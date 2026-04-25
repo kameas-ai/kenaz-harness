@@ -244,7 +244,7 @@ func TestAPI_StopStreamCancels(t *testing.T) {
 	// A stream that never closes its events channel until Cancel is
 	// called.
 	out := make(chan corellm.StreamEvent)
-	stream := &cancelOnlyStream{out: out, done: make(chan struct{})}
+	stream := &cancelOnlyStream{out: out}
 	reg := &fakeRegistry{
 		profiles: map[string]corellm.ProviderProfile{
 			"p": {ID: "p", Kind: "anthropic", Model: "x",
@@ -295,9 +295,8 @@ func TestAPI_NotWired(t *testing.T) {
 // cancelOnlyStream blocks Events() until Cancel is called, simulating
 // a long-running upstream call.
 type cancelOnlyStream struct {
-	out  chan corellm.StreamEvent
-	done chan struct{}
-	mu   sync.Mutex
+	out       chan corellm.StreamEvent
+	mu        sync.Mutex
 	cancelled bool
 }
 
