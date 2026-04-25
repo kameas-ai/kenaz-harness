@@ -1,0 +1,526 @@
+package anthropic
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	llm "github.com/sigil-tech/kaneaz-harness/core/llm"
+)
+
+// fakeServer wraps httptest.Server with helpers for crafting Messages
+// API responses (success SSE, JSON error envelopes, mid-stream
+// disconnects). Each test constructs one via newFakeServer.
+type fakeServer struct {
+	*httptest.Server
+	mu              sync.Mutex
+	lastBody        []byte
+	lastHeaders     http.Header
+	requestCount    int
+}
+
+// newFakeServer builds a fakeServer whose handler is supplied by the
+// test. The handler receives the (response, request) pair plus the
+// per-request count (1-indexed) so multi-attempt tests can vary
+// behaviour by attempt.
+func newFakeServer(t *testing.T, handler func(w http.ResponseWriter, r *http.Request, attempt int)) *fakeServer {
+	t.Helper()
+	fs := &fakeServer{}
+	fs.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		fs.mu.Lock()
+		fs.lastBody = body
+		fs.lastHeaders = r.Header.Clone()
+		fs.requestCount++
+		attempt := fs.requestCount
+		fs.mu.Unlock()
+		handler(w, r, attempt)
+	}))
+	t.Cleanup(fs.Close)
+	return fs
+}
+
+// writeSSE emits a sequence of SSE frames terminated by an empty line
+// after each. Each frame may carry an optional "event:" header (we set
+// it for clarity, but the parser only inspects the JSON "type" key).
+func writeSSE(w http.ResponseWriter, frames []sseFrame) {
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.WriteHeader(http.StatusOK)
+	flusher, _ := w.(http.Flusher)
+	for _, f := range frames {
+		if f.event != "" {
+			fmt.Fprintf(w, "event: %s\n", f.event)
+		}
+		fmt.Fprintf(w, "data: %s\n\n", f.data)
+		if flusher != nil {
+			flusher.Flush()
+		}
+	}
+}
+
+type sseFrame struct {
+	event string
+	data  string
+}
+
+// happyPathFrames constructs a minimal but realistic stream that
+// exercises message_start, content_block_delta (text), message_delta
+// (usage + stop_reason), and message_stop.
+func happyPathFrames() []sseFrame {
+	return []sseFrame{
+		{event: "message_start", data: `{"type":"message_start","message":{"id":"msg_x","role":"assistant","model":"claude-sonnet-4-5","usage":{"input_tokens":7,"output_tokens":1}}}`},
+		{event: "content_block_start", data: `{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`},
+		{event: "content_block_delta", data: `{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hello"}}`},
+		{event: "content_block_delta", data: `{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":", world"}}`},
+		{event: "content_block_stop", data: `{"type":"content_block_stop","index":0}`},
+		{event: "message_delta", data: `{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"input_tokens":7,"output_tokens":3}}`},
+		{event: "message_stop", data: `{"type":"message_stop"}`},
+	}
+}
+
+// newAdapter constructs an Adapter pointed at fs with a permissive
+// transport. The catalog defaults to the embedded one.
+func newAdapter(fs *fakeServer) *Adapter {
+	return New(WithEndpoint(fs.URL), WithHTTPClient(fs.Client()))
+}
+
+// stdReq is a minimal request good enough for the smoke tests.
+func stdReq() (llm.GenerationRequest, llm.ProviderProfile) {
+	req := llm.GenerationRequest{
+		Messages: []llm.Message{
+			{Role: llm.RoleUser, Content: []llm.ContentPart{{Type: "text", Text: "hi"}}},
+		},
+	}
+	prof := llm.ProviderProfile{
+		ID:    "p-anthropic",
+		Kind:  Kind,
+		Model: "claude-sonnet-4-5",
+		Cred:  llm.CredentialReference{Kind: "env", Locator: "ANTHROPIC_API_KEY"},
+	}
+	return req, prof
+}
+
+// drain reads every chunk and returns the concatenated text plus the
+// final Response and any final error.
+func drain(t *testing.T, s llm.Stream) (string, llm.Response, error) {
+	t.Helper()
+	var b strings.Builder
+	for ev := range s.Events() {
+		if ev.Kind == llm.StreamText {
+			b.WriteString(ev.Text)
+		}
+	}
+	resp, err := s.Final()
+	return b.String(), resp, err
+}
+
+func TestAdapter_HappyPathStreaming(t *testing.T) {
+	fs := newFakeServer(t, func(w http.ResponseWriter, r *http.Request, _ int) {
+		writeSSE(w, happyPathFrames())
+	})
+	a := newAdapter(fs)
+	req, prof := stdReq()
+	stream, err := a.Stream(context.Background(), req, prof, []byte("sk-ant-test"))
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	text, resp, ferr := drain(t, stream)
+	if ferr != nil {
+		t.Fatalf("Final: %v", ferr)
+	}
+	if text != "Hello, world" {
+		t.Fatalf("text = %q, want %q", text, "Hello, world")
+	}
+	if resp.FinishReason != "end_turn" {
+		t.Fatalf("finish reason = %q", resp.FinishReason)
+	}
+	if resp.Usage.OutputTokens != 3 || resp.Usage.InputTokens != 7 {
+		t.Fatalf("usage = %+v", resp.Usage)
+	}
+
+	// Header / body sanity: x-api-key, anthropic-version, stream=true.
+	fs.mu.Lock()
+	defer fs.mu.Unlock()
+	if got := fs.lastHeaders.Get("x-api-key"); got != "sk-ant-test" {
+		t.Fatalf("x-api-key = %q", got)
+	}
+	if got := fs.lastHeaders.Get("anthropic-version"); got != defaultAPIVersion {
+		t.Fatalf("anthropic-version = %q", got)
+	}
+	if !strings.Contains(string(fs.lastBody), `"stream":true`) {
+		t.Fatalf("body should set stream=true, got %s", fs.lastBody)
+	}
+	if !strings.Contains(string(fs.lastBody), `"model":"claude-sonnet-4-5"`) {
+		t.Fatalf("body should carry model, got %s", fs.lastBody)
+	}
+}
+
+func TestAdapter_EmptyResponse(t *testing.T) {
+	// Server writes a 200 with nothing on the body. Parser should
+	// finish cleanly with no text and a synthesized finish reason.
+	fs := newFakeServer(t, func(w http.ResponseWriter, r *http.Request, _ int) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+	})
+	a := newAdapter(fs)
+	req, prof := stdReq()
+	stream, err := a.Stream(context.Background(), req, prof, []byte("k"))
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	text, resp, ferr := drain(t, stream)
+	if ferr != nil {
+		t.Fatalf("Final: %v", ferr)
+	}
+	if text != "" {
+		t.Fatalf("text should be empty, got %q", text)
+	}
+	if resp.FinishReason != "" {
+		t.Fatalf("expected blank finish reason on empty stream, got %q", resp.FinishReason)
+	}
+}
+
+func TestAdapter_ErrorClassification(t *testing.T) {
+	// Table-driven: status, body → expected typed-error matcher.
+	cases := []struct {
+		name       string
+		status     int
+		body       string
+		assertErr  func(t *testing.T, err error)
+	}{
+		{
+			name:   "401 auth",
+			status: 401,
+			body:   `{"type":"error","error":{"type":"authentication_error","message":"invalid x-api-key"}}`,
+			assertErr: func(t *testing.T, err error) {
+				var ae *llm.ErrAuth
+				if !errors.As(err, &ae) {
+					t.Fatalf("expected ErrAuth, got %T %v", err, err)
+				}
+				if ae.Status != 401 {
+					t.Fatalf("status = %d", ae.Status)
+				}
+				if !strings.Contains(ae.Message, "authentication_error") {
+					t.Fatalf("message = %q", ae.Message)
+				}
+			},
+		},
+		{
+			name:   "403 auth",
+			status: 403,
+			body:   `{"type":"error","error":{"type":"permission_error","message":"forbidden"}}`,
+			assertErr: func(t *testing.T, err error) {
+				var ae *llm.ErrAuth
+				if !errors.As(err, &ae) {
+					t.Fatalf("expected ErrAuth, got %T %v", err, err)
+				}
+			},
+		},
+		{
+			name:   "429 transient",
+			status: 429,
+			body:   `{"type":"error","error":{"type":"rate_limit_error","message":"slow down"}}`,
+			assertErr: func(t *testing.T, err error) {
+				if !llm.IsTransient(err) {
+					t.Fatalf("expected transient, got %T %v", err, err)
+				}
+			},
+		},
+		{
+			name:   "503 transient",
+			status: 503,
+			body:   `{"type":"error","error":{"type":"overloaded_error","message":"upstream down"}}`,
+			assertErr: func(t *testing.T, err error) {
+				if !llm.IsTransient(err) {
+					t.Fatalf("expected transient, got %T %v", err, err)
+				}
+			},
+		},
+		{
+			name:   "400 invalid request (non-retryable)",
+			status: 400,
+			body:   `{"type":"error","error":{"type":"invalid_request_error","message":"bad shape"}}`,
+			assertErr: func(t *testing.T, err error) {
+				var ir *llm.ErrInvalidRequest
+				if !errors.As(err, &ir) {
+					t.Fatalf("expected ErrInvalidRequest, got %T %v", err, err)
+				}
+				if llm.IsTransient(err) {
+					t.Fatalf("400 must not be transient")
+				}
+			},
+		},
+		{
+			name:   "400 content policy refusal (non-retryable)",
+			status: 400,
+			body:   `{"type":"error","error":{"type":"invalid_request_error","message":"content_policy: refused"}}`,
+			assertErr: func(t *testing.T, err error) {
+				var ir *llm.ErrInvalidRequest
+				if !errors.As(err, &ir) {
+					t.Fatalf("expected ErrInvalidRequest, got %T %v", err, err)
+				}
+				if !strings.Contains(ir.Message, "content_policy") {
+					t.Fatalf("expected content_policy message, got %q", ir.Message)
+				}
+				if llm.IsTransient(err) {
+					t.Fatalf("content policy refusal must not be transient")
+				}
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fs := newFakeServer(t, func(w http.ResponseWriter, r *http.Request, _ int) {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(tc.status)
+				_, _ = io.WriteString(w, tc.body)
+			})
+			a := newAdapter(fs)
+			req, prof := stdReq()
+			_, err := a.Stream(context.Background(), req, prof, []byte("k"))
+			if err == nil {
+				t.Fatal("expected error, got nil")
+			}
+			tc.assertErr(t, err)
+		})
+	}
+}
+
+func TestAdapter_MidStreamDisconnect(t *testing.T) {
+	// Server writes one delta then forcibly closes the connection.
+	// The pump must surface a StreamError chunk and Final must return
+	// the partial Response with an error.
+	fs := newFakeServer(t, func(w http.ResponseWriter, r *http.Request, _ int) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		flusher, _ := w.(http.Flusher)
+		fmt.Fprintf(w, "event: message_start\ndata: %s\n\n",
+			`{"type":"message_start","message":{"id":"x","model":"y","usage":{"input_tokens":1,"output_tokens":0}}}`)
+		fmt.Fprintf(w, "event: content_block_delta\ndata: %s\n\n",
+			`{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"part"}}`)
+		if flusher != nil {
+			flusher.Flush()
+		}
+		// Hijack and close the underlying connection mid-stream.
+		hj, ok := w.(http.Hijacker)
+		if !ok {
+			t.Fatalf("server does not support hijacking")
+		}
+		conn, _, err := hj.Hijack()
+		if err != nil {
+			t.Fatalf("hijack: %v", err)
+		}
+		_ = conn.Close()
+	})
+	a := newAdapter(fs)
+	req, prof := stdReq()
+	stream, err := a.Stream(context.Background(), req, prof, []byte("k"))
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	var sawText, sawErr bool
+	for ev := range stream.Events() {
+		switch ev.Kind {
+		case llm.StreamText:
+			sawText = true
+		case llm.StreamError:
+			sawErr = true
+		}
+	}
+	_, ferr := stream.Final()
+	if !sawText {
+		t.Fatal("expected at least one text chunk before disconnect")
+	}
+	if !sawErr && ferr == nil {
+		t.Fatal("expected mid-stream error to surface (chunk OR Final)")
+	}
+}
+
+func TestAdapter_CancelTerminatesStream(t *testing.T) {
+	// Server writes one delta then sleeps. The adapter's Cancel()
+	// should sever the connection within ~1s.
+	fs := newFakeServer(t, func(w http.ResponseWriter, r *http.Request, _ int) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		flusher, _ := w.(http.Flusher)
+		fmt.Fprintf(w, "event: content_block_delta\ndata: %s\n\n",
+			`{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hi"}}`)
+		if flusher != nil {
+			flusher.Flush()
+		}
+		// Block until ctx is cancelled or a long timeout passes.
+		select {
+		case <-r.Context().Done():
+		case <-time.After(5 * time.Second):
+		}
+	})
+	a := newAdapter(fs)
+	req, prof := stdReq()
+	stream, err := a.Stream(context.Background(), req, prof, []byte("k"))
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	// Read at least one chunk to confirm the stream is open.
+	got := false
+	deadline := time.NewTimer(2 * time.Second)
+	defer deadline.Stop()
+	select {
+	case ev, ok := <-stream.Events():
+		if ok && ev.Kind == llm.StreamText {
+			got = true
+		}
+	case <-deadline.C:
+	}
+	if !got {
+		t.Fatal("expected an initial text chunk before cancel")
+	}
+	if err := stream.Cancel(); err != nil {
+		t.Fatalf("Cancel: %v", err)
+	}
+	// Drain remaining events; should close quickly.
+	closeDeadline := time.NewTimer(2 * time.Second)
+	defer closeDeadline.Stop()
+	doneCh := make(chan struct{})
+	go func() {
+		for range stream.Events() {
+		}
+		close(doneCh)
+	}()
+	select {
+	case <-doneCh:
+	case <-closeDeadline.C:
+		t.Fatal("stream did not close within 2s of Cancel")
+	}
+	_, ferr := stream.Final()
+	var ce *llm.ErrCancelled
+	if !errors.As(ferr, &ce) {
+		t.Fatalf("expected ErrCancelled after Cancel, got %v", ferr)
+	}
+}
+
+func TestAdapter_ContextCancellationPropagates(t *testing.T) {
+	// ctx-driven cancellation: ctx.Done() must close the stream.
+	fs := newFakeServer(t, func(w http.ResponseWriter, r *http.Request, _ int) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		flusher, _ := w.(http.Flusher)
+		fmt.Fprintf(w, "event: content_block_delta\ndata: %s\n\n",
+			`{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"x"}}`)
+		if flusher != nil {
+			flusher.Flush()
+		}
+		select {
+		case <-r.Context().Done():
+		case <-time.After(5 * time.Second):
+		}
+	})
+	a := newAdapter(fs)
+	req, prof := stdReq()
+	ctx, cancel := context.WithCancel(context.Background())
+	stream, err := a.Stream(ctx, req, prof, []byte("k"))
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	// Read the first chunk before cancelling.
+	select {
+	case <-stream.Events():
+	case <-time.After(2 * time.Second):
+		t.Fatal("no chunks received within 2s")
+	}
+	cancel()
+	doneCh := make(chan struct{})
+	go func() {
+		for range stream.Events() {
+		}
+		close(doneCh)
+	}()
+	select {
+	case <-doneCh:
+	case <-time.After(2 * time.Second):
+		t.Fatal("stream did not close within 2s of ctx cancel")
+	}
+}
+
+func TestAdapter_ToolUseAccumulation(t *testing.T) {
+	// Validates that input_json_delta frames are reassembled into a
+	// single ToolUse on content_block_stop.
+	fs := newFakeServer(t, func(w http.ResponseWriter, r *http.Request, _ int) {
+		writeSSE(w, []sseFrame{
+			{event: "message_start", data: `{"type":"message_start","message":{"id":"x","usage":{"input_tokens":3,"output_tokens":0}}}`},
+			{event: "content_block_start", data: `{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"tool_1","name":"calc","input":{}}}`},
+			{event: "content_block_delta", data: `{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"a\":"}}`},
+			{event: "content_block_delta", data: `{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"42}"}}`},
+			{event: "content_block_stop", data: `{"type":"content_block_stop","index":0}`},
+			{event: "message_delta", data: `{"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"input_tokens":3,"output_tokens":4}}`},
+			{event: "message_stop", data: `{"type":"message_stop"}`},
+		})
+	})
+	a := newAdapter(fs)
+	req, prof := stdReq()
+	req.Tools = []llm.ToolSpec{{Name: "calc", Description: "add"}}
+	stream, err := a.Stream(context.Background(), req, prof, []byte("k"))
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	var tools []*llm.ToolUse
+	for ev := range stream.Events() {
+		if ev.Kind == llm.StreamTool && ev.Tool != nil {
+			tu := *ev.Tool
+			tools = append(tools, &tu)
+		}
+	}
+	resp, ferr := stream.Final()
+	if ferr != nil {
+		t.Fatalf("Final: %v", ferr)
+	}
+	if len(tools) != 1 {
+		t.Fatalf("expected 1 tool event, got %d", len(tools))
+	}
+	if tools[0].Name != "calc" {
+		t.Fatalf("tool name = %q", tools[0].Name)
+	}
+	if string(tools[0].Input) != `{"a":42}` {
+		t.Fatalf("tool input = %s, want %q", tools[0].Input, `{"a":42}`)
+	}
+	if resp.FinishReason != "tool_use" {
+		t.Fatalf("finish reason = %q", resp.FinishReason)
+	}
+}
+
+func TestAdapter_EmptyCredentialRejected(t *testing.T) {
+	// No fake server should be hit; the adapter rejects empty cred
+	// before opening the connection.
+	a := New()
+	req, prof := stdReq()
+	_, err := a.Stream(context.Background(), req, prof, nil)
+	var ae *llm.ErrAuth
+	if !errors.As(err, &ae) {
+		t.Fatalf("expected ErrAuth, got %v", err)
+	}
+}
+
+func TestAdapter_CapabilitiesFromCatalog(t *testing.T) {
+	a := New()
+	desc := a.Capabilities("claude-sonnet-4-5")
+	// Anthropic catalog reports streaming + tool_calling for sonnet.
+	if !desc.Has(llm.CapStreaming) {
+		t.Fatal("expected streaming")
+	}
+	if !desc.Has(llm.CapToolCalling) {
+		t.Fatal("expected tool_calling")
+	}
+}
+
+func TestAdapter_KindIsAnthropic(t *testing.T) {
+	if New().Kind() != "anthropic" {
+		t.Fatal("Kind must be 'anthropic'")
+	}
+}

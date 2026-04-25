@@ -17,7 +17,7 @@ broker is the sole gatekeeper.
   payload `{ id, reason, message? }` with `reason ∈ {ctx-cancelled,
   stop-called, backend-error}` (see plan §4.2).
 
-## v1.0 topics (24 entries)
+## v1.0 topics (26 entries)
 
 | Topic                    | Payload (Go)                | Payload (TS)              | Cardinality        | Lifecycle                 | Ordering                | Privacy                                   |
 |--------------------------|-----------------------------|---------------------------|--------------------|---------------------------|-------------------------|-------------------------------------------|
@@ -28,7 +28,8 @@ broker is the sole gatekeeper.
 | `a2a:event`              | `a2a.CardEvent`             | `A2AEvent`                | 1 per source item  | until source closes       | source order preserved  | redacted                                  |
 | `a2a:stream-closed`      | `StreamClosedPayload`       | `StreamClosedPayload`     | 1 per close        | once                      | n/a                     | reason + message only                     |
 | `llm:event`              | `llm.ProviderEvent`         | `LLMEvent`                | 1 per source item  | until source closes       | source order preserved  | redacted; never carries credentials       |
-| `llm:stream-closed`      | `StreamClosedPayload`       | `StreamClosedPayload`     | 1 per close        | once                      | n/a                     | reason + message only                     |
+| `llm:stream-chunk`       | `llmview.StreamChunkPayload`| `LLMStreamChunkPayload`   | 1 per generation chunk | until generation ends | generation order preserved | structural redaction (no credentials, no raw HTTP frames); event-log redactor catches accidental matches |
+| `llm:stream-closed`      | `llmview.StreamClosedPayload` \| `StreamClosedPayload` | `LLMStreamClosedPayload`     | 1 per close        | once                      | n/a                     | reason + message + finish_reason only     |
 | `policy:event`           | `policy.DecisionEvent`      | `PolicyDecisionEvent`     | 1 per decision     | until source closes       | source order preserved  | clause + violating-input only             |
 | `policy:stream-closed`   | `StreamClosedPayload`       | `StreamClosedPayload`     | 1 per close        | once                      | n/a                     | reason + message only                     |
 | `audit:event`            | `audit.Entry`               | `AuditEntry`              | 1 per entry        | until source closes       | append-only             | redacted server-side                      |
@@ -45,6 +46,43 @@ broker is the sole gatekeeper.
 | `storage:stream-closed`  | `StreamClosedPayload`       | `StreamClosedPayload`     | 1 per close        | once                      | n/a                     | reason + message only                     |
 | `scheduler:event`        | `scheduler.TickEvent`       | `SchedulerEvent`          | 1 per tick         | until scheduler stops     | tick order preserved    | redacted                                  |
 | `scheduler:stream-closed`| `StreamClosedPayload`       | `StreamClosedPayload`     | 1 per close        | once                      | n/a                     | reason + message only                     |
+
+## `llm:stream-chunk` payload shape
+
+The LLM connector pumps generation chunks through the broker rather
+than the channel-driven Subscribe path so per-generation goroutine
+count stays at one. The payload mirrors `core/rpc/views/llm.StreamChunkPayload`:
+
+```json
+{
+  "sub_id": "llm-7",
+  "chunk": {
+    "kind": "text",                 // text | tool | reasoning | usage | finish | error
+    "text": "Hello",                // present on text chunks
+    "tool": { ... },                // present on tool chunks (ToolUse)
+    "reasoning": { ... },           // present on reasoning chunks
+    "usage": { ... },               // present on usage chunks
+    "finish": "end_turn",           // present on finish chunks
+    "err": "..."                    // present on error chunks
+  }
+}
+```
+
+## `llm:stream-closed` payload shape
+
+```json
+{
+  "sub_id": "llm-7",
+  "reason": "completed",            // completed | stop-called | backend-error
+  "message": "...",                 // present on backend-error
+  "finish_reason": "end_turn"       // present on completed
+}
+```
+
+Note: this payload differs from the broker's generic `StreamClosedPayload`
+because the LLM connector pumps directly (not via Subscribe). Other
+view-scoped `<view>:stream-closed` topics still carry the broker shape
+`{id, reason, message?}`.
 
 ## v1.x reservations
 

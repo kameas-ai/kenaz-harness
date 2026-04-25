@@ -12,6 +12,9 @@ import (
 	"context"
 
 	"github.com/sigil-tech/kaneaz-harness/core"
+	corellm "github.com/sigil-tech/kaneaz-harness/core/llm"
+	"github.com/sigil-tech/kaneaz-harness/core/llm/credref"
+	llmregistry "github.com/sigil-tech/kaneaz-harness/core/llm/registry"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/a2a"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/audit"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/bundle"
@@ -23,6 +26,7 @@ import (
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/settings"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/trust"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/workflow"
+	"github.com/sigil-tech/kaneaz-harness/core/secrets"
 )
 
 // HarnessAPI is the boundary between the Wails-hosted Vue frontend and
@@ -96,6 +100,12 @@ type API struct {
 	auditAPI    audit.AuditAPI
 	settingsAPI settings.SettingsAPI
 
+	// broker is the lazy stream broker held for the lifetime of the API
+	// value; per-view bridges (llm, sessions, audit, …) emit through
+	// it. Constructed by newLLMStack today; future views will reuse the
+	// same instance once they wire up.
+	broker *StreamBroker
+
 	// bindings is the Wails-reflected surface; held for the lifetime of
 	// API so OnStartup can call SetContext on it.
 	bindings *Bindings
@@ -111,15 +121,28 @@ func (a *API) SetContext(ctx context.Context) {
 	}
 }
 
-// New constructs a HarnessAPI implementation. Sub-interfaces are stub
-// objects until each feature mission wires them; the sessions surface
-// is the first to land — when c is non-nil New wires the real
-// session.Manager-backed impl, otherwise the surface falls back to a
+// New constructs a HarnessAPI implementation. Sub-interfaces start as
+// stubs and are replaced by real impls as each feature mission lands.
+//
+// Sessions wiring: when c is non-nil, New wires the real
+// session.Manager-backed impl; otherwise the surface falls back to a
 // safe stub so test fixtures can call New(nil) without booting core.
+//
+// LLMConnector wiring:
+//   - A connector Registry is constructed with the embedded capability
+//     catalog and a credref bridge pointing at a memory secrets backend
+//     so env-var-resolved API keys (e.g. ANTHROPIC_API_KEY) flow through
+//     without bundle support.
+//   - The view-scoped llm.API is constructed with a streamSinkAdapter
+//     that wraps a lazily-created StreamBroker — chunks emit on the
+//     "llm:stream-chunk" topic via the broker so the privacy CI
+//     invariant (only emitter.go and stream_broker.go call
+//     runtime.EventsEmit) stays intact.
 func New(c *core.Core) *API {
+	llmAPI, broker := newLLMStack(c)
 	a := &API{
 		core:        c,
-		llmAPI:      &stubLLM{},
+		llmAPI:      llmAPI,
 		mcpAPI:      &stubMCP{},
 		a2aAPI:      &stubA2A{},
 		workflowAPI: &stubWorkflow{},
@@ -130,6 +153,7 @@ func New(c *core.Core) *API {
 		policyAPI:   &stubPolicy{},
 		auditAPI:    &stubAudit{},
 		settingsAPI: &stubSettings{},
+		broker:      broker,
 	}
 	a.bindings = NewBindings(a)
 	return a
@@ -143,6 +167,66 @@ func newSessionsAPI(c *core.Core) sessions.SessionsAPI {
 		return &stubSessions{}
 	}
 	return sessions.NewManagerAPI(c.SessionManager())
+}
+
+// newLLMStack constructs the connector Registry + view-scoped API. It
+// is split out of New so the Wails wiring stays declarative.
+//
+// When core is nil (test path: api_test.go's chassis tests construct
+// API{nil}), we still build a working stack — the registry is
+// process-local and does not depend on the harness data directory for
+// anything other than the personal-providers escape hatch.
+func newLLMStack(c *core.Core) (llm.LLMConnectorAPI, *StreamBroker) {
+	reg, err := llmregistry.New(llmregistry.Options{
+		Resolver: credref.New(secrets.NewMemoryBackend()),
+	})
+	if err != nil {
+		// Fall back to the stub on a registry construction failure so
+		// the chassis still boots. The error path is exercised only by
+		// catalog-load failures, which should never happen in
+		// production builds.
+		return &stubLLM{}, nil
+	}
+	// Compile-time witness: *llmregistry.Registry satisfies the local
+	// Registry interface used by the view impl. The local interface is
+	// just an alias for corellm.Registry plus an optional Profiles()
+	// type assertion the impl does internally.
+	var _ corellm.Registry = (*llmregistry.Registry)(nil)
+
+	broker := NewStreamBroker(WailsEmitter{})
+	dataDir := ""
+	if c != nil {
+		dataDir = c.DataDir()
+	}
+	return llm.New(llm.Config{
+		Registry: reg,
+		Sink:     &streamSinkAdapter{broker: broker},
+		DataDir:  dataDir,
+	}), broker
+}
+
+// streamSinkAdapter wraps a *StreamBroker so the view package never
+// imports the rpc package directly (keeps the import graph acyclic).
+//
+// The adapter calls broker.emitter.Emit under the hood. Privacy CI
+// invariant #1 still holds: runtime.EventsEmit lives only in
+// emitter.go and stream_broker.go.
+type streamSinkAdapter struct {
+	broker *StreamBroker
+}
+
+// Emit forwards topic+payload to the broker's underlying emitter. The
+// broker's Subscribe-based fan-out is for channel-driven sources; the
+// LLM connector pumps directly so we use the lower-level path here.
+//
+// Bridges that arrive over time (sessions, audit, etc.) prefer the
+// Subscribe path; the LLM connector intentionally pumps directly so
+// the goroutine count per stream stays at one.
+func (s *streamSinkAdapter) Emit(topic string, payload any) {
+	if s == nil || s.broker == nil {
+		return
+	}
+	s.broker.emitter.Emit(context.Background(), topic, payload)
 }
 
 // ShellStatus returns a default shell status. Real values are filled by
@@ -189,3 +273,9 @@ func (a *API) Settings() settings.SettingsAPI    { return a.settingsAPI }
 // (bindings.go) is the flat-method surface Wails reflects. Stable for the
 // lifetime of API.
 func (a *API) Bindings() []any { return []any{a.bindings} }
+
+// StreamBroker returns the lazily-constructed broker. Future view
+// bridges (sessions, audit, …) reuse this instance so the privacy CI
+// invariant #1 — only emitter.go / stream_broker.go call
+// runtime.EventsEmit — keeps holding.
+func (a *API) StreamBroker() *StreamBroker { return a.broker }

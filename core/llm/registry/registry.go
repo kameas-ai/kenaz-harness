@@ -18,6 +18,7 @@ import (
 	"time"
 
 	llm "github.com/sigil-tech/kaneaz-harness/core/llm"
+	"github.com/sigil-tech/kaneaz-harness/core/llm/anthropic"
 	"github.com/sigil-tech/kaneaz-harness/core/llm/capabilities"
 	"github.com/sigil-tech/kaneaz-harness/core/llm/credref"
 	"github.com/sigil-tech/kaneaz-harness/core/llm/events"
@@ -75,7 +76,7 @@ func New(opts Options) (*Registry, error) {
 	if policy == nil {
 		policy = llm.AllowAllGuard{}
 	}
-	return &Registry{
+	r := &Registry{
 		adapters: map[string]llm.ProviderAdapter{},
 		profiles: map[string]llm.ProviderProfile{},
 		cat:      cat,
@@ -85,7 +86,17 @@ func New(opts Options) (*Registry, error) {
 		policy:   policy,
 		reducer:  opts.Cost,
 		now:      time.Now,
-	}, nil
+	}
+	// Built-in adapters. Operators can re-register against the same
+	// kind() string to swap (e.g. an enterprise build with custom
+	// transports / proxies); last-write-wins per RegisterAdapter.
+	//
+	// DIRECTIVE_001: only the per-provider sub-package imports the
+	// provider's wire types. The registry ships the default v1 set
+	// out of the box so a fresh harness install can talk to a real
+	// model without additional wiring (FR-018 / C-005).
+	r.adapters[anthropic.Kind] = anthropic.New()
+	return r, nil
 }
 
 // SetClock overrides the registry's clock; used by tests.
