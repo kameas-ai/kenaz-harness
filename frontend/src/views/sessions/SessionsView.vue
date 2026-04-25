@@ -47,14 +47,20 @@ const hasSession = computed(() => sessionId.value.length > 0);
 //   - 'no-sessions'        no sessions exist anywhere → big welcome
 //   - 'no-selection'       sessions exist, none selected → pick from rail
 //   - 'session-not-found'  url id has no matching backend row
-//   - 'loaded'             session loaded successfully
+//   - 'loaded'             session loaded successfully (may have a
+//                          send-time error — that's surfaced inline,
+//                          not by replacing the surface)
 const surfaceState = computed<
   'no-sessions' | 'no-selection' | 'session-not-found' | 'loaded'
 >(() => {
   if (!hasSession.value) {
     return sessionList.value.length === 0 ? 'no-sessions' : 'no-selection';
   }
-  if (session.error.value || (session.session.value === null && !session.loading.value)) {
+  // session.value goes to null only when load() failed (404 or
+  // backend error during sessions.get / listMessages). Send-time
+  // errors set session.error but leave session.value populated, so
+  // we don't conflate them here.
+  if (session.session.value === null && !session.loading.value) {
     return 'session-not-found';
   }
   return 'loaded';
