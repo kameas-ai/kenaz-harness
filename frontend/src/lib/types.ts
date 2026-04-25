@@ -76,6 +76,8 @@ export interface MCPServer {
   name: string;
   state: string;
   version: string;
+  transport?: string;
+  capabilities?: string[];
 }
 
 export interface A2ACard {
@@ -115,6 +117,16 @@ export interface Bundle {
   name: string;
   version: string;
   tier: string;
+  source?: string;
+  signature?: string;
+  artifactCount: number;
+  artifacts?: BundleArtifact[];
+}
+
+export interface BundleArtifact {
+  name: string;
+  kind: string;
+  contentHash: string;
 }
 
 export interface Denial {

@@ -21,14 +21,12 @@ const router = createRouter({
     {
       path: '/tools',
       name: 'tools',
-      component: () => import('@/views/placeholder/PlaceholderView.vue'),
-      props: { number: '02', section: 'TOOLS', title: 'Tools' },
+      component: () => import('@/views/tools/ToolsView.vue'),
     },
     {
       path: '/bundles',
       name: 'bundles',
-      component: () => import('@/views/placeholder/PlaceholderView.vue'),
-      props: { number: '03', section: 'BUNDLES', title: 'Bundles' },
+      component: () => import('@/views/bundles/BundlesView.vue'),
     },
     {
       path: '/providers',
@@ -38,14 +36,12 @@ const router = createRouter({
     {
       path: '/audit',
       name: 'audit',
-      component: () => import('@/views/placeholder/PlaceholderView.vue'),
-      props: { number: '05', section: 'AUDIT', title: 'Audit log' },
+      component: () => import('@/views/audit/AuditView.vue'),
     },
     {
       path: '/settings',
       name: 'settings',
-      component: () => import('@/views/placeholder/PlaceholderView.vue'),
-      props: { number: '06', section: 'SETTINGS', title: 'Settings' },
+      component: () => import('@/views/settings/SettingsView.vue'),
     },
   ],
 });

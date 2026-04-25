@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 
 	"github.com/sigil-tech/kaneaz-harness/core"
+	"github.com/sigil-tech/kaneaz-harness/core/event"
 	corellm "github.com/sigil-tech/kaneaz-harness/core/llm"
 	"github.com/sigil-tech/kaneaz-harness/core/llm/credref"
 	"github.com/sigil-tech/kaneaz-harness/core/llm/personal"
@@ -97,15 +98,18 @@ type API struct {
 	sessionsAPI sessions.SessionsAPI
 	trustAPI    trust.TrustAPI
 	contextAPI  contextview.ContextAPI
-	bundleAPI   bundle.BundleAPI
-	policyAPI   policy.PolicyAPI
-	auditAPI    audit.AuditAPI
-	settingsAPI settings.SettingsAPI
+	bundleAPI    bundle.BundleAPI
+	policyAPI    policy.PolicyAPI
+	auditImpl    *audit.API
+	auditAPI     audit.AuditAPI
+	settingsImpl *settings.API
+	settingsAPI  settings.SettingsAPI
 
-	// broker is the lazy stream broker held for the lifetime of the API
-	// value; per-view bridges (llm, sessions, audit, …) emit through
-	// it. Constructed by newLLMStack today; future views will reuse the
-	// same instance once they wire up.
+	// broker fans typed source channels to Wails event topics. Held for
+	// the lifetime of the API value; per-view bridges (llm, sessions,
+	// audit, mcp, …) emit through it so the privacy CI invariant —
+	// only emitter.go / stream_broker.go call runtime.EventsEmit —
+	// stays intact.
 	broker *StreamBroker
 
 	// bindings is the Wails-reflected surface; held for the lifetime of
@@ -141,23 +145,48 @@ func (a *API) SetContext(ctx context.Context) {
 //     invariant (only emitter.go and stream_broker.go call
 //     runtime.EventsEmit) stays intact.
 func New(c *core.Core) *API {
-	llmAPI, broker := newLLMStack(c)
 	a := &API{
 		core:        c,
-		llmAPI:      llmAPI,
-		mcpAPI:      &stubMCP{},
 		a2aAPI:      &stubA2A{},
 		workflowAPI: &stubWorkflow{},
 		sessionsAPI: newSessionsAPI(c),
 		trustAPI:    &stubTrust{},
 		contextAPI:  &stubContext{},
-		bundleAPI:   &stubBundle{},
 		policyAPI:   &stubPolicy{},
-		auditAPI:    &stubAudit{},
-		settingsAPI: &stubSettings{},
-		broker:      broker,
 	}
+	a.broker = NewStreamBroker(WailsEmitter{})
+	a.llmAPI = newLLMStack(c, a.broker)
+	a.auditImpl = audit.NewAPI(audit.WithSubscriber(a.broker))
+	a.auditAPI = a.auditImpl
+	a.mcpAPI = mcp.NewAPI(mcp.WithSubscriber(a.broker))
+
+	// Settings: file-backed when we have a user config dir; in-memory
+	// fallback for the test harness path so New(nil) keeps working.
+	var settingsStore settings.SettingsStore
+	if fs, err := settings.NewFileStoreFromEnv(); err == nil {
+		settingsStore = fs
+	}
+	settingsImpl := settings.NewAPI(settingsStore)
+	a.settingsAPI = settingsImpl
+	a.settingsImpl = settingsImpl
+
+	// Wire the bundle reader against the core data dir. nil core (test
+	// harness path) leaves the impl with a nil reader — List returns an
+	// empty slice and Get returns "not found", which is the contract the
+	// frontend's empty-state path expects.
+	bundleOpts := []bundle.Option{}
+	if c != nil {
+		bundleOpts = append(bundleOpts, bundle.WithReader(bundle.NewFSReader(c.DataDir())))
+		if cas, err := c.BundleCache(); err == nil && cas != nil {
+			bundleOpts = append(bundleOpts, bundle.WithCAS(bundle.CASFromCache(cas)))
+		}
+	}
+	a.bundleAPI = bundle.NewAPI(bundleOpts...)
+
 	a.bindings = NewBindings(a)
+	if a.settingsImpl != nil {
+		a.bindings.SetSettingsStore(a.settingsImpl.Store())
+	}
 	return a
 }
 
@@ -178,7 +207,10 @@ func newSessionsAPI(c *core.Core) sessions.SessionsAPI {
 // API{nil}), we still build a working stack — the registry is
 // process-local and does not depend on the harness data directory for
 // anything other than the personal-providers escape hatch.
-func newLLMStack(c *core.Core) (llm.LLMConnectorAPI, *StreamBroker) {
+//
+// The shared broker is supplied by New so all view bridges fan out to
+// the same StreamBroker instance.
+func newLLMStack(c *core.Core, broker *StreamBroker) llm.LLMConnectorAPI {
 	reg, err := llmregistry.New(llmregistry.Options{
 		Resolver: credref.New(secrets.NewMemoryBackend()),
 	})
@@ -187,21 +219,18 @@ func newLLMStack(c *core.Core) (llm.LLMConnectorAPI, *StreamBroker) {
 		// the chassis still boots. The error path is exercised only by
 		// catalog-load failures, which should never happen in
 		// production builds.
-		return &stubLLM{}, nil
+		return &stubLLM{}
 	}
 	// Compile-time witness: *llmregistry.Registry satisfies the local
-	// Registry interface used by the view impl. The local interface is
-	// just an alias for corellm.Registry plus an optional Profiles()
-	// type assertion the impl does internally.
+	// Registry interface used by the view impl.
 	var _ corellm.Registry = (*llmregistry.Registry)(nil)
 
-	broker := NewStreamBroker(WailsEmitter{})
 	store := newPersonalStore(c)
 	return llm.New(llm.Config{
 		Registry: reg,
 		Sink:     &streamSinkAdapter{broker: broker},
 		Store:    store,
-	}), broker
+	})
 }
 
 // newPersonalStore constructs the personal-providers FileStore. It
@@ -238,18 +267,24 @@ type streamSinkAdapter struct {
 	broker *StreamBroker
 }
 
-// Emit forwards topic+payload to the broker's underlying emitter. The
-// broker's Subscribe-based fan-out is for channel-driven sources; the
-// LLM connector pumps directly so we use the lower-level path here.
-//
-// Bridges that arrive over time (sessions, audit, etc.) prefer the
-// Subscribe path; the LLM connector intentionally pumps directly so
-// the goroutine count per stream stays at one.
+// Emit forwards topic+payload to the broker's underlying emitter.
 func (s *streamSinkAdapter) Emit(topic string, payload any) {
 	if s == nil || s.broker == nil {
 		return
 	}
 	s.broker.emitter.Emit(context.Background(), topic, payload)
+}
+
+// AuditObserver returns a function suitable for passing to
+// event.WithObserver — every successful Append fans into the audit
+// API's ring buffer + active subscribers. Wiring lives at the call
+// site (main.go) so core/rpc stays decoupled from the emitter
+// constructor (DIRECTIVE_001).
+func (a *API) AuditObserver() func(event.Event) {
+	if a.auditImpl == nil {
+		return func(event.Event) {}
+	}
+	return a.auditImpl.ObserveEvent
 }
 
 // ShellStatus returns a default shell status. Real values are filled by
