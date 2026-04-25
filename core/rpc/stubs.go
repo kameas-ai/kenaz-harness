@@ -9,7 +9,6 @@ import (
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/llm"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/policy"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/sessions"
-	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/settings"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/trust"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/workflow"
 )
@@ -100,17 +99,3 @@ func (s *stubPolicy) Explain(_ context.Context, _ map[string]any) (policy.Denial
 func (s *stubPolicy) StartStream(_ context.Context) (string, error) { return "", errNotWired }
 func (s *stubPolicy) StopStream(_ context.Context, _ string) error  { return errNotWired }
 
-// ── settings ───────────────────────────────────────────────────────────
-
-type stubSettings struct{}
-
-func (s *stubSettings) Get(_ context.Context) (settings.Settings, error) {
-	return settings.Settings{
-		SchemaVersion: 1,
-		LastRoute:     "/sessions",
-		Theme:         "system",
-		Accent:        "default",
-		WindowSize:    settings.WindowSize{Width: 1280, Height: 800},
-	}, nil
-}
-func (s *stubSettings) Set(_ context.Context, _ settings.Settings) error { return errNotWired }

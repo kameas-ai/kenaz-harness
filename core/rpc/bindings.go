@@ -41,6 +41,18 @@ func NewBindings(api HarnessAPI) *Bindings {
 	return &Bindings{api: api}
 }
 
+// SetSettingsStore wires the persistence backend used by LoadRoute /
+// SaveRoute / LoadTheme / SaveTheme. Safe to call once at construction;
+// later calls overwrite. Nil clears the store and reinstates the
+// memory-default behaviour for tests.
+func (b *Bindings) SetSettingsStore(store settings.SettingsStore) {
+	if store == nil {
+		b.storeFn = nil
+		return
+	}
+	b.storeFn = func() settings.SettingsStore { return store }
+}
+
 // SetContext is invoked from main.go's OnStartup callback to hand the app
 // context down to the bound surface. Bound methods use this for their
 // per-call context. Safe to call before any bound method runs.

@@ -94,9 +94,10 @@ type API struct {
 	contextAPI  contextview.ContextAPI
 	bundleAPI   bundle.BundleAPI
 	policyAPI   policy.PolicyAPI
-	auditImpl   *audit.API
-	auditAPI    audit.AuditAPI
-	settingsAPI settings.SettingsAPI
+	auditImpl    *audit.API
+	auditAPI     audit.AuditAPI
+	settingsImpl *settings.API
+	settingsAPI  settings.SettingsAPI
 
 	// streamBroker fans typed source channels to Wails event topics.
 	// Constructed in New with a default WailsEmitter so production
@@ -131,12 +132,21 @@ func New(c *core.Core) *API {
 		trustAPI:    &stubTrust{},
 		contextAPI:  &stubContext{},
 		policyAPI:   &stubPolicy{},
-		settingsAPI: &stubSettings{},
 	}
 	a.broker = NewStreamBroker(WailsEmitter{})
 	a.auditImpl = audit.NewAPI(audit.WithSubscriber(a.broker))
 	a.auditAPI = a.auditImpl
 	a.mcpAPI = mcp.NewAPI(mcp.WithSubscriber(a.broker))
+
+	// Settings: file-backed when we have a user config dir; in-memory
+	// fallback for the test harness path so New(nil) keeps working.
+	var settingsStore settings.SettingsStore
+	if fs, err := settings.NewFileStoreFromEnv(); err == nil {
+		settingsStore = fs
+	}
+	settingsImpl := settings.NewAPI(settingsStore)
+	a.settingsAPI = settingsImpl
+	a.settingsImpl = settingsImpl
 
 	// Wire the bundle reader against the core data dir. nil core (test
 	// harness path) leaves the impl with a nil reader — List returns an
@@ -152,6 +162,9 @@ func New(c *core.Core) *API {
 	a.bundleAPI = bundle.NewAPI(bundleOpts...)
 
 	a.bindings = NewBindings(a)
+	if a.settingsImpl != nil {
+		a.bindings.SetSettingsStore(a.settingsImpl.Store())
+	}
 	return a
 }
 
