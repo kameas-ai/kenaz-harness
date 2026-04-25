@@ -148,7 +148,7 @@ func TestAPI_StartStream_PumpsChunksAndCloses(t *testing.T) {
 	sink := &recordingSink{}
 	api := New(Config{Registry: reg, Sink: sink})
 
-	subID, err := api.StartStream(context.Background(), "p")
+	subID, err := api.StartStream(context.Background(), "p", "")
 	if err != nil {
 		t.Fatalf("StartStream: %v", err)
 	}
@@ -198,7 +198,7 @@ func TestAPI_StopStreamCancels(t *testing.T) {
 	sink := &recordingSink{}
 	api := New(Config{Registry: reg, Sink: sink})
 
-	subID, err := api.StartStream(context.Background(), "p")
+	subID, err := api.StartStream(context.Background(), "p", "")
 	if err != nil {
 		t.Fatalf("StartStream: %v", err)
 	}
@@ -219,7 +219,7 @@ func TestAPI_StopStreamCancels(t *testing.T) {
 func TestAPI_StartStream_RegistryError(t *testing.T) {
 	reg := &fakeRegistry{streamErr: errors.New("rate limited")}
 	api := New(Config{Registry: reg})
-	_, err := api.StartStream(context.Background(), "missing")
+	_, err := api.StartStream(context.Background(), "missing", "")
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -238,7 +238,7 @@ func TestAPI_NotWired(t *testing.T) {
 	}
 	// StartStream without a registry must reject so the UI surfaces the
 	// "connector not wired" path.
-	if _, err := api.StartStream(context.Background(), "x"); err == nil {
+	if _, err := api.StartStream(context.Background(), "x", ""); err == nil {
 		t.Fatal("expected error when registry not wired")
 	}
 }

@@ -13,6 +13,25 @@ type Session struct {
 	UpdatedAt string `json:"updatedAt"`
 }
 
+// ToolCall mirrors the frontend ToolCall shape for tool-use rendering.
+type ToolCall struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	ArgsSummary string `json:"argsSummary"`
+	Latency     string `json:"latency,omitempty"`
+}
+
+// Message is a single chat-message entry. NEVER carries credential fields.
+type Message struct {
+	ID        string     `json:"id"`
+	SessionID string     `json:"sessionId"`
+	Role      string     `json:"role"`
+	Content   string     `json:"content"`
+	CreatedAt string     `json:"createdAt"`
+	Streaming bool       `json:"streaming,omitempty"`
+	ToolCalls []ToolCall `json:"toolCalls,omitempty"`
+}
+
 // SessionsAPI is the view-scoped accessor for session CRUD + streams.
 // Implementations MUST be safe for concurrent use.
 type SessionsAPI interface {
@@ -24,4 +43,10 @@ type SessionsAPI interface {
 	Reorder(ctx context.Context, ids []string) error
 	StartStream(ctx context.Context, id string) (subscriptionID string, err error)
 	StopStream(ctx context.Context, subscriptionID string) error
+
+	// Chat-message surface (frontend-foundations chat-ui mission).
+	ListMessages(ctx context.Context, id string) ([]Message, error)
+	AppendMessage(ctx context.Context, id, role, content string) (Message, error)
+	SaveDraft(ctx context.Context, id, draft string) error
+	LoadDraft(ctx context.Context, id string) (string, error)
 }

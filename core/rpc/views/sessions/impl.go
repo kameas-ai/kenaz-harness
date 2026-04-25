@@ -103,3 +103,69 @@ func (a *managerAPI) StartStream(_ context.Context, _ string) (string, error) {
 func (a *managerAPI) StopStream(_ context.Context, _ string) error {
 	return nil
 }
+
+// messageToView projects the durable session.Message into the
+// rpc-layer wire shape. Tool-call args are coerced to a one-line
+// summary; the full structured payload stays in the durable record.
+func messageToView(m session.Message) Message {
+	out := Message{
+		ID:        m.ID,
+		SessionID: m.SessionID,
+		Role:      string(m.Role),
+		Content:   m.Content,
+		CreatedAt: m.CreatedAt.UTC().Format(time.RFC3339Nano),
+	}
+	if len(m.ToolCalls) > 0 {
+		out.ToolCalls = make([]ToolCall, 0, len(m.ToolCalls))
+		for _, tc := range m.ToolCalls {
+			out.ToolCalls = append(out.ToolCalls, ToolCall{
+				ID:          tc.ID,
+				Name:        tc.Name,
+				ArgsSummary: "",
+			})
+		}
+	}
+	return out
+}
+
+// ListMessages implements SessionsAPI.
+func (a *managerAPI) ListMessages(ctx context.Context, id string) ([]Message, error) {
+	msgs, err := a.mgr.ListMessages(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]Message, 0, len(msgs))
+	for _, m := range msgs {
+		out = append(out, messageToView(m))
+	}
+	return out, nil
+}
+
+// AppendMessage implements SessionsAPI. Persists a single chat turn
+// and returns the stored record (with an assigned id + sequence).
+func (a *managerAPI) AppendMessage(ctx context.Context, id, role, content string) (Message, error) {
+	stored, err := a.mgr.AppendMessage(ctx, id, session.Message{
+		Role:    session.Role(role),
+		Content: content,
+	})
+	if err != nil {
+		return Message{}, err
+	}
+	return messageToView(stored), nil
+}
+
+// SaveDraft implements SessionsAPI.
+func (a *managerAPI) SaveDraft(ctx context.Context, id, draft string) error {
+	return a.mgr.SaveDraft(ctx, id, draft)
+}
+
+// LoadDraft implements SessionsAPI. The Manager surfaces the draft as
+// part of the Record; we round-trip through Get to keep the wire
+// shape single-purpose.
+func (a *managerAPI) LoadDraft(ctx context.Context, id string) (string, error) {
+	r, err := a.mgr.Get(ctx, id)
+	if err != nil {
+		return "", err
+	}
+	return r.Draft, nil
+}

@@ -78,6 +78,22 @@ type BundleSource interface {
 	BundleProfiles() []corellm.ProviderProfile
 }
 
+// SessionMessage is the slice of session.Message the streaming layer
+// reads to build the GenerationRequest. Defined here so the rpc views
+// package does not import core/session directly (DIRECTIVE_001 +
+// import-cycle hygiene).
+type SessionMessage struct {
+	Role    string
+	Content string
+}
+
+// SessionMessageReader is the minimal session-history surface the
+// streaming layer needs. The rpc layer wires this to the real
+// session.Manager via an adapter; tests substitute fakes.
+type SessionMessageReader interface {
+	ListMessages(ctx context.Context, sessionID string) ([]SessionMessage, error)
+}
+
 // API is the concrete LLMConnectorAPI implementation.
 type API struct {
 	reg      Registry
@@ -86,6 +102,7 @@ type API struct {
 	bundles  BundleSource
 	keychain KeychainWriter
 	prober   ProviderProber
+	history  SessionMessageReader
 
 	mu             sync.Mutex
 	subs           map[string]*subscription
@@ -95,10 +112,11 @@ type API struct {
 }
 
 type subscription struct {
-	id     string
-	stream corellm.Stream
-	cancel context.CancelFunc
-	done   chan struct{}
+	id        string
+	sessionID string
+	stream    corellm.Stream
+	cancel    context.CancelFunc
+	done      chan struct{}
 }
 
 // Config bundles construction options.
@@ -109,6 +127,10 @@ type Config struct {
 	Bundles  BundleSource
 	Keychain KeychainWriter
 	Prober   ProviderProber
+	// History provides per-session message threading for StartStream.
+	// nil disables history threading; the connector will be called with
+	// a single fixed user message (test-friendly default).
+	History SessionMessageReader
 }
 
 // New constructs a concrete API.
@@ -124,9 +146,49 @@ func New(cfg Config) *API {
 		bundles:   cfg.Bundles,
 		keychain:  cfg.Keychain,
 		prober:    cfg.Prober,
+		history:   cfg.History,
 		subs:      map[string]*subscription{},
 		validated: map[string]bool{},
 	}
+}
+
+// buildMessages assembles the GenerationRequest message slice. When a
+// SessionMessageReader is configured and sessionID is non-empty, the
+// session's persisted history is threaded through; otherwise we fall
+// back to a single demo prompt so the chassis still streams in
+// test/CI paths.
+func (a *API) buildMessages(ctx context.Context, sessionID string) ([]corellm.Message, error) {
+	if a.history == nil || sessionID == "" {
+		return []corellm.Message{
+			{
+				Role: corellm.RoleUser,
+				Content: []corellm.ContentPart{
+					{Type: "text", Text: "Hello from the kaneaz-harness demo. Reply with a one-sentence greeting."},
+				},
+			},
+		}, nil
+	}
+	stored, err := a.history.ListMessages(ctx, sessionID)
+	if err != nil {
+		return nil, fmt.Errorf("llm: load session history: %w", err)
+	}
+	if len(stored) == 0 {
+		return nil, errors.New("llm: session has no messages — append a user turn before streaming")
+	}
+	out := make([]corellm.Message, 0, len(stored))
+	for _, m := range stored {
+		role := corellm.Role(m.Role)
+		if role == "" {
+			role = corellm.RoleUser
+		}
+		out = append(out, corellm.Message{
+			Role: role,
+			Content: []corellm.ContentPart{
+				{Type: "text", Text: m.Content},
+			},
+		})
+	}
+	return out, nil
 }
 
 // ErrPersonalStoreUnavailable is returned by AddProvider / RemoveProvider
@@ -175,10 +237,13 @@ func (a *API) ListProviders(_ context.Context) ([]Provider, error) {
 	return out, nil
 }
 
-// StartStream opens a streaming generation against profileID and returns
-// a subscription id. The actual streaming runs in a goroutine that
-// pipes each chunk into the StreamSink.
-func (a *API) StartStream(ctx context.Context, profileID string) (string, error) {
+// StartStream opens a streaming generation against profileID for the
+// supplied session and returns a subscription id. The actual streaming
+// runs in a goroutine that pipes each chunk into the StreamSink. The
+// emitted StreamChunkPayload carries SessionID so the chat UI can
+// route per-token deltas to the correct conversation without
+// smuggling state through the subscription id.
+func (a *API) StartStream(ctx context.Context, profileID, sessionID string) (string, error) {
 	if a.reg == nil {
 		return "", errors.New("llm: connector not wired")
 	}
@@ -189,16 +254,13 @@ func (a *API) StartStream(ctx context.Context, profileID string) (string, error)
 		return "", err
 	}
 
+	messages, err := a.buildMessages(ctx, sessionID)
+	if err != nil {
+		return "", err
+	}
 	req := corellm.GenerationRequest{
 		ProfileID: profileID,
-		Messages: []corellm.Message{
-			{
-				Role: corellm.RoleUser,
-				Content: []corellm.ContentPart{
-					{Type: "text", Text: "Hello from the kaneaz-harness demo. Reply with a one-sentence greeting."},
-				},
-			},
-		},
+		Messages:  messages,
 	}
 
 	streamCtx, cancel := context.WithCancel(context.Background())
@@ -220,10 +282,11 @@ func (a *API) StartStream(ctx context.Context, profileID string) (string, error)
 	a.nextID++
 	id := fmt.Sprintf("llm-%d", a.nextID)
 	sub := &subscription{
-		id:     id,
-		stream: stream,
-		cancel: cancel,
-		done:   make(chan struct{}),
+		id:        id,
+		sessionID: sessionID,
+		stream:    stream,
+		cancel:    cancel,
+		done:      make(chan struct{}),
 	}
 	a.subs[id] = sub
 	a.mu.Unlock()
@@ -259,12 +322,13 @@ func (a *API) pump(sub *subscription) {
 
 	for ev := range sub.stream.Events() {
 		a.sink.Emit("llm:stream-chunk", StreamChunkPayload{
-			SubID: sub.id,
-			Chunk: ev,
+			SubID:     sub.id,
+			SessionID: sub.sessionID,
+			Chunk:     ev,
 		})
 	}
 	resp, err := sub.stream.Final()
-	closed := StreamClosedPayload{SubID: sub.id}
+	closed := StreamClosedPayload{SubID: sub.id, SessionID: sub.sessionID}
 	switch {
 	case err != nil:
 		var ce *corellm.ErrCancelled
@@ -435,17 +499,23 @@ func (a *API) isValidated(id string) bool {
 
 // StreamChunkPayload is the typed payload shipped on llm:stream-chunk.
 //
+// SessionID lets the chat UI route deltas to the conversation that
+// requested the completion without the frontend having to maintain a
+// SubID→SessionID mapping.
+//
 // Privacy: Chunk is a connector StreamEvent. The connector never puts
 // credential bytes on a StreamEvent (per the audit-emitter contract);
 // the redaction pipeline upstream gives a second line of defense.
 type StreamChunkPayload struct {
-	SubID string              `json:"sub_id"`
-	Chunk corellm.StreamEvent `json:"chunk"`
+	SubID     string              `json:"sub_id"`
+	SessionID string              `json:"session_id,omitempty"`
+	Chunk     corellm.StreamEvent `json:"chunk"`
 }
 
 // StreamClosedPayload is the typed payload shipped on llm:stream-closed.
 type StreamClosedPayload struct {
 	SubID        string `json:"sub_id"`
+	SessionID    string `json:"session_id,omitempty"`
 	Reason       string `json:"reason"`
 	Message      string `json:"message,omitempty"`
 	FinishReason string `json:"finish_reason,omitempty"`
