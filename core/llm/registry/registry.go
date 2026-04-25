@@ -118,6 +118,32 @@ func (r *Registry) RegisterAdapter(a llm.ProviderAdapter) {
 	r.adapters[a.Kind()] = a
 }
 
+// MergePersonalProfiles installs personal (user-scoped) profiles after
+// the bundle-derived profiles. Profile IDs that collide with an existing
+// (bundle) entry are SKIPPED — bundle profiles always win, per the
+// providers-management mission contract. Validation failures abort the
+// merge with the registry left unchanged for the offending batch.
+//
+// The personal store's persistence is owned by core/llm/personal; this
+// method is the registry-side seam that merges its output.
+func (r *Registry) MergePersonalProfiles(profs []llm.ProviderProfile) error {
+	for _, p := range profs {
+		if err := llm.ValidateProfile(p); err != nil {
+			return err
+		}
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, p := range profs {
+		if _, exists := r.profiles[p.ID]; exists {
+			// Bundle-derived (or earlier) entry wins; skip silently.
+			continue
+		}
+		r.profiles[p.ID] = p
+	}
+	return nil
+}
+
 // LoadProfiles validates and installs profs. On any validation failure
 // the registry is left unchanged. Profile-id collisions are surfaced
 // as a typed error.

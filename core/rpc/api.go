@@ -10,10 +10,12 @@ package rpc
 
 import (
 	"context"
+	"path/filepath"
 
 	"github.com/sigil-tech/kaneaz-harness/core"
 	corellm "github.com/sigil-tech/kaneaz-harness/core/llm"
 	"github.com/sigil-tech/kaneaz-harness/core/llm/credref"
+	"github.com/sigil-tech/kaneaz-harness/core/llm/personal"
 	llmregistry "github.com/sigil-tech/kaneaz-harness/core/llm/registry"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/a2a"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/audit"
@@ -194,15 +196,36 @@ func newLLMStack(c *core.Core) (llm.LLMConnectorAPI, *StreamBroker) {
 	var _ corellm.Registry = (*llmregistry.Registry)(nil)
 
 	broker := NewStreamBroker(WailsEmitter{})
-	dataDir := ""
-	if c != nil {
-		dataDir = c.DataDir()
-	}
+	store := newPersonalStore(c)
 	return llm.New(llm.Config{
 		Registry: reg,
 		Sink:     &streamSinkAdapter{broker: broker},
-		DataDir:  dataDir,
+		Store:    store,
 	}), broker
+}
+
+// newPersonalStore constructs the personal-providers FileStore. It
+// prefers c.DataDir()/providers.json when core is wired so test
+// harnesses with an explicit DataDir stay isolated; otherwise it falls
+// back to personal.DefaultPath() ($USER_CONFIG_DIR/kaneaz-harness).
+// A construction failure returns nil; the rpc impl treats a nil store
+// as "personal store unavailable" and the chassis still boots.
+func newPersonalStore(c *core.Core) personal.Store {
+	var path string
+	if c != nil && c.DataDir() != "" {
+		path = filepath.Join(c.DataDir(), "providers.json")
+	} else {
+		p, err := personal.DefaultPath()
+		if err != nil {
+			return nil
+		}
+		path = p
+	}
+	store, err := personal.NewFileStore(path)
+	if err != nil {
+		return nil
+	}
+	return store
 }
 
 // streamSinkAdapter wraps a *StreamBroker so the view package never

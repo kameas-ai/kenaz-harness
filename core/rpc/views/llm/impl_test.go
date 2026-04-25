@@ -2,10 +2,7 @@ package llm
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
-	"os"
-	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -132,60 +129,6 @@ func (s *fakeStream) Final() (corellm.Response, error) {
 	return s.final, s.finalErr
 }
 
-func TestAPI_ListProvidersFromFile(t *testing.T) {
-	dir := t.TempDir()
-	doc := providerProfileFile{
-		Profiles: []providerProfileEntry{
-			{
-				ID:    "anthropic-default",
-				Name:  "Claude (Anthropic)",
-				Tier:  "Cloud",
-				Kind:  "anthropic",
-				Model: "claude-sonnet-4-5",
-				Auth:  credentialEntry{Kind: "env", Locator: "ANTHROPIC_API_KEY"},
-			},
-		},
-	}
-	raw, _ := json.Marshal(doc)
-	if err := os.WriteFile(filepath.Join(dir, "providers.json"), raw, 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	reg := &fakeRegistry{}
-	api := New(Config{Registry: reg, DataDir: dir})
-
-	provs, err := api.ListProviders(context.Background())
-	if err != nil {
-		t.Fatalf("ListProviders: %v", err)
-	}
-	if len(provs) != 1 {
-		t.Fatalf("expected 1 provider, got %d", len(provs))
-	}
-	if provs[0].ID != "anthropic-default" {
-		t.Fatalf("ID = %q", provs[0].ID)
-	}
-	if provs[0].Name != "Claude (Anthropic)" {
-		t.Fatalf("Name = %q", provs[0].Name)
-	}
-	if provs[0].Tier != "Cloud" {
-		t.Fatalf("Tier = %q", provs[0].Tier)
-	}
-	if provs[0].Model != "claude-sonnet-4-5" {
-		t.Fatalf("Model = %q", provs[0].Model)
-	}
-	if len(reg.loaded) != 1 {
-		t.Fatalf("registry should have been loaded once")
-	}
-
-	// Idempotence: a second call must not reload.
-	if _, err := api.ListProviders(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	if len(reg.loaded) != 1 {
-		t.Fatalf("loadProfiles should be idempotent; got %d loads", len(reg.loaded))
-	}
-}
-
 func TestAPI_StartStream_PumpsChunksAndCloses(t *testing.T) {
 	stream := &fakeStream{
 		chunks: []corellm.StreamEvent{
@@ -203,7 +146,7 @@ func TestAPI_StartStream_PumpsChunksAndCloses(t *testing.T) {
 		stream: stream,
 	}
 	sink := &recordingSink{}
-	api := New(Config{Registry: reg, Sink: sink, DataDir: t.TempDir()})
+	api := New(Config{Registry: reg, Sink: sink})
 
 	subID, err := api.StartStream(context.Background(), "p")
 	if err != nil {
@@ -253,7 +196,7 @@ func TestAPI_StopStreamCancels(t *testing.T) {
 		stream: stream,
 	}
 	sink := &recordingSink{}
-	api := New(Config{Registry: reg, Sink: sink, DataDir: t.TempDir()})
+	api := New(Config{Registry: reg, Sink: sink})
 
 	subID, err := api.StartStream(context.Background(), "p")
 	if err != nil {
@@ -275,7 +218,7 @@ func TestAPI_StopStreamCancels(t *testing.T) {
 
 func TestAPI_StartStream_RegistryError(t *testing.T) {
 	reg := &fakeRegistry{streamErr: errors.New("rate limited")}
-	api := New(Config{Registry: reg, DataDir: t.TempDir()})
+	api := New(Config{Registry: reg})
 	_, err := api.StartStream(context.Background(), "missing")
 	if err == nil {
 		t.Fatal("expected error")
@@ -284,9 +227,17 @@ func TestAPI_StartStream_RegistryError(t *testing.T) {
 
 func TestAPI_NotWired(t *testing.T) {
 	api := New(Config{})
-	if _, err := api.ListProviders(context.Background()); err == nil {
-		t.Fatal("expected error when registry not wired")
+	// ListProviders without store/bundles returns an empty list — the
+	// chassis still boots, just nothing to render.
+	provs, err := api.ListProviders(context.Background())
+	if err != nil {
+		t.Fatalf("ListProviders: %v", err)
 	}
+	if len(provs) != 0 {
+		t.Fatalf("expected empty provider list, got %d", len(provs))
+	}
+	// StartStream without a registry must reject so the UI surfaces the
+	// "connector not wired" path.
 	if _, err := api.StartStream(context.Background(), "x"); err == nil {
 		t.Fatal("expected error when registry not wired")
 	}

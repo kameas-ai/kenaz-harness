@@ -140,6 +140,15 @@ func (b *Bindings) LLM_StartStream(id string) (string, error) {
 func (b *Bindings) LLM_StopStream(subID string) error {
 	return b.api.LLMConnector().StopStream(b.ctx(), subID)
 }
+func (b *Bindings) LLM_AddProvider(input llm.AddProviderInput) error {
+	return b.api.LLMConnector().AddProvider(b.ctx(), input)
+}
+func (b *Bindings) LLM_RemoveProvider(id string) error {
+	return b.api.LLMConnector().RemoveProvider(b.ctx(), id)
+}
+func (b *Bindings) LLM_TestProvider(id string) (llm.TestResult, error) {
+	return b.api.LLMConnector().TestProvider(b.ctx(), id)
+}
 
 // ── mcp ────────────────────────────────────────────────────────────────
 

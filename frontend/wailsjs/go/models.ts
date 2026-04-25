@@ -110,11 +110,70 @@ export namespace contextview {
 
 export namespace llm {
 	
+	export class CredentialReference {
+	    kind: string;
+	    locator: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new CredentialReference(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.kind = source["kind"];
+	        this.locator = source["locator"];
+	    }
+	}
+	export class AddProviderInput {
+	    id: string;
+	    name: string;
+	    kind: string;
+	    model: string;
+	    region?: string;
+	    cred: CredentialReference;
+	    plaintextApiKey?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new AddProviderInput(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.name = source["name"];
+	        this.kind = source["kind"];
+	        this.model = source["model"];
+	        this.region = source["region"];
+	        this.cred = this.convertValues(source["cred"], CredentialReference);
+	        this.plaintextApiKey = source["plaintextApiKey"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	
 	export class Provider {
 	    id: string;
 	    name: string;
 	    tier: string;
 	    model: string;
+	    source?: string;
+	    validated?: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new Provider(source);
@@ -126,6 +185,24 @@ export namespace llm {
 	        this.name = source["name"];
 	        this.tier = source["tier"];
 	        this.model = source["model"];
+	        this.source = source["source"];
+	        this.validated = source["validated"];
+	    }
+	}
+	export class TestResult {
+	    success: boolean;
+	    latency_ms: number;
+	    message: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new TestResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.success = source["success"];
+	        this.latency_ms = source["latency_ms"];
+	        this.message = source["message"];
 	    }
 	}
 

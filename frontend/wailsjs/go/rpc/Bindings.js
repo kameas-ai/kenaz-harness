@@ -54,8 +54,16 @@ export function Context_StopStream(arg1) {
   return window['go']['rpc']['Bindings']['Context_StopStream'](arg1);
 }
 
+export function LLM_AddProvider(arg1) {
+  return window['go']['rpc']['Bindings']['LLM_AddProvider'](arg1);
+}
+
 export function LLM_ListProviders() {
   return window['go']['rpc']['Bindings']['LLM_ListProviders']();
+}
+
+export function LLM_RemoveProvider(arg1) {
+  return window['go']['rpc']['Bindings']['LLM_RemoveProvider'](arg1);
 }
 
 export function LLM_StartStream(arg1) {
@@ -64,6 +72,10 @@ export function LLM_StartStream(arg1) {
 
 export function LLM_StopStream(arg1) {
   return window['go']['rpc']['Bindings']['LLM_StopStream'](arg1);
+}
+
+export function LLM_TestProvider(arg1) {
+  return window['go']['rpc']['Bindings']['LLM_TestProvider'](arg1);
 }
 
 export function LoadRoute() {

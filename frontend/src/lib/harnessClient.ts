@@ -17,6 +17,8 @@
 import type {
   Session,
   Provider,
+  AddProviderInput,
+  TestResult,
   MCPServer,
   A2ACard,
   Job,
@@ -58,6 +60,9 @@ interface WailsBindingsLike {
   LLM_ListProviders(): Promise<Provider[]>;
   LLM_StartStream(id: string): Promise<string>;
   LLM_StopStream(id: string): Promise<void>;
+  LLM_AddProvider(input: AddProviderInput): Promise<void>;
+  LLM_RemoveProvider(id: string): Promise<void>;
+  LLM_TestProvider(id: string): Promise<TestResult>;
 
   MCP_ListServers(): Promise<MCPServer[]>;
   MCP_StartStream(id: string): Promise<string>;
@@ -128,6 +133,15 @@ export interface LLMConnectorClient {
   listProviders(): Promise<Provider[]>;
   startStream(id: string): Promise<string>;
   stopStream(id: string): Promise<void>;
+  /**
+   * AddProvider persists a personal provider profile. The plaintextApiKey,
+   * if supplied, is written to the OS keychain by the backend and zeroed
+   * before any further processing. Only the CredentialReference enters
+   * providers.json.
+   */
+  addProvider(input: AddProviderInput): Promise<void>;
+  removeProvider(id: string): Promise<void>;
+  testProvider(id: string): Promise<TestResult>;
 }
 
 export interface MCPClient {
@@ -237,6 +251,9 @@ export function createHarnessClient(): HarnessClient {
       listProviders: () => b().LLM_ListProviders(),
       startStream: (id) => b().LLM_StartStream(id),
       stopStream: (id) => b().LLM_StopStream(id),
+      addProvider: (input) => b().LLM_AddProvider(input),
+      removeProvider: (id) => b().LLM_RemoveProvider(id),
+      testProvider: (id) => b().LLM_TestProvider(id),
     },
     mcp: {
       listServers: () => b().MCP_ListServers(),
@@ -339,6 +356,13 @@ export function createFakeHarnessClient(
       listProviders: async () => [],
       startStream: async () => 'fake-sub',
       stopStream: noop,
+      addProvider: noop,
+      removeProvider: noop,
+      testProvider: async () => ({
+        success: true,
+        latency_ms: 1,
+        message: 'fake ok',
+      }),
     },
     mcp: {
       listServers: async () => [],

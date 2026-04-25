@@ -40,11 +40,17 @@ export function Context_StartStream():Promise<string>;
 
 export function Context_StopStream(arg1:string):Promise<void>;
 
+export function LLM_AddProvider(arg1:llm.AddProviderInput):Promise<void>;
+
 export function LLM_ListProviders():Promise<Array<llm.Provider>>;
+
+export function LLM_RemoveProvider(arg1:string):Promise<void>;
 
 export function LLM_StartStream(arg1:string):Promise<string>;
 
 export function LLM_StopStream(arg1:string):Promise<void>;
+
+export function LLM_TestProvider(arg1:string):Promise<llm.TestResult>;
 
 export function LoadRoute():Promise<string>;
 

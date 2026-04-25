@@ -1,15 +1,31 @@
+// Concrete LLMConnectorAPI implementation. Backs both the streaming
+// surface used by chat sessions and the personal-providers Add/Remove/
+// Test flow exposed through the providers UI.
+//
+// Collaborators:
+//
+//   - Registry — connector registry. ListProviders surfaces its loaded
+//     profiles; StartStream opens a stream against it.
+//   - personal.Store — JSON-file-backed user-scoped provider store.
+//     A nil Store causes AddProvider/RemoveProvider to return
+//     ErrPersonalStoreUnavailable.
+//   - BundleSource — read-only snapshot of bundle-derived profiles.
+//   - KeychainWriter — writes plaintext API keys to the OS keychain
+//     and returns the indirect reference persisted in providers.json.
+//   - ProviderProber — runs TestProvider's lightweight verification.
+//   - StreamSink — fan-out for "llm:stream-chunk" / "llm:stream-closed"
+//     payloads. nil falls back to a no-op (test-friendly default).
 package llm
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 	"sync"
+	"time"
 
 	corellm "github.com/sigil-tech/kaneaz-harness/core/llm"
+	"github.com/sigil-tech/kaneaz-harness/core/llm/personal"
 )
 
 // StreamSink is the minimal contract the concrete LLMConnectorAPI uses
@@ -25,9 +41,6 @@ type StreamSink interface {
 	Emit(topic string, payload any)
 }
 
-// nopSink is the safe default when the API is constructed without a
-// broker — the connector still returns subscription ids and pumps
-// chunks, but no Wails event is emitted.
 type nopSink struct{}
 
 func (nopSink) Emit(string, any) {}
@@ -39,35 +52,46 @@ type Registry interface {
 	corellm.Registry
 }
 
-// API is the concrete LLMConnectorAPI implementation.
-//
-// Lifecycle:
-//
-//	api := llmview.New(llmview.Config{
-//	    Registry: reg,
-//	    Sink:     broker,           // *rpc.StreamBroker.WithEmit() shim
-//	    DataDir:  dataDir,          // for providers.json fallback
-//	})
-//
-// StartStream(profileID) opens a registry stream, allocates a
-// subscription id, and runs a goroutine that pumps each StreamEvent
-// into the sink as a payload of shape:
-//
-//	{ "sub_id": "<id>", "chunk": <StreamEvent> }
-//
-// The frontend's useEventStream subscribes to "llm:stream-chunk" and
-// filters by sub_id. StopStream(subID) cancels the underlying call
-// and the pump emits "llm:stream-closed" with reason "stop-called".
-type API struct {
-	reg     Registry
-	sink    StreamSink
-	dataDir string
+// ProviderProber performs the lightweight verification call used by
+// TestProvider. Tests replace it with a deterministic fake.
+type ProviderProber interface {
+	Probe(ctx context.Context, profile corellm.ProviderProfile) ProberResult
+}
 
-	mu              sync.Mutex
-	subs            map[string]*subscription
-	nextID          uint64
-	providersLoaded bool
-	profileDisplay  map[string]displayMeta
+// ProberResult is the prober's structured response.
+type ProberResult struct {
+	Success   bool
+	LatencyMS int
+	Message   string
+}
+
+// KeychainWriter writes a plaintext credential to the OS keychain under
+// locator. Implementations MUST zeroize the supplied byte slice before
+// returning.
+type KeychainWriter interface {
+	Write(ctx context.Context, locator string, plaintext []byte) error
+}
+
+// BundleSource exposes the registry's bundle-derived profiles. A nil
+// BundleSource is treated as an empty snapshot.
+type BundleSource interface {
+	BundleProfiles() []corellm.ProviderProfile
+}
+
+// API is the concrete LLMConnectorAPI implementation.
+type API struct {
+	reg      Registry
+	sink     StreamSink
+	store    personal.Store
+	bundles  BundleSource
+	keychain KeychainWriter
+	prober   ProviderProber
+
+	mu             sync.Mutex
+	subs           map[string]*subscription
+	nextID         uint64
+	validated      map[string]bool
+	personalLoaded bool
 }
 
 type subscription struct {
@@ -77,135 +101,94 @@ type subscription struct {
 	done   chan struct{}
 }
 
-// displayMeta caches the human-friendly Name/Tier we read from
-// providers.json so ListProviders does not re-parse the file on every
-// call.
-type displayMeta struct {
-	name string
-	tier string
-}
-
 // Config bundles construction options.
 type Config struct {
-	// Registry is required; ListProviders / StartStream call into it.
 	Registry Registry
-	// Sink receives "llm:stream-chunk" / "llm:stream-closed" emissions.
-	// Nil falls through to a no-op (test-friendly default).
-	Sink StreamSink
-	// DataDir is the base for the personal providers.json file. When
-	// blank we fall back to $XDG_CONFIG_HOME / Library/Application
-	// Support / %APPDATA% (os.UserConfigDir).
-	DataDir string
+	Sink     StreamSink
+	Store    personal.Store
+	Bundles  BundleSource
+	Keychain KeychainWriter
+	Prober   ProviderProber
 }
 
-// New constructs a concrete API. A nil Registry yields an API that
-// returns errNotWired-style errors from every method, matching the
-// chassis stub behaviour so a partially-wired harness still boots.
+// New constructs a concrete API.
 func New(cfg Config) *API {
 	sink := cfg.Sink
 	if sink == nil {
 		sink = nopSink{}
 	}
 	return &API{
-		reg:     cfg.Registry,
-		sink:    sink,
-		dataDir: cfg.DataDir,
-		subs:    map[string]*subscription{},
+		reg:       cfg.Registry,
+		sink:      sink,
+		store:     cfg.Store,
+		bundles:   cfg.Bundles,
+		keychain:  cfg.Keychain,
+		prober:    cfg.Prober,
+		subs:      map[string]*subscription{},
+		validated: map[string]bool{},
 	}
 }
+
+// ErrPersonalStoreUnavailable is returned by AddProvider / RemoveProvider
+// when the impl was built without a backing store.
+var ErrPersonalStoreUnavailable = errors.New("llm: personal provider store unavailable")
+
+// ErrBundleProviderImmutable is returned by RemoveProvider when the
+// caller targets a bundle-derived profile.
+var ErrBundleProviderImmutable = errors.New("llm: bundle providers are read-only")
 
 // Compile-time assertion: *API satisfies LLMConnectorAPI.
 var _ LLMConnectorAPI = (*API)(nil)
 
-// providerProfileFile is the personal-providers escape-hatch shape.
-// One JSON file under $USER_CONFIG_DIR/kaneaz-harness/providers.json
-// lets a developer wire a real anthropic profile without authoring a
-// full bundle (US plan §6 v1 demo). The file shape mirrors
-// llm.ProviderProfile so the Registry can ingest it directly.
-type providerProfileFile struct {
-	Profiles []providerProfileEntry `json:"profiles"`
-}
-
-type providerProfileEntry struct {
-	ID       string                 `json:"id"`
-	Name     string                 `json:"name"`
-	Tier     string                 `json:"tier"`
-	Kind     string                 `json:"kind"`
-	Model    string                 `json:"model"`
-	Auth     credentialEntry        `json:"auth"`
-	Region   string                 `json:"region,omitempty"`
-	Endpoint string                 `json:"endpoint,omitempty"`
-	Defaults map[string]interface{} `json:"defaults,omitempty"`
-}
-
-type credentialEntry struct {
-	Kind    string `json:"kind"`
-	Locator string `json:"locator"`
-}
-
-// ListProviders returns the loaded profiles' user-facing summaries.
-//
-// The first call after process start lazily loads providers.json into
-// the Registry. Subsequent calls return the cached snapshot. Profiles
-// already loaded into the Registry by other code paths (tests, future
-// bundle wiring) are also surfaced here.
+// ListProviders returns the merged bundle + personal list. Bundle
+// entries win on ID collision; personal-only entries surface the
+// user's keychain-backed providers. Personal profiles are loaded into
+// the registry on first call so subsequent StartStream calls resolve
+// the same IDs.
 func (a *API) ListProviders(_ context.Context) ([]Provider, error) {
-	if a.reg == nil {
-		return nil, errors.New("llm: connector not wired")
-	}
-	if err := a.ensureProvidersLoaded(); err != nil {
+	if err := a.ensurePersonalLoaded(); err != nil {
 		return nil, err
 	}
-	// The Registry interface (core/llm.Registry) does not expose a
-	// list method, but the concrete *registry.Registry does. We
-	// retrieve via the optional method below; tests pass a fake that
-	// implements it directly.
-	type lister interface {
-		Profiles() []corellm.ProviderProfile
-	}
-	var profs []corellm.ProviderProfile
-	if l, ok := a.reg.(lister); ok {
-		profs = l.Profiles()
-	}
-	out := make([]Provider, 0, len(profs))
-	for _, p := range profs {
-		name := p.ID
-		// If we loaded from providers.json, attach the Name/Tier we
-		// stashed there. Look up by ID in our cache.
-		a.mu.Lock()
-		if disp, ok := a.profileDisplay[p.ID]; ok {
-			if disp.name != "" {
-				name = disp.name
-			}
+	seen := map[string]Provider{}
+	if a.bundles != nil {
+		for _, p := range a.bundles.BundleProfiles() {
+			seen[p.ID] = profileToProvider(p, "bundle", a.isValidated(p.ID))
 		}
-		a.mu.Unlock()
-		out = append(out, Provider{
-			ID:    p.ID,
-			Name:  name,
-			Tier:  a.tierFor(p.ID),
-			Model: p.Model,
-		})
 	}
+	if a.store != nil {
+		personalList, err := a.store.List()
+		if err != nil {
+			return nil, fmt.Errorf("llm: list personal providers: %w", err)
+		}
+		for _, p := range personalList {
+			if _, exists := seen[p.ID]; exists {
+				continue
+			}
+			seen[p.ID] = profileToProvider(p, "personal", a.isValidated(p.ID))
+		}
+	}
+	out := make([]Provider, 0, len(seen))
+	for _, v := range seen {
+		out = append(out, v)
+	}
+	sortProviders(out)
 	return out, nil
 }
 
-// StartStream opens a streaming generation against profileID and
-// returns a subscription id. The actual streaming runs in a goroutine
-// that pipes each chunk into the StreamSink.
+// StartStream opens a streaming generation against profileID and returns
+// a subscription id. The actual streaming runs in a goroutine that
+// pipes each chunk into the StreamSink.
 func (a *API) StartStream(ctx context.Context, profileID string) (string, error) {
 	if a.reg == nil {
 		return "", errors.New("llm: connector not wired")
 	}
-	if err := a.ensureProvidersLoaded(); err != nil {
-		return "", err
-	}
 	if profileID == "" {
 		return "", errors.New("llm: profile id required")
 	}
+	if err := a.ensurePersonalLoaded(); err != nil {
+		return "", err
+	}
 
-	// Build a default GenerationRequest. The v1 demo uses a single
-	// fixed user message; chat UI work will replace this with a real
-	// message-history threading from the session state.
 	req := corellm.GenerationRequest{
 		ProfileID: profileID,
 		Messages: []corellm.Message{
@@ -218,7 +201,6 @@ func (a *API) StartStream(ctx context.Context, profileID string) (string, error)
 		},
 	}
 
-	// Per-call ctx so StopStream / ctx-cancel both terminate the run.
 	streamCtx, cancel := context.WithCancel(context.Background())
 	go func() {
 		select {
@@ -267,9 +249,6 @@ func (a *API) StopStream(_ context.Context, subID string) error {
 	return nil
 }
 
-// pump reads from the underlying corellm.Stream, emits one
-// "llm:stream-chunk" payload per StreamEvent, and emits a final
-// "llm:stream-closed" payload when the stream terminates.
 func (a *API) pump(sub *subscription) {
 	defer func() {
 		a.mu.Lock()
@@ -302,104 +281,204 @@ func (a *API) pump(sub *subscription) {
 	a.sink.Emit("llm:stream-closed", closed)
 }
 
+// AddProvider validates the input, writes the plaintext API key (if any)
+// to the keychain under the supplied locator, then persists the
+// CredentialReference to the personal store. The new profile is also
+// loaded into the registry so StartStream can resolve it without
+// requiring a process restart.
+func (a *API) AddProvider(ctx context.Context, in AddProviderInput) error {
+	if a.store == nil {
+		return ErrPersonalStoreUnavailable
+	}
+	if in.Cred.Kind != "keychain" {
+		return fmt.Errorf("llm: AddProvider requires kind=keychain credential, got %q", in.Cred.Kind)
+	}
+	if in.PlaintextAPIKey != "" {
+		if a.keychain == nil {
+			return errors.New("llm: no keychain writer configured; cannot store plaintext key")
+		}
+		buf := []byte(in.PlaintextAPIKey)
+		in.PlaintextAPIKey = ""
+		err := a.keychain.Write(ctx, in.Cred.Locator, buf)
+		zeroBytes(buf)
+		if err != nil {
+			return fmt.Errorf("llm: keychain write %q: %w", in.Cred.Locator, err)
+		}
+	}
+	profile := corellm.ProviderProfile{
+		ID:     in.ID,
+		Kind:   in.Kind,
+		Model:  in.Model,
+		Region: in.Region,
+		Cred: corellm.CredentialReference{
+			Kind:    in.Cred.Kind,
+			Locator: in.Cred.Locator,
+		},
+	}
+	if err := a.store.Add(profile); err != nil {
+		return err
+	}
+	if a.reg != nil {
+		// Best-effort registry sync. Failure here means StartStream will
+		// not see the new profile until the next ensurePersonalLoaded
+		// pass; the store write is durable so the row still renders.
+		_ = a.reg.LoadProfiles([]corellm.ProviderProfile{profile})
+	}
+	a.mu.Lock()
+	delete(a.validated, in.ID)
+	a.mu.Unlock()
+	return nil
+}
+
+// RemoveProvider deletes a personal provider by ID. Bundle-derived
+// profiles are rejected so the UI cannot mutate them through this seam.
+func (a *API) RemoveProvider(_ context.Context, id string) error {
+	if a.store == nil {
+		return ErrPersonalStoreUnavailable
+	}
+	if a.bundles != nil {
+		for _, p := range a.bundles.BundleProfiles() {
+			if p.ID == id {
+				return fmt.Errorf("%w: %q", ErrBundleProviderImmutable, id)
+			}
+		}
+	}
+	if err := a.store.Remove(id); err != nil {
+		return err
+	}
+	a.mu.Lock()
+	delete(a.validated, id)
+	a.mu.Unlock()
+	return nil
+}
+
+// TestProvider runs the configured prober against the named profile and
+// returns a TestResult.
+func (a *API) TestProvider(ctx context.Context, id string) (TestResult, error) {
+	profile, err := a.lookupProfile(id)
+	if err != nil {
+		return TestResult{}, err
+	}
+	if a.prober == nil {
+		return TestResult{
+			Success: false,
+			Message: "no provider prober configured",
+		}, nil
+	}
+	t0 := time.Now()
+	res := a.prober.Probe(ctx, profile)
+	if res.LatencyMS == 0 {
+		res.LatencyMS = int(time.Since(t0).Milliseconds())
+	}
+	a.mu.Lock()
+	a.validated[id] = res.Success
+	a.mu.Unlock()
+	return TestResult{
+		Success:   res.Success,
+		LatencyMS: res.LatencyMS,
+		Message:   res.Message,
+	}, nil
+}
+
+// ensurePersonalLoaded loads personal-store profiles into the registry
+// once per process. Idempotent.
+func (a *API) ensurePersonalLoaded() error {
+	a.mu.Lock()
+	if a.personalLoaded {
+		a.mu.Unlock()
+		return nil
+	}
+	a.mu.Unlock()
+	if a.store == nil || a.reg == nil {
+		a.mu.Lock()
+		a.personalLoaded = true
+		a.mu.Unlock()
+		return nil
+	}
+	list, err := a.store.List()
+	if err != nil {
+		return fmt.Errorf("llm: list personal providers: %w", err)
+	}
+	if len(list) > 0 {
+		if err := a.reg.LoadProfiles(list); err != nil {
+			return fmt.Errorf("llm: load personal profiles: %w", err)
+		}
+	}
+	a.mu.Lock()
+	a.personalLoaded = true
+	a.mu.Unlock()
+	return nil
+}
+
+func (a *API) lookupProfile(id string) (corellm.ProviderProfile, error) {
+	if a.bundles != nil {
+		for _, p := range a.bundles.BundleProfiles() {
+			if p.ID == id {
+				return p, nil
+			}
+		}
+	}
+	if a.store != nil {
+		p, err := a.store.Get(id)
+		if err == nil {
+			return p, nil
+		}
+	}
+	return corellm.ProviderProfile{}, fmt.Errorf("llm: provider %q not found", id)
+}
+
+func (a *API) isValidated(id string) bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.validated[id]
+}
+
 // StreamChunkPayload is the typed payload shipped on llm:stream-chunk.
 //
 // Privacy: Chunk is a connector StreamEvent. The connector never puts
 // credential bytes on a StreamEvent (per the audit-emitter contract);
 // the redaction pipeline upstream gives a second line of defense.
 type StreamChunkPayload struct {
-	SubID string                 `json:"sub_id"`
-	Chunk corellm.StreamEvent    `json:"chunk"`
+	SubID string              `json:"sub_id"`
+	Chunk corellm.StreamEvent `json:"chunk"`
 }
 
 // StreamClosedPayload is the typed payload shipped on llm:stream-closed.
 type StreamClosedPayload struct {
 	SubID        string `json:"sub_id"`
-	Reason       string `json:"reason"`           // completed | stop-called | backend-error
+	Reason       string `json:"reason"`
 	Message      string `json:"message,omitempty"`
 	FinishReason string `json:"finish_reason,omitempty"`
 }
 
-// tierFor returns the human-friendly tier label cached for the given
-// profile id. Defaults to "Cloud" when no providers.json entry was
-// loaded for the profile.
-func (a *API) tierFor(id string) string {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	if d, ok := a.profileDisplay[id]; ok && d.tier != "" {
-		return d.tier
+func profileToProvider(p corellm.ProviderProfile, source string, validated bool) Provider {
+	return Provider{
+		ID:        p.ID,
+		Name:      p.ID,
+		Tier:      source,
+		Model:     p.Model,
+		Source:    source,
+		Validated: validated,
 	}
-	return "Cloud"
 }
 
-// ensureProvidersLoaded loads $USER_CONFIG_DIR/kaneaz-harness/providers.json
-// (or $DataDir/providers.json when DataDir is set) and registers each
-// entry with the Registry. Idempotent — second call is a no-op.
-func (a *API) ensureProvidersLoaded() error {
-	a.mu.Lock()
-	if a.providersLoaded {
-		a.mu.Unlock()
-		return nil
-	}
-	a.mu.Unlock()
-
-	path, err := a.providersPath()
-	if err != nil {
-		return err
-	}
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		// Missing file is not an error — the Registry may have been
-		// pre-populated by another code path. We mark "loaded" so we
-		// don't keep retrying every call.
-		a.mu.Lock()
-		a.providersLoaded = true
-		a.mu.Unlock()
-		if errors.Is(err, os.ErrNotExist) {
-			return nil
-		}
-		return fmt.Errorf("llm: read providers file: %w", err)
-	}
-	var doc providerProfileFile
-	if err := json.Unmarshal(raw, &doc); err != nil {
-		return fmt.Errorf("llm: parse providers file: %w", err)
-	}
-	profs := make([]corellm.ProviderProfile, 0, len(doc.Profiles))
-	display := make(map[string]displayMeta, len(doc.Profiles))
-	for _, e := range doc.Profiles {
-		profs = append(profs, corellm.ProviderProfile{
-			ID:       e.ID,
-			Kind:     e.Kind,
-			Model:    e.Model,
-			Cred:     corellm.CredentialReference{Kind: e.Auth.Kind, Locator: e.Auth.Locator},
-			Region:   e.Region,
-			Endpoint: e.Endpoint,
-			Defaults: e.Defaults,
-		})
-		display[e.ID] = displayMeta{name: e.Name, tier: e.Tier}
-	}
-	if len(profs) > 0 {
-		if err := a.reg.LoadProfiles(profs); err != nil {
-			return fmt.Errorf("llm: load profiles: %w", err)
+func sortProviders(ps []Provider) {
+	for i := 1; i < len(ps); i++ {
+		for j := i; j > 0 && lessProvider(ps[j], ps[j-1]); j-- {
+			ps[j], ps[j-1] = ps[j-1], ps[j]
 		}
 	}
-	a.mu.Lock()
-	a.providersLoaded = true
-	a.profileDisplay = display
-	a.mu.Unlock()
-	return nil
 }
 
-// providersPath resolves the providers.json location. DataDir wins
-// when set (test harnesses, embedding apps); otherwise we use
-// os.UserConfigDir.
-func (a *API) providersPath() (string, error) {
-	if a.dataDir != "" {
-		return filepath.Join(a.dataDir, "providers.json"), nil
+func lessProvider(a, b Provider) bool {
+	if a.Source != b.Source {
+		return a.Source < b.Source
 	}
-	cfg, err := os.UserConfigDir()
-	if err != nil {
-		return "", fmt.Errorf("llm: user config dir: %w", err)
+	return a.ID < b.ID
+}
+
+func zeroBytes(b []byte) {
+	for i := range b {
+		b[i] = 0
 	}
-	return filepath.Join(cfg, "kaneaz-harness", "providers.json"), nil
 }

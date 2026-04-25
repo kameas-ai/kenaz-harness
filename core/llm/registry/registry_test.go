@@ -335,3 +335,62 @@ func TestRegistry_PreflightAll_BedrockMissingRegion(t *testing.T) {
 func TestRegistry_ImplementsLLMRegistry(t *testing.T) {
 	var _ llm.Registry = (*Registry)(nil)
 }
+
+func TestRegistry_MergePersonalProfilesAppends(t *testing.T) {
+	r, _ := newReg(t)
+	bundle := llm.ProviderProfile{
+		ID: "bundle-prof", Kind: "anthropic", Model: "claude-sonnet",
+		Cred: llm.CredentialReference{Kind: "env", Locator: "K"},
+	}
+	if err := r.LoadProfiles([]llm.ProviderProfile{bundle}); err != nil {
+		t.Fatalf("LoadProfiles: %v", err)
+	}
+	personal := llm.ProviderProfile{
+		ID: "personal-prof", Kind: "openai", Model: "gpt-4o-mini",
+		Cred: llm.CredentialReference{Kind: "keychain", Locator: "kaneaz-harness/personal-prof"},
+	}
+	if err := r.MergePersonalProfiles([]llm.ProviderProfile{personal}); err != nil {
+		t.Fatalf("MergePersonalProfiles: %v", err)
+	}
+	got, err := r.Profile("personal-prof")
+	if err != nil || got.Kind != "openai" {
+		t.Fatalf("expected personal profile loaded, got %+v err=%v", got, err)
+	}
+}
+
+func TestRegistry_MergePersonalProfilesBundleWinsOnCollision(t *testing.T) {
+	r, _ := newReg(t)
+	bundle := llm.ProviderProfile{
+		ID: "shared-id", Kind: "anthropic", Model: "claude-sonnet",
+		Cred: llm.CredentialReference{Kind: "env", Locator: "K"},
+	}
+	if err := r.LoadProfiles([]llm.ProviderProfile{bundle}); err != nil {
+		t.Fatalf("LoadProfiles: %v", err)
+	}
+	personal := llm.ProviderProfile{
+		ID: "shared-id", Kind: "openai", Model: "gpt-4o-mini",
+		Cred: llm.CredentialReference{Kind: "keychain", Locator: "kaneaz-harness/shared-id"},
+	}
+	if err := r.MergePersonalProfiles([]llm.ProviderProfile{personal}); err != nil {
+		t.Fatalf("MergePersonalProfiles: %v", err)
+	}
+	got, err := r.Profile("shared-id")
+	if err != nil {
+		t.Fatalf("Profile: %v", err)
+	}
+	if got.Kind != "anthropic" {
+		t.Fatalf("expected bundle profile to win, got %+v", got)
+	}
+}
+
+func TestRegistry_MergePersonalProfilesValidatesBatch(t *testing.T) {
+	r, _ := newReg(t)
+	bad := llm.ProviderProfile{ID: "", Kind: "anthropic", Model: "x",
+		Cred: llm.CredentialReference{Kind: "keychain", Locator: "k"}}
+	if err := r.MergePersonalProfiles([]llm.ProviderProfile{bad}); err == nil {
+		t.Fatal("expected validation error on empty ID")
+	}
+	if len(r.Profiles()) != 0 {
+		t.Fatalf("expected registry to be unchanged after invalid merge")
+	}
+}
