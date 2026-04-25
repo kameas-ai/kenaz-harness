@@ -166,7 +166,7 @@ func (c *Cache) Invalidate(r ref.CredentialReference) {
 		}
 		delete(c.entries, id)
 	}
-	subs := append([]func(ref.CredentialReference)(nil), c.subscribers...)
+	subs := append([]func(ref.CredentialReference){}, c.subscribers...)
 	c.mu.Unlock()
 	for _, fn := range subs {
 		fn(r)

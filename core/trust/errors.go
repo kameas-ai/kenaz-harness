@@ -3,6 +3,8 @@ package trust
 import (
 	"errors"
 	"fmt"
+
+	"github.com/sigil-tech/kaneaz-harness/core/trust/internal/algo"
 )
 
 // RejectionCode is the stable taxonomy of verification rejection reasons
@@ -98,14 +100,14 @@ var (
 	// registered factory in the process; surfaces during sign dispatch.
 	ErrBackendNotRegistered = errors.New("trust: backend not registered")
 
-	// ErrAlgorithmNotImplemented is returned by interface-conformant
-	// algorithm slots that do not yet have a real implementation
-	// (FR-004 phasing — ECDSA-P256 / RSA-PSS at v1.0).
-	ErrAlgorithmNotImplemented = errors.New("trust: algorithm not implemented")
+	// ErrAlgorithmNotImplemented is re-exported from core/trust/internal/algo
+	// to keep the public API at core/trust unchanged after the algorithm
+	// types moved there to break an import cycle.
+	ErrAlgorithmNotImplemented = algo.ErrAlgorithmNotImplemented
 
-	// ErrAlgorithmNotSupported is returned when a backend cannot
-	// produce signatures for the requested algorithm.
-	ErrAlgorithmNotSupported = errors.New("trust: algorithm not supported by backend")
+	// ErrAlgorithmNotSupported is re-exported from core/trust/internal/algo
+	// (see ErrAlgorithmNotImplemented).
+	ErrAlgorithmNotSupported = algo.ErrAlgorithmNotSupported
 
 	// ErrInvalidEnvelope means the envelope failed shape validation —
 	// the verify pipeline maps this to RejSignatureInvalid.

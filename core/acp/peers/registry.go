@@ -151,7 +151,7 @@ func (r *Registry) PreflightAll(ctx context.Context) []acp.PreflightResult {
 			out = append(out, acp.PreflightResult{PeerID: p.PeerID, Success: false, Error: err})
 			continue
 		}
-		s.Zeroize()
+		s.Destroy()
 		out = append(out, acp.PreflightResult{PeerID: p.PeerID, Success: true})
 	}
 	return out

@@ -43,6 +43,9 @@ import (
 type (
 	// CredentialReference is the indirect pointer; see ref.CredentialReference.
 	CredentialReference = ref.CredentialReference
+	// Reference is a shorter alias for CredentialReference accepted by
+	// consumers (some early WPs adopted the shorter form).
+	Reference = ref.CredentialReference
 	// RefKind enumerates supported reference kinds.
 	RefKind = ref.RefKind
 	// Backend is the resolution contract; see registry.Backend.
@@ -85,6 +88,12 @@ const (
 	HealthDegraded    = registry.HealthDegraded
 	HealthUnavailable = registry.HealthUnavailable
 )
+
+// ErrUnknownKind is returned when a CredentialReference carries a Kind
+// that is not registered with any backend. Re-exported here so consumers
+// (llm/credref, acp/peers, etc.) can match it via errors.Is without
+// importing the registry sub-package.
+var ErrUnknownKind = errors.New("secrets: unknown reference kind or no backend configured")
 
 // PreFlightStatus re-exports.
 const (

@@ -252,10 +252,19 @@ func (r *Registry) Stream(ctx context.Context, req llm.GenerationRequest) (llm.S
 			_ = emitter.Error(ctx, req, prof, rerr)
 			return nil, rerr
 		}
-		credBytes = append([]byte(nil), s.Bytes()...)
-		// Zeroize the resolver-returned secret immediately; the adapter
-		// gets its own private copy in credBytes.
-		s.Zeroize()
+		// Copy the credential bytes via Secret.Use (the canonical
+		// borrowed-view pattern from secrets-keychain) and Destroy
+		// the resolver-returned Secret immediately; the adapter gets
+		// its own private copy in credBytes.
+		if useErr := s.Use(func(value []byte) error {
+			credBytes = append([]byte(nil), value...)
+			return nil
+		}); useErr != nil {
+			s.Destroy()
+			_ = emitter.Error(ctx, req, prof, useErr)
+			return nil, useErr
+		}
+		s.Destroy()
 	}
 
 	// 5. AuditEmitter.RequestSubmitted.

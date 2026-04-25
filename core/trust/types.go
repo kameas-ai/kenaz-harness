@@ -1,26 +1,29 @@
 package trust
 
-import "time"
+import (
+	"time"
 
-// Algorithm identifies a signing/verification algorithm. Stable string
-// constants conform to JOSE-style names so they can travel in envelopes.
+	"github.com/sigil-tech/kaneaz-harness/core/trust/internal/algo"
+)
+
+// Algorithm identifies a signing/verification algorithm. The canonical
+// definition lives in core/trust/internal/algo so the math packages do
+// not induce an import cycle back into core/trust; this is a type alias
+// that re-exports the type at the public API surface.
 //
 // Implements FR-004 (algorithm policy) — the set is fixed at v1.0 with
 // only Ed25519 implemented; ECDSA-P256 and RSA-PSS are interface-conformant
 // slots filled in v1.x per plan §1.4.
-type Algorithm string
+type Algorithm = algo.Algorithm
 
+// Algorithm constants re-exported from core/trust/internal/algo so the
+// public API surface is unchanged. Same instances; errors.Is and equality
+// comparisons work transparently.
 const (
-	// AlgEd25519 — RFC 8032 Ed25519. Default and only implemented at v1.0.
-	AlgEd25519 Algorithm = "ed25519"
-	// AlgECDSAP256 — interface slot for ECDSA over NIST P-256 / SHA-256.
-	AlgECDSAP256 Algorithm = "ecdsa-p256"
-	// AlgRSAPSSSHA256 — interface slot for RSA-PSS / SHA-256.
-	AlgRSAPSSSHA256 Algorithm = "rsa-pss-sha256"
+	AlgEd25519      = algo.AlgEd25519
+	AlgECDSAP256    = algo.AlgECDSAP256
+	AlgRSAPSSSHA256 = algo.AlgRSAPSSSHA256
 )
-
-// String implements fmt.Stringer.
-func (a Algorithm) String() string { return string(a) }
 
 // BackendKind names a registered [SigningBackend].
 //
