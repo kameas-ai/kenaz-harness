@@ -260,12 +260,15 @@ func FromMap(m Map) (CredentialReference, error) {
 	if locator == "" {
 		return CredentialReference{}, fmt.Errorf("%w: kind=%s", ErrEmptyLocator, kind)
 	}
-	if looksLikeInlineSecret(locator) {
-		return CredentialReference{}, fmt.Errorf("%w: kind=%s", ErrInlinePlaintext, kind)
-	}
-
+	// Kind-specific format validation runs before the inline-plaintext
+	// heuristic so that obviously-malformed locators (e.g. an env-var
+	// name with spaces) report ErrLocatorFormat rather than the more
+	// alarming ErrInlinePlaintext.
 	if err := validateLocator(kind, locator); err != nil {
 		return CredentialReference{}, err
+	}
+	if looksLikeInlineSecret(locator) {
+		return CredentialReference{}, fmt.Errorf("%w: kind=%s", ErrInlinePlaintext, kind)
 	}
 
 	consumerID, _ := m["consumer_id"].(string)
@@ -283,10 +286,16 @@ func FromMap(m Map) (CredentialReference, error) {
 // `kind:locator`. It is the form used in CLI flags, e.g.
 // `--secret-backend=keychain:anthropic-api-key`.
 func FromString(s string) (CredentialReference, error) {
-	s = strings.TrimSpace(s)
 	if s == "" {
 		return CredentialReference{}, fmt.Errorf("%w: empty input", ErrEmptyLocator)
 	}
+	trimmed := strings.TrimSpace(s)
+	if trimmed == "" {
+		// Non-empty but whitespace-only input: it had a value but the
+		// shape is invalid. Surface as a locator-format error.
+		return CredentialReference{}, fmt.Errorf("%w: whitespace-only input", ErrLocatorFormat)
+	}
+	s = trimmed
 	idx := strings.Index(s, ":")
 	if idx <= 0 {
 		return CredentialReference{}, fmt.Errorf("%w: expected kind:locator", ErrLocatorFormat)
@@ -300,11 +309,13 @@ func FromString(s string) (CredentialReference, error) {
 	if locator == "" {
 		return CredentialReference{}, fmt.Errorf("%w: kind=%s", ErrEmptyLocator, kind)
 	}
-	if looksLikeInlineSecret(locator) {
-		return CredentialReference{}, fmt.Errorf("%w: kind=%s", ErrInlinePlaintext, kind)
-	}
+	// Kind-specific format validation precedes the inline-plaintext
+	// heuristic; see FromMap for the rationale.
 	if err := validateLocator(kind, locator); err != nil {
 		return CredentialReference{}, err
+	}
+	if looksLikeInlineSecret(locator) {
+		return CredentialReference{}, fmt.Errorf("%w: kind=%s", ErrInlinePlaintext, kind)
 	}
 	return CredentialReference{Kind: kind, Locator: locator}, nil
 }
