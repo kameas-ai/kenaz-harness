@@ -85,6 +85,10 @@ type Core struct {
 	// callers do not race during the first BundleCache() / Start() call.
 	bundleCacheMu sync.Mutex
 	bundleCache   cache.CAS
+
+	// sessionManagerMu guards sessionManager lazy construction.
+	sessionManagerMu sync.Mutex
+	sessionManager   *session.Manager
 }
 
 // New constructs a Core. It validates DataDir and wires any
@@ -153,6 +157,26 @@ func (c *Core) Shutdown(ctx context.Context) error {
 // DataDir returns the data-directory root opts.DataDir was constructed
 // with. Subsystems use this as the base for their on-disk state.
 func (c *Core) DataDir() string { return c.opts.DataDir }
+
+// SessionManager returns the chat-rail session manager, lazily
+// constructed on first call. The manager is wired against an
+// in-memory store today; once storage-foundations exposes a libSQL
+// backend, the manager will switch to the SQL store via
+// session.NewSQLStore. The interface seen by callers (the *Manager
+// type) is stable across that transition.
+//
+// SessionManager is safe to call from any goroutine: the first caller
+// constructs the manager and subsequent callers see the same instance.
+func (c *Core) SessionManager() *session.Manager {
+	c.sessionManagerMu.Lock()
+	defer c.sessionManagerMu.Unlock()
+	if c.sessionManager != nil {
+		return c.sessionManager
+	}
+	store := session.NewMemoryStore()
+	c.sessionManager = session.NewManager(store)
+	return c.sessionManager
+}
 
 // BundleCache returns the bundle layer's content-addressable storage,
 // constructed lazily under <DataDir>/cache on first call. The CAS owns

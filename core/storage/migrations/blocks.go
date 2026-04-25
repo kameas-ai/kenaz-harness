@@ -21,7 +21,7 @@ var CanonicalBlocks = map[string]VersionBlock{
 	"storage":                     {Min: 1, Max: 99},
 	"event-log":                   {Min: 100, Max: 199},
 	"secrets-keychain":            {Min: 200, Max: 299},
-	"session":                     {Min: 300, Max: 399},
+	"sessions":                    {Min: 300, Max: 399},
 	"scheduler":                   {Min: 400, Max: 499},
 	"mcp":                         {Min: 500, Max: 599},
 	"a2a":                         {Min: 600, Max: 699},

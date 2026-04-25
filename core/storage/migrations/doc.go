@@ -13,7 +13,7 @@
 //	1-99       storage (this mission)
 //	100-199    event-log
 //	200-299    secrets-keychain (audit tables)
-//	300-399    session
+//	300-399    sessions
 //	400-499    scheduler
 //	500-599    mcp
 //	600-699    a2a + signed-cards-trust

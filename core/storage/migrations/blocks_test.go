@@ -36,7 +36,7 @@ func TestCanonicalBlocks_StorageRange(t *testing.T) {
 func TestCanonicalBlocks_Coverage(t *testing.T) {
 	t.Parallel()
 	missions := []string{
-		"storage", "event-log", "secrets-keychain", "session", "scheduler",
+		"storage", "event-log", "secrets-keychain", "sessions", "scheduler",
 		"mcp", "a2a", "signed-cards-trust", "bundle",
 		"shared-context-distribution", "memory-rag", "app-layer",
 	}
