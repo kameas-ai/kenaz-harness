@@ -1,23 +1,41 @@
 <script setup lang="ts">
-import { onErrorCaptured, ref } from 'vue';
+import { onErrorCaptured, ref, watch } from 'vue';
+import { useRoute } from 'vue-router';
 import { reportError } from '@/lib/eventLog';
 
 /**
  * ErrorBoundary — Vue's errorCaptured hook captures crashes and reports
- * through eventLog.ts (FR-018). Renders a quiet recovery affordance
- * that resets the boundary state.
+ * through eventLog.ts (FR-018). Renders a quiet recovery affordance:
+ *
+ *   - "Dismiss" clears the captured error and re-renders the slot.
+ *   - The boundary auto-recovers when the route changes, so the user
+ *     can always navigate away from a broken surface.
+ *   - The error message + stack are shown inline so a developer or
+ *     support engineer can read the cause without opening DevTools.
  */
 const captured = ref<Error | null>(null);
+const route = useRoute();
 
 onErrorCaptured((err, _instance, info) => {
-  captured.value = err instanceof Error ? err : new Error(String(err));
+  const e = err instanceof Error ? err : new Error(String(err));
+  captured.value = e;
   reportError(err, info);
   return false; // stop propagation
 });
 
-function recover() {
+function dismiss() {
   captured.value = null;
 }
+
+// Recover automatically when the user navigates: if a surface is
+// broken at /sessions, navigating to /providers should return them
+// to a working app rather than a sticky error pane.
+watch(
+  () => route.fullPath,
+  () => {
+    captured.value = null;
+  },
+);
 </script>
 
 <template>
@@ -32,13 +50,21 @@ function recover() {
       <p class="mt-1 font-ui text-sm text-ink">
         Something failed while rendering this surface. The error has been logged.
       </p>
-      <button
-        type="button"
-        class="mt-2 font-ui text-xs text-accent hover:text-ink"
-        @click="recover"
-      >
-        Retry
-      </button>
+      <pre
+        class="mt-2 max-h-40 overflow-auto rounded-sm bg-surface-2 px-2 py-1.5 font-mono text-[11px] text-ink-muted whitespace-pre-wrap"
+      >{{ captured.message }}</pre>
+      <div class="mt-2 flex items-center gap-2">
+        <button
+          type="button"
+          class="font-ui text-xs text-accent hover:text-ink"
+          @click="dismiss"
+        >
+          Dismiss
+        </button>
+        <span class="font-ui text-[11px] text-ink-dim">
+          or pick another surface from the left rail.
+        </span>
+      </div>
     </div>
   </div>
   <slot v-else />

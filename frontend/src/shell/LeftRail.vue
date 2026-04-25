@@ -55,10 +55,15 @@ async function deleteSession(id: string, event: Event) {
   if (deletingId.value) return;
   deletingId.value = id;
   try {
-    await sessions.remove(id);
+    // Navigate away FIRST when we're about to nuke the active session,
+    // so useSession + MessageList unmount before the row disappears
+    // and don't try to fetch a session that no longer exists.
     if (activeSessionId.value === id) {
       await router.push('/sessions');
     }
+    await sessions.remove(id);
+  } catch (err) {
+    console.error('Delete session failed:', err);
   } finally {
     deletingId.value = null;
   }
@@ -73,11 +78,15 @@ async function clearAll() {
   ) {
     return;
   }
-  for (const s of [...sessions.list.value]) {
-    await sessions.remove(s.id);
-  }
   if (activeSessionId.value) {
     await router.push('/sessions');
+  }
+  for (const s of [...sessions.list.value]) {
+    try {
+      await sessions.remove(s.id);
+    } catch (err) {
+      console.error('Delete session failed:', err);
+    }
   }
 }
 </script>
