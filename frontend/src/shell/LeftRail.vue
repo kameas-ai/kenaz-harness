@@ -50,24 +50,32 @@ async function newSession() {
   }
 }
 
-function openSession(id: string) {
-  if (deletingId.value === id) return;
+function openSession(session: unknown) {
+  const id =
+    session && typeof session === 'object' && 'id' in session
+      ? String((session as { id?: string }).id)
+      : '';
+  if (!id || id === 'undefined' || deletingId.value === id) return;
   void router.push(`/sessions/${id}`);
 }
 
-async function deleteSession(id: string, event: Event) {
-  // Show a visible signal at the top of the handler so we can tell,
-  // from the UI alone, whether the click is even reaching this code.
-  // Removed once the delete flow is stable.
-  lastError.value = `Delete clicked for ${id}…`;
+async function deleteSession(session: unknown, event: Event) {
   event.preventDefault();
   event.stopPropagation();
+  // Diagnostic: dump everything we know about the row so we can see
+  // exactly what shape Vue is passing into v-for. Removed once stable.
+  const dump = JSON.stringify(session, null, 2);
+  const id =
+    session && typeof session === 'object' && 'id' in session
+      ? String((session as { id?: string }).id)
+      : '';
+  lastError.value = `Click captured. id=${id || '(empty)'}\nrow=${dump}`;
+  if (!id || id === 'undefined') {
+    return;
+  }
   if (deletingId.value) return;
   deletingId.value = id;
   try {
-    // Navigate away FIRST when we're about to nuke the active session,
-    // so useSession + MessageList unmount before the row disappears
-    // and don't try to fetch a session that no longer exists.
     if (activeSessionId.value === id) {
       await router.push('/sessions');
     }
@@ -77,8 +85,6 @@ async function deleteSession(id: string, event: Event) {
     const msg = err instanceof Error ? err.message : String(err);
     console.error('Delete session failed:', err);
     lastError.value = `Delete failed: ${msg}`;
-    // Force a refresh so the rail list reflects the actual backend
-    // state even if we got into a half-deleted limbo.
     await sessions.refresh();
   } finally {
     deletingId.value = null;
@@ -172,7 +178,7 @@ function dismissError() {
             :title="session.name || session.id"
             :aria-current="activeSessionId === session.id ? 'page' : undefined"
             :data-testid="`open-session-${session.id}`"
-            @click="openSession(session.id)"
+            @click="openSession(session)"
           >
             <MessageSquare
               :size="14"
@@ -188,7 +194,7 @@ function dismissError() {
             :aria-label="`Delete session ${session.name}`"
             :disabled="deletingId === session.id"
             :data-testid="`delete-session-${session.id}`"
-            @click="deleteSession(session.id, $event)"
+            @click="deleteSession(session, $event)"
           >
             <X :size="14" />
           </button>
