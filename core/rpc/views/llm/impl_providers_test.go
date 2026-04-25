@@ -91,14 +91,38 @@ func TestImpl_AddProvider_StoresKeychainAndProfile(t *testing.T) {
 	}
 }
 
-func TestImpl_AddProvider_RejectsNonKeychainCred(t *testing.T) {
+func TestImpl_AddProvider_RejectsPlaintextCredKind(t *testing.T) {
 	api, _, _, _, _ := newProvidersAPI(t)
 	in := AddProviderInput{
 		ID: "p", Kind: "anthropic", Model: "x",
-		Cred: CredentialReference{Kind: "env", Locator: "ANTH_KEY"},
+		Cred: CredentialReference{Kind: "kms", Locator: "alias/foo"},
 	}
 	if err := api.AddProvider(context.Background(), in); err == nil {
-		t.Fatal("expected error rejecting env-kind cred")
+		t.Fatal("expected error rejecting kms-kind cred (not yet supported)")
+	}
+}
+
+func TestImpl_AddProvider_AcceptsAWSProfileCred(t *testing.T) {
+	api, _, _, _, store := newProvidersAPI(t)
+	in := AddProviderInput{
+		ID:     "bedrock-llama",
+		Kind:   "bedrock",
+		Model:  "meta.llama3-70b-instruct-v1:0",
+		Region: "us-east-1",
+		Cred:   CredentialReference{Kind: "aws_profile", Locator: "default"},
+	}
+	if err := api.AddProvider(context.Background(), in); err != nil {
+		t.Fatalf("AddProvider: %v", err)
+	}
+	got, err := store.Get("bedrock-llama")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.Cred.Kind != "aws_profile" || got.Cred.Locator != "default" {
+		t.Fatalf("unexpected cred: %+v", got.Cred)
+	}
+	if got.Region != "us-east-1" {
+		t.Fatalf("region not persisted: %+v", got)
 	}
 }
 

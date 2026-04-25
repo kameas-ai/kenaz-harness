@@ -10,6 +10,7 @@ import {
   Server,
   FileText,
   Settings,
+  Pencil,
   Trash2,
   X,
 } from './icons';
@@ -31,10 +32,18 @@ const {
   list: sessionList,
   refresh: refreshSessions,
   create: createSession,
+  rename: renameSession,
   remove: removeSession,
 } = useSessions();
 const newSessionLoading = ref(false);
 const deletingId = ref<string | null>(null);
+const renamingId = ref<string | null>(null);
+const renameDraft = ref('');
+function setRenameInputRef(el: Element | null) {
+  if (!(el instanceof HTMLInputElement)) return;
+  el.focus();
+  el.select();
+}
 const lastError = ref<string | null>(null);
 const route = useRoute();
 const router = useRouter();
@@ -60,8 +69,43 @@ async function newSession() {
 }
 
 function openSession(id: string) {
-  if (!id || deletingId.value === id) return;
+  if (!id || deletingId.value === id || renamingId.value === id) return;
   void router.push(`/sessions/${id}`);
+}
+
+function startRename(id: string, currentName: string, event: Event) {
+  event.preventDefault();
+  event.stopPropagation();
+  if (renamingId.value || deletingId.value) return;
+  renamingId.value = id;
+  renameDraft.value = currentName;
+  // Focus is wired via the :ref callback when the input mounts.
+}
+
+function cancelRename() {
+  renamingId.value = null;
+  renameDraft.value = '';
+}
+
+async function commitRename(id: string) {
+  const next = renameDraft.value.trim();
+  if (!next) {
+    cancelRename();
+    return;
+  }
+  const current = sessionList.value.find((s) => s.id === id);
+  if (current && current.name === next) {
+    cancelRename();
+    return;
+  }
+  try {
+    await renameSession(id, next);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    lastError.value = `Rename failed: ${msg}`;
+  } finally {
+    cancelRename();
+  }
 }
 
 async function deleteSession(id: string, event: Event) {
@@ -161,37 +205,59 @@ function dismissError() {
           :key="session.id"
           class="flex items-stretch gap-1"
         >
-          <button
-            type="button"
-            class="flex-1 min-w-0 flex items-center gap-2 px-3 py-2 rounded-sm text-left text-sm font-ui transition-fast ease-kenaz"
-            :class="
-              activeSessionId === session.id
-                ? 'text-ink bg-surface-2 ring-1 ring-accent-hairline'
-                : 'text-ink-muted hover:text-ink hover:bg-surface-2'
-            "
-            :title="session.name || session.id"
-            :aria-current="activeSessionId === session.id ? 'page' : undefined"
-            :data-testid="`open-session-${session.id}`"
-            @click="openSession(session.id)"
-          >
-            <MessageSquare
-              :size="14"
-              :class="activeSessionId === session.id ? 'text-accent' : ''"
+          <template v-if="renamingId === session.id">
+            <input
+              :ref="setRenameInputRef"
+              v-model="renameDraft"
+              class="flex-1 min-w-0 px-3 py-2 rounded-sm border border-accent bg-surface-2 text-sm font-ui text-ink focus:outline-none"
+              :data-testid="`rename-session-input-${session.id}`"
+              @keydown.enter="commitRename(session.id)"
+              @keydown.escape="cancelRename"
+              @blur="commitRename(session.id)"
             />
-            <span class="truncate hidden two-col:inline">
-              {{ session.name }}
-            </span>
-          </button>
-          <button
-            type="button"
-            class="shrink-0 p-2 rounded-sm text-ink-dim hover:text-signal-danger hover:bg-surface-3 focus:outline-none focus:ring-1 focus:ring-accent disabled:opacity-50"
-            :aria-label="`Delete session ${session.name}`"
-            :disabled="deletingId === session.id"
-            :data-testid="`delete-session-${session.id}`"
-            @click="deleteSession(session.id, $event)"
-          >
-            <X :size="14" />
-          </button>
+          </template>
+          <template v-else>
+            <button
+              type="button"
+              class="flex-1 min-w-0 flex items-center gap-2 px-3 py-2 rounded-sm text-left text-sm font-ui transition-fast ease-kenaz"
+              :class="
+                activeSessionId === session.id
+                  ? 'text-ink bg-surface-2 ring-1 ring-accent-hairline'
+                  : 'text-ink-muted hover:text-ink hover:bg-surface-2'
+              "
+              :title="session.name || session.id"
+              :aria-current="activeSessionId === session.id ? 'page' : undefined"
+              :data-testid="`open-session-${session.id}`"
+              @click="openSession(session.id)"
+            >
+              <MessageSquare
+                :size="14"
+                :class="activeSessionId === session.id ? 'text-accent' : ''"
+              />
+              <span class="truncate hidden two-col:inline">
+                {{ session.name }}
+              </span>
+            </button>
+            <button
+              type="button"
+              class="shrink-0 p-2 rounded-sm text-ink-dim hover:text-ink hover:bg-surface-3 focus:outline-none focus:ring-1 focus:ring-accent disabled:opacity-50"
+              :aria-label="`Rename session ${session.name}`"
+              :data-testid="`rename-session-${session.id}`"
+              @click="startRename(session.id, session.name, $event)"
+            >
+              <Pencil :size="13" />
+            </button>
+            <button
+              type="button"
+              class="shrink-0 p-2 rounded-sm text-ink-dim hover:text-signal-danger hover:bg-surface-3 focus:outline-none focus:ring-1 focus:ring-accent disabled:opacity-50"
+              :aria-label="`Delete session ${session.name}`"
+              :disabled="deletingId === session.id"
+              :data-testid="`delete-session-${session.id}`"
+              @click="deleteSession(session.id, $event)"
+            >
+              <X :size="14" />
+            </button>
+          </template>
         </li>
         <li v-if="sessionList.length === 0" class="px-3 py-2 text-xs text-ink-subtle">
           No sessions yet

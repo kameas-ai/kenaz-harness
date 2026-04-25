@@ -98,13 +98,32 @@ func TestFileStore_RemoveRoundTrip(t *testing.T) {
 	}
 }
 
-func TestFileStore_RejectsNonKeychainCred(t *testing.T) {
+func TestFileStore_AcceptsIndirectCredKinds(t *testing.T) {
+	for _, kind := range []string{"keychain", "aws_profile", "env", "file"} {
+		t.Run(kind, func(t *testing.T) {
+			s := newTempStore(t)
+			p := llm.ProviderProfile{
+				ID:    "p-" + kind,
+				Kind:  "anthropic",
+				Model: "claude-sonnet",
+				Cred:  llm.CredentialReference{Kind: kind, Locator: "loc-" + kind},
+			}
+			if err := s.Add(p); err != nil {
+				t.Fatalf("Add: %v", err)
+			}
+		})
+	}
+}
+
+func TestFileStore_RejectsUnsupportedCredKind(t *testing.T) {
 	s := newTempStore(t)
+	// "kms" passes the schema validator but the personal store does
+	// not yet support it — should be rejected as a non-indirect ref.
 	p := llm.ProviderProfile{
 		ID:    "p",
 		Kind:  "anthropic",
 		Model: "claude-sonnet",
-		Cred:  llm.CredentialReference{Kind: "env", Locator: "ANTHROPIC_KEY"},
+		Cred:  llm.CredentialReference{Kind: "kms", Locator: "alias/foo"},
 	}
 	err := s.Add(p)
 	if !errors.Is(err, ErrPlaintextCredential) {

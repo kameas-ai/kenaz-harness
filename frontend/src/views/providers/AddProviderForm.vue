@@ -67,6 +67,7 @@ const BEDROCK_REGIONS: { id: string; label: string }[] = [
 interface FormState {
   kind: ProviderKind;
   apiKey: string;
+  awsProfile: string;
   region: string;
   modelId: string;
   manualModelId: string;
@@ -76,6 +77,7 @@ interface FormState {
 const form = reactive<FormState>({
   kind: 'anthropic',
   apiKey: '',
+  awsProfile: 'default',
   region: 'us-east-1',
   modelId: '',
   manualModelId: '',
@@ -94,7 +96,14 @@ const probed = ref(false);
 const fallbackToManual = ref(false);
 
 const requiresRegion = computed(() => form.kind === 'bedrock');
-const requiresApiKey = computed(() => form.kind !== 'ollama');
+const requiresApiKey = computed(
+  () => form.kind !== 'ollama' && form.kind !== 'bedrock',
+);
+const requiresAwsProfile = computed(() => form.kind === 'bedrock');
+// Bedrock has no /models endpoint that mirrors the Connect flow we
+// use for Anthropic, and the user already knows the model id from the
+// AWS console. Skip the probe and go straight to manual entry.
+const skipsProbe = computed(() => form.kind === 'bedrock');
 
 // Auto-derived ID from kind + model. Hidden behind a "Customize" toggle
 // so most users never have to think about it.
@@ -125,11 +134,12 @@ watch(
   () => [form.kind, form.apiKey],
   () => {
     probed.value = false;
-    fallbackToManual.value = false;
+    fallbackToManual.value = skipsProbe.value;
     models.value = [];
     form.modelId = '';
     probeError.value = null;
   },
+  { immediate: true },
 );
 
 async function onProbe(): Promise<void> {
@@ -164,12 +174,16 @@ const validation = computed(() => {
   const errors: Record<string, string> = {};
   if (requiresApiKey.value && !form.apiKey.trim())
     errors.apiKey = 'API key is required.';
+  if (requiresAwsProfile.value && !form.awsProfile.trim())
+    errors.awsProfile = 'AWS profile name is required.';
   if (requiresRegion.value && !form.region.trim())
     errors.region = 'Region is required for Bedrock.';
   if (!effectiveModelId.value)
-    errors.model = probed.value
-      ? 'Pick a model.'
-      : 'Connect first to load available models.';
+    errors.model = skipsProbe.value
+      ? 'Model id is required.'
+      : probed.value
+        ? 'Pick a model.'
+        : 'Connect first to load available models.';
   if (customizeId.value && !form.customId.trim())
     errors.customId = 'Custom ID is required when "Customize ID" is on.';
   return errors;
@@ -181,18 +195,20 @@ function onSubmit(): void {
   if (!isValid.value || submitting.value) return;
   submitting.value = true;
   const id = effectiveId.value;
+  const cred = requiresAwsProfile.value
+    ? { kind: 'aws_profile' as const, locator: form.awsProfile.trim() }
+    : { kind: 'keychain' as const, locator: `kaneaz-harness/${id}` };
   const input: AddProviderInput = {
     id,
     name: effectiveModelName.value,
     kind: form.kind,
     model: effectiveModelId.value,
-    cred: {
-      kind: 'keychain',
-      locator: `kaneaz-harness/${id}`,
-    },
+    cred,
   };
   if (requiresRegion.value) input.region = form.region.trim();
-  if (form.apiKey.trim()) input.plaintextApiKey = form.apiKey;
+  if (cred.kind === 'keychain' && form.apiKey.trim()) {
+    input.plaintextApiKey = form.apiKey;
+  }
   // Drop our local copy of the plaintext immediately. The parent
   // component forwards the input synchronously to the backend.
   form.apiKey = '';
@@ -233,7 +249,7 @@ defineExpose({ form, validation, isValid });
       </select>
     </div>
 
-    <!-- Step 2: API key + Connect -->
+    <!-- Step 2a: API key + Connect (most providers) -->
     <div v-if="requiresApiKey">
       <label
         for="prov-apikey"
@@ -273,6 +289,34 @@ defineExpose({ form, validation, isValid });
       </p>
       <p class="mt-1 text-[11px] text-ink-dim">
         Stored in your OS keychain. Never written to providers.json.
+      </p>
+    </div>
+
+    <!-- Step 2b: AWS profile (bedrock) -->
+    <div v-if="requiresAwsProfile">
+      <label
+        for="prov-aws-profile"
+        class="block text-[11px] uppercase tracking-[0.18em] text-ink-subtle"
+      >
+        AWS Profile
+      </label>
+      <input
+        id="prov-aws-profile"
+        v-model="form.awsProfile"
+        class="mt-1 w-full rounded-sm border border-border-muted bg-surface-1 px-2.5 py-1.5 text-sm font-mono text-ink focus:border-accent focus:outline-none"
+        autocomplete="off"
+        :data-testid="'add-provider-aws-profile'"
+        placeholder="default"
+      />
+      <p
+        v-if="validation.awsProfile"
+        class="mt-1 text-xs text-signal-danger"
+      >
+        {{ validation.awsProfile }}
+      </p>
+      <p class="mt-1 text-[11px] text-ink-dim">
+        Reads from <span class="font-mono">~/.aws/credentials</span>. The
+        harness never sees your access keys.
       </p>
     </div>
 
@@ -322,8 +366,9 @@ defineExpose({ form, validation, isValid });
       </p>
     </div>
 
-    <!-- Manual model entry — fallback when /models is unsupported -->
-    <div v-if="probed && fallbackToManual">
+    <!-- Manual model entry — for kinds with no /models endpoint
+         (bedrock today) and as a fallback when probing returns empty. -->
+    <div v-if="fallbackToManual">
       <label
         for="prov-model-manual"
         class="block text-[11px] uppercase tracking-[0.18em] text-ink-subtle"
@@ -336,7 +381,13 @@ defineExpose({ form, validation, isValid });
         class="mt-1 w-full rounded-sm border border-border-muted bg-surface-1 px-2.5 py-1.5 text-sm font-mono text-ink focus:border-accent focus:outline-none"
         autocomplete="off"
         :data-testid="'add-provider-model-manual'"
-        :placeholder="form.kind === 'ollama' ? 'llama3.1:8b' : 'model-id'"
+        :placeholder="
+          form.kind === 'bedrock'
+            ? 'meta.llama3-70b-instruct-v1:0'
+            : form.kind === 'ollama'
+              ? 'llama3.1:8b'
+              : 'model-id'
+        "
       />
       <p class="mt-1 text-[11px] text-ink-dim">
         This provider does not expose a model list — type the model id

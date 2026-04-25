@@ -193,13 +193,25 @@ func (s *FileStore) Get(id string) (llm.ProviderProfile, error) {
 }
 
 // Add implements Store. The supplied profile is validated, the
-// credential reference is required to be keychain-backed, and on a
-// successful write the on-disk mode is re-asserted to 0600.
+// credential reference is required to be an indirect reference (never
+// plaintext), and on a successful write the on-disk mode is
+// re-asserted to 0600.
+//
+// Allowed cred kinds:
+//   - keychain    OS keychain entry (most providers — Anthropic, OpenAI, …)
+//   - aws_profile named profile in ~/.aws/credentials (Bedrock)
+//   - env         environment variable name (legacy / dev escape hatch)
+//   - file        path on disk to a credential file
+//
+// Plaintext credentials are rejected via ErrPlaintextCredential.
 func (s *FileStore) Add(p llm.ProviderProfile) error {
 	if err := llm.ValidateProfile(p); err != nil {
 		return err
 	}
-	if p.Cred.Kind != "keychain" {
+	switch p.Cred.Kind {
+	case "keychain", "aws_profile", "env", "file":
+		// indirect references — accepted
+	default:
 		return fmt.Errorf("%w: kind=%q", ErrPlaintextCredential, p.Cred.Kind)
 	}
 	s.mu.Lock()

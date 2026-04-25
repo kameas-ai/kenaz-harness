@@ -361,10 +361,19 @@ func (a *API) AddProvider(ctx context.Context, in AddProviderInput) error {
 	if a.store == nil {
 		return ErrPersonalStoreUnavailable
 	}
-	if in.Cred.Kind != "keychain" {
-		return fmt.Errorf("llm: AddProvider requires kind=keychain credential, got %q", in.Cred.Kind)
+	switch in.Cred.Kind {
+	case "keychain", "aws_profile", "env", "file":
+		// indirect references — accepted
+	default:
+		return fmt.Errorf("llm: AddProvider requires an indirect credential kind (keychain|aws_profile|env|file), got %q", in.Cred.Kind)
 	}
+	// Only keychain creds need a plaintext write — aws_profile points at
+	// ~/.aws/credentials which the AWS SDK reads directly, env / file
+	// resolve via their respective backends with no upfront staging.
 	if in.PlaintextAPIKey != "" {
+		if in.Cred.Kind != "keychain" {
+			return fmt.Errorf("llm: PlaintextAPIKey is only used with kind=keychain, got %q", in.Cred.Kind)
+		}
 		if a.keychain == nil {
 			return errors.New("llm: no keychain writer configured; cannot store plaintext key")
 		}
