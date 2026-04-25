@@ -1,0 +1,62 @@
+/*
+ * Shell layout — grid regions only. All colors come from Tailwind utility
+ * classes that resolve to var(--token) — never declared here. The grid
+ * shape mirrors plan §2.1: Titlebar / [LeftRail | main].
+ */
+
+.shell-grid {
+  display: grid;
+  grid-template-rows: auto 1fr;
+  grid-template-columns: 240px 1fr;
+  grid-template-areas:
+    'titlebar titlebar'
+    'rail main';
+  height: 100vh;
+  width: 100vw;
+}
+
+@media (max-width: 960px) {
+  .shell-grid {
+    grid-template-columns: 56px 1fr;
+  }
+}
+
+.shell-titlebar {
+  grid-area: titlebar;
+  -webkit-app-region: drag;
+}
+
+.shell-titlebar :is(button, a, input, [role='button']) {
+  -webkit-app-region: no-drag;
+}
+
+.shell-rail {
+  grid-area: rail;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.shell-main {
+  grid-area: main;
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  grid-template-areas:
+    'toolbar'
+    'canvas'
+    'legend';
+  overflow: hidden;
+}
+
+.shell-toolbar {
+  grid-area: toolbar;
+}
+
+.shell-canvas {
+  grid-area: canvas;
+  overflow: auto;
+}
+
+.shell-legend {
+  grid-area: legend;
+}

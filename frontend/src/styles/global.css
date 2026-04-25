@@ -1,0 +1,51 @@
+/*
+ * Global stylesheet entry point. Order matters: tokens first (so every
+ * downstream rule can resolve var(--token)), then fonts, then Tailwind
+ * directives, then layout-only shell rules.
+ */
+
+@import './tokens.css';
+@import './fonts.css';
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@import './shell.css';
+
+/* Default body chrome — colors strictly via tokens. */
+html,
+body {
+  margin: 0;
+  padding: 0;
+  font-family: var(--font-ui);
+  background: var(--surface-0);
+  color: var(--ink);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+#app {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Restrained scrollbar treatment per Kenaz visual register. */
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: var(--ink-trace);
+  border-radius: var(--radius-sm);
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--ink-dim);
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
