@@ -260,3 +260,9 @@ func (a *API) Settings() settings.SettingsAPI    { return a.settingsAPI }
 // (bindings.go) is the flat-method surface Wails reflects. Stable for the
 // lifetime of API.
 func (a *API) Bindings() []any { return []any{a.bindings} }
+
+// StreamBroker returns the lazily-constructed broker. Future view
+// bridges (sessions, audit, …) reuse this instance so the privacy CI
+// invariant #1 — only emitter.go / stream_broker.go call
+// runtime.EventsEmit — keeps holding.
+func (a *API) StreamBroker() *StreamBroker { return a.broker }

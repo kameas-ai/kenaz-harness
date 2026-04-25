@@ -746,14 +746,13 @@ func (s *stream) handleSSEData(_ string, raw []byte) {
 		// Final usage refinement and stop_reason.
 		var md struct {
 			Delta struct {
-				StopReason   string `json:"stop_reason"`
-				StopSequence string `json:"stop_sequence"`
+				StopReason string `json:"stop_reason"`
 			} `json:"delta"`
 			Usage *struct {
-				InputTokens         int `json:"input_tokens"`
-				OutputTokens        int `json:"output_tokens"`
-				CacheCreationInput  int `json:"cache_creation_input_tokens"`
-				CacheReadInput      int `json:"cache_read_input_tokens"`
+				InputTokens        int `json:"input_tokens"`
+				OutputTokens       int `json:"output_tokens"`
+				CacheCreationInput int `json:"cache_creation_input_tokens"`
+				CacheReadInput     int `json:"cache_read_input_tokens"`
 			} `json:"usage"`
 		}
 		if err := json.Unmarshal(trimmed, &md); err == nil {
