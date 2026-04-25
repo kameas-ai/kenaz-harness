@@ -26,6 +26,7 @@ import { useSessions } from '@/lib/useHarnessAPI';
 const sessions = useSessions();
 const newSessionLoading = ref(false);
 const deletingId = ref<string | null>(null);
+const lastError = ref<string | null>(null);
 const route = useRoute();
 const router = useRouter();
 
@@ -59,6 +60,7 @@ async function deleteSession(id: string, event: Event) {
   event.stopPropagation();
   if (deletingId.value) return;
   deletingId.value = id;
+  lastError.value = null;
   try {
     // Navigate away FIRST when we're about to nuke the active session,
     // so useSession + MessageList unmount before the row disappears
@@ -68,7 +70,12 @@ async function deleteSession(id: string, event: Event) {
     }
     await sessions.remove(id);
   } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
     console.error('Delete session failed:', err);
+    lastError.value = `Delete failed: ${msg}`;
+    // Force a refresh so the rail list reflects the actual backend
+    // state even if we got into a half-deleted limbo.
+    await sessions.refresh();
   } finally {
     deletingId.value = null;
   }
@@ -83,16 +90,27 @@ async function clearAll() {
   ) {
     return;
   }
+  lastError.value = null;
   if (activeSessionId.value) {
     await router.push('/sessions');
   }
+  const failures: string[] = [];
   for (const s of [...sessions.list.value]) {
     try {
       await sessions.remove(s.id);
     } catch (err) {
-      console.error('Delete session failed:', err);
+      const msg = err instanceof Error ? err.message : String(err);
+      failures.push(`${s.id}: ${msg}`);
     }
   }
+  if (failures.length > 0) {
+    lastError.value = `Some deletes failed:\n${failures.join('\n')}`;
+  }
+  await sessions.refresh();
+}
+
+function dismissError() {
+  lastError.value = null;
 }
 </script>
 
@@ -109,6 +127,22 @@ async function clearAll() {
       >
         <Plus :size="14" />
         <span class="hidden two-col:inline">New session</span>
+      </button>
+    </div>
+
+    <!-- error banner -->
+    <div
+      v-if="lastError"
+      class="mx-2 mb-1 rounded-sm border border-signal-danger bg-surface-1 px-2 py-1.5 font-ui text-[11px] text-signal-danger"
+      role="alert"
+    >
+      <pre class="whitespace-pre-wrap break-words">{{ lastError }}</pre>
+      <button
+        type="button"
+        class="mt-1 text-[10px] uppercase tracking-[0.18em] text-ink-dim hover:text-ink"
+        @click="dismissError"
+      >
+        Dismiss
       </button>
     </div>
 
@@ -131,6 +165,7 @@ async function clearAll() {
                 ? 'text-ink bg-surface-2 ring-1 ring-accent-hairline'
                 : 'text-ink-muted hover:text-ink hover:bg-surface-2'
             "
+            :title="session.name || session.id"
             :aria-current="activeSessionId === session.id ? 'page' : undefined"
             :data-testid="`open-session-${session.id}`"
             @click="openSession(session.id)"
