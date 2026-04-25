@@ -180,11 +180,64 @@ export function useChatStream(_sessionId: Ref<string>): UseStreamResult<EventStr
   };
 }
 
+/**
+ * useEventLogStream — typed live-stream for the audit view. Bridges the
+ * Audit_StartStream RPC to the streamBroker `audit:event` topic and
+ * exposes the buffered, pause-able feed. Server-side redaction has
+ * already run; payloads here are safe to render verbatim.
+ */
 export function useEventLogStream(
-  _filter: Ref<AuditFilter>,
+  filter: Ref<AuditFilter>,
 ): UseStreamResult<AuditEntry> {
+  const client = useHarnessClient();
   const events = ref<readonly AuditEntry[]>([]);
   const paused = ref(false);
+  let pending: AuditEntry[] = [];
+  let scheduled = false;
+  let off: (() => void) | undefined;
+  let offClosed: (() => void) | undefined;
+  let subscriptionId: string | null = null;
+
+  function flush() {
+    scheduled = false;
+    if (pending.length === 0 || paused.value) return;
+    const merged = events.value.concat(pending);
+    pending = [];
+    const max = 1000;
+    events.value = merged.length > max ? merged.slice(merged.length - max) : merged;
+  }
+  function schedule() {
+    if (scheduled) return;
+    scheduled = true;
+    if (typeof requestAnimationFrame !== 'undefined') {
+      requestAnimationFrame(flush);
+    } else {
+      setTimeout(flush, 16);
+    }
+  }
+
+  function attach() {
+    if (typeof window === 'undefined' || !window.runtime?.EventsOn) return;
+    off = window.runtime.EventsOn('audit:event', (payload) => {
+      pending.push(payload as AuditEntry);
+      schedule();
+    });
+    offClosed = window.runtime.EventsOn('audit:stream-closed', () => {
+      // Auto-resubscribe is the consumer's responsibility; we just
+      // surface the closed state via the existing reactive ref.
+      paused.value = true;
+    });
+  }
+
+  void (async () => {
+    try {
+      subscriptionId = await client.audit.startStream(filter.value);
+      attach();
+    } catch {
+      // No-op: a missing broker (test path) leaves events empty.
+    }
+  })();
+
   return {
     events,
     paused,
@@ -193,8 +246,20 @@ export function useEventLogStream(
     },
     resume: () => {
       paused.value = false;
+      schedule();
     },
-    stop: async () => undefined,
+    stop: async () => {
+      if (off) off();
+      if (offClosed) offClosed();
+      if (subscriptionId) {
+        try {
+          await client.audit.stopStream(subscriptionId);
+        } catch {
+          // Already closed by broker — no-op.
+        }
+        subscriptionId = null;
+      }
+    },
   };
 }
 

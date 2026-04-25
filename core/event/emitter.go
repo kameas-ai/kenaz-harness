@@ -51,11 +51,19 @@ import (
 //	a single-writer tightening on top of the storage-level guard, not a
 //	replacement for it.
 type emitter struct {
-	store        *log.Store
-	pipeline     *redact.Pipeline
-	defaultEID   EmitterID
-	clock        func() time.Time
-	emitMu       sync.Mutex
+	store      *log.Store
+	pipeline   *redact.Pipeline
+	defaultEID EmitterID
+	clock      func() time.Time
+	emitMu     sync.Mutex
+
+	// observersMu guards observers. Observers are invoked synchronously
+	// after a successful Append; failures inside an observer are
+	// swallowed (the emitter never lets a downstream consumer fail an
+	// append). Used by core/rpc/views/audit to mirror events onto the
+	// Wails `audit:event` topic.
+	observersMu sync.RWMutex
+	observers   []func(Event)
 }
 
 // EmitterOption configures an emitter at construction time.
@@ -73,6 +81,41 @@ func WithEmitterClock(clock func() time.Time) EmitterOption {
 // fallback is also validated against the allowlist at construction.
 func WithDefaultEmitterID(eid EmitterID) EmitterOption {
 	return func(e *emitter) { e.defaultEID = eid }
+}
+
+// WithObserver registers a side-effect-only callback invoked
+// synchronously after every successful Append. Observers are NOT in
+// the persistence path: a panicking or slow observer cannot fail a
+// write (the emitter recovers from observer panics; per-call latency
+// is the observer's responsibility). Used by core/rpc/views/audit to
+// mirror events onto the Wails `audit:event` topic without coupling
+// core/event to the rpc layer (DIRECTIVE_001).
+func WithObserver(fn func(Event)) EmitterOption {
+	return func(e *emitter) {
+		if fn == nil {
+			return
+		}
+		e.observersMu.Lock()
+		e.observers = append(e.observers, fn)
+		e.observersMu.Unlock()
+	}
+}
+
+// notifyObservers fires every registered observer with the published
+// event. Panics inside an observer are recovered so a misbehaving
+// downstream subscriber cannot poison the emitter. Synchronous by
+// design: the streamBroker fans events out to its async pump, so
+// observers should themselves never block.
+func (e *emitter) notifyObservers(ev Event) {
+	e.observersMu.RLock()
+	obs := e.observers
+	e.observersMu.RUnlock()
+	for _, fn := range obs {
+		func(fn func(Event)) {
+			defer func() { _ = recover() }()
+			fn(ev)
+		}(fn)
+	}
 }
 
 // NewEmitter constructs the production Emitter.
@@ -243,5 +286,9 @@ func (e *emitter) Append(ctx context.Context, in AppendInput) (Event, error) {
 		sid := *in.SessionID
 		out.SessionID = &sid
 	}
+
+	// Side-effect-only fan-out — never on the persistence path.
+	e.notifyObservers(out)
+
 	return out, nil
 }

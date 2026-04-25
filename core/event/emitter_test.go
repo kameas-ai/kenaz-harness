@@ -404,3 +404,60 @@ func TestAppend_ContextCancellation(t *testing.T) {
 		t.Fatalf("expected context.Canceled, got %v", err)
 	}
 }
+
+// TestAppend_ObserverFiresAfterSuccess pins the audit-impl wiring path:
+// every successful Append fans into every registered observer, in
+// registration order, with a snapshot of the persisted Event.
+func TestAppend_ObserverFiresAfterSuccess(t *testing.T) {
+	var (
+		mu       sync.Mutex
+		observed []Event
+	)
+	em, _ := newTestEmitter(t, WithObserver(func(ev Event) {
+		mu.Lock()
+		defer mu.Unlock()
+		observed = append(observed, ev)
+	}))
+
+	out, err := em.Append(context.Background(), AppendInput{
+		EmitterID: EmitterID("llm/anthropic"),
+		Kind:      Kind("llm.request.started"),
+		Payload:   map[string]any{"hello": "world"},
+	})
+	if err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(observed) != 1 {
+		t.Fatalf("expected 1 observer call, got %d", len(observed))
+	}
+	if observed[0].EventID != out.EventID {
+		t.Errorf("observer event id = %q, want %q", observed[0].EventID, out.EventID)
+	}
+	if observed[0].Kind != out.Kind {
+		t.Errorf("observer event kind = %q, want %q", observed[0].Kind, out.Kind)
+	}
+}
+
+// TestAppend_ObserverPanicSwallowed pins the contract that an observer
+// panic cannot poison the emitter or fail the Append.
+func TestAppend_ObserverPanicSwallowed(t *testing.T) {
+	var second bool
+	em, _ := newTestEmitter(t,
+		WithObserver(func(_ Event) { panic("boom") }),
+		WithObserver(func(_ Event) { second = true }),
+	)
+	_, err := em.Append(context.Background(), AppendInput{
+		EmitterID: EmitterID("llm/anthropic"),
+		Kind:      Kind("llm.request.started"),
+		Payload:   map[string]any{"x": 1},
+	})
+	if err != nil {
+		t.Fatalf("observer panic should not surface, got %v", err)
+	}
+	if !second {
+		t.Errorf("subsequent observer should still fire after a peer panicked")
+	}
+}

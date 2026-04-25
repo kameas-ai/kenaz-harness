@@ -5,7 +5,6 @@ import (
 	"errors"
 
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/a2a"
-	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/audit"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/bundle"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/contextview"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/llm"
@@ -121,21 +120,6 @@ func (s *stubPolicy) Explain(_ context.Context, _ map[string]any) (policy.Denial
 }
 func (s *stubPolicy) StartStream(_ context.Context) (string, error) { return "", errNotWired }
 func (s *stubPolicy) StopStream(_ context.Context, _ string) error  { return errNotWired }
-
-// ── audit ──────────────────────────────────────────────────────────────
-
-type stubAudit struct{}
-
-func (s *stubAudit) ListEntries(_ context.Context, _ audit.Filter) ([]audit.Entry, error) {
-	return nil, errNotWired
-}
-func (s *stubAudit) VerifyEntry(_ context.Context, _ string) (bool, error) {
-	return false, errNotWired
-}
-func (s *stubAudit) StartStream(_ context.Context, _ audit.Filter) (string, error) {
-	return "", errNotWired
-}
-func (s *stubAudit) StopStream(_ context.Context, _ string) error { return errNotWired }
 
 // ── settings ───────────────────────────────────────────────────────────
 

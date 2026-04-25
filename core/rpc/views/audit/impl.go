@@ -1,0 +1,272 @@
+// Package audit's impl wires the event-log Reader into the AuditAPI
+// surface and bridges Emitter.Append callbacks to the streamBroker via
+// `audit:event`.
+//
+// The concrete reader integration (libSQL or in-memory) is provided
+// from the call site at construction; tests substitute a fake. Until
+// core.Core ships a wired Reader/Verifier the impl operates against
+// an in-memory ring buffer fed by Emitter observers — sufficient for
+// the v1 audit view (newest-first, filterable, live-updating).
+//
+// Privacy CI invariant #2: redaction happens on the event-log side
+// before Append returns; Entry payloads exposed here are already
+// redacted. This impl never re-renders a raw payload.
+package audit
+
+import (
+	"context"
+	"encoding/hex"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/sigil-tech/kaneaz-harness/core/event"
+)
+
+// Subscriber is the broker contract used by API.StartStream. Decoupled
+// from core/rpc/StreamBroker so this package keeps DIRECTIVE_001
+// isolation (core/rpc/views/* must not depend on core/rpc).
+type Subscriber interface {
+	Subscribe(ctx context.Context, view, kind string, source <-chan any) (string, error)
+	Unsubscribe(id string) error
+}
+
+// API is the concrete AuditAPI implementation. Append-only ring buffer
+// of recent entries plus per-subscription fan-out wired to the
+// streamBroker via Subscriber.
+//
+// Safe for concurrent use.
+type API struct {
+	mu        sync.RWMutex
+	entries   []Entry          // newest-last; bounded by maxBuffer.
+	maxBuffer int              // cap for the in-memory ring.
+	subs      map[string]chan any // subscription id -> typed channel
+	broker    Subscriber
+}
+
+// Option configures NewAPI.
+type Option func(*API)
+
+// WithMaxBuffer overrides the default 1024-entry ring buffer.
+func WithMaxBuffer(n int) Option {
+	return func(a *API) {
+		if n > 0 {
+			a.maxBuffer = n
+		}
+	}
+}
+
+// WithSubscriber injects the streamBroker. nil disables streaming
+// (StartStream returns an empty subscription id and StopStream is a
+// no-op) — useful for tests that don't exercise the broker path.
+func WithSubscriber(s Subscriber) Option {
+	return func(a *API) { a.broker = s }
+}
+
+// NewAPI constructs the audit view-scoped API.
+func NewAPI(opts ...Option) *API {
+	a := &API{
+		entries:   make([]Entry, 0, 128),
+		maxBuffer: 1024,
+		subs:      make(map[string]chan any),
+	}
+	for _, opt := range opts {
+		opt(a)
+	}
+	return a
+}
+
+// Push appends an entry to the ring buffer and fans out to every
+// active subscription. Drops on a full subscriber channel — slow
+// subscribers must not back up the audit pipeline.
+func (a *API) Push(entry Entry) {
+	a.mu.Lock()
+	a.entries = append(a.entries, entry)
+	if len(a.entries) > a.maxBuffer {
+		// Drop oldest entries to bound memory.
+		drop := len(a.entries) - a.maxBuffer
+		a.entries = a.entries[drop:]
+	}
+	subs := make([]chan any, 0, len(a.subs))
+	for _, ch := range a.subs {
+		subs = append(subs, ch)
+	}
+	a.mu.Unlock()
+	for _, ch := range subs {
+		select {
+		case ch <- entry:
+		default:
+			// Slow subscriber: drop. Loss tolerance is acceptable for
+			// the audit live-stream — the canonical store is the
+			// event log itself.
+		}
+	}
+}
+
+// ObserveEvent is the adapter exposed for wiring as a core/event
+// emitter observer. Translates Event into Entry (redacted server-side)
+// then calls Push.
+func (a *API) ObserveEvent(ev event.Event) {
+	a.Push(EntryFromEvent(ev))
+}
+
+// EntryFromEvent maps a core/event.Event into an audit.Entry. Subject
+// is the kind; trailing carries the redacted-payload-hash hex prefix
+// for forensic correlation. Payload bytes are intentionally NOT
+// rendered — the redaction pipeline already ran but the raw stream is
+// reserved for the event-log Replayer (privacy invariant #2).
+func EntryFromEvent(ev event.Event) Entry {
+	return Entry{
+		ID:        ev.EventID.String(),
+		Timestamp: ev.EmittedAt.UTC().Format(time.RFC3339Nano),
+		Category:  categoryForKind(ev.Kind),
+		Subject:   string(ev.Kind),
+		Trailing:  hex.EncodeToString(ev.PayloadHash[:4]),
+	}
+}
+
+// categoryForKind maps an event kind onto one of the registered
+// frontend categories (lib/categories.ts). The mapping is
+// best-effort — unknown kinds fall back to STORAGE so the row still
+// renders with a known token.
+func categoryForKind(k event.Kind) string {
+	s := string(k)
+	switch {
+	case strings.HasPrefix(s, "llm."):
+		return "LLM"
+	case strings.HasPrefix(s, "mcp."):
+		return "MCP"
+	case strings.HasPrefix(s, "a2a."):
+		return "A2A"
+	case strings.HasPrefix(s, "policy."):
+		return "POLICY"
+	case strings.HasPrefix(s, "trust."), strings.HasPrefix(s, "secrets."):
+		return "SECRETS"
+	case strings.HasPrefix(s, "bundle."):
+		return "BUNDLE"
+	case strings.HasPrefix(s, "context."):
+		return "CONTEXT"
+	case strings.HasPrefix(s, "scheduler."):
+		return "SCHEDULER"
+	case strings.HasPrefix(s, "filesystem."), strings.HasPrefix(s, "fs."):
+		return "FILESYSTEM"
+	case strings.HasPrefix(s, "process."):
+		return "PROCESS"
+	case strings.HasPrefix(s, "clipboard."):
+		return "CLIPBOARD"
+	case strings.HasPrefix(s, "network."), strings.HasPrefix(s, "net."):
+		return "NETWORK"
+	case strings.HasPrefix(s, "keystroke.") , strings.HasPrefix(s, "input."):
+		return "KEYSTROKE"
+	}
+	return "STORAGE"
+}
+
+// ListEntries returns the buffered entries matching filter, newest
+// first. limit==0 returns the full ring (capped at maxBuffer).
+func (a *API) ListEntries(_ context.Context, filter Filter) ([]Entry, error) {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+
+	var (
+		since time.Time
+		until time.Time
+		hasSince bool
+		hasUntil bool
+	)
+	if filter.Since != "" {
+		t, err := time.Parse(time.RFC3339Nano, filter.Since)
+		if err == nil {
+			since, hasSince = t, true
+		}
+	}
+	if filter.Until != "" {
+		t, err := time.Parse(time.RFC3339Nano, filter.Until)
+		if err == nil {
+			until, hasUntil = t, true
+		}
+	}
+	wantCat := make(map[string]struct{}, len(filter.Categories))
+	for _, c := range filter.Categories {
+		if c != "" {
+			wantCat[strings.ToUpper(c)] = struct{}{}
+		}
+	}
+
+	out := make([]Entry, 0, len(a.entries))
+	for i := len(a.entries) - 1; i >= 0; i-- {
+		e := a.entries[i]
+		if len(wantCat) > 0 {
+			if _, ok := wantCat[strings.ToUpper(e.Category)]; !ok {
+				continue
+			}
+		}
+		if hasSince || hasUntil {
+			t, err := time.Parse(time.RFC3339Nano, e.Timestamp)
+			if err == nil {
+				if hasSince && t.Before(since) {
+					continue
+				}
+				if hasUntil && t.After(until) {
+					continue
+				}
+			}
+		}
+		out = append(out, e)
+		if filter.Limit > 0 && len(out) >= filter.Limit {
+			break
+		}
+	}
+	return out, nil
+}
+
+// VerifyEntry returns true if the entry id is present in the buffer.
+// The full chain-walking Verifier (event.Verifier) wires in once the
+// libSQL backend lands; until then membership in the buffer is the
+// most we can authoritatively report from the rpc layer.
+func (a *API) VerifyEntry(_ context.Context, id string) (bool, error) {
+	if id == "" {
+		return false, nil
+	}
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	for _, e := range a.entries {
+		if e.ID == id {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// StartStream allocates a typed channel, registers it on the API, and
+// hands it to the broker. The returned subscription id is what the
+// frontend passes to StopStream.
+func (a *API) StartStream(ctx context.Context, _ Filter) (string, error) {
+	if a.broker == nil {
+		return "", nil
+	}
+	ch := make(chan any, 64)
+	id, err := a.broker.Subscribe(ctx, "audit", "event", ch)
+	if err != nil {
+		return "", err
+	}
+	a.mu.Lock()
+	a.subs[id] = ch
+	a.mu.Unlock()
+	return id, nil
+}
+
+// StopStream tears down the subscription and releases buffer slot.
+func (a *API) StopStream(_ context.Context, id string) error {
+	if a.broker == nil {
+		return nil
+	}
+	a.mu.Lock()
+	ch, ok := a.subs[id]
+	delete(a.subs, id)
+	a.mu.Unlock()
+	if ok {
+		close(ch)
+	}
+	return a.broker.Unsubscribe(id)
+}

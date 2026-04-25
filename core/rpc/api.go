@@ -12,6 +12,7 @@ import (
 	"context"
 
 	"github.com/sigil-tech/kaneaz-harness/core"
+	"github.com/sigil-tech/kaneaz-harness/core/event"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/a2a"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/audit"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/bundle"
@@ -93,8 +94,14 @@ type API struct {
 	contextAPI  contextview.ContextAPI
 	bundleAPI   bundle.BundleAPI
 	policyAPI   policy.PolicyAPI
+	auditImpl   *audit.API
 	auditAPI    audit.AuditAPI
 	settingsAPI settings.SettingsAPI
+
+	// streamBroker fans typed source channels to Wails event topics.
+	// Constructed in New with a default WailsEmitter so production
+	// deployments work out-of-the-box; tests can swap via SetBroker.
+	broker *StreamBroker
 
 	// bindings is the Wails-reflected surface; held for the lifetime of
 	// API so OnStartup can call SetContext on it.
@@ -126,11 +133,25 @@ func New(c *core.Core) *API {
 		contextAPI:  &stubContext{},
 		bundleAPI:   &stubBundle{},
 		policyAPI:   &stubPolicy{},
-		auditAPI:    &stubAudit{},
 		settingsAPI: &stubSettings{},
 	}
+	a.broker = NewStreamBroker(WailsEmitter{})
+	a.auditImpl = audit.NewAPI(audit.WithSubscriber(a.broker))
+	a.auditAPI = a.auditImpl
 	a.bindings = NewBindings(a)
 	return a
+}
+
+// AuditObserver returns a function suitable for passing to
+// event.WithObserver — every successful Append fans into the audit
+// API's ring buffer + active subscribers. Wiring lives at the call
+// site (main.go) so core/rpc stays decoupled from the emitter
+// constructor (DIRECTIVE_001).
+func (a *API) AuditObserver() func(event.Event) {
+	if a.auditImpl == nil {
+		return func(event.Event) {}
+	}
+	return a.auditImpl.ObserveEvent
 }
 
 // ShellStatus returns a default shell status. Real values are filled by
