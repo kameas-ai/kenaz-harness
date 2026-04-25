@@ -170,6 +170,9 @@ func (b *Bindings) LLM_AddProvider(input llm.AddProviderInput) error {
 func (b *Bindings) LLM_RemoveProvider(id string) error {
 	return b.api.LLMConnector().RemoveProvider(b.ctx(), id)
 }
+func (b *Bindings) LLM_UpdateProvider(input llm.AddProviderInput) error {
+	return b.api.LLMConnector().UpdateProvider(b.ctx(), input)
+}
 func (b *Bindings) LLM_TestProvider(id string) (llm.TestResult, error) {
 	return b.api.LLMConnector().TestProvider(b.ctx(), id)
 }

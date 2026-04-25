@@ -42,6 +42,9 @@ type Store interface {
 	// Add validates and persists p. Re-adding an existing ID is a typed
 	// error (errors.Is(err, ErrAlreadyExists)).
 	Add(p llm.ProviderProfile) error
+	// Update validates and replaces an existing profile by ID. Missing
+	// IDs are a typed error (errors.Is(err, ErrNotFound)).
+	Update(p llm.ProviderProfile) error
 	// Remove deletes the profile with id. Missing IDs are a typed
 	// error (errors.Is(err, ErrNotFound)).
 	Remove(id string) error
@@ -226,6 +229,37 @@ func (s *FileStore) Add(p llm.ProviderProfile) error {
 		}
 	}
 	shape.Providers = append(shape.Providers, p)
+	return s.writeLocked(shape)
+}
+
+// Update implements Store. Validates the new profile, then replaces
+// the row with matching ID in place. Cred-kind validation matches Add.
+func (s *FileStore) Update(p llm.ProviderProfile) error {
+	if err := llm.ValidateProfile(p); err != nil {
+		return err
+	}
+	switch p.Cred.Kind {
+	case "keychain", "aws_profile", "env", "file":
+	default:
+		return fmt.Errorf("%w: kind=%q", ErrPlaintextCredential, p.Cred.Kind)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	shape, err := s.readLocked()
+	if err != nil {
+		return err
+	}
+	idx := -1
+	for i, existing := range shape.Providers {
+		if existing.ID == p.ID {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		return fmt.Errorf("%w: %q", ErrNotFound, p.ID)
+	}
+	shape.Providers[idx] = p
 	return s.writeLocked(shape)
 }
 

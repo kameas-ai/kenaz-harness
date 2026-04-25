@@ -72,6 +72,7 @@ interface WailsBindingsLike {
   LLM_StartStream(profileID: string, sessionID: string): Promise<string>;
   LLM_StopStream(id: string): Promise<void>;
   LLM_AddProvider(input: AddProviderInput): Promise<void>;
+  LLM_UpdateProvider(input: AddProviderInput): Promise<void>;
   LLM_RemoveProvider(id: string): Promise<void>;
   LLM_TestProvider(id: string): Promise<TestResult>;
   LLM_ListModels(kind: string, plaintextApiKey: string): Promise<ModelInfo[]>;
@@ -178,6 +179,13 @@ export interface LLMConnectorClient {
    * providers.json.
    */
   addProvider(input: AddProviderInput): Promise<void>;
+  /**
+   * UpdateProvider replaces an existing personal provider profile.
+   * plaintextApiKey is OPTIONAL — when omitted, the keychain entry
+   * is left in place so the user can edit model/region without
+   * re-entering their credential.
+   */
+  updateProvider(input: AddProviderInput): Promise<void>;
   removeProvider(id: string): Promise<void>;
   testProvider(id: string): Promise<TestResult>;
   /**
@@ -303,6 +311,7 @@ export function createHarnessClient(): HarnessClient {
         b().LLM_StartStream(profileID, sessionID),
       stopStream: (id) => b().LLM_StopStream(id),
       addProvider: (input) => b().LLM_AddProvider(input),
+      updateProvider: (input) => b().LLM_UpdateProvider(input),
       removeProvider: (id) => b().LLM_RemoveProvider(id),
       testProvider: (id) => b().LLM_TestProvider(id),
       listModels: (kind, plaintextApiKey) =>
@@ -420,6 +429,7 @@ export function createFakeHarnessClient(
       startStream: async () => 'fake-sub',
       stopStream: noop,
       addProvider: noop,
+      updateProvider: noop,
       removeProvider: noop,
       testProvider: async () => ({
         success: true,

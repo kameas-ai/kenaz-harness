@@ -10,7 +10,15 @@ type Provider struct {
 	ID    string `json:"id"`
 	Name  string `json:"name"`
 	Tier  string `json:"tier"`
+	Kind  string `json:"kind,omitempty"`
 	Model string `json:"model"`
+	// Region is non-empty for kinds that require it (bedrock today).
+	Region string `json:"region,omitempty"`
+	// Cred surfaces the indirect-reference shape so the UI can render
+	// edit forms without storing the original kind elsewhere. The
+	// locator is intentionally NOT a credential value — it's the
+	// keychain entry name or AWS profile name.
+	Cred CredentialReference `json:"cred,omitempty"`
 	// Source is "bundle" or "personal" — the UI surfaces this so users
 	// know whether a provider came from a signed bundle or their own
 	// providers.json store.
@@ -81,6 +89,12 @@ type LLMConnectorAPI interface {
 	// the implementation and zeroed before returning. Only the
 	// CredentialReference is persisted in providers.json.
 	AddProvider(ctx context.Context, in AddProviderInput) error
+	// UpdateProvider replaces an existing personal provider profile.
+	// PlaintextAPIKey is OPTIONAL — when empty, the keychain entry is
+	// left untouched so users can edit model/region without re-entering
+	// the credential. The profile id must already exist; bundle-derived
+	// profiles are not editable through this surface.
+	UpdateProvider(ctx context.Context, in AddProviderInput) error
 	// RemoveProvider deletes the personal provider with the given ID.
 	// Bundle-derived profiles are not removable through this surface.
 	RemoveProvider(ctx context.Context, id string) error

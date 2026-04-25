@@ -410,6 +410,69 @@ func (a *API) AddProvider(ctx context.Context, in AddProviderInput) error {
 	return nil
 }
 
+// UpdateProvider replaces an existing personal provider profile.
+// PlaintextAPIKey is optional — when empty, the keychain entry is left
+// untouched so the user can edit model/region without re-entering
+// the credential. When supplied, it is written to the keychain under
+// the (existing) locator and zeroed before any further processing.
+func (a *API) UpdateProvider(ctx context.Context, in AddProviderInput) error {
+	if a.store == nil {
+		return ErrPersonalStoreUnavailable
+	}
+	switch in.Cred.Kind {
+	case "keychain", "aws_profile", "env", "file":
+	default:
+		return fmt.Errorf("llm: UpdateProvider requires an indirect credential kind (keychain|aws_profile|env|file), got %q", in.Cred.Kind)
+	}
+	if a.bundles != nil {
+		for _, p := range a.bundles.BundleProfiles() {
+			if p.ID == in.ID {
+				return fmt.Errorf("%w: %q", ErrBundleProviderImmutable, in.ID)
+			}
+		}
+	}
+	if in.PlaintextAPIKey != "" {
+		if in.Cred.Kind != "keychain" {
+			return fmt.Errorf("llm: PlaintextAPIKey is only used with kind=keychain, got %q", in.Cred.Kind)
+		}
+		if a.keychain == nil {
+			return errors.New("llm: no keychain writer configured; cannot store plaintext key")
+		}
+		buf := []byte(in.PlaintextAPIKey)
+		in.PlaintextAPIKey = ""
+		err := a.keychain.Write(ctx, in.Cred.Locator, buf)
+		zeroBytes(buf)
+		if err != nil {
+			return fmt.Errorf("llm: keychain write %q: %w", in.Cred.Locator, err)
+		}
+	}
+	profile := corellm.ProviderProfile{
+		ID:     in.ID,
+		Kind:   in.Kind,
+		Model:  in.Model,
+		Region: in.Region,
+		Cred: corellm.CredentialReference{
+			Kind:    in.Cred.Kind,
+			Locator: in.Cred.Locator,
+		},
+	}
+	if err := a.store.Update(profile); err != nil {
+		return err
+	}
+	if a.reg != nil {
+		// Replace any in-memory copy. The simplest path is to push the
+		// new profile via LoadProfiles; since the registry rejects
+		// duplicate IDs, we have to remove first via a future
+		// RegistryEvict seam. For now, the AddProvider flow already
+		// has best-effort LoadProfiles semantics so we mirror it.
+		_ = a.reg.LoadProfiles([]corellm.ProviderProfile{profile})
+	}
+	a.mu.Lock()
+	delete(a.validated, in.ID)
+	a.mu.Unlock()
+	return nil
+}
+
 // RemoveProvider deletes a personal provider by ID. Bundle-derived
 // profiles are rejected so the UI cannot mutate them through this seam.
 func (a *API) RemoveProvider(_ context.Context, id string) error {
@@ -578,10 +641,16 @@ type StreamClosedPayload struct {
 
 func profileToProvider(p corellm.ProviderProfile, source string, validated bool) Provider {
 	return Provider{
-		ID:        p.ID,
-		Name:      p.ID,
-		Tier:      source,
-		Model:     p.Model,
+		ID:     p.ID,
+		Name:   p.ID,
+		Tier:   source,
+		Kind:   p.Kind,
+		Model:  p.Model,
+		Region: p.Region,
+		Cred: CredentialReference{
+			Kind:    p.Cred.Kind,
+			Locator: p.Cred.Locator,
+		},
 		Source:    source,
 		Validated: validated,
 	}

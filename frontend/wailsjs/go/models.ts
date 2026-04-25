@@ -229,7 +229,10 @@ export namespace llm {
 	    id: string;
 	    name: string;
 	    tier: string;
+	    kind?: string;
 	    model: string;
+	    region?: string;
+	    cred?: CredentialReference;
 	    source?: string;
 	    validated?: boolean;
 	
@@ -242,10 +245,31 @@ export namespace llm {
 	        this.id = source["id"];
 	        this.name = source["name"];
 	        this.tier = source["tier"];
+	        this.kind = source["kind"];
 	        this.model = source["model"];
+	        this.region = source["region"];
+	        this.cred = this.convertValues(source["cred"], CredentialReference);
 	        this.source = source["source"];
 	        this.validated = source["validated"];
 	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
 	}
 	export class TestResult {
 	    success: boolean;

@@ -82,6 +82,10 @@ export function LLM_TestProvider(arg1) {
   return window['go']['rpc']['Bindings']['LLM_TestProvider'](arg1);
 }
 
+export function LLM_UpdateProvider(arg1) {
+  return window['go']['rpc']['Bindings']['LLM_UpdateProvider'](arg1);
+}
+
 export function LoadRoute() {
   return window['go']['rpc']['Bindings']['LoadRoute']();
 }

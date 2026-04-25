@@ -32,6 +32,9 @@ func (s *stubLLM) AddProvider(_ context.Context, _ llm.AddProviderInput) error {
 	return errNotWired
 }
 func (s *stubLLM) RemoveProvider(_ context.Context, _ string) error { return errNotWired }
+func (s *stubLLM) UpdateProvider(_ context.Context, _ llm.AddProviderInput) error {
+	return errNotWired
+}
 func (s *stubLLM) TestProvider(_ context.Context, _ string) (llm.TestResult, error) {
 	return llm.TestResult{}, errNotWired
 }

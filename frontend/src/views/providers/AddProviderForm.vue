@@ -26,12 +26,30 @@ import type {
 import Button from '@/components/ui/Button.vue';
 import { useHarnessClient } from '@/lib/harnessClientContext';
 
+const props = defineProps<{
+  /**
+   * When present, the form is in edit mode: kind + id are read-only,
+   * fields are pre-filled from this provider's current state, and the
+   * API key field becomes optional with a "leave blank to keep current"
+   * placeholder.
+   */
+  editing?: {
+    id: string;
+    name: string;
+    kind: ProviderKind;
+    model: string;
+    region?: string;
+    credKind: 'keychain' | 'aws_profile' | 'env' | 'file';
+    credLocator: string;
+  } | null;
+}>();
 const emit = defineEmits<{
   (e: 'submit', input: AddProviderInput): void;
   (e: 'cancel'): void;
 }>();
 
 const client = useHarnessClient();
+const isEditing = computed(() => !!props.editing);
 
 const KINDS: { id: ProviderKind; label: string }[] = [
   { id: 'anthropic', label: 'Anthropic' },
@@ -88,6 +106,21 @@ const form = reactive<FormState>({
   customId: '',
 });
 
+// Pre-fill from props.editing when in edit mode. Runs once at setup.
+if (props.editing) {
+  form.kind = props.editing.kind;
+  form.region = props.editing.region || 'us-east-1';
+  form.manualModelId = props.editing.model;
+  form.customId = props.editing.id;
+  if (props.editing.kind === 'bedrock') {
+    form.bedrockAuth =
+      props.editing.credKind === 'aws_profile' ? 'aws_profile' : 'api_key';
+    if (props.editing.credKind === 'aws_profile') {
+      form.awsProfile = props.editing.credLocator || 'default';
+    }
+  }
+}
+
 const submitting = ref(false);
 const probing = ref(false);
 const probeError = ref<string | null>(null);
@@ -112,8 +145,10 @@ const requiresAwsProfile = computed(
 );
 // Bedrock has no /models endpoint that mirrors the Connect flow we
 // use for Anthropic, and the user already knows the model id from the
-// AWS console. Skip the probe and go straight to manual entry.
-const skipsProbe = computed(() => form.kind === 'bedrock');
+// AWS console. Skip the probe and go straight to manual entry. Edit
+// mode also skips the probe — the user already has a working profile
+// and we don't want to force a Connect just to tweak the model id.
+const skipsProbe = computed(() => form.kind === 'bedrock' || isEditing.value);
 
 // Auto-derived ID from kind + model. Hidden behind a "Customize" toggle
 // so most users never have to think about it.
@@ -182,7 +217,13 @@ async function onProbe(): Promise<void> {
 
 const validation = computed(() => {
   const errors: Record<string, string> = {};
-  if (requiresApiKey.value && !form.apiKey.trim())
+  // In edit mode the API key is optional — empty means "keep the
+  // existing keychain entry."
+  if (
+    requiresApiKey.value &&
+    !isEditing.value &&
+    !form.apiKey.trim()
+  )
     errors.apiKey = 'API key is required.';
   if (requiresAwsProfile.value && !form.awsProfile.trim())
     errors.awsProfile = 'AWS profile name is required.';
@@ -204,7 +245,9 @@ const isValid = computed(() => Object.keys(validation.value).length === 0);
 function onSubmit(): void {
   if (!isValid.value || submitting.value) return;
   submitting.value = true;
-  const id = effectiveId.value;
+  // Edit mode preserves the original id so the existing personal-store
+  // row + keychain entry locator stay aligned.
+  const id = isEditing.value && props.editing ? props.editing.id : effectiveId.value;
   const cred = requiresAwsProfile.value
     ? { kind: 'aws_profile' as const, locator: form.awsProfile.trim() }
     : { kind: 'keychain' as const, locator: `kaneaz-harness/${id}` };
@@ -250,7 +293,8 @@ defineExpose({ form, validation, isValid });
       <select
         id="prov-kind"
         v-model="form.kind"
-        class="mt-1 w-full rounded-sm border border-border-muted bg-surface-1 px-2.5 py-1.5 text-sm text-ink focus:border-accent focus:outline-none"
+        class="mt-1 w-full rounded-sm border border-border-muted bg-surface-1 px-2.5 py-1.5 text-sm text-ink focus:border-accent focus:outline-none disabled:opacity-60 disabled:cursor-not-allowed"
+        :disabled="isEditing"
         :data-testid="'add-provider-kind'"
       >
         <option v-for="k in KINDS" :key="k.id" :value="k.id">
@@ -318,13 +362,15 @@ defineExpose({ form, validation, isValid });
           autocomplete="off"
           :data-testid="'add-provider-apikey'"
           :placeholder="
-            form.kind === 'anthropic'
-              ? 'sk-ant-…'
-              : form.kind === 'bedrock'
-                ? 'ABSK… (Bedrock API key)'
-                : form.kind === 'openai'
-                  ? 'sk-…'
-                  : 'paste key'
+            isEditing
+              ? 'leave blank to keep current key'
+              : form.kind === 'anthropic'
+                ? 'sk-ant-…'
+                : form.kind === 'bedrock'
+                  ? 'ABSK… (Bedrock API key)'
+                  : form.kind === 'openai'
+                    ? 'sk-…'
+                    : 'paste key'
           "
         />
         <Button
@@ -503,7 +549,7 @@ defineExpose({ form, validation, isValid });
         type="submit"
         :disabled="!isValid || submitting"
       >
-        Add provider
+        {{ isEditing ? 'Save changes' : 'Add provider' }}
       </Button>
     </div>
   </form>

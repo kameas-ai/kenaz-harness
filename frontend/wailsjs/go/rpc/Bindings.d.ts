@@ -54,6 +54,8 @@ export function LLM_StopStream(arg1:string):Promise<void>;
 
 export function LLM_TestProvider(arg1:string):Promise<llm.TestResult>;
 
+export function LLM_UpdateProvider(arg1:llm.AddProviderInput):Promise<void>;
+
 export function LoadRoute():Promise<string>;
 
 export function LoadTheme():Promise<string>;

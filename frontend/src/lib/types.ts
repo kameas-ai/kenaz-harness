@@ -18,7 +18,10 @@ export interface Provider {
   id: string;
   name: string;
   tier: string;
+  kind?: ProviderKind;
   model: string;
+  region?: string;
+  cred?: CredentialReference;
   /**
    * "bundle" | "personal" — surfaced so the UI can show whether a
    * provider came from a signed bundle or the user's providers.json.

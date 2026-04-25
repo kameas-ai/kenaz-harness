@@ -22,6 +22,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   (e: 'test', id: string): void;
+  (e: 'edit', provider: Provider): void;
   (e: 'remove', id: string): void;
 }>();
 
@@ -82,6 +83,15 @@ const statusClass = computed(() =>
           @click="emit('test', provider.id)"
         >
           {{ testing ? 'Testing…' : 'Test' }}
+        </Button>
+        <Button
+          v-if="isPersonal"
+          size="sm"
+          variant="ghost"
+          :data-testid="`edit-provider-${provider.id}`"
+          @click="emit('edit', provider)"
+        >
+          Edit
         </Button>
         <Button
           v-if="isPersonal"

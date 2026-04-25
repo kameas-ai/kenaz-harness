@@ -24,6 +24,7 @@ const client = useHarnessClient();
 const providers = ref<readonly Provider[]>([]);
 const loading = ref(false);
 const drawerOpen = ref(false);
+const editingProvider = ref<Provider | null>(null);
 const testingId = ref<string | null>(null);
 const lastTestResult = ref<{ id: string; result: TestResult } | null>(null);
 const errorMessage = ref<string>('');
@@ -46,20 +47,51 @@ onMounted(() => {
 });
 
 function openDrawer(): void {
+  editingProvider.value = null;
+  drawerOpen.value = true;
+}
+
+function openEditDrawer(p: Provider): void {
+  editingProvider.value = p;
   drawerOpen.value = true;
 }
 
 function closeDrawer(): void {
   drawerOpen.value = false;
+  editingProvider.value = null;
 }
+
+const editingForForm = computed(() => {
+  const p = editingProvider.value;
+  if (!p) return null;
+  return {
+    id: p.id,
+    name: p.name,
+    kind: (p.kind ?? 'anthropic') as Provider['kind'] extends infer K ? NonNullable<K> : never,
+    model: p.model,
+    region: p.region,
+    credKind: (p.cred?.kind ?? 'keychain') as
+      | 'keychain'
+      | 'aws_profile'
+      | 'env'
+      | 'file',
+    credLocator: p.cred?.locator ?? '',
+  };
+});
 
 async function onAddSubmit(input: AddProviderInput): Promise<void> {
   errorMessage.value = '';
+  const editing = editingProvider.value;
   try {
-    await client.llm.addProvider(input);
+    if (editing) {
+      await client.llm.updateProvider(input);
+    } else {
+      await client.llm.addProvider(input);
+    }
     drawerOpen.value = false;
+    editingProvider.value = null;
     await refresh();
-    // Run TestProvider against the just-added entry and surface the
+    // Run TestProvider against the just-saved entry and surface the
     // outcome inline.
     testingId.value = input.id;
     const result = await client.llm.testProvider(input.id);
@@ -67,7 +99,11 @@ async function onAddSubmit(input: AddProviderInput): Promise<void> {
     await refresh();
   } catch (e) {
     errorMessage.value =
-      e instanceof Error ? e.message : 'Failed to add provider.';
+      e instanceof Error
+        ? e.message
+        : editing
+          ? 'Failed to update provider.'
+          : 'Failed to add provider.';
   } finally {
     testingId.value = null;
   }
@@ -178,6 +214,7 @@ const inlineTestClass = computed(() =>
             :provider="p"
             :testing="testingId === p.id"
             @test="onTest"
+            @edit="openEditDrawer"
             @remove="onRemove"
           />
           <tr v-if="!loading && providers.length === 0">
@@ -216,15 +253,23 @@ const inlineTestClass = computed(() =>
             <div
               class="text-[11px] uppercase tracking-[0.18em] text-ink-subtle"
             >
-              ADD PROVIDER
+              {{ editingProvider ? 'EDIT PROVIDER' : 'ADD PROVIDER' }}
             </div>
             <h2 class="mt-1 font-ui text-lg font-semibold text-ink">
-              New personal provider
+              {{
+                editingProvider
+                  ? `Edit ${editingProvider.name || editingProvider.id}`
+                  : 'New personal provider'
+              }}
             </h2>
           </div>
           <Button variant="ghost" @click="closeDrawer">Close</Button>
         </header>
-        <AddProviderForm @submit="onAddSubmit" @cancel="closeDrawer" />
+        <AddProviderForm
+          :editing="editingForForm"
+          @submit="onAddSubmit"
+          @cancel="closeDrawer"
+        />
       </div>
     </div>
   </div>
