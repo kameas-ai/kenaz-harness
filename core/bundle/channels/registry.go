@@ -13,7 +13,7 @@ import (
 // seam new channel implementations cross to plug into the resolver.
 type Registry interface {
 	Register(kind string, factory Factory) error
-	Open(spec ChannelSpec, creds secrets.Resolver) (Channel, error)
+	Open(spec ChannelSpec, creds secrets.ResolverAPI) (Channel, error)
 	Kinds() []string
 }
 
@@ -43,7 +43,7 @@ func (r *mapRegistry) Register(kind string, factory Factory) error {
 	return nil
 }
 
-func (r *mapRegistry) Open(spec ChannelSpec, creds secrets.Resolver) (Channel, error) {
+func (r *mapRegistry) Open(spec ChannelSpec, creds secrets.ResolverAPI) (Channel, error) {
 	r.mu.RLock()
 	factory, ok := r.factories[spec.Kind]
 	r.mu.RUnlock()

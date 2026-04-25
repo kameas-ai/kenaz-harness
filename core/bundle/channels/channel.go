@@ -97,4 +97,4 @@ type SignatureRef struct {
 
 // Factory is a constructor for Channel implementations. Each channel
 // subpackage exposes a Factory that the registry binds to a kind id.
-type Factory func(spec ChannelSpec, creds secrets.Resolver) (Channel, error)
+type Factory func(spec ChannelSpec, creds secrets.ResolverAPI) (Channel, error)

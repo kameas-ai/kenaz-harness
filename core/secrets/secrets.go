@@ -133,6 +133,30 @@ type ResolverConfig struct {
 	Logger events.EventLogger
 }
 
+// ResolverAPI is the small interface most consumers need from the
+// resolver. *Resolver satisfies it; NoopResolver is the stub used by
+// tests and contexts where credentials aren't required (e.g. the
+// local_path channel). Defined as an interface so callers can accept
+// either without taking a hard dependency on *Resolver internals.
+type ResolverAPI interface {
+	// Resolve fetches a credential. See *Resolver.Resolve.
+	Resolve(ctx context.Context, cred CredentialReference, consumerID string) (Secret, error)
+}
+
+// NoopResolver is a ResolverAPI implementation that always reports a
+// resolution failure. It is the safe placeholder for test channels and
+// for runtime paths that intentionally never need to resolve a secret
+// (e.g. local_path with no auth ref).
+type NoopResolver struct{}
+
+// Resolve always returns an error reporting that no resolver is wired.
+func (NoopResolver) Resolve(_ context.Context, _ CredentialReference, _ string) (Secret, error) {
+	return nil, errors.New("secrets: no resolver configured (NoopResolver)")
+}
+
+// Compile-time assertion that NoopResolver satisfies ResolverAPI.
+var _ ResolverAPI = NoopResolver{}
+
 // Resolver is the public entry point. It composes the registry,
 // cache, pre-flight validator, and event emission.
 type Resolver struct {

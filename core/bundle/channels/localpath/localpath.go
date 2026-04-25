@@ -33,7 +33,7 @@ const Kind = "local_path"
 // Factory is the channels.Factory for local_path. Register with:
 //
 //	registry.Register(localpath.Kind, localpath.Factory)
-func Factory(spec channels.ChannelSpec, _ secrets.Resolver) (channels.Channel, error) {
+func Factory(spec channels.ChannelSpec, _ secrets.ResolverAPI) (channels.Channel, error) {
 	if spec.Kind != Kind {
 		return nil, fmt.Errorf("localpath: spec.Kind=%q want %q", spec.Kind, Kind)
 	}
