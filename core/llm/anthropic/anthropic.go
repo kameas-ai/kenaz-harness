@@ -677,9 +677,9 @@ func (s *stream) handleSSEData(_ string, raw []byte) {
 					id:   cb.ContentBlock.ID,
 					name: cb.ContentBlock.Name,
 				}
-				if len(cb.ContentBlock.Input) > 0 && string(cb.ContentBlock.Input) != "null" {
-					s.toolPartial[env.Index].rawInput.Write(cb.ContentBlock.Input)
-				}
+				// Anthropic streams the real arguments via input_json_delta;
+				// the content_block_start.input is always an empty {}
+				// placeholder and would corrupt accumulation if appended.
 				s.mu.Unlock()
 			}
 		}
