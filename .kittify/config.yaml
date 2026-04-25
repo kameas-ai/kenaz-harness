@@ -1,0 +1,6 @@
+vcs:
+  type: git
+agents:
+  available:
+  - claude
+  auto_commit: true
