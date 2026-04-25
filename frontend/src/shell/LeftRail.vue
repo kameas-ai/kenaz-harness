@@ -30,8 +30,8 @@ const route = useRoute();
 const router = useRouter();
 
 const activeSessionId = computed(() => {
-  const h = route.hash || '';
-  return h.startsWith('#') ? h.slice(1) : '';
+  const p = route.params.id;
+  return typeof p === 'string' ? p : '';
 });
 
 onMounted(() => {
@@ -43,10 +43,15 @@ async function newSession() {
   newSessionLoading.value = true;
   try {
     const s = await sessions.create('New session');
-    await router.push(`/sessions#${s.id}`);
+    await router.push(`/sessions/${s.id}`);
   } finally {
     newSessionLoading.value = false;
   }
+}
+
+function openSession(id: string) {
+  if (deletingId.value === id) return;
+  void router.push(`/sessions/${id}`);
 }
 
 async function deleteSession(id: string, event: Event) {
@@ -116,17 +121,19 @@ async function clearAll() {
         <li
           v-for="session in sessions.list"
           :key="session.id"
-          class="group relative"
+          class="flex items-stretch gap-1"
         >
-          <router-link
-            :to="`/sessions#${session.id}`"
-            class="flex items-center gap-2 pl-3 pr-8 py-2 rounded-sm w-full text-left text-sm font-ui transition-fast ease-kenaz"
+          <button
+            type="button"
+            class="flex-1 min-w-0 flex items-center gap-2 px-3 py-2 rounded-sm text-left text-sm font-ui transition-fast ease-kenaz"
             :class="
               activeSessionId === session.id
                 ? 'text-ink bg-surface-2 ring-1 ring-accent-hairline'
                 : 'text-ink-muted hover:text-ink hover:bg-surface-2'
             "
             :aria-current="activeSessionId === session.id ? 'page' : undefined"
+            :data-testid="`open-session-${session.id}`"
+            @click="openSession(session.id)"
           >
             <MessageSquare
               :size="14"
@@ -135,10 +142,10 @@ async function clearAll() {
             <span class="truncate hidden two-col:inline">
               {{ session.name }}
             </span>
-          </router-link>
+          </button>
           <button
             type="button"
-            class="absolute right-1 top-1/2 -translate-y-1/2 p-1 rounded-sm text-ink-dim hover:text-signal-danger hover:bg-surface-3 focus:outline-none focus:ring-1 focus:ring-accent disabled:opacity-50"
+            class="shrink-0 p-2 rounded-sm text-ink-dim hover:text-signal-danger hover:bg-surface-3 focus:outline-none focus:ring-1 focus:ring-accent disabled:opacity-50"
             :aria-label="`Delete session ${session.name}`"
             :disabled="deletingId === session.id"
             :data-testid="`delete-session-${session.id}`"

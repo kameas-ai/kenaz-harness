@@ -53,17 +53,20 @@ function makeMessage(overrides: Partial<Message>): Message {
 }
 
 async function mountWithRoute(
-  hash: string,
+  idFragment: string,
   seed: Partial<HarnessClient>,
 ) {
   const router = createRouter({
     history: createMemoryHistory(),
     routes: [
-      { path: '/sessions', component: SessionsView },
+      { path: '/sessions/:id?', component: SessionsView },
       { path: '/providers', component: defineComponent({ render: () => h('div', 'providers') }) },
     ],
   });
-  await router.push(`/sessions${hash}`);
+  // Legacy callers pass `'#<id>'`; the new router uses /sessions/<id>.
+  // Strip a leading `#` when present so existing tests continue to work.
+  const id = idFragment.startsWith('#') ? idFragment.slice(1) : idFragment;
+  await router.push(id ? `/sessions/${id}` : '/sessions');
   await router.isReady();
 
   const w = mount(SessionsView, {
@@ -153,8 +156,6 @@ describe('SessionsView (chat-ui)', () => {
     const textarea = w.find('textarea');
     expect(textarea.exists()).toBe(true);
     expect(textarea.attributes('disabled')).toBeUndefined();
-    // PrivacyGuarantees panel rendered in right rail.
-    expect(w.text()).toContain('Privacy guarantees');
     w.unmount();
   });
 

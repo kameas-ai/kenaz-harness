@@ -14,7 +14,7 @@ const router = createRouter({
   routes: [
     { path: '/', redirect: '/sessions' },
     {
-      path: '/sessions',
+      path: '/sessions/:id?',
       name: 'sessions',
       component: () => import('@/views/sessions/SessionsView.vue'),
     },

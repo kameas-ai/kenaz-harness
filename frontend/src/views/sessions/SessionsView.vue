@@ -4,10 +4,10 @@
  *   - CanvasHead with the active session name + numbered section header.
  *   - MessageList of historical + currently-streaming messages.
  *   - ChatInput at the bottom.
- *   - PrivacyGuarantees rail on the right (≥960px) per FR-001e.
  *
- * Route shape: `#/sessions` → empty state ("pick a session in the rail").
- *              `#/sessions#<session-id>` → load + render that session.
+ * Route shape:
+ *   `/sessions`        → empty state ("pick a session in the rail")
+ *   `/sessions/<id>`   → load + render that session
  *
  * Uses the chat-ui composables `useSession` + `useShellStatus` and the
  * typed RPC client from `useHarnessClient`. Components never reach into
@@ -17,22 +17,20 @@
 import { computed, ref } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import CanvasHead from '@/shell/CanvasHead.vue';
-import PrivacyGuarantees from '@/components/ui/PrivacyGuarantees.vue';
 import MessageList from '@/components/chat/MessageList.vue';
 import ChatInput from '@/components/chat/ChatInput.vue';
-import { useShellStatus, useHarnessClient } from '@/lib/useHarnessAPI';
+import { useHarnessClient } from '@/lib/useHarnessAPI';
 import { useSession } from '@/lib/useSession';
 import type { Provider } from '@/lib/types';
 
 const route = useRoute();
 const router = useRouter();
-const status = useShellStatus();
 const client = useHarnessClient();
 
-// Route hash carries the session id (e.g. `#/sessions#sess-abc`).
+// Session id is the route's :id param (e.g. /sessions/sess-abc).
 const sessionId = computed(() => {
-  const h = route.hash || '';
-  return h.startsWith('#') ? h.slice(1) : h;
+  const p = route.params.id;
+  return typeof p === 'string' ? p : '';
 });
 
 const hasSession = computed(() => sessionId.value.length > 0);
@@ -56,13 +54,6 @@ const activeProvider = computed<Provider | null>(() => {
   if (providers.value.length === 0) return null;
   return providers.value[0];
 });
-
-const guarantees = computed(() => [
-  { label: 'Credentials never persisted', on: true },
-  { label: 'Event-log redaction applied', on: status.value.redactionOn },
-  { label: 'Local-first: zero outbound traffic', on: status.value.localFirstOn },
-  { label: 'Org policy applied', on: status.value.policyApplied },
-]);
 
 const sessionTitle = computed(() => session.session.value?.name ?? 'Sessions');
 const sessionSubtitle = computed(() => {
@@ -93,12 +84,9 @@ function gotoProviders() {
 </script>
 
 <template>
-  <div
-    class="grid h-full"
-    style="grid-template-columns: 1fr 280px; grid-template-rows: auto 1fr"
-  >
-    <!-- main column header -->
-    <div class="col-start-1 col-end-2 row-start-1 row-end-2">
+  <div class="grid h-full" style="grid-template-rows: auto 1fr">
+    <!-- header -->
+    <div>
       <CanvasHead
         number="01"
         section="SESSIONS"
@@ -107,12 +95,11 @@ function gotoProviders() {
       />
     </div>
 
-    <!-- right rail -->
-    <div class="col-start-2 col-end-3 row-start-1 row-end-3 px-4 pt-6 space-y-4">
-      <PrivacyGuarantees status="APPLIED" :guarantees="guarantees" />
+    <!-- main canvas -->
+    <div class="flex flex-col min-h-0">
       <div
-        v-if="providersLoaded && providers.length === 0"
-        class="rounded-md border border-signal-warn bg-surface-1 px-4 py-3 font-ui text-[12px]"
+        v-if="providersLoaded && providers.length === 0 && hasSession"
+        class="mx-6 my-3 rounded-md border border-signal-warn bg-surface-1 px-4 py-3 font-ui text-[12px]"
         role="status"
       >
         <div class="text-signal-warn uppercase tracking-[0.18em] text-[11px]">
@@ -129,12 +116,7 @@ function gotoProviders() {
           Configure providers
         </button>
       </div>
-    </div>
 
-    <!-- main canvas -->
-    <div
-      class="col-start-1 col-end-2 row-start-2 row-end-3 flex flex-col min-h-0"
-    >
       <!-- empty session state -->
       <div
         v-if="!hasSession"
