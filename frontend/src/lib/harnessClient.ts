@@ -69,7 +69,11 @@ interface WailsBindingsLike {
   Sessions_LoadDraft(id: string): Promise<string>;
 
   LLM_ListProviders(): Promise<Provider[]>;
-  LLM_StartStream(profileID: string, sessionID: string): Promise<string>;
+  LLM_StartStream(
+    profileID: string,
+    sessionID: string,
+    modelOverride: string,
+  ): Promise<string>;
   LLM_StopStream(id: string): Promise<void>;
   LLM_AddProvider(input: AddProviderInput): Promise<void>;
   LLM_UpdateProvider(input: AddProviderInput): Promise<void>;
@@ -167,10 +171,17 @@ export interface LLMConnectorClient {
   listProviders(): Promise<Provider[]>;
   /**
    * startStream begins an assistant completion against `profileID` for
-   * `sessionID`. Returns the subscription id used by `stopStream` and as
-   * the correlation key on `llm:stream-chunk` events.
+   * `sessionID`. modelOverride (optional) selects a non-default model
+   * from the profile's authorised set — the backend validates and
+   * substitutes it into the request. Returns the subscription id used
+   * by `stopStream` and as the correlation key on `llm:stream-chunk`
+   * events.
    */
-  startStream(profileID: string, sessionID: string): Promise<string>;
+  startStream(
+    profileID: string,
+    sessionID: string,
+    modelOverride?: string,
+  ): Promise<string>;
   stopStream(id: string): Promise<void>;
   /**
    * AddProvider persists a personal provider profile. The plaintextApiKey,
@@ -307,8 +318,8 @@ export function createHarnessClient(): HarnessClient {
     },
     llm: {
       listProviders: () => b().LLM_ListProviders(),
-      startStream: (profileID, sessionID) =>
-        b().LLM_StartStream(profileID, sessionID),
+      startStream: (profileID, sessionID, modelOverride) =>
+        b().LLM_StartStream(profileID, sessionID, modelOverride ?? ''),
       stopStream: (id) => b().LLM_StopStream(id),
       addProvider: (input) => b().LLM_AddProvider(input),
       updateProvider: (input) => b().LLM_UpdateProvider(input),

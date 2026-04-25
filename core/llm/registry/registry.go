@@ -276,6 +276,26 @@ func (r *Registry) Stream(ctx context.Context, req llm.GenerationRequest) (llm.S
 		return nil, fmt.Errorf("llm: no adapter registered for kind %q", prof.Kind)
 	}
 
+	// Per-call model override: when the chat surface picks a model
+	// other than the profile default (and that model is in the
+	// authorised set), substitute prof.Model so the adapter,
+	// capability gate, and audit trail all see the actual model
+	// being called.
+	if req.Model != "" && req.Model != prof.Model {
+		allowed := prof.AvailableModels()
+		ok := false
+		for _, m := range allowed {
+			if m == req.Model {
+				ok = true
+				break
+			}
+		}
+		if !ok {
+			return nil, fmt.Errorf("llm: model %q not authorised for profile %q (allowed: %v)", req.Model, req.ProfileID, allowed)
+		}
+		prof.Model = req.Model
+	}
+
 	// 2. CapabilityGate.
 	if _, err := gate.Check(req, prof); err != nil {
 		var ce *llm.ErrCapabilityUnsupported

@@ -24,7 +24,7 @@ type stubLLM struct{}
 func (s *stubLLM) ListProviders(_ context.Context) ([]llm.Provider, error) {
 	return nil, errNotWired
 }
-func (s *stubLLM) StartStream(_ context.Context, _, _ string) (string, error) {
+func (s *stubLLM) StartStream(_ context.Context, _, _, _ string) (string, error) {
 	return "", errNotWired
 }
 func (s *stubLLM) StopStream(_ context.Context, _ string) error { return errNotWired }

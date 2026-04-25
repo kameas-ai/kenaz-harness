@@ -38,6 +38,7 @@ const props = defineProps<{
     name: string;
     kind: ProviderKind;
     model: string;
+    models?: string[];
     region?: string;
     credKind: 'keychain' | 'aws_profile' | 'env' | 'file';
     credLocator: string;
@@ -90,8 +91,13 @@ interface FormState {
   awsProfile: string;
   bedrockAuth: BedrockAuth;
   region: string;
-  modelId: string;
-  manualModelId: string;
+  // Set of model ids the user has ticked from the probe-populated
+  // dropdown. The first id (in declared order from the probe) is the
+  // default sent on the wire.
+  selectedModelIds: string[];
+  // Free-form fallback when the kind has no /models endpoint
+  // (bedrock, ollama). One id per line OR comma-separated.
+  manualModelIds: string;
   customId: string;
 }
 
@@ -101,8 +107,8 @@ const form = reactive<FormState>({
   awsProfile: 'default',
   bedrockAuth: 'api_key',
   region: 'us-east-1',
-  modelId: '',
-  manualModelId: '',
+  selectedModelIds: [],
+  manualModelIds: '',
   customId: '',
 });
 
@@ -110,7 +116,9 @@ const form = reactive<FormState>({
 if (props.editing) {
   form.kind = props.editing.kind;
   form.region = props.editing.region || 'us-east-1';
-  form.manualModelId = props.editing.model;
+  form.manualModelIds = (props.editing.models ?? [props.editing.model])
+    .filter(Boolean)
+    .join('\n');
   form.customId = props.editing.id;
   if (props.editing.kind === 'bedrock') {
     form.bedrockAuth =
@@ -154,9 +162,17 @@ const skipsProbe = computed(() => form.kind === 'bedrock' || isEditing.value);
 // so most users never have to think about it.
 const customizeId = ref(false);
 const derivedId = computed(() => {
-  const m = effectiveModelId.value;
-  if (!m) return '';
-  return `${form.kind}-${m}`.toLowerCase().replace(/[^a-z0-9-_]/g, '-');
+  // For multi-model rows, the auto-derived id uses the kind + count
+  // (e.g. "anthropic-3-models") rather than naming any one model so
+  // the row id is stable when the user adjusts the model set later.
+  const ids = effectiveModelIds.value;
+  if (ids.length === 0) return '';
+  if (ids.length === 1) {
+    return `${form.kind}-${ids[0]}`
+      .toLowerCase()
+      .replace(/[^a-z0-9-_]/g, '-');
+  }
+  return `${form.kind}-${ids.length}-models`.toLowerCase();
 });
 const effectiveId = computed(() =>
   customizeId.value && form.customId.trim()
@@ -164,15 +180,28 @@ const effectiveId = computed(() =>
     : derivedId.value,
 );
 
+// Resolved list of model ids the user has authorised. The first one
+// is the primary (= profile.Model on the backend); the rest live in
+// profile.Models for the chat-surface switcher to pick.
+const effectiveModelIds = computed<string[]>(() => {
+  if (fallbackToManual.value) {
+    return form.manualModelIds
+      .split(/[\n,]/)
+      .map((s) => s.trim())
+      .filter(Boolean);
+  }
+  // Preserve the order of `models` so the primary is always the
+  // top entry of the probe-returned list, not click order.
+  const tickedSet = new Set(form.selectedModelIds);
+  return models.value.map((m) => m.id).filter((id) => tickedSet.has(id));
+});
+const primaryModelId = computed(() => effectiveModelIds.value[0] ?? '');
 const selectedModel = computed<ModelInfo | undefined>(() =>
-  models.value.find((m) => m.id === form.modelId),
-);
-const effectiveModelId = computed(() =>
-  fallbackToManual.value ? form.manualModelId.trim() : form.modelId,
+  models.value.find((m) => m.id === primaryModelId.value),
 );
 const effectiveModelName = computed(() => {
   if (selectedModel.value?.displayName) return selectedModel.value.displayName;
-  return effectiveModelId.value;
+  return primaryModelId.value;
 });
 
 watch(
@@ -181,7 +210,7 @@ watch(
     probed.value = false;
     fallbackToManual.value = skipsProbe.value;
     models.value = [];
-    form.modelId = '';
+    form.selectedModelIds = [];
     probeError.value = null;
   },
   { immediate: true },
@@ -203,7 +232,8 @@ async function onProbe(): Promise<void> {
       fallbackToManual.value = true;
     } else {
       fallbackToManual.value = false;
-      form.modelId = models.value[0].id;
+      // Default to first model ticked. User can tick more.
+      form.selectedModelIds = [models.value[0].id];
     }
   } catch (err) {
     probeError.value = err instanceof Error ? err.message : String(err);
@@ -229,11 +259,11 @@ const validation = computed(() => {
     errors.awsProfile = 'AWS profile name is required.';
   if (requiresRegion.value && !form.region.trim())
     errors.region = 'Region is required for Bedrock.';
-  if (!effectiveModelId.value)
+  if (effectiveModelIds.value.length === 0)
     errors.model = skipsProbe.value
-      ? 'Model id is required.'
+      ? 'At least one model id is required.'
       : probed.value
-        ? 'Pick a model.'
+        ? 'Pick at least one model.'
         : 'Connect first to load available models.';
   if (customizeId.value && !form.customId.trim())
     errors.customId = 'Custom ID is required when "Customize ID" is on.';
@@ -255,7 +285,8 @@ function onSubmit(): void {
     id,
     name: effectiveModelName.value,
     kind: form.kind,
-    model: effectiveModelId.value,
+    model: primaryModelId.value,
+    models: effectiveModelIds.value,
     cred,
   };
   if (requiresRegion.value) input.region = form.region.trim();
@@ -451,53 +482,78 @@ defineExpose({ form, validation, isValid });
 
     <!-- Step 4: Model picker — populated by Connect -->
     <div v-if="probed && !fallbackToManual">
-      <label
-        for="prov-model"
-        class="block text-[11px] uppercase tracking-[0.18em] text-ink-subtle"
+      <div class="flex items-center justify-between">
+        <span class="block text-[11px] uppercase tracking-[0.18em] text-ink-subtle">
+          Models ({{ form.selectedModelIds.length }} selected)
+        </span>
+        <div class="flex gap-2 text-[11px]">
+          <button
+            type="button"
+            class="text-accent hover:text-ink"
+            @click="form.selectedModelIds = models.map((m) => m.id)"
+          >
+            Select all
+          </button>
+          <button
+            type="button"
+            class="text-ink-dim hover:text-ink"
+            @click="form.selectedModelIds = []"
+          >
+            Clear
+          </button>
+        </div>
+      </div>
+      <div
+        class="mt-1 max-h-56 overflow-y-auto rounded-sm border border-border-muted bg-surface-1"
+        :data-testid="'add-provider-model-list'"
       >
-        Model
-      </label>
-      <select
-        id="prov-model"
-        v-model="form.modelId"
-        class="mt-1 w-full rounded-sm border border-border-muted bg-surface-1 px-2.5 py-1.5 text-sm text-ink focus:border-accent focus:outline-none"
-        :data-testid="'add-provider-model'"
-      >
-        <option v-for="m in models" :key="m.id" :value="m.id">
-          {{ m.displayName || m.id }}
-        </option>
-      </select>
+        <label
+          v-for="m in models"
+          :key="m.id"
+          class="flex items-center gap-2 px-2.5 py-1.5 text-sm font-ui text-ink hover:bg-surface-2 cursor-pointer"
+        >
+          <input
+            type="checkbox"
+            :value="m.id"
+            v-model="form.selectedModelIds"
+            class="h-3.5 w-3.5"
+          />
+          <span class="truncate">{{ m.displayName || m.id }}</span>
+        </label>
+      </div>
       <p v-if="validation.model" class="mt-1 text-xs text-signal-danger">
         {{ validation.model }}
       </p>
     </div>
 
     <!-- Manual model entry — for kinds with no /models endpoint
-         (bedrock today) and as a fallback when probing returns empty. -->
+         (bedrock today) and as a fallback when probing returns empty.
+         Multi-line: one model id per line. -->
     <div v-if="fallbackToManual">
       <label
         for="prov-model-manual"
         class="block text-[11px] uppercase tracking-[0.18em] text-ink-subtle"
       >
-        Model ID
+        Model IDs
       </label>
-      <input
+      <textarea
         id="prov-model-manual"
-        v-model="form.manualModelId"
+        v-model="form.manualModelIds"
+        rows="4"
         class="mt-1 w-full rounded-sm border border-border-muted bg-surface-1 px-2.5 py-1.5 text-sm font-mono text-ink focus:border-accent focus:outline-none"
         autocomplete="off"
         :data-testid="'add-provider-model-manual'"
         :placeholder="
           form.kind === 'bedrock'
-            ? 'meta.llama3-70b-instruct-v1:0'
+            ? 'us.meta.llama4-maverick-17b-instruct-v1:0\nus.anthropic.claude-3-5-sonnet-20241022-v2:0'
             : form.kind === 'ollama'
-              ? 'llama3.1:8b'
-              : 'model-id'
+              ? 'llama3.1:8b\nqwen2.5:7b'
+              : 'model-id-1\nmodel-id-2'
         "
       />
       <p class="mt-1 text-[11px] text-ink-dim">
-        This provider does not expose a model list — type the model id
-        manually.
+        One model id per line (or comma-separated). The first id is the
+        default; chat sessions can switch to any of the others.
       </p>
       <p v-if="validation.model" class="mt-1 text-xs text-signal-danger">
         {{ validation.model }}
@@ -505,7 +561,7 @@ defineExpose({ form, validation, isValid });
     </div>
 
     <!-- Optional: customize the auto-derived ID -->
-    <div v-if="effectiveModelId">
+    <div v-if="effectiveModelIds.length > 0">
       <div class="flex items-center justify-between">
         <span class="text-[11px] uppercase tracking-[0.18em] text-ink-subtle">
           Provider ID

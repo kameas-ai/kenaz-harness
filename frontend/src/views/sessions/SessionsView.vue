@@ -14,7 +14,7 @@
  * `wailsjs/*` directly — that's the FR-007 isolation rule.
  */
 
-import { computed, ref } from 'vue';
+import { computed, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import CanvasHead from '@/shell/CanvasHead.vue';
 import MessageList from '@/components/chat/MessageList.vue';
@@ -22,6 +22,7 @@ import ChatInput from '@/components/chat/ChatInput.vue';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
 import { useSession } from '@/lib/useSession';
 import type { Provider } from '@/lib/types';
+import { flattenChoices, inferFamily } from '@/lib/modelFamily';
 
 const route = useRoute();
 const router = useRouter();
@@ -55,27 +56,86 @@ void (async () => {
 // the chat surface picks the first provider whose kind we know works,
 // rather than blindly using providers[0] and hitting "no adapter for
 // kind X" on send.
-const SUPPORTED_KINDS = new Set(['anthropic', 'bedrock', 'openai', 'openrouter']);
+const SUPPORTED_KINDS = new Set([
+  'anthropic',
+  'bedrock',
+  'openai',
+  'openrouter',
+]);
+
+// Active (provider, model) tuple for this session. Model defaults to
+// the profile's primary; the switcher pill below lets the user pick
+// a different model from the same FAMILY (cross-family transfers
+// would mean swapping tokenisers mid-conversation, so we block them).
+const activeProviderId = ref<string>('');
+const activeModelId = ref<string>('');
 
 const activeProvider = computed<Provider | null>(() => {
   if (providers.value.length === 0) return null;
-  // Provider rows don't carry the kind directly today — Source is
-  // "bundle"|"personal" and the kind lives in the id prefix from the
-  // AddProvider flow (e.g. `anthropic-claude-sonnet-4-5`). Use that
-  // prefix as a heuristic until the rpc surface returns kind explicitly.
-  const supported = providers.value.find((p) =>
-    [...SUPPORTED_KINDS].some((k) => p.id.startsWith(`${k}-`)),
-  );
-  return supported ?? providers.value[0];
+  // Prefer a provider whose kind has a working stream adapter.
+  const supported = providers.value.filter((p) => {
+    const kind = p.kind ?? '';
+    return SUPPORTED_KINDS.has(kind);
+  });
+  const pool = supported.length > 0 ? supported : providers.value;
+  // Honour an explicitly-selected provider when it exists.
+  if (activeProviderId.value) {
+    const match = pool.find((p) => p.id === activeProviderId.value);
+    if (match) return match;
+  }
+  return pool[0] ?? null;
 });
 
-// True when we'd be sending to a provider whose kind has no adapter
-// — used to disable the input + show a clearer message.
-const activeProviderUnsupported = computed(
-  () =>
-    !!activeProvider.value &&
-    ![...SUPPORTED_KINDS].some((k) => activeProvider.value!.id.startsWith(`${k}-`)),
+const activeProviderUnsupported = computed(() => {
+  const p = activeProvider.value;
+  if (!p) return false;
+  return !SUPPORTED_KINDS.has(p.kind ?? '');
+});
+
+const activeFamily = computed<string>(() => {
+  const p = activeProvider.value;
+  if (!p || !activeModelId.value) return '';
+  return inferFamily(p.kind, activeModelId.value);
+});
+
+// All (provider, model) tuples available across all configured
+// providers, with their inferred family. Drives the switcher pill.
+const allChoices = computed(() => flattenChoices(providers.value));
+
+// Same family as the active session — these are click-able. Other
+// families render disabled with a tooltip.
+const familyChoices = computed(() =>
+  allChoices.value.filter((c) => c.family === activeFamily.value),
 );
+const otherFamilyChoices = computed(() =>
+  allChoices.value.filter((c) => c.family !== activeFamily.value),
+);
+
+// On provider/model load, default the active selection to the
+// provider's primary model.
+watch(
+  [activeProvider, providersLoaded],
+  () => {
+    const p = activeProvider.value;
+    if (!p) return;
+    if (!activeProviderId.value) activeProviderId.value = p.id;
+    if (!activeModelId.value) {
+      const list = p.models && p.models.length > 0 ? p.models : [p.model];
+      activeModelId.value = list[0] || '';
+    }
+  },
+  { immediate: true },
+);
+
+const switcherOpen = ref(false);
+function toggleSwitcher() {
+  switcherOpen.value = !switcherOpen.value;
+}
+function pickModel(providerId: string, modelId: string) {
+  activeProviderId.value = providerId;
+  activeModelId.value = modelId;
+  switcherOpen.value = false;
+}
 
 const sessionTitle = computed(() => session.session.value?.name ?? 'Sessions');
 const sessionSubtitle = computed(() => {
@@ -100,7 +160,7 @@ const isWaitingForFirstChunk = computed(
 
 async function onSend(content: string) {
   if (!hasSession.value || !activeProvider.value) return;
-  await session.send(content, activeProvider.value.id);
+  await session.send(content, activeProvider.value.id, activeModelId.value);
 }
 
 async function onCancel() {
@@ -165,6 +225,68 @@ function gotoProviders() {
         >
           Configure providers
         </button>
+      </div>
+
+      <!-- model switcher pill -->
+      <div
+        v-if="hasSession && activeProvider && allChoices.length > 0"
+        class="mx-6 mb-2 mt-1 relative"
+      >
+        <button
+          type="button"
+          class="flex items-center gap-2 rounded-sm border border-border-muted bg-surface-1 px-3 py-1.5 text-xs font-ui text-ink hover:bg-surface-2"
+          :data-testid="'session-model-switcher'"
+          @click="toggleSwitcher"
+        >
+          <span class="text-[10px] uppercase tracking-[0.18em] text-ink-dim">
+            Model
+          </span>
+          <span class="font-mono">{{ activeModelId || '—' }}</span>
+          <span class="text-ink-dim">▾</span>
+        </button>
+        <div
+          v-if="switcherOpen"
+          class="absolute z-20 mt-1 max-h-72 w-80 overflow-y-auto rounded-sm border border-border-muted bg-surface-1 shadow-lg"
+          role="menu"
+        >
+          <div class="px-3 py-1.5 text-[10px] uppercase tracking-[0.18em] text-ink-subtle border-b border-border-muted">
+            {{ activeFamily ? `Same family (${activeFamily})` : 'Available' }}
+          </div>
+          <button
+            v-for="c in familyChoices"
+            :key="`${c.providerId}::${c.modelId}`"
+            type="button"
+            class="block w-full px-3 py-1.5 text-left text-sm font-ui hover:bg-surface-2"
+            :class="
+              c.providerId === activeProviderId &&
+              c.modelId === activeModelId
+                ? 'text-accent'
+                : 'text-ink'
+            "
+            @click="pickModel(c.providerId, c.modelId)"
+          >
+            <div class="font-mono text-xs">{{ c.modelId }}</div>
+            <div class="text-[10px] text-ink-dim">{{ c.providerName }}</div>
+          </button>
+          <div
+            v-if="otherFamilyChoices.length > 0"
+            class="px-3 py-1.5 text-[10px] uppercase tracking-[0.18em] text-ink-subtle border-t border-border-muted"
+          >
+            Other families (cross-family blocked)
+          </div>
+          <div
+            v-for="c in otherFamilyChoices"
+            :key="`disabled-${c.providerId}::${c.modelId}`"
+            class="block w-full px-3 py-1.5 text-left text-sm font-ui text-ink-dim opacity-60 cursor-not-allowed"
+            :title="
+              `Different family (${c.family}) — would swap tokenisers ` +
+              `mid-conversation. Start a new session to use this model.`
+            "
+          >
+            <div class="font-mono text-xs">{{ c.modelId }}</div>
+            <div class="text-[10px]">{{ c.providerName }} · {{ c.family }}</div>
+          </div>
+        </div>
       </div>
 
       <!-- empty session state -->

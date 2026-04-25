@@ -20,6 +20,12 @@ export interface Provider {
   tier: string;
   kind?: ProviderKind;
   model: string;
+  /**
+   * Authorised model set. Empty => single-model row; chat surface
+   * falls back to [model]. The model-switcher pill in SessionsView
+   * reads this list (filtered to the active session's family).
+   */
+  models?: string[];
   region?: string;
   cred?: CredentialReference;
   /**
@@ -59,6 +65,11 @@ export interface AddProviderInput {
   name: string;
   kind: ProviderKind;
   model: string;
+  /**
+   * Authorised model set; first entry is the default. Empty for
+   * legacy single-model adds; the backend treats Models=[Model] then.
+   */
+  models?: string[];
   region?: string;
   cred: CredentialReference;
   /**

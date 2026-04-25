@@ -171,6 +171,7 @@ export namespace llm {
 	    name: string;
 	    kind: string;
 	    model: string;
+	    models?: string[];
 	    region?: string;
 	    cred: CredentialReference;
 	    plaintextApiKey?: string;
@@ -185,6 +186,7 @@ export namespace llm {
 	        this.name = source["name"];
 	        this.kind = source["kind"];
 	        this.model = source["model"];
+	        this.models = source["models"];
 	        this.region = source["region"];
 	        this.cred = this.convertValues(source["cred"], CredentialReference);
 	        this.plaintextApiKey = source["plaintextApiKey"];
@@ -231,6 +233,7 @@ export namespace llm {
 	    tier: string;
 	    kind?: string;
 	    model: string;
+	    models?: string[];
 	    region?: string;
 	    cred?: CredentialReference;
 	    source?: string;
@@ -247,6 +250,7 @@ export namespace llm {
 	        this.tier = source["tier"];
 	        this.kind = source["kind"];
 	        this.model = source["model"];
+	        this.models = source["models"];
 	        this.region = source["region"];
 	        this.cred = this.convertValues(source["cred"], CredentialReference);
 	        this.source = source["source"];

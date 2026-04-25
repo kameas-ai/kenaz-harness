@@ -91,15 +91,32 @@ func DefaultRetryPolicy() RetryPolicy {
 // ProviderProfile is the materialized form of one bundle Provider Profile
 // artifact (FR-002 / C-004).
 type ProviderProfile struct {
-	ID              string              `json:"id"               yaml:"id"`
-	Kind            string              `json:"kind"             yaml:"kind"`
-	Model           string              `json:"model"            yaml:"model"`
+	ID    string              `json:"id"               yaml:"id"`
+	Kind  string              `json:"kind"             yaml:"kind"`
+	Model string              `json:"model"            yaml:"model"`
+	// Models is the full set of models the credential is authorised
+	// for. When empty, callers fall back to [Model]. The first entry is
+	// the default; the chat surface picks via GenerationRequest.Model.
+	Models          []string            `json:"models,omitempty" yaml:"models,omitempty"`
 	Cred            CredentialReference `json:"cred"             yaml:"auth"`
 	Region          string              `json:"region,omitempty" yaml:"region,omitempty"`
 	Endpoint        string              `json:"endpoint,omitempty" yaml:"endpoint,omitempty"`
 	CapabilityHints map[Capability]bool `json:"capability_hints,omitempty" yaml:"capabilities,omitempty"`
 	Defaults        map[string]any      `json:"defaults,omitempty" yaml:"defaults,omitempty"`
 	Retry           *RetryPolicy        `json:"retry,omitempty"  yaml:"retry,omitempty"`
+}
+
+// AvailableModels returns the resolved model list. Falls back to
+// [Model] when Models is empty so legacy single-model profiles keep
+// working without a migration.
+func (p ProviderProfile) AvailableModels() []string {
+	if len(p.Models) > 0 {
+		return p.Models
+	}
+	if p.Model != "" {
+		return []string{p.Model}
+	}
+	return nil
 }
 
 // Role enumerates the message roles in a multi-turn conversation (FR-005).
@@ -174,7 +191,12 @@ type ReasoningSpec struct {
 
 // GenerationRequest is the provider-agnostic invocation shape (FR-004).
 type GenerationRequest struct {
-	ProfileID     string         `json:"profile_id"`
+	ProfileID string `json:"profile_id"`
+	// Model is an optional per-request override of ProviderProfile.Model.
+	// When set and present in profile.AvailableModels(), the registry
+	// substitutes prof.Model = req.Model before dispatching to the
+	// adapter. Empty means "use the profile default."
+	Model         string         `json:"model,omitempty"`
 	System        string         `json:"system,omitempty"`
 	Messages      []Message      `json:"messages"`
 	Tools         []ToolSpec     `json:"tools,omitempty"`

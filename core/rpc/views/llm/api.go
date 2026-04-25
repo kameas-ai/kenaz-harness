@@ -12,6 +12,10 @@ type Provider struct {
 	Tier  string `json:"tier"`
 	Kind  string `json:"kind,omitempty"`
 	Model string `json:"model"`
+	// Models is the authorised set; chat surfaces use it to populate
+	// the mid-conversation model switcher. Empty => single-model row
+	// — UI falls back to [Model].
+	Models []string `json:"models,omitempty"`
 	// Region is non-empty for kinds that require it (bedrock today).
 	Region string `json:"region,omitempty"`
 	// Cred surfaces the indirect-reference shape so the UI can render
@@ -44,10 +48,15 @@ type CredentialReference struct {
 // minimal subset of llm.ProviderProfile needed to drive the personal
 // store from the UI.
 type AddProviderInput struct {
-	ID     string              `json:"id"`
-	Name   string              `json:"name"`
-	Kind   string              `json:"kind"`
-	Model  string              `json:"model"`
+	ID    string `json:"id"`
+	Name  string `json:"name"`
+	Kind  string `json:"kind"`
+	Model string `json:"model"`
+	// Models is the full set of models the user authorised on this
+	// provider. The first entry is the default; the chat-surface
+	// model-switcher picks the rest at call time. When empty the
+	// backend falls back to [Model] for legacy single-model rows.
+	Models []string            `json:"models,omitempty"`
 	Region string              `json:"region,omitempty"`
 	Cred   CredentialReference `json:"cred"`
 	// PlaintextAPIKey is consumed by the bindings layer: it is written
@@ -81,7 +90,11 @@ type ModelInfo struct {
 // without smuggling state through the subscription id.
 type LLMConnectorAPI interface {
 	ListProviders(ctx context.Context) ([]Provider, error)
-	StartStream(ctx context.Context, profileID, sessionID string) (subscriptionID string, err error)
+	// StartStream opens a streaming generation for the given session.
+	// modelOverride, when non-empty, must be in the profile's authorised
+	// model set; the registry validates and substitutes prof.Model
+	// before dispatch. Empty => use the profile default.
+	StartStream(ctx context.Context, profileID, sessionID, modelOverride string) (subscriptionID string, err error)
 	StopStream(ctx context.Context, subscriptionID string) error
 
 	// AddProvider persists a personal provider profile. The supplied

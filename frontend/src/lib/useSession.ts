@@ -42,8 +42,12 @@ export interface UseSessionResult {
   /** Two-way draft buffer; debounced-saved automatically. */
   draft: Ref<string>;
   refresh(): Promise<void>;
-  /** Append a user message and start the assistant stream. */
-  send(content: string, profileID: string): Promise<void>;
+  /**
+   * Append a user message and start the assistant stream. modelOverride
+   * (optional) selects a non-default model from the profile's
+   * authorised set; the chat surface's switcher pill picks it.
+   */
+  send(content: string, profileID: string, modelOverride?: string): Promise<void>;
   /** Cancel an in-flight stream. */
   cancel(): Promise<void>;
 }
@@ -220,14 +224,14 @@ export function useSession(id: Ref<string>): UseSessionResult {
     }
   });
 
-  async function send(content: string, profileID: string) {
+  async function send(content: string, profileID: string, modelOverride?: string) {
     const sid = id.value;
     if (!sid) return;
     error.value = null;
     try {
       const userMsg = await client.sessions.appendMessage(sid, 'user', content);
       messages.value = [...messages.value, userMsg];
-      const subId = await client.llm.startStream(profileID, sid);
+      const subId = await client.llm.startStream(profileID, sid, modelOverride);
       streamSubscriptionId.value = subId;
       streamingTimedOut.value = false;
       clearStreamTimeout();

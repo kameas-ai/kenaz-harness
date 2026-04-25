@@ -119,7 +119,7 @@ describe('SessionsView (chat-ui)', () => {
       makeMessage({ id: 'a', role: 'assistant', content: 'I am well.' }),
     ];
     const providers: Provider[] = [
-      { id: 'anthropic-p-1', name: 'Anthropic', tier: 'cloud', model: 'claude' },
+      { id: 'anthropic-p-1', name: 'Anthropic', tier: 'cloud', kind: 'anthropic', model: 'claude' },
     ];
     const { w } = await mountWithRoute('#s-1', {
       sessions: {
@@ -161,7 +161,7 @@ describe('SessionsView (chat-ui)', () => {
 
   it('does not render the no-provider banner when a provider is configured', async () => {
     const providers: Provider[] = [
-      { id: 'anthropic-p-1', name: 'Anthropic', tier: 'cloud', model: 'claude' },
+      { id: 'anthropic-p-1', name: 'Anthropic', tier: 'cloud', kind: 'anthropic', model: 'claude' },
     ];
     const { w } = await mountWithRoute('#s-1', {
       llm: {

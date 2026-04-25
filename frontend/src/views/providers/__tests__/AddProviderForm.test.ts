@@ -47,14 +47,15 @@ describe('AddProviderForm', () => {
     await wrapper.find('[data-testid="add-provider-connect"]').trigger('click');
     await flushPromises();
     expect(client.llm.listModels).toHaveBeenCalledWith('anthropic', 'sk-test');
-    expect(wrapper.find('[data-testid="add-provider-model"]').exists()).toBe(
-      true,
-    );
-    const options = wrapper
-      .find('[data-testid="add-provider-model"]')
-      .findAll('option');
-    expect(options).toHaveLength(2);
-    expect(options[0].text()).toContain('Claude Sonnet 4.5');
+    expect(
+      wrapper.find('[data-testid="add-provider-model-list"]').exists(),
+    ).toBe(true);
+    const checkboxes = wrapper
+      .find('[data-testid="add-provider-model-list"]')
+      .findAll('input[type="checkbox"]');
+    expect(checkboxes).toHaveLength(2);
+    const list = wrapper.find('[data-testid="add-provider-model-list"]');
+    expect(list.text()).toContain('Claude Sonnet 4.5');
   });
 
   it('emits submit with auto-derived id + keychain reference', async () => {

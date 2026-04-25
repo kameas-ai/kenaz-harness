@@ -250,7 +250,11 @@ func (a *API) ListProviders(_ context.Context) ([]Provider, error) {
 // emitted StreamChunkPayload carries SessionID so the chat UI can
 // route per-token deltas to the correct conversation without
 // smuggling state through the subscription id.
-func (a *API) StartStream(ctx context.Context, profileID, sessionID string) (string, error) {
+//
+// modelOverride is a per-call selection from the profile's authorised
+// models — the chat surface's model-switcher picks one and passes it
+// here. Empty => use the profile default.
+func (a *API) StartStream(ctx context.Context, profileID, sessionID, modelOverride string) (string, error) {
 	if a.reg == nil {
 		return "", errors.New("llm: connector not wired")
 	}
@@ -267,6 +271,7 @@ func (a *API) StartStream(ctx context.Context, profileID, sessionID string) (str
 	}
 	req := corellm.GenerationRequest{
 		ProfileID: profileID,
+		Model:     modelOverride,
 		Messages:  messages,
 	}
 
@@ -389,6 +394,7 @@ func (a *API) AddProvider(ctx context.Context, in AddProviderInput) error {
 		ID:     in.ID,
 		Kind:   in.Kind,
 		Model:  in.Model,
+		Models: in.Models,
 		Region: in.Region,
 		Cred: corellm.CredentialReference{
 			Kind:    in.Cred.Kind,
@@ -450,6 +456,7 @@ func (a *API) UpdateProvider(ctx context.Context, in AddProviderInput) error {
 		ID:     in.ID,
 		Kind:   in.Kind,
 		Model:  in.Model,
+		Models: in.Models,
 		Region: in.Region,
 		Cred: corellm.CredentialReference{
 			Kind:    in.Cred.Kind,
@@ -646,6 +653,7 @@ func profileToProvider(p corellm.ProviderProfile, source string, validated bool)
 		Tier:   source,
 		Kind:   p.Kind,
 		Model:  p.Model,
+		Models: p.AvailableModels(),
 		Region: p.Region,
 		Cred: CredentialReference{
 			Kind:    p.Cred.Kind,

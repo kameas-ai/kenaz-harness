@@ -48,7 +48,7 @@ export function LLM_ListProviders():Promise<Array<llm.Provider>>;
 
 export function LLM_RemoveProvider(arg1:string):Promise<void>;
 
-export function LLM_StartStream(arg1:string,arg2:string):Promise<string>;
+export function LLM_StartStream(arg1:string,arg2:string,arg3:string):Promise<string>;
 
 export function LLM_StopStream(arg1:string):Promise<void>;
 

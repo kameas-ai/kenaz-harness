@@ -70,8 +70,8 @@ export function LLM_RemoveProvider(arg1) {
   return window['go']['rpc']['Bindings']['LLM_RemoveProvider'](arg1);
 }
 
-export function LLM_StartStream(arg1, arg2) {
-  return window['go']['rpc']['Bindings']['LLM_StartStream'](arg1, arg2);
+export function LLM_StartStream(arg1, arg2, arg3) {
+  return window['go']['rpc']['Bindings']['LLM_StartStream'](arg1, arg2, arg3);
 }
 
 export function LLM_StopStream(arg1) {
