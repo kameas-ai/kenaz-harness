@@ -15,6 +15,12 @@ import (
 //   - Collapse all whitespace runs (space, tab, newline) to a single ASCII space.
 //   - Trim leading/trailing whitespace.
 //
+// Whitespace adjacent to structural punctuation (parens, commas,
+// semicolons) is intentionally preserved here so authoring style stays
+// representable in the canonical form. HashSQL applies an additional
+// squeeze step before hashing so two stylistic variants — "( id INT )"
+// vs "(id INT)" — produce the same content hash.
+//
 // The function is intentionally simple — it does not understand quoted
 // strings, so a "--" embedded inside a string literal will be treated as
 // a comment. This is a known and documented constraint: migrations
@@ -104,9 +110,42 @@ func collapseWhitespace(src string) string {
 	return b.String()
 }
 
-// HashSQL canonicalizes src and returns the lowercase hex SHA-256 digest.
+// squeezePunctuation removes whitespace inside the visible bounds of
+// structural SQL grouping: a space immediately after "(" or immediately
+// before ")", and a space immediately before "," or ";". External
+// spacing (e.g. "foo (id INT)") is preserved so authoring style remains
+// representable in the canonical form.
+func squeezePunctuation(src string) string {
+	var b strings.Builder
+	b.Grow(len(src))
+	for i := 0; i < len(src); i++ {
+		c := src[i]
+		if c == ' ' {
+			// Drop a space before ")", ",", or ";".
+			if i+1 < len(src) {
+				next := src[i+1]
+				if next == ')' || next == ',' || next == ';' {
+					continue
+				}
+			}
+			// Drop a space immediately after "(".
+			if b.Len() > 0 && b.String()[b.Len()-1] == '(' {
+				continue
+			}
+		}
+		b.WriteByte(c)
+	}
+	return b.String()
+}
+
+// HashSQL canonicalizes src, additionally squeezes whitespace adjacent
+// to structural punctuation, and returns the lowercase hex SHA-256
+// digest. The extra squeeze is applied only at hashing time so the
+// human-readable canonical form returned by CanonicalizeSQL retains
+// authoring style, while content equality remains stable across the
+// stylistic variants the squeeze normalises away.
 func HashSQL(src string) string {
-	canonical := CanonicalizeSQL(src)
+	canonical := squeezePunctuation(CanonicalizeSQL(src))
 	sum := sha256.Sum256([]byte(canonical))
 	return hex.EncodeToString(sum[:])
 }

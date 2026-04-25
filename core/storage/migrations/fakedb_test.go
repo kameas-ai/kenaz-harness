@@ -238,6 +238,13 @@ func (t *fakeTx) Exec(ctx context.Context, query string, args ...any) (Result, e
 		t.db.tables[name] = true
 		t.db.mu.Unlock()
 		return fakeResult{}, nil
+	case strings.HasPrefix(q, "create table "):
+		// generic CREATE TABLE without IF NOT EXISTS
+		name := extractObjectName(q, "create table ")
+		t.db.mu.Lock()
+		t.db.tables[name] = true
+		t.db.mu.Unlock()
+		return fakeResult{}, nil
 	case strings.HasPrefix(q, "create index if not exists "):
 		name := extractObjectName(q, "create index if not exists ")
 		t.db.mu.Lock()
