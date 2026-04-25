@@ -23,7 +23,16 @@ import { useSessions } from '@/lib/useHarnessAPI';
  *
  * Collapses to icons-only at < 960px (--breakpoint-two-col, FR-016).
  */
-const sessions = useSessions();
+// Destructure so each ref becomes a top-level setup binding — Vue's
+// template auto-unwrap only fires for top-level refs, NOT for refs
+// reached through a parent object (sessions.list would surface the
+// Ref wrapper itself, which v-for would iterate as marker booleans).
+const {
+  list: sessionList,
+  refresh: refreshSessions,
+  create: createSession,
+  remove: removeSession,
+} = useSessions();
 const newSessionLoading = ref(false);
 const deletingId = ref<string | null>(null);
 const lastError = ref<string | null>(null);
@@ -36,66 +45,51 @@ const activeSessionId = computed(() => {
 });
 
 onMounted(() => {
-  sessions.refresh();
+  refreshSessions();
 });
 
 async function newSession() {
   if (newSessionLoading.value) return;
   newSessionLoading.value = true;
   try {
-    const s = await sessions.create('New session');
+    const s = await createSession('New session');
     await router.push(`/sessions/${s.id}`);
   } finally {
     newSessionLoading.value = false;
   }
 }
 
-function openSession(session: unknown) {
-  const id =
-    session && typeof session === 'object' && 'id' in session
-      ? String((session as { id?: string }).id)
-      : '';
-  if (!id || id === 'undefined' || deletingId.value === id) return;
+function openSession(id: string) {
+  if (!id || deletingId.value === id) return;
   void router.push(`/sessions/${id}`);
 }
 
-async function deleteSession(session: unknown, event: Event) {
+async function deleteSession(id: string, event: Event) {
   event.preventDefault();
   event.stopPropagation();
-  // Diagnostic: dump everything we know about the row so we can see
-  // exactly what shape Vue is passing into v-for. Removed once stable.
-  const dump = JSON.stringify(session, null, 2);
-  const id =
-    session && typeof session === 'object' && 'id' in session
-      ? String((session as { id?: string }).id)
-      : '';
-  lastError.value = `Click captured. id=${id || '(empty)'}\nrow=${dump}`;
-  if (!id || id === 'undefined') {
-    return;
-  }
-  if (deletingId.value) return;
+  if (!id || deletingId.value) return;
   deletingId.value = id;
+  lastError.value = null;
   try {
     if (activeSessionId.value === id) {
       await router.push('/sessions');
     }
-    await sessions.remove(id);
-    lastError.value = `Deleted ${id}`;
+    await removeSession(id);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     console.error('Delete session failed:', err);
     lastError.value = `Delete failed: ${msg}`;
-    await sessions.refresh();
+    await refreshSessions();
   } finally {
     deletingId.value = null;
   }
 }
 
 async function clearAll() {
-  if (sessions.list.value.length === 0) return;
+  if (sessionList.value.length === 0) return;
   if (
     !window.confirm(
-      `Delete all ${sessions.list.value.length} sessions? This cannot be undone.`,
+      `Delete all ${sessionList.value.length} sessions? This cannot be undone.`,
     )
   ) {
     return;
@@ -105,9 +99,9 @@ async function clearAll() {
     await router.push('/sessions');
   }
   const failures: string[] = [];
-  for (const s of [...sessions.list.value]) {
+  for (const s of [...sessionList.value]) {
     try {
-      await sessions.remove(s.id);
+      await removeSession(s.id);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       failures.push(`${s.id}: ${msg}`);
@@ -116,7 +110,7 @@ async function clearAll() {
   if (failures.length > 0) {
     lastError.value = `Some deletes failed:\n${failures.join('\n')}`;
   }
-  await sessions.refresh();
+  await refreshSessions();
 }
 
 function dismissError() {
@@ -163,7 +157,7 @@ function dismissError() {
     >
       <ul class="space-y-1">
         <li
-          v-for="session in sessions.list"
+          v-for="session in sessionList"
           :key="session.id"
           class="flex items-stretch gap-1"
         >
@@ -178,7 +172,7 @@ function dismissError() {
             :title="session.name || session.id"
             :aria-current="activeSessionId === session.id ? 'page' : undefined"
             :data-testid="`open-session-${session.id}`"
-            @click="openSession(session)"
+            @click="openSession(session.id)"
           >
             <MessageSquare
               :size="14"
@@ -194,26 +188,26 @@ function dismissError() {
             :aria-label="`Delete session ${session.name}`"
             :disabled="deletingId === session.id"
             :data-testid="`delete-session-${session.id}`"
-            @click="deleteSession(session, $event)"
+            @click="deleteSession(session.id, $event)"
           >
             <X :size="14" />
           </button>
         </li>
-        <li v-if="sessions.list.length === 0" class="px-3 py-2 text-xs text-ink-subtle">
+        <li v-if="sessionList.length === 0" class="px-3 py-2 text-xs text-ink-subtle">
           No sessions yet
         </li>
       </ul>
-      <div v-if="sessions.list.length > 0" class="mt-2 px-2">
+      <div v-if="sessionList.length > 0" class="mt-2 px-2">
         <button
           type="button"
           class="flex items-center gap-1.5 px-2 py-1 rounded-sm text-[11px] uppercase tracking-[0.16em] text-ink-dim hover:text-signal-danger transition-fast"
-          :title="`Delete all ${sessions.list.length} sessions`"
+          :title="`Delete all ${sessionList.length} sessions`"
           :data-testid="'clear-all-sessions'"
           @click="clearAll"
         >
           <Trash2 :size="12" />
           <span class="hidden two-col:inline">
-            Clear all ({{ sessions.list.length }})
+            Clear all ({{ sessionList.length }})
           </span>
         </button>
       </div>
