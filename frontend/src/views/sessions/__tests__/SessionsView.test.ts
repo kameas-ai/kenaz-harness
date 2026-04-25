@@ -94,9 +94,9 @@ describe('SessionsView (chat-ui)', () => {
     uninstallRuntime();
   });
 
-  it('renders the empty placeholder with no session id in the hash', async () => {
+  it('renders the welcome empty placeholder with no session id in the hash', async () => {
     const { w } = await mountWithRoute('', {});
-    expect(w.text()).toContain('No session selected');
+    expect(w.text()).toContain('Start your first conversation');
     w.unmount();
   });
 

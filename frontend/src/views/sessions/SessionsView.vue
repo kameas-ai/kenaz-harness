@@ -17,9 +17,10 @@
 import { computed, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import CanvasHead from '@/shell/CanvasHead.vue';
+import NewSessionDialog from '@/shell/NewSessionDialog.vue';
 import MessageList from '@/components/chat/MessageList.vue';
 import ChatInput from '@/components/chat/ChatInput.vue';
-import { useHarnessClient } from '@/lib/useHarnessAPI';
+import { useHarnessClient, useSessions } from '@/lib/useHarnessAPI';
 import { useSession } from '@/lib/useSession';
 import type { Provider } from '@/lib/types';
 import { flattenChoices, inferFamily } from '@/lib/modelFamily';
@@ -27,6 +28,12 @@ import { flattenChoices, inferFamily } from '@/lib/modelFamily';
 const route = useRoute();
 const router = useRouter();
 const client = useHarnessClient();
+const { list: sessionList, refresh: refreshSessions } = useSessions();
+
+// Refresh the rail's session list when SessionsView mounts so the
+// empty-state checks against an up-to-date count instead of an
+// initially-empty ref.
+void refreshSessions();
 
 // Session id is the route's :id param (e.g. /sessions/sess-abc).
 const sessionId = computed(() => {
@@ -35,6 +42,23 @@ const sessionId = computed(() => {
 });
 
 const hasSession = computed(() => sessionId.value.length > 0);
+
+// Three distinct empty / error states:
+//   - 'no-sessions'        no sessions exist anywhere → big welcome
+//   - 'no-selection'       sessions exist, none selected → pick from rail
+//   - 'session-not-found'  url id has no matching backend row
+//   - 'loaded'             session loaded successfully
+const surfaceState = computed<
+  'no-sessions' | 'no-selection' | 'session-not-found' | 'loaded'
+>(() => {
+  if (!hasSession.value) {
+    return sessionList.value.length === 0 ? 'no-sessions' : 'no-selection';
+  }
+  if (session.error.value || (session.session.value === null && !session.loading.value)) {
+    return 'session-not-found';
+  }
+  return 'loaded';
+});
 
 const sessionIdRef = computed(() => sessionId.value);
 const session = useSession(sessionIdRef);
@@ -194,14 +218,30 @@ function pickModel(providerId: string, modelId: string) {
   switcherOpen.value = false;
 }
 
-const sessionTitle = computed(() => session.session.value?.name ?? 'Sessions');
-const sessionSubtitle = computed(() => {
-  if (!hasSession.value) {
-    return 'Pick a session from the left rail or click "New session" to start one.';
+const sessionTitle = computed(() => {
+  switch (surfaceState.value) {
+    case 'no-sessions':
+      return 'Welcome';
+    case 'no-selection':
+      return 'Sessions';
+    case 'session-not-found':
+      return 'Session not found';
+    default:
+      return session.session.value?.name ?? 'Session';
   }
-  if (session.loading.value) return 'Loading…';
-  if (session.error.value) return `Error: ${session.error.value}`;
-  return 'Each session preserves its scroll position and draft input.';
+});
+const sessionSubtitle = computed(() => {
+  switch (surfaceState.value) {
+    case 'no-sessions':
+      return 'Configure a provider, then start your first conversation.';
+    case 'no-selection':
+      return 'Pick a session from the rail or start a new one.';
+    case 'session-not-found':
+      return 'This session was deleted or its id is wrong.';
+    default:
+      if (session.loading.value) return 'Loading…';
+      return 'Each session preserves its scroll position and draft input.';
+  }
 });
 
 const isStreaming = computed(
@@ -227,6 +267,17 @@ async function onCancel() {
 function gotoProviders() {
   void router.push('/providers');
 }
+
+const newSessionDialogOpen = ref(false);
+function openNewSession() {
+  newSessionDialogOpen.value = true;
+}
+async function onNewSessionDialogClose() {
+  newSessionDialogOpen.value = false;
+  await refreshSessions();
+}
+
+const hasAnyProvider = computed(() => providers.value.length > 0);
 </script>
 
 <template>
@@ -244,7 +295,7 @@ function gotoProviders() {
     <!-- main canvas -->
     <div class="flex flex-col min-h-0">
       <div
-        v-if="providersLoaded && providers.length === 0 && hasSession"
+        v-if="providersLoaded && providers.length === 0 && surfaceState === 'loaded'"
         class="mx-6 my-3 rounded-md border border-signal-warn bg-surface-1 px-4 py-3 font-ui text-[12px]"
         role="status"
       >
@@ -264,7 +315,7 @@ function gotoProviders() {
       </div>
 
       <div
-        v-else-if="activeProviderUnsupported && hasSession"
+        v-else-if="activeProviderUnsupported && surfaceState === 'loaded'"
         class="mx-6 my-3 rounded-md border border-signal-warn bg-surface-1 px-4 py-3 font-ui text-[12px]"
         role="status"
       >
@@ -286,7 +337,7 @@ function gotoProviders() {
 
       <!-- model switcher pill -->
       <div
-        v-if="hasSession && activeProvider && allChoices.length > 0"
+        v-if="surfaceState === 'loaded' && activeProvider && allChoices.length > 0"
         class="mx-6 mb-2 mt-1 relative"
       >
         <button
@@ -346,15 +397,118 @@ function gotoProviders() {
         </div>
       </div>
 
-      <!-- empty session state -->
+      <!-- ────── State A: no sessions exist anywhere ────── -->
       <div
-        v-if="!hasSession"
-        class="flex-1 grid place-items-center px-6 py-4 font-ui text-sm text-ink-muted"
+        v-if="surfaceState === 'no-sessions'"
+        class="flex-1 grid place-items-center px-6 py-12"
       >
-        No session selected. Click "New session" in the rail to start one.
+        <div class="max-w-md text-center">
+          <div
+            class="mx-auto mb-6 flex h-16 w-16 items-center justify-center rounded-md border border-accent-hairline bg-surface-1 text-accent text-3xl"
+            aria-hidden="true"
+          >
+            +
+          </div>
+          <h2 class="font-ui text-xl font-semibold text-ink">
+            Start your first conversation
+          </h2>
+          <p class="mt-2 font-ui text-sm text-ink-muted">
+            {{
+              hasAnyProvider
+                ? 'Pick a model and start chatting — sessions live locally and persist across restarts.'
+                : 'Configure an LLM provider, then start chatting. Sessions live locally and persist across restarts.'
+            }}
+          </p>
+          <div class="mt-6 flex items-center justify-center gap-2">
+            <button
+              v-if="!hasAnyProvider"
+              type="button"
+              class="rounded-md border border-accent text-accent px-4 py-2 text-xs uppercase tracking-[0.18em] font-ui hover:bg-surface-2"
+              @click="gotoProviders"
+            >
+              Configure providers
+            </button>
+            <button
+              v-else
+              type="button"
+              class="rounded-md border border-accent bg-surface-1 text-accent px-4 py-2 text-xs uppercase tracking-[0.18em] font-ui hover:bg-surface-2"
+              :data-testid="'welcome-new-session'"
+              @click="openNewSession"
+            >
+              New session
+            </button>
+          </div>
+        </div>
       </div>
 
-      <!-- live chat surface -->
+      <!-- ────── State B: sessions exist but none selected ────── -->
+      <div
+        v-else-if="surfaceState === 'no-selection'"
+        class="flex-1 grid place-items-center px-6 py-12"
+      >
+        <div class="max-w-md text-center">
+          <div
+            class="font-ui text-[11px] uppercase tracking-[0.18em] text-ink-subtle"
+          >
+            {{ sessionList.length }}
+            {{ sessionList.length === 1 ? 'session' : 'sessions' }} ready
+          </div>
+          <h2 class="mt-2 font-ui text-lg font-semibold text-ink">
+            Pick a session from the rail
+          </h2>
+          <p class="mt-1 font-ui text-sm text-ink-muted">
+            Or start a fresh one — the new-session dialog lets you pick a
+            different model up front.
+          </p>
+          <button
+            type="button"
+            class="mt-5 rounded-md border border-accent text-accent px-4 py-2 text-xs uppercase tracking-[0.18em] font-ui hover:bg-surface-2"
+            @click="openNewSession"
+          >
+            New session
+          </button>
+        </div>
+      </div>
+
+      <!-- ────── State C: url id has no matching session ────── -->
+      <div
+        v-else-if="surfaceState === 'session-not-found'"
+        class="flex-1 grid place-items-center px-6 py-12"
+      >
+        <div class="max-w-md text-center">
+          <div
+            class="font-ui text-[11px] uppercase tracking-[0.18em] text-signal-warn"
+          >
+            Gone
+          </div>
+          <h2 class="mt-2 font-ui text-lg font-semibold text-ink">
+            This session doesn't exist
+          </h2>
+          <p class="mt-1 font-ui text-sm text-ink-muted">
+            It may have been deleted, or the link is wrong. Pick another
+            from the rail or start a new one.
+          </p>
+          <div class="mt-5 flex items-center justify-center gap-2">
+            <button
+              v-if="sessionList.length > 0"
+              type="button"
+              class="rounded-md border border-border-muted text-ink px-4 py-2 text-xs uppercase tracking-[0.18em] font-ui hover:bg-surface-2"
+              @click="router.push('/sessions')"
+            >
+              Back to sessions
+            </button>
+            <button
+              type="button"
+              class="rounded-md border border-accent text-accent px-4 py-2 text-xs uppercase tracking-[0.18em] font-ui hover:bg-surface-2"
+              @click="openNewSession"
+            >
+              New session
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- ────── State D: live chat surface ────── -->
       <template v-else>
         <div
           v-if="session.streamingTimedOut.value"
@@ -385,5 +539,9 @@ function gotoProviders() {
         />
       </template>
     </div>
+    <NewSessionDialog
+      :open="newSessionDialogOpen"
+      @close="onNewSessionDialogClose"
+    />
   </div>
 </template>

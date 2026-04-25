@@ -40,6 +40,18 @@ type ErrCredentialResolution struct {
 }
 
 func (e *ErrCredentialResolution) Error() string {
+	// "memory: not found" specifically means the keychain entry has
+	// been wiped (e.g. provider added before OS-keychain persistence
+	// landed, then Wails restarted). Surface a user-friendly recovery
+	// hint instead of the raw backend message.
+	if e.Cause != nil &&
+		strings.Contains(e.Cause.Error(), "memory: not found") {
+		return fmt.Sprintf(
+			"llm: API key for provider %q is missing from the keychain. "+
+				"Open the providers tab and click Edit on this row to re-paste your key.",
+			e.ProfileID,
+		)
+	}
 	return fmt.Sprintf("llm: credential resolution failed for profile %q ref %s: %v",
 		e.ProfileID, e.Ref.String(), e.Cause)
 }
