@@ -27,8 +27,7 @@ const router = createRouter({
     {
       path: '/bundles',
       name: 'bundles',
-      component: () => import('@/views/placeholder/PlaceholderView.vue'),
-      props: { number: '03', section: 'BUNDLES', title: 'Bundles' },
+      component: () => import('@/views/bundles/BundlesView.vue'),
     },
     {
       path: '/providers',

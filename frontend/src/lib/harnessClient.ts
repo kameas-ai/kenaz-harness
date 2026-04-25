@@ -371,7 +371,13 @@ export function createFakeHarnessClient(
     },
     bundle: {
       list: async () => [],
-      get: async (id) => ({ id, name: id, version: '', tier: '' }),
+      get: async (id) => ({
+        id,
+        name: id,
+        version: '',
+        tier: '',
+        artifactCount: 0,
+      }),
     },
     policy: {
       explain: async () => ({

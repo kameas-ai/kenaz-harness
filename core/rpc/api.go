@@ -131,13 +131,26 @@ func New(c *core.Core) *API {
 		sessionsAPI: &stubSessions{},
 		trustAPI:    &stubTrust{},
 		contextAPI:  &stubContext{},
-		bundleAPI:   &stubBundle{},
 		policyAPI:   &stubPolicy{},
 		settingsAPI: &stubSettings{},
 	}
 	a.broker = NewStreamBroker(WailsEmitter{})
 	a.auditImpl = audit.NewAPI(audit.WithSubscriber(a.broker))
 	a.auditAPI = a.auditImpl
+
+	// Wire the bundle reader against the core data dir. nil core (test
+	// harness path) leaves the impl with a nil reader — List returns an
+	// empty slice and Get returns "not found", which is the contract the
+	// frontend's empty-state path expects.
+	bundleOpts := []bundle.Option{}
+	if c != nil {
+		bundleOpts = append(bundleOpts, bundle.WithReader(bundle.NewFSReader(c.DataDir())))
+		if cas, err := c.BundleCache(); err == nil && cas != nil {
+			bundleOpts = append(bundleOpts, bundle.WithCAS(bundle.CASFromCache(cas)))
+		}
+	}
+	a.bundleAPI = bundle.NewAPI(bundleOpts...)
+
 	a.bindings = NewBindings(a)
 	return a
 }

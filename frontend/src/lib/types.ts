@@ -65,6 +65,16 @@ export interface Bundle {
   name: string;
   version: string;
   tier: string;
+  source?: string;
+  signature?: string;
+  artifactCount: number;
+  artifacts?: BundleArtifact[];
+}
+
+export interface BundleArtifact {
+  name: string;
+  kind: string;
+  contentHash: string;
 }
 
 export interface Denial {

@@ -5,7 +5,6 @@ import (
 	"errors"
 
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/a2a"
-	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/bundle"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/contextview"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/llm"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/mcp"
@@ -101,15 +100,6 @@ func (s *stubContext) List(_ context.Context) ([]contextview.ContextEntry, error
 }
 func (s *stubContext) StartStream(_ context.Context) (string, error) { return "", errNotWired }
 func (s *stubContext) StopStream(_ context.Context, _ string) error  { return errNotWired }
-
-// ── bundle ─────────────────────────────────────────────────────────────
-
-type stubBundle struct{}
-
-func (s *stubBundle) List(_ context.Context) ([]bundle.Bundle, error) { return nil, errNotWired }
-func (s *stubBundle) Get(_ context.Context, _ string) (bundle.Bundle, error) {
-	return bundle.Bundle{}, errNotWired
-}
 
 // ── policy ─────────────────────────────────────────────────────────────
 
