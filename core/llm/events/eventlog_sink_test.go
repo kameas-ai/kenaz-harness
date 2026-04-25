@@ -2,11 +2,14 @@ package events_test
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/sigil-tech/kaneaz-harness/core/event"
+	"github.com/sigil-tech/kaneaz-harness/core/event/log"
+	"github.com/sigil-tech/kaneaz-harness/core/event/redact"
 	llm "github.com/sigil-tech/kaneaz-harness/core/llm"
 	llmevents "github.com/sigil-tech/kaneaz-harness/core/llm/events"
 )
@@ -82,8 +85,9 @@ func TestEventLogSink_RequestSubmittedFlows(t *testing.T) {
 		t.Fatalf("emitter received %d events, want 1", len(got))
 	}
 	in := got[0]
-	if in.Kind != event.Kind(llmevents.KindRequestSubmitted) {
-		t.Errorf("Kind=%q want %q", in.Kind, llmevents.KindRequestSubmitted)
+	wantKind := event.Kind(strings.ReplaceAll(string(llmevents.KindRequestSubmitted), "/", "."))
+	if in.Kind != wantKind {
+		t.Errorf("Kind=%q want %q", in.Kind, wantKind)
 	}
 	if in.EmitterID != event.EmitterID("llm/connector") {
 		t.Errorf("EmitterID=%q want llm/connector", in.EmitterID)
@@ -135,8 +139,9 @@ func TestEventLogSink_HeadlessEventsHaveNilSession(t *testing.T) {
 	if got[0].SessionID != nil {
 		t.Errorf("expected nil SessionID for headless event, got %v", got[0].SessionID)
 	}
-	if got[0].Kind != event.Kind(llmevents.KindPreflightResolved) {
-		t.Errorf("Kind=%q want %q", got[0].Kind, llmevents.KindPreflightResolved)
+	wantKind := event.Kind(strings.ReplaceAll(string(llmevents.KindPreflightResolved), "/", "."))
+	if got[0].Kind != wantKind {
+		t.Errorf("Kind=%q want %q", got[0].Kind, wantKind)
 	}
 }
 
@@ -204,8 +209,9 @@ func TestEventLogSink_AllKindsFlow(t *testing.T) {
 		llmevents.KindPolicyDenied,
 	}
 	for i, k := range wantKinds {
-		if event.Kind(k) != got[i].Kind {
-			t.Errorf("kind[%d]=%q want %q", i, got[i].Kind, k)
+		want := event.Kind(strings.ReplaceAll(string(k), "/", "."))
+		if want != got[i].Kind {
+			t.Errorf("kind[%d]=%q want %q", i, got[i].Kind, want)
 		}
 	}
 }
@@ -213,3 +219,79 @@ func TestEventLogSink_AllKindsFlow(t *testing.T) {
 type errFake string
 
 func (e errFake) Error() string { return string(e) }
+
+// TestEventLogSink_WiredToConcreteEmitter is the SEAM 2 end-to-end:
+// the concrete event-log emitter (kind validation + redaction +
+// hash chain + Store.Append) wired to the connector's EventLogSink.
+//
+// We bypass the higher-level Emitter shorthand (which strips raw
+// message text by design — the connector's structural-safety rule)
+// and call the Sink directly with a payload that carries a
+// credential-shaped substring. This exercises the full redaction
+// path inside the upstream Emitter.Append, which is the seam the
+// concrete event-log emitter is actually responsible for.
+func TestEventLogSink_WiredToConcreteEmitter(t *testing.T) {
+	backend := log.NewMemoryBackend()
+	store := log.NewStore(backend)
+	pol := redact.DefaultPolicy()
+	resolver := redact.NewStaticResolver(map[string][]byte{
+		pol.SaltRef.Keychain: []byte("seam2-test-salt-XXXXXXXXXXXXXXXXX"),
+	})
+	pipe, err := redact.New(pol, resolver)
+	if err != nil {
+		t.Fatalf("redact.New: %v", err)
+	}
+	emitter, err := event.NewEmitter(store, pipe)
+	if err != nil {
+		t.Fatalf("event.NewEmitter: %v", err)
+	}
+	sink, err := llmevents.NewEventLogSink(emitter)
+	if err != nil {
+		t.Fatalf("NewEventLogSink: %v", err)
+	}
+
+	const (
+		credential = "AKIAIOSFODNN7EXAMPLE"
+		sessionID  = "01HFXY8B5VJ6T6T7AXJF9JT9F9"
+	)
+	entry := llmevents.Entry{
+		Kind:      llmevents.KindRequestSubmitted,
+		SessionID: sessionID,
+		Provider:  "anthropic",
+		Model:     "claude-sonnet",
+		ProfileID: "anthropic-default",
+		Timestamp: time.Unix(1700000000, 0).UTC(),
+		Payload: map[string]any{
+			"raw_request_body": "Authorization: " + credential + " trailing",
+			"messages_count":   2,
+		},
+	}
+	if err := sink.Append(context.Background(), entry); err != nil {
+		t.Fatalf("Sink.Append: %v", err)
+	}
+
+	rows, err := backend.SelectBySession(context.Background(), sessionID, "", 0, false)
+	if err != nil {
+		t.Fatalf("SelectBySession: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("expected 1 row in session, got %d", len(rows))
+	}
+	row := rows[0]
+	if strings.Contains(string(row.Payload), credential) {
+		t.Fatalf("plaintext credential leaked into stored payload: %s", row.Payload)
+	}
+	if row.PrevHash != ([32]byte{}) {
+		t.Fatalf("first event in session must have zero prev_hash, got %x", row.PrevHash)
+	}
+	if row.PayloadHash == ([32]byte{}) {
+		t.Fatalf("payload hash must be non-zero")
+	}
+	if row.EmitterID != "llm/connector" {
+		t.Fatalf("emitter id mismatch: %q", row.EmitterID)
+	}
+	wantKind := strings.ReplaceAll(string(llmevents.KindRequestSubmitted), "/", ".")
+	if row.Kind != wantKind {
+		t.Fatalf("kind mismatch: got=%q want=%q", row.Kind, wantKind)
+	}
+}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/sigil-tech/kaneaz-harness/core/event"
 )
@@ -23,10 +24,14 @@ type EventLogEmitter = event.Emitter
 // never on core/event/log internals.
 //
 // Translation rules:
-//   - Entry.Kind ("llm/request_submitted", ...) becomes event.Kind
-//     verbatim. The kind validation that the upstream emitter performs
-//     on Append is the single source of truth; the connector publishes
-//     a curated catalog (AllKinds()) the operator registers.
+//   - Entry.Kind ("llm/request_submitted", ...) is normalized to the
+//     event-log dotted grammar ("llm.request_submitted") before being
+//     forwarded as event.Kind. The connector ships kinds in slash form
+//     to mirror its EmitterID convention; the upstream event-log
+//     grammar (FR-002 / WP02) requires dotted segments, so we translate
+//     at the seam. The kind validation that the upstream emitter
+//     performs on Append is the single source of truth; the connector
+//     publishes a curated catalog (AllKinds()) the operator registers.
 //   - Entry.SessionID, when non-empty, is parsed as an event.ULID and
 //     attached to AppendInput.SessionID. Empty session ids leave the
 //     AppendInput session pointer nil so headless events (preflight,
@@ -81,7 +86,7 @@ func (s *EventLogSink) Append(ctx context.Context, e Entry) error {
 	}
 	in := event.AppendInput{
 		EmitterID: s.emitterID,
-		Kind:      event.Kind(e.Kind),
+		Kind:      translateKind(e.Kind),
 		Payload:   buildPayload(e),
 		EmittedAt: e.Timestamp,
 	}
@@ -118,6 +123,18 @@ func buildPayload(e Entry) map[string]any {
 		out[k] = v
 	}
 	return out
+}
+
+// translateKind maps the connector's slash-separated kind ids
+// ("llm/request_submitted") to the event-log dotted grammar
+// ("llm.request_submitted") that core/event/kind enforces.
+//
+// Translation is mechanical (replace '/' with '.') and idempotent on
+// already-dotted ids. We translate at the seam rather than mutating
+// the connector's public Kind catalog because operator dashboards and
+// fixture replays already index on the slash form.
+func translateKind(k Kind) event.Kind {
+	return event.Kind(strings.ReplaceAll(string(k), "/", "."))
 }
 
 // Compile-time assertion: *EventLogSink satisfies Sink.
