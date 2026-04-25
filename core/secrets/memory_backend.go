@@ -60,7 +60,7 @@ func (b *MemoryBackend) Kind() registry.BackendKind { return "memory" }
 
 // SupportedRefKinds reports the kinds this backend can serve.
 func (b *MemoryBackend) SupportedRefKinds() []ref.RefKind {
-	return []ref.RefKind{ref.RefEnv, ref.RefKeychain, ref.RefFile}
+	return []ref.RefKind{ref.RefEnv, ref.RefKeychain, ref.RefFile, ref.RefAWSProfile}
 }
 
 // errNotFound is returned when no in-memory entry matches the locator.
@@ -86,6 +86,16 @@ func (b *MemoryBackend) Resolve(ctx context.Context, r ref.CredentialReference) 
 		}
 		dup := append([]byte(nil), v...)
 		return secret.NewStdlibSecret(dup, r.ID(), r.ConsumerID), nil
+	case ref.RefAWSProfile:
+		// The "credential" for an aws_profile reference is the profile
+		// name itself — the AWS SDK reads ~/.aws/credentials at use
+		// time. We surface the locator (profile name) verbatim so the
+		// adapter has something to pass to config.LoadDefaultConfig.
+		profile := r.Locator
+		if profile == "" {
+			profile = "default"
+		}
+		return secret.NewStdlibSecret([]byte(profile), r.ID(), r.ConsumerID), nil
 	default:
 		return nil, fmt.Errorf("memory: unsupported ref kind %s", r.Kind)
 	}

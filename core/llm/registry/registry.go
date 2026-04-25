@@ -19,6 +19,7 @@ import (
 
 	llm "github.com/sigil-tech/kaneaz-harness/core/llm"
 	"github.com/sigil-tech/kaneaz-harness/core/llm/anthropic"
+	"github.com/sigil-tech/kaneaz-harness/core/llm/bedrock"
 	"github.com/sigil-tech/kaneaz-harness/core/llm/capabilities"
 	"github.com/sigil-tech/kaneaz-harness/core/llm/credref"
 	"github.com/sigil-tech/kaneaz-harness/core/llm/events"
@@ -96,6 +97,7 @@ func New(opts Options) (*Registry, error) {
 	// out of the box so a fresh harness install can talk to a real
 	// model without additional wiring (FR-018 / C-005).
 	r.adapters[anthropic.Kind] = anthropic.New()
+	r.adapters[bedrock.Kind] = bedrock.New()
 	return r, nil
 }
 

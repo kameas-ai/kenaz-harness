@@ -55,7 +55,7 @@ void (async () => {
 // the chat surface picks the first provider whose kind we know works,
 // rather than blindly using providers[0] and hitting "no adapter for
 // kind X" on send.
-const SUPPORTED_KINDS = new Set(['anthropic']);
+const SUPPORTED_KINDS = new Set(['anthropic', 'bedrock', 'openai', 'openrouter']);
 
 const activeProvider = computed<Provider | null>(() => {
   if (providers.value.length === 0) return null;
