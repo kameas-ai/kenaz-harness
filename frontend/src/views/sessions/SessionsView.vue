@@ -41,7 +41,8 @@ const session = useSession(sessionIdRef);
 
 const providers = ref<readonly Provider[]>([]);
 const providersLoaded = ref(false);
-void (async () => {
+
+async function refreshProviders() {
   try {
     providers.value = await client.llm.listProviders();
   } catch {
@@ -49,7 +50,25 @@ void (async () => {
   } finally {
     providersLoaded.value = true;
   }
-})();
+}
+
+// Refresh providers whenever the user lands on / changes sessions —
+// vue-router keeps SessionsView mounted across /sessions/<id> param
+// changes, so a once-on-setup fetch misses providers that were added
+// while we were already on the page.
+watch(
+  () => route.path,
+  () => {
+    void refreshProviders();
+  },
+  { immediate: true },
+);
+
+// Also refresh when the window regains focus, in case the user just
+// returned from the providers tab.
+window.addEventListener('focus', () => {
+  void refreshProviders();
+});
 
 // Kinds the backend currently has a working stream adapter for.
 // Adding others (openai, bedrock, …) is a per-kind mission; until then
