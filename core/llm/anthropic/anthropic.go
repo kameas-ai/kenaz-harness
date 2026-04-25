@@ -108,6 +108,72 @@ func New(opts ...Option) *Adapter {
 // Kind returns the canonical provider kind ("anthropic").
 func (a *Adapter) Kind() string { return Kind }
 
+// ListModels implements llm.ModelLister. It calls Anthropic's /v1/models
+// endpoint with the supplied API key and returns the parsed list. The
+// caller (rpc layer) zeros the cred buffer before this method's frame
+// returns so the plaintext key never lingers.
+//
+// The endpoint URL is derived from the adapter's configured Messages
+// URL by replacing the trailing "/messages" with "/models" so a
+// custom endpoint (httptest fixture, self-hosted gateway) is honoured.
+func (a *Adapter) ListModels(ctx context.Context, cred []byte) ([]llm.ModelInfo, error) {
+	if len(cred) == 0 {
+		return nil, errors.New("anthropic: empty credential")
+	}
+	url := modelsURL(a.endpoint)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("anthropic: build models request: %w", err)
+	}
+	req.Header.Set("x-api-key", string(cred))
+	req.Header.Set("anthropic-version", a.apiVersion)
+	req.Header.Set("accept", "application/json")
+	resp, err := a.httpc.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("anthropic: list models: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode/100 != 2 {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return nil, fmt.Errorf("anthropic: list models: HTTP %d: %s", resp.StatusCode, string(body))
+	}
+	var doc modelsResponse
+	if err := json.NewDecoder(resp.Body).Decode(&doc); err != nil {
+		return nil, fmt.Errorf("anthropic: parse models response: %w", err)
+	}
+	out := make([]llm.ModelInfo, 0, len(doc.Data))
+	for _, m := range doc.Data {
+		display := m.DisplayName
+		if display == "" {
+			display = m.ID
+		}
+		out = append(out, llm.ModelInfo{
+			ID:          m.ID,
+			DisplayName: display,
+		})
+	}
+	return out, nil
+}
+
+// modelsResponse mirrors the JSON shape Anthropic returns from /v1/models.
+type modelsResponse struct {
+	Data []struct {
+		ID          string `json:"id"`
+		DisplayName string `json:"display_name"`
+		Type        string `json:"type"`
+	} `json:"data"`
+}
+
+// modelsURL derives the /models URL from the configured /messages URL.
+// Production: "https://api.anthropic.com/v1/messages" → ".../v1/models".
+// Custom endpoints that don't end in "/messages" get "/models" appended.
+func modelsURL(messagesURL string) string {
+	if strings.HasSuffix(messagesURL, "/messages") {
+		return strings.TrimSuffix(messagesURL, "/messages") + "/models"
+	}
+	return strings.TrimRight(messagesURL, "/") + "/models"
+}
+
 // Capabilities reports the (provider, model) descriptor.
 func (a *Adapter) Capabilities(model string) llm.CapabilityDescriptor {
 	if a.cat == nil {

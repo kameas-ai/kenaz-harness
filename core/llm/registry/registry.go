@@ -118,6 +118,15 @@ func (r *Registry) RegisterAdapter(a llm.ProviderAdapter) {
 	r.adapters[a.Kind()] = a
 }
 
+// Adapter returns the adapter registered for kind. Returns nil if no
+// adapter has been registered. Used by the rpc layer to drive the
+// AddProvider model-picker via the optional ModelLister capability.
+func (r *Registry) Adapter(kind string) llm.ProviderAdapter {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.adapters[kind]
+}
+
 // MergePersonalProfiles installs personal (user-scoped) profiles after
 // the bundle-derived profiles. Profile IDs that collide with an existing
 // (bundle) entry are SKIPPED — bundle profiles always win, per the

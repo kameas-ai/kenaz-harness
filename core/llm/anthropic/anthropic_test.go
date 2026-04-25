@@ -524,3 +524,50 @@ func TestAdapter_KindIsAnthropic(t *testing.T) {
 		t.Fatal("Kind must be 'anthropic'")
 	}
 }
+
+func TestAdapter_ListModels(t *testing.T) {
+	fs := newFakeServer(t, func(w http.ResponseWriter, r *http.Request, _ int) {
+		if r.Method != http.MethodGet {
+			t.Errorf("expected GET, got %s", r.Method)
+		}
+		if r.Header.Get("x-api-key") != "sk-test" {
+			t.Errorf("expected x-api-key header to be forwarded")
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":[
+			{"id":"claude-sonnet-4-5","display_name":"Claude Sonnet 4.5","type":"model"},
+			{"id":"claude-opus-4-7","display_name":"Claude Opus 4.7","type":"model"}
+		]}`))
+	})
+	a := newAdapter(fs)
+	models, err := a.ListModels(context.Background(), []byte("sk-test"))
+	if err != nil {
+		t.Fatalf("ListModels: %v", err)
+	}
+	if len(models) != 2 {
+		t.Fatalf("expected 2 models, got %d", len(models))
+	}
+	if models[0].ID != "claude-sonnet-4-5" || models[0].DisplayName != "Claude Sonnet 4.5" {
+		t.Fatalf("first model = %+v", models[0])
+	}
+}
+
+func TestAdapter_ListModels_EmptyCredential(t *testing.T) {
+	a := New()
+	_, err := a.ListModels(context.Background(), nil)
+	if err == nil {
+		t.Fatal("expected error for empty credential")
+	}
+}
+
+func TestAdapter_ListModels_HTTPError(t *testing.T) {
+	fs := newFakeServer(t, func(w http.ResponseWriter, _ *http.Request, _ int) {
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"error":"invalid x-api-key"}`))
+	})
+	a := newAdapter(fs)
+	_, err := a.ListModels(context.Background(), []byte("sk-bad"))
+	if err == nil {
+		t.Fatal("expected error on 401")
+	}
+}

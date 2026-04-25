@@ -58,6 +58,10 @@ export function LLM_AddProvider(arg1) {
   return window['go']['rpc']['Bindings']['LLM_AddProvider'](arg1);
 }
 
+export function LLM_ListModels(arg1, arg2) {
+  return window['go']['rpc']['Bindings']['LLM_ListModels'](arg1, arg2);
+}
+
 export function LLM_ListProviders() {
   return window['go']['rpc']['Bindings']['LLM_ListProviders']();
 }
@@ -66,8 +70,8 @@ export function LLM_RemoveProvider(arg1) {
   return window['go']['rpc']['Bindings']['LLM_RemoveProvider'](arg1);
 }
 
-export function LLM_StartStream(arg1) {
-  return window['go']['rpc']['Bindings']['LLM_StartStream'](arg1);
+export function LLM_StartStream(arg1, arg2) {
+  return window['go']['rpc']['Bindings']['LLM_StartStream'](arg1, arg2);
 }
 
 export function LLM_StopStream(arg1) {
@@ -122,6 +126,10 @@ export function SaveTheme(arg1) {
   return window['go']['rpc']['Bindings']['SaveTheme'](arg1);
 }
 
+export function Sessions_AppendMessage(arg1, arg2, arg3) {
+  return window['go']['rpc']['Bindings']['Sessions_AppendMessage'](arg1, arg2, arg3);
+}
+
 export function Sessions_Create(arg1) {
   return window['go']['rpc']['Bindings']['Sessions_Create'](arg1);
 }
@@ -138,12 +146,24 @@ export function Sessions_List() {
   return window['go']['rpc']['Bindings']['Sessions_List']();
 }
 
+export function Sessions_ListMessages(arg1) {
+  return window['go']['rpc']['Bindings']['Sessions_ListMessages'](arg1);
+}
+
+export function Sessions_LoadDraft(arg1) {
+  return window['go']['rpc']['Bindings']['Sessions_LoadDraft'](arg1);
+}
+
 export function Sessions_Rename(arg1, arg2) {
   return window['go']['rpc']['Bindings']['Sessions_Rename'](arg1, arg2);
 }
 
 export function Sessions_Reorder(arg1) {
   return window['go']['rpc']['Bindings']['Sessions_Reorder'](arg1);
+}
+
+export function Sessions_SaveDraft(arg1, arg2) {
+  return window['go']['rpc']['Bindings']['Sessions_SaveDraft'](arg1, arg2);
 }
 
 export function Sessions_StartStream(arg1) {
@@ -156,6 +176,10 @@ export function Sessions_StopStream(arg1) {
 
 export function SetContext(arg1) {
   return window['go']['rpc']['Bindings']['SetContext'](arg1);
+}
+
+export function SetSettingsStore(arg1) {
+  return window['go']['rpc']['Bindings']['SetSettingsStore'](arg1);
 }
 
 export function Settings_Get() {

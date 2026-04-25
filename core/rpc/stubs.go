@@ -35,6 +35,9 @@ func (s *stubLLM) RemoveProvider(_ context.Context, _ string) error { return err
 func (s *stubLLM) TestProvider(_ context.Context, _ string) (llm.TestResult, error) {
 	return llm.TestResult{}, errNotWired
 }
+func (s *stubLLM) ListModels(_ context.Context, _, _ string) ([]llm.ModelInfo, error) {
+	return nil, errNotWired
+}
 
 // ── a2a ────────────────────────────────────────────────────────────────
 

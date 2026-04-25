@@ -173,6 +173,9 @@ func (b *Bindings) LLM_RemoveProvider(id string) error {
 func (b *Bindings) LLM_TestProvider(id string) (llm.TestResult, error) {
 	return b.api.LLMConnector().TestProvider(b.ctx(), id)
 }
+func (b *Bindings) LLM_ListModels(kind, plaintextApiKey string) ([]llm.ModelInfo, error) {
+	return b.api.LLMConnector().ListModels(b.ctx(), kind, plaintextApiKey)
+}
 
 // ── mcp ────────────────────────────────────────────────────────────────
 

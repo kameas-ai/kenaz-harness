@@ -315,6 +315,24 @@ type ProviderAdapter interface {
 	Stream(ctx context.Context, req GenerationRequest, prof ProviderProfile, cred []byte) (Stream, error)
 }
 
+// ModelInfo is one entry returned by a ModelLister-capable adapter. It
+// carries enough metadata to populate the AddProvider model-picker
+// dropdown without round-tripping back to the adapter.
+type ModelInfo struct {
+	ID          string `json:"id"`           // canonical model id (e.g. "claude-sonnet-4-5")
+	DisplayName string `json:"display_name"` // user-facing label (e.g. "Claude Sonnet 4.5")
+	Description string `json:"description,omitempty"`
+}
+
+// ModelLister is the optional capability adapters opt into when their
+// provider exposes a /models endpoint. The rpc layer probes for this
+// interface to drive the "auto-fill the model dropdown after the user
+// pastes their key" flow. Adapters that do not implement it fall back
+// to the static-capability path (user types the model id manually).
+type ModelLister interface {
+	ListModels(ctx context.Context, cred []byte) ([]ModelInfo, error)
+}
+
 // PreflightResult reports the outcome of one credential-resolution
 // attempt at startup (FR-019).
 type PreflightResult struct {

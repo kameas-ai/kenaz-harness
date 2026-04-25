@@ -19,6 +19,7 @@ import type {
   Provider,
   AddProviderInput,
   TestResult,
+  ModelInfo,
   MCPServer,
   A2ACard,
   Job,
@@ -73,6 +74,7 @@ interface WailsBindingsLike {
   LLM_AddProvider(input: AddProviderInput): Promise<void>;
   LLM_RemoveProvider(id: string): Promise<void>;
   LLM_TestProvider(id: string): Promise<TestResult>;
+  LLM_ListModels(kind: string, plaintextApiKey: string): Promise<ModelInfo[]>;
 
   MCP_ListServers(): Promise<MCPServer[]>;
   MCP_StartStream(id: string): Promise<string>;
@@ -178,6 +180,13 @@ export interface LLMConnectorClient {
   addProvider(input: AddProviderInput): Promise<void>;
   removeProvider(id: string): Promise<void>;
   testProvider(id: string): Promise<TestResult>;
+  /**
+   * Probe the provider for the set of models the supplied API key is
+   * authorized to call. Returns an empty list when the kind has no
+   * adapter or no /models endpoint — UI should fall back to manual
+   * model entry in that case.
+   */
+  listModels(kind: string, plaintextApiKey: string): Promise<ModelInfo[]>;
 }
 
 export interface MCPClient {
@@ -296,6 +305,8 @@ export function createHarnessClient(): HarnessClient {
       addProvider: (input) => b().LLM_AddProvider(input),
       removeProvider: (id) => b().LLM_RemoveProvider(id),
       testProvider: (id) => b().LLM_TestProvider(id),
+      listModels: (kind, plaintextApiKey) =>
+        b().LLM_ListModels(kind, plaintextApiKey),
     },
     mcp: {
       listServers: () => b().MCP_ListServers(),
@@ -415,6 +426,7 @@ export function createFakeHarnessClient(
         latency_ms: 1,
         message: 'fake ok',
       }),
+      listModels: async () => [],
     },
     mcp: {
       listServers: async () => [],

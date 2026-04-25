@@ -52,6 +52,13 @@ type Registry interface {
 	corellm.Registry
 }
 
+// AdapterLookup is the optional registry capability the impl uses to
+// drive the AddProvider model-picker. The concrete *registry.Registry
+// satisfies it; tests substitute a fake.
+type AdapterLookup interface {
+	Adapter(kind string) corellm.ProviderAdapter
+}
+
 // ProviderProber performs the lightweight verification call used by
 // TestProvider. Tests replace it with a deterministic fake.
 type ProviderProber interface {
@@ -414,6 +421,45 @@ func (a *API) RemoveProvider(_ context.Context, id string) error {
 	delete(a.validated, id)
 	a.mu.Unlock()
 	return nil
+}
+
+// ListModels asks the adapter for the supplied kind to enumerate the
+// models the supplied API key is authorized to call. Returns an empty
+// slice (not an error) when the kind has no adapter registered or
+// when the adapter does not implement ModelLister — the UI then
+// falls back to manual model entry. The plaintext key is zeroed
+// before this method returns.
+func (a *API) ListModels(ctx context.Context, kind, plaintextApiKey string) ([]ModelInfo, error) {
+	if kind == "" {
+		return nil, errors.New("llm: kind required")
+	}
+	lookup, ok := a.reg.(AdapterLookup)
+	if !ok || lookup == nil {
+		return []ModelInfo{}, nil
+	}
+	adapter := lookup.Adapter(kind)
+	if adapter == nil {
+		return []ModelInfo{}, nil
+	}
+	lister, ok := adapter.(corellm.ModelLister)
+	if !ok {
+		return []ModelInfo{}, nil
+	}
+	buf := []byte(plaintextApiKey)
+	defer zeroBytes(buf)
+	models, err := lister.ListModels(ctx, buf)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]ModelInfo, 0, len(models))
+	for _, m := range models {
+		out = append(out, ModelInfo{
+			ID:          m.ID,
+			DisplayName: m.DisplayName,
+			Description: m.Description,
+		})
+	}
+	return out, nil
 }
 
 // TestProvider runs the configured prober against the named profile and

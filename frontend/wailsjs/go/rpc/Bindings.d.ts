@@ -42,11 +42,13 @@ export function Context_StopStream(arg1:string):Promise<void>;
 
 export function LLM_AddProvider(arg1:llm.AddProviderInput):Promise<void>;
 
+export function LLM_ListModels(arg1:string,arg2:string):Promise<Array<llm.ModelInfo>>;
+
 export function LLM_ListProviders():Promise<Array<llm.Provider>>;
 
 export function LLM_RemoveProvider(arg1:string):Promise<void>;
 
-export function LLM_StartStream(arg1:string):Promise<string>;
+export function LLM_StartStream(arg1:string,arg2:string):Promise<string>;
 
 export function LLM_StopStream(arg1:string):Promise<void>;
 
@@ -74,6 +76,8 @@ export function SaveRoute(arg1:string):Promise<void>;
 
 export function SaveTheme(arg1:string):Promise<void>;
 
+export function Sessions_AppendMessage(arg1:string,arg2:string,arg3:string):Promise<sessions.Message>;
+
 export function Sessions_Create(arg1:string):Promise<sessions.Session>;
 
 export function Sessions_Delete(arg1:string):Promise<void>;
@@ -82,15 +86,23 @@ export function Sessions_Get(arg1:string):Promise<sessions.Session>;
 
 export function Sessions_List():Promise<Array<sessions.Session>>;
 
+export function Sessions_ListMessages(arg1:string):Promise<Array<sessions.Message>>;
+
+export function Sessions_LoadDraft(arg1:string):Promise<string>;
+
 export function Sessions_Rename(arg1:string,arg2:string):Promise<void>;
 
 export function Sessions_Reorder(arg1:Array<string>):Promise<void>;
+
+export function Sessions_SaveDraft(arg1:string,arg2:string):Promise<void>;
 
 export function Sessions_StartStream(arg1:string):Promise<string>;
 
 export function Sessions_StopStream(arg1:string):Promise<void>;
 
 export function SetContext(arg1:context.Context):Promise<void>;
+
+export function SetSettingsStore(arg1:settings.SettingsStore):Promise<void>;
 
 export function Settings_Get():Promise<settings.Settings>;
 

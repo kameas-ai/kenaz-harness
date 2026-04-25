@@ -66,10 +66,18 @@ describe('ProvidersView', () => {
         latency_ms: 10,
         message: 'ok',
       });
+    const listModels = vi
+      .fn<
+        (kind: string, key: string) => Promise<{ id: string; displayName: string }[]>
+      >()
+      .mockResolvedValue([
+        { id: 'claude-sonnet-4-5', displayName: 'Claude Sonnet 4.5' },
+      ]);
     const client = makeClient({
       listProviders: list,
       addProvider,
       testProvider,
+      listModels,
     });
 
     const wrapper = mount(ProvidersView, {
@@ -83,32 +91,31 @@ describe('ProvidersView', () => {
       true,
     );
 
-    // Fill form.
-    await wrapper
-      .find('[data-testid="add-provider-id"]')
-      .setValue('new-prov');
-    await wrapper.find('[data-testid="add-provider-name"]').setValue('New');
-    await wrapper.find('[data-testid="add-provider-model"]').setValue('m');
+    // Three-step flow: paste key → Connect → pick model.
     await wrapper
       .find('[data-testid="add-provider-apikey"]')
       .setValue('sk-test');
+    await wrapper.find('[data-testid="add-provider-connect"]').trigger('click');
+    await flushPromises();
 
     await wrapper.find('form').trigger('submit.prevent');
     await flushPromises();
 
     expect(addProvider).toHaveBeenCalledTimes(1);
     const callArg = addProvider.mock.calls[0][0];
-    expect(callArg.id).toBe('new-prov');
+    expect(callArg.id).toBe('anthropic-claude-sonnet-4-5');
+    expect(callArg.kind).toBe('anthropic');
+    expect(callArg.model).toBe('claude-sonnet-4-5');
     expect(callArg.cred.kind).toBe('keychain');
     expect(callArg.plaintextApiKey).toBe('sk-test');
 
-    expect(testProvider).toHaveBeenCalledWith('new-prov');
+    expect(testProvider).toHaveBeenCalledWith('anthropic-claude-sonnet-4-5');
     // Inline test-result banner should now show.
     expect(wrapper.find('[data-testid="last-test-result"]').exists()).toBe(
       true,
     );
     expect(wrapper.find('[data-testid="last-test-result"]').text()).toContain(
-      'Validated new-prov',
+      'Validated anthropic-claude-sonnet-4-5',
     );
   });
 

@@ -56,6 +56,14 @@ type TestResult struct {
 	Message   string `json:"message"`
 }
 
+// ModelInfo is the user-pickable model entry returned by ListModels.
+// Mirrors core/llm.ModelInfo for the rpc-frontend boundary.
+type ModelInfo struct {
+	ID          string `json:"id"`
+	DisplayName string `json:"displayName"`
+	Description string `json:"description,omitempty"`
+}
+
 // LLMConnectorAPI is the view-scoped accessor for provider metadata and
 // streams. Implementations MUST be safe for concurrent use.
 //
@@ -81,4 +89,11 @@ type LLMConnectorAPI interface {
 	// provider API responds. Errors classified as transient retain
 	// Success=false but populate Message.
 	TestProvider(ctx context.Context, id string) (TestResult, error)
+
+	// ListModels probes the provider for the set of models the supplied
+	// credential can call. The plaintext key is consumed by the rpc
+	// layer and zeroed before this method returns. Returns an empty
+	// slice (not an error) when the kind has no ModelLister-capable
+	// adapter — the UI then falls back to manual model entry.
+	ListModels(ctx context.Context, kind, plaintextApiKey string) ([]ModelInfo, error)
 }

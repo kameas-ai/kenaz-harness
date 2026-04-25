@@ -66,11 +66,31 @@ export namespace audit {
 
 export namespace bundle {
 	
+	export class Artifact {
+	    name: string;
+	    kind: string;
+	    contentHash: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new Artifact(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.kind = source["kind"];
+	        this.contentHash = source["contentHash"];
+	    }
+	}
 	export class Bundle {
 	    id: string;
 	    name: string;
 	    version: string;
 	    tier: string;
+	    source?: string;
+	    signature?: string;
+	    artifactCount: number;
+	    artifacts?: Artifact[];
 	
 	    static createFrom(source: any = {}) {
 	        return new Bundle(source);
@@ -82,7 +102,29 @@ export namespace bundle {
 	        this.name = source["name"];
 	        this.version = source["version"];
 	        this.tier = source["tier"];
+	        this.source = source["source"];
+	        this.signature = source["signature"];
+	        this.artifactCount = source["artifactCount"];
+	        this.artifacts = this.convertValues(source["artifacts"], Artifact);
 	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
 	}
 
 }
@@ -167,6 +209,22 @@ export namespace llm {
 		}
 	}
 	
+	export class ModelInfo {
+	    id: string;
+	    displayName: string;
+	    description?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ModelInfo(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.displayName = source["displayName"];
+	        this.description = source["description"];
+	    }
+	}
 	export class Provider {
 	    id: string;
 	    name: string;
@@ -215,6 +273,8 @@ export namespace mcp {
 	    name: string;
 	    state: string;
 	    version: string;
+	    transport?: string;
+	    capabilities?: string[];
 	
 	    static createFrom(source: any = {}) {
 	        return new Server(source);
@@ -226,6 +286,8 @@ export namespace mcp {
 	        this.name = source["name"];
 	        this.state = source["state"];
 	        this.version = source["version"];
+	        this.transport = source["transport"];
+	        this.capabilities = source["capabilities"];
 	    }
 	}
 
@@ -341,6 +403,66 @@ export namespace rpc {
 
 export namespace sessions {
 	
+	export class ToolCall {
+	    id: string;
+	    name: string;
+	    argsSummary: string;
+	    latency?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ToolCall(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.name = source["name"];
+	        this.argsSummary = source["argsSummary"];
+	        this.latency = source["latency"];
+	    }
+	}
+	export class Message {
+	    id: string;
+	    sessionId: string;
+	    role: string;
+	    content: string;
+	    createdAt: string;
+	    streaming?: boolean;
+	    toolCalls?: ToolCall[];
+	
+	    static createFrom(source: any = {}) {
+	        return new Message(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.sessionId = source["sessionId"];
+	        this.role = source["role"];
+	        this.content = source["content"];
+	        this.createdAt = source["createdAt"];
+	        this.streaming = source["streaming"];
+	        this.toolCalls = this.convertValues(source["toolCalls"], ToolCall);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	export class Session {
 	    id: string;
 	    name: string;

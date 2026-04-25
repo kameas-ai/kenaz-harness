@@ -71,6 +71,17 @@ export interface TestResult {
   message: string;
 }
 
+/**
+ * ModelInfo — one entry in the dropdown the AddProvider drawer
+ * populates after the user pastes their API key. Comes from the
+ * provider's /models endpoint via LLMConnectorAPI.ListModels.
+ */
+export interface ModelInfo {
+  id: string;
+  displayName: string;
+  description?: string;
+}
+
 export interface MCPServer {
   id: string;
   name: string;
