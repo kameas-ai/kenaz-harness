@@ -1,0 +1,37 @@
+# golangci-lint configuration.
+#
+# The depguard block enforces FR-015 / DIRECTIVE_001 / C-001: only
+# core/acp/envelope/... is allowed to import the third-party A2A SDK
+# (github.com/a2aproject/a2a-go). Any other package importing it is a
+# build break — a CI failure forces the offending change back into the
+# envelope wrapper.
+#
+# Run:  golangci-lint run ./...
+
+linters:
+  enable:
+    - depguard
+    - govet
+    - staticcheck
+    - errcheck
+    - ineffassign
+    - unused
+
+linters-settings:
+  depguard:
+    rules:
+      a2a-sdk-isolation:
+        list-mode: lax
+        files:
+          - "!**/core/acp/envelope/**"
+        deny:
+          - pkg: github.com/a2aproject/a2a-go
+            desc: "DIRECTIVE_001 / FR-015: only core/acp/envelope/ may import the a2a-go SDK. Add the call you need behind a method on core/acp/envelope.Envelope and call that instead."
+          - pkg: github.com/a2aproject/a2a-go/...
+            desc: "DIRECTIVE_001 / FR-015: only core/acp/envelope/ may import the a2a-go SDK. Add the call you need behind a method on core/acp/envelope.Envelope and call that instead."
+
+issues:
+  exclude-rules:
+    - path: _test\.go
+      linters:
+        - errcheck
