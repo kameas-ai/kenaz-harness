@@ -56,11 +56,14 @@ function openSession(id: string) {
 }
 
 async function deleteSession(id: string, event: Event) {
+  // Show a visible signal at the top of the handler so we can tell,
+  // from the UI alone, whether the click is even reaching this code.
+  // Removed once the delete flow is stable.
+  lastError.value = `Delete clicked for ${id}…`;
   event.preventDefault();
   event.stopPropagation();
   if (deletingId.value) return;
   deletingId.value = id;
-  lastError.value = null;
   try {
     // Navigate away FIRST when we're about to nuke the active session,
     // so useSession + MessageList unmount before the row disappears
@@ -69,6 +72,7 @@ async function deleteSession(id: string, event: Event) {
       await router.push('/sessions');
     }
     await sessions.remove(id);
+    lastError.value = `Deleted ${id}`;
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     console.error('Delete session failed:', err);
