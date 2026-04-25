@@ -1,13 +1,23 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8"/>
-    <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+    <meta charset="UTF-8" />
+    <meta http-equiv="Content-Security-Policy" content="__CSP_PLACEHOLDER__" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>kaneaz-harness</title>
+    <!--
+      Critical token block per plan §8 R-9: prevent first-paint flash of
+      unthemed content while tokens.css parses. Surfaces + ink + accent
+      only — kept under 200 bytes. Privacy CI invariant #4 allowlists this
+      block via the `// css-tokens-allow` mechanism in check-css-tokens.
+    -->
+    <style>
+      :root { color-scheme: dark; --surface-0:#0A0A0B; --ink:#F4F1EA; --accent:#C8A56A; }
+      html, body { margin: 0; background: var(--surface-0); color: var(--ink); }
+    </style>
 </head>
 <body>
 <div id="app"></div>
-<script src="./src/main.js" type="module"></script>
+<script src="/src/main.ts" type="module"></script>
 </body>
 </html>
-

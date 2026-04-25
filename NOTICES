@@ -1,0 +1,28 @@
+# NOTICES
+
+This product bundles third-party assets under their respective licenses.
+
+## Geist + Geist Mono fonts
+
+Copyright 2024 The Geist Project Authors
+(https://github.com/vercel/geist-font)
+
+Licensed under the SIL Open Font License, Version 1.1. License text at
+`frontend/src/assets/fonts/OFL.txt`.
+
+Files: `Geist-Regular.woff2`, `Geist-Medium.woff2`, `Geist-SemiBold.woff2`,
+`GeistMono-Regular.woff2`, `GeistMono-Medium.woff2`. Self-hosted under
+`frontend/src/assets/fonts/`. CSP `font-src 'self'` (plan §4.3 invariant
+#1) forbids any external font request.
+
+## Kenaz design tokens
+
+Vendored verbatim from the Kenaz frontend (`frontend/src/styles/tokens.css`)
+per plan §1, §4.1, §5.1, and constraint C-008. Refresh procedure documented
+in `frontend/src/styles/REFRESH.md`.
+
+## shadcn-vue primitives
+
+Primitives under `frontend/src/components/ui/` are copied from shadcn-vue
+(MIT) and owned outright by the harness team per FR-004 / C-002. The
+upstream library is a *source*, not a runtime dependency.

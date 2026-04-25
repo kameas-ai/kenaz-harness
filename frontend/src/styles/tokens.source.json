@@ -1,0 +1,11 @@
+{
+  "source": "/Users/alecfeeman/PycharmProjects/kenaz/frontend/src/styles/tokens.css",
+  "vendoredAt": "2026-04-25",
+  "vendoredBy": "frontend-foundations-01KQ2H3P WP02",
+  "harnessLocalAdditions": [
+    "--motion-fast",
+    "--motion-base",
+    "--motion-slow"
+  ],
+  "refreshProcedure": "frontend/src/styles/REFRESH.md"
+}

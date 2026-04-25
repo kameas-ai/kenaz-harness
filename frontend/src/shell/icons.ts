@@ -1,0 +1,37 @@
+// Lucide icon re-exports. Importing only the icons we use keeps the
+// bundle under NFR-006 (1.5 MB gzipped) by relying on tree-shaking.
+import {
+  AlertTriangle,
+  ChevronRight,
+  Command,
+  FileText,
+  Folder,
+  Layers,
+  MessageSquare,
+  Plus,
+  Search,
+  Server,
+  Settings,
+  Shield,
+  Sun,
+  Moon,
+  Wrench,
+} from 'lucide-vue-next';
+
+export {
+  AlertTriangle,
+  ChevronRight,
+  Command,
+  FileText,
+  Folder,
+  Layers,
+  MessageSquare,
+  Plus,
+  Search,
+  Server,
+  Settings,
+  Shield,
+  Sun,
+  Moon,
+  Wrench,
+};
