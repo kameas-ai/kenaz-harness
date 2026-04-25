@@ -26,6 +26,7 @@ import (
 	"github.com/sigil-tech/kaneaz-harness/core/llm/openai"
 	"github.com/sigil-tech/kaneaz-harness/core/llm/openrouter"
 	"github.com/sigil-tech/kaneaz-harness/core/llm/retry"
+	"github.com/sigil-tech/kaneaz-harness/core/logging"
 )
 
 // CostReducer is the optional usage→cost stage (WP11). The registry
@@ -259,6 +260,7 @@ func (r *Registry) PreflightAll(ctx context.Context) []llm.PreflightResult {
 //  6. RetryMiddleware.Run(adapter.Stream)  → llm/retry_attempted per retry
 //  7. (Stream returned to caller; CostReducer attaches Cost on Final)
 func (r *Registry) Stream(ctx context.Context, req llm.GenerationRequest) (llm.Stream, error) {
+	log := logging.L()
 	r.mu.RLock()
 	prof, ok := r.profiles[req.ProfileID]
 	adapter := r.adapters[prof.Kind]
@@ -268,6 +270,15 @@ func (r *Registry) Stream(ctx context.Context, req llm.GenerationRequest) (llm.S
 	reducer := r.reducer
 	resolver := r.resolver
 	r.mu.RUnlock()
+
+	log.Info("registry.stream.dispatch",
+		"profile_id", req.ProfileID,
+		"profile_found", ok,
+		"profile_kind", prof.Kind,
+		"profile_default_model", prof.Model,
+		"requested_model", req.Model,
+		"adapter_registered", adapter != nil,
+	)
 
 	if !ok {
 		return nil, fmt.Errorf("llm: profile %q not registered", req.ProfileID)

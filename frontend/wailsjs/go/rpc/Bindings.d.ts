@@ -40,6 +40,10 @@ export function Context_StartStream():Promise<string>;
 
 export function Context_StopStream(arg1:string):Promise<void>;
 
+export function Diag_LogClientEvent(arg1:string,arg2:string,arg3:Record<string, any>):Promise<void>;
+
+export function Diag_LogPath():Promise<string>;
+
 export function LLM_AddProvider(arg1:llm.AddProviderInput):Promise<void>;
 
 export function LLM_ListModels(arg1:string,arg2:string):Promise<Array<llm.ModelInfo>>;

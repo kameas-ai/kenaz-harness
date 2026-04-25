@@ -26,6 +26,7 @@ import (
 
 	corellm "github.com/sigil-tech/kaneaz-harness/core/llm"
 	"github.com/sigil-tech/kaneaz-harness/core/llm/personal"
+	"github.com/sigil-tech/kaneaz-harness/core/logging"
 )
 
 // StreamSink is the minimal contract the concrete LLMConnectorAPI uses
@@ -255,18 +256,28 @@ func (a *API) ListProviders(_ context.Context) ([]Provider, error) {
 // models — the chat surface's model-switcher picks one and passes it
 // here. Empty => use the profile default.
 func (a *API) StartStream(ctx context.Context, profileID, sessionID, modelOverride string) (string, error) {
+	log := logging.L()
+	log.Info("llm.start_stream.requested",
+		"profile_id", profileID,
+		"session_id", sessionID,
+		"model_override", modelOverride,
+	)
 	if a.reg == nil {
+		log.Error("llm.start_stream.failed", "reason", "connector not wired")
 		return "", errors.New("llm: connector not wired")
 	}
 	if profileID == "" {
+		log.Error("llm.start_stream.failed", "reason", "empty profile id")
 		return "", errors.New("llm: profile id required")
 	}
 	if err := a.ensurePersonalLoaded(); err != nil {
+		log.Error("llm.start_stream.failed", "stage", "ensurePersonalLoaded", "err", err.Error())
 		return "", err
 	}
 
 	messages, err := a.buildMessages(ctx, sessionID)
 	if err != nil {
+		log.Error("llm.start_stream.failed", "stage", "buildMessages", "err", err.Error())
 		return "", err
 	}
 	req := corellm.GenerationRequest{
@@ -287,6 +298,11 @@ func (a *API) StartStream(ctx context.Context, profileID, sessionID, modelOverri
 	stream, err := a.reg.Stream(streamCtx, req)
 	if err != nil {
 		cancel()
+		log.Error("llm.start_stream.failed",
+			"stage", "registry.Stream",
+			"profile_id", profileID,
+			"err", err.Error(),
+		)
 		return "", err
 	}
 
@@ -303,6 +319,12 @@ func (a *API) StartStream(ctx context.Context, profileID, sessionID, modelOverri
 	a.subs[id] = sub
 	a.mu.Unlock()
 
+	log.Info("llm.start_stream.opened",
+		"sub_id", id,
+		"profile_id", profileID,
+		"session_id", sessionID,
+		"messages", len(messages),
+	)
 	go a.pump(sub)
 	return id, nil
 }
@@ -325,6 +347,7 @@ func (a *API) StopStream(_ context.Context, subID string) error {
 }
 
 func (a *API) pump(sub *subscription) {
+	log := logging.L()
 	defer func() {
 		a.mu.Lock()
 		delete(a.subs, sub.id)
@@ -332,7 +355,13 @@ func (a *API) pump(sub *subscription) {
 		close(sub.done)
 	}()
 
+	chunkCount := 0
+	textBytes := 0
 	for ev := range sub.stream.Events() {
+		chunkCount++
+		if ev.Kind == corellm.StreamText {
+			textBytes += len(ev.Text)
+		}
 		a.sink.Emit("llm:stream-chunk", StreamChunkPayload{
 			SubID:     sub.id,
 			SessionID: sub.sessionID,
@@ -354,6 +383,15 @@ func (a *API) pump(sub *subscription) {
 		closed.Reason = "completed"
 		closed.FinishReason = resp.FinishReason
 	}
+	log.Info("llm.stream.closed",
+		"sub_id", sub.id,
+		"session_id", sub.sessionID,
+		"reason", closed.Reason,
+		"finish_reason", closed.FinishReason,
+		"chunks", chunkCount,
+		"text_bytes", textBytes,
+		"err_message", closed.Message,
+	)
 	a.sink.Emit("llm:stream-closed", closed)
 }
 
@@ -363,7 +401,15 @@ func (a *API) pump(sub *subscription) {
 // loaded into the registry so StartStream can resolve it without
 // requiring a process restart.
 func (a *API) AddProvider(ctx context.Context, in AddProviderInput) error {
+	log := logging.L()
+	log.Info("llm.add_provider.requested",
+		"id", in.ID, "kind", in.Kind, "model", in.Model,
+		"models", in.Models, "region", in.Region,
+		"cred_kind", in.Cred.Kind, "cred_locator", in.Cred.Locator,
+		"has_plaintext_key", in.PlaintextAPIKey != "",
+	)
 	if a.store == nil {
+		log.Error("llm.add_provider.failed", "id", in.ID, "reason", "no store")
 		return ErrPersonalStoreUnavailable
 	}
 	switch in.Cred.Kind {
@@ -402,6 +448,7 @@ func (a *API) AddProvider(ctx context.Context, in AddProviderInput) error {
 		},
 	}
 	if err := a.store.Add(profile); err != nil {
+		log.Error("llm.add_provider.failed", "id", in.ID, "stage", "store.Add", "err", err.Error())
 		return err
 	}
 	if a.reg != nil {
@@ -413,6 +460,7 @@ func (a *API) AddProvider(ctx context.Context, in AddProviderInput) error {
 	a.mu.Lock()
 	delete(a.validated, in.ID)
 	a.mu.Unlock()
+	log.Info("llm.add_provider.persisted", "id", in.ID, "kind", in.Kind, "models", profile.AvailableModels())
 	return nil
 }
 

@@ -14,6 +14,7 @@ import (
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/settings"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/trust"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/workflow"
+	"github.com/sigil-tech/kaneaz-harness/core/logging"
 )
 
 // Bindings is the Wails-reflected JS-callable surface. Every method has a
@@ -172,6 +173,20 @@ func (b *Bindings) LLM_RemoveProvider(id string) error {
 }
 func (b *Bindings) LLM_UpdateProvider(input llm.AddProviderInput) error {
 	return b.api.LLMConnector().UpdateProvider(b.ctx(), input)
+}
+
+// Diag_LogClientEvent appends a structured record from the frontend
+// into the harness log file at ~/.kenaz/harness.log. Used by the
+// frontend's eventLog.ts to give support engineers a single trail
+// when debugging send/stream issues.
+func (b *Bindings) Diag_LogClientEvent(level, message string, attrs map[string]any) {
+	logging.LogClientEvent(level, message, attrs)
+}
+
+// Diag_LogPath returns the resolved log path so the settings UI can
+// surface "logging to ~/.kenaz/harness.log" or the fallback reason.
+func (b *Bindings) Diag_LogPath() string {
+	return logging.PathOrError()
 }
 func (b *Bindings) LLM_TestProvider(id string) (llm.TestResult, error) {
 	return b.api.LLMConnector().TestProvider(b.ctx(), id)

@@ -26,6 +26,7 @@ import {
 } from 'vue';
 import { useHarnessClient } from './harnessClientContext';
 import { useEventStream } from './useEventStream';
+import { logEvent } from './eventLog';
 import type { Message, Session } from './types';
 
 export interface UseSessionResult {
@@ -228,21 +229,45 @@ export function useSession(id: Ref<string>): UseSessionResult {
     const sid = id.value;
     if (!sid) return;
     error.value = null;
+    logEvent('info', 'send.requested', {
+      session_id: sid,
+      profile_id: profileID,
+      model_override: modelOverride ?? '',
+      content_bytes: content.length,
+    });
     try {
       const userMsg = await client.sessions.appendMessage(sid, 'user', content);
       messages.value = [...messages.value, userMsg];
+      logEvent('info', 'send.user_message_appended', {
+        session_id: sid,
+        message_id: userMsg.id,
+      });
       const subId = await client.llm.startStream(profileID, sid, modelOverride);
       streamSubscriptionId.value = subId;
       streamingTimedOut.value = false;
       clearStreamTimeout();
+      logEvent('info', 'send.stream_opened', {
+        session_id: sid,
+        sub_id: subId,
+      });
       streamTimeoutHandle = setTimeout(() => {
         if (streamSubscriptionId.value === subId && !currentlyStreaming.value) {
           streamingTimedOut.value = true;
+          logEvent('warn', 'send.stream_timed_out', {
+            session_id: sid,
+            sub_id: subId,
+            timeout_ms: STREAM_TIMEOUT_MS,
+          });
         }
       }, STREAM_TIMEOUT_MS);
     } catch (err) {
       const e = err instanceof Error ? err : new Error(String(err));
       error.value = e.message;
+      logEvent('error', 'send.failed', {
+        session_id: sid,
+        profile_id: profileID,
+        message: e.message,
+      });
     }
   }
 

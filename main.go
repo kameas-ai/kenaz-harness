@@ -12,6 +12,7 @@ import (
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
 
 	"github.com/sigil-tech/kaneaz-harness/core"
+	"github.com/sigil-tech/kaneaz-harness/core/logging"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc"
 )
 
@@ -19,6 +20,10 @@ import (
 var assets embed.FS
 
 func main() {
+	// Eager-open the file logger so the first lines of the boot
+	// sequence (data-dir setup, core.New) land in ~/.kenaz/harness.log.
+	logging.L().Info("harness.boot", "pid", os.Getpid())
+
 	dataDir, err := defaultDataDir()
 	if err != nil {
 		log.Fatalf("data dir: %v", err)

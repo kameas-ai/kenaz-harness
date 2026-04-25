@@ -54,6 +54,14 @@ export function Context_StopStream(arg1) {
   return window['go']['rpc']['Bindings']['Context_StopStream'](arg1);
 }
 
+export function Diag_LogClientEvent(arg1, arg2, arg3) {
+  return window['go']['rpc']['Bindings']['Diag_LogClientEvent'](arg1, arg2, arg3);
+}
+
+export function Diag_LogPath() {
+  return window['go']['rpc']['Bindings']['Diag_LogPath']();
+}
+
 export function LLM_AddProvider(arg1) {
   return window['go']['rpc']['Bindings']['LLM_AddProvider'](arg1);
 }
