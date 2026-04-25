@@ -81,10 +81,15 @@ func TestUDSListenAndDial(t *testing.T) {
 func TestUDSStaleSocketCleanup(t *testing.T) {
 	t.Parallel()
 	path := tempSocket(t)
-	// Pre-create a stale socket file.
+	// Pre-create a stale socket file. Go's *net.UnixListener.Close()
+	// unlinks the socket file by default; SetUnlinkOnClose(false)
+	// preserves it so we can simulate a left-over from a prior crash.
 	tmpLn, err := net.Listen("unix", path)
 	if err != nil {
 		t.Fatalf("pre-create listen: %v", err)
+	}
+	if ul, ok := tmpLn.(*net.UnixListener); ok {
+		ul.SetUnlinkOnClose(false)
 	}
 	_ = tmpLn.Close()
 	// File should still exist.
