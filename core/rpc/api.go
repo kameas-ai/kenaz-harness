@@ -10,6 +10,7 @@ package rpc
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 
 	"github.com/sigil-tech/kaneaz-harness/core"
@@ -232,12 +233,65 @@ func newLLMStack(c *core.Core, broker *StreamBroker) llm.LLMConnectorAPI {
 	var _ corellm.Registry = (*llmregistry.Registry)(nil)
 
 	store := newPersonalStore(c)
+	credResolver := credref.New(secretsBackend)
 	return llm.New(llm.Config{
 		Registry: reg,
 		Sink:     &streamSinkAdapter{broker: broker},
 		Store:    store,
 		Keychain: &memoryKeychainWriter{backend: secretsBackend},
+		Prober:   &registryProber{reg: reg, creds: credResolver},
 	})
+}
+
+// registryProber satisfies llm.ProviderProber by routing through the
+// adapter's ModelLister capability when one is registered. A successful
+// /models call proves the credential resolves and the provider API
+// answers. Adapters that have no ModelLister (or kinds with no adapter
+// registered) report a "not yet supported" message instead of a
+// confusing "no provider prober configured" — the chassis still reports
+// success=false but the row no longer looks broken.
+type registryProber struct {
+	reg   *llmregistry.Registry
+	creds *credref.Resolver
+}
+
+func (p *registryProber) Probe(ctx context.Context, profile corellm.ProviderProfile) llm.ProberResult {
+	if p == nil || p.reg == nil {
+		return llm.ProberResult{Message: "prober unavailable"}
+	}
+	adapter := p.reg.Adapter(profile.Kind)
+	if adapter == nil {
+		return llm.ProberResult{
+			Message: fmt.Sprintf("no adapter for kind %q yet", profile.Kind),
+		}
+	}
+	lister, ok := adapter.(corellm.ModelLister)
+	if !ok {
+		return llm.ProberResult{
+			Message: fmt.Sprintf("%s adapter has no probe endpoint", profile.Kind),
+		}
+	}
+	cred, err := p.creds.Resolve(ctx, profile.ID, profile.Cred)
+	if err != nil {
+		return llm.ProberResult{Message: fmt.Sprintf("credential: %v", err)}
+	}
+	defer cred.Destroy()
+	var models []corellm.ModelInfo
+	probeErr := cred.Use(func(buf []byte) error {
+		out, err := lister.ListModels(ctx, buf)
+		if err != nil {
+			return err
+		}
+		models = out
+		return nil
+	})
+	if probeErr != nil {
+		return llm.ProberResult{Message: probeErr.Error()}
+	}
+	return llm.ProberResult{
+		Success: true,
+		Message: fmt.Sprintf("ok — %d model(s) available", len(models)),
+	}
 }
 
 // memoryKeychainWriter implements llm.KeychainWriter against a shared
