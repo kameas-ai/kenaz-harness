@@ -120,13 +120,16 @@ type API struct {
 	bindings *Bindings
 }
 
-// SetContext threads the Wails app context to the Bindings surface.
-// main.go calls this from OnStartup so bound methods (which cannot take
-// context.Context as a parameter — Wails can't serialize it from JS)
-// have an app-scoped context for downstream calls.
+// SetContext threads the Wails app context to the Bindings surface
+// AND to the StreamBroker, which needs the OnStartup-supplied context
+// so runtime.EventsEmit dispatches correctly (background contexts
+// crash Wails). main.go calls this from OnStartup.
 func (a *API) SetContext(ctx context.Context) {
 	if a.bindings != nil {
 		a.bindings.SetContext(ctx)
+	}
+	if a.broker != nil {
+		a.broker.SetContext(ctx)
 	}
 }
 
@@ -369,12 +372,14 @@ type streamSinkAdapter struct {
 	broker *StreamBroker
 }
 
-// Emit forwards topic+payload to the broker's underlying emitter.
+// Emit forwards topic+payload to the broker's underlying emitter
+// using the Wails-supplied context — context.Background() crashes
+// runtime.EventsEmit with "invalid context was passed".
 func (s *streamSinkAdapter) Emit(topic string, payload any) {
 	if s == nil || s.broker == nil {
 		return
 	}
-	s.broker.emitter.Emit(context.Background(), topic, payload)
+	s.broker.emitter.Emit(s.broker.EmitCtx(), topic, payload)
 }
 
 // AuditObserver returns a function suitable for passing to

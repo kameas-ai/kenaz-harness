@@ -37,6 +37,34 @@ type StreamBroker struct {
 	emitter Emitter
 	subs    sync.Map // map[string]*subscription
 	nextID  atomic.Uint64
+
+	// ctx is the Wails OnStartup-supplied context. runtime.EventsEmit
+	// REQUIRES this exact context to dispatch — context.Background()
+	// fails with "An invalid context was passed". main.go wires this
+	// via API.SetContext → broker.SetContext on app startup.
+	ctxMu sync.RWMutex
+	ctx   context.Context
+}
+
+// SetContext threads the Wails-supplied OnStartup context through to
+// the broker so direct .Emit (the LLM stream-bridge path) dispatches
+// to the live runtime instead of context.Background — the latter
+// crashes Wails' EventsEmit with "An invalid context was passed".
+func (b *StreamBroker) SetContext(ctx context.Context) {
+	b.ctxMu.Lock()
+	b.ctx = ctx
+	b.ctxMu.Unlock()
+}
+
+// EmitCtx returns the configured ctx, falling back to background if
+// SetContext hasn't been called yet (test path / pre-startup).
+func (b *StreamBroker) EmitCtx() context.Context {
+	b.ctxMu.RLock()
+	defer b.ctxMu.RUnlock()
+	if b.ctx == nil {
+		return context.Background()
+	}
+	return b.ctx
 }
 
 type subscription struct {
