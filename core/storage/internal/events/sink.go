@@ -118,9 +118,10 @@ func (b *Buffered) DrainTo(ctx context.Context, target Sink) error {
 		b.mu.Unlock()
 		return errors.New("events: bootstrap sink already released")
 	}
-	// Snapshot current state under the lock so concurrent Emits during
-	// drain land in the buffer (and surface as a follow-up dropped or
-	// retried drain).
+	// Snapshot the ring under the lock and clear it: anything that
+	// arrives during the drain is a new arrival in the live buffer.
+	// On failure we prepend the unflushed remainder ahead of those new
+	// arrivals.
 	size := b.size
 	head := b.head
 	cap := b.cap
@@ -129,7 +130,9 @@ func (b *Buffered) DrainTo(ctx context.Context, target Sink) error {
 	for i := 0; i < size; i++ {
 		snapshot[i] = b.ring[(head+i)%cap]
 	}
-	// Mark as released optimistically; if drain fails we revert.
+	b.size = 0
+	b.head = 0
+	b.dropped = 0
 	b.mu.Unlock()
 
 	for i, ev := range snapshot {
@@ -137,12 +140,8 @@ func (b *Buffered) DrainTo(ctx context.Context, target Sink) error {
 			// Re-buffer the unflushed remainder so retries work.
 			b.mu.Lock()
 			remaining := snapshot[i:]
-			// Reset the live buffer to remaining + any new emits since
-			// the snapshot. The simplest correct approach: prepend
-			// remaining ahead of any post-snapshot writes.
-			// Take everything currently in the ring (which is the new
-			// arrivals only because we already drained snapshot
-			// logically) and push remaining in front.
+			// Capture any concurrent arrivals that landed in the live
+			// buffer while we were draining.
 			currentSize := b.size
 			currentHead := b.head
 			currentCap := b.cap
@@ -150,9 +149,13 @@ func (b *Buffered) DrainTo(ctx context.Context, target Sink) error {
 			for j := 0; j < currentSize; j++ {
 				newArrivals[j] = b.ring[(currentHead+j)%currentCap]
 			}
-			// Repopulate.
+			// Repopulate: remaining (in original order) ahead of the
+			// concurrent new arrivals.
 			b.size = 0
 			b.head = 0
+			// Restore the dropped counter we cleared at snapshot time;
+			// the synthetic events_dropped emit never ran.
+			b.dropped += dropped
 			for _, ev := range remaining {
 				b.appendLocked(ev)
 			}
