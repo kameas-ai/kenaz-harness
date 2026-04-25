@@ -30,6 +30,7 @@ import (
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/trust"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/workflow"
 	"github.com/sigil-tech/kaneaz-harness/core/secrets"
+	secretsref "github.com/sigil-tech/kaneaz-harness/core/secrets/ref"
 )
 
 // HarnessAPI is the boundary between the Wails-hosted Vue frontend and
@@ -211,8 +212,13 @@ func newSessionsAPI(c *core.Core) sessions.SessionsAPI {
 // The shared broker is supplied by New so all view bridges fan out to
 // the same StreamBroker instance.
 func newLLMStack(c *core.Core, broker *StreamBroker) llm.LLMConnectorAPI {
+	// Share ONE secrets backend between the credref resolver (which
+	// reads keys when streaming) and the keychain writer (which stages
+	// keys when the user submits AddProvider). Without this sharing,
+	// AddProvider would write into a backend the resolver can't see.
+	secretsBackend := secrets.NewMemoryBackend()
 	reg, err := llmregistry.New(llmregistry.Options{
-		Resolver: credref.New(secrets.NewMemoryBackend()),
+		Resolver: credref.New(secretsBackend),
 	})
 	if err != nil {
 		// Fall back to the stub on a registry construction failure so
@@ -230,7 +236,32 @@ func newLLMStack(c *core.Core, broker *StreamBroker) llm.LLMConnectorAPI {
 		Registry: reg,
 		Sink:     &streamSinkAdapter{broker: broker},
 		Store:    store,
+		Keychain: &memoryKeychainWriter{backend: secretsBackend},
 	})
+}
+
+// memoryKeychainWriter implements llm.KeychainWriter against a shared
+// *secrets.MemoryBackend so plaintext keys staged by AddProvider are
+// resolvable by the credref pipeline at stream time. The proper
+// OS-keychain backend (zalando/go-keyring + go-piv) is a follow-up
+// mission; this seam keeps the AddProvider flow end-to-end functional
+// without persisting credentials to disk.
+type memoryKeychainWriter struct {
+	backend *secrets.MemoryBackend
+}
+
+// Write stores plaintext under "keychain|<locator>" and zeroes the
+// supplied buffer. The backend dups internally so cleared input does
+// not affect the stored copy.
+func (w *memoryKeychainWriter) Write(_ context.Context, locator string, plaintext []byte) error {
+	if w == nil || w.backend == nil {
+		return nil
+	}
+	w.backend.SetEntry(secretsref.RefKeychain, locator, plaintext)
+	for i := range plaintext {
+		plaintext[i] = 0
+	}
+	return nil
 }
 
 // newPersonalStore constructs the personal-providers FileStore. It
