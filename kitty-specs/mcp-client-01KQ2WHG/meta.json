@@ -1,0 +1,10 @@
+{
+  "created_at": "2026-04-25T17:56:01.323548+00:00",
+  "friendly_name": "mcp client",
+  "mission_id": "01KQ2WHG3EKVBHDQX3RRJ6S7E2",
+  "mission_number": null,
+  "mission_slug": "mcp-client-01KQ2WHG",
+  "mission_type": "software-dev",
+  "slug": "mcp-client-01KQ2WHG",
+  "target_branch": "feat/wire-integration"
+}
