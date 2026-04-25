@@ -19,6 +19,56 @@ export interface Provider {
   name: string;
   tier: string;
   model: string;
+  /**
+   * "bundle" | "personal" — surfaced so the UI can show whether a
+   * provider came from a signed bundle or the user's providers.json.
+   */
+  source?: ProviderSource;
+  /**
+   * Most-recent TestProvider outcome for the row's status pill. Reset
+   * to false on AddProvider.
+   */
+  validated?: boolean;
+}
+
+export type ProviderSource = 'bundle' | 'personal';
+
+/**
+ * Reference-only credential pointer. NEVER carries a plaintext value;
+ * the `kind: "keychain"` shape is what AddProvider persists. The lint
+ * rule in WP14 flags additions of `value` / `secret` / `password` /
+ * `apiKey` / `token` to this shape.
+ */
+export interface CredentialReference {
+  kind: 'keychain' | 'env' | 'file' | 'aws_profile' | 'kms';
+  locator: string;
+}
+
+export type ProviderKind =
+  | 'anthropic'
+  | 'openai'
+  | 'openrouter'
+  | 'bedrock'
+  | 'ollama';
+
+export interface AddProviderInput {
+  id: string;
+  name: string;
+  kind: ProviderKind;
+  model: string;
+  region?: string;
+  cred: CredentialReference;
+  /**
+   * Plaintext API key the bindings layer writes to the OS keychain
+   * before zeroing. Never stored in providers.json.
+   */
+  plaintextApiKey?: string;
+}
+
+export interface TestResult {
+  success: boolean;
+  latency_ms: number;
+  message: string;
 }
 
 export interface MCPServer {
