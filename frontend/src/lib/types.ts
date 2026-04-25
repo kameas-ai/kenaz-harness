@@ -138,3 +138,63 @@ export interface EventStreamEntry {
   trailing?: string;
   size?: number;
 }
+
+/**
+ * Chat-message domain types. Mirrors the Go-side `core/session` package
+ * (added by the parallel session-manager mission). Until that mission
+ * lands these shapes are the source of truth on the frontend.
+ *
+ * NEVER add a `secret` / `apiKey` / `token` / `password` / `value` field
+ * here — privacy CI invariant + the WP14 lint rule reject it.
+ */
+export type MessageRole = 'user' | 'assistant' | 'system' | 'tool';
+
+export interface ToolCall {
+  id: string;
+  name: string;
+  /** Arguments rendered as a single-line monospace summary. NEVER raw JSON
+   * dumped untrimmed — the redactor server-side already strips it. */
+  argsSummary: string;
+  /** Optional latency display, e.g. `"412ms"`. */
+  latency?: string;
+}
+
+export interface Message {
+  id: string;
+  sessionId: string;
+  role: MessageRole;
+  /** Markdown-flavoured plain text. The renderer is intentionally not a
+   * full markdown HTML pipeline — see MessageBubble for the safe subset. */
+  content: string;
+  createdAt: string;
+  /** Streaming flag — true while the assistant is still emitting tokens. */
+  streaming?: boolean;
+  toolCalls?: readonly ToolCall[];
+}
+
+/**
+ * Streaming chunk delivered on the `llm:stream-chunk` topic. The broker
+ * emits one per token / tool-call delta. The `done` flag marks the final
+ * chunk before `llm:stream-closed` arrives.
+ */
+export interface StreamChunk {
+  subscriptionId: string;
+  sessionId: string;
+  messageId: string;
+  delta: string;
+  toolCallDelta?: ToolCall;
+  done?: boolean;
+}
+
+export interface StreamClosedPayload {
+  id: string;
+  reason: 'ctx-cancelled' | 'stop-called' | 'backend-error' | 'completed';
+  message?: string;
+}
+
+/** Token / cost estimate surfaced by ChatInput. Placeholder values are OK
+ * until the providers mission wires real accounting. */
+export interface CostEstimate {
+  tokens: number;
+  usd: number;
+}
