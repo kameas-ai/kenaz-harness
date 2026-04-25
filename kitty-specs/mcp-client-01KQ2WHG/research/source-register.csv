@@ -1,0 +1,10 @@
+id,kind,title,locator,as_of_date,reliability,notes
+S001,community-sdk,mark3labs/mcp-go,github.com/mark3labs/mcp-go,2025,medium,"Most active community Go SDK in 2025; not adopted by this mission but referenced as SDK option in plan."
+S002,spec,Model Context Protocol Specification (2025-06-18),modelcontextprotocol.io/specification/2025-06-18,2025-06-18,high,"Authoritative protocol reference; primary source for wire format, methods, capabilities."
+S003,stdlib,Go net/http stdlib package,pkg.go.dev/net/http,2026,high,"Stdlib HTTP client supports streamable-HTTP via POST with content-type detection on response."
+S004,internal,core/event redaction pipeline,core/event/redact/pipeline.go,2026-04-25,high,"In-tree redaction implementation; the mcp-client mission feeds patterns and reuses the pipeline."
+S005,internal,core/llm registry,core/llm/registry/registry.go,2026-04-25,high,"In-tree LLM registry; consumed by sampling callbacks under the bundle's resolved provider profile."
+S006,internal,core/secrets registry,core/secrets/registry/registry.go,2026-04-25,high,"In-tree secrets backend; resolves credential references in HTTP transport headers and stdio env vars."
+S007,internal,core/bundle resolver façade,core/bundle/types.go,2026-04-25,medium,"Stub interface today; the mcp-server artifact handler registers against the resolver in the bundle-format-resolver mission's wire-up."
+S008,charter,kaneaz-harness Project Charter,.kittify/charter/charter.md,2026-04-25,high,"Governance and policy doctrine; informs DIRECTIVE_001 layering, local-first deployment constraints, SOC 2-ready audit requirements."
+S009,internal,core/mcp/pool.go (existing stub),core/mcp/pool.go,2026-04-25,high,"Pre-existing Pool interface in core/mcp/; this mission EXTENDS the interface and houses the implementation under core/mcp/client/."

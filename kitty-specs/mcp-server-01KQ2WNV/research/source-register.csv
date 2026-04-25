@@ -1,0 +1,12 @@
+id,kind,title,locator,as_of_date,reliability,notes
+S001,community-sdk,mark3labs/mcp-go,github.com/mark3labs/mcp-go,2025,medium,"Most active community Go SDK in 2025; not adopted by this mission but referenced as SDK option."
+S002,spec,Model Context Protocol Specification (2025-06-18),modelcontextprotocol.io/specification/2025-06-18,2025-06-18,high,"Authoritative protocol reference; primary source for wire format, methods, capabilities, server-side conventions."
+S003,stdlib,Go net/http stdlib package,pkg.go.dev/net/http,2026,high,"Stdlib HTTP server used for streamable-HTTP transport; http.Server.Shutdown for graceful drain."
+S004,internal,core/event redaction pipeline,core/event/redact/pipeline.go,2026-04-25,high,"In-tree redaction implementation; the mcp-server mission feeds patterns and reuses the pipeline."
+S005,internal,core/llm registry,core/llm/registry/registry.go,2026-04-25,high,"In-tree LLM registry; consumed by sampling callbacks under the bundle's resolved provider profile."
+S006,internal,core/secrets registry,core/secrets/registry/registry.go,2026-04-25,high,"In-tree secrets backend; resolves bearer-token credential references for HTTP authentication."
+S007,internal,core/bundle resolver,core/bundle/types.go,2026-04-25,medium,"Stub interface today; the bundle-format-resolver mission lands the full Resolver. The mcp-server mission consumes the Resolver via dependency injection at Start."
+S008,charter,kaneaz-harness Project Charter,.kittify/charter/charter.md,2026-04-25,high,"Governance and policy doctrine; informs DIRECTIVE_001 layering, local-first deployment constraints, SOC 2-ready audit requirements."
+S009,internal,core/mcp/client/jsonrpc package (companion mission),kitty-specs/mcp-client-01KQ2WHG/plan.md,2026-04-25,high,"Reused JSON-RPC framing layer from the companion MCP-client mission. Server imports the same package OR triggers a refactor to core/mcp/jsonrpc/ for symmetry."
+S010,internal,core/session executor,core/session/,2026-04-25,medium,"In-tree session executor; consumed by the run_bundle tool implementation."
+S011,internal,core/scheduler,core/scheduler/,2026-04-25,medium,"In-tree scheduler façade; potential future tool exposure (not in v1 catalog)."
