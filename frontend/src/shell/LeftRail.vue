@@ -39,8 +39,17 @@ const newSessionLoading = ref(false);
 const deletingId = ref<string | null>(null);
 const renamingId = ref<string | null>(null);
 const renameDraft = ref('');
+// Track which session we've already focused so the :ref callback
+// (which Vue runs on every re-render of the input, not just mount)
+// does not re-select all text after every keystroke.
+let focusedRenameId: string | null = null;
 function setRenameInputRef(el: Element | null) {
-  if (!(el instanceof HTMLInputElement)) return;
+  if (!(el instanceof HTMLInputElement)) {
+    focusedRenameId = null;
+    return;
+  }
+  if (focusedRenameId === renamingId.value) return;
+  focusedRenameId = renamingId.value;
   el.focus();
   el.select();
 }
@@ -85,6 +94,7 @@ function startRename(id: string, currentName: string, event: Event) {
 function cancelRename() {
   renamingId.value = null;
   renameDraft.value = '';
+  focusedRenameId = null;
 }
 
 async function commitRename(id: string) {
