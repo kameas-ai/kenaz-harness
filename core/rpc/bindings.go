@@ -128,14 +128,26 @@ func (b *Bindings) Sessions_StartStream(id string) (string, error) {
 func (b *Bindings) Sessions_StopStream(subID string) error {
 	return b.api.Sessions().StopStream(b.ctx(), subID)
 }
+func (b *Bindings) Sessions_ListMessages(id string) ([]sessions.Message, error) {
+	return b.api.Sessions().ListMessages(b.ctx(), id)
+}
+func (b *Bindings) Sessions_AppendMessage(id, role, content string) (sessions.Message, error) {
+	return b.api.Sessions().AppendMessage(b.ctx(), id, role, content)
+}
+func (b *Bindings) Sessions_SaveDraft(id, draft string) error {
+	return b.api.Sessions().SaveDraft(b.ctx(), id, draft)
+}
+func (b *Bindings) Sessions_LoadDraft(id string) (string, error) {
+	return b.api.Sessions().LoadDraft(b.ctx(), id)
+}
 
 // ── llm ────────────────────────────────────────────────────────────────
 
 func (b *Bindings) LLM_ListProviders() ([]llm.Provider, error) {
 	return b.api.LLMConnector().ListProviders(b.ctx())
 }
-func (b *Bindings) LLM_StartStream(id string) (string, error) {
-	return b.api.LLMConnector().StartStream(b.ctx(), id)
+func (b *Bindings) LLM_StartStream(profileID, sessionID string) (string, error) {
+	return b.api.LLMConnector().StartStream(b.ctx(), profileID, sessionID)
 }
 func (b *Bindings) LLM_StopStream(subID string) error {
 	return b.api.LLMConnector().StopStream(b.ctx(), subID)

@@ -30,6 +30,8 @@ import type {
   AppInfo,
   Settings,
   Theme,
+  Message,
+  MessageRole,
 } from './types';
 
 /**
@@ -54,9 +56,17 @@ interface WailsBindingsLike {
   Sessions_Reorder(ids: string[]): Promise<void>;
   Sessions_StartStream(id: string): Promise<string>;
   Sessions_StopStream(id: string): Promise<void>;
+  Sessions_ListMessages(id: string): Promise<Message[]>;
+  Sessions_AppendMessage(
+    id: string,
+    role: MessageRole,
+    content: string,
+  ): Promise<Message>;
+  Sessions_SaveDraft(id: string, draft: string): Promise<void>;
+  Sessions_LoadDraft(id: string): Promise<string>;
 
   LLM_ListProviders(): Promise<Provider[]>;
-  LLM_StartStream(id: string): Promise<string>;
+  LLM_StartStream(profileID: string, sessionID: string): Promise<string>;
   LLM_StopStream(id: string): Promise<void>;
 
   MCP_ListServers(): Promise<MCPServer[]>;
@@ -122,11 +132,37 @@ export interface SessionsClient {
   reorder(ids: string[]): Promise<void>;
   startStream(id: string): Promise<string>;
   stopStream(subscriptionId: string): Promise<void>;
+
+  /**
+   * listMessages returns the chat-message history for a session in
+   * append-order. Pagination lands when long-context replays do; for now
+   * the full transcript is returned.
+   */
+  listMessages(id: string): Promise<Message[]>;
+  /**
+   * appendMessage commits a single message to the session transcript and
+   * returns the canonical Message (with server-assigned id + createdAt).
+   * The Go side enforces redaction policy before persistence.
+   */
+  appendMessage(
+    id: string,
+    role: MessageRole,
+    content: string,
+  ): Promise<Message>;
+  /** Persist a draft input for the session (debounced caller). */
+  saveDraft(id: string, draft: string): Promise<void>;
+  /** Load the persisted draft (empty string if none). */
+  loadDraft(id: string): Promise<string>;
 }
 
 export interface LLMConnectorClient {
   listProviders(): Promise<Provider[]>;
-  startStream(id: string): Promise<string>;
+  /**
+   * startStream begins an assistant completion against `profileID` for
+   * `sessionID`. Returns the subscription id used by `stopStream` and as
+   * the correlation key on `llm:stream-chunk` events.
+   */
+  startStream(profileID: string, sessionID: string): Promise<string>;
   stopStream(id: string): Promise<void>;
 }
 
@@ -232,10 +268,16 @@ export function createHarnessClient(): HarnessClient {
       reorder: (ids) => b().Sessions_Reorder(ids),
       startStream: (id) => b().Sessions_StartStream(id),
       stopStream: (id) => b().Sessions_StopStream(id),
+      listMessages: (id) => b().Sessions_ListMessages(id),
+      appendMessage: (id, role, content) =>
+        b().Sessions_AppendMessage(id, role, content),
+      saveDraft: (id, draft) => b().Sessions_SaveDraft(id, draft),
+      loadDraft: (id) => b().Sessions_LoadDraft(id),
     },
     llm: {
       listProviders: () => b().LLM_ListProviders(),
-      startStream: (id) => b().LLM_StartStream(id),
+      startStream: (profileID, sessionID) =>
+        b().LLM_StartStream(profileID, sessionID),
       stopStream: (id) => b().LLM_StopStream(id),
     },
     mcp: {
@@ -334,6 +376,16 @@ export function createFakeHarnessClient(
       reorder: noop,
       startStream: async () => 'fake-sub',
       stopStream: noop,
+      listMessages: async () => [],
+      appendMessage: async (id, role, content) => ({
+        id: `fake-msg-${Math.random().toString(36).slice(2, 8)}`,
+        sessionId: id,
+        role,
+        content,
+        createdAt: new Date().toISOString(),
+      }),
+      saveDraft: noop,
+      loadDraft: async () => '',
     },
     llm: {
       listProviders: async () => [],

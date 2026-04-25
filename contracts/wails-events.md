@@ -28,6 +28,7 @@ broker is the sole gatekeeper.
 | `a2a:event`              | `a2a.CardEvent`             | `A2AEvent`                | 1 per source item  | until source closes       | source order preserved  | redacted                                  |
 | `a2a:stream-closed`      | `StreamClosedPayload`       | `StreamClosedPayload`     | 1 per close        | once                      | n/a                     | reason + message only                     |
 | `llm:event`              | `llm.ProviderEvent`         | `LLMEvent`                | 1 per source item  | until source closes       | source order preserved  | redacted; never carries credentials       |
+| `llm:stream-chunk`       | `llm.StreamChunk`           | `StreamChunk`             | 1 per token / tool delta | until `done` chunk      | strict per-stream order | content only; redactor strips tool args   |
 | `llm:stream-closed`      | `StreamClosedPayload`       | `StreamClosedPayload`     | 1 per close        | once                      | n/a                     | reason + message only                     |
 | `policy:event`           | `policy.DecisionEvent`      | `PolicyDecisionEvent`     | 1 per decision     | until source closes       | source order preserved  | clause + violating-input only             |
 | `policy:stream-closed`   | `StreamClosedPayload`       | `StreamClosedPayload`     | 1 per close        | once                      | n/a                     | reason + message only                     |

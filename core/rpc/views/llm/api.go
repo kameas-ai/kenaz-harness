@@ -15,8 +15,13 @@ type Provider struct {
 
 // LLMConnectorAPI is the view-scoped accessor for provider metadata and
 // streams. Implementations MUST be safe for concurrent use.
+//
+// StartStream takes a profile (provider) id and the session id the
+// completion is attached to. The chat-ui mission added the second arg
+// so per-token chunks can be correlated to the caller-side message
+// without smuggling state through the subscription id.
 type LLMConnectorAPI interface {
 	ListProviders(ctx context.Context) ([]Provider, error)
-	StartStream(ctx context.Context, providerID string) (subscriptionID string, err error)
+	StartStream(ctx context.Context, profileID, sessionID string) (subscriptionID string, err error)
 	StopStream(ctx context.Context, subscriptionID string) error
 }
