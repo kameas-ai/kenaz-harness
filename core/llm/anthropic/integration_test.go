@@ -30,6 +30,7 @@ import (
 
 	corellm "github.com/sigil-tech/kaneaz-harness/core/llm"
 	"github.com/sigil-tech/kaneaz-harness/core/llm/anthropic"
+	"github.com/sigil-tech/kaneaz-harness/core/llm/anthropic/smoke"
 	"github.com/sigil-tech/kaneaz-harness/core/llm/credref"
 	"github.com/sigil-tech/kaneaz-harness/core/llm/events"
 	llmregistry "github.com/sigil-tech/kaneaz-harness/core/llm/registry"
@@ -182,7 +183,7 @@ func TestSmokeAgainstLiveAPI(t *testing.T) {
 	if model == "" {
 		model = "claude-haiku-4-5"
 	}
-	resp, err := anthropic.Smoke(context.Background(), anthropic.SmokeConfig{
+	resp, err := smoke.Run(context.Background(), smoke.Config{
 		Model:     model,
 		EnvVar:    "ANTHROPIC_API_KEY",
 		Prompt:    "Reply with the single word: OK.",

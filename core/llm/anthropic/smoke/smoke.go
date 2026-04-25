@@ -1,4 +1,13 @@
-package anthropic
+// Package smoke is the runnable one-shot check the future CLI / chat
+// UI will use to validate an Anthropic (key, profile) pair end to end.
+//
+// This package lives in a sub-directory rather than inside core/llm/anthropic
+// because it imports core/llm/registry which already imports the
+// adapter — putting Smoke in the parent package would create an import
+// cycle. The seam is intentional: the adapter is the leaf provider
+// implementation; smoke wires the adapter through the full Registry
+// pipeline without leaking a registry import back into the leaf.
+package smoke
 
 import (
 	"context"
@@ -9,14 +18,15 @@ import (
 	"time"
 
 	corellm "github.com/sigil-tech/kaneaz-harness/core/llm"
+	"github.com/sigil-tech/kaneaz-harness/core/llm/anthropic"
 	"github.com/sigil-tech/kaneaz-harness/core/llm/credref"
 	llmregistry "github.com/sigil-tech/kaneaz-harness/core/llm/registry"
 	"github.com/sigil-tech/kaneaz-harness/core/secrets"
 )
 
-// SmokeConfig configures a one-shot live-API check. All fields are
-// optional except EnvVar (resolves the API key) and Prompt.
-type SmokeConfig struct {
+// Config configures a one-shot live-API check. All fields are optional
+// except Prompt and the API key referenced by EnvVar.
+type Config struct {
 	// Model is the Anthropic model id. Defaults to claude-haiku-4-5.
 	Model string
 	// EnvVar names the environment variable holding the API key.
@@ -33,31 +43,28 @@ type SmokeConfig struct {
 	Endpoint string
 }
 
-// SmokeResult carries the round-trip outcome.
-type SmokeResult struct {
+// Result carries the round-trip outcome.
+type Result struct {
 	Text         string
 	FinishReason string
 	Usage        corellm.Usage
 }
 
-// Smoke is a runnable one-shot check that resolves an API key from
-// env, registers the adapter against a fresh Registry, sends a single
-// user message, and returns the assembled text. It is the callable
-// the future CLI / chat UI will reuse to validate a new
-// (key, profile) pair without booting the full harness.
-//
-// The function is intentionally synchronous and returns Result rather
-// than streaming so a caller can wire it into a `harness probe llm`
-// CLI subcommand without any goroutine plumbing.
-func Smoke(ctx context.Context, cfg SmokeConfig) (SmokeResult, error) {
+// Run is the runnable one-shot check. It resolves an API key from env,
+// builds a fresh Registry, registers the adapter (with optional
+// endpoint override), sends a single user message, and returns the
+// assembled text. The function is intentionally synchronous so a CLI
+// subcommand like `harness probe llm` can wire it without goroutine
+// plumbing.
+func Run(ctx context.Context, cfg Config) (Result, error) {
 	if cfg.Prompt == "" {
-		return SmokeResult{}, errors.New("anthropic.Smoke: empty prompt")
+		return Result{}, errors.New("smoke: empty prompt")
 	}
 	if cfg.EnvVar == "" {
 		cfg.EnvVar = "ANTHROPIC_API_KEY"
 	}
 	if os.Getenv(cfg.EnvVar) == "" {
-		return SmokeResult{}, fmt.Errorf("anthropic.Smoke: %s not set", cfg.EnvVar)
+		return Result{}, fmt.Errorf("smoke: %s not set", cfg.EnvVar)
 	}
 	if cfg.Model == "" {
 		cfg.Model = "claude-haiku-4-5"
@@ -73,24 +80,22 @@ func Smoke(ctx context.Context, cfg SmokeConfig) (SmokeResult, error) {
 		Resolver: credref.New(secrets.NewMemoryBackend()),
 	})
 	if err != nil {
-		return SmokeResult{}, fmt.Errorf("anthropic.Smoke: registry: %w", err)
+		return Result{}, fmt.Errorf("smoke: registry: %w", err)
 	}
-	opts := []Option{}
 	if cfg.Endpoint != "" {
-		opts = append(opts, WithEndpoint(cfg.Endpoint))
+		// Override the auto-registered default adapter so the smoke
+		// run can target a staging endpoint without touching prod.
+		reg.RegisterAdapter(anthropic.New(anthropic.WithEndpoint(cfg.Endpoint)))
 	}
-	// Re-register so the smoke function can target a non-default endpoint
-	// even though registry.New auto-registered the default adapter.
-	reg.RegisterAdapter(New(opts...))
 
 	prof := corellm.ProviderProfile{
 		ID:    "smoke-anthropic",
-		Kind:  Kind,
+		Kind:  anthropic.Kind,
 		Model: cfg.Model,
 		Cred:  corellm.CredentialReference{Kind: "env", Locator: cfg.EnvVar},
 	}
 	if err := reg.LoadProfiles([]corellm.ProviderProfile{prof}); err != nil {
-		return SmokeResult{}, fmt.Errorf("anthropic.Smoke: load profile: %w", err)
+		return Result{}, fmt.Errorf("smoke: load profile: %w", err)
 	}
 
 	callCtx, cancel := context.WithTimeout(ctx, cfg.Timeout)
@@ -103,7 +108,7 @@ func Smoke(ctx context.Context, cfg SmokeConfig) (SmokeResult, error) {
 		Params: map[string]any{"max_tokens": cfg.MaxTokens},
 	})
 	if err != nil {
-		return SmokeResult{}, fmt.Errorf("anthropic.Smoke: stream: %w", err)
+		return Result{}, fmt.Errorf("smoke: stream: %w", err)
 	}
 
 	var b strings.Builder
@@ -114,9 +119,9 @@ func Smoke(ctx context.Context, cfg SmokeConfig) (SmokeResult, error) {
 	}
 	resp, err := stream.Final()
 	if err != nil {
-		return SmokeResult{}, fmt.Errorf("anthropic.Smoke: final: %w", err)
+		return Result{}, fmt.Errorf("smoke: final: %w", err)
 	}
-	return SmokeResult{
+	return Result{
 		Text:         b.String(),
 		FinishReason: resp.FinishReason,
 		Usage:        resp.Usage,
