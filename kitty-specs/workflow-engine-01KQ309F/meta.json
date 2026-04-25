@@ -1,0 +1,10 @@
+{
+  "created_at": "2026-04-25T19:01:33.345020+00:00",
+  "friendly_name": "workflow engine",
+  "mission_id": "01KQ309FYXE9F023ZCFX1NBWC1",
+  "mission_number": null,
+  "mission_slug": "workflow-engine-01KQ309F",
+  "mission_type": "software-dev",
+  "slug": "workflow-engine-01KQ309F",
+  "target_branch": "main"
+}
