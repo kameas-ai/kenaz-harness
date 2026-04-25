@@ -143,7 +143,20 @@ export function useSessions(): UseSessionsResult {
   }
 
   async function remove(id: string) {
-    await client.sessions.delete(id);
+    try {
+      await client.sessions.delete(id);
+    } catch (err) {
+      // Self-heal: if the backend says the row already doesn't exist,
+      // the rail's view is stale — silently accept and let refresh()
+      // sync the UI to reality. Re-throw any other error so the caller
+      // can surface it.
+      const msg = err instanceof Error ? err.message : String(err);
+      const looksLikeNotFound = /not found|notfound|no such/i.test(msg);
+      if (!looksLikeNotFound) {
+        await refresh();
+        throw err;
+      }
+    }
     await refresh();
   }
 

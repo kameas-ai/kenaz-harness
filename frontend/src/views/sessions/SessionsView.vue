@@ -50,10 +50,32 @@ void (async () => {
   }
 })();
 
+// Kinds the backend currently has a working stream adapter for.
+// Adding others (openai, bedrock, …) is a per-kind mission; until then
+// the chat surface picks the first provider whose kind we know works,
+// rather than blindly using providers[0] and hitting "no adapter for
+// kind X" on send.
+const SUPPORTED_KINDS = new Set(['anthropic']);
+
 const activeProvider = computed<Provider | null>(() => {
   if (providers.value.length === 0) return null;
-  return providers.value[0];
+  // Provider rows don't carry the kind directly today — Source is
+  // "bundle"|"personal" and the kind lives in the id prefix from the
+  // AddProvider flow (e.g. `anthropic-claude-sonnet-4-5`). Use that
+  // prefix as a heuristic until the rpc surface returns kind explicitly.
+  const supported = providers.value.find((p) =>
+    [...SUPPORTED_KINDS].some((k) => p.id.startsWith(`${k}-`)),
+  );
+  return supported ?? providers.value[0];
 });
+
+// True when we'd be sending to a provider whose kind has no adapter
+// — used to disable the input + show a clearer message.
+const activeProviderUnsupported = computed(
+  () =>
+    !!activeProvider.value &&
+    ![...SUPPORTED_KINDS].some((k) => activeProvider.value!.id.startsWith(`${k}-`)),
+);
 
 const sessionTitle = computed(() => session.session.value?.name ?? 'Sessions');
 const sessionSubtitle = computed(() => {
@@ -124,6 +146,27 @@ function gotoProviders() {
         </button>
       </div>
 
+      <div
+        v-else-if="activeProviderUnsupported && hasSession"
+        class="mx-6 my-3 rounded-md border border-signal-warn bg-surface-1 px-4 py-3 font-ui text-[12px]"
+        role="status"
+      >
+        <div class="text-signal-warn uppercase tracking-[0.18em] text-[11px]">
+          Provider not yet supported
+        </div>
+        <p class="mt-1 text-ink">
+          Streaming for this provider's kind isn't wired in this build.
+          Add an Anthropic provider to start chatting today.
+        </p>
+        <button
+          type="button"
+          class="mt-2 px-3 py-1 rounded-md border border-accent text-accent text-[11px] uppercase tracking-[0.18em] hover:bg-surface-2"
+          @click="gotoProviders"
+        >
+          Configure providers
+        </button>
+      </div>
+
       <!-- empty session state -->
       <div
         v-if="!hasSession"
@@ -152,7 +195,11 @@ function gotoProviders() {
         <ChatInput
           v-model="session.draft.value"
           :streaming="isStreaming"
-          :disabled="!activeProvider || session.loading.value"
+          :disabled="
+            !activeProvider ||
+            activeProviderUnsupported ||
+            session.loading.value
+          "
           :estimate="{ tokens: 0, usd: 0 }"
           @send="onSend"
           @cancel="onCancel"
