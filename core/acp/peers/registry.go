@@ -137,7 +137,7 @@ func (r *Registry) PreflightAll(ctx context.Context) []acp.PreflightResult {
 			out = append(out, acp.PreflightResult{PeerID: p.PeerID, Success: true})
 			continue
 		}
-		refKind := string(p.AuthRef.Kind)
+		refKind := p.AuthRef.Kind.String()
 		r.emitter.PeerAuthAttempted(ctx, "", p.PeerID, refKind)
 		if r.secrets == nil {
 			err := acp.ErrCredentialResolution

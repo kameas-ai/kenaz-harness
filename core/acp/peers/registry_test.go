@@ -109,19 +109,19 @@ func (r *recordingEmitter) CardCacheMiss(_ context.Context, _, peerID, _, _, _ s
 
 func TestPreflightAllSuccessAndFailure(t *testing.T) {
 	t.Parallel()
-	backend := secrets.NewStaticBackend(map[string][]byte{
-		"keychain://kaneaz/peer-a": []byte("secret-a"),
+	backend := newStaticBackend(map[string][]byte{
+		"keychain|kaneaz/peer-a": []byte("secret-a"),
 	})
 	em := &recordingEmitter{}
 	r := NewRegistry(backend, em)
 	profiles := []acp.PeerProfile{
 		{
 			PeerID: "peer-a", Transport: acp.TransportLoopback, CardSource: acp.CardSourceWellKnown,
-			AuthRef: &secrets.Reference{Kind: secrets.KindKeychain, Lookup: "kaneaz/peer-a"},
+			AuthRef: &secrets.Reference{Kind: secrets.RefKeychain, Locator: "kaneaz/peer-a"},
 		},
 		{
 			PeerID: "peer-b", Transport: acp.TransportLoopback, CardSource: acp.CardSourceWellKnown,
-			AuthRef: &secrets.Reference{Kind: secrets.KindKeychain, Lookup: "kaneaz/missing"},
+			AuthRef: &secrets.Reference{Kind: secrets.RefKeychain, Locator: "kaneaz/missing"},
 		},
 		{
 			// No AuthRef — preflight reports success.
@@ -163,7 +163,7 @@ func TestPreflightAllNoBackend(t *testing.T) {
 	r := NewRegistry(nil, em)
 	if err := r.Load([]acp.PeerProfile{{
 		PeerID: "p", Transport: acp.TransportLoopback, CardSource: acp.CardSourceWellKnown,
-		AuthRef: &secrets.Reference{Kind: secrets.KindEnv, Lookup: "PEER_KEY"},
+		AuthRef: &secrets.Reference{Kind: secrets.RefEnv, Locator: "PEER_KEY"},
 	}}); err != nil {
 		t.Fatal(err)
 	}
