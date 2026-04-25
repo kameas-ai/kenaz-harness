@@ -41,6 +41,29 @@ const KINDS: { id: ProviderKind; label: string }[] = [
   { id: 'ollama', label: 'Ollama (local)' },
 ];
 
+// AWS Bedrock regions where Bedrock is generally available. Source:
+// https://docs.aws.amazon.com/bedrock/latest/userguide/bedrock-regions.html
+// Sorted by US → EU → APAC → other so the picker reads naturally.
+const BEDROCK_REGIONS: { id: string; label: string }[] = [
+  { id: 'us-east-1', label: 'US East (N. Virginia) — us-east-1' },
+  { id: 'us-east-2', label: 'US East (Ohio) — us-east-2' },
+  { id: 'us-west-2', label: 'US West (Oregon) — us-west-2' },
+  { id: 'ca-central-1', label: 'Canada (Central) — ca-central-1' },
+  { id: 'sa-east-1', label: 'South America (São Paulo) — sa-east-1' },
+  { id: 'eu-central-1', label: 'Europe (Frankfurt) — eu-central-1' },
+  { id: 'eu-west-1', label: 'Europe (Ireland) — eu-west-1' },
+  { id: 'eu-west-2', label: 'Europe (London) — eu-west-2' },
+  { id: 'eu-west-3', label: 'Europe (Paris) — eu-west-3' },
+  { id: 'eu-north-1', label: 'Europe (Stockholm) — eu-north-1' },
+  { id: 'eu-south-1', label: 'Europe (Milan) — eu-south-1' },
+  { id: 'ap-northeast-1', label: 'Asia Pacific (Tokyo) — ap-northeast-1' },
+  { id: 'ap-northeast-2', label: 'Asia Pacific (Seoul) — ap-northeast-2' },
+  { id: 'ap-northeast-3', label: 'Asia Pacific (Osaka) — ap-northeast-3' },
+  { id: 'ap-south-1', label: 'Asia Pacific (Mumbai) — ap-south-1' },
+  { id: 'ap-southeast-1', label: 'Asia Pacific (Singapore) — ap-southeast-1' },
+  { id: 'ap-southeast-2', label: 'Asia Pacific (Sydney) — ap-southeast-2' },
+];
+
 interface FormState {
   kind: ProviderKind;
   apiKey: string;
@@ -53,7 +76,7 @@ interface FormState {
 const form = reactive<FormState>({
   kind: 'anthropic',
   apiKey: '',
-  region: '',
+  region: 'us-east-1',
   modelId: '',
   manualModelId: '',
   customId: '',
@@ -261,13 +284,16 @@ defineExpose({ form, validation, isValid });
       >
         Region
       </label>
-      <input
+      <select
         id="prov-region"
         v-model="form.region"
         class="mt-1 w-full rounded-sm border border-border-muted bg-surface-1 px-2.5 py-1.5 text-sm text-ink focus:border-accent focus:outline-none"
-        autocomplete="off"
         :data-testid="'add-provider-region'"
-      />
+      >
+        <option v-for="r in BEDROCK_REGIONS" :key="r.id" :value="r.id">
+          {{ r.label }}
+        </option>
+      </select>
       <p v-if="validation.region" class="mt-1 text-xs text-signal-danger">
         {{ validation.region }}
       </p>
