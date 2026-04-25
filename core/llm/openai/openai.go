@@ -1,0 +1,626 @@
+// Package openai is the OpenAI Chat Completions streaming adapter.
+//
+// The adapter speaks the public Chat Completions API (POST
+// /v1/chat/completions, server-sent events) and the public /v1/models
+// endpoint. It mirrors the structure of the anthropic adapter:
+//
+//   - stdlib net/http for transport (no SDK dependency)
+//   - manual SSE parser
+//   - typed error classification per the connector taxonomy
+//   - llm.ProviderAdapter + llm.ModelLister implementation
+//
+// Authentication is a Bearer token carried in the Authorization header.
+// Plaintext credential bytes never leave the adapter and never enter
+// log payloads.
+package openai
+
+import (
+	"bufio"
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"sort"
+	"strings"
+	"sync"
+
+	llm "github.com/sigil-tech/kaneaz-harness/core/llm"
+	"github.com/sigil-tech/kaneaz-harness/core/llm/capabilities"
+)
+
+// Kind is the canonical provider kind for the OpenAI adapter. It must
+// match the ProviderProfile.Kind value used in profile manifests and
+// the capability catalog filename (core/llm/capabilities/data/openai.yaml).
+const Kind = "openai"
+
+// Default endpoints. Operators can override the chat endpoint via
+// ProviderProfile.Endpoint. Tests inject both via WithEndpoint to
+// route through httptest.Server.
+const (
+	defaultChatEndpoint   = "https://api.openai.com/v1/chat/completions"
+	defaultModelsEndpoint = "https://api.openai.com/v1/models"
+)
+
+// Option configures an Adapter at construction time.
+type Option func(*Adapter)
+
+// WithHTTPClient sets the underlying HTTP client. The client should
+// have NO request-level timeout — the adapter relies on context
+// cancellation so a long-running stream is not killed mid-flight.
+func WithHTTPClient(c *http.Client) Option {
+	return func(a *Adapter) {
+		if c != nil {
+			a.httpc = c
+		}
+	}
+}
+
+// WithEndpoint overrides the chat completions URL. Useful for fixtures
+// served from httptest and self-hosted gateways. The models URL is
+// derived from the chat URL by replacing the trailing
+// "/chat/completions" with "/models".
+func WithEndpoint(u string) Option {
+	return func(a *Adapter) {
+		if u != "" {
+			a.endpoint = u
+		}
+	}
+}
+
+// WithCatalog overrides the capability catalog. Tests that need bespoke
+// advertised capabilities inject a fixture catalog here.
+func WithCatalog(cat *capabilities.Catalog) Option {
+	return func(a *Adapter) {
+		if cat != nil {
+			a.cat = cat
+		}
+	}
+}
+
+// Adapter is the OpenAI ProviderAdapter implementation.
+type Adapter struct {
+	httpc    *http.Client
+	endpoint string
+	cat      *capabilities.Catalog
+}
+
+// New constructs an Adapter. Failures are limited to the embedded
+// capability catalog load which is generally a programming error
+// (corrupt embed). On catalog failure the adapter falls back to a nil
+// catalog and Capabilities() returns an inline conservative descriptor.
+func New(opts ...Option) *Adapter {
+	a := &Adapter{
+		httpc:    &http.Client{}, // no Timeout — context drives lifetime
+		endpoint: defaultChatEndpoint,
+	}
+	if cat, err := capabilities.LoadDefault(); err == nil {
+		a.cat = cat
+	}
+	for _, opt := range opts {
+		opt(a)
+	}
+	return a
+}
+
+// Kind returns the canonical provider kind ("openai").
+func (a *Adapter) Kind() string { return Kind }
+
+// Capabilities reports the (provider, model) descriptor.
+//
+// When a capability catalog is loaded, descriptors come from
+// capabilities/data/openai.yaml (the canonical source). When the
+// catalog is unavailable, an inline conservative descriptor is
+// returned: streaming + tool_calling + usage_reporting on for all
+// chat models, and vision is enabled for the GPT-4o / GPT-4-vision /
+// GPT-4-turbo / GPT-4.1 families that ship multimodal support.
+func (a *Adapter) Capabilities(model string) llm.CapabilityDescriptor {
+	if a.cat != nil {
+		return a.cat.Describe(Kind, model)
+	}
+	supported := map[llm.Capability]bool{
+		llm.CapStreaming:      true,
+		llm.CapToolCalling:    true,
+		llm.CapUsageReporting: true,
+	}
+	if isVisionFamily(model) {
+		supported[llm.CapVision] = true
+	}
+	return llm.CapabilityDescriptor{
+		Provider:  Kind,
+		Model:     model,
+		Supported: supported,
+		Notes: map[llm.Capability]string{
+			llm.CapStreaming: "catalog_unavailable",
+		},
+	}
+}
+
+// isVisionFamily reports whether model belongs to a known vision-
+// capable OpenAI family. The list intentionally over-approximates:
+// gating logic in the registry's CapabilityGate ultimately defers to
+// the YAML catalog for authoritative answers.
+func isVisionFamily(model string) bool {
+	m := strings.ToLower(model)
+	for _, prefix := range []string{"gpt-4o", "gpt-4-vision", "gpt-4-turbo", "gpt-4.1"} {
+		if strings.HasPrefix(m, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+// Compile-time assertion: *Adapter satisfies llm.ProviderAdapter.
+var _ llm.ProviderAdapter = (*Adapter)(nil)
+
+// Stream opens an SSE connection to the Chat Completions API and
+// returns a llm.Stream that pumps StreamEvent values to the caller.
+//
+// Lifetime / cancellation contract:
+//   - The HTTP request is created with a derived ctx so that ctx.Done()
+//     severs the connection.
+//   - The returned Stream additionally exposes Cancel() which cancels
+//     the per-call context and closes the response Body.
+//   - cred is the resolved Bearer-token bytes; the adapter uses them
+//     only to set the Authorization header and never logs them.
+func (a *Adapter) Stream(ctx context.Context, req llm.GenerationRequest, prof llm.ProviderProfile, cred []byte) (llm.Stream, error) {
+	if len(cred) == 0 {
+		return nil, &llm.ErrAuth{Status: 0, Message: "openai: empty credential"}
+	}
+
+	body, err := buildRequestBody(req, prof)
+	if err != nil {
+		return nil, &llm.ErrInvalidRequest{Status: 0, Message: err.Error()}
+	}
+
+	endpoint := a.endpoint
+	if prof.Endpoint != "" {
+		endpoint = prof.Endpoint
+	}
+
+	// Per-call cancellation handle: req.WithContext threads ctx into
+	// the transport, but Cancel() must work even after ctx scope ends.
+	streamCtx, cancel := context.WithCancel(context.Background())
+	go func() {
+		select {
+		case <-ctx.Done():
+			cancel()
+		case <-streamCtx.Done():
+		}
+	}()
+
+	httpReq, err := http.NewRequestWithContext(streamCtx, http.MethodPost, endpoint, bytes.NewReader(body))
+	if err != nil {
+		cancel()
+		return nil, &llm.ErrInvalidRequest{Status: 0, Message: err.Error()}
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Accept", "text/event-stream")
+	// OpenAI uses Bearer-token auth. The cred slice carries the API
+	// key bytes; we cross the bytes-to-string boundary exactly once,
+	// inline with the header. The registry zeroizes its private copy
+	// of cred on Final()/Cancel().
+	httpReq.Header.Set("Authorization", "Bearer "+string(cred))
+
+	resp, err := a.httpc.Do(httpReq)
+	if err != nil {
+		cancel()
+		// Network failures are transient by default — connection
+		// reset, DNS hiccup, dialer timeout. The retry middleware
+		// decides whether to retry given the configured budget.
+		return nil, &llm.ErrTransient{Status: 0, Message: err.Error(), Cause: err}
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		bodySnippet, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		_ = resp.Body.Close()
+		cancel()
+		return nil, classifyStatus(resp.StatusCode, bodySnippet)
+	}
+
+	s := &chatStream{
+		resp:   resp,
+		cancel: cancel,
+		events: make(chan llm.StreamEvent, 16),
+		done:   make(chan struct{}),
+	}
+	go s.pump()
+	return s, nil
+}
+
+// classifyStatus maps an HTTP error response to the connector taxonomy.
+//
+// OpenAI returns errors as JSON envelopes:
+//
+//	{"error": {"message": "...", "type": "...", "code": "..."}}
+//
+// The classification is by HTTP status, not by error type field —
+// only status guarantees retryability semantics. The body is included
+// in the typed error message verbatim (capped) for debugging.
+func classifyStatus(status int, body []byte) error {
+	msg := extractErrorMessage(body)
+	if msg == "" {
+		msg = http.StatusText(status)
+	}
+	switch {
+	case status == 401 || status == 403:
+		return &llm.ErrAuth{Status: status, Message: msg}
+	case status == 429:
+		return &llm.ErrTransient{Status: status, Message: msg}
+	case status >= 500 && status < 600:
+		return &llm.ErrTransient{Status: status, Message: msg}
+	case status == 408 || status == 425:
+		return &llm.ErrTransient{Status: status, Message: msg}
+	default:
+		// 400 / 404 / 422 and friends: non-retryable client errors.
+		return &llm.ErrInvalidRequest{Status: status, Message: msg}
+	}
+}
+
+// extractErrorMessage best-effort parses an OpenAI error envelope.
+func extractErrorMessage(body []byte) string {
+	if len(body) == 0 {
+		return ""
+	}
+	var env struct {
+		Error struct {
+			Message string `json:"message"`
+			Type    string `json:"type"`
+			Code    string `json:"code"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(body, &env); err == nil {
+		if env.Error.Message != "" {
+			if env.Error.Type != "" {
+				return env.Error.Type + ": " + env.Error.Message
+			}
+			return env.Error.Message
+		}
+	}
+	s := strings.TrimSpace(string(body))
+	if len(s) > 200 {
+		s = s[:200] + "…"
+	}
+	return s
+}
+
+// buildRequestBody constructs the JSON body for the Chat Completions
+// API. The connector's polymorphic ContentParts are flattened into
+// OpenAI's simpler {role, content: "string"} message shape — multi-
+// part messages join their text parts with newline separators. Vision
+// inputs and tool blocks are out of scope for the v1 adapter (the
+// CapabilityGate rejects requests that opt into them on this provider).
+func buildRequestBody(req llm.GenerationRequest, prof llm.ProviderProfile) ([]byte, error) {
+	out := map[string]any{
+		"model":          prof.Model,
+		"stream":         true,
+		"stream_options": map[string]any{"include_usage": true},
+	}
+
+	// Optional sampling knobs surfaced through Params / profile defaults.
+	for _, key := range []string{"temperature", "top_p", "max_tokens", "presence_penalty", "frequency_penalty"} {
+		if v, ok := req.Params[key]; ok {
+			out[key] = v
+		} else if v, ok := prof.Defaults[key]; ok {
+			out[key] = v
+		}
+	}
+
+	msgs := make([]map[string]any, 0, len(req.Messages)+1)
+	if req.System != "" {
+		msgs = append(msgs, map[string]any{
+			"role":    "system",
+			"content": req.System,
+		})
+	}
+	for _, m := range req.Messages {
+		role := string(m.Role)
+		if role == "" {
+			role = string(llm.RoleUser)
+		}
+		// Tool messages get the OpenAI-canonical role name. For v1
+		// we don't carry tool_call_id because the connector's
+		// ContentPart shape doesn't surface it; the gate rejects
+		// tool requests for the OpenAI adapter for now.
+		content := flattenText(m.Content)
+		entry := map[string]any{
+			"role":    role,
+			"content": content,
+		}
+		msgs = append(msgs, entry)
+	}
+	out["messages"] = msgs
+
+	return json.Marshal(out)
+}
+
+// flattenText concatenates the text fragments of parts into a single
+// string. Non-text parts are ignored (the adapter advertises only
+// text capability without a catalog override). An empty content slice
+// produces "" — OpenAI tolerates empty strings in user/assistant
+// messages but the gate-level path rarely produces this.
+func flattenText(parts []llm.ContentPart) string {
+	var b strings.Builder
+	for _, p := range parts {
+		switch p.Type {
+		case "", "text":
+			if p.Text != "" {
+				if b.Len() > 0 {
+					b.WriteByte('\n')
+				}
+				b.WriteString(p.Text)
+			}
+		default:
+			// Future: vision parts, tool_use, tool_result. Not in v1.
+			if p.Text != "" {
+				if b.Len() > 0 {
+					b.WriteByte('\n')
+				}
+				b.WriteString(p.Text)
+			}
+		}
+	}
+	return b.String()
+}
+
+// chatStream is the SSE consumer. It owns the http.Response body and
+// the cancellation handle. Pump runs in a goroutine; events are
+// exposed via Events().
+type chatStream struct {
+	resp   *http.Response
+	cancel context.CancelFunc
+	events chan llm.StreamEvent
+	done   chan struct{}
+
+	mu        sync.Mutex
+	final     llm.Response
+	finalErr  error
+	cancelled bool
+
+	textBuf    strings.Builder
+	usage      llm.Usage
+	finishStop string
+}
+
+// Events returns the channel of streaming chunks.
+func (s *chatStream) Events() <-chan llm.StreamEvent { return s.events }
+
+// Cancel terminates the upstream connection. Safe to call repeatedly
+// and from any goroutine.
+func (s *chatStream) Cancel() error {
+	s.mu.Lock()
+	if !s.cancelled {
+		s.cancelled = true
+	}
+	s.mu.Unlock()
+	s.cancel()
+	if s.resp != nil && s.resp.Body != nil {
+		_ = s.resp.Body.Close()
+	}
+	return nil
+}
+
+// Final blocks until the pump finishes and returns the accumulated
+// Response. After Cancel, Final returns ErrCancelled.
+func (s *chatStream) Final() (llm.Response, error) {
+	<-s.done
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.cancelled && s.finalErr == nil {
+		return llm.Response{}, &llm.ErrCancelled{Reason: "stop"}
+	}
+	return s.final, s.finalErr
+}
+
+// pump reads SSE frames, translates them into StreamEvents, and
+// terminates by closing s.events and s.done.
+//
+// OpenAI's SSE protocol:
+//
+//	data: {"choices":[{"delta":{"content":"Hello"},"finish_reason":null}]}
+//	data: {"choices":[{"delta":{"content":" world"},"finish_reason":null}]}
+//	data: {"choices":[{"delta":{},"finish_reason":"stop"}]}
+//	data: {"choices":[],"usage":{"prompt_tokens":5,"completion_tokens":2,"total_tokens":7}}
+//	data: [DONE]
+//
+// The terminal [DONE] sentinel closes the stream cleanly. A usage
+// frame may arrive immediately before [DONE] when the request opted
+// into stream_options.include_usage=true (we always do).
+func (s *chatStream) pump() {
+	defer func() {
+		_ = s.resp.Body.Close()
+		close(s.events)
+		s.cancel()
+		// Build final Response from accumulators.
+		s.mu.Lock()
+		if s.finalErr == nil && !s.cancelled {
+			s.final = llm.Response{
+				Content:      []llm.ContentPart{{Type: "text", Text: s.textBuf.String()}},
+				FinishReason: s.finishStop,
+				Usage:        s.usage,
+			}
+		}
+		s.mu.Unlock()
+		close(s.done)
+	}()
+
+	scanner := bufio.NewScanner(s.resp.Body)
+	// 1 MiB max line — defensive headroom for unusually large frames
+	// (e.g. JSON-mode responses with embedded blobs).
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+
+	for scanner.Scan() {
+		line := scanner.Text()
+		if line == "" {
+			continue
+		}
+		if strings.HasPrefix(line, ":") {
+			// Comment / keepalive (": OPENAI PROCESSING").
+			continue
+		}
+		if !strings.HasPrefix(line, "data:") {
+			// Ignore unknown SSE fields for forward-compat.
+			continue
+		}
+		payload := strings.TrimPrefix(line, "data:")
+		payload = strings.TrimSpace(payload)
+		if payload == "" {
+			continue
+		}
+		if payload == "[DONE]" {
+			return
+		}
+		s.handleFrame([]byte(payload))
+	}
+	if err := scanner.Err(); err != nil {
+		s.mu.Lock()
+		switch {
+		case s.cancelled:
+			// Caller-driven cancel — keep finalErr nil so Final
+			// returns ErrCancelled.
+		case errors.Is(err, context.Canceled):
+			s.finalErr = &llm.ErrCancelled{Reason: "context"}
+		default:
+			s.finalErr = &llm.ErrTransient{Message: "openai: stream read: " + err.Error(), Cause: err}
+		}
+		s.mu.Unlock()
+		select {
+		case s.events <- llm.StreamEvent{Kind: llm.StreamError, Err: err.Error()}:
+		default:
+		}
+	}
+}
+
+// handleFrame parses one SSE data payload and emits the corresponding
+// StreamEvents.
+func (s *chatStream) handleFrame(raw []byte) {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 {
+		return
+	}
+	var env struct {
+		Choices []struct {
+			Index int `json:"index"`
+			Delta struct {
+				Role    string `json:"role"`
+				Content string `json:"content"`
+			} `json:"delta"`
+			FinishReason *string `json:"finish_reason"`
+		} `json:"choices"`
+		Usage *struct {
+			PromptTokens     int `json:"prompt_tokens"`
+			CompletionTokens int `json:"completion_tokens"`
+			TotalTokens      int `json:"total_tokens"`
+		} `json:"usage"`
+	}
+	if err := json.Unmarshal(trimmed, &env); err != nil {
+		s.events <- llm.StreamEvent{Kind: llm.StreamError, Err: "openai: malformed SSE frame: " + err.Error()}
+		return
+	}
+
+	for _, ch := range env.Choices {
+		if ch.Delta.Content != "" {
+			s.mu.Lock()
+			s.textBuf.WriteString(ch.Delta.Content)
+			s.mu.Unlock()
+			s.events <- llm.StreamEvent{Kind: llm.StreamText, Text: ch.Delta.Content, Raw: trimmed}
+		}
+		if ch.FinishReason != nil && *ch.FinishReason != "" {
+			s.mu.Lock()
+			s.finishStop = *ch.FinishReason
+			s.mu.Unlock()
+			s.events <- llm.StreamEvent{Kind: llm.StreamFinish, Finish: *ch.FinishReason}
+		}
+	}
+	if env.Usage != nil {
+		s.mu.Lock()
+		s.usage.InputTokens = env.Usage.PromptTokens
+		s.usage.OutputTokens = env.Usage.CompletionTokens
+		usage := s.usage
+		s.mu.Unlock()
+		s.events <- llm.StreamEvent{Kind: llm.StreamUsage, Usage: &usage}
+	}
+}
+
+// ListModels implements llm.ModelLister. It calls OpenAI's /v1/models
+// endpoint with the supplied API key and returns a filtered+sorted
+// list of chat-capable model entries.
+//
+// The endpoint URL is derived from the adapter's configured chat URL
+// by replacing the trailing "/chat/completions" with "/models" so a
+// custom endpoint (httptest fixture, self-hosted gateway) is honoured.
+func (a *Adapter) ListModels(ctx context.Context, cred []byte) ([]llm.ModelInfo, error) {
+	if len(cred) == 0 {
+		return nil, errors.New("openai: empty credential")
+	}
+	url := modelsURL(a.endpoint)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("openai: build models request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+string(cred))
+	req.Header.Set("Accept", "application/json")
+	resp, err := a.httpc.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("openai: list models: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode/100 != 2 {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return nil, classifyStatus(resp.StatusCode, body)
+	}
+	var doc modelsResponse
+	if err := json.NewDecoder(resp.Body).Decode(&doc); err != nil {
+		return nil, fmt.Errorf("openai: parse models response: %w", err)
+	}
+	out := make([]llm.ModelInfo, 0, len(doc.Data))
+	for _, m := range doc.Data {
+		if !isChatCapable(m.ID) {
+			continue
+		}
+		out = append(out, llm.ModelInfo{
+			ID:          m.ID,
+			DisplayName: m.ID,
+		})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out, nil
+}
+
+// modelsResponse mirrors the JSON shape OpenAI returns from /v1/models.
+type modelsResponse struct {
+	Data []struct {
+		ID     string `json:"id"`
+		Object string `json:"object"`
+	} `json:"data"`
+}
+
+// modelsURL derives the /models URL from the configured chat URL.
+// Production: ".../v1/chat/completions" → ".../v1/models". Custom
+// endpoints that don't end in "/chat/completions" get "/models"
+// appended (or, if the URL already ends in "/models", returned as-is).
+func modelsURL(chatURL string) string {
+	if strings.HasSuffix(chatURL, "/chat/completions") {
+		return strings.TrimSuffix(chatURL, "/chat/completions") + "/models"
+	}
+	if strings.HasSuffix(chatURL, "/models") {
+		return chatURL
+	}
+	return strings.TrimRight(chatURL, "/") + "/models"
+}
+
+// isChatCapable filters out non-chat model IDs returned by /v1/models.
+// OpenAI's catalog includes audio, embedding, image, and moderation
+// models that are not addressable through Chat Completions; surfacing
+// them in the AddProvider model picker would be confusing.
+func isChatCapable(id string) bool {
+	lower := strings.ToLower(id)
+	for _, needle := range []string{"whisper", "tts", "dall-e", "embedding", "moderation", "audio"} {
+		if strings.Contains(lower, needle) {
+			return false
+		}
+	}
+	return true
+}

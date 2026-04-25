@@ -23,6 +23,8 @@ import (
 	"github.com/sigil-tech/kaneaz-harness/core/llm/capabilities"
 	"github.com/sigil-tech/kaneaz-harness/core/llm/credref"
 	"github.com/sigil-tech/kaneaz-harness/core/llm/events"
+	"github.com/sigil-tech/kaneaz-harness/core/llm/openai"
+	"github.com/sigil-tech/kaneaz-harness/core/llm/openrouter"
 	"github.com/sigil-tech/kaneaz-harness/core/llm/retry"
 )
 
@@ -98,6 +100,8 @@ func New(opts Options) (*Registry, error) {
 	// model without additional wiring (FR-018 / C-005).
 	r.adapters[anthropic.Kind] = anthropic.New()
 	r.adapters[bedrock.Kind] = bedrock.New()
+	r.adapters[openai.Kind] = openai.New()
+	r.adapters[openrouter.Kind] = openrouter.New()
 	return r, nil
 }
 
