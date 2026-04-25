@@ -32,6 +32,7 @@ import (
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/workflow"
 	"github.com/sigil-tech/kaneaz-harness/core/secrets"
 	secretsref "github.com/sigil-tech/kaneaz-harness/core/secrets/ref"
+	"github.com/zalando/go-keyring"
 )
 
 // HarnessAPI is the boundary between the Wails-hosted Vue frontend and
@@ -238,7 +239,7 @@ func newLLMStack(c *core.Core, broker *StreamBroker) llm.LLMConnectorAPI {
 		Registry: reg,
 		Sink:     &streamSinkAdapter{broker: broker},
 		Store:    store,
-		Keychain: &memoryKeychainWriter{backend: secretsBackend},
+		Keychain: &keychainWriter{backend: secretsBackend},
 		Prober:   &registryProber{reg: reg, creds: credResolver},
 	})
 }
@@ -294,24 +295,40 @@ func (p *registryProber) Probe(ctx context.Context, profile corellm.ProviderProf
 	}
 }
 
-// memoryKeychainWriter implements llm.KeychainWriter against a shared
-// *secrets.MemoryBackend so plaintext keys staged by AddProvider are
-// resolvable by the credref pipeline at stream time. The proper
-// OS-keychain backend (zalando/go-keyring + go-piv) is a follow-up
-// mission; this seam keeps the AddProvider flow end-to-end functional
-// without persisting credentials to disk.
-type memoryKeychainWriter struct {
+// keychainWriter implements llm.KeychainWriter by storing the
+// plaintext in the OS keychain (zalando/go-keyring routes to macOS
+// Keychain, Windows Credential Manager, or libsecret on Linux) AND
+// in the shared in-memory backend so the credref resolver can read
+// it without an OS-keychain round-trip mid-session.
+//
+// Persistence: the OS-keychain copy survives Wails restarts, which
+// is what users expect from the "API key" flow. The in-memory copy
+// is a hot cache — Resolve checks it after the keychain miss path.
+type keychainWriter struct {
 	backend *secrets.MemoryBackend
 }
 
-// Write stores plaintext under "keychain|<locator>" and zeroes the
-// supplied buffer. The backend dups internally so cleared input does
-// not affect the stored copy.
-func (w *memoryKeychainWriter) Write(_ context.Context, locator string, plaintext []byte) error {
-	if w == nil || w.backend == nil {
+// keyringService matches secrets.MemoryBackend's namespace so reads
+// via Resolve(RefKeychain) find the entry written here.
+const keyringService = "kaneaz-harness"
+
+// Write stores plaintext in the OS keychain under the harness's
+// service namespace, mirrors it to the in-memory backend, and zeroes
+// the supplied buffer.
+func (w *keychainWriter) Write(_ context.Context, locator string, plaintext []byte) error {
+	if w == nil {
 		return nil
 	}
-	w.backend.SetEntry(secretsref.RefKeychain, locator, plaintext)
+	if err := keyring.Set(keyringService, locator, string(plaintext)); err != nil {
+		// Don't hard-fail — fall through to the in-memory cache so
+		// the user can still chat in the current session even if the
+		// OS keychain backend is unavailable (CI / sandbox / Linux
+		// without libsecret).
+		_ = err
+	}
+	if w.backend != nil {
+		w.backend.SetEntry(secretsref.RefKeychain, locator, plaintext)
+	}
 	for i := range plaintext {
 		plaintext[i] = 0
 	}

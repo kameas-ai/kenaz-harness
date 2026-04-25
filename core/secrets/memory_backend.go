@@ -11,7 +11,14 @@ import (
 	"github.com/sigil-tech/kaneaz-harness/core/secrets/ref"
 	"github.com/sigil-tech/kaneaz-harness/core/secrets/registry"
 	"github.com/sigil-tech/kaneaz-harness/core/secrets/secret"
+	"github.com/zalando/go-keyring"
 )
+
+// keyringService is the namespace under which the harness writes
+// keychain credentials. zalando/go-keyring routes to the per-OS
+// secure store: macOS Keychain, Windows Credential Manager, libsecret
+// on Linux. A single namespace makes auditing + manual cleanup easy.
+const keyringService = "kaneaz-harness"
 
 // MemoryBackend is a single-process Backend that resolves env-var refs
 // from os.Getenv and keychain/file refs from an in-memory map. It is
@@ -76,7 +83,23 @@ func (b *MemoryBackend) Resolve(ctx context.Context, r ref.CredentialReference) 
 		}
 		buf := []byte(v)
 		return secret.NewStdlibSecret(buf, r.ID(), r.ConsumerID), nil
-	case ref.RefKeychain, ref.RefFile:
+	case ref.RefKeychain:
+		// Prefer the OS keychain so credentials survive process
+		// restarts. Fall back to the in-memory map for tests +
+		// for keys that have only been staged this session.
+		if v, err := keyring.Get(keyringService, r.Locator); err == nil {
+			return secret.NewStdlibSecret([]byte(v), r.ID(), r.ConsumerID), nil
+		}
+		key := r.Kind.String() + "|" + r.Locator
+		b.mu.RLock()
+		v, ok := b.entries[key]
+		b.mu.RUnlock()
+		if !ok {
+			return nil, fmt.Errorf("%w: %s", errNotFound, key)
+		}
+		dup := append([]byte(nil), v...)
+		return secret.NewStdlibSecret(dup, r.ID(), r.ConsumerID), nil
+	case ref.RefFile:
 		key := r.Kind.String() + "|" + r.Locator
 		b.mu.RLock()
 		v, ok := b.entries[key]

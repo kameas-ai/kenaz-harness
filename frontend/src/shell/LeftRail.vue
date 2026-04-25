@@ -15,6 +15,7 @@ import {
   X,
 } from './icons';
 import { useSessions } from '@/lib/useHarnessAPI';
+import NewSessionDialog from './NewSessionDialog.vue';
 
 /**
  * LeftRail — three vertical regions (plan §2.1):
@@ -35,7 +36,7 @@ const {
   rename: renameSession,
   remove: removeSession,
 } = useSessions();
-const newSessionLoading = ref(false);
+const newSessionDialogOpen = ref(false);
 const deletingId = ref<string | null>(null);
 const renamingId = ref<string | null>(null);
 const renameDraft = ref('');
@@ -66,15 +67,15 @@ onMounted(() => {
   refreshSessions();
 });
 
-async function newSession() {
-  if (newSessionLoading.value) return;
-  newSessionLoading.value = true;
-  try {
-    const s = await createSession('New session');
-    await router.push(`/sessions/${s.id}`);
-  } finally {
-    newSessionLoading.value = false;
-  }
+function newSession() {
+  newSessionDialogOpen.value = true;
+}
+
+async function onNewSessionDialogClose() {
+  newSessionDialogOpen.value = false;
+  // Dialog handles create + navigate itself; refresh so the new
+  // row appears in the rail without a page reload.
+  await refreshSessions();
 }
 
 function openSession(id: string) {
@@ -179,7 +180,6 @@ function dismissError() {
       <button
         type="button"
         class="flex items-center gap-2 px-3 py-2 rounded-sm w-full text-left text-sm font-ui text-accent border border-accent-hairline hover:bg-accent-glow transition-fast ease-kenaz disabled:opacity-50"
-        :disabled="newSessionLoading"
         aria-label="New session"
         @click="newSession"
       >
@@ -187,6 +187,10 @@ function dismissError() {
         <span class="hidden two-col:inline">New session</span>
       </button>
     </div>
+    <NewSessionDialog
+      :open="newSessionDialogOpen"
+      @close="onNewSessionDialogClose"
+    />
 
     <!-- error banner -->
     <div

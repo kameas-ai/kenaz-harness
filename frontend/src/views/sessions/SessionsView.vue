@@ -130,11 +130,49 @@ const otherFamilyChoices = computed(() =>
   allChoices.value.filter((c) => c.family !== activeFamily.value),
 );
 
-// On provider/model load, default the active selection to the
-// provider's primary model.
+// Read the new-session-dialog's localStorage stash for this session,
+// if present. NewSessionDialog writes the user's chosen
+// (providerId, modelId) under "kaneaz.session.config.<id>" so we
+// can honour cross-family choices that the mid-conversation switcher
+// would otherwise block.
+function readSessionConfig(sessionID: string): {
+  providerId: string;
+  modelId: string;
+} | null {
+  if (!sessionID) return null;
+  try {
+    const raw = window.localStorage.getItem(
+      `kaneaz.session.config.${sessionID}`,
+    );
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as {
+      providerId?: string;
+      modelId?: string;
+    };
+    if (parsed.providerId && parsed.modelId) {
+      return { providerId: parsed.providerId, modelId: parsed.modelId };
+    }
+  } catch {
+    /* malformed stash — ignore */
+  }
+  return null;
+}
+
+// On session id or provider list change, seed the active selection.
+// Priority: stashed dialog config > previously-set value > provider
+// primary model.
 watch(
-  [activeProvider, providersLoaded],
-  () => {
+  [sessionId, providers],
+  ([newSid]) => {
+    // Reset prior selection when switching sessions.
+    if (newSid) {
+      const stashed = readSessionConfig(newSid);
+      if (stashed) {
+        activeProviderId.value = stashed.providerId;
+        activeModelId.value = stashed.modelId;
+        return;
+      }
+    }
     const p = activeProvider.value;
     if (!p) return;
     if (!activeProviderId.value) activeProviderId.value = p.id;
