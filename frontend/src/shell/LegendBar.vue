@@ -36,8 +36,8 @@ const defaultLegend: Category[] = [
       </slot>
       <slot name="rate">
         <LiveRateIndicator
-          v-if="status.value.eventRate > 0"
-          :rate="status.value.eventRate"
+          v-if="status.eventRate > 0"
+          :rate="status.eventRate"
           unit="e/s"
         />
       </slot>

@@ -15,6 +15,10 @@ const buffer: ReportedError[] = [];
 
 export function reportError(err: unknown, componentName?: string): void {
   const e = err instanceof Error ? err : new Error(String(err));
+  // Mirror to console for dev visibility; the in-memory buffer is the
+  // canonical artifact that persists across the session.
+  // eslint-disable-next-line no-console
+  console.error('[ErrorBoundary]', componentName ?? '<surface>', e.message, e.stack);
   const entry: ReportedError = {
     message: e.message,
     stack: e.stack,

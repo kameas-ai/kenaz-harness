@@ -59,14 +59,14 @@ async function newSession() {
       aria-label="Sessions"
     >
       <ul class="space-y-1">
-        <li v-for="session in sessions.list.value" :key="session.id">
+        <li v-for="session in sessions.list" :key="session.id">
           <RailEntry
             :icon="MessageSquare"
             :label="session.name"
             :to="`/sessions#${session.id}`"
           />
         </li>
-        <li v-if="sessions.list.value.length === 0" class="px-3 py-2 text-xs text-ink-subtle">
+        <li v-if="sessions.list.length === 0" class="px-3 py-2 text-xs text-ink-subtle">
           No sessions yet
         </li>
       </ul>

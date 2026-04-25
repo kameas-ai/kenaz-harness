@@ -6,12 +6,11 @@
 
 @import './tokens.css';
 @import './fonts.css';
+@import './shell.css';
 
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
-
-@import './shell.css';
 
 /* Default body chrome — colors strictly via tokens. */
 html,

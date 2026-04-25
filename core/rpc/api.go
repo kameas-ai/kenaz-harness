@@ -95,13 +95,27 @@ type API struct {
 	policyAPI   policy.PolicyAPI
 	auditAPI    audit.AuditAPI
 	settingsAPI settings.SettingsAPI
+
+	// bindings is the Wails-reflected surface; held for the lifetime of
+	// API so OnStartup can call SetContext on it.
+	bindings *Bindings
+}
+
+// SetContext threads the Wails app context to the Bindings surface.
+// main.go calls this from OnStartup so bound methods (which cannot take
+// context.Context as a parameter — Wails can't serialize it from JS)
+// have an app-scoped context for downstream calls.
+func (a *API) SetContext(ctx context.Context) {
+	if a.bindings != nil {
+		a.bindings.SetContext(ctx)
+	}
 }
 
 // New constructs a HarnessAPI implementation. Sub-interfaces are stub
 // objects until each feature mission wires them; the contract is the
 // shape, not the behaviour, per the frontend-foundations mission.
 func New(c *core.Core) *API {
-	return &API{
+	a := &API{
 		core:        c,
 		llmAPI:      &stubLLM{},
 		mcpAPI:      &stubMCP{},
@@ -110,11 +124,13 @@ func New(c *core.Core) *API {
 		sessionsAPI: &stubSessions{},
 		trustAPI:    &stubTrust{},
 		contextAPI:  &stubContext{},
-		bundleAPI:  &stubBundle{},
+		bundleAPI:   &stubBundle{},
 		policyAPI:   &stubPolicy{},
 		auditAPI:    &stubAudit{},
 		settingsAPI: &stubSettings{},
 	}
+	a.bindings = NewBindings(a)
+	return a
 }
 
 // ShellStatus returns a default shell status. Real values are filled by
@@ -158,5 +174,6 @@ func (a *API) Audit() audit.AuditAPI             { return a.auditAPI }
 func (a *API) Settings() settings.SettingsAPI    { return a.settingsAPI }
 
 // Bindings returns the slice of Wails-bound objects. The Bindings struct
-// (bindings.go) is the flat-method surface Wails reflects.
-func (a *API) Bindings() []any { return []any{NewBindings(a)} }
+// (bindings.go) is the flat-method surface Wails reflects. Stable for the
+// lifetime of API.
+func (a *API) Bindings() []any { return []any{a.bindings} }

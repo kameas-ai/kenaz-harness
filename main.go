@@ -44,6 +44,7 @@ func main() {
 		},
 		BackgroundColour: &options.RGBA{R: 10, G: 10, B: 11, A: 1},
 		OnStartup: func(ctx context.Context) {
+			api.SetContext(ctx)
 			if err := c.Start(ctx); err != nil {
 				log.Printf("core start: %v", err)
 			}

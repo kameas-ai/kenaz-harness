@@ -18,17 +18,17 @@ const status = useShellStatus();
   >
     <div class="flex items-center gap-2">
       <span class="text-ink-dim">Active provider</span>
-      <span class="font-mono text-ink">{{ status.value.activeProvider }}</span>
+      <span class="font-mono text-ink">{{ status.activeProvider }}</span>
     </div>
     <div class="text-ink-dim">·</div>
     <div class="flex items-center gap-2">
       <span class="text-ink-dim">Trust tier</span>
-      <span class="font-mono text-ink">{{ status.value.trustTier }}</span>
+      <span class="font-mono text-ink">{{ status.trustTier }}</span>
     </div>
     <div class="text-ink-dim">·</div>
     <div class="flex items-center gap-2">
       <span class="text-ink-dim">Harness build</span>
-      <span class="font-mono text-ink">{{ status.value.harnessBuild }}</span>
+      <span class="font-mono text-ink">{{ status.harnessBuild }}</span>
     </div>
   </div>
 </template>
