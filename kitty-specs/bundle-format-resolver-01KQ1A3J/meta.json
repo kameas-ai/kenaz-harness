@@ -1,0 +1,10 @@
+{
+  "created_at": "2026-04-25T03:14:35.932327+00:00",
+  "friendly_name": "bundle format resolver",
+  "mission_id": "01KQ1A3J74T2TJ3KXFGFZ0SWSF",
+  "mission_number": null,
+  "mission_slug": "bundle-format-resolver-01KQ1A3J",
+  "mission_type": "software-dev",
+  "slug": "bundle-format-resolver-01KQ1A3J",
+  "target_branch": "main"
+}
