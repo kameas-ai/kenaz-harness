@@ -179,9 +179,14 @@ func (a *Adapter) Stream(ctx context.Context, req llm.GenerationRequest, prof ll
 	return stream, nil
 }
 
-// ListModels implements llm.ModelLister via bedrock.ListFoundationModels.
-// Returns an empty list (not an error) on transient failure so the UI
-// can fall back to manual model entry.
+// ListModels implements llm.ModelLister.
+//
+// Returns the merged list of (a) inference profiles available in the
+// caller's region, and (b) foundation models with on-demand throughput.
+// Inference profiles come first because newer models (Llama 4, Claude
+// 3.5+, Nova) can ONLY be invoked via an inference-profile id like
+// "us.meta.llama4-maverick-17b-instruct-v1:0" — calling them by their
+// bare foundation-model id returns a 400 ValidationException.
 //
 // The cred bytes carry the profile name OR a Bedrock API key — the
 // caller routes via the AddProvider form's auth-method choice. We
@@ -203,30 +208,58 @@ func (a *Adapter) ListModels(ctx context.Context, cred []byte) ([]llm.ModelInfo,
 	}
 	client := bedrock.NewFromConfig(cfg)
 
+	out := []llm.ModelInfo{}
+
+	// 1. Inference profiles — what users actually call for newer models.
+	if profiles, err := client.ListInferenceProfiles(ctx, &bedrock.ListInferenceProfilesInput{}); err == nil {
+		for _, p := range profiles.InferenceProfileSummaries {
+			id := stringOrEmpty(p.InferenceProfileId)
+			if id == "" {
+				continue
+			}
+			name := stringOrEmpty(p.InferenceProfileName)
+			if name == "" {
+				name = id
+			}
+			out = append(out, llm.ModelInfo{
+				ID:          id,
+				DisplayName: name + " (inference profile)",
+			})
+		}
+	}
+
+	// 2. Foundation models with on-demand throughput. Newer models
+	// (Llama 4, Claude 3.5+, Nova) advertise throughput=PROVISIONED
+	// only; their inference-profile ids surfaced above are how callers
+	// reach them. We filter to ON_DEMAND-supporting entries so the
+	// dropdown doesn't list IDs that will fail at stream time.
 	resp, err := client.ListFoundationModels(ctx, &bedrock.ListFoundationModelsInput{
 		ByOutputModality: bedrocktypes.ModelModalityText,
 	})
-	if err != nil {
+	if err != nil && len(out) == 0 {
 		return nil, fmt.Errorf("bedrock: list foundation models: %w", err)
 	}
-	out := make([]llm.ModelInfo, 0, len(resp.ModelSummaries))
-	for _, m := range resp.ModelSummaries {
-		// Skip models that don't support text streaming.
-		if !supportsStreaming(m) {
-			continue
+	if err == nil {
+		for _, m := range resp.ModelSummaries {
+			if !supportsStreaming(m) {
+				continue
+			}
+			if !supportsOnDemand(m) {
+				continue
+			}
+			id := stringOrEmpty(m.ModelId)
+			if id == "" {
+				continue
+			}
+			display := stringOrEmpty(m.ModelName)
+			if display == "" {
+				display = id
+			}
+			out = append(out, llm.ModelInfo{
+				ID:          id,
+				DisplayName: display,
+			})
 		}
-		id := stringOrEmpty(m.ModelId)
-		if id == "" {
-			continue
-		}
-		display := stringOrEmpty(m.ModelName)
-		if display == "" {
-			display = id
-		}
-		out = append(out, llm.ModelInfo{
-			ID:          id,
-			DisplayName: display,
-		})
 	}
 	return out, nil
 }
@@ -253,6 +286,22 @@ func supportsStreaming(m bedrocktypes.FoundationModelSummary) bool {
 		return true
 	}
 	return *m.ResponseStreamingSupported
+}
+
+// supportsOnDemand reports whether the model can be invoked with
+// on-demand throughput (vs only PROVISIONED, which requires reserved
+// capacity, or only INFERENCE_PROFILE, which forces callers to use
+// the inference-profile id surfaced separately).
+func supportsOnDemand(m bedrocktypes.FoundationModelSummary) bool {
+	if len(m.InferenceTypesSupported) == 0 {
+		return true
+	}
+	for _, t := range m.InferenceTypesSupported {
+		if t == bedrocktypes.InferenceTypeOnDemand {
+			return true
+		}
+	}
+	return false
 }
 
 func stringOrEmpty(s *string) string {

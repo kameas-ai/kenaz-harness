@@ -127,9 +127,70 @@ func toConverseJSON(msgs []llm.Message) ([]map[string]any, []map[string]any, err
 	return converseMsgs, system, nil
 }
 
-// listModelsWithBearer returns the foundation-model catalogue using
-// the bearer-auth REST endpoint.
+// listModelsWithBearer returns the merged inference-profile +
+// foundation-model catalogue using the bearer-auth REST endpoint.
+// Inference profiles come first because they are the only callable
+// id for newer models (Llama 4, Claude 3.5+, Nova).
 func (a *Adapter) listModelsWithBearer(ctx context.Context, apiKey string) ([]llm.ModelInfo, error) {
+	out := []llm.ModelInfo{}
+
+	// 1. Inference profiles.
+	if profiles, err := a.bearerListInferenceProfiles(ctx, apiKey); err == nil {
+		out = append(out, profiles...)
+	}
+
+	// 2. Foundation models with on-demand throughput.
+	models, err := a.bearerListFoundationModels(ctx, apiKey)
+	if err != nil && len(out) == 0 {
+		return nil, err
+	}
+	out = append(out, models...)
+	return out, nil
+}
+
+func (a *Adapter) bearerListInferenceProfiles(ctx context.Context, apiKey string) ([]llm.ModelInfo, error) {
+	url := fmt.Sprintf("https://bedrock.%s.amazonaws.com/inference-profiles", a.listModelsRegion)
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	httpReq.Header.Set("Authorization", "Bearer "+apiKey)
+	httpReq.Header.Set("Accept", "application/json")
+	resp, err := a.bearerClient().Do(httpReq)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode/100 != 2 {
+		return nil, fmt.Errorf("bedrock: list inference profiles: HTTP %d", resp.StatusCode)
+	}
+	var doc struct {
+		InferenceProfileSummaries []struct {
+			InferenceProfileID   string `json:"inferenceProfileId"`
+			InferenceProfileName string `json:"inferenceProfileName"`
+		} `json:"inferenceProfileSummaries"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&doc); err != nil {
+		return nil, err
+	}
+	out := make([]llm.ModelInfo, 0, len(doc.InferenceProfileSummaries))
+	for _, p := range doc.InferenceProfileSummaries {
+		if p.InferenceProfileID == "" {
+			continue
+		}
+		name := p.InferenceProfileName
+		if name == "" {
+			name = p.InferenceProfileID
+		}
+		out = append(out, llm.ModelInfo{
+			ID:          p.InferenceProfileID,
+			DisplayName: name + " (inference profile)",
+		})
+	}
+	return out, nil
+}
+
+func (a *Adapter) bearerListFoundationModels(ctx context.Context, apiKey string) ([]llm.ModelInfo, error) {
 	url := fmt.Sprintf("https://bedrock.%s.amazonaws.com/foundation-models", a.listModelsRegion)
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
@@ -148,10 +209,11 @@ func (a *Adapter) listModelsWithBearer(ctx context.Context, apiKey string) ([]ll
 	}
 	var doc struct {
 		ModelSummaries []struct {
-			ModelID                    string `json:"modelId"`
-			ModelName                  string `json:"modelName"`
-			ResponseStreamingSupported *bool  `json:"responseStreamingSupported"`
+			ModelID                    string   `json:"modelId"`
+			ModelName                  string   `json:"modelName"`
+			ResponseStreamingSupported *bool    `json:"responseStreamingSupported"`
 			OutputModalities           []string `json:"outputModalities"`
+			InferenceTypesSupported    []string `json:"inferenceTypesSupported"`
 		} `json:"modelSummaries"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&doc); err != nil {
@@ -165,6 +227,9 @@ func (a *Adapter) listModelsWithBearer(ctx context.Context, apiKey string) ([]ll
 		if !containsText(m.OutputModalities) {
 			continue
 		}
+		if !containsOnDemand(m.InferenceTypesSupported) {
+			continue
+		}
 		display := m.ModelName
 		if display == "" {
 			display = m.ModelID
@@ -172,6 +237,18 @@ func (a *Adapter) listModelsWithBearer(ctx context.Context, apiKey string) ([]ll
 		out = append(out, llm.ModelInfo{ID: m.ModelID, DisplayName: display})
 	}
 	return out, nil
+}
+
+func containsOnDemand(types []string) bool {
+	if len(types) == 0 {
+		return true
+	}
+	for _, t := range types {
+		if strings.EqualFold(t, "ON_DEMAND") {
+			return true
+		}
+	}
+	return false
 }
 
 func containsText(modalities []string) bool {
