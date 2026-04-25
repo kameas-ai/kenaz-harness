@@ -1,7 +1,7 @@
 package badfields
 
-// Each `// want` comment is the analysistest harness's expectation for a
-// diagnostic on the same line. Strings are regexp patterns.
+// Each "want" annotation below is the analysistest harness's expectation
+// for a diagnostic on the same line. Strings are regexp patterns.
 
 type Config struct {
 	APIKey      string // want "secret-bytes: credential-shaped field APIKey"
