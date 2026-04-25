@@ -20,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -48,10 +49,29 @@ func WithListModelsRegion(region string) Option {
 	}
 }
 
+// WithHTTPClient overrides the HTTP client used by the bearer-auth
+// path. The SDK path uses its own transport; tests typically swap
+// this client to point at an httptest.Server.
+func WithHTTPClient(c *http.Client) Option {
+	return func(a *Adapter) {
+		if c != nil {
+			a.httpc = c
+		}
+	}
+}
+
 // Adapter implements llm.ProviderAdapter and llm.ModelLister against
-// AWS Bedrock.
+// AWS Bedrock. It supports two auth flavours:
+//
+//   - aws_profile: cred bytes are an AWS profile name. The SDK loads
+//     ~/.aws/credentials and signs requests with SigV4.
+//   - keychain (long-lived API key): cred bytes are a Bedrock API
+//     key. We bypass the SDK and call the REST endpoint directly
+//     with `Authorization: Bearer <key>`, parsing the
+//     vnd.amazon.eventstream binary protocol ourselves.
 type Adapter struct {
 	listModelsRegion string
+	httpc            *http.Client
 }
 
 // New constructs an Adapter with default settings.
@@ -103,15 +123,25 @@ func resolveAWSConfig(ctx context.Context, profile, region string) (aws.Config, 
 }
 
 // Stream opens a Bedrock ConverseStream and returns a llm.Stream that
-// pumps converted events to the caller. The cred bytes are the AWS
-// profile name; the actual access keys live in ~/.aws/credentials and
-// are read by the SDK chain.
+// pumps converted events to the caller.
+//
+// The auth path is selected by the profile's CredentialReference kind:
+//
+//   - "keychain"    long-lived Bedrock API key (bearer token); the
+//                    cred bytes ARE the key. Routed through the REST
+//                    endpoint with our own event-stream parser.
+//   - "aws_profile" AWS shared-credentials profile name; the cred
+//                    bytes ARE the profile name. Routed through the
+//                    SDK with SigV4 signing.
 func (a *Adapter) Stream(ctx context.Context, req llm.GenerationRequest, prof llm.ProviderProfile, cred []byte) (llm.Stream, error) {
 	if len(cred) == 0 {
-		return nil, &llm.ErrAuth{Message: "bedrock: empty profile name"}
+		return nil, &llm.ErrAuth{Message: "bedrock: empty credential"}
 	}
 	if strings.TrimSpace(prof.Region) == "" {
 		return nil, &llm.ErrAuth{Message: "bedrock: profile region required"}
+	}
+	if prof.Cred.Kind == "keychain" {
+		return a.streamWithBearer(ctx, req, prof, strings.TrimSpace(string(cred)))
 	}
 	profile := strings.TrimSpace(string(cred))
 
@@ -152,11 +182,21 @@ func (a *Adapter) Stream(ctx context.Context, req llm.GenerationRequest, prof ll
 // ListModels implements llm.ModelLister via bedrock.ListFoundationModels.
 // Returns an empty list (not an error) on transient failure so the UI
 // can fall back to manual model entry.
+//
+// The cred bytes carry the profile name OR a Bedrock API key — the
+// caller routes via the AddProvider form's auth-method choice. We
+// distinguish heuristically: a string starting with "ABSK" or
+// containing dots / colons / forward-slashes is treated as a bearer
+// token; otherwise it's a profile name.
 func (a *Adapter) ListModels(ctx context.Context, cred []byte) ([]llm.ModelInfo, error) {
 	if len(cred) == 0 {
-		return nil, errors.New("bedrock: empty profile name")
+		return nil, errors.New("bedrock: empty credential")
 	}
-	profile := strings.TrimSpace(string(cred))
+	credStr := strings.TrimSpace(string(cred))
+	if looksLikeBearerToken(credStr) {
+		return a.listModelsWithBearer(ctx, credStr)
+	}
+	profile := credStr
 	cfg, err := resolveAWSConfig(ctx, profile, a.listModelsRegion)
 	if err != nil {
 		return nil, err
@@ -189,6 +229,23 @@ func (a *Adapter) ListModels(ctx context.Context, cred []byte) ([]llm.ModelInfo,
 		})
 	}
 	return out, nil
+}
+
+// looksLikeBearerToken returns true when cred looks like a long-lived
+// Bedrock API key rather than an AWS profile name. AWS-issued bearer
+// tokens are base64-ish strings >= 40 chars, often with dots / colons.
+// Profile names are short identifiers like "default" or "work".
+func looksLikeBearerToken(s string) bool {
+	if len(s) >= 40 {
+		return true
+	}
+	if strings.ContainsAny(s, ".:/+") {
+		return true
+	}
+	if strings.HasPrefix(s, "ABSK") {
+		return true
+	}
+	return false
 }
 
 func supportsStreaming(m bedrocktypes.FoundationModelSummary) bool {

@@ -64,10 +64,13 @@ const BEDROCK_REGIONS: { id: string; label: string }[] = [
   { id: 'ap-southeast-2', label: 'Asia Pacific (Sydney) — ap-southeast-2' },
 ];
 
+type BedrockAuth = 'api_key' | 'aws_profile';
+
 interface FormState {
   kind: ProviderKind;
   apiKey: string;
   awsProfile: string;
+  bedrockAuth: BedrockAuth;
   region: string;
   modelId: string;
   manualModelId: string;
@@ -78,6 +81,7 @@ const form = reactive<FormState>({
   kind: 'anthropic',
   apiKey: '',
   awsProfile: 'default',
+  bedrockAuth: 'api_key',
   region: 'us-east-1',
   modelId: '',
   manualModelId: '',
@@ -97,9 +101,15 @@ const fallbackToManual = ref(false);
 
 const requiresRegion = computed(() => form.kind === 'bedrock');
 const requiresApiKey = computed(
-  () => form.kind !== 'ollama' && form.kind !== 'bedrock',
+  () =>
+    form.kind === 'anthropic' ||
+    form.kind === 'openai' ||
+    form.kind === 'openrouter' ||
+    (form.kind === 'bedrock' && form.bedrockAuth === 'api_key'),
 );
-const requiresAwsProfile = computed(() => form.kind === 'bedrock');
+const requiresAwsProfile = computed(
+  () => form.kind === 'bedrock' && form.bedrockAuth === 'aws_profile',
+);
 // Bedrock has no /models endpoint that mirrors the Connect flow we
 // use for Anthropic, and the user already knows the model id from the
 // AWS console. Skip the probe and go straight to manual entry.
@@ -209,8 +219,8 @@ function onSubmit(): void {
   if (cred.kind === 'keychain' && form.apiKey.trim()) {
     input.plaintextApiKey = form.apiKey;
   }
-  // Drop our local copy of the plaintext immediately. The parent
-  // component forwards the input synchronously to the backend.
+  // Drop our local copy of the plaintext immediately so we don't
+  // accidentally retain it across re-renders.
   form.apiKey = '';
   emit('submit', input);
   submitting.value = false;
@@ -249,7 +259,49 @@ defineExpose({ form, validation, isValid });
       </select>
     </div>
 
-    <!-- Step 2a: API key + Connect (most providers) -->
+    <!-- Bedrock-only: auth method toggle -->
+    <div v-if="form.kind === 'bedrock'">
+      <span class="block text-[11px] uppercase tracking-[0.18em] text-ink-subtle">
+        Authentication
+      </span>
+      <div class="mt-1 flex gap-1 rounded-sm border border-border-muted bg-surface-1 p-0.5">
+        <button
+          type="button"
+          class="flex-1 px-2 py-1 rounded-sm text-xs font-ui transition-fast"
+          :class="
+            form.bedrockAuth === 'api_key'
+              ? 'bg-surface-2 text-ink ring-1 ring-accent-hairline'
+              : 'text-ink-muted hover:text-ink'
+          "
+          :data-testid="'add-provider-bedrock-auth-key'"
+          @click="form.bedrockAuth = 'api_key'"
+        >
+          API key
+        </button>
+        <button
+          type="button"
+          class="flex-1 px-2 py-1 rounded-sm text-xs font-ui transition-fast"
+          :class="
+            form.bedrockAuth === 'aws_profile'
+              ? 'bg-surface-2 text-ink ring-1 ring-accent-hairline'
+              : 'text-ink-muted hover:text-ink'
+          "
+          :data-testid="'add-provider-bedrock-auth-profile'"
+          @click="form.bedrockAuth = 'aws_profile'"
+        >
+          AWS profile
+        </button>
+      </div>
+      <p class="mt-1 text-[11px] text-ink-dim">
+        {{
+          form.bedrockAuth === 'api_key'
+            ? 'Long-lived Bedrock API key from the AWS console — paste it below.'
+            : 'Reads from ~/.aws/credentials. The harness never sees your access keys.'
+        }}
+      </p>
+    </div>
+
+    <!-- Step 2a: API key + Connect (most providers + bedrock-API-key mode) -->
     <div v-if="requiresApiKey">
       <label
         for="prov-apikey"
@@ -265,7 +317,15 @@ defineExpose({ form, validation, isValid });
           class="flex-1 rounded-sm border border-border-muted bg-surface-1 px-2.5 py-1.5 text-sm font-mono text-ink focus:border-accent focus:outline-none"
           autocomplete="off"
           :data-testid="'add-provider-apikey'"
-          :placeholder="form.kind === 'anthropic' ? 'sk-ant-…' : 'paste key'"
+          :placeholder="
+            form.kind === 'anthropic'
+              ? 'sk-ant-…'
+              : form.kind === 'bedrock'
+                ? 'ABSK… (Bedrock API key)'
+                : form.kind === 'openai'
+                  ? 'sk-…'
+                  : 'paste key'
+          "
         />
         <Button
           variant="ghost"
