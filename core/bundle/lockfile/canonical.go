@@ -83,6 +83,22 @@ func Read(data []byte) (*Lockfile, error) {
 		key := strings.TrimSpace(line[:eq])
 		val := strings.TrimSpace(line[eq+1:])
 
+		// Multi-line inline-array values: the canonical writer emits
+		// `dependencies = [\n  { ... },\n]`. Accumulate continuation
+		// lines until we see the closing ']' on its own.
+		if strings.HasPrefix(val, "[") && !strings.HasSuffix(val, "]") {
+			parts := []string{val}
+			i++
+			for ; i < len(lines); i++ {
+				cont := strings.TrimSpace(lines[i])
+				parts = append(parts, cont)
+				if cont == "]" || strings.HasSuffix(cont, "]") {
+					break
+				}
+			}
+			val = strings.Join(parts, " ")
+		}
+
 		switch section {
 		case "":
 			// Top-level keys.
