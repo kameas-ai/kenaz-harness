@@ -69,6 +69,13 @@ const isStreaming = computed(
   () => session.streamSubscriptionId.value !== null,
 );
 
+// "Thinking…" — stream is open but no chunks have arrived yet.
+const isWaitingForFirstChunk = computed(
+  () =>
+    session.streamSubscriptionId.value !== null &&
+    session.currentlyStreaming.value === null,
+);
+
 async function onSend(content: string) {
   if (!hasSession.value || !activeProvider.value) return;
   await session.send(content, activeProvider.value.id);
@@ -138,6 +145,8 @@ function gotoProviders() {
           <MessageList
             :messages="session.messages.value"
             :streaming-message="session.currentlyStreaming.value"
+            :waiting="isWaitingForFirstChunk"
+            :error-message="session.error.value"
           />
         </div>
         <ChatInput

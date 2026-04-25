@@ -26,7 +26,7 @@ import {
 } from 'vue';
 import { useHarnessClient } from './harnessClientContext';
 import { useEventStream } from './useEventStream';
-import type { Message, Session, StreamChunk } from './types';
+import type { Message, Session } from './types';
 
 export interface UseSessionResult {
   session: Ref<Session | null>;
@@ -123,69 +123,102 @@ export function useSession(id: Ref<string>): UseSessionResult {
     messages.value = [...messages.value, m];
   });
 
-  // Subscribe to streaming chunks. Splice into currentlyStreaming.
-  useEventStream<StreamChunk>('llm:stream-chunk', (chunk) => {
-    if (!chunk || chunk.sessionId !== id.value) return;
+  // Wire-shape payload from core/rpc/views/llm.StreamChunkPayload:
+  //   { sub_id, session_id, chunk: StreamEvent }
+  // where StreamEvent = { kind, text?, tool?, reasoning?, finish?, err? }.
+  type WireChunk = {
+    sub_id?: string;
+    session_id?: string;
+    chunk?: {
+      kind?: string;
+      text?: string;
+      finish?: string;
+      err?: string;
+    };
+  };
+  type WireClosed = {
+    sub_id?: string;
+    session_id?: string;
+    reason?: string;
+    message?: string;
+    finish_reason?: string;
+  };
+
+  // Subscribe to streaming chunks. Splice text deltas into
+  // currentlyStreaming; surface errors via error.value.
+  useEventStream<WireChunk>('llm:stream-chunk', (payload) => {
+    if (!payload || !payload.chunk) return;
+    if (payload.session_id && payload.session_id !== id.value) return;
     if (
       streamSubscriptionId.value &&
-      chunk.subscriptionId !== streamSubscriptionId.value
+      payload.sub_id &&
+      payload.sub_id !== streamSubscriptionId.value
     ) {
       return;
     }
     clearStreamTimeout();
     streamingTimedOut.value = false;
-    const existing = currentlyStreaming.value;
-    if (!existing || existing.id !== chunk.messageId) {
-      currentlyStreaming.value = {
-        id: chunk.messageId,
-        sessionId: chunk.sessionId,
-        role: 'assistant',
-        content: chunk.delta,
-        createdAt: new Date().toISOString(),
-        streaming: true,
-        toolCalls: chunk.toolCallDelta ? [chunk.toolCallDelta] : undefined,
-      };
-    } else {
-      const next: Message = {
-        ...existing,
-        content: existing.content + chunk.delta,
-        toolCalls: chunk.toolCallDelta
-          ? [...(existing.toolCalls ?? []), chunk.toolCallDelta]
-          : existing.toolCalls,
-      };
-      currentlyStreaming.value = next;
-    }
-    if (chunk.done) {
-      const finished = currentlyStreaming.value;
-      if (finished) {
-        const committed: Message = { ...finished, streaming: false };
-        messages.value = [...messages.value, committed];
+    const ev = payload.chunk;
+    const subID = payload.sub_id ?? streamSubscriptionId.value ?? 'sub';
+    switch (ev.kind) {
+      case 'text': {
+        const delta = ev.text ?? '';
+        if (!delta) return;
+        const existing = currentlyStreaming.value;
+        if (!existing) {
+          currentlyStreaming.value = {
+            id: `streaming-${subID}`,
+            sessionId: id.value,
+            role: 'assistant',
+            content: delta,
+            createdAt: new Date().toISOString(),
+            streaming: true,
+          };
+        } else {
+          currentlyStreaming.value = {
+            ...existing,
+            content: existing.content + delta,
+          };
+        }
+        return;
       }
-      currentlyStreaming.value = null;
-      streamSubscriptionId.value = null;
+      case 'error': {
+        if (ev.err) error.value = ev.err;
+        return;
+      }
+      case 'finish': {
+        // The terminal "finish" event arrives just before stream-closed;
+        // the close handler does the commit so we don't double-append.
+        return;
+      }
+      default:
+        // tool / reasoning / usage frames not yet rendered.
+        return;
     }
   });
 
-  useEventStream<{ id: string; reason?: string }>(
-    'llm:stream-closed',
-    (payload) => {
-      if (!payload) return;
-      if (
-        streamSubscriptionId.value &&
-        payload.id !== streamSubscriptionId.value
-      ) {
-        return;
-      }
-      clearStreamTimeout();
-      const finished = currentlyStreaming.value;
-      if (finished) {
-        const committed: Message = { ...finished, streaming: false };
-        messages.value = [...messages.value, committed];
-      }
-      currentlyStreaming.value = null;
-      streamSubscriptionId.value = null;
-    },
-  );
+  useEventStream<WireClosed>('llm:stream-closed', (payload) => {
+    if (!payload) return;
+    if (payload.session_id && payload.session_id !== id.value) return;
+    if (
+      streamSubscriptionId.value &&
+      payload.sub_id &&
+      payload.sub_id !== streamSubscriptionId.value
+    ) {
+      return;
+    }
+    clearStreamTimeout();
+    const finished = currentlyStreaming.value;
+    if (finished) {
+      const committed: Message = { ...finished, streaming: false };
+      messages.value = [...messages.value, committed];
+    }
+    currentlyStreaming.value = null;
+    streamSubscriptionId.value = null;
+    if (payload.reason === 'backend-error' && payload.message) {
+      error.value = payload.message;
+    }
+  });
 
   async function send(content: string, profileID: string) {
     const sid = id.value;

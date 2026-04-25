@@ -186,26 +186,28 @@ describe('useSession (chat-ui)', () => {
     await session.send('q', 'profile');
     await nextTick();
     rt.emit('llm:stream-chunk', {
-      subscriptionId: 'sub-x',
-      sessionId: 's-1',
-      messageId: 'asst-1',
-      delta: 'Hello',
+      sub_id: 'sub-x',
+      session_id: 's-1',
+      chunk: { kind: 'text', text: 'Hello' },
     });
     rt.emit('llm:stream-chunk', {
-      subscriptionId: 'sub-x',
-      sessionId: 's-1',
-      messageId: 'asst-1',
-      delta: ', world',
+      sub_id: 'sub-x',
+      session_id: 's-1',
+      chunk: { kind: 'text', text: ', world' },
     });
     await nextTick();
     expect(session.currentlyStreaming.value?.content).toBe('Hello, world');
     expect(session.currentlyStreaming.value?.streaming).toBe(true);
     rt.emit('llm:stream-chunk', {
-      subscriptionId: 'sub-x',
-      sessionId: 's-1',
-      messageId: 'asst-1',
-      delta: '!',
-      done: true,
+      sub_id: 'sub-x',
+      session_id: 's-1',
+      chunk: { kind: 'text', text: '!' },
+    });
+    rt.emit('llm:stream-closed', {
+      sub_id: 'sub-x',
+      session_id: 's-1',
+      reason: 'completed',
+      finish_reason: 'end_turn',
     });
     await nextTick();
     expect(session.currentlyStreaming.value).toBeNull();

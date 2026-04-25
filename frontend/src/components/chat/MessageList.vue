@@ -25,6 +25,17 @@ const props = defineProps<{
    * component stays presentational.
    */
   streamingMessage?: Message | null;
+  /**
+   * True while a stream is open but no chunks have arrived yet — render
+   * a small "thinking…" indicator so the user sees the system is alive.
+   */
+  waiting?: boolean;
+  /**
+   * Inline error to render at the bottom of the conversation. Useful
+   * when send/startStream fails — the error must surface in the chat
+   * itself, not just the page subtitle.
+   */
+  errorMessage?: string | null;
 }>();
 
 const scrollEl = ref<HTMLElement | null>(null);
@@ -114,6 +125,34 @@ defineExpose({ scrollToBottom });
         :streaming="m.streaming === true"
         :tool-calls="m.toolCalls"
       />
+
+      <!-- Thinking indicator: visible from the moment send() opens a
+           stream until the first chunk arrives. -->
+      <div
+        v-if="waiting"
+        class="flex items-center gap-2 font-ui text-[12px] text-ink-muted"
+        role="status"
+        aria-live="polite"
+      >
+        <span class="thinking-dots" aria-hidden="true">
+          <span class="dot"></span>
+          <span class="dot"></span>
+          <span class="dot"></span>
+        </span>
+        <span>Thinking…</span>
+      </div>
+
+      <!-- Inline error from useSession.error.value when send fails. -->
+      <div
+        v-if="errorMessage"
+        class="rounded-md border border-signal-danger bg-surface-1 px-3 py-2 font-ui text-[12px] text-signal-danger"
+        role="alert"
+      >
+        <div class="text-[10px] uppercase tracking-[0.18em] text-signal-danger">
+          Send failed
+        </div>
+        <p class="mt-1 break-words text-ink">{{ errorMessage }}</p>
+      </div>
     </div>
 
     <button
@@ -127,3 +166,25 @@ defineExpose({ scrollToBottom });
     </button>
   </div>
 </template>
+
+<style scoped>
+.thinking-dots {
+  display: inline-flex;
+  gap: 3px;
+}
+.thinking-dots .dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.4;
+  animation: thinking-bounce 1.2s infinite ease-in-out;
+}
+.thinking-dots .dot:nth-child(2) { animation-delay: 0.15s; }
+.thinking-dots .dot:nth-child(3) { animation-delay: 0.3s; }
+
+@keyframes thinking-bounce {
+  0%, 60%, 100% { transform: translateY(0); opacity: 0.4; }
+  30% { transform: translateY(-3px); opacity: 1; }
+}
+</style>
