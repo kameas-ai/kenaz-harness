@@ -1,0 +1,324 @@
+// Package registry implements the in-memory connector façade (WP02 / WP04 /
+// WP05). It composes the gates, the credential resolver, the audit
+// emitter, and the retry middleware into the canonical pipeline:
+//
+//	Profile lookup → CapabilityGate → PolicyGuard → CredentialResolver
+//	  → AuditEmitter → RetryMiddleware → ProviderAdapter → CostReducer
+//
+// The registry is the single seam for OSS and enterprise extensibility
+// (FR-018, C-005): every consumer reaches the connector through this
+// package's Registry interface or the default New() implementation.
+package registry
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"sync"
+	"time"
+
+	llm "github.com/sigil-tech/kaneaz-harness/core/llm"
+	"github.com/sigil-tech/kaneaz-harness/core/llm/capabilities"
+	"github.com/sigil-tech/kaneaz-harness/core/llm/credref"
+	"github.com/sigil-tech/kaneaz-harness/core/llm/events"
+	"github.com/sigil-tech/kaneaz-harness/core/llm/retry"
+)
+
+// CostReducer is the optional usage→cost stage (WP11). The registry
+// invokes it after the adapter returns a final Response.
+type CostReducer interface {
+	Derive(usage llm.Usage, kind, model string) llm.Cost
+}
+
+// Options bundles the optional collaborators wired into the Registry.
+type Options struct {
+	Catalog  *capabilities.Catalog
+	Resolver *credref.Resolver
+	Emitter  *events.Emitter
+	Policy   llm.PolicyGuard
+	Cost     CostReducer
+}
+
+// Registry is the mutable in-memory implementation.
+type Registry struct {
+	mu       sync.RWMutex
+	adapters map[string]llm.ProviderAdapter
+	profiles map[string]llm.ProviderProfile
+
+	cat      *capabilities.Catalog
+	gate     *capabilities.Gate
+	resolver *credref.Resolver
+	em       *events.Emitter
+	policy   llm.PolicyGuard
+	reducer  CostReducer
+
+	now func() time.Time
+}
+
+// New returns a Registry wired with opts. Nil collaborators are replaced
+// with safe defaults: AllowAllGuard for policy, an in-memory event sink
+// for audit, and the embedded capability catalog when none is supplied.
+func New(opts Options) (*Registry, error) {
+	cat := opts.Catalog
+	if cat == nil {
+		c, err := capabilities.LoadDefault()
+		if err != nil {
+			return nil, fmt.Errorf("registry: load default capabilities: %w", err)
+		}
+		cat = c
+	}
+	emitter := opts.Emitter
+	if emitter == nil {
+		emitter = events.New(&events.MemorySink{})
+	}
+	var policy llm.PolicyGuard = opts.Policy
+	if policy == nil {
+		policy = llm.AllowAllGuard{}
+	}
+	return &Registry{
+		adapters: map[string]llm.ProviderAdapter{},
+		profiles: map[string]llm.ProviderProfile{},
+		cat:      cat,
+		gate:     capabilities.NewGate(cat),
+		resolver: opts.Resolver,
+		em:       emitter,
+		policy:   policy,
+		reducer:  opts.Cost,
+		now:      time.Now,
+	}, nil
+}
+
+// SetClock overrides the registry's clock; used by tests.
+func (r *Registry) SetClock(now func() time.Time) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if now != nil {
+		r.now = now
+	}
+}
+
+// RegisterAdapter installs a for its declared Kind(). Last write wins.
+func (r *Registry) RegisterAdapter(a llm.ProviderAdapter) {
+	if a == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.adapters[a.Kind()] = a
+}
+
+// LoadProfiles validates and installs profs. On any validation failure
+// the registry is left unchanged. Profile-id collisions are surfaced
+// as a typed error.
+func (r *Registry) LoadProfiles(profs []llm.ProviderProfile) error {
+	seen := map[string]struct{}{}
+	for _, p := range profs {
+		if err := llm.ValidateProfile(p); err != nil {
+			return err
+		}
+		if _, ok := seen[p.ID]; ok {
+			return fmt.Errorf("llm: duplicate profile id %q in input", p.ID)
+		}
+		seen[p.ID] = struct{}{}
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	// Detect collision against already-loaded profiles.
+	for _, p := range profs {
+		if _, ok := r.profiles[p.ID]; ok {
+			return fmt.Errorf("llm: profile id %q already loaded", p.ID)
+		}
+	}
+	for _, p := range profs {
+		r.profiles[p.ID] = p
+	}
+	return nil
+}
+
+// Profile returns the loaded profile by id.
+func (r *Registry) Profile(id string) (llm.ProviderProfile, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	p, ok := r.profiles[id]
+	if !ok {
+		return llm.ProviderProfile{}, fmt.Errorf("llm: profile %q not registered", id)
+	}
+	return p, nil
+}
+
+// Profiles returns a snapshot list of loaded profiles in insertion-
+// order is not guaranteed; the order matches map iteration.
+func (r *Registry) Profiles() []llm.ProviderProfile {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	out := make([]llm.ProviderProfile, 0, len(r.profiles))
+	for _, p := range r.profiles {
+		out = append(out, p)
+	}
+	return out
+}
+
+// PreflightAll resolves every loaded profile's credential reference and
+// emits llm/preflight_resolved or llm/preflight_failed for each.
+func (r *Registry) PreflightAll(ctx context.Context) []llm.PreflightResult {
+	profs := r.Profiles()
+	if r.resolver == nil {
+		results := make([]llm.PreflightResult, len(profs))
+		for i, p := range profs {
+			results[i] = llm.PreflightResult{
+				ProfileID: p.ID, Kind: p.Kind, Resolved: false,
+				Message: "no credential resolver configured",
+			}
+			_ = r.em.PreflightFailed(ctx, p, errors.New(results[i].Message))
+		}
+		return results
+	}
+	results := r.resolver.Preflight(ctx, profs)
+	for i, p := range profs {
+		// Defense-in-depth: bedrock + missing region must always be a
+		// preflight failure even if the credential resolved (R7 / edge
+		// case in spec).
+		if p.Kind == "bedrock" && p.Region == "" {
+			results[i].Resolved = false
+			if results[i].Err == nil {
+				results[i].Err = fmt.Errorf("bedrock profile %q: region not configured", p.ID)
+				results[i].Message = results[i].Err.Error()
+			}
+		}
+		if results[i].Resolved {
+			_ = r.em.PreflightResolved(ctx, p)
+		} else {
+			_ = r.em.PreflightFailed(ctx, p, results[i].Err)
+		}
+	}
+	return results
+}
+
+// Stream dispatches the canonical pipeline. The returned Stream is the
+// adapter's stream wrapped with retry-aware error reporting.
+//
+// Pipeline order (matches plan §4):
+//
+//  1. Profile lookup
+//  2. CapabilityGate.Check  → llm/capability_rejected on failure
+//  3. PolicyGuard.Allow     → llm/policy_denied on failure
+//  4. CredentialResolver    → llm/error on resolution failure
+//  5. AuditEmitter.RequestSubmitted
+//  6. RetryMiddleware.Run(adapter.Stream)  → llm/retry_attempted per retry
+//  7. (Stream returned to caller; CostReducer attaches Cost on Final)
+func (r *Registry) Stream(ctx context.Context, req llm.GenerationRequest) (llm.Stream, error) {
+	r.mu.RLock()
+	prof, ok := r.profiles[req.ProfileID]
+	adapter := r.adapters[prof.Kind]
+	emitter := r.em
+	policy := r.policy
+	gate := r.gate
+	reducer := r.reducer
+	resolver := r.resolver
+	r.mu.RUnlock()
+
+	if !ok {
+		return nil, fmt.Errorf("llm: profile %q not registered", req.ProfileID)
+	}
+	if adapter == nil {
+		return nil, fmt.Errorf("llm: no adapter registered for kind %q", prof.Kind)
+	}
+
+	// 2. CapabilityGate.
+	if _, err := gate.Check(req, prof); err != nil {
+		var ce *llm.ErrCapabilityUnsupported
+		if errors.As(err, &ce) {
+			_ = emitter.CapabilityRejected(ctx, req, prof, ce.Capabilities)
+		}
+		return nil, err
+	}
+
+	// 3. PolicyGuard.
+	if perr := policy.Allow(ctx, req, prof); perr != nil {
+		var pd *llm.ErrPolicyDenied
+		reason := perr.Error()
+		if errors.As(perr, &pd) {
+			reason = pd.Reason
+		}
+		_ = emitter.PolicyDenied(ctx, req, prof, reason)
+		return nil, perr
+	}
+
+	// 4. CredentialResolver.
+	var credBytes []byte
+	if resolver != nil {
+		s, rerr := resolver.Resolve(ctx, prof.ID, prof.Cred)
+		if rerr != nil {
+			_ = emitter.Error(ctx, req, prof, rerr)
+			return nil, rerr
+		}
+		credBytes = append([]byte(nil), s.Bytes()...)
+		// Zeroize the resolver-returned secret immediately; the adapter
+		// gets its own private copy in credBytes.
+		s.Zeroize()
+	}
+
+	// 5. AuditEmitter.RequestSubmitted.
+	_ = emitter.RequestSubmitted(ctx, req, prof, snapshotIDFromCtx(ctx))
+
+	// 6. RetryMiddleware → adapter.
+	policyP := retry.FromLLM(prof.Retry)
+	if req.RetryOverride != nil {
+		policyP = retry.FromLLM(req.RetryOverride)
+	}
+	mw := retry.New(func(attempt int, plannedMS, actualMS int, err error) {
+		msg := ""
+		if err != nil {
+			msg = err.Error()
+		}
+		_ = emitter.RetryAttempted(ctx, req, prof, attempt, plannedMS, actualMS, msg)
+	})
+	start := r.now()
+	stream, attempts, err := retry.Run(mw, ctx, policyP, func(c context.Context) (llm.Stream, error) {
+		return adapter.Stream(c, req, prof, credBytes)
+	})
+	if err != nil {
+		// Zeroize the adapter's credential copy on failure path.
+		zero(credBytes)
+		_ = emitter.Error(ctx, req, prof, err)
+		return nil, err
+	}
+
+	// 7. Wrap the returned stream so we can attach the cost reducer and
+	// audit terminal events on Final()/Cancel().
+	wrapped := &auditedStream{
+		inner:    stream,
+		req:      req,
+		prof:     prof,
+		emitter:  emitter,
+		reducer:  reducer,
+		started:  start,
+		attempts: attempts,
+		credBuf:  credBytes,
+	}
+	return wrapped, nil
+}
+
+func snapshotIDFromCtx(ctx context.Context) string {
+	if v := ctx.Value(snapshotKey{}); v != nil {
+		if s, ok := v.(string); ok {
+			return s
+		}
+	}
+	return ""
+}
+
+type snapshotKey struct{}
+
+// WithSnapshotID returns a context carrying the bundle ResolvedGraph
+// snapshot id (FR-020). Used by the bundle-format-resolver to thread
+// the snapshot through to llm/request_submitted payloads.
+func WithSnapshotID(parent context.Context, id string) context.Context {
+	return context.WithValue(parent, snapshotKey{}, id)
+}
+
+func zero(b []byte) {
+	for i := range b {
+		b[i] = 0
+	}
+}

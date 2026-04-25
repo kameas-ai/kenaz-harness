@@ -1,0 +1,44 @@
+schema_version: 1
+currency: USD
+best_effort: true
+entries:
+  - kind: anthropic
+    model: claude-sonnet-*
+    per_million_tokens:
+      input: 3.00
+      output: 15.00
+      cached_input_read: 0.30
+      cached_input_write: 3.75
+  - kind: anthropic
+    model: claude-haiku-*
+    per_million_tokens:
+      input: 0.80
+      output: 4.00
+      cached_input_read: 0.08
+      cached_input_write: 1.00
+  - kind: openai
+    model: gpt-4o*
+    per_million_tokens:
+      input: 2.50
+      output: 10.00
+  - kind: openai
+    model: o1*
+    per_million_tokens:
+      input: 15.00
+      output: 60.00
+      reasoning: 60.00
+  - kind: openrouter
+    model: "*"
+    per_million_tokens:
+      input: 2.00
+      output: 8.00
+  - kind: bedrock
+    model: anthropic.claude-*
+    per_million_tokens:
+      input: 3.00
+      output: 15.00
+  - kind: ollama
+    model: "*"
+    per_million_tokens:
+      input: 0.00
+      output: 0.00

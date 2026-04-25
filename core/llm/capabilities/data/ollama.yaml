@@ -1,0 +1,20 @@
+provider: ollama
+defaults:
+  streaming: true
+  tool_calling: false
+  vision: false
+  json_mode: true
+  prompt_caching: false
+  reasoning: false
+  cancellation: true
+  usage_reporting: true
+models:
+  - match: "llama3.*"
+    streaming: true
+    tool_calling: true
+    vision: false
+    json_mode: true
+    prompt_caching: false
+    reasoning: false
+    cancellation: true
+    usage_reporting: true
