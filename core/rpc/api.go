@@ -112,8 +112,10 @@ func (a *API) SetContext(ctx context.Context) {
 }
 
 // New constructs a HarnessAPI implementation. Sub-interfaces are stub
-// objects until each feature mission wires them; the contract is the
-// shape, not the behaviour, per the frontend-foundations mission.
+// objects until each feature mission wires them; the sessions surface
+// is the first to land — when c is non-nil New wires the real
+// session.Manager-backed impl, otherwise the surface falls back to a
+// safe stub so test fixtures can call New(nil) without booting core.
 func New(c *core.Core) *API {
 	a := &API{
 		core:        c,
@@ -121,7 +123,7 @@ func New(c *core.Core) *API {
 		mcpAPI:      &stubMCP{},
 		a2aAPI:      &stubA2A{},
 		workflowAPI: &stubWorkflow{},
-		sessionsAPI: &stubSessions{},
+		sessionsAPI: newSessionsAPI(c),
 		trustAPI:    &stubTrust{},
 		contextAPI:  &stubContext{},
 		bundleAPI:   &stubBundle{},
@@ -131,6 +133,16 @@ func New(c *core.Core) *API {
 	}
 	a.bindings = NewBindings(a)
 	return a
+}
+
+// newSessionsAPI returns the real Manager-backed SessionsAPI when c
+// is non-nil; otherwise a noop stub for callers that pass New(nil)
+// (see api_test.go's TestViewAccessorStability).
+func newSessionsAPI(c *core.Core) sessions.SessionsAPI {
+	if c == nil {
+		return &stubSessions{}
+	}
+	return sessions.NewManagerAPI(c.SessionManager())
 }
 
 // ShellStatus returns a default shell status. Real values are filled by

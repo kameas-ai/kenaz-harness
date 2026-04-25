@@ -308,7 +308,7 @@ func TestManager_AppendMessage_UnknownSession(t *testing.T) {
 	}
 }
 
-func TestManager_RecordToView_RoundTrip(t *testing.T) {
+func TestManager_RecordTimestamps(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	m, _ := newTestManager(t)
@@ -316,12 +316,16 @@ func TestManager_RecordToView_RoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	view := r.ToView()
-	if view.ID != r.ID || view.Name != "round trip" {
-		t.Errorf("view = %+v, want id=%s name=%q", view, r.ID, "round trip")
+	if r.ID == "" {
+		t.Errorf("missing ID: %+v", r)
 	}
-	if !strings.HasPrefix(view.CreatedAt, "2026-04-25") {
-		t.Errorf("CreatedAt = %q, want 2026-04-25 prefix", view.CreatedAt)
+	if r.Name != "round trip" {
+		t.Errorf("Name = %q, want round trip", r.Name)
+	}
+	// Timestamps come from the pinned test clock — yyyymmdd prefix is
+	// enough proof of clock plumbing without freezing the exact value.
+	if !strings.HasPrefix(r.CreatedAt.UTC().Format(time.RFC3339Nano), "2026-04-25") {
+		t.Errorf("CreatedAt = %v, want 2026-04-25 prefix", r.CreatedAt)
 	}
 }
 

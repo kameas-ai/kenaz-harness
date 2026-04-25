@@ -2,17 +2,18 @@ package session
 
 import (
 	"time"
-
-	rpcsessions "github.com/sigil-tech/kaneaz-harness/core/rpc/views/sessions"
 )
 
 // Record is the durable representation of a chat session as the rail UI
-// renders it. It is a superset of the lightweight rpcsessions.Session
-// that crosses the Wails boundary; ToView projects to the wire shape.
+// renders it. It carries every field needed to recreate the rail's
+// view of the session, including FR-002 per-session UI state (Draft,
+// ScrollPosition) so switching sessions preserves where the user
+// left off.
 //
-// Per FR-002 the Record carries per-session UI state (Draft,
-// ScrollPosition) so switching sessions preserves where the user left
-// off.
+// The rpc-layer wire shape (rpcsessions.Session) is a strict subset of
+// Record's fields; the projection lives in the rpc/views/sessions
+// package so this package has no dependency on the rpc layer
+// (DIRECTIVE_001 + import-cycle safety).
 type Record struct {
 	ID             string
 	Name           string
@@ -23,17 +24,6 @@ type Record struct {
 	Draft          string
 	ScrollPosition int64
 	ArchivedAt     *time.Time
-}
-
-// ToView projects a Record into the rpc-layer shape the frontend
-// consumes. Timestamps render as RFC3339 UTC for byte-stable JSON.
-func (r Record) ToView() rpcsessions.Session {
-	return rpcsessions.Session{
-		ID:        r.ID,
-		Name:      r.Name,
-		CreatedAt: r.CreatedAt.UTC().Format(time.RFC3339Nano),
-		UpdatedAt: r.UpdatedAt.UTC().Format(time.RFC3339Nano),
-	}
 }
 
 // Role enumerates the speaker of a Message.
