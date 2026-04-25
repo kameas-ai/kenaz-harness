@@ -21,8 +21,7 @@ const router = createRouter({
     {
       path: '/tools',
       name: 'tools',
-      component: () => import('@/views/placeholder/PlaceholderView.vue'),
-      props: { number: '02', section: 'TOOLS', title: 'Tools' },
+      component: () => import('@/views/tools/ToolsView.vue'),
     },
     {
       path: '/bundles',

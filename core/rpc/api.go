@@ -125,7 +125,6 @@ func New(c *core.Core) *API {
 	a := &API{
 		core:        c,
 		llmAPI:      &stubLLM{},
-		mcpAPI:      &stubMCP{},
 		a2aAPI:      &stubA2A{},
 		workflowAPI: &stubWorkflow{},
 		sessionsAPI: &stubSessions{},
@@ -137,6 +136,7 @@ func New(c *core.Core) *API {
 	a.broker = NewStreamBroker(WailsEmitter{})
 	a.auditImpl = audit.NewAPI(audit.WithSubscriber(a.broker))
 	a.auditAPI = a.auditImpl
+	a.mcpAPI = mcp.NewAPI(mcp.WithSubscriber(a.broker))
 
 	// Wire the bundle reader against the core data dir. nil core (test
 	// harness path) leaves the impl with a nil reader — List returns an

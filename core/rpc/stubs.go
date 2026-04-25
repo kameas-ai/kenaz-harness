@@ -7,7 +7,6 @@ import (
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/a2a"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/contextview"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/llm"
-	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/mcp"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/policy"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/sessions"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/settings"
@@ -30,16 +29,6 @@ func (s *stubLLM) StartStream(_ context.Context, _ string) (string, error) {
 	return "", errNotWired
 }
 func (s *stubLLM) StopStream(_ context.Context, _ string) error { return errNotWired }
-
-// ── mcp ────────────────────────────────────────────────────────────────
-
-type stubMCP struct{}
-
-func (s *stubMCP) ListServers(_ context.Context) ([]mcp.Server, error) { return nil, errNotWired }
-func (s *stubMCP) StartStream(_ context.Context, _ string) (string, error) {
-	return "", errNotWired
-}
-func (s *stubMCP) StopStream(_ context.Context, _ string) error { return errNotWired }
 
 // ── a2a ────────────────────────────────────────────────────────────────
 

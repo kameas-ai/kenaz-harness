@@ -26,6 +26,8 @@ export interface MCPServer {
   name: string;
   state: string;
   version: string;
+  transport?: string;
+  capabilities?: string[];
 }
 
 export interface A2ACard {
