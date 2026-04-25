@@ -36,12 +36,13 @@ func main() {
 
 	err = wails.Run(&options.App{
 		Title:  "kaneaz-harness",
-		Width:  1024,
-		Height: 768,
+		Width:  1280,
+		Height: 800,
 		AssetServer: &assetserver.Options{
-			Assets: assets,
+			Assets:     assets,
+			Middleware: rpc.NewCSPMiddleware(),
 		},
-		BackgroundColour: &options.RGBA{R: 27, G: 38, B: 54, A: 1},
+		BackgroundColour: &options.RGBA{R: 10, G: 10, B: 11, A: 1},
 		OnStartup: func(ctx context.Context) {
 			if err := c.Start(ctx); err != nil {
 				log.Printf("core start: %v", err)
