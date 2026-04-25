@@ -3,7 +3,7 @@ import { mount } from '@vue/test-utils';
 import App from '@/App.vue';
 import { createMemoryHistory, createRouter } from 'vue-router';
 import { createFakeHarnessClient } from '@/lib/harnessClient';
-import { installHarnessClient } from '@/lib/harnessClientContext';
+import { HarnessClientKey, installHarnessClient } from '@/lib/harnessClientContext';
 import { defineComponent, h } from 'vue';
 
 describe('App smoke', () => {
@@ -28,11 +28,12 @@ describe('App smoke', () => {
     const wrapper = mount(App, {
       global: {
         plugins: [router],
-        provide: {},
+        provide: {
+          [HarnessClientKey as symbol]: createFakeHarnessClient(),
+        },
       },
     });
 
-    // Install fake client AFTER mount via a re-mount with provide.
     expect(wrapper.exists()).toBe(true);
 
     // Drive the install path directly to keep coverage on the helper.
