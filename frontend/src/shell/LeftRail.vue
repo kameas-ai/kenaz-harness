@@ -129,31 +129,31 @@ async function clearAll() {
           </router-link>
           <button
             type="button"
-            class="absolute right-1 top-1/2 -translate-y-1/2 p-1 rounded-sm text-ink-dim opacity-0 group-hover:opacity-100 hover:text-signal-danger hover:bg-surface-3 focus:opacity-100 focus:outline-none disabled:opacity-50"
+            class="absolute right-1 top-1/2 -translate-y-1/2 p-1 rounded-sm text-ink-dim hover:text-signal-danger hover:bg-surface-3 focus:outline-none focus:ring-1 focus:ring-accent disabled:opacity-50"
             :aria-label="`Delete session ${session.name}`"
             :disabled="deletingId === session.id"
             :data-testid="`delete-session-${session.id}`"
             @click="deleteSession(session.id, $event)"
           >
-            <X :size="12" />
+            <X :size="14" />
           </button>
         </li>
         <li v-if="sessions.list.length === 0" class="px-3 py-2 text-xs text-ink-subtle">
           No sessions yet
         </li>
       </ul>
-      <div
-        v-if="sessions.list.length > 1"
-        class="mt-2 px-2 hidden two-col:block"
-      >
+      <div v-if="sessions.list.length > 0" class="mt-2 px-2">
         <button
           type="button"
           class="flex items-center gap-1.5 px-2 py-1 rounded-sm text-[11px] uppercase tracking-[0.16em] text-ink-dim hover:text-signal-danger transition-fast"
+          :title="`Delete all ${sessions.list.length} sessions`"
           :data-testid="'clear-all-sessions'"
           @click="clearAll"
         >
-          <Trash2 :size="11" />
-          Clear all
+          <Trash2 :size="12" />
+          <span class="hidden two-col:inline">
+            Clear all ({{ sessions.list.length }})
+          </span>
         </button>
       </div>
     </nav>
