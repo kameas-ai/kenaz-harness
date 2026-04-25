@@ -1,0 +1,29 @@
+provider: anthropic
+defaults:
+  streaming: true
+  tool_calling: true
+  vision: true
+  json_mode: true
+  prompt_caching: true
+  reasoning: true
+  cancellation: true
+  usage_reporting: true
+models:
+  - match: "claude-sonnet-*"
+    streaming: true
+    tool_calling: true
+    vision: true
+    json_mode: true
+    prompt_caching: true
+    reasoning: true
+    cancellation: true
+    usage_reporting: true
+  - match: "claude-haiku-*"
+    streaming: true
+    tool_calling: true
+    vision: true
+    json_mode: true
+    prompt_caching: true
+    reasoning: false
+    cancellation: true
+    usage_reporting: true

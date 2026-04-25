@@ -1,0 +1,29 @@
+provider: openai
+defaults:
+  streaming: true
+  tool_calling: true
+  vision: false
+  json_mode: true
+  prompt_caching: false
+  reasoning: false
+  cancellation: true
+  usage_reporting: true
+models:
+  - match: "gpt-4o*"
+    streaming: true
+    tool_calling: true
+    vision: true
+    json_mode: true
+    prompt_caching: false
+    reasoning: false
+    cancellation: true
+    usage_reporting: true
+  - match: "o1*"
+    streaming: true
+    tool_calling: true
+    vision: true
+    json_mode: true
+    prompt_caching: false
+    reasoning: true
+    cancellation: true
+    usage_reporting: true

@@ -1,0 +1,20 @@
+provider: bedrock
+defaults:
+  streaming: true
+  tool_calling: true
+  vision: false
+  json_mode: false
+  prompt_caching: false
+  reasoning: false
+  cancellation: true
+  usage_reporting: true
+models:
+  - match: "anthropic.claude-*"
+    streaming: true
+    tool_calling: true
+    vision: true
+    json_mode: true
+    prompt_caching: true
+    reasoning: true
+    cancellation: true
+    usage_reporting: true
