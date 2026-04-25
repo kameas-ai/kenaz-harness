@@ -4,6 +4,7 @@ frontend/dist/*
 !frontend/dist/.gitkeep
 .idea/
 kitty-specs/
+.worktrees/
 
 # Added by Spec Kitty CLI (auto-managed)
 .claude/
