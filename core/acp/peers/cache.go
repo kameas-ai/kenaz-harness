@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"kaneaz-harness/core/acp"
+	"github.com/sigil-tech/kaneaz-harness/core/acp"
 )
 
 // DefaultCardCacheTTL is the v1 default Agent Card cache TTL (plan

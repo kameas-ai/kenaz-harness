@@ -14,8 +14,8 @@ import (
 	"sort"
 	"sync"
 
-	"kaneaz-harness/core/acp"
-	"kaneaz-harness/core/secrets"
+	"github.com/sigil-tech/kaneaz-harness/core/acp"
+	"github.com/sigil-tech/kaneaz-harness/core/secrets"
 )
 
 // Registry is the in-memory peer_id -> PeerProfile map. It is

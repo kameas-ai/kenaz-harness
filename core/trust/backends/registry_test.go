@@ -5,8 +5,8 @@ import (
 	"errors"
 	"testing"
 
-	"kaneaz-harness/core/trust"
-	"kaneaz-harness/core/trust/backends"
+	"github.com/sigil-tech/kaneaz-harness/core/trust"
+	"github.com/sigil-tech/kaneaz-harness/core/trust/backends"
 )
 
 // fakeBackend implements [backends.SigningBackend] for registry tests.

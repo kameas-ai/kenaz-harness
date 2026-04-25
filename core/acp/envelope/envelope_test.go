@@ -12,7 +12,7 @@ import (
 	"strings"
 	"testing"
 
-	"kaneaz-harness/core/acp"
+	"github.com/sigil-tech/kaneaz-harness/core/acp"
 )
 
 // TestPublicSurfaceUsesNoSDKTypes is a structural assertion that no

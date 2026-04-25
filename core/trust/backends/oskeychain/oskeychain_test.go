@@ -5,9 +5,9 @@ import (
 	"errors"
 	"testing"
 
-	"kaneaz-harness/core/trust"
-	"kaneaz-harness/core/trust/backends"
-	"kaneaz-harness/core/trust/backends/oskeychain"
+	"github.com/sigil-tech/kaneaz-harness/core/trust"
+	"github.com/sigil-tech/kaneaz-harness/core/trust/backends"
+	"github.com/sigil-tech/kaneaz-harness/core/trust/backends/oskeychain"
 )
 
 // TestStubFailsClosed — the v1.0 stub reports HealthUnavailable so the

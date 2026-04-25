@@ -3,7 +3,7 @@ package backends
 import (
 	"sync"
 
-	"kaneaz-harness/core/trust"
+	"github.com/sigil-tech/kaneaz-harness/core/trust"
 )
 
 // Registry is the process-local map of [trust.BackendKind] →

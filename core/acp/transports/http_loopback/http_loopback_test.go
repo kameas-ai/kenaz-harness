@@ -8,7 +8,7 @@ import (
 	"sync"
 	"testing"
 
-	"kaneaz-harness/core/acp"
+	"github.com/sigil-tech/kaneaz-harness/core/acp"
 )
 
 func TestIsLoopbackHost(t *testing.T) {

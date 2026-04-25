@@ -3,7 +3,7 @@ package algo
 import (
 	"crypto/ed25519"
 
-	"kaneaz-harness/core/trust"
+	"github.com/sigil-tech/kaneaz-harness/core/trust"
 )
 
 // ed25519Verifier verifies detached Ed25519 signatures per RFC 8032.

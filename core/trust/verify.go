@@ -7,7 +7,7 @@ import (
 	"errors"
 	"time"
 
-	"kaneaz-harness/core/trust/internal/algo"
+	"github.com/sigil-tech/kaneaz-harness/core/trust/internal/algo"
 )
 
 // verifyDeps bundles the read-side collaborators the verify pipeline

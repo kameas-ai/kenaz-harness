@@ -13,7 +13,7 @@ package verify
 import (
 	"context"
 
-	"kaneaz-harness/core/acp"
+	"github.com/sigil-tech/kaneaz-harness/core/acp"
 )
 
 // UnsignedAcceptVerifier accepts every fetched card as-is. Suitable for

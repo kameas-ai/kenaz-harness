@@ -5,7 +5,7 @@ import (
 	"sync"
 	"time"
 
-	"kaneaz-harness/core/trust/internal/algo"
+	"github.com/sigil-tech/kaneaz-harness/core/trust/internal/algo"
 )
 
 // engine is the concrete v1.0 [TrustEngine] implementation.

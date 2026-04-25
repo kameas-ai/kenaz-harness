@@ -7,7 +7,7 @@
 package algo
 
 import (
-	"kaneaz-harness/core/trust"
+	"github.com/sigil-tech/kaneaz-harness/core/trust"
 )
 
 // Metadata describes a registered algorithm's runtime parameters.

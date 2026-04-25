@@ -6,8 +6,8 @@ import (
 	"errors"
 	"testing"
 
-	"kaneaz-harness/core/trust"
-	"kaneaz-harness/core/trust/internal/algo"
+	"github.com/sigil-tech/kaneaz-harness/core/trust"
+	"github.com/sigil-tech/kaneaz-harness/core/trust/internal/algo"
 )
 
 // TestEd25519RoundTrip — sign with stdlib, verify through the registry.

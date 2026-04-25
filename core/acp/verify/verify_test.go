@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"kaneaz-harness/core/acp"
+	"github.com/sigil-tech/kaneaz-harness/core/acp"
 )
 
 func TestUnsignedAcceptVerifier(t *testing.T) {

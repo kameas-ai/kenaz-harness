@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 
-	"kaneaz-harness/core/trust"
+	"github.com/sigil-tech/kaneaz-harness/core/trust"
 )
 
 // ErrNotImplemented is returned by every method until the real

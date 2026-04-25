@@ -36,7 +36,7 @@ import (
 	"sync"
 	"time"
 
-	"kaneaz-harness/core/acp"
+	"github.com/sigil-tech/kaneaz-harness/core/acp"
 )
 
 // Dialer is the transport-neutral seam used by the envelope to acquire

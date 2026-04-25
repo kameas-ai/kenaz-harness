@@ -4,7 +4,7 @@ import (
 	"errors"
 	"fmt"
 
-	"kaneaz-harness/core/event/kind"
+	"github.com/sigil-tech/kaneaz-harness/core/event/kind"
 )
 
 // ValidateKind is the public-API mirror of kind.Validate. It rewrites
