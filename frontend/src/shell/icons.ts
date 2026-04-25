@@ -15,7 +15,9 @@ import {
   Shield,
   Sun,
   Moon,
+  Trash2,
   Wrench,
+  X,
 } from 'lucide-vue-next';
 
 export {
@@ -33,5 +35,7 @@ export {
   Shield,
   Sun,
   Moon,
+  Trash2,
   Wrench,
+  X,
 };
