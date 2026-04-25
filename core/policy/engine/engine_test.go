@@ -151,7 +151,8 @@ func TestOPAImportBoundary(t *testing.T) {
 	policyRoot := filepath.Join(root, "policy")
 
 	violations := []string{}
-	walk := func(dir string) {
+	var walk func(dir string)
+	walk = func(dir string) {
 		entries, err := readDir(dir)
 		if err != nil {
 			return
@@ -163,6 +164,12 @@ func TestOPAImportBoundary(t *testing.T) {
 				continue
 			}
 			if !strings.HasSuffix(full, ".go") {
+				continue
+			}
+			// Skip test files: the boundary applies to production
+			// imports; tests legitimately mention the OPA path in
+			// scanning logic and string literals.
+			if strings.HasSuffix(full, "_test.go") {
 				continue
 			}
 			rel, _ := filepath.Rel(policyRoot, full)
