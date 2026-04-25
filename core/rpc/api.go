@@ -32,6 +32,7 @@ import (
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/workflow"
 	"github.com/sigil-tech/kaneaz-harness/core/secrets"
 	secretsref "github.com/sigil-tech/kaneaz-harness/core/secrets/ref"
+	"github.com/sigil-tech/kaneaz-harness/core/session"
 	"github.com/zalando/go-keyring"
 )
 
@@ -244,7 +245,46 @@ func newLLMStack(c *core.Core, broker *StreamBroker) llm.LLMConnectorAPI {
 		Store:    store,
 		Keychain: &keychainWriter{backend: secretsBackend},
 		Prober:   &registryProber{reg: reg, creds: credResolver},
+		History:  newSessionHistoryReader(c),
 	})
+}
+
+// newSessionHistoryReader wires the LLM impl to the session manager
+// so buildMessages can thread the user's actual conversation into the
+// upstream provider call. Without this, the connector falls back to a
+// hardcoded demo prompt — the symptom is "my messages aren't reaching
+// the LLM" no matter what the user types.
+func newSessionHistoryReader(c *core.Core) llm.SessionMessageReader {
+	if c == nil {
+		return nil
+	}
+	mgr := c.SessionManager()
+	if mgr == nil {
+		return nil
+	}
+	return &sessionHistoryReader{mgr: mgr}
+}
+
+type sessionHistoryReader struct {
+	mgr *session.Manager
+}
+
+func (r *sessionHistoryReader) ListMessages(ctx context.Context, sessionID string) ([]llm.SessionMessage, error) {
+	if r == nil || r.mgr == nil {
+		return nil, nil
+	}
+	stored, err := r.mgr.ListMessages(ctx, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]llm.SessionMessage, 0, len(stored))
+	for _, m := range stored {
+		out = append(out, llm.SessionMessage{
+			Role:    string(m.Role),
+			Content: m.Content,
+		})
+	}
+	return out, nil
 }
 
 // registryProber satisfies llm.ProviderProber by routing through the
