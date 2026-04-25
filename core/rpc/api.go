@@ -1,24 +1,162 @@
 // Package rpc is the Wails-binding façade for the harness frontend.
 //
-// The substantive surface is the HarnessAPI defined by the
-// frontend-foundations mission — view-scoped accessors mirroring the
-// KenazAPI shape (Observer / VMSandbox / AuditViewer in Kenaz; LLMConnector
-// / MCP / A2A / Workflow / Sessions / etc. here). This stub exists so
-// main.go's `rpc.New(c)` keeps compiling while that mission lands.
+// HarnessAPI mirrors Kenaz's KenazAPI shape — top-level cross-cutting
+// methods (ShellStatus, AppInfo) plus 12 view-scoped sub-interfaces
+// returning stable Go pointers for the lifetime of the API value.
+//
+// DIRECTIVE_001: the frontend talks to core/ ONLY through this package.
+// No core/ package imports anything from frontend/.
 package rpc
 
-import "github.com/sigil-tech/kaneaz-harness/core"
+import (
+	"context"
 
-// API is the placeholder Wails-bound struct. The real surface — typed
-// accessors, slog instrumentation, and a streamBroker — is built by the
-// frontend-foundations mission.
-type API struct {
-	core *core.Core
+	"github.com/sigil-tech/kaneaz-harness/core"
+	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/a2a"
+	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/audit"
+	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/bundle"
+	contextview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/contextview"
+	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/llm"
+	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/mcp"
+	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/policy"
+	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/sessions"
+	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/settings"
+	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/trust"
+	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/workflow"
+)
+
+// HarnessAPI is the boundary between the Wails-hosted Vue frontend and
+// the Go core. Top-level cross-cutting methods (ShellStatus, AppInfo)
+// live here; view-specific surfaces are accessed through stable,
+// view-scoped sub-interfaces. Implementations MUST be safe for
+// concurrent use.
+type HarnessAPI interface {
+	ShellStatus(ctx context.Context) (ShellStatus, error)
+	AppInfo(ctx context.Context) (AppInfo, error)
+
+	LLMConnector() llm.LLMConnectorAPI
+	MCP() mcp.MCPAPI
+	A2A() a2a.A2AAPI
+	Workflow() workflow.WorkflowAPI
+	Sessions() sessions.SessionsAPI
+	Trust() trust.TrustAPI
+	Context() contextview.ContextAPI
+	Bundle() bundle.BundleAPI
+	Policy() policy.PolicyAPI
+	Audit() audit.AuditAPI
+	Settings() settings.SettingsAPI
 }
 
-// New constructs a placeholder API.
-func New(c *core.Core) *API { return &API{core: c} }
+// ShellStatus drives the Toolbar status pills + LegendBar live-rate
+// indicators. Polled every 5 s while focused; future optimization
+// replaces the poll with a `shell:status-changed` push event.
+type ShellStatus struct {
+	ActiveProvider string  `json:"activeProvider"` // FR-001f
+	TrustTier      string  `json:"trustTier"`      // FR-001f
+	HarnessBuild   string  `json:"harnessBuild"`   // FR-001f
+	Connection     string  `json:"connection"`     // connecting | ready | degraded | lost (FR-013, FR-017)
+	EventRate      float64 `json:"eventRate"`      // events/sec (FR-001g)
+	PolicyApplied  bool    `json:"policyApplied"`  // FR-001e
+	RedactionOn    bool    `json:"redactionOn"`    // FR-001e
+	LocalFirstOn   bool    `json:"localFirstOn"`   // FR-001e
+}
 
-// Bindings returns the slice of Wails-bound objects. Empty until the
-// frontend-foundations mission lands the HarnessAPI surface.
-func (a *API) Bindings() []any { return nil }
+// AppInfo is read once on app start; cached frontend-side for the session.
+type AppInfo struct {
+	Build      string     `json:"build"`
+	Commit     string     `json:"commit"`
+	BuildTime  string     `json:"buildTime"`
+	GoVersion  string     `json:"goVersion"`
+	Platform   string     `json:"platform"`
+	WindowSize WindowSize `json:"windowSize"`
+}
+
+// WindowSize mirrors the charter shape.
+type WindowSize struct {
+	Width  int `json:"width"`
+	Height int `json:"height"`
+}
+
+// API is the concrete HarnessAPI implementation backed by core.
+// Currently a stub: each view accessor returns a no-op implementation
+// stable for the lifetime of API. Real wiring lands in feature missions.
+type API struct {
+	core *core.Core
+
+	// Stable view-accessor instances (plan §4.2).
+	llmAPI      llm.LLMConnectorAPI
+	mcpAPI      mcp.MCPAPI
+	a2aAPI      a2a.A2AAPI
+	workflowAPI workflow.WorkflowAPI
+	sessionsAPI sessions.SessionsAPI
+	trustAPI    trust.TrustAPI
+	contextAPI  contextview.ContextAPI
+	bundleAPI   bundle.BundleAPI
+	policyAPI   policy.PolicyAPI
+	auditAPI    audit.AuditAPI
+	settingsAPI settings.SettingsAPI
+}
+
+// New constructs a HarnessAPI implementation. Sub-interfaces are stub
+// objects until each feature mission wires them; the contract is the
+// shape, not the behaviour, per the frontend-foundations mission.
+func New(c *core.Core) *API {
+	return &API{
+		core:        c,
+		llmAPI:      &stubLLM{},
+		mcpAPI:      &stubMCP{},
+		a2aAPI:      &stubA2A{},
+		workflowAPI: &stubWorkflow{},
+		sessionsAPI: &stubSessions{},
+		trustAPI:    &stubTrust{},
+		contextAPI:  &stubContext{},
+		bundleAPI:  &stubBundle{},
+		policyAPI:   &stubPolicy{},
+		auditAPI:    &stubAudit{},
+		settingsAPI: &stubSettings{},
+	}
+}
+
+// ShellStatus returns a default shell status. Real values are filled by
+// downstream missions; for now the chassis renders a quiet baseline.
+func (a *API) ShellStatus(_ context.Context) (ShellStatus, error) {
+	return ShellStatus{
+		ActiveProvider: "—",
+		TrustTier:      "Local",
+		HarnessBuild:   "0.0.0-dev",
+		Connection:     "ready",
+		EventRate:      0,
+		PolicyApplied:  true,
+		RedactionOn:    true,
+		LocalFirstOn:   true,
+	}, nil
+}
+
+// AppInfo returns build metadata. Real values come from build-time ldflags.
+func (a *API) AppInfo(_ context.Context) (AppInfo, error) {
+	return AppInfo{
+		Build:      "dev",
+		Commit:     "unknown",
+		BuildTime:  "",
+		GoVersion:  "",
+		Platform:   "",
+		WindowSize: WindowSize{Width: 1280, Height: 800},
+	}, nil
+}
+
+// View accessors return the stable instance constructed in New.
+func (a *API) LLMConnector() llm.LLMConnectorAPI { return a.llmAPI }
+func (a *API) MCP() mcp.MCPAPI                   { return a.mcpAPI }
+func (a *API) A2A() a2a.A2AAPI                   { return a.a2aAPI }
+func (a *API) Workflow() workflow.WorkflowAPI    { return a.workflowAPI }
+func (a *API) Sessions() sessions.SessionsAPI    { return a.sessionsAPI }
+func (a *API) Trust() trust.TrustAPI             { return a.trustAPI }
+func (a *API) Context() contextview.ContextAPI   { return a.contextAPI }
+func (a *API) Bundle() bundle.BundleAPI          { return a.bundleAPI }
+func (a *API) Policy() policy.PolicyAPI          { return a.policyAPI }
+func (a *API) Audit() audit.AuditAPI             { return a.auditAPI }
+func (a *API) Settings() settings.SettingsAPI    { return a.settingsAPI }
+
+// Bindings returns the slice of Wails-bound objects. The Bindings struct
+// (bindings.go) is the flat-method surface Wails reflects.
+func (a *API) Bindings() []any { return []any{NewBindings(a)} }

@@ -1,0 +1,32 @@
+// Package audit defines the AuditAPI view-scoped accessor consumed by
+// the audit-log viewer (downstream mission). Backed by event-log Reader.
+package audit
+
+import "context"
+
+// Entry is a redacted audit log entry. Redaction is applied server-side
+// by the event-log mission's pipeline (privacy CI invariant #2 forbids
+// raw user content in logs anyway).
+type Entry struct {
+	ID        string `json:"id"`
+	Timestamp string `json:"timestamp"`
+	Category  string `json:"category"`
+	Subject   string `json:"subject"`
+	Trailing  string `json:"trailing,omitempty"`
+}
+
+// Filter is a structured filter for ListEntries.
+type Filter struct {
+	Categories []string `json:"categories,omitempty"`
+	Since      string   `json:"since,omitempty"`
+	Until      string   `json:"until,omitempty"`
+	Limit      int      `json:"limit,omitempty"`
+}
+
+// AuditAPI is the view-scoped accessor for the append-only audit log.
+type AuditAPI interface {
+	ListEntries(ctx context.Context, filter Filter) ([]Entry, error)
+	VerifyEntry(ctx context.Context, id string) (bool, error)
+	StartStream(ctx context.Context, filter Filter) (subscriptionID string, err error)
+	StopStream(ctx context.Context, subscriptionID string) error
+}
