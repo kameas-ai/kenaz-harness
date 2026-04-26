@@ -25,7 +25,7 @@ describe('ToolsView (FR-001b numbered-section header)', () => {
     await flushPromises();
     expect(w.text()).toContain('02');
     expect(w.text()).toContain('TOOLS');
-    expect(w.text()).toContain('Connected MCP servers');
+    expect(w.text()).toContain('MCP servers');
   });
 
   it('renders the empty-state copy + doc link when no servers are configured', async () => {

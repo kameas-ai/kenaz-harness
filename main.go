@@ -10,6 +10,7 @@ import (
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
+	"github.com/wailsapp/wails/v2/pkg/options/mac"
 
 	"github.com/sigil-tech/kaneaz-harness/core"
 	"github.com/sigil-tech/kaneaz-harness/core/logging"
@@ -48,6 +49,17 @@ func main() {
 			Middleware: rpc.NewCSPMiddleware(),
 		},
 		BackgroundColour: &options.RGBA{R: 10, G: 10, B: 11, A: 1},
+		// macOS: traffic-light buttons (incl. green fullscreen pill) are
+		// hidden by Wails defaults in some dev configurations. Explicit
+		// TitleBarHiddenInset keeps the traffic lights visible inset over
+		// the in-app titlebar (modern Mac app pattern) and lets the user
+		// hit the green button to enter fullscreen.
+		Mac: &mac.Options{
+			TitleBar:             mac.TitleBarHiddenInset(),
+			Appearance:           mac.NSAppearanceNameDarkAqua,
+			WebviewIsTransparent: false,
+			WindowIsTranslucent:  false,
+		},
 		OnStartup: func(ctx context.Context) {
 			api.SetContext(ctx)
 			if err := c.Start(ctx); err != nil {

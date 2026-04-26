@@ -10,6 +10,7 @@
  */
 import { onMounted, ref } from 'vue';
 import CanvasHead from '@/shell/CanvasHead.vue';
+import KaneazToolsPanel from './KaneazToolsPanel.vue';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
 import type { MCPServer } from '@/lib/types';
 
@@ -58,9 +59,19 @@ onMounted(() => {
     <CanvasHead
       number="02"
       section="TOOLS"
-      title="Connected MCP servers"
-      subtitle="Tool servers registered with the harness via bundles. Capability advertisements and tool calls flow through the local mcp-client; nothing leaves the device."
+      title="Tools"
+      subtitle="Built-in Kaneaz tools toggle on top; below them, every MCP server registered with the harness. All tool calls flow through the local mcp-client; nothing leaves the device."
     />
+
+    <KaneazToolsPanel />
+
+    <div class="px-6 pt-2 pb-1">
+      <h2
+        class="font-ui text-[11px] uppercase tracking-[0.18em] text-ink-subtle"
+      >
+        MCP servers
+      </h2>
+    </div>
 
     <div v-if="loading" class="px-6 py-4 font-ui text-sm text-ink-muted">
       Loading servers…

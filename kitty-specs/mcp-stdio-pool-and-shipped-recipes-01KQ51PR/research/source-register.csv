@@ -1,0 +1,16 @@
+source_id,url,access_method,access_date,evidence_type,reliability
+S1,https://spec.modelcontextprotocol.io/specification/basic/transports/,documented,2026-04-26,protocol-spec,high-when-verified
+S2,https://spec.modelcontextprotocol.io/specification/basic/lifecycle/,documented,2026-04-26,protocol-spec,high-when-verified
+S3,https://spec.modelcontextprotocol.io/specification/basic/utilities/cancellation/,documented,2026-04-26,protocol-spec,high-when-verified
+S4,https://spec.modelcontextprotocol.io/specification/client/sampling/,documented,2026-04-26,protocol-spec,high-when-verified
+S5,https://spec.modelcontextprotocol.io/specification/client/roots/,documented,2026-04-26,protocol-spec,high-when-verified
+S6,https://spec.modelcontextprotocol.io/specification/server/utilities/logging/,documented,2026-04-26,protocol-spec,high-when-verified
+S7,https://spec.modelcontextprotocol.io/specification/basic/utilities/progress/,documented,2026-04-26,protocol-spec,high-when-verified
+S8,https://spec.modelcontextprotocol.io/specification/basic/utilities/ping/,documented,2026-04-26,protocol-spec,high-when-verified
+S9,https://github.com/modelcontextprotocol/servers/tree/main/src/brave-search,documented,2026-04-26,reference-server,high-when-verified
+S10,https://modelcontextprotocol.io/quickstart/server,documented,2026-04-26,quickstart-doc,medium
+S11,/Users/alecfeeman/PycharmProjects/kaneaz-harness/core/mcp/pool.go,read,2026-04-26,internal-code,high
+S12,/Users/alecfeeman/PycharmProjects/kaneaz-harness/core/mcp/fixture/pool.go,read,2026-04-26,internal-code,high
+S13,/Users/alecfeeman/PycharmProjects/kaneaz-harness/core/rpc/api.go,read,2026-04-26,internal-code,high
+S14,/Users/alecfeeman/PycharmProjects/kaneaz-harness/core/secrets/memory_backend.go,read,2026-04-26,internal-code,high
+S15,/Users/alecfeeman/PycharmProjects/kaneaz-harness/core/llm/llm.go,read,2026-04-26,internal-code,high

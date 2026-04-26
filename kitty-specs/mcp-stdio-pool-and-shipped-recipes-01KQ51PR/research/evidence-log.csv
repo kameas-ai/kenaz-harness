@@ -1,0 +1,19 @@
+evidence_id,source_id,decision,claim,confidence
+E1,S1,newline-delimited JSON-RPC 2.0 framing,Stdio transport uses one JSON-RPC message per line; no Content-Length header,medium-pending-fetch
+E2,S1,malformed-line skip,Non-JSON stdout lines are skipped not fatal (reference servers emit banners),medium-pending-fetch
+E3,S2,protocolVersion 2024-11-05,Initialize handshake currently pins to this version,medium-pending-fetch
+E4,S2,first-init-failure no-restart,Spec separates initialize from runtime; we mirror the lifecycle distinction,high
+E5,S3,cancellation correlation by id,Late responses are best-effort and may still arrive,medium-pending-fetch
+E6,S4,sampling pass-through shape,SamplingRequest maps onto host LLM (messages/systemPrompt/maxTokens/etc),medium-pending-fetch
+E7,S5,roots format,roots/list returns file:// URI list,medium-pending-fetch
+E8,S6,log level mapping,Server level strings map onto slog levels,medium-pending-fetch
+E9,S7,progress token correlation,progressToken correlates progress notifications to in-flight request id,medium-pending-fetch
+E10,S8,ping shape,Empty-params ping with empty result is the liveness probe,medium-pending-fetch
+E11,S9,Brave server tool names,brave_web_search and brave_local_search exposed by @modelcontextprotocol/server-brave-search,medium-needs-npm-verify
+E12,S9,Brave env var,BRAVE_API_KEY required,medium-needs-npm-verify
+E13,S10,cold-spawn 5-15s,npx -y first-run latency is multi-second on typical broadband,medium
+E14,S11,mcp.Pool interface,Open/Close/Tools/Call surface; ServerSpec; Tool struct,high
+E15,S12,fixture.Pool kept for unit tests,Tests in core/mcp/fixture and consumers depend on this,high
+E16,S13,newLLMStack uses fixture today,Replace at line 299 of api.go,high
+E17,S14,keychain via zalando/go-keyring,Service namespace 'kaneaz-harness'; locator scheme is per-consumer,high
+E18,S15,corellm.GenerationRequest shape,Provider-agnostic invocation shape suitable for sampling adapter,high

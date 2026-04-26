@@ -11,7 +11,6 @@
  * to coalesce rapid toggles into a single disk write.
  */
 import { onMounted, ref } from 'vue';
-import { useRouter } from 'vue-router';
 import CanvasHead from '@/shell/CanvasHead.vue';
 import SettingsTabs from '@/views/settings/SettingsTabs.vue';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
@@ -19,7 +18,6 @@ import { debouncedSave } from '@/lib/settings';
 import type { AppInfo, Settings, Theme } from '@/lib/types';
 
 const client = useHarnessClient();
-const router = useRouter();
 
 const settings = ref<Settings>({
   schemaVersion: 1,
@@ -31,7 +29,6 @@ const settings = ref<Settings>({
 });
 const appInfo = ref<AppInfo | null>(null);
 const restoreOnLaunch = ref(true);
-const memoryEnabled = ref(false);
 
 const themes: ReadonlyArray<{ value: Theme; label: string; note?: string }> = [
   { value: 'system', label: 'System' },
@@ -50,37 +47,6 @@ async function refresh() {
   } catch {
     appInfo.value = null;
   }
-  try {
-    memoryEnabled.value = await client.settings.getMemory();
-  } catch {
-    memoryEnabled.value = false;
-  }
-}
-
-function toggleMemory(event: Event) {
-  const next = (event.target as HTMLInputElement).checked;
-  memoryEnabled.value = next;
-  void client.settings
-    .setMemory(next)
-    .then(() => {
-      // The settings toggle is a convenience that auto-installs the
-      // two starter memory hooks on enable / removes them on disable.
-      // Errors during install/remove are logged but do not roll back
-      // the toggle — operators can view /hooks to fix any drift.
-      if (next) {
-        return client.hooks.installStarterMemory();
-      }
-      return client.hooks.removeStarterMemory();
-    })
-    .catch(() => {
-      // Roll back the visual state on error so the toggle reflects
-      // what the backend actually persisted.
-      memoryEnabled.value = !next;
-    });
-}
-
-function gotoMemory() {
-  void router.push('/memory');
 }
 
 function setTheme(t: Theme) {
@@ -169,36 +135,6 @@ onMounted(() => {
             {{ settings.windowSize.width }} × {{ settings.windowSize.height }}
           </dd>
         </dl>
-      </section>
-
-      <section>
-        <h2 class="font-ui text-[11px] uppercase tracking-[0.18em] text-ink-subtle">
-          Long-term memory
-        </h2>
-        <label class="mt-2 flex items-center gap-3 font-ui text-[12px] text-ink">
-          <input
-            type="checkbox"
-            class="accent-accent"
-            :checked="memoryEnabled"
-            data-testid="memory-toggle"
-            @change="toggleMemory"
-          />
-          Enable cross-session memory
-        </label>
-        <p class="mt-1 text-[11px] text-ink-muted">
-          When enabled, messages you mark with 📌 are embedded and used
-          as context for future conversations across all sessions.
-          Requires a configured OpenAI provider for embeddings. All data
-          stays on disk in <span class="font-mono">&lt;DataDir&gt;/memory.gob</span>.
-        </p>
-        <button
-          type="button"
-          class="mt-2 px-3 py-1 rounded-sm border border-border-muted text-ink text-[11px] uppercase tracking-[0.18em] hover:bg-surface-2"
-          data-testid="memory-view-link"
-          @click="gotoMemory"
-        >
-          View saved memories →
-        </button>
       </section>
 
       <section v-if="appInfo">

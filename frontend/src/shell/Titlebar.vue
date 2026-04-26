@@ -14,7 +14,7 @@ const theme = useTheme();
 </script>
 
 <template>
-  <div class="flex items-center justify-between px-4 py-2 select-none">
+  <div class="flex items-center justify-between pl-[88px] pr-4 py-2 select-none">
     <div class="flex items-center gap-3">
       <span
         v-if="showDisclaimer !== false"
