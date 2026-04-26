@@ -332,13 +332,13 @@ func TestMigrations_RegisterAndApply(t *testing.T) {
 		}
 	}
 
-	// Ledger rows: 2 storage bootstrap + 3 sessions migrations
-	// (0300 init + 0301 context_attachments + 0302 content_json) =
-	// 5 applied entries.
-	if got := len(db.ledger); got != 5 {
-		t.Fatalf("ledger size = %d, want 5", got)
+	// Ledger rows: 2 storage bootstrap + 4 sessions migrations
+	// (0300 init + 0301 context_attachments + 0302 content_json +
+	// 0303 artifacts) = 6 applied entries.
+	if got := len(db.ledger); got != 6 {
+		t.Fatalf("ledger size = %d, want 6", got)
 	}
-	wantVersions := []int{1, 2, 300, 301, 302}
+	wantVersions := []int{1, 2, 300, 301, 302, 303}
 	for i, want := range wantVersions {
 		if db.ledger[i].Version != want {
 			t.Errorf("ledger[%d].Version = %d, want %d", i, db.ledger[i].Version, want)
@@ -365,6 +365,19 @@ func TestMigrations_RegisterAndApply(t *testing.T) {
 	}
 	if !db.indexes["idx_context_attachments_scope"] {
 		t.Errorf("expected idx_context_attachments_scope to exist")
+	}
+	// artifacts table + indexes land in 0303.
+	if !db.tables["artifacts"] {
+		t.Errorf("expected artifacts table to exist")
+	}
+	for _, idx := range []string{
+		"idx_artifacts_session",
+		"idx_artifacts_project",
+		"idx_artifacts_content_hash",
+	} {
+		if !db.indexes[idx] {
+			t.Errorf("expected index %q to exist", idx)
+		}
 	}
 }
 

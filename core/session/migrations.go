@@ -69,7 +69,8 @@ const sqlInitSchema = `
 // today carries useful state. Future schema changes get their own
 // version in the 300 block — context-library WP03 lands as 0301
 // (see migrations_attachments.go for the renumbering note); multimodal-io
-// WP02 lands as 0302 (see migrations_content_json.go).
+// WP02 lands as 0302 (see migrations_content_json.go); artifacts-storage
+// WP01 lands as 0303 (see migrations_artifacts.go).
 func Migrations() []migrations.Migration {
 	return []migrations.Migration{
 		{
@@ -104,6 +105,7 @@ func Migrations() []migrations.Migration {
 		},
 		migration0301(),
 		migration0302(),
+		migration0303(),
 	}
 }
 
