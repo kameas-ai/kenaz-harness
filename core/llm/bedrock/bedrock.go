@@ -17,6 +17,7 @@ package bedrock
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -28,6 +29,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/bedrock"
 	bedrocktypes "github.com/aws/aws-sdk-go-v2/service/bedrock/types"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
+	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime/document"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime/types"
 	"github.com/sigil-tech/kaneaz-harness/core/llm"
 )
@@ -162,6 +164,20 @@ func (a *Adapter) Stream(ctx context.Context, req llm.GenerationRequest, prof ll
 	}
 	if len(system) > 0 {
 		in.System = system
+	}
+	// Tool serialization — Converse wraps each spec in a
+	// toolConfig.tools[].toolSpec envelope. The tool's input schema is
+	// carried as a smithy `document.Interface` whose JSON encoding is
+	// the raw JSON Schema. ToolSpec.InputSchema is already JSON Schema
+	// bytes; we unmarshal into a generic map so the document marshaler
+	// emits it as-is.
+	// Reference: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_Converse.html
+	if len(req.Tools) > 0 {
+		toolCfg, err := buildToolConfig(req.Tools)
+		if err != nil {
+			return nil, &llm.ErrInvalidRequest{Message: err.Error()}
+		}
+		in.ToolConfig = toolCfg
 	}
 
 	out, err := client.ConverseStream(ctx, in)
@@ -364,6 +380,33 @@ func flattenContent(parts []llm.ContentPart) string {
 	return b.String()
 }
 
+// buildToolConfig converts the harness's ToolSpec slice into the
+// Converse SDK's nested ToolConfiguration shape. Each spec becomes
+// one ToolMemberToolSpec; the JSON Schema is wrapped in a
+// ToolInputSchemaMemberJson document.
+func buildToolConfig(specs []llm.ToolSpec) (*types.ToolConfiguration, error) {
+	tools := make([]types.Tool, 0, len(specs))
+	for _, t := range specs {
+		var schema any
+		if len(t.InputSchema) > 0 {
+			if err := json.Unmarshal(t.InputSchema, &schema); err != nil {
+				return nil, fmt.Errorf("bedrock: tool %q input_schema: %w", t.Name, err)
+			}
+		} else {
+			schema = map[string]any{"type": "object"}
+		}
+		spec := types.ToolSpecification{
+			Name:        aws.String(t.Name),
+			InputSchema: &types.ToolInputSchemaMemberJson{Value: document.NewLazyDocument(schema)},
+		}
+		if t.Description != "" {
+			spec.Description = aws.String(t.Description)
+		}
+		tools = append(tools, &types.ToolMemberToolSpec{Value: spec})
+	}
+	return &types.ToolConfiguration{Tools: tools}, nil
+}
+
 // converseStream wraps a Bedrock ConverseStream response so it
 // satisfies llm.Stream. Events are translated on the fly so the
 // frontend never has to learn the AWS event-stream binary protocol.
@@ -375,6 +418,17 @@ type converseStream struct {
 	finalResp llm.Response
 	finalErr  error
 	cancelled bool
+
+	// toolPartial reassembles tool_use blocks across content_block_*
+	// frames; the model streams the tool's input JSON in fragments
+	// keyed by ContentBlockIndex.
+	toolPartial map[int32]*toolUseAccum
+}
+
+type toolUseAccum struct {
+	id    string
+	name  string
+	input strings.Builder
 }
 
 // pump reads from the underlying Bedrock event stream, converts each
@@ -387,14 +441,58 @@ func (s *converseStream) pump() {
 
 	for ev := range s.out.GetStream().Events() {
 		switch v := ev.(type) {
-		case *types.ConverseStreamOutputMemberContentBlockDelta:
-			if v.Value.Delta != nil {
-				if td, ok := v.Value.Delta.(*types.ContentBlockDeltaMemberText); ok {
-					s.events <- llm.StreamEvent{
-						Kind: llm.StreamText,
-						Text: td.Value,
-					}
+		case *types.ConverseStreamOutputMemberContentBlockStart:
+			if v.Value.Start == nil || v.Value.ContentBlockIndex == nil {
+				continue
+			}
+			if start, ok := v.Value.Start.(*types.ContentBlockStartMemberToolUse); ok {
+				if s.toolPartial == nil {
+					s.toolPartial = map[int32]*toolUseAccum{}
 				}
+				accum := &toolUseAccum{}
+				if start.Value.Name != nil {
+					accum.name = *start.Value.Name
+				}
+				if start.Value.ToolUseId != nil {
+					accum.id = *start.Value.ToolUseId
+				}
+				s.toolPartial[*v.Value.ContentBlockIndex] = accum
+			}
+		case *types.ConverseStreamOutputMemberContentBlockDelta:
+			if v.Value.Delta == nil {
+				continue
+			}
+			switch d := v.Value.Delta.(type) {
+			case *types.ContentBlockDeltaMemberText:
+				s.events <- llm.StreamEvent{
+					Kind: llm.StreamText,
+					Text: d.Value,
+				}
+			case *types.ContentBlockDeltaMemberToolUse:
+				if v.Value.ContentBlockIndex == nil || d.Value.Input == nil {
+					continue
+				}
+				if accum, ok := s.toolPartial[*v.Value.ContentBlockIndex]; ok {
+					accum.input.WriteString(*d.Value.Input)
+				}
+			}
+		case *types.ConverseStreamOutputMemberContentBlockStop:
+			if v.Value.ContentBlockIndex == nil {
+				continue
+			}
+			if accum, ok := s.toolPartial[*v.Value.ContentBlockIndex]; ok {
+				delete(s.toolPartial, *v.Value.ContentBlockIndex)
+				input := accum.input.String()
+				if input == "" {
+					input = "{}"
+				}
+				tool := llm.ToolUse{
+					ID:    accum.id,
+					Name:  accum.name,
+					Input: json.RawMessage(input),
+				}
+				s.finalResp.ToolCalls = append(s.finalResp.ToolCalls, tool)
+				s.events <- llm.StreamEvent{Kind: llm.StreamTool, Tool: &tool}
 			}
 		case *types.ConverseStreamOutputMemberMessageStop:
 			finish := string(v.Value.StopReason)
@@ -414,9 +512,7 @@ func (s *converseStream) pump() {
 				s.events <- llm.StreamEvent{Kind: llm.StreamUsage, Usage: &usageCopy}
 			}
 		default:
-			// content_block_start, content_block_stop, message_start,
-			// tool_use deltas — not surfaced to the UI yet. Fall
-			// through silently.
+			// message_start and other frames are not surfaced yet.
 		}
 	}
 	if err := s.out.GetStream().Err(); err != nil {

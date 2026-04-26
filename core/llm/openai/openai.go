@@ -290,8 +290,8 @@ func extractErrorMessage(body []byte) string {
 // API. The connector's polymorphic ContentParts are flattened into
 // OpenAI's simpler {role, content: "string"} message shape — multi-
 // part messages join their text parts with newline separators. Vision
-// inputs and tool blocks are out of scope for the v1 adapter (the
-// CapabilityGate rejects requests that opt into them on this provider).
+// inputs are out of scope for the v1 adapter (the CapabilityGate
+// rejects requests that opt into them on this provider).
 func buildRequestBody(req llm.GenerationRequest, prof llm.ProviderProfile) ([]byte, error) {
 	out := map[string]any{
 		"model":          prof.Model,
@@ -332,6 +332,35 @@ func buildRequestBody(req llm.GenerationRequest, prof llm.ProviderProfile) ([]by
 		msgs = append(msgs, entry)
 	}
 	out["messages"] = msgs
+
+	// Tool serialization — Chat Completions wraps each spec in a
+	// {type:"function", function:{...}} envelope. The function's
+	// `parameters` field is the JSON Schema, which is the same shape
+	// our ToolSpec.InputSchema already carries.
+	// Reference: https://platform.openai.com/docs/guides/function-calling
+	if len(req.Tools) > 0 {
+		tools := make([]map[string]any, 0, len(req.Tools))
+		for _, t := range req.Tools {
+			fn := map[string]any{
+				"name":        t.Name,
+				"description": t.Description,
+			}
+			if len(t.InputSchema) > 0 {
+				var schema any
+				if err := json.Unmarshal(t.InputSchema, &schema); err != nil {
+					return nil, fmt.Errorf("openai: tool %q parameters: %w", t.Name, err)
+				}
+				fn["parameters"] = schema
+			} else {
+				fn["parameters"] = map[string]any{"type": "object"}
+			}
+			tools = append(tools, map[string]any{
+				"type":     "function",
+				"function": fn,
+			})
+		}
+		out["tools"] = tools
+	}
 
 	return json.Marshal(out)
 }
@@ -382,6 +411,21 @@ type chatStream struct {
 	textBuf    strings.Builder
 	usage      llm.Usage
 	finishStop string
+
+	// tool_calls accumulator. OpenAI streams tool calls as a sequence
+	// of deltas keyed by index; we reassemble the JSON-encoded
+	// arguments and emit one StreamTool event when the call is
+	// finalized (via finish_reason or stream end).
+	toolPartial map[int]*toolCallState
+	toolOrder   []int
+	toolCalls   []llm.ToolUse
+}
+
+type toolCallState struct {
+	id        string
+	name      string
+	arguments strings.Builder
+	emitted   bool
 }
 
 // Events returns the channel of streaming chunks.
@@ -435,9 +479,11 @@ func (s *chatStream) pump() {
 		s.cancel()
 		// Build final Response from accumulators.
 		s.mu.Lock()
+		s.flushPendingToolCallsLocked()
 		if s.finalErr == nil && !s.cancelled {
 			s.final = llm.Response{
 				Content:      []llm.ContentPart{{Type: "text", Text: s.textBuf.String()}},
+				ToolCalls:    s.toolCalls,
 				FinishReason: s.finishStop,
 				Usage:        s.usage,
 			}
@@ -495,6 +541,13 @@ func (s *chatStream) pump() {
 
 // handleFrame parses one SSE data payload and emits the corresponding
 // StreamEvents.
+//
+// tool_calls deltas follow OpenAI's chunked function-calling shape
+// (https://platform.openai.com/docs/guides/function-calling): each
+// delta carries one or more entries keyed by `index` whose `function.
+// arguments` string fragment must be concatenated across frames. The
+// terminating `finish_reason: "tool_calls"` triggers the StreamTool
+// emission with the reassembled JSON arguments.
 func (s *chatStream) handleFrame(raw []byte) {
 	trimmed := bytes.TrimSpace(raw)
 	if len(trimmed) == 0 {
@@ -504,8 +557,17 @@ func (s *chatStream) handleFrame(raw []byte) {
 		Choices []struct {
 			Index int `json:"index"`
 			Delta struct {
-				Role    string `json:"role"`
-				Content string `json:"content"`
+				Role      string `json:"role"`
+				Content   string `json:"content"`
+				ToolCalls []struct {
+					Index    int    `json:"index"`
+					ID       string `json:"id"`
+					Type     string `json:"type"`
+					Function struct {
+						Name      string `json:"name"`
+						Arguments string `json:"arguments"`
+					} `json:"function"`
+				} `json:"tool_calls"`
 			} `json:"delta"`
 			FinishReason *string `json:"finish_reason"`
 		} `json:"choices"`
@@ -527,9 +589,34 @@ func (s *chatStream) handleFrame(raw []byte) {
 			s.mu.Unlock()
 			s.events <- llm.StreamEvent{Kind: llm.StreamText, Text: ch.Delta.Content, Raw: trimmed}
 		}
+		for _, tc := range ch.Delta.ToolCalls {
+			s.mu.Lock()
+			if s.toolPartial == nil {
+				s.toolPartial = map[int]*toolCallState{}
+			}
+			state, ok := s.toolPartial[tc.Index]
+			if !ok {
+				state = &toolCallState{}
+				s.toolPartial[tc.Index] = state
+				s.toolOrder = append(s.toolOrder, tc.Index)
+			}
+			if tc.ID != "" {
+				state.id = tc.ID
+			}
+			if tc.Function.Name != "" {
+				state.name = tc.Function.Name
+			}
+			if tc.Function.Arguments != "" {
+				state.arguments.WriteString(tc.Function.Arguments)
+			}
+			s.mu.Unlock()
+		}
 		if ch.FinishReason != nil && *ch.FinishReason != "" {
 			s.mu.Lock()
 			s.finishStop = *ch.FinishReason
+			if *ch.FinishReason == "tool_calls" {
+				s.flushPendingToolCallsLocked()
+			}
 			s.mu.Unlock()
 			s.events <- llm.StreamEvent{Kind: llm.StreamFinish, Finish: *ch.FinishReason}
 		}
@@ -541,6 +628,36 @@ func (s *chatStream) handleFrame(raw []byte) {
 		usage := s.usage
 		s.mu.Unlock()
 		s.events <- llm.StreamEvent{Kind: llm.StreamUsage, Usage: &usage}
+	}
+}
+
+// flushPendingToolCallsLocked materializes any reassembled tool_calls
+// into ToolUse values, emitting one StreamTool event per call. Caller
+// must hold s.mu. Re-entrant: already-emitted calls are skipped so the
+// flush triggered by finish_reason "tool_calls" doesn't double-emit
+// when pump's defer also calls it.
+func (s *chatStream) flushPendingToolCallsLocked() {
+	for _, idx := range s.toolOrder {
+		state, ok := s.toolPartial[idx]
+		if !ok || state.emitted {
+			continue
+		}
+		args := state.arguments.String()
+		if args == "" {
+			args = "{}"
+		}
+		tool := llm.ToolUse{
+			ID:    state.id,
+			Name:  state.name,
+			Input: json.RawMessage(args),
+		}
+		s.toolCalls = append(s.toolCalls, tool)
+		state.emitted = true
+		// Send without holding lock to avoid blocking on a slow consumer
+		// while the mutex is held. The buffered channel typically absorbs.
+		s.mu.Unlock()
+		s.events <- llm.StreamEvent{Kind: llm.StreamTool, Tool: &tool}
+		s.mu.Lock()
 	}
 }
 

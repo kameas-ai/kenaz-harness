@@ -2,6 +2,7 @@ package openai
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -405,5 +406,154 @@ func TestAdapter_Stream_SystemMessageEmitted(t *testing.T) {
 	}
 	if !strings.Contains(string(fs.lastBody), `"you are concise"`) {
 		t.Fatalf("expected system text in body, got %s", fs.lastBody)
+	}
+}
+
+// TestAdapter_Stream_ToolsSerialized verifies that GenerationRequest.
+// Tools is wrapped in OpenAI's {type:"function", function:{...}} envelope
+// with the JSON Schema preserved verbatim under `parameters`.
+func TestAdapter_Stream_ToolsSerialized(t *testing.T) {
+	fs := newFakeServer(t, func(w http.ResponseWriter, _ *http.Request, _ int) {
+		writeSSE(w, []string{
+			`{"choices":[{"index":0,"delta":{"content":"ok"},"finish_reason":null}]}`,
+			`{"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}`,
+			`[DONE]`,
+		})
+	})
+	a := newAdapter(fs)
+	req, prof := stdReq()
+	req.Tools = []llm.ToolSpec{
+		{
+			Name:        "calc.add",
+			Description: "Add two numbers",
+			InputSchema: json.RawMessage(`{"type":"object","properties":{"a":{"type":"number"},"b":{"type":"number"}},"required":["a","b"]}`),
+		},
+		{
+			Name:        "no_schema",
+			Description: "Tool without an explicit schema",
+		},
+	}
+	stream, err := a.Stream(context.Background(), req, prof, []byte("sk-test"))
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	if _, _, ferr := drain(t, stream); ferr != nil {
+		t.Fatalf("Final: %v", ferr)
+	}
+
+	fs.mu.Lock()
+	defer fs.mu.Unlock()
+	var body struct {
+		Tools []struct {
+			Type     string `json:"type"`
+			Function struct {
+				Name        string         `json:"name"`
+				Description string         `json:"description"`
+				Parameters  map[string]any `json:"parameters"`
+			} `json:"function"`
+		} `json:"tools"`
+	}
+	if err := json.Unmarshal(fs.lastBody, &body); err != nil {
+		t.Fatalf("body unmarshal: %v\nbody=%s", err, fs.lastBody)
+	}
+	if len(body.Tools) != 2 {
+		t.Fatalf("expected 2 tools, got %d (body=%s)", len(body.Tools), fs.lastBody)
+	}
+	if body.Tools[0].Type != "function" {
+		t.Fatalf("tools[0].type = %q, want function", body.Tools[0].Type)
+	}
+	if body.Tools[0].Function.Name != "calc.add" {
+		t.Fatalf("tools[0].function.name = %q", body.Tools[0].Function.Name)
+	}
+	if body.Tools[0].Function.Description != "Add two numbers" {
+		t.Fatalf("tools[0].function.description = %q", body.Tools[0].Function.Description)
+	}
+	if body.Tools[0].Function.Parameters["type"] != "object" {
+		t.Fatalf("tools[0].function.parameters missing type=object: %+v", body.Tools[0].Function.Parameters)
+	}
+	props, _ := body.Tools[0].Function.Parameters["properties"].(map[string]any)
+	if _, ok := props["a"]; !ok {
+		t.Fatalf("tools[0].function.parameters.properties.a missing: %+v", body.Tools[0].Function.Parameters)
+	}
+	// Empty schema falls back to {"type":"object"}.
+	if body.Tools[1].Function.Parameters["type"] != "object" {
+		t.Fatalf("tools[1] schema fallback failed: %+v", body.Tools[1].Function.Parameters)
+	}
+}
+
+// TestAdapter_Stream_ToolsAbsentWhenEmpty verifies that requests
+// without tools do NOT include a `tools` field in the body — OpenAI
+// rejects an empty array.
+func TestAdapter_Stream_ToolsAbsentWhenEmpty(t *testing.T) {
+	fs := newFakeServer(t, func(w http.ResponseWriter, _ *http.Request, _ int) {
+		writeSSE(w, []string{
+			`{"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}`,
+			`[DONE]`,
+		})
+	})
+	a := newAdapter(fs)
+	req, prof := stdReq()
+	stream, err := a.Stream(context.Background(), req, prof, []byte("sk-test"))
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	if _, _, ferr := drain(t, stream); ferr != nil {
+		t.Fatalf("Final: %v", ferr)
+	}
+	fs.mu.Lock()
+	defer fs.mu.Unlock()
+	if strings.Contains(string(fs.lastBody), `"tools"`) {
+		t.Fatalf("body should not contain tools field when none provided: %s", fs.lastBody)
+	}
+}
+
+// TestAdapter_Stream_ToolCallsParsed verifies that streamed tool_calls
+// deltas are reassembled into a single ToolUse per tool, surfaced as
+// StreamTool events, and accumulated into Response.ToolCalls.
+func TestAdapter_Stream_ToolCallsParsed(t *testing.T) {
+	fs := newFakeServer(t, func(w http.ResponseWriter, _ *http.Request, _ int) {
+		writeSSE(w, []string{
+			`{"choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}]}`,
+			`{"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"calc.add","arguments":""}}]},"finish_reason":null}]}`,
+			`{"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"a\":"}}]},"finish_reason":null}]}`,
+			`{"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"1,\"b\":2}"}}]},"finish_reason":null}]}`,
+			`{"choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}`,
+			`[DONE]`,
+		})
+	})
+	a := newAdapter(fs)
+	req, prof := stdReq()
+	req.Tools = []llm.ToolSpec{{Name: "calc.add", Description: "add"}}
+	stream, err := a.Stream(context.Background(), req, prof, []byte("sk-test"))
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	var toolEvents []llm.ToolUse
+	for ev := range stream.Events() {
+		if ev.Kind == llm.StreamTool && ev.Tool != nil {
+			toolEvents = append(toolEvents, *ev.Tool)
+		}
+	}
+	resp, ferr := stream.Final()
+	if ferr != nil {
+		t.Fatalf("Final: %v", ferr)
+	}
+	if len(toolEvents) != 1 {
+		t.Fatalf("expected 1 tool event, got %d", len(toolEvents))
+	}
+	if toolEvents[0].ID != "call_1" {
+		t.Fatalf("tool id = %q", toolEvents[0].ID)
+	}
+	if toolEvents[0].Name != "calc.add" {
+		t.Fatalf("tool name = %q", toolEvents[0].Name)
+	}
+	if string(toolEvents[0].Input) != `{"a":1,"b":2}` {
+		t.Fatalf("tool input = %s, want %q", toolEvents[0].Input, `{"a":1,"b":2}`)
+	}
+	if len(resp.ToolCalls) != 1 || resp.ToolCalls[0].Name != "calc.add" {
+		t.Fatalf("Response.ToolCalls = %+v", resp.ToolCalls)
+	}
+	if resp.FinishReason != "tool_calls" {
+		t.Fatalf("finish reason = %q", resp.FinishReason)
 	}
 }
