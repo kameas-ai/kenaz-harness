@@ -114,12 +114,32 @@ func (l *Loop) dispatchTools(ctx context.Context, sessionID, parentSubID string,
 	// Resolve server names sequentially up-front. The catalog is small
 	// and Tools() is already a network call — we don't want to repeat
 	// it inside every goroutine.
+	//
+	// The model emits the namespaced name we exported via the tool
+	// discoverer ("<server>__<tool>"); split it back into a (server,
+	// tool) pair so pool.Call, audit events, and progress events all
+	// see the un-namespaced tool name. Calls without the separator
+	// keep the WP01 path: scan the catalog for a unique name match.
+	// dispatched[i].Name is the un-namespaced tool id; dispatched[i].ID
+	// stays equal to the model's original call id for tool_result
+	// correlation.
 	servers := make([]string, len(calls))
 	resolved := make([]bool, len(calls))
+	dispatched := make([]corellm.ToolUse, len(calls))
 	for i, call := range calls {
-		s, ok := resolveServer(tools, call.Name)
-		servers[i] = s
-		resolved[i] = ok
+		dispatched[i] = call
+		if server, tool, ok := splitNamespacedToolName(call.Name); ok {
+			servers[i] = server
+			dispatched[i].Name = tool
+			// Verify the (server, tool) pair is actually in the
+			// catalog so a denied / removed tool surfaces as
+			// "not registered" instead of a pool error.
+			resolved[i] = catalogContains(tools, server, tool)
+		} else {
+			s, ok := resolveServer(tools, call.Name)
+			servers[i] = s
+			resolved[i] = ok
+		}
 	}
 
 	// Single-call fast path: skip the goroutine + semaphore overhead and
@@ -127,7 +147,7 @@ func (l *Loop) dispatchTools(ctx context.Context, sessionID, parentSubID string,
 	// exists so the most common dispatch shape (one tool per turn) does
 	// not pay the parallelism tax.
 	if len(calls) == 1 {
-		results[0] = l.dispatchOne(ctx, sessionID, parentSubID, servers[0], resolved[0], calls[0])
+		results[0] = l.dispatchOne(ctx, sessionID, parentSubID, servers[0], resolved[0], dispatched[0])
 		if ctx.Err() != nil {
 			return results, ctx.Err()
 		}
@@ -154,7 +174,7 @@ func (l *Loop) dispatchTools(ctx context.Context, sessionID, parentSubID string,
 			select {
 			case sem <- struct{}{}:
 			case <-ctx.Done():
-				results[i] = l.synthCancelled(ctx, sessionID, parentSubID, servers[i], calls[i])
+				results[i] = l.synthCancelled(ctx, sessionID, parentSubID, servers[i], dispatched[i])
 				return
 			}
 			defer func() { <-sem }()
@@ -162,10 +182,10 @@ func (l *Loop) dispatchTools(ctx context.Context, sessionID, parentSubID string,
 			// Re-check ctx after acquiring — between queue entry and
 			// goroutine wake the host ctx may have been cancelled.
 			if ctx.Err() != nil {
-				results[i] = l.synthCancelled(ctx, sessionID, parentSubID, servers[i], calls[i])
+				results[i] = l.synthCancelled(ctx, sessionID, parentSubID, servers[i], dispatched[i])
 				return
 			}
-			results[i] = l.dispatchOne(ctx, sessionID, parentSubID, servers[i], resolved[i], calls[i])
+			results[i] = l.dispatchOne(ctx, sessionID, parentSubID, servers[i], resolved[i], dispatched[i])
 		}()
 	}
 	wg.Wait()

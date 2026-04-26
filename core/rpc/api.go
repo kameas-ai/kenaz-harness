@@ -435,9 +435,10 @@ func newLLMStack(
 	if confirmEachEnabled != nil {
 		flagOn = confirmEachEnabled()
 	}
+	mcpPool := fixture.New()
 	loop, loopErr := toolloop.New(toolloop.Config{
 		Registry:           reg,
-		Pool:               &mcpPoolAdapter{inner: fixture.New()},
+		Pool:               &mcpPoolAdapter{inner: mcpPool},
 		History:            historyAdapter,
 		Permissions:        perms,
 		Hooks:              nil,
@@ -463,6 +464,13 @@ func newLLMStack(
 			reader: &sessionProjectReader{mgr: c.SessionManager()},
 		}
 	}
+	// Tool discovery wiring — the discoverer projects the same MCP
+	// pool the toolloop dispatches against onto each GenerationRequest's
+	// Tools field, namespaced as "<server>__<tool>" so the toolloop can
+	// split the response back into a (server, tool) pair at dispatch.
+	// Without this, the model never sees any tools and the loop is
+	// dead code from the user's perspective.
+	toolDiscoverer := llm.NewMCPToolDiscoverer(mcpPool, perms)
 	return llm.New(llm.Config{
 		Registry:       reg,
 		Sink:           &streamSinkAdapter{broker: broker},
@@ -474,6 +482,7 @@ func newLLMStack(
 		Hooks:          hooksRunner,
 		Attachments:    attResolver,
 		ToolLoop:       loop,
+		Tools:          toolDiscoverer,
 		ConfirmGateway: confirmGateway,
 	})
 }
