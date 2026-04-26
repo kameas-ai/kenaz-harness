@@ -18,10 +18,12 @@ Without this, the user can't paste a screenshot into a chat or hand the model a 
 
 ## 2. Goals
 
-- **Inbound (user → model)**: `ChatInput.vue` accepts image and document attachments via paperclip button + drag-and-drop. Files are stored under `<DataDir>/media/<sha256>` (CAS) and referenced by attachment id. Each adapter serializes the right per-provider shape.
+- **Inbound (user → model) — multimodal-native types**: `ChatInput.vue` accepts image (PNG/JPEG/GIF/WebP) and PDF attachments via paperclip button + drag-and-drop. Files are stored under `<DataDir>/media/<sha256>` (CAS) and referenced by attachment id. Each adapter serializes the right per-provider shape.
+- **Inbound (user → model) — any other file type**: drop a `.go` / `.json` / `.txt` / `.html` / `.md` / etc. and it's inlined as a **session-scope context attachment** via the existing `Attachments_Add` (context-library WP03) path. The file content lands in the resolved-system-prompt order alongside library attachments. NOT a multimodal content block — providers reject those as inputs.
+- **Inbound — `@filepath` shortcut**: typing `@~/path/to/file` (or `@/abs/path` or `@./relative/path`) in the chat input inlines the file the same way drag-drop does (session-scope context attachment for non-multimodal types; multimodal block for image/PDF). Supports tab-complete from the input.
 - **Vision answers**: Models that support vision (Claude 3+, GPT-4o, Bedrock Nova / Claude 3) describe / OCR / reason over the image as part of their response.
 - **Document QA**: Models that support document blocks (Anthropic Claude 3.5+, Bedrock Nova) answer questions from a PDF in the same turn.
-- **Outbound (model → file)**: Models can return `text`, `image` (when the provider supports image generation in-message), or `tool_use` blocks. Image generation is a non-goal for v1 because no current provider's chat-completion API returns generated images natively in a way that's adapter-uniform (Anthropic doesn't; OpenAI's `gpt-image-1` is a separate endpoint). Track as a follow-on. **In-message text + tool_use coverage is already complete.**
+- **Outbound (model → file)**: Out of scope for this mission. The model's response stream stays text + tool_use. **Capturing files the model produces** (code blocks with filename hints, tool outputs that return file-shaped content, manual user pin) is the **artifacts-storage mission's** job, riding on the same CAS this mission lays down. Filesystem MCP writes (model mutating the user's actual disk) are the **filesystem-mcp-recipe mission's** job and are explicitly NOT artifacts.
 
 ## 3. Non-goals
 
@@ -39,6 +41,8 @@ Without this, the user can't paste a screenshot into a chat or hand the model a 
 - **US3** As a user, I send an image to a non-vision model. The harness rejects the send with a clear error: "Model `<id>` doesn't support images. Switch to a vision-capable model or remove the attachment."
 - **US4** As a user with a previous turn that included an image, scrolling back shows the thumbnail inline with the message bubble. Clicking opens it full-size.
 - **US5** As a developer testing a new model, I see the model's declared capabilities (`supports.vision`, `supports.documents`) flow through the existing `core/llm/capabilities/` registry and gate the input.
+- **US6** As a user, I drag a `.go` file onto the chat input. A chip appears with the filename. The file's contents are inlined as a session-scope context attachment so the model sees them in the resolved-system-prompt. The chip persists in the session's resolved-context panel.
+- **US7** As a user, I type `@~/Code/foo.go` in the chat input. After a brief pause, the harness reads the file and converts the token into the same chip US6 produces. Tab autocompletes the path against the local filesystem (within the current project root if any, else `~`).
 
 ## 5. Functional requirements
 
@@ -103,15 +107,25 @@ Without this, the user can't paste a screenshot into a chat or hand the model a 
 ### 5.5 Frontend
 
 - **FR-011** `ChatInput.vue`:
-  - Paperclip button → file picker (accept: `image/png, image/jpeg, image/gif, image/webp, application/pdf`).
-  - Drag-and-drop on the input area.
-  - Per-file 20 MiB cap; harder error past 30 MiB.
-  - Each pending attachment renders as a thumbnail (image) or document-chip (PDF) with a remove button.
-  - On send: upload via `Attachments_AddMedia` (with `scope=session`), then attach `MediaID` to the outbound `ContentBlock` array.
+  - Paperclip button → file picker (accept: **all files** — type-detection happens in the upload handler).
+  - Drag-and-drop on the input area accepts any file type.
+  - Per-file 20 MiB cap for multimodal types (images/PDF); 1 MiB cap for inlined-text types matching the existing context-library library cap; harder error past 30 MiB total.
+  - **Type branch on drop**:
+    - MIME type starts with `image/` AND in `[image/png, image/jpeg, image/gif, image/webp]` → multimodal image block. Render thumbnail.
+    - MIME type is `application/pdf` → multimodal document block. Render document chip.
+    - Anything else → text-snapshot path. Read as UTF-8; if the file isn't valid UTF-8 (binary), reject with "binary files are only supported as images or PDFs". Inlined via `Attachments_Add` (existing context-library binding) at session scope. Render as a context-attachment chip with filename.
+  - On send: for multimodal blocks, upload via `Attachments_AddMedia` and attach `MediaID` to the `ContentBlock` array. For text-snapshot attachments, no upload step (already added on drop); the resolved-system-prompt picks them up at send time.
+- **FR-011b** `@filepath` token in the input box:
+  - When the user types `@<token>` followed by a space (or hits Enter), if `<token>` parses as a filesystem path that the harness can read, treat it like a drop event for that path.
+  - Path forms accepted: `~/...`, `/abs/...`, `./relative/...`. Paths must be inside the user's home directory OR (when the active session has a project) inside the project's allowed roots — same deny-list as the filesystem-mcp-recipe path-validator (canonicalize + check).
+  - Tab autocomplete: when the user types `@<partial>` and hits Tab, the harness suggests path completions via a new `Shell_PathComplete(partial string) ([]string, error)` binding. Limited to 32 results.
+  - On accept (Tab-completion or Enter), the `@<token>` text is replaced with a chip in the input pre-send queue (same chip rendering as drop).
+  - Path-validator REUSED from filesystem-mcp-recipe's `core/rpc/views/tools/path_validation.go` (Mission B WP01). If Mission B hasn't landed yet, this mission ships a slim local copy and Mission B refactors to share when it lands.
 - **FR-012** `MessageBubble.vue`:
   - Renders `text` blocks via `StreamingText.vue` (markdown).
   - Renders `image` blocks inline as a thumbnail (lightbox on click).
   - Renders `document` blocks as a chip with filename + size + a "view" link that opens the file.
+  - Renders inlined-text attachments via the existing context-attachment chip pattern from `ResolvedContextPanel.vue`.
   - `tool_use` / `tool_result` rendering is unchanged.
 
 ### 5.6 Wire shape
@@ -137,6 +151,8 @@ Without this, the user can't paste a screenshot into a chat or hand the model a 
 - **A6** Migration 0302 upgrades a v1 DB cleanly.
 - **A7** Removing an attachment from input before send does not write it to disk.
 - **A8** Deleting a session prunes session-scope attachments AND media artifacts no longer referenced (refcount-driven).
+- **A9** US6 — drop a `.go` file → resolved-context panel shows a chip; the file content appears in the LLM request's system-prompt order; on send, the model can quote the file in its response.
+- **A10** US7 — `@~/.zshrc` token → file content appears in the resolved panel; tab-complete returns ≤ 32 candidate paths; deny-list rejects `@/etc/passwd`.
 
 ## 8. Architecture
 
