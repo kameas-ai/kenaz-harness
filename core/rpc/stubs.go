@@ -45,6 +45,7 @@ func (s *stubLLM) TestProvider(_ context.Context, _ string) (llm.TestResult, err
 func (s *stubLLM) ListModels(_ context.Context, _, _ string) ([]llm.ModelInfo, error) {
 	return nil, errNotWired
 }
+func (s *stubLLM) ResolveConfirm(_ context.Context, _, _ string) error { return errNotWired }
 
 // ── a2a ────────────────────────────────────────────────────────────────
 

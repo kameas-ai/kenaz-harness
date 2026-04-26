@@ -21,6 +21,7 @@ import NewSessionDialog from '@/shell/NewSessionDialog.vue';
 import MessageList from '@/components/chat/MessageList.vue';
 import ChatInput from '@/components/chat/ChatInput.vue';
 import ResolvedContextPanel from '@/views/sessions/ResolvedContextPanel.vue';
+import ConfirmToolModal from '@/components/chat/ConfirmToolModal.vue';
 import { useHarnessClient, useSessions } from '@/lib/useHarnessAPI';
 import { useSession } from '@/lib/useSession';
 import type { MemoryScopeKind, Message, Provider } from '@/lib/types';
@@ -593,5 +594,6 @@ async function onRemember(m: Message, scope: MemoryScopeKind = 'session') {
       :open="newSessionDialogOpen"
       @close="onNewSessionDialogClose"
     />
+    <ConfirmToolModal />
   </div>
 </template>

@@ -25,6 +25,8 @@ package toolloop
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"sync"
@@ -285,8 +287,13 @@ func (l *Loop) dispatchOne(
 			IsError:   true,
 		}
 	case PolicyConfirmEach:
-		// TODO(WP05): plumb confirm-each modal — see WP02 note in loop.go.
-		fallthrough
+		if l.confirmEnabled && l.confirm != nil {
+			confirmRes, ok := l.runConfirmGate(ctx, sessionID, parentSubID, server, call, res.Reason)
+			if !ok {
+				return confirmRes
+			}
+		}
+		// confirm flag off OR confirm.allow — fall through to dispatch.
 	case PolicyAutoAllow:
 		// Existing dispatch path.
 	default:
@@ -453,4 +460,182 @@ func (l *Loop) dispatchOne(
 		Tool:      call.Name,
 		Output:    string(raw),
 	}
+}
+
+// runConfirmGate handles the confirm_each modal flow. Returns
+// (toolResult, false) when the loop should short-circuit dispatch
+// (deny / always_deny / ctx-cancel / gateway error), or (zero, true)
+// when dispatch should proceed (allow / always_allow). always_allow /
+// always_deny additionally write a session-scope override before
+// returning so subsequent calls in the same session skip the modal.
+//
+// Cancellation: ctx going down during the wait surfaces as a
+// tool_cancelled synthetic record (matches the queued-cancel path in
+// dispatchTools so the conversation thread stays consistent).
+//
+// Gateway errors are treated as a block-with-reason — the call doesn't
+// silently succeed if the modal plumbing breaks; surfacing the error
+// to the model lets it apologize / retry through a different tool.
+func (l *Loop) runConfirmGate(
+	ctx context.Context,
+	sessionID, parentSubID, server string,
+	call corellm.ToolUse,
+	resolverReason string,
+) (toolResult, bool) {
+	log := logging.L()
+
+	req := ConfirmRequest{
+		RequestID:    newConfirmRequestID(),
+		SessionID:    sessionID,
+		ParentSubID:  parentSubID,
+		Server:       server,
+		Tool:         call.Name,
+		ToolUseID:    call.ID,
+		Args:         call.Input,
+		ArgsRedacted: string(call.Input),
+		Reason:       resolverReason,
+	}
+	log.Info("toolloop.confirm.requested",
+		"sub_id", parentSubID,
+		"session_id", sessionID,
+		"server", server,
+		"tool", call.Name,
+		"request_id", req.RequestID,
+	)
+	decision, err := l.confirm.RequestConfirm(ctx, req)
+	if err != nil {
+		// Distinguish ctx cancellation from a genuine gateway fault.
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || ctx.Err() != nil {
+			cancelMsg := err.Error()
+			emitToolFailed(context.Background(), l.audit, sessionID, parentSubID, server, call.Name, call.Input, cancelMsg, 0)
+			l.hooks.RunPostToolUse(context.Background(), PostToolUseEvent{
+				SessionID: sessionID,
+				Tool:      call.Name,
+				Server:    server,
+				Args:      call.Input,
+				Error:     cancelMsg,
+				LatencyMS: 0,
+			})
+			l.progress.EmitToolFinished(context.Background(), ToolProgressEvent{
+				SessionID:   sessionID,
+				ParentSubID: parentSubID,
+				ToolUseID:   call.ID,
+				Server:      server,
+				Tool:        call.Name,
+				Status:      "cancelled",
+				Message:     cancelMsg,
+			})
+			return toolResult{
+				ToolUseID: call.ID,
+				Server:    server,
+				Tool:      call.Name,
+				Output:    "Tool cancelled: " + cancelMsg,
+				IsError:   true,
+				Cancelled: true,
+			}, false
+		}
+		log.Warn("toolloop.confirm.gateway_failed",
+			"sub_id", parentSubID, "session_id", sessionID,
+			"server", server, "tool", call.Name, "err", err.Error())
+		reason := "confirm gateway error: " + err.Error()
+		emitToolFailed(ctx, l.audit, sessionID, parentSubID, server, call.Name, call.Input, reason, 0)
+		return toolResult{
+			ToolUseID: call.ID,
+			Server:    server,
+			Tool:      call.Name,
+			Output:    "Tool blocked: " + reason,
+			IsError:   true,
+		}, false
+	}
+	log.Info("toolloop.confirm.decided",
+		"sub_id", parentSubID,
+		"session_id", sessionID,
+		"server", server,
+		"tool", call.Name,
+		"request_id", req.RequestID,
+		"decision", string(decision),
+	)
+	switch decision {
+	case ConfirmAllow:
+		return toolResult{}, true
+	case ConfirmAlwaysAllow:
+		l.persistOverride(ctx, sessionID, server, call.Name, PolicyAutoAllow, "user: always allow this session")
+		return toolResult{}, true
+	case ConfirmDeny:
+		reason := "blocked by user"
+		emitToolFailed(ctx, l.audit, sessionID, parentSubID, server, call.Name, call.Input,
+			"Tool blocked: "+reason, 0)
+		return toolResult{
+			ToolUseID: call.ID,
+			Server:    server,
+			Tool:      call.Name,
+			Output:    "Tool blocked: " + reason,
+			IsError:   true,
+		}, false
+	case ConfirmAlwaysDeny:
+		l.persistOverride(ctx, sessionID, server, call.Name, PolicyDeny, "user: always deny this session")
+		reason := "blocked by user (always deny)"
+		emitToolFailed(ctx, l.audit, sessionID, parentSubID, server, call.Name, call.Input,
+			"Tool blocked: "+reason, 0)
+		return toolResult{
+			ToolUseID: call.ID,
+			Server:    server,
+			Tool:      call.Name,
+			Output:    "Tool blocked: " + reason,
+			IsError:   true,
+		}, false
+	default:
+		// Defensive — gateways returning an unknown decision are
+		// treated as deny so a misbehaving frontend can't silently
+		// allow tool calls.
+		reason := fmt.Sprintf("unknown confirm decision %q", decision)
+		emitToolFailed(ctx, l.audit, sessionID, parentSubID, server, call.Name, call.Input, "Tool blocked: "+reason, 0)
+		return toolResult{
+			ToolUseID: call.ID,
+			Server:    server,
+			Tool:      call.Name,
+			Output:    "Tool blocked: " + reason,
+			IsError:   true,
+		}, false
+	}
+}
+
+// persistOverride writes an exact (server, tool) override for the
+// session at the supplied policy. Failure is non-fatal: we log a warn
+// and continue — the user's per-call decision is still honored, only
+// the "always" persistence drops. This keeps the modal flow robust to
+// transient storage hiccups.
+func (l *Loop) persistOverride(ctx context.Context, sessionID, server, tool string, policy ToolPolicy, reason string) {
+	if l.overrideW == nil {
+		return
+	}
+	if err := l.overrideW.SetMCPOverride(ctx, sessionID, MCPOverride{
+		Server: server,
+		Tool:   tool,
+		Policy: policy,
+		Reason: reason,
+	}); err != nil {
+		logging.L().Warn("toolloop.confirm.override_write_failed",
+			"session_id", sessionID,
+			"server", server,
+			"tool", tool,
+			"policy", string(policy),
+			"err", err.Error(),
+		)
+	}
+}
+
+// newConfirmRequestID returns a 16-byte hex-encoded random id. We
+// don't need ULID ordering here — the id is purely a correlation key
+// across the gateway / frontend / response edge.
+func newConfirmRequestID() string {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		// crypto/rand failure is process-fatal everywhere else in
+		// the codebase; return a degenerate id rather than panic so
+		// the loop still surfaces a tool_blocked instead of crashing
+		// the chat surface.
+		return "confirm-rand-failed"
+	}
+	return "confirm-" + hex.EncodeToString(b[:])
 }

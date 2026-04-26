@@ -150,6 +150,50 @@ func TestAPI_GetSet(t *testing.T) {
 	}
 }
 
+func TestFileStore_ConfirmEachDefaultsTrue(t *testing.T) {
+	// A fresh install with no settings.json (and one with a partial file
+	// missing the confirmEachDisabled field) must report ConfirmEach
+	// enabled — the spec's default-ON requirement maps to a zero-value
+	// ConfirmEachDisabled.
+	dir := t.TempDir()
+	store, err := NewFileStore(dir)
+	if err != nil {
+		t.Fatalf("NewFileStore: %v", err)
+	}
+	got, err := store.LoadConfirmEach()
+	if err != nil {
+		t.Fatalf("LoadConfirmEach: %v", err)
+	}
+	if !got {
+		t.Errorf("LoadConfirmEach() = false on fresh install, want true (default ON)")
+	}
+}
+
+func TestFileStore_ConfirmEachRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	store, err := NewFileStore(dir)
+	if err != nil {
+		t.Fatalf("NewFileStore: %v", err)
+	}
+	if err := store.SaveConfirmEach(false); err != nil {
+		t.Fatalf("SaveConfirmEach: %v", err)
+	}
+	got, err := store.LoadConfirmEach()
+	if err != nil {
+		t.Fatalf("LoadConfirmEach: %v", err)
+	}
+	if got {
+		t.Errorf("LoadConfirmEach = true after Save(false)")
+	}
+	if err := store.SaveConfirmEach(true); err != nil {
+		t.Fatalf("SaveConfirmEach(true): %v", err)
+	}
+	got, _ = store.LoadConfirmEach()
+	if !got {
+		t.Errorf("LoadConfirmEach = false after Save(true)")
+	}
+}
+
 func TestAPI_StoreAccessor(t *testing.T) {
 	api := NewAPI(nil)
 	store := api.Store()

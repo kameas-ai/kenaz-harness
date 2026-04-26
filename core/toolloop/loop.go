@@ -63,20 +63,43 @@ type Config struct {
 	// tool chips (FR-010). nil silences progress emission; the rpc layer
 	// wires a stream-sink-backed implementation in production.
 	Progress ProgressEmitter
+	// Confirm, when non-nil AND ConfirmEachEnabled is true, is invoked
+	// before dispatch when the permission resolver returns
+	// PolicyConfirmEach. The gateway surfaces the request to the user
+	// and blocks until a decision (allow / deny / always_allow /
+	// always_deny) arrives or ctx is cancelled. nil falls back to a
+	// noop gateway that always allows (degrades confirm_each to
+	// auto_allow).
+	Confirm ConfirmGateway
+	// ConfirmEachEnabled gates the entire confirm-each modal flow. When
+	// false the loop treats PolicyConfirmEach as PolicyAutoAllow and
+	// the gateway is never consulted — preserves WP04 behaviour for
+	// users who toggle the flag off in settings. Default false at the
+	// type-zero value; the rpc layer reads Settings.ConfirmEachEnabled
+	// (default true) when wiring.
+	ConfirmEachEnabled bool
+	// OverrideWriter persists per-session (server, tool) overrides for
+	// the always_allow / always_deny decisions. nil falls back to a
+	// noop writer; without persistence those decisions degrade to a
+	// per-call allow / deny.
+	OverrideWriter SessionOverrideWriter
 }
 
 // Loop is the orchestrator. Construct via New and invoke Run from the
 // rpc pump after the initial stream closes with finish_reason=tool_use.
 type Loop struct {
-	reg         corellm.Registry
-	pool        MCPPool
-	history     SessionHistoryRW
-	perms       PermissionResolver
-	hooks       HookRunner
-	audit       AuditEmitter
-	progress    ProgressEmitter
-	maxIter     int
-	maxParallel int
+	reg                corellm.Registry
+	pool               MCPPool
+	history            SessionHistoryRW
+	perms              PermissionResolver
+	hooks              HookRunner
+	audit              AuditEmitter
+	progress           ProgressEmitter
+	confirm            ConfirmGateway
+	confirmEnabled     bool
+	overrideW          SessionOverrideWriter
+	maxIter            int
+	maxParallel        int
 }
 
 // New constructs a Loop. Returns an error if the registry or pool is
@@ -109,16 +132,27 @@ func New(cfg Config) (*Loop, error) {
 	if maxParallel <= 0 {
 		maxParallel = DefaultMaxConcurrentTools
 	}
+	confirm := cfg.Confirm
+	if confirm == nil {
+		confirm = noopConfirmGateway{}
+	}
+	overrideW := cfg.OverrideWriter
+	if overrideW == nil {
+		overrideW = NoopSessionOverrideWriter{}
+	}
 	return &Loop{
-		reg:         cfg.Registry,
-		pool:        cfg.Pool,
-		history:     cfg.History,
-		perms:       perms,
-		hooks:       hooks,
-		audit:       cfg.Audit,
-		progress:    progress,
-		maxIter:     maxIter,
-		maxParallel: maxParallel,
+		reg:            cfg.Registry,
+		pool:           cfg.Pool,
+		history:        cfg.History,
+		perms:          perms,
+		hooks:          hooks,
+		audit:          cfg.Audit,
+		progress:       progress,
+		confirm:        confirm,
+		confirmEnabled: cfg.ConfirmEachEnabled,
+		overrideW:      overrideW,
+		maxIter:        maxIter,
+		maxParallel:    maxParallel,
 	}, nil
 }
 
