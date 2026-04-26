@@ -244,6 +244,12 @@ func (s *chromemStore) Close() error { return nil }
 // PromoteScope deletes the chunk with oldID and inserts a copy with
 // newID and the supplied (kind, id) scope. Atomic under s.mu — the
 // store is observed in the pre- or post-state, never with both rows.
+//
+// TODO(audit-wired): emit a `memory.scoped` audit event after a
+// successful promote. Payload: {old_chunk_id, new_chunk_id, scope_kind,
+// scope_id}. Same emitter-not-wired blocker as projects.Create and
+// attachments.Add — a process-wide event.Emitter has not been threaded
+// through the rpc layer yet.
 func (s *chromemStore) PromoteScope(_ context.Context, oldID, newID, newScopeKind, newScopeID string) error {
 	if oldID == "" || newID == "" {
 		return errors.New("memory: promote: ids required")

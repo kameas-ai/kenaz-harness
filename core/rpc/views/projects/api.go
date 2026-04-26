@@ -18,12 +18,17 @@ type Project struct {
 // Session is the wire shape for a session record returned by
 // ListSessions. Mirrors the sessions view's Session subset; duplicated
 // here to avoid a cross-view import chain.
+//
+// LastActiveAt surfaces the session's most recent activity stamp so
+// the project landing page can render an "ordered by last-active"
+// table without a second round-trip per row (WP07 T002).
 type Session struct {
-	ID        string `json:"id"`
-	Name      string `json:"name"`
-	ProjectID string `json:"projectId,omitempty"`
-	CreatedAt string `json:"createdAt"`
-	UpdatedAt string `json:"updatedAt"`
+	ID           string `json:"id"`
+	Name         string `json:"name"`
+	ProjectID    string `json:"projectId,omitempty"`
+	CreatedAt    string `json:"createdAt"`
+	UpdatedAt    string `json:"updatedAt"`
+	LastActiveAt string `json:"lastActiveAt,omitempty"`
 }
 
 // ProjectsAPI is the view-scoped surface backing /projects.

@@ -21,6 +21,7 @@
  *   - "Forget at scope" reuses the existing forget RPC.
  */
 import { computed, onMounted, ref } from 'vue';
+import { useRoute } from 'vue-router';
 import CanvasHead from '@/shell/CanvasHead.vue';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
 import type {
@@ -30,8 +31,13 @@ import type {
 } from '@/lib/types';
 
 const client = useHarnessClient();
+const route = useRoute();
 
 type FilterPill = 'all' | MemoryScopeKind;
+
+function isScopeKind(v: unknown): v is MemoryScopeKind {
+  return v === 'global' || v === 'project' || v === 'session';
+}
 
 interface PromoteState {
   chunk: MemoryChunk;
@@ -57,7 +63,17 @@ const filterPills: readonly { id: FilterPill; label: string; glyph: string }[] =
 
 function buildFilter(pill: FilterPill): MemoryListFilter {
   if (pill === 'all') return {};
-  return { scopeKind: pill };
+  const filter: MemoryListFilter = { scopeKind: pill };
+  // The /memory route accepts a `scopeId` query param so a project
+  // landing page can deep-link the user into the project-scoped view.
+  // The harness backend ignores scopeId for global filters; we still
+  // forward it for project / session so the row count matches the
+  // ProjectLandingPage's preview (WP07 T002).
+  const sid = route?.query?.scopeId;
+  if (typeof sid === 'string' && sid.length > 0 && pill !== 'global') {
+    filter.scopeId = sid;
+  }
+  return filter;
 }
 
 async function refresh() {
@@ -218,6 +234,12 @@ function formatTimestamp(iso: string): string {
 }
 
 onMounted(() => {
+  // Honour ?scopeKind=… query so deep-links from the project landing
+  // page land on the right pill (WP07 T002).
+  const qk = route?.query?.scopeKind;
+  if (isScopeKind(qk)) {
+    activeFilter.value = qk;
+  }
   void refresh();
 });
 

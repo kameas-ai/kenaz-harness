@@ -110,6 +110,13 @@ func NewManager(store Store, opts ...ManagerOption) *Manager {
 }
 
 // Create allocates a new project with the given name + description.
+//
+// TODO(audit-wired): emit a `project.created` audit event once a
+// process-wide event.Emitter is threaded through Manager (the rpc
+// layer marks the emitter nil today; see core/rpc/api.go newLLMStack
+// audit comment). The event payload should carry {project_id, name,
+// created_at}; chain consistency is the reason we do not synthesize
+// a transient emitter at the call site.
 func (m *Manager) Create(ctx context.Context, name, description string) (Project, error) {
 	name = strings.TrimSpace(name)
 	if name == "" {

@@ -231,4 +231,162 @@ describe('ProjectLandingPage', () => {
     const empty = w.find('[data-testid=project-attachments-empty]');
     expect(empty.exists()).toBe(true);
   });
+
+  // ── WP07 T002 polish coverage ───────────────────────────────────────
+
+  it('renders the editable description editor when Edit is clicked (WP07 T002)', async () => {
+    const project: Project = {
+      id: 'p1',
+      name: 'Foo',
+      description: 'original',
+      createdAt: '',
+      updatedAt: '',
+    };
+    const updateDescription = vi.fn(async () => undefined);
+    const client = createFakeHarnessClient({
+      projects: {
+        list: async () => [],
+        get: async () => project,
+        create: async () => ({ id: 'p', name: 'p', description: '', createdAt: '', updatedAt: '' }),
+        rename: async () => undefined,
+        updateDescription,
+        remove: async () => undefined,
+        addSession: async () => undefined,
+        removeSession: async () => undefined,
+        listSessions: async () => [],
+      },
+    });
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [
+        { path: '/projects/:id', name: 'project', component: ProjectLandingPage },
+        { path: '/sessions/:id?', name: 'sessions', component: { template: '<div />' } },
+        { path: '/memory', name: 'memory', component: { template: '<div />' } },
+      ],
+    });
+    await router.push('/projects/p1');
+    await router.isReady();
+    const w = mount(ProjectLandingPage, {
+      global: {
+        plugins: [router],
+        provide: { [HarnessClientKey as symbol]: client },
+      },
+    });
+    await flushPromises();
+
+    expect(w.find('[data-testid=project-description-text]').exists()).toBe(true);
+    await w.find('[data-testid=project-edit-description]').trigger('click');
+    await flushPromises();
+    const ta = w.find<HTMLTextAreaElement>('[data-testid=project-description-input]');
+    expect(ta.exists()).toBe(true);
+    await ta.setValue('rewritten description');
+    await w.find('[data-testid=project-description-save]').trigger('click');
+    await flushPromises();
+    expect(updateDescription).toHaveBeenCalledWith('p1', 'rewritten description');
+  });
+
+  it('renders project-scope memory count and a deep-link to /memory (WP07 T002)', async () => {
+    const project: Project = {
+      id: 'p1',
+      name: 'Foo',
+      description: '',
+      createdAt: '',
+      updatedAt: '',
+    };
+    const listChunks = vi.fn(async () => [
+      { id: 'm1', scopeKind: 'project', scopeId: 'p1', content: 'x', createdAt: '' },
+      { id: 'm2', scopeKind: 'project', scopeId: 'p1', content: 'y', createdAt: '' },
+    ]);
+    const client = createFakeHarnessClient({
+      projects: {
+        list: async () => [],
+        get: async () => project,
+        create: async () => ({ id: 'p', name: 'p', description: '', createdAt: '', updatedAt: '' }),
+        rename: async () => undefined,
+        updateDescription: async () => undefined,
+        remove: async () => undefined,
+        addSession: async () => undefined,
+        removeSession: async () => undefined,
+        listSessions: async () => [],
+      },
+      memory: {
+        listChunks,
+        rememberMessage: async () => 'mem-id',
+        promoteScope: async () => 'mem-id',
+        forget: async () => undefined,
+      },
+    });
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [
+        { path: '/projects/:id', name: 'project', component: ProjectLandingPage },
+        { path: '/sessions/:id?', name: 'sessions', component: { template: '<div />' } },
+        { path: '/memory', name: 'memory', component: { template: '<div />' } },
+      ],
+    });
+    await router.push('/projects/p1');
+    await router.isReady();
+    const w = mount(ProjectLandingPage, {
+      global: {
+        plugins: [router],
+        provide: { [HarnessClientKey as symbol]: client },
+      },
+    });
+    await flushPromises();
+
+    expect(w.find('[data-testid=project-memory-section]').exists()).toBe(true);
+    // count chip shows "2"
+    expect(w.text()).toContain('(2)');
+    expect(listChunks).toHaveBeenCalledWith({ scopeKind: 'project', scopeId: 'p1' });
+    await w.find('[data-testid=project-memory-link]').trigger('click');
+    await flushPromises();
+    expect(router.currentRoute.value.path).toBe('/memory');
+    expect(router.currentRoute.value.query.scopeKind).toBe('project');
+    expect(router.currentRoute.value.query.scopeId).toBe('p1');
+  });
+
+  it('renders sessions sorted by lastActiveAt with the start-session CTA (WP07 T002)', async () => {
+    const project: Project = {
+      id: 'p1',
+      name: 'Foo',
+      description: '',
+      createdAt: '',
+      updatedAt: '',
+    };
+    const sessions: Session[] = [
+      {
+        id: 's-old',
+        name: 'older',
+        createdAt: '2026-04-20T00:00:00Z',
+        updatedAt: '',
+        lastActiveAt: '2026-04-20T00:00:00Z',
+        projectId: 'p1',
+      },
+      {
+        id: 's-new',
+        name: 'newer',
+        createdAt: '2026-04-25T00:00:00Z',
+        updatedAt: '',
+        lastActiveAt: '2026-04-25T00:00:00Z',
+        projectId: 'p1',
+      },
+    ];
+    const { client, router } = setup({ projectId: 'p1', project, sessions });
+    await router.push('/projects/p1');
+    await router.isReady();
+    const w = mount(ProjectLandingPage, {
+      global: {
+        plugins: [router],
+        provide: { [HarnessClientKey as symbol]: client },
+      },
+    });
+    await flushPromises();
+
+    expect(w.find('[data-testid=project-new-session]').exists()).toBe(true);
+    const rows = w.findAll('[data-testid^="project-session-row-"]');
+    expect(rows.length).toBe(2);
+    // Newest session first.
+    expect(rows[0].attributes('data-testid')).toBe('project-session-row-s-new');
+    expect(rows[1].attributes('data-testid')).toBe('project-session-row-s-old');
+  });
 });
