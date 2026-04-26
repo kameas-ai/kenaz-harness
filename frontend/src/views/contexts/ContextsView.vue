@@ -4,14 +4,24 @@
  *
  * Three-column layout (plan §6 / spec §6):
  *   1. Tree   (left)   — folders + files rooted at <DataDir>/contexts/
- *   2. Preview (centre) — read-only render of the selected file
+ *   2. Preview (centre) — read view + in-place editor (WP05)
  *   3. Recent (right)   — N most-recently-applied paths (LRU JSON)
  *
- * WP01 scope: read-only browsing + preview. No in-place editor (WP05),
- * no scope assignment (WP04). The empty-state card surfaces the
- * library root path so users know where to drop files.
+ * WP05 additions on top of WP01:
+ *   - Inline editor in ContextPreview wired through `client.contexts.save`
+ *     (Save → re-fetch tree so size + modified refresh).
+ *   - "Show hidden" toggle in the page header (calls `listAll` instead
+ *     of `list` when on; chassis-internal .trash + .recent.json stay
+ *     hidden either way).
+ *   - "Import file…" button reads a local `.md` / `.markdown` / `.txt`
+ *     and saves it under the currently-selected directory (or the
+ *     library root when nothing is selected).
+ *   - Listener on the `contexts:tree-changed` topic emitted by the Go
+ *     side fsnotify watcher (WP05 watcher polish). External writes
+ *     fan out to every subscriber within ~200 ms; we re-fetch the
+ *     tree and surface a brief "external change detected" toast.
  */
-import { computed, onMounted, ref } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import CanvasHead from '@/shell/CanvasHead.vue';
 import { Plus, FileText } from '@/shell/icons';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
@@ -32,6 +42,13 @@ const previewContent = ref<string>('');
 const previewLoading = ref(false);
 const previewError = ref<string | null>(null);
 
+const showHidden = ref(false);
+const externalChangeToast = ref(false);
+let externalChangeToastTimer: ReturnType<typeof setTimeout> | null = null;
+
+const importInputRef = ref<HTMLInputElement | null>(null);
+const importError = ref<string | null>(null);
+
 const hasFiles = computed(() => {
   const t = tree.value;
   return t !== null && Array.isArray(t.children) && t.children.length > 0;
@@ -40,7 +57,9 @@ const hasFiles = computed(() => {
 async function loadTree() {
   treeError.value = null;
   try {
-    tree.value = await client.contexts.list();
+    tree.value = showHidden.value
+      ? await client.contexts.listAll()
+      : await client.contexts.list();
   } catch (e) {
     tree.value = null;
     treeError.value = e instanceof Error ? e.message : 'Failed to load library.';
@@ -77,12 +96,18 @@ async function selectFile(path: string) {
   }
 }
 
+async function savePreview(payload: { path: string; content: string }) {
+  // Throws on failure — ContextPreview surfaces the error inline.
+  await client.contexts.save(payload.path, payload.content);
+  previewContent.value = payload.content;
+  await loadTree();
+}
+
 async function createSampleFolder() {
   // The "+ Folder" affordance creates an empty placeholder folder so
-  // the user can populate it via the OS file manager (drag-and-drop
-  // / Finder integration lands in WP05). The default name is
-  // user-editable in WP05's inline rename; for WP01 we ship a
-  // timestamped placeholder so concurrent clicks don't collide.
+  // the user can populate it via the OS file manager. Default name is
+  // a timestamp so concurrent clicks don't collide; inline rename
+  // lands in a follow-up.
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
   try {
     await client.contexts.createFolder(`folder-${stamp}`);
@@ -92,10 +117,103 @@ async function createSampleFolder() {
   }
 }
 
+async function toggleShowHidden() {
+  showHidden.value = !showHidden.value;
+  await loadTree();
+}
+
+function openImportDialog() {
+  importError.value = null;
+  importInputRef.value?.click();
+}
+
+/**
+ * importTargetPath — the slash-separated library-relative path the
+ * imported file should land at. When the user has a folder selected
+ * in the tree, the import drops in there; otherwise it lands at the
+ * root. The selected file is the file's basename — we don't preserve
+ * the OS-side directory tree because that would cross the library
+ * boundary in confusing ways.
+ */
+function importTargetPath(name: string): string {
+  const sel = selectedPath.value;
+  if (!sel) return name;
+  // If the selection is a file, drop its basename and use its
+  // parent directory. If it's a folder, use it directly.
+  const node = findNode(tree.value, sel);
+  if (!node) return name;
+  if (node.kind === 'folder') {
+    return sel ? `${sel}/${name}` : name;
+  }
+  const i = sel.lastIndexOf('/');
+  return i === -1 ? name : `${sel.slice(0, i)}/${name}`;
+}
+
+function findNode(root: ContextNode | null, path: string): ContextNode | null {
+  if (!root) return null;
+  if (root.path === path) return root;
+  for (const c of root.children ?? []) {
+    const hit = findNode(c, path);
+    if (hit) return hit;
+  }
+  return null;
+}
+
+async function onImportChange(ev: Event) {
+  const input = ev.target as HTMLInputElement;
+  const file = input.files?.[0];
+  // Reset so re-picking the same file fires `change` again.
+  input.value = '';
+  if (!file) return;
+  importError.value = null;
+  try {
+    const text = await file.text();
+    const target = importTargetPath(file.name);
+    await client.contexts.save(target, text);
+    await loadTree();
+    selectedPath.value = target;
+    previewContent.value = text;
+  } catch (e) {
+    importError.value = e instanceof Error ? e.message : 'Import failed.';
+  }
+}
+
+function flashExternalChangeToast() {
+  externalChangeToast.value = true;
+  if (externalChangeToastTimer) {
+    clearTimeout(externalChangeToastTimer);
+  }
+  externalChangeToastTimer = setTimeout(() => {
+    externalChangeToast.value = false;
+    externalChangeToastTimer = null;
+  }, 1500);
+}
+
+let unsubscribeExternal: (() => void) | undefined;
+
 onMounted(() => {
   void loadTree();
   void loadRecent();
   void loadRoot();
+  if (typeof window !== 'undefined' && window.runtime?.EventsOn) {
+    unsubscribeExternal = window.runtime.EventsOn(
+      'contexts:tree-changed',
+      () => {
+        flashExternalChangeToast();
+        void loadTree();
+      },
+    );
+  }
+});
+
+onBeforeUnmount(() => {
+  if (unsubscribeExternal) {
+    unsubscribeExternal();
+  }
+  if (externalChangeToastTimer) {
+    clearTimeout(externalChangeToastTimer);
+    externalChangeToastTimer = null;
+  }
 });
 </script>
 
@@ -110,7 +228,58 @@ onMounted(() => {
           ? `Markdown + text files in ${rootPath}. Drop a file in the folder or use the “+ Folder” affordance to organise.`
           : 'Markdown + text files attached to sessions, projects, or globally. Local-only — nothing leaves the device.'
       "
-    />
+    >
+      <template #trailing>
+        <div class="flex items-center gap-3">
+          <label
+            class="flex items-center gap-1.5 font-ui text-[11px] text-ink-muted cursor-pointer"
+          >
+            <input
+              type="checkbox"
+              class="accent-accent"
+              :checked="showHidden"
+              data-testid="context-show-hidden"
+              @change="toggleShowHidden"
+            />
+            Show hidden
+          </label>
+          <button
+            type="button"
+            class="font-ui text-[11px] text-ink-dim hover:text-accent flex items-center gap-1"
+            data-testid="context-import"
+            @click="openImportDialog"
+          >
+            <Plus :size="12" />
+            <span>Import file…</span>
+          </button>
+          <input
+            ref="importInputRef"
+            type="file"
+            accept=".md,.markdown,.txt"
+            class="hidden"
+            data-testid="context-import-input"
+            @change="onImportChange"
+          />
+        </div>
+      </template>
+    </CanvasHead>
+
+    <div
+      v-if="externalChangeToast"
+      class="px-4 py-1 bg-surface-1 border-b border-border-muted font-ui text-[11px] text-ink-muted"
+      role="status"
+      data-testid="context-external-change-toast"
+    >
+      External change detected, refreshing…
+    </div>
+    <div
+      v-if="importError"
+      class="px-4 py-1 bg-surface-1 border-b border-border-muted font-ui text-[11px] text-signal-danger"
+      role="alert"
+      data-testid="context-import-error"
+    >
+      {{ importError }}
+    </div>
 
     <div class="flex-1 grid grid-cols-[260px_1fr_240px] min-h-0">
       <!-- left: tree -->
@@ -180,12 +349,13 @@ onMounted(() => {
         </div>
       </nav>
 
-      <!-- centre: preview -->
+      <!-- centre: preview / editor -->
       <ContextPreview
         :path="selectedPath"
         :content="previewContent"
         :loading="previewLoading"
         :error="previewError"
+        :on-save="savePreview"
       />
 
       <!-- right: recents -->

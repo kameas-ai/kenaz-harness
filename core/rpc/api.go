@@ -194,7 +194,9 @@ func New(c *core.Core) *API {
 	a.auditImpl = audit.NewAPI(audit.WithSubscriber(a.broker))
 	a.auditAPI = a.auditImpl
 	a.mcpAPI = mcp.NewAPI(mcp.WithSubscriber(a.broker))
-	a.contextsAPI = newContextsAPI(c)
+	contextsAPI, contextsLib := newContextsAPI(c)
+	a.contextsAPI = contextsAPI
+	startContextsWatcher(contextsLib, a.broker)
 
 	// Settings: file-backed when we have a user config dir; in-memory
 	// fallback for the test harness path so New(nil) keeps working.
@@ -464,18 +466,46 @@ func (a *attachmentsResolverAdapter) ListResolved(ctx context.Context, sessionID
 // or any open failure soft-fails to a nil-library API — Contexts_List
 // returns ErrLibraryUnavailable so the frontend's empty-state card is
 // the user-visible behaviour instead of a hard chassis crash.
-func newContextsAPI(c *core.Core) contextsview.ContextsAPI {
+//
+// Returns the wrapped API and the open library (or nil) so the caller
+// can wire the fsnotify watcher → broker bridge.
+func newContextsAPI(c *core.Core) (contextsview.ContextsAPI, *corecontexts.Library) {
 	if c == nil || c.DataDir() == "" {
-		return contextsview.New(nil)
+		return contextsview.New(nil), nil
 	}
 	lib, err := corecontexts.Open(filepath.Join(c.DataDir(), "contexts"))
 	if err != nil {
-		return contextsview.New(nil)
+		return contextsview.New(nil), nil
 	}
 	// SweepTrash is best-effort on boot — a stale trash directory
 	// shouldn't keep the surface from coming up.
 	_ = lib.SweepTrash()
-	return contextsview.New(lib)
+	return contextsview.New(lib), lib
+}
+
+// startContextsWatcher wires the library's fsnotify-backed watcher into
+// the StreamBroker's Wails event surface so the frontend's listener on
+// "contexts:tree-changed" receives ticks for both in-process mutations
+// and external writes (operator drops a file in via Finder). A failing
+// StartWatching is soft — Library mutators still notify subscribers
+// in-process, just not external writes.
+func startContextsWatcher(lib *corecontexts.Library, broker *StreamBroker) {
+	if lib == nil || broker == nil {
+		return
+	}
+	if err := lib.StartWatching(); err != nil {
+		// Sandboxed runners (some CI configurations) deny inotify;
+		// the in-process notification path still works via
+		// notifyOp on every Save / CreateFolder / Rename / Delete.
+		logging.L().Warn("contexts.watcher.start_failed", "err", err.Error())
+		return
+	}
+	w := lib.Subscribe()
+	go func() {
+		for range w.Events() {
+			broker.emitter.Emit(broker.EmitCtx(), "contexts:tree-changed", struct{}{})
+		}
+	}()
 }
 
 // mcpPoolAdapter bridges the wider core/mcp.Pool surface (which knows

@@ -124,6 +124,7 @@ interface WailsBindingsLike {
   Context_StopStream(id: string): Promise<void>;
 
   Contexts_List(): Promise<ContextNode>;
+  Contexts_ListAll(): Promise<ContextNode>;
   Contexts_Get(path: string): Promise<string>;
   Contexts_Save(path: string, content: string): Promise<void>;
   Contexts_CreateFolder(path: string): Promise<void>;
@@ -341,6 +342,12 @@ export interface ContextClient {
  */
 export interface ContextsClient {
   list(): Promise<ContextNode>;
+  /**
+   * listAll returns the tree with dotfiles included (excluding the
+   * chassis-internal .trash and .recent.json metadata). Backs the
+   * "Show hidden" toggle in /contexts (WP05).
+   */
+  listAll(): Promise<ContextNode>;
   get(path: string): Promise<string>;
   save(path: string, content: string): Promise<void>;
   createFolder(path: string): Promise<void>;
@@ -541,6 +548,7 @@ export function createHarnessClient(): HarnessClient {
     },
     contexts: {
       list: () => b().Contexts_List(),
+      listAll: () => b().Contexts_ListAll(),
       get: (path) => b().Contexts_Get(path),
       save: (path, content) => b().Contexts_Save(path, content),
       createFolder: (path) => b().Contexts_CreateFolder(path),
@@ -722,6 +730,7 @@ export function createFakeHarnessClient(
     },
     contexts: {
       list: async () => ({ name: '', path: '', kind: 'folder' as const }),
+      listAll: async () => ({ name: '', path: '', kind: 'folder' as const }),
       get: async () => '',
       save: noop,
       createFolder: noop,

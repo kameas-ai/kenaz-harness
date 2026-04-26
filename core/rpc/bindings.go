@@ -268,6 +268,9 @@ func (b *Bindings) Context_StopStream(subID string) error {
 func (b *Bindings) Contexts_List() (contextsview.Node, error) {
 	return b.api.Contexts().List(b.ctx())
 }
+func (b *Bindings) Contexts_ListAll() (contextsview.Node, error) {
+	return b.api.Contexts().ListAll(b.ctx())
+}
 func (b *Bindings) Contexts_Get(path string) (string, error) {
 	return b.api.Contexts().Get(b.ctx(), path)
 }
