@@ -256,6 +256,111 @@ func TestRemove(t *testing.T) {
 	}
 }
 
+func TestSaveLoadRoundTrip_WithConfig(t *testing.T) {
+	dir := t.TempDir()
+	want := &recipes.EnabledRecipes{}
+	want.Add(recipes.EnabledRecipe{
+		ID:              "fs",
+		EnabledAt:       time.Date(2026, 3, 3, 14, 0, 0, 0, time.UTC),
+		SamplingEnabled: false,
+		EnvAuditHash:    "deadbeef",
+		Config: map[string]any{
+			"allowed_directories": []any{"/tmp/a", "/tmp/b"},
+			"read_only":           true,
+			"label":               "primary",
+		},
+	})
+	if err := want.Save(dir); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	got, err := recipes.LoadEnabled(dir)
+	if err != nil {
+		t.Fatalf("LoadEnabled: %v", err)
+	}
+	entries := got.List()
+	if len(entries) != 1 {
+		t.Fatalf("entries len = %d, want 1", len(entries))
+	}
+	cfg := entries[0].Config
+	if cfg == nil {
+		t.Fatal("Config is nil after round-trip")
+	}
+	dirs, ok := cfg["allowed_directories"].([]any)
+	if !ok {
+		t.Fatalf("allowed_directories type = %T, want []any", cfg["allowed_directories"])
+	}
+	if len(dirs) != 2 || dirs[0] != "/tmp/a" || dirs[1] != "/tmp/b" {
+		t.Errorf("allowed_directories = %v", dirs)
+	}
+	if ro, ok := cfg["read_only"].(bool); !ok || !ro {
+		t.Errorf("read_only = %v (type %T), want true", cfg["read_only"], cfg["read_only"])
+	}
+	if cfg["label"] != "primary" {
+		t.Errorf("label = %v", cfg["label"])
+	}
+}
+
+func TestLoadEnabled_BackwardCompatNoConfigField(t *testing.T) {
+	// A pre-WP01 enabled.json (no "config" key on entries) must
+	// unmarshal cleanly with Config == nil.
+	dir := t.TempDir()
+	path := filepath.Join(dir, "mcp", "recipes.enabled.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	old := `{"entries":[{"id":"brave-search","enabled_at":"2026-01-01T00:00:00Z","sampling_enabled":false,"env_audit_hash":"abc"}]}`
+	if err := os.WriteFile(path, []byte(old), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := recipes.LoadEnabled(dir)
+	if err != nil {
+		t.Fatalf("LoadEnabled: %v", err)
+	}
+	entries := got.List()
+	if len(entries) != 1 {
+		t.Fatalf("entries len = %d", len(entries))
+	}
+	if entries[0].Config != nil {
+		t.Errorf("Config = %v, want nil for missing field", entries[0].Config)
+	}
+}
+
+func TestSave_NilConfigOmitsFromDisk(t *testing.T) {
+	// `omitempty` on Config means a nil map disappears from the
+	// rendered JSON, keeping the on-disk shape identical to a
+	// pre-WP01 file when no config is set.
+	dir := t.TempDir()
+	e := &recipes.EnabledRecipes{}
+	e.Add(recipes.EnabledRecipe{ID: "brave-search", EnabledAt: time.Now()})
+	if err := e.Save(dir); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "mcp", "recipes.enabled.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytesContains(data, []byte(`"config"`)) {
+		t.Errorf("nil Config leaked to disk: %s", data)
+	}
+}
+
+func bytesContains(haystack, needle []byte) bool {
+	for i := 0; i+len(needle) <= len(haystack); i++ {
+		match := true
+		for j := range needle {
+			if haystack[i+j] != needle[j] {
+				match = false
+				break
+			}
+		}
+		if match {
+			return true
+		}
+	}
+	return false
+}
+
 func TestSaveOnDiskFormatIsHumanReadable(t *testing.T) {
 	// The atomic-write contract uses MarshalIndent. A regression to
 	// non-indented JSON would still be functional, but we want to

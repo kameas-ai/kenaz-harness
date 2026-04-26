@@ -218,7 +218,7 @@ func (a *API) InstallRecipe(ctx context.Context, id string, env map[string]strin
 		_ = a.saveEnabled()
 		return stdio.RecipeStatus{}, fmt.Errorf("tools: resolve env: %w", err)
 	}
-	spec := recipe.ToServerSpec(resolved)
+	spec := recipe.ToServerSpec(resolved, nil)
 
 	if a.cfg.Pool == nil {
 		return stdio.RecipeStatus{}, errors.New("tools: no pool configured")

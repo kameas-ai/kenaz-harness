@@ -59,7 +59,36 @@ type Recipe struct {
 	PingPeriodMs int `json:"ping_period_ms"`
 	// SamplingPolicy is the per-recipe sampling default.
 	SamplingPolicy SamplingPolicy `json:"sampling_policy"`
+	// ArgsTemplate is appended verbatim to Command after ${VAR} token
+	// substitution. Recipes that take a fixed argv (e.g. Brave Search)
+	// leave this nil; recipes that need per-install variables (e.g. the
+	// filesystem server's allowed-directory positional args) expand
+	// tokens via Substitute at ToServerSpec time.
+	ArgsTemplate []string `json:"args_template,omitempty"`
+	// ConfigOptions declares the per-install config fields the modal
+	// renders. Empty for recipes that need only env keys.
+	ConfigOptions []ConfigOption `json:"config_options,omitempty"`
 }
+
+// ConfigOption is one user-editable knob the install modal renders.
+// Kind drives the input shape; Default seeds the form when no last-
+// used value is stashed. The struct intentionally carries no
+// validation logic — the install path validates by Kind.
+type ConfigOption struct {
+	Name        string `json:"name"`
+	Display     string `json:"display"`
+	Kind        string `json:"kind"`
+	Default     any    `json:"default,omitempty"`
+	Required    bool   `json:"required"`
+	Description string `json:"description"`
+}
+
+// Recognised values for ConfigOption.Kind.
+const (
+	ConfigKindDirectoryList = "directory_list"
+	ConfigKindBoolean       = "boolean"
+	ConfigKindString        = "string"
+)
 
 // EnvKey is one credential-bearing env var the server reads.
 type EnvKey struct {
@@ -178,11 +207,31 @@ func (r *Recipe) Validate() error {
 
 // ToServerSpec produces the mcp.ServerSpec the pool consumes when
 // spawning this recipe. env is the resolved env-var map (typically
-// produced by ResolveEnv). The returned ServerSpec uses Transport
-// "stdio" and copies Command verbatim.
-func (r *Recipe) ToServerSpec(env map[string]string) mcp.ServerSpec {
-	cmd := make([]string, len(r.Command))
-	copy(cmd, r.Command)
+// produced by ResolveEnv); config is the per-install user config
+// (typically EnabledRecipe.Config) used to expand any ${VAR} tokens
+// in ArgsTemplate. Both arguments are nil-tolerant.
+//
+// When ArgsTemplate is empty and config is nil, the function behaves
+// identically to the pre-WP01 single-arg version: Command is copied
+// verbatim and no substitution runs. When ArgsTemplate has entries,
+// recognised tokens are expanded:
+//
+//   - ${DATA_DIR}: scalar; pulled from config["data_dir"] (string).
+//   - ${ALLOWED_DIRS}: list; pulled from config["allowed_directories"]
+//     ([]string or []any of strings). Each element becomes a separate
+//     argv element in the resulting Command, NOT one space-joined arg.
+//
+// The returned ServerSpec uses Transport "stdio" and a fresh slice
+// for Command (callers may mutate the input recipe's Command without
+// disturbing the spec).
+func (r *Recipe) ToServerSpec(env map[string]string, config map[string]any) mcp.ServerSpec {
+	cmd := make([]string, 0, len(r.Command)+len(r.ArgsTemplate))
+	cmd = append(cmd, r.Command...)
+
+	if len(r.ArgsTemplate) > 0 {
+		vars, listVars := buildSubstitutionVars(config)
+		cmd = append(cmd, Substitute(r.ArgsTemplate, vars, listVars)...)
+	}
 
 	var envCopy map[string]string
 	if len(env) > 0 {
@@ -198,4 +247,52 @@ func (r *Recipe) ToServerSpec(env map[string]string) mcp.ServerSpec {
 		Command:   cmd,
 		Env:       envCopy,
 	}
+}
+
+// buildSubstitutionVars projects an EnabledRecipe.Config map onto the
+// scalar/list var maps Substitute consumes. The mapping is intentionally
+// small and explicit — every recognised config key is named here, so
+// adding a new substitution token is a one-line change in this file
+// rather than a generic any-typed-walk.
+//
+// String-typed values land in vars; []string and []any-of-string land
+// in listVars. Other shapes are skipped (Substitute will leave the
+// token literal and warn-log).
+func buildSubstitutionVars(config map[string]any) (map[string]string, map[string][]string) {
+	vars := map[string]string{}
+	listVars := map[string][]string{}
+	if config == nil {
+		return vars, listVars
+	}
+	if v, ok := config["data_dir"].(string); ok {
+		vars["DATA_DIR"] = v
+	}
+	if raw, present := config["allowed_directories"]; present {
+		if list, ok := coerceStringSlice(raw); ok {
+			listVars["ALLOWED_DIRS"] = list
+		}
+	}
+	return vars, listVars
+}
+
+// coerceStringSlice accepts the two shapes a JSON-loaded config may
+// surface for a list field: a typed []string (from a Go-side caller)
+// or a []any of strings (from json.Unmarshal into map[string]any).
+// Anything else returns (nil, false).
+func coerceStringSlice(raw any) ([]string, bool) {
+	switch v := raw.(type) {
+	case []string:
+		return v, true
+	case []any:
+		out := make([]string, 0, len(v))
+		for _, e := range v {
+			s, ok := e.(string)
+			if !ok {
+				return nil, false
+			}
+			out = append(out, s)
+		}
+		return out, true
+	}
+	return nil, false
 }

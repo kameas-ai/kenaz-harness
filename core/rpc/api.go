@@ -404,7 +404,7 @@ func makeMCPRecipeBootstrap(c *core.Core, pool *stdio.Pool, secretsBackend *secr
 					"recipe_id", entry.ID, "err", err.Error())
 				continue
 			}
-			specs = append(specs, recipe.ToServerSpec(resolved))
+			specs = append(specs, recipe.ToServerSpec(resolved, nil))
 		}
 		if len(specs) == 0 {
 			return nil
