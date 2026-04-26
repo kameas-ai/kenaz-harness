@@ -134,26 +134,34 @@ func toConverseToolConfigJSON(specs []llm.ToolSpec) (map[string]any, error) {
 // slice into the JSON shape Bedrock's Converse REST API accepts.
 // Mirrors toBedrockMessages for the SDK path but produces plain
 // map[string]any so we can json.Marshal.
+//
+// Image / document blocks emit `source.bytes` as a base64 string —
+// JSON cannot carry raw bytes, so the wire shape stays b64 even
+// though the SDK path hands the SDK pre-decoded []byte. The MediaSource
+// already arrives base64-encoded so we forward the string verbatim.
 func toConverseJSON(msgs []llm.Message) ([]map[string]any, []map[string]any, error) {
 	var converseMsgs []map[string]any
 	var system []map[string]any
 	for _, m := range msgs {
-		text := flattenContent(m.Content)
-		if text == "" {
-			continue
-		}
 		switch m.Role {
 		case llm.RoleSystem:
+			text := m.Text()
+			if text == "" {
+				continue
+			}
 			system = append(system, map[string]any{"text": text})
-		case llm.RoleUser:
+		case llm.RoleUser, llm.RoleAssistant:
+			blocks := toConverseContentBlocksJSON(m.Content)
+			if len(blocks) == 0 {
+				continue
+			}
+			role := "user"
+			if m.Role == llm.RoleAssistant {
+				role = "assistant"
+			}
 			converseMsgs = append(converseMsgs, map[string]any{
-				"role":    "user",
-				"content": []map[string]any{{"text": text}},
-			})
-		case llm.RoleAssistant:
-			converseMsgs = append(converseMsgs, map[string]any{
-				"role":    "assistant",
-				"content": []map[string]any{{"text": text}},
+				"role":    role,
+				"content": blocks,
 			})
 		default:
 			continue
@@ -163,6 +171,57 @@ func toConverseJSON(msgs []llm.Message) ([]map[string]any, []map[string]any, err
 		return nil, nil, errors.New("bedrock: no user/assistant messages in request")
 	}
 	return converseMsgs, system, nil
+}
+
+// toConverseContentBlocksJSON projects connector ContentBlocks onto
+// the JSON shape the Converse REST API accepts. Unknown / unsupported
+// types are dropped silently — capability gating in WP03 surfaces the
+// error before we get here.
+func toConverseContentBlocksJSON(parts []llm.ContentBlock) []map[string]any {
+	out := make([]map[string]any, 0, len(parts))
+	for _, p := range parts {
+		switch p.Type {
+		case "", "text":
+			if p.Text == "" {
+				continue
+			}
+			out = append(out, map[string]any{"text": p.Text})
+		case "image":
+			if p.Source == nil {
+				continue
+			}
+			format := imageFormatFromMediaType(p.Source.MediaType)
+			if format == "" {
+				continue
+			}
+			out = append(out, map[string]any{
+				"image": map[string]any{
+					"format": format,
+					"source": map[string]any{"bytes": p.Source.Data},
+				},
+			})
+		case "document":
+			if p.Source == nil {
+				continue
+			}
+			format := documentFormatFromMediaType(p.Source.MediaType)
+			if format == "" {
+				continue
+			}
+			name := p.Source.OriginalName
+			if name == "" {
+				name = defaultDocumentName
+			}
+			out = append(out, map[string]any{
+				"document": map[string]any{
+					"name":   name,
+					"format": format,
+					"source": map[string]any{"bytes": p.Source.Data},
+				},
+			})
+		}
+	}
+	return out
 }
 
 // listModelsWithBearer returns the merged inference-profile +

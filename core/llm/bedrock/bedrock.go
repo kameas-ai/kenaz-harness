@@ -17,6 +17,7 @@ package bedrock
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -33,6 +34,47 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime/types"
 	"github.com/sigil-tech/kaneaz-harness/core/llm"
 )
+
+// imageFormatFromMediaType maps an IANA mime-type to the Bedrock
+// Converse image format enum value. Unknown / unsupported types fall
+// through to "" so the caller can detect and skip the block.
+func imageFormatFromMediaType(mt string) string {
+	switch strings.ToLower(strings.TrimSpace(mt)) {
+	case "image/png":
+		return "png"
+	case "image/jpeg", "image/jpg":
+		return "jpeg"
+	case "image/gif":
+		return "gif"
+	case "image/webp":
+		return "webp"
+	}
+	return ""
+}
+
+// documentFormatFromMediaType maps an IANA mime-type to the Bedrock
+// Converse document format enum value. Returns "" for unsupported types.
+func documentFormatFromMediaType(mt string) string {
+	switch strings.ToLower(strings.TrimSpace(mt)) {
+	case "application/pdf":
+		return "pdf"
+	case "text/csv":
+		return "csv"
+	case "text/html":
+		return "html"
+	case "text/plain":
+		return "txt"
+	case "text/markdown":
+		return "md"
+	}
+	return ""
+}
+
+// defaultDocumentName is the placeholder Bedrock document name used
+// when the caller hasn't supplied one. Converse rejects requests with
+// a missing or empty document name (verified against the Converse
+// API docs — the field is annotated "This member is required.").
+const defaultDocumentName = "document"
 
 // Kind is the canonical provider kind ("bedrock").
 const Kind = "bedrock"
@@ -329,27 +371,32 @@ func stringOrEmpty(s *string) string {
 
 // toBedrockMessages converts the harness's GenerationRequest message
 // slice into Bedrock's Converse-style messages. System messages are
-// hoisted into a separate System block per the API contract.
+// hoisted into a separate System block per the API contract; image and
+// document blocks land as ContentBlockMemberImage / ContentBlockMemberDocument
+// per https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ContentBlock.html.
 func toBedrockMessages(msgs []llm.Message) ([]types.Message, []types.SystemContentBlock, error) {
 	var bedrockMsgs []types.Message
 	var system []types.SystemContentBlock
 	for _, m := range msgs {
-		text := flattenContent(m.Content)
-		if text == "" {
-			continue
-		}
 		switch m.Role {
 		case llm.RoleSystem:
+			text := m.Text()
+			if text == "" {
+				continue
+			}
 			system = append(system, &types.SystemContentBlockMemberText{Value: text})
-		case llm.RoleUser:
+		case llm.RoleUser, llm.RoleAssistant:
+			blocks := toBedrockContentBlocks(m.Content)
+			if len(blocks) == 0 {
+				continue
+			}
+			role := types.ConversationRoleUser
+			if m.Role == llm.RoleAssistant {
+				role = types.ConversationRoleAssistant
+			}
 			bedrockMsgs = append(bedrockMsgs, types.Message{
-				Role:    types.ConversationRoleUser,
-				Content: []types.ContentBlock{&types.ContentBlockMemberText{Value: text}},
-			})
-		case llm.RoleAssistant:
-			bedrockMsgs = append(bedrockMsgs, types.Message{
-				Role:    types.ConversationRoleAssistant,
-				Content: []types.ContentBlock{&types.ContentBlockMemberText{Value: text}},
+				Role:    role,
+				Content: blocks,
 			})
 		case llm.RoleTool:
 			// Tool results aren't yet wired through the harness — skip
@@ -366,18 +413,67 @@ func toBedrockMessages(msgs []llm.Message) ([]types.Message, []types.SystemConte
 	return bedrockMsgs, system, nil
 }
 
-// flattenContent collapses a multi-part content slice into a single
-// string. Bedrock Converse supports image parts, but the harness's
-// chat surface today only emits text — extending to multimodal parts
-// is a future enhancement.
-func flattenContent(parts []llm.ContentPart) string {
-	var b strings.Builder
+// toBedrockContentBlocks projects connector ContentBlocks onto the
+// AWS SDK's ContentBlock union. Unknown / unsupported types are
+// dropped silently — capability gating in WP03 surfaces the error to
+// the user before we get here.
+//
+// The SDK's ImageSourceMemberBytes / DocumentSourceMemberBytes accept
+// raw `[]byte`; the SDK encodes them on the wire (no caller-side base64
+// re-encoding). We base64-decode the connector's MediaSource.Data here.
+func toBedrockContentBlocks(parts []llm.ContentBlock) []types.ContentBlock {
+	out := make([]types.ContentBlock, 0, len(parts))
 	for _, p := range parts {
-		if p.Type == "text" {
-			b.WriteString(p.Text)
+		switch p.Type {
+		case "", "text":
+			if p.Text == "" {
+				continue
+			}
+			out = append(out, &types.ContentBlockMemberText{Value: p.Text})
+		case "image":
+			if p.Source == nil {
+				continue
+			}
+			format := imageFormatFromMediaType(p.Source.MediaType)
+			if format == "" {
+				continue
+			}
+			data, err := base64.StdEncoding.DecodeString(p.Source.Data)
+			if err != nil {
+				continue
+			}
+			out = append(out, &types.ContentBlockMemberImage{
+				Value: types.ImageBlock{
+					Format: types.ImageFormat(format),
+					Source: &types.ImageSourceMemberBytes{Value: data},
+				},
+			})
+		case "document":
+			if p.Source == nil {
+				continue
+			}
+			format := documentFormatFromMediaType(p.Source.MediaType)
+			if format == "" {
+				continue
+			}
+			data, err := base64.StdEncoding.DecodeString(p.Source.Data)
+			if err != nil {
+				continue
+			}
+			name := p.Source.OriginalName
+			if name == "" {
+				name = defaultDocumentName
+			}
+			out = append(out, &types.ContentBlockMemberDocument{
+				Value: types.DocumentBlock{
+					Name:   aws.String(name),
+					Format: types.DocumentFormat(format),
+					Source: &types.DocumentSourceMemberBytes{Value: data},
+				},
+			})
 		}
 	}
-	return b.String()
+	return out
 }
 
 // buildToolConfig converts the harness's ToolSpec slice into the

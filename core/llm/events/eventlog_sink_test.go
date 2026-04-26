@@ -68,7 +68,7 @@ func TestEventLogSink_RequestSubmittedFlows(t *testing.T) {
 	req := llm.GenerationRequest{
 		SessionID: "01HFXY8B5VJ6T6T7AXJF9JT9F9",
 		Messages: []llm.Message{
-			{Role: llm.RoleUser, Content: []llm.ContentPart{llm.ContentPartFromText("hello")}},
+			{Role: llm.RoleUser, Content: []llm.ContentBlock{llm.ContentBlockFromText("hello")}},
 		},
 	}
 	prof := llm.ProviderProfile{

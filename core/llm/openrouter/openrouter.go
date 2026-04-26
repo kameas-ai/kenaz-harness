@@ -349,7 +349,7 @@ func extractErrorMessage(body []byte) string {
 //	  "usage": {"include": true}
 //	}
 //
-// Connector ContentParts are flattened into a single string per message
+// Connector ContentBlocks are flattened into a single string per message
 // (text concatenation). Non-text parts are dropped — OpenRouter's
 // router accepts richer content arrays per upstream model, but the v1
 // adapter targets the universal text path.
@@ -396,7 +396,7 @@ func buildRequestBody(req llm.GenerationRequest, prof llm.ProviderProfile) ([]by
 // v1 adapter — tool calling round-trips through the upstream model's
 // own contract, and OpenRouter accepts the OpenAI tool-call schema for
 // callers that need it (out of scope for the streaming text MVP).
-func flattenContent(parts []llm.ContentPart) string {
+func flattenContent(parts []llm.ContentBlock) string {
 	if len(parts) == 0 {
 		return ""
 	}
@@ -469,7 +469,7 @@ func (s *chatStream) pump() {
 		s.mu.Lock()
 		if s.finalErr == nil && !s.cancelled {
 			s.final = llm.Response{
-				Content:      []llm.ContentPart{{Type: "text", Text: s.textBuf.String()}},
+				Content:      []llm.ContentBlock{{Type: "text", Text: s.textBuf.String()}},
 				FinishReason: s.finishStop,
 				Usage:        s.usage,
 			}

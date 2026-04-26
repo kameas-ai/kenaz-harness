@@ -137,7 +137,7 @@ func TestPump_ToolUseTriggersLoop_EndToEnd(t *testing.T) {
 	// Second stream (loop's re-invocation): plain end_turn with text.
 	finalStream := &fakeStream{
 		final: corellm.Response{
-			Content:      []corellm.ContentPart{{Type: "text", Text: "Issue 42 is open."}},
+			Content:      []corellm.ContentBlock{{Type: "text", Text: "Issue 42 is open."}},
 			FinishReason: "end_turn",
 		},
 	}
@@ -263,7 +263,7 @@ func TestPump_NonToolUseFinishUnaffected(t *testing.T) {
 			{Kind: corellm.StreamFinish, Finish: "end_turn"},
 		},
 		final: corellm.Response{
-			Content:      []corellm.ContentPart{{Type: "text", Text: "hi"}},
+			Content:      []corellm.ContentBlock{{Type: "text", Text: "hi"}},
 			FinishReason: "end_turn",
 		},
 	}

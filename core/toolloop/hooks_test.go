@@ -132,7 +132,7 @@ func TestHooks_PreToolUseReceivesEvent(t *testing.T) {
 	reg := &fakeRegistry{
 		streams: []corellm.Stream{
 			&scriptedStream{final: corellm.Response{
-				Content:      []corellm.ContentPart{{Type: "text", Text: "done"}},
+				Content:      []corellm.ContentBlock{{Type: "text", Text: "done"}},
 				FinishReason: "end_turn",
 			}},
 		},
@@ -184,7 +184,7 @@ func TestHooks_PreToolUseShortCircuits(t *testing.T) {
 	reg := &fakeRegistry{
 		streams: []corellm.Stream{
 			&scriptedStream{final: corellm.Response{
-				Content:      []corellm.ContentPart{{Type: "text", Text: "ok, skipping delete"}},
+				Content:      []corellm.ContentBlock{{Type: "text", Text: "ok, skipping delete"}},
 				FinishReason: "end_turn",
 			}},
 		},
@@ -242,7 +242,7 @@ func TestHooks_PreToolUseMutatesArgs(t *testing.T) {
 	reg := &fakeRegistry{
 		streams: []corellm.Stream{
 			&scriptedStream{final: corellm.Response{
-				Content:      []corellm.ContentPart{{Type: "text", Text: "done"}},
+				Content:      []corellm.ContentBlock{{Type: "text", Text: "done"}},
 				FinishReason: "end_turn",
 			}},
 		},
@@ -294,7 +294,7 @@ func TestHooks_PostToolUseFiresOnSuccess(t *testing.T) {
 	reg := &fakeRegistry{
 		streams: []corellm.Stream{
 			&scriptedStream{final: corellm.Response{
-				Content:      []corellm.ContentPart{{Type: "text", Text: "done"}},
+				Content:      []corellm.ContentBlock{{Type: "text", Text: "done"}},
 				FinishReason: "end_turn",
 			}},
 		},
@@ -337,7 +337,7 @@ func TestHooks_PostToolUseFiresOnError(t *testing.T) {
 	reg := &fakeRegistry{
 		streams: []corellm.Stream{
 			&scriptedStream{final: corellm.Response{
-				Content:      []corellm.ContentPart{{Type: "text", Text: "sorry"}},
+				Content:      []corellm.ContentBlock{{Type: "text", Text: "sorry"}},
 				FinishReason: "end_turn",
 			}},
 		},
@@ -373,7 +373,7 @@ func TestAudit_ToolInvokedOnSuccess(t *testing.T) {
 	reg := &fakeRegistry{
 		streams: []corellm.Stream{
 			&scriptedStream{final: corellm.Response{
-				Content:      []corellm.ContentPart{{Type: "text", Text: "done"}},
+				Content:      []corellm.ContentBlock{{Type: "text", Text: "done"}},
 				FinishReason: "end_turn",
 			}},
 		},
@@ -412,7 +412,7 @@ func TestAudit_ToolFailedOnPoolError(t *testing.T) {
 	reg := &fakeRegistry{
 		streams: []corellm.Stream{
 			&scriptedStream{final: corellm.Response{
-				Content:      []corellm.ContentPart{{Type: "text", Text: "sorry"}},
+				Content:      []corellm.ContentBlock{{Type: "text", Text: "sorry"}},
 				FinishReason: "end_turn",
 			}},
 		},
@@ -446,7 +446,7 @@ func TestAudit_RedactsSecretArgs(t *testing.T) {
 	reg := &fakeRegistry{
 		streams: []corellm.Stream{
 			&scriptedStream{final: corellm.Response{
-				Content:      []corellm.ContentPart{{Type: "text", Text: "done"}},
+				Content:      []corellm.ContentBlock{{Type: "text", Text: "done"}},
 				FinishReason: "end_turn",
 			}},
 		},
@@ -487,7 +487,7 @@ func TestAudit_ToolFailedOnPreHookDeny(t *testing.T) {
 	reg := &fakeRegistry{
 		streams: []corellm.Stream{
 			&scriptedStream{final: corellm.Response{
-				Content:      []corellm.ContentPart{{Type: "text", Text: "ok"}},
+				Content:      []corellm.ContentBlock{{Type: "text", Text: "ok"}},
 				FinishReason: "end_turn",
 			}},
 		},
@@ -529,7 +529,7 @@ func TestHooks_PreToolUseError(t *testing.T) {
 	reg := &fakeRegistry{
 		streams: []corellm.Stream{
 			&scriptedStream{final: corellm.Response{
-				Content:      []corellm.ContentPart{{Type: "text", Text: "ok"}},
+				Content:      []corellm.ContentBlock{{Type: "text", Text: "ok"}},
 				FinishReason: "end_turn",
 			}},
 		},

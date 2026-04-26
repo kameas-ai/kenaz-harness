@@ -122,7 +122,7 @@ func mapSamplingMessages(in []SamplingMessage) []corellm.Message {
 		text := extractText(m.Content)
 		out = append(out, corellm.Message{
 			Role:    role,
-			Content: []corellm.ContentPart{corellm.ContentPartFromText(text)},
+			Content: []corellm.ContentBlock{corellm.ContentBlockFromText(text)},
 		})
 	}
 	return out
@@ -151,7 +151,7 @@ func extractText(raw json.RawMessage) string {
 // string. Sampling responses are single-shot text completions; we
 // drop tool-use parts since the MCP spec does not model sampling
 // tool calls in the response shape.
-func concatText(parts []corellm.ContentPart) string {
+func concatText(parts []corellm.ContentBlock) string {
 	if len(parts) == 0 {
 		return ""
 	}

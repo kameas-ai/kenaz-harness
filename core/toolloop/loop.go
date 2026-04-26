@@ -209,7 +209,7 @@ func (l *Loop) Run(
 		// 1. Persist the assistant tool_use turn so reloading the
 		//    session shows what the model asked for. The textual
 		//    serialization is intentionally simple (JSON of the tool
-		//    calls) — once corellm.ContentPart grows native tool_use
+		//    calls) — once corellm.ContentBlock grows native tool_use
 		//    parts the storage layer will round-trip them losslessly.
 		if err := l.persistAssistantToolUse(ctx, sessionID, current); err != nil {
 			return err
@@ -364,13 +364,13 @@ func catalogContains(tools []Tool, server, tool string) bool {
 // represents the model's tool_use turn for re-submission. We use a
 // JSON serialization of the tool calls as the text content so adapters
 // that expect a specific tool_use block shape can parse it; native
-// tool_use ContentPart support lands in a later WP.
+// tool_use ContentBlock support lands in a later WP.
 func assistantMessageFromResponse(resp *corellm.Response) corellm.Message {
-	parts := make([]corellm.ContentPart, 0, len(resp.Content)+len(resp.ToolCalls))
+	parts := make([]corellm.ContentBlock, 0, len(resp.Content)+len(resp.ToolCalls))
 	parts = append(parts, resp.Content...)
 	for i := range resp.ToolCalls {
 		tu := resp.ToolCalls[i]
-		parts = append(parts, corellm.ContentPart{Type: "tool_use", ToolUse: &tu})
+		parts = append(parts, corellm.ContentBlock{Type: "tool_use", ToolUse: &tu})
 	}
 	return corellm.Message{Role: corellm.RoleAssistant, Content: parts}
 }
@@ -395,7 +395,7 @@ func toolResultMessage(r toolResult) corellm.Message {
 	payload, _ := json.Marshal(envelope)
 	return corellm.Message{
 		Role: corellm.RoleTool,
-		Content: []corellm.ContentPart{{
+		Content: []corellm.ContentBlock{{
 			Type:     "tool_result",
 			Text:     r.Output,
 			ToolData: payload,
@@ -460,7 +460,7 @@ func (l *Loop) persistAssistantFinal(ctx context.Context, sessionID string, resp
 	return l.history.AppendMessage(ctx, sessionID, string(corellm.RoleAssistant), text)
 }
 
-func concatText(parts []corellm.ContentPart) string {
+func concatText(parts []corellm.ContentBlock) string {
 	var out string
 	for _, p := range parts {
 		if p.Type == "text" || p.Text != "" {

@@ -82,7 +82,7 @@ func TestGate_AcceptsStreamingByDefault(t *testing.T) {
 	c := mustCatalog(t)
 	g := NewGate(c)
 	prof := llm.ProviderProfile{ID: "p", Kind: "anthropic", Model: "claude-sonnet-4-7"}
-	req := llm.GenerationRequest{Messages: []llm.Message{{Role: llm.RoleUser, Content: []llm.ContentPart{{Type: "text", Text: "hi"}}}}}
+	req := llm.GenerationRequest{Messages: []llm.Message{{Role: llm.RoleUser, Content: []llm.ContentBlock{{Type: "text", Text: "hi"}}}}}
 	desc, err := g.Check(req, prof)
 	if err != nil {
 		t.Fatal(err)

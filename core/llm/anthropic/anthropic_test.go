@@ -2,6 +2,7 @@ package anthropic
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -96,7 +97,7 @@ func newAdapter(fs *fakeServer) *Adapter {
 func stdReq() (llm.GenerationRequest, llm.ProviderProfile) {
 	req := llm.GenerationRequest{
 		Messages: []llm.Message{
-			{Role: llm.RoleUser, Content: []llm.ContentPart{{Type: "text", Text: "hi"}}},
+			{Role: llm.RoleUser, Content: []llm.ContentBlock{{Type: "text", Text: "hi"}}},
 		},
 	}
 	prof := llm.ProviderProfile{
@@ -557,6 +558,158 @@ func TestAdapter_ListModels_EmptyCredential(t *testing.T) {
 	_, err := a.ListModels(context.Background(), nil)
 	if err == nil {
 		t.Fatal("expected error for empty credential")
+	}
+}
+
+// TestAdapter_TextOnly_UsesStringContent verifies that a request with
+// only text blocks emits the legacy string-shaped `content` field, not
+// the array-of-blocks form. This is the wire-shape stability guarantee
+// for the text-only path: existing Anthropic deployments continue to
+// see the same body for plain chat turns.
+func TestAdapter_TextOnly_UsesStringContent(t *testing.T) {
+	fs := newFakeServer(t, func(w http.ResponseWriter, _ *http.Request, _ int) {
+		writeSSE(w, happyPathFrames())
+	})
+	a := newAdapter(fs)
+	req, prof := stdReq()
+	stream, err := a.Stream(context.Background(), req, prof, []byte("k"))
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	if _, _, ferr := drain(t, stream); ferr != nil {
+		t.Fatalf("Final: %v", ferr)
+	}
+	fs.mu.Lock()
+	defer fs.mu.Unlock()
+	var body struct {
+		Messages []struct {
+			Role    string          `json:"role"`
+			Content json.RawMessage `json:"content"`
+		} `json:"messages"`
+	}
+	if err := json.Unmarshal(fs.lastBody, &body); err != nil {
+		t.Fatalf("unmarshal: %v\nbody=%s", err, fs.lastBody)
+	}
+	if len(body.Messages) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(body.Messages))
+	}
+	// content should be a JSON string, not an array.
+	if !strings.HasPrefix(strings.TrimSpace(string(body.Messages[0].Content)), `"`) {
+		t.Fatalf("expected string-shaped content for text-only message, got %s", body.Messages[0].Content)
+	}
+}
+
+// TestAdapter_ImageBlock_Serialized verifies that a single image block
+// is mapped to Anthropic's {type:"image", source:{type:"base64",
+// media_type, data}} shape and rides inside an array-of-blocks content
+// field (any non-text block forces the array form).
+func TestAdapter_ImageBlock_Serialized(t *testing.T) {
+	fs := newFakeServer(t, func(w http.ResponseWriter, _ *http.Request, _ int) {
+		writeSSE(w, happyPathFrames())
+	})
+	a := newAdapter(fs)
+	req, prof := stdReq()
+	req.Messages = []llm.Message{{
+		Role: llm.RoleUser,
+		Content: []llm.ContentBlock{
+			{Type: "text", Text: "describe this"},
+			{Type: "image", Source: &llm.MediaSource{
+				Kind:      "base64",
+				MediaType: "image/png",
+				Data:      "iVBORw0KGgo=",
+			}},
+		},
+	}}
+	stream, err := a.Stream(context.Background(), req, prof, []byte("k"))
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	if _, _, ferr := drain(t, stream); ferr != nil {
+		t.Fatalf("Final: %v", ferr)
+	}
+	fs.mu.Lock()
+	defer fs.mu.Unlock()
+	var body struct {
+		Messages []struct {
+			Role    string           `json:"role"`
+			Content []map[string]any `json:"content"`
+		} `json:"messages"`
+	}
+	if err := json.Unmarshal(fs.lastBody, &body); err != nil {
+		t.Fatalf("unmarshal: %v\nbody=%s", err, fs.lastBody)
+	}
+	if len(body.Messages) != 1 {
+		t.Fatalf("messages = %d", len(body.Messages))
+	}
+	parts := body.Messages[0].Content
+	if len(parts) != 2 {
+		t.Fatalf("content parts = %d, want 2 (body=%s)", len(parts), fs.lastBody)
+	}
+	if parts[0]["type"] != "text" || parts[0]["text"] != "describe this" {
+		t.Fatalf("text part wrong: %+v", parts[0])
+	}
+	if parts[1]["type"] != "image" {
+		t.Fatalf("image part type = %v", parts[1]["type"])
+	}
+	src, ok := parts[1]["source"].(map[string]any)
+	if !ok {
+		t.Fatalf("image source missing: %+v", parts[1])
+	}
+	if src["type"] != "base64" || src["media_type"] != "image/png" || src["data"] != "iVBORw0KGgo=" {
+		t.Fatalf("image source wrong: %+v", src)
+	}
+}
+
+// TestAdapter_DocumentBlock_Serialized verifies that a document block
+// is mapped to Anthropic's {type:"document", source:{...}} shape with
+// application/pdf media type.
+func TestAdapter_DocumentBlock_Serialized(t *testing.T) {
+	fs := newFakeServer(t, func(w http.ResponseWriter, _ *http.Request, _ int) {
+		writeSSE(w, happyPathFrames())
+	})
+	a := newAdapter(fs)
+	req, prof := stdReq()
+	req.Messages = []llm.Message{{
+		Role: llm.RoleUser,
+		Content: []llm.ContentBlock{
+			{Type: "text", Text: "summarize"},
+			{Type: "document", Source: &llm.MediaSource{
+				Kind:      "base64",
+				MediaType: "application/pdf",
+				Data:      "JVBERi0=",
+			}},
+		},
+	}}
+	stream, err := a.Stream(context.Background(), req, prof, []byte("k"))
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	if _, _, ferr := drain(t, stream); ferr != nil {
+		t.Fatalf("Final: %v", ferr)
+	}
+	fs.mu.Lock()
+	defer fs.mu.Unlock()
+	var body struct {
+		Messages []struct {
+			Content []map[string]any `json:"content"`
+		} `json:"messages"`
+	}
+	if err := json.Unmarshal(fs.lastBody, &body); err != nil {
+		t.Fatalf("unmarshal: %v\nbody=%s", err, fs.lastBody)
+	}
+	if len(body.Messages) != 1 || len(body.Messages[0].Content) != 2 {
+		t.Fatalf("messages/content shape unexpected: %s", fs.lastBody)
+	}
+	doc := body.Messages[0].Content[1]
+	if doc["type"] != "document" {
+		t.Fatalf("doc type = %v", doc["type"])
+	}
+	src, ok := doc["source"].(map[string]any)
+	if !ok {
+		t.Fatalf("doc source missing: %+v", doc)
+	}
+	if src["media_type"] != "application/pdf" || src["data"] != "JVBERi0=" {
+		t.Fatalf("doc source wrong: %+v", src)
 	}
 }
 

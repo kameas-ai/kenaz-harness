@@ -113,7 +113,7 @@ func newConfirmTestLoop(t *testing.T, gw ConfirmGateway, ow SessionOverrideWrite
 	reg := &fakeRegistry{
 		streams: []corellm.Stream{
 			&scriptedStream{final: corellm.Response{
-				Content:      []corellm.ContentPart{{Type: "text", Text: "done"}},
+				Content:      []corellm.ContentBlock{{Type: "text", Text: "done"}},
 				FinishReason: "end_turn",
 			}},
 		},

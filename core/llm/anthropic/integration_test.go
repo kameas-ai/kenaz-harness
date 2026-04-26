@@ -113,7 +113,7 @@ func TestPipelineEndToEnd(t *testing.T) {
 	stream, err := reg.Stream(context.Background(), corellm.GenerationRequest{
 		ProfileID: "p-int",
 		Messages: []corellm.Message{
-			{Role: corellm.RoleUser, Content: []corellm.ContentPart{{Type: "text", Text: "ping"}}},
+			{Role: corellm.RoleUser, Content: []corellm.ContentBlock{{Type: "text", Text: "ping"}}},
 		},
 		SessionID: "s-int",
 	})

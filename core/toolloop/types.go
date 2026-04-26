@@ -56,7 +56,7 @@ type Tool struct {
 // values when re-invoking the registry.
 //
 // Kept internal to WP01 — once we add structured tool_result content
-// parts to corellm.ContentPart this collapses into Message construction.
+// parts to corellm.ContentBlock this collapses into Message construction.
 type recordedTurn struct {
 	Assistant corellm.Response
 	Results   []toolResult

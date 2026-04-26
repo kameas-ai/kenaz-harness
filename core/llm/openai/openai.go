@@ -29,6 +29,7 @@ import (
 
 	llm "github.com/sigil-tech/kaneaz-harness/core/llm"
 	"github.com/sigil-tech/kaneaz-harness/core/llm/capabilities"
+	"github.com/sigil-tech/kaneaz-harness/core/logging"
 )
 
 // Kind is the canonical provider kind for the OpenAI adapter. It must
@@ -287,7 +288,7 @@ func extractErrorMessage(body []byte) string {
 }
 
 // buildRequestBody constructs the JSON body for the Chat Completions
-// API. The connector's polymorphic ContentParts are flattened into
+// API. The connector's polymorphic ContentBlocks are flattened into
 // OpenAI's simpler {role, content: "string"} message shape — multi-
 // part messages join their text parts with newline separators. Vision
 // inputs are out of scope for the v1 adapter (the CapabilityGate
@@ -322,12 +323,11 @@ func buildRequestBody(req llm.GenerationRequest, prof llm.ProviderProfile) ([]by
 		}
 		// Tool messages get the OpenAI-canonical role name. For v1
 		// we don't carry tool_call_id because the connector's
-		// ContentPart shape doesn't surface it; the gate rejects
+		// ContentBlock shape doesn't surface it; the gate rejects
 		// tool requests for the OpenAI adapter for now.
-		content := flattenText(m.Content)
 		entry := map[string]any{
 			"role":    role,
-			"content": content,
+			"content": buildOpenAIContent(m.Content),
 		}
 		msgs = append(msgs, entry)
 	}
@@ -370,7 +370,7 @@ func buildRequestBody(req llm.GenerationRequest, prof llm.ProviderProfile) ([]by
 // text capability without a catalog override). An empty content slice
 // produces "" — OpenAI tolerates empty strings in user/assistant
 // messages but the gate-level path rarely produces this.
-func flattenText(parts []llm.ContentPart) string {
+func flattenText(parts []llm.ContentBlock) string {
 	var b strings.Builder
 	for _, p := range parts {
 		switch p.Type {
@@ -382,7 +382,6 @@ func flattenText(parts []llm.ContentPart) string {
 				b.WriteString(p.Text)
 			}
 		default:
-			// Future: vision parts, tool_use, tool_result. Not in v1.
 			if p.Text != "" {
 				if b.Len() > 0 {
 					b.WriteByte('\n')
@@ -392,6 +391,88 @@ func flattenText(parts []llm.ContentPart) string {
 		}
 	}
 	return b.String()
+}
+
+// buildOpenAIContent emits the JSON value to put under a message's
+// `content` field. Pure-text messages stay as a single string (the
+// classic Chat Completions shape); messages that carry image / document
+// blocks switch to the array-of-parts shape per
+// https://platform.openai.com/docs/guides/vision.
+//
+// Document blocks are NOT serialized in WP01 — Chat Completions does
+// not accept inline PDFs (the Files API is a separate endpoint). WP03
+// adds a capability gate that rejects document inputs against an
+// OpenAI profile before they reach this builder; for now we drop the
+// block with a warn log so the request still goes through the text
+// portion of the message instead of failing the whole turn.
+//
+// TODO(WP03): replace the silent drop with an UnsupportedModalityError
+// returned from buildRequest validation.
+func buildOpenAIContent(parts []llm.ContentBlock) any {
+	if hasMultimodal(parts) {
+		out := make([]map[string]any, 0, len(parts))
+		for _, p := range parts {
+			switch p.Type {
+			case "", "text":
+				if p.Text == "" {
+					continue
+				}
+				out = append(out, map[string]any{"type": "text", "text": p.Text})
+			case "image":
+				if p.Source == nil {
+					continue
+				}
+				out = append(out, map[string]any{
+					"type":      "image_url",
+					"image_url": map[string]any{"url": dataURL(p.Source)},
+				})
+			case "document":
+				logging.L().Warn("openai.serialize.document_dropped",
+					"media_type", mediaTypeOf(p.Source),
+					"reason", "openai_chat_completions_does_not_accept_inline_documents")
+				continue
+			default:
+				if p.Text != "" {
+					out = append(out, map[string]any{"type": "text", "text": p.Text})
+				}
+			}
+		}
+		if len(out) == 0 {
+			return ""
+		}
+		return out
+	}
+	return flattenText(parts)
+}
+
+// hasMultimodal reports whether any block requires the array-of-parts
+// content shape (image only — documents are dropped, see TODO above).
+func hasMultimodal(parts []llm.ContentBlock) bool {
+	for _, p := range parts {
+		if p.Type == "image" {
+			return true
+		}
+	}
+	return false
+}
+
+// dataURL composes a data: URL from a base64 MediaSource. OpenAI's
+// vision endpoint accepts both data URLs and remote https URLs; we
+// always emit data URLs because the harness stores image bytes in a
+// local CAS (see WP02) and never serves them on the public internet.
+func dataURL(src *llm.MediaSource) string {
+	if src.URI != "" && src.Kind == "uri" {
+		return src.URI
+	}
+	return "data:" + src.MediaType + ";base64," + src.Data
+}
+
+// mediaTypeOf safely extracts a MediaSource.MediaType (empty when nil).
+func mediaTypeOf(src *llm.MediaSource) string {
+	if src == nil {
+		return ""
+	}
+	return src.MediaType
 }
 
 // chatStream is the SSE consumer. It owns the http.Response body and
@@ -482,7 +563,7 @@ func (s *chatStream) pump() {
 		s.flushPendingToolCallsLocked()
 		if s.finalErr == nil && !s.cancelled {
 			s.final = llm.Response{
-				Content:      []llm.ContentPart{{Type: "text", Text: s.textBuf.String()}},
+				Content:      []llm.ContentBlock{{Type: "text", Text: s.textBuf.String()}},
 				ToolCalls:    s.toolCalls,
 				FinishReason: s.finishStop,
 				Usage:        s.usage,
