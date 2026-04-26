@@ -90,3 +90,53 @@
   --motion-base: 200ms;
   --motion-slow: 320ms;
 }
+
+/*
+ * Light-mode override. useTheme adds `.dark` to <html> when the resolved
+ * theme is dark (explicit dark, or system + prefers-color-scheme:dark).
+ * Absence of `.dark` therefore means light mode — these overrides flip
+ * the surface + ink stacks while keeping the brass accent and signal
+ * palette tonally consistent across themes.
+ *
+ * HARNESS-LOCAL extension; not yet vendored from Kenaz.
+ */
+:root:not(.dark) {
+  /* ── surfaces ─────────────────────────────────────────────────── */
+  --surface-0: #FFFFFF;
+  --surface-1: #F8F8FA;
+  --surface-2: #F0F0F4;
+  --surface-3: #E6E6EC;
+  --surface-4: #D9D9E0;
+
+  /* ── borders ──────────────────────────────────────────────────── */
+  --border: #D7D7DC;
+  --border-muted: #E5E5EA;
+  --border-strong: #B8B8C0;
+
+  /* ── ink ──────────────────────────────────────────────────────── */
+  --ink: #15151A;
+  --ink-muted: #5A5A65;
+  --ink-subtle: #8A8A95;
+  --ink-dim: #B0B0BA;
+  --ink-trace: #D5D5DC;
+
+  /* ── accent (brass) — slightly darker for contrast on white ───── */
+  --accent: #B5904A;
+  --accent-muted: #8A7550;
+  --accent-dim: #C9B98A;
+  --accent-glow: rgba(181, 144, 74, 0.14);
+  --accent-hairline: rgba(181, 144, 74, 0.35);
+
+  /* ── signal colors (slightly desaturated for light bg) ────────── */
+  --ok: #4F8B68;
+  --warn: #B8862E;
+  --danger: #C25A56;
+  --info: #5E7BA8;
+  --violet: #8A6EB0;
+  --signal-neutral: #6F747E;
+  --signal-git: #4F8881;
+
+  /* ── modal overlay (light scrim over light surfaces) ──────────── */
+  --modal-overlay: rgba(15, 15, 18, 0.45);
+  --modal-shadow: rgba(15, 15, 18, 0.18);
+}
