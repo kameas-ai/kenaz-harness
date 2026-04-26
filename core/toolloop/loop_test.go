@@ -665,3 +665,118 @@ func TestLoop_ContextCancellation(t *testing.T) {
 		t.Fatalf("err = %v, want context.Canceled", err)
 	}
 }
+
+// TestLoop_NamespacedToolNameSplits asserts that when the model emits
+// a tool_use whose name uses the "<server>__<tool>" namespacing the
+// rpc layer's discoverer applies, the loop splits the name and calls
+// pool.Call with the un-namespaced (server, tool) pair.
+func TestLoop_NamespacedToolNameSplits(t *testing.T) {
+	pool := newFakePool()
+	pool.register("brave-search", "brave_web_search", func(_ context.Context, _ json.RawMessage) (json.RawMessage, error) {
+		return json.RawMessage(`{"hits":[]}`), nil
+	})
+
+	reg := &fakeRegistry{
+		streams: []corellm.Stream{
+			&scriptedStream{
+				final: corellm.Response{
+					Content:      []corellm.ContentPart{{Type: "text", Text: "no results"}},
+					FinishReason: "end_turn",
+				},
+			},
+		},
+	}
+
+	hist := &recordingHistory{}
+	loop, err := New(Config{Registry: reg, Pool: pool, History: hist})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	initial := &corellm.Response{
+		FinishReason: "tool_use",
+		ToolCalls: []corellm.ToolUse{{
+			ID:    "tu_1",
+			Name:  "brave-search__brave_web_search",
+			Input: json.RawMessage(`{"q":"hello"}`),
+		}},
+	}
+	if err := loop.Run(context.Background(), "sess-ns", "sub-ns", initial, corellm.GenerationRequest{}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if len(pool.calls) != 1 {
+		t.Fatalf("expected 1 pool call, got %d", len(pool.calls))
+	}
+	got := pool.calls[0]
+	if got.server != "brave-search" {
+		t.Errorf("pool.Call server = %q, want brave-search", got.server)
+	}
+	if got.tool != "brave_web_search" {
+		t.Errorf("pool.Call tool = %q, want brave_web_search (un-namespaced)", got.tool)
+	}
+}
+
+// TestLoop_LegacyUnNamespacedNameStillResolves locks in the
+// backward-compat path: a tool_use without "__" still resolves via
+// the catalog scan so existing fixture-driven tests keep working.
+func TestLoop_LegacyUnNamespacedNameStillResolves(t *testing.T) {
+	pool := newFakePool()
+	pool.register("github", "get_issue", func(_ context.Context, _ json.RawMessage) (json.RawMessage, error) {
+		return json.RawMessage(`{"ok":true}`), nil
+	})
+
+	reg := &fakeRegistry{
+		streams: []corellm.Stream{
+			&scriptedStream{final: corellm.Response{
+				Content:      []corellm.ContentPart{{Type: "text", Text: "done"}},
+				FinishReason: "end_turn",
+			}},
+		},
+	}
+	loop, err := New(Config{Registry: reg, Pool: pool, History: &recordingHistory{}})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	initial := &corellm.Response{
+		FinishReason: "tool_use",
+		ToolCalls: []corellm.ToolUse{{
+			ID:    "tu_legacy",
+			Name:  "get_issue",
+			Input: json.RawMessage(`{}`),
+		}},
+	}
+	if err := loop.Run(context.Background(), "sess-legacy", "sub-l", initial, corellm.GenerationRequest{}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(pool.calls) != 1 {
+		t.Fatalf("expected 1 pool call, got %d", len(pool.calls))
+	}
+	if pool.calls[0].server != "github" || pool.calls[0].tool != "get_issue" {
+		t.Errorf("pool.Call = %+v, want github/get_issue", pool.calls[0])
+	}
+}
+
+func TestSplitNamespacedToolName(t *testing.T) {
+	cases := []struct {
+		in           string
+		wantServer   string
+		wantTool     string
+		wantOK       bool
+	}{
+		{"brave-search__brave_web_search", "brave-search", "brave_web_search", true},
+		{"fs__read", "fs", "read", true},
+		{"a__b__c", "a", "b__c", true}, // first separator wins; tool may contain "__"
+		{"plainname", "", "", false},
+		{"__leading", "", "", false},
+		{"trailing__", "", "", false},
+		{"", "", "", false},
+	}
+	for _, tc := range cases {
+		gotS, gotT, gotOK := splitNamespacedToolName(tc.in)
+		if gotS != tc.wantServer || gotT != tc.wantTool || gotOK != tc.wantOK {
+			t.Errorf("splitNamespacedToolName(%q) = (%q, %q, %v), want (%q, %q, %v)",
+				tc.in, gotS, gotT, gotOK, tc.wantServer, tc.wantTool, tc.wantOK)
+		}
+	}
+}

@@ -199,6 +199,11 @@ type API struct {
 	// signals FinishReason == "tool_use". nil disables the loop —
 	// the chat path stays as it was before WP01.
 	toolLoop *toolloop.Loop
+	// tools projects the MCP pool's catalog onto each GenerationRequest
+	// so the model knows what it may invoke. nil silences discovery
+	// and keeps WP00 chat-only behaviour for tests that don't wire an
+	// MCP pool.
+	tools corellm.ToolDiscoverer
 	// confirmGateway brokers WP05 confirm-each modal flow between the
 	// toolloop (which blocks on RequestConfirm) and the frontend
 	// (which calls ResolveConfirm). nil means "no confirm-each
@@ -269,6 +274,11 @@ type Config struct {
 	// registry until the model returns a non-tool_use finish. nil
 	// preserves WP00 chat-only behavior.
 	ToolLoop *toolloop.Loop
+	// Tools, when non-nil, is consulted on every StartStream to
+	// populate GenerationRequest.Tools. Without it the model is never
+	// told about the MCP catalog and the toolloop is dead code from
+	// the user's perspective.
+	Tools corellm.ToolDiscoverer
 	// ConfirmGateway brokers the WP05 confirm-each modal flow. When
 	// non-nil ResolveConfirm forwards to its ResolveConfirm method;
 	// when nil ResolveConfirm returns a not-wired error.
@@ -293,6 +303,7 @@ func New(cfg Config) *API {
 		hooks:          cfg.Hooks,
 		attachments:    cfg.Attachments,
 		toolLoop:       cfg.ToolLoop,
+		tools:          cfg.Tools,
 		confirmGateway: cfg.ConfirmGateway,
 		subs:           map[string]*subscription{},
 		validated:      map[string]bool{},
@@ -511,6 +522,18 @@ func (a *API) StartStream(ctx context.Context, profileID, sessionID, modelOverri
 		ProfileID: profileID,
 		Model:     modelOverride,
 		Messages:  messages,
+	}
+	// Populate the tool catalog so the model knows what it may invoke.
+	// Discovery failures are non-fatal: degrade to a no-tools request
+	// rather than block the chat surface on a flaky pool.
+	if a.tools != nil {
+		discovered, derr := a.tools.Tools(ctx, sessionID)
+		if derr != nil {
+			log.Warn("llm.tool_discovery.failed",
+				"session_id", sessionID, "err", derr.Error())
+		} else {
+			req.Tools = discovered
+		}
 	}
 
 	streamCtx, cancel := context.WithCancel(context.Background())

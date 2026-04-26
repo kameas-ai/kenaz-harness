@@ -394,3 +394,125 @@ func (s *cancelOnlyStream) Cancel() error {
 func (s *cancelOnlyStream) Final() (corellm.Response, error) {
 	return corellm.Response{}, &corellm.ErrCancelled{Reason: "stop"}
 }
+
+// recordingRegistry captures the most recent GenerationRequest so tool
+// discovery wiring can be asserted end-to-end.
+type recordingRegistry struct {
+	mu     sync.Mutex
+	stream corellm.Stream
+	req    corellm.GenerationRequest
+	called bool
+}
+
+func (r *recordingRegistry) RegisterAdapter(corellm.ProviderAdapter) {}
+func (r *recordingRegistry) LoadProfiles([]corellm.ProviderProfile) error {
+	return nil
+}
+func (r *recordingRegistry) Profile(id string) (corellm.ProviderProfile, error) {
+	return corellm.ProviderProfile{ID: id, Kind: "anthropic", Model: "x"}, nil
+}
+func (r *recordingRegistry) PreflightAll(context.Context) []corellm.PreflightResult { return nil }
+func (r *recordingRegistry) Stream(_ context.Context, req corellm.GenerationRequest) (corellm.Stream, error) {
+	r.mu.Lock()
+	r.req = req
+	r.called = true
+	r.mu.Unlock()
+	return r.stream, nil
+}
+func (r *recordingRegistry) lastRequest() (corellm.GenerationRequest, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.req, r.called
+}
+
+// stubDiscoverer returns a fixed tool list and tracks how many times
+// it was called (and with what session id).
+type stubDiscoverer struct {
+	tools     []corellm.ToolSpec
+	err       error
+	callCount int
+	lastSess  string
+}
+
+func (s *stubDiscoverer) Tools(_ context.Context, sessionID string) ([]corellm.ToolSpec, error) {
+	s.callCount++
+	s.lastSess = sessionID
+	return s.tools, s.err
+}
+
+func TestStartStream_PopulatesToolsFromDiscoverer(t *testing.T) {
+	stream := &fakeStream{
+		chunks: []corellm.StreamEvent{{Kind: corellm.StreamFinish, Finish: "end_turn"}},
+		final:  corellm.Response{FinishReason: "end_turn"},
+	}
+	reg := &recordingRegistry{stream: stream}
+	disc := &stubDiscoverer{tools: []corellm.ToolSpec{
+		{Name: "fs__read_file", Description: "read"},
+		{Name: "search__web", Description: "search"},
+	}}
+	api := New(Config{Registry: reg, Tools: disc})
+
+	subID, err := api.StartStream(context.Background(), "p", "sess-9", "")
+	if err != nil {
+		t.Fatalf("StartStream: %v", err)
+	}
+	if subID == "" {
+		t.Fatal("empty sub id")
+	}
+	if disc.callCount != 1 {
+		t.Fatalf("discoverer call count = %d, want 1", disc.callCount)
+	}
+	if disc.lastSess != "sess-9" {
+		t.Fatalf("discoverer session = %q, want sess-9", disc.lastSess)
+	}
+	got, ok := reg.lastRequest()
+	if !ok {
+		t.Fatal("registry was not called")
+	}
+	if len(got.Tools) != 2 {
+		t.Fatalf("req.Tools length = %d, want 2", len(got.Tools))
+	}
+	if got.Tools[0].Name != "fs__read_file" {
+		t.Fatalf("req.Tools[0].Name = %q, want fs__read_file", got.Tools[0].Name)
+	}
+}
+
+func TestStartStream_OmitsToolsWhenDiscovererNil(t *testing.T) {
+	stream := &fakeStream{
+		chunks: []corellm.StreamEvent{{Kind: corellm.StreamFinish, Finish: "end_turn"}},
+		final:  corellm.Response{FinishReason: "end_turn"},
+	}
+	reg := &recordingRegistry{stream: stream}
+	api := New(Config{Registry: reg}) // no Tools wired
+
+	if _, err := api.StartStream(context.Background(), "p", "", ""); err != nil {
+		t.Fatalf("StartStream: %v", err)
+	}
+	got, _ := reg.lastRequest()
+	if got.Tools != nil {
+		t.Fatalf("req.Tools = %#v, want nil when discoverer not wired", got.Tools)
+	}
+}
+
+func TestStartStream_DiscovererErrorDegradesGracefully(t *testing.T) {
+	// A flaky discoverer should not block the chat surface — degrade
+	// to a no-tools request so the model still answers.
+	stream := &fakeStream{
+		chunks: []corellm.StreamEvent{{Kind: corellm.StreamFinish, Finish: "end_turn"}},
+		final:  corellm.Response{FinishReason: "end_turn"},
+	}
+	reg := &recordingRegistry{stream: stream}
+	disc := &stubDiscoverer{err: errors.New("pool down")}
+	api := New(Config{Registry: reg, Tools: disc})
+
+	if _, err := api.StartStream(context.Background(), "p", "sess-x", ""); err != nil {
+		t.Fatalf("StartStream: %v", err)
+	}
+	got, ok := reg.lastRequest()
+	if !ok {
+		t.Fatal("registry was not called")
+	}
+	if got.Tools != nil {
+		t.Fatalf("req.Tools = %#v, want nil after discoverer error", got.Tools)
+	}
+}

@@ -320,6 +320,46 @@ func resolveServer(tools []Tool, name string) (string, bool) {
 	return "", false
 }
 
+// toolNameSeparator is the canonical delimiter the rpc layer uses when
+// it namespaces (server, tool) pairs into a single ToolSpec.Name. The
+// constant is defined twice (here and in core/rpc/views/llm) on
+// purpose: core/toolloop must not import core/rpc, and the value is
+// part of the on-the-wire contract — changing it requires changing
+// both sides at once.
+const toolNameSeparator = "__"
+
+// splitNamespacedToolName parses a "<server>__<tool>" name into its
+// (server, tool) components. The first occurrence of "__" wins so a
+// tool whose own name contains "__" still round-trips: only the
+// server-side cannot contain the separator. Returns ok=false when
+// the input has no separator (legacy / fixture path) or when either
+// side is empty after the split.
+func splitNamespacedToolName(name string) (server, tool string, ok bool) {
+	for i := 0; i+len(toolNameSeparator) <= len(name); i++ {
+		if name[i:i+len(toolNameSeparator)] == toolNameSeparator {
+			server = name[:i]
+			tool = name[i+len(toolNameSeparator):]
+			if server == "" || tool == "" {
+				return "", "", false
+			}
+			return server, tool, true
+		}
+	}
+	return "", "", false
+}
+
+// catalogContains reports whether (server, tool) is in the pool's
+// listed catalog. Used after a namespaced split so a denied / removed
+// tool surfaces as "not registered" instead of a pool-side error.
+func catalogContains(tools []Tool, server, tool string) bool {
+	for _, t := range tools {
+		if t.Server == server && t.Name == tool {
+			return true
+		}
+	}
+	return false
+}
+
 // assistantMessageFromResponse builds the corellm.Message that
 // represents the model's tool_use turn for re-submission. We use a
 // JSON serialization of the tool calls as the text content so adapters
