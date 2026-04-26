@@ -164,6 +164,54 @@ export interface ContextEntry {
 }
 
 /**
+ * AttachmentScopeKind — three scope tiers used by context attachments.
+ * Mirrors core/attachments.ScopeKind*. "global" applies to every session;
+ * "project" applies to every session under a given project; "session"
+ * applies to one specific session. Resolution order in
+ * Attachments_ListResolved is global → project → session.
+ */
+export type AttachmentScopeKind = 'global' | 'project' | 'session';
+
+/**
+ * Attachment — wire shape of one stored context attachment. Mirrors
+ * core/rpc/views/attachments.Attachment.
+ *
+ * `contentSource` is either `inline:<sha256>` (snapshot uploaded/pasted
+ * by the user) or `library:<root-rel>` (snapshot pulled from the Context
+ * Library at the relative path; Refresh re-reads the source). The
+ * snapshot lives in `content` either way — deletion of the underlying
+ * library file does NOT affect already-attached sessions (FR-202).
+ *
+ * `kind` is `'system'` (invisible, prepended on every send) or `'user'`
+ * (visible — surfaced as a user turn). Position is the 0-based ordering
+ * within (scopeKind, scopeId).
+ */
+export interface Attachment {
+  id: string;
+  scopeKind: AttachmentScopeKind;
+  scopeId?: string;
+  contentSource: string;
+  content: string;
+  kind: 'system' | 'user';
+  position: number;
+  createdAt: string;
+}
+
+/**
+ * AttachmentAddInput — wire shape Attachments.add accepts. Mirrors
+ * core/rpc/views/attachments.AddInput. The server fills in id +
+ * createdAt when omitted.
+ */
+export interface AttachmentAddInput {
+  scopeKind: AttachmentScopeKind;
+  scopeId?: string;
+  contentSource: string;
+  content: string;
+  kind?: 'system' | 'user';
+  position?: number;
+}
+
+/**
  * Context Library tree node. Path is slash-separated and relative to
  * the library root — the frontend never sees an absolute path. Children
  * is non-empty only on folder kinds; the wire shape omits the field for

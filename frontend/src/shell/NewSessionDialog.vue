@@ -309,6 +309,15 @@ const isSelected = (c: ModelChoice) =>
               Cancel
             </button>
           </div>
+          <p
+            v-if="selectedProjectId || newProjectMode"
+            class="mt-1.5 font-ui text-[11px] text-ink-dim"
+            data-testid="new-session-project-scope-hint"
+          >
+            This session inherits the project's contexts. Files attached
+            here go on the SESSION scope only — use the project page
+            after creation for project-scope attachments.
+          </p>
         </div>
         <div>
           <label

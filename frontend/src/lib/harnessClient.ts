@@ -27,6 +27,9 @@ import type {
   SecretReference,
   ContextEntry,
   ContextNode,
+  Attachment,
+  AttachmentAddInput,
+  AttachmentScopeKind,
   Bundle,
   Denial,
   AuditEntry,
@@ -131,6 +134,17 @@ interface WailsBindingsLike {
   Contexts_Delete(path: string): Promise<void>;
   Contexts_RecentlyApplied(limit: number): Promise<string[]>;
   Contexts_RootPath(): Promise<string>;
+
+  Attachments_List(scopeKind: string, scopeID: string): Promise<Attachment[]>;
+  Attachments_ListResolved(sessionID: string): Promise<Attachment[]>;
+  Attachments_Add(input: AttachmentAddInput): Promise<Attachment>;
+  Attachments_Remove(id: string): Promise<void>;
+  Attachments_Reorder(
+    scopeKind: string,
+    scopeID: string,
+    idsInOrder: string[],
+  ): Promise<void>;
+  Attachments_Refresh(id: string): Promise<Attachment>;
 
   Bundle_List(): Promise<Bundle[]>;
   Bundle_Get(id: string): Promise<Bundle>;
@@ -350,6 +364,42 @@ export interface ContextsClient {
   rootPath(): Promise<string>;
 }
 
+/**
+ * AttachmentsClient — scoped context attachments (WP03 backend / WP04 UI).
+ *
+ * Attachments are durable snapshots of starting context at one of three
+ * scopes (`global` / `project` / `session`). The persistence shape lives
+ * in core/attachments; the rpc view exposes the typed wire surface
+ * mirrored here.
+ *
+ * `list({scopeKind, scopeId})` returns rows for one scope ordered by
+ * position; `listResolved(sessionID)` returns the merged stream in
+ * [global..., project..., session...] order, suitable for the chat
+ * surface's resolved-context panel.
+ *
+ * `add` accepts either an inline snapshot (`contentSource: "inline:<sha>"`)
+ * or a library reference (`contentSource: "library:<root-rel>"`). The
+ * snapshot survives deletion of the underlying library file (FR-202).
+ *
+ * `refresh(id)` re-reads a `library:<path>` attachment from the Context
+ * Library. inline-source attachments are a no-op.
+ */
+export interface AttachmentsClient {
+  list(filter: {
+    scopeKind: AttachmentScopeKind | '';
+    scopeId?: string;
+  }): Promise<Attachment[]>;
+  listResolved(sessionID: string): Promise<Attachment[]>;
+  add(input: AttachmentAddInput): Promise<Attachment>;
+  remove(id: string): Promise<void>;
+  reorder(
+    scopeKind: AttachmentScopeKind,
+    scopeId: string,
+    idsInOrder: string[],
+  ): Promise<void>;
+  refresh(id: string): Promise<Attachment>;
+}
+
 export interface BundleClient {
   list(): Promise<Bundle[]>;
   get(id: string): Promise<Bundle>;
@@ -442,6 +492,7 @@ export interface HarnessClient {
   trust: TrustClient;
   context: ContextClient;
   contexts: ContextsClient;
+  attachments: AttachmentsClient;
   bundle: BundleClient;
   policy: PolicyClient;
   audit: AuditClient;
@@ -548,6 +599,16 @@ export function createHarnessClient(): HarnessClient {
       delete: (path) => b().Contexts_Delete(path),
       recentlyApplied: (limit) => b().Contexts_RecentlyApplied(limit),
       rootPath: () => b().Contexts_RootPath(),
+    },
+    attachments: {
+      list: ({ scopeKind, scopeId }) =>
+        b().Attachments_List(scopeKind, scopeId ?? ''),
+      listResolved: (sessionID) => b().Attachments_ListResolved(sessionID),
+      add: (input) => b().Attachments_Add(input),
+      remove: (id) => b().Attachments_Remove(id),
+      reorder: (scopeKind, scopeId, idsInOrder) =>
+        b().Attachments_Reorder(scopeKind, scopeId, idsInOrder),
+      refresh: (id) => b().Attachments_Refresh(id),
     },
     bundle: {
       list: () => b().Bundle_List(),
@@ -729,6 +790,32 @@ export function createFakeHarnessClient(
       delete: noop,
       recentlyApplied: async () => [],
       rootPath: async () => '/fake/contexts',
+    },
+    attachments: {
+      list: async () => [],
+      listResolved: async () => [],
+      add: async (input) => ({
+        id: `fake-att-${Math.random().toString(36).slice(2, 8)}`,
+        scopeKind: input.scopeKind,
+        scopeId: input.scopeId,
+        contentSource: input.contentSource,
+        content: input.content,
+        kind: input.kind ?? 'system',
+        position: input.position ?? 0,
+        createdAt: new Date().toISOString(),
+      }),
+      remove: noop,
+      reorder: noop,
+      refresh: async (id) => ({
+        id,
+        scopeKind: 'session',
+        scopeId: '',
+        contentSource: 'inline:fake',
+        content: '',
+        kind: 'system',
+        position: 0,
+        createdAt: new Date().toISOString(),
+      }),
     },
     bundle: {
       list: async () => [],

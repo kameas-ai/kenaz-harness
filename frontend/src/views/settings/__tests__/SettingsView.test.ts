@@ -3,9 +3,13 @@ import { mount, flushPromises } from '@vue/test-utils';
 import SettingsView from '@/views/settings/SettingsView.vue';
 import { createFakeHarnessClient } from '@/lib/harnessClient';
 import { HarnessClientKey } from '@/lib/harnessClientContext';
-import type { Settings, Theme } from '@/lib/types';
+import type { Attachment, Settings, Theme } from '@/lib/types';
 
-function provide(overrides: Partial<Settings> = {}) {
+function provide(
+  overrides: Partial<Settings> = {},
+  attachmentRows: Attachment[] = [],
+  attachmentsListSpy?: ReturnType<typeof vi.fn>,
+) {
   const settings: Settings = {
     schemaVersion: 1,
     lastRoute: '/sessions',
@@ -25,6 +29,8 @@ function provide(overrides: Partial<Settings> = {}) {
       logRouteChange: async () => undefined,
       loadTheme: async () => settings.theme,
       saveTheme,
+      getMemory: async () => false,
+      setMemory: async () => undefined,
     },
     appInfo: async () => ({
       build: '0.1.0-test',
@@ -34,6 +40,14 @@ function provide(overrides: Partial<Settings> = {}) {
       platform: 'darwin/arm64',
       windowSize: settings.windowSize,
     }),
+    attachments: {
+      list: attachmentsListSpy ?? (async () => [...attachmentRows]),
+      listResolved: async () => [],
+      add: async () => attachmentRows[0] ?? ({} as Attachment),
+      remove: async () => undefined,
+      reorder: async () => undefined,
+      refresh: async () => attachmentRows[0] ?? ({} as Attachment),
+    },
   });
   return { client, saveTheme, set };
 }
@@ -105,5 +119,48 @@ describe('SettingsView (FR-001b numbered-section header)', () => {
     const html = w.html();
     expect(html).not.toMatch(/#[0-9a-fA-F]{3,8}\b/);
     expect(html).not.toMatch(/rgba?\s*\(/i);
+  });
+
+  it('renders the global-context section and lists global-scope attachments (A3)', async () => {
+    const rows: Attachment[] = [
+      {
+        id: 'g-1',
+        scopeKind: 'global',
+        scopeId: '',
+        contentSource: 'library:always-read.md',
+        content: 'always-read body',
+        kind: 'system',
+        position: 0,
+        createdAt: '',
+      },
+    ];
+    const list = vi.fn(async (filter: { scopeKind: string; scopeId?: string }) => {
+      expect(filter.scopeKind).toBe('global');
+      return [...rows];
+    });
+    const { client } = provide({}, rows, list);
+    const w = mount(SettingsView, {
+      global: { provide: { [HarnessClientKey as symbol]: client } },
+    });
+    await flushPromises();
+    expect(list).toHaveBeenCalled();
+    const section = w.find('[data-testid=global-context-section]');
+    expect(section.exists()).toBe(true);
+    expect(w.find('[data-testid=global-attachments-list]').exists()).toBe(
+      true,
+    );
+    expect(w.text()).toContain('always-read.md');
+    expect(w.find('[data-testid=global-add-context]').exists()).toBe(true);
+  });
+
+  it('renders the global-context empty hint when no global attachments exist', async () => {
+    const { client } = provide({}, []);
+    const w = mount(SettingsView, {
+      global: { provide: { [HarnessClientKey as symbol]: client } },
+    });
+    await flushPromises();
+    expect(
+      w.find('[data-testid=global-attachments-empty]').exists(),
+    ).toBe(true);
   });
 });
