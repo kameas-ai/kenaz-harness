@@ -10,6 +10,7 @@ package rpc
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"path/filepath"
 
@@ -21,6 +22,8 @@ import (
 	"github.com/sigil-tech/kaneaz-harness/core/llm/credref"
 	"github.com/sigil-tech/kaneaz-harness/core/llm/personal"
 	llmregistry "github.com/sigil-tech/kaneaz-harness/core/llm/registry"
+	coremcp "github.com/sigil-tech/kaneaz-harness/core/mcp"
+	"github.com/sigil-tech/kaneaz-harness/core/mcp/fixture"
 	corememory "github.com/sigil-tech/kaneaz-harness/core/memory"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/a2a"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/audit"
@@ -39,6 +42,7 @@ import (
 	"github.com/sigil-tech/kaneaz-harness/core/secrets"
 	secretsref "github.com/sigil-tech/kaneaz-harness/core/secrets/ref"
 	"github.com/sigil-tech/kaneaz-harness/core/session"
+	"github.com/sigil-tech/kaneaz-harness/core/toolloop"
 	"github.com/zalando/go-keyring"
 )
 
@@ -285,6 +289,22 @@ func newLLMStack(c *core.Core, broker *StreamBroker, store personal.Store, hooks
 
 	credResolver := credref.New(secretsBackend)
 	historyAdapter := newSessionHistoryReader(c)
+	// Construct the toolloop with the registry and a placeholder
+	// in-memory fixture pool. Production wiring (real MCP server pool)
+	// arrives with mission C1; until then the fixture is empty so a
+	// model that asks for a tool gets a synthetic "not registered"
+	// result and the conversation continues.
+	loop, loopErr := toolloop.New(toolloop.Config{
+		Registry: reg,
+		Pool:     &mcpPoolAdapter{inner: fixture.New()},
+		History:  historyAdapter,
+	})
+	if loopErr != nil {
+		// New only errors on missing registry/pool — both are
+		// supplied here, so this branch is defensive. Fall through
+		// without a loop wired so the chat surface stays usable.
+		loop = nil
+	}
 	return llm.New(llm.Config{
 		Registry:      reg,
 		Sink:          &streamSinkAdapter{broker: broker},
@@ -294,6 +314,7 @@ func newLLMStack(c *core.Core, broker *StreamBroker, store personal.Store, hooks
 		History:       historyAdapter,
 		HistoryWriter: historyAdapter,
 		Hooks:         hooksRunner,
+		ToolLoop:      loop,
 	})
 }
 
@@ -314,6 +335,30 @@ func newContextsAPI(c *core.Core) contextsview.ContextsAPI {
 	// shouldn't keep the surface from coming up.
 	_ = lib.SweepTrash()
 	return contextsview.New(lib)
+}
+
+// mcpPoolAdapter bridges the wider core/mcp.Pool surface (which knows
+// about ServerSpec, Open, Close) to the toolloop's narrow MCPPool
+// view. The toolloop only needs Tools + Call; this adapter projects
+// the pool's coremcp.Tool slice into toolloop.Tool form.
+type mcpPoolAdapter struct {
+	inner coremcp.Pool
+}
+
+func (a *mcpPoolAdapter) Tools(ctx context.Context) ([]toolloop.Tool, error) {
+	tools, err := a.inner.Tools(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]toolloop.Tool, 0, len(tools))
+	for _, t := range tools {
+		out = append(out, toolloop.Tool{Server: t.Server, Name: t.Name})
+	}
+	return out, nil
+}
+
+func (a *mcpPoolAdapter) Call(ctx context.Context, server, tool string, args json.RawMessage) (json.RawMessage, error) {
+	return a.inner.Call(ctx, server, tool, args)
 }
 
 // openMemoryStore opens the long-term-memory vector DB at
