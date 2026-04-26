@@ -5,6 +5,7 @@ import (
 	"errors"
 
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/a2a"
+	attachmentsview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/attachments"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/contextview"
 	hooksview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/hooks"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/llm"
@@ -177,6 +178,27 @@ func (s *stubProjects) AddSession(_ context.Context, _, _ string) error        {
 func (s *stubProjects) RemoveSession(_ context.Context, _ string) error        { return errNotWired }
 func (s *stubProjects) ListSessions(_ context.Context, _ string) ([]projectsview.Session, error) {
 	return []projectsview.Session{}, nil
+}
+
+// ── attachments ────────────────────────────────────────────────────────
+
+type stubAttachments struct{}
+
+func (s *stubAttachments) List(_ context.Context, _, _ string) ([]attachmentsview.Attachment, error) {
+	return []attachmentsview.Attachment{}, nil
+}
+func (s *stubAttachments) ListResolved(_ context.Context, _ string) ([]attachmentsview.Attachment, error) {
+	return []attachmentsview.Attachment{}, nil
+}
+func (s *stubAttachments) Add(_ context.Context, _ attachmentsview.AddInput) (attachmentsview.Attachment, error) {
+	return attachmentsview.Attachment{}, errNotWired
+}
+func (s *stubAttachments) Remove(_ context.Context, _ string) error { return errNotWired }
+func (s *stubAttachments) Reorder(_ context.Context, _, _ string, _ []string) error {
+	return errNotWired
+}
+func (s *stubAttachments) Refresh(_ context.Context, _ string) (attachmentsview.Attachment, error) {
+	return attachmentsview.Attachment{}, errNotWired
 }
 
 // ── policy ─────────────────────────────────────────────────────────────

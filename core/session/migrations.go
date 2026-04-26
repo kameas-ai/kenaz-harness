@@ -67,7 +67,8 @@ const sqlInitSchema = `
 // Migrations returns the migration set that owns the sessions schema.
 // Pre-1.0 collapse: schema lands in a single 0300 init since no install
 // today carries useful state. Future schema changes get their own
-// version in the 300 block.
+// version in the 300 block — context-library WP03 lands as 0301
+// (see migrations_attachments.go for the renumbering note).
 func Migrations() []migrations.Migration {
 	return []migrations.Migration{
 		{
@@ -100,6 +101,7 @@ func Migrations() []migrations.Migration {
 				return nil
 			},
 		},
+		migration0301(),
 	}
 }
 

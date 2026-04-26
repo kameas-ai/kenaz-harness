@@ -108,8 +108,29 @@ type SessionMessageReader interface {
 // session was configured with kind=system. user_seed sessions surface
 // their seed as a normal first user turn — already in the message
 // history — so this reader returns an empty content for them.
+//
+// Deprecated: replaced by AttachmentsResolver.ListResolved in WP03;
+// remove next mission post-WP04. The interface is retained for the
+// one-release compat buffer so legacy callers keep working.
 type SessionContextReader interface {
 	SystemPromptFor(ctx context.Context, sessionID string) (content, kind string, err error)
+}
+
+// ResolvedAttachment is the slice of attachments.Attachment buildMessages
+// consumes. Defined here so the views/llm package does not import
+// core/attachments directly.
+type ResolvedAttachment struct {
+	Content string
+	Kind    string
+}
+
+// AttachmentsResolver returns the resolved (global+project+session)
+// attachment list for a session in declared injection order. nil means
+// "attachments not wired" — buildMessages falls back to the legacy
+// SessionContextReader probe so Mission A's wire shape keeps working
+// during the one-release transition.
+type AttachmentsResolver interface {
+	ListResolved(ctx context.Context, sessionID string) ([]ResolvedAttachment, error)
 }
 
 // SessionMessageWriter persists the assistant turn at stream
@@ -170,6 +191,10 @@ type API struct {
 	history   SessionMessageReader
 	historyW  SessionMessageWriter
 	hooks     HookRunner
+	// attachments is the WP03 source of truth for resolved starting
+	// context. nil falls back to the SessionContextReader probe so
+	// Mission A behaviour stays intact during the one-release buffer.
+	attachments AttachmentsResolver
 	// toolLoop closes the LLM ↔ tool ↔ LLM cycle when the adapter
 	// signals FinishReason == "tool_use". nil disables the loop —
 	// the chat path stays as it was before WP01.
@@ -225,6 +250,13 @@ type Config struct {
 	// it is now a preinstalled pre_send hook (memory.retrieve) that the
 	// rpc layer wires into the runner's BuiltinRegistry.
 	Hooks HookRunner
+	// Attachments, when non-nil, supplies the resolved attachment list
+	// for the session being streamed. buildMessages prepends each
+	// attachment as a system message in declared order
+	// ([global..., project..., session...]). nil keeps the legacy
+	// SessionContextReader probe path so Mission A continues to work
+	// for the one-release compat window.
+	Attachments AttachmentsResolver
 	// ToolLoop, when non-nil, runs after the initial stream closes
 	// with FinishReason == "tool_use". The loop dispatches each tool
 	// call against the configured MCP pool and re-invokes the
@@ -240,18 +272,19 @@ func New(cfg Config) *API {
 		sink = nopSink{}
 	}
 	return &API{
-		reg:       cfg.Registry,
-		sink:      sink,
-		store:     cfg.Store,
-		bundles:   cfg.Bundles,
-		keychain:  cfg.Keychain,
-		prober:    cfg.Prober,
-		history:   cfg.History,
-		historyW:  cfg.HistoryWriter,
-		hooks:     cfg.Hooks,
-		toolLoop:  cfg.ToolLoop,
-		subs:      map[string]*subscription{},
-		validated: map[string]bool{},
+		reg:         cfg.Registry,
+		sink:        sink,
+		store:       cfg.Store,
+		bundles:     cfg.Bundles,
+		keychain:    cfg.Keychain,
+		prober:      cfg.Prober,
+		history:     cfg.History,
+		historyW:    cfg.HistoryWriter,
+		hooks:       cfg.Hooks,
+		attachments: cfg.Attachments,
+		toolLoop:    cfg.ToolLoop,
+		subs:        map[string]*subscription{},
+		validated:   map[string]bool{},
 	}
 }
 
@@ -292,32 +325,49 @@ func (a *API) buildMessages(ctx context.Context, sessionID, model, kind string) 
 	if len(stored) == 0 {
 		return nil, errors.New("llm: session has no messages — append a user turn before streaming")
 	}
-	// Probe for the Mission-A starting-context surface. A reader that
-	// only satisfies SessionMessageReader leaves the slice unchanged.
-	var systemContent string
-	if ctxReader, ok := a.history.(SessionContextReader); ok {
+	// WP03 — collect the resolved attachment slice from the
+	// AttachmentsResolver when wired. Each "system"-kind attachment is
+	// prepended as a system message in declared order
+	// ([global..., project..., session...]); "user"-kind attachments
+	// already live as a real first user turn in `stored`, so we skip
+	// them here.
+	//
+	// When Attachments is nil we fall through to the legacy
+	// SessionContextReader probe so Mission A's behaviour is preserved
+	// for the one-release compat buffer.
+	var systemAttachments []ResolvedAttachment
+	if a.attachments != nil {
+		resolved, err := a.attachments.ListResolved(ctx, sessionID)
+		if err != nil {
+			return nil, fmt.Errorf("llm: load resolved attachments: %w", err)
+		}
+		systemAttachments = resolved
+	} else if ctxReader, ok := a.history.(SessionContextReader); ok {
 		content, ctxKind, err := ctxReader.SystemPromptFor(ctx, sessionID)
 		if err != nil {
 			return nil, fmt.Errorf("llm: load session system prompt: %w", err)
 		}
 		if ctxKind == "system" && content != "" {
-			systemContent = content
+			systemAttachments = []ResolvedAttachment{{Content: content, Kind: "system"}}
 		}
 	}
 
 	// Convert stored history to the HookMessage projection the runner
-	// consumes. Mission A's system prompt sits at the front so the hook
-	// chain sees it as part of the input (memory.retrieve appends its
-	// own snippets after); the resulting on-the-wire order is
-	// [system_prompt?, hook_injections?, conversation…].
+	// consumes. Resolved attachments sit at the front so the hook chain
+	// sees them as part of the input (memory.retrieve appends its own
+	// snippets after); the on-the-wire order is
+	// [global..., project..., session..., hook_injections?, conversation…].
 	//
 	// userText is the most recent user turn — memory.retrieve uses it
 	// as the embedding query.
-	hookMessages := make([]HookMessage, 0, len(stored)+1)
-	if systemContent != "" {
+	hookMessages := make([]HookMessage, 0, len(stored)+len(systemAttachments)+1)
+	for _, att := range systemAttachments {
+		if att.Kind != "system" || att.Content == "" {
+			continue
+		}
 		hookMessages = append(hookMessages, HookMessage{
 			Role:    "system",
-			Content: systemContent,
+			Content: att.Content,
 		})
 	}
 	var userText string
