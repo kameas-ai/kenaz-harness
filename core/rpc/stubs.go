@@ -6,6 +6,7 @@ import (
 
 	"github.com/sigil-tech/kaneaz-harness/core/mcp/stdio"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/a2a"
+	artifactsview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/artifacts"
 	attachmentsview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/attachments"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/contextview"
 	hooksview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/hooks"
@@ -83,6 +84,9 @@ func (s *stubSessions) Create(_ context.Context, _ string) (sessions.Session, er
 }
 func (s *stubSessions) Rename(_ context.Context, _, _ string) error { return errNotWired }
 func (s *stubSessions) Delete(_ context.Context, _ string) error    { return errNotWired }
+func (s *stubSessions) DeleteWithOptions(_ context.Context, _ string, _ sessions.DeleteOptions) error {
+	return errNotWired
+}
 func (s *stubSessions) Reorder(_ context.Context, _ []string) error { return errNotWired }
 func (s *stubSessions) StartStream(_ context.Context, _ string) (string, error) {
 	return "", errNotWired
@@ -209,6 +213,24 @@ func (s *stubAttachments) Reorder(_ context.Context, _, _ string, _ []string) er
 }
 func (s *stubAttachments) Refresh(_ context.Context, _ string) (attachmentsview.Attachment, error) {
 	return attachmentsview.Attachment{}, errNotWired
+}
+
+// ── artifacts ──────────────────────────────────────────────────────────
+
+type stubArtifacts struct{}
+
+func (s *stubArtifacts) List(_ context.Context, _ artifactsview.ArtifactFilter) ([]artifactsview.Artifact, error) {
+	return []artifactsview.Artifact{}, nil
+}
+func (s *stubArtifacts) Get(_ context.Context, _ string) (artifactsview.ArtifactWithBytes, error) {
+	return artifactsview.ArtifactWithBytes{}, errNotWired
+}
+func (s *stubArtifacts) Promote(_ context.Context, _, _, _ string) (artifactsview.Artifact, error) {
+	return artifactsview.Artifact{}, errNotWired
+}
+func (s *stubArtifacts) Delete(_ context.Context, _ string) error { return errNotWired }
+func (s *stubArtifacts) SaveFromMessage(_ context.Context, _, _, _ string, _, _ int) (artifactsview.Artifact, error) {
+	return artifactsview.Artifact{}, errNotWired
 }
 
 // ── tools ──────────────────────────────────────────────────────────────

@@ -28,6 +28,44 @@ type Settings struct {
 	// use ConfirmEachEnabled() helper or the Settings_GetConfirmEach
 	// binding which inverts on the boundary.
 	ConfirmEachDisabled bool `json:"confirmEachDisabled"`
+
+	// Artifacts capture settings (artifacts-storage FR-017). All four
+	// fields use a zero-value-friendly persisted form: AutoCapture*
+	// stores the inverted "Disabled" bit so a fresh install (zero
+	// values across the board) matches the spec's defaults
+	// (capture ON, 10 lines, 200 bytes). The MinLines / MinBytes
+	// zero-values fall back to the spec defaults via the helper
+	// methods on the loaded record.
+	AutoCaptureCodeBlocksDisabled  bool `json:"autoCaptureCodeBlocksDisabled,omitempty"`
+	CodeBlockMinLines              int  `json:"codeBlockMinLines,omitempty"`
+	CodeBlockMinBytes              int  `json:"codeBlockMinBytes,omitempty"`
+	AutoCaptureToolOutputsDisabled bool `json:"autoCaptureToolOutputsDisabled,omitempty"`
+}
+
+// AutoCaptureCodeBlocks reports whether the code-block detector is
+// active. Default true on a fresh install (zero-value Disabled).
+func (s Settings) AutoCaptureCodeBlocks() bool { return !s.AutoCaptureCodeBlocksDisabled }
+
+// AutoCaptureToolOutputs reports whether the tool-output detector is
+// active. Default true on a fresh install.
+func (s Settings) AutoCaptureToolOutputs() bool { return !s.AutoCaptureToolOutputsDisabled }
+
+// EffectiveCodeBlockMinLines returns the user-tuned threshold or the
+// spec default (10) when the persisted value is zero.
+func (s Settings) EffectiveCodeBlockMinLines() int {
+	if s.CodeBlockMinLines <= 0 {
+		return 10
+	}
+	return s.CodeBlockMinLines
+}
+
+// EffectiveCodeBlockMinBytes returns the user-tuned threshold or the
+// spec default (200) when the persisted value is zero.
+func (s Settings) EffectiveCodeBlockMinBytes() int {
+	if s.CodeBlockMinBytes <= 0 {
+		return 200
+	}
+	return s.CodeBlockMinBytes
 }
 
 // ConfirmEachEnabled is the user-facing form of the WP05 modal flag.

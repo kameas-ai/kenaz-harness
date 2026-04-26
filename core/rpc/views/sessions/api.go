@@ -50,6 +50,30 @@ type Message struct {
 	ToolCalls []ToolCall `json:"toolCalls,omitempty"`
 }
 
+// DeleteOptions configures the artifacts-storage cascade extension
+// (FR-014). The zero value is the default behaviour: artifacts get
+// deleted alongside the session, no promotion to project scope.
+type DeleteOptions struct {
+	// DeleteArtifacts controls whether the session's artifacts are
+	// removed during the cascade. Default true (zero-value Preserve
+	// inverts to Delete=true — see DeleteArtifactsCascade). Setting
+	// PreserveArtifacts=true forces the caller to either promote the
+	// artifacts to the session's project (PromoteArtifactsToProject)
+	// or accept the ErrSessionHasArtifacts error.
+	PreserveArtifacts bool `json:"preserveArtifacts,omitempty"`
+	// PromoteArtifactsToProject is meaningful only when
+	// PreserveArtifacts is true AND the session has a project. When
+	// set, every artifact is moved to project scope before the
+	// session row is deleted.
+	PromoteArtifactsToProject bool `json:"promoteArtifactsToProject,omitempty"`
+}
+
+// DeleteArtifactsCascade returns the user-facing flag that drives
+// session-delete cascade. Inverts the persisted PreserveArtifacts so
+// the zero value means "delete artifacts alongside the session" (the
+// FR-014 default).
+func (o DeleteOptions) DeleteArtifactsCascade() bool { return !o.PreserveArtifacts }
+
 // SessionsAPI is the view-scoped accessor for session CRUD + streams.
 // Implementations MUST be safe for concurrent use.
 type SessionsAPI interface {
@@ -58,6 +82,11 @@ type SessionsAPI interface {
 	Create(ctx context.Context, name string) (Session, error)
 	Rename(ctx context.Context, id, name string) error
 	Delete(ctx context.Context, id string) error
+	// DeleteWithOptions is the FR-014 variant: opts drive the
+	// artifacts cascade (delete vs preserve, promote-to-project on
+	// preserve). The bare Delete keeps the pre-WP02 contract for
+	// callers that don't yet thread options.
+	DeleteWithOptions(ctx context.Context, id string, opts DeleteOptions) error
 	Reorder(ctx context.Context, ids []string) error
 	StartStream(ctx context.Context, id string) (subscriptionID string, err error)
 	StopStream(ctx context.Context, subscriptionID string) error

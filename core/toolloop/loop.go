@@ -122,7 +122,7 @@ func New(cfg Config) (*Loop, error) {
 	}
 	hooks := cfg.Hooks
 	if hooks == nil {
-		hooks = noopHookRunner{}
+		hooks = &noopHookRunner{}
 	}
 	progress := cfg.Progress
 	if progress == nil {

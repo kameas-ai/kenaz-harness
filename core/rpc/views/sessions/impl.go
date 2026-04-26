@@ -5,8 +5,12 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
 	"time"
 
+	coreart "github.com/sigil-tech/kaneaz-harness/core/artifacts"
 	"github.com/sigil-tech/kaneaz-harness/core/attachments"
 	"github.com/sigil-tech/kaneaz-harness/core/session"
 )
@@ -15,6 +19,14 @@ import (
 // caller passes a nil or empty slice. Mirrors the existing
 // AppendMessage behaviour where the manager rejects empty content.
 var ErrEmptyContentBlocks = errors.New("rpc/sessions: contentBlocks must be non-empty")
+
+// ErrSessionHasArtifacts is returned by Delete when the session owns
+// artifacts but the caller has explicitly opted out of the cascade
+// (DeleteArtifacts=false) AND the session has no project to absorb
+// the orphans (PromoteArtifactsToProject is meaningful only when a
+// project exists). The session row is preserved; the caller must
+// retry with one of the two cascade branches.
+var ErrSessionHasArtifacts = errors.New("rpc/sessions: session has artifacts; delete or promote them before deleting the session")
 
 // recordToView projects a session.Record into the wire-shape Session
 // the frontend consumes. Lives here (not in core/session) to avoid an
@@ -55,6 +67,14 @@ func recordToView(r session.Record) Session {
 type managerAPI struct {
 	mgr         *session.Manager
 	attachments *attachments.Manager // optional; nil falls back to legacy column path
+	// Artifacts cascade plumbing (artifacts-storage WP02 / FR-014).
+	// When all three are non-nil, Delete extends the session-delete
+	// cascade with: list artifacts → drop them via the FK CASCADE on
+	// session delete → refcount-sweep any orphaned CAS files. Empty
+	// triple keeps the pre-WP02 cascade (attachments + session row).
+	artStore coreart.Store
+	media    attachments.MediaStore
+	dataDir  string
 }
 
 // NewManagerAPI returns a SessionsAPI backed by the supplied Manager.
@@ -78,6 +98,29 @@ func NewManagerAPIWithAttachments(mgr *session.Manager, att *attachments.Manager
 		panic("rpc/sessions: NewManagerAPI: nil manager")
 	}
 	return &managerAPI{mgr: mgr, attachments: att}
+}
+
+// NewManagerAPIWithAttachmentsAndArtifacts returns a SessionsAPI
+// wired for the artifacts-storage cascade extension (FR-014).
+// artStore + media + dataDir are optional — passing nil for any of
+// them collapses to the attachments-only behaviour.
+func NewManagerAPIWithAttachmentsAndArtifacts(
+	mgr *session.Manager,
+	att *attachments.Manager,
+	artStore coreart.Store,
+	media attachments.MediaStore,
+	dataDir string,
+) SessionsAPI {
+	if mgr == nil {
+		panic("rpc/sessions: NewManagerAPI: nil manager")
+	}
+	return &managerAPI{
+		mgr:         mgr,
+		attachments: att,
+		artStore:    artStore,
+		media:       media,
+		dataDir:     dataDir,
+	}
 }
 
 // List implements SessionsAPI.
@@ -116,22 +159,152 @@ func (a *managerAPI) Rename(ctx context.Context, id, name string) error {
 	return a.mgr.Rename(ctx, id, name)
 }
 
-// Delete implements SessionsAPI.
-//
-// When an attachments manager is wired, Delete also drops every
-// session-scope attachment via Manager.RemoveScope so refcount-driven
-// media artifact cleanup runs as part of the same operation (spec A8:
-// session delete prunes session-scope attachments AND any media
-// artifacts no longer referenced). Errors from the attachment cleanup
-// are surfaced to the caller; the session row is deleted only after
-// the cleanup completes.
+// Delete implements SessionsAPI with the default cascade (delete
+// artifacts alongside the session). Equivalent to
+// DeleteWithOptions(ctx, id, DeleteOptions{}).
 func (a *managerAPI) Delete(ctx context.Context, id string) error {
+	return a.DeleteWithOptions(ctx, id, DeleteOptions{})
+}
+
+// DeleteWithOptions implements SessionsAPI's FR-014 cascade extension.
+//
+// Order of operations:
+//  1. Resolve the session's artifact roster + content hashes so we
+//     can refcount-sweep after the cascade.
+//  2. If preserveArtifacts && session has no project → return
+//     ErrSessionHasArtifacts. The caller must promote or accept the
+//     delete-artifacts default.
+//  3. If preserveArtifacts && promote → walk each artifact, route
+//     through Store.UpdateScope("project", projectID).
+//  4. RemoveScope on session-scope attachments (existing A8 cascade).
+//  5. If deleteArtifacts (default), explicitly Delete each artifact
+//     row first — post-migration 0304 the FK is ON DELETE SET NULL,
+//     so artifact rows would otherwise survive their session as
+//     orphans. Promoted artifacts (step 3) are skipped.
+//  6. session.Manager.Delete — at this point any remaining artifact
+//     rows have either been deleted (step 5) or promoted (step 3);
+//     the SET NULL FK simply unhooks them from the deleted session.
+//  7. Refcount-sweep every captured hash; remove the on-disk file
+//     when the composite refcount drops to zero. Catches BOTH the
+//     attachments-only orphans (existing behaviour) and the
+//     artifacts orphans we just deleted in step 5.
+func (a *managerAPI) DeleteWithOptions(ctx context.Context, id string, opts DeleteOptions) error {
+	// 1. List artifacts BEFORE the cascade so we can refcount-sweep
+	// the freed hashes after the session row is gone. Empty list
+	// (or nil store) collapses to the pre-WP02 cascade.
+	var artifactRows []coreart.Artifact
+	if a.artStore != nil {
+		rows, err := a.artStore.List(ctx, coreart.ArtifactFilter{SessionID: id})
+		if err != nil {
+			return fmt.Errorf("rpc/sessions: list artifacts: %w", err)
+		}
+		artifactRows = rows
+	}
+
+	// 2/3. Honor the preserve-then-promote contract.
+	promoted := false
+	if len(artifactRows) > 0 && !opts.DeleteArtifactsCascade() {
+		// Resolve session's project membership.
+		rec, err := a.mgr.Get(ctx, id)
+		if err != nil {
+			return err
+		}
+		hasProject := rec.ProjectID != nil && *rec.ProjectID != ""
+		if !hasProject {
+			return fmt.Errorf("%w: %d artifact(s)", ErrSessionHasArtifacts, len(artifactRows))
+		}
+		if !opts.PromoteArtifactsToProject {
+			return fmt.Errorf("%w: %d artifact(s); set PromoteArtifactsToProject to keep them",
+				ErrSessionHasArtifacts, len(artifactRows))
+		}
+		// Promote every artifact to project scope before the session
+		// row is dropped. Post-migration 0304 the SET NULL FK leaves
+		// the artifact alive with NULL session_id and the freshly
+		// updated project_id, exactly the FR-014 promote semantics.
+		for _, art := range artifactRows {
+			if _, err := a.artStore.UpdateScope(ctx, art.ID, coreart.ScopeKindProject, *rec.ProjectID); err != nil {
+				return fmt.Errorf("rpc/sessions: promote artifact %s: %w", art.ID, err)
+			}
+		}
+		// Promoted artifacts survive — clear them from the sweep set
+		// so the on-disk CAS file isn't reclaimed.
+		artifactRows = nil
+		promoted = true
+	}
+
+	// 4. Existing A8 cascade — drop session-scope attachments so the
+	// attachments refcount source sees them missing during the sweep
+	// in step 7.
 	if a.attachments != nil {
 		if _, err := a.attachments.RemoveScope(ctx, attachments.ScopeKindSession, id); err != nil {
 			return err
 		}
 	}
-	return a.mgr.Delete(ctx, id)
+
+	// 5. Default cascade: explicitly Delete each (non-promoted)
+	// artifact row. Post-0304 the artifacts FK is SET NULL so the
+	// session.Delete below would orphan rather than reap them.
+	if !promoted && a.artStore != nil {
+		for _, art := range artifactRows {
+			if _, err := a.artStore.Delete(ctx, art.ID); err != nil {
+				return fmt.Errorf("rpc/sessions: delete artifact %s: %w", art.ID, err)
+			}
+		}
+	}
+
+	// 6. Delete the session row. With every cascading artifact
+	// already gone (step 5) or promoted (step 3), the FK SET NULL
+	// only fires against any rows we missed — defensive harmless.
+	if err := a.mgr.Delete(ctx, id); err != nil {
+		return err
+	}
+
+	// 6. Refcount-sweep every captured artifact hash. Skip when the
+	// MediaStore is unwired (test paths that don't share state).
+	//
+	// The non-self refcount check mirrors the artifacts view's Delete
+	// (see rpc/views/artifacts/impl.go::nonSelfRefcountIsZero): the
+	// composite RefcountFor includes media_artifacts rows themselves,
+	// so we need to subtract the per-hash media-row count to learn
+	// whether anything OTHER than the metadata still references the
+	// file. When the answer is "nothing else", we drop the metadata
+	// rows AND the on-disk file.
+	if a.media != nil && a.dataDir != "" {
+		seen := make(map[string]struct{}, len(artifactRows))
+		for _, art := range artifactRows {
+			if art.ContentHash == "" {
+				continue
+			}
+			if _, ok := seen[art.ContentHash]; ok {
+				continue
+			}
+			seen[art.ContentHash] = struct{}{}
+			mediaRows, lerr := a.media.List(ctx, attachments.MediaFilter{ContentHash: art.ContentHash})
+			if lerr != nil {
+				return fmt.Errorf("rpc/sessions: list media rows: %w", lerr)
+			}
+			total, refErr := a.media.RefcountFor(ctx, art.ContentHash)
+			if refErr != nil {
+				return fmt.Errorf("rpc/sessions: refcount %s: %w", art.ContentHash, refErr)
+			}
+			if total > len(mediaRows) {
+				// Something else still references the hash (another
+				// attachment, or a sister artifact in a different
+				// session). Leave the file in place.
+				continue
+			}
+			for _, m := range mediaRows {
+				if derr := a.media.Delete(ctx, m.ID); derr != nil {
+					return fmt.Errorf("rpc/sessions: delete media row: %w", derr)
+				}
+			}
+			path := filepath.Join(a.dataDir, "media", art.ContentHash)
+			if rerr := os.Remove(path); rerr != nil && !os.IsNotExist(rerr) {
+				return fmt.Errorf("rpc/sessions: remove cas file: %w", rerr)
+			}
+		}
+	}
+	return nil
 }
 
 // Reorder implements SessionsAPI.

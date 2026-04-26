@@ -66,6 +66,10 @@ func (h *recordingHistoryRW) ListMessages(_ context.Context, _ string) ([]Sessio
 	copy(out, h.listed)
 	return out, nil
 }
+// AppendMessage matches the toolloop's SessionHistoryRW shape (error
+// only) — the wider llm.SessionMessageWriter shape (id + error) is
+// satisfied via the recordingHistoryRWAsLLMWriter adapter below so a
+// single fixture can drive both interfaces.
 func (h *recordingHistoryRW) AppendMessage(_ context.Context, sessionID, role, content string) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -73,6 +77,21 @@ func (h *recordingHistoryRW) AppendMessage(_ context.Context, sessionID, role, c
 	// Mirror the write into listed so a subsequent read observes it.
 	h.listed = append(h.listed, SessionMessage{Role: role, Content: content})
 	return nil
+}
+
+// recordingHistoryRWAsLLMWriter wraps the toolloop-shaped fake into
+// the llm view's SessionMessageWriter shape for tests that need to
+// pass both a History reader and a HistoryWriter from the same
+// recording fake.
+type recordingHistoryRWAsLLMWriter struct {
+	inner *recordingHistoryRW
+}
+
+func (w *recordingHistoryRWAsLLMWriter) AppendMessage(ctx context.Context, sessionID, role, content string) (string, error) {
+	if err := w.inner.AppendMessage(ctx, sessionID, role, content); err != nil {
+		return "", err
+	}
+	return "", nil
 }
 func (h *recordingHistoryRW) snapshot() []writeRec {
 	h.mu.Lock()
@@ -175,7 +194,7 @@ func TestPump_ToolUseTriggersLoop_EndToEnd(t *testing.T) {
 		Registry:      reg,
 		Sink:          sink,
 		History:       hist,
-		HistoryWriter: hist,
+		HistoryWriter: &recordingHistoryRWAsLLMWriter{inner: hist},
 		ToolLoop:      loop,
 	})
 
@@ -273,7 +292,7 @@ func TestPump_NonToolUseFinishUnaffected(t *testing.T) {
 	hist := &recordingHistoryRW{
 		listed: []SessionMessage{{Role: "user", Content: "hello"}},
 	}
-	api := New(Config{Registry: reg, History: hist, HistoryWriter: hist, ToolLoop: loop})
+	api := New(Config{Registry: reg, History: hist, HistoryWriter: &recordingHistoryRWAsLLMWriter{inner: hist}, ToolLoop: loop})
 
 	if _, err := api.StartStream(context.Background(), "p", "sess", ""); err != nil {
 		t.Fatalf("StartStream: %v", err)

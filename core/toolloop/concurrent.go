@@ -211,12 +211,13 @@ func (l *Loop) synthCancelled(ctx context.Context, sessionID, parentSubID, serve
 	// because the host ctx is already done — the hook should still get
 	// to run synchronously.
 	l.hooks.RunPostToolUse(context.Background(), PostToolUseEvent{
-		SessionID: sessionID,
-		Tool:      call.Name,
-		Server:    server,
-		Args:      call.Input,
-		Error:     cancelMsg,
-		LatencyMS: 0,
+		SessionID:  sessionID,
+		Tool:       call.Name,
+		Server:     server,
+		Args:       call.Input,
+		Error:      cancelMsg,
+		LatencyMS:  0,
+		ToolCallID: call.ID,
 	})
 	l.progress.EmitToolFinished(context.Background(), ToolProgressEvent{
 		SessionID:   sessionID,
@@ -351,12 +352,13 @@ func (l *Loop) dispatchOne(
 		latencyMS := time.Since(started).Milliseconds()
 		emitToolFailed(ctx, l.audit, sessionID, parentSubID, server, call.Name, dispatchArgs, reason, latencyMS)
 		l.hooks.RunPostToolUse(ctx, PostToolUseEvent{
-			SessionID: sessionID,
-			Tool:      call.Name,
-			Server:    server,
-			Args:      dispatchArgs,
-			Error:     reason,
-			LatencyMS: latencyMS,
+			SessionID:  sessionID,
+			Tool:       call.Name,
+			Server:     server,
+			Args:       dispatchArgs,
+			Error:      reason,
+			LatencyMS:  latencyMS,
+			ToolCallID: call.ID,
 		})
 		return toolResult{
 			ToolUseID: call.ID,
@@ -375,12 +377,13 @@ func (l *Loop) dispatchOne(
 		emitToolFailed(ctx, l.audit, sessionID, parentSubID, server, call.Name, dispatchArgs,
 			"Tool blocked: "+reason, latencyMS)
 		l.hooks.RunPostToolUse(ctx, PostToolUseEvent{
-			SessionID: sessionID,
-			Tool:      call.Name,
-			Server:    server,
-			Args:      dispatchArgs,
-			Error:     "Tool blocked: " + reason,
-			LatencyMS: latencyMS,
+			SessionID:  sessionID,
+			Tool:       call.Name,
+			Server:     server,
+			Args:       dispatchArgs,
+			Error:      "Tool blocked: " + reason,
+			LatencyMS:  latencyMS,
+			ToolCallID: call.ID,
 		})
 		return toolResult{
 			ToolUseID: call.ID,
@@ -422,12 +425,13 @@ func (l *Loop) dispatchOne(
 			hookCtx = context.Background()
 		}
 		l.hooks.RunPostToolUse(hookCtx, PostToolUseEvent{
-			SessionID: sessionID,
-			Tool:      call.Name,
-			Server:    server,
-			Args:      dispatchArgs,
-			Error:     callErr.Error(),
-			LatencyMS: latencyMS,
+			SessionID:  sessionID,
+			Tool:       call.Name,
+			Server:     server,
+			Args:       dispatchArgs,
+			Error:      callErr.Error(),
+			LatencyMS:  latencyMS,
+			ToolCallID: call.ID,
 		})
 		status := "error"
 		if isCancel {
@@ -458,12 +462,13 @@ func (l *Loop) dispatchOne(
 	}
 	emitToolInvoked(ctx, l.audit, sessionID, parentSubID, server, call.Name, dispatchArgs, latencyMS)
 	l.hooks.RunPostToolUse(ctx, PostToolUseEvent{
-		SessionID: sessionID,
-		Tool:      call.Name,
-		Server:    server,
-		Args:      dispatchArgs,
-		Result:    raw,
-		LatencyMS: latencyMS,
+		SessionID:  sessionID,
+		Tool:       call.Name,
+		Server:     server,
+		Args:       dispatchArgs,
+		Result:     raw,
+		LatencyMS:  latencyMS,
+		ToolCallID: call.ID,
 	})
 	l.progress.EmitToolFinished(ctx, ToolProgressEvent{
 		SessionID:   sessionID,
@@ -529,12 +534,13 @@ func (l *Loop) runConfirmGate(
 			cancelMsg := err.Error()
 			emitToolFailed(context.Background(), l.audit, sessionID, parentSubID, server, call.Name, call.Input, cancelMsg, 0)
 			l.hooks.RunPostToolUse(context.Background(), PostToolUseEvent{
-				SessionID: sessionID,
-				Tool:      call.Name,
-				Server:    server,
-				Args:      call.Input,
-				Error:     cancelMsg,
-				LatencyMS: 0,
+				SessionID:  sessionID,
+				Tool:       call.Name,
+				Server:     server,
+				Args:       call.Input,
+				Error:      cancelMsg,
+				LatencyMS:  0,
+				ToolCallID: call.ID,
 			})
 			l.progress.EmitToolFinished(context.Background(), ToolProgressEvent{
 				SessionID:   sessionID,

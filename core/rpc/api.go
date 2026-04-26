@@ -11,6 +11,7 @@ package rpc
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"path/filepath"
 
@@ -28,7 +29,9 @@ import (
 	"github.com/sigil-tech/kaneaz-harness/core/mcp/recipes"
 	"github.com/sigil-tech/kaneaz-harness/core/mcp/stdio"
 	corememory "github.com/sigil-tech/kaneaz-harness/core/memory"
+	coreart "github.com/sigil-tech/kaneaz-harness/core/artifacts"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/a2a"
+	artifactsview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/artifacts"
 	attachmentsview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/attachments"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/audit"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/bundle"
@@ -78,6 +81,7 @@ type HarnessAPI interface {
 	Hooks() hooksview.HooksAPI
 	Projects() projectsview.ProjectsAPI
 	Attachments() attachmentsview.AttachmentsAPI
+	Artifacts() artifactsview.ArtifactsAPI
 	Tools() tools.ToolsAPI
 	Shell() shell.ShellAPI
 }
@@ -138,6 +142,10 @@ type API struct {
 	projectsAPI     projectsview.ProjectsAPI
 	attachmentsMgr  *coreatt.Manager
 	attachmentsAPI  attachmentsview.AttachmentsAPI
+	artifactsMgr    *coreart.Manager
+	artifactsStore  coreart.Store
+	artifactsAPI    artifactsview.ArtifactsAPI
+	mediaStore      coreatt.MediaStore
 	toolsAPI        tools.ToolsAPI
 	shellImpl       *shell.API
 	shellAPI        shell.ShellAPI
@@ -197,19 +205,25 @@ func (a *API) SetContext(ctx context.Context) {
 //     invariant (only emitter.go and stream_broker.go call
 //     runtime.EventsEmit) stays intact.
 func New(c *core.Core) *API {
-	attMgr := newAttachmentsManager(c)
+	media := newMediaStore(c)
+	attMgr := newAttachmentsManager(c, media)
+	artStore, artMgr := newArtifactsStack(c, media)
 	a := &API{
 		core:           c,
 		a2aAPI:         &stubA2A{},
 		workflowAPI:    &stubWorkflow{},
-		sessionsAPI:    newSessionsAPI(c, attMgr),
+		sessionsAPI:    newSessionsAPI(c, attMgr, artStore, media),
 		trustAPI:       &stubTrust{},
 		contextAPI:     &stubContext{},
 		policyAPI:      &stubPolicy{},
 		projectsAPI:    newProjectsAPI(c),
 		attachmentsMgr: attMgr,
+		artifactsMgr:   artMgr,
+		artifactsStore: artStore,
+		mediaStore:     media,
 	}
 	a.attachmentsAPI = newAttachmentsAPI(c, attMgr)
+	a.artifactsAPI = newArtifactsAPI(c, artStore, artMgr, media)
 	a.broker = NewStreamBroker(WailsEmitter{})
 	a.auditImpl = audit.NewAPI(audit.WithSubscriber(a.broker))
 	a.auditAPI = a.auditImpl
@@ -257,7 +271,32 @@ func New(c *core.Core) *API {
 		}
 		return v
 	}
-	stack := newLLMStack(c, a.broker, personalForLLM, hooksRunner, attMgr, confirmEachEnabled)
+	// Artifacts sink — wires the code-block detector at the
+	// assistant-finalize site and the tool-output detector against
+	// the toolloop's post-tool-use hook listener fan-out. The sink is
+	// shared between the LLM view's Config.Artifacts and the
+	// toolloop's RegisterPostListener registration so a single
+	// instance owns both capture paths.
+	var artifactSink artifactsview.ArtifactSink
+	var artifactSinkConcrete *artifactsview.Sink
+	if a.artifactsMgr != nil {
+		cfgFn := func() coreart.CaptureConfig {
+			cfg := coreart.DefaultCaptureConfig()
+			if settingsImpl != nil && settingsImpl.Store() != nil {
+				if loaded, err := settingsImpl.Store().LoadAll(); err == nil {
+					cfg.AutoCaptureCodeBlocks = loaded.AutoCaptureCodeBlocks()
+					cfg.AutoCaptureToolOutputs = loaded.AutoCaptureToolOutputs()
+					cfg.CodeBlockMinLines = loaded.EffectiveCodeBlockMinLines()
+					cfg.CodeBlockMinBytes = loaded.EffectiveCodeBlockMinBytes()
+				}
+			}
+			return cfg
+		}
+		artifactSinkConcrete = artifactsview.NewSinkConcrete(a.artifactsMgr, cfgFn, nil)
+		artifactSink = artifactSinkConcrete
+	}
+
+	stack := newLLMStack(c, a.broker, personalForLLM, hooksRunner, attMgr, confirmEachEnabled, artifactSink, artifactSinkConcrete)
 	a.llmAPI = stack.api
 	a.stdioPool = stack.pool
 	if c != nil && a.stdioPool != nil {
@@ -311,14 +350,20 @@ func New(c *core.Core) *API {
 // When attMgr is non-nil the returned impl drives the attachments table
 // for SetSystemPrompt, with the session.system_prompt column kept for
 // the one-release compat buffer.
-func newSessionsAPI(c *core.Core, attMgr *coreatt.Manager) sessions.SessionsAPI {
+//
+// artStore + media plumb the artifacts cascade extension (FR-014):
+// session-delete reads the artifact list, drops the rows via the
+// session FK CASCADE, then refcount-sweeps any orphaned CAS files.
+// Both nil falls back to the pre-WP02 cascade (attachments + session
+// row, no artifacts cleanup).
+func newSessionsAPI(c *core.Core, attMgr *coreatt.Manager, artStore coreart.Store, media coreatt.MediaStore) sessions.SessionsAPI {
 	if c == nil {
 		return &stubSessions{}
 	}
 	if attMgr == nil {
 		return sessions.NewManagerAPI(c.SessionManager())
 	}
-	return sessions.NewManagerAPIWithAttachments(c.SessionManager(), attMgr)
+	return sessions.NewManagerAPIWithAttachmentsAndArtifacts(c.SessionManager(), attMgr, artStore, media, c.DataDir())
 }
 
 // newProjectsAPI returns the real Manager-backed ProjectsAPI when c is
@@ -330,18 +375,13 @@ func newProjectsAPI(c *core.Core) projectsview.ProjectsAPI {
 	return projectsview.New(c.ProjectManager(), c.SessionManager())
 }
 
-// newAttachmentsManager constructs the core/attachments.Manager backed
-// by storage.DB. Returns nil when c is nil or storage isn't available;
-// the rpc surface treats nil as "attachments disabled" and the
-// SessionsAPI / LLM stack fall back to legacy behaviour.
-//
-// The MediaStore registered here is composable: WP02 plugs in the
-// AttachmentsRefcountSource so RefcountFor walks context_attachments
-// rows pointing at a hash. Future missions (artifacts-storage) extend
-// the predicate by calling MediaStore.RegisterRefcountSource against
-// the same store from their own chassis-wiring callsite — no changes
-// to media.go required.
-func newAttachmentsManager(c *core.Core) *coreatt.Manager {
+// newMediaStore constructs the core/attachments.MediaStore that owns
+// the on-disk CAS at <DataDir>/media/. Returns nil when c is nil or
+// storage isn't available. The returned store has the multimodal-io
+// AttachmentsRefcountSource pre-registered; the artifacts mission's
+// ArtifactsRefcountSource is registered separately by the caller
+// after the artifacts store has been constructed.
+func newMediaStore(c *core.Core) coreatt.MediaStore {
 	if c == nil {
 		return nil
 	}
@@ -351,6 +391,22 @@ func newAttachmentsManager(c *core.Core) *coreatt.Manager {
 	}
 	media := coreatt.NewSQLMediaStore(s, c.DataDir())
 	media.RegisterRefcountSource(coreatt.AttachmentsRefcountSource{DB: s})
+	return media
+}
+
+// newAttachmentsManager constructs the core/attachments.Manager
+// against the supplied (already-constructed) MediaStore. Returns nil
+// when either core or media is nil; the rpc surface treats nil as
+// "attachments disabled" and the SessionsAPI / LLM stack fall back
+// to legacy behaviour.
+func newAttachmentsManager(c *core.Core, media coreatt.MediaStore) *coreatt.Manager {
+	if c == nil || media == nil {
+		return nil
+	}
+	s := c.Storage()
+	if s == nil {
+		return nil
+	}
 	return coreatt.NewManager(
 		coreatt.NewSQLStore(s),
 		coreatt.WithMediaStore(media),
@@ -365,6 +421,113 @@ func newAttachmentsAPI(c *core.Core, mgr *coreatt.Manager) attachmentsview.Attac
 		return &stubAttachments{}
 	}
 	return attachmentsview.New(mgr, &sessionProjectReader{mgr: c.SessionManager()})
+}
+
+// newArtifactsStack constructs the artifacts Store + Manager and
+// wires the ArtifactsRefcountSource onto the supplied MediaStore so
+// the composite refcount sees both attachments AND artifacts before
+// any on-disk file is reclaimed. Returns (nil, nil) when core or
+// media is nil; the chassis treats that as "artifacts disabled" and
+// the rpc surface falls back to the noop sink + stub view.
+func newArtifactsStack(c *core.Core, media coreatt.MediaStore) (coreart.Store, *coreart.Manager) {
+	if c == nil || media == nil {
+		return nil, nil
+	}
+	s := c.Storage()
+	if s == nil {
+		return nil, nil
+	}
+	store := coreart.NewSQLStore(s,
+		coreart.WithSessionProjectReader(&artifactSessionProjectReader{mgr: c.SessionManager()}),
+	)
+	// Register the artifacts refcount source on the SHARED MediaStore
+	// (the same instance the attachments manager already wired the
+	// AttachmentsRefcountSource into). This is the WP02 risk-note
+	// hookup: the on-disk file is only reclaimed when no attachments
+	// row AND no artifacts row references the hash.
+	media.RegisterRefcountSource(coreart.ArtifactsRefcountSource{Store: store})
+	mgr := coreart.NewManager(store, &mediaStorePutAdapter{inner: media},
+		coreart.WithSessionReader(&artifactSessionProjectReader{mgr: c.SessionManager()}),
+	)
+	return store, mgr
+}
+
+// newArtifactsAPI returns the real Store + Manager-backed
+// ArtifactsAPI when wired; otherwise a noop stub keeps the chassis
+// bootable.
+func newArtifactsAPI(c *core.Core, store coreart.Store, mgr *coreart.Manager, media coreatt.MediaStore) artifactsview.ArtifactsAPI {
+	if c == nil || store == nil || mgr == nil || media == nil {
+		return &stubArtifacts{}
+	}
+	return artifactsview.New(artifactsview.Config{
+		Store:    store,
+		Manager:  mgr,
+		Media:    media,
+		Messages: &artifactMessageReader{mgr: c.SessionManager()},
+		DataDir:  c.DataDir(),
+	})
+}
+
+// artifactSessionProjectReader adapts session.Manager into the narrow
+// SessionProjectReader the artifacts package expects. Empty-string
+// projectID means "session has no project"; matches the artifacts
+// package's "skip the promote" contract.
+type artifactSessionProjectReader struct {
+	mgr *session.Manager
+}
+
+func (r *artifactSessionProjectReader) SessionProject(ctx context.Context, sessionID string) (string, error) {
+	if r == nil || r.mgr == nil {
+		return "", nil
+	}
+	rec, err := r.mgr.Get(ctx, sessionID)
+	if err != nil {
+		return "", err
+	}
+	if rec.ProjectID == nil {
+		return "", nil
+	}
+	return *rec.ProjectID, nil
+}
+
+// mediaStorePutAdapter projects the wider MediaStore surface onto the
+// narrow MediaStorer interface the artifacts manager consumes (Put
+// only). Lets the artifacts manager stay decoupled from the on-disk
+// + SQL details while sharing the same store instance.
+type mediaStorePutAdapter struct {
+	inner coreatt.MediaStore
+}
+
+func (a *mediaStorePutAdapter) Put(ctx context.Context, b []byte, mediaType, originalName string) (coreatt.MediaArtifact, error) {
+	return a.inner.Put(ctx, b, mediaType, originalName)
+}
+
+// artifactMessageReader adapts session.Manager to the artifacts view's
+// MessageReader. Used by SaveFromMessage to pull the message text by
+// (session, message) id.
+type artifactMessageReader struct {
+	mgr *session.Manager
+}
+
+func (r *artifactMessageReader) GetMessage(ctx context.Context, sessionID, messageID string) (artifactsview.Message, error) {
+	if r == nil || r.mgr == nil {
+		return artifactsview.Message{}, errors.New("rpc: session manager not wired")
+	}
+	msgs, err := r.mgr.ListMessages(ctx, sessionID)
+	if err != nil {
+		return artifactsview.Message{}, err
+	}
+	for _, m := range msgs {
+		if m.ID == messageID {
+			return artifactsview.Message{
+				ID:        m.ID,
+				SessionID: m.SessionID,
+				Role:      string(m.Role),
+				Content:   m.Content,
+			}, nil
+		}
+	}
+	return artifactsview.Message{}, fmt.Errorf("rpc: message %q not found in session %q", messageID, sessionID)
 }
 
 // sessionProjectReader adapts session.Manager into the small
@@ -532,6 +695,8 @@ func newLLMStack(
 	hooksRunner llm.HookRunner,
 	attMgr *coreatt.Manager,
 	confirmEachEnabled func() bool,
+	artifactSink llm.ArtifactSink,
+	artifactSinkConcrete *artifactsview.Sink,
 ) llmStack {
 	// Share ONE secrets backend between the credref resolver (which
 	// reads keys when streaming) and the keychain writer (which stages
@@ -614,12 +779,21 @@ func newLLMStack(
 		Broker: &poolEventPublisher{broker: broker},
 		Logger: nil, // defaults to slog.Default
 	})
+	// Toolloop hooks runner — we hand-pick a listener-friendly noop
+	// runner so the artifacts sink can subscribe via
+	// RegisterPostListener. Without an explicit instance the loop
+	// would build its own internal default and we'd have no handle
+	// to register the listener against.
+	toolloopHooks := toolloop.NewNoopHookRunner()
+	if artifactSinkConcrete != nil {
+		toolloopHooks.RegisterPostListener(artifactSinkConcrete.PostListener())
+	}
 	loop, loopErr := toolloop.New(toolloop.Config{
 		Registry:           reg,
 		Pool:               &mcpPoolAdapter{inner: mcpPool},
 		History:            historyAdapter,
 		Permissions:        perms,
-		Hooks:              nil,
+		Hooks:              toolloopHooks,
 		Audit:              nil,
 		Confirm:            confirmGateway,
 		ConfirmEachEnabled: flagOn,
@@ -656,12 +830,13 @@ func newLLMStack(
 		Keychain:       &keychainWriter{backend: secretsBackend},
 		Prober:         &registryProber{reg: reg, creds: credResolver},
 		History:        historyAdapter,
-		HistoryWriter:  historyAdapter,
+		HistoryWriter:  &llmHistoryWriter{inner: historyAdapter},
 		Hooks:          hooksRunner,
 		Attachments:    attResolver,
 		ToolLoop:       loop,
 		Tools:          toolDiscoverer,
 		ConfirmGateway: confirmGateway,
+		Artifacts:      &llmArtifactSinkAdapter{inner: artifactSink},
 	})
 	return llmStack{api: api, pool: mcpPool, secrets: secretsBackend}
 }
@@ -1028,8 +1203,8 @@ func (r *sessionHistoryReader) ListMessages(ctx context.Context, sessionID strin
 }
 
 // AppendMessage persists the assistant turn at stream completion so a
-// future ListMessages call rehydrates it. Implements
-// llm.SessionMessageWriter.
+// future ListMessages call rehydrates it. Implements the toolloop's
+// SessionHistoryRW.AppendMessage shape (error-only return).
 func (r *sessionHistoryReader) AppendMessage(ctx context.Context, sessionID, role, content string) error {
 	if r == nil || r.mgr == nil {
 		return nil
@@ -1039,6 +1214,43 @@ func (r *sessionHistoryReader) AppendMessage(ctx context.Context, sessionID, rol
 		Content: content,
 	})
 	return err
+}
+
+// llmHistoryWriter wraps sessionHistoryReader to satisfy the LLM
+// view's SessionMessageWriter shape, which returns the persisted
+// message id alongside the error so the post-finalize hooks
+// (artifacts code-block detector) can anchor SourceRef.MessageID to
+// the freshly persisted row.
+type llmHistoryWriter struct {
+	inner *sessionHistoryReader
+}
+
+func (w *llmHistoryWriter) ListMessages(ctx context.Context, sessionID string) ([]llm.SessionMessage, error) {
+	if w == nil || w.inner == nil {
+		return nil, nil
+	}
+	return w.inner.ListMessages(ctx, sessionID)
+}
+
+func (w *llmHistoryWriter) SystemPromptFor(ctx context.Context, sessionID string) (string, string, error) {
+	if w == nil || w.inner == nil {
+		return "", "", nil
+	}
+	return w.inner.SystemPromptFor(ctx, sessionID)
+}
+
+func (w *llmHistoryWriter) AppendMessage(ctx context.Context, sessionID, role, content string) (string, error) {
+	if w == nil || w.inner == nil || w.inner.mgr == nil {
+		return "", nil
+	}
+	stored, err := w.inner.mgr.AppendMessage(ctx, sessionID, session.Message{
+		Role:    session.Role(role),
+		Content: content,
+	})
+	if err != nil {
+		return "", err
+	}
+	return stored.ID, nil
 }
 
 // SystemPromptFor implements llm.SessionContextReader by reading the
@@ -1170,6 +1382,22 @@ func newPersonalStore(c *core.Core) personal.Store {
 	return store
 }
 
+// llmArtifactSinkAdapter bridges the artifacts view's ArtifactSink
+// shape onto the llm view's structurally-identical interface. The
+// indirection keeps the import direction one-way: the llm view does
+// not import the artifacts view, and a nil inner sink is treated as
+// "no artifacts wired" (chat path stays clean).
+type llmArtifactSinkAdapter struct {
+	inner artifactsview.ArtifactSink
+}
+
+func (a *llmArtifactSinkAdapter) OnAssistantMessage(ctx context.Context, sessionID, messageID, text string) error {
+	if a == nil || a.inner == nil {
+		return nil
+	}
+	return a.inner.OnAssistantMessage(ctx, sessionID, messageID, text)
+}
+
 // streamSinkAdapter wraps a *StreamBroker so the view package never
 // imports the rpc package directly (keeps the import graph acyclic).
 //
@@ -1270,6 +1498,12 @@ func (a *API) Attachments() attachmentsview.AttachmentsAPI {
 		return &stubAttachments{}
 	}
 	return a.attachmentsAPI
+}
+func (a *API) Artifacts() artifactsview.ArtifactsAPI {
+	if a.artifactsAPI == nil {
+		return &stubArtifacts{}
+	}
+	return a.artifactsAPI
 }
 func (a *API) Tools() tools.ToolsAPI {
 	if a.toolsAPI == nil {
