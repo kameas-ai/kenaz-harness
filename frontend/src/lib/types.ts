@@ -579,8 +579,36 @@ export interface RecipeCapabilities {
 }
 
 /**
+ * ConfigKind drives the input shape rendered by the install modal for
+ * a given ConfigOption. Mirrors the `ConfigKind*` constants in
+ * core/mcp/recipes/recipes.go.
+ */
+export type ConfigKind = 'directory_list' | 'boolean' | 'string';
+
+/**
+ * ConfigOption — one user-editable knob declared by a recipe. The
+ * filesystem recipe declares `allowed_directories` (directory_list);
+ * future recipes may declare booleans (e.g. read_only) or free-form
+ * strings. `default` may carry the `${DATA_DIR}` substitution token
+ * for directory_list defaults — the backend expands the token at
+ * install time, the modal renders the literal as a placeholder.
+ */
+export interface ConfigOption {
+  name: string;
+  display: string;
+  kind: ConfigKind;
+  default?: unknown;
+  required: boolean;
+  description: string;
+}
+
+/**
  * Recipe — one shipped catalog entry. Mirrors `core/mcp/recipes.Recipe`
  * (the catalog metadata, no live state).
+ *
+ * `argsTemplate` and `configOptions` are added by WP01 of the
+ * filesystem-mcp-recipe mission. Recipes that take only env keys
+ * (e.g. Brave Search) leave them undefined / empty.
  */
 export interface Recipe {
   id: string;
@@ -590,6 +618,8 @@ export interface Recipe {
   envKeys: EnvKey[];
   capabilities: RecipeCapabilities;
   docsUrl?: string;
+  argsTemplate?: string[];
+  configOptions?: ConfigOption[];
 }
 
 /**

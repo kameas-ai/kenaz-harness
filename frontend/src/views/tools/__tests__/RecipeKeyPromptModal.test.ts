@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { mount, flushPromises } from '@vue/test-utils';
 import RecipeKeyPromptModal from '@/views/tools/RecipeKeyPromptModal.vue';
-import type { Recipe, RecipeStatus } from '@/lib/types';
+import type { ConfigOption, Recipe, RecipeStatus } from '@/lib/types';
 
 function makeRecipe(overrides: Partial<Recipe> = {}): Recipe {
   return {
@@ -131,9 +131,11 @@ describe('RecipeKeyPromptModal', () => {
     await w.get('[data-testid=recipe-key-modal-submit]').trigger('click');
     await flushPromises();
 
-    expect(install).toHaveBeenCalledWith('brave-search', {
-      BRAVE_API_KEY: 'sk-test-123',
-    });
+    expect(install).toHaveBeenCalledWith(
+      'brave-search',
+      { BRAVE_API_KEY: 'sk-test-123' },
+      {},
+    );
     const events = w.emitted('installed');
     expect(events).toBeTruthy();
     expect(events?.[0]?.[0]).toEqual(okStatus(recipe.id));
@@ -203,5 +205,161 @@ describe('RecipeKeyPromptModal', () => {
     const html = w.html();
     expect(html).not.toMatch(/#[0-9a-fA-F]{3,8}\b/);
     expect(html).not.toMatch(/rgba?\s*\(/i);
+  });
+
+  // ── ConfigOptions extension (WP03) ────────────────────────────────
+
+  function fsRecipe(overrides: Partial<Recipe> = {}): Recipe {
+    const allowedDirsOpt: ConfigOption = {
+      name: 'allowed_directories',
+      display: 'Allowed directories',
+      kind: 'directory_list',
+      default: ['${DATA_DIR}/agent-workspace'],
+      required: true,
+      description: 'Directories the model is allowed to read and write.',
+    };
+    return {
+      id: 'filesystem',
+      displayName: 'Filesystem',
+      description: 'Read and write files in a sandboxed workspace.',
+      category: 'filesystem',
+      envKeys: [],
+      capabilities: {
+        tools: true,
+        resources: false,
+        prompts: false,
+        sampling: false,
+      },
+      argsTemplate: ['${ALLOWED_DIRS}'],
+      configOptions: [allowedDirsOpt],
+      ...overrides,
+    };
+  }
+
+  it('renders both API Keys AND Configuration sections when both exist', async () => {
+    const recipe = makeRecipe({
+      configOptions: [
+        {
+          name: 'mode',
+          display: 'Mode',
+          kind: 'string',
+          required: false,
+          description: 'Optional mode flag.',
+          default: 'fast',
+        },
+      ],
+    });
+    const install = vi.fn(async () => okStatus(recipe.id));
+    const w = mount(RecipeKeyPromptModal, {
+      props: { open: true, recipe, install },
+    });
+    await flushPromises();
+    expect(w.find('[data-testid=recipe-modal-env-section]').exists()).toBe(
+      true,
+    );
+    expect(
+      w.find('[data-testid=recipe-modal-config-section]').exists(),
+    ).toBe(true);
+  });
+
+  it('hides API Keys section for filesystem (config only)', async () => {
+    const recipe = fsRecipe();
+    const install = vi.fn(async () => okStatus(recipe.id));
+    const w = mount(RecipeKeyPromptModal, {
+      props: { open: true, recipe, install },
+    });
+    await flushPromises();
+    expect(w.find('[data-testid=recipe-modal-env-section]').exists()).toBe(
+      false,
+    );
+    expect(
+      w.find('[data-testid=recipe-modal-config-section]').exists(),
+    ).toBe(true);
+  });
+
+  it('pre-fills directory_list with the recipe default (literal token)', async () => {
+    const recipe = fsRecipe();
+    const install = vi.fn(async () => okStatus(recipe.id));
+    const w = mount(RecipeKeyPromptModal, {
+      props: { open: true, recipe, install },
+    });
+    await flushPromises();
+    expect(
+      w.find('[data-testid=dirpicker-chip-0]').text(),
+    ).toContain('${DATA_DIR}/agent-workspace');
+    // hint surfaced for ${DATA_DIR}-tokenised defaults.
+    expect(
+      w.find('[data-testid=recipe-config-hint-allowed_directories]').text(),
+    ).toContain('workspace folder');
+  });
+
+  it('submit-disabled until at least one directory is set for required directory_list', async () => {
+    const recipe = fsRecipe({
+      configOptions: [
+        {
+          name: 'allowed_directories',
+          display: 'Allowed directories',
+          kind: 'directory_list',
+          required: true,
+          description: 'd',
+          // no default → empty list at open time
+        },
+      ],
+    });
+    const install = vi.fn(async () => okStatus(recipe.id));
+    const w = mount(RecipeKeyPromptModal, {
+      props: { open: true, recipe, install },
+    });
+    await flushPromises();
+    const submit = w.get('[data-testid=recipe-key-modal-submit]');
+    expect((submit.element as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it('submit forwards env + config to install(id, env, config)', async () => {
+    const recipe = fsRecipe();
+    const install = vi.fn(async () => okStatus(recipe.id));
+    const w = mount(RecipeKeyPromptModal, {
+      props: { open: true, recipe, install },
+    });
+    await flushPromises();
+
+    await w.get('[data-testid=recipe-key-modal-submit]').trigger('click');
+    await flushPromises();
+
+    expect(install).toHaveBeenCalledTimes(1);
+    const args = (install.mock.calls as unknown as unknown[][])[0];
+    expect(args[0]).toBe('filesystem');
+    expect(args[1]).toEqual({});
+    expect(args[2]).toEqual({
+      allowed_directories: ['${DATA_DIR}/agent-workspace'],
+    });
+  });
+
+  it('honors initialConfig pre-fill (overrides recipe default)', async () => {
+    const recipe = fsRecipe();
+    const install = vi.fn(async () => okStatus(recipe.id));
+    const w = mount(RecipeKeyPromptModal, {
+      props: {
+        open: true,
+        recipe,
+        install,
+        initialConfig: {
+          allowed_directories: ['/Users/me/code', '/tmp/scratch'],
+        },
+      },
+    });
+    await flushPromises();
+    expect(w.get('[data-testid=dirpicker-chip-0]').text()).toContain(
+      '/Users/me/code',
+    );
+    expect(w.get('[data-testid=dirpicker-chip-1]').text()).toContain(
+      '/tmp/scratch',
+    );
+    await w.get('[data-testid=recipe-key-modal-submit]').trigger('click');
+    await flushPromises();
+    const args = (install.mock.calls as unknown as unknown[][])[0];
+    expect(args[2]).toEqual({
+      allowed_directories: ['/Users/me/code', '/tmp/scratch'],
+    });
   });
 });

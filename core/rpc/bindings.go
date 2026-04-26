@@ -504,6 +504,10 @@ func (b *Bindings) Tools_RecipeStatus(id string) (stdio.RecipeStatus, error) {
 	return b.api.Tools().RecipeStatus(b.ctx(), id)
 }
 
+func (b *Bindings) Tools_RecipeConfig(id string) (map[string]any, error) {
+	return b.api.Tools().RecipeConfig(b.ctx(), id)
+}
+
 // ── shell ──────────────────────────────────────────────────────────────
 
 func (b *Bindings) Shell_OpenInOSBrowser(path string) error {

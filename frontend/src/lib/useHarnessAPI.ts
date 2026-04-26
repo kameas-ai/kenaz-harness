@@ -504,10 +504,20 @@ export interface UseToolsRecipesResult {
   /** Map of recipe id → toggle-on timestamp. Drives the warming UX. */
   startedAt: Ref<Readonly<Record<string, number>>>;
   refresh(): Promise<void>;
-  install(id: string, env: Record<string, string>): Promise<RecipeStatus>;
+  install(
+    id: string,
+    env: Record<string, string>,
+    config?: Record<string, unknown>,
+  ): Promise<RecipeStatus>;
   uninstall(id: string): Promise<void>;
   forgetKey(id: string, envName: string): Promise<void>;
   statusFor(id: string): RecipeStatus | undefined;
+  /**
+   * config returns the persisted per-install ConfigOption map for an
+   * enabled recipe (delegates to client.tools.recipes.config). Empty
+   * for not-enabled or no-config recipes.
+   */
+  config(id: string): Promise<Record<string, unknown>>;
 }
 
 /**
@@ -618,10 +628,14 @@ export function useToolsRecipes(): UseToolsRecipesResult {
     recipes.value = next;
   }
 
-  async function install(id: string, env: Record<string, string>) {
+  async function install(
+    id: string,
+    env: Record<string, string>,
+    config?: Record<string, unknown>,
+  ) {
     startedAt.value = { ...startedAt.value, [id]: Date.now() };
     try {
-      const status = await client.tools.recipes.install(id, env);
+      const status = await client.tools.recipes.install(id, env, config);
       mergeStatus(id, status);
       ensurePolling();
       return status;
@@ -650,6 +664,10 @@ export function useToolsRecipes(): UseToolsRecipesResult {
     return recipes.value.find((r) => r.recipe.id === id)?.status;
   }
 
+  async function config(id: string): Promise<Record<string, unknown>> {
+    return client.tools.recipes.config(id);
+  }
+
   onMounted(() => {
     void refresh();
   });
@@ -669,6 +687,24 @@ export function useToolsRecipes(): UseToolsRecipesResult {
     uninstall,
     forgetKey,
     statusFor,
+    config,
+  };
+}
+
+/**
+ * useShell — composable for OS-shell affordances. Currently a thin
+ * pass-through to `client.shell.openInOSBrowser`; lives here so the
+ * Tools panel can call it as a single hook rather than reaching into
+ * `useHarnessClient` directly (FR-009 mirror).
+ */
+export interface UseShellResult {
+  openInOSBrowser(path: string): Promise<void>;
+}
+
+export function useShell(): UseShellResult {
+  const client = useHarnessClient();
+  return {
+    openInOSBrowser: (path) => client.shell.openInOSBrowser(path),
   };
 }
 

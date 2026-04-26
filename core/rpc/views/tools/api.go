@@ -64,4 +64,11 @@ type ToolsAPI interface {
 	// A not-installed recipe returns {Enabled: false, State: "stopped"}
 	// so the frontend can render a uniform row regardless.
 	RecipeStatus(ctx context.Context, id string) (stdio.RecipeStatus, error)
+	// RecipeConfig returns the persisted per-install ConfigOption map
+	// for an enabled recipe (e.g. {"allowed_directories": [...]} for
+	// the filesystem recipe). The frontend reads this to resolve
+	// workspace paths and to pre-fill the edit-config modal. Returns
+	// an empty map when the recipe is not enabled — no error in that
+	// case so the UI can render a uniform row.
+	RecipeConfig(ctx context.Context, id string) (map[string]any, error)
 }

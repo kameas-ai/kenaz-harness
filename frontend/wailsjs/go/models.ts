@@ -705,6 +705,28 @@ export namespace recipes {
 	        this.default = source["default"];
 	    }
 	}
+	export class ConfigOption {
+	    name: string;
+	    display: string;
+	    kind: string;
+	    default?: any;
+	    required: boolean;
+	    description: string;
+
+	    static createFrom(source: any = {}) {
+	        return new ConfigOption(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.display = source["display"];
+	        this.kind = source["kind"];
+	        this.default = source["default"];
+	        this.required = source["required"];
+	        this.description = source["description"];
+	    }
+	}
 	export class Recipe {
 	    id: string;
 	    display_name: string;
@@ -717,11 +739,13 @@ export namespace recipes {
 	    init_timeout_ms: number;
 	    ping_period_ms: number;
 	    sampling_policy: SamplingPolicy;
-	
+	    args_template?: string[];
+	    config_options?: ConfigOption[];
+
 	    static createFrom(source: any = {}) {
 	        return new Recipe(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.id = source["id"];
@@ -735,6 +759,8 @@ export namespace recipes {
 	        this.init_timeout_ms = source["init_timeout_ms"];
 	        this.ping_period_ms = source["ping_period_ms"];
 	        this.sampling_policy = this.convertValues(source["sampling_policy"], SamplingPolicy);
+	        this.args_template = source["args_template"];
+	        this.config_options = this.convertValues(source["config_options"], ConfigOption);
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {

@@ -12,15 +12,16 @@
  * Recipes section lives below the Memory row. The Memory row is
  * intentionally untouched — privacy CI invariant + WP06 constraint.
  */
-import { computed, onMounted, onBeforeUnmount, ref } from 'vue';
+import { computed, onMounted, onBeforeUnmount, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
-import { useToolsRecipes } from '@/lib/useHarnessAPI';
+import { useToolsRecipes, useShell } from '@/lib/useHarnessAPI';
 import {
   Brain,
   ChevronDown,
   ChevronRight,
   Folder,
+  FolderOpen,
   Globe,
   Search,
   Wrench,
@@ -89,11 +90,15 @@ const startedAt = tools.startedAt;
 const recipesLoading = tools.loading;
 const recipesError = tools.error;
 
+const shell = useShell();
+
 const busyById = ref<Record<string, boolean>>({});
 const rowError = ref<Record<string, string | null>>({});
 const expanded = ref<Record<string, boolean>>({});
 const modalOpen = ref(false);
 const modalRecipe = ref<Recipe | null>(null);
+const modalInitialConfig = ref<Record<string, unknown>>({});
+const recipeConfigs = ref<Record<string, Record<string, unknown>>>({});
 
 // Tick the warming indicator without resorting to per-row timers.
 const now = ref<number>(Date.now());
@@ -155,6 +160,15 @@ function setRowError(id: string, msg: string | null) {
   rowError.value = { ...rowError.value, [id]: msg };
 }
 
+function recipeNeedsModal(recipe: Recipe, keysPresent: boolean): boolean {
+  // Recipes with declared ConfigOptions ALWAYS go through the modal so
+  // the user can review / edit the directory list (or future
+  // boolean / string knobs). Recipes without ConfigOptions only need
+  // the modal when their env keys haven't been resolved yet.
+  if ((recipe.configOptions?.length ?? 0) > 0) return true;
+  return !keysPresent;
+}
+
 async function onToggle(listing: RecipeListing, event: Event) {
   const target = event.target as HTMLInputElement;
   const next = target.checked;
@@ -165,25 +179,34 @@ async function onToggle(listing: RecipeListing, event: Event) {
   }
   setRowError(id, null);
   if (next) {
-    if (listing.keysPresent) {
-      await doInstall(listing.recipe, {});
-    } else {
+    if (recipeNeedsModal(listing.recipe, listing.keysPresent)) {
       // Revert the optimistic toggle until the modal commits.
       target.checked = false;
       modalRecipe.value = listing.recipe;
+      modalInitialConfig.value = recipeConfigs.value[id] ?? {};
       modalOpen.value = true;
+    } else {
+      await doInstall(listing.recipe, {}, {});
     }
   } else {
     await doUninstall(id);
   }
 }
 
-async function doInstall(recipe: Recipe, env: Record<string, string>) {
+async function doInstall(
+  recipe: Recipe,
+  env: Record<string, string>,
+  config: Record<string, unknown>,
+) {
   const id = recipe.id;
   busyById.value = { ...busyById.value, [id]: true };
   setRowError(id, null);
   try {
-    await tools.install(id, env);
+    await tools.install(id, env, config);
+    // Cache the freshly-installed config so the "Open workspace" + "Edit
+    // configuration" affordances on the row can resolve it without a
+    // round-trip on every render.
+    recipeConfigs.value = { ...recipeConfigs.value, [id]: { ...config } };
   } catch (e) {
     setRowError(id, e instanceof Error ? e.message : String(e));
     throw e;
@@ -223,26 +246,108 @@ function onModalInstalled() {
   // `tools.install`, so the row state is already merged. Just close.
   modalOpen.value = false;
   modalRecipe.value = null;
+  modalInitialConfig.value = {};
 }
 
 function onModalClose() {
   modalOpen.value = false;
   modalRecipe.value = null;
+  modalInitialConfig.value = {};
 }
 
-const installFromModal = async (id: string, env: Record<string, string>) => {
+const installFromModal = async (
+  id: string,
+  env: Record<string, string>,
+  config: Record<string, unknown>,
+) => {
   const recipe = modalRecipe.value;
   if (!recipe || recipe.id !== id) {
     throw new Error('Modal recipe mismatch');
   }
-  return tools.install(id, env);
+  const status = await tools.install(id, env, config);
+  recipeConfigs.value = { ...recipeConfigs.value, [id]: { ...config } };
+  return status;
 };
+
+async function loadConfigFor(id: string) {
+  try {
+    const cfg = await tools.config(id);
+    recipeConfigs.value = { ...recipeConfigs.value, [id]: cfg };
+  } catch {
+    // best-effort; the row falls back to recipe defaults if the
+    // backend lookup fails.
+  }
+}
+
+function workspacePathFor(listing: RecipeListing): string | null {
+  if (listing.recipe.category !== 'filesystem') return null;
+  const cfg = recipeConfigs.value[listing.recipe.id];
+  if (!cfg) return null;
+  const dirs = cfg['allowed_directories'];
+  if (Array.isArray(dirs) && dirs.length > 0) {
+    const first = dirs[0];
+    if (typeof first === 'string' && first !== '') return first;
+  }
+  return null;
+}
+
+function allowedDirsFor(listing: RecipeListing): readonly string[] {
+  const cfg = recipeConfigs.value[listing.recipe.id];
+  if (!cfg) return [];
+  const dirs = cfg['allowed_directories'];
+  if (!Array.isArray(dirs)) return [];
+  return dirs.filter((v): v is string => typeof v === 'string');
+}
+
+async function openWorkspace(listing: RecipeListing) {
+  const id = listing.recipe.id;
+  setRowError(id, null);
+  let path = workspacePathFor(listing);
+  if (!path) {
+    // Cold path: no cached config. Fetch on demand.
+    await loadConfigFor(id);
+    path = workspacePathFor(listing);
+  }
+  if (!path) {
+    setRowError(id, 'No workspace directory configured.');
+    return;
+  }
+  try {
+    await shell.openInOSBrowser(path);
+  } catch (e) {
+    setRowError(id, e instanceof Error ? e.message : String(e));
+  }
+}
+
+function editConfig(listing: RecipeListing) {
+  modalRecipe.value = listing.recipe;
+  modalInitialConfig.value = recipeConfigs.value[listing.recipe.id] ?? {};
+  modalOpen.value = true;
+}
 
 const visibleRecipes = computed<readonly RecipeListing[]>(() => recipes.value);
 
 function statusOf(listing: RecipeListing): RecipeStatus {
   return listing.status;
 }
+
+// Whenever the recipes list refreshes, fetch persisted config for any
+// enabled row that needs ConfigOption awareness (filesystem currently;
+// future categories that ship configOptions auto-pick up the same
+// path).
+watch(
+  () => recipes.value,
+  (list) => {
+    for (const r of list) {
+      const needsConfig =
+        r.enabled && (r.recipe.configOptions?.length ?? 0) > 0;
+      if (needsConfig && !(r.recipe.id in recipeConfigs.value)) {
+        void loadConfigFor(r.recipe.id);
+      }
+    }
+  },
+  { immediate: true },
+);
 </script>
 
 <template>
@@ -407,6 +512,57 @@ function statusOf(listing: RecipeListing): RecipeStatus {
                 Forget {{ key.display }}
               </button>
             </div>
+            <div
+              v-if="
+                listing.enabled &&
+                listing.recipe.category === 'filesystem' &&
+                statusOf(listing).state === 'running'
+              "
+              class="mt-2"
+            >
+              <button
+                type="button"
+                class="inline-flex items-center gap-1 rounded-sm border border-border-muted bg-surface-1 px-2 py-1 font-ui text-[11px] text-ink hover:bg-surface-2"
+                :data-testid="`recipe-open-workspace-${listing.recipe.id}`"
+                @click="openWorkspace(listing)"
+              >
+                <FolderOpen class="h-3 w-3" aria-hidden="true" />
+                <span>Open workspace</span>
+              </button>
+            </div>
+            <div
+              v-if="
+                listing.enabled &&
+                (listing.recipe.configOptions?.length ?? 0) > 0
+              "
+              class="mt-2 flex items-start gap-2"
+              :data-testid="`recipe-config-summary-${listing.recipe.id}`"
+            >
+              <button
+                type="button"
+                class="rounded-sm border border-border-muted px-2 py-0.5 font-ui text-[10px] uppercase tracking-[0.14em] text-ink-dim hover:text-ink hover:bg-surface-2"
+                :data-testid="`recipe-edit-config-${listing.recipe.id}`"
+                @click="editConfig(listing)"
+              >
+                Edit configuration
+              </button>
+              <ul
+                v-if="
+                  expanded[listing.recipe.id] &&
+                  allowedDirsFor(listing).length > 0
+                "
+                class="flex flex-wrap gap-1"
+                :data-testid="`recipe-allowed-dirs-${listing.recipe.id}`"
+              >
+                <li
+                  v-for="(p, i) in allowedDirsFor(listing)"
+                  :key="`${i}:${p}`"
+                  class="inline-flex items-center rounded-sm border border-border-muted bg-surface-2 px-1.5 py-0.5 font-mono text-[10px] text-ink"
+                >
+                  {{ p }}
+                </li>
+              </ul>
+            </div>
             <button
               type="button"
               class="mt-2 inline-flex items-center gap-1 text-[10px] uppercase tracking-[0.16em] text-ink-dim hover:text-ink"
@@ -491,6 +647,7 @@ function statusOf(listing: RecipeListing): RecipeStatus {
       :open="modalOpen"
       :recipe="modalRecipe"
       :install="installFromModal"
+      :initial-config="modalInitialConfig"
       @installed="onModalInstalled"
       @close="onModalClose"
     />

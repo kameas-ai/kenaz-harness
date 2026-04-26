@@ -207,13 +207,17 @@ export function Settings_SetConfirmEach(arg1:boolean):Promise<void>;
 
 export function Settings_SetMemory(arg1:boolean):Promise<void>;
 
+export function Shell_OpenInOSBrowser(arg1:string):Promise<void>;
+
 export function ShellStatus():Promise<rpc.ShellStatus>;
 
 export function Tools_ForgetRecipeKey(arg1:string,arg2:string):Promise<void>;
 
-export function Tools_InstallRecipe(arg1:string,arg2:Record<string, string>):Promise<stdio.RecipeStatus>;
+export function Tools_InstallRecipe(arg1:string,arg2:Record<string, string>,arg3:Record<string, any>):Promise<stdio.RecipeStatus>;
 
 export function Tools_ListRecipes():Promise<Array<tools.RecipeListing>>;
+
+export function Tools_RecipeConfig(arg1:string):Promise<Record<string, any>>;
 
 export function Tools_RecipeStatus(arg1:string):Promise<stdio.RecipeStatus>;
 

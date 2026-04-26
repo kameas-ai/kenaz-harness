@@ -374,6 +374,10 @@ export function Settings_SetMemory(arg1) {
   return window['go']['rpc']['Bindings']['Settings_SetMemory'](arg1);
 }
 
+export function Shell_OpenInOSBrowser(arg1) {
+  return window['go']['rpc']['Bindings']['Shell_OpenInOSBrowser'](arg1);
+}
+
 export function ShellStatus() {
   return window['go']['rpc']['Bindings']['ShellStatus']();
 }
@@ -382,12 +386,16 @@ export function Tools_ForgetRecipeKey(arg1, arg2) {
   return window['go']['rpc']['Bindings']['Tools_ForgetRecipeKey'](arg1, arg2);
 }
 
-export function Tools_InstallRecipe(arg1, arg2) {
-  return window['go']['rpc']['Bindings']['Tools_InstallRecipe'](arg1, arg2);
+export function Tools_InstallRecipe(arg1, arg2, arg3) {
+  return window['go']['rpc']['Bindings']['Tools_InstallRecipe'](arg1, arg2, arg3);
 }
 
 export function Tools_ListRecipes() {
   return window['go']['rpc']['Bindings']['Tools_ListRecipes']();
+}
+
+export function Tools_RecipeConfig(arg1) {
+  return window['go']['rpc']['Bindings']['Tools_RecipeConfig'](arg1);
 }
 
 export function Tools_RecipeStatus(arg1) {

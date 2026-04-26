@@ -52,6 +52,8 @@ import type {
   RecipeState,
   RecipeStatus,
   EnvKey,
+  ConfigOption,
+  ConfigKind,
 } from './types';
 
 /**
@@ -200,10 +202,14 @@ interface WailsBindingsLike {
   Tools_InstallRecipe(
     id: string,
     env: Record<string, string>,
+    config: Record<string, unknown>,
   ): Promise<WireRecipeStatus>;
   Tools_UninstallRecipe(id: string): Promise<void>;
   Tools_ForgetRecipeKey(id: string, envName: string): Promise<void>;
   Tools_RecipeStatus(id: string): Promise<WireRecipeStatus>;
+  Tools_RecipeConfig(id: string): Promise<Record<string, unknown>>;
+
+  Shell_OpenInOSBrowser(path: string): Promise<void>;
 }
 
 // ── Wails wire shapes for recipes (snake_case-tagged Go structs) ───────
@@ -227,6 +233,15 @@ interface WireCapabilities {
   sampling: boolean;
 }
 
+interface WireConfigOption {
+  name: string;
+  display: string;
+  kind: string;
+  default?: unknown;
+  required: boolean;
+  description: string;
+}
+
 interface WireRecipe {
   id: string;
   display_name: string;
@@ -239,6 +254,8 @@ interface WireRecipe {
   init_timeout_ms?: number;
   ping_period_ms?: number;
   sampling_policy?: { allowed: boolean; default: boolean };
+  args_template?: string[];
+  config_options?: WireConfigOption[];
 }
 
 interface WireRecipeStatus {
@@ -304,7 +321,33 @@ function adaptEnvKey(w: WireEnvKey): EnvKey {
   };
 }
 
+const KNOWN_CONFIG_KINDS: readonly ConfigKind[] = [
+  'directory_list',
+  'boolean',
+  'string',
+];
+
+function adaptConfigKind(raw: string): ConfigKind {
+  return (KNOWN_CONFIG_KINDS as readonly string[]).includes(raw)
+    ? (raw as ConfigKind)
+    : 'string';
+}
+
+function adaptConfigOption(w: WireConfigOption): ConfigOption {
+  return {
+    name: w.name,
+    display: w.display,
+    kind: adaptConfigKind(w.kind),
+    default: w.default,
+    required: w.required,
+    description: w.description,
+  };
+}
+
 function adaptRecipe(w: WireRecipe): Recipe {
+  const configOptions = w.config_options
+    ? w.config_options.map(adaptConfigOption)
+    : undefined;
   return {
     id: w.id,
     displayName: w.display_name,
@@ -313,6 +356,8 @@ function adaptRecipe(w: WireRecipe): Recipe {
     envKeys: (w.env_keys ?? []).map(adaptEnvKey),
     capabilities: w.capabilities,
     docsUrl: w.docs_url || undefined,
+    argsTemplate: w.args_template ? [...w.args_template] : undefined,
+    configOptions,
   };
 }
 
@@ -674,14 +719,42 @@ export interface HooksClient {
  */
 export interface ToolsRecipesClient {
   list(): Promise<RecipeListing[]>;
-  install(id: string, env: Record<string, string>): Promise<RecipeStatus>;
+  /**
+   * install enables the recipe, stores any provided env keys in the
+   * OS keychain, expands the per-install ConfigOption values
+   * (directory_list paths, booleans, strings), and spawns the server.
+   * `config` is optional — recipes that declare no ConfigOptions
+   * (e.g. Brave Search) accept any value (including undefined / {}).
+   */
+  install(
+    id: string,
+    env: Record<string, string>,
+    config?: Record<string, unknown>,
+  ): Promise<RecipeStatus>;
   uninstall(id: string): Promise<void>;
   forgetKey(id: string, envName: string): Promise<void>;
   status(id: string): Promise<RecipeStatus>;
+  /**
+   * config returns the persisted per-install ConfigOption map for an
+   * enabled recipe (e.g. {allowed_directories: [...]} for the
+   * filesystem recipe). Returns an empty object for recipes that are
+   * not enabled or have no config.
+   */
+  config(id: string): Promise<Record<string, unknown>>;
 }
 
 export interface ToolsClient {
   recipes: ToolsRecipesClient;
+}
+
+/**
+ * ShellClient — view-scoped surface for OS-shell affordances. v1
+ * exposes a single operation: `openInOSBrowser` opens an absolute
+ * filesystem path in the OS file browser via Wails's BrowserOpenURL.
+ * The backend validates the path exists before launching.
+ */
+export interface ShellClient {
+  openInOSBrowser(path: string): Promise<void>;
 }
 
 export interface HarnessClient {
@@ -705,6 +778,7 @@ export interface HarnessClient {
   memory: MemoryClient;
   hooks: HooksClient;
   tools: ToolsClient;
+  shell: ShellClient;
 }
 
 // ── runtime client ─────────────────────────────────────────────────────
@@ -869,13 +943,19 @@ export function createHarnessClient(): HarnessClient {
       recipes: {
         list: async () =>
           (await b().Tools_ListRecipes()).map(adaptRecipeListing),
-        install: async (id, env) =>
-          adaptRecipeStatus(await b().Tools_InstallRecipe(id, env)),
+        install: async (id, env, config) =>
+          adaptRecipeStatus(
+            await b().Tools_InstallRecipe(id, env, config ?? {}),
+          ),
         uninstall: (id) => b().Tools_UninstallRecipe(id),
         forgetKey: (id, envName) => b().Tools_ForgetRecipeKey(id, envName),
         status: async (id) =>
           adaptRecipeStatus(await b().Tools_RecipeStatus(id)),
+        config: (id) => b().Tools_RecipeConfig(id),
       },
+    },
+    shell: {
+      openInOSBrowser: (path) => b().Shell_OpenInOSBrowser(path),
     },
   };
 }
@@ -1139,7 +1219,11 @@ export function createFakeHarnessClient(
           resourceCount: 0,
           promptCount: 0,
         }),
+        config: async () => ({}),
       },
+    },
+    shell: {
+      openInOSBrowser: noop,
     },
   };
 
