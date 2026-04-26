@@ -13,6 +13,7 @@ import (
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/mcp"
 	memoryview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/memory"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/policy"
+	projectsview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/projects"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/sessions"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/settings"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/trust"
@@ -158,6 +159,9 @@ func (b *Bindings) Sessions_LoadDraft(id string) (string, error) {
 }
 func (b *Bindings) Sessions_SetSystemPrompt(id, content, kind string) error {
 	return b.api.Sessions().SetSystemPrompt(b.ctx(), id, content, kind)
+}
+func (b *Bindings) Sessions_MoveToProject(id, projectID string) error {
+	return b.api.Sessions().MoveToProject(b.ctx(), id, projectID)
 }
 
 // ── llm ────────────────────────────────────────────────────────────────
@@ -359,6 +363,36 @@ func (b *Bindings) Memory_RememberMessage(sessionID, messageID string) (string, 
 
 func (b *Bindings) Memory_Forget(id string) error {
 	return b.api.Memory().Forget(b.ctx(), id)
+}
+
+// ── projects ───────────────────────────────────────────────────────────
+
+func (b *Bindings) Projects_List() ([]projectsview.Project, error) {
+	return b.api.Projects().List(b.ctx())
+}
+func (b *Bindings) Projects_Get(id string) (projectsview.Project, error) {
+	return b.api.Projects().Get(b.ctx(), id)
+}
+func (b *Bindings) Projects_Create(name, description string) (projectsview.Project, error) {
+	return b.api.Projects().Create(b.ctx(), name, description)
+}
+func (b *Bindings) Projects_Rename(id, name string) error {
+	return b.api.Projects().Rename(b.ctx(), id, name)
+}
+func (b *Bindings) Projects_UpdateDescription(id, description string) error {
+	return b.api.Projects().UpdateDescription(b.ctx(), id, description)
+}
+func (b *Bindings) Projects_Delete(id string, deleteSessions bool) error {
+	return b.api.Projects().Delete(b.ctx(), id, deleteSessions)
+}
+func (b *Bindings) Projects_AddSession(projectID, sessionID string) error {
+	return b.api.Projects().AddSession(b.ctx(), projectID, sessionID)
+}
+func (b *Bindings) Projects_RemoveSession(sessionID string) error {
+	return b.api.Projects().RemoveSession(b.ctx(), sessionID)
+}
+func (b *Bindings) Projects_ListSessions(projectID string) ([]projectsview.Session, error) {
+	return b.api.Projects().ListSessions(b.ctx(), projectID)
 }
 
 // ── hooks ──────────────────────────────────────────────────────────────

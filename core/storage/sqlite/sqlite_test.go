@@ -128,7 +128,7 @@ func TestOpen_RegistersSessionMigrations(t *testing.T) {
 		}
 		versions = append(versions, v)
 	}
-	want := []int{300, 301, 302, 303, 304}
+	want := []int{300, 301, 302, 303, 304, 306, 307}
 	if len(versions) != len(want) {
 		t.Fatalf("session migrations applied = %v, want %v", versions, want)
 	}
@@ -163,9 +163,9 @@ func TestOpen_ApplyIdempotent(t *testing.T) {
 	if err := rows.Scan(&count); err != nil {
 		t.Fatal(err)
 	}
-	// 2 storage bootstrap + 5 session migrations.
-	if count != 7 {
-		t.Errorf("ledger count = %d, want 7", count)
+	// 2 storage bootstrap + 7 session migrations.
+	if count != 9 {
+		t.Errorf("ledger count = %d, want 9", count)
 	}
 }
 

@@ -33,6 +33,7 @@ import (
 	"github.com/sigil-tech/kaneaz-harness/core/logging"
 	"github.com/sigil-tech/kaneaz-harness/core/mcp"
 	"github.com/sigil-tech/kaneaz-harness/core/memory"
+	"github.com/sigil-tech/kaneaz-harness/core/projects"
 	"github.com/sigil-tech/kaneaz-harness/core/scheduler"
 	"github.com/sigil-tech/kaneaz-harness/core/session"
 	"github.com/sigil-tech/kaneaz-harness/core/storage"
@@ -92,6 +93,10 @@ type Core struct {
 	// sessionManagerMu guards sessionManager lazy construction.
 	sessionManagerMu sync.Mutex
 	sessionManager   *session.Manager
+
+	// projectManagerMu guards projectManager lazy construction.
+	projectManagerMu sync.Mutex
+	projectManager   *projects.Manager
 
 	// storageMu guards lazy construction of the unified storage handle.
 	// storageOpened tracks whether the lazy-init path has run, so a
@@ -206,6 +211,32 @@ func (c *Core) SessionManager() *session.Manager {
 	store := c.openSessionStore()
 	c.sessionManager = session.NewManager(store)
 	return c.sessionManager
+}
+
+// ProjectManager returns the projects facade, lazily constructed on
+// first call. Falls back to an in-memory store when storage is
+// unavailable so the chassis still boots without persistence.
+func (c *Core) ProjectManager() *projects.Manager {
+	c.projectManagerMu.Lock()
+	defer c.projectManagerMu.Unlock()
+	if c.projectManager != nil {
+		return c.projectManager
+	}
+	c.projectManager = projects.NewManager(c.openProjectStore())
+	return c.projectManager
+}
+
+func (c *Core) openProjectStore() projects.Store {
+	if c.opts.DataDir == "" {
+		logging.L().Warn("projects.store.fallback_memory", "reason", "empty data dir")
+		return projects.NewMemoryStore()
+	}
+	s := c.Storage()
+	if s == nil {
+		logging.L().Warn("projects.store.fallback_memory", "reason", "storage unavailable")
+		return projects.NewMemoryStore()
+	}
+	return projects.NewSQLStore(s)
 }
 
 // openSessionStore wraps the unified storage.DB through

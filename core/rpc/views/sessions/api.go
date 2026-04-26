@@ -16,6 +16,9 @@ type Session struct {
 	// is the default for sessions created before the feature landed.
 	SystemPrompt string `json:"systemPrompt"`
 	ContextKind  string `json:"contextKind"`
+	// ProjectID is the session's project membership; empty string for
+	// loose sessions. Mirrors session.Record.ProjectID.
+	ProjectID string `json:"projectId,omitempty"`
 }
 
 // ToolCall mirrors the frontend ToolCall shape for tool-use rendering.
@@ -60,4 +63,8 @@ type SessionsAPI interface {
 	// (visible — the caller is responsible for also appending the
 	// content as a user message via AppendMessage).
 	SetSystemPrompt(ctx context.Context, id, content, kind string) error
+
+	// MoveToProject sets the session's project membership. An empty
+	// projectID detaches the session and makes it loose.
+	MoveToProject(ctx context.Context, id, projectID string) error
 }

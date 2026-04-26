@@ -10,6 +10,7 @@ import (
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/llm"
 	memoryview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/memory"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/policy"
+	projectsview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/projects"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/sessions"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/trust"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/workflow"
@@ -95,6 +96,9 @@ func (s *stubSessions) LoadDraft(_ context.Context, _ string) (string, error) {
 func (s *stubSessions) SetSystemPrompt(_ context.Context, _, _, _ string) error {
 	return errNotWired
 }
+func (s *stubSessions) MoveToProject(_ context.Context, _, _ string) error {
+	return errNotWired
+}
 
 // ── trust ──────────────────────────────────────────────────────────────
 
@@ -149,6 +153,28 @@ func (s *stubHooks) AvailableBuiltins(_ context.Context) ([]hooksview.BuiltinDes
 }
 func (s *stubHooks) InstallStarterMemoryHooks(_ context.Context) error { return nil }
 func (s *stubHooks) RemoveStarterMemoryHooks(_ context.Context) error  { return nil }
+
+// ── projects ───────────────────────────────────────────────────────────
+
+type stubProjects struct{}
+
+func (s *stubProjects) List(_ context.Context) ([]projectsview.Project, error) {
+	return []projectsview.Project{}, nil
+}
+func (s *stubProjects) Get(_ context.Context, _ string) (projectsview.Project, error) {
+	return projectsview.Project{}, errNotWired
+}
+func (s *stubProjects) Create(_ context.Context, _, _ string) (projectsview.Project, error) {
+	return projectsview.Project{}, errNotWired
+}
+func (s *stubProjects) Rename(_ context.Context, _, _ string) error            { return errNotWired }
+func (s *stubProjects) UpdateDescription(_ context.Context, _, _ string) error { return errNotWired }
+func (s *stubProjects) Delete(_ context.Context, _ string, _ bool) error       { return errNotWired }
+func (s *stubProjects) AddSession(_ context.Context, _, _ string) error        { return errNotWired }
+func (s *stubProjects) RemoveSession(_ context.Context, _ string) error        { return errNotWired }
+func (s *stubProjects) ListSessions(_ context.Context, _ string) ([]projectsview.Session, error) {
+	return []projectsview.Session{}, nil
+}
 
 // ── policy ─────────────────────────────────────────────────────────────
 

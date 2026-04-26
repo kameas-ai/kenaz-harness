@@ -136,6 +136,7 @@ describe('NewSessionDialog (Mission A: starting context)', () => {
         setSystemPrompt: async (id, content, kind) => {
           calls.push({ id, content, kind });
         },
+        moveToProject: async () => undefined,
       },
     });
     const pushSpy = vi.spyOn(router, 'push');
@@ -211,6 +212,7 @@ describe('NewSessionDialog (Mission A: starting context)', () => {
         setSystemPrompt: async (id, content, kind) => {
           calls.push({ id, content, kind });
         },
+        moveToProject: async () => undefined,
       },
     });
 
@@ -241,6 +243,94 @@ describe('NewSessionDialog (Mission A: starting context)', () => {
     expect(calls[0].kind).toBe('user_seed');
     expect(calls[0].content).toBe('');
 
+    w.unmount();
+  });
+
+  it('attaches the new session to the chosen project via moveToProject', async () => {
+    const moveCalls: { id: string; projectId: string }[] = [];
+    const { w } = await mountDialog({
+      llm: {
+        listProviders: async () => makeProviders(),
+        startStream: async () => 'sub',
+        stopStream: async () => undefined,
+        addProvider: async () => undefined,
+        updateProvider: async () => undefined,
+        removeProvider: async () => undefined,
+        testProvider: async () => ({ success: true, latency_ms: 0, message: '' }),
+        listModels: async () => [],
+      },
+      projects: {
+        list: async () => [
+          {
+            id: 'p1',
+            name: 'Foo',
+            description: '',
+            createdAt: '',
+            updatedAt: '',
+          },
+        ],
+        get: async (id) => ({
+          id,
+          name: id,
+          description: '',
+          createdAt: '',
+          updatedAt: '',
+        }),
+        create: async (name) => ({
+          id: 'new-proj-id',
+          name,
+          description: '',
+          createdAt: '',
+          updatedAt: '',
+        }),
+        rename: async () => undefined,
+        updateDescription: async () => undefined,
+        remove: async () => undefined,
+        addSession: async () => undefined,
+        removeSession: async () => undefined,
+        listSessions: async () => [],
+      },
+      sessions: {
+        list: async () => [],
+        get: async (id) => ({ id, name: id, createdAt: '', updatedAt: '' }),
+        create: async (name) => ({
+          id: 'new-session-id',
+          name,
+          createdAt: '',
+          updatedAt: '',
+        }),
+        rename: async () => undefined,
+        delete: async () => undefined,
+        reorder: async () => undefined,
+        startStream: async () => 'sub',
+        stopStream: async () => undefined,
+        listMessages: async () => [],
+        appendMessage: async (id, role, content) => ({
+          id: 'm1',
+          sessionId: id,
+          role,
+          content,
+          createdAt: '',
+        }),
+        saveDraft: async () => undefined,
+        loadDraft: async () => '',
+        setSystemPrompt: async () => undefined,
+        moveToProject: async (id, projectId) => {
+          moveCalls.push({ id, projectId });
+        },
+      },
+    });
+
+    const select = w.find<HTMLSelectElement>('[data-testid="new-session-project"]');
+    expect(select.exists()).toBe(true);
+    await select.setValue('p1');
+    await nextTick();
+
+    await w.find('[data-testid="new-session-create"]').trigger('click');
+    await flushPromises();
+
+    expect(moveCalls).toHaveLength(1);
+    expect(moveCalls[0]).toEqual({ id: 'new-session-id', projectId: 'p1' });
     w.unmount();
   });
 
@@ -288,6 +378,7 @@ describe('NewSessionDialog (Mission A: starting context)', () => {
         setSystemPrompt: async (id, content, kind) => {
           calls.push({ id, content, kind });
         },
+        moveToProject: async () => undefined,
       },
     });
 

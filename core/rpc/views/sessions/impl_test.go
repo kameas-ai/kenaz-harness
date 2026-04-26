@@ -72,6 +72,37 @@ func TestManagerAPI_RoundTrip(t *testing.T) {
 	}
 }
 
+// TestManagerAPI_MoveToProject pins the projectId round-trip in the
+// view shape. An empty projectID detaches (loose).
+func TestManagerAPI_MoveToProject(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	mgr := session.NewManager(session.NewMemoryStore())
+	api := NewManagerAPI(mgr)
+
+	s, err := api.Create(ctx, "alpha")
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if s.ProjectID != "" {
+		t.Errorf("fresh session ProjectID = %q, want empty", s.ProjectID)
+	}
+	if err := api.MoveToProject(ctx, s.ID, "p-1"); err != nil {
+		t.Fatalf("MoveToProject: %v", err)
+	}
+	got, _ := api.Get(ctx, s.ID)
+	if got.ProjectID != "p-1" {
+		t.Errorf("ProjectID after attach = %q, want p-1", got.ProjectID)
+	}
+	if err := api.MoveToProject(ctx, s.ID, ""); err != nil {
+		t.Fatalf("MoveToProject(detach): %v", err)
+	}
+	got, _ = api.Get(ctx, s.ID)
+	if got.ProjectID != "" {
+		t.Errorf("ProjectID after detach = %q, want empty", got.ProjectID)
+	}
+}
+
 // TestNewManagerAPI_NilManager pins the construction precondition.
 func TestNewManagerAPI_NilManager(t *testing.T) {
 	t.Parallel()

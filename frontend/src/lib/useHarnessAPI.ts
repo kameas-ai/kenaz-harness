@@ -18,6 +18,7 @@ import {
 import { useHarnessClient } from './harnessClientContext';
 import type {
   Session,
+  Project,
   ShellStatus,
   Denial,
   AuditEntry,
@@ -161,6 +162,74 @@ export function useSessions(): UseSessionsResult {
   }
 
   return { list, loading, refresh, create, rename, remove };
+}
+
+/**
+ * useProjects — reactive projects list + CRUD wrappers, mirroring
+ * useSessions in shape so components can adopt either with the same
+ * mental model.
+ */
+export interface UseProjectsResult {
+  list: Ref<readonly Project[]>;
+  loading: Ref<boolean>;
+  refresh(): Promise<void>;
+  create(name: string, description?: string): Promise<Project>;
+  rename(id: string, name: string): Promise<void>;
+  remove(id: string, deleteSessions: boolean): Promise<void>;
+  addSession(projectId: string, sessionId: string): Promise<void>;
+  removeSession(sessionId: string): Promise<void>;
+}
+
+export function useProjects(): UseProjectsResult {
+  const client = useHarnessClient();
+  const list = shallowRef<readonly Project[]>([]);
+  const loading = ref(false);
+
+  async function refresh() {
+    loading.value = true;
+    try {
+      list.value = await client.projects.list();
+    } catch {
+      list.value = [];
+    } finally {
+      loading.value = false;
+    }
+  }
+
+  async function create(name: string, description?: string) {
+    const p = await client.projects.create(name, description);
+    await refresh();
+    return p;
+  }
+
+  async function rename(id: string, name: string) {
+    await client.projects.rename(id, name);
+    await refresh();
+  }
+
+  async function remove(id: string, deleteSessions: boolean) {
+    await client.projects.remove(id, deleteSessions);
+    await refresh();
+  }
+
+  async function addSession(projectId: string, sessionId: string) {
+    await client.projects.addSession(projectId, sessionId);
+  }
+
+  async function removeSession(sessionId: string) {
+    await client.projects.removeSession(sessionId);
+  }
+
+  return {
+    list,
+    loading,
+    refresh,
+    create,
+    rename,
+    remove,
+    addSession,
+    removeSession,
+  };
 }
 
 /**

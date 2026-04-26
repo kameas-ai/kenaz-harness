@@ -21,6 +21,23 @@ export interface Session {
    * landed; the backend defaults to 'system' on read.
    */
   contextKind?: 'system' | 'user_seed';
+  /**
+   * Project membership. Empty / undefined means "loose" — the session
+   * is not attached to any project. Mirrors the Go-side
+   * session.Record.ProjectID nullable column.
+   */
+  projectId?: string;
+}
+
+/**
+ * Project — a top-level grouping of sessions. Mirrors core/projects.Project.
+ */
+export interface Project {
+  id: string;
+  name: string;
+  description: string;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface Provider {

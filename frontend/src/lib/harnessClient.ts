@@ -16,6 +16,7 @@
 
 import type {
   Session,
+  Project,
   Provider,
   AddProviderInput,
   TestResult,
@@ -76,6 +77,17 @@ interface WailsBindingsLike {
     content: string,
     kind: 'system' | 'user_seed',
   ): Promise<void>;
+  Sessions_MoveToProject(id: string, projectID: string): Promise<void>;
+
+  Projects_List(): Promise<Project[]>;
+  Projects_Get(id: string): Promise<Project>;
+  Projects_Create(name: string, description: string): Promise<Project>;
+  Projects_Rename(id: string, name: string): Promise<void>;
+  Projects_UpdateDescription(id: string, description: string): Promise<void>;
+  Projects_Delete(id: string, deleteSessions: boolean): Promise<void>;
+  Projects_AddSession(projectID: string, sessionID: string): Promise<void>;
+  Projects_RemoveSession(sessionID: string): Promise<void>;
+  Projects_ListSessions(projectID: string): Promise<Session[]>;
 
   LLM_ListProviders(): Promise<Provider[]>;
   LLM_StartStream(
@@ -210,6 +222,32 @@ export interface SessionsClient {
     content: string,
     kind: 'system' | 'user_seed',
   ): Promise<void>;
+  /**
+   * moveToProject sets the session's project membership. Empty
+   * projectId detaches the session and makes it loose.
+   */
+  moveToProject(id: string, projectId: string): Promise<void>;
+}
+
+/**
+ * ProjectsClient — top-level Project entity CRUD + session membership.
+ * Projects group related sessions; sessions outside a project are loose.
+ */
+export interface ProjectsClient {
+  list(): Promise<Project[]>;
+  get(id: string): Promise<Project>;
+  create(name: string, description?: string): Promise<Project>;
+  rename(id: string, name: string): Promise<void>;
+  updateDescription(id: string, description: string): Promise<void>;
+  /**
+   * remove deletes the project. When deleteSessions=true, every
+   * session attached to the project is deleted as part of the same
+   * operation; otherwise sessions become loose.
+   */
+  remove(id: string, deleteSessions: boolean): Promise<void>;
+  addSession(projectId: string, sessionId: string): Promise<void>;
+  removeSession(sessionId: string): Promise<void>;
+  listSessions(projectId: string): Promise<Session[]>;
 }
 
 export interface LLMConnectorClient {
@@ -370,6 +408,7 @@ export interface HarnessClient {
   appInfo(): Promise<AppInfo>;
 
   sessions: SessionsClient;
+  projects: ProjectsClient;
   llm: LLMConnectorClient;
   mcp: MCPClient;
   a2a: A2AClient;
@@ -420,6 +459,23 @@ export function createHarnessClient(): HarnessClient {
       loadDraft: (id) => b().Sessions_LoadDraft(id),
       setSystemPrompt: (id, content, kind) =>
         b().Sessions_SetSystemPrompt(id, content, kind),
+      moveToProject: (id, projectId) =>
+        b().Sessions_MoveToProject(id, projectId),
+    },
+    projects: {
+      list: () => b().Projects_List(),
+      get: (id) => b().Projects_Get(id),
+      create: (name, description) =>
+        b().Projects_Create(name, description ?? ''),
+      rename: (id, name) => b().Projects_Rename(id, name),
+      updateDescription: (id, description) =>
+        b().Projects_UpdateDescription(id, description),
+      remove: (id, deleteSessions) =>
+        b().Projects_Delete(id, deleteSessions),
+      addSession: (projectId, sessionId) =>
+        b().Projects_AddSession(projectId, sessionId),
+      removeSession: (sessionId) => b().Projects_RemoveSession(sessionId),
+      listSessions: (projectId) => b().Projects_ListSessions(projectId),
     },
     llm: {
       listProviders: () => b().LLM_ListProviders(),
@@ -568,6 +624,30 @@ export function createFakeHarnessClient(
       saveDraft: noop,
       loadDraft: async () => '',
       setSystemPrompt: noop,
+      moveToProject: noop,
+    },
+    projects: {
+      list: async () => [],
+      get: async (id) => ({
+        id,
+        name: id,
+        description: '',
+        createdAt: '',
+        updatedAt: '',
+      }),
+      create: async (name, description) => ({
+        id: `fake-proj-${Math.random().toString(36).slice(2, 8)}`,
+        name,
+        description: description ?? '',
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }),
+      rename: noop,
+      updateDescription: noop,
+      remove: noop,
+      addSession: noop,
+      removeSession: noop,
+      listSessions: async () => [],
     },
     llm: {
       listProviders: async () => [],
