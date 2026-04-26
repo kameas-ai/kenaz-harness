@@ -13,6 +13,7 @@
 
 import { computed, onMounted, ref } from 'vue';
 import CanvasHead from '@/shell/CanvasHead.vue';
+import SettingsTabs from '@/views/settings/SettingsTabs.vue';
 import Button from '@/components/ui/Button.vue';
 import { useHarnessClient } from '@/lib/harnessClientContext';
 import type { AddProviderInput, Provider, TestResult } from '@/lib/types';
@@ -172,6 +173,7 @@ const inlineTestClass = computed(() =>
         </Button>
       </template>
     </CanvasHead>
+    <SettingsTabs />
 
     <div class="px-6 py-4">
       <div

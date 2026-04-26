@@ -13,6 +13,7 @@
 import { onMounted, ref } from 'vue';
 import { useRouter } from 'vue-router';
 import CanvasHead from '@/shell/CanvasHead.vue';
+import SettingsTabs from '@/views/settings/SettingsTabs.vue';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
 import { debouncedSave } from '@/lib/settings';
 import type { AppInfo, Settings, Theme } from '@/lib/types';
@@ -111,6 +112,7 @@ onMounted(() => {
       title="App preferences"
       subtitle="Theme, route restoration, and data-dir info. Settings persist to a single JSON file under your user config dir."
     />
+    <SettingsTabs />
 
     <div class="px-6 py-4 grid gap-6 max-w-3xl" data-testid="settings-form">
       <section>

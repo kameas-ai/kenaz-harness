@@ -108,7 +108,7 @@ describe('BundlesView (FR-001b numbered-section header)', () => {
       },
     });
     await flushPromises();
-    const button = w.find('button');
+    const button = w.find('[data-testid="bundle-toggle-alpha"]');
     await button.trigger('click');
     await flushPromises();
     expect(w.text()).toContain('policy.toml');

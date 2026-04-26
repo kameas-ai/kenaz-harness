@@ -5,6 +5,7 @@ import {rpc} from '../models';
 import {audit} from '../models';
 import {bundle} from '../models';
 import {contextview} from '../models';
+import {contexts} from '../models';
 import {hooks} from '../models';
 import {llm} from '../models';
 import {mcp} from '../models';
@@ -41,6 +42,22 @@ export function Context_List():Promise<Array<contextview.ContextEntry>>;
 export function Context_StartStream():Promise<string>;
 
 export function Context_StopStream(arg1:string):Promise<void>;
+
+export function Contexts_CreateFolder(arg1:string):Promise<void>;
+
+export function Contexts_Delete(arg1:string):Promise<void>;
+
+export function Contexts_Get(arg1:string):Promise<string>;
+
+export function Contexts_List():Promise<contexts.Node>;
+
+export function Contexts_RecentlyApplied(arg1:number):Promise<Array<string>>;
+
+export function Contexts_Rename(arg1:string,arg2:string):Promise<void>;
+
+export function Contexts_RootPath():Promise<string>;
+
+export function Contexts_Save(arg1:string,arg2:string):Promise<void>;
 
 export function Diag_LogClientEvent(arg1:string,arg2:string,arg3:Record<string, any>):Promise<void>;
 

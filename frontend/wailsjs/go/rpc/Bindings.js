@@ -54,6 +54,38 @@ export function Context_StopStream(arg1) {
   return window['go']['rpc']['Bindings']['Context_StopStream'](arg1);
 }
 
+export function Contexts_CreateFolder(arg1) {
+  return window['go']['rpc']['Bindings']['Contexts_CreateFolder'](arg1);
+}
+
+export function Contexts_Delete(arg1) {
+  return window['go']['rpc']['Bindings']['Contexts_Delete'](arg1);
+}
+
+export function Contexts_Get(arg1) {
+  return window['go']['rpc']['Bindings']['Contexts_Get'](arg1);
+}
+
+export function Contexts_List() {
+  return window['go']['rpc']['Bindings']['Contexts_List']();
+}
+
+export function Contexts_RecentlyApplied(arg1) {
+  return window['go']['rpc']['Bindings']['Contexts_RecentlyApplied'](arg1);
+}
+
+export function Contexts_Rename(arg1, arg2) {
+  return window['go']['rpc']['Bindings']['Contexts_Rename'](arg1, arg2);
+}
+
+export function Contexts_RootPath() {
+  return window['go']['rpc']['Bindings']['Contexts_RootPath']();
+}
+
+export function Contexts_Save(arg1, arg2) {
+  return window['go']['rpc']['Bindings']['Contexts_Save'](arg1, arg2);
+}
+
 export function Diag_LogClientEvent(arg1, arg2, arg3) {
   return window['go']['rpc']['Bindings']['Diag_LogClientEvent'](arg1, arg2, arg3);
 }

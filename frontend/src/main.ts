@@ -54,6 +54,11 @@ const router = createRouter({
       component: () => import('@/views/hooks/HooksView.vue'),
     },
     {
+      path: '/workflows',
+      name: 'workflows',
+      component: () => import('@/views/workflows/WorkflowsView.vue'),
+    },
+    {
       path: '/settings',
       name: 'settings',
       component: () => import('@/views/settings/SettingsView.vue'),

@@ -14,6 +14,7 @@
  */
 import { computed, onMounted, ref } from 'vue';
 import CanvasHead from '@/shell/CanvasHead.vue';
+import SettingsTabs from '@/views/settings/SettingsTabs.vue';
 import Button from '@/components/ui/Button.vue';
 import { useHarnessClient } from '@/lib/harnessClientContext';
 import type { Hook, HookEvent, HookKind, BuiltinDescriptor } from '@/lib/types';
@@ -176,6 +177,7 @@ const kinds: HookKind[] = ['builtin', 'shell', 'mcp'];
         </Button>
       </template>
     </CanvasHead>
+    <SettingsTabs />
 
     <div class="px-6 py-4 max-w-5xl">
       <div

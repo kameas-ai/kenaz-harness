@@ -6,12 +6,10 @@ import {
   Plus,
   MessageSquare,
   Wrench,
-  Layers,
-  Server,
   FileText,
   Settings,
   Brain,
-  Webhook,
+  GitBranch,
   Pencil,
   Trash2,
   X,
@@ -300,12 +298,10 @@ function dismissError() {
       <ul class="space-y-1">
         <li><RailEntry :icon="MessageSquare" label="Sessions" to="/sessions" /></li>
         <li><RailEntry :icon="Wrench" label="Tools" to="/tools" /></li>
-        <li><RailEntry :icon="Layers" label="Bundles" to="/bundles" /></li>
+        <li><RailEntry :icon="GitBranch" label="Workflows" to="/workflows" /></li>
         <li><RailEntry :icon="FileText" label="Contexts" to="/contexts" /></li>
-        <li><RailEntry :icon="Server" label="Providers" to="/providers" /></li>
-        <li><RailEntry :icon="FileText" label="Audit log" to="/audit" /></li>
-        <li><RailEntry :icon="Webhook" label="Hooks" to="/hooks" /></li>
         <li><RailEntry :icon="Brain" label="Memory" to="/memory" /></li>
+        <li><RailEntry :icon="FileText" label="Audit log" to="/audit" /></li>
         <li><RailEntry :icon="Settings" label="Settings" to="/settings" /></li>
       </ul>
     </nav>

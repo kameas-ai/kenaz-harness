@@ -12,6 +12,7 @@
  */
 import { onMounted, ref } from 'vue';
 import CanvasHead from '@/shell/CanvasHead.vue';
+import SettingsTabs from '@/views/settings/SettingsTabs.vue';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
 import type { Bundle } from '@/lib/types';
 
@@ -62,6 +63,7 @@ onMounted(() => {
       title="Installed bundles"
       subtitle="Every bundle pinned in kaneaz.lock with its source channel, signature, and artifact count. Bytes live in the local CAS — nothing leaves the device."
     />
+    <SettingsTabs />
 
     <div v-if="loading" class="px-6 py-4 font-ui text-sm text-ink-muted">
       Loading bundles…
@@ -122,6 +124,7 @@ onMounted(() => {
               <button
                 type="button"
                 class="text-[11px] text-ink-muted hover:text-ink"
+                :data-testid="`bundle-toggle-${b.id}`"
                 @click="toggle(b.id)"
               >
                 {{ expanded[b.id] ? 'Hide' : 'View artifacts' }}
