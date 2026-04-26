@@ -104,6 +104,35 @@ func TestStart_NoOpWithoutScheduler(t *testing.T) {
 	}
 }
 
+// TestStart_WiresTelemetry confirms the telemetry init path runs
+// alongside Start when DataDir + storage are available, and Telemetry()
+// surfaces a non-nil instance afterwards. Shutdown must drain the
+// telemetry providers before the DB closes; otherwise the SDK's flush
+// would write into a closed handle.
+func TestStart_WiresTelemetry(t *testing.T) {
+	dataDir := t.TempDir()
+	c, err := core.New(core.Options{DataDir: dataDir, BuildVersion: "test-1.0"})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if err := c.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	tel := c.Telemetry()
+	if tel == nil {
+		t.Fatalf("Telemetry() returned nil after Start")
+	}
+	if tel.InstanceID == "" {
+		t.Fatalf("InstanceID empty")
+	}
+	if err := c.Shutdown(context.Background()); err != nil {
+		t.Fatalf("Shutdown: %v", err)
+	}
+	if c.Telemetry() != nil {
+		t.Errorf("Telemetry() not cleared after Shutdown")
+	}
+}
+
 type fakeEventLog struct {
 	closeCalls int
 }

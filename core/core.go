@@ -38,6 +38,7 @@ import (
 	"github.com/sigil-tech/kaneaz-harness/core/session"
 	"github.com/sigil-tech/kaneaz-harness/core/storage"
 	storagesqlite "github.com/sigil-tech/kaneaz-harness/core/storage/sqlite"
+	"github.com/sigil-tech/kaneaz-harness/core/telemetry"
 )
 
 // Options carries the bootstrap configuration passed to New. DataDir
@@ -45,6 +46,12 @@ import (
 // directly for embedding tests via the optional Subsystems struct.
 type Options struct {
 	DataDir string
+
+	// BuildVersion is the harness build label embedded in the
+	// telemetry resource (service.version). Empty falls back to "dev"
+	// inside the telemetry layer. The embedding application reads
+	// this from build-time ldflags or AppInfo and passes it through.
+	BuildVersion string
 
 	// Subsystems lets an embedding application inject pre-constructed
 	// subsystems (e.g. a fake event-log Emitter for tests) instead of
@@ -120,6 +127,13 @@ type Core struct {
 	storageMu     sync.Mutex
 	storage       storage.DB
 	storageOpened bool
+
+	// telemetryMu guards the lazy telemetry init path. Held briefly
+	// during Start; nil result means init failed and the harness is
+	// running without telemetry (chat surface unaffected per
+	// telemetry-otel NFR-003).
+	telemetryMu sync.Mutex
+	telemetry   *telemetry.Telemetry
 }
 
 // New constructs a Core. It validates DataDir and wires any
@@ -181,6 +195,13 @@ func (c *Core) Start(ctx context.Context) error {
 	if c.opts.DataDir != "" {
 		_ = c.Storage()
 	}
+	// Telemetry init — wires the OTel SDK on top of the unified DB so
+	// every subsystem can emit spans / metrics / logs once WP04
+	// instruments the hot paths. Init failure must NOT block harness
+	// boot (telemetry-otel NFR-003 + edge case 6); we log at warn and
+	// continue without telemetry. Telemetry surfaces are read through
+	// Core.Telemetry() which returns nil in that case.
+	c.initTelemetry()
 	// MCP recipe bootstrap — spawn every persisted enabled recipe onto
 	// the pool BEFORE the user gets the chat surface. Failures degrade
 	// gracefully (FR-030): the chat still works, just without that
@@ -198,6 +219,47 @@ func (c *Core) Start(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+// initTelemetry constructs the telemetry surface lazily under Start.
+// Errors degrade silently: chat surface continues without telemetry
+// (NFR-003 spirit). Held under telemetryMu so concurrent Start +
+// Telemetry() calls converge on a single instance.
+func (c *Core) initTelemetry() {
+	c.telemetryMu.Lock()
+	defer c.telemetryMu.Unlock()
+	if c.telemetry != nil {
+		return
+	}
+	storage := c.Storage()
+	if storage == nil {
+		logging.L().Warn("telemetry.init_skipped", "reason", "storage unavailable")
+		return
+	}
+	tel, err := telemetry.Init(context.Background(), telemetry.Config{
+		DataDir:      c.opts.DataDir,
+		BuildVersion: c.opts.BuildVersion,
+		Storage:      storage,
+		Logger:       logging.L(),
+	})
+	if err != nil {
+		logging.L().Warn("telemetry.init_failed", "err", err.Error())
+		return
+	}
+	c.telemetry = tel
+	logging.L().Info("telemetry.init_ok",
+		"instance_id", tel.InstanceID,
+		"data_dir", c.opts.DataDir)
+}
+
+// Telemetry returns the active telemetry surface or nil when init
+// failed / hasn't run yet. Callers that emit spans / metrics must
+// gracefully handle nil so the chat path never depends on telemetry
+// being healthy.
+func (c *Core) Telemetry() *telemetry.Telemetry {
+	c.telemetryMu.Lock()
+	defer c.telemetryMu.Unlock()
+	return c.telemetry
 }
 
 // Shutdown tears down every wired subsystem in reverse-construction
@@ -221,6 +283,14 @@ func (c *Core) Shutdown(ctx context.Context) error {
 	if c.Events != nil {
 		record(c.Events.Close())
 	}
+	// Telemetry teardown runs before the DB closes so any flush the
+	// providers emit on Shutdown lands in the local SQLite tables.
+	c.telemetryMu.Lock()
+	if c.telemetry != nil {
+		record(c.telemetry.Shutdown(ctx))
+		c.telemetry = nil
+	}
+	c.telemetryMu.Unlock()
 	c.storageMu.Lock()
 	if c.storage != nil {
 		record(c.storage.Close(ctx))

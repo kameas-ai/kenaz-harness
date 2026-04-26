@@ -352,13 +352,14 @@ func TestMigrations_RegisterAndApply(t *testing.T) {
 		}
 	}
 
-	// Ledger rows: 2 storage bootstrap + 5 sessions migrations
+	// Ledger rows: 2 storage bootstrap + 6 sessions migrations
 	// (0300 init + 0301 context_attachments + 0302 content_json +
-	// 0303 artifacts + 0304 artifacts-promote) = 7 applied entries.
-	if got := len(db.ledger); got != 7 {
-		t.Fatalf("ledger size = %d, want 7", got)
+	// 0303 artifacts + 0304 artifacts-promote + 0305 telemetry) =
+	// 8 applied entries.
+	if got := len(db.ledger); got != 8 {
+		t.Fatalf("ledger size = %d, want 8", got)
 	}
-	wantVersions := []int{1, 2, 300, 301, 302, 303, 304}
+	wantVersions := []int{1, 2, 300, 301, 302, 303, 304, 305}
 	for i, want := range wantVersions {
 		if db.ledger[i].Version != want {
 			t.Errorf("ledger[%d].Version = %d, want %d", i, db.ledger[i].Version, want)

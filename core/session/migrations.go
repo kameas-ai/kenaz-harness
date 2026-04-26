@@ -70,7 +70,9 @@ const sqlInitSchema = `
 // version in the 300 block — context-library WP03 lands as 0301
 // (see migrations_attachments.go for the renumbering note); multimodal-io
 // WP02 lands as 0302 (see migrations_content_json.go); artifacts-storage
-// WP01 lands as 0303 (see migrations_artifacts.go).
+// WP01 lands as 0303 (see migrations_artifacts.go); artifacts-storage
+// WP02 lands as 0304 (see migrations_artifacts_promote.go);
+// telemetry-otel WP01 lands as 0305 (see migrations_telemetry.go).
 func Migrations() []migrations.Migration {
 	return []migrations.Migration{
 		{
@@ -107,6 +109,7 @@ func Migrations() []migrations.Migration {
 		migration0302(),
 		migration0303(),
 		migration0304(),
+		migration0305(),
 	}
 }
 
