@@ -35,6 +35,11 @@ type Config struct {
 	Registry corellm.Registry
 	Pool     MCPPool
 	History  SessionHistoryRW
+	// Permissions resolves the per-call (server, tool) policy between
+	// tool detection and dispatch. nil falls back to a built-in
+	// auto_allow resolver so the WP01 chat path stays untouched and
+	// callers that don't yet plumb a real resolver still work.
+	Permissions PermissionResolver
 	// MaxIter caps the number of tool-use rounds per Run invocation.
 	// Zero falls back to DefaultMaxIter.
 	MaxIter int
@@ -46,6 +51,7 @@ type Loop struct {
 	reg     corellm.Registry
 	pool    MCPPool
 	history SessionHistoryRW
+	perms   PermissionResolver
 	maxIter int
 }
 
@@ -63,10 +69,15 @@ func New(cfg Config) (*Loop, error) {
 	if maxIter <= 0 {
 		maxIter = DefaultMaxIter
 	}
+	perms := cfg.Permissions
+	if perms == nil {
+		perms = allowAllResolver{}
+	}
 	return &Loop{
 		reg:     cfg.Registry,
 		pool:    cfg.Pool,
 		history: cfg.History,
+		perms:   perms,
 		maxIter: maxIter,
 	}, nil
 }
@@ -132,7 +143,7 @@ func (l *Loop) Run(
 		augmented = append(augmented, assistantMessageFromResponse(current))
 
 		// 2. Dispatch every tool sequentially (concurrency is WP04).
-		results, err := l.dispatchTools(ctx, current.ToolCalls)
+		results, err := l.dispatchTools(ctx, sessionID, parentSubID, current.ToolCalls)
 		if err != nil {
 			return err
 		}
@@ -194,12 +205,13 @@ func (l *Loop) invokeAndDrain(ctx context.Context, req corellm.GenerationRequest
 	return resp, nil
 }
 
-// dispatchTools resolves each ToolUse against the pool and invokes it.
-// Sequential — concurrency lands in WP04. A pool failure surfaces as a
-// toolResult with IsError=true so the model can recover; the function
-// only returns an error for unrecoverable problems (resolver lookup
-// failure, etc.).
-func (l *Loop) dispatchTools(ctx context.Context, calls []corellm.ToolUse) ([]toolResult, error) {
+// dispatchTools resolves each ToolUse against the pool, consults the
+// permission gate, and invokes the call when allowed. Sequential —
+// concurrency lands in WP04. A pool failure surfaces as a toolResult
+// with IsError=true so the model can recover; the function only
+// returns an error for unrecoverable problems (pool tools listing,
+// resolver internal errors).
+func (l *Loop) dispatchTools(ctx context.Context, sessionID, parentSubID string, calls []corellm.ToolUse) ([]toolResult, error) {
 	if len(calls) == 0 {
 		return nil, nil
 	}
@@ -207,6 +219,7 @@ func (l *Loop) dispatchTools(ctx context.Context, calls []corellm.ToolUse) ([]to
 	if err != nil {
 		return nil, fmt.Errorf("toolloop: pool tools: %w", err)
 	}
+	log := logging.L()
 	out := make([]toolResult, 0, len(calls))
 	for _, call := range calls {
 		server, ok := resolveServer(tools, call.Name)
@@ -215,6 +228,73 @@ func (l *Loop) dispatchTools(ctx context.Context, calls []corellm.ToolUse) ([]to
 				ToolUseID: call.ID,
 				Tool:      call.Name,
 				Output:    fmt.Sprintf("tool %q not registered", call.Name),
+				IsError:   true,
+			})
+			continue
+		}
+		// Permission gate. WP02 surfaces three policies:
+		//   deny         → synthetic blocked result, skip dispatch
+		//   confirm_each → treat as auto_allow until WP05
+		//   auto_allow   → existing path
+		// Resolver internal errors surface as a tool failure (so the
+		// model isn't trapped) but are also logged because they're
+		// almost always a bug in the wired resolver, not user policy.
+		res, permErr := l.perms.Resolve(ctx, sessionID, server, call.Name)
+		if permErr != nil {
+			log.Warn("toolloop.permission.resolver_failed",
+				"sub_id", parentSubID,
+				"session_id", sessionID,
+				"server", server,
+				"tool", call.Name,
+				"err", permErr.Error(),
+			)
+			out = append(out, toolResult{
+				ToolUseID: call.ID,
+				Server:    server,
+				Tool:      call.Name,
+				Output:    fmt.Sprintf("permission resolver error: %s", permErr.Error()),
+				IsError:   true,
+			})
+			continue
+		}
+		log.Info("toolloop.permission.resolved",
+			"sub_id", parentSubID,
+			"session_id", sessionID,
+			"server", server,
+			"tool", call.Name,
+			"policy", string(res.Policy),
+		)
+		switch res.Policy {
+		case PolicyDeny:
+			reason := res.Reason
+			if reason == "" {
+				reason = "tool not authorised for this session"
+			}
+			out = append(out, toolResult{
+				ToolUseID: call.ID,
+				Server:    server,
+				Tool:      call.Name,
+				Output:    "Tool blocked: " + reason,
+				IsError:   true,
+			})
+			continue
+		case PolicyConfirmEach:
+			// TODO(WP05): plumb confirm-each modal — pause the loop,
+			// emit tool_confirmation_required, await the user decision
+			// via the ConfirmationBus, and either continue or convert
+			// to a synthetic deny on a "deny" or timeout outcome.
+			fallthrough
+		case PolicyAutoAllow:
+			// Existing dispatch path.
+		default:
+			// Defensive: a resolver implementer that returns an unknown
+			// policy is treated as a deny — a misconfigured policy
+			// should never silently allow a call.
+			out = append(out, toolResult{
+				ToolUseID: call.ID,
+				Server:    server,
+				Tool:      call.Name,
+				Output:    fmt.Sprintf("Tool blocked: unknown policy %q", res.Policy),
 				IsError:   true,
 			})
 			continue
