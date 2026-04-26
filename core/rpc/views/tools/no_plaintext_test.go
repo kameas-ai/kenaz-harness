@@ -52,7 +52,7 @@ func TestInstallRecipe_NoPlaintextOnDisk(t *testing.T) {
 	})
 
 	env := map[string]string{"BRAVE_API_KEY": sentinel}
-	if _, err := api.InstallRecipe(context.Background(), "brave-search", env); err != nil {
+	if _, err := api.InstallRecipe(context.Background(), "brave-search", env, nil); err != nil {
 		t.Fatalf("InstallRecipe: %v", err)
 	}
 

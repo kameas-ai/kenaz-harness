@@ -95,7 +95,7 @@ func TestMCPRecipe_E2E_ToolDispatchThroughPool(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	if _, err := api.InstallRecipe(ctx, "fake-test", map[string]string{}); err != nil {
+	if _, err := api.InstallRecipe(ctx, "fake-test", map[string]string{}, nil); err != nil {
 		t.Fatalf("InstallRecipe: %v", err)
 	}
 

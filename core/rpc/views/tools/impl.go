@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -121,11 +123,15 @@ func (a *API) ListRecipes(ctx context.Context) ([]RecipeListing, error) {
 	return out, nil
 }
 
-// InstallRecipe is the FR-021 install path. It validates the env
-// input against the recipe's required keys, stages every key in the
-// keychain, persists the enabled-list update, spawns the server via
-// the pool, zeroes the input env to scrub plaintext from the
-// caller's frame, and returns the live status snapshot.
+// InstallRecipe is the FR-021/FR-003 install path. It validates the
+// env input against the recipe's required keys, validates each
+// declared ConfigOption against its Kind (directory_list paths
+// canonicalise + deny-list-check; boolean/string type-check; missing
+// optional options fall back to Default), stages every env key in
+// the keychain, persists the enabled-list update with the resolved
+// config, spawns the server via the pool, zeroes the input env to
+// scrub plaintext from the caller's frame, and returns the live
+// status snapshot.
 //
 // On any failure the function unwinds in reverse: spawned process
 // is closed (best-effort), enabled-list save is rolled back, and
@@ -133,7 +139,20 @@ func (a *API) ListRecipes(ctx context.Context) ([]RecipeListing, error) {
 // before the failure point persist — that matches the spec's "keys
 // stick across uninstall" rule, and a follow-up install will
 // overwrite them.
-func (a *API) InstallRecipe(ctx context.Context, id string, env map[string]string) (stdio.RecipeStatus, error) {
+//
+// ${DATA_DIR} substitution: Default values for directory_list
+// options are templated, so a recipe can ship a default like
+// "${DATA_DIR}/agent-workspace" that resolves to the harness data
+// directory at install time. The substitution happens BEFORE
+// validation so the deny-list check sees the canonical resolved
+// path.
+//
+// EnsureWorkspace: when the resolved allowed_directories list
+// includes the canonical default workspace path, the harness
+// creates it (idempotent) before validation runs — without this,
+// a fresh install would always reject the default path with
+// ErrPathNotFound.
+func (a *API) InstallRecipe(ctx context.Context, id string, env map[string]string, config map[string]any) (stdio.RecipeStatus, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
@@ -156,6 +175,15 @@ func (a *API) InstallRecipe(ctx context.Context, id string, env map[string]strin
 		}
 	}
 
+	// Validate + materialise the per-install config against the
+	// recipe's declared ConfigOptions. resolvedConfig is what we
+	// persist on EnabledRecipe.Config and feed into ToServerSpec
+	// for ${VAR} expansion.
+	resolvedConfig, err := a.resolveConfig(recipe, config)
+	if err != nil {
+		return stdio.RecipeStatus{}, err
+	}
+
 	// Always zero the caller's plaintext frame before return — even
 	// on the failure paths below — so a stack trace never carries
 	// the credential.
@@ -172,7 +200,6 @@ func (a *API) InstallRecipe(ctx context.Context, id string, env map[string]strin
 		for _, key := range recipe.EnvKeys {
 			plaintext, present := env[key.Name]
 			if !present || plaintext == "" {
-				// Optional + omitted: skip without error.
 				continue
 			}
 			locator := recipes.KeychainLocator(id, key.Name)
@@ -194,6 +221,7 @@ func (a *API) InstallRecipe(ctx context.Context, id string, env map[string]strin
 		EnabledAt:       time.Now().UTC(),
 		SamplingEnabled: recipe.SamplingPolicy.Default,
 		EnvAuditHash:    recipes.EnvAuditHash(recipe),
+		Config:          resolvedConfig,
 	}
 	a.cfg.Enabled.Add(entry)
 	if a.cfg.DataDir != "" {
@@ -218,7 +246,7 @@ func (a *API) InstallRecipe(ctx context.Context, id string, env map[string]strin
 		_ = a.saveEnabled()
 		return stdio.RecipeStatus{}, fmt.Errorf("tools: resolve env: %w", err)
 	}
-	spec := recipe.ToServerSpec(resolved, nil)
+	spec := recipe.ToServerSpec(resolved, resolvedConfig)
 
 	if a.cfg.Pool == nil {
 		return stdio.RecipeStatus{}, errors.New("tools: no pool configured")
@@ -231,10 +259,137 @@ func (a *API) InstallRecipe(ctx context.Context, id string, env map[string]strin
 
 	a.emit(ctx, "mcp.recipe.installed", map[string]any{
 		"recipe_id": id,
+		"config":    resolvedConfig,
 	})
 
 	status, _ := a.cfg.Pool.RecipeStatus(id)
 	return status, nil
+}
+
+// resolveConfig validates and materialises the per-install config
+// against the recipe's declared ConfigOptions. It returns the
+// canonical config map suitable to persist on EnabledRecipe.Config
+// and feed into ToServerSpec.
+//
+// Per-Kind rules:
+//   - directory_list: each entry must be a string; ${DATA_DIR} is
+//     expanded BEFORE validation so a default like
+//     "${DATA_DIR}/agent-workspace" resolves to a real path. When
+//     the resolved path equals the canonical default workspace
+//     under the harness DataDir, EnsureWorkspace is called
+//     idempotently so a fresh install doesn't trip ErrPathNotFound.
+//     Each path then runs through ValidateAllowedDir.
+//   - boolean: must be a Go bool.
+//   - string: must be a Go string.
+//
+// Required options that are missing-or-nil → error. Optional
+// options that are missing fall back to the recipe's declared
+// Default (also templated for directory_list). The function also
+// includes "data_dir" in the resolved map when the harness has a
+// DataDir set, so ToServerSpec's ${DATA_DIR} substitution works on
+// args_template too.
+//
+// Unknown Kind values fail loudly (rather than silently dropping
+// the option) so a typo in shipped.json fails the install path
+// instead of producing a half-configured recipe.
+func (a *API) resolveConfig(recipe recipes.Recipe, input map[string]any) (map[string]any, error) {
+	out := map[string]any{}
+	if a.cfg.DataDir != "" {
+		out["data_dir"] = a.cfg.DataDir
+	}
+
+	for _, opt := range recipe.ConfigOptions {
+		raw, present := input[opt.Name]
+		if !present || raw == nil {
+			if opt.Required && opt.Default == nil {
+				return nil, fmt.Errorf("tools: required config option %q for recipe %q is missing", opt.Name, recipe.ID)
+			}
+			if opt.Default == nil {
+				continue
+			}
+			raw = opt.Default
+		}
+
+		switch opt.Kind {
+		case recipes.ConfigKindDirectoryList:
+			list, ok := coerceConfigStringSlice(raw)
+			if !ok {
+				return nil, fmt.Errorf("tools: config option %q for recipe %q must be a list of strings", opt.Name, recipe.ID)
+			}
+			expanded := make([]string, 0, len(list))
+			for _, p := range list {
+				resolved := expandDataDir(p, a.cfg.DataDir)
+				expanded = append(expanded, resolved)
+			}
+			if a.cfg.DataDir != "" {
+				defaultWorkspace := filepath.Join(a.cfg.DataDir, "agent-workspace")
+				for _, p := range expanded {
+					if p == defaultWorkspace {
+						if _, err := EnsureWorkspace(a.cfg.DataDir); err != nil {
+							return nil, fmt.Errorf("tools: ensure workspace: %w", err)
+						}
+						break
+					}
+				}
+			}
+			for _, p := range expanded {
+				if err := ValidateAllowedDir(p); err != nil {
+					return nil, err
+				}
+			}
+			out[opt.Name] = expanded
+		case recipes.ConfigKindBoolean:
+			b, ok := raw.(bool)
+			if !ok {
+				return nil, fmt.Errorf("tools: config option %q for recipe %q must be a boolean", opt.Name, recipe.ID)
+			}
+			out[opt.Name] = b
+		case recipes.ConfigKindString:
+			s, ok := raw.(string)
+			if !ok {
+				return nil, fmt.Errorf("tools: config option %q for recipe %q must be a string", opt.Name, recipe.ID)
+			}
+			out[opt.Name] = s
+		default:
+			return nil, fmt.Errorf("tools: unknown ConfigOption kind: %q (option %q, recipe %q)", opt.Kind, opt.Name, recipe.ID)
+		}
+	}
+	return out, nil
+}
+
+// expandDataDir replaces ${DATA_DIR} in s with dataDir. Other
+// tokens are left untouched — they're not legal in a Default for a
+// directory_list (the only caller). When dataDir is empty, the
+// token is left literal so the downstream ValidateAllowedDir error
+// surfaces "directory does not exist" rather than appearing to
+// accept the literal "${DATA_DIR}/foo" path.
+func expandDataDir(s, dataDir string) string {
+	if dataDir == "" {
+		return s
+	}
+	return strings.ReplaceAll(s, "${DATA_DIR}", dataDir)
+}
+
+// coerceConfigStringSlice accepts the two shapes a JSON-loaded
+// config or recipe Default may surface for a list field.
+func coerceConfigStringSlice(raw any) ([]string, bool) {
+	switch v := raw.(type) {
+	case []string:
+		out := make([]string, len(v))
+		copy(out, v)
+		return out, true
+	case []any:
+		out := make([]string, 0, len(v))
+		for _, e := range v {
+			s, ok := e.(string)
+			if !ok {
+				return nil, false
+			}
+			out = append(out, s)
+		}
+		return out, true
+	}
+	return nil, false
 }
 
 // UninstallRecipe stops the server and drops the enabled-list entry.

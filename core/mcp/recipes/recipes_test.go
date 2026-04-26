@@ -13,8 +13,8 @@ func TestShippedSingletonParses(t *testing.T) {
 	if cat == nil {
 		t.Fatal("Shipped() returned nil")
 	}
-	if got := len(cat.List()); got != 1 {
-		t.Fatalf("want 1 recipe, got %d", got)
+	if got := len(cat.List()); got != 2 {
+		t.Fatalf("want 2 recipes, got %d", got)
 	}
 }
 
@@ -79,6 +79,51 @@ func TestBraveSearchEntry(t *testing.T) {
 	}
 	if r.SamplingPolicy.Allowed || r.SamplingPolicy.Default {
 		t.Errorf("sampling policy = %+v, want both false", r.SamplingPolicy)
+	}
+}
+
+func TestFilesystemEntry(t *testing.T) {
+	cat := recipes.Shipped()
+	r, ok := cat.Get("filesystem")
+	if !ok {
+		t.Fatal("filesystem not in shipped catalog")
+	}
+	if r.DisplayName != "Filesystem" {
+		t.Errorf("DisplayName = %q", r.DisplayName)
+	}
+	if r.Category != "filesystem" {
+		t.Errorf("Category = %q", r.Category)
+	}
+	wantCmd := []string{"npx", "-y", "@modelcontextprotocol/server-filesystem"}
+	if len(r.Command) != len(wantCmd) {
+		t.Fatalf("Command length = %d, want %d", len(r.Command), len(wantCmd))
+	}
+	for i := range wantCmd {
+		if r.Command[i] != wantCmd[i] {
+			t.Errorf("Command[%d] = %q, want %q", i, r.Command[i], wantCmd[i])
+		}
+	}
+	if len(r.EnvKeys) != 0 {
+		t.Errorf("EnvKeys len = %d, want 0", len(r.EnvKeys))
+	}
+	if len(r.ArgsTemplate) != 1 || r.ArgsTemplate[0] != "${ALLOWED_DIRS}" {
+		t.Errorf("ArgsTemplate = %v, want [${ALLOWED_DIRS}]", r.ArgsTemplate)
+	}
+	if len(r.ConfigOptions) != 1 {
+		t.Fatalf("ConfigOptions len = %d, want 1", len(r.ConfigOptions))
+	}
+	opt := r.ConfigOptions[0]
+	if opt.Name != "allowed_directories" {
+		t.Errorf("ConfigOptions[0].Name = %q", opt.Name)
+	}
+	if opt.Kind != recipes.ConfigKindDirectoryList {
+		t.Errorf("ConfigOptions[0].Kind = %q, want %q", opt.Kind, recipes.ConfigKindDirectoryList)
+	}
+	if !opt.Required {
+		t.Error("ConfigOptions[0].Required = false, want true")
+	}
+	if !r.Capabilities.Tools {
+		t.Error("Capabilities.Tools = false, want true")
 	}
 }
 

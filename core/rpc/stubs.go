@@ -14,6 +14,7 @@ import (
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/policy"
 	projectsview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/projects"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/sessions"
+	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/shell"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/tools"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/trust"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/workflow"
@@ -211,7 +212,7 @@ type stubTools struct{}
 func (s *stubTools) ListRecipes(_ context.Context) ([]tools.RecipeListing, error) {
 	return []tools.RecipeListing{}, nil
 }
-func (s *stubTools) InstallRecipe(_ context.Context, _ string, _ map[string]string) (stdio.RecipeStatus, error) {
+func (s *stubTools) InstallRecipe(_ context.Context, _ string, _ map[string]string, _ map[string]any) (stdio.RecipeStatus, error) {
 	return stdio.RecipeStatus{}, errNotWired
 }
 func (s *stubTools) UninstallRecipe(_ context.Context, _ string) error { return errNotWired }
@@ -221,6 +222,17 @@ func (s *stubTools) ForgetRecipeKey(_ context.Context, _, _ string) error {
 func (s *stubTools) RecipeStatus(_ context.Context, _ string) (stdio.RecipeStatus, error) {
 	return stdio.RecipeStatus{}, errNotWired
 }
+
+// ── shell ──────────────────────────────────────────────────────────────
+
+type stubShell struct{}
+
+func (s *stubShell) OpenInOSBrowser(_ context.Context, _ string) error {
+	return errNotWired
+}
+
+// Compile-time witness.
+var _ shell.ShellAPI = (*stubShell)(nil)
 
 // ── policy ─────────────────────────────────────────────────────────────
 

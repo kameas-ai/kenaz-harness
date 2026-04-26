@@ -20,6 +20,30 @@
       "init_timeout_ms": 5000,
       "ping_period_ms": 30000,
       "sampling_policy": { "allowed": false, "default": false }
+    },
+    {
+      "id": "filesystem",
+      "display_name": "Filesystem",
+      "description": "Read and write files in a sandboxed workspace. The model gets read_file, write_file, list_directory, create_directory, move_file, and search_files tools scoped to the directories you allow.",
+      "category": "filesystem",
+      "command": ["npx", "-y", "@modelcontextprotocol/server-filesystem"],
+      "args_template": ["${ALLOWED_DIRS}"],
+      "env_keys": [],
+      "config_options": [
+        {
+          "name": "allowed_directories",
+          "display": "Allowed directories",
+          "kind": "directory_list",
+          "default": ["${DATA_DIR}/agent-workspace"],
+          "required": true,
+          "description": "Directories the model is allowed to read and write. The default workspace is created automatically. Add additional paths to give the model access to e.g. a code repo."
+        }
+      ],
+      "capabilities": { "tools": true, "resources": false, "prompts": false, "sampling": false },
+      "docs_url": "https://github.com/modelcontextprotocol/servers-archived/tree/main/src/filesystem",
+      "init_timeout_ms": 5000,
+      "ping_period_ms": 30000,
+      "sampling_policy": { "allowed": false, "default": false }
     }
   ]
 }

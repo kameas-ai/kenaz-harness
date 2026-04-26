@@ -45,7 +45,14 @@ type ToolsAPI interface {
 	// keychain backend, spawns the server through the pool, and
 	// returns the live status snapshot. The env map is zeroed before
 	// return so the caller's plaintext frame never escapes the call.
-	InstallRecipe(ctx context.Context, id string, env map[string]string) (stdio.RecipeStatus, error)
+	//
+	// config carries per-install ConfigOption values (filesystem
+	// allowed_directories, future boolean toggles). Validation is
+	// done by Kind: required options must be present + well-typed,
+	// directory_list paths run through ValidateAllowedDir, missing
+	// optional options fall back to the recipe's declared Default.
+	// Recipes with no ConfigOptions ignore this argument.
+	InstallRecipe(ctx context.Context, id string, env map[string]string, config map[string]any) (stdio.RecipeStatus, error)
 	// UninstallRecipe stops the running server (SIGTERM grace) and
 	// removes the entry from the persisted enabled list. Keychain
 	// entries persist — explicit deletion goes through ForgetRecipeKey.

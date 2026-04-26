@@ -17,6 +17,7 @@ import (
 	projectsview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/projects"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/sessions"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/settings"
+	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/shell"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/tools"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/trust"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/workflow"
@@ -487,8 +488,8 @@ func (b *Bindings) Tools_ListRecipes() ([]tools.RecipeListing, error) {
 	return b.api.Tools().ListRecipes(b.ctx())
 }
 
-func (b *Bindings) Tools_InstallRecipe(id string, env map[string]string) (stdio.RecipeStatus, error) {
-	return b.api.Tools().InstallRecipe(b.ctx(), id, env)
+func (b *Bindings) Tools_InstallRecipe(id string, env map[string]string, config map[string]any) (stdio.RecipeStatus, error) {
+	return b.api.Tools().InstallRecipe(b.ctx(), id, env, config)
 }
 
 func (b *Bindings) Tools_UninstallRecipe(id string) error {
@@ -502,3 +503,15 @@ func (b *Bindings) Tools_ForgetRecipeKey(id, envName string) error {
 func (b *Bindings) Tools_RecipeStatus(id string) (stdio.RecipeStatus, error) {
 	return b.api.Tools().RecipeStatus(b.ctx(), id)
 }
+
+// ── shell ──────────────────────────────────────────────────────────────
+
+func (b *Bindings) Shell_OpenInOSBrowser(path string) error {
+	return b.api.Shell().OpenInOSBrowser(b.ctx(), path)
+}
+
+// shellAPIType keeps the shell import alive — Wails-bound methods
+// only return primitive errors here, so we anchor the import to the
+// view-API interface so a future binding addition with a typed
+// argument doesn't have to re-wire the import.
+type shellAPIType = shell.ShellAPI
