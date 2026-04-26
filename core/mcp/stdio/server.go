@@ -31,7 +31,46 @@ const (
 
 	// closeGrace is how long Close waits between SIGTERM and SIGKILL.
 	closeGrace = 2 * time.Second
+
+	// defaultPingPeriod is the interval between health pings when a
+	// recipe does not override it. Per FR-008.
+	defaultPingPeriod = 30 * time.Second
+
+	// defaultPingTimeout is the per-ping response deadline. After two
+	// consecutive failures the supervisor restarts the server.
+	defaultPingTimeout = 5 * time.Second
+
+	// restartWindow is the rolling window over which restart attempts
+	// are counted. Three failures inside the window → state=failed
+	// per FR-007.
+	restartWindow = 5 * time.Minute
 )
+
+// State values for the per-instance lifecycle state machine. Per
+// data-model.md §ServerInstance:
+//
+//	stopped → starting → running → restarting → running … → failed
+//
+// The pool transitions an instance to `stopped` once Close completes;
+// `failed` is sticky until a user-driven toggle clears the
+// restartHistory and re-spawns.
+type State string
+
+const (
+	StateStopped    State = "stopped"
+	StateStarting   State = "starting"
+	StateRunning    State = "running"
+	StateRestarting State = "restarting"
+	StateFailed     State = "failed"
+)
+
+// backoffSchedule encodes the FR-007 exponential backoff: 1 s, 2 s,
+// 4 s — three attempts maximum inside any 5-minute window.
+var backoffSchedule = []time.Duration{
+	1 * time.Second,
+	2 * time.Second,
+	4 * time.Second,
+}
 
 // SpawnSpec is the input to ServerInstance.Spawn. It mirrors the
 // subset of recipe fields the lifecycle needs without pulling
@@ -59,6 +98,13 @@ type SpawnSpec struct {
 	// sampling capability during initialize. WP03 wires the actual
 	// handler dispatch.
 	SamplingEnabled bool
+
+	// PingPeriod overrides defaultPingPeriod when > 0. WP02's
+	// healthPinger ticks at this interval.
+	PingPeriod time.Duration
+
+	// PingTimeout overrides defaultPingTimeout when > 0.
+	PingTimeout time.Duration
 }
 
 // ServerInstance is the in-memory state for one stdio MCP server.
@@ -68,28 +114,55 @@ type ServerInstance struct {
 	id     string
 	logger *slog.Logger
 
-	cmd    *exec.Cmd
-	stdin  io.WriteCloser
-	framer *Framer
 	stderr *RingBuffer
 
 	router *ResponseRouter
 	nextID atomic.Int64
 
-	// readerWG waits for the reader and stderr-pump goroutines.
-	readerWG sync.WaitGroup
-	doneCh   chan struct{}
-
 	// closeOnce guards Close from running its sequence twice.
 	closeOnce sync.Once
 	closeErr  error
 
-	// negotiated is the server's response to initialize, captured
-	// after a successful handshake.
+	// doneCh is closed after Close completes; supervisor / health
+	// goroutines select on it to exit.
+	doneCh chan struct{}
+
+	// closing reports whether Close has begun. Reader/writer use it
+	// to suppress crash signalling during planned shutdown.
+	closing atomic.Bool
+
+	// supervisorWG tracks the supervisor + healthPinger goroutines
+	// so Close can wait for them.
+	supervisorWG sync.WaitGroup
+
+	// mu guards negotiated / tools / initialized fields read from
+	// upstream callers (pool.Tools, status snapshots).
 	mu          sync.RWMutex
 	negotiated  InitializeResult
 	tools       []coremcp.Tool
 	initialized bool
+
+	// lifecycleMu guards every spawn-mutated field (cmd, stdin,
+	// framer, readerWG, crashCh, state, restartHistory, lastError)
+	// so the supervisor's restart cycle is atomic relative to
+	// callers and to status snapshots.
+	lifecycleMu    sync.Mutex
+	cmd            *exec.Cmd
+	stdin          io.WriteCloser
+	framer         *Framer
+	readerWG       sync.WaitGroup
+	crashCh        chan struct{}
+	crashOnce      *sync.Once
+	state          State
+	restartHistory []time.Time
+	lastError      string
+	lastRestartAt  time.Time
+
+	// spec / opts are captured at the first Spawn so the supervisor
+	// can re-spawn with identical configuration.
+	spec     SpawnSpec
+	opts     instanceOptions
+	hasSpawn bool
 
 	// Handlers populated by the pool from PoolOptions. nil = WP01-
 	// safe no-op. WP03 wires real implementations.
@@ -100,11 +173,69 @@ type ServerInstance struct {
 	samplingOn bool
 }
 
+// instanceOptions are the WP02 hooks the pool injects into each
+// ServerInstance. Defaults wire to the real time package; tests
+// override them to fast-forward without wallclock waits.
+type instanceOptions struct {
+	// Now returns the current time. Used for restartHistory pruning
+	// and LastRestartAt timestamps.
+	Now func() time.Time
+
+	// Sleep blocks for d. Used by the supervisor's backoff between
+	// restart attempts so tests can swap in a no-op or a recordable
+	// stub.
+	Sleep func(d time.Duration)
+
+	// NewTicker returns a ticker that fires at the requested period.
+	// Used by healthPinger; tests can return a manually-driven
+	// ticker to control the cadence deterministically.
+	NewTicker func(d time.Duration) Ticker
+}
+
+// Ticker abstracts time.Ticker so health.go can be driven from a
+// fake. The shape mirrors *time.Ticker exactly: a channel of times
+// + a Stop method.
+type Ticker interface {
+	C() <-chan time.Time
+	Stop()
+}
+
+// realTicker is the default Ticker — a thin wrapper around
+// *time.Ticker. The interface change is .C() instead of .C so the
+// fake doesn't need to embed a non-zero channel field.
+type realTicker struct{ t *time.Ticker }
+
+func (r *realTicker) C() <-chan time.Time { return r.t.C }
+func (r *realTicker) Stop()               { r.t.Stop() }
+
+// defaultInstanceOptions returns options wired to wallclock time.
+func defaultInstanceOptions() instanceOptions {
+	return instanceOptions{
+		Now:   time.Now,
+		Sleep: time.Sleep,
+		NewTicker: func(d time.Duration) Ticker {
+			return &realTicker{t: time.NewTicker(d)}
+		},
+	}
+}
+
 // newServerInstance builds an unspawned instance. The pool calls
-// this then Spawn().
-func newServerInstance(id string, logger *slog.Logger, sampling SamplingHandler, roots RootsHandler, publish EventPublisher) *ServerInstance {
+// this then Spawn(). opts is the WP02 clock-injection bundle; pass
+// the zero value (or nil-fielded value) and the constructor fills
+// in the wallclock defaults.
+func newServerInstance(id string, logger *slog.Logger, sampling SamplingHandler, roots RootsHandler, publish EventPublisher, opts instanceOptions) *ServerInstance {
 	if logger == nil {
 		logger = slog.Default()
+	}
+	def := defaultInstanceOptions()
+	if opts.Now == nil {
+		opts.Now = def.Now
+	}
+	if opts.Sleep == nil {
+		opts.Sleep = def.Sleep
+	}
+	if opts.NewTicker == nil {
+		opts.NewTicker = def.NewTicker
 	}
 	return &ServerInstance{
 		id:       id,
@@ -115,17 +246,58 @@ func newServerInstance(id string, logger *slog.Logger, sampling SamplingHandler,
 		sampling: sampling,
 		roots:    roots,
 		publish:  publish,
+		state:    StateStopped,
+		opts:     opts,
 	}
 }
 
 // Spawn starts the child process, performs the initialize
 // handshake, and (on success) leaves reader/stderr-pump goroutines
-// running. On any failure the process is reaped and Spawn returns
-// the error — the instance is unusable past that point.
+// running plus the WP02 supervisor + healthPinger. On any failure
+// the process is reaped and Spawn returns the error — the instance
+// is unusable past that point. First-init failure does NOT trigger
+// auto-restart (per spec.md §9 edge case 2); only post-init
+// crashes do.
 func (s *ServerInstance) Spawn(ctx context.Context, spec SpawnSpec) error {
 	if len(spec.Command) == 0 {
 		return errors.New("stdio: empty command")
 	}
+
+	s.lifecycleMu.Lock()
+	s.state = StateStarting
+	s.spec = spec
+	s.hasSpawn = true
+	s.samplingOn = spec.SamplingEnabled
+	s.lifecycleMu.Unlock()
+
+	if err := s.doSpawn(ctx, spec); err != nil {
+		s.lifecycleMu.Lock()
+		s.state = StateFailed
+		s.lastError = err.Error()
+		s.lifecycleMu.Unlock()
+		return err
+	}
+
+	s.lifecycleMu.Lock()
+	s.state = StateRunning
+	s.lifecycleMu.Unlock()
+
+	// Launch the supervisor + healthPinger. Both run for the life
+	// of the instance, surviving (in fact driving) restart cycles.
+	s.supervisorWG.Add(1)
+	go s.runSupervisor()
+	if s.pingPeriod() > 0 {
+		s.supervisorWG.Add(1)
+		go s.healthPinger()
+	}
+	return nil
+}
+
+// doSpawn performs one spawn attempt: exec the command, wire pipes,
+// run the initialize handshake, start the reader + stderr pump.
+// Caller holds responsibility for state transitions; doSpawn does
+// not touch the supervisor goroutines.
+func (s *ServerInstance) doSpawn(ctx context.Context, spec SpawnSpec) error {
 	firstByte := spec.FirstByteTimeout
 	if firstByte <= 0 {
 		firstByte = defaultFirstByteTimeout
@@ -134,7 +306,6 @@ func (s *ServerInstance) Spawn(ctx context.Context, spec SpawnSpec) error {
 	if initTimeout <= 0 {
 		initTimeout = defaultInitTimeout
 	}
-	s.samplingOn = spec.SamplingEnabled
 
 	// exec.Command (not CommandContext) detaches the process
 	// lifetime from the caller's ctx — the spawned server should
@@ -160,9 +331,17 @@ func (s *ServerInstance) Spawn(ctx context.Context, spec SpawnSpec) error {
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("stdio: start %q: %w", spec.Command[0], err)
 	}
+
+	// Allocate this generation's plumbing under the lifecycle mutex
+	// so the supervisor / status snapshots can't observe a half-
+	// initialized instance during restart.
+	s.lifecycleMu.Lock()
 	s.cmd = cmd
 	s.stdin = stdin
 	s.framer = NewFramer(newFirstByteReader(stdout, firstByte), stdin)
+	s.crashCh = make(chan struct{})
+	s.crashOnce = &sync.Once{}
+	s.lifecycleMu.Unlock()
 
 	// Pump stderr into the ring buffer eagerly so initialize
 	// failures still show useful context.
@@ -179,7 +358,6 @@ func (s *ServerInstance) Spawn(ctx context.Context, spec SpawnSpec) error {
 		_ = cmd.Process.Kill()
 		_ = cmd.Wait()
 		s.readerWG.Wait()
-		close(s.doneCh)
 		return err
 	}
 	return nil
@@ -291,9 +469,11 @@ func (s *ServerInstance) doInitialize(ctx context.Context, timeout time.Duration
 	// Hand the framer over to the reader loop now that the
 	// handshake response is consumed; subsequent inbound frames
 	// (including the response to our initial tools/list) flow
-	// through the router.
+	// through the router. The reader captures the framer pointer
+	// at goroutine start so a restart that swaps in a new framer
+	// doesn't stall the previous reader on the wrong descriptor.
 	s.readerWG.Add(1)
-	go s.readLoop()
+	go s.readLoop(s.framer)
 
 	// Eagerly fetch tools/list when the server advertises tools, so
 	// Pool.Tools is non-blocking. Failures are logged but do not
@@ -365,8 +545,19 @@ func (s *ServerInstance) callRaw(ctx context.Context, method string, params any)
 		Method:  method,
 		Params:  params,
 	}
-	if err := s.framer.Write(req); err != nil {
+	// Snapshot the framer so a concurrent restart that swaps in a
+	// new framer can't have us write to a freshly-opened stdin
+	// after the router cancelled us.
+	s.lifecycleMu.Lock()
+	framer := s.framer
+	s.lifecycleMu.Unlock()
+	if framer == nil {
 		s.router.Cancel(id)
+		return nil, errors.New("stdio: server not running")
+	}
+	if err := framer.Write(req); err != nil {
+		s.router.Cancel(id)
+		s.signalCrash("write " + method + ": " + errString(err))
 		return nil, fmt.Errorf("stdio: write %s: %w", method, err)
 	}
 	select {
@@ -374,7 +565,7 @@ func (s *ServerInstance) callRaw(ctx context.Context, method string, params any)
 		s.router.Cancel(id)
 		// Best-effort cancellation notification; failure to write
 		// (server already gone) shouldn't override ctx.Err().
-		_ = s.framer.Write(notificationEnvelope{
+		_ = framer.Write(notificationEnvelope{
 			JSONRPC: JSONRPCVersion,
 			Method:  NotificationCancelled,
 			Params:  CancelledParams{RequestID: idAsRaw(id), Reason: "ctx cancelled"},
@@ -401,11 +592,13 @@ func (s *ServerInstance) callRaw(ctx context.Context, method string, params any)
 // readLoop pulls envelopes off the framer and dispatches them.
 // Responses go to the router. Notifications are logged. Server-
 // initiated requests get a -32601 stub today; WP03 wires real
-// dispatch to PoolOptions handlers.
-func (s *ServerInstance) readLoop() {
+// dispatch to PoolOptions handlers. EOF / read errors close the
+// generation's crashCh so the supervisor can decide whether to
+// restart (T011).
+func (s *ServerInstance) readLoop(framer *Framer) {
 	defer s.readerWG.Done()
 	for {
-		msg, err := s.framer.Read()
+		msg, err := framer.Read()
 		if err != nil {
 			if IsSkipped(err) {
 				continue
@@ -416,6 +609,7 @@ func (s *ServerInstance) readLoop() {
 				s.logger.Warn("stdio.reader.error", "err", err.Error())
 			}
 			s.router.CancelAll()
+			s.signalCrash("reader: " + errString(err))
 			return
 		}
 		switch {
@@ -548,20 +742,38 @@ func (s *ServerInstance) Negotiated() InitializeResult {
 
 // Close closes stdin (graceful exit nudge), waits up to 2 s for the
 // process to exit on its own, then SIGKILLs and reaps. All reader
-// goroutines have exited by the time Close returns. Idempotent.
+// goroutines (including the WP02 supervisor + healthPinger) have
+// exited by the time Close returns. Idempotent.
 func (s *ServerInstance) Close(ctx context.Context) error {
 	s.closeOnce.Do(func() {
+		// Mark the instance as closing so the reader/writer paths
+		// don't fire crash signals as the process tears down.
+		s.closing.Store(true)
+
+		// Closing the doneCh unblocks the supervisor's main select
+		// (and the healthPinger's). Doing this BEFORE killing the
+		// process ensures the supervisor doesn't race to start a
+		// restart while we're in the middle of tearing down.
+		close(s.doneCh)
+
+		// Snapshot the per-generation plumbing under the lifecycle
+		// lock so we don't race with an in-flight restart.
+		s.lifecycleMu.Lock()
+		stdin := s.stdin
+		cmd := s.cmd
+		s.lifecycleMu.Unlock()
+
 		// Closing stdin first asks the server to shut down via the
 		// framing convention (EOF on stdin = "we're done").
-		if s.stdin != nil {
-			_ = s.stdin.Close()
+		if stdin != nil {
+			_ = stdin.Close()
 		}
 		// Cancel pending requests so callers unblock immediately.
 		s.router.CancelAll()
 
 		exitCh := make(chan error, 1)
-		if s.cmd != nil {
-			go func() { exitCh <- s.cmd.Wait() }()
+		if cmd != nil {
+			go func() { exitCh <- cmd.Wait() }()
 		} else {
 			close(exitCh)
 		}
@@ -578,15 +790,83 @@ func (s *ServerInstance) Close(ctx context.Context) error {
 		case err := <-exitCh:
 			s.closeErr = err
 		case <-time.After(grace):
-			if s.cmd != nil && s.cmd.Process != nil {
-				_ = s.cmd.Process.Kill()
+			if cmd != nil && cmd.Process != nil {
+				_ = cmd.Process.Kill()
 			}
 			s.closeErr = <-exitCh
 		}
 		s.readerWG.Wait()
-		close(s.doneCh)
+		s.supervisorWG.Wait()
+
+		s.lifecycleMu.Lock()
+		s.state = StateStopped
+		s.lifecycleMu.Unlock()
 	})
 	return s.closeErr
+}
+
+// signalCrash closes the current generation's crashCh exactly once.
+// The reader, writer, and healthPinger all funnel through here.
+// Idempotent across the lifetime of one spawn — once the supervisor
+// reacts and respawns, a fresh crashCh is allocated under
+// lifecycleMu so the next crash hits a different channel.
+//
+// Crash signals raised during Close are dropped: the closing flag
+// keeps the supervisor from racing to restart a process the user
+// just asked us to kill. Likewise, signals raised while the
+// supervisor is already mid-restart (state=restarting) are
+// dropped — those are spurious writer-failures against the dying
+// pipe of the previous generation.
+func (s *ServerInstance) signalCrash(reason string) {
+	if s.closing.Load() {
+		return
+	}
+	s.lifecycleMu.Lock()
+	if s.state == StateRestarting || s.state == StateFailed || s.state == StateStopped {
+		s.lifecycleMu.Unlock()
+		return
+	}
+	once := s.crashOnce
+	ch := s.crashCh
+	s.lastError = reason
+	s.lifecycleMu.Unlock()
+	if once == nil || ch == nil {
+		return
+	}
+	once.Do(func() {
+		close(ch)
+	})
+}
+
+// pingPeriod returns the configured health-ping cadence, defaulting
+// to defaultPingPeriod when the spec leaves it zero. A negative
+// value disables health pings entirely (used by tests that drive
+// the ping path manually).
+func (s *ServerInstance) pingPeriod() time.Duration {
+	if s.spec.PingPeriod < 0 {
+		return -1
+	}
+	if s.spec.PingPeriod == 0 {
+		return defaultPingPeriod
+	}
+	return s.spec.PingPeriod
+}
+
+// pingTimeout returns the per-ping deadline, defaulting to
+// defaultPingTimeout when the spec leaves it zero.
+func (s *ServerInstance) pingTimeout() time.Duration {
+	if s.spec.PingTimeout > 0 {
+		return s.spec.PingTimeout
+	}
+	return defaultPingTimeout
+}
+
+// errString returns err.Error() or "<nil>" for nil.
+func errString(err error) string {
+	if err == nil {
+		return "<nil>"
+	}
+	return err.Error()
 }
 
 // firstByteReader wraps an io.Reader and applies a deadline to the

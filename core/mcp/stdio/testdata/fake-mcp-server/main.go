@@ -9,12 +9,17 @@
 // the test helper `buildFakeServer` and stored under the test
 // temp dir.
 //
-// CLI flags (per WP01 task T007):
+// CLI flags (per WP01 task T007 + WP02 task T012):
 //
 //	--banner          emit a non-JSON banner line on stdout first
 //	--slow-init=DUR   delay the initialize response by DUR
 //	--crash-on-call   exit(1) after the first tools/call
 //	--no-init         never reply to initialize (timeout test)
+//	--ignore-pings    accept ping requests but never reply (WP02
+//	                  health-pinger test)
+//	--seed-stderr=S   write S to stderr immediately on startup so
+//	                  the harness's RecipeStatus.StderrTail test
+//	                  has a deterministic value to assert
 //
 // Tools exposed (per WP01 acceptance):
 //
@@ -38,12 +43,16 @@ func main() {
 	slowInit := flag.Duration("slow-init", 0, "delay the initialize response by this duration")
 	crashOnCall := flag.Bool("crash-on-call", false, "exit(1) after the first tools/call")
 	noInit := flag.Bool("no-init", false, "never reply to initialize")
+	ignorePings := flag.Bool("ignore-pings", false, "accept ping requests but never reply")
+	seedStderr := flag.String("seed-stderr", "", "write to stderr on startup")
 	flag.Parse()
 	os.Exit(run(os.Stdin, os.Stdout, os.Stderr, runConfig{
 		Banner:      *banner,
 		SlowInit:    *slowInit,
 		CrashOnCall: *crashOnCall,
 		NoInit:      *noInit,
+		IgnorePings: *ignorePings,
+		SeedStderr:  *seedStderr,
 	}))
 }
 
@@ -52,11 +61,16 @@ type runConfig struct {
 	SlowInit    time.Duration
 	CrashOnCall bool
 	NoInit      bool
+	IgnorePings bool
+	SeedStderr  string
 }
 
 func run(stdin io.Reader, stdout io.Writer, stderr io.Writer, cfg runConfig) int {
 	if cfg.Banner {
 		fmt.Fprintln(stdout, "[fake] non-JSON banner line — should be skipped")
+	}
+	if cfg.SeedStderr != "" {
+		fmt.Fprintln(stderr, cfg.SeedStderr)
 	}
 	scanner := bufio.NewScanner(stdin)
 	scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
@@ -180,6 +194,9 @@ func run(stdin io.Reader, stdout io.Writer, stderr io.Writer, cfg runConfig) int
 				"result":  result,
 			})
 		case "ping":
+			if cfg.IgnorePings {
+				continue
+			}
 			_ = write(map[string]any{
 				"jsonrpc": "2.0",
 				"id":      json.RawMessage(idRaw),
