@@ -18,6 +18,11 @@ type Attachment struct {
 	Kind          string `json:"kind"`
 	Position      int    `json:"position"`
 	CreatedAt     string `json:"createdAt"`
+	// MediaID, when non-empty, identifies the MediaArtifact backing
+	// this attachment (multimodal-io WP02). Surfaced on the wire so the
+	// frontend can resolve back to the on-disk binary via a future
+	// fetch endpoint without inspecting ContentSource manually.
+	MediaID string `json:"mediaId,omitempty"`
 }
 
 // AddInput is the wire shape Add accepts. Mirrors core/attachments
@@ -30,6 +35,17 @@ type AddInput struct {
 	Content       string `json:"content"`
 	Kind          string `json:"kind,omitempty"`
 	Position      int    `json:"position,omitempty"`
+}
+
+// AddMediaInput is the wire shape AddMedia accepts. MediaBytesBase64
+// is the raw base64-encoded payload; the server decodes, validates,
+// and pipes it through the MediaStore CAS path (multimodal-io WP02).
+type AddMediaInput struct {
+	ScopeKind        string `json:"scopeKind"`
+	ScopeID          string `json:"scopeId,omitempty"`
+	MediaBytesBase64 string `json:"mediaBytesBase64"`
+	MediaType        string `json:"mediaType"`
+	OriginalName     string `json:"originalName,omitempty"`
 }
 
 // AttachmentsAPI is the view-scoped surface backing the
@@ -45,6 +61,11 @@ type AttachmentsAPI interface {
 	ListResolved(ctx context.Context, sessionID string) ([]Attachment, error)
 	// Add inserts a new attachment and returns the persisted record.
 	Add(ctx context.Context, in AddInput) (Attachment, error)
+	// AddMedia decodes the base64 bytes, persists them through the
+	// MediaStore CAS path, and inserts a media-backed attachment row.
+	// Oversize / invalid base64 / missing media store yield an error;
+	// success returns the persisted Attachment with MediaID populated.
+	AddMedia(ctx context.Context, in AddMediaInput) (Attachment, error)
 	// Remove deletes an attachment by id.
 	Remove(ctx context.Context, id string) error
 	// Reorder rewrites position for every id in idsInOrder; ids must be

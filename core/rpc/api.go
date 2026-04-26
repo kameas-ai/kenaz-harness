@@ -1019,8 +1019,9 @@ func (r *sessionHistoryReader) ListMessages(ctx context.Context, sessionID strin
 	out := make([]llm.SessionMessage, 0, len(stored))
 	for _, m := range stored {
 		out = append(out, llm.SessionMessage{
-			Role:    string(m.Role),
-			Content: m.Content,
+			Role:          string(m.Role),
+			Content:       m.Content,
+			ContentBlocks: m.ContentBlocks,
 		})
 	}
 	return out, nil

@@ -4,11 +4,17 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"time"
 
 	"github.com/sigil-tech/kaneaz-harness/core/attachments"
 	"github.com/sigil-tech/kaneaz-harness/core/session"
 )
+
+// ErrEmptyContentBlocks is returned by SendMessageWithBlocks when the
+// caller passes a nil or empty slice. Mirrors the existing
+// AppendMessage behaviour where the manager rejects empty content.
+var ErrEmptyContentBlocks = errors.New("rpc/sessions: contentBlocks must be non-empty")
 
 // recordToView projects a session.Record into the wire-shape Session
 // the frontend consumes. Lives here (not in core/session) to avoid an
@@ -190,6 +196,29 @@ func (a *managerAPI) AppendMessage(ctx context.Context, id, role, content string
 	stored, err := a.mgr.AppendMessage(ctx, id, session.Message{
 		Role:    session.Role(role),
 		Content: content,
+	})
+	if err != nil {
+		return Message{}, err
+	}
+	return messageToView(stored), nil
+}
+
+// SendMessageWithBlocks implements SessionsAPI. The persisted row uses
+// the polymorphic []ContentBlock shape (multimodal-io WP02 added the
+// content_json column). Legacy callers stick with AppendMessage; new
+// frontend code (WP04) hits this path whenever the user attaches an
+// image or document.
+//
+// The LLM stream itself is NOT triggered here — the chat surface calls
+// LLM_StartStream after the user turn lands, mirroring the pre-WP03
+// AppendMessage flow.
+func (a *managerAPI) SendMessageWithBlocks(ctx context.Context, id string, contentBlocks []ContentBlock) (Message, error) {
+	if len(contentBlocks) == 0 {
+		return Message{}, ErrEmptyContentBlocks
+	}
+	stored, err := a.mgr.AppendMessage(ctx, id, session.Message{
+		Role:          session.RoleUser,
+		ContentBlocks: contentBlocks,
 	})
 	if err != nil {
 		return Message{}, err

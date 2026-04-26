@@ -19,6 +19,7 @@ const (
 	CapStreaming      Capability = "streaming"
 	CapToolCalling    Capability = "tool_calling"
 	CapVision         Capability = "vision"
+	CapDocuments      Capability = "documents"
 	CapJSONMode       Capability = "json_mode"
 	CapPromptCaching  Capability = "prompt_caching"
 	CapReasoning      Capability = "reasoning"
@@ -29,7 +30,7 @@ const (
 // AllCapabilities is the canonical ordered list (used for tests / docs).
 func AllCapabilities() []Capability {
 	return []Capability{
-		CapStreaming, CapToolCalling, CapVision, CapJSONMode,
+		CapStreaming, CapToolCalling, CapVision, CapDocuments, CapJSONMode,
 		CapPromptCaching, CapReasoning, CapCancellation, CapUsageReporting,
 	}
 }

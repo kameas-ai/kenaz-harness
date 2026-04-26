@@ -91,9 +91,17 @@ type BundleSource interface {
 // reads to build the GenerationRequest. Defined here so the rpc views
 // package does not import core/session directly (DIRECTIVE_001 +
 // import-cycle hygiene).
+//
+// ContentBlocks (multimodal-io WP03) carries the canonical post-WP01
+// polymorphic content shape when the row was persisted with non-text
+// blocks (image / document attachments). When non-nil, buildMessages
+// uses ContentBlocks verbatim and ignores Content; legacy text-only
+// rows leave ContentBlocks nil so the historical Content path keeps
+// working.
 type SessionMessage struct {
-	Role    string
-	Content string
+	Role          string
+	Content       string
+	ContentBlocks []corellm.ContentBlock
 }
 
 // SessionMessageReader is the minimal session-history surface the
@@ -379,6 +387,13 @@ func (a *API) buildMessages(ctx context.Context, sessionID, model, kind string) 
 	// userText is the most recent user turn — memory.retrieve uses it
 	// as the embedding query.
 	hookMessages := make([]HookMessage, 0, len(stored)+len(systemAttachments)+1)
+	// blockSidecar tracks which hookMessage index originated from a
+	// stored message carrying ContentBlocks so the post-hook projection
+	// can splice the canonical polymorphic shape back in (multimodal-io
+	// WP03). Indexes outside the map fall through to the plain
+	// NewTextMessage path. Hooks run on the flattened text projection
+	// only — content blocks are out of scope for the hook surface.
+	blockSidecar := map[int][]corellm.ContentBlock{}
 	for _, att := range systemAttachments {
 		if att.Kind != "system" || att.Content == "" {
 			continue
@@ -390,9 +405,17 @@ func (a *API) buildMessages(ctx context.Context, sessionID, model, kind string) 
 	}
 	var userText string
 	for _, m := range stored {
-		hookMessages = append(hookMessages, HookMessage{Role: m.Role, Content: m.Content})
+		idx := len(hookMessages)
+		flat := m.Content
+		if len(m.ContentBlocks) > 0 && flat == "" {
+			flat = flattenBlocks(m.ContentBlocks)
+		}
+		hookMessages = append(hookMessages, HookMessage{Role: m.Role, Content: flat})
+		if len(m.ContentBlocks) > 0 {
+			blockSidecar[idx] = m.ContentBlocks
+		}
 		if m.Role == "user" {
-			userText = m.Content
+			userText = flat
 		}
 	}
 	if a.hooks != nil {
@@ -410,18 +433,51 @@ func (a *API) buildMessages(ctx context.Context, sessionID, model, kind string) 
 			logging.L().Warn("llm.presend.runner_failed",
 				"session_id", sessionID, "err", herr.Error())
 		} else {
+			// Hooks may have prepended / replaced messages. Drop the
+			// sidecar when the slice length changed; the original index
+			// alignment no longer holds and we'd rather lose the block
+			// shape than splice it onto the wrong turn. WP04 lands a
+			// hook surface that understands blocks natively.
+			if len(out.Messages) != len(hookMessages) {
+				blockSidecar = nil
+			}
 			hookMessages = out.Messages
 		}
 	}
-	out := make([]corellm.Message, 0, len(hookMessages))
-	for _, m := range hookMessages {
+	outMsgs := make([]corellm.Message, 0, len(hookMessages))
+	for i, m := range hookMessages {
 		role := corellm.Role(m.Role)
 		if role == "" {
 			role = corellm.RoleUser
 		}
-		out = append(out, corellm.NewTextMessage(role, m.Content))
+		if blocks, ok := blockSidecar[i]; ok && len(blocks) > 0 {
+			outMsgs = append(outMsgs, corellm.Message{Role: role, Content: blocks})
+			continue
+		}
+		outMsgs = append(outMsgs, corellm.NewTextMessage(role, m.Content))
 	}
-	return out, nil
+	return outMsgs, nil
+}
+
+// flattenBlocks joins every text block in declaration order with a
+// blank line separator. Mirrors corellm.Message.Text but works
+// directly on a []ContentBlock slice so callers that haven't built a
+// Message yet can compute the legacy text projection.
+func flattenBlocks(blocks []corellm.ContentBlock) string {
+	out := ""
+	for _, b := range blocks {
+		if b.Type != "" && b.Type != "text" {
+			continue
+		}
+		if b.Text == "" {
+			continue
+		}
+		if out != "" {
+			out += "\n\n"
+		}
+		out += b.Text
+	}
+	return out
 }
 
 // ErrPersonalStoreUnavailable is returned by AddProvider / RemoveProvider
@@ -525,6 +581,21 @@ func (a *API) StartStream(ctx context.Context, profileID, sessionID, modelOverri
 		} else {
 			req.Tools = discovered
 		}
+	}
+
+	// multimodal-io WP03 — modality gate. Walk every Message's
+	// ContentBlocks for image / document blocks and reject the request
+	// before opening a stream when the active model lacks the matching
+	// capability. The error is surfaced via the existing chat-error
+	// path (StartStream return value); the chat surface renders
+	// UnsupportedModalityError.Friendly() in place of the raw text.
+	if err := a.validateModalities(req, kind, effectiveModel); err != nil {
+		log.Error("llm.start_stream.failed",
+			"stage", "validateModalities",
+			"profile_id", profileID,
+			"err", err.Error(),
+		)
+		return "", err
 	}
 
 	streamCtx, cancel := context.WithCancel(context.Background())
@@ -724,6 +795,61 @@ func (a *API) pump(sub *subscription) {
 			)
 		}
 	}
+}
+
+// validateModalities walks req.Messages[*].Content[*] for image /
+// document blocks and rejects the request when the active model lacks
+// the matching capability. Returns a *corellm.UnsupportedModalityError
+// keyed to the first violating modality. Empty kind / model (no
+// adapter resolvable) is treated as "no gate" so a misrouted profile
+// does not silently swallow modality information.
+func (a *API) validateModalities(req corellm.GenerationRequest, kind, model string) error {
+	hasImage := false
+	hasDocument := false
+	for _, m := range req.Messages {
+		for _, blk := range m.Content {
+			switch blk.Type {
+			case "image":
+				hasImage = true
+			case "document":
+				hasDocument = true
+			}
+		}
+	}
+	if !hasImage && !hasDocument {
+		return nil
+	}
+	desc, ok := a.lookupCapabilities(kind, model)
+	if !ok {
+		return nil
+	}
+	if hasImage && !desc.Has(corellm.CapVision) {
+		return &corellm.UnsupportedModalityError{Modality: "image", Model: model}
+	}
+	if hasDocument && !desc.Has(corellm.CapDocuments) {
+		return &corellm.UnsupportedModalityError{Modality: "document", Model: model}
+	}
+	return nil
+}
+
+// lookupCapabilities resolves the descriptor for (kind, model) by
+// asking the adapter registered under kind. Returns (zero, false) when
+// the registry lacks an AdapterLookup or the adapter is unregistered;
+// callers treat that as "skip the gate" rather than failing closed so a
+// future provider kind without a YAML entry still chats.
+func (a *API) lookupCapabilities(kind, model string) (corellm.CapabilityDescriptor, bool) {
+	if a == nil || a.reg == nil || kind == "" {
+		return corellm.CapabilityDescriptor{}, false
+	}
+	lookup, ok := a.reg.(AdapterLookup)
+	if !ok || lookup == nil {
+		return corellm.CapabilityDescriptor{}, false
+	}
+	adapter := lookup.Adapter(kind)
+	if adapter == nil {
+		return corellm.CapabilityDescriptor{}, false
+	}
+	return adapter.Capabilities(model), true
 }
 
 // profileKindAndModel resolves the provider kind + effective model

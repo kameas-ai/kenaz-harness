@@ -4,9 +4,11 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"testing"
 
 	"github.com/sigil-tech/kaneaz-harness/core/attachments"
+	"github.com/sigil-tech/kaneaz-harness/core/llm"
 	"github.com/sigil-tech/kaneaz-harness/core/session"
 )
 
@@ -210,4 +212,82 @@ func TestNewManagerAPI_NilManager(t *testing.T) {
 		}
 	}()
 	_ = NewManagerAPI(nil)
+}
+
+// TestSendMessageWithBlocks_RoundTrip pins the multimodal-io WP03
+// blocks-aware send path: the persisted row carries the polymorphic
+// content shape and ListMessages surfaces the same blocks back.
+func TestSendMessageWithBlocks_RoundTrip(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	smgr := session.NewManager(session.NewMemoryStore())
+	api := NewManagerAPI(smgr)
+
+	s, err := api.Create(ctx, "alpha")
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	blocks := []ContentBlock{
+		{Type: "text", Text: "describe this"},
+		{Type: "image", Source: &llm.MediaSource{Kind: "base64", MediaType: "image/png", Data: "AAAA"}},
+	}
+	stored, err := api.SendMessageWithBlocks(ctx, s.ID, blocks)
+	if err != nil {
+		t.Fatalf("SendMessageWithBlocks: %v", err)
+	}
+	if stored.ID == "" {
+		t.Errorf("stored.ID empty: %+v", stored)
+	}
+	if stored.Role != string(session.RoleUser) {
+		t.Errorf("Role = %q, want %q", stored.Role, session.RoleUser)
+	}
+
+	// ListMessages — the rpc wire shape's Content is the flattened
+	// text projection; the durable session.Message keeps the full
+	// block list. Round-trip via the manager so we can verify both.
+	rawMsgs, err := smgr.ListMessages(ctx, s.ID)
+	if err != nil {
+		t.Fatalf("ListMessages: %v", err)
+	}
+	if len(rawMsgs) != 1 {
+		t.Fatalf("len = %d, want 1", len(rawMsgs))
+	}
+	got := rawMsgs[0]
+	if len(got.ContentBlocks) != 2 {
+		t.Fatalf("ContentBlocks len = %d, want 2", len(got.ContentBlocks))
+	}
+	if got.ContentBlocks[0].Type != "text" || got.ContentBlocks[0].Text != "describe this" {
+		t.Errorf("first block = %+v", got.ContentBlocks[0])
+	}
+	if got.ContentBlocks[1].Type != "image" {
+		t.Errorf("second block = %+v", got.ContentBlocks[1])
+	}
+	if got.ContentBlocks[1].Source == nil || got.ContentBlocks[1].Source.MediaType != "image/png" {
+		t.Errorf("image source lost: %+v", got.ContentBlocks[1].Source)
+	}
+}
+
+// TestSendMessageWithBlocks_RejectsEmpty pins the validation
+// guarantee — an empty / nil contentBlocks slice fails closed before
+// any persistence work.
+func TestSendMessageWithBlocks_RejectsEmpty(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	smgr := session.NewManager(session.NewMemoryStore())
+	api := NewManagerAPI(smgr)
+	s, err := api.Create(ctx, "alpha")
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if _, err := api.SendMessageWithBlocks(ctx, s.ID, nil); !errors.Is(err, ErrEmptyContentBlocks) {
+		t.Errorf("got %v, want ErrEmptyContentBlocks", err)
+	}
+	if _, err := api.SendMessageWithBlocks(ctx, s.ID, []ContentBlock{}); !errors.Is(err, ErrEmptyContentBlocks) {
+		t.Errorf("got %v on empty slice, want ErrEmptyContentBlocks", err)
+	}
+	// Verify nothing was persisted on the failure path.
+	msgs, _ := smgr.ListMessages(ctx, s.ID)
+	if len(msgs) != 0 {
+		t.Errorf("len = %d, want 0 after rejected sends", len(msgs))
+	}
 }

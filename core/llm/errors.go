@@ -31,6 +31,24 @@ func (e *ErrCapabilityUnsupported) Error() string {
 		e.Provider, e.Model, strings.Join(caps, ","))
 }
 
+// UnsupportedModalityError is returned by the buildRequest validation
+// step when a Message carries an "image" or "document" content block
+// targeting a model that does not advertise the corresponding
+// capability (multimodal-io FR-010 / A3). The chat surface renders
+// Friendly() in place of the raw error text.
+type UnsupportedModalityError struct {
+	Modality string // "image" | "document"
+	Model    string
+}
+
+func (e *UnsupportedModalityError) Error() string {
+	return fmt.Sprintf("model %q does not support %s blocks", e.Model, e.Modality)
+}
+
+func (e *UnsupportedModalityError) Friendly() string {
+	return fmt.Sprintf("Model `%s` doesn't support %ss. Switch to a vision-capable model or remove the attachment.", e.Model, e.Modality)
+}
+
 // ErrCredentialResolution wraps a failure to resolve a CredentialReference
 // at preflight or at request time (FR-003 / FR-019).
 type ErrCredentialResolution struct {

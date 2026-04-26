@@ -2,10 +2,23 @@ package attachments
 
 import (
 	"context"
+	"encoding/base64"
+	"errors"
+	"fmt"
 	"time"
 
 	coreatt "github.com/sigil-tech/kaneaz-harness/core/attachments"
 )
+
+// MaxMediaBytes is the per-upload cap enforced by AddMedia. The
+// underlying MediaStore enforces a larger absolute boundary
+// (DefaultMaxBytes = 50 MiB); this user-facing cap matches the
+// frontend WP04 paperclip drop validation (FR-011: 30 MiB hard fail).
+const MaxMediaBytes int64 = 30 * 1024 * 1024
+
+// ErrInvalidMediaBytes is returned when the supplied base64 payload
+// fails to decode.
+var ErrInvalidMediaBytes = errors.New("rpc/attachments: invalid base64 media bytes")
 
 // SessionProjectReader resolves the project membership of a session.
 // ListResolved uses it to splice in the session's project attachments.
@@ -36,7 +49,7 @@ func New(mgr *coreatt.Manager, reader SessionProjectReader) *API {
 }
 
 func attToView(a coreatt.Attachment) Attachment {
-	return Attachment{
+	out := Attachment{
 		ID:            a.ID,
 		ScopeKind:     a.ScopeKind,
 		ScopeID:       a.ScopeID,
@@ -46,6 +59,10 @@ func attToView(a coreatt.Attachment) Attachment {
 		Position:      a.Position,
 		CreatedAt:     a.CreatedAt.UTC().Format(time.RFC3339Nano),
 	}
+	if a.MediaID != nil {
+		out.MediaID = *a.MediaID
+	}
+	return out
 }
 
 func attsToView(in []coreatt.Attachment) []Attachment {
@@ -72,6 +89,25 @@ func (a *API) ListResolved(ctx context.Context, sessionID string) ([]Attachment,
 		return nil, err
 	}
 	return attsToView(rows), nil
+}
+
+// AddMedia implements AttachmentsAPI. The base64 payload is decoded
+// upfront (so an invalid encoding yields an immediate error rather
+// than a corrupted CAS row) and validated against MaxMediaBytes
+// before forwarding to the underlying Manager.AddMedia path.
+func (a *API) AddMedia(ctx context.Context, in AddMediaInput) (Attachment, error) {
+	bytes, err := base64.StdEncoding.DecodeString(in.MediaBytesBase64)
+	if err != nil {
+		return Attachment{}, fmt.Errorf("%w: %v", ErrInvalidMediaBytes, err)
+	}
+	if int64(len(bytes)) > MaxMediaBytes {
+		return Attachment{}, fmt.Errorf("%w: %d bytes exceeds %d", coreatt.ErrOversize, len(bytes), MaxMediaBytes)
+	}
+	stored, err := a.mgr.AddMedia(ctx, in.ScopeKind, in.ScopeID, bytes, in.MediaType, in.OriginalName)
+	if err != nil {
+		return Attachment{}, err
+	}
+	return attToView(stored), nil
 }
 
 // Add implements AttachmentsAPI.

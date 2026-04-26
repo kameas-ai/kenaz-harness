@@ -30,6 +30,7 @@ type modelEntry struct {
 	Streaming       bool   `yaml:"streaming"`
 	ToolCalling     bool   `yaml:"tool_calling"`
 	Vision          bool   `yaml:"vision"`
+	Documents       bool   `yaml:"documents"`
 	JSONMode        bool   `yaml:"json_mode"`
 	PromptCaching   bool   `yaml:"prompt_caching"`
 	Reasoning       bool   `yaml:"reasoning"`
@@ -107,6 +108,7 @@ func (c *Catalog) Describe(provider, model string) llm.CapabilityDescriptor {
 			desc.Supported[llm.CapStreaming] = m.Streaming
 			desc.Supported[llm.CapToolCalling] = m.ToolCalling
 			desc.Supported[llm.CapVision] = m.Vision
+			desc.Supported[llm.CapDocuments] = m.Documents
 			desc.Supported[llm.CapJSONMode] = m.JSONMode
 			desc.Supported[llm.CapPromptCaching] = m.PromptCaching
 			desc.Supported[llm.CapReasoning] = m.Reasoning
@@ -125,6 +127,7 @@ func applyDefaults(desc *llm.CapabilityDescriptor, defaults map[string]bool) {
 		"streaming":       llm.CapStreaming,
 		"tool_calling":    llm.CapToolCalling,
 		"vision":          llm.CapVision,
+		"documents":       llm.CapDocuments,
 		"json_mode":       llm.CapJSONMode,
 		"prompt_caching":  llm.CapPromptCaching,
 		"reasoning":       llm.CapReasoning,

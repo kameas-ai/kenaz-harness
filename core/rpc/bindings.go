@@ -155,6 +155,9 @@ func (b *Bindings) Sessions_ListMessages(id string) ([]sessions.Message, error) 
 func (b *Bindings) Sessions_AppendMessage(id, role, content string) (sessions.Message, error) {
 	return b.api.Sessions().AppendMessage(b.ctx(), id, role, content)
 }
+func (b *Bindings) Sessions_SendMessageWithBlocks(id string, contentBlocks []sessions.ContentBlock) (sessions.Message, error) {
+	return b.api.Sessions().SendMessageWithBlocks(b.ctx(), id, contentBlocks)
+}
 func (b *Bindings) Sessions_SaveDraft(id, draft string) error {
 	return b.api.Sessions().SaveDraft(b.ctx(), id, draft)
 }
@@ -444,6 +447,9 @@ func (b *Bindings) Attachments_ListResolved(sessionID string) ([]attachmentsview
 }
 func (b *Bindings) Attachments_Add(in attachmentsview.AddInput) (attachmentsview.Attachment, error) {
 	return b.api.Attachments().Add(b.ctx(), in)
+}
+func (b *Bindings) Attachments_AddMedia(in attachmentsview.AddMediaInput) (attachmentsview.Attachment, error) {
+	return b.api.Attachments().AddMedia(b.ctx(), in)
 }
 func (b *Bindings) Attachments_Remove(id string) error {
 	return b.api.Attachments().Remove(b.ctx(), id)

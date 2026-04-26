@@ -2,8 +2,14 @@ package attachments_test
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
 	"errors"
+	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	coreatt "github.com/sigil-tech/kaneaz-harness/core/attachments"
 	attview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/attachments"
@@ -227,4 +233,191 @@ func TestAPI_NilManagerPanics(t *testing.T) {
 		}
 	}()
 	_ = attview.New(nil, nil)
+}
+
+// fakeMediaStore is a minimal in-memory MediaStore satisfying the
+// coreatt.MediaStore contract. Only the methods Manager.AddMedia and
+// Manager.Remove invoke are exercised; the rest return safe defaults.
+type fakeMediaStore struct {
+	mu    sync.Mutex
+	rows  map[string]coreatt.MediaArtifact
+	bytes map[string][]byte
+}
+
+func newFakeMediaStore() *fakeMediaStore {
+	return &fakeMediaStore{
+		rows:  map[string]coreatt.MediaArtifact{},
+		bytes: map[string][]byte{},
+	}
+}
+
+func (m *fakeMediaStore) Put(_ context.Context, body []byte, mediaType, originalName string) (coreatt.MediaArtifact, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	hash := sha256.Sum256(body)
+	hashHex := hex.EncodeToString(hash[:])
+	id := hashHex[:26]
+	art := coreatt.MediaArtifact{
+		ID:           id,
+		ContentHash:  hashHex,
+		MediaType:    mediaType,
+		ByteSize:     int64(len(body)),
+		OriginalName: originalName,
+		CreatedAt:    time.Now().UTC(),
+	}
+	m.rows[id] = art
+	m.bytes[hashHex] = append([]byte(nil), body...)
+	return art, nil
+}
+
+func (m *fakeMediaStore) Get(_ context.Context, id string) (coreatt.MediaArtifact, []byte, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	art, ok := m.rows[id]
+	if !ok {
+		return coreatt.MediaArtifact{}, nil, coreatt.ErrMediaNotFound
+	}
+	return art, m.bytes[art.ContentHash], nil
+}
+
+func (m *fakeMediaStore) GetByHash(_ context.Context, contentHash string) (coreatt.MediaArtifact, []byte, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, art := range m.rows {
+		if art.ContentHash == contentHash {
+			return art, m.bytes[contentHash], nil
+		}
+	}
+	return coreatt.MediaArtifact{}, nil, coreatt.ErrMediaNotFound
+}
+
+func (m *fakeMediaStore) Delete(_ context.Context, id string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.rows, id)
+	return nil
+}
+
+func (m *fakeMediaStore) List(_ context.Context, _ coreatt.MediaFilter) ([]coreatt.MediaArtifact, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]coreatt.MediaArtifact, 0, len(m.rows))
+	for _, a := range m.rows {
+		out = append(out, a)
+	}
+	return out, nil
+}
+
+func (m *fakeMediaStore) RefcountFor(_ context.Context, _ string) (int, error) {
+	return 0, nil
+}
+
+func (m *fakeMediaStore) PruneOrphans(_ context.Context) (int, error) {
+	return 0, nil
+}
+
+func (m *fakeMediaStore) RegisterRefcountSource(_ coreatt.RefcountSource) {}
+
+// TestAPI_AddMedia_RoundTrip pins the multimodal-io WP03 base64
+// upload path: a valid base64 payload decodes, the manager mints a
+// media-backed Attachment, and the rpc-wire shape carries MediaID.
+func TestAPI_AddMedia_RoundTrip(t *testing.T) {
+	t.Parallel()
+	media := newFakeMediaStore()
+	mgr := coreatt.NewManager(coreatt.NewMemoryStore(), coreatt.WithMediaStore(media))
+	api := attview.New(mgr, nil)
+
+	body := []byte("png-bytes")
+	in := attview.AddMediaInput{
+		ScopeKind:        coreatt.ScopeKindSession,
+		ScopeID:          "s1",
+		MediaBytesBase64: base64.StdEncoding.EncodeToString(body),
+		MediaType:        "image/png",
+		OriginalName:     "shot.png",
+	}
+	att, err := api.AddMedia(context.Background(), in)
+	if err != nil {
+		t.Fatalf("AddMedia: %v", err)
+	}
+	if att.MediaID == "" {
+		t.Errorf("MediaID empty on returned wire shape: %+v", att)
+	}
+	if !strings.HasPrefix(att.ContentSource, "media:") {
+		t.Errorf("ContentSource = %q, want prefix media:", att.ContentSource)
+	}
+	if att.Kind != coreatt.KindUser {
+		t.Errorf("Kind = %q, want %q", att.Kind, coreatt.KindUser)
+	}
+}
+
+// TestAPI_AddMedia_OversizeReject ensures payloads beyond
+// MaxMediaBytes fail closed before the manager is touched.
+func TestAPI_AddMedia_OversizeReject(t *testing.T) {
+	t.Parallel()
+	media := newFakeMediaStore()
+	mgr := coreatt.NewManager(coreatt.NewMemoryStore(), coreatt.WithMediaStore(media))
+	api := attview.New(mgr, nil)
+
+	tooBig := make([]byte, attview.MaxMediaBytes+1)
+	in := attview.AddMediaInput{
+		ScopeKind:        coreatt.ScopeKindSession,
+		ScopeID:          "s1",
+		MediaBytesBase64: base64.StdEncoding.EncodeToString(tooBig),
+		MediaType:        "image/png",
+	}
+	_, err := api.AddMedia(context.Background(), in)
+	if err == nil {
+		t.Fatal("expected oversize rejection")
+	}
+	if !errors.Is(err, coreatt.ErrOversize) {
+		t.Errorf("got %v, want ErrOversize", err)
+	}
+	if len(media.rows) != 0 {
+		t.Errorf("media store touched on oversize reject: %d rows", len(media.rows))
+	}
+}
+
+// TestAPI_AddMedia_InvalidBase64Reject ensures malformed base64
+// payloads fail closed.
+func TestAPI_AddMedia_InvalidBase64Reject(t *testing.T) {
+	t.Parallel()
+	media := newFakeMediaStore()
+	mgr := coreatt.NewManager(coreatt.NewMemoryStore(), coreatt.WithMediaStore(media))
+	api := attview.New(mgr, nil)
+
+	in := attview.AddMediaInput{
+		ScopeKind:        coreatt.ScopeKindSession,
+		ScopeID:          "s1",
+		MediaBytesBase64: "!!!not-base64!!!",
+		MediaType:        "image/png",
+	}
+	_, err := api.AddMedia(context.Background(), in)
+	if err == nil {
+		t.Fatal("expected invalid-base64 rejection")
+	}
+	if !errors.Is(err, attview.ErrInvalidMediaBytes) {
+		t.Errorf("got %v, want ErrInvalidMediaBytes", err)
+	}
+	if len(media.rows) != 0 {
+		t.Errorf("media store touched on bad base64: %d rows", len(media.rows))
+	}
+}
+
+// TestAPI_AddMedia_NoMediaStore verifies a manager built without
+// WithMediaStore surfaces ErrMediaStoreUnavailable through AddMedia.
+func TestAPI_AddMedia_NoMediaStore(t *testing.T) {
+	t.Parallel()
+	mgr := coreatt.NewManager(coreatt.NewMemoryStore())
+	api := attview.New(mgr, nil)
+
+	in := attview.AddMediaInput{
+		ScopeKind:        coreatt.ScopeKindSession,
+		ScopeID:          "s1",
+		MediaBytesBase64: base64.StdEncoding.EncodeToString([]byte("x")),
+		MediaType:        "image/png",
+	}
+	_, err := api.AddMedia(context.Background(), in)
+	if !errors.Is(err, coreatt.ErrMediaStoreUnavailable) {
+		t.Errorf("got %v, want ErrMediaStoreUnavailable", err)
+	}
 }
