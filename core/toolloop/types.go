@@ -8,13 +8,17 @@ import (
 )
 
 // Resolution is the result of mapping a ToolUse.Name to a concrete
-// (server, tool) pair on the configured MCP pool. WP01 keeps this
-// minimal — later WPs (permissions, hooks) extend Resolution with
-// policy + redaction metadata.
+// (server, tool) pair plus the per-call permission verdict. WP02 ships
+// the permission gate; later WPs (hooks, redaction) extend Resolution
+// with mutated args / redaction metadata via separate fields.
+//
+// Reason is optional human text surfaced in the synthetic deny tool
+// result so the model and the audit log know *why* a call was blocked.
 type Resolution struct {
 	Server string
 	Tool   string
-	Args   json.RawMessage
+	Policy ToolPolicy
+	Reason string
 }
 
 // SessionHistoryRW is the narrowed slice of session.Manager the loop

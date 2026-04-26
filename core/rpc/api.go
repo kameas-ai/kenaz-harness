@@ -22,6 +22,7 @@ import (
 	"github.com/sigil-tech/kaneaz-harness/core/llm/credref"
 	"github.com/sigil-tech/kaneaz-harness/core/llm/personal"
 	llmregistry "github.com/sigil-tech/kaneaz-harness/core/llm/registry"
+	"github.com/sigil-tech/kaneaz-harness/core/logging"
 	coremcp "github.com/sigil-tech/kaneaz-harness/core/mcp"
 	"github.com/sigil-tech/kaneaz-harness/core/mcp/fixture"
 	corememory "github.com/sigil-tech/kaneaz-harness/core/memory"
@@ -289,15 +290,33 @@ func newLLMStack(c *core.Core, broker *StreamBroker, store personal.Store, hooks
 
 	credResolver := credref.New(secretsBackend)
 	historyAdapter := newSessionHistoryReader(c)
+	// WP02 — wire the global static resolver against
+	// <DataDir>/mcp_servers.json. A missing file soft-fails to
+	// auto_allow (the file is opt-in); a malformed file logs a
+	// warning and the resolver is left nil so the loop's built-in
+	// auto_allow default applies. Per-session overrides (C2) are
+	// composed on top of this when the session manager grows the
+	// MCPOverrides reader.
+	var perms toolloop.PermissionResolver
+	if c != nil && c.DataDir() != "" {
+		staticPerms, permErr := toolloop.NewStaticResolverFromDataDir(c.DataDir())
+		if permErr != nil {
+			logging.L().Warn("toolloop.permissions.static_load_failed",
+				"data_dir", c.DataDir(), "err", permErr.Error())
+		} else {
+			perms = staticPerms
+		}
+	}
 	// Construct the toolloop with the registry and a placeholder
 	// in-memory fixture pool. Production wiring (real MCP server pool)
 	// arrives with mission C1; until then the fixture is empty so a
 	// model that asks for a tool gets a synthetic "not registered"
 	// result and the conversation continues.
 	loop, loopErr := toolloop.New(toolloop.Config{
-		Registry: reg,
-		Pool:     &mcpPoolAdapter{inner: fixture.New()},
-		History:  historyAdapter,
+		Registry:    reg,
+		Pool:        &mcpPoolAdapter{inner: fixture.New()},
+		History:     historyAdapter,
+		Permissions: perms,
 	})
 	if loopErr != nil {
 		// New only errors on missing registry/pool — both are

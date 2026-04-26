@@ -407,6 +407,246 @@ func TestLoop_MaxIterGuardsRunaway(t *testing.T) {
 	}
 }
 
+// TestLoop_US3_PermissionDenyRoundTrip exercises the WP02 deny path
+// end-to-end: model emits a tool_use for a tool the resolver denies,
+// the loop never dispatches to the pool, the synthetic "Tool blocked"
+// result is threaded into the augmented history, and the next pass
+// (model) sees that result and emits a final assistant turn. This is
+// the spec's US3.
+func TestLoop_US3_PermissionDenyRoundTrip(t *testing.T) {
+	// Pool advertises filesystem.delete but the resolver blocks it,
+	// so the handler must never run.
+	pool := newFakePool()
+	dispatched := 0
+	pool.register("filesystem", "delete", func(_ context.Context, _ json.RawMessage) (json.RawMessage, error) {
+		dispatched++
+		return json.RawMessage(`"ok"`), nil
+	})
+
+	// Static resolver denies filesystem.delete with a custom reason.
+	resolver, err := NewStaticResolver([]permRule{
+		{Server: "filesystem", Tool: "delete", Policy: PolicyDeny, Reason: "delete is policy-blocked for this session"},
+	})
+	if err != nil {
+		t.Fatalf("NewStaticResolver: %v", err)
+	}
+
+	// Registry: the second invocation (after the synthetic deny is
+	// threaded back) returns end_turn with a final assistant text. The
+	// model "recovers" — it acknowledges the block.
+	reg := &fakeRegistry{
+		streams: []corellm.Stream{
+			&scriptedStream{
+				final: corellm.Response{
+					Content:      []corellm.ContentPart{{Type: "text", Text: "Sorry, I can't delete that — try another approach."}},
+					FinishReason: "end_turn",
+				},
+			},
+		},
+	}
+
+	hist := &recordingHistory{}
+	loop, err := New(Config{
+		Registry:    reg,
+		Pool:        pool,
+		History:     hist,
+		Permissions: resolver,
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	initial := &corellm.Response{
+		FinishReason: "tool_use",
+		ToolCalls: []corellm.ToolUse{
+			{ID: "tool_1", Name: "delete", Input: json.RawMessage(`{"path":"/etc/passwd"}`)},
+		},
+	}
+	originalReq := corellm.GenerationRequest{
+		ProfileID: "prof",
+		Messages: []corellm.Message{
+			{Role: corellm.RoleUser, Content: []corellm.ContentPart{{Type: "text", Text: "delete /etc/passwd"}}},
+		},
+	}
+
+	if err := loop.Run(context.Background(), "sess-1", "sub-1", initial, originalReq); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	// The tool handler must NEVER run on a deny.
+	if dispatched != 0 {
+		t.Fatalf("dispatch count = %d, want 0 (deny should skip pool.Call)", dispatched)
+	}
+	if len(pool.calls) != 0 {
+		t.Fatalf("pool.calls = %d, want 0 — deny should skip pool entirely", len(pool.calls))
+	}
+
+	// Registry was re-invoked exactly once with the synthetic blocked
+	// result threaded as a tool message — the conversation continues.
+	if len(reg.requests) != 1 {
+		t.Fatalf("expected 1 registry call, got %d", len(reg.requests))
+	}
+	gotMsgs := reg.requests[0].Messages
+	if len(gotMsgs) != 3 {
+		t.Fatalf("augmented messages = %d, want 3 (user, assistant tool_use, tool result)", len(gotMsgs))
+	}
+	last := gotMsgs[len(gotMsgs)-1]
+	if last.Role != corellm.RoleTool {
+		t.Fatalf("last msg role = %q", last.Role)
+	}
+	// The tool result envelope must surface the block reason and the
+	// is_error flag so the model knows recovery is needed.
+	var payload map[string]any
+	if err := json.Unmarshal(last.Content[0].ToolData, &payload); err != nil {
+		t.Fatalf("tool_data unmarshal: %v", err)
+	}
+	if payload["is_error"] != true {
+		t.Fatalf("is_error = %v, want true", payload["is_error"])
+	}
+	output, _ := payload["output"].(string)
+	if output == "" {
+		t.Fatalf("output empty; expected the block reason")
+	}
+	if !contains(output, "delete is policy-blocked for this session") {
+		t.Fatalf("output = %q, missing reason text", output)
+	}
+	if !contains(output, "Tool blocked:") {
+		t.Fatalf("output = %q, missing 'Tool blocked:' prefix", output)
+	}
+
+	// Session history: assistant tool_use turn, tool result, final
+	// assistant text — three entries (user turn was already persisted
+	// before the loop ran, by the rpc pump).
+	entries := hist.snapshot()
+	if len(entries) != 3 {
+		t.Fatalf("history entries = %d, want 3: %+v", len(entries), entries)
+	}
+	if entries[2].content != "Sorry, I can't delete that — try another approach." {
+		t.Fatalf("final assistant content = %q", entries[2].content)
+	}
+}
+
+// TestLoop_PermissionDeny_DefaultReason verifies the synthetic result
+// uses a sensible default when the resolver returns Policy=deny but no
+// custom Reason text.
+func TestLoop_PermissionDeny_DefaultReason(t *testing.T) {
+	pool := newFakePool()
+	pool.register("filesystem", "delete", func(_ context.Context, _ json.RawMessage) (json.RawMessage, error) {
+		return json.RawMessage(`"unreachable"`), nil
+	})
+	resolver, _ := NewStaticResolver([]permRule{
+		{Server: "filesystem", Tool: "delete", Policy: PolicyDeny}, // no reason
+	})
+	reg := &fakeRegistry{
+		streams: []corellm.Stream{
+			&scriptedStream{final: corellm.Response{
+				Content:      []corellm.ContentPart{{Type: "text", Text: "ok"}},
+				FinishReason: "end_turn",
+			}},
+		},
+	}
+	loop, _ := New(Config{Registry: reg, Pool: pool, Permissions: resolver})
+	initial := &corellm.Response{
+		FinishReason: "tool_use",
+		ToolCalls:    []corellm.ToolUse{{ID: "1", Name: "delete", Input: json.RawMessage(`{}`)}},
+	}
+	if err := loop.Run(context.Background(), "s", "p", initial, corellm.GenerationRequest{}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(pool.calls) != 0 {
+		t.Fatalf("pool calls = %d, want 0", len(pool.calls))
+	}
+	last := reg.requests[0].Messages[len(reg.requests[0].Messages)-1]
+	var payload map[string]any
+	_ = json.Unmarshal(last.Content[0].ToolData, &payload)
+	output, _ := payload["output"].(string)
+	if !contains(output, "Tool blocked:") {
+		t.Fatalf("output = %q, want default block prefix", output)
+	}
+}
+
+// TestLoop_PermissionConfirmEach_TreatedAsAutoAllow verifies that
+// WP02's interim handling of confirm_each lets the call dispatch (the
+// modal flow lands in WP05). The resolver still surfaces the verdict
+// for telemetry, but the gate doesn't block.
+func TestLoop_PermissionConfirmEach_TreatedAsAutoAllow(t *testing.T) {
+	pool := newFakePool()
+	dispatched := 0
+	pool.register("git", "push", func(_ context.Context, _ json.RawMessage) (json.RawMessage, error) {
+		dispatched++
+		return json.RawMessage(`"pushed"`), nil
+	})
+	resolver, _ := NewStaticResolver([]permRule{
+		{Server: "git", Tool: "push", Policy: PolicyConfirmEach, Reason: "needs review"},
+	})
+	reg := &fakeRegistry{
+		streams: []corellm.Stream{
+			&scriptedStream{final: corellm.Response{
+				Content:      []corellm.ContentPart{{Type: "text", Text: "done"}},
+				FinishReason: "end_turn",
+			}},
+		},
+	}
+	loop, _ := New(Config{Registry: reg, Pool: pool, Permissions: resolver})
+	initial := &corellm.Response{
+		FinishReason: "tool_use",
+		ToolCalls:    []corellm.ToolUse{{ID: "1", Name: "push", Input: json.RawMessage(`{}`)}},
+	}
+	if err := loop.Run(context.Background(), "s", "p", initial, corellm.GenerationRequest{}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if dispatched != 1 {
+		t.Fatalf("dispatch count = %d, want 1 (confirm_each is auto_allow in WP02)", dispatched)
+	}
+}
+
+// TestLoop_PermissionResolverErrorSurfaces verifies that a resolver
+// internal error is surfaced as a tool failure (so the model can
+// recover) rather than aborting the loop.
+func TestLoop_PermissionResolverErrorSurfaces(t *testing.T) {
+	pool := newFakePool()
+	pool.register("svc", "tool", func(_ context.Context, _ json.RawMessage) (json.RawMessage, error) {
+		return json.RawMessage(`"ok"`), nil
+	})
+	failResolver := externalResolverFunc(func(_ context.Context, _, _, _ string) (Resolution, error) {
+		return Resolution{}, errors.New("perm-store down")
+	})
+	reg := &fakeRegistry{
+		streams: []corellm.Stream{
+			&scriptedStream{final: corellm.Response{
+				Content:      []corellm.ContentPart{{Type: "text", Text: "sorry"}},
+				FinishReason: "end_turn",
+			}},
+		},
+	}
+	loop, _ := New(Config{Registry: reg, Pool: pool, Permissions: failResolver})
+	initial := &corellm.Response{
+		FinishReason: "tool_use",
+		ToolCalls:    []corellm.ToolUse{{ID: "1", Name: "tool", Input: json.RawMessage(`{}`)}},
+	}
+	if err := loop.Run(context.Background(), "s", "p", initial, corellm.GenerationRequest{}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(pool.calls) != 0 {
+		t.Fatalf("pool calls = %d, want 0 — resolver error should skip dispatch", len(pool.calls))
+	}
+	last := reg.requests[0].Messages[len(reg.requests[0].Messages)-1]
+	var payload map[string]any
+	_ = json.Unmarshal(last.Content[0].ToolData, &payload)
+	if payload["is_error"] != true {
+		t.Fatalf("is_error = %v, want true", payload["is_error"])
+	}
+}
+
+func contains(s, substr string) bool {
+	for i := 0; i+len(substr) <= len(s); i++ {
+		if s[i:i+len(substr)] == substr {
+			return true
+		}
+	}
+	return false
+}
+
 func TestLoop_ContextCancellation(t *testing.T) {
 	pool := newFakePool()
 	pool.register("s", "t", func(_ context.Context, _ json.RawMessage) (json.RawMessage, error) {
