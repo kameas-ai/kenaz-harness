@@ -27,6 +27,9 @@ import type {
   MemoryChunk,
   MemoryListFilter,
   MemoryScopeKind,
+  RecipeListing,
+  RecipeState,
+  RecipeStatus,
 } from './types';
 import type { HarnessClient } from './harnessClient';
 
@@ -482,6 +485,190 @@ export function useMemory(): UseMemoryResult {
     remember,
     promoteScope,
     forget,
+  };
+}
+
+// ── MCP recipes (Tools panel) ─────────────────────────────────────────
+
+const RECIPE_POLL_MS = 1000;
+const TERMINAL_STATES: readonly RecipeState[] = ['stopped', 'running', 'failed'];
+
+function isTerminal(state: RecipeState): boolean {
+  return TERMINAL_STATES.includes(state);
+}
+
+export interface UseToolsRecipesResult {
+  recipes: Ref<readonly RecipeListing[]>;
+  loading: Ref<boolean>;
+  error: Ref<string | null>;
+  /** Map of recipe id → toggle-on timestamp. Drives the warming UX. */
+  startedAt: Ref<Readonly<Record<string, number>>>;
+  refresh(): Promise<void>;
+  install(id: string, env: Record<string, string>): Promise<RecipeStatus>;
+  uninstall(id: string): Promise<void>;
+  forgetKey(id: string, envName: string): Promise<void>;
+  statusFor(id: string): RecipeStatus | undefined;
+}
+
+/**
+ * useToolsRecipes — reactive list of shipped MCP recipes + lifecycle
+ * actions for the Tools panel.
+ *
+ * Polling lifecycle:
+ *   - When at least one visible row is in a non-terminal state
+ *     (`starting | restarting`), a 1 Hz poll fans out per-row
+ *     `recipeStatus(id)` calls and merges them into the list.
+ *   - When all rows are terminal (`stopped | running | failed`), the
+ *     poll timer is cleared so the harness sits idle.
+ *   - The lifecycle is restarted whenever `install` flips a row into
+ *     a non-terminal state (the optimistic update sets `state` to
+ *     `starting` immediately).
+ *   - `onBeforeUnmount` clears the timer unconditionally.
+ */
+export function useToolsRecipes(): UseToolsRecipesResult {
+  const client = useHarnessClient();
+  const recipes = ref<readonly RecipeListing[]>([]);
+  const loading = ref(false);
+  const error = ref<string | null>(null);
+  const startedAt = ref<Record<string, number>>({});
+
+  let timer: ReturnType<typeof setInterval> | null = null;
+  let mounted = true;
+
+  function hasNonTerminal(list: readonly RecipeListing[]): boolean {
+    return list.some((r) => !isTerminal(r.status.state));
+  }
+
+  function ensurePolling() {
+    if (timer || !mounted) return;
+    if (!hasNonTerminal(recipes.value)) return;
+    timer = setInterval(() => {
+      void pollOnce();
+    }, RECIPE_POLL_MS);
+  }
+
+  function stopPolling() {
+    if (timer) {
+      clearInterval(timer);
+      timer = null;
+    }
+  }
+
+  async function pollOnce() {
+    const targets = recipes.value
+      .filter((r) => !isTerminal(r.status.state))
+      .map((r) => r.recipe.id);
+    if (targets.length === 0) {
+      stopPolling();
+      return;
+    }
+    const updates = await Promise.all(
+      targets.map(async (id) => {
+        try {
+          const s = await client.tools.recipes.status(id);
+          return [id, s] as const;
+        } catch {
+          return [id, null] as const;
+        }
+      }),
+    );
+    const byId = new Map<string, RecipeStatus>();
+    for (const [id, status] of updates) {
+      if (status) byId.set(id, status);
+    }
+    if (byId.size === 0) return;
+    const next = recipes.value.map((row) => {
+      const u = byId.get(row.recipe.id);
+      if (!u) return row;
+      // Clear startedAt once a row reaches a terminal state so the
+      // warming indicator never lingers on a settled row.
+      if (isTerminal(u.state) && startedAt.value[row.recipe.id]) {
+        const cleared = { ...startedAt.value };
+        delete cleared[row.recipe.id];
+        startedAt.value = cleared;
+      }
+      return { ...row, status: u };
+    });
+    recipes.value = next;
+    if (!hasNonTerminal(next)) {
+      stopPolling();
+    }
+  }
+
+  async function refresh() {
+    loading.value = true;
+    error.value = null;
+    try {
+      recipes.value = await client.tools.recipes.list();
+    } catch (e) {
+      error.value = e instanceof Error ? e.message : String(e);
+      recipes.value = [];
+    } finally {
+      loading.value = false;
+    }
+    ensurePolling();
+  }
+
+  function mergeStatus(id: string, status: RecipeStatus): void {
+    const next = recipes.value.map((row) =>
+      row.recipe.id === id
+        ? { ...row, status, enabled: status.enabled, keysPresent: status.keysPresent }
+        : row,
+    );
+    recipes.value = next;
+  }
+
+  async function install(id: string, env: Record<string, string>) {
+    startedAt.value = { ...startedAt.value, [id]: Date.now() };
+    try {
+      const status = await client.tools.recipes.install(id, env);
+      mergeStatus(id, status);
+      ensurePolling();
+      return status;
+    } catch (e) {
+      const cleared = { ...startedAt.value };
+      delete cleared[id];
+      startedAt.value = cleared;
+      throw e;
+    }
+  }
+
+  async function uninstall(id: string) {
+    await client.tools.recipes.uninstall(id);
+    const cleared = { ...startedAt.value };
+    delete cleared[id];
+    startedAt.value = cleared;
+    await refresh();
+  }
+
+  async function forgetKey(id: string, envName: string) {
+    await client.tools.recipes.forgetKey(id, envName);
+    await refresh();
+  }
+
+  function statusFor(id: string): RecipeStatus | undefined {
+    return recipes.value.find((r) => r.recipe.id === id)?.status;
+  }
+
+  onMounted(() => {
+    void refresh();
+  });
+
+  onBeforeUnmount(() => {
+    mounted = false;
+    stopPolling();
+  });
+
+  return {
+    recipes,
+    loading,
+    error,
+    startedAt,
+    refresh,
+    install,
+    uninstall,
+    forgetKey,
+    statusFor,
   };
 }
 

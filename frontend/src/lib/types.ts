@@ -525,3 +525,114 @@ export interface BuiltinDescriptor {
   events: HookEvent[];
   defaultConfig?: Record<string, unknown>;
 }
+
+// ── MCP recipes (shipped catalog) ─────────────────────────────────────
+//
+// Mirrors the Wails wire shape from `core/rpc/views/tools/api.go`:
+//
+//   - `RecipeListing` is camelCase (the Go struct uses camelCase JSON
+//     tags).
+//   - The embedded `recipe` and `status` carry through their Go-side
+//     JSON tags verbatim, which are snake_case (e.g. `display_name`,
+//     `env_keys`, `last_error`). The TS shapes here normalise that to
+//     camelCase via a thin adapter in harnessClient.ts; consumers of
+//     these types see camelCase throughout.
+
+/**
+ * RecipeCategory groups recipes in the Tools panel. Drives the icon
+ * mapping in `KaneazToolsPanel.vue` (search→Search, filesystem→Folder,
+ * memory→Brain, fetch→Globe, default→Wrench).
+ */
+export type RecipeCategory =
+  | 'search'
+  | 'filesystem'
+  | 'memory'
+  | 'fetch'
+  | 'other';
+
+/**
+ * EnvKey — one credential-bearing env var the recipe's server reads.
+ * Render order in the install modal follows the `Recipe.envKeys`
+ * slice order.
+ */
+export interface EnvKey {
+  /** Exact env var name the server looks up (e.g. "BRAVE_API_KEY"). */
+  name: string;
+  /** Modal label. */
+  display: string;
+  /** Provider's API-key issuance page (optional). */
+  docsUrl?: string;
+  /** Required keys block install when missing; the modal asterisks them. */
+  required: boolean;
+}
+
+/**
+ * RecipeCapabilities is the recipe-author's declaration of which MCP
+ * capabilities the server advertises; the modal copy reads this and
+ * the negotiated capability set lives in `RecipeStatus.serverName/Version`.
+ */
+export interface RecipeCapabilities {
+  tools: boolean;
+  resources: boolean;
+  prompts: boolean;
+  sampling: boolean;
+}
+
+/**
+ * Recipe — one shipped catalog entry. Mirrors `core/mcp/recipes.Recipe`
+ * (the catalog metadata, no live state).
+ */
+export interface Recipe {
+  id: string;
+  displayName: string;
+  description: string;
+  category: RecipeCategory;
+  envKeys: EnvKey[];
+  capabilities: RecipeCapabilities;
+  docsUrl?: string;
+}
+
+/**
+ * RecipeState is the lifecycle state of a recipe's stdio child process.
+ * Terminal states are `stopped`, `running`, and `failed`; `starting` and
+ * `restarting` are transient and the polling loop watches them.
+ */
+export type RecipeState =
+  | 'stopped'
+  | 'starting'
+  | 'running'
+  | 'restarting'
+  | 'failed';
+
+/**
+ * RecipeStatus — live snapshot of one recipe's child process. Mirrors
+ * `core/mcp/stdio.RecipeStatus`.
+ */
+export interface RecipeStatus {
+  id: string;
+  enabled: boolean;
+  state: RecipeState;
+  lastError?: string;
+  restartAttempts: number;
+  keysPresent: boolean;
+  pid: number;
+  protocolVersion?: string;
+  serverName?: string;
+  serverVersion?: string;
+  toolCount: number;
+  resourceCount: number;
+  promptCount: number;
+  stderrTail?: string;
+}
+
+/**
+ * RecipeListing — one row returned from `Tools_ListRecipes`. Combines
+ * the catalog metadata with the harness-side overlay (enabled flag,
+ * live status snapshot, keys-resolvable hint).
+ */
+export interface RecipeListing {
+  recipe: Recipe;
+  enabled: boolean;
+  status: RecipeStatus;
+  keysPresent: boolean;
+}

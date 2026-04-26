@@ -46,6 +46,12 @@ import type {
   Hook,
   BuiltinDescriptor,
   ConfirmDecision,
+  Recipe,
+  RecipeCategory,
+  RecipeListing,
+  RecipeState,
+  RecipeStatus,
+  EnvKey,
 } from './types';
 
 /**
@@ -189,6 +195,153 @@ interface WailsBindingsLike {
   Hooks_AvailableBuiltins(): Promise<BuiltinDescriptor[]>;
   Hooks_InstallStarterMemory(): Promise<void>;
   Hooks_RemoveStarterMemory(): Promise<void>;
+
+  Tools_ListRecipes(): Promise<WireRecipeListing[]>;
+  Tools_InstallRecipe(
+    id: string,
+    env: Record<string, string>,
+  ): Promise<WireRecipeStatus>;
+  Tools_UninstallRecipe(id: string): Promise<void>;
+  Tools_ForgetRecipeKey(id: string, envName: string): Promise<void>;
+  Tools_RecipeStatus(id: string): Promise<WireRecipeStatus>;
+}
+
+// ── Wails wire shapes for recipes (snake_case-tagged Go structs) ───────
+//
+// The Go-side `core/mcp/recipes.Recipe` and `core/mcp/stdio.RecipeStatus`
+// carry snake_case JSON tags that Wails preserves verbatim, while the
+// view-layer `RecipeListing` wrapper is camelCase. We translate to the
+// camelCase TS surface in `adaptRecipeListing` / `adaptRecipeStatus`.
+
+interface WireEnvKey {
+  name: string;
+  display: string;
+  docs_url?: string;
+  required: boolean;
+}
+
+interface WireCapabilities {
+  tools: boolean;
+  resources: boolean;
+  prompts: boolean;
+  sampling: boolean;
+}
+
+interface WireRecipe {
+  id: string;
+  display_name: string;
+  description: string;
+  category: string;
+  command?: string[];
+  env_keys?: WireEnvKey[];
+  capabilities: WireCapabilities;
+  docs_url?: string;
+  init_timeout_ms?: number;
+  ping_period_ms?: number;
+  sampling_policy?: { allowed: boolean; default: boolean };
+}
+
+interface WireRecipeStatus {
+  id: string;
+  enabled: boolean;
+  state: string;
+  last_error?: string;
+  restart_attempts: number;
+  last_restart_at?: string;
+  keys_present: boolean;
+  pid: number;
+  protocol_version?: string;
+  server_name?: string;
+  server_version?: string;
+  tool_count: number;
+  resource_count: number;
+  prompt_count: number;
+  stderr_tail?: string;
+  updated_at?: string;
+}
+
+interface WireRecipeListing {
+  recipe: WireRecipe;
+  enabled: boolean;
+  status: WireRecipeStatus;
+  keysPresent: boolean;
+}
+
+const KNOWN_CATEGORIES: readonly RecipeCategory[] = [
+  'search',
+  'filesystem',
+  'memory',
+  'fetch',
+  'other',
+];
+
+function adaptCategory(raw: string): RecipeCategory {
+  return (KNOWN_CATEGORIES as readonly string[]).includes(raw)
+    ? (raw as RecipeCategory)
+    : 'other';
+}
+
+const KNOWN_STATES: readonly RecipeState[] = [
+  'stopped',
+  'starting',
+  'running',
+  'restarting',
+  'failed',
+];
+
+function adaptState(raw: string): RecipeState {
+  return (KNOWN_STATES as readonly string[]).includes(raw)
+    ? (raw as RecipeState)
+    : 'stopped';
+}
+
+function adaptEnvKey(w: WireEnvKey): EnvKey {
+  return {
+    name: w.name,
+    display: w.display,
+    docsUrl: w.docs_url || undefined,
+    required: w.required,
+  };
+}
+
+function adaptRecipe(w: WireRecipe): Recipe {
+  return {
+    id: w.id,
+    displayName: w.display_name,
+    description: w.description,
+    category: adaptCategory(w.category),
+    envKeys: (w.env_keys ?? []).map(adaptEnvKey),
+    capabilities: w.capabilities,
+    docsUrl: w.docs_url || undefined,
+  };
+}
+
+function adaptRecipeStatus(w: WireRecipeStatus): RecipeStatus {
+  return {
+    id: w.id,
+    enabled: w.enabled,
+    state: adaptState(w.state),
+    lastError: w.last_error || undefined,
+    restartAttempts: w.restart_attempts,
+    keysPresent: w.keys_present,
+    pid: w.pid,
+    protocolVersion: w.protocol_version || undefined,
+    serverName: w.server_name || undefined,
+    serverVersion: w.server_version || undefined,
+    toolCount: w.tool_count,
+    resourceCount: w.resource_count,
+    promptCount: w.prompt_count,
+    stderrTail: w.stderr_tail || undefined,
+  };
+}
+
+function adaptRecipeListing(w: WireRecipeListing): RecipeListing {
+  return {
+    recipe: adaptRecipe(w.recipe),
+    enabled: w.enabled,
+    status: adaptRecipeStatus(w.status),
+    keysPresent: w.keysPresent,
+  };
 }
 
 declare global {
@@ -502,6 +655,35 @@ export interface HooksClient {
   removeStarterMemory(): Promise<void>;
 }
 
+/**
+ * ToolsRecipesClient — view-scoped surface for the shipped MCP recipes
+ * catalog. Drives the Tools panel toggles + key-prompt modal.
+ *
+ *   - `list()` returns every shipped recipe overlaid with its
+ *     enabled-state, live status snapshot, and keys-resolvable hint.
+ *   - `install(id, env)` enables the recipe, stores any provided keys
+ *     in the OS keychain, and spawns the server. The plaintext env
+ *     map crosses the Wails boundary once and is zeroed on the Go
+ *     side; the frontend caller should not retain it.
+ *   - `uninstall(id)` stops the running server (SIGTERM grace) and
+ *     removes the recipe from the persisted enabled list. Keychain
+ *     entries are NOT deleted — explicit deletion goes through
+ *     `forgetKey`.
+ *   - `forgetKey(id, envName)` removes one keychain entry.
+ *   - `status(id)` returns the live status snapshot for one recipe.
+ */
+export interface ToolsRecipesClient {
+  list(): Promise<RecipeListing[]>;
+  install(id: string, env: Record<string, string>): Promise<RecipeStatus>;
+  uninstall(id: string): Promise<void>;
+  forgetKey(id: string, envName: string): Promise<void>;
+  status(id: string): Promise<RecipeStatus>;
+}
+
+export interface ToolsClient {
+  recipes: ToolsRecipesClient;
+}
+
 export interface HarnessClient {
   shellStatus(): Promise<ShellStatus>;
   appInfo(): Promise<AppInfo>;
@@ -522,6 +704,7 @@ export interface HarnessClient {
   settings: SettingsClient;
   memory: MemoryClient;
   hooks: HooksClient;
+  tools: ToolsClient;
 }
 
 // ── runtime client ─────────────────────────────────────────────────────
@@ -681,6 +864,18 @@ export function createHarnessClient(): HarnessClient {
       availableBuiltins: () => b().Hooks_AvailableBuiltins(),
       installStarterMemory: () => b().Hooks_InstallStarterMemory(),
       removeStarterMemory: () => b().Hooks_RemoveStarterMemory(),
+    },
+    tools: {
+      recipes: {
+        list: async () =>
+          (await b().Tools_ListRecipes()).map(adaptRecipeListing),
+        install: async (id, env) =>
+          adaptRecipeStatus(await b().Tools_InstallRecipe(id, env)),
+        uninstall: (id) => b().Tools_UninstallRecipe(id),
+        forgetKey: (id, envName) => b().Tools_ForgetRecipeKey(id, envName),
+        status: async (id) =>
+          adaptRecipeStatus(await b().Tools_RecipeStatus(id)),
+      },
     },
   };
 }
@@ -916,6 +1111,35 @@ export function createFakeHarnessClient(
       availableBuiltins: async () => [],
       installStarterMemory: noop,
       removeStarterMemory: noop,
+    },
+    tools: {
+      recipes: {
+        list: async () => [],
+        install: async (id) => ({
+          id,
+          enabled: true,
+          state: 'starting',
+          restartAttempts: 0,
+          keysPresent: true,
+          pid: 0,
+          toolCount: 0,
+          resourceCount: 0,
+          promptCount: 0,
+        }),
+        uninstall: noop,
+        forgetKey: noop,
+        status: async (id) => ({
+          id,
+          enabled: false,
+          state: 'stopped',
+          restartAttempts: 0,
+          keysPresent: false,
+          pid: 0,
+          toolCount: 0,
+          resourceCount: 0,
+          promptCount: 0,
+        }),
+      },
     },
   };
 
