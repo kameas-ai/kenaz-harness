@@ -82,6 +82,12 @@ func (d *DB) WriteTx(ctx context.Context, fn func(tx session.WriteTx) error) err
 // as a single idempotent transaction. We bypass the broader migration
 // framework here so the session feature can run without the storage
 // subsystem online.
+//
+// The two ALTER TABLE … ADD COLUMN statements (system_prompt /
+// context_kind) mirror migrations 303 / 304. SQLite has no
+// `ADD COLUMN IF NOT EXISTS`, so we guard each one with a
+// pragma_table_info lookup; rerunning EnsureSessionsSchema on a
+// post-303 database is a no-op.
 func (d *DB) EnsureSessionsSchema(ctx context.Context) error {
 	stmts := []string{
 		`CREATE TABLE IF NOT EXISTS sessions (
@@ -111,10 +117,43 @@ func (d *DB) EnsureSessionsSchema(ctx context.Context) error {
 		`CREATE INDEX IF NOT EXISTS idx_sessions_last_active_at
 			ON sessions (last_active_at)`,
 	}
+	// (column-name, ALTER statement) pairs — applied only when the
+	// column is absent. Order matters: keep additions newest-last so
+	// reading them aligns with the migration version order.
+	type addCol struct {
+		name string
+		ddl  string
+	}
+	addCols := []addCol{
+		{
+			name: "system_prompt",
+			ddl:  `ALTER TABLE sessions ADD COLUMN system_prompt TEXT NOT NULL DEFAULT ''`,
+		},
+		{
+			name: "context_kind",
+			ddl:  `ALTER TABLE sessions ADD COLUMN context_kind TEXT NOT NULL DEFAULT 'system'`,
+		},
+	}
 	return d.WriteTx(ctx, func(tx session.WriteTx) error {
 		for _, s := range stmts {
 			if _, err := tx.Exec(ctx, s); err != nil {
 				return fmt.Errorf("sqlitedb: schema %q: %w", firstLine(s), err)
+			}
+		}
+		for _, ac := range addCols {
+			row := tx.QueryRow(ctx,
+				`SELECT 1 FROM pragma_table_info('sessions') WHERE name=?`,
+				ac.name)
+			var one int
+			err := row.Scan(&one)
+			if err == nil {
+				continue
+			}
+			if !errors.Is(err, sql.ErrNoRows) {
+				return fmt.Errorf("sqlitedb: probe column %q: %w", ac.name, err)
+			}
+			if _, err := tx.Exec(ctx, ac.ddl); err != nil {
+				return fmt.Errorf("sqlitedb: add column %q: %w", ac.name, err)
 			}
 		}
 		return nil

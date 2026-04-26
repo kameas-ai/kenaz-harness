@@ -16,14 +16,15 @@ import (
 // Event kinds emitted by the manager. Naming follows the harness
 // `session.<verb>` taxonomy in plan §5.1.
 const (
-	EventKindSessionCreated         = "session.created"
-	EventKindSessionRenamed         = "session.renamed"
-	EventKindSessionDeleted         = "session.deleted"
-	EventKindSessionReordered       = "session.reordered"
-	EventKindSessionMessageAppended = "session.message_appended"
-	EventKindSessionDraftSaved      = "session.draft_saved"
-	EventKindSessionScrollSaved     = "session.scroll_saved"
+	EventKindSessionCreated          = "session.created"
+	EventKindSessionRenamed          = "session.renamed"
+	EventKindSessionDeleted          = "session.deleted"
+	EventKindSessionReordered        = "session.reordered"
+	EventKindSessionMessageAppended  = "session.message_appended"
+	EventKindSessionDraftSaved       = "session.draft_saved"
+	EventKindSessionScrollSaved      = "session.scroll_saved"
 	EventKindSessionLastActiveBumped = "session.last_active_bumped"
+	EventKindSessionSystemPromptSet  = "session.system_prompt_set"
 )
 
 // Audit is the narrowed event surface the Manager uses. Unlike
@@ -308,6 +309,26 @@ func (m *Manager) AppendMessage(ctx context.Context, sessionID string, msg Messa
 // sequence order.
 func (m *Manager) ListMessages(ctx context.Context, sessionID string) ([]Message, error) {
 	return m.store.ListMessages(ctx, sessionID)
+}
+
+// SetSystemPrompt persists the per-session starting context. kind
+// MUST be ContextKindSystem (invisible, prepended on every send) or
+// ContextKindUserSeed (visible — the caller is expected to AppendMessage
+// the seed as a user turn at create time; SetSystemPrompt only records
+// the chosen kind for downstream UI).
+func (m *Manager) SetSystemPrompt(ctx context.Context, sessionID, content, kind string) error {
+	if !validContextKind(kind) {
+		return fmt.Errorf("%w: %q", ErrInvalidContextKind, kind)
+	}
+	if err := m.store.SetSystemPrompt(ctx, sessionID, content, kind, m.now()); err != nil {
+		return err
+	}
+	m.audit.Emit(ctx, EventKindSessionSystemPromptSet, map[string]any{
+		"session_id":     sessionID,
+		"kind":           kind,
+		"content_length": len(content),
+	})
+	return nil
 }
 
 // defaultIDGen returns a 16-byte hex id (32 chars). Sufficient

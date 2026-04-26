@@ -329,6 +329,72 @@ func TestManager_RecordTimestamps(t *testing.T) {
 	}
 }
 
+func TestManager_SetSystemPrompt_PersistsAndEmits(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	m, audit := newTestManager(t)
+	r, err := m.Create(ctx, "chat")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := m.SetSystemPrompt(ctx, r.ID, "you are helpful", ContextKindSystem); err != nil {
+		t.Fatalf("SetSystemPrompt: %v", err)
+	}
+	got, err := m.Get(ctx, r.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.SystemPrompt != "you are helpful" || got.ContextKind != ContextKindSystem {
+		t.Errorf("round-trip: got %+v", got)
+	}
+	if !containsKind(audit.Kinds(), EventKindSessionSystemPromptSet) {
+		t.Errorf("missing %s emit; got %v", EventKindSessionSystemPromptSet, audit.Kinds())
+	}
+}
+
+func TestManager_SetSystemPrompt_AcceptsUserSeed(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	m, _ := newTestManager(t)
+	r, err := m.Create(ctx, "chat")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// user_seed sessions persist the kind even when content is empty
+	// — the dialog appends the seed as a user message separately.
+	if err := m.SetSystemPrompt(ctx, r.ID, "", ContextKindUserSeed); err != nil {
+		t.Fatalf("SetSystemPrompt: %v", err)
+	}
+	got, _ := m.Get(ctx, r.ID)
+	if got.ContextKind != ContextKindUserSeed {
+		t.Errorf("ContextKind = %q, want %q", got.ContextKind, ContextKindUserSeed)
+	}
+}
+
+func TestManager_SetSystemPrompt_RejectsInvalidKind(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	m, _ := newTestManager(t)
+	r, err := m.Create(ctx, "chat")
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = m.SetSystemPrompt(ctx, r.ID, "x", "garbage")
+	if !errors.Is(err, ErrInvalidContextKind) {
+		t.Errorf("got %v, want ErrInvalidContextKind", err)
+	}
+}
+
+func TestManager_SetSystemPrompt_MissingSession(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	m, _ := newTestManager(t)
+	err := m.SetSystemPrompt(ctx, "ghost", "x", ContextKindSystem)
+	if !errors.Is(err, ErrSessionNotFound) {
+		t.Errorf("got %v, want ErrSessionNotFound", err)
+	}
+}
+
 func containsKind(kinds []string, want string) bool {
 	for _, k := range kinds {
 		if k == want {
