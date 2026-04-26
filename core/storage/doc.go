@@ -25,4 +25,13 @@
 //
 // SQLite floor: 3.51.0 (per research D5 — Windows NTFS WAL close() lock
 // bug below this version). libSQL releases tracked accordingly.
+//
+// V1 scope (storage-consolidation-01KQ3Q77): the concrete backend in
+// core/storage/sqlite implements Open + the relational read/write
+// surface against modernc.org/sqlite, runs the storage-bootstrap (1-2)
+// and sessions (300-304) migrations, and acquires the data-dir lock.
+// VectorStore, BackupTaker, and Diagnostics are stubbed and return
+// ErrNotImplemented; encryption-at-rest is refused. Follow-up missions
+// will retire those stubs as they migrate consumers (providers,
+// settings, hooks, memory) into the unified DB.
 package storage

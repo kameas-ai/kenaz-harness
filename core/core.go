@@ -30,12 +30,13 @@ import (
 	"github.com/sigil-tech/kaneaz-harness/core/config"
 	"github.com/sigil-tech/kaneaz-harness/core/event"
 	"github.com/sigil-tech/kaneaz-harness/core/llm"
+	"github.com/sigil-tech/kaneaz-harness/core/logging"
 	"github.com/sigil-tech/kaneaz-harness/core/mcp"
 	"github.com/sigil-tech/kaneaz-harness/core/memory"
-	"github.com/sigil-tech/kaneaz-harness/core/logging"
 	"github.com/sigil-tech/kaneaz-harness/core/scheduler"
 	"github.com/sigil-tech/kaneaz-harness/core/session"
-	"github.com/sigil-tech/kaneaz-harness/core/session/sqlitedb"
+	"github.com/sigil-tech/kaneaz-harness/core/storage"
+	storagesqlite "github.com/sigil-tech/kaneaz-harness/core/storage/sqlite"
 )
 
 // Options carries the bootstrap configuration passed to New. DataDir
@@ -91,6 +92,13 @@ type Core struct {
 	// sessionManagerMu guards sessionManager lazy construction.
 	sessionManagerMu sync.Mutex
 	sessionManager   *session.Manager
+
+	// storageMu guards lazy construction of the unified storage handle.
+	// storageOpened tracks whether the lazy-init path has run, so a
+	// failed Open is not retried on every Storage() call.
+	storageMu     sync.Mutex
+	storage       storage.DB
+	storageOpened bool
 }
 
 // New constructs a Core. It validates DataDir and wires any
@@ -124,6 +132,17 @@ func New(opts Options) (*Core, error) {
 // itself does not own the DB lifecycle yet (see storage-foundations
 // mission for that wiring).
 func (c *Core) Start(ctx context.Context) error {
+	// Open the unified DB eagerly so the legacy-sessions migration runs
+	// before any consumer reaches for SessionManager(). Failures are
+	// logged and degrade gracefully — SessionManager falls back to the
+	// in-memory store on the same path.
+	if c.opts.DataDir != "" {
+		if err := storagesqlite.MigrateLegacySessionsDB(c.opts.DataDir); err != nil {
+			logging.L().Error("storage.legacy_sessions.migrate_failed",
+				"data_dir", c.opts.DataDir, "err", err.Error())
+		}
+		_ = c.Storage()
+	}
 	if c.Scheduler != nil {
 		if err := c.Scheduler.Start(ctx); err != nil {
 			return err
@@ -153,6 +172,12 @@ func (c *Core) Shutdown(ctx context.Context) error {
 	if c.Events != nil {
 		record(c.Events.Close())
 	}
+	c.storageMu.Lock()
+	if c.storage != nil {
+		record(c.storage.Close(ctx))
+		c.storage = nil
+	}
+	c.storageMu.Unlock()
 	return firstErr
 }
 
@@ -161,11 +186,9 @@ func (c *Core) Shutdown(ctx context.Context) error {
 func (c *Core) DataDir() string { return c.opts.DataDir }
 
 // SessionManager returns the chat-rail session manager, lazily
-// constructed on first call. The manager is wired against an
-// in-memory store today; once storage-foundations exposes a libSQL
-// backend, the manager will switch to the SQL store via
-// session.NewSQLStore. The interface seen by callers (the *Manager
-// type) is stable across that transition.
+// constructed on first call. The manager is wired against the unified
+// storage.DB once it is available; an open / migration failure
+// degrades gracefully to the in-memory store so the chassis still boots.
 //
 // SessionManager is safe to call from any goroutine: the first caller
 // constructs the manager and subsequent callers see the same instance.
@@ -175,36 +198,57 @@ func (c *Core) SessionManager() *session.Manager {
 	if c.sessionManager != nil {
 		return c.sessionManager
 	}
-	// Disk-backed by default. Falls back to the in-memory store on any
-	// open / migration error so the chassis still boots — the failure
-	// is logged so support can spot it.
-	store := openSessionStore(c.opts.DataDir)
+	store := c.openSessionStore()
 	c.sessionManager = session.NewManager(store)
 	return c.sessionManager
 }
 
-// openSessionStore opens the SQLite-backed session store at
-// <DataDir>/sessions.db. On any failure it falls back to the
-// in-memory store so the app still works (with the known limitation
-// that sessions evaporate on restart).
-func openSessionStore(dataDir string) session.Store {
-	if dataDir == "" {
+// openSessionStore wraps the unified storage.DB through
+// session.NewStorageDB and returns a SQL-backed store. It falls back to
+// the in-memory store when storage is unavailable so callers see a
+// usable manager either way (with the known limitation that sessions
+// evaporate on restart).
+func (c *Core) openSessionStore() session.Store {
+	if c.opts.DataDir == "" {
 		logging.L().Warn("session.store.fallback_memory", "reason", "empty data dir")
 		return session.NewMemoryStore()
 	}
-	path := filepath.Join(dataDir, "sessions.db")
-	db, err := sqlitedb.Open(path)
+	s := c.Storage()
+	if s == nil {
+		logging.L().Warn("session.store.fallback_memory", "reason", "storage unavailable")
+		return session.NewMemoryStore()
+	}
+	logging.L().Info("session.store.opened", "path", filepath.Join(c.opts.DataDir, "data.db"))
+	return session.NewSQLStore(session.NewStorageDB(s))
+}
+
+// Storage returns the unified harness DB, lazily opened on first call.
+// A construction failure is logged once and the method returns nil for
+// the lifetime of this Core; callers must handle nil and substitute a
+// degraded code path.
+func (c *Core) Storage() storage.DB {
+	c.storageMu.Lock()
+	defer c.storageMu.Unlock()
+	if c.storageOpened {
+		return c.storage
+	}
+	c.storageOpened = true
+	if c.opts.DataDir == "" {
+		logging.L().Warn("storage.unavailable", "reason", "empty data dir")
+		return nil
+	}
+	cfg := storage.Config{
+		DataDir:          c.opts.DataDir,
+		EncryptionStatus: storage.EncryptionStatusDisabledWithDiskEncryption,
+	}
+	db, err := storagesqlite.Open(cfg)
 	if err != nil {
-		logging.L().Error("session.store.open_failed", "path", path, "err", err.Error())
-		return session.NewMemoryStore()
+		logging.L().Error("storage.open_failed",
+			"data_dir", c.opts.DataDir, "err", err.Error())
+		return nil
 	}
-	if err := db.EnsureSessionsSchema(context.Background()); err != nil {
-		logging.L().Error("session.store.migrate_failed", "path", path, "err", err.Error())
-		_ = db.Close()
-		return session.NewMemoryStore()
-	}
-	logging.L().Info("session.store.opened", "path", path)
-	return session.NewSQLStore(db)
+	c.storage = db
+	return db
 }
 
 // BundleCache returns the bundle layer's content-addressable storage,
