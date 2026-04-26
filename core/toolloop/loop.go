@@ -17,6 +17,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	corellm "github.com/sigil-tech/kaneaz-harness/core/llm"
 	"github.com/sigil-tech/kaneaz-harness/core/logging"
@@ -40,6 +41,15 @@ type Config struct {
 	// auto_allow resolver so the WP01 chat path stays untouched and
 	// callers that don't yet plumb a real resolver still work.
 	Permissions PermissionResolver
+	// Hooks fires pre/post-tool-use lifecycle hooks around every
+	// dispatch. nil falls back to a noop runner so callers that don't
+	// yet plumb a real runner still work.
+	Hooks HookRunner
+	// Audit emits tool_invoked / tool_failed audit events for every
+	// dispatch (success, failure, blocked). nil disables emission;
+	// production wiring is expected to pass an event-log-backed
+	// emitter that runs the redaction pipeline on Append (NFR-003).
+	Audit AuditEmitter
 	// MaxIter caps the number of tool-use rounds per Run invocation.
 	// Zero falls back to DefaultMaxIter.
 	MaxIter int
@@ -52,6 +62,8 @@ type Loop struct {
 	pool    MCPPool
 	history SessionHistoryRW
 	perms   PermissionResolver
+	hooks   HookRunner
+	audit   AuditEmitter
 	maxIter int
 }
 
@@ -73,11 +85,17 @@ func New(cfg Config) (*Loop, error) {
 	if perms == nil {
 		perms = allowAllResolver{}
 	}
+	hooks := cfg.Hooks
+	if hooks == nil {
+		hooks = noopHookRunner{}
+	}
 	return &Loop{
 		reg:     cfg.Registry,
 		pool:    cfg.Pool,
 		history: cfg.History,
 		perms:   perms,
+		hooks:   hooks,
+		audit:   cfg.Audit,
 		maxIter: maxIter,
 	}, nil
 }
@@ -206,11 +224,11 @@ func (l *Loop) invokeAndDrain(ctx context.Context, req corellm.GenerationRequest
 }
 
 // dispatchTools resolves each ToolUse against the pool, consults the
-// permission gate, and invokes the call when allowed. Sequential —
-// concurrency lands in WP04. A pool failure surfaces as a toolResult
-// with IsError=true so the model can recover; the function only
-// returns an error for unrecoverable problems (pool tools listing,
-// resolver internal errors).
+// permission gate, fires pre/post-tool-use hooks, emits audit events,
+// and invokes the call when allowed. Sequential — concurrency lands in
+// WP04. A pool failure surfaces as a toolResult with IsError=true so
+// the model can recover; the function only returns an error for
+// unrecoverable problems (pool tools listing, context cancellation).
 func (l *Loop) dispatchTools(ctx context.Context, sessionID, parentSubID string, calls []corellm.ToolUse) ([]toolResult, error) {
 	if len(calls) == 0 {
 		return nil, nil
@@ -224,6 +242,11 @@ func (l *Loop) dispatchTools(ctx context.Context, sessionID, parentSubID string,
 	for _, call := range calls {
 		server, ok := resolveServer(tools, call.Name)
 		if !ok {
+			// No server resolved — args still get emitted so the audit
+			// log shows what the model attempted. server="" is fine for
+			// the unknown-tool case; downstream filters can detect it.
+			emitToolFailed(ctx, l.audit, sessionID, parentSubID, "", call.Name, call.Input,
+				fmt.Sprintf("tool %q not registered", call.Name), 0)
 			out = append(out, toolResult{
 				ToolUseID: call.ID,
 				Tool:      call.Name,
@@ -248,6 +271,8 @@ func (l *Loop) dispatchTools(ctx context.Context, sessionID, parentSubID string,
 				"tool", call.Name,
 				"err", permErr.Error(),
 			)
+			emitToolFailed(ctx, l.audit, sessionID, parentSubID, server, call.Name, call.Input,
+				fmt.Sprintf("permission resolver error: %s", permErr.Error()), 0)
 			out = append(out, toolResult{
 				ToolUseID: call.ID,
 				Server:    server,
@@ -270,6 +295,8 @@ func (l *Loop) dispatchTools(ctx context.Context, sessionID, parentSubID string,
 			if reason == "" {
 				reason = "tool not authorised for this session"
 			}
+			emitToolFailed(ctx, l.audit, sessionID, parentSubID, server, call.Name, call.Input,
+				"Tool blocked: "+reason, 0)
 			out = append(out, toolResult{
 				ToolUseID: call.ID,
 				Server:    server,
@@ -290,17 +317,104 @@ func (l *Loop) dispatchTools(ctx context.Context, sessionID, parentSubID string,
 			// Defensive: a resolver implementer that returns an unknown
 			// policy is treated as a deny — a misconfigured policy
 			// should never silently allow a call.
+			reason := fmt.Sprintf("Tool blocked: unknown policy %q", res.Policy)
+			emitToolFailed(ctx, l.audit, sessionID, parentSubID, server, call.Name, call.Input, reason, 0)
 			out = append(out, toolResult{
 				ToolUseID: call.ID,
 				Server:    server,
 				Tool:      call.Name,
-				Output:    fmt.Sprintf("Tool blocked: unknown policy %q", res.Policy),
+				Output:    reason,
 				IsError:   true,
 			})
 			continue
 		}
-		raw, callErr := l.pool.Call(ctx, server, call.Name, call.Input)
+
+		// Pre-tool-use hook. The hook may short-circuit (Continue=false
+		// → synthetic tool_blocked) or mutate the args before dispatch.
+		// A hook error is treated as a synthetic deny: the user-facing
+		// model still gets a tool_result so it can recover, and the
+		// audit log records the failure under tool_failed.
+		dispatchArgs := call.Input
+		started := time.Now()
+		preEv := PreToolUseEvent{
+			SessionID: sessionID,
+			Tool:      call.Name,
+			Server:    server,
+			Args:      dispatchArgs,
+			AttemptNo: 1,
+		}
+		preRes, preErr := l.hooks.RunPreToolUse(ctx, preEv)
+		if preErr != nil {
+			log.Warn("toolloop.hook.pretool_failed",
+				"sub_id", parentSubID,
+				"session_id", sessionID,
+				"server", server,
+				"tool", call.Name,
+				"err", preErr.Error(),
+			)
+			reason := "pre-hook error: " + preErr.Error()
+			latencyMS := time.Since(started).Milliseconds()
+			emitToolFailed(ctx, l.audit, sessionID, parentSubID, server, call.Name, dispatchArgs, reason, latencyMS)
+			l.hooks.RunPostToolUse(ctx, PostToolUseEvent{
+				SessionID: sessionID,
+				Tool:      call.Name,
+				Server:    server,
+				Args:      dispatchArgs,
+				Error:     reason,
+				LatencyMS: latencyMS,
+			})
+			out = append(out, toolResult{
+				ToolUseID: call.ID,
+				Server:    server,
+				Tool:      call.Name,
+				Output:    "Tool blocked: " + reason,
+				IsError:   true,
+			})
+			continue
+		}
+		if !preRes.Continue {
+			reason := preRes.Reason
+			if reason == "" {
+				reason = "blocked by pre-hook"
+			}
+			latencyMS := time.Since(started).Milliseconds()
+			emitToolFailed(ctx, l.audit, sessionID, parentSubID, server, call.Name, dispatchArgs,
+				"Tool blocked: "+reason, latencyMS)
+			l.hooks.RunPostToolUse(ctx, PostToolUseEvent{
+				SessionID: sessionID,
+				Tool:      call.Name,
+				Server:    server,
+				Args:      dispatchArgs,
+				Error:     "Tool blocked: " + reason,
+				LatencyMS: latencyMS,
+			})
+			out = append(out, toolResult{
+				ToolUseID: call.ID,
+				Server:    server,
+				Tool:      call.Name,
+				Output:    "Tool blocked: " + reason,
+				IsError:   true,
+			})
+			continue
+		}
+		if preRes.Args != nil {
+			dispatchArgs = preRes.Args
+		}
+
+		// Dispatch.
+		raw, callErr := l.pool.Call(ctx, server, call.Name, dispatchArgs)
+		latencyMS := time.Since(started).Milliseconds()
 		if callErr != nil {
+			emitToolFailed(ctx, l.audit, sessionID, parentSubID, server, call.Name, dispatchArgs,
+				callErr.Error(), latencyMS)
+			l.hooks.RunPostToolUse(ctx, PostToolUseEvent{
+				SessionID: sessionID,
+				Tool:      call.Name,
+				Server:    server,
+				Args:      dispatchArgs,
+				Error:     callErr.Error(),
+				LatencyMS: latencyMS,
+			})
 			out = append(out, toolResult{
 				ToolUseID: call.ID,
 				Server:    server,
@@ -310,6 +424,15 @@ func (l *Loop) dispatchTools(ctx context.Context, sessionID, parentSubID string,
 			})
 			continue
 		}
+		emitToolInvoked(ctx, l.audit, sessionID, parentSubID, server, call.Name, dispatchArgs, latencyMS)
+		l.hooks.RunPostToolUse(ctx, PostToolUseEvent{
+			SessionID: sessionID,
+			Tool:      call.Name,
+			Server:    server,
+			Args:      dispatchArgs,
+			Result:    json.RawMessage(raw),
+			LatencyMS: latencyMS,
+		})
 		out = append(out, toolResult{
 			ToolUseID: call.ID,
 			Server:    server,
