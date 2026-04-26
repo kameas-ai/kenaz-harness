@@ -13,17 +13,21 @@ package hooks
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 
 	"github.com/sigil-tech/kaneaz-harness/core/memory"
 )
 
-// MemoryRetriever is the surface the retrieve builtin needs. Mirrors
-// memory.Retriever's Retrieve method without taking a hard type
-// dependency, so tests can supply a fake.
+// MemoryRetriever is the surface the retrieve builtin needs. The
+// scoped form is the WP06 contract; the unscoped Retrieve is kept so
+// existing call sites (and tests) don't have to thread a project ID
+// through immediately.
 type MemoryRetriever interface {
 	Retrieve(ctx context.Context, query string, k int) ([]memory.Snippet, error)
+	RetrieveScoped(ctx context.Context, query, sessionID, projectID string, k int) ([]memory.Snippet, error)
 }
 
 // MemoryStore is the surface the persist builtin needs.
@@ -44,6 +48,24 @@ type MemoryDeps struct {
 	// IDFunc returns a unique chunk id. When nil a default impl
 	// derives one from the SessionID + nano timestamp.
 	IDFunc func() string
+	// Logger receives warnings from the builtins (e.g. when a hook is
+	// configured for project scope on a session that has no project).
+	// Defaults to slog.Default() when nil.
+	Logger *slog.Logger
+}
+
+// extraProjectID looks up the active session's project_id from the
+// hook event's Extra map. Empty when not threaded through (sessions
+// pre-WP02 have no project). Both string and explicit map[string]any
+// forms are accepted.
+func extraProjectID(extra map[string]any) string {
+	if extra == nil {
+		return ""
+	}
+	if v, ok := extra["project_id"].(string); ok {
+		return v
+	}
+	return ""
 }
 
 // RegisterMemoryBuiltins wires memory.retrieve + memory.persist into
@@ -53,7 +75,10 @@ func RegisterMemoryBuiltins(reg *BuiltinRegistry, deps MemoryDeps) {
 	if reg == nil {
 		return
 	}
-	reg.RegisterPreSend(BuiltinMemoryRetrieve, makeMemoryRetrieve(deps.Retriever), BuiltinDescriptor{
+	if deps.Logger == nil {
+		deps.Logger = slog.Default()
+	}
+	reg.RegisterPreSend(BuiltinMemoryRetrieve, makeMemoryRetrieve(deps), BuiltinDescriptor{
 		ID:          BuiltinMemoryRetrieve,
 		Name:        "Memory: retrieve",
 		Description: "Pre-send hook. Embeds the latest user turn and prepends matching long-term-memory snippets as a system message.",
@@ -70,16 +95,17 @@ func RegisterMemoryBuiltins(reg *BuiltinRegistry, deps MemoryDeps) {
 		Description: "Post-send hook. Embeds the user+assistant turn pair and writes a chunk to the long-term memory store.",
 		Events:      []string{EventPostSend},
 		DefaultConfig: map[string]any{
-			"min_user_chars":         80,
-			"min_assistant_chars":    200,
-			"skip_on_finish_reason":  []string{"error", "stop-called"},
+			"min_user_chars":        80,
+			"min_assistant_chars":   200,
+			"skip_on_finish_reason": []string{"error", "stop-called"},
+			"default_scope":         memory.ScopeKindSession,
 		},
 	})
 }
 
-func makeMemoryRetrieve(retriever MemoryRetriever) PreSendBuiltin {
+func makeMemoryRetrieve(deps MemoryDeps) PreSendBuiltin {
 	return func(ctx context.Context, ev PreSendEvent, cfg map[string]any) (PreSendEvent, error) {
-		if retriever == nil {
+		if deps.Retriever == nil {
 			return ev, nil
 		}
 		topK := intFromConfig(cfg, "top_k", 3)
@@ -97,7 +123,8 @@ func makeMemoryRetrieve(retriever MemoryRetriever) PreSendBuiltin {
 		if query == "" {
 			return ev, nil
 		}
-		snippets, err := retriever.Retrieve(ctx, query, topK)
+		projectID := extraProjectID(ev.Extra)
+		snippets, err := deps.Retriever.RetrieveScoped(ctx, query, ev.SessionID, projectID, topK)
 		if err != nil {
 			return ev, err
 		}
@@ -132,6 +159,31 @@ func makeMemoryRetrieve(retriever MemoryRetriever) PreSendBuiltin {
 		newMessages = append(newMessages, ev.Messages[insertAt:]...)
 		ev.Messages = newMessages
 		return ev, nil
+	}
+}
+
+// resolvePersistScope returns the scope (kind, id) the persist builtin
+// should apply to the chunk it is about to write. When the configured
+// default is "project" but the session carries no project id, the
+// builtin falls back to "session" and emits a warning so operators can
+// see why a project pin landed at session scope.
+func resolvePersistScope(cfg map[string]any, sessionID, projectID string, logger *slog.Logger) (string, string) {
+	def := stringFromConfig(cfg, "default_scope", memory.ScopeKindSession)
+	switch def {
+	case memory.ScopeKindGlobal:
+		return memory.ScopeKindGlobal, ""
+	case memory.ScopeKindProject:
+		if projectID == "" {
+			if logger != nil {
+				logger.Warn("hooks.memory.persist.project_scope_unavailable",
+					"session_id", sessionID,
+					"reason", "session has no project_id; falling back to session scope")
+			}
+			return memory.ScopeKindSession, sessionID
+		}
+		return memory.ScopeKindProject, projectID
+	default:
+		return memory.ScopeKindSession, sessionID
 	}
 }
 
@@ -173,15 +225,27 @@ func makeMemoryPersist(deps MemoryDeps) PostSendBuiltin {
 		if id == "" {
 			id = fmt.Sprintf("auto-%s-%d", ev.SessionID, NowUnixNano())
 		}
+		projectID := extraProjectID(ev.Extra)
+		scopeKind, scopeID := resolvePersistScope(cfg, ev.SessionID, projectID, deps.Logger)
 		ch := memory.Chunk{
-			ID:         id,
-			SessionID:  ev.SessionID,
-			SourceTurn: "post_send",
-			Content:    text,
-			Embedding:  vecs[0],
-			CreatedAt:  Now(),
+			ID:          id,
+			SessionID:   ev.SessionID,
+			ProjectID:   projectID,
+			ScopeKind:   scopeKind,
+			ScopeID:     scopeID,
+			SourceTurn:  "post_send",
+			Content:     text,
+			ContentHash: memory.HashContent(text),
+			Embedding:   vecs[0],
+			CreatedAt:   Now(),
 		}
-		return deps.Store.Add(ctx, ch)
+		if err := deps.Store.Add(ctx, ch); err != nil {
+			if errors.Is(err, memory.ErrDuplicate) {
+				return nil
+			}
+			return err
+		}
+		return nil
 	}
 }
 
@@ -269,6 +333,7 @@ func StarterMemoryHooks() []Hook {
 				"min_user_chars":        80,
 				"min_assistant_chars":   200,
 				"skip_on_finish_reason": []string{"error", "stop-called"},
+				"default_scope":         memory.ScopeKindSession,
 			},
 		},
 	}

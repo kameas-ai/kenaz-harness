@@ -45,10 +45,24 @@ type Snippet struct {
 }
 
 // Retrieve embeds query and returns up to k snippets above the
-// configured similarity threshold. When memory is disabled, the store
-// is missing, or the embedder is the noop, an empty result is returned
-// (no error) so the caller's "skip on empty" path is clean.
+// configured similarity threshold. No scope filter is applied — every
+// chunk is a candidate. The scoped variant (RetrieveScoped) is the
+// WP06 contract; this thin wrapper is what older callers (and the rpc
+// adapter that has not yet been updated to thread project id) hit.
 func (r *Retriever) Retrieve(ctx context.Context, query string, k int) ([]Snippet, error) {
+	return r.retrieve(ctx, query, k, nil)
+}
+
+// RetrieveScoped runs a scope-union k-NN: global ∪ project:projectID ∪
+// session:sessionID. Empty sessionID or projectID drops the matching
+// filter so callers can opt into whichever scopes apply (the persist
+// path before WP02 lands has no project yet, for example).
+func (r *Retriever) RetrieveScoped(ctx context.Context, query, sessionID, projectID string, k int) ([]Snippet, error) {
+	scopes := buildScopeUnion(sessionID, projectID)
+	return r.retrieve(ctx, query, k, scopes)
+}
+
+func (r *Retriever) retrieve(ctx context.Context, query string, k int, scopes []ScopeFilter) ([]Snippet, error) {
 	if r == nil || !r.enabledFn() {
 		return nil, nil
 	}
@@ -68,7 +82,7 @@ func (r *Retriever) Retrieve(ctx context.Context, query string, k int) ([]Snippe
 	if len(vecs) == 0 {
 		return nil, nil
 	}
-	results, err := r.store.Query(ctx, vecs[0], k)
+	results, err := r.store.Query(ctx, vecs[0], k, scopes...)
 	if err != nil {
 		return nil, err
 	}
@@ -83,4 +97,19 @@ func (r *Retriever) Retrieve(ctx context.Context, query string, k int) ([]Snippe
 		})
 	}
 	return out, nil
+}
+
+// buildScopeUnion returns the filter set for a session+project tuple.
+// Always includes the global scope. Project / session filters are
+// dropped when their id is empty so the caller still gets a usable
+// (broader) result set.
+func buildScopeUnion(sessionID, projectID string) []ScopeFilter {
+	scopes := []ScopeFilter{{Kind: ScopeKindGlobal}}
+	if projectID != "" {
+		scopes = append(scopes, ScopeFilter{Kind: ScopeKindProject, ID: projectID})
+	}
+	if sessionID != "" {
+		scopes = append(scopes, ScopeFilter{Kind: ScopeKindSession, ID: sessionID})
+	}
+	return scopes
 }

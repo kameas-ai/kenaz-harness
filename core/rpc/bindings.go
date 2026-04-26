@@ -349,12 +349,16 @@ func (b *Bindings) Settings_SetMemory(enabled bool) error {
 
 // ── memory ─────────────────────────────────────────────────────────────
 
-func (b *Bindings) Memory_ListChunks() ([]memoryview.Chunk, error) {
-	return b.api.Memory().ListChunks(b.ctx())
+func (b *Bindings) Memory_ListChunks(filter memoryview.ListFilter) ([]memoryview.Chunk, error) {
+	return b.api.Memory().ListChunks(b.ctx(), filter)
 }
 
-func (b *Bindings) Memory_RememberMessage(sessionID, messageID string) (string, error) {
-	return b.api.Memory().RememberMessage(b.ctx(), sessionID, messageID)
+func (b *Bindings) Memory_RememberMessage(sessionID, messageID, scope string) (string, error) {
+	return b.api.Memory().RememberMessage(b.ctx(), sessionID, messageID, scope)
+}
+
+func (b *Bindings) Memory_PromoteScope(chunkID, newScopeKind, newScopeID string) (string, error) {
+	return b.api.Memory().PromoteScope(b.ctx(), chunkID, newScopeKind, newScopeID)
 }
 
 func (b *Bindings) Memory_Forget(id string) error {

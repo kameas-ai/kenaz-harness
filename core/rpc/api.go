@@ -490,6 +490,13 @@ func (a *retrieverAdapter) Retrieve(ctx context.Context, query string, k int) ([
 	return a.r.Retrieve(ctx, query, k)
 }
 
+func (a *retrieverAdapter) RetrieveScoped(ctx context.Context, query, sessionID, projectID string, k int) ([]corememory.Snippet, error) {
+	if a == nil || a.r == nil {
+		return nil, nil
+	}
+	return a.r.RetrieveScoped(ctx, query, sessionID, projectID, k)
+}
+
 // hooksRunnerAdapter bridges hooks.Runner to llm.HookRunner. The
 // translation between event payload shapes is mechanical — both sides
 // carry the same fields under different package types.
