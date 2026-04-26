@@ -322,6 +322,13 @@ func newProjectsAPI(c *core.Core) projectsview.ProjectsAPI {
 // by storage.DB. Returns nil when c is nil or storage isn't available;
 // the rpc surface treats nil as "attachments disabled" and the
 // SessionsAPI / LLM stack fall back to legacy behaviour.
+//
+// The MediaStore registered here is composable: WP02 plugs in the
+// AttachmentsRefcountSource so RefcountFor walks context_attachments
+// rows pointing at a hash. Future missions (artifacts-storage) extend
+// the predicate by calling MediaStore.RegisterRefcountSource against
+// the same store from their own chassis-wiring callsite — no changes
+// to media.go required.
 func newAttachmentsManager(c *core.Core) *coreatt.Manager {
 	if c == nil {
 		return nil
@@ -330,7 +337,12 @@ func newAttachmentsManager(c *core.Core) *coreatt.Manager {
 	if s == nil {
 		return nil
 	}
-	return coreatt.NewManager(coreatt.NewSQLStore(s))
+	media := coreatt.NewSQLMediaStore(s, c.DataDir())
+	media.RegisterRefcountSource(coreatt.AttachmentsRefcountSource{DB: s})
+	return coreatt.NewManager(
+		coreatt.NewSQLStore(s),
+		coreatt.WithMediaStore(media),
+	)
 }
 
 // newAttachmentsAPI returns the real Manager-backed AttachmentsAPI

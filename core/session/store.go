@@ -9,6 +9,8 @@ import (
 	"sort"
 	"sync"
 	"time"
+
+	"github.com/sigil-tech/kaneaz-harness/core/llm"
 )
 
 // Sentinel errors. Stable typed errors so callers can errors.Is.
@@ -269,6 +271,10 @@ func (s *memStore) AppendMessage(_ context.Context, m Message) (Message, error) 
 	seq := s.seqByID[m.SessionID]
 	m.Sequence = seq
 	s.seqByID[m.SessionID] = seq + 1
+	// Mirror the SQL store's normalization so an in-memory listed
+	// Message round-trips with the same shape as a SQL-backed one.
+	m.ContentBlocks = canonicalBlocks(m)
+	m.Content = flattenContentText(m.ContentBlocks)
 	s.messages[m.SessionID] = append(s.messages[m.SessionID], m)
 	return m, nil
 }
@@ -563,8 +569,21 @@ func validContextKind(kind string) bool {
 }
 
 func (s *sqlStore) AppendMessage(ctx context.Context, m Message) (Message, error) {
+	// TODO(post-WP05): drop the legacy `content` column once every
+	// reader has migrated to the `content_json` shape. Writers fill
+	// both columns for one release as a compat buffer (multimodal-io
+	// FR-014).
+	canonical := canonicalBlocks(m)
+	contentText := flattenContentText(canonical)
+	contentJSON, err := json.Marshal(canonical)
+	if err != nil {
+		return Message{}, fmt.Errorf("session: marshal content_json: %w", err)
+	}
+	m.ContentBlocks = canonical
+	m.Content = contentText
+
 	var out Message
-	err := s.db.WriteTx(ctx, func(tx WriteTx) error {
+	err = s.db.WriteTx(ctx, func(tx WriteTx) error {
 		// Verify the session exists so the FK violation doesn't surface
 		// as an opaque storage error.
 		row := tx.QueryRow(ctx, "SELECT 1 FROM sessions WHERE id = ?", m.SessionID)
@@ -595,11 +614,12 @@ func (s *sqlStore) AppendMessage(ctx context.Context, m Message) (Message, error
 		}
 		if _, err := tx.Exec(ctx, `
             INSERT INTO session_messages
-                (id, session_id, sequence, role, content, tool_calls, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+                (id, session_id, sequence, role, content, tool_calls, created_at, content_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         `,
 			m.ID, m.SessionID, m.Sequence, string(m.Role),
-			m.Content, toolCallsJSON, m.CreatedAt.UnixNano()); err != nil {
+			m.Content, toolCallsJSON, m.CreatedAt.UnixNano(),
+			string(contentJSON)); err != nil {
 			return err
 		}
 		out = m
@@ -622,7 +642,7 @@ func (s *sqlStore) ListMessages(ctx context.Context, sessionID string) ([]Messag
 		return nil, err
 	}
 	rows, err := s.db.Reader().Query(ctx, `
-        SELECT id, session_id, sequence, role, content, tool_calls, created_at
+        SELECT id, session_id, sequence, role, content, tool_calls, created_at, content_json
         FROM session_messages
         WHERE session_id = ?
         ORDER BY sequence ASC
@@ -634,13 +654,14 @@ func (s *sqlStore) ListMessages(ctx context.Context, sessionID string) ([]Messag
 	var out []Message
 	for rows.Next() {
 		var (
-			m         Message
-			roleStr   string
-			toolCalls sql.NullString
-			createdAt int64
+			m           Message
+			roleStr     string
+			toolCalls   sql.NullString
+			createdAt   int64
+			contentJSON sql.NullString
 		)
 		if err := rows.Scan(&m.ID, &m.SessionID, &m.Sequence, &roleStr,
-			&m.Content, &toolCalls, &createdAt); err != nil {
+			&m.Content, &toolCalls, &createdAt, &contentJSON); err != nil {
 			return nil, err
 		}
 		m.Role = Role(roleStr)
@@ -650,9 +671,49 @@ func (s *sqlStore) ListMessages(ctx context.Context, sessionID string) ([]Messag
 				return nil, err
 			}
 		}
+		// Prefer content_json when present; fall back to a synthesized
+		// single text block for legacy rows.
+		if contentJSON.Valid && contentJSON.String != "" {
+			if err := json.Unmarshal([]byte(contentJSON.String), &m.ContentBlocks); err != nil {
+				return nil, fmt.Errorf("session: unmarshal content_json: %w", err)
+			}
+		} else {
+			m.ContentBlocks = synthesizeBlocks(m.Content)
+		}
 		out = append(out, m)
 	}
 	return out, rows.Err()
+}
+
+// canonicalBlocks normalizes a Message's content to its []ContentBlock
+// shape. Callers populating Content alone get a single text block;
+// callers populating ContentBlocks pass through unchanged.
+func canonicalBlocks(m Message) []llm.ContentBlock {
+	if len(m.ContentBlocks) > 0 {
+		return m.ContentBlocks
+	}
+	if m.Content == "" {
+		return []llm.ContentBlock{}
+	}
+	return []llm.ContentBlock{{Type: "text", Text: m.Content}}
+}
+
+// flattenContentText runs the WP01 Message.Text() flattener against a
+// block slice. Used to fill the legacy `content` column for one
+// release.
+func flattenContentText(blocks []llm.ContentBlock) string {
+	tmp := llm.Message{Content: blocks}
+	return tmp.Text()
+}
+
+// synthesizeBlocks produces a single-text-block []ContentBlock from a
+// legacy row's plain-text Content value. Empty input yields an empty
+// slice so callers don't see a stray {Type:"text", Text:""} block.
+func synthesizeBlocks(content string) []llm.ContentBlock {
+	if content == "" {
+		return []llm.ContentBlock{}
+	}
+	return []llm.ContentBlock{{Type: "text", Text: content}}
 }
 
 // scanRecord scans a Record from a one-row scanner. Works for both Row

@@ -2,6 +2,8 @@ package session
 
 import (
 	"time"
+
+	"github.com/sigil-tech/kaneaz-harness/core/llm"
 )
 
 // Record is the durable representation of a chat session as the rail UI
@@ -65,12 +67,29 @@ type ToolCall struct {
 
 // Message is one row in session_messages. Sequence is monotonically
 // increasing within a session and dense.
+//
+// Persistence shape (post multimodal-io WP02):
+//
+//   - Content is the legacy plain-text column. Writers populate it from
+//     ContentBlocks via the corellm.Message.Text() flattener so legacy
+//     readers (any caller still on the pre-WP01 Content-as-string
+//     contract) keep working for one release.
+//   - ContentBlocks carries the canonical post-WP01 polymorphic
+//     []ContentBlock shape and is JSON-serialized into the
+//     session_messages.content_json column. Readers prefer
+//     content_json when non-null; legacy rows synthesize a single
+//     {Type:"text", Text:Content} block on read.
+//
+// AppendMessage callers populating only Content (string) continue to
+// round-trip; the store synthesizes a single text block into
+// ContentBlocks at persist time.
 type Message struct {
-	ID        string
-	SessionID string
-	Sequence  int64
-	Role      Role
-	Content   string
-	ToolCalls []ToolCall
-	CreatedAt time.Time
+	ID            string
+	SessionID     string
+	Sequence      int64
+	Role          Role
+	Content       string
+	ContentBlocks []llm.ContentBlock
+	ToolCalls     []ToolCall
+	CreatedAt     time.Time
 }

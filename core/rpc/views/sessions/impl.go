@@ -111,7 +111,20 @@ func (a *managerAPI) Rename(ctx context.Context, id, name string) error {
 }
 
 // Delete implements SessionsAPI.
+//
+// When an attachments manager is wired, Delete also drops every
+// session-scope attachment via Manager.RemoveScope so refcount-driven
+// media artifact cleanup runs as part of the same operation (spec A8:
+// session delete prunes session-scope attachments AND any media
+// artifacts no longer referenced). Errors from the attachment cleanup
+// are surfaced to the caller; the session row is deleted only after
+// the cleanup completes.
 func (a *managerAPI) Delete(ctx context.Context, id string) error {
+	if a.attachments != nil {
+		if _, err := a.attachments.RemoveScope(ctx, attachments.ScopeKindSession, id); err != nil {
+			return err
+		}
+	}
 	return a.mgr.Delete(ctx, id)
 }
 
