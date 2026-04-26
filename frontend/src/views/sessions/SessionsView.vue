@@ -22,7 +22,7 @@ import MessageList from '@/components/chat/MessageList.vue';
 import ChatInput from '@/components/chat/ChatInput.vue';
 import { useHarnessClient, useSessions } from '@/lib/useHarnessAPI';
 import { useSession } from '@/lib/useSession';
-import type { Message, Provider } from '@/lib/types';
+import type { MemoryScopeKind, Message, Provider } from '@/lib/types';
 import { flattenChoices, inferFamily } from '@/lib/modelFamily';
 
 const route = useRoute();
@@ -306,11 +306,11 @@ window.addEventListener('focus', () => {
   void refreshMemoryFlag();
 });
 
-async function onRemember(m: Message) {
+async function onRemember(m: Message, scope: MemoryScopeKind = 'session') {
   if (!sessionId.value || !m.id) return;
   lastRememberError.value = null;
   try {
-    await client.memory.rememberMessage(sessionId.value, m.id);
+    await client.memory.rememberMessage(sessionId.value, m.id, scope);
   } catch (err) {
     lastRememberError.value =
       err instanceof Error ? err.message : String(err);
@@ -569,6 +569,7 @@ async function onRemember(m: Message) {
             :waiting="isWaitingForFirstChunk"
             :error-message="session.error.value"
             :rememberable="memoryEnabled"
+            :project-id="session.session.value?.projectId ?? ''"
             @remember="onRemember"
           />
         </div>

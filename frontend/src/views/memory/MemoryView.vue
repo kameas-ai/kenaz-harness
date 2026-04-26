@@ -7,29 +7,78 @@
  * store is fresh. Privacy: chunks live on disk under
  * <DataDir>/memory.gob; this view is the user's prune-knob for that
  * file.
+ *
+ * WP06 T005 additions:
+ *   - Scope filter pill row (All / Global / Project / Session) calls
+ *     `client.memory.listChunks({scopeKind: ...})`.
+ *   - Per-row scope badge (🌐 / 📁 / 💬) so the user can see at a glance
+ *     where each chunk lives.
+ *   - "Promote scope" action opens a small target picker that resolves
+ *     the new scope id (project → session's projectId; global → ""),
+ *     confirms with the user, then calls `client.memory.promoteScope`.
+ *     Move semantics: backend deletes the original row and inserts a
+ *     new one with a new ID; we just refresh.
+ *   - "Forget at scope" reuses the existing forget RPC.
  */
-import { onMounted, ref } from 'vue';
+import { computed, onMounted, ref } from 'vue';
 import CanvasHead from '@/shell/CanvasHead.vue';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
-import type { MemoryChunk } from '@/lib/types';
+import type {
+  MemoryChunk,
+  MemoryListFilter,
+  MemoryScopeKind,
+} from '@/lib/types';
 
 const client = useHarnessClient();
+
+type FilterPill = 'all' | MemoryScopeKind;
+
+interface PromoteState {
+  chunk: MemoryChunk;
+  target: MemoryScopeKind;
+  newScopeID: string;
+  resolving: boolean;
+  error: string | null;
+}
 
 const chunks = ref<readonly MemoryChunk[]>([]);
 const loading = ref(false);
 const error = ref<string | null>(null);
+const activeFilter = ref<FilterPill>('all');
+const openMenuId = ref<string | null>(null);
+const promote = ref<PromoteState | null>(null);
+
+const filterPills: readonly { id: FilterPill; label: string; glyph: string }[] = [
+  { id: 'all', label: 'All', glyph: '∗' },
+  { id: 'global', label: 'Global', glyph: '🌐' },
+  { id: 'project', label: 'Project', glyph: '📁' },
+  { id: 'session', label: 'Session', glyph: '💬' },
+];
+
+function buildFilter(pill: FilterPill): MemoryListFilter {
+  if (pill === 'all') return {};
+  return { scopeKind: pill };
+}
 
 async function refresh() {
   loading.value = true;
   error.value = null;
   try {
-    chunks.value = await client.memory.listChunks();
+    chunks.value = await client.memory.listChunks(
+      buildFilter(activeFilter.value),
+    );
   } catch (err) {
     error.value = err instanceof Error ? err.message : String(err);
     chunks.value = [];
   } finally {
     loading.value = false;
   }
+}
+
+async function setFilter(pill: FilterPill) {
+  if (activeFilter.value === pill) return;
+  activeFilter.value = pill;
+  await refresh();
 }
 
 async function forget(id: string) {
@@ -41,9 +90,124 @@ async function forget(id: string) {
   }
 }
 
+function toggleMenu(id: string) {
+  openMenuId.value = openMenuId.value === id ? null : id;
+}
+
+function closeMenu() {
+  openMenuId.value = null;
+}
+
+const promotionTargets = computed(() => {
+  return (chunk: MemoryChunk): readonly MemoryScopeKind[] => {
+    if (chunk.scopeKind === 'session') {
+      const targets: MemoryScopeKind[] = [];
+      if ((chunk.projectId ?? '').length > 0) targets.push('project');
+      targets.push('global');
+      return targets;
+    }
+    if (chunk.scopeKind === 'project') return ['global'];
+    return [];
+  };
+});
+
+async function resolveScopeID(
+  chunk: MemoryChunk,
+  target: MemoryScopeKind,
+): Promise<string> {
+  if (target === 'global') return '';
+  if (target === 'project') {
+    if ((chunk.projectId ?? '').length > 0) {
+      return chunk.projectId as string;
+    }
+    if ((chunk.sessionId ?? '').length > 0) {
+      const sess = await client.sessions.get(chunk.sessionId as string);
+      return sess.projectId ?? '';
+    }
+    return '';
+  }
+  // target === 'session' — promotion never targets session, but keep
+  // the resolver total: fall back to the chunk's own session id.
+  return chunk.sessionId ?? '';
+}
+
+async function startPromote(chunk: MemoryChunk, target: MemoryScopeKind) {
+  closeMenu();
+  promote.value = {
+    chunk,
+    target,
+    newScopeID: '',
+    resolving: true,
+    error: null,
+  };
+  try {
+    const id = await resolveScopeID(chunk, target);
+    if (target === 'project' && id === '') {
+      promote.value = {
+        ...promote.value,
+        resolving: false,
+        error: 'Could not resolve project for this chunk.',
+      };
+      return;
+    }
+    promote.value = {
+      ...promote.value,
+      newScopeID: id,
+      resolving: false,
+    };
+  } catch (err) {
+    promote.value = {
+      ...promote.value,
+      resolving: false,
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
+}
+
+async function confirmPromote() {
+  const state = promote.value;
+  if (!state || state.resolving) return;
+  if (state.target === 'project' && state.newScopeID === '') return;
+  try {
+    await client.memory.promoteScope(
+      state.chunk.id,
+      state.target,
+      state.newScopeID,
+    );
+    promote.value = null;
+    await refresh();
+  } catch (err) {
+    promote.value = {
+      ...state,
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
+}
+
+function cancelPromote() {
+  promote.value = null;
+}
+
 function preview(content: string): string {
   if (content.length <= 200) return content;
   return content.slice(0, 200) + '…';
+}
+
+function shortLabel(chunk: MemoryChunk): string {
+  if (chunk.title && chunk.title.length > 0) return chunk.title;
+  const first = chunk.content.replace(/\s+/g, ' ').trim();
+  if (first.length <= 60) return first;
+  return first.slice(0, 60) + '…';
+}
+
+function scopeGlyph(kind: MemoryScopeKind): string {
+  if (kind === 'global') return '🌐';
+  if (kind === 'project') return '📁';
+  return '💬';
+}
+
+function scopeLabel(kind: MemoryScopeKind): string {
+  return kind;
 }
 
 function formatTimestamp(iso: string): string {
@@ -70,6 +234,33 @@ defineExpose({ refresh });
     />
 
     <div class="px-6 py-4 max-w-4xl">
+      <!-- Scope filter pills (WP06 T005) -->
+      <div
+        class="mb-4 flex flex-wrap gap-2"
+        role="tablist"
+        aria-label="Filter memories by scope"
+        data-testid="memory-scope-filter"
+      >
+        <button
+          v-for="pill in filterPills"
+          :key="pill.id"
+          type="button"
+          role="tab"
+          :aria-selected="activeFilter === pill.id"
+          :data-testid="`memory-scope-pill-${pill.id}`"
+          class="px-3 py-1 rounded-sm border text-[11px] uppercase tracking-[0.18em] font-ui"
+          :class="
+            activeFilter === pill.id
+              ? 'border-accent text-accent bg-surface-2'
+              : 'border-border-muted text-ink-dim hover:bg-surface-2'
+          "
+          @click="setFilter(pill.id)"
+        >
+          <span class="mr-1" aria-hidden="true">{{ pill.glyph }}</span>
+          {{ pill.label }}
+        </button>
+      </div>
+
       <div
         v-if="error"
         class="mb-3 rounded-md border border-signal-danger bg-surface-1 px-3 py-2 font-ui text-[12px] text-signal-danger"
@@ -100,10 +291,17 @@ defineExpose({ refresh });
         <li
           v-for="chunk in chunks"
           :key="chunk.id"
-          class="rounded-md border border-border-muted bg-surface-1 px-4 py-3"
+          class="relative rounded-md border border-border-muted bg-surface-1 px-4 py-3"
           :data-testid="`memory-chunk-${chunk.id}`"
         >
-          <div class="flex items-baseline gap-3">
+          <div class="flex flex-wrap items-baseline gap-3">
+            <span
+              class="font-ui text-[10px] uppercase tracking-[0.18em] px-1.5 py-0.5 rounded-sm border border-border-muted text-ink-dim"
+              :data-testid="`memory-scope-badge-${chunk.id}`"
+            >
+              <span aria-hidden="true">{{ scopeGlyph(chunk.scopeKind) }}</span>
+              {{ scopeLabel(chunk.scopeKind) }}
+            </span>
             <span class="font-mono text-[10px] uppercase tracking-[0.18em] text-ink-subtle">
               {{ formatTimestamp(chunk.createdAt) }}
             </span>
@@ -119,20 +317,115 @@ defineExpose({ refresh });
             >
               · {{ chunk.sourceTurn }}
             </span>
-            <button
-              type="button"
-              class="ml-auto px-2 py-1 rounded-sm border border-border-muted text-[10px] uppercase tracking-[0.18em] text-ink-dim hover:text-signal-danger hover:bg-surface-2"
-              :data-testid="`memory-forget-${chunk.id}`"
-              @click="forget(chunk.id)"
-            >
-              Forget
-            </button>
+            <div class="ml-auto flex items-center gap-2">
+              <div class="relative">
+                <button
+                  type="button"
+                  class="px-2 py-1 rounded-sm border border-border-muted text-[10px] uppercase tracking-[0.18em] text-ink-dim hover:text-accent hover:bg-surface-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                  :disabled="promotionTargets(chunk).length === 0"
+                  :data-testid="`memory-promote-${chunk.id}`"
+                  :aria-haspopup="'menu'"
+                  :aria-expanded="openMenuId === chunk.id"
+                  @click="toggleMenu(chunk.id)"
+                >
+                  Promote scope
+                </button>
+                <div
+                  v-if="openMenuId === chunk.id"
+                  class="absolute right-0 top-full z-20 mt-1 w-48 rounded-sm border border-border-muted bg-surface-1 shadow-lg"
+                  role="menu"
+                  :data-testid="`memory-promote-menu-${chunk.id}`"
+                >
+                  <button
+                    v-for="target in promotionTargets(chunk)"
+                    :key="target"
+                    type="button"
+                    role="menuitem"
+                    class="block w-full px-3 py-1.5 text-left font-ui text-[12px] text-ink hover:bg-surface-2 hover:text-accent"
+                    :data-testid="`memory-promote-${chunk.id}-${target}`"
+                    @click="startPromote(chunk, target)"
+                  >
+                    <span class="mr-2" aria-hidden="true">{{ scopeGlyph(target) }}</span>
+                    Promote to {{ scopeLabel(target) }}
+                  </button>
+                </div>
+              </div>
+              <button
+                type="button"
+                class="px-2 py-1 rounded-sm border border-border-muted text-[10px] uppercase tracking-[0.18em] text-ink-dim hover:text-signal-danger hover:bg-surface-2"
+                :data-testid="`memory-forget-${chunk.id}`"
+                @click="forget(chunk.id)"
+              >
+                Forget
+              </button>
+            </div>
           </div>
           <p class="mt-2 font-ui text-sm text-ink whitespace-pre-wrap">
             {{ preview(chunk.content) }}
           </p>
         </li>
       </ul>
+    </div>
+
+    <!-- Promotion confirmation modal -->
+    <div
+      v-if="promote"
+      class="fixed inset-0 z-40 grid place-items-center bg-surface-0/70"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="memory-promote-title"
+      data-testid="memory-promote-modal"
+    >
+      <div class="w-[28rem] max-w-[92vw] rounded-md border border-border-muted bg-surface-1 p-4 shadow-lg">
+        <h3
+          id="memory-promote-title"
+          class="font-ui text-[11px] uppercase tracking-[0.18em] text-ink-subtle"
+        >
+          Promote scope
+        </h3>
+        <p class="mt-2 font-ui text-sm text-ink">
+          Promote
+          <span class="font-mono text-[12px]">{{ shortLabel(promote.chunk) }}</span>
+          from {{ scopeLabel(promote.chunk.scopeKind) }} to {{ scopeLabel(promote.target) }}?
+          The original entry will be deleted and re-inserted at the new scope.
+        </p>
+        <p
+          v-if="promote.error"
+          class="mt-2 font-ui text-[12px] text-signal-danger"
+          role="alert"
+        >
+          {{ promote.error }}
+        </p>
+        <p
+          v-if="promote.resolving"
+          class="mt-2 font-ui text-[12px] text-ink-muted"
+          role="status"
+        >
+          Resolving target scope…
+        </p>
+        <div class="mt-4 flex justify-end gap-2">
+          <button
+            type="button"
+            class="px-3 py-1 rounded-sm border border-border-muted font-ui text-[11px] uppercase tracking-[0.18em] text-ink-dim hover:bg-surface-2"
+            data-testid="memory-promote-cancel"
+            @click="cancelPromote"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            class="px-3 py-1 rounded-sm border border-accent font-ui text-[11px] uppercase tracking-[0.18em] text-accent hover:bg-surface-2 disabled:opacity-50 disabled:cursor-not-allowed"
+            :disabled="
+              promote.resolving ||
+              (promote.target === 'project' && promote.newScopeID === '')
+            "
+            data-testid="memory-promote-confirm"
+            @click="confirmPromote"
+          >
+            Promote
+          </button>
+        </div>
+      </div>
     </div>
   </div>
 </template>

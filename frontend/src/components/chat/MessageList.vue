@@ -15,7 +15,7 @@
 
 import { computed, nextTick, onMounted, ref, watch } from 'vue';
 import MessageBubble from './MessageBubble.vue';
-import type { Message } from '@/lib/types';
+import type { MemoryScopeKind, Message } from '@/lib/types';
 
 const props = defineProps<{
   messages: ReadonlyArray<Message>;
@@ -42,11 +42,20 @@ const props = defineProps<{
    * (privacy posture); the parent flips it on when memory is enabled.
    */
   rememberable?: boolean;
+  /**
+   * Project membership of the active session. Threaded down to each
+   * MessageBubble so the pin menu can disable "Pin to project" when
+   * the session is loose. Empty / undefined means no project.
+   */
+  projectId?: string;
 }>();
 
 const emit = defineEmits<{
-  /** Forwarded from MessageBubble's pin click. */
-  (e: 'remember', message: Message): void;
+  /**
+   * Forwarded from MessageBubble's pin menu. The second argument is the
+   * scope the user picked; defaults to `'session'` for legacy callers.
+   */
+  (e: 'remember', message: Message, scope: MemoryScopeKind): void;
 }>();
 
 const scrollEl = ref<HTMLElement | null>(null);
@@ -136,7 +145,8 @@ defineExpose({ scrollToBottom });
         :streaming="m.streaming === true"
         :tool-calls="m.toolCalls"
         :rememberable="rememberable === true && m.streaming !== true"
-        @remember="emit('remember', m)"
+        :project-id="projectId"
+        @remember="(scope) => emit('remember', m, scope)"
       />
 
       <!-- Thinking indicator: visible from the moment send() opens a
