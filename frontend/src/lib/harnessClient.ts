@@ -42,6 +42,7 @@ import type {
   MemoryScopeKind,
   Hook,
   BuiltinDescriptor,
+  ConfirmDecision,
 } from './types';
 
 /**
@@ -103,6 +104,7 @@ interface WailsBindingsLike {
   LLM_RemoveProvider(id: string): Promise<void>;
   LLM_TestProvider(id: string): Promise<TestResult>;
   LLM_ListModels(kind: string, plaintextApiKey: string): Promise<ModelInfo[]>;
+  LLM_ResolveConfirm(requestID: string, decision: string): Promise<void>;
 
   MCP_ListServers(): Promise<MCPServer[]>;
   MCP_StartStream(id: string): Promise<string>;
@@ -148,6 +150,8 @@ interface WailsBindingsLike {
   Settings_Set(s: Settings): Promise<void>;
   Settings_GetMemory(): Promise<boolean>;
   Settings_SetMemory(enabled: boolean): Promise<void>;
+  Settings_GetConfirmEach(): Promise<boolean>;
+  Settings_SetConfirmEach(enabled: boolean): Promise<void>;
 
   Memory_ListChunks(filter: MemoryListFilter): Promise<MemoryChunk[]>;
   Memory_RememberMessage(
@@ -300,6 +304,14 @@ export interface LLMConnectorClient {
    * model entry in that case.
    */
   listModels(kind: string, plaintextApiKey: string): Promise<ModelInfo[]>;
+  /**
+   * Resolve a pending confirm-each tool-call modal (WP05). The frontend
+   * calls this with the request id surfaced on the
+   * `llm:tool-confirm-request` topic and one of the four canonical
+   * decisions. The toolloop goroutine waiting on the request unblocks
+   * and dispatches / blocks accordingly.
+   */
+  resolveConfirm(requestID: string, decision: ConfirmDecision): Promise<void>;
 }
 
 export interface MCPClient {
@@ -380,6 +392,10 @@ export interface SettingsClient {
   getMemory(): Promise<boolean>;
   /** Persist the long-term-memory opt-in flag. */
   setMemory(enabled: boolean): Promise<void>;
+  /** Read the WP05 confirm-each modal opt-in flag (default true). */
+  getConfirmEach(): Promise<boolean>;
+  /** Persist the WP05 confirm-each modal opt-in flag. */
+  setConfirmEach(enabled: boolean): Promise<void>;
 }
 
 /**
@@ -514,6 +530,8 @@ export function createHarnessClient(): HarnessClient {
       testProvider: (id) => b().LLM_TestProvider(id),
       listModels: (kind, plaintextApiKey) =>
         b().LLM_ListModels(kind, plaintextApiKey),
+      resolveConfirm: (requestID, decision) =>
+        b().LLM_ResolveConfirm(requestID, decision),
     },
     mcp: {
       listServers: () => b().MCP_ListServers(),
@@ -574,6 +592,8 @@ export function createHarnessClient(): HarnessClient {
       saveTheme: (t) => b().SaveTheme(t),
       getMemory: () => b().Settings_GetMemory(),
       setMemory: (enabled) => b().Settings_SetMemory(enabled),
+      getConfirmEach: () => b().Settings_GetConfirmEach(),
+      setConfirmEach: (enabled) => b().Settings_SetConfirmEach(enabled),
     },
     memory: {
       listChunks: (filter) => b().Memory_ListChunks(filter ?? {}),
@@ -690,6 +710,7 @@ export function createFakeHarnessClient(
         message: 'fake ok',
       }),
       listModels: async () => [],
+      resolveConfirm: noop,
     },
     mcp: {
       listServers: async () => [],
@@ -764,6 +785,7 @@ export function createFakeHarnessClient(
         accent: 'default',
         windowSize: { width: 1280, height: 800 },
         memoryEnabled: false,
+        confirmEachDisabled: false,
       }),
       set: noop,
       loadRoute: async () => '/sessions',
@@ -773,6 +795,8 @@ export function createFakeHarnessClient(
       saveTheme: noop,
       getMemory: async () => false,
       setMemory: noop,
+      getConfirmEach: async () => true,
+      setConfirmEach: noop,
     },
     memory: {
       listChunks: async () => [],

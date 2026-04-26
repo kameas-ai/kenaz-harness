@@ -123,4 +123,14 @@ type LLMConnectorAPI interface {
 	// slice (not an error) when the kind has no ModelLister-capable
 	// adapter — the UI then falls back to manual model entry.
 	ListModels(ctx context.Context, kind, plaintextApiKey string) ([]ModelInfo, error)
+
+	// ResolveConfirm completes a pending confirm-each tool call. The
+	// frontend modal calls this with one of the four canonical
+	// decisions ("allow", "deny", "always_allow", "always_deny") to
+	// unblock the toolloop goroutine waiting on the request id.
+	// Unknown ids return a not-pending error; unknown decisions
+	// return a validation error. Safe to call when the confirm-each
+	// feature flag is off — the gateway is wired regardless of the
+	// flag, only the toolloop chooses whether to invoke it.
+	ResolveConfirm(ctx context.Context, requestID, decision string) error
 }

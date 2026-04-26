@@ -257,6 +257,40 @@ export interface Settings {
    * sessions.
    */
   memoryEnabled?: boolean;
+  /**
+   * WP05 confirm-each modal flag. The persisted form is the inverted
+   * `confirmEachDisabled` bit so a fresh install (zero value) gets the
+   * spec's default-ON behaviour. Frontend should treat both fields as
+   * read-mostly — write via Settings_SetConfirmEach so the inversion
+   * happens on the backend.
+   */
+  confirmEachDisabled?: boolean;
+}
+
+/**
+ * ConfirmDecision — the four canonical responses to a confirm-each
+ * tool-call modal. Matches core/toolloop.ConfirmDecision.
+ */
+export type ConfirmDecision =
+  | 'allow'
+  | 'deny'
+  | 'always_allow'
+  | 'always_deny';
+
+/**
+ * ConfirmToolRequest — payload received on `llm:tool-confirm-request`
+ * when the toolloop pauses on a confirm-each verdict. Mirrors
+ * core/rpc/views/llm.ConfirmRequestPayload.
+ */
+export interface ConfirmToolRequest {
+  request_id: string;
+  session_id: string;
+  parent_sub_id: string;
+  server: string;
+  tool: string;
+  tool_use_id: string;
+  args_redacted?: string;
+  reason?: string;
 }
 
 export type Theme = 'light' | 'dark' | 'system';

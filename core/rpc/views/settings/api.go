@@ -18,7 +18,23 @@ type Settings struct {
 	Accent        string     `json:"accent"`
 	WindowSize    WindowSize `json:"windowSize"`
 	MemoryEnabled bool       `json:"memoryEnabled"`
+	// ConfirmEachDisabled is the inverted persisted form of the
+	// WP05 confirm-each tool-call modal flag. We store the disabled
+	// bit (default false → modal ENABLED) so the zero value of a
+	// freshly-installed settings file matches the spec's "default
+	// ON" requirement without an extra Configured marker.
+	//
+	// Frontend / toolloop callers should never read this directly —
+	// use ConfirmEachEnabled() helper or the Settings_GetConfirmEach
+	// binding which inverts on the boundary.
+	ConfirmEachDisabled bool `json:"confirmEachDisabled"`
 }
+
+// ConfirmEachEnabled is the user-facing form of the WP05 modal flag.
+// Defaults to true on a fresh install (zero-value ConfirmEachDisabled)
+// and inverts the persisted bit so callers don't have to think about
+// the storage shape.
+func (s Settings) ConfirmEachEnabled() bool { return !s.ConfirmEachDisabled }
 
 // WindowSize mirrors the charter's WindowSize type.
 type WindowSize struct {
@@ -42,6 +58,14 @@ type SettingsStore interface {
 	// the whole record.
 	LoadMemory() (bool, error)
 	SaveMemory(enabled bool) error
+	// LoadConfirmEach / SaveConfirmEach expose the WP05 confirm-each
+	// tool-call modal opt-in independently of the full Settings
+	// record. The toolloop reads this on every Run boundary so the
+	// frontend toggle takes effect on the next chat without a
+	// settings round-trip. Default true (modal ON unless the user
+	// turns it off explicitly).
+	LoadConfirmEach() (bool, error)
+	SaveConfirmEach(enabled bool) error
 }
 
 // SettingsAPI is the view-scoped accessor exposed via HarnessAPI.

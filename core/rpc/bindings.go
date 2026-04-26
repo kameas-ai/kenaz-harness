@@ -206,6 +206,16 @@ func (b *Bindings) LLM_ListModels(kind, plaintextApiKey string) ([]llm.ModelInfo
 	return b.api.LLMConnector().ListModels(b.ctx(), kind, plaintextApiKey)
 }
 
+// LLM_ResolveConfirm completes a pending confirm-each tool call
+// (WP05). The frontend modal calls this with the request id surfaced
+// on the `llm:tool-confirm-request` topic and one of the four
+// canonical decisions ("allow" | "deny" | "always_allow" |
+// "always_deny"). The toolloop goroutine waiting on the request id
+// unblocks and continues / blocks accordingly.
+func (b *Bindings) LLM_ResolveConfirm(requestID, decision string) error {
+	return b.api.LLMConnector().ResolveConfirm(b.ctx(), requestID, decision)
+}
+
 // ── mcp ────────────────────────────────────────────────────────────────
 
 func (b *Bindings) MCP_ListServers() ([]mcp.Server, error) {
@@ -350,6 +360,24 @@ func (b *Bindings) Settings_SetMemory(enabled bool) error {
 		return nil
 	}
 	return b.storeFn().SaveMemory(enabled)
+}
+
+// Settings_GetConfirmEach exposes the WP05 confirm-each tool-call
+// modal opt-in flag (default true). The frontend toggle and the
+// toolloop's per-Run flag check both read this.
+func (b *Bindings) Settings_GetConfirmEach() (bool, error) {
+	if b.storeFn == nil {
+		return true, nil
+	}
+	return b.storeFn().LoadConfirmEach()
+}
+
+// Settings_SetConfirmEach persists the WP05 confirm-each opt-in flag.
+func (b *Bindings) Settings_SetConfirmEach(enabled bool) error {
+	if b.storeFn == nil {
+		return nil
+	}
+	return b.storeFn().SaveConfirmEach(enabled)
 }
 
 // ── memory ─────────────────────────────────────────────────────────────

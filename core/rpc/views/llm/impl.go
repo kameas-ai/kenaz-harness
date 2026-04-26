@@ -199,6 +199,12 @@ type API struct {
 	// signals FinishReason == "tool_use". nil disables the loop —
 	// the chat path stays as it was before WP01.
 	toolLoop *toolloop.Loop
+	// confirmGateway brokers WP05 confirm-each modal flow between the
+	// toolloop (which blocks on RequestConfirm) and the frontend
+	// (which calls ResolveConfirm). nil means "no confirm-each
+	// surface wired" — ResolveConfirm returns a not-wired error and
+	// the toolloop falls back to its noop gateway.
+	confirmGateway *ConfirmGateway
 
 	mu             sync.Mutex
 	subs           map[string]*subscription
@@ -263,6 +269,10 @@ type Config struct {
 	// registry until the model returns a non-tool_use finish. nil
 	// preserves WP00 chat-only behavior.
 	ToolLoop *toolloop.Loop
+	// ConfirmGateway brokers the WP05 confirm-each modal flow. When
+	// non-nil ResolveConfirm forwards to its ResolveConfirm method;
+	// when nil ResolveConfirm returns a not-wired error.
+	ConfirmGateway *ConfirmGateway
 }
 
 // New constructs a concrete API.
@@ -272,19 +282,20 @@ func New(cfg Config) *API {
 		sink = nopSink{}
 	}
 	return &API{
-		reg:         cfg.Registry,
-		sink:        sink,
-		store:       cfg.Store,
-		bundles:     cfg.Bundles,
-		keychain:    cfg.Keychain,
-		prober:      cfg.Prober,
-		history:     cfg.History,
-		historyW:    cfg.HistoryWriter,
-		hooks:       cfg.Hooks,
-		attachments: cfg.Attachments,
-		toolLoop:    cfg.ToolLoop,
-		subs:        map[string]*subscription{},
-		validated:   map[string]bool{},
+		reg:            cfg.Registry,
+		sink:           sink,
+		store:          cfg.Store,
+		bundles:        cfg.Bundles,
+		keychain:       cfg.Keychain,
+		prober:         cfg.Prober,
+		history:        cfg.History,
+		historyW:       cfg.HistoryWriter,
+		hooks:          cfg.Hooks,
+		attachments:    cfg.Attachments,
+		toolLoop:       cfg.ToolLoop,
+		confirmGateway: cfg.ConfirmGateway,
+		subs:           map[string]*subscription{},
+		validated:      map[string]bool{},
 	}
 }
 
@@ -911,6 +922,18 @@ func (a *API) ListModels(ctx context.Context, kind, plaintextApiKey string) ([]M
 		})
 	}
 	return out, nil
+}
+
+// ResolveConfirm forwards the user's confirm-each decision to the
+// gateway. The gateway looks up the pending request by id and unblocks
+// the toolloop goroutine waiting in RequestConfirm. Returns an error
+// when the gateway is unwired (default in tests / pre-WP05 builds) or
+// when the request id / decision is invalid.
+func (a *API) ResolveConfirm(_ context.Context, requestID, decision string) error {
+	if a == nil || a.confirmGateway == nil {
+		return errors.New("llm: confirm gateway not wired")
+	}
+	return a.confirmGateway.ResolveConfirm(requestID, toolloop.ConfirmDecision(decision))
 }
 
 // TestProvider runs the configured prober against the named profile and

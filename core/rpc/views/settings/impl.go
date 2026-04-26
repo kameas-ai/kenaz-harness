@@ -193,6 +193,33 @@ func (s *FileStore) SaveMemory(enabled bool) error {
 	return s.saveLocked(got)
 }
 
+// LoadConfirmEach returns the WP05 confirm-each modal opt-in flag.
+// Default true (modal ON) — the persisted bit is inverted so a fresh
+// install with no settings.json gets the spec's default-ON behaviour
+// without writing any state. Errors return the default so the chat
+// surface keeps working even if the settings file is unreadable.
+func (s *FileStore) LoadConfirmEach() (bool, error) {
+	got, err := s.LoadAll()
+	if err != nil {
+		return got.ConfirmEachEnabled(), err
+	}
+	return got.ConfirmEachEnabled(), nil
+}
+
+// SaveConfirmEach updates the confirm-each modal opt-in flag. Persists
+// as the inverted ConfirmEachDisabled field so the JSON shape matches
+// the storage contract.
+func (s *FileStore) SaveConfirmEach(enabled bool) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	got, err := s.loadLocked()
+	if err != nil {
+		return err
+	}
+	got.ConfirmEachDisabled = !enabled
+	return s.saveLocked(got)
+}
+
 // defaultSettings is the safe-baseline a fresh install starts with.
 func defaultSettings() Settings {
 	return Settings{
@@ -300,5 +327,18 @@ func (m *memoryStore) SaveMemory(enabled bool) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.data.MemoryEnabled = enabled
+	return nil
+}
+
+func (m *memoryStore) LoadConfirmEach() (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.data.ConfirmEachEnabled(), nil
+}
+
+func (m *memoryStore) SaveConfirmEach(enabled bool) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.data.ConfirmEachDisabled = !enabled
 	return nil
 }

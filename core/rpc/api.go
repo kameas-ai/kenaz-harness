@@ -225,7 +225,17 @@ func New(c *core.Core) *API {
 	}
 	retriever := corememory.NewRetriever(memStore, embedder, memoryEnabled, 0.7)
 	hooksRunner, hookRegistry, hookBuiltins := newHooksStack(c, retriever, memStore, embedder)
-	a.llmAPI = newLLMStack(c, a.broker, personalForLLM, hooksRunner, attMgr)
+	confirmEachEnabled := func() bool {
+		if settingsImpl == nil || settingsImpl.Store() == nil {
+			return true
+		}
+		v, err := settingsImpl.Store().LoadConfirmEach()
+		if err != nil {
+			return true
+		}
+		return v
+	}
+	a.llmAPI = newLLMStack(c, a.broker, personalForLLM, hooksRunner, attMgr, confirmEachEnabled)
 	a.memoryAPI = memoryview.New(memoryview.Config{
 		Store:    memStore,
 		Embedder: embedder,
@@ -342,7 +352,21 @@ func (r *sessionProjectReader) ProjectID(ctx context.Context, sessionID string) 
 //
 // The shared broker is supplied by New so all view bridges fan out to
 // the same StreamBroker instance.
-func newLLMStack(c *core.Core, broker *StreamBroker, store personal.Store, hooksRunner llm.HookRunner, attMgr *coreatt.Manager) llm.LLMConnectorAPI {
+//
+// confirmEachEnabled is read on every loop construction (effectively
+// every newLLMStack invocation, which is once at boot). The flag is
+// captured into the loop's Config rather than re-read per call — the
+// rpc layer's settings binding mutates the FileStore directly, and a
+// process restart picks up the new value. This keeps the loop's
+// per-Run hot path free of settings-store I/O.
+func newLLMStack(
+	c *core.Core,
+	broker *StreamBroker,
+	store personal.Store,
+	hooksRunner llm.HookRunner,
+	attMgr *coreatt.Manager,
+	confirmEachEnabled func() bool,
+) llm.LLMConnectorAPI {
 	// Share ONE secrets backend between the credref resolver (which
 	// reads keys when streaming) and the keychain writer (which stages
 	// keys when the user submits AddProvider). Without this sharing,
@@ -398,13 +422,31 @@ func newLLMStack(c *core.Core, broker *StreamBroker, store personal.Store, hooks
 	// materializes a process-wide event.Emitter (core/event.NewEmitter
 	// + redact.Pipeline). Until then audit emission is silenced and
 	// the privacy-CI guard is "no emitter, no leak".
+	// WP05 — confirm-each modal flow. The gateway brokers the
+	// pause/resume between the toolloop (which blocks on
+	// RequestConfirm) and the frontend (which calls ResolveConfirm
+	// via the LLM_ResolveConfirm Wails binding). The same broker
+	// powers chat stream chunks so the modal subscribes to the same
+	// topic the rest of the chat surface already consumes.
+	confirmGateway := llm.NewConfirmGateway(&streamSinkAdapter{broker: broker})
+	flagOn := true
+	if confirmEachEnabled != nil {
+		flagOn = confirmEachEnabled()
+	}
 	loop, loopErr := toolloop.New(toolloop.Config{
-		Registry:    reg,
-		Pool:        &mcpPoolAdapter{inner: fixture.New()},
-		History:     historyAdapter,
-		Permissions: perms,
-		Hooks:       nil,
-		Audit:       nil,
+		Registry:           reg,
+		Pool:               &mcpPoolAdapter{inner: fixture.New()},
+		History:            historyAdapter,
+		Permissions:        perms,
+		Hooks:              nil,
+		Audit:              nil,
+		Confirm:            confirmGateway,
+		ConfirmEachEnabled: flagOn,
+		// OverrideWriter intentionally nil for now — the C2 session
+		// override writer hasn't landed yet, and the confirm gate
+		// degrades to per-call allow/deny without persistence (logged
+		// at warn). Wire when sessions.MCPOverridesWriter exists.
+		OverrideWriter: nil,
 	})
 	if loopErr != nil {
 		// New only errors on missing registry/pool — both are
@@ -420,16 +462,17 @@ func newLLMStack(c *core.Core, broker *StreamBroker, store personal.Store, hooks
 		}
 	}
 	return llm.New(llm.Config{
-		Registry:      reg,
-		Sink:          &streamSinkAdapter{broker: broker},
-		Store:         store,
-		Keychain:      &keychainWriter{backend: secretsBackend},
-		Prober:        &registryProber{reg: reg, creds: credResolver},
-		History:       historyAdapter,
-		HistoryWriter: historyAdapter,
-		Hooks:         hooksRunner,
-		Attachments:   attResolver,
-		ToolLoop:      loop,
+		Registry:       reg,
+		Sink:           &streamSinkAdapter{broker: broker},
+		Store:          store,
+		Keychain:       &keychainWriter{backend: secretsBackend},
+		Prober:         &registryProber{reg: reg, creds: credResolver},
+		History:        historyAdapter,
+		HistoryWriter:  historyAdapter,
+		Hooks:          hooksRunner,
+		Attachments:    attResolver,
+		ToolLoop:       loop,
+		ConfirmGateway: confirmGateway,
 	})
 }
 
