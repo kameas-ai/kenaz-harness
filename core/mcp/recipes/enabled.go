@@ -27,6 +27,15 @@ type EnabledRecipe struct {
 	// "configuration changed" hint without leaking credential
 	// material.
 	EnvAuditHash string `json:"env_audit_hash"`
+	// Config is the per-install user config captured at install time
+	// (e.g. {"allowed_directories": ["/tmp/foo"], "read_only": true}
+	// for the filesystem recipe). nil and empty are treated as
+	// identical: the omitempty tag drops the field from disk when
+	// there is nothing to persist, and a missing field on load
+	// unmarshals to a nil map. The value type is permissive (any) so
+	// a future schema bump can add fields without breaking the
+	// round-trip on already-saved files.
+	Config map[string]any `json:"config,omitempty"`
 }
 
 // EnabledRecipes is the persisted list of toggled-on recipes.

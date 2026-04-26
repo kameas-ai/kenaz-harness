@@ -1,6 +1,7 @@
 package recipes_test
 
 import (
+	"encoding/json"
 	"errors"
 	"testing"
 
@@ -171,7 +172,7 @@ func TestToServerSpec(t *testing.T) {
 		Command: []string{"npx", "-y", "@modelcontextprotocol/server-brave-search"},
 	}
 	env := map[string]string{"BRAVE_API_KEY": "sentinel-value"}
-	spec := r.ToServerSpec(env)
+	spec := r.ToServerSpec(env, nil)
 
 	if spec.Name != "brave-search" {
 		t.Errorf("Name = %q", spec.Name)
@@ -200,9 +201,125 @@ func TestToServerSpec(t *testing.T) {
 
 func TestToServerSpecNilEnv(t *testing.T) {
 	r := recipes.Recipe{ID: "fs", Command: []string{"npx"}}
-	spec := r.ToServerSpec(nil)
+	spec := r.ToServerSpec(nil, nil)
 	if spec.Env != nil {
 		t.Errorf("Env = %v, want nil for empty env", spec.Env)
+	}
+}
+
+func TestRecipeNewFieldsZeroWhenJSONOmits(t *testing.T) {
+	// A recipe parsed from JSON without args_template / config_options
+	// should land with nil slices — not surprise allocations — so
+	// existing recipes (Brave) keep their pre-WP01 shape.
+	r, ok := recipes.Shipped().Get("brave-search")
+	if !ok {
+		t.Fatal("brave-search missing")
+	}
+	if r.ArgsTemplate != nil {
+		t.Errorf("Brave Search ArgsTemplate = %v, want nil", r.ArgsTemplate)
+	}
+	if r.ConfigOptions != nil {
+		t.Errorf("Brave Search ConfigOptions = %v, want nil", r.ConfigOptions)
+	}
+}
+
+func TestRecipeNewFieldsParseFromJSON(t *testing.T) {
+	// Parse an inline JSON blob that exercises both new fields so a
+	// regression in tag names or struct shape fails here, not at
+	// shipped.json bump time.
+	const blob = `{
+		"id": "fs",
+		"display_name": "Filesystem",
+		"description": "",
+		"category": "filesystem",
+		"command": ["npx", "-y", "server-fs"],
+		"args_template": ["${ALLOWED_DIRS}"],
+		"config_options": [
+			{"name":"allowed_directories","display":"Roots","kind":"directory_list","required":true,"description":"d"},
+			{"name":"read_only","display":"Read-only","kind":"boolean","default":false,"required":false,"description":"d2"}
+		],
+		"env_keys": [],
+		"capabilities": {"tools":true,"resources":false,"prompts":false,"sampling":false},
+		"docs_url": "",
+		"init_timeout_ms": 5000,
+		"ping_period_ms": 30000,
+		"sampling_policy": {"allowed":false,"default":false}
+	}`
+	var r recipes.Recipe
+	if err := json.Unmarshal([]byte(blob), &r); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if len(r.ArgsTemplate) != 1 || r.ArgsTemplate[0] != "${ALLOWED_DIRS}" {
+		t.Errorf("ArgsTemplate = %v", r.ArgsTemplate)
+	}
+	if len(r.ConfigOptions) != 2 {
+		t.Fatalf("ConfigOptions len = %d, want 2", len(r.ConfigOptions))
+	}
+	if r.ConfigOptions[0].Kind != recipes.ConfigKindDirectoryList {
+		t.Errorf("ConfigOptions[0].Kind = %q", r.ConfigOptions[0].Kind)
+	}
+	if !r.ConfigOptions[0].Required {
+		t.Error("ConfigOptions[0].Required = false, want true")
+	}
+	if r.ConfigOptions[1].Kind != recipes.ConfigKindBoolean {
+		t.Errorf("ConfigOptions[1].Kind = %q", r.ConfigOptions[1].Kind)
+	}
+}
+
+func TestToServerSpec_NilConfigBackwardCompat(t *testing.T) {
+	// A recipe with no ArgsTemplate and a nil config must produce the
+	// exact same spec it did pre-WP01: Command verbatim, no extras.
+	r := recipes.Recipe{
+		ID:      "brave-search",
+		Command: []string{"npx", "-y", "@modelcontextprotocol/server-brave-search"},
+	}
+	spec := r.ToServerSpec(map[string]string{"BRAVE_API_KEY": "x"}, nil)
+	if len(spec.Command) != 3 {
+		t.Fatalf("Command len = %d, want 3 (no template expansion expected)", len(spec.Command))
+	}
+}
+
+func TestToServerSpec_ConfigSubstitutesArgsTemplate(t *testing.T) {
+	r := recipes.Recipe{
+		ID:           "fs",
+		Command:      []string{"npx", "-y", "@modelcontextprotocol/server-filesystem"},
+		ArgsTemplate: []string{"${ALLOWED_DIRS}"},
+	}
+	cfg := map[string]any{
+		"allowed_directories": []any{"/tmp/one", "/tmp/two", "/tmp/three"},
+	}
+	spec := r.ToServerSpec(nil, cfg)
+	// Expect Command + 3 expanded args.
+	if len(spec.Command) != 3+3 {
+		t.Fatalf("Command = %v (len=%d), want 6", spec.Command, len(spec.Command))
+	}
+	if spec.Command[3] != "/tmp/one" || spec.Command[4] != "/tmp/two" || spec.Command[5] != "/tmp/three" {
+		t.Errorf("expanded args = %v", spec.Command[3:])
+	}
+}
+
+func TestToServerSpec_ConfigEmptyListAppendsNothing(t *testing.T) {
+	r := recipes.Recipe{
+		ID:           "fs",
+		Command:      []string{"npx"},
+		ArgsTemplate: []string{"${ALLOWED_DIRS}"},
+	}
+	spec := r.ToServerSpec(nil, map[string]any{"allowed_directories": []any{}})
+	if len(spec.Command) != 1 {
+		t.Fatalf("Command = %v, want [npx]", spec.Command)
+	}
+}
+
+func TestToServerSpec_ConfigDataDirScalar(t *testing.T) {
+	r := recipes.Recipe{
+		ID:           "fs",
+		Command:      []string{"npx"},
+		ArgsTemplate: []string{"--root=${DATA_DIR}/workspace"},
+	}
+	spec := r.ToServerSpec(nil, map[string]any{"data_dir": "/var/harness"})
+	want := "--root=/var/harness/workspace"
+	if len(spec.Command) != 2 || spec.Command[1] != want {
+		t.Errorf("Command = %v, want [npx %q]", spec.Command, want)
 	}
 }
 
