@@ -11,6 +11,11 @@ type Session struct {
 	Name      string `json:"name"`
 	CreatedAt string `json:"createdAt"`
 	UpdatedAt string `json:"updatedAt"`
+	// SystemPrompt + ContextKind surface the per-session starting
+	// context (Mission A). Empty SystemPrompt + ContextKind="system"
+	// is the default for sessions created before the feature landed.
+	SystemPrompt string `json:"systemPrompt"`
+	ContextKind  string `json:"contextKind"`
 }
 
 // ToolCall mirrors the frontend ToolCall shape for tool-use rendering.
@@ -49,4 +54,10 @@ type SessionsAPI interface {
 	AppendMessage(ctx context.Context, id, role, content string) (Message, error)
 	SaveDraft(ctx context.Context, id, draft string) error
 	LoadDraft(ctx context.Context, id string) (string, error)
+
+	// SetSystemPrompt persists per-session starting context. kind is
+	// 'system' (invisible, prepended on every send) or 'user_seed'
+	// (visible — the caller is responsible for also appending the
+	// content as a user message via AppendMessage).
+	SetSystemPrompt(ctx context.Context, id, content, kind string) error
 }

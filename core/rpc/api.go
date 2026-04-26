@@ -307,6 +307,20 @@ func (r *sessionHistoryReader) AppendMessage(ctx context.Context, sessionID, rol
 	return err
 }
 
+// SystemPromptFor implements llm.SessionContextReader by reading the
+// session's persisted starting context. A nil receiver is the test
+// fallback path; return zero values so buildMessages skips the prepend.
+func (r *sessionHistoryReader) SystemPromptFor(ctx context.Context, sessionID string) (string, string, error) {
+	if r == nil || r.mgr == nil {
+		return "", "", nil
+	}
+	rec, err := r.mgr.Get(ctx, sessionID)
+	if err != nil {
+		return "", "", err
+	}
+	return rec.SystemPrompt, rec.ContextKind, nil
+}
+
 // registryProber satisfies llm.ProviderProber by routing through the
 // adapter's ModelLister capability when one is registered. A successful
 // /models call proves the credential resolves and the provider API

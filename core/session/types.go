@@ -24,7 +24,21 @@ type Record struct {
 	Draft          string
 	ScrollPosition int64
 	ArchivedAt     *time.Time
+	// SystemPrompt is optional starting context attached to the session.
+	// When ContextKind == ContextKindSystem the manager prepends it as a
+	// system role message at every send; ContextKindUserSeed leaves the
+	// content empty here and persists it as the first user turn instead
+	// (so the user sees it in the transcript).
+	SystemPrompt string
+	ContextKind  string
 }
+
+// ContextKind values for Record.ContextKind. Validated at the manager
+// boundary so callers cannot persist unknown values.
+const (
+	ContextKindSystem   = "system"
+	ContextKindUserSeed = "user_seed"
+)
 
 // Role enumerates the speaker of a Message.
 type Role string

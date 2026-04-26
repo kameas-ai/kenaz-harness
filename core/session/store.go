@@ -24,6 +24,10 @@ var (
 	// ErrInvalidName is returned when a Create or Rename receives an
 	// empty / whitespace-only name.
 	ErrInvalidName = errors.New("session: name cannot be empty")
+
+	// ErrInvalidContextKind is returned when SetSystemPrompt receives a
+	// kind outside {ContextKindSystem, ContextKindUserSeed}.
+	ErrInvalidContextKind = errors.New("session: invalid context kind")
 )
 
 // Store is the persistence contract the Manager consumes. Two
@@ -45,6 +49,7 @@ type Store interface {
 	UpdateLastActive(ctx context.Context, id string, at time.Time) error
 	UpdateDraft(ctx context.Context, id, draft string, now time.Time) error
 	UpdateScrollPosition(ctx context.Context, id string, pos int64, now time.Time) error
+	SetSystemPrompt(ctx context.Context, id, content, kind string, now time.Time) error
 
 	AppendMessage(ctx context.Context, m Message) (Message, error)
 	ListMessages(ctx context.Context, sessionID string) ([]Message, error)
@@ -73,6 +78,11 @@ func NewMemoryStore() Store {
 func (s *memStore) Create(_ context.Context, r Record) error {
 	if r.Name == "" {
 		return ErrInvalidName
+	}
+	if r.ContextKind == "" {
+		// Mirror the SQL DEFAULT so reads after Create don't surface
+		// an empty kind that would fail SetSystemPrompt validation.
+		r.ContextKind = ContextKindSystem
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -194,6 +204,23 @@ func (s *memStore) UpdateScrollPosition(_ context.Context, id string, pos int64,
 	return nil
 }
 
+func (s *memStore) SetSystemPrompt(_ context.Context, id, content, kind string, now time.Time) error {
+	if !validContextKind(kind) {
+		return fmt.Errorf("%w: %q", ErrInvalidContextKind, kind)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	r, ok := s.records[id]
+	if !ok {
+		return ErrSessionNotFound
+	}
+	r.SystemPrompt = content
+	r.ContextKind = kind
+	r.UpdatedAt = now
+	s.records[id] = r
+	return nil
+}
+
 func (s *memStore) AppendMessage(_ context.Context, m Message) (Message, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -278,6 +305,9 @@ func (s *sqlStore) Create(ctx context.Context, r Record) error {
 	if r.Name == "" {
 		return ErrInvalidName
 	}
+	if r.ContextKind == "" {
+		r.ContextKind = ContextKindSystem
+	}
 	return s.db.WriteTx(ctx, func(tx WriteTx) error {
 		var archived any
 		if r.ArchivedAt != nil {
@@ -286,8 +316,9 @@ func (s *sqlStore) Create(ctx context.Context, r Record) error {
 		_, err := tx.Exec(ctx, `
             INSERT INTO sessions
                 (id, name, created_at, updated_at, last_active_at,
-                 position, draft, scroll_position, archived_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 position, draft, scroll_position, archived_at,
+                 system_prompt, context_kind)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `,
 			r.ID,
 			r.Name,
@@ -298,6 +329,8 @@ func (s *sqlStore) Create(ctx context.Context, r Record) error {
 			r.Draft,
 			r.ScrollPosition,
 			archived,
+			r.SystemPrompt,
+			r.ContextKind,
 		)
 		return err
 	})
@@ -305,7 +338,8 @@ func (s *sqlStore) Create(ctx context.Context, r Record) error {
 
 const sqlSelectSession = `
     SELECT id, name, created_at, updated_at, last_active_at,
-           position, draft, scroll_position, archived_at
+           position, draft, scroll_position, archived_at,
+           system_prompt, context_kind
     FROM sessions
 `
 
@@ -424,6 +458,31 @@ func (s *sqlStore) UpdateScrollPosition(ctx context.Context, id string, pos int6
 	})
 }
 
+func (s *sqlStore) SetSystemPrompt(ctx context.Context, id, content, kind string, now time.Time) error {
+	if !validContextKind(kind) {
+		return fmt.Errorf("%w: %q", ErrInvalidContextKind, kind)
+	}
+	return s.db.WriteTx(ctx, func(tx WriteTx) error {
+		res, err := tx.Exec(ctx,
+			"UPDATE sessions SET system_prompt = ?, context_kind = ?, updated_at = ? WHERE id = ?",
+			content, kind, now.UnixNano(), id)
+		if err != nil {
+			return err
+		}
+		return rowsAffectedOrNotFound(res)
+	})
+}
+
+// validContextKind reports whether kind is a known ContextKind*. The
+// constants live in types.go; mirror any additions there.
+func validContextKind(kind string) bool {
+	switch kind {
+	case ContextKindSystem, ContextKindUserSeed:
+		return true
+	}
+	return false
+}
+
 func (s *sqlStore) AppendMessage(ctx context.Context, m Message) (Message, error) {
 	var out Message
 	err := s.db.WriteTx(ctx, func(tx WriteTx) error {
@@ -532,6 +591,7 @@ func scanRecord(sc interface{ Scan(dest ...any) error }) (Record, error) {
 		&createdAt, &updatedAt, &lastActive,
 		&r.Position, &r.Draft, &r.ScrollPosition,
 		&archived,
+		&r.SystemPrompt, &r.ContextKind,
 	); err != nil {
 		return Record{}, err
 	}

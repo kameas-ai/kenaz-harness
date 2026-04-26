@@ -300,6 +300,72 @@ func TestMemStore_UpdateDraftAndScroll(t *testing.T) {
 	}
 }
 
+func TestMemStore_SetSystemPrompt_RoundTrip(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s := NewMemoryStore()
+	now := time.Date(2026, 4, 25, 0, 0, 0, 0, time.UTC)
+	if err := s.Create(ctx, mustRecord("s1", "chat", 0, now)); err != nil {
+		t.Fatal(err)
+	}
+	later := now.Add(time.Hour)
+	if err := s.SetSystemPrompt(ctx, "s1", "you are helpful", ContextKindSystem, later); err != nil {
+		t.Fatalf("SetSystemPrompt: %v", err)
+	}
+	got, _ := s.Get(ctx, "s1")
+	if got.SystemPrompt != "you are helpful" {
+		t.Errorf("SystemPrompt = %q, want 'you are helpful'", got.SystemPrompt)
+	}
+	if got.ContextKind != ContextKindSystem {
+		t.Errorf("ContextKind = %q, want %q", got.ContextKind, ContextKindSystem)
+	}
+	if !got.UpdatedAt.Equal(later) {
+		t.Errorf("UpdatedAt = %v, want %v", got.UpdatedAt, later)
+	}
+}
+
+func TestMemStore_SetSystemPrompt_RejectsInvalidKind(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s := NewMemoryStore()
+	now := time.Now()
+	if err := s.Create(ctx, mustRecord("s1", "x", 0, now)); err != nil {
+		t.Fatal(err)
+	}
+	err := s.SetSystemPrompt(ctx, "s1", "anything", "garbage", now)
+	if !errors.Is(err, ErrInvalidContextKind) {
+		t.Errorf("got %v, want ErrInvalidContextKind", err)
+	}
+	got, _ := s.Get(ctx, "s1")
+	if got.SystemPrompt != "" || got.ContextKind != ContextKindSystem {
+		t.Errorf("record mutated despite rejected kind: %+v", got)
+	}
+}
+
+func TestMemStore_SetSystemPrompt_MissingSession(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s := NewMemoryStore()
+	err := s.SetSystemPrompt(ctx, "ghost", "x", ContextKindSystem, time.Now())
+	if !errors.Is(err, ErrSessionNotFound) {
+		t.Errorf("got %v, want ErrSessionNotFound", err)
+	}
+}
+
+func TestMemStore_Create_DefaultsContextKindWhenEmpty(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s := NewMemoryStore()
+	now := time.Now()
+	if err := s.Create(ctx, mustRecord("s1", "x", 0, now)); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := s.Get(ctx, "s1")
+	if got.ContextKind != ContextKindSystem {
+		t.Errorf("ContextKind = %q, want %q (default)", got.ContextKind, ContextKindSystem)
+	}
+}
+
 func TestMemStore_UpdateLastActive(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()

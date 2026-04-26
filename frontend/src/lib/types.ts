@@ -12,6 +12,15 @@ export interface Session {
   name: string;
   createdAt: string;
   updatedAt: string;
+  /** Optional starting context attached to the session (Mission A). */
+  systemPrompt?: string;
+  /**
+   * 'system' (invisible, prepended on every send) or 'user_seed'
+   * (visible — the seed lives as the first user turn in the message
+   * history). Optional for sessions persisted before the feature
+   * landed; the backend defaults to 'system' on read.
+   */
+  contextKind?: 'system' | 'user_seed';
 }
 
 export interface Provider {

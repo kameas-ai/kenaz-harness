@@ -14,11 +14,20 @@ import (
 //
 // Timestamps render as RFC3339Nano UTC for byte-stable JSON.
 func recordToView(r session.Record) Session {
+	kind := r.ContextKind
+	if kind == "" {
+		// Sessions persisted before the system_prompt feature landed
+		// have an empty kind from the SQL DEFAULT; surface the canonical
+		// 'system' so the frontend never sees a third value.
+		kind = session.ContextKindSystem
+	}
 	return Session{
-		ID:        r.ID,
-		Name:      r.Name,
-		CreatedAt: r.CreatedAt.UTC().Format(time.RFC3339Nano),
-		UpdatedAt: r.UpdatedAt.UTC().Format(time.RFC3339Nano),
+		ID:           r.ID,
+		Name:         r.Name,
+		CreatedAt:    r.CreatedAt.UTC().Format(time.RFC3339Nano),
+		UpdatedAt:    r.UpdatedAt.UTC().Format(time.RFC3339Nano),
+		SystemPrompt: r.SystemPrompt,
+		ContextKind:  kind,
 	}
 }
 
@@ -168,4 +177,9 @@ func (a *managerAPI) LoadDraft(ctx context.Context, id string) (string, error) {
 		return "", err
 	}
 	return r.Draft, nil
+}
+
+// SetSystemPrompt implements SessionsAPI.
+func (a *managerAPI) SetSystemPrompt(ctx context.Context, id, content, kind string) error {
+	return a.mgr.SetSystemPrompt(ctx, id, content, kind)
 }

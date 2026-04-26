@@ -125,6 +125,28 @@ func (t *migFakeTx) Exec(ctx context.Context, query string, args ...any) (migrat
 		delete(t.db.indexes, name)
 		t.db.mu.Unlock()
 		return migResult{}, nil
+	case strings.HasPrefix(q, "alter table "):
+		// The fake doesn't track columns, but the session migrations
+		// only ever ALTER … ADD COLUMN against a known table. Treat
+		// as a no-op when the table exists; surface a helpful error
+		// otherwise so a typo in a future migration surfaces locally.
+		rest := strings.TrimPrefix(q, "alter table ")
+		end := len(rest)
+		for i := 0; i < len(rest); i++ {
+			c := rest[i]
+			if c == ' ' || c == '\t' {
+				end = i
+				break
+			}
+		}
+		name := strings.TrimSpace(rest[:end])
+		t.db.mu.Lock()
+		exists := t.db.tables[name]
+		t.db.mu.Unlock()
+		if !exists {
+			return nil, fmt.Errorf("alter table: unknown table %q", name)
+		}
+		return migResult{}, nil
 	case strings.HasPrefix(q, "insert into harness_migrations"):
 		if len(args) != 7 {
 			return nil, fmt.Errorf("ledger insert: want 7 args got %d", len(args))
@@ -295,11 +317,11 @@ func TestMigrations_RegisterAndApply(t *testing.T) {
 		}
 	}
 
-	// Ledger rows: 2 storage bootstrap + 3 sessions migrations = 5 applied entries.
-	if got := len(db.ledger); got != 5 {
-		t.Fatalf("ledger size = %d, want 5", got)
+	// Ledger rows: 2 storage bootstrap + 5 sessions migrations = 7 applied entries.
+	if got := len(db.ledger); got != 7 {
+		t.Fatalf("ledger size = %d, want 7", got)
 	}
-	wantVersions := []int{1, 2, 300, 301, 302}
+	wantVersions := []int{1, 2, 300, 301, 302, 303, 304}
 	for i, want := range wantVersions {
 		if db.ledger[i].Version != want {
 			t.Errorf("ledger[%d].Version = %d, want %d", i, db.ledger[i].Version, want)

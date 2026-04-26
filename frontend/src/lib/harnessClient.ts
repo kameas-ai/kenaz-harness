@@ -67,6 +67,11 @@ interface WailsBindingsLike {
   ): Promise<Message>;
   Sessions_SaveDraft(id: string, draft: string): Promise<void>;
   Sessions_LoadDraft(id: string): Promise<string>;
+  Sessions_SetSystemPrompt(
+    id: string,
+    content: string,
+    kind: 'system' | 'user_seed',
+  ): Promise<void>;
 
   LLM_ListProviders(): Promise<Provider[]>;
   LLM_StartStream(
@@ -165,6 +170,18 @@ export interface SessionsClient {
   saveDraft(id: string, draft: string): Promise<void>;
   /** Load the persisted draft (empty string if none). */
   loadDraft(id: string): Promise<string>;
+  /**
+   * Persist the per-session starting context (Mission A). kind is
+   * 'system' (invisible system prompt prepended on every send) or
+   * 'user_seed' (visible — caller is responsible for ALSO appending
+   * the content as a user message via appendMessage). The Go side
+   * validates kind and rejects unknown values.
+   */
+  setSystemPrompt(
+    id: string,
+    content: string,
+    kind: 'system' | 'user_seed',
+  ): Promise<void>;
 }
 
 export interface LLMConnectorClient {
@@ -315,6 +332,8 @@ export function createHarnessClient(): HarnessClient {
         b().Sessions_AppendMessage(id, role, content),
       saveDraft: (id, draft) => b().Sessions_SaveDraft(id, draft),
       loadDraft: (id) => b().Sessions_LoadDraft(id),
+      setSystemPrompt: (id, content, kind) =>
+        b().Sessions_SetSystemPrompt(id, content, kind),
     },
     llm: {
       listProviders: () => b().LLM_ListProviders(),
@@ -434,6 +453,7 @@ export function createFakeHarnessClient(
       }),
       saveDraft: noop,
       loadDraft: async () => '',
+      setSystemPrompt: noop,
     },
     llm: {
       listProviders: async () => [],

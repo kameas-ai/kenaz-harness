@@ -153,6 +153,9 @@ func (b *Bindings) Sessions_SaveDraft(id, draft string) error {
 func (b *Bindings) Sessions_LoadDraft(id string) (string, error) {
 	return b.api.Sessions().LoadDraft(b.ctx(), id)
 }
+func (b *Bindings) Sessions_SetSystemPrompt(id, content, kind string) error {
+	return b.api.Sessions().SetSystemPrompt(b.ctx(), id, content, kind)
+}
 
 // ── llm ────────────────────────────────────────────────────────────────
 

@@ -19,9 +19,11 @@ import (
 const (
 	OwningMission = "sessions"
 
-	migrationIDSessionsTable = "sessions/0300-sessions-table"
-	migrationIDMessagesTable = "sessions/0301-session-messages-table"
-	migrationIDIndexes       = "sessions/0302-sessions-indexes"
+	migrationIDSessionsTable      = "sessions/0300-sessions-table"
+	migrationIDMessagesTable      = "sessions/0301-session-messages-table"
+	migrationIDIndexes            = "sessions/0302-sessions-indexes"
+	migrationIDSystemPromptColumn = "sessions/0303-sessions-system-prompt"
+	migrationIDContextKindColumn  = "sessions/0304-sessions-context-kind"
 )
 
 // SQL bodies. Keep the DDL byte-stable: the migration framework hashes
@@ -61,6 +63,21 @@ const (
             ON sessions (position);
         CREATE INDEX IF NOT EXISTS idx_sessions_last_active_at
             ON sessions (last_active_at);
+    `
+
+	// SQLite cannot ALTER TABLE … DROP COLUMN before 3.35; the Down
+	// path is a deliberate no-op so rollback to v302 leaves the
+	// columns in place. Re-applying the Up is idempotent because the
+	// column already exists, and the runner won't call Up again
+	// without a rolled_back ledger row.
+	sqlAddSystemPromptColumn = `
+        ALTER TABLE sessions
+            ADD COLUMN system_prompt TEXT NOT NULL DEFAULT '';
+    `
+
+	sqlAddContextKindColumn = `
+        ALTER TABLE sessions
+            ADD COLUMN context_kind TEXT NOT NULL DEFAULT 'system';
     `
 )
 
@@ -120,6 +137,40 @@ func Migrations() []migrations.Migration {
 						return err
 					}
 				}
+				return nil
+			},
+		},
+		{
+			ID:            migrationIDSystemPromptColumn,
+			Version:       303,
+			OwningMission: OwningMission,
+			UpSource:      sqlAddSystemPromptColumn,
+			Up: func(ctx context.Context, tx migrations.WriteTx) error {
+				for _, stmt := range splitSQL(sqlAddSystemPromptColumn) {
+					if _, err := tx.Exec(ctx, stmt); err != nil {
+						return err
+					}
+				}
+				return nil
+			},
+			Down: func(ctx context.Context, tx migrations.WriteTx) error {
+				return nil
+			},
+		},
+		{
+			ID:            migrationIDContextKindColumn,
+			Version:       304,
+			OwningMission: OwningMission,
+			UpSource:      sqlAddContextKindColumn,
+			Up: func(ctx context.Context, tx migrations.WriteTx) error {
+				for _, stmt := range splitSQL(sqlAddContextKindColumn) {
+					if _, err := tx.Exec(ctx, stmt); err != nil {
+						return err
+					}
+				}
+				return nil
+			},
+			Down: func(ctx context.Context, tx migrations.WriteTx) error {
 				return nil
 			},
 		},
