@@ -42,6 +42,7 @@ import (
 	projectsview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/projects"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/sessions"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/settings"
+	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/shell"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/tools"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/trust"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/workflow"
@@ -78,6 +79,7 @@ type HarnessAPI interface {
 	Projects() projectsview.ProjectsAPI
 	Attachments() attachmentsview.AttachmentsAPI
 	Tools() tools.ToolsAPI
+	Shell() shell.ShellAPI
 }
 
 // ShellStatus drives the Toolbar status pills + LegendBar live-rate
@@ -137,6 +139,8 @@ type API struct {
 	attachmentsMgr  *coreatt.Manager
 	attachmentsAPI  attachmentsview.AttachmentsAPI
 	toolsAPI        tools.ToolsAPI
+	shellImpl       *shell.API
+	shellAPI        shell.ShellAPI
 
 	// stdioPool is the production *stdio.Pool wired into newLLMStack.
 	// Held on the API value so the tools view's InstallRecipe /
@@ -160,12 +164,18 @@ type API struct {
 // AND to the StreamBroker, which needs the OnStartup-supplied context
 // so runtime.EventsEmit dispatches correctly (background contexts
 // crash Wails). main.go calls this from OnStartup.
+//
+// The shell view also captures this ctx — runtime.BrowserOpenURL has
+// the same context-validation behaviour as EventsEmit.
 func (a *API) SetContext(ctx context.Context) {
 	if a.bindings != nil {
 		a.bindings.SetContext(ctx)
 	}
 	if a.broker != nil {
 		a.broker.SetContext(ctx)
+	}
+	if a.shellImpl != nil {
+		a.shellImpl.SetContext(ctx)
 	}
 }
 
@@ -258,6 +268,8 @@ func New(c *core.Core) *API {
 		c.SetMCPRecipeBootstrap(makeMCPRecipeBootstrap(c, a.stdioPool, stack.secrets))
 	}
 	a.toolsAPI = newToolsAPI(c, stack.pool, stack.secrets)
+	a.shellImpl = shell.New(nil)
+	a.shellAPI = a.shellImpl
 	a.memoryAPI = memoryview.New(memoryview.Config{
 		Store:    memStore,
 		Embedder: embedder,
@@ -404,7 +416,7 @@ func makeMCPRecipeBootstrap(c *core.Core, pool *stdio.Pool, secretsBackend *secr
 					"recipe_id", entry.ID, "err", err.Error())
 				continue
 			}
-			specs = append(specs, recipe.ToServerSpec(resolved, nil))
+			specs = append(specs, recipe.ToServerSpec(resolved, entry.Config))
 		}
 		if len(specs) == 0 {
 			return nil
@@ -1251,6 +1263,12 @@ func (a *API) Tools() tools.ToolsAPI {
 		return &stubTools{}
 	}
 	return a.toolsAPI
+}
+func (a *API) Shell() shell.ShellAPI {
+	if a.shellAPI == nil {
+		return &stubShell{}
+	}
+	return a.shellAPI
 }
 
 // Bindings returns the slice of Wails-bound objects. The Bindings struct

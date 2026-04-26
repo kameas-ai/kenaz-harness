@@ -2,6 +2,10 @@ package tools
 
 import (
 	"context"
+	"errors"
+	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 
@@ -180,7 +184,7 @@ func TestInstallRecipe_MissingRequiredEnvFails(t *testing.T) {
 		DataDir:  t.TempDir(),
 	})
 
-	_, err := api.InstallRecipe(context.Background(), "test-recipe", map[string]string{})
+	_, err := api.InstallRecipe(context.Background(), "test-recipe", map[string]string{}, nil)
 	if err == nil {
 		t.Fatalf("InstallRecipe with missing env: want error, got nil")
 	}
@@ -211,7 +215,7 @@ func TestInstallRecipe_RoundTripPersistsAndSpawns(t *testing.T) {
 	})
 
 	env := map[string]string{"TEST_API_KEY": "marker-12345"}
-	status, err := api.InstallRecipe(context.Background(), "test-recipe", env)
+	status, err := api.InstallRecipe(context.Background(), "test-recipe", env, nil)
 	if err != nil {
 		t.Fatalf("InstallRecipe: %v", err)
 	}
@@ -255,7 +259,7 @@ func TestUninstallRecipe_RemovesAndCloses(t *testing.T) {
 		DataDir:  t.TempDir(),
 	})
 
-	if _, err := api.InstallRecipe(context.Background(), "test-recipe", map[string]string{"TEST_API_KEY": "x"}); err != nil {
+	if _, err := api.InstallRecipe(context.Background(), "test-recipe", map[string]string{"TEST_API_KEY": "x"}, nil); err != nil {
 		t.Fatalf("Install: %v", err)
 	}
 	if err := api.UninstallRecipe(context.Background(), "test-recipe"); err != nil {
@@ -332,7 +336,7 @@ func TestRecipeStatus_InstalledPassesThrough(t *testing.T) {
 		Keychain: &fixedKeychain{backend: backend},
 		DataDir:  t.TempDir(),
 	})
-	if _, err := api.InstallRecipe(context.Background(), "test-recipe", map[string]string{"TEST_API_KEY": "x"}); err != nil {
+	if _, err := api.InstallRecipe(context.Background(), "test-recipe", map[string]string{"TEST_API_KEY": "x"}, nil); err != nil {
 		t.Fatalf("Install: %v", err)
 	}
 	status, err := api.RecipeStatus(context.Background(), "test-recipe")
@@ -371,7 +375,7 @@ func TestListRecipes_OverlaysEnabledAndStatus(t *testing.T) {
 		t.Fatalf("pre-install listing is Enabled=true")
 	}
 
-	if _, err := api.InstallRecipe(context.Background(), "test-recipe", map[string]string{"TEST_API_KEY": "x"}); err != nil {
+	if _, err := api.InstallRecipe(context.Background(), "test-recipe", map[string]string{"TEST_API_KEY": "x"}, nil); err != nil {
 		t.Fatalf("Install: %v", err)
 	}
 
@@ -418,5 +422,286 @@ func TestAPI_SatisfiesToolsAPI(t *testing.T) {
 	api := New(Config{})
 	if _, err := api.ListRecipes(context.Background()); err == nil {
 		t.Fatalf("ListRecipes with no catalog: want error, got nil")
+	}
+}
+
+// fsCatalog returns a one-recipe catalog for the filesystem-style
+// install path: ArgsTemplate driven by an allowed_directories
+// directory_list ConfigOption. No env keys.
+func fsCatalog() *recipes.Catalog {
+	return &recipes.Catalog{Version: 1, Recipes: []recipes.Recipe{{
+		ID:           "filesystem",
+		DisplayName:  "Filesystem",
+		Command:      []string{"npx", "-y", "@modelcontextprotocol/server-filesystem"},
+		ArgsTemplate: []string{"${ALLOWED_DIRS}"},
+		ConfigOptions: []recipes.ConfigOption{{
+			Name:     "allowed_directories",
+			Display:  "Allowed directories",
+			Kind:     recipes.ConfigKindDirectoryList,
+			Default:  []any{"${DATA_DIR}/agent-workspace"},
+			Required: true,
+		}},
+	}}}
+}
+
+func TestInstallRecipe_RequiredConfigMissingFails(t *testing.T) {
+	t.Parallel()
+	cat := &recipes.Catalog{Version: 1, Recipes: []recipes.Recipe{{
+		ID:      "fs",
+		Command: []string{"/bin/echo"},
+		ConfigOptions: []recipes.ConfigOption{{
+			Name:     "allowed_directories",
+			Kind:     recipes.ConfigKindDirectoryList,
+			Required: true,
+		}},
+	}}}
+	enabled := &recipes.EnabledRecipes{}
+	pool := newFakePool()
+	api := New(Config{
+		Catalog: cat,
+		Enabled: enabled,
+		Pool:    pool,
+		Secrets: secrets.NewMemoryBackend(),
+		DataDir: t.TempDir(),
+	})
+	if _, err := api.InstallRecipe(context.Background(), "fs", nil, nil); err == nil {
+		t.Fatal("InstallRecipe with missing required config: want error, got nil")
+	}
+	if len(enabled.List()) != 0 {
+		t.Fatalf("EnabledRecipes was mutated despite validation failure: %v", enabled.List())
+	}
+	if len(pool.opens()) != 0 {
+		t.Fatalf("pool received opens despite validation failure")
+	}
+}
+
+func TestInstallRecipe_DirectoryListNonExistentFails(t *testing.T) {
+	t.Parallel()
+	cat := &recipes.Catalog{Version: 1, Recipes: []recipes.Recipe{{
+		ID:      "fs",
+		Command: []string{"/bin/echo"},
+		ConfigOptions: []recipes.ConfigOption{{
+			Name:     "allowed_directories",
+			Kind:     recipes.ConfigKindDirectoryList,
+			Required: true,
+		}},
+	}}}
+	api := New(Config{
+		Catalog: cat,
+		Enabled: &recipes.EnabledRecipes{},
+		Pool:    newFakePool(),
+		Secrets: secrets.NewMemoryBackend(),
+		DataDir: t.TempDir(),
+	})
+	bogus := filepath.Join(t.TempDir(), "definitely-not-here")
+	cfg := map[string]any{"allowed_directories": []any{bogus}}
+	_, err := api.InstallRecipe(context.Background(), "fs", nil, cfg)
+	if err == nil {
+		t.Fatal("InstallRecipe with non-existent path: want error, got nil")
+	}
+	if !errors.Is(err, ErrPathNotFound) {
+		t.Fatalf("err = %v, want ErrPathNotFound", err)
+	}
+}
+
+func TestInstallRecipe_DirectoryListDenyListFails(t *testing.T) {
+	t.Parallel()
+	cat := &recipes.Catalog{Version: 1, Recipes: []recipes.Recipe{{
+		ID:      "fs",
+		Command: []string{"/bin/echo"},
+		ConfigOptions: []recipes.ConfigOption{{
+			Name:     "allowed_directories",
+			Kind:     recipes.ConfigKindDirectoryList,
+			Required: true,
+		}},
+	}}}
+	api := New(Config{
+		Catalog: cat,
+		Enabled: &recipes.EnabledRecipes{},
+		Pool:    newFakePool(),
+		Secrets: secrets.NewMemoryBackend(),
+		DataDir: t.TempDir(),
+	})
+	cfg := map[string]any{"allowed_directories": []any{"/etc"}}
+	_, err := api.InstallRecipe(context.Background(), "fs", nil, cfg)
+	if err == nil {
+		t.Fatal("InstallRecipe with /etc: want error, got nil")
+	}
+	if !errors.Is(err, ErrPathInDenyList) {
+		t.Fatalf("err = %v, want ErrPathInDenyList", err)
+	}
+}
+
+func TestInstallRecipe_UnknownConfigKindFails(t *testing.T) {
+	t.Parallel()
+	cat := &recipes.Catalog{Version: 1, Recipes: []recipes.Recipe{{
+		ID:      "weird",
+		Command: []string{"/bin/echo"},
+		ConfigOptions: []recipes.ConfigOption{{
+			Name:     "frobnicate",
+			Kind:     "frobnicator", // unknown
+			Required: false,
+			Default:  "anything",
+		}},
+	}}}
+	api := New(Config{
+		Catalog: cat,
+		Enabled: &recipes.EnabledRecipes{},
+		Pool:    newFakePool(),
+		Secrets: secrets.NewMemoryBackend(),
+		DataDir: t.TempDir(),
+	})
+	_, err := api.InstallRecipe(context.Background(), "weird", nil, nil)
+	if err == nil {
+		t.Fatal("InstallRecipe with unknown ConfigOption kind: want error, got nil")
+	}
+	if !strings.Contains(err.Error(), "unknown ConfigOption kind") {
+		t.Fatalf("err = %v, want \"unknown ConfigOption kind\"", err)
+	}
+}
+
+func TestInstallRecipe_DataDirSubstitutedInDefault(t *testing.T) {
+	t.Parallel()
+	dataDir := t.TempDir()
+	cat := fsCatalog()
+	enabled := &recipes.EnabledRecipes{}
+	pool := newFakePool()
+	api := New(Config{
+		Catalog: cat,
+		Enabled: enabled,
+		Pool:    pool,
+		Secrets: secrets.NewMemoryBackend(),
+		DataDir: dataDir,
+	})
+	// No config supplied → falls back to Default which contains
+	// ${DATA_DIR}; install must succeed and the workspace must be
+	// materialised on disk.
+	if _, err := api.InstallRecipe(context.Background(), "filesystem", nil, nil); err != nil {
+		t.Fatalf("InstallRecipe: %v", err)
+	}
+	wantWorkspace := filepath.Join(dataDir, "agent-workspace")
+	if _, statErr := os.Stat(wantWorkspace); statErr != nil {
+		t.Fatalf("default workspace not created: %v", statErr)
+	}
+	if _, statErr := os.Stat(filepath.Join(wantWorkspace, ".kaneaz-workspace")); statErr != nil {
+		t.Fatalf("workspace marker not written: %v", statErr)
+	}
+	// Persisted Config carries the expanded path (no literal ${DATA_DIR}).
+	persisted, ok := enabled.Get("filesystem")
+	if !ok {
+		t.Fatal("filesystem not persisted")
+	}
+	dirs, ok := persisted.Config["allowed_directories"].([]string)
+	if !ok {
+		t.Fatalf("persisted config dirs = %T, want []string", persisted.Config["allowed_directories"])
+	}
+	if len(dirs) != 1 || dirs[0] != wantWorkspace {
+		t.Fatalf("persisted dirs = %v, want [%s]", dirs, wantWorkspace)
+	}
+}
+
+func TestInstallRecipe_BooleanWrongTypeFails(t *testing.T) {
+	t.Parallel()
+	cat := &recipes.Catalog{Version: 1, Recipes: []recipes.Recipe{{
+		ID:      "togglerec",
+		Command: []string{"/bin/echo"},
+		ConfigOptions: []recipes.ConfigOption{{
+			Name:     "verbose",
+			Kind:     recipes.ConfigKindBoolean,
+			Required: true,
+		}},
+	}}}
+	api := New(Config{
+		Catalog: cat,
+		Enabled: &recipes.EnabledRecipes{},
+		Pool:    newFakePool(),
+		Secrets: secrets.NewMemoryBackend(),
+		DataDir: t.TempDir(),
+	})
+	cfg := map[string]any{"verbose": "yes"} // wrong type — should be bool
+	_, err := api.InstallRecipe(context.Background(), "togglerec", nil, cfg)
+	if err == nil {
+		t.Fatal("InstallRecipe with non-bool boolean: want error, got nil")
+	}
+	if !strings.Contains(err.Error(), "must be a boolean") {
+		t.Fatalf("err = %v, want \"must be a boolean\"", err)
+	}
+}
+
+func TestInstallRecipe_FilesystemRoundTripDefaultWorkspace(t *testing.T) {
+	t.Parallel()
+	dataDir := t.TempDir()
+	cat := fsCatalog()
+	pool := newFakePool()
+	api := New(Config{
+		Catalog: cat,
+		Enabled: &recipes.EnabledRecipes{},
+		Pool:    pool,
+		Secrets: secrets.NewMemoryBackend(),
+		DataDir: dataDir,
+	})
+	if _, err := api.InstallRecipe(context.Background(), "filesystem", nil, nil); err != nil {
+		t.Fatalf("InstallRecipe: %v", err)
+	}
+	opens := pool.opens()
+	if len(opens) != 1 {
+		t.Fatalf("pool opens = %d, want 1", len(opens))
+	}
+	wantWorkspace := filepath.Join(dataDir, "agent-workspace")
+	wantCmd := []string{
+		"npx", "-y", "@modelcontextprotocol/server-filesystem", wantWorkspace,
+	}
+	if len(opens[0].Command) != len(wantCmd) {
+		t.Fatalf("Command = %v, want %v", opens[0].Command, wantCmd)
+	}
+	for i, want := range wantCmd {
+		if opens[0].Command[i] != want {
+			t.Fatalf("Command[%d] = %q, want %q", i, opens[0].Command[i], want)
+		}
+	}
+}
+
+func TestInstallRecipe_FilesystemMultipleDirsAppendAsArgs(t *testing.T) {
+	t.Parallel()
+	dataDir := t.TempDir()
+	extra1 := t.TempDir()
+	extra2 := t.TempDir()
+	cat := fsCatalog()
+	pool := newFakePool()
+	api := New(Config{
+		Catalog: cat,
+		Enabled: &recipes.EnabledRecipes{},
+		Pool:    pool,
+		Secrets: secrets.NewMemoryBackend(),
+		DataDir: dataDir,
+	})
+	cfg := map[string]any{
+		"allowed_directories": []any{
+			"${DATA_DIR}/agent-workspace",
+			extra1,
+			extra2,
+		},
+	}
+	if _, err := api.InstallRecipe(context.Background(), "filesystem", nil, cfg); err != nil {
+		t.Fatalf("InstallRecipe: %v", err)
+	}
+	opens := pool.opens()
+	if len(opens) != 1 {
+		t.Fatalf("pool opens = %d, want 1", len(opens))
+	}
+	got := opens[0].Command
+	// Command base = npx -y server-filesystem; trailing 3 args are the dirs.
+	if len(got) != 6 {
+		t.Fatalf("Command len = %d, want 6 (3 base + 3 dirs): %v", len(got), got)
+	}
+	wantWorkspace := filepath.Join(dataDir, "agent-workspace")
+	if got[3] != wantWorkspace {
+		t.Errorf("Command[3] = %q, want %q", got[3], wantWorkspace)
+	}
+	if got[4] != extra1 {
+		t.Errorf("Command[4] = %q, want %q", got[4], extra1)
+	}
+	if got[5] != extra2 {
+		t.Errorf("Command[5] = %q, want %q", got[5], extra2)
 	}
 }

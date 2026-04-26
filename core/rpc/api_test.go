@@ -18,6 +18,7 @@ import (
 	projectsview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/projects"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/sessions"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/settings"
+	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/shell"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/tools"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/trust"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/workflow"
@@ -43,6 +44,7 @@ type fakeHarnessAPI struct {
 	projectsAPI     projectsview.ProjectsAPI
 	attachmentsAPI  attachmentsview.AttachmentsAPI
 	toolsAPI        tools.ToolsAPI
+	shellAPI        shell.ShellAPI
 }
 
 func (f *fakeHarnessAPI) ShellStatus(_ context.Context) (ShellStatus, error) {
@@ -66,6 +68,7 @@ func (f *fakeHarnessAPI) Hooks() hooksview.HooksAPI                   { return f
 func (f *fakeHarnessAPI) Projects() projectsview.ProjectsAPI          { return f.projectsAPI }
 func (f *fakeHarnessAPI) Attachments() attachmentsview.AttachmentsAPI { return f.attachmentsAPI }
 func (f *fakeHarnessAPI) Tools() tools.ToolsAPI                       { return f.toolsAPI }
+func (f *fakeHarnessAPI) Shell() shell.ShellAPI                       { return f.shellAPI }
 
 // Compile-time interface witness (plan §4.2).
 var _ HarnessAPI = (*fakeHarnessAPI)(nil)
