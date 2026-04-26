@@ -18,6 +18,22 @@ export function AppInfo() {
   return window['go']['rpc']['Bindings']['AppInfo']();
 }
 
+export function Artifacts_Delete(arg1) {
+  return window['go']['rpc']['Bindings']['Artifacts_Delete'](arg1);
+}
+
+export function Artifacts_Get(arg1) {
+  return window['go']['rpc']['Bindings']['Artifacts_Get'](arg1);
+}
+
+export function Artifacts_List(arg1) {
+  return window['go']['rpc']['Bindings']['Artifacts_List'](arg1);
+}
+
+export function Artifacts_Promote(arg1, arg2, arg3) {
+  return window['go']['rpc']['Bindings']['Artifacts_Promote'](arg1, arg2, arg3);
+}
+
 export function Attachments_Add(arg1) {
   return window['go']['rpc']['Bindings']['Attachments_Add'](arg1);
 }
@@ -328,6 +344,10 @@ export function Sessions_Rename(arg1, arg2) {
 
 export function Sessions_Reorder(arg1) {
   return window['go']['rpc']['Bindings']['Sessions_Reorder'](arg1);
+}
+
+export function Sessions_SaveAsArtifact(arg1, arg2, arg3, arg4, arg5) {
+  return window['go']['rpc']['Bindings']['Sessions_SaveAsArtifact'](arg1, arg2, arg3, arg4, arg5);
 }
 
 export function Sessions_SaveDraft(arg1, arg2) {

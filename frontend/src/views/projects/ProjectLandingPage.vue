@@ -15,7 +15,15 @@ import { useHarnessClient } from '@/lib/useHarnessAPI';
 import AttachmentRow from '@/components/contexts/AttachmentRow.vue';
 import AttachmentTreePicker from '@/components/contexts/AttachmentTreePicker.vue';
 import NewSessionDialog from '@/shell/NewSessionDialog.vue';
-import type { Attachment, Project, Session } from '@/lib/types';
+import ArtifactPreview from '@/views/artifacts/ArtifactPreview.vue';
+import type {
+  Artifact,
+  ArtifactScope,
+  ArtifactWithBytes,
+  Attachment,
+  Project,
+  Session,
+} from '@/lib/types';
 
 const client = useHarnessClient();
 const route = useRoute();
@@ -43,6 +51,13 @@ const memoryError = ref<string | null>(null);
 
 // New-session affordance (WP07 T002).
 const newSessionDialogOpen = ref(false);
+
+// Project-scope artifacts (WP03 T007).
+const projectArtifacts = ref<readonly Artifact[]>([]);
+const artifactsLoading = ref(false);
+const artifactsErrorMsg = ref<string | null>(null);
+const artifactPreviewOpen = ref(false);
+const artifactPreviewPayload = ref<ArtifactWithBytes | null>(null);
 
 const projectId = computed(() => {
   const v = route.params.id;
@@ -76,6 +91,67 @@ async function load(id: string) {
   }
   await loadAttachments(id);
   await loadMemoryCount(id);
+  await loadProjectArtifacts(id);
+}
+
+async function loadProjectArtifacts(id: string) {
+  if (!id) {
+    projectArtifacts.value = [];
+    return;
+  }
+  artifactsLoading.value = true;
+  artifactsErrorMsg.value = null;
+  try {
+    projectArtifacts.value = await client.artifacts.list({
+      projectId: id,
+      scopeKind: 'project',
+    });
+  } catch (err) {
+    projectArtifacts.value = [];
+    artifactsErrorMsg.value =
+      err instanceof Error ? err.message : String(err);
+  } finally {
+    artifactsLoading.value = false;
+  }
+}
+
+async function openArtifactPreview(a: Artifact) {
+  artifactsErrorMsg.value = null;
+  try {
+    artifactPreviewPayload.value = await client.artifacts.get(a.id);
+    artifactPreviewOpen.value = true;
+  } catch (err) {
+    artifactsErrorMsg.value =
+      err instanceof Error ? err.message : String(err);
+  }
+}
+
+function closeArtifactPreview() {
+  artifactPreviewOpen.value = false;
+  artifactPreviewPayload.value = null;
+}
+
+async function promoteArtifact(
+  id: string,
+  scopeKind: ArtifactScope,
+  scopeId: string,
+): Promise<Artifact> {
+  const updated = await client.artifacts.promote(id, scopeKind, scopeId);
+  await loadProjectArtifacts(projectId.value);
+  return updated;
+}
+
+async function deleteArtifact(id: string): Promise<void> {
+  await client.artifacts.remove(id);
+  await loadProjectArtifacts(projectId.value);
+}
+
+function formatArtifactSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  const kb = bytes / 1024;
+  if (kb < 1024) return kb < 10 ? `${kb.toFixed(1)} KB` : `${Math.round(kb)} KB`;
+  const mb = kb / 1024;
+  return mb < 10 ? `${mb.toFixed(1)} MB` : `${Math.round(mb)} MB`;
 }
 
 async function loadMemoryCount(id: string) {
@@ -514,6 +590,78 @@ function onDragEnd() {
           No project context yet. Pick a file from the library to attach.
         </p>
       </section>
+
+      <section data-testid="project-artifacts-section">
+        <h2
+          class="font-ui text-[11px] font-medium uppercase tracking-[0.18em] text-ink-subtle"
+        >
+          Project artifacts
+          <span class="ml-1 text-ink-dim">({{ projectArtifacts.length }})</span>
+        </h2>
+        <p class="mt-1 font-ui text-[11px] text-ink-dim">
+          Code blocks, tool outputs, and pinned snippets promoted to this
+          project. They survive their originating session.
+        </p>
+        <div
+          v-if="artifactsErrorMsg"
+          class="mt-2 rounded-sm border border-signal-danger bg-surface-1 px-3 py-2 font-ui text-[11px] text-signal-danger"
+          role="alert"
+          data-testid="project-artifacts-error"
+        >
+          {{ artifactsErrorMsg }}
+        </div>
+        <div
+          v-if="artifactsLoading"
+          class="mt-2 font-ui text-xs text-ink-muted"
+          data-testid="project-artifacts-loading"
+        >
+          Loading…
+        </div>
+        <table
+          v-else-if="projectArtifacts.length > 0"
+          class="mt-2 w-full text-left font-ui text-xs"
+          data-testid="project-artifacts-table"
+        >
+          <thead>
+            <tr class="text-[10px] uppercase tracking-[0.18em] text-ink-subtle">
+              <th class="px-3 py-1.5 font-medium">Source</th>
+              <th class="px-3 py-1.5 font-medium">Title</th>
+              <th class="px-3 py-1.5 font-medium">Mime</th>
+              <th class="px-3 py-1.5 font-medium">Size</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr
+              v-for="a in projectArtifacts"
+              :key="a.id"
+              class="cursor-pointer hover:bg-surface-2"
+              :data-testid="`project-artifacts-row-${a.id}`"
+              @click="openArtifactPreview(a)"
+            >
+              <td class="px-3 py-2 text-ink-dim font-mono text-[11px]">
+                {{ a.source }}
+              </td>
+              <td class="px-3 py-2 text-ink truncate max-w-[36ch]">
+                {{ a.title }}
+              </td>
+              <td class="px-3 py-2 text-ink-muted font-mono text-[11px]">
+                {{ a.mimeType }}
+              </td>
+              <td class="px-3 py-2 text-ink-muted font-mono text-[11px]">
+                {{ formatArtifactSize(a.byteSize) }}
+              </td>
+            </tr>
+          </tbody>
+        </table>
+        <p
+          v-else
+          class="mt-2 font-ui text-xs text-ink-muted"
+          data-testid="project-artifacts-empty"
+        >
+          No project-scope artifacts yet. Promote a session-scope artifact
+          from its preview modal.
+        </p>
+      </section>
     </div>
 
     <AttachmentTreePicker
@@ -528,6 +676,15 @@ function onDragEnd() {
       :open="newSessionDialogOpen"
       :initial-project-id="projectId"
       @close="onNewSessionDialogClose"
+    />
+
+    <ArtifactPreview
+      :open="artifactPreviewOpen"
+      :payload="artifactPreviewPayload"
+      :project-id="projectId"
+      :on-promote="promoteArtifact"
+      :on-delete="deleteArtifact"
+      @close="closeArtifactPreview"
     />
   </div>
 </template>

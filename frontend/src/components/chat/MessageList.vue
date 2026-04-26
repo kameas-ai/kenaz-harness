@@ -15,7 +15,7 @@
 
 import { computed, nextTick, onMounted, ref, watch } from 'vue';
 import MessageBubble from './MessageBubble.vue';
-import type { MemoryScopeKind, Message } from '@/lib/types';
+import type { Artifact, MemoryScopeKind, Message } from '@/lib/types';
 
 const props = defineProps<{
   messages: ReadonlyArray<Message>;
@@ -48,6 +48,19 @@ const props = defineProps<{
    * the session is loose. Empty / undefined means no project.
    */
   projectId?: string;
+  /**
+   * When true, MessageBubbles surface a "Save as artifact" affordance.
+   * Off when the parent doesn't intend to handle the corresponding
+   * `save-artifact` event.
+   */
+  saveable?: boolean;
+  /**
+   * Map of message id → artifacts captured from that message. The
+   * parent fetches the full session artifact list once via
+   * `useArtifacts(sessionId)` and projects to a per-message map; we
+   * intentionally avoid per-bubble rpc fetches.
+   */
+  artifactsByMessage?: ReadonlyMap<string, readonly Artifact[]>;
 }>();
 
 const emit = defineEmits<{
@@ -56,7 +69,16 @@ const emit = defineEmits<{
    * scope the user picked; defaults to `'session'` for legacy callers.
    */
   (e: 'remember', message: Message, scope: MemoryScopeKind): void;
+  /** Forwarded from MessageBubble's "Save as artifact" affordance. */
+  (e: 'save-artifact', message: Message): void;
+  /** Forwarded from a message's per-message artifact chip. */
+  (e: 'open-artifact', artifact: Artifact): void;
 }>();
+
+function artifactsFor(messageId: string): readonly Artifact[] {
+  if (!props.artifactsByMessage) return [];
+  return props.artifactsByMessage.get(messageId) ?? [];
+}
 
 const scrollEl = ref<HTMLElement | null>(null);
 const stickToBottom = ref(true);
@@ -147,7 +169,12 @@ defineExpose({ scrollToBottom });
         :content-blocks="m.contentBlocks"
         :rememberable="rememberable === true && m.streaming !== true"
         :project-id="projectId"
+        :message-id="m.id"
+        :saveable="saveable === true && m.streaming !== true"
+        :artifacts="artifactsFor(m.id)"
         @remember="(scope) => emit('remember', m, scope)"
+        @save-artifact="() => emit('save-artifact', m)"
+        @open-artifact="(a) => emit('open-artifact', a)"
       />
 
       <!-- Thinking indicator: visible from the moment send() opens a

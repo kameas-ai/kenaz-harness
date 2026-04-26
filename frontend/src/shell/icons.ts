@@ -2,10 +2,13 @@
 // bundle under NFR-006 (1.5 MB gzipped) by relying on tree-shaking.
 import {
   AlertTriangle,
+  Archive,
   Brain,
   ChevronDown,
   ChevronRight,
+  Code,
   Command,
+  Download,
   FileText,
   Folder,
   FolderOpen,
@@ -13,6 +16,7 @@ import {
   Globe,
   Layers,
   MessageSquare,
+  Pin,
   Plus,
   Search,
   Server,
@@ -29,10 +33,13 @@ import {
 
 export {
   AlertTriangle,
+  Archive,
   Brain,
   ChevronDown,
   ChevronRight,
+  Code,
   Command,
+  Download,
   FileText,
   Folder,
   FolderOpen,
@@ -40,6 +47,7 @@ export {
   Globe,
   Layers,
   MessageSquare,
+  Pin,
   Plus,
   Search,
   Server,

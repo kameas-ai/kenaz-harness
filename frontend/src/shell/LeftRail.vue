@@ -3,6 +3,7 @@ import { computed, ref, onMounted } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import RailEntry from './RailEntry.vue';
 import {
+  Archive,
   Plus,
   MessageSquare,
   Wrench,
@@ -788,6 +789,7 @@ async function onProjectDrop(evt: DragEvent, projectId: string) {
         <li><RailEntry :icon="GitBranch" label="Workflows" to="/workflows" /></li>
         <li><RailEntry :icon="FileText" label="Contexts" to="/contexts" /></li>
         <li><RailEntry :icon="Brain" label="Memory" to="/memory" /></li>
+        <li><RailEntry :icon="Archive" label="Artifacts" to="/artifacts" /></li>
         <li><RailEntry :icon="FileText" label="Audit log" to="/audit" /></li>
         <li><RailEntry :icon="Settings" label="Settings" to="/settings" /></li>
       </ul>

@@ -21,8 +21,134 @@ export namespace a2a {
 
 }
 
+export namespace artifacts {
+
+	export class ArtifactSourceRef {
+	    messageId?: string;
+	    toolCallId?: string;
+	    codeBlockIndex?: number;
+	    filename?: string;
+
+	    static createFrom(source: any = {}) {
+	        return new ArtifactSourceRef(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.messageId = source["messageId"];
+	        this.toolCallId = source["toolCallId"];
+	        this.codeBlockIndex = source["codeBlockIndex"];
+	        this.filename = source["filename"];
+	    }
+	}
+	export class Artifact {
+	    id: string;
+	    sessionId: string;
+	    projectId?: string;
+	    title: string;
+	    mimeType: string;
+	    contentHash: string;
+	    byteSize: number;
+	    source: string;
+	    sourceRef: ArtifactSourceRef;
+	    scopeKind: string;
+	    createdAt: string;
+
+	    static createFrom(source: any = {}) {
+	        return new Artifact(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.sessionId = source["sessionId"];
+	        this.projectId = source["projectId"];
+	        this.title = source["title"];
+	        this.mimeType = source["mimeType"];
+	        this.contentHash = source["contentHash"];
+	        this.byteSize = source["byteSize"];
+	        this.source = source["source"];
+	        this.sourceRef = this.convertValues(source["sourceRef"], ArtifactSourceRef);
+	        this.scopeKind = source["scopeKind"];
+	        this.createdAt = source["createdAt"];
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class ArtifactFilter {
+	    sessionId?: string;
+	    projectId?: string;
+	    mimeTypePrefix?: string;
+	    source?: string;
+	    scopeKind?: string;
+
+	    static createFrom(source: any = {}) {
+	        return new ArtifactFilter(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.sessionId = source["sessionId"];
+	        this.projectId = source["projectId"];
+	        this.mimeTypePrefix = source["mimeTypePrefix"];
+	        this.source = source["source"];
+	        this.scopeKind = source["scopeKind"];
+	    }
+	}
+
+	export class ArtifactWithBytes {
+	    artifact: Artifact;
+	    bytes: number[];
+
+	    static createFrom(source: any = {}) {
+	        return new ArtifactWithBytes(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.artifact = this.convertValues(source["artifact"], Artifact);
+	        this.bytes = source["bytes"];
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+
+}
+
 export namespace attachments {
-	
+
 	export class AddInput {
 	    scopeKind: string;
 	    scopeId?: string;

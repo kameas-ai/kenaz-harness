@@ -30,6 +30,9 @@ import type {
   RecipeListing,
   RecipeState,
   RecipeStatus,
+  Artifact,
+  ArtifactFilter,
+  ArtifactScope,
 } from './types';
 import type { HarnessClient } from './harnessClient';
 
@@ -705,6 +708,109 @@ export function useShell(): UseShellResult {
   const client = useHarnessClient();
   return {
     openInOSBrowser: (path) => client.shell.openInOSBrowser(path),
+  };
+}
+
+/**
+ * useArtifacts — reactive list + CRUD wrappers for the Artifacts table.
+ *
+ * The composable owns the active filter and re-fetches whenever it
+ * changes. Components that drive the /artifacts global view consume
+ * `list` directly; the chat surface uses `saveFromMessage` for the
+ * right-click "Save as artifact" affordance.
+ */
+export interface UseArtifactsResult {
+  list: Ref<readonly Artifact[]>;
+  loading: Ref<boolean>;
+  error: Ref<string | null>;
+  filter: Ref<ArtifactFilter>;
+  refresh(): Promise<void>;
+  setFilter(next: ArtifactFilter): Promise<void>;
+  promote(
+    id: string,
+    scopeKind: ArtifactScope,
+    scopeId: string,
+  ): Promise<Artifact>;
+  remove(id: string): Promise<void>;
+  saveFromMessage(
+    sessionId: string,
+    messageId: string,
+    title: string,
+    rangeStart?: number,
+    rangeEnd?: number,
+  ): Promise<Artifact>;
+}
+
+export function useArtifacts(
+  initialFilter: ArtifactFilter = {},
+): UseArtifactsResult {
+  const client = useHarnessClient();
+  const list = shallowRef<readonly Artifact[]>([]);
+  const loading = ref(false);
+  const error = ref<string | null>(null);
+  const filter = ref<ArtifactFilter>({ ...initialFilter });
+
+  async function refresh() {
+    loading.value = true;
+    error.value = null;
+    try {
+      list.value = await client.artifacts.list(filter.value);
+    } catch (e) {
+      error.value = e instanceof Error ? e.message : String(e);
+      list.value = [];
+    } finally {
+      loading.value = false;
+    }
+  }
+
+  async function setFilter(next: ArtifactFilter) {
+    filter.value = { ...next };
+    await refresh();
+  }
+
+  async function promote(
+    id: string,
+    scopeKind: ArtifactScope,
+    scopeId: string,
+  ): Promise<Artifact> {
+    const updated = await client.artifacts.promote(id, scopeKind, scopeId);
+    await refresh();
+    return updated;
+  }
+
+  async function remove(id: string) {
+    await client.artifacts.remove(id);
+    await refresh();
+  }
+
+  async function saveFromMessage(
+    sessionId: string,
+    messageId: string,
+    title: string,
+    rangeStart?: number,
+    rangeEnd?: number,
+  ): Promise<Artifact> {
+    const created = await client.sessions.saveAsArtifact(
+      sessionId,
+      messageId,
+      title,
+      rangeStart,
+      rangeEnd,
+    );
+    await refresh();
+    return created;
+  }
+
+  return {
+    list,
+    loading,
+    error,
+    filter,
+    refresh,
+    setFilter,
+    promote,
+    remove,
+    saveFromMessage,
   };
 }
 
