@@ -39,6 +39,16 @@ const router = createRouter({
       component: () => import('@/views/audit/AuditView.vue'),
     },
     {
+      path: '/memory',
+      name: 'memory',
+      component: () => import('@/views/memory/MemoryView.vue'),
+    },
+    {
+      path: '/hooks',
+      name: 'hooks',
+      component: () => import('@/views/hooks/HooksView.vue'),
+    },
+    {
       path: '/settings',
       name: 'settings',
       component: () => import('@/views/settings/SettingsView.vue'),

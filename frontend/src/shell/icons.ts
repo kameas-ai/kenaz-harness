@@ -2,6 +2,7 @@
 // bundle under NFR-006 (1.5 MB gzipped) by relying on tree-shaking.
 import {
   AlertTriangle,
+  Brain,
   ChevronRight,
   Command,
   FileText,
@@ -17,12 +18,14 @@ import {
   Moon,
   Pencil,
   Trash2,
+  Webhook,
   Wrench,
   X,
 } from 'lucide-vue-next';
 
 export {
   AlertTriangle,
+  Brain,
   ChevronRight,
   Command,
   FileText,
@@ -38,6 +41,7 @@ export {
   Moon,
   Pencil,
   Trash2,
+  Webhook,
   Wrench,
   X,
 };

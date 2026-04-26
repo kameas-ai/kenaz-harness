@@ -10,6 +10,8 @@ import {
   Server,
   FileText,
   Settings,
+  Brain,
+  Webhook,
   Pencil,
   Trash2,
   X,
@@ -301,6 +303,8 @@ function dismissError() {
         <li><RailEntry :icon="Layers" label="Bundles" to="/bundles" /></li>
         <li><RailEntry :icon="Server" label="Providers" to="/providers" /></li>
         <li><RailEntry :icon="FileText" label="Audit log" to="/audit" /></li>
+        <li><RailEntry :icon="Webhook" label="Hooks" to="/hooks" /></li>
+        <li><RailEntry :icon="Brain" label="Memory" to="/memory" /></li>
         <li><RailEntry :icon="Settings" label="Settings" to="/settings" /></li>
       </ul>
     </nav>

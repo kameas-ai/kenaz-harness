@@ -119,6 +119,45 @@ type SessionMessageWriter interface {
 	AppendMessage(ctx context.Context, sessionID, role, content string) error
 }
 
+// HookMessage mirrors the wire-shape used by the hooks subsystem so
+// the views package does not import core/hooks (keeps the boundary
+// clean). The rpc layer adapts between core/hooks.HookMessage and
+// this minimal projection.
+type HookMessage struct {
+	Role    string
+	Content string
+}
+
+// PreSendHookEvent is the slice of hooks.PreSendEvent the LLM impl
+// passes to the runner. Defined here so views/llm does not import
+// core/hooks directly.
+type PreSendHookEvent struct {
+	SessionID string
+	Messages  []HookMessage
+	Model     string
+	Kind      string
+	UserText  string
+}
+
+// PostSendHookEvent mirrors hooks.PostSendEvent.
+type PostSendHookEvent struct {
+	SessionID     string
+	UserTurn      string
+	AssistantTurn string
+	Model         string
+	Kind          string
+	FinishReason  string
+}
+
+// HookRunner is the surface buildMessages and pump call to fire
+// pre/post-send hooks. The rpc layer wires a *hooks.Runner-backed
+// adapter; nil means "no hooks configured" (the chat path stays
+// untouched, mirroring the pre-hooks behaviour).
+type HookRunner interface {
+	RunPreSend(ctx context.Context, ev PreSendHookEvent) (PreSendHookEvent, error)
+	RunPostSend(ctx context.Context, ev PostSendHookEvent)
+}
+
 // API is the concrete LLMConnectorAPI implementation.
 type API struct {
 	reg      Registry
@@ -129,6 +168,7 @@ type API struct {
 	prober    ProviderProber
 	history   SessionMessageReader
 	historyW  SessionMessageWriter
+	hooks     HookRunner
 
 	mu             sync.Mutex
 	subs           map[string]*subscription
@@ -143,6 +183,12 @@ type subscription struct {
 	stream    corellm.Stream
 	cancel    context.CancelFunc
 	done      chan struct{}
+	// userTurn / model / kind are captured at StartStream so the post-send
+	// hook fired in pump has the original turn metadata without a second
+	// session-history read.
+	userTurn string
+	model    string
+	kind     string
 }
 
 // Config bundles construction options.
@@ -160,6 +206,16 @@ type Config struct {
 	// HistoryWriter persists the assistant turn at stream completion
 	// so navigating away and back reloads the full conversation.
 	HistoryWriter SessionMessageWriter
+	// Hooks, when non-nil, fires pre_send before the message list is
+	// shipped upstream and post_send after the assistant stream closes.
+	// The runner threads any mutated message slice from pre_send hooks
+	// back into the GenerationRequest. nil disables the hooks subsystem
+	// entirely (test-friendly default; chat surface still works).
+	//
+	// Memory retrieval used to ship as an inline MemoryRetriever field;
+	// it is now a preinstalled pre_send hook (memory.retrieve) that the
+	// rpc layer wires into the runner's BuiltinRegistry.
+	Hooks HookRunner
 }
 
 // New constructs a concrete API.
@@ -177,23 +233,32 @@ func New(cfg Config) *API {
 		prober:    cfg.Prober,
 		history:   cfg.History,
 		historyW:  cfg.HistoryWriter,
+		hooks:     cfg.Hooks,
 		subs:      map[string]*subscription{},
 		validated: map[string]bool{},
 	}
 }
 
-// buildMessages assembles the GenerationRequest message slice. When a
-// SessionMessageReader is configured and sessionID is non-empty, the
-// session's persisted history is threaded through; otherwise we fall
-// back to a single demo prompt so the chassis still streams in
-// test/CI paths.
+// buildMessages assembles the GenerationRequest message slice.
 //
-// When the history reader also implements SessionContextReader and the
-// session was configured with kind=system + non-empty content, the
-// system prompt is prepended to the request. user_seed sessions don't
-// prepend here — their seed is appended once at session-creation time
-// and naturally lives in the message history.
-func (a *API) buildMessages(ctx context.Context, sessionID string) ([]corellm.Message, error) {
+// Pipeline:
+//   (1) Load the session's persisted history.
+//   (2) Mission A — if the session was configured with a starting
+//       context (kind=system, non-empty content), prepend it as a
+//       system message. user_seed kind sessions don't need this
+//       branch because the seed already lives as the first user
+//       turn in `stored`.
+//   (3) Mission B — fire the pre_send hook chain. Hooks may mutate
+//       the slice to prepend further system messages (memory.retrieve
+//       injections, redaction transforms, etc.) or block the send.
+//   (4) Map the resulting hookMessages to corellm.Message and return.
+//
+// Final on-the-wire order: [Mission-A system prompt?,
+// hook-injected system messages?, conversation turns…].
+//
+// model + kind are forwarded to the hook runner so Match filters can
+// scope hooks to a particular provider or model.
+func (a *API) buildMessages(ctx context.Context, sessionID, model, kind string) ([]corellm.Message, error) {
 	if a.history == nil || sessionID == "" {
 		return []corellm.Message{
 			{
@@ -211,32 +276,61 @@ func (a *API) buildMessages(ctx context.Context, sessionID string) ([]corellm.Me
 	if len(stored) == 0 {
 		return nil, errors.New("llm: session has no messages — append a user turn before streaming")
 	}
-	// Probe for the optional starting-context surface. A reader that
-	// only satisfies SessionMessageReader leaves out unchanged.
+	// Probe for the Mission-A starting-context surface. A reader that
+	// only satisfies SessionMessageReader leaves the slice unchanged.
 	var systemContent string
 	if ctxReader, ok := a.history.(SessionContextReader); ok {
-		content, kind, err := ctxReader.SystemPromptFor(ctx, sessionID)
+		content, ctxKind, err := ctxReader.SystemPromptFor(ctx, sessionID)
 		if err != nil {
 			return nil, fmt.Errorf("llm: load session system prompt: %w", err)
 		}
-		if kind == "system" && content != "" {
+		if ctxKind == "system" && content != "" {
 			systemContent = content
 		}
 	}
-	capacity := len(stored)
+
+	// Convert stored history to the HookMessage projection the runner
+	// consumes. Mission A's system prompt sits at the front so the hook
+	// chain sees it as part of the input (memory.retrieve appends its
+	// own snippets after); the resulting on-the-wire order is
+	// [system_prompt?, hook_injections?, conversation…].
+	//
+	// userText is the most recent user turn — memory.retrieve uses it
+	// as the embedding query.
+	hookMessages := make([]HookMessage, 0, len(stored)+1)
 	if systemContent != "" {
-		capacity++
-	}
-	out := make([]corellm.Message, 0, capacity)
-	if systemContent != "" {
-		out = append(out, corellm.Message{
-			Role: corellm.RoleSystem,
-			Content: []corellm.ContentPart{
-				{Type: "text", Text: systemContent},
-			},
+		hookMessages = append(hookMessages, HookMessage{
+			Role:    "system",
+			Content: systemContent,
 		})
 	}
+	var userText string
 	for _, m := range stored {
+		hookMessages = append(hookMessages, HookMessage{Role: m.Role, Content: m.Content})
+		if m.Role == "user" {
+			userText = m.Content
+		}
+	}
+	if a.hooks != nil {
+		out, herr := a.hooks.RunPreSend(ctx, PreSendHookEvent{
+			SessionID: sessionID,
+			Messages:  hookMessages,
+			Model:     model,
+			Kind:      kind,
+			UserText:  userText,
+		})
+		if herr != nil {
+			// Per-hook errors are already swallowed by the runner; this
+			// path only fires on a runner-level fault. Log and proceed
+			// with the unmodified slice — never block a send on hooks.
+			logging.L().Warn("llm.presend.runner_failed",
+				"session_id", sessionID, "err", herr.Error())
+		} else {
+			hookMessages = out.Messages
+		}
+	}
+	out := make([]corellm.Message, 0, len(hookMessages))
+	for _, m := range hookMessages {
 		role := corellm.Role(m.Role)
 		if role == "" {
 			role = corellm.RoleUser
@@ -327,7 +421,11 @@ func (a *API) StartStream(ctx context.Context, profileID, sessionID, modelOverri
 		return "", err
 	}
 
-	messages, err := a.buildMessages(ctx, sessionID)
+	// Resolve provider kind + effective model so the pre/post hook
+	// runners can apply Match filters without a second registry pass.
+	kind, effectiveModel := a.profileKindAndModel(profileID, modelOverride)
+
+	messages, err := a.buildMessages(ctx, sessionID, effectiveModel, kind)
 	if err != nil {
 		log.Error("llm.start_stream.failed", "stage", "buildMessages", "err", err.Error())
 		return "", err
@@ -358,6 +456,21 @@ func (a *API) StartStream(ctx context.Context, profileID, sessionID, modelOverri
 		return "", err
 	}
 
+	// Capture the latest user turn from the stored history so the
+	// post_send hook fired in pump can include it without a second
+	// session-history read.
+	var userTurn string
+	if a.history != nil && sessionID != "" {
+		if stored, herr := a.history.ListMessages(ctx, sessionID); herr == nil {
+			for i := len(stored) - 1; i >= 0; i-- {
+				if stored[i].Role == "user" {
+					userTurn = stored[i].Content
+					break
+				}
+			}
+		}
+	}
+
 	a.mu.Lock()
 	a.nextID++
 	id := fmt.Sprintf("llm-%d", a.nextID)
@@ -367,6 +480,9 @@ func (a *API) StartStream(ctx context.Context, profileID, sessionID, modelOverri
 		stream:    stream,
 		cancel:    cancel,
 		done:      make(chan struct{}),
+		userTurn:  userTurn,
+		model:     effectiveModel,
+		kind:      kind,
 	}
 	a.subs[id] = sub
 	a.mu.Unlock()
@@ -468,6 +584,39 @@ func (a *API) pump(sub *subscription) {
 		"err_message", closed.Message,
 	)
 	a.sink.Emit("llm:stream-closed", closed)
+
+	// Fire post_send hooks (memory.persist, user-defined hooks). The
+	// runner does not return mutations on this path — hooks are
+	// side-effect only. We pass the assistant text + finish reason so
+	// memory.persist can decide whether to embed and store the chunk.
+	if a.hooks != nil && sub.sessionID != "" {
+		a.hooks.RunPostSend(context.Background(), PostSendHookEvent{
+			SessionID:     sub.sessionID,
+			UserTurn:      sub.userTurn,
+			AssistantTurn: string(assistantText),
+			Model:         sub.model,
+			Kind:          sub.kind,
+			FinishReason:  closed.Reason,
+		})
+	}
+}
+
+// profileKindAndModel resolves the provider kind + effective model
+// for the supplied profile and override. Falls back to ("", model)
+// when the registry lookup fails so a missing profile id does not
+// break hook Match filters.
+func (a *API) profileKindAndModel(profileID, modelOverride string) (kind, model string) {
+	if a.reg == nil {
+		return "", modelOverride
+	}
+	prof, err := a.reg.Profile(profileID)
+	if err != nil {
+		return "", modelOverride
+	}
+	if modelOverride != "" {
+		return prof.Kind, modelOverride
+	}
+	return prof.Kind, prof.Model
 }
 
 // AddProvider validates the input, writes the plaintext API key (if any)

@@ -14,7 +14,7 @@
  * `wailsjs/*` directly — that's the FR-007 isolation rule.
  */
 
-import { computed, ref, watch } from 'vue';
+import { computed, onMounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import CanvasHead from '@/shell/CanvasHead.vue';
 import NewSessionDialog from '@/shell/NewSessionDialog.vue';
@@ -22,7 +22,7 @@ import MessageList from '@/components/chat/MessageList.vue';
 import ChatInput from '@/components/chat/ChatInput.vue';
 import { useHarnessClient, useSessions } from '@/lib/useHarnessAPI';
 import { useSession } from '@/lib/useSession';
-import type { Provider } from '@/lib/types';
+import type { Message, Provider } from '@/lib/types';
 import { flattenChoices, inferFamily } from '@/lib/modelFamily';
 
 const route = useRoute();
@@ -284,6 +284,38 @@ async function onNewSessionDialogClose() {
 }
 
 const hasAnyProvider = computed(() => providers.value.length > 0);
+
+// Long-term-memory opt-in. Off by default (privacy posture); read once
+// on mount and again when the window regains focus so toggling it in
+// settings takes effect on the next chat.
+const memoryEnabled = ref(false);
+const lastRememberError = ref<string | null>(null);
+
+async function refreshMemoryFlag() {
+  try {
+    memoryEnabled.value = await client.settings.getMemory();
+  } catch {
+    memoryEnabled.value = false;
+  }
+}
+
+onMounted(() => {
+  void refreshMemoryFlag();
+});
+window.addEventListener('focus', () => {
+  void refreshMemoryFlag();
+});
+
+async function onRemember(m: Message) {
+  if (!sessionId.value || !m.id) return;
+  lastRememberError.value = null;
+  try {
+    await client.memory.rememberMessage(sessionId.value, m.id);
+  } catch (err) {
+    lastRememberError.value =
+      err instanceof Error ? err.message : String(err);
+  }
+}
 </script>
 
 <template>
@@ -523,12 +555,21 @@ const hasAnyProvider = computed(() => providers.value.length > 0);
         >
           waiting for stream… (no chunks received in 30s)
         </div>
+        <div
+          v-if="lastRememberError"
+          class="mx-4 my-2 rounded-md border border-signal-warn bg-surface-1 px-3 py-2 font-ui text-[12px] text-signal-warn"
+          role="alert"
+        >
+          Could not remember message: {{ lastRememberError }}
+        </div>
         <div class="flex-1 min-h-0">
           <MessageList
             :messages="session.messages.value"
             :streaming-message="session.currentlyStreaming.value"
             :waiting="isWaitingForFirstChunk"
             :error-message="session.error.value"
+            :rememberable="memoryEnabled"
+            @remember="onRemember"
           />
         </div>
         <ChatInput

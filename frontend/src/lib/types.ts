@@ -216,6 +216,13 @@ export interface Settings {
   theme: Theme;
   accent: string;
   windowSize: WindowSize;
+  /**
+   * Long-term-memory opt-in (privacy default: false). When true, the
+   * harness embeds pinned messages into the local vector DB and may
+   * inject retrieved snippets into future conversations across all
+   * sessions.
+   */
+  memoryEnabled?: boolean;
 }
 
 export type Theme = 'light' | 'dark' | 'system';
@@ -293,4 +300,70 @@ export interface StreamClosedPayload {
 export interface CostEstimate {
   tokens: number;
   usd: number;
+}
+
+/**
+ * MemoryChunk — one persisted memory. In the hooks-driven architecture
+ * most chunks are auto-persisted by the memory.persist post_send hook;
+ * the chat surface still ships an explicit "remember this" button for
+ * short turns the auto-path skips. The vector representation never
+ * crosses the RPC boundary; the management UI only ever sees the
+ * human-readable fields.
+ */
+export interface MemoryChunk {
+  id: string;
+  sessionId?: string;
+  sourceTurn?: string;
+  content: string;
+  createdAt: string;
+}
+
+/**
+ * Lifecycle-hook event names. Mirrors core/hooks.Event* constants.
+ */
+export type HookEvent =
+  | 'pre_send'
+  | 'post_send'
+  | 'pre_save_session'
+  | 'post_assistant_turn_complete';
+
+/**
+ * Hook kind — selects the dispatch strategy. `builtin` runs a Go
+ * function shipped with the harness; `shell` execs a user command and
+ * speaks the JSON stdin/stdout protocol; `mcp` invokes an MCP tool
+ * (stub-only in v1).
+ */
+export type HookKind = 'builtin' | 'shell' | 'mcp';
+
+export interface HookMatch {
+  sessionIds?: string[];
+  kinds?: string[];
+  models?: string[];
+}
+
+/**
+ * Hook — one configured lifecycle hook. Mirrors core/hooks.Hook.
+ */
+export interface Hook {
+  id: string;
+  name: string;
+  event: HookEvent;
+  kind: HookKind;
+  enabled: boolean;
+  match: HookMatch;
+  builtin?: string;
+  command?: string;
+  mcpTool?: string;
+  config?: Record<string, unknown>;
+}
+
+/**
+ * BuiltinDescriptor — one entry in the AvailableBuiltins dropdown.
+ */
+export interface BuiltinDescriptor {
+  id: string;
+  name: string;
+  description: string;
+  events: HookEvent[];
+  defaultConfig?: Record<string, unknown>;
 }

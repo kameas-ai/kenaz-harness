@@ -62,6 +62,38 @@ export function Diag_LogPath() {
   return window['go']['rpc']['Bindings']['Diag_LogPath']();
 }
 
+export function Hooks_Add(arg1) {
+  return window['go']['rpc']['Bindings']['Hooks_Add'](arg1);
+}
+
+export function Hooks_AvailableBuiltins() {
+  return window['go']['rpc']['Bindings']['Hooks_AvailableBuiltins']();
+}
+
+export function Hooks_Get(arg1) {
+  return window['go']['rpc']['Bindings']['Hooks_Get'](arg1);
+}
+
+export function Hooks_InstallStarterMemory() {
+  return window['go']['rpc']['Bindings']['Hooks_InstallStarterMemory']();
+}
+
+export function Hooks_List() {
+  return window['go']['rpc']['Bindings']['Hooks_List']();
+}
+
+export function Hooks_Remove(arg1) {
+  return window['go']['rpc']['Bindings']['Hooks_Remove'](arg1);
+}
+
+export function Hooks_RemoveStarterMemory() {
+  return window['go']['rpc']['Bindings']['Hooks_RemoveStarterMemory']();
+}
+
+export function Hooks_Update(arg1) {
+  return window['go']['rpc']['Bindings']['Hooks_Update'](arg1);
+}
+
 export function LLM_AddProvider(arg1) {
   return window['go']['rpc']['Bindings']['LLM_AddProvider'](arg1);
 }
@@ -116,6 +148,18 @@ export function MCP_StartStream(arg1) {
 
 export function MCP_StopStream(arg1) {
   return window['go']['rpc']['Bindings']['MCP_StopStream'](arg1);
+}
+
+export function Memory_Forget(arg1) {
+  return window['go']['rpc']['Bindings']['Memory_Forget'](arg1);
+}
+
+export function Memory_ListChunks() {
+  return window['go']['rpc']['Bindings']['Memory_ListChunks']();
+}
+
+export function Memory_RememberMessage(arg1, arg2) {
+  return window['go']['rpc']['Bindings']['Memory_RememberMessage'](arg1, arg2);
 }
 
 export function Policy_Explain(arg1) {
@@ -178,6 +222,10 @@ export function Sessions_SaveDraft(arg1, arg2) {
   return window['go']['rpc']['Bindings']['Sessions_SaveDraft'](arg1, arg2);
 }
 
+export function Sessions_SetSystemPrompt(arg1, arg2, arg3) {
+  return window['go']['rpc']['Bindings']['Sessions_SetSystemPrompt'](arg1, arg2, arg3);
+}
+
 export function Sessions_StartStream(arg1) {
   return window['go']['rpc']['Bindings']['Sessions_StartStream'](arg1);
 }
@@ -198,8 +246,16 @@ export function Settings_Get() {
   return window['go']['rpc']['Bindings']['Settings_Get']();
 }
 
+export function Settings_GetMemory() {
+  return window['go']['rpc']['Bindings']['Settings_GetMemory']();
+}
+
 export function Settings_Set(arg1) {
   return window['go']['rpc']['Bindings']['Settings_Set'](arg1);
+}
+
+export function Settings_SetMemory(arg1) {
+  return window['go']['rpc']['Bindings']['Settings_SetMemory'](arg1);
 }
 
 export function ShellStatus() {

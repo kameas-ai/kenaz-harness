@@ -5,8 +5,10 @@ import {rpc} from '../models';
 import {audit} from '../models';
 import {bundle} from '../models';
 import {contextview} from '../models';
+import {hooks} from '../models';
 import {llm} from '../models';
 import {mcp} from '../models';
+import {memory} from '../models';
 import {policy} from '../models';
 import {sessions} from '../models';
 import {context} from '../models';
@@ -44,6 +46,22 @@ export function Diag_LogClientEvent(arg1:string,arg2:string,arg3:Record<string, 
 
 export function Diag_LogPath():Promise<string>;
 
+export function Hooks_Add(arg1:hooks.Hook):Promise<hooks.Hook>;
+
+export function Hooks_AvailableBuiltins():Promise<Array<hooks.BuiltinDescriptor>>;
+
+export function Hooks_Get(arg1:string):Promise<hooks.Hook>;
+
+export function Hooks_InstallStarterMemory():Promise<void>;
+
+export function Hooks_List():Promise<Array<hooks.Hook>>;
+
+export function Hooks_Remove(arg1:string):Promise<void>;
+
+export function Hooks_RemoveStarterMemory():Promise<void>;
+
+export function Hooks_Update(arg1:hooks.Hook):Promise<void>;
+
 export function LLM_AddProvider(arg1:llm.AddProviderInput):Promise<void>;
 
 export function LLM_ListModels(arg1:string,arg2:string):Promise<Array<llm.ModelInfo>>;
@@ -71,6 +89,12 @@ export function MCP_ListServers():Promise<Array<mcp.Server>>;
 export function MCP_StartStream(arg1:string):Promise<string>;
 
 export function MCP_StopStream(arg1:string):Promise<void>;
+
+export function Memory_Forget(arg1:string):Promise<void>;
+
+export function Memory_ListChunks():Promise<Array<memory.Chunk>>;
+
+export function Memory_RememberMessage(arg1:string,arg2:string):Promise<string>;
 
 export function Policy_Explain(arg1:Record<string, any>):Promise<policy.Denial>;
 
@@ -102,6 +126,8 @@ export function Sessions_Reorder(arg1:Array<string>):Promise<void>;
 
 export function Sessions_SaveDraft(arg1:string,arg2:string):Promise<void>;
 
+export function Sessions_SetSystemPrompt(arg1:string,arg2:string,arg3:string):Promise<void>;
+
 export function Sessions_StartStream(arg1:string):Promise<string>;
 
 export function Sessions_StopStream(arg1:string):Promise<void>;
@@ -112,7 +138,11 @@ export function SetSettingsStore(arg1:settings.SettingsStore):Promise<void>;
 
 export function Settings_Get():Promise<settings.Settings>;
 
+export function Settings_GetMemory():Promise<boolean>;
+
 export function Settings_Set(arg1:settings.Settings):Promise<void>;
+
+export function Settings_SetMemory(arg1:boolean):Promise<void>;
 
 export function ShellStatus():Promise<rpc.ShellStatus>;
 

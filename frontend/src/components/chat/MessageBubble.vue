@@ -26,7 +26,23 @@ const props = defineProps<{
   content: string;
   streaming?: boolean;
   toolCalls?: readonly ToolCall[];
+  /**
+   * When true, renders a 📌 button on hover that emits a `remember`
+   * event. The parent toggles this off when long-term memory is
+   * disabled in settings so the button never appears unsolicited.
+   */
+  rememberable?: boolean;
 }>();
+
+const emit = defineEmits<{
+  /** User clicked the 📌 pin — caller persists the chunk via RPC. */
+  (e: 'remember'): void;
+}>();
+
+function onRemember(event: Event) {
+  event.stopPropagation();
+  emit('remember');
+}
 
 const isUser = computed(() => props.role === 'user');
 const isAssistant = computed(() => props.role === 'assistant');
@@ -63,18 +79,28 @@ const roleLabel = computed(() => props.role.toUpperCase());
 
 <template>
   <article
-    :class="wrapperClass"
+    :class="wrapperClass + ' group relative'"
     :role="isTool ? 'log' : 'article'"
     :aria-label="`${roleLabel} message`"
   >
     <div :class="bubbleClass">
       <header
         v-if="!isTool"
-        class="font-ui text-[10px] uppercase tracking-[0.18em] mb-1"
+        class="font-ui text-[10px] uppercase tracking-[0.18em] mb-1 flex items-center"
         :class="isAssistant && streaming ? 'text-accent' : 'text-ink-subtle'"
       >
-        {{ roleLabel }}
+        <span>{{ roleLabel }}</span>
         <span v-if="isAssistant && streaming" class="ml-2">live</span>
+        <button
+          v-if="rememberable"
+          type="button"
+          class="ml-auto opacity-0 group-hover:opacity-100 focus:opacity-100 transition-fast text-[12px] px-1.5 py-0.5 rounded-sm border border-border-muted text-ink-dim hover:text-accent hover:bg-surface-2"
+          aria-label="Remember this message"
+          data-testid="remember-message"
+          @click="onRemember"
+        >
+          📌
+        </button>
       </header>
 
       <!-- tool-call rows: namespaced monospace line each -->

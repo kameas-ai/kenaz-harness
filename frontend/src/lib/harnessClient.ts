@@ -35,6 +35,9 @@ import type {
   Theme,
   Message,
   MessageRole,
+  MemoryChunk,
+  Hook,
+  BuiltinDescriptor,
 } from './types';
 
 /**
@@ -119,6 +122,21 @@ interface WailsBindingsLike {
 
   Settings_Get(): Promise<Settings>;
   Settings_Set(s: Settings): Promise<void>;
+  Settings_GetMemory(): Promise<boolean>;
+  Settings_SetMemory(enabled: boolean): Promise<void>;
+
+  Memory_ListChunks(): Promise<MemoryChunk[]>;
+  Memory_RememberMessage(sessionID: string, messageID: string): Promise<string>;
+  Memory_Forget(id: string): Promise<void>;
+
+  Hooks_List(): Promise<Hook[]>;
+  Hooks_Get(id: string): Promise<Hook>;
+  Hooks_Add(input: Hook): Promise<Hook>;
+  Hooks_Update(input: Hook): Promise<void>;
+  Hooks_Remove(id: string): Promise<void>;
+  Hooks_AvailableBuiltins(): Promise<BuiltinDescriptor[]>;
+  Hooks_InstallStarterMemory(): Promise<void>;
+  Hooks_RemoveStarterMemory(): Promise<void>;
 }
 
 declare global {
@@ -280,6 +298,42 @@ export interface SettingsClient {
   logRouteChange(from: string, to: string): Promise<void>;
   loadTheme(): Promise<Theme>;
   saveTheme(theme: Theme): Promise<void>;
+  /** Read the long-term-memory opt-in flag (default false). */
+  getMemory(): Promise<boolean>;
+  /** Persist the long-term-memory opt-in flag. */
+  setMemory(enabled: boolean): Promise<void>;
+}
+
+/**
+ * MemoryClient backs the chat-surface "📌 remember this" button + the
+ * /memory management view. Privacy: chunks live in the harness's data
+ * directory; the only network call is the embedding request when a
+ * new pin is staged.
+ */
+export interface MemoryClient {
+  listChunks(): Promise<MemoryChunk[]>;
+  rememberMessage(sessionID: string, messageID: string): Promise<string>;
+  forget(id: string): Promise<void>;
+}
+
+/**
+ * HooksClient backs the /hooks management view. Hooks are stored in
+ * <DataDir>/hooks.json (mode 0600) and dispatched on the chat
+ * pre_send / post_send lifecycle. Memory.retrieve / memory.persist
+ * are the v1 preinstalled builtins; the surface ships extension
+ * points for `shell` and `mcp` hooks the user configures.
+ */
+export interface HooksClient {
+  list(): Promise<Hook[]>;
+  get(id: string): Promise<Hook>;
+  add(input: Hook): Promise<Hook>;
+  update(input: Hook): Promise<void>;
+  remove(id: string): Promise<void>;
+  availableBuiltins(): Promise<BuiltinDescriptor[]>;
+  /** Auto-install the two preinstalled memory hooks (idempotent). */
+  installStarterMemory(): Promise<void>;
+  /** Remove the two preinstalled memory hooks (idempotent). */
+  removeStarterMemory(): Promise<void>;
 }
 
 export interface HarnessClient {
@@ -297,6 +351,8 @@ export interface HarnessClient {
   policy: PolicyClient;
   audit: AuditClient;
   settings: SettingsClient;
+  memory: MemoryClient;
+  hooks: HooksClient;
 }
 
 // ── runtime client ─────────────────────────────────────────────────────
@@ -394,6 +450,24 @@ export function createHarnessClient(): HarnessClient {
       logRouteChange: (f, t) => b().LogRouteChange(f, t),
       loadTheme: () => b().LoadTheme() as Promise<Theme>,
       saveTheme: (t) => b().SaveTheme(t),
+      getMemory: () => b().Settings_GetMemory(),
+      setMemory: (enabled) => b().Settings_SetMemory(enabled),
+    },
+    memory: {
+      listChunks: () => b().Memory_ListChunks(),
+      rememberMessage: (sessionID, messageID) =>
+        b().Memory_RememberMessage(sessionID, messageID),
+      forget: (id) => b().Memory_Forget(id),
+    },
+    hooks: {
+      list: () => b().Hooks_List(),
+      get: (id) => b().Hooks_Get(id),
+      add: (input) => b().Hooks_Add(input),
+      update: (input) => b().Hooks_Update(input),
+      remove: (id) => b().Hooks_Remove(id),
+      availableBuiltins: () => b().Hooks_AvailableBuiltins(),
+      installStarterMemory: () => b().Hooks_InstallStarterMemory(),
+      removeStarterMemory: () => b().Hooks_RemoveStarterMemory(),
     },
   };
 }
@@ -531,6 +605,7 @@ export function createFakeHarnessClient(
         theme: 'system',
         accent: 'default',
         windowSize: { width: 1280, height: 800 },
+        memoryEnabled: false,
       }),
       set: noop,
       loadRoute: async () => '/sessions',
@@ -538,6 +613,30 @@ export function createFakeHarnessClient(
       logRouteChange: noop,
       loadTheme: async () => 'system' as Theme,
       saveTheme: noop,
+      getMemory: async () => false,
+      setMemory: noop,
+    },
+    memory: {
+      listChunks: async () => [],
+      rememberMessage: async () => 'fake-mem-id',
+      forget: noop,
+    },
+    hooks: {
+      list: async () => [],
+      get: async (id) => ({
+        id,
+        name: id,
+        event: 'pre_send',
+        kind: 'builtin',
+        enabled: false,
+        match: {},
+      }),
+      add: async (input) => input,
+      update: noop,
+      remove: noop,
+      availableBuiltins: async () => [],
+      installStarterMemory: noop,
+      removeStarterMemory: noop,
     },
   };
 
