@@ -11,6 +11,7 @@ import {llm} from '../models';
 import {mcp} from '../models';
 import {memory} from '../models';
 import {policy} from '../models';
+import {projects} from '../models';
 import {sessions} from '../models';
 import {context} from '../models';
 import {settings} from '../models';
@@ -121,6 +122,24 @@ export function Policy_StartStream():Promise<string>;
 
 export function Policy_StopStream(arg1:string):Promise<void>;
 
+export function Projects_AddSession(arg1:string,arg2:string):Promise<void>;
+
+export function Projects_Create(arg1:string,arg2:string):Promise<projects.Project>;
+
+export function Projects_Delete(arg1:string,arg2:boolean):Promise<void>;
+
+export function Projects_Get(arg1:string):Promise<projects.Project>;
+
+export function Projects_List():Promise<Array<projects.Project>>;
+
+export function Projects_ListSessions(arg1:string):Promise<Array<projects.Session>>;
+
+export function Projects_RemoveSession(arg1:string):Promise<void>;
+
+export function Projects_Rename(arg1:string,arg2:string):Promise<void>;
+
+export function Projects_UpdateDescription(arg1:string,arg2:string):Promise<void>;
+
 export function SaveRoute(arg1:string):Promise<void>;
 
 export function SaveTheme(arg1:string):Promise<void>;
@@ -138,6 +157,8 @@ export function Sessions_List():Promise<Array<sessions.Session>>;
 export function Sessions_ListMessages(arg1:string):Promise<Array<sessions.Message>>;
 
 export function Sessions_LoadDraft(arg1:string):Promise<string>;
+
+export function Sessions_MoveToProject(arg1:string,arg2:string):Promise<void>;
 
 export function Sessions_Rename(arg1:string,arg2:string):Promise<void>;
 

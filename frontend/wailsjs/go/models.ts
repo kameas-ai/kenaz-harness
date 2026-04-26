@@ -553,6 +553,51 @@ export namespace policy {
 
 }
 
+export namespace projects {
+	
+	export class Project {
+	    id: string;
+	    name: string;
+	    description: string;
+	    createdAt: string;
+	    updatedAt: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new Project(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.name = source["name"];
+	        this.description = source["description"];
+	        this.createdAt = source["createdAt"];
+	        this.updatedAt = source["updatedAt"];
+	    }
+	}
+	export class Session {
+	    id: string;
+	    name: string;
+	    projectId?: string;
+	    createdAt: string;
+	    updatedAt: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new Session(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.name = source["name"];
+	        this.projectId = source["projectId"];
+	        this.createdAt = source["createdAt"];
+	        this.updatedAt = source["updatedAt"];
+	    }
+	}
+
+}
+
 export namespace rpc {
 	
 	export class WindowSize {
@@ -707,6 +752,7 @@ export namespace sessions {
 	    updatedAt: string;
 	    systemPrompt: string;
 	    contextKind: string;
+	    projectId?: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new Session(source);
@@ -720,6 +766,7 @@ export namespace sessions {
 	        this.updatedAt = source["updatedAt"];
 	        this.systemPrompt = source["systemPrompt"];
 	        this.contextKind = source["contextKind"];
+	        this.projectId = source["projectId"];
 	    }
 	}
 

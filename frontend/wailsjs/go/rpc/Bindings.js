@@ -210,6 +210,42 @@ export function Policy_StopStream(arg1) {
   return window['go']['rpc']['Bindings']['Policy_StopStream'](arg1);
 }
 
+export function Projects_AddSession(arg1, arg2) {
+  return window['go']['rpc']['Bindings']['Projects_AddSession'](arg1, arg2);
+}
+
+export function Projects_Create(arg1, arg2) {
+  return window['go']['rpc']['Bindings']['Projects_Create'](arg1, arg2);
+}
+
+export function Projects_Delete(arg1, arg2) {
+  return window['go']['rpc']['Bindings']['Projects_Delete'](arg1, arg2);
+}
+
+export function Projects_Get(arg1) {
+  return window['go']['rpc']['Bindings']['Projects_Get'](arg1);
+}
+
+export function Projects_List() {
+  return window['go']['rpc']['Bindings']['Projects_List']();
+}
+
+export function Projects_ListSessions(arg1) {
+  return window['go']['rpc']['Bindings']['Projects_ListSessions'](arg1);
+}
+
+export function Projects_RemoveSession(arg1) {
+  return window['go']['rpc']['Bindings']['Projects_RemoveSession'](arg1);
+}
+
+export function Projects_Rename(arg1, arg2) {
+  return window['go']['rpc']['Bindings']['Projects_Rename'](arg1, arg2);
+}
+
+export function Projects_UpdateDescription(arg1, arg2) {
+  return window['go']['rpc']['Bindings']['Projects_UpdateDescription'](arg1, arg2);
+}
+
 export function SaveRoute(arg1) {
   return window['go']['rpc']['Bindings']['SaveRoute'](arg1);
 }
@@ -244,6 +280,10 @@ export function Sessions_ListMessages(arg1) {
 
 export function Sessions_LoadDraft(arg1) {
   return window['go']['rpc']['Bindings']['Sessions_LoadDraft'](arg1);
+}
+
+export function Sessions_MoveToProject(arg1, arg2) {
+  return window['go']['rpc']['Bindings']['Sessions_MoveToProject'](arg1, arg2);
 }
 
 export function Sessions_Rename(arg1, arg2) {
