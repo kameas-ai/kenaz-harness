@@ -516,3 +516,222 @@ func TestStartStream_DiscovererErrorDegradesGracefully(t *testing.T) {
 		t.Fatalf("req.Tools = %#v, want nil after discoverer error", got.Tools)
 	}
 }
+
+// fakeAdapter is a corellm.ProviderAdapter shim that returns a fixed
+// CapabilityDescriptor. Used by the modality-gate tests below.
+type fakeAdapter struct {
+	kind string
+	caps corellm.CapabilityDescriptor
+}
+
+func (a *fakeAdapter) Kind() string { return a.kind }
+func (a *fakeAdapter) Capabilities(_ string) corellm.CapabilityDescriptor {
+	return a.caps
+}
+func (a *fakeAdapter) Stream(_ context.Context, _ corellm.GenerationRequest, _ corellm.ProviderProfile, _ []byte) (corellm.Stream, error) {
+	return nil, nil
+}
+
+// fakeRegistryWithAdapter satisfies both corellm.Registry and the
+// AdapterLookup seam so the impl can resolve capabilities through it.
+type fakeRegistryWithAdapter struct {
+	*fakeRegistry
+	adapter corellm.ProviderAdapter
+}
+
+func (f *fakeRegistryWithAdapter) Adapter(_ string) corellm.ProviderAdapter {
+	return f.adapter
+}
+
+// fakeHistoryWithBlocks satisfies SessionMessageReader and emits a
+// stored row carrying ContentBlocks so StartStream walks the modality
+// gate against a non-text payload.
+type fakeHistoryWithBlocks struct {
+	stored []SessionMessage
+}
+
+func (f *fakeHistoryWithBlocks) ListMessages(_ context.Context, _ string) ([]SessionMessage, error) {
+	return f.stored, nil
+}
+
+// TestStartStream_RejectsImageOnNonVisionModel asserts that an image
+// content block paired with a model that does not advertise
+// CapVision returns an UnsupportedModalityError before the registry
+// is invoked (multimodal-io WP03 / FR-010 / A3).
+func TestStartStream_RejectsImageOnNonVisionModel(t *testing.T) {
+	t.Parallel()
+	reg := &fakeRegistryWithAdapter{
+		fakeRegistry: &fakeRegistry{
+			profiles: map[string]corellm.ProviderProfile{
+				"p": {ID: "p", Kind: "openai", Model: "gpt-3.5-turbo",
+					Cred: corellm.CredentialReference{Kind: "env", Locator: "K"}},
+			},
+			stream: &fakeStream{
+				chunks: []corellm.StreamEvent{{Kind: corellm.StreamFinish, Finish: "end_turn"}},
+				final:  corellm.Response{FinishReason: "end_turn"},
+			},
+		},
+		adapter: &fakeAdapter{
+			kind: "openai",
+			caps: corellm.CapabilityDescriptor{
+				Provider:  "openai",
+				Model:     "gpt-3.5-turbo",
+				Supported: map[corellm.Capability]bool{corellm.CapStreaming: true},
+			},
+		},
+	}
+	hist := &fakeHistoryWithBlocks{stored: []SessionMessage{{
+		Role: "user",
+		ContentBlocks: []corellm.ContentBlock{
+			{Type: "text", Text: "what's in this?"},
+			{Type: "image", Source: &corellm.MediaSource{Kind: "base64", MediaType: "image/png", Data: "AAAA"}},
+		},
+	}}}
+	api := New(Config{Registry: reg, History: hist})
+
+	_, err := api.StartStream(context.Background(), "p", "s1", "")
+	if err == nil {
+		t.Fatal("expected modality rejection")
+	}
+	var me *corellm.UnsupportedModalityError
+	if !errors.As(err, &me) {
+		t.Fatalf("got %T: %v, want *UnsupportedModalityError", err, err)
+	}
+	if me.Modality != "image" {
+		t.Errorf("modality = %q, want image", me.Modality)
+	}
+	if me.Model != "gpt-3.5-turbo" {
+		t.Errorf("model = %q, want gpt-3.5-turbo", me.Model)
+	}
+	// Friendly message includes the model name.
+	if got := me.Friendly(); got == "" {
+		t.Errorf("Friendly() returned empty")
+	}
+}
+
+// TestStartStream_RejectsDocumentOnNonDocModel mirrors the image
+// gate for documents.
+func TestStartStream_RejectsDocumentOnNonDocModel(t *testing.T) {
+	t.Parallel()
+	reg := &fakeRegistryWithAdapter{
+		fakeRegistry: &fakeRegistry{
+			profiles: map[string]corellm.ProviderProfile{
+				"p": {ID: "p", Kind: "openai", Model: "gpt-4o",
+					Cred: corellm.CredentialReference{Kind: "env", Locator: "K"}},
+			},
+			stream: &fakeStream{
+				chunks: []corellm.StreamEvent{{Kind: corellm.StreamFinish, Finish: "end_turn"}},
+				final:  corellm.Response{FinishReason: "end_turn"},
+			},
+		},
+		adapter: &fakeAdapter{
+			kind: "openai",
+			caps: corellm.CapabilityDescriptor{
+				Provider: "openai", Model: "gpt-4o",
+				Supported: map[corellm.Capability]bool{
+					corellm.CapStreaming: true,
+					corellm.CapVision:    true,
+				},
+			},
+		},
+	}
+	hist := &fakeHistoryWithBlocks{stored: []SessionMessage{{
+		Role: "user",
+		ContentBlocks: []corellm.ContentBlock{
+			{Type: "document", Source: &corellm.MediaSource{Kind: "base64", MediaType: "application/pdf", Data: "AAAA"}},
+		},
+	}}}
+	api := New(Config{Registry: reg, History: hist})
+
+	_, err := api.StartStream(context.Background(), "p", "s1", "")
+	if err == nil {
+		t.Fatal("expected document rejection")
+	}
+	var me *corellm.UnsupportedModalityError
+	if !errors.As(err, &me) || me.Modality != "document" {
+		t.Fatalf("got %v, want UnsupportedModalityError{document}", err)
+	}
+}
+
+// TestStartStream_AcceptsImageOnVisionModel asserts a vision-capable
+// model passes the gate and the registry is invoked normally.
+func TestStartStream_AcceptsImageOnVisionModel(t *testing.T) {
+	t.Parallel()
+	stream := &fakeStream{
+		chunks: []corellm.StreamEvent{{Kind: corellm.StreamFinish, Finish: "end_turn"}},
+		final:  corellm.Response{FinishReason: "end_turn"},
+	}
+	reg := &fakeRegistryWithAdapter{
+		fakeRegistry: &fakeRegistry{
+			profiles: map[string]corellm.ProviderProfile{
+				"p": {ID: "p", Kind: "anthropic", Model: "claude-sonnet-4-5",
+					Cred: corellm.CredentialReference{Kind: "env", Locator: "K"}},
+			},
+			stream: stream,
+		},
+		adapter: &fakeAdapter{
+			kind: "anthropic",
+			caps: corellm.CapabilityDescriptor{
+				Provider: "anthropic", Model: "claude-sonnet-4-5",
+				Supported: map[corellm.Capability]bool{
+					corellm.CapStreaming: true,
+					corellm.CapVision:    true,
+					corellm.CapDocuments: true,
+				},
+			},
+		},
+	}
+	hist := &fakeHistoryWithBlocks{stored: []SessionMessage{{
+		Role: "user",
+		ContentBlocks: []corellm.ContentBlock{
+			{Type: "text", Text: "describe this"},
+			{Type: "image", Source: &corellm.MediaSource{Kind: "base64", MediaType: "image/png", Data: "AAAA"}},
+		},
+	}}}
+	api := New(Config{Registry: reg, History: hist})
+
+	subID, err := api.StartStream(context.Background(), "p", "s1", "")
+	if err != nil {
+		t.Fatalf("StartStream rejected vision-capable request: %v", err)
+	}
+	if subID == "" {
+		t.Fatal("empty sub id")
+	}
+}
+
+// TestStartStream_TextOnlyBypassesGate verifies that a request with
+// no image / document blocks does not consult the capability lookup
+// at all (text-only path is unchanged from pre-WP03).
+func TestStartStream_TextOnlyBypassesGate(t *testing.T) {
+	t.Parallel()
+	stream := &fakeStream{
+		chunks: []corellm.StreamEvent{{Kind: corellm.StreamFinish, Finish: "end_turn"}},
+		final:  corellm.Response{FinishReason: "end_turn"},
+	}
+	// Adapter returns vision=false; if the gate consulted it on text-
+	// only content, the request would be rejected. It must not be.
+	reg := &fakeRegistryWithAdapter{
+		fakeRegistry: &fakeRegistry{
+			profiles: map[string]corellm.ProviderProfile{
+				"p": {ID: "p", Kind: "openai", Model: "gpt-3.5-turbo",
+					Cred: corellm.CredentialReference{Kind: "env", Locator: "K"}},
+			},
+			stream: stream,
+		},
+		adapter: &fakeAdapter{
+			kind: "openai",
+			caps: corellm.CapabilityDescriptor{
+				Provider: "openai", Model: "gpt-3.5-turbo",
+				Supported: map[corellm.Capability]bool{corellm.CapStreaming: true},
+			},
+		},
+	}
+	hist := &fakeHistory{stored: []SessionMessage{
+		{Role: "user", Content: "hello"},
+	}}
+	api := New(Config{Registry: reg, History: hist})
+
+	if _, err := api.StartStream(context.Background(), "p", "s1", ""); err != nil {
+		t.Fatalf("text-only request should not be gated: %v", err)
+	}
+}

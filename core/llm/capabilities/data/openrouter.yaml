@@ -3,6 +3,7 @@ defaults:
   streaming: true
   tool_calling: true
   vision: false
+  documents: false
   json_mode: true
   prompt_caching: false
   reasoning: false

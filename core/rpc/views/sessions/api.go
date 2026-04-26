@@ -3,7 +3,17 @@
 // concrete implementation is wired by the sessions feature mission.
 package sessions
 
-import "context"
+import (
+	"context"
+
+	"github.com/sigil-tech/kaneaz-harness/core/llm"
+)
+
+// ContentBlock mirrors core/llm.ContentBlock on the rpc wire so the
+// frontend (multimodal-io WP04) can hand assembled image / document
+// blocks to SendMessageWithBlocks without spelling out the connector
+// shape itself. Field names match corellm.ContentBlock exactly.
+type ContentBlock = llm.ContentBlock
 
 // Session is the lightweight session metadata the rail consumes.
 type Session struct {
@@ -55,6 +65,12 @@ type SessionsAPI interface {
 	// Chat-message surface (frontend-foundations chat-ui mission).
 	ListMessages(ctx context.Context, id string) ([]Message, error)
 	AppendMessage(ctx context.Context, id, role, content string) (Message, error)
+	// SendMessageWithBlocks persists a user turn carrying polymorphic
+	// content blocks (text + image + document). The legacy text-only
+	// AppendMessage path is left untouched for callers that don't need
+	// multimodal input. contentBlocks must be non-empty (multimodal-io
+	// WP03 / FR-013).
+	SendMessageWithBlocks(ctx context.Context, id string, contentBlocks []ContentBlock) (Message, error)
 	SaveDraft(ctx context.Context, id, draft string) error
 	LoadDraft(ctx context.Context, id string) (string, error)
 

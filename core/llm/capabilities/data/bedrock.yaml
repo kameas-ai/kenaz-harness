@@ -3,16 +3,88 @@ defaults:
   streaming: true
   tool_calling: true
   vision: false
+  documents: false
   json_mode: false
   prompt_caching: false
   reasoning: false
   cancellation: true
   usage_reporting: true
 models:
+  - match: "anthropic.claude-3-5-sonnet*"
+    streaming: true
+    tool_calling: true
+    vision: true
+    documents: true
+    json_mode: true
+    prompt_caching: true
+    reasoning: false
+    cancellation: true
+    usage_reporting: true
+  - match: "anthropic.claude-3-5-haiku*"
+    streaming: true
+    tool_calling: true
+    vision: true
+    documents: false
+    json_mode: true
+    prompt_caching: true
+    reasoning: false
+    cancellation: true
+    usage_reporting: true
+  - match: "anthropic.claude-sonnet-*"
+    streaming: true
+    tool_calling: true
+    vision: true
+    documents: true
+    json_mode: true
+    prompt_caching: true
+    reasoning: true
+    cancellation: true
+    usage_reporting: true
+  - match: "anthropic.claude-opus-*"
+    streaming: true
+    tool_calling: true
+    vision: true
+    documents: true
+    json_mode: true
+    prompt_caching: true
+    reasoning: true
+    cancellation: true
+    usage_reporting: true
+  - match: "anthropic.claude-3-*"
+    streaming: true
+    tool_calling: true
+    vision: true
+    documents: false
+    json_mode: true
+    prompt_caching: true
+    reasoning: false
+    cancellation: true
+    usage_reporting: true
+  - match: "amazon.nova-lite-*"
+    streaming: true
+    tool_calling: true
+    vision: true
+    documents: true
+    json_mode: false
+    prompt_caching: false
+    reasoning: false
+    cancellation: true
+    usage_reporting: true
+  - match: "amazon.nova-pro-*"
+    streaming: true
+    tool_calling: true
+    vision: true
+    documents: true
+    json_mode: false
+    prompt_caching: false
+    reasoning: false
+    cancellation: true
+    usage_reporting: true
   - match: "anthropic.claude-*"
     streaming: true
     tool_calling: true
     vision: true
+    documents: false
     json_mode: true
     prompt_caching: true
     reasoning: true

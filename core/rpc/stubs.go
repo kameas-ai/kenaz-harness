@@ -94,6 +94,9 @@ func (s *stubSessions) ListMessages(_ context.Context, _ string) ([]sessions.Mes
 func (s *stubSessions) AppendMessage(_ context.Context, _, _, _ string) (sessions.Message, error) {
 	return sessions.Message{}, errNotWired
 }
+func (s *stubSessions) SendMessageWithBlocks(_ context.Context, _ string, _ []sessions.ContentBlock) (sessions.Message, error) {
+	return sessions.Message{}, errNotWired
+}
 func (s *stubSessions) SaveDraft(_ context.Context, _, _ string) error { return nil }
 func (s *stubSessions) LoadDraft(_ context.Context, _ string) (string, error) {
 	return "", nil
@@ -195,6 +198,9 @@ func (s *stubAttachments) ListResolved(_ context.Context, _ string) ([]attachmen
 	return []attachmentsview.Attachment{}, nil
 }
 func (s *stubAttachments) Add(_ context.Context, _ attachmentsview.AddInput) (attachmentsview.Attachment, error) {
+	return attachmentsview.Attachment{}, errNotWired
+}
+func (s *stubAttachments) AddMedia(_ context.Context, _ attachmentsview.AddMediaInput) (attachmentsview.Attachment, error) {
 	return attachmentsview.Attachment{}, errNotWired
 }
 func (s *stubAttachments) Remove(_ context.Context, _ string) error { return errNotWired }

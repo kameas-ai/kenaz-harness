@@ -3,6 +3,7 @@ defaults:
   streaming: true
   tool_calling: true
   vision: false
+  documents: false
   json_mode: true
   prompt_caching: false
   reasoning: false
@@ -13,6 +14,27 @@ models:
     streaming: true
     tool_calling: true
     vision: true
+    documents: false
+    json_mode: true
+    prompt_caching: false
+    reasoning: false
+    cancellation: true
+    usage_reporting: true
+  - match: "gpt-4-turbo*"
+    streaming: true
+    tool_calling: true
+    vision: true
+    documents: false
+    json_mode: true
+    prompt_caching: false
+    reasoning: false
+    cancellation: true
+    usage_reporting: true
+  - match: "gpt-4-vision*"
+    streaming: true
+    tool_calling: true
+    vision: true
+    documents: false
     json_mode: true
     prompt_caching: false
     reasoning: false
@@ -22,6 +44,7 @@ models:
     streaming: true
     tool_calling: true
     vision: true
+    documents: false
     json_mode: true
     prompt_caching: false
     reasoning: true
