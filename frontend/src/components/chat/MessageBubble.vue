@@ -28,13 +28,28 @@
 import { computed, ref } from 'vue';
 import StreamingText from './StreamingText.vue';
 import PinMenu from './PinMenu.vue';
-import type { MemoryScopeKind, MessageRole, ToolCall } from '@/lib/types';
+import ImageBlock from './ImageBlock.vue';
+import DocumentChip from './DocumentChip.vue';
+import type {
+  ContentBlock,
+  MemoryScopeKind,
+  MessageRole,
+  ToolCall,
+} from '@/lib/types';
 
 const props = defineProps<{
   role: MessageRole;
   content: string;
   streaming?: boolean;
   toolCalls?: readonly ToolCall[];
+  /**
+   * Polymorphic content blocks for multimodal messages
+   * (multimodal-io WP02/WP04). When non-empty, MessageBubble renders
+   * each block via the matching component (StreamingText / ImageBlock
+   * / DocumentChip). Empty / undefined falls back to the legacy
+   * `content` text path so pre-WP02 messages keep rendering.
+   */
+  contentBlocks?: readonly ContentBlock[];
   /**
    * When true, renders a 📌 button on hover that opens the scope menu.
    * The parent toggles this off when long-term memory is disabled in
@@ -166,6 +181,13 @@ const bubbleClass = computed(() => {
 });
 
 const roleLabel = computed(() => props.role.toUpperCase());
+
+const blocks = computed<readonly ContentBlock[]>(() => props.contentBlocks ?? []);
+const hasBlocks = computed(() => blocks.value.length > 0);
+
+function isLastBlock(idx: number): boolean {
+  return idx === blocks.value.length - 1;
+}
 </script>
 
 <template>
@@ -231,11 +253,30 @@ const roleLabel = computed(() => props.role.toUpperCase());
         </li>
       </ul>
 
-      <StreamingText
-        v-if="!isTool"
-        :text="content"
-        :streaming="streaming === true"
-      />
+      <template v-if="!isTool">
+        <template v-if="hasBlocks">
+          <template v-for="(block, i) in blocks" :key="i">
+            <StreamingText
+              v-if="block.type === 'text'"
+              :text="block.text ?? ''"
+              :streaming="streaming === true && isLastBlock(i)"
+            />
+            <ImageBlock
+              v-else-if="block.type === 'image' && block.source"
+              :source="block.source"
+            />
+            <DocumentChip
+              v-else-if="block.type === 'document' && block.source"
+              :source="block.source"
+            />
+          </template>
+        </template>
+        <StreamingText
+          v-else
+          :text="content"
+          :streaming="streaming === true"
+        />
+      </template>
       <span v-else class="font-mono text-[12px] text-ink-muted">
         {{ content }}
       </span>

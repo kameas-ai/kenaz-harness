@@ -209,4 +209,91 @@ describe('MessageBubble (chat-ui)', () => {
     await w.find('article').trigger('contextmenu');
     expect(w.find('[data-testid="pin-menu"]').exists()).toBe(false);
   });
+
+  // ── multimodal-io WP04 block-aware rendering ─────────────────────────
+
+  it('renders a text block via StreamingText when contentBlocks are present', () => {
+    const w = mount(MessageBubble, {
+      props: {
+        role: 'user',
+        content: 'fallback ignored',
+        contentBlocks: [{ type: 'text', text: 'hello blocks' }],
+      },
+    });
+    expect(w.text()).toContain('hello blocks');
+  });
+
+  it('renders an image block as a thumbnail', () => {
+    const w = mount(MessageBubble, {
+      props: {
+        role: 'user',
+        content: '',
+        contentBlocks: [
+          {
+            type: 'image',
+            source: {
+              kind: 'base64',
+              media_type: 'image/png',
+              data: 'aGVsbG8=',
+              original_name: 'pic.png',
+            },
+          },
+        ],
+      },
+    });
+    expect(w.find('[data-testid="image-block-thumbnail"]').exists()).toBe(true);
+  });
+
+  it('opens ImageLightbox when the image thumbnail is clicked', async () => {
+    const w = mount(MessageBubble, {
+      props: {
+        role: 'user',
+        content: '',
+        contentBlocks: [
+          {
+            type: 'image',
+            source: {
+              kind: 'base64',
+              media_type: 'image/png',
+              data: 'aGVsbG8=',
+              original_name: 'pic.png',
+            },
+          },
+        ],
+      },
+    });
+    await w.find('[data-testid="image-block-thumbnail"]').trigger('click');
+    expect(w.find('[data-testid="image-lightbox"]').exists()).toBe(true);
+  });
+
+  it('renders a document block as a chip', () => {
+    const w = mount(MessageBubble, {
+      props: {
+        role: 'user',
+        content: '',
+        contentBlocks: [
+          {
+            type: 'document',
+            source: {
+              kind: 'base64',
+              media_type: 'application/pdf',
+              data: 'JVBERi0=',
+              original_name: 'doc.pdf',
+            },
+          },
+        ],
+      },
+    });
+    expect(w.find('[data-testid="document-chip"]').exists()).toBe(true);
+  });
+
+  it('falls back to legacy text rendering when contentBlocks are empty', () => {
+    const w = mount(MessageBubble, {
+      props: {
+        role: 'user',
+        content: 'legacy plain text',
+      },
+    });
+    expect(w.text()).toContain('legacy plain text');
+  });
 });

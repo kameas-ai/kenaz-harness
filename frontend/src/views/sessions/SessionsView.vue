@@ -265,7 +265,28 @@ const isWaitingForFirstChunk = computed(
 
 async function onSend(content: string) {
   if (!hasSession.value || !activeProvider.value) return;
+  // When the user staged any multimodal attachments, the
+  // sendBlocks event has already fired and routed through
+  // session.sendBlocks — skip the legacy text-only path so we don't
+  // double-persist the user turn. We also bail when content is empty
+  // (e.g. attachments-only sends).
+  if (sentBlocksThisTurn.value || content.length === 0) {
+    sentBlocksThisTurn.value = false;
+    return;
+  }
   await session.send(content, activeProvider.value.id, activeModelId.value);
+}
+
+const sentBlocksThisTurn = ref(false);
+
+async function onSendBlocks(contentBlocks: import('@/lib/types').ContentBlock[]) {
+  if (!hasSession.value || !activeProvider.value) return;
+  sentBlocksThisTurn.value = true;
+  await session.sendBlocks(
+    contentBlocks,
+    activeProvider.value.id,
+    activeModelId.value,
+  );
 }
 
 async function onCancel() {
@@ -585,7 +606,10 @@ async function onRemember(m: Message, scope: MemoryScopeKind = 'session') {
             session.loading.value
           "
           :estimate="{ tokens: 0, usd: 0 }"
+          :session-id="sessionId"
+          :error-banner="session.error.value"
           @send="onSend"
+          @send-blocks="onSendBlocks"
           @cancel="onCancel"
         />
       </template>

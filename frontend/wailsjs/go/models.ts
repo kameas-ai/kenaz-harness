@@ -45,6 +45,26 @@ export namespace attachments {
 	        this.position = source["position"];
 	    }
 	}
+	export class AddMediaInput {
+	    scopeKind: string;
+	    scopeId?: string;
+	    mediaBytesBase64: string;
+	    mediaType: string;
+	    originalName?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new AddMediaInput(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.scopeKind = source["scopeKind"];
+	        this.scopeId = source["scopeId"];
+	        this.mediaBytesBase64 = source["mediaBytesBase64"];
+	        this.mediaType = source["mediaType"];
+	        this.originalName = source["originalName"];
+	    }
+	}
 	export class Attachment {
 	    id: string;
 	    scopeKind: string;
@@ -54,6 +74,7 @@ export namespace attachments {
 	    kind: string;
 	    position: number;
 	    createdAt: string;
+	    mediaId?: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new Attachment(source);
@@ -69,6 +90,7 @@ export namespace attachments {
 	        this.kind = source["kind"];
 	        this.position = source["position"];
 	        this.createdAt = source["createdAt"];
+	        this.mediaId = source["mediaId"];
 	    }
 	}
 
@@ -398,6 +420,99 @@ export namespace llm {
 		    return a;
 		}
 	}
+	export class ToolResult {
+	    tool_use_id?: string;
+	    content?: number[];
+	    is_error?: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new ToolResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.tool_use_id = source["tool_use_id"];
+	        this.content = source["content"];
+	        this.is_error = source["is_error"];
+	    }
+	}
+	export class ToolUse {
+	    id: string;
+	    name: string;
+	    input: number[];
+	
+	    static createFrom(source: any = {}) {
+	        return new ToolUse(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.name = source["name"];
+	        this.input = source["input"];
+	    }
+	}
+	export class MediaSource {
+	    kind: string;
+	    media_type: string;
+	    data?: string;
+	    uri?: string;
+	    original_name?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new MediaSource(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.kind = source["kind"];
+	        this.media_type = source["media_type"];
+	        this.data = source["data"];
+	        this.uri = source["uri"];
+	        this.original_name = source["original_name"];
+	    }
+	}
+	export class ContentBlock {
+	    type: string;
+	    text?: string;
+	    source?: MediaSource;
+	    tool_use?: ToolUse;
+	    tool_result?: ToolResult;
+	    tool_data?: number[];
+	
+	    static createFrom(source: any = {}) {
+	        return new ContentBlock(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.type = source["type"];
+	        this.text = source["text"];
+	        this.source = this.convertValues(source["source"], MediaSource);
+	        this.tool_use = this.convertValues(source["tool_use"], ToolUse);
+	        this.tool_result = this.convertValues(source["tool_result"], ToolResult);
+	        this.tool_data = source["tool_data"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	
 	
 	export class ModelInfo {
 	    id: string;
@@ -479,6 +594,7 @@ export namespace llm {
 	        this.message = source["message"];
 	    }
 	}
+	
 
 }
 
@@ -673,6 +789,28 @@ export namespace recipes {
 	        this.sampling = source["sampling"];
 	    }
 	}
+	export class ConfigOption {
+	    name: string;
+	    display: string;
+	    kind: string;
+	    default?: any;
+	    required: boolean;
+	    description: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ConfigOption(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.display = source["display"];
+	        this.kind = source["kind"];
+	        this.default = source["default"];
+	        this.required = source["required"];
+	        this.description = source["description"];
+	    }
+	}
 	export class EnvKey {
 	    name: string;
 	    display: string;
@@ -705,28 +843,6 @@ export namespace recipes {
 	        this.default = source["default"];
 	    }
 	}
-	export class ConfigOption {
-	    name: string;
-	    display: string;
-	    kind: string;
-	    default?: any;
-	    required: boolean;
-	    description: string;
-
-	    static createFrom(source: any = {}) {
-	        return new ConfigOption(source);
-	    }
-
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.name = source["name"];
-	        this.display = source["display"];
-	        this.kind = source["kind"];
-	        this.default = source["default"];
-	        this.required = source["required"];
-	        this.description = source["description"];
-	    }
-	}
 	export class Recipe {
 	    id: string;
 	    display_name: string;
@@ -741,11 +857,11 @@ export namespace recipes {
 	    sampling_policy: SamplingPolicy;
 	    args_template?: string[];
 	    config_options?: ConfigOption[];
-
+	
 	    static createFrom(source: any = {}) {
 	        return new Recipe(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.id = source["id"];
@@ -839,6 +955,20 @@ export namespace rpc {
 		    }
 		    return a;
 		}
+	}
+	export class ShellReadFileResult {
+	    dataBase64: string;
+	    mediaType: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ShellReadFileResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.dataBase64 = source["dataBase64"];
+	        this.mediaType = source["mediaType"];
+	    }
 	}
 	export class ShellStatus {
 	    activeProvider: string;

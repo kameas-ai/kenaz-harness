@@ -144,6 +144,7 @@ defineExpose({ scrollToBottom });
         :content="m.content"
         :streaming="m.streaming === true"
         :tool-calls="m.toolCalls"
+        :content-blocks="m.contentBlocks"
         :rememberable="rememberable === true && m.streaming !== true"
         :project-id="projectId"
         @remember="(scope) => emit('remember', m, scope)"

@@ -2,6 +2,7 @@ package rpc
 
 import (
 	"context"
+	"encoding/base64"
 
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/a2a"
 	attachmentsview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/attachments"
@@ -518,6 +519,30 @@ func (b *Bindings) Tools_RecipeConfig(id string) (map[string]any, error) {
 
 func (b *Bindings) Shell_OpenInOSBrowser(path string) error {
 	return b.api.Shell().OpenInOSBrowser(b.ctx(), path)
+}
+
+// ShellReadFileResult mirrors the (bytes, mediaType) return from
+// ShellAPI.ReadFile. The bytes are base64-encoded at the binding so
+// the Wails JSON wire shape stays string-only and the frontend can
+// hand the data straight to Attachments_AddMedia.
+type ShellReadFileResult struct {
+	DataBase64 string `json:"dataBase64"`
+	MediaType  string `json:"mediaType"`
+}
+
+func (b *Bindings) Shell_PathComplete(partial string) ([]string, error) {
+	return b.api.Shell().PathComplete(b.ctx(), partial)
+}
+
+func (b *Bindings) Shell_ReadFile(path string) (ShellReadFileResult, error) {
+	data, mt, err := b.api.Shell().ReadFile(b.ctx(), path)
+	if err != nil {
+		return ShellReadFileResult{}, err
+	}
+	return ShellReadFileResult{
+		DataBase64: base64.StdEncoding.EncodeToString(data),
+		MediaType:  mt,
+	}, nil
 }
 
 // shellAPIType keeps the shell import alive — Wails-bound methods

@@ -27,7 +27,7 @@ import {
 import { useHarnessClient } from './harnessClientContext';
 import { useEventStream } from './useEventStream';
 import { logEvent } from './eventLog';
-import type { Message, Session } from './types';
+import type { ContentBlock, Message, Session } from './types';
 
 export interface UseSessionResult {
   session: Ref<Session | null>;
@@ -49,6 +49,18 @@ export interface UseSessionResult {
    * authorised set; the chat surface's switcher pill picks it.
    */
   send(content: string, profileID: string, modelOverride?: string): Promise<void>;
+  /**
+   * Multimodal-aware send (multimodal-io WP04). Persists the user
+   * turn through Sessions_SendMessageWithBlocks, then opens the
+   * assistant stream the same way `send` does. Caller passes the
+   * full `contentBlocks` array — image / document blocks first, text
+   * block last.
+   */
+  sendBlocks(
+    contentBlocks: readonly ContentBlock[],
+    profileID: string,
+    modelOverride?: string,
+  ): Promise<void>;
   /** Cancel an in-flight stream. */
   cancel(): Promise<void>;
 }
@@ -271,6 +283,60 @@ export function useSession(id: Ref<string>): UseSessionResult {
     }
   }
 
+  async function sendBlocks(
+    contentBlocks: readonly ContentBlock[],
+    profileID: string,
+    modelOverride?: string,
+  ) {
+    const sid = id.value;
+    if (!sid) return;
+    if (contentBlocks.length === 0) return;
+    error.value = null;
+    logEvent('info', 'send.requested', {
+      session_id: sid,
+      profile_id: profileID,
+      model_override: modelOverride ?? '',
+      block_count: contentBlocks.length,
+    });
+    try {
+      const userMsg = await client.sessions.sendMessageWithBlocks(
+        sid,
+        [...contentBlocks],
+      );
+      messages.value = [...messages.value, userMsg];
+      logEvent('info', 'send.user_message_appended', {
+        session_id: sid,
+        message_id: userMsg.id,
+      });
+      const subId = await client.llm.startStream(profileID, sid, modelOverride);
+      streamSubscriptionId.value = subId;
+      streamingTimedOut.value = false;
+      clearStreamTimeout();
+      logEvent('info', 'send.stream_opened', {
+        session_id: sid,
+        sub_id: subId,
+      });
+      streamTimeoutHandle = setTimeout(() => {
+        if (streamSubscriptionId.value === subId && !currentlyStreaming.value) {
+          streamingTimedOut.value = true;
+          logEvent('warn', 'send.stream_timed_out', {
+            session_id: sid,
+            sub_id: subId,
+            timeout_ms: STREAM_TIMEOUT_MS,
+          });
+        }
+      }, STREAM_TIMEOUT_MS);
+    } catch (err) {
+      const e = err instanceof Error ? err : new Error(String(err));
+      error.value = e.message;
+      logEvent('error', 'send.failed', {
+        session_id: sid,
+        profile_id: profileID,
+        message: e.message,
+      });
+    }
+  }
+
   async function cancel() {
     const subId = streamSubscriptionId.value;
     if (!subId) return;
@@ -332,6 +398,7 @@ export function useSession(id: Ref<string>): UseSessionResult {
     draft,
     refresh,
     send,
+    sendBlocks,
     cancel,
   };
 }

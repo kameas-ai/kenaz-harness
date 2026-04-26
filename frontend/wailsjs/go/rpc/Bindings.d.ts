@@ -31,6 +31,8 @@ export function AppInfo():Promise<rpc.AppInfo>;
 
 export function Attachments_Add(arg1:attachments.AddInput):Promise<attachments.Attachment>;
 
+export function Attachments_AddMedia(arg1:attachments.AddMediaInput):Promise<attachments.Attachment>;
+
 export function Attachments_List(arg1:string,arg2:string):Promise<Array<attachments.Attachment>>;
 
 export function Attachments_ListResolved(arg1:string):Promise<Array<attachments.Attachment>>;
@@ -185,6 +187,8 @@ export function Sessions_Reorder(arg1:Array<string>):Promise<void>;
 
 export function Sessions_SaveDraft(arg1:string,arg2:string):Promise<void>;
 
+export function Sessions_SendMessageWithBlocks(arg1:string,arg2:Array<llm.ContentBlock>):Promise<sessions.Message>;
+
 export function Sessions_SetSystemPrompt(arg1:string,arg2:string,arg3:string):Promise<void>;
 
 export function Sessions_StartStream(arg1:string):Promise<string>;
@@ -207,9 +211,13 @@ export function Settings_SetConfirmEach(arg1:boolean):Promise<void>;
 
 export function Settings_SetMemory(arg1:boolean):Promise<void>;
 
+export function ShellStatus():Promise<rpc.ShellStatus>;
+
 export function Shell_OpenInOSBrowser(arg1:string):Promise<void>;
 
-export function ShellStatus():Promise<rpc.ShellStatus>;
+export function Shell_PathComplete(arg1:string):Promise<Array<string>>;
+
+export function Shell_ReadFile(arg1:string):Promise<rpc.ShellReadFileResult>;
 
 export function Tools_ForgetRecipeKey(arg1:string,arg2:string):Promise<void>;
 

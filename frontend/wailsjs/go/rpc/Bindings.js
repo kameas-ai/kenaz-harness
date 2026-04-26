@@ -22,6 +22,10 @@ export function Attachments_Add(arg1) {
   return window['go']['rpc']['Bindings']['Attachments_Add'](arg1);
 }
 
+export function Attachments_AddMedia(arg1) {
+  return window['go']['rpc']['Bindings']['Attachments_AddMedia'](arg1);
+}
+
 export function Attachments_List(arg1, arg2) {
   return window['go']['rpc']['Bindings']['Attachments_List'](arg1, arg2);
 }
@@ -330,6 +334,10 @@ export function Sessions_SaveDraft(arg1, arg2) {
   return window['go']['rpc']['Bindings']['Sessions_SaveDraft'](arg1, arg2);
 }
 
+export function Sessions_SendMessageWithBlocks(arg1, arg2) {
+  return window['go']['rpc']['Bindings']['Sessions_SendMessageWithBlocks'](arg1, arg2);
+}
+
 export function Sessions_SetSystemPrompt(arg1, arg2, arg3) {
   return window['go']['rpc']['Bindings']['Sessions_SetSystemPrompt'](arg1, arg2, arg3);
 }
@@ -374,12 +382,20 @@ export function Settings_SetMemory(arg1) {
   return window['go']['rpc']['Bindings']['Settings_SetMemory'](arg1);
 }
 
+export function ShellStatus() {
+  return window['go']['rpc']['Bindings']['ShellStatus']();
+}
+
 export function Shell_OpenInOSBrowser(arg1) {
   return window['go']['rpc']['Bindings']['Shell_OpenInOSBrowser'](arg1);
 }
 
-export function ShellStatus() {
-  return window['go']['rpc']['Bindings']['ShellStatus']();
+export function Shell_PathComplete(arg1) {
+  return window['go']['rpc']['Bindings']['Shell_PathComplete'](arg1);
+}
+
+export function Shell_ReadFile(arg1) {
+  return window['go']['rpc']['Bindings']['Shell_ReadFile'](arg1);
 }
 
 export function Tools_ForgetRecipeKey(arg1, arg2) {

@@ -31,6 +31,7 @@ import type {
   AttachmentAddInput,
   AttachmentScopeKind,
   Bundle,
+  ContentBlock,
   Denial,
   AuditEntry,
   AuditFilter,
@@ -55,6 +56,17 @@ import type {
   ConfigOption,
   ConfigKind,
 } from './types';
+
+/**
+ * ShellReadFileResult — wire shape returned by Shell_ReadFile. The
+ * binding base64-encodes the file bytes so the frontend can hand
+ * them straight to Attachments_AddMedia (image/PDF) or decode for
+ * text-snapshot attachments.
+ */
+export interface ShellReadFileResult {
+  dataBase64: string;
+  mediaType: string;
+}
 
 /**
  * Minimal shape of the runtime-attached bindings. The full surface is
@@ -83,6 +95,10 @@ interface WailsBindingsLike {
     id: string,
     role: MessageRole,
     content: string,
+  ): Promise<Message>;
+  Sessions_SendMessageWithBlocks(
+    id: string,
+    contentBlocks: ContentBlock[],
   ): Promise<Message>;
   Sessions_SaveDraft(id: string, draft: string): Promise<void>;
   Sessions_LoadDraft(id: string): Promise<string>;
@@ -149,6 +165,7 @@ interface WailsBindingsLike {
   Attachments_List(scopeKind: string, scopeID: string): Promise<Attachment[]>;
   Attachments_ListResolved(sessionID: string): Promise<Attachment[]>;
   Attachments_Add(input: AttachmentAddInput): Promise<Attachment>;
+  Attachments_AddMedia(input: AttachmentAddMediaInput): Promise<Attachment>;
   Attachments_Remove(id: string): Promise<void>;
   Attachments_Reorder(
     scopeKind: string,
@@ -210,6 +227,22 @@ interface WailsBindingsLike {
   Tools_RecipeConfig(id: string): Promise<Record<string, unknown>>;
 
   Shell_OpenInOSBrowser(path: string): Promise<void>;
+  Shell_PathComplete(partial: string): Promise<string[]>;
+  Shell_ReadFile(path: string): Promise<ShellReadFileResult>;
+}
+
+/**
+ * AttachmentAddMediaInput — wire shape Attachments_AddMedia accepts.
+ * mediaBytesBase64 is the raw base64-encoded payload (no
+ * `data:<mt>;base64,` prefix). The Go binding decodes once, validates
+ * size + media type, and pipes it through the MediaStore CAS path.
+ */
+export interface AttachmentAddMediaInput {
+  scopeKind: AttachmentScopeKind;
+  scopeId?: string;
+  mediaBytesBase64: string;
+  mediaType: string;
+  originalName?: string;
 }
 
 // ── Wails wire shapes for recipes (snake_case-tagged Go structs) ───────
@@ -434,6 +467,16 @@ export interface SessionsClient {
     role: MessageRole,
     content: string,
   ): Promise<Message>;
+  /**
+   * sendMessageWithBlocks persists a user turn carrying polymorphic
+   * content blocks (text + image + document) and returns the stored
+   * Message. The LLM stream is NOT triggered — callers must invoke
+   * `llm.startStream` afterwards (multimodal-io WP04).
+   */
+  sendMessageWithBlocks(
+    id: string,
+    contentBlocks: ContentBlock[],
+  ): Promise<Message>;
   /** Persist a draft input for the session (debounced caller). */
   saveDraft(id: string, draft: string): Promise<void>;
   /** Load the persisted draft (empty string if none). */
@@ -608,6 +651,19 @@ export interface AttachmentsClient {
   }): Promise<Attachment[]>;
   listResolved(sessionID: string): Promise<Attachment[]>;
   add(input: AttachmentAddInput): Promise<Attachment>;
+  /**
+   * addMedia uploads a base64-encoded image / PDF payload through the
+   * MediaStore CAS path (multimodal-io WP02/WP03). The returned
+   * Attachment carries `mediaId`, which the chat surface inspects to
+   * resolve back to the on-disk binary.
+   */
+  addMedia(
+    scopeKind: AttachmentScopeKind,
+    scopeId: string,
+    mediaBytesBase64: string,
+    mediaType: string,
+    originalName: string,
+  ): Promise<Attachment>;
   remove(id: string): Promise<void>;
   reorder(
     scopeKind: AttachmentScopeKind,
@@ -748,13 +804,22 @@ export interface ToolsClient {
 }
 
 /**
- * ShellClient — view-scoped surface for OS-shell affordances. v1
- * exposes a single operation: `openInOSBrowser` opens an absolute
- * filesystem path in the OS file browser via Wails's BrowserOpenURL.
- * The backend validates the path exists before launching.
+ * ShellClient — view-scoped surface for OS-shell affordances.
+ *
+ *   - openInOSBrowser opens an absolute filesystem path in the OS
+ *     file browser via Wails's BrowserOpenURL.
+ *   - pathComplete resolves up to 32 path completions for the
+ *     supplied partial. Completions whose canonical form lands in
+ *     the deny-list are filtered out (multimodal-io WP04 backs the
+ *     chat-input @filepath shortcut).
+ *   - readFile reads a single file's bytes + MIME type, with deny-
+ *     list enforcement and per-kind size caps. The bytes are
+ *     base64-encoded on the wire.
  */
 export interface ShellClient {
   openInOSBrowser(path: string): Promise<void>;
+  pathComplete(partial: string): Promise<string[]>;
+  readFile(path: string): Promise<ShellReadFileResult>;
 }
 
 export interface HarnessClient {
@@ -812,6 +877,8 @@ export function createHarnessClient(): HarnessClient {
       listMessages: (id) => b().Sessions_ListMessages(id),
       appendMessage: (id, role, content) =>
         b().Sessions_AppendMessage(id, role, content),
+      sendMessageWithBlocks: (id, contentBlocks) =>
+        b().Sessions_SendMessageWithBlocks(id, contentBlocks),
       saveDraft: (id, draft) => b().Sessions_SaveDraft(id, draft),
       loadDraft: (id) => b().Sessions_LoadDraft(id),
       setSystemPrompt: (id, content, kind) =>
@@ -888,6 +955,14 @@ export function createHarnessClient(): HarnessClient {
         b().Attachments_List(scopeKind, scopeId ?? ''),
       listResolved: (sessionID) => b().Attachments_ListResolved(sessionID),
       add: (input) => b().Attachments_Add(input),
+      addMedia: (scopeKind, scopeId, mediaBytesBase64, mediaType, originalName) =>
+        b().Attachments_AddMedia({
+          scopeKind,
+          scopeId,
+          mediaBytesBase64,
+          mediaType,
+          originalName,
+        }),
       remove: (id) => b().Attachments_Remove(id),
       reorder: (scopeKind, scopeId, idsInOrder) =>
         b().Attachments_Reorder(scopeKind, scopeId, idsInOrder),
@@ -956,6 +1031,8 @@ export function createHarnessClient(): HarnessClient {
     },
     shell: {
       openInOSBrowser: (path) => b().Shell_OpenInOSBrowser(path),
+      pathComplete: (partial) => b().Shell_PathComplete(partial),
+      readFile: (path) => b().Shell_ReadFile(path),
     },
   };
 }
@@ -1013,6 +1090,21 @@ export function createFakeHarnessClient(
         content,
         createdAt: new Date().toISOString(),
       }),
+      sendMessageWithBlocks: async (id, contentBlocks) => {
+        const text =
+          contentBlocks
+            .filter((b) => b.type === 'text')
+            .map((b) => b.text ?? '')
+            .join('\n') ?? '';
+        return {
+          id: `fake-msg-${Math.random().toString(36).slice(2, 8)}`,
+          sessionId: id,
+          role: 'user' as MessageRole,
+          content: text,
+          contentBlocks,
+          createdAt: new Date().toISOString(),
+        };
+      },
       saveDraft: noop,
       loadDraft: async () => '',
       setSystemPrompt: noop,
@@ -1107,6 +1199,16 @@ export function createFakeHarnessClient(
         content: input.content,
         kind: input.kind ?? 'system',
         position: input.position ?? 0,
+        createdAt: new Date().toISOString(),
+      }),
+      addMedia: async (scopeKind, scopeId, _mediaBytesBase64, mediaType, originalName) => ({
+        id: `fake-media-${Math.random().toString(36).slice(2, 8)}`,
+        scopeKind,
+        scopeId,
+        contentSource: `media:fake-${mediaType}`,
+        content: originalName,
+        kind: 'system' as const,
+        position: 0,
         createdAt: new Date().toISOString(),
       }),
       remove: noop,
@@ -1224,6 +1326,8 @@ export function createFakeHarnessClient(
     },
     shell: {
       openInOSBrowser: noop,
+      pathComplete: async () => [],
+      readFile: async () => ({ dataBase64: '', mediaType: '' }),
     },
   };
 

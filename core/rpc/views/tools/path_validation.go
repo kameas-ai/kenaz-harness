@@ -126,6 +126,15 @@ func ValidateAllowedDir(path string) error {
 	return nil
 }
 
+// IsDeniedPath is the public form of isDenied. The shell view re-uses
+// it to filter PathComplete results and validate ReadFile targets
+// without duplicating the deny-list. Callers MUST canonicalise via
+// filepath.EvalSymlinks before invoking — IsDeniedPath performs the
+// deny-list test only, not symlink resolution.
+func IsDeniedPath(canonical string) bool {
+	return isDenied(canonical)
+}
+
 // isDenied reports whether canonical is the same as, or sits under,
 // any path in the denyRoots list, OR whether it is the user's home
 // directory itself. allowOverrides are checked first; a match there

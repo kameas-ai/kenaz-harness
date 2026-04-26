@@ -539,7 +539,11 @@ describe('KaneazToolsPanel — recipes section', () => {
       allowed_directories: ['/Users/me/.harness/agent-workspace', '/tmp/extra'],
     }));
     const openInOSBrowser = vi.fn(async () => undefined);
-    setup.client.shell = { openInOSBrowser };
+    setup.client.shell = {
+      openInOSBrowser,
+      pathComplete: vi.fn(async () => []),
+      readFile: vi.fn(async () => ({ dataBase64: '', mediaType: '' })),
+    };
 
     const w = await mountPanel(setup);
     await flushPromises();

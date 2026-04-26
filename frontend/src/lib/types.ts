@@ -395,6 +395,48 @@ export interface Message {
   /** Streaming flag — true while the assistant is still emitting tokens. */
   streaming?: boolean;
   toolCalls?: readonly ToolCall[];
+  /**
+   * Polymorphic content blocks for multimodal messages
+   * (multimodal-io WP02/WP04). Empty / undefined for legacy text-only
+   * messages — MessageBubble falls back to the `content` field in that
+   * case. The wire shape mirrors core/llm.ContentBlock; field names use
+   * snake_case to match the Wails serializer's verbatim JSON-tag pass.
+   */
+  contentBlocks?: readonly ContentBlock[];
+}
+
+/**
+ * MediaSource — base64 / URI source of an image or document content
+ * block. Mirrors core/llm.MediaSource. The Wails JSON wire shape keeps
+ * the Go-side snake_case JSON tags verbatim.
+ */
+export interface MediaSource {
+  kind: string;
+  media_type: string;
+  data?: string;
+  uri?: string;
+  original_name?: string;
+}
+
+/**
+ * ContentBlock — one polymorphic fragment of a multimodal message.
+ * Mirrors core/llm.ContentBlock. The wire shape uses the Go-side
+ * snake_case JSON tags (`tool_use`, `tool_result`).
+ */
+export interface ContentBlock {
+  type: 'text' | 'image' | 'document' | 'tool_use' | 'tool_result';
+  text?: string;
+  source?: MediaSource;
+  tool_use?: {
+    id: string;
+    name: string;
+    input?: unknown;
+  };
+  tool_result?: {
+    tool_use_id?: string;
+    content?: unknown;
+    is_error?: boolean;
+  };
 }
 
 /**

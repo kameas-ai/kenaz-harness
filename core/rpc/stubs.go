@@ -240,6 +240,14 @@ func (s *stubShell) OpenInOSBrowser(_ context.Context, _ string) error {
 	return errNotWired
 }
 
+func (s *stubShell) PathComplete(_ context.Context, _ string) ([]string, error) {
+	return nil, errNotWired
+}
+
+func (s *stubShell) ReadFile(_ context.Context, _ string) ([]byte, string, error) {
+	return nil, "", errNotWired
+}
+
 // Compile-time witness.
 var _ shell.ShellAPI = (*stubShell)(nil)
 
