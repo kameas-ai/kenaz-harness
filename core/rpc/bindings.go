@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/a2a"
+	artifactsview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/artifacts"
 	attachmentsview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/attachments"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/audit"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/bundle"
@@ -140,6 +141,9 @@ func (b *Bindings) Sessions_Rename(id, name string) error {
 }
 func (b *Bindings) Sessions_Delete(id string) error {
 	return b.api.Sessions().Delete(b.ctx(), id)
+}
+func (b *Bindings) Sessions_DeleteWithOptions(id string, opts sessions.DeleteOptions) error {
+	return b.api.Sessions().DeleteWithOptions(b.ctx(), id, opts)
 }
 func (b *Bindings) Sessions_Reorder(ids []string) error {
 	return b.api.Sessions().Reorder(b.ctx(), ids)
@@ -436,6 +440,29 @@ func (b *Bindings) Projects_RemoveSession(sessionID string) error {
 }
 func (b *Bindings) Projects_ListSessions(projectID string) ([]projectsview.Session, error) {
 	return b.api.Projects().ListSessions(b.ctx(), projectID)
+}
+
+// ── artifacts (artifacts-storage WP02) ────────────────────────────────
+
+func (b *Bindings) Artifacts_List(filter artifactsview.ArtifactFilter) ([]artifactsview.Artifact, error) {
+	return b.api.Artifacts().List(b.ctx(), filter)
+}
+func (b *Bindings) Artifacts_Get(id string) (artifactsview.ArtifactWithBytes, error) {
+	return b.api.Artifacts().Get(b.ctx(), id)
+}
+func (b *Bindings) Artifacts_Promote(id, newScopeKind, newScopeID string) (artifactsview.Artifact, error) {
+	return b.api.Artifacts().Promote(b.ctx(), id, newScopeKind, newScopeID)
+}
+func (b *Bindings) Artifacts_Delete(id string) error {
+	return b.api.Artifacts().Delete(b.ctx(), id)
+}
+
+// Sessions_SaveAsArtifact is the user-facing manual-pin entry point
+// (FR-006). The RPC routes through the artifacts view so the
+// frontend's "Save as artifact" right-click action calls
+// Sessions_SaveAsArtifact and receives the persisted artifact row.
+func (b *Bindings) Sessions_SaveAsArtifact(sessionID, messageID, title string, sourceRangeStart, sourceRangeEnd int) (artifactsview.Artifact, error) {
+	return b.api.Artifacts().SaveFromMessage(b.ctx(), sessionID, messageID, title, sourceRangeStart, sourceRangeEnd)
 }
 
 // ── attachments (context_attachments — WP03) ──────────────────────────

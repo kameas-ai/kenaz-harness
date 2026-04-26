@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/a2a"
+	artifactsview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/artifacts"
 	attachmentsview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/attachments"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/audit"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/bundle"
@@ -43,6 +44,7 @@ type fakeHarnessAPI struct {
 	hooksAPI        hooksview.HooksAPI
 	projectsAPI     projectsview.ProjectsAPI
 	attachmentsAPI  attachmentsview.AttachmentsAPI
+	artifactsAPI    artifactsview.ArtifactsAPI
 	toolsAPI        tools.ToolsAPI
 	shellAPI        shell.ShellAPI
 }
@@ -67,6 +69,7 @@ func (f *fakeHarnessAPI) Memory() memoryview.MemoryAPI                { return f
 func (f *fakeHarnessAPI) Hooks() hooksview.HooksAPI                   { return f.hooksAPI }
 func (f *fakeHarnessAPI) Projects() projectsview.ProjectsAPI          { return f.projectsAPI }
 func (f *fakeHarnessAPI) Attachments() attachmentsview.AttachmentsAPI { return f.attachmentsAPI }
+func (f *fakeHarnessAPI) Artifacts() artifactsview.ArtifactsAPI       { return f.artifactsAPI }
 func (f *fakeHarnessAPI) Tools() tools.ToolsAPI                       { return f.toolsAPI }
 func (f *fakeHarnessAPI) Shell() shell.ShellAPI                       { return f.shellAPI }
 

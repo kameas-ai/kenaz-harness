@@ -15,10 +15,11 @@ import (
 // captureHookRunner records every pre/post invocation and lets tests
 // script the pre-hook reply.
 type captureHookRunner struct {
-	mu       sync.Mutex
-	preEvts  []PreToolUseEvent
-	postEvts []PostToolUseEvent
-	preFn    func(PreToolUseEvent) (PreToolUseResult, error)
+	mu        sync.Mutex
+	preEvts   []PreToolUseEvent
+	postEvts  []PostToolUseEvent
+	listeners []PostToolUseListener
+	preFn     func(PreToolUseEvent) (PreToolUseResult, error)
 }
 
 func (r *captureHookRunner) RunPreToolUse(_ context.Context, ev PreToolUseEvent) (PreToolUseResult, error) {
@@ -35,6 +36,19 @@ func (r *captureHookRunner) RunPreToolUse(_ context.Context, ev PreToolUseEvent)
 func (r *captureHookRunner) RunPostToolUse(_ context.Context, ev PostToolUseEvent) {
 	r.mu.Lock()
 	r.postEvts = append(r.postEvts, ev)
+	listeners := append([]PostToolUseListener(nil), r.listeners...)
+	r.mu.Unlock()
+	for _, l := range listeners {
+		invokePostListener(l, ev)
+	}
+}
+
+func (r *captureHookRunner) RegisterPostListener(listener PostToolUseListener) {
+	if listener == nil {
+		return
+	}
+	r.mu.Lock()
+	r.listeners = append(r.listeners, listener)
 	r.mu.Unlock()
 }
 

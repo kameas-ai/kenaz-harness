@@ -99,6 +99,13 @@ func (s *sqlStore) Insert(ctx context.Context, a Artifact) (Artifact, error) {
 	if a.ProjectID != nil {
 		projectID = *a.ProjectID
 	}
+	// session_id is nullable post-0304 — empty string maps to NULL so
+	// the artifact-orphan path is representable without a public-API
+	// pointer-type change.
+	var sessionID any
+	if a.SessionID != "" {
+		sessionID = a.SessionID
+	}
 	if err := s.db.WriteTx(ctx, func(tx storage.WriteTx) error {
 		_, err := tx.Exec(ctx, `
             INSERT INTO artifacts
@@ -106,7 +113,7 @@ func (s *sqlStore) Insert(ctx context.Context, a Artifact) (Artifact, error) {
                  byte_size, source, source_ref_json, scope_kind, created_at)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `,
-			a.ID, a.SessionID, projectID, a.Title, a.MimeType, a.ContentHash,
+			a.ID, sessionID, projectID, a.Title, a.MimeType, a.ContentHash,
 			a.ByteSize, a.Source, string(srJSON), a.ScopeKind,
 			a.CreatedAt.UnixNano(),
 		)
@@ -294,17 +301,26 @@ func (a ArtifactsRefcountSource) Refcount(ctx context.Context, contentHash strin
 
 func scanArtifact(sc interface{ Scan(dest ...any) error }) (Artifact, error) {
 	var (
-		a            Artifact
-		projectID    sql.NullString
-		sourceRef    string
-		createdAtNs  int64
+		a           Artifact
+		sessionID   sql.NullString
+		projectID   sql.NullString
+		sourceRef   string
+		createdAtNs int64
 	)
 	if err := sc.Scan(
-		&a.ID, &a.SessionID, &projectID, &a.Title, &a.MimeType,
+		&a.ID, &sessionID, &projectID, &a.Title, &a.MimeType,
 		&a.ContentHash, &a.ByteSize, &a.Source, &sourceRef,
 		&a.ScopeKind, &createdAtNs,
 	); err != nil {
 		return Artifact{}, err
+	}
+	// session_id is nullable post-migration 0304 (artifacts can outlive
+	// their source session via the session-delete-then-promote path).
+	// The public Artifact.SessionID stays a plain string; an orphaned
+	// row simply renders as "" so callers that key off SessionID treat
+	// it as project-scope-only.
+	if sessionID.Valid {
+		a.SessionID = sessionID.String
 	}
 	if projectID.Valid {
 		v := projectID.String

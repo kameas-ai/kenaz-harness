@@ -145,8 +145,22 @@ type AttachmentsResolver interface {
 // completion so navigating away and back reloads the full
 // conversation. Without this, assistant deltas live only in the JS
 // currentlyStreaming buffer and disappear on session switch.
+//
+// The messageID return is used by post-finalize hooks (e.g. the
+// artifacts code-block detector) to anchor SourceRef.MessageID to the
+// freshly persisted row. An empty id is acceptable when the writer
+// has no stable id to surface; downstream hooks treat the field as
+// metadata only.
 type SessionMessageWriter interface {
-	AppendMessage(ctx context.Context, sessionID, role, content string) error
+	AppendMessage(ctx context.Context, sessionID, role, content string) (messageID string, err error)
+}
+
+// ArtifactSink runs the artifacts code-block detector against a
+// freshly persisted assistant message. nil-safe — the LLM impl
+// short-circuits when no sink is wired so chat-only test paths and
+// builds without the artifacts package keep working.
+type ArtifactSink interface {
+	OnAssistantMessage(ctx context.Context, sessionID, messageID, text string) error
 }
 
 // HookMessage mirrors the wire-shape used by the hooks subsystem so
@@ -199,6 +213,7 @@ type API struct {
 	history   SessionMessageReader
 	historyW  SessionMessageWriter
 	hooks     HookRunner
+	artifacts ArtifactSink
 	// attachments is the WP03 source of truth for resolved starting
 	// context. nil falls back to the SessionContextReader probe so
 	// Mission A behaviour stays intact during the one-release buffer.
@@ -291,6 +306,10 @@ type Config struct {
 	// non-nil ResolveConfirm forwards to its ResolveConfirm method;
 	// when nil ResolveConfirm returns a not-wired error.
 	ConfirmGateway *ConfirmGateway
+	// Artifacts, when non-nil, fires the code-block detector against
+	// the freshly persisted assistant message at stream completion
+	// (non-tool_use finish only). nil leaves the chat path untouched.
+	Artifacts ArtifactSink
 }
 
 // New constructs a concrete API.
@@ -313,6 +332,7 @@ func New(cfg Config) *API {
 		toolLoop:       cfg.ToolLoop,
 		tools:          cfg.Tools,
 		confirmGateway: cfg.ConfirmGateway,
+		artifacts:      cfg.Artifacts,
 		subs:           map[string]*subscription{},
 		validated:      map[string]bool{},
 	}
@@ -729,22 +749,28 @@ func (a *API) pump(sub *subscription) {
 		err == nil &&
 		resp.FinishReason == "tool_use" &&
 		len(resp.ToolCalls) > 0
+	var persistedMessageID string
+	persistedAssistant := false
 	if a.historyW != nil &&
 		sub.sessionID != "" &&
 		len(assistantText) > 0 &&
 		closed.Reason != "backend-error" &&
 		!deferAssistantToLoop {
-		if err := a.historyW.AppendMessage(
+		mid, perr := a.historyW.AppendMessage(
 			context.Background(),
 			sub.sessionID,
 			"assistant",
 			string(assistantText),
-		); err != nil {
+		)
+		if perr != nil {
 			log.Warn("llm.stream.persist_assistant_failed",
 				"sub_id", sub.id,
 				"session_id", sub.sessionID,
-				"err", err.Error(),
+				"err", perr.Error(),
 			)
+		} else {
+			persistedMessageID = mid
+			persistedAssistant = true
 		}
 	}
 
@@ -772,6 +798,29 @@ func (a *API) pump(sub *subscription) {
 			Kind:          sub.kind,
 			FinishReason:  closed.Reason,
 		})
+	}
+
+	// Artifacts code-block detector — runs only on a clean
+	// assistant-message finalize (non-tool_use finish, message
+	// successfully persisted). Errors log at warn but never fail the
+	// chat path; the artifact tab simply stays empty for that turn.
+	if a.artifacts != nil &&
+		persistedAssistant &&
+		!deferAssistantToLoop &&
+		sub.sessionID != "" &&
+		len(assistantText) > 0 {
+		if aerr := a.artifacts.OnAssistantMessage(
+			context.Background(),
+			sub.sessionID,
+			persistedMessageID,
+			string(assistantText),
+		); aerr != nil {
+			log.Warn("llm.stream.artifacts_capture_failed",
+				"sub_id", sub.id,
+				"session_id", sub.sessionID,
+				"err", aerr.Error(),
+			)
+		}
 	}
 
 	// Hand off to the toolloop when the model asked for tools and one

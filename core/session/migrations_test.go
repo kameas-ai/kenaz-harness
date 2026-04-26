@@ -124,6 +124,12 @@ func (t *migFakeTx) Exec(ctx context.Context, query string, args ...any) (migrat
 		delete(t.db.tables, name)
 		t.db.mu.Unlock()
 		return migResult{}, nil
+	case strings.HasPrefix(q, "drop table "):
+		name := strings.TrimSpace(strings.TrimPrefix(q, "drop table "))
+		t.db.mu.Lock()
+		delete(t.db.tables, name)
+		t.db.mu.Unlock()
+		return migResult{}, nil
 	case strings.HasPrefix(q, "drop index if exists "):
 		name := strings.TrimSpace(strings.TrimPrefix(q, "drop index if exists "))
 		t.db.mu.Lock()
@@ -132,9 +138,10 @@ func (t *migFakeTx) Exec(ctx context.Context, query string, args ...any) (migrat
 		return migResult{}, nil
 	case strings.HasPrefix(q, "alter table "):
 		// The fake doesn't track columns, but the session migrations
-		// only ever ALTER … ADD COLUMN against a known table. Treat
-		// as a no-op when the table exists; surface a helpful error
-		// otherwise so a typo in a future migration surfaces locally.
+		// only ALTER … ADD COLUMN or ALTER … RENAME TO against a
+		// known table. ADD COLUMN is a no-op (no column-level state);
+		// RENAME TO swaps the source-name flag for the new name so
+		// later index creates can see it.
 		rest := strings.TrimPrefix(q, "alter table ")
 		end := len(rest)
 		for i := 0; i < len(rest); i++ {
@@ -151,6 +158,19 @@ func (t *migFakeTx) Exec(ctx context.Context, query string, args ...any) (migrat
 		if !exists {
 			return nil, fmt.Errorf("alter table: unknown table %q", name)
 		}
+		if rename := strings.Index(rest, " rename to "); rename >= 0 {
+			newName := strings.TrimSpace(rest[rename+len(" rename to "):])
+			t.db.mu.Lock()
+			delete(t.db.tables, name)
+			t.db.tables[newName] = true
+			t.db.mu.Unlock()
+		}
+		return migResult{}, nil
+	case strings.HasPrefix(q, "insert into ") && strings.Contains(q, " select "):
+		// Migration 0304 copies rows artifacts → artifacts_new via
+		// INSERT INTO ... SELECT ... FROM .... The fake has no row
+		// store; treat the copy as a no-op so the schema-shape side
+		// of the migration still exercises.
 		return migResult{}, nil
 	case strings.HasPrefix(q, "insert into harness_migrations"):
 		if len(args) != 7 {
@@ -332,13 +352,13 @@ func TestMigrations_RegisterAndApply(t *testing.T) {
 		}
 	}
 
-	// Ledger rows: 2 storage bootstrap + 4 sessions migrations
+	// Ledger rows: 2 storage bootstrap + 5 sessions migrations
 	// (0300 init + 0301 context_attachments + 0302 content_json +
-	// 0303 artifacts) = 6 applied entries.
-	if got := len(db.ledger); got != 6 {
-		t.Fatalf("ledger size = %d, want 6", got)
+	// 0303 artifacts + 0304 artifacts-promote) = 7 applied entries.
+	if got := len(db.ledger); got != 7 {
+		t.Fatalf("ledger size = %d, want 7", got)
 	}
-	wantVersions := []int{1, 2, 300, 301, 302, 303}
+	wantVersions := []int{1, 2, 300, 301, 302, 303, 304}
 	for i, want := range wantVersions {
 		if db.ledger[i].Version != want {
 			t.Errorf("ledger[%d].Version = %d, want %d", i, db.ledger[i].Version, want)
