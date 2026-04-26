@@ -15,16 +15,20 @@ import (
 
 	"github.com/sigil-tech/kaneaz-harness/core"
 	"github.com/sigil-tech/kaneaz-harness/core/event"
+	"github.com/sigil-tech/kaneaz-harness/core/hooks"
 	corellm "github.com/sigil-tech/kaneaz-harness/core/llm"
 	"github.com/sigil-tech/kaneaz-harness/core/llm/credref"
 	"github.com/sigil-tech/kaneaz-harness/core/llm/personal"
 	llmregistry "github.com/sigil-tech/kaneaz-harness/core/llm/registry"
+	corememory "github.com/sigil-tech/kaneaz-harness/core/memory"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/a2a"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/audit"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/bundle"
 	contextview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/contextview"
+	hooksview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/hooks"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/llm"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/mcp"
+	memoryview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/memory"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/policy"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/sessions"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/settings"
@@ -56,6 +60,8 @@ type HarnessAPI interface {
 	Policy() policy.PolicyAPI
 	Audit() audit.AuditAPI
 	Settings() settings.SettingsAPI
+	Memory() memoryview.MemoryAPI
+	Hooks() hooksview.HooksAPI
 }
 
 // ShellStatus drives the Toolbar status pills + LegendBar live-rate
@@ -108,6 +114,8 @@ type API struct {
 	auditAPI     audit.AuditAPI
 	settingsImpl *settings.API
 	settingsAPI  settings.SettingsAPI
+	memoryAPI    memoryview.MemoryAPI
+	hooksAPI     hooksview.HooksAPI
 
 	// broker fans typed source channels to Wails event topics. Held for
 	// the lifetime of the API value; per-view bridges (llm, sessions,
@@ -162,7 +170,6 @@ func New(c *core.Core) *API {
 		policyAPI:   &stubPolicy{},
 	}
 	a.broker = NewStreamBroker(WailsEmitter{})
-	a.llmAPI = newLLMStack(c, a.broker)
 	a.auditImpl = audit.NewAPI(audit.WithSubscriber(a.broker))
 	a.auditAPI = a.auditImpl
 	a.mcpAPI = mcp.NewAPI(mcp.WithSubscriber(a.broker))
@@ -176,6 +183,40 @@ func New(c *core.Core) *API {
 	settingsImpl := settings.NewAPI(settingsStore)
 	a.settingsAPI = settingsImpl
 	a.settingsImpl = settingsImpl
+
+	// LLM stack uses the settings store as the opt-in gate for
+	// retrieval, and shares the memory store with the MemoryAPI so a
+	// pin in the chat surface and a retrieval at send-time see the
+	// same gob file.
+	memStore := openMemoryStore(c)
+	personalForLLM := newPersonalStore(c)
+	embedder := newEmbedder(c, personalForLLM)
+	memoryEnabled := func() bool {
+		if settingsImpl == nil || settingsImpl.Store() == nil {
+			return false
+		}
+		v, err := settingsImpl.Store().LoadMemory()
+		if err != nil {
+			return false
+		}
+		return v
+	}
+	retriever := corememory.NewRetriever(memStore, embedder, memoryEnabled, 0.7)
+	hooksRunner, hookRegistry, hookBuiltins := newHooksStack(c, retriever, memStore, embedder)
+	a.llmAPI = newLLMStack(c, a.broker, personalForLLM, hooksRunner)
+	a.memoryAPI = memoryview.New(memoryview.Config{
+		Store:    memStore,
+		Embedder: embedder,
+		Reader:   newMemoryMessageReader(c),
+	})
+	if hookRegistry != nil {
+		a.hooksAPI = hooksview.New(hooksview.Config{
+			Registry: hookRegistry,
+			Builtins: &hooksBuiltinDescriber{r: hookBuiltins},
+		})
+	} else {
+		a.hooksAPI = hooksview.New(hooksview.Config{})
+	}
 
 	// Wire the bundle reader against the core data dir. nil core (test
 	// harness path) leaves the impl with a nil reader — List returns an
@@ -217,7 +258,7 @@ func newSessionsAPI(c *core.Core) sessions.SessionsAPI {
 //
 // The shared broker is supplied by New so all view bridges fan out to
 // the same StreamBroker instance.
-func newLLMStack(c *core.Core, broker *StreamBroker) llm.LLMConnectorAPI {
+func newLLMStack(c *core.Core, broker *StreamBroker, store personal.Store, hooksRunner llm.HookRunner) llm.LLMConnectorAPI {
 	// Share ONE secrets backend between the credref resolver (which
 	// reads keys when streaming) and the keychain writer (which stages
 	// keys when the user submits AddProvider). Without this sharing,
@@ -237,7 +278,6 @@ func newLLMStack(c *core.Core, broker *StreamBroker) llm.LLMConnectorAPI {
 	// Registry interface used by the view impl.
 	var _ corellm.Registry = (*llmregistry.Registry)(nil)
 
-	store := newPersonalStore(c)
 	credResolver := credref.New(secretsBackend)
 	historyAdapter := newSessionHistoryReader(c)
 	return llm.New(llm.Config{
@@ -248,7 +288,208 @@ func newLLMStack(c *core.Core, broker *StreamBroker) llm.LLMConnectorAPI {
 		Prober:        &registryProber{reg: reg, creds: credResolver},
 		History:       historyAdapter,
 		HistoryWriter: historyAdapter,
+		Hooks:         hooksRunner,
 	})
+}
+
+// openMemoryStore opens the long-term-memory vector DB at
+// <DataDir>/memory.gob. A nil core or any IO failure soft-fails to nil
+// so the chassis still boots — the rpc surface treats nil as "memory
+// unavailable" and the toggle in settings becomes a no-op.
+func openMemoryStore(c *core.Core) corememory.Store {
+	if c == nil || c.DataDir() == "" {
+		return nil
+	}
+	store, err := corememory.NewChromemStore(filepath.Join(c.DataDir(), "memory.gob"))
+	if err != nil {
+		return nil
+	}
+	return store
+}
+
+// newEmbedder picks the first openai-kind personal provider and wires
+// its keychain credential as the embedder's key source. When no openai
+// provider exists, we return the NoopEmbedder so RememberMessage can
+// surface a friendly "configure an OpenAI provider" error and the
+// retriever's Retrieve becomes a cheap noop.
+func newEmbedder(_ *core.Core, store personal.Store) corememory.Embedder {
+	if store == nil {
+		return corememory.NoopEmbedder{}
+	}
+	profiles, err := store.List()
+	if err != nil {
+		return corememory.NoopEmbedder{}
+	}
+	for _, p := range profiles {
+		if p.Kind == "openai" && p.Cred.Kind == "keychain" && p.Cred.Locator != "" {
+			locator := p.Cred.Locator
+			return corememory.NewOpenAIEmbedder(func(_ context.Context) ([]byte, error) {
+				val, err := keyring.Get(keyringService, locator)
+				if err != nil {
+					return nil, fmt.Errorf("memory: keychain get %q: %w", locator, err)
+				}
+				return []byte(val), nil
+			})
+		}
+	}
+	return corememory.NoopEmbedder{}
+}
+
+// newHooksStack constructs a hooks.Runner with the memory builtins
+// preregistered and returns the runner alongside the registry +
+// builtins so the hooksview surface can list / mutate hooks against
+// the same instances the runner dispatches on. Returns (nil, nil, nil)
+// when memStore is nil — the LLM impl falls back to "no hooks
+// configured" and the hooksview surface renders an empty list.
+//
+// Starter memory hooks are NOT auto-installed on boot; the settings
+// "long-term memory" toggle owns that lifecycle so a fresh install
+// stays quiet until the user opts in.
+func newHooksStack(
+	c *core.Core,
+	retriever *corememory.Retriever,
+	memStore corememory.Store,
+	embedder corememory.Embedder,
+) (llm.HookRunner, *hooks.Registry, *hooks.BuiltinRegistry) {
+	if memStore == nil {
+		return nil, nil, nil
+	}
+	dataDir := ""
+	if c != nil {
+		dataDir = c.DataDir()
+	}
+	registry, err := hooks.NewRegistry(dataDir)
+	if err != nil {
+		return nil, nil, nil
+	}
+	builtins := hooks.NewBuiltinRegistry()
+	hooks.RegisterMemoryBuiltins(builtins, hooks.MemoryDeps{
+		Retriever: &retrieverAdapter{r: retriever},
+		Store:     memStore,
+		Embedder:  embedder,
+	})
+	runner := hooks.NewRunner(hooks.Config{
+		Registry: registry,
+		Builtins: builtins,
+	})
+	return &hooksRunnerAdapter{r: runner}, registry, builtins
+}
+
+// hooksBuiltinDescriber adapts *hooks.BuiltinRegistry to the
+// hooksview.BuiltinDescriber interface (Builtins()) by forwarding to
+// the underlying Describe() method.
+type hooksBuiltinDescriber struct {
+	r *hooks.BuiltinRegistry
+}
+
+func (a *hooksBuiltinDescriber) Builtins() []hooks.BuiltinDescriptor {
+	if a == nil || a.r == nil {
+		return nil
+	}
+	return a.r.Describe()
+}
+
+// retrieverAdapter satisfies hooks.MemoryRetriever (which uses
+// memory.Snippet) by delegating to core/memory.Retriever.
+type retrieverAdapter struct {
+	r *corememory.Retriever
+}
+
+func (a *retrieverAdapter) Retrieve(ctx context.Context, query string, k int) ([]corememory.Snippet, error) {
+	if a == nil || a.r == nil {
+		return nil, nil
+	}
+	return a.r.Retrieve(ctx, query, k)
+}
+
+// hooksRunnerAdapter bridges hooks.Runner to llm.HookRunner. The
+// translation between event payload shapes is mechanical — both sides
+// carry the same fields under different package types.
+type hooksRunnerAdapter struct {
+	r *hooks.Runner
+}
+
+func (a *hooksRunnerAdapter) RunPreSend(ctx context.Context, ev llm.PreSendHookEvent) (llm.PreSendHookEvent, error) {
+	if a == nil || a.r == nil {
+		return ev, nil
+	}
+	in := hooks.PreSendEvent{
+		SessionID: ev.SessionID,
+		Messages:  hookMessagesFromLLM(ev.Messages),
+		Model:     ev.Model,
+		Kind:      ev.Kind,
+		UserText:  ev.UserText,
+	}
+	out, err := a.r.RunPreSend(ctx, in)
+	if err != nil {
+		return ev, err
+	}
+	ev.Messages = hookMessagesToLLM(out.Messages)
+	return ev, nil
+}
+
+func (a *hooksRunnerAdapter) RunPostSend(ctx context.Context, ev llm.PostSendHookEvent) {
+	if a == nil || a.r == nil {
+		return
+	}
+	a.r.RunPostSend(ctx, hooks.PostSendEvent{
+		SessionID:     ev.SessionID,
+		UserTurn:      ev.UserTurn,
+		AssistantTurn: ev.AssistantTurn,
+		Model:         ev.Model,
+		Kind:          ev.Kind,
+		FinishReason:  ev.FinishReason,
+	})
+}
+
+func hookMessagesFromLLM(in []llm.HookMessage) []hooks.HookMessage {
+	out := make([]hooks.HookMessage, len(in))
+	for i, m := range in {
+		out[i] = hooks.HookMessage{Role: m.Role, Content: m.Content}
+	}
+	return out
+}
+
+func hookMessagesToLLM(in []hooks.HookMessage) []llm.HookMessage {
+	out := make([]llm.HookMessage, len(in))
+	for i, m := range in {
+		out[i] = llm.HookMessage{Role: m.Role, Content: m.Content}
+	}
+	return out
+}
+
+// newMemoryMessageReader adapts the session manager to the
+// MessageReader shape the memory view uses to look up a message by id
+// before embedding its content.
+func newMemoryMessageReader(c *core.Core) memoryview.MessageReader {
+	if c == nil {
+		return nil
+	}
+	mgr := c.SessionManager()
+	if mgr == nil {
+		return nil
+	}
+	return &memoryMessageReader{mgr: mgr}
+}
+
+type memoryMessageReader struct {
+	mgr *session.Manager
+}
+
+func (r *memoryMessageReader) ListMessages(ctx context.Context, sessionID string) ([]memoryview.Message, error) {
+	stored, err := r.mgr.ListMessages(ctx, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]memoryview.Message, 0, len(stored))
+	for _, m := range stored {
+		out = append(out, memoryview.Message{
+			ID:      m.ID,
+			Role:    string(m.Role),
+			Content: m.Content,
+		})
+	}
+	return out, nil
 }
 
 // newSessionHistoryReader wires the LLM impl to the session manager
@@ -493,6 +734,18 @@ func (a *API) Bundle() bundle.BundleAPI          { return a.bundleAPI }
 func (a *API) Policy() policy.PolicyAPI          { return a.policyAPI }
 func (a *API) Audit() audit.AuditAPI             { return a.auditAPI }
 func (a *API) Settings() settings.SettingsAPI    { return a.settingsAPI }
+func (a *API) Memory() memoryview.MemoryAPI {
+	if a.memoryAPI == nil {
+		return &stubMemory{}
+	}
+	return a.memoryAPI
+}
+func (a *API) Hooks() hooksview.HooksAPI {
+	if a.hooksAPI == nil {
+		return &stubHooks{}
+	}
+	return a.hooksAPI
+}
 
 // Bindings returns the slice of Wails-bound objects. The Bindings struct
 // (bindings.go) is the flat-method surface Wails reflects. Stable for the

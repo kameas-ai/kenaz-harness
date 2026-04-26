@@ -36,6 +36,17 @@ const props = defineProps<{
    * itself, not just the page subtitle.
    */
   errorMessage?: string | null;
+  /**
+   * When true, MessageBubbles render a 📌 button on hover so the user
+   * can pin individual messages to long-term memory. Off by default
+   * (privacy posture); the parent flips it on when memory is enabled.
+   */
+  rememberable?: boolean;
+}>();
+
+const emit = defineEmits<{
+  /** Forwarded from MessageBubble's pin click. */
+  (e: 'remember', message: Message): void;
 }>();
 
 const scrollEl = ref<HTMLElement | null>(null);
@@ -124,6 +135,8 @@ defineExpose({ scrollToBottom });
         :content="m.content"
         :streaming="m.streaming === true"
         :tool-calls="m.toolCalls"
+        :rememberable="rememberable === true && m.streaming !== true"
+        @remember="emit('remember', m)"
       />
 
       <!-- Thinking indicator: visible from the moment send() opens a

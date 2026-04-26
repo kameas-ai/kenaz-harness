@@ -171,6 +171,28 @@ func (s *FileStore) SaveTheme(theme string) error {
 	return s.saveLocked(got)
 }
 
+// LoadMemory returns the memoryEnabled opt-in flag (default false —
+// privacy posture: OFF unless the user explicitly toggles it).
+func (s *FileStore) LoadMemory() (bool, error) {
+	got, err := s.LoadAll()
+	if err != nil {
+		return got.MemoryEnabled, err
+	}
+	return got.MemoryEnabled, nil
+}
+
+// SaveMemory updates the long-term-memory opt-in flag.
+func (s *FileStore) SaveMemory(enabled bool) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	got, err := s.loadLocked()
+	if err != nil {
+		return err
+	}
+	got.MemoryEnabled = enabled
+	return s.saveLocked(got)
+}
+
 // defaultSettings is the safe-baseline a fresh install starts with.
 func defaultSettings() Settings {
 	return Settings{
@@ -265,5 +287,18 @@ func (m *memoryStore) SaveTheme(t string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.data.Theme = t
+	return nil
+}
+
+func (m *memoryStore) LoadMemory() (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.data.MemoryEnabled, nil
+}
+
+func (m *memoryStore) SaveMemory(enabled bool) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.data.MemoryEnabled = enabled
 	return nil
 }

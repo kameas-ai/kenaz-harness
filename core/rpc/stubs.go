@@ -6,7 +6,9 @@ import (
 
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/a2a"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/contextview"
+	hooksview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/hooks"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/llm"
+	memoryview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/memory"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/policy"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/sessions"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/trust"
@@ -111,6 +113,39 @@ func (s *stubContext) List(_ context.Context) ([]contextview.ContextEntry, error
 }
 func (s *stubContext) StartStream(_ context.Context) (string, error) { return "", errNotWired }
 func (s *stubContext) StopStream(_ context.Context, _ string) error  { return errNotWired }
+
+// ── memory ─────────────────────────────────────────────────────────────
+
+type stubMemory struct{}
+
+func (s *stubMemory) ListChunks(_ context.Context) ([]memoryview.Chunk, error) {
+	return []memoryview.Chunk{}, nil
+}
+func (s *stubMemory) RememberMessage(_ context.Context, _, _ string) (string, error) {
+	return "", errNotWired
+}
+func (s *stubMemory) Forget(_ context.Context, _ string) error { return errNotWired }
+
+// ── hooks ──────────────────────────────────────────────────────────────
+
+type stubHooks struct{}
+
+func (s *stubHooks) List(_ context.Context) ([]hooksview.Hook, error) {
+	return []hooksview.Hook{}, nil
+}
+func (s *stubHooks) Get(_ context.Context, _ string) (hooksview.Hook, error) {
+	return hooksview.Hook{}, errNotWired
+}
+func (s *stubHooks) Add(_ context.Context, _ hooksview.HookInput) (hooksview.Hook, error) {
+	return hooksview.Hook{}, errNotWired
+}
+func (s *stubHooks) Update(_ context.Context, _ hooksview.HookInput) error { return errNotWired }
+func (s *stubHooks) Remove(_ context.Context, _ string) error              { return errNotWired }
+func (s *stubHooks) AvailableBuiltins(_ context.Context) ([]hooksview.BuiltinDescriptor, error) {
+	return []hooksview.BuiltinDescriptor{}, nil
+}
+func (s *stubHooks) InstallStarterMemoryHooks(_ context.Context) error { return nil }
+func (s *stubHooks) RemoveStarterMemoryHooks(_ context.Context) error  { return nil }
 
 // ── policy ─────────────────────────────────────────────────────────────
 

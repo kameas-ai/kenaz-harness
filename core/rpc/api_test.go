@@ -8,8 +8,10 @@ import (
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/audit"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/bundle"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/contextview"
+	hooksview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/hooks"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/llm"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/mcp"
+	memoryview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/memory"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/policy"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/sessions"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/settings"
@@ -31,6 +33,8 @@ type fakeHarnessAPI struct {
 	policyAPI   policy.PolicyAPI
 	auditAPI    audit.AuditAPI
 	settingsAPI settings.SettingsAPI
+	memoryAPI   memoryview.MemoryAPI
+	hooksAPI    hooksview.HooksAPI
 }
 
 func (f *fakeHarnessAPI) ShellStatus(_ context.Context) (ShellStatus, error) {
@@ -48,6 +52,8 @@ func (f *fakeHarnessAPI) Bundle() bundle.BundleAPI                   { return f.
 func (f *fakeHarnessAPI) Policy() policy.PolicyAPI                   { return f.policyAPI }
 func (f *fakeHarnessAPI) Audit() audit.AuditAPI                      { return f.auditAPI }
 func (f *fakeHarnessAPI) Settings() settings.SettingsAPI             { return f.settingsAPI }
+func (f *fakeHarnessAPI) Memory() memoryview.MemoryAPI                { return f.memoryAPI }
+func (f *fakeHarnessAPI) Hooks() hooksview.HooksAPI                   { return f.hooksAPI }
 
 // Compile-time interface witness (plan §4.2).
 var _ HarnessAPI = (*fakeHarnessAPI)(nil)

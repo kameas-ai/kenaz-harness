@@ -7,8 +7,10 @@ import (
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/audit"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/bundle"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/contextview"
+	hooksview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/hooks"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/llm"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/mcp"
+	memoryview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/memory"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/policy"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/sessions"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/settings"
@@ -295,4 +297,62 @@ func (b *Bindings) Settings_Get() (settings.Settings, error) {
 }
 func (b *Bindings) Settings_Set(s settings.Settings) error {
 	return b.api.Settings().Set(b.ctx(), s)
+}
+
+// Settings_GetMemory exposes the long-term-memory opt-in independently
+// of the full settings round-trip. The frontend toggle reads / writes
+// this so the privacy default (off) stays the cheap path.
+func (b *Bindings) Settings_GetMemory() (bool, error) {
+	if b.storeFn == nil {
+		return false, nil
+	}
+	return b.storeFn().LoadMemory()
+}
+
+func (b *Bindings) Settings_SetMemory(enabled bool) error {
+	if b.storeFn == nil {
+		return nil
+	}
+	return b.storeFn().SaveMemory(enabled)
+}
+
+// ── memory ─────────────────────────────────────────────────────────────
+
+func (b *Bindings) Memory_ListChunks() ([]memoryview.Chunk, error) {
+	return b.api.Memory().ListChunks(b.ctx())
+}
+
+func (b *Bindings) Memory_RememberMessage(sessionID, messageID string) (string, error) {
+	return b.api.Memory().RememberMessage(b.ctx(), sessionID, messageID)
+}
+
+func (b *Bindings) Memory_Forget(id string) error {
+	return b.api.Memory().Forget(b.ctx(), id)
+}
+
+// ── hooks ──────────────────────────────────────────────────────────────
+
+func (b *Bindings) Hooks_List() ([]hooksview.Hook, error) {
+	return b.api.Hooks().List(b.ctx())
+}
+func (b *Bindings) Hooks_Get(id string) (hooksview.Hook, error) {
+	return b.api.Hooks().Get(b.ctx(), id)
+}
+func (b *Bindings) Hooks_Add(in hooksview.HookInput) (hooksview.Hook, error) {
+	return b.api.Hooks().Add(b.ctx(), in)
+}
+func (b *Bindings) Hooks_Update(in hooksview.HookInput) error {
+	return b.api.Hooks().Update(b.ctx(), in)
+}
+func (b *Bindings) Hooks_Remove(id string) error {
+	return b.api.Hooks().Remove(b.ctx(), id)
+}
+func (b *Bindings) Hooks_AvailableBuiltins() ([]hooksview.BuiltinDescriptor, error) {
+	return b.api.Hooks().AvailableBuiltins(b.ctx())
+}
+func (b *Bindings) Hooks_InstallStarterMemory() error {
+	return b.api.Hooks().InstallStarterMemoryHooks(b.ctx())
+}
+func (b *Bindings) Hooks_RemoveStarterMemory() error {
+	return b.api.Hooks().RemoveStarterMemoryHooks(b.ctx())
 }

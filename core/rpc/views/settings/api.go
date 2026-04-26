@@ -7,12 +7,17 @@ import "context"
 
 // Settings is the persisted UI state shape (plan §5.5). schemaVersion
 // gates migrations; lastRoute drives first-paint route restoration.
+//
+// MemoryEnabled is the explicit opt-in for the cross-session long-term
+// memory feature. Privacy default is OFF: when false the harness never
+// embeds, queries, or injects memory chunks regardless of what is on disk.
 type Settings struct {
 	SchemaVersion int        `json:"schemaVersion"`
 	LastRoute     string     `json:"lastRoute"`
 	Theme         string     `json:"theme"`
 	Accent        string     `json:"accent"`
 	WindowSize    WindowSize `json:"windowSize"`
+	MemoryEnabled bool       `json:"memoryEnabled"`
 }
 
 // WindowSize mirrors the charter's WindowSize type.
@@ -31,6 +36,12 @@ type SettingsStore interface {
 	LogRouteChange(from, to string) error
 	LoadTheme() (string, error)
 	SaveTheme(string) error
+	// LoadMemory / SaveMemory expose the long-term-memory opt-in
+	// independently of the full Settings round-trip so the rpc layer
+	// can read it on the hot path (every send) without serializing
+	// the whole record.
+	LoadMemory() (bool, error)
+	SaveMemory(enabled bool) error
 }
 
 // SettingsAPI is the view-scoped accessor exposed via HarnessAPI.
