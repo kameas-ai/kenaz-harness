@@ -1,0 +1,10 @@
+{
+  "created_at": "2026-04-26T18:29:50.399318+00:00",
+  "friendly_name": "multimodal io",
+  "mission_id": "01KQ5GW4KZ5ZCTKJBN0QJFYAJG",
+  "mission_number": null,
+  "mission_slug": "multimodal-io-01KQ5GW4",
+  "mission_type": "software-dev",
+  "slug": "multimodal-io-01KQ5GW4",
+  "target_branch": "main"
+}
