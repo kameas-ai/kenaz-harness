@@ -32,8 +32,10 @@ import (
 	"github.com/sigil-tech/kaneaz-harness/core/llm"
 	"github.com/sigil-tech/kaneaz-harness/core/mcp"
 	"github.com/sigil-tech/kaneaz-harness/core/memory"
+	"github.com/sigil-tech/kaneaz-harness/core/logging"
 	"github.com/sigil-tech/kaneaz-harness/core/scheduler"
 	"github.com/sigil-tech/kaneaz-harness/core/session"
+	"github.com/sigil-tech/kaneaz-harness/core/session/sqlitedb"
 )
 
 // Options carries the bootstrap configuration passed to New. DataDir
@@ -173,9 +175,36 @@ func (c *Core) SessionManager() *session.Manager {
 	if c.sessionManager != nil {
 		return c.sessionManager
 	}
-	store := session.NewMemoryStore()
+	// Disk-backed by default. Falls back to the in-memory store on any
+	// open / migration error so the chassis still boots — the failure
+	// is logged so support can spot it.
+	store := openSessionStore(c.opts.DataDir)
 	c.sessionManager = session.NewManager(store)
 	return c.sessionManager
+}
+
+// openSessionStore opens the SQLite-backed session store at
+// <DataDir>/sessions.db. On any failure it falls back to the
+// in-memory store so the app still works (with the known limitation
+// that sessions evaporate on restart).
+func openSessionStore(dataDir string) session.Store {
+	if dataDir == "" {
+		logging.L().Warn("session.store.fallback_memory", "reason", "empty data dir")
+		return session.NewMemoryStore()
+	}
+	path := filepath.Join(dataDir, "sessions.db")
+	db, err := sqlitedb.Open(path)
+	if err != nil {
+		logging.L().Error("session.store.open_failed", "path", path, "err", err.Error())
+		return session.NewMemoryStore()
+	}
+	if err := db.EnsureSessionsSchema(context.Background()); err != nil {
+		logging.L().Error("session.store.migrate_failed", "path", path, "err", err.Error())
+		_ = db.Close()
+		return session.NewMemoryStore()
+	}
+	logging.L().Info("session.store.opened", "path", path)
+	return session.NewSQLStore(db)
 }
 
 // BundleCache returns the bundle layer's content-addressable storage,

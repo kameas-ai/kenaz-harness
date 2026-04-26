@@ -239,13 +239,15 @@ func newLLMStack(c *core.Core, broker *StreamBroker) llm.LLMConnectorAPI {
 
 	store := newPersonalStore(c)
 	credResolver := credref.New(secretsBackend)
+	historyAdapter := newSessionHistoryReader(c)
 	return llm.New(llm.Config{
-		Registry: reg,
-		Sink:     &streamSinkAdapter{broker: broker},
-		Store:    store,
-		Keychain: &keychainWriter{backend: secretsBackend},
-		Prober:   &registryProber{reg: reg, creds: credResolver},
-		History:  newSessionHistoryReader(c),
+		Registry:      reg,
+		Sink:          &streamSinkAdapter{broker: broker},
+		Store:         store,
+		Keychain:      &keychainWriter{backend: secretsBackend},
+		Prober:        &registryProber{reg: reg, creds: credResolver},
+		History:       historyAdapter,
+		HistoryWriter: historyAdapter,
 	})
 }
 
@@ -254,7 +256,11 @@ func newLLMStack(c *core.Core, broker *StreamBroker) llm.LLMConnectorAPI {
 // upstream provider call. Without this, the connector falls back to a
 // hardcoded demo prompt — the symptom is "my messages aren't reaching
 // the LLM" no matter what the user types.
-func newSessionHistoryReader(c *core.Core) llm.SessionMessageReader {
+//
+// The returned value satisfies BOTH SessionMessageReader and
+// SessionMessageWriter so the LLM impl can also persist the
+// assistant turn at stream completion.
+func newSessionHistoryReader(c *core.Core) *sessionHistoryReader {
 	if c == nil {
 		return nil
 	}
@@ -285,6 +291,20 @@ func (r *sessionHistoryReader) ListMessages(ctx context.Context, sessionID strin
 		})
 	}
 	return out, nil
+}
+
+// AppendMessage persists the assistant turn at stream completion so a
+// future ListMessages call rehydrates it. Implements
+// llm.SessionMessageWriter.
+func (r *sessionHistoryReader) AppendMessage(ctx context.Context, sessionID, role, content string) error {
+	if r == nil || r.mgr == nil {
+		return nil
+	}
+	_, err := r.mgr.AppendMessage(ctx, sessionID, session.Message{
+		Role:    session.Role(role),
+		Content: content,
+	})
+	return err
 }
 
 // registryProber satisfies llm.ProviderProber by routing through the

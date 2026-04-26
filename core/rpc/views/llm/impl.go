@@ -102,15 +102,24 @@ type SessionMessageReader interface {
 	ListMessages(ctx context.Context, sessionID string) ([]SessionMessage, error)
 }
 
+// SessionMessageWriter persists the assistant turn at stream
+// completion so navigating away and back reloads the full
+// conversation. Without this, assistant deltas live only in the JS
+// currentlyStreaming buffer and disappear on session switch.
+type SessionMessageWriter interface {
+	AppendMessage(ctx context.Context, sessionID, role, content string) error
+}
+
 // API is the concrete LLMConnectorAPI implementation.
 type API struct {
 	reg      Registry
 	sink     StreamSink
 	store    personal.Store
 	bundles  BundleSource
-	keychain KeychainWriter
-	prober   ProviderProber
-	history  SessionMessageReader
+	keychain  KeychainWriter
+	prober    ProviderProber
+	history   SessionMessageReader
+	historyW  SessionMessageWriter
 
 	mu             sync.Mutex
 	subs           map[string]*subscription
@@ -139,6 +148,9 @@ type Config struct {
 	// nil disables history threading; the connector will be called with
 	// a single fixed user message (test-friendly default).
 	History SessionMessageReader
+	// HistoryWriter persists the assistant turn at stream completion
+	// so navigating away and back reloads the full conversation.
+	HistoryWriter SessionMessageWriter
 }
 
 // New constructs a concrete API.
@@ -155,6 +167,7 @@ func New(cfg Config) *API {
 		keychain:  cfg.Keychain,
 		prober:    cfg.Prober,
 		history:   cfg.History,
+		historyW:  cfg.HistoryWriter,
 		subs:      map[string]*subscription{},
 		validated: map[string]bool{},
 	}
@@ -356,11 +369,11 @@ func (a *API) pump(sub *subscription) {
 	}()
 
 	chunkCount := 0
-	textBytes := 0
+	var assistantText []byte
 	for ev := range sub.stream.Events() {
 		chunkCount++
 		if ev.Kind == corellm.StreamText {
-			textBytes += len(ev.Text)
+			assistantText = append(assistantText, ev.Text...)
 		}
 		a.sink.Emit("llm:stream-chunk", StreamChunkPayload{
 			SubID:     sub.id,
@@ -383,13 +396,36 @@ func (a *API) pump(sub *subscription) {
 		closed.Reason = "completed"
 		closed.FinishReason = resp.FinishReason
 	}
+
+	// Persist the assistant turn so navigating away and back reloads
+	// the full conversation. We persist on completed AND on
+	// stop-called (partial turn is still useful context); skip on
+	// backend-error since the response is unreliable.
+	if a.historyW != nil &&
+		sub.sessionID != "" &&
+		len(assistantText) > 0 &&
+		closed.Reason != "backend-error" {
+		if err := a.historyW.AppendMessage(
+			context.Background(),
+			sub.sessionID,
+			"assistant",
+			string(assistantText),
+		); err != nil {
+			log.Warn("llm.stream.persist_assistant_failed",
+				"sub_id", sub.id,
+				"session_id", sub.sessionID,
+				"err", err.Error(),
+			)
+		}
+	}
+
 	log.Info("llm.stream.closed",
 		"sub_id", sub.id,
 		"session_id", sub.sessionID,
 		"reason", closed.Reason,
 		"finish_reason", closed.FinishReason,
 		"chunks", chunkCount,
-		"text_bytes", textBytes,
+		"text_bytes", len(assistantText),
 		"err_message", closed.Message,
 	)
 	a.sink.Emit("llm:stream-closed", closed)
