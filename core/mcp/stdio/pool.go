@@ -30,6 +30,29 @@ type PoolOptions struct {
 	FirstByteTimeout time.Duration
 	// InitTimeout overrides defaultInitTimeout for every spawn.
 	InitTimeout time.Duration
+
+	// PingPeriod overrides defaultPingPeriod for every spawn. Set
+	// to a negative value to disable health pings (used by tests
+	// that drive the ping path manually).
+	PingPeriod time.Duration
+
+	// PingTimeout overrides defaultPingTimeout for every spawn.
+	PingTimeout time.Duration
+
+	// Now is the clock-injection hook used by the supervisor for
+	// restartHistory pruning and LastRestartAt timestamps. Nil →
+	// time.Now. Tests pass a stub here to fast-forward without
+	// wallclock waits.
+	Now func() time.Time
+
+	// Sleep is the supervisor's backoff sleep. Nil → time.Sleep.
+	// Tests pass a no-op or a recordable stub.
+	Sleep func(d time.Duration)
+
+	// NewTicker is healthPinger's ticker factory. Nil →
+	// time.NewTicker. Tests can return a manually-driven Ticker to
+	// fire pings on demand.
+	NewTicker func(d time.Duration) Ticker
 }
 
 // Pool is the real, full-featured stdio MCP pool. It implements
@@ -121,13 +144,26 @@ func (p *Pool) openOne(ctx context.Context, spec coremcp.ServerSpec) error {
 	if len(spec.Command) == 0 {
 		return errors.New("stdio: spec.Command required")
 	}
-	inst := newServerInstance(spec.Name, p.opts.Logger, p.opts.Sampler, p.opts.Roots, p.opts.Broker)
+	inst := newServerInstance(
+		spec.Name,
+		p.opts.Logger,
+		p.opts.Sampler,
+		p.opts.Roots,
+		p.opts.Broker,
+		instanceOptions{
+			Now:       p.opts.Now,
+			Sleep:     p.opts.Sleep,
+			NewTicker: p.opts.NewTicker,
+		},
+	)
 	sspec := SpawnSpec{
 		ID:               spec.Name,
 		Command:          spec.Command,
 		Env:              spec.Env,
 		FirstByteTimeout: p.opts.FirstByteTimeout,
 		InitTimeout:      p.opts.InitTimeout,
+		PingPeriod:       p.opts.PingPeriod,
+		PingTimeout:      p.opts.PingTimeout,
 		// SamplingEnabled is recipe-level state owned by WP03+; the
 		// fixture/test path leaves it false. Pool callers that need
 		// sampling at WP03+ time will use the recipe-aware Open path.

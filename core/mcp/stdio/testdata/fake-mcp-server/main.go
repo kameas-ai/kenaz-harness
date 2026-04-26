@@ -9,20 +9,25 @@
 // the test helper `buildFakeServer` and stored under the test
 // temp dir.
 //
-// CLI flags (per WP01 task T007 + WP03 extensions):
+// CLI flags (WP01 + WP02 + WP03):
 //
 //	--banner             emit a non-JSON banner line on stdout first
 //	--slow-init=DUR      delay the initialize response by DUR
 //	--crash-on-call      exit(1) after the first tools/call
 //	--no-init            never reply to initialize (timeout test)
+//	--ignore-pings       accept ping requests but never reply (WP02
+//	                     health-pinger test)
+//	--seed-stderr=S      write S to stderr immediately on startup so
+//	                     RecipeStatus.StderrTail tests have a
+//	                     deterministic value to assert
 //	--emit-roots-list    after initialize, send a roots/list request
-//	                     to the host and exit on response.
+//	                     to the host and exit on response
 //	--emit-sampling      after initialize, send sampling/createMessage
-//	                     to the host and exit on response.
+//	                     to the host and exit on response
 //	--emit-log=LEVEL     emit one notifications/message at LEVEL after
 //	                     initialize (debug|info|notice|warning|error|...)
 //	--progress-on-call   on tools/call, emit one notifications/progress
-//	                     mid-flight before the result.
+//	                     mid-flight before the result
 //
 // Tools exposed (per WP01 acceptance):
 //
@@ -47,6 +52,8 @@ func main() {
 	slowInit := flag.Duration("slow-init", 0, "delay the initialize response by this duration")
 	crashOnCall := flag.Bool("crash-on-call", false, "exit(1) after the first tools/call")
 	noInit := flag.Bool("no-init", false, "never reply to initialize")
+	ignorePings := flag.Bool("ignore-pings", false, "accept ping requests but never reply")
+	seedStderr := flag.String("seed-stderr", "", "write to stderr on startup")
 	emitRootsList := flag.Bool("emit-roots-list", false, "send a roots/list request to the host after initialize")
 	emitSampling := flag.Bool("emit-sampling", false, "send a sampling/createMessage request to the host after initialize")
 	emitLog := flag.String("emit-log", "", "emit a notifications/message at the given level after initialize")
@@ -57,6 +64,8 @@ func main() {
 		SlowInit:       *slowInit,
 		CrashOnCall:    *crashOnCall,
 		NoInit:         *noInit,
+		IgnorePings:    *ignorePings,
+		SeedStderr:     *seedStderr,
 		EmitRootsList:  *emitRootsList,
 		EmitSampling:   *emitSampling,
 		EmitLogLevel:   *emitLog,
@@ -69,6 +78,8 @@ type runConfig struct {
 	SlowInit       time.Duration
 	CrashOnCall    bool
 	NoInit         bool
+	IgnorePings    bool
+	SeedStderr     string
 	EmitRootsList  bool
 	EmitSampling   bool
 	EmitLogLevel   string
@@ -78,6 +89,9 @@ type runConfig struct {
 func run(stdin io.Reader, stdout io.Writer, stderr io.Writer, cfg runConfig) int {
 	if cfg.Banner {
 		fmt.Fprintln(stdout, "[fake] non-JSON banner line — should be skipped")
+	}
+	if cfg.SeedStderr != "" {
+		fmt.Fprintln(stderr, cfg.SeedStderr)
 	}
 	scanner := bufio.NewScanner(stdin)
 	scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
@@ -272,6 +286,9 @@ func run(stdin io.Reader, stdout io.Writer, stderr io.Writer, cfg runConfig) int
 				"result":  result,
 			})
 		case "ping":
+			if cfg.IgnorePings {
+				continue
+			}
 			_ = write(map[string]any{
 				"jsonrpc": "2.0",
 				"id":      json.RawMessage(idRaw),

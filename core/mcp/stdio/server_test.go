@@ -12,7 +12,7 @@ import (
 func TestServer_SpawnInitializeClose(t *testing.T) {
 	t.Parallel()
 	bin := buildFakeServer(t)
-	inst := newServerInstance("fake", nil, nil, nil, nil)
+	inst := newServerInstance("fake", nil, nil, nil, nil, instanceOptions{})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -43,7 +43,7 @@ func TestServer_SpawnInitializeClose(t *testing.T) {
 func TestServer_BannerLineSkipped(t *testing.T) {
 	t.Parallel()
 	bin := buildFakeServer(t)
-	inst := newServerInstance("fake", nil, nil, nil, nil)
+	inst := newServerInstance("fake", nil, nil, nil, nil, instanceOptions{})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -63,7 +63,7 @@ func TestServer_BannerLineSkipped(t *testing.T) {
 func TestServer_InitTimeout(t *testing.T) {
 	t.Parallel()
 	bin := buildFakeServer(t)
-	inst := newServerInstance("fake", nil, nil, nil, nil)
+	inst := newServerInstance("fake", nil, nil, nil, nil, instanceOptions{})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -83,7 +83,7 @@ func TestServer_InitTimeout(t *testing.T) {
 func TestServer_FirstByteTimeout(t *testing.T) {
 	t.Parallel()
 	bin := buildFakeServer(t)
-	inst := newServerInstance("fake", nil, nil, nil, nil)
+	inst := newServerInstance("fake", nil, nil, nil, nil, instanceOptions{})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -108,7 +108,7 @@ func TestServer_FirstByteTimeout(t *testing.T) {
 func TestServer_CallTool(t *testing.T) {
 	t.Parallel()
 	bin := buildFakeServer(t)
-	inst := newServerInstance("fake", nil, nil, nil, nil)
+	inst := newServerInstance("fake", nil, nil, nil, nil, instanceOptions{})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -131,7 +131,7 @@ func TestServer_GoroutinesReturnToBaseline(t *testing.T) {
 	bin := buildFakeServer(t)
 	baseline := runtime.NumGoroutine()
 
-	inst := newServerInstance("fake", nil, nil, nil, nil)
+	inst := newServerInstance("fake", nil, nil, nil, nil, instanceOptions{})
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if err := inst.Spawn(ctx, SpawnSpec{ID: "fake", Command: []string{bin}}); err != nil {
