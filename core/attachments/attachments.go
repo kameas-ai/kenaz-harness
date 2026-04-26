@@ -72,6 +72,14 @@ type Attachment struct {
 	Position int
 	// CreatedAt is the wall clock at insert time (UTC).
 	CreatedAt time.Time
+	// MediaID, when non-nil, identifies the MediaArtifact backing this
+	// attachment. The presence of MediaID flags the attachment as
+	// binary-backed; Content is permitted to be empty. Existing
+	// text-only attachments leave MediaID nil and the resolver path
+	// unchanged. Migration 0302 adds the underlying column with
+	// ON DELETE SET NULL semantics so a media row deletion never
+	// orphans an attachment.
+	MediaID *string
 }
 
 // Sentinel errors. Stable typed errors so callers can errors.Is.
@@ -94,6 +102,10 @@ var (
 	// source cannot be re-read (the file was deleted, the library is
 	// not configured, etc.).
 	ErrSourceUnavailable = errors.New("attachments: source unavailable")
+
+	// ErrMediaStoreUnavailable is returned by AddMedia when the manager
+	// was constructed without WithMediaStore.
+	ErrMediaStoreUnavailable = errors.New("attachments: media store not configured")
 )
 
 // SessionProjectReader resolves the project membership of a session.
@@ -123,6 +135,7 @@ type Manager struct {
 	now     func() time.Time
 	idGen   IDGen
 	library LibraryReader
+	media   MediaStore
 }
 
 // ManagerOption configures a Manager at construction time.
@@ -152,6 +165,14 @@ func WithIDGen(gen IDGen) ManagerOption {
 func WithLibrary(lib LibraryReader) ManagerOption {
 	return func(m *Manager) {
 		m.library = lib
+	}
+}
+
+// WithMediaStore wires the MediaStore used by AddMedia. Without it the
+// AddMedia path returns ErrMediaStoreUnavailable.
+func WithMediaStore(ms MediaStore) ManagerOption {
+	return func(m *Manager) {
+		m.media = ms
 	}
 }
 
@@ -279,9 +300,110 @@ func (m *Manager) Add(ctx context.Context, att Attachment) (Attachment, error) {
 	return att, nil
 }
 
-// Remove deletes one attachment by id.
+// AddMedia uploads bytes through the MediaStore and inserts a
+// matching media-backed Attachment row. Content is left empty (binary
+// payload lives in the CAS file); ContentSource is set to
+// "media:<artifact-id>" so future readers can resolve back to the
+// MediaArtifact. AddMedia is the canonical entry point for image /
+// document attachments.
+func (m *Manager) AddMedia(ctx context.Context, scopeKind, scopeID string, bytes []byte, mediaType, originalName string) (Attachment, error) {
+	if m.media == nil {
+		return Attachment{}, ErrMediaStoreUnavailable
+	}
+	if !validScopeKind(scopeKind) {
+		return Attachment{}, fmt.Errorf("%w: %q", ErrInvalidScope, scopeKind)
+	}
+	if scopeKind != ScopeKindGlobal && scopeID == "" {
+		return Attachment{}, fmt.Errorf("%w: scope_id required for %s", ErrInvalidScope, scopeKind)
+	}
+	if scopeKind == ScopeKindGlobal && scopeID != "" {
+		return Attachment{}, fmt.Errorf("%w: scope_id must be empty for global", ErrInvalidScope)
+	}
+	art, err := m.media.Put(ctx, bytes, mediaType, originalName)
+	if err != nil {
+		return Attachment{}, err
+	}
+	mediaID := art.ID
+	att := Attachment{
+		ScopeKind:     scopeKind,
+		ScopeID:       scopeID,
+		ContentSource: "media:" + art.ID,
+		Content:       "",
+		Kind:          KindUser,
+		MediaID:       &mediaID,
+	}
+	return m.Add(ctx, att)
+}
+
+// Remove deletes one attachment by id. When the deleted attachment was
+// media-backed, Remove also reaps the underlying MediaArtifact: it
+// deletes the metadata row, then — if no other reference source still
+// points at the content hash — removes the on-disk CAS file. Errors
+// from the media-side cleanup are surfaced to the caller, but the
+// attachment row deletion is committed first so an attachment is never
+// left dangling because the media sweep failed.
 func (m *Manager) Remove(ctx context.Context, id string) error {
-	return m.store.Remove(ctx, id)
+	att, getErr := m.store.Get(ctx, id)
+	if err := m.store.Remove(ctx, id); err != nil {
+		return err
+	}
+	if getErr != nil || m.media == nil || att.MediaID == nil || *att.MediaID == "" {
+		return nil
+	}
+	// Resolve the content hash through the media store, then try to
+	// drop the metadata row. After the row is gone, a refcount of zero
+	// (no other attachments reference the hash, no other media row
+	// references the hash) means we can also remove the file.
+	art, _, err := m.media.Get(ctx, *att.MediaID)
+	if err != nil && !errors.Is(err, ErrMediaNotFound) {
+		return err
+	}
+	hash := art.ContentHash
+	if delErr := m.media.Delete(ctx, *att.MediaID); delErr != nil && !errors.Is(delErr, ErrMediaNotFound) {
+		return delErr
+	}
+	if hash == "" {
+		return nil
+	}
+	count, err := m.media.RefcountFor(ctx, hash)
+	if err != nil {
+		return err
+	}
+	if count > 0 {
+		return nil
+	}
+	// PruneOrphans removes the file when no source references it.
+	// Idempotent on second call (nothing left to remove).
+	if _, err := m.media.PruneOrphans(ctx); err != nil {
+		return err
+	}
+	return nil
+}
+
+// RemoveScope deletes every attachment matching (scopeKind, scopeID)
+// via Manager.Remove, so each removal participates in the media
+// refcount sweep. Used by the rpc layer's session-delete handler to
+// honour A8: deleting a session frees its session-scope attachments
+// AND any media artifacts no longer referenced (refcount-driven).
+//
+// Returns the number of removed rows. A non-nil error stops the walk;
+// rows already removed before the error are not rolled back.
+func (m *Manager) RemoveScope(ctx context.Context, scopeKind, scopeID string) (int, error) {
+	rows, err := m.store.List(ctx, ScopeFilter{
+		ScopeKind: scopeKind,
+		ScopeID:   scopeID,
+	})
+	if err != nil {
+		return 0, err
+	}
+	removed := 0
+	for _, r := range rows {
+		if err := m.Remove(ctx, r.ID); err != nil {
+			return removed, err
+		}
+		removed++
+	}
+	return removed, nil
 }
 
 // Reorder rewrites Position fields so each id in idsInOrder lands at
@@ -348,6 +470,12 @@ func validContentSource(src string) bool {
 	}
 	if strings.HasPrefix(src, "library:") {
 		return len(src) > len("library:")
+	}
+	if strings.HasPrefix(src, "media:") {
+		// "media:<artifact-id>" — the artifact id is a 26-char ULID
+		// minted by MediaStore.Put. Manager.AddMedia constructs this
+		// string after a successful Put.
+		return len(src) > len("media:")
 	}
 	return false
 }

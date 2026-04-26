@@ -142,11 +142,15 @@ func NewSQLStore(db storage.DB) Store {
 
 func (s *sqlStore) Add(ctx context.Context, att Attachment) error {
 	return s.db.WriteTx(ctx, func(tx storage.WriteTx) error {
+		var mediaID any
+		if att.MediaID != nil {
+			mediaID = *att.MediaID
+		}
 		_, err := tx.Exec(ctx, `
             INSERT INTO context_attachments
                 (id, scope_kind, scope_id, content_source, content,
-                 kind, position, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                 kind, position, created_at, media_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         `,
 			att.ID,
 			att.ScopeKind,
@@ -156,6 +160,7 @@ func (s *sqlStore) Add(ctx context.Context, att Attachment) error {
 			att.Kind,
 			att.Position,
 			att.CreatedAt.UnixNano(),
+			mediaID,
 		)
 		return err
 	})
@@ -163,7 +168,7 @@ func (s *sqlStore) Add(ctx context.Context, att Attachment) error {
 
 const sqlSelectAttachment = `
     SELECT id, scope_kind, scope_id, content_source, content,
-           kind, position, created_at
+           kind, position, created_at, media_id
     FROM context_attachments
 `
 
@@ -299,13 +304,18 @@ func scanAttachment(sc interface{ Scan(dest ...any) error }) (Attachment, error)
 	var (
 		a         Attachment
 		createdAt int64
+		mediaID   sql.NullString
 	)
 	if err := sc.Scan(
 		&a.ID, &a.ScopeKind, &a.ScopeID, &a.ContentSource, &a.Content,
-		&a.Kind, &a.Position, &createdAt,
+		&a.Kind, &a.Position, &createdAt, &mediaID,
 	); err != nil {
 		return Attachment{}, err
 	}
 	a.CreatedAt = time.Unix(0, createdAt).UTC()
+	if mediaID.Valid && mediaID.String != "" {
+		v := mediaID.String
+		a.MediaID = &v
+	}
 	return a, nil
 }
