@@ -46,6 +46,17 @@ func (a *Adapter) streamWithBearer(ctx context.Context, req llm.GenerationReques
 	if len(system) > 0 {
 		body["system"] = system
 	}
+	// Tool serialization — the REST Converse endpoint accepts the same
+	// toolConfig.tools[].toolSpec shape the SDK builds. inputSchema.json
+	// carries the raw JSON Schema.
+	// Reference: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_Converse.html
+	if len(req.Tools) > 0 {
+		toolCfg, err := toConverseToolConfigJSON(req.Tools)
+		if err != nil {
+			return nil, &llm.ErrInvalidRequest{Message: err.Error()}
+		}
+		body["toolConfig"] = toolCfg
+	}
 	bodyBytes, err := json.Marshal(body)
 	if err != nil {
 		return nil, fmt.Errorf("bedrock: marshal body: %w", err)
@@ -90,6 +101,33 @@ func (a *Adapter) bearerClient() *http.Client {
 		return a.httpc
 	}
 	return http.DefaultClient
+}
+
+// toConverseToolConfigJSON converts the harness's ToolSpec slice into
+// the JSON shape Bedrock's Converse REST API accepts under
+// toolConfig.tools[].toolSpec. Mirrors buildToolConfig for the SDK
+// path but produces plain map[string]any so we can json.Marshal.
+func toConverseToolConfigJSON(specs []llm.ToolSpec) (map[string]any, error) {
+	tools := make([]map[string]any, 0, len(specs))
+	for _, t := range specs {
+		var schema any
+		if len(t.InputSchema) > 0 {
+			if err := json.Unmarshal(t.InputSchema, &schema); err != nil {
+				return nil, fmt.Errorf("bedrock: tool %q input_schema: %w", t.Name, err)
+			}
+		} else {
+			schema = map[string]any{"type": "object"}
+		}
+		spec := map[string]any{
+			"name":        t.Name,
+			"inputSchema": map[string]any{"json": schema},
+		}
+		if t.Description != "" {
+			spec["description"] = t.Description
+		}
+		tools = append(tools, map[string]any{"toolSpec": spec})
+	}
+	return map[string]any{"tools": tools}, nil
 }
 
 // toConverseJSON converts the harness's GenerationRequest message
@@ -290,6 +328,11 @@ type bearerStream struct {
 	finalResp llm.Response
 	finalErr  error
 	cancelled bool
+
+	// toolPartial reassembles tool_use blocks across contentBlockStart
+	// / contentBlockDelta / contentBlockStop frames (Converse keys
+	// these by an integer contentBlockIndex).
+	toolPartial map[int]*toolUseAccum
 }
 
 func (s *bearerStream) Events() <-chan llm.StreamEvent { return s.events }
@@ -346,14 +389,67 @@ func (s *bearerStream) dispatch(msg eventStreamMessage) {
 		return
 	}
 	switch eventType {
+	case "contentBlockStart":
+		var p struct {
+			ContentBlockIndex int `json:"contentBlockIndex"`
+			Start             struct {
+				ToolUse *struct {
+					ToolUseID string `json:"toolUseId"`
+					Name      string `json:"name"`
+				} `json:"toolUse"`
+			} `json:"start"`
+		}
+		if err := json.Unmarshal(msg.payload, &p); err != nil || p.Start.ToolUse == nil {
+			return
+		}
+		if s.toolPartial == nil {
+			s.toolPartial = map[int]*toolUseAccum{}
+		}
+		s.toolPartial[p.ContentBlockIndex] = &toolUseAccum{
+			id:   p.Start.ToolUse.ToolUseID,
+			name: p.Start.ToolUse.Name,
+		}
 	case "contentBlockDelta":
 		var p struct {
-			Delta struct {
-				Text string `json:"text"`
+			ContentBlockIndex int `json:"contentBlockIndex"`
+			Delta             struct {
+				Text    string `json:"text"`
+				ToolUse *struct {
+					Input string `json:"input"`
+				} `json:"toolUse"`
 			} `json:"delta"`
 		}
-		if err := json.Unmarshal(msg.payload, &p); err == nil && p.Delta.Text != "" {
+		if err := json.Unmarshal(msg.payload, &p); err != nil {
+			return
+		}
+		if p.Delta.Text != "" {
 			s.events <- llm.StreamEvent{Kind: llm.StreamText, Text: p.Delta.Text}
+		}
+		if p.Delta.ToolUse != nil {
+			if accum, ok := s.toolPartial[p.ContentBlockIndex]; ok {
+				accum.input.WriteString(p.Delta.ToolUse.Input)
+			}
+		}
+	case "contentBlockStop":
+		var p struct {
+			ContentBlockIndex int `json:"contentBlockIndex"`
+		}
+		if err := json.Unmarshal(msg.payload, &p); err != nil {
+			return
+		}
+		if accum, ok := s.toolPartial[p.ContentBlockIndex]; ok {
+			delete(s.toolPartial, p.ContentBlockIndex)
+			input := accum.input.String()
+			if input == "" {
+				input = "{}"
+			}
+			tool := llm.ToolUse{
+				ID:    accum.id,
+				Name:  accum.name,
+				Input: json.RawMessage(input),
+			}
+			s.finalResp.ToolCalls = append(s.finalResp.ToolCalls, tool)
+			s.events <- llm.StreamEvent{Kind: llm.StreamTool, Tool: &tool}
 		}
 	case "messageStop":
 		var p struct {
@@ -379,8 +475,7 @@ func (s *bearerStream) dispatch(msg eventStreamMessage) {
 			s.events <- llm.StreamEvent{Kind: llm.StreamUsage, Usage: &usageCopy}
 		}
 	default:
-		// messageStart, contentBlockStart, contentBlockStop, tool_use
-		// frames — not surfaced to the UI today.
+		// messageStart and other frames — not surfaced to the UI today.
 	}
 }
 
