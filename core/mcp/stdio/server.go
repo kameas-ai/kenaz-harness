@@ -97,6 +97,12 @@ type ServerInstance struct {
 	roots    RootsHandler
 	publish  EventPublisher
 
+	// WP03 helpers built atop the handlers above. progress owns the
+	// request-id ↔ progressToken correlation table; logSink folds
+	// notifications/message frames onto slog.
+	progress *ProgressForwarder
+	logSink  *LogSink
+
 	samplingOn bool
 }
 
@@ -106,15 +112,18 @@ func newServerInstance(id string, logger *slog.Logger, sampling SamplingHandler,
 	if logger == nil {
 		logger = slog.Default()
 	}
+	scoped := logger.With("mcp.recipe", id)
 	return &ServerInstance{
 		id:       id,
-		logger:   logger.With("mcp.recipe", id),
+		logger:   scoped,
 		router:   NewResponseRouter(logger),
 		stderr:   NewRingBuffer(RingBufferSize),
 		doneCh:   make(chan struct{}),
 		sampling: sampling,
 		roots:    roots,
 		publish:  publish,
+		progress: NewProgressForwarder(id, publish, scoped),
+		logSink:  NewLogSink(scoped),
 	}
 }
 
@@ -348,8 +357,25 @@ func (s *ServerInstance) Tools() []coremcp.Tool {
 // (already unwrapped from the JSON-RPC response). ctx cancellation
 // sends notifications/cancelled and returns ctx.Err().
 func (s *ServerInstance) CallTool(ctx context.Context, tool string, args json.RawMessage) (json.RawMessage, error) {
-	params := ToolsCallParams{Name: tool, Arguments: args}
-	return s.callRaw(ctx, MethodToolsCall, params)
+	return s.CallToolWithProgress(ctx, tool, args, "")
+}
+
+// CallToolWithProgress is the progress-aware variant of CallTool.
+// When progressToken is non-empty the pool injects `_meta.progressToken`
+// into the outbound tools/call params and registers the token with
+// the ProgressForwarder so subsequent notifications/progress frames
+// are correlated to this request id.
+func (s *ServerInstance) CallToolWithProgress(ctx context.Context, tool string, args json.RawMessage, progressToken string) (json.RawMessage, error) {
+	type toolsCallParamsWithMeta struct {
+		Name      string          `json:"name"`
+		Arguments json.RawMessage `json:"arguments,omitempty"`
+		Meta      map[string]any  `json:"_meta,omitempty"`
+	}
+	params := toolsCallParamsWithMeta{Name: tool, Arguments: args}
+	if progressToken != "" {
+		params.Meta = map[string]any{"progressToken": progressToken}
+	}
+	return s.callRawWithProgress(ctx, MethodToolsCall, params, progressToken, tool)
 }
 
 // callRaw is the inner request/response primitive. Assigns a fresh
@@ -357,8 +383,25 @@ func (s *ServerInstance) CallTool(ctx context.Context, tool string, args json.Ra
 // the channel or ctx.Done, and on cancellation emits
 // notifications/cancelled before returning.
 func (s *ServerInstance) callRaw(ctx context.Context, method string, params any) (json.RawMessage, error) {
+	return s.callRawWithProgress(ctx, method, params, "", "")
+}
+
+// callRawWithProgress is callRaw with optional progress-token
+// registration. Empty token means "no correlation" — the path is
+// otherwise identical to callRaw, including the cancellation
+// notification on ctx.Done.
+func (s *ServerInstance) callRawWithProgress(ctx context.Context, method string, params any, progressToken, tool string) (json.RawMessage, error) {
 	id := s.nextID.Add(1)
 	ch := s.router.Register(id)
+	if progressToken != "" {
+		s.progress.Register(id, progressToken, tool)
+	}
+	cleanup := func() {
+		s.router.Cancel(id)
+		if progressToken != "" {
+			s.progress.Forget(id)
+		}
+	}
 	req := requestEnvelope{
 		JSONRPC: JSONRPCVersion,
 		ID:      id,
@@ -366,12 +409,12 @@ func (s *ServerInstance) callRaw(ctx context.Context, method string, params any)
 		Params:  params,
 	}
 	if err := s.framer.Write(req); err != nil {
-		s.router.Cancel(id)
+		cleanup()
 		return nil, fmt.Errorf("stdio: write %s: %w", method, err)
 	}
 	select {
 	case <-ctx.Done():
-		s.router.Cancel(id)
+		cleanup()
 		// Best-effort cancellation notification; failure to write
 		// (server already gone) shouldn't override ctx.Err().
 		_ = s.framer.Write(notificationEnvelope{
@@ -381,16 +424,19 @@ func (s *ServerInstance) callRaw(ctx context.Context, method string, params any)
 		})
 		return nil, ctx.Err()
 	case <-s.doneCh:
-		s.router.Cancel(id)
+		cleanup()
 		return nil, errors.New("stdio: server closed")
 	case env, ok := <-ch:
 		if !ok {
 			// Channel closed by Cancel/CancelAll — caller should see
 			// ctx.Err or doneCh on the next select pass, but cover
 			// the race for safety.
+			if progressToken != "" {
+				s.progress.Forget(id)
+			}
 			return nil, errors.New("stdio: call cancelled")
 		}
-		s.router.Cancel(id)
+		cleanup()
 		if env.Error != nil {
 			return nil, env.Error
 		}
@@ -469,8 +515,19 @@ func (s *ServerInstance) handleServerRequest(msg RawMessage) {
 		}
 		respond(RootsListResult{Roots: roots}, nil)
 	case MethodSamplingCreateMessage:
-		if s.sampling == nil || !s.samplingOn {
-			respond(nil, &RPCError{Code: ErrCodeMethodNotFound, Message: "sampling not enabled"})
+		// Per-server gate. Default is OFF (cost-amplification risk:
+		// see sampling.go for the consent-boundary note). When the
+		// gate is off we MUST NOT invoke the handler — the test path
+		// asserts the handler counter stays at 0.
+		s.mu.RLock()
+		on := s.samplingOn
+		s.mu.RUnlock()
+		if !on {
+			respond(nil, &RPCError{Code: ErrCodeMethodNotFound, Message: "sampling disabled for this server"})
+			return
+		}
+		if s.sampling == nil {
+			respond(nil, &RPCError{Code: ErrCodeMethodNotFound, Message: "sampling disabled for this server"})
 			return
 		}
 		var req SamplingRequest
@@ -491,9 +548,11 @@ func (s *ServerInstance) handleServerRequest(msg RawMessage) {
 	}
 }
 
-// handleNotification logs the notification and, for the small set
-// we wire today, performs the side effect (cache invalidation,
-// progress fan-out). WP03 fleshes this out.
+// handleNotification dispatches inbound notifications to their
+// side-effect handlers. tools/list_changed triggers a tool-cache
+// refresh; progress and message notifications flow through the WP03
+// helpers so they reach the broker / slog. Best-effort: a malformed
+// payload is logged at debug and dropped, never crashes the reader.
 func (s *ServerInstance) handleNotification(msg RawMessage) {
 	switch msg.Method {
 	case NotificationToolsListChanged:
@@ -506,11 +565,9 @@ func (s *ServerInstance) handleNotification(msg RawMessage) {
 			}
 		}()
 	case NotificationProgress:
-		if s.publish != nil {
-			s.publish.Publish("mcp:progress", json.RawMessage(msg.Params))
-		}
+		s.progress.Handle(json.RawMessage(msg.Params))
 	case NotificationMessage:
-		s.logger.Info("stdio.notif.message", "params", json.RawMessage(msg.Params))
+		s.logSink.Handle(context.Background(), s.id, json.RawMessage(msg.Params))
 	default:
 		s.logger.Debug("stdio.notification", "method", msg.Method)
 	}

@@ -9,12 +9,20 @@
 // the test helper `buildFakeServer` and stored under the test
 // temp dir.
 //
-// CLI flags (per WP01 task T007):
+// CLI flags (per WP01 task T007 + WP03 extensions):
 //
-//	--banner          emit a non-JSON banner line on stdout first
-//	--slow-init=DUR   delay the initialize response by DUR
-//	--crash-on-call   exit(1) after the first tools/call
-//	--no-init         never reply to initialize (timeout test)
+//	--banner             emit a non-JSON banner line on stdout first
+//	--slow-init=DUR      delay the initialize response by DUR
+//	--crash-on-call      exit(1) after the first tools/call
+//	--no-init            never reply to initialize (timeout test)
+//	--emit-roots-list    after initialize, send a roots/list request
+//	                     to the host and exit on response.
+//	--emit-sampling      after initialize, send sampling/createMessage
+//	                     to the host and exit on response.
+//	--emit-log=LEVEL     emit one notifications/message at LEVEL after
+//	                     initialize (debug|info|notice|warning|error|...)
+//	--progress-on-call   on tools/call, emit one notifications/progress
+//	                     mid-flight before the result.
 //
 // Tools exposed (per WP01 acceptance):
 //
@@ -30,6 +38,7 @@ import (
 	"io"
 	"os"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -38,20 +47,32 @@ func main() {
 	slowInit := flag.Duration("slow-init", 0, "delay the initialize response by this duration")
 	crashOnCall := flag.Bool("crash-on-call", false, "exit(1) after the first tools/call")
 	noInit := flag.Bool("no-init", false, "never reply to initialize")
+	emitRootsList := flag.Bool("emit-roots-list", false, "send a roots/list request to the host after initialize")
+	emitSampling := flag.Bool("emit-sampling", false, "send a sampling/createMessage request to the host after initialize")
+	emitLog := flag.String("emit-log", "", "emit a notifications/message at the given level after initialize")
+	progressOnCall := flag.Bool("progress-on-call", false, "emit a notifications/progress mid-tools/call")
 	flag.Parse()
 	os.Exit(run(os.Stdin, os.Stdout, os.Stderr, runConfig{
-		Banner:      *banner,
-		SlowInit:    *slowInit,
-		CrashOnCall: *crashOnCall,
-		NoInit:      *noInit,
+		Banner:         *banner,
+		SlowInit:       *slowInit,
+		CrashOnCall:    *crashOnCall,
+		NoInit:         *noInit,
+		EmitRootsList:  *emitRootsList,
+		EmitSampling:   *emitSampling,
+		EmitLogLevel:   *emitLog,
+		ProgressOnCall: *progressOnCall,
 	}))
 }
 
 type runConfig struct {
-	Banner      bool
-	SlowInit    time.Duration
-	CrashOnCall bool
-	NoInit      bool
+	Banner         bool
+	SlowInit       time.Duration
+	CrashOnCall    bool
+	NoInit         bool
+	EmitRootsList  bool
+	EmitSampling   bool
+	EmitLogLevel   string
+	ProgressOnCall bool
 }
 
 func run(stdin io.Reader, stdout io.Writer, stderr io.Writer, cfg runConfig) int {
@@ -67,6 +88,55 @@ func run(stdin io.Reader, stdout io.Writer, stderr io.Writer, cfg runConfig) int
 		writeMu.Lock()
 		defer writeMu.Unlock()
 		return enc.Encode(v)
+	}
+
+	// Server-initiated request id sequence — distinct from response
+	// ids so the host can route by direction without ambiguity.
+	var nextSrvID atomic.Int64
+	srvID := func() int64 { return nextSrvID.Add(1) }
+
+	// emitPostInit fires the WP03 server-initiated traffic once
+	// initialize has been answered. It runs in its own goroutine so
+	// the main reader loop keeps draining inbound responses.
+	emitPostInit := func() {
+		if cfg.EmitLogLevel != "" {
+			_ = write(map[string]any{
+				"jsonrpc": "2.0",
+				"method":  "notifications/message",
+				"params": map[string]any{
+					"level":  cfg.EmitLogLevel,
+					"logger": "fake.server",
+					"data":   map[string]any{"message": "hello from fake server"},
+				},
+			})
+		}
+		if cfg.EmitRootsList {
+			_ = write(map[string]any{
+				"jsonrpc": "2.0",
+				"id":      srvID(),
+				"method":  "roots/list",
+			})
+		}
+		if cfg.EmitSampling {
+			_ = write(map[string]any{
+				"jsonrpc": "2.0",
+				"id":      srvID(),
+				"method":  "sampling/createMessage",
+				"params": map[string]any{
+					"messages": []map[string]any{
+						{
+							"role": "user",
+							"content": map[string]any{
+								"type": "text",
+								"text": "ping?",
+							},
+						},
+					},
+					"systemPrompt": "you are a fake test fixture",
+					"maxTokens":    64,
+				},
+			})
+		}
 	}
 
 	for scanner.Scan() {
@@ -102,7 +172,11 @@ func run(stdin io.Reader, stdout io.Writer, stderr io.Writer, cfg runConfig) int
 				},
 			})
 		case "notifications/initialized":
-			// no-op
+			// Trigger any post-init server-initiated traffic now that
+			// the handshake is complete. Done in a goroutine so the
+			// reader keeps draining the host's inbound stream (which
+			// includes responses to the requests we're about to send).
+			go emitPostInit()
 		case "tools/list":
 			_ = write(map[string]any{
 				"jsonrpc": "2.0",
@@ -138,8 +212,26 @@ func run(stdin io.Reader, stdout io.Writer, stderr io.Writer, cfg runConfig) int
 			var params struct {
 				Name      string          `json:"name"`
 				Arguments json.RawMessage `json:"arguments"`
+				Meta      struct {
+					ProgressToken json.RawMessage `json:"progressToken"`
+				} `json:"_meta"`
 			}
 			_ = json.Unmarshal(msg["params"], &params)
+			if cfg.ProgressOnCall && len(params.Meta.ProgressToken) > 0 {
+				// Mid-flight progress before we fall through to the
+				// per-tool result builder below.
+				total := 1.0
+				_ = write(map[string]any{
+					"jsonrpc": "2.0",
+					"method":  "notifications/progress",
+					"params": map[string]any{
+						"progressToken": json.RawMessage(params.Meta.ProgressToken),
+						"progress":      0.5,
+						"total":         total,
+						"message":       "halfway",
+					},
+				})
+			}
 			var result map[string]any
 			switch params.Name {
 			case "fake_echo":
