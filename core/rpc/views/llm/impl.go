@@ -102,6 +102,15 @@ type SessionMessageReader interface {
 	ListMessages(ctx context.Context, sessionID string) ([]SessionMessage, error)
 }
 
+// SessionContextReader exposes the session's optional starting context
+// (Mission A). buildMessages prepends a system role message when the
+// session was configured with kind=system. user_seed sessions surface
+// their seed as a normal first user turn — already in the message
+// history — so this reader returns an empty content for them.
+type SessionContextReader interface {
+	SystemPromptFor(ctx context.Context, sessionID string) (content, kind string, err error)
+}
+
 // SessionMessageWriter persists the assistant turn at stream
 // completion so navigating away and back reloads the full
 // conversation. Without this, assistant deltas live only in the JS
@@ -178,6 +187,12 @@ func New(cfg Config) *API {
 // session's persisted history is threaded through; otherwise we fall
 // back to a single demo prompt so the chassis still streams in
 // test/CI paths.
+//
+// When the history reader also implements SessionContextReader and the
+// session was configured with kind=system + non-empty content, the
+// system prompt is prepended to the request. user_seed sessions don't
+// prepend here — their seed is appended once at session-creation time
+// and naturally lives in the message history.
 func (a *API) buildMessages(ctx context.Context, sessionID string) ([]corellm.Message, error) {
 	if a.history == nil || sessionID == "" {
 		return []corellm.Message{
@@ -196,7 +211,31 @@ func (a *API) buildMessages(ctx context.Context, sessionID string) ([]corellm.Me
 	if len(stored) == 0 {
 		return nil, errors.New("llm: session has no messages — append a user turn before streaming")
 	}
-	out := make([]corellm.Message, 0, len(stored))
+	// Probe for the optional starting-context surface. A reader that
+	// only satisfies SessionMessageReader leaves out unchanged.
+	var systemContent string
+	if ctxReader, ok := a.history.(SessionContextReader); ok {
+		content, kind, err := ctxReader.SystemPromptFor(ctx, sessionID)
+		if err != nil {
+			return nil, fmt.Errorf("llm: load session system prompt: %w", err)
+		}
+		if kind == "system" && content != "" {
+			systemContent = content
+		}
+	}
+	capacity := len(stored)
+	if systemContent != "" {
+		capacity++
+	}
+	out := make([]corellm.Message, 0, capacity)
+	if systemContent != "" {
+		out = append(out, corellm.Message{
+			Role: corellm.RoleSystem,
+			Content: []corellm.ContentPart{
+				{Type: "text", Text: systemContent},
+			},
+		})
+	}
 	for _, m := range stored {
 		role := corellm.Role(m.Role)
 		if role == "" {
