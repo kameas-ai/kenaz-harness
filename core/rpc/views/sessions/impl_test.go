@@ -2,8 +2,11 @@ package sessions
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"testing"
 
+	"github.com/sigil-tech/kaneaz-harness/core/attachments"
 	"github.com/sigil-tech/kaneaz-harness/core/session"
 )
 
@@ -100,6 +103,101 @@ func TestManagerAPI_MoveToProject(t *testing.T) {
 	got, _ = api.Get(ctx, s.ID)
 	if got.ProjectID != "" {
 		t.Errorf("ProjectID after detach = %q, want empty", got.ProjectID)
+	}
+}
+
+// TestSetSystemPrompt_UpsertsAttachment pins the WP03 shim: when an
+// attachments manager is wired, SetSystemPrompt mirrors the prompt into
+// a position-0 inline session-scope attachment with a sha256 source.
+// The legacy session.system_prompt column is also populated for the
+// one-release compat buffer.
+func TestSetSystemPrompt_UpsertsAttachment(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	smgr := session.NewManager(session.NewMemoryStore())
+	att := attachments.NewManager(attachments.NewMemoryStore())
+	api := NewManagerAPIWithAttachments(smgr, att)
+
+	s, err := api.Create(ctx, "alpha")
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if err := api.SetSystemPrompt(ctx, s.ID, "be brief", session.ContextKindSystem); err != nil {
+		t.Fatalf("SetSystemPrompt: %v", err)
+	}
+
+	got, err := att.List(ctx, attachments.ScopeFilter{
+		ScopeKind: attachments.ScopeKindSession, ScopeID: s.ID,
+	})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("attachments len = %d, want 1", len(got))
+	}
+	hash := sha256.Sum256([]byte("be brief"))
+	wantSource := "inline:" + hex.EncodeToString(hash[:])
+	if got[0].ContentSource != wantSource {
+		t.Errorf("ContentSource = %q, want %q", got[0].ContentSource, wantSource)
+	}
+	if got[0].Content != "be brief" {
+		t.Errorf("Content = %q", got[0].Content)
+	}
+	if got[0].Position != 0 {
+		t.Errorf("Position = %d", got[0].Position)
+	}
+	if got[0].Kind != attachments.KindSystem {
+		t.Errorf("Kind = %q, want system", got[0].Kind)
+	}
+
+	// Resetting to a new prompt removes the prior row and inserts a fresh one.
+	if err := api.SetSystemPrompt(ctx, s.ID, "be terse", session.ContextKindSystem); err != nil {
+		t.Fatalf("SetSystemPrompt second: %v", err)
+	}
+	got, _ = att.List(ctx, attachments.ScopeFilter{
+		ScopeKind: attachments.ScopeKindSession, ScopeID: s.ID,
+	})
+	if len(got) != 1 {
+		t.Fatalf("after reset len = %d, want 1", len(got))
+	}
+	if got[0].Content != "be terse" {
+		t.Errorf("after reset content = %q", got[0].Content)
+	}
+
+	// Clearing removes the attachment entirely.
+	if err := api.SetSystemPrompt(ctx, s.ID, "", session.ContextKindSystem); err != nil {
+		t.Fatalf("SetSystemPrompt clear: %v", err)
+	}
+	got, _ = att.List(ctx, attachments.ScopeFilter{
+		ScopeKind: attachments.ScopeKindSession, ScopeID: s.ID,
+	})
+	if len(got) != 0 {
+		t.Errorf("after clear len = %d, want 0", len(got))
+	}
+
+	// Legacy column still populated for the one-release compat buffer.
+	rec, _ := smgr.Get(ctx, s.ID)
+	if rec.SystemPrompt != "" {
+		t.Errorf("legacy SystemPrompt = %q, want empty after clear", rec.SystemPrompt)
+	}
+}
+
+// TestSetSystemPrompt_UserSeedKindMaps verifies user_seed → user.
+func TestSetSystemPrompt_UserSeedKindMaps(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	smgr := session.NewManager(session.NewMemoryStore())
+	att := attachments.NewManager(attachments.NewMemoryStore())
+	api := NewManagerAPIWithAttachments(smgr, att)
+	s, _ := api.Create(ctx, "x")
+	if err := api.SetSystemPrompt(ctx, s.ID, "seed", session.ContextKindUserSeed); err != nil {
+		t.Fatalf("SetSystemPrompt: %v", err)
+	}
+	got, _ := att.List(ctx, attachments.ScopeFilter{
+		ScopeKind: attachments.ScopeKindSession, ScopeID: s.ID,
+	})
+	if len(got) != 1 || got[0].Kind != attachments.KindUser {
+		t.Errorf("got %+v, want kind=user", got)
 	}
 }
 

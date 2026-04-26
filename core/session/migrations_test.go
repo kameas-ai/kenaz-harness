@@ -81,6 +81,11 @@ func (f *migFakeDB) Query(ctx context.Context, query string, args ...any) (migra
 		entries := append([]migrations.LedgerEntry(nil), f.ledger...)
 		return &migLedgerRows{entries: entries}, nil
 	}
+	// Migration 0301 seeds context_attachments from sessions rows; the
+	// fake has no row store, so report an empty cursor.
+	if strings.HasPrefix(q, "select id, coalesce(system_prompt") {
+		return &migEmptyRows{}, nil
+	}
 	return nil, fmt.Errorf("migFakeDB: unsupported query: %q", query)
 }
 
@@ -237,6 +242,16 @@ func (r *migLedgerRows) Scan(dest ...any) error {
 func (r *migLedgerRows) Close() error { r.closed = true; return nil }
 func (r *migLedgerRows) Err() error   { return nil }
 
+// migEmptyRows is a no-op iterator used by the fake to satisfy queries
+// against tables it doesn't track (e.g. the seed-from-sessions query in
+// migration 0301).
+type migEmptyRows struct{}
+
+func (migEmptyRows) Next() bool             { return false }
+func (migEmptyRows) Scan(_ ...any) error    { return errors.New("no rows") }
+func (migEmptyRows) Close() error           { return nil }
+func (migEmptyRows) Err() error             { return nil }
+
 func copyMap(m map[string]bool) map[string]bool {
 	out := make(map[string]bool, len(m))
 	for k, v := range m {
@@ -317,11 +332,12 @@ func TestMigrations_RegisterAndApply(t *testing.T) {
 		}
 	}
 
-	// Ledger rows: 2 storage bootstrap + 1 sessions init = 3 applied entries.
-	if got := len(db.ledger); got != 3 {
-		t.Fatalf("ledger size = %d, want 3", got)
+	// Ledger rows: 2 storage bootstrap + 2 sessions migrations
+	// (0300 init + 0301 context_attachments) = 4 applied entries.
+	if got := len(db.ledger); got != 4 {
+		t.Fatalf("ledger size = %d, want 4", got)
 	}
-	wantVersions := []int{1, 2, 300}
+	wantVersions := []int{1, 2, 300, 301}
 	for i, want := range wantVersions {
 		if db.ledger[i].Version != want {
 			t.Errorf("ledger[%d].Version = %d, want %d", i, db.ledger[i].Version, want)
@@ -341,6 +357,13 @@ func TestMigrations_RegisterAndApply(t *testing.T) {
 	}
 	if !db.indexes["idx_projects_name"] {
 		t.Errorf("expected idx_projects_name to exist")
+	}
+	// context_attachments table + index land in 0301.
+	if !db.tables["context_attachments"] {
+		t.Errorf("expected context_attachments table to exist")
+	}
+	if !db.indexes["idx_context_attachments_scope"] {
+		t.Errorf("expected idx_context_attachments_scope to exist")
 	}
 }
 

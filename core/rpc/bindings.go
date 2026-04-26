@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/a2a"
+	attachmentsview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/attachments"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/audit"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/bundle"
 	contextsview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/contexts"
@@ -397,6 +398,27 @@ func (b *Bindings) Projects_RemoveSession(sessionID string) error {
 }
 func (b *Bindings) Projects_ListSessions(projectID string) ([]projectsview.Session, error) {
 	return b.api.Projects().ListSessions(b.ctx(), projectID)
+}
+
+// ── attachments (context_attachments — WP03) ──────────────────────────
+
+func (b *Bindings) Attachments_List(scopeKind, scopeID string) ([]attachmentsview.Attachment, error) {
+	return b.api.Attachments().List(b.ctx(), scopeKind, scopeID)
+}
+func (b *Bindings) Attachments_ListResolved(sessionID string) ([]attachmentsview.Attachment, error) {
+	return b.api.Attachments().ListResolved(b.ctx(), sessionID)
+}
+func (b *Bindings) Attachments_Add(in attachmentsview.AddInput) (attachmentsview.Attachment, error) {
+	return b.api.Attachments().Add(b.ctx(), in)
+}
+func (b *Bindings) Attachments_Remove(id string) error {
+	return b.api.Attachments().Remove(b.ctx(), id)
+}
+func (b *Bindings) Attachments_Reorder(scopeKind, scopeID string, idsInOrder []string) error {
+	return b.api.Attachments().Reorder(b.ctx(), scopeKind, scopeID, idsInOrder)
+}
+func (b *Bindings) Attachments_Refresh(id string) (attachmentsview.Attachment, error) {
+	return b.api.Attachments().Refresh(b.ctx(), id)
 }
 
 // ── hooks ──────────────────────────────────────────────────────────────

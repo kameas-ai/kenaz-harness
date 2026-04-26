@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 
 	"github.com/sigil-tech/kaneaz-harness/core"
+	coreatt "github.com/sigil-tech/kaneaz-harness/core/attachments"
 	corecontexts "github.com/sigil-tech/kaneaz-harness/core/contexts"
 	"github.com/sigil-tech/kaneaz-harness/core/event"
 	"github.com/sigil-tech/kaneaz-harness/core/hooks"
@@ -27,6 +28,7 @@ import (
 	"github.com/sigil-tech/kaneaz-harness/core/mcp/fixture"
 	corememory "github.com/sigil-tech/kaneaz-harness/core/memory"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/a2a"
+	attachmentsview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/attachments"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/audit"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/bundle"
 	contextsview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/contexts"
@@ -72,6 +74,7 @@ type HarnessAPI interface {
 	Memory() memoryview.MemoryAPI
 	Hooks() hooksview.HooksAPI
 	Projects() projectsview.ProjectsAPI
+	Attachments() attachmentsview.AttachmentsAPI
 }
 
 // ShellStatus drives the Toolbar status pills + LegendBar live-rate
@@ -125,9 +128,11 @@ type API struct {
 	auditAPI     audit.AuditAPI
 	settingsImpl *settings.API
 	settingsAPI  settings.SettingsAPI
-	memoryAPI    memoryview.MemoryAPI
-	hooksAPI     hooksview.HooksAPI
-	projectsAPI  projectsview.ProjectsAPI
+	memoryAPI       memoryview.MemoryAPI
+	hooksAPI        hooksview.HooksAPI
+	projectsAPI     projectsview.ProjectsAPI
+	attachmentsMgr  *coreatt.Manager
+	attachmentsAPI  attachmentsview.AttachmentsAPI
 
 	// broker fans typed source channels to Wails event topics. Held for
 	// the lifetime of the API value; per-view bridges (llm, sessions,
@@ -172,16 +177,19 @@ func (a *API) SetContext(ctx context.Context) {
 //     invariant (only emitter.go and stream_broker.go call
 //     runtime.EventsEmit) stays intact.
 func New(c *core.Core) *API {
+	attMgr := newAttachmentsManager(c)
 	a := &API{
-		core:        c,
-		a2aAPI:      &stubA2A{},
-		workflowAPI: &stubWorkflow{},
-		sessionsAPI: newSessionsAPI(c),
-		trustAPI:    &stubTrust{},
-		contextAPI:  &stubContext{},
-		policyAPI:   &stubPolicy{},
-		projectsAPI: newProjectsAPI(c),
+		core:           c,
+		a2aAPI:         &stubA2A{},
+		workflowAPI:    &stubWorkflow{},
+		sessionsAPI:    newSessionsAPI(c, attMgr),
+		trustAPI:       &stubTrust{},
+		contextAPI:     &stubContext{},
+		policyAPI:      &stubPolicy{},
+		projectsAPI:    newProjectsAPI(c),
+		attachmentsMgr: attMgr,
 	}
+	a.attachmentsAPI = newAttachmentsAPI(c, attMgr)
 	a.broker = NewStreamBroker(WailsEmitter{})
 	a.auditImpl = audit.NewAPI(audit.WithSubscriber(a.broker))
 	a.auditAPI = a.auditImpl
@@ -217,7 +225,7 @@ func New(c *core.Core) *API {
 	}
 	retriever := corememory.NewRetriever(memStore, embedder, memoryEnabled, 0.7)
 	hooksRunner, hookRegistry, hookBuiltins := newHooksStack(c, retriever, memStore, embedder)
-	a.llmAPI = newLLMStack(c, a.broker, personalForLLM, hooksRunner)
+	a.llmAPI = newLLMStack(c, a.broker, personalForLLM, hooksRunner, attMgr)
 	a.memoryAPI = memoryview.New(memoryview.Config{
 		Store:    memStore,
 		Embedder: embedder,
@@ -255,11 +263,18 @@ func New(c *core.Core) *API {
 // newSessionsAPI returns the real Manager-backed SessionsAPI when c
 // is non-nil; otherwise a noop stub for callers that pass New(nil)
 // (see api_test.go's TestViewAccessorStability).
-func newSessionsAPI(c *core.Core) sessions.SessionsAPI {
+//
+// When attMgr is non-nil the returned impl drives the attachments table
+// for SetSystemPrompt, with the session.system_prompt column kept for
+// the one-release compat buffer.
+func newSessionsAPI(c *core.Core, attMgr *coreatt.Manager) sessions.SessionsAPI {
 	if c == nil {
 		return &stubSessions{}
 	}
-	return sessions.NewManagerAPI(c.SessionManager())
+	if attMgr == nil {
+		return sessions.NewManagerAPI(c.SessionManager())
+	}
+	return sessions.NewManagerAPIWithAttachments(c.SessionManager(), attMgr)
 }
 
 // newProjectsAPI returns the real Manager-backed ProjectsAPI when c is
@@ -269,6 +284,52 @@ func newProjectsAPI(c *core.Core) projectsview.ProjectsAPI {
 		return &stubProjects{}
 	}
 	return projectsview.New(c.ProjectManager(), c.SessionManager())
+}
+
+// newAttachmentsManager constructs the core/attachments.Manager backed
+// by storage.DB. Returns nil when c is nil or storage isn't available;
+// the rpc surface treats nil as "attachments disabled" and the
+// SessionsAPI / LLM stack fall back to legacy behaviour.
+func newAttachmentsManager(c *core.Core) *coreatt.Manager {
+	if c == nil {
+		return nil
+	}
+	s := c.Storage()
+	if s == nil {
+		return nil
+	}
+	return coreatt.NewManager(coreatt.NewSQLStore(s))
+}
+
+// newAttachmentsAPI returns the real Manager-backed AttachmentsAPI
+// when both c and the attachments manager are wired; otherwise a noop
+// stub keeps the chassis bootable.
+func newAttachmentsAPI(c *core.Core, mgr *coreatt.Manager) attachmentsview.AttachmentsAPI {
+	if c == nil || mgr == nil {
+		return &stubAttachments{}
+	}
+	return attachmentsview.New(mgr, &sessionProjectReader{mgr: c.SessionManager()})
+}
+
+// sessionProjectReader adapts session.Manager into the small
+// SessionProjectReader the attachments view needs.
+type sessionProjectReader struct {
+	mgr *session.Manager
+}
+
+func (r *sessionProjectReader) ProjectID(ctx context.Context, sessionID string) (*string, error) {
+	if r == nil || r.mgr == nil {
+		return nil, nil
+	}
+	rec, err := r.mgr.Get(ctx, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	if rec.ProjectID == nil {
+		return nil, nil
+	}
+	v := *rec.ProjectID
+	return &v, nil
 }
 
 // newLLMStack constructs the connector Registry + view-scoped API. It
@@ -281,7 +342,7 @@ func newProjectsAPI(c *core.Core) projectsview.ProjectsAPI {
 //
 // The shared broker is supplied by New so all view bridges fan out to
 // the same StreamBroker instance.
-func newLLMStack(c *core.Core, broker *StreamBroker, store personal.Store, hooksRunner llm.HookRunner) llm.LLMConnectorAPI {
+func newLLMStack(c *core.Core, broker *StreamBroker, store personal.Store, hooksRunner llm.HookRunner, attMgr *coreatt.Manager) llm.LLMConnectorAPI {
 	// Share ONE secrets backend between the credref resolver (which
 	// reads keys when streaming) and the keychain writer (which stages
 	// keys when the user submits AddProvider). Without this sharing,
@@ -337,6 +398,13 @@ func newLLMStack(c *core.Core, broker *StreamBroker, store personal.Store, hooks
 		// without a loop wired so the chat surface stays usable.
 		loop = nil
 	}
+	var attResolver llm.AttachmentsResolver
+	if attMgr != nil {
+		attResolver = &attachmentsResolverAdapter{
+			mgr:    attMgr,
+			reader: &sessionProjectReader{mgr: c.SessionManager()},
+		}
+	}
 	return llm.New(llm.Config{
 		Registry:      reg,
 		Sink:          &streamSinkAdapter{broker: broker},
@@ -346,8 +414,35 @@ func newLLMStack(c *core.Core, broker *StreamBroker, store personal.Store, hooks
 		History:       historyAdapter,
 		HistoryWriter: historyAdapter,
 		Hooks:         hooksRunner,
+		Attachments:   attResolver,
 		ToolLoop:      loop,
 	})
+}
+
+// attachmentsResolverAdapter bridges core/attachments.Manager into the
+// llm view's AttachmentsResolver shape so the LLM impl never imports
+// core/attachments directly.
+type attachmentsResolverAdapter struct {
+	mgr    *coreatt.Manager
+	reader coreatt.SessionProjectReader
+}
+
+func (a *attachmentsResolverAdapter) ListResolved(ctx context.Context, sessionID string) ([]llm.ResolvedAttachment, error) {
+	if a == nil || a.mgr == nil {
+		return nil, nil
+	}
+	rows, err := a.mgr.ListResolved(ctx, a.reader, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]llm.ResolvedAttachment, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, llm.ResolvedAttachment{
+			Content: r.Content,
+			Kind:    r.Kind,
+		})
+	}
+	return out, nil
 }
 
 // newContextsAPI opens the Context Library rooted at <DataDir>/contexts/
@@ -879,6 +974,12 @@ func (a *API) Projects() projectsview.ProjectsAPI {
 		return &stubProjects{}
 	}
 	return a.projectsAPI
+}
+func (a *API) Attachments() attachmentsview.AttachmentsAPI {
+	if a.attachmentsAPI == nil {
+		return &stubAttachments{}
+	}
+	return a.attachmentsAPI
 }
 
 // Bindings returns the slice of Wails-bound objects. The Bindings struct

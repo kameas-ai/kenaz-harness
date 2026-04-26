@@ -243,6 +243,136 @@ func TestAPI_NotWired(t *testing.T) {
 	}
 }
 
+// fakeHistory satisfies SessionMessageReader for buildMessages tests.
+type fakeHistory struct {
+	stored []SessionMessage
+}
+
+func (f *fakeHistory) ListMessages(_ context.Context, _ string) ([]SessionMessage, error) {
+	return f.stored, nil
+}
+
+// fakeContextReader satisfies SessionMessageReader + SessionContextReader
+// so buildMessages exercises the legacy Mission-A code path.
+type fakeContextReader struct {
+	stored []SessionMessage
+	prompt string
+	kind   string
+}
+
+func (f *fakeContextReader) ListMessages(_ context.Context, _ string) ([]SessionMessage, error) {
+	return f.stored, nil
+}
+func (f *fakeContextReader) SystemPromptFor(_ context.Context, _ string) (string, string, error) {
+	return f.prompt, f.kind, nil
+}
+
+// fakeResolver supplies ResolvedAttachments to buildMessages.
+type fakeResolver struct {
+	out []ResolvedAttachment
+	err error
+}
+
+func (f *fakeResolver) ListResolved(_ context.Context, _ string) ([]ResolvedAttachment, error) {
+	return f.out, f.err
+}
+
+// TestBuildMessages_AttachmentsPrependedInOrder asserts the
+// AttachmentsResolver path takes precedence and emits system messages
+// in the declared [global..., project..., session...] order, ahead of
+// the conversation history.
+func TestBuildMessages_AttachmentsPrependedInOrder(t *testing.T) {
+	t.Parallel()
+	api := New(Config{
+		History: &fakeHistory{stored: []SessionMessage{
+			{Role: "user", Content: "hello"},
+		}},
+		Attachments: &fakeResolver{out: []ResolvedAttachment{
+			{Content: "global pre", Kind: "system"},
+			{Content: "project pre", Kind: "system"},
+			{Content: "session pre", Kind: "system"},
+		}},
+	})
+	msgs, err := api.buildMessages(context.Background(), "s1", "model-x", "anthropic")
+	if err != nil {
+		t.Fatalf("buildMessages: %v", err)
+	}
+	if len(msgs) != 4 {
+		t.Fatalf("messages = %d, want 4 (3 system + 1 user)", len(msgs))
+	}
+	wantOrder := []struct {
+		role string
+		text string
+	}{
+		{"system", "global pre"},
+		{"system", "project pre"},
+		{"system", "session pre"},
+		{"user", "hello"},
+	}
+	for i, w := range wantOrder {
+		if string(msgs[i].Role) != w.role {
+			t.Errorf("msgs[%d].Role = %q, want %q", i, msgs[i].Role, w.role)
+		}
+		if len(msgs[i].Content) == 0 || msgs[i].Content[0].Text != w.text {
+			t.Errorf("msgs[%d].Content = %+v, want %q", i, msgs[i].Content, w.text)
+		}
+	}
+}
+
+// TestBuildMessages_AttachmentsSkipsUserKind verifies that "user"-kind
+// resolved attachments are NOT prepended as system messages — the
+// caller is responsible for surfacing them as user turns in `stored`.
+func TestBuildMessages_AttachmentsSkipsUserKind(t *testing.T) {
+	t.Parallel()
+	api := New(Config{
+		History: &fakeHistory{stored: []SessionMessage{
+			{Role: "user", Content: "hi"},
+		}},
+		Attachments: &fakeResolver{out: []ResolvedAttachment{
+			{Content: "user-seed visible", Kind: "user"},
+			{Content: "system invisible", Kind: "system"},
+		}},
+	})
+	msgs, err := api.buildMessages(context.Background(), "s1", "", "")
+	if err != nil {
+		t.Fatalf("buildMessages: %v", err)
+	}
+	// Only the system attachment is prepended; user kind is skipped.
+	if len(msgs) != 2 {
+		t.Fatalf("msgs = %d, want 2", len(msgs))
+	}
+	if string(msgs[0].Role) != "system" || msgs[0].Content[0].Text != "system invisible" {
+		t.Errorf("first = %+v", msgs[0])
+	}
+	if string(msgs[1].Role) != "user" || msgs[1].Content[0].Text != "hi" {
+		t.Errorf("second = %+v", msgs[1])
+	}
+}
+
+// TestBuildMessages_LegacyContextReaderFallback asserts that when no
+// AttachmentsResolver is wired, buildMessages still honours Mission A's
+// SessionContextReader probe — the one-release compat buffer.
+func TestBuildMessages_LegacyContextReaderFallback(t *testing.T) {
+	t.Parallel()
+	api := New(Config{
+		History: &fakeContextReader{
+			stored: []SessionMessage{{Role: "user", Content: "hey"}},
+			prompt: "be brief",
+			kind:   "system",
+		},
+	})
+	msgs, err := api.buildMessages(context.Background(), "s1", "", "")
+	if err != nil {
+		t.Fatalf("buildMessages: %v", err)
+	}
+	if len(msgs) != 2 {
+		t.Fatalf("len = %d", len(msgs))
+	}
+	if msgs[0].Content[0].Text != "be brief" {
+		t.Errorf("first = %+v", msgs[0])
+	}
+}
+
 // cancelOnlyStream blocks Events() until Cancel is called, simulating
 // a long-running upstream call.
 type cancelOnlyStream struct {

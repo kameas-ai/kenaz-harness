@@ -2,8 +2,11 @@ package sessions
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"time"
 
+	"github.com/sigil-tech/kaneaz-harness/core/attachments"
 	"github.com/sigil-tech/kaneaz-harness/core/session"
 )
 
@@ -44,7 +47,8 @@ func recordToView(r session.Record) Session {
 // ids until the streaming mission lands. The CRUD surface — which is
 // what the rail UI needs to render — is fully functional.
 type managerAPI struct {
-	mgr *session.Manager
+	mgr         *session.Manager
+	attachments *attachments.Manager // optional; nil falls back to legacy column path
 }
 
 // NewManagerAPI returns a SessionsAPI backed by the supplied Manager.
@@ -55,6 +59,19 @@ func NewManagerAPI(mgr *session.Manager) SessionsAPI {
 		panic("rpc/sessions: NewManagerAPI: nil manager")
 	}
 	return &managerAPI{mgr: mgr}
+}
+
+// NewManagerAPIWithAttachments returns a SessionsAPI that drives the
+// attachments table for SetSystemPrompt while keeping the legacy
+// session.system_prompt column populated for one-release compat.
+//
+// TODO: remove the legacy column write next mission post-WP04 once the
+// frontend reads attachments directly.
+func NewManagerAPIWithAttachments(mgr *session.Manager, att *attachments.Manager) SessionsAPI {
+	if mgr == nil {
+		panic("rpc/sessions: NewManagerAPI: nil manager")
+	}
+	return &managerAPI{mgr: mgr, attachments: att}
 }
 
 // List implements SessionsAPI.
@@ -184,8 +201,79 @@ func (a *managerAPI) LoadDraft(ctx context.Context, id string) (string, error) {
 }
 
 // SetSystemPrompt implements SessionsAPI.
+//
+// Post-WP03 this is a thin wrapper over the attachments table — the
+// canonical home for session starting context. The legacy
+// session.system_prompt column write stays for the one-release compat
+// buffer so Mission A's existing code paths (and any old DB rows that
+// migration 0301 already seeded) keep working without surprise.
+//
+// Behaviour:
+//   - content == "" with an existing position-0 inline session-scope
+//     attachment removes the attachment row.
+//   - content != "" upserts a position-0 inline attachment whose
+//     content_source is "inline:<sha256(content)>". Any prior
+//     position-0 inline attachment for the session is removed first so
+//     a re-set always replaces.
+//
+// TODO: remove the legacy a.mgr.SetSystemPrompt call next mission
+// post-WP04 once the frontend reads attachments directly.
 func (a *managerAPI) SetSystemPrompt(ctx context.Context, id, content, kind string) error {
+	if a.attachments != nil {
+		if err := a.upsertSessionAttachment(ctx, id, content, kind); err != nil {
+			return err
+		}
+	}
 	return a.mgr.SetSystemPrompt(ctx, id, content, kind)
+}
+
+// upsertSessionAttachment removes any existing position-0 inline
+// session-scope attachment for sessionID and inserts a new one when
+// content is non-empty. Library-source attachments at position 0 are
+// preserved — only inline snapshots are owned by the SetSystemPrompt
+// shim.
+func (a *managerAPI) upsertSessionAttachment(ctx context.Context, sessionID, content, kind string) error {
+	existing, err := a.attachments.List(ctx, attachments.ScopeFilter{
+		ScopeKind: attachments.ScopeKindSession,
+		ScopeID:   sessionID,
+	})
+	if err != nil {
+		return err
+	}
+	for _, att := range existing {
+		if att.Position != 0 {
+			continue
+		}
+		if !startsWithInline(att.ContentSource) {
+			continue
+		}
+		if err := a.attachments.Remove(ctx, att.ID); err != nil {
+			return err
+		}
+	}
+	if content == "" {
+		return nil
+	}
+	hash := sha256.Sum256([]byte(content))
+	source := "inline:" + hex.EncodeToString(hash[:])
+	attKind := attachments.KindSystem
+	if kind == session.ContextKindUserSeed {
+		attKind = attachments.KindUser
+	}
+	_, err = a.attachments.Add(ctx, attachments.Attachment{
+		ScopeKind:     attachments.ScopeKindSession,
+		ScopeID:       sessionID,
+		ContentSource: source,
+		Content:       content,
+		Kind:          attKind,
+		Position:      0,
+	})
+	return err
+}
+
+func startsWithInline(src string) bool {
+	const prefix = "inline:"
+	return len(src) >= len(prefix) && src[:len(prefix)] == prefix
 }
 
 // MoveToProject implements SessionsAPI. An empty projectID detaches
