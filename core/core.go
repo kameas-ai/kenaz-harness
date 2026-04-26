@@ -66,6 +66,15 @@ type Subsystems struct {
 	Memory    memory.View
 	LLMs      llm.Registry
 	MCP       mcp.Pool
+
+	// MCPRecipeBootstrap is invoked from Start once Storage() has
+	// opened. Embedders use it to spawn persisted MCP recipes onto
+	// the pool BEFORE the chat surface accepts a turn. Errors are
+	// logged at warn and do not fail Start — per FR-030, missing /
+	// failed recipes degrade gracefully (the chat still works
+	// without their tools). nil means "no recipes layer wired",
+	// which is the test-fixture path.
+	MCPRecipeBootstrap func(context.Context) error
 }
 
 // Core is the harness's top-level lifecycle facade. Subsystem fields
@@ -84,6 +93,13 @@ type Core struct {
 	Memory    memory.View
 	LLMs      llm.Registry
 	MCP       mcp.Pool
+
+	// mcpRecipeBootstrap is the optional rpc-layer-supplied hook that
+	// walks the persisted recipes list and Opens each onto MCP at
+	// Start time. Held on the Core so the OnStartup callback in main.go
+	// only needs to call c.Start(ctx) and the recipe spawn happens
+	// alongside the rest of the boot sequence. nil = no-op (test path).
+	mcpRecipeBootstrap func(context.Context) error
 
 	// bundleCacheMu guards bundleCache lazy construction so concurrent
 	// callers do not race during the first BundleCache() / Start() call.
@@ -124,7 +140,30 @@ func New(opts Options) (*Core, error) {
 	c.Memory = opts.Subsystems.Memory
 	c.LLMs = opts.Subsystems.LLMs
 	c.MCP = opts.Subsystems.MCP
+	c.mcpRecipeBootstrap = opts.Subsystems.MCPRecipeBootstrap
 	return c, nil
+}
+
+// SetMCP wires the MCP pool onto Core after construction. The rpc
+// layer uses this to hand its production *stdio.Pool to Core so
+// Shutdown's c.MCP.Close fan-out is exercised and Start's persisted-
+// recipe spawn has a target. Idempotent across repeated calls; no-op
+// when pool is nil.
+func (c *Core) SetMCP(pool mcp.Pool) {
+	if c == nil || pool == nil {
+		return
+	}
+	c.MCP = pool
+}
+
+// SetMCPRecipeBootstrap wires the rpc-layer-supplied recipe spawn
+// hook onto Core. Called after rpc.New(c) has constructed the pool +
+// secrets backend; Start invokes the hook once Storage is up.
+func (c *Core) SetMCPRecipeBootstrap(fn func(context.Context) error) {
+	if c == nil {
+		return
+	}
+	c.mcpRecipeBootstrap = fn
 }
 
 // Start brings every wired subsystem online. It is safe to call once;
@@ -141,6 +180,17 @@ func (c *Core) Start(ctx context.Context) error {
 	// happen on Start rather than on first session-manager access.
 	if c.opts.DataDir != "" {
 		_ = c.Storage()
+	}
+	// MCP recipe bootstrap — spawn every persisted enabled recipe onto
+	// the pool BEFORE the user gets the chat surface. Failures degrade
+	// gracefully (FR-030): the chat still works, just without that
+	// recipe's tools. Per-server failures don't poison the pool — the
+	// stdio.Pool's Open contract aggregates them and returns a single
+	// non-fatal error we log at warn.
+	if c.mcpRecipeBootstrap != nil {
+		if err := c.mcpRecipeBootstrap(ctx); err != nil {
+			logging.L().Warn("core.mcp_recipe_bootstrap_failed", "err", err.Error())
+		}
 	}
 	if c.Scheduler != nil {
 		if err := c.Scheduler.Start(ctx); err != nil {

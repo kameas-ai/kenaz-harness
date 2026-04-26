@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 
+	"github.com/sigil-tech/kaneaz-harness/core/mcp/stdio"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/a2a"
 	attachmentsview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/attachments"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/contextview"
@@ -13,6 +14,7 @@ import (
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/policy"
 	projectsview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/projects"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/sessions"
+	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/tools"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/trust"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/workflow"
 )
@@ -200,6 +202,24 @@ func (s *stubAttachments) Reorder(_ context.Context, _, _ string, _ []string) er
 }
 func (s *stubAttachments) Refresh(_ context.Context, _ string) (attachmentsview.Attachment, error) {
 	return attachmentsview.Attachment{}, errNotWired
+}
+
+// ── tools ──────────────────────────────────────────────────────────────
+
+type stubTools struct{}
+
+func (s *stubTools) ListRecipes(_ context.Context) ([]tools.RecipeListing, error) {
+	return []tools.RecipeListing{}, nil
+}
+func (s *stubTools) InstallRecipe(_ context.Context, _ string, _ map[string]string) (stdio.RecipeStatus, error) {
+	return stdio.RecipeStatus{}, errNotWired
+}
+func (s *stubTools) UninstallRecipe(_ context.Context, _ string) error { return errNotWired }
+func (s *stubTools) ForgetRecipeKey(_ context.Context, _, _ string) error {
+	return errNotWired
+}
+func (s *stubTools) RecipeStatus(_ context.Context, _ string) (stdio.RecipeStatus, error) {
+	return stdio.RecipeStatus{}, errNotWired
 }
 
 // ── policy ─────────────────────────────────────────────────────────────

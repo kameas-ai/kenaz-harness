@@ -25,7 +25,8 @@ import (
 	llmregistry "github.com/sigil-tech/kaneaz-harness/core/llm/registry"
 	"github.com/sigil-tech/kaneaz-harness/core/logging"
 	coremcp "github.com/sigil-tech/kaneaz-harness/core/mcp"
-	"github.com/sigil-tech/kaneaz-harness/core/mcp/fixture"
+	"github.com/sigil-tech/kaneaz-harness/core/mcp/recipes"
+	"github.com/sigil-tech/kaneaz-harness/core/mcp/stdio"
 	corememory "github.com/sigil-tech/kaneaz-harness/core/memory"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/a2a"
 	attachmentsview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/attachments"
@@ -41,6 +42,7 @@ import (
 	projectsview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/projects"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/sessions"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/settings"
+	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/tools"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/trust"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/workflow"
 	"github.com/sigil-tech/kaneaz-harness/core/secrets"
@@ -75,6 +77,7 @@ type HarnessAPI interface {
 	Hooks() hooksview.HooksAPI
 	Projects() projectsview.ProjectsAPI
 	Attachments() attachmentsview.AttachmentsAPI
+	Tools() tools.ToolsAPI
 }
 
 // ShellStatus drives the Toolbar status pills + LegendBar live-rate
@@ -133,6 +136,13 @@ type API struct {
 	projectsAPI     projectsview.ProjectsAPI
 	attachmentsMgr  *coreatt.Manager
 	attachmentsAPI  attachmentsview.AttachmentsAPI
+	toolsAPI        tools.ToolsAPI
+
+	// stdioPool is the production *stdio.Pool wired into newLLMStack.
+	// Held on the API value so the tools view's InstallRecipe /
+	// UninstallRecipe path can call OpenOne / CloseOne against the
+	// same pool the toolloop dispatches against.
+	stdioPool *stdio.Pool
 
 	// broker fans typed source channels to Wails event topics. Held for
 	// the lifetime of the API value; per-view bridges (llm, sessions,
@@ -237,7 +247,17 @@ func New(c *core.Core) *API {
 		}
 		return v
 	}
-	a.llmAPI = newLLMStack(c, a.broker, personalForLLM, hooksRunner, attMgr, confirmEachEnabled)
+	stack := newLLMStack(c, a.broker, personalForLLM, hooksRunner, attMgr, confirmEachEnabled)
+	a.llmAPI = stack.api
+	a.stdioPool = stack.pool
+	if c != nil && a.stdioPool != nil {
+		c.SetMCP(a.stdioPool)
+		// Persisted-recipes bootstrap — Core.Start invokes this once
+		// Storage() is up, so the pool is populated before the chat
+		// surface accepts a turn (FR-030).
+		c.SetMCPRecipeBootstrap(makeMCPRecipeBootstrap(c, a.stdioPool, stack.secrets))
+	}
+	a.toolsAPI = newToolsAPI(c, stack.pool, stack.secrets)
 	a.memoryAPI = memoryview.New(memoryview.Config{
 		Store:    memStore,
 		Embedder: embedder,
@@ -344,6 +364,115 @@ func (r *sessionProjectReader) ProjectID(ctx context.Context, sessionID string) 
 	return &v, nil
 }
 
+// makeMCPRecipeBootstrap returns a closure suitable for
+// Core.SetMCPRecipeBootstrap. The closure walks the persisted enabled-
+// recipes list, resolves env via the shared secrets backend, builds
+// ServerSpec values via recipe.ToServerSpec, and Opens them onto the
+// pool. Per-recipe failures (missing required env, OS-keychain entry
+// purged out-of-band, recipe id no longer in the catalog) log at warn
+// and skip — the chat surface stays usable without that recipe's
+// tools (FR-030).
+func makeMCPRecipeBootstrap(c *core.Core, pool *stdio.Pool, secretsBackend *secrets.MemoryBackend) func(context.Context) error {
+	if c == nil || pool == nil || secretsBackend == nil {
+		return nil
+	}
+	return func(ctx context.Context) error {
+		dataDir := c.DataDir()
+		if dataDir == "" {
+			return nil
+		}
+		enabled, err := recipes.LoadEnabled(dataDir)
+		if err != nil {
+			return fmt.Errorf("rpc: load enabled recipes: %w", err)
+		}
+		catalog := recipes.Shipped()
+		entries := enabled.List()
+		specs := make([]coremcp.ServerSpec, 0, len(entries))
+		for _, entry := range entries {
+			recipe, ok := catalog.Get(entry.ID)
+			if !ok {
+				logging.L().Warn("rpc.mcp_bootstrap.unknown_recipe", "recipe_id", entry.ID)
+				continue
+			}
+			resolved, err := recipes.ResolveEnv(ctx, secretsBackend, recipe)
+			if err != nil {
+				// Most likely cause: the user uninstalled the OS
+				// keychain entry out-of-band, so a required env
+				// key fails to resolve. Skip + log; the user can
+				// re-install the recipe from the Tools panel.
+				logging.L().Warn("rpc.mcp_bootstrap.resolve_env_failed",
+					"recipe_id", entry.ID, "err", err.Error())
+				continue
+			}
+			specs = append(specs, recipe.ToServerSpec(resolved))
+		}
+		if len(specs) == 0 {
+			return nil
+		}
+		if err := pool.Open(ctx, specs); err != nil {
+			// Pool.Open aggregates per-spec failures; treat the
+			// aggregate as non-fatal so a single bad recipe
+			// doesn't prevent the others from coming up.
+			logging.L().Warn("rpc.mcp_bootstrap.partial_open", "err", err.Error())
+		}
+		return nil
+	}
+}
+
+// newToolsAPI constructs the view-scoped Tools surface. The view
+// shares the same *stdio.Pool the toolloop dispatches against (so
+// install/uninstall is visible to the chat surface immediately) and
+// the same in-memory secrets backend the LLM stack uses (so newly-
+// staged keychain entries are visible to the next ResolveEnv without
+// an OS round-trip).
+//
+// Returns the stub when c is nil — the test harness path constructs
+// rpc.New(nil) and we keep the chassis bootable without crashing on
+// the catalog access.
+func newToolsAPI(c *core.Core, pool *stdio.Pool, secretsBackend *secrets.MemoryBackend) tools.ToolsAPI {
+	if c == nil {
+		return &stubTools{}
+	}
+	dataDir := c.DataDir()
+	enabled, err := recipes.LoadEnabled(dataDir)
+	if err != nil {
+		logging.L().Warn("tools.load_enabled_failed", "data_dir", dataDir, "err", err.Error())
+		enabled = &recipes.EnabledRecipes{}
+	}
+	cfg := tools.Config{
+		Catalog:   recipes.Shipped(),
+		Enabled:   enabled,
+		Pool:      pool,
+		Secrets:   secretsBackend,
+		DataDir:   dataDir,
+		Audit:     nil, // TODO(audit-wired): reuse process-wide event.Emitter once it's available
+		Keychain:  &keychainWriter{backend: secretsBackend},
+		Forgetter: &keychainForgetter{backend: secretsBackend},
+	}
+	return tools.New(cfg)
+}
+
+// keychainForgetter is the deletion counterpart to keychainWriter.
+// It pops the locator out of the OS keychain (best-effort — Linux
+// installs without libsecret return an error, which we swallow) and
+// out of the in-memory secrets backend.
+type keychainForgetter struct {
+	backend *secrets.MemoryBackend
+}
+
+func (f *keychainForgetter) Forget(_ context.Context, locator string) error {
+	if f == nil {
+		return nil
+	}
+	// OS-keychain is best-effort: a missing entry on the deletion
+	// path is non-fatal.
+	_ = keyring.Delete(keyringService, locator)
+	if f.backend != nil {
+		f.backend.ClearEntry(secretsref.RefKeychain, locator)
+	}
+	return nil
+}
+
 // newLLMStack constructs the connector Registry + view-scoped API. It
 // is split out of New so the Wails wiring stays declarative.
 //
@@ -361,6 +490,17 @@ func (r *sessionProjectReader) ProjectID(ctx context.Context, sessionID string) 
 // rpc layer's settings binding mutates the FileStore directly, and a
 // process restart picks up the new value. This keeps the loop's
 // per-Run hot path free of settings-store I/O.
+// llmStack bundles the artefacts newLLMStack constructs that the
+// outer New func also needs to wire into other views (the tools view
+// shares the same *stdio.Pool the toolloop dispatches against, and the
+// shared secrets backend is what InstallRecipe writes credentials
+// into so the resolver finds them on the next ResolveEnv).
+type llmStack struct {
+	api     llm.LLMConnectorAPI
+	pool    *stdio.Pool
+	secrets *secrets.MemoryBackend
+}
+
 func newLLMStack(
 	c *core.Core,
 	broker *StreamBroker,
@@ -368,7 +508,7 @@ func newLLMStack(
 	hooksRunner llm.HookRunner,
 	attMgr *coreatt.Manager,
 	confirmEachEnabled func() bool,
-) llm.LLMConnectorAPI {
+) llmStack {
 	// Share ONE secrets backend between the credref resolver (which
 	// reads keys when streaming) and the keychain writer (which stages
 	// keys when the user submits AddProvider). Without this sharing,
@@ -382,7 +522,7 @@ func newLLMStack(
 		// the chassis still boots. The error path is exercised only by
 		// catalog-load failures, which should never happen in
 		// production builds.
-		return &stubLLM{}
+		return llmStack{api: &stubLLM{}, secrets: secretsBackend}
 	}
 	// Compile-time witness: *llmregistry.Registry satisfies the local
 	// Registry interface used by the view impl.
@@ -407,12 +547,6 @@ func newLLMStack(
 			perms = staticPerms
 		}
 	}
-	// Construct the toolloop with the registry and a placeholder
-	// in-memory fixture pool. Production wiring (real MCP server pool)
-	// arrives with mission C1; until then the fixture is empty so a
-	// model that asks for a tool gets a synthetic "not registered"
-	// result and the conversation continues.
-	//
 	// WP03 — pre/post-tool-use hooks and audit emission. core/hooks
 	// only exposes pre_send / post_send for chat-pipeline events;
 	// there is no pre_tool_use / post_tool_use surface there yet, so
@@ -435,7 +569,27 @@ func newLLMStack(
 	if confirmEachEnabled != nil {
 		flagOn = confirmEachEnabled()
 	}
-	mcpPool := fixture.New()
+	// Stdio MCP pool — empty at boot. Persisted recipes are spawned
+	// onto this pool from core.Core.Start (so they're up before the
+	// chat surface accepts a turn), and the tools view's
+	// InstallRecipe / UninstallRecipe paths use the same pool's
+	// OpenOne / CloseOne for dynamic add/remove.
+	dataDir := ""
+	if c != nil {
+		dataDir = c.DataDir()
+	}
+	mcpPool := stdio.NewPool(stdio.PoolOptions{
+		Sampler: stdio.LLMSamplingHandler(reg, func() (string, string) {
+			// v1: no active-provider selector wired yet — sampling
+			// callbacks land on whichever profile resolves first via
+			// the registry's Stream contract. The user-trust mission
+			// owns the explicit selector knob.
+			return "", ""
+		}),
+		Roots:  stdio.DefaultRoots(dataDir, nil),
+		Broker: &poolEventPublisher{broker: broker},
+		Logger: nil, // defaults to slog.Default
+	})
 	loop, loopErr := toolloop.New(toolloop.Config{
 		Registry:           reg,
 		Pool:               &mcpPoolAdapter{inner: mcpPool},
@@ -471,7 +625,7 @@ func newLLMStack(
 	// Without this, the model never sees any tools and the loop is
 	// dead code from the user's perspective.
 	toolDiscoverer := llm.NewMCPToolDiscoverer(mcpPool, perms)
-	return llm.New(llm.Config{
+	api := llm.New(llm.Config{
 		Registry:       reg,
 		Sink:           &streamSinkAdapter{broker: broker},
 		Store:          store,
@@ -485,6 +639,21 @@ func newLLMStack(
 		Tools:          toolDiscoverer,
 		ConfirmGateway: confirmGateway,
 	})
+	return llmStack{api: api, pool: mcpPool, secrets: secretsBackend}
+}
+
+// poolEventPublisher adapts the rpc.StreamBroker to the stdio
+// pool's EventPublisher contract. Nil broker → no-op so embedding
+// tests can leave the broker unset.
+type poolEventPublisher struct {
+	broker *StreamBroker
+}
+
+func (p *poolEventPublisher) Publish(topic string, payload any) {
+	if p == nil || p.broker == nil {
+		return
+	}
+	p.broker.emitter.Emit(p.broker.EmitCtx(), topic, payload)
 }
 
 // attachmentsResolverAdapter bridges core/attachments.Manager into the
@@ -1076,6 +1245,12 @@ func (a *API) Attachments() attachmentsview.AttachmentsAPI {
 		return &stubAttachments{}
 	}
 	return a.attachmentsAPI
+}
+func (a *API) Tools() tools.ToolsAPI {
+	if a.toolsAPI == nil {
+		return &stubTools{}
+	}
+	return a.toolsAPI
 }
 
 // Bindings returns the slice of Wails-bound objects. The Bindings struct

@@ -18,6 +18,30 @@ export function AppInfo() {
   return window['go']['rpc']['Bindings']['AppInfo']();
 }
 
+export function Attachments_Add(arg1) {
+  return window['go']['rpc']['Bindings']['Attachments_Add'](arg1);
+}
+
+export function Attachments_List(arg1, arg2) {
+  return window['go']['rpc']['Bindings']['Attachments_List'](arg1, arg2);
+}
+
+export function Attachments_ListResolved(arg1) {
+  return window['go']['rpc']['Bindings']['Attachments_ListResolved'](arg1);
+}
+
+export function Attachments_Refresh(arg1) {
+  return window['go']['rpc']['Bindings']['Attachments_Refresh'](arg1);
+}
+
+export function Attachments_Remove(arg1) {
+  return window['go']['rpc']['Bindings']['Attachments_Remove'](arg1);
+}
+
+export function Attachments_Reorder(arg1, arg2, arg3) {
+  return window['go']['rpc']['Bindings']['Attachments_Reorder'](arg1, arg2, arg3);
+}
+
 export function Audit_ListEntries(arg1) {
   return window['go']['rpc']['Bindings']['Audit_ListEntries'](arg1);
 }
@@ -68,6 +92,10 @@ export function Contexts_Get(arg1) {
 
 export function Contexts_List() {
   return window['go']['rpc']['Bindings']['Contexts_List']();
+}
+
+export function Contexts_ListAll() {
+  return window['go']['rpc']['Bindings']['Contexts_ListAll']();
 }
 
 export function Contexts_RecentlyApplied(arg1) {
@@ -140,6 +168,10 @@ export function LLM_ListProviders() {
 
 export function LLM_RemoveProvider(arg1) {
   return window['go']['rpc']['Bindings']['LLM_RemoveProvider'](arg1);
+}
+
+export function LLM_ResolveConfirm(arg1, arg2) {
+  return window['go']['rpc']['Bindings']['LLM_ResolveConfirm'](arg1, arg2);
 }
 
 export function LLM_StartStream(arg1, arg2, arg3) {
@@ -322,6 +354,10 @@ export function Settings_Get() {
   return window['go']['rpc']['Bindings']['Settings_Get']();
 }
 
+export function Settings_GetConfirmEach() {
+  return window['go']['rpc']['Bindings']['Settings_GetConfirmEach']();
+}
+
 export function Settings_GetMemory() {
   return window['go']['rpc']['Bindings']['Settings_GetMemory']();
 }
@@ -330,12 +366,36 @@ export function Settings_Set(arg1) {
   return window['go']['rpc']['Bindings']['Settings_Set'](arg1);
 }
 
+export function Settings_SetConfirmEach(arg1) {
+  return window['go']['rpc']['Bindings']['Settings_SetConfirmEach'](arg1);
+}
+
 export function Settings_SetMemory(arg1) {
   return window['go']['rpc']['Bindings']['Settings_SetMemory'](arg1);
 }
 
 export function ShellStatus() {
   return window['go']['rpc']['Bindings']['ShellStatus']();
+}
+
+export function Tools_ForgetRecipeKey(arg1, arg2) {
+  return window['go']['rpc']['Bindings']['Tools_ForgetRecipeKey'](arg1, arg2);
+}
+
+export function Tools_InstallRecipe(arg1, arg2) {
+  return window['go']['rpc']['Bindings']['Tools_InstallRecipe'](arg1, arg2);
+}
+
+export function Tools_ListRecipes() {
+  return window['go']['rpc']['Bindings']['Tools_ListRecipes']();
+}
+
+export function Tools_RecipeStatus(arg1) {
+  return window['go']['rpc']['Bindings']['Tools_RecipeStatus'](arg1);
+}
+
+export function Tools_UninstallRecipe(arg1) {
+  return window['go']['rpc']['Bindings']['Tools_UninstallRecipe'](arg1);
 }
 
 export function Trust_GetSecretReference(arg1) {

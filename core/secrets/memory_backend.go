@@ -62,6 +62,18 @@ func (b *MemoryBackend) SetEntries(values map[string][]byte) {
 	b.mu.Unlock()
 }
 
+// ClearEntry removes the staged in-memory value for kind+locator.
+// Used by the rpc tools view's ForgetRecipeKey so a follow-up
+// Resolve falls through to the OS keychain (or fails when both are
+// empty). Safe under concurrent access; no-op when the entry is
+// absent.
+func (b *MemoryBackend) ClearEntry(kind ref.RefKind, locator string) {
+	key := kind.String() + "|" + locator
+	b.mu.Lock()
+	delete(b.entries, key)
+	b.mu.Unlock()
+}
+
 // Kind returns the canonical backend name.
 func (b *MemoryBackend) Kind() registry.BackendKind { return "memory" }
 

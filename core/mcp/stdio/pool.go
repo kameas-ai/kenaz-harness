@@ -275,6 +275,74 @@ func (p *Pool) Server(name string) *ServerInstance {
 	return p.servers[name]
 }
 
+// ErrServerExists is returned by OpenOne when a server with the
+// requested ID is already present in the pool. Callers (the rpc
+// view) should CloseOne first if they want to replace the instance.
+var ErrServerExists = errors.New("stdio: server already in pool")
+
+// ErrServerNotFound is returned by CloseOne when no server with the
+// requested ID exists in the pool. The rpc view treats this as a
+// non-fatal "already gone" outcome.
+var ErrServerNotFound = errors.New("stdio: server not in pool")
+
+// OpenOne adds a single server to a running pool. It mirrors Open's
+// per-spec spawn path but operates on one spec at a time, surfacing
+// the spawn error directly instead of folding it into the aggregate
+// "N server(s) failed to open" envelope.
+//
+// Restart-history semantics: a fresh ServerInstance is allocated on
+// every OpenOne call, so its restartHistory starts empty even when
+// CloseOne was called minutes ago for the same id. This matches the
+// user's mental model — "I just toggled this recipe back on, give it
+// the full backoff budget."
+//
+// Returns ErrServerExists when the pool already has a server with
+// spec.Name. The caller must CloseOne first to replace it; this is
+// the contract WP05's UninstallRecipe + InstallRecipe round-trips
+// rely on.
+func (p *Pool) OpenOne(ctx context.Context, spec coremcp.ServerSpec) error {
+	p.mu.Lock()
+	if p.closed {
+		p.mu.Unlock()
+		return errors.New("stdio: pool closed")
+	}
+	if _, exists := p.servers[spec.Name]; exists {
+		p.mu.Unlock()
+		return fmt.Errorf("%w: %q", ErrServerExists, spec.Name)
+	}
+	p.mu.Unlock()
+	return p.openOne(ctx, spec)
+}
+
+// CloseOne removes a single server from a running pool. The instance
+// is closed (SIGTERM grace per ServerInstance.Close, then SIGKILL on
+// the closeGrace deadline), every reader / supervisor / health-pinger
+// goroutine exits before this returns, and the instance is dropped
+// from the pool's server map so its restartHistory is released along
+// with it.
+//
+// Returns ErrServerNotFound when no server with id exists. The rpc
+// view treats this as a non-fatal "already gone" — UninstallRecipe
+// is allowed to be called twice.
+func (p *Pool) CloseOne(ctx context.Context, id string) error {
+	p.mu.Lock()
+	if p.closed {
+		p.mu.Unlock()
+		return errors.New("stdio: pool closed")
+	}
+	inst, ok := p.servers[id]
+	if !ok {
+		p.mu.Unlock()
+		return fmt.Errorf("%w: %q", ErrServerNotFound, id)
+	}
+	delete(p.servers, id)
+	p.mu.Unlock()
+	if err := inst.Close(ctx); err != nil && !isExpectedExit(err) {
+		return err
+	}
+	return nil
+}
+
 // isExpectedExit treats common "process exited with status N"
 // shapes as non-errors during Close. exec.ExitError on a SIGTERM/
 // SIGKILL exit is expected when the server doesn't gracefully

@@ -17,9 +17,11 @@ import (
 	projectsview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/projects"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/sessions"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/settings"
+	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/tools"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/trust"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/workflow"
 	"github.com/sigil-tech/kaneaz-harness/core/logging"
+	"github.com/sigil-tech/kaneaz-harness/core/mcp/stdio"
 )
 
 // Bindings is the Wails-reflected JS-callable surface. Every method has a
@@ -477,4 +479,26 @@ func (b *Bindings) Hooks_InstallStarterMemory() error {
 }
 func (b *Bindings) Hooks_RemoveStarterMemory() error {
 	return b.api.Hooks().RemoveStarterMemoryHooks(b.ctx())
+}
+
+// ── tools (MCP recipes) ────────────────────────────────────────────────
+
+func (b *Bindings) Tools_ListRecipes() ([]tools.RecipeListing, error) {
+	return b.api.Tools().ListRecipes(b.ctx())
+}
+
+func (b *Bindings) Tools_InstallRecipe(id string, env map[string]string) (stdio.RecipeStatus, error) {
+	return b.api.Tools().InstallRecipe(b.ctx(), id, env)
+}
+
+func (b *Bindings) Tools_UninstallRecipe(id string) error {
+	return b.api.Tools().UninstallRecipe(b.ctx(), id)
+}
+
+func (b *Bindings) Tools_ForgetRecipeKey(id, envName string) error {
+	return b.api.Tools().ForgetRecipeKey(b.ctx(), id, envName)
+}
+
+func (b *Bindings) Tools_RecipeStatus(id string) (stdio.RecipeStatus, error) {
+	return b.api.Tools().RecipeStatus(b.ctx(), id)
 }
