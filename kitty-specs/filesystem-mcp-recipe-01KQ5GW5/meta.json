@@ -1,0 +1,10 @@
+{
+  "created_at": "2026-04-26T18:29:50.929208+00:00",
+  "friendly_name": "filesystem mcp recipe",
+  "mission_id": "01KQ5GW54MVNM306734QN43KHB",
+  "mission_number": null,
+  "mission_slug": "filesystem-mcp-recipe-01KQ5GW5",
+  "mission_type": "software-dev",
+  "slug": "filesystem-mcp-recipe-01KQ5GW5",
+  "target_branch": "main"
+}
