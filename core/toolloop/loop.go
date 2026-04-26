@@ -17,7 +17,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"time"
 
 	corellm "github.com/sigil-tech/kaneaz-harness/core/llm"
 	"github.com/sigil-tech/kaneaz-harness/core/logging"
@@ -53,18 +52,31 @@ type Config struct {
 	// MaxIter caps the number of tool-use rounds per Run invocation.
 	// Zero falls back to DefaultMaxIter.
 	MaxIter int
+	// MaxConcurrentTools caps how many tool_use calls from a single
+	// assistant turn dispatch in parallel (FR-004). Zero falls back to
+	// DefaultMaxConcurrentTools (4); a value of 1 reproduces the WP01
+	// serial behaviour, which is the safest fallback for pools that are
+	// not yet thread-safe.
+	MaxConcurrentTools int
+	// Progress, when non-nil, receives EmitToolStarted / EmitToolFinished
+	// callbacks for every dispatch so the chat surface can render inline
+	// tool chips (FR-010). nil silences progress emission; the rpc layer
+	// wires a stream-sink-backed implementation in production.
+	Progress ProgressEmitter
 }
 
 // Loop is the orchestrator. Construct via New and invoke Run from the
 // rpc pump after the initial stream closes with finish_reason=tool_use.
 type Loop struct {
-	reg     corellm.Registry
-	pool    MCPPool
-	history SessionHistoryRW
-	perms   PermissionResolver
-	hooks   HookRunner
-	audit   AuditEmitter
-	maxIter int
+	reg         corellm.Registry
+	pool        MCPPool
+	history     SessionHistoryRW
+	perms       PermissionResolver
+	hooks       HookRunner
+	audit       AuditEmitter
+	progress    ProgressEmitter
+	maxIter     int
+	maxParallel int
 }
 
 // New constructs a Loop. Returns an error if the registry or pool is
@@ -89,14 +101,24 @@ func New(cfg Config) (*Loop, error) {
 	if hooks == nil {
 		hooks = noopHookRunner{}
 	}
+	progress := cfg.Progress
+	if progress == nil {
+		progress = noopProgressEmitter{}
+	}
+	maxParallel := cfg.MaxConcurrentTools
+	if maxParallel <= 0 {
+		maxParallel = DefaultMaxConcurrentTools
+	}
 	return &Loop{
-		reg:     cfg.Registry,
-		pool:    cfg.Pool,
-		history: cfg.History,
-		perms:   perms,
-		hooks:   hooks,
-		audit:   cfg.Audit,
-		maxIter: maxIter,
+		reg:         cfg.Registry,
+		pool:        cfg.Pool,
+		history:     cfg.History,
+		perms:       perms,
+		hooks:       hooks,
+		audit:       cfg.Audit,
+		progress:    progress,
+		maxIter:     maxIter,
+		maxParallel: maxParallel,
 	}, nil
 }
 
@@ -160,10 +182,37 @@ func (l *Loop) Run(
 		}
 		augmented = append(augmented, assistantMessageFromResponse(current))
 
-		// 2. Dispatch every tool sequentially (concurrency is WP04).
-		results, err := l.dispatchTools(ctx, sessionID, parentSubID, current.ToolCalls)
-		if err != nil {
-			return err
+		// 2. Dispatch every tool. WP04 fans the calls out behind a
+		//    semaphore (FR-004); the dispatcher returns ctx.Err() when
+		//    the host context cancelled mid-flight, but still surfaces a
+		//    full results slice (any unstarted call lands as a synthetic
+		//    tool_cancelled). We thread those cancellation results into
+		//    history before returning so the audit/post-hook trail stays
+		//    consistent with what the conversation actually saw.
+		results, dispatchErr := l.dispatchTools(ctx, sessionID, parentSubID, current.ToolCalls)
+		if errors.Is(dispatchErr, context.Canceled) || errors.Is(dispatchErr, context.DeadlineExceeded) {
+			// Persist what we have using a background context — the
+			// host ctx is done but the storage write should still land.
+			persistCtx := context.Background()
+			for _, r := range results {
+				if perr := l.persistToolResult(persistCtx, sessionID, r); perr != nil {
+					log.Warn("toolloop.persist_cancelled_result_failed",
+						"sub_id", parentSubID,
+						"session_id", sessionID,
+						"err", perr.Error(),
+					)
+				}
+			}
+			log.Info("toolloop.run.cancelled",
+				"sub_id", parentSubID,
+				"session_id", sessionID,
+				"iter", iter,
+				"results", len(results),
+			)
+			return dispatchErr
+		}
+		if dispatchErr != nil {
+			return dispatchErr
 		}
 
 		// 3. Persist + thread each tool result.
@@ -223,226 +272,6 @@ func (l *Loop) invokeAndDrain(ctx context.Context, req corellm.GenerationRequest
 	return resp, nil
 }
 
-// dispatchTools resolves each ToolUse against the pool, consults the
-// permission gate, fires pre/post-tool-use hooks, emits audit events,
-// and invokes the call when allowed. Sequential — concurrency lands in
-// WP04. A pool failure surfaces as a toolResult with IsError=true so
-// the model can recover; the function only returns an error for
-// unrecoverable problems (pool tools listing, context cancellation).
-func (l *Loop) dispatchTools(ctx context.Context, sessionID, parentSubID string, calls []corellm.ToolUse) ([]toolResult, error) {
-	if len(calls) == 0 {
-		return nil, nil
-	}
-	tools, err := l.pool.Tools(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("toolloop: pool tools: %w", err)
-	}
-	log := logging.L()
-	out := make([]toolResult, 0, len(calls))
-	for _, call := range calls {
-		server, ok := resolveServer(tools, call.Name)
-		if !ok {
-			// No server resolved — args still get emitted so the audit
-			// log shows what the model attempted. server="" is fine for
-			// the unknown-tool case; downstream filters can detect it.
-			emitToolFailed(ctx, l.audit, sessionID, parentSubID, "", call.Name, call.Input,
-				fmt.Sprintf("tool %q not registered", call.Name), 0)
-			out = append(out, toolResult{
-				ToolUseID: call.ID,
-				Tool:      call.Name,
-				Output:    fmt.Sprintf("tool %q not registered", call.Name),
-				IsError:   true,
-			})
-			continue
-		}
-		// Permission gate. WP02 surfaces three policies:
-		//   deny         → synthetic blocked result, skip dispatch
-		//   confirm_each → treat as auto_allow until WP05
-		//   auto_allow   → existing path
-		// Resolver internal errors surface as a tool failure (so the
-		// model isn't trapped) but are also logged because they're
-		// almost always a bug in the wired resolver, not user policy.
-		res, permErr := l.perms.Resolve(ctx, sessionID, server, call.Name)
-		if permErr != nil {
-			log.Warn("toolloop.permission.resolver_failed",
-				"sub_id", parentSubID,
-				"session_id", sessionID,
-				"server", server,
-				"tool", call.Name,
-				"err", permErr.Error(),
-			)
-			emitToolFailed(ctx, l.audit, sessionID, parentSubID, server, call.Name, call.Input,
-				fmt.Sprintf("permission resolver error: %s", permErr.Error()), 0)
-			out = append(out, toolResult{
-				ToolUseID: call.ID,
-				Server:    server,
-				Tool:      call.Name,
-				Output:    fmt.Sprintf("permission resolver error: %s", permErr.Error()),
-				IsError:   true,
-			})
-			continue
-		}
-		log.Info("toolloop.permission.resolved",
-			"sub_id", parentSubID,
-			"session_id", sessionID,
-			"server", server,
-			"tool", call.Name,
-			"policy", string(res.Policy),
-		)
-		switch res.Policy {
-		case PolicyDeny:
-			reason := res.Reason
-			if reason == "" {
-				reason = "tool not authorised for this session"
-			}
-			emitToolFailed(ctx, l.audit, sessionID, parentSubID, server, call.Name, call.Input,
-				"Tool blocked: "+reason, 0)
-			out = append(out, toolResult{
-				ToolUseID: call.ID,
-				Server:    server,
-				Tool:      call.Name,
-				Output:    "Tool blocked: " + reason,
-				IsError:   true,
-			})
-			continue
-		case PolicyConfirmEach:
-			// TODO(WP05): plumb confirm-each modal — pause the loop,
-			// emit tool_confirmation_required, await the user decision
-			// via the ConfirmationBus, and either continue or convert
-			// to a synthetic deny on a "deny" or timeout outcome.
-			fallthrough
-		case PolicyAutoAllow:
-			// Existing dispatch path.
-		default:
-			// Defensive: a resolver implementer that returns an unknown
-			// policy is treated as a deny — a misconfigured policy
-			// should never silently allow a call.
-			reason := fmt.Sprintf("Tool blocked: unknown policy %q", res.Policy)
-			emitToolFailed(ctx, l.audit, sessionID, parentSubID, server, call.Name, call.Input, reason, 0)
-			out = append(out, toolResult{
-				ToolUseID: call.ID,
-				Server:    server,
-				Tool:      call.Name,
-				Output:    reason,
-				IsError:   true,
-			})
-			continue
-		}
-
-		// Pre-tool-use hook. The hook may short-circuit (Continue=false
-		// → synthetic tool_blocked) or mutate the args before dispatch.
-		// A hook error is treated as a synthetic deny: the user-facing
-		// model still gets a tool_result so it can recover, and the
-		// audit log records the failure under tool_failed.
-		dispatchArgs := call.Input
-		started := time.Now()
-		preEv := PreToolUseEvent{
-			SessionID: sessionID,
-			Tool:      call.Name,
-			Server:    server,
-			Args:      dispatchArgs,
-			AttemptNo: 1,
-		}
-		preRes, preErr := l.hooks.RunPreToolUse(ctx, preEv)
-		if preErr != nil {
-			log.Warn("toolloop.hook.pretool_failed",
-				"sub_id", parentSubID,
-				"session_id", sessionID,
-				"server", server,
-				"tool", call.Name,
-				"err", preErr.Error(),
-			)
-			reason := "pre-hook error: " + preErr.Error()
-			latencyMS := time.Since(started).Milliseconds()
-			emitToolFailed(ctx, l.audit, sessionID, parentSubID, server, call.Name, dispatchArgs, reason, latencyMS)
-			l.hooks.RunPostToolUse(ctx, PostToolUseEvent{
-				SessionID: sessionID,
-				Tool:      call.Name,
-				Server:    server,
-				Args:      dispatchArgs,
-				Error:     reason,
-				LatencyMS: latencyMS,
-			})
-			out = append(out, toolResult{
-				ToolUseID: call.ID,
-				Server:    server,
-				Tool:      call.Name,
-				Output:    "Tool blocked: " + reason,
-				IsError:   true,
-			})
-			continue
-		}
-		if !preRes.Continue {
-			reason := preRes.Reason
-			if reason == "" {
-				reason = "blocked by pre-hook"
-			}
-			latencyMS := time.Since(started).Milliseconds()
-			emitToolFailed(ctx, l.audit, sessionID, parentSubID, server, call.Name, dispatchArgs,
-				"Tool blocked: "+reason, latencyMS)
-			l.hooks.RunPostToolUse(ctx, PostToolUseEvent{
-				SessionID: sessionID,
-				Tool:      call.Name,
-				Server:    server,
-				Args:      dispatchArgs,
-				Error:     "Tool blocked: " + reason,
-				LatencyMS: latencyMS,
-			})
-			out = append(out, toolResult{
-				ToolUseID: call.ID,
-				Server:    server,
-				Tool:      call.Name,
-				Output:    "Tool blocked: " + reason,
-				IsError:   true,
-			})
-			continue
-		}
-		if preRes.Args != nil {
-			dispatchArgs = preRes.Args
-		}
-
-		// Dispatch.
-		raw, callErr := l.pool.Call(ctx, server, call.Name, dispatchArgs)
-		latencyMS := time.Since(started).Milliseconds()
-		if callErr != nil {
-			emitToolFailed(ctx, l.audit, sessionID, parentSubID, server, call.Name, dispatchArgs,
-				callErr.Error(), latencyMS)
-			l.hooks.RunPostToolUse(ctx, PostToolUseEvent{
-				SessionID: sessionID,
-				Tool:      call.Name,
-				Server:    server,
-				Args:      dispatchArgs,
-				Error:     callErr.Error(),
-				LatencyMS: latencyMS,
-			})
-			out = append(out, toolResult{
-				ToolUseID: call.ID,
-				Server:    server,
-				Tool:      call.Name,
-				Output:    callErr.Error(),
-				IsError:   true,
-			})
-			continue
-		}
-		emitToolInvoked(ctx, l.audit, sessionID, parentSubID, server, call.Name, dispatchArgs, latencyMS)
-		l.hooks.RunPostToolUse(ctx, PostToolUseEvent{
-			SessionID: sessionID,
-			Tool:      call.Name,
-			Server:    server,
-			Args:      dispatchArgs,
-			Result:    json.RawMessage(raw),
-			LatencyMS: latencyMS,
-		})
-		out = append(out, toolResult{
-			ToolUseID: call.ID,
-			Server:    server,
-			Tool:      call.Name,
-			Output:    string(raw),
-		})
-	}
-	return out, nil
-}
-
 // resolveServer scans the pool's tool list for a name match. The MCP
 // catalog is small (single-digit servers, double-digit tools) so a
 // linear scan is fine; if that ever changes we'll cache. Returns
@@ -476,12 +305,20 @@ func assistantMessageFromResponse(resp *corellm.Response) corellm.Message {
 // result back to the model. The tool_data field carries a structured
 // payload so adapter-specific translation (Anthropic tool_result block
 // vs OpenAI tool message) can read both the tool_use_id and the body.
+//
+// Cancelled results carry an extra "cancelled":true flag so adapters
+// that want to render "the user stopped the loop" specially can do so;
+// providers that don't care still see the standard is_error path.
 func toolResultMessage(r toolResult) corellm.Message {
-	payload, _ := json.Marshal(map[string]any{
+	envelope := map[string]any{
 		"tool_use_id": r.ToolUseID,
 		"is_error":    r.IsError,
 		"output":      r.Output,
-	})
+	}
+	if r.Cancelled {
+		envelope["cancelled"] = true
+	}
+	payload, _ := json.Marshal(envelope)
 	return corellm.Message{
 		Role: corellm.RoleTool,
 		Content: []corellm.ContentPart{{

@@ -68,4 +68,10 @@ type toolResult struct {
 	Tool      string
 	Output    string // serialized result; error message on failure
 	IsError   bool
+	// Cancelled marks results synthesised because the host context was
+	// cancelled mid-dispatch. Surfaced to the model via the tool_result
+	// envelope's `cancelled` flag so it can distinguish a genuine tool
+	// failure from "the user clicked Stop" — and surfaced to audit /
+	// hooks so the post_tool_use lifecycle still fires for the call.
+	Cancelled bool
 }
