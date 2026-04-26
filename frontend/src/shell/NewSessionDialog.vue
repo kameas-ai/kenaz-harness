@@ -35,6 +35,55 @@ const submitting = ref(false);
 const errorMsg = ref<string | null>(null);
 const selected = ref<ModelChoice | null>(null);
 
+// Starting-context attachment state. The user picks a small markdown /
+// text file; we read it client-side and (depending on the kind toggle)
+// either persist it as the session's system prompt or append it as the
+// first user message after creation.
+type ContextKind = 'system' | 'user_seed';
+const MAX_CONTEXT_BYTES = 64 * 1024;
+const contextContent = ref<string>('');
+const contextFileName = ref<string>('');
+const contextByteSize = ref<number>(0);
+const contextKind = ref<ContextKind>('system');
+const contextError = ref<string | null>(null);
+
+const contextTokenEstimate = computed(() => {
+  if (!contextContent.value) return 0;
+  return Math.ceil(contextContent.value.length / 4);
+});
+
+function clearContext() {
+  contextContent.value = '';
+  contextFileName.value = '';
+  contextByteSize.value = 0;
+  contextError.value = null;
+}
+
+async function onFileChange(evt: Event) {
+  const target = evt.target as HTMLInputElement;
+  const file = target.files?.[0];
+  if (!file) return;
+  contextError.value = null;
+  if (file.size > MAX_CONTEXT_BYTES) {
+    contextError.value = `File too large (${file.size.toLocaleString()} bytes); max 64 KiB.`;
+    target.value = '';
+    return;
+  }
+  try {
+    const text = await file.text();
+    contextContent.value = text;
+    contextFileName.value = file.name;
+    contextByteSize.value = file.size;
+  } catch (err) {
+    contextError.value = err instanceof Error ? err.message : String(err);
+    contextContent.value = '';
+    contextFileName.value = '';
+    contextByteSize.value = 0;
+  }
+  // Clear the input value so re-selecting the same file fires change.
+  target.value = '';
+}
+
 const choices = computed<ModelChoice[]>(() =>
   flattenChoices(providers.value),
 );
@@ -72,6 +121,8 @@ watch(
     if (open) {
       name.value = 'New session';
       selected.value = null;
+      contextKind.value = 'system';
+      clearContext();
       void loadProviders();
     }
   },
@@ -110,6 +161,26 @@ async function onSubmit() {
       );
     } catch {
       /* localStorage unavailable — soft-fail */
+    }
+    // Apply the starting context if one was attached. system => store
+    // as the invisible system prompt; user_seed => append as the
+    // visible first user turn AND persist the kind so the rail UI can
+    // render context-attached badges later.
+    if (contextContent.value) {
+      if (contextKind.value === 'system') {
+        await client.sessions.setSystemPrompt(
+          session.id,
+          contextContent.value,
+          'system',
+        );
+      } else {
+        await client.sessions.appendMessage(
+          session.id,
+          'user',
+          contextContent.value,
+        );
+        await client.sessions.setSystemPrompt(session.id, '', 'user_seed');
+      }
     }
     emit('close');
     await router.push(`/sessions/${session.id}`);
@@ -223,6 +294,85 @@ const isSelected = (c: ModelChoice) =>
               </div>
             </div>
           </div>
+        </div>
+
+        <div>
+          <span class="block text-[11px] uppercase tracking-[0.18em] text-ink-subtle">
+            Starting context (optional)
+          </span>
+          <p class="mt-1 text-[11px] text-ink-dim">
+            Attach a Markdown / text file to seed the conversation. Max 64 KiB.
+          </p>
+          <div class="mt-2 flex items-center gap-2">
+            <label
+              class="cursor-pointer rounded-sm border border-border-muted bg-surface-1 px-2.5 py-1 text-xs text-ink hover:bg-surface-2"
+              :data-testid="'new-session-context-picker'"
+            >
+              <input
+                type="file"
+                class="hidden"
+                accept=".md,.txt,.json,.yaml,.yml"
+                @change="onFileChange"
+              />
+              Choose file…
+            </label>
+            <button
+              v-if="contextContent"
+              type="button"
+              class="rounded-sm border border-border-muted px-2 py-1 text-[11px] text-ink-dim hover:text-ink"
+              :data-testid="'new-session-context-clear'"
+              @click="clearContext"
+            >
+              Clear
+            </button>
+          </div>
+          <div
+            v-if="contextContent"
+            class="mt-2 rounded-sm border border-border-muted bg-surface-1 px-3 py-2 text-[11px] text-ink"
+            :data-testid="'new-session-context-summary'"
+          >
+            <div class="font-mono">{{ contextFileName }}</div>
+            <div class="mt-0.5 text-ink-dim">
+              {{ contextByteSize.toLocaleString() }} bytes ·
+              ~{{ contextTokenEstimate }} tokens
+            </div>
+          </div>
+          <div
+            v-if="contextError"
+            class="mt-2 rounded-sm border border-signal-danger bg-surface-1 px-3 py-2 text-[11px] text-signal-danger"
+            role="alert"
+          >
+            {{ contextError }}
+          </div>
+          <fieldset class="mt-3 space-y-1.5">
+            <legend class="text-[10px] uppercase tracking-[0.18em] text-ink-subtle">
+              Inject as
+            </legend>
+            <label class="flex items-center gap-2 text-xs text-ink">
+              <input
+                type="radio"
+                name="new-session-context-kind"
+                value="system"
+                :checked="contextKind === 'system'"
+                :data-testid="'new-session-context-kind-system'"
+                @change="contextKind = 'system'"
+              />
+              <span>System prompt</span>
+              <span class="text-ink-dim">(invisible, prepended on every send)</span>
+            </label>
+            <label class="flex items-center gap-2 text-xs text-ink">
+              <input
+                type="radio"
+                name="new-session-context-kind"
+                value="user_seed"
+                :checked="contextKind === 'user_seed'"
+                :data-testid="'new-session-context-kind-user-seed'"
+                @change="contextKind = 'user_seed'"
+              />
+              <span>First user message</span>
+              <span class="text-ink-dim">(visible in transcript)</span>
+            </label>
+          </fieldset>
         </div>
 
         <div
