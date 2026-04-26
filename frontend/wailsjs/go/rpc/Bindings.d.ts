@@ -109,9 +109,11 @@ export function MCP_StopStream(arg1:string):Promise<void>;
 
 export function Memory_Forget(arg1:string):Promise<void>;
 
-export function Memory_ListChunks():Promise<Array<memory.Chunk>>;
+export function Memory_ListChunks(arg1:memory.ListFilter):Promise<Array<memory.Chunk>>;
 
-export function Memory_RememberMessage(arg1:string,arg2:string):Promise<string>;
+export function Memory_PromoteScope(arg1:string,arg2:string,arg3:string):Promise<string>;
+
+export function Memory_RememberMessage(arg1:string,arg2:string,arg3:string):Promise<string>;
 
 export function Policy_Explain(arg1:Record<string, any>):Promise<policy.Denial>;
 

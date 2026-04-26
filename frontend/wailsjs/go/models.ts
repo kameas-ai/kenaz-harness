@@ -461,8 +461,16 @@ export namespace memory {
 	export class Chunk {
 	    id: string;
 	    sessionId?: string;
+	    projectId?: string;
+	    scopeKind: string;
+	    scopeId: string;
 	    sourceTurn?: string;
 	    content: string;
+	    contentHash: string;
+	    toolName?: string;
+	    filesRead?: string[];
+	    filesModified?: string[];
+	    title?: string;
 	    // Go type: time
 	    createdAt: any;
 	
@@ -474,8 +482,16 @@ export namespace memory {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.id = source["id"];
 	        this.sessionId = source["sessionId"];
+	        this.projectId = source["projectId"];
+	        this.scopeKind = source["scopeKind"];
+	        this.scopeId = source["scopeId"];
 	        this.sourceTurn = source["sourceTurn"];
 	        this.content = source["content"];
+	        this.contentHash = source["contentHash"];
+	        this.toolName = source["toolName"];
+	        this.filesRead = source["filesRead"];
+	        this.filesModified = source["filesModified"];
+	        this.title = source["title"];
 	        this.createdAt = this.convertValues(source["createdAt"], null);
 	    }
 	
@@ -496,6 +512,20 @@ export namespace memory {
 		    }
 		    return a;
 		}
+	}
+	export class ListFilter {
+	    scopeKind?: string;
+	    scopeId?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ListFilter(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.scopeKind = source["scopeKind"];
+	        this.scopeId = source["scopeId"];
+	    }
 	}
 
 }

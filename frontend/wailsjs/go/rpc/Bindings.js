@@ -186,12 +186,16 @@ export function Memory_Forget(arg1) {
   return window['go']['rpc']['Bindings']['Memory_Forget'](arg1);
 }
 
-export function Memory_ListChunks() {
-  return window['go']['rpc']['Bindings']['Memory_ListChunks']();
+export function Memory_ListChunks(arg1) {
+  return window['go']['rpc']['Bindings']['Memory_ListChunks'](arg1);
 }
 
-export function Memory_RememberMessage(arg1, arg2) {
-  return window['go']['rpc']['Bindings']['Memory_RememberMessage'](arg1, arg2);
+export function Memory_PromoteScope(arg1, arg2, arg3) {
+  return window['go']['rpc']['Bindings']['Memory_PromoteScope'](arg1, arg2, arg3);
+}
+
+export function Memory_RememberMessage(arg1, arg2, arg3) {
+  return window['go']['rpc']['Bindings']['Memory_RememberMessage'](arg1, arg2, arg3);
 }
 
 export function Policy_Explain(arg1) {
