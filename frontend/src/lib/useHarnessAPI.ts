@@ -117,6 +117,12 @@ export interface UseSessionsResult {
   create(name: string): Promise<Session>;
   rename(id: string, name: string): Promise<void>;
   remove(id: string): Promise<void>;
+  /**
+   * moveToProject sets the session's project membership (empty
+   * projectId detaches it). Refreshes the list afterwards so the
+   * rail re-groups the moved row.
+   */
+  moveToProject(sessionId: string, projectId: string): Promise<void>;
 }
 
 export function useSessions(): UseSessionsResult {
@@ -164,7 +170,12 @@ export function useSessions(): UseSessionsResult {
     await refresh();
   }
 
-  return { list, loading, refresh, create, rename, remove };
+  async function moveToProject(sessionId: string, projectId: string) {
+    await client.sessions.moveToProject(sessionId, projectId);
+    await refresh();
+  }
+
+  return { list, loading, refresh, create, rename, remove, moveToProject };
 }
 
 /**

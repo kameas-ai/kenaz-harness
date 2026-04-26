@@ -241,6 +241,178 @@ describe('LeftRail (project grouping)', () => {
     expect(w.find('[data-testid="project-menu-delete-p1"]').exists()).toBe(true);
   });
 
+  it('moves a session to a project when a session row is dropped on the project header (WP07 T001)', async () => {
+    const projects: Project[] = [
+      {
+        id: 'p1',
+        name: 'Alpha',
+        description: '',
+        createdAt: '',
+        updatedAt: '',
+      },
+    ];
+    const sessions: Session[] = [
+      {
+        id: 's-loose',
+        name: 'loose',
+        createdAt: '',
+        updatedAt: '',
+      },
+    ];
+    const moveCalls: { id: string; projectId: string }[] = [];
+    const { w } = await mountRail({
+      sessions: {
+        list: async () => sessions,
+        get: async (id) => sessions.find((s) => s.id === id) ?? sessions[0]!,
+        create: async (name) => ({ id: 'x', name, createdAt: '', updatedAt: '' }),
+        rename: async () => undefined,
+        delete: async () => undefined,
+        reorder: async () => undefined,
+        startStream: async () => 'sub',
+        stopStream: async () => undefined,
+        listMessages: async () => [],
+        appendMessage: async (id, role, content) => ({
+          id: 'm1',
+          sessionId: id,
+          role,
+          content,
+          createdAt: '',
+        }),
+        saveDraft: async () => undefined,
+        loadDraft: async () => '',
+        setSystemPrompt: async () => undefined,
+        moveToProject: async (id, projectId) => {
+          moveCalls.push({ id, projectId });
+        },
+      },
+      projects: {
+        list: async () => projects,
+        get: async () => projects[0]!,
+        create: async (name) => ({
+          id: 'np',
+          name,
+          description: '',
+          createdAt: '',
+          updatedAt: '',
+        }),
+        rename: async () => undefined,
+        updateDescription: async () => undefined,
+        remove: async () => undefined,
+        addSession: async () => undefined,
+        removeSession: async () => undefined,
+        listSessions: async () => [],
+      },
+    });
+
+    const sessionRow = w.find('[data-testid="session-row-s-loose"]');
+    expect(sessionRow.exists()).toBe(true);
+
+    const dataMap = new Map<string, string>();
+    const dt = {
+      effectAllowed: 'move',
+      dropEffect: 'move',
+      setData(k: string, v: string) {
+        dataMap.set(k, v);
+      },
+      getData(k: string) {
+        return dataMap.get(k) ?? '';
+      },
+    } as unknown as DataTransfer;
+
+    await sessionRow.trigger('dragstart', { dataTransfer: dt });
+    const projectRow = w.find('[data-testid="project-group-p1"] > div');
+    expect(projectRow.exists()).toBe(true);
+    await projectRow.trigger('dragover', { dataTransfer: dt });
+    await projectRow.trigger('drop', { dataTransfer: dt });
+    await flushPromises();
+
+    expect(moveCalls).toEqual([{ id: 's-loose', projectId: 'p1' }]);
+  });
+
+  it('detaches a session when dropped on the Loose header (WP07 T001)', async () => {
+    const projects: Project[] = [
+      {
+        id: 'p1',
+        name: 'Alpha',
+        description: '',
+        createdAt: '',
+        updatedAt: '',
+      },
+    ];
+    const sessions: Session[] = [
+      {
+        id: 's-attached',
+        name: 'attached',
+        createdAt: '',
+        updatedAt: '',
+        projectId: 'p1',
+      },
+    ];
+    const moveCalls: { id: string; projectId: string }[] = [];
+    const { w } = await mountRail({
+      sessions: {
+        list: async () => sessions,
+        get: async (id) => sessions.find((s) => s.id === id) ?? sessions[0]!,
+        create: async (name) => ({ id: 'x', name, createdAt: '', updatedAt: '' }),
+        rename: async () => undefined,
+        delete: async () => undefined,
+        reorder: async () => undefined,
+        startStream: async () => 'sub',
+        stopStream: async () => undefined,
+        listMessages: async () => [],
+        appendMessage: async (id, role, content) => ({
+          id: 'm',
+          sessionId: id,
+          role,
+          content,
+          createdAt: '',
+        }),
+        saveDraft: async () => undefined,
+        loadDraft: async () => '',
+        setSystemPrompt: async () => undefined,
+        moveToProject: async (id, projectId) => {
+          moveCalls.push({ id, projectId });
+        },
+      },
+      projects: {
+        list: async () => projects,
+        get: async () => projects[0]!,
+        create: async (name) => ({
+          id: 'np',
+          name,
+          description: '',
+          createdAt: '',
+          updatedAt: '',
+        }),
+        rename: async () => undefined,
+        updateDescription: async () => undefined,
+        remove: async () => undefined,
+        addSession: async () => undefined,
+        removeSession: async () => undefined,
+        listSessions: async () => [],
+      },
+    });
+
+    const sessionRow = w.find('[data-testid="session-row-s-attached"]');
+    expect(sessionRow.exists()).toBe(true);
+    const dt = {
+      effectAllowed: 'move',
+      dropEffect: 'move',
+      setData() { /* noop */ },
+      getData() { return ''; },
+    } as unknown as DataTransfer;
+
+    await sessionRow.trigger('dragstart', { dataTransfer: dt });
+    const looseHeader = w.find('[data-testid="loose-header"]');
+    expect(looseHeader.exists()).toBe(true);
+    await looseHeader.trigger('dragover', { dataTransfer: dt });
+    await looseHeader.trigger('drop', { dataTransfer: dt });
+    await flushPromises();
+
+    // Empty projectId means "loose".
+    expect(moveCalls).toEqual([{ id: 's-attached', projectId: '' }]);
+  });
+
   it('renders the cascade-delete checkbox in the delete-project modal', async () => {
     const projects: Project[] = [
       {

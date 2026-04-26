@@ -46,6 +46,9 @@ func sessionToView(r session.Record) Session {
 		CreatedAt: r.CreatedAt.UTC().Format(time.RFC3339Nano),
 		UpdatedAt: r.UpdatedAt.UTC().Format(time.RFC3339Nano),
 	}
+	if !r.LastActiveAt.IsZero() {
+		out.LastActiveAt = r.LastActiveAt.UTC().Format(time.RFC3339Nano)
+	}
 	if r.ProjectID != nil {
 		out.ProjectID = *r.ProjectID
 	}

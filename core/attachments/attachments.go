@@ -235,6 +235,12 @@ func (m *Manager) ListResolved(ctx context.Context, reader SessionProjectReader,
 
 // Add inserts a new attachment. ID, CreatedAt, and Position default if
 // zero / negative.
+//
+// TODO(audit-wired): emit a `context.attached` audit event after a
+// successful store.Add. Payload: {attachment_id, scope_kind, scope_id,
+// content_source, kind, position}. Same wiring blocker as
+// projects.Manager.Create — an emitter has to thread through rpc/api.go
+// before this Manager can construct one safely.
 func (m *Manager) Add(ctx context.Context, att Attachment) (Attachment, error) {
 	if !validScopeKind(att.ScopeKind) {
 		return Attachment{}, fmt.Errorf("%w: %q", ErrInvalidScope, att.ScopeKind)

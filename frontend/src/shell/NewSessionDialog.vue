@@ -22,7 +22,16 @@ import { useHarnessClient } from '@/lib/harnessClientContext';
 import { flattenChoices, type ModelChoice } from '@/lib/modelFamily';
 import type { Project, Provider } from '@/lib/types';
 
-const props = defineProps<{ open: boolean }>();
+const props = defineProps<{
+  open: boolean;
+  /**
+   * Optional pre-selection of the project to scope the new session
+   * under. Used by ProjectLandingPage's "Start session in this
+   * project" CTA so the user doesn't have to re-pick. Empty / unset
+   * means the project picker defaults to "(none) — loose session".
+   */
+  initialProjectId?: string;
+}>();
 const emit = defineEmits<{ (e: 'close'): void }>();
 
 const client = useHarnessClient();
@@ -160,7 +169,7 @@ watch(
       name.value = 'New session';
       selected.value = null;
       contextKind.value = 'system';
-      selectedProjectId.value = '';
+      selectedProjectId.value = props.initialProjectId ?? '';
       newProjectMode.value = false;
       newProjectName.value = '';
       clearContext();

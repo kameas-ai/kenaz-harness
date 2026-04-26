@@ -35,6 +35,7 @@ const {
   refresh: refreshSessions,
   rename: renameSession,
   remove: removeSession,
+  moveToProject: moveSessionToProject,
 } = useSessions();
 const {
   list: projectList,
@@ -48,6 +49,13 @@ const newSessionDialogOpen = ref(false);
 const deletingId = ref<string | null>(null);
 const renamingId = ref<string | null>(null);
 const renameDraft = ref('');
+
+// WP07 — drag-and-drop session-to-project membership. The dragged
+// session id is captured at dragstart; project headers + the Loose
+// header act as drop targets. drag-over targets are highlighted via
+// `dropTargetId` so the user gets a visual hint during the drag.
+const draggedSessionId = ref<string | null>(null);
+const dropTargetId = ref<string | null>(null); // project id or '__loose__'
 let focusedRenameId: string | null = null;
 function setRenameInputRef(el: Element | null) {
   if (!(el instanceof HTMLInputElement)) {
@@ -329,6 +337,65 @@ async function commitProjectDelete() {
     lastError.value = `Delete project failed: ${msg}`;
   }
 }
+
+// ── drag-and-drop session-to-project (WP07 T001) ─────────────────────
+//
+// HTML5 native DnD, mirroring the AttachmentRow approach in
+// ProjectLandingPage.vue. The session row is draggable; project
+// headers and the Loose group header are drop targets. Drop calls
+// moveToProject, then refreshSessions through the composable.
+//
+// A keyboard-accessible alternative remains available through the
+// per-session menu (rename / delete buttons + future "Move to
+// project" entry — wired separately).
+
+function onSessionDragStart(evt: DragEvent, sessionId: string) {
+  draggedSessionId.value = sessionId;
+  if (evt.dataTransfer) {
+    evt.dataTransfer.effectAllowed = 'move';
+    // Setting data is required on Firefox for the drag to commit.
+    try {
+      evt.dataTransfer.setData('text/x-kenaz-session-id', sessionId);
+    } catch {
+      /* harmless — Firefox 100+ tolerates omission */
+    }
+  }
+}
+
+function onSessionDragEnd() {
+  draggedSessionId.value = null;
+  dropTargetId.value = null;
+}
+
+function onProjectDragOver(evt: DragEvent, projectId: string) {
+  if (!draggedSessionId.value) return;
+  evt.preventDefault();
+  if (evt.dataTransfer) evt.dataTransfer.dropEffect = 'move';
+  dropTargetId.value = projectId;
+}
+
+function onProjectDragLeave(_evt: DragEvent, projectId: string) {
+  if (dropTargetId.value === projectId) dropTargetId.value = null;
+}
+
+async function onProjectDrop(evt: DragEvent, projectId: string) {
+  evt.preventDefault();
+  const sid = draggedSessionId.value;
+  draggedSessionId.value = null;
+  dropTargetId.value = null;
+  if (!sid) return;
+  // Skip the move when the session is already inside this project.
+  const current = sessionList.value.find((s) => s.id === sid);
+  const currentPid = current?.projectId ?? '';
+  const targetPid = projectId === '__loose__' ? '' : projectId;
+  if (currentPid === targetPid) return;
+  try {
+    await moveSessionToProject(sid, targetPid);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    lastError.value = `Move session failed: ${msg}`;
+  }
+}
 </script>
 
 <template>
@@ -411,7 +478,13 @@ async function commitProjectDelete() {
           :key="project.id"
           :data-testid="`project-group-${project.id}`"
         >
-          <div class="flex items-stretch gap-1">
+          <div
+            class="flex items-stretch gap-1 rounded-sm"
+            :class="dropTargetId === project.id ? 'bg-accent-glow ring-1 ring-accent' : ''"
+            @dragover="onProjectDragOver($event, project.id)"
+            @dragleave="onProjectDragLeave($event, project.id)"
+            @drop="onProjectDrop($event, project.id)"
+          >
             <template v-if="renamingProjectId === project.id">
               <input
                 :ref="setProjectRenameRef"
@@ -462,6 +535,10 @@ async function commitProjectDelete() {
               v-for="session in sessionsFor(project.id)"
               :key="session.id"
               class="flex items-stretch gap-1"
+              :draggable="renamingId !== session.id"
+              :data-testid="`session-row-${session.id}`"
+              @dragstart="onSessionDragStart($event, session.id)"
+              @dragend="onSessionDragEnd"
             >
               <template v-if="renamingId === session.id">
                 <input
@@ -527,8 +604,12 @@ async function commitProjectDelete() {
         class="mt-3"
       >
         <div
-          class="px-2 py-1 font-ui text-[10px] uppercase tracking-[0.18em] text-ink-subtle"
+          class="px-2 py-1 rounded-sm font-ui text-[10px] uppercase tracking-[0.18em] text-ink-subtle"
+          :class="dropTargetId === '__loose__' ? 'bg-accent-glow ring-1 ring-accent' : ''"
           data-testid="loose-header"
+          @dragover="onProjectDragOver($event, '__loose__')"
+          @dragleave="onProjectDragLeave($event, '__loose__')"
+          @drop="onProjectDrop($event, '__loose__')"
         >
           Loose
         </div>
@@ -537,6 +618,10 @@ async function commitProjectDelete() {
             v-for="session in looseSessions"
             :key="session.id"
             class="flex items-stretch gap-1"
+            :draggable="renamingId !== session.id"
+            :data-testid="`session-row-${session.id}`"
+            @dragstart="onSessionDragStart($event, session.id)"
+            @dragend="onSessionDragEnd"
           >
             <template v-if="renamingId === session.id">
               <input

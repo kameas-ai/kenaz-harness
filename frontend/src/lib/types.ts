@@ -12,6 +12,12 @@ export interface Session {
   name: string;
   createdAt: string;
   updatedAt: string;
+  /**
+   * Most recent activity timestamp. Optional because the projects-view
+   * Session subset omits the field on older payloads; the rail renders
+   * a fallback dash when missing.
+   */
+  lastActiveAt?: string;
   /** Optional starting context attached to the session (Mission A). */
   systemPrompt?: string;
   /**
