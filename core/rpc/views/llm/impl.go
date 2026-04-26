@@ -27,6 +27,7 @@ import (
 	corellm "github.com/sigil-tech/kaneaz-harness/core/llm"
 	"github.com/sigil-tech/kaneaz-harness/core/llm/personal"
 	"github.com/sigil-tech/kaneaz-harness/core/logging"
+	"github.com/sigil-tech/kaneaz-harness/core/toolloop"
 )
 
 // StreamSink is the minimal contract the concrete LLMConnectorAPI uses
@@ -169,6 +170,10 @@ type API struct {
 	history   SessionMessageReader
 	historyW  SessionMessageWriter
 	hooks     HookRunner
+	// toolLoop closes the LLM ↔ tool ↔ LLM cycle when the adapter
+	// signals FinishReason == "tool_use". nil disables the loop —
+	// the chat path stays as it was before WP01.
+	toolLoop *toolloop.Loop
 
 	mu             sync.Mutex
 	subs           map[string]*subscription
@@ -189,6 +194,10 @@ type subscription struct {
 	userTurn string
 	model    string
 	kind     string
+	// req is the GenerationRequest used to open the initial stream.
+	// pump passes it to the toolloop so the loop can build augmented
+	// requests when re-invoking the registry after tool dispatch.
+	req corellm.GenerationRequest
 }
 
 // Config bundles construction options.
@@ -216,6 +225,12 @@ type Config struct {
 	// it is now a preinstalled pre_send hook (memory.retrieve) that the
 	// rpc layer wires into the runner's BuiltinRegistry.
 	Hooks HookRunner
+	// ToolLoop, when non-nil, runs after the initial stream closes
+	// with FinishReason == "tool_use". The loop dispatches each tool
+	// call against the configured MCP pool and re-invokes the
+	// registry until the model returns a non-tool_use finish. nil
+	// preserves WP00 chat-only behavior.
+	ToolLoop *toolloop.Loop
 }
 
 // New constructs a concrete API.
@@ -234,6 +249,7 @@ func New(cfg Config) *API {
 		history:   cfg.History,
 		historyW:  cfg.HistoryWriter,
 		hooks:     cfg.Hooks,
+		toolLoop:  cfg.ToolLoop,
 		subs:      map[string]*subscription{},
 		validated: map[string]bool{},
 	}
@@ -483,6 +499,7 @@ func (a *API) StartStream(ctx context.Context, profileID, sessionID, modelOverri
 		userTurn:  userTurn,
 		model:     effectiveModel,
 		kind:      kind,
+		req:       req,
 	}
 	a.subs[id] = sub
 	a.mu.Unlock()
@@ -556,10 +573,21 @@ func (a *API) pump(sub *subscription) {
 	// the full conversation. We persist on completed AND on
 	// stop-called (partial turn is still useful context); skip on
 	// backend-error since the response is unreliable.
+	//
+	// One exception: if the response carries tool_use calls AND a
+	// toolloop is wired, the loop owns assistant persistence (it
+	// records the full tool_use envelope plus every subsequent turn).
+	// Letting the pump also write would duplicate the assistant turn
+	// and partially obscure the tool calls.
+	deferAssistantToLoop := a.toolLoop != nil &&
+		err == nil &&
+		resp.FinishReason == "tool_use" &&
+		len(resp.ToolCalls) > 0
 	if a.historyW != nil &&
 		sub.sessionID != "" &&
 		len(assistantText) > 0 &&
-		closed.Reason != "backend-error" {
+		closed.Reason != "backend-error" &&
+		!deferAssistantToLoop {
 		if err := a.historyW.AppendMessage(
 			context.Background(),
 			sub.sessionID,
@@ -598,6 +626,28 @@ func (a *API) pump(sub *subscription) {
 			Kind:          sub.kind,
 			FinishReason:  closed.Reason,
 		})
+	}
+
+	// Hand off to the toolloop when the model asked for tools and one
+	// is wired. We deliberately run *after* the stream-closed event so
+	// the chat surface gets the canonical close signal for the initial
+	// turn before the orchestrator loops; subsequent turns produced
+	// inside the loop don't surface as deltas in WP01 (streaming
+	// feedback during the loop lands in WP04).
+	if deferAssistantToLoop {
+		if loopErr := a.toolLoop.Run(
+			context.Background(),
+			sub.sessionID,
+			sub.id,
+			&resp,
+			sub.req,
+		); loopErr != nil {
+			log.Warn("llm.stream.toolloop_failed",
+				"sub_id", sub.id,
+				"session_id", sub.sessionID,
+				"err", loopErr.Error(),
+			)
+		}
 	}
 }
 
