@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 
 	"github.com/sigil-tech/kaneaz-harness/core"
+	corecontexts "github.com/sigil-tech/kaneaz-harness/core/contexts"
 	"github.com/sigil-tech/kaneaz-harness/core/event"
 	"github.com/sigil-tech/kaneaz-harness/core/hooks"
 	corellm "github.com/sigil-tech/kaneaz-harness/core/llm"
@@ -24,6 +25,7 @@ import (
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/a2a"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/audit"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/bundle"
+	contextsview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/contexts"
 	contextview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/contextview"
 	hooksview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/hooks"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/llm"
@@ -56,6 +58,7 @@ type HarnessAPI interface {
 	Sessions() sessions.SessionsAPI
 	Trust() trust.TrustAPI
 	Context() contextview.ContextAPI
+	Contexts() contextsview.ContextsAPI
 	Bundle() bundle.BundleAPI
 	Policy() policy.PolicyAPI
 	Audit() audit.AuditAPI
@@ -108,6 +111,7 @@ type API struct {
 	sessionsAPI sessions.SessionsAPI
 	trustAPI    trust.TrustAPI
 	contextAPI  contextview.ContextAPI
+	contextsAPI contextsview.ContextsAPI
 	bundleAPI    bundle.BundleAPI
 	policyAPI    policy.PolicyAPI
 	auditImpl    *audit.API
@@ -173,6 +177,7 @@ func New(c *core.Core) *API {
 	a.auditImpl = audit.NewAPI(audit.WithSubscriber(a.broker))
 	a.auditAPI = a.auditImpl
 	a.mcpAPI = mcp.NewAPI(mcp.WithSubscriber(a.broker))
+	a.contextsAPI = newContextsAPI(c)
 
 	// Settings: file-backed when we have a user config dir; in-memory
 	// fallback for the test harness path so New(nil) keeps working.
@@ -290,6 +295,25 @@ func newLLMStack(c *core.Core, broker *StreamBroker, store personal.Store, hooks
 		HistoryWriter: historyAdapter,
 		Hooks:         hooksRunner,
 	})
+}
+
+// newContextsAPI opens the Context Library rooted at <DataDir>/contexts/
+// and wraps it behind the view-scoped surface. A nil core (test path)
+// or any open failure soft-fails to a nil-library API — Contexts_List
+// returns ErrLibraryUnavailable so the frontend's empty-state card is
+// the user-visible behaviour instead of a hard chassis crash.
+func newContextsAPI(c *core.Core) contextsview.ContextsAPI {
+	if c == nil || c.DataDir() == "" {
+		return contextsview.New(nil)
+	}
+	lib, err := corecontexts.Open(filepath.Join(c.DataDir(), "contexts"))
+	if err != nil {
+		return contextsview.New(nil)
+	}
+	// SweepTrash is best-effort on boot — a stale trash directory
+	// shouldn't keep the surface from coming up.
+	_ = lib.SweepTrash()
+	return contextsview.New(lib)
 }
 
 // openMemoryStore opens the long-term-memory vector DB at
@@ -744,6 +768,12 @@ func (a *API) Workflow() workflow.WorkflowAPI    { return a.workflowAPI }
 func (a *API) Sessions() sessions.SessionsAPI    { return a.sessionsAPI }
 func (a *API) Trust() trust.TrustAPI             { return a.trustAPI }
 func (a *API) Context() contextview.ContextAPI   { return a.contextAPI }
+func (a *API) Contexts() contextsview.ContextsAPI {
+	if a.contextsAPI == nil {
+		return contextsview.New(nil)
+	}
+	return a.contextsAPI
+}
 func (a *API) Bundle() bundle.BundleAPI          { return a.bundleAPI }
 func (a *API) Policy() policy.PolicyAPI          { return a.policyAPI }
 func (a *API) Audit() audit.AuditAPI             { return a.auditAPI }
