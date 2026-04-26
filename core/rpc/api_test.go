@@ -14,6 +14,7 @@ import (
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/mcp"
 	memoryview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/memory"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/policy"
+	projectsview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/projects"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/sessions"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/settings"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/trust"
@@ -37,6 +38,7 @@ type fakeHarnessAPI struct {
 	settingsAPI settings.SettingsAPI
 	memoryAPI   memoryview.MemoryAPI
 	hooksAPI    hooksview.HooksAPI
+	projectsAPI projectsview.ProjectsAPI
 }
 
 func (f *fakeHarnessAPI) ShellStatus(_ context.Context) (ShellStatus, error) {
@@ -57,6 +59,7 @@ func (f *fakeHarnessAPI) Audit() audit.AuditAPI                      { return f.
 func (f *fakeHarnessAPI) Settings() settings.SettingsAPI             { return f.settingsAPI }
 func (f *fakeHarnessAPI) Memory() memoryview.MemoryAPI                { return f.memoryAPI }
 func (f *fakeHarnessAPI) Hooks() hooksview.HooksAPI                   { return f.hooksAPI }
+func (f *fakeHarnessAPI) Projects() projectsview.ProjectsAPI          { return f.projectsAPI }
 
 // Compile-time interface witness (plan §4.2).
 var _ HarnessAPI = (*fakeHarnessAPI)(nil)
@@ -102,6 +105,9 @@ func TestViewAccessorStability(t *testing.T) {
 	}
 	if api.Settings() != api.Settings() {
 		t.Errorf("Settings() returned different pointers across calls")
+	}
+	if api.Projects() != api.Projects() {
+		t.Errorf("Projects() returned different pointers across calls")
 	}
 }
 

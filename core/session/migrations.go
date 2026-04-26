@@ -24,6 +24,8 @@ const (
 	migrationIDIndexes            = "sessions/0302-sessions-indexes"
 	migrationIDSystemPromptColumn = "sessions/0303-sessions-system-prompt"
 	migrationIDContextKindColumn  = "sessions/0304-sessions-context-kind"
+	migrationIDProjectIDColumn    = "sessions/0306-sessions-project-id"
+	migrationIDProjectsTable      = "sessions/0307-projects-table"
 )
 
 // SQL bodies. Keep the DDL byte-stable: the migration framework hashes
@@ -78,6 +80,22 @@ const (
 	sqlAddContextKindColumn = `
         ALTER TABLE sessions
             ADD COLUMN context_kind TEXT NOT NULL DEFAULT 'system';
+    `
+
+	sqlAddProjectIDColumn = `
+        ALTER TABLE sessions
+            ADD COLUMN project_id TEXT NULL REFERENCES projects(id) ON DELETE SET NULL;
+    `
+
+	sqlCreateProjectsTable = `
+        CREATE TABLE IF NOT EXISTS projects (
+            id          TEXT PRIMARY KEY,
+            name        TEXT NOT NULL,
+            description TEXT NOT NULL DEFAULT '',
+            created_at  INTEGER NOT NULL,
+            updated_at  INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_projects_name ON projects (name);
     `
 )
 
@@ -171,6 +189,48 @@ func Migrations() []migrations.Migration {
 				return nil
 			},
 			Down: func(ctx context.Context, tx migrations.WriteTx) error {
+				return nil
+			},
+		},
+		{
+			ID:            migrationIDProjectIDColumn,
+			Version:       306,
+			OwningMission: OwningMission,
+			UpSource:      sqlAddProjectIDColumn,
+			Up: func(ctx context.Context, tx migrations.WriteTx) error {
+				for _, stmt := range splitSQL(sqlAddProjectIDColumn) {
+					if _, err := tx.Exec(ctx, stmt); err != nil {
+						return err
+					}
+				}
+				return nil
+			},
+			Down: func(ctx context.Context, tx migrations.WriteTx) error {
+				return nil
+			},
+		},
+		{
+			ID:            migrationIDProjectsTable,
+			Version:       307,
+			OwningMission: OwningMission,
+			UpSource:      sqlCreateProjectsTable,
+			Up: func(ctx context.Context, tx migrations.WriteTx) error {
+				for _, stmt := range splitSQL(sqlCreateProjectsTable) {
+					if _, err := tx.Exec(ctx, stmt); err != nil {
+						return err
+					}
+				}
+				return nil
+			},
+			Down: func(ctx context.Context, tx migrations.WriteTx) error {
+				for _, stmt := range []string{
+					"DROP INDEX IF EXISTS idx_projects_name",
+					"DROP TABLE IF EXISTS projects",
+				} {
+					if _, err := tx.Exec(ctx, stmt); err != nil {
+						return err
+					}
+				}
 				return nil
 			},
 		},

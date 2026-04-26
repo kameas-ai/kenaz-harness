@@ -43,6 +43,7 @@ type Store interface {
 	Create(ctx context.Context, r Record) error
 	Get(ctx context.Context, id string) (Record, error)
 	List(ctx context.Context) ([]Record, error)
+	ListByProject(ctx context.Context, projectID string) ([]Record, error)
 	Rename(ctx context.Context, id, name string, now time.Time) error
 	Delete(ctx context.Context, id string) error
 	Reorder(ctx context.Context, ids []string, now time.Time) error
@@ -50,6 +51,7 @@ type Store interface {
 	UpdateDraft(ctx context.Context, id, draft string, now time.Time) error
 	UpdateScrollPosition(ctx context.Context, id string, pos int64, now time.Time) error
 	SetSystemPrompt(ctx context.Context, id, content, kind string, now time.Time) error
+	SetProject(ctx context.Context, id string, projectID *string, now time.Time) error
 
 	AppendMessage(ctx context.Context, m Message) (Message, error)
 	ListMessages(ctx context.Context, sessionID string) ([]Message, error)
@@ -117,6 +119,43 @@ func (s *memStore) List(_ context.Context) ([]Record, error) {
 		return out[i].Position < out[j].Position
 	})
 	return out, nil
+}
+
+func (s *memStore) ListByProject(_ context.Context, projectID string) ([]Record, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]Record, 0)
+	for _, r := range s.records {
+		if r.ArchivedAt != nil {
+			continue
+		}
+		if r.ProjectID == nil || *r.ProjectID != projectID {
+			continue
+		}
+		out = append(out, r)
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		return out[i].Position < out[j].Position
+	})
+	return out, nil
+}
+
+func (s *memStore) SetProject(_ context.Context, id string, projectID *string, now time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	r, ok := s.records[id]
+	if !ok {
+		return ErrSessionNotFound
+	}
+	if projectID == nil {
+		r.ProjectID = nil
+	} else {
+		v := *projectID
+		r.ProjectID = &v
+	}
+	r.UpdatedAt = now
+	s.records[id] = r
+	return nil
 }
 
 func (s *memStore) Rename(_ context.Context, id, name string, now time.Time) error {
@@ -313,12 +352,16 @@ func (s *sqlStore) Create(ctx context.Context, r Record) error {
 		if r.ArchivedAt != nil {
 			archived = r.ArchivedAt.UnixNano()
 		}
+		var projectID any
+		if r.ProjectID != nil {
+			projectID = *r.ProjectID
+		}
 		_, err := tx.Exec(ctx, `
             INSERT INTO sessions
                 (id, name, created_at, updated_at, last_active_at,
                  position, draft, scroll_position, archived_at,
-                 system_prompt, context_kind)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 system_prompt, context_kind, project_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `,
 			r.ID,
 			r.Name,
@@ -331,6 +374,7 @@ func (s *sqlStore) Create(ctx context.Context, r Record) error {
 			archived,
 			r.SystemPrompt,
 			r.ContextKind,
+			projectID,
 		)
 		return err
 	})
@@ -339,7 +383,7 @@ func (s *sqlStore) Create(ctx context.Context, r Record) error {
 const sqlSelectSession = `
     SELECT id, name, created_at, updated_at, last_active_at,
            position, draft, scroll_position, archived_at,
-           system_prompt, context_kind
+           system_prompt, context_kind, project_id
     FROM sessions
 `
 
@@ -371,6 +415,41 @@ func (s *sqlStore) List(ctx context.Context) ([]Record, error) {
 		out = append(out, r)
 	}
 	return out, rows.Err()
+}
+
+func (s *sqlStore) ListByProject(ctx context.Context, projectID string) ([]Record, error) {
+	rows, err := s.db.Reader().Query(ctx,
+		sqlSelectSession+" WHERE archived_at IS NULL AND project_id = ? ORDER BY position ASC",
+		projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Record
+	for rows.Next() {
+		r, err := scanRecord(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+func (s *sqlStore) SetProject(ctx context.Context, id string, projectID *string, now time.Time) error {
+	return s.db.WriteTx(ctx, func(tx WriteTx) error {
+		var v any
+		if projectID != nil {
+			v = *projectID
+		}
+		res, err := tx.Exec(ctx,
+			"UPDATE sessions SET project_id = ?, updated_at = ? WHERE id = ?",
+			v, now.UnixNano(), id)
+		if err != nil {
+			return err
+		}
+		return rowsAffectedOrNotFound(res)
+	})
 }
 
 func (s *sqlStore) Rename(ctx context.Context, id, name string, now time.Time) error {
@@ -585,6 +664,7 @@ func scanRecord(sc interface{ Scan(dest ...any) error }) (Record, error) {
 		updatedAt  int64
 		lastActive int64
 		archived   sql.NullInt64
+		projectID  sql.NullString
 	)
 	if err := sc.Scan(
 		&r.ID, &r.Name,
@@ -592,6 +672,7 @@ func scanRecord(sc interface{ Scan(dest ...any) error }) (Record, error) {
 		&r.Position, &r.Draft, &r.ScrollPosition,
 		&archived,
 		&r.SystemPrompt, &r.ContextKind,
+		&projectID,
 	); err != nil {
 		return Record{}, err
 	}
@@ -601,6 +682,10 @@ func scanRecord(sc interface{ Scan(dest ...any) error }) (Record, error) {
 	if archived.Valid {
 		t := time.Unix(0, archived.Int64).UTC()
 		r.ArchivedAt = &t
+	}
+	if projectID.Valid {
+		v := projectID.String
+		r.ProjectID = &v
 	}
 	return r, nil
 }

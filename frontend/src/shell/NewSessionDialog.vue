@@ -20,7 +20,7 @@ import { useRouter } from 'vue-router';
 import Button from '@/components/ui/Button.vue';
 import { useHarnessClient } from '@/lib/harnessClientContext';
 import { flattenChoices, type ModelChoice } from '@/lib/modelFamily';
-import type { Provider } from '@/lib/types';
+import type { Project, Provider } from '@/lib/types';
 
 const props = defineProps<{ open: boolean }>();
 const emit = defineEmits<{ (e: 'close'): void }>();
@@ -34,6 +34,12 @@ const loadingProviders = ref(false);
 const submitting = ref(false);
 const errorMsg = ref<string | null>(null);
 const selected = ref<ModelChoice | null>(null);
+
+// Project picker state. Empty string => loose session.
+const projects = ref<readonly Project[]>([]);
+const selectedProjectId = ref<string>('');
+const newProjectMode = ref(false);
+const newProjectName = ref('');
 
 // Starting-context attachment state. The user picks a small markdown /
 // text file; we read it client-side and (depending on the kind toggle)
@@ -115,6 +121,38 @@ async function loadProviders() {
   }
 }
 
+async function loadProjects() {
+  try {
+    projects.value = await client.projects.list();
+  } catch {
+    projects.value = [];
+  }
+}
+
+function onProjectSelectChange(evt: Event) {
+  const v = (evt.target as HTMLSelectElement).value;
+  if (v === '__new__') {
+    newProjectMode.value = true;
+    newProjectName.value = '';
+  } else {
+    newProjectMode.value = false;
+    selectedProjectId.value = v;
+  }
+}
+
+async function createInlineProject(): Promise<string> {
+  const name = newProjectName.value.trim();
+  if (!name) {
+    return '';
+  }
+  const created = await client.projects.create(name);
+  await loadProjects();
+  selectedProjectId.value = created.id;
+  newProjectMode.value = false;
+  newProjectName.value = '';
+  return created.id;
+}
+
 watch(
   () => props.open,
   (open) => {
@@ -122,8 +160,12 @@ watch(
       name.value = 'New session';
       selected.value = null;
       contextKind.value = 'system';
+      selectedProjectId.value = '';
+      newProjectMode.value = false;
+      newProjectName.value = '';
       clearContext();
       void loadProviders();
+      void loadProjects();
     }
   },
 );
@@ -147,7 +189,14 @@ async function onSubmit() {
   submitting.value = true;
   errorMsg.value = null;
   try {
+    let projectId = selectedProjectId.value;
+    if (newProjectMode.value) {
+      projectId = await createInlineProject();
+    }
     const session = await client.sessions.create(trimmedName);
+    if (projectId) {
+      await client.sessions.moveToProject(session.id, projectId);
+    }
     // Stash the (provider, model) so SessionsView can seed the
     // active selection on first render — backend Record doesn't
     // carry these fields yet.
@@ -223,6 +272,44 @@ const isSelected = (c: ModelChoice) =>
       </header>
 
       <div class="flex-1 overflow-y-auto px-5 py-4 space-y-4 font-ui">
+        <div>
+          <label
+            for="new-session-project"
+            class="block text-[11px] uppercase tracking-[0.18em] text-ink-subtle"
+          >
+            Project
+          </label>
+          <select
+            v-if="!newProjectMode"
+            id="new-session-project"
+            :value="selectedProjectId"
+            class="mt-1 w-full rounded-sm border border-border-muted bg-surface-1 px-2.5 py-1.5 text-sm text-ink focus:border-accent focus:outline-none"
+            data-testid="new-session-project"
+            @change="onProjectSelectChange"
+          >
+            <option value="">(none) — loose session</option>
+            <option v-for="p in projects" :key="p.id" :value="p.id">
+              {{ p.name }}
+            </option>
+            <option value="__new__">+ New project…</option>
+          </select>
+          <div v-else class="mt-1 flex gap-2">
+            <input
+              v-model="newProjectName"
+              class="flex-1 rounded-sm border border-accent bg-surface-2 px-2.5 py-1.5 text-sm text-ink focus:outline-none"
+              placeholder="Project name…"
+              data-testid="new-session-new-project-input"
+              autofocus
+            />
+            <button
+              type="button"
+              class="text-[11px] text-ink-dim hover:text-ink"
+              @click="newProjectMode = false; newProjectName = ''"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
         <div>
           <label
             for="new-session-name"

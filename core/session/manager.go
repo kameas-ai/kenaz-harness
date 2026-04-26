@@ -25,6 +25,7 @@ const (
 	EventKindSessionScrollSaved      = "session.scroll_saved"
 	EventKindSessionLastActiveBumped = "session.last_active_bumped"
 	EventKindSessionSystemPromptSet  = "session.system_prompt_set"
+	EventKindSessionMovedToProject   = "session.moved_to_project"
 )
 
 // Audit is the narrowed event surface the Manager uses. Unlike
@@ -142,6 +143,12 @@ func NewManager(store Store, opts ...ManagerOption) *Manager {
 // Create allocates a new session with the given display name. The
 // session is appended to the end of the list (highest position + 1).
 func (m *Manager) Create(ctx context.Context, name string) (Record, error) {
+	return m.CreateInProject(ctx, name, nil)
+}
+
+// CreateInProject is Create with an optional project membership. A nil
+// projectID creates a loose session.
+func (m *Manager) CreateInProject(ctx context.Context, name string, projectID *string) (Record, error) {
 	name = strings.TrimSpace(name)
 	if name == "" {
 		return Record{}, ErrInvalidName
@@ -174,6 +181,10 @@ func (m *Manager) Create(ctx context.Context, name string) (Record, error) {
 		LastActiveAt: now,
 		Position:     nextPos,
 	}
+	if projectID != nil {
+		v := *projectID
+		rec.ProjectID = &v
+	}
 	if err := m.store.Create(ctx, rec); err != nil {
 		return Record{}, err
 	}
@@ -193,6 +204,31 @@ func (m *Manager) Get(ctx context.Context, id string) (Record, error) {
 // List returns every non-archived session in display order.
 func (m *Manager) List(ctx context.Context) ([]Record, error) {
 	return m.store.List(ctx)
+}
+
+// ListByProject returns the non-archived sessions belonging to the
+// given project, in display order.
+func (m *Manager) ListByProject(ctx context.Context, projectID string) ([]Record, error) {
+	return m.store.ListByProject(ctx, projectID)
+}
+
+// MoveToProject sets the session's project membership. A nil projectID
+// detaches the session and makes it loose. Errors when the session
+// does not exist.
+func (m *Manager) MoveToProject(ctx context.Context, sessionID string, projectID *string) error {
+	if err := m.store.SetProject(ctx, sessionID, projectID, m.now()); err != nil {
+		return err
+	}
+	payload := map[string]any{
+		"session_id": sessionID,
+	}
+	if projectID != nil {
+		payload["project_id"] = *projectID
+	} else {
+		payload["project_id"] = nil
+	}
+	m.audit.Emit(ctx, EventKindSessionMovedToProject, payload)
+	return nil
 }
 
 // Rename changes a session's display name.

@@ -36,6 +36,7 @@ import (
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/mcp"
 	memoryview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/memory"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/policy"
+	projectsview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/projects"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/sessions"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/settings"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/trust"
@@ -70,6 +71,7 @@ type HarnessAPI interface {
 	Settings() settings.SettingsAPI
 	Memory() memoryview.MemoryAPI
 	Hooks() hooksview.HooksAPI
+	Projects() projectsview.ProjectsAPI
 }
 
 // ShellStatus drives the Toolbar status pills + LegendBar live-rate
@@ -125,6 +127,7 @@ type API struct {
 	settingsAPI  settings.SettingsAPI
 	memoryAPI    memoryview.MemoryAPI
 	hooksAPI     hooksview.HooksAPI
+	projectsAPI  projectsview.ProjectsAPI
 
 	// broker fans typed source channels to Wails event topics. Held for
 	// the lifetime of the API value; per-view bridges (llm, sessions,
@@ -177,6 +180,7 @@ func New(c *core.Core) *API {
 		trustAPI:    &stubTrust{},
 		contextAPI:  &stubContext{},
 		policyAPI:   &stubPolicy{},
+		projectsAPI: newProjectsAPI(c),
 	}
 	a.broker = NewStreamBroker(WailsEmitter{})
 	a.auditImpl = audit.NewAPI(audit.WithSubscriber(a.broker))
@@ -256,6 +260,15 @@ func newSessionsAPI(c *core.Core) sessions.SessionsAPI {
 		return &stubSessions{}
 	}
 	return sessions.NewManagerAPI(c.SessionManager())
+}
+
+// newProjectsAPI returns the real Manager-backed ProjectsAPI when c is
+// non-nil; otherwise a noop stub.
+func newProjectsAPI(c *core.Core) projectsview.ProjectsAPI {
+	if c == nil {
+		return &stubProjects{}
+	}
+	return projectsview.New(c.ProjectManager(), c.SessionManager())
 }
 
 // newLLMStack constructs the connector Registry + view-scoped API. It
@@ -860,6 +873,12 @@ func (a *API) Hooks() hooksview.HooksAPI {
 		return &stubHooks{}
 	}
 	return a.hooksAPI
+}
+func (a *API) Projects() projectsview.ProjectsAPI {
+	if a.projectsAPI == nil {
+		return &stubProjects{}
+	}
+	return a.projectsAPI
 }
 
 // Bindings returns the slice of Wails-bound objects. The Bindings struct

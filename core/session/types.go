@@ -31,6 +31,10 @@ type Record struct {
 	// (so the user sees it in the transcript).
 	SystemPrompt string
 	ContextKind  string
+	// ProjectID groups the session under a project; nil means "loose"
+	// (no project). The pointer matches the SQL column's nullability so
+	// readers can distinguish "no project" from "project with empty id".
+	ProjectID *string
 }
 
 // ContextKind values for Record.ContextKind. Validated at the manager

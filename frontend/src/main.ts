@@ -44,6 +44,11 @@ const router = createRouter({
       component: () => import('@/views/contexts/ContextsView.vue'),
     },
     {
+      path: '/projects/:id',
+      name: 'project',
+      component: () => import('@/views/projects/ProjectLandingPage.vue'),
+    },
+    {
       path: '/memory',
       name: 'memory',
       component: () => import('@/views/memory/MemoryView.vue'),

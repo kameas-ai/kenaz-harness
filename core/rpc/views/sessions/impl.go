@@ -21,7 +21,7 @@ func recordToView(r session.Record) Session {
 		// 'system' so the frontend never sees a third value.
 		kind = session.ContextKindSystem
 	}
-	return Session{
+	out := Session{
 		ID:           r.ID,
 		Name:         r.Name,
 		CreatedAt:    r.CreatedAt.UTC().Format(time.RFC3339Nano),
@@ -29,6 +29,10 @@ func recordToView(r session.Record) Session {
 		SystemPrompt: r.SystemPrompt,
 		ContextKind:  kind,
 	}
+	if r.ProjectID != nil {
+		out.ProjectID = *r.ProjectID
+	}
+	return out
 }
 
 // managerAPI is the real SessionsAPI implementation: a thin adapter
@@ -182,4 +186,15 @@ func (a *managerAPI) LoadDraft(ctx context.Context, id string) (string, error) {
 // SetSystemPrompt implements SessionsAPI.
 func (a *managerAPI) SetSystemPrompt(ctx context.Context, id, content, kind string) error {
 	return a.mgr.SetSystemPrompt(ctx, id, content, kind)
+}
+
+// MoveToProject implements SessionsAPI. An empty projectID detaches
+// the session (loose).
+func (a *managerAPI) MoveToProject(ctx context.Context, id, projectID string) error {
+	var p *string
+	if projectID != "" {
+		v := projectID
+		p = &v
+	}
+	return a.mgr.MoveToProject(ctx, id, p)
 }
