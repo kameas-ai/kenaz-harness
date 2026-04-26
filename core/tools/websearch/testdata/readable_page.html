@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Local-first web search — A blog post</title>
+  <script>window.analytics = function(){};</script>
+  <style>body { font-family: serif; }</style>
+</head>
+<body>
+  <header>
+    <nav>
+      <a href="/">Home</a>
+      <a href="/about">About</a>
+      <a href="/contact">Contact</a>
+    </nav>
+  </header>
+  <main>
+    <article>
+      <h1>Local-first web search is a privacy primitive</h1>
+      <p class="byline">By Alec Feeman — January 2026</p>
+      <p>
+        Most agentic harnesses today route their search queries through a vendor-controlled
+        endpoint. The user types a question, the model decides to search, and the resulting
+        query lands in someone else's logs before it lands in someone else's index.
+      </p>
+      <p>
+        A local-first harness can do better. Public search engines like DuckDuckGo and
+        Wikipedia expose endpoints that work without an account or an API key. A harness
+        that aggregates those endpoints in-process keeps the query inside the user's network
+        boundary. The vendor — whether Anthropic, OpenAI, or anyone else — never sees it.
+      </p>
+      <p>
+        The implementation is mostly plumbing: a Backend interface, two scrapers, an
+        aggregator that runs them in parallel, a fetcher that pulls each result page, and
+        an extractor that strips the navigation and ads. Wrap each result in a
+        <code>&lt;source&gt;</code> tag so the model treats it as untrusted reference
+        material. Done.
+      </p>
+      <p>
+        For privacy-conscious users, optional SOCKS5 proxy support routes every outbound
+        call through Tor or Mullvad. Combined with the local-first design, the user's
+        IP address never lands in DuckDuckGo's logs either.
+      </p>
+      <h2>What this is not</h2>
+      <p>
+        It is not a custom search index. It is not a ranking model. It is a thin
+        coordinator over endpoints that already work. Future iterations can add SearXNG
+        for users who self-host that excellent privacy proxy.
+      </p>
+    </article>
+  </main>
+  <aside class="sidebar">
+    <h3>Subscribe</h3>
+    <p>Stay up to date with our latest posts.</p>
+  </aside>
+  <footer>
+    <p>&copy; 2026 Local First Co.</p>
+  </footer>
+</body>
+</html>
