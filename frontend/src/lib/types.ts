@@ -337,19 +337,55 @@ export interface CostEstimate {
 }
 
 /**
+ * MemoryScopeKind — the three scope tiers used by long-term memory.
+ * Mirrors core/memory.ScopeKind. "session" is the chat-local default;
+ * "project" survives between sister sessions of the same project;
+ * "global" is harness-wide. Promotion is monotonic
+ * (session → project → global); demotion isn't supported.
+ */
+export type MemoryScopeKind = 'global' | 'project' | 'session';
+
+/**
  * MemoryChunk — one persisted memory. In the hooks-driven architecture
  * most chunks are auto-persisted by the memory.persist post_send hook;
  * the chat surface still ships an explicit "remember this" button for
  * short turns the auto-path skips. The vector representation never
  * crosses the RPC boundary; the management UI only ever sees the
  * human-readable fields.
+ *
+ * Mirrors core/rpc/views/memory.Chunk. WP06 added the scope columns
+ * (`scopeKind`, `scopeId`, `projectId`, `contentHash`) plus the auto-
+ * persist metadata fields (`toolName`, `filesRead`, `filesModified`,
+ * `title`).
  */
 export interface MemoryChunk {
   id: string;
   sessionId?: string;
+  projectId?: string;
+  scopeKind: MemoryScopeKind;
+  scopeId: string;
+  contentHash?: string;
   sourceTurn?: string;
   content: string;
   createdAt: string;
+  toolName?: string;
+  filesRead?: string[];
+  filesModified?: string[];
+  title?: string;
+}
+
+/**
+ * MemoryListFilter — frontend mirror of core/rpc/views/memory.ListFilter.
+ * Each non-empty field acts as a conjunction. Empty filter returns
+ * every chunk. Backend ignores fields the storage layer doesn't yet
+ * index on; sessionId / projectId are accepted for forward
+ * compatibility.
+ */
+export interface MemoryListFilter {
+  scopeKind?: MemoryScopeKind;
+  scopeId?: string;
+  sessionId?: string;
+  projectId?: string;
 }
 
 /**

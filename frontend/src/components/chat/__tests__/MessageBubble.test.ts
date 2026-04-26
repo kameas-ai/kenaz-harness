@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest';
-import { mount } from '@vue/test-utils';
+import { describe, it, expect, vi } from 'vitest';
+import { mount, flushPromises } from '@vue/test-utils';
 import MessageBubble from '@/components/chat/MessageBubble.vue';
 
 describe('MessageBubble (chat-ui)', () => {
@@ -80,5 +80,133 @@ describe('MessageBubble (chat-ui)', () => {
       props: { role: 'assistant', content: 'x', streaming: true },
     });
     expect(w.html()).not.toMatch(/#[0-9a-fA-F]{3,8}\b/);
+  });
+
+  // ── WP06 T005: pin-menu behaviour ─────────────────────────────────────
+
+  it('opens the pin menu with three scope options on 📌 click', async () => {
+    const w = mount(MessageBubble, {
+      props: {
+        role: 'assistant',
+        content: 'pin me',
+        rememberable: true,
+        projectId: 'proj-1',
+      },
+    });
+    expect(w.find('[data-testid="pin-menu"]').exists()).toBe(false);
+    await w.find('[data-testid="remember-message"]').trigger('click');
+    const menu = w.find('[data-testid="pin-menu"]');
+    expect(menu.exists()).toBe(true);
+    expect(w.find('[data-testid="pin-menu-session"]').exists()).toBe(true);
+    expect(w.find('[data-testid="pin-menu-project"]').exists()).toBe(true);
+    expect(w.find('[data-testid="pin-menu-global"]').exists()).toBe(true);
+  });
+
+  it('disables "Pin to project" when projectId is empty/undefined', async () => {
+    const w = mount(MessageBubble, {
+      props: {
+        role: 'assistant',
+        content: 'pin me',
+        rememberable: true,
+      },
+    });
+    await w.find('[data-testid="remember-message"]').trigger('click');
+    const projectBtn = w.find('[data-testid="pin-menu-project"]');
+    expect(projectBtn.exists()).toBe(true);
+    expect(projectBtn.attributes('disabled')).toBeDefined();
+    expect(projectBtn.attributes('title')).toBe('session is not in a project');
+    // session and global remain enabled
+    expect(
+      w.find('[data-testid="pin-menu-session"]').attributes('disabled'),
+    ).toBeUndefined();
+    expect(
+      w.find('[data-testid="pin-menu-global"]').attributes('disabled'),
+    ).toBeUndefined();
+  });
+
+  it('emits remember(scope) with the picked option', async () => {
+    const w = mount(MessageBubble, {
+      props: {
+        role: 'assistant',
+        content: 'pin me',
+        rememberable: true,
+        projectId: 'proj-1',
+      },
+    });
+    await w.find('[data-testid="remember-message"]').trigger('click');
+    await w.find('[data-testid="pin-menu-project"]').trigger('click');
+    const events = w.emitted('remember');
+    expect(events).toBeTruthy();
+    expect(events![0]).toEqual(['project']);
+  });
+
+  it('emits remember("session") for the session option (legacy default)', async () => {
+    const w = mount(MessageBubble, {
+      props: {
+        role: 'assistant',
+        content: 'pin me',
+        rememberable: true,
+        projectId: 'proj-1',
+      },
+    });
+    await w.find('[data-testid="remember-message"]').trigger('click');
+    await w.find('[data-testid="pin-menu-session"]').trigger('click');
+    expect(w.emitted('remember')![0]).toEqual(['session']);
+  });
+
+  it('emits remember("global") for the global option', async () => {
+    const w = mount(MessageBubble, {
+      props: {
+        role: 'assistant',
+        content: 'pin me',
+        rememberable: true,
+      },
+    });
+    await w.find('[data-testid="remember-message"]').trigger('click');
+    await w.find('[data-testid="pin-menu-global"]').trigger('click');
+    expect(w.emitted('remember')![0]).toEqual(['global']);
+  });
+
+  it('flashes a confirmation badge after a successful pin', async () => {
+    vi.useFakeTimers();
+    try {
+      const w = mount(MessageBubble, {
+        props: {
+          role: 'assistant',
+          content: 'pin me',
+          rememberable: true,
+        },
+      });
+      await w.find('[data-testid="remember-message"]').trigger('click');
+      await w.find('[data-testid="pin-menu-session"]').trigger('click');
+      await flushPromises();
+      expect(w.find('[data-testid="remember-confirm"]').exists()).toBe(true);
+      vi.advanceTimersByTime(1500);
+      await flushPromises();
+      expect(w.find('[data-testid="remember-confirm"]').exists()).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('opens the pin menu via right-click on the bubble body', async () => {
+    const w = mount(MessageBubble, {
+      props: {
+        role: 'assistant',
+        content: 'pin me',
+        rememberable: true,
+      },
+    });
+    expect(w.find('[data-testid="pin-menu"]').exists()).toBe(false);
+    await w.find('article').trigger('contextmenu');
+    expect(w.find('[data-testid="pin-menu"]').exists()).toBe(true);
+  });
+
+  it('does not open the menu via right-click when not rememberable', async () => {
+    const w = mount(MessageBubble, {
+      props: { role: 'assistant', content: 'x' },
+    });
+    await w.find('article').trigger('contextmenu');
+    expect(w.find('[data-testid="pin-menu"]').exists()).toBe(false);
   });
 });

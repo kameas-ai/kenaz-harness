@@ -38,6 +38,8 @@ import type {
   Message,
   MessageRole,
   MemoryChunk,
+  MemoryListFilter,
+  MemoryScopeKind,
   Hook,
   BuiltinDescriptor,
 } from './types';
@@ -147,8 +149,17 @@ interface WailsBindingsLike {
   Settings_GetMemory(): Promise<boolean>;
   Settings_SetMemory(enabled: boolean): Promise<void>;
 
-  Memory_ListChunks(): Promise<MemoryChunk[]>;
-  Memory_RememberMessage(sessionID: string, messageID: string): Promise<string>;
+  Memory_ListChunks(filter: MemoryListFilter): Promise<MemoryChunk[]>;
+  Memory_RememberMessage(
+    sessionID: string,
+    messageID: string,
+    scope: string,
+  ): Promise<string>;
+  Memory_PromoteScope(
+    chunkID: string,
+    newScopeKind: string,
+    newScopeID: string,
+  ): Promise<string>;
   Memory_Forget(id: string): Promise<void>;
 
   Hooks_List(): Promise<Hook[]>;
@@ -376,10 +387,25 @@ export interface SettingsClient {
  * /memory management view. Privacy: chunks live in the harness's data
  * directory; the only network call is the embedding request when a
  * new pin is staged.
+ *
+ * Scope (WP06): RememberMessage accepts a third arg, one of
+ * `'session' | 'project' | 'global'`, defaulting to `'session'` when
+ * the caller omits it. PromoteScope moves an existing chunk to a wider
+ * scope (move semantics — the original row is deleted and re-inserted
+ * with a new ID; UI must refresh after the call).
  */
 export interface MemoryClient {
-  listChunks(): Promise<MemoryChunk[]>;
-  rememberMessage(sessionID: string, messageID: string): Promise<string>;
+  listChunks(filter?: MemoryListFilter): Promise<MemoryChunk[]>;
+  rememberMessage(
+    sessionID: string,
+    messageID: string,
+    scope?: MemoryScopeKind,
+  ): Promise<string>;
+  promoteScope(
+    chunkID: string,
+    newScopeKind: MemoryScopeKind,
+    newScopeID: string,
+  ): Promise<string>;
   forget(id: string): Promise<void>;
 }
 
@@ -550,9 +576,11 @@ export function createHarnessClient(): HarnessClient {
       setMemory: (enabled) => b().Settings_SetMemory(enabled),
     },
     memory: {
-      listChunks: () => b().Memory_ListChunks(),
-      rememberMessage: (sessionID, messageID) =>
-        b().Memory_RememberMessage(sessionID, messageID),
+      listChunks: (filter) => b().Memory_ListChunks(filter ?? {}),
+      rememberMessage: (sessionID, messageID, scope) =>
+        b().Memory_RememberMessage(sessionID, messageID, scope ?? 'session'),
+      promoteScope: (chunkID, newScopeKind, newScopeID) =>
+        b().Memory_PromoteScope(chunkID, newScopeKind, newScopeID),
       forget: (id) => b().Memory_Forget(id),
     },
     hooks: {
@@ -749,6 +777,7 @@ export function createFakeHarnessClient(
     memory: {
       listChunks: async () => [],
       rememberMessage: async () => 'fake-mem-id',
+      promoteScope: async () => 'fake-mem-id',
       forget: noop,
     },
     hooks: {

@@ -24,6 +24,9 @@ import type {
   AuditEntry,
   AuditFilter,
   EventStreamEntry,
+  MemoryChunk,
+  MemoryListFilter,
+  MemoryScopeKind,
 } from './types';
 import type { HarnessClient } from './harnessClient';
 
@@ -367,6 +370,108 @@ export function usePolicyDecisions(): UsePolicyDecisionsResult {
 /** Test-only: synthesize a Denial for the registered handlers. */
 export function _emitDenialForTest(d: Denial): void {
   for (const h of policyDeniedHandlers) h(d);
+}
+
+/**
+ * useMemory — reactive long-term-memory list + scope-aware mutations.
+ *
+ * The composable owns the active scope filter and re-fetches the chunk
+ * list whenever it changes. Components that drive the /memory view can
+ * consume `chunks` directly; the chat surface uses `remember` /
+ * `promoteScope` for one-shot mutations.
+ */
+export type MemoryFilterPill = 'all' | MemoryScopeKind;
+
+export interface UseMemoryResult {
+  chunks: Ref<readonly MemoryChunk[]>;
+  loading: Ref<boolean>;
+  error: Ref<string | null>;
+  filter: Ref<MemoryFilterPill>;
+  refresh(): Promise<void>;
+  setFilter(pill: MemoryFilterPill): Promise<void>;
+  remember(
+    sessionID: string,
+    messageID: string,
+    scope?: MemoryScopeKind,
+  ): Promise<string>;
+  promoteScope(
+    chunkID: string,
+    newScopeKind: MemoryScopeKind,
+    newScopeID: string,
+  ): Promise<string>;
+  forget(id: string): Promise<void>;
+}
+
+export function useMemory(): UseMemoryResult {
+  const client = useHarnessClient();
+  const chunks = shallowRef<readonly MemoryChunk[]>([]);
+  const loading = ref(false);
+  const error = ref<string | null>(null);
+  const filter = ref<MemoryFilterPill>('all');
+
+  function buildFilter(pill: MemoryFilterPill): MemoryListFilter {
+    if (pill === 'all') return {};
+    return { scopeKind: pill };
+  }
+
+  async function refresh() {
+    loading.value = true;
+    error.value = null;
+    try {
+      chunks.value = await client.memory.listChunks(buildFilter(filter.value));
+    } catch (err) {
+      error.value = err instanceof Error ? err.message : String(err);
+      chunks.value = [];
+    } finally {
+      loading.value = false;
+    }
+  }
+
+  async function setFilter(pill: MemoryFilterPill) {
+    if (filter.value === pill) return;
+    filter.value = pill;
+    await refresh();
+  }
+
+  async function remember(
+    sessionID: string,
+    messageID: string,
+    scope?: MemoryScopeKind,
+  ) {
+    const id = await client.memory.rememberMessage(sessionID, messageID, scope);
+    return id;
+  }
+
+  async function promoteScope(
+    chunkID: string,
+    newScopeKind: MemoryScopeKind,
+    newScopeID: string,
+  ) {
+    const id = await client.memory.promoteScope(
+      chunkID,
+      newScopeKind,
+      newScopeID,
+    );
+    await refresh();
+    return id;
+  }
+
+  async function forget(id: string) {
+    await client.memory.forget(id);
+    await refresh();
+  }
+
+  return {
+    chunks,
+    loading,
+    error,
+    filter,
+    refresh,
+    setFilter,
+    remember,
+    promoteScope,
+    forget,
+  };
 }
 
 // Re-export the client type for consumers that need it.
