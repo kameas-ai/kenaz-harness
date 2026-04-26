@@ -7,6 +7,7 @@ import (
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/a2a"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/audit"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/bundle"
+	contextsview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/contexts"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/contextview"
 	hooksview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/hooks"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/llm"
@@ -29,6 +30,7 @@ type fakeHarnessAPI struct {
 	sessionsAPI sessions.SessionsAPI
 	trustAPI    trust.TrustAPI
 	contextAPI  contextview.ContextAPI
+	contextsAPI contextsview.ContextsAPI
 	bundleAPI   bundle.BundleAPI
 	policyAPI   policy.PolicyAPI
 	auditAPI    audit.AuditAPI
@@ -48,6 +50,7 @@ func (f *fakeHarnessAPI) Workflow() workflow.WorkflowAPI             { return f.
 func (f *fakeHarnessAPI) Sessions() sessions.SessionsAPI             { return f.sessionsAPI }
 func (f *fakeHarnessAPI) Trust() trust.TrustAPI                      { return f.trustAPI }
 func (f *fakeHarnessAPI) Context() contextview.ContextAPI            { return f.contextAPI }
+func (f *fakeHarnessAPI) Contexts() contextsview.ContextsAPI         { return f.contextsAPI }
 func (f *fakeHarnessAPI) Bundle() bundle.BundleAPI                   { return f.bundleAPI }
 func (f *fakeHarnessAPI) Policy() policy.PolicyAPI                   { return f.policyAPI }
 func (f *fakeHarnessAPI) Audit() audit.AuditAPI                      { return f.auditAPI }
@@ -84,6 +87,9 @@ func TestViewAccessorStability(t *testing.T) {
 	}
 	if api.Context() != api.Context() {
 		t.Errorf("Context() returned different pointers across calls")
+	}
+	if api.Contexts() != api.Contexts() {
+		t.Errorf("Contexts() returned different pointers across calls")
 	}
 	if api.Bundle() != api.Bundle() {
 		t.Errorf("Bundle() returned different pointers across calls")

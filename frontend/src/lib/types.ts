@@ -146,6 +146,23 @@ export interface ContextEntry {
   label: string;
 }
 
+/**
+ * Context Library tree node. Path is slash-separated and relative to
+ * the library root — the frontend never sees an absolute path. Children
+ * is non-empty only on folder kinds; the wire shape omits the field for
+ * leaves so the JSON payload stays small for big libraries.
+ */
+export type ContextNodeKind = 'folder' | 'file';
+
+export interface ContextNode {
+  name: string;
+  path: string;
+  kind: ContextNodeKind;
+  size?: number;
+  modified?: string;
+  children?: ContextNode[];
+}
+
 export interface Bundle {
   id: string;
   name: string;

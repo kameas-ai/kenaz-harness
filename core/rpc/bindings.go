@@ -6,6 +6,7 @@ import (
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/a2a"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/audit"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/bundle"
+	contextsview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/contexts"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/contextview"
 	hooksview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/hooks"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/llm"
@@ -255,6 +256,33 @@ func (b *Bindings) Context_StartStream() (string, error) {
 }
 func (b *Bindings) Context_StopStream(subID string) error {
 	return b.api.Context().StopStream(b.ctx(), subID)
+}
+
+// ── contexts (library content pool — WP01) ────────────────────────────
+
+func (b *Bindings) Contexts_List() (contextsview.Node, error) {
+	return b.api.Contexts().List(b.ctx())
+}
+func (b *Bindings) Contexts_Get(path string) (string, error) {
+	return b.api.Contexts().Get(b.ctx(), path)
+}
+func (b *Bindings) Contexts_Save(path, content string) error {
+	return b.api.Contexts().Save(b.ctx(), path, content)
+}
+func (b *Bindings) Contexts_CreateFolder(path string) error {
+	return b.api.Contexts().CreateFolder(b.ctx(), path)
+}
+func (b *Bindings) Contexts_Rename(oldPath, newPath string) error {
+	return b.api.Contexts().Rename(b.ctx(), oldPath, newPath)
+}
+func (b *Bindings) Contexts_Delete(path string) error {
+	return b.api.Contexts().Delete(b.ctx(), path)
+}
+func (b *Bindings) Contexts_RecentlyApplied(limit int) ([]string, error) {
+	return b.api.Contexts().RecentlyApplied(b.ctx(), limit)
+}
+func (b *Bindings) Contexts_RootPath() (string, error) {
+	return b.api.Contexts().RootPath(b.ctx())
 }
 
 // ── bundle ─────────────────────────────────────────────────────────────

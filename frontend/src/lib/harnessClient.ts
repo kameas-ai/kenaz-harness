@@ -25,6 +25,7 @@ import type {
   Job,
   SecretReference,
   ContextEntry,
+  ContextNode,
   Bundle,
   Denial,
   AuditEntry,
@@ -107,6 +108,15 @@ interface WailsBindingsLike {
   Context_List(): Promise<ContextEntry[]>;
   Context_StartStream(): Promise<string>;
   Context_StopStream(id: string): Promise<void>;
+
+  Contexts_List(): Promise<ContextNode>;
+  Contexts_Get(path: string): Promise<string>;
+  Contexts_Save(path: string, content: string): Promise<void>;
+  Contexts_CreateFolder(path: string): Promise<void>;
+  Contexts_Rename(oldPath: string, newPath: string): Promise<void>;
+  Contexts_Delete(path: string): Promise<void>;
+  Contexts_RecentlyApplied(limit: number): Promise<string[]>;
+  Contexts_RootPath(): Promise<string>;
 
   Bundle_List(): Promise<Bundle[]>;
   Bundle_Get(id: string): Promise<Bundle>;
@@ -272,6 +282,25 @@ export interface ContextClient {
   stopStream(id: string): Promise<void>;
 }
 
+/**
+ * ContextsClient — file-tree CRUD for the Context Library (/contexts).
+ *
+ * The frontend treats the library as a flat content pool: scope (global
+ * / project / session) is a separate concern handled by later WPs. Path
+ * arguments are slash-separated and relative to the library root; the
+ * Go side validates ".." / absolute / symlink-escape before any I/O.
+ */
+export interface ContextsClient {
+  list(): Promise<ContextNode>;
+  get(path: string): Promise<string>;
+  save(path: string, content: string): Promise<void>;
+  createFolder(path: string): Promise<void>;
+  rename(oldPath: string, newPath: string): Promise<void>;
+  delete(path: string): Promise<void>;
+  recentlyApplied(limit: number): Promise<string[]>;
+  rootPath(): Promise<string>;
+}
+
 export interface BundleClient {
   list(): Promise<Bundle[]>;
   get(id: string): Promise<Bundle>;
@@ -347,6 +376,7 @@ export interface HarnessClient {
   workflow: WorkflowClient;
   trust: TrustClient;
   context: ContextClient;
+  contexts: ContextsClient;
   bundle: BundleClient;
   policy: PolicyClient;
   audit: AuditClient;
@@ -426,6 +456,16 @@ export function createHarnessClient(): HarnessClient {
       list: () => b().Context_List(),
       startStream: () => b().Context_StartStream(),
       stopStream: (id) => b().Context_StopStream(id),
+    },
+    contexts: {
+      list: () => b().Contexts_List(),
+      get: (path) => b().Contexts_Get(path),
+      save: (path, content) => b().Contexts_Save(path, content),
+      createFolder: (path) => b().Contexts_CreateFolder(path),
+      rename: (oldPath, newPath) => b().Contexts_Rename(oldPath, newPath),
+      delete: (path) => b().Contexts_Delete(path),
+      recentlyApplied: (limit) => b().Contexts_RecentlyApplied(limit),
+      rootPath: () => b().Contexts_RootPath(),
     },
     bundle: {
       list: () => b().Bundle_List(),
@@ -571,6 +611,16 @@ export function createFakeHarnessClient(
       list: async () => [],
       startStream: async () => 'fake-sub',
       stopStream: noop,
+    },
+    contexts: {
+      list: async () => ({ name: '', path: '', kind: 'folder' as const }),
+      get: async () => '',
+      save: noop,
+      createFolder: noop,
+      rename: noop,
+      delete: noop,
+      recentlyApplied: async () => [],
+      rootPath: async () => '/fake/contexts',
     },
     bundle: {
       list: async () => [],
