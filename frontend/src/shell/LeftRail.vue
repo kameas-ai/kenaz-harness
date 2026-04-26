@@ -301,6 +301,7 @@ function dismissError() {
         <li><RailEntry :icon="MessageSquare" label="Sessions" to="/sessions" /></li>
         <li><RailEntry :icon="Wrench" label="Tools" to="/tools" /></li>
         <li><RailEntry :icon="Layers" label="Bundles" to="/bundles" /></li>
+        <li><RailEntry :icon="FileText" label="Contexts" to="/contexts" /></li>
         <li><RailEntry :icon="Server" label="Providers" to="/providers" /></li>
         <li><RailEntry :icon="FileText" label="Audit log" to="/audit" /></li>
         <li><RailEntry :icon="Webhook" label="Hooks" to="/hooks" /></li>
