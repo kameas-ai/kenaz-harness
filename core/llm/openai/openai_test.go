@@ -89,7 +89,7 @@ func newAdapter(fs *fakeServer) *Adapter {
 func stdReq() (llm.GenerationRequest, llm.ProviderProfile) {
 	req := llm.GenerationRequest{
 		Messages: []llm.Message{
-			{Role: llm.RoleUser, Content: []llm.ContentPart{{Type: "text", Text: "hi"}}},
+			{Role: llm.RoleUser, Content: []llm.ContentBlock{{Type: "text", Text: "hi"}}},
 		},
 	}
 	prof := llm.ProviderProfile{
@@ -504,6 +504,154 @@ func TestAdapter_Stream_ToolsAbsentWhenEmpty(t *testing.T) {
 	defer fs.mu.Unlock()
 	if strings.Contains(string(fs.lastBody), `"tools"`) {
 		t.Fatalf("body should not contain tools field when none provided: %s", fs.lastBody)
+	}
+}
+
+// TestAdapter_Stream_ImageBlock_Serialized verifies that a request with
+// an image content block is wrapped in OpenAI's array-of-parts shape
+// with an image_url part carrying a data: URL constructed from the
+// MediaSource.MediaType + base64 data.
+func TestAdapter_Stream_ImageBlock_Serialized(t *testing.T) {
+	fs := newFakeServer(t, func(w http.ResponseWriter, _ *http.Request, _ int) {
+		writeSSE(w, happyPathFrames())
+	})
+	a := newAdapter(fs)
+	req, prof := stdReq()
+	req.Messages = []llm.Message{{
+		Role: llm.RoleUser,
+		Content: []llm.ContentBlock{
+			{Type: "text", Text: "describe this"},
+			{Type: "image", Source: &llm.MediaSource{
+				Kind:      "base64",
+				MediaType: "image/png",
+				Data:      "iVBORw0KGgo=",
+			}},
+		},
+	}}
+	stream, err := a.Stream(context.Background(), req, prof, []byte("sk-test"))
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	if _, _, ferr := drain(t, stream); ferr != nil {
+		t.Fatalf("Final: %v", ferr)
+	}
+	fs.mu.Lock()
+	defer fs.mu.Unlock()
+	var body struct {
+		Messages []struct {
+			Role    string           `json:"role"`
+			Content []map[string]any `json:"content"`
+		} `json:"messages"`
+	}
+	if err := json.Unmarshal(fs.lastBody, &body); err != nil {
+		t.Fatalf("unmarshal: %v\nbody=%s", err, fs.lastBody)
+	}
+	if len(body.Messages) != 1 {
+		t.Fatalf("messages = %d (body=%s)", len(body.Messages), fs.lastBody)
+	}
+	parts := body.Messages[0].Content
+	if len(parts) != 2 {
+		t.Fatalf("content parts = %d (body=%s)", len(parts), fs.lastBody)
+	}
+	if parts[0]["type"] != "text" || parts[0]["text"] != "describe this" {
+		t.Fatalf("text part wrong: %+v", parts[0])
+	}
+	if parts[1]["type"] != "image_url" {
+		t.Fatalf("image part type = %v", parts[1]["type"])
+	}
+	imgURL, ok := parts[1]["image_url"].(map[string]any)
+	if !ok {
+		t.Fatalf("image_url missing: %+v", parts[1])
+	}
+	wantURL := "data:image/png;base64,iVBORw0KGgo="
+	if imgURL["url"] != wantURL {
+		t.Fatalf("image_url.url = %q, want %q", imgURL["url"], wantURL)
+	}
+}
+
+// TestAdapter_Stream_TextOnly_StaysString verifies that messages
+// without any image / document blocks emit the legacy string-shaped
+// `content` field (regression: the multimodal refactor must not change
+// the wire shape for plain chat turns).
+func TestAdapter_Stream_TextOnly_StaysString(t *testing.T) {
+	fs := newFakeServer(t, func(w http.ResponseWriter, _ *http.Request, _ int) {
+		writeSSE(w, happyPathFrames())
+	})
+	a := newAdapter(fs)
+	req, prof := stdReq()
+	stream, err := a.Stream(context.Background(), req, prof, []byte("sk-test"))
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	if _, _, ferr := drain(t, stream); ferr != nil {
+		t.Fatalf("Final: %v", ferr)
+	}
+	fs.mu.Lock()
+	defer fs.mu.Unlock()
+	var body struct {
+		Messages []struct {
+			Role    string          `json:"role"`
+			Content json.RawMessage `json:"content"`
+		} `json:"messages"`
+	}
+	if err := json.Unmarshal(fs.lastBody, &body); err != nil {
+		t.Fatalf("unmarshal: %v\nbody=%s", err, fs.lastBody)
+	}
+	if len(body.Messages) != 1 {
+		t.Fatalf("messages = %d", len(body.Messages))
+	}
+	if !strings.HasPrefix(strings.TrimSpace(string(body.Messages[0].Content)), `"`) {
+		t.Fatalf("text-only message should emit string content, got %s", body.Messages[0].Content)
+	}
+}
+
+// TestAdapter_Stream_DocumentBlock_DroppedWithWarn verifies that
+// document blocks against an OpenAI profile are dropped silently in
+// WP01 (Chat Completions does not accept inline documents) and the
+// surviving text part is still serialized in the array form.
+//
+// The warn log fires inside the adapter's logger; we assert the
+// contract by checking the wire body — the document block must NOT
+// appear, but the text block must.
+func TestAdapter_Stream_DocumentBlock_DroppedWithWarn(t *testing.T) {
+	fs := newFakeServer(t, func(w http.ResponseWriter, _ *http.Request, _ int) {
+		writeSSE(w, happyPathFrames())
+	})
+	a := newAdapter(fs)
+	req, prof := stdReq()
+	req.Messages = []llm.Message{{
+		Role: llm.RoleUser,
+		Content: []llm.ContentBlock{
+			{Type: "text", Text: "summarize"},
+			{Type: "document", Source: &llm.MediaSource{
+				Kind:      "base64",
+				MediaType: "application/pdf",
+				Data:      "JVBERi0=",
+			}},
+			{Type: "image", Source: &llm.MediaSource{
+				Kind:      "base64",
+				MediaType: "image/png",
+				Data:      "AA==",
+			}},
+		},
+	}}
+	stream, err := a.Stream(context.Background(), req, prof, []byte("sk-test"))
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	if _, _, ferr := drain(t, stream); ferr != nil {
+		t.Fatalf("Final: %v", ferr)
+	}
+	fs.mu.Lock()
+	defer fs.mu.Unlock()
+	if strings.Contains(string(fs.lastBody), "application/pdf") {
+		t.Fatalf("document block should have been dropped, body=%s", fs.lastBody)
+	}
+	if !strings.Contains(string(fs.lastBody), "summarize") {
+		t.Fatalf("text block should remain, body=%s", fs.lastBody)
+	}
+	if !strings.Contains(string(fs.lastBody), "image_url") {
+		t.Fatalf("image block should remain, body=%s", fs.lastBody)
 	}
 }
 

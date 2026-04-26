@@ -166,7 +166,7 @@ func TestRegistry_PipelineOrdering(t *testing.T) {
 			{Kind: llm.StreamFinish, Finish: "stop"},
 		},
 		final: llm.Response{
-			Content:      []llm.ContentPart{{Type: "text", Text: "hello"}},
+			Content:      []llm.ContentBlock{{Type: "text", Text: "hello"}},
 			FinishReason: "stop",
 			Usage:        llm.Usage{InputTokens: 5, OutputTokens: 1},
 		},

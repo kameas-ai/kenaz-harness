@@ -47,7 +47,7 @@ func newFakeServer(t *testing.T, handler func(w http.ResponseWriter, r *http.Req
 func stdRequest(modelID string) (llm.GenerationRequest, llm.ProviderProfile) {
 	req := llm.GenerationRequest{
 		Messages: []llm.Message{
-			{Role: llm.RoleUser, Content: []llm.ContentPart{{Type: "text", Text: "hi"}}},
+			{Role: llm.RoleUser, Content: []llm.ContentBlock{{Type: "text", Text: "hi"}}},
 		},
 	}
 	prof := llm.ProviderProfile{
@@ -298,6 +298,245 @@ func TestBearer_ToolUseRoundTrip(t *testing.T) {
 	}
 	if resp.FinishReason != "tool_use" {
 		t.Fatalf("finish reason = %q", resp.FinishReason)
+	}
+}
+
+// TestBearer_ImageBlock_Serialized verifies the bearer-auth REST path
+// emits an image content block with the right format + base64 source
+// shape per the Converse contract:
+//
+//	{"image":{"format":"png","source":{"bytes":"<b64>"}}}
+//
+// The bearer path stays in JSON the whole way, so source.bytes is the
+// base64 string verbatim rather than the SDK path's []byte.
+func TestBearer_ImageBlock_Serialized(t *testing.T) {
+	fs := newFakeServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/vnd.amazon.eventstream")
+		w.WriteHeader(http.StatusOK)
+	})
+	a := New(WithHTTPClient(rewritingClient(fs)))
+	req, prof := stdRequest("anthropic.claude-3-haiku-20240307-v1:0")
+	req.Messages = []llm.Message{{
+		Role: llm.RoleUser,
+		Content: []llm.ContentBlock{
+			{Type: "text", Text: "describe this"},
+			{Type: "image", Source: &llm.MediaSource{
+				Kind: "base64", MediaType: "image/png", Data: "iVBORw0KGgo=",
+			}},
+		},
+	}}
+	stream, err := a.Stream(context.Background(), req, prof, []byte("ABSKtestkey"))
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	for range stream.Events() {
+	}
+	_, _ = stream.Final()
+
+	fs.mu.Lock()
+	defer fs.mu.Unlock()
+	var body struct {
+		Messages []struct {
+			Role    string           `json:"role"`
+			Content []map[string]any `json:"content"`
+		} `json:"messages"`
+	}
+	if err := json.Unmarshal(fs.lastBody, &body); err != nil {
+		t.Fatalf("unmarshal: %v\nbody=%s", err, fs.lastBody)
+	}
+	if len(body.Messages) != 1 || len(body.Messages[0].Content) != 2 {
+		t.Fatalf("body shape unexpected: %s", fs.lastBody)
+	}
+	imgBlock, ok := body.Messages[0].Content[1]["image"].(map[string]any)
+	if !ok {
+		t.Fatalf("image block missing: %+v", body.Messages[0].Content[1])
+	}
+	if imgBlock["format"] != "png" {
+		t.Fatalf("image format = %v", imgBlock["format"])
+	}
+	src, ok := imgBlock["source"].(map[string]any)
+	if !ok {
+		t.Fatalf("image source missing: %+v", imgBlock)
+	}
+	if src["bytes"] != "iVBORw0KGgo=" {
+		t.Fatalf("image source bytes = %v", src["bytes"])
+	}
+}
+
+// TestBearer_DocumentBlock_DefaultsName verifies that a document block
+// without an OriginalName defaults to "document" — Converse rejects
+// requests with an empty name field per the API contract.
+func TestBearer_DocumentBlock_DefaultsName(t *testing.T) {
+	fs := newFakeServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/vnd.amazon.eventstream")
+		w.WriteHeader(http.StatusOK)
+	})
+	a := New(WithHTTPClient(rewritingClient(fs)))
+	req, prof := stdRequest("anthropic.claude-3-haiku-20240307-v1:0")
+	req.Messages = []llm.Message{{
+		Role: llm.RoleUser,
+		Content: []llm.ContentBlock{
+			{Type: "text", Text: "summarize"},
+			{Type: "document", Source: &llm.MediaSource{
+				Kind: "base64", MediaType: "application/pdf", Data: "JVBERi0=",
+			}},
+		},
+	}}
+	stream, err := a.Stream(context.Background(), req, prof, []byte("ABSKtestkey"))
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	for range stream.Events() {
+	}
+	_, _ = stream.Final()
+
+	fs.mu.Lock()
+	defer fs.mu.Unlock()
+	var body struct {
+		Messages []struct {
+			Content []map[string]any `json:"content"`
+		} `json:"messages"`
+	}
+	if err := json.Unmarshal(fs.lastBody, &body); err != nil {
+		t.Fatalf("unmarshal: %v\nbody=%s", err, fs.lastBody)
+	}
+	if len(body.Messages) != 1 || len(body.Messages[0].Content) != 2 {
+		t.Fatalf("body shape unexpected: %s", fs.lastBody)
+	}
+	docBlock, ok := body.Messages[0].Content[1]["document"].(map[string]any)
+	if !ok {
+		t.Fatalf("document block missing: %+v", body.Messages[0].Content[1])
+	}
+	if docBlock["format"] != "pdf" {
+		t.Fatalf("doc format = %v", docBlock["format"])
+	}
+	if docBlock["name"] != "document" {
+		t.Fatalf("doc name = %v, want default 'document'", docBlock["name"])
+	}
+}
+
+// TestBearer_DocumentBlock_PreservesOriginalName confirms the explicit
+// name path: when MediaSource.OriginalName is set, the adapter forwards
+// it verbatim (subject to provider-side validation, which is documented
+// to reject names with disallowed characters but is the user's problem).
+func TestBearer_DocumentBlock_PreservesOriginalName(t *testing.T) {
+	fs := newFakeServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/vnd.amazon.eventstream")
+		w.WriteHeader(http.StatusOK)
+	})
+	a := New(WithHTTPClient(rewritingClient(fs)))
+	req, prof := stdRequest("anthropic.claude-3-haiku-20240307-v1:0")
+	req.Messages = []llm.Message{{
+		Role: llm.RoleUser,
+		Content: []llm.ContentBlock{
+			{Type: "document", Source: &llm.MediaSource{
+				Kind: "base64", MediaType: "application/pdf", Data: "JVBERi0=",
+				OriginalName: "report-q3",
+			}},
+		},
+	}}
+	stream, err := a.Stream(context.Background(), req, prof, []byte("ABSKtestkey"))
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	for range stream.Events() {
+	}
+	_, _ = stream.Final()
+
+	fs.mu.Lock()
+	defer fs.mu.Unlock()
+	if !bytes.Contains(fs.lastBody, []byte(`"name":"report-q3"`)) {
+		t.Fatalf("document name not preserved: %s", fs.lastBody)
+	}
+}
+
+// TestToBedrockContentBlocks_ImageDocument exercises the SDK-path
+// content-block builder. The SDK path can't be hit via httptest (it
+// signs requests), so we validate the resulting struct shape.
+func TestToBedrockContentBlocks_ImageDocument(t *testing.T) {
+	parts := []llm.ContentBlock{
+		{Type: "text", Text: "alpha"},
+		{Type: "image", Source: &llm.MediaSource{
+			Kind: "base64", MediaType: "image/jpeg", Data: "/9j/4AAQ",
+		}},
+		{Type: "document", Source: &llm.MediaSource{
+			Kind: "base64", MediaType: "application/pdf", Data: "JVBERi0=",
+			OriginalName: "manual",
+		}},
+	}
+	blocks := toBedrockContentBlocks(parts)
+	if len(blocks) != 3 {
+		t.Fatalf("blocks = %d, want 3", len(blocks))
+	}
+	if _, ok := blocks[0].(*types.ContentBlockMemberText); !ok {
+		t.Fatalf("blocks[0] = %T", blocks[0])
+	}
+	imgBlock, ok := blocks[1].(*types.ContentBlockMemberImage)
+	if !ok {
+		t.Fatalf("blocks[1] = %T", blocks[1])
+	}
+	if string(imgBlock.Value.Format) != "jpeg" {
+		t.Fatalf("image format = %q", imgBlock.Value.Format)
+	}
+	imgSrc, ok := imgBlock.Value.Source.(*types.ImageSourceMemberBytes)
+	if !ok {
+		t.Fatalf("image source = %T", imgBlock.Value.Source)
+	}
+	// The SDK path decodes base64 — bytes are the raw decoded payload.
+	if len(imgSrc.Value) == 0 {
+		t.Fatalf("image bytes empty")
+	}
+	docBlock, ok := blocks[2].(*types.ContentBlockMemberDocument)
+	if !ok {
+		t.Fatalf("blocks[2] = %T", blocks[2])
+	}
+	if docBlock.Value.Name == nil || *docBlock.Value.Name != "manual" {
+		t.Fatalf("doc name = %v", docBlock.Value.Name)
+	}
+	if string(docBlock.Value.Format) != "pdf" {
+		t.Fatalf("doc format = %q", docBlock.Value.Format)
+	}
+	docSrc, ok := docBlock.Value.Source.(*types.DocumentSourceMemberBytes)
+	if !ok || len(docSrc.Value) == 0 {
+		t.Fatalf("doc source = %T %v", docBlock.Value.Source, docSrc)
+	}
+}
+
+// TestToBedrockContentBlocks_DefaultsDocumentName verifies the
+// "document" fallback when MediaSource.OriginalName is empty (Converse
+// rejects empty / missing document names).
+func TestToBedrockContentBlocks_DefaultsDocumentName(t *testing.T) {
+	parts := []llm.ContentBlock{{
+		Type: "document", Source: &llm.MediaSource{
+			Kind: "base64", MediaType: "application/pdf", Data: "JVBERi0=",
+		},
+	}}
+	blocks := toBedrockContentBlocks(parts)
+	if len(blocks) != 1 {
+		t.Fatalf("blocks = %d", len(blocks))
+	}
+	doc := blocks[0].(*types.ContentBlockMemberDocument)
+	if doc.Value.Name == nil || *doc.Value.Name != "document" {
+		t.Fatalf("doc name = %v", doc.Value.Name)
+	}
+}
+
+// TestToBedrockContentBlocks_DropsUnsupportedFormats confirms that
+// unknown image / document MIME types are silently dropped (capability
+// gating in WP03 will surface these as a friendly error before the
+// builder runs).
+func TestToBedrockContentBlocks_DropsUnsupportedFormats(t *testing.T) {
+	parts := []llm.ContentBlock{
+		{Type: "image", Source: &llm.MediaSource{Kind: "base64", MediaType: "image/heic", Data: "AAAA"}},
+		{Type: "document", Source: &llm.MediaSource{Kind: "base64", MediaType: "application/zip", Data: "AAAA"}},
+		{Type: "text", Text: "still here"},
+	}
+	blocks := toBedrockContentBlocks(parts)
+	if len(blocks) != 1 {
+		t.Fatalf("blocks = %d, want 1 (text only)", len(blocks))
+	}
+	if _, ok := blocks[0].(*types.ContentBlockMemberText); !ok {
+		t.Fatalf("blocks[0] = %T", blocks[0])
 	}
 }
 

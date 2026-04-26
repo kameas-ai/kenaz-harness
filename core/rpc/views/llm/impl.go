@@ -332,12 +332,8 @@ func New(cfg Config) *API {
 func (a *API) buildMessages(ctx context.Context, sessionID, model, kind string) ([]corellm.Message, error) {
 	if a.history == nil || sessionID == "" {
 		return []corellm.Message{
-			{
-				Role: corellm.RoleUser,
-				Content: []corellm.ContentPart{
-					{Type: "text", Text: "Hello from the kaneaz-harness demo. Reply with a one-sentence greeting."},
-				},
-			},
+			corellm.NewTextMessage(corellm.RoleUser,
+				"Hello from the kaneaz-harness demo. Reply with a one-sentence greeting."),
 		}, nil
 	}
 	stored, err := a.history.ListMessages(ctx, sessionID)
@@ -423,12 +419,7 @@ func (a *API) buildMessages(ctx context.Context, sessionID, model, kind string) 
 		if role == "" {
 			role = corellm.RoleUser
 		}
-		out = append(out, corellm.Message{
-			Role: role,
-			Content: []corellm.ContentPart{
-				{Type: "text", Text: m.Content},
-			},
-		})
+		out = append(out, corellm.NewTextMessage(role, m.Content))
 	}
 	return out, nil
 }

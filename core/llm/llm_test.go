@@ -119,6 +119,133 @@ func TestCredentialReference_String_NeverCarriesValue(t *testing.T) {
 	// that holds resolved bytes.
 }
 
+func TestNewTextMessage_BuildsSingleTextBlock(t *testing.T) {
+	m := NewTextMessage(RoleUser, "hello")
+	if m.Role != RoleUser {
+		t.Fatalf("role = %q", m.Role)
+	}
+	if len(m.Content) != 1 {
+		t.Fatalf("content len = %d, want 1", len(m.Content))
+	}
+	c := m.Content[0]
+	if c.Type != "text" {
+		t.Fatalf("content[0].Type = %q", c.Type)
+	}
+	if c.Text != "hello" {
+		t.Fatalf("content[0].Text = %q", c.Text)
+	}
+}
+
+func TestMessageText_FlattensTextBlocks(t *testing.T) {
+	cases := []struct {
+		name string
+		msg  Message
+		want string
+	}{
+		{"empty", Message{}, ""},
+		{"single-text", NewTextMessage(RoleUser, "alpha"), "alpha"},
+		{
+			name: "two-text-blocks",
+			msg: Message{
+				Role: RoleUser,
+				Content: []ContentBlock{
+					{Type: "text", Text: "alpha"},
+					{Type: "text", Text: "beta"},
+				},
+			},
+			want: "alpha\n\nbeta",
+		},
+		{
+			name: "skips-images-and-tools",
+			msg: Message{
+				Role: RoleUser,
+				Content: []ContentBlock{
+					{Type: "text", Text: "alpha"},
+					{Type: "image", Source: &MediaSource{Kind: "base64", MediaType: "image/png", Data: "AA=="}},
+					{Type: "tool_use", ToolUse: &ToolUse{ID: "x", Name: "y"}},
+					{Type: "text", Text: "beta"},
+				},
+			},
+			want: "alpha\n\nbeta",
+		},
+		{
+			name: "all-images",
+			msg: Message{
+				Role: RoleUser,
+				Content: []ContentBlock{
+					{Type: "image", Source: &MediaSource{Kind: "base64", MediaType: "image/png", Data: "AA=="}},
+				},
+			},
+			want: "",
+		},
+		{
+			name: "ignores-empty-text",
+			msg: Message{
+				Role: RoleUser,
+				Content: []ContentBlock{
+					{Type: "text", Text: ""},
+					{Type: "text", Text: "alpha"},
+				},
+			},
+			want: "alpha",
+		},
+		{
+			name: "blank-type-counts-as-text",
+			msg: Message{
+				Role: RoleUser,
+				Content: []ContentBlock{
+					{Type: "", Text: "alpha"},
+				},
+			},
+			want: "alpha",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.msg.Text(); got != tc.want {
+				t.Fatalf("Text() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestMessage_RoundTripsContentBlocksWithMediaSource(t *testing.T) {
+	in := Message{
+		Role: RoleUser,
+		Content: []ContentBlock{
+			{Type: "text", Text: "describe this"},
+			{Type: "image", Source: &MediaSource{
+				Kind:      "base64",
+				MediaType: "image/png",
+				Data:      "iVBORw0KGgo=",
+			}},
+			{Type: "document", Source: &MediaSource{
+				Kind:         "base64",
+				MediaType:    "application/pdf",
+				Data:         "JVBERi0=",
+				OriginalName: "report.pdf",
+			}},
+		},
+	}
+	b, err := json.Marshal(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out Message
+	if err := json.Unmarshal(b, &out); err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Content) != 3 {
+		t.Fatalf("blocks = %d", len(out.Content))
+	}
+	if out.Content[1].Source == nil || out.Content[1].Source.MediaType != "image/png" {
+		t.Fatalf("image source missing: %+v", out.Content[1].Source)
+	}
+	if out.Content[2].Source == nil || out.Content[2].Source.OriginalName != "report.pdf" {
+		t.Fatalf("document name missing: %+v", out.Content[2].Source)
+	}
+}
+
 func contains(s, sub string) bool {
 	return len(sub) == 0 || (len(s) >= len(sub) && indexOf(s, sub) >= 0)
 }

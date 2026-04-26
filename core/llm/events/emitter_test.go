@@ -16,7 +16,7 @@ func TestEmitter_RequestSubmittedExcludesCredentials(t *testing.T) {
 
 	req := llm.GenerationRequest{
 		SessionID: "s1",
-		Messages:  []llm.Message{{Role: llm.RoleUser, Content: []llm.ContentPart{{Type: "text", Text: "hi"}}}},
+		Messages:  []llm.Message{{Role: llm.RoleUser, Content: []llm.ContentBlock{{Type: "text", Text: "hi"}}}},
 		Tools:     []llm.ToolSpec{{Name: "t"}},
 	}
 	prof := llm.ProviderProfile{

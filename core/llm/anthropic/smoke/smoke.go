@@ -103,7 +103,7 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 	stream, err := reg.Stream(callCtx, corellm.GenerationRequest{
 		ProfileID: prof.ID,
 		Messages: []corellm.Message{
-			{Role: corellm.RoleUser, Content: []corellm.ContentPart{{Type: "text", Text: cfg.Prompt}}},
+			{Role: corellm.RoleUser, Content: []corellm.ContentBlock{{Type: "text", Text: cfg.Prompt}}},
 		},
 		Params: map[string]any{"max_tokens": cfg.MaxTokens},
 	})

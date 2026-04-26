@@ -186,7 +186,7 @@ func TestLoop_SingleToolHappyPath(t *testing.T) {
 		streams: []corellm.Stream{
 			&scriptedStream{
 				final: corellm.Response{
-					Content:      []corellm.ContentPart{{Type: "text", Text: "Issue 42 says hello."}},
+					Content:      []corellm.ContentBlock{{Type: "text", Text: "Issue 42 says hello."}},
 					FinishReason: "end_turn",
 				},
 			},
@@ -210,7 +210,7 @@ func TestLoop_SingleToolHappyPath(t *testing.T) {
 	originalReq := corellm.GenerationRequest{
 		ProfileID: "prof",
 		Messages: []corellm.Message{
-			{Role: corellm.RoleUser, Content: []corellm.ContentPart{{Type: "text", Text: "what's in issue 42?"}}},
+			{Role: corellm.RoleUser, Content: []corellm.ContentBlock{{Type: "text", Text: "what's in issue 42?"}}},
 		},
 	}
 
@@ -291,7 +291,7 @@ func TestLoop_UnknownToolNameSurfacesAsErrorResult(t *testing.T) {
 		streams: []corellm.Stream{
 			&scriptedStream{
 				final: corellm.Response{
-					Content:      []corellm.ContentPart{{Type: "text", Text: "I tried but the tool isn't available."}},
+					Content:      []corellm.ContentBlock{{Type: "text", Text: "I tried but the tool isn't available."}},
 					FinishReason: "end_turn",
 				},
 			},
@@ -336,7 +336,7 @@ func TestLoop_PoolErrorSurfacesAsToolFailure(t *testing.T) {
 		streams: []corellm.Stream{
 			&scriptedStream{
 				final: corellm.Response{
-					Content:      []corellm.ContentPart{{Type: "text", Text: "tool failed; sorry"}},
+					Content:      []corellm.ContentBlock{{Type: "text", Text: "tool failed; sorry"}},
 					FinishReason: "end_turn",
 				},
 			},
@@ -438,7 +438,7 @@ func TestLoop_US3_PermissionDenyRoundTrip(t *testing.T) {
 		streams: []corellm.Stream{
 			&scriptedStream{
 				final: corellm.Response{
-					Content:      []corellm.ContentPart{{Type: "text", Text: "Sorry, I can't delete that — try another approach."}},
+					Content:      []corellm.ContentBlock{{Type: "text", Text: "Sorry, I can't delete that — try another approach."}},
 					FinishReason: "end_turn",
 				},
 			},
@@ -465,7 +465,7 @@ func TestLoop_US3_PermissionDenyRoundTrip(t *testing.T) {
 	originalReq := corellm.GenerationRequest{
 		ProfileID: "prof",
 		Messages: []corellm.Message{
-			{Role: corellm.RoleUser, Content: []corellm.ContentPart{{Type: "text", Text: "delete /etc/passwd"}}},
+			{Role: corellm.RoleUser, Content: []corellm.ContentBlock{{Type: "text", Text: "delete /etc/passwd"}}},
 		},
 	}
 
@@ -540,7 +540,7 @@ func TestLoop_PermissionDeny_DefaultReason(t *testing.T) {
 	reg := &fakeRegistry{
 		streams: []corellm.Stream{
 			&scriptedStream{final: corellm.Response{
-				Content:      []corellm.ContentPart{{Type: "text", Text: "ok"}},
+				Content:      []corellm.ContentBlock{{Type: "text", Text: "ok"}},
 				FinishReason: "end_turn",
 			}},
 		},
@@ -582,7 +582,7 @@ func TestLoop_PermissionConfirmEach_TreatedAsAutoAllow(t *testing.T) {
 	reg := &fakeRegistry{
 		streams: []corellm.Stream{
 			&scriptedStream{final: corellm.Response{
-				Content:      []corellm.ContentPart{{Type: "text", Text: "done"}},
+				Content:      []corellm.ContentBlock{{Type: "text", Text: "done"}},
 				FinishReason: "end_turn",
 			}},
 		},
@@ -614,7 +614,7 @@ func TestLoop_PermissionResolverErrorSurfaces(t *testing.T) {
 	reg := &fakeRegistry{
 		streams: []corellm.Stream{
 			&scriptedStream{final: corellm.Response{
-				Content:      []corellm.ContentPart{{Type: "text", Text: "sorry"}},
+				Content:      []corellm.ContentBlock{{Type: "text", Text: "sorry"}},
 				FinishReason: "end_turn",
 			}},
 		},
@@ -680,7 +680,7 @@ func TestLoop_NamespacedToolNameSplits(t *testing.T) {
 		streams: []corellm.Stream{
 			&scriptedStream{
 				final: corellm.Response{
-					Content:      []corellm.ContentPart{{Type: "text", Text: "no results"}},
+					Content:      []corellm.ContentBlock{{Type: "text", Text: "no results"}},
 					FinishReason: "end_turn",
 				},
 			},
@@ -729,7 +729,7 @@ func TestLoop_LegacyUnNamespacedNameStillResolves(t *testing.T) {
 	reg := &fakeRegistry{
 		streams: []corellm.Stream{
 			&scriptedStream{final: corellm.Response{
-				Content:      []corellm.ContentPart{{Type: "text", Text: "done"}},
+				Content:      []corellm.ContentBlock{{Type: "text", Text: "done"}},
 				FinishReason: "end_turn",
 			}},
 		},

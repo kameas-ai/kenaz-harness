@@ -3,6 +3,7 @@ package llm
 import (
 	"context"
 	"encoding/json"
+	"strings"
 )
 
 // Capability identifies a model capability surfaced through the connector.
@@ -131,17 +132,69 @@ const (
 
 // Message is one entry in the conversation history.
 type Message struct {
-	Role    Role          `json:"role"`
-	Content []ContentPart `json:"content"`
+	Role    Role           `json:"role"`
+	Content []ContentBlock `json:"content"`
 }
 
-// ContentPart is a polymorphic content fragment carrying text, a tool
-// reference, or a typed attachment payload.
-type ContentPart struct {
-	Type     string          `json:"type"`
-	Text     string          `json:"text,omitempty"`
-	ToolUse  *ToolUse        `json:"tool_use,omitempty"`
-	ToolData json.RawMessage `json:"tool_data,omitempty"`
+// NewTextMessage builds the common case — a message with a single text
+// block. Most call sites of the connector wrap a plain string into a
+// Message; this helper is the canonical constructor (FR-002).
+func NewTextMessage(role Role, text string) Message {
+	return Message{
+		Role:    role,
+		Content: []ContentBlock{{Type: "text", Text: text}},
+	}
+}
+
+// Text flattens all text-typed blocks in declaration order, joining
+// them with a blank-line separator. Returns "" when no text blocks
+// exist (all-image / all-document messages). Used by legacy callers
+// that haven't migrated to block-aware logic (FR-002).
+func (m Message) Text() string {
+	var b strings.Builder
+	for _, c := range m.Content {
+		if c.Type != "text" && c.Type != "" {
+			continue
+		}
+		if c.Text == "" {
+			continue
+		}
+		if b.Len() > 0 {
+			b.WriteString("\n\n")
+		}
+		b.WriteString(c.Text)
+	}
+	return b.String()
+}
+
+// ContentBlock is a polymorphic content fragment carrying text, an
+// image / document media reference, or a tool call / result. The Type
+// field selects which sibling field is populated:
+//
+//   - "text"        → Text
+//   - "image"       → Source (MediaType image/png|jpeg|gif|webp)
+//   - "document"    → Source (MediaType application/pdf|csv|html|txt|md)
+//   - "tool_use"    → ToolUse
+//   - "tool_result" → ToolResult OR ToolData (legacy raw-bytes shape)
+type ContentBlock struct {
+	Type       string          `json:"type"`
+	Text       string          `json:"text,omitempty"`
+	Source     *MediaSource    `json:"source,omitempty"`
+	ToolUse    *ToolUse        `json:"tool_use,omitempty"`
+	ToolResult *ToolResult     `json:"tool_result,omitempty"`
+	ToolData   json.RawMessage `json:"tool_data,omitempty"`
+}
+
+// MediaSource carries the bytes (or future URI reference) for an image
+// or document content block. Kind discriminates the storage form;
+// "base64" is the canonical inline shape and "uri" is reserved for a
+// future remote-fetch path.
+type MediaSource struct {
+	Kind         string `json:"kind"`
+	MediaType    string `json:"media_type"`
+	Data         string `json:"data,omitempty"`
+	URI          string `json:"uri,omitempty"`
+	OriginalName string `json:"original_name,omitempty"`
 }
 
 // ToolUse is a model-emitted tool call (FR-006).
@@ -149,6 +202,16 @@ type ToolUse struct {
 	ID    string          `json:"id"`
 	Name  string          `json:"name"`
 	Input json.RawMessage `json:"input"`
+}
+
+// ToolResult carries the typed payload returned by a tool invocation
+// when surfaced as a content block. The legacy ContentBlock.ToolData
+// raw-bytes encoding remains supported for callers that haven't yet
+// migrated to the typed form.
+type ToolResult struct {
+	ToolUseID string          `json:"tool_use_id,omitempty"`
+	Content   json.RawMessage `json:"content,omitempty"`
+	IsError   bool            `json:"is_error,omitempty"`
 }
 
 // ToolSpec declares a callable tool the model may invoke (FR-006).
@@ -275,10 +338,10 @@ type Stream interface {
 	Final() (Response, error)
 }
 
-// ContentPartFromText is a small constructor used by adapters to emit
+// ContentBlockFromText is a small constructor used by adapters to emit
 // text deltas without spelling out the full struct.
-func ContentPartFromText(text string) ContentPart {
-	return ContentPart{Type: "text", Text: text}
+func ContentBlockFromText(text string) ContentBlock {
+	return ContentBlock{Type: "text", Text: text}
 }
 
 // ReasoningBlock is one model reasoning frame (FR-010).
@@ -314,7 +377,7 @@ type Cost struct {
 
 // Response is the terminal result of a generation (FR-011).
 type Response struct {
-	Content      []ContentPart    `json:"content"`
+	Content      []ContentBlock   `json:"content"`
 	ToolCalls    []ToolUse        `json:"tool_calls,omitempty"`
 	Reasoning    []ReasoningBlock `json:"reasoning,omitempty"`
 	FinishReason string           `json:"finish_reason"`

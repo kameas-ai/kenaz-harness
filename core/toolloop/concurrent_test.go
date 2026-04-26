@@ -72,7 +72,7 @@ func TestConcurrent_ParallelDispatchPreservesOrder(t *testing.T) {
 	reg := &fakeRegistry{
 		streams: []corellm.Stream{
 			&scriptedStream{final: corellm.Response{
-				Content:      []corellm.ContentPart{{Type: "text", Text: "done"}},
+				Content:      []corellm.ContentBlock{{Type: "text", Text: "done"}},
 				FinishReason: "end_turn",
 			}},
 		},
@@ -152,7 +152,7 @@ func TestConcurrent_BoundsParallelismToCap(t *testing.T) {
 	reg := &fakeRegistry{
 		streams: []corellm.Stream{
 			&scriptedStream{final: corellm.Response{
-				Content:      []corellm.ContentPart{{Type: "text", Text: "done"}},
+				Content:      []corellm.ContentBlock{{Type: "text", Text: "done"}},
 				FinishReason: "end_turn",
 			}},
 		},
@@ -422,7 +422,7 @@ func TestConcurrent_ProgressEmittedForSuccessfulDispatch(t *testing.T) {
 	reg := &fakeRegistry{
 		streams: []corellm.Stream{
 			&scriptedStream{final: corellm.Response{
-				Content:      []corellm.ContentPart{{Type: "text", Text: "all done"}},
+				Content:      []corellm.ContentBlock{{Type: "text", Text: "all done"}},
 				FinishReason: "end_turn",
 			}},
 		},
@@ -475,7 +475,7 @@ func TestConcurrent_ProgressNotEmittedForBlockedCalls(t *testing.T) {
 	reg := &fakeRegistry{
 		streams: []corellm.Stream{
 			&scriptedStream{final: corellm.Response{
-				Content:      []corellm.ContentPart{{Type: "text", Text: "ok"}},
+				Content:      []corellm.ContentBlock{{Type: "text", Text: "ok"}},
 				FinishReason: "end_turn",
 			}},
 		},
@@ -519,7 +519,7 @@ func TestConcurrent_ParallelDispatchOrderingUnderPressure(t *testing.T) {
 	reg := &fakeRegistry{
 		streams: []corellm.Stream{
 			&scriptedStream{final: corellm.Response{
-				Content:      []corellm.ContentPart{{Type: "text", Text: "done"}},
+				Content:      []corellm.ContentBlock{{Type: "text", Text: "done"}},
 				FinishReason: "end_turn",
 			}},
 		},

@@ -85,7 +85,7 @@ func (s *stubStream) Cancel() error { return nil }
 
 func (s *stubStream) Final() (corellm.Response, error) {
 	return corellm.Response{
-		Content:      []corellm.ContentPart{corellm.ContentPartFromText(s.out)},
+		Content:      []corellm.ContentBlock{corellm.ContentBlockFromText(s.out)},
 		FinishReason: s.finish,
 	}, nil
 }

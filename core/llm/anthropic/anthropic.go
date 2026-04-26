@@ -418,9 +418,18 @@ func buildRequestBody(req llm.GenerationRequest, prof llm.ProviderProfile) ([]by
 		}
 		// Anthropic uses "user" / "assistant"; tool messages are folded
 		// into user-role messages with a tool_result content block.
+		// Anthropic accepts either a plain string or an array of typed
+		// content blocks. We pick the string form when every block is
+		// text so the legacy text-only wire shape is preserved.
+		var content any
+		if isAllText(m.Content) {
+			content = m.Text()
+		} else {
+			content = convertContent(m.Content)
+		}
 		converted := map[string]any{
 			"role":    role,
-			"content": convertContent(m.Content),
+			"content": content,
 		}
 		if m.Role == llm.RoleTool {
 			converted["role"] = "user"
@@ -460,8 +469,30 @@ func buildRequestBody(req llm.GenerationRequest, prof llm.ProviderProfile) ([]by
 	return json.Marshal(out)
 }
 
-// convertContent maps connector ContentParts to Anthropic content blocks.
-func convertContent(parts []llm.ContentPart) []map[string]any {
+// isAllText reports whether every block in parts is a text block. Used
+// by the request builder to pick between the string-shaped content
+// (legacy / common case) and the array-of-blocks shape (multimodal).
+func isAllText(parts []llm.ContentBlock) bool {
+	if len(parts) == 0 {
+		return true
+	}
+	for _, p := range parts {
+		if p.Type != "" && p.Type != "text" {
+			return false
+		}
+	}
+	return true
+}
+
+// convertContent maps connector ContentBlocks to Anthropic content blocks.
+//
+// Per https://docs.anthropic.com/en/docs/build-with-claude/vision and
+// https://docs.anthropic.com/en/docs/build-with-claude/pdf-support the
+// API expects:
+//
+//	image    → {type:"image",    source:{type:"base64", media_type, data}}
+//	document → {type:"document", source:{type:"base64", media_type:"application/pdf", data}}
+func convertContent(parts []llm.ContentBlock) []map[string]any {
 	out := make([]map[string]any, 0, len(parts))
 	for _, p := range parts {
 		switch p.Type {
@@ -470,6 +501,22 @@ func convertContent(parts []llm.ContentPart) []map[string]any {
 				continue
 			}
 			out = append(out, map[string]any{"type": "text", "text": p.Text})
+		case "image":
+			if p.Source == nil {
+				continue
+			}
+			out = append(out, map[string]any{
+				"type":   "image",
+				"source": anthropicMediaSource(p.Source),
+			})
+		case "document":
+			if p.Source == nil {
+				continue
+			}
+			out = append(out, map[string]any{
+				"type":   "document",
+				"source": anthropicMediaSource(p.Source),
+			})
 		case "tool_use":
 			if p.ToolUse == nil {
 				continue
@@ -491,7 +538,19 @@ func convertContent(parts []llm.ContentPart) []map[string]any {
 			block := map[string]any{
 				"type": "tool_result",
 			}
-			if len(p.ToolData) > 0 {
+			if p.ToolResult != nil {
+				if p.ToolResult.ToolUseID != "" {
+					block["tool_use_id"] = p.ToolResult.ToolUseID
+				}
+				if len(p.ToolResult.Content) > 0 {
+					var c any
+					_ = json.Unmarshal(p.ToolResult.Content, &c)
+					block["content"] = c
+				}
+				if p.ToolResult.IsError {
+					block["is_error"] = true
+				}
+			} else if len(p.ToolData) > 0 {
 				var content any
 				_ = json.Unmarshal(p.ToolData, &content)
 				block["content"] = content
@@ -509,6 +568,28 @@ func convertContent(parts []llm.ContentPart) []map[string]any {
 		// Anthropic rejects empty content arrays; ensure at least one
 		// block so the API call is well-formed.
 		out = append(out, map[string]any{"type": "text", "text": ""})
+	}
+	return out
+}
+
+// anthropicMediaSource builds the `source` object Anthropic expects for
+// image / document content blocks. base64 inline is the only kind we
+// emit today; "uri" is reserved.
+func anthropicMediaSource(src *llm.MediaSource) map[string]any {
+	kind := src.Kind
+	if kind == "" {
+		kind = "base64"
+	}
+	out := map[string]any{
+		"type":       kind,
+		"media_type": src.MediaType,
+	}
+	switch kind {
+	case "uri":
+		out["url"] = src.URI
+	default:
+		out["type"] = "base64"
+		out["data"] = src.Data
 	}
 	return out
 }
@@ -598,7 +679,7 @@ func (s *stream) pump() {
 		s.mu.Lock()
 		if s.finalErr == nil && !s.cancelled {
 			s.final = llm.Response{
-				Content:      []llm.ContentPart{{Type: "text", Text: s.textBuf.String()}},
+				Content:      []llm.ContentBlock{{Type: "text", Text: s.textBuf.String()}},
 				ToolCalls:    s.toolCalls,
 				FinishReason: s.finishStop,
 				Usage:        s.usage,

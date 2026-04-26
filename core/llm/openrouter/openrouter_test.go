@@ -72,7 +72,7 @@ func newAdapter(fs *fakeServer) *Adapter {
 func stdReq() (llm.GenerationRequest, llm.ProviderProfile) {
 	req := llm.GenerationRequest{
 		Messages: []llm.Message{
-			{Role: llm.RoleUser, Content: []llm.ContentPart{{Type: "text", Text: "hi"}}},
+			{Role: llm.RoleUser, Content: []llm.ContentBlock{{Type: "text", Text: "hi"}}},
 		},
 	}
 	prof := llm.ProviderProfile{
