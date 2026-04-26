@@ -222,6 +222,9 @@ func (s *stubTools) ForgetRecipeKey(_ context.Context, _, _ string) error {
 func (s *stubTools) RecipeStatus(_ context.Context, _ string) (stdio.RecipeStatus, error) {
 	return stdio.RecipeStatus{}, errNotWired
 }
+func (s *stubTools) RecipeConfig(_ context.Context, _ string) (map[string]any, error) {
+	return map[string]any{}, nil
+}
 
 // ── shell ──────────────────────────────────────────────────────────────
 

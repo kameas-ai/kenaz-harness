@@ -469,6 +469,26 @@ func (a *API) RecipeStatus(ctx context.Context, id string) (stdio.RecipeStatus, 
 	}, nil
 }
 
+// RecipeConfig returns the persisted per-install config map for an
+// enabled recipe. When the recipe is not enabled the function
+// returns an empty map (not nil) and no error — the frontend can
+// render a uniform row regardless. The returned map is a shallow
+// copy of the persisted entry so callers may safely mutate it.
+func (a *API) RecipeConfig(_ context.Context, id string) (map[string]any, error) {
+	if a.cfg.Enabled == nil {
+		return map[string]any{}, nil
+	}
+	entry, ok := a.cfg.Enabled.Get(id)
+	if !ok {
+		return map[string]any{}, nil
+	}
+	out := make(map[string]any, len(entry.Config))
+	for k, v := range entry.Config {
+		out[k] = v
+	}
+	return out, nil
+}
+
 // keysResolvable reports whether every required env key for r
 // resolves through the secrets backend. Optional keys do not affect
 // the boolean — a recipe with one required + one optional key is

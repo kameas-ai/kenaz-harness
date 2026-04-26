@@ -705,3 +705,47 @@ func TestInstallRecipe_FilesystemMultipleDirsAppendAsArgs(t *testing.T) {
 		t.Errorf("Command[5] = %q, want %q", got[5], extra2)
 	}
 }
+
+func TestRecipeConfig_NotEnabledReturnsEmpty(t *testing.T) {
+	t.Parallel()
+	api := New(Config{
+		Catalog: fsCatalog(),
+		Enabled: &recipes.EnabledRecipes{},
+	})
+	cfg, err := api.RecipeConfig(context.Background(), "filesystem")
+	if err != nil {
+		t.Fatalf("RecipeConfig: %v", err)
+	}
+	if len(cfg) != 0 {
+		t.Fatalf("cfg = %v, want empty", cfg)
+	}
+}
+
+func TestRecipeConfig_EnabledReturnsPersistedConfig(t *testing.T) {
+	t.Parallel()
+	dataDir := t.TempDir()
+	api := New(Config{
+		Catalog: fsCatalog(),
+		Enabled: &recipes.EnabledRecipes{},
+		Pool:    newFakePool(),
+		Secrets: secrets.NewMemoryBackend(),
+		DataDir: dataDir,
+	})
+	wantPath := filepath.Join(dataDir, "agent-workspace")
+	if _, err := api.InstallRecipe(context.Background(), "filesystem", nil, map[string]any{
+		"allowed_directories": []any{"${DATA_DIR}/agent-workspace"},
+	}); err != nil {
+		t.Fatalf("InstallRecipe: %v", err)
+	}
+	cfg, err := api.RecipeConfig(context.Background(), "filesystem")
+	if err != nil {
+		t.Fatalf("RecipeConfig: %v", err)
+	}
+	dirs, ok := cfg["allowed_directories"].([]string)
+	if !ok {
+		t.Fatalf("allowed_directories type = %T, want []string", cfg["allowed_directories"])
+	}
+	if len(dirs) != 1 || dirs[0] != wantPath {
+		t.Fatalf("allowed_directories = %v, want [%q]", dirs, wantPath)
+	}
+}

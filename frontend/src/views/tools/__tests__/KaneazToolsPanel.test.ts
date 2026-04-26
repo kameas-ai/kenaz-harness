@@ -93,13 +93,14 @@ function makeClient(
 ): MountResult {
   const list = vi.fn(async () => initialList.map((l) => ({ ...l })));
   const install = vi.fn<
-    [string, Record<string, string>],
+    [string, Record<string, string>, Record<string, unknown>?],
     Promise<RecipeStatus>
   >(async (id) =>
     makeStatus(id, { enabled: true, state: 'starting', keysPresent: true }),
   );
   const uninstall = vi.fn(async () => undefined);
   const forgetKey = vi.fn(async () => undefined);
+  const config = vi.fn(async (_id: string): Promise<Record<string, unknown>> => ({}));
   const status = vi.fn<[string], Promise<RecipeStatus>>(async (id) => {
     const seq = statusOverrides.get(id);
     if (seq && seq.length > 0) {
@@ -120,6 +121,7 @@ function makeClient(
         uninstall,
         forgetKey,
         status,
+        config,
       },
     },
   });
@@ -206,7 +208,9 @@ describe('KaneazToolsPanel — recipes section', () => {
     await flushPromises();
 
     expect(setup.spies.install).toHaveBeenCalledTimes(1);
-    expect(setup.spies.install).toHaveBeenCalledWith('brave-search', {});
+    const [calledId, calledEnv] = setup.spies.install.mock.calls[0];
+    expect(calledId).toBe('brave-search');
+    expect(calledEnv).toEqual({});
 
     // Modal stub is rendered only when `modalRecipe` is non-null in the
     // panel; with keysPresent the modal stays unmounted.
@@ -429,5 +433,156 @@ describe('KaneazToolsPanel — recipes section', () => {
     const html = w.html();
     expect(html).not.toMatch(/#[0-9a-fA-F]{3,8}\b/);
     expect(html).not.toMatch(/rgba?\s*\(/i);
+  });
+
+  // ── Filesystem-specific UX (WP03) ──────────────────────────────────
+
+  function fsRecipe(): Recipe {
+    return {
+      id: 'filesystem',
+      displayName: 'Filesystem',
+      description: 'Read and write files in a sandboxed workspace.',
+      category: 'filesystem',
+      envKeys: [],
+      capabilities: {
+        tools: true,
+        resources: false,
+        prompts: false,
+        sampling: false,
+      },
+      argsTemplate: ['${ALLOWED_DIRS}'],
+      configOptions: [
+        {
+          name: 'allowed_directories',
+          display: 'Allowed directories',
+          kind: 'directory_list',
+          default: ['${DATA_DIR}/agent-workspace'],
+          required: true,
+          description: 'Directories the model can read and write.',
+        },
+      ],
+    };
+  }
+
+  it('filesystem-category running row shows "Open workspace" button', async () => {
+    const recipes = [
+      makeListing(fsRecipe(), {
+        enabled: true,
+        keysPresent: true,
+        status: makeStatus('filesystem', {
+          enabled: true,
+          state: 'running',
+          keysPresent: true,
+        }),
+      }),
+    ];
+    const setup = makeClient(recipes);
+    setup.spies.status.mockResolvedValue(
+      makeStatus('filesystem', {
+        enabled: true,
+        state: 'running',
+        keysPresent: true,
+      }),
+    );
+    // Pre-load the persisted config so the panel can resolve the path.
+    const config = vi.fn(
+      async (_id: string): Promise<Record<string, unknown>> => ({
+        allowed_directories: ['/Users/me/.harness/agent-workspace'],
+      }),
+    );
+    setup.client.tools.recipes.config = config;
+
+    const w = await mountPanel(setup);
+    await flushPromises();
+    expect(
+      w.find('[data-testid=recipe-open-workspace-filesystem]').exists(),
+    ).toBe(true);
+  });
+
+  it('filesystem rows hide "Open workspace" while not running', async () => {
+    const recipes = [
+      makeListing(fsRecipe(), {
+        enabled: true,
+        keysPresent: true,
+        status: makeStatus('filesystem', {
+          enabled: true,
+          state: 'starting',
+          keysPresent: true,
+        }),
+      }),
+    ];
+    const setup = makeClient(recipes);
+    setup.client.tools.recipes.config = vi.fn(async () => ({
+      allowed_directories: ['/tmp/x'],
+    }));
+    const w = await mountPanel(setup);
+    await flushPromises();
+    expect(
+      w.find('[data-testid=recipe-open-workspace-filesystem]').exists(),
+    ).toBe(false);
+  });
+
+  it('clicking "Open workspace" calls shell.openInOSBrowser with the resolved path', async () => {
+    const recipes = [
+      makeListing(fsRecipe(), {
+        enabled: true,
+        keysPresent: true,
+        status: makeStatus('filesystem', {
+          enabled: true,
+          state: 'running',
+          keysPresent: true,
+        }),
+      }),
+    ];
+    const setup = makeClient(recipes);
+    setup.client.tools.recipes.config = vi.fn(async () => ({
+      allowed_directories: ['/Users/me/.harness/agent-workspace', '/tmp/extra'],
+    }));
+    const openInOSBrowser = vi.fn(async () => undefined);
+    setup.client.shell = { openInOSBrowser };
+
+    const w = await mountPanel(setup);
+    await flushPromises();
+    // Allow the watcher-triggered config load to settle.
+    await flushPromises();
+
+    await w
+      .get('[data-testid=recipe-open-workspace-filesystem]')
+      .trigger('click');
+    await flushPromises();
+
+    expect(openInOSBrowser).toHaveBeenCalledTimes(1);
+    expect(openInOSBrowser).toHaveBeenCalledWith(
+      '/Users/me/.harness/agent-workspace',
+    );
+  });
+
+  it('toggling on a filesystem row opens the modal (config flow)', async () => {
+    const recipes = [
+      makeListing(fsRecipe(), {
+        enabled: false,
+        keysPresent: true,
+        status: makeStatus('filesystem', {
+          enabled: false,
+          state: 'stopped',
+          keysPresent: true,
+        }),
+      }),
+    ];
+    const setup = makeClient(recipes);
+    const w = await mountPanel(setup);
+    await flushPromises();
+
+    const toggle = w.get('[data-testid=recipe-toggle-filesystem]');
+    await toggle.setValue(true);
+    await flushPromises();
+
+    // The modal stub is mounted with open=true and recipe=filesystem.
+    const modal = w.findComponent(Stub);
+    expect(modal.exists()).toBe(true);
+    expect(modal.props('open')).toBe(true);
+    expect((modal.props('recipe') as Recipe).id).toBe('filesystem');
+    // Install was NOT called yet — the config flow waits for modal commit.
+    expect(setup.spies.install).not.toHaveBeenCalled();
   });
 });

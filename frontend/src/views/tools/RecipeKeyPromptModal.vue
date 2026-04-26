@@ -1,54 +1,124 @@
 <script setup lang="ts">
 /**
  * RecipeKeyPromptModal — modal that prompts the user for the recipe's
- * env-key credentials, calls `installRecipe(id, env)`, and emits
- * `installed` on success.
+ * env-key credentials AND its declared ConfigOption values, calls
+ * `installRecipe(id, env, config)`, and emits `installed` on success.
  *
  * Design notes:
  *   - Shape mirrors the home-grown PinMenu pattern: no radix-vue, no
  *     teleport — a fixed-position overlay + centred panel.
  *   - Required keys carry an asterisk; submit is disabled until every
- *     required key has a non-empty value.
+ *     required env key has a non-empty value AND every required config
+ *     option resolves (non-empty for strings, ≥1 entry for
+ *     directory_list, booleans always count as filled).
  *   - "Get a key →" links resolve to `EnvKey.docsUrl`; `target=_blank`
- *     + `rel="noopener"` keep browser-dev parity. Wails desktop hands
- *     these off to the OS browser via the same anchor — verified via
- *     the manual A14 walkthrough in `docs/mcp-recipes.md`.
- *   - Keyboard: Esc closes; Enter on the last input submits when all
- *     required keys are filled.
- *   - The plaintext env map is passed once to `installRecipe` and not
- *     retained beyond that call (cleared on close).
+ *     + `rel="noopener"` keep browser-dev parity.
+ *   - Keyboard: Esc closes; Enter on the LAST text input submits when
+ *     all required fields are filled. Directory chips and inline-edits
+ *     never submit on Enter (they commit the edit).
+ *   - The plaintext env map and config map are passed once to
+ *     `installRecipe` and not retained beyond that call (cleared on
+ *     close).
+ *   - ConfigOption defaults are pre-filled. directory_list defaults
+ *     often carry the `${DATA_DIR}` token; we render it literally as
+ *     a chip placeholder and the backend expands at install time.
+ *
+ * `initialConfig` lets the caller seed the form with the persisted
+ * config (used by the "Edit configuration" path so the modal opens
+ * with the user's current allowed_directories instead of the recipe
+ * default).
  */
 
 import { computed, nextTick, ref, watch } from 'vue';
-import type { Recipe, RecipeStatus } from '@/lib/types';
+import type { Recipe, RecipeStatus, ConfigOption } from '@/lib/types';
+import DirectoryPicker from './DirectoryPicker.vue';
 
-const props = defineProps<{
-  open: boolean;
-  recipe: Recipe;
-  /**
-   * Caller-provided installer. Decoupled from the harness client so
-   * the surrounding panel can wire in its `useToolsRecipes().install`
-   * (or a test stub) without the modal owning the polling lifecycle.
-   */
-  install: (id: string, env: Record<string, string>) => Promise<RecipeStatus>;
-}>();
+const props = withDefaults(
+  defineProps<{
+    open: boolean;
+    recipe: Recipe;
+    /**
+     * Caller-provided installer. Decoupled from the harness client so
+     * the surrounding panel can wire in its `useToolsRecipes().install`
+     * (or a test stub) without the modal owning the polling lifecycle.
+     */
+    install: (
+      id: string,
+      env: Record<string, string>,
+      config: Record<string, unknown>,
+    ) => Promise<RecipeStatus>;
+    /**
+     * Optional pre-fill for the config form. Keys outside the
+     * recipe's declared ConfigOptions are ignored; missing keys fall
+     * back to the option's `default`. Used by the "Edit configuration"
+     * path on the filesystem row.
+     */
+    initialConfig?: Record<string, unknown>;
+  }>(),
+  {
+    initialConfig: () => ({}),
+  },
+);
 
 const emit = defineEmits<{
   (e: 'close'): void;
   (e: 'installed', status: RecipeStatus): void;
 }>();
 
-const values = ref<Record<string, string>>({});
+const envValues = ref<Record<string, string>>({});
+const configValues = ref<Record<string, unknown>>({});
 const submitting = ref(false);
 const errorMsg = ref<string | null>(null);
 const inputsContainer = ref<HTMLElement | null>(null);
 
+const configOptions = computed<readonly ConfigOption[]>(
+  () => props.recipe.configOptions ?? [],
+);
+
+const hasEnvSection = computed(() => props.recipe.envKeys.length > 0);
+const hasConfigSection = computed(() => configOptions.value.length > 0);
+
+function defaultForOption(opt: ConfigOption): unknown {
+  if (props.initialConfig && opt.name in props.initialConfig) {
+    return props.initialConfig[opt.name];
+  }
+  if (opt.default !== undefined) return opt.default;
+  switch (opt.kind) {
+    case 'directory_list':
+      return [];
+    case 'boolean':
+      return false;
+    case 'string':
+    default:
+      return '';
+  }
+}
+
 function resetForm() {
-  const next: Record<string, string> = {};
-  for (const k of props.recipe.envKeys) next[k.name] = '';
-  values.value = next;
+  const env: Record<string, string> = {};
+  for (const k of props.recipe.envKeys) env[k.name] = '';
+  envValues.value = env;
+
+  const cfg: Record<string, unknown> = {};
+  for (const opt of configOptions.value) {
+    cfg[opt.name] = cloneDefault(defaultForOption(opt), opt);
+  }
+  configValues.value = cfg;
   submitting.value = false;
   errorMsg.value = null;
+}
+
+function cloneDefault(value: unknown, opt: ConfigOption): unknown {
+  if (opt.kind === 'directory_list') {
+    if (Array.isArray(value)) {
+      return value.filter((v): v is string => typeof v === 'string').slice();
+    }
+    return [];
+  }
+  if (opt.kind === 'boolean') {
+    return typeof value === 'boolean' ? value : false;
+  }
+  return typeof value === 'string' ? value : '';
 }
 
 watch(
@@ -58,27 +128,44 @@ watch(
       resetForm();
       void nextTick(() => {
         const first = inputsContainer.value?.querySelector(
-          'input[type="password"], input[type="text"]',
+          'input[type="password"], input[type="text"]:not([data-testid^="dirpicker-edit"])',
         ) as HTMLInputElement | null;
         first?.focus();
       });
     } else {
-      // Zero out the in-memory values when the modal closes so the
-      // plaintext key never lingers in component state.
       const cleared: Record<string, string> = {};
       for (const k of props.recipe.envKeys) cleared[k.name] = '';
-      values.value = cleared;
+      envValues.value = cleared;
+      configValues.value = {};
     }
   },
   { immediate: true },
 );
 
-const requiredFilled = computed(() => {
+const requiredEnvFilled = computed(() => {
   for (const k of props.recipe.envKeys) {
-    if (k.required && !values.value[k.name]?.trim()) return false;
+    if (k.required && !envValues.value[k.name]?.trim()) return false;
   }
   return true;
 });
+
+const requiredConfigFilled = computed(() => {
+  for (const opt of configOptions.value) {
+    if (!opt.required) continue;
+    const v = configValues.value[opt.name];
+    if (opt.kind === 'directory_list') {
+      if (!Array.isArray(v) || v.length === 0) return false;
+    } else if (opt.kind === 'string') {
+      if (typeof v !== 'string' || v.trim() === '') return false;
+    }
+    // boolean: presence is implied (false is a valid filled value).
+  }
+  return true;
+});
+
+const canSubmit = computed(
+  () => requiredEnvFilled.value && requiredConfigFilled.value,
+);
 
 const lastEnvName = computed(
   () =>
@@ -90,23 +177,65 @@ function close() {
   emit('close');
 }
 
+function dirListDirHint(opt: ConfigOption): string | null {
+  if (opt.kind !== 'directory_list') return null;
+  const def = opt.default;
+  if (!Array.isArray(def)) return null;
+  const tokenised = def.find(
+    (s): s is string => typeof s === 'string' && s.includes('${DATA_DIR}'),
+  );
+  if (!tokenised) return null;
+  return tokenised;
+}
+
+function defaultHintFor(opt: ConfigOption): string | null {
+  const tokenised = dirListDirHint(opt);
+  if (tokenised) {
+    return `default: workspace folder under your harness data directory (${tokenised})`;
+  }
+  return null;
+}
+
 async function submit() {
   if (submitting.value) return;
-  if (!requiredFilled.value) return;
+  if (!canSubmit.value) return;
   submitting.value = true;
   errorMsg.value = null;
-  // Clone before handing off so the install callback receives a snapshot
-  // independent of further keystrokes (and so callers can zero their copy
-  // without racing the modal).
+
+  // Snapshot env so the install callback receives a frozen copy
+  // independent of further keystrokes.
   const env: Record<string, string> = {};
   for (const k of props.recipe.envKeys) {
-    const v = values.value[k.name]?.trim() ?? '';
+    const v = envValues.value[k.name]?.trim() ?? '';
     if (v) env[k.name] = v;
   }
+
+  // Snapshot config — only fields the recipe actually declares end
+  // up in the payload. directory_list values are filtered to non-empty
+  // strings; boolean / string fields are forwarded verbatim.
+  const config: Record<string, unknown> = {};
+  for (const opt of configOptions.value) {
+    const raw = configValues.value[opt.name];
+    if (opt.kind === 'directory_list') {
+      if (Array.isArray(raw)) {
+        const list = raw
+          .filter((v): v is string => typeof v === 'string')
+          .map((s) => s.trim())
+          .filter((s) => s !== '');
+        config[opt.name] = list;
+      } else {
+        config[opt.name] = [];
+      }
+    } else if (opt.kind === 'boolean') {
+      config[opt.name] = typeof raw === 'boolean' ? raw : false;
+    } else {
+      config[opt.name] = typeof raw === 'string' ? raw : '';
+    }
+  }
+
   try {
-    const status = await props.install(props.recipe.id, env);
-    // Clear plaintext from local state ASAP.
-    for (const k of props.recipe.envKeys) values.value[k.name] = '';
+    const status = await props.install(props.recipe.id, env, config);
+    for (const k of props.recipe.envKeys) envValues.value[k.name] = '';
     emit('installed', status);
     emit('close');
   } catch (e) {
@@ -125,9 +254,22 @@ function onKeydown(event: KeyboardEvent) {
   if (event.key !== 'Enter') return;
   const target = event.target as HTMLInputElement | null;
   if (!target || target.tagName !== 'INPUT') return;
-  // Only the last input submits on Enter — earlier inputs let the user
-  // tab forward without accidentally firing the install.
-  if (target.name === lastEnvName.value && requiredFilled.value) {
+  // Inline-edit chips inside DirectoryPicker handle Enter themselves —
+  // they carry a `data-testid` starting with `dirpicker-edit-`. The
+  // chip's @keydown handler stops propagation by calling
+  // `event.preventDefault()` after committing; we still bail here as
+  // a belt-and-braces guard against accidental form submission.
+  const testId = target.getAttribute('data-testid') ?? '';
+  if (testId.startsWith('dirpicker-edit-')) return;
+  if (target.type === 'checkbox') return;
+  // Only the last env-key input submits on Enter (matching the
+  // pre-WP03 behaviour) — earlier inputs (env or config) let the
+  // user tab forward.
+  if (
+    hasEnvSection.value &&
+    target.name === lastEnvName.value &&
+    canSubmit.value
+  ) {
     event.preventDefault();
     void submit();
   }
@@ -146,7 +288,7 @@ function onKeydown(event: KeyboardEvent) {
   >
     <div class="absolute inset-0 bg-modal-overlay" @click="close" />
     <div
-      class="relative z-10 w-[480px] max-w-[90vw] max-h-[80vh] overflow-hidden flex flex-col rounded-md border border-border-muted bg-surface-0 shadow-lg"
+      class="relative z-10 w-[520px] max-w-[90vw] max-h-[80vh] overflow-hidden flex flex-col rounded-md border border-border-muted bg-surface-0 shadow-lg"
     >
       <header
         class="flex items-center justify-between border-b border-border-muted px-5 py-3"
@@ -155,10 +297,10 @@ function onKeydown(event: KeyboardEvent) {
           <div
             class="text-[11px] uppercase tracking-[0.18em] text-ink-subtle"
           >
-            CONNECT TOOL
+            INSTALL TOOL
           </div>
           <h2 class="mt-1 font-ui text-base font-semibold text-ink">
-            {{ recipe.displayName }}
+            Install {{ recipe.displayName }}
           </h2>
         </div>
         <button
@@ -173,49 +315,132 @@ function onKeydown(event: KeyboardEvent) {
 
       <div
         ref="inputsContainer"
-        class="flex-1 overflow-y-auto px-5 py-4 space-y-4 font-ui"
+        class="flex-1 overflow-y-auto px-5 py-4 space-y-5 font-ui"
       >
         <p class="text-[12px] text-ink-muted max-w-prose">
           {{ recipe.description }}
         </p>
 
-        <div
-          v-for="key in recipe.envKeys"
-          :key="key.name"
-          class="space-y-1"
+        <!-- API Keys section -->
+        <section
+          v-if="hasEnvSection"
+          class="space-y-3"
+          data-testid="recipe-modal-env-section"
         >
-          <label
-            :for="`recipe-key-${recipe.id}-${key.name}`"
-            class="block text-[11px] uppercase tracking-[0.18em] text-ink-subtle"
+          <h3
+            class="text-[11px] uppercase tracking-[0.18em] text-ink-subtle"
           >
-            <span>{{ key.display }}</span>
-            <span
-              v-if="key.required"
-              class="ml-1 text-signal-warn"
-              aria-label="required"
-            >*</span>
-          </label>
-          <input
-            :id="`recipe-key-${recipe.id}-${key.name}`"
-            v-model="values[key.name]"
-            :name="key.name"
-            type="password"
-            autocomplete="off"
-            spellcheck="false"
-            class="w-full rounded-sm border border-border-muted bg-surface-1 px-2.5 py-1.5 font-mono text-sm text-ink focus:border-accent focus:outline-none"
-            :data-testid="`recipe-key-input-${key.name}`"
-          />
-          <a
-            v-if="key.docsUrl"
-            :href="key.docsUrl"
-            target="_blank"
-            rel="noopener"
-            class="inline-block text-[11px] text-accent hover:text-accent-muted"
-            :data-testid="`recipe-key-docs-${key.name}`"
+            API Keys
+          </h3>
+          <div
+            v-for="key in recipe.envKeys"
+            :key="key.name"
+            class="space-y-1"
           >
-            Get a key →
-          </a>
-        </div>
+            <label
+              :for="`recipe-key-${recipe.id}-${key.name}`"
+              class="block text-[11px] uppercase tracking-[0.18em] text-ink-subtle"
+            >
+              <span>{{ key.display }}</span>
+              <span
+                v-if="key.required"
+                class="ml-1 text-signal-warn"
+                aria-label="required"
+              >*</span>
+            </label>
+            <input
+              :id="`recipe-key-${recipe.id}-${key.name}`"
+              v-model="envValues[key.name]"
+              :name="key.name"
+              type="password"
+              autocomplete="off"
+              spellcheck="false"
+              class="w-full rounded-sm border border-border-muted bg-surface-1 px-2.5 py-1.5 font-mono text-sm text-ink focus:border-accent focus:outline-none"
+              :data-testid="`recipe-key-input-${key.name}`"
+            />
+            <a
+              v-if="key.docsUrl"
+              :href="key.docsUrl"
+              target="_blank"
+              rel="noopener"
+              class="inline-block text-[11px] text-accent hover:text-accent-muted"
+              :data-testid="`recipe-key-docs-${key.name}`"
+            >
+              Get a key →
+            </a>
+          </div>
+        </section>
+
+        <!-- Configuration section -->
+        <section
+          v-if="hasConfigSection"
+          class="space-y-3"
+          data-testid="recipe-modal-config-section"
+        >
+          <h3
+            class="text-[11px] uppercase tracking-[0.18em] text-ink-subtle"
+          >
+            Configuration
+          </h3>
+          <div
+            v-for="opt in configOptions"
+            :key="opt.name"
+            class="space-y-1"
+            :data-testid="`recipe-config-row-${opt.name}`"
+          >
+            <label
+              class="block text-[11px] uppercase tracking-[0.18em] text-ink-subtle"
+            >
+              <span>{{ opt.display }}</span>
+              <span
+                v-if="opt.required"
+                class="ml-1 text-signal-warn"
+                aria-label="required"
+              >*</span>
+            </label>
+            <p
+              v-if="opt.description"
+              class="text-[11px] text-ink-muted max-w-prose"
+              :data-testid="`recipe-config-desc-${opt.name}`"
+            >
+              {{ opt.description }}
+            </p>
+            <DirectoryPicker
+              v-if="opt.kind === 'directory_list'"
+              :model-value="(configValues[opt.name] as string[]) ?? []"
+              :input-id="opt.name"
+              @update:model-value="(v: string[]) => configValues[opt.name] = v"
+            />
+            <input
+              v-else-if="opt.kind === 'string'"
+              v-model="configValues[opt.name] as string"
+              type="text"
+              spellcheck="false"
+              autocomplete="off"
+              class="w-full rounded-sm border border-border-muted bg-surface-1 px-2.5 py-1.5 font-mono text-sm text-ink focus:border-accent focus:outline-none"
+              :data-testid="`recipe-config-string-${opt.name}`"
+            />
+            <label
+              v-else-if="opt.kind === 'boolean'"
+              class="inline-flex items-center gap-2 cursor-pointer select-none"
+            >
+              <input
+                v-model="configValues[opt.name] as boolean"
+                type="checkbox"
+                class="accent-accent w-4 h-4"
+                :data-testid="`recipe-config-bool-${opt.name}`"
+              />
+              <span class="font-ui text-[12px] text-ink">{{ opt.display }}</span>
+            </label>
+            <p
+              v-if="defaultHintFor(opt)"
+              class="text-[11px] text-ink-subtle"
+              :data-testid="`recipe-config-hint-${opt.name}`"
+            >
+              {{ defaultHintFor(opt) }}
+            </p>
+          </div>
+        </section>
 
         <div
           v-if="errorMsg"
@@ -241,11 +466,11 @@ function onKeydown(event: KeyboardEvent) {
         <button
           type="button"
           class="rounded-sm border border-accent-hairline bg-surface-1 px-3 py-1 text-[12px] text-accent hover:bg-accent-glow disabled:opacity-50 disabled:cursor-not-allowed"
-          :disabled="!requiredFilled || submitting"
+          :disabled="!canSubmit || submitting"
           data-testid="recipe-key-modal-submit"
           @click="submit"
         >
-          {{ submitting ? 'Connecting…' : 'Connect' }}
+          {{ submitting ? 'Installing…' : 'Install' }}
         </button>
       </footer>
     </div>
