@@ -119,7 +119,7 @@ func TestLog_ServerNotificationPath(t *testing.T) {
 
 	cap := &captureHandler{}
 	logger := slog.New(cap)
-	inst := newServerInstance("fake", logger, nil, nil, nil)
+	inst := newServerInstance("fake", logger, nil, nil, nil, instanceOptions{})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()

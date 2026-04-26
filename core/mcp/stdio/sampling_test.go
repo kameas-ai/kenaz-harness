@@ -159,7 +159,7 @@ func TestLLMSamplingHandler_ServerInitiated_GateOn(t *testing.T) {
 	reg := &stubRegistry{out: "answered"}
 	h := LLMSamplingHandler(reg, func() (string, string) { return "openai", "gpt-test" })
 
-	inst := newServerInstance("fake", nil, h, nil, nil)
+	inst := newServerInstance("fake", nil, h, nil, nil, instanceOptions{})
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if err := inst.Spawn(ctx, SpawnSpec{
@@ -202,7 +202,7 @@ func TestSampling_GateOff_ReturnsMethodNotFound(t *testing.T) {
 	t.Parallel()
 	bin := buildFakeServer(t)
 	stub := &countingHandler{}
-	inst := newServerInstance("fake", nil, stub, nil, nil)
+	inst := newServerInstance("fake", nil, stub, nil, nil, instanceOptions{})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -227,7 +227,7 @@ func TestPool_SetSamplingEnabled(t *testing.T) {
 	t.Parallel()
 	// Construct an instance directly so we don't pay the spawn cost
 	// for what is purely a state-mutation test.
-	inst := newServerInstance("fake", nil, nil, nil, nil)
+	inst := newServerInstance("fake", nil, nil, nil, nil, instanceOptions{})
 	if inst.SamplingEnabled() {
 		t.Fatalf("default sampling state must be OFF")
 	}

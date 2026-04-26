@@ -84,7 +84,7 @@ func TestRoots_ServerInitiatedDispatch(t *testing.T) {
 			{URI: "file:///proj", Name: "project"},
 		},
 	}
-	inst := newServerInstance("fake", nil, nil, stub, nil)
+	inst := newServerInstance("fake", nil, nil, stub, nil, instanceOptions{})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()

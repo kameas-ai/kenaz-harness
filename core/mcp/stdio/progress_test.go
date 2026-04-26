@@ -151,7 +151,7 @@ func TestProgress_EndToEnd_ServerNotification(t *testing.T) {
 	bin := buildFakeServer(t)
 
 	b := &stubBroker{}
-	inst := newServerInstance("fake", nil, nil, nil, b)
+	inst := newServerInstance("fake", nil, nil, nil, b, instanceOptions{})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
