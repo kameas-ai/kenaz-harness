@@ -7,6 +7,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/config v1.32.16
 	github.com/aws/aws-sdk-go-v2/service/bedrock v1.59.1
 	github.com/aws/aws-sdk-go-v2/service/bedrockruntime v1.50.5
+	github.com/fsnotify/fsnotify v1.9.0
 	github.com/wailsapp/wails/v2 v2.12.0
 	github.com/zalando/go-keyring v0.2.8
 	golang.org/x/sys v0.42.0

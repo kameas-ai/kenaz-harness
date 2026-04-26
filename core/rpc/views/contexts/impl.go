@@ -15,6 +15,7 @@ import (
 // satisfies it by construction; tests pass fakes.
 type Library interface {
 	Tree() (corecontexts.Node, error)
+	TreeWithOptions(includeHidden bool) (corecontexts.Node, error)
 	Get(path string) (string, error)
 	Save(path, content string) error
 	CreateFolder(path string) error
@@ -47,6 +48,19 @@ func (a *API) List(_ context.Context) (Node, error) {
 		return Node{Kind: KindFolder}, ErrLibraryUnavailable
 	}
 	root, err := a.lib.Tree()
+	if err != nil {
+		return Node{}, err
+	}
+	return toWire(root), nil
+}
+
+// ListAll returns the tree with dotfiles included. Used by the
+// "Show hidden" toggle in /contexts.
+func (a *API) ListAll(_ context.Context) (Node, error) {
+	if a == nil || a.lib == nil {
+		return Node{Kind: KindFolder}, ErrLibraryUnavailable
+	}
+	root, err := a.lib.TreeWithOptions(true)
 	if err != nil {
 		return Node{}, err
 	}

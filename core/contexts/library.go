@@ -39,6 +39,15 @@ type Library struct {
 
 	mu       sync.Mutex
 	watchers []*Watcher
+	// fsw is the optional fsnotify-backed watcher set by StartWatching.
+	// nil when the chassis booted without a watcher (test paths) or
+	// when the platform refused the inotify syscall — Library mutators
+	// fall back to debounceFallback in that case.
+	fsw *fsWatcher
+	// debounceFallback drives per-path debounce when fsw is nil.
+	// Library mutators always feed through one or the other so the
+	// 200 ms quiet-period contract holds either way.
+	debounceFallback fallbackDebouncer
 }
 
 // NodeKind discriminates folders from files in a tree response.
@@ -130,16 +139,25 @@ func (l *Library) Root() string {
 // Node whose Path is "" (root). Hidden entries (dotfiles) are omitted
 // — including the .trash dir and .recent.json metadata.
 func (l *Library) Tree() (Node, error) {
+	return l.TreeWithOptions(false)
+}
+
+// TreeWithOptions is the parameterised form of Tree. includeHidden=true
+// surfaces dotfiles in the tree EXCEPT the chassis-internal .trash
+// directory and .recent.json metadata which are unconditionally hidden
+// — they are plumbing, not user-visible content. The "Show hidden"
+// toggle in /contexts is the only caller that flips this on.
+func (l *Library) TreeWithOptions(includeHidden bool) (Node, error) {
 	if l == nil {
 		return Node{}, errors.New("contexts: nil library")
 	}
-	return l.walk(l.root, "")
+	return l.walk(l.root, "", includeHidden)
 }
 
 // walk builds a Node for absPath. relPath is the slash-separated
 // library-relative path of absPath; root passes "" so its children
 // surface as top-level entries.
-func (l *Library) walk(absPath, relPath string) (Node, error) {
+func (l *Library) walk(absPath, relPath string, includeHidden bool) (Node, error) {
 	info, err := os.Stat(absPath)
 	if err != nil {
 		return Node{}, err
@@ -171,16 +189,22 @@ func (l *Library) walk(absPath, relPath string) (Node, error) {
 	for _, e := range entries {
 		name := e.Name()
 		if strings.HasPrefix(name, ".") {
-			// Hidden: .trash, .recent.json, dotfiles users dropped
-			// in by mistake.
-			continue
+			// Always hide chassis plumbing — even when includeHidden
+			// is on, the trash dir and recents metadata aren't
+			// user-content and would just clutter the tree.
+			if name == trashDirName || name == recentJSONRel {
+				continue
+			}
+			if !includeHidden {
+				continue
+			}
 		}
 		childAbs := filepath.Join(absPath, name)
 		childRel := name
 		if relPath != "" {
 			childRel = relPath + "/" + name
 		}
-		child, err := l.walk(childAbs, childRel)
+		child, err := l.walk(childAbs, childRel, includeHidden)
 		if err != nil {
 			// Surface partial trees rather than failing hard — a
 			// single unreadable subtree should not blank the UI.
@@ -265,7 +289,7 @@ func (l *Library) Save(path, content string) error {
 	if err := os.Rename(tmpName, abs); err != nil {
 		return fmt.Errorf("contexts: rename %q: %w", path, err)
 	}
-	l.notify()
+	l.notifyOp(rel, OpModified)
 	return nil
 }
 
@@ -299,7 +323,7 @@ func (l *Library) CreateFolder(path string) error {
 	if err := os.MkdirAll(abs, 0o700); err != nil {
 		return fmt.Errorf("contexts: mkdir %q: %w", path, err)
 	}
-	l.notify()
+	l.notifyOp(rel, OpCreated)
 	return nil
 }
 
@@ -344,7 +368,7 @@ func (l *Library) Rename(oldPath, newPath string) error {
 	if err := os.Rename(oldAbs, newAbs); err != nil {
 		return fmt.Errorf("contexts: rename: %w", err)
 	}
-	l.notify()
+	l.notifyOp(newRel, OpCreated)
 	return nil
 }
 
@@ -376,7 +400,8 @@ func (l *Library) Delete(path string) error {
 	if err := os.Rename(abs, dst); err != nil {
 		return fmt.Errorf("contexts: trash %q: %w", path, err)
 	}
-	l.notify()
+	rel, _ := l.cleanRel(path)
+	l.notifyOp(rel, OpDeleted)
 	return nil
 }
 

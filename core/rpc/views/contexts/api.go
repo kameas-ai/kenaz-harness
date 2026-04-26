@@ -42,7 +42,12 @@ type Node struct {
 type ContextsAPI interface {
 	// List returns the recursive tree rooted at the library. An
 	// empty library returns a Node with Kind=folder and no children.
+	// Dotfiles are filtered.
 	List(ctx context.Context) (Node, error)
+	// ListAll is like List but surfaces dotfile entries (excluding
+	// the chassis-internal .trash dir and .recent.json metadata).
+	// The /contexts "Show hidden" toggle calls this when on.
+	ListAll(ctx context.Context) (Node, error)
 	// Get reads a file's contents as a string.
 	Get(ctx context.Context, path string) (string, error)
 	// Save writes content to path; creates parent directories.
