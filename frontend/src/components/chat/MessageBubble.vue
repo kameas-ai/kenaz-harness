@@ -30,7 +30,9 @@ import StreamingText from './StreamingText.vue';
 import PinMenu from './PinMenu.vue';
 import ImageBlock from './ImageBlock.vue';
 import DocumentChip from './DocumentChip.vue';
+import ArtifactChip from './ArtifactChip.vue';
 import type {
+  Artifact,
   ContentBlock,
   MemoryScopeKind,
   MessageRole,
@@ -62,6 +64,26 @@ const props = defineProps<{
    * disabled with a tooltip.
    */
   projectId?: string;
+  /**
+   * Stable id for this message. Required for the artifact-save and
+   * per-message artifact-chip flows. Optional for legacy callers — when
+   * absent the right-click "Save as artifact" affordance is suppressed
+   * and the chip row never renders.
+   */
+  messageId?: string;
+  /**
+   * When true, MessageBubble exposes a "Save as artifact" affordance
+   * (right-click context menu when `rememberable` is false; explicit
+   * button otherwise). The parent owns the rpc call via the
+   * `save-artifact` event.
+   */
+  saveable?: boolean;
+  /**
+   * Artifacts already captured from THIS message (filtered upstream
+   * by the session-level useArtifacts composable so we don't fetch
+   * per-bubble). Empty / undefined renders no chip row.
+   */
+  artifacts?: readonly Artifact[];
 }>();
 
 const emit = defineEmits<{
@@ -70,6 +92,17 @@ const emit = defineEmits<{
    * via RPC. Defaults to `'session'` when invoked from legacy paths.
    */
   (e: 'remember', scope: MemoryScopeKind): void;
+  /**
+   * User asked to save the message (or a slice of it) as an artifact.
+   * The parent prompts for a title and calls
+   * `client.sessions.saveAsArtifact`.
+   */
+  (e: 'save-artifact', messageId: string): void;
+  /**
+   * User clicked an artifact chip — parent owns the preview modal
+   * lifecycle (it fetches bytes via `client.artifacts.get`).
+   */
+  (e: 'open-artifact', artifact: Artifact): void;
 }>();
 
 const menuOpen = ref(false);
@@ -134,9 +167,31 @@ function onPinPointerDown(event: PointerEvent) {
 }
 
 function onBodyContextMenu(event: MouseEvent) {
-  if (!props.rememberable) return;
-  event.preventDefault();
-  openMenu();
+  if (props.rememberable) {
+    event.preventDefault();
+    openMenu();
+    return;
+  }
+  if (props.saveable && props.messageId) {
+    event.preventDefault();
+    saveArtifactMenuOpen.value = true;
+  }
+}
+
+const saveArtifactMenuOpen = ref(false);
+
+function closeSaveArtifactMenu() {
+  saveArtifactMenuOpen.value = false;
+}
+
+function onSaveArtifact() {
+  closeSaveArtifactMenu();
+  if (!props.messageId) return;
+  emit('save-artifact', props.messageId);
+}
+
+function onArtifactChipOpen(artifact: Artifact) {
+  emit('open-artifact', artifact);
 }
 
 function onPick(scope: MemoryScopeKind) {
@@ -233,6 +288,36 @@ function isLastBlock(idx: number): boolean {
             @close="closeMenu"
           />
         </div>
+        <div
+          v-if="saveable && messageId"
+          :class="['relative', rememberable ? '' : flashConfirm ? '' : 'ml-auto']"
+        >
+          <button
+            type="button"
+            class="opacity-0 group-hover:opacity-100 focus:opacity-100 transition-fast text-[12px] px-1.5 py-0.5 rounded-sm border border-border-muted text-ink-dim hover:text-accent hover:bg-surface-2 ml-1"
+            aria-label="Save as artifact"
+            data-testid="save-artifact-button"
+            @click="onSaveArtifact"
+          >
+            ⎘
+          </button>
+          <div
+            v-if="saveArtifactMenuOpen"
+            class="absolute right-0 top-full z-30 mt-1 w-52 rounded-sm border border-border-muted bg-surface-1 shadow-lg"
+            role="menu"
+            data-testid="save-artifact-menu"
+          >
+            <button
+              type="button"
+              role="menuitem"
+              class="block w-full px-3 py-1.5 text-left font-ui text-[12px] text-ink hover:bg-surface-2"
+              data-testid="save-artifact-menu-save"
+              @click="onSaveArtifact"
+            >
+              Save as artifact
+            </button>
+          </div>
+        </div>
       </header>
 
       <!-- tool-call rows: namespaced monospace line each -->
@@ -280,6 +365,19 @@ function isLastBlock(idx: number): boolean {
       <span v-else class="font-mono text-[12px] text-ink-muted">
         {{ content }}
       </span>
+
+      <div
+        v-if="artifacts && artifacts.length > 0"
+        class="mt-2 flex flex-wrap gap-1.5"
+        data-testid="message-artifacts-row"
+      >
+        <ArtifactChip
+          v-for="a in artifacts"
+          :key="a.id"
+          :artifact="a"
+          @open="onArtifactChipOpen"
+        />
+      </div>
     </div>
   </article>
 </template>

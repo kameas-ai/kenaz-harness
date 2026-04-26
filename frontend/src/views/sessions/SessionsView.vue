@@ -22,9 +22,17 @@ import MessageList from '@/components/chat/MessageList.vue';
 import ChatInput from '@/components/chat/ChatInput.vue';
 import ResolvedContextPanel from '@/views/sessions/ResolvedContextPanel.vue';
 import ConfirmToolModal from '@/components/chat/ConfirmToolModal.vue';
-import { useHarnessClient, useSessions } from '@/lib/useHarnessAPI';
+import ArtifactPreview from '@/views/artifacts/ArtifactPreview.vue';
+import { useArtifacts, useHarnessClient, useSessions } from '@/lib/useHarnessAPI';
 import { useSession } from '@/lib/useSession';
-import type { MemoryScopeKind, Message, Provider } from '@/lib/types';
+import type {
+  Artifact,
+  ArtifactScope,
+  ArtifactWithBytes,
+  MemoryScopeKind,
+  Message,
+  Provider,
+} from '@/lib/types';
 import { flattenChoices, inferFamily } from '@/lib/modelFamily';
 
 const route = useRoute();
@@ -339,6 +347,117 @@ async function onRemember(m: Message, scope: MemoryScopeKind = 'session') {
       err instanceof Error ? err.message : String(err);
   }
 }
+
+// ── Artifacts (artifacts-storage WP03) ───────────────────────────────
+//
+// Session-scoped artifact list — fetched once per session via the
+// useArtifacts composable, projected to a per-message map so individual
+// MessageBubbles never trigger their own RPC fetches (FR-009 / plan §5).
+const sessionArtifacts = useArtifacts({});
+const activeTab = ref<'chat' | 'artifacts'>('chat');
+const artifactPreviewOpen = ref(false);
+const artifactPreviewPayload = ref<ArtifactWithBytes | null>(null);
+const lastArtifactError = ref<string | null>(null);
+
+function refreshSessionArtifacts() {
+  if (!sessionId.value) return;
+  void sessionArtifacts.setFilter({ sessionId: sessionId.value });
+}
+
+watch(sessionId, () => {
+  refreshSessionArtifacts();
+}, { immediate: true });
+
+const artifactsByMessage = computed<ReadonlyMap<string, readonly Artifact[]>>(() => {
+  const map = new Map<string, Artifact[]>();
+  for (const a of sessionArtifacts.list.value) {
+    const mid = a.sourceRef.messageId;
+    if (!mid) continue;
+    const list = map.get(mid) ?? [];
+    list.push(a);
+    map.set(mid, list);
+  }
+  return map;
+});
+
+function defaultArtifactTitle(content: string): string {
+  const flat = content.replace(/\s+/g, ' ').trim();
+  return flat.slice(0, 60) || 'pinned message';
+}
+
+async function onSaveArtifactFromMessage(m: Message) {
+  if (!sessionId.value || !m.id) return;
+  const suggested = defaultArtifactTitle(m.content);
+  const title =
+    typeof window !== 'undefined' && typeof window.prompt === 'function'
+      ? window.prompt('Save as artifact — title:', suggested)
+      : suggested;
+  if (title === null) return;
+  const trimmed = title.trim() || suggested;
+  lastArtifactError.value = null;
+  try {
+    await sessionArtifacts.saveFromMessage(
+      sessionId.value,
+      m.id,
+      trimmed,
+    );
+  } catch (err) {
+    lastArtifactError.value = err instanceof Error ? err.message : String(err);
+  }
+}
+
+async function openArtifactPreview(a: Artifact) {
+  lastArtifactError.value = null;
+  try {
+    artifactPreviewPayload.value = await client.artifacts.get(a.id);
+    artifactPreviewOpen.value = true;
+  } catch (err) {
+    lastArtifactError.value = err instanceof Error ? err.message : String(err);
+  }
+}
+
+function closeArtifactPreview() {
+  artifactPreviewOpen.value = false;
+  artifactPreviewPayload.value = null;
+}
+
+async function promoteArtifact(
+  id: string,
+  scopeKind: ArtifactScope,
+  scopeId: string,
+): Promise<Artifact> {
+  const updated = await client.artifacts.promote(id, scopeKind, scopeId);
+  refreshSessionArtifacts();
+  if (
+    artifactPreviewPayload.value &&
+    artifactPreviewPayload.value.artifact.id === id
+  ) {
+    artifactPreviewPayload.value = {
+      artifact: updated,
+      bytes: artifactPreviewPayload.value.bytes,
+    };
+  }
+  return updated;
+}
+
+async function deleteArtifact(id: string): Promise<void> {
+  await client.artifacts.remove(id);
+  refreshSessionArtifacts();
+}
+
+function formatTimestamp(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return d.toLocaleString();
+}
+
+function formatSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  const kb = bytes / 1024;
+  if (kb < 1024) return kb < 10 ? `${kb.toFixed(1)} KB` : `${Math.round(kb)} KB`;
+  const mb = kb / 1024;
+  return mb < 10 ? `${mb.toFixed(1)} MB` : `${Math.round(mb)} MB`;
+}
 </script>
 
 <template>
@@ -586,16 +705,118 @@ async function onRemember(m: Message, scope: MemoryScopeKind = 'session') {
           Could not remember message: {{ lastRememberError }}
         </div>
         <ResolvedContextPanel :session-id="sessionId" />
-        <div class="flex-1 min-h-0">
+        <div
+          class="px-4 pt-2 flex items-center gap-1 border-b border-border-muted"
+          data-testid="session-tabs"
+        >
+          <button
+            type="button"
+            class="px-3 py-1 rounded-t-sm font-ui text-[11px] uppercase tracking-[0.18em] border-b-2"
+            :class="
+              activeTab === 'chat'
+                ? 'text-accent border-accent'
+                : 'text-ink-muted border-transparent hover:text-ink'
+            "
+            data-testid="session-tab-chat"
+            @click="activeTab = 'chat'"
+          >
+            Chat
+          </button>
+          <button
+            type="button"
+            class="px-3 py-1 rounded-t-sm font-ui text-[11px] uppercase tracking-[0.18em] border-b-2 flex items-center gap-1"
+            :class="
+              activeTab === 'artifacts'
+                ? 'text-accent border-accent'
+                : 'text-ink-muted border-transparent hover:text-ink'
+            "
+            data-testid="session-tab-artifacts"
+            @click="activeTab = 'artifacts'"
+          >
+            <span>Artifacts</span>
+            <span class="text-ink-dim font-mono text-[10px]">
+              ({{ sessionArtifacts.list.value.length }})
+            </span>
+          </button>
+        </div>
+        <div
+          v-if="lastArtifactError"
+          class="mx-4 my-2 rounded-md border border-signal-warn bg-surface-1 px-3 py-2 font-ui text-[12px] text-signal-warn"
+          role="alert"
+        >
+          {{ lastArtifactError }}
+        </div>
+        <div v-if="activeTab === 'chat'" class="flex-1 min-h-0">
           <MessageList
             :messages="session.messages.value"
             :streaming-message="session.currentlyStreaming.value"
             :waiting="isWaitingForFirstChunk"
             :error-message="session.error.value"
             :rememberable="memoryEnabled"
+            :saveable="true"
             :project-id="session.session.value?.projectId ?? ''"
+            :artifacts-by-message="artifactsByMessage"
             @remember="onRemember"
+            @save-artifact="onSaveArtifactFromMessage"
+            @open-artifact="openArtifactPreview"
           />
+        </div>
+        <div
+          v-else
+          class="flex-1 min-h-0 overflow-y-auto px-4 py-3"
+          data-testid="session-artifacts-tab"
+        >
+          <p
+            v-if="sessionArtifacts.list.value.length === 0"
+            class="font-ui text-xs text-ink-muted"
+            data-testid="session-artifacts-empty"
+          >
+            No artifacts yet. Code blocks with
+            <code class="font-mono">title="filename.ext"</code> and tool
+            outputs are captured automatically.
+          </p>
+          <table
+            v-else
+            class="w-full text-left font-ui text-xs"
+            data-testid="session-artifacts-table"
+          >
+            <thead>
+              <tr
+                class="text-[10px] uppercase tracking-[0.18em] text-ink-subtle"
+              >
+                <th class="px-2 py-1.5 font-medium">Source</th>
+                <th class="px-2 py-1.5 font-medium">Title</th>
+                <th class="px-2 py-1.5 font-medium">Mime</th>
+                <th class="px-2 py-1.5 font-medium">Size</th>
+                <th class="px-2 py-1.5 font-medium">Created</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr
+                v-for="a in sessionArtifacts.list.value"
+                :key="a.id"
+                class="cursor-pointer hover:bg-surface-2"
+                :data-testid="`session-artifacts-row-${a.id}`"
+                @click="openArtifactPreview(a)"
+              >
+                <td class="px-2 py-1.5 text-ink-dim font-mono text-[11px]">
+                  {{ a.source }}
+                </td>
+                <td class="px-2 py-1.5 text-ink truncate max-w-[40ch]">
+                  {{ a.title }}
+                </td>
+                <td class="px-2 py-1.5 text-ink-muted font-mono text-[11px]">
+                  {{ a.mimeType }}
+                </td>
+                <td class="px-2 py-1.5 text-ink-muted font-mono text-[11px]">
+                  {{ formatSize(a.byteSize) }}
+                </td>
+                <td class="px-2 py-1.5 text-ink-dim font-mono text-[11px]">
+                  {{ formatTimestamp(a.createdAt) }}
+                </td>
+              </tr>
+            </tbody>
+          </table>
         </div>
         <ChatInput
           v-model="session.draft.value"
@@ -619,5 +840,13 @@ async function onRemember(m: Message, scope: MemoryScopeKind = 'session') {
       @close="onNewSessionDialogClose"
     />
     <ConfirmToolModal />
+    <ArtifactPreview
+      :open="artifactPreviewOpen"
+      :payload="artifactPreviewPayload"
+      :project-id="session.session.value?.projectId ?? ''"
+      :on-promote="promoteArtifact"
+      :on-delete="deleteArtifact"
+      @close="closeArtifactPreview"
+    />
   </div>
 </template>

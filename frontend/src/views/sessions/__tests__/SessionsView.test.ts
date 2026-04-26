@@ -5,7 +5,7 @@ import { defineComponent, h } from 'vue';
 import SessionsView from '@/views/sessions/SessionsView.vue';
 import { provideFakeClient } from '@/lib/harnessClientContext';
 import type { HarnessClient } from '@/lib/harnessClient';
-import type { Message, Provider } from '@/lib/types';
+import type { Artifact, Message, Provider } from '@/lib/types';
 import { setConnectionState } from '@/lib/useConnectionState';
 
 interface FakeRuntime {
@@ -156,6 +156,99 @@ describe('SessionsView (chat-ui)', () => {
     const textarea = w.find('textarea');
     expect(textarea.exists()).toBe(true);
     expect(textarea.attributes('disabled')).toBeUndefined();
+    w.unmount();
+  });
+
+  it('renders the Artifacts tab and filters its list to the active session', async () => {
+    const messages: Message[] = [
+      makeMessage({ id: 'q', role: 'user', content: 'How are you?' }),
+    ];
+    const providers: Provider[] = [
+      { id: 'anthropic-p-1', name: 'Anthropic', tier: 'cloud', kind: 'anthropic', model: 'claude' },
+    ];
+    const sessionArtifact: Artifact = {
+      id: 'art-1',
+      sessionId: 's-1',
+      title: 'tictactoe.html',
+      mimeType: 'text/html',
+      contentHash: 'sha256:a',
+      byteSize: 256,
+      source: 'code_block',
+      sourceRef: { messageId: 'q' },
+      scopeKind: 'session',
+      createdAt: '2026-04-26T00:00:00Z',
+    };
+    const otherArtifact: Artifact = {
+      ...sessionArtifact,
+      id: 'art-2',
+      sessionId: 'other-session',
+      title: 'other-session.html',
+    };
+    const recordedFilters: Array<unknown> = [];
+    const { w } = await mountWithRoute('#s-1', {
+      sessions: {
+        list: async () => [],
+        get: async (id) => ({ id, name: 'Demo', createdAt: '', updatedAt: '' }),
+        create: async () => ({ id: '', name: '', createdAt: '', updatedAt: '' }),
+        rename: async () => undefined,
+        delete: async () => undefined,
+        reorder: async () => undefined,
+        startStream: async () => 'sub',
+        stopStream: async () => undefined,
+        listMessages: async () => messages,
+        appendMessage: async (id, role, content) =>
+          makeMessage({ id: 'new', sessionId: id, role, content }),
+        sendMessageWithBlocks: async () => makeMessage({ id: 'b' }),
+        saveDraft: async () => undefined,
+        loadDraft: async () => '',
+        setSystemPrompt: async () => undefined,
+        moveToProject: async () => undefined,
+        saveAsArtifact: async () => sessionArtifact,
+      },
+      llm: {
+        listProviders: async () => providers,
+        startStream: async () => 'sub',
+        stopStream: async () => undefined,
+        addProvider: async () => undefined,
+        updateProvider: async () => undefined,
+        removeProvider: async () => undefined,
+        testProvider: async () => ({ success: true, latency_ms: 1, message: 'ok' }),
+        listModels: async () => [],
+        resolveConfirm: async () => undefined,
+      },
+      artifacts: {
+        list: async (filter) => {
+          recordedFilters.push(filter);
+          if (filter?.sessionId) {
+            return [sessionArtifact, otherArtifact].filter(
+              (a) => a.sessionId === filter.sessionId,
+            );
+          }
+          return [sessionArtifact, otherArtifact];
+        },
+        get: async () => ({
+          artifact: sessionArtifact,
+          bytes: btoa('html'),
+        }),
+        promote: async () => sessionArtifact,
+        remove: async () => undefined,
+      },
+    });
+    await flushPromises();
+    // The list should have been fetched with sessionId === 's-1'.
+    expect(
+      recordedFilters.some(
+        (f) => (f as { sessionId?: string }).sessionId === 's-1',
+      ),
+    ).toBe(true);
+    // Switch to artifacts tab.
+    expect(w.find('[data-testid="session-tab-artifacts"]').exists()).toBe(true);
+    await w.find('[data-testid="session-tab-artifacts"]').trigger('click');
+    await flushPromises();
+    expect(w.find('[data-testid="session-artifacts-tab"]').exists()).toBe(true);
+    // Only the session-scoped artifact (art-1) should appear.
+    expect(w.find('[data-testid="session-artifacts-row-art-1"]').exists()).toBe(true);
+    expect(w.find('[data-testid="session-artifacts-row-art-2"]').exists()).toBe(false);
     w.unmount();
   });
 

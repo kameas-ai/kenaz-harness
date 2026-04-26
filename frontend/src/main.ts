@@ -68,6 +68,11 @@ const router = createRouter({
       name: 'settings',
       component: () => import('@/views/settings/SettingsView.vue'),
     },
+    {
+      path: '/artifacts',
+      name: 'artifacts',
+      component: () => import('@/views/artifacts/ArtifactsView.vue'),
+    },
   ],
 });
 

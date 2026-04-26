@@ -1,6 +1,23 @@
 import { describe, it, expect, vi } from 'vitest';
 import { mount, flushPromises } from '@vue/test-utils';
 import MessageBubble from '@/components/chat/MessageBubble.vue';
+import type { Artifact } from '@/lib/types';
+
+function makeArtifact(overrides: Partial<Artifact> = {}): Artifact {
+  return {
+    id: 'art-1',
+    sessionId: 'sess-1',
+    title: 'snippet.html',
+    mimeType: 'text/html',
+    contentHash: 'sha256:abc',
+    byteSize: 1024,
+    source: 'code_block',
+    sourceRef: { messageId: 'm-1' },
+    scopeKind: 'session',
+    createdAt: '2026-04-26T00:00:00Z',
+    ...overrides,
+  };
+}
 
 describe('MessageBubble (chat-ui)', () => {
   it('renders user message with right-justified shape', () => {
@@ -295,5 +312,100 @@ describe('MessageBubble (chat-ui)', () => {
       },
     });
     expect(w.text()).toContain('legacy plain text');
+  });
+
+  // ── artifacts-storage WP03 — per-message chip + Save as artifact ────
+
+  it('renders an ArtifactChip row when artifacts are present', () => {
+    const w = mount(MessageBubble, {
+      props: {
+        role: 'assistant',
+        content: 'see attached',
+        messageId: 'm-1',
+        artifacts: [makeArtifact()],
+      },
+    });
+    expect(w.find('[data-testid="message-artifacts-row"]').exists()).toBe(true);
+    expect(w.find('[data-testid="artifact-chip-art-1"]').exists()).toBe(true);
+  });
+
+  it('does not render the chip row when no artifacts are present', () => {
+    const w = mount(MessageBubble, {
+      props: { role: 'assistant', content: 'plain' },
+    });
+    expect(w.find('[data-testid="message-artifacts-row"]').exists()).toBe(false);
+  });
+
+  it('emits open-artifact when an ArtifactChip is clicked', async () => {
+    const a = makeArtifact({ id: 'art-9' });
+    const w = mount(MessageBubble, {
+      props: {
+        role: 'assistant',
+        content: 'see attached',
+        messageId: 'm-1',
+        artifacts: [a],
+      },
+    });
+    await w.find('[data-testid="artifact-chip-art-9"]').trigger('click');
+    const events = w.emitted('open-artifact');
+    expect(events).toBeTruthy();
+    expect(events![0][0]).toEqual(a);
+  });
+
+  it('opens the save-artifact menu via right-click when saveable=true and not rememberable', async () => {
+    const w = mount(MessageBubble, {
+      props: {
+        role: 'assistant',
+        content: 'pin me as artifact',
+        messageId: 'm-1',
+        saveable: true,
+      },
+    });
+    expect(w.find('[data-testid="save-artifact-menu"]').exists()).toBe(false);
+    await w.find('article').trigger('contextmenu');
+    expect(w.find('[data-testid="save-artifact-menu"]').exists()).toBe(true);
+  });
+
+  it('emits save-artifact with the messageId when "Save as artifact" is picked', async () => {
+    const w = mount(MessageBubble, {
+      props: {
+        role: 'assistant',
+        content: 'long content here',
+        messageId: 'm-42',
+        saveable: true,
+      },
+    });
+    await w.find('article').trigger('contextmenu');
+    await w.find('[data-testid="save-artifact-menu-save"]').trigger('click');
+    const events = w.emitted('save-artifact');
+    expect(events).toBeTruthy();
+    expect(events![0]).toEqual(['m-42']);
+  });
+
+  it('exposes a Save-as-artifact button when saveable and rememberable both true', async () => {
+    const w = mount(MessageBubble, {
+      props: {
+        role: 'assistant',
+        content: 'mixed',
+        messageId: 'm-1',
+        rememberable: true,
+        saveable: true,
+      },
+    });
+    expect(w.find('[data-testid="save-artifact-button"]').exists()).toBe(true);
+    await w.find('[data-testid="save-artifact-button"]').trigger('click');
+    expect(w.emitted('save-artifact')![0]).toEqual(['m-1']);
+  });
+
+  it('does not open the save-artifact menu via right-click when saveable=false', async () => {
+    const w = mount(MessageBubble, {
+      props: {
+        role: 'assistant',
+        content: 'plain',
+        messageId: 'm-1',
+      },
+    });
+    await w.find('article').trigger('contextmenu');
+    expect(w.find('[data-testid="save-artifact-menu"]').exists()).toBe(false);
   });
 });
