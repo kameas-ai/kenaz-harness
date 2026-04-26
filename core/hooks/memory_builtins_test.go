@@ -1,8 +1,11 @@
 package hooks
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
+	"strings"
 	"sync"
 	"testing"
 
@@ -10,17 +13,25 @@ import (
 )
 
 type fakeRetriever struct {
-	calls    int
-	snippets []memory.Snippet
-	err      error
-	lastQ    string
-	lastK    int
+	calls         int
+	snippets      []memory.Snippet
+	err           error
+	lastQ         string
+	lastK         int
+	lastSessionID string
+	lastProjectID string
 }
 
-func (f *fakeRetriever) Retrieve(_ context.Context, q string, k int) ([]memory.Snippet, error) {
+func (f *fakeRetriever) Retrieve(ctx context.Context, q string, k int) ([]memory.Snippet, error) {
+	return f.RetrieveScoped(ctx, q, "", "", k)
+}
+
+func (f *fakeRetriever) RetrieveScoped(_ context.Context, q, sessionID, projectID string, k int) ([]memory.Snippet, error) {
 	f.calls++
 	f.lastQ = q
 	f.lastK = k
+	f.lastSessionID = sessionID
+	f.lastProjectID = projectID
 	return f.snippets, f.err
 }
 
@@ -236,6 +247,108 @@ func TestMemoryPersist_SurfacesEmbedderError(t *testing.T) {
 	}, nil)
 	if err == nil {
 		t.Fatal("expected error")
+	}
+}
+
+func TestMemoryPersist_DefaultScopeProject_FallsBackWhenNoProject(t *testing.T) {
+	t.Parallel()
+	store := &fakeStore{}
+	emb := &fakeEmbedder{}
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, nil))
+	reg := NewBuiltinRegistry()
+	RegisterMemoryBuiltins(reg, MemoryDeps{
+		Store:    store,
+		Embedder: emb,
+		Logger:   logger,
+	})
+
+	fn := reg.postSend[BuiltinMemoryPersist]
+	ev := PostSendEvent{
+		SessionID:     "sess-1",
+		UserTurn:      mustStringOfLen(100),
+		AssistantTurn: mustStringOfLen(250),
+		FinishReason:  "completed",
+	}
+	if err := fn(context.Background(), ev, map[string]any{
+		"default_scope": memory.ScopeKindProject,
+	}); err != nil {
+		t.Fatalf("persist: %v", err)
+	}
+	if len(store.chunks) != 1 {
+		t.Fatalf("store len = %d, want 1", len(store.chunks))
+	}
+	got := store.chunks[0]
+	if got.ScopeKind != memory.ScopeKindSession {
+		t.Errorf("ScopeKind = %q, want session (fallback)", got.ScopeKind)
+	}
+	if got.ScopeID != "sess-1" {
+		t.Errorf("ScopeID = %q, want sess-1", got.ScopeID)
+	}
+	if !strings.Contains(buf.String(), "project_scope_unavailable") {
+		t.Errorf("expected fallback warning in log, got: %s", buf.String())
+	}
+}
+
+func TestMemoryPersist_DefaultScopeProject_AppliedWhenProjectPresent(t *testing.T) {
+	t.Parallel()
+	store := &fakeStore{}
+	emb := &fakeEmbedder{}
+	reg := NewBuiltinRegistry()
+	RegisterMemoryBuiltins(reg, MemoryDeps{
+		Store:    store,
+		Embedder: emb,
+	})
+
+	fn := reg.postSend[BuiltinMemoryPersist]
+	ev := PostSendEvent{
+		SessionID:     "sess-1",
+		UserTurn:      mustStringOfLen(100),
+		AssistantTurn: mustStringOfLen(250),
+		FinishReason:  "completed",
+		Extra:         map[string]any{"project_id": "proj-A"},
+	}
+	if err := fn(context.Background(), ev, map[string]any{
+		"default_scope": memory.ScopeKindProject,
+	}); err != nil {
+		t.Fatalf("persist: %v", err)
+	}
+	if len(store.chunks) != 1 {
+		t.Fatalf("store len = %d", len(store.chunks))
+	}
+	got := store.chunks[0]
+	if got.ScopeKind != memory.ScopeKindProject {
+		t.Errorf("ScopeKind = %q, want project", got.ScopeKind)
+	}
+	if got.ScopeID != "proj-A" {
+		t.Errorf("ScopeID = %q, want proj-A", got.ScopeID)
+	}
+	if got.ProjectID != "proj-A" {
+		t.Errorf("ProjectID = %q, want proj-A", got.ProjectID)
+	}
+}
+
+func TestMemoryRetrieve_ThreadsProjectIDFromExtra(t *testing.T) {
+	t.Parallel()
+	retr := &fakeRetriever{snippets: []memory.Snippet{{Content: "x", Similarity: 0.9}}}
+	reg := NewBuiltinRegistry()
+	RegisterMemoryBuiltins(reg, MemoryDeps{Retriever: retr})
+
+	ev := PreSendEvent{
+		SessionID: "sess-1",
+		UserText:  "what's up",
+		Messages:  []HookMessage{{Role: "user", Content: "what's up"}},
+		Extra:     map[string]any{"project_id": "proj-A"},
+	}
+	fn := reg.preSend[BuiltinMemoryRetrieve]
+	if _, err := fn(context.Background(), ev, nil); err != nil {
+		t.Fatalf("retrieve: %v", err)
+	}
+	if retr.lastSessionID != "sess-1" {
+		t.Errorf("sessionID not threaded: %q", retr.lastSessionID)
+	}
+	if retr.lastProjectID != "proj-A" {
+		t.Errorf("projectID not threaded: %q", retr.lastProjectID)
 	}
 }
 

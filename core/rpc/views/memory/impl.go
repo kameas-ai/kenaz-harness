@@ -28,6 +28,15 @@ type MessageReader interface {
 	ListMessages(ctx context.Context, sessionID string) ([]Message, error)
 }
 
+// ProjectResolver is the optional capability the impl uses to map a
+// session id to its project id when resolving project scope. The rpc
+// layer's session adapter implements this when the project entity
+// lands; until then RememberMessage's project scope falls back to
+// session scope (mirrors the persist-builtin warning path).
+type ProjectResolver interface {
+	ProjectIDForSession(ctx context.Context, sessionID string) (string, error)
+}
+
 // Message mirrors the role+content+id triple buildMessages cares about;
 // kept here so the impl doesn't import core/session directly.
 type Message struct {
@@ -71,34 +80,39 @@ var ErrStoreUnavailable = errors.New("memory: store unavailable")
 // surface can match without importing core/memory.
 var ErrEmbedderUnavailable = corememory.ErrEmbedderUnavailable
 
-// ListChunks returns every chunk newest-first. A nil store yields an
-// empty slice so the UI's empty state is the observable behaviour.
-func (a *API) ListChunks(ctx context.Context) ([]Chunk, error) {
+// ErrInvalidScope is returned when RememberMessage receives a scope
+// that is not one of "global" / "project" / "session".
+var ErrInvalidScope = errors.New("memory: invalid scope")
+
+// ListChunks returns matching chunks newest-first. A nil store yields
+// an empty slice so the UI's empty state is the observable behaviour.
+func (a *API) ListChunks(ctx context.Context, filter ListFilter) ([]Chunk, error) {
 	if a == nil || a.store == nil {
 		return []Chunk{}, nil
 	}
-	stored, err := a.store.List(ctx)
+	var scopes []corememory.ScopeFilter
+	if filter.ScopeKind != "" {
+		scopes = append(scopes, corememory.ScopeFilter{
+			Kind: filter.ScopeKind,
+			ID:   filter.ScopeID,
+		})
+	}
+	stored, err := a.store.List(ctx, scopes...)
 	if err != nil {
 		return nil, err
 	}
 	out := make([]Chunk, 0, len(stored))
 	for _, c := range stored {
-		out = append(out, Chunk{
-			ID:         c.ID,
-			SessionID:  c.SessionID,
-			SourceTurn: c.SourceTurn,
-			Content:    c.Content,
-			CreatedAt:  c.CreatedAt,
-		})
+		out = append(out, toViewChunk(c))
 	}
 	return out, nil
 }
 
 // RememberMessage persists the message at (sessionID, messageID) as a
-// new memory chunk. Privacy: content stays on disk under the harness's
-// data dir; the only network call is the embeddings request to the
-// configured OpenAI provider.
-func (a *API) RememberMessage(ctx context.Context, sessionID, messageID string) (string, error) {
+// new memory chunk under scope. Privacy: content stays on disk under
+// the harness's data dir; the only network call is the embeddings
+// request to the configured OpenAI provider.
+func (a *API) RememberMessage(ctx context.Context, sessionID, messageID, scope string) (string, error) {
 	if a == nil || a.store == nil {
 		return "", ErrStoreUnavailable
 	}
@@ -110,6 +124,14 @@ func (a *API) RememberMessage(ctx context.Context, sessionID, messageID string) 
 	}
 	if a.reader == nil {
 		return "", errors.New("memory: session reader unwired")
+	}
+	if scope == "" {
+		scope = corememory.ScopeKindSession
+	}
+	switch scope {
+	case corememory.ScopeKindGlobal, corememory.ScopeKindProject, corememory.ScopeKindSession:
+	default:
+		return "", fmt.Errorf("%w: %q", ErrInvalidScope, scope)
 	}
 	msgs, err := a.reader.ListMessages(ctx, sessionID)
 	if err != nil {
@@ -128,6 +150,29 @@ func (a *API) RememberMessage(ctx context.Context, sessionID, messageID string) 
 	if target.Content == "" {
 		return "", errors.New("memory: cannot remember empty content")
 	}
+
+	projectID := ""
+	if pr, ok := a.reader.(ProjectResolver); ok {
+		pid, perr := pr.ProjectIDForSession(ctx, sessionID)
+		if perr == nil {
+			projectID = pid
+		}
+	}
+	scopeKind, scopeID := scope, ""
+	switch scope {
+	case corememory.ScopeKindGlobal:
+		scopeID = ""
+	case corememory.ScopeKindProject:
+		if projectID == "" {
+			scopeKind = corememory.ScopeKindSession
+			scopeID = sessionID
+		} else {
+			scopeID = projectID
+		}
+	case corememory.ScopeKindSession:
+		scopeID = sessionID
+	}
+
 	vecs, err := a.embedder.Embed(ctx, []string{target.Content})
 	if err != nil {
 		return "", fmt.Errorf("memory: embed: %w", err)
@@ -140,17 +185,51 @@ func (a *API) RememberMessage(ctx context.Context, sessionID, messageID string) 
 		return "", err
 	}
 	chunk := corememory.Chunk{
-		ID:         id,
-		SessionID:  sessionID,
-		SourceTurn: target.Role,
-		Content:    target.Content,
-		Embedding:  vecs[0],
-		CreatedAt:  time.Now().UTC(),
+		ID:          id,
+		SessionID:   sessionID,
+		ProjectID:   projectID,
+		ScopeKind:   scopeKind,
+		ScopeID:     scopeID,
+		SourceTurn:  target.Role,
+		Content:     target.Content,
+		ContentHash: corememory.HashContent(target.Content),
+		Embedding:   vecs[0],
+		CreatedAt:   time.Now().UTC(),
 	}
 	if err := a.store.Add(ctx, chunk); err != nil {
 		return "", err
 	}
 	return id, nil
+}
+
+// PromoteScope moves a chunk to a new scope. It deletes the original
+// row and inserts a new chunk with a new ID, the same content +
+// embedding, and the new (kind, id) scope. Atomic under the store's
+// mutex: callers see either the old chunk or the new one, never both.
+func (a *API) PromoteScope(ctx context.Context, chunkID, newScopeKind, newScopeID string) (string, error) {
+	if a == nil || a.store == nil {
+		return "", ErrStoreUnavailable
+	}
+	switch newScopeKind {
+	case corememory.ScopeKindGlobal, corememory.ScopeKindProject, corememory.ScopeKindSession:
+	default:
+		return "", fmt.Errorf("%w: %q", ErrInvalidScope, newScopeKind)
+	}
+	if newScopeKind == corememory.ScopeKindGlobal {
+		newScopeID = ""
+	}
+	mover, ok := a.store.(corememory.ScopePromoter)
+	if !ok {
+		return "", errors.New("memory: store does not support scope promotion")
+	}
+	newID, err := newChunkID()
+	if err != nil {
+		return "", err
+	}
+	if err := mover.PromoteScope(ctx, chunkID, newID, newScopeKind, newScopeID); err != nil {
+		return "", err
+	}
+	return newID, nil
 }
 
 // Forget removes the chunk with id from the store. Bare wrapper around
@@ -171,6 +250,24 @@ func newChunkID() (string, error) {
 		return "", fmt.Errorf("memory: random id: %w", err)
 	}
 	return "mem-" + hex.EncodeToString(b), nil
+}
+
+func toViewChunk(c corememory.Chunk) Chunk {
+	return Chunk{
+		ID:            c.ID,
+		SessionID:     c.SessionID,
+		ProjectID:     c.ProjectID,
+		ScopeKind:     c.ScopeKind,
+		ScopeID:       c.ScopeID,
+		SourceTurn:    c.SourceTurn,
+		Content:       c.Content,
+		ContentHash:   c.ContentHash,
+		ToolName:      c.ToolName,
+		FilesRead:     c.FilesRead,
+		FilesModified: c.FilesModified,
+		Title:         c.Title,
+		CreatedAt:     c.CreatedAt,
+	}
 }
 
 // Compile-time witness.

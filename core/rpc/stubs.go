@@ -121,10 +121,13 @@ func (s *stubContext) StopStream(_ context.Context, _ string) error  { return er
 
 type stubMemory struct{}
 
-func (s *stubMemory) ListChunks(_ context.Context) ([]memoryview.Chunk, error) {
+func (s *stubMemory) ListChunks(_ context.Context, _ memoryview.ListFilter) ([]memoryview.Chunk, error) {
 	return []memoryview.Chunk{}, nil
 }
-func (s *stubMemory) RememberMessage(_ context.Context, _, _ string) (string, error) {
+func (s *stubMemory) RememberMessage(_ context.Context, _, _, _ string) (string, error) {
+	return "", errNotWired
+}
+func (s *stubMemory) PromoteScope(_ context.Context, _, _, _ string) (string, error) {
 	return "", errNotWired
 }
 func (s *stubMemory) Forget(_ context.Context, _ string) error { return errNotWired }
