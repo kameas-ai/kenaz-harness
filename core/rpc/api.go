@@ -325,11 +325,25 @@ func newLLMStack(c *core.Core, broker *StreamBroker, store personal.Store, hooks
 	// arrives with mission C1; until then the fixture is empty so a
 	// model that asks for a tool gets a synthetic "not registered"
 	// result and the conversation continues.
+	//
+	// WP03 — pre/post-tool-use hooks and audit emission. core/hooks
+	// only exposes pre_send / post_send for chat-pipeline events;
+	// there is no pre_tool_use / post_tool_use surface there yet, so
+	// the toolloop falls back to its built-in noopHookRunner. A real
+	// runner lands when core/hooks grows the tool-use lifecycle (see
+	// kitty-specs/mcp-tool-execution-01KQ3JCS/spec.md FR-003).
+	//
+	// TODO(audit): wire a real AuditEmitter once the rpc layer
+	// materializes a process-wide event.Emitter (core/event.NewEmitter
+	// + redact.Pipeline). Until then audit emission is silenced and
+	// the privacy-CI guard is "no emitter, no leak".
 	loop, loopErr := toolloop.New(toolloop.Config{
 		Registry:    reg,
 		Pool:        &mcpPoolAdapter{inner: fixture.New()},
 		History:     historyAdapter,
 		Permissions: perms,
+		Hooks:       nil,
+		Audit:       nil,
 	})
 	if loopErr != nil {
 		// New only errors on missing registry/pool — both are
