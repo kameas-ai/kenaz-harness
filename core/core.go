@@ -124,15 +124,6 @@ func New(opts Options) (*Core, error) {
 	c.Memory = opts.Subsystems.Memory
 	c.LLMs = opts.Subsystems.LLMs
 	c.MCP = opts.Subsystems.MCP
-	// Run the legacy sessions.db → data.db migration before any consumer
-	// (notably rpc.New → c.SessionManager → c.Storage) can open the
-	// unified DB and grab the lock. The migration opens its own
-	// short-lived handle to apply schema + ATTACH/copy, so it must run
-	// while the harness lock is unowned.
-	if err := storagesqlite.MigrateLegacySessionsDB(opts.DataDir); err != nil {
-		logging.L().Error("storage.legacy_sessions.migrate_failed",
-			"data_dir", opts.DataDir, "err", err.Error())
-	}
 	return c, nil
 }
 
@@ -146,10 +137,8 @@ func New(opts Options) (*Core, error) {
 // itself does not own the DB lifecycle yet (see storage-foundations
 // mission for that wiring).
 func (c *Core) Start(ctx context.Context) error {
-	// Touch Storage() so any deferred migrations and the lockfile claim
-	// happen on Start rather than on first session-manager access. The
-	// legacy sessions.db → data.db migration ran in New(), before any
-	// consumer could grab the lock.
+	// Touch Storage() so the deferred migrations and the lockfile claim
+	// happen on Start rather than on first session-manager access.
 	if c.opts.DataDir != "" {
 		_ = c.Storage()
 	}

@@ -2,9 +2,7 @@ package sqlite_test
 
 import (
 	"context"
-	"database/sql"
 	"errors"
-	"net/url"
 	"os"
 	"path/filepath"
 	"testing"
@@ -128,7 +126,7 @@ func TestOpen_RegistersSessionMigrations(t *testing.T) {
 		}
 		versions = append(versions, v)
 	}
-	want := []int{300, 301, 302, 303, 304, 306, 307}
+	want := []int{300}
 	if len(versions) != len(want) {
 		t.Fatalf("session migrations applied = %v, want %v", versions, want)
 	}
@@ -163,46 +161,9 @@ func TestOpen_ApplyIdempotent(t *testing.T) {
 	if err := rows.Scan(&count); err != nil {
 		t.Fatal(err)
 	}
-	// 2 storage bootstrap + 7 session migrations.
-	if count != 9 {
-		t.Errorf("ledger count = %d, want 9", count)
-	}
-}
-
-func TestOpen_LegacyMigration(t *testing.T) {
-	t.Parallel()
-	dir := t.TempDir()
-	legacyPath := filepath.Join(dir, "sessions.db")
-	createLegacySessionsDB(t, legacyPath, false /* hasSystemPrompt */, false /* hasContextKind */)
-
-	if err := storagesqlite.MigrateLegacySessionsDB(dir); err != nil {
-		t.Fatalf("MigrateLegacySessionsDB: %v", err)
-	}
-
-	// data.db should now exist; the legacy file should be renamed.
-	if _, err := os.Stat(filepath.Join(dir, "data.db")); err != nil {
-		t.Fatalf("data.db missing: %v", err)
-	}
-	if _, err := os.Stat(legacyPath); !errors.Is(err, os.ErrNotExist) {
-		t.Errorf("legacy still at original path: %v", err)
-	}
-	if _, err := os.Stat(filepath.Join(dir, "sessions.legacy.db")); err != nil {
-		t.Errorf("renamed legacy missing: %v", err)
-	}
-
-	db := mustOpen(t, dir)
-	ctx := context.Background()
-	row := db.Reader().QueryRow(ctx,
-		"SELECT id, name, system_prompt, context_kind FROM sessions WHERE id='legacy-1'")
-	var id, name, prompt, kind string
-	if err := row.Scan(&id, &name, &prompt, &kind); err != nil {
-		t.Fatalf("query legacy row: %v", err)
-	}
-	if id != "legacy-1" || name != "Legacy" {
-		t.Errorf("row = (%q,%q), want (legacy-1, Legacy)", id, name)
-	}
-	if prompt != "" || kind != "system" {
-		t.Errorf("defaults = (%q,%q), want (\"\", system)", prompt, kind)
+	// 2 storage bootstrap + 1 session init.
+	if count != 3 {
+		t.Errorf("ledger count = %d, want 3", count)
 	}
 }
 
@@ -255,69 +216,3 @@ func TestSessionRoundTrip_ThroughAdapter(t *testing.T) {
 	}
 }
 
-// ── test helpers ──────────────────────────────────────────────────────
-
-// createLegacySessionsDB seeds a pre-consolidation sessions.db at path.
-// The hasSystemPrompt / hasContextKind toggles model the schema of
-// installs that did vs. didn't migrate to columns 303 / 304 under the
-// old standalone shortcut.
-func createLegacySessionsDB(t *testing.T, path string, hasSystemPrompt, hasContextKind bool) {
-	t.Helper()
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		t.Fatalf("mkdir: %v", err)
-	}
-	dsn := "file:" + url.PathEscape(path) +
-		"?_pragma=foreign_keys(1)&_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)"
-	db, err := sql.Open("sqlite", dsn)
-	if err != nil {
-		t.Fatalf("open legacy: %v", err)
-	}
-	defer db.Close()
-	cols := `id              TEXT PRIMARY KEY,
-            name            TEXT NOT NULL,
-            created_at      INTEGER NOT NULL,
-            updated_at      INTEGER NOT NULL,
-            last_active_at  INTEGER NOT NULL,
-            position        INTEGER NOT NULL,
-            draft           TEXT NOT NULL DEFAULT '',
-            scroll_position INTEGER NOT NULL DEFAULT 0,
-            archived_at     INTEGER`
-	if hasSystemPrompt {
-		cols += `, system_prompt TEXT NOT NULL DEFAULT ''`
-	}
-	if hasContextKind {
-		cols += `, context_kind TEXT NOT NULL DEFAULT 'system'`
-	}
-	if _, err := db.Exec("CREATE TABLE sessions (" + cols + ")"); err != nil {
-		t.Fatalf("create legacy schema: %v", err)
-	}
-	if _, err := db.Exec(`CREATE TABLE session_messages (
-        id          TEXT PRIMARY KEY,
-        session_id  TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
-        sequence    INTEGER NOT NULL,
-        role        TEXT NOT NULL,
-        content     TEXT NOT NULL,
-        tool_calls  TEXT,
-        created_at  INTEGER NOT NULL
-    )`); err != nil {
-		t.Fatalf("create legacy messages: %v", err)
-	}
-	now := time.Now().UnixNano()
-	if hasSystemPrompt && hasContextKind {
-		_, err = db.Exec(`INSERT INTO sessions
-            (id, name, created_at, updated_at, last_active_at,
-             position, draft, scroll_position, archived_at,
-             system_prompt, context_kind)
-            VALUES ('legacy-1','Legacy',?,?,?,0,'',0,NULL,'','system')`,
-			now, now, now)
-	} else {
-		_, err = db.Exec(`INSERT INTO sessions
-            (id, name, created_at, updated_at, last_active_at,
-             position, draft, scroll_position, archived_at)
-            VALUES ('legacy-1','Legacy',?,?,?,0,'',0,NULL)`,
-			now, now, now)
-	}
-	if err != nil {
-		t.Fatalf("seed legacy row: %v", err)
-	}
-}

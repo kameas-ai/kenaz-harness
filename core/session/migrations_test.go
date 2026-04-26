@@ -317,11 +317,11 @@ func TestMigrations_RegisterAndApply(t *testing.T) {
 		}
 	}
 
-	// Ledger rows: 2 storage bootstrap + 7 sessions migrations = 9 applied entries.
-	if got := len(db.ledger); got != 9 {
-		t.Fatalf("ledger size = %d, want 9", got)
+	// Ledger rows: 2 storage bootstrap + 1 sessions init = 3 applied entries.
+	if got := len(db.ledger); got != 3 {
+		t.Fatalf("ledger size = %d, want 3", got)
 	}
-	wantVersions := []int{1, 2, 300, 301, 302, 303, 304, 306, 307}
+	wantVersions := []int{1, 2, 300}
 	for i, want := range wantVersions {
 		if db.ledger[i].Version != want {
 			t.Errorf("ledger[%d].Version = %d, want %d", i, db.ledger[i].Version, want)
@@ -335,7 +335,7 @@ func TestMigrations_RegisterAndApply(t *testing.T) {
 			t.Errorf("Action = %q, want applied", e.Action)
 		}
 	}
-	// projects table + index land at version 307.
+	// projects table + index ride along in the consolidated init.
 	if !db.tables["projects"] {
 		t.Errorf("expected projects table to exist")
 	}
