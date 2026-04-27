@@ -82,6 +82,9 @@ jobs:
             artifact_glob: 'build/bin/*.exe'
             archive_ext: zip
     runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+      id-token: write   # required for Azure OIDC federation on Windows signing
     steps:
       - uses: actions/checkout@v4
 
@@ -120,6 +123,46 @@ jobs:
             -ldflags "-X main.Version=${VERSION}" \
             -trimpath \
             -tags ${{ runner.os == 'Linux' && 'webkit2_41' || '' }}
+
+      # ── Windows code signing (Microsoft Artifact Signing / Trusted Signing) ──
+      # Skips silently when AZURE_CLIENT_ID is not set, so the workflow
+      # works pre-enrollment. Once identity validation completes and the
+      # five AZURE_* secrets are populated, this step signs every .exe
+      # in build/bin via Azure-hosted HSM (no local cert).
+      - name: azure login (OIDC) — windows only
+        if: runner.os == 'Windows' && env.AZURE_CLIENT_ID != ''
+        uses: azure/login@v2
+        env:
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          allow-no-subscriptions: true
+
+      - name: artifact signing (windows .exe)
+        if: runner.os == 'Windows' && env.AZURE_CLIENT_ID != ''
+        uses: azure/trusted-signing-action@v0.5.1
+        env:
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+        with:
+          endpoint: ${{ secrets.AZURE_TRUSTED_SIGNING_ENDPOINT }}
+          trusted-signing-account-name: ${{ secrets.AZURE_TRUSTED_SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ secrets.AZURE_TRUSTED_SIGNING_PROFILE }}
+          files-folder: build/bin
+          files-folder-filter: exe
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+
+      - name: signing skipped notice (windows, secrets missing)
+        if: runner.os == 'Windows' && env.AZURE_CLIENT_ID == ''
+        env:
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+        shell: bash
+        run: |
+          echo "::notice::Windows binary not signed — AZURE_CLIENT_ID secret not set."
+          echo "Add AZURE_CLIENT_ID, AZURE_TENANT_ID, AZURE_TRUSTED_SIGNING_ENDPOINT,"
+          echo "AZURE_TRUSTED_SIGNING_ACCOUNT, AZURE_TRUSTED_SIGNING_PROFILE to enable."
 
       - name: archive (linux/macos)
         if: runner.os != 'Windows'
