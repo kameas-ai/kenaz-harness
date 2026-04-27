@@ -35,3 +35,10 @@ kitty-specs/
 .kittify/runtime/
 .kittify/workspaces/
 /kitty-specs/*
+
+# Local-only — explicitly excluded from public repo
+.kittify/
+.claude/settings.local.json
+
+# Test runner output caches
+.vite/
