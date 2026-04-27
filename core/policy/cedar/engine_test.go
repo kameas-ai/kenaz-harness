@@ -1,0 +1,368 @@
+package cedar
+
+import (
+	"context"
+	"errors"
+	"os"
+	"path/filepath"
+	"testing"
+
+	cedarlib "github.com/cedar-policy/cedar-go"
+)
+
+// TestNewEngine_DefaultBundleAllowsTool exercises the embedded default
+// policy: a tool execution against the canonical local user must be
+// permitted out of the box.
+func TestNewEngine_DefaultBundleAllowsTool(t *testing.T) {
+	t.Parallel()
+	e, err := NewEngine(Options{IncludeEmbedded: true})
+	if err != nil {
+		t.Fatalf("NewEngine: %v", err)
+	}
+	d := e.Evaluate(
+		context.Background(),
+		UserUID(),
+		ActionToolExec,
+		ToolUID("filesystem", "list"),
+		nil,
+	)
+	if d.Outcome != Allow {
+		t.Fatalf("default bundle should allow tool_exec, got %s (reason=%s)",
+			d.Outcome, d.Reason)
+	}
+	if d.MatchedPolicy == "" {
+		t.Fatalf("expected MatchedPolicy to be set on Allow")
+	}
+}
+
+// TestNewEngine_NoEngine_NoDisk exercises the in-memory boot path:
+// the engine boots cleanly with no embedded policy and no disk files;
+// every action becomes NotApplicable (default-allow with audit).
+func TestNewEngine_EmptyBundle_NotApplicable(t *testing.T) {
+	t.Parallel()
+	e, err := NewEngine(Options{
+		IncludeEmbedded: false,
+		LoadFromDisk:    false,
+	})
+	if err != nil {
+		t.Fatalf("NewEngine: %v", err)
+	}
+	d := e.Evaluate(
+		context.Background(),
+		UserUID(),
+		ActionToolExec,
+		ToolUID("filesystem", "list"),
+		nil,
+	)
+	if d.Outcome != NotApplicable {
+		t.Fatalf("empty bundle should produce NotApplicable, got %s", d.Outcome)
+	}
+}
+
+// TestEngine_DefaultDeny_FailsClosed exercises the user-opt-in
+// fail-closed mode: an empty bundle plus DefaultDeny=true denies
+// every action.
+func TestEngine_DefaultDeny_FailsClosed(t *testing.T) {
+	t.Parallel()
+	e, err := NewEngine(Options{
+		IncludeEmbedded: false,
+		LoadFromDisk:    false,
+		DefaultDeny:     true,
+	})
+	if err != nil {
+		t.Fatalf("NewEngine: %v", err)
+	}
+	d := e.Evaluate(
+		context.Background(),
+		UserUID(),
+		ActionToolExec,
+		ToolUID("filesystem", "list"),
+		nil,
+	)
+	if d.Outcome != Deny {
+		t.Fatalf("DefaultDeny should deny on empty bundle, got %s", d.Outcome)
+	}
+	if d.Reason == "" {
+		t.Fatalf("expected non-empty Reason on Deny")
+	}
+}
+
+// TestEngine_ForbidPolicyDenies installs a custom forbid policy via
+// SetPolicyText and asserts a deny outcome with the matching policy
+// id surfaced.
+func TestEngine_ForbidPolicyDenies(t *testing.T) {
+	t.Parallel()
+	const src = `
+permit (principal, action, resource);
+
+forbid (
+    principal == User::"local",
+    action == Action::"tool_exec",
+    resource == Tool::"filesystem__delete"
+);
+`
+	e, err := NewEngine(Options{LoadFromDisk: false, IncludeEmbedded: false})
+	if err != nil {
+		t.Fatalf("NewEngine: %v", err)
+	}
+	if err := e.SetPolicyText("custom.cedar", []byte(src)); err != nil {
+		t.Fatalf("SetPolicyText: %v", err)
+	}
+	// Allowed tool: not the forbidden one.
+	d := e.Evaluate(
+		context.Background(), UserUID(), ActionToolExec,
+		ToolUID("filesystem", "list"), nil,
+	)
+	if d.Outcome != Allow {
+		t.Fatalf("expected Allow for filesystem__list, got %s (%s)",
+			d.Outcome, d.Reason)
+	}
+	// Denied tool: the forbidden one.
+	d = e.Evaluate(
+		context.Background(), UserUID(), ActionToolExec,
+		ToolUID("filesystem", "delete"), nil,
+	)
+	if d.Outcome != Deny {
+		t.Fatalf("expected Deny for filesystem__delete, got %s (%s)",
+			d.Outcome, d.Reason)
+	}
+}
+
+// TestEngine_ReloadFromDisk writes two .cedar files under DataDir/policy
+// and asserts the engine picks them up on Reload, in lexicographic
+// order, alongside the embedded default.
+func TestEngine_ReloadFromDisk(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	policyDir := filepath.Join(dir, PolicyDir)
+	if err := os.MkdirAll(policyDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	// File "01_allow.cedar" — allow netfetch.
+	allow := []byte(`permit (principal, action == Action::"network_request", resource);`)
+	if err := os.WriteFile(filepath.Join(policyDir, "01_allow.cedar"), allow, 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	// File "02_forbid.cedar" — forbid memory_write to global.
+	forbid := []byte(`forbid (
+		principal == User::"local",
+		action == Action::"memory_write",
+		resource == Memory::"global"
+	);`)
+	if err := os.WriteFile(filepath.Join(policyDir, "02_forbid.cedar"), forbid, 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	e, err := NewEngine(Options{
+		DataDir:         dir,
+		LoadFromDisk:    true,
+		IncludeEmbedded: true,
+	})
+	if err != nil {
+		t.Fatalf("NewEngine: %v", err)
+	}
+
+	// Listing should report 3 files (embedded + 2 disk).
+	files := e.ListPolicies()
+	if len(files) != 3 {
+		t.Fatalf("ListPolicies len=%d, want 3", len(files))
+	}
+	if !files[0].Embedded {
+		t.Fatalf("first file should be embedded default, got %+v", files[0])
+	}
+
+	// memory_write to "global" must be denied.
+	d := e.Evaluate(
+		context.Background(), UserUID(), ActionMemoryWrite,
+		MemoryUID("global"), nil,
+	)
+	if d.Outcome != Deny {
+		t.Fatalf("expected Deny for memory_write/global, got %s", d.Outcome)
+	}
+
+	// memory_write to "session" still allowed by embedded permit.
+	d = e.Evaluate(
+		context.Background(), UserUID(), ActionMemoryWrite,
+		MemoryUID("session"), nil,
+	)
+	if d.Outcome != Allow {
+		t.Fatalf("expected Allow for memory_write/session, got %s (%s)",
+			d.Outcome, d.Reason)
+	}
+}
+
+// TestEngine_InvalidPolicyFile_Tolerated asserts that one broken file
+// does not abort the reload; the engine keeps working with the rest.
+func TestEngine_InvalidPolicyFile_Tolerated(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	policyDir := filepath.Join(dir, PolicyDir)
+	if err := os.MkdirAll(policyDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	// One valid file:
+	if err := os.WriteFile(filepath.Join(policyDir, "01_ok.cedar"),
+		[]byte(`permit (principal, action, resource);`), 0o644); err != nil {
+		t.Fatalf("write ok: %v", err)
+	}
+	// One broken file:
+	if err := os.WriteFile(filepath.Join(policyDir, "02_broken.cedar"),
+		[]byte(`this is not cedar`), 0o644); err != nil {
+		t.Fatalf("write broken: %v", err)
+	}
+
+	e, err := NewEngine(Options{
+		DataDir:         dir,
+		LoadFromDisk:    true,
+		IncludeEmbedded: true,
+	})
+	if err != nil {
+		t.Fatalf("NewEngine: %v", err)
+	}
+	files := e.ListPolicies()
+	var sawBroken bool
+	for _, f := range files {
+		if f.Name == "02_broken.cedar" && !f.ParseOK && f.ParseErr != "" {
+			sawBroken = true
+		}
+	}
+	if !sawBroken {
+		t.Fatalf("broken file did not surface in ListPolicies: %+v", files)
+	}
+	// Engine must still allow tool_exec via the embedded default + ok file.
+	d := e.Evaluate(
+		context.Background(), UserUID(), ActionToolExec,
+		ToolUID("websearch", "search"), nil,
+	)
+	if d.Outcome != Allow {
+		t.Fatalf("expected Allow despite one broken file, got %s", d.Outcome)
+	}
+}
+
+// TestEngine_DecisionLog records every Evaluate call.
+func TestEngine_DecisionLog(t *testing.T) {
+	t.Parallel()
+	e, err := NewEngine(Options{IncludeEmbedded: true})
+	if err != nil {
+		t.Fatalf("NewEngine: %v", err)
+	}
+	for i := 0; i < 3; i++ {
+		_ = e.Evaluate(
+			context.Background(), UserUID(), ActionToolExec,
+			ToolUID("filesystem", "list"), nil,
+		)
+	}
+	recent := e.RecentDecisions(10)
+	if len(recent) != 3 {
+		t.Fatalf("RecentDecisions returned %d, want 3", len(recent))
+	}
+	if recent[0].Action != ActionToolExec {
+		t.Fatalf("RecentDecisions[0].Action = %q, want tool_exec", recent[0].Action)
+	}
+}
+
+// TestEngine_PolicyDeniedError_Helpers exercises the gate helpers:
+// Deny outcomes return *PolicyDeniedError; Allow / NotApplicable
+// return nil.
+func TestEngine_GateHooks(t *testing.T) {
+	t.Parallel()
+	const src = `
+forbid (
+    principal == User::"local",
+    action == Action::"tool_exec",
+    resource == Tool::"filesystem__delete"
+);
+`
+	e, err := NewEngine(Options{LoadFromDisk: false, IncludeEmbedded: true})
+	if err != nil {
+		t.Fatalf("NewEngine: %v", err)
+	}
+	// Append the forbid rule to the embedded base by reloading with
+	// SetPolicyText that includes both the base permits and the
+	// forbid. We reuse the embedded source plus an extra rule.
+	combined := append([]byte{}, defaultPolicySource...)
+	combined = append(combined, '\n')
+	combined = append(combined, []byte(src)...)
+	if err := e.SetPolicyText("combined.cedar", combined); err != nil {
+		t.Fatalf("SetPolicyText: %v", err)
+	}
+
+	if err := CheckTool(context.Background(), e, "websearch", "search"); err != nil {
+		t.Fatalf("CheckTool websearch__search should allow: %v", err)
+	}
+	err = CheckTool(context.Background(), e, "filesystem", "delete")
+	if err == nil {
+		t.Fatal("CheckTool filesystem__delete should deny")
+	}
+	if !IsPolicyDenied(err) {
+		t.Fatalf("CheckTool deny should be PolicyDeniedError, got %T", err)
+	}
+
+	// AllowAll fallback never errors.
+	if err := CheckTool(context.Background(), AllowAll{}, "any", "thing"); err != nil {
+		t.Fatalf("AllowAll.CheckTool returned err: %v", err)
+	}
+}
+
+// TestEngine_GateNilGate is defensive: nil gate is a valid wiring
+// state during boot before the engine is constructed; helpers must
+// silently allow.
+func TestEngine_GateNilGate(t *testing.T) {
+	t.Parallel()
+	if err := CheckTool(context.Background(), nil, "x", "y"); err != nil {
+		t.Fatalf("nil gate should allow, got %v", err)
+	}
+	if err := CheckModel(context.Background(), nil, "p", "m"); err != nil {
+		t.Fatalf("nil gate should allow, got %v", err)
+	}
+	if err := CheckMemoryWrite(context.Background(), nil, "global"); err != nil {
+		t.Fatalf("nil gate should allow, got %v", err)
+	}
+	if err := CheckNetwork(context.Background(), nil, "example.com"); err != nil {
+		t.Fatalf("nil gate should allow, got %v", err)
+	}
+	if err := CheckFileWrite(context.Background(), nil, "/tmp/x"); err != nil {
+		t.Fatalf("nil gate should allow, got %v", err)
+	}
+}
+
+// TestUIDHelpers asserts the EntityUID builders produce the canonical
+// shapes the policy bundle expects.
+func TestUIDHelpers(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		uid  cedarlib.EntityUID
+		want string
+	}{
+		{"tool", ToolUID("filesystem", "list"), `Tool::"filesystem__list"`},
+		{"tool-builtin", ToolUID("", "websearch"), `Tool::"builtin__websearch"`},
+		{"model", ModelUID("openai", "gpt-4o"), `Model::"openai:gpt-4o"`},
+		{"net", NetworkUID("Example.COM."), `Network::"example.com"`},
+		{"fs", FilesystemUID("/tmp/x"), `Filesystem::"/tmp/x"`},
+		{"mem", MemoryUID("global"), `Memory::"global"`},
+		{"user", UserUID(), `User::"local"`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.uid.String(); got != tc.want {
+				t.Fatalf("got %q want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestPolicyDeniedError_Sentinel ensures errors.As reaches the typed
+// error through wrapping.
+func TestPolicyDeniedError_Sentinel(t *testing.T) {
+	t.Parallel()
+	d := Decision{Outcome: Deny, Action: ActionToolExec, Resource: `Tool::"x"`, Reason: "x"}
+	wrapped := errors.New("outer: " + (&PolicyDeniedError{Decision: d}).Error())
+	if IsPolicyDenied(wrapped) {
+		t.Fatalf("plain wrapping (errors.New) should NOT be PolicyDenied")
+	}
+	pe := &PolicyDeniedError{Decision: d}
+	if !IsPolicyDenied(pe) {
+		t.Fatalf("direct PolicyDeniedError should match")
+	}
+}
