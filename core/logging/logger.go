@@ -24,18 +24,25 @@ const (
 )
 
 var (
-	once      sync.Once
-	loggerInt *slog.Logger
-	logFile   *os.File
-	openErr   error
+	once         sync.Once
+	loggerInt    *slog.Logger
+	fileHandler  slog.Handler
+	logFile      *os.File
+	openErr      error
+	replaceMu    sync.Mutex
 )
 
 // L returns the process-global slog.Logger writing JSON lines to
 // ~/.kenaz/harness.log. On the first call the file is opened (parent
 // dir created with mode 0700) and a JSON-line handler is wired. If
-// the file can't be opened the logger falls back to stderr.
+// the file can't be opened the logger falls back to stderr. Once
+// telemetry.Init has run with InstallSlogBridge=true, the returned
+// logger is fronted by a fan-out handler that ALSO emits each record
+// through the OTel logger pipeline.
 func L() *slog.Logger {
 	once.Do(initLogger)
+	replaceMu.Lock()
+	defer replaceMu.Unlock()
 	return loggerInt
 }
 
@@ -60,10 +67,11 @@ func initLogger() {
 	// Tee to stderr in dev so wails-dev console shows logs too — the
 	// MultiWriter is cheap and the volume is low.
 	w := io.MultiWriter(os.Stderr, f)
-	loggerInt = slog.New(slog.NewJSONHandler(w, &slog.HandlerOptions{
+	fileHandler = slog.NewJSONHandler(w, &slog.HandlerOptions{
 		Level:     slog.LevelDebug,
 		AddSource: false,
-	}))
+	})
+	loggerInt = slog.New(fileHandler)
 	loggerInt.Info("logger.opened",
 		"path", path,
 		"pid", os.Getpid(),
@@ -73,10 +81,37 @@ func initLogger() {
 
 func fallback(reason string) {
 	openErr = fmt.Errorf("logging fallback: %s", reason)
-	loggerInt = slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
+	fileHandler = slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
 		Level: slog.LevelDebug,
-	}))
+	})
+	loggerInt = slog.New(fileHandler)
 	loggerInt.Warn("logger.fallback", "reason", reason)
+}
+
+// FileHandler exposes the file-backed slog.Handler so the telemetry
+// package can wrap it in a fan-out bridge (file + OTel) without
+// depending on the unexported state. Returns nil if L() has not yet
+// been called.
+func FileHandler() slog.Handler {
+	once.Do(initLogger)
+	replaceMu.Lock()
+	defer replaceMu.Unlock()
+	return fileHandler
+}
+
+// Replace swaps the process-global slog.Logger's handler. The
+// telemetry package uses this to install its slog→OTel bridge once
+// the SDK providers are constructed. The bridge SHOULD wrap the
+// handler returned by FileHandler so file-logging behaviour is
+// preserved. Idempotent: a second call swaps to the new handler.
+func Replace(h slog.Handler) {
+	if h == nil {
+		return
+	}
+	once.Do(initLogger)
+	replaceMu.Lock()
+	defer replaceMu.Unlock()
+	loggerInt = slog.New(h)
 }
 
 // LogClientEvent is the entry point bound through the Wails surface
