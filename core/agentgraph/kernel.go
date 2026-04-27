@@ -98,6 +98,9 @@ func (k *Kernel) Run(ctx context.Context, env *Env) error {
 	// store, which we set above. Re-apply if it picked nilMemory.
 	if env.Hooks == nil {
 		env.Hooks = NewHookManager(env.Memory, env.SessionID, env.ProjectID)
+		if env.JournalWriter != nil {
+			env.Hooks.SetJournalWriter(env.JournalWriter)
+		}
 	}
 
 	// Pin the kernel's registry into env so nested dispatches inside

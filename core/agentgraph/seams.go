@@ -602,6 +602,13 @@ func applyEnvDefaults(env *Env) {
 	}
 	if env.Hooks == nil {
 		env.Hooks = NewHookManager(env.Memory, env.SessionID, env.ProjectID)
+		// Production-wired journal writer (memory_hook_journal table)
+		// — installed after construction so a chassis that supplied
+		// EnvDeps.JournalWriter gets persistence; tests / nil-seam
+		// callers fall back to the in-memory ring buffer.
+		if env.JournalWriter != nil {
+			env.Hooks.SetJournalWriter(env.JournalWriter)
+		}
 	}
 	if env.Transforms == nil {
 		env.Transforms = NewTransformRegistry()

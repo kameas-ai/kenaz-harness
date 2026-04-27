@@ -30,6 +30,12 @@ type EnvDeps struct {
 	// Held here so the Manager can surface it to a caller that wants
 	// to inspect run-ids in tests; not consumed by the kernel directly.
 	BashStore *corebash.Store
+	// JournalWriter persists the memory hook journal to migration
+	// 0308's memory_hook_journal table. Threaded onto the kernel's
+	// HookManager via SetJournalWriter after applyEnvDefaults
+	// constructs it. nil disables persistence (the in-memory ring
+	// buffer continues to work).
+	JournalWriter coreag.JournalWriter
 }
 
 // WithEnvDeps installs production seams onto the Manager. The seams
@@ -66,5 +72,15 @@ func (d EnvDeps) applyTo(env *coreag.Env) {
 	}
 	if d.Policy != nil {
 		env.Policy = d.Policy
+	}
+	// JournalWriter is applied AFTER the kernel constructs its
+	// HookManager (kernel.Run does that lazily on the first fire).
+	// We can't reach the HookManager here because env.Hooks is still
+	// nil at this point. The kernel's applyEnvDefaults reads back the
+	// EnvDeps via the env.Hooks creation path; alternatively we wire
+	// it through env.JournalWriter which the kernel's HookManager
+	// init pulls in. The agentgraph.Env carries the seam directly.
+	if d.JournalWriter != nil {
+		env.JournalWriter = d.JournalWriter
 	}
 }

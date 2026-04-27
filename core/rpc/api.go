@@ -10,12 +10,15 @@ package rpc
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"path/filepath"
 
 	"github.com/sigil-tech/kaneaz-harness/core"
+	coreag "github.com/sigil-tech/kaneaz-harness/core/agentgraph"
 	corenodes "github.com/sigil-tech/kaneaz-harness/core/agentgraph/nodes"
 	coreatt "github.com/sigil-tech/kaneaz-harness/core/attachments"
 	corecontexts "github.com/sigil-tech/kaneaz-harness/core/contexts"
@@ -1300,14 +1303,28 @@ func newGraphManagerWithDeps(
 	if memStore != nil {
 		deps.Memory = graphview.NewMemoryStoreAdapter(memStore, embedder)
 	}
-	// Cedar policy gate: production starts with AllowAll until an
-	// engine is loaded; the wiring slot is here so a future "load
-	// policy bundle" path only needs to swap the gate without
-	// touching the manager constructor.
-	deps.Policy = graphview.NewPolicyGateAdapter(cedar.AllowAll{})
+	// Cedar policy gate: build a real *cedar.Engine when a DataDir is
+	// available so user-supplied policies in <DataDir>/policy/*.cedar
+	// take effect immediately. The Engine ships an embedded default
+	// policy bundle that permits the five gate categories with logging
+	// — so an empty <DataDir>/policy/ still gives the harness's
+	// "default-allow with audit" stance, not a fail-closed posture.
+	// Falls back to AllowAll when the engine cannot be constructed
+	// (e.g. nil Core, nil DataDir, or a corrupt policy file) so the
+	// chassis still boots; the user sees the failure in the audit log.
+	deps.Policy = graphview.NewPolicyGateAdapter(buildCedarGate(dataDir))
 	if bashStore != nil {
 		deps.BashStore = bashStore
 		deps.BashOutput = graphview.NewBashOutputStoreAdapter(bashStore)
+	}
+	// Memory hook journal: bind the SQL writer (migration 0308) when
+	// the storage layer exposes a stdlib *sql.DB. The HookManager's
+	// in-memory ring buffer continues to work either way; the SQL
+	// writer just adds durable persistence.
+	if c != nil {
+		if jw := buildJournalWriter(c); jw != nil {
+			deps.JournalWriter = jw
+		}
 	}
 
 	mgr, err := graphview.NewManager(
@@ -2014,3 +2031,71 @@ func (a *API) Bindings() []any { return []any{a.bindings} }
 // invariant #1 — only emitter.go / stream_broker.go call
 // runtime.EventsEmit — keeps holding.
 func (a *API) StreamBroker() *StreamBroker { return a.broker }
+
+// buildCedarGate constructs the production Cedar policy gate. It loads
+// any user-supplied policies from <DataDir>/policy/*.cedar in addition
+// to the Engine's embedded default bundle (which permits the five gate
+// categories with logging — the harness's documented default-allow
+// stance, not fail-closed).
+//
+// Failure modes:
+//   - empty dataDir: returns AllowAll (no policy loading possible)
+//   - DataDir/policy/ doesn't exist: Engine.Reload creates an empty
+//     PolicySet on top of the default bundle; that's still default-allow
+//   - policy file fails to parse: Engine.Reload reports per-file errors
+//     in ListPolicies(); the audit panel surfaces them. The Engine
+//     keeps its prior PolicySet active (or the embedded default if
+//     this is the first load) so the chassis never boots in an
+//     unexpected fail-closed posture due to a typo.
+//   - construction itself errors: log a warning + fall back to
+//     AllowAll so the chassis boots
+func buildCedarGate(dataDir string) cedar.Gate {
+	if dataDir == "" {
+		return cedar.AllowAll{}
+	}
+	engine, err := cedar.NewEngine(cedar.Options{
+		DataDir:         dataDir,
+		LoadFromDisk:    true,
+		IncludeEmbedded: true,
+		// DefaultDeny=false — preserve the documented default-allow
+		// stance. Users opt into fail-closed by setting DefaultDeny=true
+		// once the policy engine settles down (a future settings toggle
+		// will surface this).
+		DefaultDeny: false,
+	})
+	if err != nil {
+		slog.Warn("cedar engine construction failed; falling back to AllowAll",
+			"err", err, "data_dir", dataDir)
+		return cedar.AllowAll{}
+	}
+	return engine
+}
+
+// buildJournalWriter constructs the SQL-backed memory hook journal
+// writer (migration 0308). Returns nil when the storage layer doesn't
+// expose a stdlib *sql.DB (in which case the HookManager falls back
+// to its in-memory ring buffer; persistence is just not available).
+//
+// The structural type assertion below is the wiring bridge: it asks
+// the storage.DB whether it satisfies the SQL-handle shape without
+// requiring storage.DB to grow a public method. The sqlite-backed
+// concreteDB does satisfy it.
+func buildJournalWriter(c *core.Core) coreag.JournalWriter {
+	if c == nil {
+		return nil
+	}
+	store := c.Storage()
+	if store == nil {
+		return nil
+	}
+	type sqlHandle interface{ SQL() *sql.DB }
+	h, ok := store.(sqlHandle)
+	if !ok {
+		return nil
+	}
+	rawDB := h.SQL()
+	if rawDB == nil {
+		return nil
+	}
+	return coreag.NewSQLJournalWriter(rawDB)
+}

@@ -5,13 +5,19 @@ import {rpc} from '../models';
 import {artifacts} from '../models';
 import {attachments} from '../models';
 import {audit} from '../models';
+import {branches} from '../models';
 import {bundle} from '../models';
+import {compaction} from '../models';
 import {contextview} from '../models';
 import {contexts} from '../models';
+import {corpus} from '../models';
+import {dials} from '../models';
+import {agentgraph} from '../models';
 import {hooks} from '../models';
 import {llm} from '../models';
 import {mcp} from '../models';
 import {memory} from '../models';
+import {nodes} from '../models';
 import {policy} from '../models';
 import {projects} from '../models';
 import {sessions} from '../models';
@@ -61,9 +67,31 @@ export function Audit_StopStream(arg1:string):Promise<void>;
 
 export function Audit_VerifyEntry(arg1:string):Promise<boolean>;
 
+export function Branches_Abandon(arg1:string):Promise<void>;
+
+export function Branches_Create(arg1:branches.CreateBranchOptions):Promise<branches.Branch>;
+
+export function Branches_GetStatus(arg1:string):Promise<branches.BranchStatus>;
+
+export function Branches_List(arg1:string):Promise<Array<branches.Branch>>;
+
+export function Branches_Merge(arg1:string):Promise<void>;
+
+export function Branches_RecommendModel(arg1:string,arg2:string,arg3:string):Promise<branches.RecommendedModel>;
+
 export function Bundle_Get(arg1:string):Promise<bundle.Bundle>;
 
 export function Bundle_List():Promise<Array<bundle.Bundle>>;
+
+export function Compaction_GetConfig(arg1:compaction.Layer,arg2:string):Promise<compaction.Config>;
+
+export function Compaction_GetEffective(arg1:compaction.ScopeKey):Promise<compaction.EffectiveConfig>;
+
+export function Compaction_ListCustomStrategies():Promise<Array<compaction.CustomStrategy>>;
+
+export function Compaction_SetConfig(arg1:compaction.Layer,arg2:string,arg3:compaction.Config):Promise<void>;
+
+export function Compaction_TriggerManual(arg1:string,arg2:compaction.ManualOpts):Promise<compaction.ManualResult>;
 
 export function Context_List():Promise<Array<contextview.ContextEntry>>;
 
@@ -89,9 +117,55 @@ export function Contexts_RootPath():Promise<string>;
 
 export function Contexts_Save(arg1:string,arg2:string):Promise<void>;
 
+export function Corpus_CreateCorpus(arg1:corpus.CreateRequest):Promise<corpus.Corpus>;
+
+export function Corpus_DeleteCorpus(arg1:string):Promise<void>;
+
+export function Corpus_GetCorpus(arg1:string):Promise<corpus.Corpus>;
+
+export function Corpus_IngestPath(arg1:string,arg2:string,arg3:corpus.IngestOptions):Promise<corpus.IngestStatus>;
+
+export function Corpus_JobStatus(arg1:string):Promise<corpus.IngestStatus>;
+
+export function Corpus_ListChunks(arg1:string,arg2:string):Promise<Array<corpus.Chunk>>;
+
+export function Corpus_ListCorpora(arg1:string):Promise<Array<corpus.Corpus>>;
+
+export function Corpus_ListFiles(arg1:string):Promise<Array<corpus.CorpusFile>>;
+
+export function Corpus_Retrieve(arg1:string,arg2:corpus.RetrieveRequest):Promise<corpus.RetrieveResponse>;
+
 export function Diag_LogClientEvent(arg1:string,arg2:string,arg3:Record<string, any>):Promise<void>;
 
 export function Diag_LogPath():Promise<string>;
+
+export function Dials_BumpAndResume(arg1:string,arg2:dials.DialDelta):Promise<void>;
+
+export function Dials_Get(arg1:dials.ScopeKey):Promise<dials.DialConfig>;
+
+export function Dials_GetEffective(arg1:string,arg2:string,arg3:string,arg4:string):Promise<dials.EffectiveDials>;
+
+export function Dials_Set(arg1:dials.ScopeKey,arg2:dials.DialConfig):Promise<void>;
+
+export function Graph_CancelRun(arg1:string):Promise<void>;
+
+export function Graph_DeleteGraph(arg1:string):Promise<void>;
+
+export function Graph_GetRunStatus(arg1:string):Promise<agentgraph.RunStatus>;
+
+export function Graph_GetRunTrace(arg1:string,arg2:number):Promise<Array<agentgraph.RunTraceEvent>>;
+
+export function Graph_ListGraphs(arg1:string):Promise<Array<agentgraph.GraphInfo>>;
+
+export function Graph_LoadGraph(arg1:string):Promise<agentgraph.GraphSpec>;
+
+export function Graph_Resume(arg1:string,arg2:string):Promise<void>;
+
+export function Graph_SaveGraph(arg1:agentgraph.GraphSpec):Promise<void>;
+
+export function Graph_StartRun(arg1:agentgraph.StartRunRequest):Promise<agentgraph.StartRunResponse>;
+
+export function Graph_Validate(arg1:string):Promise<agentgraph.ValidationResult>;
 
 export function Hooks_Add(arg1:hooks.Hook):Promise<hooks.Hook>;
 
@@ -141,11 +215,29 @@ export function MCP_StopStream(arg1:string):Promise<void>;
 
 export function Memory_Forget(arg1:string):Promise<void>;
 
+export function Memory_JournalTail(arg1:string,arg2:number,arg3:number):Promise<Array<memory.JournalEntry>>;
+
 export function Memory_ListChunks(arg1:memory.ListFilter):Promise<Array<memory.Chunk>>;
+
+export function Memory_Pin(arg1:string,arg2:boolean):Promise<void>;
 
 export function Memory_PromoteScope(arg1:string,arg2:string,arg3:string):Promise<string>;
 
+export function Memory_PrunePreview(arg1:string):Promise<memory.PrunePreview>;
+
 export function Memory_RememberMessage(arg1:string,arg2:string,arg3:string):Promise<string>;
+
+export function Memory_RunPruneNow(arg1:string):Promise<memory.PruneStats>;
+
+export function Nodes_Catalog():Promise<Array<nodes.NodeManifestSummary>>;
+
+export function Nodes_Doctor():Promise<nodes.DoctorReport>;
+
+export function Nodes_Get(arg1:string):Promise<nodes.NodeManifestDetail>;
+
+export function Nodes_ListUserOverrides():Promise<Array<nodes.UserOverrideInfo>>;
+
+export function Nodes_ReloadOverrides():Promise<nodes.ReloadResult>;
 
 export function Policy_Explain(arg1:Record<string, any>):Promise<policy.Denial>;
 
@@ -181,6 +273,8 @@ export function Sessions_Create(arg1:string):Promise<sessions.Session>;
 
 export function Sessions_Delete(arg1:string):Promise<void>;
 
+export function Sessions_DeleteWithOptions(arg1:string,arg2:sessions.DeleteOptions):Promise<void>;
+
 export function Sessions_Get(arg1:string):Promise<sessions.Session>;
 
 export function Sessions_List():Promise<Array<sessions.Session>>;
@@ -213,15 +307,23 @@ export function SetSettingsStore(arg1:settings.SettingsStore):Promise<void>;
 
 export function Settings_Get():Promise<settings.Settings>;
 
+export function Settings_GetBash():Promise<boolean>;
+
 export function Settings_GetConfirmEach():Promise<boolean>;
 
 export function Settings_GetMemory():Promise<boolean>;
 
+export function Settings_GetWebSearch():Promise<boolean>;
+
 export function Settings_Set(arg1:settings.Settings):Promise<void>;
+
+export function Settings_SetBash(arg1:boolean):Promise<void>;
 
 export function Settings_SetConfirmEach(arg1:boolean):Promise<void>;
 
 export function Settings_SetMemory(arg1:boolean):Promise<void>;
+
+export function Settings_SetWebSearch(arg1:boolean):Promise<void>;
 
 export function ShellStatus():Promise<rpc.ShellStatus>;
 

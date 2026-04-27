@@ -177,6 +177,12 @@ type Env struct {
 	// chat surface surfaces this as "branching not enabled in this build".
 	Branch BranchSeam
 
+	// JournalWriter persists memory hook journal entries. The kernel
+	// threads it onto the lazily-constructed HookManager via
+	// SetJournalWriter. nil disables on-disk persistence; the
+	// HookManager's in-memory ring buffer keeps working.
+	JournalWriter JournalWriter
+
 	// Recommender suggests a (provider, model) for forks. nil disables
 	// the recommendation chip; ForkNode falls back to ModelOverride or
 	// the parent model.

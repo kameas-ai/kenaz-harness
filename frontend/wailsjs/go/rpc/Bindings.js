@@ -78,12 +78,56 @@ export function Audit_VerifyEntry(arg1) {
   return window['go']['rpc']['Bindings']['Audit_VerifyEntry'](arg1);
 }
 
+export function Branches_Abandon(arg1) {
+  return window['go']['rpc']['Bindings']['Branches_Abandon'](arg1);
+}
+
+export function Branches_Create(arg1) {
+  return window['go']['rpc']['Bindings']['Branches_Create'](arg1);
+}
+
+export function Branches_GetStatus(arg1) {
+  return window['go']['rpc']['Bindings']['Branches_GetStatus'](arg1);
+}
+
+export function Branches_List(arg1) {
+  return window['go']['rpc']['Bindings']['Branches_List'](arg1);
+}
+
+export function Branches_Merge(arg1) {
+  return window['go']['rpc']['Bindings']['Branches_Merge'](arg1);
+}
+
+export function Branches_RecommendModel(arg1, arg2, arg3) {
+  return window['go']['rpc']['Bindings']['Branches_RecommendModel'](arg1, arg2, arg3);
+}
+
 export function Bundle_Get(arg1) {
   return window['go']['rpc']['Bindings']['Bundle_Get'](arg1);
 }
 
 export function Bundle_List() {
   return window['go']['rpc']['Bindings']['Bundle_List']();
+}
+
+export function Compaction_GetConfig(arg1, arg2) {
+  return window['go']['rpc']['Bindings']['Compaction_GetConfig'](arg1, arg2);
+}
+
+export function Compaction_GetEffective(arg1) {
+  return window['go']['rpc']['Bindings']['Compaction_GetEffective'](arg1);
+}
+
+export function Compaction_ListCustomStrategies() {
+  return window['go']['rpc']['Bindings']['Compaction_ListCustomStrategies']();
+}
+
+export function Compaction_SetConfig(arg1, arg2, arg3) {
+  return window['go']['rpc']['Bindings']['Compaction_SetConfig'](arg1, arg2, arg3);
+}
+
+export function Compaction_TriggerManual(arg1, arg2) {
+  return window['go']['rpc']['Bindings']['Compaction_TriggerManual'](arg1, arg2);
 }
 
 export function Context_List() {
@@ -134,12 +178,104 @@ export function Contexts_Save(arg1, arg2) {
   return window['go']['rpc']['Bindings']['Contexts_Save'](arg1, arg2);
 }
 
+export function Corpus_CreateCorpus(arg1) {
+  return window['go']['rpc']['Bindings']['Corpus_CreateCorpus'](arg1);
+}
+
+export function Corpus_DeleteCorpus(arg1) {
+  return window['go']['rpc']['Bindings']['Corpus_DeleteCorpus'](arg1);
+}
+
+export function Corpus_GetCorpus(arg1) {
+  return window['go']['rpc']['Bindings']['Corpus_GetCorpus'](arg1);
+}
+
+export function Corpus_IngestPath(arg1, arg2, arg3) {
+  return window['go']['rpc']['Bindings']['Corpus_IngestPath'](arg1, arg2, arg3);
+}
+
+export function Corpus_JobStatus(arg1) {
+  return window['go']['rpc']['Bindings']['Corpus_JobStatus'](arg1);
+}
+
+export function Corpus_ListChunks(arg1, arg2) {
+  return window['go']['rpc']['Bindings']['Corpus_ListChunks'](arg1, arg2);
+}
+
+export function Corpus_ListCorpora(arg1) {
+  return window['go']['rpc']['Bindings']['Corpus_ListCorpora'](arg1);
+}
+
+export function Corpus_ListFiles(arg1) {
+  return window['go']['rpc']['Bindings']['Corpus_ListFiles'](arg1);
+}
+
+export function Corpus_Retrieve(arg1, arg2) {
+  return window['go']['rpc']['Bindings']['Corpus_Retrieve'](arg1, arg2);
+}
+
 export function Diag_LogClientEvent(arg1, arg2, arg3) {
   return window['go']['rpc']['Bindings']['Diag_LogClientEvent'](arg1, arg2, arg3);
 }
 
 export function Diag_LogPath() {
   return window['go']['rpc']['Bindings']['Diag_LogPath']();
+}
+
+export function Dials_BumpAndResume(arg1, arg2) {
+  return window['go']['rpc']['Bindings']['Dials_BumpAndResume'](arg1, arg2);
+}
+
+export function Dials_Get(arg1) {
+  return window['go']['rpc']['Bindings']['Dials_Get'](arg1);
+}
+
+export function Dials_GetEffective(arg1, arg2, arg3, arg4) {
+  return window['go']['rpc']['Bindings']['Dials_GetEffective'](arg1, arg2, arg3, arg4);
+}
+
+export function Dials_Set(arg1, arg2) {
+  return window['go']['rpc']['Bindings']['Dials_Set'](arg1, arg2);
+}
+
+export function Graph_CancelRun(arg1) {
+  return window['go']['rpc']['Bindings']['Graph_CancelRun'](arg1);
+}
+
+export function Graph_DeleteGraph(arg1) {
+  return window['go']['rpc']['Bindings']['Graph_DeleteGraph'](arg1);
+}
+
+export function Graph_GetRunStatus(arg1) {
+  return window['go']['rpc']['Bindings']['Graph_GetRunStatus'](arg1);
+}
+
+export function Graph_GetRunTrace(arg1, arg2) {
+  return window['go']['rpc']['Bindings']['Graph_GetRunTrace'](arg1, arg2);
+}
+
+export function Graph_ListGraphs(arg1) {
+  return window['go']['rpc']['Bindings']['Graph_ListGraphs'](arg1);
+}
+
+export function Graph_LoadGraph(arg1) {
+  return window['go']['rpc']['Bindings']['Graph_LoadGraph'](arg1);
+}
+
+export function Graph_Resume(arg1, arg2) {
+  return window['go']['rpc']['Bindings']['Graph_Resume'](arg1, arg2);
+}
+
+export function Graph_SaveGraph(arg1) {
+  return window['go']['rpc']['Bindings']['Graph_SaveGraph'](arg1);
+}
+
+export function Graph_StartRun(arg1) {
+  return window['go']['rpc']['Bindings']['Graph_StartRun'](arg1);
+}
+
+export function Graph_Validate(arg1) {
+  return window['go']['rpc']['Bindings']['Graph_Validate'](arg1);
 }
 
 export function Hooks_Add(arg1) {
@@ -238,16 +374,52 @@ export function Memory_Forget(arg1) {
   return window['go']['rpc']['Bindings']['Memory_Forget'](arg1);
 }
 
+export function Memory_JournalTail(arg1, arg2, arg3) {
+  return window['go']['rpc']['Bindings']['Memory_JournalTail'](arg1, arg2, arg3);
+}
+
 export function Memory_ListChunks(arg1) {
   return window['go']['rpc']['Bindings']['Memory_ListChunks'](arg1);
+}
+
+export function Memory_Pin(arg1, arg2) {
+  return window['go']['rpc']['Bindings']['Memory_Pin'](arg1, arg2);
 }
 
 export function Memory_PromoteScope(arg1, arg2, arg3) {
   return window['go']['rpc']['Bindings']['Memory_PromoteScope'](arg1, arg2, arg3);
 }
 
+export function Memory_PrunePreview(arg1) {
+  return window['go']['rpc']['Bindings']['Memory_PrunePreview'](arg1);
+}
+
 export function Memory_RememberMessage(arg1, arg2, arg3) {
   return window['go']['rpc']['Bindings']['Memory_RememberMessage'](arg1, arg2, arg3);
+}
+
+export function Memory_RunPruneNow(arg1) {
+  return window['go']['rpc']['Bindings']['Memory_RunPruneNow'](arg1);
+}
+
+export function Nodes_Catalog() {
+  return window['go']['rpc']['Bindings']['Nodes_Catalog']();
+}
+
+export function Nodes_Doctor() {
+  return window['go']['rpc']['Bindings']['Nodes_Doctor']();
+}
+
+export function Nodes_Get(arg1) {
+  return window['go']['rpc']['Bindings']['Nodes_Get'](arg1);
+}
+
+export function Nodes_ListUserOverrides() {
+  return window['go']['rpc']['Bindings']['Nodes_ListUserOverrides']();
+}
+
+export function Nodes_ReloadOverrides() {
+  return window['go']['rpc']['Bindings']['Nodes_ReloadOverrides']();
 }
 
 export function Policy_Explain(arg1) {
@@ -318,6 +490,10 @@ export function Sessions_Delete(arg1) {
   return window['go']['rpc']['Bindings']['Sessions_Delete'](arg1);
 }
 
+export function Sessions_DeleteWithOptions(arg1, arg2) {
+  return window['go']['rpc']['Bindings']['Sessions_DeleteWithOptions'](arg1, arg2);
+}
+
 export function Sessions_Get(arg1) {
   return window['go']['rpc']['Bindings']['Sessions_Get'](arg1);
 }
@@ -382,6 +558,10 @@ export function Settings_Get() {
   return window['go']['rpc']['Bindings']['Settings_Get']();
 }
 
+export function Settings_GetBash() {
+  return window['go']['rpc']['Bindings']['Settings_GetBash']();
+}
+
 export function Settings_GetConfirmEach() {
   return window['go']['rpc']['Bindings']['Settings_GetConfirmEach']();
 }
@@ -390,8 +570,16 @@ export function Settings_GetMemory() {
   return window['go']['rpc']['Bindings']['Settings_GetMemory']();
 }
 
+export function Settings_GetWebSearch() {
+  return window['go']['rpc']['Bindings']['Settings_GetWebSearch']();
+}
+
 export function Settings_Set(arg1) {
   return window['go']['rpc']['Bindings']['Settings_Set'](arg1);
+}
+
+export function Settings_SetBash(arg1) {
+  return window['go']['rpc']['Bindings']['Settings_SetBash'](arg1);
 }
 
 export function Settings_SetConfirmEach(arg1) {
@@ -400,6 +588,10 @@ export function Settings_SetConfirmEach(arg1) {
 
 export function Settings_SetMemory(arg1) {
   return window['go']['rpc']['Bindings']['Settings_SetMemory'](arg1);
+}
+
+export function Settings_SetWebSearch(arg1) {
+  return window['go']['rpc']['Bindings']['Settings_SetWebSearch'](arg1);
 }
 
 export function ShellStatus() {

@@ -224,6 +224,16 @@ func (d *concreteDB) Reader() storage.Reader {
 	return &reader{db: d.raw}
 }
 
+// SQL returns the underlying *sql.DB. Exposed for narrow stdlib-
+// shaped consumers (agentgraph.SQLEventLog, the memory hook journal
+// writer) that wrap one INSERT or one SELECT per call. Callers MUST
+// NOT open long-lived transactions through this handle — the storage
+// layer's WAL contention invariants depend on the WriteTx writer-
+// thread discipline (plan §4.1). The handle is matched at the wiring
+// site via a structural interface assertion so storage.DB itself does
+// not grow a public method.
+func (d *concreteDB) SQL() *sql.DB { return d.raw }
+
 // WriteTx runs fn inside a serialisable transaction.
 func (d *concreteDB) WriteTx(ctx context.Context, fn func(tx storage.WriteTx) error) error {
 	if d.raw == nil {
