@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"embed"
+	"flag"
 	"log"
 	"os"
 	"path/filepath"
@@ -25,6 +26,16 @@ func main() {
 	// sequence (data-dir setup, core.New) land in ~/.kenaz/harness.log.
 	logging.L().Info("harness.boot", "pid", os.Getpid())
 
+	// Dev-only flag: --enable-manifest-hot-reload turns on the polling
+	// watcher under <DataDir>/agent_graph/nodes/ so authoring a new
+	// override and saving immediately reflects in the palette without
+	// a chassis restart (mission agent-kernel-graph-node-catalog WP07
+	// / FR-023). Default off — production graphs MUST get a stable
+	// manifest set.
+	enableHotReload := flag.Bool("enable-manifest-hot-reload", false,
+		"dev: poll <DataDir>/agent_graph/nodes/ and reload the node manifest catalog on change")
+	flag.Parse()
+
 	dataDir, err := defaultDataDir()
 	if err != nil {
 		log.Fatalf("data dir: %v", err)
@@ -33,7 +44,10 @@ func main() {
 		log.Fatalf("mkdir data dir: %v", err)
 	}
 
-	c, err := core.New(core.Options{DataDir: dataDir})
+	c, err := core.New(core.Options{
+		DataDir:                 dataDir,
+		EnableManifestHotReload: *enableHotReload,
+	})
 	if err != nil {
 		log.Fatalf("core init: %v", err)
 	}

@@ -61,11 +61,31 @@ type Options struct {
 	// core.New time.
 	Telemetry TelemetryOptions
 
+	// EnableManifestHotReload toggles the dev-only node-manifest hot
+	// reload watcher (mission agent-kernel-graph-node-catalog WP07 /
+	// FR-023). Default false; production graphs MUST get a stable
+	// manifest set across the run lifetime. The chassis surfaces the
+	// `--enable-manifest-hot-reload` CLI flag and forwards the value
+	// here. When true, the rpc layer constructs a stdlib polling
+	// watcher over <DataDir>/agent_graph/nodes/ and atomically swaps
+	// the resolved catalog when files change.
+	EnableManifestHotReload bool
+
 	// Subsystems lets an embedding application inject pre-constructed
 	// subsystems (e.g. a fake event-log Emitter for tests) instead of
 	// relying on Core's lazy defaults. Fields left zero fall through
 	// to the default lazy-init path in Start.
 	Subsystems Subsystems
+}
+
+// HotReloadEnabled reports whether the dev-flag-gated node-manifest hot
+// reload watcher should run. Mirrors the rpc-layer accessor pattern so
+// the rpc package can read the flag without importing core.Options.
+func (c *Core) HotReloadEnabled() bool {
+	if c == nil {
+		return false
+	}
+	return c.opts.EnableManifestHotReload
 }
 
 // TelemetryOptions is the OTLP fan-out config the embedder passes to

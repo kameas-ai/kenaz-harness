@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 
 	"github.com/sigil-tech/kaneaz-harness/core"
+	corenodes "github.com/sigil-tech/kaneaz-harness/core/agentgraph/nodes"
 	coreatt "github.com/sigil-tech/kaneaz-harness/core/attachments"
 	corecontexts "github.com/sigil-tech/kaneaz-harness/core/contexts"
 	corecorpus "github.com/sigil-tech/kaneaz-harness/core/corpus"
@@ -49,6 +50,7 @@ import (
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/llm"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/mcp"
 	memoryview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/memory"
+	nodesview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/nodes"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/policy"
 	projectsview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/projects"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/sessions"
@@ -100,6 +102,7 @@ type HarnessAPI interface {
 	Compaction() compactionview.CompactionAPI
 	Branches() branchesview.BranchesAPI
 	Dials() dialsview.DialsAPI
+	Nodes() nodesview.NodesAPI
 }
 
 // ShellStatus drives the Toolbar status pills + LegendBar live-rate
@@ -174,6 +177,14 @@ type API struct {
 	convMgr         *coreconv.Manager
 	branchesAPI     branchesview.BranchesAPI
 	dialsAPI        dialsview.DialsAPI
+
+	// Node manifest catalog (mission agent-kernel-graph-node-catalog;
+	// WP07). The manager owns the resolved catalog + user-override
+	// directory. The optional hot-reload watcher polls when the
+	// chassis-level --enable-manifest-hot-reload flag is set.
+	nodesMgr     *nodesview.Manager
+	nodesAPI     nodesview.NodesAPI
+	nodesWatcher *corenodes.Watcher
 
 	// stdioPool is the production *stdio.Pool wired into newLLMStack.
 	// Held on the API value so the tools view's InstallRecipe /
@@ -397,6 +408,15 @@ func New(c *core.Core) *API {
 	// only when no kernel resumer is wired — the chassis still boots
 	// and BumpAndResume returns ErrNoPause until a kernel binds.
 	a.dialsAPI = dialsview.New(dialsview.Config{})
+
+	// Node manifest catalog (mission agent-kernel-graph-node-catalog
+	// WP07). Loads shipped manifests + user-overrides at chassis boot;
+	// the hot-reload watcher is only started when the chassis-level
+	// `--enable-manifest-hot-reload` flag is enabled (FR-023).
+	a.nodesMgr, a.nodesAPI = newNodesStack(c)
+	if c != nil && c.HotReloadEnabled() && a.nodesMgr != nil {
+		a.nodesWatcher = startNodesWatcher(c, a.nodesMgr)
+	}
 
 	a.bindings = NewBindings(a)
 	if a.settingsImpl != nil {
@@ -1182,6 +1202,59 @@ func newGraphManager(c *core.Core) *graphview.Manager {
 	return mgr
 }
 
+// newNodesStack constructs the manifest-catalog view (mission
+// agent-kernel-graph-node-catalog WP07). LoadCatalog is best-effort:
+// shipped manifests load from the embedded YAML set, user overrides
+// at <DataDir>/agent_graph/nodes/*.yaml deep-merge in. A load error
+// is logged at warn but does not abort wiring — the API surface still
+// lists whatever loaded cleanly so the frontend's empty-state path
+// stays tolerant of a single malformed override file.
+func newNodesStack(c *core.Core) (*nodesview.Manager, nodesview.NodesAPI) {
+	userDir := ""
+	if c != nil && c.DataDir() != "" {
+		userDir = filepath.Join(c.DataDir(), "agent_graph", "nodes")
+	}
+	cat, err := corenodes.LoadCatalog(corenodes.LoadOptions{UserDir: userDir})
+	if err != nil {
+		logging.L().Warn("nodes.load_warn", "err", err.Error(), "user_dir", userDir)
+	}
+	mgr := nodesview.NewManager(nodesview.ManagerConfig{
+		Catalog: cat,
+		UserDir: userDir,
+	})
+	return mgr, nodesview.New(mgr)
+}
+
+// startNodesWatcher launches the dev-flag-gated polling watcher on
+// <DataDir>/agent_graph/nodes/. The watcher swaps the manager's
+// catalog atomically when *.yaml content changes are detected. nil
+// returns are tolerated by the caller; the chassis still boots.
+func startNodesWatcher(c *core.Core, mgr *nodesview.Manager) *corenodes.Watcher {
+	if c == nil || mgr == nil {
+		return nil
+	}
+	userDir := mgr.UserDir()
+	if userDir == "" {
+		return nil
+	}
+	w := corenodes.NewWatcher(corenodes.WatcherConfig{
+		UserDir: userDir,
+		OnReload: func(cat *corenodes.Catalog) {
+			res := mgr.SwapCatalog(cat)
+			logging.L().Info("nodes.hot_reload",
+				"added", res.Added,
+				"removed", res.Removed,
+				"modified", res.Modified)
+		},
+		OnError: func(err error) {
+			logging.L().Warn("nodes.hot_reload_err", "err", err.Error())
+		},
+	})
+	w.Start(context.Background())
+	logging.L().Info("nodes.hot_reload.started", "user_dir", userDir)
+	return w
+}
+
 // corpusEmbedderAdapter bridges core/memory.Embedder onto the narrower
 // corpus.Embedder seam. The two interfaces share the Embed signature;
 // keeping them disjoint avoids a corpus -> memory import edge.
@@ -1773,6 +1846,19 @@ func (a *API) Graph() graphview.API {
 		return graphview.New(nil)
 	}
 	return a.graphAPI
+}
+
+// Nodes returns the view-scoped accessor for the manifest-driven
+// node catalog (mission agent-kernel-graph-node-catalog; WP07). The
+// accessor lets the frontend list every callable kind + archetype with
+// provenance so WP06's palette and attribute editor can render
+// inheritance metadata. nil-manager fallback returns the
+// ErrManagerUnavailable empty-state surface.
+func (a *API) Nodes() nodesview.NodesAPI {
+	if a == nil || a.nodesAPI == nil {
+		return nodesview.New(nil)
+	}
+	return a.nodesAPI
 }
 
 // Compaction returns the configurable-compaction view (mission

@@ -85,6 +85,10 @@ import type {
   GraphRunTraceEvent,
   GraphStartRunRequest,
   GraphStartRunResponse,
+  NodeManifestSummary,
+  NodeManifestDetail,
+  NodeReloadResult,
+  NodeUserOverrideInfo,
   CompactionConfig,
   CompactionCustomStrategy,
   CompactionEffectiveConfig,
@@ -359,6 +363,12 @@ interface WailsBindingsLike {
     opts: CompactionManualOpts,
   ): Promise<CompactionManualResult>;
   Compaction_ListCustomStrategies(): Promise<CompactionCustomStrategy[]>;
+
+  // Nodes view (manifest-driven node catalog; WP07).
+  Nodes_Catalog(): Promise<NodeManifestSummary[]>;
+  Nodes_Get(id: string): Promise<NodeManifestDetail>;
+  Nodes_ReloadOverrides(): Promise<NodeReloadResult>;
+  Nodes_ListUserOverrides(): Promise<NodeUserOverrideInfo[]>;
 
   // Branches view (agent-kernel-graph; Bundle B WP07/08).
   Branches_List(parentSessionID: string): Promise<Branch[]>;
@@ -1159,6 +1169,24 @@ export interface CompactionClient {
 }
 
 /**
+ * NodesClient — manifest-driven node catalog (mission
+ * agent-kernel-graph-node-catalog; WP07). Backs WP06's NodePaletteTree
+ * + NodeAttributeEditor; the dev-only ReloadOverrides path is also
+ * exposed so the Settings panel can offer a "Reload node catalog"
+ * doctor button.
+ */
+export interface NodesClient {
+  /** List every callable kind + archetype (palette tree source). */
+  catalog(): Promise<NodeManifestSummary[]>;
+  /** Full resolved manifest with provenance for one id. */
+  get(id: string): Promise<NodeManifestDetail>;
+  /** Re-scan <DataDir>/agent_graph/nodes/ and atomically swap the catalog. */
+  reloadOverrides(): Promise<NodeReloadResult>;
+  /** Inspect the user-override directory; list each YAML's parse status. */
+  listUserOverrides(): Promise<NodeUserOverrideInfo[]>;
+}
+
+/**
  * BranchesClient — conversation branches subsystem (mission
  * agent-kernel-graph; Bundle B WP07/08). Backs the BranchSidebar +
  * CreateBranchModal + MergeSuggestionToast surfaces.
@@ -1209,6 +1237,7 @@ export interface HarnessClient {
   compaction: CompactionClient;
   branches: BranchesClient;
   dials: DialsClient;
+  nodes: NodesClient;
 }
 
 // ── runtime client ─────────────────────────────────────────────────────
@@ -1477,6 +1506,12 @@ export function createHarnessClient(): HarnessClient {
       abandon: (branchID) => b().Branches_Abandon(branchID),
       recommendModel: (parentSessionID, taskHint, preference) =>
         b().Branches_RecommendModel(parentSessionID, taskHint, preference),
+    },
+    nodes: {
+      catalog: () => b().Nodes_Catalog(),
+      get: (id) => b().Nodes_Get(id),
+      reloadOverrides: () => b().Nodes_ReloadOverrides(),
+      listUserOverrides: () => b().Nodes_ListUserOverrides(),
     },
   };
 }
@@ -2006,6 +2041,22 @@ export function createFakeHarnessClient(
         tier: 'small',
         reason: 'default',
       }),
+    },
+    nodes: {
+      catalog: async () => [],
+      get: async (id) => ({
+        summary: { id, callable: false },
+        chain: [id],
+        attrs: [],
+        ports: {},
+        provenance: [],
+      }),
+      reloadOverrides: async () => ({
+        added: [],
+        removed: [],
+        modified: [],
+      }),
+      listUserOverrides: async () => [],
     },
   };
 

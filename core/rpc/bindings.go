@@ -20,6 +20,7 @@ import (
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/llm"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/mcp"
 	memoryview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/memory"
+	nodesview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/nodes"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/policy"
 	projectsview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/projects"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/sessions"
@@ -728,4 +729,19 @@ func (b *Bindings) Branches_Abandon(branchID string) error {
 }
 func (b *Bindings) Branches_RecommendModel(parentSessionID, taskHint, preference string) (branchesview.RecommendedModel, error) {
 	return b.api.Branches().RecommendModel(b.ctx(), parentSessionID, taskHint, preference)
+}
+
+// ── nodes (manifest-driven node catalog; WP07) ────────────────────────
+
+func (b *Bindings) Nodes_Catalog() ([]nodesview.NodeManifestSummary, error) {
+	return b.api.Nodes().Catalog(b.ctx())
+}
+func (b *Bindings) Nodes_Get(id string) (nodesview.NodeManifestDetail, error) {
+	return b.api.Nodes().Get(b.ctx(), id)
+}
+func (b *Bindings) Nodes_ReloadOverrides() (nodesview.ReloadResult, error) {
+	return b.api.Nodes().ReloadOverrides(b.ctx())
+}
+func (b *Bindings) Nodes_ListUserOverrides() ([]nodesview.UserOverrideInfo, error) {
+	return b.api.Nodes().ListUserOverrides(b.ctx())
 }

@@ -1205,6 +1205,111 @@ export interface GraphStartRunResponse {
   status: GraphRunStatus;
 }
 
+// ── Node manifest catalog (mission agent-kernel-graph-node-catalog WP07) ─
+
+/**
+ * AttrProvenance maps a resolved-manifest field path (e.g.
+ * "attrs.max_tokens", "defaults.temperature") to the inheritance layer
+ * that contributed its effective value. Layer values:
+ *   - "shipped"        — the bundled manifest's leaf layer
+ *   - "archetype-<id>" — inherited from the named archetype layer
+ *   - "user-override"  — user manifest at <DataDir>/agent_graph/nodes/
+ *
+ * The frontend's NodeInheritanceTooltip surfaces this on hover (FR-024).
+ */
+export interface AttrProvenance {
+  fieldPath: string;
+  layer: string;
+}
+
+/** AttrSpec is the wire-shaped attribute descriptor. */
+export interface NodeAttrSpec {
+  name: string;
+  type: string;
+  required?: boolean;
+  default?: unknown;
+  enum?: string[];
+  min?: number;
+  max?: number;
+  minLength?: number;
+  maxLength?: number;
+  description?: string;
+}
+
+/** PortSpec is the wire-shaped port descriptor. */
+export interface NodePortSpec {
+  name: string;
+  type: string;
+  description?: string;
+  defaultFor?: string;
+}
+
+/** PortSet pairs the merged input + output port lists. */
+export interface NodePortSet {
+  inputs?: NodePortSpec[];
+  outputs?: NodePortSpec[];
+}
+
+/**
+ * NodeManifestSummary is one catalog row. The palette tree lists these
+ * without fetching the full attribute schema.
+ */
+export interface NodeManifestSummary {
+  id: string;
+  kindName?: string;
+  displayName?: string;
+  description?: string;
+  category?: string;
+  extends?: string;
+  archetype?: string;
+  callable: boolean;
+  aliases?: string[];
+  source?: string;
+  hash?: string;
+  version?: string;
+}
+
+/**
+ * NodeManifestDetail is the full resolved manifest with per-field
+ * provenance. The attribute editor consumes this shape.
+ */
+export interface NodeManifestDetail {
+  summary: NodeManifestSummary;
+  chain: string[];
+  attrs: NodeAttrSpec[];
+  ports: NodePortSet;
+  defaults?: Record<string, unknown>;
+  budgetConsumes?: string[];
+  budget?: string;
+  executor?: string;
+  provenance: AttrProvenance[];
+}
+
+/**
+ * ReloadResult is the diff returned by Nodes_ReloadOverrides.
+ */
+export interface NodeReloadResult {
+  added: string[];
+  removed: string[];
+  modified: string[];
+  errors?: string[];
+  reloadedAt?: string;
+}
+
+/**
+ * UserOverrideInfo describes one *.yaml under the user-override dir
+ * after a parse pass. status === "ok" for accepted files; otherwise
+ * `error` carries the per-file message.
+ */
+export interface NodeUserOverrideInfo {
+  path: string;
+  filename: string;
+  id?: string;
+  status: 'ok' | 'error';
+  error?: string;
+  sizeBytes?: number;
+}
+
 // ── compaction (mission agent-kernel-graph; Bundle D WP12/WP13) ──────
 
 /**
