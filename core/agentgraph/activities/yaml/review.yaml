@@ -1,0 +1,30 @@
+# review.yaml — bounded reviewer-iteration gate for a draft.
+#
+# Bundle A WP05. ReviewNode runs a reviewer pass against the upstream
+# producer and either passes or signals re-fire upstream until the
+# iteration cap (default 3) trips. Distinct from `reflect`: review is
+# a control-flavoured gate (pass/fail with iteration), not an open
+# critique.
+spec_version: "1"
+id: "review"
+name: "Review a draft and iterate until pass or cap"
+description: |
+  Pipes the upstream node's output to a ReviewNode bounded at 3
+  iterations. On fail, ReviewNode signals the kernel to re-fire the
+  upstream producer; on cap-hit, the activity halts with the last
+  draft so the caller can decide whether to escalate.
+entrypoints:
+  - reviewer
+nodes:
+  - id: reviewer
+    kind: review
+    title: "Reviewer iteration"
+    attrs:
+      max_iterations: 3
+      on_cap_hit: halt
+      system_prompt: |
+        Evaluate the supplied draft against the stated goal. Respond
+        with a JSON object: `pass` (boolean), `reasons` (array of
+        specific issues if pass is false). Do NOT rewrite the draft;
+        the upstream producer re-fires with your reasons in context.
+edges: []

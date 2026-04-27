@@ -1,0 +1,31 @@
+# reflect.yaml — explicit critique + revision over a recent draft.
+#
+# Bundle A WP05. Wraps a ReflectNode against a configurable upstream
+# producer. The reflector emits a critique block alongside an optional
+# revised draft. Callers consume the `critique` and `revision` ports.
+# The model is configurable (defaults to the parent run's model);
+# escalating to a larger model is a one-attribute override.
+spec_version: "1"
+id: "reflect"
+name: "Reflect on a draft and propose a revision"
+description: |
+  Hands the upstream node's output to a ReflectNode that produces a
+  structured critique and an optional revised draft. The activity is
+  the building block of self-refine loops: a downstream LoopNode (or
+  ReviewNode) can re-fire upstream until the critique is empty.
+entrypoints:
+  - reflector
+nodes:
+  - id: reflector
+    kind: reflect
+    title: "Critique + revision"
+    attrs:
+      model: "default"
+      system_prompt: |
+        Read the supplied draft and produce a JSON object with two
+        fields: `critique` (specific, actionable issues; empty array
+        if the draft is acceptable) and `revision` (a revised draft
+        that addresses every critique point, or the original if no
+        issues were found).
+      max_tokens: 2048
+edges: []
