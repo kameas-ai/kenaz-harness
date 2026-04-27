@@ -32,6 +32,7 @@ import (
 	corememory "github.com/sigil-tech/kaneaz-harness/core/memory"
 	coreart "github.com/sigil-tech/kaneaz-harness/core/artifacts"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/a2a"
+	graphview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/agentgraph"
 	artifactsview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/artifacts"
 	attachmentsview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/attachments"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/audit"
@@ -90,6 +91,7 @@ type HarnessAPI interface {
 	Shell() shell.ShellAPI
 	Slash() slashview.SlashAPI
 	Corpus() corpusview.CorpusAPI
+	Graph() graphview.API
 }
 
 // ShellStatus drives the Toolbar status pills + LegendBar live-rate
@@ -158,6 +160,8 @@ type API struct {
 	slashAPI        slashview.SlashAPI
 	corpusMgr       *corecorpus.Manager
 	corpusAPI       corpusview.CorpusAPI
+	graphMgr        *graphview.Manager
+	graphAPI        graphview.API
 
 	// stdioPool is the production *stdio.Pool wired into newLLMStack.
 	// Held on the API value so the tools view's InstallRecipe /
@@ -359,6 +363,12 @@ func New(c *core.Core) *API {
 	// an empty state.
 	a.corpusMgr = newCorpusManager(c, embedder)
 	a.corpusAPI = corpusview.New(a.corpusMgr)
+
+	// Agent-graph subsystem (mission agent-kernel-graph; Bundle A WP06).
+	// Manager construction is best-effort; on failure the API surface
+	// falls back to ErrManagerUnavailable so the chassis still boots.
+	a.graphMgr = newGraphManager(c)
+	a.graphAPI = graphview.New(a.graphMgr)
 
 	a.bindings = NewBindings(a)
 	if a.settingsImpl != nil {
@@ -1116,6 +1126,25 @@ func newCorpusManager(c *core.Core, embedder corememory.Embedder) *corecorpus.Ma
 	return corecorpus.NewManager(corecorpus.NewStorageDB(store), c.DataDir(), corpusEmb)
 }
 
+// newGraphManager constructs the agent-graph view's Manager. Nil core
+// or empty DataDir falls back to a memory-only manager so tests + the
+// nil-Core path keep working — the manager still surfaces the bundled
+// library and runs in-memory graphs; user-graph persistence is the
+// only feature lost when DataDir is empty.
+func newGraphManager(c *core.Core) *graphview.Manager {
+	dataDir := ""
+	if c != nil {
+		dataDir = c.DataDir()
+	}
+	mgr, err := graphview.NewManager(graphview.WithDataDir(dataDir))
+	if err != nil {
+		// Construction is best-effort; surface returns
+		// ErrManagerUnavailable when nil.
+		return nil
+	}
+	return mgr
+}
+
 // corpusEmbedderAdapter bridges core/memory.Embedder onto the narrower
 // corpus.Embedder seam. The two interfaces share the Embed signature;
 // keeping them disjoint avoids a corpus -> memory import edge.
@@ -1681,6 +1710,18 @@ func (a *API) Corpus() corpusview.CorpusAPI {
 		return corpusview.New(nil)
 	}
 	return a.corpusAPI
+}
+
+// Graph returns the view-scoped accessor for the agent-graph subsystem
+// (mission agent-kernel-graph; Bundle A WP06). The accessor lets the
+// frontend list the graph library, edit specs, run graphs, and tail the
+// EventLog. nil-manager fallback returns the ErrManagerUnavailable
+// empty-state surface.
+func (a *API) Graph() graphview.API {
+	if a.graphAPI == nil {
+		return graphview.New(nil)
+	}
+	return a.graphAPI
 }
 
 // Bindings returns the slice of Wails-bound objects. The Bindings struct

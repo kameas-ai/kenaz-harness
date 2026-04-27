@@ -953,3 +953,106 @@ export interface CorpusRetrieveResponse {
   results: CorpusRetrievalResult[];
   dropped: number;
 }
+
+// ─── Agent graph (mission agent-kernel-graph; Bundle A WP06) ─────────
+
+/**
+ * GraphScope narrows ListGraphs:
+ *   - "library" — bundled / shipped graphs (read-only)
+ *   - "user"    — on-disk user graphs at <DataDir>/agent_graph/library/
+ *   - ""        — both layers (library first then user)
+ */
+export type GraphScope = '' | 'library' | 'user';
+
+/**
+ * GraphInfo — one row in the graph library list. The frontend's
+ * GraphsView renders these; SaveGraph is the inverse (write a YAML
+ * payload by id).
+ */
+export interface GraphInfo {
+  id: string;
+  name?: string;
+  description?: string;
+  scope: 'library' | 'user';
+  source?: string;
+  updatedAt?: string;
+}
+
+/**
+ * GraphSpec is the editable graph payload. The kernel parses YAML on
+ * load + dump so the frontend can drive a textarea / Monaco instance
+ * without modelling the typed node-attrs structure.
+ */
+export interface GraphSpec {
+  id: string;
+  name?: string;
+  scope: 'library' | 'user';
+  yaml: string;
+}
+
+/**
+ * GraphValidationIssue is one validator violation. Stable shape so
+ * the frontend can render `rule` distinctly from `message`.
+ */
+export interface GraphValidationIssue {
+  rule: string;
+  message: string;
+}
+
+/**
+ * GraphValidationResult — green path returns ok=true with empty issues.
+ */
+export interface GraphValidationResult {
+  ok: boolean;
+  issues: GraphValidationIssue[];
+}
+
+/** RunState mirrors the kernel's emitted lifecycle. */
+export type GraphRunState = 'running' | 'paused' | 'completed' | 'failed';
+
+/** PendingAsk surfaces a parked AskNode question for the resume UI. */
+export interface GraphPendingAsk {
+  nodeId: string;
+  question: string;
+}
+
+/** RunStatus is the snapshot the RunView renders. */
+export interface GraphRunStatus {
+  runId: string;
+  graphId: string;
+  sessionId?: string;
+  state: GraphRunState;
+  startedAt: string;
+  updatedAt: string;
+  completedAt?: string;
+  error?: string;
+  nodesComplete: number;
+  llmTokens: number;
+  llmCalls: number;
+  toolCalls: number;
+  costUsd: number;
+  pendingAsk?: GraphPendingAsk;
+}
+
+/** RunTraceEvent is one row of the EventLog tail. */
+export interface GraphRunTraceEvent {
+  seq: number;
+  runId: string;
+  nodeId?: string;
+  kind: string;
+  ts: string;
+  payload?: string;
+}
+
+/** StartRunRequest — body for StartRun. */
+export interface GraphStartRunRequest {
+  graphId: string;
+  sessionId?: string;
+  inputs?: Record<string, unknown>;
+}
+
+/** StartRunResponse pairs the new run id with its initial status. */
+export interface GraphStartRunResponse {
+  runId: string;
+  status: GraphRunStatus;
+}

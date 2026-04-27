@@ -1,0 +1,32 @@
+# decompose.yaml — breaks a goal into sub-goals.
+#
+# Bundle A WP05. A cheap-tier LLMNode emits a JSON list of sub-goals;
+# a transform normalises the response so downstream activities consume
+# a stable shape regardless of the upstream model's verbosity.
+spec_version: "1"
+id: "decompose"
+name: "Decompose a goal into sub-goals"
+description: |
+  LLMNode prompts the cheap-tier model to enumerate sub-goals; a
+  parseJSON transform normalises the response into a list[string] on
+  the `subgoals` output port.
+entrypoints:
+  - decomposer
+nodes:
+  - id: decomposer
+    kind: llm
+    title: "Cheap-tier sub-goal enumerator"
+    attrs:
+      model: "default"
+      system_prompt: |
+        You break a user goal into a JSON array of independently
+        actionable sub-goals. Reply with JSON only.
+      max_tokens: 1024
+  - id: normalize
+    kind: transform
+    title: "Parse JSON sub-goal list"
+    attrs:
+      name: parseJSON
+edges:
+  - from: { node: decomposer, port: response }
+    to:   { node: normalize, port: in }

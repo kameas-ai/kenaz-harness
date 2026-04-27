@@ -1,0 +1,72 @@
+# Default graph: reproduces core/toolloop semantics as a typed topology.
+#
+# Bundle A WP06 ships this as the read-only library entry the frontend
+# offers as a starting template. The behaviour mirrors core/toolloop/loop.go
+# (LLM emits a turn → tool calls fan out → results thread back → LoopNode
+# bounds the pump at DefaultMaxIter). The branch checks finish_reason and
+# exits when it is no longer "tool_use".
+spec_version: "1"
+id: "toolloop_default"
+name: "Default toolloop graph"
+description: |
+  Equivalent to core/toolloop/. Sessions without an explicit graph
+  attach this at run-start. The LoopNode bounds the re-pump to 8
+  iterations.
+entrypoints:
+  - history_in
+budget:
+  max_llm_calls_per_run: 100
+  max_tool_calls_per_run: 200
+  max_tokens_per_run: 200000
+nodes:
+  - id: history_in
+    kind: history_read
+    title: "Load conversation history"
+    attrs:
+      n: 0
+  - id: assistant_turn
+    kind: llm
+    title: "Assistant turn (streamed)"
+    attrs:
+      model: "default"
+      stream_to_chat: true
+      max_tokens: 4096
+  - id: dispatch_tools
+    kind: parallel
+    title: "Fan-out tool calls"
+    attrs:
+      targets:
+        - tool_call
+      max_concurrency: 4
+  - id: tool_call
+    kind: tool
+    title: "One tool call"
+    attrs:
+      name: "<resolved at run-time>"
+  - id: continue_check
+    kind: branch
+    title: "Did the model emit more tool_use?"
+    attrs:
+      condition: "finish_reason == \"tool_use\""
+      next_true: pump_loop
+      next_false: terminal
+  - id: pump_loop
+    kind: loop
+    title: "Re-pump until non-tool-use"
+    attrs:
+      max_iterations: 8
+      body:
+        - assistant_turn
+        - dispatch_tools
+        - continue_check
+  - id: terminal
+    kind: trace_write
+    title: "Mark run complete"
+    attrs:
+      severity: info
+      message: "toolloop terminal turn reached"
+edges:
+  - from: { node: history_in, port: messages }
+    to:   { node: assistant_turn, port: messages }
+  - from: { node: assistant_turn, port: response }
+    to:   { node: continue_check, port: in }

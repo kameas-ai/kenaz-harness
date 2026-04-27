@@ -1,0 +1,24 @@
+# retrieve.yaml — wraps CorpusReadNode with a token-budget cap.
+#
+# Bundle A WP05. The activity defers to the CorpusReadNode the kernel
+# already provides; it sets a default token-budget cap (16 KiB) so
+# parent graphs don't accidentally drown their context in retrieval
+# spillover. Parents override corpus_ids at the activity callsite.
+spec_version: "1"
+id: "retrieve"
+name: "Retrieve from a corpus with a token budget"
+description: |
+  Cosine top-K retrieval against the supplied corpus IDs, capped at
+  16 KiB. Spillover is dropped per FR-020 / WP11-T6 with the kernel's
+  `corpus_overflow_dropped` event.
+entrypoints:
+  - reader
+nodes:
+  - id: reader
+    kind: corpus_read
+    title: "Top-K retrieval (16 KiB cap)"
+    attrs:
+      corpus_ids:
+        - "default"
+      top_k: 5
+      max_bytes: 16384

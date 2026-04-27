@@ -1,0 +1,22 @@
+# ask.yaml — wraps AskNode with a structured prompt.
+#
+# Bundle A WP05. The activity surfaces a question to the chat surface
+# and parks the run on AskNode until the user answers. The kernel's
+# Resume(runID, answer) un-parks; the answer flows on the `answer`
+# output port.
+spec_version: "1"
+id: "ask"
+name: "Ask the user a clarifying question"
+description: |
+  Pauses the parent run on an AskNode. Resume the run with the user's
+  answer to continue. The default question is a generic prompt; parent
+  graphs typically override `question` via dial overrides at the
+  ActivityNode that references this activity.
+entrypoints:
+  - asker
+nodes:
+  - id: asker
+    kind: ask
+    title: "Surface a clarifying question"
+    attrs:
+      question: "Could you clarify what you'd like next?"

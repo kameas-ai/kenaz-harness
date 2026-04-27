@@ -1,0 +1,38 @@
+# summarize.yaml — summary compaction strategy as a sub-graph.
+#
+# Bundle A WP05. Bundle D's `custom_subgraph` compaction strategy hands
+# the messages port into this activity; the LLMNode produces a single
+# summary message; a transform truncates so the result fits the budget.
+# Output port `messages` carries a single-element message list ready
+# for the downstream LLMNode in place of the original window.
+spec_version: "1"
+id: "summarize"
+name: "Summarize a message window"
+description: |
+  Takes a `messages` port carrying a chat history window and returns
+  a `messages` port with a single summary message. Bundle D's
+  custom_subgraph compaction strategy invokes this activity.
+entrypoints:
+  - summarizer
+nodes:
+  - id: summarizer
+    kind: llm
+    title: "Compaction summarizer"
+    attrs:
+      model: "default"
+      system_prompt: |
+        Compress the supplied conversation into a single concise
+        summary message. Preserve task-relevant facts, explicit
+        constraints, and outstanding action items. Drop pleasantries
+        and redundant tool output.
+      max_tokens: 1024
+  - id: clip
+    kind: transform
+    title: "Clip summary to budget"
+    attrs:
+      name: truncateAt
+      params:
+        max_chars: 4096
+edges:
+  - from: { node: summarizer, port: response }
+    to:   { node: clip, port: in }

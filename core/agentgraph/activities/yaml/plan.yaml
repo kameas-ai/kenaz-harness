@@ -1,0 +1,22 @@
+# plan.yaml — kernel-decided invocation, produces a structured plan.
+#
+# Bundle A WP05. The activity wraps a PlanNode with a verbosity dial so
+# kernels can ask "should we plan this turn?" without re-encoding the
+# heuristic at every callsite. The PlanNode's planner_model is the
+# cheap-tier classifier; the parent graph supplies it via dial overrides
+# or accepts the kernel default.
+spec_version: "1"
+id: "plan"
+name: "Plan a turn"
+description: |
+  Invokes a PlanNode that emits a (possibly empty) structured plan for
+  the upcoming turn. The plan_verbosity dial controls how chatty the
+  output is. Returns the plan on its `plan` output port.
+entrypoints:
+  - planner
+nodes:
+  - id: planner
+    kind: plan
+    title: "Decide whether to plan + emit plan"
+    attrs:
+      verbosity: standard
