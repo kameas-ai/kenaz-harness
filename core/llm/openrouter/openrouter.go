@@ -32,6 +32,7 @@ import (
 	"sync"
 
 	llm "github.com/sigil-tech/kaneaz-harness/core/llm"
+	"github.com/sigil-tech/kaneaz-harness/core/logging"
 )
 
 // Kind is the canonical provider kind ("openrouter").
@@ -534,6 +535,20 @@ func (s *chatStream) pump() {
 	}
 }
 
+// truncForLog returns up to n bytes from b suitable for an slog field.
+// Multi-byte UTF-8 sequences split across the truncation boundary are
+// trimmed back so the log line stays valid UTF-8.
+func truncForLog(b []byte, n int) string {
+	if len(b) <= n {
+		return string(b)
+	}
+	cut := n
+	for cut > 0 && (b[cut]&0xC0) == 0x80 {
+		cut--
+	}
+	return string(b[:cut]) + "…"
+}
+
 // handleSSEData parses one SSE record and emits the corresponding
 // StreamEvents. The OpenAI-compatible streaming protocol is a sequence
 // of JSON chunks of shape:
@@ -548,8 +563,17 @@ func (s *chatStream) handleSSEData(raw []byte) {
 		return
 	}
 	if bytes.Equal(trimmed, []byte("[DONE]")) {
+		logging.L().Info("openrouter.sse.done", "bytes", len(raw))
 		return
 	}
+	// One log entry per SSE record so corruption can be reproduced
+	// from the on-disk transcript at ~/.kenaz/harness.log. The full
+	// frame goes in `raw` (capped to the first 512 bytes to keep the
+	// log compact); rare full-frame inspection lives at LevelDebug.
+	logging.L().Info("openrouter.sse.frame",
+		"bytes", len(trimmed),
+		"head", truncForLog(trimmed, 512),
+	)
 	var env struct {
 		Choices []struct {
 			Delta struct {
@@ -592,14 +616,26 @@ func (s *chatStream) handleSSEData(raw []byte) {
 		if c.Delta.Content != "" {
 			s.mu.Lock()
 			s.textBuf.WriteString(c.Delta.Content)
+			cumulative := s.textBuf.Len()
 			s.mu.Unlock()
+			// Per-delta INFO log so the on-disk transcript at
+			// ~/.kenaz/harness.log carries every chunk. `delta` is
+			// truncated to keep the log line compact; the full delta
+			// is preserved in StreamEvent.Raw for the chat surface.
+			logging.L().Info("openrouter.delta",
+				"len", len(c.Delta.Content),
+				"cumulative", cumulative,
+				"delta", truncForLog([]byte(c.Delta.Content), 256),
+			)
 			s.events <- llm.StreamEvent{Kind: llm.StreamText, Text: c.Delta.Content, Raw: trimmed}
 		}
 		if c.FinishReason != nil && *c.FinishReason != "" {
 			s.mu.Lock()
 			s.finishStop = *c.FinishReason
 			finish := s.finishStop
+			total := s.textBuf.Len()
 			s.mu.Unlock()
+			logging.L().Info("openrouter.finish", "reason", finish, "total_bytes", total)
 			s.events <- llm.StreamEvent{Kind: llm.StreamFinish, Finish: finish}
 		}
 	}
