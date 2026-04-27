@@ -9,6 +9,7 @@ import (
 	artifactsview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/artifacts"
 	attachmentsview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/attachments"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/audit"
+	branchesview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/branches"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/bundle"
 	compactionview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/compaction"
 	contextsview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/contexts"
@@ -671,4 +672,25 @@ func (b *Bindings) Compaction_TriggerManual(sessionID string, opts compactionvie
 }
 func (b *Bindings) Compaction_ListCustomStrategies() ([]compactionview.CustomStrategy, error) {
 	return b.api.Compaction().ListCustomStrategies(b.ctx())
+}
+
+// ── branches (agent-kernel-graph; Bundle B WP07/08) ───────────────────
+
+func (b *Bindings) Branches_List(parentSessionID string) ([]branchesview.Branch, error) {
+	return b.api.Branches().ListBranches(b.ctx(), parentSessionID)
+}
+func (b *Bindings) Branches_Create(opts branchesview.CreateBranchOptions) (branchesview.Branch, error) {
+	return b.api.Branches().CreateBranch(b.ctx(), opts)
+}
+func (b *Bindings) Branches_GetStatus(branchID string) (branchesview.BranchStatus, error) {
+	return b.api.Branches().GetBranchStatus(b.ctx(), branchID)
+}
+func (b *Bindings) Branches_Merge(branchID string) error {
+	return b.api.Branches().MergeBranch(b.ctx(), branchID)
+}
+func (b *Bindings) Branches_Abandon(branchID string) error {
+	return b.api.Branches().AbandonBranch(b.ctx(), branchID)
+}
+func (b *Bindings) Branches_RecommendModel(parentSessionID, taskHint, preference string) (branchesview.RecommendedModel, error) {
+	return b.api.Branches().RecommendModel(b.ctx(), parentSessionID, taskHint, preference)
 }

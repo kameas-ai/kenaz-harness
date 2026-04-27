@@ -1167,3 +1167,90 @@ export interface CompactionManualResult {
   skipped?: boolean;
   reason?: string;
 }
+
+// ── conversation branches (agent-kernel-graph; Bundle B WP07/08) ──────
+
+/**
+ * BranchKind discriminates how the branch was created.
+ */
+export type BranchKind = 'fork' | 'linear_continuation';
+
+/**
+ * BranchStatus tracks the branch's lifecycle state.
+ */
+export type BranchStatus = 'active' | 'merging' | 'merged' | 'abandoned';
+
+/**
+ * Branch — one fork off a parent session. v1 branches are flat: a
+ * branch always points at one parent and one child session, and there
+ * is no branch-of-branch (spec FR-040 defers that to v2).
+ */
+export interface Branch {
+  id: string;
+  parentSessionId: string;
+  childSessionId: string;
+  kind: BranchKind;
+  status: BranchStatus;
+  providerId?: string;
+  modelId?: string;
+  title?: string;
+  taskHint?: string;
+  createdAt: string;
+  updatedAt: string;
+  mergedAt?: string;
+  abandonedAt?: string;
+}
+
+/**
+ * BranchModelPreference — the user's stated preference at fork time.
+ * Maps to the dropdown in the CreateBranch modal.
+ */
+export type BranchModelPreference =
+  | 'smaller'
+  | 'larger'
+  | 'same'
+  | 'exact'
+  | '';
+
+/**
+ * BranchCreateOptions — request body for Branches_Create.
+ */
+export interface BranchCreateOptions {
+  parentSessionId: string;
+  title?: string;
+  taskHint?: string;
+  modelPreference?: BranchModelPreference;
+  exactProviderId?: string;
+  exactModelId?: string;
+  systemPromptOverride?: string;
+  childName?: string;
+}
+
+/**
+ * BranchStatusInfo — wire shape for Branches_GetStatus.
+ */
+export interface BranchStatusInfo {
+  branch: Branch;
+  childSessionId: string;
+  hasInflightRun: boolean;
+  lastActivityAt?: string;
+  lastAssistantMessage?: string;
+}
+
+/**
+ * BranchRecommendedModel — wire shape for Branches_RecommendModel.
+ * Carries a stable reason string the frontend can localize.
+ */
+export interface BranchRecommendedModel {
+  providerId: string;
+  modelId: string;
+  tier: 'small' | 'medium' | 'large' | string;
+  reason: string;
+  notes?: string;
+  /**
+   * Non-empty when the recommended provider differs from the parent's
+   * (spec FR-039). The frontend renders this as a yellow callout in
+   * the CreateBranchModal.
+   */
+  crossProviderWarning?: string;
+}

@@ -514,4 +514,7 @@ func applyEnvDefaults(env *Env) {
 	// Compactor is intentionally not stubbed: nil compactor === no-op
 	// at every fire site. Production wiring installs the real
 	// pipeline; tests that don't care leave it nil.
+	if env.Branch == nil {
+		env.Branch = nilBranchSeam{}
+	}
 }

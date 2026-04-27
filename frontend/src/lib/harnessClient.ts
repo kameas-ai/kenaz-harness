@@ -84,6 +84,10 @@ import type {
   CompactionManualOpts,
   CompactionManualResult,
   CompactionScopeKey,
+  Branch,
+  BranchCreateOptions,
+  BranchStatusInfo,
+  BranchRecommendedModel,
 } from './types';
 
 /**
@@ -329,6 +333,18 @@ interface WailsBindingsLike {
     opts: CompactionManualOpts,
   ): Promise<CompactionManualResult>;
   Compaction_ListCustomStrategies(): Promise<CompactionCustomStrategy[]>;
+
+  // Branches view (agent-kernel-graph; Bundle B WP07/08).
+  Branches_List(parentSessionID: string): Promise<Branch[]>;
+  Branches_Create(opts: BranchCreateOptions): Promise<Branch>;
+  Branches_GetStatus(branchID: string): Promise<BranchStatusInfo>;
+  Branches_Merge(branchID: string): Promise<void>;
+  Branches_Abandon(branchID: string): Promise<void>;
+  Branches_RecommendModel(
+    parentSessionID: string,
+    taskHint: string,
+    preference: string,
+  ): Promise<BranchRecommendedModel>;
 }
 
 /**
@@ -1086,6 +1102,28 @@ export interface CompactionClient {
   listCustomStrategies(): Promise<CompactionCustomStrategy[]>;
 }
 
+/**
+ * BranchesClient — conversation branches subsystem (mission
+ * agent-kernel-graph; Bundle B WP07/08). Backs the BranchSidebar +
+ * CreateBranchModal + MergeSuggestionToast surfaces.
+ *
+ * v1 is intentionally simple: one parent → one child, one merge action.
+ * Spec §4.6 / FR-040 explicitly defers semantic merge / multi-merge /
+ * branch-of-branch to v2.
+ */
+export interface BranchesClient {
+  list(parentSessionID: string): Promise<Branch[]>;
+  create(opts: BranchCreateOptions): Promise<Branch>;
+  status(branchID: string): Promise<BranchStatusInfo>;
+  merge(branchID: string): Promise<void>;
+  abandon(branchID: string): Promise<void>;
+  recommendModel(
+    parentSessionID: string,
+    taskHint: string,
+    preference: string,
+  ): Promise<BranchRecommendedModel>;
+}
+
 export interface HarnessClient {
   shellStatus(): Promise<ShellStatus>;
   appInfo(): Promise<AppInfo>;
@@ -1113,6 +1151,7 @@ export interface HarnessClient {
   corpus: CorpusClient;
   graph: GraphClient;
   compaction: CompactionClient;
+  branches: BranchesClient;
 }
 
 // ── runtime client ─────────────────────────────────────────────────────
@@ -1359,6 +1398,15 @@ export function createHarnessClient(): HarnessClient {
       triggerManualCompaction: (sessionID, opts) =>
         b().Compaction_TriggerManual(sessionID, opts),
       listCustomStrategies: () => b().Compaction_ListCustomStrategies(),
+    },
+    branches: {
+      list: (parentSessionID) => b().Branches_List(parentSessionID),
+      create: (opts) => b().Branches_Create(opts),
+      status: (branchID) => b().Branches_GetStatus(branchID),
+      merge: (branchID) => b().Branches_Merge(branchID),
+      abandon: (branchID) => b().Branches_Abandon(branchID),
+      recommendModel: (parentSessionID, taskHint, preference) =>
+        b().Branches_RecommendModel(parentSessionID, taskHint, preference),
     },
   };
 }
@@ -1813,6 +1861,41 @@ export function createFakeHarnessClient(
         bytesSaved: 0,
       }),
       listCustomStrategies: async () => [],
+    },
+    branches: {
+      list: async () => [],
+      create: async (opts) => ({
+        id: `fake-branch-${Math.random().toString(36).slice(2, 8)}`,
+        parentSessionId: opts.parentSessionId,
+        childSessionId: `fake-child-${Math.random().toString(36).slice(2, 8)}`,
+        kind: 'fork',
+        status: 'active',
+        title: opts.title,
+        taskHint: opts.taskHint,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }),
+      status: async (branchID) => ({
+        branch: {
+          id: branchID,
+          parentSessionId: 'fake-parent',
+          childSessionId: 'fake-child',
+          kind: 'fork',
+          status: 'active',
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        },
+        childSessionId: 'fake-child',
+        hasInflightRun: false,
+      }),
+      merge: noop,
+      abandon: noop,
+      recommendModel: async () => ({
+        providerId: 'anthropic',
+        modelId: 'claude-haiku-4',
+        tier: 'small',
+        reason: 'default',
+      }),
     },
   };
 

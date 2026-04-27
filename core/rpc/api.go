@@ -31,11 +31,13 @@ import (
 	"github.com/sigil-tech/kaneaz-harness/core/mcp/stdio"
 	corememory "github.com/sigil-tech/kaneaz-harness/core/memory"
 	coreart "github.com/sigil-tech/kaneaz-harness/core/artifacts"
+	coreconv "github.com/sigil-tech/kaneaz-harness/core/conversation"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/a2a"
 	graphview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/agentgraph"
 	artifactsview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/artifacts"
 	attachmentsview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/attachments"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/audit"
+	branchesview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/branches"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/bundle"
 	compactionview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/compaction"
 	contextsview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/contexts"
@@ -94,6 +96,7 @@ type HarnessAPI interface {
 	Corpus() corpusview.CorpusAPI
 	Graph() graphview.API
 	Compaction() compactionview.CompactionAPI
+	Branches() branchesview.BranchesAPI
 }
 
 // ShellStatus drives the Toolbar status pills + LegendBar live-rate
@@ -165,6 +168,8 @@ type API struct {
 	graphMgr        *graphview.Manager
 	graphAPI        graphview.API
 	compactionAPI   compactionview.CompactionAPI
+	convMgr         *coreconv.Manager
+	branchesAPI     branchesview.BranchesAPI
 
 	// stdioPool is the production *stdio.Pool wired into newLLMStack.
 	// Held on the API value so the tools view's InstallRecipe /
@@ -372,6 +377,17 @@ func New(c *core.Core) *API {
 	// falls back to ErrManagerUnavailable so the chassis still boots.
 	a.graphMgr = newGraphManager(c)
 	a.graphAPI = graphview.New(a.graphMgr)
+
+	// Branches subsystem (mission agent-kernel-graph; Bundle B WP07/08).
+	// Wired only when storage is up — falls back to a nil-manager
+	// surface (ErrManagerUnavailable) when c is nil so test harness
+	// callers (New(nil)) don't crash.
+	a.convMgr = newConversationManager(c)
+	a.branchesAPI = branchesview.New(branchesview.Config{
+		Conversations: a.convMgr,
+		Sessions:      sessionManagerOrNil(c),
+		Recommender:   newBranchRecommender(),
+	})
 
 	a.bindings = NewBindings(a)
 	if a.settingsImpl != nil {
@@ -1713,6 +1729,14 @@ func (a *API) Corpus() corpusview.CorpusAPI {
 		return corpusview.New(nil)
 	}
 	return a.corpusAPI
+}
+func (a *API) Branches() branchesview.BranchesAPI {
+	if a.branchesAPI == nil {
+		// nil-manager surface — methods return ErrManagerUnavailable
+		// so the frontend renders the empty state. Mirrors Corpus().
+		return branchesview.New(branchesview.Config{})
+	}
+	return a.branchesAPI
 }
 
 // Graph returns the view-scoped accessor for the agent-graph subsystem

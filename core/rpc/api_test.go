@@ -9,6 +9,7 @@ import (
 	artifactsview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/artifacts"
 	attachmentsview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/attachments"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/audit"
+	branchesview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/branches"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/bundle"
 	compactionview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/compaction"
 	contextsview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/contexts"
@@ -55,6 +56,7 @@ type fakeHarnessAPI struct {
 	corpusAPI       corpusview.CorpusAPI
 	graphAPI        graphview.API
 	compactionAPI   compactionview.CompactionAPI
+	branchesAPI     branchesview.BranchesAPI
 }
 
 func (f *fakeHarnessAPI) ShellStatus(_ context.Context) (ShellStatus, error) {
@@ -84,6 +86,7 @@ func (f *fakeHarnessAPI) Slash() slashview.SlashAPI                   { return f
 func (f *fakeHarnessAPI) Corpus() corpusview.CorpusAPI                 { return f.corpusAPI }
 func (f *fakeHarnessAPI) Graph() graphview.API                         { return f.graphAPI }
 func (f *fakeHarnessAPI) Compaction() compactionview.CompactionAPI     { return f.compactionAPI }
+func (f *fakeHarnessAPI) Branches() branchesview.BranchesAPI           { return f.branchesAPI }
 
 // Compile-time interface witness (plan §4.2).
 var _ HarnessAPI = (*fakeHarnessAPI)(nil)
