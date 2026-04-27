@@ -126,7 +126,7 @@ func TestOpen_RegistersSessionMigrations(t *testing.T) {
 		}
 		versions = append(versions, v)
 	}
-	want := []int{300, 301, 302, 303, 304, 305}
+	want := []int{300, 301, 302, 303, 304, 305, 308, 309}
 	if len(versions) != len(want) {
 		t.Fatalf("session migrations applied = %v, want %v", versions, want)
 	}
@@ -162,9 +162,10 @@ func TestOpen_ApplyIdempotent(t *testing.T) {
 		t.Fatal(err)
 	}
 	// 2 storage bootstrap + 1 session init + 1 context_attachments +
-	// 1 content_json + 1 artifacts + 1 artifacts-promote + 1 telemetry.
-	if count != 8 {
-		t.Errorf("ledger count = %d, want 8", count)
+	// 1 content_json + 1 artifacts + 1 artifacts-promote + 1 telemetry +
+	// 1 memory_hook_journal (0308) + 1 agent_graph_events (0309).
+	if count != 10 {
+		t.Errorf("ledger count = %d, want 10", count)
 	}
 }
 
