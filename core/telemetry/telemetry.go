@@ -8,6 +8,7 @@ import (
 	"runtime"
 	"sync"
 
+	"github.com/sigil-tech/kaneaz-harness/core/logging"
 	"github.com/sigil-tech/kaneaz-harness/core/storage"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -49,11 +50,28 @@ type Config struct {
 
 	// SpanExporters / MetricExporters / LogExporters are additional
 	// exporters the caller wants attached to the providers in
-	// addition to the local ones constructed here. WP02's OTLP
-	// exporters land via this seam.
+	// addition to the local + OTLP composites constructed here. The
+	// rpc layer leaves these nil; tests that want to assert SDK
+	// pipelining without standing up a fake OTLP receiver use them.
 	SpanExporters   []sdktrace.SpanExporter
 	MetricExporters []sdkmetric.Exporter
 	LogExporters    []sdklog.Exporter
+
+	// OTLPEndpoint, if non-empty, opts the harness into the dual-export
+	// fan-out: every signal lands in BOTH the local SQLite store AND
+	// the configured OTLP/HTTP endpoint. Empty Endpoint = local-only,
+	// no outbound work, NFR-005 invariant intact.
+	OTLPEndpoint string
+	OTLPHeaders  map[string]string
+	OTLPInsecure bool
+
+	// InstallSlogBridge replaces the global logging handler with a
+	// bridge that fans every slog line into the OTel logger pipeline
+	// in addition to the existing file sink. Off by default so the
+	// telemetry tests (which construct Telemetry repeatedly) do not
+	// stomp on the process-global logger; core.initTelemetry sets it
+	// to true at boot.
+	InstallSlogBridge bool
 }
 
 // Telemetry is the Init result. The caller holds it for the harness's
@@ -91,9 +109,11 @@ type Telemetry struct {
 // All other failures degrade silently inside the exporters; the
 // providers themselves never error during construction in v1.30.
 //
-// Init does NOT install the slog-bridge or any OTLP exporters — those
-// are WP02's scope. The caller passes additional exporters via
-// cfg.SpanExporters / cfg.MetricExporters / cfg.LogExporters.
+// When cfg.OTLPEndpoint is set, OTLP/HTTP exporters are constructed
+// and wrapped together with the local exporters in a CompositeXxx
+// fan-out: each signal lands in both sinks per export call. When the
+// endpoint is empty no OTLP exporter is constructed (NFR-005:
+// local-first invariant — zero outbound network work).
 func Init(ctx context.Context, cfg Config) (*Telemetry, error) {
 	if cfg.Storage == nil {
 		return nil, errors.New("telemetry: Init: Storage required")
@@ -130,11 +150,53 @@ func Init(ctx context.Context, cfg Config) (*Telemetry, error) {
 		return nil, err
 	}
 
-	// Tracer provider: local exporter via batcher (async), plus any
-	// extra exporters the caller passed in (WP02 OTLP).
+	// Build OTLP exporters lazily. NewOTLP*Exporter returns (nil, nil)
+	// when cfg.OTLPEndpoint is empty so the composite skips the OTLP
+	// branch without ever instantiating an HTTP client (NFR-005).
+	var (
+		otlpSpan   sdktrace.SpanExporter
+		otlpMetric sdkmetric.Exporter
+		otlpLog    sdklog.Exporter
+	)
+	if cfg.OTLPEndpoint != "" {
+		otlpSpan, err = NewOTLPSpanExporter(ctx, OTLPSpanConfig{
+			Endpoint: cfg.OTLPEndpoint,
+			Headers:  cfg.OTLPHeaders,
+			Insecure: cfg.OTLPInsecure,
+		})
+		if err != nil {
+			return nil, err
+		}
+		otlpMetric, err = NewOTLPMetricExporter(ctx, OTLPMetricConfig{
+			Endpoint: cfg.OTLPEndpoint,
+			Headers:  cfg.OTLPHeaders,
+			Insecure: cfg.OTLPInsecure,
+		})
+		if err != nil {
+			return nil, err
+		}
+		otlpLog, err = NewOTLPLogExporter(ctx, OTLPLogConfig{
+			Endpoint: cfg.OTLPEndpoint,
+			Headers:  cfg.OTLPHeaders,
+			Insecure: cfg.OTLPInsecure,
+		})
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	// Composite exporters fan-out to local + (optional) OTLP. Local
+	// errors propagate to the SDK; OTLP errors are swallowed and
+	// warn-logged so a network blip never poisons the chat surface.
+	compSpan := &CompositeSpanExporter{Local: localSpan, OTLP: otlpSpan, Logger: logger}
+	compMetric := &CompositeMetricExporter{Local: localMetric, OTLP: otlpMetric, Logger: logger}
+	compLog := &CompositeLogExporter{Local: localLog, OTLP: otlpLog, Logger: logger}
+
+	// Tracer provider: composite via batcher (async), plus any extra
+	// exporters the caller passed in (test seam).
 	tpOpts := []sdktrace.TracerProviderOption{
 		sdktrace.WithResource(res),
-		sdktrace.WithBatcher(localSpan),
+		sdktrace.WithBatcher(compSpan),
 	}
 	for _, exp := range cfg.SpanExporters {
 		if exp != nil {
@@ -143,10 +205,10 @@ func Init(ctx context.Context, cfg Config) (*Telemetry, error) {
 	}
 	tp := sdktrace.NewTracerProvider(tpOpts...)
 
-	// Meter provider: periodic reader pushing into our local
-	// exporter; extra exporters get their own readers.
+	// Meter provider: periodic reader pushing into the composite;
+	// extra exporters get their own readers.
 	readers := []sdkmetric.Reader{
-		sdkmetric.NewPeriodicReader(localMetric),
+		sdkmetric.NewPeriodicReader(compMetric),
 	}
 	for _, exp := range cfg.MetricExporters {
 		if exp != nil {
@@ -161,11 +223,11 @@ func Init(ctx context.Context, cfg Config) (*Telemetry, error) {
 	}
 	mp := sdkmetric.NewMeterProvider(mpOpts...)
 
-	// Logger provider: local exporter via batch processor; extra
-	// exporters land as additional batch processors.
+	// Logger provider: composite via batch processor; extra exporters
+	// land as additional batch processors.
 	lpOpts := []sdklog.LoggerProviderOption{
 		sdklog.WithResource(res),
-		sdklog.WithProcessor(sdklog.NewBatchProcessor(localLog)),
+		sdklog.WithProcessor(sdklog.NewBatchProcessor(compLog)),
 	}
 	for _, exp := range cfg.LogExporters {
 		if exp != nil {
@@ -190,8 +252,13 @@ func Init(ctx context.Context, cfg Config) (*Telemetry, error) {
 		logger:         logger,
 	}
 	// Shutdown order: providers first (they flush any buffered
-	// signals through their batchers / readers), then the local
-	// exporters drain their own queues. Reverse-construction.
+	// signals through their batchers / readers, which in turn close
+	// the composite exporters), then the local exporters drain their
+	// own queues. Local exporter Shutdown is idempotent so the second
+	// call is a no-op; we keep the explicit calls to make the drain
+	// observably synchronous when the SDK's batcher hands a partial
+	// flush back. OTLP exporters are shut down inside the composites'
+	// Shutdown — no separate fn here.
 	t.shutdownFns = []func(context.Context) error{
 		tp.Shutdown,
 		mp.Shutdown,
@@ -199,6 +266,14 @@ func Init(ctx context.Context, cfg Config) (*Telemetry, error) {
 		localSpan.Shutdown,
 		localMetric.Shutdown,
 		localLog.Shutdown,
+	}
+
+	// Slog bridge — when requested, replace the global file-only logger
+	// with a fan-out that ALSO emits through the OTel logger pipeline.
+	// Lines emitted before this call only land in the file; that
+	// initialization-order constraint is documented on SlogBridge.
+	if cfg.InstallSlogBridge {
+		installSlogBridge(lp, logger)
 	}
 	_ = ctx // reserved for future wait-for-collector-init paths
 	return t, nil
@@ -243,6 +318,29 @@ func (t *Telemetry) Logger(name string) otellog.Logger {
 		return nil
 	}
 	return t.LoggerProvider.Logger(name)
+}
+
+// installSlogBridge swaps the process-global slog handler with a
+// fan-out that emits each record into BOTH the file handler and the
+// OTel logger. Safe to call repeatedly: a second call replaces the
+// previous bridge so reconfigured providers (WP05) take effect.
+//
+// The OTel logger is sourced from the LoggerProvider just constructed
+// — the same provider whose pipeline includes the local SQLite
+// exporter and the optional OTLP exporter. So each slog line written
+// after this call lands in: ~/.kenaz/harness.log, telemetry_logs (via
+// local exporter), and the configured OTLP endpoint (when set).
+func installSlogBridge(lp *sdklog.LoggerProvider, fallback *slog.Logger) {
+	if lp == nil {
+		return
+	}
+	fileH := logging.FileHandler()
+	if fileH == nil && fallback != nil {
+		fileH = fallback.Handler()
+	}
+	otelLogger := lp.Logger("kaneaz-harness/slog-bridge")
+	bridge := NewSlogBridge(fileH, otelLogger)
+	logging.Replace(bridge)
 }
 
 // buildResource constructs the resource with the spec's required

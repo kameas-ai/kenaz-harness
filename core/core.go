@@ -53,11 +53,27 @@ type Options struct {
 	// this from build-time ldflags or AppInfo and passes it through.
 	BuildVersion string
 
+	// Telemetry carries optional OTLP fan-out configuration sourced
+	// from the user's Settings. Empty Endpoint = local-only telemetry
+	// (NFR-005 invariant). The rpc layer reads the persisted Settings
+	// on boot and threads them through. Live re-config (settings
+	// change → exporter swap) is WP05's job; WP02 reads once at
+	// core.New time.
+	Telemetry TelemetryOptions
+
 	// Subsystems lets an embedding application inject pre-constructed
 	// subsystems (e.g. a fake event-log Emitter for tests) instead of
 	// relying on Core's lazy defaults. Fields left zero fall through
 	// to the default lazy-init path in Start.
 	Subsystems Subsystems
+}
+
+// TelemetryOptions is the OTLP fan-out config the embedder passes to
+// core. All fields are optional; the empty struct = local-only.
+type TelemetryOptions struct {
+	OTLPEndpoint string
+	OTLPHeaders  map[string]string
+	OTLPInsecure bool
 }
 
 // Subsystems is the explicit subsystem-injection record. Every field
@@ -237,10 +253,14 @@ func (c *Core) initTelemetry() {
 		return
 	}
 	tel, err := telemetry.Init(context.Background(), telemetry.Config{
-		DataDir:      c.opts.DataDir,
-		BuildVersion: c.opts.BuildVersion,
-		Storage:      storage,
-		Logger:       logging.L(),
+		DataDir:           c.opts.DataDir,
+		BuildVersion:      c.opts.BuildVersion,
+		Storage:           storage,
+		Logger:            logging.L(),
+		OTLPEndpoint:      c.opts.Telemetry.OTLPEndpoint,
+		OTLPHeaders:       c.opts.Telemetry.OTLPHeaders,
+		OTLPInsecure:      c.opts.Telemetry.OTLPInsecure,
+		InstallSlogBridge: true,
 	})
 	if err != nil {
 		logging.L().Warn("telemetry.init_failed", "err", err.Error())
