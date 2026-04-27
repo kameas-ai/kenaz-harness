@@ -229,10 +229,13 @@ The current 23 kinds collapse + rename as follows. **New names are the load-bear
 - **FR-047** Kind `retry` — extends `control`. Alias: none. Executor: `agentgraph.ExecRetry`. Attrs: `max_attempts: int` (required, min 1), `backoff_base_ms: int`, `backoff_max_ms: int`, `body: [node_id_ref]` (required, min_length 1).
 - **FR-048** Kind `approval` — **NEW** — extends `control`. Alias: none. Executor: `agentgraph.ExecApproval`. Human-in-the-loop policy gate. Attrs: `approver_role: string` (default `"user"`), `policy_label: string`, `auto_approve_window_seconds: int` (0 = no auto-approve), `prompt: string`. Distinct from `ask` (free-form text elicitation) — `approval` is a binary yes/no gate. Persists a `pending_approval` event mirroring `pending_ask`.
 
-#### State category — archetypes `read`, `write`
+#### State category — archetype tree `state → {read, write, marker}`
 
-- **FR-049** Archetype `read` (extends parent: none). Category `state`. Declares input port `query: any`, output port `result: messages`. Budget signature `none`. Common attrs: `source: enum(history|corpus|memory|attachment)` (required) — discriminator.
-- **FR-050** Archetype `write` (extends parent: none). Category `state`. Declares input port `payload: any`, output port `ack: bool`. Budget signature `none`. Common attrs: `target: enum(memory|corpus|trace)` (required).
+State uses a **three-layer inheritance chain** (`state → read → <kind>`) rather than the flat sibling layout used in Compute/Control. Rationale: read/write/marker share enough invariants (no LLM budget, optional provenance, hooks-on-write) that a common ancestor is justified. The kind manifest declares its parent via `extends:`; the resolver walks the full chain at load time per FR-004 (single-parent, N-deep).
+
+- **FR-048a** Archetype `state` (extends parent: none). Category `state`. Declares no required ports. Budget signature `none`. Common attrs: `provenance: bool` (default true) — whether the operation surfaces a `(path, hash, scope)` triple to the EventLog. `callable: false`.
+- **FR-049** Archetype `read` (extends `state`). Declares input port `query: any`, output port `result: messages`. Budget signature inherits `none` from `state`. Common attrs: `source: enum(history|corpus|memory|attachment|file|bash_output)` (required) — discriminator. `callable: false`.
+- **FR-050** Archetype `write` (extends `state`). Declares input port `payload: any`, output port `ack: bool`. Budget signature inherits `none`. Common attrs: `target: enum(memory|corpus|trace|file|artifact)` (required). `callable: false`.
 - **FR-051** Kind `history_read` (was `HistoryReadNode`) — extends `read`. Alias: none. Executor: `agentgraph.ExecHistoryRead`. Defaults `source: history`. Attrs: `branch_id: string`, `last_n: int` (default 20).
 - **FR-052** Kind `corpus_read` (was `CorpusReadNode`) — extends `read`. Alias: none. Executor: `agentgraph.ExecCorpusRead`. Defaults `source: corpus`. Attrs: `corpus_ids: [corpus_ref]`, `top_k: int` (default 10), `score_threshold: float`, `source_path_prefix: string`, `mime_types: [string]`.
 - **FR-053** Kind `memory` — extends `read` **AND `write`** via dual archetype membership? **No — single inheritance only (FR-004).** Resolution: `memory` extends `read` and the `write` flavor is implemented through a `mode: enum(read|write|upsert)` attr in the manifest. The executor branches on `mode`. Alternative considered (one kind per mode: `memory_read`, `memory_write`) was rejected because the existing `MemoryNode` already supports all three modes via a single executor and breaking it apart would churn callers needlessly.
@@ -240,8 +243,38 @@ The current 23 kinds collapse + rename as follows. **New names are the load-bear
 - **FR-054** Kind `corpus_write` (was `CorpusWriteNode`) — extends `write`. Alias: none. Executor: `agentgraph.ExecCorpusWrite`. Defaults `target: corpus`. Attrs: `corpus_id: corpus_ref` (required), `source_path: string`, `chunker: string`.
 - **FR-055** Kind `attachment` (was `AttachmentNode`) — extends `read`. Alias: none. Executor: `agentgraph.ExecAttachment`. Defaults `source: attachment`. Attrs: `attachment_id: attachment_ref` (required), `as_content_block: bool` (default true).
 - **FR-056** Kind `trace_write` (was `TraceWriteNode`) — extends `write`. Alias: none. Executor: `agentgraph.ExecTraceWrite`. Defaults `target: trace`. Attrs: `severity: enum(debug|info|warn|error)` (default `info`), `message: string` (required), `attrs: object`.
-- **FR-057** Kind `checkpoint` (was `CheckpointNode`) — extends... NEITHER `read` nor `write`; it's a kernel-control state node. Resolution: introduce a third state archetype `marker` (`extends: none`, category `state`, no required attrs). `checkpoint` extends `marker`. Executor: `agentgraph.ExecCheckpoint`. Attrs: `label: string`.
+- **FR-057** Kind `checkpoint` (was `CheckpointNode`) — extends `marker` archetype (extends `state`). Resolution: archetype `marker` (extends `state`, no required attrs, `callable: false`) groups kernel-control state markers. `checkpoint` is its first concrete kind. Executor: `agentgraph.ExecCheckpoint`. Attrs: `label: string`.
+- **FR-057a** Kind `read_file` — **NEW** — extends `read`. Defaults `source: file`. Executor: `agentgraph.ExecReadFile`. Attrs: `path: string` (required), `encoding: enum(utf8|base64)` (default `utf8`), `as_attachment: bool` (default false — when true, registers the file content in attachments and emits an `attachment_ref` instead of inline messages). **Distinct from `tool` filesystem reads** — see §4.9 State-vs-Tool framing. File contents are tracked in the EventLog with provenance (`path`, `sha256`, `mtime`), participate in greedy memory hooks per FR-027 of the parent mission, and are eligible for the configurable compaction subsystem.
+- **FR-057b** Kind `read_bash_output` — **NEW** — extends `read`. Defaults `source: bash_output`. Executor: `agentgraph.ExecReadBashOutput`. Attrs: `bash_run_id: string` (required), `tail_bytes: int` (default 0 = full), `include_stderr: bool` (default true). Reads cached output from a prior bash tool run, surfacing it as context-tracked artifact rather than ephemeral tool return.
+- **FR-057c** Kind `write_file` — **NEW** — extends `write`. Defaults `target: file`. Executor: `agentgraph.ExecWriteFile`. Attrs: `path: string` (required), `content: messages_ref` (required), `mode: enum(create|append|replace)` (default `create`), `policy_label: string`. **Distinct from filesystem-MCP tool writes** (see §4.9): write_file participates in policy gating + EventLog provenance + the artifacts subsystem; tool-side writes are one-shot side effects.
 - **FR-058** Kind `artifact` — **NEW** — extends `write`. Alias: none. Executor: `agentgraph.ExecArtifact`. Terminal output. Attrs: `mime_type: string` (required), `output_target: enum(session_message|file_path|report)` (required, default `session_message`), `attachment_ref: attachment_ref`, `content: messages_ref`. Replaces ad-hoc end-of-graph "dump the final answer to chat" patterns.
+
+#### Inheritance chain example (3-layer)
+
+The chain `state → read → corpus_read` resolves at load time as:
+
+```
+state (callable=false, provenance attr)
+└── read (callable=false, adds source enum, ports)
+    └── corpus_read (callable=true, source=corpus default, adds corpus_ids/top_k)
+```
+
+The resolved manifest for `corpus_read` carries every attr/port from all three layers with provenance tags. The Go layer sees only the flat resolved manifest — no Go-side inheritance, no struct embedding.
+
+### 4.9 State-vs-Tool framing decision
+
+Two of the new kinds (`read_file`, `read_bash_output`, `write_file`) overlap conceptually with existing **filesystem-MCP** tool dispatches. The framing rule:
+
+- **State (Read/Write archetype)** — the operation produces / consumes content the graph wants to **track in context**. Provenance recorded in EventLog (`path`, `sha256`, `mtime`, `scope`). Greedy memory hooks fire. Eligible for compaction. Output participates in the context graph as a first-class artifact.
+- **Tool (Compute archetype, `tool` kind)** — the operation is a **one-shot side effect**. Output is ephemeral (tool return), policy-gated via Cedar `Tool::"<server>__<tool>"`, but not retained in context unless the graph author explicitly persists it via a `write` kind downstream.
+
+**Decision rule for graph authors**: if you want the result to *be remembered and reasoned about later*, use a State kind (`read_file`, `read_bash_output`, `corpus_read`, etc.). If it's a fire-and-forget action whose return value is consumed once and discarded, use `tool`.
+
+**FR-058a** The migration **does not** remove filesystem-MCP tool dispatches. Both surfaces coexist:
+- Filesystem MCP tool: backward compat for existing graphs + tool-shaped UX (single tool call returns content, no context tracking).
+- `read_file` / `write_file` state kinds: new context-aware path; preferred for any graph that wants greedy memory + provenance + compaction eligibility.
+
+**FR-058b** Cedar policy gating is consistent across both surfaces: filesystem accesses go through `Filesystem::"<path>"` regardless of which kind initiated them. The State kinds add a `Read::"<source>"` / `Write::"<target>"` action UID layer for finer-grained gating (e.g., "permit read_file from `~/Documents/projects/**` but not from `~/.ssh`").
 
 #### Reconciliation summary
 
@@ -271,10 +304,15 @@ The current 23 kinds collapse + rename as follows. **New names are the load-bear
 | `attachment` | `attachment` | `read` | n/a |
 | `history_read` | `history_read` | `read` | n/a |
 | `trace_write` | `trace_write` | `write` | n/a |
-| `checkpoint` | `checkpoint` | `marker` | n/a |
-| (NEW) | `artifact` | `write` | n/a |
+| `checkpoint` | `checkpoint` | `marker` (extends `state`) | n/a |
+| (NEW) | `artifact` | `write` (extends `state`) | n/a |
+| (NEW) | `read_file` | `read` (extends `state`) | n/a |
+| (NEW) | `read_bash_output` | `read` (extends `state`) | n/a |
+| (NEW) | `write_file` | `write` (extends `state`) | n/a |
 
-**Net**: 23 old → 26 new (3 added: `compact`, `approval`, `artifact`). 4 renames with retained aliases (`llm`, `plan`, `branch`, `fork`).
+**Net**: 23 old → 29 new (6 added: `compact`, `approval`, `artifact`, `read_file`, `read_bash_output`, `write_file`). 4 renames with retained aliases (`llm`, `plan`, `branch`, `fork`).
+
+**Archetype inventory (8)**: `compute`, `control`, `state`, `read` (extends `state`), `write` (extends `state`), `marker` (extends `state`). All `callable: false` in v1.
 
 ---
 
@@ -454,6 +492,8 @@ docs/agent-kernel-graph-node-catalog.md  # NEW (in this mission's polish WP)
 6. **Hot reload: ship in v1 or defer?** The implementation is small (`fsnotify` + re-resolve). The risk is in-flight runs holding stale manifests. **Default**: ship behind a `--enable-manifest-hot-reload` dev flag; not on by default in v1.
 7. **Should the `tool_ref` and `model_ref` AttrSpec types resolve at validation time?** v1 says yes (the validator checks the model exists in the configured providers). But this couples the validator to the LLM/tool subsystems. Alternative: leave it to runtime (cleaner separation). **Default**: validator-time resolution because it catches typos earlier; the coupling is already there via dial validation.
 8. **Frontend handling of object/map/array attr types**: v1 uses a JSON textarea. For complex object attrs (e.g., `args` on `tool`) this is awkward. Future work: structured form generation from a nested schema. Out of scope here.
+9. **Executor registry: `init()` side-effects vs explicit `RegisterAll()`?** FR-018 currently uses `init()` calls in each `exec_*.go` source file (idiomatic stdlib pattern: `database/sql.Register`, image-format decoders, etc.). Modern Go style guides increasingly prefer explicit `RegisterAll(reg *Registry)` called once from `core/core.go` startup — same effect, no init-time side effects, easier to reason about test ordering and dependency graphs. **Default**: ship with `init()` per FR-018 to match the existing harness conventions; revisit if test isolation or import-ordering bugs surface. Trade-off: explicit `RegisterAll` adds one wiring line at chassis init but removes a class of "import-for-side-effects" footguns.
+10. **Read/Write file vs filesystem-MCP coexistence**: §4.9 commits to coexistence in v1 (both surfaces shipped, framing rule documented). If users overwhelmingly migrate to State kinds, a follow-up mission could deprecate the filesystem-MCP recipe. Conversely if State kinds see no uptake, a follow-up could remove them. v1 is reversible by design.
 
 ---
 
