@@ -15,6 +15,7 @@ import (
 	contextsview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/contexts"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/contextview"
 	corpusview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/corpus"
+	dialsview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/dials"
 	hooksview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/hooks"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/llm"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/mcp"
@@ -415,6 +416,40 @@ func (b *Bindings) Memory_PromoteScope(chunkID, newScopeKind, newScopeID string)
 
 func (b *Bindings) Memory_Forget(id string) error {
 	return b.api.Memory().Forget(b.ctx(), id)
+}
+
+func (b *Bindings) Memory_Pin(id string, pinned bool) error {
+	return b.api.Memory().Pin(b.ctx(), id, pinned)
+}
+
+func (b *Bindings) Memory_JournalTail(scope string, sinceSeq int64, limit int) ([]memoryview.JournalEntry, error) {
+	return b.api.Memory().JournalTail(b.ctx(), scope, sinceSeq, limit)
+}
+
+func (b *Bindings) Memory_PrunePreview(scope string) (memoryview.PrunePreview, error) {
+	return b.api.Memory().PrunePreview(b.ctx(), scope)
+}
+
+func (b *Bindings) Memory_RunPruneNow(scope string) (memoryview.PruneStats, error) {
+	return b.api.Memory().RunPruneNow(b.ctx(), scope)
+}
+
+// ── dials (Bundle E WP17) ──────────────────────────────────────────────
+
+func (b *Bindings) Dials_Get(key dialsview.ScopeKey) (dialsview.DialConfig, error) {
+	return b.api.Dials().GetDials(b.ctx(), key)
+}
+
+func (b *Bindings) Dials_Set(key dialsview.ScopeKey, cfg dialsview.DialConfig) error {
+	return b.api.Dials().SetDials(b.ctx(), key, cfg)
+}
+
+func (b *Bindings) Dials_GetEffective(projectID, sessionID, graphID, runID string) (dialsview.EffectiveDials, error) {
+	return b.api.Dials().GetEffective(b.ctx(), projectID, sessionID, graphID, runID)
+}
+
+func (b *Bindings) Dials_BumpAndResume(runID string, delta dialsview.DialDelta) error {
+	return b.api.Dials().BumpAndResume(b.ctx(), runID, delta)
 }
 
 // ── projects ───────────────────────────────────────────────────────────

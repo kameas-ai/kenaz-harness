@@ -30,6 +30,7 @@ import (
 	"github.com/sigil-tech/kaneaz-harness/core/mcp/recipes"
 	"github.com/sigil-tech/kaneaz-harness/core/mcp/stdio"
 	corememory "github.com/sigil-tech/kaneaz-harness/core/memory"
+	"github.com/sigil-tech/kaneaz-harness/core/policy/cedar"
 	coreart "github.com/sigil-tech/kaneaz-harness/core/artifacts"
 	coreconv "github.com/sigil-tech/kaneaz-harness/core/conversation"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/a2a"
@@ -43,6 +44,7 @@ import (
 	contextsview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/contexts"
 	contextview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/contextview"
 	corpusview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/corpus"
+	dialsview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/dials"
 	hooksview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/hooks"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/llm"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/mcp"
@@ -97,6 +99,7 @@ type HarnessAPI interface {
 	Graph() graphview.API
 	Compaction() compactionview.CompactionAPI
 	Branches() branchesview.BranchesAPI
+	Dials() dialsview.DialsAPI
 }
 
 // ShellStatus drives the Toolbar status pills + LegendBar live-rate
@@ -170,6 +173,7 @@ type API struct {
 	compactionAPI   compactionview.CompactionAPI
 	convMgr         *coreconv.Manager
 	branchesAPI     branchesview.BranchesAPI
+	dialsAPI        dialsview.DialsAPI
 
 	// stdioPool is the production *stdio.Pool wired into newLLMStack.
 	// Held on the API value so the tools view's InstallRecipe /
@@ -388,6 +392,11 @@ func New(c *core.Core) *API {
 		Sessions:      sessionManagerOrNil(c),
 		Recommender:   newBranchRecommender(),
 	})
+
+	// Cascading dials (Bundle E WP17). The view degrades to in-memory-
+	// only when no kernel resumer is wired — the chassis still boots
+	// and BumpAndResume returns ErrNoPause until a kernel binds.
+	a.dialsAPI = dialsview.New(dialsview.Config{})
 
 	a.bindings = NewBindings(a)
 	if a.settingsImpl != nil {
@@ -827,8 +836,17 @@ func newLLMStack(
 	// keys when the user submits AddProvider). Without this sharing,
 	// AddProvider would write into a backend the resolver can't see.
 	secretsBackend := secrets.NewMemoryBackend()
+	// Bundle E bonus — wire the Cedar LLM policy guard into the
+	// registry pipeline. AllowAll is the boot-stage default per
+	// `cedar.AllowAll` doc; production callers swap a real Engine
+	// in once the policy bundle has loaded. The pipeline shape
+	// (profile → CapabilityGate → PolicyGuard → CredentialResolver)
+	// stays unchanged; only the PolicyGuard implementation is now
+	// Cedar-driven.
+	cedarGuard := cedar.NewLLMPolicyGuard(cedar.AllowAll{})
 	reg, err := llmregistry.New(llmregistry.Options{
 		Resolver: credref.New(secretsBackend),
+		Policy:   cedarGuard,
 	})
 	if err != nil {
 		// Fall back to the stub on a registry construction failure so
@@ -1677,6 +1695,12 @@ func (a *API) Memory() memoryview.MemoryAPI {
 		return &stubMemory{}
 	}
 	return a.memoryAPI
+}
+func (a *API) Dials() dialsview.DialsAPI {
+	if a.dialsAPI == nil {
+		return &stubDials{}
+	}
+	return a.dialsAPI
 }
 func (a *API) Hooks() hooksview.HooksAPI {
 	if a.hooksAPI == nil {

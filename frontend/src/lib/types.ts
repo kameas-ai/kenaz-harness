@@ -502,6 +502,14 @@ export interface MemoryChunk {
   filesRead?: string[];
   filesModified?: string[];
   title?: string;
+  /** Bundle E WP15 — pinned chunks survive the prune sweep. */
+  pinned?: boolean;
+  /** Bundle E WP15 — recall hits since chunk creation. */
+  recallCount?: number;
+  /** Bundle E WP15 — last time this chunk was retrieved. */
+  lastAccessed?: string;
+  /** Bundle E WP16 — originating hook boundary ("post-llm" etc.). */
+  source?: string;
 }
 
 /**
@@ -516,6 +524,146 @@ export interface MemoryListFilter {
   scopeId?: string;
   sessionId?: string;
   projectId?: string;
+}
+
+/**
+ * MemoryJournalEntry — one row in the greedy-memory hook journal
+ * (Bundle E WP16). The HookJournalView surfaces a tail so users can
+ * audit what the kernel boundaries are capturing on their behalf.
+ */
+export interface MemoryJournalEntry {
+  seq: number;
+  boundary: string;
+  scope: string;
+  title?: string;
+  source?: string;
+  written: boolean;
+  deduped: boolean;
+  skipped: boolean;
+  skipReason?: string;
+  chunkId?: string;
+  contentHash?: string;
+  at: string;
+}
+
+/**
+ * MemoryPruneStats — aggregated prune-sweep stats. Bundle E WP15.
+ */
+export interface MemoryPruneStats {
+  startedAt: string;
+  durationMs: number;
+  kept: number;
+  dropped: number;
+  collapsed: number;
+  pinned: number;
+}
+
+/**
+ * MemoryPruneVerdict — per-chunk prune verdict.
+ */
+export interface MemoryPruneVerdict {
+  id: string;
+  action: 'keep' | 'drop' | 'collapse';
+  reason?: string;
+  keepScore: number;
+  collapsedInto?: string;
+}
+
+/**
+ * MemoryPrunePreview — dry-run prune result.
+ */
+export interface MemoryPrunePreview {
+  verdicts: MemoryPruneVerdict[];
+  stats: MemoryPruneStats;
+}
+
+/**
+ * DialScope — the cascading-config layer keys.
+ */
+export type DialScope =
+  | 'global'
+  | 'project'
+  | 'session'
+  | 'graph'
+  | 'run';
+
+/**
+ * DialScopeKey — addresses one cascading layer.
+ */
+export interface DialScopeKey {
+  scope: DialScope;
+  id?: string;
+}
+
+/**
+ * DialConfig — the wire shape for one cascading layer's overrides.
+ * Each *Set boolean toggles whether the value is an explicit override
+ * or "use cascade".
+ */
+export interface DialConfig {
+  maxTokensPerRun?: number;
+  maxTokensPerRunSet?: boolean;
+  maxWallclockSeconds?: number;
+  maxWallclockSet?: boolean;
+  maxLLMCalls?: number;
+  maxLLMCallsSet?: boolean;
+  maxToolCalls?: number;
+  maxToolCallsSet?: boolean;
+  maxCostUSD?: number;
+  maxCostUSDSet?: boolean;
+  planVerbosity?: string;
+  planVerbositySet?: boolean;
+  askThreshold?: number;
+  askThresholdSet?: boolean;
+  reflectFrequency?: number;
+  reflectFrequencySet?: boolean;
+  compactionAggressiveness?: number;
+  compactionAggressivenessSet?: boolean;
+  reviewIterationsCap?: number;
+  reviewIterationsCapSet?: boolean;
+  memoryHooksEnabled?: boolean;
+  memoryHooksEnabledSet?: boolean;
+  memoryPruneIntervalSeconds?: number;
+  memoryPruneIntervalSet?: boolean;
+  updatedAt?: string;
+}
+
+/**
+ * DialEffectiveField<T> — one resolved field's value plus the layer
+ * that contributed it.
+ */
+export interface DialEffectiveField<T> {
+  value: T;
+  from: DialScope;
+}
+
+/**
+ * DialEffectiveDials — the resolved cascade output.
+ */
+export interface DialEffectiveDials {
+  maxTokensPerRun: DialEffectiveField<number>;
+  maxWallclockSeconds: DialEffectiveField<number>;
+  maxLLMCalls: DialEffectiveField<number>;
+  maxToolCalls: DialEffectiveField<number>;
+  maxCostUSD: DialEffectiveField<number>;
+  planVerbosity: DialEffectiveField<string>;
+  askThreshold: DialEffectiveField<number>;
+  reflectFrequency: DialEffectiveField<number>;
+  compactionAggressiveness: DialEffectiveField<number>;
+  reviewIterationsCap: DialEffectiveField<number>;
+  memoryHooksEnabled: DialEffectiveField<boolean>;
+  memoryPruneIntervalSeconds: DialEffectiveField<number>;
+}
+
+/**
+ * DialDelta — additive bump used by BumpAndResume.
+ */
+export interface DialDelta {
+  addTokensPerRun?: number;
+  addWallclockSeconds?: number;
+  addLLMCalls?: number;
+  addToolCalls?: number;
+  addCostUSD?: number;
 }
 
 /**

@@ -106,6 +106,38 @@ async function forget(id: string) {
   }
 }
 
+// Bundle E WP16 — pin / unpin a chunk so the prune sweep skips it.
+async function togglePin(chunk: MemoryChunk) {
+  try {
+    const next = !chunk.pinned;
+    await client.memory.pin(chunk.id, next);
+    await refresh();
+  } catch (err) {
+    error.value = err instanceof Error ? err.message : String(err);
+  }
+}
+
+// Bundle E WP15 — prune controls.
+const pruneRunning = ref(false);
+const pruneLastResult = ref<string | null>(null);
+
+async function runPruneNow() {
+  pruneRunning.value = true;
+  pruneLastResult.value = null;
+  try {
+    const scope = activeFilter.value === 'all' ? '' : activeFilter.value;
+    const stats = await client.memory.runPruneNow(scope);
+    pruneLastResult.value =
+      `kept ${stats.kept} · dropped ${stats.dropped} · ` +
+      `collapsed ${stats.collapsed} · pinned ${stats.pinned}`;
+    await refresh();
+  } catch (err) {
+    error.value = err instanceof Error ? err.message : String(err);
+  } finally {
+    pruneRunning.value = false;
+  }
+}
+
 function toggleMenu(id: string) {
   openMenuId.value = openMenuId.value === id ? null : id;
 }
@@ -283,6 +315,29 @@ defineExpose({ refresh });
         </button>
       </div>
 
+      <!-- Prune controls (Bundle E WP15) -->
+      <div
+        class="mb-3 flex flex-wrap items-center gap-2"
+        data-testid="memory-prune-controls"
+      >
+        <button
+          type="button"
+          class="px-3 py-1 rounded-sm border border-border-muted font-ui text-[11px] uppercase tracking-[0.18em] text-ink-dim hover:bg-surface-2 disabled:opacity-50"
+          :disabled="pruneRunning"
+          data-testid="memory-prune-now"
+          @click="runPruneNow"
+        >
+          {{ pruneRunning ? 'Pruning…' : 'Prune now' }}
+        </button>
+        <span
+          v-if="pruneLastResult"
+          class="font-mono text-[11px] text-ink-subtle"
+          data-testid="memory-prune-result"
+        >
+          {{ pruneLastResult }}
+        </span>
+      </div>
+
       <div
         v-if="error"
         class="mb-3 rounded-md border border-signal-danger bg-surface-1 px-3 py-2 font-ui text-[12px] text-signal-danger"
@@ -372,6 +427,14 @@ defineExpose({ refresh });
                   </button>
                 </div>
               </div>
+              <button
+                type="button"
+                class="px-2 py-1 rounded-sm border border-border-muted text-[10px] uppercase tracking-[0.18em] text-ink-dim hover:text-accent hover:bg-surface-2"
+                :data-testid="`memory-pin-${chunk.id}`"
+                @click="togglePin(chunk)"
+              >
+                {{ chunk.pinned ? 'Unpin' : 'Pin' }}
+              </button>
               <button
                 type="button"
                 class="px-2 py-1 rounded-sm border border-border-muted text-[10px] uppercase tracking-[0.18em] text-ink-dim hover:text-signal-danger hover:bg-surface-2"

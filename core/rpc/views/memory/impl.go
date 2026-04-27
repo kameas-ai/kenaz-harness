@@ -16,9 +16,11 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	corememory "github.com/sigil-tech/kaneaz-harness/core/memory"
+	"github.com/sigil-tech/kaneaz-harness/core/memory/prune"
 )
 
 // MessageReader is the slice of session.Manager the impl needs to
@@ -45,28 +47,59 @@ type Message struct {
 	Content string
 }
 
+// JournalSource is the optional capability the impl uses to surface
+// memory hook journal entries (Bundle E WP16). The kernel's
+// HookManager satisfies this — the rpc layer reaches into core/agentgraph
+// when it has a live kernel to bind, otherwise the JournalTail surface
+// returns an empty slice.
+type JournalSource interface {
+	JournalSnapshot() []JournalEntry
+}
+
 // API is the concrete MemoryAPI.
 type API struct {
 	store    corememory.Store
 	embedder corememory.Embedder
 	reader   MessageReader
+	rules    prune.Rules
+	journal  JournalSource
+
+	mu     sync.Mutex
+	stats  []PruneStats
 }
 
 // Config bundles dependencies for New. Embedder + Reader are required
 // for the explicit RememberMessage path; ListChunks / Forget continue
 // working when only Store is wired (the rpc layer's degraded mode).
+//
+// PruneRules + Journal are Bundle E WP15/WP16 additions; both are
+// optional. When PruneRules is the zero value the prune surface uses
+// prune.DefaultRules(). When Journal is nil, JournalTail returns an
+// empty slice.
 type Config struct {
-	Store    corememory.Store
-	Embedder corememory.Embedder
-	Reader   MessageReader
+	Store      corememory.Store
+	Embedder   corememory.Embedder
+	Reader     MessageReader
+	PruneRules prune.Rules
+	Journal    JournalSource
 }
 
 // New constructs a MemoryAPI.
 func New(cfg Config) *API {
+	rules := cfg.PruneRules
+	// Detect zero ruleset: switch to defaults so a freshly-wired
+	// API has sensible behavior.
+	if rules.MaxAge == 0 && rules.StaleAfter == 0 && rules.MaxEntries == 0 &&
+		rules.CollapseCosine == 0 && rules.MinRecallCount == 0 &&
+		rules.RecallPercentileFloor == 0 {
+		rules = prune.DefaultRules()
+	}
 	return &API{
 		store:    cfg.Store,
 		embedder: cfg.Embedder,
 		reader:   cfg.Reader,
+		rules:    rules,
+		journal:  cfg.Journal,
 	}
 }
 
@@ -241,6 +274,135 @@ func (a *API) Forget(ctx context.Context, id string) error {
 	return a.store.Delete(ctx, id)
 }
 
+// Pin sets / clears the do-not-prune flag on a chunk (Bundle E WP16).
+// Returns ErrPinUnsupported when the wired store does not implement
+// PruneCapable — older stores don't carry the flag.
+func (a *API) Pin(ctx context.Context, id string, pinned bool) error {
+	if a == nil || a.store == nil {
+		return ErrStoreUnavailable
+	}
+	pruner, ok := a.store.(corememory.PruneCapable)
+	if !ok {
+		return ErrPinUnsupported
+	}
+	return pruner.SetPinned(ctx, id, pinned)
+}
+
+// JournalTail returns the most recent N memory hook journal entries.
+// Empty journal source ⇒ empty slice. The scope filter is exact-match
+// against the recorded JournalEntry.Scope; an empty scope returns all.
+func (a *API) JournalTail(_ context.Context, scope string, sinceSeq int64, limit int) ([]JournalEntry, error) {
+	if a == nil || a.journal == nil {
+		return []JournalEntry{}, nil
+	}
+	if limit <= 0 {
+		limit = 100
+	}
+	all := a.journal.JournalSnapshot()
+	out := make([]JournalEntry, 0, len(all))
+	for _, e := range all {
+		if e.Seq <= sinceSeq {
+			continue
+		}
+		if scope != "" && e.Scope != scope {
+			continue
+		}
+		out = append(out, e)
+	}
+	if len(out) > limit {
+		out = out[len(out)-limit:]
+	}
+	return out, nil
+}
+
+// PrunePreview computes the would-prune verdict without mutating the
+// store. The frontend renders the verdict list before letting the user
+// confirm with RunPruneNow.
+func (a *API) PrunePreview(ctx context.Context, scope string) (PrunePreview, error) {
+	if a == nil || a.store == nil {
+		return PrunePreview{}, ErrStoreUnavailable
+	}
+	p := prune.New(a.store, a.rules, nil)
+	scopes := buildScopeFilter(scope)
+	started := time.Now().UTC()
+	dec, err := p.Plan(ctx, scopes...)
+	if err != nil {
+		return PrunePreview{}, err
+	}
+	dur := time.Since(started)
+	out := PrunePreview{
+		Stats: PruneStats{
+			StartedAt:  started,
+			DurationMs: dur.Milliseconds(),
+			Kept:       len(dec.Kept),
+			Dropped:    len(dec.Dropped),
+			Collapsed:  len(dec.Collapsed),
+			Pinned:     dec.Pinned,
+		},
+		Verdicts: make([]PruneVerdict, 0, len(dec.Verdicts)),
+	}
+	for _, v := range dec.Verdicts {
+		out.Verdicts = append(out.Verdicts, PruneVerdict{
+			ID:            v.ID,
+			Action:        v.Action,
+			Reason:        v.Reason,
+			KeepScore:     v.KeepScore,
+			CollapsedInto: v.CollapsedInto,
+		})
+	}
+	return out, nil
+}
+
+// RunPruneNow applies the prune sweep immediately. Returns aggregated
+// stats; the per-id verdict list is omitted from the wire response —
+// callers that want details should call PrunePreview first.
+func (a *API) RunPruneNow(ctx context.Context, scope string) (PruneStats, error) {
+	if a == nil || a.store == nil {
+		return PruneStats{}, ErrStoreUnavailable
+	}
+	p := prune.New(a.store, a.rules, nil)
+	scopes := buildScopeFilter(scope)
+	started := time.Now().UTC()
+	dec, err := p.Apply(ctx, scopes...)
+	if err != nil {
+		return PruneStats{}, err
+	}
+	dur := time.Since(started)
+	stats := PruneStats{
+		StartedAt:  started,
+		DurationMs: dur.Milliseconds(),
+		Kept:       len(dec.Kept),
+		Dropped:    len(dec.Dropped),
+		Collapsed:  len(dec.Collapsed),
+		Pinned:     dec.Pinned,
+	}
+	a.mu.Lock()
+	a.stats = append(a.stats, stats)
+	if len(a.stats) > 30 {
+		a.stats = a.stats[len(a.stats)-30:]
+	}
+	a.mu.Unlock()
+	return stats, nil
+}
+
+// ErrPinUnsupported is returned by Pin when the wired store predates
+// the PruneCapable interface (in-memory test stubs etc.).
+var ErrPinUnsupported = errors.New("memory: store does not support pinning")
+
+// buildScopeFilter expands a single scope string ("global" / "project"
+// / "session" / "") into the core/memory ScopeFilter slice. Empty ⇒
+// nil filter (match everywhere).
+func buildScopeFilter(scope string) []corememory.ScopeFilter {
+	switch scope {
+	case "":
+		return nil
+	case corememory.ScopeKindGlobal, corememory.ScopeKindProject, corememory.ScopeKindSession:
+		return []corememory.ScopeFilter{{Kind: scope}}
+	default:
+		return nil
+	}
+}
+
 // newChunkID returns a 16-byte hex-encoded random id. crypto/rand so
 // concurrent Remembers cannot collide and the value stays opaque to the
 // frontend.
@@ -267,6 +429,10 @@ func toViewChunk(c corememory.Chunk) Chunk {
 		FilesModified: c.FilesModified,
 		Title:         c.Title,
 		CreatedAt:     c.CreatedAt,
+		Pinned:        c.Pinned,
+		RecallCount:   c.RecallCount,
+		LastAccessed:  c.LastAccessed,
+		Source:        c.Source,
 	}
 }
 

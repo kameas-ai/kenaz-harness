@@ -393,52 +393,83 @@ func (k *Kernel) Leaves(_ string, g *Graph) []string {
 	return out
 }
 
+// PauseMarker is the EventBudgetCapHit / EventCostCapHit payload
+// extension introduced by WP17 (cap-hit pause-not-kill). It carries
+// the resume token the user will hand back via BumpAndResume to
+// revalidate the run against a freshly-bumped cap.
+//
+// On cap hit the kernel emits EventBudgetCapHit (or EventCostCapHit)
+// with this payload AND returns ErrBudgetExceeded. The caller treats
+// the run as paused — RebuildState replays the marker on Resume and
+// the kernel re-checks the (now larger) cap before re-firing the
+// budget-blocked node.
+type PauseMarker struct {
+	Reason      string  `json:"reason"`
+	Limit       float64 `json:"limit"`
+	Used        float64 `json:"used"`
+	ResumeToken string  `json:"resume_token"`
+	// PausePending is true when the run can be resumed once the
+	// dial is bumped. Always true for current cap-hit emissions —
+	// reserved for future "fatal cap" semantics.
+	PausePending bool `json:"pause_pending_cap_increase"`
+}
+
 // checkBudget enforces the per-run hard caps before each fire. Returns
-// ErrBudgetExceeded if any cap is exceeded.
+// ErrBudgetExceeded if any cap is exceeded; the EventLog row carries
+// a PauseMarker so the resume path can revalidate against a bumped
+// cap (WP17 — cap-hit pause-not-kill).
 func (k *Kernel) checkBudget(env *Env) error {
 	if env.Counters == nil {
 		return nil
 	}
 	tokens, calls, tools, cost := env.Counters.Snapshot()
 	if env.Budget.MaxTokensPerRun > 0 && tokens > env.Budget.MaxTokensPerRun {
-		var b EventBatch
-		_ = b.AppendKind(env.RunID, "", EventBudgetCapHit,
-			map[string]any{"reason": "max_tokens_per_run", "limit": env.Budget.MaxTokensPerRun, "used": tokens})
-		_, _ = k.log.Append(b)
+		k.emitCapHit(env, EventBudgetCapHit, "max_tokens_per_run",
+			float64(env.Budget.MaxTokensPerRun), float64(tokens))
 		return ErrBudgetExceeded
 	}
 	if env.Budget.MaxLLMCallsPerRun > 0 && calls > env.Budget.MaxLLMCallsPerRun {
-		var b EventBatch
-		_ = b.AppendKind(env.RunID, "", EventBudgetCapHit,
-			map[string]any{"reason": "max_llm_calls_per_run", "limit": env.Budget.MaxLLMCallsPerRun, "used": calls})
-		_, _ = k.log.Append(b)
+		k.emitCapHit(env, EventBudgetCapHit, "max_llm_calls_per_run",
+			float64(env.Budget.MaxLLMCallsPerRun), float64(calls))
 		return ErrBudgetExceeded
 	}
 	if env.Budget.MaxToolCallsPerRun > 0 && tools > env.Budget.MaxToolCallsPerRun {
-		var b EventBatch
-		_ = b.AppendKind(env.RunID, "", EventBudgetCapHit,
-			map[string]any{"reason": "max_tool_calls_per_run", "limit": env.Budget.MaxToolCallsPerRun, "used": tools})
-		_, _ = k.log.Append(b)
+		k.emitCapHit(env, EventBudgetCapHit, "max_tool_calls_per_run",
+			float64(env.Budget.MaxToolCallsPerRun), float64(tools))
 		return ErrBudgetExceeded
 	}
 	if env.Budget.MaxCostUSDPerRun > 0 && cost > env.Budget.MaxCostUSDPerRun {
-		var b EventBatch
-		_ = b.AppendKind(env.RunID, "", EventCostCapHit,
-			map[string]any{"reason": "max_cost_usd_per_run", "limit": env.Budget.MaxCostUSDPerRun, "used": cost})
-		_, _ = k.log.Append(b)
+		k.emitCapHit(env, EventCostCapHit, "max_cost_usd_per_run",
+			env.Budget.MaxCostUSDPerRun, cost)
 		return ErrBudgetExceeded
 	}
 	if env.Budget.MaxWallclockPerRunSecs > 0 && env.Counters.WallclockStart > 0 {
 		elapsed := time.Now().UnixNano() - env.Counters.WallclockStart
 		if elapsed > int64(env.Budget.MaxWallclockPerRunSecs)*int64(time.Second) {
-			var b EventBatch
-			_ = b.AppendKind(env.RunID, "", EventBudgetCapHit,
-				map[string]any{"reason": "max_wallclock_per_run_seconds", "limit": env.Budget.MaxWallclockPerRunSecs})
-			_, _ = k.log.Append(b)
+			k.emitCapHit(env, EventBudgetCapHit, "max_wallclock_per_run_seconds",
+				float64(env.Budget.MaxWallclockPerRunSecs), float64(elapsed)/float64(time.Second))
 			return ErrBudgetExceeded
 		}
 	}
 	return nil
+}
+
+// emitCapHit appends a cap-hit event with a PauseMarker. The resume
+// token is the run id + a deterministic suffix per reason — the
+// frontend echoes it back via BumpAndResume so the kernel can
+// match resume-without-bump as a no-op (the marker is still in the
+// log).
+func (k *Kernel) emitCapHit(env *Env, kind EventKind, reason string, limit, used float64) {
+	marker := PauseMarker{
+		Reason:       reason,
+		Limit:        limit,
+		Used:         used,
+		ResumeToken:  env.RunID + ":" + reason,
+		PausePending: true,
+	}
+	var b EventBatch
+	_ = b.AppendKind(env.RunID, "", kind, marker)
+	_, _ = k.log.Append(b)
 }
 
 // ---- helpers ----

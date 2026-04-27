@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"net/url"
 	"time"
+
+	"github.com/sigil-tech/kaneaz-harness/core/policy/cedar"
 )
 
 const (
@@ -38,6 +40,10 @@ type FetcherOpts struct {
 	// httptest.Server round-trippers. Mutually exclusive with
 	// ProxyURL — when both are set, Transport wins.
 	Transport http.RoundTripper
+	// PolicyGate is the optional Cedar gate consulted before each
+	// outbound request. nil ⇒ all hosts allowed (Bundle E bonus —
+	// gate-hook wiring per the WP14 report).
+	PolicyGate cedar.Gate
 }
 
 // Fetcher wraps an http.Client with the harness's fetch policy: proxy,
@@ -45,6 +51,7 @@ type FetcherOpts struct {
 type Fetcher struct {
 	client       *http.Client
 	maxBodyBytes int64
+	gate         cedar.Gate
 }
 
 // NewFetcher constructs a Fetcher. Returns an error if the proxy URL
@@ -86,7 +93,7 @@ func NewFetcher(opts FetcherOpts) (*Fetcher, error) {
 			return nil
 		},
 	}
-	return &Fetcher{client: client, maxBodyBytes: maxBody}, nil
+	return &Fetcher{client: client, maxBodyBytes: maxBody, gate: opts.PolicyGate}, nil
 }
 
 // Fetch GETs url and returns up to maxBodyBytes of its body plus the
@@ -96,6 +103,16 @@ func NewFetcher(opts FetcherOpts) (*Fetcher, error) {
 func (f *Fetcher) Fetch(ctx context.Context, rawURL string) ([]byte, string, error) {
 	if rawURL == "" {
 		return nil, "", fmt.Errorf("websearch/fetch: empty url")
+	}
+	// Bundle E bonus — Cedar network gate. nil gate ⇒ allow all (the
+	// AllowAll fallback returns NotApplicable; CheckNetwork translates
+	// that to nil error).
+	if f.gate != nil {
+		if pu, perr := url.Parse(rawURL); perr == nil {
+			if gerr := cedar.CheckNetwork(ctx, f.gate, pu.Hostname()); gerr != nil {
+				return nil, "", gerr
+			}
+		}
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
