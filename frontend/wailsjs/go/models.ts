@@ -1275,6 +1275,43 @@ export namespace settings {
 
 }
 
+export namespace slashcmd {
+
+	export class CommandInfo {
+	    name: string;
+	    description: string;
+	    comingSoon: boolean;
+
+	    static createFrom(source: any = {}) {
+	        return new CommandInfo(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.description = source["description"];
+	        this.comingSoon = source["comingSoon"];
+	    }
+	}
+	export class ExecuteResult {
+	    text: string;
+	    kind: string;
+	    metadata?: Record<string, any>;
+
+	    static createFrom(source: any = {}) {
+	        return new ExecuteResult(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.text = source["text"];
+	        this.kind = source["kind"];
+	        this.metadata = source["metadata"];
+	    }
+	}
+
+}
+
 export namespace stdio {
 	
 	export class RecipeStatus {

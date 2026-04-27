@@ -59,6 +59,8 @@ import type {
   ArtifactFilter,
   ArtifactScope,
   ArtifactWithBytes,
+  SlashCommandInfo,
+  SlashExecuteResult,
 } from './types';
 
 /**
@@ -249,6 +251,12 @@ interface WailsBindingsLike {
   Shell_OpenInOSBrowser(path: string): Promise<void>;
   Shell_PathComplete(partial: string): Promise<string[]>;
   Shell_ReadFile(path: string): Promise<ShellReadFileResult>;
+
+  Slash_Execute(
+    sessionID: string,
+    raw: string,
+  ): Promise<SlashExecuteResult>;
+  Slash_List(): Promise<SlashCommandInfo[]>;
 }
 
 /**
@@ -905,6 +913,22 @@ export interface ShellClient {
   readFile(path: string): Promise<ShellReadFileResult>;
 }
 
+/**
+ * SlashClient — view-scoped surface for in-chat slash commands.
+ *
+ *   - list returns the registered visible commands (sorted) so the
+ *     autocomplete dropdown can render without a round-trip per
+ *     keystroke (single fetch on mount).
+ *   - execute parses raw ("/foo arg1 arg2") and dispatches to the
+ *     registered handler. Unknown commands and parse errors surface
+ *     as SlashExecuteResults with kind="error" — the surface never
+ *     crashes the composer.
+ */
+export interface SlashClient {
+  list(): Promise<SlashCommandInfo[]>;
+  execute(sessionID: string, raw: string): Promise<SlashExecuteResult>;
+}
+
 export interface HarnessClient {
   shellStatus(): Promise<ShellStatus>;
   appInfo(): Promise<AppInfo>;
@@ -927,6 +951,7 @@ export interface HarnessClient {
   hooks: HooksClient;
   tools: ToolsClient;
   shell: ShellClient;
+  slash: SlashClient;
   artifacts: ArtifactsClient;
 }
 
@@ -1138,6 +1163,10 @@ export function createHarnessClient(): HarnessClient {
       openInOSBrowser: (path) => b().Shell_OpenInOSBrowser(path),
       pathComplete: (partial) => b().Shell_PathComplete(partial),
       readFile: (path) => b().Shell_ReadFile(path),
+    },
+    slash: {
+      list: () => b().Slash_List(),
+      execute: (sessionID, raw) => b().Slash_Execute(sessionID, raw),
     },
   };
 }
@@ -1445,6 +1474,21 @@ export function createFakeHarnessClient(
       openInOSBrowser: noop,
       pathComplete: async () => [],
       readFile: async () => ({ dataBase64: '', mediaType: '' }),
+    },
+    slash: {
+      list: async () => [
+        { name: 'help', description: 'List available slash commands.', comingSoon: false },
+        { name: 'clear', description: 'Insert a divider in the current chat (history preserved).', comingSoon: false },
+        { name: 'model', description: 'Switch the active model — e.g. /model gpt-4o', comingSoon: false },
+        { name: 'memorize', description: 'Pin text to long-term memory (coming soon).', comingSoon: true },
+        { name: 'recall', description: 'Recall memory chunks matching a query (coming soon).', comingSoon: true },
+        { name: 'forget', description: 'Forget a memory chunk by id (coming soon).', comingSoon: true },
+        { name: 'branch', description: 'Branch the conversation onto a smaller or larger model (coming soon).', comingSoon: true },
+      ],
+      execute: async (_sessionID, raw) => ({
+        text: `fake slash result for ${raw}`,
+        kind: 'info' as const,
+      }),
     },
     artifacts: {
       list: async () => [],

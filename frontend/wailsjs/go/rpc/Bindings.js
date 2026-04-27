@@ -418,6 +418,14 @@ export function Shell_ReadFile(arg1) {
   return window['go']['rpc']['Bindings']['Shell_ReadFile'](arg1);
 }
 
+export function Slash_Execute(arg1, arg2) {
+  return window['go']['rpc']['Bindings']['Slash_Execute'](arg1, arg2);
+}
+
+export function Slash_List() {
+  return window['go']['rpc']['Bindings']['Slash_List']();
+}
+
 export function Tools_ForgetRecipeKey(arg1, arg2) {
   return window['go']['rpc']['Bindings']['Tools_ForgetRecipeKey'](arg1, arg2);
 }

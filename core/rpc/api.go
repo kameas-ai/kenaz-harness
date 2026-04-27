@@ -46,10 +46,12 @@ import (
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/sessions"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/settings"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/shell"
+	slashview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/slashcmd"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/tools"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/trust"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/workflow"
 	"github.com/sigil-tech/kaneaz-harness/core/secrets"
+	coreslashcmd "github.com/sigil-tech/kaneaz-harness/core/slashcmd"
 	secretsref "github.com/sigil-tech/kaneaz-harness/core/secrets/ref"
 	"github.com/sigil-tech/kaneaz-harness/core/session"
 	"github.com/sigil-tech/kaneaz-harness/core/toolloop"
@@ -84,6 +86,7 @@ type HarnessAPI interface {
 	Artifacts() artifactsview.ArtifactsAPI
 	Tools() tools.ToolsAPI
 	Shell() shell.ShellAPI
+	Slash() slashview.SlashAPI
 }
 
 // ShellStatus drives the Toolbar status pills + LegendBar live-rate
@@ -149,6 +152,7 @@ type API struct {
 	toolsAPI        tools.ToolsAPI
 	shellImpl       *shell.API
 	shellAPI        shell.ShellAPI
+	slashAPI        slashview.SlashAPI
 
 	// stdioPool is the production *stdio.Pool wired into newLLMStack.
 	// Held on the API value so the tools view's InstallRecipe /
@@ -336,11 +340,90 @@ func New(c *core.Core) *API {
 	}
 	a.bundleAPI = bundle.NewAPI(bundleOpts...)
 
+	// Slash-command surface — registry constructed against narrow
+	// adapters over the session manager (for /clear) and the LLM
+	// connector view (for /model). A construction failure soft-fails
+	// to a nil-registry surface; the chassis still boots and Execute
+	// returns a friendly "not wired" error.
+	slashRegistry := newSlashRegistry(c, a.llmAPI)
+	a.slashAPI = slashview.New(slashRegistry)
+
 	a.bindings = NewBindings(a)
 	if a.settingsImpl != nil {
 		a.bindings.SetSettingsStore(a.settingsImpl.Store())
 	}
 	return a
+}
+
+// newSlashRegistry wires the slash-command registry against the
+// session manager (used by /clear) and the LLM connector view (used
+// by /model). Returns nil when neither dependency is available; the
+// view degrades to a friendly error response on every Execute.
+func newSlashRegistry(c *core.Core, llmAPI llm.LLMConnectorAPI) *coreslashcmd.Registry {
+	deps := coreslashcmd.Deps{}
+	if c != nil && c.SessionManager() != nil {
+		deps.Sessions = &slashSessionAppender{mgr: c.SessionManager()}
+	}
+	if llmAPI != nil {
+		deps.Providers = &slashProviderLister{inner: llmAPI}
+	}
+	registry, err := coreslashcmd.NewRegistry(deps)
+	if err != nil {
+		logging.L().Warn("slashcmd.registry.construct_failed", "err", err.Error())
+		return nil
+	}
+	return registry
+}
+
+// slashSessionAppender adapts session.Manager into the narrow
+// SessionAppender contract /clear consumes. Maps the manager's
+// AppendMessage shape onto the slashcmd-side AppendSystemMessage
+// shape (always role=system, returns the persisted message id).
+type slashSessionAppender struct {
+	mgr *session.Manager
+}
+
+func (a *slashSessionAppender) AppendSystemMessage(ctx context.Context, sessionID, content string) (string, error) {
+	if a == nil || a.mgr == nil {
+		return "", errors.New("slashcmd: session manager not wired")
+	}
+	stored, err := a.mgr.AppendMessage(ctx, sessionID, session.Message{
+		Role:    session.RoleSystem,
+		Content: content,
+	})
+	if err != nil {
+		return "", err
+	}
+	return stored.ID, nil
+}
+
+// slashProviderLister adapts the LLM connector view into the
+// ProviderLister contract /model consumes. The translation projects
+// the rich llm.Provider shape onto the smaller slashcmd.Provider so
+// the slashcmd package never imports the rpc/views/llm package.
+type slashProviderLister struct {
+	inner llm.LLMConnectorAPI
+}
+
+func (a *slashProviderLister) ListProviders(ctx context.Context) ([]coreslashcmd.Provider, error) {
+	if a == nil || a.inner == nil {
+		return nil, nil
+	}
+	rows, err := a.inner.ListProviders(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]coreslashcmd.Provider, 0, len(rows))
+	for _, p := range rows {
+		out = append(out, coreslashcmd.Provider{
+			ID:           p.ID,
+			Name:         p.Name,
+			Kind:         p.Kind,
+			DefaultModel: p.Model,
+			Models:       append([]string(nil), p.Models...),
+		})
+	}
+	return out, nil
 }
 
 // newSessionsAPI returns the real Manager-backed SessionsAPI when c
@@ -1516,6 +1599,14 @@ func (a *API) Shell() shell.ShellAPI {
 		return &stubShell{}
 	}
 	return a.shellAPI
+}
+func (a *API) Slash() slashview.SlashAPI {
+	if a.slashAPI == nil {
+		// nil-registry surface — Execute returns the friendly
+		// "not wired" result; List returns empty.
+		return slashview.New(nil)
+	}
+	return a.slashAPI
 }
 
 // Bindings returns the slice of Wails-bound objects. The Bindings struct

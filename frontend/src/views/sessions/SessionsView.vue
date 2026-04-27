@@ -32,6 +32,7 @@ import type {
   MemoryScopeKind,
   Message,
   Provider,
+  SlashExecuteResult,
 } from '@/lib/types';
 import { flattenChoices, inferFamily } from '@/lib/modelFamily';
 
@@ -300,6 +301,119 @@ async function onSendBlocks(contentBlocks: import('@/lib/types').ContentBlock[])
 async function onCancel() {
   await session.cancel();
 }
+
+// ── slash commands ──────────────────────────────────────────────────
+//
+// Slash commands ride alongside the regular chat flow. The composer
+// emits `slashCommand(raw)` instead of `send` / `sendBlocks` when the
+// user submits a `/...` line. We dispatch via the typed RPC, then
+// surface the result inline as a synthetic system / assistant-shaped
+// Message in the chat. `/model` results carry metadata that updates
+// the local active provider+model. `/clear` returns metadata that
+// triggers a refresh of the on-disk message list (the divider was
+// persisted server-side).
+
+interface SlashTransientMessage {
+  id: string;
+  role: 'system' | 'assistant';
+  content: string;
+  createdAt: string;
+}
+
+// Per-session transient slash output. Keyed by session id so
+// switching sessions doesn't leak previous-session results into the
+// new view.
+const slashResults = ref<Record<string, SlashTransientMessage[]>>({});
+
+const activeSlashResults = computed<readonly SlashTransientMessage[]>(() => {
+  const sid = sessionId.value;
+  if (!sid) return [];
+  return slashResults.value[sid] ?? [];
+});
+
+function appendSlashResult(sid: string, kind: string, text: string) {
+  // Map slash result kinds to message-bubble roles. The system role
+  // renders centered + italic which fits info / warning / system; the
+  // assistant role renders left-aligned which fits errors well
+  // enough that the user notices something went wrong without us
+  // shipping a new bubble variant in v1.
+  const role: 'system' | 'assistant' = kind === 'error' ? 'assistant' : 'system';
+  const id = `slash-${sid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const entry: SlashTransientMessage = {
+    id,
+    role,
+    content: text,
+    createdAt: new Date().toISOString(),
+  };
+  const existing = slashResults.value[sid] ?? [];
+  slashResults.value = {
+    ...slashResults.value,
+    [sid]: [...existing, entry],
+  };
+}
+
+async function onSlashCommand(raw: string) {
+  const sid = sessionId.value;
+  if (!sid) {
+    return;
+  }
+  let result: SlashExecuteResult;
+  try {
+    result = await client.slash.execute(sid, raw);
+  } catch (err) {
+    appendSlashResult(
+      sid,
+      'error',
+      err instanceof Error ? err.message : String(err),
+    );
+    return;
+  }
+  appendSlashResult(sid, result.kind, result.text);
+
+  // /model — apply provider+model metadata to the local active state
+  // so the next regular message dispatches to the chosen tuple.
+  const modelId = result.metadata?.['modelId'];
+  const providerId = result.metadata?.['providerId'];
+  if (typeof modelId === 'string' && typeof providerId === 'string' && modelId !== '' && providerId !== '') {
+    pickModel(providerId, modelId);
+  }
+
+  // /clear — the backend appended a system divider; refresh the
+  // message list so the divider shows up in the transcript.
+  if (raw.trim().startsWith('/clear')) {
+    void refreshActiveMessages();
+  }
+}
+
+async function refreshActiveMessages() {
+  const sid = sessionId.value;
+  if (!sid) return;
+  try {
+    await session.refresh();
+  } catch {
+    /* swallow — the next user turn will re-fetch anyway. */
+  }
+}
+
+// Combined view: persisted messages + transient slash results,
+// ordered by createdAt so a slash result lands in the right spot.
+const visibleMessages = computed<readonly Message[]>(() => {
+  const persisted = session.messages.value;
+  const transient = activeSlashResults.value;
+  if (transient.length === 0) return persisted;
+  // Transient messages are not real Message objects; map them up.
+  const sid = sessionId.value;
+  const synthetic: Message[] = transient.map((t) => ({
+    id: t.id,
+    sessionId: sid,
+    role: t.role,
+    content: t.content,
+    createdAt: t.createdAt,
+  }));
+  // Append after persisted; v1 doesn't reorder by createdAt — the
+  // user just submitted the slash command, so it's freshest.
+  return [...persisted, ...synthetic];
+});
 
 function gotoProviders() {
   void router.push('/providers');
@@ -748,7 +862,7 @@ function formatSize(bytes: number): string {
         </div>
         <div v-if="activeTab === 'chat'" class="flex-1 min-h-0">
           <MessageList
-            :messages="session.messages.value"
+            :messages="visibleMessages"
             :streaming-message="session.currentlyStreaming.value"
             :waiting="isWaitingForFirstChunk"
             :error-message="session.error.value"
@@ -832,6 +946,7 @@ function formatSize(bytes: number): string {
           @send="onSend"
           @send-blocks="onSendBlocks"
           @cancel="onCancel"
+          @slash-command="onSlashCommand"
         />
       </template>
     </div>

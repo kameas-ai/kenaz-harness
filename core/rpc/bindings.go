@@ -20,6 +20,7 @@ import (
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/sessions"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/settings"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/shell"
+	slashview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/slashcmd"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/tools"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/trust"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/workflow"
@@ -577,3 +578,13 @@ func (b *Bindings) Shell_ReadFile(path string) (ShellReadFileResult, error) {
 // view-API interface so a future binding addition with a typed
 // argument doesn't have to re-wire the import.
 type shellAPIType = shell.ShellAPI
+
+// ── slash commands ────────────────────────────────────────────────────
+
+func (b *Bindings) Slash_Execute(sessionID, raw string) (slashview.ExecuteResult, error) {
+	return b.api.Slash().Execute(b.ctx(), sessionID, raw)
+}
+
+func (b *Bindings) Slash_List() ([]slashview.CommandInfo, error) {
+	return b.api.Slash().List(b.ctx())
+}
