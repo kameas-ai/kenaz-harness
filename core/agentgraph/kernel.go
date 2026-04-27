@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"sync"
 	"time"
+
+	"github.com/sigil-tech/kaneaz-harness/core/logging"
 )
 
 // Kernel is the graph executor. It walks the ready set of a Graph,
@@ -92,6 +94,21 @@ func (k *Kernel) Run(ctx context.Context, env *Env) error {
 	if env.Graph == nil {
 		return errors.New("agentgraph: kernel: env.Graph is nil")
 	}
+	runStart := time.Now()
+	logging.L().Info("agentgraph.run.start",
+		"run_id", env.RunID,
+		"session_id", env.SessionID,
+		"graph_id", env.Graph.ID,
+		"nodes", len(env.Graph.Nodes),
+		"entrypoints", env.Graph.Entrypoints,
+	)
+	defer func() {
+		logging.L().Info("agentgraph.run.end",
+			"run_id", env.RunID,
+			"graph_id", env.Graph.ID,
+			"duration_ms", time.Since(runStart).Milliseconds(),
+		)
+	}()
 	applyEnvDefaults(env)
 
 	// Fix: applyEnvDefaults's Hooks default needs the resolved memory
@@ -235,6 +252,24 @@ func (k *Kernel) Run(ctx context.Context, env *Env) error {
 			"title": nd.Title,
 		})
 
+		// Per-node-fire log so the kernel's traversal is visible in
+		// ~/.kenaz/harness.log without grepping the EventLog. The log
+		// line is a sibling of EventNodeStart; the EventLog stays the
+		// authoritative replay surface.
+		fireStart := time.Now()
+		inputPorts := make([]string, 0, len(inputs))
+		for k := range inputs {
+			inputPorts = append(inputPorts, k)
+		}
+		logging.L().Info("agentgraph.node.fire",
+			"run_id", env.RunID,
+			"session_id", env.SessionID,
+			"node_id", nd.ID,
+			"kind", string(nd.Kind),
+			"title", nd.Title,
+			"inputs", inputPorts,
+		)
+
 		r, err := ex.Execute(ctx, env, nd, inputs)
 		// Always commit the node_start + executor events even on error.
 		for _, e := range r.Events.Events {
@@ -247,6 +282,13 @@ func (k *Kernel) Run(ctx context.Context, env *Env) error {
 			batch.Append(e)
 		}
 		if err != nil {
+			logging.L().Warn("agentgraph.node.error",
+				"run_id", env.RunID,
+				"node_id", nd.ID,
+				"kind", string(nd.Kind),
+				"err", err.Error(),
+				"duration_ms", time.Since(fireStart).Milliseconds(),
+			)
 			_ = batch.AppendKind(env.RunID, nd.ID, EventNodeError, map[string]any{
 				"err": err.Error(),
 			})
@@ -270,6 +312,19 @@ func (k *Kernel) Run(ctx context.Context, env *Env) error {
 			return
 		}
 
+		outputPorts := make([]string, 0, len(r.Outputs))
+		for k := range r.Outputs {
+			outputPorts = append(outputPorts, k)
+		}
+		logging.L().Info("agentgraph.node.complete",
+			"run_id", env.RunID,
+			"node_id", nd.ID,
+			"kind", string(nd.Kind),
+			"outputs", outputPorts,
+			"events", len(r.Events.Events),
+			"pause", r.Pause,
+			"duration_ms", time.Since(fireStart).Milliseconds(),
+		)
 		_ = batch.AppendKind(env.RunID, nd.ID, EventNodeComplete, map[string]any{
 			"outputs": len(r.Outputs),
 		})

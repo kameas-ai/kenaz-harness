@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 
 	"github.com/sigil-tech/kaneaz-harness/core"
+	"github.com/sigil-tech/kaneaz-harness/core/logging"
 	"github.com/sigil-tech/kaneaz-harness/core/policy/cedar"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/settings"
 	corebash "github.com/sigil-tech/kaneaz-harness/core/tools/bash"
@@ -38,6 +39,9 @@ func registerBuiltinTools(c *core.Core, registry *toolloop.BuiltinRegistry, bash
 	// shipped defaults.
 	if ws := constructWebSearch(); ws != nil {
 		registry.Register(ws)
+		logging.L().Info("rpc.builtins.register", "tool", ws.Name())
+	} else {
+		logging.L().Warn("rpc.builtins.websearch_construct_failed")
 	}
 
 	// bash: requires a sandbox root. Prefer <DataDir>/agent-workspace
@@ -49,6 +53,10 @@ func registerBuiltinTools(c *core.Core, registry *toolloop.BuiltinRegistry, bash
 		Store:       bashStore,
 	})
 	registry.Register(bashTool)
+	logging.L().Info("rpc.builtins.register",
+		"tool", bashTool.Name(),
+		"sandbox", sandboxRoot,
+	)
 }
 
 // constructWebSearch builds a websearch.Tool with the package's
@@ -94,6 +102,7 @@ func defaultBashSandbox(c *core.Core) string {
 // (rpc.New(nil)) doesn't accidentally hide tools.
 func builtinEnabledPredicate(s *settings.API) func(string) bool {
 	if s == nil || s.Store() == nil {
+		logging.L().Info("rpc.builtins.predicate.no_store")
 		return func(string) bool { return true }
 	}
 	return func(name string) bool {
@@ -105,14 +114,20 @@ func builtinEnabledPredicate(s *settings.API) func(string) bool {
 		case corewebsearch.ToolName:
 			v, err := store.LoadWebSearch()
 			if err != nil {
+				logging.L().Warn("rpc.builtins.predicate.read_failed",
+					"tool", name, "err", err.Error())
 				return false
 			}
+			logging.L().Info("rpc.builtins.predicate", "tool", name, "enabled", v)
 			return v
 		case corebash.Name:
 			v, err := store.LoadBash()
 			if err != nil {
+				logging.L().Warn("rpc.builtins.predicate.read_failed",
+					"tool", name, "err", err.Error())
 				return false
 			}
+			logging.L().Info("rpc.builtins.predicate", "tool", name, "enabled", v)
 			return v
 		}
 		return true

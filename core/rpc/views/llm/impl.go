@@ -601,7 +601,18 @@ func (a *API) StartStream(ctx context.Context, profileID, sessionID, modelOverri
 				"session_id", sessionID, "err", derr.Error())
 		} else {
 			req.Tools = discovered
+			toolNames := make([]string, 0, len(discovered))
+			for _, t := range discovered {
+				toolNames = append(toolNames, t.Name)
+			}
+			log.Info("llm.tool_discovery.ok",
+				"session_id", sessionID,
+				"count", len(discovered),
+				"names", toolNames,
+			)
 		}
+	} else {
+		log.Info("llm.tool_discovery.no_discoverer", "session_id", sessionID)
 	}
 
 	// multimodal-io WP03 — modality gate. Walk every Message's
