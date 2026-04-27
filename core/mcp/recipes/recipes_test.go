@@ -13,8 +13,8 @@ func TestShippedSingletonParses(t *testing.T) {
 	if cat == nil {
 		t.Fatal("Shipped() returned nil")
 	}
-	if got := len(cat.List()); got != 2 {
-		t.Fatalf("want 2 recipes, got %d", got)
+	if got := len(cat.List()); got != 4 {
+		t.Fatalf("want 4 recipes, got %d", got)
 	}
 }
 
@@ -88,7 +88,7 @@ func TestFilesystemEntry(t *testing.T) {
 	if !ok {
 		t.Fatal("filesystem not in shipped catalog")
 	}
-	if r.DisplayName != "Filesystem" {
+	if r.DisplayName != "Filesystem (sandboxed)" {
 		t.Errorf("DisplayName = %q", r.DisplayName)
 	}
 	if r.Category != "filesystem" {
@@ -131,6 +131,55 @@ func TestCatalogGetMiss(t *testing.T) {
 	cat := recipes.Shipped()
 	if _, ok := cat.Get("nonexistent-recipe"); ok {
 		t.Fatal("Get returned ok for nonexistent id")
+	}
+}
+
+func TestFilesystemProjectEntry(t *testing.T) {
+	cat := recipes.Shipped()
+	r, ok := cat.Get("filesystem-project")
+	if !ok {
+		t.Fatal("filesystem-project not in shipped catalog")
+	}
+	if r.Category != "filesystem" {
+		t.Errorf("Category = %q, want filesystem", r.Category)
+	}
+	if len(r.ConfigOptions) != 1 {
+		t.Fatalf("ConfigOptions len = %d, want 1", len(r.ConfigOptions))
+	}
+	opt := r.ConfigOptions[0]
+	if !opt.Required {
+		t.Error("project root should be required")
+	}
+	// Default is empty so user must pick a project.
+	if defaults, ok := opt.Default.([]any); !ok || len(defaults) != 0 {
+		t.Errorf("default = %#v, want empty slice", opt.Default)
+	}
+	if r.Warning != "" {
+		t.Errorf("project recipe should not carry a warning, got %q", r.Warning)
+	}
+}
+
+func TestFilesystemFullEntry(t *testing.T) {
+	cat := recipes.Shipped()
+	r, ok := cat.Get("filesystem-full")
+	if !ok {
+		t.Fatal("filesystem-full not in shipped catalog")
+	}
+	if r.Category != "filesystem" {
+		t.Errorf("Category = %q, want filesystem", r.Category)
+	}
+	// Hardcoded args, no user config knobs.
+	if len(r.ArgsTemplate) != 1 || r.ArgsTemplate[0] != "/" {
+		t.Errorf("ArgsTemplate = %v, want [/]", r.ArgsTemplate)
+	}
+	if len(r.ConfigOptions) != 0 {
+		t.Errorf("ConfigOptions = %v, want none (path is hardcoded to /)", r.ConfigOptions)
+	}
+	if r.Warning == "" {
+		t.Error("filesystem-full MUST carry a Warning string")
+	}
+	if r.RecommendedPolicyTemplate != "filesystem-full-recommended.cedar" {
+		t.Errorf("RecommendedPolicyTemplate = %q, want filesystem-full-recommended.cedar", r.RecommendedPolicyTemplate)
 	}
 }
 

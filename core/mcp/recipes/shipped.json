@@ -23,7 +23,7 @@
     },
     {
       "id": "filesystem",
-      "display_name": "Filesystem",
+      "display_name": "Filesystem (sandboxed)",
       "description": "Read and write files in a sandboxed workspace. The model gets read_file, write_file, list_directory, create_directory, move_file, and search_files tools scoped to the directories you allow.",
       "category": "filesystem",
       "command": ["npx", "-y", "@modelcontextprotocol/server-filesystem"],
@@ -44,6 +44,47 @@
       "init_timeout_ms": 5000,
       "ping_period_ms": 30000,
       "sampling_policy": { "allowed": false, "default": false }
+    },
+    {
+      "id": "filesystem-project",
+      "display_name": "Filesystem (project root)",
+      "description": "Read and write files inside a single project root you select. Same six tools as the sandboxed recipe, but pointed at one tree of your choice — typically a code repo. Use this when you want the model to work end-to-end on a project without granting access to the rest of your machine.",
+      "category": "filesystem",
+      "command": ["npx", "-y", "@modelcontextprotocol/server-filesystem"],
+      "args_template": ["${ALLOWED_DIRS}"],
+      "env_keys": [],
+      "config_options": [
+        {
+          "name": "allowed_directories",
+          "display": "Project root",
+          "kind": "directory_list",
+          "default": [],
+          "required": true,
+          "description": "The single directory the model is allowed to read and write. Pick your project root. Add a second path if your project depends on a sibling directory; otherwise leave it as one entry."
+        }
+      ],
+      "capabilities": { "tools": true, "resources": false, "prompts": false, "sampling": false },
+      "docs_url": "https://github.com/modelcontextprotocol/servers-archived/tree/main/src/filesystem",
+      "init_timeout_ms": 5000,
+      "ping_period_ms": 30000,
+      "sampling_policy": { "allowed": false, "default": false }
+    },
+    {
+      "id": "filesystem-full",
+      "display_name": "Filesystem (UNRESTRICTED)",
+      "description": "UNRESTRICTED filesystem access. The model can read and write ANY file your user account can reach — your home directory, system config, SSH keys, every credential file. Same six tools as the sandboxed recipe, scoped to '/'. Only enable this when you understand the risk; install the recommended Cedar policy alongside it.",
+      "category": "filesystem",
+      "command": ["npx", "-y", "@modelcontextprotocol/server-filesystem"],
+      "args_template": ["/"],
+      "env_keys": [],
+      "config_options": [],
+      "capabilities": { "tools": true, "resources": false, "prompts": false, "sampling": false },
+      "docs_url": "https://github.com/modelcontextprotocol/servers-archived/tree/main/src/filesystem",
+      "init_timeout_ms": 5000,
+      "ping_period_ms": 30000,
+      "sampling_policy": { "allowed": false, "default": false },
+      "warning": "This recipe gives the model read AND write access to your entire filesystem — including ~/.ssh, ~/.aws, every credential file, and every project on your machine. The Cedar policy gate is your only line of defense. Install the recommended policy template (filesystem-full-recommended.cedar) before enabling this recipe, and review every tool call.",
+      "recommended_policy_template": "filesystem-full-recommended.cedar"
     }
   ]
 }

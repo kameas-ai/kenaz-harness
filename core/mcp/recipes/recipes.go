@@ -68,6 +68,16 @@ type Recipe struct {
 	// ConfigOptions declares the per-install config fields the modal
 	// renders. Empty for recipes that need only env keys.
 	ConfigOptions []ConfigOption `json:"config_options,omitempty"`
+	// Warning is an optional user-facing hazard message rendered by the
+	// install modal in a stark style (red banner, explicit confirmation
+	// checkbox). Used by recipes that grant elevated trust — e.g. the
+	// unrestricted filesystem MCP. Empty for ordinary recipes.
+	Warning string `json:"warning,omitempty"`
+	// RecommendedPolicyTemplate names a Cedar policy file under
+	// `core/policy/cedar/policies/` that the user is encouraged to
+	// install alongside this recipe. The install modal surfaces a
+	// "copy recommended policy" affordance when set.
+	RecommendedPolicyTemplate string `json:"recommended_policy_template,omitempty"`
 }
 
 // ConfigOption is one user-editable knob the install modal renders.
