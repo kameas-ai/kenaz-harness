@@ -21,6 +21,7 @@ type Kernel struct {
 	log         EventLog
 	maxInFlight int
 	now         func() time.Time
+	compactor   Compactor
 }
 
 // KernelOption tunes a Kernel.
@@ -47,6 +48,15 @@ func WithExecutor(ex Executor) KernelOption {
 // WithClock overrides the clock used for timestamps. Used in tests.
 func WithClock(now func() time.Time) KernelOption {
 	return func(k *Kernel) { k.now = now }
+}
+
+// WithCompactor wires the configurable-compaction subsystem (Bundle
+// D — FR-041..FR-045). The kernel pins the compactor onto every Env
+// at the start of Run so executors at the LLMNode pre-call and
+// ToolNode post-tool sites can dispatch through it. Nil disables
+// compaction (the kernel default).
+func WithCompactor(c Compactor) KernelOption {
+	return func(k *Kernel) { k.compactor = c }
 }
 
 // NewKernel constructs a kernel with default executors + memory log.
@@ -94,6 +104,14 @@ func (k *Kernel) Run(ctx context.Context, env *Env) error {
 	// control executors (Loop, Retry, Parallel) honor any
 	// WithExecutor overrides the kernel was built with.
 	env.registry = k.registry
+
+	// Pin the kernel's compactor into env so the compute executors
+	// (LLMNode pre-call, ToolNode post-tool) reach the same pipeline
+	// every node fire walks. Per-Env-overrides still win — only fill
+	// in the default when the caller didn't pass one.
+	if env.Compactor == nil && k.compactor != nil {
+		env.Compactor = k.compactor
+	}
 
 	// Run start event.
 	var startBatch EventBatch

@@ -9,6 +9,7 @@ import (
 	attachmentsview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/attachments"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/audit"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/bundle"
+	compactionview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/compaction"
 	contextsview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/contexts"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/contextview"
 	corpusview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/corpus"
@@ -618,4 +619,22 @@ func (b *Bindings) Corpus_JobStatus(jobID string) (corpusview.IngestStatus, erro
 }
 func (b *Bindings) Corpus_Retrieve(corpusID string, req corpusview.RetrieveRequest) (corpusview.RetrieveResponse, error) {
 	return b.api.Corpus().Retrieve(b.ctx(), corpusID, req)
+}
+
+// ── compaction (agent-kernel-graph; Bundle D WP12/WP13) ───────────────
+
+func (b *Bindings) Compaction_GetConfig(layer compactionview.Layer, scopeID string) (compactionview.Config, error) {
+	return b.api.Compaction().GetConfig(b.ctx(), layer, scopeID)
+}
+func (b *Bindings) Compaction_GetEffective(scope compactionview.ScopeKey) (compactionview.EffectiveConfig, error) {
+	return b.api.Compaction().GetEffective(b.ctx(), scope)
+}
+func (b *Bindings) Compaction_SetConfig(layer compactionview.Layer, scopeID string, cfg compactionview.Config) error {
+	return b.api.Compaction().SetConfig(b.ctx(), layer, scopeID, cfg)
+}
+func (b *Bindings) Compaction_TriggerManual(sessionID string, opts compactionview.ManualOpts) (compactionview.ManualResult, error) {
+	return b.api.Compaction().TriggerManualCompaction(b.ctx(), sessionID, opts)
+}
+func (b *Bindings) Compaction_ListCustomStrategies() ([]compactionview.CustomStrategy, error) {
+	return b.api.Compaction().ListCustomStrategies(b.ctx())
 }

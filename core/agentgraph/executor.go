@@ -154,6 +154,12 @@ type Env struct {
 	// Hooks fires greedy memory-write hooks at kernel boundaries.
 	Hooks *HookManager
 
+	// Compactor is the optional compaction pipeline (Bundle D). The
+	// kernel calls it at LLMNode pre-call and ToolNode post-call
+	// firing sites when the relevant threshold is crossed. Nil
+	// disables compaction; the rest of the pipeline runs unchanged.
+	Compactor Compactor
+
 	// registry is the executor lookup table the control executors
 	// (Loop, Retry, Parallel) use to dispatch into peer nodes. The
 	// kernel sets this on entry to Run(); leaving it nil falls back

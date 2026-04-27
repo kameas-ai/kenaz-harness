@@ -331,6 +331,72 @@ func (r *TransformRegistry) Names() []string {
 	return out
 }
 
+// ---- Compactor ----
+
+// CompactionSite labels the kernel firing point that triggers a
+// compaction call. Mirrors the Site enum in core/agentgraph/compaction
+// without importing it (keeps the cycle direction one-way).
+type CompactionSite string
+
+const (
+	// CompactionSitePreCall fires before an LLMNode dispatches its
+	// request when the prepared input would exceed the token budget
+	// threshold (FR-041).
+	CompactionSitePreCall CompactionSite = "pre_call"
+	// CompactionSitePostTool fires after a ToolNode returns when the
+	// result payload exceeds tool_result_max_bytes (FR-041).
+	CompactionSitePostTool CompactionSite = "post_tool"
+	// CompactionSiteManual fires from the user-facing manual trigger.
+	CompactionSiteManual CompactionSite = "manual"
+)
+
+// CompactionInput is the value-shape the kernel hands to a Compactor
+// at a fire site. The kernel populates it from the active LLM request
+// or tool result; the Compactor returns its compacted equivalent.
+type CompactionInput struct {
+	// Site identifies the firing point.
+	Site CompactionSite
+	// RunID + NodeID flag the originating node for telemetry.
+	RunID  string
+	NodeID string
+	// SessionID + ProjectID drive cascading-config resolution.
+	SessionID string
+	ProjectID string
+	// SystemPrompt is preserved untouched across compaction.
+	SystemPrompt string
+	// Messages is the slice the compactor will shrink. The kernel
+	// passes the LLM-bound messages at pre_call; at post_tool the
+	// slice contains a single message representing the tool result.
+	Messages []Message
+	// TargetTokens is the upper bound the compactor must aim to land
+	// under. Zero means "let the compactor pick from cascading config".
+	TargetTokens int
+	// CurrentTokens is the kernel's estimate of the input size.
+	CurrentTokens int
+}
+
+// CompactionOutput is what the compactor returns. Skipped=true means
+// the input is unchanged (e.g. cascading config disabled the site,
+// or recursion-depth tripped). Strategies do not surface errors for
+// the recursion bound; the kernel treats Skipped as a soft no-op.
+type CompactionOutput struct {
+	Messages    []Message
+	TokensAfter int
+	Skipped     bool
+	Reason      string
+}
+
+// Compactor is the kernel-side seam for the configurable compaction
+// subsystem (mission agent-kernel-graph; Bundle D). Production wiring
+// binds this to *compaction.Pipeline. Nil disables compaction without
+// breaking the kernel.
+type Compactor interface {
+	// Compact runs one compaction request at the given site. The
+	// returned CompactionOutput carries either the compacted
+	// messages or a Skipped=true passthrough.
+	Compact(ctx context.Context, in CompactionInput) (CompactionOutput, error)
+}
+
 // ---- Sentinels for stub seams ----
 
 // ErrNoLLM is returned by the default LLMProvider stub.
@@ -445,4 +511,7 @@ func applyEnvDefaults(env *Env) {
 		env.Transforms = NewTransformRegistry()
 		BuiltinTransforms(env.Transforms)
 	}
+	// Compactor is intentionally not stubbed: nil compactor === no-op
+	// at every fire site. Production wiring installs the real
+	// pipeline; tests that don't care leave it nil.
 }
