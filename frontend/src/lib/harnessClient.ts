@@ -1437,6 +1437,10 @@ export function createHarnessClient(): HarnessClient {
       setMemory: (enabled) => b().Settings_SetMemory(enabled),
       getConfirmEach: () => b().Settings_GetConfirmEach(),
       setConfirmEach: (enabled) => b().Settings_SetConfirmEach(enabled),
+      getWebSearch: () => b().Settings_GetWebSearch(),
+      setWebSearch: (enabled) => b().Settings_SetWebSearch(enabled),
+      getBash: () => b().Settings_GetBash(),
+      setBash: (enabled) => b().Settings_SetBash(enabled),
     },
     memory: {
       listChunks: (filter) => b().Memory_ListChunks(filter ?? {}),
@@ -1789,6 +1793,10 @@ export function createFakeHarnessClient(
       setMemory: noop,
       getConfirmEach: async () => true,
       setConfirmEach: noop,
+      getWebSearch: async () => false,
+      setWebSearch: noop,
+      getBash: async () => false,
+      setBash: noop,
     },
     memory: {
       listChunks: async () => [],

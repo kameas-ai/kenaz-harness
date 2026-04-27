@@ -79,8 +79,72 @@ function gotoMemory() {
   void router.push('/memory');
 }
 
+// ── Web search built-in (core/tools/websearch) ─────────────────────────
+const webSearchEnabled = ref(false);
+const webSearchError = ref<string | null>(null);
+const webSearchBusy = ref(false);
+
+async function refreshWebSearch() {
+  try {
+    webSearchEnabled.value = await client.settings.getWebSearch();
+  } catch {
+    webSearchEnabled.value = false;
+  }
+}
+
+async function toggleWebSearch(event: Event) {
+  if (webSearchBusy.value) return;
+  const next = (event.target as HTMLInputElement).checked;
+  webSearchBusy.value = true;
+  webSearchError.value = null;
+  const previous = webSearchEnabled.value;
+  webSearchEnabled.value = next;
+  try {
+    await client.settings.setWebSearch(next);
+  } catch (e) {
+    webSearchEnabled.value = previous;
+    webSearchError.value =
+      e instanceof Error ? e.message : 'Failed to toggle web search.';
+  } finally {
+    webSearchBusy.value = false;
+  }
+}
+
+// ── Bash built-in (core/tools/bash) ────────────────────────────────────
+const bashEnabled = ref(false);
+const bashError = ref<string | null>(null);
+const bashBusy = ref(false);
+
+async function refreshBash() {
+  try {
+    bashEnabled.value = await client.settings.getBash();
+  } catch {
+    bashEnabled.value = false;
+  }
+}
+
+async function toggleBash(event: Event) {
+  if (bashBusy.value) return;
+  const next = (event.target as HTMLInputElement).checked;
+  bashBusy.value = true;
+  bashError.value = null;
+  const previous = bashEnabled.value;
+  bashEnabled.value = next;
+  try {
+    await client.settings.setBash(next);
+  } catch (e) {
+    bashEnabled.value = previous;
+    bashError.value =
+      e instanceof Error ? e.message : 'Failed to toggle bash.';
+  } finally {
+    bashBusy.value = false;
+  }
+}
+
 onMounted(() => {
   void refreshMemory();
+  void refreshWebSearch();
+  void refreshBash();
 });
 
 // ── Recipes (WP06) ─────────────────────────────────────────────────────
@@ -364,6 +428,100 @@ watch(
     <div
       class="rounded-sm border border-border-muted bg-surface-1 divide-y divide-border-muted"
     >
+      <!-- Web search row (built-in; local-only DuckDuckGo + Wikipedia) -->
+      <div
+        class="px-4 py-3 grid gap-3 items-start"
+        style="grid-template-columns: 1fr auto"
+        data-testid="websearch-tool-row"
+      >
+        <div>
+          <div class="flex items-center gap-2 font-ui text-[13px] text-ink">
+            <span>Web search</span>
+            <span
+              v-if="webSearchEnabled"
+              class="text-[10px] uppercase tracking-[0.16em] text-signal-ok"
+            >
+              on
+            </span>
+          </div>
+          <p class="mt-1 text-[11px] text-ink-muted max-w-prose">
+            Local-first web search built into the harness. Queries DuckDuckGo's
+            HTML endpoint + Wikipedia's API and extracts readable content via
+            go-readability. No API key, no third-party SDK, no data leaves
+            your machine beyond the search query itself. Cedar policy gates
+            the outbound HTTP request hostname.
+          </p>
+          <div
+            v-if="webSearchError"
+            class="mt-2 text-[11px] text-signal-danger"
+            role="alert"
+          >
+            {{ webSearchError }}
+          </div>
+        </div>
+        <label
+          class="inline-flex items-center cursor-pointer select-none"
+          :class="webSearchBusy ? 'opacity-60 cursor-wait' : ''"
+        >
+          <input
+            type="checkbox"
+            class="accent-accent w-4 h-4"
+            :checked="webSearchEnabled"
+            :disabled="webSearchBusy"
+            data-testid="websearch-toggle"
+            @change="toggleWebSearch"
+          />
+        </label>
+      </div>
+
+      <!-- Bash row (built-in; sandboxed via per-command allowlist) -->
+      <div
+        class="px-4 py-3 grid gap-3 items-start"
+        style="grid-template-columns: 1fr auto"
+        data-testid="bash-tool-row"
+      >
+        <div>
+          <div class="flex items-center gap-2 font-ui text-[13px] text-ink">
+            <span>Bash</span>
+            <span
+              v-if="bashEnabled"
+              class="text-[10px] uppercase tracking-[0.16em] text-signal-ok"
+            >
+              on
+            </span>
+          </div>
+          <p class="mt-1 text-[11px] text-ink-muted max-w-prose">
+            Local bash execution gated by a per-command allowlist. The model
+            can only run commands you've allowed; everything else is denied
+            at parse time. Output stays local and is gated through the Cedar
+            policy engine. Use Bash with care — pair with the
+            <code class="font-mono">filesystem</code> recipe or
+            <code class="font-mono">read_bash_output</code> state node to
+            keep results in context.
+          </p>
+          <div
+            v-if="bashError"
+            class="mt-2 text-[11px] text-signal-danger"
+            role="alert"
+          >
+            {{ bashError }}
+          </div>
+        </div>
+        <label
+          class="inline-flex items-center cursor-pointer select-none"
+          :class="bashBusy ? 'opacity-60 cursor-wait' : ''"
+        >
+          <input
+            type="checkbox"
+            class="accent-accent w-4 h-4"
+            :checked="bashEnabled"
+            :disabled="bashBusy"
+            data-testid="bash-toggle"
+            @change="toggleBash"
+          />
+        </label>
+      </div>
+
       <!-- Memory tool row -->
       <div
         class="px-4 py-3 grid gap-3 items-start"
