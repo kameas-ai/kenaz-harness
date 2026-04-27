@@ -126,7 +126,10 @@ func TestOpen_RegistersSessionMigrations(t *testing.T) {
 		}
 		versions = append(versions, v)
 	}
-	want := []int{300, 301, 302, 303, 304, 305}
+	// 0306 (branches) is reserved for the agent-kernel-graph branching
+	// bundle landing in parallel; this build has 0307 (corpora) but
+	// not 0306 yet.
+	want := []int{300, 301, 302, 303, 304, 305, 307}
 	if len(versions) != len(want) {
 		t.Fatalf("session migrations applied = %v, want %v", versions, want)
 	}
@@ -162,9 +165,10 @@ func TestOpen_ApplyIdempotent(t *testing.T) {
 		t.Fatal(err)
 	}
 	// 2 storage bootstrap + 1 session init + 1 context_attachments +
-	// 1 content_json + 1 artifacts + 1 artifacts-promote + 1 telemetry.
-	if count != 8 {
-		t.Errorf("ledger count = %d, want 8", count)
+	// 1 content_json + 1 artifacts + 1 artifacts-promote + 1 telemetry +
+	// 1 corpora (0307) = 9.
+	if count != 9 {
+		t.Errorf("ledger count = %d, want 9", count)
 	}
 }
 

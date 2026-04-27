@@ -817,3 +817,139 @@ export interface SlashExecuteResult {
   kind: SlashResultKind;
   metadata?: Record<string, unknown>;
 }
+
+// ── corpora (agent-kernel-graph; Bundle C WP10/WP11) ─────────────────
+
+/**
+ * CorpusScope discriminates the visibility of a corpus.
+ */
+export type CorpusScope = 'global' | 'project' | 'session';
+
+/**
+ * IngestState enumerates the lifecycle of a background ingest job.
+ */
+export type IngestState =
+  | 'pending'
+  | 'running'
+  | 'completed'
+  | 'failed'
+  | 'canceled';
+
+/**
+ * Corpus — a named pool of source files that have been walked,
+ * hashed, chunked, and embedded for top-K retrieval.
+ */
+export interface Corpus {
+  id: string;
+  name: string;
+  scope: CorpusScope;
+  scopeId?: string;
+  tag?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/**
+ * CorpusFile — one ingested source file. `sha256` enables hash-based
+ * skip on re-ingest; matching files are not re-embedded.
+ */
+export interface CorpusFile {
+  id: string;
+  corpusId: string;
+  path: string;
+  sha256: string;
+  fileSize: number;
+  lineCount: number;
+  ingestedAt: string;
+}
+
+/**
+ * ChunkProvenance — the (file path + line range + hash) tuple a
+ * retrieved chunk carries so the chat surface can render a citation.
+ */
+export interface CorpusChunkProvenance {
+  filePath: string;
+  lineStart: number;
+  lineEnd: number;
+  sha256: string;
+}
+
+/**
+ * CorpusChunk — one indexed text fragment. Embedding bytes never
+ * cross the Wails boundary; `text` is the user-readable payload.
+ */
+export interface CorpusChunk {
+  id: string;
+  corpusId: string;
+  fileId: string;
+  chunkSeq: number;
+  text: string;
+  provenance: CorpusChunkProvenance;
+  createdAt: string;
+}
+
+/**
+ * CorpusRetrievalResult pairs a chunk with its similarity score.
+ */
+export interface CorpusRetrievalResult {
+  chunk: CorpusChunk;
+  similarity: number;
+}
+
+/**
+ * CorpusIngestStatus — pollable state of a background ingest job.
+ */
+export interface CorpusIngestStatus {
+  jobId: string;
+  corpusId: string;
+  state: IngestState;
+  path: string;
+  filesTotal: number;
+  filesDone: number;
+  filesSkip: number;
+  chunksTotal: number;
+  startedAt: string;
+  updatedAt: string;
+  finishedAt?: string;
+  error?: string;
+}
+
+/**
+ * CorpusIngestOptions narrows ingest behaviour.
+ */
+export interface CorpusIngestOptions {
+  recursive?: boolean;
+  extensions?: string[];
+  maxFileBytes?: number;
+  chunkLines?: number;
+}
+
+/**
+ * CorpusCreateRequest — body for CreateCorpus.
+ */
+export interface CorpusCreateRequest {
+  name: string;
+  scope: CorpusScope;
+  scopeId?: string;
+  tag?: string;
+}
+
+/**
+ * CorpusRetrieveRequest — body for Retrieve.
+ */
+export interface CorpusRetrieveRequest {
+  query: string;
+  topK?: number;
+  tokenBudget?: number;
+  tag?: string;
+  scope?: CorpusScope;
+}
+
+/**
+ * CorpusRetrieveResponse pairs the results with a `dropped` count
+ * indicating how many top-K chunks were truncated by the token budget.
+ */
+export interface CorpusRetrieveResponse {
+  results: CorpusRetrievalResult[];
+  dropped: number;
+}

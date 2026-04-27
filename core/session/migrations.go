@@ -72,7 +72,10 @@ const sqlInitSchema = `
 // WP02 lands as 0302 (see migrations_content_json.go); artifacts-storage
 // WP01 lands as 0303 (see migrations_artifacts.go); artifacts-storage
 // WP02 lands as 0304 (see migrations_artifacts_promote.go);
-// telemetry-otel WP01 lands as 0305 (see migrations_telemetry.go).
+// telemetry-otel WP01 lands as 0305 (see migrations_telemetry.go);
+// agent-kernel-graph WP10 lands as 0307 (see migrations_corpora.go).
+// Versions 0306 / 0308 / 0309 are owned by other agent-kernel-graph
+// bundles in parallel; do not collide.
 func Migrations() []migrations.Migration {
 	return []migrations.Migration{
 		{
@@ -110,6 +113,7 @@ func Migrations() []migrations.Migration {
 		migration0303(),
 		migration0304(),
 		migration0305(),
+		migration0307(),
 	}
 }
 

@@ -18,6 +18,7 @@ import (
 	"github.com/sigil-tech/kaneaz-harness/core"
 	coreatt "github.com/sigil-tech/kaneaz-harness/core/attachments"
 	corecontexts "github.com/sigil-tech/kaneaz-harness/core/contexts"
+	corecorpus "github.com/sigil-tech/kaneaz-harness/core/corpus"
 	"github.com/sigil-tech/kaneaz-harness/core/event"
 	"github.com/sigil-tech/kaneaz-harness/core/hooks"
 	corellm "github.com/sigil-tech/kaneaz-harness/core/llm"
@@ -37,6 +38,7 @@ import (
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/bundle"
 	contextsview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/contexts"
 	contextview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/contextview"
+	corpusview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/corpus"
 	hooksview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/hooks"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/llm"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/mcp"
@@ -87,6 +89,7 @@ type HarnessAPI interface {
 	Tools() tools.ToolsAPI
 	Shell() shell.ShellAPI
 	Slash() slashview.SlashAPI
+	Corpus() corpusview.CorpusAPI
 }
 
 // ShellStatus drives the Toolbar status pills + LegendBar live-rate
@@ -153,6 +156,8 @@ type API struct {
 	shellImpl       *shell.API
 	shellAPI        shell.ShellAPI
 	slashAPI        slashview.SlashAPI
+	corpusMgr       *corecorpus.Manager
+	corpusAPI       corpusview.CorpusAPI
 
 	// stdioPool is the production *stdio.Pool wired into newLLMStack.
 	// Held on the API value so the tools view's InstallRecipe /
@@ -347,6 +352,13 @@ func New(c *core.Core) *API {
 	// returns a friendly "not wired" error.
 	slashRegistry := newSlashRegistry(c, a.llmAPI)
 	a.slashAPI = slashview.New(slashRegistry)
+
+	// Corpora subsystem (mission agent-kernel-graph; Bundle C). Wired
+	// only when the chassis has a real DataDir + storage; otherwise the
+	// view falls back to ErrManagerUnavailable so the frontend renders
+	// an empty state.
+	a.corpusMgr = newCorpusManager(c, embedder)
+	a.corpusAPI = corpusview.New(a.corpusMgr)
 
 	a.bindings = NewBindings(a)
 	if a.settingsImpl != nil {
@@ -1078,6 +1090,60 @@ func newEmbedder(_ *core.Core, store personal.Store) corememory.Embedder {
 	return corememory.NoopEmbedder{}
 }
 
+// newCorpusManager wires the corpora subsystem against the chassis's
+// storage + DataDir + the same embedder the memory retriever uses.
+// Returns nil when c lacks a real storage handle (test path) so the
+// rpc view surfaces ErrManagerUnavailable.
+//
+// The corpus.Embedder seam mirrors core/memory.Embedder shape so the
+// adapter is trivial; embedding model parity matters because the
+// vector index dimensions must align across the two subsystems if a
+// future "memory pulls from corpora" path lands.
+func newCorpusManager(c *core.Core, embedder corememory.Embedder) *corecorpus.Manager {
+	if c == nil || c.DataDir() == "" {
+		return nil
+	}
+	store := c.Storage()
+	if store == nil {
+		return nil
+	}
+	var corpusEmb corecorpus.Embedder
+	if embedder != nil {
+		if _, ok := embedder.(corememory.NoopEmbedder); !ok {
+			corpusEmb = &corpusEmbedderAdapter{inner: embedder}
+		}
+	}
+	return corecorpus.NewManager(corecorpus.NewStorageDB(store), c.DataDir(), corpusEmb)
+}
+
+// corpusEmbedderAdapter bridges core/memory.Embedder onto the narrower
+// corpus.Embedder seam. The two interfaces share the Embed signature;
+// keeping them disjoint avoids a corpus -> memory import edge.
+type corpusEmbedderAdapter struct {
+	inner corememory.Embedder
+}
+
+func (a *corpusEmbedderAdapter) Dimensions() int {
+	if a == nil || a.inner == nil {
+		return 0
+	}
+	return a.inner.Dimensions()
+}
+
+func (a *corpusEmbedderAdapter) Embed(ctx context.Context, texts []string) ([][]float32, error) {
+	if a == nil || a.inner == nil {
+		return nil, corecorpus.ErrEmbedderUnavailable
+	}
+	vecs, err := a.inner.Embed(ctx, texts)
+	if err != nil {
+		if errors.Is(err, corememory.ErrEmbedderUnavailable) {
+			return nil, corecorpus.ErrEmbedderUnavailable
+		}
+		return nil, err
+	}
+	return vecs, nil
+}
+
 // newHooksStack constructs a hooks.Runner with the memory builtins
 // preregistered and returns the runner alongside the registry +
 // builtins so the hooksview surface can list / mutate hooks against
@@ -1607,6 +1673,14 @@ func (a *API) Slash() slashview.SlashAPI {
 		return slashview.New(nil)
 	}
 	return a.slashAPI
+}
+func (a *API) Corpus() corpusview.CorpusAPI {
+	if a.corpusAPI == nil {
+		// nil-manager surface — methods return ErrManagerUnavailable
+		// so the frontend renders the empty state.
+		return corpusview.New(nil)
+	}
+	return a.corpusAPI
 }
 
 // Bindings returns the slice of Wails-bound objects. The Bindings struct
