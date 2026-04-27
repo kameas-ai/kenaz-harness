@@ -1,0 +1,8 @@
+# Invalid: graph declares no entrypoints. Validator rejects.
+spec_version: "1"
+id: "invalid_no_entrypoint"
+nodes:
+  - id: n
+    kind: llm
+    attrs:
+      model: m

@@ -1,0 +1,8 @@
+# Invalid: a node carrying an unrecognised kind. Validator rejects.
+spec_version: "1"
+id: "invalid_unknown_kind"
+entrypoints:
+  - bogus
+nodes:
+  - id: bogus
+    kind: not_a_real_kind

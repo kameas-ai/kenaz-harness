@@ -1,0 +1,13 @@
+# Invalid: max_tokens_per_run is `int`-typed but the override supplies a
+# string. Validator rejects.
+spec_version: "1"
+id: "invalid_dial_type"
+entrypoints:
+  - n
+dial_overrides:
+  max_tokens_per_run: "lots"
+nodes:
+  - id: n
+    kind: llm
+    attrs:
+      model: m

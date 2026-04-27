@@ -1,0 +1,63 @@
+# Branching v1 example: fork-with-compact-handoff + compact-summary-merge.
+#
+# Demonstrates FR-033 (compact-handoff fork) and FR-034 (compact-summary
+# merge) as a graph topology. Real ForkNode/MergeNode impls land in WP08;
+# WP01 only validates the schema.
+spec_version: "1"
+id: "branch_v1_simple"
+name: "Simple fork + summarize-merge"
+description: |
+  Trunk runs an LLMNode, branches off into a child run on a smaller
+  recommended model, and merges the branch's output back into the
+  trunk via summarize_append.
+entrypoints:
+  - trunk_question
+nodes:
+  - id: trunk_question
+    kind: llm
+    title: "Trunk — first question"
+    attrs:
+      model: "claude-sonnet"
+      max_tokens: 1024
+      stream_to_chat: true
+  - id: spawn_branch
+    kind: fork
+    title: "Spawn a child branch"
+    attrs:
+      title: "look up dep version"
+      model_override: "claude-haiku"
+  - id: branch_lookup
+    kind: llm
+    title: "Branch — quick lookup"
+    inputs:
+      - { name: messages, type: messages }   # not required: kernel seeds via fork compaction
+    attrs:
+      model: "claude-haiku"
+      max_tokens: 512
+  - id: rejoin
+    kind: merge
+    title: "Merge branch back as a one-line summary"
+    inputs:
+      - { name: branch, type: branch_id, required: true }
+      - { name: branch_output, type: messages }
+    outputs:
+      - { name: merged, type: messages }
+    attrs:
+      branch_id: "<filled at fork-time>"
+      mode: summarize_append
+  - id: trunk_continue
+    kind: llm
+    title: "Trunk — continue with summary"
+    attrs:
+      model: "claude-sonnet"
+      max_tokens: 1024
+      stream_to_chat: true
+edges:
+  - from: { node: trunk_question, port: response }
+    to:   { node: spawn_branch, port: parent }
+  - from: { node: spawn_branch, port: branch_id }
+    to:   { node: rejoin, port: branch }
+  - from: { node: branch_lookup, port: response }
+    to:   { node: rejoin, port: branch_output }
+  - from: { node: rejoin, port: merged }
+    to:   { node: trunk_continue, port: messages }

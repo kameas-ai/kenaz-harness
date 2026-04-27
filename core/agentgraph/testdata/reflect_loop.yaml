@@ -1,0 +1,55 @@
+# ReflectNode + ReviewNode iterative refinement (FR-008 + FR-009 + US6 + US7).
+#
+# An LLMNode produces a draft → ReflectNode critiques → if severity is
+# high we loop back to revise → ReviewNode runs a final reviewer pass
+# bounded at 3 iterations. The LoopNode binds the reflect cycle.
+spec_version: "1"
+id: "reflect_loop"
+name: "Reflect + Review refinement loop"
+description: |
+  Iterative refine: draft → critique → revise (loop, capped) → review.
+entrypoints:
+  - draft
+nodes:
+  - id: draft
+    kind: llm
+    title: "Draft v1"
+    attrs:
+      model: "claude-haiku"
+      max_tokens: 2048
+  - id: critique
+    kind: reflect
+    title: "Critique current draft"
+    attrs:
+      severity_threshold: medium
+      include_trace: true
+      max_iterations: 3
+  - id: revise
+    kind: llm
+    title: "Revise draft"
+    attrs:
+      model: "claude-haiku"
+      max_tokens: 2048
+  - id: refine_loop
+    kind: loop
+    title: "Bounded reflect+revise loop"
+    attrs:
+      max_iterations: 3
+      condition: "critique.severity > medium"
+      body:
+        - critique
+        - revise
+  - id: final_review
+    kind: review
+    title: "Final reviewer pass"
+    attrs:
+      upstream_node: revise
+      max_iterations: 3
+      on_cap_hit: halt
+edges:
+  - from: { node: draft, port: response }
+    to:   { node: critique, port: draft }
+  - from: { node: critique, port: revision }
+    to:   { node: revise, port: messages }
+  - from: { node: revise, port: response }
+    to:   { node: final_review, port: draft }

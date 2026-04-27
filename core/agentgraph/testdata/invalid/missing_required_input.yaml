@@ -1,0 +1,16 @@
+# Invalid: an LLMNode that is not the entrypoint has its required
+# `messages` input port left disconnected.
+spec_version: "1"
+id: "invalid_missing_required_input"
+entrypoints:
+  - history
+nodes:
+  - id: history
+    kind: history_read
+    attrs:
+      n: 0
+  - id: assistant
+    kind: llm
+    attrs:
+      model: m
+edges: []

@@ -1,0 +1,10 @@
+# Invalid: entrypoint references a node id that does not exist.
+spec_version: "1"
+id: "invalid_phantom_entrypoint"
+entrypoints:
+  - phantom
+nodes:
+  - id: real
+    kind: llm
+    attrs:
+      model: m

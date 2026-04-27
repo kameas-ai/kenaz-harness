@@ -1,0 +1,14 @@
+# Invalid: ReviewNode without max_iterations. FR-009 / FR-047 mandate.
+spec_version: "1"
+id: "invalid_unbounded_review"
+entrypoints:
+  - upstream
+nodes:
+  - id: upstream
+    kind: llm
+    attrs:
+      model: m
+  - id: bad_review
+    kind: review
+    attrs:
+      upstream_node: upstream

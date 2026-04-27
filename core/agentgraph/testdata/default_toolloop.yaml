@@ -1,0 +1,75 @@
+# Default graph: reproduces core/toolloop semantics as a typed topology.
+#
+# This is the FR-003 "default graph" baseline — when a session has no
+# explicit graph attached, the kernel runs this. The behaviour mirrors
+# core/toolloop/loop.go: an LLMNode emits a turn, any tool_use calls
+# fan out through ToolNode dispatches, results thread back into the
+# next LLMNode invocation, and a LoopNode binds the whole pump with
+# a hard iteration cap (DefaultMaxIter = 8 in toolloop). The Branch
+# checks the assistant's finish_reason and exits when it is no longer
+# "tool_use".
+spec_version: "1"
+id: "toolloop_default"
+name: "Default toolloop graph"
+description: |
+  Equivalent to core/toolloop/. Sessions without an explicit graph
+  attach this at run-start (FR-003). The LoopNode bounds the
+  re-pump to DefaultMaxIter (8) iterations.
+entrypoints:
+  - "history_in"
+budget:
+  max_llm_calls_per_run: 100
+  max_tool_calls_per_run: 200
+  max_tokens_per_run: 200000
+nodes:
+  - id: history_in
+    kind: history_read
+    title: "Load conversation history"
+    attrs:
+      n: 0          # 0 = full history
+  - id: assistant_turn
+    kind: llm
+    title: "Assistant turn (streamed)"
+    attrs:
+      model: "default"      # placeholder; resolved from session profile
+      stream_to_chat: true
+      max_tokens: 4096
+  - id: dispatch_tools
+    kind: parallel
+    title: "Fan-out tool calls"
+    attrs:
+      targets:
+        - tool_call
+      max_concurrency: 4
+  - id: tool_call
+    kind: tool
+    title: "One tool call"
+    attrs:
+      name: "<resolved at run-time>"
+  - id: continue_check
+    kind: branch
+    title: "Did the model emit more tool_use?"
+    attrs:
+      condition: "finish_reason == \"tool_use\""
+      next_true: pump_loop
+      next_false: terminal
+  - id: pump_loop
+    kind: loop
+    title: "Re-pump until non-tool-use"
+    attrs:
+      max_iterations: 8
+      body:
+        - assistant_turn
+        - dispatch_tools
+        - continue_check
+  - id: terminal
+    kind: trace_write
+    title: "Mark run complete"
+    attrs:
+      severity: info
+      message: "toolloop terminal turn reached"
+edges:
+  - from: { node: history_in, port: messages }
+    to:   { node: assistant_turn, port: messages }
+  - from: { node: assistant_turn, port: response }
+    to:   { node: continue_check, port: in }

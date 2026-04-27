@@ -34,3 +34,4 @@ kitty-specs/
 .kittify/missions/__pycache__/
 .kittify/runtime/
 .kittify/workspaces/
+/kitty-specs/*

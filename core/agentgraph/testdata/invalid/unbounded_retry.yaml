@@ -1,0 +1,15 @@
+# Invalid: RetryNode without max_attempts. Validator must reject (FR-016).
+spec_version: "1"
+id: "invalid_unbounded_retry"
+entrypoints:
+  - body_node
+nodes:
+  - id: body_node
+    kind: tool
+    attrs:
+      name: example__noop
+  - id: bad_retry
+    kind: retry
+    attrs:
+      body:
+        - body_node

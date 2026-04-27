@@ -1,0 +1,13 @@
+# Invalid: graph declares a dial override under a name the validator
+# does not recognise.
+spec_version: "1"
+id: "invalid_unknown_dial"
+entrypoints:
+  - n
+dial_overrides:
+  totally_made_up_dial: 99
+nodes:
+  - id: n
+    kind: llm
+    attrs:
+      model: m

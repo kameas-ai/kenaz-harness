@@ -1,0 +1,21 @@
+# Invalid: edge wires `bool` source into `messages` destination port.
+spec_version: "1"
+id: "invalid_port_type"
+entrypoints:
+  - a
+nodes:
+  - id: a
+    kind: branch
+    outputs:
+      - { name: out, type: bool }
+    attrs:
+      condition: "x == 1"
+      next_true: b
+      next_false: b
+  - id: b
+    kind: llm
+    attrs:
+      model: m
+edges:
+  - from: { node: a, port: out }
+    to:   { node: b, port: messages }

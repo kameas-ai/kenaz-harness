@@ -1,0 +1,16 @@
+# Invalid: a LoopNode body references a node id that does not exist.
+spec_version: "1"
+id: "invalid_loop_body_unknown"
+entrypoints:
+  - real
+nodes:
+  - id: real
+    kind: llm
+    attrs:
+      model: m
+  - id: bad_loop
+    kind: loop
+    attrs:
+      max_iterations: 3
+      body:
+        - phantom

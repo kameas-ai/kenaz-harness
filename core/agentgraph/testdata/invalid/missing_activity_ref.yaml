@@ -1,0 +1,11 @@
+# Invalid: ActivityNode references an activity ID the registry does not know.
+# Use WithActivityRegistry(strict registry) when validating to surface this.
+spec_version: "1"
+id: "invalid_missing_activity"
+entrypoints:
+  - act
+nodes:
+  - id: act
+    kind: activity
+    attrs:
+      activity_id: "ghost.activity"

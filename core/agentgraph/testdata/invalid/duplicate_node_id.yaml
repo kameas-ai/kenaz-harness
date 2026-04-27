@@ -1,0 +1,14 @@
+# Invalid: two nodes share the same id. Validator rejects.
+spec_version: "1"
+id: "invalid_dup_id"
+entrypoints:
+  - dup
+nodes:
+  - id: dup
+    kind: llm
+    attrs:
+      model: m
+  - id: dup
+    kind: tool
+    attrs:
+      name: srv__t

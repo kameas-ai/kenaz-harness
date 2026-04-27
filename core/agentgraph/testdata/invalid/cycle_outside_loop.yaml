@@ -1,0 +1,19 @@
+# Invalid: A → B → A cycle outside any loop body. Validator must reject.
+spec_version: "1"
+id: "invalid_cycle"
+entrypoints:
+  - a
+nodes:
+  - id: a
+    kind: llm
+    attrs:
+      model: m
+  - id: b
+    kind: llm
+    attrs:
+      model: m
+edges:
+  - from: { node: a, port: response }
+    to:   { node: b, port: messages }
+  - from: { node: b, port: response }
+    to:   { node: a, port: messages }

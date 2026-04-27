@@ -1,0 +1,15 @@
+# Invalid: LoopNode without max_iterations. Validator must reject (FR-015 / NFR-004).
+spec_version: "1"
+id: "invalid_unbounded_loop"
+entrypoints:
+  - body_node
+nodes:
+  - id: body_node
+    kind: llm
+    attrs:
+      model: m
+  - id: bad_loop
+    kind: loop
+    attrs:
+      body:
+        - body_node

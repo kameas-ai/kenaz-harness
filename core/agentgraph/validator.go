@@ -1,0 +1,621 @@
+package agentgraph
+
+import (
+	"errors"
+	"fmt"
+	"strings"
+)
+
+// KnownDials is the canonical list of dial names the validator accepts
+// in graph- and node-scoped DialOverrides. Authors can introduce new
+// dials in later WPs by extending this set; WP01 enumerates the dials
+// the spec already documents in §4.9.
+//
+// The map value is a tiny "kind" descriptor used to validate the type
+// of a supplied override (`int`, `float`, `bool`, `string`).
+var KnownDials = map[string]dialSpec{
+	// Budget dials (FR-048).
+	"max_tokens_per_run":             {kind: "int"},
+	"max_wallclock_per_run_seconds":  {kind: "int"},
+	"max_llm_calls_per_run":          {kind: "int"},
+	"max_tool_calls_per_run":         {kind: "int"},
+	"max_cost_usd_per_run":           {kind: "float"},
+	// Behavior dials (FR-049).
+	"plan_verbosity":           {kind: "string", enum: []string{"terse", "standard", "verbose"}},
+	"plan_threshold":           {kind: "float"},
+	"ask_threshold":            {kind: "float"},
+	"reflect_frequency":        {kind: "string", enum: []string{"never", "on_demand", "every_n_turns"}},
+	"review_iterations_cap":    {kind: "int"},
+	"compaction_aggressiveness": {kind: "string", enum: []string{"gentle", "default", "aggressive"}},
+	"escalation_enabled":       {kind: "bool"},
+	// Compaction-subsystem dials (FR-041..FR-045).
+	"pre_call_threshold":        {kind: "float"},
+	"tool_result_max_bytes":     {kind: "int"},
+	"compaction_recursion_max":  {kind: "int"},
+	// Memory hooks (FR-027).
+	"memory_hooks_enabled":  {kind: "bool"},
+	// Concurrency (FR-060).
+	"max_in_flight_nodes": {kind: "int"},
+}
+
+type dialSpec struct {
+	kind string   // "int" | "float" | "bool" | "string"
+	enum []string // optional whitelist for string-kind dials
+}
+
+// ActivityRegistry is the lookup hook the validator uses to resolve
+// `ActivityNode.activity_id` references. WP01 ships the
+// nilActivityRegistry default which accepts every reference; WP05
+// installs the real registry. Tests can supply a fake registry that
+// rejects/accepts specific IDs.
+type ActivityRegistry interface {
+	HasActivity(activityID string) bool
+}
+
+// nilActivityRegistry is the default — always reports "yes" so WP01
+// validation passes for any activity reference. The validator only
+// surfaces an error when the user installs a stricter registry.
+type nilActivityRegistry struct{}
+
+func (nilActivityRegistry) HasActivity(string) bool { return true }
+
+// ValidateOption tunes Validate's strictness.
+type ValidateOption func(*validateConfig)
+
+type validateConfig struct {
+	activities ActivityRegistry
+	// extraDials are author-specific dial names accepted on top of
+	// KnownDials. Empty in WP01.
+	extraDials map[string]dialSpec
+}
+
+// WithActivityRegistry plugs in a custom registry. Use it in tests
+// when you want the validator to reject unknown activity references.
+func WithActivityRegistry(r ActivityRegistry) ValidateOption {
+	return func(c *validateConfig) { c.activities = r }
+}
+
+// WithExtraDials extends the recognised dial set for the duration of a
+// single Validate call. Useful for tests pinning dial behaviour.
+func WithExtraDials(d map[string]dialSpec) ValidateOption {
+	return func(c *validateConfig) {
+		if c.extraDials == nil {
+			c.extraDials = make(map[string]dialSpec, len(d))
+		}
+		for k, v := range d {
+			c.extraDials[k] = v
+		}
+	}
+}
+
+// ValidationError aggregates one or more violations. Each rule reports
+// its own message; the validator collects them rather than failing
+// fast so authors see every problem in one round-trip.
+type ValidationError struct {
+	Issues []string
+}
+
+// Error joins the issues into a single message. The concrete shape is
+// stable: each issue starts with a rule prefix (`schema:`, `cycle:`,
+// `port:`, `dial:`, `activity:`).
+func (e *ValidationError) Error() string {
+	if len(e.Issues) == 0 {
+		return "agentgraph: validation failed (no issues recorded)"
+	}
+	return "agentgraph: validation failed:\n  - " + strings.Join(e.Issues, "\n  - ")
+}
+
+// Has returns true when one of the issues contains substr — used by
+// table-driven tests to assert specific rules fired without coupling
+// to the entire error surface.
+func (e *ValidationError) Has(substr string) bool {
+	if e == nil {
+		return false
+	}
+	for _, m := range e.Issues {
+		if strings.Contains(m, substr) {
+			return true
+		}
+	}
+	return false
+}
+
+// Validate runs every WP01 rule against the spec and returns nil on
+// success or a *ValidationError on failure. Callers should call this
+// at load time before handing the graph to the kernel.
+func Validate(g Graph, opts ...ValidateOption) error {
+	cfg := validateConfig{activities: nilActivityRegistry{}}
+	for _, o := range opts {
+		o(&cfg)
+	}
+
+	v := &validator{cfg: cfg, errs: &ValidationError{}}
+	v.checkSpecVersion(g)
+	v.checkBasics(g)
+	idx := v.indexNodes(g)
+	v.checkAttrs(g)
+	v.checkPorts(g, idx)
+	v.checkEdges(g, idx)
+	v.checkEntrypoints(g, idx)
+	v.checkDialOverrides(g)
+	v.checkActivityRefs(g)
+	v.checkLoopBodies(g, idx)
+	v.checkReviewBodies(g, idx)
+	v.checkAcyclicityOutsideLoops(g, idx)
+
+	if len(v.errs.Issues) == 0 {
+		return nil
+	}
+	return v.errs
+}
+
+type validator struct {
+	cfg  validateConfig
+	errs *ValidationError
+}
+
+func (v *validator) addf(format string, args ...any) {
+	v.errs.Issues = append(v.errs.Issues, fmt.Sprintf(format, args...))
+}
+
+func (v *validator) checkSpecVersion(g Graph) {
+	if g.SpecVersion == "" {
+		v.addf("schema: spec_version is required (current = %q)", SpecVersion)
+		return
+	}
+	if g.SpecVersion != SpecVersion {
+		v.addf("schema: unsupported spec_version %q (want %q)", g.SpecVersion, SpecVersion)
+	}
+}
+
+func (v *validator) checkBasics(g Graph) {
+	if g.ID == "" {
+		v.addf("schema: graph id is required")
+	}
+	if len(g.Nodes) == 0 {
+		v.addf("schema: graph must declare at least one node")
+	}
+}
+
+// indexNodes builds the lookup map and reports duplicate IDs.
+func (v *validator) indexNodes(g Graph) map[string]*Node {
+	out := make(map[string]*Node, len(g.Nodes))
+	for i := range g.Nodes {
+		n := &g.Nodes[i]
+		if n.ID == "" {
+			v.addf("schema: node #%d has empty id", i)
+			continue
+		}
+		if !n.Kind.IsKnown() {
+			v.addf("schema: node %q has unknown kind %q", n.ID, n.Kind)
+		}
+		if _, dup := out[n.ID]; dup {
+			v.addf("schema: duplicate node id %q", n.ID)
+			continue
+		}
+		out[n.ID] = n
+	}
+	return out
+}
+
+// checkAttrs invokes each node's per-kind Validate.
+func (v *validator) checkAttrs(g Graph) {
+	for i := range g.Nodes {
+		n := &g.Nodes[i]
+		if n.Attrs == nil {
+			// Loader normally fills a zero-valued Attrs; if a hand-built
+			// Graph omitted it we substitute the default and re-validate.
+			defaults := defaultAttrsFor(n.Kind)
+			if defaults == nil {
+				continue
+			}
+			if err := defaults.Validate(); err != nil {
+				v.addf("schema: node %q (%s): %v", n.ID, n.Kind, err)
+			}
+			continue
+		}
+		if err := n.Attrs.Validate(); err != nil {
+			v.addf("schema: node %q (%s): %v", n.ID, n.Kind, err)
+		}
+	}
+}
+
+// checkPorts ensures every node has a port surface (default or
+// explicit) and detects duplicate port names.
+func (v *validator) checkPorts(g Graph, _ map[string]*Node) {
+	for i := range g.Nodes {
+		n := &g.Nodes[i]
+		ins, outs := portSurface(n)
+		if err := checkPortNames(ins); err != nil {
+			v.addf("port: node %q inputs: %v", n.ID, err)
+		}
+		if err := checkPortNames(outs); err != nil {
+			v.addf("port: node %q outputs: %v", n.ID, err)
+		}
+	}
+}
+
+// portSurface returns the effective input/output ports for a node:
+// explicit if listed, otherwise the per-kind defaults.
+func portSurface(n *Node) (inputs, outputs []Port) {
+	defIns, defOuts := defaultPortsFor(n.Kind)
+	if len(n.Inputs) > 0 {
+		inputs = n.Inputs
+	} else {
+		inputs = defIns
+	}
+	if len(n.Outputs) > 0 {
+		outputs = n.Outputs
+	} else {
+		outputs = defOuts
+	}
+	return
+}
+
+func checkPortNames(ports []Port) error {
+	seen := make(map[string]struct{}, len(ports))
+	for _, p := range ports {
+		if p.Name == "" {
+			return errors.New("empty port name")
+		}
+		if p.Type == "" {
+			return fmt.Errorf("port %q has empty type", p.Name)
+		}
+		if _, dup := seen[p.Name]; dup {
+			return fmt.Errorf("duplicate port name %q", p.Name)
+		}
+		seen[p.Name] = struct{}{}
+	}
+	return nil
+}
+
+// checkEdges validates every edge: endpoints exist, ports exist on the
+// referenced nodes, types are compatible, required input ports are
+// reached.
+func (v *validator) checkEdges(g Graph, idx map[string]*Node) {
+	type sig struct {
+		nodeID string
+		port   string
+	}
+	inputsCovered := make(map[sig]struct{})
+	for ei, e := range g.Edges {
+		fromNode, fromOK := idx[e.From.Node]
+		toNode, toOK := idx[e.To.Node]
+		if !fromOK {
+			v.addf("port: edge #%d: from-node %q does not exist", ei, e.From.Node)
+			continue
+		}
+		if !toOK {
+			v.addf("port: edge #%d: to-node %q does not exist", ei, e.To.Node)
+			continue
+		}
+		_, fromOuts := portSurface(fromNode)
+		toIns, _ := portSurface(toNode)
+		fromPort, fromPortOK := lookupPort(fromOuts, e.From.Port)
+		toPort, toPortOK := lookupPort(toIns, e.To.Port)
+		if !fromPortOK {
+			v.addf("port: edge #%d: node %q has no output port %q", ei, e.From.Node, e.From.Port)
+			continue
+		}
+		if !toPortOK {
+			v.addf("port: edge #%d: node %q has no input port %q", ei, e.To.Node, e.To.Port)
+			continue
+		}
+		if !fromPort.Type.Compatible(toPort.Type) {
+			v.addf("port: edge #%d: type mismatch %s.%s(%s) → %s.%s(%s)",
+				ei,
+				e.From.Node, e.From.Port, fromPort.Type,
+				e.To.Node, e.To.Port, toPort.Type,
+			)
+		}
+		inputsCovered[sig{nodeID: e.To.Node, port: e.To.Port}] = struct{}{}
+	}
+	// Required input ports must be reached by some edge — unless the
+	// node is an entrypoint (then the kernel feeds the initial value).
+	entrypoints := make(map[string]struct{}, len(g.Entrypoints))
+	for _, ep := range g.Entrypoints {
+		entrypoints[ep] = struct{}{}
+	}
+	for i := range g.Nodes {
+		n := &g.Nodes[i]
+		if _, isEntry := entrypoints[n.ID]; isEntry {
+			continue
+		}
+		ins, _ := portSurface(n)
+		for _, p := range ins {
+			if !p.Required {
+				continue
+			}
+			if _, ok := inputsCovered[sig{nodeID: n.ID, port: p.Name}]; !ok {
+				v.addf("port: required input %s.%s is not connected", n.ID, p.Name)
+			}
+		}
+	}
+}
+
+func lookupPort(ports []Port, name string) (Port, bool) {
+	for _, p := range ports {
+		if p.Name == name {
+			return p, true
+		}
+	}
+	return Port{}, false
+}
+
+// checkEntrypoints ensures the graph names at least one entrypoint and
+// every entrypoint refers to an existing node.
+func (v *validator) checkEntrypoints(g Graph, idx map[string]*Node) {
+	if len(g.Entrypoints) == 0 {
+		v.addf("schema: graph must declare at least one entrypoint")
+		return
+	}
+	seen := make(map[string]struct{}, len(g.Entrypoints))
+	for _, ep := range g.Entrypoints {
+		if ep == "" {
+			v.addf("schema: empty entrypoint id")
+			continue
+		}
+		if _, dup := seen[ep]; dup {
+			v.addf("schema: duplicate entrypoint %q", ep)
+			continue
+		}
+		seen[ep] = struct{}{}
+		if _, ok := idx[ep]; !ok {
+			v.addf("schema: entrypoint %q does not match any node", ep)
+		}
+	}
+}
+
+// checkDialOverrides validates graph-scope and per-node dial keys +
+// value types.
+func (v *validator) checkDialOverrides(g Graph) {
+	v.validateDialMap("graph", g.DialOverrides)
+	for i := range g.Nodes {
+		n := &g.Nodes[i]
+		if len(n.DialOverrides) == 0 {
+			continue
+		}
+		v.validateDialMap("node "+n.ID, n.DialOverrides)
+	}
+}
+
+func (v *validator) validateDialMap(scope string, dials map[string]any) {
+	for k, raw := range dials {
+		spec, ok := KnownDials[k]
+		if !ok {
+			if extra, present := v.cfg.extraDials[k]; present {
+				spec, ok = extra, true
+			}
+		}
+		if !ok {
+			v.addf("dial: %s: unknown dial %q", scope, k)
+			continue
+		}
+		if err := dialValueOK(spec, raw); err != nil {
+			v.addf("dial: %s: dial %q: %v", scope, k, err)
+		}
+	}
+}
+
+func dialValueOK(spec dialSpec, raw any) error {
+	switch spec.kind {
+	case "int":
+		switch v := raw.(type) {
+		case int, int32, int64:
+			return nil
+		case float64:
+			// JSON / YAML lossily promote ints to float64; accept whole
+			// numbers, reject fractional.
+			if v == float64(int64(v)) {
+				return nil
+			}
+			return fmt.Errorf("expected int, got fractional %.3f", v)
+		}
+		return fmt.Errorf("expected int, got %T", raw)
+	case "float":
+		switch raw.(type) {
+		case float32, float64, int, int32, int64:
+			return nil
+		}
+		return fmt.Errorf("expected number, got %T", raw)
+	case "bool":
+		if _, ok := raw.(bool); ok {
+			return nil
+		}
+		return fmt.Errorf("expected bool, got %T", raw)
+	case "string":
+		s, ok := raw.(string)
+		if !ok {
+			return fmt.Errorf("expected string, got %T", raw)
+		}
+		if len(spec.enum) == 0 {
+			return nil
+		}
+		for _, allowed := range spec.enum {
+			if s == allowed {
+				return nil
+			}
+		}
+		return fmt.Errorf("value %q not in {%s}", s, strings.Join(spec.enum, "|"))
+	}
+	return fmt.Errorf("unrecognised dial kind %q", spec.kind)
+}
+
+// checkActivityRefs walks every ActivityNode and asks the registry to
+// confirm the activity exists.
+func (v *validator) checkActivityRefs(g Graph) {
+	for i := range g.Nodes {
+		n := &g.Nodes[i]
+		if n.Kind != NodeKindActivity {
+			continue
+		}
+		attrs, ok := n.Attrs.(ActivityAttrs)
+		if !ok {
+			// Schema check already flagged a malformed payload.
+			continue
+		}
+		if attrs.ActivityID == "" {
+			continue // schema-check already reported missing id
+		}
+		if !v.cfg.activities.HasActivity(attrs.ActivityID) {
+			v.addf("activity: node %q references unknown activity %q",
+				n.ID, attrs.ActivityID)
+		}
+	}
+}
+
+// checkLoopBodies ensures Loop and Retry bodies refer to declared
+// nodes and carry their mandatory caps. The cap presence is enforced
+// per-attrs Validate() too — but we double-check here so authors who
+// hand-construct attrs in Go cannot bypass it via a zero-value max.
+func (v *validator) checkLoopBodies(g Graph, idx map[string]*Node) {
+	for i := range g.Nodes {
+		n := &g.Nodes[i]
+		switch n.Kind {
+		case NodeKindLoop:
+			a, ok := n.Attrs.(LoopAttrs)
+			if !ok {
+				continue
+			}
+			if a.MaxIterations <= 0 {
+				v.addf("schema: node %q (loop): max_iterations must be > 0 (NFR-004)", n.ID)
+			}
+			for _, b := range a.Body {
+				if _, ok := idx[b]; !ok {
+					v.addf("schema: node %q (loop): body references unknown node %q", n.ID, b)
+				}
+			}
+		case NodeKindRetry:
+			a, ok := n.Attrs.(RetryAttrs)
+			if !ok {
+				continue
+			}
+			if a.MaxAttempts <= 0 {
+				v.addf("schema: node %q (retry): max_attempts must be > 0 (NFR-004)", n.ID)
+			}
+			for _, b := range a.Body {
+				if _, ok := idx[b]; !ok {
+					v.addf("schema: node %q (retry): body references unknown node %q", n.ID, b)
+				}
+			}
+		}
+	}
+}
+
+// checkReviewBodies enforces that every ReviewNode's upstream_node
+// reference resolves and that its mandatory cap is positive (the per-
+// attrs Validate also enforces this; double-check parallels the loop
+// rule above).
+func (v *validator) checkReviewBodies(g Graph, idx map[string]*Node) {
+	for i := range g.Nodes {
+		n := &g.Nodes[i]
+		if n.Kind != NodeKindReview {
+			continue
+		}
+		a, ok := n.Attrs.(ReviewAttrs)
+		if !ok {
+			continue
+		}
+		if a.MaxIterations <= 0 {
+			v.addf("schema: node %q (review): max_iterations must be > 0 (FR-009)", n.ID)
+		}
+		if a.UpstreamNode != "" {
+			if _, ok := idx[a.UpstreamNode]; !ok {
+				v.addf("schema: node %q (review): upstream_node %q does not exist", n.ID, a.UpstreamNode)
+			}
+		}
+	}
+}
+
+// checkAcyclicityOutsideLoops runs BFS over the graph treating
+// Loop/Retry/Review bodies as opaque (their internal cycles are
+// allowed and bounded by mandatory caps). FR-002 / NFR-004.
+func (v *validator) checkAcyclicityOutsideLoops(g Graph, idx map[string]*Node) {
+	// Build the set of node IDs that live INSIDE a Loop / Retry / Review
+	// body. We hide them from the outer graph during cycle detection —
+	// the container node represents the body to the outside world, and
+	// the inside is allowed to cycle (the container's mandatory
+	// max_iterations / max_attempts cap bounds it).
+	inside := make(map[string]struct{})
+	for i := range g.Nodes {
+		n := &g.Nodes[i]
+		switch n.Kind {
+		case NodeKindLoop:
+			if a, ok := n.Attrs.(LoopAttrs); ok {
+				for _, b := range a.Body {
+					inside[b] = struct{}{}
+				}
+			}
+		case NodeKindRetry:
+			if a, ok := n.Attrs.(RetryAttrs); ok {
+				for _, b := range a.Body {
+					inside[b] = struct{}{}
+				}
+			}
+		case NodeKindReview:
+			// A ReviewNode re-runs its upstream_node on a `fail` verdict
+			// (FR-009). Treat the upstream as inside the review's body
+			// so a feedback edge from the review's output back into the
+			// upstream does not register as an outside-loop cycle.
+			if a, ok := n.Attrs.(ReviewAttrs); ok && a.UpstreamNode != "" {
+				inside[a.UpstreamNode] = struct{}{}
+			}
+		}
+	}
+
+	// Build an adjacency list over the OUTER subgraph (skip nodes
+	// inside loop bodies). Edges that originate or terminate inside a
+	// loop body are also skipped — those are the kernel's job to
+	// resolve at run-time, not the validator's.
+	adj := make(map[string][]string)
+	for _, e := range g.Edges {
+		if _, hidden := inside[e.From.Node]; hidden {
+			continue
+		}
+		if _, hidden := inside[e.To.Node]; hidden {
+			continue
+		}
+		adj[e.From.Node] = append(adj[e.From.Node], e.To.Node)
+	}
+	// Tarjan-style DFS for cycle detection.
+	const (
+		white = 0
+		gray  = 1
+		black = 2
+	)
+	colour := make(map[string]int, len(idx))
+	for id := range idx {
+		colour[id] = white
+	}
+	var dfs func(string, []string) bool
+	dfs = func(u string, path []string) bool {
+		if _, hidden := inside[u]; hidden {
+			return false
+		}
+		colour[u] = gray
+		path = append(path, u)
+		for _, w := range adj[u] {
+			switch colour[w] {
+			case gray:
+				cycle := append([]string(nil), path...)
+				cycle = append(cycle, w)
+				v.addf("cycle: outside-loop cycle detected: %s", strings.Join(cycle, " → "))
+				return true
+			case white:
+				if dfs(w, path) {
+					return true
+				}
+			}
+		}
+		colour[u] = black
+		return false
+	}
+	// Visit every node so disconnected sub-DAGs still get checked.
+	for id := range idx {
+		if colour[id] == white {
+			if dfs(id, nil) {
+				return // one cycle is enough; report and stop.
+			}
+		}
+	}
+}
