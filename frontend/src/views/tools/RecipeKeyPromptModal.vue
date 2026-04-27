@@ -70,6 +70,10 @@ const configValues = ref<Record<string, unknown>>({});
 const submitting = ref(false);
 const errorMsg = ref<string | null>(null);
 const inputsContainer = ref<HTMLElement | null>(null);
+// Hazard-recipe acknowledgment (recipes carrying a `warning` string).
+// The user must check this box before Install becomes clickable.
+const warningAck = ref(false);
+const hasWarning = computed(() => Boolean(props.recipe.warning));
 
 const configOptions = computed<readonly ConfigOption[]>(
   () => props.recipe.configOptions ?? [],
@@ -126,6 +130,7 @@ watch(
   (isOpen) => {
     if (isOpen) {
       resetForm();
+      warningAck.value = false;
       void nextTick(() => {
         const first = inputsContainer.value?.querySelector(
           'input[type="password"], input[type="text"]:not([data-testid^="dirpicker-edit"])',
@@ -164,7 +169,10 @@ const requiredConfigFilled = computed(() => {
 });
 
 const canSubmit = computed(
-  () => requiredEnvFilled.value && requiredConfigFilled.value,
+  () =>
+    requiredEnvFilled.value &&
+    requiredConfigFilled.value &&
+    (!hasWarning.value || warningAck.value),
 );
 
 const lastEnvName = computed(
@@ -321,6 +329,54 @@ function onKeydown(event: KeyboardEvent) {
           {{ recipe.description }}
         </p>
 
+        <!-- Hazard banner (recipes carrying a `warning` string) -->
+        <section
+          v-if="hasWarning"
+          class="rounded-sm border-2 border-signal-danger bg-signal-danger/10 px-3 py-3 space-y-2"
+          role="alert"
+          data-testid="recipe-modal-warning"
+        >
+          <div
+            class="flex items-center gap-2 text-[11px] uppercase tracking-[0.18em] font-semibold text-signal-danger"
+          >
+            <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+              <path d="M12 9v4M12 17h.01M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
+            </svg>
+            Hazard
+          </div>
+          <p
+            class="text-[12px] text-signal-danger leading-snug max-w-prose"
+            data-testid="recipe-modal-warning-text"
+          >
+            {{ recipe.warning }}
+          </p>
+          <div
+            v-if="recipe.recommendedPolicyTemplate"
+            class="text-[11px] text-ink-muted"
+            data-testid="recipe-modal-policy-pointer"
+          >
+            Recommended Cedar policy:
+            <code class="font-mono text-[11px] text-ink">{{ recipe.recommendedPolicyTemplate }}</code>
+            — copy this file from the harness install into
+            <code class="font-mono text-[11px] text-ink">&lt;DataDir&gt;/policy/</code>
+            before enabling.
+          </div>
+          <label
+            class="inline-flex items-start gap-2 cursor-pointer select-none mt-1"
+            data-testid="recipe-modal-warning-ack-label"
+          >
+            <input
+              v-model="warningAck"
+              type="checkbox"
+              class="accent-signal-danger w-4 h-4 mt-0.5"
+              data-testid="recipe-modal-warning-ack"
+            />
+            <span class="font-ui text-[12px] text-ink leading-snug">
+              I understand the risk and accept that the model will have the access described above.
+            </span>
+          </label>
+        </section>
+
         <!-- API Keys section -->
         <section
           v-if="hasEnvSection"
@@ -465,12 +521,17 @@ function onKeydown(event: KeyboardEvent) {
         </button>
         <button
           type="button"
-          class="rounded-sm border border-accent-hairline bg-surface-1 px-3 py-1 text-[12px] text-accent hover:bg-accent-glow disabled:opacity-50 disabled:cursor-not-allowed"
+          :class="[
+            'rounded-sm px-3 py-1 text-[12px] disabled:opacity-50 disabled:cursor-not-allowed',
+            hasWarning
+              ? 'border border-signal-danger bg-signal-danger/10 text-signal-danger hover:bg-signal-danger/20'
+              : 'border border-accent-hairline bg-surface-1 text-accent hover:bg-accent-glow',
+          ]"
           :disabled="!canSubmit || submitting"
           data-testid="recipe-key-modal-submit"
           @click="submit"
         >
-          {{ submitting ? 'Installing…' : 'Install' }}
+          {{ submitting ? 'Installing…' : hasWarning ? 'Install with risk' : 'Install' }}
         </button>
       </footer>
     </div>

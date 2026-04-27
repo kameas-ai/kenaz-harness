@@ -443,6 +443,8 @@ interface WireRecipe {
   sampling_policy?: { allowed: boolean; default: boolean };
   args_template?: string[];
   config_options?: WireConfigOption[];
+  warning?: string;
+  recommended_policy_template?: string;
 }
 
 interface WireRecipeStatus {
@@ -570,6 +572,8 @@ function adaptRecipe(w: WireRecipe): Recipe {
     docsUrl: w.docs_url || undefined,
     argsTemplate: w.args_template ? [...w.args_template] : undefined,
     configOptions,
+    warning: w.warning || undefined,
+    recommendedPolicyTemplate: w.recommended_policy_template || undefined,
   };
 }
 

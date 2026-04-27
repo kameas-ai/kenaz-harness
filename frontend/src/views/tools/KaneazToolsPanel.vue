@@ -163,9 +163,12 @@ function setRowError(id: string, msg: string | null) {
 function recipeNeedsModal(recipe: Recipe, keysPresent: boolean): boolean {
   // Recipes with declared ConfigOptions ALWAYS go through the modal so
   // the user can review / edit the directory list (or future
-  // boolean / string knobs). Recipes without ConfigOptions only need
-  // the modal when their env keys haven't been resolved yet.
+  // boolean / string knobs). Recipes carrying a Warning ALWAYS go
+  // through the modal so the user must explicitly confirm. Recipes
+  // without ConfigOptions/Warning only need the modal when their env
+  // keys haven't been resolved yet.
   if ((recipe.configOptions?.length ?? 0) > 0) return true;
+  if (recipe.warning) return true;
   return !keysPresent;
 }
 

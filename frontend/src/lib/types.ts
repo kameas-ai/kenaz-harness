@@ -810,6 +810,21 @@ export interface Recipe {
   docsUrl?: string;
   argsTemplate?: string[];
   configOptions?: ConfigOption[];
+  /**
+   * Optional hazard message rendered by the install modal in a stark
+   * red banner with an explicit confirmation checkbox. Set on recipes
+   * that grant elevated trust (e.g. `filesystem-full`, the unrestricted
+   * filesystem MCP). Empty / undefined for ordinary recipes.
+   */
+  warning?: string;
+  /**
+   * Optional filename (under `core/policy/cedar/policies/`) of a Cedar
+   * policy template the user is encouraged to install alongside this
+   * recipe. The install modal surfaces a "copy recommended policy"
+   * button when set; copying drops the file into
+   * `<DataDir>/policy/`. Pairs with `warning`.
+   */
+  recommendedPolicyTemplate?: string;
 }
 
 /**
