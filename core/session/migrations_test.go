@@ -352,17 +352,16 @@ func TestMigrations_RegisterAndApply(t *testing.T) {
 		}
 	}
 
-	// Ledger rows: 2 storage bootstrap + 8 sessions migrations
+	// Ledger rows: 2 storage bootstrap + 9 sessions migrations
 	// (0300 init + 0301 context_attachments + 0302 content_json +
 	// 0303 artifacts + 0304 artifacts-promote + 0305 telemetry +
-	// 0308 memory_hook_journal + 0309 agent_graph_events) =
-	// 10 applied entries. Numbering note: 0306 (branches) and 0307
-	// (corpora) are reserved for the parallel agent-kernel-graph
-	// Bundle B and Bundle C agents; they are NOT registered here.
-	if got := len(db.ledger); got != 10 {
-		t.Fatalf("ledger size = %d, want 10", got)
+	// 0307 corpora + 0308 memory_hook_journal + 0309 agent_graph_events)
+	// = 11 applied entries. Version 0306 is reserved for the
+	// agent-kernel-graph branching bundle landing in parallel.
+	if got := len(db.ledger); got != 11 {
+		t.Fatalf("ledger size = %d, want 11", got)
 	}
-	wantVersions := []int{1, 2, 300, 301, 302, 303, 304, 305, 308, 309}
+	wantVersions := []int{1, 2, 300, 301, 302, 303, 304, 305, 307, 308, 309}
 	for i, want := range wantVersions {
 		if db.ledger[i].Version != want {
 			t.Errorf("ledger[%d].Version = %d, want %d", i, db.ledger[i].Version, want)

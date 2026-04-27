@@ -73,10 +73,11 @@ const sqlInitSchema = `
 // WP01 lands as 0303 (see migrations_artifacts.go); artifacts-storage
 // WP02 lands as 0304 (see migrations_artifacts_promote.go);
 // telemetry-otel WP01 lands as 0305 (see migrations_telemetry.go);
-// agent-kernel-graph WP04 lands 0308 (memory hook journal — see
+// agent-kernel-graph WP10 lands as 0307 (corpora — see
+// migrations_corpora.go); WP04 lands 0308 (memory hook journal — see
 // migrations_memory_hook_journal.go) and 0309 (agent_graph_events —
-// see migrations_agent_graph_events.go). 0306 + 0307 are reserved for
-// the parallel Bundle B (branches) and Bundle C (corpora) agents.
+// see migrations_agent_graph_events.go). 0306 is reserved for Bundle B
+// (branches).
 func Migrations() []migrations.Migration {
 	return []migrations.Migration{
 		{
@@ -114,6 +115,7 @@ func Migrations() []migrations.Migration {
 		migration0303(),
 		migration0304(),
 		migration0305(),
+		migration0307(),
 		migration0308(),
 		migration0309(),
 	}

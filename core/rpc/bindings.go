@@ -11,6 +11,7 @@ import (
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/bundle"
 	contextsview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/contexts"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/contextview"
+	corpusview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/corpus"
 	hooksview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/hooks"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/llm"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/mcp"
@@ -587,4 +588,34 @@ func (b *Bindings) Slash_Execute(sessionID, raw string) (slashview.ExecuteResult
 
 func (b *Bindings) Slash_List() ([]slashview.CommandInfo, error) {
 	return b.api.Slash().List(b.ctx())
+}
+
+// ── corpora (agent-kernel-graph; Bundle C WP10/WP11) ──────────────────
+
+func (b *Bindings) Corpus_ListCorpora(scope string) ([]corpusview.Corpus, error) {
+	return b.api.Corpus().ListCorpora(b.ctx(), scope)
+}
+func (b *Bindings) Corpus_CreateCorpus(req corpusview.CreateRequest) (corpusview.Corpus, error) {
+	return b.api.Corpus().CreateCorpus(b.ctx(), req)
+}
+func (b *Bindings) Corpus_GetCorpus(corpusID string) (corpusview.Corpus, error) {
+	return b.api.Corpus().GetCorpus(b.ctx(), corpusID)
+}
+func (b *Bindings) Corpus_DeleteCorpus(corpusID string) error {
+	return b.api.Corpus().DeleteCorpus(b.ctx(), corpusID)
+}
+func (b *Bindings) Corpus_ListFiles(corpusID string) ([]corpusview.CorpusFile, error) {
+	return b.api.Corpus().ListFiles(b.ctx(), corpusID)
+}
+func (b *Bindings) Corpus_ListChunks(corpusID, fileID string) ([]corpusview.Chunk, error) {
+	return b.api.Corpus().ListChunks(b.ctx(), corpusID, fileID)
+}
+func (b *Bindings) Corpus_IngestPath(corpusID, path string, opts corpusview.IngestOptions) (corpusview.IngestStatus, error) {
+	return b.api.Corpus().IngestPath(b.ctx(), corpusID, path, opts)
+}
+func (b *Bindings) Corpus_JobStatus(jobID string) (corpusview.IngestStatus, error) {
+	return b.api.Corpus().JobStatus(b.ctx(), jobID)
+}
+func (b *Bindings) Corpus_Retrieve(corpusID string, req corpusview.RetrieveRequest) (corpusview.RetrieveResponse, error) {
+	return b.api.Corpus().Retrieve(b.ctx(), corpusID, req)
 }

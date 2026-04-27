@@ -73,6 +73,16 @@ const router = createRouter({
       name: 'artifacts',
       component: () => import('@/views/artifacts/ArtifactsView.vue'),
     },
+    {
+      path: '/corpora',
+      name: 'corpora',
+      component: () => import('@/views/corpora/CorporaView.vue'),
+    },
+    {
+      path: '/corpora/:id',
+      name: 'corpus-detail',
+      component: () => import('@/views/corpora/CorpusDetail.vue'),
+    },
   ],
 });
 

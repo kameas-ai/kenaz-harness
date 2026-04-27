@@ -61,6 +61,14 @@ import type {
   ArtifactWithBytes,
   SlashCommandInfo,
   SlashExecuteResult,
+  Corpus,
+  CorpusFile,
+  CorpusChunk,
+  CorpusIngestStatus,
+  CorpusIngestOptions,
+  CorpusCreateRequest,
+  CorpusRetrieveRequest,
+  CorpusRetrieveResponse,
 } from './types';
 
 /**
@@ -257,6 +265,23 @@ interface WailsBindingsLike {
     raw: string,
   ): Promise<SlashExecuteResult>;
   Slash_List(): Promise<SlashCommandInfo[]>;
+
+  Corpus_ListCorpora(scope: string): Promise<Corpus[]>;
+  Corpus_CreateCorpus(req: CorpusCreateRequest): Promise<Corpus>;
+  Corpus_GetCorpus(corpusID: string): Promise<Corpus>;
+  Corpus_DeleteCorpus(corpusID: string): Promise<void>;
+  Corpus_ListFiles(corpusID: string): Promise<CorpusFile[]>;
+  Corpus_ListChunks(corpusID: string, fileID: string): Promise<CorpusChunk[]>;
+  Corpus_IngestPath(
+    corpusID: string,
+    path: string,
+    opts: CorpusIngestOptions,
+  ): Promise<CorpusIngestStatus>;
+  Corpus_JobStatus(jobID: string): Promise<CorpusIngestStatus>;
+  Corpus_Retrieve(
+    corpusID: string,
+    req: CorpusRetrieveRequest,
+  ): Promise<CorpusRetrieveResponse>;
 }
 
 /**
@@ -929,6 +954,38 @@ export interface SlashClient {
   execute(sessionID: string, raw: string): Promise<SlashExecuteResult>;
 }
 
+/**
+ * CorpusClient — bulk-ingest knowledge corpora (mission
+ * agent-kernel-graph; Bundle C WP10/WP11). Backs the Knowledge view's
+ * three surfaces:
+ *
+ *   - listCorpora / createCorpus / deleteCorpus drive the corpus list.
+ *   - ingestPath kicks off a background job; jobStatus polls progress.
+ *   - listFiles / listChunks render the per-corpus detail view.
+ *   - retrieve runs cosine top-K with an enforced token-budget cap.
+ *
+ * The Go side persists chunk text + embeddings under
+ * `<DataDir>/corpora/<id>/`; only the text crosses the Wails boundary.
+ */
+export interface CorpusClient {
+  listCorpora(scope: string): Promise<Corpus[]>;
+  createCorpus(req: CorpusCreateRequest): Promise<Corpus>;
+  getCorpus(corpusID: string): Promise<Corpus>;
+  deleteCorpus(corpusID: string): Promise<void>;
+  listFiles(corpusID: string): Promise<CorpusFile[]>;
+  listChunks(corpusID: string, fileID: string): Promise<CorpusChunk[]>;
+  ingestPath(
+    corpusID: string,
+    path: string,
+    opts: CorpusIngestOptions,
+  ): Promise<CorpusIngestStatus>;
+  jobStatus(jobID: string): Promise<CorpusIngestStatus>;
+  retrieve(
+    corpusID: string,
+    req: CorpusRetrieveRequest,
+  ): Promise<CorpusRetrieveResponse>;
+}
+
 export interface HarnessClient {
   shellStatus(): Promise<ShellStatus>;
   appInfo(): Promise<AppInfo>;
@@ -953,6 +1010,7 @@ export interface HarnessClient {
   shell: ShellClient;
   slash: SlashClient;
   artifacts: ArtifactsClient;
+  corpus: CorpusClient;
 }
 
 // ── runtime client ─────────────────────────────────────────────────────
@@ -1167,6 +1225,17 @@ export function createHarnessClient(): HarnessClient {
     slash: {
       list: () => b().Slash_List(),
       execute: (sessionID, raw) => b().Slash_Execute(sessionID, raw),
+    },
+    corpus: {
+      listCorpora: (scope) => b().Corpus_ListCorpora(scope),
+      createCorpus: (req) => b().Corpus_CreateCorpus(req),
+      getCorpus: (id) => b().Corpus_GetCorpus(id),
+      deleteCorpus: (id) => b().Corpus_DeleteCorpus(id),
+      listFiles: (id) => b().Corpus_ListFiles(id),
+      listChunks: (id, fileID) => b().Corpus_ListChunks(id, fileID),
+      ingestPath: (id, path, opts) => b().Corpus_IngestPath(id, path, opts),
+      jobStatus: (jobID) => b().Corpus_JobStatus(jobID),
+      retrieve: (id, req) => b().Corpus_Retrieve(id, req),
     },
   };
 }
@@ -1520,6 +1589,53 @@ export function createFakeHarnessClient(
         createdAt: new Date().toISOString(),
       }),
       remove: noop,
+    },
+    corpus: {
+      listCorpora: async () => [],
+      createCorpus: async (req) => ({
+        id: 'fake-corpus',
+        name: req.name,
+        scope: req.scope,
+        scopeId: req.scopeId,
+        tag: req.tag,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }),
+      getCorpus: async (id) => ({
+        id,
+        name: 'fake',
+        scope: 'global',
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }),
+      deleteCorpus: noop,
+      listFiles: async () => [],
+      listChunks: async () => [],
+      ingestPath: async (corpusId, path) => ({
+        jobId: 'fake-job',
+        corpusId,
+        state: 'completed',
+        path,
+        filesTotal: 0,
+        filesDone: 0,
+        filesSkip: 0,
+        chunksTotal: 0,
+        startedAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }),
+      jobStatus: async (jobId) => ({
+        jobId,
+        corpusId: 'fake',
+        state: 'completed',
+        path: '',
+        filesTotal: 0,
+        filesDone: 0,
+        filesSkip: 0,
+        chunksTotal: 0,
+        startedAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }),
+      retrieve: async () => ({ results: [], dropped: 0 }),
     },
   };
 
