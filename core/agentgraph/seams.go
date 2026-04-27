@@ -69,6 +69,139 @@ type LLMProvider interface {
 // LLMProviderFunc adapts a function to the LLMProvider interface.
 type LLMProviderFunc func(ctx context.Context, req LLMRequest) (LLMResponse, error)
 
+// StreamEventKind classifies a stream-bridge chunk. Mirrors the
+// core/llm.StreamEventKind enum exactly so the chassis adapter can
+// translate by string-equality without importing core/llm into the
+// kernel (DIRECTIVE_001).
+type StreamEventKind string
+
+const (
+	StreamEventText      StreamEventKind = "text"
+	StreamEventTool      StreamEventKind = "tool"
+	StreamEventReasoning StreamEventKind = "reasoning"
+	StreamEventUsage     StreamEventKind = "usage"
+	StreamEventFinish    StreamEventKind = "finish"
+	StreamEventError     StreamEventKind = "error"
+)
+
+// StreamEvent is one delta the chassis-bound LLM provider hands the
+// kernel's StreamSink as the upstream provider stream is consumed.
+// The shape mirrors core/llm.StreamEvent (intentionally so) but lives
+// in agentgraph to keep the import direction one-way: the chassis
+// adapter that bridges core/llm.Stream → kernel.StreamSink translates
+// between the two value types.
+//
+// ToolName / ToolID / ToolArgs carry the tool-use accumulator state
+// when Kind == StreamEventTool. Provider adapters typically deliver
+// tool deltas across multiple chunks; the chassis adapter is
+// responsible for emitting the accumulated record on finalisation,
+// not raw deltas — this matches the existing pump shape on the
+// llm:stream-chunk topic.
+type StreamEvent struct {
+	Kind StreamEventKind `json:"kind"`
+	// Text is the next text-delta chunk when Kind == StreamEventText.
+	Text string `json:"text,omitempty"`
+	// ToolName / ToolID / ToolArgs carry the model's accumulated
+	// tool_use record on Kind == StreamEventTool (the chassis adapter
+	// fans these onto the existing tool-use chip render path).
+	ToolName string `json:"tool_name,omitempty"`
+	ToolID   string `json:"tool_id,omitempty"`
+	ToolArgs string `json:"tool_args,omitempty"`
+	// Reasoning carries a model reasoning frame on
+	// Kind == StreamEventReasoning. The string is the rendered
+	// content; the structured frame stays inside the chassis.
+	Reasoning string `json:"reasoning,omitempty"`
+	// Usage / Finish / ErrMsg are populated for the matching kinds.
+	UsageInputTokens   int    `json:"usage_input_tokens,omitempty"`
+	UsageOutputTokens  int    `json:"usage_output_tokens,omitempty"`
+	UsageReasoningTokens int  `json:"usage_reasoning_tokens,omitempty"`
+	Finish             string `json:"finish,omitempty"`
+	ErrMsg             string `json:"err,omitempty"`
+}
+
+// StreamSink is the kernel-side seam the LLMNode-bound provider feeds
+// streaming chunks into. The chassis (core/rpc) wires a sink that
+// fans the events onto the existing `llm:stream-chunk` broker topic
+// so the chat surface continues to receive byte-equal deltas — no
+// frontend changes required.
+//
+// Implementations MUST be safe for concurrent use within a single
+// kernel run: even though one LLMNode dispatch produces events
+// serially, multiple parallel LLMNodes (Parallel-fanout) can share
+// the same sink.
+//
+// Nil-safe behavior: when env.StreamSink is nil the provider adapter
+// simply drains the upstream stream without forwarding deltas — the
+// final Response still lands on the LLMNode output ports as before,
+// only the per-token surface goes silent. This preserves the kernel's
+// "graphs without a chassis" path (tests, batch-runs, scripted
+// activities) without forcing every caller to plumb a sink.
+type StreamSink interface {
+	// Emit forwards one streaming delta. The implementation is
+	// expected to be non-blocking on the hot path; chassis wiring
+	// pushes onto the broker's bounded channel and drops on overflow.
+	Emit(StreamEvent)
+	// Close signals the end of the stream for this LLMNode dispatch.
+	// The chassis fans a stream-finish payload onto the broker. Safe
+	// to call multiple times; subsequent calls are no-ops.
+	Close()
+}
+
+// streamSinkContextKey is the unexported context key the LLMNode
+// executor uses to thread the kernel-bound StreamSink into the
+// chassis-bound LLMProvider call. The chassis adapter (core/rpc) calls
+// StreamSinkFromContext to retrieve it; tests can use the same helper
+// to assert the kernel propagates the sink.
+type streamSinkContextKey struct{}
+
+// withStreamSink binds the StreamSink onto ctx so a downstream
+// LLMProvider.Generate implementation can pull it out without a new
+// argument on the seam. Returns the original ctx unchanged when sink
+// is nil so the chassis side sees the absence-of-sink state cleanly.
+func withStreamSink(ctx context.Context, sink StreamSink) context.Context {
+	if sink == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, streamSinkContextKey{}, sink)
+}
+
+// StreamSinkFromContext returns the StreamSink the kernel pinned to
+// ctx for the active LLMNode dispatch. ok=false when the kernel
+// chose not to wire one (test runs, batch executions).
+func StreamSinkFromContext(ctx context.Context) (StreamSink, bool) {
+	v := ctx.Value(streamSinkContextKey{})
+	if v == nil {
+		return nil, false
+	}
+	s, ok := v.(StreamSink)
+	return s, ok
+}
+
+// streamSinkFunc adapts a function value to StreamSink. Used in tests
+// that want to record events without a struct.
+type streamSinkFunc struct {
+	emit  func(StreamEvent)
+	close func()
+}
+
+// NewStreamSinkFunc adapts emit + close callbacks to the StreamSink
+// interface. close may be nil — Close becomes a no-op.
+func NewStreamSinkFunc(emit func(StreamEvent), close func()) StreamSink {
+	if emit == nil {
+		emit = func(StreamEvent) {}
+	}
+	if close == nil {
+		close = func() {}
+	}
+	return &streamSinkFunc{emit: emit, close: close}
+}
+
+// Emit satisfies StreamSink.
+func (f *streamSinkFunc) Emit(ev StreamEvent) { f.emit(ev) }
+
+// Close satisfies StreamSink.
+func (f *streamSinkFunc) Close() { f.close() }
+
 // Generate satisfies LLMProvider.
 func (f LLMProviderFunc) Generate(ctx context.Context, req LLMRequest) (LLMResponse, error) {
 	return f(ctx, req)

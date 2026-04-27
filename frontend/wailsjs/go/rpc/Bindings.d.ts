@@ -311,6 +311,8 @@ export function Settings_GetBash():Promise<boolean>;
 
 export function Settings_GetConfirmEach():Promise<boolean>;
 
+export function Settings_GetMaxAgentTurns():Promise<number>;
+
 export function Settings_GetMemory():Promise<boolean>;
 
 export function Settings_GetWebSearch():Promise<boolean>;
@@ -320,6 +322,8 @@ export function Settings_Set(arg1:settings.Settings):Promise<void>;
 export function Settings_SetBash(arg1:boolean):Promise<void>;
 
 export function Settings_SetConfirmEach(arg1:boolean):Promise<void>;
+
+export function Settings_SetMaxAgentTurns(arg1:number):Promise<void>;
 
 export function Settings_SetMemory(arg1:boolean):Promise<void>;
 

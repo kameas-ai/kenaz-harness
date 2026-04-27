@@ -319,6 +319,14 @@ export interface Settings {
    * happens on the backend.
    */
   confirmEachDisabled?: boolean;
+  /**
+   * Chat-graph LoopNode iteration cap (agent-kernel-graph-chat-migration
+   * mission). Zero on the wire means "use the spec default"
+   * (DefaultMaxAgentTurns = 25). Frontend renders the placeholder
+   * accordingly; the chassis reads the effective value on every chat
+   * run start so a settings change takes effect on the next user turn.
+   */
+  maxAgentTurns?: number;
 }
 
 /**

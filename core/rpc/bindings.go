@@ -438,6 +438,29 @@ func (b *Bindings) Settings_SetBash(enabled bool) error {
 	return b.storeFn().SaveBash(enabled)
 }
 
+// Settings_GetMaxAgentTurns exposes the chat-graph LoopNode iteration
+// cap (default DefaultMaxAgentTurns = 25). The chassis (chat runner)
+// reads the effective value on every chat run start so the dial takes
+// effect on the next user turn. The wire returns the persisted raw
+// value: zero on the wire means "use the spec default" — frontend
+// callers can render the placeholder accordingly.
+func (b *Bindings) Settings_GetMaxAgentTurns() (int, error) {
+	if b.storeFn == nil {
+		return 0, nil
+	}
+	return b.storeFn().LoadMaxAgentTurns()
+}
+
+// Settings_SetMaxAgentTurns persists the chat-graph LoopNode
+// iteration cap. Zero clears the override (resets to the spec
+// default); negatives are normalised to zero by the store.
+func (b *Bindings) Settings_SetMaxAgentTurns(turns int) error {
+	if b.storeFn == nil {
+		return nil
+	}
+	return b.storeFn().SaveMaxAgentTurns(turns)
+}
+
 // ── memory ─────────────────────────────────────────────────────────────
 
 func (b *Bindings) Memory_ListChunks(filter memoryview.ListFilter) ([]memoryview.Chunk, error) {

@@ -53,7 +53,23 @@ type Settings struct {
 	// provider. The allowlist itself ships with a conservative default
 	// (read-only commands; deny by pattern).
 	BashEnabled bool `json:"bashEnabled,omitempty"`
+
+	// MaxAgentTurns caps the number of LLM ↔ tool round-trips inside
+	// a single chat-graph LoopNode body before the cap-hit pause-not-kill
+	// UX fires (commit c760087). Zero falls back to the spec default
+	// (DefaultMaxAgentTurns = 25 — agreed with the user when migrating
+	// off core/toolloop's per-call DefaultMaxIter=8). The chassis reads
+	// the effective value via EffectiveMaxAgentTurns on every chat run
+	// start so a settings change takes effect on the next user turn
+	// without restarting the harness.
+	MaxAgentTurns int `json:"maxAgentTurns,omitempty"`
 }
+
+// DefaultMaxAgentTurns is the spec-locked iteration cap for the chat
+// graph's LoopNode body when Settings.MaxAgentTurns is unset (zero).
+// Set to 25 per the agent-kernel-graph-chat-migration mission brief
+// (the user's stated preference replacing toolloop's old 8-call cap).
+const DefaultMaxAgentTurns = 25
 
 // AutoCaptureCodeBlocks reports whether the code-block detector is
 // active. Default true on a fresh install (zero-value Disabled).
@@ -86,6 +102,17 @@ func (s Settings) EffectiveCodeBlockMinBytes() int {
 // and inverts the persisted bit so callers don't have to think about
 // the storage shape.
 func (s Settings) ConfirmEachEnabled() bool { return !s.ConfirmEachDisabled }
+
+// EffectiveMaxAgentTurns returns the user-tuned cap or the spec
+// default (DefaultMaxAgentTurns) when the persisted value is zero.
+// The chat-graph runner reads this on every Run start to thread the
+// cap onto the LoopNode body's max_iterations.
+func (s Settings) EffectiveMaxAgentTurns() int {
+	if s.MaxAgentTurns <= 0 {
+		return DefaultMaxAgentTurns
+	}
+	return s.MaxAgentTurns
+}
 
 // WindowSize mirrors the charter's WindowSize type.
 type WindowSize struct {
@@ -127,6 +154,15 @@ type SettingsStore interface {
 	// in the same shape. Default false (off).
 	LoadBash() (bool, error)
 	SaveBash(enabled bool) error
+	// LoadMaxAgentTurns / SaveMaxAgentTurns expose the chat-graph
+	// LoopNode iteration cap independently of the full Settings record
+	// so the chassis can read it on the hot path (every chat run start)
+	// without serializing the whole record. Persists as the raw int;
+	// zero on the wire means "use DefaultMaxAgentTurns". The frontend
+	// SettingsClient surfaces this via Settings_GetMaxAgentTurns /
+	// Settings_SetMaxAgentTurns.
+	LoadMaxAgentTurns() (int, error)
+	SaveMaxAgentTurns(turns int) error
 }
 
 // SettingsAPI is the view-scoped accessor exposed via HarnessAPI.

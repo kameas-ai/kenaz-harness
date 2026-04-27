@@ -1,0 +1,106 @@
+# Default chat graph: per-session kernel run that pauses on AskNode
+# between user turns. Replaces core/toolloop as the chassis chat path
+# (mission agent-kernel-graph-chat-migration).
+#
+# Topology:
+#   history_in (history_read) → ask_user (ask)
+#                              → assistant_turn (model)
+#                              → pump_loop (loop body: branch on
+#                                tool_use ⇒ tool_call → assistant_turn)
+#                              → final_check (decision: tool_use ⇒ loop,
+#                                else → ask_user again)
+#
+# Per-session lifecycle:
+#   - The chassis (core/rpc/views/agentgraph/chat) starts one Kernel.Run
+#     per chat session. The first fire pauses on `ask_user`.
+#   - On each user message, the chassis writes the answer onto the
+#     ask_user output port and resumes the kernel. The model fires,
+#     the loop body re-fires until finish_reason != "tool_use", and
+#     the run pauses again on the next ask_user.
+#   - Persistence of the assistant turn is handled by the chassis-side
+#     post-LLM hook listener (existing path via env.Hooks.Fire), not a
+#     dedicated SessionWriteNode — porting the toolloop's persistence
+#     surface into a typed kind is tracked separately.
+#
+# Streaming:
+#   - The chassis wires env.StreamSink before each Run start (WP01 of
+#     the chat-migration mission). The model executor pins the sink
+#     onto its provider call ctx; the chassis's chassis-bound LLM
+#     provider pumps StreamEvents into the sink as the upstream
+#     stream is consumed. The sink fans events onto the existing
+#     llm:stream-chunk broker topic so the chat surface keeps
+#     receiving byte-equal deltas without a frontend change.
+#
+# Iteration cap:
+#   - max_iterations is set to 25 per the mission brief
+#     (DefaultMaxAgentTurns). The chassis overrides it from
+#     Settings.EffectiveMaxAgentTurns at run-start; this YAML carries
+#     the spec default so a graph dump round-trips cleanly.
+#   - Cap-hit fires EventBudgetCapHit (kernel checkBudget path) and
+#     the existing CapHitToast component handles bump-and-resume.
+spec_version: "1"
+id: "chat_default"
+name: "Default chat graph"
+description: |
+  Per-session kernel run that replaces core/toolloop as the chassis
+  chat path. Pauses on AskNode between user turns; the chassis
+  resumes on the next user message. The LoopNode bounds tool-use
+  re-pumps at MaxAgentTurns (default 25).
+entrypoints:
+  - history_in
+budget:
+  max_llm_calls_per_run: 100
+  max_tool_calls_per_run: 200
+  max_tokens_per_run: 200000
+nodes:
+  - id: history_in
+    kind: history_read
+    title: "Load conversation history"
+    attrs:
+      n: 0
+
+  - id: ask_user
+    kind: ask
+    title: "Wait for user message"
+    attrs:
+      question: "(filled by chassis on resume)"
+
+  - id: assistant_turn
+    kind: model
+    title: "Assistant turn (streamed)"
+    attrs:
+      model: "default"
+      stream_to_chat: true
+      max_tokens: 4096
+
+  - id: tool_call
+    kind: tool
+    title: "Dispatch one tool call"
+    attrs:
+      name: "<resolved at run-time>"
+
+  - id: continue_check
+    kind: decision
+    title: "Did the model emit tool_use?"
+    attrs:
+      condition: "finish_reason == \"tool_use\""
+      next_true: pump_loop
+      next_false: ask_user
+
+  - id: pump_loop
+    kind: loop
+    title: "Re-pump until non-tool-use"
+    attrs:
+      max_iterations: 25
+      body:
+        - assistant_turn
+        - tool_call
+        - continue_check
+
+edges:
+  - from: { node: history_in, port: messages }
+    to:   { node: ask_user, port: context }
+  - from: { node: ask_user, port: answer }
+    to:   { node: assistant_turn, port: messages }
+  - from: { node: assistant_turn, port: response }
+    to:   { node: continue_check, port: in }

@@ -152,6 +152,17 @@ type Env struct {
 	// to the chat surface.
 	Ask AskBus
 
+	// StreamSink, when non-nil, receives streaming deltas (token text,
+	// tool-use records, usage, finish reason, error) as the LLMNode's
+	// upstream provider stream is consumed. The chassis wires a sink
+	// that bridges to the existing `llm:stream-chunk` broker topic so
+	// the chat surface keeps receiving byte-equal deltas without
+	// needing a frontend change. Nil disables forwarding — the
+	// LLMNode still lands its terminal response on the output ports;
+	// only the per-token surface goes silent (kernel tests, scripted
+	// runs, batch executions).
+	StreamSink StreamSink
+
 	// Budget aggregates the per-run hard caps (FR-048).
 	Budget Budget
 	// Counters track running budget consumption.

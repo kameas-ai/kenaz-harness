@@ -566,6 +566,10 @@ export function Settings_GetConfirmEach() {
   return window['go']['rpc']['Bindings']['Settings_GetConfirmEach']();
 }
 
+export function Settings_GetMaxAgentTurns() {
+  return window['go']['rpc']['Bindings']['Settings_GetMaxAgentTurns']();
+}
+
 export function Settings_GetMemory() {
   return window['go']['rpc']['Bindings']['Settings_GetMemory']();
 }
@@ -584,6 +588,10 @@ export function Settings_SetBash(arg1) {
 
 export function Settings_SetConfirmEach(arg1) {
   return window['go']['rpc']['Bindings']['Settings_SetConfirmEach'](arg1);
+}
+
+export function Settings_SetMaxAgentTurns(arg1) {
+  return window['go']['rpc']['Bindings']['Settings_SetMaxAgentTurns'](arg1);
 }
 
 export function Settings_SetMemory(arg1) {

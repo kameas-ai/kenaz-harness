@@ -258,6 +258,8 @@ interface WailsBindingsLike {
   Settings_SetWebSearch(enabled: boolean): Promise<void>;
   Settings_GetBash(): Promise<boolean>;
   Settings_SetBash(enabled: boolean): Promise<void>;
+  Settings_GetMaxAgentTurns(): Promise<number>;
+  Settings_SetMaxAgentTurns(turns: number): Promise<void>;
 
   Memory_ListChunks(filter: MemoryListFilter): Promise<MemoryChunk[]>;
   Memory_RememberMessage(
@@ -947,6 +949,18 @@ export interface SettingsClient {
   getBash(): Promise<boolean>;
   /** Persist the bash built-in opt-in flag. */
   setBash(enabled: boolean): Promise<void>;
+  /**
+   * Read the chat-graph LoopNode iteration cap. Zero on the wire
+   * means "use the spec default" (DefaultMaxAgentTurns = 25); the
+   * frontend renders the placeholder accordingly.
+   */
+  getMaxAgentTurns(): Promise<number>;
+  /**
+   * Persist the chat-graph LoopNode iteration cap. Zero clears the
+   * override (resets to the spec default); negatives are normalised
+   * to zero by the store.
+   */
+  setMaxAgentTurns(turns: number): Promise<void>;
 }
 
 /**
@@ -1441,6 +1455,8 @@ export function createHarnessClient(): HarnessClient {
       setWebSearch: (enabled) => b().Settings_SetWebSearch(enabled),
       getBash: () => b().Settings_GetBash(),
       setBash: (enabled) => b().Settings_SetBash(enabled),
+      getMaxAgentTurns: () => b().Settings_GetMaxAgentTurns(),
+      setMaxAgentTurns: (turns) => b().Settings_SetMaxAgentTurns(turns),
     },
     memory: {
       listChunks: (filter) => b().Memory_ListChunks(filter ?? {}),
@@ -1797,6 +1813,8 @@ export function createFakeHarnessClient(
       setWebSearch: noop,
       getBash: async () => false,
       setBash: noop,
+      getMaxAgentTurns: async () => 0,
+      setMaxAgentTurns: noop,
     },
     memory: {
       listChunks: async () => [],

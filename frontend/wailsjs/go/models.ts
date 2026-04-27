@@ -2764,6 +2764,7 @@ export namespace settings {
 	    autoCaptureToolOutputsDisabled?: boolean;
 	    webSearchEnabled?: boolean;
 	    bashEnabled?: boolean;
+	    maxAgentTurns?: number;
 	
 	    static createFrom(source: any = {}) {
 	        return new Settings(source);
@@ -2784,6 +2785,7 @@ export namespace settings {
 	        this.autoCaptureToolOutputsDisabled = source["autoCaptureToolOutputsDisabled"];
 	        this.webSearchEnabled = source["webSearchEnabled"];
 	        this.bashEnabled = source["bashEnabled"];
+	        this.maxAgentTurns = source["maxAgentTurns"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {

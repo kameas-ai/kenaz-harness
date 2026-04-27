@@ -265,6 +265,40 @@ func (s *FileStore) SaveBash(enabled bool) error {
 	return s.saveLocked(got)
 }
 
+// LoadMaxAgentTurns returns the chat-graph LoopNode iteration cap.
+// Default DefaultMaxAgentTurns (25) when the persisted value is zero
+// or when the settings file is unreadable — the chat surface stays
+// usable even if storage is broken. The returned int is the
+// user-tuned value (zero-on-wire == default), not the effective
+// value; callers run it through EffectiveMaxAgentTurns when they
+// need the rounded-up form.
+func (s *FileStore) LoadMaxAgentTurns() (int, error) {
+	got, err := s.LoadAll()
+	if err != nil {
+		return got.MaxAgentTurns, err
+	}
+	return got.MaxAgentTurns, nil
+}
+
+// SaveMaxAgentTurns updates the chat-graph LoopNode iteration cap.
+// The chassis reads this on every chat run start so the change takes
+// effect on the next user turn. Zero clears the override (resets to
+// DefaultMaxAgentTurns). Negative values are normalised to zero so
+// the spec default re-engages.
+func (s *FileStore) SaveMaxAgentTurns(turns int) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	got, err := s.loadLocked()
+	if err != nil {
+		return err
+	}
+	if turns < 0 {
+		turns = 0
+	}
+	got.MaxAgentTurns = turns
+	return s.saveLocked(got)
+}
+
 // defaultSettings is the safe-baseline a fresh install starts with.
 func defaultSettings() Settings {
 	return Settings{
@@ -411,5 +445,21 @@ func (m *memoryStore) SaveBash(enabled bool) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.data.BashEnabled = enabled
+	return nil
+}
+
+func (m *memoryStore) LoadMaxAgentTurns() (int, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.data.MaxAgentTurns, nil
+}
+
+func (m *memoryStore) SaveMaxAgentTurns(turns int) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if turns < 0 {
+		turns = 0
+	}
+	m.data.MaxAgentTurns = turns
 	return nil
 }

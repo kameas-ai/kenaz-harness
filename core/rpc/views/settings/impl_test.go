@@ -194,6 +194,58 @@ func TestFileStore_ConfirmEachRoundTrip(t *testing.T) {
 	}
 }
 
+func TestEffectiveMaxAgentTurns_DefaultWhenZero(t *testing.T) {
+	// Zero on the wire ⇒ DefaultMaxAgentTurns (25). Negative is treated
+	// the same way (defensive — the store normalises negatives to zero
+	// on save, but the helper covers the in-memory path too).
+	for _, tc := range []struct {
+		raw  int
+		want int
+	}{
+		{0, DefaultMaxAgentTurns},
+		{-1, DefaultMaxAgentTurns},
+		{1, 1},
+		{50, 50},
+	} {
+		s := Settings{MaxAgentTurns: tc.raw}
+		if got := s.EffectiveMaxAgentTurns(); got != tc.want {
+			t.Errorf("EffectiveMaxAgentTurns(%d) = %d, want %d", tc.raw, got, tc.want)
+		}
+	}
+}
+
+func TestFileStore_MaxAgentTurnsRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	store, err := NewFileStore(dir)
+	if err != nil {
+		t.Fatalf("NewFileStore: %v", err)
+	}
+	// Default (zero on wire) on a fresh install.
+	got, err := store.LoadMaxAgentTurns()
+	if err != nil {
+		t.Fatalf("LoadMaxAgentTurns: %v", err)
+	}
+	if got != 0 {
+		t.Errorf("fresh install MaxAgentTurns = %d, want 0 (zero ⇒ default)", got)
+	}
+	// Round-trip a non-zero value.
+	if err := store.SaveMaxAgentTurns(10); err != nil {
+		t.Fatalf("SaveMaxAgentTurns: %v", err)
+	}
+	got, _ = store.LoadMaxAgentTurns()
+	if got != 10 {
+		t.Errorf("after Save(10): MaxAgentTurns = %d, want 10", got)
+	}
+	// Negative value normalised to zero.
+	if err := store.SaveMaxAgentTurns(-5); err != nil {
+		t.Fatalf("SaveMaxAgentTurns(-5): %v", err)
+	}
+	got, _ = store.LoadMaxAgentTurns()
+	if got != 0 {
+		t.Errorf("after Save(-5): MaxAgentTurns = %d, want 0 (negatives normalised)", got)
+	}
+}
+
 func TestAPI_StoreAccessor(t *testing.T) {
 	api := NewAPI(nil)
 	store := api.Store()

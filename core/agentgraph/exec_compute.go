@@ -114,7 +114,13 @@ func (modelExecutor) Execute(ctx context.Context, env *Env, node *Node, inputs P
 		}
 	}
 
-	resp, err := env.LLM.Generate(ctx, req)
+	// Thread the kernel's StreamSink onto the call ctx so the
+	// chassis-bound provider can pump tokens / tool deltas / usage to
+	// the existing llm:stream-chunk topic without a new seam argument.
+	// Nil-safe: withStreamSink returns ctx unchanged when env.StreamSink
+	// is nil (test runs, scripted activities, batch executions).
+	llmCtx := withStreamSink(ctx, env.StreamSink)
+	resp, err := env.LLM.Generate(llmCtx, req)
 	if err != nil {
 		_ = res.Events.AppendKind(env.RunID, node.ID, EventNodeError, map[string]any{
 			"err": err.Error(),

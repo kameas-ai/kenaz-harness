@@ -70,6 +70,41 @@ func TestListBundled(t *testing.T) {
 	}
 }
 
+// TestChatDefaultBundled asserts the chat_default library entry the
+// agent-kernel-graph-chat-migration mission ships parses cleanly and
+// is listed alongside toolloop_default. This is the new chassis chat
+// path; the chassis runner picks it as the default graph for any
+// session without an explicit override.
+func TestChatDefaultBundled(t *testing.T) {
+	t.Parallel()
+	a, _, _ := newTestAPI(t)
+	ctx := context.Background()
+	rows, err := a.ListGraphs(ctx, "")
+	if err != nil {
+		t.Fatalf("ListGraphs: %v", err)
+	}
+	found := false
+	for _, r := range rows {
+		if r.ID == "chat_default" && r.Scope == "library" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("chat_default not listed; rows = %+v", rows)
+	}
+	spec, err := a.LoadGraph(ctx, "chat_default")
+	if err != nil {
+		t.Fatalf("LoadGraph(chat_default): %v", err)
+	}
+	if !strings.Contains(spec.YAML, "chat_default") {
+		t.Errorf("YAML missing id; got %q", spec.YAML[:64])
+	}
+	if !strings.Contains(spec.YAML, "max_iterations: 25") {
+		t.Errorf("chat_default should default LoopNode max_iterations to 25 per mission brief")
+	}
+}
+
 // TestSaveAndDeleteUserGraph walks the user-graph CRUD round-trip.
 func TestSaveAndDeleteUserGraph(t *testing.T) {
 	t.Parallel()
