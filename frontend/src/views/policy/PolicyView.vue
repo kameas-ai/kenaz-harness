@@ -163,7 +163,7 @@ function outcomeBadgeClass(outcome: PolicyOutcome): string {
   flex-direction: column;
   gap: 1rem;
   padding: 1rem;
-  font-family: var(--font-ui, system-ui, sans-serif);
+  font-family: var(--font-ui);
 }
 .policy-view__head {
   display: flex;
@@ -174,7 +174,7 @@ function outcomeBadgeClass(outcome: PolicyOutcome): string {
   display: flex;
   gap: 0.5rem;
   font-size: 0.75rem;
-  color: var(--color-ink-muted, #888);
+  color: var(--ink-muted);
   letter-spacing: 0.1em;
   text-transform: uppercase;
 }
@@ -188,7 +188,7 @@ function outcomeBadgeClass(outcome: PolicyOutcome): string {
 }
 .policy-view__sub {
   margin: 0;
-  color: var(--color-ink-muted, #888);
+  color: var(--ink-muted);
   font-size: 0.875rem;
 }
 .policy-view__section-block {
@@ -207,11 +207,11 @@ function outcomeBadgeClass(outcome: PolicyOutcome): string {
   margin: 0;
 }
 .policy-view__btn {
-  border: 1px solid var(--color-border, #444);
-  border-radius: 0.125rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
   padding: 0.25rem 0.625rem;
-  background: var(--color-surface-2, transparent);
-  color: var(--color-ink, inherit);
+  background: var(--surface-2);
+  color: var(--ink);
   cursor: pointer;
   font-size: 0.75rem;
 }
@@ -221,13 +221,13 @@ function outcomeBadgeClass(outcome: PolicyOutcome): string {
 }
 .policy-view__count {
   font-size: 0.75rem;
-  color: var(--color-ink-muted, #888);
+  color: var(--ink-muted);
 }
 .policy-view__warn {
-  color: var(--color-signal-warn, #c80);
+  color: var(--warn);
 }
 .policy-view__error {
-  color: var(--color-signal-danger, #c33);
+  color: var(--danger);
   font-size: 0.875rem;
 }
 .policy-view__file-list,
@@ -246,25 +246,25 @@ function outcomeBadgeClass(outcome: PolicyOutcome): string {
   align-items: baseline;
   gap: 0.5rem;
   padding: 0.25rem 0;
-  border-bottom: 1px solid var(--color-border-muted, #2a2a2a);
+  border-bottom: 1px solid var(--border-muted);
   font-size: 0.875rem;
 }
 .policy-view__file-name {
-  font-family: var(--font-mono, monospace);
+  font-family: var(--font-mono);
 }
 .policy-view__tag {
   font-size: 0.625rem;
   text-transform: uppercase;
   letter-spacing: 0.05em;
-  color: var(--color-ink-muted, #888);
+  color: var(--ink-muted);
 }
 .policy-view__ok {
-  color: var(--color-signal-ok, #4a4);
+  color: var(--ok);
   font-weight: 600;
   font-size: 0.75rem;
 }
 .policy-view__err {
-  color: var(--color-signal-danger, #c33);
+  color: var(--danger);
   font-weight: 600;
   font-size: 0.75rem;
 }
@@ -272,11 +272,11 @@ function outcomeBadgeClass(outcome: PolicyOutcome): string {
 .policy-view__bytes,
 .policy-view__reason,
 .policy-view__principal {
-  color: var(--color-ink-muted, #888);
+  color: var(--ink-muted);
   font-size: 0.75rem;
 }
 .policy-view__empty {
-  color: var(--color-ink-muted, #888);
+  color: var(--ink-muted);
   font-size: 0.875rem;
 }
 .policy-view__badge {
@@ -286,28 +286,28 @@ function outcomeBadgeClass(outcome: PolicyOutcome): string {
   font-size: 0.75rem;
   font-weight: 600;
   padding: 0.0625rem 0.375rem;
-  border-radius: 0.125rem;
+  border-radius: var(--radius-sm);
   text-transform: uppercase;
 }
 .badge-allow {
-  background: var(--color-signal-ok-bg, rgba(80, 180, 120, 0.15));
-  color: var(--color-signal-ok, #4a4);
+  background: var(--surface-3);
+  color: var(--ok);
 }
 .badge-deny {
-  background: var(--color-signal-danger-bg, rgba(220, 80, 80, 0.15));
-  color: var(--color-signal-danger, #c33);
+  background: var(--surface-3);
+  color: var(--danger);
 }
 .badge-na,
 .badge-unknown {
-  background: var(--color-surface-2, rgba(140, 140, 140, 0.1));
-  color: var(--color-ink-muted, #888);
+  background: var(--surface-2);
+  color: var(--ink-muted);
 }
 .policy-view__action {
-  font-family: var(--font-mono, monospace);
+  font-family: var(--font-mono);
   font-weight: 500;
 }
 .policy-view__resource {
-  font-family: var(--font-mono, monospace);
+  font-family: var(--font-mono);
   font-size: 0.8125rem;
 }
 </style>

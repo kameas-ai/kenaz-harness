@@ -152,9 +152,11 @@ describe('ChatInput slash-command branch', () => {
     const textarea = w.find('textarea');
     await textarea.setValue('/m');
     await flushPromises();
-    // /m matches: memorize, model — activeIndex 0 → memorize.
+    // /m matches both /model and /memorize. The fake harness client lists
+    // them in source order [model, memorize]; the autocomplete preserves
+    // that order and clamps activeIndex to 0, so Tab commits /model.
     await textarea.trigger('keydown', { key: 'Tab' });
     await flushPromises();
-    expect((textarea.element as HTMLTextAreaElement).value).toBe('/memorize ');
+    expect((textarea.element as HTMLTextAreaElement).value).toBe('/model ');
   });
 });
