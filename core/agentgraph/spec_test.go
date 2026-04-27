@@ -15,16 +15,18 @@ import (
 func TestNodeKindEnumeration(t *testing.T) {
 	t.Parallel()
 
-	// Canonical (post-WP04) ordering: AllNodeKinds is sorted by manifest
-	// ID, so the slice is alphabetised across categories.
+	// Canonical (post-WP04 + WP05 read_file/read_bash_output/write_file)
+	// ordering: AllNodeKinds is sorted by manifest ID, so the slice is
+	// alphabetised across categories.
 	want := []NodeKind{
 		NodeKindActivity, NodeKindApproval, NodeKindArtifact, NodeKindAsk,
 		NodeKindAttachment, NodeKindBranch, NodeKindCheckpoint, NodeKindCompact,
 		NodeKindCorpusRead, NodeKindCorpusWrite, NodeKindDecision, NodeKindEscalate,
 		NodeKindHistoryRead, NodeKindJoin, NodeKindLoop, NodeKindMemory,
 		NodeKindMerge, NodeKindModel, NodeKindParallel, NodeKindPlanner,
-		NodeKindReflect, NodeKindRetry, NodeKindReview, NodeKindTool,
-		NodeKindTraceWrite, NodeKindTransform,
+		NodeKindReadBashOutput, NodeKindReadFile, NodeKindReflect, NodeKindRetry,
+		NodeKindReview, NodeKindTool, NodeKindTraceWrite, NodeKindTransform,
+		NodeKindWriteFile,
 	}
 	got := AllNodeKinds()
 	// Compare set-equal (order is sorted-by-ID; we accept whatever order

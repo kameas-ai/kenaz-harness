@@ -132,6 +132,18 @@ type Env struct {
 	History HistoryReader
 	// Attachments resolves an attachment ID to a content block.
 	Attachments AttachmentResolver
+	// AttachmentRegistry is the optional registration half of the
+	// attachment seam. read_file consults it when its `as_attachment`
+	// attr is true; nil disables the as_attachment path (the executor
+	// falls back to inline content).
+	AttachmentRegistry AttachmentRegistrar
+	// BashOutput is the cached-bash-output store, consulted by
+	// read_bash_output. Nil installs a stub that always returns
+	// ErrNoBashOutput.
+	BashOutput BashOutputStore
+	// Policy is the kernel-side filesystem/state gate. Nil installs
+	// the AllowAll fallback (every check passes).
+	Policy PolicyGate
 	// Trace is an optional telemetry sink. Nil disables span emission.
 	Trace TraceSink
 
@@ -353,6 +365,9 @@ func newExecutorRegistry() *executorRegistry {
 	r.register(&traceWriteExecutor{})
 	r.register(&checkpointExecutor{})
 	r.register(&artifactExecutor{})
+	r.register(&readFileExecutor{})
+	r.register(&readBashOutputExecutor{})
+	r.register(&writeFileExecutor{})
 	return r
 }
 

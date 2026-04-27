@@ -1010,6 +1010,115 @@ func (a PlannerAttrs) Validate() error {
 	return nil
 }
 
+// ReadBashOutputAttrs is the typed payload for `kind: read_bash_output`.
+//
+// Reads cached stdout/stderr from a prior bash tool run as a context-tracked artifact (FR-057b).
+type ReadBashOutputAttrs struct {
+
+	// BashRunId: Identifier of a prior bash tool run whose output to read.
+	BashRunId string `json:"bash_run_id,omitempty" yaml:"bash_run_id,omitempty"`
+
+	// IncludeStderr: When true (default), prepend stderr to stdout in the returned content.
+	IncludeStderr bool `json:"include_stderr,omitempty" yaml:"include_stderr,omitempty"`
+
+	// Provenance: When true, surface a (path, hash, scope) triple to the EventLog for this op.
+	Provenance bool `json:"provenance,omitempty" yaml:"provenance,omitempty"`
+
+	// Source: Discriminator naming the read source. Each kind under `read` sets its own default via the `defaults:` map.
+	Source string `json:"source,omitempty" yaml:"source,omitempty"`
+
+	// TailBytes: Tail-N bytes of output to return; 0 returns the full cached output.
+	TailBytes int `json:"tail_bytes,omitempty" yaml:"tail_bytes,omitempty"`
+}
+
+func (ReadBashOutputAttrs) nodeAttrsMarker() {}
+
+// Validate enforces the manifest's declared constraints for `kind: read_bash_output`.
+// Generated from the resolved manifest's attrs map; per-rule errors
+// follow the validator's manifest-attribution format
+// (`read_bash_output.attrs.<attr>.<rule>: ...`) so callers can grep for the
+// constraint that fired.
+func (a ReadBashOutputAttrs) Validate() error {
+	if a.BashRunId == "" {
+		return fmt.Errorf("bash_run_id: bash_run_id is required (manifest constraint)")
+	}
+	if a.Source != "" {
+		valid_Source := false
+		for _, allowed := range []string{"history", "corpus", "memory", "attachment", "file", "bash_output"} {
+			if a.Source == allowed {
+				valid_Source = true
+				break
+			}
+		}
+		if !valid_Source {
+			return fmt.Errorf("source.enum: got %q, want one of history | corpus | memory | attachment | file | bash_output", a.Source)
+		}
+	}
+	if a.TailBytes != 0 && float64(a.TailBytes) < 0 {
+		return fmt.Errorf("tail_bytes.min: got %d, want >= %v", a.TailBytes, 0)
+	}
+	return nil
+}
+
+// ReadFileAttrs is the typed payload for `kind: read_file`.
+//
+// Reads a file path into the active context with provenance (FR-057a). Distinct from filesystem-MCP tool reads — see spec §4.9 State-vs-Tool framing.
+type ReadFileAttrs struct {
+
+	// AsAttachment: When true, register the content in core/attachments and emit an attachment_ref instead of inline messages.
+	AsAttachment bool `json:"as_attachment,omitempty" yaml:"as_attachment,omitempty"`
+
+	// Encoding: Encoding of the returned content (default utf8).
+	Encoding string `json:"encoding,omitempty" yaml:"encoding,omitempty"`
+
+	// Path: Absolute path of the file to read.
+	Path string `json:"path,omitempty" yaml:"path,omitempty"`
+
+	// Provenance: When true, surface a (path, hash, scope) triple to the EventLog for this op.
+	Provenance bool `json:"provenance,omitempty" yaml:"provenance,omitempty"`
+
+	// Source: Discriminator naming the read source. Each kind under `read` sets its own default via the `defaults:` map.
+	Source string `json:"source,omitempty" yaml:"source,omitempty"`
+}
+
+func (ReadFileAttrs) nodeAttrsMarker() {}
+
+// Validate enforces the manifest's declared constraints for `kind: read_file`.
+// Generated from the resolved manifest's attrs map; per-rule errors
+// follow the validator's manifest-attribution format
+// (`read_file.attrs.<attr>.<rule>: ...`) so callers can grep for the
+// constraint that fired.
+func (a ReadFileAttrs) Validate() error {
+	if a.Encoding != "" {
+		valid_Encoding := false
+		for _, allowed := range []string{"utf8", "base64"} {
+			if a.Encoding == allowed {
+				valid_Encoding = true
+				break
+			}
+		}
+		if !valid_Encoding {
+			return fmt.Errorf("encoding.enum: got %q, want one of utf8 | base64", a.Encoding)
+		}
+	}
+	if a.Path == "" {
+		return fmt.Errorf("path: path is required (manifest constraint)")
+	}
+	if a.Source != "" {
+		valid_Source := false
+		for _, allowed := range []string{"history", "corpus", "memory", "attachment", "file", "bash_output"} {
+			if a.Source == allowed {
+				valid_Source = true
+				break
+			}
+		}
+		if !valid_Source {
+			return fmt.Errorf("source.enum: got %q, want one of history | corpus | memory | attachment | file | bash_output", a.Source)
+		}
+	}
+	return nil
+}
+
 // ReflectAttrs is the typed payload for `kind: reflect`.
 //
 // Self-critique pass that emits a verdict and (optionally) a revision (FR-035).
@@ -1360,6 +1469,71 @@ func (a TransformAttrs) Validate() error {
 	}
 	if a.Temperature > 2 {
 		return fmt.Errorf("temperature.max: got %v, want <= %v", a.Temperature, 2)
+	}
+	return nil
+}
+
+// WriteFileAttrs is the typed payload for `kind: write_file`.
+//
+// Writes content to a file with policy gating + provenance (FR-057c). Distinct from filesystem-MCP tool writes — see spec §4.9 State-vs-Tool framing.
+type WriteFileAttrs struct {
+
+	// Content: Port reference to the content payload.
+	Content string `json:"content,omitempty" yaml:"content,omitempty"`
+
+	// Mode: Write mode (default create).
+	Mode string `json:"mode,omitempty" yaml:"mode,omitempty"`
+
+	// Path: Absolute path of the file to write.
+	Path string `json:"path,omitempty" yaml:"path,omitempty"`
+
+	// PolicyLabel: Optional Cedar policy label evaluated alongside the file path.
+	PolicyLabel string `json:"policy_label,omitempty" yaml:"policy_label,omitempty"`
+
+	// Provenance: When true, surface a (path, hash, scope) triple to the EventLog for this op.
+	Provenance bool `json:"provenance,omitempty" yaml:"provenance,omitempty"`
+
+	// Target: Discriminator naming the write target. Each kind under `write` sets its own default via the `defaults:` map.
+	Target string `json:"target,omitempty" yaml:"target,omitempty"`
+}
+
+func (WriteFileAttrs) nodeAttrsMarker() {}
+
+// Validate enforces the manifest's declared constraints for `kind: write_file`.
+// Generated from the resolved manifest's attrs map; per-rule errors
+// follow the validator's manifest-attribution format
+// (`write_file.attrs.<attr>.<rule>: ...`) so callers can grep for the
+// constraint that fired.
+func (a WriteFileAttrs) Validate() error {
+	if a.Content == "" {
+		return fmt.Errorf("content: content is required (manifest constraint)")
+	}
+	if a.Mode != "" {
+		valid_Mode := false
+		for _, allowed := range []string{"create", "append", "replace"} {
+			if a.Mode == allowed {
+				valid_Mode = true
+				break
+			}
+		}
+		if !valid_Mode {
+			return fmt.Errorf("mode.enum: got %q, want one of create | append | replace", a.Mode)
+		}
+	}
+	if a.Path == "" {
+		return fmt.Errorf("path: path is required (manifest constraint)")
+	}
+	if a.Target != "" {
+		valid_Target := false
+		for _, allowed := range []string{"memory", "corpus", "trace", "file", "artifact"} {
+			if a.Target == allowed {
+				valid_Target = true
+				break
+			}
+		}
+		if !valid_Target {
+			return fmt.Errorf("target.enum: got %q, want one of memory | corpus | trace | file | artifact", a.Target)
+		}
 	}
 	return nil
 }

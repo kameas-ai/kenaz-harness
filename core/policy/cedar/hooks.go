@@ -144,6 +144,63 @@ func CheckFileWrite(ctx context.Context, g Gate, path string) error {
 	return enforce(d)
 }
 
+// CheckFileRead is the gate-hook helper for filesystem reads. Mirrors
+// CheckFileWrite: callers SHOULD pass an absolute, cleaned path so
+// policy authors get deterministic matching. The harness's State
+// `read_file` kind calls this from the executor; tool-side reads
+// (filesystem MCP) call it via the same helper.
+func CheckFileRead(ctx context.Context, g Gate, path string) error {
+	if g == nil {
+		return nil
+	}
+	d := g.Evaluate(
+		ctx,
+		UserUID(),
+		ActionFileRead,
+		FilesystemUID(path),
+		nil,
+	)
+	return enforce(d)
+}
+
+// CheckStateRead is the gate-hook helper for the FR-058b finer-grained
+// "Read::<source>" action. State `read_file` / `read_bash_output`
+// executors call this AFTER the broader file-read gate so a policy
+// can deny a particular source class without forbidding every
+// filesystem read.
+func CheckStateRead(ctx context.Context, g Gate, source string) error {
+	if g == nil {
+		return nil
+	}
+	d := g.Evaluate(
+		ctx,
+		UserUID(),
+		ActionStateRead,
+		StateSourceUID(source),
+		nil,
+	)
+	return enforce(d)
+}
+
+// CheckStateWrite is the FR-058b counterpart for State write kinds
+// ("write_file", "artifact"). The action carries the target class
+// ("file", "artifact") so policy authors can write rules like
+// `forbid (action == Action::"state_write", resource == State::"file")`
+// to disable file writes without breaking artifact emission.
+func CheckStateWrite(ctx context.Context, g Gate, target string) error {
+	if g == nil {
+		return nil
+	}
+	d := g.Evaluate(
+		ctx,
+		UserUID(),
+		ActionStateWrite,
+		StateTargetUID(target),
+		nil,
+	)
+	return enforce(d)
+}
+
 // enforce maps a Decision to a Go error. Allow + NotApplicable both
 // return nil (default-allow stance); Deny returns *PolicyDeniedError.
 func enforce(d Decision) error {

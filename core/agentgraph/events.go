@@ -51,6 +51,15 @@ const (
 	// node's `output_target` attr.
 	EventArtifactEmitted EventKind = "artifact_emitted"
 
+	// Filesystem / bash-output state-kind events (FR-057a/b/c). The
+	// `state_action` payload field carries the FR-058b action UID
+	// classification ("Read::file", "Read::bash_output", "Write::file")
+	// so audit consumers can group by surface without re-parsing the
+	// event kind.
+	EventFileRead       EventKind = "file_read"
+	EventFileWrite      EventKind = "file_write"
+	EventBashOutputRead EventKind = "bash_output_read"
+
 	// Alias resolution (NFR-003). Emitted once per run when the loader
 	// rewrites a deprecated kind name to its canonical form.
 	EventKindAliasResolved EventKind = "kind_alias_resolved"
@@ -95,6 +104,7 @@ func AllEventKinds() []EventKind {
 		EventCompactionFired, EventCompactionApplied,
 		EventApprovalPending, EventApprovalResolved,
 		EventArtifactEmitted, EventKindAliasResolved,
+		EventFileRead, EventFileWrite, EventBashOutputRead,
 		EventDialOverridden, EventCostCapHit, EventBudgetCapHit,
 		EventAskPending, EventAskAnswered,
 		EventReflectStarted, EventReflectCompleted,

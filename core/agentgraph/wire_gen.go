@@ -16,32 +16,35 @@ import (
 // Generated NodeKind constants. The on-the-wire string values come
 // straight from the manifest's `kind_name` (defaults to `id`).
 const (
-	NodeKindActivity    NodeKind = "activity"
-	NodeKindApproval    NodeKind = "approval"
-	NodeKindArtifact    NodeKind = "artifact"
-	NodeKindAsk         NodeKind = "ask"
-	NodeKindAttachment  NodeKind = "attachment"
-	NodeKindBranch      NodeKind = "branch"
-	NodeKindCheckpoint  NodeKind = "checkpoint"
-	NodeKindCompact     NodeKind = "compact"
-	NodeKindCorpusRead  NodeKind = "corpus_read"
-	NodeKindCorpusWrite NodeKind = "corpus_write"
-	NodeKindDecision    NodeKind = "decision"
-	NodeKindEscalate    NodeKind = "escalate"
-	NodeKindHistoryRead NodeKind = "history_read"
-	NodeKindJoin        NodeKind = "join"
-	NodeKindLoop        NodeKind = "loop"
-	NodeKindMemory      NodeKind = "memory"
-	NodeKindMerge       NodeKind = "merge"
-	NodeKindModel       NodeKind = "model"
-	NodeKindParallel    NodeKind = "parallel"
-	NodeKindPlanner     NodeKind = "planner"
-	NodeKindReflect     NodeKind = "reflect"
-	NodeKindRetry       NodeKind = "retry"
-	NodeKindReview      NodeKind = "review"
-	NodeKindTool        NodeKind = "tool"
-	NodeKindTraceWrite  NodeKind = "trace_write"
-	NodeKindTransform   NodeKind = "transform"
+	NodeKindActivity       NodeKind = "activity"
+	NodeKindApproval       NodeKind = "approval"
+	NodeKindArtifact       NodeKind = "artifact"
+	NodeKindAsk            NodeKind = "ask"
+	NodeKindAttachment     NodeKind = "attachment"
+	NodeKindBranch         NodeKind = "branch"
+	NodeKindCheckpoint     NodeKind = "checkpoint"
+	NodeKindCompact        NodeKind = "compact"
+	NodeKindCorpusRead     NodeKind = "corpus_read"
+	NodeKindCorpusWrite    NodeKind = "corpus_write"
+	NodeKindDecision       NodeKind = "decision"
+	NodeKindEscalate       NodeKind = "escalate"
+	NodeKindHistoryRead    NodeKind = "history_read"
+	NodeKindJoin           NodeKind = "join"
+	NodeKindLoop           NodeKind = "loop"
+	NodeKindMemory         NodeKind = "memory"
+	NodeKindMerge          NodeKind = "merge"
+	NodeKindModel          NodeKind = "model"
+	NodeKindParallel       NodeKind = "parallel"
+	NodeKindPlanner        NodeKind = "planner"
+	NodeKindReadBashOutput NodeKind = "read_bash_output"
+	NodeKindReadFile       NodeKind = "read_file"
+	NodeKindReflect        NodeKind = "reflect"
+	NodeKindRetry          NodeKind = "retry"
+	NodeKindReview         NodeKind = "review"
+	NodeKindTool           NodeKind = "tool"
+	NodeKindTraceWrite     NodeKind = "trace_write"
+	NodeKindTransform      NodeKind = "transform"
+	NodeKindWriteFile      NodeKind = "write_file"
 )
 
 // AllNodeKinds returns every callable kind in canonical (sorted-ID)
@@ -68,12 +71,15 @@ func AllNodeKinds() []NodeKind {
 		NodeKindModel,
 		NodeKindParallel,
 		NodeKindPlanner,
+		NodeKindReadBashOutput,
+		NodeKindReadFile,
 		NodeKindReflect,
 		NodeKindRetry,
 		NodeKindReview,
 		NodeKindTool,
 		NodeKindTraceWrite,
 		NodeKindTransform,
+		NodeKindWriteFile,
 	}
 }
 
@@ -122,6 +128,10 @@ func defaultAttrsFor(kind NodeKind) NodeAttrs {
 		return ParallelAttrs{}
 	case NodeKindPlanner:
 		return PlannerAttrs{}
+	case NodeKindReadBashOutput:
+		return ReadBashOutputAttrs{}
+	case NodeKindReadFile:
+		return ReadFileAttrs{}
 	case NodeKindReflect:
 		return ReflectAttrs{}
 	case NodeKindRetry:
@@ -134,6 +144,8 @@ func defaultAttrsFor(kind NodeKind) NodeAttrs {
 		return TraceWriteAttrs{}
 	case NodeKindTransform:
 		return TransformAttrs{}
+	case NodeKindWriteFile:
+		return WriteFileAttrs{}
 	}
 	return nil
 }
@@ -266,6 +278,18 @@ func defaultPortsFor(kind NodeKind) (inputs, outputs []Port) {
 			}, []Port{
 				{Name: "plan", Type: PortType("messages")},
 			}
+	case NodeKindReadBashOutput:
+		return []Port{
+				{Name: "query", Type: PortType("any")},
+			}, []Port{
+				{Name: "result", Type: PortType("messages")},
+			}
+	case NodeKindReadFile:
+		return []Port{
+				{Name: "query", Type: PortType("any")},
+			}, []Port{
+				{Name: "result", Type: PortType("messages")},
+			}
 	case NodeKindReflect:
 		return []Port{
 				{Name: "draft", Type: PortType("messages"), Required: true},
@@ -303,6 +327,12 @@ func defaultPortsFor(kind NodeKind) (inputs, outputs []Port) {
 				{Name: "in", Type: PortType("any"), Required: true},
 			}, []Port{
 				{Name: "out", Type: PortType("any")},
+			}
+	case NodeKindWriteFile:
+		return []Port{
+				{Name: "payload", Type: PortType("any")},
+			}, []Port{
+				{Name: "ack", Type: PortType("bool")},
 			}
 	}
 	return nil, nil
@@ -450,6 +480,18 @@ func decodeAttrs(kind NodeKind, raw map[string]any, nodeID string) (NodeAttrs, e
 			return nil, fmt.Errorf("agentgraph: node %q: decode attrs for kind %q: %w", nodeID, kind, err)
 		}
 		return v, nil
+	case NodeKindReadBashOutput:
+		var v ReadBashOutputAttrs
+		if err := json.Unmarshal(buf, &v); err != nil {
+			return nil, fmt.Errorf("agentgraph: node %q: decode attrs for kind %q: %w", nodeID, kind, err)
+		}
+		return v, nil
+	case NodeKindReadFile:
+		var v ReadFileAttrs
+		if err := json.Unmarshal(buf, &v); err != nil {
+			return nil, fmt.Errorf("agentgraph: node %q: decode attrs for kind %q: %w", nodeID, kind, err)
+		}
+		return v, nil
 	case NodeKindReflect:
 		var v ReflectAttrs
 		if err := json.Unmarshal(buf, &v); err != nil {
@@ -482,6 +524,12 @@ func decodeAttrs(kind NodeKind, raw map[string]any, nodeID string) (NodeAttrs, e
 		return v, nil
 	case NodeKindTransform:
 		var v TransformAttrs
+		if err := json.Unmarshal(buf, &v); err != nil {
+			return nil, fmt.Errorf("agentgraph: node %q: decode attrs for kind %q: %w", nodeID, kind, err)
+		}
+		return v, nil
+	case NodeKindWriteFile:
+		var v WriteFileAttrs
 		if err := json.Unmarshal(buf, &v); err != nil {
 			return nil, fmt.Errorf("agentgraph: node %q: decode attrs for kind %q: %w", nodeID, kind, err)
 		}

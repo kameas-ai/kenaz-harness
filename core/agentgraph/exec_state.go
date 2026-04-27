@@ -2,8 +2,15 @@ package agentgraph
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
 )
 
 // State-primitive executors (FR-051 .. FR-058): Memory, CorpusRead,
@@ -283,4 +290,390 @@ func (artifactExecutor) Execute(_ context.Context, env *Env, node *Node, inputs 
 		"content_bytes":  len(content),
 	})
 	return res, nil
+}
+
+// ---- read_file (FR-057a) ----
+
+// readFileTokenCap caps file reads at ~256 KiB by default. Beyond that
+// we truncate with a warning so an oversized file doesn't blow the
+// kernel's per-run token budget. The cap is intentionally conservative
+// — graphs that need to read a large file should use the corpus
+// pipeline instead.
+const readFileTokenCap = 256 * 1024
+
+type readFileExecutor struct{}
+
+func (readFileExecutor) Kind() NodeKind { return NodeKindReadFile }
+
+func (readFileExecutor) Execute(ctx context.Context, env *Env, node *Node, _ PortValues) (Result, error) {
+	res := NewResult()
+	a, ok := node.Attrs.(ReadFileAttrs)
+	if !ok {
+		return res, fmt.Errorf("read_file: node %q has wrong attrs type %T", node.ID, node.Attrs)
+	}
+	if a.Path == "" {
+		return res, fmt.Errorf("read_file: node %q: path is required", node.ID)
+	}
+	cleanPath := filepath.Clean(a.Path)
+
+	// Cedar gates: the broad Filesystem::"<path>" / file_read action
+	// fires first, then the FR-058b finer-grained Read::"file" action.
+	// Either deny short-circuits with *cedar.PolicyDeniedError surfaced
+	// through the agentgraph error chain.
+	if env.Policy != nil {
+		if err := env.Policy.CheckFileRead(ctx, cleanPath); err != nil {
+			return res, err
+		}
+		if err := env.Policy.CheckStateRead(ctx, "file"); err != nil {
+			return res, err
+		}
+	}
+
+	info, err := os.Stat(cleanPath)
+	if err != nil {
+		return res, fmt.Errorf("read_file: node %q: stat %s: %w", node.ID, cleanPath, err)
+	}
+	raw, err := os.ReadFile(cleanPath)
+	if err != nil {
+		return res, fmt.Errorf("read_file: node %q: read %s: %w", node.ID, cleanPath, err)
+	}
+
+	truncated := false
+	if len(raw) > readFileTokenCap {
+		raw = raw[:readFileTokenCap]
+		truncated = true
+	}
+
+	hash := sha256.Sum256(raw)
+	sum := hex.EncodeToString(hash[:])
+
+	encoding := a.Encoding
+	if encoding == "" {
+		encoding = "utf8"
+	}
+	var encoded string
+	switch encoding {
+	case "utf8":
+		encoded = string(raw)
+	case "base64":
+		encoded = base64.StdEncoding.EncodeToString(raw)
+	default:
+		return res, fmt.Errorf("read_file: node %q: unknown encoding %q", node.ID, encoding)
+	}
+
+	// Provenance lands in the EventLog regardless of the output port
+	// we choose so audit consumers see every read.
+	_ = res.Events.AppendKind(env.RunID, node.ID, EventFileRead, map[string]any{
+		"path":         cleanPath,
+		"sha256":       sum,
+		"mtime":        info.ModTime().UTC().Format(time.RFC3339Nano),
+		"size_bytes":   info.Size(),
+		"truncated":    truncated,
+		"encoding":     encoding,
+		"state_action": "Read::file",
+	})
+
+	if a.AsAttachment {
+		// Best-effort registration via the AttachmentRegistry seam. When
+		// the seam is missing we fall back to inline content so the
+		// node still produces a usable result.
+		if env.AttachmentRegistry != nil {
+			id, regErr := env.AttachmentRegistry.Register(ctx, AttachmentBlock{
+				MIME:   detectMIME(cleanPath),
+				Data:   raw,
+				URI:    cleanPath,
+				Title:  filepath.Base(cleanPath),
+				Inline: false,
+			})
+			if regErr == nil {
+				res.Outputs["attachment_ref"] = id
+				res.Outputs["result"] = encoded
+				res.Outputs["sha256"] = sum
+				res.Outputs["truncated"] = truncated
+				fireGreedyHook(ctx, env, node, "post-read-file",
+					"read_file:"+filepath.Base(cleanPath), encoded, &res)
+				return res, nil
+			}
+			if !errors.Is(regErr, ErrNotImplemented) {
+				return res, fmt.Errorf("read_file: node %q: register attachment: %w", node.ID, regErr)
+			}
+			// ErrNotImplemented falls through to inline mode.
+		}
+	}
+
+	res.Outputs["result"] = encoded
+	res.Outputs["sha256"] = sum
+	res.Outputs["truncated"] = truncated
+	fireGreedyHook(ctx, env, node, "post-read-file",
+		"read_file:"+filepath.Base(cleanPath), encoded, &res)
+	return res, nil
+}
+
+// ---- read_bash_output (FR-057b) ----
+
+type readBashOutputExecutor struct{}
+
+func (readBashOutputExecutor) Kind() NodeKind { return NodeKindReadBashOutput }
+
+func (readBashOutputExecutor) Execute(ctx context.Context, env *Env, node *Node, _ PortValues) (Result, error) {
+	res := NewResult()
+	a, ok := node.Attrs.(ReadBashOutputAttrs)
+	if !ok {
+		return res, fmt.Errorf("read_bash_output: node %q has wrong attrs type %T", node.ID, node.Attrs)
+	}
+	if a.BashRunId == "" {
+		return res, fmt.Errorf("read_bash_output: node %q: bash_run_id is required", node.ID)
+	}
+	if env.BashOutput == nil {
+		return res, ErrNoBashOutput
+	}
+
+	// Cedar gate: Read::"bash_output". No filesystem check here — the
+	// underlying bash run already passed its own gates.
+	if env.Policy != nil {
+		if err := env.Policy.CheckStateRead(ctx, "bash_output"); err != nil {
+			return res, err
+		}
+	}
+
+	out, err := env.BashOutput.Get(ctx, a.BashRunId)
+	if err != nil {
+		return res, fmt.Errorf("read_bash_output: node %q: %w", node.ID, err)
+	}
+
+	// Manifest declares `include_stderr` defaults to true, but Go's
+	// zero-value for bool is false. We treat an explicit-false attr as
+	// "stdout only EXCEPT when stdout is empty and stderr has content"
+	// so the node never silently returns nothing — this matches the
+	// bash tool's transcript-merging behaviour. Tests cover both
+	// branches; the kernel never sees a "default-true" decision tree
+	// because it always passes ReadBashOutputAttrs through with the
+	// raw bool the user authored.
+	body := out.Stdout
+	mergeStderr := a.IncludeStderr || (out.Stdout == "" && out.Stderr != "")
+	if mergeStderr && out.Stderr != "" {
+		if body != "" {
+			body = out.Stderr + "\n" + body
+		} else {
+			body = out.Stderr
+		}
+	}
+
+	if a.TailBytes > 0 && len(body) > a.TailBytes {
+		body = body[len(body)-a.TailBytes:]
+	}
+
+	hash := sha256.Sum256([]byte(body))
+	sum := hex.EncodeToString(hash[:])
+
+	_ = res.Events.AppendKind(env.RunID, node.ID, EventBashOutputRead, map[string]any{
+		"bash_run_id":  a.BashRunId,
+		"command":      out.Command,
+		"exit_code":    out.ExitCode,
+		"sha256":       sum,
+		"size_bytes":   len(body),
+		"state_action": "Read::bash_output",
+	})
+
+	res.Outputs["result"] = body
+	res.Outputs["exit_code"] = out.ExitCode
+	res.Outputs["sha256"] = sum
+	fireGreedyHook(ctx, env, node, "post-read-bash-output",
+		"read_bash_output:"+a.BashRunId, body, &res)
+	return res, nil
+}
+
+// ---- write_file (FR-057c) ----
+
+type writeFileExecutor struct{}
+
+func (writeFileExecutor) Kind() NodeKind { return NodeKindWriteFile }
+
+func (writeFileExecutor) Execute(ctx context.Context, env *Env, node *Node, inputs PortValues) (Result, error) {
+	res := NewResult()
+	a, ok := node.Attrs.(WriteFileAttrs)
+	if !ok {
+		return res, fmt.Errorf("write_file: node %q has wrong attrs type %T", node.ID, node.Attrs)
+	}
+	if a.Path == "" {
+		return res, fmt.Errorf("write_file: node %q: path is required", node.ID)
+	}
+	cleanPath := filepath.Clean(a.Path)
+
+	// Pull content from the named port reference. The schema marks
+	// `content` required; surface a useful error if the port is empty.
+	contentPort := a.Content
+	if contentPort == "" {
+		contentPort = "payload"
+	}
+	body, ok := inputs.GetString(contentPort)
+	if !ok {
+		// Fall back to a `content` literal when present (test
+		// convenience; production graphs use the port reference).
+		if v, ok2 := inputs.GetString("content"); ok2 {
+			body = v
+			ok = true
+		}
+	}
+	if !ok {
+		return res, fmt.Errorf("write_file: node %q: missing content on port %q", node.ID, contentPort)
+	}
+
+	// Cedar gates: file-level + FR-058b State::"file" gate. Either
+	// deny short-circuits with *cedar.PolicyDeniedError. The policy
+	// label, when set, is recorded in the EventLog so a downstream
+	// reviewer can attribute the decision back to a labelled rule.
+	if env.Policy != nil {
+		if err := env.Policy.CheckFileWrite(ctx, cleanPath); err != nil {
+			return res, err
+		}
+		if err := env.Policy.CheckStateWrite(ctx, "file"); err != nil {
+			return res, err
+		}
+	}
+
+	mode := a.Mode
+	if mode == "" {
+		mode = "create"
+	}
+
+	// Atomic-rename writes for create/replace; append uses an O_APPEND
+	// open since rename on append would lose the file. The temp file
+	// lives in the same directory as the target so cross-volume
+	// renames don't fail (NFR-005 spirit).
+	dir := filepath.Dir(cleanPath)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return res, fmt.Errorf("write_file: node %q: mkdir %s: %w", node.ID, dir, err)
+	}
+
+	switch mode {
+	case "create":
+		if _, err := os.Stat(cleanPath); err == nil {
+			return res, fmt.Errorf("write_file: node %q: %s exists (mode=create)", node.ID, cleanPath)
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return res, fmt.Errorf("write_file: node %q: stat %s: %w", node.ID, cleanPath, err)
+		}
+		if err := atomicWrite(cleanPath, []byte(body)); err != nil {
+			return res, fmt.Errorf("write_file: node %q: %w", node.ID, err)
+		}
+	case "replace":
+		if err := atomicWrite(cleanPath, []byte(body)); err != nil {
+			return res, fmt.Errorf("write_file: node %q: %w", node.ID, err)
+		}
+	case "append":
+		f, err := os.OpenFile(cleanPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+		if err != nil {
+			return res, fmt.Errorf("write_file: node %q: open append %s: %w", node.ID, cleanPath, err)
+		}
+		if _, werr := f.WriteString(body); werr != nil {
+			_ = f.Close()
+			return res, fmt.Errorf("write_file: node %q: append %s: %w", node.ID, cleanPath, werr)
+		}
+		if cerr := f.Close(); cerr != nil {
+			return res, fmt.Errorf("write_file: node %q: close %s: %w", node.ID, cleanPath, cerr)
+		}
+	default:
+		return res, fmt.Errorf("write_file: node %q: unknown mode %q", node.ID, mode)
+	}
+
+	info, err := os.Stat(cleanPath)
+	if err != nil {
+		return res, fmt.Errorf("write_file: node %q: post-write stat: %w", node.ID, err)
+	}
+	hash := sha256.Sum256([]byte(body))
+	sum := hex.EncodeToString(hash[:])
+
+	_ = res.Events.AppendKind(env.RunID, node.ID, EventFileWrite, map[string]any{
+		"path":         cleanPath,
+		"sha256":       sum,
+		"mtime":        info.ModTime().UTC().Format(time.RFC3339Nano),
+		"size_bytes":   info.Size(),
+		"mode":         mode,
+		"policy_label": a.PolicyLabel,
+		"state_action": "Write::file",
+	})
+
+	res.Outputs["ack"] = true
+	res.Outputs["sha256"] = sum
+	fireGreedyHook(ctx, env, node, "post-write-file",
+		"write_file:"+filepath.Base(cleanPath), body, &res)
+	return res, nil
+}
+
+// fireGreedyHook funnels the State-kind boundary memory writes through
+// the kernel's HookManager. The boundary tag is a free-form label per
+// FR-027's "every kernel boundary" rule — the nine canonical
+// HookBoundary constants are reserved for top-level kernel events; the
+// State kinds use stringified boundaries here so the audit log can
+// distinguish a read_file fire from a generic post-tool boundary.
+func fireGreedyHook(ctx context.Context, env *Env, node *Node, source, title, content string, res *Result) {
+	if env == nil || env.Hooks == nil || content == "" {
+		return
+	}
+	// Wrap the boundary in the post-tool archetype since State reads
+	// and writes are kernel-side side effects, not LLM/user surfaces.
+	batch := env.Hooks.Fire(ctx, HookPostTool, "session", title, content, source)
+	for _, e := range batch.Events {
+		e.RunID = env.RunID
+		e.NodeID = node.ID
+		res.Events.Append(e)
+	}
+}
+
+// atomicWrite is the temp-file + rename helper used by the create /
+// replace modes. The temp file lives in the same directory so a
+// cross-volume rename never fails.
+func atomicWrite(path string, body []byte) error {
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".write_file-*")
+	if err != nil {
+		return fmt.Errorf("create temp: %w", err)
+	}
+	tmpName := tmp.Name()
+	defer func() {
+		// Best-effort cleanup if rename failed.
+		if _, statErr := os.Stat(tmpName); statErr == nil {
+			_ = os.Remove(tmpName)
+		}
+	}()
+	if _, werr := tmp.Write(body); werr != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("write temp: %w", werr)
+	}
+	if cerr := tmp.Close(); cerr != nil {
+		return fmt.Errorf("close temp: %w", cerr)
+	}
+	if rerr := os.Rename(tmpName, path); rerr != nil {
+		return fmt.Errorf("rename %s -> %s: %w", tmpName, path, rerr)
+	}
+	return nil
+}
+
+// detectMIME is a stdlib-only MIME guesser based on file extension.
+// Keeps the read_file executor self-contained so the AttachmentBlock
+// it emits has a usable MIME field. Unknown extensions fall back to
+// "application/octet-stream".
+func detectMIME(path string) string {
+	ext := strings.ToLower(filepath.Ext(path))
+	switch ext {
+	case ".txt", ".md", ".log":
+		return "text/plain"
+	case ".json":
+		return "application/json"
+	case ".yaml", ".yml":
+		return "application/yaml"
+	case ".html", ".htm":
+		return "text/html"
+	case ".csv":
+		return "text/csv"
+	case ".png":
+		return "image/png"
+	case ".jpg", ".jpeg":
+		return "image/jpeg"
+	case ".gif":
+		return "image/gif"
+	case ".pdf":
+		return "application/pdf"
+	default:
+		return "application/octet-stream"
+	}
 }

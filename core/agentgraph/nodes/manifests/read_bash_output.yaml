@@ -1,0 +1,26 @@
+schema_version: "1"
+id: read_bash_output
+extends: read
+display_name: Read Bash Output
+description: "Reads cached stdout/stderr from a prior bash tool run as a context-tracked artifact (FR-057b)."
+executor: agentgraph.ExecReadBashOutput
+ports:
+  inputs:
+    - { name: query, type: any }
+  outputs:
+    - { name: result, type: messages }
+defaults:
+  source: bash_output
+attrs:
+  bash_run_id:
+    type: string
+    required: true
+    description: "Identifier of a prior bash tool run whose output to read."
+  tail_bytes:
+    type: int
+    min: 0
+    description: "Tail-N bytes of output to return; 0 returns the full cached output."
+  include_stderr:
+    type: bool
+    description: "When true (default), prepend stderr to stdout in the returned content."
+budget: none

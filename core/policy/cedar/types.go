@@ -17,9 +17,19 @@ import (
 const (
 	ActionToolExec       = "tool_exec"
 	ActionFileWrite      = "file_write"
+	ActionFileRead       = "file_read"
 	ActionNetworkRequest = "network_request"
 	ActionModelSelect    = "model_select"
 	ActionMemoryWrite    = "memory_write"
+
+	// State-kind action UIDs introduced by FR-058b. These coexist with
+	// the broad `tool_exec` and `file_*` actions: a State `read_file`
+	// node evaluates BOTH `Filesystem::"<path>"` (via ActionFileRead)
+	// AND a finer-grained `Read::"<source>"` action UID so policy
+	// authors can express "permit reads but deny reads from
+	// `~/.ssh`" with a single forbid rule.
+	ActionStateRead  = "state_read"
+	ActionStateWrite = "state_write"
 )
 
 // Entity-type names mirror spec §4.10's recommended mapping:
@@ -38,6 +48,13 @@ const (
 	EntityTypeMemory     = "Memory"
 	EntityTypeUser       = "User"
 	EntityTypeAction     = "Action"
+
+	// EntityTypeStateSource and EntityTypeStateTarget back the FR-058b
+	// finer-grained read/write gating. Resource IDs match the State
+	// archetype's `source` / `target` enums (e.g. "file", "bash_output",
+	// "history" for read; "file", "artifact", "trace" for write).
+	EntityTypeStateSource = "State"
+	EntityTypeStateTarget = "State"
 
 	// PrincipalLocal is the canonical EntityUID id for the single
 	// local user. The harness is single-user / privacy-first
@@ -119,6 +136,22 @@ func FilesystemUID(path string) cedar.EntityUID {
 // of "global", "project", or "session" per FR-029.
 func MemoryUID(scope string) cedar.EntityUID {
 	return cedar.NewEntityUID(EntityTypeMemory, cedar.String(scope))
+}
+
+// StateSourceUID builds a Cedar EntityUID for a State `read` source
+// class. source is one of "history", "corpus", "memory", "attachment",
+// "file", "bash_output" — matching the `source:` enum on the read
+// archetype (FR-058b).
+func StateSourceUID(source string) cedar.EntityUID {
+	return cedar.NewEntityUID(EntityTypeStateSource, cedar.String(source))
+}
+
+// StateTargetUID builds a Cedar EntityUID for a State `write` target
+// class. target is one of "memory", "corpus", "trace", "file",
+// "artifact" — matching the `target:` enum on the write archetype
+// (FR-058b).
+func StateTargetUID(target string) cedar.EntityUID {
+	return cedar.NewEntityUID(EntityTypeStateTarget, cedar.String(target))
 }
 
 // UserUID returns the canonical local-user principal.

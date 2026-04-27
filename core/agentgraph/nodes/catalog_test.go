@@ -41,11 +41,12 @@ func TestCatalogGetListArchetypes(t *testing.T) {
 		}
 	}
 
-	// Kinds() returns the 26 callable kinds shipped in WP04.
+	// Kinds() returns the 29 callable kinds shipped after WP05 (WP04's
+	// 26 + the three filesystem/bash-output state kinds).
 	kinds := cat.Kinds()
-	const wantCallable = 26
+	const wantCallable = 29
 	if len(kinds) != wantCallable {
-		t.Errorf("expected %d kinds in WP04, got %d", wantCallable, len(kinds))
+		t.Errorf("expected %d kinds (WP04+WP05), got %d", wantCallable, len(kinds))
 	}
 
 	// IsCallable returns false for archetypes and unknown IDs.
@@ -63,11 +64,12 @@ func TestCatalogGetListArchetypes(t *testing.T) {
 	if got := cat.ListByCategory(nodes.CategoryCompute); len(got) != 11 {
 		t.Errorf("ListByCategory(compute): got %d, want 11 (1 archetype + 10 kinds)", len(got))
 	}
-	// state archetype + read/write/marker archetypes + 8 callable state
-	// kinds = 12.
+	// state archetype + read/write/marker archetypes + 11 callable state
+	// kinds (8 from WP04 + read_file/read_bash_output/write_file from
+	// WP05) = 15.
 	stateLayer := cat.ListByCategory(nodes.CategoryState)
-	if len(stateLayer) != 12 {
-		t.Errorf("ListByCategory(state): got %d, want 12 (4 archetypes + 8 kinds)", len(stateLayer))
+	if len(stateLayer) != 15 {
+		t.Errorf("ListByCategory(state): got %d, want 15 (4 archetypes + 11 kinds)", len(stateLayer))
 	}
 }
 
@@ -80,9 +82,10 @@ func TestCatalogListByArchetype(t *testing.T) {
 		t.Fatalf("LoadCatalog: %v", err)
 	}
 	children := cat.ListByArchetype("state")
-	// 3 archetype-children (read/write/marker) + 8 callable kinds =
-	// 11 entries under the state archetype.
-	if got, want := len(children), 11; got != want {
+	// 3 archetype-children (read/write/marker) + 11 callable kinds
+	// (WP04's 8 + WP05's read_file/read_bash_output/write_file) =
+	// 14 entries under the state archetype.
+	if got, want := len(children), 14; got != want {
 		t.Fatalf("ListByArchetype(state): got %d, want %d", got, want)
 	}
 	gotIDs := map[string]bool{}

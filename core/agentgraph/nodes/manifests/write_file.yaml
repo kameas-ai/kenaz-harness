@@ -1,0 +1,30 @@
+schema_version: "1"
+id: write_file
+extends: write
+display_name: Write File
+description: "Writes content to a file with policy gating + provenance (FR-057c). Distinct from filesystem-MCP tool writes — see spec §4.9 State-vs-Tool framing."
+executor: agentgraph.ExecWriteFile
+ports:
+  inputs:
+    - { name: payload, type: any }
+  outputs:
+    - { name: ack, type: bool }
+defaults:
+  target: file
+attrs:
+  path:
+    type: string
+    required: true
+    description: "Absolute path of the file to write."
+  content:
+    type: messages_ref
+    required: true
+    description: "Port reference to the content payload."
+  mode:
+    type: enum
+    enum: [create, append, replace]
+    description: "Write mode (default create)."
+  policy_label:
+    type: string
+    description: "Optional Cedar policy label evaluated alongside the file path."
+budget: none

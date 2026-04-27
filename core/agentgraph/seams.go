@@ -198,6 +198,15 @@ type AttachmentResolver interface {
 	Resolve(ctx context.Context, attachmentID string) (AttachmentBlock, error)
 }
 
+// AttachmentRegistrar is the optional registration half of the
+// attachment seam, consumed by the read_file executor when its
+// `as_attachment` attr is set. Implementations register a new
+// attachment in `core/attachments` and return its ID. Implementations
+// that don't support registration should return ErrNotImplemented.
+type AttachmentRegistrar interface {
+	Register(ctx context.Context, block AttachmentBlock) (attachmentID string, err error)
+}
+
 // AttachmentBlock is the resolved content the AttachmentNode flows on
 // its output port. The kernel passes it through opaquely; the
 // downstream LLMNode is responsible for converting it to a
@@ -208,6 +217,66 @@ type AttachmentBlock struct {
 	URI     string
 	Title   string
 	Inline  bool
+}
+
+// ---- Bash output cache ----
+
+// BashOutput is the cached transcript of a prior bash tool run, looked
+// up by run-id by the read_bash_output executor (FR-057b).
+type BashOutput struct {
+	// RunID is the identifier the executor matches on.
+	RunID string
+	// Command is the parsed/argv command string (best-effort; may be
+	// empty if the cache layer did not retain it).
+	Command string
+	// Stdout is the captured standard output.
+	Stdout string
+	// Stderr is the captured standard error.
+	Stderr string
+	// ExitCode is the process exit status (-1 when the run was killed
+	// or the cache predates exit tracking).
+	ExitCode int
+}
+
+// BashOutputStore is the kernel-side seam for reading cached bash tool
+// transcripts. Production wiring binds this to the bash tool's run
+// log; tests pass a fake. nil disables read_bash_output (the executor
+// returns ErrNoBashOutput).
+type BashOutputStore interface {
+	Get(ctx context.Context, runID string) (BashOutput, error)
+}
+
+// BashOutputStoreFunc adapts a function to BashOutputStore.
+type BashOutputStoreFunc func(ctx context.Context, runID string) (BashOutput, error)
+
+// Get satisfies BashOutputStore.
+func (f BashOutputStoreFunc) Get(ctx context.Context, runID string) (BashOutput, error) {
+	return f(ctx, runID)
+}
+
+// ---- Policy gate ----
+
+// PolicyGate is the kernel-side seam onto core/policy/cedar's filesystem
+// gate hooks. It is intentionally narrow: only the operations the
+// agentgraph executors call are exposed. Production wiring binds this
+// to a small adapter that delegates to cedar.Check{File,State}{Read,Write};
+// tests pass a stub.
+//
+// nil disables policy gating (the AllowAll fallback) — every executor
+// proceeds as if the action were permitted. This matches the
+// boot-stage default of cedar.AllowAll.
+type PolicyGate interface {
+	// CheckFileRead is consulted by read_file before opening a path.
+	// Implementations return a non-nil error to deny.
+	CheckFileRead(ctx context.Context, path string) error
+	// CheckFileWrite is consulted by write_file before opening a path
+	// for writing.
+	CheckFileWrite(ctx context.Context, path string) error
+	// CheckStateRead is the FR-058b finer-grained gate; source is the
+	// `read` archetype's source class ("file", "bash_output", ...).
+	CheckStateRead(ctx context.Context, source string) error
+	// CheckStateWrite mirrors CheckStateRead for write targets.
+	CheckStateWrite(ctx context.Context, target string) error
 }
 
 // ---- Trace ----
@@ -414,6 +483,10 @@ var ErrNoCorpus = errors.New("agentgraph: no corpus backend configured")
 // ErrNoActivities is returned by the default ActivityCatalog stub.
 var ErrNoActivities = errors.New("agentgraph: no activity catalog configured")
 
+// ErrNoBashOutput is returned by the default BashOutputStore stub when
+// no cache is wired or the run-id is unknown.
+var ErrNoBashOutput = errors.New("agentgraph: no bash output store configured")
+
 // nilLLM is a placeholder LLMProvider that errors on every call.
 type nilLLM struct{}
 
@@ -468,6 +541,23 @@ func (nilAttachments) Resolve(_ context.Context, _ string) (AttachmentBlock, err
 	return AttachmentBlock{}, ErrNotImplemented
 }
 
+// nilBashOutput is the default BashOutputStore stub.
+type nilBashOutput struct{}
+
+func (nilBashOutput) Get(_ context.Context, _ string) (BashOutput, error) {
+	return BashOutput{}, ErrNoBashOutput
+}
+
+// allowAllPolicy is the default PolicyGate when no gate is configured.
+// Mirrors cedar.AllowAll's default-allow stance: every check returns
+// nil so the executor proceeds.
+type allowAllPolicy struct{}
+
+func (allowAllPolicy) CheckFileRead(_ context.Context, _ string) error    { return nil }
+func (allowAllPolicy) CheckFileWrite(_ context.Context, _ string) error   { return nil }
+func (allowAllPolicy) CheckStateRead(_ context.Context, _ string) error   { return nil }
+func (allowAllPolicy) CheckStateWrite(_ context.Context, _ string) error  { return nil }
+
 // applyEnvDefaults fills missing seams with safe stubs so executors
 // don't need to nil-check every dependency.
 func applyEnvDefaults(env *Env) {
@@ -491,6 +581,12 @@ func applyEnvDefaults(env *Env) {
 	}
 	if env.Attachments == nil {
 		env.Attachments = nilAttachments{}
+	}
+	if env.BashOutput == nil {
+		env.BashOutput = nilBashOutput{}
+	}
+	if env.Policy == nil {
+		env.Policy = allowAllPolicy{}
 	}
 	if env.Trace == nil {
 		env.Trace = noopTrace{}

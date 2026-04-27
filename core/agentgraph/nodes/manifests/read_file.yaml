@@ -1,0 +1,26 @@
+schema_version: "1"
+id: read_file
+extends: read
+display_name: Read File
+description: "Reads a file path into the active context with provenance (FR-057a). Distinct from filesystem-MCP tool reads — see spec §4.9 State-vs-Tool framing."
+executor: agentgraph.ExecReadFile
+ports:
+  inputs:
+    - { name: query, type: any }
+  outputs:
+    - { name: result, type: messages }
+defaults:
+  source: file
+attrs:
+  path:
+    type: string
+    required: true
+    description: "Absolute path of the file to read."
+  encoding:
+    type: enum
+    enum: [utf8, base64]
+    description: "Encoding of the returned content (default utf8)."
+  as_attachment:
+    type: bool
+    description: "When true, register the content in core/attachments and emit an attachment_ref instead of inline messages."
+budget: none

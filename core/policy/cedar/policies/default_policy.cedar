@@ -54,3 +54,33 @@ permit (
     action == Action::"file_write",
     resource
 );
+
+// --- file reads ----------------------------------------------------
+// Permit file reads by default. The State `read_file` kind and the
+// filesystem MCP `read` tool both gate through this action. Granular
+// forbid rules can disable reads from specific roots (e.g. `~/.ssh`).
+permit (
+    principal == User::"local",
+    action == Action::"file_read",
+    resource
+);
+
+// --- state read ----------------------------------------------------
+// Permit FR-058b State-kind reads by default. The action UID
+// `Action::"state_read"` carries a `State::"<source>"` resource where
+// source is one of history|corpus|memory|attachment|file|bash_output.
+permit (
+    principal == User::"local",
+    action == Action::"state_read",
+    resource
+);
+
+// --- state write ---------------------------------------------------
+// Permit FR-058b State-kind writes by default. The action UID
+// `Action::"state_write"` carries a `State::"<target>"` resource
+// where target is one of memory|corpus|trace|file|artifact.
+permit (
+    principal == User::"local",
+    action == Action::"state_write",
+    resource
+);
