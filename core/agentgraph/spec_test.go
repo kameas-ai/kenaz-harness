@@ -25,8 +25,8 @@ func TestNodeKindEnumeration(t *testing.T) {
 		NodeKindHistoryRead, NodeKindJoin, NodeKindLoop, NodeKindMemory,
 		NodeKindMerge, NodeKindModel, NodeKindParallel, NodeKindPlanner,
 		NodeKindReadBashOutput, NodeKindReadFile, NodeKindReflect, NodeKindRetry,
-		NodeKindReview, NodeKindTool, NodeKindTraceWrite, NodeKindTransform,
-		NodeKindWriteFile,
+		NodeKindReview, NodeKindSessionWrite, NodeKindTool, NodeKindTraceWrite,
+		NodeKindTransform, NodeKindWriteFile,
 	}
 	got := AllNodeKinds()
 	// Compare set-equal (order is sorted-by-ID; we accept whatever order

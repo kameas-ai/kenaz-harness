@@ -284,8 +284,8 @@ func TestKernel_LLMNodeRunsThroughKernel(t *testing.T) {
 	if env.Counters.LLMCallsMade != 1 {
 		t.Errorf("LLMCallsMade = %d", env.Counters.LLMCallsMade)
 	}
-	// Should have produced 1 post-LLM hook write to memory.
-	if mem.writeCount() != 1 {
-		t.Errorf("memory hook writes = %d", mem.writeCount())
+	// Should have produced 2 hook writes: pre-LLM (WP06) + post-LLM.
+	if mem.writeCount() != 2 {
+		t.Errorf("memory hook writes = %d (want 2 = pre+post-llm)", mem.writeCount())
 	}
 }

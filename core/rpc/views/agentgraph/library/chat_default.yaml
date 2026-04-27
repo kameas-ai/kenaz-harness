@@ -85,7 +85,7 @@ nodes:
     attrs:
       condition: "finish_reason == \"tool_use\""
       next_true: pump_loop
-      next_false: ask_user
+      next_false: assistant_write
 
   - id: pump_loop
     kind: loop
@@ -97,6 +97,13 @@ nodes:
         - tool_call
         - continue_check
 
+  - id: assistant_write
+    kind: session_write
+    title: "Persist assistant turn to session history"
+    attrs:
+      role: assistant
+      text_input_port: text
+
 edges:
   - from: { node: history_in, port: messages }
     to:   { node: ask_user, port: context }
@@ -104,3 +111,5 @@ edges:
     to:   { node: assistant_turn, port: messages }
   - from: { node: assistant_turn, port: response }
     to:   { node: continue_check, port: in }
+  - from: { node: assistant_turn, port: assistant }
+    to:   { node: assistant_write, port: text }

@@ -36,6 +36,14 @@ type EnvDeps struct {
 	// constructs it. nil disables persistence (the in-memory ring
 	// buffer continues to work).
 	JournalWriter coreag.JournalWriter
+	// History is the read-side session-history seam consumed by the
+	// HistoryReadNode kind. nil installs the agentgraph nil-stub
+	// (returns an empty history).
+	History coreag.HistoryReader
+	// HistoryWriter is the write-side seam consumed by the
+	// SessionWriteNode kind (chat-migration WP02). nil installs the
+	// nilHistoryWriter stub which errors on every call.
+	HistoryWriter coreag.HistoryWriter
 }
 
 // WithEnvDeps installs production seams onto the Manager. The seams
@@ -82,5 +90,11 @@ func (d EnvDeps) applyTo(env *coreag.Env) {
 	// init pulls in. The agentgraph.Env carries the seam directly.
 	if d.JournalWriter != nil {
 		env.JournalWriter = d.JournalWriter
+	}
+	if d.History != nil {
+		env.History = d.History
+	}
+	if d.HistoryWriter != nil {
+		env.HistoryWriter = d.HistoryWriter
 	}
 }

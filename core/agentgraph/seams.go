@@ -324,6 +324,43 @@ func (f HistoryReaderFunc) History(ctx context.Context, sessionID string, n int)
 	return f(ctx, sessionID, n)
 }
 
+// HistoryWriter is the optional persistence half of the history seam,
+// consumed by the SessionWriteNode kind. Production wiring binds this
+// to core/session.Manager.AppendMessage; tests can pass a fake.
+//
+// AppendMessage assigns the message ID and persistence side-effects;
+// the returned id is surfaced on the SessionWriteNode `message_id`
+// output port so downstream nodes (artifact backlinks, branch markers)
+// can reference the freshly persisted row.
+type HistoryWriter interface {
+	AppendMessage(ctx context.Context, sessionID, role, content string) (messageID string, err error)
+}
+
+// HistoryWriterFunc adapts a function value to the HistoryWriter
+// interface. Useful for tests that want to record append calls without
+// declaring a struct.
+type HistoryWriterFunc func(ctx context.Context, sessionID, role, content string) (string, error)
+
+// AppendMessage satisfies HistoryWriter.
+func (f HistoryWriterFunc) AppendMessage(ctx context.Context, sessionID, role, content string) (string, error) {
+	return f(ctx, sessionID, role, content)
+}
+
+// nilHistoryWriter is the default no-op writer installed when env
+// applyEnvDefaults sees env.HistoryWriter == nil. It returns
+// ErrNoHistoryWriter so SessionWriteNode surfaces a clear error rather
+// than silently no-opping.
+type nilHistoryWriter struct{}
+
+// AppendMessage satisfies HistoryWriter; always errors.
+func (nilHistoryWriter) AppendMessage(_ context.Context, _, _, _ string) (string, error) {
+	return "", ErrNoHistoryWriter
+}
+
+// ErrNoHistoryWriter is returned by the default HistoryWriter stub
+// when SessionWriteNode fires without a real writer wired.
+var ErrNoHistoryWriter = errors.New("agentgraph: no history writer configured")
+
 // ---- Attachments ----
 
 // AttachmentResolver wraps `core/attachments` for the AttachmentNode.
@@ -711,6 +748,9 @@ func applyEnvDefaults(env *Env) {
 	}
 	if env.History == nil {
 		env.History = nilHistory{}
+	}
+	if env.HistoryWriter == nil {
+		env.HistoryWriter = nilHistoryWriter{}
 	}
 	if env.Attachments == nil {
 		env.Attachments = nilAttachments{}

@@ -130,6 +130,12 @@ type Env struct {
 	Corpus CorpusBackend
 	// History is the session-history reader.
 	History HistoryReader
+	// HistoryWriter is the optional persistence half of the history
+	// seam, consumed by SessionWriteNode. nil installs the
+	// nilHistoryWriter stub which errors on every call so a graph that
+	// fires session_write without wiring fails fast rather than
+	// silently dropping the assistant turn.
+	HistoryWriter HistoryWriter
 	// Attachments resolves an attachment ID to a content block.
 	Attachments AttachmentResolver
 	// AttachmentRegistry is the optional registration half of the
@@ -385,6 +391,7 @@ func newExecutorRegistry() *executorRegistry {
 	r.register(&readFileExecutor{})
 	r.register(&readBashOutputExecutor{})
 	r.register(&writeFileExecutor{})
+	r.register(&sessionWriteExecutor{})
 	return r
 }
 

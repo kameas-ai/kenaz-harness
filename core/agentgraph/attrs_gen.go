@@ -1308,6 +1308,47 @@ func (a ReviewAttrs) Validate() error {
 	return nil
 }
 
+// SessionWriteAttrs is the typed payload for `kind: session_write`.
+//
+// Appends one assistant or system message to the session's persisted history. Replaces the toolloop's chassis-side post-LLM persistence path with a typed kind that lives on the chat graph. Distinct from `memory` because session messages and long-term embedded memory are different storage concerns.
+type SessionWriteAttrs struct {
+
+	// Provenance: When true, surface a (path, hash, scope) triple to the EventLog for this op.
+	Provenance bool `json:"provenance,omitempty" yaml:"provenance,omitempty"`
+
+	// Role: Role under which to persist the message.
+	Role string `json:"role,omitempty" yaml:"role,omitempty"`
+
+	// TextInputPort: Override for the input port to read text from (default: text).
+	TextInputPort string `json:"text_input_port,omitempty" yaml:"text_input_port,omitempty"`
+}
+
+func (SessionWriteAttrs) nodeAttrsMarker() {}
+
+// Validate enforces the manifest's declared constraints for `kind: session_write`.
+// Generated from the resolved manifest's attrs map; per-rule errors
+// follow the validator's manifest-attribution format
+// (`session_write.attrs.<attr>.<rule>: ...`) so callers can grep for the
+// constraint that fired.
+func (a SessionWriteAttrs) Validate() error {
+	if a.Role == "" {
+		return fmt.Errorf("role: role is required (manifest constraint)")
+	}
+	if a.Role != "" {
+		valid_Role := false
+		for _, allowed := range []string{"assistant", "system"} {
+			if a.Role == allowed {
+				valid_Role = true
+				break
+			}
+		}
+		if !valid_Role {
+			return fmt.Errorf("role.enum: got %q, want one of assistant | system", a.Role)
+		}
+	}
+	return nil
+}
+
 // ToolAttrs is the typed payload for `kind: tool`.
 //
 // Invokes a registered tool (FR-032). The on-the-wire kind name is unchanged from v0.

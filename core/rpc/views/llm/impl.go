@@ -203,6 +203,20 @@ type HookRunner interface {
 	RunPostSend(ctx context.Context, ev PostSendHookEvent)
 }
 
+// ChatRunner is the kernel-driven entry point that replaces the
+// toolloop-based StartStream when wired (chat-migration WP04). The
+// LLM impl prefers ChatRunner when both ChatRunner and ToolLoop are
+// configured; the toolloop path remains the default until parity
+// tests in WP06 turn green.
+//
+// Defined here as a narrow interface so the impl doesn't import the
+// chat package directly (DIRECTIVE_001 — keeps the import direction
+// one-way: chat package can import llm view, not the other way around).
+type ChatRunner interface {
+	StartStream(ctx context.Context, profileID, sessionID, modelOverride, userMessage string) (string, error)
+	StopStream(ctx context.Context, subID string) error
+}
+
 // API is the concrete LLMConnectorAPI implementation.
 type API struct {
 	reg      Registry
@@ -219,6 +233,12 @@ type API struct {
 	// context. nil falls back to the SessionContextReader probe so
 	// Mission A behaviour stays intact during the one-release buffer.
 	attachments AttachmentsResolver
+	// chatRunner is the kernel-driven entry point introduced in
+	// chat-migration WP04. When non-nil StartStream forwards to the
+	// runner; when nil the legacy toolloop path runs. The chassis
+	// flips this on once parity tests turn green; until then both
+	// paths coexist behind feature-flag-style construction.
+	chatRunner ChatRunner
 	// toolLoop closes the LLM ↔ tool ↔ LLM cycle when the adapter
 	// signals FinishReason == "tool_use". nil disables the loop —
 	// the chat path stays as it was before WP01.
@@ -297,7 +317,15 @@ type Config struct {
 	// call against the configured MCP pool and re-invokes the
 	// registry until the model returns a non-tool_use finish. nil
 	// preserves WP00 chat-only behavior.
+	//
+	// Deprecated by chat-migration WP04: when both ToolLoop and
+	// ChatRunner are wired the impl prefers ChatRunner. The toolloop
+	// path is retained for the parity-test cutover; WP07 retires it.
 	ToolLoop *toolloop.Loop
+	// ChatRunner is the kernel-driven entry point that replaces the
+	// toolloop chat path. When non-nil StartStream forwards through
+	// the runner. nil falls back to the legacy toolloop path.
+	ChatRunner ChatRunner
 	// Tools, when non-nil, is consulted on every StartStream to
 	// populate GenerationRequest.Tools. Without it the model is never
 	// told about the MCP catalog and the toolloop is dead code from
@@ -331,6 +359,7 @@ func New(cfg Config) *API {
 		hooks:          cfg.Hooks,
 		attachments:    cfg.Attachments,
 		toolLoop:       cfg.ToolLoop,
+		chatRunner:     cfg.ChatRunner,
 		tools:          cfg.Tools,
 		confirmGateway: cfg.ConfirmGateway,
 		artifacts:      cfg.Artifacts,
@@ -563,7 +592,32 @@ func (a *API) StartStream(ctx context.Context, profileID, sessionID, modelOverri
 		"profile_id", profileID,
 		"session_id", sessionID,
 		"model_override", modelOverride,
+		"chat_runner_wired", a.chatRunner != nil,
 	)
+	// chat-migration WP04: prefer the kernel-driven ChatRunner when
+	// wired. The runner takes ownership of provider resolution,
+	// history loading, kernel run, and the post-LLM persistence path
+	// (via SessionWriteNode). The legacy toolloop fallthrough below
+	// remains for the parity-test cutover; WP07 removes it.
+	if a.chatRunner != nil {
+		// Pull the latest user message — the chat surface posts the
+		// user turn via Sessions_AppendMessage immediately before
+		// calling StartStream, so the trailing user row is the new
+		// turn. The runner will re-append it via HistoryWriter so the
+		// kernel run sees consistent history.
+		var userMessage string
+		if a.history != nil && sessionID != "" {
+			if stored, herr := a.history.ListMessages(ctx, sessionID); herr == nil {
+				for i := len(stored) - 1; i >= 0; i-- {
+					if stored[i].Role == "user" {
+						userMessage = stored[i].Content
+						break
+					}
+				}
+			}
+		}
+		return a.chatRunner.StartStream(ctx, profileID, sessionID, modelOverride, userMessage)
+	}
 	if a.reg == nil {
 		log.Error("llm.start_stream.failed", "reason", "connector not wired")
 		return "", errors.New("llm: connector not wired")
@@ -694,7 +748,14 @@ func (a *API) StartStream(ctx context.Context, profileID, sessionID, modelOverri
 
 // StopStream terminates the subscription. The pump goroutine drains
 // remaining chunks, emits llm:stream-closed, and exits.
-func (a *API) StopStream(_ context.Context, subID string) error {
+func (a *API) StopStream(ctx context.Context, subID string) error {
+	// chat-migration WP04: ChatRunner-issued sub IDs are prefixed
+	// "chat-"; route them to the runner's StopStream so the kernel
+	// goroutine can cancel cleanly. Legacy "llm-N" ids fall through
+	// to the toolloop pump path below.
+	if a.chatRunner != nil && len(subID) >= 5 && subID[:5] == "chat-" {
+		return a.chatRunner.StopStream(ctx, subID)
+	}
 	a.mu.Lock()
 	sub, ok := a.subs[subID]
 	a.mu.Unlock()

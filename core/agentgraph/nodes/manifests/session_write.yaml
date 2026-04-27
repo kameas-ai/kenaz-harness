@@ -1,0 +1,24 @@
+schema_version: "1"
+id: session_write
+extends: state
+display_name: Session Write
+description: "Appends one assistant or system message to the session's persisted history. Replaces the toolloop's chassis-side post-LLM persistence path with a typed kind that lives on the chat graph. Distinct from `memory` because session messages and long-term embedded memory are different storage concerns."
+executor: agentgraph.ExecSessionWrite
+ports:
+  inputs:
+    - { name: text, type: any }
+  outputs:
+    - { name: message_id, type: any }
+    - { name: appended, type: any }
+defaults:
+  target: session_messages
+attrs:
+  role:
+    type: enum
+    enum: [assistant, system]
+    required: true
+    description: "Role under which to persist the message."
+  text_input_port:
+    type: string
+    description: "Override for the input port to read text from (default: text)."
+budget: none

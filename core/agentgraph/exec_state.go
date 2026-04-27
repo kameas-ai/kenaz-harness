@@ -190,6 +190,86 @@ func (historyReadExecutor) Execute(ctx context.Context, env *Env, node *Node, _ 
 	return res, nil
 }
 
+// ---- SessionWriteNode ----
+
+// sessionWriteExecutor persists one chat-history row via the
+// HistoryWriter seam. The kind ships under the `state` archetype
+// because it writes durable session-message rows; the Memory kind is
+// reserved for long-term embedded memory and uses a separate store.
+//
+// Pulled from the typed `SessionWriteAttrs.TextInputPort` (default
+// "text"); the input value MUST be a string. The role attr is one of
+// {"assistant", "system"} — the manifest enum gates this at decode
+// time so we don't repeat the validation here.
+type sessionWriteExecutor struct{}
+
+func (sessionWriteExecutor) Kind() NodeKind { return NodeKindSessionWrite }
+
+func (sessionWriteExecutor) Execute(ctx context.Context, env *Env, node *Node, inputs PortValues) (Result, error) {
+	res := NewResult()
+	a, ok := node.Attrs.(SessionWriteAttrs)
+	if !ok {
+		return res, fmt.Errorf("session_write: node %q has wrong attrs type %T", node.ID, node.Attrs)
+	}
+	role := a.Role
+	if role == "" {
+		role = "assistant"
+	}
+	port := a.TextInputPort
+	if port == "" {
+		port = "text"
+	}
+	text, ok := inputs.GetString(port)
+	if !ok {
+		// Fallback: accept a Message slice on the named port and pull
+		// the trailing assistant turn — this is the common shape the
+		// modelExecutor emits on its `response` port, so a graph can
+		// wire `response → text` without an explicit transform.
+		if v, vok := inputs.Get(port); vok {
+			if msgs, mok := v.([]Message); mok && len(msgs) > 0 {
+				text = msgs[len(msgs)-1].Content
+				ok = true
+			} else if m, mok := v.(Message); mok {
+				text = m.Content
+				ok = true
+			}
+		}
+	}
+	if !ok || text == "" {
+		_ = res.Events.AppendKind(env.RunID, node.ID, EventNodeError, map[string]any{
+			"err":  "missing or empty text input",
+			"port": port,
+		})
+		return res, fmt.Errorf("session_write: node %q: missing text on port %q", node.ID, port)
+	}
+	if env.SessionID == "" {
+		// No session — best-effort no-op so a graph that runs outside
+		// a chat session (batch / activity tests) doesn't hard-error.
+		res.Outputs["message_id"] = ""
+		res.Outputs["appended"] = false
+		return res, nil
+	}
+	if env.HistoryWriter == nil {
+		return res, ErrNoHistoryWriter
+	}
+	mid, err := env.HistoryWriter.AppendMessage(ctx, env.SessionID, role, text)
+	if err != nil {
+		_ = res.Events.AppendKind(env.RunID, node.ID, EventNodeError, map[string]any{
+			"err":  err.Error(),
+			"role": role,
+		})
+		return res, fmt.Errorf("session_write: node %q: %w", node.ID, err)
+	}
+	res.Outputs["message_id"] = mid
+	res.Outputs["appended"] = true
+	_ = res.Events.AppendKind(env.RunID, node.ID, EventSessionWrite, map[string]any{
+		"role":       role,
+		"message_id": mid,
+		"bytes":      len(text),
+	})
+	return res, nil
+}
+
 // ---- TraceWriteNode ----
 
 type traceWriteExecutor struct{}

@@ -62,12 +62,23 @@ const (
 	HookOnSessionEnd    HookBoundary = "on-session-end"
 	HookOnCheckpoint    HookBoundary = "on-checkpoint"
 	HookOnExplicitPin   HookBoundary = "on-explicit-pin"
+
+	// Chat-pipeline boundaries (chat-migration WP06). pre-llm fires
+	// before the model executor dispatches the LLMRequest; pre-tool
+	// fires before the tool executor calls Tools.Call. They mirror the
+	// toolloop's PreSend / PreToolUse extension points so the chassis
+	// can swap toolloop's HookRunner for kernel HookManager without
+	// losing any hook surface.
+	HookPreLLM  HookBoundary = "pre-llm"
+	HookPreTool HookBoundary = "pre-tool"
 )
 
 // AllHookBoundaries lists every supported boundary in canonical order.
 func AllHookBoundaries() []HookBoundary {
 	return []HookBoundary{
-		HookPostLLM, HookPostTool, HookPostUserMessage,
+		HookPreLLM, HookPostLLM,
+		HookPreTool, HookPostTool,
+		HookPostUserMessage,
 		HookPreBranchFork, HookOnBranchClose, HookOnMerge,
 		HookOnSessionEnd, HookOnCheckpoint, HookOnExplicitPin,
 	}

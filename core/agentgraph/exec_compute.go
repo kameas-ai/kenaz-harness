@@ -114,6 +114,23 @@ func (modelExecutor) Execute(ctx context.Context, env *Env, node *Node, inputs P
 		}
 	}
 
+	// Pre-LLM hook (WP06 chat-migration). Mirrors the toolloop's
+	// PreSend extension point so the chassis can swap toolloop's
+	// HookRunner for the kernel HookManager without losing the
+	// pre-call surface (memory.retrieve, redaction transforms, ...).
+	// Hooks here are fire-and-record: the FR-027 greedy-memory journal
+	// captures the boundary; provider-side mutation (request rewrite)
+	// stays in toolloop's HookRunner until that path is fully retired.
+	if env.Hooks != nil {
+		hookBatch := env.Hooks.Fire(ctx, HookPreLLM, "session",
+			"pre-llm — "+node.ID, summarizeMessages(msgs), node.ID)
+		for _, e := range hookBatch.Events {
+			e.RunID = env.RunID
+			e.NodeID = node.ID
+			res.Events.Append(e)
+		}
+	}
+
 	// Thread the kernel's StreamSink onto the call ctx so the
 	// chassis-bound provider can pump tokens / tool deltas / usage to
 	// the existing llm:stream-chunk topic without a new seam argument.
@@ -218,6 +235,21 @@ func (toolExecutor) Execute(ctx context.Context, env *Env, node *Node, inputs Po
 		"args": args,
 	})
 
+	// Pre-tool hook (WP06 chat-migration). Mirrors toolloop's
+	// PreToolUse extension point. The greedy-memory journal records
+	// the boundary; mutation (arg redaction, deny-by-hook) is
+	// out-of-scope for the kernel HookManager and remains in the
+	// toolloop HookRunner until the chassis-side cutover lands.
+	if env.Hooks != nil {
+		hookBatch := env.Hooks.Fire(ctx, HookPreTool, "session",
+			"pre-tool — "+a.Name, summarizeArgs(args), node.ID)
+		for _, e := range hookBatch.Events {
+			e.RunID = env.RunID
+			e.NodeID = node.ID
+			res.Events.Append(e)
+		}
+	}
+
 	tr, err := env.Tools.Call(ctx, ToolCall{Name: a.Name, Args: args})
 	if env.Counters != nil {
 		env.Counters.AddTool()
@@ -286,6 +318,43 @@ func (toolExecutor) Execute(ctx context.Context, env *Env, node *Node, inputs Po
 		}
 	}
 	return res, nil
+}
+
+// summarizeMessages builds a compact text summary of an outbound LLM
+// message slice for the pre-LLM hook payload. The greedy-memory journal
+// records the summary string as the hook's content; the canonical
+// EventLog batch already carries the full message bodies, so we keep
+// this short to avoid duplicating bytes onto the journal.
+func summarizeMessages(ms []Message) string {
+	if len(ms) == 0 {
+		return ""
+	}
+	last := ms[len(ms)-1]
+	body := last.Content
+	if len(body) > 200 {
+		body = body[:200] + "..."
+	}
+	return fmt.Sprintf("%d messages; last(role=%s): %s", len(ms), last.Role, body)
+}
+
+// summarizeArgs builds a compact text summary of a tool's arg map for
+// the pre-tool hook payload. We avoid serializing the whole arg map so
+// secrets in arg values don't land in the journal; the EventToolCall
+// payload already carries the canonical args.
+func summarizeArgs(args map[string]any) string {
+	if len(args) == 0 {
+		return "(no args)"
+	}
+	keys := make([]string, 0, len(args))
+	for k := range args {
+		keys = append(keys, k)
+	}
+	for i := 1; i < len(keys); i++ {
+		for j := i; j > 0 && keys[j-1] > keys[j]; j-- {
+			keys[j], keys[j-1] = keys[j-1], keys[j]
+		}
+	}
+	return fmt.Sprintf("args: %v", keys)
 }
 
 // estimateTokens approximates the token count of a message slice

@@ -179,6 +179,102 @@ func TestHistoryReadExecutor_PassesThrough(t *testing.T) {
 	}
 }
 
+func TestSessionWriteExecutor_AppendsAssistantMessage(t *testing.T) {
+	t.Parallel()
+	calls := []struct {
+		sid, role, body string
+	}{}
+	env := &Env{
+		RunID:     "r",
+		SessionID: "s1",
+		HistoryWriter: HistoryWriterFunc(func(_ context.Context, sid, role, body string) (string, error) {
+			calls = append(calls, struct{ sid, role, body string }{sid, role, body})
+			return "msg-42", nil
+		}),
+	}
+	applyEnvDefaults(env)
+	ex := sessionWriteExecutor{}
+	node := &Node{ID: "sw", Kind: NodeKindSessionWrite, Attrs: SessionWriteAttrs{
+		Role: "assistant", TextInputPort: "text",
+	}}
+	r, err := ex.Execute(context.Background(), env, node, PortValues{"text": "hello there"})
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if r.Outputs["message_id"] != "msg-42" {
+		t.Errorf("message_id = %v", r.Outputs["message_id"])
+	}
+	if r.Outputs["appended"] != true {
+		t.Errorf("appended = %v", r.Outputs["appended"])
+	}
+	if len(calls) != 1 {
+		t.Fatalf("expected 1 append call, got %d", len(calls))
+	}
+	if calls[0].sid != "s1" || calls[0].role != "assistant" || calls[0].body != "hello there" {
+		t.Errorf("call = %+v", calls[0])
+	}
+}
+
+func TestSessionWriteExecutor_FallsBackToMessageSlice(t *testing.T) {
+	t.Parallel()
+	env := &Env{
+		RunID:     "r",
+		SessionID: "s1",
+		HistoryWriter: HistoryWriterFunc(func(_ context.Context, _, _, body string) (string, error) {
+			if body != "the answer" {
+				return "", errors.New("wrong body: " + body)
+			}
+			return "msg-1", nil
+		}),
+	}
+	applyEnvDefaults(env)
+	ex := sessionWriteExecutor{}
+	node := &Node{ID: "sw", Kind: NodeKindSessionWrite, Attrs: SessionWriteAttrs{
+		Role: "assistant",
+	}}
+	// Default port is "text"; we pass a []Message slice and the executor
+	// should pluck the trailing assistant turn's content.
+	in := PortValues{"text": []Message{
+		{Role: "user", Content: "what?"},
+		{Role: "assistant", Content: "the answer"},
+	}}
+	if _, err := ex.Execute(context.Background(), env, node, in); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+}
+
+func TestSessionWriteExecutor_NoSessionIsNoOp(t *testing.T) {
+	t.Parallel()
+	env := &Env{
+		RunID: "r",
+		HistoryWriter: HistoryWriterFunc(func(_ context.Context, _, _, _ string) (string, error) {
+			t.Fatalf("HistoryWriter should not be called when SessionID is empty")
+			return "", nil
+		}),
+	}
+	applyEnvDefaults(env)
+	ex := sessionWriteExecutor{}
+	node := &Node{ID: "sw", Kind: NodeKindSessionWrite, Attrs: SessionWriteAttrs{Role: "assistant"}}
+	r, err := ex.Execute(context.Background(), env, node, PortValues{"text": "hi"})
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if r.Outputs["appended"] != false {
+		t.Errorf("expected appended=false on no-session, got %v", r.Outputs["appended"])
+	}
+}
+
+func TestSessionWriteExecutor_ErrorsOnEmptyText(t *testing.T) {
+	t.Parallel()
+	env := &Env{RunID: "r", SessionID: "s1"}
+	applyEnvDefaults(env)
+	ex := sessionWriteExecutor{}
+	node := &Node{ID: "sw", Kind: NodeKindSessionWrite, Attrs: SessionWriteAttrs{Role: "assistant"}}
+	if _, err := ex.Execute(context.Background(), env, node, PortValues{}); err == nil {
+		t.Fatalf("expected error on missing text input")
+	}
+}
+
 func TestTraceWriteExecutor_EmitsEvent(t *testing.T) {
 	t.Parallel()
 	env := &Env{RunID: "r"}

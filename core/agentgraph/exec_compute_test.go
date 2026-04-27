@@ -157,8 +157,9 @@ func TestLLMExecutor_BasicCall(t *testing.T) {
 	if env.Counters.LLMCallsMade != 1 || env.Counters.LLMTokensUsed != 10 {
 		t.Errorf("counters: %+v", env.Counters)
 	}
-	if mem.writeCount() != 1 {
-		t.Errorf("expected 1 hook write, got %d", mem.writeCount())
+	// Two hook writes now: pre-llm (WP06 chat-migration) + post-llm.
+	if mem.writeCount() != 2 {
+		t.Errorf("expected 2 hook writes (pre+post-llm), got %d", mem.writeCount())
 	}
 	// Verify LLMCall + HookFired events.
 	var sawLLMCall, sawHook bool
@@ -224,8 +225,9 @@ func TestToolExecutor_Allowed(t *testing.T) {
 	if env.Counters.ToolCallsMade != 1 {
 		t.Errorf("ToolCallsMade = %d", env.Counters.ToolCallsMade)
 	}
-	if mem.writeCount() != 1 {
-		t.Errorf("post-tool memory hook didn't fire (writes=%d)", mem.writeCount())
+	// Two hook writes now: pre-tool (WP06 chat-migration) + post-tool.
+	if mem.writeCount() != 2 {
+		t.Errorf("expected 2 hook writes (pre+post-tool), got %d", mem.writeCount())
 	}
 }
 

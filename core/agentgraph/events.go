@@ -24,10 +24,11 @@ const (
 	EventToolResult EventKind = "tool_result"
 
 	// State side-effects.
-	EventMemoryWrite EventKind = "memory_write"
-	EventMemoryRead  EventKind = "memory_read"
-	EventTraceWrite  EventKind = "trace_write"
-	EventCheckpoint  EventKind = "checkpoint"
+	EventMemoryWrite  EventKind = "memory_write"
+	EventMemoryRead   EventKind = "memory_read"
+	EventTraceWrite   EventKind = "trace_write"
+	EventCheckpoint   EventKind = "checkpoint"
+	EventSessionWrite EventKind = "session_write"
 
 	// Control flow.
 	EventBranchFork    EventKind = "branch_fork"
@@ -99,7 +100,7 @@ func AllEventKinds() []EventKind {
 	return []EventKind{
 		EventNodeStart, EventNodeComplete, EventNodeError,
 		EventLLMCall, EventToolCall, EventToolResult,
-		EventMemoryWrite, EventMemoryRead, EventTraceWrite, EventCheckpoint,
+		EventMemoryWrite, EventMemoryRead, EventTraceWrite, EventCheckpoint, EventSessionWrite,
 		EventBranchFork, EventBranchMerge, EventForkRequested, EventMergeRequest,
 		EventCompactionFired, EventCompactionApplied,
 		EventApprovalPending, EventApprovalResolved,
