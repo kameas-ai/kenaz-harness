@@ -1,0 +1,34 @@
+schema_version: "1"
+archetype: compute
+category: compute
+description: "Reasoning/generation work that consumes LLM/tool budget."
+callable: false
+ports:
+  inputs:
+    - { name: input, type: messages }
+  outputs:
+    - { name: output, type: messages }
+attrs:
+  provider:
+    type: string
+    description: "LLM provider identifier (e.g. anthropic, bedrock)."
+  model:
+    type: string
+    description: "Provider-specific model name."
+  system_prompt:
+    type: string
+    description: "Optional system prompt prepended to the conversation."
+  tool_allowlist:
+    type: "[]string"
+    description: "Tool IDs this node may call. Empty = allow-all per policy."
+  max_tokens:
+    type: int
+    min: 0
+    description: "Upper bound on generated tokens; 0 = provider default."
+  temperature:
+    type: float
+    min: 0.0
+    max: 2.0
+    description: "Sampling temperature."
+budget: llm
+budget_consumes: [tokens, llm_calls, cost_usd]

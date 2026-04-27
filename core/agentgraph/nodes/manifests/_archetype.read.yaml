@@ -1,0 +1,17 @@
+schema_version: "1"
+archetype: read
+extends: state
+description: "Reads from durable harness state into the active context."
+callable: false
+ports:
+  inputs:
+    - { name: query, type: any }
+  outputs:
+    - { name: result, type: messages }
+attrs:
+  source:
+    type: enum
+    enum: [history, corpus, memory, attachment, file, bash_output]
+    required: true
+    description: "Discriminator naming the read source."
+budget: none

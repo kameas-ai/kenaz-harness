@@ -1,0 +1,17 @@
+schema_version: "1"
+archetype: write
+extends: state
+description: "Writes content into durable harness state (memory, corpus, trace, file, artifact)."
+callable: false
+ports:
+  inputs:
+    - { name: payload, type: any }
+  outputs:
+    - { name: ack, type: bool }
+attrs:
+  target:
+    type: enum
+    enum: [memory, corpus, trace, file, artifact]
+    required: true
+    description: "Discriminator naming the write target."
+budget: none

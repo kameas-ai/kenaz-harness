@@ -1,0 +1,11 @@
+schema_version: "1"
+archetype: control
+category: control
+description: "Flow-control primitives (decision, parallel, loop, retry, etc.)."
+callable: false
+ports:
+  inputs:
+    - { name: signal, type: any }
+  outputs:
+    - { name: next, type: any }
+budget: none

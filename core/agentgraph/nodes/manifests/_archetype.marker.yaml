@@ -1,0 +1,6 @@
+schema_version: "1"
+archetype: marker
+extends: state
+description: "Kernel-control state markers (checkpoints, etc.). No payload by default."
+callable: false
+budget: none

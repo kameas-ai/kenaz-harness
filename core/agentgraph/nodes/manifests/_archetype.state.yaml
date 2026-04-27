@@ -1,0 +1,11 @@
+schema_version: "1"
+archetype: state
+category: state
+description: "Reads from and writes to durable harness state (history, corpora, memory, attachments, files, markers)."
+callable: false
+attrs:
+  provenance:
+    type: bool
+    default: true
+    description: "When true, surface a (path, hash, scope) triple to the EventLog for this op."
+budget: none
