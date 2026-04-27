@@ -185,6 +185,14 @@ type attrField struct {
 	IsPointerNumber bool // ptr type used for nullable numeric (e.g. *float64)
 }
 
+// portField is one resolved port (input or output), ready for template
+// emission into the generated `defaultPortsFor` switch.
+type portField struct {
+	Name     string
+	Type     string // PortType literal (e.g., "messages", "any")
+	Required bool
+}
+
 // kindData is one callable kind, ready for template emission.
 type kindData struct {
 	ID         string // canonical ID (e.g., "history_read")
@@ -192,8 +200,11 @@ type kindData struct {
 	StructName string // <GoName>Attrs
 	ConstName  string // NodeKind<GoName>
 	KindName   string // on-the-wire NodeKind value
+	Aliases    []string
 	Doc        string // doc-comment for the struct
 	Fields     []attrField
+	Inputs     []portField
+	Outputs    []portField
 }
 
 // fileData is the top-level template input.
@@ -271,7 +282,14 @@ func buildKindData(rm *nodes.ResolvedManifest) (kindData, error) {
 		StructName: goName + "Attrs",
 		ConstName:  "NodeKind" + goName,
 		KindName:   kindName,
+		Aliases:    append([]string(nil), rm.Manifest.Aliases...),
 		Doc:        rm.Manifest.Description,
+	}
+	for _, p := range rm.Manifest.Ports.Inputs {
+		kd.Inputs = append(kd.Inputs, portField{Name: p.Name, Type: p.Type, Required: p.Required})
+	}
+	for _, p := range rm.Manifest.Ports.Outputs {
+		kd.Outputs = append(kd.Outputs, portField{Name: p.Name, Type: p.Type, Required: p.Required})
 	}
 
 	// Sort attr names for deterministic emission (FR-009).
@@ -360,13 +378,12 @@ func buildAttrField(name string, spec nodes.AttrSpec) (attrField, error) {
 //
 //   - string-shaped refs all collapse to `string` because the typed
 //     ref is enforced by the validator (model_ref, tool_ref, etc).
-//   - numeric types lower to `int` or `float64`. We deliberately do
-//     NOT use *int / *float64 today because the existing hand-written
-//     attrs use bare numerics; the WP04 rename can introduce *float64
-//     for explicitly-nullable fields if the manifests declare it.
+//   - numeric types lower to `int` or `float64`. Bare numerics are
+//     used (no *int / *float64); a future WP can introduce nullable
+//     numerics if the manifest declares them.
 //   - array of strings is `[]string`; opaque arrays land as `[]any`.
-//   - object/map types land as `map[string]any` to match the existing
-//     LLMAttrs.JSONSchema / ToolAttrs.Args shape.
+//   - object/map types land as `map[string]any` to match the
+//     ModelAttrs.JsonSchema / ToolAttrs.Args shape.
 //
 // Returns (goType, isPointerNumeric, err).
 func goTypeFor(spec nodes.AttrSpec) (string, bool, error) {
@@ -418,8 +435,9 @@ func isAncestorName(candidate string, chain []string) bool {
 // pascalCase converts kebab/snake/space-separated identifiers to
 // PascalCase. We walk runes once so multi-byte input is safe; tokens
 // like "id", "json", "url" come out un-acronymized (Id, Json, Url) on
-// purpose — the existing hand-written LLMAttrs uses "JSONSchema" via
-// the GoField override, which a manifest can mirror. The default is
+// purpose — manifests can opt-in to acronym uppercasing on a
+// per-attr basis via `go_field:` (e.g. set `go_field: JSONSchema`).
+// The default is
 // the simpler PascalCase, and authors are free to set go_field for any
 // attr that needs the all-caps acronym treatment.
 func pascalCase(s string) string {

@@ -546,12 +546,12 @@ func (v *validator) checkActivityRefs(g Graph) {
 			// Schema check already flagged a malformed payload.
 			continue
 		}
-		if attrs.ActivityID == "" {
+		if attrs.ActivityId == "" {
 			continue // schema-check already reported missing id
 		}
-		if !v.cfg.activities.HasActivity(attrs.ActivityID) {
+		if !v.cfg.activities.HasActivity(attrs.ActivityId) {
 			v.addf("activity: node %q references unknown activity %q",
-				n.ID, attrs.ActivityID)
+				n.ID, attrs.ActivityId)
 		}
 	}
 }

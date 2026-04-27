@@ -5,7 +5,7 @@ entrypoints:
   - dup
 nodes:
   - id: dup
-    kind: llm
+    kind: model
     attrs:
       model: m
   - id: dup

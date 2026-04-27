@@ -1,0 +1,42 @@
+schema_version: "1"
+id: corpus_read
+extends: read
+display_name: Corpus Read
+description: "Reads from one or more registered corpora (FR-052)."
+executor: agentgraph.ExecCorpusRead
+ports:
+  inputs:
+    - { name: query, type: any }
+  outputs:
+    - { name: hits, type: any }
+defaults:
+  source: corpus
+attrs:
+  corpus_ids:
+    type: "[]string"
+    required: true
+    min_length: 1
+    description: "Corpus IDs to query."
+  query:
+    type: string
+    description: "Search query."
+  top_k:
+    type: int
+    min: 0
+    description: "Top-K hits to return."
+  source_path_prefix:
+    type: string
+    description: "Filter results by source-path prefix."
+  mime_types:
+    type: "[]string"
+    description: "Filter results by MIME type."
+  score_threshold:
+    type: float
+    min: 0.0
+    max: 1.0
+    description: "Score floor for retained hits."
+  max_bytes:
+    type: int
+    min: 0
+    description: "Cap on returned hit-byte total."
+budget: none

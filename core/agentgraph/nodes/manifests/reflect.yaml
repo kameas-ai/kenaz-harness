@@ -1,0 +1,26 @@
+schema_version: "1"
+id: reflect
+extends: compute
+display_name: Reflect
+description: "Self-critique pass that emits a verdict and (optionally) a revision (FR-035)."
+executor: agentgraph.ExecReflect
+ports:
+  inputs:
+    - { name: draft, type: messages, required: true }
+  outputs:
+    - { name: critique, type: json }
+    - { name: revision, type: messages }
+attrs:
+  severity_threshold:
+    type: enum
+    enum: [low, medium, high]
+    description: "Minimum severity that triggers a revision."
+  include_trace:
+    type: bool
+    description: "When true, attach the upstream trace to the critique."
+  max_iterations:
+    type: int
+    min: 0
+    description: "Mandatory cap when this Reflect is composed inside a Loop (FR-047)."
+budget: llm
+budget_consumes: [tokens, llm_calls, cost_usd]

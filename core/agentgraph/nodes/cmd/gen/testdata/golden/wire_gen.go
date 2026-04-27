@@ -16,42 +16,67 @@ import (
 // Generated NodeKind constants. The on-the-wire string values come
 // straight from the manifest's `kind_name` (defaults to `id`).
 const (
-	NodeKindDecisionGen NodeKind = "decision"
-	NodeKindModelGen    NodeKind = "model"
+	NodeKindDecision NodeKind = "decision"
+	NodeKindModel    NodeKind = "model"
 )
 
-// AllNodeKindsGen lists every callable kind in canonical (sorted-ID)
-// order. The hand-written `AllNodeKinds()` in spec.go remains the
-// authoritative caller surface until WP04; this slice exists so the
-// generated decoder dispatch table is reachable for tests that bind
-// against the generated layer alone.
-var AllNodeKindsGen = []NodeKind{
-	NodeKindDecisionGen,
-	NodeKindModelGen,
+// AllNodeKinds returns every callable kind in canonical (sorted-ID)
+// order. Used by validator membership checks and tests.
+func AllNodeKinds() []NodeKind {
+	return []NodeKind{
+		NodeKindDecision,
+		NodeKindModel,
+	}
 }
 
-// defaultAttrsForGen returns a zero-value typed attrs struct for the
-// requested kind, or nil if the kind is not part of the generated
-// catalog. Callers (the WP04 wire.go rewrite) consult this before
-// falling back to the hand-written switch.
-func defaultAttrsForGen(kind NodeKind) NodeAttrs {
+// defaultAttrsFor returns a zero-value typed attrs struct for the
+// requested kind, or nil if the kind is not in the catalog. The wire
+// decoder consults this when the on-disk YAML omits the `attrs:` block.
+func defaultAttrsFor(kind NodeKind) NodeAttrs {
 	switch kind {
-	case NodeKindDecisionGen:
+	case NodeKindDecision:
 		return DecisionAttrs{}
-	case NodeKindModelGen:
+	case NodeKindModel:
 		return ModelAttrs{}
 	}
 	return nil
 }
 
-// decodeAttrsGen routes the raw attrs map through the per-kind typed
-// struct. Mirrors decodeAttrs in wire.go but dispatches against the
-// generated kinds; once WP04 flips the switch this becomes the only
-// dispatcher.
-func decodeAttrsGen(kind NodeKind, raw map[string]any, nodeID string) (NodeAttrs, error) {
-	target := defaultAttrsForGen(kind)
+// defaultPortsFor returns the canonical input/output ports for each
+// callable kind, sourced directly from the resolved manifest. Authors
+// can override per-node by listing `inputs:` / `outputs:` explicitly;
+// the validator falls back to these when the node omits a port surface.
+func defaultPortsFor(kind NodeKind) (inputs, outputs []Port) {
+	switch kind {
+	case NodeKindDecision:
+		return []Port{
+				{Name: "signal", Type: PortType("any")},
+			}, []Port{
+				{Name: "next", Type: PortType("any")},
+			}
+	case NodeKindModel:
+		return []Port{
+				{Name: "input", Type: PortType("messages")},
+			}, []Port{
+				{Name: "output", Type: PortType("messages")},
+			}
+	}
+	return nil, nil
+}
+
+// decodeAttrs routes the raw attrs map through the per-kind typed
+// struct. Returns the kind-specific NodeAttrs implementation.
+func decodeAttrs(kind NodeKind, raw map[string]any, nodeID string) (NodeAttrs, error) {
+	target := defaultAttrsFor(kind)
 	if target == nil {
-		return nil, fmt.Errorf("agentgraph: node %q: kind %q has no generated decoder", nodeID, kind)
+		// Unknown kinds may still resolve through the alias map.
+		if canonical, ok := lookupAlias(string(kind)); ok {
+			target = defaultAttrsFor(NodeKind(canonical))
+			kind = NodeKind(canonical)
+		}
+	}
+	if target == nil {
+		return nil, fmt.Errorf("agentgraph: node %q: kind %q has no decoder", nodeID, kind)
 	}
 	if len(raw) == 0 {
 		return target, nil
@@ -61,24 +86,30 @@ func decodeAttrsGen(kind NodeKind, raw map[string]any, nodeID string) (NodeAttrs
 		return nil, fmt.Errorf("agentgraph: node %q: re-encode attrs: %w", nodeID, err)
 	}
 	switch kind {
-	case NodeKindDecisionGen:
+	case NodeKindDecision:
 		var v DecisionAttrs
 		if err := json.Unmarshal(buf, &v); err != nil {
 			return nil, fmt.Errorf("agentgraph: node %q: decode attrs for kind %q: %w", nodeID, kind, err)
 		}
 		return v, nil
-	case NodeKindModelGen:
+	case NodeKindModel:
 		var v ModelAttrs
 		if err := json.Unmarshal(buf, &v); err != nil {
 			return nil, fmt.Errorf("agentgraph: node %q: decode attrs for kind %q: %w", nodeID, kind, err)
 		}
 		return v, nil
 	}
-	return nil, fmt.Errorf("agentgraph: node %q: kind %q has no generated decoder", nodeID, kind)
+	return nil, fmt.Errorf("agentgraph: node %q: kind %q has no decoder", nodeID, kind)
 }
 
+// kindAliases is the canonical alias→canonical-kind map sourced from
+// each manifest's `aliases:` list. The runtime alias map (lookupAlias)
+// is built from this slice plus any user-override aliases; see
+// aliases.go.
+var kindAliases = map[string]string{}
+
 // ResolvedManifests is populated at init time by loading the embedded
-// catalog. Callers (kernel + validator in WP03) consult it via
+// catalog. Callers (kernel + validator) consult it via
 // ResolvedManifests[kind] for manifest-driven validation rules.
 //
 // Keyed by NodeKind (the on-the-wire kind value, NOT the manifest ID —

@@ -5,11 +5,11 @@ entrypoints:
   - a
 nodes:
   - id: a
-    kind: llm
+    kind: model
     attrs:
       model: m
   - id: b
-    kind: llm
+    kind: model
     attrs:
       model: m
 edges:

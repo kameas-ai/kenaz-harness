@@ -1,0 +1,28 @@
+schema_version: "1"
+id: review
+extends: compute
+display_name: Review
+description: "Verdict-driven re-run of an upstream node, bounded by max_iterations (FR-036)."
+executor: agentgraph.ExecReview
+ports:
+  inputs:
+    - { name: draft, type: any, required: true }
+  outputs:
+    - { name: verdict, type: any }
+    - { name: approved, type: any }
+attrs:
+  upstream_node:
+    type: node_id_ref
+    required: true
+    description: "ID of the upstream node to re-fire on a fail verdict."
+  max_iterations:
+    type: int
+    required: true
+    min: 1
+    description: "Mandatory cap on review re-runs (FR-009)."
+  on_cap_hit:
+    type: enum
+    enum: [escalate, halt]
+    description: "Behaviour after the cap is hit."
+budget: llm
+budget_consumes: [tokens, llm_calls, cost_usd]

@@ -8,24 +8,27 @@ import (
 	"strings"
 )
 
-// This file holds the compute-primitive executors (FR-004 .. FR-012):
-// LLM, Tool, Transform, Activity, Reflect, Review, Plan, Ask, Escalate.
+// This file holds the compute-primitive executors (FR-029 .. FR-039):
+// Model, Tool, Transform, Activity, Reflect, Review, Planner, Ask,
+// Escalate, Compact.
 //
 // All executors follow the same shape: pull the typed *Attrs from the
 // node, perform the side effect via the Env seam, emit an EventBatch
 // with kind-specific events, return outputs on declared ports.
 
-// ---- LLMNode ----
+// ---- ModelNode (was LLMNode) ----
 
-type llmExecutor struct{}
+// modelExecutor implements ExecModel (FR-030). The on-the-wire kind is
+// `model`; legacy graphs naming `llm` are alias-resolved at load time.
+type modelExecutor struct{}
 
-func (llmExecutor) Kind() NodeKind { return NodeKindLLM }
+func (modelExecutor) Kind() NodeKind { return NodeKindModel }
 
-func (llmExecutor) Execute(ctx context.Context, env *Env, node *Node, inputs PortValues) (Result, error) {
+func (modelExecutor) Execute(ctx context.Context, env *Env, node *Node, inputs PortValues) (Result, error) {
 	res := NewResult()
-	a, ok := node.Attrs.(LLMAttrs)
+	a, ok := node.Attrs.(ModelAttrs)
 	if !ok {
-		return res, fmt.Errorf("llm: node %q has wrong attrs type %T", node.ID, node.Attrs)
+		return res, fmt.Errorf("model: node %q has wrong attrs type %T", node.ID, node.Attrs)
 	}
 
 	// Build the message slice from upstream inputs. The default port
@@ -73,13 +76,21 @@ func (llmExecutor) Execute(ctx context.Context, env *Env, node *Node, inputs Por
 				"err": err.Error(),
 				"at":  "compaction.pre_call",
 			})
-			return res, fmt.Errorf("llm: node %q: pre-call compaction: %w", node.ID, err)
+			return res, fmt.Errorf("model: node %q: pre-call compaction: %w", node.ID, err)
 		}
 		if !co.Skipped && len(co.Messages) > 0 {
 			msgs = co.Messages
 		}
 	}
 
+	// Temperature is *float64 on the LLMRequest seam (nil = use provider
+	// default). The codegen-emitted ModelAttrs uses bare float64, so we
+	// pass nil for the zero value and a fresh pointer otherwise.
+	var tempPtr *float64
+	if a.Temperature != 0 {
+		t := a.Temperature
+		tempPtr = &t
+	}
 	req := LLMRequest{
 		Provider:     a.Provider,
 		Model:        a.Model,
@@ -87,7 +98,7 @@ func (llmExecutor) Execute(ctx context.Context, env *Env, node *Node, inputs Por
 		Messages:     msgs,
 		Tools:        tools,
 		MaxTokens:    a.MaxTokens,
-		Temperature:  a.Temperature,
+		Temperature:  tempPtr,
 	}
 
 	if env.Counters != nil {
@@ -108,7 +119,7 @@ func (llmExecutor) Execute(ctx context.Context, env *Env, node *Node, inputs Por
 		_ = res.Events.AppendKind(env.RunID, node.ID, EventNodeError, map[string]any{
 			"err": err.Error(),
 		})
-		return res, fmt.Errorf("llm: node %q: %w", node.ID, err)
+		return res, fmt.Errorf("model: node %q: %w", node.ID, err)
 	}
 
 	if env.Counters != nil {
@@ -437,9 +448,9 @@ func (activityExecutor) Execute(ctx context.Context, env *Env, node *Node, input
 	if env.Activities == nil {
 		return res, fmt.Errorf("activity: node %q: no catalog wired", node.ID)
 	}
-	sub, err := env.Activities.Resolve(a.ActivityID, a.Version)
+	sub, err := env.Activities.Resolve(a.ActivityId, a.Version)
 	if err != nil {
-		return res, fmt.Errorf("activity: node %q: resolve %q: %w", node.ID, a.ActivityID, err)
+		return res, fmt.Errorf("activity: node %q: resolve %q: %w", node.ID, a.ActivityId, err)
 	}
 	// Run the sub-graph synchronously. The sub-run shares the parent
 	// env (memory, counters, tools, etc.) so budgets cascade.
@@ -465,7 +476,7 @@ func (activityExecutor) Execute(ctx context.Context, env *Env, node *Node, input
 	}
 	res.Outputs["out"] = subEnv.State.Outputs(leaves[len(leaves)-1])
 	_ = res.Events.AppendKind(env.RunID, node.ID, EventNodeComplete, map[string]any{
-		"activity_id": a.ActivityID,
+		"activity_id": a.ActivityId,
 		"version":     a.Version,
 		"sub_run":     subRunID,
 		"leaf_count":  len(leaves),
@@ -643,17 +654,19 @@ func (reviewExecutor) Execute(ctx context.Context, env *Env, node *Node, inputs 
 	return res, nil
 }
 
-// ---- PlanNode ----
+// ---- PlannerNode (was PlanNode) ----
 
-type planExecutor struct{}
+// plannerExecutor implements ExecPlanner (FR-031). Legacy graphs naming
+// `plan` are alias-resolved at load time.
+type plannerExecutor struct{}
 
-func (planExecutor) Kind() NodeKind { return NodeKindPlan }
+func (plannerExecutor) Kind() NodeKind { return NodeKindPlanner }
 
-func (planExecutor) Execute(ctx context.Context, env *Env, node *Node, inputs PortValues) (Result, error) {
+func (plannerExecutor) Execute(ctx context.Context, env *Env, node *Node, inputs PortValues) (Result, error) {
 	res := NewResult()
-	a, ok := node.Attrs.(PlanAttrs)
+	a, ok := node.Attrs.(PlannerAttrs)
 	if !ok {
-		return res, fmt.Errorf("plan: node %q has wrong attrs type %T", node.ID, node.Attrs)
+		return res, fmt.Errorf("planner: node %q has wrong attrs type %T", node.ID, node.Attrs)
 	}
 
 	task, _ := inputs.GetString("task")
@@ -675,7 +688,7 @@ func (planExecutor) Execute(ctx context.Context, env *Env, node *Node, inputs Po
 		Messages: []Message{{Role: "user", Content: prompt}},
 	})
 	if err != nil {
-		return res, fmt.Errorf("plan: node %q: %w", node.ID, err)
+		return res, fmt.Errorf("planner: node %q: %w", node.ID, err)
 	}
 	if env.Counters != nil {
 		env.Counters.AddLLM(resp.TokensUsed)
@@ -795,6 +808,79 @@ func (escalateExecutor) Execute(ctx context.Context, env *Env, node *Node, input
 		"target_model": a.TargetModel,
 		"upstream":     a.UpstreamNode,
 		"tokens":       resp.TokensUsed,
+	})
+	return res, nil
+}
+
+// ---- CompactNode (NEW, FR-039) ----
+
+// compactExecutor implements ExecCompact (FR-039). It delegates to the
+// existing core/agentgraph/compaction/ subsystem via the Env.Compactor
+// seam — the manifest-declared `strategy` attr selects which strategy
+// the compactor invokes. Pre-call / post-tool / manual invocations from
+// the kernel continue to flow through the compactor; this kind makes
+// the compaction seam graph-author-addressable.
+type compactExecutor struct{}
+
+func (compactExecutor) Kind() NodeKind { return NodeKindCompact }
+
+func (compactExecutor) Execute(ctx context.Context, env *Env, node *Node, inputs PortValues) (Result, error) {
+	res := NewResult()
+	a, ok := node.Attrs.(CompactAttrs)
+	if !ok {
+		return res, fmt.Errorf("compact: node %q has wrong attrs type %T", node.ID, node.Attrs)
+	}
+
+	// Pull the inbound messages — the canonical input port is `input`
+	// (per the compute archetype default), but accept `messages` for
+	// backwards compatibility with hand-built test graphs.
+	var msgs []Message
+	if v, ok := inputs.Get("input"); ok {
+		if typed, ok := v.([]Message); ok {
+			msgs = typed
+		}
+	}
+	if msgs == nil {
+		if v, ok := inputs.Get("messages"); ok {
+			if typed, ok := v.([]Message); ok {
+				msgs = typed
+			}
+		}
+	}
+
+	// When no compactor is wired, return the input unchanged + emit a
+	// trace event so authors can spot the no-op.
+	if env.Compactor == nil {
+		_ = res.Events.AppendKind(env.RunID, node.ID, EventNodeError, map[string]any{
+			"err": "no compactor configured",
+			"at":  "compact.execute",
+		})
+		res.Outputs["result"] = msgs
+		return res, fmt.Errorf("compact: node %q: no compactor configured", node.ID)
+	}
+
+	target := a.TargetTokenBudget
+	co, err := env.Compactor.Compact(ctx, CompactionInput{
+		Site:          CompactionSiteManual,
+		Messages:      msgs,
+		TargetTokens:  target,
+	})
+	if err != nil {
+		_ = res.Events.AppendKind(env.RunID, node.ID, EventNodeError, map[string]any{
+			"err": err.Error(),
+			"at":  "compact.execute",
+		})
+		return res, fmt.Errorf("compact: node %q: %w", node.ID, err)
+	}
+
+	res.Outputs["result"] = co.Messages
+	_ = res.Events.AppendKind(env.RunID, node.ID, EventCompactionApplied, map[string]any{
+		"strategy":          a.Strategy,
+		"target_tokens":     target,
+		"input_messages":    len(msgs),
+		"output_messages":   len(co.Messages),
+		"skipped":           co.Skipped,
+		"custom_subgraph":   a.CustomSubgraphId,
 	})
 	return res, nil
 }

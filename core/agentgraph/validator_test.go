@@ -185,7 +185,7 @@ func TestValidate_ActivityRegistryAllowList(t *testing.T) {
 			{
 				ID:    "a",
 				Kind:  NodeKindActivity,
-				Attrs: ActivityAttrs{ActivityID: "summarize"},
+				Attrs: ActivityAttrs{ActivityId: "summarize"},
 			},
 		},
 	}
@@ -217,8 +217,8 @@ func TestValidate_DialOverrides_Cascade(t *testing.T) {
 		Nodes: []Node{
 			{
 				ID:    "n",
-				Kind:  NodeKindLLM,
-				Attrs: LLMAttrs{Model: "m"},
+				Kind:  NodeKindModel,
+				Attrs: ModelAttrs{Model: "m"},
 				DialOverrides: map[string]any{
 					"max_cost_usd_per_run": 2.5,
 				},
@@ -264,8 +264,8 @@ func TestValidate_CycleAllowedInLoopBody(t *testing.T) {
 					Body:          []string{"a", "b"},
 				},
 			},
-			{ID: "a", Kind: NodeKindLLM, Attrs: LLMAttrs{Model: "m"}},
-			{ID: "b", Kind: NodeKindLLM, Attrs: LLMAttrs{Model: "m"}},
+			{ID: "a", Kind: NodeKindModel, Attrs: ModelAttrs{Model: "m"}},
+			{ID: "b", Kind: NodeKindModel, Attrs: ModelAttrs{Model: "m"}},
 		},
 		Edges: []Edge{
 			{From: EndpointRef{Node: "a", Port: "response"},
@@ -291,7 +291,7 @@ func TestValidate_CycleAllowedInReviewBody(t *testing.T) {
 		ID:          "review-feedback",
 		Entrypoints: []string{"author"},
 		Nodes: []Node{
-			{ID: "author", Kind: NodeKindLLM, Attrs: LLMAttrs{Model: "m"}},
+			{ID: "author", Kind: NodeKindModel, Attrs: ModelAttrs{Model: "m"}},
 			{
 				ID:   "reviewer",
 				Kind: NodeKindReview,
@@ -335,8 +335,8 @@ func TestValidate_DAGOutsideLoopRejectsCycle(t *testing.T) {
 		ID:          "outside-cycle",
 		Entrypoints: []string{"a"},
 		Nodes: []Node{
-			{ID: "a", Kind: NodeKindLLM, Attrs: LLMAttrs{Model: "m"}},
-			{ID: "b", Kind: NodeKindLLM, Attrs: LLMAttrs{Model: "m"}},
+			{ID: "a", Kind: NodeKindModel, Attrs: ModelAttrs{Model: "m"}},
+			{ID: "b", Kind: NodeKindModel, Attrs: ModelAttrs{Model: "m"}},
 		},
 		Edges: []Edge{
 			{From: EndpointRef{Node: "a", Port: "response"},
@@ -369,7 +369,7 @@ func TestValidate_PortRequiredEntrypointBypass(t *testing.T) {
 		ID:          "ep",
 		Entrypoints: []string{"a"},
 		Nodes: []Node{
-			{ID: "a", Kind: NodeKindLLM, Attrs: LLMAttrs{Model: "m"}},
+			{ID: "a", Kind: NodeKindModel, Attrs: ModelAttrs{Model: "m"}},
 		},
 	}
 	if err := Validate(g); err != nil {
@@ -390,7 +390,7 @@ func TestValidate_AcceptsExtraDials(t *testing.T) {
 			"my_extra_dial": 42,
 		},
 		Nodes: []Node{
-			{ID: "n", Kind: NodeKindLLM, Attrs: LLMAttrs{Model: "m"}},
+			{ID: "n", Kind: NodeKindModel, Attrs: ModelAttrs{Model: "m"}},
 		},
 	}
 	if err := Validate(g, WithExtraDials(map[string]dialSpec{

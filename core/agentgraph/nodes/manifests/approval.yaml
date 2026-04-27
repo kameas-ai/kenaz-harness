@@ -1,0 +1,27 @@
+schema_version: "1"
+id: approval
+extends: control
+display_name: Approval
+description: "Binary HITL gate (FR-048). Persists a `pending_approval` event mirroring `pending_ask`."
+executor: agentgraph.ExecApproval
+ports:
+  inputs:
+    - { name: in, type: any }
+  outputs:
+    - { name: approved, type: any }
+    - { name: rejected, type: any }
+attrs:
+  approver_role:
+    type: string
+    description: "Role expected to approve (default `user`)."
+  policy_label:
+    type: string
+    description: "Cedar policy label evaluated for auto-approval."
+  auto_approve_window_seconds:
+    type: int
+    min: 0
+    description: "Seconds within which auto-approval may fire (0 disables)."
+  prompt:
+    type: string
+    description: "Prompt rendered to the approver."
+budget: none

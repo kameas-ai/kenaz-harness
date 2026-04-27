@@ -5,7 +5,7 @@ entrypoints:
   - real
 nodes:
   - id: real
-    kind: llm
+    kind: model
     attrs:
       model: m
   - id: bad_loop

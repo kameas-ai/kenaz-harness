@@ -1,0 +1,21 @@
+schema_version: "1"
+id: merge
+extends: control
+display_name: Merge
+description: "Folds a sub-graph branch back into the parent (FR-045)."
+executor: agentgraph.ExecMerge
+ports:
+  inputs:
+    - { name: branch, type: branch_id, required: true }
+  outputs:
+    - { name: merged, type: messages }
+attrs:
+  branch_id:
+    type: string
+    required: true
+    description: "ID of the branch to merge back into the parent."
+  mode:
+    type: enum
+    enum: [append, summarize_append, replace_last_turn]
+    description: "Merge strategy."
+budget: none

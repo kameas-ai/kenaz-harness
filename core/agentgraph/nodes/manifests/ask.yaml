@@ -1,0 +1,17 @@
+schema_version: "1"
+id: ask
+extends: compute
+display_name: Ask
+description: "Free-form user-input elicitation (FR-037). No LLM budget consumed."
+executor: agentgraph.ExecAsk
+ports:
+  inputs:
+    - { name: context, type: any }
+  outputs:
+    - { name: answer, type: any }
+attrs:
+  question:
+    type: string
+    required: true
+    description: "Prompt rendered to the user."
+budget: none

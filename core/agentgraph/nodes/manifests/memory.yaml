@@ -1,0 +1,37 @@
+schema_version: "1"
+id: memory
+extends: read
+display_name: Memory
+description: "Read/write/upsert against the memory store (FR-053). The `mode` attr drives executor behaviour."
+executor: agentgraph.ExecMemory
+ports:
+  inputs:
+    - { name: in, type: any }
+  outputs:
+    - { name: out, type: any }
+defaults:
+  source: memory
+attrs:
+  mode:
+    type: enum
+    enum: [read, write, upsert]
+    required: true
+    description: "Discriminates read vs. write semantics inside this kind."
+  scope:
+    type: enum
+    enum: [global, project, session]
+    description: "Memory scope partition."
+  query:
+    type: string
+    description: "Search query when mode=read."
+  content:
+    type: string
+    description: "Payload text when mode=write|upsert."
+  top_k:
+    type: int
+    min: 0
+    description: "Top-K hits to return when mode=read."
+  pin:
+    type: bool
+    description: "When true, pin the resulting memory entry."
+budget: none

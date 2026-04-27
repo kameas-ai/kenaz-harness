@@ -247,8 +247,8 @@ func TestAddGraphProgrammatic(t *testing.T) {
 		Nodes: []agentgraph.Node{
 			{
 				ID:    "a",
-				Kind:  agentgraph.NodeKindPlan,
-				Attrs: agentgraph.PlanAttrs{Verbosity: "terse"},
+				Kind:  agentgraph.NodeKindPlanner,
+				Attrs: agentgraph.PlannerAttrs{Verbosity: "terse"},
 			},
 		},
 	}

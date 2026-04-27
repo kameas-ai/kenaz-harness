@@ -12,6 +12,5 @@ attrs:
   source:
     type: enum
     enum: [history, corpus, memory, attachment, file, bash_output]
-    required: true
-    description: "Discriminator naming the read source."
+    description: "Discriminator naming the read source. Each kind under `read` sets its own default via the `defaults:` map."
 budget: none

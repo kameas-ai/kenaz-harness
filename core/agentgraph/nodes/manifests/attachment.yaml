@@ -1,0 +1,22 @@
+schema_version: "1"
+id: attachment
+extends: read
+display_name: Attachment
+description: "Materialises an attachment-by-id into the active context (FR-055)."
+executor: agentgraph.ExecAttachment
+ports:
+  inputs:
+    - { name: in, type: any }
+  outputs:
+    - { name: block, type: any }
+defaults:
+  source: attachment
+attrs:
+  attachment_id:
+    type: string
+    required: true
+    description: "Identifier of the attachment to materialise."
+  inline:
+    type: bool
+    description: "When true, inline the attachment as a content block (default true)."
+budget: none

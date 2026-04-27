@@ -58,8 +58,8 @@ func TestBranchExpr_BadSyntax(t *testing.T) {
 func TestBranchExecutor_TrueFalsePorts(t *testing.T) {
 	t.Parallel()
 	env := newTestEnv(&Graph{})
-	ex := branchExecutor{}
-	node := &Node{ID: "b", Kind: NodeKindBranch, Attrs: BranchAttrs{
+	ex := decisionExecutor{}
+	node := &Node{ID: "b", Kind: NodeKindDecision, Attrs: DecisionAttrs{
 		Condition: `flag == "yes"`, NextTrue: "T", NextFalse: "F",
 	}}
 	r, err := ex.Execute(context.Background(), env, node, PortValues{"in": "x", "flag": "yes"})
@@ -160,7 +160,7 @@ func TestRetryExecutor_RetriesUntilSuccess(t *testing.T) {
 	calls := 0
 	g := &Graph{Nodes: []Node{
 		{ID: "retry", Kind: NodeKindRetry, Attrs: RetryAttrs{
-			MaxAttempts: 3, BackoffBase: 1, Body: []string{"flake"},
+			MaxAttempts: 3, BackoffBaseMs: 1, Body: []string{"flake"},
 		}},
 		{ID: "flake", Kind: NodeKindTransform, Attrs: TransformAttrs{Name: "flaky"}},
 	}}
@@ -186,7 +186,7 @@ func TestRetryExecutor_ExhaustReturnsError(t *testing.T) {
 	t.Parallel()
 	g := &Graph{Nodes: []Node{
 		{ID: "retry", Kind: NodeKindRetry, Attrs: RetryAttrs{
-			MaxAttempts: 2, BackoffBase: 1, Body: []string{"always"},
+			MaxAttempts: 2, BackoffBaseMs: 1, Body: []string{"always"},
 		}},
 		{ID: "always", Kind: NodeKindTransform, Attrs: TransformAttrs{Name: "always_fail"}},
 	}}
@@ -205,8 +205,8 @@ func TestForkExecutor_RealImpl_FiresFork(t *testing.T) {
 	env := newTestEnv(&Graph{})
 	seam := NewFakeBranchSeam()
 	env.Branch = seam
-	ex := forkExecutor{}
-	node := &Node{ID: "fk", Kind: NodeKindFork, Attrs: ForkAttrs{Title: "child"}}
+	ex := branchExecutor{}
+	node := &Node{ID: "fk", Kind: NodeKindBranch, Attrs: BranchAttrs{Title: "child"}}
 	r, err := ex.Execute(context.Background(), env, node,
 		PortValues{"context": "you are a helpful summary"})
 	if err != nil {
@@ -245,8 +245,8 @@ func TestForkExecutor_NoBranchSeam_Errors(t *testing.T) {
 	t.Parallel()
 	env := newTestEnv(&Graph{})
 	// applyEnvDefaults installs nilBranchSeam which errors.
-	ex := forkExecutor{}
-	node := &Node{ID: "fk", Kind: NodeKindFork, Attrs: ForkAttrs{Title: "child"}}
+	ex := branchExecutor{}
+	node := &Node{ID: "fk", Kind: NodeKindBranch, Attrs: BranchAttrs{Title: "child"}}
 	_, err := ex.Execute(context.Background(), env, node, nil)
 	if err == nil || !errors.Is(err, ErrNoBranchSeam) {
 		t.Fatalf("err = %v, want ErrNoBranchSeam", err)
@@ -263,7 +263,7 @@ func TestMergeExecutor_RealImpl_AppendsAndMarksMerged(t *testing.T) {
 	}
 	env.Branch = seam
 	ex := mergeExecutor{}
-	node := &Node{ID: "mg", Kind: NodeKindMerge, Attrs: MergeAttrs{BranchID: "b1", Mode: "summarize_append"}}
+	node := &Node{ID: "mg", Kind: NodeKindMerge, Attrs: MergeAttrs{BranchId: "b1", Mode: "summarize_append"}}
 	r, err := ex.Execute(context.Background(), env, node, PortValues{"branch": "b1"})
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
@@ -306,7 +306,7 @@ func TestMergeExecutor_MissingBranchID_Errors(t *testing.T) {
 	env.Branch = NewFakeBranchSeam()
 	ex := mergeExecutor{}
 	// MergeAttrs with empty BranchID and no port → error.
-	node := &Node{ID: "mg", Kind: NodeKindMerge, Attrs: MergeAttrs{BranchID: ""}}
+	node := &Node{ID: "mg", Kind: NodeKindMerge, Attrs: MergeAttrs{BranchId: ""}}
 	_, err := ex.Execute(context.Background(), env, node, nil)
 	if err == nil {
 		t.Fatal("expected error for missing branch id")

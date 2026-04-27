@@ -67,12 +67,12 @@ func callableFalse() *bool {
 	return &f
 }
 
-// llmKindManifest is a minimal kind manifest that mirrors LLMAttrs's
+// llmKindManifest is a minimal kind manifest that mirrors ModelAttrs's
 // rules expressed in the manifest schema. Used by the manifest-driven
 // tests to drive each rule (required, min/max, enum, length).
 //
-// The kind id matches NodeKindLLM ("llm") so the validator's catalog
-// lookup finds it for any LLMAttrs-bearing node in the test fixtures.
+// The kind id matches NodeKindModel ("llm") so the validator's catalog
+// lookup finds it for any ModelAttrs-bearing node in the test fixtures.
 func llmKindManifest() nodes.Manifest {
 	return nodes.Manifest{
 		Archetype:   "",
@@ -102,7 +102,7 @@ func llmKindManifest() nodes.Manifest {
 		},
 		Ports: nodes.PortSet{
 			Inputs: []nodes.PortSpec{
-				{Name: "messages", Type: string(PortTypeMessages)},
+				{Name: "messages", Type: string(PortTypeMessages), Required: true},
 			},
 			Outputs: []nodes.PortSpec{
 				{Name: "response", Type: string(PortTypeMessages)},
@@ -146,9 +146,9 @@ func TestManifestValidation_RequiredAttrViolation(t *testing.T) {
 	t.Parallel()
 
 	cat := newFakeCatalog()
-	cat.Put(string(NodeKindLLM), llmKindManifest())
+	cat.Put(string(NodeKindModel), llmKindManifest())
 
-	// LLMAttrs.Model is "" — manifest declares it required.
+	// ModelAttrs.Model is "" — manifest declares it required.
 	g := Graph{
 		SpecVersion: SpecVersion,
 		ID:          "g",
@@ -156,8 +156,8 @@ func TestManifestValidation_RequiredAttrViolation(t *testing.T) {
 		Nodes: []Node{
 			{
 				ID:    "a",
-				Kind:  NodeKindLLM,
-				Attrs: LLMAttrs{Model: ""},
+				Kind:  NodeKindModel,
+				Attrs: ModelAttrs{Model: ""},
 			},
 		},
 	}
@@ -168,7 +168,7 @@ func TestManifestValidation_RequiredAttrViolation(t *testing.T) {
 	ve := mustValidationError(t, err)
 	wantSubstrs := []string{
 		`node "a"`,
-		"manifest llm.attrs.model.required",
+		"manifest model.attrs.model.required",
 	}
 	for _, s := range wantSubstrs {
 		if !ve.Has(s) {
@@ -183,28 +183,28 @@ func TestManifestValidation_MinMaxViolation(t *testing.T) {
 	t.Parallel()
 
 	cat := newFakeCatalog()
-	cat.Put(string(NodeKindLLM), llmKindManifest())
+	cat.Put(string(NodeKindModel), llmKindManifest())
 
 	cases := []struct {
 		name    string
-		attrs   LLMAttrs
+		attrs   ModelAttrs
 		mustHas []string
 	}{
 		{
 			name:  "max_tokens_below_min",
-			attrs: LLMAttrs{Model: "m", MaxTokens: -1},
+			attrs: ModelAttrs{Model: "m", MaxTokens: -1},
 			mustHas: []string{
 				`node "a"`,
-				"manifest llm.attrs.max_tokens.min",
+				"manifest model.attrs.max_tokens.min",
 				"got -1",
 				"want >= 1",
 			},
 		},
 		{
 			name:  "temperature_above_max",
-			attrs: LLMAttrs{Model: "m", Temperature: floatPtr(3.5)},
+			attrs: ModelAttrs{Model: "m", Temperature: 3.5},
 			mustHas: []string{
-				"manifest llm.attrs.temperature.max",
+				"manifest model.attrs.temperature.max",
 				"got 3.5",
 				"want <= 2",
 			},
@@ -219,7 +219,7 @@ func TestManifestValidation_MinMaxViolation(t *testing.T) {
 				ID:          "g",
 				Entrypoints: []string{"a"},
 				Nodes: []Node{
-					{ID: "a", Kind: NodeKindLLM, Attrs: tc.attrs},
+					{ID: "a", Kind: NodeKindModel, Attrs: tc.attrs},
 				},
 			}
 			err := Validate(g, WithCatalog(cat))
@@ -281,7 +281,7 @@ func TestManifestValidation_ListBoundsViolation(t *testing.T) {
 	t.Parallel()
 
 	cat := newFakeCatalog()
-	cat.Put(string(NodeKindLLM), llmKindManifest())
+	cat.Put(string(NodeKindModel), llmKindManifest())
 
 	tools := []string{"a", "b", "c", "d", "e", "f", "g", "h", "i"} // 9 > 8
 	g := Graph{
@@ -291,8 +291,8 @@ func TestManifestValidation_ListBoundsViolation(t *testing.T) {
 		Nodes: []Node{
 			{
 				ID:    "a",
-				Kind:  NodeKindLLM,
-				Attrs: LLMAttrs{Model: "m", ToolAllowlist: tools},
+				Kind:  NodeKindModel,
+				Attrs: ModelAttrs{Model: "m", ToolAllowlist: tools},
 			},
 		},
 	}
@@ -302,7 +302,7 @@ func TestManifestValidation_ListBoundsViolation(t *testing.T) {
 	}
 	ve := mustValidationError(t, err)
 	for _, s := range []string{
-		"manifest llm.attrs.tool_allowlist.max_length",
+		"manifest model.attrs.tool_allowlist.max_length",
 		"len=9",
 		"want <= 8",
 	} {
@@ -319,7 +319,7 @@ func TestManifestValidation_PortTypeMismatch(t *testing.T) {
 	t.Parallel()
 
 	cat := newFakeCatalog()
-	cat.Put(string(NodeKindLLM), llmKindManifest())
+	cat.Put(string(NodeKindModel), llmKindManifest())
 
 	g := Graph{
 		SpecVersion: SpecVersion,
@@ -328,12 +328,12 @@ func TestManifestValidation_PortTypeMismatch(t *testing.T) {
 		Nodes: []Node{
 			{
 				ID:   "a",
-				Kind: NodeKindLLM,
+				Kind: NodeKindModel,
 				// Override the input port with an incompatible type.
 				Inputs: []Port{
 					{Name: "messages", Type: PortTypeBool, Required: true},
 				},
-				Attrs: LLMAttrs{Model: "m"},
+				Attrs: ModelAttrs{Model: "m"},
 			},
 		},
 	}
@@ -343,7 +343,7 @@ func TestManifestValidation_PortTypeMismatch(t *testing.T) {
 	}
 	ve := mustValidationError(t, err)
 	for _, s := range []string{
-		"manifest llm.ports.inputs.messages.type",
+		"manifest model.ports.inputs.messages.type",
 		"got bool",
 		"compatible with messages",
 	} {
@@ -363,7 +363,7 @@ func TestManifestValidation_RequiredInputNotConnected(t *testing.T) {
 	t.Parallel()
 
 	cat := newFakeCatalog()
-	cat.Put(string(NodeKindLLM), llmKindManifest())
+	cat.Put(string(NodeKindModel), llmKindManifest())
 
 	// Two LLM nodes, neither connected. The non-entrypoint node has
 	// `messages` required on the default surface.
@@ -372,8 +372,8 @@ func TestManifestValidation_RequiredInputNotConnected(t *testing.T) {
 		ID:          "g",
 		Entrypoints: []string{"a"},
 		Nodes: []Node{
-			{ID: "a", Kind: NodeKindLLM, Attrs: LLMAttrs{Model: "m"}},
-			{ID: "b", Kind: NodeKindLLM, Attrs: LLMAttrs{Model: "m"}},
+			{ID: "a", Kind: NodeKindModel, Attrs: ModelAttrs{Model: "m"}},
+			{ID: "b", Kind: NodeKindModel, Attrs: ModelAttrs{Model: "m"}},
 		},
 	}
 	err := Validate(g, WithCatalog(cat))
@@ -492,32 +492,35 @@ func TestManifestValidation_UnknownKind(t *testing.T) {
 	}
 }
 
-// TestManifestValidation_FallbackPath_LegacyKind confirms the
-// transitional bridge: when the catalog has NO manifest for a kind
-// that IS in the legacy IsKnown set (`llm`, `tool`, ...), the
-// validator falls back to the hand-coded *Attrs.Validate() rules
-// and the existing behaviour is preserved.
+// TestManifestValidation_FallbackPath_LegacyKind confirms that when
+// the explicit fakeCatalog has no manifest for the kind, the
+// codegen-emitted *Attrs.Validate() (sourced from the SHIPPED
+// manifests) still fires. As of WP04 the hand-written Validate()
+// methods are gone — every per-kind rule is now codegen-emitted from
+// the manifest. The "fallback" path therefore relies on the bundled
+// catalog alone.
 func TestManifestValidation_FallbackPath_LegacyKind(t *testing.T) {
 	t.Parallel()
 
-	cat := newFakeCatalog() // no llm manifest
+	cat := newFakeCatalog() // no model manifest in the fake catalog
 
-	// LLMAttrs.Model = "" — hand-coded rule rejects.
+	// ModelAttrs.Model = "" — the codegen-emitted Validate() rejects
+	// because the shipped model.yaml marks `model:` as required.
 	g := Graph{
 		SpecVersion: SpecVersion,
 		ID:          "g",
 		Entrypoints: []string{"a"},
 		Nodes: []Node{
-			{ID: "a", Kind: NodeKindLLM, Attrs: LLMAttrs{}},
+			{ID: "a", Kind: NodeKindModel, Attrs: ModelAttrs{}},
 		},
 	}
 	err := Validate(g, WithCatalog(cat))
 	if err == nil {
-		t.Fatalf("expected fallback hand-coded rule to fire")
+		t.Fatalf("expected codegen-emitted rule to fire")
 	}
 	ve := mustValidationError(t, err)
-	if !ve.Has("llm: model is required") {
-		t.Errorf("expected hand-coded rule message: %v", ve.Error())
+	if !ve.Has("model: model is required") {
+		t.Errorf("expected codegen-emitted rule message: %v", ve.Error())
 	}
 }
 
@@ -561,9 +564,9 @@ func TestManifestValidation_AttrsToMap_Helpers(t *testing.T) {
 	}
 
 	// Typed attrs round-trip.
-	m, err = attrsToMap(LLMAttrs{Model: "claude-opus", MaxTokens: 512})
+	m, err = attrsToMap(ModelAttrs{Model: "claude-opus", MaxTokens: 512})
 	if err != nil {
-		t.Fatalf("attrsToMap(LLMAttrs): %v", err)
+		t.Fatalf("attrsToMap(ModelAttrs): %v", err)
 	}
 	if m["model"] != "claude-opus" {
 		t.Errorf("model lost: %v", m)
@@ -583,14 +586,14 @@ func TestManifestValidation_PortMissing(t *testing.T) {
 		Name: "extra",
 		Type: string(PortTypeJSON),
 	})
-	cat.Put(string(NodeKindLLM), m)
+	cat.Put(string(NodeKindModel), m)
 
 	g := Graph{
 		SpecVersion: SpecVersion,
 		ID:          "g",
 		Entrypoints: []string{"a"},
 		Nodes: []Node{
-			{ID: "a", Kind: NodeKindLLM, Attrs: LLMAttrs{Model: "m"}},
+			{ID: "a", Kind: NodeKindModel, Attrs: ModelAttrs{Model: "m"}},
 		},
 	}
 	err := Validate(g, WithCatalog(cat))
@@ -599,7 +602,7 @@ func TestManifestValidation_PortMissing(t *testing.T) {
 	}
 	ve := mustValidationError(t, err)
 	for _, s := range []string{
-		"manifest llm.ports.outputs.extra.missing",
+		"manifest model.ports.outputs.extra.missing",
 		"effective surface omits port",
 	} {
 		if !ve.Has(s) {

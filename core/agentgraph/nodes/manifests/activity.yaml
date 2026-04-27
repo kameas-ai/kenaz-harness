@@ -1,0 +1,23 @@
+schema_version: "1"
+id: activity
+extends: compute
+display_name: Activity
+description: "Embeds a registered activity sub-graph (FR-034)."
+executor: agentgraph.ExecActivity
+ports:
+  inputs:
+    - { name: in, type: any }
+  outputs:
+    - { name: out, type: any }
+attrs:
+  activity_id:
+    type: activity_ref
+    required: true
+    description: "Identifier of the activity to embed."
+  version:
+    type: string
+    description: "Optional activity version pin."
+  inputs:
+    type: object
+    description: "Inputs forwarded into the embedded activity."
+budget: inherit

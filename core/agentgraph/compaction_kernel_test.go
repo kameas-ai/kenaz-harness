@@ -45,8 +45,8 @@ func TestKernel_FiresPreCallCompactionOnLLMNode(t *testing.T) {
 		Nodes: []agentgraph.Node{
 			{
 				ID:   "llm1",
-				Kind: agentgraph.NodeKindLLM,
-				Attrs: agentgraph.LLMAttrs{
+				Kind: agentgraph.NodeKindModel,
+				Attrs: agentgraph.ModelAttrs{
 					Provider: "test", Model: "m", MaxTokens: 100,
 				},
 			},
@@ -139,7 +139,7 @@ func TestKernel_NilCompactorIsNoOp(t *testing.T) {
 		SpecVersion: "1",
 		Entrypoints: []string{"llm1"},
 		Nodes: []agentgraph.Node{
-			{ID: "llm1", Kind: agentgraph.NodeKindLLM, Attrs: agentgraph.LLMAttrs{Provider: "p", Model: "m"}},
+			{ID: "llm1", Kind: agentgraph.NodeKindModel, Attrs: agentgraph.ModelAttrs{Provider: "p", Model: "m"}},
 		},
 	}
 	k := agentgraph.NewKernel()

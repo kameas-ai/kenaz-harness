@@ -7,6 +7,11 @@ import (
 
 // wireGraph mirrors Graph but holds attrs as raw JSON so we can
 // dispatch on Kind during unmarshal. Used by both YAML and JSON paths.
+//
+// As of WP04 the codegen-emitted wire_gen.go owns the per-kind decoder
+// (decodeAttrs), the NodeKind constants, and the defaultAttrsFor /
+// defaultPortsFor dispatchers. This file retains only the Graph-level
+// wire shape and helpers that operate on it.
 type wireGraph struct {
 	SpecVersion   string         `json:"spec_version" yaml:"spec_version"`
 	ID            string         `json:"id" yaml:"id"`
@@ -84,6 +89,13 @@ func wireToGraph(w wireGraph) (Graph, error) {
 	}
 	g.Nodes = make([]Node, 0, len(w.Nodes))
 	for _, wn := range w.Nodes {
+		// Resolve aliases at load time so downstream code only sees
+		// canonical kinds. The alias map emits a deprecation warning the
+		// first time it sees each old kind name (FR-029..FR-058).
+		canonical, ok := lookupAlias(string(wn.Kind))
+		if ok {
+			wn.Kind = NodeKind(canonical)
+		}
 		n := Node{
 			ID:            wn.ID,
 			Kind:          wn.Kind,
@@ -100,175 +112,6 @@ func wireToGraph(w wireGraph) (Graph, error) {
 		g.Nodes = append(g.Nodes, n)
 	}
 	return g, nil
-}
-
-// decodeAttrs routes the raw attrs map through the per-kind typed
-// struct. Returns the kind-specific NodeAttrs implementation.
-func decodeAttrs(kind NodeKind, raw map[string]any, nodeID string) (NodeAttrs, error) {
-	if !kind.IsKnown() {
-		return nil, fmt.Errorf("agentgraph: node %q: unknown kind %q", nodeID, kind)
-	}
-	target := defaultAttrsFor(kind)
-	if target == nil {
-		return nil, fmt.Errorf("agentgraph: node %q: no attrs decoder for kind %q", nodeID, kind)
-	}
-	if len(raw) == 0 {
-		// Caller may have omitted attrs; return zero-value typed struct.
-		return target, nil
-	}
-	// Re-marshal the free-form map and decode it into the typed struct.
-	// json (rather than yaml) is the lingua franca because every typed
-	// struct already carries `json:` tags and yaml.v3 routes through
-	// the yaml tags equivalently for the basic shapes we use.
-	buf, err := json.Marshal(raw)
-	if err != nil {
-		return nil, fmt.Errorf("agentgraph: node %q: re-encode attrs: %w", nodeID, err)
-	}
-	switch kind {
-	case NodeKindLLM:
-		var v LLMAttrs
-		if err := json.Unmarshal(buf, &v); err != nil {
-			return nil, attrsDecodeErr(nodeID, kind, err)
-		}
-		return v, nil
-	case NodeKindTool:
-		var v ToolAttrs
-		if err := json.Unmarshal(buf, &v); err != nil {
-			return nil, attrsDecodeErr(nodeID, kind, err)
-		}
-		return v, nil
-	case NodeKindTransform:
-		var v TransformAttrs
-		if err := json.Unmarshal(buf, &v); err != nil {
-			return nil, attrsDecodeErr(nodeID, kind, err)
-		}
-		return v, nil
-	case NodeKindActivity:
-		var v ActivityAttrs
-		if err := json.Unmarshal(buf, &v); err != nil {
-			return nil, attrsDecodeErr(nodeID, kind, err)
-		}
-		return v, nil
-	case NodeKindReflect:
-		var v ReflectAttrs
-		if err := json.Unmarshal(buf, &v); err != nil {
-			return nil, attrsDecodeErr(nodeID, kind, err)
-		}
-		return v, nil
-	case NodeKindReview:
-		var v ReviewAttrs
-		if err := json.Unmarshal(buf, &v); err != nil {
-			return nil, attrsDecodeErr(nodeID, kind, err)
-		}
-		return v, nil
-	case NodeKindPlan:
-		var v PlanAttrs
-		if err := json.Unmarshal(buf, &v); err != nil {
-			return nil, attrsDecodeErr(nodeID, kind, err)
-		}
-		return v, nil
-	case NodeKindAsk:
-		var v AskAttrs
-		if err := json.Unmarshal(buf, &v); err != nil {
-			return nil, attrsDecodeErr(nodeID, kind, err)
-		}
-		return v, nil
-	case NodeKindEscalate:
-		var v EscalateAttrs
-		if err := json.Unmarshal(buf, &v); err != nil {
-			return nil, attrsDecodeErr(nodeID, kind, err)
-		}
-		return v, nil
-	case NodeKindBranch:
-		var v BranchAttrs
-		if err := json.Unmarshal(buf, &v); err != nil {
-			return nil, attrsDecodeErr(nodeID, kind, err)
-		}
-		return v, nil
-	case NodeKindParallel:
-		var v ParallelAttrs
-		if err := json.Unmarshal(buf, &v); err != nil {
-			return nil, attrsDecodeErr(nodeID, kind, err)
-		}
-		return v, nil
-	case NodeKindJoin:
-		var v JoinAttrs
-		if err := json.Unmarshal(buf, &v); err != nil {
-			return nil, attrsDecodeErr(nodeID, kind, err)
-		}
-		return v, nil
-	case NodeKindLoop:
-		var v LoopAttrs
-		if err := json.Unmarshal(buf, &v); err != nil {
-			return nil, attrsDecodeErr(nodeID, kind, err)
-		}
-		return v, nil
-	case NodeKindRetry:
-		var v RetryAttrs
-		if err := json.Unmarshal(buf, &v); err != nil {
-			return nil, attrsDecodeErr(nodeID, kind, err)
-		}
-		return v, nil
-	case NodeKindFork:
-		var v ForkAttrs
-		if err := json.Unmarshal(buf, &v); err != nil {
-			return nil, attrsDecodeErr(nodeID, kind, err)
-		}
-		return v, nil
-	case NodeKindMerge:
-		var v MergeAttrs
-		if err := json.Unmarshal(buf, &v); err != nil {
-			return nil, attrsDecodeErr(nodeID, kind, err)
-		}
-		return v, nil
-	case NodeKindMemory:
-		var v MemoryAttrs
-		if err := json.Unmarshal(buf, &v); err != nil {
-			return nil, attrsDecodeErr(nodeID, kind, err)
-		}
-		return v, nil
-	case NodeKindCorpusRead:
-		var v CorpusReadAttrs
-		if err := json.Unmarshal(buf, &v); err != nil {
-			return nil, attrsDecodeErr(nodeID, kind, err)
-		}
-		return v, nil
-	case NodeKindCorpusWrite:
-		var v CorpusWriteAttrs
-		if err := json.Unmarshal(buf, &v); err != nil {
-			return nil, attrsDecodeErr(nodeID, kind, err)
-		}
-		return v, nil
-	case NodeKindAttachment:
-		var v AttachmentAttrs
-		if err := json.Unmarshal(buf, &v); err != nil {
-			return nil, attrsDecodeErr(nodeID, kind, err)
-		}
-		return v, nil
-	case NodeKindHistoryRead:
-		var v HistoryReadAttrs
-		if err := json.Unmarshal(buf, &v); err != nil {
-			return nil, attrsDecodeErr(nodeID, kind, err)
-		}
-		return v, nil
-	case NodeKindTraceWrite:
-		var v TraceWriteAttrs
-		if err := json.Unmarshal(buf, &v); err != nil {
-			return nil, attrsDecodeErr(nodeID, kind, err)
-		}
-		return v, nil
-	case NodeKindCheckpoint:
-		var v CheckpointAttrs
-		if err := json.Unmarshal(buf, &v); err != nil {
-			return nil, attrsDecodeErr(nodeID, kind, err)
-		}
-		return v, nil
-	}
-	return nil, fmt.Errorf("agentgraph: node %q: kind %q has no decoder", nodeID, kind)
-}
-
-func attrsDecodeErr(nodeID string, kind NodeKind, err error) error {
-	return fmt.Errorf("agentgraph: node %q: decode attrs for kind %q: %w", nodeID, kind, err)
 }
 
 func cloneMap(m map[string]any) map[string]any {

@@ -5,7 +5,7 @@ entrypoints:
   - body_node
 nodes:
   - id: body_node
-    kind: llm
+    kind: model
     attrs:
       model: m
   - id: bad_loop

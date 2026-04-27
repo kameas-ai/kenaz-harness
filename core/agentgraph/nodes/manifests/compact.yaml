@@ -1,0 +1,26 @@
+schema_version: "1"
+id: compact
+extends: compute
+display_name: Compact
+description: "First-class compaction primitive (FR-039). Emits a BranchResult; coordinates with the configurable compaction subsystem."
+executor: agentgraph.ExecCompact
+ports:
+  inputs:
+    - { name: input, type: messages }
+  outputs:
+    - { name: result, type: any }
+attrs:
+  strategy:
+    type: enum
+    enum: [summary, drop_oldest, semantic_cluster, custom_subgraph]
+    required: true
+    description: "Compaction strategy discriminator."
+  target_token_budget:
+    type: int
+    min: 0
+    description: "Hard target for the post-compaction token count."
+  custom_subgraph_id:
+    type: activity_ref
+    description: "Activity-graph reference invoked when strategy=custom_subgraph."
+budget: llm
+budget_consumes: [tokens, llm_calls, cost_usd]

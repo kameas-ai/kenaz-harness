@@ -1,0 +1,25 @@
+schema_version: "1"
+id: model
+extends: compute
+display_name: Model
+description: "LLM-powered reasoning/generation node (FR-030)."
+aliases: [llm]
+executor: agentgraph.ExecModel
+ports:
+  inputs:
+    - { name: messages, type: messages, required: true }
+  outputs:
+    - { name: response, type: messages }
+attrs:
+  model:
+    type: string
+    required: true
+    description: "Provider-specific model name."
+  json_schema:
+    type: object
+    description: "Optional JSON schema constraint for structured output."
+  stream_to_chat:
+    type: bool
+    description: "When true, stream tokens directly to the active chat surface."
+budget: llm
+budget_consumes: [tokens, llm_calls, cost_usd]

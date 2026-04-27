@@ -173,6 +173,7 @@ type AttrSpec struct {
 type PortSpec struct {
 	Name        string `yaml:"name" json:"name"`
 	Type        string `yaml:"type" json:"type"`
+	Required    bool   `yaml:"required,omitempty" json:"required,omitempty"`
 	Description string `yaml:"description,omitempty" json:"description,omitempty"`
 	// DefaultFor names the archetype the port is the canonical "default"
 	// for; surfaced to the frontend palette.

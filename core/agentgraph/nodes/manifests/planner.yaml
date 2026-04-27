@@ -1,0 +1,25 @@
+schema_version: "1"
+id: planner
+extends: compute
+display_name: Planner
+description: "Decomposes a task into a plan before downstream execution (FR-031)."
+aliases: [plan]
+executor: agentgraph.ExecPlanner
+ports:
+  inputs:
+    - { name: task, type: text, required: true }
+  outputs:
+    - { name: plan, type: messages }
+attrs:
+  verbosity:
+    type: enum
+    enum: [terse, standard, verbose]
+    description: "Plan verbosity tier."
+  planner_model:
+    type: model_ref
+    description: "Override model used for planning (defaults to model)."
+  threshold_input:
+    type: string
+    description: "Input expression that gates plan emission."
+budget: llm
+budget_consumes: [tokens, llm_calls, cost_usd]

@@ -1,0 +1,26 @@
+schema_version: "1"
+id: loop
+extends: control
+display_name: Loop
+description: "Bounded iteration over a body of nodes (FR-046)."
+executor: agentgraph.ExecLoop
+ports:
+  inputs:
+    - { name: in, type: any }
+  outputs:
+    - { name: out, type: any }
+attrs:
+  max_iterations:
+    type: int
+    required: true
+    min: 1
+    description: "Mandatory cap on iteration count (NFR-004)."
+  condition:
+    type: string
+    description: "Optional continuation predicate; loop ends when it evaluates false."
+  body:
+    type: "[]string"
+    required: true
+    min_length: 1
+    description: "Node IDs forming the loop body."
+budget: none

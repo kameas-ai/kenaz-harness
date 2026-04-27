@@ -28,7 +28,7 @@ nodes:
     attrs:
       n: 0          # 0 = full history
   - id: assistant_turn
-    kind: llm
+    kind: model
     title: "Assistant turn (streamed)"
     attrs:
       model: "default"      # placeholder; resolved from session profile
@@ -47,7 +47,7 @@ nodes:
     attrs:
       name: "<resolved at run-time>"
   - id: continue_check
-    kind: branch
+    kind: decision
     title: "Did the model emit more tool_use?"
     attrs:
       condition: "finish_reason == \"tool_use\""

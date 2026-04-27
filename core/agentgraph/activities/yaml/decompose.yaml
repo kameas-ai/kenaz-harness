@@ -14,7 +14,7 @@ entrypoints:
   - decomposer
 nodes:
   - id: decomposer
-    kind: llm
+    kind: model
     title: "Cheap-tier sub-goal enumerator"
     attrs:
       model: "default"

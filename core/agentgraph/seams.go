@@ -21,7 +21,7 @@ import (
 // Kept narrow: provider/model selection, system prompt, message
 // history, optional tool allow-list. Provider-specific knobs (caching,
 // reasoning, JSON mode) are left to the production wiring layer to
-// translate from LLMAttrs into core/llm.GenerationRequest.
+// translate from ModelAttrs into core/llm.GenerationRequest.
 type LLMRequest struct {
 	Provider     string
 	Model        string

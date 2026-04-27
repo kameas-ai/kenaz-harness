@@ -1,0 +1,23 @@
+schema_version: "1"
+id: corpus_write
+extends: write
+display_name: Corpus Write
+description: "Ingests a source path into a registered corpus (FR-054)."
+executor: agentgraph.ExecCorpusWrite
+ports:
+  inputs:
+    - { name: in, type: any }
+  outputs:
+    - { name: job_handle, type: any }
+defaults:
+  target: corpus
+attrs:
+  corpus_id:
+    type: string
+    required: true
+    description: "Target corpus ID."
+  source_path:
+    type: string
+    required: true
+    description: "Filesystem path to ingest."
+budget: none

@@ -101,8 +101,8 @@ func TestKernel_BudgetCapHaltsRun(t *testing.T) {
 	g := &Graph{
 		SpecVersion: SpecVersion, ID: "g", Entrypoints: []string{"l1"},
 		Nodes: []Node{
-			{ID: "l1", Kind: NodeKindLLM, Attrs: LLMAttrs{Model: "x"}},
-			{ID: "l2", Kind: NodeKindLLM, Attrs: LLMAttrs{Model: "x"}},
+			{ID: "l1", Kind: NodeKindModel, Attrs: ModelAttrs{Model: "x"}},
+			{ID: "l2", Kind: NodeKindModel, Attrs: ModelAttrs{Model: "x"}},
 		},
 		Edges: []Edge{
 			{From: EndpointRef{Node: "l1", Port: "response"}, To: EndpointRef{Node: "l2", Port: "messages"}},
@@ -272,7 +272,7 @@ func TestKernel_LLMNodeRunsThroughKernel(t *testing.T) {
 	mem := newStubMemory()
 	g := &Graph{
 		SpecVersion: SpecVersion, ID: "g", Entrypoints: []string{"l"},
-		Nodes: []Node{{ID: "l", Kind: NodeKindLLM, Attrs: LLMAttrs{Model: "x", MaxTokens: 50}}},
+		Nodes: []Node{{ID: "l", Kind: NodeKindModel, Attrs: ModelAttrs{Model: "x", MaxTokens: 50}}},
 	}
 	log := NewMemoryEventLog()
 	k := NewKernel(WithEventLog(log))

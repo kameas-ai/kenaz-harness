@@ -1,0 +1,27 @@
+schema_version: "1"
+id: decision
+extends: control
+display_name: Decision
+description: "Predicate router (FR-041). Was named `branch` in v0; kept as alias."
+aliases: [branch]
+executor: agentgraph.ExecDecision
+ports:
+  inputs:
+    - { name: in, type: any, required: true }
+  outputs:
+    - { name: "true", type: any }
+    - { name: "false", type: any }
+attrs:
+  condition:
+    type: string
+    required: true
+    description: "Boolean expression evaluated against the inbound payload."
+  next_true:
+    type: node_id_ref
+    required: true
+    description: "Next node when the condition evaluates to true."
+  next_false:
+    type: node_id_ref
+    required: true
+    description: "Next node when the condition evaluates to false."
+budget: none

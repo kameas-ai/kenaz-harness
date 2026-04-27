@@ -1,0 +1,26 @@
+schema_version: "1"
+id: parallel
+extends: control
+display_name: Parallel
+description: "Fan-out to multiple downstream nodes concurrently (FR-043)."
+executor: agentgraph.ExecParallel
+ports:
+  inputs:
+    - { name: in, type: any }
+  outputs:
+    - { name: out, type: any }
+attrs:
+  fan_out:
+    type: int
+    min: 0
+    description: "Static fan-out count (when targets are inferred)."
+  targets:
+    type: "[]string"
+    required: true
+    min_length: 1
+    description: "Downstream node IDs to fan out to."
+  max_concurrency:
+    type: int
+    min: 0
+    description: "Per-node concurrency cap (default 4)."
+budget: none

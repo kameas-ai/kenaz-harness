@@ -16,7 +16,7 @@ entrypoints:
   - planner
 nodes:
   - id: planner
-    kind: plan
+    kind: planner
     title: "Decide whether to plan + emit plan"
     attrs:
       verbosity: standard

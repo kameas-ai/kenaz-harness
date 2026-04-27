@@ -6,7 +6,1360 @@
 
 package agentgraph
 
-// No callable kinds in the catalog yet; the generator emitted no
-// per-kind structs. WP04 lands the kind manifests and this file
-// populates with one struct per callable kind. Until then the
-// hand-written attrs.go remains the source of truth for typed payloads.
+import (
+	"fmt"
+)
+
+// ActivityAttrs is the typed payload for `kind: activity`.
+//
+// Embeds a registered activity sub-graph (FR-034).
+type ActivityAttrs struct {
+
+	// ActivityId: Identifier of the activity to embed.
+	ActivityId string `json:"activity_id,omitempty" yaml:"activity_id,omitempty"`
+
+	// Inputs: Inputs forwarded into the embedded activity.
+	Inputs map[string]any `json:"inputs,omitempty" yaml:"inputs,omitempty"`
+
+	// MaxTokens: Upper bound on generated tokens; 0 = provider default.
+	MaxTokens int `json:"max_tokens,omitempty" yaml:"max_tokens,omitempty"`
+
+	// Model: Provider-specific model name.
+	Model string `json:"model,omitempty" yaml:"model,omitempty"`
+
+	// Provider: LLM provider identifier (e.g. anthropic, bedrock).
+	Provider string `json:"provider,omitempty" yaml:"provider,omitempty"`
+
+	// SystemPrompt: Optional system prompt prepended to the conversation.
+	SystemPrompt string `json:"system_prompt,omitempty" yaml:"system_prompt,omitempty"`
+
+	// Temperature: Sampling temperature.
+	Temperature float64 `json:"temperature,omitempty" yaml:"temperature,omitempty"`
+
+	// ToolAllowlist: Tool IDs this node may call. Empty = allow-all per policy.
+	ToolAllowlist []string `json:"tool_allowlist,omitempty" yaml:"tool_allowlist,omitempty"`
+
+	// Version: Optional activity version pin.
+	Version string `json:"version,omitempty" yaml:"version,omitempty"`
+}
+
+func (ActivityAttrs) nodeAttrsMarker() {}
+
+// Validate enforces the manifest's declared constraints for `kind: activity`.
+// Generated from the resolved manifest's attrs map; per-rule errors
+// follow the validator's manifest-attribution format
+// (`activity.attrs.<attr>.<rule>: ...`) so callers can grep for the
+// constraint that fired.
+func (a ActivityAttrs) Validate() error {
+	if a.ActivityId == "" {
+		return fmt.Errorf("activity_id: activity_id is required (manifest constraint)")
+	}
+	if a.MaxTokens != 0 && float64(a.MaxTokens) < 0 {
+		return fmt.Errorf("max_tokens.min: got %d, want >= %v", a.MaxTokens, 0)
+	}
+	if a.Temperature < 0 {
+		return fmt.Errorf("temperature.min: got %v, want >= %v", a.Temperature, 0)
+	}
+	if a.Temperature > 2 {
+		return fmt.Errorf("temperature.max: got %v, want <= %v", a.Temperature, 2)
+	}
+	return nil
+}
+
+// ApprovalAttrs is the typed payload for `kind: approval`.
+//
+// Binary HITL gate (FR-048). Persists a `pending_approval` event mirroring `pending_ask`.
+type ApprovalAttrs struct {
+
+	// ApproverRole: Role expected to approve (default `user`).
+	ApproverRole string `json:"approver_role,omitempty" yaml:"approver_role,omitempty"`
+
+	// AutoApproveWindowSeconds: Seconds within which auto-approval may fire (0 disables).
+	AutoApproveWindowSeconds int `json:"auto_approve_window_seconds,omitempty" yaml:"auto_approve_window_seconds,omitempty"`
+
+	// PolicyLabel: Cedar policy label evaluated for auto-approval.
+	PolicyLabel string `json:"policy_label,omitempty" yaml:"policy_label,omitempty"`
+
+	// Prompt: Prompt rendered to the approver.
+	Prompt string `json:"prompt,omitempty" yaml:"prompt,omitempty"`
+}
+
+func (ApprovalAttrs) nodeAttrsMarker() {}
+
+// Validate enforces the manifest's declared constraints for `kind: approval`.
+// Generated from the resolved manifest's attrs map; per-rule errors
+// follow the validator's manifest-attribution format
+// (`approval.attrs.<attr>.<rule>: ...`) so callers can grep for the
+// constraint that fired.
+func (a ApprovalAttrs) Validate() error {
+	if a.AutoApproveWindowSeconds != 0 && float64(a.AutoApproveWindowSeconds) < 0 {
+		return fmt.Errorf("auto_approve_window_seconds.min: got %d, want >= %v", a.AutoApproveWindowSeconds, 0)
+	}
+	return nil
+}
+
+// ArtifactAttrs is the typed payload for `kind: artifact`.
+//
+// Terminal output node (FR-058). Replaces ad-hoc end-of-graph dumps.
+type ArtifactAttrs struct {
+
+	// AttachmentRef: Optional attachment ID to bind the artifact to.
+	AttachmentRef string `json:"attachment_ref,omitempty" yaml:"attachment_ref,omitempty"`
+
+	// Content: Inline content (when not using attachment_ref).
+	Content string `json:"content,omitempty" yaml:"content,omitempty"`
+
+	// MimeType: MIME type of the emitted artifact.
+	MimeType string `json:"mime_type,omitempty" yaml:"mime_type,omitempty"`
+
+	// OutputTarget: Where the artifact is delivered.
+	OutputTarget string `json:"output_target,omitempty" yaml:"output_target,omitempty"`
+
+	// Provenance: When true, surface a (path, hash, scope) triple to the EventLog for this op.
+	Provenance bool `json:"provenance,omitempty" yaml:"provenance,omitempty"`
+
+	// Target: Discriminator naming the write target. Each kind under `write` sets its own default via the `defaults:` map.
+	Target string `json:"target,omitempty" yaml:"target,omitempty"`
+}
+
+func (ArtifactAttrs) nodeAttrsMarker() {}
+
+// Validate enforces the manifest's declared constraints for `kind: artifact`.
+// Generated from the resolved manifest's attrs map; per-rule errors
+// follow the validator's manifest-attribution format
+// (`artifact.attrs.<attr>.<rule>: ...`) so callers can grep for the
+// constraint that fired.
+func (a ArtifactAttrs) Validate() error {
+	if a.MimeType == "" {
+		return fmt.Errorf("mime_type: mime_type is required (manifest constraint)")
+	}
+	if a.OutputTarget == "" {
+		return fmt.Errorf("output_target: output_target is required (manifest constraint)")
+	}
+	if a.OutputTarget != "" {
+		valid_OutputTarget := false
+		for _, allowed := range []string{"session_message", "file_path", "report"} {
+			if a.OutputTarget == allowed {
+				valid_OutputTarget = true
+				break
+			}
+		}
+		if !valid_OutputTarget {
+			return fmt.Errorf("output_target.enum: got %q, want one of session_message | file_path | report", a.OutputTarget)
+		}
+	}
+	if a.Target != "" {
+		valid_Target := false
+		for _, allowed := range []string{"memory", "corpus", "trace", "file", "artifact"} {
+			if a.Target == allowed {
+				valid_Target = true
+				break
+			}
+		}
+		if !valid_Target {
+			return fmt.Errorf("target.enum: got %q, want one of memory | corpus | trace | file | artifact", a.Target)
+		}
+	}
+	return nil
+}
+
+// AskAttrs is the typed payload for `kind: ask`.
+//
+// Free-form user-input elicitation (FR-037). No LLM budget consumed.
+type AskAttrs struct {
+
+	// MaxTokens: Upper bound on generated tokens; 0 = provider default.
+	MaxTokens int `json:"max_tokens,omitempty" yaml:"max_tokens,omitempty"`
+
+	// Model: Provider-specific model name.
+	Model string `json:"model,omitempty" yaml:"model,omitempty"`
+
+	// Provider: LLM provider identifier (e.g. anthropic, bedrock).
+	Provider string `json:"provider,omitempty" yaml:"provider,omitempty"`
+
+	// Question: Prompt rendered to the user.
+	Question string `json:"question,omitempty" yaml:"question,omitempty"`
+
+	// SystemPrompt: Optional system prompt prepended to the conversation.
+	SystemPrompt string `json:"system_prompt,omitempty" yaml:"system_prompt,omitempty"`
+
+	// Temperature: Sampling temperature.
+	Temperature float64 `json:"temperature,omitempty" yaml:"temperature,omitempty"`
+
+	// ToolAllowlist: Tool IDs this node may call. Empty = allow-all per policy.
+	ToolAllowlist []string `json:"tool_allowlist,omitempty" yaml:"tool_allowlist,omitempty"`
+}
+
+func (AskAttrs) nodeAttrsMarker() {}
+
+// Validate enforces the manifest's declared constraints for `kind: ask`.
+// Generated from the resolved manifest's attrs map; per-rule errors
+// follow the validator's manifest-attribution format
+// (`ask.attrs.<attr>.<rule>: ...`) so callers can grep for the
+// constraint that fired.
+func (a AskAttrs) Validate() error {
+	if a.MaxTokens != 0 && float64(a.MaxTokens) < 0 {
+		return fmt.Errorf("max_tokens.min: got %d, want >= %v", a.MaxTokens, 0)
+	}
+	if a.Question == "" {
+		return fmt.Errorf("question: question is required (manifest constraint)")
+	}
+	if a.Temperature < 0 {
+		return fmt.Errorf("temperature.min: got %v, want >= %v", a.Temperature, 0)
+	}
+	if a.Temperature > 2 {
+		return fmt.Errorf("temperature.max: got %v, want <= %v", a.Temperature, 2)
+	}
+	return nil
+}
+
+// AttachmentAttrs is the typed payload for `kind: attachment`.
+//
+// Materialises an attachment-by-id into the active context (FR-055).
+type AttachmentAttrs struct {
+
+	// AttachmentId: Identifier of the attachment to materialise.
+	AttachmentId string `json:"attachment_id,omitempty" yaml:"attachment_id,omitempty"`
+
+	// Inline: When true, inline the attachment as a content block (default true).
+	Inline bool `json:"inline,omitempty" yaml:"inline,omitempty"`
+
+	// Provenance: When true, surface a (path, hash, scope) triple to the EventLog for this op.
+	Provenance bool `json:"provenance,omitempty" yaml:"provenance,omitempty"`
+
+	// Source: Discriminator naming the read source. Each kind under `read` sets its own default via the `defaults:` map.
+	Source string `json:"source,omitempty" yaml:"source,omitempty"`
+}
+
+func (AttachmentAttrs) nodeAttrsMarker() {}
+
+// Validate enforces the manifest's declared constraints for `kind: attachment`.
+// Generated from the resolved manifest's attrs map; per-rule errors
+// follow the validator's manifest-attribution format
+// (`attachment.attrs.<attr>.<rule>: ...`) so callers can grep for the
+// constraint that fired.
+func (a AttachmentAttrs) Validate() error {
+	if a.AttachmentId == "" {
+		return fmt.Errorf("attachment_id: attachment_id is required (manifest constraint)")
+	}
+	if a.Source != "" {
+		valid_Source := false
+		for _, allowed := range []string{"history", "corpus", "memory", "attachment", "file", "bash_output"} {
+			if a.Source == allowed {
+				valid_Source = true
+				break
+			}
+		}
+		if !valid_Source {
+			return fmt.Errorf("source.enum: got %q, want one of history | corpus | memory | attachment | file | bash_output", a.Source)
+		}
+	}
+	return nil
+}
+
+// BranchAttrs is the typed payload for `kind: branch`.
+//
+// Sub-graph spawn primitive (FR-042). Was named `fork` in v0; kept as alias.
+type BranchAttrs struct {
+
+	// MessageSubset: Subset of parent message IDs to seed the branch with.
+	MessageSubset []string `json:"message_subset,omitempty" yaml:"message_subset,omitempty"`
+
+	// ModelOverride: Optional model override applied to the branch's compute layer.
+	ModelOverride string `json:"model_override,omitempty" yaml:"model_override,omitempty"`
+
+	// ParentLeaf: Optional explicit parent leaf node; defaults to current leaf.
+	ParentLeaf string `json:"parent_leaf,omitempty" yaml:"parent_leaf,omitempty"`
+
+	// Title: Human-readable title for the spawned branch.
+	Title string `json:"title,omitempty" yaml:"title,omitempty"`
+
+	// ToolAllowlist: Tool IDs the branch may invoke.
+	ToolAllowlist []string `json:"tool_allowlist,omitempty" yaml:"tool_allowlist,omitempty"`
+}
+
+func (BranchAttrs) nodeAttrsMarker() {}
+
+// Validate enforces the manifest's declared constraints for `kind: branch`.
+// Generated from the resolved manifest's attrs map; per-rule errors
+// follow the validator's manifest-attribution format
+// (`branch.attrs.<attr>.<rule>: ...`) so callers can grep for the
+// constraint that fired.
+func (a BranchAttrs) Validate() error {
+	if a.Title == "" {
+		return fmt.Errorf("title: title is required (manifest constraint)")
+	}
+	return nil
+}
+
+// CheckpointAttrs is the typed payload for `kind: checkpoint`.
+//
+// Forces a kernel checkpoint at a logical boundary (FR-057).
+type CheckpointAttrs struct {
+
+	// Label: Optional human-readable checkpoint label.
+	Label string `json:"label,omitempty" yaml:"label,omitempty"`
+
+	// Provenance: When true, surface a (path, hash, scope) triple to the EventLog for this op.
+	Provenance bool `json:"provenance,omitempty" yaml:"provenance,omitempty"`
+}
+
+func (CheckpointAttrs) nodeAttrsMarker() {}
+
+// Validate enforces the manifest's declared constraints for `kind: checkpoint`.
+// Generated from the resolved manifest's attrs map; per-rule errors
+// follow the validator's manifest-attribution format
+// (`checkpoint.attrs.<attr>.<rule>: ...`) so callers can grep for the
+// constraint that fired.
+func (a CheckpointAttrs) Validate() error {
+	return nil
+}
+
+// CompactAttrs is the typed payload for `kind: compact`.
+//
+// First-class compaction primitive (FR-039). Emits a BranchResult; coordinates with the configurable compaction subsystem.
+type CompactAttrs struct {
+
+	// CustomSubgraphId: Activity-graph reference invoked when strategy=custom_subgraph.
+	CustomSubgraphId string `json:"custom_subgraph_id,omitempty" yaml:"custom_subgraph_id,omitempty"`
+
+	// MaxTokens: Upper bound on generated tokens; 0 = provider default.
+	MaxTokens int `json:"max_tokens,omitempty" yaml:"max_tokens,omitempty"`
+
+	// Model: Provider-specific model name.
+	Model string `json:"model,omitempty" yaml:"model,omitempty"`
+
+	// Provider: LLM provider identifier (e.g. anthropic, bedrock).
+	Provider string `json:"provider,omitempty" yaml:"provider,omitempty"`
+
+	// Strategy: Compaction strategy discriminator.
+	Strategy string `json:"strategy,omitempty" yaml:"strategy,omitempty"`
+
+	// SystemPrompt: Optional system prompt prepended to the conversation.
+	SystemPrompt string `json:"system_prompt,omitempty" yaml:"system_prompt,omitempty"`
+
+	// TargetTokenBudget: Hard target for the post-compaction token count.
+	TargetTokenBudget int `json:"target_token_budget,omitempty" yaml:"target_token_budget,omitempty"`
+
+	// Temperature: Sampling temperature.
+	Temperature float64 `json:"temperature,omitempty" yaml:"temperature,omitempty"`
+
+	// ToolAllowlist: Tool IDs this node may call. Empty = allow-all per policy.
+	ToolAllowlist []string `json:"tool_allowlist,omitempty" yaml:"tool_allowlist,omitempty"`
+}
+
+func (CompactAttrs) nodeAttrsMarker() {}
+
+// Validate enforces the manifest's declared constraints for `kind: compact`.
+// Generated from the resolved manifest's attrs map; per-rule errors
+// follow the validator's manifest-attribution format
+// (`compact.attrs.<attr>.<rule>: ...`) so callers can grep for the
+// constraint that fired.
+func (a CompactAttrs) Validate() error {
+	if a.MaxTokens != 0 && float64(a.MaxTokens) < 0 {
+		return fmt.Errorf("max_tokens.min: got %d, want >= %v", a.MaxTokens, 0)
+	}
+	if a.Strategy == "" {
+		return fmt.Errorf("strategy: strategy is required (manifest constraint)")
+	}
+	if a.Strategy != "" {
+		valid_Strategy := false
+		for _, allowed := range []string{"summary", "drop_oldest", "semantic_cluster", "custom_subgraph"} {
+			if a.Strategy == allowed {
+				valid_Strategy = true
+				break
+			}
+		}
+		if !valid_Strategy {
+			return fmt.Errorf("strategy.enum: got %q, want one of summary | drop_oldest | semantic_cluster | custom_subgraph", a.Strategy)
+		}
+	}
+	if a.TargetTokenBudget != 0 && float64(a.TargetTokenBudget) < 0 {
+		return fmt.Errorf("target_token_budget.min: got %d, want >= %v", a.TargetTokenBudget, 0)
+	}
+	if a.Temperature < 0 {
+		return fmt.Errorf("temperature.min: got %v, want >= %v", a.Temperature, 0)
+	}
+	if a.Temperature > 2 {
+		return fmt.Errorf("temperature.max: got %v, want <= %v", a.Temperature, 2)
+	}
+	return nil
+}
+
+// CorpusReadAttrs is the typed payload for `kind: corpus_read`.
+//
+// Reads from one or more registered corpora (FR-052).
+type CorpusReadAttrs struct {
+
+	// CorpusIds: Corpus IDs to query.
+	CorpusIds []string `json:"corpus_ids,omitempty" yaml:"corpus_ids,omitempty"`
+
+	// MaxBytes: Cap on returned hit-byte total.
+	MaxBytes int `json:"max_bytes,omitempty" yaml:"max_bytes,omitempty"`
+
+	// MimeTypes: Filter results by MIME type.
+	MimeTypes []string `json:"mime_types,omitempty" yaml:"mime_types,omitempty"`
+
+	// Provenance: When true, surface a (path, hash, scope) triple to the EventLog for this op.
+	Provenance bool `json:"provenance,omitempty" yaml:"provenance,omitempty"`
+
+	// Query: Search query.
+	Query string `json:"query,omitempty" yaml:"query,omitempty"`
+
+	// ScoreThreshold: Score floor for retained hits.
+	ScoreThreshold float64 `json:"score_threshold,omitempty" yaml:"score_threshold,omitempty"`
+
+	// Source: Discriminator naming the read source. Each kind under `read` sets its own default via the `defaults:` map.
+	Source string `json:"source,omitempty" yaml:"source,omitempty"`
+
+	// SourcePathPrefix: Filter results by source-path prefix.
+	SourcePathPrefix string `json:"source_path_prefix,omitempty" yaml:"source_path_prefix,omitempty"`
+
+	// TopK: Top-K hits to return.
+	TopK int `json:"top_k,omitempty" yaml:"top_k,omitempty"`
+}
+
+func (CorpusReadAttrs) nodeAttrsMarker() {}
+
+// Validate enforces the manifest's declared constraints for `kind: corpus_read`.
+// Generated from the resolved manifest's attrs map; per-rule errors
+// follow the validator's manifest-attribution format
+// (`corpus_read.attrs.<attr>.<rule>: ...`) so callers can grep for the
+// constraint that fired.
+func (a CorpusReadAttrs) Validate() error {
+	if len(a.CorpusIds) == 0 {
+		return fmt.Errorf("corpus_ids: corpus_ids is required (manifest constraint)")
+	}
+	if len(a.CorpusIds) > 0 && len(a.CorpusIds) < 1 {
+		return fmt.Errorf("corpus_ids.min_length: got %d, want >= %d", len(a.CorpusIds), 1)
+	}
+	if a.MaxBytes != 0 && float64(a.MaxBytes) < 0 {
+		return fmt.Errorf("max_bytes.min: got %d, want >= %v", a.MaxBytes, 0)
+	}
+	if a.ScoreThreshold < 0 {
+		return fmt.Errorf("score_threshold.min: got %v, want >= %v", a.ScoreThreshold, 0)
+	}
+	if a.ScoreThreshold > 1 {
+		return fmt.Errorf("score_threshold.max: got %v, want <= %v", a.ScoreThreshold, 1)
+	}
+	if a.Source != "" {
+		valid_Source := false
+		for _, allowed := range []string{"history", "corpus", "memory", "attachment", "file", "bash_output"} {
+			if a.Source == allowed {
+				valid_Source = true
+				break
+			}
+		}
+		if !valid_Source {
+			return fmt.Errorf("source.enum: got %q, want one of history | corpus | memory | attachment | file | bash_output", a.Source)
+		}
+	}
+	if a.TopK != 0 && float64(a.TopK) < 0 {
+		return fmt.Errorf("top_k.min: got %d, want >= %v", a.TopK, 0)
+	}
+	return nil
+}
+
+// CorpusWriteAttrs is the typed payload for `kind: corpus_write`.
+//
+// Ingests a source path into a registered corpus (FR-054).
+type CorpusWriteAttrs struct {
+
+	// CorpusId: Target corpus ID.
+	CorpusId string `json:"corpus_id,omitempty" yaml:"corpus_id,omitempty"`
+
+	// Provenance: When true, surface a (path, hash, scope) triple to the EventLog for this op.
+	Provenance bool `json:"provenance,omitempty" yaml:"provenance,omitempty"`
+
+	// SourcePath: Filesystem path to ingest.
+	SourcePath string `json:"source_path,omitempty" yaml:"source_path,omitempty"`
+
+	// Target: Discriminator naming the write target. Each kind under `write` sets its own default via the `defaults:` map.
+	Target string `json:"target,omitempty" yaml:"target,omitempty"`
+}
+
+func (CorpusWriteAttrs) nodeAttrsMarker() {}
+
+// Validate enforces the manifest's declared constraints for `kind: corpus_write`.
+// Generated from the resolved manifest's attrs map; per-rule errors
+// follow the validator's manifest-attribution format
+// (`corpus_write.attrs.<attr>.<rule>: ...`) so callers can grep for the
+// constraint that fired.
+func (a CorpusWriteAttrs) Validate() error {
+	if a.CorpusId == "" {
+		return fmt.Errorf("corpus_id: corpus_id is required (manifest constraint)")
+	}
+	if a.SourcePath == "" {
+		return fmt.Errorf("source_path: source_path is required (manifest constraint)")
+	}
+	if a.Target != "" {
+		valid_Target := false
+		for _, allowed := range []string{"memory", "corpus", "trace", "file", "artifact"} {
+			if a.Target == allowed {
+				valid_Target = true
+				break
+			}
+		}
+		if !valid_Target {
+			return fmt.Errorf("target.enum: got %q, want one of memory | corpus | trace | file | artifact", a.Target)
+		}
+	}
+	return nil
+}
+
+// DecisionAttrs is the typed payload for `kind: decision`.
+//
+// Predicate router (FR-041). Was named `branch` in v0; kept as alias.
+type DecisionAttrs struct {
+
+	// Condition: Boolean expression evaluated against the inbound payload.
+	Condition string `json:"condition,omitempty" yaml:"condition,omitempty"`
+
+	// NextFalse: Next node when the condition evaluates to false.
+	NextFalse string `json:"next_false,omitempty" yaml:"next_false,omitempty"`
+
+	// NextTrue: Next node when the condition evaluates to true.
+	NextTrue string `json:"next_true,omitempty" yaml:"next_true,omitempty"`
+}
+
+func (DecisionAttrs) nodeAttrsMarker() {}
+
+// Validate enforces the manifest's declared constraints for `kind: decision`.
+// Generated from the resolved manifest's attrs map; per-rule errors
+// follow the validator's manifest-attribution format
+// (`decision.attrs.<attr>.<rule>: ...`) so callers can grep for the
+// constraint that fired.
+func (a DecisionAttrs) Validate() error {
+	if a.Condition == "" {
+		return fmt.Errorf("condition: condition is required (manifest constraint)")
+	}
+	if a.NextFalse == "" {
+		return fmt.Errorf("next_false: next_false is required (manifest constraint)")
+	}
+	if a.NextTrue == "" {
+		return fmt.Errorf("next_true: next_true is required (manifest constraint)")
+	}
+	return nil
+}
+
+// EscalateAttrs is the typed payload for `kind: escalate`.
+//
+// Re-runs an upstream node with a stronger model when confidence falls below the floor (FR-038).
+type EscalateAttrs struct {
+
+	// ConfidenceFloor: Floor below which escalation fires.
+	ConfidenceFloor float64 `json:"confidence_floor,omitempty" yaml:"confidence_floor,omitempty"`
+
+	// MaxTokens: Upper bound on generated tokens; 0 = provider default.
+	MaxTokens int `json:"max_tokens,omitempty" yaml:"max_tokens,omitempty"`
+
+	// Model: Provider-specific model name.
+	Model string `json:"model,omitempty" yaml:"model,omitempty"`
+
+	// OneEscalationOnly: When true, escalation is one-shot per run.
+	OneEscalationOnly bool `json:"one_escalation_only,omitempty" yaml:"one_escalation_only,omitempty"`
+
+	// Provider: LLM provider identifier (e.g. anthropic, bedrock).
+	Provider string `json:"provider,omitempty" yaml:"provider,omitempty"`
+
+	// SystemPrompt: Optional system prompt prepended to the conversation.
+	SystemPrompt string `json:"system_prompt,omitempty" yaml:"system_prompt,omitempty"`
+
+	// TargetModel: Stronger model used for the escalation pass.
+	TargetModel string `json:"target_model,omitempty" yaml:"target_model,omitempty"`
+
+	// Temperature: Sampling temperature.
+	Temperature float64 `json:"temperature,omitempty" yaml:"temperature,omitempty"`
+
+	// ToolAllowlist: Tool IDs this node may call. Empty = allow-all per policy.
+	ToolAllowlist []string `json:"tool_allowlist,omitempty" yaml:"tool_allowlist,omitempty"`
+
+	// UpstreamNode: ID of the upstream node to re-fire.
+	UpstreamNode string `json:"upstream_node,omitempty" yaml:"upstream_node,omitempty"`
+}
+
+func (EscalateAttrs) nodeAttrsMarker() {}
+
+// Validate enforces the manifest's declared constraints for `kind: escalate`.
+// Generated from the resolved manifest's attrs map; per-rule errors
+// follow the validator's manifest-attribution format
+// (`escalate.attrs.<attr>.<rule>: ...`) so callers can grep for the
+// constraint that fired.
+func (a EscalateAttrs) Validate() error {
+	if a.ConfidenceFloor < 0 {
+		return fmt.Errorf("confidence_floor.min: got %v, want >= %v", a.ConfidenceFloor, 0)
+	}
+	if a.ConfidenceFloor > 1 {
+		return fmt.Errorf("confidence_floor.max: got %v, want <= %v", a.ConfidenceFloor, 1)
+	}
+	if a.MaxTokens != 0 && float64(a.MaxTokens) < 0 {
+		return fmt.Errorf("max_tokens.min: got %d, want >= %v", a.MaxTokens, 0)
+	}
+	if a.TargetModel == "" {
+		return fmt.Errorf("target_model: target_model is required (manifest constraint)")
+	}
+	if a.Temperature < 0 {
+		return fmt.Errorf("temperature.min: got %v, want >= %v", a.Temperature, 0)
+	}
+	if a.Temperature > 2 {
+		return fmt.Errorf("temperature.max: got %v, want <= %v", a.Temperature, 2)
+	}
+	if a.UpstreamNode == "" {
+		return fmt.Errorf("upstream_node: upstream_node is required (manifest constraint)")
+	}
+	return nil
+}
+
+// HistoryReadAttrs is the typed payload for `kind: history_read`.
+//
+// Reads the last-N messages from the conversation history (FR-051).
+type HistoryReadAttrs struct {
+
+	// BranchId: Optional branch ID; defaults to current branch.
+	BranchId string `json:"branch_id,omitempty" yaml:"branch_id,omitempty"`
+
+	// N: Last-N messages to read.
+	N int `json:"n,omitempty" yaml:"n,omitempty"`
+
+	// Provenance: When true, surface a (path, hash, scope) triple to the EventLog for this op.
+	Provenance bool `json:"provenance,omitempty" yaml:"provenance,omitempty"`
+
+	// Source: Discriminator naming the read source. Each kind under `read` sets its own default via the `defaults:` map.
+	Source string `json:"source,omitempty" yaml:"source,omitempty"`
+}
+
+func (HistoryReadAttrs) nodeAttrsMarker() {}
+
+// Validate enforces the manifest's declared constraints for `kind: history_read`.
+// Generated from the resolved manifest's attrs map; per-rule errors
+// follow the validator's manifest-attribution format
+// (`history_read.attrs.<attr>.<rule>: ...`) so callers can grep for the
+// constraint that fired.
+func (a HistoryReadAttrs) Validate() error {
+	if a.N != 0 && float64(a.N) < 0 {
+		return fmt.Errorf("n.min: got %d, want >= %v", a.N, 0)
+	}
+	if a.Source != "" {
+		valid_Source := false
+		for _, allowed := range []string{"history", "corpus", "memory", "attachment", "file", "bash_output"} {
+			if a.Source == allowed {
+				valid_Source = true
+				break
+			}
+		}
+		if !valid_Source {
+			return fmt.Errorf("source.enum: got %q, want one of history | corpus | memory | attachment | file | bash_output", a.Source)
+		}
+	}
+	return nil
+}
+
+// JoinAttrs is the typed payload for `kind: join`.
+//
+// Awaits multiple upstream completions and folds them into a single output (FR-044).
+type JoinAttrs struct {
+
+	// From: Upstream node IDs whose outputs are joined.
+	From []string `json:"from,omitempty" yaml:"from,omitempty"`
+
+	// Order: Output ordering rule.
+	Order string `json:"order,omitempty" yaml:"order,omitempty"`
+}
+
+func (JoinAttrs) nodeAttrsMarker() {}
+
+// Validate enforces the manifest's declared constraints for `kind: join`.
+// Generated from the resolved manifest's attrs map; per-rule errors
+// follow the validator's manifest-attribution format
+// (`join.attrs.<attr>.<rule>: ...`) so callers can grep for the
+// constraint that fired.
+func (a JoinAttrs) Validate() error {
+	if len(a.From) == 0 {
+		return fmt.Errorf("from: from is required (manifest constraint)")
+	}
+	if len(a.From) > 0 && len(a.From) < 1 {
+		return fmt.Errorf("from.min_length: got %d, want >= %d", len(a.From), 1)
+	}
+	if a.Order != "" {
+		valid_Order := false
+		for _, allowed := range []string{"declared", "first_done"} {
+			if a.Order == allowed {
+				valid_Order = true
+				break
+			}
+		}
+		if !valid_Order {
+			return fmt.Errorf("order.enum: got %q, want one of declared | first_done", a.Order)
+		}
+	}
+	return nil
+}
+
+// LoopAttrs is the typed payload for `kind: loop`.
+//
+// Bounded iteration over a body of nodes (FR-046).
+type LoopAttrs struct {
+
+	// Body: Node IDs forming the loop body.
+	Body []string `json:"body,omitempty" yaml:"body,omitempty"`
+
+	// Condition: Optional continuation predicate; loop ends when it evaluates false.
+	Condition string `json:"condition,omitempty" yaml:"condition,omitempty"`
+
+	// MaxIterations: Mandatory cap on iteration count (NFR-004).
+	MaxIterations int `json:"max_iterations,omitempty" yaml:"max_iterations,omitempty"`
+}
+
+func (LoopAttrs) nodeAttrsMarker() {}
+
+// Validate enforces the manifest's declared constraints for `kind: loop`.
+// Generated from the resolved manifest's attrs map; per-rule errors
+// follow the validator's manifest-attribution format
+// (`loop.attrs.<attr>.<rule>: ...`) so callers can grep for the
+// constraint that fired.
+func (a LoopAttrs) Validate() error {
+	if len(a.Body) == 0 {
+		return fmt.Errorf("body: body is required (manifest constraint)")
+	}
+	if len(a.Body) > 0 && len(a.Body) < 1 {
+		return fmt.Errorf("body.min_length: got %d, want >= %d", len(a.Body), 1)
+	}
+	if a.MaxIterations == 0 {
+		return fmt.Errorf("max_iterations: max_iterations is required (manifest constraint)")
+	}
+	if a.MaxIterations != 0 && float64(a.MaxIterations) < 1 {
+		return fmt.Errorf("max_iterations.min: got %d, want >= %v", a.MaxIterations, 1)
+	}
+	return nil
+}
+
+// MemoryAttrs is the typed payload for `kind: memory`.
+//
+// Read/write/upsert against the memory store (FR-053). The `mode` attr drives executor behaviour.
+type MemoryAttrs struct {
+
+	// Content: Payload text when mode=write|upsert.
+	Content string `json:"content,omitempty" yaml:"content,omitempty"`
+
+	// Mode: Discriminates read vs. write semantics inside this kind.
+	Mode string `json:"mode,omitempty" yaml:"mode,omitempty"`
+
+	// Pin: When true, pin the resulting memory entry.
+	Pin bool `json:"pin,omitempty" yaml:"pin,omitempty"`
+
+	// Provenance: When true, surface a (path, hash, scope) triple to the EventLog for this op.
+	Provenance bool `json:"provenance,omitempty" yaml:"provenance,omitempty"`
+
+	// Query: Search query when mode=read.
+	Query string `json:"query,omitempty" yaml:"query,omitempty"`
+
+	// Scope: Memory scope partition.
+	Scope string `json:"scope,omitempty" yaml:"scope,omitempty"`
+
+	// Source: Discriminator naming the read source. Each kind under `read` sets its own default via the `defaults:` map.
+	Source string `json:"source,omitempty" yaml:"source,omitempty"`
+
+	// TopK: Top-K hits to return when mode=read.
+	TopK int `json:"top_k,omitempty" yaml:"top_k,omitempty"`
+}
+
+func (MemoryAttrs) nodeAttrsMarker() {}
+
+// Validate enforces the manifest's declared constraints for `kind: memory`.
+// Generated from the resolved manifest's attrs map; per-rule errors
+// follow the validator's manifest-attribution format
+// (`memory.attrs.<attr>.<rule>: ...`) so callers can grep for the
+// constraint that fired.
+func (a MemoryAttrs) Validate() error {
+	if a.Mode == "" {
+		return fmt.Errorf("mode: mode is required (manifest constraint)")
+	}
+	if a.Mode != "" {
+		valid_Mode := false
+		for _, allowed := range []string{"read", "write", "upsert"} {
+			if a.Mode == allowed {
+				valid_Mode = true
+				break
+			}
+		}
+		if !valid_Mode {
+			return fmt.Errorf("mode.enum: got %q, want one of read | write | upsert", a.Mode)
+		}
+	}
+	if a.Scope != "" {
+		valid_Scope := false
+		for _, allowed := range []string{"global", "project", "session"} {
+			if a.Scope == allowed {
+				valid_Scope = true
+				break
+			}
+		}
+		if !valid_Scope {
+			return fmt.Errorf("scope.enum: got %q, want one of global | project | session", a.Scope)
+		}
+	}
+	if a.Source != "" {
+		valid_Source := false
+		for _, allowed := range []string{"history", "corpus", "memory", "attachment", "file", "bash_output"} {
+			if a.Source == allowed {
+				valid_Source = true
+				break
+			}
+		}
+		if !valid_Source {
+			return fmt.Errorf("source.enum: got %q, want one of history | corpus | memory | attachment | file | bash_output", a.Source)
+		}
+	}
+	if a.TopK != 0 && float64(a.TopK) < 0 {
+		return fmt.Errorf("top_k.min: got %d, want >= %v", a.TopK, 0)
+	}
+	return nil
+}
+
+// MergeAttrs is the typed payload for `kind: merge`.
+//
+// Folds a sub-graph branch back into the parent (FR-045).
+type MergeAttrs struct {
+
+	// BranchId: ID of the branch to merge back into the parent.
+	BranchId string `json:"branch_id,omitempty" yaml:"branch_id,omitempty"`
+
+	// Mode: Merge strategy.
+	Mode string `json:"mode,omitempty" yaml:"mode,omitempty"`
+}
+
+func (MergeAttrs) nodeAttrsMarker() {}
+
+// Validate enforces the manifest's declared constraints for `kind: merge`.
+// Generated from the resolved manifest's attrs map; per-rule errors
+// follow the validator's manifest-attribution format
+// (`merge.attrs.<attr>.<rule>: ...`) so callers can grep for the
+// constraint that fired.
+func (a MergeAttrs) Validate() error {
+	if a.BranchId == "" {
+		return fmt.Errorf("branch_id: branch_id is required (manifest constraint)")
+	}
+	if a.Mode != "" {
+		valid_Mode := false
+		for _, allowed := range []string{"append", "summarize_append", "replace_last_turn"} {
+			if a.Mode == allowed {
+				valid_Mode = true
+				break
+			}
+		}
+		if !valid_Mode {
+			return fmt.Errorf("mode.enum: got %q, want one of append | summarize_append | replace_last_turn", a.Mode)
+		}
+	}
+	return nil
+}
+
+// ModelAttrs is the typed payload for `kind: model`.
+//
+// LLM-powered reasoning/generation node (FR-030).
+type ModelAttrs struct {
+
+	// JsonSchema: Optional JSON schema constraint for structured output.
+	JsonSchema map[string]any `json:"json_schema,omitempty" yaml:"json_schema,omitempty"`
+
+	// MaxTokens: Upper bound on generated tokens; 0 = provider default.
+	MaxTokens int `json:"max_tokens,omitempty" yaml:"max_tokens,omitempty"`
+
+	// Model: Provider-specific model name.
+	Model string `json:"model,omitempty" yaml:"model,omitempty"`
+
+	// Provider: LLM provider identifier (e.g. anthropic, bedrock).
+	Provider string `json:"provider,omitempty" yaml:"provider,omitempty"`
+
+	// StreamToChat: When true, stream tokens directly to the active chat surface.
+	StreamToChat bool `json:"stream_to_chat,omitempty" yaml:"stream_to_chat,omitempty"`
+
+	// SystemPrompt: Optional system prompt prepended to the conversation.
+	SystemPrompt string `json:"system_prompt,omitempty" yaml:"system_prompt,omitempty"`
+
+	// Temperature: Sampling temperature.
+	Temperature float64 `json:"temperature,omitempty" yaml:"temperature,omitempty"`
+
+	// ToolAllowlist: Tool IDs this node may call. Empty = allow-all per policy.
+	ToolAllowlist []string `json:"tool_allowlist,omitempty" yaml:"tool_allowlist,omitempty"`
+}
+
+func (ModelAttrs) nodeAttrsMarker() {}
+
+// Validate enforces the manifest's declared constraints for `kind: model`.
+// Generated from the resolved manifest's attrs map; per-rule errors
+// follow the validator's manifest-attribution format
+// (`model.attrs.<attr>.<rule>: ...`) so callers can grep for the
+// constraint that fired.
+func (a ModelAttrs) Validate() error {
+	if a.MaxTokens != 0 && float64(a.MaxTokens) < 0 {
+		return fmt.Errorf("max_tokens.min: got %d, want >= %v", a.MaxTokens, 0)
+	}
+	if a.Model == "" {
+		return fmt.Errorf("model: model is required (manifest constraint)")
+	}
+	if a.Temperature < 0 {
+		return fmt.Errorf("temperature.min: got %v, want >= %v", a.Temperature, 0)
+	}
+	if a.Temperature > 2 {
+		return fmt.Errorf("temperature.max: got %v, want <= %v", a.Temperature, 2)
+	}
+	return nil
+}
+
+// ParallelAttrs is the typed payload for `kind: parallel`.
+//
+// Fan-out to multiple downstream nodes concurrently (FR-043).
+type ParallelAttrs struct {
+
+	// FanOut: Static fan-out count (when targets are inferred).
+	FanOut int `json:"fan_out,omitempty" yaml:"fan_out,omitempty"`
+
+	// MaxConcurrency: Per-node concurrency cap (default 4).
+	MaxConcurrency int `json:"max_concurrency,omitempty" yaml:"max_concurrency,omitempty"`
+
+	// Targets: Downstream node IDs to fan out to.
+	Targets []string `json:"targets,omitempty" yaml:"targets,omitempty"`
+}
+
+func (ParallelAttrs) nodeAttrsMarker() {}
+
+// Validate enforces the manifest's declared constraints for `kind: parallel`.
+// Generated from the resolved manifest's attrs map; per-rule errors
+// follow the validator's manifest-attribution format
+// (`parallel.attrs.<attr>.<rule>: ...`) so callers can grep for the
+// constraint that fired.
+func (a ParallelAttrs) Validate() error {
+	if a.FanOut != 0 && float64(a.FanOut) < 0 {
+		return fmt.Errorf("fan_out.min: got %d, want >= %v", a.FanOut, 0)
+	}
+	if a.MaxConcurrency != 0 && float64(a.MaxConcurrency) < 0 {
+		return fmt.Errorf("max_concurrency.min: got %d, want >= %v", a.MaxConcurrency, 0)
+	}
+	if len(a.Targets) == 0 {
+		return fmt.Errorf("targets: targets is required (manifest constraint)")
+	}
+	if len(a.Targets) > 0 && len(a.Targets) < 1 {
+		return fmt.Errorf("targets.min_length: got %d, want >= %d", len(a.Targets), 1)
+	}
+	return nil
+}
+
+// PlannerAttrs is the typed payload for `kind: planner`.
+//
+// Decomposes a task into a plan before downstream execution (FR-031).
+type PlannerAttrs struct {
+
+	// MaxTokens: Upper bound on generated tokens; 0 = provider default.
+	MaxTokens int `json:"max_tokens,omitempty" yaml:"max_tokens,omitempty"`
+
+	// Model: Provider-specific model name.
+	Model string `json:"model,omitempty" yaml:"model,omitempty"`
+
+	// PlannerModel: Override model used for planning (defaults to model).
+	PlannerModel string `json:"planner_model,omitempty" yaml:"planner_model,omitempty"`
+
+	// Provider: LLM provider identifier (e.g. anthropic, bedrock).
+	Provider string `json:"provider,omitempty" yaml:"provider,omitempty"`
+
+	// SystemPrompt: Optional system prompt prepended to the conversation.
+	SystemPrompt string `json:"system_prompt,omitempty" yaml:"system_prompt,omitempty"`
+
+	// Temperature: Sampling temperature.
+	Temperature float64 `json:"temperature,omitempty" yaml:"temperature,omitempty"`
+
+	// ThresholdInput: Input expression that gates plan emission.
+	ThresholdInput string `json:"threshold_input,omitempty" yaml:"threshold_input,omitempty"`
+
+	// ToolAllowlist: Tool IDs this node may call. Empty = allow-all per policy.
+	ToolAllowlist []string `json:"tool_allowlist,omitempty" yaml:"tool_allowlist,omitempty"`
+
+	// Verbosity: Plan verbosity tier.
+	Verbosity string `json:"verbosity,omitempty" yaml:"verbosity,omitempty"`
+}
+
+func (PlannerAttrs) nodeAttrsMarker() {}
+
+// Validate enforces the manifest's declared constraints for `kind: planner`.
+// Generated from the resolved manifest's attrs map; per-rule errors
+// follow the validator's manifest-attribution format
+// (`planner.attrs.<attr>.<rule>: ...`) so callers can grep for the
+// constraint that fired.
+func (a PlannerAttrs) Validate() error {
+	if a.MaxTokens != 0 && float64(a.MaxTokens) < 0 {
+		return fmt.Errorf("max_tokens.min: got %d, want >= %v", a.MaxTokens, 0)
+	}
+	if a.Temperature < 0 {
+		return fmt.Errorf("temperature.min: got %v, want >= %v", a.Temperature, 0)
+	}
+	if a.Temperature > 2 {
+		return fmt.Errorf("temperature.max: got %v, want <= %v", a.Temperature, 2)
+	}
+	if a.Verbosity != "" {
+		valid_Verbosity := false
+		for _, allowed := range []string{"terse", "standard", "verbose"} {
+			if a.Verbosity == allowed {
+				valid_Verbosity = true
+				break
+			}
+		}
+		if !valid_Verbosity {
+			return fmt.Errorf("verbosity.enum: got %q, want one of terse | standard | verbose", a.Verbosity)
+		}
+	}
+	return nil
+}
+
+// ReflectAttrs is the typed payload for `kind: reflect`.
+//
+// Self-critique pass that emits a verdict and (optionally) a revision (FR-035).
+type ReflectAttrs struct {
+
+	// IncludeTrace: When true, attach the upstream trace to the critique.
+	IncludeTrace bool `json:"include_trace,omitempty" yaml:"include_trace,omitempty"`
+
+	// MaxIterations: Mandatory cap when this Reflect is composed inside a Loop (FR-047).
+	MaxIterations int `json:"max_iterations,omitempty" yaml:"max_iterations,omitempty"`
+
+	// MaxTokens: Upper bound on generated tokens; 0 = provider default.
+	MaxTokens int `json:"max_tokens,omitempty" yaml:"max_tokens,omitempty"`
+
+	// Model: Provider-specific model name.
+	Model string `json:"model,omitempty" yaml:"model,omitempty"`
+
+	// Provider: LLM provider identifier (e.g. anthropic, bedrock).
+	Provider string `json:"provider,omitempty" yaml:"provider,omitempty"`
+
+	// SeverityThreshold: Minimum severity that triggers a revision.
+	SeverityThreshold string `json:"severity_threshold,omitempty" yaml:"severity_threshold,omitempty"`
+
+	// SystemPrompt: Optional system prompt prepended to the conversation.
+	SystemPrompt string `json:"system_prompt,omitempty" yaml:"system_prompt,omitempty"`
+
+	// Temperature: Sampling temperature.
+	Temperature float64 `json:"temperature,omitempty" yaml:"temperature,omitempty"`
+
+	// ToolAllowlist: Tool IDs this node may call. Empty = allow-all per policy.
+	ToolAllowlist []string `json:"tool_allowlist,omitempty" yaml:"tool_allowlist,omitempty"`
+}
+
+func (ReflectAttrs) nodeAttrsMarker() {}
+
+// Validate enforces the manifest's declared constraints for `kind: reflect`.
+// Generated from the resolved manifest's attrs map; per-rule errors
+// follow the validator's manifest-attribution format
+// (`reflect.attrs.<attr>.<rule>: ...`) so callers can grep for the
+// constraint that fired.
+func (a ReflectAttrs) Validate() error {
+	if a.MaxIterations != 0 && float64(a.MaxIterations) < 0 {
+		return fmt.Errorf("max_iterations.min: got %d, want >= %v", a.MaxIterations, 0)
+	}
+	if a.MaxTokens != 0 && float64(a.MaxTokens) < 0 {
+		return fmt.Errorf("max_tokens.min: got %d, want >= %v", a.MaxTokens, 0)
+	}
+	if a.SeverityThreshold != "" {
+		valid_SeverityThreshold := false
+		for _, allowed := range []string{"low", "medium", "high"} {
+			if a.SeverityThreshold == allowed {
+				valid_SeverityThreshold = true
+				break
+			}
+		}
+		if !valid_SeverityThreshold {
+			return fmt.Errorf("severity_threshold.enum: got %q, want one of low | medium | high", a.SeverityThreshold)
+		}
+	}
+	if a.Temperature < 0 {
+		return fmt.Errorf("temperature.min: got %v, want >= %v", a.Temperature, 0)
+	}
+	if a.Temperature > 2 {
+		return fmt.Errorf("temperature.max: got %v, want <= %v", a.Temperature, 2)
+	}
+	return nil
+}
+
+// RetryAttrs is the typed payload for `kind: retry`.
+//
+// Bounded retry of a body with exponential backoff (FR-047).
+type RetryAttrs struct {
+
+	// BackoffBaseMs: Initial backoff in milliseconds.
+	BackoffBaseMs int `json:"backoff_base_ms,omitempty" yaml:"backoff_base_ms,omitempty"`
+
+	// BackoffMaxMs: Maximum backoff ceiling in milliseconds.
+	BackoffMaxMs int `json:"backoff_max_ms,omitempty" yaml:"backoff_max_ms,omitempty"`
+
+	// Body: Node IDs forming the retried body.
+	Body []string `json:"body,omitempty" yaml:"body,omitempty"`
+
+	// MaxAttempts: Mandatory cap on retry attempts (NFR-004).
+	MaxAttempts int `json:"max_attempts,omitempty" yaml:"max_attempts,omitempty"`
+}
+
+func (RetryAttrs) nodeAttrsMarker() {}
+
+// Validate enforces the manifest's declared constraints for `kind: retry`.
+// Generated from the resolved manifest's attrs map; per-rule errors
+// follow the validator's manifest-attribution format
+// (`retry.attrs.<attr>.<rule>: ...`) so callers can grep for the
+// constraint that fired.
+func (a RetryAttrs) Validate() error {
+	if a.BackoffBaseMs != 0 && float64(a.BackoffBaseMs) < 0 {
+		return fmt.Errorf("backoff_base_ms.min: got %d, want >= %v", a.BackoffBaseMs, 0)
+	}
+	if a.BackoffMaxMs != 0 && float64(a.BackoffMaxMs) < 0 {
+		return fmt.Errorf("backoff_max_ms.min: got %d, want >= %v", a.BackoffMaxMs, 0)
+	}
+	if len(a.Body) == 0 {
+		return fmt.Errorf("body: body is required (manifest constraint)")
+	}
+	if len(a.Body) > 0 && len(a.Body) < 1 {
+		return fmt.Errorf("body.min_length: got %d, want >= %d", len(a.Body), 1)
+	}
+	if a.MaxAttempts == 0 {
+		return fmt.Errorf("max_attempts: max_attempts is required (manifest constraint)")
+	}
+	if a.MaxAttempts != 0 && float64(a.MaxAttempts) < 1 {
+		return fmt.Errorf("max_attempts.min: got %d, want >= %v", a.MaxAttempts, 1)
+	}
+	return nil
+}
+
+// ReviewAttrs is the typed payload for `kind: review`.
+//
+// Verdict-driven re-run of an upstream node, bounded by max_iterations (FR-036).
+type ReviewAttrs struct {
+
+	// MaxIterations: Mandatory cap on review re-runs (FR-009).
+	MaxIterations int `json:"max_iterations,omitempty" yaml:"max_iterations,omitempty"`
+
+	// MaxTokens: Upper bound on generated tokens; 0 = provider default.
+	MaxTokens int `json:"max_tokens,omitempty" yaml:"max_tokens,omitempty"`
+
+	// Model: Provider-specific model name.
+	Model string `json:"model,omitempty" yaml:"model,omitempty"`
+
+	// OnCapHit: Behaviour after the cap is hit.
+	OnCapHit string `json:"on_cap_hit,omitempty" yaml:"on_cap_hit,omitempty"`
+
+	// Provider: LLM provider identifier (e.g. anthropic, bedrock).
+	Provider string `json:"provider,omitempty" yaml:"provider,omitempty"`
+
+	// SystemPrompt: Optional system prompt prepended to the conversation.
+	SystemPrompt string `json:"system_prompt,omitempty" yaml:"system_prompt,omitempty"`
+
+	// Temperature: Sampling temperature.
+	Temperature float64 `json:"temperature,omitempty" yaml:"temperature,omitempty"`
+
+	// ToolAllowlist: Tool IDs this node may call. Empty = allow-all per policy.
+	ToolAllowlist []string `json:"tool_allowlist,omitempty" yaml:"tool_allowlist,omitempty"`
+
+	// UpstreamNode: ID of the upstream node to re-fire on a fail verdict.
+	UpstreamNode string `json:"upstream_node,omitempty" yaml:"upstream_node,omitempty"`
+}
+
+func (ReviewAttrs) nodeAttrsMarker() {}
+
+// Validate enforces the manifest's declared constraints for `kind: review`.
+// Generated from the resolved manifest's attrs map; per-rule errors
+// follow the validator's manifest-attribution format
+// (`review.attrs.<attr>.<rule>: ...`) so callers can grep for the
+// constraint that fired.
+func (a ReviewAttrs) Validate() error {
+	if a.MaxIterations == 0 {
+		return fmt.Errorf("max_iterations: max_iterations is required (manifest constraint)")
+	}
+	if a.MaxIterations != 0 && float64(a.MaxIterations) < 1 {
+		return fmt.Errorf("max_iterations.min: got %d, want >= %v", a.MaxIterations, 1)
+	}
+	if a.MaxTokens != 0 && float64(a.MaxTokens) < 0 {
+		return fmt.Errorf("max_tokens.min: got %d, want >= %v", a.MaxTokens, 0)
+	}
+	if a.OnCapHit != "" {
+		valid_OnCapHit := false
+		for _, allowed := range []string{"escalate", "halt"} {
+			if a.OnCapHit == allowed {
+				valid_OnCapHit = true
+				break
+			}
+		}
+		if !valid_OnCapHit {
+			return fmt.Errorf("on_cap_hit.enum: got %q, want one of escalate | halt", a.OnCapHit)
+		}
+	}
+	if a.Temperature < 0 {
+		return fmt.Errorf("temperature.min: got %v, want >= %v", a.Temperature, 0)
+	}
+	if a.Temperature > 2 {
+		return fmt.Errorf("temperature.max: got %v, want <= %v", a.Temperature, 2)
+	}
+	if a.UpstreamNode == "" {
+		return fmt.Errorf("upstream_node: upstream_node is required (manifest constraint)")
+	}
+	return nil
+}
+
+// ToolAttrs is the typed payload for `kind: tool`.
+//
+// Invokes a registered tool (FR-032). The on-the-wire kind name is unchanged from v0.
+type ToolAttrs struct {
+
+	// Args: Tool call arguments (object literal).
+	Args map[string]any `json:"args,omitempty" yaml:"args,omitempty"`
+
+	// MaxTokens: Upper bound on generated tokens; 0 = provider default.
+	MaxTokens int `json:"max_tokens,omitempty" yaml:"max_tokens,omitempty"`
+
+	// Model: Provider-specific model name.
+	Model string `json:"model,omitempty" yaml:"model,omitempty"`
+
+	// Name: Canonical <server>__<tool> identifier.
+	Name string `json:"name,omitempty" yaml:"name,omitempty"`
+
+	// Provider: LLM provider identifier (e.g. anthropic, bedrock).
+	Provider string `json:"provider,omitempty" yaml:"provider,omitempty"`
+
+	// SystemPrompt: Optional system prompt prepended to the conversation.
+	SystemPrompt string `json:"system_prompt,omitempty" yaml:"system_prompt,omitempty"`
+
+	// Temperature: Sampling temperature.
+	Temperature float64 `json:"temperature,omitempty" yaml:"temperature,omitempty"`
+
+	// ToolAllowlist: Tool IDs this node may call. Empty = allow-all per policy.
+	ToolAllowlist []string `json:"tool_allowlist,omitempty" yaml:"tool_allowlist,omitempty"`
+}
+
+func (ToolAttrs) nodeAttrsMarker() {}
+
+// Validate enforces the manifest's declared constraints for `kind: tool`.
+// Generated from the resolved manifest's attrs map; per-rule errors
+// follow the validator's manifest-attribution format
+// (`tool.attrs.<attr>.<rule>: ...`) so callers can grep for the
+// constraint that fired.
+func (a ToolAttrs) Validate() error {
+	if a.MaxTokens != 0 && float64(a.MaxTokens) < 0 {
+		return fmt.Errorf("max_tokens.min: got %d, want >= %v", a.MaxTokens, 0)
+	}
+	if a.Name == "" {
+		return fmt.Errorf("name: name is required (manifest constraint)")
+	}
+	if a.Temperature < 0 {
+		return fmt.Errorf("temperature.min: got %v, want >= %v", a.Temperature, 0)
+	}
+	if a.Temperature > 2 {
+		return fmt.Errorf("temperature.max: got %v, want <= %v", a.Temperature, 2)
+	}
+	return nil
+}
+
+// TraceWriteAttrs is the typed payload for `kind: trace_write`.
+//
+// Emits a structured trace event into the EventLog (FR-056).
+type TraceWriteAttrs struct {
+
+	// Attrs: Free-form structured attributes.
+	Attrs map[string]any `json:"attrs,omitempty" yaml:"attrs,omitempty"`
+
+	// Message: Trace message body.
+	Message string `json:"message,omitempty" yaml:"message,omitempty"`
+
+	// Provenance: When true, surface a (path, hash, scope) triple to the EventLog for this op.
+	Provenance bool `json:"provenance,omitempty" yaml:"provenance,omitempty"`
+
+	// Severity: Severity level.
+	Severity string `json:"severity,omitempty" yaml:"severity,omitempty"`
+
+	// Target: Discriminator naming the write target. Each kind under `write` sets its own default via the `defaults:` map.
+	Target string `json:"target,omitempty" yaml:"target,omitempty"`
+}
+
+func (TraceWriteAttrs) nodeAttrsMarker() {}
+
+// Validate enforces the manifest's declared constraints for `kind: trace_write`.
+// Generated from the resolved manifest's attrs map; per-rule errors
+// follow the validator's manifest-attribution format
+// (`trace_write.attrs.<attr>.<rule>: ...`) so callers can grep for the
+// constraint that fired.
+func (a TraceWriteAttrs) Validate() error {
+	if a.Message == "" {
+		return fmt.Errorf("message: message is required (manifest constraint)")
+	}
+	if a.Severity != "" {
+		valid_Severity := false
+		for _, allowed := range []string{"debug", "info", "warn", "error"} {
+			if a.Severity == allowed {
+				valid_Severity = true
+				break
+			}
+		}
+		if !valid_Severity {
+			return fmt.Errorf("severity.enum: got %q, want one of debug | info | warn | error", a.Severity)
+		}
+	}
+	if a.Target != "" {
+		valid_Target := false
+		for _, allowed := range []string{"memory", "corpus", "trace", "file", "artifact"} {
+			if a.Target == allowed {
+				valid_Target = true
+				break
+			}
+		}
+		if !valid_Target {
+			return fmt.Errorf("target.enum: got %q, want one of memory | corpus | trace | file | artifact", a.Target)
+		}
+	}
+	return nil
+}
+
+// TransformAttrs is the typed payload for `kind: transform`.
+//
+// Pure data transformation; no model/tool budget consumption (FR-033).
+type TransformAttrs struct {
+
+	// MaxTokens: Upper bound on generated tokens; 0 = provider default.
+	MaxTokens int `json:"max_tokens,omitempty" yaml:"max_tokens,omitempty"`
+
+	// Model: Provider-specific model name.
+	Model string `json:"model,omitempty" yaml:"model,omitempty"`
+
+	// Name: Registered transform identifier.
+	Name string `json:"name,omitempty" yaml:"name,omitempty"`
+
+	// Params: Free-form parameter object passed to the transform.
+	Params map[string]any `json:"params,omitempty" yaml:"params,omitempty"`
+
+	// Provider: LLM provider identifier (e.g. anthropic, bedrock).
+	Provider string `json:"provider,omitempty" yaml:"provider,omitempty"`
+
+	// SystemPrompt: Optional system prompt prepended to the conversation.
+	SystemPrompt string `json:"system_prompt,omitempty" yaml:"system_prompt,omitempty"`
+
+	// Temperature: Sampling temperature.
+	Temperature float64 `json:"temperature,omitempty" yaml:"temperature,omitempty"`
+
+	// ToolAllowlist: Tool IDs this node may call. Empty = allow-all per policy.
+	ToolAllowlist []string `json:"tool_allowlist,omitempty" yaml:"tool_allowlist,omitempty"`
+}
+
+func (TransformAttrs) nodeAttrsMarker() {}
+
+// Validate enforces the manifest's declared constraints for `kind: transform`.
+// Generated from the resolved manifest's attrs map; per-rule errors
+// follow the validator's manifest-attribution format
+// (`transform.attrs.<attr>.<rule>: ...`) so callers can grep for the
+// constraint that fired.
+func (a TransformAttrs) Validate() error {
+	if a.MaxTokens != 0 && float64(a.MaxTokens) < 0 {
+		return fmt.Errorf("max_tokens.min: got %d, want >= %v", a.MaxTokens, 0)
+	}
+	if a.Name == "" {
+		return fmt.Errorf("name: name is required (manifest constraint)")
+	}
+	if a.Temperature < 0 {
+		return fmt.Errorf("temperature.min: got %v, want >= %v", a.Temperature, 0)
+	}
+	if a.Temperature > 2 {
+		return fmt.Errorf("temperature.max: got %v, want <= %v", a.Temperature, 2)
+	}
+	return nil
+}

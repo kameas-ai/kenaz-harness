@@ -1,0 +1,21 @@
+schema_version: "1"
+id: history_read
+extends: read
+display_name: History Read
+description: "Reads the last-N messages from the conversation history (FR-051)."
+executor: agentgraph.ExecHistoryRead
+ports:
+  inputs: []
+  outputs:
+    - { name: messages, type: messages }
+defaults:
+  source: history
+attrs:
+  n:
+    type: int
+    min: 0
+    description: "Last-N messages to read."
+  branch_id:
+    type: string
+    description: "Optional branch ID; defaults to current branch."
+budget: none

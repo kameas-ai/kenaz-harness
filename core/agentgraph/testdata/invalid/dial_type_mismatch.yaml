@@ -8,6 +8,6 @@ dial_overrides:
   max_tokens_per_run: "lots"
 nodes:
   - id: n
-    kind: llm
+    kind: model
     attrs:
       model: m

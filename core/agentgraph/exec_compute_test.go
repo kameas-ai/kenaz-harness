@@ -143,8 +143,8 @@ func TestLLMExecutor_BasicCall(t *testing.T) {
 	mem := newStubMemory()
 	env := &Env{RunID: "r", SessionID: "s", LLM: llm, Memory: mem}
 	applyEnvDefaults(env)
-	ex := llmExecutor{}
-	node := &Node{ID: "n1", Kind: NodeKindLLM, Attrs: LLMAttrs{Model: "x", MaxTokens: 100}}
+	ex := modelExecutor{}
+	node := &Node{ID: "n1", Kind: NodeKindModel, Attrs: ModelAttrs{Model: "x", MaxTokens: 100}}
 	r, err := ex.Execute(context.Background(), env, node, PortValues{
 		"messages": []Message{{Role: "user", Content: "hello"}},
 	})
@@ -181,8 +181,8 @@ func TestLLMExecutor_BudgetCap(t *testing.T) {
 	env := &Env{RunID: "r", LLM: llm, Budget: Budget{MaxLLMCallsPerRun: 1}}
 	applyEnvDefaults(env)
 	env.Counters.LLMCallsMade = 1 // pretend a previous call already happened
-	ex := llmExecutor{}
-	node := &Node{ID: "n", Kind: NodeKindLLM, Attrs: LLMAttrs{Model: "x"}}
+	ex := modelExecutor{}
+	node := &Node{ID: "n", Kind: NodeKindModel, Attrs: ModelAttrs{Model: "x"}}
 	if _, err := ex.Execute(context.Background(), env, node, nil); !errors.Is(err, ErrBudgetExceeded) {
 		t.Fatalf("err = %v, want ErrBudgetExceeded", err)
 	}
@@ -193,8 +193,8 @@ func TestLLMExecutor_PropagatesProviderError(t *testing.T) {
 	llm := &stubLLM{failOn: 1, failErr: errors.New("boom")}
 	env := &Env{RunID: "r", LLM: llm}
 	applyEnvDefaults(env)
-	ex := llmExecutor{}
-	node := &Node{ID: "n", Kind: NodeKindLLM, Attrs: LLMAttrs{Model: "x"}}
+	ex := modelExecutor{}
+	node := &Node{ID: "n", Kind: NodeKindModel, Attrs: ModelAttrs{Model: "x"}}
 	if _, err := ex.Execute(context.Background(), env, node, nil); err == nil {
 		t.Fatalf("expected error")
 	}
@@ -455,8 +455,8 @@ func TestPlanExecutor_ProducesPlan(t *testing.T) {
 	llm := &stubLLM{responses: []LLMResponse{{Content: "1. step\n2. step\n"}}}
 	env := &Env{RunID: "r", LLM: llm}
 	applyEnvDefaults(env)
-	ex := planExecutor{}
-	node := &Node{ID: "p", Kind: NodeKindPlan, Attrs: PlanAttrs{Verbosity: "terse"}}
+	ex := plannerExecutor{}
+	node := &Node{ID: "p", Kind: NodeKindPlanner, Attrs: PlannerAttrs{Verbosity: "terse"}}
 	r, err := ex.Execute(context.Background(), env, node, PortValues{"task": "do something"})
 	if err != nil {
 		t.Fatalf("Execute: %v", err)

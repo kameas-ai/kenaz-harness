@@ -12,6 +12,5 @@ attrs:
   target:
     type: enum
     enum: [memory, corpus, trace, file, artifact]
-    required: true
-    description: "Discriminator naming the write target."
+    description: "Discriminator naming the write target. Each kind under `write` sets its own default via the `defaults:` map."
 budget: none

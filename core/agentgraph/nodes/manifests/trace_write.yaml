@@ -1,0 +1,26 @@
+schema_version: "1"
+id: trace_write
+extends: write
+display_name: Trace Write
+description: "Emits a structured trace event into the EventLog (FR-056)."
+executor: agentgraph.ExecTraceWrite
+ports:
+  inputs:
+    - { name: in, type: any }
+  outputs:
+    - { name: ack, type: any }
+defaults:
+  target: trace
+attrs:
+  severity:
+    type: enum
+    enum: [debug, info, warn, error]
+    description: "Severity level."
+  message:
+    type: string
+    required: true
+    description: "Trace message body."
+  attrs:
+    type: object
+    description: "Free-form structured attributes."
+budget: none

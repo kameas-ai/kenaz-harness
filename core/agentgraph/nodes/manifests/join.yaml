@@ -1,0 +1,22 @@
+schema_version: "1"
+id: join
+extends: control
+display_name: Join
+description: "Awaits multiple upstream completions and folds them into a single output (FR-044)."
+executor: agentgraph.ExecJoin
+ports:
+  inputs:
+    - { name: in, type: any }
+  outputs:
+    - { name: out, type: any }
+attrs:
+  from:
+    type: "[]string"
+    required: true
+    min_length: 1
+    description: "Upstream node IDs whose outputs are joined."
+  order:
+    type: enum
+    enum: [declared, first_done]
+    description: "Output ordering rule."
+budget: none

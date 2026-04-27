@@ -1,0 +1,30 @@
+schema_version: "1"
+id: artifact
+extends: write
+display_name: Artifact
+description: "Terminal output node (FR-058). Replaces ad-hoc end-of-graph dumps."
+executor: agentgraph.ExecArtifact
+ports:
+  inputs:
+    - { name: in, type: any }
+  outputs:
+    - { name: ack, type: any }
+defaults:
+  target: artifact
+attrs:
+  mime_type:
+    type: string
+    required: true
+    description: "MIME type of the emitted artifact."
+  output_target:
+    type: enum
+    enum: [session_message, file_path, report]
+    required: true
+    description: "Where the artifact is delivered."
+  attachment_ref:
+    type: string
+    description: "Optional attachment ID to bind the artifact to."
+  content:
+    type: string
+    description: "Inline content (when not using attachment_ref)."
+budget: none

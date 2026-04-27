@@ -16,7 +16,7 @@ entrypoints:
   - summarizer
 nodes:
   - id: summarizer
-    kind: llm
+    kind: model
     title: "Compaction summarizer"
     attrs:
       model: "default"

@@ -13,7 +13,7 @@ nodes:
       next_true: b
       next_false: b
   - id: b
-    kind: llm
+    kind: model
     attrs:
       model: m
 edges:

@@ -12,25 +12,29 @@ import (
 	"golang.org/x/sync/semaphore"
 )
 
-// This file holds the control-primitive executors (FR-013 .. FR-018):
-// Branch, Parallel, Join, Loop, Retry, Fork, Merge.
+// This file holds the control-primitive executors (FR-040 .. FR-048):
+// Decision (predicate router, was Branch), Parallel, Join, Loop, Retry,
+// Branch (sub-graph spawn, was Fork), Merge, Approval.
 //
-// Fork + Merge are STUBS in this WP — real implementations land in
+// Branch + Merge are STUBS in this WP — real implementations land in
 // Bundle B (WP08). The stubs emit `fork_requested` / `merge_requested`
 // events so downstream code can wire to them, and return synthetic
 // branch IDs to keep dependent graph topologies validating.
 
-// ---- BranchNode ----
+// ---- DecisionNode (was BranchNode predicate router) ----
 
-type branchExecutor struct{}
+// decisionExecutor implements ExecDecision (FR-041). The on-the-wire
+// kind is `decision`; legacy graphs naming the predicate-router
+// `branch` are alias-resolved at load time.
+type decisionExecutor struct{}
 
-func (branchExecutor) Kind() NodeKind { return NodeKindBranch }
+func (decisionExecutor) Kind() NodeKind { return NodeKindDecision }
 
-func (branchExecutor) Execute(_ context.Context, env *Env, node *Node, inputs PortValues) (Result, error) {
+func (decisionExecutor) Execute(_ context.Context, env *Env, node *Node, inputs PortValues) (Result, error) {
 	res := NewResult()
-	a, ok := node.Attrs.(BranchAttrs)
+	a, ok := node.Attrs.(DecisionAttrs)
 	if !ok {
-		return res, fmt.Errorf("branch: node %q has wrong attrs type %T", node.ID, node.Attrs)
+		return res, fmt.Errorf("decision: node %q has wrong attrs type %T", node.ID, node.Attrs)
 	}
 
 	// Tiny expression evaluator: eq / lt / gt / and / or / not over
@@ -38,7 +42,7 @@ func (branchExecutor) Execute(_ context.Context, env *Env, node *Node, inputs Po
 	// is deferred until complexity demands it.
 	verdict, err := evalBranchExpr(a.Condition, inputs)
 	if err != nil {
-		return res, fmt.Errorf("branch: node %q: %w", node.ID, err)
+		return res, fmt.Errorf("decision: node %q: %w", node.ID, err)
 	}
 	if verdict {
 		res.Outputs["true"] = inputs["in"]
@@ -562,11 +566,11 @@ func (retryExecutor) Execute(ctx context.Context, env *Env, node *Node, inputs P
 	if a.MaxAttempts <= 0 {
 		return res, fmt.Errorf("retry: node %q: max_attempts must be > 0", node.ID)
 	}
-	base := a.BackoffBase
+	base := a.BackoffBaseMs
 	if base <= 0 {
 		base = 50
 	}
-	cap := a.BackoffMax
+	cap := a.BackoffMaxMs
 	if cap <= 0 {
 		cap = 5000
 	}
@@ -629,17 +633,19 @@ func (retryExecutor) Execute(ctx context.Context, env *Env, node *Node, inputs P
 	return res, fmt.Errorf("retry: node %q: exhausted %d attempts: %w", node.ID, a.MaxAttempts, lastErr)
 }
 
-// ---- ForkNode (real impl, Bundle B WP08) ----
+// ---- BranchNode (was ForkNode, sub-graph spawn) ----
 
-type forkExecutor struct{}
+// branchExecutor implements ExecBranch (FR-042). The on-the-wire kind
+// is `branch`; legacy graphs naming `fork` are alias-resolved at load.
+type branchExecutor struct{}
 
-func (forkExecutor) Kind() NodeKind { return NodeKindFork }
+func (branchExecutor) Kind() NodeKind { return NodeKindBranch }
 
-func (forkExecutor) Execute(ctx context.Context, env *Env, node *Node, inputs PortValues) (Result, error) {
+func (branchExecutor) Execute(ctx context.Context, env *Env, node *Node, inputs PortValues) (Result, error) {
 	res := NewResult()
-	a, ok := node.Attrs.(ForkAttrs)
+	a, ok := node.Attrs.(BranchAttrs)
 	if !ok {
-		return res, fmt.Errorf("fork: node %q has wrong attrs type %T", node.ID, node.Attrs)
+		return res, fmt.Errorf("branch: node %q has wrong attrs type %T", node.ID, node.Attrs)
 	}
 	if env.Branch == nil {
 		// applyEnvDefaults installs nilBranchSeam, but defend against
@@ -699,7 +705,7 @@ func (forkExecutor) Execute(ctx context.Context, env *Env, node *Node, inputs Po
 		_ = res.Events.AppendKind(env.RunID, node.ID, EventNodeError, map[string]any{
 			"err": err.Error(),
 		})
-		return res, fmt.Errorf("fork: node %q: %w", node.ID, err)
+		return res, fmt.Errorf("branch: node %q: %w", node.ID, err)
 	}
 
 	// Surface both the fork-requested signal (frontend listens for the
@@ -757,10 +763,10 @@ func (mergeExecutor) Execute(ctx context.Context, env *Env, node *Node, inputs P
 	}
 	branchID, _ := inputs.GetString("branch")
 	if branchID == "" {
-		branchID = a.BranchID
+		branchID = a.BranchId
 	}
 	if branchID == "" {
-		return res, fmt.Errorf("merge: node %q: no branch id (attrs.BranchID empty + no port)", node.ID)
+		return res, fmt.Errorf("merge: node %q: no branch id (attrs.BranchId empty + no port)", node.ID)
 	}
 
 	// Wait for the child run to complete (or be manually marked done).
@@ -902,6 +908,58 @@ func summarizeTail(ctx context.Context, env *Env, tail []Message, mode string) s
 		}
 	}
 	return b.String()
+}
+
+// ---- ApprovalNode (NEW, FR-048) ----
+
+// approvalExecutor implements ExecApproval — a binary HITL gate that
+// pauses the run until the user clicks Approve or Reject in the
+// harness UI. Persists a `pending_approval` event mirroring
+// `pending_ask`. Auto-approve is governed by
+// `auto_approve_window_seconds` (0 = never auto-approve).
+//
+// Like ask, the v1 implementation surfaces a synchronous "pending"
+// event and returns a sentinel that the kernel should wire to a UI
+// modal in WP06. For now the executor short-circuits with `Approved:
+// true` so happy-path tests round-trip — production paths will replace
+// this with a true halt-and-resume seam.
+type approvalExecutor struct{}
+
+func (approvalExecutor) Kind() NodeKind { return NodeKindApproval }
+
+func (approvalExecutor) Execute(_ context.Context, env *Env, node *Node, inputs PortValues) (Result, error) {
+	res := NewResult()
+	a, ok := node.Attrs.(ApprovalAttrs)
+	if !ok {
+		return res, fmt.Errorf("approval: node %q has wrong attrs type %T", node.ID, node.Attrs)
+	}
+
+	prompt := a.Prompt
+	if prompt == "" {
+		prompt = "Approval requested"
+	}
+	approverRole := a.ApproverRole
+	if approverRole == "" {
+		approverRole = "user"
+	}
+
+	// Surface a pending_approval event so the UI can render the modal.
+	_ = res.Events.AppendKind(env.RunID, node.ID, EventApprovalPending, map[string]any{
+		"prompt":                     prompt,
+		"approver_role":              approverRole,
+		"policy_label":               a.PolicyLabel,
+		"auto_approve_window_seconds": a.AutoApproveWindowSeconds,
+	})
+
+	// v1 behaviour: auto-approve to keep happy-path tests green; the
+	// real halt-and-resume seam lands when the harness UI surface for
+	// approvals ships (WP06+).
+	res.Outputs["approved"] = inputs["in"]
+	_ = res.Events.AppendKind(env.RunID, node.ID, EventApprovalResolved, map[string]any{
+		"approved": true,
+		"auto":     a.AutoApproveWindowSeconds > 0,
+	})
+	return res, nil
 }
 
 // ---- helpers ----

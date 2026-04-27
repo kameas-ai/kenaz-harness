@@ -1,0 +1,21 @@
+schema_version: "1"
+id: tool
+extends: compute
+display_name: Tool
+description: "Invokes a registered tool (FR-032). The on-the-wire kind name is unchanged from v0."
+executor: agentgraph.ExecTool
+ports:
+  inputs:
+    - { name: args, type: any }
+  outputs:
+    - { name: result, type: any }
+attrs:
+  name:
+    type: string
+    required: true
+    description: "Canonical <server>__<tool> identifier."
+  args:
+    type: object
+    description: "Tool call arguments (object literal)."
+budget: tool
+budget_consumes: [tool_calls]

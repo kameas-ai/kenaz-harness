@@ -5,6 +5,6 @@ entrypoints:
   - phantom
 nodes:
   - id: real
-    kind: llm
+    kind: model
     attrs:
       model: m

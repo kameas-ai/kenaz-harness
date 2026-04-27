@@ -1,0 +1,31 @@
+schema_version: "1"
+id: retry
+extends: control
+display_name: Retry
+description: "Bounded retry of a body with exponential backoff (FR-047)."
+executor: agentgraph.ExecRetry
+ports:
+  inputs:
+    - { name: in, type: any }
+  outputs:
+    - { name: out, type: any }
+attrs:
+  max_attempts:
+    type: int
+    required: true
+    min: 1
+    description: "Mandatory cap on retry attempts (NFR-004)."
+  backoff_base_ms:
+    type: int
+    min: 0
+    description: "Initial backoff in milliseconds."
+  backoff_max_ms:
+    type: int
+    min: 0
+    description: "Maximum backoff ceiling in milliseconds."
+  body:
+    type: "[]string"
+    required: true
+    min_length: 1
+    description: "Node IDs forming the retried body."
+budget: none

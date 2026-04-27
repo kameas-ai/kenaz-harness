@@ -1,0 +1,20 @@
+schema_version: "1"
+id: transform
+extends: compute
+display_name: Transform
+description: "Pure data transformation; no model/tool budget consumption (FR-033)."
+executor: agentgraph.ExecTransform
+ports:
+  inputs:
+    - { name: in, type: any, required: true }
+  outputs:
+    - { name: out, type: any }
+attrs:
+  name:
+    type: string
+    required: true
+    description: "Registered transform identifier."
+  params:
+    type: object
+    description: "Free-form parameter object passed to the transform."
+budget: none

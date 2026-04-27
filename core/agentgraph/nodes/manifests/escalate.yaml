@@ -1,0 +1,30 @@
+schema_version: "1"
+id: escalate
+extends: compute
+display_name: Escalate
+description: "Re-runs an upstream node with a stronger model when confidence falls below the floor (FR-038)."
+executor: agentgraph.ExecEscalate
+ports:
+  inputs:
+    - { name: trigger, type: any }
+  outputs:
+    - { name: result, type: any }
+attrs:
+  target_model:
+    type: model_ref
+    required: true
+    description: "Stronger model used for the escalation pass."
+  upstream_node:
+    type: node_id_ref
+    required: true
+    description: "ID of the upstream node to re-fire."
+  confidence_floor:
+    type: float
+    min: 0.0
+    max: 1.0
+    description: "Floor below which escalation fires."
+  one_escalation_only:
+    type: bool
+    description: "When true, escalation is one-shot per run."
+budget: llm
+budget_consumes: [tokens, llm_calls, cost_usd]

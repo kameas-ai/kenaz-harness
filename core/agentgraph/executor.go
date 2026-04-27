@@ -321,25 +321,30 @@ type executorRegistry struct {
 // newExecutorRegistry constructs the default registry with one
 // implementation per kind. Tests can override via WithExecutor.
 func newExecutorRegistry() *executorRegistry {
-	r := &executorRegistry{byKind: make(map[NodeKind]Executor, 24)}
-	r.register(&llmExecutor{})
+	r := &executorRegistry{byKind: make(map[NodeKind]Executor, 32)}
+	// Compute (FR-029..FR-039).
+	r.register(&modelExecutor{})
 	r.register(&toolExecutor{})
 	r.register(&transformExecutor{})
 	r.register(&activityExecutor{})
 	r.register(&reflectExecutor{})
 	r.register(&reviewExecutor{})
-	r.register(&planExecutor{})
+	r.register(&plannerExecutor{})
 	r.register(&askExecutor{})
 	r.register(&escalateExecutor{})
+	r.register(&compactExecutor{})
 
-	r.register(&branchExecutor{})
+	// Control (FR-040..FR-048).
+	r.register(&decisionExecutor{})
 	r.register(&parallelExecutor{})
 	r.register(&joinExecutor{})
 	r.register(&loopExecutor{})
 	r.register(&retryExecutor{})
-	r.register(&forkExecutor{})
+	r.register(&branchExecutor{})
 	r.register(&mergeExecutor{})
+	r.register(&approvalExecutor{})
 
+	// State (FR-051..FR-058).
 	r.register(&memoryExecutor{})
 	r.register(&corpusReadExecutor{})
 	r.register(&corpusWriteExecutor{})
@@ -347,6 +352,7 @@ func newExecutorRegistry() *executorRegistry {
 	r.register(&historyReadExecutor{})
 	r.register(&traceWriteExecutor{})
 	r.register(&checkpointExecutor{})
+	r.register(&artifactExecutor{})
 	return r
 }
 

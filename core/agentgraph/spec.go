@@ -14,60 +14,24 @@ const SpecVersion = "1"
 // NodeKind enumerates every primitive the spec defines (FR-001 / FR-004
 // .. FR-025). The string values are the on-the-wire identifiers used in
 // YAML / JSON; renaming any of them is a breaking spec change.
+//
+// As of WP04 the canonical NodeKind* constants and the AllNodeKinds
+// helper live in wire_gen.go (codegen-emitted from the manifest set).
+// IsKnown delegates to that generated slice plus the runtime alias map
+// so v0 graphs (kind: llm | plan | branch | fork) still load.
 type NodeKind string
 
-const (
-	// Compute node-kinds (FR-004 .. FR-012).
-	NodeKindLLM       NodeKind = "llm"
-	NodeKindTool      NodeKind = "tool"
-	NodeKindTransform NodeKind = "transform"
-	NodeKindActivity  NodeKind = "activity"
-	NodeKindReflect   NodeKind = "reflect"
-	NodeKindReview    NodeKind = "review"
-	NodeKindPlan      NodeKind = "plan"
-	NodeKindAsk       NodeKind = "ask"
-	NodeKindEscalate  NodeKind = "escalate"
-
-	// Control node-kinds (FR-013 .. FR-018).
-	NodeKindBranch   NodeKind = "branch"
-	NodeKindParallel NodeKind = "parallel"
-	NodeKindJoin     NodeKind = "join"
-	NodeKindLoop     NodeKind = "loop"
-	NodeKindRetry    NodeKind = "retry"
-	NodeKindFork     NodeKind = "fork"
-	NodeKindMerge    NodeKind = "merge"
-
-	// State node-kinds (FR-019 .. FR-025).
-	NodeKindMemory      NodeKind = "memory"
-	NodeKindCorpusRead  NodeKind = "corpus_read"
-	NodeKindCorpusWrite NodeKind = "corpus_write"
-	NodeKindAttachment  NodeKind = "attachment"
-	NodeKindHistoryRead NodeKind = "history_read"
-	NodeKindTraceWrite  NodeKind = "trace_write"
-	NodeKindCheckpoint  NodeKind = "checkpoint"
-)
-
-// AllNodeKinds returns every recognised node-kind in canonical order.
-// Used by validator (membership test) and tests (round-trip).
-func AllNodeKinds() []NodeKind {
-	return []NodeKind{
-		NodeKindLLM, NodeKindTool, NodeKindTransform, NodeKindActivity,
-		NodeKindReflect, NodeKindReview, NodeKindPlan, NodeKindAsk,
-		NodeKindEscalate,
-		NodeKindBranch, NodeKindParallel, NodeKindJoin, NodeKindLoop,
-		NodeKindRetry, NodeKindFork, NodeKindMerge,
-		NodeKindMemory, NodeKindCorpusRead, NodeKindCorpusWrite,
-		NodeKindAttachment, NodeKindHistoryRead, NodeKindTraceWrite,
-		NodeKindCheckpoint,
-	}
-}
-
-// IsKnown reports whether k is a recognised node-kind.
+// IsKnown reports whether k is a recognised node-kind. Recognition
+// covers both the canonical (manifest-emitted) names and the live
+// alias map (FR-029..FR-058 deprecation aliases).
 func (k NodeKind) IsKnown() bool {
 	for _, candidate := range AllNodeKinds() {
 		if candidate == k {
 			return true
 		}
+	}
+	if _, ok := lookupAlias(string(k)); ok {
+		return true
 	}
 	return false
 }
@@ -117,7 +81,7 @@ type Port struct {
 }
 
 // Node is the unit of execution in a graph. Attrs holds the per-kind
-// typed payload (e.g. LLMAttrs for `kind: llm`); the loader populates
+// typed payload (e.g. ModelAttrs for `kind: model`); the loader populates
 // it from the raw `attrs:` block once Kind is known.
 type Node struct {
 	ID    string   `json:"id" yaml:"id"`

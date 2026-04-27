@@ -29,8 +29,8 @@ func TestCatalogGetListArchetypes(t *testing.T) {
 		}
 	}
 
-	// Archetypes() returns exactly the archetype layer; no kinds yet
-	// (they land in WP04).
+	// Archetypes() returns exactly the archetype layer (WP04 lands kind
+	// manifests; archetypes themselves remain non-callable per FR-007).
 	archs := cat.Archetypes()
 	if len(archs) != len(wantArchetypes) {
 		t.Errorf("Archetypes len: got %d, want %d", len(archs), len(wantArchetypes))
@@ -41,10 +41,11 @@ func TestCatalogGetListArchetypes(t *testing.T) {
 		}
 	}
 
-	// Kinds() returns 0 for now (WP01 ships archetypes only).
+	// Kinds() returns the 26 callable kinds shipped in WP04.
 	kinds := cat.Kinds()
-	if len(kinds) != 0 {
-		t.Errorf("expected 0 kinds in WP01, got %d", len(kinds))
+	const wantCallable = 26
+	if len(kinds) != wantCallable {
+		t.Errorf("expected %d kinds in WP04, got %d", wantCallable, len(kinds))
 	}
 
 	// IsCallable returns false for archetypes and unknown IDs.
@@ -57,15 +58,16 @@ func TestCatalogGetListArchetypes(t *testing.T) {
 		t.Error("IsCallable(unknown) should be false")
 	}
 
-	// ListByCategory returns the archetypes whose category matches.
-	if got := cat.ListByCategory(nodes.CategoryCompute); len(got) != 1 {
-		t.Errorf("ListByCategory(compute): got %d, want 1", len(got))
+	// ListByCategory returns archetypes + every kind whose category
+	// matches. WP04: 1 archetype + 10 callable compute kinds = 11.
+	if got := cat.ListByCategory(nodes.CategoryCompute); len(got) != 11 {
+		t.Errorf("ListByCategory(compute): got %d, want 11 (1 archetype + 10 kinds)", len(got))
 	}
+	// state archetype + read/write/marker archetypes + 8 callable state
+	// kinds = 12.
 	stateLayer := cat.ListByCategory(nodes.CategoryState)
-	// state, read (extends state), write (extends state), marker
-	// (extends state) — 4 archetypes share the state category.
-	if len(stateLayer) != 4 {
-		t.Errorf("ListByCategory(state): got %d, want 4 (state/read/write/marker)", len(stateLayer))
+	if len(stateLayer) != 12 {
+		t.Errorf("ListByCategory(state): got %d, want 12 (4 archetypes + 8 kinds)", len(stateLayer))
 	}
 }
 
@@ -78,7 +80,9 @@ func TestCatalogListByArchetype(t *testing.T) {
 		t.Fatalf("LoadCatalog: %v", err)
 	}
 	children := cat.ListByArchetype("state")
-	if got, want := len(children), 3; got != want {
+	// 3 archetype-children (read/write/marker) + 8 callable kinds =
+	// 11 entries under the state archetype.
+	if got, want := len(children), 11; got != want {
 		t.Fatalf("ListByArchetype(state): got %d, want %d", got, want)
 	}
 	gotIDs := map[string]bool{}
@@ -88,6 +92,12 @@ func TestCatalogListByArchetype(t *testing.T) {
 	for _, want := range []string{"read", "write", "marker"} {
 		if !gotIDs[want] {
 			t.Errorf("missing child %q under archetype state", want)
+		}
+	}
+	// Spot-check that callable kinds also surface.
+	for _, want := range []string{"memory", "history_read", "checkpoint"} {
+		if !gotIDs[want] {
+			t.Errorf("missing kind %q under archetype state", want)
 		}
 	}
 }

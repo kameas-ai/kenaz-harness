@@ -1,0 +1,30 @@
+schema_version: "1"
+id: branch
+extends: control
+display_name: Branch
+description: "Sub-graph spawn primitive (FR-042). Was named `fork` in v0; kept as alias."
+aliases: [fork]
+executor: agentgraph.ExecBranch
+ports:
+  inputs:
+    - { name: parent, type: any }
+  outputs:
+    - { name: branch_id, type: any }
+attrs:
+  title:
+    type: string
+    required: true
+    description: "Human-readable title for the spawned branch."
+  parent_leaf:
+    type: node_id_ref
+    description: "Optional explicit parent leaf node; defaults to current leaf."
+  model_override:
+    type: model_ref
+    description: "Optional model override applied to the branch's compute layer."
+  tool_allowlist:
+    type: "[]string"
+    description: "Tool IDs the branch may invoke."
+  message_subset:
+    type: "[]string"
+    description: "Subset of parent message IDs to seed the branch with."
+budget: none

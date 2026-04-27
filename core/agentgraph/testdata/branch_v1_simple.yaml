@@ -14,20 +14,20 @@ entrypoints:
   - trunk_question
 nodes:
   - id: trunk_question
-    kind: llm
+    kind: model
     title: "Trunk — first question"
     attrs:
       model: "claude-sonnet"
       max_tokens: 1024
       stream_to_chat: true
   - id: spawn_branch
-    kind: fork
+    kind: branch
     title: "Spawn a child branch"
     attrs:
       title: "look up dep version"
       model_override: "claude-haiku"
   - id: branch_lookup
-    kind: llm
+    kind: model
     title: "Branch — quick lookup"
     inputs:
       - { name: messages, type: messages }   # not required: kernel seeds via fork compaction
@@ -46,7 +46,7 @@ nodes:
       branch_id: "<filled at fork-time>"
       mode: summarize_append
   - id: trunk_continue
-    kind: llm
+    kind: model
     title: "Trunk — continue with summary"
     attrs:
       model: "claude-sonnet"

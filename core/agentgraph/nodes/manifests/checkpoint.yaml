@@ -1,0 +1,16 @@
+schema_version: "1"
+id: checkpoint
+extends: marker
+display_name: Checkpoint
+description: "Forces a kernel checkpoint at a logical boundary (FR-057)."
+executor: agentgraph.ExecCheckpoint
+ports:
+  inputs:
+    - { name: in, type: any }
+  outputs:
+    - { name: ack, type: any }
+attrs:
+  label:
+    type: string
+    description: "Optional human-readable checkpoint label."
+budget: none

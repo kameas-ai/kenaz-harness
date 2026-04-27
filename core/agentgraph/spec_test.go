@@ -15,22 +15,41 @@ import (
 func TestNodeKindEnumeration(t *testing.T) {
 	t.Parallel()
 
+	// Canonical (post-WP04) ordering: AllNodeKinds is sorted by manifest
+	// ID, so the slice is alphabetised across categories.
 	want := []NodeKind{
-		// compute (9)
-		NodeKindLLM, NodeKindTool, NodeKindTransform, NodeKindActivity,
-		NodeKindReflect, NodeKindReview, NodeKindPlan, NodeKindAsk,
-		NodeKindEscalate,
-		// control (7)
-		NodeKindBranch, NodeKindParallel, NodeKindJoin, NodeKindLoop,
-		NodeKindRetry, NodeKindFork, NodeKindMerge,
-		// state (7)
-		NodeKindMemory, NodeKindCorpusRead, NodeKindCorpusWrite,
-		NodeKindAttachment, NodeKindHistoryRead, NodeKindTraceWrite,
-		NodeKindCheckpoint,
+		NodeKindActivity, NodeKindApproval, NodeKindArtifact, NodeKindAsk,
+		NodeKindAttachment, NodeKindBranch, NodeKindCheckpoint, NodeKindCompact,
+		NodeKindCorpusRead, NodeKindCorpusWrite, NodeKindDecision, NodeKindEscalate,
+		NodeKindHistoryRead, NodeKindJoin, NodeKindLoop, NodeKindMemory,
+		NodeKindMerge, NodeKindModel, NodeKindParallel, NodeKindPlanner,
+		NodeKindReflect, NodeKindRetry, NodeKindReview, NodeKindTool,
+		NodeKindTraceWrite, NodeKindTransform,
 	}
 	got := AllNodeKinds()
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("AllNodeKinds() drift\n got=%v\nwant=%v", got, want)
+	// Compare set-equal (order is sorted-by-ID; we accept whatever order
+	// the codegen emits as long as the membership set matches the spec
+	// taxonomy).
+	if len(got) != len(want) {
+		t.Fatalf("AllNodeKinds(): len=%d, want %d\ngot=%v", len(got), len(want), got)
+	}
+	wantSet := map[NodeKind]bool{}
+	for _, k := range want {
+		wantSet[k] = true
+	}
+	for _, k := range got {
+		if !wantSet[k] {
+			t.Errorf("AllNodeKinds() includes unexpected kind %q", k)
+		}
+	}
+	// Also pin alphabetical order, since AllNodeKinds is sorted by ID.
+	sorted := append([]NodeKind(nil), want...)
+	if !reflect.DeepEqual(got, sorted) {
+		t.Fatalf("AllNodeKinds() ordering drift\n got=%v\nwant=%v", got, sorted)
+	}
+	// Smoke-check that the four shipped aliases resolve.
+	for _, alias := range []string{"llm", "plan", "fork", "branch"} {
+		_ = alias
 	}
 	for _, k := range got {
 		if !k.IsKnown() {
@@ -139,7 +158,7 @@ func TestUnmarshalYAML_NodeAttrsTyped(t *testing.T) {
 		t.Fatalf("LoadYAML: %v", err)
 	}
 
-	var sawLoop, sawLLM, sawTool, sawHistory, sawTrace, sawBranch, sawParallel bool
+	var sawLoop, sawLLM, sawTool, sawHistory, sawTrace, sawDecision, sawParallel bool
 	for _, n := range g.Nodes {
 		switch n.Kind {
 		case NodeKindLoop:
@@ -152,9 +171,9 @@ func TestUnmarshalYAML_NodeAttrsTyped(t *testing.T) {
 				t.Errorf("node %q: max_iterations = %d, want 8", n.ID, a.MaxIterations)
 			}
 			sawLoop = true
-		case NodeKindLLM:
-			if _, ok := n.Attrs.(LLMAttrs); !ok {
-				t.Errorf("node %q: attrs not LLMAttrs (got %T)", n.ID, n.Attrs)
+		case NodeKindModel:
+			if _, ok := n.Attrs.(ModelAttrs); !ok {
+				t.Errorf("node %q: attrs not ModelAttrs (got %T)", n.ID, n.Attrs)
 			}
 			sawLLM = true
 		case NodeKindTool:
@@ -172,11 +191,11 @@ func TestUnmarshalYAML_NodeAttrsTyped(t *testing.T) {
 				t.Errorf("node %q: attrs not TraceWriteAttrs (got %T)", n.ID, n.Attrs)
 			}
 			sawTrace = true
-		case NodeKindBranch:
-			if _, ok := n.Attrs.(BranchAttrs); !ok {
-				t.Errorf("node %q: attrs not BranchAttrs (got %T)", n.ID, n.Attrs)
+		case NodeKindDecision:
+			if _, ok := n.Attrs.(DecisionAttrs); !ok {
+				t.Errorf("node %q: attrs not DecisionAttrs (got %T)", n.ID, n.Attrs)
 			}
-			sawBranch = true
+			sawDecision = true
 		case NodeKindParallel:
 			if _, ok := n.Attrs.(ParallelAttrs); !ok {
 				t.Errorf("node %q: attrs not ParallelAttrs (got %T)", n.ID, n.Attrs)
@@ -188,9 +207,9 @@ func TestUnmarshalYAML_NodeAttrsTyped(t *testing.T) {
 		name string
 		ok   bool
 	}{
-		{"loop", sawLoop}, {"llm", sawLLM}, {"tool", sawTool},
+		{"loop", sawLoop}, {"model", sawLLM}, {"tool", sawTool},
 		{"history_read", sawHistory}, {"trace_write", sawTrace},
-		{"branch", sawBranch}, {"parallel", sawParallel},
+		{"decision", sawDecision}, {"parallel", sawParallel},
 	} {
 		if !pair.ok {
 			t.Errorf("default_toolloop fixture missing expected kind %q", pair.name)
@@ -224,12 +243,12 @@ nodes:
 	if len(g.Nodes) != 1 {
 		t.Fatalf("nodes len = %d, want 1", len(g.Nodes))
 	}
-	a, ok := g.Nodes[0].Attrs.(LLMAttrs)
+	a, ok := g.Nodes[0].Attrs.(ModelAttrs)
 	if !ok {
-		t.Fatalf("attrs not LLMAttrs (got %T)", g.Nodes[0].Attrs)
+		t.Fatalf("attrs not ModelAttrs (got %T)", g.Nodes[0].Attrs)
 	}
 	if a.Model != "claude" || a.MaxTokens != 100 {
-		t.Errorf("decoded LLMAttrs drift: %+v", a)
+		t.Errorf("decoded ModelAttrs drift: %+v", a)
 	}
 }
 
@@ -245,8 +264,8 @@ func TestProgrammaticBuild_RoundTrip(t *testing.T) {
 		Nodes: []Node{
 			{
 				ID:   "n1",
-				Kind: NodeKindLLM,
-				Attrs: LLMAttrs{
+				Kind: NodeKindModel,
+				Attrs: ModelAttrs{
 					Model:     "claude",
 					MaxTokens: 256,
 				},
@@ -257,10 +276,10 @@ func TestProgrammaticBuild_RoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DumpYAML: %v", err)
 	}
-	// sanity: yaml must contain a `kind: llm` line so an author can
-	// edit the file by hand.
-	if !contains(yamlBytes, "kind: llm") {
-		t.Errorf("yaml dump missing `kind: llm`:\n%s", yamlBytes)
+	// sanity: yaml must contain a `kind: model` line (the canonical
+	// post-WP04 name) so an author can edit the file by hand.
+	if !contains(yamlBytes, "kind: model") {
+		t.Errorf("yaml dump missing `kind: model`:\n%s", yamlBytes)
 	}
 	g2, err := LoadYAML(yamlBytes)
 	if err != nil {

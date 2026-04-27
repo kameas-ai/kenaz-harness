@@ -81,8 +81,14 @@ func resolveOne(id string, byID map[string]*Manifest, stack []string) (*Resolved
 		// The Extends field on the merged manifest points at the
 		// child's parent (matches authoring expectation).
 		merged.Extends = m.Extends
-		// The KindName defaults to the leaf ID.
-		if merged.KindName == "" {
+		// KindName policy: a kind manifest's on-the-wire NodeKind value
+		// must reflect THIS layer, not whatever the parent archetype
+		// happened to set. The parent's kind_name (typically the
+		// archetype id) leaks through cloneManifest; reset to the leaf
+		// unless the leaf explicitly provided its own kind_name.
+		if m.KindName != "" {
+			merged.KindName = m.KindName
+		} else {
 			merged.KindName = id
 		}
 		// Apply the callable default after the overlay so an explicit

@@ -6,13 +6,525 @@
 
 package agentgraph
 
-// No callable kinds in the catalog yet. Once WP04 lands the kind
-// manifests, this file will declare:
-//   - NodeKind<X> constants (one per callable kind)
-//   - AllNodeKindsGen slice
-//   - decodeAttrsGen / defaultAttrsForGen dispatchers
-//   - ResolvedManifests registry populated at init
+import (
+	"encoding/json"
+	"fmt"
+
+	"github.com/sigil-tech/kaneaz-harness/core/agentgraph/nodes"
+)
+
+// Generated NodeKind constants. The on-the-wire string values come
+// straight from the manifest's `kind_name` (defaults to `id`).
+const (
+	NodeKindActivity    NodeKind = "activity"
+	NodeKindApproval    NodeKind = "approval"
+	NodeKindArtifact    NodeKind = "artifact"
+	NodeKindAsk         NodeKind = "ask"
+	NodeKindAttachment  NodeKind = "attachment"
+	NodeKindBranch      NodeKind = "branch"
+	NodeKindCheckpoint  NodeKind = "checkpoint"
+	NodeKindCompact     NodeKind = "compact"
+	NodeKindCorpusRead  NodeKind = "corpus_read"
+	NodeKindCorpusWrite NodeKind = "corpus_write"
+	NodeKindDecision    NodeKind = "decision"
+	NodeKindEscalate    NodeKind = "escalate"
+	NodeKindHistoryRead NodeKind = "history_read"
+	NodeKindJoin        NodeKind = "join"
+	NodeKindLoop        NodeKind = "loop"
+	NodeKindMemory      NodeKind = "memory"
+	NodeKindMerge       NodeKind = "merge"
+	NodeKindModel       NodeKind = "model"
+	NodeKindParallel    NodeKind = "parallel"
+	NodeKindPlanner     NodeKind = "planner"
+	NodeKindReflect     NodeKind = "reflect"
+	NodeKindRetry       NodeKind = "retry"
+	NodeKindReview      NodeKind = "review"
+	NodeKindTool        NodeKind = "tool"
+	NodeKindTraceWrite  NodeKind = "trace_write"
+	NodeKindTransform   NodeKind = "transform"
+)
+
+// AllNodeKinds returns every callable kind in canonical (sorted-ID)
+// order. Used by validator membership checks and tests.
+func AllNodeKinds() []NodeKind {
+	return []NodeKind{
+		NodeKindActivity,
+		NodeKindApproval,
+		NodeKindArtifact,
+		NodeKindAsk,
+		NodeKindAttachment,
+		NodeKindBranch,
+		NodeKindCheckpoint,
+		NodeKindCompact,
+		NodeKindCorpusRead,
+		NodeKindCorpusWrite,
+		NodeKindDecision,
+		NodeKindEscalate,
+		NodeKindHistoryRead,
+		NodeKindJoin,
+		NodeKindLoop,
+		NodeKindMemory,
+		NodeKindMerge,
+		NodeKindModel,
+		NodeKindParallel,
+		NodeKindPlanner,
+		NodeKindReflect,
+		NodeKindRetry,
+		NodeKindReview,
+		NodeKindTool,
+		NodeKindTraceWrite,
+		NodeKindTransform,
+	}
+}
+
+// defaultAttrsFor returns a zero-value typed attrs struct for the
+// requested kind, or nil if the kind is not in the catalog. The wire
+// decoder consults this when the on-disk YAML omits the `attrs:` block.
+func defaultAttrsFor(kind NodeKind) NodeAttrs {
+	switch kind {
+	case NodeKindActivity:
+		return ActivityAttrs{}
+	case NodeKindApproval:
+		return ApprovalAttrs{}
+	case NodeKindArtifact:
+		return ArtifactAttrs{}
+	case NodeKindAsk:
+		return AskAttrs{}
+	case NodeKindAttachment:
+		return AttachmentAttrs{}
+	case NodeKindBranch:
+		return BranchAttrs{}
+	case NodeKindCheckpoint:
+		return CheckpointAttrs{}
+	case NodeKindCompact:
+		return CompactAttrs{}
+	case NodeKindCorpusRead:
+		return CorpusReadAttrs{}
+	case NodeKindCorpusWrite:
+		return CorpusWriteAttrs{}
+	case NodeKindDecision:
+		return DecisionAttrs{}
+	case NodeKindEscalate:
+		return EscalateAttrs{}
+	case NodeKindHistoryRead:
+		return HistoryReadAttrs{}
+	case NodeKindJoin:
+		return JoinAttrs{}
+	case NodeKindLoop:
+		return LoopAttrs{}
+	case NodeKindMemory:
+		return MemoryAttrs{}
+	case NodeKindMerge:
+		return MergeAttrs{}
+	case NodeKindModel:
+		return ModelAttrs{}
+	case NodeKindParallel:
+		return ParallelAttrs{}
+	case NodeKindPlanner:
+		return PlannerAttrs{}
+	case NodeKindReflect:
+		return ReflectAttrs{}
+	case NodeKindRetry:
+		return RetryAttrs{}
+	case NodeKindReview:
+		return ReviewAttrs{}
+	case NodeKindTool:
+		return ToolAttrs{}
+	case NodeKindTraceWrite:
+		return TraceWriteAttrs{}
+	case NodeKindTransform:
+		return TransformAttrs{}
+	}
+	return nil
+}
+
+// defaultPortsFor returns the canonical input/output ports for each
+// callable kind, sourced directly from the resolved manifest. Authors
+// can override per-node by listing `inputs:` / `outputs:` explicitly;
+// the validator falls back to these when the node omits a port surface.
+func defaultPortsFor(kind NodeKind) (inputs, outputs []Port) {
+	switch kind {
+	case NodeKindActivity:
+		return []Port{
+				{Name: "in", Type: PortType("any")},
+			}, []Port{
+				{Name: "out", Type: PortType("any")},
+			}
+	case NodeKindApproval:
+		return []Port{
+				{Name: "in", Type: PortType("any")},
+			}, []Port{
+				{Name: "approved", Type: PortType("any")},
+				{Name: "rejected", Type: PortType("any")},
+			}
+	case NodeKindArtifact:
+		return []Port{
+				{Name: "in", Type: PortType("any")},
+			}, []Port{
+				{Name: "ack", Type: PortType("any")},
+			}
+	case NodeKindAsk:
+		return []Port{
+				{Name: "context", Type: PortType("any")},
+			}, []Port{
+				{Name: "answer", Type: PortType("any")},
+			}
+	case NodeKindAttachment:
+		return []Port{
+				{Name: "in", Type: PortType("any")},
+			}, []Port{
+				{Name: "block", Type: PortType("any")},
+			}
+	case NodeKindBranch:
+		return []Port{
+				{Name: "parent", Type: PortType("any")},
+			}, []Port{
+				{Name: "branch_id", Type: PortType("any")},
+			}
+	case NodeKindCheckpoint:
+		return []Port{
+				{Name: "in", Type: PortType("any")},
+			}, []Port{
+				{Name: "ack", Type: PortType("any")},
+			}
+	case NodeKindCompact:
+		return []Port{
+				{Name: "input", Type: PortType("messages")},
+			}, []Port{
+				{Name: "result", Type: PortType("any")},
+			}
+	case NodeKindCorpusRead:
+		return []Port{
+				{Name: "query", Type: PortType("any")},
+			}, []Port{
+				{Name: "hits", Type: PortType("any")},
+			}
+	case NodeKindCorpusWrite:
+		return []Port{
+				{Name: "in", Type: PortType("any")},
+			}, []Port{
+				{Name: "job_handle", Type: PortType("any")},
+			}
+	case NodeKindDecision:
+		return []Port{
+				{Name: "in", Type: PortType("any"), Required: true},
+			}, []Port{
+				{Name: "true", Type: PortType("any")},
+				{Name: "false", Type: PortType("any")},
+			}
+	case NodeKindEscalate:
+		return []Port{
+				{Name: "trigger", Type: PortType("any")},
+			}, []Port{
+				{Name: "result", Type: PortType("any")},
+			}
+	case NodeKindHistoryRead:
+		return []Port{
+				{Name: "query", Type: PortType("any")},
+			}, []Port{
+				{Name: "messages", Type: PortType("messages")},
+			}
+	case NodeKindJoin:
+		return []Port{
+				{Name: "in", Type: PortType("any")},
+			}, []Port{
+				{Name: "out", Type: PortType("any")},
+			}
+	case NodeKindLoop:
+		return []Port{
+				{Name: "in", Type: PortType("any")},
+			}, []Port{
+				{Name: "out", Type: PortType("any")},
+			}
+	case NodeKindMemory:
+		return []Port{
+				{Name: "in", Type: PortType("any")},
+			}, []Port{
+				{Name: "out", Type: PortType("any")},
+			}
+	case NodeKindMerge:
+		return []Port{
+				{Name: "branch", Type: PortType("branch_id"), Required: true},
+			}, []Port{
+				{Name: "merged", Type: PortType("messages")},
+			}
+	case NodeKindModel:
+		return []Port{
+				{Name: "messages", Type: PortType("messages"), Required: true},
+			}, []Port{
+				{Name: "response", Type: PortType("messages")},
+			}
+	case NodeKindParallel:
+		return []Port{
+				{Name: "in", Type: PortType("any")},
+			}, []Port{
+				{Name: "out", Type: PortType("any")},
+			}
+	case NodeKindPlanner:
+		return []Port{
+				{Name: "task", Type: PortType("text"), Required: true},
+			}, []Port{
+				{Name: "plan", Type: PortType("messages")},
+			}
+	case NodeKindReflect:
+		return []Port{
+				{Name: "draft", Type: PortType("messages"), Required: true},
+			}, []Port{
+				{Name: "critique", Type: PortType("json")},
+				{Name: "revision", Type: PortType("messages")},
+			}
+	case NodeKindRetry:
+		return []Port{
+				{Name: "in", Type: PortType("any")},
+			}, []Port{
+				{Name: "out", Type: PortType("any")},
+			}
+	case NodeKindReview:
+		return []Port{
+				{Name: "draft", Type: PortType("any"), Required: true},
+			}, []Port{
+				{Name: "verdict", Type: PortType("any")},
+				{Name: "approved", Type: PortType("any")},
+			}
+	case NodeKindTool:
+		return []Port{
+				{Name: "args", Type: PortType("any")},
+			}, []Port{
+				{Name: "result", Type: PortType("any")},
+			}
+	case NodeKindTraceWrite:
+		return []Port{
+				{Name: "in", Type: PortType("any")},
+			}, []Port{
+				{Name: "ack", Type: PortType("any")},
+			}
+	case NodeKindTransform:
+		return []Port{
+				{Name: "in", Type: PortType("any"), Required: true},
+			}, []Port{
+				{Name: "out", Type: PortType("any")},
+			}
+	}
+	return nil, nil
+}
+
+// decodeAttrs routes the raw attrs map through the per-kind typed
+// struct. Returns the kind-specific NodeAttrs implementation.
+func decodeAttrs(kind NodeKind, raw map[string]any, nodeID string) (NodeAttrs, error) {
+	target := defaultAttrsFor(kind)
+	if target == nil {
+		// Unknown kinds may still resolve through the alias map.
+		if canonical, ok := lookupAlias(string(kind)); ok {
+			target = defaultAttrsFor(NodeKind(canonical))
+			kind = NodeKind(canonical)
+		}
+	}
+	if target == nil {
+		return nil, fmt.Errorf("agentgraph: node %q: kind %q has no decoder", nodeID, kind)
+	}
+	if len(raw) == 0 {
+		return target, nil
+	}
+	buf, err := json.Marshal(raw)
+	if err != nil {
+		return nil, fmt.Errorf("agentgraph: node %q: re-encode attrs: %w", nodeID, err)
+	}
+	switch kind {
+	case NodeKindActivity:
+		var v ActivityAttrs
+		if err := json.Unmarshal(buf, &v); err != nil {
+			return nil, fmt.Errorf("agentgraph: node %q: decode attrs for kind %q: %w", nodeID, kind, err)
+		}
+		return v, nil
+	case NodeKindApproval:
+		var v ApprovalAttrs
+		if err := json.Unmarshal(buf, &v); err != nil {
+			return nil, fmt.Errorf("agentgraph: node %q: decode attrs for kind %q: %w", nodeID, kind, err)
+		}
+		return v, nil
+	case NodeKindArtifact:
+		var v ArtifactAttrs
+		if err := json.Unmarshal(buf, &v); err != nil {
+			return nil, fmt.Errorf("agentgraph: node %q: decode attrs for kind %q: %w", nodeID, kind, err)
+		}
+		return v, nil
+	case NodeKindAsk:
+		var v AskAttrs
+		if err := json.Unmarshal(buf, &v); err != nil {
+			return nil, fmt.Errorf("agentgraph: node %q: decode attrs for kind %q: %w", nodeID, kind, err)
+		}
+		return v, nil
+	case NodeKindAttachment:
+		var v AttachmentAttrs
+		if err := json.Unmarshal(buf, &v); err != nil {
+			return nil, fmt.Errorf("agentgraph: node %q: decode attrs for kind %q: %w", nodeID, kind, err)
+		}
+		return v, nil
+	case NodeKindBranch:
+		var v BranchAttrs
+		if err := json.Unmarshal(buf, &v); err != nil {
+			return nil, fmt.Errorf("agentgraph: node %q: decode attrs for kind %q: %w", nodeID, kind, err)
+		}
+		return v, nil
+	case NodeKindCheckpoint:
+		var v CheckpointAttrs
+		if err := json.Unmarshal(buf, &v); err != nil {
+			return nil, fmt.Errorf("agentgraph: node %q: decode attrs for kind %q: %w", nodeID, kind, err)
+		}
+		return v, nil
+	case NodeKindCompact:
+		var v CompactAttrs
+		if err := json.Unmarshal(buf, &v); err != nil {
+			return nil, fmt.Errorf("agentgraph: node %q: decode attrs for kind %q: %w", nodeID, kind, err)
+		}
+		return v, nil
+	case NodeKindCorpusRead:
+		var v CorpusReadAttrs
+		if err := json.Unmarshal(buf, &v); err != nil {
+			return nil, fmt.Errorf("agentgraph: node %q: decode attrs for kind %q: %w", nodeID, kind, err)
+		}
+		return v, nil
+	case NodeKindCorpusWrite:
+		var v CorpusWriteAttrs
+		if err := json.Unmarshal(buf, &v); err != nil {
+			return nil, fmt.Errorf("agentgraph: node %q: decode attrs for kind %q: %w", nodeID, kind, err)
+		}
+		return v, nil
+	case NodeKindDecision:
+		var v DecisionAttrs
+		if err := json.Unmarshal(buf, &v); err != nil {
+			return nil, fmt.Errorf("agentgraph: node %q: decode attrs for kind %q: %w", nodeID, kind, err)
+		}
+		return v, nil
+	case NodeKindEscalate:
+		var v EscalateAttrs
+		if err := json.Unmarshal(buf, &v); err != nil {
+			return nil, fmt.Errorf("agentgraph: node %q: decode attrs for kind %q: %w", nodeID, kind, err)
+		}
+		return v, nil
+	case NodeKindHistoryRead:
+		var v HistoryReadAttrs
+		if err := json.Unmarshal(buf, &v); err != nil {
+			return nil, fmt.Errorf("agentgraph: node %q: decode attrs for kind %q: %w", nodeID, kind, err)
+		}
+		return v, nil
+	case NodeKindJoin:
+		var v JoinAttrs
+		if err := json.Unmarshal(buf, &v); err != nil {
+			return nil, fmt.Errorf("agentgraph: node %q: decode attrs for kind %q: %w", nodeID, kind, err)
+		}
+		return v, nil
+	case NodeKindLoop:
+		var v LoopAttrs
+		if err := json.Unmarshal(buf, &v); err != nil {
+			return nil, fmt.Errorf("agentgraph: node %q: decode attrs for kind %q: %w", nodeID, kind, err)
+		}
+		return v, nil
+	case NodeKindMemory:
+		var v MemoryAttrs
+		if err := json.Unmarshal(buf, &v); err != nil {
+			return nil, fmt.Errorf("agentgraph: node %q: decode attrs for kind %q: %w", nodeID, kind, err)
+		}
+		return v, nil
+	case NodeKindMerge:
+		var v MergeAttrs
+		if err := json.Unmarshal(buf, &v); err != nil {
+			return nil, fmt.Errorf("agentgraph: node %q: decode attrs for kind %q: %w", nodeID, kind, err)
+		}
+		return v, nil
+	case NodeKindModel:
+		var v ModelAttrs
+		if err := json.Unmarshal(buf, &v); err != nil {
+			return nil, fmt.Errorf("agentgraph: node %q: decode attrs for kind %q: %w", nodeID, kind, err)
+		}
+		return v, nil
+	case NodeKindParallel:
+		var v ParallelAttrs
+		if err := json.Unmarshal(buf, &v); err != nil {
+			return nil, fmt.Errorf("agentgraph: node %q: decode attrs for kind %q: %w", nodeID, kind, err)
+		}
+		return v, nil
+	case NodeKindPlanner:
+		var v PlannerAttrs
+		if err := json.Unmarshal(buf, &v); err != nil {
+			return nil, fmt.Errorf("agentgraph: node %q: decode attrs for kind %q: %w", nodeID, kind, err)
+		}
+		return v, nil
+	case NodeKindReflect:
+		var v ReflectAttrs
+		if err := json.Unmarshal(buf, &v); err != nil {
+			return nil, fmt.Errorf("agentgraph: node %q: decode attrs for kind %q: %w", nodeID, kind, err)
+		}
+		return v, nil
+	case NodeKindRetry:
+		var v RetryAttrs
+		if err := json.Unmarshal(buf, &v); err != nil {
+			return nil, fmt.Errorf("agentgraph: node %q: decode attrs for kind %q: %w", nodeID, kind, err)
+		}
+		return v, nil
+	case NodeKindReview:
+		var v ReviewAttrs
+		if err := json.Unmarshal(buf, &v); err != nil {
+			return nil, fmt.Errorf("agentgraph: node %q: decode attrs for kind %q: %w", nodeID, kind, err)
+		}
+		return v, nil
+	case NodeKindTool:
+		var v ToolAttrs
+		if err := json.Unmarshal(buf, &v); err != nil {
+			return nil, fmt.Errorf("agentgraph: node %q: decode attrs for kind %q: %w", nodeID, kind, err)
+		}
+		return v, nil
+	case NodeKindTraceWrite:
+		var v TraceWriteAttrs
+		if err := json.Unmarshal(buf, &v); err != nil {
+			return nil, fmt.Errorf("agentgraph: node %q: decode attrs for kind %q: %w", nodeID, kind, err)
+		}
+		return v, nil
+	case NodeKindTransform:
+		var v TransformAttrs
+		if err := json.Unmarshal(buf, &v); err != nil {
+			return nil, fmt.Errorf("agentgraph: node %q: decode attrs for kind %q: %w", nodeID, kind, err)
+		}
+		return v, nil
+	}
+	return nil, fmt.Errorf("agentgraph: node %q: kind %q has no decoder", nodeID, kind)
+}
+
+// kindAliases is the canonical alias→canonical-kind map sourced from
+// each manifest's `aliases:` list. The runtime alias map (lookupAlias)
+// is built from this slice plus any user-override aliases; see
+// aliases.go.
+var kindAliases = map[string]string{
+	"fork":   "branch",
+	"branch": "decision",
+	"llm":    "model",
+	"plan":   "planner",
+}
+
+// ResolvedManifests is populated at init time by loading the embedded
+// catalog. Callers (kernel + validator) consult it via
+// ResolvedManifests[kind] for manifest-driven validation rules.
 //
-// The empty-catalog state is intentional: WP02 ships the codegen
-// tool + CI gate; WP04 ships the kind manifests that populate the
-// generated output.
+// Keyed by NodeKind (the on-the-wire kind value, NOT the manifest ID —
+// they coincide today but the manifest `kind_name` field can diverge in
+// the future).
+var ResolvedManifests = map[NodeKind]*nodes.ResolvedManifest{}
+
+func init() {
+	cat, err := nodes.LoadCatalog(nodes.LoadOptions{})
+	if err != nil {
+		// A load failure at init-time is a hard build break; the
+		// kernel cannot operate without the catalog. We fail loudly.
+		panic(fmt.Sprintf("agentgraph: load node catalog: %v", err))
+	}
+	for _, rm := range cat.Kinds() {
+		if rm == nil || !rm.Manifest.IsCallable() {
+			continue
+		}
+		key := rm.Manifest.KindName
+		if key == "" {
+			key = rm.Manifest.ID
+		}
+		ResolvedManifests[NodeKind(key)] = rm
+	}
+}

@@ -84,7 +84,7 @@ func TestCorpusReadExecutor_StubReturnsEmpty(t *testing.T) {
 	applyEnvDefaults(env)
 	ex := corpusReadExecutor{}
 	node := &Node{ID: "c", Kind: NodeKindCorpusRead, Attrs: CorpusReadAttrs{
-		CorpusIDs: []string{"x"},
+		CorpusIds: []string{"x"},
 	}}
 	r, err := ex.Execute(context.Background(), env, node, PortValues{"query": "test"})
 	if err != nil {
@@ -101,7 +101,7 @@ func TestCorpusWriteExecutor_StubReturnsEmpty(t *testing.T) {
 	applyEnvDefaults(env)
 	ex := corpusWriteExecutor{}
 	node := &Node{ID: "c", Kind: NodeKindCorpusWrite, Attrs: CorpusWriteAttrs{
-		CorpusID: "x", SourcePath: "y",
+		CorpusId: "x", SourcePath: "y",
 	}}
 	if _, err := ex.Execute(context.Background(), env, node, nil); err != nil {
 		t.Fatalf("Execute: %v", err)
@@ -128,7 +128,7 @@ func TestAttachmentExecutor_Resolves(t *testing.T) {
 	}}
 	applyEnvDefaults(env)
 	ex := attachmentExecutor{}
-	node := &Node{ID: "a", Kind: NodeKindAttachment, Attrs: AttachmentAttrs{AttachmentID: "id-1"}}
+	node := &Node{ID: "a", Kind: NodeKindAttachment, Attrs: AttachmentAttrs{AttachmentId: "id-1"}}
 	r, err := ex.Execute(context.Background(), env, node, nil)
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
@@ -144,7 +144,7 @@ func TestAttachmentExecutor_PropagatesError(t *testing.T) {
 	env := &Env{RunID: "r", Attachments: stubAttachments{err: errors.New("nope")}}
 	applyEnvDefaults(env)
 	ex := attachmentExecutor{}
-	node := &Node{ID: "a", Kind: NodeKindAttachment, Attrs: AttachmentAttrs{AttachmentID: "x"}}
+	node := &Node{ID: "a", Kind: NodeKindAttachment, Attrs: AttachmentAttrs{AttachmentId: "x"}}
 	if _, err := ex.Execute(context.Background(), env, node, nil); err == nil {
 		t.Fatalf("expected error")
 	}

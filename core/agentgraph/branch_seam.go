@@ -43,7 +43,7 @@ type BranchSeam interface {
 }
 
 // ForkRequest is the input to BranchSeam.Fork. The agentgraph layer
-// builds this from the ForkAttrs payload + recent parent history; the
+// builds this from the BranchAttrs payload + recent parent history; the
 // seam owns the storage details.
 type ForkRequest struct {
 	ParentSessionID    string

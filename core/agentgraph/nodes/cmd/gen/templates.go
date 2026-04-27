@@ -18,12 +18,10 @@ package main
 //   - defaultAttrsFor(kind) NodeAttrs
 //   - ResolvedManifests map[NodeKind]*nodes.ResolvedManifest (init'd)
 //
-// During WP02 the existing hand-written wire.go still defines its own
-// decodeAttrs / defaultAttrsFor — both files coexist until WP04 flips
-// the switch by removing the hand-written ones. To avoid a double
-// declaration today the generator suffixes its identifiers with `Gen`
-// (decodeAttrsGen, defaultAttrsForGen). WP04 renames them back to the
-// canonical names when the hand-written code is deleted.
+// As of WP04 the generator emits the canonical names directly:
+// `NodeKindX`, `AllNodeKinds`, `decodeAttrs`, `defaultAttrsFor`,
+// `defaultPortsFor`. The hand-written attrs.go and wire.go are deleted;
+// these generated files are now the single source of truth.
 
 const attrsTemplate = `{{.Header}}
 
@@ -180,43 +178,68 @@ import (
 // straight from the manifest's ` + "`kind_name`" + ` (defaults to ` + "`id`" + `).
 const (
 {{- range .Kinds}}
-	{{.ConstName}}Gen NodeKind = {{goString .KindName}}
+	{{.ConstName}} NodeKind = {{goString .KindName}}
 {{- end}}
 )
 
-// AllNodeKindsGen lists every callable kind in canonical (sorted-ID)
-// order. The hand-written ` + "`AllNodeKinds()`" + ` in spec.go remains the
-// authoritative caller surface until WP04; this slice exists so the
-// generated decoder dispatch table is reachable for tests that bind
-// against the generated layer alone.
-var AllNodeKindsGen = []NodeKind{
+// AllNodeKinds returns every callable kind in canonical (sorted-ID)
+// order. Used by validator membership checks and tests.
+func AllNodeKinds() []NodeKind {
+	return []NodeKind{
 {{- range .Kinds}}
-	{{.ConstName}}Gen,
+		{{.ConstName}},
 {{- end}}
+	}
 }
 
-// defaultAttrsForGen returns a zero-value typed attrs struct for the
-// requested kind, or nil if the kind is not part of the generated
-// catalog. Callers (the WP04 wire.go rewrite) consult this before
-// falling back to the hand-written switch.
-func defaultAttrsForGen(kind NodeKind) NodeAttrs {
+// defaultAttrsFor returns a zero-value typed attrs struct for the
+// requested kind, or nil if the kind is not in the catalog. The wire
+// decoder consults this when the on-disk YAML omits the ` + "`attrs:`" + ` block.
+func defaultAttrsFor(kind NodeKind) NodeAttrs {
 	switch kind {
 {{- range .Kinds}}
-	case {{.ConstName}}Gen:
+	case {{.ConstName}}:
 		return {{.StructName}}{}
 {{- end}}
 	}
 	return nil
 }
 
-// decodeAttrsGen routes the raw attrs map through the per-kind typed
-// struct. Mirrors decodeAttrs in wire.go but dispatches against the
-// generated kinds; once WP04 flips the switch this becomes the only
-// dispatcher.
-func decodeAttrsGen(kind NodeKind, raw map[string]any, nodeID string) (NodeAttrs, error) {
-	target := defaultAttrsForGen(kind)
+// defaultPortsFor returns the canonical input/output ports for each
+// callable kind, sourced directly from the resolved manifest. Authors
+// can override per-node by listing ` + "`inputs:`" + ` / ` + "`outputs:`" + ` explicitly;
+// the validator falls back to these when the node omits a port surface.
+func defaultPortsFor(kind NodeKind) (inputs, outputs []Port) {
+	switch kind {
+{{- range .Kinds}}
+	case {{.ConstName}}:
+		return []Port{
+{{- range .Inputs}}
+				{Name: {{goString .Name}}, Type: PortType({{goString .Type}}){{if .Required}}, Required: true{{end}}},
+{{- end}}
+			}, []Port{
+{{- range .Outputs}}
+				{Name: {{goString .Name}}, Type: PortType({{goString .Type}}){{if .Required}}, Required: true{{end}}},
+{{- end}}
+			}
+{{- end}}
+	}
+	return nil, nil
+}
+
+// decodeAttrs routes the raw attrs map through the per-kind typed
+// struct. Returns the kind-specific NodeAttrs implementation.
+func decodeAttrs(kind NodeKind, raw map[string]any, nodeID string) (NodeAttrs, error) {
+	target := defaultAttrsFor(kind)
 	if target == nil {
-		return nil, fmt.Errorf("agentgraph: node %q: kind %q has no generated decoder", nodeID, kind)
+		// Unknown kinds may still resolve through the alias map.
+		if canonical, ok := lookupAlias(string(kind)); ok {
+			target = defaultAttrsFor(NodeKind(canonical))
+			kind = NodeKind(canonical)
+		}
+	}
+	if target == nil {
+		return nil, fmt.Errorf("agentgraph: node %q: kind %q has no decoder", nodeID, kind)
 	}
 	if len(raw) == 0 {
 		return target, nil
@@ -227,7 +250,7 @@ func decodeAttrsGen(kind NodeKind, raw map[string]any, nodeID string) (NodeAttrs
 	}
 	switch kind {
 {{- range .Kinds}}
-	case {{.ConstName}}Gen:
+	case {{.ConstName}}:
 		var v {{.StructName}}
 		if err := json.Unmarshal(buf, &v); err != nil {
 			return nil, fmt.Errorf("agentgraph: node %q: decode attrs for kind %q: %w", nodeID, kind, err)
@@ -235,11 +258,24 @@ func decodeAttrsGen(kind NodeKind, raw map[string]any, nodeID string) (NodeAttrs
 		return v, nil
 {{- end}}
 	}
-	return nil, fmt.Errorf("agentgraph: node %q: kind %q has no generated decoder", nodeID, kind)
+	return nil, fmt.Errorf("agentgraph: node %q: kind %q has no decoder", nodeID, kind)
+}
+
+// kindAliases is the canonical alias→canonical-kind map sourced from
+// each manifest's ` + "`aliases:`" + ` list. The runtime alias map (lookupAlias)
+// is built from this slice plus any user-override aliases; see
+// aliases.go.
+var kindAliases = map[string]string{
+{{- range .Kinds}}
+{{- $canon := .KindName}}
+{{- range .Aliases}}
+	{{goString .}}: {{goString $canon}},
+{{- end}}
+{{- end}}
 }
 
 // ResolvedManifests is populated at init time by loading the embedded
-// catalog. Callers (kernel + validator in WP03) consult it via
+// catalog. Callers (kernel + validator) consult it via
 // ResolvedManifests[kind] for manifest-driven validation rules.
 //
 // Keyed by NodeKind (the on-the-wire kind value, NOT the manifest ID —
@@ -271,8 +307,8 @@ func init() {
 // No callable kinds in the catalog yet. Once WP04 lands the kind
 // manifests, this file will declare:
 //   - NodeKind<X> constants (one per callable kind)
-//   - AllNodeKindsGen slice
-//   - decodeAttrsGen / defaultAttrsForGen dispatchers
+//   - AllNodeKinds() helper
+//   - decodeAttrs / defaultAttrsFor / defaultPortsFor dispatchers
 //   - ResolvedManifests registry populated at init
 //
 // The empty-catalog state is intentional: WP02 ships the codegen

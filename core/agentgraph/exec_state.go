@@ -6,8 +6,8 @@ import (
 	"fmt"
 )
 
-// State-primitive executors (FR-019 .. FR-025): Memory, CorpusRead,
-// CorpusWrite, Attachment, HistoryRead, TraceWrite, Checkpoint.
+// State-primitive executors (FR-051 .. FR-058): Memory, CorpusRead,
+// CorpusWrite, Attachment, HistoryRead, TraceWrite, Checkpoint, Artifact.
 
 // ---- MemoryNode ----
 
@@ -95,7 +95,7 @@ func (corpusReadExecutor) Execute(ctx context.Context, env *Env, node *Node, inp
 	if v, ok := inputs.GetString("query"); ok && query == "" {
 		query = v
 	}
-	hits, err := env.Corpus.Search(ctx, a.CorpusIDs, query, a.TopK)
+	hits, err := env.Corpus.Search(ctx, a.CorpusIds, query, a.TopK)
 	if err != nil {
 		if errors.Is(err, ErrNoCorpus) || errors.Is(err, ErrNotImplemented) {
 			res.Outputs["hits"] = []CorpusHit{}
@@ -124,7 +124,7 @@ func (corpusWriteExecutor) Execute(ctx context.Context, env *Env, node *Node, in
 	if env.Corpus == nil {
 		return res, ErrNotImplemented
 	}
-	job, err := env.Corpus.Enqueue(ctx, a.CorpusID, a.SourcePath)
+	job, err := env.Corpus.Enqueue(ctx, a.CorpusId, a.SourcePath)
 	if err != nil {
 		if errors.Is(err, ErrNoCorpus) || errors.Is(err, ErrNotImplemented) {
 			res.Outputs["job_handle"] = ""
@@ -152,7 +152,7 @@ func (attachmentExecutor) Execute(ctx context.Context, env *Env, node *Node, _ P
 	if env.Attachments == nil {
 		return res, ErrNotImplemented
 	}
-	block, err := env.Attachments.Resolve(ctx, a.AttachmentID)
+	block, err := env.Attachments.Resolve(ctx, a.AttachmentId)
 	if err != nil {
 		return res, fmt.Errorf("attachment: node %q: %w", node.ID, err)
 	}
@@ -241,5 +241,46 @@ func (checkpointExecutor) Execute(ctx context.Context, env *Env, node *Node, inp
 		}
 	}
 	_ = inputs
+	return res, nil
+}
+
+// ---- ArtifactNode (NEW, FR-058) ----
+
+// artifactExecutor implements ExecArtifact — terminal output that
+// replaces ad-hoc end-of-graph "dump the final answer to chat" patterns.
+// The output_target attr discriminates session-message vs. file-path
+// vs. report delivery. v1 emits a structured `artifact_emitted` event;
+// the harness UI / file-write seam ships in WP06+.
+type artifactExecutor struct{}
+
+func (artifactExecutor) Kind() NodeKind { return NodeKindArtifact }
+
+func (artifactExecutor) Execute(_ context.Context, env *Env, node *Node, inputs PortValues) (Result, error) {
+	res := NewResult()
+	a, ok := node.Attrs.(ArtifactAttrs)
+	if !ok {
+		return res, fmt.Errorf("artifact: node %q has wrong attrs type %T", node.ID, node.Attrs)
+	}
+
+	target := a.OutputTarget
+	if target == "" {
+		target = "session_message"
+	}
+
+	// Pull content from attrs first, then fall back to the inbound port.
+	content := a.Content
+	if content == "" {
+		if v, ok := inputs.GetString("content"); ok {
+			content = v
+		}
+	}
+
+	res.Outputs["ack"] = "ok"
+	_ = res.Events.AppendKind(env.RunID, node.ID, EventArtifactEmitted, map[string]any{
+		"mime_type":      a.MimeType,
+		"output_target":  target,
+		"attachment_ref": a.AttachmentRef,
+		"content_bytes":  len(content),
+	})
 	return res, nil
 }

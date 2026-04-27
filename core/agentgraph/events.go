@@ -37,7 +37,23 @@ const (
 
 	// Compaction (subsystem ships in Bundle D — kernel only emits the
 	// signal events here so other agents can wire into them.)
-	EventCompactionFired EventKind = "compaction_fired"
+	EventCompactionFired   EventKind = "compaction_fired"
+	EventCompactionApplied EventKind = "compaction_applied"
+
+	// Approval flow (FR-048). Mirrors the ask_pending / ask_answered
+	// pair; runs pause at `approval_pending` until the user clicks
+	// Approve / Reject in the harness UI.
+	EventApprovalPending  EventKind = "approval_pending"
+	EventApprovalResolved EventKind = "approval_resolved"
+
+	// Artifact emission (FR-058). Terminal output; the harness UI
+	// surfaces these as session messages or files depending on the
+	// node's `output_target` attr.
+	EventArtifactEmitted EventKind = "artifact_emitted"
+
+	// Alias resolution (NFR-003). Emitted once per run when the loader
+	// rewrites a deprecated kind name to its canonical form.
+	EventKindAliasResolved EventKind = "kind_alias_resolved"
 
 	// Dial / budget.
 	EventDialOverridden EventKind = "dial_overridden"
@@ -76,7 +92,9 @@ func AllEventKinds() []EventKind {
 		EventLLMCall, EventToolCall, EventToolResult,
 		EventMemoryWrite, EventMemoryRead, EventTraceWrite, EventCheckpoint,
 		EventBranchFork, EventBranchMerge, EventForkRequested, EventMergeRequest,
-		EventCompactionFired,
+		EventCompactionFired, EventCompactionApplied,
+		EventApprovalPending, EventApprovalResolved,
+		EventArtifactEmitted, EventKindAliasResolved,
 		EventDialOverridden, EventCostCapHit, EventBudgetCapHit,
 		EventAskPending, EventAskAnswered,
 		EventReflectStarted, EventReflectCompleted,

@@ -3,6 +3,6 @@ spec_version: "1"
 id: "invalid_no_entrypoint"
 nodes:
   - id: n
-    kind: llm
+    kind: model
     attrs:
       model: m
