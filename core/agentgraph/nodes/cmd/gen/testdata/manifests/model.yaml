@@ -1,0 +1,26 @@
+schema_version: "1"
+id: model
+extends: compute
+display_name: "Model"
+description: "LLM call (generation/tool-use)."
+executor: agentgraph.ExecModel
+attrs:
+  model:
+    type: string
+    required: true
+    description: "Provider-specific model name (required at the kind layer)."
+  max_tokens:
+    type: int
+    min: 1
+    max: 100000
+    description: "Upper bound on generated tokens."
+  temperature:
+    type: float
+    min: 0.0
+    max: 2.0
+    description: "Sampling temperature."
+  tool_allowlist:
+    type: "[]string"
+    description: "Tool IDs this node may call."
+defaults:
+  max_tokens: 4096

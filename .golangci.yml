@@ -35,3 +35,12 @@ issues:
     - path: _test\.go
       linters:
         - errcheck
+    # Mission agent-kernel-graph-node-catalog-01KQ7JDZ WP02-T8:
+    # generated *_gen.go files (codegen output of
+    # core/agentgraph/nodes/cmd/gen) skip cosmetic linters. govet +
+    # staticcheck still run because compile-correctness must hold.
+    - path: _gen\.go
+      linters:
+        - errcheck
+        - ineffassign
+        - unused

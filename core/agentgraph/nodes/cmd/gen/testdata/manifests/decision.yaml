@@ -1,0 +1,23 @@
+schema_version: "1"
+id: decision
+extends: control
+display_name: "Decision"
+description: "Predicate router (if-then-else)."
+executor: agentgraph.ExecDecision
+attrs:
+  condition:
+    type: string
+    required: true
+    description: "Boolean expression evaluated at fire time."
+  next_true:
+    type: node_id_ref
+    required: true
+    description: "Branch when condition is true."
+  next_false:
+    type: node_id_ref
+    required: true
+    description: "Branch when condition is false."
+  mode:
+    type: enum
+    enum: [strict, lenient]
+    description: "Evaluation mode."
