@@ -200,46 +200,116 @@ func TestRetryExecutor_ExhaustReturnsError(t *testing.T) {
 	}
 }
 
-func TestForkExecutor_StubEmitsEvent(t *testing.T) {
+func TestForkExecutor_RealImpl_FiresFork(t *testing.T) {
 	t.Parallel()
 	env := newTestEnv(&Graph{})
+	seam := NewFakeBranchSeam()
+	env.Branch = seam
 	ex := forkExecutor{}
 	node := &Node{ID: "fk", Kind: NodeKindFork, Attrs: ForkAttrs{Title: "child"}}
-	r, err := ex.Execute(context.Background(), env, node, nil)
+	r, err := ex.Execute(context.Background(), env, node,
+		PortValues{"context": "you are a helpful summary"})
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
 	if r.Outputs["branch_id"] == "" {
-		t.Error("expected synthetic branch_id")
+		t.Error("expected branch_id output")
 	}
-	var sawForkReq bool
+	if r.Outputs["child_session_id"] == "" {
+		t.Error("expected child_session_id output")
+	}
+	if len(seam.Forks) != 1 {
+		t.Fatalf("Fork calls = %d, want 1", len(seam.Forks))
+	}
+	if seam.Forks[0].HandoffPrompt != "you are a helpful summary" {
+		t.Errorf("handoff prompt = %q", seam.Forks[0].HandoffPrompt)
+	}
+	var sawForkReq, sawBranchFork bool
 	for _, e := range r.Events.Events {
 		if e.Kind == EventForkRequested {
 			sawForkReq = true
+		}
+		if e.Kind == EventBranchFork {
+			sawBranchFork = true
 		}
 	}
 	if !sawForkReq {
 		t.Error("missing fork_requested event")
 	}
+	if !sawBranchFork {
+		t.Error("missing branch_fork event")
+	}
 }
 
-func TestMergeExecutor_StubEmitsEvent(t *testing.T) {
+func TestForkExecutor_NoBranchSeam_Errors(t *testing.T) {
 	t.Parallel()
 	env := newTestEnv(&Graph{})
+	// applyEnvDefaults installs nilBranchSeam which errors.
+	ex := forkExecutor{}
+	node := &Node{ID: "fk", Kind: NodeKindFork, Attrs: ForkAttrs{Title: "child"}}
+	_, err := ex.Execute(context.Background(), env, node, nil)
+	if err == nil || !errors.Is(err, ErrNoBranchSeam) {
+		t.Fatalf("err = %v, want ErrNoBranchSeam", err)
+	}
+}
+
+func TestMergeExecutor_RealImpl_AppendsAndMarksMerged(t *testing.T) {
+	t.Parallel()
+	env := newTestEnv(&Graph{})
+	seam := NewFakeBranchSeam()
+	seam.ChildTails["b1"] = []Message{
+		{Role: "user", Content: "what's up?"},
+		{Role: "assistant", Content: "Done. Latest dep version is 1.2.3."},
+	}
+	env.Branch = seam
 	ex := mergeExecutor{}
-	node := &Node{ID: "mg", Kind: NodeKindMerge, Attrs: MergeAttrs{BranchID: "b1"}}
-	r, err := ex.Execute(context.Background(), env, node, PortValues{"branch": "b1", "branch_output": "result"})
+	node := &Node{ID: "mg", Kind: NodeKindMerge, Attrs: MergeAttrs{BranchID: "b1", Mode: "summarize_append"}}
+	r, err := ex.Execute(context.Background(), env, node, PortValues{"branch": "b1"})
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
-	var sawMergeReq bool
+	if r.Outputs["branch_id"] != "b1" {
+		t.Errorf("branch_id output = %v", r.Outputs["branch_id"])
+	}
+	if r.Outputs["summary_msg_id"] == "" {
+		t.Error("missing summary_msg_id")
+	}
+	if len(seam.ParentMessages) != 1 {
+		t.Fatalf("parent messages = %d, want 1", len(seam.ParentMessages))
+	}
+	if seam.ParentMessages[0].Role != "system" {
+		t.Errorf("role = %q, want system", seam.ParentMessages[0].Role)
+	}
+	if len(seam.Merged) != 1 || seam.Merged[0] != "b1" {
+		t.Errorf("Merged = %v, want [b1]", seam.Merged)
+	}
+	var sawMergeReq, sawBranchMerge bool
 	for _, e := range r.Events.Events {
 		if e.Kind == EventMergeRequest {
 			sawMergeReq = true
 		}
+		if e.Kind == EventBranchMerge {
+			sawBranchMerge = true
+		}
 	}
 	if !sawMergeReq {
 		t.Error("missing merge_requested event")
+	}
+	if !sawBranchMerge {
+		t.Error("missing branch_merge event")
+	}
+}
+
+func TestMergeExecutor_MissingBranchID_Errors(t *testing.T) {
+	t.Parallel()
+	env := newTestEnv(&Graph{})
+	env.Branch = NewFakeBranchSeam()
+	ex := mergeExecutor{}
+	// MergeAttrs with empty BranchID and no port → error.
+	node := &Node{ID: "mg", Kind: NodeKindMerge, Attrs: MergeAttrs{BranchID: ""}}
+	_, err := ex.Execute(context.Background(), env, node, nil)
+	if err == nil {
+		t.Fatal("expected error for missing branch id")
 	}
 }
 

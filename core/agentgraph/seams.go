@@ -445,4 +445,7 @@ func applyEnvDefaults(env *Env) {
 		env.Transforms = NewTransformRegistry()
 		BuiltinTransforms(env.Transforms)
 	}
+	if env.Branch == nil {
+		env.Branch = nilBranchSeam{}
+	}
 }

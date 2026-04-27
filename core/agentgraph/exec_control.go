@@ -2,6 +2,7 @@ package agentgraph
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -628,39 +629,127 @@ func (retryExecutor) Execute(ctx context.Context, env *Env, node *Node, inputs P
 	return res, fmt.Errorf("retry: node %q: exhausted %d attempts: %w", node.ID, a.MaxAttempts, lastErr)
 }
 
-// ---- ForkNode (STUB) ----
+// ---- ForkNode (real impl, Bundle B WP08) ----
 
 type forkExecutor struct{}
 
 func (forkExecutor) Kind() NodeKind { return NodeKindFork }
 
-func (forkExecutor) Execute(_ context.Context, env *Env, node *Node, _ PortValues) (Result, error) {
+func (forkExecutor) Execute(ctx context.Context, env *Env, node *Node, inputs PortValues) (Result, error) {
 	res := NewResult()
 	a, ok := node.Attrs.(ForkAttrs)
 	if !ok {
 		return res, fmt.Errorf("fork: node %q has wrong attrs type %T", node.ID, node.Attrs)
 	}
-	syntheticID := env.RunID + ":fork:" + node.ID
-	res.Outputs["branch_id"] = syntheticID
+	if env.Branch == nil {
+		// applyEnvDefaults installs nilBranchSeam, but defend against
+		// callers that built Env by hand.
+		return res, ErrNoBranchSeam
+	}
+
+	// Build the handoff prompt: spec FR-033 says the kernel "compacts"
+	// the parent context into a small initial-input message. v1 uses
+	// the input port "context" (an upstream Compaction or LLM node
+	// hands us a string) when present, else the upstream "messages"
+	// port flattened, else the parent's recent history.
+	handoff, _ := inputs.GetString("context")
+	if handoff == "" {
+		if v, ok := inputs.Get("messages"); ok {
+			handoff = flattenMessages(v)
+		}
+	}
+	if handoff == "" && env.History != nil {
+		msgs, _ := env.History.History(ctx, env.SessionID, 10)
+		handoff = flattenMessages(msgs)
+	}
+	if handoff == "" {
+		handoff = "Branch: " + a.Title
+	}
+
+	// Recommend a model. Order of precedence: explicit attr override,
+	// then the recommender, then the parent's current model (we don't
+	// have it here directly so the nil-recommender path leaves the
+	// model empty for downstream wiring to fill).
+	providerID := ""
+	modelID := a.ModelOverride
+	if env.Recommender != nil && a.ModelOverride == "" {
+		// Heuristic-only: we don't know the parent model from inside
+		// the kernel; the rpc layer (CreateBranch) is the more useful
+		// recommendation site. Here we just leave both empty so the
+		// seam's wiring picks the parent's model.
+		rec := env.Recommender.Recommend("", "", a.Title, "")
+		providerID = rec.ProviderID
+		modelID = rec.ModelID
+	}
+
+	req := ForkRequest{
+		ParentSessionID: env.SessionID,
+		Title:           a.Title,
+		HandoffPrompt:   handoff,
+		ProviderID:      providerID,
+		ModelID:         modelID,
+		ToolAllowlist:   append([]string(nil), a.ToolAllowlist...),
+		// MessageSubset is the CoW seed list — these are the parent
+		// message ids the child branch initially aliases.
+		ParentMessageIDs: append([]string(nil), a.MessageSubset...),
+	}
+
+	handle, err := env.Branch.Fork(ctx, req)
+	if err != nil {
+		_ = res.Events.AppendKind(env.RunID, node.ID, EventNodeError, map[string]any{
+			"err": err.Error(),
+		})
+		return res, fmt.Errorf("fork: node %q: %w", node.ID, err)
+	}
+
+	// Surface both the fork-requested signal (frontend listens for the
+	// "we're starting a branch" toast) AND the canonical branch_fork
+	// event the EventLog projection consumes.
 	_ = res.Events.AppendKind(env.RunID, node.ID, EventForkRequested, map[string]any{
 		"title":          a.Title,
-		"branch_id":      syntheticID,
+		"branch_id":      handle.BranchID,
+		"child_session":  handle.ChildSessionID,
 		"model_override": a.ModelOverride,
+		"provider_id":    providerID,
+		"model_id":       modelID,
 	})
+	_ = res.Events.AppendKind(env.RunID, node.ID, EventBranchFork, map[string]any{
+		"branch_id":     handle.BranchID,
+		"child_session": handle.ChildSessionID,
+		"title":         a.Title,
+	})
+
+	// Fire the pre-branch-fork hook (FR-027).
+	if env.Hooks != nil {
+		hookBatch := env.Hooks.Fire(ctx, HookPreBranchFork, "session",
+			"branch fork: "+a.Title, handoff, "fork")
+		for _, e := range hookBatch.Events {
+			res.Events.Append(e)
+		}
+	}
+
+	res.Outputs["branch_id"] = handle.BranchID
+	res.Outputs["child_session_id"] = handle.ChildSessionID
 	return res, nil
 }
 
-// ---- MergeNode (STUB) ----
+// ---- MergeNode (real impl, Bundle B WP08) ----
 
 type mergeExecutor struct{}
 
 func (mergeExecutor) Kind() NodeKind { return NodeKindMerge }
 
-func (mergeExecutor) Execute(_ context.Context, env *Env, node *Node, inputs PortValues) (Result, error) {
+// Default tail length pulled from the child for compaction.
+const mergeDefaultTail = 10
+
+func (mergeExecutor) Execute(ctx context.Context, env *Env, node *Node, inputs PortValues) (Result, error) {
 	res := NewResult()
 	a, ok := node.Attrs.(MergeAttrs)
 	if !ok {
 		return res, fmt.Errorf("merge: node %q has wrong attrs type %T", node.ID, node.Attrs)
+	}
+	if env.Branch == nil {
+		return res, ErrNoBranchSeam
 	}
 	mode := a.Mode
 	if mode == "" {
@@ -670,16 +759,149 @@ func (mergeExecutor) Execute(_ context.Context, env *Env, node *Node, inputs Por
 	if branchID == "" {
 		branchID = a.BranchID
 	}
+	if branchID == "" {
+		return res, fmt.Errorf("merge: node %q: no branch id (attrs.BranchID empty + no port)", node.ID)
+	}
 
-	// Trivial append: mirror the branch_output back as the merged
-	// output. Real impl in WP08.
-	out := PortValues{"merged": inputs["branch_output"]}
-	res.Outputs = out
+	// Wait for the child run to complete (or be manually marked done).
+	// The fake seam returns immediately when CompleteAfter == 0, so this
+	// is fast in tests.
+	if err := env.Branch.WaitForChildRun(ctx, branchID); err != nil && !errors.Is(err, ErrNoBranchSeam) {
+		_ = res.Events.AppendKind(env.RunID, node.ID, EventNodeError, map[string]any{
+			"err": err.Error(),
+		})
+		return res, fmt.Errorf("merge: node %q: wait child: %w", node.ID, err)
+	}
+
+	// Pull the child's recent tail.
+	tail, err := env.Branch.PullChildTail(ctx, branchID, mergeDefaultTail)
+	if err != nil {
+		_ = res.Events.AppendKind(env.RunID, node.ID, EventNodeError, map[string]any{
+			"err": err.Error(),
+		})
+		return res, fmt.Errorf("merge: node %q: pull tail: %w", node.ID, err)
+	}
+
+	// Compact the tail into a summary. v1 keeps this trivial: when an
+	// LLMProvider is configured and a summary mode is requested, ask
+	// the provider for a one-paragraph summary; otherwise concatenate
+	// the assistant turns. Spec FR-034 calls out "summary strategy by
+	// default" — the v1 implementation is the cheapest viable path.
+	summary := summarizeTail(ctx, env, tail, mode)
+
+	// Build the merge message that lands on the parent. Modes:
+	//   - append            — verbatim child tail concatenation.
+	//   - summarize_append  — summary paragraph (default).
+	//   - replace_last_turn — same content as summarize_append; the
+	//     frontend semantics differ (it removes the parent's last
+	//     assistant turn before appending). v1 stores the same content.
+	parentMsgID, err := env.Branch.AppendToParent(ctx, branchID, "system", summary)
+	if err != nil {
+		_ = res.Events.AppendKind(env.RunID, node.ID, EventNodeError, map[string]any{
+			"err": err.Error(),
+		})
+		return res, fmt.Errorf("merge: node %q: append parent: %w", node.ID, err)
+	}
+
+	if err := env.Branch.MarkMerged(ctx, branchID); err != nil {
+		_ = res.Events.AppendKind(env.RunID, node.ID, EventNodeError, map[string]any{
+			"err": err.Error(),
+		})
+		return res, fmt.Errorf("merge: node %q: mark merged: %w", node.ID, err)
+	}
+
 	_ = res.Events.AppendKind(env.RunID, node.ID, EventMergeRequest, map[string]any{
 		"branch_id": branchID,
 		"mode":      mode,
 	})
+	_ = res.Events.AppendKind(env.RunID, node.ID, EventBranchMerge, map[string]any{
+		"branch_id":      branchID,
+		"mode":           mode,
+		"summary_msg_id": parentMsgID,
+	})
+
+	if env.Hooks != nil {
+		hookBatch := env.Hooks.Fire(ctx, HookOnMerge, "session",
+			"branch merge", summary, "merge")
+		for _, e := range hookBatch.Events {
+			res.Events.Append(e)
+		}
+	}
+
+	res.Outputs["merged"] = summary
+	res.Outputs["summary_msg_id"] = parentMsgID
+	res.Outputs["branch_id"] = branchID
 	return res, nil
+}
+
+// flattenMessages turns whatever upstream produced — a []Message, an
+// []any, or a string — into a single string usable as a handoff prompt.
+func flattenMessages(v any) string {
+	switch typed := v.(type) {
+	case nil:
+		return ""
+	case string:
+		return typed
+	case []Message:
+		var b strings.Builder
+		for _, m := range typed {
+			b.WriteString(m.Role)
+			b.WriteString(": ")
+			b.WriteString(m.Content)
+			b.WriteString("\n")
+		}
+		return b.String()
+	case []any:
+		var b strings.Builder
+		for _, raw := range typed {
+			if m, ok := raw.(Message); ok {
+				b.WriteString(m.Role)
+				b.WriteString(": ")
+				b.WriteString(m.Content)
+				b.WriteString("\n")
+			}
+		}
+		return b.String()
+	}
+	return ""
+}
+
+// summarizeTail collapses a tail of Messages into a summary suitable
+// for the parent session. v1 is intentionally crude: when an LLM
+// provider is configured we fire a single Generate call with a tight
+// system prompt; otherwise we concatenate assistant turns and prefix
+// "Branch summary:". Either path yields a one-paragraph string.
+func summarizeTail(ctx context.Context, env *Env, tail []Message, mode string) string {
+	if len(tail) == 0 {
+		return "Branch closed with no new turns."
+	}
+	if env.LLM != nil {
+		// Wrap the tail into a summary request; if the provider returns
+		// an error we fall back to the concat path silently.
+		req := LLMRequest{
+			Provider:     "",
+			Model:        "",
+			SystemPrompt: "Summarize the conversation below into a single concise paragraph for the parent session. Do not include speculation.",
+			Messages:     tail,
+			MaxTokens:    256,
+		}
+		if resp, err := env.LLM.Generate(ctx, req); err == nil && resp.Content != "" {
+			return "Branch summary: " + strings.TrimSpace(resp.Content)
+		}
+	}
+	// Fallback: concat the assistant turns with a short prefix.
+	var b strings.Builder
+	b.WriteString("Branch summary (")
+	b.WriteString(mode)
+	b.WriteString("):\n")
+	for _, m := range tail {
+		if m.Role == "assistant" {
+			b.WriteString("- ")
+			b.WriteString(strings.TrimSpace(m.Content))
+			b.WriteString("\n")
+		}
+	}
+	return b.String()
 }
 
 // ---- helpers ----

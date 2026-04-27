@@ -22,6 +22,9 @@ import MessageList from '@/components/chat/MessageList.vue';
 import ChatInput from '@/components/chat/ChatInput.vue';
 import ResolvedContextPanel from '@/views/sessions/ResolvedContextPanel.vue';
 import ConfirmToolModal from '@/components/chat/ConfirmToolModal.vue';
+import BranchSidebar from '@/components/chat/BranchSidebar.vue';
+import CreateBranchModal from '@/components/chat/CreateBranchModal.vue';
+import MergeSuggestionToast from '@/components/chat/MergeSuggestionToast.vue';
 import ArtifactPreview from '@/views/artifacts/ArtifactPreview.vue';
 import { useArtifacts, useHarnessClient, useSessions } from '@/lib/useHarnessAPI';
 import { useSession } from '@/lib/useSession';
@@ -426,6 +429,19 @@ function openNewSession() {
 async function onNewSessionDialogClose() {
   newSessionDialogOpen.value = false;
   await refreshSessions();
+}
+
+// ── branches sidebar (agent-kernel-graph; Bundle B WP09) ──────────────
+const createBranchModalOpen = ref(false);
+function openCreateBranchModal() {
+  createBranchModalOpen.value = true;
+}
+function closeCreateBranchModal() {
+  createBranchModalOpen.value = false;
+}
+function onBranchOpen(childSessionId: string) {
+  if (!childSessionId) return;
+  void router.push(`/sessions/${childSessionId}`);
 }
 
 const hasAnyProvider = computed(() => providers.value.length > 0);
@@ -860,7 +876,7 @@ function formatSize(bytes: number): string {
         >
           {{ lastArtifactError }}
         </div>
-        <div v-if="activeTab === 'chat'" class="flex-1 min-h-0">
+        <div v-if="activeTab === 'chat'" class="flex-1 min-h-0 grid grid-cols-[1fr_auto]">
           <MessageList
             :messages="visibleMessages"
             :streaming-message="session.currentlyStreaming.value"
@@ -873,6 +889,13 @@ function formatSize(bytes: number): string {
             @remember="onRemember"
             @save-artifact="onSaveArtifactFromMessage"
             @open-artifact="openArtifactPreview"
+          />
+          <BranchSidebar
+            v-if="hasSession"
+            :parent-session-id="sessionId"
+            class="w-64 hidden lg:flex"
+            @open="onBranchOpen"
+            @create="openCreateBranchModal"
           />
         </div>
         <div
@@ -955,6 +978,14 @@ function formatSize(bytes: number): string {
       @close="onNewSessionDialogClose"
     />
     <ConfirmToolModal />
+    <CreateBranchModal
+      v-if="hasSession"
+      :parent-session-id="sessionId"
+      :open="createBranchModalOpen"
+      @close="closeCreateBranchModal"
+      @created="closeCreateBranchModal"
+    />
+    <MergeSuggestionToast />
     <ArtifactPreview
       :open="artifactPreviewOpen"
       :payload="artifactPreviewPayload"

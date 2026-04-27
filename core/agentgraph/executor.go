@@ -154,6 +154,20 @@ type Env struct {
 	// Hooks fires greedy memory-write hooks at kernel boundaries.
 	Hooks *HookManager
 
+	// Branch is the BranchSeam for ForkNode/MergeNode. nil installs the
+	// nilBranchSeam stub which errors with ErrNoBranchSeam — the
+	// chat surface surfaces this as "branching not enabled in this build".
+	Branch BranchSeam
+
+	// Recommender suggests a (provider, model) for forks. nil disables
+	// the recommendation chip; ForkNode falls back to ModelOverride or
+	// the parent model.
+	Recommender *BranchRecommender
+
+	// MergeSuggester powers the kernel's "merge?" toast. nil disables
+	// the suggestion stream.
+	MergeSuggester *MergeSuggester
+
 	// registry is the executor lookup table the control executors
 	// (Loop, Retry, Parallel) use to dispatch into peer nodes. The
 	// kernel sets this on entry to Run(); leaving it nil falls back
