@@ -1,0 +1,31 @@
+# validate.yaml — validates an output structure / claim.
+#
+# Bundle A WP05. Wraps a ReviewNode bounded at 3 iterations against a
+# transform that normalises the upstream payload. ReviewNode pass/fail
+# semantics drive the activity's terminal state; cap-hit emits the
+# unrecoverable event the kernel surfaces to the user.
+spec_version: "1"
+id: "validate"
+name: "Validate a claim or structure"
+description: |
+  Pipes the upstream node's output through a `parseJSON` transform and
+  hands it to a ReviewNode. The reviewer either passes or re-runs
+  upstream until the cap is hit (3 iterations).
+entrypoints:
+  - normalize
+nodes:
+  - id: normalize
+    kind: transform
+    title: "Parse JSON candidate"
+    attrs:
+      name: parseJSON
+  - id: reviewer
+    kind: review
+    title: "Reviewer pass"
+    attrs:
+      upstream_node: normalize
+      max_iterations: 3
+      on_cap_hit: halt
+edges:
+  - from: { node: normalize, port: out }
+    to:   { node: reviewer, port: draft }

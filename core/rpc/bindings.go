@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/a2a"
+	graphview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/agentgraph"
 	artifactsview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/artifacts"
 	attachmentsview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/attachments"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/audit"
@@ -618,4 +619,37 @@ func (b *Bindings) Corpus_JobStatus(jobID string) (corpusview.IngestStatus, erro
 }
 func (b *Bindings) Corpus_Retrieve(corpusID string, req corpusview.RetrieveRequest) (corpusview.RetrieveResponse, error) {
 	return b.api.Corpus().Retrieve(b.ctx(), corpusID, req)
+}
+
+// ── agent graph (mission agent-kernel-graph; Bundle A WP06) ─────────
+
+func (b *Bindings) Graph_ListGraphs(scope string) ([]graphview.GraphInfo, error) {
+	return b.api.Graph().ListGraphs(b.ctx(), scope)
+}
+func (b *Bindings) Graph_LoadGraph(id string) (graphview.GraphSpec, error) {
+	return b.api.Graph().LoadGraph(b.ctx(), id)
+}
+func (b *Bindings) Graph_SaveGraph(spec graphview.GraphSpec) error {
+	return b.api.Graph().SaveGraph(b.ctx(), spec)
+}
+func (b *Bindings) Graph_DeleteGraph(id string) error {
+	return b.api.Graph().DeleteGraph(b.ctx(), id)
+}
+func (b *Bindings) Graph_Validate(yaml string) (graphview.ValidationResult, error) {
+	return b.api.Graph().Validate(b.ctx(), yaml)
+}
+func (b *Bindings) Graph_StartRun(req graphview.StartRunRequest) (graphview.StartRunResponse, error) {
+	return b.api.Graph().StartRun(b.ctx(), req)
+}
+func (b *Bindings) Graph_GetRunStatus(runID string) (graphview.RunStatus, error) {
+	return b.api.Graph().GetRunStatus(b.ctx(), runID)
+}
+func (b *Bindings) Graph_GetRunTrace(runID string, since int64) ([]graphview.RunTraceEvent, error) {
+	return b.api.Graph().GetRunTrace(b.ctx(), runID, since)
+}
+func (b *Bindings) Graph_Resume(runID, askResponse string) error {
+	return b.api.Graph().Resume(b.ctx(), runID, askResponse)
+}
+func (b *Bindings) Graph_CancelRun(runID string) error {
+	return b.api.Graph().CancelRun(b.ctx(), runID)
 }

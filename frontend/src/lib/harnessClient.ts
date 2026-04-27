@@ -69,6 +69,14 @@ import type {
   CorpusCreateRequest,
   CorpusRetrieveRequest,
   CorpusRetrieveResponse,
+  GraphInfo,
+  GraphScope,
+  GraphSpec,
+  GraphValidationResult,
+  GraphRunStatus,
+  GraphRunTraceEvent,
+  GraphStartRunRequest,
+  GraphStartRunResponse,
 } from './types';
 
 /**
@@ -282,6 +290,20 @@ interface WailsBindingsLike {
     corpusID: string,
     req: CorpusRetrieveRequest,
   ): Promise<CorpusRetrieveResponse>;
+
+  Graph_ListGraphs(scope: GraphScope): Promise<GraphInfo[]>;
+  Graph_LoadGraph(id: string): Promise<GraphSpec>;
+  Graph_SaveGraph(spec: GraphSpec): Promise<void>;
+  Graph_DeleteGraph(id: string): Promise<void>;
+  Graph_Validate(yaml: string): Promise<GraphValidationResult>;
+  Graph_StartRun(req: GraphStartRunRequest): Promise<GraphStartRunResponse>;
+  Graph_GetRunStatus(runID: string): Promise<GraphRunStatus>;
+  Graph_GetRunTrace(
+    runID: string,
+    since: number,
+  ): Promise<GraphRunTraceEvent[]>;
+  Graph_Resume(runID: string, askResponse: string): Promise<void>;
+  Graph_CancelRun(runID: string): Promise<void>;
 }
 
 /**
@@ -986,6 +1008,33 @@ export interface CorpusClient {
   ): Promise<CorpusRetrieveResponse>;
 }
 
+/**
+ * GraphClient — the agent-graph subsystem (mission agent-kernel-graph;
+ * Bundle A WP06). Backs the /agentgraph route's three surfaces:
+ *
+ *   - listGraphs / loadGraph / saveGraph / deleteGraph drive the library
+ *     listing + the editor.
+ *   - validate runs the kernel's validator without persisting.
+ *   - startRun / getRunStatus / getRunTrace / resume / cancelRun expose
+ *     the kernel run lifecycle to the RunView.
+ *
+ * The Go side persists user graph specs at
+ * `<DataDir>/agent_graph/library/<id>.yaml`. The bundled library
+ * (`toolloop_default`) is read-only.
+ */
+export interface GraphClient {
+  listGraphs(scope: GraphScope): Promise<GraphInfo[]>;
+  loadGraph(id: string): Promise<GraphSpec>;
+  saveGraph(spec: GraphSpec): Promise<void>;
+  deleteGraph(id: string): Promise<void>;
+  validate(yaml: string): Promise<GraphValidationResult>;
+  startRun(req: GraphStartRunRequest): Promise<GraphStartRunResponse>;
+  getRunStatus(runID: string): Promise<GraphRunStatus>;
+  getRunTrace(runID: string, since: number): Promise<GraphRunTraceEvent[]>;
+  resume(runID: string, askResponse: string): Promise<void>;
+  cancelRun(runID: string): Promise<void>;
+}
+
 export interface HarnessClient {
   shellStatus(): Promise<ShellStatus>;
   appInfo(): Promise<AppInfo>;
@@ -1011,6 +1060,7 @@ export interface HarnessClient {
   slash: SlashClient;
   artifacts: ArtifactsClient;
   corpus: CorpusClient;
+  graph: GraphClient;
 }
 
 // ── runtime client ─────────────────────────────────────────────────────
@@ -1236,6 +1286,18 @@ export function createHarnessClient(): HarnessClient {
       ingestPath: (id, path, opts) => b().Corpus_IngestPath(id, path, opts),
       jobStatus: (jobID) => b().Corpus_JobStatus(jobID),
       retrieve: (id, req) => b().Corpus_Retrieve(id, req),
+    },
+    graph: {
+      listGraphs: (scope) => b().Graph_ListGraphs(scope),
+      loadGraph: (id) => b().Graph_LoadGraph(id),
+      saveGraph: (spec) => b().Graph_SaveGraph(spec),
+      deleteGraph: (id) => b().Graph_DeleteGraph(id),
+      validate: (yaml) => b().Graph_Validate(yaml),
+      startRun: (req) => b().Graph_StartRun(req),
+      getRunStatus: (runID) => b().Graph_GetRunStatus(runID),
+      getRunTrace: (runID, since) => b().Graph_GetRunTrace(runID, since),
+      resume: (runID, askResponse) => b().Graph_Resume(runID, askResponse),
+      cancelRun: (runID) => b().Graph_CancelRun(runID),
     },
   };
 }
@@ -1636,6 +1698,47 @@ export function createFakeHarnessClient(
         updatedAt: new Date().toISOString(),
       }),
       retrieve: async () => ({ results: [], dropped: 0 }),
+    },
+    graph: {
+      listGraphs: async () => [],
+      loadGraph: async (id) => ({
+        id,
+        scope: 'library' as const,
+        yaml: '',
+      }),
+      saveGraph: noop,
+      deleteGraph: noop,
+      validate: async () => ({ ok: true, issues: [] }),
+      startRun: async (req) => ({
+        runId: 'fake-run',
+        status: {
+          runId: 'fake-run',
+          graphId: req.graphId,
+          state: 'running',
+          startedAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+          nodesComplete: 0,
+          llmTokens: 0,
+          llmCalls: 0,
+          toolCalls: 0,
+          costUsd: 0,
+        },
+      }),
+      getRunStatus: async (runID) => ({
+        runId: runID,
+        graphId: 'fake-graph',
+        state: 'completed',
+        startedAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        nodesComplete: 0,
+        llmTokens: 0,
+        llmCalls: 0,
+        toolCalls: 0,
+        costUsd: 0,
+      }),
+      getRunTrace: async () => [],
+      resume: noop,
+      cancelRun: noop,
     },
   };
 

@@ -83,6 +83,21 @@ const router = createRouter({
       name: 'corpus-detail',
       component: () => import('@/views/corpora/CorpusDetail.vue'),
     },
+    {
+      path: '/agentgraph',
+      name: 'graphs',
+      component: () => import('@/views/agentgraph/GraphsView.vue'),
+    },
+    {
+      path: '/agentgraph/edit/:id',
+      name: 'graph-editor',
+      component: () => import('@/views/agentgraph/GraphEditor.vue'),
+    },
+    {
+      path: '/agentgraph/run/:runId',
+      name: 'graph-run',
+      component: () => import('@/views/agentgraph/RunView.vue'),
+    },
   ],
 });
 
