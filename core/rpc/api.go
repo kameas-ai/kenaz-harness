@@ -37,6 +37,7 @@ import (
 	attachmentsview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/attachments"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/audit"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/bundle"
+	compactionview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/compaction"
 	contextsview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/contexts"
 	contextview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/contextview"
 	corpusview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/corpus"
@@ -92,6 +93,7 @@ type HarnessAPI interface {
 	Slash() slashview.SlashAPI
 	Corpus() corpusview.CorpusAPI
 	Graph() graphview.API
+	Compaction() compactionview.CompactionAPI
 }
 
 // ShellStatus drives the Toolbar status pills + LegendBar live-rate
@@ -162,6 +164,7 @@ type API struct {
 	corpusAPI       corpusview.CorpusAPI
 	graphMgr        *graphview.Manager
 	graphAPI        graphview.API
+	compactionAPI   compactionview.CompactionAPI
 
 	// stdioPool is the production *stdio.Pool wired into newLLMStack.
 	// Held on the API value so the tools view's InstallRecipe /
@@ -1722,6 +1725,24 @@ func (a *API) Graph() graphview.API {
 		return graphview.New(nil)
 	}
 	return a.graphAPI
+}
+
+// Compaction returns the configurable-compaction view (mission
+// agent-kernel-graph; Bundle D WP12/WP13). The defensive nil-pipeline
+// branch keeps parallel-agent edits safe: callers may construct an
+// API value before the kernel wires the pipeline in.
+func (a *API) Compaction() compactionview.CompactionAPI {
+	if a.compactionAPI == nil {
+		return compactionview.New(nil)
+	}
+	return a.compactionAPI
+}
+
+// SetCompactionAPI wires the compaction view onto the API. Production
+// chassis calls this once the kernel constructs its pipeline; tests
+// pass a fake.
+func (a *API) SetCompactionAPI(c compactionview.CompactionAPI) {
+	a.compactionAPI = c
 }
 
 // Bindings returns the slice of Wails-bound objects. The Bindings struct

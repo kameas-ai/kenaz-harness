@@ -49,6 +49,37 @@ func (llmExecutor) Execute(ctx context.Context, env *Env, node *Node, inputs Por
 	// Tool allowlist comes from attrs.
 	tools := append([]string(nil), a.ToolAllowlist...)
 
+	// Pre-call compaction (FR-041 site #1). The kernel's Compactor
+	// looks at the prepared message slice + max_tokens budget and,
+	// if the cascading config says "fire at pre_call", returns the
+	// compacted messages. Errors from the compactor short-circuit the
+	// LLM call so a misconfigured strategy never silently runs an
+	// over-budget request.
+	if env.Compactor != nil {
+		ci := CompactionInput{
+			Site:          CompactionSitePreCall,
+			RunID:         env.RunID,
+			NodeID:        node.ID,
+			SessionID:     env.SessionID,
+			ProjectID:     env.ProjectID,
+			SystemPrompt:  a.SystemPrompt,
+			Messages:      msgs,
+			TargetTokens:  a.MaxTokens,
+			CurrentTokens: estimateTokens(msgs),
+		}
+		co, err := env.Compactor.Compact(ctx, ci)
+		if err != nil {
+			_ = res.Events.AppendKind(env.RunID, node.ID, EventNodeError, map[string]any{
+				"err": err.Error(),
+				"at":  "compaction.pre_call",
+			})
+			return res, fmt.Errorf("llm: node %q: pre-call compaction: %w", node.ID, err)
+		}
+		if !co.Skipped && len(co.Messages) > 0 {
+			msgs = co.Messages
+		}
+	}
+
 	req := LLMRequest{
 		Provider:     a.Provider,
 		Model:        a.Model,
@@ -182,6 +213,44 @@ func (toolExecutor) Execute(ctx context.Context, env *Env, node *Node, inputs Po
 		return res, fmt.Errorf("tool: node %q (%s): %w", node.ID, a.Name, err)
 	}
 
+	// Post-tool compaction (FR-041 site #2). The pipeline decides
+	// whether to fire based on result byte size + cascading config.
+	// We hand the result content as a single Message so every
+	// strategy sees a uniform input shape; on success we replace
+	// tr.Content with the compacted message's content.
+	if env.Compactor != nil && tr.Content != "" {
+		ci := CompactionInput{
+			Site:          CompactionSitePostTool,
+			RunID:         env.RunID,
+			NodeID:        node.ID,
+			SessionID:     env.SessionID,
+			ProjectID:     env.ProjectID,
+			Messages:      []Message{{Role: "tool", Name: a.Name, Content: tr.Content}},
+			CurrentTokens: estimateTokens([]Message{{Content: tr.Content}}),
+		}
+		co, err := env.Compactor.Compact(ctx, ci)
+		if err != nil {
+			_ = res.Events.AppendKind(env.RunID, node.ID, EventNodeError, map[string]any{
+				"err": err.Error(),
+				"at":  "compaction.post_tool",
+			})
+			return res, fmt.Errorf("tool: node %q: post-tool compaction: %w", node.ID, err)
+		}
+		if !co.Skipped && len(co.Messages) > 0 {
+			// Concatenate compacted messages' content; the kernel does
+			// not introspect tool result structure beyond the raw
+			// string today.
+			var sb strings.Builder
+			for i, m := range co.Messages {
+				if i > 0 {
+					sb.WriteByte('\n')
+				}
+				sb.WriteString(m.Content)
+			}
+			tr.Content = sb.String()
+		}
+	}
+
 	res.Outputs["result"] = tr
 	_ = res.Events.AppendKind(env.RunID, node.ID, EventToolResult, map[string]any{
 		"tool":     a.Name,
@@ -200,6 +269,18 @@ func (toolExecutor) Execute(ctx context.Context, env *Env, node *Node, inputs Po
 		}
 	}
 	return res, nil
+}
+
+// estimateTokens approximates the token count of a message slice
+// using the rule-of-thumb 4 bytes / token. The kernel uses this for
+// the pre-call compaction threshold check; the canonical token count
+// still comes from the LLM provider on the response side.
+func estimateTokens(ms []Message) int {
+	n := 0
+	for _, m := range ms {
+		n += len(m.Content) + len(m.Name)
+	}
+	return (n + 3) / 4
 }
 
 // ---- TransformNode ----

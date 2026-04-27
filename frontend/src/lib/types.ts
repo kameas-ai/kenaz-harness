@@ -1056,3 +1056,114 @@ export interface GraphStartRunResponse {
   runId: string;
   status: GraphRunStatus;
 }
+
+// ── compaction (mission agent-kernel-graph; Bundle D WP12/WP13) ──────
+
+/**
+ * CompactionSite labels the kernel firing point that triggered a
+ * compaction. Three sites: token-budget pre-call, post-tool result
+ * trim, and the user-facing manual trigger.
+ */
+export type CompactionSite = 'pre_call' | 'post_tool' | 'manual';
+
+/**
+ * CompactionStrategy identifies one of the four compaction algorithms
+ * the kernel ships out of the box.
+ */
+export type CompactionStrategy =
+  | 'summary'
+  | 'drop_oldest'
+  | 'semantic_cluster'
+  | 'custom_subgraph';
+
+/**
+ * CompactionLayer identifies one rung in the cascading-config chain.
+ * The resolver walks global → project → session → run → node and
+ * merges the layers; per-node config wins where set.
+ */
+export type CompactionLayer =
+  | 'global'
+  | 'project'
+  | 'session'
+  | 'run'
+  | 'node';
+
+/**
+ * CompactionSiteConfig is the per-site, per-layer configuration shape.
+ * Empty fields fall through to the next layer.
+ */
+export interface CompactionSiteConfig {
+  enabled: boolean;
+  strategy?: CompactionStrategy;
+  preCallThreshold?: number;
+  toolResultMaxBytes?: number;
+  maxRecursionDepth?: number;
+  dropOldestKeepRecentN?: number;
+  semanticClusterCount?: number;
+  summaryProvider?: string;
+  summaryModel?: string;
+  subgraphInputPort?: string;
+  subgraphOutputPort?: string;
+  customGraphId?: string;
+}
+
+/**
+ * CompactionConfig is one layer's contribution. The resolver
+ * persists one of these per (layer, scopeId) pair.
+ */
+export interface CompactionConfig {
+  sites?: Partial<Record<CompactionSite, CompactionSiteConfig>>;
+}
+
+/**
+ * CompactionEffectiveConfig is the merged-cascade view: the effective
+ * value for each field plus a per-(site, field) attribution map
+ * showing which layer ultimately supplied each value.
+ */
+export interface CompactionEffectiveConfig {
+  config: CompactionConfig;
+  attribution: Partial<Record<CompactionSite, Record<string, CompactionLayer>>>;
+}
+
+/**
+ * CompactionScopeKey identifies a resolution chain. Empty fields fall
+ * through to the next layer.
+ */
+export interface CompactionScopeKey {
+  projectId?: string;
+  sessionId?: string;
+  runId?: string;
+  nodeId?: string;
+}
+
+/**
+ * CompactionCustomStrategy is one row in the agent-graph library that
+ * is wired as a custom_subgraph compaction strategy.
+ */
+export interface CompactionCustomStrategy {
+  graphId: string;
+  name: string;
+  description?: string;
+}
+
+/**
+ * CompactionManualOpts narrow the manual-compaction trigger.
+ */
+export interface CompactionManualOpts {
+  strategy?: CompactionStrategy;
+  dropOldestKeepRecentN?: number;
+  semanticClusterCount?: number;
+  summaryProvider?: string;
+  summaryModel?: string;
+  customGraphId?: string;
+}
+
+/**
+ * CompactionManualResult is what TriggerManualCompaction returns.
+ */
+export interface CompactionManualResult {
+  strategy: CompactionStrategy;
+  bytesSaved: number;
+  skipped?: boolean;
+  reason?: string;
+}

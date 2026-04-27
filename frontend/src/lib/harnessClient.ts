@@ -77,6 +77,13 @@ import type {
   GraphRunTraceEvent,
   GraphStartRunRequest,
   GraphStartRunResponse,
+  CompactionConfig,
+  CompactionCustomStrategy,
+  CompactionEffectiveConfig,
+  CompactionLayer,
+  CompactionManualOpts,
+  CompactionManualResult,
+  CompactionScopeKey,
 } from './types';
 
 /**
@@ -304,6 +311,24 @@ interface WailsBindingsLike {
   ): Promise<GraphRunTraceEvent[]>;
   Graph_Resume(runID: string, askResponse: string): Promise<void>;
   Graph_CancelRun(runID: string): Promise<void>;
+
+  Compaction_GetConfig(
+    layer: CompactionLayer,
+    scopeID: string,
+  ): Promise<CompactionConfig>;
+  Compaction_GetEffective(
+    scope: CompactionScopeKey,
+  ): Promise<CompactionEffectiveConfig>;
+  Compaction_SetConfig(
+    layer: CompactionLayer,
+    scopeID: string,
+    cfg: CompactionConfig,
+  ): Promise<void>;
+  Compaction_TriggerManual(
+    sessionID: string,
+    opts: CompactionManualOpts,
+  ): Promise<CompactionManualResult>;
+  Compaction_ListCustomStrategies(): Promise<CompactionCustomStrategy[]>;
 }
 
 /**
@@ -1035,6 +1060,32 @@ export interface GraphClient {
   cancelRun(runID: string): Promise<void>;
 }
 
+/**
+ * CompactionClient — view-scoped client for the configurable
+ * compaction subsystem (mission agent-kernel-graph; Bundle D
+ * WP12/WP13). Three operations:
+ *
+ *   - getConfig / setConfig — read/write one persisted layer.
+ *   - getEffective — fetch the merged-cascade view + attribution.
+ *   - triggerManualCompaction — fire the manual site for a session.
+ *   - listCustomStrategies — agent-graph library entries available
+ *     as custom_subgraph strategies.
+ */
+export interface CompactionClient {
+  getConfig(layer: CompactionLayer, scopeID: string): Promise<CompactionConfig>;
+  getEffective(scope: CompactionScopeKey): Promise<CompactionEffectiveConfig>;
+  setConfig(
+    layer: CompactionLayer,
+    scopeID: string,
+    cfg: CompactionConfig,
+  ): Promise<void>;
+  triggerManualCompaction(
+    sessionID: string,
+    opts: CompactionManualOpts,
+  ): Promise<CompactionManualResult>;
+  listCustomStrategies(): Promise<CompactionCustomStrategy[]>;
+}
+
 export interface HarnessClient {
   shellStatus(): Promise<ShellStatus>;
   appInfo(): Promise<AppInfo>;
@@ -1061,6 +1112,7 @@ export interface HarnessClient {
   artifacts: ArtifactsClient;
   corpus: CorpusClient;
   graph: GraphClient;
+  compaction: CompactionClient;
 }
 
 // ── runtime client ─────────────────────────────────────────────────────
@@ -1298,6 +1350,15 @@ export function createHarnessClient(): HarnessClient {
       getRunTrace: (runID, since) => b().Graph_GetRunTrace(runID, since),
       resume: (runID, askResponse) => b().Graph_Resume(runID, askResponse),
       cancelRun: (runID) => b().Graph_CancelRun(runID),
+    },
+    compaction: {
+      getConfig: (layer, scopeID) => b().Compaction_GetConfig(layer, scopeID),
+      getEffective: (scope) => b().Compaction_GetEffective(scope),
+      setConfig: (layer, scopeID, cfg) =>
+        b().Compaction_SetConfig(layer, scopeID, cfg),
+      triggerManualCompaction: (sessionID, opts) =>
+        b().Compaction_TriggerManual(sessionID, opts),
+      listCustomStrategies: () => b().Compaction_ListCustomStrategies(),
     },
   };
 }
@@ -1739,6 +1800,19 @@ export function createFakeHarnessClient(
       getRunTrace: async () => [],
       resume: noop,
       cancelRun: noop,
+    },
+    compaction: {
+      getConfig: async () => ({ sites: {} }),
+      getEffective: async () => ({
+        config: { sites: {} },
+        attribution: {},
+      }),
+      setConfig: noop,
+      triggerManualCompaction: async () => ({
+        strategy: 'drop_oldest',
+        bytesSaved: 0,
+      }),
+      listCustomStrategies: async () => [],
     },
   };
 
