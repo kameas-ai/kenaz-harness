@@ -4,6 +4,8 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+
+	"github.com/sigil-tech/kaneaz-harness/core/agentgraph/nodes"
 )
 
 // KnownDials is the canonical list of dial names the validator accepts
@@ -67,6 +69,18 @@ type validateConfig struct {
 	// extraDials are author-specific dial names accepted on top of
 	// KnownDials. Empty in WP01.
 	extraDials map[string]dialSpec
+	// catalog drives the manifest-driven validation rules (WP03 /
+	// FR-013..FR-016). Nil means "fall back to package default" — the
+	// validator lazily loads shipped manifests on first use. Tests
+	// inject a fake via WithCatalog to drive deterministic catalogs
+	// without filesystem coupling.
+	catalog CatalogProvider
+	// catalogExplicit records whether the caller injected a catalog
+	// (true) or whether we should fall back to the package default
+	// (false). When true and catalog is nil, the manifest path is
+	// disabled outright — useful for tests asserting hand-coded
+	// behaviour.
+	catalogExplicit bool
 }
 
 // WithActivityRegistry plugs in a custom registry. Use it in tests
@@ -123,10 +137,29 @@ func (e *ValidationError) Has(substr string) bool {
 // Validate runs every WP01 rule against the spec and returns nil on
 // success or a *ValidationError on failure. Callers should call this
 // at load time before handing the graph to the kernel.
+//
+// The validator drives per-kind attr / port checks off the resolved
+// manifest catalog (WP03 / FR-013). Graph-level concerns — cycle
+// detection, orphan detection, edge endpoints, dial-ref + activity-ref
+// resolution — remain hand-coded (FR-014). When a kind has no
+// manifest registered yet, the validator falls back to the
+// hand-written `Validate()` methods on each *Attrs struct (this is
+// the WP03→WP04 transitional bridge: today's catalog only has
+// archetype manifests; WP04 lands the kind manifests).
 func Validate(g Graph, opts ...ValidateOption) error {
 	cfg := validateConfig{activities: nilActivityRegistry{}}
 	for _, o := range opts {
 		o(&cfg)
+	}
+	// Resolve the catalog once: explicit injection wins; otherwise we
+	// fall back to the package-level default (lazily loaded from the
+	// embedded shipped manifests). A nil result is acceptable — the
+	// manifest-driven checks short-circuit on nil and only the
+	// hand-coded path runs.
+	if !cfg.catalogExplicit {
+		if cat := defaultCatalog(); cat != nil {
+			cfg.catalog = cat
+		}
 	}
 
 	v := &validator{cfg: cfg, errs: &ValidationError{}}
@@ -177,7 +210,14 @@ func (v *validator) checkBasics(g Graph) {
 	}
 }
 
-// indexNodes builds the lookup map and reports duplicate IDs.
+// indexNodes builds the lookup map and reports duplicate IDs. It also
+// fires the FR-016 archetype-non-callable rule when the catalog
+// reports the kind as a non-callable manifest.
+//
+// The unknown-kind rule is satisfied either when the catalog rejects
+// the kind (post-WP04) or when the legacy IsKnown() set rejects it
+// (pre-WP04 / no catalog). When the catalog has the kind we trust
+// it — `IsKnown()` is a hand-coded subset that WP04 will retire.
 func (v *validator) indexNodes(g Graph) map[string]*Node {
 	out := make(map[string]*Node, len(g.Nodes))
 	for i := range g.Nodes {
@@ -186,8 +226,28 @@ func (v *validator) indexNodes(g Graph) map[string]*Node {
 			v.addf("schema: node #%d has empty id", i)
 			continue
 		}
-		if !n.Kind.IsKnown() {
-			v.addf("schema: node %q has unknown kind %q", n.ID, n.Kind)
+		// Resolve via catalog first. When the catalog has the kind we
+		// fire the archetype rule (FR-016) and skip the IsKnown
+		// subset (the catalog supersedes it). When the catalog does
+		// NOT have the kind, fall back to IsKnown — that path remains
+		// the source of truth for the WP03 transitional state.
+		rm, found, err := resolveCatalogManifest(v.cfg.catalog, n.Kind)
+		switch {
+		case err != nil:
+			v.addf("schema: node %q: catalog lookup failed: %v", n.ID, err)
+		case found && !rm.Manifest.IsCallable():
+			alts := archetypeAlternatives(v.cfg.catalog, rm.Manifest.ID)
+			v.errs.Issues = append(v.errs.Issues,
+				archetypeNotCallableMsg(n.ID, rm, alts))
+		case found:
+			// Recognised concrete kind; the catalog is the authority.
+		default:
+			// Catalog miss: enforce the legacy IsKnown subset so authors
+			// constructing graphs in Go (and YAML graphs the loader
+			// already accepted) keep their existing behaviour.
+			if !n.Kind.IsKnown() {
+				v.addf("schema: node %q has unknown kind %q", n.ID, n.Kind)
+			}
 		}
 		if _, dup := out[n.ID]; dup {
 			v.addf("schema: duplicate node id %q", n.ID)
@@ -198,13 +258,45 @@ func (v *validator) indexNodes(g Graph) map[string]*Node {
 	return out
 }
 
-// checkAttrs invokes each node's per-kind Validate.
+// checkAttrs runs per-node attr-level validation. The manifest-driven
+// path (validateAgainstManifest) is preferred when the catalog has the
+// kind; otherwise we fall back to the hand-written `Validate()`
+// methods on each *Attrs struct.
+//
+// Belt-and-suspenders policy (WP03 transitional): when the manifest
+// path fires we ALSO run the hand-coded Validate(). The hand-coded
+// path stays around until WP04 deletes the per-kind methods; running
+// both is redundant in steady state but catches drift where a kind
+// has BOTH a registered manifest and a hand-coded method (the
+// expected state during the WP03→WP04 cutover for any kind authors
+// land manifests for first).
 func (v *validator) checkAttrs(g Graph) {
 	for i := range g.Nodes {
 		n := &g.Nodes[i]
+
+		// Manifest-driven path. Only fires when the catalog has the
+		// kind AND the kind is callable; archetype-non-callable is
+		// reported once by indexNodes, no need to double-emit attr
+		// errors against an archetype's attrs.
+		var manifest *nodes.ResolvedManifest
+		if v.cfg.catalog != nil {
+			if rm, found, _ := resolveCatalogManifest(v.cfg.catalog, n.Kind); found && rm.Manifest.IsCallable() {
+				manifest = rm
+			}
+		}
+		if manifest != nil {
+			for _, msg := range validateAgainstManifest(n, manifest) {
+				v.errs.Issues = append(v.errs.Issues, msg)
+			}
+			for _, msg := range validatePortsAgainstManifest(n, manifest) {
+				v.errs.Issues = append(v.errs.Issues, msg)
+			}
+		}
+
+		// Hand-coded path. Runs in parallel with the manifest path
+		// during the WP03 transitional window so unmigrated kinds
+		// (which have no manifest yet) keep their existing checks.
 		if n.Attrs == nil {
-			// Loader normally fills a zero-valued Attrs; if a hand-built
-			// Graph omitted it we substitute the default and re-validate.
 			defaults := defaultAttrsFor(n.Kind)
 			if defaults == nil {
 				continue
