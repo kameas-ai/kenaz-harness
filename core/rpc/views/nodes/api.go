@@ -152,6 +152,30 @@ type UserOverrideInfo struct {
 	SizeBytes int64 `json:"sizeBytes,omitempty"`
 }
 
+// DoctorReport summarises catalog health for the frontend NodesView
+// debug surface (WP08). Mirrors the Activities doctor pattern: each
+// counter is a non-negative int and the optional ErrorMessages slice
+// surfaces per-file parse failures recorded by the most-recent reload.
+//
+// HotReloadEnabled reflects the chassis flag; UserDir reports the
+// scanned path (empty when no DataDir is configured). LastReloadAt is
+// RFC3339Nano with "" before the first manual or watcher-triggered
+// reload.
+type DoctorReport struct {
+	ShippedCount     int      `json:"shippedCount"`
+	UserOverrideCount int     `json:"userOverrideCount"`
+	ArchetypeCount   int      `json:"archetypeCount"`
+	CallableCount    int      `json:"callableCount"`
+	AliasCount       int      `json:"aliasCount"`
+	UserDir          string   `json:"userDir,omitempty"`
+	HotReloadEnabled bool     `json:"hotReloadEnabled"`
+	LastReloadAt     string   `json:"lastReloadAt,omitempty"`
+	UserOverrideErrors []string `json:"userOverrideErrors,omitempty"`
+	// SunsetVersion is the AliasSunsetVersion the deprecation warning
+	// surfaces. Frontend renders "<old> → <new> (removal in <version>)".
+	SunsetVersion string `json:"sunsetVersion,omitempty"`
+}
+
 // NodesAPI is the view-scoped accessor for the resolved manifest
 // catalog. WP06 builds the frontend palette + attribute editor on top
 // of these methods.
@@ -176,4 +200,11 @@ type NodesAPI interface {
 	// directory with parse status. Empty (no files) and missing dir are
 	// both reported as an empty slice with no error.
 	ListUserOverrides(ctx context.Context) ([]UserOverrideInfo, error)
+
+	// Doctor returns a one-shot summary of catalog health: shipped /
+	// user-override counts, last reload timestamp, hot-reload flag,
+	// and any per-file parse errors from the most-recent reload. The
+	// frontend NodesView debug panel renders this report so authors
+	// can diagnose override-not-applied issues without grep'ing logs.
+	Doctor(ctx context.Context) (DoctorReport, error)
 }

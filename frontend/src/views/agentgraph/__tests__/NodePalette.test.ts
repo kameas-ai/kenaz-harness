@@ -92,6 +92,14 @@ function mountPalette(rows: NodeManifestSummary[] = FIXTURE) {
       }),
       reloadOverrides: async () => ({ added: [], removed: [], modified: [] }),
       listUserOverrides: async () => [],
+      doctor: async () => ({
+        shippedCount: 0,
+        userOverrideCount: 0,
+        archetypeCount: 0,
+        callableCount: 0,
+        aliasCount: 0,
+        hotReloadEnabled: false,
+      }),
     },
   });
   const wrapper = mount(NodePalette, {

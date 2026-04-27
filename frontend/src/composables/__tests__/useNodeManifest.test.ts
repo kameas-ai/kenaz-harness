@@ -45,6 +45,14 @@ function makeClient(over: {
         modified: [],
       }),
       listUserOverrides: async () => [],
+      doctor: async () => ({
+        shippedCount: 0,
+        userOverrideCount: 0,
+        archetypeCount: 0,
+        callableCount: 0,
+        aliasCount: 0,
+        hotReloadEnabled: false,
+      }),
     },
   });
 }

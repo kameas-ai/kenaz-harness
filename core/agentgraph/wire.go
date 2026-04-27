@@ -88,13 +88,26 @@ func wireToGraph(w wireGraph) (Graph, error) {
 		DialOverrides: cloneMap(w.DialOverrides),
 	}
 	g.Nodes = make([]Node, 0, len(w.Nodes))
+	// Track aliases observed during this load so the kernel can emit
+	// per-run audit events (NFR-003). The same alias appearing on
+	// multiple nodes is recorded once.
+	seenAlias := map[string]struct{}{}
 	for _, wn := range w.Nodes {
 		// Resolve aliases at load time so downstream code only sees
 		// canonical kinds. The alias map emits a deprecation warning the
 		// first time it sees each old kind name (FR-029..FR-058).
-		canonical, ok := lookupAlias(string(wn.Kind))
+		original := string(wn.Kind)
+		canonical, ok := lookupAlias(original)
 		if ok {
 			wn.Kind = NodeKind(canonical)
+			if _, dup := seenAlias[original]; !dup {
+				seenAlias[original] = struct{}{}
+				g.AliasesSeen = append(g.AliasesSeen, AliasResolution{
+					Old:       original,
+					New:       canonical,
+					RemovalIn: AliasSunsetVersion,
+				})
+			}
 		}
 		n := Node{
 			ID:            wn.ID,

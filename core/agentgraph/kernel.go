@@ -120,6 +120,19 @@ func (k *Kernel) Run(ctx context.Context, env *Env) error {
 		"entrypoints":  env.Graph.Entrypoints,
 		"max_in_flight": k.maxInFlight,
 	})
+	// Emit one kind_alias_resolved event per (old → new) pair seen
+	// during the wire decode of this graph (NFR-003 / WP08). The
+	// once-per-process slog warning fires the first time a process
+	// loads each alias; the EventLog event below fires every run so
+	// the audit panel surfaces a per-run deprecation footprint.
+	for _, ar := range env.Graph.AliasesSeen {
+		_ = startBatch.AppendKind(env.RunID, "", EventKindAliasResolved, map[string]any{
+			"old":         ar.Old,
+			"new":         ar.New,
+			"removal_in":  ar.RemovalIn,
+			"graph_id":    env.Graph.ID,
+		})
+	}
 	if _, err := k.log.Append(startBatch); err != nil {
 		return fmt.Errorf("agentgraph: kernel: append run_start: %w", err)
 	}

@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	coreag "github.com/sigil-tech/kaneaz-harness/core/agentgraph"
 	corenodes "github.com/sigil-tech/kaneaz-harness/core/agentgraph/nodes"
 )
 
@@ -31,6 +32,13 @@ type Manager struct {
 	userDir string
 	// reloadedAt records the most recent successful reload timestamp.
 	reloadedAt time.Time
+	// hotReload reflects the chassis-level --enable-manifest-hot-reload
+	// flag. Reported by the doctor surface; not load-bearing inside the
+	// manager itself.
+	hotReload bool
+	// lastErrors caches the most recent per-file parse errors so the
+	// doctor surface can report them without re-scanning the disk.
+	lastErrors []string
 	// nowFn is overridable for tests.
 	nowFn func() time.Time
 }
@@ -44,6 +52,11 @@ type ManagerConfig struct {
 	// UserDir is the directory scanned by ReloadOverrides /
 	// ListUserOverrides. Empty disables those operations (no-op).
 	UserDir string
+	// HotReloadEnabled reflects whether the chassis was started with
+	// --enable-manifest-hot-reload. The doctor surface reports this so
+	// the frontend can disable / enable diagnostic affordances. The
+	// flag is informational; it does not affect manager behaviour.
+	HotReloadEnabled bool
 	// NowFn is an optional clock injection for tests.
 	NowFn func() time.Time
 }
@@ -60,9 +73,10 @@ func NewManager(cfg ManagerConfig) *Manager {
 		now = time.Now
 	}
 	m := &Manager{
-		catalog: cat,
-		userDir: cfg.UserDir,
-		nowFn:   now,
+		catalog:   cat,
+		userDir:   cfg.UserDir,
+		hotReload: cfg.HotReloadEnabled,
+		nowFn:     now,
 	}
 	m.idSet = snapshotIDs(cat)
 	return m
@@ -105,6 +119,61 @@ func (m *Manager) SwapCatalog(next *corenodes.Catalog) ReloadResult {
 	res.ReloadedAt = m.reloadedAt.UTC().Format(time.RFC3339Nano)
 	m.mu.Unlock()
 	return res
+}
+
+// recordLastErrors stashes the per-file error list from the most recent
+// reload so the doctor surface can report it without re-scanning disk.
+// Empty slice clears any prior errors.
+func (m *Manager) recordLastErrors(errs []string) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if len(errs) == 0 {
+		m.lastErrors = nil
+		return
+	}
+	m.lastErrors = append([]string(nil), errs...)
+}
+
+// doctor builds a DoctorReport snapshot under the read lock. Counters
+// derive from the live catalog; bookkeeping fields (last reload, hot-
+// reload flag, recorded per-file errors) come from the manager state.
+func (m *Manager) doctor() DoctorReport {
+	if m == nil {
+		return DoctorReport{SunsetVersion: coreag.AliasSunsetVersion}
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	rep := DoctorReport{
+		UserDir:          m.userDir,
+		HotReloadEnabled: m.hotReload,
+		SunsetVersion:    coreag.AliasSunsetVersion,
+	}
+	if m.catalog != nil {
+		for _, rm := range m.catalog.List() {
+			if strings.HasPrefix(rm.Source, "user:") {
+				rep.UserOverrideCount++
+			} else {
+				rep.ShippedCount++
+			}
+			if rm.Manifest.IsArchetype() {
+				rep.ArchetypeCount++
+			}
+			if rm.Manifest.IsCallable() {
+				rep.CallableCount++
+			}
+			rep.AliasCount += len(rm.Manifest.Aliases)
+		}
+	}
+	if !m.reloadedAt.IsZero() {
+		rep.LastReloadAt = m.reloadedAt.UTC().Format(time.RFC3339Nano)
+	}
+	if len(m.lastErrors) > 0 {
+		rep.UserOverrideErrors = append([]string(nil), m.lastErrors...)
+	}
+	return rep
 }
 
 // snapshotIDs builds the id→hash map used to compute reload diffs.
@@ -206,9 +275,25 @@ func (a *Impl) ReloadOverrides(_ context.Context) (ReloadResult, error) {
 	}
 	if loadErr != nil {
 		res.Errors = append(res.Errors, loadErr.Error())
+	}
+	a.mgr.recordLastErrors(res.Errors)
+	if loadErr != nil {
 		return res, nil
 	}
 	return res, nil
+}
+
+// Doctor implements NodesAPI. Returns a one-shot summary of catalog
+// health for the frontend NodesView debug panel (WP08). Counters are
+// derived from the live catalog under a read lock; the report mutates
+// no state.
+func (a *Impl) Doctor(_ context.Context) (DoctorReport, error) {
+	if a == nil || a.mgr == nil {
+		return DoctorReport{
+			SunsetVersion: coreag.AliasSunsetVersion,
+		}, ErrManagerUnavailable
+	}
+	return a.mgr.doctor(), nil
 }
 
 // ListUserOverrides implements NodesAPI. Reads the configured user

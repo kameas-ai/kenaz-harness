@@ -265,6 +265,80 @@ func TestListUserOverridesEmptyDir(t *testing.T) {
 	}
 }
 
+// TestDoctorReportsCounters asserts that Doctor() returns the catalog
+// header counters and the configured user-dir / hot-reload flag. This
+// is the WP08 surface backing the frontend NodesView debug panel.
+func TestDoctorReportsCounters(t *testing.T) {
+	t.Parallel()
+	mgr := nodesview.NewManager(nodesview.ManagerConfig{
+		Catalog:          bundledCatalog(t),
+		UserDir:          "/tmp/never-exists-doctor",
+		HotReloadEnabled: true,
+	})
+	api := nodesview.New(mgr)
+	rep, err := api.Doctor(context.Background())
+	if err != nil {
+		t.Fatalf("Doctor: %v", err)
+	}
+	if rep.ShippedCount == 0 {
+		t.Errorf("expected shippedCount > 0, got %d", rep.ShippedCount)
+	}
+	if rep.ArchetypeCount == 0 {
+		t.Errorf("expected archetypeCount > 0, got %d", rep.ArchetypeCount)
+	}
+	if rep.CallableCount == 0 {
+		t.Errorf("expected callableCount > 0, got %d", rep.CallableCount)
+	}
+	if rep.UserDir != "/tmp/never-exists-doctor" {
+		t.Errorf("userDir: got %q, want /tmp/never-exists-doctor", rep.UserDir)
+	}
+	if !rep.HotReloadEnabled {
+		t.Error("expected hotReloadEnabled to round-trip")
+	}
+	if rep.SunsetVersion == "" {
+		t.Error("expected SunsetVersion to be populated")
+	}
+}
+
+// TestDoctorTracksUserOverrideAndReload: after a successful reload of
+// a UserDir containing one override, the Doctor report shows the
+// user override in the count, populates the lastReloadAt timestamp,
+// and clears any prior errors.
+func TestDoctorTracksUserOverrideAndReload(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	writeManifest(t, dir, "model.yaml", `id: model
+extends: compute
+description: doctor-test-override
+`)
+	cat, err := corenodes.LoadCatalog(corenodes.LoadOptions{UserDir: dir})
+	if err != nil {
+		t.Fatalf("LoadCatalog: %v", err)
+	}
+	mgr := nodesview.NewManager(nodesview.ManagerConfig{
+		Catalog: cat,
+		UserDir: dir,
+	})
+	api := nodesview.New(mgr)
+	// Trigger a reload so reloadedAt populates.
+	if _, err := api.ReloadOverrides(context.Background()); err != nil {
+		t.Fatalf("ReloadOverrides: %v", err)
+	}
+	rep, err := api.Doctor(context.Background())
+	if err != nil {
+		t.Fatalf("Doctor: %v", err)
+	}
+	if rep.UserOverrideCount == 0 {
+		t.Errorf("expected at least one user override, got %d", rep.UserOverrideCount)
+	}
+	if rep.LastReloadAt == "" {
+		t.Errorf("expected LastReloadAt to be populated after reload")
+	}
+	if len(rep.UserOverrideErrors) != 0 {
+		t.Errorf("expected no errors, got %v", rep.UserOverrideErrors)
+	}
+}
+
 // TestProvenanceUserOverrideTagged: when a user override modifies a
 // scalar, the resolved manifest's provenance for that field surfaces
 // as "user-override".

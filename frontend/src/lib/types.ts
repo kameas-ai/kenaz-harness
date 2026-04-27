@@ -1310,6 +1310,26 @@ export interface NodeUserOverrideInfo {
   sizeBytes?: number;
 }
 
+/**
+ * NodeDoctorReport summarises catalog health for the NodesView debug
+ * panel (mission agent-kernel-graph-node-catalog WP08). Counters are
+ * non-negative ints; lastReloadAt is RFC3339Nano (empty before any
+ * reload). userOverrideErrors carries the per-file parse failures
+ * recorded by the most-recent reload pass.
+ */
+export interface NodeDoctorReport {
+  shippedCount: number;
+  userOverrideCount: number;
+  archetypeCount: number;
+  callableCount: number;
+  aliasCount: number;
+  userDir?: string;
+  hotReloadEnabled: boolean;
+  lastReloadAt?: string;
+  userOverrideErrors?: string[];
+  sunsetVersion?: string;
+}
+
 // ── compaction (mission agent-kernel-graph; Bundle D WP12/WP13) ──────
 
 /**

@@ -1211,16 +1211,21 @@ func newGraphManager(c *core.Core) *graphview.Manager {
 // stays tolerant of a single malformed override file.
 func newNodesStack(c *core.Core) (*nodesview.Manager, nodesview.NodesAPI) {
 	userDir := ""
+	hotReload := false
 	if c != nil && c.DataDir() != "" {
 		userDir = filepath.Join(c.DataDir(), "agent_graph", "nodes")
+	}
+	if c != nil {
+		hotReload = c.HotReloadEnabled()
 	}
 	cat, err := corenodes.LoadCatalog(corenodes.LoadOptions{UserDir: userDir})
 	if err != nil {
 		logging.L().Warn("nodes.load_warn", "err", err.Error(), "user_dir", userDir)
 	}
 	mgr := nodesview.NewManager(nodesview.ManagerConfig{
-		Catalog: cat,
-		UserDir: userDir,
+		Catalog:          cat,
+		UserDir:          userDir,
+		HotReloadEnabled: hotReload,
 	})
 	return mgr, nodesview.New(mgr)
 }

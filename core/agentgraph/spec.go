@@ -149,6 +149,18 @@ type Graph struct {
 	Budget      Budget  `json:"budget,omitempty" yaml:"budget,omitempty"`
 	// DialOverrides at graph scope (FR-050).
 	DialOverrides map[string]any `json:"dial_overrides,omitempty" yaml:"dial_overrides,omitempty"`
+
+	// AliasesSeen records every (old → new) deprecated kind name the
+	// load path rewrote while parsing this graph. Populated by
+	// wireToGraph. The kernel emits one EventKindAliasResolved event
+	// per entry at run-start so the audit log carries a per-run record
+	// even though the alias warning itself is once-per-process. Empty
+	// when the graph used only canonical kind names.
+	//
+	// Not serialised on the wire — the field is JSON/YAML-omitted via
+	// the wire types' `MarshalJSON` / `MarshalYAML` helpers (graphToWire
+	// strips it).
+	AliasesSeen []AliasResolution `json:"-" yaml:"-"`
 }
 
 // findNode returns the node with the given ID, or nil if not found.

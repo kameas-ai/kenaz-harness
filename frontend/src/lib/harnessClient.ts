@@ -89,6 +89,7 @@ import type {
   NodeManifestDetail,
   NodeReloadResult,
   NodeUserOverrideInfo,
+  NodeDoctorReport,
   CompactionConfig,
   CompactionCustomStrategy,
   CompactionEffectiveConfig,
@@ -369,6 +370,7 @@ interface WailsBindingsLike {
   Nodes_Get(id: string): Promise<NodeManifestDetail>;
   Nodes_ReloadOverrides(): Promise<NodeReloadResult>;
   Nodes_ListUserOverrides(): Promise<NodeUserOverrideInfo[]>;
+  Nodes_Doctor(): Promise<NodeDoctorReport>;
 
   // Branches view (agent-kernel-graph; Bundle B WP07/08).
   Branches_List(parentSessionID: string): Promise<Branch[]>;
@@ -1184,6 +1186,8 @@ export interface NodesClient {
   reloadOverrides(): Promise<NodeReloadResult>;
   /** Inspect the user-override directory; list each YAML's parse status. */
   listUserOverrides(): Promise<NodeUserOverrideInfo[]>;
+  /** Catalog health one-shot for the NodesView debug panel (WP08). */
+  doctor(): Promise<NodeDoctorReport>;
 }
 
 /**
@@ -1512,6 +1516,7 @@ export function createHarnessClient(): HarnessClient {
       get: (id) => b().Nodes_Get(id),
       reloadOverrides: () => b().Nodes_ReloadOverrides(),
       listUserOverrides: () => b().Nodes_ListUserOverrides(),
+      doctor: () => b().Nodes_Doctor(),
     },
   };
 }
@@ -2057,6 +2062,14 @@ export function createFakeHarnessClient(
         modified: [],
       }),
       listUserOverrides: async () => [],
+      doctor: async () => ({
+        shippedCount: 0,
+        userOverrideCount: 0,
+        archetypeCount: 0,
+        callableCount: 0,
+        aliasCount: 0,
+        hotReloadEnabled: false,
+      }),
     },
   };
 

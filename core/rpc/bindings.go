@@ -745,3 +745,6 @@ func (b *Bindings) Nodes_ReloadOverrides() (nodesview.ReloadResult, error) {
 func (b *Bindings) Nodes_ListUserOverrides() ([]nodesview.UserOverrideInfo, error) {
 	return b.api.Nodes().ListUserOverrides(b.ctx())
 }
+func (b *Bindings) Nodes_Doctor() (nodesview.DoctorReport, error) {
+	return b.api.Nodes().Doctor(b.ctx())
+}
