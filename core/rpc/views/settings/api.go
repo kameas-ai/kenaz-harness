@@ -40,6 +40,19 @@ type Settings struct {
 	CodeBlockMinLines              int  `json:"codeBlockMinLines,omitempty"`
 	CodeBlockMinBytes              int  `json:"codeBlockMinBytes,omitempty"`
 	AutoCaptureToolOutputsDisabled bool `json:"autoCaptureToolOutputsDisabled,omitempty"`
+
+	// WebSearchEnabled controls the local-first web search built-in
+	// (core/tools/websearch). Default OFF on a fresh install — the user
+	// opts in from the Tools panel. Local-only by design: DuckDuckGo
+	// HTML scrape + Wikipedia + go-readability extraction. No API key.
+	WebSearchEnabled bool `json:"webSearchEnabled,omitempty"`
+
+	// BashEnabled controls the local-first bash built-in
+	// (core/tools/bash). Default OFF. Sandboxed to a configurable
+	// command allowlist (BashAllowlistEditor component) regardless of
+	// provider. The allowlist itself ships with a conservative default
+	// (read-only commands; deny by pattern).
+	BashEnabled bool `json:"bashEnabled,omitempty"`
 }
 
 // AutoCaptureCodeBlocks reports whether the code-block detector is
@@ -104,6 +117,16 @@ type SettingsStore interface {
 	// turns it off explicitly).
 	LoadConfirmEach() (bool, error)
 	SaveConfirmEach(enabled bool) error
+	// LoadWebSearch / SaveWebSearch expose the local-first web search
+	// built-in opt-in independently of the full Settings record. The
+	// toolloop / kernel reads this on every Run boundary so the toggle
+	// takes effect on the next chat. Default false (off).
+	LoadWebSearch() (bool, error)
+	SaveWebSearch(enabled bool) error
+	// LoadBash / SaveBash expose the local-first bash built-in opt-in
+	// in the same shape. Default false (off).
+	LoadBash() (bool, error)
+	SaveBash(enabled bool) error
 }
 
 // SettingsAPI is the view-scoped accessor exposed via HarnessAPI.

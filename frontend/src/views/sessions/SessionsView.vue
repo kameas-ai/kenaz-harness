@@ -876,7 +876,11 @@ function formatSize(bytes: number): string {
         >
           {{ lastArtifactError }}
         </div>
-        <div v-if="activeTab === 'chat'" class="flex-1 min-h-0 grid grid-cols-[1fr_auto]">
+        <div
+          v-if="activeTab === 'chat'"
+          class="flex-1 min-h-0 grid grid-cols-[minmax(0,1fr)_auto]"
+          style="grid-template-rows: minmax(0, 1fr)"
+        >
           <MessageList
             :messages="visibleMessages"
             :streaming-message="session.currentlyStreaming.value"
@@ -893,7 +897,7 @@ function formatSize(bytes: number): string {
           <BranchSidebar
             v-if="hasSession"
             :parent-session-id="sessionId"
-            class="w-64 hidden lg:flex"
+            class="hidden lg:flex"
             @open="onBranchOpen"
             @create="openCreateBranchModal"
           />

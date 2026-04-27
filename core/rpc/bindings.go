@@ -401,6 +401,43 @@ func (b *Bindings) Settings_SetConfirmEach(enabled bool) error {
 	return b.storeFn().SaveConfirmEach(enabled)
 }
 
+// Settings_GetWebSearch exposes the local-first web-search built-in
+// opt-in flag (default false). Surfaced as a toggle row in the Tools
+// panel; toolloop reads this on every Run boundary so toggling takes
+// effect on the next chat.
+func (b *Bindings) Settings_GetWebSearch() (bool, error) {
+	if b.storeFn == nil {
+		return false, nil
+	}
+	return b.storeFn().LoadWebSearch()
+}
+
+// Settings_SetWebSearch persists the web-search built-in opt-in flag.
+func (b *Bindings) Settings_SetWebSearch(enabled bool) error {
+	if b.storeFn == nil {
+		return nil
+	}
+	return b.storeFn().SaveWebSearch(enabled)
+}
+
+// Settings_GetBash exposes the local-first bash built-in opt-in flag
+// (default false). The bash tool is also gated by the per-command
+// allowlist regardless of this toggle.
+func (b *Bindings) Settings_GetBash() (bool, error) {
+	if b.storeFn == nil {
+		return false, nil
+	}
+	return b.storeFn().LoadBash()
+}
+
+// Settings_SetBash persists the bash built-in opt-in flag.
+func (b *Bindings) Settings_SetBash(enabled bool) error {
+	if b.storeFn == nil {
+		return nil
+	}
+	return b.storeFn().SaveBash(enabled)
+}
+
 // ── memory ─────────────────────────────────────────────────────────────
 
 func (b *Bindings) Memory_ListChunks(filter memoryview.ListFilter) ([]memoryview.Chunk, error) {

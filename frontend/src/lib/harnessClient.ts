@@ -254,6 +254,10 @@ interface WailsBindingsLike {
   Settings_SetMemory(enabled: boolean): Promise<void>;
   Settings_GetConfirmEach(): Promise<boolean>;
   Settings_SetConfirmEach(enabled: boolean): Promise<void>;
+  Settings_GetWebSearch(): Promise<boolean>;
+  Settings_SetWebSearch(enabled: boolean): Promise<void>;
+  Settings_GetBash(): Promise<boolean>;
+  Settings_SetBash(enabled: boolean): Promise<void>;
 
   Memory_ListChunks(filter: MemoryListFilter): Promise<MemoryChunk[]>;
   Memory_RememberMessage(
@@ -928,6 +932,21 @@ export interface SettingsClient {
   getConfirmEach(): Promise<boolean>;
   /** Persist the WP05 confirm-each modal opt-in flag. */
   setConfirmEach(enabled: boolean): Promise<void>;
+  /**
+   * Read the local-first web-search built-in opt-in (default false).
+   * Surfaced as a toggle row in the Tools panel.
+   */
+  getWebSearch(): Promise<boolean>;
+  /** Persist the web-search built-in opt-in flag. */
+  setWebSearch(enabled: boolean): Promise<void>;
+  /**
+   * Read the local-first bash built-in opt-in (default false). Bash
+   * is also gated by its per-command allowlist regardless of this
+   * toggle.
+   */
+  getBash(): Promise<boolean>;
+  /** Persist the bash built-in opt-in flag. */
+  setBash(enabled: boolean): Promise<void>;
 }
 
 /**

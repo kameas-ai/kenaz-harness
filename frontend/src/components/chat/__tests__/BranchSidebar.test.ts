@@ -36,10 +36,17 @@ function mountSidebar(parentSessionId: string, seed: Partial<HarnessClient> = {}
 }
 
 describe('BranchSidebar', () => {
-  it('renders the empty state when no branches exist', async () => {
+  it('collapses to a narrow rail when no branches exist', async () => {
     const w = mountSidebar('p1');
     await flushPromises();
-    expect(w.find('[data-testid="branch-sidebar-empty"]').exists()).toBe(true);
+    // Empty state collapses to a narrow strip with only a "+ Fork"
+    // button and a vertical "Fork" label — the full sidebar copy
+    // (and its data-testid) only mounts once at least one branch exists.
+    expect(
+      w.find('[data-testid="branch-sidebar-collapsed"]').exists(),
+    ).toBe(true);
+    expect(w.find('[data-testid="branch-sidebar"]').exists()).toBe(false);
+    expect(w.find('[data-testid="branch-create-btn"]').exists()).toBe(true);
   });
 
   it('renders one row per branch with status + model', async () => {

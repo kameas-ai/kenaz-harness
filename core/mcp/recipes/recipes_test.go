@@ -13,8 +13,8 @@ func TestShippedSingletonParses(t *testing.T) {
 	if cat == nil {
 		t.Fatal("Shipped() returned nil")
 	}
-	if got := len(cat.List()); got != 4 {
-		t.Fatalf("want 4 recipes, got %d", got)
+	if got := len(cat.List()); got != 3 {
+		t.Fatalf("want 3 recipes, got %d", got)
 	}
 }
 
@@ -35,50 +35,14 @@ func TestLoadShippedReturnsFreshCopy(t *testing.T) {
 	}
 }
 
-func TestBraveSearchEntry(t *testing.T) {
+func TestBraveSearchRemoved(t *testing.T) {
+	// Local-only stance (charter): the Brave Search recipe required an
+	// external API key and is no longer shipped. Web search ships as a
+	// built-in keyless tool surfaced via core/tools/websearch (toggle
+	// in KaneazToolsPanel under "Local tools").
 	cat := recipes.Shipped()
-	r, ok := cat.Get("brave-search")
-	if !ok {
-		t.Fatal("brave-search not in shipped catalog")
-	}
-	if r.DisplayName != "Brave Search" {
-		t.Errorf("DisplayName = %q", r.DisplayName)
-	}
-	if r.Category != "search" {
-		t.Errorf("Category = %q", r.Category)
-	}
-	wantCmd := []string{"npx", "-y", "@modelcontextprotocol/server-brave-search"}
-	if len(r.Command) != len(wantCmd) {
-		t.Fatalf("Command length = %d, want %d", len(r.Command), len(wantCmd))
-	}
-	for i := range wantCmd {
-		if r.Command[i] != wantCmd[i] {
-			t.Errorf("Command[%d] = %q, want %q", i, r.Command[i], wantCmd[i])
-		}
-	}
-	if len(r.EnvKeys) != 1 {
-		t.Fatalf("EnvKeys length = %d, want 1", len(r.EnvKeys))
-	}
-	if r.EnvKeys[0].Name != "BRAVE_API_KEY" {
-		t.Errorf("EnvKeys[0].Name = %q, want BRAVE_API_KEY", r.EnvKeys[0].Name)
-	}
-	if !r.EnvKeys[0].Required {
-		t.Error("EnvKeys[0].Required should be true")
-	}
-	if !r.Capabilities.Tools {
-		t.Error("Capabilities.Tools should be true")
-	}
-	if r.Capabilities.Resources || r.Capabilities.Prompts || r.Capabilities.Sampling {
-		t.Errorf("unexpected capabilities: %+v", r.Capabilities)
-	}
-	if r.InitTimeoutMs != 5000 {
-		t.Errorf("InitTimeoutMs = %d, want 5000", r.InitTimeoutMs)
-	}
-	if r.PingPeriodMs != 30000 {
-		t.Errorf("PingPeriodMs = %d, want 30000", r.PingPeriodMs)
-	}
-	if r.SamplingPolicy.Allowed || r.SamplingPolicy.Default {
-		t.Errorf("sampling policy = %+v, want both false", r.SamplingPolicy)
+	if _, ok := cat.Get("brave-search"); ok {
+		t.Fatal("brave-search MUST NOT be in shipped catalog (local-only stance)")
 	}
 }
 
@@ -303,17 +267,37 @@ func TestToServerSpecNilEnv(t *testing.T) {
 
 func TestRecipeNewFieldsZeroWhenJSONOmits(t *testing.T) {
 	// A recipe parsed from JSON without args_template / config_options
-	// should land with nil slices — not surprise allocations — so
-	// existing recipes (Brave) keep their pre-WP01 shape.
-	r, ok := recipes.Shipped().Get("brave-search")
-	if !ok {
-		t.Fatal("brave-search missing")
+	// should land with nil slices — not surprise allocations. Inline a
+	// minimal recipe blob to exercise this without depending on a
+	// specific shipped recipe's shape.
+	const blob = `{
+		"id": "minimal",
+		"display_name": "Minimal",
+		"description": "",
+		"category": "other",
+		"command": ["npx", "-y", "stub"],
+		"env_keys": [],
+		"capabilities": {"tools": true, "resources": false, "prompts": false, "sampling": false},
+		"docs_url": "",
+		"init_timeout_ms": 5000,
+		"ping_period_ms": 30000,
+		"sampling_policy": {"allowed": false, "default": false}
+	}`
+	var r recipes.Recipe
+	if err := json.Unmarshal([]byte(blob), &r); err != nil {
+		t.Fatalf("parse: %v", err)
 	}
 	if r.ArgsTemplate != nil {
-		t.Errorf("Brave Search ArgsTemplate = %v, want nil", r.ArgsTemplate)
+		t.Errorf("ArgsTemplate = %v, want nil", r.ArgsTemplate)
 	}
 	if r.ConfigOptions != nil {
-		t.Errorf("Brave Search ConfigOptions = %v, want nil", r.ConfigOptions)
+		t.Errorf("ConfigOptions = %v, want nil", r.ConfigOptions)
+	}
+	if r.Warning != "" {
+		t.Errorf("Warning = %q, want empty", r.Warning)
+	}
+	if r.RecommendedPolicyTemplate != "" {
+		t.Errorf("RecommendedPolicyTemplate = %q, want empty", r.RecommendedPolicyTemplate)
 	}
 }
 

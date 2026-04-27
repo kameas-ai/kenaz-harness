@@ -102,8 +102,38 @@ defineExpose({ refresh, branches });
 </script>
 
 <template>
+  <!-- Collapsed empty-state: narrow vertical rail with just a "+ Fork"
+       button. The full panel only expands when at least one branch
+       exists (or while loading / on error so the user sees the state).
+       This keeps real estate for the chat surface when no branches
+       are live, which is the common case. -->
   <aside
-    class="flex w-full flex-col gap-2 border-l border-accent-hairline bg-surface-1 p-3"
+    v-if="!loading && !lastError && !hasBranches"
+    class="flex w-10 flex-col items-center gap-2 border-l border-border-muted bg-surface-1 py-3"
+    aria-label="Branch off this conversation"
+    data-testid="branch-sidebar-collapsed"
+  >
+    <button
+      type="button"
+      class="font-ui text-xs text-ink-muted hover:text-ink rounded-sm border border-border-muted px-1.5 py-1"
+      data-testid="branch-create-btn"
+      :title="'Fork this session into a branch'"
+      :aria-label="'Fork this session into a branch'"
+      @click="emit('create')"
+    >
+      +
+    </button>
+    <span
+      class="font-ui text-[10px] uppercase tracking-[0.18em] text-ink-subtle"
+      style="writing-mode: vertical-rl; transform: rotate(180deg)"
+    >
+      Fork
+    </span>
+  </aside>
+
+  <aside
+    v-else
+    class="flex w-64 flex-col gap-2 border-l border-accent-hairline bg-surface-1 p-3"
     aria-label="Conversation branches"
     data-testid="branch-sidebar"
   >
@@ -129,13 +159,6 @@ defineExpose({ refresh, branches });
       data-testid="branch-sidebar-error"
     >
       {{ lastError }}
-    </div>
-    <div
-      v-else-if="!hasBranches"
-      class="font-ui text-xs text-ink-subtle italic"
-      data-testid="branch-sidebar-empty"
-    >
-      No branches yet — fork off this session to explore a side question.
     </div>
     <ul v-else class="flex flex-col gap-2" data-testid="branch-list">
       <li

@@ -2,26 +2,6 @@
   "version": 1,
   "recipes": [
     {
-      "id": "brave-search",
-      "display_name": "Brave Search",
-      "description": "Web + local search via the Brave Search API. Free tier 2000 queries/month.",
-      "category": "search",
-      "command": ["npx", "-y", "@modelcontextprotocol/server-brave-search"],
-      "env_keys": [
-        {
-          "name": "BRAVE_API_KEY",
-          "display": "Brave Search API Key",
-          "docs_url": "https://api.search.brave.com/app/keys",
-          "required": true
-        }
-      ],
-      "capabilities": { "tools": true, "resources": false, "prompts": false, "sampling": false },
-      "docs_url": "https://github.com/modelcontextprotocol/servers-archived/tree/main/src/brave-search",
-      "init_timeout_ms": 5000,
-      "ping_period_ms": 30000,
-      "sampling_policy": { "allowed": false, "default": false }
-    },
-    {
       "id": "filesystem",
       "display_name": "Filesystem (sandboxed)",
       "description": "Read and write files in a sandboxed workspace. The model gets read_file, write_file, list_directory, create_directory, move_file, and search_files tools scoped to the directories you allow.",

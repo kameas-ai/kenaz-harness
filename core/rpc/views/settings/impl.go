@@ -220,6 +220,51 @@ func (s *FileStore) SaveConfirmEach(enabled bool) error {
 	return s.saveLocked(got)
 }
 
+// LoadWebSearch returns the local-first web search built-in opt-in.
+// Default false (off) — privacy / least-surface posture.
+func (s *FileStore) LoadWebSearch() (bool, error) {
+	got, err := s.LoadAll()
+	if err != nil {
+		return got.WebSearchEnabled, err
+	}
+	return got.WebSearchEnabled, nil
+}
+
+// SaveWebSearch updates the web search opt-in flag.
+func (s *FileStore) SaveWebSearch(enabled bool) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	got, err := s.loadLocked()
+	if err != nil {
+		return err
+	}
+	got.WebSearchEnabled = enabled
+	return s.saveLocked(got)
+}
+
+// LoadBash returns the local-first bash built-in opt-in. Default
+// false (off) — bash is gated behind both this toggle and the
+// per-command allowlist regardless.
+func (s *FileStore) LoadBash() (bool, error) {
+	got, err := s.LoadAll()
+	if err != nil {
+		return got.BashEnabled, err
+	}
+	return got.BashEnabled, nil
+}
+
+// SaveBash updates the bash built-in opt-in flag.
+func (s *FileStore) SaveBash(enabled bool) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	got, err := s.loadLocked()
+	if err != nil {
+		return err
+	}
+	got.BashEnabled = enabled
+	return s.saveLocked(got)
+}
+
 // defaultSettings is the safe-baseline a fresh install starts with.
 func defaultSettings() Settings {
 	return Settings{
@@ -340,5 +385,31 @@ func (m *memoryStore) SaveConfirmEach(enabled bool) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.data.ConfirmEachDisabled = !enabled
+	return nil
+}
+
+func (m *memoryStore) LoadWebSearch() (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.data.WebSearchEnabled, nil
+}
+
+func (m *memoryStore) SaveWebSearch(enabled bool) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.data.WebSearchEnabled = enabled
+	return nil
+}
+
+func (m *memoryStore) LoadBash() (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.data.BashEnabled, nil
+}
+
+func (m *memoryStore) SaveBash(enabled bool) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.data.BashEnabled = enabled
 	return nil
 }
