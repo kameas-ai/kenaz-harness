@@ -39,6 +39,18 @@ func (r *recordingSink) topicCount(topic string) int {
 	return n
 }
 
+func (r *recordingSink) payloadsForTopic(topic string) []any {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make([]any, 0, len(r.calls))
+	for _, c := range r.calls {
+		if c.topic == topic {
+			out = append(out, c.payload)
+		}
+	}
+	return out
+}
+
 func (r *recordingSink) lastClosed() (StreamClosedPayload, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -165,8 +177,22 @@ func TestAPI_StartStream_PumpsChunksAndCloses(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 
-	if got := sink.topicCount("llm:stream-chunk"); got != 3 {
-		t.Fatalf("expected 3 stream-chunk emissions, got %d", got)
+	// The pump batches text deltas (Wails coalescing fix) and emits
+	// non-text events immediately. Two text deltas + one finish = 2
+	// emissions: a single coalesced "hello world" text, then the finish.
+	if got := sink.topicCount("llm:stream-chunk"); got != 2 {
+		t.Fatalf("expected 2 stream-chunk emissions (1 batched text + 1 finish), got %d", got)
+	}
+	// Verify the batched text covered both deltas — no character drop.
+	textPayloads := sink.payloadsForTopic("llm:stream-chunk")
+	var combined string
+	for _, p := range textPayloads {
+		if scp, ok := p.(StreamChunkPayload); ok && scp.Chunk.Kind == corellm.StreamText {
+			combined += scp.Chunk.Text
+		}
+	}
+	if combined != "hello world" {
+		t.Fatalf("batched text = %q, want %q", combined, "hello world")
 	}
 	closed, ok := sink.lastClosed()
 	if !ok {

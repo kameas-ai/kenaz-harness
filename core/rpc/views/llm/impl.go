@@ -21,6 +21,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -706,19 +707,74 @@ func (a *API) pump(sub *subscription) {
 		close(sub.done)
 	}()
 
+	// Stream-chunk batching (token-stream coalescing fix).
+	//
+	// Wails v2's runtime.EventsEmit on macOS uses evaluateJavaScript
+	// under the hood; rapid-fire calls landing within a single webview
+	// message-pump cycle can be elided — middle events get dropped
+	// while first+last survive. Confirmed by per-delta logging in
+	// core/llm/openrouter (see openrouter.delta records in
+	// ~/.kenaz/harness.log) showing 781 bytes accumulated server-side
+	// vs. ~half that landing in the chat surface.
+	//
+	// Fix: accumulate text deltas in a per-pump builder; flush at most
+	// once per ~16ms (one frame). Non-text events (finish / error /
+	// usage / tool / reasoning) flush pending text first, then emit
+	// immediately so ordering is preserved. End-of-stream flushes any
+	// remaining pending text before returning.
 	chunkCount := 0
 	var assistantText []byte
-	for ev := range sub.stream.Events() {
-		chunkCount++
-		if ev.Kind == corellm.StreamText {
-			assistantText = append(assistantText, ev.Text...)
+	var pendingText strings.Builder
+
+	flushPending := func() {
+		if pendingText.Len() == 0 {
+			return
 		}
+		text := pendingText.String()
+		pendingText.Reset()
 		a.sink.Emit("llm:stream-chunk", StreamChunkPayload{
 			SubID:     sub.id,
 			SessionID: sub.sessionID,
-			Chunk:     ev,
+			Chunk: corellm.StreamEvent{
+				Kind: corellm.StreamText,
+				Text: text,
+			},
 		})
 	}
+
+	const flushEvery = 16 * time.Millisecond
+	flushTicker := time.NewTicker(flushEvery)
+	defer flushTicker.Stop()
+
+	events := sub.stream.Events()
+loop:
+	for {
+		select {
+		case ev, ok := <-events:
+			if !ok {
+				break loop
+			}
+			chunkCount++
+			if ev.Kind == corellm.StreamText {
+				assistantText = append(assistantText, ev.Text...)
+				pendingText.WriteString(ev.Text)
+				continue
+			}
+			// Non-text event: drain pending text first so ordering is
+			// preserved (a finish or error must arrive AFTER the text
+			// that preceded it).
+			flushPending()
+			a.sink.Emit("llm:stream-chunk", StreamChunkPayload{
+				SubID:     sub.id,
+				SessionID: sub.sessionID,
+				Chunk:     ev,
+			})
+		case <-flushTicker.C:
+			flushPending()
+		}
+	}
+	// Final flush of anything buffered after the events channel closed.
+	flushPending()
 	resp, err := sub.stream.Final()
 	closed := StreamClosedPayload{SubID: sub.id, SessionID: sub.sessionID}
 	switch {
