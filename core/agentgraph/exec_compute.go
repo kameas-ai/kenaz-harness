@@ -1,0 +1,719 @@
+package agentgraph
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"strings"
+)
+
+// This file holds the compute-primitive executors (FR-004 .. FR-012):
+// LLM, Tool, Transform, Activity, Reflect, Review, Plan, Ask, Escalate.
+//
+// All executors follow the same shape: pull the typed *Attrs from the
+// node, perform the side effect via the Env seam, emit an EventBatch
+// with kind-specific events, return outputs on declared ports.
+
+// ---- LLMNode ----
+
+type llmExecutor struct{}
+
+func (llmExecutor) Kind() NodeKind { return NodeKindLLM }
+
+func (llmExecutor) Execute(ctx context.Context, env *Env, node *Node, inputs PortValues) (Result, error) {
+	res := NewResult()
+	a, ok := node.Attrs.(LLMAttrs)
+	if !ok {
+		return res, fmt.Errorf("llm: node %q has wrong attrs type %T", node.ID, node.Attrs)
+	}
+
+	// Build the message slice from upstream inputs. The default port
+	// for an LLMNode is "messages"; we accept either a []Message slice
+	// or a []llm.Message payload. Anything else falls back to a
+	// blank history.
+	var msgs []Message
+	if v, ok := inputs.Get("messages"); ok {
+		switch typed := v.(type) {
+		case []Message:
+			msgs = append(msgs, typed...)
+		case []any:
+			for _, m := range typed {
+				if mm, ok := m.(Message); ok {
+					msgs = append(msgs, mm)
+				}
+			}
+		}
+	}
+
+	// Tool allowlist comes from attrs.
+	tools := append([]string(nil), a.ToolAllowlist...)
+
+	req := LLMRequest{
+		Provider:     a.Provider,
+		Model:        a.Model,
+		SystemPrompt: a.SystemPrompt,
+		Messages:     msgs,
+		Tools:        tools,
+		MaxTokens:    a.MaxTokens,
+		Temperature:  a.Temperature,
+	}
+
+	if env.Counters != nil {
+		// Cheap pre-check: if budget would already be over even before
+		// the call, bail out.
+		if env.Budget.MaxLLMCallsPerRun > 0 &&
+			env.Counters.LLMCallsMade >= env.Budget.MaxLLMCallsPerRun {
+			_ = res.Events.AppendKind(env.RunID, node.ID, EventBudgetCapHit, map[string]any{
+				"reason": "max_llm_calls_per_run",
+				"limit":  env.Budget.MaxLLMCallsPerRun,
+			})
+			return res, ErrBudgetExceeded
+		}
+	}
+
+	resp, err := env.LLM.Generate(ctx, req)
+	if err != nil {
+		_ = res.Events.AppendKind(env.RunID, node.ID, EventNodeError, map[string]any{
+			"err": err.Error(),
+		})
+		return res, fmt.Errorf("llm: node %q: %w", node.ID, err)
+	}
+
+	if env.Counters != nil {
+		env.Counters.AddLLM(resp.TokensUsed)
+		env.Counters.AddCost(resp.CostUSD)
+	}
+
+	// Build the assistant message + tool-call records.
+	asst := Message{
+		Role:      "assistant",
+		Content:   resp.Content,
+		ToolCalls: resp.ToolCalls,
+	}
+	out := append(append([]Message(nil), msgs...), asst)
+	res.Outputs["response"] = out
+	res.Outputs["assistant"] = asst
+	res.Outputs["finish_reason"] = resp.FinishReason
+	if len(resp.ToolCalls) > 0 {
+		res.Outputs["tool_calls"] = resp.ToolCalls
+	}
+
+	_ = res.Events.AppendKind(env.RunID, node.ID, EventLLMCall, map[string]any{
+		"provider":      a.Provider,
+		"model":         a.Model,
+		"tokens":        resp.TokensUsed,
+		"cost_usd":      resp.CostUSD,
+		"finish_reason": resp.FinishReason,
+		"tool_calls":    len(resp.ToolCalls),
+	})
+
+	// Greedy memory hook: post-LLM (FR-027).
+	if env.Hooks != nil && resp.Content != "" {
+		hookBatch := env.Hooks.Fire(ctx, HookPostLLM, "session",
+			"assistant turn — "+node.ID, resp.Content, node.ID)
+		for _, e := range hookBatch.Events {
+			e.RunID = env.RunID
+			e.NodeID = node.ID
+			res.Events.Append(e)
+		}
+	}
+
+	return res, nil
+}
+
+// ---- ToolNode ----
+
+type toolExecutor struct{}
+
+func (toolExecutor) Kind() NodeKind { return NodeKindTool }
+
+func (toolExecutor) Execute(ctx context.Context, env *Env, node *Node, inputs PortValues) (Result, error) {
+	res := NewResult()
+	a, ok := node.Attrs.(ToolAttrs)
+	if !ok {
+		return res, fmt.Errorf("tool: node %q has wrong attrs type %T", node.ID, node.Attrs)
+	}
+
+	if env.Budget.MaxToolCallsPerRun > 0 && env.Counters != nil &&
+		env.Counters.ToolCallsMade >= env.Budget.MaxToolCallsPerRun {
+		_ = res.Events.AppendKind(env.RunID, node.ID, EventBudgetCapHit, map[string]any{
+			"reason": "max_tool_calls_per_run",
+			"limit":  env.Budget.MaxToolCallsPerRun,
+		})
+		return res, ErrBudgetExceeded
+	}
+
+	if !env.Tools.Has(a.Name) {
+		_ = res.Events.AppendKind(env.RunID, node.ID, EventNodeError, map[string]any{
+			"err":  "unknown tool",
+			"tool": a.Name,
+		})
+		return res, fmt.Errorf("tool: node %q: unknown tool %q", node.ID, a.Name)
+	}
+
+	args := make(map[string]any, len(a.Args))
+	for k, v := range a.Args {
+		args[k] = v
+	}
+	// Allow the upstream "args" port to override / augment static args.
+	if v, ok := inputs.Get("args"); ok {
+		if m, ok := v.(map[string]any); ok {
+			for k, vv := range m {
+				args[k] = vv
+			}
+		}
+	}
+
+	_ = res.Events.AppendKind(env.RunID, node.ID, EventToolCall, map[string]any{
+		"tool": a.Name,
+		"args": args,
+	})
+
+	tr, err := env.Tools.Call(ctx, ToolCall{Name: a.Name, Args: args})
+	if env.Counters != nil {
+		env.Counters.AddTool()
+	}
+	if err != nil {
+		_ = res.Events.AppendKind(env.RunID, node.ID, EventNodeError, map[string]any{
+			"err":  err.Error(),
+			"tool": a.Name,
+		})
+		return res, fmt.Errorf("tool: node %q (%s): %w", node.ID, a.Name, err)
+	}
+
+	res.Outputs["result"] = tr
+	_ = res.Events.AppendKind(env.RunID, node.ID, EventToolResult, map[string]any{
+		"tool":     a.Name,
+		"is_error": tr.IsError,
+		"bytes":    len(tr.Content),
+	})
+
+	// Greedy memory hook: post-tool.
+	if env.Hooks != nil && tr.Content != "" {
+		hookBatch := env.Hooks.Fire(ctx, HookPostTool, "session",
+			"tool result — "+a.Name, tr.Content, node.ID)
+		for _, e := range hookBatch.Events {
+			e.RunID = env.RunID
+			e.NodeID = node.ID
+			res.Events.Append(e)
+		}
+	}
+	return res, nil
+}
+
+// ---- TransformNode ----
+
+type transformExecutor struct{}
+
+func (transformExecutor) Kind() NodeKind { return NodeKindTransform }
+
+func (transformExecutor) Execute(ctx context.Context, env *Env, node *Node, inputs PortValues) (Result, error) {
+	res := NewResult()
+	a, ok := node.Attrs.(TransformAttrs)
+	if !ok {
+		return res, fmt.Errorf("transform: node %q has wrong attrs type %T", node.ID, node.Attrs)
+	}
+	fn, ok := env.Transforms.Lookup(a.Name)
+	if !ok {
+		return res, fmt.Errorf("transform: node %q: unknown transform %q", node.ID, a.Name)
+	}
+	out, err := fn(ctx, inputs, a.Params)
+	if err != nil {
+		return res, fmt.Errorf("transform: node %q (%s): %w", node.ID, a.Name, err)
+	}
+	res.Outputs = out
+	return res, nil
+}
+
+// BuiltinTransforms registers the WP02 default transforms (FR-006).
+//
+// The kernel ships with a small set out of the box; project authors
+// can register more via TransformRegistry.Register. Names are stable
+// wire identifiers and must not change without a spec bump.
+func BuiltinTransforms(r *TransformRegistry) {
+	r.Register("concat", transformConcat)
+	r.Register("json_extract", transformJSONExtract)
+	r.Register("truncate_tokens", transformTruncateTokens)
+	r.Register("uppercase", transformUppercase)
+}
+
+// transformConcat joins the "parts" input slice (or all string-valued
+// inputs) with the configured separator (default newline).
+func transformConcat(_ context.Context, in PortValues, params map[string]any) (PortValues, error) {
+	sep, _ := params["sep"].(string)
+	if sep == "" {
+		sep = "\n"
+	}
+	var parts []string
+	if v, ok := in["parts"]; ok {
+		switch t := v.(type) {
+		case []string:
+			parts = append(parts, t...)
+		case []any:
+			for _, p := range t {
+				if s, ok := p.(string); ok {
+					parts = append(parts, s)
+				}
+			}
+		}
+	} else {
+		// fall back: every string-typed input, in alphabetical order.
+		keys := make([]string, 0, len(in))
+		for k := range in {
+			keys = append(keys, k)
+		}
+		// stable order — sort.Strings would do but we avoid the import
+		// for one slot; insertion sort is plenty for the transform path.
+		for i := 1; i < len(keys); i++ {
+			for j := i; j > 0 && keys[j-1] > keys[j]; j-- {
+				keys[j], keys[j-1] = keys[j-1], keys[j]
+			}
+		}
+		for _, k := range keys {
+			if s, ok := in[k].(string); ok {
+				parts = append(parts, s)
+			}
+		}
+	}
+	return PortValues{"out": strings.Join(parts, sep)}, nil
+}
+
+// transformJSONExtract reads in["in"] as a JSON document and extracts
+// the path keyed by params["path"] (a dot-separated string).
+func transformJSONExtract(_ context.Context, in PortValues, params map[string]any) (PortValues, error) {
+	doc, _ := in["in"].(string)
+	if doc == "" {
+		// Maybe the upstream passed []byte.
+		if b, ok := in["in"].([]byte); ok {
+			doc = string(b)
+		}
+	}
+	if doc == "" {
+		return PortValues{"out": nil}, nil
+	}
+	var data any
+	if err := json.Unmarshal([]byte(doc), &data); err != nil {
+		return nil, fmt.Errorf("json_extract: parse: %w", err)
+	}
+	path, _ := params["path"].(string)
+	if path == "" {
+		return PortValues{"out": data}, nil
+	}
+	cur := data
+	for _, segment := range strings.Split(path, ".") {
+		m, ok := cur.(map[string]any)
+		if !ok {
+			return PortValues{"out": nil}, nil
+		}
+		cur = m[segment]
+	}
+	return PortValues{"out": cur}, nil
+}
+
+// transformTruncateTokens truncates the input string to params["max"]
+// rune-counted "tokens". Cheap-and-cheerful: no real tokenizer, just
+// rune-counting suitable for the WP02 placeholder.
+func transformTruncateTokens(_ context.Context, in PortValues, params map[string]any) (PortValues, error) {
+	s, _ := in["in"].(string)
+	max := 0
+	switch m := params["max"].(type) {
+	case int:
+		max = m
+	case int64:
+		max = int(m)
+	case float64:
+		max = int(m)
+	}
+	if max <= 0 || len(s) == 0 {
+		return PortValues{"out": s}, nil
+	}
+	runes := []rune(s)
+	if len(runes) > max {
+		runes = runes[:max]
+	}
+	return PortValues{"out": string(runes)}, nil
+}
+
+// transformUppercase upper-cases the input string.
+func transformUppercase(_ context.Context, in PortValues, _ map[string]any) (PortValues, error) {
+	s, _ := in["in"].(string)
+	return PortValues{"out": strings.ToUpper(s)}, nil
+}
+
+// ---- ActivityNode ----
+
+type activityExecutor struct{}
+
+func (activityExecutor) Kind() NodeKind { return NodeKindActivity }
+
+func (activityExecutor) Execute(ctx context.Context, env *Env, node *Node, inputs PortValues) (Result, error) {
+	res := NewResult()
+	a, ok := node.Attrs.(ActivityAttrs)
+	if !ok {
+		return res, fmt.Errorf("activity: node %q has wrong attrs type %T", node.ID, node.Attrs)
+	}
+	if env.Activities == nil {
+		return res, fmt.Errorf("activity: node %q: no catalog wired", node.ID)
+	}
+	sub, err := env.Activities.Resolve(a.ActivityID, a.Version)
+	if err != nil {
+		return res, fmt.Errorf("activity: node %q: resolve %q: %w", node.ID, a.ActivityID, err)
+	}
+	// Run the sub-graph synchronously. The sub-run shares the parent
+	// env (memory, counters, tools, etc.) so budgets cascade.
+	subKernel := NewKernel(WithEventLog(NewMemoryEventLog()))
+	subRunID := env.RunID + ":" + node.ID
+	subEnv := *env
+	subEnv.RunID = subRunID
+	subEnv.Graph = sub
+	subEnv.State = NewRunState()
+	for k, v := range inputs {
+		subEnv.State.SetOutputs("__activity_inputs__"+k, PortValues{"out": v})
+	}
+	if err := subKernel.Run(ctx, &subEnv); err != nil && !errors.Is(err, ErrPaused) {
+		return res, fmt.Errorf("activity: node %q: sub-run: %w", node.ID, err)
+	}
+
+	// Surface the last-completed leaf's outputs as our output. If the
+	// sub-graph produced no leaves we just pass through the inputs.
+	leaves := subKernel.Leaves(subRunID, sub)
+	if len(leaves) == 0 {
+		res.Outputs["out"] = inputs
+		return res, nil
+	}
+	res.Outputs["out"] = subEnv.State.Outputs(leaves[len(leaves)-1])
+	_ = res.Events.AppendKind(env.RunID, node.ID, EventNodeComplete, map[string]any{
+		"activity_id": a.ActivityID,
+		"version":     a.Version,
+		"sub_run":     subRunID,
+		"leaf_count":  len(leaves),
+	})
+	return res, nil
+}
+
+// ---- ReflectNode ----
+
+type reflectExecutor struct{}
+
+func (reflectExecutor) Kind() NodeKind { return NodeKindReflect }
+
+func (reflectExecutor) Execute(ctx context.Context, env *Env, node *Node, inputs PortValues) (Result, error) {
+	res := NewResult()
+	a, ok := node.Attrs.(ReflectAttrs)
+	if !ok {
+		return res, fmt.Errorf("reflect: node %q has wrong attrs type %T", node.ID, node.Attrs)
+	}
+	_ = a // kept for future config
+	_ = res.Events.AppendKind(env.RunID, node.ID, EventReflectStarted, map[string]any{
+		"model":              a.Model,
+		"severity_threshold": a.SeverityThreshold,
+		"include_trace":      a.IncludeTrace,
+	})
+
+	// The reflect step takes a draft, asks the configured model for a
+	// critique, and returns both. The model + draft live in inputs.
+	draft, _ := inputs.GetString("draft")
+	if v, ok := inputs.Get("draft"); ok && draft == "" {
+		// May have come through as a Message slice; flatten.
+		if msgs, ok := v.([]Message); ok && len(msgs) > 0 {
+			draft = msgs[len(msgs)-1].Content
+		}
+	}
+
+	prompt := "Critique this draft. Reply with severity (low|medium|high) and a one-line revision suggestion.\n\nDraft:\n" + draft
+	model := a.Model
+	if model == "" {
+		model = "default"
+	}
+	resp, err := env.LLM.Generate(ctx, LLMRequest{
+		Model: model, MaxTokens: 512,
+		Messages: []Message{{Role: "user", Content: prompt}},
+	})
+	if err != nil {
+		return res, fmt.Errorf("reflect: node %q: %w", node.ID, err)
+	}
+	if env.Counters != nil {
+		env.Counters.AddLLM(resp.TokensUsed)
+		env.Counters.AddCost(resp.CostUSD)
+	}
+
+	severity := "low"
+	low := strings.ToLower(resp.Content)
+	switch {
+	case strings.Contains(low, "high"):
+		severity = "high"
+	case strings.Contains(low, "medium"):
+		severity = "medium"
+	}
+
+	critique := map[string]any{
+		"severity":            severity,
+		"text":                resp.Content,
+		"suggested_revision": resp.Content,
+	}
+	res.Outputs["critique"] = critique
+	res.Outputs["revision"] = []Message{{Role: "user", Content: "Revise: " + resp.Content}}
+	res.Outputs["severity"] = severity
+
+	_ = res.Events.AppendKind(env.RunID, node.ID, EventReflectCompleted, map[string]any{
+		"severity": severity,
+		"tokens":   resp.TokensUsed,
+	})
+	return res, nil
+}
+
+// ---- ReviewNode ----
+
+type reviewExecutor struct{}
+
+func (reviewExecutor) Kind() NodeKind { return NodeKindReview }
+
+func (reviewExecutor) Execute(ctx context.Context, env *Env, node *Node, inputs PortValues) (Result, error) {
+	res := NewResult()
+	a, ok := node.Attrs.(ReviewAttrs)
+	if !ok {
+		return res, fmt.Errorf("review: node %q has wrong attrs type %T", node.ID, node.Attrs)
+	}
+
+	// Track per-node iteration count via RunState (lives only in this
+	// process, but matches the kernel's other re-fire counters).
+	iterKey := "__review_iter__" + node.ID
+	prev := env.State.Outputs(iterKey)
+	iter := 0
+	if v, ok := prev["count"]; ok {
+		if n, ok := v.(int); ok {
+			iter = n
+		}
+	}
+	iter++
+	env.State.SetOutputs(iterKey, PortValues{"count": iter})
+
+	draft, _ := inputs.GetString("draft")
+	if draft == "" {
+		if v, ok := inputs.Get("draft"); ok {
+			if msgs, ok := v.([]Message); ok && len(msgs) > 0 {
+				draft = msgs[len(msgs)-1].Content
+			}
+		}
+	}
+
+	model := a.Model
+	if model == "" {
+		model = "default"
+	}
+	resp, err := env.LLM.Generate(ctx, LLMRequest{
+		Model: model, MaxTokens: 256,
+		Messages: []Message{{Role: "user", Content: "Review this. Reply PASS or FAIL with one-line reason.\n\n" + draft}},
+	})
+	if err != nil {
+		return res, fmt.Errorf("review: node %q: %w", node.ID, err)
+	}
+	if env.Counters != nil {
+		env.Counters.AddLLM(resp.TokensUsed)
+		env.Counters.AddCost(resp.CostUSD)
+	}
+
+	verdict := "fail"
+	if strings.HasPrefix(strings.TrimSpace(strings.ToUpper(resp.Content)), "PASS") {
+		verdict = "pass"
+	}
+	res.Outputs["verdict"] = map[string]any{
+		"verdict": verdict,
+		"text":    resp.Content,
+		"iter":    iter,
+	}
+	res.Outputs["approved"] = draft
+
+	if verdict == "pass" {
+		_ = res.Events.AppendKind(env.RunID, node.ID, EventReviewPass, map[string]any{
+			"iter": iter, "tokens": resp.TokensUsed,
+		})
+		res.Outputs["should_retry"] = false
+		return res, nil
+	}
+
+	// Fail path. If we still have iterations left, signal the kernel
+	// to re-fire upstream; otherwise hard-error per on_cap_hit.
+	_ = res.Events.AppendKind(env.RunID, node.ID, EventReviewFail, map[string]any{
+		"iter": iter, "tokens": resp.TokensUsed,
+	})
+
+	if iter >= a.MaxIterations {
+		_ = res.Events.AppendKind(env.RunID, node.ID, EventReviewUnrecov, map[string]any{
+			"iter": iter, "cap": a.MaxIterations,
+		})
+		switch a.OnCapHit {
+		case "escalate":
+			_ = res.Events.AppendKind(env.RunID, node.ID, EventEscalateTriggered, map[string]any{
+				"reason": "review cap hit",
+				"iter":   iter,
+			})
+			res.Outputs["should_retry"] = false
+			res.Outputs["escalated"] = true
+			return res, nil
+		default:
+			res.Outputs["should_retry"] = false
+			return res, fmt.Errorf("review: node %q: cap hit at iter %d", node.ID, iter)
+		}
+	}
+	res.Outputs["should_retry"] = true
+	res.Outputs["retry_target"] = a.UpstreamNode
+	return res, nil
+}
+
+// ---- PlanNode ----
+
+type planExecutor struct{}
+
+func (planExecutor) Kind() NodeKind { return NodeKindPlan }
+
+func (planExecutor) Execute(ctx context.Context, env *Env, node *Node, inputs PortValues) (Result, error) {
+	res := NewResult()
+	a, ok := node.Attrs.(PlanAttrs)
+	if !ok {
+		return res, fmt.Errorf("plan: node %q has wrong attrs type %T", node.ID, node.Attrs)
+	}
+
+	task, _ := inputs.GetString("task")
+	if task == "" {
+		task = "(unspecified task)"
+	}
+	verbosity := a.Verbosity
+	if verbosity == "" {
+		verbosity = "standard"
+	}
+	model := a.PlannerModel
+	if model == "" {
+		model = "default"
+	}
+	prompt := fmt.Sprintf("Produce a %s plan for the task. Reply with a numbered list of steps.\n\nTask: %s",
+		verbosity, task)
+	resp, err := env.LLM.Generate(ctx, LLMRequest{
+		Model: model, MaxTokens: 1024,
+		Messages: []Message{{Role: "user", Content: prompt}},
+	})
+	if err != nil {
+		return res, fmt.Errorf("plan: node %q: %w", node.ID, err)
+	}
+	if env.Counters != nil {
+		env.Counters.AddLLM(resp.TokensUsed)
+		env.Counters.AddCost(resp.CostUSD)
+	}
+
+	res.Outputs["plan"] = []Message{{Role: "assistant", Content: resp.Content}}
+	res.Outputs["plan_text"] = resp.Content
+	res.Outputs["verbosity"] = verbosity
+
+	_ = res.Events.AppendKind(env.RunID, node.ID, EventPlanCreated, map[string]any{
+		"verbosity": verbosity,
+		"model":     model,
+		"tokens":    resp.TokensUsed,
+	})
+	return res, nil
+}
+
+// ---- AskNode ----
+
+type askExecutor struct{}
+
+func (askExecutor) Kind() NodeKind { return NodeKindAsk }
+
+func (askExecutor) Execute(ctx context.Context, env *Env, node *Node, _ PortValues) (Result, error) {
+	res := NewResult()
+	a, ok := node.Attrs.(AskAttrs)
+	if !ok {
+		return res, fmt.Errorf("ask: node %q has wrong attrs type %T", node.ID, node.Attrs)
+	}
+
+	// First check if a prior pause has already collected an answer.
+	if ans, ok := env.Ask.LookupAnswer(ctx, env.RunID, node.ID); ok {
+		res.Outputs["answer"] = ans
+		_ = res.Events.AppendKind(env.RunID, node.ID, EventAskAnswered, map[string]any{
+			"answer_len": len(ans),
+		})
+		// Hook the user message into greedy memory.
+		if env.Hooks != nil && ans != "" {
+			b := env.Hooks.Fire(ctx, HookPostUserMessage, "session",
+				"user answer — "+node.ID, ans, node.ID)
+			for _, e := range b.Events {
+				e.RunID = env.RunID
+				e.NodeID = node.ID
+				res.Events.Append(e)
+			}
+		}
+		return res, nil
+	}
+
+	// No answer yet — record pending and signal pause.
+	if err := env.Ask.Pending(ctx, env.RunID, node.ID, a.Question); err != nil {
+		return res, fmt.Errorf("ask: node %q: pending: %w", node.ID, err)
+	}
+	_ = res.Events.AppendKind(env.RunID, node.ID, EventAskPending, map[string]any{
+		"question": a.Question,
+	})
+	res.Pause = true
+	res.PauseReason = "ask: " + a.Question
+	return res, nil
+}
+
+// ---- EscalateNode ----
+
+type escalateExecutor struct{}
+
+func (escalateExecutor) Kind() NodeKind { return NodeKindEscalate }
+
+func (escalateExecutor) Execute(ctx context.Context, env *Env, node *Node, inputs PortValues) (Result, error) {
+	res := NewResult()
+	a, ok := node.Attrs.(EscalateAttrs)
+	if !ok {
+		return res, fmt.Errorf("escalate: node %q has wrong attrs type %T", node.ID, node.Attrs)
+	}
+
+	// One escalation per leg (FR-012). Track via RunState.
+	flagKey := "__escalated__" + node.ID
+	prev := env.State.Outputs(flagKey)
+	if v, ok := prev["fired"].(bool); ok && v && a.OneEscalationOnly {
+		return res, fmt.Errorf("escalate: node %q: already escalated once", node.ID)
+	}
+	env.State.SetOutputs(flagKey, PortValues{"fired": true})
+
+	// The "trigger" port carries the upstream context; we re-fire the
+	// upstream's most recent draft via the configured TargetModel.
+	upstreamOut := env.State.Outputs(a.UpstreamNode)
+	var draft string
+	if v, ok := upstreamOut["assistant"]; ok {
+		if m, ok := v.(Message); ok {
+			draft = m.Content
+		}
+	}
+	if draft == "" {
+		if v, ok := inputs.GetString("trigger"); ok {
+			draft = v
+		}
+	}
+
+	resp, err := env.LLM.Generate(ctx, LLMRequest{
+		Model:     a.TargetModel,
+		MaxTokens: 1024,
+		Messages: []Message{
+			{Role: "user", Content: "Re-do this with higher quality:\n\n" + draft},
+		},
+	})
+	if err != nil {
+		return res, fmt.Errorf("escalate: node %q: %w", node.ID, err)
+	}
+	if env.Counters != nil {
+		env.Counters.AddLLM(resp.TokensUsed)
+		env.Counters.AddCost(resp.CostUSD)
+	}
+
+	res.Outputs["result"] = []Message{{Role: "assistant", Content: resp.Content}}
+	res.Outputs["model_used"] = a.TargetModel
+	_ = res.Events.AppendKind(env.RunID, node.ID, EventEscalateTriggered, map[string]any{
+		"target_model": a.TargetModel,
+		"upstream":     a.UpstreamNode,
+		"tokens":       resp.TokensUsed,
+	})
+	return res, nil
+}
