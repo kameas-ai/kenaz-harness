@@ -31,6 +31,7 @@ type Manager struct {
 	kernel    *coreag.Kernel
 	log       coreag.EventLog
 	catalog   *activities.Catalog
+	envDeps   EnvDeps
 
 	// Library: bundled graphs the loader splices in (read-only).
 	bundled map[string]bundledGraph
@@ -355,6 +356,11 @@ func (m *Manager) startRun(req StartRunRequest) (StartRunResponse, error) {
 		Counters:   &coreag.RunCounters{WallclockStart: m.nowFn().UnixNano()},
 		State:      coreag.NewRunState(),
 	}
+	// Production wiring: thread the chassis-supplied EnvDeps into the
+	// per-run Env. Each non-nil dep replaces the corresponding nil-stub
+	// the kernel's applyEnvDefaults would otherwise install. Tests that
+	// don't wire deps fall through to the existing stubs.
+	m.envDeps.applyTo(env)
 	now := m.nowFn()
 	entry := &runEntry{
 		id:        runID,

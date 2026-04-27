@@ -3,7 +3,50 @@ package agentgraph
 import (
 	"context"
 	"sync"
+	"time"
 )
+
+// JournalWriter is the optional persistence seam for memory-hook
+// journal entries (FR-058 — agent-kernel-graph mission). Production
+// wiring binds a SQL-backed writer (migration 0308 ships the
+// memory_hook_journal table); tests can leave it nil and the
+// in-memory journal stays the only sink.
+//
+// The writer is consulted on every Fire() in addition to the
+// in-process journal slice. A write failure is non-fatal: the kernel
+// still emits the EventHookFired event so the inspector RPC can see
+// the fire, but the on-disk audit trail loses the row. The chassis
+// logs the failure at warn.
+//
+// IMPORTANT (DIRECTIVE_001): the writer interface lives here so
+// core/agentgraph has no dependency on core/storage. Production
+// wiring constructs the SQL-backed adapter in core/rpc and threads
+// it through HookManager.SetJournalWriter.
+type JournalWriter interface {
+	WriteJournalEntry(ctx context.Context, entry JournalEntry) error
+}
+
+// JournalEntry is the on-disk shape mirrored by the memory_hook_journal
+// table (sessions/0308). Timestamp is captured at hook fire time so
+// the journal preserves causal order even when the SQL write is
+// delayed (writes are best-effort, not transactional with the kernel
+// run).
+type JournalEntry struct {
+	ID           string
+	RunID        string
+	SessionID    string
+	NodeID       string
+	Boundary     HookBoundary
+	Scope        string
+	ScopeID      string
+	ChunkID      string
+	Written      bool
+	Deduped      bool
+	Skipped      bool
+	SkipReason   string
+	ContentHash  string
+	Timestamp    time.Time
+}
 
 // HookBoundary identifies the kernel firing point where a memory hook
 // runs. The nine boundaries from FR-027.
@@ -68,6 +111,15 @@ type HookManager struct {
 	// the inspector RPC can audit hook activity. Append-only; cap
 	// pruning is the caller's job (Bundle E ships the prune sweep).
 	journal []HookRecord
+
+	// journalWriter is the optional on-disk persistence seam. nil
+	// disables persistence; the in-memory journal is still populated.
+	journalWriter JournalWriter
+
+	// idGen produces unique journal-entry ids. Defaults to a fnv-based
+	// counter so test runs are deterministic; production wiring can
+	// override via SetJournalIDGen for crypto-strong ids.
+	idGen func() string
 }
 
 // HookRecord is one entry in the in-memory hook journal.
@@ -109,6 +161,28 @@ func (h *HookManager) SetRedactor(r Redactor) {
 	h.mu.Unlock()
 }
 
+// SetJournalWriter installs the on-disk persistence seam. nil disables
+// persistence (in-memory journal still works). Calling this from
+// production wiring is the only difference between "journal lost on
+// restart" and "journal in SQL".
+func (h *HookManager) SetJournalWriter(w JournalWriter) {
+	h.mu.Lock()
+	h.journalWriter = w
+	h.mu.Unlock()
+}
+
+// SetJournalIDGen overrides the journal-entry id generator. Tests use
+// this to produce deterministic ids; production wiring leaves the
+// default generator untouched.
+func (h *HookManager) SetJournalIDGen(gen func() string) {
+	if gen == nil {
+		return
+	}
+	h.mu.Lock()
+	h.idGen = gen
+	h.mu.Unlock()
+}
+
 // Fire runs the hook for the given boundary. The content is the text
 // the kernel wants captured; scope is global / project / session
 // (defaults to session when empty). Returns the EventBatch the kernel
@@ -121,6 +195,7 @@ func (h *HookManager) Fire(ctx context.Context, boundary HookBoundary, scope, ti
 		scope = "session"
 	}
 	var batch EventBatch
+	hash := contentHash(content)
 	h.mu.Lock()
 	if !h.enabled {
 		// Always emit the journal entry so the inspector can see the
@@ -129,7 +204,20 @@ func (h *HookManager) Fire(ctx context.Context, boundary HookBoundary, scope, ti
 			Boundary: boundary, Scope: scope, Title: title, Source: source,
 			Skipped: true, Reason: "hooks disabled",
 		})
+		writer := h.journalWriter
+		idGen := h.journalIDGenLocked()
 		h.mu.Unlock()
+		h.persistJournalEntry(ctx, writer, JournalEntry{
+			ID:          idGen(),
+			SessionID:   h.sessionID,
+			Boundary:    boundary,
+			Scope:       scope,
+			ScopeID:     resolveScopeID(scope, h.projectID, h.sessionID),
+			Skipped:     true,
+			SkipReason:  "hooks disabled",
+			ContentHash: hash,
+			Timestamp:   time.Now().UTC(),
+		})
 		_ = batch.AppendKind("", "", EventHookFired, HookEvent{
 			Boundary: boundary, Scope: scope, Title: title, Source: source,
 			Skipped: true, SkipReason: "hooks disabled",
@@ -137,14 +225,25 @@ func (h *HookManager) Fire(ctx context.Context, boundary HookBoundary, scope, ti
 		return batch
 	}
 	// In-process dedup: same boundary + content hash within this run.
-	hash := contentHash(content)
 	dedupKey := string(boundary) + "|" + hash
 	if _, seen := h.fired[dedupKey]; seen {
 		h.journal = append(h.journal, HookRecord{
 			Boundary: boundary, Scope: scope, Title: title, Source: source,
 			Deduped: true,
 		})
+		writer := h.journalWriter
+		idGen := h.journalIDGenLocked()
 		h.mu.Unlock()
+		h.persistJournalEntry(ctx, writer, JournalEntry{
+			ID:          idGen(),
+			SessionID:   h.sessionID,
+			Boundary:    boundary,
+			Scope:       scope,
+			ScopeID:     resolveScopeID(scope, h.projectID, h.sessionID),
+			Deduped:     true,
+			ContentHash: hash,
+			Timestamp:   time.Now().UTC(),
+		})
 		_ = batch.AppendKind("", "", EventHookFired, HookEvent{
 			Boundary: boundary, Scope: scope, Title: title, Source: source,
 			Deduped: true,
@@ -159,6 +258,8 @@ func (h *HookManager) Fire(ctx context.Context, boundary HookBoundary, scope, ti
 	mem := h.memory
 	sess := h.sessionID
 	proj := h.projectID
+	writer := h.journalWriter
+	idGen := h.journalIDGenLocked()
 	h.mu.Unlock()
 
 	id, deduped, err := mem.Write(ctx, MemoryWrite{
@@ -182,6 +283,24 @@ func (h *HookManager) Fire(ctx context.Context, boundary HookBoundary, scope, ti
 	h.journal = append(h.journal, rec)
 	h.mu.Unlock()
 
+	je := JournalEntry{
+		ID:          idGen(),
+		SessionID:   sess,
+		Boundary:    boundary,
+		Scope:       scope,
+		ScopeID:     resolveScopeID(scope, proj, sess),
+		ChunkID:     id,
+		Written:     err == nil,
+		Deduped:     deduped,
+		ContentHash: hash,
+		Timestamp:   time.Now().UTC(),
+	}
+	if err != nil {
+		je.Skipped = true
+		je.SkipReason = err.Error()
+	}
+	h.persistJournalEntry(ctx, writer, je)
+
 	hev := HookEvent{
 		Boundary: boundary, Scope: scope, Title: title, Source: source,
 		ChunkID: id, Deduped: deduped,
@@ -192,6 +311,40 @@ func (h *HookManager) Fire(ctx context.Context, boundary HookBoundary, scope, ti
 	}
 	_ = batch.AppendKind("", "", EventHookFired, hev)
 	return batch
+}
+
+// persistJournalEntry writes one entry to the SQL-backed sink when
+// configured. Failures are silently swallowed: the in-memory journal
+// still records the fire, and the kernel's EventLog still emits the
+// audit event. A future patch can surface persistence errors via a
+// chassis-level audit emitter.
+func (h *HookManager) persistJournalEntry(ctx context.Context, w JournalWriter, e JournalEntry) {
+	if w == nil {
+		return
+	}
+	_ = w.WriteJournalEntry(ctx, e)
+}
+
+// journalIDGenLocked returns the configured id generator, lazily
+// installing the default fnv-counter when none has been wired. Caller
+// MUST hold h.mu.
+func (h *HookManager) journalIDGenLocked() func() string {
+	if h.idGen != nil {
+		return h.idGen
+	}
+	counter := uint64(0)
+	h.idGen = func() string {
+		counter++
+		var buf [16]byte
+		const digits = "0123456789abcdef"
+		v := counter
+		for i := 15; i >= 0; i-- {
+			buf[i] = digits[v&0xF]
+			v >>= 4
+		}
+		return "j-" + string(buf[:])
+	}
+	return h.idGen
 }
 
 // Journal returns a copy of the in-memory hook journal. Tests use it

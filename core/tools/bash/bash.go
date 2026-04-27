@@ -2,6 +2,8 @@ package bash
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,6 +13,17 @@ import (
 	"strings"
 	"time"
 )
+
+// defaultBashRunID returns a hex-encoded 12-byte random id. Mirrors
+// the run-id shape used elsewhere in the chassis so logs and cache
+// keys look uniform.
+func defaultBashRunID() string {
+	var b [12]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return fmt.Sprintf("bash-%d", time.Now().UnixNano())
+	}
+	return "bash-" + hex.EncodeToString(b[:])
+}
 
 // Name is the namespaced tool identifier surfaced to the model. The
 // "kaneaz__" prefix is reserved for built-in (in-binary) tools so the
@@ -46,10 +59,17 @@ const (
 // pointing at the agent workspace (typically <DataDir>/agent-workspace).
 // Allowlist defaults to DefaultAllowlist when nil; pass an empty slice
 // to deny everything (test-only). Logger is optional; nil is silent.
+//
+// Store is the optional output cache the kernel's read_bash_output
+// executor reads from. nil disables run-id tracking; the tool still
+// works, but stale runs cannot be re-read by a downstream node.
+// IDGen is the run-id generator; nil falls back to a 12-byte hex id.
 type Options struct {
 	SandboxRoot string
 	Allowlist   []string
 	Logger      *slog.Logger
+	Store       *Store
+	IDGen       func() string
 }
 
 // Tool implements the kaneaz__bash built-in tool. It is safe for
@@ -59,6 +79,8 @@ type Tool struct {
 	sandboxRoot string
 	allowlist   []string
 	logger      *slog.Logger
+	store       *Store
+	idGen       func() string
 }
 
 // New constructs a Tool with the given options. SandboxRoot must be
@@ -72,6 +94,8 @@ func New(opts Options) *Tool {
 		sandboxRoot: opts.SandboxRoot,
 		allowlist:   allow,
 		logger:      opts.Logger,
+		store:       opts.Store,
+		idGen:       opts.IDGen,
 	}
 }
 
@@ -100,11 +124,16 @@ type callArgs struct {
 
 // callResult mirrors the tool's documented JSON return shape
 // (FR-011). Marshalled and returned by Call.
+//
+// RunID is the optional cache key the read_bash_output node uses to
+// re-read this run's transcript. Populated only when the tool was
+// constructed with a non-nil Store.
 type callResult struct {
 	Stdout    string `json:"stdout"`
 	Stderr    string `json:"stderr"`
 	ExitCode  int    `json:"exit_code"`
 	Truncated bool   `json:"truncated"`
+	RunID     string `json:"run_id,omitempty"`
 }
 
 // Call dispatches a single tool invocation. Errors that originate
@@ -202,12 +231,38 @@ func (t *Tool) Call(ctx context.Context, argsJSON json.RawMessage) (json.RawMess
 		}
 		t.logf("bash.run_error", "err", runErr.Error())
 	}
+	stdout := string(res.Stdout)
+	runID := ""
+	if t.store != nil {
+		runID = t.allocRunID()
+		t.store.Put(runID, Record{
+			Command:  args.Command,
+			Stdout:   stdout,
+			Stderr:   stderr,
+			ExitCode: exitCode,
+		})
+	}
 	return marshalResult(callResult{
-		Stdout:    string(res.Stdout),
+		Stdout:    stdout,
 		Stderr:    stderr,
 		ExitCode:  exitCode,
 		Truncated: res.Truncated,
+		RunID:     runID,
 	})
+}
+
+// allocRunID returns a unique run-id for the cache. Falls back to a
+// time-based id if crypto/rand is unavailable; in practice this is
+// the same defensive posture as core/rpc/views/agentgraph's run-id
+// generator and the chance of a collision in a single-user desktop
+// app is negligible.
+func (t *Tool) allocRunID() string {
+	if t.idGen != nil {
+		if id := t.idGen(); id != "" {
+			return id
+		}
+	}
+	return defaultBashRunID()
 }
 
 // resolveWorkingDir maps the caller-supplied working_dir to an

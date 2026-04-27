@@ -27,9 +27,16 @@ const ToolNameSeparator = "__"
 // permission resolver denies for this session, and namespaces the
 // remainder so the toolloop can split them back into (server, tool)
 // pairs at dispatch time.
+//
+// When a non-nil BuiltinLookup is provided, the discoverer ALSO appends
+// every enabled built-in tool (gated by the lookup's filter, e.g.
+// Settings.WebSearchEnabled). Built-ins surface to the model namespaced
+// as "kaneaz__<tool>" — the toolloop's BuiltinPool dispatches them
+// without going through MCP.
 type mcpToolDiscoverer struct {
-	pool  mcp.Pool
-	perms toolloop.PermissionResolver
+	pool     mcp.Pool
+	perms    toolloop.PermissionResolver
+	builtins toolloop.BuiltinLookup
 }
 
 // NewMCPToolDiscoverer wraps an mcp.Pool + an optional permission
@@ -40,28 +47,62 @@ func NewMCPToolDiscoverer(pool mcp.Pool, perms toolloop.PermissionResolver) core
 	return &mcpToolDiscoverer{pool: pool, perms: perms}
 }
 
+// NewMCPToolDiscovererWithBuiltins is the production constructor that
+// also threads in-binary tools (websearch, bash) through the same
+// discovery surface. builtins.Empty() at boot — the registry is filled
+// in when the user toggles them on; no rebind needed.
+func NewMCPToolDiscovererWithBuiltins(
+	pool mcp.Pool,
+	perms toolloop.PermissionResolver,
+	builtins toolloop.BuiltinLookup,
+) corellm.ToolDiscoverer {
+	return &mcpToolDiscoverer{pool: pool, perms: perms, builtins: builtins}
+}
+
 // Tools satisfies corellm.ToolDiscoverer.
 func (d *mcpToolDiscoverer) Tools(ctx context.Context, sessionID string) ([]corellm.ToolSpec, error) {
-	if d == nil || d.pool == nil {
+	if d == nil {
 		return nil, nil
 	}
-	raw, err := d.pool.Tools(ctx)
-	if err != nil {
-		return nil, err
+	// Preserve the legacy "nil pool ⇒ nil list" contract for callers
+	// that don't wire builtins. The empty-list fall-through below
+	// only kicks in when at least one source produced something.
+	if d.pool == nil && (d.builtins == nil || d.builtins.Empty()) {
+		return nil, nil
 	}
-	out := make([]corellm.ToolSpec, 0, len(raw))
-	for _, t := range raw {
-		if d.perms != nil {
-			res, perr := d.perms.Resolve(ctx, sessionID, t.Server, t.Name)
-			if perr == nil && res.Policy == toolloop.PolicyDeny {
-				continue
-			}
+	var out []corellm.ToolSpec
+	if d.pool != nil {
+		raw, err := d.pool.Tools(ctx)
+		if err != nil {
+			return nil, err
 		}
-		out = append(out, corellm.ToolSpec{
-			Name:        t.Server + ToolNameSeparator + t.Name,
-			Description: t.Description,
-			InputSchema: t.InputSchema,
-		})
+		for _, t := range raw {
+			if d.perms != nil {
+				res, perr := d.perms.Resolve(ctx, sessionID, t.Server, t.Name)
+				if perr == nil && res.Policy == toolloop.PolicyDeny {
+					continue
+				}
+			}
+			out = append(out, corellm.ToolSpec{
+				Name:        t.Server + ToolNameSeparator + t.Name,
+				Description: t.Description,
+				InputSchema: t.InputSchema,
+			})
+		}
+	}
+	if d.builtins != nil && !d.builtins.Empty() {
+		for _, b := range d.builtins.List() {
+			// Built-ins use the reserved "kaneaz" server prefix so the
+			// toolloop's namespaced-name split sends Call back to
+			// BuiltinPool. The Name() value already includes the
+			// "kaneaz__" prefix in production tools (websearch.Name,
+			// bash.Name); the discoverer publishes that name verbatim.
+			out = append(out, corellm.ToolSpec{
+				Name:        b.Name(),
+				Description: b.Description(),
+				InputSchema: b.InputSchema(),
+			})
+		}
 	}
 	return out, nil
 }

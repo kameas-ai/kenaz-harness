@@ -62,6 +62,7 @@ import (
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/workflow"
 	"github.com/sigil-tech/kaneaz-harness/core/secrets"
 	coreslashcmd "github.com/sigil-tech/kaneaz-harness/core/slashcmd"
+	corebash "github.com/sigil-tech/kaneaz-harness/core/tools/bash"
 	secretsref "github.com/sigil-tech/kaneaz-harness/core/secrets/ref"
 	"github.com/sigil-tech/kaneaz-harness/core/session"
 	"github.com/sigil-tech/kaneaz-harness/core/toolloop"
@@ -283,6 +284,13 @@ func New(c *core.Core) *API {
 	// pin in the chat surface and a retrieval at send-time see the
 	// same gob file.
 	memStore := openMemoryStore(c)
+	// Cedar gate-hook wiring (FR-026): wrap every memory.Store.Add with
+	// cedar.CheckMemoryWrite. AllowAll is the boot-stage default; a
+	// future engine-load path swaps in a real Cedar engine without
+	// touching this wiring.
+	if gs, ok := memStore.(corememory.GateSetter); ok && gs != nil {
+		gs.SetGate(&memoryGateAdapter{gate: cedar.AllowAll{}})
+	}
 	personalForLLM := newPersonalStore(c)
 	embedder := newEmbedder(c, personalForLLM)
 	memoryEnabled := func() bool {
@@ -332,7 +340,14 @@ func New(c *core.Core) *API {
 		artifactSink = artifactSinkConcrete
 	}
 
-	stack := newLLMStack(c, a.broker, personalForLLM, hooksRunner, attMgr, confirmEachEnabled, artifactSink, artifactSinkConcrete)
+	// Bash output cache — shared between the bash built-in tool (writes
+	// transcripts at Call time) and the agent-graph kernel's
+	// read_bash_output executor (reads transcripts by run-id). Both
+	// halves of the FR-057b loop bind to the SAME store instance so a
+	// transcript written by a bash call is visible to a downstream
+	// read_bash_output node in the same chat session.
+	a_bashStore := corebash.NewStore()
+	stack := newLLMStack(c, a.broker, personalForLLM, hooksRunner, attMgr, confirmEachEnabled, artifactSink, artifactSinkConcrete, settingsImpl, a_bashStore)
 	a.llmAPI = stack.api
 	a.stdioPool = stack.pool
 	if c != nil && a.stdioPool != nil {
@@ -387,22 +402,31 @@ func New(c *core.Core) *API {
 	a.corpusMgr = newCorpusManager(c, embedder)
 	a.corpusAPI = corpusview.New(a.corpusMgr)
 
-	// Agent-graph subsystem (mission agent-kernel-graph; Bundle A WP06).
-	// Manager construction is best-effort; on failure the API surface
-	// falls back to ErrManagerUnavailable so the chassis still boots.
-	a.graphMgr = newGraphManager(c)
-	a.graphAPI = graphview.New(a.graphMgr)
-
 	// Branches subsystem (mission agent-kernel-graph; Bundle B WP07/08).
 	// Wired only when storage is up — falls back to a nil-manager
 	// surface (ErrManagerUnavailable) when c is nil so test harness
 	// callers (New(nil)) don't crash.
+	//
+	// IMPORTANT: convMgr is constructed BEFORE the graph manager so we
+	// can thread it through as the BranchSeam dep on Env.
 	a.convMgr = newConversationManager(c)
 	a.branchesAPI = branchesview.New(branchesview.Config{
 		Conversations: a.convMgr,
 		Sessions:      sessionManagerOrNil(c),
 		Recommender:   newBranchRecommender(),
 	})
+
+	// Agent-graph subsystem (mission agent-kernel-graph; Bundle A WP06).
+	// Manager construction is best-effort; on failure the API surface
+	// falls back to ErrManagerUnavailable so the chassis still boots.
+	//
+	// Production wiring: thread the real conversation/corpus/memory/
+	// cedar/bash managers into the graph kernel's Env so the executors
+	// reach actual subsystems instead of the agentgraph nil-stubs. The
+	// bash store is shared with the bash tool's writes — see
+	// a_bashStore creation above newLLMStack.
+	a.graphMgr = newGraphManagerWithDeps(c, a.convMgr, a.corpusMgr, memStore, embedder, a_bashStore)
+	a.graphAPI = graphview.New(a.graphMgr)
 
 	// Cascading dials (Bundle E WP17). The view degrades to in-memory-
 	// only when no kernel resumer is wired — the chassis still boots
@@ -836,9 +860,19 @@ func (f *keychainForgetter) Forget(_ context.Context, locator string) error {
 // shared secrets backend is what InstallRecipe writes credentials
 // into so the resolver finds them on the next ResolveEnv).
 type llmStack struct {
-	api     llm.LLMConnectorAPI
-	pool    *stdio.Pool
-	secrets *secrets.MemoryBackend
+	api      llm.LLMConnectorAPI
+	pool     *stdio.Pool
+	secrets  *secrets.MemoryBackend
+	// builtins is the registry of in-binary tools (websearch, bash)
+	// the chassis fills in based on the Settings toggles. Holding it
+	// on the stack so the chassis-level wiring path can register and
+	// unregister tools as the user toggles them in Settings.
+	builtins *toolloop.BuiltinRegistry
+	// bashStore is the bash tool's per-process output cache. Held so
+	// the agent-graph manager (which constructs its read_bash_output
+	// adapter against the SAME instance) wires both halves of the
+	// FR-057b loop without separate plumbing.
+	bashStore *corebash.Store
 }
 
 func newLLMStack(
@@ -850,6 +884,8 @@ func newLLMStack(
 	confirmEachEnabled func() bool,
 	artifactSink llm.ArtifactSink,
 	artifactSinkConcrete *artifactsview.Sink,
+	settingsImpl *settings.API,
+	bashStore *corebash.Store,
 ) llmStack {
 	// Share ONE secrets backend between the credref resolver (which
 	// reads keys when streaming) and the keychain writer (which stages
@@ -950,9 +986,21 @@ func newLLMStack(
 	if artifactSinkConcrete != nil {
 		toolloopHooks.RegisterPostListener(artifactSinkConcrete.PostListener())
 	}
+
+	// Built-in tools registry. The chassis registers websearch + bash
+	// here when Settings toggles are ON. The toolloop's BuiltinPool
+	// merges them into the pool's tool catalog AND dispatches to them
+	// without going through MCP. Gating is done via an EnabledFilter
+	// composed from the Settings store so a toggle takes effect on the
+	// next chat turn without a process restart.
+	builtinRegistry := toolloop.NewBuiltinRegistry()
+	registerBuiltinTools(c, builtinRegistry, bashStore)
+	builtinFilter := toolloop.NewEnabledFilter(builtinRegistry, builtinEnabledPredicate(settingsImpl))
+	wrappedPool := toolloop.NewBuiltinPool(&mcpPoolAdapter{inner: mcpPool}, builtinFilter)
+
 	loop, loopErr := toolloop.New(toolloop.Config{
 		Registry:           reg,
-		Pool:               &mcpPoolAdapter{inner: mcpPool},
+		Pool:               wrappedPool,
 		History:            historyAdapter,
 		Permissions:        perms,
 		Hooks:              toolloopHooks,
@@ -984,7 +1032,12 @@ func newLLMStack(
 	// split the response back into a (server, tool) pair at dispatch.
 	// Without this, the model never sees any tools and the loop is
 	// dead code from the user's perspective.
-	toolDiscoverer := llm.NewMCPToolDiscoverer(mcpPool, perms)
+	//
+	// The discoverer also threads the built-in tool registry through
+	// (gated by the same Settings filter as the dispatch path), so the
+	// model SEES kaneaz__web_search / kaneaz__bash in its tool catalog
+	// when those Settings toggles are ON.
+	toolDiscoverer := llm.NewMCPToolDiscovererWithBuiltins(mcpPool, perms, builtinFilter)
 	api := llm.New(llm.Config{
 		Registry:       reg,
 		Sink:           &streamSinkAdapter{broker: broker},
@@ -1000,7 +1053,13 @@ func newLLMStack(
 		ConfirmGateway: confirmGateway,
 		Artifacts:      &llmArtifactSinkAdapter{inner: artifactSink},
 	})
-	return llmStack{api: api, pool: mcpPool, secrets: secretsBackend}
+	return llmStack{
+		api:       api,
+		pool:      mcpPool,
+		secrets:   secretsBackend,
+		builtins:  builtinRegistry,
+		bashStore: bashStore,
+	}
 }
 
 // poolEventPublisher adapts the rpc.StreamBroker to the stdio
@@ -1114,6 +1173,24 @@ func (a *mcpPoolAdapter) Call(ctx context.Context, server, tool string, args jso
 	return a.inner.Call(ctx, server, tool, args)
 }
 
+// memoryGateAdapter wraps a cedar.Gate onto the memory.MemoryWriteGate
+// interface so the memory store can fire cedar.CheckMemoryWrite on
+// every Add without importing the cedar package directly. The adapter
+// keeps DIRECTIVE_001 intact: core/memory has no policy/cedar import.
+type memoryGateAdapter struct {
+	gate cedar.Gate
+}
+
+// CheckWrite delegates to cedar.CheckMemoryWrite. nil gate is treated
+// as AllowAll (every check passes), which matches the boot-stage
+// default the chassis ships with.
+func (a *memoryGateAdapter) CheckWrite(ctx context.Context, scope string) error {
+	if a == nil || a.gate == nil {
+		return nil
+	}
+	return cedar.CheckMemoryWrite(ctx, a.gate, scope)
+}
+
 // openMemoryStore opens the long-term-memory vector DB at
 // <DataDir>/memory.gob. A nil core or any IO failure soft-fails to nil
 // so the chassis still boots — the rpc surface treats nil as "memory
@@ -1189,11 +1266,54 @@ func newCorpusManager(c *core.Core, embedder corememory.Embedder) *corecorpus.Ma
 // library and runs in-memory graphs; user-graph persistence is the
 // only feature lost when DataDir is empty.
 func newGraphManager(c *core.Core) *graphview.Manager {
+	return newGraphManagerWithDeps(c, nil, nil, nil, nil, nil)
+}
+
+// newGraphManagerWithDeps wires production seams into the graph
+// kernel's Env. Each non-nil dep is wrapped in the corresponding
+// agentgraph adapter and threaded into every Run. Nil deps fall back
+// to the agentgraph nil-stubs so the kernel keeps booting in test
+// harnesses that don't care about the wiring.
+//
+// bashStore must be the SAME instance the bash built-in tool writes
+// to so a downstream read_bash_output node sees transcripts written
+// by a prior bash call. Pass nil to disable read_bash_output entirely.
+func newGraphManagerWithDeps(
+	c *core.Core,
+	convMgr *coreconv.Manager,
+	corpusMgr *corecorpus.Manager,
+	memStore corememory.Store,
+	embedder corememory.Embedder,
+	bashStore *corebash.Store,
+) *graphview.Manager {
 	dataDir := ""
 	if c != nil {
 		dataDir = c.DataDir()
 	}
-	mgr, err := graphview.NewManager(graphview.WithDataDir(dataDir))
+	deps := graphview.EnvDeps{}
+	if convMgr != nil {
+		deps.Branch = graphview.NewBranchSeamAdapter(convMgr, sessionManagerOrNil(c))
+	}
+	if corpusMgr != nil {
+		deps.Corpus = graphview.NewCorpusBackendAdapter(corpusMgr)
+	}
+	if memStore != nil {
+		deps.Memory = graphview.NewMemoryStoreAdapter(memStore, embedder)
+	}
+	// Cedar policy gate: production starts with AllowAll until an
+	// engine is loaded; the wiring slot is here so a future "load
+	// policy bundle" path only needs to swap the gate without
+	// touching the manager constructor.
+	deps.Policy = graphview.NewPolicyGateAdapter(cedar.AllowAll{})
+	if bashStore != nil {
+		deps.BashStore = bashStore
+		deps.BashOutput = graphview.NewBashOutputStoreAdapter(bashStore)
+	}
+
+	mgr, err := graphview.NewManager(
+		graphview.WithDataDir(dataDir),
+		graphview.WithEnvDeps(deps),
+	)
 	if err != nil {
 		// Construction is best-effort; surface returns
 		// ErrManagerUnavailable when nil.
