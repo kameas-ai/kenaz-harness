@@ -20,6 +20,7 @@ import (
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/sessions"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/settings"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/shell"
+	slashview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/slashcmd"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/tools"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/trust"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/workflow"
@@ -47,6 +48,7 @@ type fakeHarnessAPI struct {
 	artifactsAPI    artifactsview.ArtifactsAPI
 	toolsAPI        tools.ToolsAPI
 	shellAPI        shell.ShellAPI
+	slashAPI        slashview.SlashAPI
 }
 
 func (f *fakeHarnessAPI) ShellStatus(_ context.Context) (ShellStatus, error) {
@@ -72,6 +74,7 @@ func (f *fakeHarnessAPI) Attachments() attachmentsview.AttachmentsAPI { return f
 func (f *fakeHarnessAPI) Artifacts() artifactsview.ArtifactsAPI       { return f.artifactsAPI }
 func (f *fakeHarnessAPI) Tools() tools.ToolsAPI                       { return f.toolsAPI }
 func (f *fakeHarnessAPI) Shell() shell.ShellAPI                       { return f.shellAPI }
+func (f *fakeHarnessAPI) Slash() slashview.SlashAPI                   { return f.slashAPI }
 
 // Compile-time interface witness (plan §4.2).
 var _ HarnessAPI = (*fakeHarnessAPI)(nil)
@@ -123,6 +126,14 @@ func TestViewAccessorStability(t *testing.T) {
 	}
 	if api.Attachments() != api.Attachments() {
 		t.Errorf("Attachments() returned different pointers across calls")
+	}
+	// Slash() — when the slashAPI is wired (which is the case for
+	// New(nil) since the registry is built from a nil-deps Deps and
+	// still succeeds), the accessor must return the same pointer
+	// twice. The accessor falls back to a fresh nil-registry surface
+	// only when slashAPI is nil at construction time.
+	if api.slashAPI != nil && api.Slash() != api.Slash() {
+		t.Errorf("Slash() returned different pointers across calls")
 	}
 }
 

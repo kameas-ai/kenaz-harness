@@ -25,11 +25,16 @@
  * #3: image previews use URL.createObjectURL, revoked on remove + send.
  */
 
-import { computed, onBeforeUnmount, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { Paperclip, X, FileText } from 'lucide-vue-next';
 import { useDropZone } from '@vueuse/core';
 import { useHarnessClient } from '@/lib/harnessClientContext';
-import type { ContentBlock, CostEstimate } from '@/lib/types';
+import type {
+  ContentBlock,
+  CostEstimate,
+  SlashCommandInfo,
+} from '@/lib/types';
+import SlashAutocomplete from '@/components/chat/SlashAutocomplete.vue';
 
 const props = defineProps<{
   modelValue?: string;
@@ -65,6 +70,13 @@ const emit = defineEmits<{
    */
   (e: 'sendBlocks', contentBlocks: ContentBlock[]): void;
   (e: 'cancel'): void;
+  /**
+   * Slash-command submit. Fires INSTEAD of `send` / `sendBlocks`
+   * when the trimmed input begins with `/`. The parent dispatches
+   * via `client.slash.execute(sessionId, raw)` and renders the
+   * result inline.
+   */
+  (e: 'slashCommand', raw: string): void;
 }>();
 
 const client = useHarnessClient();
@@ -560,6 +572,105 @@ async function commitAtPath(path: string): Promise<void> {
   }
 }
 
+// ── slash-command autocomplete ───────────────────────────────────────
+//
+// When the trimmed input starts with `/` AND the user is still typing
+// the command name (no whitespace yet), we render the slash dropdown.
+// The command list is fetched once on mount; filtering happens
+// in-component (cheap O(n) over the static list).
+//
+// `slashFilteredCount` mirrors the autocomplete component's filtered
+// length so the keydown handler can clamp activeIndex without poking
+// at the child's exposed handle on every keystroke.
+
+const slashCommands = ref<readonly SlashCommandInfo[]>([]);
+const slashActiveIndex = ref(0);
+const slashFilteredCount = ref(0);
+
+const slashAutocompleteRef = ref<InstanceType<typeof SlashAutocomplete> | null>(
+  null,
+);
+
+onMounted(() => {
+  // Best-effort fetch — when the harness boots without a wired
+  // slashcmd registry (test harness path), the surface returns an
+  // empty list. The composer renders nothing and stays usable.
+  void client.slash
+    .list()
+    .then((list) => {
+      slashCommands.value = list;
+    })
+    .catch(() => {
+      slashCommands.value = [];
+    });
+});
+
+/**
+ * slashState — derived computed: when non-null, the dropdown opens.
+ *
+ *   - Trimmed input must begin with `/`.
+ *   - `query` is the post-`/` token (no whitespace); empty is fine
+ *     (open dropdown shows every command).
+ *   - As soon as the user types a space (passing into args land),
+ *     the dropdown closes — args are command-specific and not
+ *     covered by v1 autocomplete.
+ */
+interface SlashState {
+  query: string;
+}
+
+const slashState = computed<SlashState | null>(() => {
+  const trimmed = internal.value.trimStart();
+  if (!trimmed.startsWith('/')) return null;
+  const body = trimmed.slice(1);
+  // Whitespace inside `body` means the user is now typing args; the
+  // dropdown should close so it doesn't shadow the textarea.
+  if (/\s/.test(body)) return null;
+  return { query: body };
+});
+
+// Recompute the filtered length whenever query / commands change so
+// the parent's keyboard nav has a clamp to compare against.
+watch(
+  [slashState, slashCommands],
+  () => {
+    const s = slashState.value;
+    const list = slashCommands.value;
+    if (!s || list.length === 0) {
+      slashFilteredCount.value = 0;
+      slashActiveIndex.value = 0;
+      return;
+    }
+    const q = s.query.toLowerCase();
+    const count =
+      q === ''
+        ? list.length
+        : list.filter((c) => c.name.toLowerCase().startsWith(q)).length;
+    slashFilteredCount.value = count;
+    if (slashActiveIndex.value >= count) {
+      slashActiveIndex.value = 0;
+    }
+  },
+  { immediate: true },
+);
+
+function commitSlashCommand(name: string) {
+  // Replace the typed prefix with the canonical "/<name> ".
+  internal.value = `/${name} `;
+  emit('update:modelValue', internal.value);
+  slashActiveIndex.value = 0;
+  // Re-focus the textarea so the user can keep typing args.
+  const ta = textareaRef.value;
+  if (ta) {
+    ta.focus();
+    // Move cursor to the end.
+    queueMicrotask(() => {
+      ta.selectionStart = ta.value.length;
+      ta.selectionEnd = ta.value.length;
+    });
+  }
+}
+
 // ── textarea event handlers ──────────────────────────────────────────
 
 const textareaRef = ref<HTMLTextAreaElement | null>(null);
@@ -574,6 +685,20 @@ function onInput(ev: Event) {
 function send() {
   if (!canSend.value) return;
   const text = trimmed.value;
+  // Slash-command branch: when the trimmed input begins with `/`,
+  // emit the slashCommand event INSTEAD of send / sendBlocks. The
+  // parent dispatches via client.slash.execute and renders the
+  // result inline. This branch fires before the multimodal blocks
+  // are assembled — staged attachments are NOT consumed (they
+  // remain pending so the user can send them as a normal message
+  // afterwards).
+  if (text.startsWith('/')) {
+    emit('slashCommand', text);
+    internal.value = '';
+    emit('update:modelValue', '');
+    slashActiveIndex.value = 0;
+    return;
+  }
   // Build content blocks: image + document blocks first, then a final
   // text block if any text was typed.
   const contentBlocks: ContentBlock[] = [];
@@ -620,6 +745,45 @@ function send() {
 }
 
 function onKeydown(ev: KeyboardEvent) {
+  // Slash command autocomplete — handle Up/Down/Tab/Enter/Escape
+  // before the @filepath path so /foo and @bar can't fight each
+  // other. Slash and at autocomplete are mutually exclusive in
+  // practice (the leading-/ check excludes leading-@).
+  if (slashState.value && slashFilteredCount.value > 0) {
+    if (ev.key === 'ArrowDown') {
+      ev.preventDefault();
+      slashActiveIndex.value =
+        (slashActiveIndex.value + 1) % slashFilteredCount.value;
+      return;
+    }
+    if (ev.key === 'ArrowUp') {
+      ev.preventDefault();
+      const len = slashFilteredCount.value;
+      slashActiveIndex.value = (slashActiveIndex.value - 1 + len) % len;
+      return;
+    }
+    if (ev.key === 'Tab') {
+      ev.preventDefault();
+      const filtered = slashAutocompleteRef.value?.filtered ?? [];
+      const choice = filtered[slashActiveIndex.value] ?? filtered[0];
+      if (choice) {
+        commitSlashCommand(choice.name);
+      }
+      return;
+    }
+    if (ev.key === 'Escape') {
+      ev.preventDefault();
+      // Closing the dropdown without committing; the user can
+      // continue typing or backspace the leading slash to dismiss
+      // permanently. We achieve "close" by clamping the count to 0
+      // until the next input event recomputes.
+      slashFilteredCount.value = 0;
+      return;
+    }
+    // Enter falls through to the unified Enter handler below; it
+    // checks slashState and commits the highlighted entry instead
+    // of sending.
+  }
   // @filepath: Tab or Enter on the first option commits it.
   if (atState.value && atState.value.options.length > 0) {
     if (ev.key === 'Tab') {
@@ -655,6 +819,25 @@ function onKeydown(ev: KeyboardEvent) {
     }
   }
   if (ev.key === 'Enter' && !ev.shiftKey) {
+    // Slash autocomplete: when the dropdown is open AND there are
+    // filtered options, Enter commits the active one rather than
+    // submitting the half-typed command.
+    if (slashState.value && slashFilteredCount.value > 0) {
+      const filtered = slashAutocompleteRef.value?.filtered ?? [];
+      const choice = filtered[slashActiveIndex.value];
+      // Only intercept Enter when the user has not yet typed the
+      // full command name — i.e. there's still ambiguity to resolve.
+      // Once the typed query EXACTLY matches a registered command,
+      // Enter falls through to send so the command actually
+      // executes.
+      const typed = slashState.value.query.toLowerCase();
+      const exact = filtered.find((c) => c.name.toLowerCase() === typed);
+      if (!exact && choice) {
+        ev.preventDefault();
+        commitSlashCommand(choice.name);
+        return;
+      }
+    }
     // If the user pressed Enter while an @<token> is staged AND the
     // first option is an exact file (no trailing /), commit it
     // instead of sending. Otherwise, send.
@@ -768,6 +951,16 @@ const acceptedTypes =
         class="hidden"
         data-testid="chat-input-file"
         @change="onFileInputChange"
+      />
+
+      <!-- slash-command autocomplete dropdown -->
+      <SlashAutocomplete
+        v-if="slashState"
+        ref="slashAutocompleteRef"
+        :commands="slashCommands"
+        :query="slashState.query"
+        :active-index="slashActiveIndex"
+        @select="commitSlashCommand"
       />
 
       <!-- @filepath autocomplete dropdown -->

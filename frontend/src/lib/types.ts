@@ -784,3 +784,36 @@ export interface RecipeListing {
   status: RecipeStatus;
   keysPresent: boolean;
 }
+
+// ── slash commands ───────────────────────────────────────────────────
+
+/**
+ * SlashCommandInfo — one row returned by `Slash_List`. Drives the
+ * autocomplete dropdown the chat composer renders when the input
+ * starts with a `/`. ComingSoon flags v1 stubs (memorize, recall,
+ * forget, branch); the dropdown renders them with a
+ * "(coming soon)" tag.
+ */
+export interface SlashCommandInfo {
+  name: string;
+  description: string;
+  comingSoon: boolean;
+}
+
+/**
+ * SlashResultKind — discriminator the chat surface uses to style the
+ * inline result bubble. The Go side surfaces one of these four.
+ */
+export type SlashResultKind = 'info' | 'error' | 'warning' | 'system';
+
+/**
+ * SlashExecuteResult — wire shape returned by `Slash_Execute`. The
+ * `text` body renders inline (system/info/warning/error bubble);
+ * `metadata` carries well-known keys the SessionsView reads to apply
+ * local side effects (e.g. `modelId` + `providerId` for `/model`).
+ */
+export interface SlashExecuteResult {
+  text: string;
+  kind: SlashResultKind;
+  metadata?: Record<string, unknown>;
+}

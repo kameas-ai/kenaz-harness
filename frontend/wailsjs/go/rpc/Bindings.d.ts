@@ -17,6 +17,7 @@ import {projects} from '../models';
 import {sessions} from '../models';
 import {context} from '../models';
 import {settings} from '../models';
+import {slashcmd} from '../models';
 import {stdio} from '../models';
 import {tools} from '../models';
 import {trust} from '../models';
@@ -229,6 +230,10 @@ export function Shell_OpenInOSBrowser(arg1:string):Promise<void>;
 export function Shell_PathComplete(arg1:string):Promise<Array<string>>;
 
 export function Shell_ReadFile(arg1:string):Promise<rpc.ShellReadFileResult>;
+
+export function Slash_Execute(arg1:string,arg2:string):Promise<slashcmd.ExecuteResult>;
+
+export function Slash_List():Promise<Array<slashcmd.CommandInfo>>;
 
 export function Tools_ForgetRecipeKey(arg1:string,arg2:string):Promise<void>;
 
