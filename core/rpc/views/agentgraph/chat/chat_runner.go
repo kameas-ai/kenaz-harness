@@ -12,6 +12,12 @@ import (
 	"github.com/sigil-tech/kaneaz-harness/core/logging"
 )
 
+// chatAskNodeID is the AskNode id the chassis chat graph (chat_default)
+// uses to gate per-turn user input. The runner pre-seeds the AskBus
+// answer for this node id on every StartStream so the graph's first
+// fire progresses past the AskNode without a chassis-side resume.
+const chatAskNodeID = "ask_user"
+
 // SessionMessageReader is the slice of session.Manager the runner
 // consumes. Defined here so the chat package doesn't import
 // core/session (DIRECTIVE_001).
@@ -41,6 +47,14 @@ type GraphLoader func() (coreag.Graph, error)
 // runner can reuse the existing pause/resume plumbing.
 type AnswerInjector func(runID, nodeID, answer string)
 
+// ToolCatalogDiscoverer projects the chassis-side MCP pool catalog
+// (plus built-in tools) onto a per-session ToolSpec slice the LLM
+// provider adapter forwards to the upstream model. Defined narrow so
+// the chat package stays free of the LLM view's discoverer types.
+type ToolCatalogDiscoverer interface {
+	Tools(ctx context.Context, sessionID string) ([]corellm.ToolSpec, error)
+}
+
 // Config bundles the dependencies needed to construct a ChatRunner.
 // Every field is required — the runner does not default-fallback on
 // production paths because a missing seam would silently deliver a
@@ -55,6 +69,11 @@ type Config struct {
 	HistoryWriter HistoryWriter
 	GraphLoader   GraphLoader
 	MaxTurns      MaxTurnsResolver
+	// ToolDiscoverer publishes the chat-runner-level tool catalog onto
+	// each LLMProviderAdapter so the model sees the live MCP+builtin
+	// tool list. nil disables discovery — the chat path still works,
+	// but the model is never told about any tools.
+	ToolDiscoverer ToolCatalogDiscoverer
 	// EnvDefaults is an optional callback the runner invokes on the
 	// constructed Env before kernel.Run; production wiring threads
 	// Memory / Policy / Branch / Hooks-journal seams through it.
@@ -186,7 +205,21 @@ func (r *ChatRunner) StartStream(ctx context.Context, profileID, sessionID, mode
 	applyMaxTurnsDial(&graph, maxTurns)
 
 	// Construct adapters for this run's LLM provider + tool registry.
-	llmAdapter := NewLLMProviderAdapter(r.cfg.Registry, profileID, modelOverride, nil /* tools wired by caller */)
+	// Tool discovery runs once per StartStream so the model sees the
+	// live MCP + builtin catalog (gated by Settings toggles for
+	// websearch/bash). Discovery failure is non-fatal — the model
+	// just won't see any tools for this turn.
+	var toolCatalog []corellm.ToolSpec
+	if r.cfg.ToolDiscoverer != nil {
+		discovered, derr := r.cfg.ToolDiscoverer.Tools(ctx, sessionID)
+		if derr != nil {
+			logging.L().Warn("chat.tool_discovery.failed",
+				"session_id", sessionID, "err", derr.Error())
+		} else {
+			toolCatalog = discovered
+		}
+	}
+	llmAdapter := NewLLMProviderAdapter(r.cfg.Registry, profileID, modelOverride, toolCatalog)
 	toolAdapter := newKernelToolAdapter(r.cfg.Pool, r.cfg.Perms, sessionID)
 
 	r.mu.Lock()
@@ -205,6 +238,15 @@ func (r *ChatRunner) StartStream(ctx context.Context, profileID, sessionID, mode
 		}
 	}()
 
+	// Pre-seed the AskBus with the user's message so the chat graph's
+	// `ask_user` AskNode resolves on its first fire. The chat graph is
+	// shaped to pause-then-progress: history_in → ask_user (resolves
+	// immediately to the user message) → assistant_turn → ... and the
+	// run pauses on the next ask_user fire if the LoopNode body re-
+	// enters the AskNode for a follow-up turn.
+	askBus := coreag.NewMemAskBus()
+	askBus.Answer(subID, chatAskNodeID, userMessage)
+
 	env := &coreag.Env{
 		RunID:         subID,
 		SessionID:     sessionID,
@@ -213,6 +255,7 @@ func (r *ChatRunner) StartStream(ctx context.Context, profileID, sessionID, mode
 		Tools:         toolAdapter,
 		HistoryWriter: r.cfg.HistoryWriter,
 		StreamSink:    bridge,
+		Ask:           askBus,
 	}
 	if r.cfg.History != nil {
 		env.History = historyAdapterFunc(r.cfg.History.History)

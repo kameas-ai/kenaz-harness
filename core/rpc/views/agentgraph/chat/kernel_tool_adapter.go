@@ -127,3 +127,21 @@ func (a *kernelToolAdapter) Call(ctx context.Context, call coreag.ToolCall) (cor
 		IsError: false,
 	}, nil
 }
+
+// splitName parses a "<server>__<tool>" name. Returns ok=false when
+// the input has no separator or either side is empty after split.
+const toolNameSeparator = "__"
+
+func splitName(name string) (server, tool string, ok bool) {
+	for i := 0; i+len(toolNameSeparator) <= len(name); i++ {
+		if name[i:i+len(toolNameSeparator)] == toolNameSeparator {
+			s := name[:i]
+			t := name[i+len(toolNameSeparator):]
+			if s == "" || t == "" {
+				return "", "", false
+			}
+			return s, t, true
+		}
+	}
+	return "", "", false
+}

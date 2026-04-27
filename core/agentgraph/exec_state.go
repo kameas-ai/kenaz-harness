@@ -267,6 +267,14 @@ func (sessionWriteExecutor) Execute(ctx context.Context, env *Env, node *Node, i
 		"message_id": mid,
 		"bytes":      len(text),
 	})
+	// Fire post-LLM listeners registered via HookManager.RegisterPostHook
+	// (chat-migration WP-D). The artifacts code-block detector subscribes
+	// here so the SessionWriteNode-driven persistence path produces the
+	// same "scan assistant message → capture artifacts" side-effect the
+	// deleted toolloop pump used to drive.
+	if role == "assistant" && env.Hooks != nil {
+		env.Hooks.FirePostHooks(ctx, HookPostLLM, env.SessionID, mid, text)
+	}
 	return res, nil
 }
 

@@ -100,8 +100,15 @@ func TestChatDefaultBundled(t *testing.T) {
 	if !strings.Contains(spec.YAML, "chat_default") {
 		t.Errorf("YAML missing id; got %q", spec.YAML[:64])
 	}
-	if !strings.Contains(spec.YAML, "max_iterations: 25") {
-		t.Errorf("chat_default should default LoopNode max_iterations to 25 per mission brief")
+	// Shape invariants: history_in entrypoint, ask_user pause, model
+	// turn, session_write persistence. The chat-migration cutover
+	// dropped the LoopNode primitive from this manifest because the
+	// kernel ToolNode requires a static tool name; multi-turn agent
+	// loops will return alongside a dynamic ToolNode in a follow-up.
+	for _, marker := range []string{"history_in", "ask_user", "assistant_turn", "assistant_write", "session_write"} {
+		if !strings.Contains(spec.YAML, marker) {
+			t.Errorf("chat_default missing %q in YAML", marker)
+		}
 	}
 }
 

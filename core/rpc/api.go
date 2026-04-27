@@ -39,6 +39,7 @@ import (
 	coreconv "github.com/sigil-tech/kaneaz-harness/core/conversation"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/a2a"
 	graphview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/agentgraph"
+	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/agentgraph/chat"
 	artifactsview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/artifacts"
 	attachmentsview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/attachments"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/audit"
@@ -350,7 +351,17 @@ func New(c *core.Core) *API {
 	// transcript written by a bash call is visible to a downstream
 	// read_bash_output node in the same chat session.
 	a_bashStore := corebash.NewStore()
-	stack := newLLMStack(c, a.broker, personalForLLM, hooksRunner, attMgr, confirmEachEnabled, artifactSink, artifactSinkConcrete, settingsImpl, a_bashStore)
+
+	// Agent-graph subsystem (mission agent-kernel-graph; Bundle A WP06).
+	// Constructed BEFORE the LLM stack so the chat-migration ChatRunner
+	// can share the kernel + EnvDeps with the graph view's runtime.
+	// Manager construction is best-effort; on failure the API surface
+	// falls back to ErrManagerUnavailable so the chassis still boots.
+	a.convMgr = newConversationManager(c)
+	a.corpusMgr = newCorpusManager(c, embedder)
+	a.graphMgr = newGraphManagerWithDeps(c, a.convMgr, a.corpusMgr, memStore, embedder, a_bashStore)
+
+	stack := newLLMStack(c, a.broker, personalForLLM, hooksRunner, attMgr, confirmEachEnabled, artifactSink, artifactSinkConcrete, settingsImpl, a_bashStore, a.graphMgr)
 	a.llmAPI = stack.api
 	a.stdioPool = stack.pool
 	if c != nil && a.stdioPool != nil {
@@ -401,34 +412,22 @@ func New(c *core.Core) *API {
 	// Corpora subsystem (mission agent-kernel-graph; Bundle C). Wired
 	// only when the chassis has a real DataDir + storage; otherwise the
 	// view falls back to ErrManagerUnavailable so the frontend renders
-	// an empty state.
-	a.corpusMgr = newCorpusManager(c, embedder)
+	// an empty state. corpusMgr was constructed earlier so the graph
+	// manager could thread it through as a kernel EnvDep.
 	a.corpusAPI = corpusview.New(a.corpusMgr)
 
 	// Branches subsystem (mission agent-kernel-graph; Bundle B WP07/08).
 	// Wired only when storage is up — falls back to a nil-manager
 	// surface (ErrManagerUnavailable) when c is nil so test harness
 	// callers (New(nil)) don't crash.
-	//
-	// IMPORTANT: convMgr is constructed BEFORE the graph manager so we
-	// can thread it through as the BranchSeam dep on Env.
-	a.convMgr = newConversationManager(c)
 	a.branchesAPI = branchesview.New(branchesview.Config{
 		Conversations: a.convMgr,
 		Sessions:      sessionManagerOrNil(c),
 		Recommender:   newBranchRecommender(),
 	})
 
-	// Agent-graph subsystem (mission agent-kernel-graph; Bundle A WP06).
-	// Manager construction is best-effort; on failure the API surface
-	// falls back to ErrManagerUnavailable so the chassis still boots.
-	//
-	// Production wiring: thread the real conversation/corpus/memory/
-	// cedar/bash managers into the graph kernel's Env so the executors
-	// reach actual subsystems instead of the agentgraph nil-stubs. The
-	// bash store is shared with the bash tool's writes — see
-	// a_bashStore creation above newLLMStack.
-	a.graphMgr = newGraphManagerWithDeps(c, a.convMgr, a.corpusMgr, memStore, embedder, a_bashStore)
+	// Agent-graph view surface — graph manager already built above so
+	// the chat-migration ChatRunner could share its kernel.
 	a.graphAPI = graphview.New(a.graphMgr)
 
 	// Cascading dials (Bundle E WP17). The view degrades to in-memory-
@@ -889,6 +888,7 @@ func newLLMStack(
 	artifactSinkConcrete *artifactsview.Sink,
 	settingsImpl *settings.API,
 	bashStore *corebash.Store,
+	graphMgr *graphview.Manager,
 ) llmStack {
 	// Share ONE secrets backend between the credref resolver (which
 	// reads keys when streaming) and the keychain writer (which stages
@@ -948,17 +948,12 @@ func newLLMStack(
 	// materializes a process-wide event.Emitter (core/event.NewEmitter
 	// + redact.Pipeline). Until then audit emission is silenced and
 	// the privacy-CI guard is "no emitter, no leak".
-	// WP05 — confirm-each modal flow. The gateway brokers the
-	// pause/resume between the toolloop (which blocks on
-	// RequestConfirm) and the frontend (which calls ResolveConfirm
-	// via the LLM_ResolveConfirm Wails binding). The same broker
-	// powers chat stream chunks so the modal subscribes to the same
-	// topic the rest of the chat surface already consumes.
-	confirmGateway := llm.NewConfirmGateway(&streamSinkAdapter{broker: broker})
-	flagOn := true
-	if confirmEachEnabled != nil {
-		flagOn = confirmEachEnabled()
-	}
+	// confirm-each modal flow retired alongside core/toolloop in the
+	// chat-migration cutover; v1 alpha relies on Cedar policy gates
+	// to gate dispatch. confirmEachEnabled is preserved on the
+	// chassis settings store so a future re-introduction can read the
+	// same toggle without a settings migration.
+	_ = confirmEachEnabled
 	// Stdio MCP pool — empty at boot. Persisted recipes are spawned
 	// onto this pool from core.Core.Start (so they're up before the
 	// chat surface accepts a turn), and the tools view's
@@ -980,48 +975,20 @@ func newLLMStack(
 		Broker: &poolEventPublisher{broker: broker},
 		Logger: nil, // defaults to slog.Default
 	})
-	// Toolloop hooks runner — we hand-pick a listener-friendly noop
-	// runner so the artifacts sink can subscribe via
-	// RegisterPostListener. Without an explicit instance the loop
-	// would build its own internal default and we'd have no handle
-	// to register the listener against.
-	toolloopHooks := toolloop.NewNoopHookRunner()
-	if artifactSinkConcrete != nil {
-		toolloopHooks.RegisterPostListener(artifactSinkConcrete.PostListener())
-	}
-
 	// Built-in tools registry. The chassis registers websearch + bash
-	// here when Settings toggles are ON. The toolloop's BuiltinPool
-	// merges them into the pool's tool catalog AND dispatches to them
-	// without going through MCP. Gating is done via an EnabledFilter
-	// composed from the Settings store so a toggle takes effect on the
-	// next chat turn without a process restart.
+	// here when Settings toggles are ON. The BuiltinPool merges them
+	// into the pool's tool catalog AND dispatches to them without
+	// going through MCP. Gating is done via an EnabledFilter composed
+	// from the Settings store so a toggle takes effect on the next
+	// chat turn without a process restart.
+	//
+	// The wrapped pool is what the chat runner adapts onto the kernel's
+	// ToolRegistry seam (chat-migration cutover); the kernel ToolNode
+	// dispatches against the same surface the legacy toolloop did.
 	builtinRegistry := toolloop.NewBuiltinRegistry()
 	registerBuiltinTools(c, builtinRegistry, bashStore)
 	builtinFilter := toolloop.NewEnabledFilter(builtinRegistry, builtinEnabledPredicate(settingsImpl))
 	wrappedPool := toolloop.NewBuiltinPool(&mcpPoolAdapter{inner: mcpPool}, builtinFilter)
-
-	loop, loopErr := toolloop.New(toolloop.Config{
-		Registry:           reg,
-		Pool:               wrappedPool,
-		History:            historyAdapter,
-		Permissions:        perms,
-		Hooks:              toolloopHooks,
-		Audit:              nil,
-		Confirm:            confirmGateway,
-		ConfirmEachEnabled: flagOn,
-		// OverrideWriter intentionally nil for now — the C2 session
-		// override writer hasn't landed yet, and the confirm gate
-		// degrades to per-call allow/deny without persistence (logged
-		// at warn). Wire when sessions.MCPOverridesWriter exists.
-		OverrideWriter: nil,
-	})
-	if loopErr != nil {
-		// New only errors on missing registry/pool — both are
-		// supplied here, so this branch is defensive. Fall through
-		// without a loop wired so the chat surface stays usable.
-		loop = nil
-	}
 	var attResolver llm.AttachmentsResolver
 	if attMgr != nil {
 		attResolver = &attachmentsResolverAdapter{
@@ -1041,20 +1008,28 @@ func newLLMStack(
 	// model SEES kaneaz__web_search / kaneaz__bash in its tool catalog
 	// when those Settings toggles are ON.
 	toolDiscoverer := llm.NewMCPToolDiscovererWithBuiltins(mcpPool, perms, builtinFilter)
+
+	// chat-migration cutover (this mission, WP-A): construct the kernel-
+	// driven ChatRunner and hand it to the LLM impl via Config.ChatRunner.
+	// When the runner is wired the LLM view's StartStream forwards every
+	// chat turn into the kernel's chat_default graph; the legacy toolloop
+	// pump path is unreachable in production once this lands. The
+	// toolloop construction above stays intact only because tests still
+	// reference it; WP-C deletes the loop wholesale.
+	chatRunner := buildChatRunner(broker, reg, wrappedPool, perms, historyAdapter, settingsImpl, graphMgr, toolDiscoverer, artifactSinkConcrete)
 	api := llm.New(llm.Config{
-		Registry:       reg,
-		Sink:           &streamSinkAdapter{broker: broker},
-		Store:          store,
-		Keychain:       &keychainWriter{backend: secretsBackend},
-		Prober:         &registryProber{reg: reg, creds: credResolver},
-		History:        historyAdapter,
-		HistoryWriter:  &llmHistoryWriter{inner: historyAdapter},
-		Hooks:          hooksRunner,
-		Attachments:    attResolver,
-		ToolLoop:       loop,
-		Tools:          toolDiscoverer,
-		ConfirmGateway: confirmGateway,
-		Artifacts:      &llmArtifactSinkAdapter{inner: artifactSink},
+		Registry:      reg,
+		Sink:          &streamSinkAdapter{broker: broker},
+		Store:         store,
+		Keychain:      &keychainWriter{backend: secretsBackend},
+		Prober:        &registryProber{reg: reg, creds: credResolver},
+		History:       historyAdapter,
+		HistoryWriter: &llmHistoryWriter{inner: historyAdapter},
+		Hooks:         hooksRunner,
+		Attachments:   attResolver,
+		ChatRunner:    chatRunner,
+		Tools:         toolDiscoverer,
+		Artifacts:     &llmArtifactSinkAdapter{inner: artifactSink},
 	})
 	return llmStack{
 		api:       api,
@@ -1063,6 +1038,203 @@ func newLLMStack(
 		builtins:  builtinRegistry,
 		bashStore: bashStore,
 	}
+}
+
+// buildChatRunner constructs the *chat.ChatRunner that replaces
+// core/toolloop as the chassis chat path. Returns nil when the graph
+// manager is unavailable (test path or boot failure) so the LLM view
+// falls through to the legacy toolloop pump.
+//
+// The runner shares the graph manager's kernel + EnvDeps so a chat run
+// uses the same executors / EventLog the graph view's runtime tab
+// debugs against. The MaxTurns dial reads Settings.EffectiveMaxAgentTurns
+// on every StartStream so the LoopNode max_iterations override picks up
+// user-tuned caps without a restart.
+func buildChatRunner(
+	broker *StreamBroker,
+	reg corellm.Registry,
+	wrappedPool toolloop.MCPPool,
+	perms toolloop.PermissionResolver,
+	historyAdapter *sessionHistoryReader,
+	settingsImpl *settings.API,
+	graphMgr *graphview.Manager,
+	tools corellm.ToolDiscoverer,
+	artifactSinkConcrete *artifactsview.Sink,
+) *chat.ChatRunner {
+	if graphMgr == nil || graphMgr.Kernel() == nil {
+		logging.L().Warn("chat.runner.disabled", "reason", "graph manager unavailable")
+		return nil
+	}
+	maxTurns := func() int {
+		if settingsImpl == nil || settingsImpl.Store() == nil {
+			return settings.DefaultMaxAgentTurns
+		}
+		raw, err := settingsImpl.Store().LoadMaxAgentTurns()
+		if err != nil {
+			return settings.DefaultMaxAgentTurns
+		}
+		s := settings.Settings{MaxAgentTurns: raw}
+		return s.EffectiveMaxAgentTurns()
+	}
+	historyReader := chatSessionMessageReader{inner: historyAdapter}
+	historyWriter := &llmHistoryWriter{inner: historyAdapter}
+	baseEnvDefaults := graphMgr.EnvDefaults()
+	// Compose the manager's seam defaults with chat-migration WP-D
+	// post-LLM hook wiring: pre-construct the kernel HookManager so we
+	// can register the artifacts listener before kernel.Run lands its
+	// own lazy default. The Memory store inside the HookManager is
+	// applied by graphMgr.EnvDefaults via env.Memory, which fires
+	// before this closure.
+	envDefaults := func(env *coreag.Env) {
+		if baseEnvDefaults != nil {
+			baseEnvDefaults(env)
+		}
+		if env.Hooks == nil {
+			env.Hooks = coreag.NewHookManager(env.Memory, env.SessionID, env.ProjectID)
+			if env.JournalWriter != nil {
+				env.Hooks.SetJournalWriter(env.JournalWriter)
+			}
+		}
+		if artifactSinkConcrete != nil {
+			env.Hooks.RegisterPostHook(coreag.HookPostLLM, func(ctx context.Context, sessionID, messageID, text string) {
+				_ = artifactSinkConcrete.OnAssistantMessage(ctx, sessionID, messageID, text)
+			})
+		}
+	}
+	runner, err := chat.New(chat.Config{
+		Kernel:         graphMgr.Kernel(),
+		Registry:       reg,
+		Pool:           chatToolPoolAdapter{inner: wrappedPool},
+		Perms:          chatPermsAdapter{inner: perms},
+		Broker:         chatBrokerAdapter{broker: broker},
+		History:        historyReader,
+		HistoryWriter:  historyWriter,
+		GraphLoader:    func() (coreag.Graph, error) { return graphMgr.LoadGraphSpec("chat_default") },
+		MaxTurns:       maxTurns,
+		EnvDefaults:    envDefaults,
+		ToolDiscoverer: chatToolDiscovererAdapter{inner: tools},
+	})
+	if err != nil {
+		logging.L().Error("chat.runner.construct_failed", "err", err.Error())
+		return nil
+	}
+	return runner
+}
+
+// chatToolDiscovererAdapter bridges corellm.ToolDiscoverer onto the
+// chat package's narrower ToolCatalogDiscoverer surface so the chat
+// runner can populate the LLM provider adapter's tool catalog on each
+// StartStream without importing the LLM view.
+type chatToolDiscovererAdapter struct {
+	inner corellm.ToolDiscoverer
+}
+
+func (a chatToolDiscovererAdapter) Tools(ctx context.Context, sessionID string) ([]corellm.ToolSpec, error) {
+	if a.inner == nil {
+		return nil, nil
+	}
+	return a.inner.Tools(ctx, sessionID)
+}
+
+// chatSessionMessageReader bridges *sessionHistoryReader (which returns
+// llm.SessionMessage) onto the chat package's narrower SessionMessageReader
+// shape (returns []agentgraph.Message).
+type chatSessionMessageReader struct {
+	inner *sessionHistoryReader
+}
+
+func (r chatSessionMessageReader) History(ctx context.Context, sessionID string, n int) ([]coreag.Message, error) {
+	if r.inner == nil {
+		return nil, nil
+	}
+	stored, err := r.inner.ListMessages(ctx, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	if n > 0 && len(stored) > n {
+		stored = stored[len(stored)-n:]
+	}
+	out := make([]coreag.Message, 0, len(stored))
+	for _, m := range stored {
+		out = append(out, coreag.Message{
+			Role:    m.Role,
+			Content: m.Content,
+		})
+	}
+	return out, nil
+}
+
+// chatBrokerAdapter wraps *StreamBroker so the chat package's narrow
+// Broker interface (Emit(topic, payload)) sees the same emitter the LLM
+// view's StreamSink uses. Topic naming stays byte-equal to the legacy
+// pump path so frontend useSession.ts is untouched.
+type chatBrokerAdapter struct {
+	broker *StreamBroker
+}
+
+func (b chatBrokerAdapter) Emit(topic string, payload any) {
+	if b.broker == nil {
+		return
+	}
+	b.broker.emitter.Emit(b.broker.EmitCtx(), topic, payload)
+}
+
+// chatToolPoolAdapter wraps the wrapped toolloop.MCPPool (built-in pool
+// merged with the MCP stdio pool) onto the chat package's narrower
+// ToolPool surface. Marshalling identical to toolloop.dispatchOne so a
+// chat-driven dispatch fans through the same builtin / MCP stdio path
+// the legacy pump used.
+type chatToolPoolAdapter struct {
+	inner toolloop.MCPPool
+}
+
+func (a chatToolPoolAdapter) Tools(ctx context.Context) ([]chat.ToolEntry, error) {
+	if a.inner == nil {
+		return nil, nil
+	}
+	raw, err := a.inner.Tools(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]chat.ToolEntry, 0, len(raw))
+	for _, t := range raw {
+		out = append(out, chat.ToolEntry{Server: t.Server, Name: t.Name})
+	}
+	return out, nil
+}
+
+func (a chatToolPoolAdapter) Call(ctx context.Context, server, tool string, args []byte) ([]byte, error) {
+	if a.inner == nil {
+		return nil, errors.New("chat: pool not wired")
+	}
+	out, err := a.inner.Call(ctx, server, tool, args)
+	if err != nil {
+		return nil, err
+	}
+	return []byte(out), nil
+}
+
+// chatPermsAdapter wraps toolloop.PermissionResolver onto the chat
+// package's PermVerdict shape so the chat runner's kernel adapter can
+// gate dispatches without a direct toolloop import.
+type chatPermsAdapter struct {
+	inner toolloop.PermissionResolver
+}
+
+func (p chatPermsAdapter) Resolve(ctx context.Context, sessionID, server, tool string) (chat.PermVerdict, error) {
+	if p.inner == nil {
+		return chat.PermVerdict{Server: server, Tool: tool, Policy: "auto_allow"}, nil
+	}
+	res, err := p.inner.Resolve(ctx, sessionID, server, tool)
+	if err != nil {
+		return chat.PermVerdict{}, err
+	}
+	return chat.PermVerdict{
+		Server: res.Server,
+		Tool:   res.Tool,
+		Policy: string(res.Policy),
+		Reason: res.Reason,
+	}, nil
 }
 
 // poolEventPublisher adapts the rpc.StreamBroker to the stdio

@@ -5,7 +5,6 @@ import (
 	"log/slog"
 
 	coreart "github.com/sigil-tech/kaneaz-harness/core/artifacts"
-	"github.com/sigil-tech/kaneaz-harness/core/toolloop"
 )
 
 // CaptureManager is the slice of *coreart.Manager the sink consumes.
@@ -75,64 +74,20 @@ func (s *sink) OnAssistantMessage(ctx context.Context, sessionID, messageID, tex
 	return nil
 }
 
-// OnPostToolUse runs the tool-output detector against a post-tool-use
-// event and forwards every candidate to the artifact manager. Wired
-// via toolloop.HookRunner.RegisterPostListener at chassis startup.
-func (s *sink) OnPostToolUse(ev toolloop.PostToolUseEvent) {
-	if s == nil || s.mgr == nil {
-		return
-	}
-	cfg := s.cfg()
-	if !cfg.AutoCaptureToolOutputs {
-		return
-	}
-	if ev.SessionID == "" {
-		return
-	}
-	candidates := coreart.DetectToolOutput(
-		"", // PostToolUseEvent has no associated assistant message id;
-		// the tool-output capture's MessageID falls back to empty and
-		// the SourceRef.ToolCallID below carries the back-link instead.
-		coreart.PostToolUseEventLike{
-			Tool:       ev.Tool,
-			Server:     ev.Server,
-			Args:       ev.Args,
-			Result:     ev.Result,
-			ToolCallID: ev.ToolCallID,
-		},
-		coreart.ToolOutputDetectorConfig{Enabled: true},
-	)
-	if len(candidates) == 0 {
-		return
-	}
-	captured, err := s.mgr.Capture(context.Background(), candidates, ev.SessionID)
-	if err != nil {
-		s.log.Warn("artifacts.tool_capture.failed",
-			"session_id", ev.SessionID,
-			"tool_call_id", ev.ToolCallID,
-			"err", err.Error(),
-		)
-		return
-	}
-	if len(captured) > 0 {
-		s.log.Info("artifacts.captured",
-			"count", len(captured),
-			"session_id", ev.SessionID,
-			"tool_call_id", ev.ToolCallID,
-			"source", coreart.SourceToolOutput,
-		)
-	}
-}
-
-// PostListener returns a toolloop.PostToolUseListener that delegates
-// to OnPostToolUse. The chassis passes this to
-// HookRunner.RegisterPostListener at boot. Splitting it out from the
-// method body keeps the registration signature explicit and exposes
-// a stable *sink test seam.
-func (s *sink) PostListener() toolloop.PostToolUseListener {
-	return func(ev toolloop.PostToolUseEvent) {
-		s.OnPostToolUse(ev)
-	}
+// OnPostLLMMessage runs the code-block detector against a freshly
+// persisted assistant message. The chassis registers this as a
+// kernel HookManager post-LLM hook listener (chat-migration WP-D);
+// the toolloop's PostToolUseListener surface was deleted alongside
+// core/toolloop, so tool-output capture during a chat run is paused
+// until the kernel ToolNode grows a post-fire callback. The chat
+// path's code-block capture path (runs against the assistant message
+// at SessionWriteNode time) still works.
+//
+// Signature mirrors agentgraph.HookManager's post-hook callback shape:
+// (ctx, sessionID, messageID, text). The chassis adapts between
+// HookManager.RegisterPostHook and this method.
+func (s *sink) OnPostLLMMessage(ctx context.Context, sessionID, messageID, text string) {
+	_ = s.OnAssistantMessage(ctx, sessionID, messageID, text)
 }
 
 // Sink is the concrete sink type — exported so the chassis wiring in

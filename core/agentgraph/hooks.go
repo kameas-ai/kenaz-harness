@@ -102,6 +102,13 @@ type Redactor interface {
 	Redact(s string) string
 }
 
+// PostHookCallback is the chassis-side post-fire callback shape. The
+// chat-migration cutover wires this to register listeners (artifacts
+// code-block detector, etc.) onto the kernel's hook surface so the
+// kernel — not the deleted toolloop runner — fans them. Callbacks
+// MUST be safe for concurrent use.
+type PostHookCallback func(ctx context.Context, sessionID, messageID, text string)
+
 // HookManager owns the kernel's greedy memory writes. It is kernel-
 // owned (FR-026): tools cannot write memory, only the kernel.
 type HookManager struct {
@@ -131,6 +138,13 @@ type HookManager struct {
 	// counter so test runs are deterministic; production wiring can
 	// override via SetJournalIDGen for crypto-strong ids.
 	idGen func() string
+
+	// postHooks is the chassis-side post-fire listener registry the
+	// chat-migration cutover wires onto SessionWriteNode (post-LLM)
+	// and ToolNode (post-tool, when kernel ToolNode grows the call
+	// site). The map is keyed by boundary so the chassis can register
+	// listeners narrowly without re-receiving every boundary's fire.
+	postHooks map[HookBoundary][]PostHookCallback
 }
 
 // HookRecord is one entry in the in-memory hook journal.
@@ -364,6 +378,44 @@ func (h *HookManager) Journal() []HookRecord {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	return append([]HookRecord(nil), h.journal...)
+}
+
+// RegisterPostHook adds a callback fired by the chassis-bound
+// boundaries (HookPostLLM, HookPostTool) once the kernel's executor
+// has landed a durable side-effect (assistant message persisted, tool
+// result lands). Multiple callbacks may register on the same boundary;
+// they fire in registration order.
+//
+// nil callback is a no-op. The chassis uses this seam to wire the
+// artifacts code-block detector onto SessionWriteNode without re-
+// introducing the deleted toolloop HookRunner.
+func (h *HookManager) RegisterPostHook(boundary HookBoundary, cb PostHookCallback) {
+	if h == nil || cb == nil {
+		return
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.postHooks == nil {
+		h.postHooks = map[HookBoundary][]PostHookCallback{}
+	}
+	h.postHooks[boundary] = append(h.postHooks[boundary], cb)
+}
+
+// FirePostHooks invokes every registered post-hook callback for
+// boundary in registration order. Callbacks are run synchronously on
+// the kernel's execution goroutine; long-running listeners must
+// dispatch their own goroutine. A nil HookManager is treated as "no
+// listeners wired" so callers don't have to nil-check.
+func (h *HookManager) FirePostHooks(ctx context.Context, boundary HookBoundary, sessionID, messageID, text string) {
+	if h == nil {
+		return
+	}
+	h.mu.Lock()
+	cbs := append([]PostHookCallback(nil), h.postHooks[boundary]...)
+	h.mu.Unlock()
+	for _, cb := range cbs {
+		cb(ctx, sessionID, messageID, text)
+	}
 }
 
 func resolveScopeID(scope, projectID, sessionID string) string {

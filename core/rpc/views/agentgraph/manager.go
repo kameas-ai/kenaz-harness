@@ -157,6 +157,39 @@ func (m *Manager) Catalog() *activities.Catalog { return m.catalog }
 // raw events.
 func (m *Manager) EventLog() coreag.EventLog { return m.log }
 
+// Kernel returns the underlying *coreag.Kernel. The chat-migration
+// ChatRunner shares the manager's kernel so chat runs reuse the same
+// EventLog / executors the graph view debugs against. Returns nil
+// when the manager was constructed without a kernel (test path).
+func (m *Manager) Kernel() *coreag.Kernel { return m.kernel }
+
+// EnvDefaults returns a closure that applies the manager's configured
+// production EnvDeps onto an Env. The chat runner threads this onto
+// every per-run Env so memory / policy / branch / journal seams are
+// wired identically to the graph runner. The returned closure is nil
+// when the manager has no EnvDeps (test path); callers must nil-check.
+func (m *Manager) EnvDefaults() func(*coreag.Env) {
+	deps := m.envDeps
+	return func(env *coreag.Env) { deps.applyTo(env) }
+}
+
+// LoadGraphSpec returns the parsed graph for the supplied id, applying
+// the same user-wins-over-bundled lookup the impl_graphs.LoadGraph
+// surface uses. The chat runner consumes this to resolve
+// chat_default.yaml on every StartStream so user-saved overrides take
+// effect on the next chat turn without a process restart.
+func (m *Manager) LoadGraphSpec(id string) (coreag.Graph, error) {
+	spec, err := m.loadGraph(id)
+	if err != nil {
+		return coreag.Graph{}, err
+	}
+	g, err := coreag.LoadYAML([]byte(spec.YAML))
+	if err != nil {
+		return coreag.Graph{}, fmt.Errorf("agentgraph: parse %q: %w", id, err)
+	}
+	return g, nil
+}
+
 // listLibrary returns the bundled + user library entries.
 func (m *Manager) listLibrary(scope GraphScope) []GraphInfo {
 	m.mu.RLock()

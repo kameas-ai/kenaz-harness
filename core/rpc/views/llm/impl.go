@@ -21,14 +21,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 	"sync"
 	"time"
 
 	corellm "github.com/sigil-tech/kaneaz-harness/core/llm"
 	"github.com/sigil-tech/kaneaz-harness/core/llm/personal"
 	"github.com/sigil-tech/kaneaz-harness/core/logging"
-	"github.com/sigil-tech/kaneaz-harness/core/toolloop"
 )
 
 // StreamSink is the minimal contract the concrete LLMConnectorAPI uses
@@ -233,27 +231,17 @@ type API struct {
 	// context. nil falls back to the SessionContextReader probe so
 	// Mission A behaviour stays intact during the one-release buffer.
 	attachments AttachmentsResolver
-	// chatRunner is the kernel-driven entry point introduced in
-	// chat-migration WP04. When non-nil StartStream forwards to the
-	// runner; when nil the legacy toolloop path runs. The chassis
-	// flips this on once parity tests turn green; until then both
-	// paths coexist behind feature-flag-style construction.
+	// chatRunner is the kernel-driven entry point. The chassis-side
+	// chat path forwards every StartStream into the chat package's
+	// ChatRunner once it's wired; production builds never run with a
+	// nil chatRunner. The legacy toolloop pump path was deleted in
+	// the agent-kernel-graph-chat-migration cutover.
 	chatRunner ChatRunner
-	// toolLoop closes the LLM ↔ tool ↔ LLM cycle when the adapter
-	// signals FinishReason == "tool_use". nil disables the loop —
-	// the chat path stays as it was before WP01.
-	toolLoop *toolloop.Loop
 	// tools projects the MCP pool's catalog onto each GenerationRequest
 	// so the model knows what it may invoke. nil silences discovery
 	// and keeps WP00 chat-only behaviour for tests that don't wire an
 	// MCP pool.
 	tools corellm.ToolDiscoverer
-	// confirmGateway brokers WP05 confirm-each modal flow between the
-	// toolloop (which blocks on RequestConfirm) and the frontend
-	// (which calls ResolveConfirm). nil means "no confirm-each
-	// surface wired" — ResolveConfirm returns a not-wired error and
-	// the toolloop falls back to its noop gateway.
-	confirmGateway *ConfirmGateway
 
 	mu             sync.Mutex
 	subs           map[string]*subscription
@@ -312,29 +300,16 @@ type Config struct {
 	// SessionContextReader probe path so Mission A continues to work
 	// for the one-release compat window.
 	Attachments AttachmentsResolver
-	// ToolLoop, when non-nil, runs after the initial stream closes
-	// with FinishReason == "tool_use". The loop dispatches each tool
-	// call against the configured MCP pool and re-invokes the
-	// registry until the model returns a non-tool_use finish. nil
-	// preserves WP00 chat-only behavior.
-	//
-	// Deprecated by chat-migration WP04: when both ToolLoop and
-	// ChatRunner are wired the impl prefers ChatRunner. The toolloop
-	// path is retained for the parity-test cutover; WP07 retires it.
-	ToolLoop *toolloop.Loop
 	// ChatRunner is the kernel-driven entry point that replaces the
-	// toolloop chat path. When non-nil StartStream forwards through
-	// the runner. nil falls back to the legacy toolloop path.
+	// toolloop chat path. The chassis wires this on every boot;
+	// production never runs with a nil ChatRunner. Tests pass a fake
+	// runner when they need to assert StartStream forwarding.
 	ChatRunner ChatRunner
 	// Tools, when non-nil, is consulted on every StartStream to
 	// populate GenerationRequest.Tools. Without it the model is never
-	// told about the MCP catalog and the toolloop is dead code from
-	// the user's perspective.
+	// told about the MCP catalog so the agent loop has nothing to
+	// dispatch against.
 	Tools corellm.ToolDiscoverer
-	// ConfirmGateway brokers the WP05 confirm-each modal flow. When
-	// non-nil ResolveConfirm forwards to its ResolveConfirm method;
-	// when nil ResolveConfirm returns a not-wired error.
-	ConfirmGateway *ConfirmGateway
 	// Artifacts, when non-nil, fires the code-block detector against
 	// the freshly persisted assistant message at stream completion
 	// (non-tool_use finish only). nil leaves the chat path untouched.
@@ -348,23 +323,21 @@ func New(cfg Config) *API {
 		sink = nopSink{}
 	}
 	return &API{
-		reg:            cfg.Registry,
-		sink:           sink,
-		store:          cfg.Store,
-		bundles:        cfg.Bundles,
-		keychain:       cfg.Keychain,
-		prober:         cfg.Prober,
-		history:        cfg.History,
-		historyW:       cfg.HistoryWriter,
-		hooks:          cfg.Hooks,
-		attachments:    cfg.Attachments,
-		toolLoop:       cfg.ToolLoop,
-		chatRunner:     cfg.ChatRunner,
-		tools:          cfg.Tools,
-		confirmGateway: cfg.ConfirmGateway,
-		artifacts:      cfg.Artifacts,
-		subs:           map[string]*subscription{},
-		validated:      map[string]bool{},
+		reg:         cfg.Registry,
+		sink:        sink,
+		store:       cfg.Store,
+		bundles:     cfg.Bundles,
+		keychain:    cfg.Keychain,
+		prober:      cfg.Prober,
+		history:     cfg.History,
+		historyW:    cfg.HistoryWriter,
+		hooks:       cfg.Hooks,
+		attachments: cfg.Attachments,
+		chatRunner:  cfg.ChatRunner,
+		tools:       cfg.Tools,
+		artifacts:   cfg.Artifacts,
+		subs:        map[string]*subscription{},
+		validated:   map[string]bool{},
 	}
 }
 
@@ -586,6 +559,16 @@ func (a *API) ListProviders(_ context.Context) ([]Provider, error) {
 // modelOverride is a per-call selection from the profile's authorised
 // models — the chat surface's model-switcher picks one and passes it
 // here. Empty => use the profile default.
+// modelOverride is a per-call selection from the profile's authorised
+// models — the chat surface's model-switcher picks one and passes it
+// here. Empty => use the profile default.
+//
+// The chat path is fully kernel-driven: StartStream forwards every
+// turn into the wired ChatRunner, which owns provider resolution,
+// history loading, kernel run, streaming, and assistant persistence
+// (via SessionWriteNode). A nil ChatRunner indicates a chassis-build
+// failure — the surface returns "not wired" rather than silently
+// falling back to a deleted legacy pump path.
 func (a *API) StartStream(ctx context.Context, profileID, sessionID, modelOverride string) (string, error) {
 	log := logging.L()
 	log.Info("llm.start_stream.requested",
@@ -594,384 +577,36 @@ func (a *API) StartStream(ctx context.Context, profileID, sessionID, modelOverri
 		"model_override", modelOverride,
 		"chat_runner_wired", a.chatRunner != nil,
 	)
-	// chat-migration WP04: prefer the kernel-driven ChatRunner when
-	// wired. The runner takes ownership of provider resolution,
-	// history loading, kernel run, and the post-LLM persistence path
-	// (via SessionWriteNode). The legacy toolloop fallthrough below
-	// remains for the parity-test cutover; WP07 removes it.
-	if a.chatRunner != nil {
-		// Pull the latest user message — the chat surface posts the
-		// user turn via Sessions_AppendMessage immediately before
-		// calling StartStream, so the trailing user row is the new
-		// turn. The runner will re-append it via HistoryWriter so the
-		// kernel run sees consistent history.
-		var userMessage string
-		if a.history != nil && sessionID != "" {
-			if stored, herr := a.history.ListMessages(ctx, sessionID); herr == nil {
-				for i := len(stored) - 1; i >= 0; i-- {
-					if stored[i].Role == "user" {
-						userMessage = stored[i].Content
-						break
-					}
-				}
-			}
-		}
-		return a.chatRunner.StartStream(ctx, profileID, sessionID, modelOverride, userMessage)
+	if a.chatRunner == nil {
+		log.Error("llm.start_stream.failed", "reason", "chat runner not wired")
+		return "", errors.New("llm: chat runner not wired")
 	}
-	if a.reg == nil {
-		log.Error("llm.start_stream.failed", "reason", "connector not wired")
-		return "", errors.New("llm: connector not wired")
-	}
-	if profileID == "" {
-		log.Error("llm.start_stream.failed", "reason", "empty profile id")
-		return "", errors.New("llm: profile id required")
-	}
-	if err := a.ensurePersonalLoaded(); err != nil {
-		log.Error("llm.start_stream.failed", "stage", "ensurePersonalLoaded", "err", err.Error())
-		return "", err
-	}
-
-	// Resolve provider kind + effective model so the pre/post hook
-	// runners can apply Match filters without a second registry pass.
-	kind, effectiveModel := a.profileKindAndModel(profileID, modelOverride)
-
-	messages, err := a.buildMessages(ctx, sessionID, effectiveModel, kind)
-	if err != nil {
-		log.Error("llm.start_stream.failed", "stage", "buildMessages", "err", err.Error())
-		return "", err
-	}
-	req := corellm.GenerationRequest{
-		ProfileID: profileID,
-		Model:     modelOverride,
-		Messages:  messages,
-	}
-	// Populate the tool catalog so the model knows what it may invoke.
-	// Discovery failures are non-fatal: degrade to a no-tools request
-	// rather than block the chat surface on a flaky pool.
-	if a.tools != nil {
-		discovered, derr := a.tools.Tools(ctx, sessionID)
-		if derr != nil {
-			log.Warn("llm.tool_discovery.failed",
-				"session_id", sessionID, "err", derr.Error())
-		} else {
-			req.Tools = discovered
-			toolNames := make([]string, 0, len(discovered))
-			for _, t := range discovered {
-				toolNames = append(toolNames, t.Name)
-			}
-			log.Info("llm.tool_discovery.ok",
-				"session_id", sessionID,
-				"count", len(discovered),
-				"names", toolNames,
-			)
-		}
-	} else {
-		log.Info("llm.tool_discovery.no_discoverer", "session_id", sessionID)
-	}
-
-	// multimodal-io WP03 — modality gate. Walk every Message's
-	// ContentBlocks for image / document blocks and reject the request
-	// before opening a stream when the active model lacks the matching
-	// capability. The error is surfaced via the existing chat-error
-	// path (StartStream return value); the chat surface renders
-	// UnsupportedModalityError.Friendly() in place of the raw text.
-	if err := a.validateModalities(req, kind, effectiveModel); err != nil {
-		log.Error("llm.start_stream.failed",
-			"stage", "validateModalities",
-			"profile_id", profileID,
-			"err", err.Error(),
-		)
-		return "", err
-	}
-
-	streamCtx, cancel := context.WithCancel(context.Background())
-	go func() {
-		select {
-		case <-ctx.Done():
-			cancel()
-		case <-streamCtx.Done():
-		}
-	}()
-
-	stream, err := a.reg.Stream(streamCtx, req)
-	if err != nil {
-		cancel()
-		log.Error("llm.start_stream.failed",
-			"stage", "registry.Stream",
-			"profile_id", profileID,
-			"err", err.Error(),
-		)
-		return "", err
-	}
-
-	// Capture the latest user turn from the stored history so the
-	// post_send hook fired in pump can include it without a second
-	// session-history read.
-	var userTurn string
+	// Pull the latest user message — the chat surface posts the user
+	// turn via Sessions_AppendMessage immediately before calling
+	// StartStream, so the trailing user row is the new turn. The
+	// runner re-appends it via HistoryWriter so the kernel run sees
+	// consistent history.
+	var userMessage string
 	if a.history != nil && sessionID != "" {
 		if stored, herr := a.history.ListMessages(ctx, sessionID); herr == nil {
 			for i := len(stored) - 1; i >= 0; i-- {
 				if stored[i].Role == "user" {
-					userTurn = stored[i].Content
+					userMessage = stored[i].Content
 					break
 				}
 			}
 		}
 	}
-
-	a.mu.Lock()
-	a.nextID++
-	id := fmt.Sprintf("llm-%d", a.nextID)
-	sub := &subscription{
-		id:        id,
-		sessionID: sessionID,
-		stream:    stream,
-		cancel:    cancel,
-		done:      make(chan struct{}),
-		userTurn:  userTurn,
-		model:     effectiveModel,
-		kind:      kind,
-		req:       req,
-	}
-	a.subs[id] = sub
-	a.mu.Unlock()
-
-	log.Info("llm.start_stream.opened",
-		"sub_id", id,
-		"profile_id", profileID,
-		"session_id", sessionID,
-		"messages", len(messages),
-	)
-	go a.pump(sub)
-	return id, nil
+	return a.chatRunner.StartStream(ctx, profileID, sessionID, modelOverride, userMessage)
 }
 
-// StopStream terminates the subscription. The pump goroutine drains
-// remaining chunks, emits llm:stream-closed, and exits.
+// StopStream terminates the subscription. Forwards to the ChatRunner
+// (every sub id is now chat-runner-issued).
 func (a *API) StopStream(ctx context.Context, subID string) error {
-	// chat-migration WP04: ChatRunner-issued sub IDs are prefixed
-	// "chat-"; route them to the runner's StopStream so the kernel
-	// goroutine can cancel cleanly. Legacy "llm-N" ids fall through
-	// to the toolloop pump path below.
-	if a.chatRunner != nil && len(subID) >= 5 && subID[:5] == "chat-" {
-		return a.chatRunner.StopStream(ctx, subID)
+	if a.chatRunner == nil {
+		return errors.New("llm: chat runner not wired")
 	}
-	a.mu.Lock()
-	sub, ok := a.subs[subID]
-	a.mu.Unlock()
-	if !ok {
-		return fmt.Errorf("llm: subscription %q not found", subID)
-	}
-	if err := sub.stream.Cancel(); err != nil {
-		return err
-	}
-	sub.cancel()
-	<-sub.done
-	return nil
-}
-
-func (a *API) pump(sub *subscription) {
-	log := logging.L()
-	defer func() {
-		a.mu.Lock()
-		delete(a.subs, sub.id)
-		a.mu.Unlock()
-		close(sub.done)
-	}()
-
-	// Stream-chunk batching (token-stream coalescing fix).
-	//
-	// Wails v2's runtime.EventsEmit on macOS uses evaluateJavaScript
-	// under the hood; rapid-fire calls landing within a single webview
-	// message-pump cycle can be elided — middle events get dropped
-	// while first+last survive. Confirmed by per-delta logging in
-	// core/llm/openrouter (see openrouter.delta records in
-	// ~/.kenaz/harness.log) showing 781 bytes accumulated server-side
-	// vs. ~half that landing in the chat surface.
-	//
-	// Fix: accumulate text deltas in a per-pump builder; flush at most
-	// once per ~16ms (one frame). Non-text events (finish / error /
-	// usage / tool / reasoning) flush pending text first, then emit
-	// immediately so ordering is preserved. End-of-stream flushes any
-	// remaining pending text before returning.
-	chunkCount := 0
-	var assistantText []byte
-	var pendingText strings.Builder
-
-	flushPending := func() {
-		if pendingText.Len() == 0 {
-			return
-		}
-		text := pendingText.String()
-		pendingText.Reset()
-		a.sink.Emit("llm:stream-chunk", StreamChunkPayload{
-			SubID:     sub.id,
-			SessionID: sub.sessionID,
-			Chunk: corellm.StreamEvent{
-				Kind: corellm.StreamText,
-				Text: text,
-			},
-		})
-	}
-
-	const flushEvery = 16 * time.Millisecond
-	flushTicker := time.NewTicker(flushEvery)
-	defer flushTicker.Stop()
-
-	events := sub.stream.Events()
-loop:
-	for {
-		select {
-		case ev, ok := <-events:
-			if !ok {
-				break loop
-			}
-			chunkCount++
-			if ev.Kind == corellm.StreamText {
-				assistantText = append(assistantText, ev.Text...)
-				pendingText.WriteString(ev.Text)
-				continue
-			}
-			// Non-text event: drain pending text first so ordering is
-			// preserved (a finish or error must arrive AFTER the text
-			// that preceded it).
-			flushPending()
-			a.sink.Emit("llm:stream-chunk", StreamChunkPayload{
-				SubID:     sub.id,
-				SessionID: sub.sessionID,
-				Chunk:     ev,
-			})
-		case <-flushTicker.C:
-			flushPending()
-		}
-	}
-	// Final flush of anything buffered after the events channel closed.
-	flushPending()
-	resp, err := sub.stream.Final()
-	closed := StreamClosedPayload{SubID: sub.id, SessionID: sub.sessionID}
-	switch {
-	case err != nil:
-		var ce *corellm.ErrCancelled
-		if errors.As(err, &ce) {
-			closed.Reason = "stop-called"
-		} else {
-			closed.Reason = "backend-error"
-			closed.Message = err.Error()
-		}
-	default:
-		closed.Reason = "completed"
-		closed.FinishReason = resp.FinishReason
-	}
-
-	// Persist the assistant turn so navigating away and back reloads
-	// the full conversation. We persist on completed AND on
-	// stop-called (partial turn is still useful context); skip on
-	// backend-error since the response is unreliable.
-	//
-	// One exception: if the response carries tool_use calls AND a
-	// toolloop is wired, the loop owns assistant persistence (it
-	// records the full tool_use envelope plus every subsequent turn).
-	// Letting the pump also write would duplicate the assistant turn
-	// and partially obscure the tool calls.
-	deferAssistantToLoop := a.toolLoop != nil &&
-		err == nil &&
-		resp.FinishReason == "tool_use" &&
-		len(resp.ToolCalls) > 0
-	var persistedMessageID string
-	persistedAssistant := false
-	if a.historyW != nil &&
-		sub.sessionID != "" &&
-		len(assistantText) > 0 &&
-		closed.Reason != "backend-error" &&
-		!deferAssistantToLoop {
-		mid, perr := a.historyW.AppendMessage(
-			context.Background(),
-			sub.sessionID,
-			"assistant",
-			string(assistantText),
-		)
-		if perr != nil {
-			log.Warn("llm.stream.persist_assistant_failed",
-				"sub_id", sub.id,
-				"session_id", sub.sessionID,
-				"err", perr.Error(),
-			)
-		} else {
-			persistedMessageID = mid
-			persistedAssistant = true
-		}
-	}
-
-	log.Info("llm.stream.closed",
-		"sub_id", sub.id,
-		"session_id", sub.sessionID,
-		"reason", closed.Reason,
-		"finish_reason", closed.FinishReason,
-		"chunks", chunkCount,
-		"text_bytes", len(assistantText),
-		"err_message", closed.Message,
-	)
-	a.sink.Emit("llm:stream-closed", closed)
-
-	// Fire post_send hooks (memory.persist, user-defined hooks). The
-	// runner does not return mutations on this path — hooks are
-	// side-effect only. We pass the assistant text + finish reason so
-	// memory.persist can decide whether to embed and store the chunk.
-	if a.hooks != nil && sub.sessionID != "" {
-		a.hooks.RunPostSend(context.Background(), PostSendHookEvent{
-			SessionID:     sub.sessionID,
-			UserTurn:      sub.userTurn,
-			AssistantTurn: string(assistantText),
-			Model:         sub.model,
-			Kind:          sub.kind,
-			FinishReason:  closed.Reason,
-		})
-	}
-
-	// Artifacts code-block detector — runs only on a clean
-	// assistant-message finalize (non-tool_use finish, message
-	// successfully persisted). Errors log at warn but never fail the
-	// chat path; the artifact tab simply stays empty for that turn.
-	if a.artifacts != nil &&
-		persistedAssistant &&
-		!deferAssistantToLoop &&
-		sub.sessionID != "" &&
-		len(assistantText) > 0 {
-		if aerr := a.artifacts.OnAssistantMessage(
-			context.Background(),
-			sub.sessionID,
-			persistedMessageID,
-			string(assistantText),
-		); aerr != nil {
-			log.Warn("llm.stream.artifacts_capture_failed",
-				"sub_id", sub.id,
-				"session_id", sub.sessionID,
-				"err", aerr.Error(),
-			)
-		}
-	}
-
-	// Hand off to the toolloop when the model asked for tools and one
-	// is wired. We deliberately run *after* the stream-closed event so
-	// the chat surface gets the canonical close signal for the initial
-	// turn before the orchestrator loops; subsequent turns produced
-	// inside the loop don't surface as deltas in WP01 (streaming
-	// feedback during the loop lands in WP04).
-	if deferAssistantToLoop {
-		if loopErr := a.toolLoop.Run(
-			context.Background(),
-			sub.sessionID,
-			sub.id,
-			&resp,
-			sub.req,
-		); loopErr != nil {
-			log.Warn("llm.stream.toolloop_failed",
-				"sub_id", sub.id,
-				"session_id", sub.sessionID,
-				"err", loopErr.Error(),
-			)
-		}
-	}
+	return a.chatRunner.StopStream(ctx, subID)
 }
 
 // validateModalities walks req.Messages[*].Content[*] for image /
@@ -1241,16 +876,14 @@ func (a *API) ListModels(ctx context.Context, kind, plaintextApiKey string) ([]M
 	return out, nil
 }
 
-// ResolveConfirm forwards the user's confirm-each decision to the
-// gateway. The gateway looks up the pending request by id and unblocks
-// the toolloop goroutine waiting in RequestConfirm. Returns an error
-// when the gateway is unwired (default in tests / pre-WP05 builds) or
-// when the request id / decision is invalid.
-func (a *API) ResolveConfirm(_ context.Context, requestID, decision string) error {
-	if a == nil || a.confirmGateway == nil {
-		return errors.New("llm: confirm gateway not wired")
-	}
-	return a.confirmGateway.ResolveConfirm(requestID, toolloop.ConfirmDecision(decision))
+// ResolveConfirm is a deprecated stub retained for the LLMConnectorAPI
+// surface compatibility (Wails binding contract). The confirm-each
+// modal flow was deleted alongside core/toolloop in the chat-migration
+// cutover; v1 alpha relies on Cedar policy gates instead. Always
+// returns an error so the frontend modal can render a helpful message
+// when bound — no dispatch path resolves through this method anymore.
+func (a *API) ResolveConfirm(_ context.Context, _, _ string) error {
+	return errors.New("llm: confirm-each is retired; use cedar policies to gate tool dispatch")
 }
 
 // TestProvider runs the configured prober against the named profile and

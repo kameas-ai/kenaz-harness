@@ -2,25 +2,30 @@
 # between user turns. Replaces core/toolloop as the chassis chat path
 # (mission agent-kernel-graph-chat-migration).
 #
-# Topology:
-#   history_in (history_read) → ask_user (ask)
-#                              → assistant_turn (model)
-#                              → pump_loop (loop body: branch on
-#                                tool_use ⇒ tool_call → assistant_turn)
-#                              → final_check (decision: tool_use ⇒ loop,
-#                                else → ask_user again)
+# Topology (post-cutover, v1 alpha):
+#
+#   history_in (history_read) → ask_user (ask) → assistant_turn (model)
+#                                                  → assistant_write (session_write)
 #
 # Per-session lifecycle:
 #   - The chassis (core/rpc/views/agentgraph/chat) starts one Kernel.Run
-#     per chat session. The first fire pauses on `ask_user`.
-#   - On each user message, the chassis writes the answer onto the
-#     ask_user output port and resumes the kernel. The model fires,
-#     the loop body re-fires until finish_reason != "tool_use", and
-#     the run pauses again on the next ask_user.
-#   - Persistence of the assistant turn is handled by the chassis-side
-#     post-LLM hook listener (existing path via env.Hooks.Fire), not a
-#     dedicated SessionWriteNode — porting the toolloop's persistence
-#     surface into a typed kind is tracked separately.
+#     per chat StartStream. The runner pre-seeds the AskBus with the
+#     user's message so ask_user resolves on its first fire.
+#   - assistant_turn fires once; its assistant output flows into
+#     assistant_write which persists the assistant turn via the
+#     HistoryWriter seam (SessionWriteNode).
+#   - SessionWriteNode fires the kernel HookManager's post-LLM listener
+#     callbacks, including the artifacts code-block detector.
+#
+# Tool loop:
+#   - V1 alpha pushes tool dispatch into a single assistant_turn fire.
+#     Multi-turn agent loops (re-pump on tool_use) require a kernel
+#     ToolNode that dispatches dynamically from upstream tool_calls;
+#     adding that primitive is a follow-up mission. Until then a
+#     tool_use response from the assistant lands as the model's final
+#     turn for that StartStream — the tool_use envelope is persisted
+#     verbatim and the chassis surface renders the tool_call request
+#     to the user.
 #
 # Streaming:
 #   - The chassis wires env.StreamSink before each Run start (WP01 of
@@ -32,20 +37,17 @@
 #     receiving byte-equal deltas without a frontend change.
 #
 # Iteration cap:
-#   - max_iterations is set to 25 per the mission brief
-#     (DefaultMaxAgentTurns). The chassis overrides it from
-#     Settings.EffectiveMaxAgentTurns at run-start; this YAML carries
-#     the spec default so a graph dump round-trips cleanly.
-#   - Cap-hit fires EventBudgetCapHit (kernel checkBudget path) and
-#     the existing CapHitToast component handles bump-and-resume.
+#   - MaxAgentTurns is enforced by the chat runner at the chassis
+#     level — the runner re-runs the kernel up to N times when the
+#     model emits tool_use. v1 alpha defers this; one assistant_turn
+#     fire per StartStream.
 spec_version: "1"
 id: "chat_default"
 name: "Default chat graph"
 description: |
   Per-session kernel run that replaces core/toolloop as the chassis
   chat path. Pauses on AskNode between user turns; the chassis
-  resumes on the next user message. The LoopNode bounds tool-use
-  re-pumps at MaxAgentTurns (default 25).
+  resumes on the next user message.
 entrypoints:
   - history_in
 budget:
@@ -73,30 +75,6 @@ nodes:
       stream_to_chat: true
       max_tokens: 4096
 
-  - id: tool_call
-    kind: tool
-    title: "Dispatch one tool call"
-    attrs:
-      name: "<resolved at run-time>"
-
-  - id: continue_check
-    kind: decision
-    title: "Did the model emit tool_use?"
-    attrs:
-      condition: "finish_reason == \"tool_use\""
-      next_true: pump_loop
-      next_false: assistant_write
-
-  - id: pump_loop
-    kind: loop
-    title: "Re-pump until non-tool-use"
-    attrs:
-      max_iterations: 25
-      body:
-        - assistant_turn
-        - tool_call
-        - continue_check
-
   - id: assistant_write
     kind: session_write
     title: "Persist assistant turn to session history"
@@ -109,7 +87,5 @@ edges:
     to:   { node: ask_user, port: context }
   - from: { node: ask_user, port: answer }
     to:   { node: assistant_turn, port: messages }
-  - from: { node: assistant_turn, port: response }
-    to:   { node: continue_check, port: in }
   - from: { node: assistant_turn, port: assistant }
     to:   { node: assistant_write, port: text }

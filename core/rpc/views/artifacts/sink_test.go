@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	coreart "github.com/sigil-tech/kaneaz-harness/core/artifacts"
-	"github.com/sigil-tech/kaneaz-harness/core/toolloop"
 )
 
 // recordingCaptureManager captures every Capture call so the test can
@@ -101,96 +100,5 @@ func TestSink_OnAssistantMessage_NoBlocksNoOp(t *testing.T) {
 	}
 	if got := len(mgr.snapshotCalls()); got != 0 {
 		t.Errorf("Capture calls = %d, want 0", got)
-	}
-}
-
-// TestSink_OnPostToolUse_ImageEnvelope — image-shape result captured.
-func TestSink_OnPostToolUse_ImageEnvelope(t *testing.T) {
-	t.Parallel()
-	mgr := &recordingCaptureManager{}
-	cfgFn := func() coreart.CaptureConfig {
-		return coreart.CaptureConfig{AutoCaptureToolOutputs: true}
-	}
-	s := NewSinkConcrete(mgr, cfgFn, nil)
-	// "hello" base64 = aGVsbG8=
-	ev := toolloop.PostToolUseEvent{
-		SessionID:  "sess-2",
-		Tool:       "render",
-		Server:     "img-srv",
-		Result:     []byte(`{"type":"image","data":"aGVsbG8=","mimeType":"image/png"}`),
-		ToolCallID: "call-7",
-	}
-	s.OnPostToolUse(ev)
-	calls := mgr.snapshotCalls()
-	if len(calls) != 1 {
-		t.Fatalf("Capture calls = %d, want 1", len(calls))
-	}
-	if len(calls[0]) != 1 || calls[0][0].MimeType != "image/png" {
-		t.Errorf("candidate = %+v", calls[0])
-	}
-	if mgr.sessions[0] != "sess-2" {
-		t.Errorf("session id forwarded = %q, want sess-2", mgr.sessions[0])
-	}
-	if calls[0][0].SourceRef.ToolCallID != "call-7" {
-		t.Errorf("ToolCallID forwarded = %q, want call-7", calls[0][0].SourceRef.ToolCallID)
-	}
-}
-
-// TestSink_OnPostToolUse_DisabledShortCircuits — settings disable.
-func TestSink_OnPostToolUse_DisabledShortCircuits(t *testing.T) {
-	t.Parallel()
-	mgr := &recordingCaptureManager{}
-	cfgFn := func() coreart.CaptureConfig {
-		return coreart.CaptureConfig{AutoCaptureToolOutputs: false}
-	}
-	s := NewSinkConcrete(mgr, cfgFn, nil)
-	ev := toolloop.PostToolUseEvent{
-		SessionID: "sess-2",
-		Result:    []byte(`{"type":"image","data":"aGVsbG8=","mimeType":"image/png"}`),
-	}
-	s.OnPostToolUse(ev)
-	if got := len(mgr.snapshotCalls()); got != 0 {
-		t.Errorf("Capture calls = %d, want 0 (cfg disabled)", got)
-	}
-}
-
-// TestSink_OnPostToolUse_PlainTextResultSkipped — non-file-shaped
-// results are NOT captured.
-func TestSink_OnPostToolUse_PlainTextResultSkipped(t *testing.T) {
-	t.Parallel()
-	mgr := &recordingCaptureManager{}
-	cfgFn := func() coreart.CaptureConfig {
-		return coreart.CaptureConfig{AutoCaptureToolOutputs: true}
-	}
-	s := NewSinkConcrete(mgr, cfgFn, nil)
-	ev := toolloop.PostToolUseEvent{
-		SessionID: "sess-2",
-		Result:    []byte(`{"text":"hello"}`),
-	}
-	s.OnPostToolUse(ev)
-	if got := len(mgr.snapshotCalls()); got != 0 {
-		t.Errorf("Capture calls = %d, want 0", got)
-	}
-}
-
-// TestSink_PostListener_FansThroughHookRunner — the listener returned
-// by PostListener invokes OnPostToolUse, exercising the registration
-// path that the rpc chassis uses.
-func TestSink_PostListener_FansThroughHookRunner(t *testing.T) {
-	t.Parallel()
-	mgr := &recordingCaptureManager{}
-	cfgFn := func() coreart.CaptureConfig {
-		return coreart.CaptureConfig{AutoCaptureToolOutputs: true}
-	}
-	s := NewSinkConcrete(mgr, cfgFn, nil)
-	runner := toolloop.NewNoopHookRunner()
-	runner.RegisterPostListener(s.PostListener())
-	runner.RunPostToolUse(context.Background(), toolloop.PostToolUseEvent{
-		SessionID:  "sess-3",
-		Result:     []byte(`{"type":"image","data":"aGVsbG8=","mimeType":"image/png"}`),
-		ToolCallID: "c1",
-	})
-	if got := len(mgr.snapshotCalls()); got != 1 {
-		t.Errorf("Capture calls = %d, want 1", got)
 	}
 }

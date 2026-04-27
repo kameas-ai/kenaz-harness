@@ -52,6 +52,12 @@ type BuiltinTool interface {
 // validates server names against an allowlist.
 const BuiltinServerName = "kaneaz"
 
+// toolNameSeparator is the canonical delimiter between server and
+// tool names in the namespaced "<server>__<tool>" form used on the
+// model's tool catalog. Keeping it in this package preserves the
+// builtin-naming round-trip without re-introducing the dispatch loop.
+const toolNameSeparator = "__"
+
 // builtinNamePrefix is the namespace prefix the in-binary tools embed
 // in their Name() values (e.g. websearch.Name = "kaneaz__web_search").
 // The toolloop's namespaced-name split strips the "kaneaz__" prefix
