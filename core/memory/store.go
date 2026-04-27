@@ -54,6 +54,21 @@ type ScopePromoter interface {
 	PromoteScope(ctx context.Context, oldID, newID, newScopeKind, newScopeID string) error
 }
 
+// PruneCapable is the optional capability the prune sweep uses to
+// mark recall hits, pin/unpin chunks, and bulk-delete based on the
+// pruner's verdict. Stores that don't implement it fall through to
+// per-id Delete and the slower path the inspector RPC uses today.
+//
+// SetPinned with pinned=true makes the chunk immune to the prune
+// sweep (FR-028). MarkAccessed bumps RecallCount and updates
+// LastAccessed atomically — the retriever should call it after every
+// successful read so the prune sweep's recall-frequency signal
+// reflects real usage.
+type PruneCapable interface {
+	SetPinned(ctx context.Context, id string, pinned bool) error
+	MarkAccessed(ctx context.Context, ids []string, at time.Time) error
+}
+
 // chromemStore is the gob-snapshot-backed Store. The name is kept
 // generic so a future chromem-go-backed implementation can replace it
 // without touching callers.
@@ -62,6 +77,20 @@ type chromemStore struct {
 	path   string
 	chunks []Chunk
 	now    func() time.Time
+	// gate is an optional Cedar memory-write check; consulted on
+	// every Add. nil ⇒ no policy enforcement (the AllowAll fallback
+	// is the boot-stage default; production callers swap in a real
+	// Engine via SetGate). Bundle E bonus — gate-hook wiring per the
+	// WP14 report.
+	gate MemoryWriteGate
+}
+
+// MemoryWriteGate is the narrow interface chromemStore consults on
+// every Add. core/policy/cedar.Gate satisfies it via CheckMemoryWrite
+// adapter; tests can pass a stub. The interface lives here to avoid
+// pulling cedar into core/memory's import graph (DIRECTIVE_001).
+type MemoryWriteGate interface {
+	CheckWrite(ctx context.Context, scope string) error
 }
 
 // NewChromemStore opens (or creates) the on-disk vector DB at path.
@@ -106,6 +135,12 @@ func (s *chromemStore) load() error {
 // backfillChunkDefaults applies the WP06 schema defaults to a chunk
 // loaded from a pre-WP06 gob: missing scope fields fall back to the
 // session scope keyed on SessionID; missing content hash is computed.
+//
+// Bundle E WP15 addendum: greedy-memory metadata (LastAccessed) was
+// added without a schema migration, so legacy chunks read back with a
+// zero LastAccessed; default it to CreatedAt so the staleness signal
+// treats them as "as old as their creation" rather than "infinitely
+// stale" (which would prune everything on first sweep).
 func backfillChunkDefaults(c *Chunk) {
 	if c.ScopeKind == "" {
 		c.ScopeKind = ScopeKindSession
@@ -115,6 +150,9 @@ func backfillChunkDefaults(c *Chunk) {
 	}
 	if c.ContentHash == "" {
 		c.ContentHash = HashContent(c.Content)
+	}
+	if c.LastAccessed.IsZero() {
+		c.LastAccessed = c.CreatedAt
 	}
 }
 
@@ -144,7 +182,7 @@ func (s *chromemStore) saveLocked() error {
 	return nil
 }
 
-func (s *chromemStore) Add(_ context.Context, chunk Chunk) error {
+func (s *chromemStore) Add(ctx context.Context, chunk Chunk) error {
 	if chunk.ID == "" {
 		return errors.New("memory: chunk id required")
 	}
@@ -159,6 +197,11 @@ func (s *chromemStore) Add(_ context.Context, chunk Chunk) error {
 	}
 	if chunk.ContentHash == "" {
 		chunk.ContentHash = HashContent(chunk.Content)
+	}
+	if s.gate != nil {
+		if err := s.gate.CheckWrite(ctx, chunk.ScopeKind); err != nil {
+			return err
+		}
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -241,6 +284,21 @@ func (s *chromemStore) Query(_ context.Context, embedding []float32, k int, scop
 
 func (s *chromemStore) Close() error { return nil }
 
+// SetGate installs (or replaces) the memory-write policy gate. Called
+// once at boot; passing nil disables the gate.
+func (s *chromemStore) SetGate(g MemoryWriteGate) {
+	s.mu.Lock()
+	s.gate = g
+	s.mu.Unlock()
+}
+
+// GateSetter is the optional capability tests + the rpc layer use to
+// install a policy gate without re-opening the store. The chromem
+// store implements it.
+type GateSetter interface {
+	SetGate(g MemoryWriteGate)
+}
+
 // PromoteScope deletes the chunk with oldID and inserts a copy with
 // newID and the supplied (kind, id) scope. Atomic under s.mu — the
 // store is observed in the pre- or post-state, never with both rows.
@@ -286,6 +344,59 @@ func (s *chromemStore) PromoteScope(_ context.Context, oldID, newID, newScopeKin
 		return err
 	}
 	return nil
+}
+
+// SetPinned sets or clears the Pinned flag on chunk id. Returns
+// ErrNotFound when the id does not exist. Atomic under s.mu — the
+// gob is rewritten before the call returns. Bundle E WP15.
+func (s *chromemStore) SetPinned(_ context.Context, id string, pinned bool) error {
+	if id == "" {
+		return errors.New("memory: pin: id required")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := range s.chunks {
+		if s.chunks[i].ID == id {
+			if s.chunks[i].Pinned == pinned {
+				return nil
+			}
+			s.chunks[i].Pinned = pinned
+			return s.saveLocked()
+		}
+	}
+	return fmt.Errorf("memory: chunk %q not found", id)
+}
+
+// MarkAccessed bumps RecallCount + LastAccessed for every id in ids.
+// Missing ids are silently skipped — recall is best-effort metadata,
+// not a state machine; surfacing per-id errors here would force the
+// retriever to single-thread its writes. Bundle E WP15.
+func (s *chromemStore) MarkAccessed(_ context.Context, ids []string, at time.Time) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	if at.IsZero() {
+		at = s.now().UTC()
+	}
+	wanted := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		wanted[id] = struct{}{}
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	dirty := false
+	for i := range s.chunks {
+		if _, ok := wanted[s.chunks[i].ID]; !ok {
+			continue
+		}
+		s.chunks[i].RecallCount++
+		s.chunks[i].LastAccessed = at
+		dirty = true
+	}
+	if !dirty {
+		return nil
+	}
+	return s.saveLocked()
 }
 
 // cosineSimilarity computes the cosine of the angle between a and b.

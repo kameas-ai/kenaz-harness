@@ -22,6 +22,12 @@ const (
 
 // Chunk is one stored memory: an opt-in snippet the user explicitly
 // asked the harness to keep across sessions.
+//
+// Greedy-memory addendum (Bundle E WP15): the Pinned, RecallCount, and
+// LastAccessed fields drive the background prune sweep. They default to
+// the "fresh chunk" values when an old gob is read back (Pinned=false,
+// RecallCount=0, LastAccessed=CreatedAt) so existing on-disk stores
+// keep working without a migration.
 type Chunk struct {
 	ID            string    `json:"id"`
 	SessionID     string    `json:"session_id,omitempty"`
@@ -37,6 +43,20 @@ type Chunk struct {
 	Title         string    `json:"title,omitempty"`
 	Embedding     []float32 `json:"-"`
 	CreatedAt     time.Time `json:"created_at"`
+	// Pinned chunks are immune to the prune sweep (FR-028).
+	Pinned bool `json:"pinned,omitempty"`
+	// RecallCount is the number of times this chunk has been retrieved
+	// by the kernel's MemoryNode / retriever. Updated lazily — the
+	// production store is the canonical recorder. Used by the
+	// recall-frequency prune signal.
+	RecallCount int `json:"recall_count,omitempty"`
+	// LastAccessed is the last time this chunk was read out of the
+	// store. Defaults to CreatedAt when zero. Used by the staleness
+	// prune signal.
+	LastAccessed time.Time `json:"last_accessed,omitempty"`
+	// Source records the originating hook boundary ("post-llm" etc.)
+	// so the inspector can show users why a chunk was captured.
+	Source string `json:"source,omitempty"`
 }
 
 // Result pairs a Chunk with its similarity score against a query

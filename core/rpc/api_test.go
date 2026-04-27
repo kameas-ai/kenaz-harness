@@ -12,6 +12,7 @@ import (
 	contextsview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/contexts"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/contextview"
 	corpusview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/corpus"
+	dialsview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/dials"
 	hooksview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/hooks"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/llm"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/mcp"
@@ -51,6 +52,7 @@ type fakeHarnessAPI struct {
 	shellAPI        shell.ShellAPI
 	slashAPI        slashview.SlashAPI
 	corpusAPI       corpusview.CorpusAPI
+	dialsAPI        dialsview.DialsAPI
 }
 
 func (f *fakeHarnessAPI) ShellStatus(_ context.Context) (ShellStatus, error) {
@@ -78,6 +80,7 @@ func (f *fakeHarnessAPI) Tools() tools.ToolsAPI                       { return f
 func (f *fakeHarnessAPI) Shell() shell.ShellAPI                       { return f.shellAPI }
 func (f *fakeHarnessAPI) Slash() slashview.SlashAPI                   { return f.slashAPI }
 func (f *fakeHarnessAPI) Corpus() corpusview.CorpusAPI                 { return f.corpusAPI }
+func (f *fakeHarnessAPI) Dials() dialsview.DialsAPI                    { return f.dialsAPI }
 
 // Compile-time interface witness (plan §4.2).
 var _ HarnessAPI = (*fakeHarnessAPI)(nil)

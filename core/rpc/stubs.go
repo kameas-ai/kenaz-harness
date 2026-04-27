@@ -9,6 +9,7 @@ import (
 	artifactsview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/artifacts"
 	attachmentsview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/attachments"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/contextview"
+	dialsview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/dials"
 	hooksview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/hooks"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/llm"
 	memoryview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/memory"
@@ -147,6 +148,33 @@ func (s *stubMemory) PromoteScope(_ context.Context, _, _, _ string) (string, er
 	return "", errNotWired
 }
 func (s *stubMemory) Forget(_ context.Context, _ string) error { return errNotWired }
+func (s *stubMemory) Pin(_ context.Context, _ string, _ bool) error { return errNotWired }
+func (s *stubMemory) JournalTail(_ context.Context, _ string, _ int64, _ int) ([]memoryview.JournalEntry, error) {
+	return []memoryview.JournalEntry{}, nil
+}
+func (s *stubMemory) PrunePreview(_ context.Context, _ string) (memoryview.PrunePreview, error) {
+	return memoryview.PrunePreview{}, nil
+}
+func (s *stubMemory) RunPruneNow(_ context.Context, _ string) (memoryview.PruneStats, error) {
+	return memoryview.PruneStats{}, nil
+}
+
+// ── dials ──────────────────────────────────────────────────────────────
+
+type stubDials struct{}
+
+func (s *stubDials) GetDials(_ context.Context, _ dialsview.ScopeKey) (dialsview.DialConfig, error) {
+	return dialsview.DialConfig{}, nil
+}
+func (s *stubDials) SetDials(_ context.Context, _ dialsview.ScopeKey, _ dialsview.DialConfig) error {
+	return errNotWired
+}
+func (s *stubDials) GetEffective(_ context.Context, _, _, _, _ string) (dialsview.EffectiveDials, error) {
+	return dialsview.EffectiveDials{}, nil
+}
+func (s *stubDials) BumpAndResume(_ context.Context, _ string, _ dialsview.DialDelta) error {
+	return errNotWired
+}
 
 // ── hooks ──────────────────────────────────────────────────────────────
 

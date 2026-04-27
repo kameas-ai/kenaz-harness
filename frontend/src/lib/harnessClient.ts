@@ -44,6 +44,14 @@ import type {
   MemoryChunk,
   MemoryListFilter,
   MemoryScopeKind,
+  MemoryJournalEntry,
+  MemoryPruneStats,
+  MemoryPrunePreview,
+  DialConfig,
+  DialDelta,
+  DialEffectiveDials,
+  DialScope,
+  DialScopeKey,
   Hook,
   BuiltinDescriptor,
   ConfirmDecision,
@@ -235,6 +243,24 @@ interface WailsBindingsLike {
     newScopeID: string,
   ): Promise<string>;
   Memory_Forget(id: string): Promise<void>;
+  Memory_Pin(id: string, pinned: boolean): Promise<void>;
+  Memory_JournalTail(
+    scope: string,
+    sinceSeq: number,
+    limit: number,
+  ): Promise<MemoryJournalEntry[]>;
+  Memory_PrunePreview(scope: string): Promise<MemoryPrunePreview>;
+  Memory_RunPruneNow(scope: string): Promise<MemoryPruneStats>;
+
+  Dials_Get(key: DialScopeKey): Promise<DialConfig>;
+  Dials_Set(key: DialScopeKey, cfg: DialConfig): Promise<void>;
+  Dials_GetEffective(
+    projectID: string,
+    sessionID: string,
+    graphID: string,
+    runID: string,
+  ): Promise<DialEffectiveDials>;
+  Dials_BumpAndResume(runID: string, delta: DialDelta): Promise<void>;
 
   Hooks_List(): Promise<Hook[]>;
   Hooks_Get(id: string): Promise<Hook>;
@@ -850,6 +876,36 @@ export interface MemoryClient {
     newScopeID: string,
   ): Promise<string>;
   forget(id: string): Promise<void>;
+  /** Pin / unpin a chunk so it survives the prune sweep (WP15). */
+  pin(id: string, pinned: boolean): Promise<void>;
+  /** Tail the greedy-memory hook journal — what was captured at each
+   * kernel boundary (WP16). */
+  journalTail(
+    scope: string,
+    sinceSeq: number,
+    limit: number,
+  ): Promise<MemoryJournalEntry[]>;
+  /** Compute the would-prune set without mutating the store (WP15). */
+  prunePreview(scope: string): Promise<MemoryPrunePreview>;
+  /** Apply the prune sweep immediately (WP15). */
+  runPruneNow(scope: string): Promise<MemoryPruneStats>;
+}
+
+/**
+ * DialsClient backs the /dials view + the cap-hit toast (Bundle E
+ * WP17). The four methods mirror Dials_Get / Dials_Set /
+ * Dials_GetEffective / Dials_BumpAndResume.
+ */
+export interface DialsClient {
+  get(key: DialScopeKey): Promise<DialConfig>;
+  set(key: DialScopeKey, cfg: DialConfig): Promise<void>;
+  getEffective(
+    projectID: string,
+    sessionID: string,
+    graphID: string,
+    runID: string,
+  ): Promise<DialEffectiveDials>;
+  bumpAndResume(runID: string, delta: DialDelta): Promise<void>;
 }
 
 /**
@@ -1011,6 +1067,7 @@ export interface HarnessClient {
   slash: SlashClient;
   artifacts: ArtifactsClient;
   corpus: CorpusClient;
+  dials: DialsClient;
 }
 
 // ── runtime client ─────────────────────────────────────────────────────
@@ -1191,6 +1248,19 @@ export function createHarnessClient(): HarnessClient {
       promoteScope: (chunkID, newScopeKind, newScopeID) =>
         b().Memory_PromoteScope(chunkID, newScopeKind, newScopeID),
       forget: (id) => b().Memory_Forget(id),
+      pin: (id, pinned) => b().Memory_Pin(id, pinned),
+      journalTail: (scope, sinceSeq, limit) =>
+        b().Memory_JournalTail(scope, sinceSeq, limit),
+      prunePreview: (scope) => b().Memory_PrunePreview(scope),
+      runPruneNow: (scope) => b().Memory_RunPruneNow(scope),
+    },
+    dials: {
+      get: (key) => b().Dials_Get(key),
+      set: (key, cfg) => b().Dials_Set(key, cfg),
+      getEffective: (projectID, sessionID, graphID, runID) =>
+        b().Dials_GetEffective(projectID, sessionID, graphID, runID),
+      bumpAndResume: (runID, delta) =>
+        b().Dials_BumpAndResume(runID, delta),
     },
     hooks: {
       list: () => b().Hooks_List(),
@@ -1491,6 +1561,46 @@ export function createFakeHarnessClient(
       rememberMessage: async () => 'fake-mem-id',
       promoteScope: async () => 'fake-mem-id',
       forget: noop,
+      pin: noop,
+      journalTail: async () => [],
+      prunePreview: async () => ({
+        verdicts: [],
+        stats: {
+          startedAt: new Date().toISOString(),
+          durationMs: 0,
+          kept: 0,
+          dropped: 0,
+          collapsed: 0,
+          pinned: 0,
+        },
+      }),
+      runPruneNow: async () => ({
+        startedAt: new Date().toISOString(),
+        durationMs: 0,
+        kept: 0,
+        dropped: 0,
+        collapsed: 0,
+        pinned: 0,
+      }),
+    },
+    dials: {
+      get: async () => ({}),
+      set: noop,
+      getEffective: async () => ({
+        maxTokensPerRun: { value: 0, from: 'global' },
+        maxWallclockSeconds: { value: 0, from: 'global' },
+        maxLLMCalls: { value: 0, from: 'global' },
+        maxToolCalls: { value: 0, from: 'global' },
+        maxCostUSD: { value: 0, from: 'global' },
+        planVerbosity: { value: 'normal', from: 'global' },
+        askThreshold: { value: 0.4, from: 'global' },
+        reflectFrequency: { value: 1, from: 'global' },
+        compactionAggressiveness: { value: 0.5, from: 'global' },
+        reviewIterationsCap: { value: 3, from: 'global' },
+        memoryHooksEnabled: { value: true, from: 'global' },
+        memoryPruneIntervalSeconds: { value: 86400, from: 'global' },
+      }),
+      bumpAndResume: noop,
     },
     hooks: {
       list: async () => [],

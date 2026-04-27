@@ -44,6 +44,27 @@ function mountWith(opts: MountOpts = {}) {
       forget,
       rememberMessage,
       promoteScope,
+      pin: async () => undefined,
+      journalTail: async () => [],
+      prunePreview: async () => ({
+        verdicts: [],
+        stats: {
+          startedAt: '',
+          durationMs: 0,
+          kept: 0,
+          dropped: 0,
+          collapsed: 0,
+          pinned: 0,
+        },
+      }),
+      runPruneNow: async () => ({
+        startedAt: '',
+        durationMs: 0,
+        kept: 0,
+        dropped: 0,
+        collapsed: 0,
+        pinned: 0,
+      }),
     },
     sessions: {
       list: async () => [],
