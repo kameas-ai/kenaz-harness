@@ -459,6 +459,20 @@ type chatStream struct {
 	textBuf    strings.Builder
 	usage      llm.Usage
 	finishStop string
+	// toolCalls is the index-keyed accumulator for streamed tool calls.
+	// OpenAI's wire format sends `id` and `function.name` once on the
+	// opening fragment of a given `index`, then fragments `arguments`
+	// across many subsequent deltas. We splice them back into a single
+	// `llm.ToolUse` per index when the stream closes.
+	toolCalls map[int]*toolCallAccum
+}
+
+// toolCallAccum accumulates the streamed fragments of a single tool
+// call. `index` is the OpenAI Chat Completions streaming index field.
+type toolCallAccum struct {
+	id      string
+	name    string
+	argsBuf strings.Builder
 }
 
 // Events returns the channel of streaming chunks.
@@ -500,8 +514,28 @@ func (s *chatStream) pump() {
 		s.cancel() // release the goroutine watching ctx
 		s.mu.Lock()
 		if s.finalErr == nil && !s.cancelled {
+			// Order accumulated tool calls by index so callers see them
+			// in the same order the model emitted them.
+			var calls []llm.ToolUse
+			if len(s.toolCalls) > 0 {
+				idxs := make([]int, 0, len(s.toolCalls))
+				for i := range s.toolCalls {
+					idxs = append(idxs, i)
+				}
+				sort.Ints(idxs)
+				calls = make([]llm.ToolUse, 0, len(idxs))
+				for _, i := range idxs {
+					a := s.toolCalls[i]
+					calls = append(calls, llm.ToolUse{
+						ID:    a.id,
+						Name:  a.name,
+						Input: json.RawMessage(a.argsBuf.String()),
+					})
+				}
+			}
 			s.final = llm.Response{
 				Content:      []llm.ContentBlock{{Type: "text", Text: s.textBuf.String()}},
+				ToolCalls:    calls,
 				FinishReason: s.finishStop,
 				Usage:        s.usage,
 			}
@@ -608,8 +642,17 @@ func (s *chatStream) handleSSEData(raw []byte) {
 	var env struct {
 		Choices []struct {
 			Delta struct {
-				Content string `json:"content"`
-				Role    string `json:"role"`
+				Content   string `json:"content"`
+				Role      string `json:"role"`
+				ToolCalls []struct {
+					Index    int    `json:"index"`
+					ID       string `json:"id,omitempty"`
+					Type     string `json:"type,omitempty"`
+					Function struct {
+						Name      string `json:"name,omitempty"`
+						Arguments string `json:"arguments,omitempty"`
+					} `json:"function"`
+				} `json:"tool_calls,omitempty"`
 			} `json:"delta"`
 			FinishReason *string `json:"finish_reason"`
 		} `json:"choices"`
@@ -642,8 +685,39 @@ func (s *chatStream) handleSSEData(raw []byte) {
 		return
 	}
 
-	// Text deltas and finish reasons travel through choices[].
+	// Text deltas, tool-call deltas, and finish reasons travel through choices[].
 	for _, c := range env.Choices {
+		// Tool-call deltas: the OpenAI-compat wire format streams `id`
+		// and `function.name` once on the opening fragment of a given
+		// `index`, then fragments `function.arguments` as JSON-string
+		// pieces over many subsequent deltas. Splice them into the
+		// per-index accumulator. Without this branch the model's
+		// tool_calls stream is silently discarded and Final.ToolCalls
+		// stays empty — the kernel's tool_dispatch then sees no calls
+		// and the agent loop exits after one iteration.
+		if len(c.Delta.ToolCalls) > 0 {
+			s.mu.Lock()
+			if s.toolCalls == nil {
+				s.toolCalls = make(map[int]*toolCallAccum)
+			}
+			for _, tc := range c.Delta.ToolCalls {
+				acc, ok := s.toolCalls[tc.Index]
+				if !ok {
+					acc = &toolCallAccum{}
+					s.toolCalls[tc.Index] = acc
+				}
+				if tc.ID != "" {
+					acc.id = tc.ID
+				}
+				if tc.Function.Name != "" {
+					acc.name = tc.Function.Name
+				}
+				if tc.Function.Arguments != "" {
+					acc.argsBuf.WriteString(tc.Function.Arguments)
+				}
+			}
+			s.mu.Unlock()
+		}
 		if c.Delta.Content != "" {
 			s.mu.Lock()
 			s.textBuf.WriteString(c.Delta.Content)
