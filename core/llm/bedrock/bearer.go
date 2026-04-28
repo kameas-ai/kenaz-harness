@@ -188,8 +188,23 @@ func parseConverseNonStreamingResponse(body []byte) (llm.Response, string, error
 	var textBuf strings.Builder
 	for _, b := range env.Output.Message.Content {
 		if b.Text != "" {
-			blocks = append(blocks, llm.ContentBlock{Type: "text", Text: b.Text})
-			textBuf.WriteString(b.Text)
+			// Llama and other instruction-tuned models on Bedrock often
+			// emit tool calls as a JSON-shaped envelope INSIDE their
+			// text instead of using the structured toolUse block:
+			//   {"type":"function","name":"...","parameters":{...}}
+			// The displayed chat ends up showing the raw envelope and
+			// the kernel sees no tool to dispatch. Extract the call,
+			// fold it into ToolCalls, and suppress the JSON from the
+			// visible text. Cleaner long-term solution is the
+			// provider-implementation-uniformity mission's FR-016
+			// (capability-aware shaping picks the right model surface
+			// up front).
+			extracted, residual := extractEmbeddedToolCalls(b.Text)
+			toolCalls = append(toolCalls, extracted...)
+			if strings.TrimSpace(residual) != "" {
+				blocks = append(blocks, llm.ContentBlock{Type: "text", Text: residual})
+				textBuf.WriteString(residual)
+			}
 		}
 		if b.ToolUse != nil {
 			toolCalls = append(toolCalls, llm.ToolUse{
@@ -211,6 +226,134 @@ func parseConverseNonStreamingResponse(body []byte) (llm.Response, string, error
 		}
 	}
 	return resp, env.StopReason, nil
+}
+
+// extractEmbeddedToolCalls scans assistant text for JSON-shaped tool
+// call envelopes that Llama-family models on Bedrock emit instead of
+// using the structured toolUse channel. Returns the extracted calls
+// and the residual text with the envelopes removed. Pattern:
+//
+//	{"type": "function", "name": "<tool>", "parameters": {...}}
+//
+// also tolerates `arguments` instead of `parameters` (OpenAI-shape
+// leakage), and the same envelope wrapped in a ```json fence.
+//
+// Conservative parser: only treats top-level objects with the exact
+// `{type:"function", name, parameters|arguments}` shape as tool
+// envelopes. Plain JSON in the assistant's response (a model showing
+// the user a JSON example) stays as text.
+func extractEmbeddedToolCalls(text string) (calls []llm.ToolUse, residual string) {
+	if text == "" || !strings.Contains(text, `"type"`) || !strings.Contains(text, `"function"`) {
+		return nil, text
+	}
+	var residualBuf strings.Builder
+	i := 0
+	for i < len(text) {
+		// Look for the next `{` that might start an envelope.
+		open := strings.IndexByte(text[i:], '{')
+		if open < 0 {
+			residualBuf.WriteString(text[i:])
+			break
+		}
+		open += i
+		residualBuf.WriteString(text[i:open])
+		// Find the matching close brace, respecting nested objects + strings.
+		end := matchObjectEnd(text, open)
+		if end < 0 {
+			residualBuf.WriteString(text[open:])
+			break
+		}
+		candidate := text[open : end+1]
+		if call, ok := parseToolEnvelope(candidate); ok {
+			calls = append(calls, call)
+			i = end + 1
+			continue
+		}
+		// Not a tool envelope — keep the brace + advance one char.
+		residualBuf.WriteByte(text[open])
+		i = open + 1
+	}
+	return calls, residualBuf.String()
+}
+
+// matchObjectEnd returns the index of the `}` that closes the `{` at
+// position open. Returns -1 if the object is unterminated.
+func matchObjectEnd(s string, open int) int {
+	depth := 0
+	inStr := false
+	esc := false
+	for i := open; i < len(s); i++ {
+		c := s[i]
+		if inStr {
+			if esc {
+				esc = false
+				continue
+			}
+			if c == '\\' {
+				esc = true
+				continue
+			}
+			if c == '"' {
+				inStr = false
+			}
+			continue
+		}
+		switch c {
+		case '"':
+			inStr = true
+		case '{':
+			depth++
+		case '}':
+			depth--
+			if depth == 0 {
+				return i
+			}
+		}
+	}
+	return -1
+}
+
+// parseToolEnvelope decodes a candidate JSON object as a tool-call
+// envelope. Returns the extracted ToolUse and ok=true on match;
+// (zero, false) otherwise. Accepts both `parameters` (Llama default)
+// and `arguments` (OpenAI-shape leakage).
+func parseToolEnvelope(candidate string) (llm.ToolUse, bool) {
+	var env struct {
+		Type       string          `json:"type"`
+		Name       string          `json:"name"`
+		ID         string          `json:"id,omitempty"`
+		Parameters json.RawMessage `json:"parameters,omitempty"`
+		Arguments  json.RawMessage `json:"arguments,omitempty"`
+	}
+	if err := json.Unmarshal([]byte(candidate), &env); err != nil {
+		return llm.ToolUse{}, false
+	}
+	if env.Type != "function" || env.Name == "" {
+		return llm.ToolUse{}, false
+	}
+	input := env.Parameters
+	if len(input) == 0 {
+		input = env.Arguments
+	}
+	if len(input) == 0 {
+		input = json.RawMessage(`{}`)
+	}
+	id := env.ID
+	if id == "" {
+		// Synthesise a deterministic id so the kernel's tool_dispatch
+		// can pair this with a result message; using the call's
+		// content hash keeps it stable across replays.
+		id = "synthetic_" + simpleHash(env.Name+string(input))
+	}
+	return llm.ToolUse{ID: id, Name: env.Name, Input: input}, true
+}
+
+// simpleHash returns a short hex digest suitable for synthetic ids.
+// Not cryptographic — just stable + collision-resistant for the
+// per-turn tool-call set.
+func simpleHash(s string) string {
+	h := crc32.ChecksumIEEE([]byte(s))
+	return fmt.Sprintf("%08x", h)
 }
 
 // syntheticStream wraps a fully-resolved Response in the llm.Stream
