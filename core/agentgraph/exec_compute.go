@@ -48,6 +48,18 @@ func (modelExecutor) Execute(ctx context.Context, env *Env, node *Node, inputs P
 			}
 		}
 	}
+	// Fallback for chat-graph LoopNode bodies: when the model node sits
+	// inside a loop body its inputs are threaded by the LoopNode's
+	// `current` PortValues, not by edges touching the body node (the
+	// kernel filters those). If the upstream didn't supply messages,
+	// pull the live conversation from env.History so multi-turn chat
+	// works without every body wiring re-threading the history.
+	if len(msgs) == 0 && env.History != nil && env.SessionID != "" {
+		hist, err := env.History.History(ctx, env.SessionID, 0)
+		if err == nil {
+			msgs = append(msgs, hist...)
+		}
+	}
 
 	// Tool allowlist comes from attrs.
 	tools := append([]string(nil), a.ToolAllowlist...)
