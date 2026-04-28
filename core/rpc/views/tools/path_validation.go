@@ -81,19 +81,82 @@ const workspaceMarkerName = ".kaneaz-workspace"
 // dataDir that EnsureWorkspace materialises.
 const agentWorkspaceDirName = "agent-workspace"
 
+// commonHomeFolders maps bare folder names to subdirectories of the
+// user's home. Lets users type "Desktop" / "Downloads" in the recipe
+// modal and get them resolved to $HOME/Desktop / $HOME/Downloads
+// instead of an "is not absolute" error. Match is case-insensitive
+// against the bare path component.
+var commonHomeFolders = map[string]string{
+	"desktop":   "Desktop",
+	"documents": "Documents",
+	"downloads": "Downloads",
+	"music":     "Music",
+	"movies":    "Movies",
+	"pictures":  "Pictures",
+	"public":    "Public",
+}
+
+// ExpandPath resolves shell-friendly path forms into absolute paths
+// suitable for ValidateAllowedDir. Order:
+//
+//  1. Empty input → empty (caller surfaces empty-path error).
+//  2. Already absolute → returned untouched.
+//  3. Leading "~" or "~/" → $HOME-prefixed.
+//  4. "$HOME" / "${HOME}" prefix → $HOME-prefixed.
+//  5. Bare common-home-folder name (case-insensitive: "Desktop",
+//     "Downloads", "Documents", etc.) → $HOME/<canonical>.
+//  6. Anything else relative → returned untouched so the validator
+//     surfaces the canonical "is not absolute" error.
+//
+// Resolution is intentionally narrow: we only do the mappings users
+// reach for first. Generic `cd path` semantics would let a typo land
+// the agent on an unintended directory.
+func ExpandPath(path string) string {
+	if path == "" {
+		return path
+	}
+	if filepath.IsAbs(path) {
+		return path
+	}
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return path
+	}
+	switch {
+	case path == "~":
+		return home
+	case strings.HasPrefix(path, "~/"):
+		return filepath.Join(home, path[2:])
+	case strings.HasPrefix(path, "$HOME/"):
+		return filepath.Join(home, path[len("$HOME/"):])
+	case path == "$HOME" || path == "${HOME}":
+		return home
+	case strings.HasPrefix(path, "${HOME}/"):
+		return filepath.Join(home, path[len("${HOME}/"):])
+	}
+	// Single bare component? Match against the common-home folders.
+	if !strings.ContainsRune(path, filepath.Separator) {
+		if mapped, ok := commonHomeFolders[strings.ToLower(strings.TrimSuffix(path, "/"))]; ok {
+			return filepath.Join(home, mapped)
+		}
+	}
+	return path
+}
+
 // ValidateAllowedDir reports whether path is suitable to grant to a
 // filesystem MCP server.
 //
 // Validation order matters:
-//  1. Absolute (after filepath.Abs). A relative path is rejected
-//     outright with ErrPathNotAbsolute — callers MUST expand
-//     ~/ themselves.
-//  2. Existing (os.Stat). Non-existent → ErrPathNotFound.
-//  3. Canonical (filepath.EvalSymlinks). A symlink-resolution
+//  1. ExpandPath: tilde, $HOME, and bare common-folder names like
+//     "Desktop" are rewritten to $HOME-prefixed absolute paths.
+//  2. Absolute (after filepath.Abs). A relative path that ExpandPath
+//     couldn't resolve is rejected with ErrPathNotAbsolute.
+//  3. Existing (os.Stat). Non-existent → ErrPathNotFound.
+//  4. Canonical (filepath.EvalSymlinks). A symlink-resolution
 //     failure → ErrPathTraversal. Canonicalization runs BEFORE the
 //     deny-list check so "/etc/../tmp" resolves to "/tmp" and the
 //     check sees the real target.
-//  4. Not in the deny-list (denyRoots + the user's home directory
+//  5. Not in the deny-list (denyRoots + the user's home directory
 //     itself). Children of the home directory are allowed.
 //
 // The function returns nil on success; on failure it wraps the
@@ -102,6 +165,7 @@ func ValidateAllowedDir(path string) error {
 	if path == "" {
 		return fmt.Errorf("%w: empty path", ErrPathNotAbsolute)
 	}
+	path = ExpandPath(path)
 	if !filepath.IsAbs(path) {
 		return fmt.Errorf("%w: %q", ErrPathNotAbsolute, path)
 	}

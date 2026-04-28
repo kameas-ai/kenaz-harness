@@ -28,12 +28,14 @@ func TestValidateAllowedDir_RejectsEmptyPath(t *testing.T) {
 	}
 }
 
-func TestValidateAllowedDir_RejectsTildePath(t *testing.T) {
-	// "~/foo" is technically not absolute (no leading /), so the
-	// validator rejects it for the caller to expand.
+func TestValidateAllowedDir_ExpandsTildePath(t *testing.T) {
+	// "~/Documents" is now expanded to $HOME/Documents before validation,
+	// so it should no longer surface as ErrPathNotAbsolute. We don't
+	// assert success because $HOME/Documents may not exist on every
+	// test machine — the assertion is "no longer ErrPathNotAbsolute."
 	err := ValidateAllowedDir("~/Documents")
-	if !errors.Is(err, ErrPathNotAbsolute) {
-		t.Errorf("got %v, want ErrPathNotAbsolute", err)
+	if errors.Is(err, ErrPathNotAbsolute) {
+		t.Errorf("expand should have rewritten ~/Documents to absolute; got %v", err)
 	}
 }
 
