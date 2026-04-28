@@ -72,6 +72,24 @@ func (a *LLMProviderAdapter) Generate(ctx context.Context, req coreag.LLMRequest
 	llmMsgs := make([]corellm.Message, 0, len(req.Messages))
 	for _, m := range req.Messages {
 		blocks := make([]corellm.ContentBlock, 0, 1+len(m.ToolCalls))
+		// Tool-result message: emit a tool_result block carrying the
+		// tool_use_id so the wire encoder can reach it. Without this
+		// the second-turn assistant request goes out with a dangling
+		// tool_use and no matching tool_call_id, and OpenAI-compat
+		// providers (incl. OpenRouter) 5xx the request.
+		if m.Role == "tool" {
+			content := []byte(m.Content)
+			if len(content) == 0 {
+				content = []byte(`""`)
+			}
+			tr := corellm.ToolResult{
+				ToolUseID: m.ToolCallID,
+				Content:   content,
+			}
+			blocks = append(blocks, corellm.ContentBlock{Type: "tool_result", ToolResult: &tr})
+			llmMsgs = append(llmMsgs, corellm.Message{Role: corellm.Role(m.Role), Content: blocks})
+			continue
+		}
 		if m.Content != "" {
 			blocks = append(blocks, corellm.ContentBlock{Type: "text", Text: m.Content})
 		}

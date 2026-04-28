@@ -373,6 +373,82 @@ func buildRequestBody(req llm.GenerationRequest, prof llm.ProviderProfile) ([]by
 		if role == "" {
 			role = string(llm.RoleUser)
 		}
+
+		// Inspect content blocks for tool_use (assistant turns the model
+		// emitted that we're echoing back) and tool_result (kernel's
+		// tool-dispatch output we're feeding into the next turn).
+		var toolUses []*llm.ToolUse
+		var toolResultBlock *llm.ToolResult
+		for i := range m.Content {
+			blk := m.Content[i]
+			if blk.Type == "tool_use" && blk.ToolUse != nil {
+				toolUses = append(toolUses, blk.ToolUse)
+			}
+			if blk.Type == "tool_result" && blk.ToolResult != nil {
+				toolResultBlock = blk.ToolResult
+			}
+		}
+
+		// Tool-result message → OpenAI tool message shape:
+		//   {role:"tool", tool_call_id:"...", content:"..."}
+		// Without tool_call_id the upstream model can't pair the result
+		// to the prior tool_use, and OpenAI-compat providers reject the
+		// request (silent 5xx → retry budget exhausted).
+		if role == "tool" && toolResultBlock != nil {
+			content := string(toolResultBlock.Content)
+			// ToolResult.Content is JSON-encoded — strip the surrounding
+			// quotes for plain-string payloads so the model sees the raw
+			// text rather than `"escaped\nstring"`.
+			if len(content) >= 2 && content[0] == '"' && content[len(content)-1] == '"' {
+				var unq string
+				if err := json.Unmarshal(toolResultBlock.Content, &unq); err == nil {
+					content = unq
+				}
+			}
+			msgs = append(msgs, map[string]any{
+				"role":         "tool",
+				"tool_call_id": toolResultBlock.ToolUseID,
+				"content":      content,
+			})
+			continue
+		}
+
+		// Assistant turn that emitted tool_calls → OpenAI assistant
+		// shape:
+		//   {role:"assistant", content: text|null,
+		//    tool_calls:[{id, type:"function",
+		//                 function:{name, arguments}}]}
+		// Without tool_calls the next-turn tool_call_id has no parent.
+		if len(toolUses) > 0 {
+			tcs := make([]map[string]any, 0, len(toolUses))
+			for _, tu := range toolUses {
+				args := string(tu.Input)
+				if args == "" {
+					args = "{}"
+				}
+				tcs = append(tcs, map[string]any{
+					"id":   tu.ID,
+					"type": "function",
+					"function": map[string]any{
+						"name":      tu.Name,
+						"arguments": args,
+					},
+				})
+			}
+			text := flattenContent(m.Content)
+			entry := map[string]any{
+				"role":       role,
+				"tool_calls": tcs,
+			}
+			if text != "" {
+				entry["content"] = text
+			} else {
+				entry["content"] = nil
+			}
+			msgs = append(msgs, entry)
+			continue
+		}
+
 		msgs = append(msgs, map[string]any{
 			"role":    role,
 			"content": flattenContent(m.Content),

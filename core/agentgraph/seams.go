@@ -40,6 +40,12 @@ type Message struct {
 	Content string
 	// Name is optional (tool name for role=tool, etc.).
 	Name string
+	// ToolCallID links a tool-result message back to the assistant's
+	// tool_use that produced it. Required for OpenAI Chat Completions
+	// wire format (`tool_call_id` field on tool messages); without it
+	// upstream providers reject multi-turn tool conversations because
+	// the dangling tool_use has no matching tool result.
+	ToolCallID string
 	// ToolCalls is the (subset of) tool-call records the assistant
 	// emitted; populated by LLMProvider on responses.
 	ToolCalls []ToolCallRequest

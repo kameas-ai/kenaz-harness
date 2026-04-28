@@ -211,9 +211,10 @@ func (toolDispatchExecutor) Execute(ctx context.Context, env *Env, node *Node, i
 	for _, oc := range outcomes {
 		results = append(results, oc.result)
 		toolMsgs = append(toolMsgs, Message{
-			Role:    "tool",
-			Name:    oc.call.Name,
-			Content: oc.result.Content,
+			Role:       "tool",
+			Name:       oc.call.Name,
+			ToolCallID: oc.call.ID,
+			Content:    oc.result.Content,
 		})
 		for _, e := range oc.events.Events {
 			res.Events.Append(e)
