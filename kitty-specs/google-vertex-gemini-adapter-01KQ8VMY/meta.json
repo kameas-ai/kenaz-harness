@@ -1,0 +1,10 @@
+{
+  "created_at": "2026-04-28T01:35:52.433244+00:00",
+  "friendly_name": "google vertex gemini adapter",
+  "mission_id": "01KQ8VMYHKA3PXYAJN3KKP7BEY",
+  "mission_number": null,
+  "mission_slug": "google-vertex-gemini-adapter-01KQ8VMY",
+  "mission_type": "software-dev",
+  "slug": "google-vertex-gemini-adapter-01KQ8VMY",
+  "target_branch": "main"
+}
