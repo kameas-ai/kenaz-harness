@@ -1,0 +1,20 @@
+source_id,citation,url,accessed_date,relevance,status
+oras-project,"oras-project/oras GitHub.",https://github.com/oras-project/oras,2026-04-25,high,pending
+oras-go-v2,"oras.land/oras-go v2 pkg.go.dev.",https://pkg.go.dev/oras.land/oras-go/v2,2026-04-25,high,pending
+oras-go-credentials,"oras.land/oras-go v2 credentials package.",https://pkg.go.dev/oras.land/oras-go/v2/registry/remote/credentials,2026-04-25,high,pending
+sigstore-cosign,"sigstore/cosign reference signing CLI.",https://github.com/sigstore/cosign,2026-04-25,medium,pending
+sigstore-go,"sigstore/sigstore-go embedding library.",https://github.com/sigstore/sigstore-go,2026-04-25,high,pending
+oci-distribution-1-1,"OCI Image and Distribution Specs v1.1 announcement.",https://opencontainers.org/posts/blog/2024-03-13-image-and-distribution-1-1/,2026-04-25,high,pending
+oras-attached-artifacts,"ORAS attached artifacts docs.",https://oras.land/docs/concepts/reftypes/,2026-04-25,high,pending
+nesbitt-lockfile-tradeoffs,"Lockfile Format Design and Tradeoffs (Andrew Nesbitt).",https://nesbitt.io/2026/01/17/lockfile-format-design-and-tradeoffs.html,2026-04-25,medium,pending
+uv-project-layout,"uv project structure docs.",https://docs.astral.sh/uv/concepts/projects/layout/,2026-04-25,high,pending
+alicecaml-kdl,"Switching Manifests to KDL (alicecaml).",https://www.alicecaml.org/blog/switching-manifests-to-kdl/,2026-04-25,medium,pending
+kerkour-hashes,"Choosing a hash function for 2030 (kerkour).",https://kerkour.com/fast-secure-hash-function-sha256-sha512-sha3-blake3,2026-04-25,medium,pending
+slsa-spec,"SLSA v1.2 spec.",https://slsa.dev/spec/v1.2/,2026-04-25,high,pending
+slsa-attestations,"SLSA software attestations model.",https://slsa.dev/attestation-model,2026-04-25,high,pending
+helm-registries,"Helm OCI registries doc.",https://helm.sh/docs/topics/registries/,2026-04-25,high,pending
+cargo-resolver,"Cargo Dependency Resolution.",https://doc.rust-lang.org/cargo/reference/resolver.html,2026-04-25,high,pending
+go-modules-ref,"Go Modules Reference.",https://go.dev/ref/mod,2026-04-25,high,pending
+pnpm-git-branch-lockfiles,"pnpm git-branch-lockfiles.",https://pnpm.io/git_branch_lockfiles,2026-04-25,medium,pending
+opssquad-ed25519,"Best SSH Key Type in 2026.",https://blog.opssquad.ai/blog/best-ssh-key-type,2026-04-25,medium,pending
+yaml-from-hell,"The YAML document from hell.",https://ruudvanasseldonk.com/2023/01/11/the-yaml-document-from-hell,2026-04-25,medium,pending

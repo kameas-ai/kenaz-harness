@@ -1,0 +1,35 @@
+# Source Register: Master list of all research sources
+# Column Definitions:
+# - source_id: Unique identifier (lowercase, no spaces)
+# - citation: Full citation
+# - url: Direct link
+# - accessed_date: Date accessed (YYYY-MM-DD)
+# - relevance: high | medium | low
+# - status: reviewed | pending | archived
+source_id,citation,url,accessed_date,relevance,status
+sqlcipher-license,"Zetetic. SQLCipher Community Edition License.",https://www.zetetic.net/sqlcipher/license/,2026-04-25,high,reviewed
+sqlcipher-perf,"Zetetic. SQLCipher Performance.",https://www.zetetic.net/sqlcipher/performance/,2026-04-25,high,reviewed
+sqlcipher-repo,"sqlcipher upstream repository.",https://github.com/sqlcipher/sqlcipher,2026-04-25,medium,reviewed
+go-sqlcipher,"mutecomm/go-sqlcipher Go bindings.",https://github.com/mutecomm/go-sqlcipher,2026-04-25,medium,reviewed
+libsql-encryption,"Turso. Fully Open Source Encryption for SQLite.",https://turso.tech/blog/fully-open-source-encryption-for-sqlite-b3858225,2026-04-25,high,reviewed
+go-libsql-docs,"Turso docs. Go SDK reference.",https://docs.turso.tech/sdk/go/reference,2026-04-25,high,reviewed
+go-libsql-repo,"tursodatabase/go-libsql repository.",https://github.com/tursodatabase/go-libsql,2026-04-25,high,reviewed
+libsql-repo,"tursodatabase/libsql upstream.",https://github.com/tursodatabase/libsql,2026-04-25,high,reviewed
+embedded-replicas-ga,"Turso. Embedded Replicas Go GA.",https://turso.tech/blog/embedded-replicas-go-ga-with-production-friendly-upgrades,2026-04-25,high,reviewed
+sqlite-see,"SQLite. SEE commercial encryption license.",https://sqlite.org/com/see.html,2026-04-25,medium,reviewed
+sqlite3-multi-ciphers,"utelle/SQLite3MultipleCiphers.",https://github.com/utelle/SQLite3MultipleCiphers,2026-04-25,medium,reviewed
+modernc-sqlite,"modernc.org/sqlite pure-Go SQLite driver.",https://pkg.go.dev/modernc.org/sqlite,2026-04-25,medium,reviewed
+sqlite-vec-repo,"asg017/sqlite-vec repository.",https://github.com/asg017/sqlite-vec,2026-04-25,high,reviewed
+sqlite-vec-releases,"asg017/sqlite-vec releases.",https://github.com/asg017/sqlite-vec/releases,2026-04-25,high,reviewed
+sqlite-vec-perf,"sqlite-vec stable release blog.",https://alexgarcia.xyz/blog/2024/sqlite-vec-stable-release/index.html,2026-04-25,high,reviewed
+sqlite-vec-go-guide,"sqlite-vec Go usage guide.",https://alexgarcia.xyz/sqlite-vec/go.html,2026-04-25,high,reviewed
+lancedb-go,"lancedb/lancedb-go Go SDK.",https://github.com/lancedb/lancedb-go,2026-04-25,high,reviewed
+lancedb-upstream,"lancedb/lancedb upstream.",https://github.com/lancedb/lancedb,2026-04-25,medium,reviewed
+chromem-go,"philippgille/chromem-go pure-Go vector store.",https://github.com/philippgille/chromem-go,2026-04-25,high,reviewed
+qdrant-go-client,"qdrant/go-client (gRPC only).",https://github.com/qdrant/go-client,2026-04-25,medium,reviewed
+sqlite-wal,"SQLite. Write-Ahead Logging.",https://www.sqlite.org/wal.html,2026-04-25,high,reviewed
+sqlite-corrupt,"SQLite. How to corrupt your SQLite database.",https://sqlite.org/howtocorrupt.html,2026-04-25,high,reviewed
+sqlite-wal-lock,"SQLite. WAL blocking-locks doc.",https://github.com/sqlite/sqlite/blob/master/doc/wal-lock.md,2026-04-25,medium,reviewed
+gotosocial-storage-guidance,"GoToSocial. SQLite networked storage docs.",https://docs.gotosocial.org/en/latest/advanced/sqlite-networked-storage/,2026-04-25,high,reviewed
+bun-issue,"oven-sh/bun issue 25964 — Windows NTFS WAL close() lock.",https://github.com/oven-sh/bun/issues/25964,2026-04-25,high,reviewed
+skypilot-sqlite-concurrency,"skypilot. Practical multi-process SQLite WAL writeup.",https://blog.skypilot.co/abusing-sqlite-to-handle-concurrency/,2026-04-25,medium,reviewed

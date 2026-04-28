@@ -1,0 +1,10 @@
+{
+  "created_at": "2026-04-26T19:09:32.468350+00:00",
+  "friendly_name": "artifacts storage",
+  "mission_id": "01KQ5K4TVQ1JBPX7F6KF7EJ2EA",
+  "mission_number": null,
+  "mission_slug": "artifacts-storage-01KQ5K4T",
+  "mission_type": "software-dev",
+  "slug": "artifacts-storage-01KQ5K4T",
+  "target_branch": "main"
+}

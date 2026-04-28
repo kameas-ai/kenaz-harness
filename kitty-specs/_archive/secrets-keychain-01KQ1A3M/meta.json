@@ -1,0 +1,10 @@
+{
+  "created_at": "2026-04-25T03:14:38.599735+00:00",
+  "friendly_name": "secrets keychain",
+  "mission_id": "01KQ1A3MTE9PDS9GD6C4Q56XQ1",
+  "mission_number": null,
+  "mission_slug": "secrets-keychain-01KQ1A3M",
+  "mission_type": "software-dev",
+  "slug": "secrets-keychain-01KQ1A3M",
+  "target_branch": "main"
+}

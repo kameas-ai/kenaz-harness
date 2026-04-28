@@ -1,0 +1,10 @@
+{
+  "created_at": "2026-04-25T17:58:24.228181+00:00",
+  "friendly_name": "mcp server",
+  "mission_id": "01KQ2WNVMWV7M9CBEJB0QX44FJ",
+  "mission_number": null,
+  "mission_slug": "mcp-server-01KQ2WNV",
+  "mission_type": "software-dev",
+  "slug": "mcp-server-01KQ2WNV",
+  "target_branch": "feat/wire-integration"
+}

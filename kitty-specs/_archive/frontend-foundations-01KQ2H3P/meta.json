@@ -1,0 +1,10 @@
+{
+  "created_at": "2026-04-25T14:36:14.389818+00:00",
+  "friendly_name": "frontend foundations",
+  "mission_id": "01KQ2H3P3EMTR7M5SF294EG77T",
+  "mission_number": null,
+  "mission_slug": "frontend-foundations-01KQ2H3P",
+  "mission_type": "software-dev",
+  "slug": "frontend-foundations-01KQ2H3P",
+  "target_branch": "main"
+}

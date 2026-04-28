@@ -1,0 +1,10 @@
+{
+  "created_at": "2026-04-25T02:49:53.113370+00:00",
+  "friendly_name": "shared context distribution",
+  "mission_id": "01KQ18PA4ZVYMZP1RNTZV4Z1V8",
+  "mission_number": null,
+  "mission_slug": "shared-context-distribution-01KQ18PA",
+  "mission_type": "software-dev",
+  "slug": "shared-context-distribution-01KQ18PA",
+  "target_branch": "main"
+}
