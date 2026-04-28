@@ -1,0 +1,23 @@
+schema_version: "1"
+id: tool_dispatch
+extends: compute
+display_name: Tool Dispatch
+description: "Dispatches every tool_use record on the input port through the kernel ToolRegistry. Emits tool_results on the output port. Used inside chat LoopNode bodies to close the model→tool→model cycle."
+executor: agentgraph.ExecToolDispatch
+ports:
+  inputs:
+    - { name: tool_calls, type: any, required: true }
+  outputs:
+    - { name: tool_results, type: any }
+    - { name: messages, type: messages }
+attrs:
+  parallel_dispatch:
+    type: bool
+    description: "Dispatch all tool_calls concurrently via errgroup; set false for serial dispatch."
+  max_concurrent:
+    type: int
+    min: 1
+    max: 16
+    description: "Cap when parallel_dispatch=true (default 4)."
+budget: tool
+budget_consumes: [tool_calls]

@@ -2,52 +2,61 @@
 # between user turns. Replaces core/toolloop as the chassis chat path
 # (mission agent-kernel-graph-chat-migration).
 #
-# Topology (post-cutover, v1 alpha):
+# Topology (post tool-dispatch-node mission):
 #
-#   history_in (history_read) → ask_user (ask) → assistant_turn (model)
-#                                                  → assistant_write (session_write)
+#   history_in (history_read)
+#     ↓
+#   ask_user (ask)
+#     ↓
+#   agent_loop (loop, max_iterations: 25)
+#     body:
+#       assistant_turn (model)
+#         ↓ tool_calls + response
+#       tool_dispatch (tool_dispatch)
+#         ↓ messages = upstream response + tool result messages;
+#           tool_call_count surfaces "did the model emit tools?"
+#     condition (between iterations):
+#       tool_call_count > 0   — keep looping while the model is
+#       still asking for tools; break out as soon as a turn returns
+#       text-only.
+#     ↓
+#   assistant_write (session_write)
 #
 # Per-session lifecycle:
 #   - The chassis (core/rpc/views/agentgraph/chat) starts one Kernel.Run
 #     per chat StartStream. The runner pre-seeds the AskBus with the
 #     user's message so ask_user resolves on its first fire.
-#   - assistant_turn fires once; its assistant output flows into
+#   - The agent_loop body fires assistant_turn, then tool_dispatch;
+#     the loop continues until a turn comes back text-only (no
+#     tool_calls). On exit the LoopNode's tail outputs flow into
 #     assistant_write which persists the assistant turn via the
-#     HistoryWriter seam (SessionWriteNode).
+#     HistoryWriter seam.
 #   - SessionWriteNode fires the kernel HookManager's post-LLM listener
-#     callbacks, including the artifacts code-block detector.
-#
-# Tool loop:
-#   - V1 alpha pushes tool dispatch into a single assistant_turn fire.
-#     Multi-turn agent loops (re-pump on tool_use) require a kernel
-#     ToolNode that dispatches dynamically from upstream tool_calls;
-#     adding that primitive is a follow-up mission. Until then a
-#     tool_use response from the assistant lands as the model's final
-#     turn for that StartStream — the tool_use envelope is persisted
-#     verbatim and the chassis surface renders the tool_call request
-#     to the user.
+#     callbacks, including the artifacts code-block detector. The
+#     tool_dispatch node fires HookPostTool listeners (artifact-output
+#     capture seam) per tool result.
 #
 # Streaming:
-#   - The chassis wires env.StreamSink before each Run start (WP01 of
-#     the chat-migration mission). The model executor pins the sink
-#     onto its provider call ctx; the chassis's chassis-bound LLM
-#     provider pumps StreamEvents into the sink as the upstream
-#     stream is consumed. The sink fans events onto the existing
-#     llm:stream-chunk broker topic so the chat surface keeps
+#   - The chassis wires env.StreamSink before each Run start. The model
+#     executor pins the sink onto its provider call ctx; the chassis's
+#     chassis-bound LLM provider pumps StreamEvents into the sink as
+#     the upstream stream is consumed. The sink fans events onto the
+#     existing llm:stream-chunk broker topic so the chat surface keeps
 #     receiving byte-equal deltas without a frontend change.
 #
 # Iteration cap:
-#   - MaxAgentTurns is enforced by the chat runner at the chassis
-#     level — the runner re-runs the kernel up to N times when the
-#     model emits tool_use. v1 alpha defers this; one assistant_turn
-#     fire per StartStream.
+#   - MaxAgentTurns is enforced at the LoopNode by chat_runner.go's
+#     applyMaxTurnsDial walking the resolved spec and overriding
+#     max_iterations. Per-StartStream the runner picks up the live
+#     Settings.EffectiveMaxAgentTurns dial.
 spec_version: "1"
 id: "chat_default"
 name: "Default chat graph"
 description: |
   Per-session kernel run that replaces core/toolloop as the chassis
   chat path. Pauses on AskNode between user turns; the chassis
-  resumes on the next user message.
+  resumes on the next user message. The agent_loop LoopNode closes
+  the model→tool→model cycle so multi-turn tool flows work end-to-end.
 entrypoints:
   - history_in
 budget:
@@ -70,22 +79,82 @@ nodes:
   - id: assistant_turn
     kind: model
     title: "Assistant turn (streamed)"
+    # The model executor emits both `response` (full message history)
+    # and `tool_calls` ([]ToolCallRequest) when the model emits any.
+    # Declaring `tool_calls` here lets the validator route the
+    # tool_dispatch edge; the model manifest's defaults stop at the
+    # canonical `response` output.
+    outputs:
+      - { name: response, type: messages }
+      - { name: assistant, type: any }
+      - { name: tool_calls, type: any }
+      - { name: finish_reason, type: text }
     attrs:
       model: "default"
       stream_to_chat: true
       max_tokens: 4096
 
+  - id: tool_dispatch
+    kind: tool_dispatch
+    title: "Dispatch tool_calls from upstream model"
+    attrs:
+      parallel_dispatch: true
+      max_concurrent: 4
+
+  - id: agent_loop
+    kind: loop
+    title: "Multi-turn agent loop (model → tools → model)"
+    # The LoopNode flattens the last body node's outputs onto its own
+    # output ports (see exec_control.go loopExecutor). Declaring them
+    # explicitly here lets the validator route the assistant_text edge
+    # into assistant_write. The canonical `out` port is preserved for
+    # callers that depend on the legacy PortValues bag shape.
+    outputs:
+      - { name: out, type: any }
+      - { name: assistant_text, type: text }
+      - { name: assistant, type: any }
+      - { name: response, type: messages }
+      - { name: tool_results, type: any }
+      - { name: tool_messages, type: messages }
+      - { name: tool_call_count, type: number }
+    attrs:
+      max_iterations: 25
+      condition: "tool_call_count > 0"
+      body:
+        - assistant_turn
+        - tool_dispatch
+
   - id: assistant_write
     kind: session_write
     title: "Persist assistant turn to session history"
+    # Declaring `assistant_text` as an explicit input alongside the
+    # manifest-required `text` port lets the validator route the
+    # agent_loop:assistant_text → assistant_write edge. The
+    # session_write executor reads inputs by the name set in
+    # text_input_port, falling back to the canonical `text` port.
+    inputs:
+      - { name: text, type: any }
+      - { name: assistant_text, type: any }
     attrs:
       role: assistant
-      text_input_port: text
+      text_input_port: assistant_text
 
 edges:
   - from: { node: history_in, port: messages }
     to:   { node: ask_user, port: context }
   - from: { node: ask_user, port: answer }
+    to:   { node: agent_loop, port: in }
+  - from: { node: agent_loop, port: assistant_text }
+    to:   { node: assistant_write, port: assistant_text }
+  # The two edges below serve the validator only — they declare
+  # connectivity for the required input ports of the body nodes
+  # (assistant_turn.messages, tool_dispatch.tool_calls). At runtime the
+  # kernel filters edges that touch nodes inside a loop body, so the
+  # body nodes still receive their inputs from the LoopNode's internal
+  # `current` thread (loopExecutor in core/agentgraph/exec_control.go).
+  # Without these edges the validator's `required input not connected`
+  # rule fires; with them, the runtime semantics are unchanged.
+  - from: { node: ask_user, port: answer }
     to:   { node: assistant_turn, port: messages }
-  - from: { node: assistant_turn, port: assistant }
-    to:   { node: assistant_write, port: text }
+  - from: { node: assistant_turn, port: tool_calls }
+    to:   { node: tool_dispatch, port: tool_calls }

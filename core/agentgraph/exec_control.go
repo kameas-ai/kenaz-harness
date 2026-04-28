@@ -546,8 +546,19 @@ func (loopExecutor) Execute(ctx context.Context, env *Env, node *Node, inputs Po
 			current = r.Outputs
 		}
 	}
+	// Surface the last body node's output ports onto the LoopNode itself
+	// so outside-loop edges can pull specific named values out of the
+	// loop. The canonical `out` (PortValues bag) and `iterations` keys
+	// remain for callers that already depend on them; we only flatten
+	// keys that don't collide.
 	res.Outputs["out"] = current
 	res.Outputs["iterations"] = iter
+	for k, v := range current {
+		if _, exists := res.Outputs[k]; exists {
+			continue
+		}
+		res.Outputs[k] = v
+	}
 	return res, nil
 }
 
