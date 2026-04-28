@@ -1,0 +1,10 @@
+{
+  "created_at": "2026-04-28T01:35:53.451816+00:00",
+  "friendly_name": "local model runtimes",
+  "mission_id": "01KQ8VMZHDB1PRMA14YVCWPM8A",
+  "mission_number": null,
+  "mission_slug": "local-model-runtimes-01KQ8VMZ",
+  "mission_type": "software-dev",
+  "slug": "local-model-runtimes-01KQ8VMZ",
+  "target_branch": "main"
+}
