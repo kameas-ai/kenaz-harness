@@ -217,7 +217,17 @@ func (r *ChatRunner) StartStream(ctx context.Context, profileID, sessionID, mode
 				"session_id", sessionID, "err", derr.Error())
 		} else {
 			toolCatalog = discovered
+			names := make([]string, 0, len(toolCatalog))
+			for _, t := range toolCatalog {
+				names = append(names, t.Name)
+			}
+			logging.L().Info("chat.tool_discovery.ok",
+				"session_id", sessionID,
+				"count", len(toolCatalog),
+				"tools", names)
 		}
+	} else {
+		logging.L().Warn("chat.tool_discovery.no_discoverer", "session_id", sessionID)
 	}
 	llmAdapter := NewLLMProviderAdapter(r.cfg.Registry, profileID, modelOverride, toolCatalog)
 	toolAdapter := newKernelToolAdapter(r.cfg.Pool, r.cfg.Perms, sessionID)
