@@ -24,6 +24,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 
 	"github.com/sigil-tech/kaneaz-harness/core/llm"
 )
@@ -80,8 +81,22 @@ func (a *Adapter) streamWithBearer(ctx context.Context, req llm.GenerationReques
 	}
 	if resp.StatusCode/100 != 2 {
 		defer resp.Body.Close()
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return nil, classifyBedrockHTTPStatus(resp.StatusCode, string(body))
+		errBody, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		// Bedrock-side capability fallback: some models (notably the
+		// Llama family on Bedrock) reject `tools + stream` together
+		// with a 400 "This model doesn't support tool use in streaming
+		// mode." When that happens AND tools were requested, retry
+		// against the non-streaming /converse endpoint and synthesise a
+		// single-shot stream — preserves tool calling at the cost of
+		// per-token streaming UX. Cleaner long-term fix is the
+		// model-capability-aware-request-shaping mission, which reads
+		// supported_parameters from the provider /models endpoint and
+		// picks the right shape up front.
+		if resp.StatusCode == http.StatusBadRequest && len(req.Tools) > 0 &&
+			bytes.Contains(errBody, []byte("doesn't support tool use in streaming mode")) {
+			return a.converseNonStreamingFallback(ctx, req, prof, apiKey, bodyBytes)
+		}
+		return nil, classifyBedrockHTTPStatus(resp.StatusCode, string(errBody))
 	}
 
 	stream := &bearerStream{
@@ -91,6 +106,154 @@ func (a *Adapter) streamWithBearer(ctx context.Context, req llm.GenerationReques
 	}
 	go stream.pump()
 	return stream, nil
+}
+
+// converseNonStreamingFallback re-issues the request against the
+// non-streaming /converse endpoint and wraps the result in a
+// llm.Stream that emits a single StreamText event for the full text
+// followed by StreamFinish. Tool calls in the response are returned
+// via Final.ToolCalls so the kernel's tool_dispatch fires normally.
+//
+// Reason field on the synthetic StreamFinish is preserved from
+// stopReason in the response (`tool_use` / `end_turn` / etc.) so the
+// chat surface's "finished" UI remains correct.
+func (a *Adapter) converseNonStreamingFallback(ctx context.Context, req llm.GenerationRequest, prof llm.ProviderProfile, apiKey string, bodyBytes []byte) (llm.Stream, error) {
+	url := fmt.Sprintf(
+		"https://bedrock-runtime.%s.amazonaws.com/model/%s/converse",
+		prof.Region,
+		prof.Model,
+	)
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(bodyBytes))
+	if err != nil {
+		return nil, fmt.Errorf("bedrock: build non-streaming request: %w", err)
+	}
+	httpReq.Header.Set("Authorization", "Bearer "+apiKey)
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Accept", "application/json")
+
+	resp, err := a.bearerClient().Do(httpReq)
+	if err != nil {
+		return nil, &llm.ErrTransient{Message: "bedrock: " + err.Error(), Cause: err}
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 8*1024*1024))
+	if resp.StatusCode/100 != 2 {
+		return nil, classifyBedrockHTTPStatus(resp.StatusCode, string(body))
+	}
+
+	final, finishReason, err := parseConverseNonStreamingResponse(body)
+	if err != nil {
+		return nil, fmt.Errorf("bedrock: parse non-streaming response: %w", err)
+	}
+
+	syn := &syntheticStream{
+		events:       make(chan llm.StreamEvent, 4),
+		final:        final,
+		finishReason: finishReason,
+	}
+	go syn.emit()
+	return syn, nil
+}
+
+// parseConverseNonStreamingResponse decodes the /converse REST
+// response body into an llm.Response. The shape mirrors the streaming
+// path's accumulated final but arrives in one frame.
+func parseConverseNonStreamingResponse(body []byte) (llm.Response, string, error) {
+	var env struct {
+		Output struct {
+			Message struct {
+				Role    string `json:"role"`
+				Content []struct {
+					Text    string `json:"text,omitempty"`
+					ToolUse *struct {
+						ToolUseID string          `json:"toolUseId"`
+						Name      string          `json:"name"`
+						Input     json.RawMessage `json:"input"`
+					} `json:"toolUse,omitempty"`
+				} `json:"content"`
+			} `json:"message"`
+		} `json:"output"`
+		StopReason string `json:"stopReason"`
+		Usage      *struct {
+			InputTokens  int `json:"inputTokens"`
+			OutputTokens int `json:"outputTokens"`
+			TotalTokens  int `json:"totalTokens"`
+		} `json:"usage"`
+	}
+	if err := json.Unmarshal(body, &env); err != nil {
+		return llm.Response{}, "", err
+	}
+	var blocks []llm.ContentBlock
+	var toolCalls []llm.ToolUse
+	var textBuf strings.Builder
+	for _, b := range env.Output.Message.Content {
+		if b.Text != "" {
+			blocks = append(blocks, llm.ContentBlock{Type: "text", Text: b.Text})
+			textBuf.WriteString(b.Text)
+		}
+		if b.ToolUse != nil {
+			toolCalls = append(toolCalls, llm.ToolUse{
+				ID:    b.ToolUse.ToolUseID,
+				Name:  b.ToolUse.Name,
+				Input: b.ToolUse.Input,
+			})
+		}
+	}
+	resp := llm.Response{
+		Content:      blocks,
+		ToolCalls:    toolCalls,
+		FinishReason: env.StopReason,
+	}
+	if env.Usage != nil {
+		resp.Usage = llm.Usage{
+			InputTokens:  env.Usage.InputTokens,
+			OutputTokens: env.Usage.OutputTokens,
+		}
+	}
+	return resp, env.StopReason, nil
+}
+
+// syntheticStream wraps a fully-resolved Response in the llm.Stream
+// surface so the kernel-side stream pump can consume it without
+// caring whether the upstream actually streamed.
+type syntheticStream struct {
+	events       chan llm.StreamEvent
+	final        llm.Response
+	finishReason string
+	mu           sync.Mutex
+	cancelled    bool
+}
+
+func (s *syntheticStream) Events() <-chan llm.StreamEvent { return s.events }
+func (s *syntheticStream) Cancel() error {
+	s.mu.Lock()
+	s.cancelled = true
+	s.mu.Unlock()
+	return nil
+}
+func (s *syntheticStream) Final() (llm.Response, error) {
+	if s.cancelled {
+		return llm.Response{}, &llm.ErrCancelled{Reason: "cancelled"}
+	}
+	return s.final, nil
+}
+func (s *syntheticStream) emit() {
+	defer close(s.events)
+	// One text event with the entire content; one finish event.
+	var fullText strings.Builder
+	for _, blk := range s.final.Content {
+		if blk.Type == "text" {
+			fullText.WriteString(blk.Text)
+		}
+	}
+	if fullText.Len() > 0 {
+		s.events <- llm.StreamEvent{Kind: llm.StreamText, Text: fullText.String()}
+	}
+	finishKind := s.finishReason
+	if finishKind == "" {
+		finishKind = "stop"
+	}
+	s.events <- llm.StreamEvent{Kind: llm.StreamFinish, Finish: finishKind}
 }
 
 // bearerClient returns the HTTP client used for bearer-auth Bedrock
