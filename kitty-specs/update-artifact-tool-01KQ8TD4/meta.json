@@ -1,0 +1,10 @@
+{
+  "created_at": "2026-04-28T01:14:07.385934+00:00",
+  "friendly_name": "update artifact tool",
+  "mission_id": "01KQ8TD42H3WKWG3X5VVJFYNYQ",
+  "mission_number": null,
+  "mission_slug": "update-artifact-tool-01KQ8TD4",
+  "mission_type": "software-dev",
+  "slug": "update-artifact-tool-01KQ8TD4",
+  "target_branch": "main"
+}
