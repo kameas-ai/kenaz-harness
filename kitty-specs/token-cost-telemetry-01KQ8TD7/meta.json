@@ -1,0 +1,10 @@
+{
+  "created_at": "2026-04-28T01:14:10.589600+00:00",
+  "friendly_name": "token cost telemetry",
+  "mission_id": "01KQ8TD769NA04WYPDTP1VQPDN",
+  "mission_number": null,
+  "mission_slug": "token-cost-telemetry-01KQ8TD7",
+  "mission_type": "software-dev",
+  "slug": "token-cost-telemetry-01KQ8TD7",
+  "target_branch": "main"
+}
