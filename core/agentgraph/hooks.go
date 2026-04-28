@@ -3,6 +3,7 @@ package agentgraph
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -109,6 +110,17 @@ type Redactor interface {
 // MUST be safe for concurrent use.
 type PostHookCallback func(ctx context.Context, sessionID, messageID, text string)
 
+// ToolPostHookCallback is the post-fire callback shape for HookPostTool.
+// Carries the (toolName, toolArgs, toolResult, duration) tuple so chassis
+// listeners (artifact code-block detector, output capture, etc.) get the
+// full tool-call context the post-LLM callback shape can't express. The
+// `messageID` argument on PostHookCallback maps to `toolName` here for
+// consistency with the topology terminology used by the chat surface.
+//
+// Callbacks MUST be safe for concurrent use; ToolDispatchNode fires this
+// boundary in parallel when parallel_dispatch is enabled.
+type ToolPostHookCallback func(ctx context.Context, sessionID, toolName, toolArgs, toolResult string, duration time.Duration)
+
 // HookManager owns the kernel's greedy memory writes. It is kernel-
 // owned (FR-026): tools cannot write memory, only the kernel.
 type HookManager struct {
@@ -145,6 +157,15 @@ type HookManager struct {
 	// site). The map is keyed by boundary so the chassis can register
 	// listeners narrowly without re-receiving every boundary's fire.
 	postHooks map[HookBoundary][]PostHookCallback
+
+	// toolPostHooks is the listener registry for HookPostTool callbacks
+	// that need the (toolName, toolArgs, toolResult, duration) tuple.
+	// Keeping this as a sibling registry (rather than overloading
+	// postHooks) avoids forcing every PostHookCallback consumer to grow
+	// the wider signature. ToolDispatchNode fires both registries — the
+	// generic PostHookCallback list for backwards compatibility, and
+	// this richer surface for the artifact-output capture seam.
+	toolPostHooks []ToolPostHookCallback
 }
 
 // HookRecord is one entry in the in-memory hook journal.
@@ -353,16 +374,19 @@ func (h *HookManager) persistJournalEntry(ctx context.Context, w JournalWriter, 
 // journalIDGenLocked returns the configured id generator, lazily
 // installing the default fnv-counter when none has been wired. Caller
 // MUST hold h.mu.
+//
+// The default generator increments via atomic.AddUint64 so concurrent
+// Hooks.Fire() calls (from parallel ToolDispatchNode dispatches, etc.)
+// don't race on the counter.
 func (h *HookManager) journalIDGenLocked() func() string {
 	if h.idGen != nil {
 		return h.idGen
 	}
-	counter := uint64(0)
+	var counter uint64
 	h.idGen = func() string {
-		counter++
+		v := atomic.AddUint64(&counter, 1)
 		var buf [16]byte
 		const digits = "0123456789abcdef"
-		v := counter
 		for i := 15; i >= 0; i-- {
 			buf[i] = digits[v&0xF]
 			v >>= 4
@@ -415,6 +439,38 @@ func (h *HookManager) FirePostHooks(ctx context.Context, boundary HookBoundary, 
 	h.mu.Unlock()
 	for _, cb := range cbs {
 		cb(ctx, sessionID, messageID, text)
+	}
+}
+
+// RegisterToolPostHook adds a tool-shaped callback fired by the kernel's
+// tool dispatcher (ToolDispatchNode) once a single tool call returns.
+// Multiple callbacks may register; they fire in registration order on
+// the kernel's execution goroutine. nil callback is a no-op. Used by
+// the chassis to wire the artifacts code-block detector + tool-output
+// capture onto the kernel's tool dispatch surface without re-introducing
+// the deleted toolloop HookRunner.
+func (h *HookManager) RegisterToolPostHook(cb ToolPostHookCallback) {
+	if h == nil || cb == nil {
+		return
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.toolPostHooks = append(h.toolPostHooks, cb)
+}
+
+// FirePostToolHooks invokes every registered tool-post-hook callback in
+// registration order. Callbacks are synchronous; long-running listeners
+// must spawn their own goroutine. A nil HookManager is treated as "no
+// listeners wired" so callers don't have to nil-check.
+func (h *HookManager) FirePostToolHooks(ctx context.Context, sessionID, toolName, toolArgs, toolResult string, duration time.Duration) {
+	if h == nil {
+		return
+	}
+	h.mu.Lock()
+	cbs := append([]ToolPostHookCallback(nil), h.toolPostHooks...)
+	h.mu.Unlock()
+	for _, cb := range cbs {
+		cb(ctx, sessionID, toolName, toolArgs, toolResult, duration)
 	}
 }
 

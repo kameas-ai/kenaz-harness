@@ -101,11 +101,15 @@ func TestChatDefaultBundled(t *testing.T) {
 		t.Errorf("YAML missing id; got %q", spec.YAML[:64])
 	}
 	// Shape invariants: history_in entrypoint, ask_user pause, model
-	// turn, session_write persistence. The chat-migration cutover
-	// dropped the LoopNode primitive from this manifest because the
-	// kernel ToolNode requires a static tool name; multi-turn agent
-	// loops will return alongside a dynamic ToolNode in a follow-up.
-	for _, marker := range []string{"history_in", "ask_user", "assistant_turn", "assistant_write", "session_write"} {
+	// turn, tool_dispatch + agent_loop closing the model→tool→model
+	// cycle, and session_write persistence. The tool-dispatch-node
+	// mission re-introduced the LoopNode + tool_dispatch pair so the
+	// chat path supports multi-turn agent loops again.
+	for _, marker := range []string{
+		"history_in", "ask_user",
+		"assistant_turn", "tool_dispatch", "agent_loop",
+		"assistant_write", "session_write",
+	} {
 		if !strings.Contains(spec.YAML, marker) {
 			t.Errorf("chat_default missing %q in YAML", marker)
 		}

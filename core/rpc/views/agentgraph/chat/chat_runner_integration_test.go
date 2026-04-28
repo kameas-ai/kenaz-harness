@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -14,10 +16,13 @@ import (
 	corellm "github.com/sigil-tech/kaneaz-harness/core/llm"
 )
 
-// These integration tests port the toolloop's golden behaviors onto the
-// new ChatRunner path. Each test wires a fake LLMProvider + ToolRegistry
-// onto the chat_default-shaped graph and asserts the broker/persistence
-// wire shapes match the legacy pump path.
+// These integration tests load the production chat_default.yaml graph
+// and exercise the runtime end-to-end so any topology drift in the
+// chat surface is caught immediately. The previous hand-built test
+// topologies left the door open to "the production YAML is shaped
+// differently than the test fixture" regressions; mission
+// tool-dispatch-node cuts that drift surface by reading the canonical
+// graph from disk on every test.
 
 // stubLLM is a programmable LLMProvider for chat-runner integration tests.
 // Each Generate call pops the next pre-staged response off the queue and
@@ -103,117 +108,40 @@ func (s *stubTools) Call(_ context.Context, call coreag.ToolCall) (coreag.ToolRe
 	return r, nil
 }
 
-// chatGraphForTests is a chat-runner-shaped graph for integration tests:
-// history_in → ask_user → assistant_turn → assistant_write (linear).
-// This skips the LoopNode-pump-around-tools branch so single-turn
-// streaming + persistence can be verified in isolation. The cap-hit
-// test uses chatGraphForCapTests instead.
-func chatGraphForTests(_ int) coreag.Graph {
-	return coreag.Graph{
-		ID:          "chat_default_test",
-		Name:        "Chat default (integration test)",
-		Entrypoints: []string{"history_in"},
-		Nodes: []coreag.Node{
-			{
-				ID:    "history_in",
-				Kind:  coreag.NodeKindHistoryRead,
-				Attrs: coreag.HistoryReadAttrs{N: 0},
-			},
-			{
-				ID:    "ask_user",
-				Kind:  coreag.NodeKindAsk,
-				Attrs: coreag.AskAttrs{Question: "(filled by chassis on resume)"},
-			},
-			{
-				ID:   "assistant_turn",
-				Kind: coreag.NodeKindModel,
-				Attrs: coreag.ModelAttrs{
-					Model:        "default",
-					StreamToChat: true,
-					MaxTokens:    4096,
-				},
-			},
-			{
-				ID:    "assistant_write",
-				Kind:  coreag.NodeKindSessionWrite,
-				Attrs: coreag.SessionWriteAttrs{Role: "assistant", TextInputPort: "text"},
-			},
-		},
-		Edges: []coreag.Edge{
-			{From: coreag.EndpointRef{Node: "history_in", Port: "messages"}, To: coreag.EndpointRef{Node: "ask_user", Port: "context"}},
-			{From: coreag.EndpointRef{Node: "ask_user", Port: "answer"}, To: coreag.EndpointRef{Node: "assistant_turn", Port: "messages"}},
-			{From: coreag.EndpointRef{Node: "assistant_turn", Port: "assistant"}, To: coreag.EndpointRef{Node: "assistant_write", Port: "text"}},
-		},
+// loadProductionChatGraph reads core/rpc/views/agentgraph/library/chat_default.yaml
+// and returns the parsed Graph. The path is resolved from the test's CWD
+// (which is the chat package directory) up two levels into the library
+// directory; failure to locate the bundled file is a hard test failure
+// because the whole point of these integration tests is to verify the
+// production graph topology.
+func loadProductionChatGraph(t *testing.T) coreag.Graph {
+	t.Helper()
+	candidates := []string{
+		filepath.Join("..", "library", "chat_default.yaml"),
+		filepath.Join("library", "chat_default.yaml"),
 	}
-}
-
-// chatGraphForToolLoop emulates one round-trip of the agent loop
-// without using the LoopNode primitive. The kernel's ToolNode requires
-// a static tool name, and dynamic dispatch is the chat runner's job in
-// the production path (a dedicated dispatch executor that reads
-// upstream tool_calls). For integration testing, a static tool_call
-// node fed off assistant_turn_1 plus a follow-up assistant_turn_2 is
-// sufficient to exercise the multi-call ordering invariants.
-//
-// Topology:
-//
-//	history_in → ask_user → assistant_turn_1 → tool_call → assistant_turn_2 → assistant_write
-func chatGraphForToolLoop(_ int) coreag.Graph {
-	return coreag.Graph{
-		ID:          "chat_default_loop_test",
-		Name:        "Chat default with tool loop (integration test)",
-		Entrypoints: []string{"history_in"},
-		Nodes: []coreag.Node{
-			{ID: "history_in", Kind: coreag.NodeKindHistoryRead, Attrs: coreag.HistoryReadAttrs{N: 0}},
-			{ID: "ask_user", Kind: coreag.NodeKindAsk, Attrs: coreag.AskAttrs{Question: "(filled)"}},
-			{ID: "assistant_turn_1", Kind: coreag.NodeKindModel, Attrs: coreag.ModelAttrs{Model: "default", StreamToChat: true, MaxTokens: 4096}},
-			{ID: "tool_call", Kind: coreag.NodeKindTool, Attrs: coreag.ToolAttrs{Name: "search__web"}},
-			{ID: "assistant_turn_2", Kind: coreag.NodeKindModel, Attrs: coreag.ModelAttrs{Model: "default", StreamToChat: true, MaxTokens: 4096}},
-			{ID: "assistant_write", Kind: coreag.NodeKindSessionWrite, Attrs: coreag.SessionWriteAttrs{Role: "assistant", TextInputPort: "text"}},
-		},
-		Edges: []coreag.Edge{
-			{From: coreag.EndpointRef{Node: "history_in", Port: "messages"}, To: coreag.EndpointRef{Node: "ask_user", Port: "context"}},
-			{From: coreag.EndpointRef{Node: "ask_user", Port: "answer"}, To: coreag.EndpointRef{Node: "assistant_turn_1", Port: "messages"}},
-			{From: coreag.EndpointRef{Node: "assistant_turn_1", Port: "response"}, To: coreag.EndpointRef{Node: "tool_call", Port: "messages"}},
-			{From: coreag.EndpointRef{Node: "tool_call", Port: "result"}, To: coreag.EndpointRef{Node: "assistant_turn_2", Port: "messages"}},
-			{From: coreag.EndpointRef{Node: "assistant_turn_2", Port: "assistant"}, To: coreag.EndpointRef{Node: "assistant_write", Port: "text"}},
-		},
+	var data []byte
+	var err error
+	for _, p := range candidates {
+		data, err = os.ReadFile(p)
+		if err == nil {
+			break
+		}
 	}
-}
-
-// chatGraphForCapTest exercises the LoopNode's cap-hit behaviour using
-// a body of just a single model node. The loop iterates max_iterations
-// times; each iteration pops a stub LLM response off the queue. The
-// assertion is that the kernel doesn't loop indefinitely — it stops at
-// max_iterations even when no termination condition is set.
-func chatGraphForCapTest(maxIter int) coreag.Graph {
-	if maxIter <= 0 {
-		maxIter = 3
+	if err != nil {
+		t.Fatalf("loadProductionChatGraph: cannot find chat_default.yaml; tried %v: %v", candidates, err)
 	}
-	return coreag.Graph{
-		ID:          "chat_cap_test",
-		Name:        "Chat cap-hit test graph",
-		Entrypoints: []string{"history_in"},
-		Nodes: []coreag.Node{
-			{ID: "history_in", Kind: coreag.NodeKindHistoryRead, Attrs: coreag.HistoryReadAttrs{N: 0}},
-			{ID: "ask_user", Kind: coreag.NodeKindAsk, Attrs: coreag.AskAttrs{Question: "(filled)"}},
-			{ID: "assistant_turn", Kind: coreag.NodeKindModel, Attrs: coreag.ModelAttrs{Model: "default", StreamToChat: true, MaxTokens: 4096}},
-			{ID: "assistant_turn_loop", Kind: coreag.NodeKindModel, Attrs: coreag.ModelAttrs{Model: "default", StreamToChat: true, MaxTokens: 4096}},
-			{ID: "pump_loop", Kind: coreag.NodeKindLoop, Attrs: coreag.LoopAttrs{
-				MaxIterations: maxIter,
-				Body:          []string{"assistant_turn_loop"},
-			}},
-		},
-		Edges: []coreag.Edge{
-			{From: coreag.EndpointRef{Node: "history_in", Port: "messages"}, To: coreag.EndpointRef{Node: "ask_user", Port: "context"}},
-			{From: coreag.EndpointRef{Node: "ask_user", Port: "answer"}, To: coreag.EndpointRef{Node: "assistant_turn", Port: "messages"}},
-			{From: coreag.EndpointRef{Node: "assistant_turn", Port: "response"}, To: coreag.EndpointRef{Node: "pump_loop", Port: "messages"}},
-		},
+	g, err := coreag.LoadYAML(data)
+	if err != nil {
+		t.Fatalf("loadProductionChatGraph: parse: %v", err)
 	}
+	return g
 }
 
 // buildIntegrationRunner wires a ChatRunner with the supplied stubs +
 // recorders. Returns the runner, broker, and writer for assertions.
+// Loads the real chat_default.yaml so any topology regression bites the
+// test immediately.
 func buildIntegrationRunner(
 	t *testing.T,
 	llm *stubLLM,
@@ -221,7 +149,8 @@ func buildIntegrationRunner(
 	maxTurns int,
 	graphHistory []coreag.Message,
 ) (*ChatRunner, *recordingBroker, *recordingHistoryWriter) {
-	return buildIntegrationRunnerWithGraph(t, llm, tools, maxTurns, graphHistory, chatGraphForTests(maxTurns))
+	graph := loadProductionChatGraph(t)
+	return buildIntegrationRunnerWithGraph(t, llm, tools, maxTurns, graphHistory, graph)
 }
 
 func buildIntegrationRunnerWithGraph(
@@ -277,12 +206,11 @@ func waitForClosed(t *testing.T, broker *recordingBroker) StreamClosedPayload {
 	return StreamClosedPayload{}
 }
 
-// TestChatRunnerIntegration_SingleTurnNoTool: stub LLM emits text-only,
-// no tool_use. Asserts:
-//   - llm:stream-chunk payloads stream in order
-//   - llm:stream-closed fires
-//   - assistant message persists via SessionWriteNode
-func TestChatRunnerIntegration_SingleTurnNoTool(t *testing.T) {
+// TestChatGraph_SingleTurnNoTool: stub LLM emits text-only, no tool_use
+// against the production chat_default.yaml. Asserts that the agent_loop
+// terminates after one iteration (text-only finishes the loop) and that
+// the assistant message lands on the broker + history writer.
+func TestChatGraph_SingleTurnNoTool(t *testing.T) {
 	t.Parallel()
 	llm := &stubLLM{}
 	llm.push(stubLLMResponse{
@@ -295,7 +223,7 @@ func TestChatRunnerIntegration_SingleTurnNoTool(t *testing.T) {
 			FinishReason: "stop",
 		},
 	})
-	runner, broker, writer := buildIntegrationRunner(t, llm, nil, 25, []coreag.Message{
+	runner, broker, writer := buildIntegrationRunner(t, llm, newStubTools(), 25, []coreag.Message{
 		{Role: "user", Content: "say hi"},
 	})
 
@@ -310,6 +238,11 @@ func TestChatRunnerIntegration_SingleTurnNoTool(t *testing.T) {
 	closed := waitForClosed(t, broker)
 	if closed.Reason == "backend-error" {
 		t.Errorf("Reason = %q, want completed-style; msg=%q", closed.Reason, closed.Message)
+	}
+
+	// Single LLM call: text-only finishes the agent_loop on iter 1.
+	if got := llm.calls.Load(); got != 1 {
+		t.Errorf("llm.calls = %d, want 1 (single text-only turn)", got)
 	}
 
 	// Assert text deltas streamed in order.
@@ -329,7 +262,7 @@ func TestChatRunnerIntegration_SingleTurnNoTool(t *testing.T) {
 	}
 
 	// Assert assistant persistence (writer.calls[0] is the user-turn
-	// append done by StartStream; calls[1] is the SessionWriteNode
+	// append done by StartStream; calls[len-1] is the SessionWriteNode
 	// assistant turn).
 	writer.mu.Lock()
 	defer writer.mu.Unlock()
@@ -345,10 +278,13 @@ func TestChatRunnerIntegration_SingleTurnNoTool(t *testing.T) {
 	}
 }
 
-// TestChatRunnerIntegration_MultiTurnAgentLoop: stub LLM emits tool_use →
-// stub Tool returns result → next iteration → text-only finish. Asserts
-// iteration count + message ordering.
-func TestChatRunnerIntegration_MultiTurnAgentLoop(t *testing.T) {
+// TestChatGraph_MultiTurnAgentLoop: stub LLM emits tool_use → stub Tool
+// returns result → next iteration → text-only finish, against the real
+// chat_default.yaml. Asserts:
+//   - LLM called twice (tool_use turn + finishing turn)
+//   - tool_dispatch fires the registered tool exactly once
+//   - the final assistant message persists
+func TestChatGraph_MultiTurnAgentLoop(t *testing.T) {
 	t.Parallel()
 	llm := &stubLLM{}
 	// First call: tool_use response
@@ -377,9 +313,9 @@ func TestChatRunnerIntegration_MultiTurnAgentLoop(t *testing.T) {
 	tools := newStubTools("search__web")
 	tools.push(coreag.ToolResult{Content: `{"result":"42"}`, IsError: false})
 
-	runner, broker, writer := buildIntegrationRunnerWithGraph(t, llm, tools, 25, []coreag.Message{
+	runner, broker, writer := buildIntegrationRunner(t, llm, tools, 25, []coreag.Message{
 		{Role: "user", Content: "search hello"},
-	}, chatGraphForToolLoop(25))
+	})
 	_, err := runner.StartStream(context.Background(), "profile-1", "session-1", "", "search hello")
 	if err != nil {
 		t.Fatalf("StartStream: %v", err)
@@ -389,32 +325,42 @@ func TestChatRunnerIntegration_MultiTurnAgentLoop(t *testing.T) {
 		t.Errorf("Reason = %q, want non-error; msg=%q", closed.Reason, closed.Message)
 	}
 
-	// LLM should have been called at least twice (tool_use then finish).
-	if got := llm.calls.Load(); got < 2 {
-		t.Errorf("llm.calls = %d, want >=2", got)
+	// LLM should have been called exactly twice (tool_use then finish).
+	if got := llm.calls.Load(); got != 2 {
+		t.Errorf("llm.calls = %d, want 2 (tool_use turn + finish turn)", got)
 	}
 	// Tool should have been called exactly once.
 	tools.mu.Lock()
-	defer tools.mu.Unlock()
-	if len(tools.calls) != 1 {
-		t.Fatalf("len(tools.calls) = %d, want 1; calls=%+v", len(tools.calls), tools.calls)
+	calls := append([]coreag.ToolCall(nil), tools.calls...)
+	tools.mu.Unlock()
+	if len(calls) != 1 {
+		t.Fatalf("len(tools.calls) = %d, want 1; calls=%+v", len(calls), calls)
 	}
-	if tools.calls[0].Name != "search__web" {
-		t.Errorf("tool name = %q, want search__web", tools.calls[0].Name)
+	if calls[0].Name != "search__web" {
+		t.Errorf("tool name = %q, want search__web", calls[0].Name)
 	}
 
-	// Writer should have at minimum the user turn + assistant turn.
+	// The final assistant turn ("found 42") should be persisted.
 	writer.mu.Lock()
 	defer writer.mu.Unlock()
 	if len(writer.calls) < 2 {
-		t.Errorf("len(writer.calls) = %d, want >=2; calls=%+v", len(writer.calls), writer.calls)
+		t.Fatalf("len(writer.calls) = %d, want >=2; calls=%+v", len(writer.calls), writer.calls)
+	}
+	assistantCall := writer.calls[len(writer.calls)-1]
+	if assistantCall.role != "assistant" {
+		t.Errorf("last writer call role = %q, want assistant", assistantCall.role)
+	}
+	if !strings.Contains(assistantCall.content, "found 42") {
+		t.Errorf("assistant content = %q, want 'found 42'", assistantCall.content)
 	}
 }
 
-// TestChatRunnerIntegration_CapHitAtMaxAgentTurns: stub LLM keeps emitting
-// tool_use; with MaxAgentTurns=3, asserts the LoopNode hits the cap and
-// the run terminates (rather than streaming forever).
-func TestChatRunnerIntegration_CapHitAtMaxAgentTurns(t *testing.T) {
+// TestChatGraph_CapHitAtMaxAgentTurns: stub LLM keeps emitting tool_use;
+// with MaxAgentTurns=3, asserts the LoopNode hits the cap. The per-run
+// cap is enforced by the chat_runner.applyMaxTurnsDial walk + the kernel
+// LoopNode max_iterations bound. Verifies the run terminates rather
+// than streaming forever, and that LLM call count stays bounded.
+func TestChatGraph_CapHitAtMaxAgentTurns(t *testing.T) {
 	t.Parallel()
 	llm := &stubLLM{}
 	// Stage many tool_use responses so the loop would never exit
@@ -437,28 +383,80 @@ func TestChatRunnerIntegration_CapHitAtMaxAgentTurns(t *testing.T) {
 		tools.push(coreag.ToolResult{Content: "ok", IsError: false})
 	}
 
-	runner, broker, _ := buildIntegrationRunnerWithGraph(t, llm, tools, 3, []coreag.Message{
+	runner, broker, _ := buildIntegrationRunner(t, llm, tools, 3, []coreag.Message{
 		{Role: "user", Content: "loop forever"},
-	}, chatGraphForCapTest(3))
+	})
 	_, err := runner.StartStream(context.Background(), "profile-1", "session-1", "", "loop forever")
 	if err != nil {
 		t.Fatalf("StartStream: %v", err)
 	}
 	closed := waitForClosed(t, broker)
-	// The cap-hit surfaces as either backend-error (LoopNode aborts with
-	// max-iterations) or completed (LoopNode silently bounds). Either is
-	// acceptable as long as the run does NOT loop indefinitely; the
-	// stub LLM has a fixed queue that would surface "out of responses"
-	// if the runner ever exceeded MaxAgentTurns iterations.
 	if closed.Reason == "" {
 		t.Errorf("expected non-empty close reason; got payload = %+v", closed)
 	}
 	// Critically: we must NOT have called the LLM 50 times. With a cap
-	// of 3 iterations the loop body fires at most 3 times, plus the
-	// initial assistant_turn before the loop, plus any pre-loop call.
+	// of 3 iterations the LoopNode body fires at most 3 times, each
+	// firing one LLMNode call. Allow a small overhead for any pre-loop
+	// pumping the chassis might add.
 	calls := llm.calls.Load()
 	if calls > 6 {
 		t.Errorf("llm.calls = %d, want <=6 (cap=3 with overhead); did the cap fire?", calls)
+	}
+	if calls < 1 {
+		t.Errorf("llm.calls = %d, want >=1; loop body never ran?", calls)
+	}
+}
+
+// TestChatGraph_StreamingOrder asserts the streaming deltas the
+// LLMNode pumps reach the broker in arrival order. The broker bridges
+// to the existing llm:stream-chunk topic; the production frontend
+// useSession.ts depends on byte-equal chunk order so this is a pin
+// against any reordering inside the chat runner.
+func TestChatGraph_StreamingOrder(t *testing.T) {
+	t.Parallel()
+	llm := &stubLLM{}
+	llm.push(stubLLMResponse{
+		stream: []coreag.StreamEvent{
+			{Kind: coreag.StreamEventText, Text: "alpha "},
+			{Kind: coreag.StreamEventText, Text: "beta "},
+			{Kind: coreag.StreamEventText, Text: "gamma "},
+			{Kind: coreag.StreamEventText, Text: "delta"},
+			{Kind: coreag.StreamEventFinish, Finish: "stop"},
+		},
+		resp: coreag.LLMResponse{
+			Content:      "alpha beta gamma delta",
+			FinishReason: "stop",
+		},
+	})
+	runner, broker, _ := buildIntegrationRunner(t, llm, newStubTools(), 25, []coreag.Message{
+		{Role: "user", Content: "stream please"},
+	})
+	if _, err := runner.StartStream(context.Background(), "profile-1", "session-1", "", "stream please"); err != nil {
+		t.Fatalf("StartStream: %v", err)
+	}
+	closed := waitForClosed(t, broker)
+	if closed.Reason == "backend-error" {
+		t.Errorf("Reason = %q, want non-error; msg=%q", closed.Reason, closed.Message)
+	}
+
+	want := []string{"alpha ", "beta ", "gamma ", "delta"}
+	var got []string
+	for _, e := range broker.snapshot() {
+		if e.topic != "llm:stream-chunk" {
+			continue
+		}
+		chunk := e.payload.(StreamChunkPayload)
+		if chunk.Chunk.Kind == corellm.StreamText {
+			got = append(got, chunk.Chunk.Text)
+		}
+	}
+	if len(got) != len(want) {
+		t.Fatalf("text deltas: got=%v want=%v", got, want)
+	}
+	for i, w := range want {
+		if got[i] != w {
+			t.Errorf("delta[%d] = %q, want %q", i, got[i], w)
+		}
 	}
 }
 
@@ -475,7 +473,7 @@ func TestChatRunnerIntegration_ProviderError(t *testing.T) {
 		err: errors.New("transient backend error"),
 	})
 
-	runner, broker, _ := buildIntegrationRunner(t, llm, nil, 25, []coreag.Message{
+	runner, broker, _ := buildIntegrationRunner(t, llm, newStubTools(), 25, []coreag.Message{
 		{Role: "user", Content: "fail me"},
 	})
 	_, err := runner.StartStream(context.Background(), "profile-1", "session-1", "", "fail me")

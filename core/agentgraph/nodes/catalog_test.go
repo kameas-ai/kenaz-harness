@@ -41,12 +41,12 @@ func TestCatalogGetListArchetypes(t *testing.T) {
 		}
 	}
 
-	// Kinds() returns the 30 callable kinds shipped after the
-	// chat-migration mission added `session_write` (was 29 before).
+	// Kinds() returns the 31 callable kinds shipped after the
+	// tool-dispatch-node mission added `tool_dispatch` (was 30 before).
 	kinds := cat.Kinds()
-	const wantCallable = 30
+	const wantCallable = 31
 	if len(kinds) != wantCallable {
-		t.Errorf("expected %d kinds (WP04+WP05+session_write), got %d", wantCallable, len(kinds))
+		t.Errorf("expected %d kinds (WP04+WP05+session_write+tool_dispatch), got %d", wantCallable, len(kinds))
 	}
 
 	// IsCallable returns false for archetypes and unknown IDs.
@@ -60,9 +60,10 @@ func TestCatalogGetListArchetypes(t *testing.T) {
 	}
 
 	// ListByCategory returns archetypes + every kind whose category
-	// matches. WP04: 1 archetype + 10 callable compute kinds = 11.
-	if got := cat.ListByCategory(nodes.CategoryCompute); len(got) != 11 {
-		t.Errorf("ListByCategory(compute): got %d, want 11 (1 archetype + 10 kinds)", len(got))
+	// matches. WP04: 1 archetype + 11 callable compute kinds = 12
+	// (10 from WP04 + tool_dispatch from tool-dispatch-node mission).
+	if got := cat.ListByCategory(nodes.CategoryCompute); len(got) != 12 {
+		t.Errorf("ListByCategory(compute): got %d, want 12 (1 archetype + 11 kinds)", len(got))
 	}
 	// state archetype + read/write/marker archetypes + 12 callable state
 	// kinds (8 from WP04 + read_file/read_bash_output/write_file from

@@ -43,6 +43,7 @@ const (
 	NodeKindReview         NodeKind = "review"
 	NodeKindSessionWrite   NodeKind = "session_write"
 	NodeKindTool           NodeKind = "tool"
+	NodeKindToolDispatch   NodeKind = "tool_dispatch"
 	NodeKindTraceWrite     NodeKind = "trace_write"
 	NodeKindTransform      NodeKind = "transform"
 	NodeKindWriteFile      NodeKind = "write_file"
@@ -79,6 +80,7 @@ func AllNodeKinds() []NodeKind {
 		NodeKindReview,
 		NodeKindSessionWrite,
 		NodeKindTool,
+		NodeKindToolDispatch,
 		NodeKindTraceWrite,
 		NodeKindTransform,
 		NodeKindWriteFile,
@@ -144,6 +146,8 @@ func defaultAttrsFor(kind NodeKind) NodeAttrs {
 		return SessionWriteAttrs{}
 	case NodeKindTool:
 		return ToolAttrs{}
+	case NodeKindToolDispatch:
+		return ToolDispatchAttrs{}
 	case NodeKindTraceWrite:
 		return TraceWriteAttrs{}
 	case NodeKindTransform:
@@ -326,6 +330,13 @@ func defaultPortsFor(kind NodeKind) (inputs, outputs []Port) {
 				{Name: "args", Type: PortType("any")},
 			}, []Port{
 				{Name: "result", Type: PortType("any")},
+			}
+	case NodeKindToolDispatch:
+		return []Port{
+				{Name: "tool_calls", Type: PortType("any"), Required: true},
+			}, []Port{
+				{Name: "tool_results", Type: PortType("any")},
+				{Name: "messages", Type: PortType("messages")},
 			}
 	case NodeKindTraceWrite:
 		return []Port{
@@ -529,6 +540,12 @@ func decodeAttrs(kind NodeKind, raw map[string]any, nodeID string) (NodeAttrs, e
 		return v, nil
 	case NodeKindTool:
 		var v ToolAttrs
+		if err := json.Unmarshal(buf, &v); err != nil {
+			return nil, fmt.Errorf("agentgraph: node %q: decode attrs for kind %q: %w", nodeID, kind, err)
+		}
+		return v, nil
+	case NodeKindToolDispatch:
+		var v ToolDispatchAttrs
 		if err := json.Unmarshal(buf, &v); err != nil {
 			return nil, fmt.Errorf("agentgraph: node %q: decode attrs for kind %q: %w", nodeID, kind, err)
 		}

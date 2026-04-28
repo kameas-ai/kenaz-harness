@@ -1402,6 +1402,62 @@ func (a ToolAttrs) Validate() error {
 	return nil
 }
 
+// ToolDispatchAttrs is the typed payload for `kind: tool_dispatch`.
+//
+// Dispatches every tool_use record on the input port through the kernel ToolRegistry. Emits tool_results on the output port. Used inside chat LoopNode bodies to close the model→tool→model cycle.
+type ToolDispatchAttrs struct {
+
+	// MaxConcurrent: Cap when parallel_dispatch=true (default 4).
+	MaxConcurrent int `json:"max_concurrent,omitempty" yaml:"max_concurrent,omitempty"`
+
+	// MaxTokens: Upper bound on generated tokens; 0 = provider default.
+	MaxTokens int `json:"max_tokens,omitempty" yaml:"max_tokens,omitempty"`
+
+	// Model: Provider-specific model name.
+	Model string `json:"model,omitempty" yaml:"model,omitempty"`
+
+	// ParallelDispatch: Dispatch all tool_calls concurrently via errgroup; set false for serial dispatch.
+	ParallelDispatch bool `json:"parallel_dispatch,omitempty" yaml:"parallel_dispatch,omitempty"`
+
+	// Provider: LLM provider identifier (e.g. anthropic, bedrock).
+	Provider string `json:"provider,omitempty" yaml:"provider,omitempty"`
+
+	// SystemPrompt: Optional system prompt prepended to the conversation.
+	SystemPrompt string `json:"system_prompt,omitempty" yaml:"system_prompt,omitempty"`
+
+	// Temperature: Sampling temperature.
+	Temperature float64 `json:"temperature,omitempty" yaml:"temperature,omitempty"`
+
+	// ToolAllowlist: Tool IDs this node may call. Empty = allow-all per policy.
+	ToolAllowlist []string `json:"tool_allowlist,omitempty" yaml:"tool_allowlist,omitempty"`
+}
+
+func (ToolDispatchAttrs) nodeAttrsMarker() {}
+
+// Validate enforces the manifest's declared constraints for `kind: tool_dispatch`.
+// Generated from the resolved manifest's attrs map; per-rule errors
+// follow the validator's manifest-attribution format
+// (`tool_dispatch.attrs.<attr>.<rule>: ...`) so callers can grep for the
+// constraint that fired.
+func (a ToolDispatchAttrs) Validate() error {
+	if a.MaxConcurrent != 0 && float64(a.MaxConcurrent) < 1 {
+		return fmt.Errorf("max_concurrent.min: got %d, want >= %v", a.MaxConcurrent, 1)
+	}
+	if float64(a.MaxConcurrent) > 16 {
+		return fmt.Errorf("max_concurrent.max: got %d, want <= %v", a.MaxConcurrent, 16)
+	}
+	if a.MaxTokens != 0 && float64(a.MaxTokens) < 0 {
+		return fmt.Errorf("max_tokens.min: got %d, want >= %v", a.MaxTokens, 0)
+	}
+	if a.Temperature < 0 {
+		return fmt.Errorf("temperature.min: got %v, want >= %v", a.Temperature, 0)
+	}
+	if a.Temperature > 2 {
+		return fmt.Errorf("temperature.max: got %v, want <= %v", a.Temperature, 2)
+	}
+	return nil
+}
+
 // TraceWriteAttrs is the typed payload for `kind: trace_write`.
 //
 // Emits a structured trace event into the EventLog (FR-056).

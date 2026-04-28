@@ -360,6 +360,7 @@ func newExecutorRegistry() *executorRegistry {
 	// Compute (FR-029..FR-039).
 	r.register(&modelExecutor{})
 	r.register(&toolExecutor{})
+	r.register(&toolDispatchExecutor{})
 	r.register(&transformExecutor{})
 	r.register(&activityExecutor{})
 	r.register(&reflectExecutor{})

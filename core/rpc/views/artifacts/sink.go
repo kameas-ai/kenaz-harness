@@ -3,6 +3,7 @@ package artifacts
 import (
 	"context"
 	"log/slog"
+	"time"
 
 	coreart "github.com/sigil-tech/kaneaz-harness/core/artifacts"
 )
@@ -76,18 +77,60 @@ func (s *sink) OnAssistantMessage(ctx context.Context, sessionID, messageID, tex
 
 // OnPostLLMMessage runs the code-block detector against a freshly
 // persisted assistant message. The chassis registers this as a
-// kernel HookManager post-LLM hook listener (chat-migration WP-D);
-// the toolloop's PostToolUseListener surface was deleted alongside
-// core/toolloop, so tool-output capture during a chat run is paused
-// until the kernel ToolNode grows a post-fire callback. The chat
-// path's code-block capture path (runs against the assistant message
-// at SessionWriteNode time) still works.
+// kernel HookManager post-LLM hook listener (chat-migration WP-D).
 //
 // Signature mirrors agentgraph.HookManager's post-hook callback shape:
 // (ctx, sessionID, messageID, text). The chassis adapts between
 // HookManager.RegisterPostHook and this method.
 func (s *sink) OnPostLLMMessage(ctx context.Context, sessionID, messageID, text string) {
 	_ = s.OnAssistantMessage(ctx, sessionID, messageID, text)
+}
+
+// OnPostToolMessage runs the code-block detector against a tool result
+// payload. The chassis registers this as the kernel HookManager
+// HookPostTool tool-shaped listener (mission tool-dispatch-node) so
+// tool-output capture matches the deleted toolloop's PostToolUseListener
+// behaviour. The toolName is folded into the candidate's source so
+// captured artifacts surface "tool: <name>" in the artifacts library.
+//
+// Signature mirrors agentgraph.HookManager's tool post-hook callback
+// shape: (ctx, sessionID, toolName, toolArgs, toolResult, duration).
+func (s *sink) OnPostToolMessage(ctx context.Context, sessionID, toolName, toolArgs, toolResult string, _ time.Duration) {
+	if s == nil || s.mgr == nil || toolResult == "" {
+		return
+	}
+	cfg := s.cfg()
+	if !cfg.AutoCaptureCodeBlocks {
+		return
+	}
+	// Use the tool name as the synthetic message id so callers correlate
+	// captured artifacts with the originating tool dispatch. The detector
+	// keys candidates by (messageID, byteOffset) so a stable suffix is
+	// enough to keep the dedup invariant.
+	syntheticID := "tool:" + toolName
+	candidates := coreart.DetectCodeBlocks(syntheticID, toolResult, coreart.CodeBlockDetectorConfig{
+		MinLines: cfg.CodeBlockMinLines,
+		MinBytes: cfg.CodeBlockMinBytes,
+	})
+	if len(candidates) == 0 {
+		return
+	}
+	captured, err := s.mgr.Capture(ctx, candidates, sessionID)
+	if err != nil {
+		s.log.Warn("artifacts.tool_capture.failed",
+			"session_id", sessionID,
+			"tool", toolName,
+			"err", err.Error())
+		return
+	}
+	if len(captured) > 0 {
+		s.log.Info("artifacts.captured",
+			"count", len(captured),
+			"session_id", sessionID,
+			"tool", toolName,
+			"source", coreart.SourceToolOutput,
+		)
+	}
 }
 
 // Sink is the concrete sink type — exported so the chassis wiring in

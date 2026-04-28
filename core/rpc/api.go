@@ -1099,6 +1099,11 @@ func buildChatRunner(
 			env.Hooks.RegisterPostHook(coreag.HookPostLLM, func(ctx context.Context, sessionID, messageID, text string) {
 				_ = artifactSinkConcrete.OnAssistantMessage(ctx, sessionID, messageID, text)
 			})
+			// Tool-output artifact capture: re-introduces the deleted
+			// toolloop PostToolUseListener pipeline. ToolDispatchNode
+			// fires this boundary per tool result; the sink runs the
+			// code-block detector against the tool payload.
+			env.Hooks.RegisterToolPostHook(artifactSinkConcrete.OnPostToolMessage)
 		}
 	}
 	runner, err := chat.New(chat.Config{
