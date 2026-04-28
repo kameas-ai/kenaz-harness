@@ -318,7 +318,15 @@ func (a *API) resolveConfig(recipe recipes.Recipe, input map[string]any) (map[st
 			}
 			expanded := make([]string, 0, len(list))
 			for _, p := range list {
-				resolved := expandDataDir(p, a.cfg.DataDir)
+				// Two passes: ${DATA_DIR} substitution (for shipped
+				// recipe defaults) then user-friendly expansion of "~/",
+				// "$HOME", and bare common-folder names like "Desktop".
+				// Both passes must run BEFORE the persisted list is
+				// stored; otherwise the npx args end up with the user's
+				// literal input ("Desktop") and the MCP filesystem
+				// server exits on stat() before responding to the
+				// initialize handshake (EOF on stdio init).
+				resolved := ExpandPath(expandDataDir(p, a.cfg.DataDir))
 				expanded = append(expanded, resolved)
 			}
 			if a.cfg.DataDir != "" {
