@@ -259,10 +259,18 @@ const sessionSubtitle = computed(() => {
     case 'session-not-found':
       return 'This session was deleted or its id is wrong.';
     default:
-      if (session.loading.value) return 'Loading…';
-      return 'Each session preserves its scroll position and draft input.';
+      // Active chat: show no subtitle. The session name in the header
+      // is sufficient; chrome below it just wastes vertical space.
+      return undefined;
   }
 });
+
+// In the active-chat default, drop the breadcrumb (`01 / SESSIONS`)
+// chrome too — the session name alone is enough orientation. Empty/
+// error states keep the breadcrumb so the user knows where they are.
+const showSessionBreadcrumb = computed(
+  () => surfaceState.value !== 'loaded',
+);
 
 const isStreaming = computed(
   () => session.streamSubscriptionId.value !== null,
@@ -595,8 +603,8 @@ function formatSize(bytes: number): string {
     <!-- header -->
     <div>
       <CanvasHead
-        number="01"
-        section="SESSIONS"
+        :number="showSessionBreadcrumb ? '01' : undefined"
+        :section="showSessionBreadcrumb ? 'SESSIONS' : undefined"
         :title="sessionTitle"
         :subtitle="sessionSubtitle"
       />

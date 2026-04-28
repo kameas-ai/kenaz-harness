@@ -966,7 +966,7 @@ const acceptedTypes =
       <!-- @filepath autocomplete dropdown -->
       <ul
         v-if="atState && atState.options.length > 0"
-        class="absolute left-0 right-0 top-full mt-1 z-20 max-h-60 overflow-y-auto rounded-md border border-border-muted bg-surface-1 shadow-lg"
+        class="absolute left-0 right-0 bottom-full mb-1 z-30 max-h-60 overflow-y-auto rounded-md border border-border-muted bg-surface-1 shadow-lg"
         data-testid="at-filepath-suggestions"
       >
         <li

@@ -1,15 +1,19 @@
 <script setup lang="ts">
 /**
- * CanvasHead — Kenaz numbered-section header pattern (FR-001b).
+ * CanvasHead — Kenaz section header.
  *
+ * Default (with number + section):
  *   01 / SESSIONS         <- muted small-caps, separator
  *   Recent runs           <- prominent title, Geist Semibold
- *   The harness preserves your conversation thread per session.
- *                         <- one-paragraph subtitle, --ink-muted
+ *   <subtitle>            <- one-paragraph subtitle, --ink-muted
+ *
+ * Minimal (number/section/subtitle omitted): just the title, used for
+ * the active chat surface where the session name is the only useful
+ * affordance and breadcrumb chrome wastes vertical space.
  */
 defineProps<{
-  number: string;
-  section: string;
+  number?: string;
+  section?: string;
   title: string;
   subtitle?: string;
 }>();
@@ -17,7 +21,10 @@ defineProps<{
 
 <template>
   <header class="px-6 pt-6 pb-4 border-b border-border-muted bg-surface-0">
-    <div class="flex items-baseline gap-2 text-ink-subtle">
+    <div
+      v-if="number && section"
+      class="flex items-baseline gap-2 text-ink-subtle"
+    >
       <span class="font-ui text-[11px] font-medium uppercase tracking-[0.18em]">
         {{ number }}
       </span>
@@ -27,7 +34,8 @@ defineProps<{
       </span>
     </div>
     <h1
-      class="mt-2 font-ui text-2xl font-semibold tracking-tight text-ink"
+      class="font-ui text-2xl font-semibold tracking-tight text-ink"
+      :class="number && section ? 'mt-2' : ''"
     >
       {{ title }}
     </h1>

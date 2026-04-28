@@ -612,7 +612,7 @@ async function onProjectDrop(evt: DragEvent, projectId: string) {
           @dragleave="onProjectDragLeave($event, '__loose__')"
           @drop="onProjectDrop($event, '__loose__')"
         >
-          Loose
+          Global
         </div>
         <ul class="space-y-1">
           <li
@@ -750,7 +750,7 @@ async function onProjectDrop(evt: DragEvent, projectId: string) {
           Delete project “{{ deleteModal.project.name }}”?
         </h2>
         <p class="mt-2 font-ui text-xs text-ink-muted">
-          Sessions in this project become loose unless you opt to delete
+          Sessions in this project become global unless you opt to delete
           them as well.
         </p>
         <label class="mt-3 flex items-center gap-2 font-ui text-xs text-ink">

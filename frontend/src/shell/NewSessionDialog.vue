@@ -28,7 +28,7 @@ const props = defineProps<{
    * Optional pre-selection of the project to scope the new session
    * under. Used by ProjectLandingPage's "Start session in this
    * project" CTA so the user doesn't have to re-pick. Empty / unset
-   * means the project picker defaults to "(none) — loose session".
+   * means the project picker defaults to "(none) — global session".
    */
   initialProjectId?: string;
 }>();
@@ -44,7 +44,7 @@ const submitting = ref(false);
 const errorMsg = ref<string | null>(null);
 const selected = ref<ModelChoice | null>(null);
 
-// Project picker state. Empty string => loose session.
+// Project picker state. Empty string => global (no project) session.
 const projects = ref<readonly Project[]>([]);
 const selectedProjectId = ref<string>('');
 const newProjectMode = ref(false);
@@ -296,7 +296,7 @@ const isSelected = (c: ModelChoice) =>
             data-testid="new-session-project"
             @change="onProjectSelectChange"
           >
-            <option value="">(none) — loose session</option>
+            <option value="">(none) — global session</option>
             <option v-for="p in projects" :key="p.id" :value="p.id">
               {{ p.name }}
             </option>
