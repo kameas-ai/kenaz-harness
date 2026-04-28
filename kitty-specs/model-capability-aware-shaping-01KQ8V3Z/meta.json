@@ -1,0 +1,10 @@
+{
+  "created_at": "2026-04-28T01:26:36.748470+00:00",
+  "friendly_name": "model capability aware shaping",
+  "mission_id": "01KQ8V3ZW9SQQM5K0VCXYFKGZ8",
+  "mission_number": null,
+  "mission_slug": "model-capability-aware-shaping-01KQ8V3Z",
+  "mission_type": "software-dev",
+  "slug": "model-capability-aware-shaping-01KQ8V3Z",
+  "target_branch": "main"
+}
