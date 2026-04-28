@@ -1,0 +1,10 @@
+{
+  "created_at": "2026-04-28T01:14:13.270058+00:00",
+  "friendly_name": "provider keychain rotation",
+  "mission_id": "01KQ8TD9TKW0ZN0C19PAX1YVMX",
+  "mission_number": null,
+  "mission_slug": "provider-keychain-rotation-01KQ8TD9",
+  "mission_type": "software-dev",
+  "slug": "provider-keychain-rotation-01KQ8TD9",
+  "target_branch": "main"
+}
