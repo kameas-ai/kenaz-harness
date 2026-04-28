@@ -380,6 +380,37 @@ func buildRequestBody(req llm.GenerationRequest, prof llm.ProviderProfile) ([]by
 	}
 	out["messages"] = msgs
 
+	// Tool serialization — OpenRouter accepts OpenAI's Chat Completions
+	// tools envelope: each spec wrapped in {type:"function", function:{
+	// name, description, parameters}}. ToolSpec.InputSchema is already
+	// JSON Schema. Without this block tools were discovered + threaded
+	// through GenerationRequest.Tools but silently dropped at the wire
+	// boundary, so the model saw an empty tool catalog and answered
+	// "I'm a text-only assistant" on every turn.
+	if len(req.Tools) > 0 {
+		tools := make([]map[string]any, 0, len(req.Tools))
+		for _, t := range req.Tools {
+			fn := map[string]any{
+				"name":        t.Name,
+				"description": t.Description,
+			}
+			if len(t.InputSchema) > 0 {
+				var schema any
+				if err := json.Unmarshal(t.InputSchema, &schema); err != nil {
+					return nil, fmt.Errorf("openrouter: tool %q parameters: %w", t.Name, err)
+				}
+				fn["parameters"] = schema
+			} else {
+				fn["parameters"] = map[string]any{"type": "object"}
+			}
+			tools = append(tools, map[string]any{
+				"type":     "function",
+				"function": fn,
+			})
+		}
+		out["tools"] = tools
+	}
+
 	// Optional sampling knobs surfaced through Params / Defaults.
 	for _, key := range []string{"temperature", "top_p", "max_tokens"} {
 		if v, ok := req.Params[key]; ok {
