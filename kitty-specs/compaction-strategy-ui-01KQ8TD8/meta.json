@@ -1,0 +1,10 @@
+{
+  "created_at": "2026-04-28T01:14:12.248306+00:00",
+  "friendly_name": "compaction strategy ui",
+  "mission_id": "01KQ8TD8TH3QTWDQW48ZFJMR2K",
+  "mission_number": null,
+  "mission_slug": "compaction-strategy-ui-01KQ8TD8",
+  "mission_type": "software-dev",
+  "slug": "compaction-strategy-ui-01KQ8TD8",
+  "target_branch": "main"
+}
