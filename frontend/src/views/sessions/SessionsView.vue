@@ -283,6 +283,79 @@ const isWaitingForFirstChunk = computed(
     session.currentlyStreaming.value === null,
 );
 
+// Per-model context window. The connector's /models endpoint knows
+// these but they're not surfaced through the Provider type yet, so
+// we keep a small substring-matched fallback table here. Anything
+// unmatched falls back to 200k (covers the modern Anthropic /
+// OpenAI flagships). Move this to a backend-derived prop when the
+// model-info plumbing lands.
+const MODEL_CONTEXT_FALLBACK = 200_000;
+const MODEL_CONTEXT_HINTS: Array<[RegExp, number]> = [
+  [/claude-(?:opus|sonnet)-(?:4(?:-?[1-9])?|3-?7)/, 200_000],
+  [/claude-haiku/, 200_000],
+  [/claude-3(?:-5)?-haiku/, 200_000],
+  [/claude-3-(?:opus|sonnet|haiku)/, 200_000],
+  [/gpt-5/, 256_000],
+  [/gpt-4o|gpt-4-turbo/, 128_000],
+  [/gpt-4(?!o)/, 8_192],
+  [/o1|o3/, 200_000],
+  [/gemini-(?:1\.5|2)/, 1_000_000],
+  [/llama-3\.1-405/, 128_000],
+];
+
+function modelContextWindow(modelId: string): number {
+  if (!modelId) return MODEL_CONTEXT_FALLBACK;
+  const id = modelId.toLowerCase();
+  for (const [re, n] of MODEL_CONTEXT_HINTS) {
+    if (re.test(id)) return n;
+  }
+  return MODEL_CONTEXT_FALLBACK;
+}
+
+// Cheap client-side token estimate. The backend's estimateTokens uses
+// a similar chars/4 heuristic so the % we display roughly tracks what
+// the kernel sees. Don't trust this to the digit — it's a usage cue,
+// not a billing surface.
+function estimateMessageTokens(s: string): number {
+  if (!s) return 0;
+  return Math.ceil(s.length / 4);
+}
+
+const conversationTokens = computed(() => {
+  let total = 0;
+  for (const m of visibleMessages.value) {
+    total += estimateMessageTokens(m.content);
+  }
+  const streaming = session.currentlyStreaming.value;
+  if (streaming?.content) total += estimateMessageTokens(streaming.content);
+  return total;
+});
+
+const contextWindowPct = computed(() => {
+  const max = modelContextWindow(activeModelId.value);
+  if (max <= 0) return 0;
+  return Math.min(100, Math.round((conversationTokens.value / max) * 100));
+});
+
+const contextWindowLabel = computed(() => {
+  const max = modelContextWindow(activeModelId.value);
+  const used = conversationTokens.value;
+  // Compact thousands formatter ("1.2k", "12k", "128k").
+  const fmt = (n: number) => {
+    if (n < 1_000) return String(n);
+    if (n < 10_000) return (n / 1_000).toFixed(1).replace(/\.0$/, '') + 'k';
+    return Math.round(n / 1_000) + 'k';
+  };
+  return `${fmt(used)} / ${fmt(max)}`;
+});
+
+const contextBarTone = computed<'ok' | 'warn' | 'danger'>(() => {
+  const pct = contextWindowPct.value;
+  if (pct >= 85) return 'danger';
+  if (pct >= 65) return 'warn';
+  return 'ok';
+});
+
 async function onSend(content: string) {
   if (!hasSession.value || !activeProvider.value) return;
   // When the user staged any multimodal attachments, the
@@ -492,7 +565,7 @@ async function onRemember(m: Message, scope: MemoryScopeKind = 'session') {
 // useArtifacts composable, projected to a per-message map so individual
 // MessageBubbles never trigger their own RPC fetches (FR-009 / plan §5).
 const sessionArtifacts = useArtifacts({});
-const activeTab = ref<'chat' | 'artifacts'>('chat');
+const activeTab = ref<'chat' | 'artifacts' | 'context'>('chat');
 const artifactPreviewOpen = ref(false);
 const artifactPreviewPayload = ref<ArtifactWithBytes | null>(null);
 const lastArtifactError = ref<string | null>(null);
@@ -653,68 +726,6 @@ function formatSize(bytes: number): string {
         </button>
       </div>
 
-      <!-- model switcher pill -->
-      <div
-        v-if="surfaceState === 'loaded' && activeProvider && allChoices.length > 0"
-        class="mx-6 mb-2 mt-1 relative"
-      >
-        <button
-          type="button"
-          class="flex items-center gap-2 rounded-sm border border-border-muted bg-surface-1 px-3 py-1.5 text-xs font-ui text-ink hover:bg-surface-2"
-          :data-testid="'session-model-switcher'"
-          @click="toggleSwitcher"
-        >
-          <span class="text-[10px] uppercase tracking-[0.18em] text-ink-dim">
-            Model
-          </span>
-          <span class="font-mono">{{ activeModelId || '—' }}</span>
-          <span class="text-ink-dim">▾</span>
-        </button>
-        <div
-          v-if="switcherOpen"
-          class="absolute z-20 mt-1 max-h-72 w-80 overflow-y-auto rounded-sm border border-border-muted bg-surface-1 shadow-lg"
-          role="menu"
-        >
-          <div class="px-3 py-1.5 text-[10px] uppercase tracking-[0.18em] text-ink-subtle border-b border-border-muted">
-            {{ activeFamily ? `Same family (${activeFamily})` : 'Available' }}
-          </div>
-          <button
-            v-for="c in familyChoices"
-            :key="`${c.providerId}::${c.modelId}`"
-            type="button"
-            class="block w-full px-3 py-1.5 text-left text-sm font-ui hover:bg-surface-2"
-            :class="
-              c.providerId === activeProviderId &&
-              c.modelId === activeModelId
-                ? 'text-accent'
-                : 'text-ink'
-            "
-            @click="pickModel(c.providerId, c.modelId)"
-          >
-            <div class="font-mono text-xs">{{ c.modelId }}</div>
-            <div class="text-[10px] text-ink-dim">{{ c.providerName }}</div>
-          </button>
-          <div
-            v-if="otherFamilyChoices.length > 0"
-            class="px-3 py-1.5 text-[10px] uppercase tracking-[0.18em] text-ink-subtle border-t border-border-muted"
-          >
-            Other families (cross-family blocked)
-          </div>
-          <div
-            v-for="c in otherFamilyChoices"
-            :key="`disabled-${c.providerId}::${c.modelId}`"
-            class="block w-full px-3 py-1.5 text-left text-sm font-ui text-ink-dim opacity-60 cursor-not-allowed"
-            :title="
-              `Different family (${c.family}) — would swap tokenisers ` +
-              `mid-conversation. Start a new session to use this model.`
-            "
-          >
-            <div class="font-mono text-xs">{{ c.modelId }}</div>
-            <div class="text-[10px]">{{ c.providerName }} · {{ c.family }}</div>
-          </div>
-        </div>
-      </div>
-
       <!-- ────── State A: no sessions exist anywhere ────── -->
       <div
         v-if="surfaceState === 'no-sessions'"
@@ -842,7 +853,6 @@ function formatSize(bytes: number): string {
         >
           Could not remember message: {{ lastRememberError }}
         </div>
-        <ResolvedContextPanel :session-id="sessionId" />
         <div
           class="px-4 pt-2 flex items-center gap-1 border-b border-border-muted"
           data-testid="session-tabs"
@@ -875,6 +885,19 @@ function formatSize(bytes: number): string {
             <span class="text-ink-dim font-mono text-[10px]">
               ({{ sessionArtifacts.list.value.length }})
             </span>
+          </button>
+          <button
+            type="button"
+            class="px-3 py-1 rounded-t-sm font-ui text-[11px] uppercase tracking-[0.18em] border-b-2"
+            :class="
+              activeTab === 'context'
+                ? 'text-accent border-accent'
+                : 'text-ink-muted border-transparent hover:text-ink'
+            "
+            data-testid="session-tab-context"
+            @click="activeTab = 'context'"
+          >
+            Context
           </button>
         </div>
         <div
@@ -911,7 +934,7 @@ function formatSize(bytes: number): string {
           />
         </div>
         <div
-          v-else
+          v-else-if="activeTab === 'artifacts'"
           class="flex-1 min-h-0 overflow-y-auto px-4 py-3"
           data-testid="session-artifacts-tab"
         >
@@ -966,6 +989,112 @@ function formatSize(bytes: number): string {
               </tr>
             </tbody>
           </table>
+        </div>
+        <div
+          v-else-if="activeTab === 'context'"
+          class="flex-1 min-h-0 overflow-y-auto"
+          data-testid="session-context-tab"
+        >
+          <ResolvedContextPanel :session-id="sessionId" />
+        </div>
+
+        <!-- footer status bar: muted model picker + context window meter -->
+        <div
+          v-if="activeProvider && allChoices.length > 0"
+          class="relative flex items-center justify-between gap-3 border-t border-border-muted bg-surface-0 px-4 py-1.5 font-ui text-[11px] text-ink-dim"
+          data-testid="session-status-bar"
+        >
+          <button
+            type="button"
+            class="flex items-center gap-1.5 rounded-sm px-1.5 py-0.5 hover:bg-surface-2 hover:text-ink"
+            :data-testid="'session-model-switcher'"
+            @click="toggleSwitcher"
+          >
+            <span class="uppercase tracking-[0.14em] text-ink-subtle">
+              model
+            </span>
+            <span class="font-mono text-ink-muted">
+              {{ activeModelId || '—' }}
+            </span>
+            <span aria-hidden="true">▾</span>
+          </button>
+          <div
+            v-if="switcherOpen"
+            class="absolute z-30 bottom-full mb-1 left-3 max-h-72 w-80 overflow-y-auto rounded-sm border border-border-muted bg-surface-1 shadow-lg"
+            role="menu"
+          >
+            <div
+              class="px-3 py-1.5 text-[10px] uppercase tracking-[0.18em] text-ink-subtle border-b border-border-muted"
+            >
+              {{
+                activeFamily ? `Same family (${activeFamily})` : 'Available'
+              }}
+            </div>
+            <button
+              v-for="c in familyChoices"
+              :key="`${c.providerId}::${c.modelId}`"
+              type="button"
+              class="block w-full px-3 py-1.5 text-left text-sm font-ui hover:bg-surface-2"
+              :class="
+                c.providerId === activeProviderId &&
+                c.modelId === activeModelId
+                  ? 'text-accent'
+                  : 'text-ink'
+              "
+              @click="pickModel(c.providerId, c.modelId)"
+            >
+              <div class="font-mono text-xs">{{ c.modelId }}</div>
+              <div class="text-[10px] text-ink-dim">
+                {{ c.providerName }}
+              </div>
+            </button>
+            <div
+              v-if="otherFamilyChoices.length > 0"
+              class="px-3 py-1.5 text-[10px] uppercase tracking-[0.18em] text-ink-subtle border-t border-border-muted"
+            >
+              Other families (cross-family blocked)
+            </div>
+            <div
+              v-for="c in otherFamilyChoices"
+              :key="`disabled-${c.providerId}::${c.modelId}`"
+              class="block w-full px-3 py-1.5 text-left text-sm font-ui text-ink-dim opacity-60 cursor-not-allowed"
+              :title="
+                `Different family (${c.family}) — would swap tokenisers ` +
+                `mid-conversation. Start a new session to use this model.`
+              "
+            >
+              <div class="font-mono text-xs">{{ c.modelId }}</div>
+              <div class="text-[10px]">
+                {{ c.providerName }} · {{ c.family }}
+              </div>
+            </div>
+          </div>
+          <div
+            class="flex items-center gap-2"
+            data-testid="session-context-meter"
+            :title="`Estimated context use — ${conversationTokens.toLocaleString()} of ${modelContextWindow(activeModelId).toLocaleString()} tokens`"
+          >
+            <span class="uppercase tracking-[0.14em] text-ink-subtle">
+              context
+            </span>
+            <div class="h-1 w-24 rounded-full bg-surface-2 overflow-hidden">
+              <div
+                class="h-full transition-[width] duration-300"
+                :class="{
+                  'bg-signal-ok': contextBarTone === 'ok',
+                  'bg-signal-warn': contextBarTone === 'warn',
+                  'bg-signal-danger': contextBarTone === 'danger',
+                }"
+                :style="{ width: contextWindowPct + '%' }"
+              ></div>
+            </div>
+            <span class="font-mono text-ink-muted tabular-nums">
+              {{ contextWindowPct }}%
+            </span>
+            <span class="font-mono text-ink-subtle">
+              {{ contextWindowLabel }}
+            </span>
+          </div>
         </div>
         <ChatInput
           v-model="session.draft.value"
