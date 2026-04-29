@@ -1,7 +1,7 @@
 // Package main is the in-tree fake MCP server used by stdio
-// integration tests. The tests in core/mcp/stdio/ compile this
-// program at test setup (via `go build`) and spawn it as a child
-// process to drive the real lifecycle code paths.
+// integration tests. The tests in core/mcp/transport/stdio/ compile
+// this program at test setup (via `go build`) and spawn it as a
+// child process to drive the real lifecycle code paths.
 //
 // `go test` excludes testdata/ from the package compilation, so
 // this file does not land in the production binary or in the

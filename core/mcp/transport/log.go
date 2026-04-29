@@ -1,4 +1,4 @@
-package stdio
+package transport
 
 import (
 	"context"
@@ -44,16 +44,16 @@ func (s *LogSink) Handle(ctx context.Context, recipeID string, raw json.RawMessa
 		return
 	}
 	if len(raw) == 0 {
-		s.logger.DebugContext(ctx, "stdio.log.empty_payload", "mcp.recipe", recipeID)
+		s.logger.DebugContext(ctx, "transport.log.empty_payload", "mcp.recipe", recipeID)
 		return
 	}
 	var params MessageParams
 	if err := json.Unmarshal(raw, &params); err != nil {
-		s.logger.DebugContext(ctx, "stdio.log.parse_error", "mcp.recipe", recipeID, "err", err.Error())
+		s.logger.DebugContext(ctx, "transport.log.parse_error", "mcp.recipe", recipeID, "err", err.Error())
 		return
 	}
 
-	level := mapLogLevel(params.Level)
+	level := MapLogLevel(params.Level)
 	msgKey := "mcp." + recipeID + ".message"
 	attrs := []slog.Attr{
 		slog.String("mcp.recipe", recipeID),
@@ -68,9 +68,9 @@ func (s *LogSink) Handle(ctx context.Context, recipeID string, raw json.RawMessa
 	s.logger.LogAttrs(ctx, level, msgKey, attrs...)
 }
 
-// mapLogLevel translates the MCP spec's syslog-style level strings
+// MapLogLevel translates the MCP spec's syslog-style level strings
 // onto slog levels per research §"notifications/message → slog".
-func mapLogLevel(level string) slog.Level {
+func MapLogLevel(level string) slog.Level {
 	switch level {
 	case "debug":
 		return slog.LevelDebug

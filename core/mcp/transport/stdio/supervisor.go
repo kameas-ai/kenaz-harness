@@ -201,22 +201,6 @@ func (s *ServerInstance) sleepOrDone(d time.Duration) bool {
 	}
 }
 
-// pruneHistory drops timestamps older than the window relative to
-// now. Returns a new slice; does not mutate the input.
-func pruneHistory(history []time.Time, now time.Time, window time.Duration) []time.Time {
-	if len(history) == 0 {
-		return history
-	}
-	cutoff := now.Add(-window)
-	out := history[:0:0]
-	for _, t := range history {
-		if t.After(cutoff) {
-			out = append(out, t)
-		}
-	}
-	return out
-}
-
 // respawnCtxBudget returns the wall-clock budget for one respawn
 // attempt: first-byte timeout + init timeout + 1 s slack. Defaults
 // to the package defaults when the spec leaves them zero.

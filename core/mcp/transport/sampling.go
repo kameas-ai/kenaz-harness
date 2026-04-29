@@ -1,4 +1,4 @@
-package stdio
+package transport
 
 import (
 	"context"
@@ -41,14 +41,14 @@ func LLMSamplingHandler(reg corellm.Registry, selector func() (provider, model s
 // dispatch path before this handler is reached.
 func (h *llmSamplingHandler) CreateMessage(ctx context.Context, _ string, req SamplingRequest) (SamplingResponse, error) {
 	if h.registry == nil {
-		return SamplingResponse{}, errors.New("stdio: sampling handler has no registry")
+		return SamplingResponse{}, errors.New("transport: sampling handler has no registry")
 	}
 	if h.selector == nil {
-		return SamplingResponse{}, errors.New("stdio: sampling handler has no selector")
+		return SamplingResponse{}, errors.New("transport: sampling handler has no selector")
 	}
 	provider, model := h.selector()
 	if provider == "" {
-		return SamplingResponse{}, errors.New("stdio: no active provider for sampling")
+		return SamplingResponse{}, errors.New("transport: no active provider for sampling")
 	}
 
 	gen := corellm.GenerationRequest{
@@ -72,7 +72,7 @@ func (h *llmSamplingHandler) CreateMessage(ctx context.Context, _ string, req Sa
 
 	stream, err := h.registry.Stream(ctx, gen)
 	if err != nil {
-		return SamplingResponse{}, fmt.Errorf("stdio: sampling stream: %w", err)
+		return SamplingResponse{}, fmt.Errorf("transport: sampling stream: %w", err)
 	}
 
 	// Drain the event channel synchronously. The stream contract is
@@ -85,7 +85,7 @@ func (h *llmSamplingHandler) CreateMessage(ctx context.Context, _ string, req Sa
 	}
 	final, err := stream.Final()
 	if err != nil {
-		return SamplingResponse{}, fmt.Errorf("stdio: sampling final: %w", err)
+		return SamplingResponse{}, fmt.Errorf("transport: sampling final: %w", err)
 	}
 
 	text := concatText(final.Content)
@@ -94,7 +94,7 @@ func (h *llmSamplingHandler) CreateMessage(ctx context.Context, _ string, req Sa
 		"text": text,
 	})
 	if err != nil {
-		return SamplingResponse{}, fmt.Errorf("stdio: marshal sampling content: %w", err)
+		return SamplingResponse{}, fmt.Errorf("transport: marshal sampling content: %w", err)
 	}
 	resp := SamplingResponse{
 		Role:       "assistant",
@@ -167,34 +167,4 @@ func concatText(parts []corellm.ContentBlock) string {
 		out = append(out, p.Text...)
 	}
 	return string(out)
-}
-
-// SetSamplingEnabled flips the per-server sampling gate. When off,
-// the reader-loop dispatch path returns -32601 to the server
-// without invoking the SamplingHandler. This is the user's consent
-// boundary — see the cost-amplification risk note above.
-func (p *Pool) SetSamplingEnabled(serverID string, on bool) {
-	p.mu.RLock()
-	inst, ok := p.servers[serverID]
-	p.mu.RUnlock()
-	if !ok {
-		return
-	}
-	inst.setSamplingEnabled(on)
-}
-
-// setSamplingEnabled mutates the per-instance sampling gate under
-// the instance's lock so the reader loop's read of samplingOn
-// observes a consistent value.
-func (s *ServerInstance) setSamplingEnabled(on bool) {
-	s.mu.Lock()
-	s.samplingOn = on
-	s.mu.Unlock()
-}
-
-// SamplingEnabled reads the per-server gate. Test-only convenience.
-func (s *ServerInstance) SamplingEnabled() bool {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.samplingOn
 }

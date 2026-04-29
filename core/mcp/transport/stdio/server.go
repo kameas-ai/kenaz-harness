@@ -1,3 +1,14 @@
+// Package stdio implements the stdio MCP transport — a child
+// process spawned with stdin/stdout pipes carrying newline-
+// delimited JSON-RPC 2.0. WP01 split the transport-agnostic types
+// (Framer, Router, RingBuffer, ProgressForwarder, LogSink, etc.)
+// into `core/mcp/transport`; this package now hosts only the
+// stdio-specific lifecycle: Spawn → Initialize → Close, plus the
+// health-pinger and supervisor restart machinery.
+//
+// The legacy import path `core/mcp/stdio` re-exports this
+// package's symbols for one release while downstream callers
+// migrate.
 package stdio
 
 import (
@@ -15,97 +26,172 @@ import (
 	"time"
 
 	coremcp "github.com/sigil-tech/kaneaz-harness/core/mcp"
+	"github.com/sigil-tech/kaneaz-harness/core/mcp/transport"
 )
 
-// Default deadlines used by the lifecycle code paths.
+// Default deadlines used by the lifecycle code paths. These are
+// re-exported aliases of the transport-package defaults so the
+// existing stdio tests can reference them without importing the
+// transport package directly.
 const (
-	// defaultFirstByteTimeout caps the wait for the first byte on
-	// stdout after exec, covering an `npx -y …` cold-fetch. Distinct
-	// from initialize's response deadline — research §"npx -y cold-
-	// spawn behavior".
-	defaultFirstByteTimeout = 30 * time.Second
-
-	// defaultInitTimeout is the response deadline once the
-	// initialize request is on the wire.
-	defaultInitTimeout = 5 * time.Second
-
-	// closeGrace is how long Close waits between SIGTERM and SIGKILL.
-	closeGrace = 2 * time.Second
-
-	// defaultPingPeriod is the interval between health pings when a
-	// recipe does not override it. Per FR-008.
-	defaultPingPeriod = 30 * time.Second
-
-	// defaultPingTimeout is the per-ping response deadline. After two
-	// consecutive failures the supervisor restarts the server.
-	defaultPingTimeout = 5 * time.Second
-
-	// restartWindow is the rolling window over which restart attempts
-	// are counted. Three failures inside the window → state=failed
-	// per FR-007.
-	restartWindow = 5 * time.Minute
-)
-
-// State values for the per-instance lifecycle state machine. Per
-// data-model.md §ServerInstance:
-//
-//	stopped → starting → running → restarting → running … → failed
-//
-// The pool transitions an instance to `stopped` once Close completes;
-// `failed` is sticky until a user-driven toggle clears the
-// restartHistory and re-spawns.
-type State string
-
-const (
-	StateStopped    State = "stopped"
-	StateStarting   State = "starting"
-	StateRunning    State = "running"
-	StateRestarting State = "restarting"
-	StateFailed     State = "failed"
+	defaultFirstByteTimeout = transport.DefaultFirstByteTimeout
+	defaultInitTimeout      = transport.DefaultInitTimeout
+	closeGrace              = transport.CloseGrace
+	defaultPingPeriod       = transport.DefaultPingPeriod
+	defaultPingTimeout      = transport.DefaultPingTimeout
+	restartWindow           = transport.RestartWindow
 )
 
 // backoffSchedule encodes the FR-007 exponential backoff: 1 s, 2 s,
-// 4 s — three attempts maximum inside any 5-minute window.
-var backoffSchedule = []time.Duration{
-	1 * time.Second,
-	2 * time.Second,
-	4 * time.Second,
-}
+// 4 s — three attempts maximum inside any 5-minute window. Aliased
+// from the transport package so the supervisor code below reads
+// the way the original stdio package did.
+var backoffSchedule = transport.BackoffSchedule
 
-// SpawnSpec is the input to ServerInstance.Spawn. It mirrors the
-// subset of recipe fields the lifecycle needs without pulling
-// core/mcp/recipes (WP04) into the WP01 dependency graph.
-type SpawnSpec struct {
-	// ID identifies the server in logs and on Tool.Server. The pool
-	// uses ServerSpec.Name, which the recipe maps to its ID.
-	ID string
+// SpawnSpec mirrors transport.SpawnSpec for backwards-source-
+// compatibility with the existing stdio tests. The fields are
+// identical; the legacy stdio package re-exports this type.
+type SpawnSpec = transport.SpawnSpec
 
-	// Command is the argv vector of the child process. Command[0]
-	// is resolved against PATH.
-	Command []string
+// State / state-name re-exports. Kept here so existing tests can
+// reference `StateRunning` etc. without importing the transport
+// package.
+type State = transport.State
 
-	// Env is the additional environment merged on top of the
-	// process's existing environment. Empty values clear a key.
-	Env map[string]string
+const (
+	StateStopped    = transport.StateStopped
+	StateStarting   = transport.StateStarting
+	StateRunning    = transport.StateRunning
+	StateRestarting = transport.StateRestarting
+	StateFailed     = transport.StateFailed
+)
 
-	// FirstByteTimeout overrides defaultFirstByteTimeout when > 0.
-	FirstByteTimeout time.Duration
+// Wire-protocol re-exports kept for source compatibility with the
+// original stdio package. Tests reference these directly.
+const (
+	SupportedProtocolVersion = transport.SupportedProtocolVersion
+	JSONRPCVersion           = transport.JSONRPCVersion
+	ClientName               = transport.ClientName
+	ClientVersion            = transport.ClientVersion
 
-	// InitTimeout overrides defaultInitTimeout when > 0.
-	InitTimeout time.Duration
+	MethodInitialize         = transport.MethodInitialize
+	MethodPing               = transport.MethodPing
+	MethodToolsList          = transport.MethodToolsList
+	MethodToolsCall          = transport.MethodToolsCall
+	MethodResourcesList      = transport.MethodResourcesList
+	MethodResourcesRead      = transport.MethodResourcesRead
+	MethodResourcesSubscribe = transport.MethodResourcesSubscribe
+	MethodPromptsList        = transport.MethodPromptsList
+	MethodPromptsGet         = transport.MethodPromptsGet
 
-	// SamplingEnabled tells the pool whether to advertise the
-	// sampling capability during initialize. WP03 wires the actual
-	// handler dispatch.
-	SamplingEnabled bool
+	MethodRootsList             = transport.MethodRootsList
+	MethodSamplingCreateMessage = transport.MethodSamplingCreateMessage
 
-	// PingPeriod overrides defaultPingPeriod when > 0. WP02's
-	// healthPinger ticks at this interval.
-	PingPeriod time.Duration
+	NotificationInitialized          = transport.NotificationInitialized
+	NotificationCancelled            = transport.NotificationCancelled
+	NotificationProgress             = transport.NotificationProgress
+	NotificationMessage              = transport.NotificationMessage
+	NotificationToolsListChanged     = transport.NotificationToolsListChanged
+	NotificationResourcesListChanged = transport.NotificationResourcesListChanged
+	NotificationResourcesUpdated     = transport.NotificationResourcesUpdated
+	NotificationPromptsListChanged   = transport.NotificationPromptsListChanged
 
-	// PingTimeout overrides defaultPingTimeout when > 0.
-	PingTimeout time.Duration
-}
+	ErrCodeParseError     = transport.ErrCodeParseError
+	ErrCodeInvalidRequest = transport.ErrCodeInvalidRequest
+	ErrCodeMethodNotFound = transport.ErrCodeMethodNotFound
+	ErrCodeInvalidParams  = transport.ErrCodeInvalidParams
+	ErrCodeInternalError  = transport.ErrCodeInternalError
+)
+
+// Type aliases re-exporting transport types so existing call sites
+// in this package and downstream tests keep their original spellings.
+type (
+	RawMessage           = transport.RawMessage
+	RPCError             = transport.RPCError
+	InitializeParams     = transport.InitializeParams
+	InitializeResult     = transport.InitializeResult
+	ClientCapabilities   = transport.ClientCapabilities
+	ServerCapabilities   = transport.ServerCapabilities
+	RootsCapability      = transport.RootsCapability
+	SamplingCapability   = transport.SamplingCapability
+	Implementation       = transport.Implementation
+	ToolsCapability      = transport.ToolsCapability
+	ResourcesCapability  = transport.ResourcesCapability
+	PromptsCapability    = transport.PromptsCapability
+	LoggingCapability    = transport.LoggingCapability
+	ToolDefinition       = transport.ToolDefinition
+	ToolsListResult      = transport.ToolsListResult
+	ToolsCallParams      = transport.ToolsCallParams
+	ToolsCallResult      = transport.ToolsCallResult
+	ResourceDefinition   = transport.ResourceDefinition
+	ResourcesListResult  = transport.ResourcesListResult
+	ResourcesReadParams  = transport.ResourcesReadParams
+	ResourceContent      = transport.ResourceContent
+	ResourcesReadResult  = transport.ResourcesReadResult
+	PromptDefinition     = transport.PromptDefinition
+	PromptArgument       = transport.PromptArgument
+	PromptsListResult    = transport.PromptsListResult
+	PromptsGetParams     = transport.PromptsGetParams
+	PromptsGetResult     = transport.PromptsGetResult
+	PingResult           = transport.PingResult
+	Root                 = transport.Root
+	RootsListResult      = transport.RootsListResult
+	SamplingMessage      = transport.SamplingMessage
+	SamplingRequest      = transport.SamplingRequest
+	SamplingResponse     = transport.SamplingResponse
+	CancelledParams      = transport.CancelledParams
+	ProgressParams       = transport.ProgressParams
+	MessageParams        = transport.MessageParams
+	ResourcesUpdatedParams = transport.ResourcesUpdatedParams
+
+	SamplingHandler = transport.SamplingHandler
+	RootsHandler    = transport.RootsHandler
+	EventPublisher  = transport.EventPublisher
+
+	Framer            = transport.Framer
+	ResponseRouter    = transport.ResponseRouter
+	RingBuffer        = transport.RingBuffer
+	RecipeStatus      = transport.RecipeStatus
+	Ticker            = transport.Ticker
+	ProgressEvent     = transport.ProgressEvent
+	ProgressForwarder = transport.ProgressForwarder
+	LogSink           = transport.LogSink
+)
+
+// Function and constant re-exports used by the supervisor /
+// progress / log paths inside this package and by tests.
+var (
+	NewFramer            = transport.NewFramer
+	NewResponseRouter    = transport.NewResponseRouter
+	NewRingBuffer        = transport.NewRingBuffer
+	NewProgressForwarder = transport.NewProgressForwarder
+	NewLogSink           = transport.NewLogSink
+	mapLogLevel          = transport.MapLogLevel
+	IsSkipped            = transport.IsSkipped
+	ErrFrameTooLarge     = transport.ErrFrameTooLarge
+	LLMSamplingHandler   = transport.LLMSamplingHandler
+	DefaultRoots         = transport.DefaultRoots
+	pruneHistory         = transport.PruneHistory
+)
+
+// Aliased capacities so tests can keep referencing them by short
+// name.
+const (
+	MaxFrameBytes         = transport.MaxFrameBytes
+	RingBufferSize        = transport.RingBufferSize
+	StatusStderrTailBytes = transport.StatusStderrTailBytes
+	ProgressTopic         = transport.ProgressTopic
+)
+
+// requestEnvelope / notificationEnvelope / responseEnvelope are
+// thin internal aliases — the transport package owns the public
+// type, but using a local lowercase alias keeps the call sites
+// here readable and matches the original stdio source.
+type (
+	requestEnvelope      = transport.RequestEnvelope
+	notificationEnvelope = transport.NotificationEnvelope
+	responseEnvelope     = transport.ResponseEnvelope
+)
 
 // ServerInstance is the in-memory state for one stdio MCP server.
 // WP01 implements Spawn → Initialize → Close + tool calls. WP02
@@ -198,30 +284,12 @@ type instanceOptions struct {
 	NewTicker func(d time.Duration) Ticker
 }
 
-// Ticker abstracts time.Ticker so health.go can be driven from a
-// fake. The shape mirrors *time.Ticker exactly: a channel of times
-// + a Stop method.
-type Ticker interface {
-	C() <-chan time.Time
-	Stop()
-}
-
-// realTicker is the default Ticker — a thin wrapper around
-// *time.Ticker. The interface change is .C() instead of .C so the
-// fake doesn't need to embed a non-zero channel field.
-type realTicker struct{ t *time.Ticker }
-
-func (r *realTicker) C() <-chan time.Time { return r.t.C }
-func (r *realTicker) Stop()               { r.t.Stop() }
-
 // defaultInstanceOptions returns options wired to wallclock time.
 func defaultInstanceOptions() instanceOptions {
 	return instanceOptions{
-		Now:   time.Now,
-		Sleep: time.Sleep,
-		NewTicker: func(d time.Duration) Ticker {
-			return &realTicker{t: time.NewTicker(d)}
-		},
+		Now:       time.Now,
+		Sleep:     time.Sleep,
+		NewTicker: transport.NewRealTicker,
 	}
 }
 

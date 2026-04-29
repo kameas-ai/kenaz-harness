@@ -1,4 +1,4 @@
-package stdio
+package transport
 
 import (
 	"encoding/json"
@@ -118,7 +118,7 @@ func (p *ProgressForwarder) Handle(raw json.RawMessage) {
 	}
 	var params ProgressParams
 	if err := json.Unmarshal(raw, &params); err != nil {
-		p.logger.Debug("stdio.progress.parse_error", "err", err.Error())
+		p.logger.Debug("transport.progress.parse_error", "err", err.Error())
 		return
 	}
 	// The MCP spec lets progressToken be a string or a number. Try

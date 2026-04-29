@@ -1,4 +1,4 @@
-package stdio
+package transport
 
 import (
 	"log/slog"
@@ -80,7 +80,7 @@ func (r *ResponseRouter) Deliver(id int64, env RawMessage) bool {
 	defer r.mu.Unlock()
 	ch, ok := r.pending[id]
 	if !ok {
-		r.logger.Debug("stdio.router.late_delivery", "id", id)
+		r.logger.Debug("transport.router.late_delivery", "id", id)
 		return false
 	}
 	select {
@@ -89,7 +89,7 @@ func (r *ResponseRouter) Deliver(id int64, env RawMessage) bool {
 	default:
 		// The caller already drained or never pulled; either way we
 		// must not block the reader loop.
-		r.logger.Debug("stdio.router.dropped", "id", id)
+		r.logger.Debug("transport.router.dropped", "id", id)
 		return false
 	}
 }

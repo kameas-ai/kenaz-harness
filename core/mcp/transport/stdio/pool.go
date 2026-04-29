@@ -356,3 +356,34 @@ func isExpectedExit(err error) bool {
 		strings.Contains(msg, "signal: terminated") ||
 		strings.Contains(msg, "exit status")
 }
+
+// SetSamplingEnabled flips the per-server sampling gate. When off,
+// the reader-loop dispatch path returns -32601 to the server
+// without invoking the SamplingHandler. This is the user's consent
+// boundary — see the cost-amplification risk note in
+// transport/sampling.go.
+func (p *Pool) SetSamplingEnabled(serverID string, on bool) {
+	p.mu.RLock()
+	inst, ok := p.servers[serverID]
+	p.mu.RUnlock()
+	if !ok {
+		return
+	}
+	inst.setSamplingEnabled(on)
+}
+
+// setSamplingEnabled mutates the per-instance sampling gate under
+// the instance's lock so the reader loop's read of samplingOn
+// observes a consistent value.
+func (s *ServerInstance) setSamplingEnabled(on bool) {
+	s.mu.Lock()
+	s.samplingOn = on
+	s.mu.Unlock()
+}
+
+// SamplingEnabled reads the per-server gate. Test-only convenience.
+func (s *ServerInstance) SamplingEnabled() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.samplingOn
+}

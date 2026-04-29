@@ -1,16 +1,4 @@
-// Package stdio implements the real, full-featured MCP pool that
-// spawns child processes per the Model Context Protocol stdio
-// transport. WP01 lays the foundations: a newline-delimited JSON-RPC
-// 2.0 framer, message shapes, a per-server response router, a
-// bounded stderr ring buffer, the Spawn → Initialize → Close subset
-// of server lifecycle, and a *Pool that satisfies core/mcp.Pool.
-//
-// Subsequent work packages add resilience (auto-restart, health
-// pings — WP02), server-initiated requests (sampling, roots, log,
-// progress — WP03), and the recipes catalog + RPC view + frontend
-// (WP04..WP06). No production code path consumes this pool yet —
-// that wiring lands in WP05.
-package stdio
+package transport
 
 import (
 	"bufio"
@@ -33,7 +21,7 @@ const MaxFrameBytes = 4 * 1024 * 1024
 // inbound line is not parseable JSON. The reader loop continues on
 // this error rather than terminating the connection — empty lines
 // and stderr-style banners that landed on stdout are tolerated.
-var errSkipped = errors.New("stdio: skipped non-JSON line")
+var errSkipped = errors.New("transport: skipped non-JSON line")
 
 // IsSkipped reports whether err is the framer's "skip this line"
 // sentinel. Tests use this to assert the reader survives malformed
@@ -44,7 +32,7 @@ func IsSkipped(err error) bool { return errors.Is(err, errSkipped) }
 // MaxFrameBytes. Distinct from errSkipped: the reader treats this
 // as fatal and exits the loop, matching the spec's expectation that
 // frame-size violations are transport errors.
-var ErrFrameTooLarge = errors.New("stdio: frame exceeds 4 MiB ceiling")
+var ErrFrameTooLarge = errors.New("transport: frame exceeds 4 MiB ceiling")
 
 // Framer reads and writes newline-delimited JSON-RPC 2.0 messages
 // over an arbitrary io.Reader/io.Writer pair. Read returns one

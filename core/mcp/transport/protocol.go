@@ -1,4 +1,13 @@
-package stdio
+// Package transport hosts the transport-agnostic MCP primitives —
+// JSON-RPC framing, the response router, ring buffers, supervisor
+// helpers, status snapshots, and the Connection interface that the
+// per-transport implementations (stdio, http, sse) plug into.
+//
+// The legacy import path `github.com/sigil-tech/kaneaz-harness/core/mcp/stdio`
+// remains as a one-release alias re-exporting the symbols defined
+// here and in `transport/stdio`, so existing callers continue to
+// compile during the WP01..WP04 transport refactor.
+package transport
 
 import (
 	"context"
@@ -105,27 +114,27 @@ func (e *RPCError) Error() string {
 	return e.Message
 }
 
-// requestEnvelope is the on-wire shape of an outbound request. The
+// RequestEnvelope is the on-wire shape of an outbound request. The
 // JSON-RPC spec treats id as either a string or a number; this
 // transport always uses int64.
-type requestEnvelope struct {
+type RequestEnvelope struct {
 	JSONRPC string `json:"jsonrpc"`
 	ID      int64  `json:"id"`
 	Method  string `json:"method"`
 	Params  any    `json:"params,omitempty"`
 }
 
-// notificationEnvelope is the outbound shape for notifications
+// NotificationEnvelope is the outbound shape for notifications
 // (no id by spec).
-type notificationEnvelope struct {
+type NotificationEnvelope struct {
 	JSONRPC string `json:"jsonrpc"`
 	Method  string `json:"method"`
 	Params  any    `json:"params,omitempty"`
 }
 
-// responseEnvelope is the outbound shape for replies to
+// ResponseEnvelope is the outbound shape for replies to
 // server-initiated requests.
-type responseEnvelope struct {
+type ResponseEnvelope struct {
 	JSONRPC string          `json:"jsonrpc"`
 	ID      json.RawMessage `json:"id"`
 	Result  any             `json:"result,omitempty"`
