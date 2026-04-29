@@ -5,55 +5,24 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log/slog"
 	"strings"
 	"sync"
-	"time"
 
 	coremcp "github.com/sigil-tech/kaneaz-harness/core/mcp"
+	"github.com/sigil-tech/kaneaz-harness/core/mcp/transport"
 	"golang.org/x/sync/errgroup"
 )
 
-// PoolOptions configures a *Pool. Sampler / Roots / Broker are the
-// WP03 hooks; nil values are accepted and cause the pool to no-op
-// or reply with -32601 as appropriate. Logger defaults to
-// slog.Default.
-type PoolOptions struct {
-	Sampler SamplingHandler
-	Roots   RootsHandler
-	Broker  EventPublisher
-	Logger  *slog.Logger
-
-	// FirstByteTimeout overrides defaultFirstByteTimeout for every
-	// spawn the pool initiates. Recipes can still override per-
-	// instance via SpawnSpec.
-	FirstByteTimeout time.Duration
-	// InitTimeout overrides defaultInitTimeout for every spawn.
-	InitTimeout time.Duration
-
-	// PingPeriod overrides defaultPingPeriod for every spawn. Set
-	// to a negative value to disable health pings (used by tests
-	// that drive the ping path manually).
-	PingPeriod time.Duration
-
-	// PingTimeout overrides defaultPingTimeout for every spawn.
-	PingTimeout time.Duration
-
-	// Now is the clock-injection hook used by the supervisor for
-	// restartHistory pruning and LastRestartAt timestamps. Nil →
-	// time.Now. Tests pass a stub here to fast-forward without
-	// wallclock waits.
-	Now func() time.Time
-
-	// Sleep is the supervisor's backoff sleep. Nil → time.Sleep.
-	// Tests pass a no-op or a recordable stub.
-	Sleep func(d time.Duration)
-
-	// NewTicker is healthPinger's ticker factory. Nil →
-	// time.NewTicker. Tests can return a manually-driven Ticker to
-	// fire pings on demand.
-	NewTicker func(d time.Duration) Ticker
-}
+// PoolOptions configures a *Pool. WP02 collapses this onto the
+// shared transport.PoolOptions so the cross-transport defaults
+// (clock, sleep, ticker, ping cadence, init/first-byte deadlines,
+// handler hooks) are applied uniformly across stdio, HTTP, and SSE.
+//
+// The alias keeps source compatibility with the existing stdio
+// callers — fields are addressed by the same names — while letting
+// transport.PoolOptions.ApplyDefaults stay the single source of
+// truth for nil-pointer / zero-value fall-back behaviour.
+type PoolOptions = transport.PoolOptions
 
 // Pool is the real, full-featured stdio MCP pool. It implements
 // core/mcp.Pool. Servers are addressed by ServerSpec.Name; the
@@ -71,12 +40,32 @@ type Pool struct {
 // constructed around this type.
 var _ coremcp.Pool = (*Pool)(nil)
 
-// NewPool returns an empty pool. Open populates it. Logger
-// defaults to slog.Default when nil.
+// NewPool returns an empty pool with cross-transport defaults
+// applied via transport.PoolOptions.ApplyDefaults. Open populates
+// the pool.
 func NewPool(opts PoolOptions) *Pool {
-	if opts.Logger == nil {
-		opts.Logger = slog.Default()
-	}
+	opts.ApplyDefaults()
+	return newPool(opts)
+}
+
+// NewPoolBare returns an empty pool WITHOUT applying transport-level
+// defaults. Callers that have already merged their own defaults (e.g.
+// the WP07 Test-Connection one-shot path that wires custom hooks)
+// can use this to avoid double-application.
+//
+// Production callers should prefer NewPool. NewPoolBare is the
+// escape hatch for callers that have already filled the option
+// fields they care about and don't want the transport package's
+// defaults to overwrite future zero-value semantics they intend to
+// observe.
+func NewPoolBare(opts PoolOptions) *Pool {
+	return newPool(opts)
+}
+
+// newPool is the shared constructor; both NewPool and NewPoolBare
+// route through it so the only behaviour difference is whether
+// ApplyDefaults ran.
+func newPool(opts PoolOptions) *Pool {
 	return &Pool{
 		opts:    opts,
 		servers: make(map[string]*ServerInstance),

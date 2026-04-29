@@ -194,8 +194,11 @@ type (
 )
 
 // ServerInstance is the in-memory state for one stdio MCP server.
-// WP01 implements Spawn → Initialize → Close + tool calls. WP02
-// adds restart/health, WP03 adds server-initiated request handling.
+// WP02 re-hosts the lifecycle on top of a stdio.Connection — the
+// `transport.Connection` impl that owns the bytes-layer (subprocess
+// + framer + stderr ring buffer). The instance still drives the
+// MCP-level handshake, the response router, and the supervisor
+// restart machinery; the connection just supplies the wire.
 type ServerInstance struct {
 	id     string
 	logger *slog.Logger
@@ -228,11 +231,17 @@ type ServerInstance struct {
 	tools       []coremcp.Tool
 	initialized bool
 
-	// lifecycleMu guards every spawn-mutated field (cmd, stdin,
-	// framer, readerWG, crashCh, state, restartHistory, lastError)
-	// so the supervisor's restart cycle is atomic relative to
-	// callers and to status snapshots.
+	// lifecycleMu guards every spawn-mutated field (conn, cmd,
+	// stdin, framer, readerWG, crashCh, state, restartHistory,
+	// lastError) so the supervisor's restart cycle is atomic
+	// relative to callers and to status snapshots.
+	//
+	// cmd / stdin / framer mirror the underlying *Connection's
+	// handles. They're kept here so the existing test surface (and
+	// the supervisor's tear-down path) can reach the live process
+	// without going through the connection accessor on every read.
 	lifecycleMu    sync.Mutex
+	conn           *Connection
 	cmd            *exec.Cmd
 	stdin          io.WriteCloser
 	framer         *Framer
@@ -370,70 +379,57 @@ func (s *ServerInstance) Spawn(ctx context.Context, spec SpawnSpec) error {
 	return nil
 }
 
-// doSpawn performs one spawn attempt: exec the command, wire pipes,
-// run the initialize handshake, start the reader + stderr pump.
-// Caller holds responsibility for state transitions; doSpawn does
-// not touch the supervisor goroutines.
+// doSpawn performs one spawn attempt: open a fresh Connection
+// (which executes the command, wires pipes, and starts the stderr
+// pump), then drives the MCP initialize handshake and starts the
+// reader loop. Caller holds responsibility for state transitions;
+// doSpawn does not touch the supervisor goroutines.
+//
+// The Connection is the WP02 abstraction the per-transport pools
+// share — when WP03/WP04 land, the same handshake-and-router code
+// can drive an HTTP or SSE bytes layer simply by swapping the
+// Connection implementation.
 func (s *ServerInstance) doSpawn(ctx context.Context, spec SpawnSpec) error {
-	firstByte := spec.FirstByteTimeout
-	if firstByte <= 0 {
-		firstByte = defaultFirstByteTimeout
-	}
 	initTimeout := spec.InitTimeout
 	if initTimeout <= 0 {
 		initTimeout = defaultInitTimeout
 	}
 
-	// exec.Command (not CommandContext) detaches the process
-	// lifetime from the caller's ctx — the spawned server should
-	// outlive Open and only die via the explicit Close path.
-	// Cancellation of the spawn ctx still reaches the handshake via
-	// the doInitialize select.
-	cmd := exec.Command(spec.Command[0], spec.Command[1:]...)
-	cmd.Env = mergeEnv(spec.Env)
-
-	stdin, err := cmd.StdinPipe()
-	if err != nil {
-		return fmt.Errorf("stdio: stdin pipe: %w", err)
-	}
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		return fmt.Errorf("stdio: stdout pipe: %w", err)
-	}
-	stderr, err := cmd.StderrPipe()
-	if err != nil {
-		return fmt.Errorf("stdio: stderr pipe: %w", err)
+	// Build and open the bytes-layer Connection. The Connection
+	// owns the subprocess, the framer, and the stderr pump; once
+	// Open returns the wire is ready for an MCP initialize.
+	conn := NewConnection(spec, s.logger)
+	// Reuse the instance-scoped ring buffer so the legacy
+	// StderrTail accessor keeps returning the same buffer the
+	// stderr pump fills, even across restart cycles.
+	conn.stderr = s.stderr
+	if err := conn.Open(ctx); err != nil {
+		return err
 	}
 
-	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("stdio: start %q: %w", spec.Command[0], err)
-	}
-
-	// Allocate this generation's plumbing under the lifecycle mutex
-	// so the supervisor / status snapshots can't observe a half-
-	// initialized instance during restart.
+	// Mirror the Connection's handles into the lifecycle fields
+	// under lifecycleMu so the supervisor / status snapshots / test
+	// hooks (Cmd, killProcessForTest) observe a coherent
+	// generation. cmd / stdin / framer all derive from conn — they
+	// are pointer mirrors, not independent state.
 	s.lifecycleMu.Lock()
-	s.cmd = cmd
-	s.stdin = stdin
-	s.framer = NewFramer(newFirstByteReader(stdout, firstByte), stdin)
+	s.conn = conn
+	s.cmd = conn.Cmd()
+	s.stdin = conn.Stdin()
+	s.framer = conn.Framer()
 	s.crashCh = make(chan struct{})
 	s.crashOnce = &sync.Once{}
 	s.lifecycleMu.Unlock()
-
-	// Pump stderr into the ring buffer eagerly so initialize
-	// failures still show useful context.
-	s.readerWG.Add(1)
-	go s.pumpStderr(stderr)
 
 	// Run initialize before the reader loop so we can surface the
 	// handshake error directly. doInitialize starts the reader
 	// loop on success so post-init bookkeeping (tools/list refresh)
 	// can rely on the router.
 	if err := s.doInitialize(ctx, initTimeout, spec.SamplingEnabled); err != nil {
-		// Tear the process down; we still need stderr-pump and Wait.
-		_ = stdin.Close()
-		_ = cmd.Process.Kill()
-		_ = cmd.Wait()
+		// Tear the connection down. Connection.Close handles the
+		// stdin-close / SIGKILL / Wait + stderr-pump drain so we
+		// don't have to replay the sequence here.
+		_ = conn.Close()
 		s.readerWG.Wait()
 		return err
 	}
@@ -835,24 +831,10 @@ func (s *ServerInstance) handleNotification(msg RawMessage) {
 	}
 }
 
-// pumpStderr forwards every byte of the child's stderr into the
-// ring buffer. Returns when the pipe is closed (process exit).
-func (s *ServerInstance) pumpStderr(rc io.ReadCloser) {
-	defer s.readerWG.Done()
-	buf := make([]byte, 4*1024)
-	for {
-		n, err := rc.Read(buf)
-		if n > 0 {
-			_, _ = s.stderr.Write(buf[:n])
-		}
-		if err != nil {
-			return
-		}
-	}
-}
-
 // StderrTail returns up to maxBytes of the most recent stderr
-// content. Used by RecipeStatus in WP04.
+// content. The Connection's stderr pump fills the same RingBuffer
+// referenced here (set on doSpawn via conn.stderr = s.stderr) so
+// the snapshot stays consistent across restart cycles.
 func (s *ServerInstance) StderrTail(maxBytes int) string {
 	return s.stderr.Snapshot(maxBytes)
 }
@@ -869,6 +851,12 @@ func (s *ServerInstance) Negotiated() InitializeResult {
 // process to exit on its own, then SIGKILLs and reaps. All reader
 // goroutines (including the WP02 supervisor + healthPinger) have
 // exited by the time Close returns. Idempotent.
+//
+// The actual subprocess teardown is delegated to Connection.Close,
+// which owns the stdin-close → grace-wait → SIGKILL → stderr-pump
+// drain sequence. ServerInstance.Close adds the MCP-level
+// bookkeeping: cancel pending router calls, signal supervisor /
+// healthPinger to exit via doneCh, then wait for both.
 func (s *ServerInstance) Close(ctx context.Context) error {
 	s.closeOnce.Do(func() {
 		// Mark the instance as closing so the reader/writer paths
@@ -881,44 +869,46 @@ func (s *ServerInstance) Close(ctx context.Context) error {
 		// restart while we're in the middle of tearing down.
 		close(s.doneCh)
 
-		// Snapshot the per-generation plumbing under the lifecycle
-		// lock so we don't race with an in-flight restart.
+		// Snapshot the live Connection under the lifecycle lock so
+		// we don't race with an in-flight restart.
 		s.lifecycleMu.Lock()
-		stdin := s.stdin
-		cmd := s.cmd
+		conn := s.conn
 		s.lifecycleMu.Unlock()
 
-		// Closing stdin first asks the server to shut down via the
-		// framing convention (EOF on stdin = "we're done").
-		if stdin != nil {
-			_ = stdin.Close()
-		}
 		// Cancel pending requests so callers unblock immediately.
 		s.router.CancelAll()
 
-		exitCh := make(chan error, 1)
-		if cmd != nil {
-			go func() { exitCh <- cmd.Wait() }()
+		// Connection.Close owns the stdin-close + SIGKILL + Wait +
+		// stderr-pump drain. We respect a tighter ctx deadline by
+		// racing Close against a deadline ticker.
+		closeErrCh := make(chan error, 1)
+		if conn != nil {
+			go func() { closeErrCh <- conn.Close() }()
 		} else {
-			close(exitCh)
+			close(closeErrCh)
 		}
 
-		// Use ctx deadline if it's tighter than closeGrace; else
-		// fall back to closeGrace.
-		grace := closeGrace
+		grace := closeGrace + time.Second // slack over Connection's own grace
 		if dl, ok := ctx.Deadline(); ok {
 			if d := time.Until(dl); d < grace {
 				grace = d
 			}
 		}
 		select {
-		case err := <-exitCh:
+		case err := <-closeErrCh:
 			s.closeErr = err
 		case <-time.After(grace):
-			if cmd != nil && cmd.Process != nil {
-				_ = cmd.Process.Kill()
+			// Connection.Close hasn't returned in time — force the
+			// process down and wait. Connection's internal timer
+			// will SIGKILL on the next tick; this branch just
+			// surfaces the error.
+			if conn != nil {
+				cmd := conn.Cmd()
+				if cmd != nil && cmd.Process != nil {
+					_ = cmd.Process.Kill()
+				}
 			}
-			s.closeErr = <-exitCh
+			s.closeErr = <-closeErrCh
 		}
 		s.readerWG.Wait()
 		s.supervisorWG.Wait()

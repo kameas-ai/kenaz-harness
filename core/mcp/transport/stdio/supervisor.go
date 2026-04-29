@@ -76,8 +76,8 @@ func (s *ServerInstance) attemptRestart() bool {
 	// One-time tear-down of the generation that just crashed.
 	s.lifecycleMu.Lock()
 	s.state = StateRestarting
+	prevConn := s.conn
 	prevCmd := s.cmd
-	prevStdin := s.stdin
 	s.lifecycleMu.Unlock()
 
 	// Cancel any pending callers immediately — they'll see
@@ -85,13 +85,16 @@ func (s *ServerInstance) attemptRestart() bool {
 	// over while we restart.
 	s.router.CancelAll()
 
-	// Reap the previous process. SIGKILL guarantees we don't leak
-	// a zombie even if the crash signal came from the writer side
-	// (process may still be alive briefly).
-	if prevStdin != nil {
-		_ = prevStdin.Close()
-	}
-	if prevCmd != nil && prevCmd.Process != nil {
+	// Reap the previous Connection. Connection.Close handles the
+	// stdin-close + grace + SIGKILL + Wait + stderr-pump drain
+	// idempotently, so the supervisor doesn't have to replay the
+	// sequence by hand.
+	if prevConn != nil {
+		_ = prevConn.Close()
+	} else if prevCmd != nil && prevCmd.Process != nil {
+		// Defensive fallback for a state where conn is nil but a
+		// cmd was registered (shouldn't happen post-WP02; kept for
+		// safety until the migration settles).
 		_ = prevCmd.Process.Kill()
 		_ = prevCmd.Wait()
 	}
