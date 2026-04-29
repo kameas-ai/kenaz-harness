@@ -1,0 +1,10 @@
+{
+  "created_at": "2026-04-29T15:53:41.296186+00:00",
+  "friendly_name": "save artifact builtin",
+  "mission_id": "01KQCZ4C365FX08C68ZYFYS28N",
+  "mission_number": null,
+  "mission_slug": "save-artifact-builtin-01KQCZ4C",
+  "mission_type": "software-dev",
+  "slug": "save-artifact-builtin-01KQCZ4C",
+  "target_branch": "main"
+}
