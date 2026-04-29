@@ -2932,7 +2932,48 @@ export namespace slashcmd {
 
 }
 
-export namespace stdio {
+export namespace tools {
+	
+	export class RecipeListing {
+	    recipe: recipes.Recipe;
+	    enabled: boolean;
+	    status: transport.RecipeStatus;
+	    keysPresent: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new RecipeListing(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.recipe = this.convertValues(source["recipe"], recipes.Recipe);
+	        this.enabled = source["enabled"];
+	        this.status = this.convertValues(source["status"], transport.RecipeStatus);
+	        this.keysPresent = source["keysPresent"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+
+}
+
+export namespace transport {
 	
 	export class RecipeStatus {
 	    id: string;
@@ -2976,47 +3017,6 @@ export namespace stdio {
 	        this.prompt_count = source["prompt_count"];
 	        this.stderr_tail = source["stderr_tail"];
 	        this.updated_at = this.convertValues(source["updated_at"], null);
-	    }
-	
-		convertValues(a: any, classs: any, asMap: boolean = false): any {
-		    if (!a) {
-		        return a;
-		    }
-		    if (a.slice && a.map) {
-		        return (a as any[]).map(elem => this.convertValues(elem, classs));
-		    } else if ("object" === typeof a) {
-		        if (asMap) {
-		            for (const key of Object.keys(a)) {
-		                a[key] = new classs(a[key]);
-		            }
-		            return a;
-		        }
-		        return new classs(a);
-		    }
-		    return a;
-		}
-	}
-
-}
-
-export namespace tools {
-	
-	export class RecipeListing {
-	    recipe: recipes.Recipe;
-	    enabled: boolean;
-	    status: stdio.RecipeStatus;
-	    keysPresent: boolean;
-	
-	    static createFrom(source: any = {}) {
-	        return new RecipeListing(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.recipe = this.convertValues(source["recipe"], recipes.Recipe);
-	        this.enabled = source["enabled"];
-	        this.status = this.convertValues(source["status"], stdio.RecipeStatus);
-	        this.keysPresent = source["keysPresent"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {

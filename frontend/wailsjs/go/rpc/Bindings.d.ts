@@ -24,7 +24,7 @@ import {sessions} from '../models';
 import {context} from '../models';
 import {settings} from '../models';
 import {slashcmd} from '../models';
-import {stdio} from '../models';
+import {transport} from '../models';
 import {tools} from '../models';
 import {trust} from '../models';
 import {workflow} from '../models';
@@ -353,13 +353,13 @@ export function Slash_List():Promise<Array<slashcmd.CommandInfo>>;
 
 export function Tools_ForgetRecipeKey(arg1:string,arg2:string):Promise<void>;
 
-export function Tools_InstallRecipe(arg1:string,arg2:Record<string, string>,arg3:Record<string, any>):Promise<stdio.RecipeStatus>;
+export function Tools_InstallRecipe(arg1:string,arg2:Record<string, string>,arg3:Record<string, any>):Promise<transport.RecipeStatus>;
 
 export function Tools_ListRecipes():Promise<Array<tools.RecipeListing>>;
 
 export function Tools_RecipeConfig(arg1:string):Promise<Record<string, any>>;
 
-export function Tools_RecipeStatus(arg1:string):Promise<stdio.RecipeStatus>;
+export function Tools_RecipeStatus(arg1:string):Promise<transport.RecipeStatus>;
 
 export function Tools_UninstallRecipe(arg1:string):Promise<void>;
 
