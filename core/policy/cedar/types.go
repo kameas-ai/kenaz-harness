@@ -2,6 +2,7 @@ package cedar
 
 import (
 	"strings"
+	"unicode"
 
 	cedar "github.com/cedar-policy/cedar-go"
 )
@@ -30,6 +31,25 @@ const (
 	// `~/.ssh`" with a single forbid rule.
 	ActionStateRead  = "state_read"
 	ActionStateWrite = "state_write"
+
+	// Action UIDs introduced by mission cedar-credential-policy-01KQ8TDE
+	// (WP01). They identify the four resource families that the
+	// universal interactive permission system gates:
+	//
+	//   ActionUseCredential    — Credential::"<provider-id>::<purpose>"
+	//   ActionRunBashCommand   — BashCommand::"<argv-pattern>"
+	//   ActionReadFilesystem   — FilesystemOp::"<canonical-path>" (read)
+	//   ActionWriteFilesystem  — FilesystemOp::"<canonical-path>" (write)
+	//   ActionUseTool          — Tool::"<fully-qualified-tool-name>"
+	//
+	// These coexist with the broader `tool_exec` / `file_*` actions
+	// from agent-kernel-graph; consumers gradually migrate to the
+	// finer-grained surface as each WP lands.
+	ActionUseCredential   = "use_credential"
+	ActionRunBashCommand  = "run_bash_command"
+	ActionReadFilesystem  = "read_filesystem"
+	ActionWriteFilesystem = "write_filesystem"
+	ActionUseTool         = "use_tool"
 )
 
 // Entity-type names mirror spec §4.10's recommended mapping:
@@ -55,6 +75,14 @@ const (
 	// "history" for read; "file", "artifact", "trace" for write).
 	EntityTypeStateSource = "State"
 	EntityTypeStateTarget = "State"
+
+	// Entity-type names introduced by mission
+	// cedar-credential-policy-01KQ8TDE (WP01). The Tool entity already
+	// exists from the agent-kernel-graph mission (chat-runner gate);
+	// the new families add Credential, BashCommand, and FilesystemOp.
+	EntityTypeCredential   = "Credential"
+	EntityTypeBashCommand  = "BashCommand"
+	EntityTypeFilesystemOp = "FilesystemOp"
 
 	// PrincipalLocal is the canonical EntityUID id for the single
 	// local user. The harness is single-user / privacy-first
@@ -164,4 +192,109 @@ func UserUID() cedar.EntityUID {
 // produce a valid UID but match nothing in the default policy.
 func ActionUID(name string) cedar.EntityUID {
 	return cedar.NewEntityUID(EntityTypeAction, cedar.String(name))
+}
+
+// invalidUIDID is the canonical replacement-id substituted when one of
+// the family-aware UID constructors below rejects malformed input. The
+// resource-type stays unchanged so the policy bundle's `resource is
+// <T>` clauses keep type-matching, but the literal value is something
+// no realistic call site would ever match — a typo therefore never
+// silently authorises against a permit policy.
+const invalidUIDID = "invalid"
+
+// validateFamilyID checks a resource-id fragment is safe to embed in a
+// Cedar EntityUID literal for the WP01 resource families. The four
+// invariants below mirror the spec's threat model (FR-009, FR-017):
+//
+//   - Empty strings collapse the family namespace ("Tool::\"\"" matches
+//     no realistic call site, but a typo here would silently bypass
+//     intended denies).
+//   - Control characters and the NUL byte are rejected because they
+//     can corrupt log lines, audit records, and downstream consumers
+//     that assume printable IDs.
+//   - Leading `..` is rejected to prevent path-traversal-style abuse
+//     of the FilesystemOp / BashCommand UIDs (and to harmonise with
+//     the spec's `..`-rejection rule for FilesystemOp paths).
+//
+// The function returns true when id is acceptable. Callers use the
+// boolean to swap in invalidUIDID without forfeiting the family type.
+func validateFamilyID(id string) bool {
+	if id == "" {
+		return false
+	}
+	if strings.HasPrefix(id, "..") {
+		return false
+	}
+	for _, r := range id {
+		if r == 0 {
+			return false
+		}
+		if unicode.IsControl(r) {
+			return false
+		}
+	}
+	return true
+}
+
+// CredentialUID builds a Cedar EntityUID for the Credential family
+// introduced in WP01. The id encodes the provider id and the access
+// purpose using the spec §3 "<provider-id>::<purpose>" shape (e.g.
+// "openai::provider_call"). Callers SHOULD pass a non-empty provider
+// and a member of the credstore.AccessPurpose enum; malformed input
+// (empty / control chars / leading "..") is replaced with the literal
+// "invalid" so the resulting UID type-matches in policy `is Credential`
+// clauses but never satisfies any real permit.
+func CredentialUID(provider, purpose string) cedar.EntityUID {
+	id := provider + "::" + purpose
+	if !validateFamilyID(provider) || !validateFamilyID(purpose) {
+		id = invalidUIDID
+	}
+	return cedar.NewEntityUID(EntityTypeCredential, cedar.String(id))
+}
+
+// BashCommandUID builds a Cedar EntityUID for the BashCommand family.
+// pattern is the derived "argv[0] [argv[1]?]" pattern from FR-014
+// (e.g. "git status", "ls", "run.sh"). Pattern derivation lives in
+// `core/tools/bash/pattern.go` (WP03); this constructor only validates
+// and embeds. Empty / control-char / leading-".." patterns are
+// replaced with the literal "invalid".
+func BashCommandUID(pattern string) cedar.EntityUID {
+	id := pattern
+	if !validateFamilyID(pattern) {
+		id = invalidUIDID
+	}
+	return cedar.NewEntityUID(EntityTypeBashCommand, cedar.String(id))
+}
+
+// FilesystemOpUID builds a Cedar EntityUID for the FilesystemOp family.
+// canonicalPath is the `filepath.Abs` + `filepath.Clean`'d path from
+// FR-017 (e.g. "/Users/alec/projects/kaneaz/main.go"). Callers MUST
+// canonicalise the path before invoking this constructor; the
+// constructor itself only enforces the universal "no empty / no
+// control / no leading .." invariant — it does NOT re-canonicalise so
+// the caller's traversal-rejection layer keeps a single source of
+// truth.
+func FilesystemOpUID(canonicalPath string) cedar.EntityUID {
+	id := canonicalPath
+	if !validateFamilyID(canonicalPath) {
+		id = invalidUIDID
+	}
+	return cedar.NewEntityUID(EntityTypeFilesystemOp, cedar.String(id))
+}
+
+// PermissionToolUID builds a Cedar EntityUID for the Tool family in
+// the WP01 universal-permission shape. toolName is the fully qualified
+// "<server>__<tool>" name (e.g. "kaneaz__bash", "filesystem__write_file").
+// This constructor differs from the older ToolUID(server, tool) helper
+// — that one composes the id from two arguments and is kept for
+// backwards compatibility with the agent-kernel-graph chat-runner
+// gate. New gate sites that already have the canonical fully-qualified
+// name (mcp registry, recipe metadata) call PermissionToolUID directly
+// to avoid re-splitting + re-joining.
+func PermissionToolUID(toolName string) cedar.EntityUID {
+	id := toolName
+	if !validateFamilyID(toolName) {
+		id = invalidUIDID
+	}
+	return cedar.NewEntityUID(EntityTypeTool, cedar.String(id))
 }

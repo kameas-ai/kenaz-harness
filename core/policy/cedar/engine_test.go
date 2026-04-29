@@ -162,10 +162,11 @@ func TestEngine_ReloadFromDisk(t *testing.T) {
 		t.Fatalf("NewEngine: %v", err)
 	}
 
-	// Listing should report 3 files (embedded + 2 disk).
+	// Listing should report 7 files: the 5 embedded defaults
+	// (default_policy + the four WP01 family defaults) + 2 disk files.
 	files := e.ListPolicies()
-	if len(files) != 3 {
-		t.Fatalf("ListPolicies len=%d, want 3", len(files))
+	if len(files) != 7 {
+		t.Fatalf("ListPolicies len=%d, want 7", len(files))
 	}
 	if !files[0].Embedded {
 		t.Fatalf("first file should be embedded default, got %+v", files[0])
@@ -364,5 +365,245 @@ func TestPolicyDeniedError_Sentinel(t *testing.T) {
 	pe := &PolicyDeniedError{Decision: d}
 	if !IsPolicyDenied(pe) {
 		t.Fatalf("direct PolicyDeniedError should match")
+	}
+}
+
+// =====================================================================
+// WP01 — universal-permission family acceptance tests.
+// =====================================================================
+//
+// The four resource families share the same engine but exercise four
+// independent default-policy files. The cases below mirror the WP01
+// acceptance matrix verbatim:
+//
+//   Credential family:
+//     - mcp_spawn          → NotApplicable (no rule covers it)
+//     - manual_export      → Deny (forbid in default_credential_policy)
+//     - provider_call      → Allow (permit in default_credential_policy)
+//
+//   Bash family:
+//     - any pattern        → NotApplicable (header-only default policy)
+//
+//   Filesystem family:
+//     - read inside recipe-dir  → Allow
+//     - write inside recipe-dir → NotApplicable
+//     - read outside recipe-dir → NotApplicable
+//     - write outside recipe-dir→ NotApplicable
+//
+//   Tool family:
+//     - kaneaz__bash       → Allow (server_name=="kaneaz")
+//     - filesystem__read   → NotApplicable (non-builtin)
+
+// TestEvaluate_Family_Credential covers FR-002.
+func TestEvaluate_Family_Credential(t *testing.T) {
+	t.Parallel()
+	e, err := NewEngine(Options{IncludeEmbedded: true})
+	if err != nil {
+		t.Fatalf("NewEngine: %v", err)
+	}
+	cases := []struct {
+		name    string
+		purpose string
+		want    Outcome
+	}{
+		{"mcp_spawn-not-applicable", "mcp_spawn", NotApplicable},
+		{"manual_export-deny", "manual_export", Deny},
+		{"provider_call-allow", "provider_call", Allow},
+		{"provider_test-allow", "provider_test", Allow},
+		{"tool_dispatch-allow", "tool_dispatch", Allow},
+		{"unknown-purpose-not-applicable", "future_purpose", NotApplicable},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			d := e.Evaluate(
+				context.Background(),
+				UserUID(),
+				ActionUseCredential,
+				CredentialUID("openai", tc.purpose),
+				map[cedarlib.String]cedarlib.Value{
+					cedarlib.String(CtxKeyPurpose): cedarlib.String(tc.purpose),
+				},
+			)
+			if d.Outcome != tc.want {
+				t.Fatalf("purpose=%q: outcome=%s (reason=%s) want %s",
+					tc.purpose, d.Outcome, d.Reason, tc.want)
+			}
+		})
+	}
+}
+
+// TestEvaluate_Family_Bash covers FR-003 — every bash request is
+// NotApplicable against the empty default bundle.
+func TestEvaluate_Family_Bash(t *testing.T) {
+	t.Parallel()
+	e, err := NewEngine(Options{IncludeEmbedded: true})
+	if err != nil {
+		t.Fatalf("NewEngine: %v", err)
+	}
+	cases := []struct {
+		name    string
+		pattern string
+	}{
+		{"git-status", "git status"},
+		{"ls", "ls"},
+		{"rm-dangerous", "rm"},
+		{"sudo-dangerous", "sudo"},
+		{"unknown", "kubectl get"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			d := e.Evaluate(
+				context.Background(),
+				UserUID(),
+				ActionRunBashCommand,
+				BashCommandUID(tc.pattern),
+				nil,
+			)
+			if d.Outcome != NotApplicable {
+				t.Fatalf("pattern=%q: outcome=%s want NotApplicable",
+					tc.pattern, d.Outcome)
+			}
+		})
+	}
+}
+
+// TestEvaluate_Family_Filesystem covers FR-004.
+func TestEvaluate_Family_Filesystem(t *testing.T) {
+	t.Parallel()
+	e, err := NewEngine(Options{IncludeEmbedded: true})
+	if err != nil {
+		t.Fatalf("NewEngine: %v", err)
+	}
+	cases := []struct {
+		name        string
+		action      string
+		path        string
+		recipeMatch bool
+		want        Outcome
+	}{
+		{"read-inside-recipe-dir-allow", ActionReadFilesystem, "/Users/alec/recipe/notes.md", true, Allow},
+		{"write-inside-recipe-dir-not-applicable", ActionWriteFilesystem, "/Users/alec/recipe/notes.md", true, NotApplicable},
+		{"read-outside-recipe-dir-not-applicable", ActionReadFilesystem, "/etc/passwd", false, NotApplicable},
+		{"write-outside-recipe-dir-not-applicable", ActionWriteFilesystem, "/etc/passwd", false, NotApplicable},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			d := e.Evaluate(
+				context.Background(),
+				UserUID(),
+				tc.action,
+				FilesystemOpUID(tc.path),
+				map[cedarlib.String]cedarlib.Value{
+					cedarlib.String(CtxKeyRecipeDirMatch): cedarlib.Boolean(tc.recipeMatch),
+				},
+			)
+			if d.Outcome != tc.want {
+				t.Fatalf("%s on %q (recipeMatch=%v): outcome=%s (reason=%s) want %s",
+					tc.action, tc.path, tc.recipeMatch, d.Outcome, d.Reason, tc.want)
+			}
+		})
+	}
+}
+
+// TestEvaluate_Family_Tool covers FR-005.
+func TestEvaluate_Family_Tool(t *testing.T) {
+	t.Parallel()
+	e, err := NewEngine(Options{IncludeEmbedded: true})
+	if err != nil {
+		t.Fatalf("NewEngine: %v", err)
+	}
+	cases := []struct {
+		name string
+		uid  string
+		want Outcome
+	}{
+		{"builtin-bash-allow", "kaneaz__bash", Allow},
+		{"builtin-websearch-allow", "kaneaz__websearch", Allow},
+		{"builtin-save-artifact-allow", "kaneaz__save_artifact", Allow},
+		{"mcp-filesystem-not-applicable", "filesystem__read_file", NotApplicable},
+		{"mcp-postgres-not-applicable", "postgres__query", NotApplicable},
+		{"no-server-not-applicable", "bare_tool", NotApplicable},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			d := e.Evaluate(
+				context.Background(),
+				UserUID(),
+				ActionUseTool,
+				PermissionToolUID(tc.uid),
+				nil,
+			)
+			if d.Outcome != tc.want {
+				t.Fatalf("tool=%q: outcome=%s (reason=%s) want %s",
+					tc.uid, d.Outcome, d.Reason, tc.want)
+			}
+		})
+	}
+}
+
+// TestFamilyUIDValidation asserts the UID constructors reject malformed
+// ids per the WP01 acceptance criteria. The replacement value is the
+// literal "invalid" so policy `is <Type>` clauses keep type-matching
+// (preventing silent bypasses) while never satisfying realistic
+// permits.
+func TestFamilyUIDValidation(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		got  string
+		want string
+	}{
+		// Credential
+		{"credential-empty-provider", CredentialUID("", "provider_call").String(), `Credential::"invalid"`},
+		{"credential-empty-purpose", CredentialUID("openai", "").String(), `Credential::"invalid"`},
+		{"credential-traversal-provider", CredentialUID("..foo", "provider_call").String(), `Credential::"invalid"`},
+		{"credential-control-char", CredentialUID("open\x01ai", "provider_call").String(), `Credential::"invalid"`},
+		{"credential-nul", CredentialUID("openai", "purpose\x00bad").String(), `Credential::"invalid"`},
+		{"credential-ok", CredentialUID("openai", "provider_call").String(), `Credential::"openai::provider_call"`},
+
+		// BashCommand
+		{"bash-empty", BashCommandUID("").String(), `BashCommand::"invalid"`},
+		{"bash-traversal", BashCommandUID("../bash").String(), `BashCommand::"invalid"`},
+		{"bash-control", BashCommandUID("git\nstatus").String(), `BashCommand::"invalid"`},
+		{"bash-nul", BashCommandUID("git\x00status").String(), `BashCommand::"invalid"`},
+		{"bash-ok", BashCommandUID("git status").String(), `BashCommand::"git status"`},
+
+		// FilesystemOp
+		{"fs-empty", FilesystemOpUID("").String(), `FilesystemOp::"invalid"`},
+		{"fs-traversal-leading", FilesystemOpUID("../etc/passwd").String(), `FilesystemOp::"invalid"`},
+		{"fs-control", FilesystemOpUID("/tmp/\x07a").String(), `FilesystemOp::"invalid"`},
+		{"fs-nul", FilesystemOpUID("/tmp/a\x00b").String(), `FilesystemOp::"invalid"`},
+		{"fs-ok", FilesystemOpUID("/Users/alec/notes.md").String(), `FilesystemOp::"/Users/alec/notes.md"`},
+
+		// Tool (universal shape)
+		{"tool-empty", PermissionToolUID("").String(), `Tool::"invalid"`},
+		{"tool-traversal", PermissionToolUID("..bad").String(), `Tool::"invalid"`},
+		{"tool-control", PermissionToolUID("kaneaz__\tbash").String(), `Tool::"invalid"`},
+		{"tool-nul", PermissionToolUID("kaneaz__bash\x00").String(), `Tool::"invalid"`},
+		{"tool-ok", PermissionToolUID("kaneaz__bash").String(), `Tool::"kaneaz__bash"`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.got != tc.want {
+				t.Fatalf("got %q want %q", tc.got, tc.want)
+			}
+		})
+	}
+}
+
+// TestPopulateFamilyContext_NonFamilyAction is a regression guard: the
+// agent-kernel-graph callers (tool_exec, file_read, model_select,
+// memory_write) MUST keep their existing nil-context behaviour. The
+// helper short-circuits on non-family actions so these stay unaffected.
+func TestPopulateFamilyContext_NonFamilyAction(t *testing.T) {
+	t.Parallel()
+	in := map[cedarlib.String]cedarlib.Value(nil)
+	out := populateFamilyContext(ActionToolExec, ToolUID("filesystem", "list"), in)
+	if out != nil {
+		t.Fatalf("non-family action should leave context untouched, got %v", out)
 	}
 }

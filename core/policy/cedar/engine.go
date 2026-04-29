@@ -25,9 +25,55 @@ import (
 //go:embed policies/default_policy.cedar
 var defaultPolicySource []byte
 
+// defaultCredentialPolicySource is the embedded Credential-family
+// default for mission cedar-credential-policy-01KQ8TDE (WP01). See the
+// file's leading comment for the exact posture; the short form is
+// "permit routine purposes, forbid manual_export, leave mcp_spawn
+// implicit so the prompt flow handles it".
+//
+//go:embed policies/default_credential_policy.cedar
+var defaultCredentialPolicySource []byte
+
+// defaultBashPolicySource is the embedded BashCommand-family default.
+// Header-only by design — every command starts as NotApplicable; the
+// universal prompt flow takes over.
+//
+//go:embed policies/default_bash_policy.cedar
+var defaultBashPolicySource []byte
+
+// defaultFilesystemPolicySource is the embedded FilesystemOp-family
+// default. Permits reads inside recipe-declared directories (via the
+// `recipe_dir_match` context attribute); everything else falls
+// through to the prompt flow.
+//
+//go:embed policies/default_filesystem_policy.cedar
+var defaultFilesystemPolicySource []byte
+
+// defaultToolPolicySource is the embedded Tool-family default for the
+// universal permission system. Permits built-in `kaneaz__*` tools by
+// matching on the `server_name` context attribute; non-builtin tools
+// fall through to NotApplicable + prompt.
+//
+//go:embed policies/default_tool_policy.cedar
+var defaultToolPolicySource []byte
+
 // DefaultPolicyName is the synthetic filename used when reporting the
 // embedded policy to the frontend.
 const DefaultPolicyName = "default_policy.cedar"
+
+// DefaultCredentialPolicyName / DefaultBashPolicyName /
+// DefaultFilesystemPolicyName / DefaultToolPolicyName are the
+// synthetic filenames the per-family embedded bundles surface as in
+// `Engine.ListPolicies`. They mirror the on-disk names so the audit
+// view does not distinguish between embedded and on-disk variants of
+// the same file (the user's accumulated `.cedar` files in
+// `<DataDir>/policy/` compose with the embedded set).
+const (
+	DefaultCredentialPolicyName = "default_credential_policy.cedar"
+	DefaultBashPolicyName       = "default_bash_policy.cedar"
+	DefaultFilesystemPolicyName = "default_filesystem_policy.cedar"
+	DefaultToolPolicyName       = "default_tool_policy.cedar"
+)
 
 // PolicyDir is the directory under DataDir where user-authored
 // .cedar files live. Engine.Reload walks this directory on each call.
@@ -38,12 +84,12 @@ const PolicyDir = "policy"
 // surface compact; the frontend opens the file directly if it needs
 // to display source.
 type PolicyFile struct {
-	Name      string `json:"name"`
-	Path      string `json:"path"`
-	Bytes     int    `json:"bytes"`
-	Embedded  bool   `json:"embedded"`
-	ParseOK   bool   `json:"parse_ok"`
-	ParseErr  string `json:"parse_err,omitempty"`
+	Name     string `json:"name"`
+	Path     string `json:"path"`
+	Bytes    int    `json:"bytes"`
+	Embedded bool   `json:"embedded"`
+	ParseOK  bool   `json:"parse_ok"`
+	ParseErr string `json:"parse_err,omitempty"`
 }
 
 // Options configures a new Engine.
@@ -165,15 +211,31 @@ func (e *Engine) Reload(ctx context.Context) error {
 	)
 
 	if e.opts.IncludeEmbedded {
-		sources = append(sources, policySource{
-			name:  DefaultPolicyName,
-			bytes: defaultPolicySource,
-		})
-		files = append(files, PolicyFile{
-			Name:     DefaultPolicyName,
-			Bytes:    len(defaultPolicySource),
-			Embedded: true,
-		})
+		// The base agent-kernel-graph default plus the four
+		// permission-family defaults from WP01. Order matters only
+		// for cosmetic listing; Cedar's permit/forbid semantics are
+		// commutative across files.
+		embedded := []struct {
+			name  string
+			bytes []byte
+		}{
+			{DefaultPolicyName, defaultPolicySource},
+			{DefaultCredentialPolicyName, defaultCredentialPolicySource},
+			{DefaultBashPolicyName, defaultBashPolicySource},
+			{DefaultFilesystemPolicyName, defaultFilesystemPolicySource},
+			{DefaultToolPolicyName, defaultToolPolicySource},
+		}
+		for _, em := range embedded {
+			sources = append(sources, policySource{
+				name:  em.name,
+				bytes: em.bytes,
+			})
+			files = append(files, PolicyFile{
+				Name:     em.name,
+				Bytes:    len(em.bytes),
+				Embedded: true,
+			})
+		}
 	}
 
 	if e.opts.LoadFromDisk {
@@ -319,6 +381,7 @@ func (e *Engine) Evaluate(
 		// no forbids). DefaultDeny decides the final outcome.
 		ps = cedar.NewPolicySet()
 	}
+	contextAttrs = populateFamilyContext(action, resource, contextAttrs)
 	req := cedar.Request{
 		Principal: principal,
 		Action:    ActionUID(action),
@@ -373,4 +436,144 @@ func IsPolicyDenied(err error) bool {
 type policySource struct {
 	name  string
 	bytes []byte
+}
+
+// Context-attr keys consulted by the family-default policies. Exported
+// so consumers in WP02–WP08 (bash gate, fs gate, tool gate) can build
+// their context maps with the same keys the embedded policy bundle
+// reads against — no chance of a typo splitting the namespace.
+const (
+	// Credential family.
+	CtxKeyPurpose = "purpose"
+
+	// BashCommand family.
+	CtxKeyPattern       = "pattern"
+	CtxKeyDangerousTier = "dangerous_tier"
+	CtxKeyWorkingDir    = "working_dir"
+
+	// FilesystemOp family.
+	CtxKeyCanonicalPath  = "canonical_path"
+	CtxKeyRecipeDirMatch = "recipe_dir_match"
+
+	// Tool family.
+	CtxKeyToolName         = "tool_name"
+	CtxKeyServerName       = "server_name"
+	CtxKeyPromptOnFirstUse = "prompt_on_first_use"
+)
+
+// populateFamilyContext fills in context-attribute defaults for the
+// four WP01 resource families. Caller-provided keys ALWAYS win — this
+// helper only fills in attributes the caller did not set, derived
+// from the resource UID and action where possible.
+//
+// Why derive from the resource? Two reasons:
+//
+//  1. The bundled default policies reference these attrs in `when {
+//     ... }` clauses; a request that omits a referenced attr produces
+//     a Cedar evaluation error and lands as Deny. Filling sane
+//     zero-values keeps the request well-formed.
+//  2. Derived attrs (server_name from a "<server>__<tool>" UID,
+//     pattern from a BashCommand UID, canonical_path from a
+//     FilesystemOp UID) are 1:1 with the resource id. Computing them
+//     once at the engine boundary lets callers pass less boilerplate
+//     and ensures the audit trail records the same canonical view
+//     the policy saw.
+//
+// The resulting map is the input the engine hands to cedar.NewRecord.
+// Returns the same map when nothing needs filling so the hot path
+// keeps zero allocations on the common "Allow via existing policy"
+// shape.
+func populateFamilyContext(
+	action string,
+	resource cedar.EntityUID,
+	in map[cedar.String]cedar.Value,
+) map[cedar.String]cedar.Value {
+	// Cheap exit: actions outside the four WP01 families pass through
+	// untouched. The agent-kernel-graph callers (tool_exec, file_*,
+	// memory_write, model_select, network_request, state_*) do not
+	// rely on family-attr derivation and many pass a nil map — we
+	// MUST NOT widen their context.
+	if !isFamilyAction(action) {
+		return in
+	}
+
+	resourceID := string(resource.ID)
+	out := in
+	ensure := func(key, value string) {
+		k := cedar.String(key)
+		if out == nil {
+			out = make(map[cedar.String]cedar.Value, 4)
+		}
+		if _, set := out[k]; set {
+			return
+		}
+		out[k] = cedar.String(value)
+	}
+	ensureBool := func(key string, value bool) {
+		k := cedar.String(key)
+		if out == nil {
+			out = make(map[cedar.String]cedar.Value, 4)
+		}
+		if _, set := out[k]; set {
+			return
+		}
+		out[k] = cedar.Boolean(value)
+	}
+
+	switch action {
+	case ActionUseCredential:
+		// purpose is the only attr the credential default policy
+		// inspects. We refuse to derive it from the UID because
+		// callers might encode a non-purpose suffix (Spec leaves the
+		// purpose enum closed; callers MUST pass it explicitly). The
+		// engine simply ensures the key exists so a caller-omission
+		// surfaces as NotApplicable rather than a Cedar eval error.
+		ensure(CtxKeyPurpose, "")
+
+	case ActionRunBashCommand:
+		// Pattern derivation is the BashGate's responsibility (WP03);
+		// we mirror the resource id into context.pattern so policies
+		// can reference whichever they prefer.
+		ensure(CtxKeyPattern, resourceID)
+		ensure(CtxKeyWorkingDir, "")
+		ensureBool(CtxKeyDangerousTier, false)
+
+	case ActionReadFilesystem, ActionWriteFilesystem:
+		ensure(CtxKeyCanonicalPath, resourceID)
+		ensureBool(CtxKeyRecipeDirMatch, false)
+		ensureBool(CtxKeyDangerousTier, false)
+
+	case ActionUseTool:
+		// Derive server_name + tool_name from the canonical
+		// "<server>__<tool>" shape. The split is deterministic; a
+		// resource id that doesn't contain "__" is treated as a
+		// no-server tool name (server_name="") so the default policy
+		// — which permits server_name=="kaneaz" — refuses to match.
+		toolName := resourceID
+		serverName := ""
+		if idx := strings.Index(resourceID, "__"); idx >= 0 {
+			serverName = resourceID[:idx]
+			toolName = resourceID[idx+2:]
+		}
+		ensure(CtxKeyToolName, toolName)
+		ensure(CtxKeyServerName, serverName)
+		ensureBool(CtxKeyPromptOnFirstUse, false)
+	}
+
+	return out
+}
+
+// isFamilyAction reports whether action is one of the WP01
+// universal-permission family actions. Used by populateFamilyContext
+// to keep agent-kernel-graph call sites unaffected.
+func isFamilyAction(action string) bool {
+	switch action {
+	case ActionUseCredential,
+		ActionRunBashCommand,
+		ActionReadFilesystem,
+		ActionWriteFilesystem,
+		ActionUseTool:
+		return true
+	}
+	return false
 }
