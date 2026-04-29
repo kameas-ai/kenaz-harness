@@ -96,6 +96,12 @@ func (s *stubSessions) StopStream(_ context.Context, _ string) error { return er
 func (s *stubSessions) ListMessages(_ context.Context, _ string) ([]sessions.Message, error) {
 	return []sessions.Message{}, nil
 }
+func (s *stubSessions) ListMessagesActive(_ context.Context, _ string) (sessions.ListMessagesResult, error) {
+	return sessions.ListMessagesResult{Messages: []sessions.Message{}}, nil
+}
+func (s *stubSessions) ListMessagesAll(_ context.Context, _ string) (sessions.ListMessagesResult, error) {
+	return sessions.ListMessagesResult{Messages: []sessions.Message{}}, nil
+}
 func (s *stubSessions) AppendMessage(_ context.Context, _, _, _ string) (sessions.Message, error) {
 	return sessions.Message{}, errNotWired
 }

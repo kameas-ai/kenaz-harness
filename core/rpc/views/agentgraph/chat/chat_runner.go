@@ -4,13 +4,36 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"sync"
 	"sync/atomic"
 
 	coreag "github.com/sigil-tech/kaneaz-harness/core/agentgraph"
+	"github.com/sigil-tech/kaneaz-harness/core/compaction"
 	corellm "github.com/sigil-tech/kaneaz-harness/core/llm"
+	"github.com/sigil-tech/kaneaz-harness/core/llm/tokenizer"
 	"github.com/sigil-tech/kaneaz-harness/core/logging"
 )
+
+// envCompactionDisabled is the env-var sentinel value the harness
+// honors to skip compaction at the chat-runner pre-send hook AND at
+// the scheduler boundary (mission compaction-strategy-ui-01KQ8TDI WP08
+// / plan §4 rollout). Setting HARNESS_COMPACTION=off short-circuits
+// every compaction-driven branch so users can A/B test the feature
+// without restarting the harness for the chat hook (the scheduler
+// reads the env once at boot and stays consistent for its lifetime —
+// see core/rpc/api.go boot wiring).
+const envCompactionVar = "HARNESS_COMPACTION"
+const envCompactionDisabled = "off"
+
+// compactionDisabledByEnv reports whether HARNESS_COMPACTION=off is
+// set. The chat-runner pre-send hook reads this on every send so a
+// mid-day toggle takes effect on the next user turn without a chassis
+// restart (per WP08 acceptance: "HARNESS_COMPACTION=off short-circuits
+// the hook").
+func compactionDisabledByEnv() bool {
+	return os.Getenv(envCompactionVar) == envCompactionDisabled
+}
 
 // chatAskNodeID is the AskNode id the chassis chat graph (chat_default)
 // uses to gate per-turn user input. The runner pre-seeds the AskBus
@@ -78,6 +101,71 @@ type Config struct {
 	// constructed Env before kernel.Run; production wiring threads
 	// Memory / Policy / Branch / Hooks-journal seams through it.
 	EnvDefaults func(env *coreag.Env)
+	// Compaction is the optional pre-send compaction hook configuration
+	// (mission compaction-strategy-ui-01KQ8TDI WP08). nil disables the
+	// hook entirely — the chat runner falls through to the kernel run
+	// without checking the token threshold. Production builds wire
+	// this; tests that don't exercise compaction leave it nil.
+	Compaction *CompactionDeps
+}
+
+// CompactionDeps bundles every collaborator the pre-send compaction
+// hook needs. The runner reads the active aggressiveness tier on every
+// send (so settings changes take effect on the next user turn without
+// a restart), counts tokens via the supplied tokenizer, and either
+// invokes Engine.Compact (threshold tiers) or Engine.RollingSummarize
+// (maximal tier). On a no-op + over-cap we surface compaction.ErrSessionFull
+// to the caller; the existing chat-runner error path translates that
+// into the user-facing "session full" message.
+//
+// Every field is required when CompactionDeps is non-nil. The caller
+// is responsible for nil-checking before constructing Config.Compaction.
+type CompactionDeps struct {
+	// Engine is the threshold + rolling compaction surface (plan §2.4 / §2.5).
+	Engine compaction.Engine
+
+	// Aggressiveness returns the current effective tier. Read on every
+	// send so a Settings change (UI dial) takes effect on the next turn
+	// without restarting the harness.
+	Aggressiveness func() compaction.CompactionAggressiveness
+
+	// CompactionModel returns the (provider, model) ref the engine
+	// should use for the summarization call. An ok=false reply means
+	// "fall back to the chat session's active model" — the runner
+	// substitutes (profileID, modelOverride) in that case so the
+	// summarization runs against the same model the chat is using.
+	CompactionModel func() (compaction.ProviderProfileRef, bool)
+
+	// RecentWindow returns the locked-window size (count of most-recent
+	// user-assistant pairs compaction never touches). Plumbed through
+	// to RollingSummarize; the threshold engine reads its own copy
+	// inside Engine.
+	RecentWindow func() int
+
+	// MaxContextTokens looks up the active model's MaxContextTokens
+	// budget. Returns ok=false on an unknown model — the runner skips
+	// the threshold check in that case (the provider's own gate will
+	// catch any over-cap span). The compaction.CapabilityLookup
+	// adapter from core/compaction/wiring provides a curated builtin
+	// table covering the major providers.
+	MaxContextTokens func(model compaction.ProviderProfileRef) (int, bool)
+}
+
+// modelToTokenize is the helper that builds the (system, msgs) input
+// the tokenizer consumes from the chat runner's per-send state. The
+// system prompt is the empty string because the chat runner doesn't
+// know what system prompt the kernel will inject (that's a graph-side
+// concern); the framing overhead the tokenizer adds covers the slot
+// regardless.
+func tokenizeRequest(history []coreag.Message, userMessage string) int {
+	msgs := make([]tokenizer.Message, 0, len(history)+1)
+	for _, m := range history {
+		msgs = append(msgs, tokenizer.Message{Role: m.Role, Content: m.Content})
+	}
+	if userMessage != "" {
+		msgs = append(msgs, tokenizer.Message{Role: "user", Content: userMessage})
+	}
+	return tokenizer.CountRequestTokens("", msgs)
 }
 
 // ToolPool is the narrow MCP-pool surface the runner consumes. Mirrors
@@ -190,6 +278,16 @@ func (r *ChatRunner) StartStream(ctx context.Context, profileID, sessionID, mode
 		if _, werr := r.cfg.HistoryWriter.AppendMessage(ctx, sessionID, "user", userMessage); werr != nil {
 			return "", fmt.Errorf("chat: persist user turn: %w", werr)
 		}
+	}
+
+	// Pre-send compaction hook (mission compaction-strategy-ui-01KQ8TDI
+	// WP08 / plan §2.3). Runs between user-turn persistence and kernel
+	// run so HistoryReadNode picks up the post-compaction transcript on
+	// the first fire. On Mode==None over cap or model-too-small in
+	// graceful-degrade fallback we return compaction.ErrSessionFull so
+	// the chat surface renders the honest "session full" copy.
+	if cerr := r.runPreSendCompaction(ctx, profileID, sessionID, modelOverride, userMessage); cerr != nil {
+		return "", cerr
 	}
 
 	// Resolve the chat graph and apply the per-run MaxAgentTurns dial
@@ -368,6 +466,169 @@ func applyMaxTurnsDial(g *coreag.Graph, cap int) {
 			g.Nodes[i].Attrs = a
 		}
 	}
+}
+
+// runPreSendCompaction is the pre-send hook from plan §2.3 / WP08.
+// Returns compaction.ErrSessionFull when the user is honestly out of
+// context (off tier + over cap, or maximal-fallback ran out of room);
+// returns nil on every other path including soft failures (we log,
+// don't crash the chat). The userMessage is INCLUDED in the
+// token-count input but is NOT mutated.
+//
+// Concurrency: per-session serialization is the chat runner's
+// invariant (one StartStream goroutine per session at a time); the
+// engine relies on it to keep ListActiveMessages → snap → write race-
+// free. Multi-session traffic runs in parallel safely.
+func (r *ChatRunner) runPreSendCompaction(ctx context.Context, profileID, sessionID, modelOverride, userMessage string) error {
+	deps := r.cfg.Compaction
+	if deps == nil || deps.Engine == nil {
+		// Compaction not wired — fall through to the kernel. This is
+		// the test-fixture path and the boot path on a chassis where
+		// compaction failed to construct.
+		return nil
+	}
+	// HARNESS_COMPACTION=off short-circuits the hook entirely so the
+	// user can A/B test without restarting (WP08 acceptance).
+	if compactionDisabledByEnv() {
+		return nil
+	}
+	if deps.Aggressiveness == nil {
+		// Defensive: a chassis that wired the engine but not the
+		// settings reader can't make a tier decision.
+		return nil
+	}
+
+	tier := compaction.Tier(deps.Aggressiveness())
+
+	// Helper: load the current active history. Re-fetched after
+	// compaction so the kernel run sees the post-compaction transcript.
+	loadHistory := func() []coreag.Message {
+		if r.cfg.History == nil {
+			return nil
+		}
+		msgs, herr := r.cfg.History.History(ctx, sessionID, 0)
+		if herr != nil {
+			logging.L().Warn("chat.compaction.history_load_failed",
+				"session_id", sessionID, "err", herr.Error())
+			return nil
+		}
+		return msgs
+	}
+
+	// Helper: pick the compaction model. Configured ref wins; fallback
+	// is the active chat model (treating profileID as the providerID
+	// and modelOverride as the modelID — the fallback convention also
+	// used by core/compaction/wiring/llm.go's resolveProfile).
+	pickModel := func() compaction.ProviderProfileRef {
+		if deps.CompactionModel != nil {
+			if ref, ok := deps.CompactionModel(); ok && (ref.ProviderID != "" || ref.ModelID != "") {
+				return ref
+			}
+		}
+		return compaction.ProviderProfileRef{ProviderID: profileID, ModelID: modelOverride}
+	}
+
+	switch tier.Mode {
+	case compaction.ModeNone:
+		// Off tier: honest "session full" if we'd exceed cap, otherwise
+		// proceed without compaction.
+		if deps.MaxContextTokens == nil {
+			return nil
+		}
+		history := loadHistory()
+		current := tokenizeRequest(history, userMessage)
+		activeModel := compaction.ProviderProfileRef{ProviderID: profileID, ModelID: modelOverride}
+		if cap, ok := deps.MaxContextTokens(activeModel); ok && cap > 0 && current >= cap {
+			logging.L().Warn("chat.compaction.session_full_off",
+				"session_id", sessionID,
+				"tokens", current, "cap", cap)
+			return compaction.ErrSessionFull
+		}
+		return nil
+
+	case compaction.ModeThreshold:
+		if deps.MaxContextTokens == nil {
+			return nil
+		}
+		history := loadHistory()
+		current := tokenizeRequest(history, userMessage)
+		activeModel := compaction.ProviderProfileRef{ProviderID: profileID, ModelID: modelOverride}
+		cap, ok := deps.MaxContextTokens(activeModel)
+		if !ok || cap <= 0 {
+			// Unknown model cap — skip the trigger check; provider's own
+			// gate handles any over-cap span.
+			return nil
+		}
+		if float64(current)/float64(cap) < tier.TriggerPct {
+			return nil
+		}
+		// Trigger! Run a synchronous Compact pass.
+		_, cerr := deps.Engine.Compact(ctx, sessionID, pickModel(), tier.SummarizePct)
+		if cerr != nil {
+			var tooSmall *compaction.ErrCompactionModelTooSmall
+			if errors.As(cerr, &tooSmall) {
+				// Threshold-mode model-too-small: surface session-full
+				// upward so the UI renders the actionable copy.
+				logging.L().Warn("chat.compaction.threshold_model_too_small",
+					"session_id", sessionID,
+					"needs_tokens", tooSmall.NeedsTokens,
+					"model_max_tokens", tooSmall.ModelMaxTokens)
+				return compaction.ErrSessionFull
+			}
+			// Other errors: log + proceed without compaction. Partial
+			// state is okay because Compact is transactional — either
+			// the summary row exists or the originals stayed untouched.
+			logging.L().Warn("chat.compaction.threshold_failed",
+				"session_id", sessionID, "err", cerr.Error())
+			return nil
+		}
+		// Compact OK. The kernel's HistoryReadNode will pick up the
+		// post-compaction transcript on its first fire — the chat
+		// runner doesn't need to plumb a fresh history into the kernel
+		// run (the kernel always reads through env.History).
+		return nil
+
+	case compaction.ModeRolling:
+		// Maximal tier: roll every turn.
+		recentWindow := 4
+		if deps.RecentWindow != nil {
+			recentWindow = deps.RecentWindow()
+		}
+		_, cerr := deps.Engine.RollingSummarize(ctx, sessionID, pickModel(), recentWindow)
+		if cerr == nil {
+			return nil
+		}
+		var tooSmall *compaction.ErrCompactionModelTooSmall
+		if errors.As(cerr, &tooSmall) {
+			// Graceful degrade per plan §2.5 R2: silently treat this
+			// turn as the aggressive tier. Run a single Compact pass
+			// using the aggressive numerics; the audit emit inside
+			// Engine.RollingSummarize already recorded the failure
+			// breadcrumb so dashboards can see the fallback.
+			logging.L().Warn("chat.compaction.maximal_too_small_fallback_aggressive",
+				"session_id", sessionID,
+				"needs_tokens", tooSmall.NeedsTokens,
+				"model_max_tokens", tooSmall.ModelMaxTokens)
+			fallback := compaction.Tier(compaction.AggressivenessAggressive)
+			_, fcerr := deps.Engine.Compact(ctx, sessionID, pickModel(), fallback.SummarizePct)
+			if fcerr != nil {
+				var fts *compaction.ErrCompactionModelTooSmall
+				if errors.As(fcerr, &fts) {
+					return compaction.ErrSessionFull
+				}
+				logging.L().Warn("chat.compaction.maximal_fallback_failed",
+					"session_id", sessionID, "err", fcerr.Error())
+			}
+			return nil
+		}
+		// Other rolling errors: log + proceed without compaction (R1
+		// of the risk register: provider hiccup shouldn't block chat
+		// when the session isn't yet over cap).
+		logging.L().Warn("chat.compaction.rolling_failed",
+			"session_id", sessionID, "err", cerr.Error())
+		return nil
+	}
+	return nil
 }
 
 // historyAdapterFunc adapts a closure to the agentgraph.HistoryReader

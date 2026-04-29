@@ -14,6 +14,20 @@ import (
 	llm "github.com/sigil-tech/kaneaz-harness/core/llm"
 )
 
+// KindCompaction is the cost-tagging kind compaction-driven LLM calls
+// carry so the per-session cost view (and any downstream telemetry)
+// can break out compaction overhead from regular chat costs (mission
+// compaction-strategy-ui-01KQ8TDI WP08 / plan §2.11).
+//
+// The constant is consumed by the compaction wiring layer
+// (core/compaction/wiring) when it tags compaction LLM calls; the
+// cost reducer itself does NOT consume this kind for price lookup
+// (price lookup keys on the provider Kind: "anthropic", "openai", …).
+// The tag is propagated through the audit emitter so dashboards can
+// filter "where did this token spend land" without re-deriving by
+// model / session.
+const KindCompaction = "compaction"
+
 //go:embed starter_table.yaml
 var starterTable []byte
 

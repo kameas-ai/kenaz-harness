@@ -19,6 +19,8 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+
+	"github.com/sigil-tech/kaneaz-harness/core/compaction"
 )
 
 // FileStore is a SettingsStore backed by a single JSON file. Safe for
@@ -97,9 +99,59 @@ func (s *FileStore) loadLocked() (Settings, error) {
 
 // SaveAll persists every field atomically via a temp-file rename.
 func (s *FileStore) SaveAll(in Settings) error {
+	if err := validateCompactionFields(in); err != nil {
+		return err
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.saveLocked(in)
+}
+
+// ErrInvalidCompactionAggressiveness is the typed error Save returns
+// when the user (or a hand-edited settings file) supplies an unknown
+// aggressiveness tier. Empty string IS valid (resolves to "balanced"
+// via the Effective accessor); only known constants pass through.
+var ErrInvalidCompactionAggressiveness = errors.New("settings: invalid compactionAggressiveness — must be one of off / conservative / balanced / aggressive / maximal")
+
+// ErrInvalidCompactionArchiveDays is returned when the persisted
+// archive-retention window falls outside the [Min, Max] range. Zero is
+// valid (resolves to DefaultCompactionArchiveDays).
+var ErrInvalidCompactionArchiveDays = fmt.Errorf("settings: invalid compactionArchiveDays — must be 0 (default) or in [%d, %d]", MinCompactionArchiveDays, MaxCompactionArchiveDays)
+
+// ErrInvalidCompactionRecentWindow is returned when the recent-window
+// override is negative.
+var ErrInvalidCompactionRecentWindow = errors.New("settings: invalid compactionRecentWindow — must be >= 0")
+
+// validateCompactionFields runs the per-field validation rules for the
+// four compaction settings (mission compaction-strategy-ui-01KQ8TDI
+// WP06 acceptance: clamp rejects out-of-range values at SAVE, not just
+// at Effective-time clamp). Returns the typed error so the rpc layer
+// can render specific copy in the UI.
+//
+// Empty / zero values are valid for every field — they resolve to the
+// documented defaults via the EffectiveCompaction* accessors.
+func validateCompactionFields(in Settings) error {
+	switch compaction.CompactionAggressiveness(in.CompactionAggressiveness) {
+	case "",
+		compaction.AggressivenessOff,
+		compaction.AggressivenessConservative,
+		compaction.AggressivenessBalanced,
+		compaction.AggressivenessAggressive,
+		compaction.AggressivenessMaximal:
+		// ok
+	default:
+		return ErrInvalidCompactionAggressiveness
+	}
+
+	if d := in.CompactionArchiveDays; d != 0 && (d < MinCompactionArchiveDays || d > MaxCompactionArchiveDays) {
+		return ErrInvalidCompactionArchiveDays
+	}
+
+	if in.CompactionRecentWindow < 0 {
+		return ErrInvalidCompactionRecentWindow
+	}
+
+	return nil
 }
 
 func (s *FileStore) saveLocked(in Settings) error {
@@ -359,6 +411,9 @@ func (m *memoryStore) LoadAll() (Settings, error) {
 }
 
 func (m *memoryStore) SaveAll(s Settings) error {
+	if err := validateCompactionFields(s); err != nil {
+		return err
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if s.SchemaVersion == 0 {

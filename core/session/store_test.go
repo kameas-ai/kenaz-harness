@@ -383,3 +383,158 @@ func TestMemStore_UpdateLastActive(t *testing.T) {
 		t.Errorf("LastActiveAt = %v, want %v", got.LastActiveAt, later)
 	}
 }
+
+// TestMemStore_ApplyCompaction_FlipsOriginalsAndInsertsSummary asserts
+// the WP08 transactional helper behaves correctly on the in-memory
+// store: archived_at + compacted_into_id flip on every original, the
+// summary row appears in ListMessages, and ListMessagesActive hides
+// the originals.
+func TestMemStore_ApplyCompaction_FlipsOriginalsAndInsertsSummary(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s := NewMemoryStore()
+	now := time.Date(2026, 4, 25, 0, 0, 0, 0, time.UTC)
+	if err := s.Create(ctx, mustRecord("s1", "x", 0, now)); err != nil {
+		t.Fatal(err)
+	}
+	// Append three messages: user, assistant, user.
+	a, err := s.AppendMessage(ctx, Message{ID: "m1", SessionID: "s1", Role: RoleUser, Content: "hello"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := s.AppendMessage(ctx, Message{ID: "m2", SessionID: "s1", Role: RoleAssistant, Content: "hi"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = s.AppendMessage(ctx, Message{ID: "m3", SessionID: "s1", Role: RoleUser, Content: "again"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	at := now.Add(time.Hour)
+	summary := Message{
+		ID:        "sum-1",
+		Role:      RoleSystem,
+		Content:   "[Earlier conversation summary: hi]",
+		Sequence:  a.Sequence,
+		CreatedAt: at,
+	}
+	if err := s.ApplyCompaction(ctx, "s1", summary, []string{"m1", "m2"}, at); err != nil {
+		t.Fatalf("ApplyCompaction: %v", err)
+	}
+
+	all, err := s.ListMessages(ctx, "s1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(all) != 4 {
+		t.Errorf("ListMessages returned %d rows, want 4 (3 originals + summary)", len(all))
+	}
+	active, err := s.ListMessagesActive(ctx, "s1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Live rows: m3 + summary (m1, m2 archived).
+	if len(active) != 2 {
+		t.Errorf("ListMessagesActive returned %d rows, want 2", len(active))
+	}
+	// Confirm the originals carry the flip.
+	for _, m := range all {
+		if m.ID == "m1" || m.ID == "m2" {
+			if m.ArchivedAt == nil {
+				t.Errorf("%s: ArchivedAt nil; want non-nil", m.ID)
+			}
+			if m.CompactedIntoID == nil || *m.CompactedIntoID != "sum-1" {
+				t.Errorf("%s: CompactedIntoID = %v; want sum-1", m.ID, m.CompactedIntoID)
+			}
+		}
+	}
+	_ = b
+}
+
+// TestMemStore_DeleteArchivedBefore_DropsOldArchivedRows asserts the
+// soft-archive sweep adapter walks the in-memory slice and tombstones
+// rows whose archived_at is past the cutoff.
+func TestMemStore_DeleteArchivedBefore_DropsOldArchivedRows(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s := NewMemoryStore()
+	now := time.Date(2026, 4, 25, 0, 0, 0, 0, time.UTC)
+	if err := s.Create(ctx, mustRecord("s1", "x", 0, now)); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"m1", "m2", "m3"} {
+		if _, err := s.AppendMessage(ctx, Message{ID: id, SessionID: "s1", Role: RoleUser, Content: id}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Archive m1 + m2 in the past, leave m3 live.
+	old := now.Add(-100 * 24 * time.Hour)
+	summary := Message{ID: "sum-x", Role: RoleSystem, Content: "[s]", Sequence: 0, CreatedAt: old}
+	if err := s.ApplyCompaction(ctx, "s1", summary, []string{"m1", "m2"}, old); err != nil {
+		t.Fatal(err)
+	}
+
+	cutoff := now.Add(-7 * 24 * time.Hour)
+	deleted, oldest, newest, err := s.DeleteArchivedBefore(ctx, cutoff, 1000)
+	if err != nil {
+		t.Fatalf("DeleteArchivedBefore: %v", err)
+	}
+	if deleted != 2 {
+		t.Errorf("deleted=%d, want 2", deleted)
+	}
+	if oldest.IsZero() || newest.IsZero() {
+		t.Errorf("oldest=%v newest=%v; both should be non-zero", oldest, newest)
+	}
+	// Verify the surviving rows.
+	all, _ := s.ListMessages(ctx, "s1")
+	for _, m := range all {
+		if m.ID == "m1" || m.ID == "m2" {
+			t.Errorf("%s should have been deleted", m.ID)
+		}
+	}
+}
+
+// TestMemStore_DeleteArchivedBefore_NeverDeletesSummary asserts the
+// summary row (CompactedIntoID is nil, CompactedAt is non-nil) is
+// excluded from the sweep regardless of its archived_at timestamp.
+// In practice the engine never archives a summary; this test pins the
+// belt-and-braces filter for defense-in-depth.
+func TestMemStore_DeleteArchivedBefore_NeverDeletesSummary(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s := NewMemoryStore()
+	now := time.Date(2026, 4, 25, 0, 0, 0, 0, time.UTC)
+	if err := s.Create(ctx, mustRecord("s1", "x", 0, now)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.AppendMessage(ctx, Message{ID: "m1", SessionID: "s1", Role: RoleUser, Content: "hi"}); err != nil {
+		t.Fatal(err)
+	}
+	// Insert a summary row directly via ApplyCompaction; it gets a
+	// non-nil CompactedAt and nil CompactedIntoID per the schema
+	// convention.
+	old := now.Add(-100 * 24 * time.Hour)
+	summary := Message{ID: "sum-1", Role: RoleSystem, Content: "[s]", Sequence: 0, CreatedAt: old}
+	if err := s.ApplyCompaction(ctx, "s1", summary, []string{"m1"}, old); err != nil {
+		t.Fatal(err)
+	}
+	cutoff := now.Add(-7 * 24 * time.Hour)
+	deleted, _, _, err := s.DeleteArchivedBefore(ctx, cutoff, 1000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if deleted != 1 {
+		t.Errorf("deleted=%d, want 1 (only m1)", deleted)
+	}
+	all, _ := s.ListMessages(ctx, "s1")
+	foundSummary := false
+	for _, m := range all {
+		if m.ID == "sum-1" {
+			foundSummary = true
+		}
+	}
+	if !foundSummary {
+		t.Error("summary row was deleted; sweep must never delete summaries")
+	}
+}

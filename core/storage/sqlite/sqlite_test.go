@@ -128,8 +128,9 @@ func TestOpen_RegistersSessionMigrations(t *testing.T) {
 	}
 	// 0306 (branches) lands with the agent-kernel-graph branching bundle
 	// (Bundle B, WP07); 0307 (corpora), 0308 (memory_hook_journal), and
-	// 0309 (agent_graph_events) land alongside.
-	want := []int{300, 301, 302, 303, 304, 305, 306, 307, 308, 309}
+	// 0309 (agent_graph_events) land alongside; 0310 (compaction columns
+	// on session_messages) lands with compaction-strategy-ui WP01.
+	want := []int{300, 301, 302, 303, 304, 305, 306, 307, 308, 309, 310}
 	if len(versions) != len(want) {
 		t.Fatalf("session migrations applied = %v, want %v", versions, want)
 	}
@@ -167,9 +168,9 @@ func TestOpen_ApplyIdempotent(t *testing.T) {
 	// 2 storage bootstrap + 1 session init + 1 context_attachments +
 	// 1 content_json + 1 artifacts + 1 artifacts-promote + 1 telemetry +
 	// 1 branches (0306) + 1 corpora (0307) + 1 memory_hook_journal (0308) +
-	// 1 agent_graph_events (0309) = 12.
-	if count != 12 {
-		t.Errorf("ledger count = %d, want 12", count)
+	// 1 agent_graph_events (0309) + 1 compaction (0310) = 13.
+	if count != 13 {
+		t.Errorf("ledger count = %d, want 13", count)
 	}
 }
 

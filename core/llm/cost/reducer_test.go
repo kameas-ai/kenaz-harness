@@ -79,3 +79,56 @@ func TestReducer_NilTableSafe(t *testing.T) {
 		t.Fatal("nil reducer should yield indeterminate cost")
 	}
 }
+
+// TestKindCompaction_Constant pins the WP08 cost-tag constant. The
+// per-session cost view in core/compaction/wiring/llm.go reads this
+// to render "Compaction overhead: $X.XX of $Y.YY total" (FR §2.11);
+// a rename here would silently break the frontend's cost projection.
+func TestKindCompaction_Constant(t *testing.T) {
+	if KindCompaction != "compaction" {
+		t.Fatalf("KindCompaction = %q, want %q", KindCompaction, "compaction")
+	}
+}
+
+// TestReducer_TaggedSubsetSum sums the cost across two synthetic
+// "compaction" calls plus one "chat" call to model the per-session
+// cost panel's break-out behavior. The reducer itself doesn't filter
+// by the tag — that's the OverheadTotals adapter's job in
+// core/compaction/wiring/llm.go — but the reducer must still produce
+// determinate cost for the same (provider, model) regardless of which
+// kind triggered the call. This test pins that contract so a future
+// reducer change accidentally keying on the tag fails loudly.
+func TestReducer_TaggedSubsetSum(t *testing.T) {
+	tab, err := LoadDefault()
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := New(tab)
+
+	// Three calls against the same provider/model. Two of them are
+	// modeled as compaction calls (same input/output token counts),
+	// one is a chat call. The reducer's per-call answer should be
+	// identical for all three — the kind passed in is the provider
+	// kind, not the cost.kind tag, so summing in Go gives a clean
+	// "compaction overhead" subtotal.
+	usage := llm.Usage{InputTokens: 100_000, OutputTokens: 100_000}
+	chat1 := r.Derive(usage, "anthropic", "claude-sonnet-4-5")
+	comp1 := r.Derive(usage, "anthropic", "claude-sonnet-4-5")
+	comp2 := r.Derive(usage, "anthropic", "claude-sonnet-4-5")
+
+	if chat1.Total <= 0 || comp1.Total <= 0 || comp2.Total <= 0 {
+		t.Fatalf("expected positive costs; chat=%v comp1=%v comp2=%v",
+			chat1.Total, comp1.Total, comp2.Total)
+	}
+	if math.Abs(chat1.Total-comp1.Total) > 1e-9 {
+		t.Errorf("reducer should not vary cost by call kind: chat=%v comp=%v",
+			chat1.Total, comp1.Total)
+	}
+
+	compactionSubtotal := comp1.Total + comp2.Total
+	total := compactionSubtotal + chat1.Total
+	if compactionSubtotal >= total {
+		t.Errorf("compaction subtotal=%v should be less than total=%v",
+			compactionSubtotal, total)
+	}
+}

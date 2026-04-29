@@ -92,4 +92,18 @@ type Message struct {
 	ContentBlocks []llm.ContentBlock
 	ToolCalls     []ToolCall
 	CreatedAt     time.Time
+	// CompactedIntoID is the id of the synthetic summary row that
+	// folded this message in. NULL on rows the compaction engine never
+	// touched. Populated by migration 0310 (compaction-strategy-ui WP01).
+	CompactedIntoID *string
+	// CompactedAt is the unix-nanos moment the compaction engine wrote
+	// the summary row that replaces this message. NULL on rows the
+	// engine never touched. On the synthetic summary row itself,
+	// CompactedAt is non-nil and CompactedIntoID is nil.
+	CompactedAt *time.Time
+	// ArchivedAt is the unix-nanos moment the compaction engine flagged
+	// this row as archived (i.e. folded into a summary). NULL on live
+	// rows; non-NULL rows are excluded from the default scrollback fetch
+	// (Sessions.ListMessagesActive).
+	ArchivedAt *time.Time
 }

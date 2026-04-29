@@ -860,6 +860,29 @@ export namespace compaction {
 	        this.nodeId = source["nodeId"];
 	    }
 	}
+	
+	export class TierExplain {
+	    aggressiveness: string;
+	    label: string;
+	    description: string;
+	    triggerPct: number;
+	    summarizePct: number;
+	    mode: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new TierExplain(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.aggressiveness = source["aggressiveness"];
+	        this.label = source["label"];
+	        this.description = source["description"];
+	        this.triggerPct = source["triggerPct"];
+	        this.summarizePct = source["summarizePct"];
+	        this.mode = source["mode"];
+	    }
+	}
 
 }
 
@@ -2673,6 +2696,9 @@ export namespace sessions {
 	    createdAt: string;
 	    streaming?: boolean;
 	    toolCalls?: ToolCall[];
+	    compactedIntoId?: string;
+	    compactedAt?: string;
+	    archivedAt?: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new Message(source);
@@ -2687,6 +2713,9 @@ export namespace sessions {
 	        this.createdAt = source["createdAt"];
 	        this.streaming = source["streaming"];
 	        this.toolCalls = this.convertValues(source["toolCalls"], ToolCall);
+	        this.compactedIntoId = source["compactedIntoId"];
+	        this.compactedAt = source["compactedAt"];
+	        this.archivedAt = source["archivedAt"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -2707,6 +2736,39 @@ export namespace sessions {
 		    return a;
 		}
 	}
+	export class ListMessagesResult {
+	    messages: Message[];
+	    sweptCount: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new ListMessagesResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.messages = this.convertValues(source["messages"], Message);
+	        this.sweptCount = source["sweptCount"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	
 	export class Session {
 	    id: string;
 	    name: string;
@@ -2736,6 +2798,20 @@ export namespace sessions {
 
 export namespace settings {
 	
+	export class ProviderProfileRef {
+	    providerId?: string;
+	    modelId?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ProviderProfileRef(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.providerId = source["providerId"];
+	        this.modelId = source["modelId"];
+	    }
+	}
 	export class WindowSize {
 	    width: number;
 	    height: number;
@@ -2765,6 +2841,10 @@ export namespace settings {
 	    webSearchEnabled?: boolean;
 	    bashEnabled?: boolean;
 	    maxAgentTurns?: number;
+	    compactionAggressiveness?: string;
+	    compactionModel?: ProviderProfileRef;
+	    compactionArchiveDays?: number;
+	    compactionRecentWindow?: number;
 	
 	    static createFrom(source: any = {}) {
 	        return new Settings(source);
@@ -2786,6 +2866,10 @@ export namespace settings {
 	        this.webSearchEnabled = source["webSearchEnabled"];
 	        this.bashEnabled = source["bashEnabled"];
 	        this.maxAgentTurns = source["maxAgentTurns"];
+	        this.compactionAggressiveness = source["compactionAggressiveness"];
+	        this.compactionModel = this.convertValues(source["compactionModel"], ProviderProfileRef);
+	        this.compactionArchiveDays = source["compactionArchiveDays"];
+	        this.compactionRecentWindow = source["compactionRecentWindow"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {

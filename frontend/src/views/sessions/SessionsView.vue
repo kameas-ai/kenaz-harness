@@ -533,6 +533,32 @@ const hasAnyProvider = computed(() => providers.value.length > 0);
 const memoryEnabled = ref(false);
 const lastRememberError = ref<string | null>(null);
 
+// Soft-archive retention window — drives the swept-count placeholder
+// copy in MessageList. Falls back to the locked default 90 (plan §2.9)
+// when settings have not been loaded or the call fails.
+const compactionArchiveDays = ref<number>(90);
+
+// Compaction overhead surface (mission compaction-strategy-ui-01KQ8TDI
+// WP08 / plan §2.11). The backend tags every compaction-driven LLM
+// call with cost.kind = "compaction" and accumulates a running total
+// (see core/compaction/wiring/llm.go OverheadTotals). The frontend
+// surface here renders a compact "Compaction overhead: $X.XX of $Y.YY
+// total" line on the chat header when the overhead is non-zero so
+// users can see the cost of compaction without opening a dedicated
+// panel.
+//
+// TODO(compaction-strategy-ui WP08+): wire an RPC method that returns
+// the per-session OverheadTotals shape (Total / Currency / Calls /
+// Indeterminate / InputTokens / OutputTokens — defined in
+// core/compaction/wiring/llm.go). Until the RPC lands the values
+// stay at zero and the row is hidden by compactionOverheadVisible.
+const compactionOverheadUSD = ref<number>(0);
+const compactionOverheadTotalUSD = ref<number>(0);
+const compactionOverheadCurrency = ref<string>('USD');
+const compactionOverheadVisible = computed(
+  () => compactionOverheadUSD.value > 0,
+);
+
 async function refreshMemoryFlag() {
   try {
     memoryEnabled.value = await client.settings.getMemory();
@@ -541,11 +567,24 @@ async function refreshMemoryFlag() {
   }
 }
 
+async function refreshCompactionSettings() {
+  try {
+    const s = await client.settings.get();
+    if (typeof s.compactionArchiveDays === 'number' && s.compactionArchiveDays > 0) {
+      compactionArchiveDays.value = s.compactionArchiveDays;
+    }
+  } catch {
+    // Soft-fail: leave the locked default in place.
+  }
+}
+
 onMounted(() => {
   void refreshMemoryFlag();
+  void refreshCompactionSettings();
 });
 window.addEventListener('focus', () => {
   void refreshMemoryFlag();
+  void refreshCompactionSettings();
 });
 
 async function onRemember(m: Message, scope: MemoryScopeKind = 'session') {
@@ -899,6 +938,48 @@ function formatSize(bytes: number): string {
           >
             Context
           </button>
+          <!-- Compaction overhead readout (compaction-strategy-ui WP08
+               / plan §2.11). Hidden until at least one compaction call
+               has run; renders the running total tagged with
+               cost.kind = "compaction" alongside the session's grand
+               total so users can see what fraction of their spend
+               compaction is responsible for. -->
+          <span
+            v-if="compactionOverheadVisible"
+            class="ml-auto px-3 py-1 font-ui text-[11px] tracking-[0.05em] text-ink-muted"
+            data-testid="compaction-overhead-line"
+          >
+            Compaction overhead:
+            <span class="text-ink font-mono">
+              ${{ compactionOverheadUSD.toFixed(2) }}
+            </span>
+            of
+            <span class="text-ink font-mono">
+              ${{ compactionOverheadTotalUSD.toFixed(2) }}
+            </span>
+            total
+          </span>
+          <!-- Show full history toggle (compaction-strategy-ui WP07).
+               Per-session UI state (NOT persisted) — flips the
+               scrollback fetch between listMessagesActive (default,
+               hides archived rows) and listMessagesAll (reveals them).
+               Always rendered; the toggle is harmless on sessions
+               with no compacted history. -->
+          <button
+            type="button"
+            class="px-3 py-1 rounded-sm font-ui text-[11px] uppercase tracking-[0.18em] border"
+            :class="[
+              compactionOverheadVisible ? '' : 'ml-auto',
+              session.showFullHistory.value
+                ? 'border-accent text-accent bg-surface-1'
+                : 'border-border-muted text-ink-muted hover:text-ink hover:bg-surface-2',
+            ]"
+            data-testid="show-full-history-toggle"
+            :aria-pressed="session.showFullHistory.value"
+            @click="session.showFullHistory.value = !session.showFullHistory.value"
+          >
+            {{ session.showFullHistory.value ? 'Hide archived' : 'Show full history' }}
+          </button>
         </div>
         <div
           v-if="lastArtifactError"
@@ -921,6 +1002,8 @@ function formatSize(bytes: number): string {
             :saveable="true"
             :project-id="session.session.value?.projectId ?? ''"
             :artifacts-by-message="artifactsByMessage"
+            :swept-count="session.sweptCount.value"
+            :archive-days="compactionArchiveDays"
             @remember="onRemember"
             @save-artifact="onSaveArtifactFromMessage"
             @open-artifact="openArtifactPreview"

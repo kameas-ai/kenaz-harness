@@ -42,6 +42,20 @@ export interface UseSessionResult {
   streamingTimedOut: Ref<boolean>;
   /** Two-way draft buffer; debounced-saved automatically. */
   draft: Ref<string>;
+  /**
+   * Per-session UI state for the compaction-strategy-ui WP07 "Show
+   * full history" toggle. Two-way; flipping it triggers a refetch
+   * (active vs. all). NOT persisted — resets on session reopen.
+   */
+  showFullHistory: Ref<boolean>;
+  /**
+   * Count of soft-archived rows that have since been hard-deleted by
+   * the soft-archive sweep. Surfaced from the WP07 ListMessagesResult
+   * envelope. The frontend renders the
+   * "N earlier turns no longer available" placeholder when this is > 0.
+   * Always 0 today — the per-session counter lands in WP09.
+   */
+  sweptCount: Ref<number>;
   refresh(): Promise<void>;
   /**
    * Append a user message and start the assistant stream. modelOverride
@@ -79,6 +93,8 @@ export function useSession(id: Ref<string>): UseSessionResult {
   const streamSubscriptionId = ref<string | null>(null);
   const streamingTimedOut = ref(false);
   const draft = ref('');
+  const showFullHistory = ref(false);
+  const sweptCount = ref(0);
 
   let streamTimeoutHandle: ReturnType<typeof setTimeout> | null = null;
   let draftDebounceHandle: ReturnType<typeof setTimeout> | null = null;
@@ -91,23 +107,48 @@ export function useSession(id: Ref<string>): UseSessionResult {
     }
   }
 
+  // fetchMessages dispatches to the WP07 envelope methods when the
+  // client exposes them (the harness binding ships them by default; a
+  // few legacy fake clients in tests stub only listMessages). Falls
+  // back to the flat listMessages call so pre-WP07 fakes keep working.
+  async function fetchMessages(
+    sessionId: string,
+    fullHistory: boolean,
+  ): Promise<{ messages: readonly Message[]; sweptCount: number }> {
+    const sessionsClient = client.sessions as typeof client.sessions & {
+      listMessagesActive?: typeof client.sessions.listMessagesActive;
+      listMessagesAll?: typeof client.sessions.listMessagesAll;
+    };
+    const fn = fullHistory
+      ? sessionsClient.listMessagesAll
+      : sessionsClient.listMessagesActive;
+    if (typeof fn === 'function') {
+      const res = await fn.call(sessionsClient, sessionId);
+      return { messages: res.messages, sweptCount: res.sweptCount };
+    }
+    const flat = await sessionsClient.listMessages(sessionId);
+    return { messages: flat, sweptCount: 0 };
+  }
+
   async function load(sessionId: string) {
     if (!sessionId) {
       session.value = null;
       messages.value = [];
+      sweptCount.value = 0;
       draft.value = '';
       return;
     }
     loading.value = true;
     error.value = null;
     try {
-      const [s, msgs, d] = await Promise.all([
+      const [s, msgsResult, d] = await Promise.all([
         client.sessions.get(sessionId),
-        client.sessions.listMessages(sessionId),
+        fetchMessages(sessionId, showFullHistory.value),
         client.sessions.loadDraft(sessionId).catch(() => ''),
       ]);
       session.value = s;
-      messages.value = msgs;
+      messages.value = msgsResult.messages;
+      sweptCount.value = msgsResult.sweptCount;
       draft.value = d;
       lastSavedDraft = d;
     } catch (err) {
@@ -115,6 +156,7 @@ export function useSession(id: Ref<string>): UseSessionResult {
       error.value = e.message;
       session.value = null;
       messages.value = [];
+      sweptCount.value = 0;
     } finally {
       loading.value = false;
     }
@@ -370,17 +412,41 @@ export function useSession(id: Ref<string>): UseSessionResult {
     }, DRAFT_DEBOUNCE_MS);
   });
 
+  // resettingShowFullHistory suppresses the showFullHistory watcher
+  // when the id watcher resets the flag during a session switch — we
+  // don't want a session-switch to issue a redundant load() call.
+  let resettingShowFullHistory = false;
+
   watch(
     id,
     (next) => {
       currentlyStreaming.value = null;
       streamSubscriptionId.value = null;
       streamingTimedOut.value = false;
+      // showFullHistory is per-session UI state — reset on every
+      // session reopen so a switch-back never resurrects the previous
+      // view (compaction-strategy-ui WP07 plan §2.8).
+      if (showFullHistory.value) {
+        resettingShowFullHistory = true;
+        showFullHistory.value = false;
+      }
       clearStreamTimeout();
       void load(next);
     },
     { immediate: true },
   );
+
+  // Refetch on toggle. Vue's default-lazy watch only fires on
+  // value change, so the very first fire is whatever the user
+  // (or the session-reset above) flipped to.
+  watch(showFullHistory, () => {
+    if (resettingShowFullHistory) {
+      resettingShowFullHistory = false;
+      return;
+    }
+    if (!id.value) return;
+    void load(id.value);
+  });
 
   onBeforeUnmount(() => {
     clearStreamTimeout();
@@ -396,6 +462,8 @@ export function useSession(id: Ref<string>): UseSessionResult {
     streamSubscriptionId,
     streamingTimedOut,
     draft,
+    showFullHistory,
+    sweptCount,
     refresh,
     send,
     sendBlocks,

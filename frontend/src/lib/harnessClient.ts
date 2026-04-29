@@ -39,6 +39,7 @@ import type {
   AppInfo,
   Settings,
   Theme,
+  ListMessagesResult,
   Message,
   MessageRole,
   MemoryChunk,
@@ -97,6 +98,7 @@ import type {
   CompactionManualOpts,
   CompactionManualResult,
   CompactionScopeKey,
+  CompactionTierExplain,
   Branch,
   BranchCreateOptions,
   BranchStatusInfo,
@@ -137,6 +139,8 @@ interface WailsBindingsLike {
   Sessions_StartStream(id: string): Promise<string>;
   Sessions_StopStream(id: string): Promise<void>;
   Sessions_ListMessages(id: string): Promise<Message[]>;
+  Sessions_ListMessagesActive(id: string): Promise<ListMessagesResult>;
+  Sessions_ListMessagesAll(id: string): Promise<ListMessagesResult>;
   Sessions_AppendMessage(
     id: string,
     role: MessageRole,
@@ -370,6 +374,7 @@ interface WailsBindingsLike {
     opts: CompactionManualOpts,
   ): Promise<CompactionManualResult>;
   Compaction_ListCustomStrategies(): Promise<CompactionCustomStrategy[]>;
+  Compaction_GetTierExplain(): Promise<CompactionTierExplain[]>;
 
   // Nodes view (manifest-driven node catalog; WP07).
   Nodes_Catalog(): Promise<NodeManifestSummary[]>;
@@ -646,6 +651,21 @@ export interface SessionsClient {
    * the full transcript is returned.
    */
   listMessages(id: string): Promise<Message[]>;
+  /**
+   * listMessagesActive returns only the messages whose archivedAt is
+   * empty — the default scrollback view once a session has compacted
+   * history (compaction-strategy-ui WP07). The wrapped envelope also
+   * carries a SweptCount counter the frontend uses to render an
+   * "N earlier turns no longer available" placeholder. SweptCount is
+   * a stub zero today; WP09 lands the per-session counter.
+   */
+  listMessagesActive(id: string): Promise<ListMessagesResult>;
+  /**
+   * listMessagesAll returns every message including soft-archived
+   * rows. Used when the user toggles "Show full history" in the chat
+   * view (compaction-strategy-ui WP07).
+   */
+  listMessagesAll(id: string): Promise<ListMessagesResult>;
   /**
    * appendMessage commits a single message to the session transcript and
    * returns the canonical Message (with server-assigned id + createdAt).
@@ -1205,6 +1225,14 @@ export interface CompactionClient {
     opts: CompactionManualOpts,
   ): Promise<CompactionManualResult>;
   listCustomStrategies(): Promise<CompactionCustomStrategy[]>;
+  /**
+   * Fetch the static tier-explain payload that drives the
+   * "What does this mean?" disclosure on the
+   * compaction-aggressiveness dial in Settings (mission
+   * compaction-strategy-ui-01KQ8TDI §2.2 / §2.9). Numerics come from
+   * core/compaction.Tier() so the UI can never drift.
+   */
+  getTierExplain(): Promise<CompactionTierExplain[]>;
 }
 
 /**
@@ -1310,6 +1338,8 @@ export function createHarnessClient(): HarnessClient {
       startStream: (id) => b().Sessions_StartStream(id),
       stopStream: (id) => b().Sessions_StopStream(id),
       listMessages: (id) => b().Sessions_ListMessages(id),
+      listMessagesActive: (id) => b().Sessions_ListMessagesActive(id),
+      listMessagesAll: (id) => b().Sessions_ListMessagesAll(id),
       appendMessage: (id, role, content) =>
         b().Sessions_AppendMessage(id, role, content),
       sendMessageWithBlocks: (id, contentBlocks) =>
@@ -1544,6 +1574,7 @@ export function createHarnessClient(): HarnessClient {
       triggerManualCompaction: (sessionID, opts) =>
         b().Compaction_TriggerManual(sessionID, opts),
       listCustomStrategies: () => b().Compaction_ListCustomStrategies(),
+      getTierExplain: () => b().Compaction_GetTierExplain(),
     },
     branches: {
       list: (parentSessionID) => b().Branches_List(parentSessionID),
@@ -1610,6 +1641,8 @@ export function createFakeHarnessClient(
       startStream: async () => 'fake-sub',
       stopStream: noop,
       listMessages: async () => [],
+      listMessagesActive: async () => ({ messages: [], sweptCount: 0 }),
+      listMessagesAll: async () => ({ messages: [], sweptCount: 0 }),
       appendMessage: async (id, role, content) => ({
         id: `fake-msg-${Math.random().toString(36).slice(2, 8)}`,
         sessionId: id,
@@ -2060,6 +2093,48 @@ export function createFakeHarnessClient(
         bytesSaved: 0,
       }),
       listCustomStrategies: async () => [],
+      getTierExplain: async () => [
+        {
+          aggressiveness: 'off',
+          label: 'Off',
+          description: 'Never compact.',
+          triggerPct: 0,
+          summarizePct: 0,
+          mode: 'none',
+        },
+        {
+          aggressiveness: 'conservative',
+          label: 'Conservative',
+          description: 'Compact at 95%, summarise oldest 20%.',
+          triggerPct: 0.95,
+          summarizePct: 0.2,
+          mode: 'threshold',
+        },
+        {
+          aggressiveness: 'balanced',
+          label: 'Balanced (default)',
+          description: 'Compact at 80%, summarise oldest 30%.',
+          triggerPct: 0.8,
+          summarizePct: 0.3,
+          mode: 'threshold',
+        },
+        {
+          aggressiveness: 'aggressive',
+          label: 'Aggressive',
+          description: 'Compact at 60%, summarise oldest 40%.',
+          triggerPct: 0.6,
+          summarizePct: 0.4,
+          mode: 'threshold',
+        },
+        {
+          aggressiveness: 'maximal',
+          label: 'Maximal',
+          description: 'Continuous rolling summary on every turn.',
+          triggerPct: 0,
+          summarizePct: 0,
+          mode: 'rolling',
+        },
+      ],
     },
     branches: {
       list: async () => [],

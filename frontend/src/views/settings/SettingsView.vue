@@ -10,7 +10,7 @@
  * Settings_Set RPC); writes are debounced 250ms via lib/settings.ts
  * to coalesce rapid toggles into a single disk write.
  */
-import { onMounted, ref } from 'vue';
+import { computed, onMounted, ref } from 'vue';
 import CanvasHead from '@/shell/CanvasHead.vue';
 import SettingsTabs from '@/views/settings/SettingsTabs.vue';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
@@ -18,7 +18,15 @@ import { debouncedSave } from '@/lib/settings';
 import { Plus } from '@/shell/icons';
 import AttachmentRow from '@/components/contexts/AttachmentRow.vue';
 import AttachmentTreePicker from '@/components/contexts/AttachmentTreePicker.vue';
-import type { AppInfo, Attachment, Settings, Theme } from '@/lib/types';
+import type {
+  AppInfo,
+  Attachment,
+  CompactionAggressiveness,
+  CompactionTierExplain,
+  Provider,
+  Settings,
+  Theme,
+} from '@/lib/types';
 
 const client = useHarnessClient();
 
@@ -34,6 +42,85 @@ const settings = ref<Settings>({
 const appInfo = ref<AppInfo | null>(null);
 const restoreOnLaunch = ref(true);
 const confirmEachEnabled = ref(true);
+
+/* ── Compaction (mission compaction-strategy-ui-01KQ8TDI §2.9) ─────── */
+
+/**
+ * The five-stop slider's locked tier order. Same order as plan §2.2 —
+ * off (no compaction) → maximal (rolling). The slider's index maps
+ * 1:1 onto this array.
+ */
+const COMPACTION_TIERS: ReadonlyArray<CompactionAggressiveness> = [
+  'off',
+  'conservative',
+  'balanced',
+  'aggressive',
+  'maximal',
+];
+
+/** Local working copy of the compaction-related fields. The component
+ * mutates this on user input and pushes through client.settings.set
+ * via debouncedSave. */
+const compactionTier = ref<CompactionAggressiveness>('balanced');
+const compactionProviderId = ref('');
+const compactionModelId = ref('');
+const compactionArchiveDays = ref<number>(90);
+const compactionRecentWindow = ref<number>(4);
+const compactionExplainOpen = ref(false);
+const compactionTiers = ref<CompactionTierExplain[]>([]);
+const compactionProviders = ref<Provider[]>([]);
+const compactionArchiveDaysError = ref<string | null>(null);
+const compactionRecentWindowError = ref<string | null>(null);
+
+/** Derived: the explain row matching the currently-selected tier. */
+const selectedTierExplain = computed<CompactionTierExplain | null>(() => {
+  return (
+    compactionTiers.value.find(
+      (row) => row.aggressiveness === compactionTier.value,
+    ) ?? null
+  );
+});
+
+/** Derived: model dropdown options.
+ *
+ * The plan calls for a "ProviderProfileRef dropdown component" that may
+ * already exist from another mission. None ships in this repo today, so
+ * we render a flat <select> over each provider's authorised model list
+ * — replace with the canonical picker when it lands. The first option
+ * is "Use session's active model (recommended)" with empty
+ * provider/model values.
+ *
+ * Wire shape: option value = `${providerId}::${modelId}` so the
+ * <select> stays a primitive string while we still emit a
+ * ProviderProfileRef on save.
+ */
+const compactionModelOptions = computed<
+  { value: string; label: string; providerId: string; modelId: string }[]
+>(() => {
+  const out: {
+    value: string;
+    label: string;
+    providerId: string;
+    modelId: string;
+  }[] = [];
+  for (const p of compactionProviders.value) {
+    const models = p.models && p.models.length > 0 ? p.models : [p.model];
+    for (const m of models) {
+      out.push({
+        value: `${p.id}::${m}`,
+        label: `${p.name} • ${m}`,
+        providerId: p.id,
+        modelId: m,
+      });
+    }
+  }
+  return out;
+});
+
+const compactionModelValue = computed<string>(() => {
+  if (!compactionProviderId.value || !compactionModelId.value) return '';
+  return `${compactionProviderId.value}::${compactionModelId.value}`;
+});
 
 const themes: ReadonlyArray<{ value: Theme; label: string; note?: string }> = [
   { value: 'system', label: 'System' },
@@ -63,7 +150,99 @@ async function refresh() {
   } catch {
     appInfo.value = null;
   }
+  // Hydrate the compaction working copies from the persisted settings.
+  compactionTier.value =
+    (settings.value.compactionAggressiveness as CompactionAggressiveness) ||
+    'balanced';
+  compactionProviderId.value = settings.value.compactionModel?.providerId ?? '';
+  compactionModelId.value = settings.value.compactionModel?.modelId ?? '';
+  compactionArchiveDays.value = settings.value.compactionArchiveDays || 90;
+  compactionRecentWindow.value = settings.value.compactionRecentWindow || 4;
+  compactionArchiveDaysError.value = null;
+  compactionRecentWindowError.value = null;
+  // Tier-explain payload + provider list both feed the Compaction
+  // section; either failing returns the empty-state UI rather than
+  // bricking the page.
+  try {
+    compactionTiers.value = await client.compaction.getTierExplain();
+  } catch {
+    compactionTiers.value = [];
+  }
+  try {
+    compactionProviders.value = await client.llm.listProviders();
+  } catch {
+    compactionProviders.value = [];
+  }
   await loadGlobalAttachments();
+}
+
+function setCompactionTier(t: CompactionAggressiveness) {
+  compactionTier.value = t;
+  persistCompactionFields();
+}
+
+function onCompactionModelChange(evt: Event) {
+  const v = (evt.target as HTMLSelectElement).value;
+  if (!v) {
+    compactionProviderId.value = '';
+    compactionModelId.value = '';
+  } else {
+    const opt = compactionModelOptions.value.find((o) => o.value === v);
+    if (opt) {
+      compactionProviderId.value = opt.providerId;
+      compactionModelId.value = opt.modelId;
+    }
+  }
+  persistCompactionFields();
+}
+
+function onCompactionArchiveDaysInput(evt: Event) {
+  const raw = (evt.target as HTMLInputElement).value;
+  const n = Number.parseInt(raw, 10);
+  if (Number.isNaN(n) || n < 7 || n > 365) {
+    compactionArchiveDaysError.value =
+      'Archive days must be between 7 and 365.';
+    return;
+  }
+  compactionArchiveDaysError.value = null;
+  compactionArchiveDays.value = n;
+  persistCompactionFields();
+}
+
+function onCompactionRecentWindowInput(evt: Event) {
+  const raw = (evt.target as HTMLInputElement).value;
+  const n = Number.parseInt(raw, 10);
+  if (Number.isNaN(n) || n < 1) {
+    compactionRecentWindowError.value =
+      'Recent window must be at least 1.';
+    return;
+  }
+  compactionRecentWindowError.value = null;
+  compactionRecentWindow.value = n;
+  persistCompactionFields();
+}
+
+function persistCompactionFields() {
+  // Local-only error: don't persist if we're in an invalid state.
+  if (
+    compactionArchiveDaysError.value !== null ||
+    compactionRecentWindowError.value !== null
+  ) {
+    return;
+  }
+  debouncedSave(client, {
+    ...settings.value,
+    compactionAggressiveness: compactionTier.value,
+    compactionModel:
+      compactionProviderId.value && compactionModelId.value
+        ? {
+            providerId: compactionProviderId.value,
+            modelId: compactionModelId.value,
+          }
+        : undefined,
+    compactionArchiveDays: compactionArchiveDays.value,
+    compactionRecentWindow: compactionRecentWindow.value,
+  });
 }
 
 async function loadGlobalAttachments() {
@@ -258,6 +437,187 @@ onMounted(() => {
             {{ settings.windowSize.width }} × {{ settings.windowSize.height }}
           </dd>
         </dl>
+      </section>
+
+      <section data-testid="compaction-section">
+        <h2 class="font-ui text-[11px] uppercase tracking-[0.18em] text-ink-subtle">
+          Compaction
+        </h2>
+        <p class="mt-1 font-ui text-[11px] text-ink-muted">
+          When a session approaches the model's context cap, the harness
+          summarises older turns into a single message so the conversation
+          can keep going. Pick a tier — see "What does this mean?" below
+          for the trade-off.
+        </p>
+
+        <div
+          class="mt-3 inline-flex rounded-sm border border-border"
+          role="radiogroup"
+          aria-label="Compaction aggressiveness"
+        >
+          <button
+            v-for="t in COMPACTION_TIERS"
+            :key="t"
+            type="button"
+            role="radio"
+            :aria-checked="compactionTier === t"
+            class="px-3 py-1.5 font-ui text-[12px] border-r border-border last:border-r-0 transition-colors capitalize"
+            :class="compactionTier === t
+              ? 'bg-surface-3 text-ink'
+              : 'bg-surface-1 text-ink-muted hover:text-ink'"
+            :data-testid="`compaction-tier-${t}`"
+            @click="setCompactionTier(t)"
+          >
+            {{ t }}
+          </button>
+        </div>
+
+        <button
+          type="button"
+          class="mt-3 font-ui text-[11px] text-accent hover:underline"
+          data-testid="compaction-explain-toggle"
+          :aria-expanded="compactionExplainOpen"
+          @click="compactionExplainOpen = !compactionExplainOpen"
+        >
+          {{ compactionExplainOpen ? 'Hide' : 'What does this mean?' }}
+        </button>
+
+        <div
+          v-if="compactionExplainOpen"
+          class="mt-2 rounded-sm border border-border bg-surface-1 p-3 font-ui text-[12px]"
+          data-testid="compaction-explain-disclosure"
+        >
+          <div v-if="selectedTierExplain" class="space-y-1">
+            <div class="font-medium text-ink" data-testid="compaction-explain-label">
+              {{ selectedTierExplain.label }}
+            </div>
+            <p class="text-ink-muted" data-testid="compaction-explain-description">
+              {{ selectedTierExplain.description }}
+            </p>
+            <dl
+              class="mt-2 grid gap-1 font-mono text-[11px] text-ink-muted"
+              style="grid-template-columns: 14ch 1fr"
+              data-testid="compaction-explain-numerics"
+            >
+              <dt>Trigger %</dt>
+              <dd>
+                {{
+                  selectedTierExplain.triggerPct > 0
+                    ? `${Math.round(selectedTierExplain.triggerPct * 100)}% of cap`
+                    : '—'
+                }}
+              </dd>
+              <dt>Summarize %</dt>
+              <dd>
+                {{
+                  selectedTierExplain.summarizePct > 0
+                    ? `${Math.round(selectedTierExplain.summarizePct * 100)}% of oldest tokens`
+                    : '—'
+                }}
+              </dd>
+              <dt>Mode</dt>
+              <dd>{{ selectedTierExplain.mode }}</dd>
+            </dl>
+          </div>
+          <div v-else class="text-ink-muted">
+            No explain row available — using locked defaults.
+          </div>
+        </div>
+
+        <div class="mt-4 grid gap-2" style="grid-template-columns: 14ch 1fr">
+          <label
+            for="compaction-model"
+            class="self-center font-ui text-[12px] text-ink-muted"
+          >
+            Compaction model
+          </label>
+          <select
+            id="compaction-model"
+            class="rounded-sm border border-border bg-surface-1 px-2 py-1 font-ui text-[12px] text-ink"
+            data-testid="compaction-model-select"
+            :value="compactionModelValue"
+            @change="onCompactionModelChange"
+          >
+            <option value="">Use session's active model (recommended)</option>
+            <option
+              v-for="opt in compactionModelOptions"
+              :key="opt.value"
+              :value="opt.value"
+            >
+              {{ opt.label }}
+            </option>
+          </select>
+          <!--
+            TODO(compaction-strategy-ui-01KQ8TDI WP06): emit a "deprecated
+            model" warning chip here when the capability gate exposes a
+            programmatic deprecated check. The save still succeeds today;
+            the actual deprecation enforcement happens at compaction time
+            via the capability gate (plan §R7).
+          -->
+        </div>
+
+        <div class="mt-2 grid gap-2" style="grid-template-columns: 14ch 1fr">
+          <label
+            for="compaction-archive-days"
+            class="self-center font-ui text-[12px] text-ink-muted"
+          >
+            Archive days
+          </label>
+          <div>
+            <input
+              id="compaction-archive-days"
+              type="number"
+              min="7"
+              max="365"
+              :value="compactionArchiveDays"
+              class="w-24 rounded-sm border border-border bg-surface-1 px-2 py-1 font-ui text-[12px] text-ink"
+              data-testid="compaction-archive-days-input"
+              @input="onCompactionArchiveDaysInput"
+            />
+            <p
+              v-if="compactionArchiveDaysError"
+              class="mt-1 font-ui text-[11px] text-signal-danger"
+              role="alert"
+              data-testid="compaction-archive-days-error"
+            >
+              {{ compactionArchiveDaysError }}
+            </p>
+            <p v-else class="mt-1 font-ui text-[11px] text-ink-muted">
+              Soft-archived originals are deleted after this many days. Default 90.
+            </p>
+          </div>
+        </div>
+
+        <div class="mt-2 grid gap-2" style="grid-template-columns: 14ch 1fr">
+          <label
+            for="compaction-recent-window"
+            class="self-center font-ui text-[12px] text-ink-muted"
+          >
+            Recent window
+          </label>
+          <div>
+            <input
+              id="compaction-recent-window"
+              type="number"
+              min="1"
+              :value="compactionRecentWindow"
+              class="w-24 rounded-sm border border-border bg-surface-1 px-2 py-1 font-ui text-[12px] text-ink"
+              data-testid="compaction-recent-window-input"
+              @input="onCompactionRecentWindowInput"
+            />
+            <p
+              v-if="compactionRecentWindowError"
+              class="mt-1 font-ui text-[11px] text-signal-danger"
+              role="alert"
+              data-testid="compaction-recent-window-error"
+            >
+              {{ compactionRecentWindowError }}
+            </p>
+            <p v-else class="mt-1 font-ui text-[11px] text-ink-muted">
+              Most-recent user-assistant pairs that compaction never touches. Default 4.
+            </p>
+          </div>
+        </div>
       </section>
 
       <section data-testid="global-context-section">

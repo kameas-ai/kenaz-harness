@@ -29,6 +29,15 @@ const (
 	KindInjectionEmitted    Kind = "context.injection_emitted"
 	KindScopeRevoked        Kind = "context.scope_revoked"
 	KindUpdateAvailable     Kind = "context.update_available"
+
+	// Compaction kinds (compaction-strategy-ui-01KQ8TDI WP01). These
+	// signal lifecycle events of the summarize-then-replace compaction
+	// engine; the engine emits one of {session_compacted, failed} per
+	// run, and originals_deleted on the retention sweep that tombstones
+	// archived rows.
+	KindSessionCompacted          Kind = "compaction.session_compacted"
+	KindCompactionFailed          Kind = "compaction.failed"
+	KindCompactedOriginalsDeleted Kind = "compaction.originals_deleted"
 )
 
 // Event is the wire shape passed to the event log. The concrete event-log
@@ -118,6 +127,42 @@ type UpdateAvailablePayload struct {
 	Pack             pack.PackRef `json:"pack"`
 	AvailableVersion string       `json:"available_version"`
 	DiffSummary      string       `json:"diff_summary"`
+}
+
+// SessionCompactedPayload carries the success-path signalling for the
+// summarize-then-replace compaction engine
+// (compaction-strategy-ui-01KQ8TDI WP01). Emitted once per successful
+// Compact() call. Compression ratio is precomputed
+// (TokensAfterSummary / TokensInSpan) so dashboards don't have to.
+type SessionCompactedPayload struct {
+	SessionID          string  `json:"session_id"`
+	AggressivenessTier string  `json:"aggressiveness_tier"`
+	ModelUsed          string  `json:"model_used"`
+	TokensInSpan       int     `json:"tokens_in_span"`
+	TokensAfterSummary int     `json:"tokens_after_summary"`
+	CompressionRatio   float64 `json:"compression_ratio"`
+}
+
+// CompactionFailedPayload carries the failure-path signalling for the
+// compaction engine. ErrorKind is the typed error class
+// ("model_too_small", "during_tool_pair", "session_full", …) per the
+// engine's exported sentinel errors.
+type CompactionFailedPayload struct {
+	SessionID          string `json:"session_id"`
+	AggressivenessTier string `json:"aggressiveness_tier"`
+	ModelUsed          string `json:"model_used"`
+	TokensInSpan       int    `json:"tokens_in_span"`
+	ErrorKind          string `json:"error_kind"`
+}
+
+// CompactedOriginalsDeletedPayload signals that the retention sweep
+// tombstoned a window of archived session_messages rows. Carries the
+// row count plus the archived_at extremes the sweep covered, so an
+// operator inspecting the audit log can reproduce the cursor query.
+type CompactedOriginalsDeletedPayload struct {
+	DeletedCount     int       `json:"deleted_count"`
+	OldestArchivedAt time.Time `json:"oldest_archived_at"`
+	NewestArchivedAt time.Time `json:"newest_archived_at"`
 }
 
 // Marshal is a small convenience wrapper that builds an [Event] for any

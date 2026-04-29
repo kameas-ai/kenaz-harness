@@ -3,9 +3,12 @@ package settings
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/sigil-tech/kaneaz-harness/core/compaction"
 )
 
 func TestFileStore_LoadDefaults_OnMissingFile(t *testing.T) {
@@ -243,6 +246,239 @@ func TestFileStore_MaxAgentTurnsRoundTrip(t *testing.T) {
 	got, _ = store.LoadMaxAgentTurns()
 	if got != 0 {
 		t.Errorf("after Save(-5): MaxAgentTurns = %d, want 0 (negatives normalised)", got)
+	}
+}
+
+// TestEffectiveCompaction_DefaultsOnEmptySettings verifies the
+// documented defaults the chat runner reads on a fresh install:
+// balanced tier, 90-day retention, 4-pair recent window. The defaults
+// are the source-of-truth surfaces — UI tooltip copy reads through
+// these accessors so a regression here would silently change behaviour.
+func TestEffectiveCompaction_DefaultsOnEmptySettings(t *testing.T) {
+	var s Settings
+	if got := s.EffectiveCompactionAggressiveness(); got != compaction.AggressivenessBalanced {
+		t.Errorf("default aggressiveness = %q, want %q", got, compaction.AggressivenessBalanced)
+	}
+	if got := s.EffectiveCompactionArchiveDays(); got != DefaultCompactionArchiveDays {
+		t.Errorf("default archive days = %d, want %d", got, DefaultCompactionArchiveDays)
+	}
+	if got := s.EffectiveCompactionRecentWindow(); got != DefaultCompactionRecentWindow {
+		t.Errorf("default recent window = %d, want %d", got, DefaultCompactionRecentWindow)
+	}
+}
+
+// TestEffectiveCompactionAggressiveness_PassesThroughKnownTiers checks
+// that valid tier strings round-trip through Effective into the typed
+// constant the engine consumes.
+func TestEffectiveCompactionAggressiveness_PassesThroughKnownTiers(t *testing.T) {
+	for _, tier := range []compaction.CompactionAggressiveness{
+		compaction.AggressivenessOff,
+		compaction.AggressivenessConservative,
+		compaction.AggressivenessBalanced,
+		compaction.AggressivenessAggressive,
+		compaction.AggressivenessMaximal,
+	} {
+		s := Settings{CompactionAggressiveness: string(tier)}
+		if got := s.EffectiveCompactionAggressiveness(); got != tier {
+			t.Errorf("tier %q round-trip = %q, want %q", tier, got, tier)
+		}
+	}
+}
+
+// TestEffectiveCompactionArchiveDays_ClampsOutOfRange covers the
+// defensive read path — Save validation rejects out-of-range writes,
+// but a hand-edited file or a stale client could still surface bad
+// numerics. The Effective accessor must clamp gracefully so the sweep
+// never runs against a nonsense window.
+func TestEffectiveCompactionArchiveDays_ClampsOutOfRange(t *testing.T) {
+	for _, tc := range []struct {
+		raw  int
+		want int
+	}{
+		{0, DefaultCompactionArchiveDays},
+		{-5, DefaultCompactionArchiveDays}, // negative collapses to default per the <=0 branch
+		{1, MinCompactionArchiveDays},
+		{6, MinCompactionArchiveDays},
+		{7, 7},
+		{90, 90},
+		{365, 365},
+		{1000, MaxCompactionArchiveDays},
+	} {
+		s := Settings{CompactionArchiveDays: tc.raw}
+		if got := s.EffectiveCompactionArchiveDays(); got != tc.want {
+			t.Errorf("EffectiveCompactionArchiveDays(%d) = %d, want %d", tc.raw, got, tc.want)
+		}
+	}
+}
+
+// TestEffectiveCompactionRecentWindow_DefaultsOnNonPositive covers the
+// documented default-when-zero-or-negative behaviour.
+func TestEffectiveCompactionRecentWindow_DefaultsOnNonPositive(t *testing.T) {
+	for _, tc := range []struct {
+		raw  int
+		want int
+	}{
+		{0, DefaultCompactionRecentWindow},
+		{-1, DefaultCompactionRecentWindow},
+		{1, 1},
+		{4, 4},
+		{20, 20},
+	} {
+		s := Settings{CompactionRecentWindow: tc.raw}
+		if got := s.EffectiveCompactionRecentWindow(); got != tc.want {
+			t.Errorf("EffectiveCompactionRecentWindow(%d) = %d, want %d", tc.raw, got, tc.want)
+		}
+	}
+}
+
+// TestSaveAll_RejectsInvalidAggressiveness verifies the SAVE-time
+// validation rejects unknown tier strings with a typed error. WP06
+// acceptance: bad values fail at save, not silently at Effective time.
+func TestSaveAll_RejectsInvalidAggressiveness(t *testing.T) {
+	dir := t.TempDir()
+	store, err := NewFileStore(dir)
+	if err != nil {
+		t.Fatalf("NewFileStore: %v", err)
+	}
+	bad := Settings{
+		CompactionAggressiveness: "ludicrous",
+	}
+	err = store.SaveAll(bad)
+	if !errors.Is(err, ErrInvalidCompactionAggressiveness) {
+		t.Errorf("SaveAll(bad tier) error = %v, want ErrInvalidCompactionAggressiveness", err)
+	}
+}
+
+// TestSaveAll_AcceptsEmptyAggressiveness verifies the empty-string
+// tier is treated as "use default" — saved without error and resolved
+// to balanced via the Effective accessor on read-back.
+func TestSaveAll_AcceptsEmptyAggressiveness(t *testing.T) {
+	dir := t.TempDir()
+	store, err := NewFileStore(dir)
+	if err != nil {
+		t.Fatalf("NewFileStore: %v", err)
+	}
+	if err := store.SaveAll(Settings{}); err != nil {
+		t.Fatalf("SaveAll empty: %v", err)
+	}
+	got, err := store.LoadAll()
+	if err != nil {
+		t.Fatalf("LoadAll: %v", err)
+	}
+	if got.EffectiveCompactionAggressiveness() != compaction.AggressivenessBalanced {
+		t.Errorf("after Save(empty): effective tier = %q, want balanced",
+			got.EffectiveCompactionAggressiveness())
+	}
+}
+
+// TestSaveAll_RejectsArchiveDaysOutOfRange verifies the WP06 acceptance
+// criterion: clamp rejects values outside [7, 365] at SAVE.
+func TestSaveAll_RejectsArchiveDaysOutOfRange(t *testing.T) {
+	dir := t.TempDir()
+	store, err := NewFileStore(dir)
+	if err != nil {
+		t.Fatalf("NewFileStore: %v", err)
+	}
+	for _, bad := range []int{1, 6, 366, 1000} {
+		err := store.SaveAll(Settings{CompactionArchiveDays: bad})
+		if !errors.Is(err, ErrInvalidCompactionArchiveDays) {
+			t.Errorf("SaveAll(archiveDays=%d) error = %v, want ErrInvalidCompactionArchiveDays",
+				bad, err)
+		}
+	}
+	// 0 and the boundary values are accepted.
+	for _, ok := range []int{0, 7, 90, 365} {
+		if err := store.SaveAll(Settings{CompactionArchiveDays: ok}); err != nil {
+			t.Errorf("SaveAll(archiveDays=%d) unexpected error: %v", ok, err)
+		}
+	}
+}
+
+// TestSaveAll_RejectsNegativeRecentWindow covers the negative-input
+// rejection branch on the recent-window field.
+func TestSaveAll_RejectsNegativeRecentWindow(t *testing.T) {
+	dir := t.TempDir()
+	store, err := NewFileStore(dir)
+	if err != nil {
+		t.Fatalf("NewFileStore: %v", err)
+	}
+	err = store.SaveAll(Settings{CompactionRecentWindow: -1})
+	if !errors.Is(err, ErrInvalidCompactionRecentWindow) {
+		t.Errorf("SaveAll(recentWindow=-1) error = %v, want ErrInvalidCompactionRecentWindow", err)
+	}
+	if err := store.SaveAll(Settings{CompactionRecentWindow: 0}); err != nil {
+		t.Errorf("SaveAll(recentWindow=0) unexpected: %v", err)
+	}
+	if err := store.SaveAll(Settings{CompactionRecentWindow: 4}); err != nil {
+		t.Errorf("SaveAll(recentWindow=4) unexpected: %v", err)
+	}
+}
+
+// TestFileStore_CompactionFields_RoundTrip verifies the persisted JSON
+// shape preserves every compaction field across a Save → Load cycle,
+// including the nested ProviderProfileRef wire shape.
+func TestFileStore_CompactionFields_RoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	store, err := NewFileStore(dir)
+	if err != nil {
+		t.Fatalf("NewFileStore: %v", err)
+	}
+	in := Settings{
+		CompactionAggressiveness: string(compaction.AggressivenessAggressive),
+		CompactionModel:          ProviderProfileRef{ProviderID: "anthropic", ModelID: "claude-haiku-3-5"},
+		CompactionArchiveDays:    30,
+		CompactionRecentWindow:   8,
+	}
+	if err := store.SaveAll(in); err != nil {
+		t.Fatalf("SaveAll: %v", err)
+	}
+	got, err := store.LoadAll()
+	if err != nil {
+		t.Fatalf("LoadAll: %v", err)
+	}
+	if got.CompactionAggressiveness != in.CompactionAggressiveness {
+		t.Errorf("aggressiveness = %q, want %q",
+			got.CompactionAggressiveness, in.CompactionAggressiveness)
+	}
+	if got.CompactionModel != in.CompactionModel {
+		t.Errorf("model = %+v, want %+v", got.CompactionModel, in.CompactionModel)
+	}
+	if got.CompactionArchiveDays != in.CompactionArchiveDays {
+		t.Errorf("archive days = %d, want %d",
+			got.CompactionArchiveDays, in.CompactionArchiveDays)
+	}
+	if got.CompactionRecentWindow != in.CompactionRecentWindow {
+		t.Errorf("recent window = %d, want %d",
+			got.CompactionRecentWindow, in.CompactionRecentWindow)
+	}
+
+	// Disk JSON shape: confirm the camelCase keys are present so the
+	// frontend's TypeScript interface matches the wire format.
+	raw, err := os.ReadFile(filepath.Join(dir, "kaneaz-harness", "settings.json"))
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	var disk map[string]any
+	if err := json.Unmarshal(raw, &disk); err != nil {
+		t.Fatalf("disk JSON parse: %v", err)
+	}
+	for _, key := range []string{
+		"compactionAggressiveness",
+		"compactionModel",
+		"compactionArchiveDays",
+		"compactionRecentWindow",
+	} {
+		if _, ok := disk[key]; !ok {
+			t.Errorf("disk JSON missing %q", key)
+		}
+	}
+	// Nested ProviderProfileRef keys.
+	model, _ := disk["compactionModel"].(map[string]any)
+	if _, ok := model["providerId"]; !ok {
+		t.Errorf("compactionModel missing providerId")
+	}
+	if _, ok := model["modelId"]; !ok {
+		t.Errorf("compactionModel missing modelId")
 	}
 }
 

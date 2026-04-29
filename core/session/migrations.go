@@ -77,7 +77,9 @@ const sqlInitSchema = `
 // migrations_branches.go); WP10 lands as 0307 (corpora — see
 // migrations_corpora.go); WP04 lands 0308 (memory hook journal — see
 // migrations_memory_hook_journal.go) and 0309 (agent_graph_events —
-// see migrations_agent_graph_events.go).
+// see migrations_agent_graph_events.go); compaction-strategy-ui WP01
+// lands as 0310 (compaction bookkeeping columns + indexes — see
+// migrations_compaction.go).
 func Migrations() []migrations.Migration {
 	return []migrations.Migration{
 		{
@@ -119,6 +121,7 @@ func Migrations() []migrations.Migration {
 		migration0307(),
 		migration0308(),
 		migration0309(),
+		migration0310(),
 	}
 }
 

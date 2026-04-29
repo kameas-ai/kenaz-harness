@@ -6,11 +6,18 @@ import (
 	"encoding/hex"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/sigil-tech/kaneaz-harness/core/attachments"
 	"github.com/sigil-tech/kaneaz-harness/core/llm"
 	"github.com/sigil-tech/kaneaz-harness/core/session"
 )
+
+// timeNow is a stable clock for the WP07 ListMessagesActive tests so
+// the relative ArchivedAt / CompactedAt windows stay deterministic.
+func timeNow() time.Time {
+	return time.Date(2026, 4, 28, 12, 0, 0, 0, time.UTC)
+}
 
 // TestManagerAPI_RoundTrip exercises the rpc-side impl against a real
 // Manager backed by an in-memory store. The intent is to pin the
@@ -264,6 +271,98 @@ func TestSendMessageWithBlocks_RoundTrip(t *testing.T) {
 	}
 	if got.ContentBlocks[1].Source == nil || got.ContentBlocks[1].Source.MediaType != "image/png" {
 		t.Errorf("image source lost: %+v", got.ContentBlocks[1].Source)
+	}
+}
+
+// TestListMessagesActive_HidesArchivedRows pins the WP07
+// scrollback contract: ListMessagesActive omits rows whose
+// ArchivedAt is non-nil, while ListMessagesAll surfaces every row.
+func TestListMessagesActive_HidesArchivedRows(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	store := session.NewMemoryStore()
+	smgr := session.NewManager(store)
+	api := NewManagerAPI(smgr)
+
+	s, err := api.Create(ctx, "compacted")
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	// Append three messages: one archived, one summary, one live.
+	// AppendMessage preserves the bookkeeping fields the engine
+	// would set in production.
+	now := timeNow()
+	archivedAt := now.Add(-time.Hour)
+	summaryID := "msg-summary"
+	if _, err := store.AppendMessage(ctx, session.Message{
+		ID: "msg-archived", SessionID: s.ID, Role: session.RoleUser,
+		Content: "old user turn", CreatedAt: now.Add(-2 * time.Hour),
+		ArchivedAt: &archivedAt, CompactedIntoID: &summaryID,
+	}); err != nil {
+		t.Fatalf("append archived: %v", err)
+	}
+	compactedAt := archivedAt
+	if _, err := store.AppendMessage(ctx, session.Message{
+		ID: summaryID, SessionID: s.ID, Role: session.RoleSystem,
+		Content: "[Earlier conversation summary: ...]", CreatedAt: now.Add(-time.Hour),
+		CompactedAt: &compactedAt,
+	}); err != nil {
+		t.Fatalf("append summary: %v", err)
+	}
+	if _, err := store.AppendMessage(ctx, session.Message{
+		ID: "msg-live", SessionID: s.ID, Role: session.RoleUser,
+		Content: "live turn", CreatedAt: now,
+	}); err != nil {
+		t.Fatalf("append live: %v", err)
+	}
+
+	// Active view: archived row is filtered out, summary + live
+	// remain. The summary carries CompactedAt; the live row is
+	// untouched.
+	active, err := api.ListMessagesActive(ctx, s.ID)
+	if err != nil {
+		t.Fatalf("ListMessagesActive: %v", err)
+	}
+	if len(active.Messages) != 2 {
+		t.Fatalf("active len = %d, want 2", len(active.Messages))
+	}
+	if active.Messages[0].ID != summaryID {
+		t.Errorf("active[0].ID = %q, want %q", active.Messages[0].ID, summaryID)
+	}
+	if active.Messages[0].CompactedAt == "" {
+		t.Errorf("active[0].CompactedAt empty; expected populated")
+	}
+	if active.Messages[1].ID != "msg-live" {
+		t.Errorf("active[1].ID = %q, want msg-live", active.Messages[1].ID)
+	}
+	// SweptCount is a stub zero in WP07 — see plan §2.8.
+	if active.SweptCount != 0 {
+		t.Errorf("active.SweptCount = %d, want 0 (WP07 stub)", active.SweptCount)
+	}
+
+	// Full view: every row including the archived original. The
+	// archived row carries CompactedIntoID + ArchivedAt so the UI
+	// can render the chip + faded background.
+	all, err := api.ListMessagesAll(ctx, s.ID)
+	if err != nil {
+		t.Fatalf("ListMessagesAll: %v", err)
+	}
+	if len(all.Messages) != 3 {
+		t.Fatalf("all len = %d, want 3", len(all.Messages))
+	}
+	if all.Messages[0].ID != "msg-archived" {
+		t.Errorf("all[0].ID = %q, want msg-archived", all.Messages[0].ID)
+	}
+	if all.Messages[0].ArchivedAt == "" {
+		t.Errorf("all[0].ArchivedAt empty; expected populated")
+	}
+	if all.Messages[0].CompactedIntoID != summaryID {
+		t.Errorf("all[0].CompactedIntoID = %q, want %q",
+			all.Messages[0].CompactedIntoID, summaryID)
+	}
+	if all.SweptCount != 0 {
+		t.Errorf("all.SweptCount = %d, want 0 (WP07 stub)", all.SweptCount)
 	}
 }
 

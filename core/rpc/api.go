@@ -15,12 +15,15 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
 	"path/filepath"
 
 	"github.com/sigil-tech/kaneaz-harness/core"
 	coreag "github.com/sigil-tech/kaneaz-harness/core/agentgraph"
 	corenodes "github.com/sigil-tech/kaneaz-harness/core/agentgraph/nodes"
 	coreatt "github.com/sigil-tech/kaneaz-harness/core/attachments"
+	corecompaction "github.com/sigil-tech/kaneaz-harness/core/compaction"
+	compactionwiring "github.com/sigil-tech/kaneaz-harness/core/compaction/wiring"
 	corecontexts "github.com/sigil-tech/kaneaz-harness/core/contexts"
 	corecorpus "github.com/sigil-tech/kaneaz-harness/core/corpus"
 	"github.com/sigil-tech/kaneaz-harness/core/event"
@@ -875,6 +878,21 @@ type llmStack struct {
 	// adapter against the SAME instance) wires both halves of the
 	// FR-057b loop without separate plumbing.
 	bashStore *corebash.Store
+	// compactionScheduler is the soft-archive sweep scheduler
+	// (compaction-strategy-ui-01KQ8TDI WP05 + WP08). Started during
+	// boot when HARNESS_COMPACTION != "off"; nil when compaction is
+	// disabled at boot. The caller is responsible for invoking
+	// Stop() on shutdown so the in-flight sweep returns cleanly.
+	compactionScheduler *corecompaction.Scheduler
+	// compactionLLM is the LLM-call adapter the compaction engine
+	// dispatches summarization through. Held on the stack so the
+	// rpc layer can expose its OverheadTotals on the per-session
+	// cost surface (FR §2.11). nil when compaction is disabled.
+	compactionLLM *compactionwiring.LLMCaller
+	// compactionAudit is the in-memory audit ring buffer the rpc
+	// layer queries when surfacing recent compaction events to the
+	// frontend. nil when compaction is disabled.
+	compactionAudit *compactionwiring.AuditEmitter
 }
 
 func newLLMStack(
@@ -1016,7 +1034,25 @@ func newLLMStack(
 	// pump path is unreachable in production once this lands. The
 	// toolloop construction above stays intact only because tests still
 	// reference it; WP-C deletes the loop wholesale.
-	chatRunner := buildChatRunner(broker, reg, wrappedPool, perms, historyAdapter, settingsImpl, graphMgr, toolDiscoverer, artifactSinkConcrete)
+	// Compaction wiring (mission compaction-strategy-ui-01KQ8TDI WP08).
+	// Constructs the engine + sweep scheduler when:
+	//   - HARNESS_COMPACTION != "off" (env-flag opt-out).
+	//   - The session manager is wired (need session.Store for the
+	//     MessageStore + SweepStore adapters).
+	//
+	// Failure paths degrade gracefully: a missing session store leaves
+	// compactionDeps nil and the chat runner falls through without the
+	// pre-send hook (the existing chat path stays intact). Engine
+	// construction errors log at warn and produce nil too.
+	compactionDeps, sweepScheduler, compactionLLM, compactionAudit := buildCompactionWiring(c, reg, settingsImpl)
+	if sweepScheduler != nil {
+		// Start the sweep loop in a background goroutine. Errors are
+		// swallowed by the loop; the optional onSweep callback inside
+		// the scheduler logs failures.
+		sweepScheduler.Start(context.Background())
+	}
+
+	chatRunner := buildChatRunner(broker, reg, wrappedPool, perms, historyAdapter, settingsImpl, graphMgr, toolDiscoverer, artifactSinkConcrete, compactionDeps)
 	api := llm.New(llm.Config{
 		Registry:      reg,
 		Sink:          &streamSinkAdapter{broker: broker},
@@ -1032,12 +1068,163 @@ func newLLMStack(
 		Artifacts:     &llmArtifactSinkAdapter{inner: artifactSink},
 	})
 	return llmStack{
-		api:       api,
-		pool:      mcpPool,
-		secrets:   secretsBackend,
-		builtins:  builtinRegistry,
-		bashStore: bashStore,
+		api:                 api,
+		pool:                mcpPool,
+		secrets:             secretsBackend,
+		builtins:            builtinRegistry,
+		bashStore:           bashStore,
+		compactionScheduler: sweepScheduler,
+		compactionLLM:       compactionLLM,
+		compactionAudit:     compactionAudit,
 	}
+}
+
+// buildCompactionWiring constructs the compaction engine, sweep
+// scheduler, and the per-stream chat-runner deps bundle (mission
+// compaction-strategy-ui-01KQ8TDI WP08). Returns nil values when
+// compaction is disabled (env flag) or its dependencies are not yet
+// wired (test harness boot path) — every nil is a graceful no-op
+// downstream.
+//
+// The HARNESS_COMPACTION=off env check is read ONCE at boot for the
+// scheduler (mid-day env changes don't toggle the scheduler);
+// the chat-runner pre-send hook re-reads the env on every send so
+// users can A/B test by setting it without restarting (see
+// chat_runner.compactionDisabledByEnv).
+func buildCompactionWiring(
+	c *core.Core,
+	reg corellm.Registry,
+	settingsImpl *settings.API,
+) (deps *chat.CompactionDeps, sched *corecompaction.Scheduler, llm *compactionwiring.LLMCaller, audit *compactionwiring.AuditEmitter) {
+	if compactionEnvDisabled() {
+		logging.L().Info("compaction.disabled", "reason", "HARNESS_COMPACTION=off")
+		return nil, nil, nil, nil
+	}
+	if c == nil {
+		return nil, nil, nil, nil
+	}
+	mgr := c.SessionManager()
+	if mgr == nil {
+		return nil, nil, nil, nil
+	}
+	sessionStore := mgr.Store()
+	if sessionStore == nil {
+		return nil, nil, nil, nil
+	}
+
+	messageStoreAdapter := compactionwiring.NewMessageStore(sessionStore)
+	sweepStoreAdapter := compactionwiring.NewSweepStore(sessionStore)
+	caps := compactionwiring.NewCapabilityLookup()
+	auditAdapter := compactionwiring.NewAuditEmitter()
+	llmAdapter := compactionwiring.NewLLMCaller(reg)
+
+	// Recent-window resolver — closes over the settings store so a UI
+	// change takes effect on the next send.
+	recentWindow := func() int {
+		if settingsImpl == nil || settingsImpl.Store() == nil {
+			return settings.DefaultCompactionRecentWindow
+		}
+		s, err := settingsImpl.Store().LoadAll()
+		if err != nil {
+			return settings.DefaultCompactionRecentWindow
+		}
+		return s.EffectiveCompactionRecentWindow()
+	}
+
+	engine, err := corecompaction.NewEngine(corecompaction.EngineConfig{
+		Store:        messageStoreAdapter,
+		LLM:          llmAdapter,
+		Capabilities: caps,
+		Audit:        auditAdapter,
+		RecentWindow: recentWindow,
+	})
+	if err != nil {
+		logging.L().Warn("compaction.engine.construct_failed", "err", err.Error())
+		return nil, nil, nil, nil
+	}
+
+	// Sweep scheduler — re-reads settings on every tick so the user-
+	// tuned archive-days takes effect without a restart. The OFF tier
+	// disables the sweep at the closure level (per WP08 acceptance).
+	sweepRunner := func(ctx context.Context) (int, error) {
+		if compactionEnvDisabled() {
+			return 0, nil
+		}
+		if settingsImpl == nil || settingsImpl.Store() == nil {
+			return 0, nil
+		}
+		s, err := settingsImpl.Store().LoadAll()
+		if err != nil {
+			return 0, err
+		}
+		if s.EffectiveCompactionAggressiveness() == corecompaction.AggressivenessOff {
+			// User opted out: sweep is also disabled so a deliberate
+			// "I want full transparency" install never deletes archived
+			// rows out from under the user.
+			return 0, nil
+		}
+		return corecompaction.RunSweep(ctx, sweepStoreAdapter, auditAdapter,
+			s.EffectiveCompactionArchiveDays(), nil)
+	}
+	scheduler := corecompaction.NewScheduler(sweepRunner,
+		corecompaction.WithOnSweep(func(deleted int, err error) {
+			if err != nil {
+				logging.L().Warn("compaction.sweep.failed", "err", err.Error())
+				return
+			}
+			if deleted > 0 {
+				logging.L().Info("compaction.sweep.ok", "deleted", deleted)
+			}
+		}),
+	)
+
+	deps = &chat.CompactionDeps{
+		Engine: engine,
+		Aggressiveness: func() corecompaction.CompactionAggressiveness {
+			if settingsImpl == nil || settingsImpl.Store() == nil {
+				return corecompaction.AggressivenessBalanced
+			}
+			s, err := settingsImpl.Store().LoadAll()
+			if err != nil {
+				return corecompaction.AggressivenessBalanced
+			}
+			return s.EffectiveCompactionAggressiveness()
+		},
+		CompactionModel: func() (corecompaction.ProviderProfileRef, bool) {
+			if settingsImpl == nil || settingsImpl.Store() == nil {
+				return corecompaction.ProviderProfileRef{}, false
+			}
+			s, err := settingsImpl.Store().LoadAll()
+			if err != nil {
+				return corecompaction.ProviderProfileRef{}, false
+			}
+			if s.CompactionModel.IsZero() {
+				return corecompaction.ProviderProfileRef{}, false
+			}
+			return corecompaction.ProviderProfileRef{
+				ProviderID: s.CompactionModel.ProviderID,
+				ModelID:    s.CompactionModel.ModelID,
+			}, true
+		},
+		RecentWindow: recentWindow,
+		MaxContextTokens: func(model corecompaction.ProviderProfileRef) (int, bool) {
+			return caps.MaxContextTokens(model)
+		},
+	}
+	return deps, scheduler, llmAdapter, auditAdapter
+}
+
+// compactionEnvDisabled reports whether HARNESS_COMPACTION=off is
+// set. Mirrors the chat-runner's compactionDisabledByEnv but lives in
+// the rpc layer so the boot-time scheduler check stays self-contained.
+func compactionEnvDisabled() bool {
+	return osGetenv("HARNESS_COMPACTION") == "off"
+}
+
+// osGetenv is a thin wrapper so tests can stub the env without
+// global mutation. Production reads through os.Getenv directly.
+var osGetenv = func(key string) string {
+	return os.Getenv(key)
 }
 
 // buildChatRunner constructs the *chat.ChatRunner that replaces
@@ -1060,6 +1247,7 @@ func buildChatRunner(
 	graphMgr *graphview.Manager,
 	tools corellm.ToolDiscoverer,
 	artifactSinkConcrete *artifactsview.Sink,
+	compactionDeps *chat.CompactionDeps,
 ) *chat.ChatRunner {
 	if graphMgr == nil || graphMgr.Kernel() == nil {
 		logging.L().Warn("chat.runner.disabled", "reason", "graph manager unavailable")
@@ -1118,6 +1306,7 @@ func buildChatRunner(
 		MaxTurns:       maxTurns,
 		EnvDefaults:    envDefaults,
 		ToolDiscoverer: chatToolDiscovererAdapter{inner: tools},
+		Compaction:     compactionDeps,
 	})
 	if err != nil {
 		logging.L().Error("chat.runner.construct_failed", "err", err.Error())

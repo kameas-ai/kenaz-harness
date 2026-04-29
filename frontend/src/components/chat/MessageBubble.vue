@@ -26,6 +26,7 @@
  */
 
 import { computed, ref } from 'vue';
+import { Archive, Layers } from 'lucide-vue-next';
 import StreamingText from './StreamingText.vue';
 import PinMenu from './PinMenu.vue';
 import ImageBlock from './ImageBlock.vue';
@@ -84,6 +85,18 @@ const props = defineProps<{
    * per-bubble). Empty / undefined renders no chip row.
    */
   artifacts?: readonly Artifact[];
+  /**
+   * Compaction bookkeeping (compaction-strategy-ui WP07). When the
+   * row is the synthetic summary, summaryFoldedCount is the number of
+   * archived rows that fold into it (computed by the parent from
+   * `messages.filter(m => m.compactedIntoId === this.messageId).length`).
+   * When the row is an archived original, archivedFromSummaryId points
+   * back at the summary that absorbed it so the chip can scroll-to.
+   */
+  isSummary?: boolean;
+  summaryFoldedCount?: number;
+  isArchived?: boolean;
+  archivedFromSummaryId?: string;
 }>();
 
 const emit = defineEmits<{
@@ -103,6 +116,12 @@ const emit = defineEmits<{
    * lifecycle (it fetches bytes via `client.artifacts.get`).
    */
   (e: 'open-artifact', artifact: Artifact): void;
+  /**
+   * User clicked the "→ summary" chip on an archived row. The parent
+   * scrolls / jumps to the summary in the scrollback
+   * (compaction-strategy-ui WP07).
+   */
+  (e: 'jump-to-summary', summaryId: string): void;
 }>();
 
 const menuOpen = ref(false);
@@ -219,21 +238,33 @@ const wrapperClass = computed(() => {
 
 const bubbleClass = computed(() => {
   const base = 'max-w-[78ch] px-4 py-3 rounded-md font-ui text-sm leading-relaxed';
+  // Archived rows render at half-strength with a left-border tag —
+  // the surface still shows them in full when "Show full history" is
+  // on (compaction-strategy-ui WP07 plan §2.8). The opacity tweak
+  // pulls from the global ink ramp rather than hard-coding a color.
+  const archived = props.isArchived
+    ? ' opacity-60 border-l-2 border-l-accent-hairline'
+    : '';
   if (isUser.value) {
-    return `${base} bg-surface-3 text-ink border border-border-muted`;
+    return `${base} bg-surface-3 text-ink border border-border-muted${archived}`;
   }
   if (isAssistant.value) {
     const live = props.streaming
       ? 'border-accent shadow-[0_0_0_1px_var(--accent-glow)]'
       : 'border-border-muted';
-    return `${base} bg-surface-1 text-ink border ${live}`;
+    return `${base} bg-surface-1 text-ink border ${live}${archived}`;
   }
   if (isSystem.value) {
-    return `${base} bg-transparent text-ink-muted italic`;
+    return `${base} bg-transparent text-ink-muted italic${archived}`;
   }
   // tool — monospace EventStreamRow-style
-  return 'font-mono text-[12px] text-ink-muted px-3 py-1';
+  return `font-mono text-[12px] text-ink-muted px-3 py-1${archived}`;
 });
+
+function onJumpToSummary() {
+  if (!props.archivedFromSummaryId) return;
+  emit('jump-to-summary', props.archivedFromSummaryId);
+}
 
 const roleLabel = computed(() => props.role.toUpperCase());
 
@@ -319,6 +350,40 @@ function isLastBlock(idx: number): boolean {
           </div>
         </div>
       </header>
+
+      <!-- Compaction summary indicator (WP07): rendered on the
+           synthetic summary row regardless of toggle state. -->
+      <div
+        v-if="isSummary"
+        class="mb-2 flex items-center gap-1.5 font-ui text-[11px] text-ink-muted"
+        data-testid="message-summary-indicator"
+      >
+        <Layers class="h-3.5 w-3.5 text-accent" aria-hidden="true" />
+        <span>
+          Summary of {{ summaryFoldedCount ?? 0 }}
+          {{ (summaryFoldedCount ?? 0) === 1 ? 'turn' : 'turns' }}
+        </span>
+      </div>
+
+      <!-- Archived row tag + jump-to-summary chip (WP07). -->
+      <div
+        v-if="isArchived"
+        class="mb-2 flex items-center gap-1.5 font-ui text-[10px] uppercase tracking-[0.18em] text-ink-subtle"
+        data-testid="message-archived-tag"
+      >
+        <Archive class="h-3 w-3" aria-hidden="true" />
+        <span>archived</span>
+        <button
+          v-if="archivedFromSummaryId"
+          type="button"
+          class="ml-2 normal-case tracking-normal text-[11px] text-accent hover:underline"
+          data-testid="message-archived-jump"
+          :data-summary-id="archivedFromSummaryId"
+          @click="onJumpToSummary"
+        >
+          → summary
+        </button>
+      </div>
 
       <!-- tool-call rows: namespaced monospace line each -->
       <ul v-if="toolCalls && toolCalls.length > 0" class="space-y-1 mb-2">

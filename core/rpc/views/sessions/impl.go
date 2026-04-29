@@ -329,6 +329,11 @@ func (a *managerAPI) StopStream(_ context.Context, _ string) error {
 // messageToView projects the durable session.Message into the
 // rpc-layer wire shape. Tool-call args are coerced to a one-line
 // summary; the full structured payload stays in the durable record.
+//
+// Compaction bookkeeping (WP07): CompactedIntoID / CompactedAt /
+// ArchivedAt are surfaced on the wire as RFC3339Nano UTC strings (or
+// the empty string for nil pointers) so the frontend can render the
+// summary indicator + archived chip without a second round-trip.
 func messageToView(m session.Message) Message {
 	out := Message{
 		ID:        m.ID,
@@ -347,6 +352,15 @@ func messageToView(m session.Message) Message {
 			})
 		}
 	}
+	if m.CompactedIntoID != nil {
+		out.CompactedIntoID = *m.CompactedIntoID
+	}
+	if m.CompactedAt != nil {
+		out.CompactedAt = m.CompactedAt.UTC().Format(time.RFC3339Nano)
+	}
+	if m.ArchivedAt != nil {
+		out.ArchivedAt = m.ArchivedAt.UTC().Format(time.RFC3339Nano)
+	}
 	return out
 }
 
@@ -361,6 +375,47 @@ func (a *managerAPI) ListMessages(ctx context.Context, id string) ([]Message, er
 		out = append(out, messageToView(m))
 	}
 	return out, nil
+}
+
+// ListMessagesActive implements SessionsAPI. Filters to rows where
+// archived_at IS NULL via the manager's ListMessagesActive helper.
+//
+// SweptCount is currently always 0: by design the soft-archive sweep
+// hard-deletes rows without leaving a tombstone, so a precise count
+// requires either a per-session counter (deferred to WP09) or a
+// recoverable "earliest sequence" marker we don't yet keep. The wire
+// field ships as a stub so frontend code paths are exercised end-to-end
+// and the placeholder UI becomes a one-line flip once tracking lands.
+//
+// TODO (WP09): track swept count via a session-level counter
+// incremented inside compaction.RunSweep so the placeholder renders an
+// accurate "N earlier turns no longer available" copy.
+func (a *managerAPI) ListMessagesActive(ctx context.Context, id string) (ListMessagesResult, error) {
+	msgs, err := a.mgr.ListMessagesActive(ctx, id)
+	if err != nil {
+		return ListMessagesResult{}, err
+	}
+	out := make([]Message, 0, len(msgs))
+	for _, m := range msgs {
+		out = append(out, messageToView(m))
+	}
+	return ListMessagesResult{Messages: out, SweptCount: 0}, nil
+}
+
+// ListMessagesAll implements SessionsAPI. Returns every message in the
+// session, including soft-archived rows, ordered by sequence ASC. The
+// frontend "Show full history" toggle hits this path. SweptCount is a
+// placeholder zero today — see ListMessagesActive for the rationale.
+func (a *managerAPI) ListMessagesAll(ctx context.Context, id string) (ListMessagesResult, error) {
+	msgs, err := a.mgr.ListMessages(ctx, id)
+	if err != nil {
+		return ListMessagesResult{}, err
+	}
+	out := make([]Message, 0, len(msgs))
+	for _, m := range msgs {
+		out = append(out, messageToView(m))
+	}
+	return ListMessagesResult{Messages: out, SweptCount: 0}, nil
 }
 
 // AppendMessage implements SessionsAPI. Persists a single chat turn

@@ -8,6 +8,7 @@ import (
 
 	"github.com/sigil-tech/kaneaz-harness/core/agentgraph"
 	corecompaction "github.com/sigil-tech/kaneaz-harness/core/agentgraph/compaction"
+	sessioncompaction "github.com/sigil-tech/kaneaz-harness/core/compaction"
 )
 
 // API is the concrete CompactionAPI.
@@ -150,6 +151,98 @@ func (a *API) ListCustomStrategies(ctx context.Context) ([]CustomStrategy, error
 		return []CustomStrategy{}, nil
 	}
 	return a.graphLister(ctx)
+}
+
+// GetTierExplain returns the static tier-explain payload the Settings
+// panel renders inside the "What does this mean?" disclosure on the
+// compaction-aggressiveness dial (mission
+// compaction-strategy-ui-01KQ8TDI §2.2 / §2.9).
+//
+// The numerics come from core/compaction.Tier() so the engine and UI
+// share a single source of truth — the descriptions are static copy
+// from plan §2.2.
+//
+// This method is deliberately pipeline-independent: a nil receiver still
+// returns the payload so a fresh install with no compaction pipeline
+// wired in (or a chassis booted with the feature flag off) still surfaces
+// the dial copy in Settings.
+func (a *API) GetTierExplain(_ context.Context) ([]TierExplain, error) {
+	return tierExplainRows(), nil
+}
+
+// tierExplainRows builds the five-row payload from core/compaction.Tier
+// + the locked descriptions. Centralised so the binding test and the
+// view test can share a fixture without a separate helper.
+func tierExplainRows() []TierExplain {
+	type row struct {
+		tier        sessioncompaction.CompactionAggressiveness
+		label       string
+		description string
+	}
+	rows := []row{
+		{
+			tier:  sessioncompaction.AggressivenessOff,
+			label: "Off",
+			description: "Never compact. Hitting the context cap will fail honestly with a " +
+				"'session full' error. Recommended only when you want full transparency " +
+				"about hitting the cap.",
+		},
+		{
+			tier:  sessioncompaction.AggressivenessConservative,
+			label: "Conservative",
+			description: "Compact only when you've used 95% of the context window, summarising " +
+				"the oldest 20% of turns. Preserves the most history.",
+		},
+		{
+			tier:  sessioncompaction.AggressivenessBalanced,
+			label: "Balanced (default)",
+			description: "Compact at 80% of the context window, summarising the oldest 30% of " +
+				"turns. The recommended sweet spot for long sessions.",
+		},
+		{
+			tier:  sessioncompaction.AggressivenessAggressive,
+			label: "Aggressive",
+			description: "Compact at 60% of the context window, summarising the oldest 40% of " +
+				"turns. Long sessions stay cheap, with more nuance lost to summary.",
+		},
+		{
+			tier:  sessioncompaction.AggressivenessMaximal,
+			label: "Maximal",
+			description: "Continuous rolling summary on every turn. Best for 'infinite chat' UX " +
+				"where session length matters more than per-turn fidelity. Pays for an " +
+				"extra summarisation call every turn.",
+		},
+	}
+
+	out := make([]TierExplain, len(rows))
+	for i, r := range rows {
+		params := sessioncompaction.Tier(r.tier)
+		out[i] = TierExplain{
+			Aggressiveness: string(r.tier),
+			Label:          r.label,
+			Description:    r.description,
+			TriggerPct:     params.TriggerPct,
+			SummarizePct:   params.SummarizePct,
+			Mode:           modeString(params.Mode),
+		}
+	}
+	return out
+}
+
+// modeString renders a CompactionMode integer as the wire-stable string
+// the frontend expects ("none" | "threshold" | "rolling"). Centralised
+// so any future mode addition has a single mapping point.
+func modeString(m sessioncompaction.CompactionMode) string {
+	switch m {
+	case sessioncompaction.ModeNone:
+		return "none"
+	case sessioncompaction.ModeThreshold:
+		return "threshold"
+	case sessioncompaction.ModeRolling:
+		return "rolling"
+	default:
+		return "none"
+	}
 }
 
 // ---- conversions ----

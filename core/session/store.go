@@ -57,6 +57,41 @@ type Store interface {
 
 	AppendMessage(ctx context.Context, m Message) (Message, error)
 	ListMessages(ctx context.Context, sessionID string) ([]Message, error)
+	// ListMessagesActive returns only rows where archived_at IS NULL,
+	// ordered by sequence ASC. This is the default scrollback view once
+	// a session has any compacted history (compaction-strategy-ui WP07).
+	ListMessagesActive(ctx context.Context, sessionID string) ([]Message, error)
+	// ApplyCompaction inserts the synthetic summary row + flips
+	// compacted_into_id / archived_at on every original row in
+	// originalIDs in a single SQLite transaction. The caller (the
+	// compaction engine via core/compaction/wiring) supplies the summary
+	// shape; the Store only sequences the writes atomically.
+	//
+	// summary.SessionID is ignored — the sessionID arg is the
+	// authoritative one. summary.Sequence is used as-is (the engine
+	// computes "lowest sequence in span" so the summary lands at the
+	// head of the surviving history). Summary content is persisted
+	// verbatim, including the canonical "[Earlier conversation summary: …]"
+	// or "[Rolling summary: …]" wrapper the engine produced.
+	//
+	// Compaction-strategy-ui-01KQ8TDI WP08 wires this into a real
+	// session_messages INSERT + UPDATE pair; the in-memory implementation
+	// mirrors the same semantics on the in-memory slice for tests.
+	ApplyCompaction(ctx context.Context, sessionID string, summary Message,
+		originalIDs []string, archivedAt time.Time) error
+	// DeleteArchivedBefore tombstones session_messages rows whose
+	// archived_at is non-NULL and older than cutoff, in batched DELETEs
+	// of pageLimit each, until no more rows match. Returns the total
+	// deleted count plus the oldest / newest archived_at timestamps the
+	// sweep covered. Summary rows (compacted_into_id IS NULL) are
+	// excluded by the WHERE clause.
+	//
+	// Wraps the SQL the soft-archive sweep (core/compaction/sweep.go)
+	// drives once per scheduler tick; the in-memory implementation
+	// mirrors the semantics so unit tests can exercise the sweep without
+	// a real DB.
+	DeleteArchivedBefore(ctx context.Context, cutoff time.Time, pageLimit int) (
+		deleted int, oldest, newest time.Time, err error)
 }
 
 // memStore is the in-memory Store implementation. Backed by maps
@@ -288,6 +323,116 @@ func (s *memStore) ListMessages(_ context.Context, sessionID string) ([]Message,
 	out := make([]Message, len(s.messages[sessionID]))
 	copy(out, s.messages[sessionID])
 	return out, nil
+}
+
+// ListMessagesActive returns only the messages whose ArchivedAt is nil.
+// In-memory implementation walks the existing slice; the SQL store uses
+// a partial-index-friendly WHERE clause.
+func (s *memStore) ListMessagesActive(_ context.Context, sessionID string) ([]Message, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if _, ok := s.records[sessionID]; !ok {
+		return nil, ErrSessionNotFound
+	}
+	src := s.messages[sessionID]
+	out := make([]Message, 0, len(src))
+	for _, m := range src {
+		if m.ArchivedAt != nil {
+			continue
+		}
+		out = append(out, m)
+	}
+	return out, nil
+}
+
+// ApplyCompaction inserts the synthetic summary row at its caller-
+// supplied Sequence and flips compacted_into_id / archived_at on every
+// id in originalIDs. Atomic in the sense that the in-memory map is
+// guarded by the store's RWMutex for the whole operation; tests can
+// pin the post-compaction state without races.
+func (s *memStore) ApplyCompaction(_ context.Context, sessionID string, summary Message,
+	originalIDs []string, archivedAt time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.records[sessionID]; !ok {
+		return ErrSessionNotFound
+	}
+	// Build a set of original ids for the flip pass.
+	idSet := make(map[string]struct{}, len(originalIDs))
+	for _, id := range originalIDs {
+		idSet[id] = struct{}{}
+	}
+	// Flip every original.
+	src := s.messages[sessionID]
+	at := archivedAt
+	intoID := summary.ID
+	for i := range src {
+		if _, ok := idSet[src[i].ID]; !ok {
+			continue
+		}
+		// Only flip rows that have not already been archived. The engine
+		// guards this upstream (only ListActiveMessages rows are folded)
+		// but the store still tolerates a re-flip as idempotent.
+		t := at
+		s.messages[sessionID][i].ArchivedAt = &t
+		id := intoID
+		s.messages[sessionID][i].CompactedIntoID = &id
+	}
+	// Insert the summary row. Normalize content shape so reads round-
+	// trip with the SQL store's behavior.
+	summary.SessionID = sessionID
+	if summary.CreatedAt.IsZero() {
+		summary.CreatedAt = at
+	}
+	// CompactedAt non-nil + CompactedIntoID nil signals "this IS the
+	// summary row" per the WP01 schema convention.
+	t := at
+	summary.CompactedAt = &t
+	summary.ContentBlocks = canonicalBlocks(summary)
+	summary.Content = flattenContentText(summary.ContentBlocks)
+	s.messages[sessionID] = append(s.messages[sessionID], summary)
+	return nil
+}
+
+// DeleteArchivedBefore walks the in-memory slice once, dropping every
+// row whose ArchivedAt < cutoff AND whose CompactedIntoID is non-nil.
+// pageLimit is honored for parity with the SQL implementation (caps the
+// per-pass deletes); the in-memory slice rarely needs more than one
+// pass anyway.
+func (s *memStore) DeleteArchivedBefore(_ context.Context, cutoff time.Time, pageLimit int) (
+	deleted int, oldest, newest time.Time, err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if pageLimit <= 0 {
+		pageLimit = 5000
+	}
+	for sid, msgs := range s.messages {
+		kept := make([]Message, 0, len(msgs))
+		for _, m := range msgs {
+			if m.ArchivedAt == nil || m.CompactedIntoID == nil {
+				kept = append(kept, m)
+				continue
+			}
+			if !m.ArchivedAt.Before(cutoff) {
+				kept = append(kept, m)
+				continue
+			}
+			if deleted >= pageLimit {
+				kept = append(kept, m)
+				continue
+			}
+			deleted++
+			t := *m.ArchivedAt
+			if oldest.IsZero() || t.Before(oldest) {
+				oldest = t
+			}
+			if newest.IsZero() || t.After(newest) {
+				newest = t
+			}
+		}
+		s.messages[sid] = kept
+	}
+	return deleted, oldest, newest, nil
 }
 
 // ── SQL-backed implementation ──────────────────────────────────────────
@@ -632,6 +777,22 @@ func (s *sqlStore) AppendMessage(ctx context.Context, m Message) (Message, error
 }
 
 func (s *sqlStore) ListMessages(ctx context.Context, sessionID string) ([]Message, error) {
+	return s.listMessages(ctx, sessionID, false)
+}
+
+// ListMessagesActive returns rows where archived_at IS NULL, ordered by
+// sequence ASC. The compaction WP07 frontend toggles between this and
+// ListMessages to show / hide soft-archived originals.
+func (s *sqlStore) ListMessagesActive(ctx context.Context, sessionID string) ([]Message, error) {
+	return s.listMessages(ctx, sessionID, true)
+}
+
+// listMessages is the shared SELECT body. activeOnly adds the
+// archived_at IS NULL clause hitting idx_session_messages_archived_at.
+// The new compaction columns (compacted_into_id, compacted_at,
+// archived_at) are read alongside the existing payload so callers can
+// render the post-compaction indicators without a second round-trip.
+func (s *sqlStore) listMessages(ctx context.Context, sessionID string, activeOnly bool) ([]Message, error) {
 	// Verify session exists for symmetry with the in-memory implementation.
 	row := s.db.Reader().QueryRow(ctx, "SELECT 1 FROM sessions WHERE id = ?", sessionID)
 	var one int
@@ -641,12 +802,17 @@ func (s *sqlStore) ListMessages(ctx context.Context, sessionID string) ([]Messag
 		}
 		return nil, err
 	}
-	rows, err := s.db.Reader().Query(ctx, `
-        SELECT id, session_id, sequence, role, content, tool_calls, created_at, content_json
+	query := `
+        SELECT id, session_id, sequence, role, content, tool_calls, created_at, content_json,
+               compacted_into_id, compacted_at, archived_at
         FROM session_messages
         WHERE session_id = ?
-        ORDER BY sequence ASC
-    `, sessionID)
+    `
+	if activeOnly {
+		query += " AND archived_at IS NULL"
+	}
+	query += " ORDER BY sequence ASC"
+	rows, err := s.db.Reader().Query(ctx, query, sessionID)
 	if err != nil {
 		return nil, err
 	}
@@ -654,14 +820,18 @@ func (s *sqlStore) ListMessages(ctx context.Context, sessionID string) ([]Messag
 	var out []Message
 	for rows.Next() {
 		var (
-			m           Message
-			roleStr     string
-			toolCalls   sql.NullString
-			createdAt   int64
-			contentJSON sql.NullString
+			m               Message
+			roleStr         string
+			toolCalls       sql.NullString
+			createdAt       int64
+			contentJSON     sql.NullString
+			compactedIntoID sql.NullString
+			compactedAt     sql.NullInt64
+			archivedAt      sql.NullInt64
 		)
 		if err := rows.Scan(&m.ID, &m.SessionID, &m.Sequence, &roleStr,
-			&m.Content, &toolCalls, &createdAt, &contentJSON); err != nil {
+			&m.Content, &toolCalls, &createdAt, &contentJSON,
+			&compactedIntoID, &compactedAt, &archivedAt); err != nil {
 			return nil, err
 		}
 		m.Role = Role(roleStr)
@@ -680,9 +850,167 @@ func (s *sqlStore) ListMessages(ctx context.Context, sessionID string) ([]Messag
 		} else {
 			m.ContentBlocks = synthesizeBlocks(m.Content)
 		}
+		if compactedIntoID.Valid {
+			id := compactedIntoID.String
+			m.CompactedIntoID = &id
+		}
+		if compactedAt.Valid {
+			t := time.Unix(0, compactedAt.Int64).UTC()
+			m.CompactedAt = &t
+		}
+		if archivedAt.Valid {
+			t := time.Unix(0, archivedAt.Int64).UTC()
+			m.ArchivedAt = &t
+		}
 		out = append(out, m)
 	}
 	return out, rows.Err()
+}
+
+// ApplyCompaction inserts the synthetic summary row + flips
+// compacted_into_id / archived_at on each id in originalIDs in a single
+// SQLite transaction, so a partial write never leaves the session in a
+// half-compacted state. See Store.ApplyCompaction for the full contract.
+func (s *sqlStore) ApplyCompaction(ctx context.Context, sessionID string, summary Message,
+	originalIDs []string, archivedAt time.Time) error {
+	canonical := canonicalBlocks(summary)
+	contentText := flattenContentText(canonical)
+	contentJSON, err := json.Marshal(canonical)
+	if err != nil {
+		return fmt.Errorf("session: marshal summary content_json: %w", err)
+	}
+
+	return s.db.WriteTx(ctx, func(tx WriteTx) error {
+		// Verify the session exists so the FK violation surfaces as a
+		// recognizable error rather than an opaque storage failure.
+		row := tx.QueryRow(ctx, "SELECT 1 FROM sessions WHERE id = ?", sessionID)
+		var one int
+		if err := row.Scan(&one); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return ErrSessionNotFound
+			}
+			return err
+		}
+		// Insert the synthetic summary row. compacted_at is set so the
+		// frontend's compacted-turn indicator (WP07) can recognize the
+		// row; compacted_into_id stays NULL — only originals point at
+		// the summary, never the other direction.
+		atNS := archivedAt.UnixNano()
+		createdAt := summary.CreatedAt
+		if createdAt.IsZero() {
+			createdAt = archivedAt
+		}
+		if _, err := tx.Exec(ctx, `
+            INSERT INTO session_messages
+                (id, session_id, sequence, role, content, tool_calls, created_at, content_json,
+                 compacted_into_id, compacted_at, archived_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, NULL)
+        `,
+			summary.ID, sessionID, summary.Sequence, string(summary.Role),
+			contentText, nil, createdAt.UnixNano(), string(contentJSON),
+			atNS,
+		); err != nil {
+			return fmt.Errorf("session: insert summary row: %w", err)
+		}
+		// Flip every original. We loop one UPDATE per id so the SQL stays
+		// portable (no parameterized IN-list across drivers); the engine
+		// guards the call to a single span per session per turn so the
+		// extra round-trips are bounded.
+		for _, id := range originalIDs {
+			if id == "" {
+				continue
+			}
+			if _, err := tx.Exec(ctx, `
+                UPDATE session_messages
+                SET compacted_into_id = ?, archived_at = ?
+                WHERE session_id = ? AND id = ?
+            `, summary.ID, atNS, sessionID, id); err != nil {
+				return fmt.Errorf("session: flip original %q: %w", id, err)
+			}
+		}
+		return nil
+	})
+}
+
+// DeleteArchivedBefore drives the soft-archive sweep's batched DELETE
+// loop. See Store.DeleteArchivedBefore for the full contract. The
+// summary-row exclusion (compacted_into_id IS NOT NULL) lives in the
+// SQL filter so a malformed engine call cannot accidentally tombstone
+// the synthetic summary head.
+func (s *sqlStore) DeleteArchivedBefore(ctx context.Context, cutoff time.Time, pageLimit int) (
+	deleted int, oldest, newest time.Time, err error) {
+	if pageLimit <= 0 {
+		pageLimit = 5000
+	}
+	cutoffNS := cutoff.UnixNano()
+	for {
+		// Capture the page's archived_at extremes BEFORE the DELETE so
+		// the audit payload's oldest / newest fields stay accurate.
+		// SQLite's RETURNING is supported on modernc.org/sqlite 1.50+
+		// but we keep the path portable by issuing a bounded SELECT
+		// before the DELETE.
+		var pageOldest, pageNewest sql.NullInt64
+		var pageDeleted int
+		err = s.db.WriteTx(ctx, func(tx WriteTx) error {
+			row := tx.QueryRow(ctx, `
+                SELECT MIN(archived_at), MAX(archived_at)
+                FROM session_messages
+                WHERE archived_at IS NOT NULL
+                  AND archived_at < ?
+                  AND compacted_into_id IS NOT NULL
+                LIMIT 1
+            `, cutoffNS)
+			if err := row.Scan(&pageOldest, &pageNewest); err != nil {
+				if !errors.Is(err, sql.ErrNoRows) {
+					return err
+				}
+			}
+			res, err := tx.Exec(ctx, `
+                DELETE FROM session_messages
+                WHERE rowid IN (
+                    SELECT rowid FROM session_messages
+                    WHERE archived_at IS NOT NULL
+                      AND archived_at < ?
+                      AND compacted_into_id IS NOT NULL
+                    LIMIT ?
+                )
+            `, cutoffNS, pageLimit)
+			if err != nil {
+				return err
+			}
+			n, rerr := res.RowsAffected()
+			if rerr != nil {
+				return rerr
+			}
+			pageDeleted = int(n)
+			return nil
+		})
+		if err != nil {
+			return deleted, oldest, newest, err
+		}
+		if pageDeleted == 0 {
+			return deleted, oldest, newest, nil
+		}
+		deleted += pageDeleted
+		if pageOldest.Valid {
+			t := time.Unix(0, pageOldest.Int64).UTC()
+			if oldest.IsZero() || t.Before(oldest) {
+				oldest = t
+			}
+		}
+		if pageNewest.Valid {
+			t := time.Unix(0, pageNewest.Int64).UTC()
+			if newest.IsZero() || t.After(newest) {
+				newest = t
+			}
+		}
+		// If a page returned fewer than pageLimit rows, the next pass
+		// would necessarily be empty — exit early without an extra
+		// round-trip.
+		if pageDeleted < pageLimit {
+			return deleted, oldest, newest, nil
+		}
+	}
 }
 
 // canonicalBlocks normalizes a Message's content to its []ContentBlock

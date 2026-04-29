@@ -3,7 +3,11 @@
 // is a single JSON file per privacy CI invariant #5 (plan §4.3).
 package settings
 
-import "context"
+import (
+	"context"
+
+	"github.com/sigil-tech/kaneaz-harness/core/compaction"
+)
 
 // Settings is the persisted UI state shape (plan §5.5). schemaVersion
 // gates migrations; lastRoute drives first-paint route restoration.
@@ -63,7 +67,77 @@ type Settings struct {
 	// start so a settings change takes effect on the next user turn
 	// without restarting the harness.
 	MaxAgentTurns int `json:"maxAgentTurns,omitempty"`
+
+	// CompactionAggressiveness controls when and how aggressively the
+	// harness summarises older session history when approaching the
+	// model's context window. One of: "off", "conservative", "balanced",
+	// "aggressive", "maximal". Empty string == "balanced" via the
+	// EffectiveCompactionAggressiveness accessor.
+	//
+	// Plan: compaction-strategy-ui-01KQ8TDI §2.9. The chat runner reads
+	// the effective tier on every send; settings changes take effect on
+	// the next turn without restarting.
+	CompactionAggressiveness string `json:"compactionAggressiveness,omitempty"`
+
+	// CompactionModel is the provider+model used for the summarisation
+	// call. Empty == "use the session's active model" (the chained
+	// default the chat runner falls back to when this is unset). The
+	// wire shape mirrors core/compaction.ProviderProfileRef but is
+	// declared locally here so settings doesn't take a dependency on
+	// the engine's internal types beyond the policy constants.
+	CompactionModel ProviderProfileRef `json:"compactionModel,omitempty"`
+
+	// CompactionArchiveDays is the soft-archive retention window in
+	// days. Default 90, range [7, 365]. Save() rejects out-of-range
+	// values; the EffectiveCompactionArchiveDays accessor clamps for
+	// defensive reads (e.g. against a hand-edited settings file).
+	CompactionArchiveDays int `json:"compactionArchiveDays,omitempty"`
+
+	// CompactionRecentWindow is the count of most-recent user-assistant
+	// pairs that compaction will never touch. Default 4 (locked plan
+	// default §2.6). Negative is rejected at Save; zero rounds up to the
+	// default via the EffectiveCompactionRecentWindow accessor.
+	CompactionRecentWindow int `json:"compactionRecentWindow,omitempty"`
 }
+
+// ProviderProfileRef is the wire shape that identifies a provider+model
+// pair. Mirrors core/compaction.ProviderProfileRef exactly — the engine
+// declares its own copy to avoid depending on this view package; if the
+// llm package ever exports a canonical ProviderProfileRef, both copies
+// can be replaced with a type alias.
+//
+// JSON casing follows the existing settings convention (camelCase) used
+// elsewhere in this struct.
+type ProviderProfileRef struct {
+	ProviderID string `json:"providerId,omitempty"`
+	ModelID    string `json:"modelId,omitempty"`
+}
+
+// IsZero reports whether the ref is the empty value (no provider, no
+// model). Used by the chat runner to decide between the configured
+// compaction model and the session's active model fallback.
+func (r ProviderProfileRef) IsZero() bool {
+	return r.ProviderID == "" && r.ModelID == ""
+}
+
+// DefaultCompactionArchiveDays is the spec-locked retention window for
+// soft-archived original messages (plan §2.7). Reads through the
+// EffectiveCompactionArchiveDays accessor.
+const DefaultCompactionArchiveDays = 90
+
+// MinCompactionArchiveDays is the lower clamp applied at save and at
+// effective-read time. Below this, the sweep would race against
+// still-useful reviewable history.
+const MinCompactionArchiveDays = 7
+
+// MaxCompactionArchiveDays is the upper clamp applied at save and at
+// effective-read time. Above this, archived rows accumulate without
+// bound and the sweep stops being a sweep.
+const MaxCompactionArchiveDays = 365
+
+// DefaultCompactionRecentWindow is the spec-locked count of most-recent
+// user-assistant pairs that compaction never touches (plan §2.6).
+const DefaultCompactionRecentWindow = 4
 
 // DefaultMaxAgentTurns is the spec-locked iteration cap for the chat
 // graph's LoopNode body when Settings.MaxAgentTurns is unset (zero).
@@ -112,6 +186,49 @@ func (s Settings) EffectiveMaxAgentTurns() int {
 		return DefaultMaxAgentTurns
 	}
 	return s.MaxAgentTurns
+}
+
+// EffectiveCompactionAggressiveness returns the locked tier enum the
+// chat runner / engine consume. Empty / unknown persisted values
+// resolve to the documented default ("balanced" via compaction.Tier's
+// own fallback). Returning compaction.CompactionAggressiveness directly
+// keeps the call site one type-cast lighter than going through the raw
+// string and lets compaction.Tier's switch handle unknown values.
+func (s Settings) EffectiveCompactionAggressiveness() compaction.CompactionAggressiveness {
+	if s.CompactionAggressiveness == "" {
+		return compaction.AggressivenessBalanced
+	}
+	return compaction.CompactionAggressiveness(s.CompactionAggressiveness)
+}
+
+// EffectiveCompactionArchiveDays returns the user-tuned retention or
+// DefaultCompactionArchiveDays when zero. Out-of-range persisted values
+// (a hand-edited settings file, an old client) are clamped to the
+// [Min, Max] range so the sweep never queries a nonsense window. Save
+// validation rejects out-of-range writes so well-behaved clients never
+// hit the clamp branch.
+func (s Settings) EffectiveCompactionArchiveDays() int {
+	d := s.CompactionArchiveDays
+	if d <= 0 {
+		return DefaultCompactionArchiveDays
+	}
+	if d < MinCompactionArchiveDays {
+		return MinCompactionArchiveDays
+	}
+	if d > MaxCompactionArchiveDays {
+		return MaxCompactionArchiveDays
+	}
+	return d
+}
+
+// EffectiveCompactionRecentWindow returns the user-tuned recent-window
+// (number of most-recent user-assistant pairs compaction never touches)
+// or DefaultCompactionRecentWindow when zero or negative.
+func (s Settings) EffectiveCompactionRecentWindow() int {
+	if s.CompactionRecentWindow <= 0 {
+		return DefaultCompactionRecentWindow
+	}
+	return s.CompactionRecentWindow
 }
 
 // WindowSize mirrors the charter's WindowSize type.

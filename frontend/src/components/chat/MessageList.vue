@@ -61,6 +61,20 @@ const props = defineProps<{
    * intentionally avoid per-bubble rpc fetches.
    */
   artifactsByMessage?: ReadonlyMap<string, readonly Artifact[]>;
+  /**
+   * Count of soft-archived rows that have since been hard-deleted by
+   * the soft-archive sweep (compaction-strategy-ui WP07). When > 0,
+   * MessageList renders an inline placeholder above the earliest
+   * surviving message: `[N earlier turns no longer available — archived
+   * past <archiveDays>-day retention]`. Defaults to 0.
+   */
+  sweptCount?: number;
+  /**
+   * Settings.compactionArchiveDays — drives the placeholder copy so
+   * the user sees the same number they configured. Falls back to 90
+   * (the locked default in plan §2.9) when undefined.
+   */
+  archiveDays?: number;
 }>();
 
 const emit = defineEmits<{
@@ -73,12 +87,62 @@ const emit = defineEmits<{
   (e: 'save-artifact', message: Message): void;
   /** Forwarded from a message's per-message artifact chip. */
   (e: 'open-artifact', artifact: Artifact): void;
+  /**
+   * Forwarded from an archived MessageBubble's "→ summary" chip
+   * (compaction-strategy-ui WP07). MessageList scrolls the matching
+   * summary row into view.
+   */
+  (e: 'jump-to-summary', summaryId: string): void;
 }>();
 
 function artifactsFor(messageId: string): readonly Artifact[] {
   if (!props.artifactsByMessage) return [];
   return props.artifactsByMessage.get(messageId) ?? [];
 }
+
+/**
+ * summaryFoldCounts — for each summary row id, the number of archived
+ * messages currently in `messages` that fold into it (i.e. have
+ * `compactedIntoId === summaryId`). The "Summary of N turns" indicator
+ * pulls from this map. Computed reactively so reload + toggle render
+ * stable counts.
+ */
+const summaryFoldCounts = computed<ReadonlyMap<string, number>>(() => {
+  const counts = new Map<string, number>();
+  for (const m of props.messages) {
+    const into = m.compactedIntoId;
+    if (!into) continue;
+    counts.set(into, (counts.get(into) ?? 0) + 1);
+  }
+  return counts;
+});
+
+function isSummaryRow(m: Message): boolean {
+  // A row is the synthetic summary when compactedAt is set AND
+  // compactedIntoId is empty (the summary itself doesn't reference
+  // another summary). Plan §2.4 step 5 carries this convention.
+  return Boolean(m.compactedAt) && !m.compactedIntoId;
+}
+
+function isArchivedRow(m: Message): boolean {
+  return Boolean(m.archivedAt);
+}
+
+function onJumpToSummary(summaryId: string) {
+  // Scroll the summary row into view — the data attribute is set on
+  // every message wrapper below so a querySelector can find it.
+  emit('jump-to-summary', summaryId);
+  const el = scrollEl.value;
+  if (!el) return;
+  const target = el.querySelector(
+    `[data-message-id="${CSS.escape(summaryId)}"]`,
+  );
+  if (target instanceof HTMLElement) {
+    target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }
+}
+
+const archivedCopyDays = computed(() => props.archiveDays ?? 90);
 
 const scrollEl = ref<HTMLElement | null>(null);
 const stickToBottom = ref(true);
@@ -159,23 +223,48 @@ defineExpose({ scrollToBottom });
       >
         No messages yet — start the conversation below.
       </div>
-      <MessageBubble
+
+      <!-- Swept-count placeholder (compaction-strategy-ui WP07). Renders
+           above the first message when archived rows have been hard-
+           deleted by the soft-archive sweep. SweptCount > 0 only after
+           WP09 wires the per-session counter; until then the path is
+           exercised but never visible. -->
+      <div
+        v-if="(sweptCount ?? 0) > 0"
+        class="rounded-md border border-dashed border-border-muted px-3 py-2 font-ui text-[11px] text-ink-subtle"
+        role="status"
+        data-testid="swept-history-placeholder"
+      >
+        {{ sweptCount }} earlier turns no longer available — archived past
+        {{ archivedCopyDays }}-day retention.
+      </div>
+
+      <div
         v-for="m in allMessages"
         :key="m.id"
-        :role="m.role"
-        :content="m.content"
-        :streaming="m.streaming === true"
-        :tool-calls="m.toolCalls"
-        :content-blocks="m.contentBlocks"
-        :rememberable="rememberable === true && m.streaming !== true"
-        :project-id="projectId"
-        :message-id="m.id"
-        :saveable="saveable === true && m.streaming !== true"
-        :artifacts="artifactsFor(m.id)"
-        @remember="(scope) => emit('remember', m, scope)"
-        @save-artifact="() => emit('save-artifact', m)"
-        @open-artifact="(a) => emit('open-artifact', a)"
-      />
+        :data-message-id="m.id"
+      >
+        <MessageBubble
+          :role="m.role"
+          :content="m.content"
+          :streaming="m.streaming === true"
+          :tool-calls="m.toolCalls"
+          :content-blocks="m.contentBlocks"
+          :rememberable="rememberable === true && m.streaming !== true"
+          :project-id="projectId"
+          :message-id="m.id"
+          :saveable="saveable === true && m.streaming !== true"
+          :artifacts="artifactsFor(m.id)"
+          :is-summary="isSummaryRow(m)"
+          :summary-folded-count="summaryFoldCounts.get(m.id) ?? 0"
+          :is-archived="isArchivedRow(m)"
+          :archived-from-summary-id="m.compactedIntoId ?? ''"
+          @remember="(scope) => emit('remember', m, scope)"
+          @save-artifact="() => emit('save-artifact', m)"
+          @open-artifact="(a) => emit('open-artifact', a)"
+          @jump-to-summary="onJumpToSummary"
+        />
+      </div>
 
       <!-- Thinking indicator: visible from the moment send() opens a
            stream until the first chunk arrives. -->

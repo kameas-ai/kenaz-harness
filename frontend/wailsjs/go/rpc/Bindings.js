@@ -118,6 +118,10 @@ export function Compaction_GetEffective(arg1) {
   return window['go']['rpc']['Bindings']['Compaction_GetEffective'](arg1);
 }
 
+export function Compaction_GetTierExplain() {
+  return window['go']['rpc']['Bindings']['Compaction_GetTierExplain']();
+}
+
 export function Compaction_ListCustomStrategies() {
   return window['go']['rpc']['Bindings']['Compaction_ListCustomStrategies']();
 }
@@ -504,6 +508,14 @@ export function Sessions_List() {
 
 export function Sessions_ListMessages(arg1) {
   return window['go']['rpc']['Bindings']['Sessions_ListMessages'](arg1);
+}
+
+export function Sessions_ListMessagesActive(arg1) {
+  return window['go']['rpc']['Bindings']['Sessions_ListMessagesActive'](arg1);
+}
+
+export function Sessions_ListMessagesAll(arg1) {
+  return window['go']['rpc']['Bindings']['Sessions_ListMessagesAll'](arg1);
 }
 
 export function Sessions_LoadDraft(arg1) {

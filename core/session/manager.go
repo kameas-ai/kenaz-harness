@@ -140,6 +140,20 @@ func NewManager(store Store, opts ...ManagerOption) *Manager {
 	return m
 }
 
+// Store exposes the underlying persistence handle so cross-mission
+// wiring (e.g. core/compaction/wiring) can compose its own adapters
+// against the same store the manager already opened. The chat path
+// keeps consuming the manager's higher-level methods; this getter is
+// only for adapters that need the narrower Store interface (and that
+// must NOT bypass the manager's audit emission for mutations the
+// manager itself owns).
+func (m *Manager) Store() Store {
+	if m == nil {
+		return nil
+	}
+	return m.store
+}
+
 // Create allocates a new session with the given display name. The
 // session is appended to the end of the list (highest position + 1).
 func (m *Manager) Create(ctx context.Context, name string) (Record, error) {
@@ -345,6 +359,14 @@ func (m *Manager) AppendMessage(ctx context.Context, sessionID string, msg Messa
 // sequence order.
 func (m *Manager) ListMessages(ctx context.Context, sessionID string) ([]Message, error) {
 	return m.store.ListMessages(ctx, sessionID)
+}
+
+// ListMessagesActive returns only the messages whose ArchivedAt is nil
+// — i.e. the live scrollback view, with soft-archived originals folded
+// into a summary hidden. Used by the compaction-strategy-ui WP07 RPC
+// when the user has not toggled "Show full history".
+func (m *Manager) ListMessagesActive(ctx context.Context, sessionID string) ([]Message, error) {
+	return m.store.ListMessagesActive(ctx, sessionID)
 }
 
 // SetSystemPrompt persists the per-session starting context. kind

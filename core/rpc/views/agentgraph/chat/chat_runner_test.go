@@ -3,13 +3,115 @@ package chat
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	coreag "github.com/sigil-tech/kaneaz-harness/core/agentgraph"
+	"github.com/sigil-tech/kaneaz-harness/core/compaction"
 	corellm "github.com/sigil-tech/kaneaz-harness/core/llm"
 )
+
+// fakeCompactionEngine is a recording fake for compaction.Engine. It
+// counts Compact / RollingSummarize calls and replays a scripted
+// reply, so the pre-send hook tests can pin "compact ran exactly K
+// times under tier X" without standing up the real engine.
+type fakeCompactionEngine struct {
+	mu sync.Mutex
+
+	compactCalls         int
+	rollingSummarizeCalls int
+
+	compactErr  error
+	rollingErr  error
+	compactID   string
+	rollingID   string
+}
+
+func (f *fakeCompactionEngine) Compact(_ context.Context, _ string, _ compaction.ProviderProfileRef, _ float64) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.compactCalls++
+	if f.compactErr != nil {
+		return "", f.compactErr
+	}
+	if f.compactID == "" {
+		return "summary-1", nil
+	}
+	return f.compactID, nil
+}
+
+func (f *fakeCompactionEngine) RollingSummarize(_ context.Context, _ string, _ compaction.ProviderProfileRef, _ int) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.rollingSummarizeCalls++
+	if f.rollingErr != nil {
+		return "", f.rollingErr
+	}
+	if f.rollingID == "" {
+		return "rolling-1", nil
+	}
+	return f.rollingID, nil
+}
+
+func (f *fakeCompactionEngine) compactCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.compactCalls
+}
+
+func (f *fakeCompactionEngine) rollingCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.rollingSummarizeCalls
+}
+
+// makeCompactionDeps builds a CompactionDeps fixture pinned to a
+// (tier, capTokens, currentHistoryTokens) tuple. The history reader
+// returns a single user message whose runeCount/4 + framing yields
+// the requested currentHistoryTokens — that way the pre-send hook's
+// internal tokenize step lands on the test-specified count.
+func makeCompactionDeps(t *testing.T, eng compaction.Engine, tier compaction.CompactionAggressiveness,
+	cap int, modelTooSmall *atomic.Bool) *CompactionDeps {
+	t.Helper()
+	return &CompactionDeps{
+		Engine:         eng,
+		Aggressiveness: func() compaction.CompactionAggressiveness { return tier },
+		CompactionModel: func() (compaction.ProviderProfileRef, bool) {
+			return compaction.ProviderProfileRef{}, false
+		},
+		RecentWindow: func() int { return 4 },
+		MaxContextTokens: func(_ compaction.ProviderProfileRef) (int, bool) {
+			if cap <= 0 {
+				return 0, false
+			}
+			return cap, true
+		},
+	}
+}
+
+// fillerMessage returns a coreag.Message with content sized so the
+// tokenize estimate (runeCount/4 + 4 framing) hits the requested
+// targetTokens (approximately — the test's assertions use thresholds
+// not exact counts).
+func fillerMessage(role string, targetTokens int) coreag.Message {
+	if targetTokens <= 0 {
+		return coreag.Message{Role: role, Content: ""}
+	}
+	// runesPerToken=4, messageFramingOverhead=4. Subtract the
+	// systemPrompt-slot and per-message framing first.
+	contentTokens := targetTokens
+	if contentTokens < 0 {
+		contentTokens = 0
+	}
+	runes := contentTokens * 4
+	if runes <= 0 {
+		runes = 1
+	}
+	return coreag.Message{Role: role, Content: strings.Repeat("x", runes)}
+}
 
 // recordingBroker is a fake Broker that captures every emitted topic
 // and payload so tests can assert wire-shape parity with the legacy
@@ -222,6 +324,275 @@ func minimalChatGraph() coreag.Graph {
 				Attrs: coreag.AskAttrs{Question: "what?"},
 			},
 		},
+	}
+}
+
+// TestChatRunner_PreSendCompaction_OffTier_OverCap_ReturnsSessionFull
+// asserts the off tier honestly fails when the would-be request would
+// exceed the cap (WP08 acceptance: "Off-tier session honestly fails on
+// cap with ErrSessionFull").
+func TestChatRunner_PreSendCompaction_OffTier_OverCap_ReturnsSessionFull(t *testing.T) {
+	t.Parallel()
+	eng := &fakeCompactionEngine{}
+	// Cap = 100; history pre-loaded with ~150 tokens of filler so the
+	// off-tier branch trips the over-cap check.
+	hist := []coreag.Message{fillerMessage("user", 150)}
+	runner, err := New(Config{
+		Kernel:        coreag.NewKernel(),
+		Registry:      stubRegistry{},
+		Broker:        &recordingBroker{},
+		HistoryWriter: &recordingHistoryWriter{},
+		History:       staticHistoryReader{msgs: hist},
+		GraphLoader:   func() (coreag.Graph, error) { return minimalChatGraph(), nil },
+		MaxTurns:      func() int { return 25 },
+		Compaction:    makeCompactionDeps(t, eng, compaction.AggressivenessOff, 100, nil),
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	_, gerr := runner.StartStream(context.Background(), "profile-1", "session-1", "", "second turn")
+	if gerr == nil || !errors.Is(gerr, compaction.ErrSessionFull) {
+		t.Fatalf("StartStream: got err=%v, want ErrSessionFull", gerr)
+	}
+	if eng.compactCount() != 0 || eng.rollingCount() != 0 {
+		t.Errorf("off-tier should not invoke compaction; compact=%d rolling=%d",
+			eng.compactCount(), eng.rollingCount())
+	}
+}
+
+// TestChatRunner_PreSendCompaction_OffTier_UnderCap_NoCompact asserts
+// the off tier passes through cleanly when the request stays under cap.
+func TestChatRunner_PreSendCompaction_OffTier_UnderCap_NoCompact(t *testing.T) {
+	t.Parallel()
+	eng := &fakeCompactionEngine{}
+	hist := []coreag.Message{fillerMessage("user", 5)}
+	runner, err := New(Config{
+		Kernel:        coreag.NewKernel(),
+		Registry:      stubRegistry{},
+		Broker:        &recordingBroker{},
+		HistoryWriter: &recordingHistoryWriter{},
+		History:       staticHistoryReader{msgs: hist},
+		GraphLoader:   func() (coreag.Graph, error) { return minimalChatGraph(), nil },
+		MaxTurns:      func() int { return 25 },
+		Compaction:    makeCompactionDeps(t, eng, compaction.AggressivenessOff, 1000, nil),
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	subID, gerr := runner.StartStream(context.Background(), "profile-1", "session-1", "", "second turn")
+	if gerr != nil {
+		t.Fatalf("StartStream: %v", gerr)
+	}
+	time.Sleep(20 * time.Millisecond)
+	_ = runner.StopStream(context.Background(), subID)
+	if eng.compactCount() != 0 || eng.rollingCount() != 0 {
+		t.Errorf("under-cap should not compact; compact=%d rolling=%d",
+			eng.compactCount(), eng.rollingCount())
+	}
+}
+
+// TestChatRunner_PreSendCompaction_Threshold_NotTriggered asserts the
+// threshold tier does NOT compact when current/cap < TriggerPct (WP08
+// acceptance: "Threshold-tier session compacts exactly when ... and
+// not before").
+func TestChatRunner_PreSendCompaction_Threshold_NotTriggered(t *testing.T) {
+	t.Parallel()
+	eng := &fakeCompactionEngine{}
+	// Balanced tier triggers at 0.80. Cap=1000, history ~10 tokens
+	// → ratio ~ 0.01, well below 0.80.
+	hist := []coreag.Message{fillerMessage("user", 10)}
+	runner, err := New(Config{
+		Kernel:        coreag.NewKernel(),
+		Registry:      stubRegistry{},
+		Broker:        &recordingBroker{},
+		HistoryWriter: &recordingHistoryWriter{},
+		History:       staticHistoryReader{msgs: hist},
+		GraphLoader:   func() (coreag.Graph, error) { return minimalChatGraph(), nil },
+		MaxTurns:      func() int { return 25 },
+		Compaction:    makeCompactionDeps(t, eng, compaction.AggressivenessBalanced, 1000, nil),
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	subID, gerr := runner.StartStream(context.Background(), "profile-1", "session-1", "", "small turn")
+	if gerr != nil {
+		t.Fatalf("StartStream: %v", gerr)
+	}
+	time.Sleep(20 * time.Millisecond)
+	_ = runner.StopStream(context.Background(), subID)
+	if eng.compactCount() != 0 {
+		t.Errorf("under-threshold should not compact; got %d", eng.compactCount())
+	}
+}
+
+// TestChatRunner_PreSendCompaction_Threshold_Triggered asserts the
+// threshold tier compacts exactly once when current/cap >= TriggerPct.
+func TestChatRunner_PreSendCompaction_Threshold_Triggered(t *testing.T) {
+	t.Parallel()
+	eng := &fakeCompactionEngine{}
+	// Balanced tier triggers at 0.80. Cap=100, history ~90 tokens of
+	// filler → ratio ~ 0.90, above 0.80.
+	hist := []coreag.Message{fillerMessage("user", 90)}
+	runner, err := New(Config{
+		Kernel:        coreag.NewKernel(),
+		Registry:      stubRegistry{},
+		Broker:        &recordingBroker{},
+		HistoryWriter: &recordingHistoryWriter{},
+		History:       staticHistoryReader{msgs: hist},
+		GraphLoader:   func() (coreag.Graph, error) { return minimalChatGraph(), nil },
+		MaxTurns:      func() int { return 25 },
+		Compaction:    makeCompactionDeps(t, eng, compaction.AggressivenessBalanced, 100, nil),
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	subID, gerr := runner.StartStream(context.Background(), "profile-1", "session-1", "", "trigger turn")
+	if gerr != nil {
+		t.Fatalf("StartStream: %v", gerr)
+	}
+	time.Sleep(20 * time.Millisecond)
+	_ = runner.StopStream(context.Background(), subID)
+	if eng.compactCount() != 1 {
+		t.Errorf("threshold trigger should run Compact exactly once; got %d", eng.compactCount())
+	}
+}
+
+// TestChatRunner_PreSendCompaction_Maximal_RollsEveryTurn asserts the
+// maximal tier rolls on every send (WP08 acceptance: "Maximal-tier
+// session compacts on every turn with rolling summary semantics").
+func TestChatRunner_PreSendCompaction_Maximal_RollsEveryTurn(t *testing.T) {
+	t.Parallel()
+	eng := &fakeCompactionEngine{}
+	hist := []coreag.Message{fillerMessage("user", 5)}
+	runner, err := New(Config{
+		Kernel:        coreag.NewKernel(),
+		Registry:      stubRegistry{},
+		Broker:        &recordingBroker{},
+		HistoryWriter: &recordingHistoryWriter{},
+		History:       staticHistoryReader{msgs: hist},
+		GraphLoader:   func() (coreag.Graph, error) { return minimalChatGraph(), nil },
+		MaxTurns:      func() int { return 25 },
+		Compaction:    makeCompactionDeps(t, eng, compaction.AggressivenessMaximal, 1000, nil),
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	subID, gerr := runner.StartStream(context.Background(), "profile-1", "session-1", "", "first roll")
+	if gerr != nil {
+		t.Fatalf("StartStream: %v", gerr)
+	}
+	time.Sleep(20 * time.Millisecond)
+	_ = runner.StopStream(context.Background(), subID)
+	if eng.rollingCount() != 1 {
+		t.Errorf("first send should run RollingSummarize once; got %d", eng.rollingCount())
+	}
+	// Second send: should roll again.
+	subID2, gerr2 := runner.StartStream(context.Background(), "profile-1", "session-1", "", "second roll")
+	if gerr2 != nil {
+		t.Fatalf("StartStream2: %v", gerr2)
+	}
+	time.Sleep(20 * time.Millisecond)
+	_ = runner.StopStream(context.Background(), subID2)
+	if eng.rollingCount() != 2 {
+		t.Errorf("second send should run RollingSummarize again; got %d", eng.rollingCount())
+	}
+}
+
+// TestChatRunner_PreSendCompaction_Maximal_TooSmall_FallsBackAggressive
+// asserts the rolling-mode model-too-small case silently falls back to
+// the aggressive tier (plan §2.5 R2 graceful-degrade).
+func TestChatRunner_PreSendCompaction_Maximal_TooSmall_FallsBackAggressive(t *testing.T) {
+	t.Parallel()
+	eng := &fakeCompactionEngine{
+		rollingErr: &compaction.ErrCompactionModelTooSmall{NeedsTokens: 10000, ModelMaxTokens: 1000},
+	}
+	hist := []coreag.Message{fillerMessage("user", 5)}
+	runner, err := New(Config{
+		Kernel:        coreag.NewKernel(),
+		Registry:      stubRegistry{},
+		Broker:        &recordingBroker{},
+		HistoryWriter: &recordingHistoryWriter{},
+		History:       staticHistoryReader{msgs: hist},
+		GraphLoader:   func() (coreag.Graph, error) { return minimalChatGraph(), nil },
+		MaxTurns:      func() int { return 25 },
+		Compaction:    makeCompactionDeps(t, eng, compaction.AggressivenessMaximal, 1000, nil),
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	subID, gerr := runner.StartStream(context.Background(), "profile-1", "session-1", "", "rolling fail")
+	if gerr != nil {
+		t.Fatalf("StartStream: %v", gerr)
+	}
+	time.Sleep(20 * time.Millisecond)
+	_ = runner.StopStream(context.Background(), subID)
+	if eng.rollingCount() != 1 {
+		t.Errorf("RollingSummarize should still be attempted once; got %d", eng.rollingCount())
+	}
+	if eng.compactCount() != 1 {
+		t.Errorf("aggressive-fallback Compact should run once; got %d", eng.compactCount())
+	}
+}
+
+// TestChatRunner_PreSendCompaction_Threshold_TooSmall_ReturnsSessionFull
+// asserts a model-too-small in threshold mode surfaces ErrSessionFull
+// to the caller (R1: "If the user is over cap and we can't compact,
+// fail honestly").
+func TestChatRunner_PreSendCompaction_Threshold_TooSmall_ReturnsSessionFull(t *testing.T) {
+	t.Parallel()
+	eng := &fakeCompactionEngine{
+		compactErr: &compaction.ErrCompactionModelTooSmall{NeedsTokens: 10000, ModelMaxTokens: 1000},
+	}
+	hist := []coreag.Message{fillerMessage("user", 90)}
+	runner, err := New(Config{
+		Kernel:        coreag.NewKernel(),
+		Registry:      stubRegistry{},
+		Broker:        &recordingBroker{},
+		HistoryWriter: &recordingHistoryWriter{},
+		History:       staticHistoryReader{msgs: hist},
+		GraphLoader:   func() (coreag.Graph, error) { return minimalChatGraph(), nil },
+		MaxTurns:      func() int { return 25 },
+		Compaction:    makeCompactionDeps(t, eng, compaction.AggressivenessBalanced, 100, nil),
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	_, gerr := runner.StartStream(context.Background(), "profile-1", "session-1", "", "trigger turn")
+	if gerr == nil || !errors.Is(gerr, compaction.ErrSessionFull) {
+		t.Fatalf("StartStream: got err=%v, want ErrSessionFull", gerr)
+	}
+}
+
+// TestChatRunner_PreSendCompaction_HARNESS_COMPACTION_OFF_ShortCircuits
+// asserts the env-var opt-out skips the hook entirely (WP08 acceptance:
+// "HARNESS_COMPACTION=off short-circuits the hook").
+func TestChatRunner_PreSendCompaction_HARNESS_COMPACTION_OFF_ShortCircuits(t *testing.T) {
+	// Not parallel: mutates env var.
+	t.Setenv("HARNESS_COMPACTION", "off")
+	eng := &fakeCompactionEngine{}
+	hist := []coreag.Message{fillerMessage("user", 200)}
+	runner, err := New(Config{
+		Kernel:        coreag.NewKernel(),
+		Registry:      stubRegistry{},
+		Broker:        &recordingBroker{},
+		HistoryWriter: &recordingHistoryWriter{},
+		History:       staticHistoryReader{msgs: hist},
+		GraphLoader:   func() (coreag.Graph, error) { return minimalChatGraph(), nil },
+		MaxTurns:      func() int { return 25 },
+		Compaction:    makeCompactionDeps(t, eng, compaction.AggressivenessBalanced, 100, nil),
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	subID, gerr := runner.StartStream(context.Background(), "profile-1", "session-1", "", "would normally trigger")
+	if gerr != nil {
+		t.Fatalf("StartStream: %v", gerr)
+	}
+	time.Sleep(20 * time.Millisecond)
+	_ = runner.StopStream(context.Background(), subID)
+	if eng.compactCount() != 0 || eng.rollingCount() != 0 {
+		t.Errorf("HARNESS_COMPACTION=off should short-circuit; compact=%d rolling=%d",
+			eng.compactCount(), eng.rollingCount())
 	}
 }
 

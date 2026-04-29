@@ -87,6 +87,8 @@ export function Compaction_GetConfig(arg1:compaction.Layer,arg2:string):Promise<
 
 export function Compaction_GetEffective(arg1:compaction.ScopeKey):Promise<compaction.EffectiveConfig>;
 
+export function Compaction_GetTierExplain():Promise<Array<compaction.TierExplain>>;
+
 export function Compaction_ListCustomStrategies():Promise<Array<compaction.CustomStrategy>>;
 
 export function Compaction_SetConfig(arg1:compaction.Layer,arg2:string,arg3:compaction.Config):Promise<void>;
@@ -280,6 +282,10 @@ export function Sessions_Get(arg1:string):Promise<sessions.Session>;
 export function Sessions_List():Promise<Array<sessions.Session>>;
 
 export function Sessions_ListMessages(arg1:string):Promise<Array<sessions.Message>>;
+
+export function Sessions_ListMessagesActive(arg1:string):Promise<sessions.ListMessagesResult>;
+
+export function Sessions_ListMessagesAll(arg1:string):Promise<sessions.ListMessagesResult>;
 
 export function Sessions_LoadDraft(arg1:string):Promise<string>;
 

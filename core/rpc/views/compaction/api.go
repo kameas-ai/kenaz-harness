@@ -113,7 +113,7 @@ type ManualResult struct {
 }
 
 // CompactionAPI is the view-scoped surface backing the frontend's
-// CompactionSettings view. Exactly four operations:
+// CompactionSettings view. Operations:
 //
 //   - GetConfig(layer, scopeID) — fetch the persisted config layer.
 //   - GetEffective(scope) — fetch the merged-cascade view + attribution.
@@ -121,10 +121,52 @@ type ManualResult struct {
 //   - TriggerManualCompaction(sessionID, opts) — fire the manual site.
 //   - ListCustomStrategies() — return the registered custom_subgraph
 //     graphs available as strategies.
+//   - GetTierExplain() — return the static tier-explain payload that
+//     drives the "What does this mean?" tooltip on the Settings dial.
+//     Sourced from core/compaction.Tier(), so the numerics never drift
+//     between the engine and the UI (mission
+//     compaction-strategy-ui-01KQ8TDI §2.2 / §2.9).
 type CompactionAPI interface {
 	GetConfig(ctx context.Context, layer Layer, scopeID string) (Config, error)
 	GetEffective(ctx context.Context, scope ScopeKey) (EffectiveConfig, error)
 	SetConfig(ctx context.Context, layer Layer, scopeID string, cfg Config) error
 	TriggerManualCompaction(ctx context.Context, sessionID string, opts ManualOpts) (ManualResult, error)
 	ListCustomStrategies(ctx context.Context) ([]CustomStrategy, error)
+	GetTierExplain(ctx context.Context) ([]TierExplain, error)
+}
+
+// TierExplain is the wire shape for one row of the tier-explain payload
+// the frontend's Settings panel renders in the "What does this mean?"
+// disclosure on the compaction-aggressiveness dial. Mirrors the locked
+// tier numerics from core/compaction.Tier() — the impl wires the two
+// together so the description, label, and numerics never drift.
+//
+// Mode is the human-facing "none" | "threshold" | "rolling" string,
+// not the integer enum, so the frontend doesn't have to know the
+// CompactionMode constant values.
+type TierExplain struct {
+	// Aggressiveness is the wire-stable tier name, one of
+	// "off" | "conservative" | "balanced" | "aggressive" | "maximal".
+	Aggressiveness string `json:"aggressiveness"`
+
+	// Label is the human-facing tier label rendered in the UI
+	// (e.g. "Balanced (default)").
+	Label string `json:"label"`
+
+	// Description is the tooltip body — a one-paragraph explanation of
+	// what this tier does and the trade-off the user is making.
+	Description string `json:"description"`
+
+	// TriggerPct is the current/cap fraction at which threshold-mode
+	// compaction kicks off. Zero for off / maximal tiers.
+	TriggerPct float64 `json:"triggerPct"`
+
+	// SummarizePct is the fraction of oldest tokens folded into the
+	// summary. Zero for off / maximal tiers.
+	SummarizePct float64 `json:"summarizePct"`
+
+	// Mode is the engine path string, one of "none" | "threshold" |
+	// "rolling". Mirrors core/compaction.CompactionMode but as a string
+	// so the wire format is self-describing.
+	Mode string `json:"mode"`
 }

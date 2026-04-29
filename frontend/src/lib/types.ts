@@ -327,6 +327,35 @@ export interface Settings {
    * run start so a settings change takes effect on the next user turn.
    */
   maxAgentTurns?: number;
+
+  /**
+   * Compaction aggressiveness tier (mission
+   * compaction-strategy-ui-01KQ8TDI §2.9). Empty == "balanced" (the
+   * documented default). The Settings panel's five-stop slider emits
+   * one of the five locked enum strings; the chat runner reads through
+   * the EffectiveCompactionAggressiveness accessor on every send.
+   */
+  compactionAggressiveness?: CompactionAggressiveness;
+
+  /**
+   * Provider+model used for the summarisation call. Empty == "use the
+   * session's active model" (the chained default the chat runner falls
+   * back to when this is unset).
+   */
+  compactionModel?: ProviderProfileRef;
+
+  /**
+   * Soft-archive retention window in days. Default 90, range [7, 365].
+   * Save validation rejects out-of-range values; defensive Effective
+   * accessors clamp at read time as belt-and-braces.
+   */
+  compactionArchiveDays?: number;
+
+  /**
+   * Count of most-recent user-assistant pairs that compaction will
+   * never touch. Default 4. Negative is rejected at save.
+   */
+  compactionRecentWindow?: number;
 }
 
 /**
@@ -411,6 +440,45 @@ export interface Message {
    * snake_case to match the Wails serializer's verbatim JSON-tag pass.
    */
   contentBlocks?: readonly ContentBlock[];
+  /**
+   * Compaction bookkeeping (compaction-strategy-ui WP07). Populated by
+   * the WP01 schema migration once a session has compacted history.
+   *
+   *   - compactedIntoId : id of the synthetic summary row that folded
+   *                       this message in. Empty / undefined on rows the
+   *                       compaction engine never touched. Frontend uses
+   *                       this to wire the "archived → summary" jump
+   *                       chip on archived rows.
+   *   - compactedAt     : RFC3339Nano UTC moment the engine wrote the
+   *                       summary row that replaces this message. On the
+   *                       synthetic summary row itself, compactedAt is
+   *                       set and compactedIntoId is empty — that's how
+   *                       the frontend identifies "this row IS a summary".
+   *   - archivedAt      : RFC3339Nano UTC moment this row was flagged
+   *                       archived. Empty / undefined on live rows;
+   *                       non-empty rows are excluded from
+   *                       sessions.listMessagesActive.
+   */
+  compactedIntoId?: string;
+  compactedAt?: string;
+  archivedAt?: string;
+}
+
+/**
+ * ListMessagesResult — wire shape for sessions.listMessagesActive /
+ * sessions.listMessagesAll (compaction-strategy-ui WP07). Carries the
+ * message list plus a SweptCount counting rows that were once archived
+ * but have since been hard-deleted by the soft-archive sweep.
+ *
+ * SweptCount is currently always 0 from the backend (the sweep deletes
+ * rows without leaving a tombstone, so a precise count requires a
+ * per-session counter that lands in WP09). The frontend renders the
+ * "N earlier turns no longer available" placeholder only when
+ * sweptCount > 0, so this is a feature-gated stub today.
+ */
+export interface ListMessagesResult {
+  messages: Message[];
+  sweptCount: number;
 }
 
 /**
@@ -1462,6 +1530,53 @@ export interface CompactionManualResult {
   bytesSaved: number;
   skipped?: boolean;
   reason?: string;
+}
+
+/**
+ * CompactionAggressiveness — one of the five locked tiers from mission
+ * compaction-strategy-ui-01KQ8TDI §2.2. The Settings panel's
+ * five-stop slider emits these as the wire-stable tier name; the chat
+ * runner dispatches on the same enum.
+ */
+export type CompactionAggressiveness =
+  | 'off'
+  | 'conservative'
+  | 'balanced'
+  | 'aggressive'
+  | 'maximal';
+
+/**
+ * CompactionTierExplain — one row of the tier-explain payload returned
+ * by Compaction.GetTierExplain(). Drives the "What does this mean?"
+ * disclosure on the Settings panel's compaction-aggressiveness dial.
+ * Numerics come from core/compaction.Tier() via the binding so the UI
+ * can never drift from the engine.
+ */
+export interface CompactionTierExplain {
+  aggressiveness: CompactionAggressiveness;
+  /** Human-facing tier label, e.g. "Balanced (default)". */
+  label: string;
+  /** Tooltip body — one paragraph explaining the trade-off. */
+  description: string;
+  /** Current/cap fraction at which threshold-mode compaction kicks
+   * off. Zero for off / maximal tiers. */
+  triggerPct: number;
+  /** Fraction of oldest tokens folded into the summary. Zero for off /
+   * maximal tiers. */
+  summarizePct: number;
+  /** Engine path identifier — "none" | "threshold" | "rolling". */
+  mode: 'none' | 'threshold' | 'rolling';
+}
+
+/**
+ * ProviderProfileRef — wire shape mirroring core/rpc/views/settings's
+ * ProviderProfileRef Go struct. Identifies a provider+model pair the
+ * Settings panel's compaction-model picker emits. Empty fields == "use
+ * the session's active model" (chained default).
+ */
+export interface ProviderProfileRef {
+  providerId?: string;
+  modelId?: string;
 }
 
 // ── conversation branches (agent-kernel-graph; Bundle B WP07/08) ──────

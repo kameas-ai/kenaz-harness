@@ -48,6 +48,36 @@ type Message struct {
 	CreatedAt string     `json:"createdAt"`
 	Streaming bool       `json:"streaming,omitempty"`
 	ToolCalls []ToolCall `json:"toolCalls,omitempty"`
+	// CompactedIntoID is the id of the synthetic summary row that
+	// folded this message in. Empty (omitted) on rows the compaction
+	// engine never touched. Frontend uses this to render an "archived →
+	// summary" jump chip on archived rows (compaction-strategy-ui WP07).
+	CompactedIntoID string `json:"compactedIntoId,omitempty"`
+	// CompactedAt is the RFC3339Nano UTC moment the compaction engine
+	// wrote the summary row that replaces this message. Empty on rows
+	// the engine never touched. On the synthetic summary row itself,
+	// CompactedAt is non-empty and CompactedIntoID is empty.
+	CompactedAt string `json:"compactedAt,omitempty"`
+	// ArchivedAt is the RFC3339Nano UTC moment this row was flagged as
+	// archived (folded into a summary). Empty on live rows; non-empty
+	// rows are excluded from ListMessagesActive.
+	ArchivedAt string `json:"archivedAt,omitempty"`
+}
+
+// ListMessagesResult is the wire-shape envelope for the WP07
+// ListMessagesActive / ListMessagesAll surface. Carries the message
+// list plus a SweptCount field describing rows that were once archived
+// but have since been hard-deleted by the soft-archive sweep.
+//
+// SweptCount note: the sweep deletes rows outright (no tombstone), so
+// computing the gap precisely requires either a per-session counter
+// (deferred to WP09) or a recoverable "earliest sequence" marker. For
+// WP07 the field ships as zero — the frontend guards the placeholder
+// behind SweptCount > 0, so the UI path is wired but only renders once
+// the WP09 tracking lands. See plan §2.8.
+type ListMessagesResult struct {
+	Messages   []Message `json:"messages"`
+	SweptCount int       `json:"sweptCount"`
 }
 
 // DeleteOptions configures the artifacts-storage cascade extension
@@ -93,6 +123,17 @@ type SessionsAPI interface {
 
 	// Chat-message surface (frontend-foundations chat-ui mission).
 	ListMessages(ctx context.Context, id string) ([]Message, error)
+	// ListMessagesActive returns messages where archived_at IS NULL,
+	// ordered by sequence ASC. The default scrollback fetch for
+	// sessions whose history has been compacted (compaction-strategy-ui
+	// WP07). The SweptCount field is a placeholder for the count of
+	// archived-then-hard-deleted rows; until WP09 lands a per-session
+	// counter, it is always 0.
+	ListMessagesActive(ctx context.Context, id string) (ListMessagesResult, error)
+	// ListMessagesAll returns every message in the session including
+	// archived rows, ordered by sequence ASC. Used when the user
+	// toggles "Show full history" in the chat view.
+	ListMessagesAll(ctx context.Context, id string) (ListMessagesResult, error)
 	AppendMessage(ctx context.Context, id, role, content string) (Message, error)
 	// SendMessageWithBlocks persists a user turn carrying polymorphic
 	// content blocks (text + image + document). The legacy text-only

@@ -164,6 +164,12 @@ func (b *Bindings) Sessions_StopStream(subID string) error {
 func (b *Bindings) Sessions_ListMessages(id string) ([]sessions.Message, error) {
 	return b.api.Sessions().ListMessages(b.ctx(), id)
 }
+func (b *Bindings) Sessions_ListMessagesActive(id string) (sessions.ListMessagesResult, error) {
+	return b.api.Sessions().ListMessagesActive(b.ctx(), id)
+}
+func (b *Bindings) Sessions_ListMessagesAll(id string) (sessions.ListMessagesResult, error) {
+	return b.api.Sessions().ListMessagesAll(b.ctx(), id)
+}
 func (b *Bindings) Sessions_AppendMessage(id, role, content string) (sessions.Message, error) {
 	return b.api.Sessions().AppendMessage(b.ctx(), id, role, content)
 }
@@ -768,6 +774,15 @@ func (b *Bindings) Compaction_TriggerManual(sessionID string, opts compactionvie
 }
 func (b *Bindings) Compaction_ListCustomStrategies() ([]compactionview.CustomStrategy, error) {
 	return b.api.Compaction().ListCustomStrategies(b.ctx())
+}
+
+// Compaction_GetTierExplain returns the static tier-explain payload the
+// Settings panel renders in the "What does this mean?" disclosure on
+// the compaction-aggressiveness dial (mission
+// compaction-strategy-ui-01KQ8TDI §2.2 / §2.9). The numerics come from
+// core/compaction.Tier() so the engine and UI never drift.
+func (b *Bindings) Compaction_GetTierExplain() ([]compactionview.TierExplain, error) {
+	return b.api.Compaction().GetTierExplain(b.ctx())
 }
 
 // ── branches (agent-kernel-graph; Bundle B WP07/08) ───────────────────
