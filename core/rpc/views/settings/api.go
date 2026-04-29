@@ -58,6 +58,14 @@ type Settings struct {
 	// (read-only commands; deny by pattern).
 	BashEnabled bool `json:"bashEnabled,omitempty"`
 
+	// SaveArtifactDisabled is the inverted-form persisted bit for the
+	// kaneaz__save_artifact built-in. Default ON (zero-value Disabled
+	// → tool enabled) — saving deliverables is a low-risk primitive
+	// that should work on first launch without setup. Mirrors the
+	// AutoCaptureCodeBlocksDisabled pattern. Read via the
+	// SaveArtifactEnabled() accessor; never read directly.
+	SaveArtifactDisabled bool `json:"saveArtifactDisabled,omitempty"`
+
 	// MaxAgentTurns caps the number of LLM ↔ tool round-trips inside
 	// a single chat-graph LoopNode body before the cap-hit pause-not-kill
 	// UX fires (commit c760087). Zero falls back to the spec default
@@ -148,6 +156,12 @@ const DefaultMaxAgentTurns = 25
 // AutoCaptureCodeBlocks reports whether the code-block detector is
 // active. Default true on a fresh install (zero-value Disabled).
 func (s Settings) AutoCaptureCodeBlocks() bool { return !s.AutoCaptureCodeBlocksDisabled }
+
+// SaveArtifactEnabled reports whether the kaneaz__save_artifact
+// built-in is enabled. Default true on a fresh install (zero-value
+// Disabled). Inverted on the wire so the JSON shape matches the
+// storage contract.
+func (s Settings) SaveArtifactEnabled() bool { return !s.SaveArtifactDisabled }
 
 // AutoCaptureToolOutputs reports whether the tool-output detector is
 // active. Default true on a fresh install.
@@ -271,6 +285,14 @@ type SettingsStore interface {
 	// in the same shape. Default false (off).
 	LoadBash() (bool, error)
 	SaveBash(enabled bool) error
+	// LoadSaveArtifactEnabled / SaveSaveArtifactEnabled expose the
+	// kaneaz__save_artifact built-in opt-in. Default true (on) — saving
+	// deliverables is a low-risk primitive that should work on first
+	// launch. The toolloop's EnabledFilter consults the predicate
+	// (which calls LoadSaveArtifactEnabled) on every Run boundary so a
+	// toggle takes effect on the next chat.
+	LoadSaveArtifactEnabled() (bool, error)
+	SaveSaveArtifactEnabled(enabled bool) error
 	// LoadMaxAgentTurns / SaveMaxAgentTurns expose the chat-graph
 	// LoopNode iteration cap independently of the full Settings record
 	// so the chassis can read it on the hot path (every chat run start)

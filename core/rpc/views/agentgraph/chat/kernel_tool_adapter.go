@@ -7,6 +7,7 @@ import (
 	"fmt"
 
 	coreag "github.com/sigil-tech/kaneaz-harness/core/agentgraph"
+	"github.com/sigil-tech/kaneaz-harness/core/toolloop"
 )
 
 // kernelToolAdapter satisfies agentgraph.ToolRegistry by routing
@@ -115,7 +116,10 @@ func (a *kernelToolAdapter) Call(ctx context.Context, call coreag.ToolCall) (cor
 		return coreag.ToolResult{}, fmt.Errorf("chat: marshal args: %w", err)
 	}
 
-	out, err := a.pool.Call(ctx, server, tool, argsJSON)
+	// Stuff the session ID into ctx so built-in tools that need it
+	// (kaneaz__save_artifact) can pull it out without a parameter.
+	// Tools that don't read it pay nothing.
+	out, err := a.pool.Call(toolloop.WithSessionID(ctx, a.sessionID), server, tool, argsJSON)
 	if err != nil {
 		return coreag.ToolResult{
 			Content: err.Error(),

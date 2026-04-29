@@ -240,6 +240,8 @@ function makeSettingsClient(): HarnessClient['settings'] {
     setWebSearch: async () => undefined,
     getBash: async () => false,
     setBash: async () => undefined,
+    getSaveArtifact: async () => true,
+    setSaveArtifact: async () => undefined,
     getMaxAgentTurns: async () => 0,
     setMaxAgentTurns: async () => undefined,
   };

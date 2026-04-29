@@ -141,10 +141,45 @@ async function toggleBash(event: Event) {
   }
 }
 
+// ── Save artifact built-in (core/tools/saveartifact) ───────────────────
+// Default ON: saving deliverables is a low-risk primitive that should
+// work on first launch. Reads default to true on backend errors so a
+// settings-store glitch doesn't disable the dial UI.
+const saveArtifactEnabled = ref(true);
+const saveArtifactError = ref<string | null>(null);
+const saveArtifactBusy = ref(false);
+
+async function refreshSaveArtifact() {
+  try {
+    saveArtifactEnabled.value = await client.settings.getSaveArtifact();
+  } catch {
+    saveArtifactEnabled.value = true;
+  }
+}
+
+async function toggleSaveArtifact(event: Event) {
+  if (saveArtifactBusy.value) return;
+  const next = (event.target as HTMLInputElement).checked;
+  saveArtifactBusy.value = true;
+  saveArtifactError.value = null;
+  const previous = saveArtifactEnabled.value;
+  saveArtifactEnabled.value = next;
+  try {
+    await client.settings.setSaveArtifact(next);
+  } catch (e) {
+    saveArtifactEnabled.value = previous;
+    saveArtifactError.value =
+      e instanceof Error ? e.message : 'Failed to toggle save_artifact.';
+  } finally {
+    saveArtifactBusy.value = false;
+  }
+}
+
 onMounted(() => {
   void refreshMemory();
   void refreshWebSearch();
   void refreshBash();
+  void refreshSaveArtifact();
 });
 
 // ── Recipes (WP06) ─────────────────────────────────────────────────────
@@ -518,6 +553,53 @@ watch(
             :disabled="bashBusy"
             data-testid="bash-toggle"
             @change="toggleBash"
+          />
+        </label>
+      </div>
+
+      <!-- Save artifact row (built-in; CAS-only, default ON) -->
+      <div
+        class="px-4 py-3 grid gap-3 items-start"
+        style="grid-template-columns: 1fr auto"
+        data-testid="saveartifact-tool-row"
+      >
+        <div>
+          <div class="flex items-center gap-2 font-ui text-[13px] text-ink">
+            <span>Save artifact</span>
+            <span
+              v-if="saveArtifactEnabled"
+              class="text-[10px] uppercase tracking-[0.16em] text-signal-ok"
+            >
+              on
+            </span>
+          </div>
+          <p class="mt-1 text-[11px] text-ink-muted max-w-prose">
+            Lets the assistant save deliverables (notes, code, summaries)
+            straight to the Artifacts tab. Content is stored content-addressed
+            in the same media-store the rest of the harness uses — no
+            filesystem touch, no MCP filesystem recipe required. Default ON;
+            the model picks this tool when you ask it to save, export, or
+            produce a document.
+          </p>
+          <div
+            v-if="saveArtifactError"
+            class="mt-2 text-[11px] text-signal-danger"
+            role="alert"
+          >
+            {{ saveArtifactError }}
+          </div>
+        </div>
+        <label
+          class="inline-flex items-center cursor-pointer select-none"
+          :class="saveArtifactBusy ? 'opacity-60 cursor-wait' : ''"
+        >
+          <input
+            type="checkbox"
+            class="accent-accent w-4 h-4"
+            :checked="saveArtifactEnabled"
+            :disabled="saveArtifactBusy"
+            data-testid="saveartifact-toggle"
+            @change="toggleSaveArtifact"
           />
         </label>
       </div>

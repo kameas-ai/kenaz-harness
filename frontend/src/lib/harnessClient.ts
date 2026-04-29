@@ -262,6 +262,8 @@ interface WailsBindingsLike {
   Settings_SetWebSearch(enabled: boolean): Promise<void>;
   Settings_GetBash(): Promise<boolean>;
   Settings_SetBash(enabled: boolean): Promise<void>;
+  Settings_GetSaveArtifactEnabled(): Promise<boolean>;
+  Settings_SetSaveArtifactEnabled(enabled: boolean): Promise<void>;
   Settings_GetMaxAgentTurns(): Promise<number>;
   Settings_SetMaxAgentTurns(turns: number): Promise<void>;
 
@@ -970,6 +972,14 @@ export interface SettingsClient {
   /** Persist the bash built-in opt-in flag. */
   setBash(enabled: boolean): Promise<void>;
   /**
+   * Read the kaneaz__save_artifact built-in opt-in (default true —
+   * saving deliverables is a low-risk primitive that should work on
+   * a fresh install). Surfaced as a toggle row in the Tools panel.
+   */
+  getSaveArtifact(): Promise<boolean>;
+  /** Persist the save_artifact built-in opt-in flag. */
+  setSaveArtifact(enabled: boolean): Promise<void>;
+  /**
    * Read the chat-graph LoopNode iteration cap. Zero on the wire
    * means "use the spec default" (DefaultMaxAgentTurns = 25); the
    * frontend renders the placeholder accordingly.
@@ -1485,6 +1495,8 @@ export function createHarnessClient(): HarnessClient {
       setWebSearch: (enabled) => b().Settings_SetWebSearch(enabled),
       getBash: () => b().Settings_GetBash(),
       setBash: (enabled) => b().Settings_SetBash(enabled),
+      getSaveArtifact: () => b().Settings_GetSaveArtifactEnabled(),
+      setSaveArtifact: (enabled) => b().Settings_SetSaveArtifactEnabled(enabled),
       getMaxAgentTurns: () => b().Settings_GetMaxAgentTurns(),
       setMaxAgentTurns: (turns) => b().Settings_SetMaxAgentTurns(turns),
     },
@@ -1846,6 +1858,8 @@ export function createFakeHarnessClient(
       setWebSearch: noop,
       getBash: async () => false,
       setBash: noop,
+      getSaveArtifact: async () => true,
+      setSaveArtifact: noop,
       getMaxAgentTurns: async () => 0,
       setMaxAgentTurns: noop,
     },

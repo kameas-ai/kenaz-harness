@@ -317,6 +317,31 @@ func (s *FileStore) SaveBash(enabled bool) error {
 	return s.saveLocked(got)
 }
 
+// LoadSaveArtifactEnabled returns the kaneaz__save_artifact built-in
+// opt-in. Default true (on) — wire shape persists the inverted
+// SaveArtifactDisabled bit so a fresh install (zero-value across the
+// board) matches "tool enabled".
+func (s *FileStore) LoadSaveArtifactEnabled() (bool, error) {
+	got, err := s.LoadAll()
+	if err != nil {
+		return got.SaveArtifactEnabled(), err
+	}
+	return got.SaveArtifactEnabled(), nil
+}
+
+// SaveSaveArtifactEnabled updates the save_artifact built-in opt-in
+// flag. Persists as the inverted SaveArtifactDisabled bit.
+func (s *FileStore) SaveSaveArtifactEnabled(enabled bool) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	got, err := s.loadLocked()
+	if err != nil {
+		return err
+	}
+	got.SaveArtifactDisabled = !enabled
+	return s.saveLocked(got)
+}
+
 // LoadMaxAgentTurns returns the chat-graph LoopNode iteration cap.
 // Default DefaultMaxAgentTurns (25) when the persisted value is zero
 // or when the settings file is unreadable — the chat surface stays
@@ -500,6 +525,19 @@ func (m *memoryStore) SaveBash(enabled bool) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.data.BashEnabled = enabled
+	return nil
+}
+
+func (m *memoryStore) LoadSaveArtifactEnabled() (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.data.SaveArtifactEnabled(), nil
+}
+
+func (m *memoryStore) SaveSaveArtifactEnabled(enabled bool) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.data.SaveArtifactDisabled = !enabled
 	return nil
 }
 

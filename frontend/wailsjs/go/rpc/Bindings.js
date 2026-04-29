@@ -586,6 +586,10 @@ export function Settings_GetMemory() {
   return window['go']['rpc']['Bindings']['Settings_GetMemory']();
 }
 
+export function Settings_GetSaveArtifactEnabled() {
+  return window['go']['rpc']['Bindings']['Settings_GetSaveArtifactEnabled']();
+}
+
 export function Settings_GetWebSearch() {
   return window['go']['rpc']['Bindings']['Settings_GetWebSearch']();
 }
@@ -608,6 +612,10 @@ export function Settings_SetMaxAgentTurns(arg1) {
 
 export function Settings_SetMemory(arg1) {
   return window['go']['rpc']['Bindings']['Settings_SetMemory'](arg1);
+}
+
+export function Settings_SetSaveArtifactEnabled(arg1) {
+  return window['go']['rpc']['Bindings']['Settings_SetSaveArtifactEnabled'](arg1);
 }
 
 export function Settings_SetWebSearch(arg1) {

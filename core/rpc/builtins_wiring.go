@@ -11,10 +11,12 @@ import (
 	"path/filepath"
 
 	"github.com/sigil-tech/kaneaz-harness/core"
+	coreart "github.com/sigil-tech/kaneaz-harness/core/artifacts"
 	"github.com/sigil-tech/kaneaz-harness/core/logging"
 	"github.com/sigil-tech/kaneaz-harness/core/policy/cedar"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/settings"
 	corebash "github.com/sigil-tech/kaneaz-harness/core/tools/bash"
+	coresaveartifact "github.com/sigil-tech/kaneaz-harness/core/tools/saveartifact"
 	corewebsearch "github.com/sigil-tech/kaneaz-harness/core/tools/websearch"
 	"github.com/sigil-tech/kaneaz-harness/core/toolloop"
 )
@@ -27,7 +29,11 @@ import (
 // nil core is tolerated: the websearch tool is process-local (no
 // dependency on chassis state) and the bash tool falls back to a
 // process tempdir when no DataDir is available.
-func registerBuiltinTools(c *core.Core, registry *toolloop.BuiltinRegistry, bashStore *corebash.Store) {
+//
+// nil artifactsMgr is tolerated too: the save_artifact tool is simply
+// not registered when no artifacts manager is wired (test harness
+// path). EnabledFilter then naturally returns nil for the tool name.
+func registerBuiltinTools(c *core.Core, registry *toolloop.BuiltinRegistry, bashStore *corebash.Store, artifactsMgr *coreart.Manager, store settings.SettingsStore) {
 	if registry == nil {
 		return
 	}
@@ -57,6 +63,49 @@ func registerBuiltinTools(c *core.Core, registry *toolloop.BuiltinRegistry, bash
 		"tool", bashTool.Name(),
 		"sandbox", sandboxRoot,
 	)
+
+	// save_artifact: pipes (title, content) into the artifact CAS
+	// pipeline. Only registered when the chassis wired an artifacts
+	// manager (production); the test harness path with nil manager
+	// silently skips registration, which the EnabledFilter handles
+	// gracefully.
+	//
+	// The Enabled callback the tool consults is the SAME Settings
+	// dial the EnabledFilter consults; passing it here gives us
+	// defence-in-depth against stale model-side tool catalogs that
+	// fire calls after the user toggled the dial off mid-session.
+	if artifactsMgr != nil {
+		saveArtifactTool := coresaveartifact.New(coresaveartifact.Options{
+			Manager: artifactsMgr,
+			Enabled: saveArtifactEnabledLookup(store),
+		})
+		registry.Register(saveArtifactTool)
+		logging.L().Info("rpc.builtins.register", "tool", saveArtifactTool.Name())
+	} else {
+		logging.L().Info("rpc.builtins.save_artifact_skipped",
+			"reason", "no artifacts manager wired")
+	}
+}
+
+// saveArtifactEnabledLookup returns a closure the saveartifact tool
+// consults inside Call to honour the live Settings dial. nil store
+// collapses to "always enabled" (test harness path); this matches the
+// builtinEnabledPredicate's behaviour for nil settings impl.
+func saveArtifactEnabledLookup(store settings.SettingsStore) func() bool {
+	if store == nil {
+		return func() bool { return true }
+	}
+	return func() bool {
+		v, err := store.LoadSaveArtifactEnabled()
+		if err != nil {
+			logging.L().Warn("rpc.builtins.save_artifact_lookup.read_failed", "err", err.Error())
+			// Soft-fail to "enabled" so a transient settings-store
+			// glitch doesn't disable a default-on tool. The frontend
+			// toggle remains the source of truth.
+			return true
+		}
+		return v
+	}
 }
 
 // constructWebSearch builds a websearch.Tool with the package's
@@ -126,6 +175,18 @@ func builtinEnabledPredicate(s *settings.API) func(string) bool {
 				logging.L().Warn("rpc.builtins.predicate.read_failed",
 					"tool", name, "err", err.Error())
 				return false
+			}
+			logging.L().Info("rpc.builtins.predicate", "tool", name, "enabled", v)
+			return v
+		case coresaveartifact.ToolName:
+			v, err := store.LoadSaveArtifactEnabled()
+			if err != nil {
+				logging.L().Warn("rpc.builtins.predicate.read_failed",
+					"tool", name, "err", err.Error())
+				// Default-on tool: soft-fail to enabled on a transient
+				// store error so first-launch ergonomics survive a
+				// settings-file glitch.
+				return true
 			}
 			logging.L().Info("rpc.builtins.predicate", "tool", name, "enabled", v)
 			return v

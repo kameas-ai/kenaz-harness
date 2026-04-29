@@ -364,7 +364,7 @@ func New(c *core.Core) *API {
 	a.corpusMgr = newCorpusManager(c, embedder)
 	a.graphMgr = newGraphManagerWithDeps(c, a.convMgr, a.corpusMgr, memStore, embedder, a_bashStore)
 
-	stack := newLLMStack(c, a.broker, personalForLLM, hooksRunner, attMgr, confirmEachEnabled, artifactSink, artifactSinkConcrete, settingsImpl, a_bashStore, a.graphMgr)
+	stack := newLLMStack(c, a.broker, personalForLLM, hooksRunner, attMgr, confirmEachEnabled, artifactSink, artifactSinkConcrete, settingsImpl, a_bashStore, artMgr, a.graphMgr)
 	a.llmAPI = stack.api
 	a.stdioPool = stack.pool
 	if c != nil && a.stdioPool != nil {
@@ -906,6 +906,7 @@ func newLLMStack(
 	artifactSinkConcrete *artifactsview.Sink,
 	settingsImpl *settings.API,
 	bashStore *corebash.Store,
+	artifactsMgr *coreart.Manager,
 	graphMgr *graphview.Manager,
 ) llmStack {
 	// Share ONE secrets backend between the credref resolver (which
@@ -1004,7 +1005,11 @@ func newLLMStack(
 	// ToolRegistry seam (chat-migration cutover); the kernel ToolNode
 	// dispatches against the same surface the legacy toolloop did.
 	builtinRegistry := toolloop.NewBuiltinRegistry()
-	registerBuiltinTools(c, builtinRegistry, bashStore)
+	var settingsStore settings.SettingsStore
+	if settingsImpl != nil {
+		settingsStore = settingsImpl.Store()
+	}
+	registerBuiltinTools(c, builtinRegistry, bashStore, artifactsMgr, settingsStore)
 	builtinFilter := toolloop.NewEnabledFilter(builtinRegistry, builtinEnabledPredicate(settingsImpl))
 	wrappedPool := toolloop.NewBuiltinPool(&mcpPoolAdapter{inner: mcpPool}, builtinFilter)
 	var attResolver llm.AttachmentsResolver

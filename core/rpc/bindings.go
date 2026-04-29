@@ -444,6 +444,27 @@ func (b *Bindings) Settings_SetBash(enabled bool) error {
 	return b.storeFn().SaveBash(enabled)
 }
 
+// Settings_GetSaveArtifactEnabled exposes the kaneaz__save_artifact
+// built-in opt-in flag. Default true (on) — saving deliverables is a
+// low-risk primitive that should work on a fresh install. Surfaced as a
+// toggle row in the Tools panel; toolloop reads this on every Run
+// boundary so toggling takes effect on the next chat.
+func (b *Bindings) Settings_GetSaveArtifactEnabled() (bool, error) {
+	if b.storeFn == nil {
+		return true, nil
+	}
+	return b.storeFn().LoadSaveArtifactEnabled()
+}
+
+// Settings_SetSaveArtifactEnabled persists the save_artifact built-in
+// opt-in flag.
+func (b *Bindings) Settings_SetSaveArtifactEnabled(enabled bool) error {
+	if b.storeFn == nil {
+		return nil
+	}
+	return b.storeFn().SaveSaveArtifactEnabled(enabled)
+}
+
 // Settings_GetMaxAgentTurns exposes the chat-graph LoopNode iteration
 // cap (default DefaultMaxAgentTurns = 25). The chassis (chat runner)
 // reads the effective value on every chat run start so the dial takes

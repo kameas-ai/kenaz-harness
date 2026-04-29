@@ -2840,6 +2840,7 @@ export namespace settings {
 	    autoCaptureToolOutputsDisabled?: boolean;
 	    webSearchEnabled?: boolean;
 	    bashEnabled?: boolean;
+	    saveArtifactDisabled?: boolean;
 	    maxAgentTurns?: number;
 	    compactionAggressiveness?: string;
 	    compactionModel?: ProviderProfileRef;
@@ -2865,6 +2866,7 @@ export namespace settings {
 	        this.autoCaptureToolOutputsDisabled = source["autoCaptureToolOutputsDisabled"];
 	        this.webSearchEnabled = source["webSearchEnabled"];
 	        this.bashEnabled = source["bashEnabled"];
+	        this.saveArtifactDisabled = source["saveArtifactDisabled"];
 	        this.maxAgentTurns = source["maxAgentTurns"];
 	        this.compactionAggressiveness = source["compactionAggressiveness"];
 	        this.compactionModel = this.convertValues(source["compactionModel"], ProviderProfileRef);
