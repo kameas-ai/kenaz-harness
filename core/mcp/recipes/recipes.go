@@ -78,7 +78,31 @@ type Recipe struct {
 	// install alongside this recipe. The install modal surfaces a
 	// "copy recommended policy" affordance when set.
 	RecommendedPolicyTemplate string `json:"recommended_policy_template,omitempty"`
+	// Source tags the loader that produced this Recipe. It is set by
+	// loaders (LoadShipped → SourceShipped, registry loader →
+	// SourceRegistry, UserStore → SourceUser/SourceImported) and is
+	// never persisted on disk: both the JSON and YAML codecs skip the
+	// field. Consumers use it to render badges and to drive the
+	// MergedCatalog precedence rules.
+	Source string `json:"-" yaml:"-"`
 }
+
+// Recipe Source values. Loaders stamp these onto Recipe.Source after
+// successful parse + Validate; the field is never persisted.
+const (
+	// SourceShipped marks the embedded shipped catalog (the 3
+	// filesystem variants — see C-003).
+	SourceShipped = "shipped"
+	// SourceRegistry marks the curated in-binary registry (see WP06).
+	SourceRegistry = "registry"
+	// SourceUser marks recipes loaded from
+	// <DataDir>/mcp/recipes/*.yaml.
+	SourceUser = "user"
+	// SourceImported marks recipes loaded from
+	// <DataDir>/mcp/recipes/_imports/*.yaml — translated from a
+	// clipboard-pasted Claude Desktop / Cursor config.
+	SourceImported = "imported"
+)
 
 // ConfigOption is one user-editable knob the install modal renders.
 // Kind drives the input shape; Default seeds the form when no last-

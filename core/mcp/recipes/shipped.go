@@ -36,6 +36,7 @@ func LoadShipped() (*Catalog, error) {
 		if err := cat.Recipes[i].Validate(); err != nil {
 			return nil, fmt.Errorf("recipes: shipped.json recipe[%d]: %w", i, err)
 		}
+		cat.Recipes[i].Source = SourceShipped
 	}
 	return &cat, nil
 }
