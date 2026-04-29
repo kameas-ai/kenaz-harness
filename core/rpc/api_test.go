@@ -69,6 +69,7 @@ func (f *fakeHarnessAPI) ShellStatus(_ context.Context) (ShellStatus, error) {
 func (f *fakeHarnessAPI) AppInfo(_ context.Context) (AppInfo, error) { return AppInfo{}, nil }
 func (f *fakeHarnessAPI) LLMConnector() llm.LLMConnectorAPI          { return f.llmAPI }
 func (f *fakeHarnessAPI) MCP() mcp.MCPAPI                            { return f.mcpAPI }
+func (f *fakeHarnessAPI) MCPImport() *mcp.ImportAPI                   { return nil }
 func (f *fakeHarnessAPI) A2A() a2a.A2AAPI                            { return f.a2aAPI }
 func (f *fakeHarnessAPI) Workflow() workflow.WorkflowAPI             { return f.workflowAPI }
 func (f *fakeHarnessAPI) Sessions() sessions.SessionsAPI             { return f.sessionsAPI }

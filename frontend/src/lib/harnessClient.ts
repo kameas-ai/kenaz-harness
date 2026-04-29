@@ -103,6 +103,12 @@ import type {
   BranchCreateOptions,
   BranchStatusInfo,
   BranchRecommendedModel,
+  MCPImportRequest,
+  MCPImportResponse,
+  MCPImportEntry,
+  MCPImportStatus,
+  MCPTranslationReport,
+  MCPImportWrotePath,
 } from './types';
 
 /**
@@ -202,6 +208,9 @@ interface WailsBindingsLike {
   MCP_ListServers(): Promise<MCPServer[]>;
   MCP_StartStream(id: string): Promise<string>;
   MCP_StopStream(id: string): Promise<void>;
+  MCP_ImportClaudeDesktopConfig(
+    req: MCPImportRequest,
+  ): Promise<MCPImportResponse>;
 
   A2A_ListCards(): Promise<A2ACard[]>;
   A2A_StartStream(): Promise<string>;
@@ -823,7 +832,29 @@ export interface MCPClient {
   listServers(): Promise<MCPServer[]>;
   startStream(id: string): Promise<string>;
   stopStream(id: string): Promise<void>;
+  /**
+   * importClaudeDesktopConfig — translate a pasted Claude Desktop /
+   * Cursor `mcpServers` JSON config into harness recipes (mission
+   * mcp-server-install-01KQ8TDP, WP08).
+   *
+   * Pass `dryRun: true` to render the per-entry ✓/✗ summary in the
+   * Add MCP Server modal without writing anything to disk. Pass
+   * `dryRun: false` (with optional per-entry `keepIds` filter) to
+   * commit kept entries to `<DataDir>/mcp/recipes/_imports/`.
+   */
+  importClaudeDesktopConfig(
+    req: MCPImportRequest,
+  ): Promise<MCPImportResponse>;
 }
+
+export type {
+  MCPImportRequest,
+  MCPImportResponse,
+  MCPImportEntry,
+  MCPImportStatus,
+  MCPTranslationReport,
+  MCPImportWrotePath,
+};
 
 export interface A2AClient {
   listCards(): Promise<A2ACard[]>;
@@ -1415,6 +1446,7 @@ export function createHarnessClient(): HarnessClient {
       listServers: () => b().MCP_ListServers(),
       startStream: (id) => b().MCP_StartStream(id),
       stopStream: (id) => b().MCP_StopStream(id),
+      importClaudeDesktopConfig: (req) => b().MCP_ImportClaudeDesktopConfig(req),
     },
     a2a: {
       listCards: () => b().A2A_ListCards(),
@@ -1736,6 +1768,15 @@ export function createFakeHarnessClient(
       listServers: async () => [],
       startStream: async () => 'fake-sub',
       stopStream: noop,
+      importClaudeDesktopConfig: async () => ({
+        report: {
+          entries: [],
+          kept_count: 0,
+          unsupported_count: 0,
+          malformed_count: 0,
+          collision_count: 0,
+        },
+      }),
     },
     a2a: {
       listCards: async () => [],

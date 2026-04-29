@@ -252,6 +252,22 @@ func (b *Bindings) MCP_StopStream(subID string) error {
 	return b.api.MCP().StopStream(b.ctx(), subID)
 }
 
+// MCP_ImportClaudeDesktopConfig is the user-facing RPC behind the
+// "Paste config" tab of the Add-MCP-Server modal (mission
+// mcp-server-install-01KQ8TDP, WP08). It accepts the verbatim
+// clipboard JSON, runs the translator, and — when dryRun=false —
+// writes per-entry artefacts under
+// <DataDir>/mcp/recipes/_imports/<id>.{yaml,json}. dryRun=true is
+// pure-read: the modal renders the report's per-entry rows before
+// the user commits.
+func (b *Bindings) MCP_ImportClaudeDesktopConfig(req mcp.ImportRequest) (mcp.ImportResponse, error) {
+	importer := b.api.MCPImport()
+	if importer == nil {
+		return mcp.ImportResponse{}, mcp.ErrImportNotConfigured
+	}
+	return importer.ImportClaudeDesktopConfig(b.ctx(), req)
+}
+
 // ── a2a ────────────────────────────────────────────────────────────────
 
 func (b *Bindings) A2A_ListCards() ([]a2a.Card, error) {

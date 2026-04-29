@@ -87,6 +87,14 @@ type HarnessAPI interface {
 
 	LLMConnector() llm.LLMConnectorAPI
 	MCP() mcp.MCPAPI
+	// MCPImport returns the clipboard-import RPC surface (mission
+	// mcp-server-install-01KQ8TDP, WP08). It is a separate sub-API
+	// rather than a method on MCPAPI so the existing MCP view's
+	// stub-server contract stays minimal. May return nil when the boot
+	// wiring did not configure the import dependencies (catalog +
+	// data-dir); the binding layer handles nil with a typed
+	// ErrImportNotConfigured.
+	MCPImport() *mcp.ImportAPI
 	A2A() a2a.A2AAPI
 	Workflow() workflow.WorkflowAPI
 	Sessions() sessions.SessionsAPI
@@ -152,6 +160,11 @@ type API struct {
 	// Stable view-accessor instances (plan §4.2).
 	llmAPI      llm.LLMConnectorAPI
 	mcpAPI      mcp.MCPAPI
+	// mcpImportAPI is the clipboard-import sub-surface (WP08 of
+	// mission mcp-server-install-01KQ8TDP). Wired in New when the
+	// merged catalog + data-dir are available; nil otherwise (the
+	// binding returns ErrImportNotConfigured).
+	mcpImportAPI *mcp.ImportAPI
 	a2aAPI      a2a.A2AAPI
 	workflowAPI workflow.WorkflowAPI
 	sessionsAPI sessions.SessionsAPI
@@ -272,6 +285,16 @@ func New(c *core.Core) *API {
 	a.auditImpl = audit.NewAPI(audit.WithSubscriber(a.broker))
 	a.auditAPI = a.auditImpl
 	a.mcpAPI = mcp.NewAPI(mcp.WithSubscriber(a.broker))
+	// MCP clipboard-import surface (mission mcp-server-install-01KQ8TDP,
+	// WP08). Wired only when we have a real Core (= a real DataDir);
+	// rpc.New(nil) test harness leaves it nil and the binding returns
+	// ErrImportNotConfigured.
+	if c != nil && c.DataDir() != "" {
+		a.mcpImportAPI = mcp.NewImportAPI(mcp.ImportConfig{
+			Catalog: importCatalogReader{},
+			DataDir: c.DataDir,
+		})
+	}
 	contextsAPI, contextsLib := newContextsAPI(c)
 	a.contextsAPI = contextsAPI
 	startContextsWatcher(contextsLib, a.broker)
@@ -731,6 +754,22 @@ func (r *sessionProjectReader) ProjectID(ctx context.Context, sessionID string) 
 	}
 	v := *rec.ProjectID
 	return &v, nil
+}
+
+// importCatalogReader satisfies mcp.MergedCatalogReader by snapshotting
+// the same shipped+registry merge mergedRecipeCatalog produces. The
+// import RPC uses it to drive collision detection: an entry whose id
+// already exists in the merged catalog is flagged
+// `collision_warning`. WP10 will swap this for a live MergedCatalog
+// pointer once the user-source hot-reload is wired into rpc boot.
+type importCatalogReader struct{}
+
+func (importCatalogReader) Recipes() []recipes.Recipe {
+	cat := mergedRecipeCatalog()
+	if cat == nil {
+		return nil
+	}
+	return cat.List()
 }
 
 // mergedRecipeCatalog returns a snapshot *recipes.Catalog containing
@@ -2289,6 +2328,7 @@ func (a *API) AppInfo(_ context.Context) (AppInfo, error) {
 // View accessors return the stable instance constructed in New.
 func (a *API) LLMConnector() llm.LLMConnectorAPI { return a.llmAPI }
 func (a *API) MCP() mcp.MCPAPI                   { return a.mcpAPI }
+func (a *API) MCPImport() *mcp.ImportAPI         { return a.mcpImportAPI }
 func (a *API) A2A() a2a.A2AAPI                   { return a.a2aAPI }
 func (a *API) Workflow() workflow.WorkflowAPI    { return a.workflowAPI }
 func (a *API) Sessions() sessions.SessionsAPI    { return a.sessionsAPI }

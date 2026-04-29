@@ -137,6 +137,90 @@ export interface MCPServer {
   capabilities?: string[];
 }
 
+// ── MCP clipboard import (mission mcp-server-install-01KQ8TDP, WP08) ───
+//
+// Wire shapes for `MCP_ImportClaudeDesktopConfig`. Field names follow
+// the Go JSON tags (snake_case) verbatim because the binding does not
+// adapt these structs frontend-side — the modal (WP09) reads the
+// wire fields directly. The translator is read-only on `dry_run=true`;
+// `dry_run=false` writes <DataDir>/mcp/recipes/_imports/<id>.{yaml,json}
+// for every kept-or-warning entry the caller did not exclude via
+// `keep_ids`.
+
+/**
+ * MCPImportStatus mirrors the Go-side ImportEntry.Status enum.
+ *
+ * - `kept` — translated cleanly; safe to save.
+ * - `unsupported` — parses but harness can't adopt it (HTTP/SSE
+ *   transport, oauth2, unknown auth scheme); Reason is populated
+ *   with a one-line explanation.
+ * - `malformed` — entry's JSON is structurally invalid (missing
+ *   required field, wrong type); Reason carries the parser-level
+ *   error.
+ * - `collision_warning` — translated cleanly but id collides with an
+ *   existing recipe; kept-with-warning. Reason carries the colliding
+ *   id. Saving will shadow the existing recipe per MergedCatalog
+ *   precedence (user > registry > shipped).
+ */
+export type MCPImportStatus =
+  | 'kept'
+  | 'unsupported'
+  | 'malformed'
+  | 'collision_warning';
+
+/**
+ * MCPImportEntry is one translated row from the pasted mcpServers map.
+ * The `recipe` field is the zero value (id="") for non-kept entries —
+ * the modal MUST gate Save on `status === 'kept' || status ===
+ * 'collision_warning'`.
+ *
+ * `original_json` preserves the exact JSON snippet for this entry so
+ * the modal can render a "show original" disclosure.
+ */
+export interface MCPImportEntry {
+  id: string;
+  original_name: string;
+  status: MCPImportStatus;
+  reason?: string;
+  recipe: Recipe;
+  original_json?: string;
+}
+
+export interface MCPTranslationReport {
+  entries: MCPImportEntry[];
+  kept_count: number;
+  unsupported_count: number;
+  malformed_count: number;
+  collision_count: number;
+}
+
+/**
+ * MCPImportRequest is the single argument to MCP_ImportClaudeDesktopConfig.
+ *
+ * - `raw_json`: the clipboard payload verbatim (max 64 KiB; oversize
+ *   surfaces as a typed error from the binding).
+ * - `dry_run`: `true` → no disk writes, just translation preview;
+ *   `false` → commit kept-or-warning entries to disk.
+ * - `keep_ids`: optional per-entry filter for the `dry_run=false`
+ *   path. Empty/missing means "save every kept-or-warning entry".
+ */
+export interface MCPImportRequest {
+  raw_json: string;
+  dry_run: boolean;
+  keep_ids?: string[];
+}
+
+export interface MCPImportWrotePath {
+  id: string;
+  yaml_path: string;
+  json_path: string;
+}
+
+export interface MCPImportResponse {
+  report: MCPTranslationReport;
+  wrote_paths?: MCPImportWrotePath[];
+}
+
 export interface A2ACard {
   id: string;
   issuer: string;
