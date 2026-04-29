@@ -733,6 +733,29 @@ func (r *sessionProjectReader) ProjectID(ctx context.Context, sessionID string) 
 	return &v, nil
 }
 
+// mergedRecipeCatalog returns a snapshot *recipes.Catalog containing
+// the shipped + curated-registry recipes merged in source-tagged
+// order. WP06 introduces the curated registry; the boot path
+// previously consulted only Shipped(), which meant a user who had
+// enabled e.g. the registry "github" recipe wouldn't find it on
+// startup.
+//
+// The merge happens through the WP05 *recipes.MergedCatalog so the
+// id-keyed precedence rules (user > registry > shipped) stay
+// centralised; a future hot-reloading user source can plug in via
+// MergedCatalog.SetUserSource without re-touching this helper.
+//
+// Callers receive a fresh *recipes.Catalog whose Recipes slice they
+// may mutate freely (copy-on-write semantics from MergedCatalog).
+func mergedRecipeCatalog() *recipes.Catalog {
+	mc := recipes.NewMergedCatalog(
+		func() []recipes.Recipe { return recipes.Shipped().List() },
+		func() []recipes.Recipe { return recipes.Registry().List() },
+		nil,
+	)
+	return &recipes.Catalog{Version: 1, Recipes: mc.Recipes()}
+}
+
 // makeMCPRecipeBootstrap returns a closure suitable for
 // Core.SetMCPRecipeBootstrap. The closure walks the persisted enabled-
 // recipes list, resolves env via the shared secrets backend, builds
@@ -754,7 +777,12 @@ func makeMCPRecipeBootstrap(c *core.Core, pool *stdio.Pool, secretsBackend *secr
 		if err != nil {
 			return fmt.Errorf("rpc: load enabled recipes: %w", err)
 		}
-		catalog := recipes.Shipped()
+		// Bootstrap consults the merged catalog so a user who has
+		// enabled e.g. the curated-registry "github" recipe finds the
+		// entry on boot. WP06 wires shipped + registry; WP05 already
+		// provided the merge surface and WP10 will plug in the user
+		// source.
+		catalog := mergedRecipeCatalog()
 		entries := enabled.List()
 		specs := make([]coremcp.ServerSpec, 0, len(entries))
 		for _, entry := range entries {
@@ -809,7 +837,7 @@ func newToolsAPI(c *core.Core, pool *stdio.Pool, secretsBackend *secrets.MemoryB
 		enabled = &recipes.EnabledRecipes{}
 	}
 	cfg := tools.Config{
-		Catalog:   recipes.Shipped(),
+		Catalog:   mergedRecipeCatalog(),
 		Enabled:   enabled,
 		Pool:      pool,
 		Secrets:   secretsBackend,
