@@ -553,6 +553,19 @@ func New(c *core.Core) *API {
 	if a.settingsImpl != nil {
 		a.bindings.SetSettingsStore(a.settingsImpl.Store())
 	}
+
+	// Bash allowlist → Cedar migration bootstrap (WP10). Wired only
+	// when both a real Core with a DataDir and a settings store are
+	// available. The hook is best-effort: errors are logged at warn
+	// inside Core.Start and never block boot.
+	if c != nil && c.DataDir() != "" && a.settingsImpl != nil && a.settingsImpl.Store() != nil {
+		snippetWriter := cedarpolicyview.NewAPIWithDataDir(nil, c.DataDir())
+		store := a.settingsImpl.Store()
+		c.SetBashMigrationBootstrap(func(ctx context.Context) error {
+			return corebash.MigrateBashAllowlist(ctx, snippetWriter, store)
+		})
+	}
+
 	return a
 }
 

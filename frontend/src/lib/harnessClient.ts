@@ -288,10 +288,6 @@ interface WailsBindingsLike {
   Settings_SetBashAllowlistMigrated(migrated: boolean): Promise<void>;
   Settings_GetPermissionsMigrationToastShown(): Promise<boolean>;
   Settings_SetPermissionsMigrationToastShown(shown: boolean): Promise<void>;
-  // WP08 permission grants (stubbed — real impl lands in later WPs)
-  Permissions_ListGrants(family: string): Promise<PermissionGrant[]>;
-  Permissions_RevokeGrant(id: string): Promise<void>;
-  Permissions_Resolve(requestID: string, decision: string): Promise<void>;
 
   Memory_ListChunks(filter: MemoryListFilter): Promise<MemoryChunk[]>;
   Memory_RememberMessage(

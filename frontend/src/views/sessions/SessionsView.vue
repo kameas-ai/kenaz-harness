@@ -29,6 +29,7 @@ import BashPermissionModal from '@/components/permissions/BashPermissionModal.vu
 import FilesystemPermissionModal from '@/components/permissions/FilesystemPermissionModal.vue';
 import CredentialPermissionModal from '@/components/permissions/CredentialPermissionModal.vue';
 import ToolPermissionModal from '@/components/permissions/ToolPermissionModal.vue';
+import MigrationToast from '@/components/permissions/MigrationToast.vue';
 import ArtifactPreview from '@/views/artifacts/ArtifactPreview.vue';
 import { useArtifacts, useHarnessClient, useSessions } from '@/lib/useHarnessAPI';
 import { useSession } from '@/lib/useSession';
@@ -1219,6 +1220,7 @@ function formatSize(bytes: number): string {
     <FilesystemPermissionModal />
     <CredentialPermissionModal />
     <ToolPermissionModal />
+    <MigrationToast />
     <ArtifactPreview
       :open="artifactPreviewOpen"
       :payload="artifactPreviewPayload"
