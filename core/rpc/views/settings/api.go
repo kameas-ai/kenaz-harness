@@ -134,6 +134,18 @@ type Settings struct {
 	// first-boot migration toast has been displayed to the user.
 	// Set to true after the toast is shown so it never shows again.
 	PermissionsMigrationToastShown bool `json:"permissionsMigrationToastShown,omitempty"`
+
+	// CedarStrictCredentialMode controls NotApplicable handling in the
+	// credstore Cedar gate (mission cedar-credential-policy-01KQ8TDE,
+	// WP05). When false (default / lenient), a NotApplicable Cedar
+	// outcome is treated as allow. When true (strict), NotApplicable
+	// for non-mcp_spawn purposes is treated as deny — the store
+	// becomes fail-closed for unmatched credential access patterns.
+	//
+	// The UI dial for this setting is a follow-up to WP05; set via
+	// Settings_GetCedarStrictCredentialMode /
+	// Settings_SetCedarStrictCredentialMode bindings today.
+	CedarStrictCredentialMode bool `json:"cedarStrictCredentialMode,omitempty"`
 }
 
 // ProviderProfileRef is the wire shape that identifies a provider+model
@@ -360,6 +372,16 @@ type SettingsStore interface {
 	// expose the one-time toast marker. Default false.
 	LoadPermissionsMigrationToastShown() (bool, error)
 	SavePermissionsMigrationToastShown(shown bool) error
+
+	// LoadCedarStrictCredentialMode / SaveCedarStrictCredentialMode
+	// expose the WP05 credential-gate strictness dial. Default false
+	// (lenient): NotApplicable outcomes from the Cedar gate allow
+	// access. When true (strict): NotApplicable for non-mcp_spawn
+	// purposes is treated as deny. The credstore.Store reads this via
+	// a func() bool callback threaded through its Config so the dial
+	// takes effect on the next Use call without re-creating the store.
+	LoadCedarStrictCredentialMode() (bool, error)
+	SaveCedarStrictCredentialMode(enabled bool) error
 }
 
 // SettingsAPI is the view-scoped accessor exposed via HarnessAPI.

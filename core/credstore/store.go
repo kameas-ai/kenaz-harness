@@ -6,6 +6,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/sigil-tech/kaneaz-harness/core/policy/cedar"
 	"github.com/sigil-tech/kaneaz-harness/core/secrets"
 )
 
@@ -39,6 +40,19 @@ type store struct {
 	clock     func() time.Time
 	done      chan struct{}
 	closeOnce sync.Once
+
+	// cedarGate is the optional Cedar policy gate consulted inside Use
+	// before secret resolution. nil = no gate (default-allow), keeps
+	// the test harness path simple. When set, evaluation routes through
+	// cedar.CheckCredentialAccess (mission cedar-credential-policy
+	// WP05). The mcp_spawn purpose has TODO-deferred interactive
+	// behaviour landing in credstore WP06.
+	cedarGate cedar.Gate
+	// strictMode is read on every Use call (not at construction time)
+	// so flipping the Settings.CedarStrictCredentialMode dial takes
+	// effect on the next Use without re-creating the store. nil
+	// degrades to "false" (lenient).
+	strictMode func() bool
 }
 
 // Store is the public interface. Callers obtain a *store via New.
@@ -67,9 +81,24 @@ func WithTTL(d time.Duration) IssueOption {
 	return func(c *issueConfig) { c.ttl = d }
 }
 
+// StoreOption configures a Store at construction time.
+type StoreOption func(*store)
+
+// WithCedarGate threads a Cedar policy gate + strictMode callback into
+// the store. The gate fires inside Use() before secret resolution
+// (mission cedar-credential-policy-01KQ8TDE WP05). nil gate is a no-op
+// (no gating). nil strictMode degrades to "lenient" (NotApplicable
+// outcomes allow access).
+func WithCedarGate(g cedar.Gate, strictMode func() bool) StoreOption {
+	return func(s *store) {
+		s.cedarGate = g
+		s.strictMode = strictMode
+	}
+}
+
 // New constructs a Store. resolver is used by Use to fetch raw bytes.
 // clock defaults to time.Now when nil (tests inject a fake clock).
-func New(resolver secrets.ResolverAPI, clock func() time.Time) Store {
+func New(resolver secrets.ResolverAPI, clock func() time.Time, opts ...StoreOption) Store {
 	if clock == nil {
 		clock = time.Now
 	}
@@ -78,6 +107,9 @@ func New(resolver secrets.ResolverAPI, clock func() time.Time) Store {
 		resolver: resolver,
 		clock:    clock,
 		done:     make(chan struct{}),
+	}
+	for _, opt := range opts {
+		opt(s)
 	}
 	go s.reapLoop()
 	return s

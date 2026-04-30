@@ -288,6 +288,9 @@ interface WailsBindingsLike {
   Settings_SetBashAllowlistMigrated(migrated: boolean): Promise<void>;
   Settings_GetPermissionsMigrationToastShown(): Promise<boolean>;
   Settings_SetPermissionsMigrationToastShown(shown: boolean): Promise<void>;
+  // WP05 credential-gate strictness dial
+  Settings_GetCedarStrictCredentialMode(): Promise<boolean>;
+  Settings_SetCedarStrictCredentialMode(enabled: boolean): Promise<void>;
 
   Memory_ListChunks(filter: MemoryListFilter): Promise<MemoryChunk[]>;
   Memory_RememberMessage(
@@ -1077,6 +1080,22 @@ export interface SettingsClient {
   getPermissionsMigrationToastShown(): Promise<boolean>;
   /** Mark the migration toast as shown. */
   setPermissionsMigrationToastShown(shown: boolean): Promise<void>;
+
+  // ── WP05 credential-gate strictness dial ──────────────────────────
+
+  /**
+   * Read the WP05 Cedar credential-gate strictness flag (default
+   * false / lenient). When false, NotApplicable Cedar outcomes allow
+   * credential access. When true (strict), NotApplicable for
+   * non-mcp_spawn purposes is treated as deny.
+   */
+  getCedarStrictCredentialMode(): Promise<boolean>;
+  /**
+   * Persist the Cedar credential-gate strictness flag. Changes take
+   * effect on the next credential Use call without restarting the
+   * harness.
+   */
+  setCedarStrictCredentialMode(enabled: boolean): Promise<void>;
 }
 
 /**
@@ -1655,6 +1674,10 @@ export function createHarnessClient(): HarnessClient {
         b().Settings_GetPermissionsMigrationToastShown(),
       setPermissionsMigrationToastShown: (shown) =>
         b().Settings_SetPermissionsMigrationToastShown(shown),
+      getCedarStrictCredentialMode: () =>
+        b().Settings_GetCedarStrictCredentialMode(),
+      setCedarStrictCredentialMode: (enabled) =>
+        b().Settings_SetCedarStrictCredentialMode(enabled),
     },
     permissions: {
       listGrants: (family) =>
@@ -2058,6 +2081,8 @@ export function createFakeHarnessClient(
       setBashAllowlistMigrated: noop,
       getPermissionsMigrationToastShown: async () => false,
       setPermissionsMigrationToastShown: noop,
+      getCedarStrictCredentialMode: async () => false,
+      setCedarStrictCredentialMode: noop,
     },
     permissions: {
       listGrants: async () => [],

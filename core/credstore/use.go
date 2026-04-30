@@ -2,7 +2,10 @@ package credstore
 
 import (
 	"context"
+	"errors"
 	"runtime"
+
+	"github.com/sigil-tech/kaneaz-harness/core/policy/cedar"
 )
 
 // Use resolves the credential behind h and passes the raw bytes to op.
@@ -35,6 +38,31 @@ func (s *store) Use(ctx context.Context, h Handle, op func([]byte) error) (retEr
 	// CompareAndSwap: false→true succeeds only once.
 	if !e.used.CompareAndSwap(false, true) {
 		return ErrUseAfterFree
+	}
+
+	// ── 1.5 Cedar gate ──────────────────────────────────────────────
+	//
+	// Cedar policy gate fires BEFORE secret resolution so an explicit
+	// Deny never lets raw bytes flow (mission
+	// cedar-credential-policy-01KQ8TDE WP05). nil gate is a no-op
+	// (default-allow). The mcp_spawn purpose is gated best-effort
+	// here; the full IssueForMCPSpawn interactive-prompt path lands
+	// in credstore WP06.
+	if s.cedarGate != nil {
+		strict := false
+		if s.strictMode != nil {
+			strict = s.strictMode()
+		}
+		gateErr := cedar.CheckCredentialAccess(ctx, s.cedarGate, e.ref.ID(), string(e.purpose), strict)
+		if gateErr != nil {
+			// PolicyDeniedError + the strict-mode NotApplicable sentinel
+			// both surface as ErrCredentialAccessDenied to the caller.
+			var denied *cedar.PolicyDeniedError
+			if errors.As(gateErr, &denied) || cedar.IsCredentialAccessDenied(gateErr) {
+				return ErrCredentialAccessDenied
+			}
+			return gateErr
+		}
 	}
 
 	// ── 2. Resolve ────────────────────────────────────────────────────

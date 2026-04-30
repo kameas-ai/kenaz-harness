@@ -29,4 +29,17 @@ var (
 	// ErrStoreClosed is returned when any operation is attempted on a
 	// closed store.
 	ErrStoreClosed = errors.New("credstore: store closed")
+
+	// ErrCredentialAccessDenied is returned by Use when the Cedar
+	// policy gate denies the credential access — either an explicit
+	// Deny outcome or a NotApplicable outcome under strict mode (for
+	// non-mcp_spawn purposes). Mission cedar-credential-policy WP05.
+	ErrCredentialAccessDenied = errors.New("credstore: credential access denied by policy")
+
+	// ErrMCPSpawnPolicyPending is a forward-marker for the
+	// IssueForMCPSpawn interactive-prompt path landing in credstore
+	// WP06. WP05 documents the integration point but does not return
+	// this error today; the mcp_spawn Cedar gate fires best-effort
+	// (Deny → ErrCredentialAccessDenied; NotApplicable → allow).
+	ErrMCPSpawnPolicyPending = errors.New("credstore: mcp_spawn cedar gate pending — wired in credstore WP06")
 )

@@ -657,6 +657,32 @@ func (b *Bindings) Settings_SetPermissionsMigrationToastShown(shown bool) error 
 	return b.storeFn().SavePermissionsMigrationToastShown(shown)
 }
 
+// Settings_GetCedarStrictCredentialMode exposes the WP05
+// credential-gate strictness dial (default false / lenient). When
+// false, NotApplicable Cedar outcomes allow credential access. When
+// true (strict), NotApplicable for non-mcp_spawn purposes is treated
+// as deny — the credstore becomes fail-closed for unmatched patterns.
+// The UI dial for this setting is a Settings-panel follow-up; the
+// binding is wired now so the frontend can surface it without a
+// re-deploy.
+func (b *Bindings) Settings_GetCedarStrictCredentialMode() (bool, error) {
+	if b.storeFn == nil {
+		return false, nil
+	}
+	return b.storeFn().LoadCedarStrictCredentialMode()
+}
+
+// Settings_SetCedarStrictCredentialMode persists the credential-gate
+// strictness flag. The credstore.Store reads this via its StrictMode
+// callback on every Use call; changes take effect on the next
+// credential use without restarting the harness.
+func (b *Bindings) Settings_SetCedarStrictCredentialMode(enabled bool) error {
+	if b.storeFn == nil {
+		return nil
+	}
+	return b.storeFn().SaveCedarStrictCredentialMode(enabled)
+}
+
 // ── memory ─────────────────────────────────────────────────────────────
 
 func (b *Bindings) Memory_ListChunks(filter memoryview.ListFilter) ([]memoryview.Chunk, error) {

@@ -464,6 +464,34 @@ func (s *FileStore) SavePermissionsMigrationToastShown(shown bool) error {
 	return s.saveLocked(got)
 }
 
+// LoadCedarStrictCredentialMode returns the WP05 credential-gate
+// strictness flag. Default false (lenient) — a fresh install with no
+// settings.json allows NotApplicable outcomes through. Errors return
+// the safe default so the credstore gate keeps working even if the
+// settings file is unreadable.
+func (s *FileStore) LoadCedarStrictCredentialMode() (bool, error) {
+	got, err := s.LoadAll()
+	if err != nil {
+		return got.CedarStrictCredentialMode, err
+	}
+	return got.CedarStrictCredentialMode, nil
+}
+
+// SaveCedarStrictCredentialMode persists the credential-gate
+// strictness flag. The credstore.Store reads this via its StrictMode
+// callback on every Use call, so changes take effect immediately
+// without re-creating the store.
+func (s *FileStore) SaveCedarStrictCredentialMode(enabled bool) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	got, err := s.loadLocked()
+	if err != nil {
+		return err
+	}
+	got.CedarStrictCredentialMode = enabled
+	return s.saveLocked(got)
+}
+
 // defaultSettings is the safe-baseline a fresh install starts with.
 func defaultSettings() Settings {
 	return Settings{
@@ -696,5 +724,18 @@ func (m *memoryStore) SavePermissionsMigrationToastShown(shown bool) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.data.PermissionsMigrationToastShown = shown
+	return nil
+}
+
+func (m *memoryStore) LoadCedarStrictCredentialMode() (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.data.CedarStrictCredentialMode, nil
+}
+
+func (m *memoryStore) SaveCedarStrictCredentialMode(enabled bool) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.data.CedarStrictCredentialMode = enabled
 	return nil
 }

@@ -2,6 +2,7 @@ package cedar
 
 import (
 	"context"
+	"errors"
 
 	cedar "github.com/cedar-policy/cedar-go"
 )
@@ -289,6 +290,84 @@ func CheckRecipeSpawn(ctx context.Context, g Gate, recipeID, command, transport 
 		},
 	)
 	return enforce(d)
+}
+
+// CheckCredentialAccess is the gate-hook helper for credstore.Use
+// (mission cedar-credential-policy-01KQ8TDE, WP05). It fires inside
+// Use BEFORE the secret bytes are returned so an explicit Deny always
+// blocks resolution.
+//
+// refID is the credential-provider identifier (e.g. "openai");
+// purpose is the string form of an AccessPurpose (e.g.
+// "provider_call", "manual_export", "mcp_spawn"). The Cedar resource
+// entity is built as Credential::"<refID>::<purpose>" per spec §3.
+//
+// strictMode controls NotApplicable handling for non-mcp_spawn
+// purposes:
+//   - false (default / lenient): NotApplicable → nil (allow).
+//   - true (strict): NotApplicable + purpose != "mcp_spawn" →
+//     credstore.ErrCredentialAccessDenied.
+//
+// For purpose == "mcp_spawn" the gate fires best-effort regardless of
+// strictMode; the IssueForMCPSpawn interactive-prompt path is deferred
+// to credstore WP06.
+//
+// Nil gate → nil error (default-allow; no engine wired).
+// Evaluation errors on the gate itself → nil (best-effort; only
+// explicit Deny outcomes block).
+func CheckCredentialAccess(ctx context.Context, g Gate, refID, purpose string, strictMode bool) error {
+	if g == nil {
+		return nil
+	}
+	ctxAttrs := map[cedar.String]cedar.Value{
+		cedar.String("purpose"): cedar.String(purpose),
+		cedar.String("ref_id"):  cedar.String(refID),
+	}
+	d := g.Evaluate(
+		ctx,
+		UserUID(),
+		ActionUseCredential,
+		CredentialUID(refID, purpose),
+		ctxAttrs,
+	)
+	switch d.Outcome {
+	case Allow:
+		return nil
+	case Deny:
+		return &PolicyDeniedError{Decision: d}
+	case NotApplicable:
+		// Strict mode: for non-mcp_spawn purposes, treat no-match as
+		// deny so the store is fail-closed when the operator requests it.
+		// mcp_spawn is always lenient here because its full interactive
+		// gate lands in credstore WP06.
+		if strictMode && purpose != "mcp_spawn" {
+			return errCredentialAccessDenied
+		}
+		return nil
+	default:
+		return nil
+	}
+}
+
+// errCredentialAccessDenied is the package-local sentinel returned by
+// CheckCredentialAccess in strict-mode / NotApplicable cases. Callers
+// in credstore surface this as credstore.ErrCredentialAccessDenied;
+// the cedar package avoids importing credstore to prevent a cycle.
+var errCredentialAccessDenied = &credentialAccessDeniedError{}
+
+type credentialAccessDeniedError struct{}
+
+func (*credentialAccessDeniedError) Error() string {
+	return "credstore: credential access denied by policy"
+}
+
+// IsCredentialAccessDenied reports whether err is the strict-mode
+// NotApplicable denial produced by CheckCredentialAccess. Credstore
+// uses this to map the error onto its own ErrCredentialAccessDenied
+// sentinel before returning it to callers.
+func IsCredentialAccessDenied(err error) bool {
+	var e *credentialAccessDeniedError
+	return errors.As(err, &e)
 }
 
 // enforce maps a Decision to a Go error. Allow + NotApplicable both
