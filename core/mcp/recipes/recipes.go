@@ -56,29 +56,24 @@ type Recipe struct {
 	// Command is the argv used to spawn the stdio server.
 	// Command[0] must be non-empty for stdio recipes.
 	Command []string `json:"command"`
-	// EnvKeys are the credential-bearing env vars the server reads.
-	// Slice order is render order in the install modal.
-	EnvKeys []EnvKey `json:"env_keys"`
 	// Transport names the wire protocol the recipe speaks. Empty (or
 	// "stdio") preserves backwards compatibility with the shipped
 	// stdio catalog. Recognised values: "stdio", "http", "sse".
 	Transport string `json:"transport,omitempty" yaml:"transport,omitempty"`
 	// URL is the endpoint for HTTP/SSE recipes. Required when
 	// Transport is non-stdio. Subject to ${VAR} env-var substitution
-	// at connection-open time so credentials in the path are sourced
-	// from the keychain rather than the YAML on disk. Must be
-	// http:// or https://, with no fragment and no userinfo —
-	// credentials flow exclusively through HeadersTemplate.
+	// at connection-open time.
 	URL string `json:"url,omitempty" yaml:"url,omitempty"`
-	// HeadersTemplate is the per-request HTTP header set the
-	// transport applies on every outbound POST. Values are subject
-	// to the same ${VAR} substitution as ArgsTemplate so a recipe
-	// can declare e.g. `Authorization: "Bearer ${GITHUB_TOKEN}"`
-	// and have the env-var resolved from the keychain at Open time.
-	// Header names should be canonical-cased; the transport leaves
-	// them untouched so the server sees what the recipe author
-	// wrote.
+	// HeadersTemplate is the per-request HTTP header set applied on
+	// every outbound request. Values are subject to ${VAR}
+	// substitution at Open time.
 	HeadersTemplate map[string]string `json:"headers_template,omitempty" yaml:"headers_template,omitempty"`
+	// PostURL is the SSE client→server endpoint. Required when
+	// Transport=="sse". Subject to ${VAR} substitution at Open time.
+	PostURL string `json:"post_url,omitempty" yaml:"post_url,omitempty"`
+	// EnvKeys are the credential-bearing env vars the server reads.
+	// Slice order is render order in the install modal.
+	EnvKeys []EnvKey `json:"env_keys"`
 	// Capabilities is the recipe-author's declaration; the
 	// negotiated set lives on ServerInstance.Negotiated.
 	Capabilities Capabilities `json:"capabilities"`
@@ -263,7 +258,8 @@ func ValidateRecipeID(id string) error {
 //     forgiving).
 //   - "http" / "sse": URL must be set, must parse, must use http or
 //     https scheme, must not carry a fragment, and must not embed
-//     userinfo (credentials route through HeadersTemplate).
+//     userinfo (credentials route through HeadersTemplate). For "sse"
+//     PostURL must additionally be set and validated identically.
 //   - Any other transport string is rejected.
 func (r *Recipe) Validate() error {
 	if err := ValidateRecipeID(r.ID); err != nil {
@@ -284,6 +280,14 @@ func (r *Recipe) Validate() error {
 		}
 		if err := validateRecipeURL(r.URL); err != nil {
 			return fmt.Errorf("%w: recipe %q: %v", ErrInvalidRecipe, r.ID, err)
+		}
+		if transport == TransportSSE {
+			if strings.TrimSpace(r.PostURL) == "" {
+				return fmt.Errorf("%w: recipe %q transport %q requires PostURL", ErrInvalidRecipe, r.ID, transport)
+			}
+			if err := validateRecipeURL(r.PostURL); err != nil {
+				return fmt.Errorf("%w: recipe %q post_url: %v", ErrInvalidRecipe, r.ID, err)
+			}
 		}
 	default:
 		return fmt.Errorf("%w: recipe %q has unknown transport %q", ErrInvalidRecipe, r.ID, transport)

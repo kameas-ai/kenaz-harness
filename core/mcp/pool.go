@@ -10,7 +10,10 @@ type ServerSpec struct {
 	Transport string            `json:"transport"`
 	Command   []string          `json:"command,omitempty"`
 	URL       string            `json:"url,omitempty"`
-	Env       map[string]string `json:"env,omitempty"`
+	// PostURL is the client→server endpoint for SSE recipes. Only
+	// populated when Transport=="sse".
+	PostURL string            `json:"post_url,omitempty"`
+	Env     map[string]string `json:"env,omitempty"`
 }
 
 type Tool struct {
