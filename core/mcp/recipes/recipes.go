@@ -21,9 +21,20 @@ package recipes
 import (
 	"errors"
 	"fmt"
+	"net/url"
 	"regexp"
+	"strings"
 
 	"github.com/sigil-tech/kaneaz-harness/core/mcp"
+)
+
+// Recognised transport identifiers. Empty string is treated as
+// TransportStdio for backwards compatibility with the shipped
+// catalog (which predates the transport field).
+const (
+	TransportStdio = "stdio"
+	TransportHTTP  = "http"
+	TransportSSE   = "sse"
 )
 
 // Recipe is one entry in the shipped catalog. The fields mirror the
@@ -43,11 +54,31 @@ type Recipe struct {
 	// "memory", "fetch", ...).
 	Category string `json:"category"`
 	// Command is the argv used to spawn the stdio server.
-	// Command[0] must be non-empty.
+	// Command[0] must be non-empty for stdio recipes.
 	Command []string `json:"command"`
 	// EnvKeys are the credential-bearing env vars the server reads.
 	// Slice order is render order in the install modal.
 	EnvKeys []EnvKey `json:"env_keys"`
+	// Transport names the wire protocol the recipe speaks. Empty (or
+	// "stdio") preserves backwards compatibility with the shipped
+	// stdio catalog. Recognised values: "stdio", "http", "sse".
+	Transport string `json:"transport,omitempty" yaml:"transport,omitempty"`
+	// URL is the endpoint for HTTP/SSE recipes. Required when
+	// Transport is non-stdio. Subject to ${VAR} env-var substitution
+	// at connection-open time so credentials in the path are sourced
+	// from the keychain rather than the YAML on disk. Must be
+	// http:// or https://, with no fragment and no userinfo —
+	// credentials flow exclusively through HeadersTemplate.
+	URL string `json:"url,omitempty" yaml:"url,omitempty"`
+	// HeadersTemplate is the per-request HTTP header set the
+	// transport applies on every outbound POST. Values are subject
+	// to the same ${VAR} substitution as ArgsTemplate so a recipe
+	// can declare e.g. `Authorization: "Bearer ${GITHUB_TOKEN}"`
+	// and have the env-var resolved from the keychain at Open time.
+	// Header names should be canonical-cased; the transport leaves
+	// them untouched so the server sees what the recipe author
+	// wrote.
+	HeadersTemplate map[string]string `json:"headers_template,omitempty" yaml:"headers_template,omitempty"`
 	// Capabilities is the recipe-author's declaration; the
 	// negotiated set lives on ServerInstance.Negotiated.
 	Capabilities Capabilities `json:"capabilities"`
@@ -224,17 +255,71 @@ func ValidateRecipeID(id string) error {
 // Validate runs the recipe-level invariants. It is called by
 // LoadShipped on every parsed recipe so that a bad shipped.json fails
 // the binary at init time.
+//
+// Transport-specific rules:
+//   - Empty / "stdio": Command[0] must be non-empty. URL and
+//     HeadersTemplate are tolerated but unused (a stdio recipe with a
+//     stray URL is a noop, not an error — keeps the import path more
+//     forgiving).
+//   - "http" / "sse": URL must be set, must parse, must use http or
+//     https scheme, must not carry a fragment, and must not embed
+//     userinfo (credentials route through HeadersTemplate).
+//   - Any other transport string is rejected.
 func (r *Recipe) Validate() error {
 	if err := ValidateRecipeID(r.ID); err != nil {
 		return err
 	}
-	if len(r.Command) == 0 || r.Command[0] == "" {
-		return fmt.Errorf("%w: recipe %q has empty Command", ErrInvalidRecipe, r.ID)
+	transport := r.Transport
+	if transport == "" {
+		transport = TransportStdio
+	}
+	switch transport {
+	case TransportStdio:
+		if len(r.Command) == 0 || r.Command[0] == "" {
+			return fmt.Errorf("%w: recipe %q has empty Command", ErrInvalidRecipe, r.ID)
+		}
+	case TransportHTTP, TransportSSE:
+		if strings.TrimSpace(r.URL) == "" {
+			return fmt.Errorf("%w: recipe %q transport %q requires URL", ErrInvalidRecipe, r.ID, transport)
+		}
+		if err := validateRecipeURL(r.URL); err != nil {
+			return fmt.Errorf("%w: recipe %q: %v", ErrInvalidRecipe, r.ID, err)
+		}
+	default:
+		return fmt.Errorf("%w: recipe %q has unknown transport %q", ErrInvalidRecipe, r.ID, transport)
 	}
 	for i, k := range r.EnvKeys {
 		if k.Name == "" {
 			return fmt.Errorf("%w: recipe %q env_keys[%d] has empty Name", ErrInvalidRecipe, r.ID, i)
 		}
+	}
+	return nil
+}
+
+// validateRecipeURL enforces the URL constraints documented on
+// Recipe.URL. The URL is allowed to contain ${VAR} substitution
+// tokens — those are stripped before parsing so the validator does
+// not fight the recipe author who routes part of the path through a
+// keychain-sourced env var. Token substitution is re-validated at
+// connection-open time.
+func validateRecipeURL(raw string) error {
+	probe := tokenPattern.ReplaceAllString(raw, "x")
+	u, err := url.Parse(probe)
+	if err != nil {
+		return fmt.Errorf("invalid URL %q: %w", raw, err)
+	}
+	scheme := strings.ToLower(u.Scheme)
+	if scheme != "http" && scheme != "https" {
+		return fmt.Errorf("invalid URL %q: scheme must be http or https", raw)
+	}
+	if u.Host == "" {
+		return fmt.Errorf("invalid URL %q: host required", raw)
+	}
+	if u.Fragment != "" || strings.Contains(probe, "#") {
+		return fmt.Errorf("invalid URL %q: fragment not permitted", raw)
+	}
+	if u.User != nil {
+		return fmt.Errorf("invalid URL %q: userinfo not permitted (use headers_template)", raw)
 	}
 	return nil
 }
@@ -275,10 +360,16 @@ func (r *Recipe) ToServerSpec(env map[string]string, config map[string]any) mcp.
 		}
 	}
 
+	transport := r.Transport
+	if transport == "" {
+		transport = TransportStdio
+	}
+
 	return mcp.ServerSpec{
 		Name:      r.ID,
-		Transport: "stdio",
+		Transport: transport,
 		Command:   cmd,
+		URL:       r.URL,
 		Env:       envCopy,
 	}
 }
