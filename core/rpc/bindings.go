@@ -192,6 +192,20 @@ func (b *Bindings) Sessions_MoveToProject(id, projectID string) error {
 	return b.api.Sessions().MoveToProject(b.ctx(), id, projectID)
 }
 
+// Sessions_SuggestTitle triggers a manual auto-title generation for the
+// session identified by id. Returns the generated title string on success
+// (session-auto-titling-01KQ8TDS WP04).
+func (b *Bindings) Sessions_SuggestTitle(id string) (string, error) {
+	return b.api.Sessions().SuggestTitle(b.ctx(), id)
+}
+
+// Sessions_ClearTitle resets the session's name to "" and auto_titled=0,
+// re-enabling future auto-title attempts
+// (session-auto-titling-01KQ8TDS WP04).
+func (b *Bindings) Sessions_ClearTitle(id string) error {
+	return b.api.Sessions().ClearTitle(b.ctx(), id)
+}
+
 // ── llm ────────────────────────────────────────────────────────────────
 
 func (b *Bindings) LLM_ListProviders() ([]llm.Provider, error) {

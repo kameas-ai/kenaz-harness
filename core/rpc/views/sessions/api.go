@@ -29,6 +29,11 @@ type Session struct {
 	// ProjectID is the session's project membership; empty string for
 	// loose sessions. Mirrors session.Record.ProjectID.
 	ProjectID string `json:"projectId,omitempty"`
+	// AutoTitled is true when the auto-titling engine has written a
+	// title, or when the user has manually renamed the session (locking
+	// out further auto-titling). Mirrors session.Record.AutoTitled.
+	// Populated by migration 0311 (session-auto-titling-01KQ8TDS WP01).
+	AutoTitled bool `json:"autoTitled"`
 }
 
 // ToolCall mirrors the frontend ToolCall shape for tool-use rendering.
@@ -153,4 +158,15 @@ type SessionsAPI interface {
 	// MoveToProject sets the session's project membership. An empty
 	// projectID detaches the session and makes it loose.
 	MoveToProject(ctx context.Context, id, projectID string) error
+
+	// SuggestTitle forces a new auto-title generation and writes the
+	// result regardless of the current auto_titled state (the "Suggest
+	// new title" manual path — session-auto-titling WP04). Returns the
+	// generated title string on success.
+	SuggestTitle(ctx context.Context, id string) (string, error)
+
+	// ClearTitle resets the session's name to "" and auto_titled=0,
+	// re-enabling future auto-title attempts. Mirrors the session
+	// manager's ClearTitle method (session-auto-titling WP04).
+	ClearTitle(ctx context.Context, id string) error
 }
