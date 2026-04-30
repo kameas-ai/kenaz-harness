@@ -49,6 +49,10 @@ type Engine interface {
 // Compile-time witness: *cedar.Engine satisfies Engine.
 var _ Engine = (*cedar.Engine)(nil)
 
+// snippetFilenameRE is the validation pattern for WritePolicySnippet
+// filenames. Matches cedar WP09's regex requirement.
+var snippetFilenameRE = regexp.MustCompile(`^[a-z][a-z0-9_]{0,127}\.cedar$`)
+
 // API is the concrete CedarPolicyAPI implementation.
 type API struct {
 	engine  Engine

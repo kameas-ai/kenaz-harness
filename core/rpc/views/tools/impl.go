@@ -4,15 +4,19 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	coremcp "github.com/sigil-tech/kaneaz-harness/core/mcp"
 	"github.com/sigil-tech/kaneaz-harness/core/mcp/recipes"
 	"github.com/sigil-tech/kaneaz-harness/core/mcp/stdio"
 	"github.com/sigil-tech/kaneaz-harness/core/policy/cedar"
+	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/cedarpolicy"
 	"github.com/sigil-tech/kaneaz-harness/core/secrets"
 )
 
@@ -51,10 +55,45 @@ type PoolController interface {
 	OpenOne(ctx context.Context, spec coremcp.ServerSpec) error
 	CloseOne(ctx context.Context, id string) error
 	RecipeStatus(id string) (stdio.RecipeStatus, bool)
+	// ServerTools returns the tool list for the named server, or nil
+	// when the server is not in the pool. Used by the pre-seed path to
+	// discover which tools need Cedar permit snippets.
+	ServerTools(id string) []coremcp.Tool
 }
 
 // Compile-time witness: *stdio.Pool satisfies PoolController.
 var _ PoolController = (*stdio.Pool)(nil)
+
+// snippetNameRE is the validation regex for Cedar snippet filenames
+// per cedar WP09: ^[a-z][a-z0-9_]{0,127}\.cedar$
+var snippetNameRE = regexp.MustCompile(`^[a-z][a-z0-9_]{0,127}\.cedar$`)
+
+// sanitizeSnippetID converts an arbitrary string (recipe id + "__" +
+// tool name) into a snippet filename that satisfies snippetNameRE.
+// Non-alphanumeric runes are replaced with '_'; the result is
+// lower-cased; a leading non-alpha rune gets a "t_" prefix.
+func sanitizeSnippetID(raw string) string {
+	out := make([]rune, 0, len(raw))
+	for _, r := range strings.ToLower(raw) {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			out = append(out, r)
+		} else {
+			out = append(out, '_')
+		}
+	}
+	if len(out) == 0 {
+		return "t_.cedar"
+	}
+	// Ensure first rune is alpha.
+	if !unicode.IsLetter(out[0]) {
+		out = append([]rune{'t', '_'}, out...)
+	}
+	// Trim to max 128 chars before the .cedar suffix.
+	if len(out) > 128 {
+		out = out[:128]
+	}
+	return string(out) + ".cedar"
+}
 
 // Config bundles the dependencies the API constructor needs. Every
 // field except Catalog and Enabled is nil-tolerant — tests that only
@@ -71,6 +110,10 @@ type Config struct {
 	// Gate is the Cedar policy gate for InstallRecipe (WP10). nil =
 	// default-permit (best-effort: a Cedar bug never blocks the chassis).
 	Gate cedar.Gate
+	// CedarPolicy is the optional Cedar policy API used to pre-seed
+	// tool permit snippets after a successful recipe install (WP11).
+	// When nil the pre-seed step is silently skipped (backwards-compatible).
+	CedarPolicy cedarpolicy.CedarPolicyAPI
 }
 
 // API is the concrete ToolsAPI implementation.
@@ -283,8 +326,60 @@ func (a *API) InstallRecipe(ctx context.Context, id string, env map[string]strin
 		"config":    resolvedConfig,
 	})
 
+	// Pre-seed Cedar permit snippets for the recipe's discovered tools.
+	// Best-effort: a single snippet failure logs a warning and continues.
+	// The install never rolls back on snippet write failure.
+	a.preSeedToolSnippets(ctx, recipe)
+
 	status, _ := a.cfg.Pool.RecipeStatus(id)
 	return status, nil
+}
+
+// preSeedToolSnippets writes Cedar permit snippets for the tools the
+// recipe just exposed via the pool. It is called after a successful
+// install. It is a no-op when CedarPolicy is nil, the pool has no
+// ServerTools method result, or PreSeedingPolicy is "prompt_only"/"none".
+func (a *API) preSeedToolSnippets(ctx context.Context, recipe recipes.Recipe) {
+	if a.cfg.CedarPolicy == nil {
+		return
+	}
+	// "prompt_only" and "none" disable pre-seeding entirely.
+	switch recipe.PreSeedingPolicy {
+	case "prompt_only", "none":
+		return
+	}
+	// default ("" or "allow_all"): pre-seed all non-prompt-tagged tools.
+
+	// Build a set of tool names that must NOT be pre-seeded.
+	skipSet := make(map[string]struct{}, len(recipe.PromptOnFirstUse))
+	for _, name := range recipe.PromptOnFirstUse {
+		skipSet[name] = struct{}{}
+	}
+
+	// Discover the tools the server is advertising via the pool.
+	serverTools := a.cfg.Pool.ServerTools(recipe.ID)
+
+	for _, tool := range serverTools {
+		if _, skip := skipSet[tool.Name]; skip {
+			continue
+		}
+		// Build snippet filename: sanitize "<recipeID>__<toolName>".
+		raw := recipe.ID + "__" + tool.Name
+		filename := sanitizeSnippetID(raw)
+		if !snippetNameRE.MatchString(filename) {
+			slog.Warn("tools: pre-seed snippet filename invalid after sanitisation; skipping",
+				"recipe", recipe.ID, "tool", tool.Name, "filename", filename)
+			continue
+		}
+		body := fmt.Sprintf(
+			"permit(principal, action == Action::\"use_tool\", resource == Tool::\"%s__%s\");",
+			recipe.ID, tool.Name,
+		)
+		if err := a.cfg.CedarPolicy.WritePolicySnippet(ctx, filename, body); err != nil {
+			slog.Warn("tools: pre-seed snippet write failed; continuing",
+				"recipe", recipe.ID, "tool", tool.Name, "err", err)
+		}
+	}
 }
 
 // resolveConfig validates and materialises the per-install config

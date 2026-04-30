@@ -119,6 +119,10 @@ type Recipe struct {
 	// has no effect because the default_tool_policy.cedar already allows
 	// them unconditionally.
 	//
+	// Tools listed here are also EXCLUDED from WP11's install-time pre-seed
+	// loop: they keep the gate prompt instead of getting a silent
+	// tool_allow_*.cedar snippet.
+	//
 	// Example: a recipe with tool names "write_file" and "delete_file"
 	// that wants first-use confirmation only on "delete_file" would set:
 	//
@@ -126,6 +130,20 @@ type Recipe struct {
 	//
 	// JSON key: prompt_on_first_use. omitempty: present only when non-empty.
 	PromptOnFirstUse []string `json:"prompt_on_first_use,omitempty"`
+	// PreSeedingPolicy controls how Cedar permit snippets are written
+	// for the recipe's tools at install time (cedar WP11). Recognised values:
+	//
+	//   ""           — same as "allow_all" (backwards-compatible default).
+	//   "allow_all"  — write a permit snippet for every discovered tool
+	//                  except those named in PromptOnFirstUse.
+	//   "prompt_only"— skip pre-seeding entirely; the Cedar gate prompt
+	//                  fires for every tool on first call.
+	//   "none"       — synonym for "prompt_only"; no snippets written.
+	//
+	// Failure to write any single snippet is best-effort: a warning is
+	// logged and the install continues. The install never rolls back on
+	// snippet write failure.
+	PreSeedingPolicy string `json:"pre_seeding_policy,omitempty"`
 	// Source tags the loader that produced this Recipe. It is set by
 	// loaders (LoadShipped → SourceShipped, registry loader →
 	// SourceRegistry, UserStore → SourceUser/SourceImported) and is
@@ -322,6 +340,12 @@ func (r *Recipe) Validate() error {
 		if k.Name == "" {
 			return fmt.Errorf("%w: recipe %q env_keys[%d] has empty Name", ErrInvalidRecipe, r.ID, i)
 		}
+	}
+	switch r.PreSeedingPolicy {
+	case "", "allow_all", "prompt_only", "none":
+		// valid
+	default:
+		return fmt.Errorf("%w: recipe %q has invalid pre_seeding_policy %q (want \"\", \"allow_all\", \"prompt_only\", or \"none\")", ErrInvalidRecipe, r.ID, r.PreSeedingPolicy)
 	}
 	return nil
 }

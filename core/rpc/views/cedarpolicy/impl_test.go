@@ -10,6 +10,9 @@ import (
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/cedarpolicy"
 )
 
+// Compile-time witness: *cedarpolicy.API satisfies CedarPolicyAPI.
+var _ cedarpolicy.CedarPolicyAPI = (*cedarpolicy.API)(nil)
+
 // TestAPI_NilEngine_ReturnsEmpty asserts the boot-time graceful
 // degradation: a view constructed with no engine returns empty
 // slices and an explicit error on reload, but never panics.
@@ -219,5 +222,44 @@ func TestWriteAndRevoke_EngineReloadTriggered(t *testing.T) {
 	}
 	if err := api.RevokePolicySnippet(context.Background(), name); err != nil {
 		t.Fatalf("RevokePolicySnippet: %v", err)
+	}
+}
+
+// TestAPI_WritePolicySnippet_WritesAndReloads (cedar WP11): a real
+// engine + dataDir + valid filename round-trips through ListPolicies.
+func TestAPI_WritePolicySnippet_WritesAndReloads(t *testing.T) {
+	t.Parallel()
+	dataDir := t.TempDir()
+	e, err := cedar.NewEngine(cedar.Options{
+		IncludeEmbedded: true,
+		LoadFromDisk:    true,
+		DataDir:         dataDir,
+	})
+	if err != nil {
+		t.Fatalf("cedar.NewEngine: %v", err)
+	}
+	api := cedarpolicy.NewAPIWithDataDir(e, dataDir)
+
+	initialFiles, _ := api.ListPolicies(context.Background())
+
+	const filename = "tool_allow_my_recipe__search.cedar"
+	const body = `permit(principal, action == Action::"use_tool", resource == Tool::"my-recipe__search");`
+	if err := api.WritePolicySnippet(context.Background(), filename, body); err != nil {
+		t.Fatalf("WritePolicySnippet: %v", err)
+	}
+
+	afterFiles, _ := api.ListPolicies(context.Background())
+	if len(afterFiles) <= len(initialFiles) {
+		t.Fatalf("ListPolicies after write: %d files, want > %d", len(afterFiles), len(initialFiles))
+	}
+	found := false
+	for _, f := range afterFiles {
+		if f.Name == filename {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("snippet file %q not listed after WritePolicySnippet", filename)
 	}
 }
