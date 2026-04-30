@@ -688,6 +688,221 @@ export namespace bundle {
 
 }
 
+export namespace cedar {
+	
+	export class BashPromptSurface {
+	    pattern: string;
+	    argv: string[];
+	    working_dir?: string;
+	    dangerous: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new BashPromptSurface(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.pattern = source["pattern"];
+	        this.argv = source["argv"];
+	        this.working_dir = source["working_dir"];
+	        this.dangerous = source["dangerous"];
+	    }
+	}
+	export class CredPromptSurface {
+	    provider_id: string;
+	    purpose: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new CredPromptSurface(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.provider_id = source["provider_id"];
+	        this.purpose = source["purpose"];
+	    }
+	}
+	export class Decision {
+	    outcome: number;
+	    action: string;
+	    principal: string;
+	    resource: string;
+	    matched_policy?: string;
+	    reason?: string;
+	    // Go type: time
+	    evaluated_at: any;
+	
+	    static createFrom(source: any = {}) {
+	        return new Decision(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.outcome = source["outcome"];
+	        this.action = source["action"];
+	        this.principal = source["principal"];
+	        this.resource = source["resource"];
+	        this.matched_policy = source["matched_policy"];
+	        this.reason = source["reason"];
+	        this.evaluated_at = this.convertValues(source["evaluated_at"], null);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class FSPromptSurface {
+	    op: string;
+	    canonical_path: string;
+	    dangerous: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new FSPromptSurface(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.op = source["op"];
+	        this.canonical_path = source["canonical_path"];
+	        this.dangerous = source["dangerous"];
+	    }
+	}
+	export class ToolPromptSurface {
+	    tool_name: string;
+	    server_name?: string;
+	    args_redacted?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ToolPromptSurface(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.tool_name = source["tool_name"];
+	        this.server_name = source["server_name"];
+	        this.args_redacted = source["args_redacted"];
+	    }
+	}
+	export class PromptSurface {
+	    bash?: BashPromptSurface;
+	    fs?: FSPromptSurface;
+	    cred?: CredPromptSurface;
+	    tool?: ToolPromptSurface;
+	    reason?: string;
+	    session_id?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new PromptSurface(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.bash = this.convertValues(source["bash"], BashPromptSurface);
+	        this.fs = this.convertValues(source["fs"], FSPromptSurface);
+	        this.cred = this.convertValues(source["cred"], CredPromptSurface);
+	        this.tool = this.convertValues(source["tool"], ToolPromptSurface);
+	        this.reason = source["reason"];
+	        this.session_id = source["session_id"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class PendingRequest {
+	    request_id: string;
+	    family: string;
+	    surface: PromptSurface;
+	    // Go type: time
+	    issued_at: any;
+	    // Go type: time
+	    deadline_at: any;
+	
+	    static createFrom(source: any = {}) {
+	        return new PendingRequest(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.request_id = source["request_id"];
+	        this.family = source["family"];
+	        this.surface = this.convertValues(source["surface"], PromptSurface);
+	        this.issued_at = this.convertValues(source["issued_at"], null);
+	        this.deadline_at = this.convertValues(source["deadline_at"], null);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class PolicyFile {
+	    name: string;
+	    path: string;
+	    bytes: number;
+	    embedded: boolean;
+	    parse_ok: boolean;
+	    parse_err?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new PolicyFile(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.path = source["path"];
+	        this.bytes = source["bytes"];
+	        this.embedded = source["embedded"];
+	        this.parse_ok = source["parse_ok"];
+	        this.parse_err = source["parse_err"];
+	    }
+	}
+	
+
+}
+
 export namespace compaction {
 	
 	export class SiteConfig {
@@ -2415,6 +2630,31 @@ export namespace nodes {
 
 }
 
+export namespace permissions {
+	
+	export class Grant {
+	    id: string;
+	    policy_file?: string;
+	    transient: boolean;
+	    resource_key?: string;
+	    family?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new Grant(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.policy_file = source["policy_file"];
+	        this.transient = source["transient"];
+	        this.resource_key = source["resource_key"];
+	        this.family = source["family"];
+	    }
+	}
+
+}
+
 export namespace policy {
 	
 	export class Denial {
@@ -2566,6 +2806,9 @@ export namespace recipes {
 	    category: string;
 	    command: string[];
 	    env_keys: EnvKey[];
+	    transport?: string;
+	    url?: string;
+	    headers_template?: Record<string, string>;
 	    capabilities: Capabilities;
 	    docs_url: string;
 	    init_timeout_ms: number;
@@ -2588,6 +2831,9 @@ export namespace recipes {
 	        this.category = source["category"];
 	        this.command = source["command"];
 	        this.env_keys = this.convertValues(source["env_keys"], EnvKey);
+	        this.transport = source["transport"];
+	        this.url = source["url"];
+	        this.headers_template = source["headers_template"];
 	        this.capabilities = this.convertValues(source["capabilities"], Capabilities);
 	        this.docs_url = source["docs_url"];
 	        this.init_timeout_ms = source["init_timeout_ms"];

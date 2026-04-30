@@ -110,6 +110,18 @@ export function Bundle_List() {
   return window['go']['rpc']['Bindings']['Bundle_List']();
 }
 
+export function CedarPolicy_ListPolicies() {
+  return window['go']['rpc']['Bindings']['CedarPolicy_ListPolicies']();
+}
+
+export function CedarPolicy_RecentDecisions(arg1) {
+  return window['go']['rpc']['Bindings']['CedarPolicy_RecentDecisions'](arg1);
+}
+
+export function CedarPolicy_ReloadPolicies() {
+  return window['go']['rpc']['Bindings']['CedarPolicy_ReloadPolicies']();
+}
+
 export function Compaction_GetConfig(arg1, arg2) {
   return window['go']['rpc']['Bindings']['Compaction_GetConfig'](arg1, arg2);
 }
@@ -428,6 +440,22 @@ export function Nodes_ListUserOverrides() {
 
 export function Nodes_ReloadOverrides() {
   return window['go']['rpc']['Bindings']['Nodes_ReloadOverrides']();
+}
+
+export function Permissions_ListGrants() {
+  return window['go']['rpc']['Bindings']['Permissions_ListGrants']();
+}
+
+export function Permissions_ListPending() {
+  return window['go']['rpc']['Bindings']['Permissions_ListPending']();
+}
+
+export function Permissions_Resolve(arg1, arg2) {
+  return window['go']['rpc']['Bindings']['Permissions_Resolve'](arg1, arg2);
+}
+
+export function Permissions_RevokeGrant(arg1) {
+  return window['go']['rpc']['Bindings']['Permissions_RevokeGrant'](arg1);
 }
 
 export function Policy_Explain(arg1) {

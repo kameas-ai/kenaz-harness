@@ -7,6 +7,7 @@ import {attachments} from '../models';
 import {audit} from '../models';
 import {branches} from '../models';
 import {bundle} from '../models';
+import {cedar} from '../models';
 import {compaction} from '../models';
 import {contextview} from '../models';
 import {contexts} from '../models';
@@ -18,6 +19,7 @@ import {llm} from '../models';
 import {mcp} from '../models';
 import {memory} from '../models';
 import {nodes} from '../models';
+import {permissions} from '../models';
 import {policy} from '../models';
 import {projects} from '../models';
 import {sessions} from '../models';
@@ -82,6 +84,12 @@ export function Branches_RecommendModel(arg1:string,arg2:string,arg3:string):Pro
 export function Bundle_Get(arg1:string):Promise<bundle.Bundle>;
 
 export function Bundle_List():Promise<Array<bundle.Bundle>>;
+
+export function CedarPolicy_ListPolicies():Promise<Array<cedar.PolicyFile>>;
+
+export function CedarPolicy_RecentDecisions(arg1:number):Promise<Array<cedar.Decision>>;
+
+export function CedarPolicy_ReloadPolicies():Promise<void>;
 
 export function Compaction_GetConfig(arg1:compaction.Layer,arg2:string):Promise<compaction.Config>;
 
@@ -242,6 +250,14 @@ export function Nodes_Get(arg1:string):Promise<nodes.NodeManifestDetail>;
 export function Nodes_ListUserOverrides():Promise<Array<nodes.UserOverrideInfo>>;
 
 export function Nodes_ReloadOverrides():Promise<nodes.ReloadResult>;
+
+export function Permissions_ListGrants():Promise<Array<permissions.Grant>>;
+
+export function Permissions_ListPending():Promise<Array<cedar.PendingRequest>>;
+
+export function Permissions_Resolve(arg1:string,arg2:string):Promise<void>;
+
+export function Permissions_RevokeGrant(arg1:string):Promise<void>;
 
 export function Policy_Explain(arg1:Record<string, any>):Promise<policy.Denial>;
 
