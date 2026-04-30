@@ -396,6 +396,10 @@ interface WailsBindingsLike {
   Nodes_ListUserOverrides(): Promise<NodeUserOverrideInfo[]>;
   Nodes_Doctor(): Promise<NodeDoctorReport>;
 
+  // Cedar policy snippet writer/revoker (WP09).
+  CedarPolicy_WriteSnippet(name: string, body: string): Promise<void>;
+  CedarPolicy_RevokeSnippet(name: string): Promise<void>;
+
   // Branches view (agent-kernel-graph; Bundle B WP07/08).
   Branches_List(parentSessionID: string): Promise<Branch[]>;
   Branches_Create(opts: BranchCreateOptions): Promise<Branch>;
@@ -1331,6 +1335,27 @@ export interface BranchesClient {
   ): Promise<BranchRecommendedModel>;
 }
 
+/**
+ * CedarPolicyClient — view-scoped surface for writing and revoking
+ * Cedar policy snippets on disk (mission cedar-credential-policy-01KQ8TDE,
+ * WP09). Backs the per-family allow/deny quick-write affordance in the
+ * Policy panel. Pure-additive: existing ListPolicies / ReloadPolicies /
+ * RecentDecisions are wired through the older Policy view (policy.PolicyAPI).
+ *
+ *   - `writeSnippet(name, body)` writes `<DataDir>/policy/<name>` atomically
+ *     and triggers an engine reload. name must match
+ *     `^[a-z][a-z0-9_]{0,127}\.cedar$` — the backend rejects anything
+ *     else with a typed error.
+ *   - `revokeSnippet(name)` deletes the file (no-op when absent) and
+ *     triggers an engine reload.
+ */
+export interface CedarPolicyClient {
+  /** Write a Cedar snippet file. Filename must match the backend safety regex. */
+  writeSnippet(name: string, body: string): Promise<void>;
+  /** Delete a Cedar snippet file. No-op when the file does not exist. */
+  revokeSnippet(name: string): Promise<void>;
+}
+
 export interface HarnessClient {
   shellStatus(): Promise<ShellStatus>;
   appInfo(): Promise<AppInfo>;
@@ -1361,6 +1386,7 @@ export interface HarnessClient {
   branches: BranchesClient;
   dials: DialsClient;
   nodes: NodesClient;
+  cedarPolicy: CedarPolicyClient;
 }
 
 // ── runtime client ─────────────────────────────────────────────────────
@@ -1649,6 +1675,10 @@ export function createHarnessClient(): HarnessClient {
       reloadOverrides: () => b().Nodes_ReloadOverrides(),
       listUserOverrides: () => b().Nodes_ListUserOverrides(),
       doctor: () => b().Nodes_Doctor(),
+    },
+    cedarPolicy: {
+      writeSnippet: (name, body) => b().CedarPolicy_WriteSnippet(name, body),
+      revokeSnippet: (name) => b().CedarPolicy_RevokeSnippet(name),
     },
   };
 }
@@ -2275,6 +2305,10 @@ export function createFakeHarnessClient(
         aliasCount: 0,
         hotReloadEnabled: false,
       }),
+    },
+    cedarPolicy: {
+      writeSnippet: noop,
+      revokeSnippet: noop,
     },
   };
 

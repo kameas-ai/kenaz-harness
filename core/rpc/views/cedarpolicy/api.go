@@ -40,4 +40,19 @@ type CedarPolicyAPI interface {
 	// RecentDecisions returns up to limit most-recent gate
 	// decisions, newest first. Used by the audit panel.
 	RecentDecisions(ctx context.Context, limit int) ([]Decision, error)
+
+	// WritePolicySnippet writes body to <DataDir>/policy/<name>
+	// atomically (write-to-tmp then rename). name must satisfy the
+	// filename safety regex `^[a-z][a-z0-9_]{0,127}\.cedar$` — the
+	// validator rejects path traversal, uppercase, control chars, and
+	// lengths that exceed the 133-char total (128 stem + 5 suffix).
+	// Body is written verbatim; Cedar syntax errors are caught by the
+	// engine on reload, not here. Engine.Reload is triggered
+	// best-effort after the write; failure is logged as a warning.
+	WritePolicySnippet(ctx context.Context, name string, body string) error
+
+	// RevokePolicySnippet deletes <DataDir>/policy/<name>. name is
+	// subject to the same filename safety validation as
+	// WritePolicySnippet. Engine.Reload is triggered best-effort.
+	RevokePolicySnippet(ctx context.Context, name string) error
 }

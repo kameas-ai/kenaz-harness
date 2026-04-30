@@ -501,19 +501,25 @@ func New(c *core.Core) *API {
 		a.nodesWatcher = startNodesWatcher(c, a.nodesMgr)
 	}
 
-	// CedarPolicy view (mission cedar-credential-policy-01KQ8TDE, WP02).
+	// CedarPolicy view (mission cedar-credential-policy-01KQ8TDE, WP02 + WP09).
 	// Constructs a process-singleton *cedar.Engine so the policy-panel
-	// RPC surface can list loaded policy files and surface recent
-	// decisions. The engine instance is independent of the gate engine
-	// wired into the graph EnvDeps above; a future WP will unify them.
-	// nil Core / empty DataDir falls back to cedarpolicy.NewAPI(nil)
-	// which serves empty slices — the panel renders its empty state.
+	// RPC surface can list loaded policy files, surface recent decisions,
+	// and (WP09) write/revoke `<family>_allow_*.cedar` snippets with an
+	// engine reload after each mutation. nil Core / empty DataDir falls
+	// back to NewAPIWithDataDir(nil, "") which serves empty slices and
+	// rejects snippet writes with a typed error.
 	{
 		var cedarDataDir string
 		if c != nil {
 			cedarDataDir = c.DataDir()
 		}
-		a.cedarPolicyAPI = cedarpolicyview.NewAPI(buildCedarEngineOrNil(cedarDataDir))
+		var cedarEng cedarpolicyview.Engine
+		if eng := buildCedarEngineOrNil(cedarDataDir); eng != nil {
+			if e2, ok := any(eng).(cedarpolicyview.Engine); ok {
+				cedarEng = e2
+			}
+		}
+		a.cedarPolicyAPI = cedarpolicyview.NewAPIWithDataDir(cedarEng, cedarDataDir)
 
 		// Permissions view + prompt registry singleton. The registry is
 		// constructed without a dispatcher today; cedar WP03–WP06 will
@@ -2402,14 +2408,14 @@ func (a *API) Contexts() contextsview.ContextsAPI {
 }
 func (a *API) Bundle() bundle.BundleAPI          { return a.bundleAPI }
 func (a *API) Policy() policy.PolicyAPI          { return a.policyAPI }
-// CedarPolicy returns the policy-panel view surface (mission
-// cedar-credential-policy-01KQ8TDE, WP02). cedarpolicy.NewAPI(nil)
-// serves an empty-slice surface if the engine was not wired; this
-// accessor mirrors that nil-safe pattern for test harnesses that call
-// New(nil).
+// CedarPolicy returns the policy-panel + snippet writer/revoker view
+// (mission cedar-credential-policy-01KQ8TDE, WP02 + WP09). The
+// nil-engine fallback returns a view that serves empty slices for
+// reads and rejects WritePolicySnippet / RevokePolicySnippet with a
+// typed error when no DataDir is wired (test-harness path).
 func (a *API) CedarPolicy() cedarpolicyview.CedarPolicyAPI {
-	if a.cedarPolicyAPI == nil {
-		return cedarpolicyview.NewAPI(nil)
+	if a == nil || a.cedarPolicyAPI == nil {
+		return cedarpolicyview.NewAPIWithDataDir(nil, "")
 	}
 	return a.cedarPolicyAPI
 }

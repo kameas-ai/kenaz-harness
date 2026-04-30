@@ -924,3 +924,17 @@ func (b *Bindings) Nodes_ListUserOverrides() ([]nodesview.UserOverrideInfo, erro
 func (b *Bindings) Nodes_Doctor() (nodesview.DoctorReport, error) {
 	return b.api.Nodes().Doctor(b.ctx())
 }
+
+// ── cedarpolicy (snippet writer/revoker; WP09) ────────────────────────
+
+// CedarPolicy_WriteSnippet writes body to <DataDir>/policy/<name> after
+// validating the filename. Triggers engine reload best-effort.
+func (b *Bindings) CedarPolicy_WriteSnippet(name string, body string) error {
+	return b.api.CedarPolicy().WritePolicySnippet(b.ctx(), name, body)
+}
+
+// CedarPolicy_RevokeSnippet deletes <DataDir>/policy/<name> after
+// validating the filename. Triggers engine reload best-effort.
+func (b *Bindings) CedarPolicy_RevokeSnippet(name string) error {
+	return b.api.CedarPolicy().RevokePolicySnippet(b.ctx(), name)
+}
