@@ -362,6 +362,10 @@ export function LogRouteChange(arg1, arg2) {
   return window['go']['rpc']['Bindings']['LogRouteChange'](arg1, arg2);
 }
 
+export function MCP_ImportClaudeDesktopConfig(arg1) {
+  return window['go']['rpc']['Bindings']['MCP_ImportClaudeDesktopConfig'](arg1);
+}
+
 export function MCP_ListServers() {
   return window['go']['rpc']['Bindings']['MCP_ListServers']();
 }
