@@ -24,6 +24,40 @@ credstore WP06 to be fully wired into the MCP spawn hook. Until WP05 is
 complete, `mcp_spawn` evaluates to `NotApplicable` and the gate passes
 (default-allow). See the dedicated gap section below.
 
+**WP12 partial gap**: only the cedar package's multi-family integration
+test landed cleanly. The bash / fs / credstore integration tests this
+WP attempted to ship were written against a forked-too-early version
+of those packages and did not match the production APIs on main; they
+were dropped during cherry-pick (commit `d4f598d`). Each gate already
+has its own unit test coverage in its package — the missing pieces are
+end-to-end cross-WP scenarios. See "Open follow-ups" below.
+
+---
+
+## Open follow-ups
+
+Tracked here so they remain discoverable after the mission is archived.
+
+1. **WP05 mcp_spawn integration** (blocks complete): wire
+   `credstore.IssueForMCPSpawn` (credstore WP06) into the cedar prompt
+   registry so the first MCP spawn that requests a credential triggers
+   the universal interactive prompt. Until then, mcp_spawn purpose is
+   default-allow.
+
+2. **WP12 cross-WP integration tests** (deferred): re-author against
+   the actual production APIs and add to the suite:
+   - `core/credstore/integration_test.go` — Issue → Cedar deny → Use
+     returns ErrCredentialAccessDenied; op never called.
+   - `core/tools/bash/integration_test.go` — full pattern → cedar
+     evaluate → AllowOnce/AllowAlways/dangerous-demote scenarios.
+   - `core/tools/fs/integration_test.go` — read inside recipe-dir
+     silent; write prompts → user picks "directory and below" → snippet
+     body has `like "<dir>/*"`; dangerous-path write blocks.
+
+3. **Settings UI dial for `CedarStrictCredentialMode`** (cosmetic):
+   the backend dial + RPC binding are wired (WP05 partial commit
+   `5d55b8c`); the Settings panel UI is a follow-up.
+
 ---
 
 ## Architecture Overview
