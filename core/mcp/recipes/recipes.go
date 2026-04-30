@@ -104,6 +104,28 @@ type Recipe struct {
 	// install alongside this recipe. The install modal surfaces a
 	// "copy recommended policy" affordance when set.
 	RecommendedPolicyTemplate string `json:"recommended_policy_template,omitempty"`
+	// PromptOnFirstUse lists tool names (bare, without the server prefix)
+	// within this recipe that opt into the universal interactive-permission
+	// prompt gate on their first invocation. When the Cedar engine returns
+	// NotApplicable for one of these tools, the toolloop dispatcher routes
+	// through the prompt registry so the user can grant or deny access
+	// interactively.
+	//
+	// An empty (or nil) slice — the default — means no per-tool prompts:
+	// the caller's existing allow/deny policy drives the verdict, exactly
+	// as before WP06. Recipe authors SHOULD list only tools whose default
+	// posture is NotApplicable (i.e. not already covered by a broad
+	// server-level Cedar permit rule); listing a builtin kaneaz tool here
+	// has no effect because the default_tool_policy.cedar already allows
+	// them unconditionally.
+	//
+	// Example: a recipe with tool names "write_file" and "delete_file"
+	// that wants first-use confirmation only on "delete_file" would set:
+	//
+	//   "prompt_on_first_use": ["delete_file"]
+	//
+	// JSON key: prompt_on_first_use. omitempty: present only when non-empty.
+	PromptOnFirstUse []string `json:"prompt_on_first_use,omitempty"`
 	// Source tags the loader that produced this Recipe. It is set by
 	// loaders (LoadShipped → SourceShipped, registry loader →
 	// SourceRegistry, UserStore → SourceUser/SourceImported) and is

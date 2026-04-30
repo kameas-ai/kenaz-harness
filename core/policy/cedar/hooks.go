@@ -201,6 +201,45 @@ func CheckStateWrite(ctx context.Context, g Gate, target string) error {
 	return enforce(d)
 }
 
+// EvaluateUseTool runs the Cedar engine against the Tool resource family
+// for the given (serverName, toolName) pair and returns the raw Decision.
+// The context attribute map is pre-populated with the tool-family attrs
+// (server_name, tool_name, prompt_on_first_use) before evaluation.
+//
+// This helper is the gate-hook entry point for WP06: callers that need
+// to act differently on Allow / Deny / NotApplicable call this rather
+// than CheckTool so they can inspect the Outcome directly.
+//
+// g may be nil — returns a NotApplicable Decision with reason "no engine".
+// toolName is the bare tool name (without server prefix). serverName is
+// the bare server name. promptOnFirstUse is the recipe-metadata flag
+// (FR-024) — it is injected into context so Cedar policies can inspect it.
+func EvaluateUseTool(
+	ctx context.Context,
+	g Gate,
+	serverName, toolName string,
+	promptOnFirstUse bool,
+) Decision {
+	if g == nil {
+		return Decision{
+			Outcome:  NotApplicable,
+			Action:   ActionUseTool,
+			Resource: PermissionToolUID(serverName + "__" + toolName).String(),
+			Reason:   "no engine (nil gate)",
+		}
+	}
+	fqName := toolName
+	if serverName != "" {
+		fqName = serverName + "__" + toolName
+	}
+	attrs := map[cedar.String]cedar.Value{
+		cedar.String(CtxKeyServerName):       cedar.String(serverName),
+		cedar.String(CtxKeyToolName):         cedar.String(toolName),
+		cedar.String(CtxKeyPromptOnFirstUse): cedar.Boolean(promptOnFirstUse),
+	}
+	return g.Evaluate(ctx, UserUID(), ActionUseTool, PermissionToolUID(fqName), attrs)
+}
+
 // enforce maps a Decision to a Go error. Allow + NotApplicable both
 // return nil (default-allow stance); Deny returns *PolicyDeniedError.
 func enforce(d Decision) error {

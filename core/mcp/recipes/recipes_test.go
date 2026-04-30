@@ -401,6 +401,93 @@ func TestToServerSpec_ConfigDataDirScalar(t *testing.T) {
 	}
 }
 
+// TestPromptOnFirstUseRoundTrip verifies that the PromptOnFirstUse slice
+// survives JSON marshal → unmarshal exactly (WP06 requirement).
+func TestPromptOnFirstUseRoundTrip(t *testing.T) {
+	// When the JSON blob includes prompt_on_first_use, it must decode.
+	const blobWith = `{
+		"id": "fs",
+		"display_name": "FS",
+		"description": "",
+		"category": "filesystem",
+		"command": ["npx", "-y", "server-fs"],
+		"env_keys": [],
+		"capabilities": {"tools": true, "resources": false, "prompts": false, "sampling": false},
+		"docs_url": "",
+		"init_timeout_ms": 5000,
+		"ping_period_ms": 30000,
+		"sampling_policy": {"allowed": false, "default": false},
+		"prompt_on_first_use": ["write_file", "delete_file"]
+	}`
+	var r recipes.Recipe
+	if err := json.Unmarshal([]byte(blobWith), &r); err != nil {
+		t.Fatalf("Unmarshal with prompt_on_first_use: %v", err)
+	}
+	if len(r.PromptOnFirstUse) != 2 {
+		t.Fatalf("PromptOnFirstUse len = %d, want 2", len(r.PromptOnFirstUse))
+	}
+	if r.PromptOnFirstUse[0] != "write_file" || r.PromptOnFirstUse[1] != "delete_file" {
+		t.Errorf("PromptOnFirstUse = %v, want [write_file delete_file]", r.PromptOnFirstUse)
+	}
+
+	// Re-marshal and confirm the key appears.
+	out, err := json.Marshal(r)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	var r2 recipes.Recipe
+	if err := json.Unmarshal(out, &r2); err != nil {
+		t.Fatalf("Unmarshal round-trip: %v", err)
+	}
+	if len(r2.PromptOnFirstUse) != 2 {
+		t.Fatalf("round-trip PromptOnFirstUse len = %d, want 2", len(r2.PromptOnFirstUse))
+	}
+
+	// When the JSON blob omits prompt_on_first_use, the field is nil (not []).
+	const blobWithout = `{
+		"id": "fs",
+		"display_name": "FS",
+		"description": "",
+		"category": "filesystem",
+		"command": ["npx", "-y", "server-fs"],
+		"env_keys": [],
+		"capabilities": {"tools": false, "resources": false, "prompts": false, "sampling": false},
+		"docs_url": "",
+		"init_timeout_ms": 5000,
+		"ping_period_ms": 30000,
+		"sampling_policy": {"allowed": false, "default": false}
+	}`
+	var r3 recipes.Recipe
+	if err := json.Unmarshal([]byte(blobWithout), &r3); err != nil {
+		t.Fatalf("Unmarshal without prompt_on_first_use: %v", err)
+	}
+	if r3.PromptOnFirstUse != nil {
+		t.Errorf("PromptOnFirstUse = %v, want nil when JSON omits field", r3.PromptOnFirstUse)
+	}
+
+	// A recipe with no PromptOnFirstUse must NOT emit the key in JSON
+	// (omitempty). Confirmed by checking the marshalled form contains no
+	// "prompt_on_first_use" substring.
+	outWithout, err := json.Marshal(r3)
+	if err != nil {
+		t.Fatalf("Marshal without: %v", err)
+	}
+	if bytes := string(outWithout); containsSubstring(bytes, "prompt_on_first_use") {
+		t.Errorf("empty PromptOnFirstUse should be omitted from JSON, got: %s", bytes)
+	}
+}
+
+// containsSubstring is a pure helper that avoids importing strings in
+// this test file.
+func containsSubstring(haystack, needle string) bool {
+	for i := 0; i+len(needle) <= len(haystack); i++ {
+		if haystack[i:i+len(needle)] == needle {
+			return true
+		}
+	}
+	return false
+}
+
 func TestSentinelErrorsDistinct(t *testing.T) {
 	// Defensive: a refactor that collapses the sentinels into one
 	// would silently flip behaviour for downstream errors.Is checks.
