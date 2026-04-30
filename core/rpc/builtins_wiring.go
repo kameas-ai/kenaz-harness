@@ -33,7 +33,20 @@ import (
 // nil artifactsMgr is tolerated too: the save_artifact tool is simply
 // not registered when no artifacts manager is wired (test harness
 // path). EnabledFilter then naturally returns nil for the tool name.
-func registerBuiltinTools(c *core.Core, registry *toolloop.BuiltinRegistry, bashStore *corebash.Store, artifactsMgr *coreart.Manager, store settings.SettingsStore) {
+//
+// cedarEngine and promptRegistry are WP03 Cedar gate dependencies.
+// Both are nil-tolerant: when nil the bash tool falls back to the
+// legacy allowlist-based gate so the test harness path and nil-core
+// callers keep working unchanged.
+func registerBuiltinTools(
+	c *core.Core,
+	registry *toolloop.BuiltinRegistry,
+	bashStore *corebash.Store,
+	artifactsMgr *coreart.Manager,
+	store settings.SettingsStore,
+	cedarEngine *cedar.Engine,
+	promptRegistry *cedar.Registry,
+) {
 	if registry == nil {
 		return
 	}
@@ -53,15 +66,27 @@ func registerBuiltinTools(c *core.Core, registry *toolloop.BuiltinRegistry, bash
 	// bash: requires a sandbox root. Prefer <DataDir>/agent-workspace
 	// when available; fall back to the OS tempdir so tests + nil-core
 	// callers still get a working tool.
+	//
+	// CedarEngine and PromptRegistry are wired when the chassis has a
+	// real DataDir; nil falls back to the legacy allowlist gate so the
+	// test harness path (registerBuiltinTools with nil core) still works.
 	sandboxRoot := defaultBashSandbox(c)
+	var dataDir string
+	if c != nil {
+		dataDir = c.DataDir()
+	}
 	bashTool := corebash.New(corebash.Options{
-		SandboxRoot: sandboxRoot,
-		Store:       bashStore,
+		SandboxRoot:    sandboxRoot,
+		Store:          bashStore,
+		CedarEngine:    cedarEngine,
+		PromptRegistry: promptRegistry,
+		DataDir:        dataDir,
 	})
 	registry.Register(bashTool)
 	logging.L().Info("rpc.builtins.register",
 		"tool", bashTool.Name(),
 		"sandbox", sandboxRoot,
+		"cedar_gate", cedarEngine != nil,
 	)
 
 	// save_artifact: pipes (title, content) into the artifact CAS

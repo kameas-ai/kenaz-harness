@@ -1142,7 +1142,18 @@ func newLLMStack(
 	if settingsImpl != nil {
 		settingsStore = settingsImpl.Store()
 	}
-	registerBuiltinTools(c, builtinRegistry, bashStore, artifactsMgr, settingsStore)
+	// Cedar engine + prompt registry for the bash gate (WP03). Build
+	// them here so the bash tool's Cedar gate is wired at construction
+	// time. Both are nil-tolerant: when nil the bash tool falls back to
+	// the legacy allowlist gate so the test harness path (New(nil))
+	// keeps working unchanged.
+	var bashCedarEngine *cedar.Engine
+	var bashPromptRegistry *cedar.Registry
+	if dataDir != "" {
+		bashCedarEngine = buildCedarEngineOrNil(dataDir)
+		bashPromptRegistry = cedar.NewRegistry()
+	}
+	registerBuiltinTools(c, builtinRegistry, bashStore, artifactsMgr, settingsStore, bashCedarEngine, bashPromptRegistry)
 	builtinFilter := toolloop.NewEnabledFilter(builtinRegistry, builtinEnabledPredicate(settingsImpl))
 	wrappedPool := toolloop.NewBuiltinPool(&mcpPoolAdapter{inner: mcpPool}, builtinFilter)
 	var attResolver llm.AttachmentsResolver
@@ -2561,12 +2572,12 @@ func (a *API) Bindings() []any { return []any{a.bindings} }
 func (a *API) StreamBroker() *StreamBroker { return a.broker }
 
 // buildCedarEngineOrNil constructs a *cedar.Engine for callers that
-// need direct access to ListPolicies / Reload / RecentDecisions (i.e.
-// the cedarpolicy view). Returns nil when dataDir is empty so callers
-// can degrade gracefully rather than booting a disk-walk engine with
-// nowhere to walk. Mirrors the same Options as buildCedarGate; the
-// two functions intentionally share no state — a future WP will unify
-// them into a single engine instance shared by both call sites.
+// need the concrete Engine type — the cedarpolicy view (ListPolicies /
+// Reload / RecentDecisions / WritePolicySnippet) and the bash gate
+// (WP03+). Returns nil when dataDir is empty so callers can degrade
+// gracefully rather than booting a disk-walk engine with nowhere to
+// walk. Mirrors buildCedarGate's options but returns *Engine instead
+// of the Gate interface.
 func buildCedarEngineOrNil(dataDir string) *cedar.Engine {
 	if dataDir == "" {
 		return nil
@@ -2578,7 +2589,7 @@ func buildCedarEngineOrNil(dataDir string) *cedar.Engine {
 		DefaultDeny:     false,
 	})
 	if err != nil {
-		slog.Warn("cedar engine (cedarpolicy view) construction failed; policy panel will be empty",
+		slog.Warn("cedar engine construction failed; consumer falls back to its safe-default behaviour",
 			"err", err, "data_dir", dataDir)
 		return nil
 	}
