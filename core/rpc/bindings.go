@@ -33,6 +33,7 @@ import (
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/trust"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/workflow"
 	"github.com/sigil-tech/kaneaz-harness/core/logging"
+	"github.com/sigil-tech/kaneaz-harness/core/mcp/recipes"
 	"github.com/sigil-tech/kaneaz-harness/core/mcp/stdio"
 )
 
@@ -268,6 +269,15 @@ func (b *Bindings) MCP_ImportClaudeDesktopConfig(req mcp.ImportRequest) (mcp.Imp
 		return mcp.ImportResponse{}, mcp.ErrImportNotConfigured
 	}
 	return importer.ImportClaudeDesktopConfig(b.ctx(), req)
+}
+
+// MCP_TestRecipe opens a one-shot connection to the MCP server
+// described by recipe, performs the initialize + capability listing
+// handshake (30 s hard timeout), and returns a TestResult summary.
+// The connection is closed before this method returns; the recipe is
+// NOT registered with the production MCP pool (fire-and-forget).
+func (b *Bindings) MCP_TestRecipe(recipe recipes.Recipe) (mcp.TestResult, error) {
+	return b.api.MCP().TestRecipe(b.ctx(), recipe)
 }
 
 // ── a2a ────────────────────────────────────────────────────────────────

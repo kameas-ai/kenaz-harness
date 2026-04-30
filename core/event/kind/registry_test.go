@@ -32,6 +32,15 @@ func TestPermissionKindsRegistered(t *testing.T) {
 	}
 }
 
+func TestMCPRecipeTestedRegistered(t *testing.T) {
+	if !IsRegistered(KindMCPRecipeTested) {
+		t.Errorf("KindMCPRecipeTested %q should be registered as a built-in", KindMCPRecipeTested)
+	}
+	if err := Validate(KindMCPRecipeTested); err != nil {
+		t.Errorf("KindMCPRecipeTested should be valid: %v", err)
+	}
+}
+
 func TestValidateGoodKinds(t *testing.T) {
 	good := []Kind{
 		"llm.request.started",

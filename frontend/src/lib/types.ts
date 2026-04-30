@@ -137,6 +137,44 @@ export interface MCPServer {
   capabilities?: string[];
 }
 
+// ── MCP Test Connection (mission mcp-server-install-01KQ8TDP, WP07) ────
+//
+// Wire shape for `MCP_TestRecipe`. Field names match the Go JSON tags
+// (camelCase) on mcp.TestResult. The frontend renders the result in the
+// "Test Connection" drawer without any adaptation layer.
+
+/**
+ * MCPTestResult is the outcome of a one-shot Test Connection RPC.
+ * All string fields may be empty on failure; numeric counts default to 0
+ * when the server did not advertise the capability or the handshake
+ * did not complete.
+ */
+export interface MCPTestResult {
+  /** Whether the full initialize + capability listing completed without error. */
+  ok: boolean;
+  /** Server name from the initialize response serverInfo block. */
+  serverName: string;
+  /** Server version from the initialize response serverInfo block. */
+  serverVersion: string;
+  /** Protocol version echoed back by the server. */
+  protocolVersion: string;
+  /** Number of tools reported by tools/list (0 if not advertised). */
+  toolCount: number;
+  /** Number of resources reported by resources/list (0 if not advertised). */
+  resourceCount: number;
+  /** Number of prompts reported by prompts/list (0 if not advertised). */
+  promptCount: number;
+  /**
+   * Up to 4 KiB of the most recent stderr output (stdio recipes only).
+   * Empty for HTTP/SSE transports.
+   */
+  stderrTail: string;
+  /** Human-readable error when ok is false. Empty when ok is true. */
+  errorMessage: string;
+  /** Wall-clock elapsed time from connection open to close, in milliseconds. */
+  durationMs: number;
+}
+
 // ── MCP clipboard import (mission mcp-server-install-01KQ8TDP, WP08) ───
 //
 // Wire shapes for `MCP_ImportClaudeDesktopConfig`. Field names follow

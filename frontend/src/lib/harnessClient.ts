@@ -22,6 +22,7 @@ import type {
   TestResult,
   ModelInfo,
   MCPServer,
+  MCPTestResult,
   A2ACard,
   Job,
   SecretReference,
@@ -211,6 +212,7 @@ interface WailsBindingsLike {
   MCP_ImportClaudeDesktopConfig(
     req: MCPImportRequest,
   ): Promise<MCPImportResponse>;
+  MCP_TestRecipe(recipe: WireRecipe): Promise<MCPTestResult>;
 
   A2A_ListCards(): Promise<A2ACard[]>;
   A2A_StartStream(): Promise<string>;
@@ -845,6 +847,16 @@ export interface MCPClient {
   importClaudeDesktopConfig(
     req: MCPImportRequest,
   ): Promise<MCPImportResponse>;
+  /**
+   * testRecipe — opens a one-shot connection to the MCP server described
+   * by recipe, performs the initialize + capability listing handshake
+   * (30 s hard timeout), and returns a TestResult summary.
+   *
+   * The recipe is NOT registered with the production MCP pool — this is
+   * a pure fire-and-forget connectivity check (mission
+   * mcp-server-install-01KQ8TDP, WP07).
+   */
+  testRecipe(recipe: Recipe): Promise<MCPTestResult>;
 }
 
 export type {
@@ -854,6 +866,7 @@ export type {
   MCPImportStatus,
   MCPTranslationReport,
   MCPImportWrotePath,
+  MCPTestResult,
 };
 
 export interface A2AClient {
@@ -1447,6 +1460,7 @@ export function createHarnessClient(): HarnessClient {
       startStream: (id) => b().MCP_StartStream(id),
       stopStream: (id) => b().MCP_StopStream(id),
       importClaudeDesktopConfig: (req) => b().MCP_ImportClaudeDesktopConfig(req),
+      testRecipe: (recipe) => b().MCP_TestRecipe(recipe as WireRecipe),
     },
     a2a: {
       listCards: () => b().A2A_ListCards(),
@@ -1776,6 +1790,18 @@ export function createFakeHarnessClient(
           malformed_count: 0,
           collision_count: 0,
         },
+      }),
+      testRecipe: async () => ({
+        ok: true,
+        serverName: 'fake-server',
+        serverVersion: '0.0.0',
+        protocolVersion: '2024-11-05',
+        toolCount: 0,
+        resourceCount: 0,
+        promptCount: 0,
+        stderrTail: '',
+        errorMessage: '',
+        durationMs: 1,
       }),
     },
     a2a: {
