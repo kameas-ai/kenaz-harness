@@ -630,6 +630,10 @@ export function Settings_GetBashAllowlistMigrated() {
   return window['go']['rpc']['Bindings']['Settings_GetBashAllowlistMigrated']();
 }
 
+export function Settings_GetCedarStrictCredentialMode() {
+  return window['go']['rpc']['Bindings']['Settings_GetCedarStrictCredentialMode']();
+}
+
 export function Settings_GetConfirmEach() {
   return window['go']['rpc']['Bindings']['Settings_GetConfirmEach']();
 }
@@ -672,6 +676,10 @@ export function Settings_SetBash(arg1) {
 
 export function Settings_SetBashAllowlistMigrated(arg1) {
   return window['go']['rpc']['Bindings']['Settings_SetBashAllowlistMigrated'](arg1);
+}
+
+export function Settings_SetCedarStrictCredentialMode(arg1) {
+  return window['go']['rpc']['Bindings']['Settings_SetCedarStrictCredentialMode'](arg1);
 }
 
 export function Settings_SetConfirmEach(arg1) {

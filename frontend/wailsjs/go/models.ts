@@ -3279,6 +3279,7 @@ export namespace settings {
 	    permissionCacheDangerousOps?: boolean;
 	    bashAllowlistMigrated?: boolean;
 	    permissionsMigrationToastShown?: boolean;
+	    cedarStrictCredentialMode?: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new Settings(source);
@@ -3309,6 +3310,7 @@ export namespace settings {
 	        this.permissionCacheDangerousOps = source["permissionCacheDangerousOps"];
 	        this.bashAllowlistMigrated = source["bashAllowlistMigrated"];
 	        this.permissionsMigrationToastShown = source["permissionsMigrationToastShown"];
+	        this.cedarStrictCredentialMode = source["cedarStrictCredentialMode"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {

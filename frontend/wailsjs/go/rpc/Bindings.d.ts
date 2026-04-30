@@ -346,6 +346,8 @@ export function Settings_GetBash():Promise<boolean>;
 
 export function Settings_GetBashAllowlistMigrated():Promise<boolean>;
 
+export function Settings_GetCedarStrictCredentialMode():Promise<boolean>;
+
 export function Settings_GetConfirmEach():Promise<boolean>;
 
 export function Settings_GetMaxAgentTurns():Promise<number>;
@@ -367,6 +369,8 @@ export function Settings_Set(arg1:settings.Settings):Promise<void>;
 export function Settings_SetBash(arg1:boolean):Promise<void>;
 
 export function Settings_SetBashAllowlistMigrated(arg1:boolean):Promise<void>;
+
+export function Settings_SetCedarStrictCredentialMode(arg1:boolean):Promise<void>;
 
 export function Settings_SetConfirmEach(arg1:boolean):Promise<void>;
 
