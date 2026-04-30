@@ -626,6 +626,10 @@ export function Settings_GetBash() {
   return window['go']['rpc']['Bindings']['Settings_GetBash']();
 }
 
+export function Settings_GetBashAllowlistMigrated() {
+  return window['go']['rpc']['Bindings']['Settings_GetBashAllowlistMigrated']();
+}
+
 export function Settings_GetConfirmEach() {
   return window['go']['rpc']['Bindings']['Settings_GetConfirmEach']();
 }
@@ -636,6 +640,18 @@ export function Settings_GetMaxAgentTurns() {
 
 export function Settings_GetMemory() {
   return window['go']['rpc']['Bindings']['Settings_GetMemory']();
+}
+
+export function Settings_GetPermissionCacheDangerousOps() {
+  return window['go']['rpc']['Bindings']['Settings_GetPermissionCacheDangerousOps']();
+}
+
+export function Settings_GetPermissionMode() {
+  return window['go']['rpc']['Bindings']['Settings_GetPermissionMode']();
+}
+
+export function Settings_GetPermissionsMigrationToastShown() {
+  return window['go']['rpc']['Bindings']['Settings_GetPermissionsMigrationToastShown']();
 }
 
 export function Settings_GetSaveArtifactEnabled() {
@@ -654,6 +670,10 @@ export function Settings_SetBash(arg1) {
   return window['go']['rpc']['Bindings']['Settings_SetBash'](arg1);
 }
 
+export function Settings_SetBashAllowlistMigrated(arg1) {
+  return window['go']['rpc']['Bindings']['Settings_SetBashAllowlistMigrated'](arg1);
+}
+
 export function Settings_SetConfirmEach(arg1) {
   return window['go']['rpc']['Bindings']['Settings_SetConfirmEach'](arg1);
 }
@@ -664,6 +684,18 @@ export function Settings_SetMaxAgentTurns(arg1) {
 
 export function Settings_SetMemory(arg1) {
   return window['go']['rpc']['Bindings']['Settings_SetMemory'](arg1);
+}
+
+export function Settings_SetPermissionCacheDangerousOps(arg1) {
+  return window['go']['rpc']['Bindings']['Settings_SetPermissionCacheDangerousOps'](arg1);
+}
+
+export function Settings_SetPermissionMode(arg1) {
+  return window['go']['rpc']['Bindings']['Settings_SetPermissionMode'](arg1);
+}
+
+export function Settings_SetPermissionsMigrationToastShown(arg1) {
+  return window['go']['rpc']['Bindings']['Settings_SetPermissionsMigrationToastShown'](arg1);
 }
 
 export function Settings_SetSaveArtifactEnabled(arg1) {

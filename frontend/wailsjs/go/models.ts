@@ -2850,6 +2850,7 @@ export namespace recipes {
 	    warning?: string;
 	    recommended_policy_template?: string;
 	    prompt_on_first_use?: string[];
+	    pre_seeding_policy?: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new Recipe(source);
@@ -2877,6 +2878,7 @@ export namespace recipes {
 	        this.warning = source["warning"];
 	        this.recommended_policy_template = source["recommended_policy_template"];
 	        this.prompt_on_first_use = source["prompt_on_first_use"];
+	        this.pre_seeding_policy = source["pre_seeding_policy"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -3273,6 +3275,10 @@ export namespace settings {
 	    compactionModel?: ProviderProfileRef;
 	    compactionArchiveDays?: number;
 	    compactionRecentWindow?: number;
+	    permissionMode?: string;
+	    permissionCacheDangerousOps?: boolean;
+	    bashAllowlistMigrated?: boolean;
+	    permissionsMigrationToastShown?: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new Settings(source);
@@ -3299,6 +3305,10 @@ export namespace settings {
 	        this.compactionModel = this.convertValues(source["compactionModel"], ProviderProfileRef);
 	        this.compactionArchiveDays = source["compactionArchiveDays"];
 	        this.compactionRecentWindow = source["compactionRecentWindow"];
+	        this.permissionMode = source["permissionMode"];
+	        this.permissionCacheDangerousOps = source["permissionCacheDangerousOps"];
+	        this.bashAllowlistMigrated = source["bashAllowlistMigrated"];
+	        this.permissionsMigrationToastShown = source["permissionsMigrationToastShown"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {

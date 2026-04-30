@@ -344,11 +344,19 @@ export function Settings_Get():Promise<settings.Settings>;
 
 export function Settings_GetBash():Promise<boolean>;
 
+export function Settings_GetBashAllowlistMigrated():Promise<boolean>;
+
 export function Settings_GetConfirmEach():Promise<boolean>;
 
 export function Settings_GetMaxAgentTurns():Promise<number>;
 
 export function Settings_GetMemory():Promise<boolean>;
+
+export function Settings_GetPermissionCacheDangerousOps():Promise<boolean>;
+
+export function Settings_GetPermissionMode():Promise<string>;
+
+export function Settings_GetPermissionsMigrationToastShown():Promise<boolean>;
 
 export function Settings_GetSaveArtifactEnabled():Promise<boolean>;
 
@@ -358,11 +366,19 @@ export function Settings_Set(arg1:settings.Settings):Promise<void>;
 
 export function Settings_SetBash(arg1:boolean):Promise<void>;
 
+export function Settings_SetBashAllowlistMigrated(arg1:boolean):Promise<void>;
+
 export function Settings_SetConfirmEach(arg1:boolean):Promise<void>;
 
 export function Settings_SetMaxAgentTurns(arg1:number):Promise<void>;
 
 export function Settings_SetMemory(arg1:boolean):Promise<void>;
+
+export function Settings_SetPermissionCacheDangerousOps(arg1:boolean):Promise<void>;
+
+export function Settings_SetPermissionMode(arg1:string):Promise<void>;
+
+export function Settings_SetPermissionsMigrationToastShown(arg1:boolean):Promise<void>;
 
 export function Settings_SetSaveArtifactEnabled(arg1:boolean):Promise<void>;
 
