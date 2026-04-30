@@ -27,7 +27,7 @@
 
 import { computed, ref } from 'vue';
 import { Archive, Layers } from 'lucide-vue-next';
-import StreamingText from './StreamingText.vue';
+import MarkdownBlock from './MarkdownBlock.vue';
 import PinMenu from './PinMenu.vue';
 import ImageBlock from './ImageBlock.vue';
 import DocumentChip from './DocumentChip.vue';
@@ -406,10 +406,12 @@ function isLastBlock(idx: number): boolean {
       <template v-if="!isTool">
         <template v-if="hasBlocks">
           <template v-for="(block, i) in blocks" :key="i">
-            <StreamingText
+            <MarkdownBlock
               v-if="block.type === 'text'"
-              :text="block.text ?? ''"
+              :source="block.text ?? ''"
               :streaming="streaming === true && isLastBlock(i)"
+              :session-id="undefined"
+              :message-id="messageId"
             />
             <ImageBlock
               v-else-if="block.type === 'image' && block.source"
@@ -421,10 +423,12 @@ function isLastBlock(idx: number): boolean {
             />
           </template>
         </template>
-        <StreamingText
+        <MarkdownBlock
           v-else
-          :text="content"
+          :source="content"
           :streaming="streaming === true"
+          :session-id="undefined"
+          :message-id="messageId"
         />
       </template>
       <span v-else class="font-mono text-[12px] text-ink-muted">
