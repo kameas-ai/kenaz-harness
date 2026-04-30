@@ -17,6 +17,7 @@ import {agentgraph} from '../models';
 import {hooks} from '../models';
 import {llm} from '../models';
 import {mcp} from '../models';
+import {recipes} from '../models';
 import {memory} from '../models';
 import {nodes} from '../models';
 import {permissions} from '../models';
@@ -90,6 +91,10 @@ export function CedarPolicy_ListPolicies():Promise<Array<cedar.PolicyFile>>;
 export function CedarPolicy_RecentDecisions(arg1:number):Promise<Array<cedar.Decision>>;
 
 export function CedarPolicy_ReloadPolicies():Promise<void>;
+
+export function CedarPolicy_RevokeSnippet(arg1:string):Promise<void>;
+
+export function CedarPolicy_WriteSnippet(arg1:string,arg2:string):Promise<void>;
 
 export function Compaction_GetConfig(arg1:compaction.Layer,arg2:string):Promise<compaction.Config>;
 
@@ -224,6 +229,8 @@ export function MCP_ListServers():Promise<Array<mcp.Server>>;
 export function MCP_StartStream(arg1:string):Promise<string>;
 
 export function MCP_StopStream(arg1:string):Promise<void>;
+
+export function MCP_TestRecipe(arg1:recipes.Recipe):Promise<mcp.TestResult>;
 
 export function Memory_Forget(arg1:string):Promise<void>;
 

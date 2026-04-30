@@ -2143,6 +2143,36 @@ export namespace mcp {
 	        this.capabilities = source["capabilities"];
 	    }
 	}
+	export class TestResult {
+	    ok: boolean;
+	    serverName: string;
+	    serverVersion: string;
+	    protocolVersion: string;
+	    toolCount: number;
+	    resourceCount: number;
+	    promptCount: number;
+	    stderrTail: string;
+	    errorMessage: string;
+	    durationMs: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new TestResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.ok = source["ok"];
+	        this.serverName = source["serverName"];
+	        this.serverVersion = source["serverVersion"];
+	        this.protocolVersion = source["protocolVersion"];
+	        this.toolCount = source["toolCount"];
+	        this.resourceCount = source["resourceCount"];
+	        this.promptCount = source["promptCount"];
+	        this.stderrTail = source["stderrTail"];
+	        this.errorMessage = source["errorMessage"];
+	        this.durationMs = source["durationMs"];
+	    }
+	}
 
 }
 
@@ -2819,6 +2849,7 @@ export namespace recipes {
 	    config_options?: ConfigOption[];
 	    warning?: string;
 	    recommended_policy_template?: string;
+	    prompt_on_first_use?: string[];
 	
 	    static createFrom(source: any = {}) {
 	        return new Recipe(source);
@@ -2845,6 +2876,7 @@ export namespace recipes {
 	        this.config_options = this.convertValues(source["config_options"], ConfigOption);
 	        this.warning = source["warning"];
 	        this.recommended_policy_template = source["recommended_policy_template"];
+	        this.prompt_on_first_use = source["prompt_on_first_use"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {

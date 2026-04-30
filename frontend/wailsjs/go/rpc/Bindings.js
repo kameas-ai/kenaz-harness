@@ -122,6 +122,14 @@ export function CedarPolicy_ReloadPolicies() {
   return window['go']['rpc']['Bindings']['CedarPolicy_ReloadPolicies']();
 }
 
+export function CedarPolicy_RevokeSnippet(arg1) {
+  return window['go']['rpc']['Bindings']['CedarPolicy_RevokeSnippet'](arg1);
+}
+
+export function CedarPolicy_WriteSnippet(arg1, arg2) {
+  return window['go']['rpc']['Bindings']['CedarPolicy_WriteSnippet'](arg1, arg2);
+}
+
 export function Compaction_GetConfig(arg1, arg2) {
   return window['go']['rpc']['Bindings']['Compaction_GetConfig'](arg1, arg2);
 }
@@ -388,6 +396,10 @@ export function MCP_StartStream(arg1) {
 
 export function MCP_StopStream(arg1) {
   return window['go']['rpc']['Bindings']['MCP_StopStream'](arg1);
+}
+
+export function MCP_TestRecipe(arg1) {
+  return window['go']['rpc']['Bindings']['MCP_TestRecipe'](arg1);
 }
 
 export function Memory_Forget(arg1) {
