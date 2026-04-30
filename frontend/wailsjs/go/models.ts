@@ -2805,10 +2805,11 @@ export namespace recipes {
 	    description: string;
 	    category: string;
 	    command: string[];
-	    env_keys: EnvKey[];
 	    transport?: string;
 	    url?: string;
 	    headers_template?: Record<string, string>;
+	    post_url?: string;
+	    env_keys: EnvKey[];
 	    capabilities: Capabilities;
 	    docs_url: string;
 	    init_timeout_ms: number;
@@ -2830,10 +2831,11 @@ export namespace recipes {
 	        this.description = source["description"];
 	        this.category = source["category"];
 	        this.command = source["command"];
-	        this.env_keys = this.convertValues(source["env_keys"], EnvKey);
 	        this.transport = source["transport"];
 	        this.url = source["url"];
 	        this.headers_template = source["headers_template"];
+	        this.post_url = source["post_url"];
+	        this.env_keys = this.convertValues(source["env_keys"], EnvKey);
 	        this.capabilities = this.convertValues(source["capabilities"], Capabilities);
 	        this.docs_url = source["docs_url"];
 	        this.init_timeout_ms = source["init_timeout_ms"];
