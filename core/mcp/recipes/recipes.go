@@ -404,6 +404,53 @@ func buildSubstitutionVars(config map[string]any) (map[string]string, map[string
 	return vars, listVars
 }
 
+// RecipeDirs extracts the union of all "allowed_directories" config
+// values declared across the supplied recipes. It is the canonical
+// source-of-truth builder that the fs gate's NotifyRecipeDirs call
+// site invokes at recipe-install / recipe-uninstall time.
+//
+// Each recipe may declare zero or more ConfigOption entries with
+// Kind == ConfigKindDirectoryList whose Default field holds a
+// pre-configured list of allowed directories. When a recipe has no
+// such option the recipe contributes nothing to the result.
+//
+// The returned slice is deduplicated (last-write-wins within a single
+// recipe; across recipes all unique entries are retained). Callers
+// should pass the combined enabled-recipe set; passing a partial list
+// replaces the prior full set.
+//
+// This function is intentionally minimal (one exported symbol, no new
+// struct fields) per the WP04 constraint.
+func RecipeDirs(recipes []Recipe) []string {
+	seen := make(map[string]struct{})
+	var out []string
+	for _, r := range recipes {
+		for _, opt := range r.ConfigOptions {
+			if opt.Kind != ConfigKindDirectoryList {
+				continue
+			}
+			if opt.Default == nil {
+				continue
+			}
+			list, ok := coerceStringSlice(opt.Default)
+			if !ok {
+				continue
+			}
+			for _, d := range list {
+				if d == "" {
+					continue
+				}
+				if _, dup := seen[d]; dup {
+					continue
+				}
+				seen[d] = struct{}{}
+				out = append(out, d)
+			}
+		}
+	}
+	return out
+}
+
 // coerceStringSlice accepts the two shapes a JSON-loaded config may
 // surface for a list field: a typed []string (from a Go-side caller)
 // or a []any of strings (from json.Unmarshal into map[string]any).
