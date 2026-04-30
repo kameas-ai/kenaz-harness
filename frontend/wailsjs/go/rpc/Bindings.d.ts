@@ -296,6 +296,8 @@ export function SaveTheme(arg1:string):Promise<void>;
 
 export function Sessions_AppendMessage(arg1:string,arg2:string,arg3:string):Promise<sessions.Message>;
 
+export function Sessions_ClearTitle(arg1:string):Promise<void>;
+
 export function Sessions_Create(arg1:string):Promise<sessions.Session>;
 
 export function Sessions_Delete(arg1:string):Promise<void>;
@@ -331,6 +333,8 @@ export function Sessions_SetSystemPrompt(arg1:string,arg2:string,arg3:string):Pr
 export function Sessions_StartStream(arg1:string):Promise<string>;
 
 export function Sessions_StopStream(arg1:string):Promise<void>;
+
+export function Sessions_SuggestTitle(arg1:string):Promise<string>;
 
 export function SetContext(arg1:context.Context):Promise<void>;
 

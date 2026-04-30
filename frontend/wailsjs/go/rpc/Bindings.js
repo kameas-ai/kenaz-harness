@@ -530,6 +530,10 @@ export function Sessions_AppendMessage(arg1, arg2, arg3) {
   return window['go']['rpc']['Bindings']['Sessions_AppendMessage'](arg1, arg2, arg3);
 }
 
+export function Sessions_ClearTitle(arg1) {
+  return window['go']['rpc']['Bindings']['Sessions_ClearTitle'](arg1);
+}
+
 export function Sessions_Create(arg1) {
   return window['go']['rpc']['Bindings']['Sessions_Create'](arg1);
 }
@@ -600,6 +604,10 @@ export function Sessions_StartStream(arg1) {
 
 export function Sessions_StopStream(arg1) {
   return window['go']['rpc']['Bindings']['Sessions_StopStream'](arg1);
+}
+
+export function Sessions_SuggestTitle(arg1) {
+  return window['go']['rpc']['Bindings']['Sessions_SuggestTitle'](arg1);
 }
 
 export function SetContext(arg1) {

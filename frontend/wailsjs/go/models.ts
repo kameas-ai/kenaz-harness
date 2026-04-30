@@ -3202,6 +3202,7 @@ export namespace sessions {
 	    systemPrompt: string;
 	    contextKind: string;
 	    projectId?: string;
+	    autoTitled: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new Session(source);
@@ -3216,6 +3217,7 @@ export namespace sessions {
 	        this.systemPrompt = source["systemPrompt"];
 	        this.contextKind = source["contextKind"];
 	        this.projectId = source["projectId"];
+	        this.autoTitled = source["autoTitled"];
 	    }
 	}
 
