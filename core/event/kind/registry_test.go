@@ -108,3 +108,42 @@ func TestUnknownButWellFormedKindAccepted(t *testing.T) {
 		t.Fatalf("unknown kind should NOT report IsRegistered until Register is called")
 	}
 }
+
+// TestMCPRecipeKindsRegistered asserts that the three MCP recipe
+// lifecycle audit kinds introduced by mission mcp-server-install-01KQ8TDP
+// (WP10) are registered as built-ins at package init time.
+func TestMCPRecipeKindsRegistered(t *testing.T) {
+	mcpKinds := []Kind{
+		KindMCPRecipeAdded,
+		KindMCPRecipeRemoved,
+		KindMCPRecipeTested,
+	}
+	for _, k := range mcpKinds {
+		if !IsRegistered(k) {
+			t.Errorf("MCP recipe kind %q should be registered as a built-in", k)
+		}
+		if err := Validate(k); err != nil {
+			t.Errorf("MCP recipe kind %q should validate: %v", k, err)
+		}
+	}
+}
+
+// TestMCPRecipeKindsInBuiltIn asserts that all three MCP kinds appear
+// in the builtIn slice (regression guard against accidental removal).
+func TestMCPRecipeKindsInBuiltIn(t *testing.T) {
+	want := map[Kind]bool{
+		KindMCPRecipeAdded:   false,
+		KindMCPRecipeRemoved: false,
+		KindMCPRecipeTested:  false,
+	}
+	for _, k := range builtIn {
+		if _, ok := want[k]; ok {
+			want[k] = true
+		}
+	}
+	for k, found := range want {
+		if !found {
+			t.Errorf("kind %q missing from builtIn slice", k)
+		}
+	}
+}

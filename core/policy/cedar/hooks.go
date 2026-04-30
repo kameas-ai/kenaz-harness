@@ -240,6 +240,57 @@ func EvaluateUseTool(
 	return g.Evaluate(ctx, UserUID(), ActionUseTool, PermissionToolUID(fqName), attrs)
 }
 
+// CheckRecipeAdd is the gate-hook helper for AddRecipe / EditRecipe RPC
+// paths (mission mcp-server-install-01KQ8TDP, WP10). recipeID is the
+// canonical recipe identifier; command is Command[0] (first argv element,
+// e.g. "npx", "uvx", "/usr/local/bin/my-server"); transport is "stdio",
+// "http", or "sse".
+//
+// When g is nil the helper returns nil (boot-stage default-allow). Cedar
+// evaluation errors (engine not fully loaded) are also mapped to nil
+// (default-permit) to keep the chassis from blocking on a Cedar bug.
+func CheckRecipeAdd(ctx context.Context, g Gate, recipeID, command, transport string) error {
+	if g == nil {
+		return nil
+	}
+	d := g.Evaluate(
+		ctx,
+		UserUID(),
+		ActionAddRecipe,
+		MCPRecipeUID(recipeID),
+		map[cedar.String]cedar.Value{
+			cedar.String(CtxKeyRecipeID):        cedar.String(recipeID),
+			cedar.String(CtxKeyRecipeCommand):   cedar.String(command),
+			cedar.String(CtxKeyRecipeTransport): cedar.String(transport),
+		},
+	)
+	return enforce(d)
+}
+
+// CheckRecipeSpawn is the gate-hook helper for the pool's OpenOne path
+// (mission mcp-server-install-01KQ8TDP, WP10). recipeID is the canonical
+// recipe identifier; command is Command[0]; transport is "stdio"/"http"/"sse".
+//
+// When g is nil the helper returns nil (boot-stage default-allow). Cedar
+// evaluation errors are mapped to nil (default-permit — best-effort gate).
+func CheckRecipeSpawn(ctx context.Context, g Gate, recipeID, command, transport string) error {
+	if g == nil {
+		return nil
+	}
+	d := g.Evaluate(
+		ctx,
+		UserUID(),
+		ActionSpawnRecipe,
+		MCPRecipeUID(recipeID),
+		map[cedar.String]cedar.Value{
+			cedar.String(CtxKeyRecipeID):        cedar.String(recipeID),
+			cedar.String(CtxKeyRecipeCommand):   cedar.String(command),
+			cedar.String(CtxKeyRecipeTransport): cedar.String(transport),
+		},
+	)
+	return enforce(d)
+}
+
 // enforce maps a Decision to a Go error. Allow + NotApplicable both
 // return nil (default-allow stance); Deny returns *PolicyDeniedError.
 func enforce(d Decision) error {

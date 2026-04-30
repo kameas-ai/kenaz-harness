@@ -12,6 +12,7 @@ import (
 	coremcp "github.com/sigil-tech/kaneaz-harness/core/mcp"
 	"github.com/sigil-tech/kaneaz-harness/core/mcp/recipes"
 	"github.com/sigil-tech/kaneaz-harness/core/mcp/stdio"
+	"github.com/sigil-tech/kaneaz-harness/core/policy/cedar"
 	"github.com/sigil-tech/kaneaz-harness/core/secrets"
 )
 
@@ -67,6 +68,9 @@ type Config struct {
 	Forgetter KeychainForgetter
 	DataDir   string
 	Audit     AuditEmitter
+	// Gate is the Cedar policy gate for InstallRecipe (WP10). nil =
+	// default-permit (best-effort: a Cedar bug never blocks the chassis).
+	Gate cedar.Gate
 }
 
 // API is the concrete ToolsAPI implementation.
@@ -251,6 +255,23 @@ func (a *API) InstallRecipe(ctx context.Context, id string, env map[string]strin
 	if a.cfg.Pool == nil {
 		return stdio.RecipeStatus{}, errors.New("tools: no pool configured")
 	}
+
+	// Cedar gate (WP10) — best-effort: nil gate = permit. A Cedar
+	// evaluation error (engine not loaded, etc.) must never block the
+	// install path; CheckRecipeSpawn logs the warning internally and
+	// returns nil when g is nil.
+	command := ""
+	if len(recipe.Command) > 0 {
+		command = recipe.Command[0]
+	}
+	// Transport field lands in WP03/WP04; current recipes are all stdio.
+	transport := "stdio"
+	if err := cedar.CheckRecipeSpawn(ctx, a.cfg.Gate, id, command, transport); err != nil {
+		a.cfg.Enabled.Remove(id)
+		_ = a.saveEnabled()
+		return stdio.RecipeStatus{}, fmt.Errorf("tools: cedar gate denied recipe %q: %w", id, err)
+	}
+
 	if err := a.cfg.Pool.OpenOne(ctx, spec); err != nil {
 		a.cfg.Enabled.Remove(id)
 		_ = a.saveEnabled()

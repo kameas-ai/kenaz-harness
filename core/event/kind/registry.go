@@ -47,12 +47,19 @@ const (
 	KindCredentialPermission Kind = "permission.credential"
 	KindToolPermission       Kind = "permission.tool"
 
-	// KindMCPRecipeTested is emitted by the Test Connection RPC
-	// (mission mcp-server-install-01KQ8TDP, WP07) after every
-	// one-shot handshake attempt. The payload carries a redacted
-	// TestResult so the audit log surfaces capability summaries
-	// without leaking API keys or URL query-string secrets.
-	KindMCPRecipeTested Kind = "mcp.recipe.tested"
+	// MCP recipe lifecycle audit kinds (mission mcp-server-install-01KQ8TDP).
+	//
+	//   KindMCPRecipeAdded   — emitted by AddRecipe on success (WP10).
+	//                          Payload: {recipe_id, source, transport}.
+	//   KindMCPRecipeRemoved — emitted by RemoveRecipe on success (WP10).
+	//                          Payload: {recipe_id, source}.
+	//   KindMCPRecipeTested  — emitted by TestRecipe on completion (WP07).
+	//                          Payload: {recipe_id, ok, transport,
+	//                                    tool_count, resource_count,
+	//                                    prompt_count, duration_ms}.
+	KindMCPRecipeAdded   Kind = "mcp.recipe.added"
+	KindMCPRecipeRemoved Kind = "mcp.recipe.removed"
+	KindMCPRecipeTested  Kind = "mcp.recipe.tested"
 )
 
 var builtIn = []Kind{
@@ -66,8 +73,8 @@ var builtIn = []Kind{
 	// Per-family permission audit kinds (cedar WP07).
 	KindBashPermission, KindFilesystemPermission, KindCredentialPermission,
 	KindToolPermission,
-	// MCP Test Connection result audit kind (mcp WP07).
-	KindMCPRecipeTested,
+	// MCP recipe lifecycle (WP07 + WP10).
+	KindMCPRecipeAdded, KindMCPRecipeRemoved, KindMCPRecipeTested,
 }
 
 var (

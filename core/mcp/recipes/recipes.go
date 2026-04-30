@@ -254,6 +254,10 @@ var (
 	// ErrInvalidRecipe is returned by validation for non-ID problems
 	// (empty Command, etc.).
 	ErrInvalidRecipe = errors.New("recipes: invalid recipe")
+	// ErrUserRecipesDisabled is returned by AddRecipe / EditRecipe /
+	// RemoveRecipe when the user-recipe store is not wired (e.g.
+	// HARNESS_MCP_USER_RECIPES=off or no DataDir configured).
+	ErrUserRecipesDisabled = errors.New("recipes: user-recipe store not configured")
 )
 
 // recipeIDPattern is the canonical recipe ID validation regex.

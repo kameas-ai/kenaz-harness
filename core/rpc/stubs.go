@@ -118,6 +118,12 @@ func (s *stubSessions) SetSystemPrompt(_ context.Context, _, _, _ string) error 
 func (s *stubSessions) MoveToProject(_ context.Context, _, _ string) error {
 	return errNotWired
 }
+func (s *stubSessions) SuggestTitle(_ context.Context, _ string) (string, error) {
+	return "", errNotWired
+}
+func (s *stubSessions) ClearTitle(_ context.Context, _ string) error {
+	return errNotWired
+}
 
 // ── trust ──────────────────────────────────────────────────────────────
 

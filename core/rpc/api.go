@@ -316,6 +316,19 @@ func New(c *core.Core) *API {
 	a.auditImpl = audit.NewAPI(audit.WithSubscriber(a.broker))
 	a.auditAPI = a.auditImpl
 	a.mcpAPI = mcp.NewAPI(mcp.WithSubscriber(a.broker))
+	// MCP boot-time directory creation (mission mcp-server-install-01KQ8TDP,
+	// WP10). Best-effort: a failure here must never prevent the chassis from
+	// booting. The directory is needed by UserStore.Load; without it a fresh
+	// install would see a missing-dir warning on every load tick.
+	if c != nil && c.DataDir() != "" {
+		mcpRecipesDir := filepath.Join(c.DataDir(), "mcp", "recipes")
+		if err := os.MkdirAll(mcpRecipesDir, 0o700); err != nil {
+			logging.L().Warn("rpc: boot: could not create mcp/recipes dir",
+				"dir", mcpRecipesDir,
+				"err", err.Error(),
+			)
+		}
+	}
 	// MCP clipboard-import surface (mission mcp-server-install-01KQ8TDP,
 	// WP08). Wired only when we have a real Core (= a real DataDir);
 	// rpc.New(nil) test harness leaves it nil and the binding returns
