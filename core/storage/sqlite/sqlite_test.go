@@ -130,8 +130,10 @@ func TestOpen_RegistersSessionMigrations(t *testing.T) {
 	// (Bundle B, WP07); 0307 (corpora), 0308 (memory_hook_journal), and
 	// 0309 (agent_graph_events) land alongside; 0310 (compaction columns
 	// on session_messages) lands with compaction-strategy-ui WP01;
-	// 0311 (sessions.auto_titled) lands with session-auto-titling WP01.
-	want := []int{300, 301, 302, 303, 304, 305, 306, 307, 308, 309, 310, 311}
+	// 0311 (sessions.auto_titled) lands with session-auto-titling WP01;
+	// 0312 (FTS5 messages_fts virtual table + triggers) lands with
+	// cross-session-search WP01.
+	want := []int{300, 301, 302, 303, 304, 305, 306, 307, 308, 309, 310, 311, 312}
 	if len(versions) != len(want) {
 		t.Fatalf("session migrations applied = %v, want %v", versions, want)
 	}
@@ -170,9 +172,9 @@ func TestOpen_ApplyIdempotent(t *testing.T) {
 	// 1 content_json + 1 artifacts + 1 artifacts-promote + 1 telemetry +
 	// 1 branches (0306) + 1 corpora (0307) + 1 memory_hook_journal (0308) +
 	// 1 agent_graph_events (0309) + 1 compaction (0310) +
-	// 1 sessions.auto_titled (0311) = 14.
-	if count != 14 {
-		t.Errorf("ledger count = %d, want 14", count)
+	// 1 sessions.auto_titled (0311) + 1 search-fts5 (0312) = 15.
+	if count != 15 {
+		t.Errorf("ledger count = %d, want 15", count)
 	}
 }
 

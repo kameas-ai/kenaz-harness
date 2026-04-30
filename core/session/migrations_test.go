@@ -121,6 +121,27 @@ func (t *migFakeTx) Exec(ctx context.Context, query string, args ...any) (migrat
 		t.db.tables[name] = true
 		t.db.mu.Unlock()
 		return migResult{}, nil
+	case strings.HasPrefix(q, "create virtual table if not exists "):
+		// FTS5 virtual table (cross-session-search WP01, migration 0312).
+		name := extractName(q, "create virtual table if not exists ")
+		t.db.mu.Lock()
+		t.db.tables[name] = true
+		t.db.mu.Unlock()
+		return migResult{}, nil
+	case strings.HasPrefix(q, "create trigger if not exists "):
+		// FTS5 sync triggers — name-only registration; the fake doesn't
+		// fire them.
+		name := extractName(q, "create trigger if not exists ")
+		t.db.mu.Lock()
+		t.db.indexes[name] = true
+		t.db.mu.Unlock()
+		return migResult{}, nil
+	case strings.HasPrefix(q, "drop trigger if exists "):
+		name := strings.TrimSpace(strings.TrimPrefix(q, "drop trigger if exists "))
+		t.db.mu.Lock()
+		delete(t.db.indexes, name)
+		t.db.mu.Unlock()
+		return migResult{}, nil
 	case strings.HasPrefix(q, "create index if not exists "):
 		name := extractName(q, "create index if not exists ")
 		t.db.mu.Lock()
@@ -389,11 +410,12 @@ func TestMigrations_RegisterAndApply(t *testing.T) {
 	// (0300 init + 0301 context_attachments + 0302 content_json +
 	// 0303 artifacts + 0304 artifacts-promote + 0305 telemetry +
 	// 0306 branches + 0307 corpora + 0308 memory_hook_journal +
-	// 0309 agent_graph_events + 0310 compaction + 0311 auto_titled) = 14 applied entries.
-	if got := len(db.ledger); got != 14 {
-		t.Fatalf("ledger size = %d, want 14", got)
+	// 0309 agent_graph_events + 0310 compaction + 0311 auto_titled +
+	// 0312 search_fts5) = 15 applied entries.
+	if got := len(db.ledger); got != 15 {
+		t.Fatalf("ledger size = %d, want 15", got)
 	}
-	wantVersions := []int{1, 2, 300, 301, 302, 303, 304, 305, 306, 307, 308, 309, 310, 311}
+	wantVersions := []int{1, 2, 300, 301, 302, 303, 304, 305, 306, 307, 308, 309, 310, 311, 312}
 	for i, want := range wantVersions {
 		if db.ledger[i].Version != want {
 			t.Errorf("ledger[%d].Version = %d, want %d", i, db.ledger[i].Version, want)

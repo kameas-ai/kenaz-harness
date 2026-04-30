@@ -80,7 +80,9 @@ const sqlInitSchema = `
 // see migrations_agent_graph_events.go); compaction-strategy-ui WP01
 // lands as 0310 (compaction bookkeeping columns + indexes — see
 // migrations_compaction.go); session-auto-titling WP01 lands as 0311
-// (auto_titled column — see migrations_auto_titled.go).
+// (auto_titled column — see migrations_auto_titled.go);
+// cross-session-search WP01 lands as 0312 (FTS5 virtual table +
+// triggers — see migrations_search_fts.go).
 func Migrations() []migrations.Migration {
 	return []migrations.Migration{
 		{
@@ -124,6 +126,7 @@ func Migrations() []migrations.Migration {
 		migration0309(),
 		migration0310(),
 		migration0311(),
+		migration0312(),
 	}
 }
 
