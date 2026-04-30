@@ -376,6 +376,94 @@ func (s *FileStore) SaveMaxAgentTurns(turns int) error {
 	return s.saveLocked(got)
 }
 
+// ── WP08 permission dial FileStore accessors ──────────────────────
+
+// LoadPermissionMode returns the global permission posture ("normal"
+// when unset).
+func (s *FileStore) LoadPermissionMode() (string, error) {
+	got, err := s.LoadAll()
+	if err != nil {
+		return got.EffectivePermissionMode(), err
+	}
+	return got.EffectivePermissionMode(), nil
+}
+
+// SavePermissionMode updates the global permission posture.
+func (s *FileStore) SavePermissionMode(mode string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	got, err := s.loadLocked()
+	if err != nil {
+		return err
+	}
+	got.PermissionMode = mode
+	return s.saveLocked(got)
+}
+
+// LoadPermissionCacheDangerousOps returns the dangerous-ops override flag
+// (default false).
+func (s *FileStore) LoadPermissionCacheDangerousOps() (bool, error) {
+	got, err := s.LoadAll()
+	if err != nil {
+		return got.PermissionCacheDangerousOps, err
+	}
+	return got.PermissionCacheDangerousOps, nil
+}
+
+// SavePermissionCacheDangerousOps updates the dangerous-ops override flag.
+func (s *FileStore) SavePermissionCacheDangerousOps(enabled bool) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	got, err := s.loadLocked()
+	if err != nil {
+		return err
+	}
+	got.PermissionCacheDangerousOps = enabled
+	return s.saveLocked(got)
+}
+
+// LoadBashAllowlistMigrated returns the WP10 migration marker.
+func (s *FileStore) LoadBashAllowlistMigrated() (bool, error) {
+	got, err := s.LoadAll()
+	if err != nil {
+		return got.BashAllowlistMigrated, err
+	}
+	return got.BashAllowlistMigrated, nil
+}
+
+// SaveBashAllowlistMigrated updates the WP10 migration marker.
+func (s *FileStore) SaveBashAllowlistMigrated(migrated bool) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	got, err := s.loadLocked()
+	if err != nil {
+		return err
+	}
+	got.BashAllowlistMigrated = migrated
+	return s.saveLocked(got)
+}
+
+// LoadPermissionsMigrationToastShown returns the one-time toast marker.
+func (s *FileStore) LoadPermissionsMigrationToastShown() (bool, error) {
+	got, err := s.LoadAll()
+	if err != nil {
+		return got.PermissionsMigrationToastShown, err
+	}
+	return got.PermissionsMigrationToastShown, nil
+}
+
+// SavePermissionsMigrationToastShown updates the one-time toast marker.
+func (s *FileStore) SavePermissionsMigrationToastShown(shown bool) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	got, err := s.loadLocked()
+	if err != nil {
+		return err
+	}
+	got.PermissionsMigrationToastShown = shown
+	return s.saveLocked(got)
+}
+
 // defaultSettings is the safe-baseline a fresh install starts with.
 func defaultSettings() Settings {
 	return Settings{
@@ -554,5 +642,59 @@ func (m *memoryStore) SaveMaxAgentTurns(turns int) error {
 		turns = 0
 	}
 	m.data.MaxAgentTurns = turns
+	return nil
+}
+
+// ── WP08 permission dial memoryStore accessors ────────────────────
+
+func (m *memoryStore) LoadPermissionMode() (string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.data.EffectivePermissionMode(), nil
+}
+
+func (m *memoryStore) SavePermissionMode(mode string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.data.PermissionMode = mode
+	return nil
+}
+
+func (m *memoryStore) LoadPermissionCacheDangerousOps() (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.data.PermissionCacheDangerousOps, nil
+}
+
+func (m *memoryStore) SavePermissionCacheDangerousOps(enabled bool) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.data.PermissionCacheDangerousOps = enabled
+	return nil
+}
+
+func (m *memoryStore) LoadBashAllowlistMigrated() (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.data.BashAllowlistMigrated, nil
+}
+
+func (m *memoryStore) SaveBashAllowlistMigrated(migrated bool) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.data.BashAllowlistMigrated = migrated
+	return nil
+}
+
+func (m *memoryStore) LoadPermissionsMigrationToastShown() (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.data.PermissionsMigrationToastShown, nil
+}
+
+func (m *memoryStore) SavePermissionsMigrationToastShown(shown bool) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.data.PermissionsMigrationToastShown = shown
 	return nil
 }

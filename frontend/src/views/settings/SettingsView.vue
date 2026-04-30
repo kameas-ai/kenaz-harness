@@ -13,6 +13,10 @@
 import { computed, onMounted, ref } from 'vue';
 import CanvasHead from '@/shell/CanvasHead.vue';
 import SettingsTabs from '@/views/settings/SettingsTabs.vue';
+import BashPermissionsPanel from '@/views/settings/BashPermissionsPanel.vue';
+import FilesystemPermissionsPanel from '@/views/settings/FilesystemPermissionsPanel.vue';
+import CredentialPermissionsPanel from '@/views/settings/CredentialPermissionsPanel.vue';
+import ToolPermissionsPanel from '@/views/settings/ToolPermissionsPanel.vue';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
 import { debouncedSave } from '@/lib/settings';
 import { Plus } from '@/shell/icons';
@@ -23,6 +27,7 @@ import type {
   Attachment,
   CompactionAggressiveness,
   CompactionTierExplain,
+  PermissionMode,
   Provider,
   Settings,
   Theme,
@@ -134,6 +139,53 @@ const globalAttachmentsLoading = ref(false);
 const globalPickerOpen = ref(false);
 const draggedId = ref<string | null>(null);
 
+/* ── WP08 — Permission dials ────────────────────────────────────── */
+
+const PERMISSION_MODES: ReadonlyArray<{ value: PermissionMode; label: string; note?: string }> = [
+  { value: 'strict', label: 'Strict', note: 'every call prompts' },
+  { value: 'normal', label: 'Normal', note: 'default' },
+  { value: 'permissive', label: 'Permissive', note: 'non-dangerous skip prompt' },
+];
+
+const permissionMode = ref<PermissionMode>('normal');
+const permissionCacheDangerousOps = ref(false);
+
+async function setPermissionMode(mode: PermissionMode) {
+  if (mode === 'permissive') {
+    if (!window.confirm(
+      'Switching to Permissive mode allows all non-dangerous operations without prompting. ' +
+      'This reduces security. Are you sure?'
+    )) {
+      return;
+    }
+  }
+  permissionMode.value = mode;
+  try {
+    await client.settings.setPermissionMode(mode);
+  } catch {
+    // revert
+    permissionMode.value = (await client.settings.getPermissionMode().catch(() => 'normal')) as PermissionMode;
+  }
+}
+
+async function togglePermissionCacheDangerousOps() {
+  const next = !permissionCacheDangerousOps.value;
+  if (next) {
+    if (!window.confirm(
+      'Enabling this allows "Allow always" for dangerous operations like rm, sudo, and system path writes. ' +
+      'This is a significant security override. Are you sure?'
+    )) {
+      return;
+    }
+  }
+  permissionCacheDangerousOps.value = next;
+  try {
+    await client.settings.setPermissionCacheDangerousOps(next);
+  } catch {
+    permissionCacheDangerousOps.value = !next;
+  }
+}
+
 async function refresh() {
   try {
     settings.value = await client.settings.get();
@@ -174,6 +226,17 @@ async function refresh() {
     compactionProviders.value = [];
   }
   await loadGlobalAttachments();
+  // Load permission dials
+  try {
+    permissionMode.value = (await client.settings.getPermissionMode()) as PermissionMode;
+  } catch {
+    permissionMode.value = 'normal';
+  }
+  try {
+    permissionCacheDangerousOps.value = await client.settings.getPermissionCacheDangerousOps();
+  } catch {
+    permissionCacheDangerousOps.value = false;
+  }
 }
 
 function setCompactionTier(t: CompactionAggressiveness) {
@@ -699,6 +762,81 @@ onMounted(() => {
           <dt class="text-ink-muted">Platform</dt>
           <dd class="font-mono text-ink">{{ appInfo.platform || '—' }}</dd>
         </dl>
+      </section>
+
+      <!-- ── WP08 — Permission mode dial ──────────────────────────── -->
+      <section id="permissions-mode" data-testid="permission-mode-section">
+        <h2 class="font-ui text-[11px] uppercase tracking-[0.18em] text-ink-subtle">
+          Permission mode
+        </h2>
+        <p class="mt-1 font-ui text-[11px] text-ink-dim">
+          Controls when permission prompts appear across all resource families (bash, filesystem, credentials, tools).
+        </p>
+        <div class="mt-2 inline-flex rounded-sm border border-border" role="radiogroup" aria-label="Permission mode">
+          <button
+            v-for="m in PERMISSION_MODES"
+            :key="m.value"
+            type="button"
+            role="radio"
+            :aria-checked="permissionMode === m.value"
+            class="px-3 py-1.5 font-ui text-[12px] border-r border-border last:border-r-0 transition-colors"
+            :class="permissionMode === m.value
+              ? 'bg-surface-3 text-ink'
+              : 'bg-surface-1 text-ink-muted hover:text-ink'"
+            :data-testid="`permission-mode-${m.value}`"
+            @click="setPermissionMode(m.value)"
+          >
+            {{ m.label }}
+            <span v-if="m.note" class="ml-1 text-[10px] text-ink-subtle">({{ m.note }})</span>
+          </button>
+        </div>
+      </section>
+
+      <!-- Cache dangerous ops toggle -->
+      <section data-testid="permission-cache-dangerous-section">
+        <div class="flex items-center justify-between">
+          <div>
+            <h2 class="font-ui text-[11px] uppercase tracking-[0.18em] text-ink-subtle">
+              Cache dangerous operation grants
+            </h2>
+            <p class="mt-0.5 font-ui text-[11px] text-ink-dim">
+              When enabled, "Allow always" is offered for dangerous ops (rm, sudo, system paths, etc).
+              Default off — dangerous ops re-prompt every time.
+            </p>
+          </div>
+          <button
+            type="button"
+            class="ml-4 shrink-0 rounded-full w-9 h-5 transition-colors"
+            :class="permissionCacheDangerousOps ? 'bg-accent' : 'bg-surface-3'"
+            role="switch"
+            :aria-checked="permissionCacheDangerousOps"
+            data-testid="permission-cache-dangerous-toggle"
+            @click="togglePermissionCacheDangerousOps"
+          >
+            <span class="sr-only">Cache dangerous operation grants</span>
+            <span
+              class="block w-4 h-4 rounded-full bg-white shadow transition-transform mx-0.5"
+              :class="permissionCacheDangerousOps ? 'translate-x-4' : 'translate-x-0'"
+            />
+          </button>
+        </div>
+      </section>
+
+      <!-- ── WP08 — 4 Permission panels ───────────────────────────── -->
+      <section id="permissions-bash" data-testid="permissions-bash-section">
+        <BashPermissionsPanel />
+      </section>
+
+      <section id="permissions-fs" data-testid="permissions-fs-section">
+        <FilesystemPermissionsPanel />
+      </section>
+
+      <section id="permissions-credential" data-testid="permissions-credential-section">
+        <CredentialPermissionsPanel />
+      </section>
+
+      <section id="permissions-tool" data-testid="permissions-tool-section">
+        <ToolPermissionsPanel />
       </section>
     </div>
 

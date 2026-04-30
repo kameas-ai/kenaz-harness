@@ -110,6 +110,8 @@ import type {
   MCPImportStatus,
   MCPTranslationReport,
   MCPImportWrotePath,
+  PermissionGrant,
+  PermissionMode,
 } from './types';
 
 /**
@@ -277,6 +279,19 @@ interface WailsBindingsLike {
   Settings_SetSaveArtifactEnabled(enabled: boolean): Promise<void>;
   Settings_GetMaxAgentTurns(): Promise<number>;
   Settings_SetMaxAgentTurns(turns: number): Promise<void>;
+  // WP08 permission dials
+  Settings_GetPermissionMode(): Promise<string>;
+  Settings_SetPermissionMode(mode: string): Promise<void>;
+  Settings_GetPermissionCacheDangerousOps(): Promise<boolean>;
+  Settings_SetPermissionCacheDangerousOps(enabled: boolean): Promise<void>;
+  Settings_GetBashAllowlistMigrated(): Promise<boolean>;
+  Settings_SetBashAllowlistMigrated(migrated: boolean): Promise<void>;
+  Settings_GetPermissionsMigrationToastShown(): Promise<boolean>;
+  Settings_SetPermissionsMigrationToastShown(shown: boolean): Promise<void>;
+  // WP08 permission grants (stubbed — real impl lands in later WPs)
+  Permissions_ListGrants(family: string): Promise<PermissionGrant[]>;
+  Permissions_RevokeGrant(id: string): Promise<void>;
+  Permissions_Resolve(requestID: string, decision: string): Promise<void>;
 
   Memory_ListChunks(filter: MemoryListFilter): Promise<MemoryChunk[]>;
   Memory_RememberMessage(
@@ -1039,6 +1054,64 @@ export interface SettingsClient {
    * to zero by the store.
    */
   setMaxAgentTurns(turns: number): Promise<void>;
+
+  // ── WP08 permission dials ─────────────────────────────────────────
+
+  /**
+   * Read the global permission posture dial. "normal" when unset.
+   */
+  getPermissionMode(): Promise<PermissionMode>;
+  /** Persist the global permission posture. */
+  setPermissionMode(mode: PermissionMode): Promise<void>;
+  /**
+   * Read the dangerous-ops override flag (default false).
+   * When true, "Allow always" is offered for dangerous-tier resources.
+   */
+  getPermissionCacheDangerousOps(): Promise<boolean>;
+  /** Persist the dangerous-ops override flag. */
+  setPermissionCacheDangerousOps(enabled: boolean): Promise<void>;
+  /**
+   * Read the WP10 migration marker (set by the first-boot migration).
+   * The UI reads this to suppress the one-time migration toast.
+   */
+  getBashAllowlistMigrated(): Promise<boolean>;
+  /** Mark the WP10 migration as completed. */
+  setBashAllowlistMigrated(migrated: boolean): Promise<void>;
+  /** Read the one-time migration toast marker. */
+  getPermissionsMigrationToastShown(): Promise<boolean>;
+  /** Mark the migration toast as shown. */
+  setPermissionsMigrationToastShown(shown: boolean): Promise<void>;
+}
+
+/**
+ * PermissionsClient — the WP08 permission grants + resolution surface.
+ *
+ * Grants are persisted Cedar policy snippets written by "Allow always"
+ * decisions. The settings panels call listGrants(family) to populate
+ * their lists; revokeGrant deletes the underlying .cedar file and
+ * triggers a Cedar engine reload.
+ *
+ * resolve() is called by the four permission modals when the user
+ * clicks Allow Once, Allow Always, or Deny (or Esc / timeout fires
+ * the deny path automatically).
+ */
+export interface PermissionsClient {
+  /**
+   * List accumulated "Allow always" grants, optionally scoped to one
+   * resource family. Empty string or omitted = all families.
+   */
+  listGrants(family?: string): Promise<PermissionGrant[]>;
+  /**
+   * Revoke a grant by id. Deletes the underlying .cedar file and
+   * triggers a Cedar engine reload. The settings panel calls this from
+   * the row's "Revoke" button.
+   */
+  revokeGrant(id: string): Promise<void>;
+  /**
+   * Resolve a pending permission prompt. Called by each modal after
+   * the user decides. The pending backend goroutine unblocks server-side.
+   */
+  resolve(requestID: string, decision: string): Promise<void>;
 }
 
 /**
@@ -1374,6 +1447,7 @@ export interface HarnessClient {
   policy: PolicyClient;
   audit: AuditClient;
   settings: SettingsClient;
+  permissions: PermissionsClient;
   memory: MemoryClient;
   hooks: HooksClient;
   tools: ToolsClient;
@@ -1571,6 +1645,27 @@ export function createHarnessClient(): HarnessClient {
       setSaveArtifact: (enabled) => b().Settings_SetSaveArtifactEnabled(enabled),
       getMaxAgentTurns: () => b().Settings_GetMaxAgentTurns(),
       setMaxAgentTurns: (turns) => b().Settings_SetMaxAgentTurns(turns),
+      getPermissionMode: () =>
+        b().Settings_GetPermissionMode() as Promise<PermissionMode>,
+      setPermissionMode: (mode) => b().Settings_SetPermissionMode(mode),
+      getPermissionCacheDangerousOps: () =>
+        b().Settings_GetPermissionCacheDangerousOps(),
+      setPermissionCacheDangerousOps: (enabled) =>
+        b().Settings_SetPermissionCacheDangerousOps(enabled),
+      getBashAllowlistMigrated: () => b().Settings_GetBashAllowlistMigrated(),
+      setBashAllowlistMigrated: (migrated) =>
+        b().Settings_SetBashAllowlistMigrated(migrated),
+      getPermissionsMigrationToastShown: () =>
+        b().Settings_GetPermissionsMigrationToastShown(),
+      setPermissionsMigrationToastShown: (shown) =>
+        b().Settings_SetPermissionsMigrationToastShown(shown),
+    },
+    permissions: {
+      listGrants: (family) =>
+        b().Permissions_ListGrants(family ?? ''),
+      revokeGrant: (id) => b().Permissions_RevokeGrant(id),
+      resolve: (requestID, decision) =>
+        b().Permissions_Resolve(requestID, decision),
     },
     memory: {
       listChunks: (filter) => b().Memory_ListChunks(filter ?? {}),
@@ -1959,6 +2054,19 @@ export function createFakeHarnessClient(
       setSaveArtifact: noop,
       getMaxAgentTurns: async () => 0,
       setMaxAgentTurns: noop,
+      getPermissionMode: async () => 'normal' as PermissionMode,
+      setPermissionMode: noop,
+      getPermissionCacheDangerousOps: async () => false,
+      setPermissionCacheDangerousOps: noop,
+      getBashAllowlistMigrated: async () => false,
+      setBashAllowlistMigrated: noop,
+      getPermissionsMigrationToastShown: async () => false,
+      setPermissionsMigrationToastShown: noop,
+    },
+    permissions: {
+      listGrants: async () => [],
+      revokeGrant: noop,
+      resolve: noop,
     },
     memory: {
       listChunks: async () => [],

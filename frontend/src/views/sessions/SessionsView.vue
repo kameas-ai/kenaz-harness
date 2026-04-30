@@ -25,6 +25,10 @@ import ConfirmToolModal from '@/components/chat/ConfirmToolModal.vue';
 import BranchSidebar from '@/components/chat/BranchSidebar.vue';
 import CreateBranchModal from '@/components/chat/CreateBranchModal.vue';
 import MergeSuggestionToast from '@/components/chat/MergeSuggestionToast.vue';
+import BashPermissionModal from '@/components/permissions/BashPermissionModal.vue';
+import FilesystemPermissionModal from '@/components/permissions/FilesystemPermissionModal.vue';
+import CredentialPermissionModal from '@/components/permissions/CredentialPermissionModal.vue';
+import ToolPermissionModal from '@/components/permissions/ToolPermissionModal.vue';
 import ArtifactPreview from '@/views/artifacts/ArtifactPreview.vue';
 import { useArtifacts, useHarnessClient, useSessions } from '@/lib/useHarnessAPI';
 import { useSession } from '@/lib/useSession';
@@ -1210,6 +1214,11 @@ function formatSize(bytes: number): string {
       @created="closeCreateBranchModal"
     />
     <MergeSuggestionToast />
+    <!-- WP08 — universal permission modals (one per family) -->
+    <BashPermissionModal />
+    <FilesystemPermissionModal />
+    <CredentialPermissionModal />
+    <ToolPermissionModal />
     <ArtifactPreview
       :open="artifactPreviewOpen"
       :payload="artifactPreviewPayload"

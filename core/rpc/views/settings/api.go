@@ -106,6 +106,34 @@ type Settings struct {
 	// default §2.6). Negative is rejected at Save; zero rounds up to the
 	// default via the EffectiveCompactionRecentWindow accessor.
 	CompactionRecentWindow int `json:"compactionRecentWindow,omitempty"`
+
+	// ── WP08 — Universal permission dials ──────────────────────────────
+
+	// PermissionMode controls the global permission posture for all
+	// four resource families (bash, filesystem, credential, tool).
+	// One of: "strict", "normal" (default, empty==normal), "permissive".
+	// "strict"     — every call prompts regardless of saved policies.
+	// "normal"     — prompts only for NotApplicable Cedar decisions.
+	// "permissive" — all non-dangerous ops permitted without prompt.
+	// UI: stern confirm dialog when switching to "permissive".
+	PermissionMode string `json:"permissionMode,omitempty"`
+
+	// PermissionCacheDangerousOps controls whether "Allow always" is
+	// available for dangerous-tier operations (rm, sudo, system paths,
+	// etc). Default false — dangerous ops re-prompt every time.
+	// When true, the bash and filesystem modals enable "Allow always"
+	// for dangerous-tier resources. Requires confirm dialog on enable.
+	PermissionCacheDangerousOps bool `json:"permissionCacheDangerousOps,omitempty"`
+
+	// BashAllowlistMigrated tracks whether the first-boot migration
+	// (WP10) has run. When true the UI suppresses the one-time migration
+	// toast. Set by the migration runner; do not set manually.
+	BashAllowlistMigrated bool `json:"bashAllowlistMigrated,omitempty"`
+
+	// PermissionsMigrationToastShown tracks whether the one-time
+	// first-boot migration toast has been displayed to the user.
+	// Set to true after the toast is shown so it never shows again.
+	PermissionsMigrationToastShown bool `json:"permissionsMigrationToastShown,omitempty"`
 }
 
 // ProviderProfileRef is the wire shape that identifies a provider+model
@@ -245,6 +273,17 @@ func (s Settings) EffectiveCompactionRecentWindow() int {
 	return s.CompactionRecentWindow
 }
 
+// EffectivePermissionMode returns the persisted mode or "normal" when
+// the field is empty/unknown. Valid values: "strict", "normal", "permissive".
+func (s Settings) EffectivePermissionMode() string {
+	switch s.PermissionMode {
+	case "strict", "normal", "permissive":
+		return s.PermissionMode
+	default:
+		return "normal"
+	}
+}
+
 // WindowSize mirrors the charter's WindowSize type.
 type WindowSize struct {
 	Width  int `json:"width"`
@@ -302,6 +341,25 @@ type SettingsStore interface {
 	// Settings_SetMaxAgentTurns.
 	LoadMaxAgentTurns() (int, error)
 	SaveMaxAgentTurns(turns int) error
+
+	// ── WP08 permission dial store accessors ────────────────────────
+
+	// LoadPermissionMode / SavePermissionMode expose the global
+	// permission posture dial. Returns "normal" when unset.
+	LoadPermissionMode() (string, error)
+	SavePermissionMode(mode string) error
+	// LoadPermissionCacheDangerousOps / SavePermissionCacheDangerousOps
+	// expose the dangerous-ops override flag. Default false.
+	LoadPermissionCacheDangerousOps() (bool, error)
+	SavePermissionCacheDangerousOps(enabled bool) error
+	// LoadBashAllowlistMigrated / SaveBashAllowlistMigrated expose the
+	// WP10 migration marker. Default false.
+	LoadBashAllowlistMigrated() (bool, error)
+	SaveBashAllowlistMigrated(migrated bool) error
+	// LoadPermissionsMigrationToastShown / SavePermissionsMigrationToastShown
+	// expose the one-time toast marker. Default false.
+	LoadPermissionsMigrationToastShown() (bool, error)
+	SavePermissionsMigrationToastShown(shown bool) error
 }
 
 // SettingsAPI is the view-scoped accessor exposed via HarnessAPI.

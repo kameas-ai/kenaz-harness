@@ -21,6 +21,10 @@ const tabs: ReadonlyArray<{ to: string; label: string }> = [
   { to: '/providers', label: 'Providers' },
   { to: '/hooks', label: 'Hooks' },
   { to: '/bundles', label: 'Bundles' },
+  { to: '/settings#permissions-bash', label: 'Bash Perms' },
+  { to: '/settings#permissions-fs', label: 'FS Perms' },
+  { to: '/settings#permissions-credential', label: 'Cred Perms' },
+  { to: '/settings#permissions-tool', label: 'Tool Perms' },
 ];
 
 const activePath = computed(() => route?.path ?? '');

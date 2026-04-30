@@ -582,6 +582,81 @@ func (b *Bindings) Settings_SetMaxAgentTurns(turns int) error {
 	return b.storeFn().SaveMaxAgentTurns(turns)
 }
 
+// ── WP08 permission dials ──────────────────────────────────────────
+
+// Settings_GetPermissionMode returns the global permission posture.
+// Default "normal" when unset.
+func (b *Bindings) Settings_GetPermissionMode() (string, error) {
+	if b.storeFn == nil {
+		return "normal", nil
+	}
+	return b.storeFn().LoadPermissionMode()
+}
+
+// Settings_SetPermissionMode persists the global permission posture.
+// Valid values: "strict", "normal", "permissive". Switching to
+// "permissive" is gated by a confirm dialog on the frontend side.
+func (b *Bindings) Settings_SetPermissionMode(mode string) error {
+	if b.storeFn == nil {
+		return nil
+	}
+	return b.storeFn().SavePermissionMode(mode)
+}
+
+// Settings_GetPermissionCacheDangerousOps returns the dangerous-ops
+// override flag (default false).
+func (b *Bindings) Settings_GetPermissionCacheDangerousOps() (bool, error) {
+	if b.storeFn == nil {
+		return false, nil
+	}
+	return b.storeFn().LoadPermissionCacheDangerousOps()
+}
+
+// Settings_SetPermissionCacheDangerousOps persists the dangerous-ops
+// override flag. Enabling requires a confirm dialog on the frontend.
+func (b *Bindings) Settings_SetPermissionCacheDangerousOps(enabled bool) error {
+	if b.storeFn == nil {
+		return nil
+	}
+	return b.storeFn().SavePermissionCacheDangerousOps(enabled)
+}
+
+// Settings_GetBashAllowlistMigrated returns the WP10 migration
+// marker. The UI reads this to suppress the one-time migration toast
+// after WP10's first-boot migration has run.
+func (b *Bindings) Settings_GetBashAllowlistMigrated() (bool, error) {
+	if b.storeFn == nil {
+		return false, nil
+	}
+	return b.storeFn().LoadBashAllowlistMigrated()
+}
+
+// Settings_SetBashAllowlistMigrated marks the WP10 migration as done.
+func (b *Bindings) Settings_SetBashAllowlistMigrated(migrated bool) error {
+	if b.storeFn == nil {
+		return nil
+	}
+	return b.storeFn().SaveBashAllowlistMigrated(migrated)
+}
+
+// Settings_GetPermissionsMigrationToastShown returns the one-time toast
+// shown marker.
+func (b *Bindings) Settings_GetPermissionsMigrationToastShown() (bool, error) {
+	if b.storeFn == nil {
+		return false, nil
+	}
+	return b.storeFn().LoadPermissionsMigrationToastShown()
+}
+
+// Settings_SetPermissionsMigrationToastShown marks the migration toast
+// as having been shown so it never appears again.
+func (b *Bindings) Settings_SetPermissionsMigrationToastShown(shown bool) error {
+	if b.storeFn == nil {
+		return nil
+	}
+	return b.storeFn().SavePermissionsMigrationToastShown(shown)
+}
+
 // ── memory ─────────────────────────────────────────────────────────────
 
 func (b *Bindings) Memory_ListChunks(filter memoryview.ListFilter) ([]memoryview.Chunk, error) {

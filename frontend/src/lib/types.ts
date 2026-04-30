@@ -478,6 +478,36 @@ export interface Settings {
    * never touch. Default 4. Negative is rejected at save.
    */
   compactionRecentWindow?: number;
+
+  // ── WP08 — Universal permission dials ────────────────────────────
+
+  /**
+   * Global permission posture for all four resource families.
+   * "strict" — every call prompts. "normal" (default) — Cedar gates.
+   * "permissive" — non-dangerous ops skip prompts.
+   * Empty/missing == "normal".
+   */
+  permissionMode?: PermissionMode;
+
+  /**
+   * When true, "Allow always" is offered for dangerous-tier resources
+   * (rm, sudo, system paths, etc). Default false — dangerous ops
+   * re-prompt every time. Requires confirm dialog to enable.
+   */
+  permissionCacheDangerousOps?: boolean;
+
+  /**
+   * Marker set by WP10's first-boot migration after it writes
+   * bash_allow_*.cedar files for the historical allowlist. The UI reads
+   * this to suppress the one-time migration toast after it fires.
+   */
+  bashAllowlistMigrated?: boolean;
+
+  /**
+   * Marker set after the one-time migration toast is shown. Once true
+   * the toast never displays again.
+   */
+  permissionsMigrationToastShown?: boolean;
 }
 
 /**
@@ -1787,3 +1817,60 @@ export interface BranchRecommendedModel {
    */
   crossProviderWarning?: string;
 }
+
+// ── WP08 — Universal Permission system types ─────────────────────────────
+
+/**
+ * PermissionFamily — the four resource families that the permission
+ * system covers. Matches the Cedar entity type names.
+ */
+export type PermissionFamily = 'bash' | 'fs' | 'credential' | 'tool';
+
+/**
+ * PermissionDecision — the three possible responses to a permission prompt.
+ * Mirrors the three buttons in BasePermissionModal.
+ */
+export type PermissionDecision = 'allow_once' | 'allow_always' | 'deny';
+
+/**
+ * PermissionGrant — a persisted "Allow always" Cedar policy snippet,
+ * as returned by client.permissions.listGrants().
+ */
+export interface PermissionGrant {
+  /** Unique stable id (the Cedar policy filename without .cedar). */
+  id: string;
+  /** Resource family. */
+  family: PermissionFamily;
+  /** Human-readable resource key (e.g. "git status", "/home/user/foo.txt"). */
+  resourceKey: string;
+  /** ISO-8601 timestamp when the grant was created. */
+  createdAt: string;
+}
+
+/**
+ * PermissionRequest — payload emitted on the four broker topics
+ * (`bash:permission-pending`, `fs:permission-pending`,
+ *  `cred:permission-pending`, `tool:permission-pending`).
+ */
+export interface PermissionRequest {
+  request_id: string;
+  session_id: string;
+  family: PermissionFamily;
+  /** Human-friendly label for the resource (argv, path, provider::purpose, tool). */
+  resource_display: string;
+  /** Optional: full canonical resource UID for Cedar. */
+  resource_uid?: string;
+  /** Optional: model's stated reason for the request. */
+  reason?: string;
+  /** True when the resource is in the dangerous tier for its family. */
+  dangerous_tier?: boolean;
+  /** Dangerous-tier one-line explanation copy (e.g. "Deletes files irreversibly"). */
+  danger_copy?: string;
+  // Filesystem-specific
+  op?: 'read' | 'write' | 'delete' | 'move';
+}
+
+/**
+ * PermissionMode — the three global permission posture values.
+ */
+export type PermissionMode = 'strict' | 'normal' | 'permissive';
