@@ -22,6 +22,7 @@ import (
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/mcp"
 	memoryview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/memory"
 	nodesview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/nodes"
+	permissionsview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/permissions"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/policy"
 	projectsview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/projects"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/sessions"
@@ -61,6 +62,7 @@ type fakeHarnessAPI struct {
 	compactionAPI   compactionview.CompactionAPI
 	branchesAPI     branchesview.BranchesAPI
 	cedarPolicyAPI  cedarpolicyview.CedarPolicyAPI
+	permissionsAPI  permissionsview.PermissionsAPI
 	dialsAPI        dialsview.DialsAPI
 	nodesAPI        nodesview.NodesAPI
 }
@@ -95,6 +97,7 @@ func (f *fakeHarnessAPI) Graph() graphview.API                         { return 
 func (f *fakeHarnessAPI) Compaction() compactionview.CompactionAPI     { return f.compactionAPI }
 func (f *fakeHarnessAPI) Branches() branchesview.BranchesAPI           { return f.branchesAPI }
 func (f *fakeHarnessAPI) CedarPolicy() cedarpolicyview.CedarPolicyAPI  { return f.cedarPolicyAPI }
+func (f *fakeHarnessAPI) Permissions() permissionsview.PermissionsAPI  { return f.permissionsAPI }
 func (f *fakeHarnessAPI) Dials() dialsview.DialsAPI                    { return f.dialsAPI }
 func (f *fakeHarnessAPI) Nodes() nodesview.NodesAPI                    { return f.nodesAPI }
 

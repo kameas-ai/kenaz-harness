@@ -22,6 +22,7 @@ import (
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/mcp"
 	memoryview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/memory"
 	nodesview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/nodes"
+	permissionsview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/permissions"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/policy"
 	projectsview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/projects"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/sessions"
@@ -385,6 +386,36 @@ func (b *Bindings) CedarPolicy_ReloadPolicies() error {
 // decisions, newest first. Used by the audit panel.
 func (b *Bindings) CedarPolicy_RecentDecisions(limit int) ([]cedarpolicyview.Decision, error) {
 	return b.api.CedarPolicy().RecentDecisions(b.ctx(), limit)
+}
+
+// ── permissions (cedar-credential-policy-01KQ8TDE, WP02) ───────────────
+
+// Permissions_Resolve routes a modal decision (allow_once / allow_always
+// / deny) back into the cedar prompt registry. requestID came in on one
+// of the four `<family>:permission-pending` broker topics.
+func (b *Bindings) Permissions_Resolve(requestID string, decision string) error {
+	return b.api.Permissions().Resolve(b.ctx(), requestID, permissionsview.Decision(decision))
+}
+
+// Permissions_ListGrants enumerates accumulated grants — both persisted
+// `<family>_allow_*.cedar` files in <DataDir>/policy/ and the per-process
+// transient (Allow-once) cache.
+func (b *Bindings) Permissions_ListGrants() ([]permissionsview.Grant, error) {
+	return b.api.Permissions().ListGrants(b.ctx())
+}
+
+// Permissions_RevokeGrant removes a grant. Persisted grants delete the
+// underlying .cedar file and trigger an engine reload; transient grants
+// drop the in-memory cache entry.
+func (b *Bindings) Permissions_RevokeGrant(grantID string) error {
+	return b.api.Permissions().RevokeGrant(b.ctx(), grantID)
+}
+
+// Permissions_ListPending returns in-flight pending prompts. The
+// frontend uses this to reconcile its modal queue on app start / after
+// a hot reload.
+func (b *Bindings) Permissions_ListPending() ([]permissionsview.PendingRequest, error) {
+	return b.api.Permissions().ListPending(b.ctx())
 }
 
 // ── audit ──────────────────────────────────────────────────────────────

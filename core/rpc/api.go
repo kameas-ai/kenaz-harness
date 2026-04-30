@@ -59,6 +59,7 @@ import (
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/mcp"
 	memoryview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/memory"
 	nodesview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/nodes"
+	permissionsview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/permissions"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/policy"
 	projectsview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/projects"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/sessions"
@@ -123,6 +124,12 @@ type HarnessAPI interface {
 	// loaded policy files, triggers reload, and surfaces recent
 	// gate decisions to the frontend Policy panel.
 	CedarPolicy() cedarpolicyview.CedarPolicyAPI
+
+	// Permissions exposes the universal interactive permission RPC
+	// surface (mission cedar-credential-policy-01KQ8TDE, WP02).
+	// Resolves modal decisions from the four prompt topics, lists
+	// accumulated grants, and revokes them.
+	Permissions() permissionsview.PermissionsAPI
 	Dials() dialsview.DialsAPI
 	Nodes() nodesview.NodesAPI
 }
@@ -208,6 +215,19 @@ type API struct {
 	// when a real *cedar.Engine is available; nil falls back to the
 	// cedarpolicy.NewAPI(nil) graceful-empty surface.
 	cedarPolicyAPI  cedarpolicyview.CedarPolicyAPI
+
+	// permissionsAPI is the universal interactive-permission RPC
+	// surface (mission cedar-credential-policy-01KQ8TDE, WP02). Backed
+	// by a process-singleton *cedar.Registry shared with the gate
+	// callers in WP03–WP06 (not yet wired). Until then the registry
+	// has no producers and ListPending returns empty.
+	permissionsAPI permissionsview.PermissionsAPI
+
+	// promptRegistry is the process-singleton cedar prompt registry.
+	// Held on the stack so future WPs (cedar WP03 bash gate, WP04 fs
+	// gate, etc.) can pass it into their gate constructors without
+	// re-plumbing through api.New.
+	promptRegistry *cedar.Registry
 	dialsAPI        dialsview.DialsAPI
 
 	// Node manifest catalog (mission agent-kernel-graph-node-catalog;
@@ -494,6 +514,20 @@ func New(c *core.Core) *API {
 			cedarDataDir = c.DataDir()
 		}
 		a.cedarPolicyAPI = cedarpolicyview.NewAPI(buildCedarEngineOrNil(cedarDataDir))
+
+		// Permissions view + prompt registry singleton. The registry is
+		// constructed without a dispatcher today; cedar WP03–WP06 will
+		// wire dispatchers per-family (broker emit) when they grow the
+		// prompt-firing call sites. ListPending returns empty until then;
+		// Resolve / RevokeGrant work end-to-end against persisted .cedar
+		// files in <DataDir>/policy/.
+		a.promptRegistry = cedar.NewRegistry()
+		a.permissionsAPI = permissionsview.New(permissionsview.Config{
+			DataDir:  cedarDataDir,
+			Registry: a.promptRegistry,
+			// Engine left nil for now — RevokeGrant skips the reload
+			// gracefully when the engine is unset.
+		})
 	}
 
 	a.bindings = NewBindings(a)
@@ -2378,6 +2412,18 @@ func (a *API) CedarPolicy() cedarpolicyview.CedarPolicyAPI {
 		return cedarpolicyview.NewAPI(nil)
 	}
 	return a.cedarPolicyAPI
+}
+
+// Permissions returns the universal interactive-permission view surface
+// (mission cedar-credential-policy-01KQ8TDE, WP02). When the chassis
+// has not wired a registry (test harness path with New(nil)), a stub
+// view is returned that surfaces ErrRegistryUnavailable on Resolve and
+// empty slices on List* operations.
+func (a *API) Permissions() permissionsview.PermissionsAPI {
+	if a.permissionsAPI == nil {
+		return permissionsview.New(permissionsview.Config{})
+	}
+	return a.permissionsAPI
 }
 func (a *API) Audit() audit.AuditAPI             { return a.auditAPI }
 func (a *API) Settings() settings.SettingsAPI    { return a.settingsAPI }
