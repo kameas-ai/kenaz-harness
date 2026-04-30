@@ -28,6 +28,13 @@ import (
 // model / session.
 const KindCompaction = "compaction"
 
+// KindAutoTitle is the cost-tagging kind the auto-titling wiring adapter
+// attaches to every LLM call it issues, mirroring the KindCompaction
+// convention (session-auto-titling-01KQ8TDS WP01 / plan §2.8).
+// Dashboards can use this tag to break out auto-title overhead from
+// regular chat and compaction costs.
+const KindAutoTitle = "auto_title"
+
 //go:embed starter_table.yaml
 var starterTable []byte
 

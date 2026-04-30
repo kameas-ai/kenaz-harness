@@ -26,6 +26,9 @@ const (
 	EventKindSessionLastActiveBumped = "session.last_active_bumped"
 	EventKindSessionSystemPromptSet  = "session.system_prompt_set"
 	EventKindSessionMovedToProject   = "session.moved_to_project"
+	// EventKindSessionAutoTitled is emitted by AutoTitle (success path),
+	// MarkAutoTitleAttempted (failure path), and RequestRetitle.
+	EventKindSessionAutoTitled = "session.auto_titled"
 )
 
 // Audit is the narrowed event surface the Manager uses. Unlike
@@ -385,6 +388,73 @@ func (m *Manager) SetSystemPrompt(ctx context.Context, sessionID, content, kind 
 		"session_id":     sessionID,
 		"kind":           kind,
 		"content_length": len(content),
+	})
+	return nil
+}
+
+// AutoTitle writes a generated title and sets auto_titled=1 on the
+// session, but only when auto_titled is currently 0. If the row's
+// auto_titled flag is already 1 — either because the engine already ran
+// or a user manually renamed — ErrAutoTitleSuperseded is returned and no
+// write occurs. The predicate check and the write happen inside the same
+// transaction in the store layer (race-safe).
+func (m *Manager) AutoTitle(ctx context.Context, id, title string) error {
+	if err := m.store.AutoTitle(ctx, id, title, m.now()); err != nil {
+		return err
+	}
+	m.audit.Emit(ctx, EventKindSessionAutoTitled, map[string]any{
+		"session_id": id,
+		"title":      title,
+		"trigger":    "auto",
+	})
+	return nil
+}
+
+// MarkAutoTitleAttempted sets auto_titled=1 without changing the name.
+// Used on the failure path so a crashed generator run does not retry
+// indefinitely.
+func (m *Manager) MarkAutoTitleAttempted(ctx context.Context, id string) error {
+	if err := m.store.MarkAutoTitleAttempted(ctx, id, m.now()); err != nil {
+		return err
+	}
+	m.audit.Emit(ctx, EventKindSessionAutoTitled, map[string]any{
+		"session_id": id,
+		"trigger":    "auto",
+		"error_kind": "attempted_no_title",
+	})
+	return nil
+}
+
+// ClearTitle writes name="" and auto_titled=0, re-enabling future
+// auto-title attempts. Emits EventKindSessionRenamed so the rail
+// refreshes the session row.
+func (m *Manager) ClearTitle(ctx context.Context, id string) error {
+	if err := m.store.ClearTitle(ctx, id, m.now()); err != nil {
+		return err
+	}
+	m.audit.Emit(ctx, EventKindSessionRenamed, map[string]any{
+		"session_id": id,
+		"name":       "",
+	})
+	return nil
+}
+
+// RequestRetitle forces a new auto-title run regardless of the current
+// auto_titled state. It clears the flag first so AutoTitle's predicate
+// check passes, then sets the new title atomically. This is the "Suggest
+// new title" manual path — it bypasses the auto_titled guard intentionally.
+func (m *Manager) RequestRetitle(ctx context.Context, id, title string) error {
+	// Clear first so AutoTitle's predicate (auto_titled == 0) passes.
+	if err := m.store.ClearTitle(ctx, id, m.now()); err != nil {
+		return err
+	}
+	if err := m.store.AutoTitle(ctx, id, title, m.now()); err != nil {
+		return err
+	}
+	m.audit.Emit(ctx, EventKindSessionAutoTitled, map[string]any{
+		"session_id": id,
+		"title":      title,
+		"trigger":    "manual",
 	})
 	return nil
 }

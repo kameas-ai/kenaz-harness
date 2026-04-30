@@ -38,6 +38,11 @@ const (
 	KindSessionCompacted          Kind = "compaction.session_compacted"
 	KindCompactionFailed          Kind = "compaction.failed"
 	KindCompactedOriginalsDeleted Kind = "compaction.originals_deleted"
+
+	// KindSessionAutoTitled signals that the auto-titling engine produced
+	// (or attempted to produce) a session title
+	// (session-auto-titling-01KQ8TDS WP01).
+	KindSessionAutoTitled Kind = "sessions.auto_titled"
 )
 
 // Event is the wire shape passed to the event log. The concrete event-log
@@ -163,6 +168,18 @@ type CompactedOriginalsDeletedPayload struct {
 	DeletedCount     int       `json:"deleted_count"`
 	OldestArchivedAt time.Time `json:"oldest_archived_at"`
 	NewestArchivedAt time.Time `json:"newest_archived_at"`
+}
+
+// SessionAutoTitledPayload carries signalling for the auto-titling engine
+// (session-auto-titling-01KQ8TDS WP01 §2.8). Emitted on both success and
+// failure paths; ErrorKind is empty on success.
+type SessionAutoTitledPayload struct {
+	SessionID      string `json:"session_id"`
+	GeneratedTitle string `json:"generated_title,omitempty"`
+	ModelUsed      string `json:"model_used"`
+	DurationMs     int64  `json:"duration_ms"`
+	Trigger        string `json:"trigger"` // "first_turn" | "manual" | "after_clear"
+	ErrorKind      string `json:"error_kind,omitempty"`
 }
 
 // Marshal is a small convenience wrapper that builds an [Event] for any

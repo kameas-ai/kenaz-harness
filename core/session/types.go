@@ -37,6 +37,11 @@ type Record struct {
 	// (no project). The pointer matches the SQL column's nullability so
 	// readers can distinguish "no project" from "project with empty id".
 	ProjectID *string
+	// AutoTitled is true when the auto-titling engine has written a
+	// generated title to this session, or when a user has manually
+	// renamed it (locking out further auto-titling).
+	// Populated by migration 0311 (session-auto-titling-01KQ8TDS WP01).
+	AutoTitled bool
 }
 
 // ContextKind values for Record.ContextKind. Validated at the manager

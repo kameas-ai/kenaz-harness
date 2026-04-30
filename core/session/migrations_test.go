@@ -86,6 +86,15 @@ func (f *migFakeDB) Query(ctx context.Context, query string, args ...any) (migra
 	if strings.HasPrefix(q, "select id, coalesce(system_prompt") {
 		return &migEmptyRows{}, nil
 	}
+	// Migration 0311 checks whether auto_titled already exists via
+	// pragma_table_info. The fake doesn't track columns, so report 0
+	// (column absent) so the ALTER TABLE branch fires. The ALTER TABLE
+	// fake accepts ADD COLUMN as a no-op, so the combined behaviour is
+	// correct for the migration framework (which never re-runs a migration
+	// that is already in the ledger).
+	if strings.HasPrefix(q, "select count(*) from pragma_table_info(") {
+		return &migCountRows{n: 0}, nil
+	}
 	return nil, fmt.Errorf("migFakeDB: unsupported query: %q", query)
 }
 
@@ -272,6 +281,30 @@ func (migEmptyRows) Scan(_ ...any) error    { return errors.New("no rows") }
 func (migEmptyRows) Close() error           { return nil }
 func (migEmptyRows) Err() error             { return nil }
 
+// migCountRows is a single-row iterator returning a count value. Used by
+// the fake to satisfy pragma_table_info COUNT(*) queries (migration 0311).
+type migCountRows struct {
+	n    int
+	done bool
+}
+
+func (r *migCountRows) Next() bool {
+	if r.done {
+		return false
+	}
+	r.done = true
+	return true
+}
+func (r *migCountRows) Scan(dest ...any) error {
+	if len(dest) != 1 {
+		return fmt.Errorf("migCountRows: want 1 dest got %d", len(dest))
+	}
+	*dest[0].(*int) = r.n
+	return nil
+}
+func (r *migCountRows) Close() error { return nil }
+func (r *migCountRows) Err() error   { return nil }
+
 func copyMap(m map[string]bool) map[string]bool {
 	out := make(map[string]bool, len(m))
 	for k, v := range m {
@@ -352,15 +385,15 @@ func TestMigrations_RegisterAndApply(t *testing.T) {
 		}
 	}
 
-	// Ledger rows: 2 storage bootstrap + 11 sessions migrations
+	// Ledger rows: 2 storage bootstrap + 12 sessions migrations
 	// (0300 init + 0301 context_attachments + 0302 content_json +
 	// 0303 artifacts + 0304 artifacts-promote + 0305 telemetry +
 	// 0306 branches + 0307 corpora + 0308 memory_hook_journal +
-	// 0309 agent_graph_events + 0310 compaction) = 13 applied entries.
-	if got := len(db.ledger); got != 13 {
-		t.Fatalf("ledger size = %d, want 13", got)
+	// 0309 agent_graph_events + 0310 compaction + 0311 auto_titled) = 14 applied entries.
+	if got := len(db.ledger); got != 14 {
+		t.Fatalf("ledger size = %d, want 14", got)
 	}
-	wantVersions := []int{1, 2, 300, 301, 302, 303, 304, 305, 306, 307, 308, 309, 310}
+	wantVersions := []int{1, 2, 300, 301, 302, 303, 304, 305, 306, 307, 308, 309, 310, 311}
 	for i, want := range wantVersions {
 		if db.ledger[i].Version != want {
 			t.Errorf("ledger[%d].Version = %d, want %d", i, db.ledger[i].Version, want)
