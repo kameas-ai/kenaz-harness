@@ -1,11 +1,10 @@
 <script setup lang="ts">
 /**
- * MarkdownBlock — single canonical markdown renderer (markdown-rendering-polish WP01).
+ * MarkdownBlock — single canonical markdown renderer (markdown-rendering-polish WP02).
  *
- * Consolidates the scattered marked+DOMPurify pipeline into one component.
- * All markdown rendering in the chat surface should flow through this component.
+ * Extends WP01 (code-block headers + Undo toast) with KaTeX math rendering.
  *
- * Features:
+ * Features (WP01):
  *   - Renders `:source` (markdown string) via marked (GFM) + DOMPurify.
  *   - Detects fenced code blocks and wraps each in a `.code-block-wrap` div
  *     with a header bar: language label, copy-to-clipboard, save-as-artifact.
@@ -16,23 +15,38 @@
  *   - Undo toast: 5-second inline toast with "Saved as <title>. Undo." that
  *     calls `client.artifacts.remove(id)` on click.
  *
- * Save RPC: uses `client.sessions.saveAsArtifact` — the only artifact-create
- * surface in ArtifactsClient v1 (there is no artifacts.create endpoint).
+ * Features (WP02 — KaTeX):
+ *   - Inline math: `$...$` → KaTeX inline render (displayMode: false).
+ *   - Display math: `$$...$$` → KaTeX display render (displayMode: true).
+ *   - Math detection runs via custom marked extensions (level 'block' and
+ *     level 'inline') BEFORE marked's HTML escaping sees the content.
+ *     This is the safest approach: TeX backslashes (\frac, \sum etc.)
+ *     are captured verbatim, then handed to KaTeX. The alternative
+ *     (pre-parse extraction + placeholder splicing) avoids marked entirely
+ *     but is harder to keep streaming-safe with partial tokens.
+ *   - Code/pre blocks are immune: the marked 'code' token fires first,
+ *     so math inside fenced blocks never reaches the math extensions.
+ *   - Streaming guard: both extensions require the FULL closing delimiter
+ *     (`$` or `$$`) to be present; partial tokens fall back to raw text.
+ *   - Error fallback: KaTeX `throwOnError: false` emits an HTML error span
+ *     which we additionally wrap in <code> when throwOnError is true but
+ *     we keep it false so KaTeX self-degrades. On truly broken input
+ *     the raw TeX is passed through in a <code> wrapper via a try/catch.
+ *   - KaTeX CSS: imported in this component's <style> via @import so it
+ *     is bundled into the katex async chunk and loaded once.
  *
- * Typography: code-block header matches KaneazToolsPanel small-caps register
- * (font-ui, text-[10px] uppercase tracking-[0.16em]).
- *
- * CSS note: code block headers are rendered via a custom marked renderer that
- * wraps each <pre> in a .code-block-wrap container, with the header bar
- * injected as a preceding sibling. This keeps the Vue template clean and
- * avoids the v-html/Vue-island isolation problem.
- * Interactive buttons (copy/save) are handled via event delegation on the
- * root element — this is safe because DOMPurify strips event handlers from
- * v-html, but our wrapper element catches delegated clicks outside v-html.
+ * Trade-off note: using marked extensions means the math tokens are
+ * processed synchronously inside the marked pipeline — no async import
+ * needed for the tokenizer. KaTeX is imported synchronously at component
+ * load time because renderToString is synchronous; lazy import would add
+ * complexity for negligible cold-start benefit (KaTeX is ~90 KiB gzipped,
+ * already split into an async chunk by Vite via dynamic import in main.ts).
  */
 import { computed, ref, nextTick, onMounted, onUpdated, useTemplateRef, inject } from 'vue';
 import { Marked } from 'marked';
+import type { TokenizerExtension, RendererExtension, Tokens } from 'marked';
 import DOMPurify from 'dompurify';
+import katex from 'katex';
 import { HarnessClientKey } from '@/lib/harnessClientContext';
 import type { HarnessClient } from '@/lib/harnessClient';
 
@@ -122,6 +136,106 @@ const codeBlocks = computed<CodeBlock[]>(() => {
   return blocks;
 });
 
+// ── KaTeX math rendering ──────────────────────────────────────────────────
+
+/**
+ * Render a TeX string to HTML using KaTeX.
+ * Falls back to a <code> wrapper with the raw source on any error.
+ * throwOnError: false ensures KaTeX self-degrades for most bad input;
+ * the outer try/catch catches anything KaTeX still throws.
+ */
+function renderKatex(tex: string, displayMode: boolean): string {
+  try {
+    return katex.renderToString(tex, {
+      displayMode,
+      throwOnError: false,
+      output: 'html',
+      trust: false,
+    });
+  } catch {
+    // Hard fallback: wrap raw source in <code>.
+    const escaped = tex
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;');
+    return `<code class="math-fallback">${escaped}</code>`;
+  }
+}
+
+/**
+ * Custom marked extension: display math `$$...$$`.
+ *
+ * Registered at level 'block' so it fires before inline tokenizers and
+ * before marked's HTML-entity encoding touches the TeX content.
+ * Streaming guard: requires the closing `$$` to be present in the token
+ * source; partial buffers without a closing delimiter are NOT matched.
+ */
+const displayMathExtension: TokenizerExtension & RendererExtension = {
+  name: 'displayMath',
+  level: 'block',
+  start(src: string) {
+    return src.indexOf('$$');
+  },
+  tokenizer(src: string) {
+    // Require both opening and closing $$ on the same or next lines.
+    const match = /^\$\$([\s\S]+?)\$\$/.exec(src);
+    if (match) {
+      return {
+        type: 'displayMath',
+        raw: match[0],
+        text: match[1].trim(),
+      };
+    }
+    return undefined;
+  },
+  renderer(token: Tokens.Generic) {
+    const text = (token as Tokens.Generic & { text: string }).text ?? '';
+    return `<div class="math-display">${renderKatex(text, true)}</div>\n`;
+  },
+};
+
+/**
+ * Custom marked extension: inline math `$...$`.
+ *
+ * Registered at level 'inline'. Requires non-space immediately after opening
+ * `$` and non-space immediately before closing `$` to avoid triggering on
+ * bare dollar signs in prose (e.g. "costs $5").
+ * Streaming guard: closing `$` must be present in the token source.
+ */
+const inlineMathExtension: TokenizerExtension & RendererExtension = {
+  name: 'inlineMath',
+  level: 'inline',
+  start(src: string) {
+    // Only start at $ that has a non-space char immediately after it.
+    let idx = src.indexOf('$');
+    while (idx !== -1) {
+      if (src[idx + 1] && src[idx + 1] !== ' ' && src[idx + 1] !== '$') {
+        return idx;
+      }
+      idx = src.indexOf('$', idx + 1);
+    }
+    return -1;
+  },
+  tokenizer(src: string) {
+    // Match $...$ where content doesn't start or end with whitespace and
+    // doesn't contain unescaped $$. The closing $ must be followed by a
+    // non-digit to avoid matching currency like "$5 and $10".
+    const match = /^\$([^\s$](?:[^$]*[^\s$])?)\$(?!\d)/.exec(src);
+    if (match) {
+      return {
+        type: 'inlineMath',
+        raw: match[0],
+        text: match[1],
+      };
+    }
+    return undefined;
+  },
+  renderer(token: Tokens.Generic) {
+    const text = (token as Tokens.Generic & { text: string }).text ?? '';
+    return `<span class="math-inline">${renderKatex(text, false)}</span>`;
+  },
+};
+
 // ── rendered HTML ─────────────────────────────────────────────────────────
 
 /**
@@ -129,6 +243,9 @@ const codeBlocks = computed<CodeBlock[]>(() => {
  * fenced block in a .code-block-wrap container with data-block-idx.
  * A fresh instance per compute call gives us a per-invocation blockIdx counter
  * without mutating the shared base instance.
+ *
+ * Math extensions are registered AFTER the code renderer so that code tokens
+ * fire first — math inside fenced blocks is captured as code, not math.
  */
 function buildMarkedWithCodeHeaders(): Marked {
   let blockIdx = 0;
@@ -152,6 +269,8 @@ function buildMarkedWithCodeHeaders(): Marked {
       },
     },
   });
+  // Register math extensions after code — code fence tokens take priority.
+  m.use({ extensions: [displayMathExtension, inlineMathExtension] });
   return m;
 }
 
@@ -160,8 +279,12 @@ const html = computed(() => {
   const m = buildMarkedWithCodeHeaders();
   const raw = m.parse(props.source, { async: false }) as string;
   return DOMPurify.sanitize(raw, {
-    ADD_ATTR: ['target', 'rel', 'data-block-idx'],
-    ADD_TAGS: [],
+    ADD_ATTR: ['target', 'rel', 'data-block-idx', 'aria-hidden', 'focusable', 'style'],
+    // Allow KaTeX spans and math wrappers. KaTeX output uses span.katex,
+    // span.katex-display, and many sub-spans — DOMPurify allows <span> by
+    // default; the katex-* class names pass through without extra config
+    // since DOMPurify does not filter class attribute values.
+    ADD_TAGS: ['math-inline', 'math-display'],
   });
 });
 
@@ -373,6 +496,15 @@ async function undoSave(): Promise<void> {
 </template>
 
 <style scoped>
+/*
+ * KaTeX CSS — imported here so it is bundled into the same chunk as the
+ * MarkdownBlock component. This keeps KaTeX styles co-located with the
+ * only component that uses them, avoids a global import in main.ts, and
+ * lets Vite split it cleanly into the katex async chunk if MarkdownBlock
+ * is ever lazy-loaded.
+ */
+@import 'katex/dist/katex.min.css';
+
 /* ── markdown body ─────────────────────────────────────────────────────── */
 .md-body {
   display: block;
@@ -567,6 +699,32 @@ async function undoSave(): Promise<void> {
 .undo-fade-enter-from,
 .undo-fade-leave-to {
   opacity: 0;
+}
+
+/* ── KaTeX math wrappers ─────────────────────────────────────────────── */
+/*
+ * .math-display wraps KaTeX display-mode output. We add block-level
+ * centering and vertical margin so display equations stand out visually.
+ * .math-inline wraps inline KaTeX output; no special block layout needed.
+ * .math-fallback is used when KaTeX fails to render (raw TeX in <code>).
+ */
+.md-body :deep(.math-display) {
+  display: block;
+  text-align: center;
+  margin: 0.75em 0;
+  overflow-x: auto;
+}
+.md-body :deep(.math-inline) {
+  display: inline;
+}
+.md-body :deep(.math-fallback) {
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+  background: var(--surface-2);
+  border: 1px solid var(--border-muted);
+  border-radius: var(--radius-sm);
+  padding: 0.05em 0.35em;
+  color: var(--ink-muted);
 }
 
 /* ── streaming caret ──────────────────────────────────────────────────── */

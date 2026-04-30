@@ -12,7 +12,6 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { mount, flushPromises } from '@vue/test-utils';
-import { createApp, defineComponent, h } from 'vue';
 import MarkdownBlock from '@/components/chat/MarkdownBlock.vue';
 import { HarnessClientKey } from '@/lib/harnessClientContext';
 import { createFakeHarnessClient } from '@/lib/harnessClient';
