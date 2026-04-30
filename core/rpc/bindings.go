@@ -11,6 +11,7 @@ import (
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/audit"
 	branchesview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/branches"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/bundle"
+	cedarpolicyview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/cedarpolicy"
 	compactionview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/compaction"
 	contextsview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/contexts"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/contextview"
@@ -362,6 +363,28 @@ func (b *Bindings) Policy_StartStream() (string, error) {
 }
 func (b *Bindings) Policy_StopStream(subID string) error {
 	return b.api.Policy().StopStream(b.ctx(), subID)
+}
+
+// ── cedar policy panel (cedar-credential-policy-01KQ8TDE, WP02) ────────
+
+// CedarPolicy_ListPolicies returns the per-file parse status for every
+// .cedar source the engine has loaded. The frontend's Policy panel
+// renders this list on mount and after a successful reload.
+func (b *Bindings) CedarPolicy_ListPolicies() ([]cedarpolicyview.PolicyFile, error) {
+	return b.api.CedarPolicy().ListPolicies(b.ctx())
+}
+
+// CedarPolicy_ReloadPolicies re-walks <DataDir>/policy/ and rebuilds
+// the active policy bundle. Per-file parse failures are reported via
+// the next CedarPolicy_ListPolicies call; errors do not abort reload.
+func (b *Bindings) CedarPolicy_ReloadPolicies() error {
+	return b.api.CedarPolicy().ReloadPolicies(b.ctx())
+}
+
+// CedarPolicy_RecentDecisions returns up to limit most-recent gate
+// decisions, newest first. Used by the audit panel.
+func (b *Bindings) CedarPolicy_RecentDecisions(limit int) ([]cedarpolicyview.Decision, error) {
+	return b.api.CedarPolicy().RecentDecisions(b.ctx(), limit)
 }
 
 // ── audit ──────────────────────────────────────────────────────────────

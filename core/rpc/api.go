@@ -48,6 +48,7 @@ import (
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/audit"
 	branchesview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/branches"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/bundle"
+	cedarpolicyview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/cedarpolicy"
 	compactionview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/compaction"
 	contextsview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/contexts"
 	contextview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/contextview"
@@ -117,6 +118,11 @@ type HarnessAPI interface {
 	Graph() graphview.API
 	Compaction() compactionview.CompactionAPI
 	Branches() branchesview.BranchesAPI
+	// CedarPolicy exposes the cedarpolicy view-scoped RPC surface
+	// (mission cedar-credential-policy-01KQ8TDE, WP02). It lists
+	// loaded policy files, triggers reload, and surfaces recent
+	// gate decisions to the frontend Policy panel.
+	CedarPolicy() cedarpolicyview.CedarPolicyAPI
 	Dials() dialsview.DialsAPI
 	Nodes() nodesview.NodesAPI
 }
@@ -197,6 +203,11 @@ type API struct {
 	compactionAPI   compactionview.CompactionAPI
 	convMgr         *coreconv.Manager
 	branchesAPI     branchesview.BranchesAPI
+	// cedarPolicyAPI is the policy-panel RPC surface (mission
+	// cedar-credential-policy-01KQ8TDE, WP02). Constructed in New
+	// when a real *cedar.Engine is available; nil falls back to the
+	// cedarpolicy.NewAPI(nil) graceful-empty surface.
+	cedarPolicyAPI  cedarpolicyview.CedarPolicyAPI
 	dialsAPI        dialsview.DialsAPI
 
 	// Node manifest catalog (mission agent-kernel-graph-node-catalog;
@@ -468,6 +479,21 @@ func New(c *core.Core) *API {
 	a.nodesMgr, a.nodesAPI = newNodesStack(c)
 	if c != nil && c.HotReloadEnabled() && a.nodesMgr != nil {
 		a.nodesWatcher = startNodesWatcher(c, a.nodesMgr)
+	}
+
+	// CedarPolicy view (mission cedar-credential-policy-01KQ8TDE, WP02).
+	// Constructs a process-singleton *cedar.Engine so the policy-panel
+	// RPC surface can list loaded policy files and surface recent
+	// decisions. The engine instance is independent of the gate engine
+	// wired into the graph EnvDeps above; a future WP will unify them.
+	// nil Core / empty DataDir falls back to cedarpolicy.NewAPI(nil)
+	// which serves empty slices — the panel renders its empty state.
+	{
+		var cedarDataDir string
+		if c != nil {
+			cedarDataDir = c.DataDir()
+		}
+		a.cedarPolicyAPI = cedarpolicyview.NewAPI(buildCedarEngineOrNil(cedarDataDir))
 	}
 
 	a.bindings = NewBindings(a)
@@ -2342,6 +2368,17 @@ func (a *API) Contexts() contextsview.ContextsAPI {
 }
 func (a *API) Bundle() bundle.BundleAPI          { return a.bundleAPI }
 func (a *API) Policy() policy.PolicyAPI          { return a.policyAPI }
+// CedarPolicy returns the policy-panel view surface (mission
+// cedar-credential-policy-01KQ8TDE, WP02). cedarpolicy.NewAPI(nil)
+// serves an empty-slice surface if the engine was not wired; this
+// accessor mirrors that nil-safe pattern for test harnesses that call
+// New(nil).
+func (a *API) CedarPolicy() cedarpolicyview.CedarPolicyAPI {
+	if a.cedarPolicyAPI == nil {
+		return cedarpolicyview.NewAPI(nil)
+	}
+	return a.cedarPolicyAPI
+}
 func (a *API) Audit() audit.AuditAPI             { return a.auditAPI }
 func (a *API) Settings() settings.SettingsAPI    { return a.settingsAPI }
 func (a *API) Memory() memoryview.MemoryAPI {
@@ -2470,6 +2507,31 @@ func (a *API) Bindings() []any { return []any{a.bindings} }
 // invariant #1 — only emitter.go / stream_broker.go call
 // runtime.EventsEmit — keeps holding.
 func (a *API) StreamBroker() *StreamBroker { return a.broker }
+
+// buildCedarEngineOrNil constructs a *cedar.Engine for callers that
+// need direct access to ListPolicies / Reload / RecentDecisions (i.e.
+// the cedarpolicy view). Returns nil when dataDir is empty so callers
+// can degrade gracefully rather than booting a disk-walk engine with
+// nowhere to walk. Mirrors the same Options as buildCedarGate; the
+// two functions intentionally share no state — a future WP will unify
+// them into a single engine instance shared by both call sites.
+func buildCedarEngineOrNil(dataDir string) *cedar.Engine {
+	if dataDir == "" {
+		return nil
+	}
+	engine, err := cedar.NewEngine(cedar.Options{
+		DataDir:         dataDir,
+		LoadFromDisk:    true,
+		IncludeEmbedded: true,
+		DefaultDeny:     false,
+	})
+	if err != nil {
+		slog.Warn("cedar engine (cedarpolicy view) construction failed; policy panel will be empty",
+			"err", err, "data_dir", dataDir)
+		return nil
+	}
+	return engine
+}
 
 // buildCedarGate constructs the production Cedar policy gate. It loads
 // any user-supplied policies from <DataDir>/policy/*.cedar in addition
