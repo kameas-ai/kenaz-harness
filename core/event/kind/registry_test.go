@@ -13,6 +13,25 @@ func TestBuiltInsRegistered(t *testing.T) {
 	}
 }
 
+func TestPermissionKindsRegistered(t *testing.T) {
+	permKinds := []Kind{
+		KindPermissionGranted,
+		KindPermissionDenied,
+		KindPermissionPrompted,
+		KindPermissionTimeout,
+		KindPermissionRevoked,
+		KindBashPermission,
+		KindFilesystemPermission,
+		KindCredentialPermission,
+		KindToolPermission,
+	}
+	for _, k := range permKinds {
+		if !IsRegistered(k) {
+			t.Errorf("permission kind %q should be registered on init", k)
+		}
+	}
+}
+
 func TestValidateGoodKinds(t *testing.T) {
 	good := []Kind{
 		"llm.request.started",

@@ -30,6 +30,22 @@ const (
 	KindError               Kind = "event-log.error"
 	KindTimeout             Kind = "event-log.timeout"
 	KindDatabaseOpened      Kind = "event-log.database.opened"
+
+	// Universal permission audit kinds (cedar-credential-policy-01KQ8TDE WP07).
+	// These fire regardless of which resource family triggered the gate.
+	KindPermissionGranted  Kind = "permission.granted"
+	KindPermissionDenied   Kind = "permission.denied"
+	KindPermissionPrompted Kind = "permission.prompted"
+	KindPermissionTimeout  Kind = "permission.timeout"
+	KindPermissionRevoked  Kind = "permission.revoked"
+
+	// Per-family permission audit kinds (cedar-credential-policy-01KQ8TDE WP07).
+	// Each fires in addition to the universal kind above when the gate
+	// is for the named resource family.
+	KindBashPermission       Kind = "permission.bash"
+	KindFilesystemPermission Kind = "permission.filesystem"
+	KindCredentialPermission Kind = "permission.credential"
+	KindToolPermission       Kind = "permission.tool"
 )
 
 var builtIn = []Kind{
@@ -37,6 +53,12 @@ var builtIn = []Kind{
 	KindSessionBranched, KindRawReplayOpened, KindRedactionSupersede,
 	KindChainRebased, KindCancellation, KindError, KindTimeout,
 	KindDatabaseOpened,
+	// Universal permission audit kinds.
+	KindPermissionGranted, KindPermissionDenied, KindPermissionPrompted,
+	KindPermissionTimeout, KindPermissionRevoked,
+	// Per-family permission audit kinds.
+	KindBashPermission, KindFilesystemPermission, KindCredentialPermission,
+	KindToolPermission,
 }
 
 var (
