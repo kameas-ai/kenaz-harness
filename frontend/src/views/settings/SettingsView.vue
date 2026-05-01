@@ -18,6 +18,7 @@ import CanvasHead from '@/shell/CanvasHead.vue';
 import SettingsTabs from '@/views/settings/SettingsTabs.vue';
 import RadioStrip from '@/components/settings/RadioStrip.vue';
 import BranchAdvisorSettings from '@/components/settings/BranchAdvisorSettings.vue';
+import KeyboardShortcuts from '@/components/settings/KeyboardShortcuts.vue';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
 import { debouncedSave } from '@/lib/settings';
 import type {
@@ -558,6 +559,185 @@ onMounted(() => {
             <dd class="font-mono text-ink">{{ appInfo.platform || '—' }}</dd>
           </dl>
         </div>
+
+        <div class="mt-4 grid gap-2" style="grid-template-columns: 14ch 1fr">
+          <label
+            for="compaction-model"
+            class="self-center font-ui text-[12px] text-ink-muted"
+          >
+            Compaction model
+          </label>
+          <select
+            id="compaction-model"
+            class="rounded-sm border border-border bg-surface-1 px-2 py-1 font-ui text-[12px] text-ink"
+            data-testid="compaction-model-select"
+            :value="compactionModelValue"
+            @change="onCompactionModelChange"
+          >
+            <option value="">Use session's active model (recommended)</option>
+            <option
+              v-for="opt in compactionModelOptions"
+              :key="opt.value"
+              :value="opt.value"
+            >
+              {{ opt.label }}
+            </option>
+          </select>
+          <!--
+            TODO(compaction-strategy-ui-01KQ8TDI WP06): emit a "deprecated
+            model" warning chip here when the capability gate exposes a
+            programmatic deprecated check. The save still succeeds today;
+            the actual deprecation enforcement happens at compaction time
+            via the capability gate (plan §R7).
+          -->
+        </div>
+
+        <div class="mt-2 grid gap-2" style="grid-template-columns: 14ch 1fr">
+          <label
+            for="compaction-archive-days"
+            class="self-center font-ui text-[12px] text-ink-muted"
+          >
+            Archive days
+          </label>
+          <div>
+            <input
+              id="compaction-archive-days"
+              type="number"
+              min="7"
+              max="365"
+              :value="compactionArchiveDays"
+              class="w-24 rounded-sm border border-border bg-surface-1 px-2 py-1 font-ui text-[12px] text-ink"
+              data-testid="compaction-archive-days-input"
+              @input="onCompactionArchiveDaysInput"
+            />
+            <p
+              v-if="compactionArchiveDaysError"
+              class="mt-1 font-ui text-[11px] text-signal-danger"
+              role="alert"
+              data-testid="compaction-archive-days-error"
+            >
+              {{ compactionArchiveDaysError }}
+            </p>
+            <p v-else class="mt-1 font-ui text-[11px] text-ink-muted">
+              Soft-archived originals are deleted after this many days. Default 90.
+            </p>
+          </div>
+        </div>
+
+        <div class="mt-2 grid gap-2" style="grid-template-columns: 14ch 1fr">
+          <label
+            for="compaction-recent-window"
+            class="self-center font-ui text-[12px] text-ink-muted"
+          >
+            Recent window
+          </label>
+          <div>
+            <input
+              id="compaction-recent-window"
+              type="number"
+              min="1"
+              :value="compactionRecentWindow"
+              class="w-24 rounded-sm border border-border bg-surface-1 px-2 py-1 font-ui text-[12px] text-ink"
+              data-testid="compaction-recent-window-input"
+              @input="onCompactionRecentWindowInput"
+            />
+            <p
+              v-if="compactionRecentWindowError"
+              class="mt-1 font-ui text-[11px] text-signal-danger"
+              role="alert"
+              data-testid="compaction-recent-window-error"
+            >
+              {{ compactionRecentWindowError }}
+            </p>
+            <p v-else class="mt-1 font-ui text-[11px] text-ink-muted">
+              Most-recent user-assistant pairs that compaction never touches. Default 4.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <section data-testid="global-context-section">
+        <div class="flex items-center justify-between">
+          <h2 class="font-ui text-[11px] uppercase tracking-[0.18em] text-ink-subtle">
+            Global context
+            <span class="ml-1 text-ink-dim">({{ globalAttachments.length }})</span>
+          </h2>
+          <button
+            type="button"
+            class="flex items-center gap-1 rounded-sm border border-accent-hairline bg-surface-1 px-2 py-1 font-ui text-[11px] text-accent hover:bg-accent-glow"
+            data-testid="global-add-context"
+            @click="openGlobalPicker"
+          >
+            <Plus :size="12" />
+            <span>Add context</span>
+          </button>
+        </div>
+        <p class="mt-1 font-ui text-[11px] text-ink-dim">
+          Global context applies to every session in the harness. The
+          resolved stream concatenates global → project → session, so
+          ordering here affects the prefix every conversation receives.
+        </p>
+        <div
+          v-if="globalAttachmentsError"
+          class="mt-2 rounded-sm border border-signal-danger bg-surface-1 px-3 py-2 font-ui text-[11px] text-signal-danger"
+          role="alert"
+          data-testid="global-attachments-error"
+        >
+          {{ globalAttachmentsError }}
+        </div>
+        <div
+          v-if="globalAttachmentsLoading"
+          class="mt-2 font-ui text-xs text-ink-muted"
+          data-testid="global-attachments-loading"
+        >
+          Loading…
+        </div>
+        <ul
+          v-else-if="globalAttachments.length > 0"
+          class="mt-2 space-y-2"
+          data-testid="global-attachments-list"
+        >
+          <li v-for="a in globalAttachments" :key="a.id">
+            <AttachmentRow
+              :attachment="a"
+              :draggable="true"
+              @refreshed="onGlobalRefreshed"
+              @removed="onGlobalRemoved"
+              @drag-start="onDragStart"
+              @drag-over="onDragOver"
+              @drop="onDrop"
+              @drag-end="onDragEnd"
+            />
+          </li>
+        </ul>
+        <p
+          v-else
+          class="mt-2 font-ui text-xs text-ink-muted"
+          data-testid="global-attachments-empty"
+        >
+          No global context yet. Pick a file from the library to attach.
+        </p>
+      </section>
+
+      <!-- Keyboard shortcuts (keyboard-shortcuts-settings-01KQ8TDR) -->
+      <KeyboardShortcuts />
+
+      <section v-if="appInfo">
+        <h2 class="font-ui text-[11px] uppercase tracking-[0.18em] text-ink-subtle">
+          Harness build
+        </h2>
+        <dl class="mt-2 grid gap-2 font-ui text-[12px]" style="grid-template-columns: 12ch 1fr">
+          <dt class="text-ink-muted">Build</dt>
+          <dd class="font-mono text-ink">{{ appInfo.build }}</dd>
+          <dt class="text-ink-muted">Commit</dt>
+          <dd class="font-mono text-ink">{{ appInfo.commit }}</dd>
+          <dt class="text-ink-muted">Built</dt>
+          <dd class="font-mono text-ink">{{ appInfo.buildTime || '—' }}</dd>
+          <dt class="text-ink-muted">Go</dt>
+          <dd class="font-mono text-ink">{{ appInfo.goVersion || '—' }}</dd>
+          <dt class="text-ink-muted">Platform</dt>
+          <dd class="font-mono text-ink">{{ appInfo.platform || '—' }}</dd>
+        </dl>
       </section>
     </div>
   </div>

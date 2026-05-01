@@ -1,12 +1,16 @@
 <script setup lang="ts">
 import { computed, ref, onMounted, onBeforeUnmount } from 'vue';
+import { computed, onMounted, onBeforeUnmount, ref } from 'vue';
 import Titlebar from './Titlebar.vue';
 import Toolbar from './Toolbar.vue';
 import LeftRail from './LeftRail.vue';
 import LegendBar from './LegendBar.vue';
 import ConnectionLostBanner from '@/components/ui/ConnectionLostBanner.vue';
 import SearchModal from '@/components/search/SearchModal.vue';
+import CheatSheetModal from '@/components/shortcuts/CheatSheetModal.vue';
 import { useConnectionState } from '@/lib/useConnectionState';
+import { useHarnessClient } from '@/lib/useHarnessAPI';
+import { matchesEvent } from '@/lib/shortcuts/platform';
 
 /**
  * Shell — the persistent app-level layout (plan §2.1).
@@ -22,6 +26,9 @@ import { useConnectionState } from '@/lib/useConnectionState';
  * Cmd-F (Mac) / Ctrl-F (other) opens the SearchModal. The binding
  * short-circuits when the event target is an INPUT or TEXTAREA so the
  * browser / chat composer shortcut is not stolen.
+ * Also registers the global `?` / Cmd-/ shortcut for the keyboard
+ * cheat-sheet overlay (keyboard-shortcuts-settings-01KQ8TDR plan §2.6).
+ * Mirrors the Cmd-F pattern in useCommandPalette.
  */
 const connection = useConnectionState();
 const isStarting = computed(() => connection.value === 'connecting');
@@ -54,6 +61,43 @@ onBeforeUnmount(() => {
     window.removeEventListener('keydown', onGlobalKeydown);
   }
 });
+// ── cheat-sheet overlay (help.cheat-sheet) ────────────────────────────
+
+const client = useHarnessClient();
+const cheatSheetOpen = ref(false);
+const shortcutOverrides = ref<Record<string, string>>({});
+
+// Load overrides for display in the cheat-sheet (best-effort).
+onMounted(async () => {
+  try {
+    const s = await client.settings.get();
+    shortcutOverrides.value = s.keyboardShortcuts ?? {};
+  } catch {
+    // Non-fatal: cheat-sheet falls back to defaults.
+  }
+  window.addEventListener('keydown', onGlobalKeydown);
+});
+
+onBeforeUnmount(() => {
+  window.removeEventListener('keydown', onGlobalKeydown);
+});
+
+function onGlobalKeydown(e: KeyboardEvent) {
+  // Skip when focus is inside an input / textarea / contenteditable.
+  const tag = (e.target as HTMLElement)?.tagName?.toLowerCase();
+  const isEditable =
+    tag === 'input' ||
+    tag === 'textarea' ||
+    (e.target as HTMLElement)?.isContentEditable;
+  if (isEditable) return;
+
+  if (matchesEvent('?', e)) {
+    e.preventDefault();
+    cheatSheetOpen.value = !cheatSheetOpen.value;
+  } else if (e.key === 'Escape' && cheatSheetOpen.value) {
+    cheatSheetOpen.value = false;
+  }
+}
 </script>
 
 <template>
@@ -98,4 +142,10 @@ onBeforeUnmount(() => {
   <!-- Search modal — rendered as a portal sibling to the shell grid so
        it sits above all z-index layers without clipping. -->
   <SearchModal v-if="searchOpen" @close="searchOpen = false" />
+  <!-- Global overlays -->
+  <CheatSheetModal
+    :open="cheatSheetOpen"
+    :overrides="shortcutOverrides"
+    @close="cheatSheetOpen = false"
+  />
 </template>

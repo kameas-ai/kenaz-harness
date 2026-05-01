@@ -19,6 +19,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"unicode"
 
 	"github.com/sigil-tech/kaneaz-harness/core/compaction"
 )
@@ -102,6 +103,9 @@ func (s *FileStore) SaveAll(in Settings) error {
 	if err := validateCompactionFields(in); err != nil {
 		return err
 	}
+	if err := validateShortcuts(in); err != nil {
+		return err
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.saveLocked(in)
@@ -151,6 +155,53 @@ func validateCompactionFields(in Settings) error {
 		return ErrInvalidCompactionRecentWindow
 	}
 
+	return nil
+}
+
+// MaxShortcutEntries is the upper bound on the number of per-shortcut
+// overrides the backend accepts in a single Settings write (plan §2.7 R4).
+const MaxShortcutEntries = 200
+
+// MaxShortcutValueLen is the maximum byte length of a single binding
+// value. Generous enough for any legitimate `Cmd+Shift+Letter` string.
+const MaxShortcutValueLen = 64
+
+// ErrTooManyShortcuts is returned when the KeyboardShortcuts map exceeds
+// MaxShortcutEntries.
+var ErrTooManyShortcuts = fmt.Errorf(
+	"settings: keyboardShortcuts map exceeds maximum of %d entries", MaxShortcutEntries,
+)
+
+// ErrShortcutValueTooLong is returned when a binding string exceeds
+// MaxShortcutValueLen bytes.
+var ErrShortcutValueTooLong = fmt.Errorf(
+	"settings: keyboard shortcut binding value exceeds %d characters", MaxShortcutValueLen,
+)
+
+// ErrShortcutValueControlChar is returned when a binding value contains
+// a control character (newline, tab, etc.).
+var ErrShortcutValueControlChar = errors.New(
+	"settings: keyboard shortcut binding value contains a control character",
+)
+
+// validateShortcuts checks the KeyboardShortcuts map for size and value
+// constraints (plan §2.7). Called by SaveAll so malformed maps from a
+// hand-edited settings file or a buggy client are rejected before they
+// reach the filesystem.
+func validateShortcuts(in Settings) error {
+	if len(in.KeyboardShortcuts) > MaxShortcutEntries {
+		return ErrTooManyShortcuts
+	}
+	for _, v := range in.KeyboardShortcuts {
+		if len(v) > MaxShortcutValueLen {
+			return ErrShortcutValueTooLong
+		}
+		for _, r := range v {
+			if unicode.IsControl(r) {
+				return ErrShortcutValueControlChar
+			}
+		}
+	}
 	return nil
 }
 
@@ -400,6 +451,36 @@ func (s *FileStore) SavePermissionMode(mode string) error {
 	return s.saveLocked(got)
 }
 
+// LoadShortcuts returns the KeyboardShortcuts map from the persisted
+// settings. Missing settings file returns an empty map (no error).
+func (s *FileStore) LoadShortcuts() (map[string]string, error) {
+	got, err := s.LoadAll()
+	if err != nil {
+		return nil, err
+	}
+	if got.KeyboardShortcuts == nil {
+		return map[string]string{}, nil
+	}
+	// Return a defensive copy.
+	out := make(map[string]string, len(got.KeyboardShortcuts))
+	for k, v := range got.KeyboardShortcuts {
+		out[k] = v
+	}
+	return out, nil
+}
+
+// SaveShortcuts atomically replaces the full KeyboardShortcuts map.
+func (s *FileStore) SaveShortcuts(m map[string]string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	got, err := s.loadLocked()
+	if err != nil {
+		return err
+	}
+	got.KeyboardShortcuts = m
+	return s.saveLocked(got)
+}
+
 // LoadPermissionCacheDangerousOps returns the dangerous-ops override flag
 // (default false).
 func (s *FileStore) LoadPermissionCacheDangerousOps() (bool, error) {
@@ -478,9 +559,7 @@ func (s *FileStore) LoadCedarStrictCredentialMode() (bool, error) {
 }
 
 // SaveCedarStrictCredentialMode persists the credential-gate
-// strictness flag. The credstore.Store reads this via its StrictMode
-// callback on every Use call, so changes take effect immediately
-// without re-creating the store.
+// strictness flag.
 func (s *FileStore) SaveCedarStrictCredentialMode(enabled bool) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

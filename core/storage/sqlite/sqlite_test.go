@@ -130,7 +130,7 @@ func TestOpen_RegistersSessionMigrations(t *testing.T) {
 	// 0307 (corpora), 0308 (memory_hook_journal), 0309 (agent_graph_events);
 	// 0310 (compaction); 0311 (auto_titled); 0312 (FTS5 messages_fts);
 	// 0313 (subagent-metadata) lands with branch-as-subagent-recommendation WP04.
-	want := []int{300, 301, 302, 303, 304, 305, 306, 307, 308, 309, 310, 311, 312, 313}
+	want := []int{300, 301, 302, 303, 304, 305, 306, 307, 308, 309, 310, 311, 312, 313, 314}
 	if len(versions) != len(want) {
 		t.Fatalf("session migrations applied = %v, want %v", versions, want)
 	}
@@ -170,9 +170,9 @@ func TestOpen_ApplyIdempotent(t *testing.T) {
 	// 1 branches (0306) + 1 corpora (0307) + 1 memory_hook_journal (0308) +
 	// 1 agent_graph_events (0309) + 1 compaction (0310) +
 	// 1 sessions.auto_titled (0311) + 1 search-fts5 (0312) +
-	// 1 subagent-metadata (0313) = 16.
-	if count != 16 {
-		t.Errorf("ledger count = %d, want 16", count)
+	// 1 subagent-metadata (0313) + 1 session_usage (0314) = 17.
+	if count != 17 {
+		t.Errorf("ledger count = %d, want 17", count)
 	}
 }
 

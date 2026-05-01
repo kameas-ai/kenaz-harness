@@ -694,6 +694,10 @@ export function Settings_GetSaveArtifactEnabled() {
   return window['go']['rpc']['Bindings']['Settings_GetSaveArtifactEnabled']();
 }
 
+export function Settings_GetShortcuts() {
+  return window['go']['rpc']['Bindings']['Settings_GetShortcuts']();
+}
+
 export function Settings_GetWebSearch() {
   return window['go']['rpc']['Bindings']['Settings_GetWebSearch']();
 }
@@ -740,6 +744,14 @@ export function Settings_SetPermissionsMigrationToastShown(arg1) {
 
 export function Settings_SetSaveArtifactEnabled(arg1) {
   return window['go']['rpc']['Bindings']['Settings_SetSaveArtifactEnabled'](arg1);
+}
+
+export function Settings_SetShortcut(arg1, arg2) {
+  return window['go']['rpc']['Bindings']['Settings_SetShortcut'](arg1, arg2);
+}
+
+export function Settings_SetShortcuts(arg1) {
+  return window['go']['rpc']['Bindings']['Settings_SetShortcuts'](arg1);
 }
 
 export function Settings_SetWebSearch(arg1) {

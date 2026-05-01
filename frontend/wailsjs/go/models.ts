@@ -3475,6 +3475,8 @@ export namespace settings {
 	    branchAutoMode?: boolean;
 	    branchReintegrationMaxTokens?: number;
 	    branchAdvisorDefaultModel?: ProviderProfileRef;
+	    keyboardShortcuts?: Record<string, string>;
+	    keyboardShortcutsPreset?: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new Settings(source);
@@ -3513,6 +3515,8 @@ export namespace settings {
 	        this.branchAutoMode = source["branchAutoMode"];
 	        this.branchReintegrationMaxTokens = source["branchReintegrationMaxTokens"];
 	        this.branchAdvisorDefaultModel = this.convertValues(source["branchAdvisorDefaultModel"], ProviderProfileRef);
+	        this.keyboardShortcuts = source["keyboardShortcuts"];
+	        this.keyboardShortcutsPreset = source["keyboardShortcutsPreset"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {

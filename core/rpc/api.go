@@ -77,7 +77,6 @@ import (
 	secretsref "github.com/sigil-tech/kaneaz-harness/core/secrets/ref"
 	"github.com/sigil-tech/kaneaz-harness/core/session"
 	"github.com/sigil-tech/kaneaz-harness/core/toolloop"
-	"github.com/sigil-tech/kaneaz-harness/core/usage"
 	"github.com/zalando/go-keyring"
 )
 

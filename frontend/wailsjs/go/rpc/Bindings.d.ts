@@ -379,6 +379,8 @@ export function Settings_GetPermissionsMigrationToastShown():Promise<boolean>;
 
 export function Settings_GetSaveArtifactEnabled():Promise<boolean>;
 
+export function Settings_GetShortcuts():Promise<Record<string, string>>;
+
 export function Settings_GetWebSearch():Promise<boolean>;
 
 export function Settings_Set(arg1:settings.Settings):Promise<void>;
@@ -402,6 +404,10 @@ export function Settings_SetPermissionMode(arg1:string):Promise<void>;
 export function Settings_SetPermissionsMigrationToastShown(arg1:boolean):Promise<void>;
 
 export function Settings_SetSaveArtifactEnabled(arg1:boolean):Promise<void>;
+
+export function Settings_SetShortcut(arg1:string,arg2:string):Promise<void>;
+
+export function Settings_SetShortcuts(arg1:Record<string, string>):Promise<void>;
 
 export function Settings_SetWebSearch(arg1:boolean):Promise<void>;
 

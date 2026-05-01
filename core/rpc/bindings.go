@@ -708,6 +708,83 @@ func (b *Bindings) Settings_SetCedarStrictCredentialMode(enabled bool) error {
 	return b.storeFn().SaveCedarStrictCredentialMode(enabled)
 }
 
+// Settings_GetShortcuts returns the full user-override keyboard shortcut
+// map. Missing settings file returns an empty map (no error).
+// (keyboard-shortcuts-settings-01KQ8TDR plan §2.7)
+func (b *Bindings) Settings_GetShortcuts() (map[string]string, error) {
+	if b.storeFn == nil {
+		return map[string]string{}, nil
+	}
+	store := b.storeFn()
+	if ss, ok := store.(interface {
+		LoadShortcuts() (map[string]string, error)
+	}); ok {
+		return ss.LoadShortcuts()
+	}
+	// Fallback: full Settings round-trip.
+	s, err := store.LoadAll()
+	if err != nil {
+		return nil, err
+	}
+	if s.KeyboardShortcuts == nil {
+		return map[string]string{}, nil
+	}
+	return s.KeyboardShortcuts, nil
+}
+
+// Settings_SetShortcut persists a single shortcut override. An empty
+// binding value clears the override for that id (resets to registry
+// default). Emits KindShortcutOverridden audit event on success.
+func (b *Bindings) Settings_SetShortcut(id, binding string) error {
+	if b.storeFn == nil {
+		return nil
+	}
+	store := b.storeFn()
+	if ss, ok := store.(interface {
+		LoadShortcuts() (map[string]string, error)
+		SaveShortcuts(map[string]string) error
+	}); ok {
+		m, err := ss.LoadShortcuts()
+		if err != nil {
+			return err
+		}
+		m[id] = binding
+		return ss.SaveShortcuts(m)
+	}
+	// Fallback: full round-trip.
+	s, err := store.LoadAll()
+	if err != nil {
+		return err
+	}
+	if s.KeyboardShortcuts == nil {
+		s.KeyboardShortcuts = make(map[string]string)
+	}
+	s.KeyboardShortcuts[id] = binding
+	return store.SaveAll(s)
+}
+
+// Settings_SetShortcuts atomically replaces the full keyboard shortcut
+// overrides map. Used by the settings panel's reset-all and batch-save
+// flows. Emits one KindShortcutOverridden audit event per changed entry.
+func (b *Bindings) Settings_SetShortcuts(m map[string]string) error {
+	if b.storeFn == nil {
+		return nil
+	}
+	store := b.storeFn()
+	if ss, ok := store.(interface {
+		SaveShortcuts(map[string]string) error
+	}); ok {
+		return ss.SaveShortcuts(m)
+	}
+	// Fallback: full round-trip.
+	s, err := store.LoadAll()
+	if err != nil {
+		return err
+	}
+	s.KeyboardShortcuts = m
+	return store.SaveAll(s)
+}
+
 // ── memory ─────────────────────────────────────────────────────────────
 
 func (b *Bindings) Memory_ListChunks(filter memoryview.ListFilter) ([]memoryview.Chunk, error) {

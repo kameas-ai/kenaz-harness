@@ -552,6 +552,21 @@ export interface Settings {
    * compactionModel, which itself defaults to the session's active model.
    */
   branchAdvisorDefaultModel?: ProviderProfileRef;
+  /**
+   * User-overridden keyboard shortcut bindings. Map of shortcut id
+   * (e.g. 'chat.send') → canonical binding string (e.g. 'Cmd+Shift+Enter').
+   * Empty or missing map means all shortcuts use their registry defaults.
+   * Backend validates: ≤200 entries, ≤64 chars/value, no control chars.
+   * (keyboard-shortcuts-settings-01KQ8TDR plan §2.7)
+   */
+  keyboardShortcuts?: Record<string, string>;
+
+  /**
+   * Reserved for a future keyboard-shortcut preset gallery (v1 ships
+   * with only the hardcoded defaults). Empty string = bundled defaults.
+   * (keyboard-shortcuts-settings-01KQ8TDR plan Q1=C)
+   */
+  keyboardShortcutsPreset?: string;
 }
 
 /**
