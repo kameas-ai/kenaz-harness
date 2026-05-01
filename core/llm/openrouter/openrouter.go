@@ -532,9 +532,10 @@ type chatStream struct {
 	cancelled bool
 
 	// accumulators populated as the SSE pump runs.
-	textBuf    strings.Builder
-	usage      llm.Usage
-	finishStop string
+	textBuf         strings.Builder
+	usage           llm.Usage
+	providerCostUSD *float64 // non-nil when OpenRouter reports usage.cost
+	finishStop      string
 	// toolCalls is the index-keyed accumulator for streamed tool calls.
 	// OpenAI's wire format sends `id` and `function.name` once on the
 	// opening fragment of a given `index`, then fragments `arguments`
@@ -609,11 +610,20 @@ func (s *chatStream) pump() {
 					})
 				}
 			}
+			var cost llm.Cost
+			if s.providerCostUSD != nil {
+				cost = llm.Cost{
+					Currency: "USD",
+					Total:    *s.providerCostUSD,
+					Source:   "provider",
+				}
+			}
 			s.final = llm.Response{
 				Content:      []llm.ContentBlock{{Type: "text", Text: s.textBuf.String()}},
 				ToolCalls:    calls,
 				FinishReason: s.finishStop,
 				Usage:        s.usage,
+				Cost:         cost,
 			}
 		}
 		s.mu.Unlock()
@@ -733,9 +743,10 @@ func (s *chatStream) handleSSEData(raw []byte) {
 			FinishReason *string `json:"finish_reason"`
 		} `json:"choices"`
 		Usage *struct {
-			PromptTokens     int `json:"prompt_tokens"`
-			CompletionTokens int `json:"completion_tokens"`
-			TotalTokens      int `json:"total_tokens"`
+			PromptTokens     int      `json:"prompt_tokens"`
+			CompletionTokens int      `json:"completion_tokens"`
+			TotalTokens      int      `json:"total_tokens"`
+			Cost             *float64 `json:"cost,omitempty"`
 		} `json:"usage"`
 		Error *struct {
 			Message string `json:"message"`
@@ -825,6 +836,10 @@ func (s *chatStream) handleSSEData(raw []byte) {
 		s.mu.Lock()
 		s.usage.InputTokens = env.Usage.PromptTokens
 		s.usage.OutputTokens = env.Usage.CompletionTokens
+		if env.Usage.Cost != nil && *env.Usage.Cost > 0 {
+			v := *env.Usage.Cost
+			s.providerCostUSD = &v
+		}
 		usage := s.usage
 		s.mu.Unlock()
 		s.events <- llm.StreamEvent{Kind: llm.StreamUsage, Usage: &usage}

@@ -41,6 +41,13 @@ type LLMProviderAdapter struct {
 	// discoverer; the kernel's LLMRequest.Tools slice is just a string
 	// allowlist, but the registry needs the full ToolSpec shape.
 	tools []corellm.ToolSpec
+	// sessionID is threaded through from the chat runner's StartStream
+	// call so the usageHook can identify which session the turn belongs to.
+	sessionID string
+	// usageHook is the optional per-turn callback (token-cost-telemetry
+	// WP02). Fired after stream.Final() returns with the full response.
+	// nil disables usage capture.
+	usageHook UsageHookFunc
 }
 
 // NewLLMProviderAdapter constructs an adapter pinned to a specific
@@ -53,6 +60,15 @@ func NewLLMProviderAdapter(reg corellm.Registry, profileID, modelOverride string
 		modelOverride: modelOverride,
 		tools:         tools,
 	}
+}
+
+// withUsageHook returns a copy of the adapter with the supplied
+// sessionID + usageHook wired in (token-cost-telemetry WP02).
+func (a *LLMProviderAdapter) withUsageHook(sessionID string, hook UsageHookFunc) *LLMProviderAdapter {
+	cp := *a
+	cp.sessionID = sessionID
+	cp.usageHook = hook
+	return &cp
 }
 
 // Generate satisfies agentgraph.LLMProvider. Translates the kernel
@@ -132,6 +148,16 @@ func (a *LLMProviderAdapter) Generate(ctx context.Context, req coreag.LLMRequest
 		// runner's terminal goroutine is responsible for emitting the
 		// stream-closed payload with reason=backend-error.
 		return coreag.LLMResponse{}, fmt.Errorf("chat: stream final: %w", ferr)
+	}
+
+	// Fire the per-turn usage hook (token-cost-telemetry WP02). We fire
+	// with an empty messageID — the session_write node may not have
+	// persisted the assistant message yet. The wired hook in api.go
+	// resolves the most-recent assistant message id for the session at
+	// record time. The hook must not block; we fire it synchronously
+	// here and trust the wiring to be fast (SQL UPDATE on a local file).
+	if a.usageHook != nil {
+		a.usageHook(ctx, a.sessionID, "", resp)
 	}
 
 	out := coreag.LLMResponse{

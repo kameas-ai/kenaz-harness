@@ -350,6 +350,9 @@ func (r *ChatRunner) StartStream(ctx context.Context, profileID, sessionID, mode
 		logging.L().Warn("chat.tool_discovery.no_discoverer", "session_id", sessionID)
 	}
 	llmAdapter := NewLLMProviderAdapter(r.cfg.Registry, profileID, modelOverride, toolCatalog)
+	if r.cfg.UsageHook != nil {
+		llmAdapter = llmAdapter.withUsageHook(sessionID, r.cfg.UsageHook)
+	}
 	toolAdapter := newKernelToolAdapter(r.cfg.Pool, r.cfg.Perms, sessionID)
 
 	r.mu.Lock()
