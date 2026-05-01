@@ -382,6 +382,7 @@ jobs:
         env:
           VERSION: ${{ needs.derive-version.outputs.version }}
           TAG:     ${{ steps.create.outputs.tag }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           # Emit a JSON manifest the docusaurus site consumes.
           # One record per platform with download URL + sha256.
@@ -431,8 +432,6 @@ jobs:
           # Also upload the manifest as a release asset so the docs site
           # can fetch it without needing a token.
           gh release upload "${{ steps.create.outputs.tag }}" manifest.json --clobber
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   notify-docs:
     name: Notify docusaurus site
