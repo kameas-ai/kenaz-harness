@@ -3386,6 +3386,30 @@ export namespace sessions {
 	        this.autoTitled = source["autoTitled"];
 	    }
 	}
+	export class SessionUsage {
+	    promptTokens: number;
+	    completionTokens: number;
+	    totalTokens: number;
+	    costUsd: number;
+	    costSource: string;
+	    messageCount: number;
+	    pricingDataDate: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new SessionUsage(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.promptTokens = source["promptTokens"];
+	        this.completionTokens = source["completionTokens"];
+	        this.totalTokens = source["totalTokens"];
+	        this.costUsd = source["costUsd"];
+	        this.costSource = source["costSource"];
+	        this.messageCount = source["messageCount"];
+	        this.pricingDataDate = source["pricingDataDate"];
+	    }
+	}
 
 }
 

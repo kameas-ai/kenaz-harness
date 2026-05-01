@@ -206,6 +206,13 @@ func (b *Bindings) Sessions_SuggestTitle(id string) (string, error) {
 	return b.api.Sessions().SuggestTitle(b.ctx(), id)
 }
 
+// Sessions_GetUsage returns the cumulative token + cost aggregate for
+// the session (token-cost-telemetry-01KQ8TD7 WP03). Returns a zeroed
+// aggregate with costSource="unknown" for sessions with no usage data.
+func (b *Bindings) Sessions_GetUsage(id string) (sessions.SessionUsage, error) {
+	return b.api.Sessions().GetUsage(b.ctx(), id)
+}
+
 // Sessions_ClearTitle resets the session's name to "" and auto_titled=0,
 // re-enabling future auto-title attempts
 // (session-auto-titling-01KQ8TDS WP04).

@@ -46,7 +46,7 @@ func (s *store) IssueForMCPSpawn(
 	}
 
 	// ── 1. Cedar gate + optional interactive prompt ───────────────────
-	if err := cedar.GateMCPSpawn(ctx, s.cedarGate, s.promptRegistry, recipeID); err != nil {
+	if err := cedar.GateMCPSpawn(ctx, s.cedarGate, s.promptRegistry, recipeID, s.policyDataDir, s.policyEngine); err != nil {
 		return nil, ErrMCPSpawnDenied
 	}
 

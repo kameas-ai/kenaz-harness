@@ -12,8 +12,10 @@ import (
 
 	coreart "github.com/sigil-tech/kaneaz-harness/core/artifacts"
 	"github.com/sigil-tech/kaneaz-harness/core/attachments"
+	"github.com/sigil-tech/kaneaz-harness/core/llm/pricing"
 	"github.com/sigil-tech/kaneaz-harness/core/session"
 	autotitle "github.com/sigil-tech/kaneaz-harness/core/sessions/autotitle"
+	"github.com/sigil-tech/kaneaz-harness/core/usage"
 )
 
 // ErrEmptyContentBlocks is returned by SendMessageWithBlocks when the
@@ -80,6 +82,9 @@ type managerAPI struct {
 	// titleGen is the optional auto-title generator used by SuggestTitle.
 	// nil causes SuggestTitle to return ErrTitleGeneratorNotConfigured.
 	titleGen TitleGenerator
+	// usageMgr is the optional usage manager for GetUsage. nil returns
+	// zeroed aggregate (feature disabled or not yet wired).
+	usageMgr usage.Manager
 }
 
 // TitleGenerator is the surface SuggestTitle needs. Matches
@@ -628,4 +633,38 @@ func (a *managerAPI) SuggestTitle(ctx context.Context, id string) (string, error
 // auto_titled=0, re-enabling future auto-title attempts.
 func (a *managerAPI) ClearTitle(ctx context.Context, id string) error {
 	return a.mgr.ClearTitle(ctx, id)
+}
+
+// WithUsageManager wires a usage.Manager into the sessions view so
+// GetUsage can return real aggregates (token-cost-telemetry WP03).
+// Safe to call at boot before any request arrives.
+func WithUsageManager(api SessionsAPI, mgr usage.Manager) SessionsAPI {
+	if m, ok := api.(*managerAPI); ok {
+		m.usageMgr = mgr
+	}
+	return api
+}
+
+// GetUsage implements SessionsAPI. Returns the per-session cumulative
+// token + cost aggregate from session_messages columns added in
+// migration 0314. Falls back to an zeroed Aggregate when the usage
+// manager is not wired.
+func (a *managerAPI) GetUsage(ctx context.Context, id string) (SessionUsage, error) {
+	pricingDate := pricing.LastUpdatedString()
+	if a.usageMgr == nil {
+		return SessionUsage{CostSource: "unknown", PricingDataDate: pricingDate}, nil
+	}
+	agg, err := a.usageMgr.GetSession(ctx, id)
+	if err != nil {
+		return SessionUsage{}, fmt.Errorf("rpc/sessions: GetUsage: %w", err)
+	}
+	return SessionUsage{
+		PromptTokens:     agg.PromptTokens,
+		CompletionTokens: agg.CompletionTokens,
+		TotalTokens:      agg.TotalTokens,
+		CostUSD:          agg.CostUSD,
+		CostSource:       agg.CostSource,
+		MessageCount:     agg.MessageCount,
+		PricingDataDate:  pricingDate,
+	}, nil
 }

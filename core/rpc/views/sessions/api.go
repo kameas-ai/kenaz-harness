@@ -109,6 +109,26 @@ type DeleteOptions struct {
 // FR-014 default).
 func (o DeleteOptions) DeleteArtifactsCascade() bool { return !o.PreserveArtifacts }
 
+// SessionUsage is the per-session cumulative token + cost aggregate
+// returned by GetUsage (token-cost-telemetry-01KQ8TD7 WP03).
+type SessionUsage struct {
+	// PromptTokens is the sum of all input tokens for the session.
+	PromptTokens int `json:"promptTokens"`
+	// CompletionTokens is the sum of all output tokens.
+	CompletionTokens int `json:"completionTokens"`
+	// TotalTokens is PromptTokens + CompletionTokens.
+	TotalTokens int `json:"totalTokens"`
+	// CostUSD is the summed cost in USD. 0 when unknown.
+	CostUSD float64 `json:"costUsd"`
+	// CostSource is one of "provider", "derived", "mixed", "unknown".
+	CostSource string `json:"costSource"`
+	// MessageCount is the number of assistant turns with usage data.
+	MessageCount int `json:"messageCount"`
+	// PricingDataDate is the last_updated date of the pricing table
+	// ("YYYY-MM-DD") so the UI tooltip can surface data age.
+	PricingDataDate string `json:"pricingDataDate"`
+}
+
 // SessionsAPI is the view-scoped accessor for session CRUD + streams.
 // Implementations MUST be safe for concurrent use.
 type SessionsAPI interface {
@@ -169,4 +189,10 @@ type SessionsAPI interface {
 	// re-enabling future auto-title attempts. Mirrors the session
 	// manager's ClearTitle method (session-auto-titling WP04).
 	ClearTitle(ctx context.Context, id string) error
+
+	// GetUsage returns the cumulative token + cost aggregate for the
+	// session (token-cost-telemetry-01KQ8TD7 WP03). Returns a zeroed
+	// Aggregate with CostSource="unknown" for sessions with no usage
+	// data yet.
+	GetUsage(ctx context.Context, id string) (SessionUsage, error)
 }

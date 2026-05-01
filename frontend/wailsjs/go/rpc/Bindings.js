@@ -578,6 +578,10 @@ export function Sessions_Get(arg1) {
   return window['go']['rpc']['Bindings']['Sessions_Get'](arg1);
 }
 
+export function Sessions_GetUsage(arg1) {
+  return window['go']['rpc']['Bindings']['Sessions_GetUsage'](arg1);
+}
+
 export function Sessions_List() {
   return window['go']['rpc']['Bindings']['Sessions_List']();
 }

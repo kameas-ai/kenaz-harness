@@ -500,7 +500,9 @@ func New(c *core.Core) *API {
 		// Persisted-recipes bootstrap — Core.Start invokes this once
 		// Storage() is up, so the pool is populated before the chat
 		// surface accepts a turn (FR-030).
-		c.SetMCPRecipeBootstrap(makeMCPRecipeBootstrap(c, a.stdioPool, stack.secrets, a.promptRegistry))
+		// Pass the Cedar engine so AllowAlways grants are persisted to
+		// disk (cedar-credential-policy follow-up: AllowAlways mcp_spawn).
+		c.SetMCPRecipeBootstrap(makeMCPRecipeBootstrap(c, a.stdioPool, stack.secrets, a.promptRegistry, buildCedarEngineOrNil(c.DataDir())))
 	}
 	a.toolsAPI = newToolsAPI(c, stack.pool, stack.secrets)
 	a.shellImpl = shell.New(nil)
@@ -961,7 +963,11 @@ func mergedRecipeCatalog() *recipes.Catalog {
 // promptRegistry may be nil (default-allow; pre-boot posture). When
 // wired, a recipe with env keys triggers an interactive credential
 // prompt via the CredentialPermissionModal before resolution proceeds.
-func makeMCPRecipeBootstrap(c *core.Core, pool *stdio.Pool, secretsBackend *secrets.MemoryBackend, promptRegistry *cedar.Registry) func(context.Context) error {
+//
+// cedarEngine may be nil. When non-nil, an AllowAlways decision writes
+// a persistent .cedar snippet so the grant survives restarts
+// (cedar-credential-policy follow-up: AllowAlways mcp_spawn).
+func makeMCPRecipeBootstrap(c *core.Core, pool *stdio.Pool, secretsBackend *secrets.MemoryBackend, promptRegistry *cedar.Registry, cedarEngine *cedar.Engine) func(context.Context) error {
 	if c == nil || pool == nil || secretsBackend == nil {
 		return nil
 	}
@@ -992,8 +998,10 @@ func makeMCPRecipeBootstrap(c *core.Core, pool *stdio.Pool, secretsBackend *secr
 			// the mcp_spawn gate. The gate fires best-effort here —
 			// promptRegistry nil = default-allow (no engine wired at
 			// boot). An explicit deny or user-deny skips the recipe.
+			// cedarEngine + dataDir enable AllowAlways persistent grants
+			// (cedar-credential-policy follow-up).
 			if len(recipe.EnvKeys) > 0 {
-				if gateErr := cedar.GateMCPSpawn(ctx, nil, promptRegistry, recipe.ID); gateErr != nil {
+				if gateErr := cedar.GateMCPSpawn(ctx, nil, promptRegistry, recipe.ID, dataDir, cedarEngine); gateErr != nil {
 					logging.L().Warn("rpc.mcp_bootstrap.credential_gate_denied",
 						"recipe_id", recipe.ID, "err", gateErr.Error())
 					continue

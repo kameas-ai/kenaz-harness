@@ -3,6 +3,9 @@ package cedar
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
+	"strings"
 
 	cedar "github.com/cedar-policy/cedar-go"
 )
@@ -353,9 +356,26 @@ func CheckCredentialAccess(ctx context.Context, g Gate, refID, purpose string, s
 //  5. NotApplicable + registry == nil → nil (default-allow; pre-boot
 //     posture so a nil-registry chassis never blocks).
 //
+// When the interactive prompt resolves to DecisionAllowAlways AND
+// dataDir + engine are both non-nil, a persistent Cedar policy snippet
+// is written to <dataDir>/policy/cred_allow_mcp_<sanitized>.cedar so
+// the grant survives a process restart. The engine is then reloaded so
+// the new permit takes effect immediately without a restart. Both the
+// persistent snippet and the existing in-memory transient grant (seeded
+// by DecisionAllowOnce via Registry.Resolve) cover the current session.
+//
 // g may be nil (no engine wired) → nil (default-allow).
 // registry may be nil → NotApplicable treated as allow (step 5).
-func GateMCPSpawn(ctx context.Context, g Gate, registry *Registry, recipeID string) error {
+// dataDir / engine may be nil → AllowAlways behaves as AllowOnce (no
+// persistent grant written, same behaviour as before this follow-up).
+func GateMCPSpawn(
+	ctx context.Context,
+	g Gate,
+	registry *Registry,
+	recipeID string,
+	dataDir string,
+	engine *Engine,
+) error {
 	ctxAttrs := map[cedar.String]cedar.Value{
 		cedar.String("purpose"): cedar.String("mcp_spawn"),
 		cedar.String("ref_id"):  cedar.String(recipeID),
@@ -401,11 +421,88 @@ func GateMCPSpawn(ctx context.Context, g Gate, registry *Registry, recipeID stri
 		return errMCPSpawnDenied
 	}
 	switch res.Decision {
-	case DecisionAllowOnce, DecisionAllowAlways:
+	case DecisionAllowOnce:
+		return nil
+	case DecisionAllowAlways:
+		// Write a persistent Cedar snippet so the grant survives restarts,
+		// then reload the engine so the permit is active immediately.
+		// Failure is non-fatal: the user approved the spawn this session;
+		// future sessions will re-prompt if the write failed.
+		if dataDir != "" && engine != nil {
+			if writeErr := WriteMCPSpawnSnippet(ctx, dataDir, engine, recipeID); writeErr != nil {
+				// Log-only: do not block the spawn on a write error.
+				_ = writeErr
+			}
+		}
 		return nil
 	default:
 		return errMCPSpawnDenied
 	}
+}
+
+// WriteMCPSpawnSnippet writes a persistent Cedar permit snippet for an
+// mcp_spawn grant to <dataDir>/policy/cred_allow_mcp_<sanitized>.cedar.
+//
+// The snippet body is a single permit that allows
+// Action::"use_credential" on Credential::"<recipeID>::mcp_spawn".
+// After writing, Engine.Reload is called so the new permit takes effect
+// in the current process without a restart.
+//
+// Filename sanitisation: recipeID characters outside [a-zA-Z0-9\-.] are
+// replaced with underscores, then lowercased, giving a filename that:
+//   - matches familyFromFilename's "cred_allow_" prefix check in the
+//     permissions view (ListGrants / RevokeGrant path);
+//   - satisfies isPolicyFilename's path-traversal guard.
+//
+// When dataDir is empty, or the engine is nil, the function is a no-op
+// (callers on the pre-boot / test path pass nil engine). Errors from
+// mkdir or file-write are returned; callers SHOULD treat them as
+// non-fatal (the interactive grant covers the current session).
+func WriteMCPSpawnSnippet(ctx context.Context, dataDir string, engine *Engine, recipeID string) error {
+	if dataDir == "" || engine == nil {
+		return nil
+	}
+	sanitized := sanitizeMCPIDForFilename(recipeID)
+	dir := filepath.Join(dataDir, PolicyDir)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	filename := filepath.Join(dir, "cred_allow_mcp_"+sanitized+".cedar")
+	// Credential resource UID encodes both provider and purpose in the
+	// "<provider>::<purpose>" shape (spec §3). A permit on the exact UID
+	// Credential::"<recipeID>::mcp_spawn" covers only this recipe's spawn.
+	body := "permit(\n" +
+		"  principal,\n" +
+		"  action == Action::\"use_credential\",\n" +
+		"  resource == Credential::\"" + recipeID + "::mcp_spawn\"\n" +
+		");\n"
+	if err := os.WriteFile(filename, []byte(body), 0o644); err != nil {
+		return err
+	}
+	// Best-effort reload: failure is non-fatal; the current session's
+	// transient grant (seeded by DecisionAllowOnce on the Registry.Resolve
+	// path) already permits the spawn.
+	if err := engine.Reload(ctx); err != nil {
+		return err
+	}
+	return nil
+}
+
+// sanitizeMCPIDForFilename replaces characters outside [a-zA-Z0-9\-.]
+// with underscores and lowercases the result. Mirrors the same logic
+// used by core/tools/bash.sanitizePatternForFilename so the filename
+// safety invariant is shared across all snippet writers.
+func sanitizeMCPIDForFilename(id string) string {
+	var sb strings.Builder
+	for _, r := range strings.ToLower(id) {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9', r == '-', r == '.':
+			sb.WriteRune(r)
+		default:
+			sb.WriteRune('_')
+		}
+	}
+	return sb.String()
 }
 
 // errMCPSpawnDenied is the package-local sentinel returned by

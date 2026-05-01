@@ -75,6 +75,15 @@ type store struct {
 	// used by IssueForMCPSpawn when the Cedar gate returns
 	// NotApplicable. nil = skip interactive prompt (default-allow).
 	promptRegistry *cedar.Registry
+
+	// policyDataDir and policyEngine are used by IssueForMCPSpawn to
+	// write a persistent AllowAlways .cedar snippet when the user picks
+	// "Allow always" in the credential modal. Both must be non-nil for
+	// the persistent grant to be written; nil values degrade to
+	// AllowOnce behaviour (in-session only). Injected via
+	// WithMCPSpawnPolicyWriter (cedar-credential-policy follow-up).
+	policyDataDir string
+	policyEngine  *cedar.Engine
 }
 
 // Store is the public interface. Callers obtain a *store via New.
@@ -144,6 +153,21 @@ func WithCedarGate(g cedar.Gate, strictMode func() bool) StoreOption {
 func WithPromptRegistry(r *cedar.Registry) StoreOption {
 	return func(s *store) {
 		s.promptRegistry = r
+	}
+}
+
+// WithMCPSpawnPolicyWriter threads the data directory path and Cedar
+// engine into the store so IssueForMCPSpawn can write a persistent
+// .cedar AllowAlways grant when the user picks "Allow always" in the
+// credential modal (cedar-credential-policy follow-up).
+//
+// When either argument is empty / nil the persistent grant is silently
+// skipped; the interactive (in-session) transient grant still covers
+// the current process lifetime.
+func WithMCPSpawnPolicyWriter(dataDir string, engine *cedar.Engine) StoreOption {
+	return func(s *store) {
+		s.policyDataDir = dataDir
+		s.policyEngine = engine
 	}
 }
 

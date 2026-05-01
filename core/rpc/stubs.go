@@ -92,6 +92,9 @@ func (s *stubSessions) DeleteWithOptions(_ context.Context, _ string, _ sessions
 	return errNotWired
 }
 func (s *stubSessions) Reorder(_ context.Context, _ []string) error { return errNotWired }
+func (s *stubSessions) GetUsage(_ context.Context, _ string) (sessions.SessionUsage, error) {
+	return sessions.SessionUsage{}, nil
+}
 func (s *stubSessions) StartStream(_ context.Context, _ string) (string, error) {
 	return "", errNotWired
 }

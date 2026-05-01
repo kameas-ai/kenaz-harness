@@ -44,7 +44,23 @@ Tracked here so they remain discoverable after the mission is archived.
    The `CredentialPermissionModal` (WP08) surfaces the prompt; `mcp_spawn`
    now enforces strictMode uniformly.
 
-2. **WP12 cross-WP integration tests** (deferred): re-author against
+2. ~~**AllowAlways persistent grant for `mcp_spawn`**~~ — **Shipped**.
+   `GateMCPSpawn` now accepts `dataDir` and `engine` parameters. When the
+   interactive prompt resolves to `DecisionAllowAlways`, `WriteMCPSpawnSnippet`
+   writes `<DataDir>/policy/cred_allow_mcp_<sanitized-recipeID>.cedar` and
+   calls `Engine.Reload()` so the grant takes effect immediately. The file
+   satisfies `familyFromFilename`'s `cred_allow_` prefix check so
+   `ListGrants("cred")` and `RevokeGrant` already work via the existing path.
+   `WithMCPSpawnPolicyWriter(dataDir, engine)` wires both values into the
+   credstore. `makeMCPRecipeBootstrap` in `core/rpc/api.go` passes
+   `buildCedarEngineOrNil(c.DataDir())` to complete the production wiring.
+   Unit tests: 5 in `core/policy/cedar/mcp_spawn_snippet_test.go` (filename
+   canonicalisation, Cedar 4 syntax, nil no-op, engine reload, end-to-end
+   AllowAlways gate). Integration test: 1 in
+   `core/credstore/mcp_spawn_allow_always_test.go` (prompt → AllowAlways →
+   file written → engine reloaded → second call Allow without prompting).
+
+3. **WP12 cross-WP integration tests** (deferred): re-author against
    the actual production APIs and add to the suite:
    - `core/credstore/integration_test.go` — Issue → Cedar deny → Use
      returns ErrCredentialAccessDenied; op never called.
@@ -54,7 +70,7 @@ Tracked here so they remain discoverable after the mission is archived.
      silent; write prompts → user picks "directory and below" → snippet
      body has `like "<dir>/*"`; dangerous-path write blocks.
 
-3. **Settings UI dial for `CedarStrictCredentialMode`** (cosmetic):
+4. **Settings UI dial for `CedarStrictCredentialMode`** (cosmetic):
    the backend dial + RPC binding are wired (WP05 partial commit
    `5d55b8c`); the Settings panel UI is a follow-up.
 

@@ -321,6 +321,8 @@ export function Sessions_DeleteWithOptions(arg1:string,arg2:sessions.DeleteOptio
 
 export function Sessions_Get(arg1:string):Promise<sessions.Session>;
 
+export function Sessions_GetUsage(arg1:string):Promise<sessions.SessionUsage>;
+
 export function Sessions_List():Promise<Array<sessions.Session>>;
 
 export function Sessions_ListMessages(arg1:string):Promise<Array<sessions.Message>>;

@@ -112,7 +112,22 @@ type Config struct {
 	// trigger entirely. Production builds wire this; tests that don't
 	// exercise auto-titling leave it nil.
 	AutoTitle *AutoTitleDeps
+
+	// UsageHook is an optional callback fired by the LLMProviderAdapter
+	// once per LLM turn, after stream.Final() returns
+	// (token-cost-telemetry-01KQ8TD7 WP02). The callback receives the
+	// session id, message id (empty string when the writer hasn't been
+	// called yet), provider kind, model id, and the full llm.Response.
+	// nil disables usage capture entirely.
+	UsageHook UsageHookFunc
 }
+
+// UsageHookFunc is the callback signature for per-turn usage capture.
+// sessionID and messageID identify the turn; messageID may be empty
+// when the session_write node hasn't fired yet (test paths). The hook
+// must not block the chat turn — it should write async or accept the
+// latency.
+type UsageHookFunc func(ctx context.Context, sessionID, messageID string, resp corellm.Response)
 
 // CompactionDeps bundles every collaborator the pre-send compaction
 // hook needs. The runner reads the active aggressiveness tier on every

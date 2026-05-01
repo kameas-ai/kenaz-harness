@@ -84,8 +84,10 @@ const sqlInitSchema = `
 // cross-session-search WP01 lands as 0312 (FTS5 virtual table +
 // triggers — see migrations_search_fts.go).
 // migrations_compaction.go); branch-as-subagent-recommendation WP04
-// lands as 0311 (subagent metadata columns — see
-// migrations_subagent.go).
+// lands as 0313 (subagent metadata columns — see
+// migrations_subagent.go); token-cost-telemetry-01KQ8TD7 WP02 lands
+// as 0314 (session_messages usage columns — see
+// migrations_session_usage.go).
 func Migrations() []migrations.Migration {
 	return []migrations.Migration{
 		{
@@ -131,6 +133,7 @@ func Migrations() []migrations.Migration {
 		migration0311(),
 		migration0312(),
 		migration0313(),
+		migration0314(),
 	}
 }
 
