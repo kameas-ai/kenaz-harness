@@ -350,9 +350,6 @@ func (r *ChatRunner) StartStream(ctx context.Context, profileID, sessionID, mode
 		logging.L().Warn("chat.tool_discovery.no_discoverer", "session_id", sessionID)
 	}
 	llmAdapter := NewLLMProviderAdapter(r.cfg.Registry, profileID, modelOverride, toolCatalog)
-	if r.cfg.UsageHook != nil {
-		llmAdapter = llmAdapter.withUsageHook(sessionID, r.cfg.UsageHook)
-	}
 	toolAdapter := newKernelToolAdapter(r.cfg.Pool, r.cfg.Perms, sessionID)
 
 	r.mu.Lock()
@@ -395,6 +392,24 @@ func (r *ChatRunner) StartStream(ctx context.Context, profileID, sessionID, mode
 	}
 	if r.cfg.EnvDefaults != nil {
 		r.cfg.EnvDefaults(env)
+	}
+
+	// Register the per-turn usage hook via HookPostLLM so it fires
+	// AFTER session_write has persisted the assistant message (and
+	// thus has a valid messageID). The adapter stores the most recent
+	// llm.Response so the hook can record token counts + cost
+	// (token-cost-telemetry-01KQ8TD7 WP02).
+	if r.cfg.UsageHook != nil {
+		if env.Hooks == nil {
+			env.Hooks = coreag.NewHookManager(env.Memory, env.SessionID, env.ProjectID)
+		}
+		usageHook := r.cfg.UsageHook
+		capturedAdapter := llmAdapter
+		capturedSessionID := sessionID
+		env.Hooks.RegisterPostHook(coreag.HookPostLLM, func(ctx context.Context, sID, messageID, _ string) {
+			resp := capturedAdapter.LastResponse()
+			usageHook(ctx, capturedSessionID, messageID, resp)
+		})
 	}
 
 	sub := &chatSub{

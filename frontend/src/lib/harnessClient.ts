@@ -116,6 +116,7 @@ import type {
   MCPImportWrotePath,
   PermissionGrant,
   PermissionMode,
+  SessionUsage,
 } from './types';
 
 /**
@@ -171,6 +172,8 @@ interface WailsBindingsLike {
     kind: 'system' | 'user_seed',
   ): Promise<void>;
   Sessions_MoveToProject(id: string, projectID: string): Promise<void>;
+  /** Returns the cumulative token + cost aggregate (token-cost-telemetry WP03). */
+  Sessions_GetUsage(id: string): Promise<SessionUsage>;
   Sessions_SaveAsArtifact(
     sessionID: string,
     messageID: string,
@@ -787,6 +790,11 @@ export interface SessionsClient {
    * projectId detaches the session and makes it loose.
    */
   moveToProject(id: string, projectId: string): Promise<void>;
+  /**
+   * getUsage returns the cumulative token + cost aggregate for the
+   * session (token-cost-telemetry-01KQ8TD7 WP03).
+   */
+  getUsage(id: string): Promise<SessionUsage>;
   /**
    * saveAsArtifact pins a message (or a sub-range thereof) as a
    * `user_pin` artifact. `rangeStart` / `rangeEnd` are byte offsets
@@ -1654,6 +1662,8 @@ export function createHarnessClient(): HarnessClient {
         b().Sessions_SetSystemPrompt(id, content, kind),
       moveToProject: (id, projectId) =>
         b().Sessions_MoveToProject(id, projectId),
+      getUsage: (id: string): Promise<SessionUsage> =>
+        b().Sessions_GetUsage(id),
       saveAsArtifact: (sessionId, messageId, title, rangeStart, rangeEnd) =>
         b().Sessions_SaveAsArtifact(
           sessionId,
@@ -2026,6 +2036,15 @@ export function createFakeHarnessClient(
       loadDraft: async () => '',
       setSystemPrompt: noop,
       moveToProject: noop,
+      getUsage: async () => ({
+        promptTokens: 0,
+        completionTokens: 0,
+        totalTokens: 0,
+        costUsd: 0,
+        costSource: 'unknown' as const,
+        messageCount: 0,
+        pricingDataDate: '',
+      }),
       saveAsArtifact: async (sessionId, messageId, title) => ({
         id: `fake-art-${Math.random().toString(36).slice(2, 8)}`,
         sessionId,

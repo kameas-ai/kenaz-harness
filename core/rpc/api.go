@@ -76,7 +76,9 @@ import (
 	corebash "github.com/sigil-tech/kaneaz-harness/core/tools/bash"
 	secretsref "github.com/sigil-tech/kaneaz-harness/core/secrets/ref"
 	"github.com/sigil-tech/kaneaz-harness/core/session"
+	"github.com/sigil-tech/kaneaz-harness/core/storage"
 	"github.com/sigil-tech/kaneaz-harness/core/toolloop"
+	"github.com/sigil-tech/kaneaz-harness/core/usage"
 	"github.com/zalando/go-keyring"
 )
 
@@ -254,6 +256,11 @@ type API struct {
 	// same pool the toolloop dispatches against.
 	stdioPool *stdio.Pool
 
+	// usageMgr is the per-session token + cost aggregate store
+	// (token-cost-telemetry-01KQ8TD7). Wired in New when a real
+	// Core is available; noop manager when not.
+	usageMgr usage.Manager
+
 	// broker fans typed source channels to Wails event topics. Held for
 	// the lifetime of the API value; per-view bridges (llm, sessions,
 	// audit, mcp, …) emit through it so the privacy CI invariant —
@@ -330,11 +337,21 @@ func New(c *core.Core) *API {
 	media := newMediaStore(c)
 	attMgr := newAttachmentsManager(c, media)
 	artStore, artMgr := newArtifactsStack(c, media)
+
+	// Token + cost telemetry manager (token-cost-telemetry-01KQ8TD7).
+	// Backed by the same storage.DB as every other session-table writer.
+	// usage.New returns a noop manager when c is nil or HARNESS_COST_TELEMETRY=off.
+	var db storage.DB
+	if c != nil {
+		db = c.Storage()
+	}
+	usageMgr := usage.New(db)
+
 	a := &API{
 		core:           c,
 		a2aAPI:         &stubA2A{},
 		workflowAPI:    &stubWorkflow{},
-		sessionsAPI:    newSessionsAPI(c, attMgr, artStore, media),
+		sessionsAPI:    newSessionsAPI(c, attMgr, artStore, media, usageMgr),
 		trustAPI:       &stubTrust{},
 		contextAPI:     &stubContext{},
 		policyAPI:      &stubPolicy{},
@@ -343,6 +360,7 @@ func New(c *core.Core) *API {
 		artifactsMgr:   artMgr,
 		artifactsStore: artStore,
 		mediaStore:     media,
+		usageMgr:       usageMgr,
 	}
 	a.attachmentsAPI = newAttachmentsAPI(c, attMgr)
 	a.artifactsAPI = newArtifactsAPI(c, artStore, artMgr, media)
@@ -491,7 +509,7 @@ func New(c *core.Core) *API {
 	a.corpusMgr = newCorpusManager(c, embedder)
 	a.graphMgr = newGraphManagerWithDeps(c, a.convMgr, a.corpusMgr, memStore, embedder, a_bashStore)
 
-	stack := newLLMStack(c, a.broker, personalForLLM, hooksRunner, attMgr, confirmEachEnabled, artifactSink, artifactSinkConcrete, settingsImpl, a_bashStore, artMgr, a.graphMgr, a.promptRegistry)
+	stack := newLLMStack(c, a.broker, personalForLLM, hooksRunner, attMgr, confirmEachEnabled, artifactSink, artifactSinkConcrete, settingsImpl, a_bashStore, artMgr, a.graphMgr, a.promptRegistry, usageMgr)
 	a.llmAPI = stack.api
 	a.stdioPool = stack.pool
 	a.builtins = stack.builtins
@@ -715,14 +733,21 @@ func (a *slashProviderLister) ListProviders(ctx context.Context) ([]coreslashcmd
 // session FK CASCADE, then refcount-sweeps any orphaned CAS files.
 // Both nil falls back to the pre-WP02 cascade (attachments + session
 // row, no artifacts cleanup).
-func newSessionsAPI(c *core.Core, attMgr *coreatt.Manager, artStore coreart.Store, media coreatt.MediaStore) sessions.SessionsAPI {
+//
+// mgr is the optional usage manager (token-cost-telemetry-01KQ8TD7).
+// nil disables GetUsage — it returns a zeroed aggregate with
+// CostSource="unknown" (the noopManager contract).
+func newSessionsAPI(c *core.Core, attMgr *coreatt.Manager, artStore coreart.Store, media coreatt.MediaStore, mgr usage.Manager) sessions.SessionsAPI {
 	if c == nil {
 		return &stubSessions{}
 	}
+	var base sessions.SessionsAPI
 	if attMgr == nil {
-		return sessions.NewManagerAPI(c.SessionManager())
+		base = sessions.NewManagerAPI(c.SessionManager())
+	} else {
+		base = sessions.NewManagerAPIWithAttachmentsAndArtifacts(c.SessionManager(), attMgr, artStore, media, c.DataDir())
 	}
-	return sessions.NewManagerAPIWithAttachmentsAndArtifacts(c.SessionManager(), attMgr, artStore, media, c.DataDir())
+	return sessions.WithUsageManager(base, mgr)
 }
 
 // newProjectsAPI returns the real Manager-backed ProjectsAPI when c is
@@ -1153,6 +1178,7 @@ func newLLMStack(
 	artifactsMgr *coreart.Manager,
 	graphMgr *graphview.Manager,
 	promptRegistry *cedar.Registry,
+	usageMgr usage.Manager,
 ) llmStack {
 	// Share ONE secrets backend between the credref resolver (which
 	// reads keys when streaming) and the keychain writer (which stages
@@ -1313,7 +1339,7 @@ func newLLMStack(
 		sweepScheduler.Start(context.Background())
 	}
 
-	chatRunner := buildChatRunner(broker, reg, wrappedPool, perms, historyAdapter, settingsImpl, graphMgr, toolDiscoverer, artifactSinkConcrete, compactionDeps)
+	chatRunner := buildChatRunner(broker, reg, wrappedPool, perms, historyAdapter, settingsImpl, graphMgr, toolDiscoverer, artifactSinkConcrete, compactionDeps, usageMgr)
 	api := llm.New(llm.Config{
 		Registry:      reg,
 		Sink:          &streamSinkAdapter{broker: broker},
@@ -1509,6 +1535,7 @@ func buildChatRunner(
 	tools corellm.ToolDiscoverer,
 	artifactSinkConcrete *artifactsview.Sink,
 	compactionDeps *chat.CompactionDeps,
+	usageMgr usage.Manager,
 ) *chat.ChatRunner {
 	if graphMgr == nil || graphMgr.Kernel() == nil {
 		logging.L().Warn("chat.runner.disabled", "reason", "graph manager unavailable")
@@ -1555,6 +1582,43 @@ func buildChatRunner(
 			env.Hooks.RegisterToolPostHook(artifactSinkConcrete.OnPostToolMessage)
 		}
 	}
+	// Usage hook (token-cost-telemetry-01KQ8TD7 WP02). The closure
+	// fires from HookPostLLM (after session_write persists the assistant
+	// message, so messageID is valid). It reads the provider cost and
+	// source from the llm.Response that the LLMProviderAdapter stored
+	// in LastResponse(), then records via usageMgr.Add.
+	var usageHookFn chat.UsageHookFunc
+	if usageMgr != nil {
+		capturedUsageMgr := usageMgr
+		usageHookFn = func(ctx context.Context, sessionID, messageID string, resp corellm.Response) {
+			var costUSD *float64
+			source := "unknown"
+			switch {
+			case resp.Cost.Source == "provider" && resp.Cost.Total > 0:
+				v := resp.Cost.Total
+				costUSD = &v
+				source = "provider"
+			case !resp.Cost.Indeterminate && resp.Cost.Total > 0:
+				v := resp.Cost.Total
+				costUSD = &v
+				source = "derived"
+			}
+			turn := usage.UsageTurn{
+				SessionID:        sessionID,
+				MessageID:        messageID,
+				PromptTokens:     resp.Usage.InputTokens,
+				CompletionTokens: resp.Usage.OutputTokens,
+				CostUSD:          costUSD,
+				CostSource:       source,
+			}
+			if err := capturedUsageMgr.Add(ctx, turn); err != nil {
+				logging.L().Warn("usage.add.failed",
+					"session_id", sessionID,
+					"message_id", messageID,
+					"err", err.Error())
+			}
+		}
+	}
 	runner, err := chat.New(chat.Config{
 		Kernel:         graphMgr.Kernel(),
 		Registry:       reg,
@@ -1568,6 +1632,7 @@ func buildChatRunner(
 		EnvDefaults:    envDefaults,
 		ToolDiscoverer: chatToolDiscovererAdapter{inner: tools},
 		Compaction:     compactionDeps,
+		UsageHook:      usageHookFn,
 	})
 	if err != nil {
 		logging.L().Error("chat.runner.construct_failed", "err", err.Error())

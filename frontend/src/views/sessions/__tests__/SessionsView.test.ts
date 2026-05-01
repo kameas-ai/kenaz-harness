@@ -137,10 +137,17 @@ describe('SessionsView (chat-ui)', () => {
         startStream: async () => 'sub',
         stopStream: async () => undefined,
         listMessages: async () => messages,
+        listMessagesActive: async () => ({ messages, sweptCount: 0 }),
+        listMessagesAll: async () => ({ messages, sweptCount: 0 }),
         appendMessage: async (id, role, content) =>
           makeMessage({ id: 'new', sessionId: id, role, content }),
+        sendMessageWithBlocks: async () => makeMessage({ id: 'b' }),
         saveDraft: async () => undefined,
         loadDraft: async () => '',
+        setSystemPrompt: async () => undefined,
+        moveToProject: async () => undefined,
+        getUsage: async () => ({ promptTokens: 0, completionTokens: 0, totalTokens: 0, costUsd: 0, costSource: 'unknown' as const, messageCount: 0, pricingDataDate: '' }),
+        saveAsArtifact: async () => ({ id: '', sessionId: '', title: '', mimeType: 'text/plain', contentHash: '', byteSize: 0, source: 'user_pin' as const, sourceRef: { messageId: '', offset: 0, length: 0 }, scopeKind: 'session' as const, createdAt: '' }),
       },
       llm: {
         listProviders: async () => providers,
@@ -196,6 +203,8 @@ describe('SessionsView (chat-ui)', () => {
         startStream: async () => 'sub',
         stopStream: async () => undefined,
         listMessages: async () => messages,
+        listMessagesActive: async () => ({ messages, sweptCount: 0 }),
+        listMessagesAll: async () => ({ messages, sweptCount: 0 }),
         appendMessage: async (id, role, content) =>
           makeMessage({ id: 'new', sessionId: id, role, content }),
         sendMessageWithBlocks: async () => makeMessage({ id: 'b' }),
@@ -203,6 +212,7 @@ describe('SessionsView (chat-ui)', () => {
         loadDraft: async () => '',
         setSystemPrompt: async () => undefined,
         moveToProject: async () => undefined,
+        getUsage: async () => ({ promptTokens: 0, completionTokens: 0, totalTokens: 0, costUsd: 0, costSource: 'unknown' as const, messageCount: 0, pricingDataDate: '' }),
         saveAsArtifact: async () => sessionArtifact,
       },
       llm: {

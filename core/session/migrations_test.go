@@ -406,14 +406,14 @@ func TestMigrations_RegisterAndApply(t *testing.T) {
 		}
 	}
 
-	// Ledger rows: 2 storage bootstrap + 12 sessions migrations
+	// Ledger rows: 2 storage bootstrap + 15 sessions migrations
 	// (0300 init + 0301 context_attachments + 0302 content_json +
 	// 0303 artifacts + 0304 artifacts-promote + 0305 telemetry +
 	// 0306 branches + 0307 corpora + 0308 memory_hook_journal +
 	// 0309 agent_graph_events + 0310 compaction + 0311 auto_titled +
-	// 0312 search_fts5) = 15 applied entries.
-	// 0312 search_fts5 + 0313 subagent-metadata + 0314 session_usage =
-	// 17 applied entries (2 chassis bootstrap + 15 sessions migrations).
+	// 0312 search_fts5 + 0313 subagent-metadata +
+	// 0314 session_usage_columns) = 17 applied entries
+	// (2 chassis bootstrap + 15 sessions migrations).
 	if got := len(db.ledger); got != 17 {
 		t.Fatalf("ledger size = %d, want 17", got)
 	}

@@ -36,6 +36,33 @@ export interface Session {
 }
 
 /**
+ * SessionUsage — per-session cumulative token + cost aggregate.
+ * Mirrors core/rpc/views/sessions.SessionUsage (token-cost-telemetry WP03).
+ */
+export interface SessionUsage {
+  /** Sum of all input tokens for the session. */
+  promptTokens: number;
+  /** Sum of all output tokens. */
+  completionTokens: number;
+  /** promptTokens + completionTokens. */
+  totalTokens: number;
+  /** Summed cost in USD. 0 when no cost data. */
+  costUsd: number;
+  /**
+   * How the cost was determined:
+   *   'provider'  — directly reported by the upstream provider (exact).
+   *   'derived'   — estimated from the curated pricing table (~).
+   *   'mixed'     — some turns provider, some derived.
+   *   'unknown'   — no cost data at all; render tokens only.
+   */
+  costSource: 'provider' | 'derived' | 'mixed' | 'unknown';
+  /** Number of assistant turns that contributed usage data. */
+  messageCount: number;
+  /** Last-updated date of the pricing table used ("YYYY-MM-DD"). */
+  pricingDataDate: string;
+}
+
+/**
  * Project — a top-level grouping of sessions. Mirrors core/projects.Project.
  */
 export interface Project {

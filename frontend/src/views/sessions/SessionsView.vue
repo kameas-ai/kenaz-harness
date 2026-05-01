@@ -31,6 +31,7 @@ import CredentialPermissionModal from '@/components/permissions/CredentialPermis
 import ToolPermissionModal from '@/components/permissions/ToolPermissionModal.vue';
 import MigrationToast from '@/components/permissions/MigrationToast.vue';
 import ArtifactPreview from '@/views/artifacts/ArtifactPreview.vue';
+import CostCell from '@/components/chat/CostCell.vue';
 import { useArtifacts, useHarnessClient, useSessions } from '@/lib/useHarnessAPI';
 import { useSession } from '@/lib/useSession';
 import { useEventStream } from '@/lib/useEventStream';
@@ -41,6 +42,7 @@ import type {
   MemoryScopeKind,
   Message,
   Provider,
+  SessionUsage,
   SlashExecuteResult,
 } from '@/lib/types';
 import { flattenChoices, inferFamily } from '@/lib/modelFamily';
@@ -697,7 +699,30 @@ watch(sessionId, () => {
 useEventStream<{ session_id?: string }>('llm:stream-closed', (payload) => {
   if (payload?.session_id && payload.session_id !== sessionId.value) return;
   refreshSessionArtifacts();
+  // Refresh cost pill on every stream close (token-cost-telemetry WP04).
+  void refreshSessionUsage();
 });
+
+// ── Cost telemetry (token-cost-telemetry-01KQ8TD7 WP04) ──────────────
+const sessionUsage = ref<SessionUsage | null>(null);
+const sessionUsageLoading = ref(false);
+
+async function refreshSessionUsage() {
+  if (!sessionId.value) return;
+  sessionUsageLoading.value = true;
+  try {
+    sessionUsage.value = await client.sessions.getUsage(sessionId.value);
+  } catch {
+    // Non-fatal: leave existing value, don't surface error to user.
+  } finally {
+    sessionUsageLoading.value = false;
+  }
+}
+
+watch(sessionId, () => {
+  sessionUsage.value = null;
+  void refreshSessionUsage();
+}, { immediate: true });
 
 const artifactsByMessage = computed<ReadonlyMap<string, readonly Artifact[]>>(() => {
   const map = new Map<string, Artifact[]>();
@@ -1233,6 +1258,11 @@ function formatSize(bytes: number): string {
               </div>
             </div>
           </div>
+          <!-- Cost pill (token-cost-telemetry-01KQ8TD7 WP04) -->
+          <CostCell
+            :usage="sessionUsage"
+            :loading="sessionUsageLoading"
+          />
           <div
             class="flex items-center gap-2"
             data-testid="session-context-meter"

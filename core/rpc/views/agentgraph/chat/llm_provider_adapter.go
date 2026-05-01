@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 
 	coreag "github.com/sigil-tech/kaneaz-harness/core/agentgraph"
 	corellm "github.com/sigil-tech/kaneaz-harness/core/llm"
@@ -41,13 +42,14 @@ type LLMProviderAdapter struct {
 	// discoverer; the kernel's LLMRequest.Tools slice is just a string
 	// allowlist, but the registry needs the full ToolSpec shape.
 	tools []corellm.ToolSpec
-	// sessionID is threaded through from the chat runner's StartStream
-	// call so the usageHook can identify which session the turn belongs to.
-	sessionID string
-	// usageHook is the optional per-turn callback (token-cost-telemetry
-	// WP02). Fired after stream.Final() returns with the full response.
-	// nil disables usage capture.
-	usageHook UsageHookFunc
+	// lastRespMu protects lastResp.
+	lastRespMu sync.Mutex
+	// lastResp stores the most recent llm.Response produced by Generate.
+	// The session_write HookPostLLM callback reads this to record usage.
+	// Overwritten on every Generate call; safe because each kernel run is
+	// sequential (one Generate completes before session_write fires, and
+	// session_write fires before the next Generate could start).
+	lastResp corellm.Response
 }
 
 // NewLLMProviderAdapter constructs an adapter pinned to a specific
@@ -62,13 +64,14 @@ func NewLLMProviderAdapter(reg corellm.Registry, profileID, modelOverride string
 	}
 }
 
-// withUsageHook returns a copy of the adapter with the supplied
-// sessionID + usageHook wired in (token-cost-telemetry WP02).
-func (a *LLMProviderAdapter) withUsageHook(sessionID string, hook UsageHookFunc) *LLMProviderAdapter {
-	cp := *a
-	cp.sessionID = sessionID
-	cp.usageHook = hook
-	return &cp
+// LastResponse returns the most recently produced llm.Response. Called
+// by the HookPostLLM callback registered in buildChatRunner to record
+// per-turn usage data once the session_write node has persisted the
+// assistant message (token-cost-telemetry WP02).
+func (a *LLMProviderAdapter) LastResponse() corellm.Response {
+	a.lastRespMu.Lock()
+	defer a.lastRespMu.Unlock()
+	return a.lastResp
 }
 
 // Generate satisfies agentgraph.LLMProvider. Translates the kernel
@@ -150,15 +153,13 @@ func (a *LLMProviderAdapter) Generate(ctx context.Context, req coreag.LLMRequest
 		return coreag.LLMResponse{}, fmt.Errorf("chat: stream final: %w", ferr)
 	}
 
-	// Fire the per-turn usage hook (token-cost-telemetry WP02). We fire
-	// with an empty messageID — the session_write node may not have
-	// persisted the assistant message yet. The wired hook in api.go
-	// resolves the most-recent assistant message id for the session at
-	// record time. The hook must not block; we fire it synchronously
-	// here and trust the wiring to be fast (SQL UPDATE on a local file).
-	if a.usageHook != nil {
-		a.usageHook(ctx, a.sessionID, "", resp)
-	}
+	// Store the response for the HookPostLLM callback (token-cost-
+	// telemetry WP02). The session_write node fires after Generate
+	// returns and reads LastResponse() inside its PostHook to record
+	// usage against the freshly-persisted messageID.
+	a.lastRespMu.Lock()
+	a.lastResp = resp
+	a.lastRespMu.Unlock()
 
 	out := coreag.LLMResponse{
 		Content:      flattenContent(resp.Content),
