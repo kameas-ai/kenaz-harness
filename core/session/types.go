@@ -3,6 +3,7 @@ package session
 import (
 	"time"
 
+	"github.com/sigil-tech/kaneaz-harness/core/autonomy"
 	"github.com/sigil-tech/kaneaz-harness/core/llm"
 )
 
@@ -49,6 +50,19 @@ type Record struct {
 	// the project-level setting (resolution order step 4). Persisted
 	// in the sessions table via migration 0311.
 	BranchAdvisorDismissed bool
+
+	// AutonomyLevel is this session's tier override (autonomy-dial-01KR3M2A
+	// WP02). nil means "inherit from the upstream layer" (project →
+	// global → tier-default). Persisted in sessions.autonomy_level via
+	// migration 0316. The autonomy.Layer for the session is reconstructed
+	// from (AutonomyLevel, AutonomyOverrides) by the autonomy resolver.
+	AutonomyLevel *autonomy.Tier `json:"autonomyLevel,omitempty"`
+	// AutonomyOverrides are the per-knob overrides this session pinned.
+	// Empty / nil means "no overrides at this layer." Persisted as a
+	// JSON blob in sessions.autonomy_overrides via migration 0316. The
+	// map key is the canonical autonomy.Knob name (matches the wire
+	// shape produced by autonomy.Layer.MarshalJSON).
+	AutonomyOverrides map[autonomy.Knob]any `json:"autonomyOverrides,omitempty"`
 }
 
 // ContextKind values for Record.ContextKind. Validated at the manager

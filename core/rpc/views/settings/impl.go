@@ -21,6 +21,7 @@ import (
 	"sync"
 	"unicode"
 
+	"github.com/sigil-tech/kaneaz-harness/core/autonomy"
 	"github.com/sigil-tech/kaneaz-harness/core/compaction"
 )
 
@@ -596,6 +597,73 @@ func (s *FileStore) SaveFSRequestAccessEnabled(enabled bool) error {
 	return s.saveLocked(got)
 }
 
+// LoadAutonomyProfile returns the persisted global autonomy.Layer
+// (autonomy-dial-01KR3M2A WP02). Empty / missing field returns the
+// zero Layer, which the resolver treats as "fall through to the next
+// layer / tier-default." Errors return the safe default (empty Layer)
+// alongside the error so the resolver can keep working even if the
+// settings file is unreadable.
+func (s *FileStore) LoadAutonomyProfile() (autonomy.Layer, error) {
+	got, err := s.LoadAll()
+	if err != nil {
+		return autonomy.Layer{}, err
+	}
+	return decodeAutonomyField(got.Autonomy)
+}
+
+// SaveAutonomyProfile persists the global autonomy.Layer. An empty
+// Layer (Level=nil + no overrides) clears the field so a fresh load
+// returns the empty Layer again.
+func (s *FileStore) SaveAutonomyProfile(layer autonomy.Layer) error {
+	encoded, err := encodeAutonomyField(layer)
+	if err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	got, err := s.loadLocked()
+	if err != nil {
+		return err
+	}
+	got.Autonomy = encoded
+	return s.saveLocked(got)
+}
+
+// encodeAutonomyField marshals a Layer to the json.RawMessage stored
+// on Settings.Autonomy. The empty Layer encodes as nil so it omits via
+// `omitempty` on disk.
+func encodeAutonomyField(layer autonomy.Layer) (json.RawMessage, error) {
+	if layer.IsZero() {
+		return nil, nil
+	}
+	blob, err := layer.MarshalJSON()
+	if err != nil {
+		return nil, fmt.Errorf("settings: marshal autonomy layer: %w", err)
+	}
+	return json.RawMessage(blob), nil
+}
+
+// decodeAutonomyField parses the Settings.Autonomy raw field. Missing
+// or empty input yields the zero Layer (no error).
+func decodeAutonomyField(raw json.RawMessage) (autonomy.Layer, error) {
+	if len(raw) == 0 {
+		return autonomy.Layer{}, nil
+	}
+	// A literal JSON null is also treated as "no value."
+	trimmed := raw
+	for len(trimmed) > 0 && (trimmed[0] == ' ' || trimmed[0] == '\t' || trimmed[0] == '\n' || trimmed[0] == '\r') {
+		trimmed = trimmed[1:]
+	}
+	if len(trimmed) >= 4 && string(trimmed[:4]) == "null" {
+		return autonomy.Layer{}, nil
+	}
+	var l autonomy.Layer
+	if err := l.UnmarshalJSON(raw); err != nil {
+		return autonomy.Layer{}, fmt.Errorf("settings: parse autonomy layer: %w", err)
+	}
+	return l, nil
+}
+
 // defaultSettings is the safe-baseline a fresh install starts with.
 func defaultSettings() Settings {
 	return Settings{
@@ -854,5 +922,22 @@ func (m *memoryStore) SaveFSRequestAccessEnabled(enabled bool) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.data.FSRequestAccessDisabled = !enabled
+	return nil
+}
+
+func (m *memoryStore) LoadAutonomyProfile() (autonomy.Layer, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return decodeAutonomyField(m.data.Autonomy)
+}
+
+func (m *memoryStore) SaveAutonomyProfile(layer autonomy.Layer) error {
+	encoded, err := encodeAutonomyField(layer)
+	if err != nil {
+		return err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.data.Autonomy = encoded
 	return nil
 }
