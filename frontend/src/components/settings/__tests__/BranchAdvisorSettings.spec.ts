@@ -63,6 +63,8 @@ function mountPanel(overrides: Partial<Settings> = {}) {
       setPermissionsMigrationToastShown: async () => undefined,
       getCedarStrictCredentialMode: async () => false,
       setCedarStrictCredentialMode: async () => undefined,
+      getFSRequestAccessEnabled: async () => true,
+      setFSRequestAccessEnabled: async () => undefined,
     },
   });
   const w = mount(BranchAdvisorSettings, {

@@ -45,6 +45,10 @@ function mountToast(toastShown: boolean) {
       setPermissionCacheDangerousOps: async () => undefined,
       getBashAllowlistMigrated: async () => false,
       setBashAllowlistMigrated: async () => undefined,
+      getCedarStrictCredentialMode: async () => false,
+      setCedarStrictCredentialMode: async () => undefined,
+      getFSRequestAccessEnabled: async () => true,
+      setFSRequestAccessEnabled: async () => undefined,
     },
   });
 

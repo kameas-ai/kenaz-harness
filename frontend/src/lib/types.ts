@@ -2045,7 +2045,7 @@ export interface PermissionRequest {
   /** Dangerous-tier one-line explanation copy (e.g. "Deletes files irreversibly"). */
   danger_copy?: string;
   // Filesystem-specific
-  op?: 'read' | 'write' | 'delete' | 'move';
+  op?: 'read' | 'write' | 'delete' | 'move' | 'recipe_dir_add';
 }
 
 /**

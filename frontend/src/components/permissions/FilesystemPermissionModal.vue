@@ -69,6 +69,15 @@ defineExpose({ queue });
     data-testid="filesystem-permission-modal"
     @resolved="onResolved"
   >
+    <!-- Model-initiated expanded-access notice (recipe_dir_add) -->
+    <p
+      v-if="head?.op === 'recipe_dir_add'"
+      class="mt-2 font-ui text-[12px] text-ink-muted"
+      data-testid="fs-recipe-dir-add-notice"
+    >
+      The model is requesting expanded filesystem access to this directory.
+    </p>
+
     <!-- Two-tier scope radio (spec FR-018) -->
     <div
       v-if="head"

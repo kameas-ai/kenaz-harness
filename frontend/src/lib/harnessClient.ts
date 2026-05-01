@@ -304,6 +304,9 @@ interface WailsBindingsLike {
   // WP05 credential-gate strictness dial
   Settings_GetCedarStrictCredentialMode(): Promise<boolean>;
   Settings_SetCedarStrictCredentialMode(enabled: boolean): Promise<void>;
+  // runtime filesystem-access request built-in toggle
+  Settings_GetFSRequestAccessEnabled(): Promise<boolean>;
+  Settings_SetFSRequestAccessEnabled(enabled: boolean): Promise<void>;
   /** Returns the full keyboard shortcut overrides map. */
   Settings_GetShortcuts(): Promise<Record<string, string>>;
   /** Persist a single shortcut override. Empty binding clears the override. */
@@ -362,6 +365,11 @@ interface WailsBindingsLike {
   Tools_RecipeStatus(id: string): Promise<WireRecipeStatus>;
   Tools_RecipeConfig(id: string): Promise<Record<string, unknown>>;
   Tools_PickDirectory(title: string, defaultDir: string): Promise<string>;
+  Tools_RequestAdditionalAllowedDir(
+    recipeID: string,
+    path: string,
+    reason: string,
+  ): Promise<{ granted: boolean; expanded: string; message: string }>;
 
   Bash_Exec(sessionID: string, command: string): Promise<BashExecResult>;
 
@@ -1181,6 +1189,16 @@ export interface SettingsClient {
    * harness.
    */
   setCedarStrictCredentialMode(enabled: boolean): Promise<void>;
+  /**
+   * Return whether the runtime filesystem-access-request built-in
+   * (`kaneaz__request_filesystem_access`) is enabled. Default: true.
+   */
+  getFSRequestAccessEnabled(): Promise<boolean>;
+  /**
+   * Persist the runtime filesystem-access-request built-in toggle.
+   * Changes take effect on the next model turn without restarting.
+   */
+  setFSRequestAccessEnabled(enabled: boolean): Promise<void>;
 }
 
 /**
@@ -1350,6 +1368,15 @@ export interface ToolsRecipesClient {
   config(id: string): Promise<Record<string, unknown>>;
 }
 
+/** Result returned by requestAdditionalAllowedDir. */
+export interface FSAccessResult {
+  granted: boolean;
+  /** The expanded (resolved) absolute path, populated when granted. */
+  expanded: string;
+  /** Human-readable message for granted=false cases. */
+  message: string;
+}
+
 export interface ToolsClient {
   recipes: ToolsRecipesClient;
   /**
@@ -1358,6 +1385,17 @@ export interface ToolsClient {
    * user cancels.
    */
   pickDirectory(title?: string, defaultDir?: string): Promise<string>;
+  /**
+   * Request that the harness add path to the filesystem recipe's
+   * allowed_directories at runtime. Fires the Cedar interactive
+   * prompt; blocks until the user resolves or the context cancels.
+   * Returns { granted: true, expanded: canonicalPath } on approval.
+   */
+  requestAdditionalAllowedDir(
+    path: string,
+    reason: string,
+    recipeID?: string,
+  ): Promise<FSAccessResult>;
 }
 
 /**
@@ -1848,6 +1886,10 @@ export function createHarnessClient(): HarnessClient {
         b().Settings_GetCedarStrictCredentialMode(),
       setCedarStrictCredentialMode: (enabled) =>
         b().Settings_SetCedarStrictCredentialMode(enabled),
+      getFSRequestAccessEnabled: () =>
+        b().Settings_GetFSRequestAccessEnabled(),
+      setFSRequestAccessEnabled: (enabled) =>
+        b().Settings_SetFSRequestAccessEnabled(enabled),
     },
     permissions: {
       listGrants: (family) =>
@@ -1906,6 +1948,8 @@ export function createHarnessClient(): HarnessClient {
       },
       pickDirectory: (title?: string, defaultDir?: string) =>
         b().Tools_PickDirectory(title ?? '', defaultDir ?? ''),
+      requestAdditionalAllowedDir: (path, reason, recipeID = 'filesystem') =>
+        b().Tools_RequestAdditionalAllowedDir(recipeID, path, reason),
     },
     shell: {
       openInOSBrowser: (path) => b().Shell_OpenInOSBrowser(path),
@@ -2280,6 +2324,8 @@ export function createFakeHarnessClient(
       setPermissionsMigrationToastShown: noop,
       getCedarStrictCredentialMode: async () => false,
       setCedarStrictCredentialMode: noop,
+      getFSRequestAccessEnabled: async () => true,
+      setFSRequestAccessEnabled: noop,
     },
     permissions: {
       listGrants: async () => [],
@@ -2382,6 +2428,11 @@ export function createFakeHarnessClient(
         config: async () => ({}),
       },
       pickDirectory: async () => '',
+      requestAdditionalAllowedDir: async () => ({
+        granted: false,
+        expanded: '',
+        message: 'stub',
+      }),
     },
     shell: {
       openInOSBrowser: noop,

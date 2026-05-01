@@ -339,3 +339,149 @@ func names(gs []Grant) []string {
 	sort.Strings(out)
 	return out
 }
+
+// ---- configTrimmer tests -------------------------------------------------
+
+// spyTrimmer records TrimAllowedDir calls so tests can assert the trimmer
+// was (or was not) invoked with the expected arguments.
+type spyTrimmer struct {
+	calls []trimCall
+}
+
+type trimCall struct {
+	recipeID string
+	path     string
+}
+
+func (s *spyTrimmer) TrimAllowedDir(_ context.Context, recipeID, path string) {
+	s.calls = append(s.calls, trimCall{recipeID: recipeID, path: path})
+}
+
+// fsRecipeDirSnippetBody returns a Cedar snippet body in the same format
+// that tools.writeAllowAlwaysSnippet produces, so tests can write it to
+// the policy dir without importing the tools package.
+func fsRecipeDirSnippetBody(canonical string) []byte {
+	return []byte("permit(\n  principal,\n  action == Action::\"recipe_dir_add\",\n  resource == FilesystemOp::\"" + canonical + "\"\n);\n")
+}
+
+// writeFSRecipeDirPolicy writes a snippet file and returns its filename.
+func writeFSRecipeDirPolicy(t *testing.T, dir, stem, canonical string) string {
+	t.Helper()
+	name := "fs_allow_recipe_dir_" + stem + ".cedar"
+	body := fsRecipeDirSnippetBody(canonical)
+	if err := os.WriteFile(filepath.Join(dir, cedar.PolicyDir, name), body, 0o644); err != nil {
+		t.Fatalf("writeFSRecipeDirPolicy: %v", err)
+	}
+	return name
+}
+
+// TestRevokeGrant_TrimsRecipeConfig_RecipeDirAddSnippet verifies that
+// revoking a "fs_allow_recipe_dir_" grant calls TrimAllowedDir with the
+// canonical path embedded in the snippet body and the hardcoded recipe id.
+func TestRevokeGrant_TrimsRecipeConfig_RecipeDirAddSnippet(t *testing.T) {
+	t.Parallel()
+	api, _, dir, _ := newAPIForTest(t)
+
+	const canonical = "/Users/alice/projects"
+	grantID := writeFSRecipeDirPolicy(t, dir, "usersaliceprojects", canonical)
+
+	spy := &spyTrimmer{}
+	api.SetConfigTrimmer(spy)
+
+	if err := api.RevokeGrant(context.Background(), grantID); err != nil {
+		t.Fatalf("RevokeGrant: %v", err)
+	}
+
+	if len(spy.calls) != 1 {
+		t.Fatalf("TrimAllowedDir call count = %d, want 1", len(spy.calls))
+	}
+	if spy.calls[0].path != canonical {
+		t.Errorf("TrimAllowedDir path = %q, want %q", spy.calls[0].path, canonical)
+	}
+	if spy.calls[0].recipeID != "filesystem" {
+		t.Errorf("TrimAllowedDir recipeID = %q, want \"filesystem\"", spy.calls[0].recipeID)
+	}
+}
+
+// TestRevokeGrant_NoTrim_NonRecipeDirSnippet verifies that revoking a
+// "fs_allow_" grant whose name does NOT start with "fs_allow_recipe_dir_"
+// does not invoke TrimAllowedDir (it's a plain read/write/etc. grant, not
+// a recipe-dir-add).
+func TestRevokeGrant_NoTrim_NonRecipeDirSnippet(t *testing.T) {
+	t.Parallel()
+	api, _, dir, _ := newAPIForTest(t)
+
+	// fs_allow_read_* is a standard fs family grant, not recipe_dir_add.
+	writePolicy(t, dir, "fs_allow_read_tmp.cedar")
+
+	spy := &spyTrimmer{}
+	api.SetConfigTrimmer(spy)
+
+	if err := api.RevokeGrant(context.Background(), "fs_allow_read_tmp.cedar"); err != nil {
+		t.Fatalf("RevokeGrant: %v", err)
+	}
+
+	if len(spy.calls) != 0 {
+		t.Errorf("TrimAllowedDir called %d times for non-recipe-dir grant; want 0", len(spy.calls))
+	}
+}
+
+// TestRevokeGrant_NilTrimmer_StillSucceeds verifies that a nil configTrimmer
+// does not cause RevokeGrant to fail. The Cedar-level revocation must
+// complete successfully regardless.
+func TestRevokeGrant_NilTrimmer_StillSucceeds(t *testing.T) {
+	t.Parallel()
+	api, _, dir, _ := newAPIForTest(t)
+
+	const canonical = "/tmp/safe"
+	grantID := writeFSRecipeDirPolicy(t, dir, "tmpsafe", canonical)
+	// configTrimmer is nil (default from newAPIForTest).
+
+	if err := api.RevokeGrant(context.Background(), grantID); err != nil {
+		t.Fatalf("RevokeGrant with nil trimmer: %v", err)
+	}
+	// File must be gone.
+	if _, err := os.Stat(filepath.Join(dir, cedar.PolicyDir, grantID)); !os.IsNotExist(err) {
+		t.Fatalf("grant file still present after revoke: %v", err)
+	}
+}
+
+// TestExtractFilesystemOpPath verifies the Cedar body parser extracts the
+// path correctly from well-formed and malformed bodies.
+func TestExtractFilesystemOpPath(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		body string
+		want string
+	}{
+		{
+			name: "well_formed",
+			body: "permit(\n  principal,\n  action == Action::\"recipe_dir_add\",\n  resource == FilesystemOp::\"/Users/alice/docs\"\n);\n",
+			want: "/Users/alice/docs",
+		},
+		{
+			name: "no_marker",
+			body: `permit(principal, action, resource);`,
+			want: "",
+		},
+		{
+			name: "unterminated_quote",
+			body: `resource == FilesystemOp::"no closing quote`,
+			want: "",
+		},
+		{
+			name: "empty",
+			body: "",
+			want: "",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := extractFilesystemOpPath(tc.body)
+			if got != tc.want {
+				t.Errorf("extractFilesystemOpPath = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
