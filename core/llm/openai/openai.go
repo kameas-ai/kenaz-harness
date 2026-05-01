@@ -29,6 +29,7 @@ import (
 
 	llm "github.com/sigil-tech/kaneaz-harness/core/llm"
 	"github.com/sigil-tech/kaneaz-harness/core/llm/capabilities"
+	"github.com/sigil-tech/kaneaz-harness/core/llm/httpx"
 	"github.com/sigil-tech/kaneaz-harness/core/logging"
 )
 
@@ -94,7 +95,7 @@ type Adapter struct {
 // catalog and Capabilities() returns an inline conservative descriptor.
 func New(opts ...Option) *Adapter {
 	a := &Adapter{
-		httpc:    &http.Client{}, // no Timeout — context drives lifetime
+		httpc:    &http.Client{Transport: httpx.DefaultTransport()}, // no Timeout — context drives lifetime
 		endpoint: defaultChatEndpoint,
 	}
 	if cat, err := capabilities.LoadDefault(); err == nil {

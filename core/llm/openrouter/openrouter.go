@@ -32,6 +32,7 @@ import (
 	"sync"
 
 	llm "github.com/sigil-tech/kaneaz-harness/core/llm"
+	"github.com/sigil-tech/kaneaz-harness/core/llm/httpx"
 	"github.com/sigil-tech/kaneaz-harness/core/logging"
 )
 
@@ -103,7 +104,7 @@ type Adapter struct {
 // New constructs an Adapter with the OpenRouter defaults.
 func New(opts ...Option) *Adapter {
 	a := &Adapter{
-		httpc:    &http.Client{}, // no Timeout — context drives lifetime
+		httpc:    &http.Client{Transport: httpx.DefaultTransport()}, // no Timeout — context drives lifetime
 		endpoint: defaultEndpoint,
 		referer:  defaultReferer,
 		appTitle: defaultAppTitle,
