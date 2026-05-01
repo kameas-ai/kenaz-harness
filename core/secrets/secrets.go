@@ -141,6 +141,13 @@ type ResolverConfig struct {
 type ResolverAPI interface {
 	// Resolve fetches a credential. See *Resolver.Resolve.
 	Resolve(ctx context.Context, cred CredentialReference, consumerID string) (Secret, error)
+	// ResolveFresh fetches a credential bypassing the cache but still
+	// routing through the resolver for ResolutionEvent emission. Used
+	// by spawn paths (MCP child processes) where stale cached values
+	// would let a child outlive a credential rotation. Caches MUST NOT
+	// be populated by ResolveFresh — the freshness contract is "every
+	// call hits the backend." See *Resolver.ResolveFresh.
+	ResolveFresh(ctx context.Context, cred CredentialReference, consumerID string) (Secret, error)
 }
 
 // NoopResolver is a ResolverAPI implementation that always reports a
@@ -151,6 +158,11 @@ type NoopResolver struct{}
 
 // Resolve always returns an error reporting that no resolver is wired.
 func (NoopResolver) Resolve(_ context.Context, _ CredentialReference, _ string) (Secret, error) {
+	return nil, errors.New("secrets: no resolver configured (NoopResolver)")
+}
+
+// ResolveFresh always returns an error reporting that no resolver is wired.
+func (NoopResolver) ResolveFresh(_ context.Context, _ CredentialReference, _ string) (Secret, error) {
 	return nil, errors.New("secrets: no resolver configured (NoopResolver)")
 }
 
@@ -222,6 +234,47 @@ func (r *Resolver) Resolve(ctx context.Context, cred ref.CredentialReference, co
 		return nil, fmt.Errorf("secrets: backend %s: %w", b.Kind(), err)
 	}
 	r.cache.Put(cred, b.Kind(), s)
+	r.emit(ctx, events.KindResolutionOK, cred, b.Kind(), "ok", false, t0)
+	return s, nil
+}
+
+// ResolveFresh fetches a credential, bypassing the cache but still
+// emitting ResolutionEvents at every branch. Use this on spawn paths
+// (MCP child processes, exec'd subagents) where a cached value could
+// outlive a rotation and be inherited by a forked process the resolver
+// can no longer invalidate.
+//
+// Contract:
+//   - Cache is NEVER read.
+//   - Cache is NEVER written. The fresh secret returns to the caller
+//     and dies with their scope; subsequent Resolve calls will still
+//     pay a backend round-trip until the next cache-write path runs.
+//   - Events emit identically to Resolve so observability stays
+//     uniform: KindResolutionRequested, KindResolutionBackendDispatch,
+//     KindResolutionOK / KindResolutionFailed. KindResolutionCacheHit /
+//     KindResolutionCacheMiss are NOT emitted (no cache check happens).
+//
+// The returned Secret is owned by the caller for the duration of its
+// scope: caller MUST call Secret.Use(...) and Secret.Destroy().
+func (r *Resolver) ResolveFresh(ctx context.Context, cred ref.CredentialReference, consumerID string) (Secret, error) {
+	if consumerID != "" {
+		cred.ConsumerID = consumerID
+	}
+	t0 := time.Now()
+	r.emit(ctx, events.KindResolutionRequested, cred, "", "", false, t0)
+
+	b, err := r.reg.Lookup(cred.Kind)
+	if err != nil {
+		r.emit(ctx, events.KindResolutionFailed, cred, "", "no_backend", false, t0)
+		return nil, err
+	}
+	r.emit(ctx, events.KindResolutionBackendDispatch, cred, b.Kind(), "", false, t0)
+
+	s, err := b.Resolve(ctx, cred)
+	if err != nil {
+		r.emit(ctx, events.KindResolutionFailed, cred, b.Kind(), "failed", false, t0)
+		return nil, fmt.Errorf("secrets: backend %s: %w", b.Kind(), err)
+	}
 	r.emit(ctx, events.KindResolutionOK, cred, b.Kind(), "ok", false, t0)
 	return s, nil
 }

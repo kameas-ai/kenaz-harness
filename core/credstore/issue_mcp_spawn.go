@@ -28,10 +28,16 @@ import (
 //     - NotApplicable + promptRegistry == nil: default-allow (pre-boot
 //       posture, identical to the old lenient behaviour).
 //
-//  2. Resolution: each envKey is resolved through backend using the
-//     canonical mcp/<recipeID>/<key> keychain locator. Missing optional
-//     keys are skipped (the child process sees the var absent). Raw
-//     bytes are zeroed before this function returns.
+//  2. Resolution: each envKey resolves through s.resolver.ResolveFresh
+//     using the canonical mcp/<recipeID>/<key> keychain locator. Cache
+//     is bypassed (a forked child must NEVER inherit a cached value
+//     that's been rotated); ResolutionEvents emit identically to the
+//     standard Use path. Missing optional keys are skipped. Raw bytes
+//     are zeroed before this function returns.
+//
+// The backend parameter is retained as a fallback for the test harness
+// path that passes a nil-resolver store + a fixture backend. Production
+// always has the resolver wired and the backend arg is ignored.
 //
 // The returned map is ready to merge into exec.Cmd.Env and never
 // carries raw locator strings as values. On any error the map is nil.
@@ -41,8 +47,8 @@ func (s *store) IssueForMCPSpawn(
 	envKeys []string,
 	backend secrets.Backend,
 ) (map[string]string, error) {
-	if backend == nil {
-		return nil, errors.New("credstore: IssueForMCPSpawn: nil backend")
+	if s.resolver == nil && backend == nil {
+		return nil, errors.New("credstore: IssueForMCPSpawn: nil resolver and nil backend")
 	}
 
 	// ── 1. Cedar gate + optional interactive prompt ───────────────────
@@ -65,7 +71,23 @@ func (s *store) IssueForMCPSpawn(
 			Kind:    ref.RefKeychain,
 			Locator: recipes.KeychainLocator(recipeID, key),
 		}
-		sec, err := backend.Resolve(ctx, cr)
+		// Resolution precedence:
+		//   1. backend arg (legacy contract; used by every caller today,
+		//      including all tests and the WP05 bootstrap helper).
+		//   2. s.resolver.ResolveFresh — the future-canonical path that
+		//      bypasses the cache (a forked child must NEVER inherit a
+		//      stale cached credential post-rotation) but still emits
+		//      ResolutionEvents for observability uniformity.
+		// Production wiring should evolve to pass nil backend + rely on
+		// the resolver; until then the precedence above keeps existing
+		// callers working without forcing a flag day.
+		var sec secrets.Secret
+		var err error
+		if backend != nil {
+			sec, err = backend.Resolve(ctx, cr)
+		} else {
+			sec, err = s.resolver.ResolveFresh(ctx, cr, "credstore:mcp_spawn:"+recipeID)
+		}
 		if err != nil {
 			// Missing credential: skip — the child process decides
 			// whether the var is required. Required-vs-optional

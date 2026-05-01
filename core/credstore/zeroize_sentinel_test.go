@@ -28,6 +28,11 @@ func (sentinelResolver) Resolve(_ context.Context, cred secrets.CredentialRefere
 	return secret.NewStdlibSecret(dup, cred.ID(), cred.ConsumerID), nil
 }
 
+// ResolveFresh delegates to Resolve — sentinelResolver has no cache.
+func (s sentinelResolver) ResolveFresh(ctx context.Context, cred secrets.CredentialReference, consumerID string) (secrets.Secret, error) {
+	return s.Resolve(ctx, cred, consumerID)
+}
+
 // TestZeroizeSentinel pumps the 32-byte sentinel pattern through Use,
 // forces a GC, writes a heap dump to a temp file, reads it back, and
 // asserts that the sentinel pattern does not appear in the dump (or

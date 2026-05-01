@@ -290,3 +290,34 @@ func TestIssueForMCPSpawn_PromptTimeout(t *testing.T) {
 		t.Fatalf("registry leaked after timeout: %d entries", reg.PendingCount())
 	}
 }
+
+// TestIssueForMCPSpawn_ResolverFreshPath verifies the future-canonical
+// path: when the caller passes nil backend, IssueForMCPSpawn routes
+// through s.resolver.ResolveFresh so events emit + cache stays bypassed.
+func TestIssueForMCPSpawn_ResolverFreshPath(t *testing.T) {
+	resolver := newFakeResolver(map[string][]byte{
+		recipes.KeychainLocator("recipe-x", "API_KEY"): []byte("from-resolver"),
+	})
+	s := credstore.New(resolver, nil)
+	t.Cleanup(s.Close)
+	ctx := context.Background()
+
+	env, err := s.IssueForMCPSpawn(ctx, "recipe-x", []string{"API_KEY"}, nil)
+	if err != nil {
+		t.Fatalf("IssueForMCPSpawn (resolver path): unexpected error: %v", err)
+	}
+	if env["API_KEY"] != "from-resolver" {
+		t.Fatalf("want API_KEY=from-resolver, got %q", env["API_KEY"])
+	}
+}
+
+// TestIssueForMCPSpawn_NilResolverAndBackend ensures the no-source
+// guard returns a clear error rather than nil-deref.
+func TestIssueForMCPSpawn_NilResolverAndBackend(t *testing.T) {
+	s := credstore.New(nil, nil)
+	t.Cleanup(s.Close)
+	_, err := s.IssueForMCPSpawn(context.Background(), "r", []string{"K"}, nil)
+	if err == nil {
+		t.Fatal("want error when both resolver and backend are nil")
+	}
+}

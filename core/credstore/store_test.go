@@ -32,6 +32,12 @@ func (r *fakeResolver) Resolve(_ context.Context, cred secrets.CredentialReferen
 	return secret.NewStdlibSecret(dup, cred.ID(), cred.ConsumerID), nil
 }
 
+// ResolveFresh delegates to Resolve for the test seam — fakeResolver has
+// no cache, so cache-bypass is the same as a regular call.
+func (r *fakeResolver) ResolveFresh(ctx context.Context, cred secrets.CredentialReference, consumerID string) (secrets.Secret, error) {
+	return r.Resolve(ctx, cred, consumerID)
+}
+
 // validRef returns a simple RefEnv CredentialReference.
 func validRef(locator string) secrets.CredentialReference {
 	return secrets.CredentialReference{Kind: ref.RefEnv, Locator: locator}
