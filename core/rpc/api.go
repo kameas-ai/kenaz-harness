@@ -173,6 +173,12 @@ type WindowSize struct {
 type API struct {
 	core *core.Core
 
+	// builtins holds the in-binary tool registry so the chat-input
+	// `!cmd` shell-escape can dispatch directly to kaneaz__bash without
+	// going through the toolloop. Populated at boot from the same
+	// registry the LLM tool catalog reads.
+	builtins *toolloop.BuiltinRegistry
+
 	// Stable view-accessor instances (plan §4.2).
 	llmAPI      llm.LLMConnectorAPI
 	mcpAPI      mcp.MCPAPI
@@ -259,6 +265,12 @@ type API struct {
 	// API so OnStartup can call SetContext on it.
 	bindings *Bindings
 }
+
+// Builtins returns the in-binary tool registry. Used by the chat-input
+// `!cmd` shell-escape binding to dispatch directly to kaneaz__bash.
+// Concrete-type method; the HarnessAPI interface does not expose it
+// because no view-scoped consumer needs it.
+func (a *API) Builtins() *toolloop.BuiltinRegistry { return a.builtins }
 
 // SetContext threads the Wails app context to the Bindings surface
 // AND to the StreamBroker, which needs the OnStartup-supplied context
@@ -482,6 +494,7 @@ func New(c *core.Core) *API {
 	stack := newLLMStack(c, a.broker, personalForLLM, hooksRunner, attMgr, confirmEachEnabled, artifactSink, artifactSinkConcrete, settingsImpl, a_bashStore, artMgr, a.graphMgr, a.promptRegistry)
 	a.llmAPI = stack.api
 	a.stdioPool = stack.pool
+	a.builtins = stack.builtins
 	if c != nil && a.stdioPool != nil {
 		c.SetMCP(a.stdioPool)
 		// Persisted-recipes bootstrap — Core.Start invokes this once

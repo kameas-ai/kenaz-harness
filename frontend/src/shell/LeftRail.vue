@@ -48,6 +48,7 @@ const {
 } = useProjects();
 
 const newSessionDialogOpen = ref(false);
+const newSessionProjectId = ref<string | undefined>(undefined);
 const deletingId = ref<string | null>(null);
 const renamingId = ref<string | null>(null);
 const renameDraft = ref('');
@@ -140,14 +141,26 @@ onMounted(() => {
   refreshProjects();
 });
 
-function newSession() {
+function newSession(projectId?: string) {
+  newSessionProjectId.value = projectId;
   newSessionDialogOpen.value = true;
 }
 
 async function onNewSessionDialogClose() {
   newSessionDialogOpen.value = false;
+  // Defensive double-refresh: the dialog calls
+  //   client.sessions.create() → client.sessions.moveToProject()
+  // directly (not via the useSessions composable) AND emits 'close'
+  // synchronously between those steps and a router.push() — so the
+  // first refresh can race with the moveToProject's commit visibility.
+  // A second refresh on a 100ms tail catches any commit lag and
+  // guarantees the new session appears under its project header.
   await refreshSessions();
   await refreshProjects();
+  setTimeout(() => {
+    void refreshSessions();
+    void refreshProjects();
+  }, 120);
 }
 
 function openSession(id: string) {
@@ -408,7 +421,7 @@ async function onProjectDrop(evt: DragEvent, projectId: string) {
         type="button"
         class="flex items-center gap-2 px-3 py-2 rounded-sm w-full text-left text-sm font-ui text-accent border border-accent-hairline hover:bg-accent-glow transition-fast ease-kenaz disabled:opacity-50"
         aria-label="New session"
-        @click="newSession"
+        @click="newSession(activeProjectId || undefined)"
       >
         <Plus :size="14" />
         <span class="hidden two-col:inline">New session</span>
@@ -416,6 +429,7 @@ async function onProjectDrop(evt: DragEvent, projectId: string) {
     </div>
     <NewSessionDialog
       :open="newSessionDialogOpen"
+      :initial-project-id="newSessionProjectId"
       @close="onNewSessionDialogClose"
     />
 
@@ -524,6 +538,15 @@ async function onProjectDrop(evt: DragEvent, projectId: string) {
                 @click.stop="openProjectPage(project.id)"
               >
                 <FileText :size="12" />
+              </button>
+              <button
+                type="button"
+                class="shrink-0 p-1.5 rounded-sm text-ink-dim hover:text-accent hover:bg-surface-3 focus:outline-none focus:ring-1 focus:ring-accent"
+                :aria-label="`New session in ${project.name}`"
+                :data-testid="`new-session-in-project-${project.id}`"
+                @click.stop="newSession(project.id)"
+              >
+                <Plus :size="12" />
               </button>
             </template>
           </div>

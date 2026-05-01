@@ -3,9 +3,12 @@ package rpc
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
+	"errors"
 	"os"
 
 	wruntime "github.com/wailsapp/wails/v2/pkg/runtime"
+	"github.com/sigil-tech/kaneaz-harness/core/toolloop"
 
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/a2a"
 	graphview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/agentgraph"
@@ -930,6 +933,55 @@ func (b *Bindings) Tools_PickDirectory(title, defaultDir string) (string, error)
 		Title:            title,
 		DefaultDirectory: defaultDir,
 	})
+}
+
+// ── shell escape (chat input `!cmd` feature) ──────────────────────────
+
+// BashExecResult mirrors the JSON the kaneaz__bash tool returns.
+// stdout/stderr are plain strings (UTF-8); the bash tool already caps
+// at 64 KiB per stream and signals truncation via the `Truncated` flag.
+type BashExecResult struct {
+	Stdout    string `json:"stdout"`
+	Stderr    string `json:"stderr"`
+	ExitCode  int    `json:"exitCode"`
+	Truncated bool   `json:"truncated"`
+}
+
+// Bash_Exec runs a single command line through the kaneaz__bash
+// built-in tool and returns its result. Used by the chat input's
+// `!cmd` shell-escape — typing `!ls -la ~/Desktop` dispatches here
+// (not to the LLM) and the parent renders the result inline as a
+// synthetic system message. The Cedar gate applies normally.
+//
+// sessionID is threaded through ctx so the bash tool's per-session
+// run-id cache picks up the right slot. Empty sessionID is OK (the
+// tool's run-id cache is best-effort).
+func (b *Bindings) Bash_Exec(sessionID, command string) (BashExecResult, error) {
+	type builtinsHolder interface{ Builtins() *toolloop.BuiltinRegistry }
+	holder, ok := b.api.(builtinsHolder)
+	if !ok || holder.Builtins() == nil {
+		return BashExecResult{}, errors.New("rpc: bash tool registry not wired")
+	}
+	tool, ok := holder.Builtins().Lookup("kaneaz__bash")
+	if !ok {
+		return BashExecResult{}, errors.New("rpc: kaneaz__bash tool not registered (toggle on in Settings → Tools)")
+	}
+	args, err := json.Marshal(struct {
+		Command string `json:"command"`
+	}{Command: command})
+	if err != nil {
+		return BashExecResult{}, err
+	}
+	ctx := toolloop.WithSessionID(b.ctx(), sessionID)
+	raw, err := tool.Call(ctx, args)
+	if err != nil {
+		return BashExecResult{}, err
+	}
+	var out BashExecResult
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return BashExecResult{}, err
+	}
+	return out, nil
 }
 
 // ── shell ──────────────────────────────────────────────────────────────

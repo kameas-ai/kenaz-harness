@@ -345,6 +345,8 @@ interface WailsBindingsLike {
   Tools_RecipeConfig(id: string): Promise<Record<string, unknown>>;
   Tools_PickDirectory(title: string, defaultDir: string): Promise<string>;
 
+  Bash_Exec(sessionID: string, command: string): Promise<BashExecResult>;
+
   Shell_OpenInOSBrowser(path: string): Promise<void>;
   Shell_PathComplete(partial: string): Promise<string[]>;
   Shell_ReadFile(path: string): Promise<ShellReadFileResult>;
@@ -1300,6 +1302,26 @@ export interface ShellClient {
 }
 
 /**
+ * BashExecResult — kaneaz__bash tool's JSON return shape, surfaced via
+ * the Bash_Exec binding for the chat-input `!cmd` shell-escape.
+ */
+export interface BashExecResult {
+  stdout: string;
+  stderr: string;
+  exitCode: number;
+  truncated: boolean;
+}
+
+/**
+ * BashClient — chat-input shell-escape surface. `!cmd` in the composer
+ * dispatches here (Cedar gate applies); result is rendered inline as a
+ * synthetic system message.
+ */
+export interface BashClient {
+  exec(sessionID: string, command: string): Promise<BashExecResult>;
+}
+
+/**
  * SlashClient — view-scoped surface for in-chat slash commands.
  *
  *   - list returns the registered visible commands (sorted) so the
@@ -1523,6 +1545,7 @@ export interface HarnessClient {
   hooks: HooksClient;
   tools: ToolsClient;
   shell: ShellClient;
+  bash: BashClient;
   slash: SlashClient;
   artifacts: ArtifactsClient;
   corpus: CorpusClient;
@@ -1797,6 +1820,9 @@ export function createHarnessClient(): HarnessClient {
       openInOSBrowser: (path) => b().Shell_OpenInOSBrowser(path),
       pathComplete: (partial) => b().Shell_PathComplete(partial),
       readFile: (path) => b().Shell_ReadFile(path),
+    },
+    bash: {
+      exec: (sessionID, command) => b().Bash_Exec(sessionID, command),
     },
     slash: {
       list: () => b().Slash_List(),
@@ -2252,6 +2278,9 @@ export function createFakeHarnessClient(
       openInOSBrowser: noop,
       pathComplete: async () => [],
       readFile: async () => ({ dataBase64: '', mediaType: '' }),
+    },
+    bash: {
+      exec: async () => ({ stdout: '', stderr: '', exitCode: 0, truncated: false }),
     },
     slash: {
       list: async () => [

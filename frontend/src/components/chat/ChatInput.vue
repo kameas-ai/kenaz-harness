@@ -83,6 +83,13 @@ const emit = defineEmits<{
    * result inline.
    */
   (e: 'slashCommand', raw: string): void;
+  /**
+   * Bash-escape submit. Fires INSTEAD of `send` / `sendBlocks` when
+   * the trimmed input begins with `!`. The parent dispatches via the
+   * kaneaz__bash tool (Cedar gate applies) and renders the result
+   * inline as a synthetic system message.
+   */
+  (e: 'bashCommand', cmd: string): void;
 }>();
 
 const client = useHarnessClient();
@@ -707,6 +714,20 @@ function send() {
     internal.value = '';
     emit('update:modelValue', '');
     slashActiveIndex.value = 0;
+    return;
+  }
+  // Bash-escape branch: when the trimmed input begins with `!`, emit
+  // a bashCommand event with the rest of the line. The parent runs it
+  // through the kaneaz__bash tool (Cedar gate applies) and renders
+  // the result inline as a synthetic system message — same pattern as
+  // slash commands. The bang is stripped before dispatch.
+  if (text.startsWith('!')) {
+    const cmd = text.slice(1).trim();
+    if (cmd) {
+      emit('bashCommand', cmd);
+      internal.value = '';
+      emit('update:modelValue', '');
+    }
     return;
   }
   // Build content blocks: image + document blocks first, then a final

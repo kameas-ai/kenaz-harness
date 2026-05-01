@@ -1986,6 +1986,22 @@ export namespace llm {
 	        this.description = source["description"];
 	    }
 	}
+	export class Redacted {
+	    display: string;
+	    kind: string;
+	    locator: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new Redacted(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.display = source["display"];
+	        this.kind = source["kind"];
+	        this.locator = source["locator"];
+	    }
+	}
 	export class Provider {
 	    id: string;
 	    name: string;
@@ -1995,6 +2011,7 @@ export namespace llm {
 	    models?: string[];
 	    region?: string;
 	    cred?: CredentialReference;
+	    redaction?: Redacted;
 	    source?: string;
 	    validated?: boolean;
 	
@@ -2012,6 +2029,7 @@ export namespace llm {
 	        this.models = source["models"];
 	        this.region = source["region"];
 	        this.cred = this.convertValues(source["cred"], CredentialReference);
+	        this.redaction = this.convertValues(source["redaction"], Redacted);
 	        this.source = source["source"];
 	        this.validated = source["validated"];
 	    }
@@ -2034,6 +2052,7 @@ export namespace llm {
 		    return a;
 		}
 	}
+	
 	export class TestResult {
 	    success: boolean;
 	    latency_ms: number;
@@ -3040,6 +3059,24 @@ export namespace rpc {
 		    return a;
 		}
 	}
+	export class BashExecResult {
+	    stdout: string;
+	    stderr: string;
+	    exitCode: number;
+	    truncated: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new BashExecResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.stdout = source["stdout"];
+	        this.stderr = source["stderr"];
+	        this.exitCode = source["exitCode"];
+	        this.truncated = source["truncated"];
+	    }
+	}
 	export class ShellReadFileResult {
 	    dataBase64: string;
 	    mediaType: string;
@@ -3363,6 +3400,7 @@ export namespace settings {
 	    bashAllowlistMigrated?: boolean;
 	    permissionsMigrationToastShown?: boolean;
 	    cedarStrictCredentialMode?: boolean;
+	    credentialAuditRetentionDays?: number;
 	
 	    static createFrom(source: any = {}) {
 	        return new Settings(source);
@@ -3394,6 +3432,7 @@ export namespace settings {
 	        this.bashAllowlistMigrated = source["bashAllowlistMigrated"];
 	        this.permissionsMigrationToastShown = source["permissionsMigrationToastShown"];
 	        this.cedarStrictCredentialMode = source["cedarStrictCredentialMode"];
+	        this.credentialAuditRetentionDays = source["credentialAuditRetentionDays"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {

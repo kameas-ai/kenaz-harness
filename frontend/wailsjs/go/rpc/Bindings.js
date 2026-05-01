@@ -82,6 +82,10 @@ export function Audit_VerifyEntry(arg1) {
   return window['go']['rpc']['Bindings']['Audit_VerifyEntry'](arg1);
 }
 
+export function Bash_Exec(arg1, arg2) {
+  return window['go']['rpc']['Bindings']['Bash_Exec'](arg1, arg2);
+}
+
 export function Branches_Abandon(arg1) {
   return window['go']['rpc']['Bindings']['Branches_Abandon'](arg1);
 }
@@ -372,6 +376,10 @@ export function LLM_TestProvider(arg1) {
 
 export function LLM_UpdateProvider(arg1) {
   return window['go']['rpc']['Bindings']['LLM_UpdateProvider'](arg1);
+}
+
+export function LLM_UpdateProviderCredential(arg1, arg2) {
+  return window['go']['rpc']['Bindings']['LLM_UpdateProviderCredential'](arg1, arg2);
 }
 
 export function LoadRoute() {

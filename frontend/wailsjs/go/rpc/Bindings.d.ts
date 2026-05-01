@@ -73,6 +73,8 @@ export function Audit_StopStream(arg1:string):Promise<void>;
 
 export function Audit_VerifyEntry(arg1:string):Promise<boolean>;
 
+export function Bash_Exec(arg1:string,arg2:string):Promise<rpc.BashExecResult>;
+
 export function Branches_Abandon(arg1:string):Promise<void>;
 
 export function Branches_Create(arg1:branches.CreateBranchOptions):Promise<branches.Branch>;
@@ -218,6 +220,8 @@ export function LLM_StopStream(arg1:string):Promise<void>;
 export function LLM_TestProvider(arg1:string):Promise<llm.TestResult>;
 
 export function LLM_UpdateProvider(arg1:llm.AddProviderInput):Promise<void>;
+
+export function LLM_UpdateProviderCredential(arg1:string,arg2:string):Promise<void>;
 
 export function LoadRoute():Promise<string>;
 

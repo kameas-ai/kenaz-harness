@@ -33,6 +33,7 @@ import MigrationToast from '@/components/permissions/MigrationToast.vue';
 import ArtifactPreview from '@/views/artifacts/ArtifactPreview.vue';
 import { useArtifacts, useHarnessClient, useSessions } from '@/lib/useHarnessAPI';
 import { useSession } from '@/lib/useSession';
+import { useEventStream } from '@/lib/useEventStream';
 import type {
   Artifact,
   ArtifactScope,
@@ -521,6 +522,26 @@ async function onSlashCommand(raw: string) {
   }
 }
 
+async function onBashCommand(cmd: string) {
+  const sid = sessionId.value;
+  if (!sid) return;
+  // Echo the user's command first (mirrors what the user typed) so the
+  // transcript reads naturally — same convention slash commands follow.
+  appendSlashResult(sid, 'info', `$ ${cmd}`);
+  try {
+    const result = await client.bash.exec(sid, cmd);
+    const parts: string[] = [];
+    if (result.stdout) parts.push(result.stdout.trimEnd());
+    if (result.stderr) parts.push(`stderr:\n${result.stderr.trimEnd()}`);
+    if (result.exitCode !== 0) parts.push(`exit ${result.exitCode}`);
+    if (result.truncated) parts.push('… (output truncated at 64 KiB)');
+    const body = parts.length > 0 ? parts.join('\n\n') : '(no output)';
+    appendSlashResult(sid, result.exitCode === 0 ? 'info' : 'error', body);
+  } catch (err) {
+    appendSlashResult(sid, 'error', err instanceof Error ? err.message : String(err));
+  }
+}
+
 async function refreshActiveMessages() {
   const sid = sessionId.value;
   if (!sid) return;
@@ -669,6 +690,14 @@ function refreshSessionArtifacts() {
 watch(sessionId, () => {
   refreshSessionArtifacts();
 }, { immediate: true });
+
+// Refresh the session artifact list when the LLM stream closes so that
+// tool-created artifacts (e.g. kaneaz__save_artifact) appear immediately
+// without requiring a manual navigation or session switch.
+useEventStream<{ session_id?: string }>('llm:stream-closed', (payload) => {
+  if (payload?.session_id && payload.session_id !== sessionId.value) return;
+  refreshSessionArtifacts();
+});
 
 const artifactsByMessage = computed<ReadonlyMap<string, readonly Artifact[]>>(() => {
   const map = new Map<string, Artifact[]>();
@@ -1247,6 +1276,7 @@ function formatSize(bytes: number): string {
           @send-blocks="onSendBlocks"
           @cancel="onCancel"
           @slash-command="onSlashCommand"
+          @bash-command="onBashCommand"
         />
       </template>
     </div>
