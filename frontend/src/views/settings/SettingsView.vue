@@ -23,10 +23,13 @@ import type {
   AppInfo,
   CompactionAggressiveness,
   CompactionTierExplain,
+  MarkdownExtensions,
   Provider,
   Settings,
   Theme,
 } from '@/lib/types';
+
+
 
 const client = useHarnessClient();
 
@@ -41,6 +44,30 @@ const settings = ref<Settings>({
 });
 const appInfo = ref<AppInfo | null>(null);
 const restoreOnLaunch = ref(true);
+
+/* ── Rendering extensions (mission markdown-rendering-polish-01KQ8TDT) ── */
+
+/**
+ * Four-stop rendering dial: basic / math / diagrams / all (default).
+ * Disable heavier renderers (KaTeX, Mermaid) for performance on slow
+ * machines.
+ */
+const RENDERING_TIERS: ReadonlyArray<{ value: MarkdownExtensions; label: string }> = [
+  { value: 'basic', label: 'Basic' },
+  { value: 'math', label: 'Math' },
+  { value: 'diagrams', label: 'Diagrams' },
+  { value: 'all', label: 'All' },
+];
+
+const markdownExtensions = ref<MarkdownExtensions>('all');
+
+function setMarkdownExtensions(ext: MarkdownExtensions) {
+  markdownExtensions.value = ext;
+  debouncedSave(client, {
+    ...settings.value,
+    markdownExtensions: ext,
+  });
+}
 
 /* ── Compaction ────────────────────────────────────────────────── */
 
@@ -138,6 +165,10 @@ async function refresh() {
   } catch {
     appInfo.value = null;
   }
+  // Hydrate rendering extensions.
+  markdownExtensions.value =
+    (settings.value.markdownExtensions as MarkdownExtensions) || 'all';
+  // Hydrate compaction working copies from persisted settings.
   compactionTier.value =
     (settings.value.compactionAggressiveness as CompactionAggressiveness) ||
     'balanced';
@@ -293,6 +324,30 @@ onMounted(() => {
           </label>
           <p class="mt-1 text-[11px] text-ink-muted">
             Last route: <span class="font-mono">{{ settings.lastRoute }}</span>
+          </p>
+        </section>
+
+        <section data-testid="rendering-section">
+          <h2 class="font-ui text-[11px] uppercase tracking-[0.18em] text-ink-subtle">
+            Rendering
+          </h2>
+          <p class="mt-1 font-ui text-[11px] text-ink-muted">
+            Which markdown renderers are active. Disable on slow machines if math/diagrams feel laggy.
+          </p>
+          <div class="mt-2">
+            <RadioStrip
+              :model-value="markdownExtensions"
+              :options="RENDERING_TIERS"
+              aria-label="Markdown rendering extensions"
+              testid-prefix="rendering-tier"
+              @update:model-value="setMarkdownExtensions"
+            />
+          </div>
+          <p class="mt-1 font-ui text-[11px] text-ink-muted">
+            <strong class="text-ink">Basic</strong> — GFM only.
+            <strong class="text-ink">Math</strong> — GFM + KaTeX.
+            <strong class="text-ink">Diagrams</strong> — GFM + Mermaid.
+            <strong class="text-ink">All</strong> — everything (default).
           </p>
         </section>
       </div>
