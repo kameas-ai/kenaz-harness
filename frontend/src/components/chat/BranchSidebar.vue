@@ -19,6 +19,7 @@
 
 import { computed, onMounted, ref, watch } from 'vue';
 import { useHarnessClient } from '@/lib/harnessClientContext';
+import ReintegrationPreviewModal from '@/components/chat/ReintegrationPreviewModal.vue';
 import type { Branch } from '@/lib/types';
 
 const props = defineProps<{
@@ -29,6 +30,20 @@ const emit = defineEmits<{
   open: [childSessionId: string];
   create: [];
 }>();
+
+// Reintegration modal state
+const reintegrationModalOpen = ref(false);
+const reintegrationBranchSessionId = ref('');
+
+function openReintegration(branch: Branch) {
+  reintegrationBranchSessionId.value = branch.childSessionId;
+  reintegrationModalOpen.value = true;
+}
+
+function closeReintegration() {
+  reintegrationModalOpen.value = false;
+  reintegrationBranchSessionId.value = '';
+}
 
 const client = useHarnessClient();
 const branches = ref<Branch[]>([]);
@@ -190,6 +205,15 @@ defineExpose({ refresh, branches });
             Open
           </button>
           <button
+            v-if="branch.status === 'active' && branch.subagentBranch"
+            type="button"
+            class="font-ui text-xs text-accent hover:underline"
+            :data-testid="`branch-bring-back-${branch.id}`"
+            @click="openReintegration(branch)"
+          >
+            Bring back to parent
+          </button>
+          <button
             v-if="branch.status === 'active'"
             type="button"
             class="font-ui text-xs text-ink-link hover:underline"
@@ -211,4 +235,15 @@ defineExpose({ refresh, branches });
       </li>
     </ul>
   </aside>
+
+  <!-- Reintegration preview modal — mounted at BranchSidebar level so
+       it doesn't depend on SessionsView wiring. The branchSessionId is
+       the child session; parentSessionId is from props. -->
+  <ReintegrationPreviewModal
+    :open="reintegrationModalOpen"
+    :branch-session-id="reintegrationBranchSessionId"
+    :parent-session-id="parentSessionId"
+    @close="closeReintegration"
+    @committed="closeReintegration"
+  />
 </template>

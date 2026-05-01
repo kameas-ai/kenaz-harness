@@ -103,6 +103,8 @@ import type {
   BranchCreateOptions,
   BranchStatusInfo,
   BranchRecommendedModel,
+  BranchReintegrationProposal,
+  BranchReintegrationCommitOpts,
   MCPImportRequest,
   MCPImportResponse,
   MCPImportEntry,
@@ -405,6 +407,13 @@ interface WailsBindingsLike {
     taskHint: string,
     preference: string,
   ): Promise<BranchRecommendedModel>;
+  // WP06 — reintegration propose + commit.
+  Branches_ProposeReintegrationSummary(
+    branchSessionID: string,
+  ): Promise<BranchReintegrationProposal>;
+  Branches_CommitReintegration(
+    opts: BranchReintegrationCommitOpts,
+  ): Promise<void>;
 }
 
 /**
@@ -1316,6 +1325,12 @@ export interface BranchesClient {
     taskHint: string,
     preference: string,
   ): Promise<BranchRecommendedModel>;
+  /** WP06 — generate a reintegration summary for a subagent branch. */
+  proposeReintegrationSummary(
+    branchSessionID: string,
+  ): Promise<BranchReintegrationProposal>;
+  /** WP06 — commit the final summary into the parent session. */
+  commitReintegration(opts: BranchReintegrationCommitOpts): Promise<void>;
 }
 
 export interface HarnessClient {
@@ -1628,6 +1643,9 @@ export function createHarnessClient(): HarnessClient {
       abandon: (branchID) => b().Branches_Abandon(branchID),
       recommendModel: (parentSessionID, taskHint, preference) =>
         b().Branches_RecommendModel(parentSessionID, taskHint, preference),
+      proposeReintegrationSummary: (branchSessionID) =>
+        b().Branches_ProposeReintegrationSummary(branchSessionID),
+      commitReintegration: (opts) => b().Branches_CommitReintegration(opts),
     },
     nodes: {
       catalog: () => b().Nodes_Catalog(),
@@ -2225,6 +2243,12 @@ export function createFakeHarnessClient(
         tier: 'small',
         reason: 'default',
       }),
+      proposeReintegrationSummary: async () => ({
+        proposedSummary: 'Fake reintegration summary.',
+        tokenCount: 42,
+        model: 'claude-haiku-4',
+      }),
+      commitReintegration: noop,
     },
     nodes: {
       catalog: async () => [],

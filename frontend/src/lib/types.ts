@@ -1694,6 +1694,40 @@ export interface Branch {
   updatedAt: string;
   mergedAt?: string;
   abandonedAt?: string;
+  /**
+   * True when this branch was created as a subagent branch via the
+   * branch-as-subagent-recommendation mission. Drives the "Bring back
+   * to parent" affordance in BranchSidebar and the sticky chip in
+   * SessionsView.
+   */
+  subagentBranch?: boolean;
+  /** Parent session id — populated on subagent branches. */
+  parentSessionIdRef?: string;
+}
+
+/**
+ * BranchReintegrationProposal — wire shape returned by
+ * Branches_ProposeReintegrationSummary. Carries the model-generated
+ * summary text, the token count it consumed, and the model name used.
+ * An empty ProposedSummary signals an empty branch (zero user/assistant
+ * turns); the modal switches to a "discard branch" affordance in that
+ * case.
+ */
+export interface BranchReintegrationProposal {
+  proposedSummary: string;
+  tokenCount: number;
+  model: string;
+  warningEdited?: boolean;
+}
+
+/**
+ * BranchReintegrationCommitOpts — options for CommitReintegration.
+ */
+export interface BranchReintegrationCommitOpts {
+  branchSessionId: string;
+  parentSessionId: string;
+  summary: string;
+  wasEdited: boolean;
 }
 
 /**
