@@ -3445,6 +3445,7 @@ export namespace settings {
 	    permissionsMigrationToastShown?: boolean;
 	    cedarStrictCredentialMode?: boolean;
 	    credentialAuditRetentionDays?: number;
+	    branchAdvisorEnabled?: boolean;
 	    branchAdvisorMinConfidence?: number;
 	    branchAdvisorUseLLM?: boolean;
 	    branchAutoMode?: boolean;
@@ -3482,6 +3483,7 @@ export namespace settings {
 	        this.permissionsMigrationToastShown = source["permissionsMigrationToastShown"];
 	        this.cedarStrictCredentialMode = source["cedarStrictCredentialMode"];
 	        this.credentialAuditRetentionDays = source["credentialAuditRetentionDays"];
+	        this.branchAdvisorEnabled = source["branchAdvisorEnabled"];
 	        this.branchAdvisorMinConfidence = source["branchAdvisorMinConfidence"];
 	        this.branchAdvisorUseLLM = source["branchAdvisorUseLLM"];
 	        this.branchAutoMode = source["branchAutoMode"];

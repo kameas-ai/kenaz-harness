@@ -76,6 +76,7 @@ const showDeleteConfirm = ref(false);
 const busy = ref(false);
 const errorMsg = ref<string | null>(null);
 const copyFlash = ref(false);
+const imageLoadFailed = ref(false);
 
 const artifact = computed<Artifact | null>(
   () => props.payload?.artifact ?? null,
@@ -187,6 +188,7 @@ watch(
       allowScripts.value = false;
       showPromoteConfirm.value = false;
       showDeleteConfirm.value = false;
+      imageLoadFailed.value = false;
       errorMsg.value = null;
       void nextTick();
     }
@@ -406,10 +408,22 @@ async function confirmDelete() {
           data-testid="artifact-preview-image"
         >
           <img
+            v-if="!imageLoadFailed"
             :src="dataUrl"
             :alt="artifact.title || 'image artifact'"
             class="block max-w-full max-h-[70vh] mx-auto"
+            @error="imageLoadFailed = true"
           />
+          <div
+            v-else
+            class="px-4 py-6 text-center text-[12px] text-ink-muted"
+            data-testid="artifact-preview-image-broken"
+          >
+            Image bytes failed to render — the file may be corrupt or
+            mis-typed (mime: <span class="font-mono">{{ mimeType }}</span>,
+            size: <span class="font-mono">{{ artifact.byteSize }}B</span>).
+            Use Download to inspect the raw bytes.
+          </div>
         </div>
 
         <!-- Plain / code text -->

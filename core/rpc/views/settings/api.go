@@ -160,6 +160,11 @@ type Settings struct {
 	CredentialAuditRetentionDays int `json:"credentialAuditRetentionDays,omitempty"`
 	// ── Branch Advisor dials (branch-as-subagent-recommendation WP08) ──
 
+	// BranchAdvisorEnabled is the master on/off for the branch advisor
+	// (FR-010). When false the banner never mounts, regardless of
+	// confidence score. Default false.
+	BranchAdvisorEnabled bool `json:"branchAdvisorEnabled,omitempty"`
+
 	// BranchAdvisorMinConfidence is the heuristic-score threshold below
 	// which the banner does not mount. Default 0.85 (locked Q29.1).
 	// Range [0, 1]; Save rejects values outside this range.

@@ -33,8 +33,12 @@ import type {
   ContentBlock,
   CostEstimate,
   SlashCommandInfo,
+  BranchSuggestion,
+  BranchAdvisorDismissScope,
 } from '@/lib/types';
 import SlashAutocomplete from '@/components/chat/SlashAutocomplete.vue';
+import BranchSuggestionBanner from '@/components/chat/BranchSuggestionBanner.vue';
+import CreateBranchModal from '@/components/chat/CreateBranchModal.vue';
 
 const props = defineProps<{
   modelValue?: string;
@@ -95,6 +99,135 @@ const emit = defineEmits<{
 const client = useHarnessClient();
 
 const internal = ref(props.modelValue ?? '');
+
+// ── Branch-advisor heuristic detector ────────────────────────────────
+//
+// Runs on every keystroke after an 800ms idle window (plan §arch §2,
+// NFR-004: never blocks send). Pure regex — no LLM call (C-004).
+//
+// Positive-signal phrases (any match → confidence = 0.9):
+//   "can you also"  |  "also figure out"  |  "also do"  |  "also check"
+//   "also look at"  |  "while you're at it"  |  "side question"
+//   "side task"  |  "side note"  |  "tangent"  |  "as a one-off"
+//   "in parallel"  |  "before that, let me know"  |  "quick aside"
+//   "unrelated but"  |  "by the way"
+//
+// Confidence is fixed at 0.9 when any positive signal matches, 0 otherwise.
+// Threshold is fetched from Settings.branchAdvisorMinConfidence (default 0.85).
+
+const ADVISOR_POSITIVE_SIGNALS: RegExp[] = [
+  /\bcan\s+you\s+also\b/i,
+  /\balso\s+(figure\s+out|do|check|look\s+at)\b/i,
+  /\bwhile\s+you'?re\s+at\s+it\b/i,
+  /\bside\s+(question|task|note)\b/i,
+  /\btangent\b/i,
+  /\bas\s+a\s+one[- ]off\b/i,
+  /\bin\s+parallel\b/i,
+  /\bbefore\s+that,?\s+let\s+me\s+know\b/i,
+  /\bquick\s+aside\b/i,
+  /\bunrelated\s+but\b/i,
+  /\bby\s+the\s+way\b/i,
+];
+
+const ADVISOR_CONFIDENCE = 0.9;
+const ADVISOR_DEBOUNCE_MS = 800;
+const ADVISOR_DEFAULT_THRESHOLD = 0.85;
+
+/** Detected suggestion waiting to be shown (null = hidden). */
+const activeSuggestion = ref<BranchSuggestion | null>(null);
+/** IDs of suggestions the user dismissed for this message only. */
+const messageDismissedIds = ref<Set<string>>(new Set());
+/** Whether the user has clicked "Don't suggest again" this session. */
+const sessionAdvisorDismissed = ref(false);
+/** Whether CreateBranchModal is open (triggered by "Branch it off"). */
+const createBranchModalOpen = ref(false);
+/** Pre-filled task hint passed to the CreateBranchModal. */
+const createBranchTaskHint = ref('');
+
+let advisorDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+let advisorThreshold = ADVISOR_DEFAULT_THRESHOLD;
+
+// Load session dismiss flag from sessionStorage on mount; also load threshold.
+onMounted(async () => {
+  const sid = props.sessionId ?? '';
+  if (sid) {
+    const stored = sessionStorage.getItem(`branchAdvisorDismissed:${sid}`);
+    if (stored === 'true') sessionAdvisorDismissed.value = true;
+  }
+  try {
+    const settings = await client.settings.get();
+    if (typeof settings.branchAdvisorMinConfidence === 'number') {
+      advisorThreshold = settings.branchAdvisorMinConfidence;
+    }
+  } catch {
+    // best-effort — keep the default
+  }
+});
+
+function runAdvisorDetector(text: string) {
+  if (advisorDebounceTimer !== null) {
+    clearTimeout(advisorDebounceTimer);
+    advisorDebounceTimer = null;
+  }
+  const trimmedText = text.trim();
+  if (!trimmedText) {
+    activeSuggestion.value = null;
+    return;
+  }
+  advisorDebounceTimer = setTimeout(() => {
+    advisorDebounceTimer = null;
+    // Don't show when streaming or session-dismissed.
+    if (props.streaming || sessionAdvisorDismissed.value) return;
+    // Run heuristic.
+    const matchedSignals: string[] = [];
+    for (const re of ADVISOR_POSITIVE_SIGNALS) {
+      if (re.test(trimmedText)) {
+        matchedSignals.push(re.source);
+      }
+    }
+    if (matchedSignals.length === 0 || ADVISOR_CONFIDENCE < advisorThreshold) {
+      activeSuggestion.value = null;
+      return;
+    }
+    const id = `sugg-${Date.now()}`;
+    // Don't re-show a suggestion the user already dismissed for this message.
+    if (messageDismissedIds.value.has(id)) return;
+    const proposed = trimmedText.slice(0, 40).replace(/\s+\S*$/, '');
+    activeSuggestion.value = {
+      id,
+      confidence: ADVISOR_CONFIDENCE,
+      rationale: `Signals detected: ${matchedSignals.slice(0, 3).join('; ')}`,
+      signals: matchedSignals,
+      proposedTitle: proposed || trimmedText.slice(0, 40),
+    };
+  }, ADVISOR_DEBOUNCE_MS);
+}
+
+/** Banner: "No thanks" (message-level dismiss). */
+function handleBannerDismiss(scope: BranchAdvisorDismissScope, suggestionId: string) {
+  if (scope === 'message') {
+    messageDismissedIds.value = new Set([...messageDismissedIds.value, suggestionId]);
+    activeSuggestion.value = null;
+  } else {
+    // scope === 'session': persist + call backend
+    sessionAdvisorDismissed.value = true;
+    activeSuggestion.value = null;
+    const sid = props.sessionId ?? '';
+    if (sid) {
+      sessionStorage.setItem(`branchAdvisorDismissed:${sid}`, 'true');
+      void client.branches.setAdvisorDismissed(sid, true).catch(() => {
+        /* best-effort */
+      });
+    }
+  }
+}
+
+/** Banner: "Branch it off" — open CreateBranchModal pre-filled. */
+function handleBannerBranchOff(suggestion: BranchSuggestion) {
+  createBranchTaskHint.value = suggestion.proposedTitle;
+  createBranchModalOpen.value = true;
+  activeSuggestion.value = null;
+}
 watch(
   () => props.modelValue,
   (v) => {
@@ -146,6 +279,10 @@ function revokeAllObjectUrls() {
 
 onBeforeUnmount(() => {
   revokeAllObjectUrls();
+  if (advisorDebounceTimer !== null) {
+    clearTimeout(advisorDebounceTimer);
+    advisorDebounceTimer = null;
+  }
 });
 
 const canSend = computed(() => {
@@ -697,6 +834,7 @@ function onInput(ev: Event) {
   internal.value = t.value;
   emit('update:modelValue', t.value);
   void refreshAtSuggestions();
+  runAdvisorDetector(t.value);
 }
 
 function send() {
@@ -773,6 +911,13 @@ function send() {
   pending.value = [];
   revokeAllObjectUrls();
   atState.value = null;
+  // Race guard: cancel any pending advisor detection and hide the banner.
+  if (advisorDebounceTimer !== null) {
+    clearTimeout(advisorDebounceTimer);
+    advisorDebounceTimer = null;
+  }
+  activeSuggestion.value = null;
+  messageDismissedIds.value = new Set();
 }
 
 function onKeydown(ev: KeyboardEvent) {
@@ -949,6 +1094,16 @@ const acceptedTypes =
       {{ localError || errorBanner }}
     </div>
 
+    <!-- branch suggestion banner (FR-002) -->
+    <BranchSuggestionBanner
+      v-if="activeSuggestion && !streaming"
+      :suggestion="activeSuggestion"
+      class="mb-2"
+      data-testid="chat-input-branch-banner"
+      @branch-off="handleBannerBranchOff"
+      @dismiss="handleBannerDismiss"
+    />
+
     <label class="sr-only" for="chat-input">Message</label>
     <div class="relative">
       <textarea
@@ -1012,6 +1167,15 @@ const acceptedTypes =
         </li>
       </ul>
     </div>
+
+    <!-- create-branch modal (opens when user clicks "Branch it off") -->
+    <CreateBranchModal
+      v-if="sessionId"
+      :parent-session-id="sessionId"
+      :open="createBranchModalOpen"
+      @close="createBranchModalOpen = false"
+      @created="createBranchModalOpen = false"
+    />
 
     <div class="mt-2 flex items-center justify-between font-mono text-[11px] text-ink-subtle">
       <div aria-live="polite">

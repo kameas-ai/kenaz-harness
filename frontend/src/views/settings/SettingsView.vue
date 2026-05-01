@@ -17,6 +17,7 @@ import { computed, onMounted, ref } from 'vue';
 import CanvasHead from '@/shell/CanvasHead.vue';
 import SettingsTabs from '@/views/settings/SettingsTabs.vue';
 import RadioStrip from '@/components/settings/RadioStrip.vue';
+import BranchAdvisorSettings from '@/components/settings/BranchAdvisorSettings.vue';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
 import { debouncedSave } from '@/lib/settings';
 import type {
@@ -518,6 +519,14 @@ onMounted(() => {
             </div>
           </div>
         </section>
+      </div>
+
+      <!-- ── Group: Subagents ──────────────────────────────────────── -->
+      <div class="grid gap-6" data-testid="subagents-group">
+        <h3 class="font-ui text-[10px] uppercase tracking-[0.22em] text-ink-dim border-b border-border-muted pb-1">
+          Subagents
+        </h3>
+        <BranchAdvisorSettings />
       </div>
 
       <!-- ── About (collapsed disclosure) ────────────────────────── -->

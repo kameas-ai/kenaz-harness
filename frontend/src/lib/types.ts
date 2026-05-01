@@ -519,6 +519,12 @@ export interface Settings {
   // ── Branch Advisor dials (branch-as-subagent-recommendation WP08) ──
 
   /**
+   * Master on/off for the branch advisor (FR-010). When false the banner
+   * never mounts, regardless of confidence. Default false.
+   */
+  branchAdvisorEnabled?: boolean;
+
+  /**
    * Heuristic confidence threshold. Default 0.85. Range [0, 1].
    * Banner only mounts when the detector returns confidence ≥ this value.
    */
