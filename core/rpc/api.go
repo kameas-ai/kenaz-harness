@@ -1402,6 +1402,26 @@ func newLLMStack(
 		Artifacts:     &llmArtifactSinkAdapter{inner: artifactSink},
 		CapCatalog:    capCatalog,
 	})
+
+	// Boot-time warm-up: kick a one-shot async ListModels refresh on every
+	// adapter that exposes the AdapterRefresher capability. By the time
+	// the user opens the first chat session, the per-adapter cache is
+	// populated and ListProviders surfaces real context_window values
+	// instead of the frontend's MODEL_CONTEXT_FALLBACK.
+	//
+	// This is best-effort and rate-limited inside each adapter, so a
+	// down upstream API simply leaves the cache empty until the next
+	// ListProviders call kicks another attempt.
+	for _, kind := range []string{"anthropic", "openai", "openrouter", "bedrock"} {
+		ad := reg.Adapter(kind)
+		if ad == nil {
+			continue
+		}
+		if rf, ok := ad.(interface{ RefreshModelsAsync(cred []byte) }); ok {
+			logging.L().Info("llm.boot.warmup_models", "kind", kind)
+			rf.RefreshModelsAsync(nil)
+		}
+	}
 	return llmStack{
 		api:                 api,
 		pool:                mcpPool,

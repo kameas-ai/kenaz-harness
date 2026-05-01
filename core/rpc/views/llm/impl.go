@@ -61,6 +61,26 @@ type AdapterLookup interface {
 	Adapter(kind string) corellm.ProviderAdapter
 }
 
+// ModelInfoLookup is implemented by adapters that expose a per-model
+// info lookup driven by their own dynamic source (e.g. OpenRouter's
+// /api/v1/models endpoint). When a provider's adapter satisfies this
+// interface, ListProviders prefers its values over the static
+// capabilities catalog so live data (context_window, description) flows
+// to the frontend chat-bar without re-issuing HTTP on every call.
+//
+// The concrete *openrouter.Adapter satisfies this interface; other
+// adapters can opt in as their dynamic catalogs land.
+type ModelInfoLookup interface {
+	LookupModelInfo(modelID string) (corellm.ModelInfo, bool)
+}
+
+// AdapterRefresher is implemented by adapters that can refresh their
+// dynamic model cache asynchronously. ListProviders kicks a refresh
+// when the lookup misses so the next call sees populated data.
+type AdapterRefresher interface {
+	RefreshModelsAsync(cred []byte)
+}
+
 // ProviderProber performs the lightweight verification call used by
 // TestProvider. Tests replace it with a deterministic fake.
 type ProviderProber interface {
@@ -586,19 +606,81 @@ func (a *API) ListProviders(ctx context.Context) ([]Provider, error) {
 		if a.credPeeker != nil {
 			v.Redaction = a.credPeeker.PeekCred(ctx, v.Cred.Kind, v.Cred.Locator)
 		}
-		// Populate ModelInfos with curated context-window data when the
-		// catalog is wired. Frontend reads contextWindow from here;
-		// 0 = unknown → falls back to MODEL_CONTEXT_FALLBACK.
-		if a.capCatalog != nil && len(v.Models) > 0 {
+		// Populate ModelInfos with the best per-model data available.
+		// Resolution order: dynamic adapter lookup (live source of truth
+		// for OpenRouter and similar) → curated YAML catalog → 0
+		// (frontend falls back to MODEL_CONTEXT_FALLBACK).
+		//
+		// We prefer dynamic over curated because the adapter's cache
+		// reflects the upstream API and avoids stale hand-maintained
+		// values drifting behind reality.
+		if len(v.Models) > 0 {
+			var lookup ModelInfoLookup
+			var refresher AdapterRefresher
+			if al, ok := a.reg.(AdapterLookup); ok {
+				if ad := al.Adapter(v.Kind); ad != nil {
+					if ml, ok := ad.(ModelInfoLookup); ok {
+						lookup = ml
+					}
+					if rf, ok := ad.(AdapterRefresher); ok {
+						refresher = rf
+					}
+				}
+			}
 			infos := make([]ModelInfo, 0, len(v.Models))
+			missCount := 0
 			for _, modelID := range v.Models {
-				infos = append(infos, ModelInfo{
-					ID:            modelID,
-					DisplayName:   modelID,
-					ContextWindow: a.capCatalog.ContextWindow(v.Kind, modelID),
-				})
+				info := ModelInfo{ID: modelID, DisplayName: modelID}
+				resolved := false
+				if lookup != nil {
+					if mi, ok := lookup.LookupModelInfo(modelID); ok {
+						info.ContextWindow = mi.ContextWindow
+						if mi.DisplayName != "" {
+							info.DisplayName = mi.DisplayName
+						}
+						info.Description = mi.Description
+						resolved = true
+						logging.L().Debug("llm.model_info.dynamic_hit",
+							"provider_id", v.ID,
+							"kind", v.Kind,
+							"model_id", modelID,
+							"context_window", mi.ContextWindow)
+					}
+				}
+				if !resolved && a.capCatalog != nil {
+					cw := a.capCatalog.ContextWindow(v.Kind, modelID)
+					info.ContextWindow = cw
+					if cw > 0 {
+						resolved = true
+						logging.L().Debug("llm.model_info.catalog_hit",
+							"provider_id", v.ID,
+							"kind", v.Kind,
+							"model_id", modelID,
+							"context_window", cw)
+					}
+				}
+				if !resolved {
+					missCount++
+					logging.L().Info("llm.model_info.miss",
+						"provider_id", v.ID,
+						"kind", v.Kind,
+						"model_id", modelID,
+						"reason", "no dynamic lookup hit and no catalog entry; frontend will use MODEL_CONTEXT_FALLBACK")
+				}
+				infos = append(infos, info)
 			}
 			v.ModelInfos = infos
+			// On a miss with a refresher available, kick a background
+			// refresh so the NEXT ListProviders call sees populated
+			// data. The refresh is rate-limited inside the adapter via
+			// modelCacheTTL + refreshBackoff so we won't hammer the API.
+			if missCount > 0 && refresher != nil {
+				logging.L().Info("llm.model_info.refresh_kick",
+					"provider_id", v.ID,
+					"kind", v.Kind,
+					"miss_count", missCount)
+				refresher.RefreshModelsAsync(nil)
+			}
 		}
 		out = append(out, v)
 	}
