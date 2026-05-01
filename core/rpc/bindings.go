@@ -18,6 +18,7 @@ import (
 	dialsview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/dials"
 	hooksview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/hooks"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/llm"
+	coremcp "github.com/sigil-tech/kaneaz-harness/core/mcp"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/mcp"
 	memoryview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/memory"
 	nodesview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/nodes"
@@ -250,6 +251,17 @@ func (b *Bindings) MCP_StartStream(id string) (string, error) {
 }
 func (b *Bindings) MCP_StopStream(subID string) error {
 	return b.api.MCP().StopStream(b.ctx(), subID)
+}
+
+// MCP_TestRecipe runs a one-shot connection test against the recipe
+// identified by recipeID (WP07 of mission mcp-server-install-01KQ8TDP).
+// env and config override the recipe's stored values; both are nil-safe.
+// The result is always non-nil; transport-level failures are reflected in
+// TestResult.OK=false / TestResult.Error rather than the Go error return.
+// The Go error return is set only for pre-flight failures (recipe not
+// found, catalog not wired).
+func (b *Bindings) MCP_TestRecipe(recipeID string, env map[string]string, config map[string]any) (coremcp.TestResult, error) {
+	return b.api.MCP().TestRecipe(b.ctx(), recipeID, env, config)
 }
 
 // MCP_ImportClaudeDesktopConfig is the user-facing RPC behind the

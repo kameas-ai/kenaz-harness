@@ -11,8 +11,12 @@ package mcp
 
 import (
 	"context"
+	"errors"
 	"sort"
 	"sync"
+
+	coremcp "github.com/sigil-tech/kaneaz-harness/core/mcp"
+	"github.com/sigil-tech/kaneaz-harness/core/mcp/recipes"
 )
 
 // Subscriber is the broker contract used by API.StartStream. Mirrors
@@ -30,11 +34,18 @@ type Registry interface {
 	List(ctx context.Context) ([]Server, error)
 }
 
+// RecipeCatalog is the read seam used by TestRecipe for recipe lookup.
+// *recipes.MergedCatalog satisfies this interface.
+type RecipeCatalog interface {
+	Get(id string) (recipes.Recipe, bool)
+}
+
 // API is the concrete MCPAPI implementation.
 type API struct {
 	mu       sync.RWMutex
 	registry Registry
 	broker   Subscriber
+	catalog  RecipeCatalog
 	subs     map[string]chan any
 }
 
@@ -51,6 +62,12 @@ func WithRegistry(r Registry) Option {
 // WithSubscriber injects a streamBroker.
 func WithSubscriber(s Subscriber) Option {
 	return func(a *API) { a.broker = s }
+}
+
+// WithCatalog injects the merged recipe catalog used by TestRecipe.
+// Without this option TestRecipe returns ErrCatalogNotConfigured.
+func WithCatalog(c RecipeCatalog) Option {
+	return func(a *API) { a.catalog = c }
 }
 
 // NewAPI constructs the mcp view-scoped API.
@@ -135,4 +152,37 @@ func (a *API) Publish(ev any) {
 			// mcp-client's own log; this surface is best-effort fan-out.
 		}
 	}
+}
+
+// ErrCatalogNotConfigured is returned by TestRecipe when no catalog
+// has been wired via WithCatalog. Callers interpret this as
+// "feature not yet available in this API instance".
+var ErrCatalogNotConfigured = errors.New("mcp: TestRecipe catalog not configured")
+
+// TestRecipe looks up the recipe by id in the merged catalog, builds
+// a ServerSpec via Recipe.ToServerSpec, and delegates to
+// coremcp.TestConnection. env and config override the recipe's
+// stored values (nil is safe; the recipe's own defaults apply).
+//
+// The method satisfies the MCPAPI interface for TestRecipe. It
+// returns (coremcp.TestResult{}, err) for pre-flight failures; for
+// transport-level failures the error is folded into the returned
+// TestResult.Error field and the Go error return is nil.
+func (a *API) TestRecipe(ctx context.Context, recipeID string, env map[string]string, config map[string]any) (coremcp.TestResult, error) {
+	a.mu.RLock()
+	cat := a.catalog
+	a.mu.RUnlock()
+
+	if cat == nil {
+		return coremcp.TestResult{}, ErrCatalogNotConfigured
+	}
+
+	recipe, ok := cat.Get(recipeID)
+	if !ok {
+		return coremcp.TestResult{}, recipes.ErrRecipeNotFound
+	}
+
+	spec := recipe.ToServerSpec(env, config)
+	result := TestConnection(ctx, spec)
+	return result, nil
 }

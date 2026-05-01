@@ -137,6 +137,36 @@ export interface MCPServer {
   capabilities?: string[];
 }
 
+// ── MCP Test Connection (mission mcp-server-install-01KQ8TDP, WP07) ────
+//
+// Wire shape for `MCP_TestRecipe`. Field names follow Go JSON tags
+// (snake_case) verbatim. `ok` is the primary discriminant; `error`
+// is populated on failure. Capability counts are -1 when the server
+// did not advertise the capability (not 0, which means "advertised
+// but empty").
+
+export interface MCPTestResult {
+  ok: boolean;
+  protocol_version?: string;
+  server_info: { name: string; version: string };
+  capabilities: {
+    tools?: { listChanged?: boolean };
+    resources?: { subscribe?: boolean; listChanged?: boolean };
+    prompts?: { listChanged?: boolean };
+    logging?: Record<string, never>;
+  };
+  /** -1 when tools capability not advertised. */
+  tool_count: number;
+  /** -1 when resources capability not advertised. */
+  resource_count: number;
+  /** -1 when prompts capability not advertised. */
+  prompt_count: number;
+  /** Last 4 KiB of stderr from a stdio server on failure. */
+  stderr_tail?: string;
+  duration_ms: number;
+  error?: string;
+}
+
 // ── MCP clipboard import (mission mcp-server-install-01KQ8TDP, WP08) ───
 //
 // Wire shapes for `MCP_ImportClaudeDesktopConfig`. Field names follow

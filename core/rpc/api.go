@@ -284,7 +284,14 @@ func New(c *core.Core) *API {
 	a.broker = NewStreamBroker(WailsEmitter{})
 	a.auditImpl = audit.NewAPI(audit.WithSubscriber(a.broker))
 	a.auditAPI = a.auditImpl
-	a.mcpAPI = mcp.NewAPI(mcp.WithSubscriber(a.broker))
+	// Build the merged catalog once so both TestRecipe and the import
+	// surface share the same shipped + registry + user view.
+	mergedCat := recipes.NewMergedCatalog(
+		func() []recipes.Recipe { return recipes.Shipped().List() },
+		func() []recipes.Recipe { return recipes.Registry().List() },
+		nil, // user source wired by WP10 boot sequence
+	)
+	a.mcpAPI = mcp.NewAPI(mcp.WithSubscriber(a.broker), mcp.WithCatalog(mergedCat))
 	// MCP clipboard-import surface (mission mcp-server-install-01KQ8TDP,
 	// WP08). Wired only when we have a real Core (= a real DataDir);
 	// rpc.New(nil) test harness leaves it nil and the binding returns
