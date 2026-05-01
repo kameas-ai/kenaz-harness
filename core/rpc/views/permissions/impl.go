@@ -3,6 +3,7 @@ package permissions
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
@@ -21,6 +22,16 @@ type Engine interface {
 // Compile-time witness: *cedar.Engine satisfies Engine.
 var _ Engine = (*cedar.Engine)(nil)
 
+// RecipeConfigTrimmer is the narrow interface for trimming a directory
+// from a recipe's allowed_directories after a Cedar grant revoke. The
+// tools view implements this; nil is tolerated (trim is skipped).
+type RecipeConfigTrimmer interface {
+	// TrimAllowedDir removes path from the named recipe's
+	// Config["allowed_directories"] and persists the change. It is
+	// best-effort: the caller does not inspect the error.
+	TrimAllowedDir(ctx context.Context, recipeID, path string)
+}
+
 // API is the concrete PermissionsAPI implementation.
 //
 // dataDir is the harness data root; the view resolves grants by
@@ -30,12 +41,16 @@ var _ Engine = (*cedar.Engine)(nil)
 // reload after a revoke; nil engine is tolerated (revoke skips the
 // reload) so the test harness path stays simple.
 //
-// All three may be nil; the view degrades to a friendly error per
+// configTrimmer is optional: when non-nil, RevokeGrant trims any
+// paths covered by the revoked fs grant from the recipe config.
+//
+// All fields may be nil; the view degrades to a friendly error per
 // method so the chassis still boots when none of these are wired.
 type API struct {
-	dataDir  string
-	registry *cedar.Registry
-	engine   Engine
+	dataDir       string
+	registry      *cedar.Registry
+	engine        Engine
+	configTrimmer RecipeConfigTrimmer
 }
 
 // Config configures the API at construction time.
@@ -43,15 +58,31 @@ type Config struct {
 	DataDir  string
 	Registry *cedar.Registry
 	Engine   Engine
+	// ConfigTrimmer is optional. When non-nil, RevokeGrant calls
+	// TrimAllowedDir for fs-family "recipe_dir_add" grants so the
+	// MCP server's allowed_directories list stays in sync with the
+	// Cedar policy state.
+	ConfigTrimmer RecipeConfigTrimmer
 }
 
 // New constructs the view-scoped API.
 func New(cfg Config) *API {
 	return &API{
-		dataDir:  cfg.DataDir,
-		registry: cfg.Registry,
-		engine:   cfg.Engine,
+		dataDir:       cfg.DataDir,
+		registry:      cfg.Registry,
+		engine:        cfg.Engine,
+		configTrimmer: cfg.ConfigTrimmer,
 	}
+}
+
+// SetConfigTrimmer wires the recipe-config trimmer after construction.
+// Called when the tools API is available (constructed after the permissions
+// API). nil-safe: clears a previously wired trimmer.
+func (a *API) SetConfigTrimmer(t RecipeConfigTrimmer) {
+	if a == nil {
+		return
+	}
+	a.configTrimmer = t
 }
 
 // ErrRegistryUnavailable is returned by Resolve / ListPending when the
@@ -207,6 +238,14 @@ func (a *API) RevokeGrant(ctx context.Context, grantID string) error {
 		if a.registry != nil {
 			a.registry.ClearTransientGrants()
 		}
+		// For fs recipe-dir grants, also trim the revoked path from
+		// the filesystem recipe's Config["allowed_directories"] so the
+		// MCP server stops serving that directory on the next restart.
+		// Best-effort: failure is logged inside the trimmer; the Cedar-
+		// level revocation always takes effect regardless.
+		if familyFromFilename(grantID) == string(cedar.FamilyFilesystem) {
+			a.trimFSGrantFromRecipeConfig(ctx, grantID)
+		}
 		return nil
 	}
 
@@ -293,4 +332,64 @@ func familyFromResourceKey(k string) string {
 		return string(cedar.FamilyTool)
 	}
 	return ""
+}
+
+// trimFSGrantFromRecipeConfig calls the configTrimmer to remove the
+// path that a revoked fs recipe-dir grant covered. Only
+// "fs_allow_recipe_dir_" snippets have corresponding recipe-config
+// entries; other fs grants are skipped.
+//
+// The canonical path is recovered from the Cedar snippet body, which
+// is read from disk BEFORE the file was deleted (it was deleted in the
+// caller). If the file is already gone we bail out silently.
+//
+// Best-effort: failures are logged; the Cedar-level revocation is not
+// affected.
+func (a *API) trimFSGrantFromRecipeConfig(ctx context.Context, grantFilename string) {
+	if a.configTrimmer == nil || a.dataDir == "" {
+		return
+	}
+	// Only "recipe_dir_add" snippets affect the recipe config.
+	if !strings.HasPrefix(strings.ToLower(grantFilename), "fs_allow_recipe_dir_") {
+		return
+	}
+
+	// The snippet was deleted just before this call; read via policyPath.
+	// If the file is gone (expected after os.Remove) we cannot recover
+	// the path — skip silently.
+	policyPath := filepath.Join(a.dataDir, cedar.PolicyDir, grantFilename)
+	body, err := os.ReadFile(policyPath) // #nosec G304 — dataDir is harness-owned
+	if err != nil {
+		return // file already gone; nothing to trim
+	}
+
+	canonical := extractFilesystemOpPath(string(body))
+	if canonical == "" {
+		slog.Warn("permissions.revoke.trim.path_not_found",
+			"grant", grantFilename)
+		return
+	}
+
+	// v1: hardcoded to the "filesystem" recipe.
+	a.configTrimmer.TrimAllowedDir(ctx, "filesystem", canonical)
+}
+
+// extractFilesystemOpPath parses the canonical path out of a Cedar
+// snippet body of the form:
+//
+//	resource == FilesystemOp::"<path>"
+//
+// Returns the empty string if the marker is not found.
+func extractFilesystemOpPath(body string) string {
+	const marker = `FilesystemOp::"`
+	idx := strings.Index(body, marker)
+	if idx < 0 {
+		return ""
+	}
+	rest := body[idx+len(marker):]
+	end := strings.Index(rest, `"`)
+	if end < 0 {
+		return ""
+	}
+	return rest[:end]
 }

@@ -293,6 +293,10 @@ func TestAdapter_ListModels_FiltersNonChat(t *testing.T) {
 	if models[0].DisplayName != "gpt-4o" {
 		t.Fatalf("display name = %q", models[0].DisplayName)
 	}
+	// ContextWindow should be populated from the curated catalog.
+	if models[0].ContextWindow != 128_000 {
+		t.Errorf("expected ContextWindow=128000 for gpt-4o, got %d", models[0].ContextWindow)
+	}
 }
 
 func TestAdapter_ListModels_SortedAlphabetically(t *testing.T) {

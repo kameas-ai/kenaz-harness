@@ -300,6 +300,10 @@ func (s *stubTools) RecipeConfig(_ context.Context, _ string) (map[string]any, e
 	return map[string]any{}, nil
 }
 
+func (s *stubTools) RequestAdditionalAllowedDir(_ context.Context, _, _, _ string) (bool, string, error) {
+	return false, "", errNotWired
+}
+
 // ── shell ──────────────────────────────────────────────────────────────
 
 type stubShell struct{}

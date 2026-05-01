@@ -778,9 +778,14 @@ func (a *Adapter) ListModels(ctx context.Context, cred []byte) ([]llm.ModelInfo,
 		if !isChatCapable(m.ID) {
 			continue
 		}
+		cw := 0
+		if a.cat != nil {
+			cw = a.cat.ContextWindow(Kind, m.ID)
+		}
 		out = append(out, llm.ModelInfo{
-			ID:          m.ID,
-			DisplayName: m.ID,
+			ID:            m.ID,
+			DisplayName:   m.ID,
+			ContextWindow: cw,
 		})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })

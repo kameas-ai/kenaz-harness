@@ -571,6 +571,31 @@ func (s *FileStore) SaveCedarStrictCredentialMode(enabled bool) error {
 	return s.saveLocked(got)
 }
 
+// LoadFSRequestAccessEnabled returns the kaneaz__request_filesystem_access
+// built-in opt-in. Default true (on) — zero-value FSRequestAccessDisabled
+// means enabled. Errors return the safe default so the tool keeps working
+// even if the settings file is unreadable.
+func (s *FileStore) LoadFSRequestAccessEnabled() (bool, error) {
+	got, err := s.LoadAll()
+	if err != nil {
+		return got.FSRequestAccessEnabled(), err
+	}
+	return got.FSRequestAccessEnabled(), nil
+}
+
+// SaveFSRequestAccessEnabled persists the request_filesystem_access
+// built-in opt-in flag. Persists as the inverted FSRequestAccessDisabled bit.
+func (s *FileStore) SaveFSRequestAccessEnabled(enabled bool) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	got, err := s.loadLocked()
+	if err != nil {
+		return err
+	}
+	got.FSRequestAccessDisabled = !enabled
+	return s.saveLocked(got)
+}
+
 // defaultSettings is the safe-baseline a fresh install starts with.
 func defaultSettings() Settings {
 	return Settings{
@@ -816,5 +841,18 @@ func (m *memoryStore) SaveCedarStrictCredentialMode(enabled bool) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.data.CedarStrictCredentialMode = enabled
+	return nil
+}
+
+func (m *memoryStore) LoadFSRequestAccessEnabled() (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.data.FSRequestAccessEnabled(), nil
+}
+
+func (m *memoryStore) SaveFSRequestAccessEnabled(enabled bool) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.data.FSRequestAccessDisabled = !enabled
 	return nil
 }

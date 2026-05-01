@@ -1,5 +1,4 @@
 <script setup lang="ts">
-import { computed, ref, onMounted, onBeforeUnmount } from 'vue';
 import { computed, onMounted, onBeforeUnmount, ref } from 'vue';
 import Titlebar from './Titlebar.vue';
 import Toolbar from './Toolbar.vue';
@@ -35,24 +34,45 @@ const isStarting = computed(() => connection.value === 'connecting');
 const isLost = computed(() => connection.value === 'lost');
 
 const searchOpen = ref(false);
+const client = useHarnessClient();
+const cheatSheetOpen = ref(false);
+const shortcutOverrides = ref<Record<string, string>>({});
 
 function onGlobalKeydown(e: KeyboardEvent) {
-  // Cmd-F (Mac) or Ctrl-F (other platforms)
-  const isCmdF = (e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'f';
-  if (!isCmdF) return;
+  const target = e.target as HTMLElement | null;
+  const tag = target?.tagName?.toUpperCase();
+  const isEditable =
+    tag === 'INPUT' ||
+    tag === 'TEXTAREA' ||
+    (target?.isContentEditable ?? false);
+  if (isEditable) return;
 
-  // Don't intercept when focus is already inside a text field (chat
-  // composer, inline rename inputs, etc.).
-  const tag = (e.target as HTMLElement | null)?.tagName?.toUpperCase();
-  if (tag === 'INPUT' || tag === 'TEXTAREA') return;
-
-  e.preventDefault();
-  searchOpen.value = true;
+  // Cmd-F / Ctrl-F → search modal
+  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'f') {
+    e.preventDefault();
+    searchOpen.value = true;
+    return;
+  }
+  // ? → cheat-sheet overlay
+  if (matchesEvent('?', e)) {
+    e.preventDefault();
+    cheatSheetOpen.value = !cheatSheetOpen.value;
+    return;
+  }
+  if (e.key === 'Escape' && cheatSheetOpen.value) {
+    cheatSheetOpen.value = false;
+  }
 }
 
-onMounted(() => {
+onMounted(async () => {
   if (typeof window !== 'undefined') {
     window.addEventListener('keydown', onGlobalKeydown);
+  }
+  try {
+    const s = await client.settings.get();
+    shortcutOverrides.value = s.keyboardShortcuts ?? {};
+  } catch {
+    // best-effort; cheat sheet falls back to defaults
   }
 });
 
@@ -61,43 +81,6 @@ onBeforeUnmount(() => {
     window.removeEventListener('keydown', onGlobalKeydown);
   }
 });
-// ── cheat-sheet overlay (help.cheat-sheet) ────────────────────────────
-
-const client = useHarnessClient();
-const cheatSheetOpen = ref(false);
-const shortcutOverrides = ref<Record<string, string>>({});
-
-// Load overrides for display in the cheat-sheet (best-effort).
-onMounted(async () => {
-  try {
-    const s = await client.settings.get();
-    shortcutOverrides.value = s.keyboardShortcuts ?? {};
-  } catch {
-    // Non-fatal: cheat-sheet falls back to defaults.
-  }
-  window.addEventListener('keydown', onGlobalKeydown);
-});
-
-onBeforeUnmount(() => {
-  window.removeEventListener('keydown', onGlobalKeydown);
-});
-
-function onGlobalKeydown(e: KeyboardEvent) {
-  // Skip when focus is inside an input / textarea / contenteditable.
-  const tag = (e.target as HTMLElement)?.tagName?.toLowerCase();
-  const isEditable =
-    tag === 'input' ||
-    tag === 'textarea' ||
-    (e.target as HTMLElement)?.isContentEditable;
-  if (isEditable) return;
-
-  if (matchesEvent('?', e)) {
-    e.preventDefault();
-    cheatSheetOpen.value = !cheatSheetOpen.value;
-  } else if (e.key === 'Escape' && cheatSheetOpen.value) {
-    cheatSheetOpen.value = false;
-  }
-}
 </script>
 
 <template>

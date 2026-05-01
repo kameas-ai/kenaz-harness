@@ -276,4 +276,108 @@ describe('SessionsView (chat-ui)', () => {
     expect(w.text()).not.toContain('No provider configured');
     w.unmount();
   });
+
+  it('context meter title uses backend-supplied contextWindow from modelInfos', async () => {
+    const providers: Provider[] = [
+      {
+        id: 'anthropic-p-1',
+        name: 'Anthropic',
+        tier: 'cloud',
+        kind: 'anthropic',
+        model: 'claude-sonnet-4-5',
+        models: ['claude-sonnet-4-5'],
+        modelInfos: [{ id: 'claude-sonnet-4-5', displayName: 'Claude Sonnet 4.5', contextWindow: 200_000 }],
+      },
+    ];
+    const messages: Message[] = [
+      makeMessage({ id: 'q', role: 'user', content: 'Hello' }),
+    ];
+    const { w } = await mountWithRoute('#ctx-test', {
+      sessions: {
+        list: async () => [],
+        get: async (id) => ({ id, name: 'Test', createdAt: '', updatedAt: '' }),
+        create: async () => ({ id: '', name: '', createdAt: '', updatedAt: '' }),
+        rename: async () => undefined,
+        delete: async () => undefined,
+        reorder: async () => undefined,
+        startStream: async () => 'sub',
+        stopStream: async () => undefined,
+        listMessages: async () => messages,
+        listMessagesActive: async () => ({ messages, sweptCount: 0 }),
+        listMessagesAll: async () => ({ messages, sweptCount: 0 }),
+        appendMessage: async (id, role, content) =>
+          makeMessage({ id: 'new', sessionId: id, role, content }),
+        sendMessageWithBlocks: async () => makeMessage({ id: 'b' }),
+        saveDraft: async () => undefined,
+        loadDraft: async () => '',
+        setSystemPrompt: async () => undefined,
+        moveToProject: async () => undefined,
+        getUsage: async () => ({ promptTokens: 0, completionTokens: 0, totalTokens: 0, costUsd: 0, costSource: 'unknown' as const, messageCount: 0, pricingDataDate: '' }),
+        saveAsArtifact: async () => ({ id: '', sessionId: '', title: '', mimeType: 'text/plain', contentHash: '', byteSize: 0, source: 'user_pin' as const, sourceRef: { messageId: '', offset: 0, length: 0 }, scopeKind: 'session' as const, createdAt: '' }),
+      },
+      llm: {
+        listProviders: async () => providers,
+        startStream: async () => 'sub',
+        stopStream: async () => undefined,
+      },
+    });
+    const meter = w.find('[data-testid="session-context-meter"]');
+    expect(meter.exists()).toBe(true);
+    // Title should use the backend-supplied 200_000 cap (not a regex-derived value).
+    const title = meter.attributes('title') ?? '';
+    expect(title).toContain('200,000');
+    w.unmount();
+  });
+
+  it('context meter falls back to MODEL_CONTEXT_FALLBACK (200k) when modelInfos is absent', async () => {
+    const providers: Provider[] = [
+      {
+        id: 'openai-p-1',
+        name: 'OpenAI',
+        tier: 'cloud',
+        kind: 'openai',
+        model: 'some-unknown-future-model',
+        models: ['some-unknown-future-model'],
+        // no modelInfos — simulates a provider that hasn't been catalogued yet
+      },
+    ];
+    const messages: Message[] = [
+      makeMessage({ id: 'q', role: 'user', content: 'Hello' }),
+    ];
+    const { w } = await mountWithRoute('#ctx-fallback', {
+      sessions: {
+        list: async () => [],
+        get: async (id) => ({ id, name: 'Test', createdAt: '', updatedAt: '' }),
+        create: async () => ({ id: '', name: '', createdAt: '', updatedAt: '' }),
+        rename: async () => undefined,
+        delete: async () => undefined,
+        reorder: async () => undefined,
+        startStream: async () => 'sub',
+        stopStream: async () => undefined,
+        listMessages: async () => messages,
+        listMessagesActive: async () => ({ messages, sweptCount: 0 }),
+        listMessagesAll: async () => ({ messages, sweptCount: 0 }),
+        appendMessage: async (id, role, content) =>
+          makeMessage({ id: 'new', sessionId: id, role, content }),
+        sendMessageWithBlocks: async () => makeMessage({ id: 'b' }),
+        saveDraft: async () => undefined,
+        loadDraft: async () => '',
+        setSystemPrompt: async () => undefined,
+        moveToProject: async () => undefined,
+        getUsage: async () => ({ promptTokens: 0, completionTokens: 0, totalTokens: 0, costUsd: 0, costSource: 'unknown' as const, messageCount: 0, pricingDataDate: '' }),
+        saveAsArtifact: async () => ({ id: '', sessionId: '', title: '', mimeType: 'text/plain', contentHash: '', byteSize: 0, source: 'user_pin' as const, sourceRef: { messageId: '', offset: 0, length: 0 }, scopeKind: 'session' as const, createdAt: '' }),
+      },
+      llm: {
+        listProviders: async () => providers,
+        startStream: async () => 'sub',
+        stopStream: async () => undefined,
+      },
+    });
+    const meter = w.find('[data-testid="session-context-meter"]');
+    expect(meter.exists()).toBe(true);
+    // Without modelInfos, falls back to MODEL_CONTEXT_FALLBACK = 200_000.
+    const title = meter.attributes('title') ?? '';
+    expect(title).toContain('200,000');
+    w.unmount();
+  });
 });

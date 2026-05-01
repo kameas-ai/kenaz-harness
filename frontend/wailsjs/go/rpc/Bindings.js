@@ -422,8 +422,8 @@ export function MCP_StopStream(arg1) {
   return window['go']['rpc']['Bindings']['MCP_StopStream'](arg1);
 }
 
-export function MCP_TestRecipe(arg1) {
-  return window['go']['rpc']['Bindings']['MCP_TestRecipe'](arg1);
+export function MCP_TestRecipe(arg1, arg2, arg3) {
+  return window['go']['rpc']['Bindings']['MCP_TestRecipe'](arg1, arg2, arg3);
 }
 
 export function Memory_Forget(arg1) {
@@ -670,6 +670,10 @@ export function Settings_GetConfirmEach() {
   return window['go']['rpc']['Bindings']['Settings_GetConfirmEach']();
 }
 
+export function Settings_GetFSRequestAccessEnabled() {
+  return window['go']['rpc']['Bindings']['Settings_GetFSRequestAccessEnabled']();
+}
+
 export function Settings_GetMaxAgentTurns() {
   return window['go']['rpc']['Bindings']['Settings_GetMaxAgentTurns']();
 }
@@ -720,6 +724,10 @@ export function Settings_SetCedarStrictCredentialMode(arg1) {
 
 export function Settings_SetConfirmEach(arg1) {
   return window['go']['rpc']['Bindings']['Settings_SetConfirmEach'](arg1);
+}
+
+export function Settings_SetFSRequestAccessEnabled(arg1) {
+  return window['go']['rpc']['Bindings']['Settings_SetFSRequestAccessEnabled'](arg1);
 }
 
 export function Settings_SetMaxAgentTurns(arg1) {
@@ -804,6 +812,10 @@ export function Tools_RecipeConfig(arg1) {
 
 export function Tools_RecipeStatus(arg1) {
   return window['go']['rpc']['Bindings']['Tools_RecipeStatus'](arg1);
+}
+
+export function Tools_RequestAdditionalAllowedDir(arg1, arg2, arg3) {
+  return window['go']['rpc']['Bindings']['Tools_RequestAdditionalAllowedDir'](arg1, arg2, arg3);
 }
 
 export function Tools_UninstallRecipe(arg1) {

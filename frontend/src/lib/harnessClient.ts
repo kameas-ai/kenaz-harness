@@ -219,6 +219,11 @@ interface WailsBindingsLike {
   MCP_ListServers(): Promise<MCPServer[]>;
   MCP_StartStream(id: string): Promise<string>;
   MCP_StopStream(id: string): Promise<void>;
+  MCP_TestRecipe(
+    recipeID: string,
+    env: Record<string, string>,
+    config: Record<string, unknown>,
+  ): Promise<MCPTestResult>;
   MCP_ImportClaudeDesktopConfig(
     req: MCPImportRequest,
   ): Promise<MCPImportResponse>;
@@ -917,6 +922,21 @@ export interface MCPClient {
   startStream(id: string): Promise<string>;
   stopStream(id: string): Promise<void>;
   /**
+   * testRecipe — run a one-shot connection test against the recipe
+   * identified by recipeID (mission mcp-server-install-01KQ8TDP, WP07).
+   *
+   * `env` and `config` override the recipe's stored values and are safe
+   * to pass as empty objects. The result is always returned; transport-
+   * level failures are reflected in `result.ok === false` / `result.error`
+   * rather than a thrown error. A thrown error indicates a pre-flight
+   * failure (recipe not found, catalog not wired).
+   */
+  testRecipe(
+    recipeID: string,
+    env?: Record<string, string>,
+    config?: Record<string, unknown>,
+  ): Promise<MCPTestResult>;
+  /**
    * importClaudeDesktopConfig — translate a pasted Claude Desktop /
    * Cursor `mcpServers` JSON config into harness recipes (mission
    * mcp-server-install-01KQ8TDP, WP08).
@@ -942,6 +962,7 @@ export interface MCPClient {
 }
 
 export type {
+  MCPTestResult,
   MCPImportRequest,
   MCPImportResponse,
   MCPImportEntry,
@@ -1721,6 +1742,8 @@ export function createHarnessClient(): HarnessClient {
       listServers: () => b().MCP_ListServers(),
       startStream: (id) => b().MCP_StartStream(id),
       stopStream: (id) => b().MCP_StopStream(id),
+      testRecipe: (recipeID, env = {}, config = {}) =>
+        b().MCP_TestRecipe(recipeID, env, config),
       importClaudeDesktopConfig: (req) => b().MCP_ImportClaudeDesktopConfig(req),
       testRecipe: (recipe) => b().MCP_TestRecipe(recipe as WireRecipe),
     },

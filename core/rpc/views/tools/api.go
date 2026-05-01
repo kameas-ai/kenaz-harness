@@ -33,6 +33,15 @@ type RecipeListing struct {
 	KeysPresent bool               `json:"keysPresent"`
 }
 
+// FSAccessResult is the wire shape returned by RequestAdditionalAllowedDir
+// and the Tools_RequestAdditionalAllowedDir Wails binding. Kept here so
+// the binding file can reference it without importing the impl package.
+type FSAccessResult struct {
+	Granted  bool   `json:"granted"`
+	Expanded string `json:"expanded"`
+	Message  string `json:"message"`
+}
+
 // ToolsAPI is the view-scoped surface backing /tools. Implementations
 // MUST be safe for concurrent use; the rpc layer holds a single API
 // pointer for the lifetime of the harness and fan-outs from the Wails
@@ -71,4 +80,14 @@ type ToolsAPI interface {
 	// an empty map when the recipe is not enabled — no error in that
 	// case so the UI can render a uniform row.
 	RecipeConfig(ctx context.Context, id string) (map[string]any, error)
+
+	// RequestAdditionalAllowedDir is the runtime "expand filesystem
+	// access" flow. It validates the path, fires the Cedar interactive
+	// prompt, and — on approval — appends the path to the recipe's
+	// Config["allowed_directories"] and re-spawns the MCP server.
+	// Returns (true, canonicalPath, nil) on success and
+	// (false, "", err) on rejection or error. The path is
+	// canonicalised before returning so the model can retry with the
+	// resolved form.
+	RequestAdditionalAllowedDir(ctx context.Context, recipeID, path, reason string) (granted bool, expanded string, err error)
 }

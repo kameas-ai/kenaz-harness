@@ -2018,6 +2018,7 @@ export namespace llm {
 	    id: string;
 	    displayName: string;
 	    description?: string;
+	    contextWindow?: number;
 	
 	    static createFrom(source: any = {}) {
 	        return new ModelInfo(source);
@@ -2028,6 +2029,7 @@ export namespace llm {
 	        this.id = source["id"];
 	        this.displayName = source["displayName"];
 	        this.description = source["description"];
+	        this.contextWindow = source["contextWindow"];
 	    }
 	}
 	export class Redacted {
@@ -2053,6 +2055,7 @@ export namespace llm {
 	    kind?: string;
 	    model: string;
 	    models?: string[];
+	    modelInfos?: ModelInfo[];
 	    region?: string;
 	    cred?: CredentialReference;
 	    redaction?: Redacted;
@@ -2071,6 +2074,7 @@ export namespace llm {
 	        this.kind = source["kind"];
 	        this.model = source["model"];
 	        this.models = source["models"];
+	        this.modelInfos = this.convertValues(source["modelInfos"], ModelInfo);
 	        this.region = source["region"];
 	        this.cred = this.convertValues(source["cred"], CredentialReference);
 	        this.redaction = this.convertValues(source["redaction"], Redacted);
@@ -2208,15 +2212,15 @@ export namespace mcp {
 	}
 	export class TestResult {
 	    ok: boolean;
-	    serverName: string;
-	    serverVersion: string;
-	    protocolVersion: string;
-	    toolCount: number;
-	    resourceCount: number;
-	    promptCount: number;
-	    stderrTail: string;
-	    errorMessage: string;
-	    durationMs: number;
+	    protocol_version?: string;
+	    server_info: transport.Implementation;
+	    capabilities: transport.ServerCapabilities;
+	    tool_count: number;
+	    resource_count: number;
+	    prompt_count: number;
+	    stderr_tail?: string;
+	    duration_ms: number;
+	    error?: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new TestResult(source);
@@ -2225,16 +2229,34 @@ export namespace mcp {
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.ok = source["ok"];
-	        this.serverName = source["serverName"];
-	        this.serverVersion = source["serverVersion"];
-	        this.protocolVersion = source["protocolVersion"];
-	        this.toolCount = source["toolCount"];
-	        this.resourceCount = source["resourceCount"];
-	        this.promptCount = source["promptCount"];
-	        this.stderrTail = source["stderrTail"];
-	        this.errorMessage = source["errorMessage"];
-	        this.durationMs = source["durationMs"];
+	        this.protocol_version = source["protocol_version"];
+	        this.server_info = this.convertValues(source["server_info"], transport.Implementation);
+	        this.capabilities = this.convertValues(source["capabilities"], transport.ServerCapabilities);
+	        this.tool_count = source["tool_count"];
+	        this.resource_count = source["resource_count"];
+	        this.prompt_count = source["prompt_count"];
+	        this.stderr_tail = source["stderr_tail"];
+	        this.duration_ms = source["duration_ms"];
+	        this.error = source["error"];
 	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
 	}
 
 }
@@ -3477,6 +3499,7 @@ export namespace settings {
 	    branchAdvisorDefaultModel?: ProviderProfileRef;
 	    keyboardShortcuts?: Record<string, string>;
 	    keyboardShortcutsPreset?: string;
+	    fsRequestAccessDisabled?: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new Settings(source);
@@ -3517,6 +3540,7 @@ export namespace settings {
 	        this.branchAdvisorDefaultModel = this.convertValues(source["branchAdvisorDefaultModel"], ProviderProfileRef);
 	        this.keyboardShortcuts = source["keyboardShortcuts"];
 	        this.keyboardShortcutsPreset = source["keyboardShortcutsPreset"];
+	        this.fsRequestAccessDisabled = source["fsRequestAccessDisabled"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -3579,6 +3603,22 @@ export namespace slashcmd {
 
 export namespace tools {
 	
+	export class FSAccessResult {
+	    granted: boolean;
+	    expanded: string;
+	    message: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new FSAccessResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.granted = source["granted"];
+	        this.expanded = source["expanded"];
+	        this.message = source["message"];
+	    }
+	}
 	export class RecipeListing {
 	    recipe: recipes.Recipe;
 	    enabled: boolean;
@@ -3620,6 +3660,32 @@ export namespace tools {
 
 export namespace transport {
 	
+	export class Implementation {
+	    name: string;
+	    version: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new Implementation(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.version = source["version"];
+	    }
+	}
+	export class PromptsCapability {
+	    listChanged?: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new PromptsCapability(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.listChanged = source["listChanged"];
+	    }
+	}
 	export class RecipeStatus {
 	    id: string;
 	    enabled: boolean;
@@ -3662,6 +3728,81 @@ export namespace transport {
 	        this.prompt_count = source["prompt_count"];
 	        this.stderr_tail = source["stderr_tail"];
 	        this.updated_at = this.convertValues(source["updated_at"], null);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class ResourcesCapability {
+	    subscribe?: boolean;
+	    listChanged?: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new ResourcesCapability(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.subscribe = source["subscribe"];
+	        this.listChanged = source["listChanged"];
+	    }
+	}
+	export class LoggingCapability {
+	
+	
+	    static createFrom(source: any = {}) {
+	        return new LoggingCapability(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	
+	    }
+	}
+	export class ToolsCapability {
+	    listChanged?: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new ToolsCapability(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.listChanged = source["listChanged"];
+	    }
+	}
+	export class ServerCapabilities {
+	    tools?: ToolsCapability;
+	    resources?: ResourcesCapability;
+	    prompts?: PromptsCapability;
+	    // Go type: LoggingCapability
+	    logging?: any;
+	
+	    static createFrom(source: any = {}) {
+	        return new ServerCapabilities(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.tools = this.convertValues(source["tools"], ToolsCapability);
+	        this.resources = this.convertValues(source["resources"], ResourcesCapability);
+	        this.prompts = this.convertValues(source["prompts"], PromptsCapability);
+	        this.logging = this.convertValues(source["logging"], null);
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {

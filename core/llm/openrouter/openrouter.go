@@ -250,9 +250,10 @@ func (a *Adapter) ListModels(ctx context.Context, cred []byte) ([]llm.ModelInfo,
 			display = m.ID
 		}
 		out = append(out, llm.ModelInfo{
-			ID:          m.ID,
-			DisplayName: display,
-			Description: m.Description,
+			ID:            m.ID,
+			DisplayName:   display,
+			Description:   m.Description,
+			ContextWindow: m.ContextLength,
 		})
 	}
 	sort.Slice(out, func(i, j int) bool {

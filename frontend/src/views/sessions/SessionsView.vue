@@ -291,34 +291,26 @@ const isWaitingForFirstChunk = computed(
     session.currentlyStreaming.value === null,
 );
 
-// Per-model context window. The connector's /models endpoint knows
-// these but they're not surfaced through the Provider type yet, so
-// we keep a small substring-matched fallback table here. Anything
-// unmatched falls back to 200k (covers the modern Anthropic /
-// OpenAI flagships). Move this to a backend-derived prop when the
-// model-info plumbing lands.
+// Per-model context window — sourced from the backend's curated
+// capability table via Provider.modelInfos. 0 means "unknown"; the
+// meter falls back to MODEL_CONTEXT_FALLBACK so there is always a
+// floor denominator for the bar.
+//
+// MODEL_CONTEXT_FALLBACK is kept as the safety floor and the default
+// for any model the backend does not recognise yet.
 const MODEL_CONTEXT_FALLBACK = 200_000;
-const MODEL_CONTEXT_HINTS: Array<[RegExp, number]> = [
-  [/claude-(?:opus|sonnet)-(?:4(?:-?[1-9])?|3-?7)/, 200_000],
-  [/claude-haiku/, 200_000],
-  [/claude-3(?:-5)?-haiku/, 200_000],
-  [/claude-3-(?:opus|sonnet|haiku)/, 200_000],
-  [/gpt-5/, 256_000],
-  [/gpt-4o|gpt-4-turbo/, 128_000],
-  [/gpt-4(?!o)/, 8_192],
-  [/o1|o3/, 200_000],
-  [/gemini-(?:1\.5|2)/, 1_000_000],
-  [/llama-3\.1-405/, 128_000],
-];
 
-function modelContextWindow(modelId: string): number {
-  if (!modelId) return MODEL_CONTEXT_FALLBACK;
-  const id = modelId.toLowerCase();
-  for (const [re, n] of MODEL_CONTEXT_HINTS) {
-    if (re.test(id)) return n;
-  }
-  return MODEL_CONTEXT_FALLBACK;
-}
+// Resolved context-window cap for the active model. Looks up the
+// active model in the active provider's modelInfos list by exact id.
+// Falls back to MODEL_CONTEXT_FALLBACK when 0 or missing.
+const activeModelContextWindow = computed((): number => {
+  const provider = activeProvider.value;
+  const modelId = activeModelId.value;
+  if (!provider || !modelId) return MODEL_CONTEXT_FALLBACK;
+  const info = provider.modelInfos?.find((m) => m.id === modelId);
+  const cw = info?.contextWindow ?? 0;
+  return cw > 0 ? cw : MODEL_CONTEXT_FALLBACK;
+});
 
 // Cheap client-side token estimate. The backend's estimateTokens uses
 // a similar chars/4 heuristic so the % we display roughly tracks what
@@ -340,13 +332,13 @@ const conversationTokens = computed(() => {
 });
 
 const contextWindowPct = computed(() => {
-  const max = modelContextWindow(activeModelId.value);
+  const max = activeModelContextWindow.value;
   if (max <= 0) return 0;
   return Math.min(100, Math.round((conversationTokens.value / max) * 100));
 });
 
 const contextWindowLabel = computed(() => {
-  const max = modelContextWindow(activeModelId.value);
+  const max = activeModelContextWindow.value;
   const used = conversationTokens.value;
   // Compact thousands formatter ("1.2k", "12k", "128k").
   const fmt = (n: number) => {
@@ -1266,7 +1258,7 @@ function formatSize(bytes: number): string {
           <div
             class="flex items-center gap-2"
             data-testid="session-context-meter"
-            :title="`Estimated context use — ${conversationTokens.toLocaleString()} of ${modelContextWindow(activeModelId).toLocaleString()} tokens`"
+            :title="`Estimated context use — ${conversationTokens.toLocaleString()} of ${activeModelContextWindow.toLocaleString()} tokens`"
           >
             <span class="uppercase tracking-[0.14em] text-ink-subtle">
               context

@@ -25,6 +25,7 @@ import (
 	dialsview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/dials"
 	hooksview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/hooks"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/llm"
+	coremcp "github.com/sigil-tech/kaneaz-harness/core/mcp"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/mcp"
 	memoryview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/memory"
 	nodesview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/nodes"
@@ -40,7 +41,6 @@ import (
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/trust"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/workflow"
 	"github.com/sigil-tech/kaneaz-harness/core/logging"
-	"github.com/sigil-tech/kaneaz-harness/core/mcp/recipes"
 	"github.com/sigil-tech/kaneaz-harness/core/mcp/stdio"
 )
 
@@ -292,6 +292,17 @@ func (b *Bindings) MCP_StopStream(subID string) error {
 	return b.api.MCP().StopStream(b.ctx(), subID)
 }
 
+// MCP_TestRecipe runs a one-shot connection test against the recipe
+// identified by recipeID (WP07 of mission mcp-server-install-01KQ8TDP).
+// env and config override the recipe's stored values; both are nil-safe.
+// The result is always non-nil; transport-level failures are reflected in
+// TestResult.OK=false / TestResult.Error rather than the Go error return.
+// The Go error return is set only for pre-flight failures (recipe not
+// found, catalog not wired).
+func (b *Bindings) MCP_TestRecipe(recipeID string, env map[string]string, config map[string]any) (coremcp.TestResult, error) {
+	return b.api.MCP().TestRecipe(b.ctx(), recipeID, env, config)
+}
+
 // MCP_ImportClaudeDesktopConfig is the user-facing RPC behind the
 // "Paste config" tab of the Add-MCP-Server modal (mission
 // mcp-server-install-01KQ8TDP, WP08). It accepts the verbatim
@@ -306,15 +317,6 @@ func (b *Bindings) MCP_ImportClaudeDesktopConfig(req mcp.ImportRequest) (mcp.Imp
 		return mcp.ImportResponse{}, mcp.ErrImportNotConfigured
 	}
 	return importer.ImportClaudeDesktopConfig(b.ctx(), req)
-}
-
-// MCP_TestRecipe opens a one-shot connection to the MCP server
-// described by recipe, performs the initialize + capability listing
-// handshake (30 s hard timeout), and returns a TestResult summary.
-// The connection is closed before this method returns; the recipe is
-// NOT registered with the production MCP pool (fire-and-forget).
-func (b *Bindings) MCP_TestRecipe(recipe recipes.Recipe) (mcp.TestResult, error) {
-	return b.api.MCP().TestRecipe(b.ctx(), recipe)
 }
 
 // ── a2a ────────────────────────────────────────────────────────────────
@@ -582,6 +584,26 @@ func (b *Bindings) Settings_SetSaveArtifactEnabled(enabled bool) error {
 		return nil
 	}
 	return b.storeFn().SaveSaveArtifactEnabled(enabled)
+}
+
+// Settings_GetFSRequestAccessEnabled exposes the
+// kaneaz__request_filesystem_access built-in opt-in flag (default true).
+// The toolloop EnabledFilter reads this on every Run boundary so toggling
+// takes effect on the next chat.
+func (b *Bindings) Settings_GetFSRequestAccessEnabled() (bool, error) {
+	if b.storeFn == nil {
+		return true, nil
+	}
+	return b.storeFn().LoadFSRequestAccessEnabled()
+}
+
+// Settings_SetFSRequestAccessEnabled persists the
+// request_filesystem_access built-in opt-in flag.
+func (b *Bindings) Settings_SetFSRequestAccessEnabled(enabled bool) error {
+	if b.storeFn == nil {
+		return nil
+	}
+	return b.storeFn().SaveFSRequestAccessEnabled(enabled)
 }
 
 // Settings_GetMaxAgentTurns exposes the chat-graph LoopNode iteration
@@ -1000,6 +1022,26 @@ func (b *Bindings) Artifacts_SaveAs(id, suggestedName string) (string, error) {
 		return "", err
 	}
 	return dest, nil
+}
+
+// Tools_RequestAdditionalAllowedDir is the Wails binding for the runtime
+// "expand filesystem access" flow. The model's kaneaz__request_filesystem_access
+// built-in calls this via its delegate; it can also be called directly from
+// the frontend if a future UI surface needs it.
+//
+// Returns { granted, expanded, message } so the caller knows whether to
+// retry its original filesystem operation using the canonicalised path.
+func (b *Bindings) Tools_RequestAdditionalAllowedDir(recipeID, path, reason string) (tools.FSAccessResult, error) {
+	granted, expanded, err := b.api.Tools().RequestAdditionalAllowedDir(b.ctx(), recipeID, path, reason)
+	msg := ""
+	if err != nil {
+		msg = err.Error()
+	} else if !granted {
+		msg = "access denied or timed out"
+	} else {
+		msg = "access granted"
+	}
+	return tools.FSAccessResult{Granted: granted, Expanded: expanded, Message: msg}, nil
 }
 
 // Tools_PickDirectory opens the OS-native folder-picker dialog and

@@ -30,6 +30,10 @@ type Provider struct {
 	// the mid-conversation model switcher. Empty => single-model row
 	// — UI falls back to [Model].
 	Models []string `json:"models,omitempty"`
+	// ModelInfos carries capability metadata (contextWindow, etc.) for
+	// each entry in Models. Parallel by position; may be shorter than
+	// Models when capability data is unavailable for a given model.
+	ModelInfos []ModelInfo `json:"modelInfos,omitempty"`
 	// Region is non-empty for kinds that require it (bedrock today).
 	Region string `json:"region,omitempty"`
 	// Cred surfaces the indirect-reference shape so the UI can render
@@ -94,9 +98,10 @@ type TestResult struct {
 // ModelInfo is the user-pickable model entry returned by ListModels.
 // Mirrors core/llm.ModelInfo for the rpc-frontend boundary.
 type ModelInfo struct {
-	ID          string `json:"id"`
-	DisplayName string `json:"displayName"`
-	Description string `json:"description,omitempty"`
+	ID            string `json:"id"`
+	DisplayName   string `json:"displayName"`
+	Description   string `json:"description,omitempty"`
+	ContextWindow int    `json:"contextWindow,omitempty"` // max tokens; 0 = unknown
 }
 
 // LLMConnectorAPI is the view-scoped accessor for provider metadata and

@@ -30,6 +30,7 @@ import (
 	"github.com/sigil-tech/kaneaz-harness/core/event"
 	"github.com/sigil-tech/kaneaz-harness/core/hooks"
 	corellm "github.com/sigil-tech/kaneaz-harness/core/llm"
+	llmcap "github.com/sigil-tech/kaneaz-harness/core/llm/capabilities"
 	"github.com/sigil-tech/kaneaz-harness/core/llm/credref"
 	"github.com/sigil-tech/kaneaz-harness/core/llm/personal"
 	llmregistry "github.com/sigil-tech/kaneaz-harness/core/llm/registry"
@@ -407,6 +408,14 @@ func New(c *core.Core) *API {
 			)
 		}
 	}
+	// Build the merged catalog once so both TestRecipe and the import
+	// surface share the same shipped + registry + user view.
+	mergedCat := recipes.NewMergedCatalog(
+		func() []recipes.Recipe { return recipes.Shipped().List() },
+		func() []recipes.Recipe { return recipes.Registry().List() },
+		nil, // user source wired by WP10 boot sequence
+	)
+	a.mcpAPI = mcp.NewAPI(mcp.WithSubscriber(a.broker), mcp.WithCatalog(mergedCat))
 	// MCP clipboard-import surface (mission mcp-server-install-01KQ8TDP,
 	// WP08). Wired only when we have a real Core (= a real DataDir);
 	// rpc.New(nil) test harness leaves it nil and the binding returns
@@ -522,7 +531,22 @@ func New(c *core.Core) *API {
 		// disk (cedar-credential-policy follow-up: AllowAlways mcp_spawn).
 		c.SetMCPRecipeBootstrap(makeMCPRecipeBootstrap(c, a.stdioPool, stack.secrets, a.promptRegistry, buildCedarEngineOrNil(c.DataDir())))
 	}
-	a.toolsAPI = newToolsAPI(c, stack.pool, stack.secrets)
+	a.toolsAPI = newToolsAPI(c, stack.pool, stack.secrets, a.promptRegistry, a.cedarPolicyAPI)
+	// Register the fsrequest built-in after toolsAPI is wired so the
+	// tool's delegate can be the real (non-stub) implementation. The
+	// tool is registered unconditionally; the EnabledFilter gates
+	// dispatch based on the LoadFSRequestAccessEnabled setting.
+	registerFSRequestTool(a.builtins, a.toolsAPI)
+	// Wire the recipe-config trimmer into the permissions view now that
+	// toolsAPI is available. The tools.API implements
+	// permissions.RecipeConfigTrimmer via its TrimAllowedDir method.
+	if toolsImpl, ok := a.toolsAPI.(interface {
+		TrimAllowedDir(ctx context.Context, recipeID, path string)
+	}); ok {
+		if permsImpl, ok2 := a.permissionsAPI.(*permissionsview.API); ok2 {
+			permsImpl.SetConfigTrimmer(trimmerAdapter{toolsImpl})
+		}
+	}
 	a.shellImpl = shell.New(nil)
 	a.shellAPI = a.shellImpl
 	a.memoryAPI = memoryview.New(memoryview.Config{
@@ -626,6 +650,8 @@ func New(c *core.Core) *API {
 			Registry: a.promptRegistry,
 			// Engine left nil for now — RevokeGrant skips the reload
 			// gracefully when the engine is unset.
+			// ConfigTrimmer is wired after toolsAPI is constructed; see
+			// the wiring step below that calls setPermissionsConfigTrimmer.
 		})
 	}
 
@@ -1067,7 +1093,7 @@ func makeMCPRecipeBootstrap(c *core.Core, pool *stdio.Pool, secretsBackend *secr
 // Returns the stub when c is nil — the test harness path constructs
 // rpc.New(nil) and we keep the chassis bootable without crashing on
 // the catalog access.
-func newToolsAPI(c *core.Core, pool *stdio.Pool, secretsBackend *secrets.MemoryBackend) tools.ToolsAPI {
+func newToolsAPI(c *core.Core, pool *stdio.Pool, secretsBackend *secrets.MemoryBackend, promptReg *cedar.Registry, cedarPolicyAPI cedarpolicyview.CedarPolicyAPI) tools.ToolsAPI {
 	if c == nil {
 		return &stubTools{}
 	}
@@ -1078,16 +1104,33 @@ func newToolsAPI(c *core.Core, pool *stdio.Pool, secretsBackend *secrets.MemoryB
 		enabled = &recipes.EnabledRecipes{}
 	}
 	cfg := tools.Config{
-		Catalog:   mergedRecipeCatalog(),
-		Enabled:   enabled,
-		Pool:      pool,
-		Secrets:   secretsBackend,
-		DataDir:   dataDir,
-		Audit:     nil, // TODO(audit-wired): reuse process-wide event.Emitter once it's available
-		Keychain:  &keychainWriter{backend: secretsBackend},
-		Forgetter: &keychainForgetter{backend: secretsBackend},
+		Catalog:        mergedRecipeCatalog(),
+		Enabled:        enabled,
+		Pool:           pool,
+		Secrets:        secretsBackend,
+		DataDir:        dataDir,
+		Audit:          nil, // TODO(audit-wired): reuse process-wide event.Emitter once it's available
+		Keychain:       &keychainWriter{backend: secretsBackend},
+		Forgetter:      &keychainForgetter{backend: secretsBackend},
+		PromptRegistry: promptReg,
+		CedarPolicy:    cedarPolicyAPI,
 	}
 	return tools.New(cfg)
+}
+
+// trimmerAdapter adapts tools.API.TrimAllowedDir to the
+// permissions.RecipeConfigTrimmer interface. Defined here so api.go
+// can wire the two packages without creating an import cycle.
+type trimmerAdapter struct {
+	inner interface {
+		TrimAllowedDir(ctx context.Context, recipeID, path string)
+	}
+}
+
+func (t trimmerAdapter) TrimAllowedDir(ctx context.Context, recipeID, path string) {
+	if t.inner != nil {
+		t.inner.TrimAllowedDir(ctx, recipeID, path)
+	}
 }
 
 // keychainForgetter is the deletion counterpart to keychainWriter.
@@ -1340,6 +1383,10 @@ func newLLMStack(
 	}
 
 	chatRunner := buildChatRunner(broker, reg, wrappedPool, perms, historyAdapter, settingsImpl, graphMgr, toolDiscoverer, artifactSinkConcrete, compactionDeps, usageMgr)
+	var capCatalog llm.CapCatalog
+	if cat, err := llmcap.LoadDefault(); err == nil {
+		capCatalog = cat
+	}
 	api := llm.New(llm.Config{
 		Registry:      reg,
 		Sink:          &streamSinkAdapter{broker: broker},
@@ -1353,6 +1400,7 @@ func newLLMStack(
 		ChatRunner:    chatRunner,
 		Tools:         toolDiscoverer,
 		Artifacts:     &llmArtifactSinkAdapter{inner: artifactSink},
+		CapCatalog:    capCatalog,
 	})
 	return llmStack{
 		api:                 api,

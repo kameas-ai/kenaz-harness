@@ -17,7 +17,6 @@ import {agentgraph} from '../models';
 import {hooks} from '../models';
 import {llm} from '../models';
 import {mcp} from '../models';
-import {recipes} from '../models';
 import {memory} from '../models';
 import {nodes} from '../models';
 import {permissions} from '../models';
@@ -243,7 +242,7 @@ export function MCP_StartStream(arg1:string):Promise<string>;
 
 export function MCP_StopStream(arg1:string):Promise<void>;
 
-export function MCP_TestRecipe(arg1:recipes.Recipe):Promise<mcp.TestResult>;
+export function MCP_TestRecipe(arg1:string,arg2:Record<string, string>,arg3:Record<string, any>):Promise<mcp.TestResult>;
 
 export function Memory_Forget(arg1:string):Promise<void>;
 
@@ -367,6 +366,8 @@ export function Settings_GetCedarStrictCredentialMode():Promise<boolean>;
 
 export function Settings_GetConfirmEach():Promise<boolean>;
 
+export function Settings_GetFSRequestAccessEnabled():Promise<boolean>;
+
 export function Settings_GetMaxAgentTurns():Promise<number>;
 
 export function Settings_GetMemory():Promise<boolean>;
@@ -392,6 +393,8 @@ export function Settings_SetBashAllowlistMigrated(arg1:boolean):Promise<void>;
 export function Settings_SetCedarStrictCredentialMode(arg1:boolean):Promise<void>;
 
 export function Settings_SetConfirmEach(arg1:boolean):Promise<void>;
+
+export function Settings_SetFSRequestAccessEnabled(arg1:boolean):Promise<void>;
 
 export function Settings_SetMaxAgentTurns(arg1:number):Promise<void>;
 
@@ -434,6 +437,8 @@ export function Tools_PickDirectory(arg1:string,arg2:string):Promise<string>;
 export function Tools_RecipeConfig(arg1:string):Promise<Record<string, any>>;
 
 export function Tools_RecipeStatus(arg1:string):Promise<transport.RecipeStatus>;
+
+export function Tools_RequestAdditionalAllowedDir(arg1:string,arg2:string,arg3:string):Promise<tools.FSAccessResult>;
 
 export function Tools_UninstallRecipe(arg1:string):Promise<void>;
 

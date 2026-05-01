@@ -8,10 +8,12 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	coremcp "github.com/sigil-tech/kaneaz-harness/core/mcp"
 	"github.com/sigil-tech/kaneaz-harness/core/mcp/recipes"
 	"github.com/sigil-tech/kaneaz-harness/core/mcp/stdio"
+	"github.com/sigil-tech/kaneaz-harness/core/policy/cedar"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/cedarpolicy"
 	"github.com/sigil-tech/kaneaz-harness/core/secrets"
 )
@@ -963,5 +965,233 @@ func TestPreSeed_PromptOnlyPolicyWritesNoSnippets(t *testing.T) {
 	written := cedar.written()
 	if len(written) != 0 {
 		t.Fatalf("want 0 snippets written with prompt_only policy, got %d: %v", len(written), written)
+	}
+}
+
+// ── RequestAdditionalAllowedDir tests ─────────────────────────────────────
+
+// fsRecipe returns a minimal filesystem recipe suitable for RequestAdditionalAllowedDir tests.
+func fsRecipe() recipes.Recipe {
+	return recipes.Recipe{
+		ID:          "filesystem",
+		DisplayName: "Filesystem",
+		Command:     []string{"npx", "-y", "@modelcontextprotocol/server-filesystem"},
+	}
+}
+
+// fsCatalogMinimal returns a catalog with just the filesystem recipe.
+func fsCatalogMinimal() *recipes.Catalog {
+	return &recipes.Catalog{Version: 1, Recipes: []recipes.Recipe{fsRecipe()}}
+}
+
+// installFSRecipe sets up an EnabledRecipes with one "filesystem" entry
+// containing the given allowed_directories.
+func installFSRecipe(dirs []string) *recipes.EnabledRecipes {
+	er := &recipes.EnabledRecipes{}
+	er.Add(recipes.EnabledRecipe{
+		ID:        "filesystem",
+		EnabledAt: time.Now().UTC(),
+		Config:    map[string]any{"allowed_directories": dirs},
+	})
+	return er
+}
+
+func TestRequestAdditionalAllowedDir_HappyPathAllowOnce(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	newDir := t.TempDir() // the directory to grant
+
+	reg := cedar.NewRegistry(cedar.WithTimeout(5 * time.Second))
+	pool := newFakePool()
+	backend := secrets.NewMemoryBackend()
+	enabled := installFSRecipe([]string{dir})
+
+	api := New(Config{
+		Catalog:        fsCatalogMinimal(),
+		Enabled:        enabled,
+		Pool:           pool,
+		Secrets:        backend,
+		DataDir:        t.TempDir(),
+		PromptRegistry: reg,
+	})
+
+	// Resolve the prompt as AllowOnce in a goroutine while Call blocks.
+	go func() {
+		for {
+			pending := reg.ListPending()
+			if len(pending) > 0 {
+				_ = reg.Resolve(pending[0].RequestID, cedar.DecisionAllowOnce)
+				return
+			}
+			time.Sleep(2 * time.Millisecond)
+		}
+	}()
+
+	granted, expanded, err := api.RequestAdditionalAllowedDir(context.Background(), "filesystem", newDir, "need to read project")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !granted {
+		t.Error("granted = false; want true")
+	}
+	if expanded == "" {
+		t.Error("expanded path is empty")
+	}
+
+	// Config should now include newDir.
+	entry, ok := enabled.Get("filesystem")
+	if !ok {
+		t.Fatal("filesystem entry missing from EnabledRecipes")
+	}
+	dirs := configStringSlice(entry.Config, "allowed_directories")
+	found := false
+	for _, p := range dirs {
+		if p == expanded {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expanded path %q not in allowed_directories %v", expanded, dirs)
+	}
+
+	// CloseOne + OpenOne should have been called (restart).
+	if closes := pool.closes(); len(closes) == 0 {
+		t.Error("pool.CloseOne was not called (no restart)")
+	}
+	if opens := pool.opens(); len(opens) == 0 {
+		t.Error("pool.OpenOne was not called (no restart)")
+	}
+}
+
+func TestRequestAdditionalAllowedDir_DenyDecision(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	newDir := t.TempDir()
+
+	reg := cedar.NewRegistry(cedar.WithTimeout(5 * time.Second))
+	pool := newFakePool()
+	backend := secrets.NewMemoryBackend()
+	enabled := installFSRecipe([]string{dir})
+
+	api := New(Config{
+		Catalog:        fsCatalogMinimal(),
+		Enabled:        enabled,
+		Pool:           pool,
+		Secrets:        backend,
+		DataDir:        t.TempDir(),
+		PromptRegistry: reg,
+	})
+
+	go func() {
+		for {
+			pending := reg.ListPending()
+			if len(pending) > 0 {
+				_ = reg.Resolve(pending[0].RequestID, cedar.DecisionDeny)
+				return
+			}
+			time.Sleep(2 * time.Millisecond)
+		}
+	}()
+
+	granted, _, err := api.RequestAdditionalAllowedDir(context.Background(), "filesystem", newDir, "testing deny")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if granted {
+		t.Error("granted = true after deny; want false")
+	}
+
+	// Config should NOT have been updated.
+	entry, _ := enabled.Get("filesystem")
+	dirs := configStringSlice(entry.Config, "allowed_directories")
+	if len(dirs) != 1 || dirs[0] != dir {
+		t.Errorf("allowed_directories changed unexpectedly: %v", dirs)
+	}
+	if len(pool.closes()) != 0 || len(pool.opens()) != 0 {
+		t.Error("pool should not have been touched on deny")
+	}
+}
+
+func TestRequestAdditionalAllowedDir_DeniedPrefix(t *testing.T) {
+	t.Parallel()
+	// /etc is on the deny-list — ValidateAllowedDir should reject it
+	// before any prompt fires.
+	reg := cedar.NewRegistry()
+	pool := newFakePool()
+	backend := secrets.NewMemoryBackend()
+	enabled := installFSRecipe([]string{t.TempDir()})
+
+	api := New(Config{
+		Catalog:        fsCatalogMinimal(),
+		Enabled:        enabled,
+		Pool:           pool,
+		Secrets:        backend,
+		DataDir:        t.TempDir(),
+		PromptRegistry: reg,
+	})
+
+	granted, _, err := api.RequestAdditionalAllowedDir(context.Background(), "filesystem", "/etc", "bypass deny-list")
+	// Should return an error (or granted=false) without prompting.
+	if granted {
+		t.Error("granted = true for /etc; want false")
+	}
+	if err == nil {
+		t.Error("expected error for /etc (deny-list); got nil")
+	}
+	// The registry must have zero pending prompts (no prompt was fired).
+	if n := reg.PendingCount(); n != 0 {
+		t.Errorf("pending count = %d; want 0 (no prompt should have fired)", n)
+	}
+}
+
+func TestRequestAdditionalAllowedDir_RestoreOnRestartFailure(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	newDir := t.TempDir()
+
+	reg := cedar.NewRegistry(cedar.WithTimeout(5 * time.Second))
+	pool := newFakePool()
+	pool.openErr = errors.New("spawn failed")
+	backend := secrets.NewMemoryBackend()
+	enabled := installFSRecipe([]string{dir})
+	dataDir := t.TempDir()
+
+	api := New(Config{
+		Catalog:        fsCatalogMinimal(),
+		Enabled:        enabled,
+		Pool:           pool,
+		Secrets:        backend,
+		DataDir:        dataDir,
+		PromptRegistry: reg,
+	})
+
+	go func() {
+		for {
+			pending := reg.ListPending()
+			if len(pending) > 0 {
+				_ = reg.Resolve(pending[0].RequestID, cedar.DecisionAllowOnce)
+				return
+			}
+			time.Sleep(2 * time.Millisecond)
+		}
+	}()
+
+	granted, _, err := api.RequestAdditionalAllowedDir(context.Background(), "filesystem", newDir, "restart test")
+	if granted {
+		t.Error("granted = true despite restart failure; want false")
+	}
+	if err == nil {
+		t.Error("expected error from restart failure; got nil")
+	}
+
+	// Config should be rolled back — only original dir.
+	entry, ok := enabled.Get("filesystem")
+	if !ok {
+		t.Fatal("filesystem entry missing after rollback")
+	}
+	dirs := configStringSlice(entry.Config, "allowed_directories")
+	if len(dirs) != 1 || dirs[0] != dir {
+		t.Errorf("config not rolled back; got %v", dirs)
 	}
 }

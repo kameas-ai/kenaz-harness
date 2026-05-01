@@ -201,6 +201,13 @@ type Settings struct {
 	// follow-up mission. v1 always persists as empty string; old clients
 	// ignore the field. (keyboard-shortcuts-settings-01KQ8TDR plan Q1=C)
 	KeyboardShortcutsPreset string `json:"keyboardShortcutsPreset,omitempty"`
+
+	// FSRequestAccessDisabled is the inverted persisted bit for the
+	// kaneaz__request_filesystem_access built-in. Default ON (zero-value
+	// Disabled → tool enabled) so users can expand filesystem access
+	// from the first session without any setup. Read via the
+	// FSRequestAccessEnabled() accessor; never read directly.
+	FSRequestAccessDisabled bool `json:"fsRequestAccessDisabled,omitempty"`
 }
 
 // ProviderProfileRef is the wire shape that identifies a provider+model
@@ -261,6 +268,10 @@ func (s Settings) SaveArtifactEnabled() bool { return !s.SaveArtifactDisabled }
 // AutoCaptureToolOutputs reports whether the tool-output detector is
 // active. Default true on a fresh install.
 func (s Settings) AutoCaptureToolOutputs() bool { return !s.AutoCaptureToolOutputsDisabled }
+
+// FSRequestAccessEnabled reports whether kaneaz__request_filesystem_access
+// is enabled. Default true on a fresh install (zero-value Disabled).
+func (s Settings) FSRequestAccessEnabled() bool { return !s.FSRequestAccessDisabled }
 
 // EffectiveCodeBlockMinLines returns the user-tuned threshold or the
 // spec default (10) when the persisted value is zero.
@@ -490,6 +501,13 @@ type SettingsStore interface {
 	// takes effect on the next Use call without re-creating the store.
 	LoadCedarStrictCredentialMode() (bool, error)
 	SaveCedarStrictCredentialMode(enabled bool) error
+
+	// LoadFSRequestAccessEnabled / SaveFSRequestAccessEnabled expose
+	// the kaneaz__request_filesystem_access built-in opt-in. Default
+	// true (on) — requesting expanded filesystem access is a low-risk
+	// convenience that should work on a fresh install.
+	LoadFSRequestAccessEnabled() (bool, error)
+	SaveFSRequestAccessEnabled(enabled bool) error
 }
 
 // SettingsAPI is the view-scoped accessor exposed via HarnessAPI.

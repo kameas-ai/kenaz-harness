@@ -87,6 +87,16 @@ type BundleSource interface {
 	BundleProfiles() []corellm.ProviderProfile
 }
 
+// CapCatalog is the capability-lookup seam used to populate ModelInfos
+// (contextWindow) on Provider at ListProviders time. The concrete
+// *capabilities.Catalog satisfies it; tests may inject a fake.
+// nil → ModelInfos fields default to 0 (unknown).
+type CapCatalog interface {
+	// ContextWindow returns the curated max context length in tokens
+	// for (provider, model). Returns 0 when the model is unknown.
+	ContextWindow(provider, model string) int
+}
+
 // CredPeeker resolves a credential reference to a display-safe Redacted
 // value (credstore.Peek). Wire via Config.CredPeeker; nil = no
 // redaction in ListProviders responses (Redaction field stays zero).
@@ -242,6 +252,9 @@ type API struct {
 	// credPeeker, when non-nil, is called by ListProviders to populate
 	// Provider.Redaction for each profile (WP05).
 	credPeeker CredPeeker
+	// capCatalog, when non-nil, is consulted by ListProviders to populate
+	// Provider.ModelInfos with contextWindow data from the curated table.
+	capCatalog CapCatalog
 	// attachments is the WP03 source of truth for resolved starting
 	// context. nil falls back to the SessionContextReader probe so
 	// Mission A behaviour stays intact during the one-release buffer.
@@ -333,6 +346,11 @@ type Config struct {
 	// Provider.Redaction for each profile. nil = Redaction field
 	// is omitted (zero value) — no breaking change for existing tests.
 	CredPeeker CredPeeker
+	// CapCatalog, when non-nil, is consulted by ListProviders to populate
+	// Provider.ModelInfos with contextWindow data from the curated table.
+	// nil = ModelInfos fields default to 0 (unknown) — frontend falls
+	// back to MODEL_CONTEXT_FALLBACK.
+	CapCatalog CapCatalog
 }
 
 // New constructs a concrete API.
@@ -356,6 +374,7 @@ func New(cfg Config) *API {
 		tools:       cfg.Tools,
 		artifacts:   cfg.Artifacts,
 		credPeeker:  cfg.CredPeeker,
+		capCatalog:  cfg.CapCatalog,
 		subs:        map[string]*subscription{},
 		validated:   map[string]bool{},
 	}
@@ -566,6 +585,20 @@ func (a *API) ListProviders(ctx context.Context) ([]Provider, error) {
 		// WP05: populate Redaction via credPeeker if wired.
 		if a.credPeeker != nil {
 			v.Redaction = a.credPeeker.PeekCred(ctx, v.Cred.Kind, v.Cred.Locator)
+		}
+		// Populate ModelInfos with curated context-window data when the
+		// catalog is wired. Frontend reads contextWindow from here;
+		// 0 = unknown → falls back to MODEL_CONTEXT_FALLBACK.
+		if a.capCatalog != nil && len(v.Models) > 0 {
+			infos := make([]ModelInfo, 0, len(v.Models))
+			for _, modelID := range v.Models {
+				infos = append(infos, ModelInfo{
+					ID:            modelID,
+					DisplayName:   modelID,
+					ContextWindow: a.capCatalog.ContextWindow(v.Kind, modelID),
+				})
+			}
+			v.ModelInfos = infos
 		}
 		out = append(out, v)
 	}
@@ -892,9 +925,10 @@ func (a *API) ListModels(ctx context.Context, kind, plaintextApiKey string) ([]M
 	out := make([]ModelInfo, 0, len(models))
 	for _, m := range models {
 		out = append(out, ModelInfo{
-			ID:          m.ID,
-			DisplayName: m.DisplayName,
-			Description: m.Description,
+			ID:            m.ID,
+			DisplayName:   m.DisplayName,
+			Description:   m.Description,
+			ContextWindow: m.ContextWindow,
 		})
 	}
 	return out, nil

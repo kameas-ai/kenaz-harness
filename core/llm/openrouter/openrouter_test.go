@@ -306,6 +306,17 @@ func TestAdapter_ListModels_HappyPath(t *testing.T) {
 	if models[2].ID != "meta-llama/llama-3-70b" {
 		t.Fatalf("third model id = %q", models[2].ID)
 	}
+	// ContextWindow should be passed through from the API response.
+	if models[0].ContextWindow != 200_000 {
+		t.Errorf("expected ContextWindow=200000 for claude-3.5-sonnet, got %d", models[0].ContextWindow)
+	}
+	if models[1].ContextWindow != 128_000 {
+		t.Errorf("expected ContextWindow=128000 for gpt-4o, got %d", models[1].ContextWindow)
+	}
+	// Model without context_length → 0.
+	if models[2].ContextWindow != 0 {
+		t.Errorf("expected ContextWindow=0 for llama (missing), got %d", models[2].ContextWindow)
+	}
 }
 
 func TestAdapter_ListModels_EmptyCredential(t *testing.T) {

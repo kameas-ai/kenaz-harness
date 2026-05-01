@@ -15,7 +15,9 @@ import (
 	"github.com/sigil-tech/kaneaz-harness/core/logging"
 	"github.com/sigil-tech/kaneaz-harness/core/policy/cedar"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/settings"
+	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/tools"
 	corebash "github.com/sigil-tech/kaneaz-harness/core/tools/bash"
+	corefsrequest "github.com/sigil-tech/kaneaz-harness/core/tools/fsrequest"
 	coresaveartifact "github.com/sigil-tech/kaneaz-harness/core/tools/saveartifact"
 	corewebsearch "github.com/sigil-tech/kaneaz-harness/core/tools/websearch"
 	"github.com/sigil-tech/kaneaz-harness/core/toolloop"
@@ -110,6 +112,21 @@ func registerBuiltinTools(
 		logging.L().Info("rpc.builtins.save_artifact_skipped",
 			"reason", "no artifacts manager wired")
 	}
+}
+
+// registerFSRequestTool registers the kaneaz__request_filesystem_access
+// built-in after the toolsAPI is wired (must be called after
+// newToolsAPI returns). nil registry or nil toolsAPI are no-ops so the
+// test harness path stays clean.
+func registerFSRequestTool(registry *toolloop.BuiltinRegistry, toolsAPI tools.ToolsAPI) {
+	if registry == nil || toolsAPI == nil {
+		return
+	}
+	fsReqTool := corefsrequest.New(corefsrequest.Options{
+		Delegate: toolsAPI,
+	})
+	registry.Register(fsReqTool)
+	logging.L().Info("rpc.builtins.register", "tool", fsReqTool.Name())
 }
 
 // saveArtifactEnabledLookup returns a closure the saveartifact tool
@@ -211,6 +228,16 @@ func builtinEnabledPredicate(s *settings.API) func(string) bool {
 				// Default-on tool: soft-fail to enabled on a transient
 				// store error so first-launch ergonomics survive a
 				// settings-file glitch.
+				return true
+			}
+			logging.L().Info("rpc.builtins.predicate", "tool", name, "enabled", v)
+			return v
+		case corefsrequest.ToolName:
+			v, err := store.LoadFSRequestAccessEnabled()
+			if err != nil {
+				logging.L().Warn("rpc.builtins.predicate.read_failed",
+					"tool", name, "err", err.Error())
+				// Default-on: soft-fail to enabled so the tool works on first launch.
 				return true
 			}
 			logging.L().Info("rpc.builtins.predicate", "tool", name, "enabled", v)

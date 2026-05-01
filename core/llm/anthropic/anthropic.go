@@ -147,9 +147,14 @@ func (a *Adapter) ListModels(ctx context.Context, cred []byte) ([]llm.ModelInfo,
 		if display == "" {
 			display = m.ID
 		}
+		cw := 0
+		if a.cat != nil {
+			cw = a.cat.ContextWindow(Kind, m.ID)
+		}
 		out = append(out, llm.ModelInfo{
-			ID:          m.ID,
-			DisplayName: display,
+			ID:            m.ID,
+			DisplayName:   display,
+			ContextWindow: cw,
 		})
 	}
 	return out, nil

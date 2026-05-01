@@ -20,6 +20,7 @@ models:
     reasoning: true
     cancellation: true
     usage_reporting: true
+    context_window: 200000
   - match: "claude-opus-*"
     streaming: true
     tool_calling: true
@@ -30,6 +31,7 @@ models:
     reasoning: true
     cancellation: true
     usage_reporting: true
+    context_window: 200000
   - match: "claude-haiku-*"
     streaming: true
     tool_calling: true
@@ -40,6 +42,7 @@ models:
     reasoning: false
     cancellation: true
     usage_reporting: true
+    context_window: 200000
   - match: "claude-3-5-sonnet*"
     streaming: true
     tool_calling: true
@@ -50,6 +53,7 @@ models:
     reasoning: false
     cancellation: true
     usage_reporting: true
+    context_window: 200000
   - match: "claude-3-5-haiku*"
     streaming: true
     tool_calling: true
@@ -60,6 +64,7 @@ models:
     reasoning: false
     cancellation: true
     usage_reporting: true
+    context_window: 200000
   - match: "claude-3-haiku*"
     streaming: true
     tool_calling: true
@@ -70,6 +75,7 @@ models:
     reasoning: false
     cancellation: true
     usage_reporting: true
+    context_window: 200000
   - match: "claude-3-sonnet*"
     streaming: true
     tool_calling: true
@@ -80,6 +86,7 @@ models:
     reasoning: false
     cancellation: true
     usage_reporting: true
+    context_window: 200000
   - match: "claude-3-opus*"
     streaming: true
     tool_calling: true
@@ -90,3 +97,4 @@ models:
     reasoning: false
     cancellation: true
     usage_reporting: true
+    context_window: 200000

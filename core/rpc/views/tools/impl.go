@@ -114,6 +114,9 @@ type Config struct {
 	// tool permit snippets after a successful recipe install (WP11).
 	// When nil the pre-seed step is silently skipped (backwards-compatible).
 	CedarPolicy cedarpolicy.CedarPolicyAPI
+	// PromptRegistry is the Cedar interactive-prompt registry used by
+	// RequestAdditionalAllowedDir. When nil the call returns an error.
+	PromptRegistry *cedar.Registry
 }
 
 // API is the concrete ToolsAPI implementation.
@@ -677,6 +680,269 @@ func (a *API) saveEnabled() error {
 		return nil
 	}
 	return a.cfg.Enabled.Save(a.cfg.DataDir)
+}
+
+// RequestAdditionalAllowedDir implements the runtime "expand filesystem
+// access" flow (runtime-fsaccess-request feature).
+//
+// Execution order:
+//  1. Expand + validate path via ExpandPath + ValidateAllowedDir. Denied
+//     paths (deny-list, bad syntax) return (false, "", err) immediately —
+//     the user is never prompted for a path the harness will reject.
+//  2. Fire cedar.Registry.RequestInteractive with Op "recipe_dir_add". On
+//     Deny / timeout / overflow: return (false, "", nil).
+//  3. On AllowOnce or AllowAlways: load the enabled-recipe entry, append
+//     the canonical path (deduplicated) to Config["allowed_directories"],
+//     and re-spawn the MCP server transactionally (snapshot config →
+//     persist → CloseOne → OpenOne; restore snapshot on any failure).
+//  4. On AllowAlways: additionally write a Cedar snippet
+//     fs_allow_recipe_dir_<sanitized>.cedar so future sessions inherit the
+//     grant without re-prompting.
+//
+// v1 hardcodes support for the "filesystem" recipe id. Multi-recipe
+// support is out of scope.
+func (a *API) RequestAdditionalAllowedDir(ctx context.Context, recipeID, path, reason string) (granted bool, expanded string, err error) {
+	// ── Step 1: validate path before any user interaction ──────────────
+	path = ExpandPath(path)
+	if err := ValidateAllowedDir(path); err != nil {
+		return false, "", fmt.Errorf("tools: path rejected before prompt: %w", err)
+	}
+	// Canonicalise: resolve symlinks so the comparison + snippet name
+	// use the real path the MCP server will stat().
+	canonical, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		canonical = path // best-effort fallback; validation already passed
+	}
+
+	if a.cfg.PromptRegistry == nil {
+		return false, canonical, errors.New("tools: prompt registry not configured")
+	}
+
+	// ── Step 2: interactive prompt ──────────────────────────────────────
+	surface := cedar.PromptSurface{
+		FS: &cedar.FSPromptSurface{
+			Op:            "recipe_dir_add",
+			CanonicalPath: canonical,
+			Dangerous:     false,
+		},
+		Reason: reason,
+	}
+	resolution, err := a.cfg.PromptRegistry.RequestInteractive(ctx, surface)
+	if err != nil {
+		return false, canonical, fmt.Errorf("tools: prompt error: %w", err)
+	}
+	switch resolution.Decision {
+	case cedar.DecisionDeny:
+		return false, canonical, nil
+	case cedar.DecisionAllowOnce, cedar.DecisionAllowAlways:
+		// proceed below
+	default:
+		return false, canonical, nil
+	}
+
+	// ── Step 3: expand config + restart MCP server ─────────────────────
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	if a.cfg.Enabled == nil {
+		return false, canonical, errors.New("tools: no enabled-recipes store configured")
+	}
+
+	entry, ok := a.cfg.Enabled.Get(recipeID)
+	if !ok {
+		return false, canonical, fmt.Errorf("tools: recipe %q is not installed", recipeID)
+	}
+
+	// Snapshot current config for transactional restore on failure.
+	snapshot := make(map[string]any, len(entry.Config))
+	for k, v := range entry.Config {
+		snapshot[k] = v
+	}
+
+	// Append canonical path to allowed_directories (dedupe, preserve order).
+	existing := configStringSlice(entry.Config, "allowed_directories")
+	for _, p := range existing {
+		if p == canonical {
+			// Already in the list — nothing to update, but the prompt
+			// said yes so we call this a success.
+			if resolution.Decision == cedar.DecisionAllowAlways {
+				a.writeAllowAlwaysSnippet(ctx, canonical)
+			}
+			return true, canonical, nil
+		}
+	}
+	newList := append(existing, canonical)
+	if entry.Config == nil {
+		entry.Config = make(map[string]any)
+	}
+	entry.Config["allowed_directories"] = newList
+
+	// Persist the updated entry — do this BEFORE restart so a crash
+	// between persist and restart leaves the stored config consistent.
+	a.cfg.Enabled.Add(entry)
+	if saveErr := a.saveEnabled(); saveErr != nil {
+		// Roll back the in-memory change.
+		entry.Config = snapshot
+		a.cfg.Enabled.Add(entry)
+		return false, canonical, fmt.Errorf("tools: save enabled list: %w", saveErr)
+	}
+
+	// Restart the MCP server with the new config. CloseOne + OpenOne is
+	// the idempotent spawn pattern (same as InstallRecipe).
+	if a.cfg.Pool != nil {
+		// Build a ServerSpec from the recipe catalog + updated config.
+		recipe, catalogOK := a.cfg.Catalog.Get(recipeID)
+		if catalogOK {
+			if restartErr := a.restartRecipe(ctx, recipe, entry.Config); restartErr != nil {
+				// Roll back: restore the snapshot in memory and on disk.
+				entry.Config = snapshot
+				a.cfg.Enabled.Add(entry)
+				_ = a.saveEnabled() // best-effort; log but don't surface
+				return false, canonical, fmt.Errorf("tools: restart failed: %w", restartErr)
+			}
+		}
+	}
+
+	// ── Step 4: AllowAlways snippet ─────────────────────────────────────
+	if resolution.Decision == cedar.DecisionAllowAlways {
+		a.writeAllowAlwaysSnippet(ctx, canonical)
+	}
+
+	return true, canonical, nil
+}
+
+// restartRecipe closes and re-opens the MCP server with updatedConfig.
+// Called under a.mu — must NOT call a.cfg.Enabled or pool under a
+// separate lock.
+func (a *API) restartRecipe(ctx context.Context, recipe recipes.Recipe, updatedConfig map[string]any) error {
+	if a.cfg.Secrets == nil {
+		return errors.New("tools: no secrets backend configured")
+	}
+	resolved, err := recipes.ResolveEnv(ctx, a.cfg.Secrets, recipe)
+	if err != nil {
+		return fmt.Errorf("resolve env: %w", err)
+	}
+	spec := recipe.ToServerSpec(resolved, updatedConfig)
+	if err := a.cfg.Pool.CloseOne(ctx, recipe.ID); err != nil && !errors.Is(err, stdio.ErrServerNotFound) {
+		return fmt.Errorf("close existing server: %w", err)
+	}
+	if err := a.cfg.Pool.OpenOne(ctx, spec); err != nil {
+		return fmt.Errorf("open server: %w", err)
+	}
+	return nil
+}
+
+// writeAllowAlwaysSnippet writes a Cedar policy file that permanently
+// permits recipe_dir_add for the canonical path. Best-effort: failure is
+// logged but does not affect the granted-true return.
+func (a *API) writeAllowAlwaysSnippet(ctx context.Context, canonical string) {
+	if a.cfg.CedarPolicy == nil || a.cfg.DataDir == "" {
+		slog.Warn("tools.fsrequest.snippet_skip",
+			"reason", "no CedarPolicy or DataDir configured",
+			"path", canonical)
+		return
+	}
+	sanitized := sanitizePathForSnippet(canonical)
+	filename := "fs_allow_recipe_dir_" + sanitized + ".cedar"
+	body := fmt.Sprintf(
+		"permit(\n  principal,\n  action == Action::\"recipe_dir_add\",\n  resource == FilesystemOp::\"%s\"\n);\n",
+		canonical,
+	)
+	if err := a.cfg.CedarPolicy.WritePolicySnippet(ctx, filename, body); err != nil {
+		slog.Warn("tools.fsrequest.snippet_write_err",
+			"file", filename, "err", err.Error())
+	}
+}
+
+// sanitizePathForSnippet converts an absolute path into a safe filename
+// stem for use in fs_allow_recipe_dir_<stem>.cedar. The stem must satisfy
+// the snippet filename regex: [a-z][a-z0-9_]{0,127}.
+func sanitizePathForSnippet(p string) string {
+	out := make([]rune, 0, len(p))
+	for _, r := range strings.ToLower(p) {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			out = append(out, r)
+		} else {
+			out = append(out, '_')
+		}
+	}
+	// Strip leading underscores/non-alpha.
+	for len(out) > 0 && !unicode.IsLetter(out[0]) {
+		out = out[1:]
+	}
+	if len(out) == 0 {
+		return "dir"
+	}
+	if len(out) > 64 {
+		out = out[len(out)-64:]
+		// Ensure starts with alpha after truncation.
+		for len(out) > 0 && !unicode.IsLetter(out[0]) {
+			out = out[1:]
+		}
+	}
+	if len(out) == 0 {
+		return "dir"
+	}
+	return string(out)
+}
+
+// configStringSlice extracts config["allowed_directories"] as []string.
+// Handles both []string and []any (JSON-round-tripped form).
+func configStringSlice(config map[string]any, key string) []string {
+	if config == nil {
+		return nil
+	}
+	raw, ok := config[key]
+	if !ok {
+		return nil
+	}
+	out, _ := coerceConfigStringSlice(raw)
+	return out
+}
+
+// TrimAllowedDir removes path from the named recipe's
+// Config["allowed_directories"] and persists the change. It implements
+// permissions.RecipeConfigTrimmer so the permissions view can call back
+// into the tools layer without importing it.
+//
+// Best-effort: failures are logged but not returned.
+func (a *API) TrimAllowedDir(_ context.Context, recipeID, path string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	if a.cfg.Enabled == nil {
+		return
+	}
+	entry, ok := a.cfg.Enabled.Get(recipeID)
+	if !ok {
+		return
+	}
+	existing := configStringSlice(entry.Config, "allowed_directories")
+	found := false
+	for _, p := range existing {
+		if p == path {
+			found = true
+			break
+		}
+	}
+	if !found {
+		return
+	}
+	newList := make([]string, 0, len(existing))
+	for _, p := range existing {
+		if p != path {
+			newList = append(newList, p)
+		}
+	}
+	if entry.Config == nil {
+		entry.Config = make(map[string]any)
+	}
+	entry.Config["allowed_directories"] = newList
+	a.cfg.Enabled.Add(entry)
+	if err := a.saveEnabled(); err != nil {
+		slog.Warn("tools.trim_allowed_dir.save_failed",
+			"recipe", recipeID, "path", path, "err", err.Error())
+	}
 }
 
 // Compile-time witness.

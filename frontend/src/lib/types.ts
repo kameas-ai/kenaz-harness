@@ -85,6 +85,12 @@ export interface Provider {
    * reads this list (filtered to the active session's family).
    */
   models?: string[];
+  /**
+   * Capability metadata for each entry in `models`, parallel by
+   * position. The context-window meter reads contextWindow from here;
+   * 0 / missing means unknown — falls back to MODEL_CONTEXT_FALLBACK.
+   */
+  modelInfos?: ModelInfo[];
   region?: string;
   cred?: CredentialReference;
   /**
@@ -153,6 +159,8 @@ export interface ModelInfo {
   id: string;
   displayName: string;
   description?: string;
+  /** Max context length in tokens; 0 / undefined = unknown. */
+  contextWindow?: number;
 }
 
 export interface MCPServer {
@@ -200,6 +208,34 @@ export interface MCPTestResult {
   errorMessage: string;
   /** Wall-clock elapsed time from connection open to close, in milliseconds. */
   durationMs: number;
+}
+
+// Wire shape for `MCP_TestRecipe`. Field names follow Go JSON tags
+// (snake_case) verbatim. `ok` is the primary discriminant; `error`
+// is populated on failure. Capability counts are -1 when the server
+// did not advertise the capability (not 0, which means "advertised
+// but empty").
+
+export interface MCPTestResult {
+  ok: boolean;
+  protocol_version?: string;
+  server_info: { name: string; version: string };
+  capabilities: {
+    tools?: { listChanged?: boolean };
+    resources?: { subscribe?: boolean; listChanged?: boolean };
+    prompts?: { listChanged?: boolean };
+    logging?: Record<string, never>;
+  };
+  /** -1 when tools capability not advertised. */
+  tool_count: number;
+  /** -1 when resources capability not advertised. */
+  resource_count: number;
+  /** -1 when prompts capability not advertised. */
+  prompt_count: number;
+  /** Last 4 KiB of stderr from a stdio server on failure. */
+  stderr_tail?: string;
+  duration_ms: number;
+  error?: string;
 }
 
 // ── MCP clipboard import (mission mcp-server-install-01KQ8TDP, WP08) ───
