@@ -1,10 +1,11 @@
 <script setup lang="ts">
-import { computed } from 'vue';
+import { computed, ref, onMounted, onBeforeUnmount } from 'vue';
 import Titlebar from './Titlebar.vue';
 import Toolbar from './Toolbar.vue';
 import LeftRail from './LeftRail.vue';
 import LegendBar from './LegendBar.vue';
 import ConnectionLostBanner from '@/components/ui/ConnectionLostBanner.vue';
+import SearchModal from '@/components/search/SearchModal.vue';
 import { useConnectionState } from '@/lib/useConnectionState';
 
 /**
@@ -17,10 +18,42 @@ import { useConnectionState } from '@/lib/useConnectionState';
  * The first-paint state machine (plan §4.1, FR-017) renders a quiet
  * "starting…" surface while connecting. ConnectionLostBanner appears
  * only when the bridge is lost (FR-013) — not as a toast wall.
+ *
+ * Cmd-F (Mac) / Ctrl-F (other) opens the SearchModal. The binding
+ * short-circuits when the event target is an INPUT or TEXTAREA so the
+ * browser / chat composer shortcut is not stolen.
  */
 const connection = useConnectionState();
 const isStarting = computed(() => connection.value === 'connecting');
 const isLost = computed(() => connection.value === 'lost');
+
+const searchOpen = ref(false);
+
+function onGlobalKeydown(e: KeyboardEvent) {
+  // Cmd-F (Mac) or Ctrl-F (other platforms)
+  const isCmdF = (e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'f';
+  if (!isCmdF) return;
+
+  // Don't intercept when focus is already inside a text field (chat
+  // composer, inline rename inputs, etc.).
+  const tag = (e.target as HTMLElement | null)?.tagName?.toUpperCase();
+  if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+
+  e.preventDefault();
+  searchOpen.value = true;
+}
+
+onMounted(() => {
+  if (typeof window !== 'undefined') {
+    window.addEventListener('keydown', onGlobalKeydown);
+  }
+});
+
+onBeforeUnmount(() => {
+  if (typeof window !== 'undefined') {
+    window.removeEventListener('keydown', onGlobalKeydown);
+  }
+});
 </script>
 
 <template>
@@ -61,4 +94,8 @@ const isLost = computed(() => connection.value === 'lost');
       </div>
     </main>
   </div>
+
+  <!-- Search modal — rendered as a portal sibling to the shell grid so
+       it sits above all z-index layers without clipping. -->
+  <SearchModal v-if="searchOpen" @close="searchOpen = false" />
 </template>

@@ -405,6 +405,12 @@ interface WailsBindingsLike {
     taskHint: string,
     preference: string,
   ): Promise<BranchRecommendedModel>;
+
+  // Search view (cross-session-search mission).
+  Search_Sessions(
+    query: string,
+    filters: SearchFilters,
+  ): Promise<SearchHit[]>;
 }
 
 /**
@@ -1318,6 +1324,55 @@ export interface BranchesClient {
   ): Promise<BranchRecommendedModel>;
 }
 
+// ── Search types (cross-session-search mission) ───────────────────────
+
+/**
+ * SearchFilters — optional predicates for a Search_Sessions call.
+ * Zero values mean "no filter". Limit defaults to 50 server-side when 0.
+ */
+export interface SearchFilters {
+  /** Restrict to sessions in this project. Empty = all projects. */
+  projectId?: string;
+  /** Restrict to a single session (in-session search). Empty = all. */
+  sessionId?: string;
+  /** One of "", "user", "assistant", "system". Empty = all roles. */
+  roleFilter?: string;
+  /** Max results (server default 50 when 0 / omitted). */
+  limit?: number;
+}
+
+/** A byte-offset range [start, end) within a SearchHit.snippet string. */
+export interface SearchHighlight {
+  start: number;
+  end: number;
+}
+
+/**
+ * SearchHit — a single full-text match returned by Search_Sessions.
+ * snippet is plain text; highlights is a sorted list of non-overlapping
+ * UTF-8 byte ranges to mark within it.
+ */
+export interface SearchHit {
+  sessionId: string;
+  sessionName: string;
+  messageId: string;
+  role: string;
+  snippet: string;
+  highlights: SearchHighlight[];
+  createdAt: string;
+  projectId?: string;
+}
+
+/**
+ * SearchClient — full-text search across all session messages.
+ *
+ * Backed by SQLite FTS5 messages_fts (porter+unicode61 tokeniser).
+ * The server sanitises the query string; empty/whitespace returns [].
+ */
+export interface SearchClient {
+  sessions(query: string, filters?: SearchFilters): Promise<SearchHit[]>;
+}
+
 export interface HarnessClient {
   shellStatus(): Promise<ShellStatus>;
   appInfo(): Promise<AppInfo>;
@@ -1348,6 +1403,7 @@ export interface HarnessClient {
   branches: BranchesClient;
   dials: DialsClient;
   nodes: NodesClient;
+  search: SearchClient;
 }
 
 // ── runtime client ─────────────────────────────────────────────────────
@@ -1635,6 +1691,10 @@ export function createHarnessClient(): HarnessClient {
       reloadOverrides: () => b().Nodes_ReloadOverrides(),
       listUserOverrides: () => b().Nodes_ListUserOverrides(),
       doctor: () => b().Nodes_Doctor(),
+    },
+    search: {
+      sessions: (query, filters) =>
+        b().Search_Sessions(query, filters ?? {}),
     },
   };
 }
@@ -2249,6 +2309,9 @@ export function createFakeHarnessClient(
         aliasCount: 0,
         hotReloadEnabled: false,
       }),
+    },
+    search: {
+      sessions: async () => [],
     },
   };
 

@@ -11,6 +11,7 @@ import (
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/audit"
 	branchesview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/branches"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/bundle"
+	searchview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/search"
 	compactionview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/compaction"
 	contextsview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/contexts"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/contextview"
@@ -61,6 +62,7 @@ type fakeHarnessAPI struct {
 	branchesAPI     branchesview.BranchesAPI
 	dialsAPI        dialsview.DialsAPI
 	nodesAPI        nodesview.NodesAPI
+	searchAPI       searchview.SearchAPI
 }
 
 func (f *fakeHarnessAPI) ShellStatus(_ context.Context) (ShellStatus, error) {
@@ -94,6 +96,7 @@ func (f *fakeHarnessAPI) Compaction() compactionview.CompactionAPI     { return 
 func (f *fakeHarnessAPI) Branches() branchesview.BranchesAPI           { return f.branchesAPI }
 func (f *fakeHarnessAPI) Dials() dialsview.DialsAPI                    { return f.dialsAPI }
 func (f *fakeHarnessAPI) Nodes() nodesview.NodesAPI                    { return f.nodesAPI }
+func (f *fakeHarnessAPI) Search() searchview.SearchAPI                 { return f.searchAPI }
 
 // Compile-time interface witness (plan §4.2).
 var _ HarnessAPI = (*fakeHarnessAPI)(nil)
