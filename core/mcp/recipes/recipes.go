@@ -296,6 +296,14 @@ func ValidateRecipeID(id string) error {
 	return nil
 }
 
+// validTransports is the exhaustive set of recognised transport values.
+var validTransports = map[string]bool{
+	"":     true, // empty = stdio (back-compat)
+	"stdio": true,
+	"http":  true,
+	"sse":   true,
+}
+
 // Validate runs the recipe-level invariants. It is called by
 // LoadShipped on every parsed recipe so that a bad shipped.json fails
 // the binary at init time.
