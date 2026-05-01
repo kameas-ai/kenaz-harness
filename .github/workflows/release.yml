@@ -24,7 +24,8 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  GO_VERSION: '1.22'
+  # Match go.mod (currently 1.25.0). Bumping here when go.mod bumps.
+  GO_VERSION: '1.25'
   NODE_VERSION: '20'
 
 jobs:
@@ -102,12 +103,16 @@ jobs:
       - name: install wails system deps (linux)
         if: runner.os == 'Linux'
         run: |
+          # ubuntu-latest moved to 24.04, which ships libwebkit2gtk-4.1
+          # (not 4.0). Pair with the `webkit2_41` build tag below.
           sudo apt-get update
           sudo apt-get install -y \
-            libgtk-3-dev libwebkit2gtk-4.0-dev pkg-config
+            libgtk-3-dev libwebkit2gtk-4.1-dev pkg-config
 
       - name: install wails CLI
-        run: go install github.com/wailsapp/wails/v2/cmd/wails@latest
+        # Pin to the same version we've validated locally; @latest can ship
+        # breaking generator changes (the Wails CLI emits TS bindings, etc.).
+        run: go install github.com/wailsapp/wails/v2/cmd/wails@v2.12.0
 
       - name: frontend deps
         working-directory: frontend
@@ -116,13 +121,21 @@ jobs:
       - name: wails build
         shell: bash
         run: |
+          set -euo pipefail
           VERSION="${{ needs.derive-version.outputs.version }}"
-          # Pass version via -ldflags so main.go can surface it.
-          wails build \
-            -platform ${{ matrix.wails_platform }} \
-            -ldflags "-X main.Version=${VERSION}" \
-            -trimpath \
-            -tags ${{ runner.os == 'Linux' && 'webkit2_41' || '' }}
+          # The -tags flag is only valid with an argument. Linux needs
+          # webkit2_41 (gtk 4.1); macOS + Windows want no tags. Build the
+          # arg list conditionally so we don't emit a bare `-tags` on
+          # platforms that don't need one.
+          ARGS=(
+            -platform "${{ matrix.wails_platform }}"
+            -ldflags "-X main.Version=${VERSION}"
+            -trimpath
+          )
+          if [ "${{ runner.os }}" = "Linux" ]; then
+            ARGS+=(-tags webkit2_41)
+          fi
+          wails build "${ARGS[@]}"
 
       # ── macOS rename + code signing + notarization ──────────────────────
       # Wails names the .app bundle from wails.json `name` (kenaz-harness),
