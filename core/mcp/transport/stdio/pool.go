@@ -10,6 +10,7 @@ import (
 
 	coremcp "github.com/sigil-tech/kaneaz-harness/core/mcp"
 	"github.com/sigil-tech/kaneaz-harness/core/mcp/transport"
+	mcphttp "github.com/sigil-tech/kaneaz-harness/core/mcp/transport/http"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -26,13 +27,14 @@ type PoolOptions = transport.PoolOptions
 
 // Pool is the real, full-featured stdio MCP pool. It implements
 // core/mcp.Pool. Servers are addressed by ServerSpec.Name; the
-// transport must be "stdio" — any other value is rejected at Open.
+// transport must be "stdio" or "http" — other values are rejected at Open.
 type Pool struct {
 	opts PoolOptions
 
-	mu      sync.RWMutex
-	servers map[string]*ServerInstance
-	closed  bool
+	mu        sync.RWMutex
+	servers   map[string]*ServerInstance
+	httpConns map[string]*mcphttp.Server // WP03: HTTP transport connections
+	closed    bool
 }
 
 // Compile-time witness that *Pool satisfies coremcp.Pool. WP05
@@ -67,8 +69,9 @@ func NewPoolBare(opts PoolOptions) *Pool {
 // ApplyDefaults ran.
 func newPool(opts PoolOptions) *Pool {
 	return &Pool{
-		opts:    opts,
-		servers: make(map[string]*ServerInstance),
+		opts:      opts,
+		servers:   make(map[string]*ServerInstance),
+		httpConns: make(map[string]*mcphttp.Server),
 	}
 }
 
@@ -121,11 +124,15 @@ func (p *Pool) Open(ctx context.Context, specs []coremcp.ServerSpec) error {
 }
 
 // openOne is the per-spec helper. Validates the spec, builds a
-// ServerInstance, performs the handshake, and registers it on
-// success.
+// ServerInstance (for stdio) or an httpServer (for http), performs
+// the handshake, and registers it on success.
 func (p *Pool) openOne(ctx context.Context, spec coremcp.ServerSpec) error {
 	if spec.Name == "" {
 		return errors.New("stdio: spec.Name required")
+	}
+	// WP03: dispatch HTTP transport to the http package.
+	if spec.Transport == "http" {
+		return p.openOneHTTP(ctx, spec)
 	}
 	if spec.Transport != "" && spec.Transport != "stdio" {
 		return fmt.Errorf("stdio: unsupported transport %q", spec.Transport)
@@ -193,6 +200,8 @@ func (p *Pool) Close(ctx context.Context) error {
 	p.closed = true
 	servers := p.servers
 	p.servers = make(map[string]*ServerInstance)
+	httpConns := p.httpConns
+	p.httpConns = make(map[string]*mcphttp.Server)
 	p.mu.Unlock()
 
 	var (
@@ -206,6 +215,20 @@ func (p *Pool) Close(ctx context.Context) error {
 		go func() {
 			defer wg.Done()
 			if err := inst.Close(ctx); err != nil && !isExpectedExit(err) {
+				mu.Lock()
+				if first == nil {
+					first = err
+				}
+				mu.Unlock()
+			}
+		}()
+	}
+	for _, hs := range httpConns {
+		hs := hs
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := hs.Close(); err != nil {
 				mu.Lock()
 				if first == nil {
 					first = err
@@ -231,10 +254,17 @@ func (p *Pool) Tools(ctx context.Context) ([]coremcp.Tool, error) {
 	for _, inst := range p.servers {
 		insts = append(insts, inst)
 	}
+	httpConns := make([]*mcphttp.Server, 0, len(p.httpConns))
+	for _, hs := range p.httpConns {
+		httpConns = append(httpConns, hs)
+	}
 	p.mu.RUnlock()
 	out := make([]coremcp.Tool, 0)
 	for _, inst := range insts {
 		out = append(out, inst.Tools()...)
+	}
+	for _, hs := range httpConns {
+		out = append(out, hs.Tools()...)
 	}
 	return out, nil
 }
@@ -248,11 +278,16 @@ func (p *Pool) Call(ctx context.Context, server, tool string, args json.RawMessa
 		return nil, errors.New("stdio: pool closed")
 	}
 	inst, ok := p.servers[server]
+	if ok {
+		p.mu.RUnlock()
+		return inst.CallTool(ctx, tool, args)
+	}
+	hs, ok := p.httpConns[server]
 	p.mu.RUnlock()
 	if !ok {
 		return nil, fmt.Errorf("stdio: unknown server %q", server)
 	}
-	return inst.CallTool(ctx, tool, args)
+	return hs.CallTool(ctx, tool, args)
 }
 
 // Server returns the named instance for callers that need to read
@@ -299,6 +334,10 @@ func (p *Pool) OpenOne(ctx context.Context, spec coremcp.ServerSpec) error {
 		p.mu.Unlock()
 		return fmt.Errorf("%w: %q", ErrServerExists, spec.Name)
 	}
+	if _, exists := p.httpConns[spec.Name]; exists {
+		p.mu.Unlock()
+		return fmt.Errorf("%w: %q", ErrServerExists, spec.Name)
+	}
 	p.mu.Unlock()
 	return p.openOne(ctx, spec)
 }
@@ -320,15 +359,54 @@ func (p *Pool) CloseOne(ctx context.Context, id string) error {
 		return errors.New("stdio: pool closed")
 	}
 	inst, ok := p.servers[id]
-	if !ok {
+	if ok {
+		delete(p.servers, id)
 		p.mu.Unlock()
-		return fmt.Errorf("%w: %q", ErrServerNotFound, id)
+		if err := inst.Close(ctx); err != nil && !isExpectedExit(err) {
+			return err
+		}
+		return nil
 	}
-	delete(p.servers, id)
+	hs, ok := p.httpConns[id]
+	if ok {
+		delete(p.httpConns, id)
+		p.mu.Unlock()
+		return hs.Close()
+	}
 	p.mu.Unlock()
-	if err := inst.Close(ctx); err != nil && !isExpectedExit(err) {
-		return err
+	return fmt.Errorf("%w: %q", ErrServerNotFound, id)
+}
+
+// openOneHTTP opens a single HTTP-transport server. It builds the
+// factory, opens the connection, performs the MCP initialize
+// handshake, and registers the httpServer in httpConns.
+func (p *Pool) openOneHTTP(ctx context.Context, spec coremcp.ServerSpec) error {
+	factory, err := mcphttp.NewConnectionFactory(spec, nil)
+	if err != nil {
+		return fmt.Errorf("http: build factory for %q: %w", spec.Name, err)
 	}
+	conn, err := factory.NewConnection(spec.Name)
+	if err != nil {
+		return fmt.Errorf("http: new connection for %q: %w", spec.Name, err)
+	}
+	hs := mcphttp.NewServer(spec.Name, conn, p.opts.Logger)
+	if err := hs.Open(ctx); err != nil {
+		return fmt.Errorf("http: open %q: %w", spec.Name, err)
+	}
+	p.mu.Lock()
+	if p.closed {
+		p.mu.Unlock()
+		_ = hs.Close()
+		return errors.New("stdio: pool closed mid-open")
+	}
+	if existing, ok := p.httpConns[spec.Name]; ok {
+		p.httpConns[spec.Name] = hs
+		p.mu.Unlock()
+		_ = existing.Close()
+		return nil
+	}
+	p.httpConns[spec.Name] = hs
+	p.mu.Unlock()
 	return nil
 }
 

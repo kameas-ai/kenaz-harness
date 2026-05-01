@@ -78,6 +78,22 @@ type Recipe struct {
 	// install alongside this recipe. The install modal surfaces a
 	// "copy recommended policy" affordance when set.
 	RecommendedPolicyTemplate string `json:"recommended_policy_template,omitempty"`
+	// Transport identifies the bytes layer: "stdio" | "http" | "sse".
+	// Empty / missing defaults to "stdio" for back-compat with the
+	// shipped catalog (which has no transport field today).
+	Transport string `json:"transport,omitempty"`
+	// URL is required when Transport is "http" or "sse". Subject to
+	// ${ENV_VAR} substitution at spawn time. Ignored for stdio.
+	URL string `json:"url,omitempty"`
+	// HeadersTemplate holds static HTTP headers for the http and sse
+	// transports. Values may contain ${ENV_VAR} tokens; substitution
+	// runs via the existing recipe substitution machinery at spawn time.
+	// The Authorization header is redacted from diagnostic logs.
+	HeadersTemplate map[string]string `json:"headers_template,omitempty"`
+	// PostURL is required for the sse transport: the client-to-server
+	// POST endpoint (separate from the SSE stream URL). Ignored for
+	// stdio and http.
+	PostURL string `json:"post_url,omitempty"`
 	// Source tags the loader that produced this Recipe. It is set by
 	// loaders (LoadShipped → SourceShipped, registry loader →
 	// SourceRegistry, UserStore → SourceUser/SourceImported) and is
@@ -221,6 +237,14 @@ func ValidateRecipeID(id string) error {
 	return nil
 }
 
+// validTransports is the exhaustive set of recognised transport values.
+var validTransports = map[string]bool{
+	"":     true, // empty = stdio (back-compat)
+	"stdio": true,
+	"http":  true,
+	"sse":   true,
+}
+
 // Validate runs the recipe-level invariants. It is called by
 // LoadShipped on every parsed recipe so that a bad shipped.json fails
 // the binary at init time.
@@ -228,8 +252,27 @@ func (r *Recipe) Validate() error {
 	if err := ValidateRecipeID(r.ID); err != nil {
 		return err
 	}
-	if len(r.Command) == 0 || r.Command[0] == "" {
-		return fmt.Errorf("%w: recipe %q has empty Command", ErrInvalidRecipe, r.ID)
+	// Validate transport enum.
+	if !validTransports[r.Transport] {
+		return fmt.Errorf("%w: recipe %q has invalid transport %q (want stdio|http|sse)", ErrInvalidRecipe, r.ID, r.Transport)
+	}
+	transport := r.Transport
+	if transport == "" {
+		transport = "stdio"
+	}
+	switch transport {
+	case "stdio":
+		if len(r.Command) == 0 || r.Command[0] == "" {
+			return fmt.Errorf("%w: recipe %q has empty Command", ErrInvalidRecipe, r.ID)
+		}
+	case "http":
+		if r.URL == "" {
+			return fmt.Errorf("%w: recipe %q with transport \"http\" requires non-empty URL", ErrInvalidRecipe, r.ID)
+		}
+	case "sse":
+		if r.URL == "" {
+			return fmt.Errorf("%w: recipe %q with transport \"sse\" requires non-empty URL", ErrInvalidRecipe, r.ID)
+		}
 	}
 	for i, k := range r.EnvKeys {
 		if k.Name == "" {
