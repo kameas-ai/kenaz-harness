@@ -440,7 +440,25 @@ export interface Settings {
    * never touch. Default 4. Negative is rejected at save.
    */
   compactionRecentWindow?: number;
+
+  /**
+   * Markdown rendering extensions dial (markdown-rendering-polish-01KQ8TDT).
+   * Controls which heavy renderers (KaTeX, Mermaid) are active.
+   * Empty / undefined == 'all' (default). Set to 'basic' to disable
+   * both KaTeX and Mermaid on slow machines.
+   */
+  markdownExtensions?: MarkdownExtensions;
 }
+
+/**
+ * MarkdownExtensions — controls which rendering features are active in
+ * MarkdownBlock. Matches the four-stop dial in SettingsView.
+ *   'basic'    — GFM only; KaTeX and Mermaid disabled.
+ *   'math'     — GFM + KaTeX; Mermaid disabled.
+ *   'diagrams' — GFM + Mermaid; KaTeX disabled.
+ *   'all'      — all renderers active (default).
+ */
+export type MarkdownExtensions = 'basic' | 'math' | 'diagrams' | 'all';
 
 /**
  * ConfirmDecision — the four canonical responses to a confirm-each

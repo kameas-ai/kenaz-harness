@@ -23,6 +23,7 @@ import type {
   Attachment,
   CompactionAggressiveness,
   CompactionTierExplain,
+  MarkdownExtensions,
   Provider,
   Settings,
   Theme,
@@ -42,6 +43,30 @@ const settings = ref<Settings>({
 const appInfo = ref<AppInfo | null>(null);
 const restoreOnLaunch = ref(true);
 const confirmEachEnabled = ref(true);
+
+/* ── Rendering extensions (mission markdown-rendering-polish-01KQ8TDT) ── */
+
+/**
+ * Four-stop rendering dial: basic / math / diagrams / all (default).
+ * Disable heavier renderers (KaTeX, Mermaid) for performance on slow
+ * machines.
+ */
+const RENDERING_TIERS: ReadonlyArray<{ value: MarkdownExtensions; label: string }> = [
+  { value: 'basic', label: 'Basic' },
+  { value: 'math', label: 'Math' },
+  { value: 'diagrams', label: 'Diagrams' },
+  { value: 'all', label: 'All' },
+];
+
+const markdownExtensions = ref<MarkdownExtensions>('all');
+
+function setMarkdownExtensions(ext: MarkdownExtensions) {
+  markdownExtensions.value = ext;
+  debouncedSave(client, {
+    ...settings.value,
+    markdownExtensions: ext,
+  });
+}
 
 /* ── Compaction (mission compaction-strategy-ui-01KQ8TDI §2.9) ─────── */
 
@@ -150,6 +175,9 @@ async function refresh() {
   } catch {
     appInfo.value = null;
   }
+  // Hydrate rendering extensions.
+  markdownExtensions.value =
+    (settings.value.markdownExtensions as MarkdownExtensions) || 'all';
   // Hydrate the compaction working copies from the persisted settings.
   compactionTier.value =
     (settings.value.compactionAggressiveness as CompactionAggressiveness) ||
@@ -437,6 +465,43 @@ onMounted(() => {
             {{ settings.windowSize.width }} × {{ settings.windowSize.height }}
           </dd>
         </dl>
+      </section>
+
+      <section data-testid="rendering-section">
+        <h2 class="font-ui text-[11px] uppercase tracking-[0.18em] text-ink-subtle">
+          Rendering
+        </h2>
+        <p class="mt-1 font-ui text-[11px] text-ink-muted">
+          Controls which markdown renderers are active. Disable on slow
+          machines if diagrams or math feel laggy.
+        </p>
+        <div
+          class="mt-2 inline-flex rounded-sm border border-border"
+          role="radiogroup"
+          aria-label="Markdown rendering extensions"
+        >
+          <button
+            v-for="tier in RENDERING_TIERS"
+            :key="tier.value"
+            type="button"
+            role="radio"
+            :aria-checked="markdownExtensions === tier.value"
+            class="px-3 py-1.5 font-ui text-[12px] border-r border-border last:border-r-0 transition-colors"
+            :class="markdownExtensions === tier.value
+              ? 'bg-surface-3 text-ink'
+              : 'bg-surface-1 text-ink-muted hover:text-ink'"
+            :data-testid="`rendering-tier-${tier.value}`"
+            @click="setMarkdownExtensions(tier.value)"
+          >
+            {{ tier.label }}
+          </button>
+        </div>
+        <p class="mt-1 font-ui text-[11px] text-ink-muted">
+          <strong class="text-ink">Basic</strong> — GFM only.
+          <strong class="text-ink">Math</strong> — GFM + KaTeX.
+          <strong class="text-ink">Diagrams</strong> — GFM + Mermaid.
+          <strong class="text-ink">All</strong> — everything (default).
+        </p>
       </section>
 
       <section data-testid="compaction-section">
