@@ -4,6 +4,20 @@ package llm
 
 import "context"
 
+// Redacted is the display-safe credential view carried over the RPC
+// boundary (credential-store-01KQ8TDD WP05). It mirrors
+// core/credstore.Redacted but is declared here so this package does
+// not take a hard dependency on credstore. Raw credential bytes never
+// appear in this struct (DIRECTIVE_001 / FR-006).
+type Redacted struct {
+	// Display is the human-readable redacted form (e.g. "sk-a…d4f9").
+	Display string `json:"display"`
+	// Kind is the CredentialReference.Kind string ("keychain", "env", …).
+	Kind string `json:"kind"`
+	// Locator is the redaction-safe reference ID — NOT the raw locator.
+	Locator string `json:"locator"`
+}
+
 // Provider is reference-only metadata about a configured LLM provider.
 // Credentials live behind secrets-keychain — never returned here.
 type Provider struct {
@@ -23,6 +37,10 @@ type Provider struct {
 	// locator is intentionally NOT a credential value — it's the
 	// keychain entry name or AWS profile name.
 	Cred CredentialReference `json:"cred,omitempty"`
+	// Redaction carries the display-safe credential view populated by
+	// credstore.Peek (WP05). The wire payload never carries raw key
+	// material — consumers read Redaction.Display for UI rendering.
+	Redaction Redacted `json:"redaction,omitempty"`
 	// Source is "bundle" or "personal" — the UI surfaces this so users
 	// know whether a provider came from a signed bundle or their own
 	// providers.json store.
@@ -133,4 +151,12 @@ type LLMConnectorAPI interface {
 	// feature flag is off — the gateway is wired regardless of the
 	// flag, only the toolloop chooses whether to invoke it.
 	ResolveConfirm(ctx context.Context, requestID, decision string) error
+
+	// UpdateProviderCredential writes a new plaintext API key for
+	// profileID directly to the OS keychain and zeroes the in-memory
+	// buffer before returning. The "leave blank to keep current"
+	// frontend pattern is preserved — the UI ONLY calls this method
+	// when the user has entered a new value (credential-store-01KQ8TDD
+	// WP05 / FR-007).
+	UpdateProviderCredential(ctx context.Context, profileID, plaintext string) error
 }

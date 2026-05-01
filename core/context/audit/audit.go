@@ -43,6 +43,12 @@ const (
 	// (or attempted to produce) a session title
 	// (session-auto-titling-01KQ8TDS WP01).
 	KindSessionAutoTitled Kind = "sessions.auto_titled"
+
+	// KindCredentialAccessed signals that a credential was accessed via
+	// credstore.Use (credential-store-01KQ8TDD WP03). The payload carries
+	// only the redaction-safe RefID; raw bytes, locator strings, and
+	// display strings are never included.
+	KindCredentialAccessed Kind = "credential.accessed"
 )
 
 // Event is the wire shape passed to the event log. The concrete event-log
@@ -168,6 +174,24 @@ type CompactedOriginalsDeletedPayload struct {
 	DeletedCount     int       `json:"deleted_count"`
 	OldestArchivedAt time.Time `json:"oldest_archived_at"`
 	NewestArchivedAt time.Time `json:"newest_archived_at"`
+}
+
+// CredentialAccessedPayload is the audit payload for KindCredentialAccessed
+// (credential-store-01KQ8TDD WP03). It carries only the redaction-safe RefID;
+// raw key bytes, locator strings, and display strings are never included
+// (DIRECTIVE_001 / FR-008).
+type CredentialAccessedPayload struct {
+	// RefID is ref.CredentialReference.ID() — a hash-derived, redaction-safe
+	// token that identifies the credential without revealing its locator.
+	RefID string `json:"ref_id"`
+	// Purpose is the AccessPurpose enum string (e.g. "provider_call").
+	Purpose string `json:"purpose"`
+	// ToolCallID is the in-flight tool-call id, if available from the context.
+	ToolCallID string `json:"tool_call_id,omitempty"`
+	// RequestID is the HTTP / RPC request id, if available from the context.
+	RequestID string `json:"request_id,omitempty"`
+	// AccessedAt is the wall-clock time the Use call was made.
+	AccessedAt time.Time `json:"accessed_at"`
 }
 
 // SessionAutoTitledPayload carries signalling for the auto-titling engine

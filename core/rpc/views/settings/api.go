@@ -146,6 +146,18 @@ type Settings struct {
 	// Settings_GetCedarStrictCredentialMode /
 	// Settings_SetCedarStrictCredentialMode bindings today.
 	CedarStrictCredentialMode bool `json:"cedarStrictCredentialMode,omitempty"`
+
+	// CredentialAuditRetentionDays controls how long
+	// KindCredentialAccessed audit rows are retained before the daily
+	// sweep deletes them (credential-store-01KQ8TDD WP07). Zero (default)
+	// keeps rows forever — matches the harness greedy-retention posture
+	// (spec Q26.1). Non-zero values prune rows older than N days on the
+	// daily credstore sweep goroutine.
+	//
+	// UI surface: Settings → Privacy, "Credential audit retention: ___
+	// days (blank = forever)". Frontend sends the numeric value; the
+	// binding layer converts 0/empty to 0 (forever).
+	CredentialAuditRetentionDays int `json:"credentialAuditRetentionDays,omitempty"`
 }
 
 // ProviderProfileRef is the wire shape that identifies a provider+model

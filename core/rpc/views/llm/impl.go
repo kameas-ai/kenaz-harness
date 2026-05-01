@@ -21,6 +21,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"runtime"
 	"sync"
 	"time"
 
@@ -84,6 +85,17 @@ type KeychainWriter interface {
 // BundleSource is treated as an empty snapshot.
 type BundleSource interface {
 	BundleProfiles() []corellm.ProviderProfile
+}
+
+// CredPeeker resolves a credential reference to a display-safe Redacted
+// value (credstore.Peek). Wire via Config.CredPeeker; nil = no
+// redaction in ListProviders responses (Redaction field stays zero).
+type CredPeeker interface {
+	// PeekCred returns the display string, kind, and locator-safe id for
+	// ref. Display rules: len>12 → "first4…last4"; else "••••••••".
+	// On resolver error the returned Redacted has Display="••••••••"
+	// and Kind="unset".
+	PeekCred(ctx context.Context, kind, locator string) Redacted
 }
 
 // SessionMessage is the slice of session.Message the streaming layer
@@ -227,6 +239,9 @@ type API struct {
 	historyW  SessionMessageWriter
 	hooks     HookRunner
 	artifacts ArtifactSink
+	// credPeeker, when non-nil, is called by ListProviders to populate
+	// Provider.Redaction for each profile (WP05).
+	credPeeker CredPeeker
 	// attachments is the WP03 source of truth for resolved starting
 	// context. nil falls back to the SessionContextReader probe so
 	// Mission A behaviour stays intact during the one-release buffer.
@@ -314,6 +329,10 @@ type Config struct {
 	// the freshly persisted assistant message at stream completion
 	// (non-tool_use finish only). nil leaves the chat path untouched.
 	Artifacts ArtifactSink
+	// CredPeeker, when non-nil, is called by ListProviders to populate
+	// Provider.Redaction for each profile. nil = Redaction field
+	// is omitted (zero value) — no breaking change for existing tests.
+	CredPeeker CredPeeker
 }
 
 // New constructs a concrete API.
@@ -336,6 +355,7 @@ func New(cfg Config) *API {
 		chatRunner:  cfg.ChatRunner,
 		tools:       cfg.Tools,
 		artifacts:   cfg.Artifacts,
+		credPeeker:  cfg.CredPeeker,
 		subs:        map[string]*subscription{},
 		validated:   map[string]bool{},
 	}
@@ -519,7 +539,7 @@ var _ LLMConnectorAPI = (*API)(nil)
 // user's keychain-backed providers. Personal profiles are loaded into
 // the registry on first call so subsequent StartStream calls resolve
 // the same IDs.
-func (a *API) ListProviders(_ context.Context) ([]Provider, error) {
+func (a *API) ListProviders(ctx context.Context) ([]Provider, error) {
 	if err := a.ensurePersonalLoaded(); err != nil {
 		return nil, err
 	}
@@ -543,6 +563,10 @@ func (a *API) ListProviders(_ context.Context) ([]Provider, error) {
 	}
 	out := make([]Provider, 0, len(seen))
 	for _, v := range seen {
+		// WP05: populate Redaction via credPeeker if wired.
+		if a.credPeeker != nil {
+			v.Redaction = a.credPeeker.PeekCred(ctx, v.Cred.Kind, v.Cred.Locator)
+		}
 		out = append(out, v)
 	}
 	sortProviders(out)
@@ -884,6 +908,50 @@ func (a *API) ListModels(ctx context.Context, kind, plaintextApiKey string) ([]M
 // when bound — no dispatch path resolves through this method anymore.
 func (a *API) ResolveConfirm(_ context.Context, _, _ string) error {
 	return errors.New("llm: confirm-each is retired; use cedar policies to gate tool dispatch")
+}
+
+// UpdateProviderCredential writes a new plaintext API key for profileID
+// directly to the OS keychain and zeroes the buffer before returning
+// (credential-store-01KQ8TDD WP05 / FR-007). This is the ONLY RPC that
+// accepts plaintext — it is consumed and destroyed at the binding layer.
+//
+// Errors:
+//   - ErrPersonalStoreUnavailable — no backing store.
+//   - ErrBundleProviderImmutable — profile is bundle-derived.
+//   - errors.New — keychain not configured, empty plaintext, or write fail.
+func (a *API) UpdateProviderCredential(ctx context.Context, profileID, plaintext string) error {
+	if a.store == nil {
+		return ErrPersonalStoreUnavailable
+	}
+	if a.bundles != nil {
+		for _, p := range a.bundles.BundleProfiles() {
+			if p.ID == profileID {
+				return fmt.Errorf("%w: %q", ErrBundleProviderImmutable, profileID)
+			}
+		}
+	}
+	if plaintext == "" {
+		return errors.New("llm: UpdateProviderCredential: empty plaintext")
+	}
+	profile, err := a.lookupProfile(profileID)
+	if err != nil {
+		return err
+	}
+	if profile.Cred.Kind != "keychain" {
+		return fmt.Errorf("llm: UpdateProviderCredential: profile %q uses kind=%q; only keychain credentials are writable via this RPC", profileID, profile.Cred.Kind)
+	}
+	if a.keychain == nil {
+		return errors.New("llm: UpdateProviderCredential: no keychain writer configured")
+	}
+	buf := []byte(plaintext)
+	plaintext = "" // zero the Go string-local copy
+	err = a.keychain.Write(ctx, profile.Cred.Locator, buf)
+	runtime.KeepAlive(buf)
+	zeroBytes(buf)
+	if err != nil {
+		return fmt.Errorf("llm: UpdateProviderCredential keychain write %q: %w", profile.Cred.Locator, err)
+	}
+	return nil
 }
 
 // TestProvider runs the configured prober against the named profile and

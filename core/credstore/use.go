@@ -106,10 +106,3 @@ func (s *store) Use(ctx context.Context, h Handle, op func([]byte) error) (retEr
 	return opErr
 }
 
-// emitAccessed is the WP03 audit hook. It is a no-op here; WP03
-// replaces this body with the real event emission.
-//
-// TODO(WP03): emit an AccessedEvent to the audit log.
-func (s *store) emitAccessed(_ context.Context, _ interface{}, _ AccessPurpose, _ error) {
-	// no-op stub — intentional
-}

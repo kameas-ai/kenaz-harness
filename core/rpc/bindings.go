@@ -261,6 +261,15 @@ func (b *Bindings) LLM_ResolveConfirm(requestID, decision string) error {
 	return b.api.LLMConnector().ResolveConfirm(b.ctx(), requestID, decision)
 }
 
+// LLM_UpdateProviderCredential writes a new plaintext API key for
+// profileID to the OS keychain and zeroes the in-memory buffer before
+// returning (credential-store-01KQ8TDD WP05 / FR-007). The frontend
+// ONLY calls this when the user has typed a new key value — the
+// "leave blank to keep current" flow is preserved.
+func (b *Bindings) LLM_UpdateProviderCredential(profileID, plaintext string) error {
+	return b.api.LLMConnector().UpdateProviderCredential(b.ctx(), profileID, plaintext)
+}
+
 // ── mcp ────────────────────────────────────────────────────────────────
 
 func (b *Bindings) MCP_ListServers() ([]mcp.Server, error) {

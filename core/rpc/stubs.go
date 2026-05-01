@@ -51,6 +51,9 @@ func (s *stubLLM) ListModels(_ context.Context, _, _ string) ([]llm.ModelInfo, e
 	return nil, errNotWired
 }
 func (s *stubLLM) ResolveConfirm(_ context.Context, _, _ string) error { return errNotWired }
+func (s *stubLLM) UpdateProviderCredential(_ context.Context, _, _ string) error {
+	return errNotWired
+}
 
 // ── a2a ────────────────────────────────────────────────────────────────
 

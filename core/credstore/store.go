@@ -6,6 +6,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/sigil-tech/kaneaz-harness/core/context/audit"
 	"github.com/sigil-tech/kaneaz-harness/core/policy/cedar"
 	"github.com/sigil-tech/kaneaz-harness/core/secrets"
 )
@@ -41,6 +42,24 @@ type store struct {
 	done      chan struct{}
 	closeOnce sync.Once
 
+	// auditEmitter is the optional audit.Emitter injected via
+	// WithAuditEmitter. nil = no-op (tests / pre-boot path).
+	auditEmitter audit.Emitter
+	// auditCh is the 256-slot buffered channel that decouples Use from
+	// the emitter I/O. Nil when no emitter is wired.
+	auditCh chan auditEmitJob
+
+	// auditSweeper is the optional deletion backend for SweepAuditLog
+	// (WP07). nil = no-op.
+	auditSweeper AuditSweeper
+	// retentionDaysFn, when non-nil, returns the current retention
+	// window in days. Zero means forever (spec Q26.1 default). Read
+	// by the background sweep goroutine on every tick.
+	retentionDaysFn func() int
+	// sweepLastRan tracks the last sweep wall time (atomic pointer swap,
+	// no lock). nil = never swept.
+	sweepLastRan *time.Time
+
 	// cedarGate is the optional Cedar policy gate consulted inside Use
 	// before secret resolution. nil = no gate (default-allow), keeps
 	// the test harness path simple. When set, evaluation routes through
@@ -68,6 +87,10 @@ type Store interface {
 	// Peek resolves the credential behind ref and returns a redacted
 	// display value. No audit event is emitted.
 	Peek(ctx context.Context, ref secrets.CredentialReference) (Redacted, error)
+	// RoundTrip issues a single-use handle and immediately calls Use(op)
+	// in one step. Convenience wrapper for callers that do not need to
+	// manage the Handle lifecycle explicitly.
+	RoundTrip(ctx context.Context, ref secrets.CredentialReference, purpose AccessPurpose, op func([]byte) error) error
 	// IssueForMCPSpawn resolves the credentials required to spawn an
 	// MCP stdio child process. The Cedar gate fires with
 	// purpose="mcp_spawn"; NotApplicable triggers an interactive prompt
@@ -77,6 +100,11 @@ type Store interface {
 	// UID and as the CredPromptSurface.ProviderID. envKeys are the env
 	// var names the recipe declares; only those keys are resolved.
 	IssueForMCPSpawn(ctx context.Context, recipeID string, envKeys []string, backend secrets.Backend) (map[string]string, error)
+	// SweepAuditLog deletes credential.accessed audit rows older than
+	// retainDuration. When retainDuration is zero the call is a no-op
+	// and returns (0, nil). Requires WithAuditSweeper to be wired;
+	// without it the call is always a no-op (WP07).
+	SweepAuditLog(ctx context.Context, retainDuration time.Duration) (int, error)
 	// Close stops the expiration goroutine and zeroes all entries.
 	Close()
 }
@@ -135,6 +163,10 @@ func New(resolver secrets.ResolverAPI, clock func() time.Time, opts ...StoreOpti
 		opt(s)
 	}
 	go s.reapLoop()
+	// Start the daily audit-retention sweep goroutine (WP07). It only
+	// does meaningful work when retentionDaysFn + auditSweeper are both
+	// wired; otherwise maybeSweep returns immediately on every tick.
+	go s.sweepLoop()
 	return s
 }
 
