@@ -87,7 +87,9 @@ const sqlInitSchema = `
 // lands as 0313 (subagent metadata columns — see
 // migrations_subagent.go); token-cost-telemetry-01KQ8TD7 WP02 lands
 // as 0314 (session_messages usage columns — see
-// migrations_session_usage.go).
+// migrations_session_usage.go); autonomy-dial-01KR3M2A WP02 lands as
+// 0316 (autonomy_level + autonomy_overrides columns on projects +
+// sessions — see migrations_autonomy.go). 0315 is reserved/skipped.
 func Migrations() []migrations.Migration {
 	return []migrations.Migration{
 		{
@@ -134,6 +136,7 @@ func Migrations() []migrations.Migration {
 		migration0312(),
 		migration0313(),
 		migration0314(),
+		migration0316(),
 	}
 }
 

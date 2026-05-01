@@ -5,7 +5,9 @@ package settings
 
 import (
 	"context"
+	"encoding/json"
 
+	"github.com/sigil-tech/kaneaz-harness/core/autonomy"
 	"github.com/sigil-tech/kaneaz-harness/core/compaction"
 )
 
@@ -208,6 +210,16 @@ type Settings struct {
 	// from the first session without any setup. Read via the
 	// FSRequestAccessEnabled() accessor; never read directly.
 	FSRequestAccessDisabled bool `json:"fsRequestAccessDisabled,omitempty"`
+
+	// Autonomy is the persisted global autonomy.Layer
+	// (autonomy-dial-01KR3M2A WP02). Empty value (no level + no
+	// overrides) means "use the tier-default fallback." The wire shape
+	// is the canonical autonomy.Layer JSON envelope ({"level":...,
+	// "overrides":{...}}); a missing field round-trips as the empty
+	// Layer. The settings store is JSON-file backed (no SQL table for
+	// settings), so the global autonomy layer rides on top of the
+	// existing settings.json round-trip rather than its own migration.
+	Autonomy json.RawMessage `json:"autonomy,omitempty"`
 }
 
 // ProviderProfileRef is the wire shape that identifies a provider+model
@@ -508,6 +520,18 @@ type SettingsStore interface {
 	// convenience that should work on a fresh install.
 	LoadFSRequestAccessEnabled() (bool, error)
 	SaveFSRequestAccessEnabled(enabled bool) error
+
+	// LoadAutonomyProfile / SaveAutonomyProfile expose the global
+	// autonomy.Layer (autonomy-dial-01KR3M2A WP02) independently of the
+	// full Settings record so the autonomy resolver can read it on the
+	// hot path (every chat turn) without serializing the whole record.
+	// An empty Layer (nil Level + empty Overrides) round-trips as the
+	// missing/empty Autonomy field in settings.json — the resolver then
+	// falls back to the tier-default. A missing settings file returns
+	// the empty Layer + nil error so a fresh install boots with the
+	// canonical Default tier.
+	LoadAutonomyProfile() (autonomy.Layer, error)
+	SaveAutonomyProfile(layer autonomy.Layer) error
 }
 
 // SettingsAPI is the view-scoped accessor exposed via HarnessAPI.

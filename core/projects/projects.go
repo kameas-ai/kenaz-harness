@@ -17,6 +17,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/sigil-tech/kaneaz-harness/core/autonomy"
 )
 
 // Project is the durable representation of a project entity.
@@ -26,6 +28,15 @@ type Project struct {
 	Description string
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
+
+	// AutonomyLevel is this project's tier override
+	// (autonomy-dial-01KR3M2A WP02). nil means "inherit from global."
+	// Persisted in projects.autonomy_level via migration 0316.
+	AutonomyLevel *autonomy.Tier `json:"autonomyLevel,omitempty"`
+	// AutonomyOverrides are the per-knob overrides this project pinned.
+	// Empty / nil means "no overrides at this layer." Persisted as a
+	// JSON blob in projects.autonomy_overrides via migration 0316.
+	AutonomyOverrides map[autonomy.Knob]any `json:"autonomyOverrides,omitempty"`
 }
 
 // Sentinel errors. Stable typed errors so callers can errors.Is.
@@ -55,6 +66,15 @@ type Store interface {
 	Rename(ctx context.Context, id, name string, now time.Time) error
 	UpdateDescription(ctx context.Context, id, description string, now time.Time) error
 	Delete(ctx context.Context, id string) error
+
+	// SetAutonomyProfile persists the per-project autonomy.Layer
+	// (autonomy-dial-01KR3M2A WP02). An empty Layer (nil Level + empty
+	// Overrides) round-trips as both columns NULL — the upstream
+	// resolver then falls back to the global / tier-default chain.
+	SetAutonomyProfile(ctx context.Context, id string, layer autonomy.Layer) error
+	// GetAutonomyProfile loads the per-project autonomy.Layer. Returns
+	// the empty Layer when both columns are NULL.
+	GetAutonomyProfile(ctx context.Context, id string) (autonomy.Layer, error)
 }
 
 // IDGen is the project-id generator. Tests override; production uses

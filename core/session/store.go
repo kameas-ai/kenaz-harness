@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/sigil-tech/kaneaz-harness/core/autonomy"
 	"github.com/sigil-tech/kaneaz-harness/core/llm"
 )
 
@@ -78,6 +79,19 @@ type Store interface {
 	// again" flag for the branch advisor (FR-010). When dismissed is
 	// true, the backend skips detection for this session.
 	SetBranchAdvisorDismissed(ctx context.Context, id string, dismissed bool, now time.Time) error
+
+	// SetAutonomyProfile persists the per-session autonomy.Layer
+	// (autonomy-dial-01KR3M2A WP02). An empty Layer (nil Level + empty
+	// Overrides) round-trips as both columns NULL — the upstream resolver
+	// then falls back to the project / global / tier-default chain.
+	// Mutating ID's session row is the only side effect; UpdatedAt is
+	// not bumped (this is a UI-state knob, not a content edit).
+	SetAutonomyProfile(ctx context.Context, id string, layer autonomy.Layer) error
+	// GetAutonomyProfile loads the per-session autonomy.Layer. Returns
+	// the empty Layer when both columns are NULL — callers feed the
+	// result straight into autonomy.Resolve which already understands
+	// the empty layer as "this layer contributes nothing."
+	GetAutonomyProfile(ctx context.Context, id string) (autonomy.Layer, error)
 
 	AppendMessage(ctx context.Context, m Message) (Message, error)
 	ListMessages(ctx context.Context, sessionID string) ([]Message, error)
@@ -217,6 +231,28 @@ func (s *memStore) SetProject(_ context.Context, id string, projectID *string, n
 	r.UpdatedAt = now
 	s.records[id] = r
 	return nil
+}
+
+func (s *memStore) SetAutonomyProfile(_ context.Context, id string, layer autonomy.Layer) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	r, ok := s.records[id]
+	if !ok {
+		return ErrSessionNotFound
+	}
+	r.AutonomyLevel, r.AutonomyOverrides = cloneAutonomyLayer(layer)
+	s.records[id] = r
+	return nil
+}
+
+func (s *memStore) GetAutonomyProfile(_ context.Context, id string) (autonomy.Layer, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	r, ok := s.records[id]
+	if !ok {
+		return autonomy.Layer{}, ErrSessionNotFound
+	}
+	return autonomyLayerFromRecord(r.AutonomyLevel, r.AutonomyOverrides), nil
 }
 
 func (s *memStore) SetBranchAdvisorDismissed(_ context.Context, id string, dismissed bool, now time.Time) error {
@@ -594,13 +630,18 @@ func (s *sqlStore) Create(ctx context.Context, r Record) error {
 		if r.BranchAdvisorDismissed {
 			advisorDismissed = 1
 		}
-		_, err := tx.Exec(ctx, `
+		autonomyLevel, autonomyOverrides, err := encodeAutonomySQL(autonomyLayerFromRecord(r.AutonomyLevel, r.AutonomyOverrides))
+		if err != nil {
+			return err
+		}
+		_, err = tx.Exec(ctx, `
             INSERT INTO sessions
                 (id, name, created_at, updated_at, last_active_at,
                  position, draft, scroll_position, archived_at,
                  system_prompt, context_kind, project_id,
-                 branch_advisor_dismissed)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 branch_advisor_dismissed,
+                 autonomy_level, autonomy_overrides)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `,
 			r.ID,
 			r.Name,
@@ -615,6 +656,8 @@ func (s *sqlStore) Create(ctx context.Context, r Record) error {
 			r.ContextKind,
 			projectID,
 			advisorDismissed,
+			autonomyLevel,
+			autonomyOverrides,
 		)
 		return err
 	})
@@ -624,7 +667,8 @@ const sqlSelectSession = `
     SELECT id, name, created_at, updated_at, last_active_at,
            position, draft, scroll_position, archived_at,
            system_prompt, context_kind, project_id, auto_titled,
-           COALESCE(branch_advisor_dismissed, 0)
+           COALESCE(branch_advisor_dismissed, 0),
+           autonomy_level, autonomy_overrides
     FROM sessions
 `
 
@@ -707,6 +751,38 @@ func (s *sqlStore) SetBranchAdvisorDismissed(ctx context.Context, id string, dis
 		}
 		return rowsAffectedOrNotFound(res)
 	})
+}
+
+func (s *sqlStore) SetAutonomyProfile(ctx context.Context, id string, layer autonomy.Layer) error {
+	level, overrides, err := encodeAutonomySQL(layer)
+	if err != nil {
+		return err
+	}
+	return s.db.WriteTx(ctx, func(tx WriteTx) error {
+		res, err := tx.Exec(ctx,
+			"UPDATE sessions SET autonomy_level = ?, autonomy_overrides = ? WHERE id = ?",
+			level, overrides, id)
+		if err != nil {
+			return err
+		}
+		return rowsAffectedOrNotFound(res)
+	})
+}
+
+func (s *sqlStore) GetAutonomyProfile(ctx context.Context, id string) (autonomy.Layer, error) {
+	row := s.db.Reader().QueryRow(ctx,
+		"SELECT autonomy_level, autonomy_overrides FROM sessions WHERE id = ?", id)
+	var (
+		level     sql.NullInt64
+		overrides sql.NullString
+	)
+	if err := row.Scan(&level, &overrides); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return autonomy.Layer{}, ErrSessionNotFound
+		}
+		return autonomy.Layer{}, err
+	}
+	return decodeAutonomySQL(level, overrides)
 }
 
 func (s *sqlStore) Rename(ctx context.Context, id, name string, now time.Time) error {
@@ -1202,14 +1278,16 @@ func synthesizeBlocks(content string) []llm.ContentBlock {
 // (single row) and Rows (current row) since both expose Scan(dest...).
 func scanRecord(sc interface{ Scan(dest ...any) error }) (Record, error) {
 	var (
-		r                Record
-		createdAt        int64
-		updatedAt        int64
-		lastActive       int64
-		archived         sql.NullInt64
-		projectID        sql.NullString
-		autoTitled       int64
-		advisorDismissed int
+		r                  Record
+		createdAt          int64
+		updatedAt          int64
+		lastActive         int64
+		archived           sql.NullInt64
+		projectID          sql.NullString
+		autoTitled         int64
+		advisorDismissed   int
+		autonomyLevel      sql.NullInt64
+		autonomyOverrides  sql.NullString
 	)
 	if err := sc.Scan(
 		&r.ID, &r.Name,
@@ -1219,6 +1297,7 @@ func scanRecord(sc interface{ Scan(dest ...any) error }) (Record, error) {
 		&r.SystemPrompt, &r.ContextKind,
 		&projectID, &autoTitled,
 		&advisorDismissed,
+		&autonomyLevel, &autonomyOverrides,
 	); err != nil {
 		return Record{}, err
 	}
@@ -1235,6 +1314,17 @@ func scanRecord(sc interface{ Scan(dest ...any) error }) (Record, error) {
 	}
 	r.AutoTitled = autoTitled != 0
 	r.BranchAdvisorDismissed = advisorDismissed != 0
+	if autonomyLevel.Valid {
+		t := autonomy.Tier(int(autonomyLevel.Int64))
+		r.AutonomyLevel = &t
+	}
+	if autonomyOverrides.Valid && autonomyOverrides.String != "" {
+		ov, err := decodeAutonomyOverrides(autonomyOverrides.String)
+		if err != nil {
+			return Record{}, fmt.Errorf("session: decode autonomy_overrides: %w", err)
+		}
+		r.AutonomyOverrides = ov
+	}
 	return r, nil
 }
 
