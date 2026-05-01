@@ -126,7 +126,7 @@ func TestListGrants_PersistedAndTransient(t *testing.T) {
 		t.Fatalf("RequestInteractive: %v", err)
 	}
 
-	grants, err := api.ListGrants(context.Background())
+	grants, err := api.ListGrants(context.Background(), "")
 	if err != nil {
 		t.Fatalf("ListGrants: %v", err)
 	}

@@ -330,9 +330,12 @@ func TestUninstallRecipe_RemovesAndCloses(t *testing.T) {
 	if len(enabled.List()) != 0 {
 		t.Fatalf("enabled list = %v, want empty after Uninstall", enabled.List())
 	}
+	// Install now calls CloseOne for idempotency before OpenOne, so the
+	// recorded closes are: [install's pre-evict, uninstall's evict].
+	// Both must reference the same recipe id.
 	closes := pool.closes()
-	if len(closes) != 1 || closes[0] != "test-recipe" {
-		t.Fatalf("pool closes = %v, want [test-recipe]", closes)
+	if len(closes) != 2 || closes[0] != "test-recipe" || closes[1] != "test-recipe" {
+		t.Fatalf("pool closes = %v, want [test-recipe test-recipe]", closes)
 	}
 }
 

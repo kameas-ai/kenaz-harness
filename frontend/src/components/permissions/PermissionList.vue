@@ -32,8 +32,53 @@ const FAMILY_ICONS: Record<string, string> = {
   bash: '⚡',
   fs: '📁',
   credential: '🔑',
+  cred: '🔑',
   tool: '🔧',
 };
+
+/**
+ * Derive a human-readable resource label for a grant. For transient
+ * grants the registry already wrote a `<family>::<rest>` resource key
+ * we can show. For persisted `.cedar` grants the backend's Grant
+ * struct only carries the filename (e.g. `bash_allow_aws.cedar`); we
+ * strip the `<family>_allow_` prefix and `.cedar` suffix and decode
+ * the body which the migration writer URL-encodes for filesystem-
+ * safety. Falls back to the raw id if the conventions don't match.
+ */
+function grantLabel(g: PermissionGrant): string {
+  if (g.transient && g.resourceKey) {
+    // Strip the leading "family::" prefix for cleaner display.
+    const idx = g.resourceKey.indexOf('::');
+    return idx >= 0 ? g.resourceKey.slice(idx + 2) : g.resourceKey;
+  }
+  if (g.policyFile) {
+    const lower = g.policyFile.toLowerCase();
+    const stripSuffix = (s: string) => (s.endsWith('.cedar') ? s.slice(0, -6) : s);
+    const tryPrefix = (prefix: string) =>
+      lower.startsWith(prefix) ? stripSuffix(g.policyFile.slice(prefix.length)) : null;
+    const stripped =
+      tryPrefix('bash_allow_') ??
+      tryPrefix('fs_allow_') ??
+      tryPrefix('cred_allow_') ??
+      tryPrefix('tool_allow_');
+    if (stripped !== null && stripped !== '') {
+      // The migration sanitiser percent-encodes spaces and special
+      // chars on disk. Decoding makes "git_status" → "git_status"
+      // and "echo%20hi" → "echo hi" without affecting plain names.
+      try {
+        return decodeURIComponent(stripped.replace(/_/g, ' '));
+      } catch {
+        return stripped;
+      }
+    }
+  }
+  return g.id;
+}
+
+function grantSecondaryLabel(g: PermissionGrant): string {
+  if (g.transient) return 'Allow once · in-memory';
+  return g.policyFile || '';
+}
 
 async function refresh() {
   loading.value = true;
@@ -110,12 +155,22 @@ defineExpose({ refresh, grants });
             {{ FAMILY_ICONS[grant.family] ?? '🔒' }}
             {{ grant.family }}
           </span>
-          <span
-            class="font-mono text-[12px] text-ink truncate"
-            :title="grant.resourceKey"
-          >
-            {{ grant.resourceKey }}
-          </span>
+          <div class="min-w-0 flex-1">
+            <div
+              class="font-mono text-[12px] text-ink truncate"
+              :title="grantLabel(grant)"
+              :data-testid="`permission-list-row-label-${grant.id}`"
+            >
+              {{ grantLabel(grant) }}
+            </div>
+            <div
+              v-if="grantSecondaryLabel(grant)"
+              class="font-mono text-[10px] text-ink-subtle truncate"
+              :title="grantSecondaryLabel(grant)"
+            >
+              {{ grantSecondaryLabel(grant) }}
+            </div>
+          </div>
         </div>
         <button
           type="button"

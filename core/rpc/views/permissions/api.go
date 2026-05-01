@@ -85,7 +85,9 @@ type PermissionsAPI interface {
 	// ListGrants enumerates accumulated grants. Persisted `.cedar`
 	// files in <DataDir>/policy/ matching `<family>_allow_*.cedar` are
 	// returned alongside the per-process transient (Allow once) cache.
-	ListGrants(ctx context.Context) ([]Grant, error)
+	// When family is non-empty ("bash" / "fs" / "cred" / "tool") only
+	// grants of that family are returned; empty string returns all.
+	ListGrants(ctx context.Context, family string) ([]Grant, error)
 
 	// RevokeGrant removes a grant. For persisted grants the underlying
 	// `.cedar` file is deleted and the engine is reloaded. For

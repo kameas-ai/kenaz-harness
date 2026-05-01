@@ -48,6 +48,8 @@ export function Artifacts_List(arg1:artifacts.ArtifactFilter):Promise<Array<arti
 
 export function Artifacts_Promote(arg1:string,arg2:string,arg3:string):Promise<artifacts.Artifact>;
 
+export function Artifacts_SaveAs(arg1:string,arg2:string):Promise<string>;
+
 export function Attachments_Add(arg1:attachments.AddInput):Promise<attachments.Attachment>;
 
 export function Attachments_AddMedia(arg1:attachments.AddMediaInput):Promise<attachments.Attachment>;
@@ -258,7 +260,7 @@ export function Nodes_ListUserOverrides():Promise<Array<nodes.UserOverrideInfo>>
 
 export function Nodes_ReloadOverrides():Promise<nodes.ReloadResult>;
 
-export function Permissions_ListGrants():Promise<Array<permissions.Grant>>;
+export function Permissions_ListGrants(arg1:string):Promise<Array<permissions.Grant>>;
 
 export function Permissions_ListPending():Promise<Array<cedar.PendingRequest>>;
 
@@ -405,6 +407,8 @@ export function Tools_ForgetRecipeKey(arg1:string,arg2:string):Promise<void>;
 export function Tools_InstallRecipe(arg1:string,arg2:Record<string, string>,arg3:Record<string, any>):Promise<transport.RecipeStatus>;
 
 export function Tools_ListRecipes():Promise<Array<tools.RecipeListing>>;
+
+export function Tools_PickDirectory(arg1:string,arg2:string):Promise<string>;
 
 export function Tools_RecipeConfig(arg1:string):Promise<Record<string, any>>;
 

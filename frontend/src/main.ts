@@ -69,6 +69,11 @@ const router = createRouter({
       component: () => import('@/views/settings/SettingsView.vue'),
     },
     {
+      path: '/permissions/:family?',
+      name: 'permissions',
+      component: () => import('@/views/permissions/PermissionsView.vue'),
+    },
+    {
       path: '/artifacts',
       name: 'artifacts',
       component: () => import('@/views/artifacts/ArtifactsView.vue'),

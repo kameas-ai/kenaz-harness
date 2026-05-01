@@ -3,6 +3,9 @@ package rpc
 import (
 	"context"
 	"encoding/base64"
+	"os"
+
+	wruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/a2a"
 	graphview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/agentgraph"
@@ -423,9 +426,11 @@ func (b *Bindings) Permissions_Resolve(requestID string, decision string) error 
 
 // Permissions_ListGrants enumerates accumulated grants — both persisted
 // `<family>_allow_*.cedar` files in <DataDir>/policy/ and the per-process
-// transient (Allow-once) cache.
-func (b *Bindings) Permissions_ListGrants() ([]permissionsview.Grant, error) {
-	return b.api.Permissions().ListGrants(b.ctx())
+// transient (Allow-once) cache. When family is non-empty ("bash" / "fs"
+// / "cred" / "tool") only grants of that family are returned; empty
+// string returns all four families.
+func (b *Bindings) Permissions_ListGrants(family string) ([]permissionsview.Grant, error) {
+	return b.api.Permissions().ListGrants(b.ctx(), family)
 }
 
 // Permissions_RevokeGrant removes a grant. Persisted grants delete the
@@ -863,6 +868,58 @@ func (b *Bindings) Tools_RecipeStatus(id string) (stdio.RecipeStatus, error) {
 
 func (b *Bindings) Tools_RecipeConfig(id string) (map[string]any, error) {
 	return b.api.Tools().RecipeConfig(b.ctx(), id)
+}
+
+// Artifacts_SaveAs opens the OS-native save-file dialog and writes
+// the artifact's bytes to the user-chosen path. Returns the absolute
+// path written, or empty string if the user cancels. The bytes are
+// resolved server-side from the media store so the round-trip never
+// re-base64-encodes on the JS side (which is fragile in some webviews
+// for large or binary blobs).
+func (b *Bindings) Artifacts_SaveAs(id, suggestedName string) (string, error) {
+	// Pull the artifact + its bytes through the existing view path.
+	withBytes, err := b.api.Artifacts().Get(b.ctx(), id)
+	if err != nil {
+		return "", err
+	}
+	if suggestedName == "" {
+		suggestedName = withBytes.Artifact.Title
+	}
+	if suggestedName == "" {
+		suggestedName = id
+	}
+	dest, err := wruntime.SaveFileDialog(b.ctx(), wruntime.SaveDialogOptions{
+		Title:           "Save artifact",
+		DefaultFilename: suggestedName,
+	})
+	if err != nil {
+		return "", err
+	}
+	if dest == "" {
+		// User cancelled; soft return.
+		return "", nil
+	}
+	if err := os.WriteFile(dest, withBytes.Bytes, 0o644); err != nil {
+		return "", err
+	}
+	return dest, nil
+}
+
+// Tools_PickDirectory opens the OS-native folder-picker dialog and
+// returns the absolute path the user selected. Returns the empty
+// string when the user cancels (Wails surfaces cancel as a no-error
+// empty result). The default-directory hint nudges the dialog to a
+// useful starting point — pass "" to let the OS decide. Used by the
+// recipe-install modal's allowed_directories chip list so the user
+// can pick a folder graphically instead of typing an absolute path.
+func (b *Bindings) Tools_PickDirectory(title, defaultDir string) (string, error) {
+	if title == "" {
+		title = "Choose a directory"
+	}
+	return wruntime.OpenDirectoryDialog(b.ctx(), wruntime.OpenDialogOptions{
+		Title:            title,
+		DefaultDirectory: defaultDir,
+	})
 }
 
 // ── shell ──────────────────────────────────────────────────────────────

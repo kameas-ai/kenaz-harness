@@ -362,8 +362,21 @@ const copyFlash = ref<Set<number>>(new Set());
 async function copyCode(blockIdx: number, btn: HTMLElement): Promise<void> {
   const block = codeBlocks.value[blockIdx];
   if (!block) return;
+  let ok = false;
   try {
     await navigator.clipboard.writeText(block.text);
+    ok = true;
+  } catch {
+    // navigator.clipboard is unavailable in the Wails webview (non-secure
+    // context). Fall back to the Wails runtime binding (window.runtime is
+    // injected by Wails at boot — same pattern as useStream.ts EventsOn).
+    try {
+      ok = await window.runtime?.ClipboardSetText?.(block.text) ?? false;
+    } catch {
+      // Both paths failed — silent.
+    }
+  }
+  if (ok) {
     btn.textContent = 'copied';
     copyFlash.value = new Set([...copyFlash.value, blockIdx]);
     setTimeout(() => {
@@ -372,8 +385,6 @@ async function copyCode(blockIdx: number, btn: HTMLElement): Promise<void> {
       next.delete(blockIdx);
       copyFlash.value = next;
     }, 1500);
-  } catch {
-    // clipboard denied — silent
   }
 }
 

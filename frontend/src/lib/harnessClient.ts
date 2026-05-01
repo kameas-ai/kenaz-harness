@@ -183,6 +183,7 @@ interface WailsBindingsLike {
     newScopeID: string,
   ): Promise<Artifact>;
   Artifacts_Delete(id: string): Promise<void>;
+  Artifacts_SaveAs(id: string, suggestedName: string): Promise<string>;
 
   Projects_List(): Promise<Project[]>;
   Projects_Get(id: string): Promise<Project>;
@@ -342,6 +343,7 @@ interface WailsBindingsLike {
   Tools_ForgetRecipeKey(id: string, envName: string): Promise<void>;
   Tools_RecipeStatus(id: string): Promise<WireRecipeStatus>;
   Tools_RecipeConfig(id: string): Promise<Record<string, unknown>>;
+  Tools_PickDirectory(title: string, defaultDir: string): Promise<string>;
 
   Shell_OpenInOSBrowser(path: string): Promise<void>;
   Shell_PathComplete(partial: string): Promise<string[]>;
@@ -469,6 +471,7 @@ interface WireConfigOption {
   default?: unknown;
   required: boolean;
   description: string;
+  choices?: string[];
 }
 
 interface WireRecipe {
@@ -581,6 +584,7 @@ const KNOWN_CONFIG_KINDS: readonly ConfigKind[] = [
   'directory_list',
   'boolean',
   'string',
+  'enum',
 ];
 
 function adaptConfigKind(raw: string): ConfigKind {
@@ -597,6 +601,9 @@ function adaptConfigOption(w: WireConfigOption): ConfigOption {
     default: w.default,
     required: w.required,
     description: w.description,
+    choices: Array.isArray(w.choices)
+      ? w.choices.filter((c): c is string => typeof c === 'string')
+      : undefined,
   };
 }
 
@@ -660,6 +667,7 @@ declare global {
         cb: (payload: unknown) => void,
       ) => () => void;
       EventsOff?: (topic: string) => void;
+      ClipboardSetText?: (text: string) => Promise<boolean>;
     };
   }
 }
@@ -776,6 +784,13 @@ export interface ArtifactsClient {
     scopeId: string,
   ): Promise<Artifact>;
   remove(id: string): Promise<void>;
+  /**
+   * Save the artifact's bytes to a user-chosen path via the OS-native
+   * save dialog. Returns the absolute path written, or empty string
+   * when the user cancels. Bytes resolve server-side from the media
+   * store — no JS-side base64 round-trip.
+   */
+  saveAs(id: string, suggestedName?: string): Promise<string>;
 }
 
 /**
@@ -1251,6 +1266,12 @@ export interface ToolsRecipesClient {
 
 export interface ToolsClient {
   recipes: ToolsRecipesClient;
+  /**
+   * Open the OS-native directory-picker dialog and return the
+   * absolute path the user selects. Returns empty string when the
+   * user cancels.
+   */
+  pickDirectory(title?: string, defaultDir?: string): Promise<string>;
 }
 
 /**
@@ -1540,6 +1561,8 @@ export function createHarnessClient(): HarnessClient {
       promote: (id, scopeKind, scopeId) =>
         b().Artifacts_Promote(id, scopeKind, scopeId),
       remove: (id) => b().Artifacts_Delete(id),
+      saveAs: (id, suggestedName) =>
+        b().Artifacts_SaveAs(id, suggestedName ?? ''),
     },
     projects: {
       list: () => b().Projects_List(),
@@ -1731,6 +1754,8 @@ export function createHarnessClient(): HarnessClient {
           adaptRecipeStatus(await b().Tools_RecipeStatus(id)),
         config: (id) => b().Tools_RecipeConfig(id),
       },
+      pickDirectory: (title?: string, defaultDir?: string) =>
+        b().Tools_PickDirectory(title ?? '', defaultDir ?? ''),
     },
     shell: {
       openInOSBrowser: (path) => b().Shell_OpenInOSBrowser(path),
@@ -2181,6 +2206,7 @@ export function createFakeHarnessClient(
         }),
         config: async () => ({}),
       },
+      pickDirectory: async () => '',
     },
     shell: {
       openInOSBrowser: noop,
@@ -2232,6 +2258,7 @@ export function createFakeHarnessClient(
         createdAt: new Date().toISOString(),
       }),
       remove: noop,
+      saveAs: async () => '',
     },
     corpus: {
       listCorpora: async () => [],

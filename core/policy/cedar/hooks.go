@@ -302,15 +302,9 @@ func CheckRecipeSpawn(ctx context.Context, g Gate, recipeID, command, transport 
 // "provider_call", "manual_export", "mcp_spawn"). The Cedar resource
 // entity is built as Credential::"<refID>::<purpose>" per spec §3.
 //
-// strictMode controls NotApplicable handling for non-mcp_spawn
-// purposes:
+// strictMode controls NotApplicable handling:
 //   - false (default / lenient): NotApplicable → nil (allow).
-//   - true (strict): NotApplicable + purpose != "mcp_spawn" →
-//     credstore.ErrCredentialAccessDenied.
-//
-// For purpose == "mcp_spawn" the gate fires best-effort regardless of
-// strictMode; the IssueForMCPSpawn interactive-prompt path is deferred
-// to credstore WP06.
+//   - true (strict): NotApplicable → credstore.ErrCredentialAccessDenied.
 //
 // Nil gate → nil error (default-allow; no engine wired).
 // Evaluation errors on the gate itself → nil (best-effort; only
@@ -336,11 +330,7 @@ func CheckCredentialAccess(ctx context.Context, g Gate, refID, purpose string, s
 	case Deny:
 		return &PolicyDeniedError{Decision: d}
 	case NotApplicable:
-		// Strict mode: for non-mcp_spawn purposes, treat no-match as
-		// deny so the store is fail-closed when the operator requests it.
-		// mcp_spawn is always lenient here because its full interactive
-		// gate lands in credstore WP06.
-		if strictMode && purpose != "mcp_spawn" {
+		if strictMode {
 			return errCredentialAccessDenied
 		}
 		return nil
@@ -348,6 +338,81 @@ func CheckCredentialAccess(ctx context.Context, g Gate, refID, purpose string, s
 		return nil
 	}
 }
+
+// GateMCPSpawn is the full WP05 credential gate for MCP spawn. It:
+//
+//  1. Evaluates the Cedar engine with purpose="mcp_spawn" and the
+//     recipe id as the Credential resource UID.
+//  2. Allow → returns nil.
+//  3. Deny → returns *PolicyDeniedError.
+//  4. NotApplicable + registry != nil → fires
+//     Registry.RequestInteractive with a CredPromptSurface
+//     (ProviderID = recipeID, Purpose = "mcp_spawn"). Resolves to
+//     Allow-once / Allow-always → nil; Deny / timeout / overflow →
+//     returns errMCPSpawnDenied.
+//  5. NotApplicable + registry == nil → nil (default-allow; pre-boot
+//     posture so a nil-registry chassis never blocks).
+//
+// g may be nil (no engine wired) → nil (default-allow).
+// registry may be nil → NotApplicable treated as allow (step 5).
+func GateMCPSpawn(ctx context.Context, g Gate, registry *Registry, recipeID string) error {
+	ctxAttrs := map[cedar.String]cedar.Value{
+		cedar.String("purpose"): cedar.String("mcp_spawn"),
+		cedar.String("ref_id"):  cedar.String(recipeID),
+	}
+
+	var outcome Outcome
+	if g != nil {
+		d := g.Evaluate(
+			ctx,
+			UserUID(),
+			ActionUseCredential,
+			CredentialUID(recipeID, "mcp_spawn"),
+			ctxAttrs,
+		)
+		switch d.Outcome {
+		case Allow:
+			return nil
+		case Deny:
+			return &PolicyDeniedError{Decision: d}
+		default:
+			outcome = NotApplicable
+		}
+	} else {
+		outcome = NotApplicable
+	}
+
+	_ = outcome // NotApplicable path
+
+	if registry == nil {
+		// No registry — default-allow (pre-boot / nil-registry posture).
+		return nil
+	}
+
+	// Fire the interactive prompt for the Credential family.
+	surface := PromptSurface{
+		Cred: &CredPromptSurface{
+			ProviderID: recipeID,
+			Purpose:    "mcp_spawn",
+		},
+	}
+	res, err := registry.RequestInteractive(ctx, surface)
+	if err != nil {
+		return errMCPSpawnDenied
+	}
+	switch res.Decision {
+	case DecisionAllowOnce, DecisionAllowAlways:
+		return nil
+	default:
+		return errMCPSpawnDenied
+	}
+}
+
+// errMCPSpawnDenied is the package-local sentinel returned by
+// GateMCPSpawn when the interactive prompt denies the request.
+// credstore maps this onto ErrMCPSpawnDenied before surfacing to
+// callers.
+var errMCPSpawnDenied = errors.New("cedar: mcp_spawn credential denied by prompt")
 
 // errCredentialAccessDenied is the package-local sentinel returned by
 // CheckCredentialAccess in strict-mode / NotApplicable cases. Callers

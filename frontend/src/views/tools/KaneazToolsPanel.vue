@@ -428,7 +428,14 @@ function editConfig(listing: RecipeListing) {
   modalOpen.value = true;
 }
 
-const visibleRecipes = computed<readonly RecipeListing[]>(() => recipes.value);
+// Show only enabled (installed) recipes in the main panel. The full
+// catalog is browsable via the Add MCP Server modal (RegistryTab).
+// This ensures a clean-install shows zero rows, and that the Delete
+// button is only presented for recipes that are actually enabled —
+// clicking Delete on a non-enabled catalog entry would be a no-op.
+const visibleRecipes = computed<readonly RecipeListing[]>(() =>
+  recipes.value.filter((l) => l.enabled),
+);
 
 function statusOf(listing: RecipeListing): RecipeStatus {
   return listing.status;
@@ -767,8 +774,7 @@ watch(
       class="rounded-sm border border-border-muted bg-surface-1 px-4 py-3 font-ui text-[12px] text-ink-muted"
       data-testid="recipes-empty"
     >
-      No shipped recipes available. Drop a JSON entry into
-      <span class="font-mono">core/mcp/recipes/shipped.json</span> to add one.
+      No MCP servers installed. Click <strong>+ Add MCP Server</strong> to browse the catalog and install one.
     </div>
 
     <div

@@ -175,12 +175,16 @@ const (
 // used value is stashed. The struct intentionally carries no
 // validation logic — the install path validates by Kind.
 type ConfigOption struct {
-	Name        string `json:"name"`
-	Display     string `json:"display"`
-	Kind        string `json:"kind"`
-	Default     any    `json:"default,omitempty"`
-	Required    bool   `json:"required"`
-	Description string `json:"description"`
+	Name        string   `json:"name"`
+	Display     string   `json:"display"`
+	Kind        string   `json:"kind"`
+	Default     any      `json:"default,omitempty"`
+	Required    bool     `json:"required"`
+	Description string   `json:"description"`
+	// Choices is the closed set of allowed values when Kind ==
+	// ConfigKindEnum. The install modal renders a dropdown; any other
+	// Kind ignores this field. Empty for non-enum kinds.
+	Choices []string `json:"choices,omitempty"`
 }
 
 // Recognised values for ConfigOption.Kind.
@@ -188,6 +192,7 @@ const (
 	ConfigKindDirectoryList = "directory_list"
 	ConfigKindBoolean       = "boolean"
 	ConfigKindString        = "string"
+	ConfigKindEnum          = "enum"
 )
 
 // EnvKey is one credential-bearing env var the server reads.

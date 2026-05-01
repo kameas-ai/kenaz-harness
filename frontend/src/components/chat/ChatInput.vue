@@ -39,6 +39,12 @@ import SlashAutocomplete from '@/components/chat/SlashAutocomplete.vue';
 const props = defineProps<{
   modelValue?: string;
   streaming?: boolean;
+  /**
+   * Number of follow-up turns the parent has queued behind the
+   * currently-streaming turn. Surfaced as a small badge so the user
+   * can tell their queued sends are tracked.
+   */
+  queueDepth?: number;
   estimate?: CostEstimate | null;
   placeholder?: string;
   /** Optional disabled override (e.g. no-provider state). */
@@ -89,7 +95,11 @@ watch(
   },
 );
 
-const isDisabled = computed(() => props.disabled === true || props.streaming === true);
+// Textarea + send button stay enabled while streaming so the user can
+// queue follow-up messages — the parent's `send` handler routes them
+// into a queue that drains as soon as the current turn finishes.
+// `disabled` (no provider, no session) still hard-locks the input.
+const isDisabled = computed(() => props.disabled === true);
 const trimmed = computed(() => internal.value.trim());
 
 // ── pending attachments (staged before send) ──────────────────────────
@@ -994,6 +1004,14 @@ const acceptedTypes =
         >
           streaming…
         </span>
+        <span
+          v-if="(queueDepth ?? 0) > 0"
+          class="ml-3 text-ink-muted uppercase tracking-[0.18em]"
+          aria-live="polite"
+          :data-testid="'composer-queue-depth'"
+        >
+          {{ queueDepth }} queued
+        </span>
       </div>
       <div class="flex items-center gap-2">
         <button
@@ -1006,13 +1024,12 @@ const acceptedTypes =
           cancel
         </button>
         <button
-          v-else
           type="submit"
           class="px-3 py-1 rounded-md border border-accent text-accent font-ui text-[11px] uppercase tracking-[0.18em] hover:bg-surface-2 disabled:opacity-50 disabled:cursor-not-allowed"
           :disabled="!canSend"
-          aria-label="Send message"
+          :aria-label="streaming ? 'Queue message — sends after the current turn finishes' : 'Send message'"
         >
-          send
+          {{ streaming ? 'queue' : 'send' }}
         </button>
       </div>
     </div>

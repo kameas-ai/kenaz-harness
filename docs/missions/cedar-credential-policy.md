@@ -10,7 +10,7 @@ Mission: `cedar-credential-policy-01KQ8TDE`
 | WP02 | Interactive prompt registry (`prompt.go`) | Merged |
 | WP03 | Bash gate (pattern derivation, dangerous detection, grant write) | Merged |
 | WP04 | Filesystem gate (canonical path, recipe-dir match, grant write) | Merged |
-| WP05 | MCP spawn credential flow | **Partial — pending** |
+| WP05 | MCP spawn credential flow | **Merged** |
 | WP06 | Credstore (Issue / Use / Revoke, keychain backend) | Merged |
 | WP07 | Permissions RPC view (Resolve, ListGrants, RevokeGrant) | Merged |
 | WP08 | Frontend permission modals (bash / fs / cred / tool) | Merged |
@@ -19,10 +19,11 @@ Mission: `cedar-credential-policy-01KQ8TDE`
 | WP11 | Audit log view (RecentDecisions panel) | Merged |
 | WP12 | Integration tests + this acceptance doc | **This branch** |
 
-**WP05 partial gap**: the `mcp_spawn` credential-prompt flow waits for the
-credstore WP06 to be fully wired into the MCP spawn hook. Until WP05 is
-complete, `mcp_spawn` evaluates to `NotApplicable` and the gate passes
-(default-allow). See the dedicated gap section below.
+**WP05 merged**: `IssueForMCPSpawn` is wired into `makeMCPRecipeBootstrap`
+via `cedar.GateMCPSpawn`. The full interactive-prompt flow fires on
+`NotApplicable`; `mcp_spawn` now respects `strictMode` like every other
+purpose. The `CredentialPermissionModal` (WP08) renders via the existing
+`cred:permission-pending` topic.
 
 **WP12 partial gap**: only the cedar package's multi-family integration
 test landed cleanly. The bash / fs / credstore integration tests this
@@ -38,11 +39,10 @@ end-to-end cross-WP scenarios. See "Open follow-ups" below.
 
 Tracked here so they remain discoverable after the mission is archived.
 
-1. **WP05 mcp_spawn integration** (blocks complete): wire
-   `credstore.IssueForMCPSpawn` (credstore WP06) into the cedar prompt
-   registry so the first MCP spawn that requests a credential triggers
-   the universal interactive prompt. Until then, mcp_spawn purpose is
-   default-allow.
+1. ~~**WP05 mcp_spawn integration**~~ — **Shipped**. `IssueForMCPSpawn`
+   and `cedar.GateMCPSpawn` landed in this branch (see commit history).
+   The `CredentialPermissionModal` (WP08) surfaces the prompt; `mcp_spawn`
+   now enforces strictMode uniformly.
 
 2. **WP12 cross-WP integration tests** (deferred): re-author against
    the actual production APIs and add to the suite:
@@ -122,27 +122,25 @@ snippet to `<DataDir>/policy/` and calls `Engine.Reload()`.
 
 ---
 
-## WP05 Gap: mcp_spawn Credential Flow
+## WP05: mcp_spawn Credential Flow
 
-**Status**: Partial — not fully exercised in WP12.
+**Status**: Merged.
 
-When an MCP server spawns and requests a credential for the first time,
-the intended flow is:
+When an MCP server with env keys is about to spawn, the flow is:
 
-1. `credstore.Use(credID, "mcp_spawn")` → Cedar evaluates
-   `use_credential` with `purpose = "mcp_spawn"`.
+1. `makeMCPRecipeBootstrap` calls `cedar.GateMCPSpawn(ctx, nil, promptRegistry, recipeID)`.
 2. Default policy: no permit, no forbid → `NotApplicable`.
 3. `Registry.RequestInteractive` fires and presents the **Credential
-   Permission Modal** (WP08) with `purpose = mcp_spawn`.
-4. User picks Allow Once or Allow Always → transient or permanent grant.
-5. Second spawn attempt evaluates Allow silently.
+   Permission Modal** (WP08) with `purpose = mcp_spawn` and
+   `ProviderID = recipeID`.
+4. User picks Allow Once or Allow Always → transient or permanent grant;
+   `ResolveEnv` proceeds and the recipe spawns.
+5. Second spawn attempt evaluates Allow silently (transient grant or Cedar
+   policy file).
 
-Until WP05 is merged, step 3 does not fire. `NotApplicable` propagates
-as nil from the gate so the spawn proceeds without prompting. This is
-the safe-by-default posture (not blocked, but not explicitly granted).
-
-**Action required before tagging the release**: confirm WP05 is merged
-and run the full mcp_spawn smoke manually.
+An explicit Cedar Deny (e.g. a `forbid` rule targeting the recipe) skips
+the recipe at bootstrap with a warn log. The prompt blocks the bootstrap
+goroutine; `ctx` cancellation propagates as a Deny.
 
 ---
 
@@ -180,9 +178,10 @@ Run this checklist on a clean data directory before tagging a release.
 - [ ] **8. Credential manual_export**: immediate Deny. No dialog.
   Audit entry shows `forbid policy matched`.
 
-- [ ] **9. Credential mcp_spawn**: **WP05 pending** — skip until WP05
-  is merged. After WP05: dialog appears on first spawn, resolves, second
-  spawn is silent.
+- [ ] **9. Credential mcp_spawn**: enable a recipe with env keys. On
+  first boot a credential permission dialog should appear. Pick Allow
+  Once; second boot is silent (transient grant). Pick Allow Always;
+  subsequent boots are silent without prompting (Cedar policy written).
 
 - [ ] **10. Builtin tool (kaneaz__bash)**: silent Allow (embedded tool
   policy permits `server_name == "kaneaz"`). No dialog.

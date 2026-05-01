@@ -118,82 +118,40 @@ func TestCallDisallowedCommandReturnsNotAllowed(t *testing.T) {
 
 func TestCallWorkingDirTraversalRejected(t *testing.T) {
 	t.Parallel()
+	// The bash tool runs as the user's account; cwd traversal is no
+	// longer rejected. Cedar gate is the security boundary, not the
+	// cwd. This test now asserts the call SUCCEEDS — the model can
+	// chdir wherever the OS lets the process go.
 	tool, _ := newTool(t)
 	raw, err := tool.Call(context.Background(), mustMarshal(t, callArgs{
-		Command:    `ls`,
-		WorkingDir: "../../../../etc",
-	}))
-	if err != nil {
-		t.Fatalf("Call: %v", err)
-	}
-	res := unmarshalResult(t, raw)
-	if res.ExitCode != -1 {
-		t.Errorf("ExitCode = %d, want -1", res.ExitCode)
-	}
-	if !strings.Contains(res.Stderr, "outside sandbox") {
-		t.Errorf("Stderr = %q, want contains 'outside sandbox'", res.Stderr)
-	}
-}
-
-func TestCallSymlinkEscapeRejected(t *testing.T) {
-	t.Parallel()
-	tool, root := newTool(t)
-	// Plant a symlink "escape" inside the sandbox pointing at /tmp.
-	target := os.TempDir()
-	canonicalTarget, err := filepath.EvalSymlinks(target)
-	if err != nil {
-		t.Fatalf("EvalSymlinks(%q): %v", target, err)
-	}
-	if strings.HasPrefix(canonicalTarget, root) {
-		t.Skipf("temp dir %q resolves under sandbox %q; cannot stage escape", canonicalTarget, root)
-	}
-	link := filepath.Join(root, "escape")
-	if err := os.Symlink(canonicalTarget, link); err != nil {
-		t.Fatalf("Symlink: %v", err)
-	}
-	raw, err := tool.Call(context.Background(), mustMarshal(t, callArgs{
-		Command:    `ls`,
-		WorkingDir: "escape",
-	}))
-	if err != nil {
-		t.Fatalf("Call: %v", err)
-	}
-	res := unmarshalResult(t, raw)
-	if !strings.Contains(res.Stderr, "outside sandbox") {
-		t.Errorf("Stderr = %q, want contains 'outside sandbox' (symlink escape rejection)", res.Stderr)
-	}
-}
-
-func TestCallAbsoluteWorkingDirOutsideRejected(t *testing.T) {
-	t.Parallel()
-	tool, _ := newTool(t)
-	raw, err := tool.Call(context.Background(), mustMarshal(t, callArgs{
-		Command:    `ls`,
+		Command:    `pwd`,
 		WorkingDir: "/tmp",
 	}))
 	if err != nil {
 		t.Fatalf("Call: %v", err)
 	}
 	res := unmarshalResult(t, raw)
-	if !strings.Contains(res.Stderr, "outside sandbox") {
-		t.Errorf("Stderr = %q, want contains 'outside sandbox'", res.Stderr)
+	if res.ExitCode != 0 {
+		t.Errorf("ExitCode = %d, want 0; stderr=%q", res.ExitCode, res.Stderr)
 	}
 }
 
-func TestCallPipeBlockedByAllowlist(t *testing.T) {
+// Symlink-escape and absolute-outside-sandbox tests retired alongside
+// the cwd liberalization: the bash tool now runs with full user-account
+// authority and the Cedar permission gate is the security boundary.
+
+func TestCallPipeWorks(t *testing.T) {
 	t.Parallel()
-	// Pipes / redirects parse into argv but the metachar token
-	// itself ("|") fails the allowlist downstream. The allowlist
-	// is checked on argv[0] only, so a command like
-	//     echo hi | grep h
-	// parses as ["echo", "hi", "|", "grep", "h"] and "echo" is
-	// allowed. To test the ACTUAL pipe-blocking story (the model
-	// can't get a shell pipe), assert that the |/redirect bytes
-	// arrive in argv (so the child sees them as literal args, not
-	// as shell metacharacters).
+	// Shell mode: `echo hi | grep h` should work — the pipe is handled
+	// by bash -lc, so stdout contains only the grep-matched output "hi".
+	// The Cedar gate patterns on the first segment ("echo") which is in
+	// the default allowlist.
 	tool, _ := newTool(t)
 	if _, err := exec.LookPath("echo"); err != nil {
 		t.Skipf("echo missing: %v", err)
+	}
+	if _, err := exec.LookPath("grep"); err != nil {
+		t.Skipf("grep missing: %v", err)
 	}
 	raw, err := tool.Call(context.Background(), mustMarshal(t, callArgs{
 		Command: `echo hi | grep h`,
@@ -202,13 +160,16 @@ func TestCallPipeBlockedByAllowlist(t *testing.T) {
 		t.Fatalf("Call: %v", err)
 	}
 	res := unmarshalResult(t, raw)
-	// echo prints all its args verbatim — we should see the literal
-	// "|" and "grep" tokens in stdout because there's no shell.
-	if !strings.Contains(res.Stdout, "|") || !strings.Contains(res.Stdout, "grep") {
-		t.Errorf("Stdout = %q, want containing literal pipe + grep tokens", res.Stdout)
-	}
 	if res.ExitCode != 0 {
-		t.Errorf("ExitCode = %d, want 0 (echo always succeeds)", res.ExitCode)
+		t.Errorf("ExitCode = %d, want 0; stderr=%q", res.ExitCode, res.Stderr)
+	}
+	// grep matched "hi" — stdout should contain "hi" but NOT the literal
+	// pipe character or "grep" (those are metacharacters, not output).
+	if !strings.Contains(res.Stdout, "hi") {
+		t.Errorf("Stdout = %q, want contains 'hi' (pipe worked)", res.Stdout)
+	}
+	if strings.Contains(res.Stdout, "|") {
+		t.Errorf("Stdout = %q, pipe character leaked into output; shell not interpreting metacharacters", res.Stdout)
 	}
 }
 
@@ -732,5 +693,124 @@ func TestCedarGateNotApplicablePromptAllowAlwaysDangerousDemoted(t *testing.T) {
 	}
 	if snippetWritten {
 		t.Errorf("snippet was written for dangerous command without override; want demotion to AllowOnce (no snippet)")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Shell-mode behavior tests (added for shell-mode migration)
+// ---------------------------------------------------------------------------
+
+// TestCallAndChainingWorks verifies that && chaining is handled by the
+// shell — both commands in a chain run and both outputs appear.
+func TestCallAndChainingWorks(t *testing.T) {
+	t.Parallel()
+	if _, err := exec.LookPath("echo"); err != nil {
+		t.Skipf("echo missing: %v", err)
+	}
+	tool, _ := newTool(t)
+	raw, err := tool.Call(context.Background(), mustMarshal(t, callArgs{
+		Command: `echo first && echo second`,
+	}))
+	if err != nil {
+		t.Fatalf("Call: %v", err)
+	}
+	res := unmarshalResult(t, raw)
+	if res.ExitCode != 0 {
+		t.Errorf("ExitCode = %d, want 0; stderr=%q", res.ExitCode, res.Stderr)
+	}
+	if !strings.Contains(res.Stdout, "first") || !strings.Contains(res.Stdout, "second") {
+		t.Errorf("Stdout = %q, want contains 'first' and 'second'", res.Stdout)
+	}
+}
+
+// TestCallEnvVarExpansionWorks verifies that $VAR expansion is handled
+// by the shell. Not parallel because t.Setenv is not safe with t.Parallel.
+func TestCallEnvVarExpansionWorks(t *testing.T) {
+	if _, err := exec.LookPath("echo"); err != nil {
+		t.Skipf("echo missing: %v", err)
+	}
+	// Set a known env var in the current process; bash -lc inherits env.
+	t.Setenv("KANEAZ_TEST_VAR", "expanded_value")
+	tool, _ := newTool(t)
+	raw, err := tool.Call(context.Background(), mustMarshal(t, callArgs{
+		Command: `echo $KANEAZ_TEST_VAR`,
+	}))
+	if err != nil {
+		t.Fatalf("Call: %v", err)
+	}
+	res := unmarshalResult(t, raw)
+	if res.ExitCode != 0 {
+		t.Errorf("ExitCode = %d, want 0; stderr=%q", res.ExitCode, res.Stderr)
+	}
+	if !strings.Contains(res.Stdout, "expanded_value") {
+		t.Errorf("Stdout = %q, want contains 'expanded_value' ($VAR expansion)", res.Stdout)
+	}
+}
+
+// TestCallGlobExpansionWorks verifies that glob patterns are expanded
+// by the shell.
+func TestCallGlobExpansionWorks(t *testing.T) {
+	t.Parallel()
+	if _, err := exec.LookPath("ls"); err != nil {
+		t.Skipf("ls missing: %v", err)
+	}
+	tool, root := newTool(t)
+	// Create two files in the sandbox root.
+	if err := os.WriteFile(filepath.Join(root, "alpha.txt"), []byte("a"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "beta.txt"), []byte("b"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	raw, err := tool.Call(context.Background(), mustMarshal(t, callArgs{
+		Command: `ls *.txt`,
+	}))
+	if err != nil {
+		t.Fatalf("Call: %v", err)
+	}
+	res := unmarshalResult(t, raw)
+	if res.ExitCode != 0 {
+		t.Errorf("ExitCode = %d, want 0; stderr=%q", res.ExitCode, res.Stderr)
+	}
+	if !strings.Contains(res.Stdout, "alpha.txt") || !strings.Contains(res.Stdout, "beta.txt") {
+		t.Errorf("Stdout = %q, want both txt files listed (glob expansion)", res.Stdout)
+	}
+}
+
+// TestCedarPatternDerivesFromFirstSegment verifies that the Cedar gate
+// patterns on the first segment of a chained command. A Cedar Allow
+// engine that permits "echo" should allow `echo hi && echo there` because
+// the first segment is "echo".
+func TestCedarPatternDerivesFromFirstSegment(t *testing.T) {
+	t.Parallel()
+	if _, err := exec.LookPath("echo"); err != nil {
+		t.Skipf("echo missing: %v", err)
+	}
+	// Build an engine that only permits the exact BashCommand "echo".
+	eng, err := cedar.NewEngine(cedar.Options{LoadFromDisk: false, IncludeEmbedded: false})
+	if err != nil {
+		t.Fatalf("NewEngine: %v", err)
+	}
+	policy := `permit(principal, action == Action::"run_bash_command", resource == BashCommand::"echo");`
+	if err := eng.SetPolicyText("allow_echo.cedar", []byte(policy)); err != nil {
+		t.Fatalf("SetPolicyText: %v", err)
+	}
+	tool, _ := newTool(t, func(o *Options) {
+		o.CedarEngine = eng
+	})
+	// Chain of two echo commands — Cedar gates on first segment "echo"
+	// which matches the policy above.
+	raw, err := tool.Call(context.Background(), mustMarshal(t, callArgs{
+		Command: `echo first && echo second`,
+	}))
+	if err != nil {
+		t.Fatalf("Call: %v", err)
+	}
+	res := unmarshalResult(t, raw)
+	if res.ExitCode != 0 {
+		t.Errorf("ExitCode = %d, want 0 (Cedar allows first segment 'echo'); stderr=%q", res.ExitCode, res.Stderr)
+	}
+	if !strings.Contains(res.Stdout, "first") {
+		t.Errorf("Stdout = %q, want contains 'first'", res.Stdout)
 	}
 }

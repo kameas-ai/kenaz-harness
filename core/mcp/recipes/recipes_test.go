@@ -13,8 +13,8 @@ func TestShippedSingletonParses(t *testing.T) {
 	if cat == nil {
 		t.Fatal("Shipped() returned nil")
 	}
-	if got := len(cat.List()); got != 3 {
-		t.Fatalf("want 3 recipes, got %d", got)
+	if got := len(cat.List()); got != 1 {
+		t.Fatalf("want 1 recipe, got %d", got)
 	}
 }
 
@@ -52,7 +52,7 @@ func TestFilesystemEntry(t *testing.T) {
 	if !ok {
 		t.Fatal("filesystem not in shipped catalog")
 	}
-	if r.DisplayName != "Filesystem (sandboxed)" {
+	if r.DisplayName != "Filesystem" {
 		t.Errorf("DisplayName = %q", r.DisplayName)
 	}
 	if r.Category != "filesystem" {
@@ -73,18 +73,32 @@ func TestFilesystemEntry(t *testing.T) {
 	if len(r.ArgsTemplate) != 1 || r.ArgsTemplate[0] != "${ALLOWED_DIRS}" {
 		t.Errorf("ArgsTemplate = %v, want [${ALLOWED_DIRS}]", r.ArgsTemplate)
 	}
-	if len(r.ConfigOptions) != 1 {
-		t.Fatalf("ConfigOptions len = %d, want 1", len(r.ConfigOptions))
+	// Consolidated: two config options — access_tier (string) +
+	// allowed_directories (directory_list). Tier names: sandbox /
+	// project / full.
+	if len(r.ConfigOptions) != 2 {
+		t.Fatalf("ConfigOptions len = %d, want 2", len(r.ConfigOptions))
 	}
-	opt := r.ConfigOptions[0]
-	if opt.Name != "allowed_directories" {
-		t.Errorf("ConfigOptions[0].Name = %q", opt.Name)
+	var tierOpt, dirsOpt *recipes.ConfigOption
+	for i := range r.ConfigOptions {
+		switch r.ConfigOptions[i].Name {
+		case "access_tier":
+			tierOpt = &r.ConfigOptions[i]
+		case "allowed_directories":
+			dirsOpt = &r.ConfigOptions[i]
+		}
 	}
-	if opt.Kind != recipes.ConfigKindDirectoryList {
-		t.Errorf("ConfigOptions[0].Kind = %q, want %q", opt.Kind, recipes.ConfigKindDirectoryList)
+	if tierOpt == nil {
+		t.Fatal("missing access_tier config option")
 	}
-	if !opt.Required {
-		t.Error("ConfigOptions[0].Required = false, want true")
+	if dirsOpt == nil {
+		t.Fatal("missing allowed_directories config option")
+	}
+	if dirsOpt.Kind != recipes.ConfigKindDirectoryList {
+		t.Errorf("allowed_directories.Kind = %q, want %q", dirsOpt.Kind, recipes.ConfigKindDirectoryList)
+	}
+	if !dirsOpt.Required {
+		t.Error("allowed_directories.Required = false, want true")
 	}
 	if !r.Capabilities.Tools {
 		t.Error("Capabilities.Tools = false, want true")
@@ -98,54 +112,10 @@ func TestCatalogGetMiss(t *testing.T) {
 	}
 }
 
-func TestFilesystemProjectEntry(t *testing.T) {
-	cat := recipes.Shipped()
-	r, ok := cat.Get("filesystem-project")
-	if !ok {
-		t.Fatal("filesystem-project not in shipped catalog")
-	}
-	if r.Category != "filesystem" {
-		t.Errorf("Category = %q, want filesystem", r.Category)
-	}
-	if len(r.ConfigOptions) != 1 {
-		t.Fatalf("ConfigOptions len = %d, want 1", len(r.ConfigOptions))
-	}
-	opt := r.ConfigOptions[0]
-	if !opt.Required {
-		t.Error("project root should be required")
-	}
-	// Default is empty so user must pick a project.
-	if defaults, ok := opt.Default.([]any); !ok || len(defaults) != 0 {
-		t.Errorf("default = %#v, want empty slice", opt.Default)
-	}
-	if r.Warning != "" {
-		t.Errorf("project recipe should not carry a warning, got %q", r.Warning)
-	}
-}
-
-func TestFilesystemFullEntry(t *testing.T) {
-	cat := recipes.Shipped()
-	r, ok := cat.Get("filesystem-full")
-	if !ok {
-		t.Fatal("filesystem-full not in shipped catalog")
-	}
-	if r.Category != "filesystem" {
-		t.Errorf("Category = %q, want filesystem", r.Category)
-	}
-	// Hardcoded args, no user config knobs.
-	if len(r.ArgsTemplate) != 1 || r.ArgsTemplate[0] != "/" {
-		t.Errorf("ArgsTemplate = %v, want [/]", r.ArgsTemplate)
-	}
-	if len(r.ConfigOptions) != 0 {
-		t.Errorf("ConfigOptions = %v, want none (path is hardcoded to /)", r.ConfigOptions)
-	}
-	if r.Warning == "" {
-		t.Error("filesystem-full MUST carry a Warning string")
-	}
-	if r.RecommendedPolicyTemplate != "filesystem-full-recommended.cedar" {
-		t.Errorf("RecommendedPolicyTemplate = %q, want filesystem-full-recommended.cedar", r.RecommendedPolicyTemplate)
-	}
-}
+// Note: filesystem-project and filesystem-full were consolidated into
+// the single `filesystem` recipe with an `access_tier` config option
+// (sandbox / project / full). The dedicated tests for those two
+// separate recipes were retired with the consolidation.
 
 func TestCatalogListIsCopy(t *testing.T) {
 	cat := recipes.Shipped()

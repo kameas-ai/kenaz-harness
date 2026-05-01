@@ -2782,6 +2782,7 @@ export namespace recipes {
 	    default?: any;
 	    required: boolean;
 	    description: string;
+	    choices?: string[];
 	
 	    static createFrom(source: any = {}) {
 	        return new ConfigOption(source);
@@ -2795,6 +2796,7 @@ export namespace recipes {
 	        this.default = source["default"];
 	        this.required = source["required"];
 	        this.description = source["description"];
+	        this.choices = source["choices"];
 	    }
 	}
 	export class EnvKey {

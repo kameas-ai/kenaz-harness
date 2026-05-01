@@ -361,6 +361,19 @@ const contextBarTone = computed<'ok' | 'warn' | 'danger'>(() => {
   return 'ok';
 });
 
+// ── send queue ─────────────────────────────────────────────────────
+//
+// While a turn is streaming, follow-up sends are queued instead of
+// blocked. The watch on `isStreaming` drains the queue as soon as the
+// current turn ends (whether by completion or cancel). A queued turn
+// dispatches with whatever provider/model is active at drain time, so
+// the user can switch models between queueing and dispatch.
+type QueuedTurn =
+  | { kind: 'text'; content: string }
+  | { kind: 'blocks'; blocks: import('@/lib/types').ContentBlock[] };
+
+const sendQueue = ref<QueuedTurn[]>([]);
+
 async function onSend(content: string) {
   if (!hasSession.value || !activeProvider.value) return;
   // When the user staged any multimodal attachments, the
@@ -372,6 +385,10 @@ async function onSend(content: string) {
     sentBlocksThisTurn.value = false;
     return;
   }
+  if (isStreaming.value) {
+    sendQueue.value = [...sendQueue.value, { kind: 'text', content }];
+    return;
+  }
   await session.send(content, activeProvider.value.id, activeModelId.value);
 }
 
@@ -380,12 +397,42 @@ const sentBlocksThisTurn = ref(false);
 async function onSendBlocks(contentBlocks: import('@/lib/types').ContentBlock[]) {
   if (!hasSession.value || !activeProvider.value) return;
   sentBlocksThisTurn.value = true;
+  if (isStreaming.value) {
+    sendQueue.value = [
+      ...sendQueue.value,
+      { kind: 'blocks', blocks: contentBlocks },
+    ];
+    return;
+  }
   await session.sendBlocks(
     contentBlocks,
     activeProvider.value.id,
     activeModelId.value,
   );
 }
+
+// Drain one queued turn each time the stream ends. Recursively re-fires
+// itself via the watch — one streaming turn at a time, in FIFO order.
+watch(isStreaming, async (now, prev) => {
+  if (!prev || now) return; // only act on true → false transitions
+  if (sendQueue.value.length === 0) return;
+  if (!hasSession.value || !activeProvider.value) return;
+  const [next, ...rest] = sendQueue.value;
+  sendQueue.value = rest;
+  if (next.kind === 'text') {
+    await session.send(
+      next.content,
+      activeProvider.value.id,
+      activeModelId.value,
+    );
+  } else {
+    await session.sendBlocks(
+      next.blocks,
+      activeProvider.value.id,
+      activeModelId.value,
+    );
+  }
+});
 
 async function onCancel() {
   await session.cancel();
@@ -1187,6 +1234,7 @@ function formatSize(bytes: number): string {
         <ChatInput
           v-model="session.draft.value"
           :streaming="isStreaming"
+          :queue-depth="sendQueue.length"
           :disabled="
             !activeProvider ||
             activeProviderUnsupported ||

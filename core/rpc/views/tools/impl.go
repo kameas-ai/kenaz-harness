@@ -315,6 +315,15 @@ func (a *API) InstallRecipe(ctx context.Context, id string, env map[string]strin
 		return stdio.RecipeStatus{}, fmt.Errorf("tools: cedar gate denied recipe %q: %w", id, err)
 	}
 
+	// Idempotency: if the pool still holds an entry under this id (a
+	// re-install with config changes, or a prior crash that left the
+	// pool dirty), evict it before spawning. CloseOne returning
+	// ErrServerNotFound is the happy path on a clean install.
+	if err := a.cfg.Pool.CloseOne(ctx, id); err != nil && !errors.Is(err, stdio.ErrServerNotFound) {
+		a.cfg.Enabled.Remove(id)
+		_ = a.saveEnabled()
+		return stdio.RecipeStatus{}, fmt.Errorf("tools: replace existing pool entry for %q: %w", id, err)
+	}
 	if err := a.cfg.Pool.OpenOne(ctx, spec); err != nil {
 		a.cfg.Enabled.Remove(id)
 		_ = a.saveEnabled()
@@ -472,6 +481,27 @@ func (a *API) resolveConfig(recipe recipes.Recipe, input map[string]any) (map[st
 			s, ok := raw.(string)
 			if !ok {
 				return nil, fmt.Errorf("tools: config option %q for recipe %q must be a string", opt.Name, recipe.ID)
+			}
+			out[opt.Name] = s
+		case recipes.ConfigKindEnum:
+			s, ok := raw.(string)
+			if !ok {
+				return nil, fmt.Errorf("tools: config option %q for recipe %q must be a string (enum kind)", opt.Name, recipe.ID)
+			}
+			// Validate against the recipe's declared choices when present;
+			// an empty Choices slice is treated as "any string accepted"
+			// so older recipes that haven't filled in choices don't fail.
+			if len(opt.Choices) > 0 {
+				match := false
+				for _, c := range opt.Choices {
+					if c == s {
+						match = true
+						break
+					}
+				}
+				if !match {
+					return nil, fmt.Errorf("tools: config option %q for recipe %q: value %q not in declared choices %v", opt.Name, recipe.ID, s, opt.Choices)
+				}
 			}
 			out[opt.Name] = s
 		default:

@@ -1001,15 +1001,16 @@ export interface RecipeCapabilities {
  * a given ConfigOption. Mirrors the `ConfigKind*` constants in
  * core/mcp/recipes/recipes.go.
  */
-export type ConfigKind = 'directory_list' | 'boolean' | 'string';
+export type ConfigKind = 'directory_list' | 'boolean' | 'string' | 'enum';
 
 /**
  * ConfigOption — one user-editable knob declared by a recipe. The
  * filesystem recipe declares `allowed_directories` (directory_list);
- * future recipes may declare booleans (e.g. read_only) or free-form
- * strings. `default` may carry the `${DATA_DIR}` substitution token
- * for directory_list defaults — the backend expands the token at
- * install time, the modal renders the literal as a placeholder.
+ * future recipes may declare booleans (e.g. read_only), free-form
+ * strings, or enums (closed-set choices rendered as a dropdown).
+ * `default` may carry the `${DATA_DIR}` substitution token for
+ * directory_list defaults — the backend expands the token at install
+ * time, the modal renders the literal as a placeholder.
  */
 export interface ConfigOption {
   name: string;
@@ -1018,6 +1019,11 @@ export interface ConfigOption {
   default?: unknown;
   required: boolean;
   description: string;
+  /**
+   * Closed set of allowed values when `kind === 'enum'`. The install
+   * modal renders these as a dropdown; ignored for any other kind.
+   */
+  choices?: string[];
 }
 
 /**

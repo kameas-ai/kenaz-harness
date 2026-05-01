@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -73,8 +72,13 @@ const Name = "kaneaz__bash"
 // description is the user-facing tool description sent to the model.
 // It mirrors FR-010's text and the assistant relies on the truncated
 // flag + policy gate to know when to retry with a narrower command.
-const description = "Execute a shell command in a sandboxed working directory. " +
-	"Returns stdout, stderr, exit code, and a truncated flag. Cedar policy gate applies."
+const description = "Execute a shell command via `bash -lc` as the user's own account. " +
+	"You can read and write ANY path the user's account can reach — `ls ~/Desktop`, `cat ~/.zshrc`, `pwd`, anything. The shell resolves ~ and $HOME from the user's login profile. " +
+	"There is NO sandbox restricting which paths you can touch; the only gate is the Cedar permission system, which prompts the user the first time it sees a new program (e.g. first `aws`, first `git`, first `rm`). Once granted, the program runs without re-prompting. " +
+	"Pipes (|), redirects (>, <), command chaining (&&, ;, ||), variable expansion ($VAR), globbing (*), and command substitution ($(...)) all work. " +
+	"Each invocation spawns a fresh shell — cwd and exported env vars do NOT persist across calls. Default cwd is the harness's agent-workspace directory, but you can `cd` anywhere within the same command line. " +
+	"The Cedar gate evaluates the FIRST command in a chain only — don't hide destructive ops behind a benign first command (e.g. `echo hi && rm -rf foo`); the user only saw `echo` in the prompt. " +
+	"Returns stdout, stderr, exit code, and a truncated flag."
 
 // inputSchema is the JSON Schema describing kaneaz__bash's argument
 // shape (FR-010). Inlined as a constant so InputSchema() can return
@@ -83,7 +87,7 @@ const inputSchema = `{
   "type": "object",
   "properties": {
     "command": {"type": "string"},
-    "working_dir": {"type": "string", "description": "Optional subdirectory of the workspace"},
+    "working_dir": {"type": "string", "description": "Optional cwd for this invocation. Defaults to the harness agent-workspace; you can also pass any absolute path the user's account can reach."},
     "timeout_seconds": {"type": "integer", "default": 30, "maximum": 300}
   },
   "required": ["command"]
@@ -202,21 +206,21 @@ type callResult struct {
 }
 
 // Call dispatches a single tool invocation. Errors that originate
-// from invalid input (parse failure, missing command field) are
-// returned as Go errors; errors that originate from the sandbox /
-// policy gate / exec layer are surfaced as a successful tool result
-// with an explanatory stderr and a non-zero exit_code so the model
-// learns what went wrong without the toolloop short-circuiting.
+// from invalid input (missing command field) are returned as Go
+// errors; errors that originate from the sandbox / policy gate / exec
+// layer are surfaced as a successful tool result with an explanatory
+// stderr and a non-zero exit_code so the model learns what went wrong
+// without the toolloop short-circuiting.
 //
 // Flow:
 //  1. Unmarshal args. Empty command → error.
-//  2. Parse command into argv. Parse error → error.
-//  3. Cedar gate check on argv BEFORE LookPath (NFR-005). Falls back
+//  2. Derive first-segment argv via FirstSegmentArgv for Cedar pattern.
+//  3. Cedar gate check on first-segment argv (NFR-005). Falls back
 //     to allowlist check when no Cedar engine is wired.
 //  4. Resolve working_dir under sandboxRoot (FR-013, NFR-004).
-//  5. exec.LookPath the program; "command not found" → exit 127.
-//  6. Run with the bounded context + output cap.
-//  7. Marshal RunResult → callResult JSON.
+//  5. Run via bash -lc with the bounded context + output cap.
+//     The shell handles PATH lookup and all metacharacters.
+//  6. Marshal RunResult → callResult JSON.
 func (t *Tool) Call(ctx context.Context, argsJSON json.RawMessage) (json.RawMessage, error) {
 	var args callArgs
 	if len(argsJSON) > 0 {
@@ -228,16 +232,16 @@ func (t *Tool) Call(ctx context.Context, argsJSON json.RawMessage) (json.RawMess
 		return nil, errors.New("bash: command is required")
 	}
 
-	argv, err := Parse(args.Command)
-	if err != nil {
-		return nil, fmt.Errorf("bash: parse command: %w", err)
-	}
+	// Derive argv for Cedar pattern derivation from the first segment.
+	// FirstSegmentArgv never returns an error; if parsing fails it
+	// falls back to a whitespace split. This is best-effort — the shell
+	// is the authoritative parser at runtime.
+	argv := FirstSegmentArgv(args.Command)
 	if len(argv) == 0 {
 		return nil, errors.New("bash: command parsed to empty argv")
 	}
 
-	prog := argv[0]
-	progBase := filepath.Base(prog)
+	progBase := filepath.Base(argv[0])
 
 	// Cedar gate (WP03). When no engine is wired, fall back to the
 	// legacy allowlist so test harnesses and unbooted chassis paths
@@ -270,26 +274,14 @@ func (t *Tool) Call(ctx context.Context, argsJSON json.RawMessage) (json.RawMess
 
 	timeout := resolveTimeout(args.TimeoutSeconds)
 
-	resolved, err := exec.LookPath(prog)
-	if err != nil {
-		t.logf("bash.not_found", "program", progBase)
-		return marshalResult(callResult{
-			Stderr:    "command not found: " + progBase,
-			ExitCode:  127,
-			Truncated: false,
-		})
-	}
-	argv[0] = resolved
-
 	t.logf("bash.invoke",
 		"program", progBase,
-		"argv_len", len(argv),
 		"cwd", cwd,
 		"timeout_seconds", int(timeout/time.Second),
 	)
 
 	res, runErr := Run(ctx, RunOpts{
-		Argv:           argv,
+		CommandLine:    args.Command,
 		Cwd:            cwd,
 		Timeout:        timeout,
 		MaxOutputBytes: DefaultMaxOutputBytes,
@@ -520,22 +512,24 @@ var writeFile = func(path string, data []byte) error {
 }
 
 // resolveWorkingDir maps the caller-supplied working_dir to an
-// absolute path that lies under sandboxRoot. Empty input returns the
-// sandbox root verbatim. Relative input is joined to sandboxRoot.
-// Absolute input is taken as-is. In every case the final path is
-// canonicalised via filepath.EvalSymlinks BEFORE the prefix check so
-// a symlink pointing at /tmp cannot grant access to /tmp.
+// absolute path. Empty input returns the harness's default
+// agent-workspace root. Relative input is joined to that root.
+// Absolute input is taken as-is — the bash tool runs as the user's
+// account so any path the account can reach is fair game; the Cedar
+// permission gate is the security boundary, not the cwd.
 //
-// EvalSymlinks requires the path to exist; non-existent dirs that
-// resolve syntactically under the sandbox are accepted on the
-// assumption that the user wants to run a command there (e.g. mkdir
-// followed by ls). For non-existent paths we fall back to a Clean +
-// prefix check on the syntactic form — symlink escape is not
-// possible against a path that doesn't exist yet.
+// In every case the final path is canonicalised via
+// filepath.EvalSymlinks; if the path doesn't exist yet (e.g. the
+// model wants to mkdir + ls) we fall back to filepath.Clean on the
+// syntactic form.
 func (t *Tool) resolveWorkingDir(workingDir string) (string, error) {
 	root, err := canonicalize(t.sandboxRoot)
 	if err != nil {
-		return "", fmt.Errorf("sandbox root unavailable: %w", err)
+		// Default-root unavailable but the model passed an absolute
+		// path — let the spawn happen anyway; the kernel will reject
+		// if the dir genuinely doesn't exist. For the no-input case
+		// fall back to "/" so the spawn doesn't crash on a nil cwd.
+		root = "/"
 	}
 	var candidate string
 	switch {
@@ -548,11 +542,8 @@ func (t *Tool) resolveWorkingDir(workingDir string) (string, error) {
 	}
 	canonical, err := canonicalize(candidate)
 	if err != nil {
-		// Path doesn't exist (yet). Fall back to syntactic check.
+		// Path doesn't exist (yet). Use the syntactic form.
 		canonical = filepath.Clean(candidate)
-	}
-	if !pathHasPrefix(canonical, root) {
-		return "", errors.New("working_dir outside sandbox")
 	}
 	return canonical, nil
 }

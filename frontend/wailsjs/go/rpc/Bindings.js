@@ -34,6 +34,10 @@ export function Artifacts_Promote(arg1, arg2, arg3) {
   return window['go']['rpc']['Bindings']['Artifacts_Promote'](arg1, arg2, arg3);
 }
 
+export function Artifacts_SaveAs(arg1, arg2) {
+  return window['go']['rpc']['Bindings']['Artifacts_SaveAs'](arg1, arg2);
+}
+
 export function Attachments_Add(arg1) {
   return window['go']['rpc']['Bindings']['Attachments_Add'](arg1);
 }
@@ -454,8 +458,8 @@ export function Nodes_ReloadOverrides() {
   return window['go']['rpc']['Bindings']['Nodes_ReloadOverrides']();
 }
 
-export function Permissions_ListGrants() {
-  return window['go']['rpc']['Bindings']['Permissions_ListGrants']();
+export function Permissions_ListGrants(arg1) {
+  return window['go']['rpc']['Bindings']['Permissions_ListGrants'](arg1);
 }
 
 export function Permissions_ListPending() {
@@ -748,6 +752,10 @@ export function Tools_InstallRecipe(arg1, arg2, arg3) {
 
 export function Tools_ListRecipes() {
   return window['go']['rpc']['Bindings']['Tools_ListRecipes']();
+}
+
+export function Tools_PickDirectory(arg1, arg2) {
+  return window['go']['rpc']['Bindings']['Tools_PickDirectory'](arg1, arg2);
 }
 
 export function Tools_RecipeConfig(arg1) {

@@ -45,9 +45,9 @@ func (s *store) Use(ctx context.Context, h Handle, op func([]byte) error) (retEr
 	// Cedar policy gate fires BEFORE secret resolution so an explicit
 	// Deny never lets raw bytes flow (mission
 	// cedar-credential-policy-01KQ8TDE WP05). nil gate is a no-op
-	// (default-allow). The mcp_spawn purpose is gated best-effort
-	// here; the full IssueForMCPSpawn interactive-prompt path lands
-	// in credstore WP06.
+	// (default-allow). The mcp_spawn purpose is fully enforced here
+	// via IssueForMCPSpawn; Use is only called for non-spawn purposes
+	// in the normal credential flow.
 	if s.cedarGate != nil {
 		strict := false
 		if s.strictMode != nil {

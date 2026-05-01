@@ -1,9 +1,8 @@
 // Package bash provides a sandboxed wrapper around os/exec for the
-// built-in kaneaz__bash tool. The package never spawns a shell — input
-// command strings are split into argv via Parse (a hand-rolled
-// shlex-style state machine) and dispatched directly through
-// exec.CommandContext. No globbing, no variable expansion, no command
-// substitution, no pipes.
+// built-in kaneaz__bash tool. Commands are executed via `bash -lc` so
+// pipes, redirects, variable expansion, globbing, and command
+// substitution all work. Parse is retained for Cedar pattern derivation
+// from the first segment of a command chain.
 package bash
 
 import "errors"
@@ -114,4 +113,72 @@ func Parse(cmd string) ([]string, error) {
 // preserved as-is including the backslash.
 func isDoubleQuoteEscape(b byte) bool {
 	return b == '"' || b == '\\' || b == '$' || b == '`'
+}
+
+// FirstSegmentArgv extracts argv for the FIRST command segment in a
+// shell command string. Segments are delimited by the top-level shell
+// operators ;, &&, ||, and |. "Top-level" means not inside single or
+// double quotes.
+//
+// The segment text is passed to Parse for tokenisation. If Parse
+// returns an error (e.g. unterminated quote), or the result is empty,
+// FirstSegmentArgv falls back to a simple whitespace split of the
+// entire command so Cedar pattern derivation always has something to
+// work with. The returned slice is used solely for DerivePattern; it
+// is never dispatched to exec.
+func FirstSegmentArgv(cmd string) []string {
+	seg := firstSegment(cmd)
+	argv, err := Parse(seg)
+	if err != nil || len(argv) == 0 {
+		// Fallback: split the whole command on whitespace.
+		argv, _ = Parse(cmd)
+	}
+	return argv
+}
+
+// firstSegment returns the substring of cmd up to (but not including)
+// the first top-level shell operator: ;, |, &&, or ||. Characters
+// inside single or double quotes are never treated as operators.
+func firstSegment(cmd string) string {
+	const (
+		sNormal = iota
+		sSingle
+		sDouble
+	)
+	state := sNormal
+	for i := 0; i < len(cmd); i++ {
+		c := cmd[i]
+		switch state {
+		case sSingle:
+			if c == '\'' {
+				state = sNormal
+			}
+		case sDouble:
+			if c == '"' {
+				state = sNormal
+			} else if c == '\\' {
+				i++ // skip the escaped character
+			}
+		case sNormal:
+			switch c {
+			case '\'':
+				state = sSingle
+			case '"':
+				state = sDouble
+			case '\\':
+				i++ // skip the escaped character
+			case ';':
+				return cmd[:i]
+			case '|':
+				// Both | and || end the first segment.
+				return cmd[:i]
+			case '&':
+				// && ends the first segment.
+				if i+1 < len(cmd) && cmd[i+1] == '&' {
+					return cmd[:i]
+				}
+			}
+		}
+	}
+	return cmd
 }

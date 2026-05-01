@@ -209,6 +209,35 @@ function onSaveArtifact() {
   emit('save-artifact', props.messageId);
 }
 
+const copyFlash = ref(false);
+
+async function onCopyMessage() {
+  const text = props.content ?? '';
+  let ok = false;
+  try {
+    await navigator.clipboard.writeText(text);
+    ok = true;
+  } catch {
+    // Wails fallback — same path as the per-code-block copy in
+    // MarkdownBlock. Wails' webview rejects navigator.clipboard in
+    // some contexts; the runtime binding always works.
+    try {
+      const setter = window.runtime?.ClipboardSetText;
+      if (setter) {
+        ok = await setter(text);
+      }
+    } catch {
+      ok = false;
+    }
+  }
+  if (ok) {
+    copyFlash.value = true;
+    setTimeout(() => {
+      copyFlash.value = false;
+    }, 1200);
+  }
+}
+
 function onArtifactChipOpen(artifact: Artifact) {
   emit('open-artifact', artifact);
 }
@@ -319,9 +348,19 @@ function isLastBlock(idx: number): boolean {
             @close="closeMenu"
           />
         </div>
+        <button
+          type="button"
+          class="opacity-0 group-hover:opacity-100 focus:opacity-100 transition-fast text-[12px] px-1.5 py-0.5 rounded-sm border border-border-muted text-ink-dim hover:text-accent hover:bg-surface-2 ml-1"
+          :class="rememberable || (saveable && messageId) ? '' : 'ml-auto'"
+          aria-label="Copy message text"
+          :data-testid="'copy-message-button'"
+          @click="onCopyMessage"
+        >
+          {{ copyFlash ? 'copied' : 'copy' }}
+        </button>
         <div
           v-if="saveable && messageId"
-          :class="['relative', rememberable ? '' : flashConfirm ? '' : 'ml-auto']"
+          :class="['relative', rememberable ? '' : flashConfirm ? '' : '']"
         >
           <button
             type="button"

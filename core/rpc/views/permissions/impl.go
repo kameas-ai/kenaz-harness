@@ -91,7 +91,7 @@ func (a *API) ListPending(_ context.Context) ([]PendingRequest, error) {
 // surfaces them through `CedarPolicy.ListPolicies`, but they are not
 // "user-revocable single-permission grants" so they don't belong in
 // this list.
-func (a *API) ListGrants(_ context.Context) ([]Grant, error) {
+func (a *API) ListGrants(_ context.Context, family string) ([]Grant, error) {
 	if a == nil {
 		return []Grant{}, nil
 	}
@@ -147,6 +147,18 @@ func (a *API) ListGrants(_ context.Context) ([]Grant, error) {
 		}
 		return out[i].ID < out[j].ID
 	})
+
+	// Family filter — empty string means "all families". Applied last
+	// so the sort order is preserved within the filtered subset.
+	if family != "" {
+		filtered := out[:0]
+		for _, g := range out {
+			if g.Family == family {
+				filtered = append(filtered, g)
+			}
+		}
+		out = filtered
+	}
 	return out, nil
 }
 

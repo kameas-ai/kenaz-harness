@@ -529,8 +529,9 @@ async function onProjectDrop(evt: DragEvent, projectId: string) {
 
           <!-- nested sessions for this project -->
           <ul
-            v-if="!isCollapsed(project.id) && sessionsFor(project.id).length > 0"
-            class="mt-1 ml-3 space-y-1 border-l border-border-muted pl-2"
+            v-if="!isCollapsed(project.id)"
+            class="mt-1 ml-3 space-y-1 pl-2"
+            :class="{ 'border-l border-border-muted': sessionsFor(project.id).length > 0 }"
           >
             <li
               v-for="session in sessionsFor(project.id)"

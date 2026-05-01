@@ -45,14 +45,17 @@ type store struct {
 	// before secret resolution. nil = no gate (default-allow), keeps
 	// the test harness path simple. When set, evaluation routes through
 	// cedar.CheckCredentialAccess (mission cedar-credential-policy
-	// WP05). The mcp_spawn purpose has TODO-deferred interactive
-	// behaviour landing in credstore WP06.
+	// WP05).
 	cedarGate cedar.Gate
 	// strictMode is read on every Use call (not at construction time)
 	// so flipping the Settings.CedarStrictCredentialMode dial takes
 	// effect on the next Use without re-creating the store. nil
 	// degrades to "false" (lenient).
 	strictMode func() bool
+	// promptRegistry is the process-singleton Cedar prompt registry
+	// used by IssueForMCPSpawn when the Cedar gate returns
+	// NotApplicable. nil = skip interactive prompt (default-allow).
+	promptRegistry *cedar.Registry
 }
 
 // Store is the public interface. Callers obtain a *store via New.
@@ -65,6 +68,15 @@ type Store interface {
 	// Peek resolves the credential behind ref and returns a redacted
 	// display value. No audit event is emitted.
 	Peek(ctx context.Context, ref secrets.CredentialReference) (Redacted, error)
+	// IssueForMCPSpawn resolves the credentials required to spawn an
+	// MCP stdio child process. The Cedar gate fires with
+	// purpose="mcp_spawn"; NotApplicable triggers an interactive prompt
+	// via the Registry (if wired). On Allow / prompt-Allow, the
+	// resolved env map is returned. On Deny / prompt-Deny, an error is
+	// returned and no bytes flow. recipeID is used as the Cedar resource
+	// UID and as the CredPromptSurface.ProviderID. envKeys are the env
+	// var names the recipe declares; only those keys are resolved.
+	IssueForMCPSpawn(ctx context.Context, recipeID string, envKeys []string, backend secrets.Backend) (map[string]string, error)
 	// Close stops the expiration goroutine and zeroes all entries.
 	Close()
 }
@@ -93,6 +105,17 @@ func WithCedarGate(g cedar.Gate, strictMode func() bool) StoreOption {
 	return func(s *store) {
 		s.cedarGate = g
 		s.strictMode = strictMode
+	}
+}
+
+// WithPromptRegistry threads the process-singleton Cedar prompt registry
+// into the store. IssueForMCPSpawn uses it to fire an interactive
+// credential prompt when the Cedar gate returns NotApplicable (no rule
+// matched). nil registry = default-allow on NotApplicable (pre-boot
+// posture, same behaviour as before WP05 was completed).
+func WithPromptRegistry(r *cedar.Registry) StoreOption {
+	return func(s *store) {
+		s.promptRegistry = r
 	}
 }
 
