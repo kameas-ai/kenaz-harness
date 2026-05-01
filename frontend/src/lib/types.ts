@@ -515,6 +515,15 @@ export interface Message {
   createdAt: string;
   /** Streaming flag — true while the assistant is still emitting tokens. */
   streaming?: boolean;
+  /**
+   * Stream failure marker (long-turn-resilience WP00). When the SSE stream
+   * closes with a non-completed reason or an error event fires mid-flight,
+   * the partial assistant content is still committed to messages with this
+   * field stamped to the failure reason ("error", "cancelled", "transient",
+   * "closed-without-finish", etc.). Empty / undefined for healthy streams.
+   * Serialised omitempty.
+   */
+  streamingError?: string;
   toolCalls?: readonly ToolCall[];
   /**
    * Polymorphic content blocks for multimodal messages
