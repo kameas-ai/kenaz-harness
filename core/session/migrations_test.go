@@ -412,10 +412,12 @@ func TestMigrations_RegisterAndApply(t *testing.T) {
 	// 0306 branches + 0307 corpora + 0308 memory_hook_journal +
 	// 0309 agent_graph_events + 0310 compaction + 0311 auto_titled +
 	// 0312 search_fts5) = 15 applied entries.
-	if got := len(db.ledger); got != 15 {
-		t.Fatalf("ledger size = %d, want 15", got)
+	// 0312 cross-session-search FTS5 + 0313 subagent-metadata = 16 applied entries
+	// (2 chassis bootstrap + 14 sessions migrations).
+	if got := len(db.ledger); got != 16 {
+		t.Fatalf("ledger size = %d, want 16", got)
 	}
-	wantVersions := []int{1, 2, 300, 301, 302, 303, 304, 305, 306, 307, 308, 309, 310, 311, 312}
+	wantVersions := []int{1, 2, 300, 301, 302, 303, 304, 305, 306, 307, 308, 309, 310, 311, 312, 313}
 	for i, want := range wantVersions {
 		if db.ledger[i].Version != want {
 			t.Errorf("ledger[%d].Version = %d, want %d", i, db.ledger[i].Version, want)

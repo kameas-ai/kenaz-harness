@@ -52,10 +52,11 @@ function grantLabel(g: PermissionGrant): string {
     return idx >= 0 ? g.resourceKey.slice(idx + 2) : g.resourceKey;
   }
   if (g.policyFile) {
-    const lower = g.policyFile.toLowerCase();
+    const policyFile = g.policyFile;
+    const lower = policyFile.toLowerCase();
     const stripSuffix = (s: string) => (s.endsWith('.cedar') ? s.slice(0, -6) : s);
     const tryPrefix = (prefix: string) =>
-      lower.startsWith(prefix) ? stripSuffix(g.policyFile.slice(prefix.length)) : null;
+      lower.startsWith(prefix) ? stripSuffix(policyFile.slice(prefix.length)) : null;
     const stripped =
       tryPrefix('bash_allow_') ??
       tryPrefix('fs_allow_') ??

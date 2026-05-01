@@ -90,6 +90,10 @@ export function Branches_Abandon(arg1) {
   return window['go']['rpc']['Bindings']['Branches_Abandon'](arg1);
 }
 
+export function Branches_CommitReintegration(arg1) {
+  return window['go']['rpc']['Bindings']['Branches_CommitReintegration'](arg1);
+}
+
 export function Branches_Create(arg1) {
   return window['go']['rpc']['Bindings']['Branches_Create'](arg1);
 }
@@ -106,8 +110,16 @@ export function Branches_Merge(arg1) {
   return window['go']['rpc']['Bindings']['Branches_Merge'](arg1);
 }
 
+export function Branches_ProposeReintegrationSummary(arg1) {
+  return window['go']['rpc']['Bindings']['Branches_ProposeReintegrationSummary'](arg1);
+}
+
 export function Branches_RecommendModel(arg1, arg2, arg3) {
   return window['go']['rpc']['Bindings']['Branches_RecommendModel'](arg1, arg2, arg3);
+}
+
+export function Branches_SetAdvisorDismissed(arg1, arg2) {
+  return window['go']['rpc']['Bindings']['Branches_SetAdvisorDismissed'](arg1, arg2);
 }
 
 export function Bundle_Get(arg1) {

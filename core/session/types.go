@@ -42,6 +42,13 @@ type Record struct {
 	// renamed it (locking out further auto-titling).
 	// Populated by migration 0311 (session-auto-titling-01KQ8TDS WP01).
 	AutoTitled bool
+
+	// BranchAdvisorDismissed is set when the user clicks "Don't suggest
+	// again" in the branch-advisor banner (FR-010). When true, the
+	// backend skips running the detector for this session regardless of
+	// the project-level setting (resolution order step 4). Persisted
+	// in the sessions table via migration 0311.
+	BranchAdvisorDismissed bool
 }
 
 // ContextKind values for Record.ContextKind. Validated at the manager

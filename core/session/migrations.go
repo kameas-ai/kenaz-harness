@@ -83,6 +83,9 @@ const sqlInitSchema = `
 // (auto_titled column — see migrations_auto_titled.go);
 // cross-session-search WP01 lands as 0312 (FTS5 virtual table +
 // triggers — see migrations_search_fts.go).
+// migrations_compaction.go); branch-as-subagent-recommendation WP04
+// lands as 0311 (subagent metadata columns — see
+// migrations_subagent.go).
 func Migrations() []migrations.Migration {
 	return []migrations.Migration{
 		{
@@ -127,6 +130,7 @@ func Migrations() []migrations.Migration {
 		migration0310(),
 		migration0311(),
 		migration0312(),
+		migration0313(),
 	}
 }
 

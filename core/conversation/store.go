@@ -3,6 +3,7 @@ package conversation
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
@@ -257,18 +258,29 @@ func (s *sqlStore) Create(ctx context.Context, b Branch) error {
 		if b.AbandonedAt != nil {
 			abandoned = b.AbandonedAt.UnixNano()
 		}
+		var subagentInt int
+		if b.SubagentBranch {
+			subagentInt = 1
+		}
+		advisorSignals := "[]"
+		if len(b.AdvisorSignals) > 0 {
+			raw, _ := jsonMarshalStrings(b.AdvisorSignals)
+			advisorSignals = string(raw)
+		}
 		_, err := tx.Exec(ctx, `
             INSERT INTO branches
                 (id, parent_session_id, child_session_id, kind, status,
                  model_id, provider_id, title, task_hint,
-                 created_at, updated_at, merged_at, abandoned_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 created_at, updated_at, merged_at, abandoned_at,
+                 subagent_branch, recommendation_id, advisor_signals)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `,
 			b.ID, b.ParentSessionID, b.ChildSessionID,
 			string(b.Kind), string(b.Status),
 			b.ModelID, b.ProviderID, b.Title, b.TaskHint,
 			b.CreatedAt.UnixNano(), b.UpdatedAt.UnixNano(),
 			merged, abandoned,
+			subagentInt, b.RecommendationID, advisorSignals,
 		)
 		return err
 	})
@@ -277,7 +289,10 @@ func (s *sqlStore) Create(ctx context.Context, b Branch) error {
 const sqlSelectBranch = `
     SELECT id, parent_session_id, child_session_id, kind, status,
            model_id, provider_id, title, task_hint,
-           created_at, updated_at, merged_at, abandoned_at
+           created_at, updated_at, merged_at, abandoned_at,
+           COALESCE(subagent_branch, 0),
+           COALESCE(recommendation_id, ''),
+           COALESCE(advisor_signals, '[]')
     FROM branches
 `
 
@@ -426,19 +441,22 @@ func (s *sqlStore) UpdateChildMsgID(ctx context.Context, branchID string, seq in
 // scanBranch scans a Branch from a one-row scanner.
 func scanBranch(sc interface{ Scan(dest ...any) error }) (Branch, error) {
 	var (
-		b           Branch
-		kindStr     string
-		statusStr   string
-		createdAt   int64
-		updatedAt   int64
-		merged      sql.NullInt64
-		abandoned   sql.NullInt64
+		b               Branch
+		kindStr         string
+		statusStr       string
+		createdAt       int64
+		updatedAt       int64
+		merged          sql.NullInt64
+		abandoned       sql.NullInt64
+		subagentInt     int
+		advisorSignalsJ string
 	)
 	if err := sc.Scan(
 		&b.ID, &b.ParentSessionID, &b.ChildSessionID,
 		&kindStr, &statusStr,
 		&b.ModelID, &b.ProviderID, &b.Title, &b.TaskHint,
 		&createdAt, &updatedAt, &merged, &abandoned,
+		&subagentInt, &b.RecommendationID, &advisorSignalsJ,
 	); err != nil {
 		return Branch{}, err
 	}
@@ -454,6 +472,10 @@ func scanBranch(sc interface{ Scan(dest ...any) error }) (Branch, error) {
 		t := time.Unix(0, abandoned.Int64).UTC()
 		b.AbandonedAt = &t
 	}
+	b.SubagentBranch = subagentInt != 0
+	if advisorSignalsJ != "" && advisorSignalsJ != "[]" {
+		b.AdvisorSignals, _ = jsonUnmarshalStrings(advisorSignalsJ)
+	}
 	return b, nil
 }
 
@@ -466,6 +488,18 @@ func rowsAffectedOrNotFound(res Result) error {
 		return ErrBranchNotFound
 	}
 	return nil
+}
+
+// jsonMarshalStrings marshals a string slice to compact JSON.
+func jsonMarshalStrings(ss []string) ([]byte, error) {
+	return json.Marshal(ss)
+}
+
+// jsonUnmarshalStrings parses a compact JSON string array.
+func jsonUnmarshalStrings(s string) ([]string, error) {
+	var out []string
+	err := json.Unmarshal([]byte(s), &out)
+	return out, err
 }
 
 // Helper that callers can use in tests to format an internal error

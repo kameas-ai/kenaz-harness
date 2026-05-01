@@ -512,6 +512,9 @@ export namespace branches {
 	    updatedAt: string;
 	    mergedAt?: string;
 	    abandonedAt?: string;
+	    subagentBranch?: boolean;
+	    recommendationId?: string;
+	    advisorSignals?: string[];
 	
 	    static createFrom(source: any = {}) {
 	        return new Branch(source);
@@ -532,6 +535,9 @@ export namespace branches {
 	        this.updatedAt = source["updatedAt"];
 	        this.mergedAt = source["mergedAt"];
 	        this.abandonedAt = source["abandonedAt"];
+	        this.subagentBranch = source["subagentBranch"];
+	        this.recommendationId = source["recommendationId"];
+	        this.advisorSignals = source["advisorSignals"];
 	    }
 	}
 	export class BranchStatus {
@@ -572,6 +578,22 @@ export namespace branches {
 		    return a;
 		}
 	}
+	export class CommitReintegrationOptions {
+	    branchSessionId: string;
+	    finalSummaryText: string;
+	    wasEdited: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new CommitReintegrationOptions(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.branchSessionId = source["branchSessionId"];
+	        this.finalSummaryText = source["finalSummaryText"];
+	        this.wasEdited = source["wasEdited"];
+	    }
+	}
 	export class CreateBranchOptions {
 	    parentSessionId: string;
 	    title?: string;
@@ -581,6 +603,9 @@ export namespace branches {
 	    exactModelId?: string;
 	    systemPromptOverride?: string;
 	    childName?: string;
+	    recommendationId?: string;
+	    advisorSignals?: string[];
+	    advisorConfidence?: number;
 	
 	    static createFrom(source: any = {}) {
 	        return new CreateBranchOptions(source);
@@ -596,6 +621,9 @@ export namespace branches {
 	        this.exactModelId = source["exactModelId"];
 	        this.systemPromptOverride = source["systemPromptOverride"];
 	        this.childName = source["childName"];
+	        this.recommendationId = source["recommendationId"];
+	        this.advisorSignals = source["advisorSignals"];
+	        this.advisorConfidence = source["advisorConfidence"];
 	    }
 	}
 	export class RecommendedModel {
@@ -618,6 +646,22 @@ export namespace branches {
 	        this.reason = source["reason"];
 	        this.notes = source["notes"];
 	        this.crossProviderWarning = source["crossProviderWarning"];
+	    }
+	}
+	export class ReintegrationProposal {
+	    proposedSummary: string;
+	    tokenCount: number;
+	    model?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ReintegrationProposal(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.proposedSummary = source["proposedSummary"];
+	        this.tokenCount = source["tokenCount"];
+	        this.model = source["model"];
 	    }
 	}
 
@@ -3401,6 +3445,11 @@ export namespace settings {
 	    permissionsMigrationToastShown?: boolean;
 	    cedarStrictCredentialMode?: boolean;
 	    credentialAuditRetentionDays?: number;
+	    branchAdvisorMinConfidence?: number;
+	    branchAdvisorUseLLM?: boolean;
+	    branchAutoMode?: boolean;
+	    branchReintegrationMaxTokens?: number;
+	    branchAdvisorDefaultModel?: ProviderProfileRef;
 	
 	    static createFrom(source: any = {}) {
 	        return new Settings(source);
@@ -3433,6 +3482,11 @@ export namespace settings {
 	        this.permissionsMigrationToastShown = source["permissionsMigrationToastShown"];
 	        this.cedarStrictCredentialMode = source["cedarStrictCredentialMode"];
 	        this.credentialAuditRetentionDays = source["credentialAuditRetentionDays"];
+	        this.branchAdvisorMinConfidence = source["branchAdvisorMinConfidence"];
+	        this.branchAdvisorUseLLM = source["branchAdvisorUseLLM"];
+	        this.branchAutoMode = source["branchAutoMode"];
+	        this.branchReintegrationMaxTokens = source["branchReintegrationMaxTokens"];
+	        this.branchAdvisorDefaultModel = this.convertValues(source["branchAdvisorDefaultModel"], ProviderProfileRef);
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {

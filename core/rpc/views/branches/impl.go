@@ -8,8 +8,11 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
+	"unicode/utf8"
 
 	"github.com/sigil-tech/kaneaz-harness/core/agentgraph"
+	"github.com/sigil-tech/kaneaz-harness/core/context/audit"
 	"github.com/sigil-tech/kaneaz-harness/core/conversation"
 	"github.com/sigil-tech/kaneaz-harness/core/session"
 )
@@ -35,6 +38,12 @@ type Config struct {
 	// by RecommendModel. May be nil; the recommender falls back to
 	// the parent's exact pair when the list is empty.
 	ModelInfos []agentgraph.ModelInfo
+	// Audit is the append-only event log emitter (branch-as-subagent-
+	// recommendation WP04/WP07). nil means audit events are silently
+	// dropped — acceptable in test harnesses.
+	Audit audit.Emitter
+	// Now is the wall-clock source. nil uses time.Now().UTC().
+	Now func() time.Time
 }
 
 // API is the concrete BranchesAPI implementation.
@@ -46,6 +55,15 @@ type API struct {
 // allowed — methods then return ErrManagerUnavailable.
 func New(cfg Config) *API {
 	return &API{cfg: cfg}
+}
+
+// now returns the current UTC time, using the configured clock or
+// time.Now().UTC() when none is set.
+func (a *API) now() time.Time {
+	if a.cfg.Now != nil {
+		return a.cfg.Now()
+	}
+	return time.Now().UTC()
 }
 
 // ListBranches returns every branch off a parent session.
@@ -103,13 +121,17 @@ func (a *API) CreateBranch(ctx context.Context, opts CreateBranchOptions) (Branc
 		}
 	}
 
+	isSubagent := strings.TrimSpace(opts.RecommendationID) != ""
 	br, child, err := a.cfg.Conversations.CreateBranch(ctx, conversation.ForkOptions{
-		ParentSessionID: opts.ParentSessionID,
-		ChildName:       opts.ChildName,
-		Title:           opts.Title,
-		TaskHint:        opts.TaskHint,
-		ProviderID:      rec.ProviderID,
-		ModelID:         rec.ModelID,
+		ParentSessionID:  opts.ParentSessionID,
+		ChildName:        opts.ChildName,
+		Title:            opts.Title,
+		TaskHint:         opts.TaskHint,
+		ProviderID:       rec.ProviderID,
+		ModelID:          rec.ModelID,
+		SubagentBranch:   isSubagent,
+		RecommendationID: strings.TrimSpace(opts.RecommendationID),
+		AdvisorSignals:   opts.AdvisorSignals,
 	})
 	if err != nil {
 		return Branch{}, err
@@ -133,6 +155,16 @@ func (a *API) CreateBranch(ctx context.Context, opts CreateBranchOptions) (Branc
 				Content: handoff,
 			})
 		}
+	}
+
+	// Emit audit event for accepted subagent branch (WP04).
+	if isSubagent {
+		_ = audit.Emit(ctx, a.cfg.Audit, audit.KindBranchAdvisorAccepted,
+			audit.BranchAdvisorAcceptedPayload{
+				Confidence:       opts.AdvisorConfidence,
+				BranchSessionID:  br.ChildSessionID,
+				RecommendationID: opts.RecommendationID,
+			}, a.now())
 	}
 
 	return toWire(br), nil
@@ -263,22 +295,165 @@ func (a *API) parentModel(_ context.Context, _ string) (string, string) {
 	return "", ""
 }
 
+// ProposeReintegrationSummary generates a proposed summary for the
+// branch transcript (WP05 / FR-008a). v1 is rule-based: it concatenates
+// the last ≤8 assistant turns from the child session, truncated to
+// DefaultBranchReintegrationMaxTokens-worth of runes (rough 4-char /
+// token estimate). A follow-up patch can swap in a real LLM call when
+// Settings.CompactionModel is wired.
+func (a *API) ProposeReintegrationSummary(ctx context.Context, branchSessionID string) (ReintegrationProposal, error) {
+	if a == nil || a.cfg.Sessions == nil {
+		return ReintegrationProposal{}, ErrManagerUnavailable
+	}
+	if branchSessionID == "" {
+		return ReintegrationProposal{}, ErrInvalidArg
+	}
+	msgs, err := a.cfg.Sessions.ListMessages(ctx, branchSessionID)
+	if err != nil {
+		return ReintegrationProposal{}, fmt.Errorf("branches: list messages: %w", err)
+	}
+	// Collect the last ≤8 assistant turns.
+	var assistantMsgs []string
+	for _, m := range msgs {
+		if m.Role == session.RoleAssistant {
+			assistantMsgs = append(assistantMsgs, strings.TrimSpace(m.Content))
+		}
+	}
+	if len(assistantMsgs) == 0 {
+		// Empty-branch case: no assistant turns yet.
+		return ReintegrationProposal{ProposedSummary: ""}, nil
+	}
+	tail := assistantMsgs
+	if len(tail) > 8 {
+		tail = tail[len(tail)-8:]
+	}
+	var b strings.Builder
+	for i, t := range tail {
+		if i > 0 {
+			b.WriteString("\n\n")
+		}
+		b.WriteString(t)
+	}
+	summary := b.String()
+
+	// Rough truncation: 4 runes ≈ 1 token; cap at DefaultBranchReintegrationMaxTokens.
+	const runesPerToken = 4
+	const maxTokens = 2000
+	maxRunes := maxTokens * runesPerToken
+	if utf8.RuneCountInString(summary) > maxRunes {
+		runes := []rune(summary)
+		summary = string(runes[:maxRunes])
+	}
+
+	tokenCount := utf8.RuneCountInString(summary) / runesPerToken
+	if tokenCount < 1 && summary != "" {
+		tokenCount = 1
+	}
+	return ReintegrationProposal{
+		ProposedSummary: summary,
+		TokenCount:      tokenCount,
+		Model:           "rule_based",
+	}, nil
+}
+
+// CommitReintegration inserts the final summary as a synthetic system
+// message on the parent session and flips the branch to merged
+// (WP07 / FR-008b).
+func (a *API) CommitReintegration(ctx context.Context, opts CommitReintegrationOptions) error {
+	if a == nil || a.cfg.Conversations == nil {
+		return ErrManagerUnavailable
+	}
+	if opts.BranchSessionID == "" {
+		return ErrInvalidArg
+	}
+	summary := strings.TrimSpace(opts.FinalSummaryText)
+	if summary == "" {
+		return fmt.Errorf("branches: commit reintegration: summary must not be empty")
+	}
+
+	// Look up the branch row by child session id.
+	branches, err := a.cfg.Conversations.ListByChild(ctx, opts.BranchSessionID)
+	if err != nil {
+		return fmt.Errorf("branches: lookup by child: %w", err)
+	}
+	if len(branches) == 0 {
+		return fmt.Errorf("branches: no branch row found for session %q", opts.BranchSessionID)
+	}
+	br := branches[0]
+
+	// Append synthetic system message to parent session.
+	if a.cfg.Sessions != nil {
+		header := "Subagent branch summary"
+		if br.Title != "" {
+			header += " (" + br.Title + ")"
+		}
+		fullMsg := header + ":\n" + summary
+		if _, err := a.cfg.Sessions.AppendMessage(ctx, br.ParentSessionID, session.Message{
+			Role:    session.RoleSystem,
+			Content: fullMsg,
+		}); err != nil {
+			return fmt.Errorf("branches: append parent summary: %w", err)
+		}
+	}
+
+	// Flip branch to merged.
+	if err := a.cfg.Conversations.MarkMerged(ctx, br.ID); err != nil {
+		return fmt.Errorf("branches: mark merged: %w", err)
+	}
+
+	// Emit audit event.
+	tokenCount := utf8.RuneCountInString(summary) / 4
+	_ = audit.Emit(ctx, a.cfg.Audit, audit.KindBranchReintegrated,
+		audit.BranchReintegratedPayload{
+			ParentSessionID:   br.ParentSessionID,
+			BranchSessionID:   opts.BranchSessionID,
+			SummaryTokenCount: tokenCount,
+			WasEdited:         opts.WasEdited,
+		}, a.now())
+
+	return nil
+}
+
+// SetAdvisorDismissed persists the per-session "don't suggest again"
+// flag (FR-010 / WP04).
+func (a *API) SetAdvisorDismissed(ctx context.Context, sessionID string, dismissed bool) error {
+	if a == nil || a.cfg.Sessions == nil {
+		return ErrManagerUnavailable
+	}
+	if sessionID == "" {
+		return ErrInvalidArg
+	}
+	if err := a.cfg.Sessions.SetBranchAdvisorDismissed(ctx, sessionID, dismissed); err != nil {
+		return fmt.Errorf("branches: set advisor dismissed: %w", err)
+	}
+	// Emit audit event for explicit session-scoped dismissal.
+	_ = audit.Emit(ctx, a.cfg.Audit, audit.KindBranchAdvisorDismissed,
+		audit.BranchAdvisorDismissedPayload{
+			Scope:  "session",
+			Reason: "dont_suggest_again",
+		}, a.now())
+	return nil
+}
+
 // toWire projects a conversation.Branch onto the Branch wire shape.
 func toWire(b conversation.Branch) Branch {
 	return Branch{
-		ID:              b.ID,
-		ParentSessionID: b.ParentSessionID,
-		ChildSessionID:  b.ChildSessionID,
-		Kind:            string(b.Kind),
-		Status:          string(b.Status),
-		ProviderID:      b.ProviderID,
-		ModelID:         b.ModelID,
-		Title:           b.Title,
-		TaskHint:        b.TaskHint,
-		CreatedAt:       fmtTime(b.CreatedAt),
-		UpdatedAt:       fmtTime(b.UpdatedAt),
-		MergedAt:        fmtTimePtr(b.MergedAt),
-		AbandonedAt:     fmtTimePtr(b.AbandonedAt),
+		ID:               b.ID,
+		ParentSessionID:  b.ParentSessionID,
+		ChildSessionID:   b.ChildSessionID,
+		Kind:             string(b.Kind),
+		Status:           string(b.Status),
+		ProviderID:       b.ProviderID,
+		ModelID:          b.ModelID,
+		Title:            b.Title,
+		TaskHint:         b.TaskHint,
+		CreatedAt:        fmtTime(b.CreatedAt),
+		UpdatedAt:        fmtTime(b.UpdatedAt),
+		MergedAt:         fmtTimePtr(b.MergedAt),
+		AbandonedAt:      fmtTimePtr(b.AbandonedAt),
+		SubagentBranch:   b.SubagentBranch,
+		RecommendationID: b.RecommendationID,
+		AdvisorSignals:   b.AdvisorSignals,
 	}
 }
 

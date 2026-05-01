@@ -248,6 +248,13 @@ func (m *Manager) MoveToProject(ctx context.Context, sessionID string, projectID
 	return nil
 }
 
+// SetBranchAdvisorDismissed persists the per-session "don't suggest
+// again" flag for the branch advisor. When dismissed is true the
+// backend skips detection for this session (FR-010 resolution step 4).
+func (m *Manager) SetBranchAdvisorDismissed(ctx context.Context, id string, dismissed bool) error {
+	return m.store.SetBranchAdvisorDismissed(ctx, id, dismissed, m.now())
+}
+
 // Rename changes a session's display name.
 func (m *Manager) Rename(ctx context.Context, id, name string) error {
 	name = strings.TrimSpace(name)

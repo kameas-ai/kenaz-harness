@@ -516,6 +516,36 @@ export interface Settings {
    * both KaTeX and Mermaid on slow machines.
    */
   markdownExtensions?: MarkdownExtensions;
+  // ── Branch Advisor dials (branch-as-subagent-recommendation WP08) ──
+
+  /**
+   * Heuristic confidence threshold. Default 0.85. Range [0, 1].
+   * Banner only mounts when the detector returns confidence ≥ this value.
+   */
+  branchAdvisorMinConfidence?: number;
+
+  /**
+   * Reserved: enables the LLM-backed detector (FR-013). Default false.
+   */
+  branchAdvisorUseLLM?: boolean;
+
+  /**
+   * Reserved: enables auto-branching above a higher threshold (FR-014).
+   * Default false.
+   */
+  branchAutoMode?: boolean;
+
+  /**
+   * Token budget for the reintegration summarization call (FR-008a).
+   * Default 2000, min 500, max 16000.
+   */
+  branchReintegrationMaxTokens?: number;
+
+  /**
+   * Provider+model used for newly spawned subagent branches. Defaults to
+   * compactionModel, which itself defaults to the session's active model.
+   */
+  branchAdvisorDefaultModel?: ProviderProfileRef;
 }
 
 /**
@@ -1786,6 +1816,15 @@ export interface Branch {
   updatedAt: string;
   mergedAt?: string;
   abandonedAt?: string;
+  /**
+   * True when this branch was spawned via the branch-advisor
+   * (branch-as-subagent-recommendation WP04).
+   */
+  subagentBranch?: boolean;
+  /** Correlates with KindBranchAdvisorAccepted audit event. */
+  recommendationId?: string;
+  /** Positive-signal labels that fired for this branch. */
+  advisorSignals?: string[];
 }
 
 /**
@@ -1861,14 +1900,18 @@ export type PermissionDecision = 'allow_once' | 'allow_always' | 'deny';
  * as returned by client.permissions.listGrants().
  */
 export interface PermissionGrant {
-  /** Unique stable id (the Cedar policy filename without .cedar). */
+  /** Unique stable id (the Cedar policy filename, or transient resource key). */
   id: string;
   /** Resource family. */
   family: PermissionFamily;
   /** Human-readable resource key (e.g. "git status", "/home/user/foo.txt"). */
   resourceKey: string;
   /** ISO-8601 timestamp when the grant was created. */
-  createdAt: string;
+  createdAt?: string;
+  /** True when this is an in-memory Allow-once grant (no .cedar file). */
+  transient?: boolean;
+  /** When persisted, the .cedar filename under <DataDir>/policy/. */
+  policyFile?: string;
 }
 
 /**
@@ -1898,3 +1941,96 @@ export interface PermissionRequest {
  * PermissionMode — the three global permission posture values.
  */
 export type PermissionMode = 'strict' | 'normal' | 'permissive';
+// ── Branch Advisor (branch-as-subagent-recommendation WP02/WP03/WP06/WP07) ─
+
+/**
+ * BranchSuggestion — payload the backend attaches to a user-message echo
+ * when the heuristic detector fires (C-004 / DIRECTIVE_001: rides on the
+ * existing chat broker channel, no new RPC layer).
+ */
+export interface BranchSuggestion {
+  /** Opaque ULID that correlates suggestion → accept/dismiss audit events. */
+  id: string;
+  /** Normalized score [0, 1]. */
+  confidence: number;
+  /** Human-readable explanation for the banner tooltip. */
+  rationale: string;
+  /** Stable signal-label list (e.g. ["can_you_also", "while_youre_at_it"]). */
+  signals: string[];
+  /** First ≤40 chars of the message trimmed at whitespace. */
+  proposedTitle: string;
+}
+
+/**
+ * BranchAdvisorDismissScope — how broadly the dismiss applies.
+ */
+export type BranchAdvisorDismissScope = 'message' | 'session';
+
+/**
+ * ContextItemKind — the kinds of context items the context-pick modal
+ * can include when spawning a subagent branch (FR-006).
+ */
+export type ContextItemKind =
+  | 'last_4_turns'
+  | 'pinned_memories'
+  | 'attached_artifacts'
+  | 'system_prompt';
+
+/**
+ * SubagentToolGrantMode — the tool-grant scope for a spawned subagent
+ * branch (FR-005). "inherit" copies the parent's grant; "readonly" limits
+ * to read-only tools; "none" disables tools entirely; "cedar" requires an
+ * explicit Cedar policy id (only rendered when cedar-policy-editor is
+ * shipped).
+ */
+export type SubagentToolGrantMode =
+  | 'inherit'
+  | 'readonly'
+  | 'none'
+  | 'cedar';
+
+/**
+ * SubagentCreateOptions — request body for the context-pick modal's
+ * Submit action. Extends BranchCreateOptions with the subagent-specific
+ * advisor metadata.
+ */
+export interface SubagentCreateOptions extends BranchCreateOptions {
+  /** ID from the BranchSuggestion that triggered this creation. */
+  recommendationId?: string;
+  /** Signal labels that fired for this suggestion. */
+  advisorSignals?: string[];
+  /** Confidence score from the detector. */
+  advisorConfidence?: number;
+  /** Which context items to seed the subagent session with. */
+  contextItems?: ContextItemKind[];
+  /** Tool-grant scope for the new branch. */
+  toolGrantMode?: SubagentToolGrantMode;
+  /** Cedar policy id when toolGrantMode === 'cedar'. */
+  cedarPolicyId?: string;
+}
+
+/**
+ * ReintegrationProposal — what ProposeReintegrationSummary returns.
+ */
+export interface ReintegrationProposal {
+  /** The model-generated summary text, pre-filled in the editable textarea. */
+  proposedSummary: string;
+  /** Approximate output token count for the summary. */
+  tokenCount: number;
+  /** Model used for summarization (e.g. "claude-haiku-4"). */
+  model: string;
+  /** Artifact IDs produced in the branch session. */
+  artifactRefs?: string[];
+}
+
+/**
+ * ReintegrationCommitOptions — body for CommitReintegration.
+ */
+export interface ReintegrationCommitOptions {
+  /** The branch session being reintegrated. */
+  branchSessionId: string;
+  /** Final summary text (may have been edited by the user). */
+  finalSummaryText: string;
+  /** True when the user modified the proposed summary before inserting. */
+  wasEdited: boolean;
+}

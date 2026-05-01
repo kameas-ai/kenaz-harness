@@ -158,6 +158,31 @@ type Settings struct {
 	// days (blank = forever)". Frontend sends the numeric value; the
 	// binding layer converts 0/empty to 0 (forever).
 	CredentialAuditRetentionDays int `json:"credentialAuditRetentionDays,omitempty"`
+	// ── Branch Advisor dials (branch-as-subagent-recommendation WP08) ──
+
+	// BranchAdvisorMinConfidence is the heuristic-score threshold below
+	// which the banner does not mount. Default 0.85 (locked Q29.1).
+	// Range [0, 1]; Save rejects values outside this range.
+	BranchAdvisorMinConfidence float64 `json:"branchAdvisorMinConfidence,omitempty"`
+
+	// BranchAdvisorUseLLM enables the optional LLM-backed detector
+	// (FR-013). Default false — reserved field; no implementation in v1.
+	BranchAdvisorUseLLM bool `json:"branchAdvisorUseLLM,omitempty"`
+
+	// BranchAutoMode enables auto-branching when confidence exceeds a
+	// higher threshold (FR-014). Default false — power-user feature off
+	// by default. Reserved field; no implementation in v1.
+	BranchAutoMode bool `json:"branchAutoMode,omitempty"`
+
+	// BranchReintegrationMaxTokens caps the summary length the
+	// reintegration model is instructed to produce (FR-008a). Default
+	// 2000, min 500, max 16000. Zero falls back to the default.
+	BranchReintegrationMaxTokens int `json:"branchReintegrationMaxTokens,omitempty"`
+
+	// BranchAdvisorDefaultModel is the (provider, model) used for
+	// newly spawned subagent branches. Defaults to CompactionModel when
+	// empty, which itself defaults to the session's active model.
+	BranchAdvisorDefaultModel ProviderProfileRef `json:"branchAdvisorDefaultModel,omitempty"`
 }
 
 // ProviderProfileRef is the wire shape that identifies a provider+model
@@ -306,6 +331,59 @@ func (s Settings) EffectivePermissionMode() string {
 	default:
 		return "normal"
 	}
+}
+
+// ── Branch Advisor constants ─────────────────────────────────────────
+
+// DefaultBranchAdvisorMinConfidence is the spec-locked heuristic
+// threshold (Q29.1). Banner mounts only when the detector's confidence
+// meets or exceeds this value.
+const DefaultBranchAdvisorMinConfidence = 0.85
+
+// DefaultBranchReintegrationMaxTokens is the spec-locked default token
+// budget for the reintegration summarization call (FR-008a).
+const DefaultBranchReintegrationMaxTokens = 2000
+
+// MinBranchReintegrationMaxTokens is the lower clamp (FR-008a).
+const MinBranchReintegrationMaxTokens = 500
+
+// MaxBranchReintegrationMaxTokens is the upper clamp (FR-008a).
+const MaxBranchReintegrationMaxTokens = 16000
+
+// EffectiveBranchAdvisorMinConfidence returns the configured threshold
+// or DefaultBranchAdvisorMinConfidence when zero.
+func (s Settings) EffectiveBranchAdvisorMinConfidence() float64 {
+	if s.BranchAdvisorMinConfidence <= 0 {
+		return DefaultBranchAdvisorMinConfidence
+	}
+	return s.BranchAdvisorMinConfidence
+}
+
+// EffectiveBranchReintegrationMaxTokens returns the configured token
+// budget or DefaultBranchReintegrationMaxTokens when zero. Out-of-range
+// persisted values are clamped to [Min, Max].
+func (s Settings) EffectiveBranchReintegrationMaxTokens() int {
+	t := s.BranchReintegrationMaxTokens
+	if t <= 0 {
+		return DefaultBranchReintegrationMaxTokens
+	}
+	if t < MinBranchReintegrationMaxTokens {
+		return MinBranchReintegrationMaxTokens
+	}
+	if t > MaxBranchReintegrationMaxTokens {
+		return MaxBranchReintegrationMaxTokens
+	}
+	return t
+}
+
+// EffectiveBranchAdvisorDefaultModel returns BranchAdvisorDefaultModel
+// when set, otherwise falls back to CompactionModel (which itself
+// defaults to the session's active model when zero).
+func (s Settings) EffectiveBranchAdvisorDefaultModel() ProviderProfileRef {
+	if !s.BranchAdvisorDefaultModel.IsZero() {
+		return s.BranchAdvisorDefaultModel
+	}
+	return s.CompactionModel
 }
 
 // WindowSize mirrors the charter's WindowSize type.

@@ -1140,6 +1140,15 @@ func (b *Bindings) Branches_Abandon(branchID string) error {
 func (b *Bindings) Branches_RecommendModel(parentSessionID, taskHint, preference string) (branchesview.RecommendedModel, error) {
 	return b.api.Branches().RecommendModel(b.ctx(), parentSessionID, taskHint, preference)
 }
+func (b *Bindings) Branches_ProposeReintegrationSummary(branchSessionID string) (branchesview.ReintegrationProposal, error) {
+	return b.api.Branches().ProposeReintegrationSummary(b.ctx(), branchSessionID)
+}
+func (b *Bindings) Branches_CommitReintegration(opts branchesview.CommitReintegrationOptions) error {
+	return b.api.Branches().CommitReintegration(b.ctx(), opts)
+}
+func (b *Bindings) Branches_SetAdvisorDismissed(sessionID string, dismissed bool) error {
+	return b.api.Branches().SetAdvisorDismissed(b.ctx(), sessionID, dismissed)
+}
 
 // ── nodes (manifest-driven node catalog; WP07) ────────────────────────
 

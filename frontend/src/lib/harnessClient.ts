@@ -104,6 +104,8 @@ import type {
   BranchCreateOptions,
   BranchStatusInfo,
   BranchRecommendedModel,
+  ReintegrationProposal,
+  ReintegrationCommitOptions,
   MCPImportRequest,
   MCPImportResponse,
   MCPImportEntry,
@@ -435,6 +437,22 @@ interface WailsBindingsLike {
     query: string,
     filters: SearchFilters,
   ): Promise<SearchHit[]>;
+  // Branch-advisor RPC (branch-as-subagent-recommendation WP05/WP07).
+  Branches_ProposeReintegrationSummary(
+    branchSessionID: string,
+  ): Promise<ReintegrationProposal>;
+  Branches_CommitReintegration(
+    opts: ReintegrationCommitOptions,
+  ): Promise<void>;
+  Branches_SetAdvisorDismissed(
+    sessionID: string,
+    dismissed: boolean,
+  ): Promise<void>;
+
+  // Permissions view (cedar-credential-policy WP07/WP08).
+  Permissions_ListGrants(family: string): Promise<PermissionGrant[]>;
+  Permissions_RevokeGrant(id: string): Promise<void>;
+  Permissions_Resolve(requestID: string, decision: string): Promise<void>;
 }
 
 /**
@@ -1470,6 +1488,12 @@ export interface BranchesClient {
     taskHint: string,
     preference: string,
   ): Promise<BranchRecommendedModel>;
+  /** Propose a reintegration summary for a subagent branch (WP05/WP06). */
+  proposeReintegrationSummary(branchSessionID: string): Promise<ReintegrationProposal>;
+  /** Commit the reintegration — inserts summary into parent (WP07). */
+  commitReintegration(opts: ReintegrationCommitOptions): Promise<void>;
+  /** Persist per-session branch-advisor dismiss flag (WP02). */
+  setAdvisorDismissed(sessionID: string, dismissed: boolean): Promise<void>;
 }
 
 /**
@@ -1869,6 +1893,12 @@ export function createHarnessClient(): HarnessClient {
       abandon: (branchID) => b().Branches_Abandon(branchID),
       recommendModel: (parentSessionID, taskHint, preference) =>
         b().Branches_RecommendModel(parentSessionID, taskHint, preference),
+      proposeReintegrationSummary: (branchSessionID) =>
+        b().Branches_ProposeReintegrationSummary(branchSessionID),
+      commitReintegration: (opts) =>
+        b().Branches_CommitReintegration(opts),
+      setAdvisorDismissed: (sessionID, dismissed) =>
+        b().Branches_SetAdvisorDismissed(sessionID, dismissed),
     },
     nodes: {
       catalog: () => b().Nodes_Catalog(),
@@ -2506,6 +2536,14 @@ export function createFakeHarnessClient(
         tier: 'small',
         reason: 'default',
       }),
+      proposeReintegrationSummary: async () => ({
+        proposedSummary: '',
+        warningEdited: false,
+        tokenCount: 0,
+        model: '',
+      }),
+      commitReintegration: async () => undefined,
+      setAdvisorDismissed: async () => undefined,
     },
     nodes: {
       catalog: async () => [],

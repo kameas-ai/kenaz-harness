@@ -74,6 +74,10 @@ type Store interface {
 	// auto-title attempts. The name empty is legal here (unlike Rename);
 	// callers own the validation that this is a deliberate user-clear.
 	ClearTitle(ctx context.Context, id string, now time.Time) error
+	// SetBranchAdvisorDismissed persists the per-session "don't suggest
+	// again" flag for the branch advisor (FR-010). When dismissed is
+	// true, the backend skips detection for this session.
+	SetBranchAdvisorDismissed(ctx context.Context, id string, dismissed bool, now time.Time) error
 
 	AppendMessage(ctx context.Context, m Message) (Message, error)
 	ListMessages(ctx context.Context, sessionID string) ([]Message, error)
@@ -210,6 +214,19 @@ func (s *memStore) SetProject(_ context.Context, id string, projectID *string, n
 		v := *projectID
 		r.ProjectID = &v
 	}
+	r.UpdatedAt = now
+	s.records[id] = r
+	return nil
+}
+
+func (s *memStore) SetBranchAdvisorDismissed(_ context.Context, id string, dismissed bool, now time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	r, ok := s.records[id]
+	if !ok {
+		return ErrSessionNotFound
+	}
+	r.BranchAdvisorDismissed = dismissed
 	r.UpdatedAt = now
 	s.records[id] = r
 	return nil
@@ -573,12 +590,17 @@ func (s *sqlStore) Create(ctx context.Context, r Record) error {
 		if r.ProjectID != nil {
 			projectID = *r.ProjectID
 		}
+		var advisorDismissed int
+		if r.BranchAdvisorDismissed {
+			advisorDismissed = 1
+		}
 		_, err := tx.Exec(ctx, `
             INSERT INTO sessions
                 (id, name, created_at, updated_at, last_active_at,
                  position, draft, scroll_position, archived_at,
-                 system_prompt, context_kind, project_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 system_prompt, context_kind, project_id,
+                 branch_advisor_dismissed)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `,
 			r.ID,
 			r.Name,
@@ -592,6 +614,7 @@ func (s *sqlStore) Create(ctx context.Context, r Record) error {
 			r.SystemPrompt,
 			r.ContextKind,
 			projectID,
+			advisorDismissed,
 		)
 		return err
 	})
@@ -600,7 +623,8 @@ func (s *sqlStore) Create(ctx context.Context, r Record) error {
 const sqlSelectSession = `
     SELECT id, name, created_at, updated_at, last_active_at,
            position, draft, scroll_position, archived_at,
-           system_prompt, context_kind, project_id, auto_titled
+           system_prompt, context_kind, project_id, auto_titled,
+           COALESCE(branch_advisor_dismissed, 0)
     FROM sessions
 `
 
@@ -661,6 +685,22 @@ func (s *sqlStore) SetProject(ctx context.Context, id string, projectID *string,
 		}
 		res, err := tx.Exec(ctx,
 			"UPDATE sessions SET project_id = ?, updated_at = ? WHERE id = ?",
+			v, now.UnixNano(), id)
+		if err != nil {
+			return err
+		}
+		return rowsAffectedOrNotFound(res)
+	})
+}
+
+func (s *sqlStore) SetBranchAdvisorDismissed(ctx context.Context, id string, dismissed bool, now time.Time) error {
+	var v int
+	if dismissed {
+		v = 1
+	}
+	return s.db.WriteTx(ctx, func(tx WriteTx) error {
+		res, err := tx.Exec(ctx,
+			"UPDATE sessions SET branch_advisor_dismissed = ?, updated_at = ? WHERE id = ?",
 			v, now.UnixNano(), id)
 		if err != nil {
 			return err
@@ -1162,13 +1202,14 @@ func synthesizeBlocks(content string) []llm.ContentBlock {
 // (single row) and Rows (current row) since both expose Scan(dest...).
 func scanRecord(sc interface{ Scan(dest ...any) error }) (Record, error) {
 	var (
-		r           Record
-		createdAt   int64
-		updatedAt   int64
-		lastActive  int64
-		archived    sql.NullInt64
-		projectID   sql.NullString
-		autoTitled  int64
+		r                Record
+		createdAt        int64
+		updatedAt        int64
+		lastActive       int64
+		archived         sql.NullInt64
+		projectID        sql.NullString
+		autoTitled       int64
+		advisorDismissed int
 	)
 	if err := sc.Scan(
 		&r.ID, &r.Name,
@@ -1177,6 +1218,7 @@ func scanRecord(sc interface{ Scan(dest ...any) error }) (Record, error) {
 		&archived,
 		&r.SystemPrompt, &r.ContextKind,
 		&projectID, &autoTitled,
+		&advisorDismissed,
 	); err != nil {
 		return Record{}, err
 	}
@@ -1192,6 +1234,7 @@ func scanRecord(sc interface{ Scan(dest ...any) error }) (Record, error) {
 		r.ProjectID = &v
 	}
 	r.AutoTitled = autoTitled != 0
+	r.BranchAdvisorDismissed = advisorDismissed != 0
 	return r, nil
 }
 

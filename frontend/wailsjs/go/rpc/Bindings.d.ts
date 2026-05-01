@@ -77,6 +77,8 @@ export function Bash_Exec(arg1:string,arg2:string):Promise<rpc.BashExecResult>;
 
 export function Branches_Abandon(arg1:string):Promise<void>;
 
+export function Branches_CommitReintegration(arg1:branches.CommitReintegrationOptions):Promise<void>;
+
 export function Branches_Create(arg1:branches.CreateBranchOptions):Promise<branches.Branch>;
 
 export function Branches_GetStatus(arg1:string):Promise<branches.BranchStatus>;
@@ -85,7 +87,11 @@ export function Branches_List(arg1:string):Promise<Array<branches.Branch>>;
 
 export function Branches_Merge(arg1:string):Promise<void>;
 
+export function Branches_ProposeReintegrationSummary(arg1:string):Promise<branches.ReintegrationProposal>;
+
 export function Branches_RecommendModel(arg1:string,arg2:string,arg3:string):Promise<branches.RecommendedModel>;
+
+export function Branches_SetAdvisorDismissed(arg1:string,arg2:boolean):Promise<void>;
 
 export function Bundle_Get(arg1:string):Promise<bundle.Bundle>;
 
