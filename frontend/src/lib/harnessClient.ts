@@ -106,6 +106,8 @@ import type {
   BranchRecommendedModel,
   ReintegrationProposal,
   ReintegrationCommitOptions,
+  BranchReintegrationProposal,
+  BranchReintegrationCommitOpts,
   MCPImportRequest,
   MCPImportResponse,
   MCPImportEntry,
@@ -453,6 +455,13 @@ interface WailsBindingsLike {
   Permissions_ListGrants(family: string): Promise<PermissionGrant[]>;
   Permissions_RevokeGrant(id: string): Promise<void>;
   Permissions_Resolve(requestID: string, decision: string): Promise<void>;
+  // WP06 — reintegration propose + commit.
+  Branches_ProposeReintegrationSummary(
+    branchSessionID: string,
+  ): Promise<BranchReintegrationProposal>;
+  Branches_CommitReintegration(
+    opts: BranchReintegrationCommitOpts,
+  ): Promise<void>;
 }
 
 /**
