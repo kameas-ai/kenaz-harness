@@ -12,6 +12,7 @@ import (
 	branchesview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/branches"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/bundle"
 	cedarpolicyview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/cedarpolicy"
+	searchview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/search"
 	compactionview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/compaction"
 	contextsview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/contexts"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/contextview"
@@ -65,6 +66,7 @@ type fakeHarnessAPI struct {
 	permissionsAPI  permissionsview.PermissionsAPI
 	dialsAPI        dialsview.DialsAPI
 	nodesAPI        nodesview.NodesAPI
+	searchAPI       searchview.SearchAPI
 }
 
 func (f *fakeHarnessAPI) ShellStatus(_ context.Context) (ShellStatus, error) {
@@ -100,6 +102,7 @@ func (f *fakeHarnessAPI) CedarPolicy() cedarpolicyview.CedarPolicyAPI  { return 
 func (f *fakeHarnessAPI) Permissions() permissionsview.PermissionsAPI  { return f.permissionsAPI }
 func (f *fakeHarnessAPI) Dials() dialsview.DialsAPI                    { return f.dialsAPI }
 func (f *fakeHarnessAPI) Nodes() nodesview.NodesAPI                    { return f.nodesAPI }
+func (f *fakeHarnessAPI) Search() searchview.SearchAPI                 { return f.searchAPI }
 
 // Compile-time interface witness (plan §4.2).
 var _ HarnessAPI = (*fakeHarnessAPI)(nil)

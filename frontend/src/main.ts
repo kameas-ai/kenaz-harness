@@ -103,6 +103,15 @@ const router = createRouter({
       name: 'graph-run',
       component: () => import('@/views/agentgraph/RunView.vue'),
     },
+    {
+      // /search opens the sessions view with the search modal overlay.
+      // The modal is rendered by Shell.vue and triggered by the
+      // route-change guard below; this route makes the sidebar link work
+      // and keeps the URL bookmarkable.
+      path: '/search',
+      name: 'search',
+      component: () => import('@/views/sessions/SessionsView.vue'),
+    },
   ],
 });
 

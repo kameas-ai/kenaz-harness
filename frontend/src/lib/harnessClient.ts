@@ -427,6 +427,12 @@ interface WailsBindingsLike {
     taskHint: string,
     preference: string,
   ): Promise<BranchRecommendedModel>;
+
+  // Search view (cross-session-search mission).
+  Search_Sessions(
+    query: string,
+    filters: SearchFilters,
+  ): Promise<SearchHit[]>;
 }
 
 /**
@@ -1447,22 +1453,51 @@ export interface BranchesClient {
 /**
  * CedarPolicyClient — view-scoped surface for writing and revoking
  * Cedar policy snippets on disk (mission cedar-credential-policy-01KQ8TDE,
- * WP09). Backs the per-family allow/deny quick-write affordance in the
- * Policy panel. Pure-additive: existing ListPolicies / ReloadPolicies /
- * RecentDecisions are wired through the older Policy view (policy.PolicyAPI).
- *
- *   - `writeSnippet(name, body)` writes `<DataDir>/policy/<name>` atomically
- *     and triggers an engine reload. name must match
- *     `^[a-z][a-z0-9_]{0,127}\.cedar$` — the backend rejects anything
- *     else with a typed error.
- *   - `revokeSnippet(name)` deletes the file (no-op when absent) and
- *     triggers an engine reload.
+ * WP09).
  */
 export interface CedarPolicyClient {
-  /** Write a Cedar snippet file. Filename must match the backend safety regex. */
   writeSnippet(name: string, body: string): Promise<void>;
-  /** Delete a Cedar snippet file. No-op when the file does not exist. */
   revokeSnippet(name: string): Promise<void>;
+}
+
+// ── Search types (cross-session-search mission) ───────────────────────
+
+/**
+ * SearchFilters — optional predicates for a Search_Sessions call.
+ * Zero values mean "no filter". Limit defaults to 50 server-side when 0.
+ */
+export interface SearchFilters {
+  projectId?: string;
+  sessionId?: string;
+  roleFilter?: string;
+  limit?: number;
+}
+
+/** A byte-offset range [start, end) within a SearchHit.snippet string. */
+export interface SearchHighlight {
+  start: number;
+  end: number;
+}
+
+/**
+ * SearchHit — a single full-text match returned by Search_Sessions.
+ */
+export interface SearchHit {
+  sessionId: string;
+  sessionName: string;
+  messageId: string;
+  role: string;
+  snippet: string;
+  highlights: SearchHighlight[];
+  createdAt: string;
+  projectId?: string;
+}
+
+/**
+ * SearchClient — full-text search across all session messages.
+ */
+export interface SearchClient {
+  sessions(query: string, filters?: SearchFilters): Promise<SearchHit[]>;
 }
 
 export interface HarnessClient {
@@ -1497,6 +1532,7 @@ export interface HarnessClient {
   dials: DialsClient;
   nodes: NodesClient;
   cedarPolicy: CedarPolicyClient;
+  search: SearchClient;
 }
 
 // ── runtime client ─────────────────────────────────────────────────────
@@ -1818,6 +1854,10 @@ export function createHarnessClient(): HarnessClient {
     cedarPolicy: {
       writeSnippet: (name, body) => b().CedarPolicy_WriteSnippet(name, body),
       revokeSnippet: (name) => b().CedarPolicy_RevokeSnippet(name),
+    },
+    search: {
+      sessions: (query, filters) =>
+        b().Search_Sessions(query, filters ?? {}),
     },
   };
 }
@@ -2465,6 +2505,9 @@ export function createFakeHarnessClient(
     cedarPolicy: {
       writeSnippet: noop,
       revokeSnippet: noop,
+    },
+    search: {
+      sessions: async () => [],
     },
   };
 

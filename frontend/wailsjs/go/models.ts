@@ -3083,6 +3083,87 @@ export namespace rpc {
 
 }
 
+export namespace search {
+	
+	export class Highlight {
+	    start: number;
+	    end: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new Highlight(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.start = source["start"];
+	        this.end = source["end"];
+	    }
+	}
+	export class SearchFilters {
+	    projectId?: string;
+	    sessionId?: string;
+	    roleFilter?: string;
+	    limit?: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new SearchFilters(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.projectId = source["projectId"];
+	        this.sessionId = source["sessionId"];
+	        this.roleFilter = source["roleFilter"];
+	        this.limit = source["limit"];
+	    }
+	}
+	export class SearchHit {
+	    sessionId: string;
+	    sessionName: string;
+	    messageId: string;
+	    role: string;
+	    snippet: string;
+	    highlights: Highlight[];
+	    createdAt: string;
+	    projectId?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new SearchHit(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.sessionId = source["sessionId"];
+	        this.sessionName = source["sessionName"];
+	        this.messageId = source["messageId"];
+	        this.role = source["role"];
+	        this.snippet = source["snippet"];
+	        this.highlights = this.convertValues(source["highlights"], Highlight);
+	        this.createdAt = source["createdAt"];
+	        this.projectId = source["projectId"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+
+}
+
 export namespace sessions {
 	
 	export class DeleteOptions {

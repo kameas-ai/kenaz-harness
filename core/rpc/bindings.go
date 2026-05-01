@@ -28,6 +28,7 @@ import (
 	permissionsview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/permissions"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/policy"
 	projectsview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/projects"
+	searchview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/search"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/sessions"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/settings"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/shell"
@@ -1109,4 +1110,15 @@ func (b *Bindings) CedarPolicy_WriteSnippet(name string, body string) error {
 // validating the filename. Triggers engine reload best-effort.
 func (b *Bindings) CedarPolicy_RevokeSnippet(name string) error {
 	return b.api.CedarPolicy().RevokePolicySnippet(b.ctx(), name)
+}
+
+// ── search (cross-session-search mission) ─────────────────────────────
+
+// Search_Sessions executes a full-text search across all session
+// messages via the FTS5 messages_fts virtual table.
+//
+// query is sanitised (empty/whitespace → empty result). filters is
+// optional; zero values mean "no filter".
+func (b *Bindings) Search_Sessions(query string, filters searchview.SearchFilters) ([]searchview.SearchHit, error) {
+	return b.api.Search().Search(b.ctx(), query, filters)
 }

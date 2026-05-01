@@ -23,6 +23,7 @@ import {nodes} from '../models';
 import {permissions} from '../models';
 import {policy} from '../models';
 import {projects} from '../models';
+import {search} from '../models';
 import {sessions} from '../models';
 import {context} from '../models';
 import {settings} from '../models';
@@ -295,6 +296,8 @@ export function Projects_UpdateDescription(arg1:string,arg2:string):Promise<void
 export function SaveRoute(arg1:string):Promise<void>;
 
 export function SaveTheme(arg1:string):Promise<void>;
+
+export function Search_Sessions(arg1:string,arg2:search.SearchFilters):Promise<Array<search.SearchHit>>;
 
 export function Sessions_AppendMessage(arg1:string,arg2:string,arg3:string):Promise<sessions.Message>;
 

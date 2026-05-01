@@ -530,6 +530,10 @@ export function SaveTheme(arg1) {
   return window['go']['rpc']['Bindings']['SaveTheme'](arg1);
 }
 
+export function Search_Sessions(arg1, arg2) {
+  return window['go']['rpc']['Bindings']['Search_Sessions'](arg1, arg2);
+}
+
 export function Sessions_AppendMessage(arg1, arg2, arg3) {
   return window['go']['rpc']['Bindings']['Sessions_AppendMessage'](arg1, arg2, arg3);
 }

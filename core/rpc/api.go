@@ -63,6 +63,7 @@ import (
 	permissionsview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/permissions"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/policy"
 	projectsview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/projects"
+	searchview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/search"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/sessions"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/settings"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/shell"
@@ -133,6 +134,7 @@ type HarnessAPI interface {
 	Permissions() permissionsview.PermissionsAPI
 	Dials() dialsview.DialsAPI
 	Nodes() nodesview.NodesAPI
+	Search() searchview.SearchAPI
 }
 
 // ShellStatus drives the Toolbar status pills + LegendBar live-rate
@@ -230,6 +232,7 @@ type API struct {
 	// re-plumbing through api.New.
 	promptRegistry *cedar.Registry
 	dialsAPI        dialsview.DialsAPI
+	searchAPI       searchview.SearchAPI
 
 	// Node manifest catalog (mission agent-kernel-graph-node-catalog;
 	// WP07). The manager owns the resolved catalog + user-override
@@ -2659,6 +2662,38 @@ func (a *API) Compaction() compactionview.CompactionAPI {
 // pass a fake.
 func (a *API) SetCompactionAPI(c compactionview.CompactionAPI) {
 	a.compactionAPI = c
+}
+
+// Search returns the full-text search view (cross-session-search
+// mission). Uses the raw *sql.DB handle from the storage backend to
+// query the messages_fts FTS5 virtual table directly.
+func (a *API) Search() searchview.SearchAPI {
+	if a.searchAPI != nil {
+		return a.searchAPI
+	}
+	// Wire lazily on first call using the structural SQL() interface
+	// (same dance as buildJournalWriter at the bottom of this file).
+	if a.core != nil {
+		store := a.core.Storage()
+		if store != nil {
+			type sqlHandle interface{ SQL() *sql.DB }
+			if h, ok := store.(sqlHandle); ok {
+				if rawDB := h.SQL(); rawDB != nil {
+					a.searchAPI = searchview.NewManagerAPI(rawDB)
+					return a.searchAPI
+				}
+			}
+		}
+	}
+	// Fallback: return a nil-safe stub that returns empty results.
+	return &stubSearch{}
+}
+
+// stubSearch is a safe no-op SearchAPI for use before storage is wired.
+type stubSearch struct{}
+
+func (s *stubSearch) Search(_ context.Context, _ string, _ searchview.SearchFilters) ([]searchview.SearchHit, error) {
+	return nil, nil
 }
 
 // Bindings returns the slice of Wails-bound objects. The Bindings struct
