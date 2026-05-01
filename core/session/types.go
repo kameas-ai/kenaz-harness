@@ -37,6 +37,13 @@ type Record struct {
 	// (no project). The pointer matches the SQL column's nullability so
 	// readers can distinguish "no project" from "project with empty id".
 	ProjectID *string
+
+	// BranchAdvisorDismissed is set when the user clicks "Don't suggest
+	// again" in the branch-advisor banner (FR-010). When true, the
+	// backend skips running the detector for this session regardless of
+	// the project-level setting (resolution order step 4). Persisted
+	// in the sessions table via migration 0311.
+	BranchAdvisorDismissed bool
 }
 
 // ContextKind values for Record.ContextKind. Validated at the manager

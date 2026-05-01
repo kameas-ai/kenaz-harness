@@ -38,6 +38,32 @@ const (
 	KindSessionCompacted          Kind = "compaction.session_compacted"
 	KindCompactionFailed          Kind = "compaction.failed"
 	KindCompactedOriginalsDeleted Kind = "compaction.originals_deleted"
+
+	// Branch Advisor kinds (branch-as-subagent-recommendation WP08).
+	// Four lifecycle events cover the suggestion → accept/dismiss →
+	// commit flow so the operator can compute advisor accuracy and
+	// dismissal rate.
+
+	// KindBranchAdvisorSuggested fires when Detect returns a non-nil
+	// BranchSuggestion and the resolution logic (env flag, project
+	// override, session dismiss) passes. Payload:
+	// BranchAdvisorSuggestedPayload.
+	KindBranchAdvisorSuggested Kind = "branch_advisor.suggested"
+
+	// KindBranchAdvisorAccepted fires when the user submits the
+	// context-pick modal and a subagent branch session is created.
+	// Payload: BranchAdvisorAcceptedPayload.
+	KindBranchAdvisorAccepted Kind = "branch_advisor.accepted"
+
+	// KindBranchAdvisorDismissed fires when the user clicks "No thanks",
+	// "Don't suggest again", or when the project-level override is
+	// "always_off". Payload: BranchAdvisorDismissedPayload.
+	KindBranchAdvisorDismissed Kind = "branch_advisor.dismissed"
+
+	// KindBranchReintegrated fires when CommitReintegration appends the
+	// synthetic system message to the parent session. Payload:
+	// BranchReintegratedPayload.
+	KindBranchReintegrated Kind = "branch_advisor.reintegrated"
 )
 
 // Event is the wire shape passed to the event log. The concrete event-log
@@ -163,6 +189,43 @@ type CompactedOriginalsDeletedPayload struct {
 	DeletedCount     int       `json:"deleted_count"`
 	OldestArchivedAt time.Time `json:"oldest_archived_at"`
 	NewestArchivedAt time.Time `json:"newest_archived_at"`
+}
+
+// BranchAdvisorSuggestedPayload carries signalling for
+// KindBranchAdvisorSuggested (branch-as-subagent-recommendation WP08).
+type BranchAdvisorSuggestedPayload struct {
+	Confidence       float64  `json:"confidence"`
+	Signals          []string `json:"signals"`
+	MessageID        string   `json:"message_id"`
+	SessionID        string   `json:"session_id"`
+	RecommendationID string   `json:"recommendation_id"`
+}
+
+// BranchAdvisorAcceptedPayload carries signalling for
+// KindBranchAdvisorAccepted.
+type BranchAdvisorAcceptedPayload struct {
+	Confidence       float64 `json:"confidence"`
+	BranchSessionID  string  `json:"branch_session_id"`
+	RecommendationID string  `json:"recommendation_id"`
+}
+
+// BranchAdvisorDismissedPayload carries signalling for
+// KindBranchAdvisorDismissed. Scope is "message" | "session" |
+// "project"; Reason is "no_thanks" | "dont_suggest_again" |
+// "project_off".
+type BranchAdvisorDismissedPayload struct {
+	Scope            string `json:"scope"`
+	Reason           string `json:"reason"`
+	RecommendationID string `json:"recommendation_id,omitempty"`
+}
+
+// BranchReintegratedPayload carries signalling for
+// KindBranchReintegrated.
+type BranchReintegratedPayload struct {
+	ParentSessionID   string `json:"parent_session_id"`
+	BranchSessionID   string `json:"branch_session_id"`
+	SummaryTokenCount int    `json:"summary_token_count"`
+	WasEdited         bool   `json:"was_edited"`
 }
 
 // Marshal is a small convenience wrapper that builds an [Event] for any

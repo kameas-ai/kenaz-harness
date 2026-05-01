@@ -103,6 +103,8 @@ import type {
   BranchCreateOptions,
   BranchStatusInfo,
   BranchRecommendedModel,
+  ReintegrationProposal,
+  ReintegrationCommitOptions,
   MCPImportRequest,
   MCPImportResponse,
   MCPImportEntry,
@@ -405,6 +407,17 @@ interface WailsBindingsLike {
     taskHint: string,
     preference: string,
   ): Promise<BranchRecommendedModel>;
+  // Branch-advisor RPC (branch-as-subagent-recommendation WP05/WP07).
+  Branches_ProposeReintegrationSummary(
+    branchSessionID: string,
+  ): Promise<ReintegrationProposal>;
+  Branches_CommitReintegration(
+    opts: ReintegrationCommitOptions,
+  ): Promise<void>;
+  Branches_SetAdvisorDismissed(
+    sessionID: string,
+    dismissed: boolean,
+  ): Promise<void>;
 }
 
 /**
@@ -1316,6 +1329,12 @@ export interface BranchesClient {
     taskHint: string,
     preference: string,
   ): Promise<BranchRecommendedModel>;
+  /** Propose a reintegration summary for a subagent branch (WP05/WP06). */
+  proposeReintegrationSummary(branchSessionID: string): Promise<ReintegrationProposal>;
+  /** Commit the reintegration — inserts summary into parent (WP07). */
+  commitReintegration(opts: ReintegrationCommitOptions): Promise<void>;
+  /** Persist per-session branch-advisor dismiss flag (WP02). */
+  setAdvisorDismissed(sessionID: string, dismissed: boolean): Promise<void>;
 }
 
 export interface HarnessClient {
@@ -1628,6 +1647,12 @@ export function createHarnessClient(): HarnessClient {
       abandon: (branchID) => b().Branches_Abandon(branchID),
       recommendModel: (parentSessionID, taskHint, preference) =>
         b().Branches_RecommendModel(parentSessionID, taskHint, preference),
+      proposeReintegrationSummary: (branchSessionID) =>
+        b().Branches_ProposeReintegrationSummary(branchSessionID),
+      commitReintegration: (opts) =>
+        b().Branches_CommitReintegration(opts),
+      setAdvisorDismissed: (sessionID, dismissed) =>
+        b().Branches_SetAdvisorDismissed(sessionID, dismissed),
     },
     nodes: {
       catalog: () => b().Nodes_Catalog(),
