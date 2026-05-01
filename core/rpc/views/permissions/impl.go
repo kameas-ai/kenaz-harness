@@ -224,6 +224,14 @@ func (a *API) RevokeGrant(ctx context.Context, grantID string) error {
 		if !strings.HasPrefix(clean, expectedDir+string(filepath.Separator)) && clean != expectedDir {
 			return ErrInvalidGrantID
 		}
+		// Read the snippet body BEFORE deleting so we can recover the
+		// canonical path when trimming the recipe config afterward.
+		// Ignore read errors: if the file is unreadable we just cannot
+		// trim, which is best-effort anyway.
+		var snippetBody []byte
+		if familyFromFilename(grantID) == string(cedar.FamilyFilesystem) {
+			snippetBody, _ = os.ReadFile(clean) // #nosec G304 — path is verified above
+		}
 		if err := os.Remove(clean); err != nil {
 			return err
 		}
@@ -243,8 +251,8 @@ func (a *API) RevokeGrant(ctx context.Context, grantID string) error {
 		// MCP server stops serving that directory on the next restart.
 		// Best-effort: failure is logged inside the trimmer; the Cedar-
 		// level revocation always takes effect regardless.
-		if familyFromFilename(grantID) == string(cedar.FamilyFilesystem) {
-			a.trimFSGrantFromRecipeConfig(ctx, grantID)
+		if len(snippetBody) > 0 {
+			a.trimFSGrantFromRecipeConfig(ctx, grantID, snippetBody)
 		}
 		return nil
 	}
@@ -339,28 +347,18 @@ func familyFromResourceKey(k string) string {
 // "fs_allow_recipe_dir_" snippets have corresponding recipe-config
 // entries; other fs grants are skipped.
 //
-// The canonical path is recovered from the Cedar snippet body, which
-// is read from disk BEFORE the file was deleted (it was deleted in the
-// caller). If the file is already gone we bail out silently.
+// body is the Cedar snippet content, which must be read by the caller
+// BEFORE os.Remove so the path information is still available.
 //
 // Best-effort: failures are logged; the Cedar-level revocation is not
 // affected.
-func (a *API) trimFSGrantFromRecipeConfig(ctx context.Context, grantFilename string) {
-	if a.configTrimmer == nil || a.dataDir == "" {
+func (a *API) trimFSGrantFromRecipeConfig(ctx context.Context, grantFilename string, body []byte) {
+	if a.configTrimmer == nil {
 		return
 	}
 	// Only "recipe_dir_add" snippets affect the recipe config.
 	if !strings.HasPrefix(strings.ToLower(grantFilename), "fs_allow_recipe_dir_") {
 		return
-	}
-
-	// The snippet was deleted just before this call; read via policyPath.
-	// If the file is gone (expected after os.Remove) we cannot recover
-	// the path — skip silently.
-	policyPath := filepath.Join(a.dataDir, cedar.PolicyDir, grantFilename)
-	body, err := os.ReadFile(policyPath) // #nosec G304 — dataDir is harness-owned
-	if err != nil {
-		return // file already gone; nothing to trim
 	}
 
 	canonical := extractFilesystemOpPath(string(body))
