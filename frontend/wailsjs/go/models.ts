@@ -3500,6 +3500,7 @@ export namespace settings {
 	    keyboardShortcuts?: Record<string, string>;
 	    keyboardShortcutsPreset?: string;
 	    fsRequestAccessDisabled?: boolean;
+	    autonomy?: number[];
 	
 	    static createFrom(source: any = {}) {
 	        return new Settings(source);
@@ -3541,6 +3542,7 @@ export namespace settings {
 	        this.keyboardShortcuts = source["keyboardShortcuts"];
 	        this.keyboardShortcutsPreset = source["keyboardShortcutsPreset"];
 	        this.fsRequestAccessDisabled = source["fsRequestAccessDisabled"];
+	        this.autonomy = source["autonomy"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {

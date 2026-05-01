@@ -34,6 +34,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime/types"
 	"github.com/sigil-tech/kaneaz-harness/core/llm"
 	"github.com/sigil-tech/kaneaz-harness/core/llm/capabilities"
+	"github.com/sigil-tech/kaneaz-harness/core/llm/httpx"
 )
 
 // imageFormatFromMediaType maps an IANA mime-type to the Bedrock
@@ -131,9 +132,15 @@ type Adapter struct {
 }
 
 // New constructs an Adapter with default settings.
+//
+// The default *http.Client is built with the shared keepalive
+// transport from core/llm/httpx so long-lived bearer-auth Converse
+// streams survive edge-proxy idle timeouts. WithHTTPClient still
+// wins for tests/custom gateways.
 func New(opts ...Option) *Adapter {
 	a := &Adapter{
 		listModelsRegion: "us-east-1",
+		httpc:            &http.Client{Transport: httpx.DefaultTransport()}, // no Timeout — context drives lifetime
 	}
 	if cat, err := capabilities.LoadDefault(); err == nil {
 		a.cat = cat
