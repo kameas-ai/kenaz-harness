@@ -30,6 +30,13 @@ const (
 	KindError               Kind = "event-log.error"
 	KindTimeout             Kind = "event-log.timeout"
 	KindDatabaseOpened      Kind = "event-log.database.opened"
+
+	// KindShortcutOverridden is emitted on every successful keyboard
+	// shortcut binding write (set or reset). Payload JSON:
+	//   {"shortcut_id":"chat.send","default_binding":"Cmd+Enter","new_binding":"Cmd+Shift+Enter"}
+	// Reset emits new_binding: "".
+	// (keyboard-shortcuts-settings-01KQ8TDR plan §2.9)
+	KindShortcutOverridden Kind = "settings.shortcut.overridden"
 )
 
 var builtIn = []Kind{
@@ -37,6 +44,7 @@ var builtIn = []Kind{
 	KindSessionBranched, KindRawReplayOpened, KindRedactionSupersede,
 	KindChainRebased, KindCancellation, KindError, KindTimeout,
 	KindDatabaseOpened,
+	KindShortcutOverridden,
 }
 
 var (

@@ -106,6 +106,20 @@ type Settings struct {
 	// default §2.6). Negative is rejected at Save; zero rounds up to the
 	// default via the EffectiveCompactionRecentWindow accessor.
 	CompactionRecentWindow int `json:"compactionRecentWindow,omitempty"`
+
+	// KeyboardShortcuts holds user-overridden shortcut bindings keyed by
+	// stable shortcut id (e.g. "chat.send" → "Cmd+Shift+Enter"). An
+	// absent/empty map means all shortcuts use their registry defaults.
+	// Backend validates: ≤200 entries, ≤64 chars/value, no control chars.
+	// omitempty: old clients that don't know about this field simply read
+	// an empty map and use registry defaults — no migration needed.
+	// (keyboard-shortcuts-settings-01KQ8TDR plan §2.7 / C-004)
+	KeyboardShortcuts map[string]string `json:"keyboardShortcuts,omitempty"`
+
+	// KeyboardShortcutsPreset is reserved for a future preset-gallery
+	// follow-up mission. v1 always persists as empty string; old clients
+	// ignore the field. (keyboard-shortcuts-settings-01KQ8TDR plan Q1=C)
+	KeyboardShortcutsPreset string `json:"keyboardShortcutsPreset,omitempty"`
 }
 
 // ProviderProfileRef is the wire shape that identifies a provider+model
@@ -308,4 +322,18 @@ type SettingsStore interface {
 type SettingsAPI interface {
 	Get(ctx context.Context) (Settings, error)
 	Set(ctx context.Context, s Settings) error
+}
+
+// ShortcutsStore is the persistence interface for keyboard shortcut
+// overrides. LoadShortcuts / SaveShortcuts are thin field-level accessors
+// so callers can read/write just the shortcuts map without a full
+// settings round-trip. Validation (validateShortcuts) still runs on every
+// SaveShortcuts call via SaveAll under the hood.
+// (keyboard-shortcuts-settings-01KQ8TDR plan §2.7)
+type ShortcutsStore interface {
+	// LoadShortcuts returns the current KeyboardShortcuts map.
+	// Missing settings file → empty map (no error).
+	LoadShortcuts() (map[string]string, error)
+	// SaveShortcuts atomically replaces the full KeyboardShortcuts map.
+	SaveShortcuts(m map[string]string) error
 }

@@ -275,6 +275,12 @@ interface WailsBindingsLike {
   Settings_SetSaveArtifactEnabled(enabled: boolean): Promise<void>;
   Settings_GetMaxAgentTurns(): Promise<number>;
   Settings_SetMaxAgentTurns(turns: number): Promise<void>;
+  /** Returns the full keyboard shortcut overrides map. */
+  Settings_GetShortcuts(): Promise<Record<string, string>>;
+  /** Persist a single shortcut override. Empty binding clears the override. */
+  Settings_SetShortcut(id: string, binding: string): Promise<void>;
+  /** Atomically replace the full shortcut overrides map. */
+  Settings_SetShortcuts(m: Record<string, string>): Promise<void>;
 
   Memory_ListChunks(filter: MemoryListFilter): Promise<MemoryChunk[]>;
   Memory_RememberMessage(
@@ -1022,6 +1028,22 @@ export interface SettingsClient {
    * to zero by the store.
    */
   setMaxAgentTurns(turns: number): Promise<void>;
+  /**
+   * Read the full keyboard shortcut overrides map. Empty map means all
+   * shortcuts use registry defaults.
+   * (keyboard-shortcuts-settings-01KQ8TDR plan §2.7)
+   */
+  getShortcuts(): Promise<Record<string, string>>;
+  /**
+   * Persist a single shortcut override. An empty binding value clears
+   * the override (resets to registry default).
+   */
+  setShortcut(id: string, binding: string): Promise<void>;
+  /**
+   * Atomically replace the full shortcut overrides map. Used for
+   * reset-all and batch-save flows.
+   */
+  setShortcuts(m: Record<string, string>): Promise<void>;
 }
 
 /**
@@ -1531,6 +1553,9 @@ export function createHarnessClient(): HarnessClient {
       setSaveArtifact: (enabled) => b().Settings_SetSaveArtifactEnabled(enabled),
       getMaxAgentTurns: () => b().Settings_GetMaxAgentTurns(),
       setMaxAgentTurns: (turns) => b().Settings_SetMaxAgentTurns(turns),
+      getShortcuts: () => b().Settings_GetShortcuts(),
+      setShortcut: (id, binding) => b().Settings_SetShortcut(id, binding),
+      setShortcuts: (m) => b().Settings_SetShortcuts(m),
     },
     memory: {
       listChunks: (filter) => b().Memory_ListChunks(filter ?? {}),
@@ -1903,6 +1928,9 @@ export function createFakeHarnessClient(
       setSaveArtifact: noop,
       getMaxAgentTurns: async () => 0,
       setMaxAgentTurns: noop,
+      getShortcuts: async () => ({}),
+      setShortcut: noop,
+      setShortcuts: noop,
     },
     memory: {
       listChunks: async () => [],
