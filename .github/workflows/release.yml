@@ -124,6 +124,112 @@ jobs:
             -trimpath \
             -tags ${{ runner.os == 'Linux' && 'webkit2_41' || '' }}
 
+      # ── macOS rename + code signing + notarization ──────────────────────
+      # Wails names the .app bundle from wails.json `name` (kenaz-harness),
+      # ignoring info.productName for the directory name. Rename to "Kenaz.app"
+      # so the user-visible artifact matches CFBundleName.
+      - name: rename .app bundle to Kenaz.app (macos only)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -d "build/bin/kenaz-harness.app" ] && [ ! -d "build/bin/Kenaz.app" ]; then
+            mv "build/bin/kenaz-harness.app" "build/bin/Kenaz.app"
+          fi
+          test -d "build/bin/Kenaz.app" || { echo "::error::expected build/bin/Kenaz.app"; ls -la build/bin; exit 1; }
+
+      # Org-level secret APPLE_CERT_P12 is the base64 of a Developer ID
+      # Application .p12 export. Imported into a temp keychain that's
+      # destroyed when the runner cleans up; nothing persists.
+      # Skips silently when the org secret isn't visible to this repo,
+      # so future repos that opt out of signing still build.
+      - name: import Apple signing certificate (macos only)
+        if: runner.os == 'macOS' && env.APPLE_CERT_P12 != ''
+        env:
+          APPLE_CERT_P12: ${{ secrets.APPLE_CERT_P12 }}
+          APPLE_CERT_P12_PASSWORD: ${{ secrets.APPLE_CERT_P12_PASSWORD }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          KEYCHAIN_PATH="$RUNNER_TEMP/build.keychain-db"
+          KEYCHAIN_PASSWORD=$(uuidgen)
+          CERT_PATH="$RUNNER_TEMP/cert.p12"
+
+          echo "$APPLE_CERT_P12" | base64 -d > "$CERT_PATH"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security import "$CERT_PATH" -P "$APPLE_CERT_P12_PASSWORD" \
+            -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH" >/dev/null
+          security list-keychains -d user -s "$KEYCHAIN_PATH" \
+            $(security list-keychains -d user | tr -d '"')
+
+          echo "KEYCHAIN_PATH=$KEYCHAIN_PATH" >> "$GITHUB_ENV"
+          echo "::add-mask::$KEYCHAIN_PASSWORD"
+
+          security find-identity -v -p codesigning "$KEYCHAIN_PATH"
+
+      - name: codesign Kenaz.app (macos only)
+        if: runner.os == 'macOS' && env.APPLE_CERT_P12 != ''
+        env:
+          APPLE_CERT_P12: ${{ secrets.APPLE_CERT_P12 }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # --deep covers the embedded Chromium framework + helpers.
+          # --options runtime enables Hardened Runtime (required for notarization).
+          # --timestamp embeds an Apple-trusted RFC 3161 timestamp.
+          codesign --force --deep --options runtime --timestamp \
+            --entitlements build/darwin/entitlements.plist \
+            --sign "Developer ID Application: Kameas AI, Inc. (K54JDRHBA7)" \
+            build/bin/Kenaz.app
+          codesign --verify --deep --strict --verbose=2 build/bin/Kenaz.app
+          codesign -dv --verbose=4 build/bin/Kenaz.app
+
+      - name: notarize Kenaz.app (macos only)
+        if: runner.os == 'macOS' && env.APPLE_API_KEY_P8 != ''
+        env:
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          ZIP_PATH="$RUNNER_TEMP/Kenaz-notarize.zip"
+          P8_PATH="$RUNNER_TEMP/AuthKey_${APPLE_API_KEY_ID}.p8"
+          echo "$APPLE_API_KEY_P8" > "$P8_PATH"
+          chmod 600 "$P8_PATH"
+
+          ditto -c -k --sequesterRsrc --keepParent build/bin/Kenaz.app "$ZIP_PATH"
+          xcrun notarytool submit "$ZIP_PATH" \
+            --key "$P8_PATH" --key-id "$APPLE_API_KEY_ID" --issuer "$APPLE_API_ISSUER_ID" \
+            --wait --timeout 30m
+
+          xcrun stapler staple build/bin/Kenaz.app
+          # Final acceptance check — should print "accepted source=Notarized Developer ID"
+          spctl -a -vv build/bin/Kenaz.app
+          rm -f "$P8_PATH"
+
+      - name: cleanup keychain (macos, always)
+        if: runner.os == 'macOS' && always()
+        shell: bash
+        run: |
+          if [ -n "${KEYCHAIN_PATH:-}" ] && [ -f "$KEYCHAIN_PATH" ]; then
+            security delete-keychain "$KEYCHAIN_PATH" || true
+          fi
+
+      - name: macos signing skipped notice
+        if: runner.os == 'macOS' && env.APPLE_CERT_P12 == ''
+        env:
+          APPLE_CERT_P12: ${{ secrets.APPLE_CERT_P12 }}
+        shell: bash
+        run: |
+          echo "::notice::macOS binary not signed — APPLE_CERT_P12 org secret not visible to this repo."
+          echo "Add this repo to the kameas-ai org's APPLE_CERT_P12 + APPLE_CERT_P12_PASSWORD +"
+          echo "APPLE_API_KEY_P8 + APPLE_API_KEY_ID + APPLE_API_ISSUER_ID secrets to enable."
+
       # ── Windows code signing (Microsoft Artifact Signing / Trusted Signing) ──
       # Skips silently when AZURE_CLIENT_ID is not set, so the workflow
       # works pre-enrollment. Once identity validation completes and the
