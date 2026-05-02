@@ -100,6 +100,16 @@ jobs:
     permissions:
       contents: read
       id-token: write   # required for Azure OIDC federation on Windows signing
+    # Lift the gating-only secrets to job-level env so step `if:`
+    # expressions can read them. GitHub evaluates step `if:` *before*
+    # the step's own `env:` block is materialized, so per-step
+    # `env: APPLE_CERT_P12: ${{ secrets... }}` is invisible to its
+    # own `if: env.APPLE_CERT_P12 != ''`. Only checking presence here;
+    # the secret value still flows into `secrets.*` references that
+    # need it.
+    env:
+      APPLE_CERT_P12_PRESENT: ${{ secrets.APPLE_CERT_P12 != '' }}
+      AZURE_CLIENT_ID_PRESENT: ${{ secrets.AZURE_CLIENT_ID != '' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -171,7 +181,7 @@ jobs:
       # Skips silently when the org secret isn't visible to this repo,
       # so future repos that opt out of signing still build.
       - name: import Apple signing certificate (macos only)
-        if: runner.os == 'macOS' && env.APPLE_CERT_P12 != ''
+        if: runner.os == 'macOS' && env.APPLE_CERT_P12_PRESENT == 'true'
         env:
           APPLE_CERT_P12: ${{ secrets.APPLE_CERT_P12 }}
           APPLE_CERT_P12_PASSWORD: ${{ secrets.APPLE_CERT_P12_PASSWORD }}
@@ -199,7 +209,7 @@ jobs:
           security find-identity -v -p codesigning "$KEYCHAIN_PATH"
 
       - name: codesign Kenaz.app (macos only)
-        if: runner.os == 'macOS' && env.APPLE_CERT_P12 != ''
+        if: runner.os == 'macOS' && env.APPLE_CERT_P12_PRESENT == 'true'
         env:
           APPLE_CERT_P12: ${{ secrets.APPLE_CERT_P12 }}
         shell: bash
@@ -216,7 +226,7 @@ jobs:
           codesign -dv --verbose=4 build/bin/Kenaz.app
 
       - name: notarize Kenaz.app (macos only)
-        if: runner.os == 'macOS' && env.APPLE_API_KEY_P8 != ''
+        if: runner.os == 'macOS' && env.APPLE_CERT_P12_PRESENT == 'true'
         env:
           APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
           APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
@@ -248,7 +258,7 @@ jobs:
           fi
 
       - name: macos signing skipped notice
-        if: runner.os == 'macOS' && env.APPLE_CERT_P12 == ''
+        if: runner.os == 'macOS' && env.APPLE_CERT_P12_PRESENT != 'true'
         env:
           APPLE_CERT_P12: ${{ secrets.APPLE_CERT_P12 }}
         shell: bash
@@ -263,7 +273,7 @@ jobs:
       # five AZURE_* secrets are populated, this step signs every .exe
       # in build/bin via Azure-hosted HSM (no local cert).
       - name: azure login (OIDC) — windows only
-        if: runner.os == 'Windows' && env.AZURE_CLIENT_ID != ''
+        if: runner.os == 'Windows' && env.AZURE_CLIENT_ID_PRESENT == 'true'
         uses: azure/login@v2
         env:
           AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
@@ -273,7 +283,7 @@ jobs:
           allow-no-subscriptions: true
 
       - name: artifact signing (windows .exe)
-        if: runner.os == 'Windows' && env.AZURE_CLIENT_ID != ''
+        if: runner.os == 'Windows' && env.AZURE_CLIENT_ID_PRESENT == 'true'
         uses: azure/trusted-signing-action@v0.5.1
         env:
           AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
@@ -288,7 +298,7 @@ jobs:
           timestamp-digest: SHA256
 
       - name: signing skipped notice (windows, secrets missing)
-        if: runner.os == 'Windows' && env.AZURE_CLIENT_ID == ''
+        if: runner.os == 'Windows' && env.AZURE_CLIENT_ID_PRESENT != 'true'
         env:
           AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
         shell: bash
