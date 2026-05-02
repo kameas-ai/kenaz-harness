@@ -104,6 +104,13 @@ func expandTilde(p string) string {
 // exist yet. Reusing tools' canonical-form deny-list keeps the
 // security guarantee.
 func isAllowed(abs string) bool {
+	// Check the lexical path first — a path that syntactically lives
+	// under a denied prefix (e.g. /etc/resolv.conf on Linux, where the
+	// file is a symlink to /run/systemd/...) must stay denied even when
+	// EvalSymlinks resolves it outside the deny-list.
+	if tools.IsDeniedPath(filepath.Clean(abs)) {
+		return false
+	}
 	canonical, err := filepath.EvalSymlinks(abs)
 	if err != nil {
 		// Pre-existing path failed to canonicalise: treat as denied.
