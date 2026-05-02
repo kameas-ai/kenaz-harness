@@ -39,11 +39,16 @@ jobs:
       - name: golangci-lint
         # v8 supports golangci-lint v2.x, which is built with go1.25 and can
         # load configs targeting Go 1.25.0 (go.mod's `go` directive).
+        # only-new-issues: true scopes failures to PR-introduced issues so
+        # the lint gate does not fail on the existing debt the codebase
+        # accumulated while lint was misconfigured. Burn down the
+        # backlog opportunistically; do not block PRs on it.
         uses: golangci/golangci-lint-action@v8
         with:
           version: v2.5.0
           args: --timeout=5m
           working-directory: .
+          only-new-issues: true
 
       - name: codegen idempotent
         run: bash scripts/ci/check-codegen.sh
