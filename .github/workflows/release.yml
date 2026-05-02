@@ -331,7 +331,10 @@ jobs:
           $label   = "${{ matrix.label }}"
           $stage   = "kaneaz-harness-$version-$label"
           New-Item -ItemType Directory -Force -Path dist | Out-Null
-          Rename-Item build/bin $stage
+          # Move-Item (not Rename-Item) — Rename-Item only changes the name
+          # in place ("build/$stage"), but Compress-Archive expects the staged
+          # folder at cwd. Move-Item relocates it to the working directory.
+          Move-Item build/bin $stage
           Compress-Archive -Path $stage -DestinationPath "dist/$stage.zip"
           Get-ChildItem dist
 
