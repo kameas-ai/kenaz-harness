@@ -293,59 +293,43 @@ const isWaitingForFirstChunk = computed(
 
 // Per-model context window — sourced from the backend's curated
 // capability table via Provider.modelInfos. 0 means "unknown"; the
-// meter falls back to MODEL_CONTEXT_FALLBACK so there is always a
-// floor denominator for the bar.
+// meter enters an explicit "unknown" state rather than a misleading
+// 200k fallback. Real input-token counts will be wired by the
+// per-message-token-meter mission once it lands.
 //
-// MODEL_CONTEXT_FALLBACK is kept as the safety floor and the default
-// for any model the backend does not recognise yet.
-const MODEL_CONTEXT_FALLBACK = 200_000;
-
-// Resolved context-window cap for the active model. Looks up the
-// active model in the active provider's modelInfos list by exact id.
-// Falls back to MODEL_CONTEXT_FALLBACK when 0 or missing.
-const activeModelContextWindow = computed((): number => {
+// contextDenominator: >0 = known window; 0 = unknown.
+const contextDenominator = computed((): number => {
   const provider = activeProvider.value;
   const modelId = activeModelId.value;
-  if (!provider || !modelId) return MODEL_CONTEXT_FALLBACK;
+  if (!provider || !modelId) return 0;
   const info = provider.modelInfos?.find((m) => m.id === modelId);
   const cw = info?.contextWindow ?? 0;
-  return cw > 0 ? cw : MODEL_CONTEXT_FALLBACK;
+  return cw > 0 ? cw : 0;
 });
 
-// Cheap client-side token estimate. The backend's estimateTokens uses
-// a similar chars/4 heuristic so the % we display roughly tracks what
-// the kernel sees. Don't trust this to the digit — it's a usage cue,
-// not a billing surface.
-function estimateMessageTokens(s: string): number {
-  if (!s) return 0;
-  return Math.ceil(s.length / 4);
-}
+// hasContextWindow: true when the backend has supplied a non-zero cap.
+const hasContextWindow = computed(() => contextDenominator.value > 0);
 
-const conversationTokens = computed(() => {
-  let total = 0;
-  for (const m of visibleMessages.value) {
-    total += estimateMessageTokens(m.content);
-  }
-  const streaming = session.currentlyStreaming.value;
-  if (streaming?.content) total += estimateMessageTokens(streaming.content);
-  return total;
-});
+// contextNumerator: 0 until the per-message-token-meter mission wires
+// real input-token counts from session.lastUsage.
+const contextNumerator = computed(() => 0);
 
 const contextWindowPct = computed(() => {
-  const max = activeModelContextWindow.value;
+  const max = contextDenominator.value;
   if (max <= 0) return 0;
-  return Math.min(100, Math.round((conversationTokens.value / max) * 100));
+  return Math.min(100, Math.round((contextNumerator.value / max) * 100));
 });
 
 const contextWindowLabel = computed(() => {
-  const max = activeModelContextWindow.value;
-  const used = conversationTokens.value;
+  const max = contextDenominator.value;
+  const used = contextNumerator.value;
   // Compact thousands formatter ("1.2k", "12k", "128k").
   const fmt = (n: number) => {
     if (n < 1_000) return String(n);
     if (n < 10_000) return (n / 1_000).toFixed(1).replace(/\.0$/, '') + 'k';
     return Math.round(n / 1_000) + 'k';
   };
+  if (!hasContextWindow.value) return '—';
   return `${fmt(used)} / ${fmt(max)}`;
 });
 
@@ -1255,30 +1239,48 @@ function formatSize(bytes: number): string {
             :usage="sessionUsage"
             :loading="sessionUsageLoading"
           />
+          <!-- Context window meter.
+               Known window (hasContextWindow): bar + pct + used/max label.
+               Unknown window (!hasContextWindow): greyed label only — no bar,
+               no percentage, no misleading 200k fallback. -->
           <div
             class="flex items-center gap-2"
             data-testid="session-context-meter"
-            :title="`Estimated context use — ${conversationTokens.toLocaleString()} of ${activeModelContextWindow.toLocaleString()} tokens`"
+            :title="hasContextWindow
+              ? `Context use — ${contextNumerator.toLocaleString()} of ${contextDenominator.toLocaleString()} tokens`
+              : 'Context window size unknown for this model'"
           >
-            <span class="uppercase tracking-[0.14em] text-ink-subtle">
+            <span
+              class="uppercase tracking-[0.14em]"
+              :class="hasContextWindow ? 'text-ink-subtle' : 'text-ink-dim'"
+            >
               context
             </span>
-            <div class="h-1 w-24 rounded-full bg-surface-2 overflow-hidden">
-              <div
-                class="h-full transition-[width] duration-300"
-                :class="{
-                  'bg-signal-ok': contextBarTone === 'ok',
-                  'bg-signal-warn': contextBarTone === 'warn',
-                  'bg-signal-danger': contextBarTone === 'danger',
-                }"
-                :style="{ width: contextWindowPct + '%' }"
-              ></div>
-            </div>
-            <span class="font-mono text-ink-muted tabular-nums">
-              {{ contextWindowPct }}%
-            </span>
-            <span class="font-mono text-ink-subtle">
-              {{ contextWindowLabel }}
+            <template v-if="hasContextWindow">
+              <div class="h-1 w-24 rounded-full bg-surface-2 overflow-hidden">
+                <div
+                  class="h-full transition-[width] duration-300"
+                  :class="{
+                    'bg-signal-ok': contextBarTone === 'ok',
+                    'bg-signal-warn': contextBarTone === 'warn',
+                    'bg-signal-danger': contextBarTone === 'danger',
+                  }"
+                  :style="{ width: contextWindowPct + '%' }"
+                ></div>
+              </div>
+              <span class="font-mono text-ink-muted tabular-nums">
+                {{ contextWindowPct }}%
+              </span>
+              <span class="font-mono text-ink-subtle">
+                {{ contextWindowLabel }}
+              </span>
+            </template>
+            <span
+              v-else
+              class="font-mono text-ink-dim"
+              data-testid="session-context-meter-unknown"
+            >
+              unknown
             </span>
           </div>
         </div>

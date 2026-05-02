@@ -277,7 +277,33 @@ describe('SessionsView (chat-ui)', () => {
     w.unmount();
   });
 
-  it('context meter title uses backend-supplied contextWindow from modelInfos', async () => {
+  // Helper to build a minimal session client stub for context-meter tests.
+  function makeSessionsStub(messages: Message[]) {
+    return {
+      list: async () => [],
+      get: async (id: string) => ({ id, name: 'Test', createdAt: '', updatedAt: '' }),
+      create: async () => ({ id: '', name: '', createdAt: '', updatedAt: '' }),
+      rename: async () => undefined,
+      delete: async () => undefined,
+      reorder: async () => undefined,
+      startStream: async () => 'sub',
+      stopStream: async () => undefined,
+      listMessages: async () => messages,
+      listMessagesActive: async () => ({ messages, sweptCount: 0 }),
+      listMessagesAll: async () => ({ messages, sweptCount: 0 }),
+      appendMessage: async (id: string, role: string, content: string) =>
+        makeMessage({ id: 'new', sessionId: id, role: role as Message['role'], content }),
+      sendMessageWithBlocks: async () => makeMessage({ id: 'b' }),
+      saveDraft: async () => undefined,
+      loadDraft: async () => '',
+      setSystemPrompt: async () => undefined,
+      moveToProject: async () => undefined,
+      getUsage: async () => ({ promptTokens: 0, completionTokens: 0, totalTokens: 0, costUsd: 0, costSource: 'unknown' as const, messageCount: 0, pricingDataDate: '' }),
+      saveAsArtifact: async () => ({ id: '', sessionId: '', title: '', mimeType: 'text/plain', contentHash: '', byteSize: 0, source: 'user_pin' as const, sourceRef: { messageId: '', offset: 0, length: 0 }, scopeKind: 'session' as const, createdAt: '' }),
+    };
+  }
+
+  it('context meter renders bar and correct denominator when contextWindow is known', async () => {
     const providers: Provider[] = [
       {
         id: 'anthropic-p-1',
@@ -293,28 +319,7 @@ describe('SessionsView (chat-ui)', () => {
       makeMessage({ id: 'q', role: 'user', content: 'Hello' }),
     ];
     const { w } = await mountWithRoute('#ctx-test', {
-      sessions: {
-        list: async () => [],
-        get: async (id) => ({ id, name: 'Test', createdAt: '', updatedAt: '' }),
-        create: async () => ({ id: '', name: '', createdAt: '', updatedAt: '' }),
-        rename: async () => undefined,
-        delete: async () => undefined,
-        reorder: async () => undefined,
-        startStream: async () => 'sub',
-        stopStream: async () => undefined,
-        listMessages: async () => messages,
-        listMessagesActive: async () => ({ messages, sweptCount: 0 }),
-        listMessagesAll: async () => ({ messages, sweptCount: 0 }),
-        appendMessage: async (id, role, content) =>
-          makeMessage({ id: 'new', sessionId: id, role, content }),
-        sendMessageWithBlocks: async () => makeMessage({ id: 'b' }),
-        saveDraft: async () => undefined,
-        loadDraft: async () => '',
-        setSystemPrompt: async () => undefined,
-        moveToProject: async () => undefined,
-        getUsage: async () => ({ promptTokens: 0, completionTokens: 0, totalTokens: 0, costUsd: 0, costSource: 'unknown' as const, messageCount: 0, pricingDataDate: '' }),
-        saveAsArtifact: async () => ({ id: '', sessionId: '', title: '', mimeType: 'text/plain', contentHash: '', byteSize: 0, source: 'user_pin' as const, sourceRef: { messageId: '', offset: 0, length: 0 }, scopeKind: 'session' as const, createdAt: '' }),
-      },
+      sessions: makeSessionsStub(messages),
       llm: {
         listProviders: async () => providers,
         startStream: async () => 'sub',
@@ -323,13 +328,81 @@ describe('SessionsView (chat-ui)', () => {
     });
     const meter = w.find('[data-testid="session-context-meter"]');
     expect(meter.exists()).toBe(true);
-    // Title should use the backend-supplied 200_000 cap (not a regex-derived value).
+    // Title should use the backend-supplied 200_000 cap.
     const title = meter.attributes('title') ?? '';
     expect(title).toContain('200,000');
+    // The "unknown" badge must NOT appear when context window is known.
+    expect(w.find('[data-testid="session-context-meter-unknown"]').exists()).toBe(false);
     w.unmount();
   });
 
-  it('context meter falls back to MODEL_CONTEXT_FALLBACK (200k) when modelInfos is absent', async () => {
+  it('context meter renders bar and correct denominator for DeepSeek V4 Pro (1_048_576)', async () => {
+    const providers: Provider[] = [
+      {
+        id: 'openrouter-p-1',
+        name: 'OpenRouter',
+        tier: 'cloud',
+        kind: 'openrouter',
+        model: 'deepseek/deepseek-chat-v3-0324',
+        models: ['deepseek/deepseek-chat-v3-0324'],
+        modelInfos: [{ id: 'deepseek/deepseek-chat-v3-0324', displayName: 'DeepSeek V3 0324', contextWindow: 1_048_576 }],
+      },
+    ];
+    const messages: Message[] = [
+      makeMessage({ id: 'q', role: 'user', content: 'Hello' }),
+    ];
+    const { w } = await mountWithRoute('#ctx-deepseek', {
+      sessions: makeSessionsStub(messages),
+      llm: {
+        listProviders: async () => providers,
+        startStream: async () => 'sub',
+        stopStream: async () => undefined,
+      },
+    });
+    const meter = w.find('[data-testid="session-context-meter"]');
+    expect(meter.exists()).toBe(true);
+    const title = meter.attributes('title') ?? '';
+    expect(title).toContain('1,048,576');
+    // The "unknown" badge must NOT appear.
+    expect(w.find('[data-testid="session-context-meter-unknown"]').exists()).toBe(false);
+    w.unmount();
+  });
+
+  it('context meter renders explicit unknown state when contextWindow is 0', async () => {
+    const providers: Provider[] = [
+      {
+        id: 'openai-p-1',
+        name: 'OpenAI',
+        tier: 'cloud',
+        kind: 'openai',
+        model: 'some-unknown-future-model',
+        models: ['some-unknown-future-model'],
+        modelInfos: [{ id: 'some-unknown-future-model', displayName: 'Unknown model', contextWindow: 0 }],
+      },
+    ];
+    const messages: Message[] = [
+      makeMessage({ id: 'q', role: 'user', content: 'Hello' }),
+    ];
+    const { w } = await mountWithRoute('#ctx-unknown-zero', {
+      sessions: makeSessionsStub(messages),
+      llm: {
+        listProviders: async () => providers,
+        startStream: async () => 'sub',
+        stopStream: async () => undefined,
+      },
+    });
+    const meter = w.find('[data-testid="session-context-meter"]');
+    expect(meter.exists()).toBe(true);
+    // Title should indicate unknown state, not 200,000 fallback.
+    const title = meter.attributes('title') ?? '';
+    expect(title).toContain('unknown');
+    expect(title).not.toContain('200,000');
+    // The explicit "unknown" badge must be visible.
+    expect(w.find('[data-testid="session-context-meter-unknown"]').exists()).toBe(true);
+    w.unmount();
+  });
+
+  it('context meter renders explicit unknown state when modelInfos is absent', async () => {
     const providers: Provider[] = [
       {
         id: 'openai-p-1',
@@ -344,29 +417,8 @@ describe('SessionsView (chat-ui)', () => {
     const messages: Message[] = [
       makeMessage({ id: 'q', role: 'user', content: 'Hello' }),
     ];
-    const { w } = await mountWithRoute('#ctx-fallback', {
-      sessions: {
-        list: async () => [],
-        get: async (id) => ({ id, name: 'Test', createdAt: '', updatedAt: '' }),
-        create: async () => ({ id: '', name: '', createdAt: '', updatedAt: '' }),
-        rename: async () => undefined,
-        delete: async () => undefined,
-        reorder: async () => undefined,
-        startStream: async () => 'sub',
-        stopStream: async () => undefined,
-        listMessages: async () => messages,
-        listMessagesActive: async () => ({ messages, sweptCount: 0 }),
-        listMessagesAll: async () => ({ messages, sweptCount: 0 }),
-        appendMessage: async (id, role, content) =>
-          makeMessage({ id: 'new', sessionId: id, role, content }),
-        sendMessageWithBlocks: async () => makeMessage({ id: 'b' }),
-        saveDraft: async () => undefined,
-        loadDraft: async () => '',
-        setSystemPrompt: async () => undefined,
-        moveToProject: async () => undefined,
-        getUsage: async () => ({ promptTokens: 0, completionTokens: 0, totalTokens: 0, costUsd: 0, costSource: 'unknown' as const, messageCount: 0, pricingDataDate: '' }),
-        saveAsArtifact: async () => ({ id: '', sessionId: '', title: '', mimeType: 'text/plain', contentHash: '', byteSize: 0, source: 'user_pin' as const, sourceRef: { messageId: '', offset: 0, length: 0 }, scopeKind: 'session' as const, createdAt: '' }),
-      },
+    const { w } = await mountWithRoute('#ctx-unknown-absent', {
+      sessions: makeSessionsStub(messages),
       llm: {
         listProviders: async () => providers,
         startStream: async () => 'sub',
@@ -375,9 +427,12 @@ describe('SessionsView (chat-ui)', () => {
     });
     const meter = w.find('[data-testid="session-context-meter"]');
     expect(meter.exists()).toBe(true);
-    // Without modelInfos, falls back to MODEL_CONTEXT_FALLBACK = 200_000.
+    // Title should indicate unknown, not a misleading 200,000 fallback.
     const title = meter.attributes('title') ?? '';
-    expect(title).toContain('200,000');
+    expect(title).toContain('unknown');
+    expect(title).not.toContain('200,000');
+    // The explicit "unknown" badge must be visible.
+    expect(w.find('[data-testid="session-context-meter-unknown"]').exists()).toBe(true);
     w.unmount();
   });
 });

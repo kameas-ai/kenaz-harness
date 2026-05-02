@@ -33,6 +33,14 @@ export interface Session {
    * session.Record.ProjectID nullable column.
    */
   projectId?: string;
+  /**
+   * True when the auto-titling engine has written a generated title for
+   * this session (session-auto-titling-01KQ8TDS WP05). The rail renders
+   * the title in italic + muted style when this is true. Flips to false
+   * when the user renames the session or calls clearTitle.
+   * Mirrors session.Record.AutoTitled (Go-side).
+   */
+  autoTitled?: boolean;
 }
 
 /**
@@ -88,7 +96,8 @@ export interface Provider {
   /**
    * Capability metadata for each entry in `models`, parallel by
    * position. The context-window meter reads contextWindow from here;
-   * 0 / missing means unknown — falls back to MODEL_CONTEXT_FALLBACK.
+   * 0 / missing means unknown — the meter renders an explicit unknown
+   * state rather than a misleading fallback denominator.
    */
   modelInfos?: ModelInfo[];
   region?: string;
