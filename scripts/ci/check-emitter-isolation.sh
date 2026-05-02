@@ -9,7 +9,16 @@ ALLOWED=(
   "core/rpc/stream_broker.go"
 )
 
-violations=$(grep -rln 'runtime\.EventsEmit' --include='*.go' . 2>/dev/null || true)
+# Match call syntax — `runtime.EventsEmit(` — so doc comments that
+# reference the symbol by name (e.g. "only emitter.go calls
+# runtime.EventsEmit ...") don't trip the guard. Exclude .claude/
+# (worktree scratch space) and vendor/ if present.
+violations=$(grep -rln 'runtime\.EventsEmit(' \
+  --include='*.go' \
+  --exclude-dir='.claude' \
+  --exclude-dir='vendor' \
+  --exclude-dir='node_modules' \
+  . 2>/dev/null || true)
 
 if [[ -z "$violations" ]]; then
   echo "[emitter-isolation] clean — no callers of runtime.EventsEmit found."
