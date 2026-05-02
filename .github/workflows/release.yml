@@ -148,6 +148,30 @@ jobs:
         working-directory: frontend
         run: npm ci
 
+      # Sync wails.json info.productVersion to the resolved release
+      # version BEFORE wails build, so the OS-visible bundle metadata
+      # (CFBundleShortVersionString on macOS, FileVersion on Windows)
+      # matches the tag instead of the source-tree default. Stable tag
+      # builds: source already matches (release-please bumped it). Rolling
+      # main builds: source is the last release version, so we overwrite
+      # with the rolling label here.
+      #
+      # Wails enforces a numeric productVersion (X.Y.Z[.W]); strip the
+      # leading "v" and any rolling/prerelease suffix before writing.
+      - name: sync wails.json productVersion
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${{ needs.derive-version.outputs.version }}"
+          NUMERIC=$(echo "$VERSION" | sed -E 's/^v//; s/-.*$//')
+          if ! [[ "$NUMERIC" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::warning::derived numeric version '$NUMERIC' is not X.Y.Z; leaving wails.json untouched"
+            exit 0
+          fi
+          tmp=$(mktemp)
+          jq --arg v "$NUMERIC" '.info.productVersion = $v' wails.json > "$tmp" && mv "$tmp" wails.json
+          echo "wails.json info.productVersion → $NUMERIC"
+
       - name: wails build
         shell: bash
         run: |

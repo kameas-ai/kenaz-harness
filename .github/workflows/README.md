@@ -1,6 +1,41 @@
 # Workflows
 
-Two workflows live in this directory.
+Four workflows live in this directory.
+
+## `release-please.yml` — semantic versioning
+
+Runs on every push to `main`. Reads conventional-commit subjects since the
+last tag and either:
+
+- **Updates a long-lived "release PR"** with the next version, regenerated
+  `CHANGELOG.md`, bumped `wails.json` `info.productVersion`, and bumped
+  `.release-please-manifest.json`. The PR body lists every commit grouped
+  by section.
+- **Cuts a tag + GitHub Release** when that PR is merged, then dispatches
+  `release.yml` against the new tag so the cross-platform signed binaries
+  attach to the proper `vX.Y.Z` release (not just the rolling `main` channel).
+
+Bump rules (with `bump-minor-pre-major: true` while we are < 1.0.0):
+
+| Conventional prefix | Bump |
+|---|---|
+| `feat:` | minor |
+| `fix:` | patch |
+| `feat!:` / `BREAKING CHANGE:` body | minor (capped pre-1.0; flip to major after the 1.0 cut) |
+| `docs:` `chore:` `ci:` `style:` `refactor:` `test:` `build:` | none (no release PR opened by these alone) |
+
+Source of truth: `release-please-config.json` + `.release-please-manifest.json`
+in the repo root.
+
+## `pr-title.yml` — conventional-commits enforcement
+
+Runs on every PR open / edit / synchronize. Validates the PR title against
+the conventional-commits spec and the type list above. Required by the
+`main` branch ruleset, so a non-conventional title cannot merge.
+
+Because the `main` branch settings squash with `squash_merge_commit_title=PR_TITLE`,
+the PR title becomes the merge-commit subject verbatim — which is exactly
+what release-please reads to compute the next version. Single point of truth.
 
 ## `pr.yml` — pull-request gate
 

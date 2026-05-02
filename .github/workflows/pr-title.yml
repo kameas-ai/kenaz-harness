@@ -1,0 +1,61 @@
+name: PR Title
+
+# Enforces conventional-commits on PR titles. The branch ruleset on
+# `main` squashes PRs and uses the PR title verbatim as the merge-commit
+# subject (squash_merge_commit_title=PR_TITLE), so this check is the
+# single point of truth release-please reads when computing the next
+# version. A non-conventional title would land an un-versioned commit on
+# main and silently skip the release.
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+
+permissions:
+  pull-requests: read
+
+jobs:
+  conventional-commits:
+    name: Conventional Commits
+    runs-on: ubuntu-latest
+    steps:
+      - uses: amannn/action-semantic-pull-request@v5
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          # Keep this list aligned with release-please-config.json
+          # changelog-sections so unknown types can never sneak in.
+          types: |
+            feat
+            fix
+            perf
+            revert
+            deps
+            docs
+            style
+            chore
+            refactor
+            test
+            build
+            ci
+          # Scope is optional but if supplied must be lowercase tokens
+          # (e.g. feat(llm): ..., fix(ui,sessions): ...).
+          requireScope: false
+          disallowScopes: |
+            release
+          # First character of the description must be a non-empty letter
+          # or digit; trailing period not allowed.
+          subjectPattern: ^(?![A-Z])([a-z0-9].+[^. ])$
+          subjectPatternError: |
+            The subject "{subject}" found in the PR title "{title}" is invalid.
+            It must:
+              - start with a lowercase letter or digit
+              - not end with a period
+              - not be empty
+          # Disable validation on PRs whose head branch is the
+          # release-please bot — the bot sets its own conventional title
+          # ("chore(main): release vX.Y.Z") which already passes anyway,
+          # so this is belt-and-suspenders.
+          ignoreLabels: |
+            autorelease: pending
+            autorelease: tagged

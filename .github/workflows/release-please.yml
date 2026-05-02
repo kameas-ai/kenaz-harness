@@ -1,0 +1,88 @@
+name: release-please
+
+# Release-please drives semantic versioning. On every push to main it
+# inspects conventional-commit messages since the last tag and either
+# updates a long-lived "release PR" with the next version + changelog +
+# wails.json productVersion bump, or — when that PR is merged — cuts the
+# tag and GitHub Release.
+#
+# Mapping (with bump-minor-pre-major while we are < 1.0.0):
+#   feat:       → minor bump (0.x.0 → 0.(x+1).0)
+#   fix:        → patch bump (0.x.y → 0.x.(y+1))
+#   feat!: …    → minor bump (kept under 1.0; flip post-1.0)
+#   BREAKING CHANGE in body → minor bump (same, pre-1.0 guard)
+#
+# After release-please creates the release/tag we dispatch release.yml
+# explicitly. This is required because the GITHUB_TOKEN-issued release
+# event does NOT trigger downstream workflows (loop prevention). The
+# dispatched run produces signed cross-platform binaries and uploads
+# them to the new release + the docs CDN.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-please
+  cancel-in-progress: false
+
+jobs:
+  release-please:
+    name: release-please
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write          # tag + release + commit changelog/manifest
+      pull-requests: write     # open / update the release PR
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+      tag_name:        ${{ steps.release.outputs.tag_name }}
+      version:         ${{ steps.release.outputs.version }}
+      pr:              ${{ steps.release.outputs.pr }}
+    steps:
+      - id: release
+        uses: googleapis/release-please-action@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+
+      - name: summary
+        if: always()
+        env:
+          RELEASED:  ${{ steps.release.outputs.release_created || 'false' }}
+          TAG:       ${{ steps.release.outputs.tag_name }}
+          PR:        ${{ steps.release.outputs.pr }}
+        run: |
+          {
+            echo "## release-please"
+            echo ""
+            echo "- release_created: \`$RELEASED\`"
+            if [ -n "$TAG" ]; then echo "- tag: \`$TAG\`"; fi
+            if [ -n "$PR" ];  then echo "- release PR: $PR"; fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  trigger-tagged-build:
+    name: Dispatch tagged build
+    needs: release-please
+    if: ${{ needs.release-please.outputs.release_created == 'true' }}
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write           # workflow_dispatch needs actions:write
+      contents: read
+    steps:
+      - name: dispatch release.yml against new tag
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.release-please.outputs.tag_name }}
+        run: |
+          set -euo pipefail
+          echo "Dispatching release.yml for tag $TAG"
+          gh workflow run release.yml \
+            -R "$GITHUB_REPOSITORY" \
+            --ref "$TAG" \
+            -f version="$TAG"
+          echo "Dispatched. Run will appear under the Actions tab shortly."

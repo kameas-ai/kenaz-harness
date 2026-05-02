@@ -21,10 +21,17 @@ import (
 //go:embed all:frontend/dist
 var assets embed.FS
 
+// Version is injected by the release pipeline via:
+//   wails build -ldflags "-X main.Version=v0.1.2"
+// Release-please bumps this string indirectly: the source of truth is the
+// release-please manifest + git tag; the ldflag wires the resolved tag into
+// the binary at link time. "dev" is the local, untagged default.
+var Version = "dev"
+
 func main() {
 	// Eager-open the file logger so the first lines of the boot
 	// sequence (data-dir setup, core.New) land in ~/.kenaz/harness.log.
-	logging.L().Info("harness.boot", "pid", os.Getpid())
+	logging.L().Info("harness.boot", "pid", os.Getpid(), "version", Version)
 
 	// Dev-only flag: --enable-manifest-hot-reload turns on the polling
 	// watcher under <DataDir>/agent_graph/nodes/ so authoring a new
