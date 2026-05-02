@@ -171,6 +171,8 @@ interface WailsBindingsLike {
     rangeStart: number,
     rangeEnd: number,
   ): Promise<Artifact>;
+  Sessions_SuggestTitle(id: string): Promise<string>;
+  Sessions_ClearTitle(id: string): Promise<void>;
 
   Artifacts_List(filter: ArtifactFilter): Promise<Artifact[]>;
   Artifacts_Get(id: string): Promise<WireArtifactWithBytes>;
@@ -275,6 +277,8 @@ interface WailsBindingsLike {
   Settings_SetSaveArtifactEnabled(enabled: boolean): Promise<void>;
   Settings_GetMaxAgentTurns(): Promise<number>;
   Settings_SetMaxAgentTurns(turns: number): Promise<void>;
+  Settings_GetAutoTitleEnabled(): Promise<boolean>;
+  Settings_SetAutoTitleEnabled(enabled: boolean): Promise<void>;
 
   Memory_ListChunks(filter: MemoryListFilter): Promise<MemoryChunk[]>;
   Memory_RememberMessage(
@@ -731,6 +735,10 @@ export interface SessionsClient {
     rangeStart?: number,
     rangeEnd?: number,
   ): Promise<Artifact>;
+  /** Ask the auto-title engine to generate a new title for the session. Returns the new title. */
+  suggestTitle(id: string): Promise<string>;
+  /** Clear the user-set title and revert to the auto-title engine's suggestion. */
+  clearTitle(id: string): Promise<void>;
 }
 
 /**
@@ -1022,6 +1030,10 @@ export interface SettingsClient {
    * to zero by the store.
    */
   setMaxAgentTurns(turns: number): Promise<void>;
+  /** Read the auto-title opt-in flag (default true). */
+  getAutoTitleEnabled(): Promise<boolean>;
+  /** Persist the auto-title opt-in flag. */
+  setAutoTitleEnabled(enabled: boolean): Promise<void>;
 }
 
 /**
@@ -1399,6 +1411,8 @@ export function createHarnessClient(): HarnessClient {
           rangeStart ?? 0,
           rangeEnd ?? 0,
         ),
+      suggestTitle: (id) => b().Sessions_SuggestTitle(id),
+      clearTitle: (id) => b().Sessions_ClearTitle(id),
     },
     artifacts: {
       list: (filter) => b().Artifacts_List(filter ?? {}),
@@ -1531,6 +1545,8 @@ export function createHarnessClient(): HarnessClient {
       setSaveArtifact: (enabled) => b().Settings_SetSaveArtifactEnabled(enabled),
       getMaxAgentTurns: () => b().Settings_GetMaxAgentTurns(),
       setMaxAgentTurns: (turns) => b().Settings_SetMaxAgentTurns(turns),
+      getAutoTitleEnabled: () => b().Settings_GetAutoTitleEnabled(),
+      setAutoTitleEnabled: (enabled) => b().Settings_SetAutoTitleEnabled(enabled),
     },
     memory: {
       listChunks: (filter) => b().Memory_ListChunks(filter ?? {}),
@@ -1725,6 +1741,8 @@ export function createFakeHarnessClient(
         scopeKind: 'session',
         createdAt: new Date().toISOString(),
       }),
+      suggestTitle: async () => 'Fake suggested title',
+      clearTitle: noop,
     },
     projects: {
       list: async () => [],
@@ -1903,6 +1921,8 @@ export function createFakeHarnessClient(
       setSaveArtifact: noop,
       getMaxAgentTurns: async () => 0,
       setMaxAgentTurns: noop,
+      getAutoTitleEnabled: async () => true,
+      setAutoTitleEnabled: noop,
     },
     memory: {
       listChunks: async () => [],

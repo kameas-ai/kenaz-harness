@@ -19,6 +19,7 @@ import { useRoute, useRouter } from 'vue-router';
 import CanvasHead from '@/shell/CanvasHead.vue';
 import NewSessionDialog from '@/shell/NewSessionDialog.vue';
 import MessageList from '@/components/chat/MessageList.vue';
+import SessionHeader from '@/components/chat/SessionHeader.vue';
 import ChatInput from '@/components/chat/ChatInput.vue';
 import ResolvedContextPanel from '@/views/sessions/ResolvedContextPanel.vue';
 import ConfirmToolModal from '@/components/chat/ConfirmToolModal.vue';
@@ -988,6 +989,11 @@ function formatSize(bytes: number): string {
         >
           {{ lastArtifactError }}
         </div>
+        <SessionHeader
+          v-if="session.session.value && activeTab === 'chat'"
+          :session="session.session.value"
+          @title-changed="session.refresh()"
+        />
         <div
           v-if="activeTab === 'chat'"
           class="flex-1 min-h-0 grid grid-cols-[minmax(0,1fr)_auto]"
