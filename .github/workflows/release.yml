@@ -72,12 +72,18 @@ jobs:
             wails_platform: linux/arm64
             artifact_glob: 'build/bin/*'
             archive_ext: tar.gz
-          - os: macos-13 # Intel runner
+          # Cross-compile both Mac architectures from Apple Silicon runners.
+          # macos-13 (Intel) hosted runners have been intermittently
+          # unschedulable — observed runs sitting queued >50 min with no
+          # runner ever assigned. macos-14 / macos-latest run Apple Silicon
+          # and Go cross-compiles to darwin/amd64 fine; Wails ships its
+          # macOS SDK headers regardless of build host arch.
+          - os: macos-latest
             label: darwin-amd64
             wails_platform: darwin/amd64
             artifact_glob: 'build/bin/*.app'
             archive_ext: zip
-          - os: macos-14 # Apple Silicon runner
+          - os: macos-latest
             label: darwin-arm64
             wails_platform: darwin/arm64
             artifact_glob: 'build/bin/*.app'
