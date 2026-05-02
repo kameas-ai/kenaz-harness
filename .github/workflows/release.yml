@@ -67,6 +67,11 @@ jobs:
             wails_platform: linux/amd64
             artifact_glob: 'build/bin/*'
             archive_ext: tar.gz
+          - os: ubuntu-24.04-arm
+            label: linux-arm64
+            wails_platform: linux/arm64
+            artifact_glob: 'build/bin/*'
+            archive_ext: tar.gz
           - os: macos-13 # Intel runner
             label: darwin-amd64
             wails_platform: darwin/amd64
@@ -80,6 +85,15 @@ jobs:
           - os: windows-latest
             label: windows-amd64
             wails_platform: windows/amd64
+            artifact_glob: 'build/bin/*.exe'
+            archive_ext: zip
+          # Cross-compile to Windows arm64 from the x86 runner (Wails
+          # supports it; no separate runner needed). Trusted Signing's
+          # signtool handles arm64 PE files transparently — same step,
+          # same secrets, no Windows-arm64 runner required.
+          - os: windows-latest
+            label: windows-arm64
+            wails_platform: windows/arm64
             artifact_glob: 'build/bin/*.exe'
             archive_ext: zip
     runs-on: ${{ matrix.os }}
