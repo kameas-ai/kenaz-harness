@@ -479,40 +479,139 @@ jobs:
           # can fetch it without needing a token.
           gh release upload "${{ steps.create.outputs.tag }}" manifest.json --clobber
 
-  notify-docs:
-    name: Notify docusaurus site
+  publish-s3:
+    name: Publish artifacts to docs CDN (S3)
     needs: [derive-version, release]
     runs-on: ubuntu-latest
-    # Only fire for tagged releases or main rolling builds.
-    if: needs.derive-version.outputs.is_release == 'true' || github.event_name == 'push'
+    # The kenaz-harness repo is private and GitHub release assets on
+    # private repos require auth — public docs visitors get 404 hitting
+    # github.com/.../releases/download/. Mirror to the same S3 bucket
+    # docs.kameas.ai serves from so binaries are reachable at
+    # https://docs.kameas.ai/downloads/<file>. Same OIDC chain the
+    # kenaz-docs deploy uses.
+    permissions:
+      id-token: write
+      contents: read
+    environment: shared-services
     steps:
-      - name: dispatch update to kenaz-docs
-        env:
-          DOCS_TOKEN: ${{ secrets.DOCS_DISPATCH_TOKEN }}
-        run: |
-          if [ -z "$DOCS_TOKEN" ]; then
-            echo "DOCS_DISPATCH_TOKEN not set — skipping docs dispatch."
-            echo "To enable: add a PAT with 'repo' scope on kameas-ai/kenaz-docs as DOCS_DISPATCH_TOKEN secret on this repo."
-            exit 0
-          fi
+      - uses: actions/checkout@v4
 
-          # repository_dispatch into kenaz-docs; that repo's workflow
-          # consumes type "kaneaz-harness-release" + the manifest payload
-          # to update its download page.
-          curl -fsSL -X POST \
-            -H "Authorization: token ${DOCS_TOKEN}" \
-            -H "Accept: application/vnd.github+json" \
-            -H "X-GitHub-Api-Version: 2022-11-28" \
-            https://api.github.com/repos/kameas-ai/kenaz-docs/dispatches \
-            -d @- <<EOF
-          {
-            "event_type": "kaneaz-harness-release",
-            "client_payload": {
-              "version": "${{ needs.derive-version.outputs.version }}",
-              "tag":     "${{ needs.release.outputs.release_tag }}",
-              "release_url": "${{ needs.release.outputs.release_url }}",
-              "manifest_url": "https://github.com/kameas-ai/kaneaz-harness/releases/download/${{ needs.release.outputs.release_tag }}/manifest.json",
-              "is_release": ${{ needs.derive-version.outputs.is_release }}
-            }
+      - name: download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist-flat
+          pattern: kaneaz-harness-*
+          merge-multiple: true
+
+      - name: rewrite manifest with docs.kameas.ai URLs
+        env:
+          VERSION: ${{ needs.derive-version.outputs.version }}
+          TAG:     ${{ needs.release.outputs.release_tag }}
+        run: |
+          python3 - <<'PY'
+          import json, os, pathlib, re
+          tag = os.environ['TAG']
+          version = os.environ['VERSION']
+          # Public CDN base — the docs site's CloudFront distribution
+          # serves /downloads/<tag>/<file> from s3://kameas-ai-docs-site.
+          base = f"https://docs.kameas.ai/downloads/{tag}"
+          dist = pathlib.Path('dist-flat')
+          assets = []
+          for f in sorted(dist.iterdir()):
+              if f.suffix == '.sha256' or f.name == 'manifest.json':
+                  continue
+              sha_path = dist / f"{f.name}.sha256"
+              sha = ''
+              if sha_path.exists():
+                  sha = sha_path.read_text().split()[0]
+              m = re.match(r'kaneaz-harness-.+?-(linux|darwin|windows)-(amd64|arm64)\.(.+)$', f.name)
+              if not m:
+                  continue
+              os_label, arch, ext = m.groups()
+              assets.append({
+                  'platform': f"{os_label}-{arch}",
+                  'os': os_label,
+                  'arch': arch,
+                  'filename': f.name,
+                  'url': f"{base}/{f.name}",
+                  'sha256': sha,
+                  'ext': ext,
+                  'size_bytes': f.stat().st_size,
+              })
+          manifest = {
+              'version': version,
+              'tag': tag,
+              'commit': os.environ.get('GITHUB_SHA', ''),
+              'released_at': os.environ.get('GITHUB_RUN_STARTED_AT', ''),
+              'release_url': f"https://docs.kameas.ai/download/",
+              'assets': assets,
           }
-          EOF
+          pathlib.Path('dist-flat/manifest.json').write_text(json.dumps(manifest, indent=2))
+          print(json.dumps(manifest, indent=2))
+          PY
+
+      - name: Configure AWS credentials (gh-deploy-shared-services)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::764395350337:role/gh-deploy-shared-services
+          aws-region: us-east-2
+
+      - name: Chain-assume AppDeployRole
+        shell: bash
+        run: |
+          set -euo pipefail
+          CREDS=$(aws sts assume-role \
+            --role-arn arn:aws:iam::575638747659:role/AppDeployRole \
+            --role-session-name gh-publish-kenaz-harness \
+            --query 'Credentials' --output json)
+
+          echo "::add-mask::$(echo "$CREDS" | jq -r .AccessKeyId)"
+          echo "::add-mask::$(echo "$CREDS" | jq -r .SecretAccessKey)"
+          echo "::add-mask::$(echo "$CREDS" | jq -r .SessionToken)"
+          {
+            echo "AWS_ACCESS_KEY_ID=$(echo "$CREDS" | jq -r .AccessKeyId)"
+            echo "AWS_SECRET_ACCESS_KEY=$(echo "$CREDS" | jq -r .SecretAccessKey)"
+            echo "AWS_SESSION_TOKEN=$(echo "$CREDS" | jq -r .SessionToken)"
+          } >> "$GITHUB_ENV"
+
+      - name: Upload binaries + sha256 to per-tag prefix
+        env:
+          TAG: ${{ needs.release.outputs.release_tag }}
+        run: |
+          set -euo pipefail
+          # Per-tag prefix so old releases stay reachable for users
+          # who have a stale /download/ tab open. Long cache (1h) on
+          # binaries since filenames are version-stamped.
+          aws s3 sync dist-flat/ "s3://kameas-ai-docs-site/downloads/${TAG}/" \
+            --exclude 'manifest.json' \
+            --cache-control 'public, max-age=3600' \
+            --metadata-directive REPLACE \
+            --no-progress
+
+      - name: Upload manifest at canonical path (short cache)
+        env:
+          TAG: ${{ needs.release.outputs.release_tag }}
+        run: |
+          set -euo pipefail
+          # The download page fetches /downloads/manifest.json at runtime.
+          # Short cache so a fresh release shows up within minutes.
+          aws s3 cp dist-flat/manifest.json s3://kameas-ai-docs-site/downloads/manifest.json \
+            --cache-control 'public, max-age=120, must-revalidate' \
+            --content-type 'application/json' \
+            --metadata-directive REPLACE \
+            --no-progress
+          # Also pin a copy under the per-tag prefix for forensic lookup.
+          aws s3 cp dist-flat/manifest.json "s3://kameas-ai-docs-site/downloads/${TAG}/manifest.json" \
+            --cache-control 'public, max-age=3600' \
+            --content-type 'application/json' \
+            --metadata-directive REPLACE \
+            --no-progress
+
+      - name: Invalidate CloudFront
+        run: |
+          set -euo pipefail
+          INV=$(aws cloudfront create-invalidation \
+            --distribution-id E266IHHD1ZE4J0 \
+            --paths '/downloads/manifest.json' '/downloads/*' \
+            --query 'Invalidation.Id' --output text)
+          echo "Invalidation: $INV"
