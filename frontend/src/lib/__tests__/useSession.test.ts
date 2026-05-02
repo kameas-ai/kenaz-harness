@@ -277,6 +277,151 @@ describe('useSession (chat-ui)', () => {
     w.unmount();
   });
 
+  it('persists partial assistant content on error event + stream-closed (resilience WP00)', async () => {
+    const { w, session } = mountWithSession({
+      sessions: {
+        list: async () => [],
+        get: async (id) => ({ id, name: id, createdAt: '', updatedAt: '' }),
+        create: async () => ({ id: '', name: '', createdAt: '', updatedAt: '' }),
+        rename: async () => undefined,
+        delete: async () => undefined,
+        reorder: async () => undefined,
+        startStream: async () => 'sub',
+        stopStream: async () => undefined,
+        listMessages: async () => [],
+        appendMessage: async (id, role, content) =>
+          makeMessage({ id: 'u-1', sessionId: id, role, content }),
+        saveDraft: async () => undefined,
+        loadDraft: async () => '',
+      },
+      llm: {
+        listProviders: async () => [],
+        startStream: async () => 'sub-err',
+        stopStream: async () => undefined,
+      },
+    });
+    await vi.runAllTimersAsync();
+    await session.send('q', 'p');
+    await nextTick();
+    rt.emit('llm:stream-chunk', {
+      sub_id: 'sub-err',
+      session_id: 's-1',
+      chunk: { kind: 'text', text: 'partial ' },
+    });
+    rt.emit('llm:stream-chunk', {
+      sub_id: 'sub-err',
+      session_id: 's-1',
+      chunk: { kind: 'text', text: 'reply' },
+    });
+    rt.emit('llm:stream-chunk', {
+      sub_id: 'sub-err',
+      session_id: 's-1',
+      chunk: { kind: 'error', err: 'transient provider error' },
+    });
+    rt.emit('llm:stream-closed', {
+      sub_id: 'sub-err',
+      session_id: 's-1',
+      reason: 'error',
+    });
+    await nextTick();
+    const assistantRows = session.messages.value.filter((m) => m.role === 'assistant');
+    expect(assistantRows).toHaveLength(1);
+    expect(assistantRows[0].content).toBe('partial reply');
+    expect(assistantRows[0].streaming).toBe(false);
+    expect(assistantRows[0].streamingError).toBe('transient provider error');
+    expect(session.currentlyStreaming.value).toBeNull();
+    expect(session.error.value).toBe('transient provider error');
+    w.unmount();
+  });
+
+  it('does not stamp streamingError when stream closes with reason=completed', async () => {
+    const { w, session } = mountWithSession({
+      sessions: {
+        list: async () => [],
+        get: async (id) => ({ id, name: id, createdAt: '', updatedAt: '' }),
+        create: async () => ({ id: '', name: '', createdAt: '', updatedAt: '' }),
+        rename: async () => undefined,
+        delete: async () => undefined,
+        reorder: async () => undefined,
+        startStream: async () => 'sub',
+        stopStream: async () => undefined,
+        listMessages: async () => [],
+        appendMessage: async (id, role, content) =>
+          makeMessage({ id: 'u-1', sessionId: id, role, content }),
+        saveDraft: async () => undefined,
+        loadDraft: async () => '',
+      },
+      llm: {
+        listProviders: async () => [],
+        startStream: async () => 'sub-ok',
+        stopStream: async () => undefined,
+      },
+    });
+    await vi.runAllTimersAsync();
+    await session.send('q', 'p');
+    await nextTick();
+    rt.emit('llm:stream-chunk', {
+      sub_id: 'sub-ok',
+      session_id: 's-1',
+      chunk: { kind: 'text', text: 'all good' },
+    });
+    rt.emit('llm:stream-chunk', {
+      sub_id: 'sub-ok',
+      session_id: 's-1',
+      chunk: { kind: 'finish', finish: 'end_turn' },
+    });
+    rt.emit('llm:stream-closed', {
+      sub_id: 'sub-ok',
+      session_id: 's-1',
+      reason: 'completed',
+      finish_reason: 'end_turn',
+    });
+    await nextTick();
+    const assistantRows = session.messages.value.filter((m) => m.role === 'assistant');
+    expect(assistantRows).toHaveLength(1);
+    expect(assistantRows[0].content).toBe('all good');
+    expect(assistantRows[0].streamingError).toBeUndefined();
+    w.unmount();
+  });
+
+  it('does not append a spurious message when stream-closed cancelled with no content', async () => {
+    const { w, session } = mountWithSession({
+      sessions: {
+        list: async () => [],
+        get: async (id) => ({ id, name: id, createdAt: '', updatedAt: '' }),
+        create: async () => ({ id: '', name: '', createdAt: '', updatedAt: '' }),
+        rename: async () => undefined,
+        delete: async () => undefined,
+        reorder: async () => undefined,
+        startStream: async () => 'sub',
+        stopStream: async () => undefined,
+        listMessages: async () => [],
+        appendMessage: async (id, role, content) =>
+          makeMessage({ id: 'u-1', sessionId: id, role, content }),
+        saveDraft: async () => undefined,
+        loadDraft: async () => '',
+      },
+      llm: {
+        listProviders: async () => [],
+        startStream: async () => 'sub-cancel',
+        stopStream: async () => undefined,
+      },
+    });
+    await vi.runAllTimersAsync();
+    await session.send('q', 'p');
+    await nextTick();
+    rt.emit('llm:stream-closed', {
+      sub_id: 'sub-cancel',
+      session_id: 's-1',
+      reason: 'cancelled',
+    });
+    await nextTick();
+    const assistantRows = session.messages.value.filter((m) => m.role === 'assistant');
+    expect(assistantRows).toHaveLength(0);
+    expect(session.currentlyStreaming.value).toBeNull();
+    w.unmount();
+  });
+
   it('flags streamingTimedOut after 30s with no chunks', async () => {
     const { w, session } = mountWithSession({
       sessions: {

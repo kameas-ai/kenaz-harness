@@ -44,6 +44,13 @@ const props = defineProps<{
   role: MessageRole;
   content: string;
   streaming?: boolean;
+  /**
+   * Stream-failure marker (long-turn-resilience WP00). When set, the
+   * bubble renders a muted "Connection lost — message may be
+   * incomplete." sub-line beneath the body. No Resume button yet —
+   * that lands in WP03.
+   */
+  streamingError?: string;
   toolCalls?: readonly ToolCall[];
   /**
    * Polymorphic content blocks for multimodal messages
@@ -473,6 +480,18 @@ function isLastBlock(idx: number): boolean {
       <span v-else class="font-mono text-[12px] text-ink-muted">
         {{ content }}
       </span>
+
+      <!-- Stream-failure sub-line (long-turn-resilience WP00). Surfaced
+           when the SSE stream closed with a non-completed reason and
+           the partial bubble was committed anyway. WP03 will replace
+           this with a Resume button. -->
+      <div
+        v-if="streamingError"
+        class="mt-2 font-ui text-[11px] text-ink-muted italic"
+        data-testid="message-streaming-error"
+      >
+        Connection lost — message may be incomplete.
+      </div>
 
       <div
         v-if="artifacts && artifacts.length > 0"
