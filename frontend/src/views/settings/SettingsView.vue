@@ -156,6 +156,9 @@ const compactionTierOptions = computed(() =>
 
 const aboutOpen = ref(false);
 
+// WP05: auto-title toggle
+const autoTitleEnabled = ref(true);
+
 async function refresh() {
   try {
     settings.value = await client.settings.get();
@@ -189,6 +192,28 @@ async function refresh() {
     compactionProviders.value = await client.llm.listProviders();
   } catch {
     compactionProviders.value = [];
+  }
+  await loadGlobalAttachments();
+  await loadAutoTitleEnabled();
+}
+
+async function loadAutoTitleEnabled() {
+  try {
+    autoTitleEnabled.value = await client.settings.getAutoTitleEnabled();
+  } catch {
+    // Graceful fallback: the Go binding may not exist yet; default true.
+    autoTitleEnabled.value = true;
+  }
+}
+
+async function toggleAutoTitleEnabled() {
+  const next = !autoTitleEnabled.value;
+  autoTitleEnabled.value = next;
+  try {
+    await client.settings.setAutoTitleEnabled(next);
+  } catch {
+    // Revert on error.
+    autoTitleEnabled.value = !next;
   }
 }
 
@@ -394,6 +419,109 @@ onMounted(() => {
             v-if="compactionExplainOpen"
             class="mt-2 rounded-sm border border-border bg-surface-1 p-3 font-ui text-[12px]"
             data-testid="compaction-explain-disclosure"
+      <section>
+        <h2 class="font-ui text-[11px] uppercase tracking-[0.18em] text-ink-subtle">
+          Route restoration
+        </h2>
+        <label class="mt-2 flex items-center gap-3 font-ui text-[12px] text-ink">
+          <input
+            type="checkbox"
+            class="accent-accent"
+            :checked="restoreOnLaunch"
+            data-testid="restore-toggle"
+            @change="toggleRestore"
+          />
+          Restore the last visited route on launch
+        </label>
+        <p class="mt-1 text-[11px] text-ink-muted">
+          Last route: <span class="font-mono">{{ settings.lastRoute }}</span>
+        </p>
+      </section>
+
+      <section data-testid="auto-title-section">
+        <h2 class="font-ui text-[11px] uppercase tracking-[0.18em] text-ink-subtle">
+          Sessions
+        </h2>
+        <label class="mt-2 flex items-center gap-3 font-ui text-[12px] text-ink">
+          <input
+            type="checkbox"
+            class="accent-accent"
+            :checked="autoTitleEnabled"
+            data-testid="auto-title-toggle"
+            @change="toggleAutoTitleEnabled"
+          />
+          Auto-title new sessions using the active model
+        </label>
+        <p class="mt-1 text-[11px] text-ink-muted">
+          When on, the harness asks the model to generate a short title for
+          each new session after the first exchange. You can override or
+          clear it at any time.
+        </p>
+      </section>
+
+      <section>
+        <h2 class="font-ui text-[11px] uppercase tracking-[0.18em] text-ink-subtle">
+          Tool execution
+        </h2>
+        <label class="mt-2 flex items-center gap-3 font-ui text-[12px] text-ink">
+          <input
+            type="checkbox"
+            class="accent-accent"
+            :checked="confirmEachEnabled"
+            data-testid="confirm-each-toggle"
+            @change="toggleConfirmEach"
+          />
+          Show confirmation modal for tools marked <span class="font-mono">confirm_each</span>
+        </label>
+        <p class="mt-1 text-[11px] text-ink-muted">
+          When off, tools whose policy resolves to <span class="font-mono">confirm_each</span>
+          dispatch automatically (equivalent to <span class="font-mono">auto_allow</span>).
+          Default: ON.
+        </p>
+      </section>
+
+      <section>
+        <h2 class="font-ui text-[11px] uppercase tracking-[0.18em] text-ink-subtle">
+          Storage
+        </h2>
+        <dl class="mt-2 grid gap-2 font-ui text-[12px]" style="grid-template-columns: 12ch 1fr">
+          <dt class="text-ink-muted">Schema version</dt>
+          <dd class="font-mono text-ink">{{ settings.schemaVersion }}</dd>
+          <dt class="text-ink-muted">Window size</dt>
+          <dd class="font-mono text-ink">
+            {{ settings.windowSize.width }} × {{ settings.windowSize.height }}
+          </dd>
+        </dl>
+      </section>
+
+      <section data-testid="compaction-section">
+        <h2 class="font-ui text-[11px] uppercase tracking-[0.18em] text-ink-subtle">
+          Compaction
+        </h2>
+        <p class="mt-1 font-ui text-[11px] text-ink-muted">
+          When a session approaches the model's context cap, the harness
+          summarises older turns into a single message so the conversation
+          can keep going. Pick a tier — see "What does this mean?" below
+          for the trade-off.
+        </p>
+
+        <div
+          class="mt-3 inline-flex rounded-sm border border-border"
+          role="radiogroup"
+          aria-label="Compaction aggressiveness"
+        >
+          <button
+            v-for="t in COMPACTION_TIERS"
+            :key="t"
+            type="button"
+            role="radio"
+            :aria-checked="compactionTier === t"
+            class="px-3 py-1.5 font-ui text-[12px] border-r border-border last:border-r-0 transition-colors capitalize"
+            :class="compactionTier === t
+              ? 'bg-surface-3 text-ink'
+              : 'bg-surface-1 text-ink-muted hover:text-ink'"
+            :data-testid="`compaction-tier-${t}`"
+            @click="setCompactionTier(t)"
           >
             <div v-if="selectedTierExplain" class="space-y-1">
               <div class="font-medium text-ink" data-testid="compaction-explain-label">

@@ -19,9 +19,10 @@ import {
   ChevronRight,
   Folder,
 } from './icons';
-import { useSessions, useProjects } from '@/lib/useHarnessAPI';
+import { useSessions, useProjects, useHarnessClient } from '@/lib/useHarnessAPI';
 import NewSessionDialog from './NewSessionDialog.vue';
 import type { Project, Session } from '@/lib/types';
+import '@/styles/sessions.css';
 
 /**
  * LeftRail — three vertical regions (plan §2.1):
@@ -46,6 +47,7 @@ const {
   rename: renameProject,
   remove: removeProject,
 } = useProjects();
+const client = useHarnessClient();
 
 const newSessionDialogOpen = ref(false);
 const newSessionProjectId = ref<string | undefined>(undefined);
@@ -190,7 +192,17 @@ function cancelRename() {
 async function commitRename(id: string) {
   const next = renameDraft.value.trim();
   if (!next) {
-    cancelRename();
+    // Empty submission — clear any user-set title so the auto-title
+    // engine can take over (WP05 clear-title flow).
+    try {
+      await client.sessions.clearTitle(id);
+      await refreshSessions();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      lastError.value = `Clear title failed: ${msg}`;
+    } finally {
+      cancelRename();
+    }
     return;
   }
   const current = sessionList.value.find((s) => s.id === id);
@@ -586,7 +598,7 @@ async function onProjectDrop(evt: DragEvent, projectId: string) {
                       ? 'text-ink bg-surface-2 ring-1 ring-accent-hairline'
                       : 'text-ink-muted hover:text-ink hover:bg-surface-2'
                   "
-                  :title="session.name || session.id"
+                  :title="session.autoTitled ? 'Auto-generated title — click to edit' : (session.name || session.id)"
                   :aria-current="activeSessionId === session.id ? 'page' : undefined"
                   :data-testid="`open-session-${session.id}`"
                   @click="openSession(session.id)"
@@ -595,7 +607,11 @@ async function onProjectDrop(evt: DragEvent, projectId: string) {
                     :size="14"
                     :class="activeSessionId === session.id ? 'text-accent' : ''"
                   />
-                  <span class="truncate hidden two-col:inline">
+                  <span
+                    class="truncate hidden two-col:inline"
+                    :class="session.autoTitled ? 'session-row__name--auto' : ''"
+                    :data-testid="session.autoTitled ? `auto-titled-name-${session.id}` : undefined"
+                  >
                     {{ session.name }}
                   </span>
                 </button>
@@ -669,7 +685,7 @@ async function onProjectDrop(evt: DragEvent, projectId: string) {
                     ? 'text-ink bg-surface-2 ring-1 ring-accent-hairline'
                     : 'text-ink-muted hover:text-ink hover:bg-surface-2'
                 "
-                :title="session.name || session.id"
+                :title="session.autoTitled ? 'Auto-generated title — click to edit' : (session.name || session.id)"
                 :aria-current="activeSessionId === session.id ? 'page' : undefined"
                 :data-testid="`open-session-${session.id}`"
                 @click="openSession(session.id)"
@@ -678,7 +694,11 @@ async function onProjectDrop(evt: DragEvent, projectId: string) {
                   :size="14"
                   :class="activeSessionId === session.id ? 'text-accent' : ''"
                 />
-                <span class="truncate hidden two-col:inline">
+                <span
+                  class="truncate hidden two-col:inline"
+                  :class="session.autoTitled ? 'session-row__name--auto' : ''"
+                  :data-testid="session.autoTitled ? `auto-titled-name-${session.id}` : undefined"
+                >
                   {{ session.name }}
                 </span>
               </button>

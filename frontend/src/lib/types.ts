@@ -68,6 +68,12 @@ export interface SessionUsage {
   messageCount: number;
   /** Last-updated date of the pricing table used ("YYYY-MM-DD"). */
   pricingDataDate: string;
+   * True when the auto-titling engine wrote the session name. Mirrors
+   * session.Record.AutoTitled. The rail renders auto-titled sessions
+   * with a subtle italic+muted hint so the user can distinguish
+   * engine-chosen titles from names they set themselves.
+   */
+  autoTitled?: boolean;
 }
 
 /**

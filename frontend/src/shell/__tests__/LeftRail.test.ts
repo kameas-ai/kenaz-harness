@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { mount, flushPromises } from '@vue/test-utils';
 import { createMemoryHistory, createRouter } from 'vue-router';
 import { defineComponent, h, nextTick } from 'vue';
@@ -479,5 +479,189 @@ describe('LeftRail (project grouping)', () => {
     await w.find('[data-testid="delete-project-confirm"]').trigger('click');
     await flushPromises();
     expect(removeCalls).toEqual([{ id: 'p1', cascade: true }]);
+  });
+});
+
+// ── WP05: auto-title rail distinction + clear-title flow ─────────────────────
+
+describe('LeftRail (WP05 auto-title rail distinction)', () => {
+  it('auto-titled session span carries session-row__name--auto class', async () => {
+    const sessions: Session[] = [
+      {
+        id: 'auto-s',
+        name: 'Some engine title',
+        createdAt: '',
+        updatedAt: '',
+        autoTitled: true,
+      },
+    ];
+    const { w } = await mountRail({
+      sessions: {
+        list: async () => sessions,
+        get: async (id) => sessions.find((s) => s.id === id) ?? sessions[0]!,
+        create: async (name) => ({ id: 'new', name, createdAt: '', updatedAt: '' }),
+        rename: async () => undefined,
+        delete: async () => undefined,
+        reorder: async () => undefined,
+        startStream: async () => 'sub',
+        stopStream: async () => undefined,
+        listMessages: async () => [],
+        appendMessage: async (id, role, content) => ({
+          id: 'm',
+          sessionId: id,
+          role,
+          content,
+          createdAt: '',
+        }),
+        saveDraft: async () => undefined,
+        loadDraft: async () => '',
+        setSystemPrompt: async () => undefined,
+        moveToProject: async () => undefined,
+        saveAsArtifact: async () => ({} as any),
+        suggestTitle: async () => 'New title',
+        clearTitle: async () => undefined,
+      },
+    });
+    const span = w.find('[data-testid="auto-titled-name-auto-s"]');
+    expect(span.exists()).toBe(true);
+    expect(span.classes()).toContain('session-row__name--auto');
+  });
+
+  it('user-set title session span does NOT have session-row__name--auto class', async () => {
+    const sessions: Session[] = [
+      {
+        id: 'user-s',
+        name: 'My custom title',
+        createdAt: '',
+        updatedAt: '',
+        autoTitled: false,
+      },
+    ];
+    const { w } = await mountRail({
+      sessions: {
+        list: async () => sessions,
+        get: async (id) => sessions.find((s) => s.id === id) ?? sessions[0]!,
+        create: async (name) => ({ id: 'new', name, createdAt: '', updatedAt: '' }),
+        rename: async () => undefined,
+        delete: async () => undefined,
+        reorder: async () => undefined,
+        startStream: async () => 'sub',
+        stopStream: async () => undefined,
+        listMessages: async () => [],
+        appendMessage: async (id, role, content) => ({
+          id: 'm',
+          sessionId: id,
+          role,
+          content,
+          createdAt: '',
+        }),
+        saveDraft: async () => undefined,
+        loadDraft: async () => '',
+        setSystemPrompt: async () => undefined,
+        moveToProject: async () => undefined,
+        saveAsArtifact: async () => ({} as any),
+        suggestTitle: async () => 'New title',
+        clearTitle: async () => undefined,
+      },
+    });
+    const row = w.find('[data-testid="open-session-user-s"]');
+    expect(row.exists()).toBe(true);
+    // No auto-titled data-testid attribute should be present.
+    expect(w.find('[data-testid="auto-titled-name-user-s"]').exists()).toBe(false);
+  });
+
+  it('omitting autoTitled field does not add session-row__name--auto class', async () => {
+    const sessions: Session[] = [
+      {
+        id: 'plain-s',
+        name: 'Plain session',
+        createdAt: '',
+        updatedAt: '',
+        // autoTitled not set — undefined
+      },
+    ];
+    const { w } = await mountRail({
+      sessions: {
+        list: async () => sessions,
+        get: async (id) => sessions.find((s) => s.id === id) ?? sessions[0]!,
+        create: async (name) => ({ id: 'new', name, createdAt: '', updatedAt: '' }),
+        rename: async () => undefined,
+        delete: async () => undefined,
+        reorder: async () => undefined,
+        startStream: async () => 'sub',
+        stopStream: async () => undefined,
+        listMessages: async () => [],
+        appendMessage: async (id, role, content) => ({
+          id: 'm',
+          sessionId: id,
+          role,
+          content,
+          createdAt: '',
+        }),
+        saveDraft: async () => undefined,
+        loadDraft: async () => '',
+        setSystemPrompt: async () => undefined,
+        moveToProject: async () => undefined,
+        saveAsArtifact: async () => ({} as any),
+        suggestTitle: async () => 'New title',
+        clearTitle: async () => undefined,
+      },
+    });
+    expect(w.find('[data-testid="auto-titled-name-plain-s"]').exists()).toBe(false);
+  });
+
+  it('empty rename submission calls clearTitle rather than renameSession', async () => {
+    const clearTitleMock = vi.fn().mockResolvedValue(undefined);
+    const renameMock = vi.fn().mockResolvedValue(undefined);
+    const sessions: Session[] = [
+      {
+        id: 'ct-s',
+        name: 'Clear me',
+        createdAt: '',
+        updatedAt: '',
+        autoTitled: true,
+      },
+    ];
+    const { w } = await mountRail({
+      sessions: {
+        list: async () => sessions,
+        get: async (id) => sessions.find((s) => s.id === id) ?? sessions[0]!,
+        create: async (name) => ({ id: 'new', name, createdAt: '', updatedAt: '' }),
+        rename: renameMock,
+        delete: async () => undefined,
+        reorder: async () => undefined,
+        startStream: async () => 'sub',
+        stopStream: async () => undefined,
+        listMessages: async () => [],
+        appendMessage: async (id, role, content) => ({
+          id: 'm',
+          sessionId: id,
+          role,
+          content,
+          createdAt: '',
+        }),
+        saveDraft: async () => undefined,
+        loadDraft: async () => '',
+        setSystemPrompt: async () => undefined,
+        moveToProject: async () => undefined,
+        saveAsArtifact: async () => ({} as any),
+        suggestTitle: async () => 'New title',
+        clearTitle: clearTitleMock,
+      },
+    });
+
+    // Open the rename input.
+    await w.find('[data-testid="rename-session-ct-s"]').trigger('click');
+    await nextTick();
+
+    // Submit with empty value.
+    const input = w.find<HTMLInputElement>('[data-testid="rename-session-input-ct-s"]');
+    expect(input.exists()).toBe(true);
+    await input.setValue('');
+    await input.trigger('keydown.enter');
+    await flushPromises();
+
+    expect(clearTitleMock).toHaveBeenCalledWith('ct-s');
+    expect(renameMock).not.toHaveBeenCalled();
   });
 });

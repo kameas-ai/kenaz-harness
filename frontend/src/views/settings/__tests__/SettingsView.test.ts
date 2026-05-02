@@ -163,4 +163,54 @@ describe('SettingsView (FR-001b numbered-section header)', () => {
       w.find('[data-testid=global-attachments-empty]').exists(),
     ).toBe(true);
   });
+
+  // ── WP05: auto-title toggle ───────────────────────────────────────────
+
+  it('renders the auto-title toggle (data-testid="auto-title-toggle")', async () => {
+    const { client } = provide();
+    const w = mount(SettingsView, {
+      global: { provide: { [HarnessClientKey as symbol]: client } },
+    });
+    await flushPromises();
+    expect(w.find('[data-testid="auto-title-toggle"]').exists()).toBe(true);
+  });
+
+  it('auto-title toggle is checked by default (autoTitleEnabled=true)', async () => {
+    const getAutoTitleEnabled = vi.fn().mockResolvedValue(true);
+    const { client: baseClient } = provide();
+    const client = {
+      ...baseClient,
+      settings: {
+        ...baseClient.settings,
+        getAutoTitleEnabled,
+        setAutoTitleEnabled: vi.fn().mockResolvedValue(undefined),
+      },
+    };
+    const w = mount(SettingsView, {
+      global: { provide: { [HarnessClientKey as symbol]: client } },
+    });
+    await flushPromises();
+    const toggle = w.find<HTMLInputElement>('[data-testid="auto-title-toggle"]');
+    expect((toggle.element as HTMLInputElement).checked).toBe(true);
+  });
+
+  it('calls setAutoTitleEnabled(false) when user unchecks the toggle', async () => {
+    const setAutoTitleEnabled = vi.fn().mockResolvedValue(undefined);
+    const { client: baseClient } = provide();
+    const client = {
+      ...baseClient,
+      settings: {
+        ...baseClient.settings,
+        getAutoTitleEnabled: vi.fn().mockResolvedValue(true),
+        setAutoTitleEnabled,
+      },
+    };
+    const w = mount(SettingsView, {
+      global: { provide: { [HarnessClientKey as symbol]: client } },
+    });
+    await flushPromises();
+    await w.find('[data-testid="auto-title-toggle"]').trigger('change');
+    await flushPromises();
+    expect(setAutoTitleEnabled).toHaveBeenCalledWith(false);
+  });
 });
