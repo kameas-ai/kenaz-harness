@@ -1,4 +1,4 @@
-# golangci-lint configuration.
+# golangci-lint v2 configuration.
 #
 # The depguard block enforces FR-015 / DIRECTIVE_001 / C-001: only
 # core/acp/envelope/... is allowed to import the third-party A2A SDK
@@ -8,39 +8,40 @@
 #
 # Run:  golangci-lint run ./...
 
+version: "2"
+
 linters:
+  default: none
   enable:
     - depguard
-    - govet
-    - staticcheck
     - errcheck
+    - govet
     - ineffassign
+    - staticcheck
     - unused
-
-linters-settings:
-  depguard:
+  settings:
+    depguard:
+      rules:
+        a2a-sdk-isolation:
+          list-mode: lax
+          files:
+            - "!**/core/acp/envelope/**"
+          deny:
+            - pkg: github.com/a2aproject/a2a-go
+              desc: "DIRECTIVE_001 / FR-015: only core/acp/envelope/ may import the a2a-go SDK. Add the call you need behind a method on core/acp/envelope.Envelope and call that instead."
+            - pkg: github.com/a2aproject/a2a-go/...
+              desc: "DIRECTIVE_001 / FR-015: only core/acp/envelope/ may import the a2a-go SDK. Add the call you need behind a method on core/acp/envelope.Envelope and call that instead."
+  exclusions:
     rules:
-      a2a-sdk-isolation:
-        list-mode: lax
-        files:
-          - "!**/core/acp/envelope/**"
-        deny:
-          - pkg: github.com/a2aproject/a2a-go
-            desc: "DIRECTIVE_001 / FR-015: only core/acp/envelope/ may import the a2a-go SDK. Add the call you need behind a method on core/acp/envelope.Envelope and call that instead."
-          - pkg: github.com/a2aproject/a2a-go/...
-            desc: "DIRECTIVE_001 / FR-015: only core/acp/envelope/ may import the a2a-go SDK. Add the call you need behind a method on core/acp/envelope.Envelope and call that instead."
-
-issues:
-  exclude-rules:
-    - path: _test\.go
-      linters:
-        - errcheck
-    # Mission agent-kernel-graph-node-catalog-01KQ7JDZ WP02-T8:
-    # generated *_gen.go files (codegen output of
-    # core/agentgraph/nodes/cmd/gen) skip cosmetic linters. govet +
-    # staticcheck still run because compile-correctness must hold.
-    - path: _gen\.go
-      linters:
-        - errcheck
-        - ineffassign
-        - unused
+      - path: _test\.go
+        linters:
+          - errcheck
+      # Mission agent-kernel-graph-node-catalog-01KQ7JDZ WP02-T8:
+      # generated *_gen.go files (codegen output of
+      # core/agentgraph/nodes/cmd/gen) skip cosmetic linters. govet +
+      # staticcheck still run because compile-correctness must hold.
+      - path: _gen\.go
+        linters:
+          - errcheck
+          - ineffassign
+          - unused
