@@ -5,9 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	coreag "github.com/sigil-tech/kaneaz-harness/core/agentgraph"
 	corellm "github.com/sigil-tech/kaneaz-harness/core/llm"
+	"github.com/sigil-tech/kaneaz-harness/core/llm/retry"
 )
 
 // LLMProviderAdapter satisfies the agentgraph.LLMProvider seam by
@@ -109,7 +111,20 @@ func (a *LLMProviderAdapter) Generate(ctx context.Context, req coreag.LLMRequest
 		Tools:     a.tools,
 	}
 
-	stream, err := a.reg.Stream(ctx, gen)
+	// WP02 (long-turn-resilience): wrap the stream open with classified
+	// retry-with-backoff. Pre-stream transient errors (5xx, network blips)
+	// are retried up to 3 times with 500ms exponential backoff ±10%.
+	// Mid-stream transient errors that have not yet emitted any content
+	// are silently retried by the retryableStream wrapper. Non-transient
+	// errors (auth, invalid-request, cancelled) propagate immediately.
+	retryPolicy := retry.StreamPolicy{
+		MaxAttempts: 3,
+		BaseDelay:   500 * time.Millisecond,
+		JitterPct:   0.10,
+	}
+	stream, err := retry.RetryStream(ctx, retryPolicy, func() (corellm.Stream, error) {
+		return a.reg.Stream(ctx, gen)
+	})
 	if err != nil {
 		return coreag.LLMResponse{}, fmt.Errorf("chat: registry stream: %w", err)
 	}
