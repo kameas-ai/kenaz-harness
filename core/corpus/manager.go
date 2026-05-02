@@ -216,9 +216,14 @@ func (m *Manager) IngestPath(ctx context.Context, corpusID, path string, opts In
 	}
 	m.mu.Lock()
 	m.jobs[jobID] = st
+	// Snapshot before releasing the lock or launching the goroutine —
+	// runIngest mutates *st via updateJob, which races the *st copy
+	// the bare return below would otherwise perform after the
+	// goroutine has already started.
+	snap := *st
 	m.mu.Unlock()
 	go m.runIngest(jobID, corpusID, path, opts, embedder)
-	return *st, nil
+	return snap, nil
 }
 
 // IngestPathSync is the synchronous form used by tests + the kernel's

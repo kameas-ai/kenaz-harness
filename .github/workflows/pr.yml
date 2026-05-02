@@ -82,8 +82,9 @@ jobs:
       - name: no-user-content-in-slog guard
         run: bash scripts/ci/check-no-user-content-in-slog.sh
 
-      - name: csp guard
-        run: bash scripts/ci/check-csp.sh
+      # csp guard runs in test-frontend after `npm run build` produces
+      # the real frontend/dist/index.html — there's no point checking
+      # the CSP of a stub.
 
   test-go:
     name: Go tests (-race -short)
@@ -131,6 +132,13 @@ jobs:
 
       - name: vitest
         run: npm test -- --run
+
+      - name: build frontend (for csp guard)
+        run: npm run build
+
+      - name: csp guard
+        working-directory: ${{ github.workspace }}
+        run: bash scripts/ci/check-csp.sh
 
       - name: bundle-size guard
         working-directory: ${{ github.workspace }}
