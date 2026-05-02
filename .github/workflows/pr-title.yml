@@ -41,8 +41,6 @@ jobs:
           # Scope is optional but if supplied must be lowercase tokens
           # (e.g. feat(llm): ..., fix(ui,sessions): ...).
           requireScope: false
-          disallowScopes: |
-            release
           # First character of the description must be a non-empty letter
           # or digit; trailing period not allowed.
           subjectPattern: ^(?![A-Z])([a-z0-9].+[^. ])$
