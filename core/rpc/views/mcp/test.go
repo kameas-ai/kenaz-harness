@@ -40,7 +40,7 @@ const stderrTailBytes = 4 * 1024
 //
 // Only stdio transport is currently implemented; HTTP and SSE will
 // be added when WP03/WP04 land their Connection factories.
-func TestConnection(ctx context.Context, spec coremcp.ServerSpec) coremcp.TestResult {
+func TestConnection(ctx context.Context, spec coremcp.ServerSpec) coremcp.TestResult { // privacy-allow: WP07 RPC method, not a Go test
 	if _, ok := ctx.Deadline(); !ok {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, DefaultTestTimeout)
