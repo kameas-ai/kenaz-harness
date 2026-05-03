@@ -2,30 +2,30 @@
 
 Four workflows live in this directory.
 
-## `release-please.yml` — semantic versioning
+## `tag-on-merge.yml` — semantic versioning
 
-Runs on every push to `main`. Reads conventional-commit subjects since the
-last tag and either:
+Runs on every push to `main`. Parses the commit subject (= squashed PR
+title, since the `main` ruleset forces squash + `PR_TITLE` subject):
 
-- **Updates a long-lived "release PR"** with the next version, regenerated
-  `CHANGELOG.md`, bumped `wails.json` `info.productVersion`, and bumped
-  `.release-please-manifest.json`. The PR body lists every commit grouped
-  by section.
-- **Cuts a tag + GitHub Release** when that PR is merged, then dispatches
-  `release.yml` against the new tag so the cross-platform signed binaries
-  attach to the proper `vX.Y.Z` release (not just the rolling `main` channel).
+| Conventional prefix | Bump | Release? |
+|---|---|---|
+| `feat:` (or `feat(scope):`) | minor (`0.x.0`) | yes — instant |
+| `fix:` `perf:` `revert:` `deps:` | patch (`0.x.y`) | yes — instant |
+| `feat!:` / `BREAKING CHANGE:` in body | major, **capped to minor while `< 1.0.0`** | yes — instant |
+| `docs:` `chore:` `ci:` `style:` `refactor:` `test:` `build:` | none | no |
+| Anything that isn't a conventional commit | none | no |
 
-Bump rules (with `bump-minor-pre-major: true` while we are < 1.0.0):
+On a release-worthy commit it: looks up the latest `vX.Y.Z` tag, computes
+the next version, generates GitHub's "What's Changed" auto-release notes
+(grouped by PR + contributor) since the previous tag, creates an
+annotated tag + GitHub Release, then dispatches `release.yml` against
+the new tag to build + sign + publish cross-platform binaries.
 
-| Conventional prefix | Bump |
-|---|---|
-| `feat:` | minor |
-| `fix:` | patch |
-| `feat!:` / `BREAKING CHANGE:` body | minor (capped pre-1.0; flip to major after the 1.0 cut) |
-| `docs:` `chore:` `ci:` `style:` `refactor:` `test:` `build:` | none (no release PR opened by these alone) |
+No CHANGELOG file is maintained — the per-release auto-generated notes
+are the canonical changelog. No release PR — the merge of the original
+PR *is* the release.
 
-Source of truth: `release-please-config.json` + `.release-please-manifest.json`
-in the repo root.
+Source of truth for the next version: `git tag --list 'v*' --sort=-v:refname`.
 
 ## `pr-title.yml` — conventional-commits enforcement
 
