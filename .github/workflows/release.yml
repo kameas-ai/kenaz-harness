@@ -303,8 +303,17 @@ jobs:
       # works pre-enrollment. Once identity validation completes and the
       # five AZURE_* secrets are populated, this step signs every .exe
       # in build/bin via Azure-hosted HSM (no local cert).
+      #
+      # `continue-on-error: true` on these steps so a federation-credential
+      # mismatch (e.g. trust scoped to `main` branch but workflow ran from
+      # a tag ref) does NOT abort the build matrix and skip downstream
+      # publish jobs. Unsigned binaries are preferable to no binaries.
+      # The signing-skipped notice below differentiates "secrets missing"
+      # from "login attempted but failed".
       - name: azure login (OIDC) — windows only
+        id: azure_login
         if: runner.os == 'Windows' && env.AZURE_CLIENT_ID_PRESENT == 'true'
+        continue-on-error: true
         uses: azure/login@v2
         env:
           AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
@@ -314,7 +323,8 @@ jobs:
           allow-no-subscriptions: true
 
       - name: artifact signing (windows .exe)
-        if: runner.os == 'Windows' && env.AZURE_CLIENT_ID_PRESENT == 'true'
+        if: runner.os == 'Windows' && env.AZURE_CLIENT_ID_PRESENT == 'true' && steps.azure_login.outcome == 'success'
+        continue-on-error: true
         uses: azure/trusted-signing-action@v0.5.1
         env:
           AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
@@ -327,6 +337,14 @@ jobs:
           file-digest: SHA256
           timestamp-rfc3161: http://timestamp.acs.microsoft.com
           timestamp-digest: SHA256
+
+      - name: signing skipped notice (windows, azure login failed)
+        if: runner.os == 'Windows' && env.AZURE_CLIENT_ID_PRESENT == 'true' && steps.azure_login.outcome != 'success'
+        shell: bash
+        run: |
+          echo "::warning::Windows binary not signed — Azure OIDC login failed."
+          echo "Likely cause: federation credential subject doesn't match the workflow's OIDC token."
+          echo "If signing is currently scoped to refs/heads/main, add a federation credential for refs/tags/v* (or for the whole repo) in Azure Portal → App Registration → Federated credentials."
 
       - name: signing skipped notice (windows, secrets missing)
         if: runner.os == 'Windows' && env.AZURE_CLIENT_ID_PRESENT != 'true'
