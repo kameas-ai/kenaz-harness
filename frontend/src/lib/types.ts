@@ -515,6 +515,15 @@ export interface Message {
   createdAt: string;
   /** Streaming flag — true while the assistant is still emitting tokens. */
   streaming?: boolean;
+  /**
+   * Set when an assistant message was committed mid-stream because the
+   * stream errored or closed without a clean `completed` reason
+   * (long-turn-resilience WP00). Carries either the provider-side error
+   * string or the close-reason ("backend-error", "ctx-cancelled",
+   * "closed-without-finish", …). Empty / undefined for the happy path
+   * so existing serialised rows don't grow a column.
+   */
+  streamingError?: string;
   toolCalls?: readonly ToolCall[];
   /**
    * Polymorphic content blocks for multimodal messages

@@ -277,6 +277,134 @@ describe('useSession (chat-ui)', () => {
     w.unmount();
   });
 
+  it('preserves partial assistant content when the stream errors mid-turn', async () => {
+    // long-turn-resilience WP00 regression: a stream that emits text
+    // deltas and then errors must NOT throw away the partial content.
+    // The committed message lands in messages.value with streamingError
+    // stamped so the bubble can render the "Connection lost" hint.
+    const { w, session } = mountWithSession({
+      sessions: {
+        list: async () => [],
+        get: async (id) => ({ id, name: id, createdAt: '', updatedAt: '' }),
+        create: async () => ({ id: '', name: '', createdAt: '', updatedAt: '' }),
+        rename: async () => undefined,
+        delete: async () => undefined,
+        reorder: async () => undefined,
+        startStream: async () => 'sub',
+        stopStream: async () => undefined,
+        listMessages: async () => [],
+        appendMessage: async (id, role, content) =>
+          makeMessage({ id: 'u-1', sessionId: id, role, content }),
+        saveDraft: async () => undefined,
+        loadDraft: async () => '',
+      },
+      llm: {
+        listProviders: async () => [],
+        startStream: async () => 'sub-err',
+        stopStream: async () => undefined,
+      },
+    });
+    await vi.runAllTimersAsync();
+    await session.send('q', 'profile');
+    await nextTick();
+    rt.emit('llm:stream-chunk', {
+      sub_id: 'sub-err',
+      session_id: 's-1',
+      chunk: { kind: 'text', text: 'partial reply ' },
+    });
+    rt.emit('llm:stream-chunk', {
+      sub_id: 'sub-err',
+      session_id: 's-1',
+      chunk: { kind: 'text', text: 'before death' },
+    });
+    await nextTick();
+    expect(session.currentlyStreaming.value?.content).toBe(
+      'partial reply before death',
+    );
+    rt.emit('llm:stream-chunk', {
+      sub_id: 'sub-err',
+      session_id: 's-1',
+      chunk: { kind: 'error', err: 'connection reset' },
+    });
+    await nextTick();
+    // The partial content must already be in messages.value, with
+    // streamingError set, BEFORE stream-closed arrives.
+    const committedAfterError = session.messages.value.find(
+      (m) => m.role === 'assistant' && m.content.startsWith('partial reply'),
+    );
+    expect(committedAfterError).toBeTruthy();
+    expect(committedAfterError?.streamingError).toBe('connection reset');
+    expect(committedAfterError?.streaming).toBe(false);
+    expect(session.error.value).toBe('connection reset');
+    // stream-closed arrives second; idempotency check — no duplicate
+    // append even though currentlyStreaming was non-null at error time.
+    rt.emit('llm:stream-closed', {
+      sub_id: 'sub-err',
+      session_id: 's-1',
+      reason: 'backend-error',
+      message: 'connection reset',
+    });
+    await nextTick();
+    const matches = session.messages.value.filter(
+      (m) => m.role === 'assistant' && m.content.startsWith('partial reply'),
+    );
+    expect(matches).toHaveLength(1);
+    expect(session.currentlyStreaming.value).toBeNull();
+    expect(session.streamSubscriptionId.value).toBeNull();
+    w.unmount();
+  });
+
+  it('commits partial content on stream-closed when reason !== completed', async () => {
+    // long-turn-resilience WP00: the close handler is now responsible
+    // for committing partial content even when the stream never sent a
+    // discrete `error` chunk (e.g. a clean TCP RST mid-stream that the
+    // backend surfaces only via stream-closed).
+    const { w, session } = mountWithSession({
+      sessions: {
+        list: async () => [],
+        get: async (id) => ({ id, name: id, createdAt: '', updatedAt: '' }),
+        create: async () => ({ id: '', name: '', createdAt: '', updatedAt: '' }),
+        rename: async () => undefined,
+        delete: async () => undefined,
+        reorder: async () => undefined,
+        startStream: async () => 'sub',
+        stopStream: async () => undefined,
+        listMessages: async () => [],
+        appendMessage: async (id, role, content) =>
+          makeMessage({ id: 'u-1', sessionId: id, role, content }),
+        saveDraft: async () => undefined,
+        loadDraft: async () => '',
+      },
+      llm: {
+        listProviders: async () => [],
+        startStream: async () => 'sub-cut',
+        stopStream: async () => undefined,
+      },
+    });
+    await vi.runAllTimersAsync();
+    await session.send('q', 'profile');
+    await nextTick();
+    rt.emit('llm:stream-chunk', {
+      sub_id: 'sub-cut',
+      session_id: 's-1',
+      chunk: { kind: 'text', text: 'half a reply' },
+    });
+    await nextTick();
+    rt.emit('llm:stream-closed', {
+      sub_id: 'sub-cut',
+      session_id: 's-1',
+      reason: 'ctx-cancelled',
+    });
+    await nextTick();
+    const last = session.messages.value[session.messages.value.length - 1];
+    expect(last.role).toBe('assistant');
+    expect(last.content).toBe('half a reply');
+    expect(last.streamingError).toBe('ctx-cancelled');
+    expect(last.streaming).toBe(false);
+    expect(session.currentlyStreaming.value).toBeNull();
+    w.unmount();
+  });
+
   it('flags streamingTimedOut after 30s with no chunks', async () => {
     const { w, session } = mountWithSession({
       sessions: {

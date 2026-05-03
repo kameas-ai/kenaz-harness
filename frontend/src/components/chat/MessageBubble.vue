@@ -97,6 +97,14 @@ const props = defineProps<{
   summaryFoldedCount?: number;
   isArchived?: boolean;
   archivedFromSummaryId?: string;
+  /**
+   * Set when this assistant message was committed mid-stream because
+   * of a network / provider failure (long-turn-resilience WP00). When
+   * present, MessageBubble renders a "Connection lost" sub-line under
+   * the bubble. The Resume affordance lands in WP03 — for now the user
+   * can re-send manually.
+   */
+  streamingError?: string;
 }>();
 
 const emit = defineEmits<{
@@ -442,6 +450,18 @@ function isLastBlock(idx: number): boolean {
           :artifact="a"
           @open="onArtifactChipOpen"
         />
+      </div>
+
+      <!-- long-turn-resilience WP00: surface partial-stream failures so
+           the user knows the bubble was cut off. Resume button lands in
+           WP03; until then the user can re-send manually. -->
+      <div
+        v-if="isAssistant && streamingError"
+        class="mt-2 font-ui text-[11px] text-ink-subtle italic"
+        data-testid="message-streaming-error"
+        :data-streaming-error="streamingError"
+      >
+        Connection lost — partial reply preserved.
       </div>
     </div>
   </article>

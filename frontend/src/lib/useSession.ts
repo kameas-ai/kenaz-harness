@@ -242,6 +242,23 @@ export function useSession(id: Ref<string>): UseSessionResult {
         return;
       }
       case 'error': {
+        // long-turn-resilience WP00: commit any partial assistant
+        // content BEFORE surfacing the error so the bubble survives the
+        // failure. We deliberately leave currentlyStreaming non-null so
+        // the stream-closed handler still owns the canonical cleanup
+        // path; stream-closed dedupes by id so the second commit is a
+        // no-op.
+        const partial = currentlyStreaming.value;
+        if (partial && partial.content.length > 0) {
+          const committed: Message = {
+            ...partial,
+            streaming: false,
+            streamingError: ev.err || 'stream-error',
+          };
+          if (!messages.value.some((m) => m.id === committed.id)) {
+            messages.value = [...messages.value, committed];
+          }
+        }
         if (ev.err) error.value = ev.err;
         return;
       }
@@ -269,8 +286,22 @@ export function useSession(id: Ref<string>): UseSessionResult {
     clearStreamTimeout();
     const finished = currentlyStreaming.value;
     if (finished) {
-      const committed: Message = { ...finished, streaming: false };
-      messages.value = [...messages.value, committed];
+      // long-turn-resilience WP00: commit on every close reason, not
+      // just `completed`. When the close arrived because of an error /
+      // cancel / EOF-without-finish, stamp `streamingError` so the
+      // bubble can render a "Connection lost" hint. Dedupe by id in
+      // case the case 'error' branch above already committed.
+      const isClean = payload.reason === 'completed';
+      const committed: Message = {
+        ...finished,
+        streaming: false,
+        ...(isClean
+          ? {}
+          : { streamingError: payload.reason || 'closed-without-finish' }),
+      };
+      if (!messages.value.some((m) => m.id === committed.id)) {
+        messages.value = [...messages.value, committed];
+      }
     }
     currentlyStreaming.value = null;
     streamSubscriptionId.value = null;

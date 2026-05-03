@@ -259,6 +259,7 @@ defineExpose({ scrollToBottom });
           :summary-folded-count="summaryFoldCounts.get(m.id) ?? 0"
           :is-archived="isArchivedRow(m)"
           :archived-from-summary-id="m.compactedIntoId ?? ''"
+          :streaming-error="m.streamingError"
           @remember="(scope) => emit('remember', m, scope)"
           @save-artifact="() => emit('save-artifact', m)"
           @open-artifact="(a) => emit('open-artifact', a)"
