@@ -717,6 +717,82 @@ func TestAdapter_DocumentBlock_Serialized(t *testing.T) {
 	}
 }
 
+// TestConvertContent_ToolResult_NormalizesObjectPayload guards the wire
+// shape Anthropic requires for tool_result content blocks: a string OR a
+// list of content blocks. A bare JSON object is rejected with
+// "Found an object, but `tool_result` content must either be a string or
+// a list of content blocks" — the bug surfaced from a tool returning a
+// structured result on May 2 2026.
+func TestConvertContent_ToolResult_NormalizesObjectPayload(t *testing.T) {
+	cases := []struct {
+		name    string
+		payload string
+		want    func(t *testing.T, got any)
+	}{
+		{
+			name:    "object payload wrapped as text block",
+			payload: `{"foo":"bar","n":1}`,
+			want: func(t *testing.T, got any) {
+				blocks, ok := got.([]map[string]any)
+				if !ok {
+					t.Fatalf("want []map[string]any, got %T (%v)", got, got)
+				}
+				if len(blocks) != 1 || blocks[0]["type"] != "text" {
+					t.Fatalf("want one text block, got %+v", blocks)
+				}
+				if blocks[0]["text"] != `{"foo":"bar","n":1}` {
+					t.Fatalf("text payload not preserved: %v", blocks[0]["text"])
+				}
+			},
+		},
+		{
+			name:    "string payload passes through",
+			payload: `"hello world"`,
+			want: func(t *testing.T, got any) {
+				if got != "hello world" {
+					t.Fatalf("want plain string, got %T %v", got, got)
+				}
+			},
+		},
+		{
+			name:    "array payload passes through",
+			payload: `[{"type":"text","text":"a"}]`,
+			want: func(t *testing.T, got any) {
+				arr, ok := got.([]any)
+				if !ok || len(arr) != 1 {
+					t.Fatalf("want []any of length 1, got %T %v", got, got)
+				}
+			},
+		},
+		{
+			name:    "number payload wrapped as text block",
+			payload: `42`,
+			want: func(t *testing.T, got any) {
+				blocks, ok := got.([]map[string]any)
+				if !ok || len(blocks) != 1 || blocks[0]["text"] != "42" {
+					t.Fatalf("want wrapped number, got %+v", got)
+				}
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			parts := []llm.ContentBlock{{
+				Type: "tool_result",
+				ToolResult: &llm.ToolResult{
+					ToolUseID: "tu_1",
+					Content:   json.RawMessage(tc.payload),
+				},
+			}}
+			out := convertContent(parts)
+			if len(out) != 1 || out[0]["type"] != "tool_result" {
+				t.Fatalf("convertContent did not emit tool_result: %+v", out)
+			}
+			tc.want(t, out[0]["content"])
+		})
+	}
+}
+
 func TestAdapter_ListModels_HTTPError(t *testing.T) {
 	fs := newFakeServer(t, func(w http.ResponseWriter, _ *http.Request, _ int) {
 		w.WriteHeader(http.StatusUnauthorized)

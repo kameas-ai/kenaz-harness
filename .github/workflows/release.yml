@@ -1,17 +1,19 @@
 name: Release
 
 on:
-  push:
-    branches: [main]
-    paths-ignore:
-      - 'docs/**'
-      - '*.md'
-      - '.github/**'
+  # release-please owns version bumps; this workflow only runs against
+  # real semver tags. Three entry points:
+  #   1. release-please dispatches it via `gh workflow run release.yml --ref vX.Y.Z`
+  #      after merging a release PR (the primary path).
+  #   2. A human creates a Release in the GitHub UI (manual path; rare).
+  #   3. workflow_dispatch with an explicit version (escape hatch / re-run).
+  # No more `push: branches: [main]` — non-versioning merges (chore/docs/ci/etc.)
+  # do not produce binaries; PR-time `build-smoke` covers build-health verification.
   workflow_dispatch:
     inputs:
       version:
-        description: 'Override version (e.g. v0.1.0). Leave empty to derive from sha.'
-        required: false
+        description: 'Tag to build (e.g. v0.1.0). Required.'
+        required: true
   release:
     types: [published]
 
@@ -24,7 +26,8 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  GO_VERSION: '1.22'
+  # Match go.mod (currently 1.25.0). Bumping here when go.mod bumps.
+  GO_VERSION: '1.25'
   NODE_VERSION: '20'
 
 jobs:
@@ -33,26 +36,25 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.set.outputs.version }}
-      is_release: ${{ steps.set.outputs.is_release }}
     steps:
       - uses: actions/checkout@v4
       - id: set
         run: |
+          set -euo pipefail
           if [ "${{ github.event_name }}" = "release" ]; then
             VERSION="${{ github.event.release.tag_name }}"
-            IS_RELEASE=true
           elif [ -n "${{ github.event.inputs.version }}" ]; then
             VERSION="${{ github.event.inputs.version }}"
-            IS_RELEASE=true
           else
-            SHORT_SHA=$(git rev-parse --short=8 HEAD)
-            DATE=$(date -u +%Y%m%d)
-            VERSION="v0.0.0-main-${DATE}-${SHORT_SHA}"
-            IS_RELEASE=false
+            echo "::error::release.yml expects either a release event or a workflow_dispatch with version=vX.Y.Z"
+            exit 1
+          fi
+          if ! [[ "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.-]+)?$ ]]; then
+            echo "::error::version '$VERSION' is not a valid SemVer tag (vX.Y.Z[-pre])"
+            exit 1
           fi
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
-          echo "is_release=${IS_RELEASE}" >> "$GITHUB_OUTPUT"
-          echo "Resolved version: ${VERSION} (release=${IS_RELEASE})"
+          echo "Resolved version: ${VERSION}"
 
   build:
     name: Build ${{ matrix.label }}
@@ -66,12 +68,23 @@ jobs:
             wails_platform: linux/amd64
             artifact_glob: 'build/bin/*'
             archive_ext: tar.gz
-          - os: macos-13 # Intel runner
+          - os: ubuntu-24.04-arm
+            label: linux-arm64
+            wails_platform: linux/arm64
+            artifact_glob: 'build/bin/*'
+            archive_ext: tar.gz
+          # Cross-compile both Mac architectures from Apple Silicon runners.
+          # macos-13 (Intel) hosted runners have been intermittently
+          # unschedulable — observed runs sitting queued >50 min with no
+          # runner ever assigned. macos-14 / macos-latest run Apple Silicon
+          # and Go cross-compiles to darwin/amd64 fine; Wails ships its
+          # macOS SDK headers regardless of build host arch.
+          - os: macos-latest
             label: darwin-amd64
             wails_platform: darwin/amd64
             artifact_glob: 'build/bin/*.app'
             archive_ext: zip
-          - os: macos-14 # Apple Silicon runner
+          - os: macos-latest
             label: darwin-arm64
             wails_platform: darwin/arm64
             artifact_glob: 'build/bin/*.app'
@@ -81,10 +94,29 @@ jobs:
             wails_platform: windows/amd64
             artifact_glob: 'build/bin/*.exe'
             archive_ext: zip
+          # Cross-compile to Windows arm64 from the x86 runner (Wails
+          # supports it; no separate runner needed). Trusted Signing's
+          # signtool handles arm64 PE files transparently — same step,
+          # same secrets, no Windows-arm64 runner required.
+          - os: windows-latest
+            label: windows-arm64
+            wails_platform: windows/arm64
+            artifact_glob: 'build/bin/*.exe'
+            archive_ext: zip
     runs-on: ${{ matrix.os }}
     permissions:
       contents: read
       id-token: write   # required for Azure OIDC federation on Windows signing
+    # Lift the gating-only secrets to job-level env so step `if:`
+    # expressions can read them. GitHub evaluates step `if:` *before*
+    # the step's own `env:` block is materialized, so per-step
+    # `env: APPLE_CERT_P12: ${{ secrets... }}` is invisible to its
+    # own `if: env.APPLE_CERT_P12 != ''`. Only checking presence here;
+    # the secret value still flows into `secrets.*` references that
+    # need it.
+    env:
+      APPLE_CERT_P12_PRESENT: ${{ secrets.APPLE_CERT_P12 != '' }}
+      AZURE_CLIENT_ID_PRESENT: ${{ secrets.AZURE_CLIENT_ID != '' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -102,35 +134,186 @@ jobs:
       - name: install wails system deps (linux)
         if: runner.os == 'Linux'
         run: |
+          # ubuntu-latest moved to 24.04, which ships libwebkit2gtk-4.1
+          # (not 4.0). Pair with the `webkit2_41` build tag below.
           sudo apt-get update
           sudo apt-get install -y \
-            libgtk-3-dev libwebkit2gtk-4.0-dev pkg-config
+            libgtk-3-dev libwebkit2gtk-4.1-dev pkg-config
 
       - name: install wails CLI
-        run: go install github.com/wailsapp/wails/v2/cmd/wails@latest
+        # Pin to the same version we've validated locally; @latest can ship
+        # breaking generator changes (the Wails CLI emits TS bindings, etc.).
+        run: go install github.com/wailsapp/wails/v2/cmd/wails@v2.12.0
 
       - name: frontend deps
         working-directory: frontend
         run: npm ci
 
+      # Sync wails.json info.productVersion to the resolved release
+      # version BEFORE wails build, so the OS-visible bundle metadata
+      # (CFBundleShortVersionString on macOS, FileVersion on Windows)
+      # matches the tag instead of the source-tree default. Stable tag
+      # builds: source already matches (release-please bumped it). Rolling
+      # main builds: source is the last release version, so we overwrite
+      # with the rolling label here.
+      #
+      # Wails enforces a numeric productVersion (X.Y.Z[.W]); strip the
+      # leading "v" and any rolling/prerelease suffix before writing.
+      - name: sync wails.json productVersion
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${{ needs.derive-version.outputs.version }}"
+          NUMERIC=$(echo "$VERSION" | sed -E 's/^v//; s/-.*$//')
+          if ! [[ "$NUMERIC" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::warning::derived numeric version '$NUMERIC' is not X.Y.Z; leaving wails.json untouched"
+            exit 0
+          fi
+          tmp=$(mktemp)
+          jq --arg v "$NUMERIC" '.info.productVersion = $v' wails.json > "$tmp" && mv "$tmp" wails.json
+          echo "wails.json info.productVersion → $NUMERIC"
+
       - name: wails build
         shell: bash
         run: |
+          set -euo pipefail
           VERSION="${{ needs.derive-version.outputs.version }}"
-          # Pass version via -ldflags so main.go can surface it.
-          wails build \
-            -platform ${{ matrix.wails_platform }} \
-            -ldflags "-X main.Version=${VERSION}" \
-            -trimpath \
-            -tags ${{ runner.os == 'Linux' && 'webkit2_41' || '' }}
+          # The -tags flag is only valid with an argument. Linux needs
+          # webkit2_41 (gtk 4.1); macOS + Windows want no tags. Build the
+          # arg list conditionally so we don't emit a bare `-tags` on
+          # platforms that don't need one.
+          ARGS=(
+            -platform "${{ matrix.wails_platform }}"
+            -ldflags "-X main.Version=${VERSION}"
+            -trimpath
+          )
+          if [ "${{ runner.os }}" = "Linux" ]; then
+            ARGS+=(-tags webkit2_41)
+          fi
+          wails build "${ARGS[@]}"
+
+      # ── macOS rename + code signing + notarization ──────────────────────
+      # Wails names the .app bundle from wails.json `name` (kenaz-harness),
+      # ignoring info.productName for the directory name. Rename to "Kenaz.app"
+      # so the user-visible artifact matches CFBundleName.
+      - name: rename .app bundle to Kenaz.app (macos only)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -d "build/bin/kenaz-harness.app" ] && [ ! -d "build/bin/Kenaz.app" ]; then
+            mv "build/bin/kenaz-harness.app" "build/bin/Kenaz.app"
+          fi
+          test -d "build/bin/Kenaz.app" || { echo "::error::expected build/bin/Kenaz.app"; ls -la build/bin; exit 1; }
+
+      # Org-level secret APPLE_CERT_P12 is the base64 of a Developer ID
+      # Application .p12 export. Imported into a temp keychain that's
+      # destroyed when the runner cleans up; nothing persists.
+      # Skips silently when the org secret isn't visible to this repo,
+      # so future repos that opt out of signing still build.
+      - name: import Apple signing certificate (macos only)
+        if: runner.os == 'macOS' && env.APPLE_CERT_P12_PRESENT == 'true'
+        env:
+          APPLE_CERT_P12: ${{ secrets.APPLE_CERT_P12 }}
+          APPLE_CERT_P12_PASSWORD: ${{ secrets.APPLE_CERT_P12_PASSWORD }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          KEYCHAIN_PATH="$RUNNER_TEMP/build.keychain-db"
+          KEYCHAIN_PASSWORD=$(uuidgen)
+          CERT_PATH="$RUNNER_TEMP/cert.p12"
+
+          echo "$APPLE_CERT_P12" | base64 -d > "$CERT_PATH"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security import "$CERT_PATH" -P "$APPLE_CERT_P12_PASSWORD" \
+            -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH" >/dev/null
+          security list-keychains -d user -s "$KEYCHAIN_PATH" \
+            $(security list-keychains -d user | tr -d '"')
+
+          echo "KEYCHAIN_PATH=$KEYCHAIN_PATH" >> "$GITHUB_ENV"
+          echo "::add-mask::$KEYCHAIN_PASSWORD"
+
+          security find-identity -v -p codesigning "$KEYCHAIN_PATH"
+
+      - name: codesign Kenaz.app (macos only)
+        if: runner.os == 'macOS' && env.APPLE_CERT_P12_PRESENT == 'true'
+        env:
+          APPLE_CERT_P12: ${{ secrets.APPLE_CERT_P12 }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # --deep covers the embedded Chromium framework + helpers.
+          # --options runtime enables Hardened Runtime (required for notarization).
+          # --timestamp embeds an Apple-trusted RFC 3161 timestamp.
+          codesign --force --deep --options runtime --timestamp \
+            --entitlements build/darwin/entitlements.plist \
+            --sign "Developer ID Application: Kameas AI, Inc. (K54JDRHBA7)" \
+            build/bin/Kenaz.app
+          codesign --verify --deep --strict --verbose=2 build/bin/Kenaz.app
+          codesign -dv --verbose=4 build/bin/Kenaz.app
+
+      - name: notarize Kenaz.app (macos only)
+        if: runner.os == 'macOS' && env.APPLE_CERT_P12_PRESENT == 'true'
+        env:
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          ZIP_PATH="$RUNNER_TEMP/Kenaz-notarize.zip"
+          P8_PATH="$RUNNER_TEMP/AuthKey_${APPLE_API_KEY_ID}.p8"
+          echo "$APPLE_API_KEY_P8" > "$P8_PATH"
+          chmod 600 "$P8_PATH"
+
+          ditto -c -k --sequesterRsrc --keepParent build/bin/Kenaz.app "$ZIP_PATH"
+          xcrun notarytool submit "$ZIP_PATH" \
+            --key "$P8_PATH" --key-id "$APPLE_API_KEY_ID" --issuer "$APPLE_API_ISSUER_ID" \
+            --wait --timeout 30m
+
+          xcrun stapler staple build/bin/Kenaz.app
+          # Final acceptance check — should print "accepted source=Notarized Developer ID"
+          spctl -a -vv build/bin/Kenaz.app
+          rm -f "$P8_PATH"
+
+      - name: cleanup keychain (macos, always)
+        if: runner.os == 'macOS' && always()
+        shell: bash
+        run: |
+          if [ -n "${KEYCHAIN_PATH:-}" ] && [ -f "$KEYCHAIN_PATH" ]; then
+            security delete-keychain "$KEYCHAIN_PATH" || true
+          fi
+
+      - name: macos signing skipped notice
+        if: runner.os == 'macOS' && env.APPLE_CERT_P12_PRESENT != 'true'
+        env:
+          APPLE_CERT_P12: ${{ secrets.APPLE_CERT_P12 }}
+        shell: bash
+        run: |
+          echo "::notice::macOS binary not signed — APPLE_CERT_P12 org secret not visible to this repo."
+          echo "Add this repo to the kameas-ai org's APPLE_CERT_P12 + APPLE_CERT_P12_PASSWORD +"
+          echo "APPLE_API_KEY_P8 + APPLE_API_KEY_ID + APPLE_API_ISSUER_ID secrets to enable."
 
       # ── Windows code signing (Microsoft Artifact Signing / Trusted Signing) ──
       # Skips silently when AZURE_CLIENT_ID is not set, so the workflow
       # works pre-enrollment. Once identity validation completes and the
       # five AZURE_* secrets are populated, this step signs every .exe
       # in build/bin via Azure-hosted HSM (no local cert).
+      #
+      # `continue-on-error: true` on these steps so a federation-credential
+      # mismatch (e.g. trust scoped to `main` branch but workflow ran from
+      # a tag ref) does NOT abort the build matrix and skip downstream
+      # publish jobs. Unsigned binaries are preferable to no binaries.
+      # The signing-skipped notice below differentiates "secrets missing"
+      # from "login attempted but failed".
       - name: azure login (OIDC) — windows only
-        if: runner.os == 'Windows' && env.AZURE_CLIENT_ID != ''
+        id: azure_login
+        if: runner.os == 'Windows' && env.AZURE_CLIENT_ID_PRESENT == 'true'
+        continue-on-error: true
         uses: azure/login@v2
         env:
           AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
@@ -140,7 +323,8 @@ jobs:
           allow-no-subscriptions: true
 
       - name: artifact signing (windows .exe)
-        if: runner.os == 'Windows' && env.AZURE_CLIENT_ID != ''
+        if: runner.os == 'Windows' && env.AZURE_CLIENT_ID_PRESENT == 'true' && steps.azure_login.outcome == 'success'
+        continue-on-error: true
         uses: azure/trusted-signing-action@v0.5.1
         env:
           AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
@@ -154,8 +338,16 @@ jobs:
           timestamp-rfc3161: http://timestamp.acs.microsoft.com
           timestamp-digest: SHA256
 
+      - name: signing skipped notice (windows, azure login failed)
+        if: runner.os == 'Windows' && env.AZURE_CLIENT_ID_PRESENT == 'true' && steps.azure_login.outcome != 'success'
+        shell: bash
+        run: |
+          echo "::warning::Windows binary not signed — Azure OIDC login failed."
+          echo "Likely cause: federation credential subject doesn't match the workflow's OIDC token."
+          echo "If signing is currently scoped to refs/heads/main, add a federation credential for refs/tags/v* (or for the whole repo) in Azure Portal → App Registration → Federated credentials."
+
       - name: signing skipped notice (windows, secrets missing)
-        if: runner.os == 'Windows' && env.AZURE_CLIENT_ID == ''
+        if: runner.os == 'Windows' && env.AZURE_CLIENT_ID_PRESENT != 'true'
         env:
           AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
         shell: bash
@@ -188,7 +380,10 @@ jobs:
           $label   = "${{ matrix.label }}"
           $stage   = "kaneaz-harness-$version-$label"
           New-Item -ItemType Directory -Force -Path dist | Out-Null
-          Rename-Item build/bin $stage
+          # Move-Item (not Rename-Item) — Rename-Item only changes the name
+          # in place ("build/$stage"), but Compress-Archive expects the staged
+          # folder at cwd. Move-Item relocates it to the working directory.
+          Move-Item build/bin $stage
           Compress-Archive -Path $stage -DestinationPath "dist/$stage.zip"
           Get-ChildItem dist
 
@@ -233,49 +428,36 @@ jobs:
       - name: list artifacts
         run: ls -la dist-flat/
 
-      - name: create or update release
+      - name: upload artifacts to release
         id: create
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          set -e
+          set -euo pipefail
           VERSION="${{ needs.derive-version.outputs.version }}"
-          IS_RELEASE="${{ needs.derive-version.outputs.is_release }}"
-
-          if [ "$IS_RELEASE" = "true" ]; then
-            # Tagged release: upload to existing release if possible, otherwise create.
-            TAG="$VERSION"
-            if ! gh release view "$TAG" >/dev/null 2>&1; then
-              gh release create "$TAG" \
-                --title "$TAG" \
-                --notes "Automated release from main." \
-                --target "$GITHUB_SHA"
-            fi
-            gh release upload "$TAG" dist-flat/* --clobber
-            URL=$(gh release view "$TAG" --json url --jq .url)
-          else
-            # Pre-release rolling channel: replace the "main" prerelease.
-            TAG="main"
-            if gh release view "$TAG" >/dev/null 2>&1; then
-              gh release delete "$TAG" --yes --cleanup-tag
-            fi
+          TAG="$VERSION"
+          # release-please creates the Release before dispatching us, so
+          # `view` should always succeed. If a human runs this via
+          # workflow_dispatch against a tag that has no Release yet, fall
+          # back to creating one. Notes default to release-please's body
+          # when present.
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
             gh release create "$TAG" \
-              --title "main (rolling, $VERSION)" \
-              --notes "Rolling build from main. Not a stable release." \
-              --prerelease \
-              --target "$GITHUB_SHA" \
-              dist-flat/*
-            URL=$(gh release view "$TAG" --json url --jq .url)
+              --title "$TAG" \
+              --notes "Automated release for $TAG." \
+              --target "$GITHUB_SHA"
           fi
-
-          echo "tag=$TAG"   >> "$GITHUB_OUTPUT"
-          echo "url=$URL"   >> "$GITHUB_OUTPUT"
+          gh release upload "$TAG" dist-flat/* --clobber
+          URL=$(gh release view "$TAG" --json url --jq .url)
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "url=$URL" >> "$GITHUB_OUTPUT"
 
       - name: build asset manifest for docs site
         id: manifest
         env:
           VERSION: ${{ needs.derive-version.outputs.version }}
           TAG:     ${{ steps.create.outputs.tag }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           # Emit a JSON manifest the docusaurus site consumes.
           # One record per platform with download URL + sha256.
@@ -325,43 +507,190 @@ jobs:
           # Also upload the manifest as a release asset so the docs site
           # can fetch it without needing a token.
           gh release upload "${{ steps.create.outputs.tag }}" manifest.json --clobber
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  notify-docs:
-    name: Notify docusaurus site
+  publish-s3:
+    name: Publish artifacts to docs CDN (S3)
     needs: [derive-version, release]
     runs-on: ubuntu-latest
-    # Only fire for tagged releases or main rolling builds.
-    if: needs.derive-version.outputs.is_release == 'true' || github.event_name == 'push'
+    # The kenaz-harness repo is private and GitHub release assets on
+    # private repos require auth — public docs visitors get 404 hitting
+    # github.com/.../releases/download/. Mirror to the same S3 bucket
+    # docs.kameas.ai serves from so binaries are reachable at
+    # https://docs.kameas.ai/downloads/<file>. Same OIDC chain the
+    # kenaz-docs deploy uses.
+    permissions:
+      id-token: write
+      contents: read
+    environment: shared-services
     steps:
-      - name: dispatch update to kenaz-docs
-        env:
-          DOCS_TOKEN: ${{ secrets.DOCS_DISPATCH_TOKEN }}
-        run: |
-          if [ -z "$DOCS_TOKEN" ]; then
-            echo "DOCS_DISPATCH_TOKEN not set — skipping docs dispatch."
-            echo "To enable: add a PAT with 'repo' scope on kameas-ai/kenaz-docs as DOCS_DISPATCH_TOKEN secret on this repo."
-            exit 0
-          fi
+      - uses: actions/checkout@v4
 
-          # repository_dispatch into kenaz-docs; that repo's workflow
-          # consumes type "kaneaz-harness-release" + the manifest payload
-          # to update its download page.
-          curl -fsSL -X POST \
-            -H "Authorization: token ${DOCS_TOKEN}" \
-            -H "Accept: application/vnd.github+json" \
-            -H "X-GitHub-Api-Version: 2022-11-28" \
-            https://api.github.com/repos/kameas-ai/kenaz-docs/dispatches \
-            -d @- <<EOF
-          {
-            "event_type": "kaneaz-harness-release",
-            "client_payload": {
-              "version": "${{ needs.derive-version.outputs.version }}",
-              "tag":     "${{ needs.release.outputs.release_tag }}",
-              "release_url": "${{ needs.release.outputs.release_url }}",
-              "manifest_url": "https://github.com/kameas-ai/kaneaz-harness/releases/download/${{ needs.release.outputs.release_tag }}/manifest.json",
-              "is_release": ${{ needs.derive-version.outputs.is_release }}
-            }
+      - name: download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist-flat
+          pattern: kaneaz-harness-*
+          merge-multiple: true
+
+      - name: rewrite manifest with docs.kameas.ai URLs
+        env:
+          VERSION: ${{ needs.derive-version.outputs.version }}
+          TAG:     ${{ needs.release.outputs.release_tag }}
+        run: |
+          python3 - <<'PY'
+          import json, os, pathlib, re
+          tag = os.environ['TAG']
+          version = os.environ['VERSION']
+          # Public CDN base — the docs site's CloudFront distribution
+          # serves /downloads/<tag>/<file> from s3://kameas-ai-docs-site.
+          base = f"https://docs.kameas.ai/downloads/{tag}"
+          dist = pathlib.Path('dist-flat')
+          assets = []
+          for f in sorted(dist.iterdir()):
+              if f.suffix == '.sha256' or f.name == 'manifest.json':
+                  continue
+              sha_path = dist / f"{f.name}.sha256"
+              sha = ''
+              if sha_path.exists():
+                  sha = sha_path.read_text().split()[0]
+              m = re.match(r'kaneaz-harness-.+?-(linux|darwin|windows)-(amd64|arm64)\.(.+)$', f.name)
+              if not m:
+                  continue
+              os_label, arch, ext = m.groups()
+              assets.append({
+                  'platform': f"{os_label}-{arch}",
+                  'os': os_label,
+                  'arch': arch,
+                  'filename': f.name,
+                  'url': f"{base}/{f.name}",
+                  'sha256': sha,
+                  'ext': ext,
+                  'size_bytes': f.stat().st_size,
+              })
+          manifest = {
+              'version': version,
+              'tag': tag,
+              'commit': os.environ.get('GITHUB_SHA', ''),
+              'released_at': os.environ.get('GITHUB_RUN_STARTED_AT', ''),
+              'release_url': f"https://docs.kameas.ai/download/",
+              'assets': assets,
           }
-          EOF
+          pathlib.Path('dist-flat/manifest.json').write_text(json.dumps(manifest, indent=2))
+          print(json.dumps(manifest, indent=2))
+          PY
+
+      - name: Configure AWS credentials (gh-deploy-shared-services)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::764395350337:role/gh-deploy-shared-services
+          aws-region: us-east-2
+
+      - name: Chain-assume AppDeployRole
+        shell: bash
+        run: |
+          set -euo pipefail
+          CREDS=$(aws sts assume-role \
+            --role-arn arn:aws:iam::575638747659:role/AppDeployRole \
+            --role-session-name gh-publish-kenaz-harness \
+            --query 'Credentials' --output json)
+
+          echo "::add-mask::$(echo "$CREDS" | jq -r .AccessKeyId)"
+          echo "::add-mask::$(echo "$CREDS" | jq -r .SecretAccessKey)"
+          echo "::add-mask::$(echo "$CREDS" | jq -r .SessionToken)"
+          {
+            echo "AWS_ACCESS_KEY_ID=$(echo "$CREDS" | jq -r .AccessKeyId)"
+            echo "AWS_SECRET_ACCESS_KEY=$(echo "$CREDS" | jq -r .SecretAccessKey)"
+            echo "AWS_SESSION_TOKEN=$(echo "$CREDS" | jq -r .SessionToken)"
+          } >> "$GITHUB_ENV"
+
+      - name: Upload binaries + sha256 to per-tag prefix
+        env:
+          TAG: ${{ needs.release.outputs.release_tag }}
+        run: |
+          set -euo pipefail
+          # Per-tag prefix so old releases stay reachable for users
+          # who have a stale /download/ tab open. Long cache (1h) on
+          # binaries since filenames are version-stamped.
+          aws s3 sync dist-flat/ "s3://kameas-ai-docs-site/downloads/${TAG}/" \
+            --exclude 'manifest.json' \
+            --cache-control 'public, max-age=3600' \
+            --metadata-directive REPLACE \
+            --no-progress
+
+      - name: Upload manifest at canonical path (short cache)
+        env:
+          TAG: ${{ needs.release.outputs.release_tag }}
+        run: |
+          set -euo pipefail
+          # The download page fetches /downloads/manifest.json at runtime.
+          # Short cache so a fresh release shows up within minutes.
+          aws s3 cp dist-flat/manifest.json s3://kameas-ai-docs-site/downloads/manifest.json \
+            --cache-control 'public, max-age=120, must-revalidate' \
+            --content-type 'application/json' \
+            --metadata-directive REPLACE \
+            --no-progress
+          # Also pin a copy under the per-tag prefix for forensic lookup.
+          aws s3 cp dist-flat/manifest.json "s3://kameas-ai-docs-site/downloads/${TAG}/manifest.json" \
+            --cache-control 'public, max-age=3600' \
+            --content-type 'application/json' \
+            --metadata-directive REPLACE \
+            --no-progress
+
+      - name: Update versions index
+        env:
+          TAG: ${{ needs.release.outputs.release_tag }}
+          VERSION: ${{ needs.derive-version.outputs.version }}
+          IS_RELEASE: ${{ needs.derive-version.outputs.is_release }}
+        run: |
+          set -euo pipefail
+          # Maintain s3://.../downloads/index.json — a sorted list of
+          # every version that's been published. The download page
+          # fetches this lazily when the user opens the version picker.
+          # Read-modify-write pattern; a missing index seeds an empty list.
+          INDEX_S3=s3://kameas-ai-docs-site/downloads/index.json
+          if aws s3 cp "$INDEX_S3" /tmp/index.json --no-progress 2>/dev/null; then
+            echo "fetched existing index"
+          else
+            echo '{"updated_at":"","versions":[]}' > /tmp/index.json
+            echo "seeded empty index"
+          fi
+          export NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          python3 - <<'PY' > /tmp/index.new.json
+          import json, os, pathlib
+          idx = json.loads(pathlib.Path('/tmp/index.json').read_text() or '{}')
+          versions = idx.get('versions') or []
+          tag = os.environ['TAG']
+          # Drop any prior entry for the same tag (rolling 'main' replaces
+          # itself; tagged releases shouldn't republish but if they do the
+          # latest wins).
+          versions = [v for v in versions if v.get('tag') != tag]
+          versions.append({
+              'tag': tag,
+              'version': os.environ['VERSION'],
+              'released_at': os.environ['NOW'],
+              'is_release': os.environ.get('IS_RELEASE', 'false') == 'true',
+              'manifest_url': f"https://docs.kameas.ai/downloads/{tag}/manifest.json",
+          })
+          # Newest first by released_at, with 'main' (rolling) pinned to
+          # the top so the picker shows it at the front.
+          versions.sort(key=lambda v: (0 if v.get('tag') == 'main' else 1, v.get('released_at', '')), reverse=True)
+          # Cap at 50 entries — very old builds drop off the picker but
+          # their /downloads/<tag>/ assets remain in S3 for direct linking.
+          versions = versions[:50]
+          print(json.dumps({'updated_at': os.environ['NOW'], 'versions': versions}, indent=2))
+          PY
+
+          aws s3 cp /tmp/index.new.json "$INDEX_S3" \
+            --cache-control 'public, max-age=120, must-revalidate' \
+            --content-type 'application/json' \
+            --metadata-directive REPLACE \
+            --no-progress
+
+      - name: Invalidate CloudFront
+        run: |
+          set -euo pipefail
+          INV=$(aws cloudfront create-invalidation \
+            --distribution-id E266IHHD1ZE4J0 \
+            --paths '/downloads/manifest.json' '/downloads/index.json' '/downloads/*' \
+            --query 'Invalidation.Id' --output text)
+          echo "Invalidation: $INV"

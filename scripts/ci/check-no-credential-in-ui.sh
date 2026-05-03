@@ -20,10 +20,22 @@ fi
 
 while IFS= read -r line; do
   file="${line%%:*}"
-  if grep -E '\b(value|secret|password|apiKey|token)\b' "$file" \
+  startln="${line#*:}"
+  startln="${startln%%:*}"
+  # Slice from the `interface` line to the closing brace at column 0
+  # (TS/Vue interfaces are conventionally formatted that way). Only
+  # scan within that block — checking the whole file produces false
+  # positives like `value: T` on an unrelated DialEffectiveField in
+  # the same file. `// privacy-allow:` opt-out still honoured.
+  block=$(awk -v start="$startln" '
+    NR < start { next }
+    NR == start { inblock=1; print; next }
+    inblock { print; if ($0 ~ /^}/) exit }
+  ' "$file")
+  if echo "$block" \
        | grep -v 'privacy-allow:' \
        | grep -qE '^\s*(value|secret|password|apiKey|token)\s*[:?]'; then
-    echo "[no-credential-in-ui] FAIL: $file declares a forbidden field on a credential-shaped type" >&2
+    echo "[no-credential-in-ui] FAIL: $file:$startln declares a forbidden field on a credential-shaped type" >&2
     fail=1
   fi
 done <<< "$matches"

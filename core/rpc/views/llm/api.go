@@ -89,7 +89,7 @@ type AddProviderInput struct {
 
 // TestResult is the structured outcome of TestProvider. The frontend
 // renders Success as a pill and Message inline.
-type TestResult struct {
+type TestResult struct { // privacy-allow: domain type, not a test fixture
 	Success   bool   `json:"success"`
 	LatencyMS int    `json:"latency_ms"`
 	Message   string `json:"message"`
