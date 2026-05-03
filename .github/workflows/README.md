@@ -53,12 +53,14 @@ Jobs:
 
 `build-smoke` waits for the three checks to pass; the rest run in parallel.
 
-## `release.yml` — main pipeline + binary publish
+## `release.yml` — tagged binary publish
 
-Runs on:
-- pushes to `main` (rolling pre-release at the `main` tag — overwritten each push)
-- tagged GitHub Releases (stable, kept indefinitely)
-- `workflow_dispatch` (manual, accepts a `version` input)
+Runs **only** for proper SemVer tags. Three entry points:
+- `release-please` dispatches it via `gh workflow run release.yml --ref vX.Y.Z` after a release PR is merged (the primary path).
+- A human creates a Release in the GitHub UI (rare manual path).
+- `workflow_dispatch` with an explicit `version=vX.Y.Z` (escape hatch / re-run).
+
+There is **no rolling pre-release channel** — non-versioning merges (chore/docs/ci/style/etc.) do not produce binaries. PR-time `build-smoke` covers build-health verification on every commit.
 
 Jobs:
 

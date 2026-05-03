@@ -1,17 +1,19 @@
 name: Release
 
 on:
-  push:
-    branches: [main]
-    paths-ignore:
-      - 'docs/**'
-      - '*.md'
-      - '.github/**'
+  # release-please owns version bumps; this workflow only runs against
+  # real semver tags. Three entry points:
+  #   1. release-please dispatches it via `gh workflow run release.yml --ref vX.Y.Z`
+  #      after merging a release PR (the primary path).
+  #   2. A human creates a Release in the GitHub UI (manual path; rare).
+  #   3. workflow_dispatch with an explicit version (escape hatch / re-run).
+  # No more `push: branches: [main]` — non-versioning merges (chore/docs/ci/etc.)
+  # do not produce binaries; PR-time `build-smoke` covers build-health verification.
   workflow_dispatch:
     inputs:
       version:
-        description: 'Override version (e.g. v0.1.0). Leave empty to derive from sha.'
-        required: false
+        description: 'Tag to build (e.g. v0.1.0). Required.'
+        required: true
   release:
     types: [published]
 
@@ -34,26 +36,25 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.set.outputs.version }}
-      is_release: ${{ steps.set.outputs.is_release }}
     steps:
       - uses: actions/checkout@v4
       - id: set
         run: |
+          set -euo pipefail
           if [ "${{ github.event_name }}" = "release" ]; then
             VERSION="${{ github.event.release.tag_name }}"
-            IS_RELEASE=true
           elif [ -n "${{ github.event.inputs.version }}" ]; then
             VERSION="${{ github.event.inputs.version }}"
-            IS_RELEASE=true
           else
-            SHORT_SHA=$(git rev-parse --short=8 HEAD)
-            DATE=$(date -u +%Y%m%d)
-            VERSION="v0.0.0-main-${DATE}-${SHORT_SHA}"
-            IS_RELEASE=false
+            echo "::error::release.yml expects either a release event or a workflow_dispatch with version=vX.Y.Z"
+            exit 1
+          fi
+          if ! [[ "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.-]+)?$ ]]; then
+            echo "::error::version '$VERSION' is not a valid SemVer tag (vX.Y.Z[-pre])"
+            exit 1
           fi
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
-          echo "is_release=${IS_RELEASE}" >> "$GITHUB_OUTPUT"
-          echo "Resolved version: ${VERSION} (release=${IS_RELEASE})"
+          echo "Resolved version: ${VERSION}"
 
   build:
     name: Build ${{ matrix.label }}
@@ -409,43 +410,29 @@ jobs:
       - name: list artifacts
         run: ls -la dist-flat/
 
-      - name: create or update release
+      - name: upload artifacts to release
         id: create
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          set -e
+          set -euo pipefail
           VERSION="${{ needs.derive-version.outputs.version }}"
-          IS_RELEASE="${{ needs.derive-version.outputs.is_release }}"
-
-          if [ "$IS_RELEASE" = "true" ]; then
-            # Tagged release: upload to existing release if possible, otherwise create.
-            TAG="$VERSION"
-            if ! gh release view "$TAG" >/dev/null 2>&1; then
-              gh release create "$TAG" \
-                --title "$TAG" \
-                --notes "Automated release from main." \
-                --target "$GITHUB_SHA"
-            fi
-            gh release upload "$TAG" dist-flat/* --clobber
-            URL=$(gh release view "$TAG" --json url --jq .url)
-          else
-            # Pre-release rolling channel: replace the "main" prerelease.
-            TAG="main"
-            if gh release view "$TAG" >/dev/null 2>&1; then
-              gh release delete "$TAG" --yes --cleanup-tag
-            fi
+          TAG="$VERSION"
+          # release-please creates the Release before dispatching us, so
+          # `view` should always succeed. If a human runs this via
+          # workflow_dispatch against a tag that has no Release yet, fall
+          # back to creating one. Notes default to release-please's body
+          # when present.
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
             gh release create "$TAG" \
-              --title "main (rolling, $VERSION)" \
-              --notes "Rolling build from main. Not a stable release." \
-              --prerelease \
-              --target "$GITHUB_SHA" \
-              dist-flat/*
-            URL=$(gh release view "$TAG" --json url --jq .url)
+              --title "$TAG" \
+              --notes "Automated release for $TAG." \
+              --target "$GITHUB_SHA"
           fi
-
-          echo "tag=$TAG"   >> "$GITHUB_OUTPUT"
-          echo "url=$URL"   >> "$GITHUB_OUTPUT"
+          gh release upload "$TAG" dist-flat/* --clobber
+          URL=$(gh release view "$TAG" --json url --jq .url)
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "url=$URL" >> "$GITHUB_OUTPUT"
 
       - name: build asset manifest for docs site
         id: manifest
