@@ -338,7 +338,7 @@ function escapeHtml(str: string): string {
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#039;');
+    .replace(/'/g, '&#039;'); // css-tokens-allow: HTML numeric entity, not a hex color literal
 }
 
 /** Wrap bare <table> elements in a horizontal-scroll container. */

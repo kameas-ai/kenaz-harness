@@ -700,7 +700,7 @@ async function undoSave(): Promise<void> {
   border-radius: var(--radius-sm);
   border: 1px solid var(--border-muted);
   background: var(--surface-1);
-  box-shadow: var(--shadow-lg, 0 4px 6px -1px rgb(0 0 0 / 0.1));
+  box-shadow: var(--shadow-lg, 0 4px 6px -1px rgb(0 0 0 / 0.1)); /* css-tokens-allow: shadow fallback for older render paths */
 }
 
 .undo-fade-enter-active,

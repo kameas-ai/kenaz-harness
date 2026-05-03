@@ -368,7 +368,7 @@ const projectMap = computed(() => {
 
 <style scoped>
 .search-highlight {
-  background-color: color-mix(in srgb, var(--color-accent-a, #f59e0b) 35%, transparent);
+  background-color: color-mix(in srgb, var(--color-accent-a, #f59e0b) 35%, transparent); /* css-tokens-allow: --color-accent-a fallback for older render paths */
   border-radius: 2px;
   padding: 0 1px;
 }
