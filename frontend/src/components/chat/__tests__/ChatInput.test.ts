@@ -68,21 +68,30 @@ describe('ChatInput (chat-ui)', () => {
     expect(w.emitted('send')).toBeFalsy();
   });
 
-  it('disables the textarea while streaming and shows Cancel', async () => {
+  it('keeps the textarea enabled while streaming and shows Cancel (queue-while-streaming UX)', async () => {
+    // Per current contract the textarea stays enabled while a turn is
+    // streaming so the user can queue a follow-up message; the
+    // surrounding view drains the queue once the active turn finishes.
+    // `disabled` (no provider / no session) still hard-locks the input
+    // — that path is covered separately below.
     const w = mountInput({ streaming: true, modelValue: 'pending' });
     const textarea = w.find('textarea');
-    expect(textarea.attributes('disabled')).toBeDefined();
+    expect(textarea.attributes('disabled')).toBeUndefined();
     const cancel = w.find('button[aria-label="Cancel stream"]');
     expect(cancel.exists()).toBe(true);
     await cancel.trigger('click');
     expect(w.emitted('cancel')).toBeTruthy();
   });
 
-  it('Enter does not send while streaming', async () => {
+  it('Enter while streaming queues the message (parent drains the queue)', async () => {
+    // Streaming no longer suppresses send — it routes the message into
+    // the parent's queue. The send button label flips to "queue" but
+    // the emit fires the same way.
     const w = mountInput({ streaming: true, modelValue: 'queued' });
     const textarea = w.find('textarea');
     await textarea.trigger('keydown', { key: 'Enter' });
-    expect(w.emitted('send')).toBeFalsy();
+    expect(w.emitted('send')).toBeTruthy();
+    expect(w.emitted('send')![0]).toEqual(['queued']);
   });
 
   it('disabled prop also gates send', async () => {
