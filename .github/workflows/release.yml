@@ -631,11 +631,61 @@ jobs:
             --metadata-directive REPLACE \
             --no-progress
 
+      - name: Update versions index
+        env:
+          TAG: ${{ needs.release.outputs.release_tag }}
+          VERSION: ${{ needs.derive-version.outputs.version }}
+          IS_RELEASE: ${{ needs.derive-version.outputs.is_release }}
+        run: |
+          set -euo pipefail
+          # Maintain s3://.../downloads/index.json — a sorted list of
+          # every version that's been published. The download page
+          # fetches this lazily when the user opens the version picker.
+          # Read-modify-write pattern; a missing index seeds an empty list.
+          INDEX_S3=s3://kameas-ai-docs-site/downloads/index.json
+          if aws s3 cp "$INDEX_S3" /tmp/index.json --no-progress 2>/dev/null; then
+            echo "fetched existing index"
+          else
+            echo '{"updated_at":"","versions":[]}' > /tmp/index.json
+            echo "seeded empty index"
+          fi
+          export NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          python3 - <<'PY' > /tmp/index.new.json
+          import json, os, pathlib
+          idx = json.loads(pathlib.Path('/tmp/index.json').read_text() or '{}')
+          versions = idx.get('versions') or []
+          tag = os.environ['TAG']
+          # Drop any prior entry for the same tag (rolling 'main' replaces
+          # itself; tagged releases shouldn't republish but if they do the
+          # latest wins).
+          versions = [v for v in versions if v.get('tag') != tag]
+          versions.append({
+              'tag': tag,
+              'version': os.environ['VERSION'],
+              'released_at': os.environ['NOW'],
+              'is_release': os.environ.get('IS_RELEASE', 'false') == 'true',
+              'manifest_url': f"https://docs.kameas.ai/downloads/{tag}/manifest.json",
+          })
+          # Newest first by released_at, with 'main' (rolling) pinned to
+          # the top so the picker shows it at the front.
+          versions.sort(key=lambda v: (0 if v.get('tag') == 'main' else 1, v.get('released_at', '')), reverse=True)
+          # Cap at 50 entries — very old builds drop off the picker but
+          # their /downloads/<tag>/ assets remain in S3 for direct linking.
+          versions = versions[:50]
+          print(json.dumps({'updated_at': os.environ['NOW'], 'versions': versions}, indent=2))
+          PY
+
+          aws s3 cp /tmp/index.new.json "$INDEX_S3" \
+            --cache-control 'public, max-age=120, must-revalidate' \
+            --content-type 'application/json' \
+            --metadata-directive REPLACE \
+            --no-progress
+
       - name: Invalidate CloudFront
         run: |
           set -euo pipefail
           INV=$(aws cloudfront create-invalidation \
             --distribution-id E266IHHD1ZE4J0 \
-            --paths '/downloads/manifest.json' '/downloads/*' \
+            --paths '/downloads/manifest.json' '/downloads/index.json' '/downloads/*' \
             --query 'Invalidation.Id' --output text)
           echo "Invalidation: $INV"
