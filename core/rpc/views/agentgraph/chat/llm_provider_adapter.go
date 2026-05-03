@@ -5,9 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
+	"time"
 
 	coreag "github.com/sigil-tech/kaneaz-harness/core/agentgraph"
 	corellm "github.com/sigil-tech/kaneaz-harness/core/llm"
+	"github.com/sigil-tech/kaneaz-harness/core/llm/retry"
 )
 
 // LLMProviderAdapter satisfies the agentgraph.LLMProvider seam by
@@ -41,6 +44,14 @@ type LLMProviderAdapter struct {
 	// discoverer; the kernel's LLMRequest.Tools slice is just a string
 	// allowlist, but the registry needs the full ToolSpec shape.
 	tools []corellm.ToolSpec
+	// lastRespMu protects lastResp.
+	lastRespMu sync.Mutex
+	// lastResp stores the most recent llm.Response produced by Generate.
+	// The session_write HookPostLLM callback reads this to record usage.
+	// Overwritten on every Generate call; safe because each kernel run is
+	// sequential (one Generate completes before session_write fires, and
+	// session_write fires before the next Generate could start).
+	lastResp corellm.Response
 }
 
 // NewLLMProviderAdapter constructs an adapter pinned to a specific
@@ -53,6 +64,16 @@ func NewLLMProviderAdapter(reg corellm.Registry, profileID, modelOverride string
 		modelOverride: modelOverride,
 		tools:         tools,
 	}
+}
+
+// LastResponse returns the most recently produced llm.Response. Called
+// by the HookPostLLM callback registered in buildChatRunner to record
+// per-turn usage data once the session_write node has persisted the
+// assistant message (token-cost-telemetry WP02).
+func (a *LLMProviderAdapter) LastResponse() corellm.Response {
+	a.lastRespMu.Lock()
+	defer a.lastRespMu.Unlock()
+	return a.lastResp
 }
 
 // Generate satisfies agentgraph.LLMProvider. Translates the kernel
@@ -109,7 +130,20 @@ func (a *LLMProviderAdapter) Generate(ctx context.Context, req coreag.LLMRequest
 		Tools:     a.tools,
 	}
 
-	stream, err := a.reg.Stream(ctx, gen)
+	// WP02 (long-turn-resilience): wrap the stream open with classified
+	// retry-with-backoff. Pre-stream transient errors (5xx, network blips)
+	// are retried up to 3 times with 500ms exponential backoff ±10%.
+	// Mid-stream transient errors that have not yet emitted any content
+	// are silently retried by the retryableStream wrapper. Non-transient
+	// errors (auth, invalid-request, cancelled) propagate immediately.
+	retryPolicy := retry.StreamPolicy{
+		MaxAttempts: 3,
+		BaseDelay:   500 * time.Millisecond,
+		JitterPct:   0.10,
+	}
+	stream, err := retry.RetryStream(ctx, retryPolicy, func() (corellm.Stream, error) {
+		return a.reg.Stream(ctx, gen)
+	})
 	if err != nil {
 		return coreag.LLMResponse{}, fmt.Errorf("chat: registry stream: %w", err)
 	}
@@ -133,6 +167,14 @@ func (a *LLMProviderAdapter) Generate(ctx context.Context, req coreag.LLMRequest
 		// stream-closed payload with reason=backend-error.
 		return coreag.LLMResponse{}, fmt.Errorf("chat: stream final: %w", ferr)
 	}
+
+	// Store the response for the HookPostLLM callback (token-cost-
+	// telemetry WP02). The session_write node fires after Generate
+	// returns and reads LastResponse() inside its PostHook to record
+	// usage against the freshly-persisted messageID.
+	a.lastRespMu.Lock()
+	a.lastResp = resp
+	a.lastRespMu.Unlock()
 
 	out := coreag.LLMResponse{
 		Content:      flattenContent(resp.Content),

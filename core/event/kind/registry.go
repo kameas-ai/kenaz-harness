@@ -30,6 +30,42 @@ const (
 	KindError               Kind = "event-log.error"
 	KindTimeout             Kind = "event-log.timeout"
 	KindDatabaseOpened      Kind = "event-log.database.opened"
+
+	// Universal permission audit kinds (cedar-credential-policy-01KQ8TDE WP07).
+	// These fire regardless of which resource family triggered the gate.
+	KindPermissionGranted  Kind = "permission.granted"
+	KindPermissionDenied   Kind = "permission.denied"
+	KindPermissionPrompted Kind = "permission.prompted"
+	KindPermissionTimeout  Kind = "permission.timeout"
+	KindPermissionRevoked  Kind = "permission.revoked"
+
+	// Per-family permission audit kinds (cedar-credential-policy-01KQ8TDE WP07).
+	// Each fires in addition to the universal kind above when the gate
+	// is for the named resource family.
+	KindBashPermission       Kind = "permission.bash"
+	KindFilesystemPermission Kind = "permission.filesystem"
+	KindCredentialPermission Kind = "permission.credential"
+	KindToolPermission       Kind = "permission.tool"
+
+	// MCP recipe lifecycle audit kinds (mission mcp-server-install-01KQ8TDP).
+	//
+	//   KindMCPRecipeAdded   — emitted by AddRecipe on success (WP10).
+	//                          Payload: {recipe_id, source, transport}.
+	//   KindMCPRecipeRemoved — emitted by RemoveRecipe on success (WP10).
+	//                          Payload: {recipe_id, source}.
+	//   KindMCPRecipeTested  — emitted by TestRecipe on completion (WP07).
+	//                          Payload: {recipe_id, ok, transport,
+	//                                    tool_count, resource_count,
+	//                                    prompt_count, duration_ms}.
+	KindMCPRecipeAdded   Kind = "mcp.recipe.added"
+	KindMCPRecipeRemoved Kind = "mcp.recipe.removed"
+	KindMCPRecipeTested  Kind = "mcp.recipe.tested"
+	// KindShortcutOverridden is emitted on every successful keyboard
+	// shortcut binding write (set or reset). Payload JSON:
+	//   {"shortcut_id":"chat.send","default_binding":"Cmd+Enter","new_binding":"Cmd+Shift+Enter"}
+	// Reset emits new_binding: "".
+	// (keyboard-shortcuts-settings-01KQ8TDR plan §2.9)
+	KindShortcutOverridden Kind = "settings.shortcut.overridden"
 )
 
 var builtIn = []Kind{
@@ -37,6 +73,15 @@ var builtIn = []Kind{
 	KindSessionBranched, KindRawReplayOpened, KindRedactionSupersede,
 	KindChainRebased, KindCancellation, KindError, KindTimeout,
 	KindDatabaseOpened,
+	// Universal permission audit kinds (cedar WP07).
+	KindPermissionGranted, KindPermissionDenied, KindPermissionPrompted,
+	KindPermissionTimeout, KindPermissionRevoked,
+	// Per-family permission audit kinds (cedar WP07).
+	KindBashPermission, KindFilesystemPermission, KindCredentialPermission,
+	KindToolPermission,
+	// MCP recipe lifecycle (WP07 + WP10).
+	KindMCPRecipeAdded, KindMCPRecipeRemoved, KindMCPRecipeTested,
+	KindShortcutOverridden,
 }
 
 var (

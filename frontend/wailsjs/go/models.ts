@@ -512,6 +512,9 @@ export namespace branches {
 	    updatedAt: string;
 	    mergedAt?: string;
 	    abandonedAt?: string;
+	    subagentBranch?: boolean;
+	    recommendationId?: string;
+	    advisorSignals?: string[];
 	
 	    static createFrom(source: any = {}) {
 	        return new Branch(source);
@@ -532,6 +535,9 @@ export namespace branches {
 	        this.updatedAt = source["updatedAt"];
 	        this.mergedAt = source["mergedAt"];
 	        this.abandonedAt = source["abandonedAt"];
+	        this.subagentBranch = source["subagentBranch"];
+	        this.recommendationId = source["recommendationId"];
+	        this.advisorSignals = source["advisorSignals"];
 	    }
 	}
 	export class BranchStatus {
@@ -572,6 +578,22 @@ export namespace branches {
 		    return a;
 		}
 	}
+	export class CommitReintegrationOptions {
+	    branchSessionId: string;
+	    finalSummaryText: string;
+	    wasEdited: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new CommitReintegrationOptions(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.branchSessionId = source["branchSessionId"];
+	        this.finalSummaryText = source["finalSummaryText"];
+	        this.wasEdited = source["wasEdited"];
+	    }
+	}
 	export class CreateBranchOptions {
 	    parentSessionId: string;
 	    title?: string;
@@ -581,6 +603,9 @@ export namespace branches {
 	    exactModelId?: string;
 	    systemPromptOverride?: string;
 	    childName?: string;
+	    recommendationId?: string;
+	    advisorSignals?: string[];
+	    advisorConfidence?: number;
 	
 	    static createFrom(source: any = {}) {
 	        return new CreateBranchOptions(source);
@@ -596,6 +621,9 @@ export namespace branches {
 	        this.exactModelId = source["exactModelId"];
 	        this.systemPromptOverride = source["systemPromptOverride"];
 	        this.childName = source["childName"];
+	        this.recommendationId = source["recommendationId"];
+	        this.advisorSignals = source["advisorSignals"];
+	        this.advisorConfidence = source["advisorConfidence"];
 	    }
 	}
 	export class RecommendedModel {
@@ -618,6 +646,22 @@ export namespace branches {
 	        this.reason = source["reason"];
 	        this.notes = source["notes"];
 	        this.crossProviderWarning = source["crossProviderWarning"];
+	    }
+	}
+	export class ReintegrationProposal {
+	    proposedSummary: string;
+	    tokenCount: number;
+	    model?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ReintegrationProposal(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.proposedSummary = source["proposedSummary"];
+	        this.tokenCount = source["tokenCount"];
+	        this.model = source["model"];
 	    }
 	}
 
@@ -685,6 +729,221 @@ export namespace bundle {
 		    return a;
 		}
 	}
+
+}
+
+export namespace cedar {
+	
+	export class BashPromptSurface {
+	    pattern: string;
+	    argv: string[];
+	    working_dir?: string;
+	    dangerous: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new BashPromptSurface(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.pattern = source["pattern"];
+	        this.argv = source["argv"];
+	        this.working_dir = source["working_dir"];
+	        this.dangerous = source["dangerous"];
+	    }
+	}
+	export class CredPromptSurface {
+	    provider_id: string;
+	    purpose: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new CredPromptSurface(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.provider_id = source["provider_id"];
+	        this.purpose = source["purpose"];
+	    }
+	}
+	export class Decision {
+	    outcome: number;
+	    action: string;
+	    principal: string;
+	    resource: string;
+	    matched_policy?: string;
+	    reason?: string;
+	    // Go type: time
+	    evaluated_at: any;
+	
+	    static createFrom(source: any = {}) {
+	        return new Decision(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.outcome = source["outcome"];
+	        this.action = source["action"];
+	        this.principal = source["principal"];
+	        this.resource = source["resource"];
+	        this.matched_policy = source["matched_policy"];
+	        this.reason = source["reason"];
+	        this.evaluated_at = this.convertValues(source["evaluated_at"], null);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class FSPromptSurface {
+	    op: string;
+	    canonical_path: string;
+	    dangerous: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new FSPromptSurface(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.op = source["op"];
+	        this.canonical_path = source["canonical_path"];
+	        this.dangerous = source["dangerous"];
+	    }
+	}
+	export class ToolPromptSurface {
+	    tool_name: string;
+	    server_name?: string;
+	    args_redacted?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ToolPromptSurface(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.tool_name = source["tool_name"];
+	        this.server_name = source["server_name"];
+	        this.args_redacted = source["args_redacted"];
+	    }
+	}
+	export class PromptSurface {
+	    bash?: BashPromptSurface;
+	    fs?: FSPromptSurface;
+	    cred?: CredPromptSurface;
+	    tool?: ToolPromptSurface;
+	    reason?: string;
+	    session_id?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new PromptSurface(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.bash = this.convertValues(source["bash"], BashPromptSurface);
+	        this.fs = this.convertValues(source["fs"], FSPromptSurface);
+	        this.cred = this.convertValues(source["cred"], CredPromptSurface);
+	        this.tool = this.convertValues(source["tool"], ToolPromptSurface);
+	        this.reason = source["reason"];
+	        this.session_id = source["session_id"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class PendingRequest {
+	    request_id: string;
+	    family: string;
+	    surface: PromptSurface;
+	    // Go type: time
+	    issued_at: any;
+	    // Go type: time
+	    deadline_at: any;
+	
+	    static createFrom(source: any = {}) {
+	        return new PendingRequest(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.request_id = source["request_id"];
+	        this.family = source["family"];
+	        this.surface = this.convertValues(source["surface"], PromptSurface);
+	        this.issued_at = this.convertValues(source["issued_at"], null);
+	        this.deadline_at = this.convertValues(source["deadline_at"], null);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class PolicyFile {
+	    name: string;
+	    path: string;
+	    bytes: number;
+	    embedded: boolean;
+	    parse_ok: boolean;
+	    parse_err?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new PolicyFile(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.path = source["path"];
+	        this.bytes = source["bytes"];
+	        this.embedded = source["embedded"];
+	        this.parse_ok = source["parse_ok"];
+	        this.parse_err = source["parse_err"];
+	    }
+	}
+	
 
 }
 
@@ -1759,6 +2018,7 @@ export namespace llm {
 	    id: string;
 	    displayName: string;
 	    description?: string;
+	    contextWindow?: number;
 	
 	    static createFrom(source: any = {}) {
 	        return new ModelInfo(source);
@@ -1769,6 +2029,23 @@ export namespace llm {
 	        this.id = source["id"];
 	        this.displayName = source["displayName"];
 	        this.description = source["description"];
+	        this.contextWindow = source["contextWindow"];
+	    }
+	}
+	export class Redacted {
+	    display: string;
+	    kind: string;
+	    locator: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new Redacted(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.display = source["display"];
+	        this.kind = source["kind"];
+	        this.locator = source["locator"];
 	    }
 	}
 	export class Provider {
@@ -1778,8 +2055,10 @@ export namespace llm {
 	    kind?: string;
 	    model: string;
 	    models?: string[];
+	    modelInfos?: ModelInfo[];
 	    region?: string;
 	    cred?: CredentialReference;
+	    redaction?: Redacted;
 	    source?: string;
 	    validated?: boolean;
 	
@@ -1795,8 +2074,10 @@ export namespace llm {
 	        this.kind = source["kind"];
 	        this.model = source["model"];
 	        this.models = source["models"];
+	        this.modelInfos = this.convertValues(source["modelInfos"], ModelInfo);
 	        this.region = source["region"];
 	        this.cred = this.convertValues(source["cred"], CredentialReference);
+	        this.redaction = this.convertValues(source["redaction"], Redacted);
 	        this.source = source["source"];
 	        this.validated = source["validated"];
 	    }
@@ -1819,6 +2100,7 @@ export namespace llm {
 		    return a;
 		}
 	}
+	
 	export class TestResult {
 	    success: boolean;
 	    latency_ms: number;
@@ -1841,6 +2123,71 @@ export namespace llm {
 
 export namespace mcp {
 	
+	export class ImportRequest {
+	    raw_json: string;
+	    dry_run: boolean;
+	    keep_ids?: string[];
+	
+	    static createFrom(source: any = {}) {
+	        return new ImportRequest(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.raw_json = source["raw_json"];
+	        this.dry_run = source["dry_run"];
+	        this.keep_ids = source["keep_ids"];
+	    }
+	}
+	export class ImportWrotePath {
+	    id: string;
+	    yaml_path: string;
+	    json_path: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ImportWrotePath(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.yaml_path = source["yaml_path"];
+	        this.json_path = source["json_path"];
+	    }
+	}
+	export class ImportResponse {
+	    report: recipes.TranslationReport;
+	    wrote_paths?: ImportWrotePath[];
+	
+	    static createFrom(source: any = {}) {
+	        return new ImportResponse(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.report = this.convertValues(source["report"], recipes.TranslationReport);
+	        this.wrote_paths = this.convertValues(source["wrote_paths"], ImportWrotePath);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	
 	export class Server {
 	    id: string;
 	    name: string;
@@ -1862,6 +2209,54 @@ export namespace mcp {
 	        this.transport = source["transport"];
 	        this.capabilities = source["capabilities"];
 	    }
+	}
+	export class TestResult {
+	    ok: boolean;
+	    protocol_version?: string;
+	    server_info: transport.Implementation;
+	    capabilities: transport.ServerCapabilities;
+	    tool_count: number;
+	    resource_count: number;
+	    prompt_count: number;
+	    stderr_tail?: string;
+	    duration_ms: number;
+	    error?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new TestResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.ok = source["ok"];
+	        this.protocol_version = source["protocol_version"];
+	        this.server_info = this.convertValues(source["server_info"], transport.Implementation);
+	        this.capabilities = this.convertValues(source["capabilities"], transport.ServerCapabilities);
+	        this.tool_count = source["tool_count"];
+	        this.resource_count = source["resource_count"];
+	        this.prompt_count = source["prompt_count"];
+	        this.stderr_tail = source["stderr_tail"];
+	        this.duration_ms = source["duration_ms"];
+	        this.error = source["error"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
 	}
 
 }
@@ -2350,6 +2745,31 @@ export namespace nodes {
 
 }
 
+export namespace permissions {
+	
+	export class Grant {
+	    id: string;
+	    policy_file?: string;
+	    transient: boolean;
+	    resource_key?: string;
+	    family?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new Grant(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.policy_file = source["policy_file"];
+	        this.transient = source["transient"];
+	        this.resource_key = source["resource_key"];
+	        this.family = source["family"];
+	    }
+	}
+
+}
+
 export namespace policy {
 	
 	export class Denial {
@@ -2447,6 +2867,7 @@ export namespace recipes {
 	    default?: any;
 	    required: boolean;
 	    description: string;
+	    choices?: string[];
 	
 	    static createFrom(source: any = {}) {
 	        return new ConfigOption(source);
@@ -2460,6 +2881,7 @@ export namespace recipes {
 	        this.default = source["default"];
 	        this.required = source["required"];
 	        this.description = source["description"];
+	        this.choices = source["choices"];
 	    }
 	}
 	export class EnvKey {
@@ -2500,6 +2922,10 @@ export namespace recipes {
 	    description: string;
 	    category: string;
 	    command: string[];
+	    transport?: string;
+	    url?: string;
+	    headers_template?: Record<string, string>;
+	    post_url?: string;
 	    env_keys: EnvKey[];
 	    capabilities: Capabilities;
 	    docs_url: string;
@@ -2510,6 +2936,8 @@ export namespace recipes {
 	    config_options?: ConfigOption[];
 	    warning?: string;
 	    recommended_policy_template?: string;
+	    prompt_on_first_use?: string[];
+	    pre_seeding_policy?: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new Recipe(source);
@@ -2522,6 +2950,10 @@ export namespace recipes {
 	        this.description = source["description"];
 	        this.category = source["category"];
 	        this.command = source["command"];
+	        this.transport = source["transport"];
+	        this.url = source["url"];
+	        this.headers_template = source["headers_template"];
+	        this.post_url = source["post_url"];
 	        this.env_keys = this.convertValues(source["env_keys"], EnvKey);
 	        this.capabilities = this.convertValues(source["capabilities"], Capabilities);
 	        this.docs_url = source["docs_url"];
@@ -2532,6 +2964,88 @@ export namespace recipes {
 	        this.config_options = this.convertValues(source["config_options"], ConfigOption);
 	        this.warning = source["warning"];
 	        this.recommended_policy_template = source["recommended_policy_template"];
+	        this.prompt_on_first_use = source["prompt_on_first_use"];
+	        this.pre_seeding_policy = source["pre_seeding_policy"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class ImportEntry {
+	    id: string;
+	    original_name: string;
+	    status: string;
+	    reason?: string;
+	    recipe: Recipe;
+	    original_json?: number[];
+	
+	    static createFrom(source: any = {}) {
+	        return new ImportEntry(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.original_name = source["original_name"];
+	        this.status = source["status"];
+	        this.reason = source["reason"];
+	        this.recipe = this.convertValues(source["recipe"], Recipe);
+	        this.original_json = source["original_json"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	
+	
+	export class TranslationReport {
+	    entries: ImportEntry[];
+	    kept_count: number;
+	    unsupported_count: number;
+	    malformed_count: number;
+	    collision_count: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new TranslationReport(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.entries = this.convertValues(source["entries"], ImportEntry);
+	        this.kept_count = source["kept_count"];
+	        this.unsupported_count = source["unsupported_count"];
+	        this.malformed_count = source["malformed_count"];
+	        this.collision_count = source["collision_count"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -2611,6 +3125,24 @@ export namespace rpc {
 		    return a;
 		}
 	}
+	export class BashExecResult {
+	    stdout: string;
+	    stderr: string;
+	    exitCode: number;
+	    truncated: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new BashExecResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.stdout = source["stdout"];
+	        this.stderr = source["stderr"];
+	        this.exitCode = source["exitCode"];
+	        this.truncated = source["truncated"];
+	    }
+	}
 	export class ShellReadFileResult {
 	    dataBase64: string;
 	    mediaType: string;
@@ -2650,6 +3182,87 @@ export namespace rpc {
 	        this.redactionOn = source["redactionOn"];
 	        this.localFirstOn = source["localFirstOn"];
 	    }
+	}
+
+}
+
+export namespace search {
+	
+	export class Highlight {
+	    start: number;
+	    end: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new Highlight(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.start = source["start"];
+	        this.end = source["end"];
+	    }
+	}
+	export class SearchFilters {
+	    projectId?: string;
+	    sessionId?: string;
+	    roleFilter?: string;
+	    limit?: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new SearchFilters(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.projectId = source["projectId"];
+	        this.sessionId = source["sessionId"];
+	        this.roleFilter = source["roleFilter"];
+	        this.limit = source["limit"];
+	    }
+	}
+	export class SearchHit {
+	    sessionId: string;
+	    sessionName: string;
+	    messageId: string;
+	    role: string;
+	    snippet: string;
+	    highlights: Highlight[];
+	    createdAt: string;
+	    projectId?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new SearchHit(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.sessionId = source["sessionId"];
+	        this.sessionName = source["sessionName"];
+	        this.messageId = source["messageId"];
+	        this.role = source["role"];
+	        this.snippet = source["snippet"];
+	        this.highlights = this.convertValues(source["highlights"], Highlight);
+	        this.createdAt = source["createdAt"];
+	        this.projectId = source["projectId"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
 	}
 
 }
@@ -2777,6 +3390,7 @@ export namespace sessions {
 	    systemPrompt: string;
 	    contextKind: string;
 	    projectId?: string;
+	    autoTitled: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new Session(source);
@@ -2791,6 +3405,31 @@ export namespace sessions {
 	        this.systemPrompt = source["systemPrompt"];
 	        this.contextKind = source["contextKind"];
 	        this.projectId = source["projectId"];
+	        this.autoTitled = source["autoTitled"];
+	    }
+	}
+	export class SessionUsage {
+	    promptTokens: number;
+	    completionTokens: number;
+	    totalTokens: number;
+	    costUsd: number;
+	    costSource: string;
+	    messageCount: number;
+	    pricingDataDate: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new SessionUsage(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.promptTokens = source["promptTokens"];
+	        this.completionTokens = source["completionTokens"];
+	        this.totalTokens = source["totalTokens"];
+	        this.costUsd = source["costUsd"];
+	        this.costSource = source["costSource"];
+	        this.messageCount = source["messageCount"];
+	        this.pricingDataDate = source["pricingDataDate"];
 	    }
 	}
 
@@ -2846,6 +3485,22 @@ export namespace settings {
 	    compactionModel?: ProviderProfileRef;
 	    compactionArchiveDays?: number;
 	    compactionRecentWindow?: number;
+	    permissionMode?: string;
+	    permissionCacheDangerousOps?: boolean;
+	    bashAllowlistMigrated?: boolean;
+	    permissionsMigrationToastShown?: boolean;
+	    cedarStrictCredentialMode?: boolean;
+	    credentialAuditRetentionDays?: number;
+	    branchAdvisorEnabled?: boolean;
+	    branchAdvisorMinConfidence?: number;
+	    branchAdvisorUseLLM?: boolean;
+	    branchAutoMode?: boolean;
+	    branchReintegrationMaxTokens?: number;
+	    branchAdvisorDefaultModel?: ProviderProfileRef;
+	    keyboardShortcuts?: Record<string, string>;
+	    keyboardShortcutsPreset?: string;
+	    fsRequestAccessDisabled?: boolean;
+	    autonomy?: number[];
 	
 	    static createFrom(source: any = {}) {
 	        return new Settings(source);
@@ -2872,6 +3527,22 @@ export namespace settings {
 	        this.compactionModel = this.convertValues(source["compactionModel"], ProviderProfileRef);
 	        this.compactionArchiveDays = source["compactionArchiveDays"];
 	        this.compactionRecentWindow = source["compactionRecentWindow"];
+	        this.permissionMode = source["permissionMode"];
+	        this.permissionCacheDangerousOps = source["permissionCacheDangerousOps"];
+	        this.bashAllowlistMigrated = source["bashAllowlistMigrated"];
+	        this.permissionsMigrationToastShown = source["permissionsMigrationToastShown"];
+	        this.cedarStrictCredentialMode = source["cedarStrictCredentialMode"];
+	        this.credentialAuditRetentionDays = source["credentialAuditRetentionDays"];
+	        this.branchAdvisorEnabled = source["branchAdvisorEnabled"];
+	        this.branchAdvisorMinConfidence = source["branchAdvisorMinConfidence"];
+	        this.branchAdvisorUseLLM = source["branchAdvisorUseLLM"];
+	        this.branchAutoMode = source["branchAutoMode"];
+	        this.branchReintegrationMaxTokens = source["branchReintegrationMaxTokens"];
+	        this.branchAdvisorDefaultModel = this.convertValues(source["branchAdvisorDefaultModel"], ProviderProfileRef);
+	        this.keyboardShortcuts = source["keyboardShortcuts"];
+	        this.keyboardShortcutsPreset = source["keyboardShortcutsPreset"];
+	        this.fsRequestAccessDisabled = source["fsRequestAccessDisabled"];
+	        this.autonomy = source["autonomy"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -2934,6 +3605,22 @@ export namespace slashcmd {
 
 export namespace tools {
 	
+	export class FSAccessResult {
+	    granted: boolean;
+	    expanded: string;
+	    message: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new FSAccessResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.granted = source["granted"];
+	        this.expanded = source["expanded"];
+	        this.message = source["message"];
+	    }
+	}
 	export class RecipeListing {
 	    recipe: recipes.Recipe;
 	    enabled: boolean;
@@ -2975,6 +3662,32 @@ export namespace tools {
 
 export namespace transport {
 	
+	export class Implementation {
+	    name: string;
+	    version: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new Implementation(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.version = source["version"];
+	    }
+	}
+	export class PromptsCapability {
+	    listChanged?: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new PromptsCapability(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.listChanged = source["listChanged"];
+	    }
+	}
 	export class RecipeStatus {
 	    id: string;
 	    enabled: boolean;
@@ -3017,6 +3730,81 @@ export namespace transport {
 	        this.prompt_count = source["prompt_count"];
 	        this.stderr_tail = source["stderr_tail"];
 	        this.updated_at = this.convertValues(source["updated_at"], null);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class ResourcesCapability {
+	    subscribe?: boolean;
+	    listChanged?: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new ResourcesCapability(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.subscribe = source["subscribe"];
+	        this.listChanged = source["listChanged"];
+	    }
+	}
+	export class LoggingCapability {
+	
+	
+	    static createFrom(source: any = {}) {
+	        return new LoggingCapability(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	
+	    }
+	}
+	export class ToolsCapability {
+	    listChanged?: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new ToolsCapability(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.listChanged = source["listChanged"];
+	    }
+	}
+	export class ServerCapabilities {
+	    tools?: ToolsCapability;
+	    resources?: ResourcesCapability;
+	    prompts?: PromptsCapability;
+	    // Go type: LoggingCapability
+	    logging?: any;
+	
+	    static createFrom(source: any = {}) {
+	        return new ServerCapabilities(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.tools = this.convertValues(source["tools"], ToolsCapability);
+	        this.resources = this.convertValues(source["resources"], ResourcesCapability);
+	        this.prompts = this.convertValues(source["prompts"], PromptsCapability);
+	        this.logging = this.convertValues(source["logging"], null);
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {

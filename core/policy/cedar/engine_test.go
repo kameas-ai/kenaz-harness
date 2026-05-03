@@ -607,3 +607,172 @@ func TestPopulateFamilyContext_NonFamilyAction(t *testing.T) {
 		t.Fatalf("non-family action should leave context untouched, got %v", out)
 	}
 }
+
+// =====================================================================
+// WP10 — MCPRecipe resource family tests.
+// =====================================================================
+
+// TestMCPRecipeUID_Shape asserts the EntityUID constructor produces the
+// canonical MCPRecipe::"<id>" shape and validates malformed ids.
+func TestMCPRecipeUID_Shape(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		id   string
+		want string
+	}{
+		{"ok-simple", "github", `MCPRecipe::"github"`},
+		{"ok-hyphen", "brave-search", `MCPRecipe::"brave-search"`},
+		{"empty-id", "", `MCPRecipe::"invalid"`},
+		{"leading-dotdot", "../evil", `MCPRecipe::"invalid"`},
+		{"control-char", "my\x01recipe", `MCPRecipe::"invalid"`},
+		{"nul-byte", "recipe\x00bad", `MCPRecipe::"invalid"`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := MCPRecipeUID(tc.id).String()
+			if got != tc.want {
+				t.Fatalf("MCPRecipeUID(%q) = %q, want %q", tc.id, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestEvaluate_MCPRecipe_DefaultPermit verifies that the default embedded
+// policy set produces NotApplicable (= default-allow) for add_recipe and
+// spawn_recipe because no MCPRecipe-specific rules are in the embedded bundle.
+func TestEvaluate_MCPRecipe_DefaultPermit(t *testing.T) {
+	t.Parallel()
+	e, err := NewEngine(Options{IncludeEmbedded: true})
+	if err != nil {
+		t.Fatalf("NewEngine: %v", err)
+	}
+	cases := []struct {
+		name      string
+		action    string
+		recipeID  string
+		command   string
+		transport string
+		want      Outcome
+	}{
+		{"add-stdio-npx-default", ActionAddRecipe, "my-recipe", "npx", "stdio", NotApplicable},
+		{"spawn-stdio-node-default", ActionSpawnRecipe, "my-recipe", "node", "stdio", NotApplicable},
+		{"add-http-recipe-default", ActionAddRecipe, "brave-search", "", "http", NotApplicable},
+		{"spawn-sse-recipe-default", ActionSpawnRecipe, "slack", "", "sse", NotApplicable},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			d := e.Evaluate(
+				context.Background(),
+				UserUID(),
+				tc.action,
+				MCPRecipeUID(tc.recipeID),
+				map[cedarlib.String]cedarlib.Value{
+					cedarlib.String(CtxKeyRecipeID):        cedarlib.String(tc.recipeID),
+					cedarlib.String(CtxKeyRecipeCommand):   cedarlib.String(tc.command),
+					cedarlib.String(CtxKeyRecipeTransport): cedarlib.String(tc.transport),
+				},
+			)
+			if d.Outcome != tc.want {
+				t.Fatalf("%s on %q (cmd=%q, transport=%q): outcome=%s want %s",
+					tc.action, tc.recipeID, tc.command, tc.transport, d.Outcome, tc.want)
+			}
+		})
+	}
+}
+
+// TestEvaluate_MCPRecipe_NoNpxPolicy installs the mcp-no-npx policy text
+// inline and asserts:
+//   - add_recipe / spawn_recipe on an npx recipe → Deny
+//   - add_recipe / spawn_recipe on a non-npx recipe → Allow (from base permit)
+//   - add_recipe / spawn_recipe with empty command → Allow (not npx)
+func TestEvaluate_MCPRecipe_NoNpxPolicy(t *testing.T) {
+	t.Parallel()
+
+	// We compose a policy that (a) permits everything by default
+	// and (b) forbids npx-spawned recipes — mirroring what mcp-no-npx.cedar
+	// does when combined with a user's base permit.
+	const noNpxPolicy = `
+permit (principal, action, resource);
+
+forbid (
+    principal == User::"local",
+    action in [Action::"add_recipe", Action::"spawn_recipe"],
+    resource is MCPRecipe
+) when {
+    context.recipe_command == "npx"
+};
+`
+	e, err := NewEngine(Options{LoadFromDisk: false, IncludeEmbedded: false})
+	if err != nil {
+		t.Fatalf("NewEngine: %v", err)
+	}
+	if err := e.SetPolicyText("no-npx.cedar", []byte(noNpxPolicy)); err != nil {
+		t.Fatalf("SetPolicyText: %v", err)
+	}
+
+	cases := []struct {
+		name      string
+		action    string
+		recipeID  string
+		command   string
+		transport string
+		want      Outcome
+	}{
+		// npx → Deny for both add and spawn.
+		{"add-npx-deny", ActionAddRecipe, "my-mcp", "npx", "stdio", Deny},
+		{"spawn-npx-deny", ActionSpawnRecipe, "my-mcp", "npx", "stdio", Deny},
+		// Non-npx → Allow (base permit).
+		{"add-node-allow", ActionAddRecipe, "my-mcp", "node", "stdio", Allow},
+		{"spawn-uvx-allow", ActionSpawnRecipe, "my-mcp", "uvx", "stdio", Allow},
+		// HTTP recipe with empty command → Allow (not npx).
+		{"add-http-allow", ActionAddRecipe, "brave-search", "", "http", Allow},
+		// spawn_recipe on http recipe → Allow.
+		{"spawn-http-allow", ActionSpawnRecipe, "brave-search", "", "http", Allow},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			d := e.Evaluate(
+				context.Background(),
+				UserUID(),
+				tc.action,
+				MCPRecipeUID(tc.recipeID),
+				map[cedarlib.String]cedarlib.Value{
+					cedarlib.String(CtxKeyRecipeID):        cedarlib.String(tc.recipeID),
+					cedarlib.String(CtxKeyRecipeCommand):   cedarlib.String(tc.command),
+					cedarlib.String(CtxKeyRecipeTransport): cedarlib.String(tc.transport),
+				},
+			)
+			if d.Outcome != tc.want {
+				t.Fatalf("%s on %q (cmd=%q): outcome=%s (reason=%s) want %s",
+					tc.action, tc.recipeID, tc.command, d.Outcome, d.Reason, tc.want)
+			}
+		})
+	}
+}
+
+// TestCheckRecipeAdd_NilGatePermits exercises the nil-gate default-allow path.
+func TestCheckRecipeAdd_NilGatePermits(t *testing.T) {
+	t.Parallel()
+	if err := CheckRecipeAdd(context.Background(), nil, "my-recipe", "npx", "stdio"); err != nil {
+		t.Fatalf("nil gate CheckRecipeAdd should permit: %v", err)
+	}
+	if err := CheckRecipeSpawn(context.Background(), nil, "my-recipe", "npx", "stdio"); err != nil {
+		t.Fatalf("nil gate CheckRecipeSpawn should permit: %v", err)
+	}
+}
+
+// TestCheckRecipeAdd_AllowAllPermits exercises the AllowAll gate.
+func TestCheckRecipeAdd_AllowAllPermits(t *testing.T) {
+	t.Parallel()
+	g := AllowAll{}
+	if err := CheckRecipeAdd(context.Background(), g, "my-recipe", "npx", "stdio"); err != nil {
+		t.Fatalf("AllowAll CheckRecipeAdd should permit: %v", err)
+	}
+	if err := CheckRecipeSpawn(context.Background(), g, "my-recipe", "npx", "stdio"); err != nil {
+		t.Fatalf("AllowAll CheckRecipeSpawn should permit: %v", err)
+	}
+}

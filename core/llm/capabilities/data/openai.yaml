@@ -20,6 +20,7 @@ models:
     reasoning: false
     cancellation: true
     usage_reporting: true
+    context_window: 128000
   - match: "gpt-4-turbo*"
     streaming: true
     tool_calling: true
@@ -30,6 +31,7 @@ models:
     reasoning: false
     cancellation: true
     usage_reporting: true
+    context_window: 128000
   - match: "gpt-4-vision*"
     streaming: true
     tool_calling: true
@@ -40,6 +42,7 @@ models:
     reasoning: false
     cancellation: true
     usage_reporting: true
+    context_window: 128000
   - match: "o1*"
     streaming: true
     tool_calling: true
@@ -50,3 +53,26 @@ models:
     reasoning: true
     cancellation: true
     usage_reporting: true
+    context_window: 200000
+  - match: "gpt-3.5-turbo*"
+    streaming: true
+    tool_calling: true
+    vision: false
+    documents: false
+    json_mode: true
+    prompt_caching: false
+    reasoning: false
+    cancellation: true
+    usage_reporting: true
+    context_window: 16385
+  - match: "gpt-4*"
+    streaming: true
+    tool_calling: true
+    vision: false
+    documents: false
+    json_mode: true
+    prompt_caching: false
+    reasoning: false
+    cancellation: true
+    usage_reporting: true
+    context_window: 8192

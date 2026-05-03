@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	llm "github.com/sigil-tech/kaneaz-harness/core/llm"
 )
@@ -306,13 +307,115 @@ func TestAdapter_ListModels_HappyPath(t *testing.T) {
 	if models[2].ID != "meta-llama/llama-3-70b" {
 		t.Fatalf("third model id = %q", models[2].ID)
 	}
+	// ContextWindow should be passed through from the API response.
+	if models[0].ContextWindow != 200_000 {
+		t.Errorf("expected ContextWindow=200000 for claude-3.5-sonnet, got %d", models[0].ContextWindow)
+	}
+	if models[1].ContextWindow != 128_000 {
+		t.Errorf("expected ContextWindow=128000 for gpt-4o, got %d", models[1].ContextWindow)
+	}
+	// Model without context_length → 0.
+	if models[2].ContextWindow != 0 {
+		t.Errorf("expected ContextWindow=0 for llama (missing), got %d", models[2].ContextWindow)
+	}
 }
 
-func TestAdapter_ListModels_EmptyCredential(t *testing.T) {
-	a := New()
-	_, err := a.ListModels(context.Background(), nil)
-	if err == nil {
-		t.Fatal("expected error for empty credential")
+func TestAdapter_ListModels_EmptyCredentialAllowed(t *testing.T) {
+	// OpenRouter's /api/v1/models endpoint is publicly accessible, so an
+	// empty credential is valid: the request goes out without an
+	// Authorization header and the server still returns the catalog.
+	// This lets ListProviders refresh the cache before the user has
+	// saved a key (and lets the AddProvider modal populate the model
+	// picker on first launch).
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Authorization"); got != "" {
+			t.Errorf("expected no Authorization header for empty cred call, got %q", got)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":[]}`))
+	}))
+	defer srv.Close()
+	a := New(WithEndpoint(srv.URL + "/chat/completions"))
+	models, err := a.ListModels(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("expected no error for empty cred (public endpoint), got %v", err)
+	}
+	if len(models) != 0 {
+		t.Errorf("expected empty model list, got %d", len(models))
+	}
+}
+
+func TestAdapter_LookupModelInfo_CachePopulatedByListModels(t *testing.T) {
+	// Verifies that ListModels populates the per-adapter cache so
+	// LookupModelInfo can serve ListProviders without re-fetching. The
+	// dynamic source is the upstream /models response — the cached
+	// values must match the wire shape verbatim.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":[
+			{"id":"deepseek/deepseek-chat-v3","name":"DeepSeek Chat V3","description":"d","context_length":131072},
+			{"id":"anthropic/claude-3.5-sonnet","name":"Claude","description":"a","context_length":200000}
+		]}`))
+	}))
+	defer srv.Close()
+	a := New(WithEndpoint(srv.URL + "/chat/completions"))
+
+	// Lookup before ListModels: miss.
+	if _, ok := a.LookupModelInfo("deepseek/deepseek-chat-v3"); ok {
+		t.Fatal("expected miss before ListModels populates cache")
+	}
+
+	if _, err := a.ListModels(context.Background(), []byte("sk-test")); err != nil {
+		t.Fatalf("ListModels: %v", err)
+	}
+
+	info, ok := a.LookupModelInfo("deepseek/deepseek-chat-v3")
+	if !ok {
+		t.Fatal("expected hit after ListModels populates cache")
+	}
+	if info.ContextWindow != 131072 {
+		t.Errorf("ContextWindow = %d, want 131072 (wire value)", info.ContextWindow)
+	}
+	if info.DisplayName != "DeepSeek Chat V3" {
+		t.Errorf("DisplayName = %q, want %q", info.DisplayName, "DeepSeek Chat V3")
+	}
+
+	// Unknown model still misses after cache populated.
+	if _, ok := a.LookupModelInfo("bogus/model"); ok {
+		t.Error("expected miss for unknown model id")
+	}
+}
+
+func TestAdapter_RefreshModelsAsync_DedupesAndBacksOff(t *testing.T) {
+	var hitCount int32
+	var mu sync.Mutex
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		hitCount++
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":[{"id":"x","name":"X","context_length":1000}]}`))
+	}))
+	defer srv.Close()
+	a := New(WithEndpoint(srv.URL + "/chat/completions"))
+
+	a.RefreshModelsAsync(nil)
+	a.RefreshModelsAsync(nil) // dedupe — in flight
+	a.RefreshModelsAsync(nil) // dedupe — in flight
+
+	// Wait for the in-flight to finish.
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, ok := a.LookupModelInfo("x"); ok {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	mu.Lock()
+	got := hitCount
+	mu.Unlock()
+	if got != 1 {
+		t.Errorf("expected exactly 1 upstream hit (dedupe), got %d", got)
 	}
 }
 

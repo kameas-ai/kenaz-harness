@@ -8,27 +8,85 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	coremcp "github.com/sigil-tech/kaneaz-harness/core/mcp"
 	"github.com/sigil-tech/kaneaz-harness/core/mcp/recipes"
 	"github.com/sigil-tech/kaneaz-harness/core/mcp/stdio"
+	"github.com/sigil-tech/kaneaz-harness/core/policy/cedar"
+	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/cedarpolicy"
 	"github.com/sigil-tech/kaneaz-harness/core/secrets"
 )
+
+// fakeCedarPolicy is a test double for cedarpolicy.CedarPolicyAPI. It
+// records WritePolicySnippet calls so tests can assert which snippets
+// were written without touching the filesystem.
+type fakeCedarPolicy struct {
+	mu       sync.Mutex
+	snippets map[string]string // filename → body
+	writeErr error
+}
+
+// Compile-time witness: *fakeCedarPolicy satisfies cedarpolicy.CedarPolicyAPI.
+var _ cedarpolicy.CedarPolicyAPI = (*fakeCedarPolicy)(nil)
+
+func newFakeCedarPolicy() *fakeCedarPolicy {
+	return &fakeCedarPolicy{snippets: map[string]string{}}
+}
+
+func (f *fakeCedarPolicy) ListPolicies(_ context.Context) ([]cedarpolicy.PolicyFile, error) {
+	return nil, nil
+}
+func (f *fakeCedarPolicy) ReloadPolicies(_ context.Context) error { return nil }
+func (f *fakeCedarPolicy) RecentDecisions(_ context.Context, _ int) ([]cedarpolicy.Decision, error) {
+	return nil, nil
+}
+func (f *fakeCedarPolicy) WritePolicySnippet(_ context.Context, filename, body string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.writeErr != nil {
+		return f.writeErr
+	}
+	f.snippets[filename] = body
+	return nil
+}
+func (f *fakeCedarPolicy) RevokePolicySnippet(_ context.Context, filename string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.snippets, filename)
+	return nil
+}
+
+func (f *fakeCedarPolicy) written() map[string]string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make(map[string]string, len(f.snippets))
+	for k, v := range f.snippets {
+		out[k] = v
+	}
+	return out
+}
 
 // fakePool stands in for *stdio.Pool. It records every OpenOne /
 // CloseOne call so tests can assert the ServerSpec passed in matches
 // the recipe's ToServerSpec output.
 type fakePool struct {
-	mu       sync.Mutex
-	opened   []coremcp.ServerSpec
-	closed   []string
-	openErr  error
-	closeErr error
-	statuses map[string]stdio.RecipeStatus
+	mu         sync.Mutex
+	opened     []coremcp.ServerSpec
+	closed     []string
+	openErr    error
+	closeErr   error
+	statuses   map[string]stdio.RecipeStatus
+	// serverToolsMap lets tests pre-populate which tools each server
+	// advertises, so preSeedToolSnippets has something to iterate.
+	serverToolsMap map[string][]coremcp.Tool
 }
 
 func newFakePool() *fakePool {
-	return &fakePool{statuses: map[string]stdio.RecipeStatus{}}
+	return &fakePool{
+		statuses:       map[string]stdio.RecipeStatus{},
+		serverToolsMap: map[string][]coremcp.Tool{},
+	}
 }
 
 func (p *fakePool) OpenOne(_ context.Context, spec coremcp.ServerSpec) error {
@@ -61,6 +119,12 @@ func (p *fakePool) RecipeStatus(id string) (stdio.RecipeStatus, bool) {
 	defer p.mu.Unlock()
 	s, ok := p.statuses[id]
 	return s, ok
+}
+
+func (p *fakePool) ServerTools(id string) []coremcp.Tool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.serverToolsMap[id]
 }
 
 func (p *fakePool) opens() []coremcp.ServerSpec {
@@ -268,9 +332,12 @@ func TestUninstallRecipe_RemovesAndCloses(t *testing.T) {
 	if len(enabled.List()) != 0 {
 		t.Fatalf("enabled list = %v, want empty after Uninstall", enabled.List())
 	}
+	// Install now calls CloseOne for idempotency before OpenOne, so the
+	// recorded closes are: [install's pre-evict, uninstall's evict].
+	// Both must reference the same recipe id.
 	closes := pool.closes()
-	if len(closes) != 1 || closes[0] != "test-recipe" {
-		t.Fatalf("pool closes = %v, want [test-recipe]", closes)
+	if len(closes) != 2 || closes[0] != "test-recipe" || closes[1] != "test-recipe" {
+		t.Fatalf("pool closes = %v, want [test-recipe test-recipe]", closes)
 	}
 }
 
@@ -747,5 +814,384 @@ func TestRecipeConfig_EnabledReturnsPersistedConfig(t *testing.T) {
 	}
 	if len(dirs) != 1 || dirs[0] != wantPath {
 		t.Fatalf("allowed_directories = %v, want [%q]", dirs, wantPath)
+	}
+}
+
+// ── WP11 pre-seed tests ────────────────────────────────────────────────────
+
+// toolsRecipe returns a recipe that declares two tools and has no
+// PromptOnFirstUse restrictions. Used by the pre-seed tests.
+func toolsRecipe(id string, toolNames ...string) recipes.Recipe {
+	return recipes.Recipe{
+		ID:          id,
+		DisplayName: "Tools " + id,
+		Command:     []string{"/bin/echo"},
+	}
+}
+
+// TestPreSeed_AllToolsSeededWhenNoPromptList verifies that when
+// PromptOnFirstUse is empty and PreSeedingPolicy is "" (allow_all),
+// every tool discovered by the pool gets a Cedar snippet.
+func TestPreSeed_AllToolsSeededWhenNoPromptList(t *testing.T) {
+	t.Parallel()
+	backend := secrets.NewMemoryBackend()
+	pool := newFakePool()
+	cedar := newFakeCedarPolicy()
+
+	r := recipes.Recipe{
+		ID:          "my-recipe",
+		DisplayName: "My Recipe",
+		Command:     []string{"/bin/echo"},
+	}
+	cat := &recipes.Catalog{Version: 1, Recipes: []recipes.Recipe{r}}
+
+	// Pre-populate the pool with tools for my-recipe.
+	pool.serverToolsMap["my-recipe"] = []coremcp.Tool{
+		{Server: "my-recipe", Name: "search"},
+		{Server: "my-recipe", Name: "fetch"},
+	}
+
+	api := New(Config{
+		Catalog:     cat,
+		Enabled:     &recipes.EnabledRecipes{},
+		Pool:        pool,
+		Secrets:     backend,
+		DataDir:     t.TempDir(),
+		CedarPolicy: cedar,
+	})
+
+	if _, err := api.InstallRecipe(context.Background(), "my-recipe", nil, nil); err != nil {
+		t.Fatalf("InstallRecipe: %v", err)
+	}
+
+	written := cedar.written()
+	if len(written) != 2 {
+		t.Fatalf("want 2 snippets written, got %d: %v", len(written), written)
+	}
+	wantSearch := "my_recipe__search.cedar"
+	wantFetch := "my_recipe__fetch.cedar"
+	if _, ok := written[wantSearch]; !ok {
+		t.Errorf("snippet %q not written; got %v", wantSearch, written)
+	}
+	if _, ok := written[wantFetch]; !ok {
+		t.Errorf("snippet %q not written; got %v", wantFetch, written)
+	}
+}
+
+// TestPreSeed_PromptTaggedToolSkipped verifies that a tool listed in
+// PromptOnFirstUse does NOT get a pre-seeded snippet while other tools do.
+func TestPreSeed_PromptTaggedToolSkipped(t *testing.T) {
+	t.Parallel()
+	backend := secrets.NewMemoryBackend()
+	pool := newFakePool()
+	cedar := newFakeCedarPolicy()
+
+	r := recipes.Recipe{
+		ID:               "my-recipe",
+		DisplayName:      "My Recipe",
+		Command:          []string{"/bin/echo"},
+		PromptOnFirstUse: []string{"dangerous_tool"},
+	}
+	cat := &recipes.Catalog{Version: 1, Recipes: []recipes.Recipe{r}}
+
+	pool.serverToolsMap["my-recipe"] = []coremcp.Tool{
+		{Server: "my-recipe", Name: "safe_tool"},
+		{Server: "my-recipe", Name: "dangerous_tool"},
+	}
+
+	api := New(Config{
+		Catalog:     cat,
+		Enabled:     &recipes.EnabledRecipes{},
+		Pool:        pool,
+		Secrets:     backend,
+		DataDir:     t.TempDir(),
+		CedarPolicy: cedar,
+	})
+
+	if _, err := api.InstallRecipe(context.Background(), "my-recipe", nil, nil); err != nil {
+		t.Fatalf("InstallRecipe: %v", err)
+	}
+
+	written := cedar.written()
+	// Only the safe tool should be pre-seeded.
+	if len(written) != 1 {
+		t.Fatalf("want 1 snippet written, got %d: %v", len(written), written)
+	}
+	wantSafe := "my_recipe__safe_tool.cedar"
+	wantDanger := "my_recipe__dangerous_tool.cedar"
+	if _, ok := written[wantSafe]; !ok {
+		t.Errorf("snippet %q not written; got %v", wantSafe, written)
+	}
+	if _, ok := written[wantDanger]; ok {
+		t.Errorf("snippet %q was written but should be skipped (prompt_on_first_use)", wantDanger)
+	}
+}
+
+// TestPreSeed_PromptOnlyPolicyWritesNoSnippets verifies that when
+// PreSeedingPolicy is "prompt_only", no snippets are written even when
+// tools are discovered.
+func TestPreSeed_PromptOnlyPolicyWritesNoSnippets(t *testing.T) {
+	t.Parallel()
+	backend := secrets.NewMemoryBackend()
+	pool := newFakePool()
+	cedar := newFakeCedarPolicy()
+
+	r := recipes.Recipe{
+		ID:               "my-recipe",
+		DisplayName:      "My Recipe",
+		Command:          []string{"/bin/echo"},
+		PreSeedingPolicy: "prompt_only",
+	}
+	cat := &recipes.Catalog{Version: 1, Recipes: []recipes.Recipe{r}}
+
+	pool.serverToolsMap["my-recipe"] = []coremcp.Tool{
+		{Server: "my-recipe", Name: "tool_a"},
+		{Server: "my-recipe", Name: "tool_b"},
+	}
+
+	api := New(Config{
+		Catalog:     cat,
+		Enabled:     &recipes.EnabledRecipes{},
+		Pool:        pool,
+		Secrets:     backend,
+		DataDir:     t.TempDir(),
+		CedarPolicy: cedar,
+	})
+
+	if _, err := api.InstallRecipe(context.Background(), "my-recipe", nil, nil); err != nil {
+		t.Fatalf("InstallRecipe: %v", err)
+	}
+
+	written := cedar.written()
+	if len(written) != 0 {
+		t.Fatalf("want 0 snippets written with prompt_only policy, got %d: %v", len(written), written)
+	}
+}
+
+// ── RequestAdditionalAllowedDir tests ─────────────────────────────────────
+
+// fsRecipe returns a minimal filesystem recipe suitable for RequestAdditionalAllowedDir tests.
+func fsRecipe() recipes.Recipe {
+	return recipes.Recipe{
+		ID:          "filesystem",
+		DisplayName: "Filesystem",
+		Command:     []string{"npx", "-y", "@modelcontextprotocol/server-filesystem"},
+	}
+}
+
+// fsCatalogMinimal returns a catalog with just the filesystem recipe.
+func fsCatalogMinimal() *recipes.Catalog {
+	return &recipes.Catalog{Version: 1, Recipes: []recipes.Recipe{fsRecipe()}}
+}
+
+// installFSRecipe sets up an EnabledRecipes with one "filesystem" entry
+// containing the given allowed_directories.
+func installFSRecipe(dirs []string) *recipes.EnabledRecipes {
+	er := &recipes.EnabledRecipes{}
+	er.Add(recipes.EnabledRecipe{
+		ID:        "filesystem",
+		EnabledAt: time.Now().UTC(),
+		Config:    map[string]any{"allowed_directories": dirs},
+	})
+	return er
+}
+
+func TestRequestAdditionalAllowedDir_HappyPathAllowOnce(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	newDir := t.TempDir() // the directory to grant
+
+	reg := cedar.NewRegistry(cedar.WithTimeout(5 * time.Second))
+	pool := newFakePool()
+	backend := secrets.NewMemoryBackend()
+	enabled := installFSRecipe([]string{dir})
+
+	api := New(Config{
+		Catalog:        fsCatalogMinimal(),
+		Enabled:        enabled,
+		Pool:           pool,
+		Secrets:        backend,
+		DataDir:        t.TempDir(),
+		PromptRegistry: reg,
+	})
+
+	// Resolve the prompt as AllowOnce in a goroutine while Call blocks.
+	go func() {
+		for {
+			pending := reg.ListPending()
+			if len(pending) > 0 {
+				_ = reg.Resolve(pending[0].RequestID, cedar.DecisionAllowOnce)
+				return
+			}
+			time.Sleep(2 * time.Millisecond)
+		}
+	}()
+
+	granted, expanded, err := api.RequestAdditionalAllowedDir(context.Background(), "filesystem", newDir, "need to read project")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !granted {
+		t.Error("granted = false; want true")
+	}
+	if expanded == "" {
+		t.Error("expanded path is empty")
+	}
+
+	// Config should now include newDir.
+	entry, ok := enabled.Get("filesystem")
+	if !ok {
+		t.Fatal("filesystem entry missing from EnabledRecipes")
+	}
+	dirs := configStringSlice(entry.Config, "allowed_directories")
+	found := false
+	for _, p := range dirs {
+		if p == expanded {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expanded path %q not in allowed_directories %v", expanded, dirs)
+	}
+
+	// CloseOne + OpenOne should have been called (restart).
+	if closes := pool.closes(); len(closes) == 0 {
+		t.Error("pool.CloseOne was not called (no restart)")
+	}
+	if opens := pool.opens(); len(opens) == 0 {
+		t.Error("pool.OpenOne was not called (no restart)")
+	}
+}
+
+func TestRequestAdditionalAllowedDir_DenyDecision(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	newDir := t.TempDir()
+
+	reg := cedar.NewRegistry(cedar.WithTimeout(5 * time.Second))
+	pool := newFakePool()
+	backend := secrets.NewMemoryBackend()
+	enabled := installFSRecipe([]string{dir})
+
+	api := New(Config{
+		Catalog:        fsCatalogMinimal(),
+		Enabled:        enabled,
+		Pool:           pool,
+		Secrets:        backend,
+		DataDir:        t.TempDir(),
+		PromptRegistry: reg,
+	})
+
+	go func() {
+		for {
+			pending := reg.ListPending()
+			if len(pending) > 0 {
+				_ = reg.Resolve(pending[0].RequestID, cedar.DecisionDeny)
+				return
+			}
+			time.Sleep(2 * time.Millisecond)
+		}
+	}()
+
+	granted, _, err := api.RequestAdditionalAllowedDir(context.Background(), "filesystem", newDir, "testing deny")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if granted {
+		t.Error("granted = true after deny; want false")
+	}
+
+	// Config should NOT have been updated.
+	entry, _ := enabled.Get("filesystem")
+	dirs := configStringSlice(entry.Config, "allowed_directories")
+	if len(dirs) != 1 || dirs[0] != dir {
+		t.Errorf("allowed_directories changed unexpectedly: %v", dirs)
+	}
+	if len(pool.closes()) != 0 || len(pool.opens()) != 0 {
+		t.Error("pool should not have been touched on deny")
+	}
+}
+
+func TestRequestAdditionalAllowedDir_DeniedPrefix(t *testing.T) {
+	t.Parallel()
+	// /etc is on the deny-list — ValidateAllowedDir should reject it
+	// before any prompt fires.
+	reg := cedar.NewRegistry()
+	pool := newFakePool()
+	backend := secrets.NewMemoryBackend()
+	enabled := installFSRecipe([]string{t.TempDir()})
+
+	api := New(Config{
+		Catalog:        fsCatalogMinimal(),
+		Enabled:        enabled,
+		Pool:           pool,
+		Secrets:        backend,
+		DataDir:        t.TempDir(),
+		PromptRegistry: reg,
+	})
+
+	granted, _, err := api.RequestAdditionalAllowedDir(context.Background(), "filesystem", "/etc", "bypass deny-list")
+	// Should return an error (or granted=false) without prompting.
+	if granted {
+		t.Error("granted = true for /etc; want false")
+	}
+	if err == nil {
+		t.Error("expected error for /etc (deny-list); got nil")
+	}
+	// The registry must have zero pending prompts (no prompt was fired).
+	if n := reg.PendingCount(); n != 0 {
+		t.Errorf("pending count = %d; want 0 (no prompt should have fired)", n)
+	}
+}
+
+func TestRequestAdditionalAllowedDir_RestoreOnRestartFailure(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	newDir := t.TempDir()
+
+	reg := cedar.NewRegistry(cedar.WithTimeout(5 * time.Second))
+	pool := newFakePool()
+	pool.openErr = errors.New("spawn failed")
+	backend := secrets.NewMemoryBackend()
+	enabled := installFSRecipe([]string{dir})
+	dataDir := t.TempDir()
+
+	api := New(Config{
+		Catalog:        fsCatalogMinimal(),
+		Enabled:        enabled,
+		Pool:           pool,
+		Secrets:        backend,
+		DataDir:        dataDir,
+		PromptRegistry: reg,
+	})
+
+	go func() {
+		for {
+			pending := reg.ListPending()
+			if len(pending) > 0 {
+				_ = reg.Resolve(pending[0].RequestID, cedar.DecisionAllowOnce)
+				return
+			}
+			time.Sleep(2 * time.Millisecond)
+		}
+	}()
+
+	granted, _, err := api.RequestAdditionalAllowedDir(context.Background(), "filesystem", newDir, "restart test")
+	if granted {
+		t.Error("granted = true despite restart failure; want false")
+	}
+	if err == nil {
+		t.Error("expected error from restart failure; got nil")
+	}
+
+	// Config should be rolled back — only original dir.
+	entry, ok := enabled.Get("filesystem")
+	if !ok {
+		t.Fatal("filesystem entry missing after rollback")
+	}
+	dirs := configStringSlice(entry.Config, "allowed_directories")
+	if len(dirs) != 1 || dirs[0] != dir {
+		t.Errorf("config not rolled back; got %v", dirs)
 	}
 }

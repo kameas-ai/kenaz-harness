@@ -5,6 +5,8 @@ import (
 	"sort"
 	"sync"
 	"time"
+
+	"github.com/sigil-tech/kaneaz-harness/core/autonomy"
 )
 
 // memStore is the in-memory Store implementation. Backed by a map
@@ -94,4 +96,26 @@ func (s *memStore) Delete(_ context.Context, id string) error {
 	}
 	delete(s.projects, id)
 	return nil
+}
+
+func (s *memStore) SetAutonomyProfile(_ context.Context, id string, layer autonomy.Layer) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	p, ok := s.projects[id]
+	if !ok {
+		return ErrNotFound
+	}
+	p.AutonomyLevel, p.AutonomyOverrides = cloneAutonomyLayer(layer)
+	s.projects[id] = p
+	return nil
+}
+
+func (s *memStore) GetAutonomyProfile(_ context.Context, id string) (autonomy.Layer, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	p, ok := s.projects[id]
+	if !ok {
+		return autonomy.Layer{}, ErrNotFound
+	}
+	return autonomyLayerFromProject(p), nil
 }

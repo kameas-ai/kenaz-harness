@@ -27,6 +27,7 @@ import {
   Wrench,
 } from '@/shell/icons';
 import RecipeKeyPromptModal from './RecipeKeyPromptModal.vue';
+import AddMCPServerModal from './AddMCPServerModal.vue';
 import type {
   EnvKey,
   Recipe,
@@ -427,10 +428,85 @@ function editConfig(listing: RecipeListing) {
   modalOpen.value = true;
 }
 
-const visibleRecipes = computed<readonly RecipeListing[]>(() => recipes.value);
+// Show only enabled (installed) recipes in the main panel. The full
+// catalog is browsable via the Add MCP Server modal (RegistryTab).
+// This ensures a clean-install shows zero rows, and that the Delete
+// button is only presented for recipes that are actually enabled —
+// clicking Delete on a non-enabled catalog entry would be a no-op.
+const visibleRecipes = computed<readonly RecipeListing[]>(() =>
+  recipes.value.filter((l) => l.enabled),
+);
 
 function statusOf(listing: RecipeListing): RecipeStatus {
   return listing.status;
+}
+
+// ── Add MCP Server modal (WP09) ────────────────────────────────────────
+const addModalOpen = ref(false);
+const addModalEditRecipe = ref<Recipe | null>(null);
+
+const existingRecipeIds = computed<readonly string[]>(() =>
+  visibleRecipes.value.map((l) => l.recipe.id),
+);
+
+function openAddModal() {
+  addModalEditRecipe.value = null;
+  addModalOpen.value = true;
+}
+
+function openEditModal(listing: RecipeListing) {
+  addModalEditRecipe.value = listing.recipe;
+  addModalOpen.value = true;
+}
+
+function onAddModalClose() {
+  addModalOpen.value = false;
+  addModalEditRecipe.value = null;
+}
+
+function onAddModalInstalled() {
+  addModalOpen.value = false;
+  addModalEditRecipe.value = null;
+  // Refresh the recipe list to pick up newly installed/imported servers.
+  void tools.refresh();
+}
+
+// ── Delete recipe ──────────────────────────────────────────────────────
+const deleteConfirmId = ref<string | null>(null);
+
+function requestDelete(id: string) {
+  deleteConfirmId.value = id;
+}
+
+async function confirmDelete() {
+  const id = deleteConfirmId.value;
+  if (!id) return;
+  deleteConfirmId.value = null;
+  await doUninstall(id);
+}
+
+function cancelDelete() {
+  deleteConfirmId.value = null;
+}
+
+/**
+ * sourceBadge — derive a human-readable source label for a recipe row.
+ *
+ * BACKEND GAP: The wire shape does not yet carry a `source` discriminator.
+ * When the backend adds it (WP10+), read it directly instead of this
+ * heuristic fallback.
+ *
+ * Current heuristic: all recipes returned by Tools_ListRecipes are
+ * considered "shipped" because that is the only catalog the backend
+ * exposes today. Registry / user / imported will be distinguishable once
+ * the backend surfaces the field.
+ */
+function sourceBadge(_listing: RecipeListing): string {
+  return 'shipped';
+}
+
+function sourceBadgeClass(_listing: RecipeListing): string {
+  return 'text-ink-dim';
 }
 
 // Whenever the recipes list refreshes, fetch persisted config for any
@@ -661,11 +737,22 @@ watch(
       </div>
     </div>
 
-    <h2
-      class="mt-6 font-ui text-[11px] uppercase tracking-[0.18em] text-ink-subtle mb-3"
-    >
-      Connected MCP recipes
-    </h2>
+    <!-- Connected MCP recipes header + Add CTA -->
+    <div class="mt-6 flex items-center justify-between mb-3">
+      <h2
+        class="font-ui text-[11px] uppercase tracking-[0.18em] text-ink-subtle"
+      >
+        Connected MCP recipes
+      </h2>
+      <button
+        type="button"
+        class="rounded-sm border border-accent-hairline bg-surface-1 px-3 py-1 font-ui text-[11px] uppercase tracking-[0.16em] text-accent hover:bg-accent-glow"
+        data-testid="add-mcp-server-btn"
+        @click="openAddModal"
+      >
+        + Add MCP Server
+      </button>
+    </div>
 
     <div
       v-if="recipesLoading && visibleRecipes.length === 0"
@@ -687,8 +774,7 @@ watch(
       class="rounded-sm border border-border-muted bg-surface-1 px-4 py-3 font-ui text-[12px] text-ink-muted"
       data-testid="recipes-empty"
     >
-      No shipped recipes available. Drop a JSON entry into
-      <span class="font-mono">core/mcp/recipes/shipped.json</span> to add one.
+      No MCP servers installed. Click <strong>+ Add MCP Server</strong> to browse the catalog and install one.
     </div>
 
     <div
@@ -720,6 +806,14 @@ watch(
                 :data-testid="`recipe-state-${listing.recipe.id}`"
               >
                 {{ statusOf(listing).state }}
+              </span>
+              <!-- Source badge -->
+              <span
+                class="text-[10px] uppercase tracking-[0.14em]"
+                :class="sourceBadgeClass(listing)"
+                :data-testid="`recipe-source-${listing.recipe.id}`"
+              >
+                {{ sourceBadge(listing) }}
               </span>
               <span
                 v-if="isWarming(listing.recipe.id, statusOf(listing).state)"
@@ -805,6 +899,53 @@ watch(
                   {{ p }}
                 </li>
               </ul>
+            </div>
+            <!-- Edit + Delete row actions -->
+            <div class="mt-2 flex items-center gap-2">
+              <button
+                type="button"
+                class="rounded-sm border border-border-muted px-2 py-0.5 font-ui text-[10px] uppercase tracking-[0.14em] text-ink-dim hover:text-ink hover:bg-surface-2"
+                :data-testid="`recipe-edit-btn-${listing.recipe.id}`"
+                @click="openEditModal(listing)"
+              >
+                Edit
+              </button>
+              <button
+                type="button"
+                class="rounded-sm border border-border-muted px-2 py-0.5 font-ui text-[10px] uppercase tracking-[0.14em] text-signal-danger hover:bg-signal-danger/10"
+                :data-testid="`recipe-delete-btn-${listing.recipe.id}`"
+                @click="requestDelete(listing.recipe.id)"
+              >
+                Delete
+              </button>
+            </div>
+            <!-- Delete confirmation dialog -->
+            <div
+              v-if="deleteConfirmId === listing.recipe.id"
+              class="mt-2 rounded-sm border border-signal-danger bg-signal-danger/10 px-3 py-2 space-y-2"
+              data-testid="recipe-delete-confirm"
+            >
+              <p class="font-ui text-[12px] text-ink">
+                Remove <strong>{{ listing.recipe.displayName }}</strong>? This stops the server and removes it from your enabled list.
+              </p>
+              <div class="flex gap-2">
+                <button
+                  type="button"
+                  class="rounded-sm border border-signal-danger bg-signal-danger/10 px-2 py-0.5 font-ui text-[10px] uppercase tracking-[0.14em] text-signal-danger hover:bg-signal-danger/20"
+                  :data-testid="`recipe-delete-confirm-yes-${listing.recipe.id}`"
+                  @click="confirmDelete"
+                >
+                  Remove
+                </button>
+                <button
+                  type="button"
+                  class="rounded-sm border border-border-muted px-2 py-0.5 font-ui text-[10px] uppercase tracking-[0.14em] text-ink-dim hover:text-ink"
+                  :data-testid="`recipe-delete-confirm-no-${listing.recipe.id}`"
+                  @click="cancelDelete"
+                >
+                  Cancel
+                </button>
+              </div>
             </div>
             <button
               type="button"
@@ -893,6 +1034,14 @@ watch(
       :initial-config="modalInitialConfig"
       @installed="onModalInstalled"
       @close="onModalClose"
+    />
+
+    <AddMCPServerModal
+      :open="addModalOpen"
+      :edit-recipe="addModalEditRecipe"
+      :existing-ids="existingRecipeIds"
+      @installed="onAddModalInstalled"
+      @close="onAddModalClose"
     />
   </section>
 </template>

@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Kenaz app icon — simplified mark per design doc.
+  Dark rounded-square background (squircle approximation via rx=225 on 1024)
+  with a centred gold chevron ">" in the brand accent (#C8A56A).
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#23232A"/>
+      <stop offset="1" stop-color="#0E0E12"/>
+    </linearGradient>
+  </defs>
+  <!-- Squircle-ish background -->
+  <rect width="1024" height="1024" rx="225" ry="225" fill="url(#bg)"/>
+  <!-- Gold chevron — same accent as the existing UI tokens (--accent: #C8A56A) -->
+  <polyline
+    points="360,300 680,512 360,724"
+    stroke="#C8A56A"
+    stroke-width="92"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+    fill="none"/>
+</svg>

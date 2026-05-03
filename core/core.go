@@ -144,6 +144,13 @@ type Core struct {
 	// alongside the rest of the boot sequence. nil = no-op (test path).
 	mcpRecipeBootstrap func(context.Context) error
 
+	// bashMigrationBootstrap is the optional rpc-layer-supplied hook that
+	// runs the first-boot bash-allowlist → Cedar policy migration (WP10).
+	// Invoked from Start BEFORE the chat surface accepts a turn. Errors
+	// are logged at warn and do not fail Start — migration is best-effort;
+	// the flag stays false so the next boot retries. nil = no-op.
+	bashMigrationBootstrap func(context.Context) error
+
 	// bundleCacheMu guards bundleCache lazy construction so concurrent
 	// callers do not race during the first BundleCache() / Start() call.
 	bundleCacheMu sync.Mutex
@@ -216,6 +223,16 @@ func (c *Core) SetMCPRecipeBootstrap(fn func(context.Context) error) {
 	c.mcpRecipeBootstrap = fn
 }
 
+// SetBashMigrationBootstrap wires the rpc-layer-supplied first-boot bash
+// allowlist migration hook. Start invokes the hook before the chat surface
+// accepts a turn; errors are logged at warn and never block boot.
+func (c *Core) SetBashMigrationBootstrap(fn func(context.Context) error) {
+	if c == nil {
+		return
+	}
+	c.bashMigrationBootstrap = fn
+}
+
 // Start brings every wired subsystem online. It is safe to call once;
 // repeated calls are not supported.
 //
@@ -238,6 +255,16 @@ func (c *Core) Start(ctx context.Context) error {
 	// continue without telemetry. Telemetry surfaces are read through
 	// Core.Telemetry() which returns nil in that case.
 	c.initTelemetry()
+	// Bash allowlist → Cedar migration (WP10). Runs before the chat
+	// surface accepts a turn so the first bash gate check has the full
+	// policy set. Best-effort: if the Cedar engine isn't loaded yet or a
+	// write fails, we log at warn and continue — the next boot retries
+	// (BashAllowlistMigrated stays false).
+	if c.bashMigrationBootstrap != nil {
+		if err := c.bashMigrationBootstrap(ctx); err != nil {
+			logging.L().Warn("core.bash_migration_failed", "err", err.Error())
+		}
+	}
 	// MCP recipe bootstrap — spawn every persisted enabled recipe onto
 	// the pool BEFORE the user gets the chat surface. Failures degrade
 	// gracefully (FR-030): the chat still works, just without that

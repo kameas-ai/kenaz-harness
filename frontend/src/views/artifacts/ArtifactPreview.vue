@@ -28,7 +28,10 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { Download, X } from '@/shell/icons';
 import StreamingText from '@/components/chat/StreamingText.vue';
+import { useHarnessClient } from '@/lib/harnessClientContext';
 import type { Artifact, ArtifactScope, ArtifactWithBytes } from '@/lib/types';
+
+const client = useHarnessClient();
 
 const props = withDefaults(
   defineProps<{
@@ -73,6 +76,7 @@ const showDeleteConfirm = ref(false);
 const busy = ref(false);
 const errorMsg = ref<string | null>(null);
 const copyFlash = ref(false);
+const imageLoadFailed = ref(false);
 
 const artifact = computed<Artifact | null>(
   () => props.payload?.artifact ?? null,
@@ -84,12 +88,27 @@ const bytesB64 = computed(() => props.payload?.bytes ?? '');
 const isMarkdown = computed(() => mimeType.value === 'text/markdown');
 const isHtml = computed(() => mimeType.value === 'text/html');
 const isImage = computed(() => mimeType.value.startsWith('image/'));
+// Mimes whose body is plain UTF-8 text we can render in <pre>. Covers
+// application/json, application/xml, application/javascript, and the
+// "+json"/"+xml" suffix family (e.g. application/manifest+json) plus
+// anything explicitly text/*. JSON specifically is the common save-
+// artifact output, so treating it as previewable matters.
+function isTextLikeMime(m: string): boolean {
+  if (!m) return false;
+  if (m.startsWith('text/')) return true;
+  if (m === 'application/json' || m.endsWith('+json')) return true;
+  if (m === 'application/xml' || m.endsWith('+xml')) return true;
+  if (m === 'application/javascript' || m === 'application/ecmascript') return true;
+  if (m === 'application/x-yaml' || m === 'application/yaml') return true;
+  return false;
+}
+
 const isText = computed(
   () =>
     !isMarkdown.value &&
     !isHtml.value &&
     !isImage.value &&
-    mimeType.value.startsWith('text/'),
+    isTextLikeMime(mimeType.value),
 );
 const isOther = computed(
   () => !isMarkdown.value && !isHtml.value && !isImage.value && !isText.value,
@@ -169,6 +188,7 @@ watch(
       allowScripts.value = false;
       showPromoteConfirm.value = false;
       showDeleteConfirm.value = false;
+      imageLoadFailed.value = false;
       errorMsg.value = null;
       void nextTick();
     }
@@ -187,17 +207,20 @@ onBeforeUnmount(() => {
   }
 });
 
-function downloadArtifact() {
+async function downloadArtifact() {
   const a = artifact.value;
-  if (!a || !dataUrl.value) return;
-  if (typeof document === 'undefined') return;
-  const link = document.createElement('a');
-  link.href = dataUrl.value;
-  const name = a.sourceRef.filename || a.title || a.id;
-  link.download = name;
-  document.body.appendChild(link);
-  link.click();
-  document.body.removeChild(link);
+  if (!a) return;
+  errorMsg.value = null;
+  // Wails webview ignores `<a download>` on `data:` URLs (the older
+  // implementation silently no-op'd). Use the OS-native save dialog
+  // bound on the backend (Artifacts_SaveAs); bytes resolve from the
+  // media store server-side, no JS-side base64 round-trip.
+  const suggested = a.sourceRef.filename || a.title || a.id;
+  try {
+    await client.artifacts.saveAs(a.id, suggested);
+  } catch (err) {
+    errorMsg.value = err instanceof Error ? err.message : String(err);
+  }
 }
 
 async function copyToClipboard() {
@@ -385,10 +408,22 @@ async function confirmDelete() {
           data-testid="artifact-preview-image"
         >
           <img
+            v-if="!imageLoadFailed"
             :src="dataUrl"
             :alt="artifact.title || 'image artifact'"
             class="block max-w-full max-h-[70vh] mx-auto"
+            @error="imageLoadFailed = true"
           />
+          <div
+            v-else
+            class="px-4 py-6 text-center text-[12px] text-ink-muted"
+            data-testid="artifact-preview-image-broken"
+          >
+            Image bytes failed to render — the file may be corrupt or
+            mis-typed (mime: <span class="font-mono">{{ mimeType }}</span>,
+            size: <span class="font-mono">{{ artifact.byteSize }}B</span>).
+            Use Download to inspect the raw bytes.
+          </div>
         </div>
 
         <!-- Plain / code text -->
@@ -416,19 +451,25 @@ async function confirmDelete() {
           {{ errorMsg }}
         </div>
 
-        <div
-          v-if="showPromoteConfirm"
-          class="mt-3 rounded-sm border border-accent bg-surface-1 px-3 py-2 text-[12px] text-ink"
-          role="dialog"
-          data-testid="artifact-preview-promote-confirm"
-        >
+        <!-- Promote / Delete confirmations are rendered above the
+             footer (not inside the scrollable body) so the user can
+             see them after clicking the footer button regardless of
+             scroll position. See the footer block below. -->
+      </div>
+
+      <!-- Confirmations appear directly above the footer so they're
+           always visible after clicking a footer action button. -->
+      <div
+        v-if="showPromoteConfirm"
+        class="border-t border-border-muted bg-surface-1 px-5 py-2 text-[12px] text-ink"
+        role="dialog"
+        data-testid="artifact-preview-promote-confirm"
+      >
+        <div class="flex items-center justify-between gap-3">
           <p>
-            Promote
-            <strong>{{ artifact.title }}</strong>
-            from session to project? The original session-scope row is
-            moved (not copied).
+            Promote <strong>{{ artifact.title }}</strong> from session to project?
           </p>
-          <div class="mt-2 flex justify-end gap-2">
+          <div class="flex items-center gap-2 shrink-0">
             <button
               type="button"
               class="rounded-sm px-2 py-1 text-[11px] text-ink-dim hover:text-ink"
@@ -449,18 +490,18 @@ async function confirmDelete() {
             </button>
           </div>
         </div>
-
-        <div
-          v-if="showDeleteConfirm"
-          class="mt-3 rounded-sm border border-signal-danger bg-surface-1 px-3 py-2 text-[12px] text-ink"
-          role="dialog"
-          data-testid="artifact-preview-delete-confirm"
-        >
+      </div>
+      <div
+        v-if="showDeleteConfirm"
+        class="border-t border-signal-danger bg-surface-1 px-5 py-2 text-[12px] text-ink"
+        role="dialog"
+        data-testid="artifact-preview-delete-confirm"
+      >
+        <div class="flex items-center justify-between gap-3">
           <p>
-            Delete
-            <strong>{{ artifact.title }}</strong>? This cannot be undone.
+            Delete <strong>{{ artifact.title }}</strong>? This cannot be undone.
           </p>
-          <div class="mt-2 flex justify-end gap-2">
+          <div class="flex items-center gap-2 shrink-0">
             <button
               type="button"
               class="rounded-sm px-2 py-1 text-[11px] text-ink-dim hover:text-ink"
@@ -482,7 +523,6 @@ async function confirmDelete() {
           </div>
         </div>
       </div>
-
       <footer
         class="flex items-center justify-between gap-2 border-t border-border-muted px-5 py-3"
       >

@@ -4,8 +4,10 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"time"
 
+	"github.com/sigil-tech/kaneaz-harness/core/autonomy"
 	"github.com/sigil-tech/kaneaz-harness/core/storage"
 )
 
@@ -24,24 +26,32 @@ func (s *sqlStore) Create(ctx context.Context, p Project) error {
 	if p.Name == "" {
 		return ErrNameRequired
 	}
+	level, overrides, err := encodeAutonomySQL(autonomyLayerFromProject(p))
+	if err != nil {
+		return err
+	}
 	return s.db.WriteTx(ctx, func(tx storage.WriteTx) error {
 		_, err := tx.Exec(ctx, `
             INSERT INTO projects
-                (id, name, description, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?)
+                (id, name, description, created_at, updated_at,
+                 autonomy_level, autonomy_overrides)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
         `,
 			p.ID,
 			p.Name,
 			p.Description,
 			p.CreatedAt.UnixNano(),
 			p.UpdatedAt.UnixNano(),
+			level,
+			overrides,
 		)
 		return err
 	})
 }
 
 const sqlSelectProject = `
-    SELECT id, name, description, created_at, updated_at
+    SELECT id, name, description, created_at, updated_at,
+           autonomy_level, autonomy_overrides
     FROM projects
 `
 
@@ -102,6 +112,38 @@ func (s *sqlStore) UpdateDescription(ctx context.Context, id, description string
 	})
 }
 
+func (s *sqlStore) SetAutonomyProfile(ctx context.Context, id string, layer autonomy.Layer) error {
+	level, overrides, err := encodeAutonomySQL(layer)
+	if err != nil {
+		return err
+	}
+	return s.db.WriteTx(ctx, func(tx storage.WriteTx) error {
+		res, err := tx.Exec(ctx,
+			"UPDATE projects SET autonomy_level = ?, autonomy_overrides = ? WHERE id = ?",
+			level, overrides, id)
+		if err != nil {
+			return err
+		}
+		return rowsAffectedOrNotFound(res)
+	})
+}
+
+func (s *sqlStore) GetAutonomyProfile(ctx context.Context, id string) (autonomy.Layer, error) {
+	row := s.db.Reader().QueryRow(ctx,
+		"SELECT autonomy_level, autonomy_overrides FROM projects WHERE id = ?", id)
+	var (
+		level     sql.NullInt64
+		overrides sql.NullString
+	)
+	if err := row.Scan(&level, &overrides); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return autonomy.Layer{}, ErrNotFound
+		}
+		return autonomy.Layer{}, err
+	}
+	return decodeAutonomySQL(level, overrides)
+}
+
 func (s *sqlStore) Delete(ctx context.Context, id string) error {
 	return s.db.WriteTx(ctx, func(tx storage.WriteTx) error {
 		res, err := tx.Exec(ctx, "DELETE FROM projects WHERE id = ?", id)
@@ -114,15 +156,29 @@ func (s *sqlStore) Delete(ctx context.Context, id string) error {
 
 func scanProject(sc interface{ Scan(dest ...any) error }) (Project, error) {
 	var (
-		p         Project
-		createdAt int64
-		updatedAt int64
+		p                 Project
+		createdAt         int64
+		updatedAt         int64
+		autonomyLevel     sql.NullInt64
+		autonomyOverrides sql.NullString
 	)
-	if err := sc.Scan(&p.ID, &p.Name, &p.Description, &createdAt, &updatedAt); err != nil {
+	if err := sc.Scan(&p.ID, &p.Name, &p.Description, &createdAt, &updatedAt,
+		&autonomyLevel, &autonomyOverrides); err != nil {
 		return Project{}, err
 	}
 	p.CreatedAt = time.Unix(0, createdAt).UTC()
 	p.UpdatedAt = time.Unix(0, updatedAt).UTC()
+	if autonomyLevel.Valid {
+		t := autonomy.Tier(int(autonomyLevel.Int64))
+		p.AutonomyLevel = &t
+	}
+	if autonomyOverrides.Valid && autonomyOverrides.String != "" {
+		ov, err := decodeAutonomyOverrides(autonomyOverrides.String)
+		if err != nil {
+			return Project{}, fmt.Errorf("projects: decode autonomy_overrides: %w", err)
+		}
+		p.AutonomyOverrides = ov
+	}
 	return p, nil
 }
 

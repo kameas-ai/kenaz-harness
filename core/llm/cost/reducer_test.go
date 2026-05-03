@@ -132,3 +132,20 @@ func TestReducer_TaggedSubsetSum(t *testing.T) {
 			compactionSubtotal, total)
 	}
 }
+
+// TestKindAutoTitle_PinsConstantValue pins that KindAutoTitle is exactly
+// "auto_title" so any renaming during refactors shows up as a test failure
+// rather than a silent contract break in the wiring adapter's tag path.
+func TestKindAutoTitle_PinsConstantValue(t *testing.T) {
+	if KindAutoTitle != "auto_title" {
+		t.Errorf("KindAutoTitle = %q, want \"auto_title\"", KindAutoTitle)
+	}
+}
+
+// TestKindCompaction_StillPinsValue ensures adding KindAutoTitle didn't
+// accidentally change the existing KindCompaction constant.
+func TestKindCompaction_StillPinsValue(t *testing.T) {
+	if KindCompaction != "compaction" {
+		t.Errorf("KindCompaction = %q, want \"compaction\"", KindCompaction)
+	}
+}

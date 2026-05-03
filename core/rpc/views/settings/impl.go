@@ -19,7 +19,9 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"unicode"
 
+	"github.com/sigil-tech/kaneaz-harness/core/autonomy"
 	"github.com/sigil-tech/kaneaz-harness/core/compaction"
 )
 
@@ -102,6 +104,9 @@ func (s *FileStore) SaveAll(in Settings) error {
 	if err := validateCompactionFields(in); err != nil {
 		return err
 	}
+	if err := validateShortcuts(in); err != nil {
+		return err
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.saveLocked(in)
@@ -151,6 +156,53 @@ func validateCompactionFields(in Settings) error {
 		return ErrInvalidCompactionRecentWindow
 	}
 
+	return nil
+}
+
+// MaxShortcutEntries is the upper bound on the number of per-shortcut
+// overrides the backend accepts in a single Settings write (plan §2.7 R4).
+const MaxShortcutEntries = 200
+
+// MaxShortcutValueLen is the maximum byte length of a single binding
+// value. Generous enough for any legitimate `Cmd+Shift+Letter` string.
+const MaxShortcutValueLen = 64
+
+// ErrTooManyShortcuts is returned when the KeyboardShortcuts map exceeds
+// MaxShortcutEntries.
+var ErrTooManyShortcuts = fmt.Errorf(
+	"settings: keyboardShortcuts map exceeds maximum of %d entries", MaxShortcutEntries,
+)
+
+// ErrShortcutValueTooLong is returned when a binding string exceeds
+// MaxShortcutValueLen bytes.
+var ErrShortcutValueTooLong = fmt.Errorf(
+	"settings: keyboard shortcut binding value exceeds %d characters", MaxShortcutValueLen,
+)
+
+// ErrShortcutValueControlChar is returned when a binding value contains
+// a control character (newline, tab, etc.).
+var ErrShortcutValueControlChar = errors.New(
+	"settings: keyboard shortcut binding value contains a control character",
+)
+
+// validateShortcuts checks the KeyboardShortcuts map for size and value
+// constraints (plan §2.7). Called by SaveAll so malformed maps from a
+// hand-edited settings file or a buggy client are rejected before they
+// reach the filesystem.
+func validateShortcuts(in Settings) error {
+	if len(in.KeyboardShortcuts) > MaxShortcutEntries {
+		return ErrTooManyShortcuts
+	}
+	for _, v := range in.KeyboardShortcuts {
+		if len(v) > MaxShortcutValueLen {
+			return ErrShortcutValueTooLong
+		}
+		for _, r := range v {
+			if unicode.IsControl(r) {
+				return ErrShortcutValueControlChar
+			}
+		}
+	}
 	return nil
 }
 
@@ -376,6 +428,242 @@ func (s *FileStore) SaveMaxAgentTurns(turns int) error {
 	return s.saveLocked(got)
 }
 
+// ── WP08 permission dial FileStore accessors ──────────────────────
+
+// LoadPermissionMode returns the global permission posture ("normal"
+// when unset).
+func (s *FileStore) LoadPermissionMode() (string, error) {
+	got, err := s.LoadAll()
+	if err != nil {
+		return got.EffectivePermissionMode(), err
+	}
+	return got.EffectivePermissionMode(), nil
+}
+
+// SavePermissionMode updates the global permission posture.
+func (s *FileStore) SavePermissionMode(mode string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	got, err := s.loadLocked()
+	if err != nil {
+		return err
+	}
+	got.PermissionMode = mode
+	return s.saveLocked(got)
+}
+
+// LoadShortcuts returns the KeyboardShortcuts map from the persisted
+// settings. Missing settings file returns an empty map (no error).
+func (s *FileStore) LoadShortcuts() (map[string]string, error) {
+	got, err := s.LoadAll()
+	if err != nil {
+		return nil, err
+	}
+	if got.KeyboardShortcuts == nil {
+		return map[string]string{}, nil
+	}
+	// Return a defensive copy.
+	out := make(map[string]string, len(got.KeyboardShortcuts))
+	for k, v := range got.KeyboardShortcuts {
+		out[k] = v
+	}
+	return out, nil
+}
+
+// SaveShortcuts atomically replaces the full KeyboardShortcuts map.
+func (s *FileStore) SaveShortcuts(m map[string]string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	got, err := s.loadLocked()
+	if err != nil {
+		return err
+	}
+	got.KeyboardShortcuts = m
+	return s.saveLocked(got)
+}
+
+// LoadPermissionCacheDangerousOps returns the dangerous-ops override flag
+// (default false).
+func (s *FileStore) LoadPermissionCacheDangerousOps() (bool, error) {
+	got, err := s.LoadAll()
+	if err != nil {
+		return got.PermissionCacheDangerousOps, err
+	}
+	return got.PermissionCacheDangerousOps, nil
+}
+
+// SavePermissionCacheDangerousOps updates the dangerous-ops override flag.
+func (s *FileStore) SavePermissionCacheDangerousOps(enabled bool) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	got, err := s.loadLocked()
+	if err != nil {
+		return err
+	}
+	got.PermissionCacheDangerousOps = enabled
+	return s.saveLocked(got)
+}
+
+// LoadBashAllowlistMigrated returns the WP10 migration marker.
+func (s *FileStore) LoadBashAllowlistMigrated() (bool, error) {
+	got, err := s.LoadAll()
+	if err != nil {
+		return got.BashAllowlistMigrated, err
+	}
+	return got.BashAllowlistMigrated, nil
+}
+
+// SaveBashAllowlistMigrated updates the WP10 migration marker.
+func (s *FileStore) SaveBashAllowlistMigrated(migrated bool) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	got, err := s.loadLocked()
+	if err != nil {
+		return err
+	}
+	got.BashAllowlistMigrated = migrated
+	return s.saveLocked(got)
+}
+
+// LoadPermissionsMigrationToastShown returns the one-time toast marker.
+func (s *FileStore) LoadPermissionsMigrationToastShown() (bool, error) {
+	got, err := s.LoadAll()
+	if err != nil {
+		return got.PermissionsMigrationToastShown, err
+	}
+	return got.PermissionsMigrationToastShown, nil
+}
+
+// SavePermissionsMigrationToastShown updates the one-time toast marker.
+func (s *FileStore) SavePermissionsMigrationToastShown(shown bool) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	got, err := s.loadLocked()
+	if err != nil {
+		return err
+	}
+	got.PermissionsMigrationToastShown = shown
+	return s.saveLocked(got)
+}
+
+// LoadCedarStrictCredentialMode returns the WP05 credential-gate
+// strictness flag. Default false (lenient) — a fresh install with no
+// settings.json allows NotApplicable outcomes through. Errors return
+// the safe default so the credstore gate keeps working even if the
+// settings file is unreadable.
+func (s *FileStore) LoadCedarStrictCredentialMode() (bool, error) {
+	got, err := s.LoadAll()
+	if err != nil {
+		return got.CedarStrictCredentialMode, err
+	}
+	return got.CedarStrictCredentialMode, nil
+}
+
+// SaveCedarStrictCredentialMode persists the credential-gate
+// strictness flag.
+func (s *FileStore) SaveCedarStrictCredentialMode(enabled bool) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	got, err := s.loadLocked()
+	if err != nil {
+		return err
+	}
+	got.CedarStrictCredentialMode = enabled
+	return s.saveLocked(got)
+}
+
+// LoadFSRequestAccessEnabled returns the kaneaz__request_filesystem_access
+// built-in opt-in. Default true (on) — zero-value FSRequestAccessDisabled
+// means enabled. Errors return the safe default so the tool keeps working
+// even if the settings file is unreadable.
+func (s *FileStore) LoadFSRequestAccessEnabled() (bool, error) {
+	got, err := s.LoadAll()
+	if err != nil {
+		return got.FSRequestAccessEnabled(), err
+	}
+	return got.FSRequestAccessEnabled(), nil
+}
+
+// SaveFSRequestAccessEnabled persists the request_filesystem_access
+// built-in opt-in flag. Persists as the inverted FSRequestAccessDisabled bit.
+func (s *FileStore) SaveFSRequestAccessEnabled(enabled bool) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	got, err := s.loadLocked()
+	if err != nil {
+		return err
+	}
+	got.FSRequestAccessDisabled = !enabled
+	return s.saveLocked(got)
+}
+
+// LoadAutonomyProfile returns the persisted global autonomy.Layer
+// (autonomy-dial-01KR3M2A WP02). Empty / missing field returns the
+// zero Layer, which the resolver treats as "fall through to the next
+// layer / tier-default." Errors return the safe default (empty Layer)
+// alongside the error so the resolver can keep working even if the
+// settings file is unreadable.
+func (s *FileStore) LoadAutonomyProfile() (autonomy.Layer, error) {
+	got, err := s.LoadAll()
+	if err != nil {
+		return autonomy.Layer{}, err
+	}
+	return decodeAutonomyField(got.Autonomy)
+}
+
+// SaveAutonomyProfile persists the global autonomy.Layer. An empty
+// Layer (Level=nil + no overrides) clears the field so a fresh load
+// returns the empty Layer again.
+func (s *FileStore) SaveAutonomyProfile(layer autonomy.Layer) error {
+	encoded, err := encodeAutonomyField(layer)
+	if err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	got, err := s.loadLocked()
+	if err != nil {
+		return err
+	}
+	got.Autonomy = encoded
+	return s.saveLocked(got)
+}
+
+// encodeAutonomyField marshals a Layer to the json.RawMessage stored
+// on Settings.Autonomy. The empty Layer encodes as nil so it omits via
+// `omitempty` on disk.
+func encodeAutonomyField(layer autonomy.Layer) (json.RawMessage, error) {
+	if layer.IsZero() {
+		return nil, nil
+	}
+	blob, err := layer.MarshalJSON()
+	if err != nil {
+		return nil, fmt.Errorf("settings: marshal autonomy layer: %w", err)
+	}
+	return json.RawMessage(blob), nil
+}
+
+// decodeAutonomyField parses the Settings.Autonomy raw field. Missing
+// or empty input yields the zero Layer (no error).
+func decodeAutonomyField(raw json.RawMessage) (autonomy.Layer, error) {
+	if len(raw) == 0 {
+		return autonomy.Layer{}, nil
+	}
+	// A literal JSON null is also treated as "no value."
+	trimmed := raw
+	for len(trimmed) > 0 && (trimmed[0] == ' ' || trimmed[0] == '\t' || trimmed[0] == '\n' || trimmed[0] == '\r') {
+		trimmed = trimmed[1:]
+	}
+	if len(trimmed) >= 4 && string(trimmed[:4]) == "null" {
+		return autonomy.Layer{}, nil
+	}
+	var l autonomy.Layer
+	if err := l.UnmarshalJSON(raw); err != nil {
+		return autonomy.Layer{}, fmt.Errorf("settings: parse autonomy layer: %w", err)
+	}
+	return l, nil
+}
+
 // defaultSettings is the safe-baseline a fresh install starts with.
 func defaultSettings() Settings {
 	return Settings{
@@ -554,5 +842,102 @@ func (m *memoryStore) SaveMaxAgentTurns(turns int) error {
 		turns = 0
 	}
 	m.data.MaxAgentTurns = turns
+	return nil
+}
+
+// ── WP08 permission dial memoryStore accessors ────────────────────
+
+func (m *memoryStore) LoadPermissionMode() (string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.data.EffectivePermissionMode(), nil
+}
+
+func (m *memoryStore) SavePermissionMode(mode string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.data.PermissionMode = mode
+	return nil
+}
+
+func (m *memoryStore) LoadPermissionCacheDangerousOps() (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.data.PermissionCacheDangerousOps, nil
+}
+
+func (m *memoryStore) SavePermissionCacheDangerousOps(enabled bool) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.data.PermissionCacheDangerousOps = enabled
+	return nil
+}
+
+func (m *memoryStore) LoadBashAllowlistMigrated() (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.data.BashAllowlistMigrated, nil
+}
+
+func (m *memoryStore) SaveBashAllowlistMigrated(migrated bool) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.data.BashAllowlistMigrated = migrated
+	return nil
+}
+
+func (m *memoryStore) LoadPermissionsMigrationToastShown() (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.data.PermissionsMigrationToastShown, nil
+}
+
+func (m *memoryStore) SavePermissionsMigrationToastShown(shown bool) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.data.PermissionsMigrationToastShown = shown
+	return nil
+}
+
+func (m *memoryStore) LoadCedarStrictCredentialMode() (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.data.CedarStrictCredentialMode, nil
+}
+
+func (m *memoryStore) SaveCedarStrictCredentialMode(enabled bool) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.data.CedarStrictCredentialMode = enabled
+	return nil
+}
+
+func (m *memoryStore) LoadFSRequestAccessEnabled() (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.data.FSRequestAccessEnabled(), nil
+}
+
+func (m *memoryStore) SaveFSRequestAccessEnabled(enabled bool) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.data.FSRequestAccessDisabled = !enabled
+	return nil
+}
+
+func (m *memoryStore) LoadAutonomyProfile() (autonomy.Layer, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return decodeAutonomyField(m.data.Autonomy)
+}
+
+func (m *memoryStore) SaveAutonomyProfile(layer autonomy.Layer) error {
+	encoded, err := encodeAutonomyField(layer)
+	if err != nil {
+		return err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.data.Autonomy = encoded
 	return nil
 }

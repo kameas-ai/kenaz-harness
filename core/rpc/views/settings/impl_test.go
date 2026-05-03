@@ -6,10 +6,15 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 
 	"github.com/sigil-tech/kaneaz-harness/core/compaction"
 )
+
+// settingsEqual compares two Settings values with map-aware semantics.
+// Plain `==` fails on Settings since it embeds a map.
+func settingsEqual(a, b Settings) bool { return reflect.DeepEqual(a, b) }
 
 func TestFileStore_LoadDefaults_OnMissingFile(t *testing.T) {
 	dir := t.TempDir()
@@ -52,7 +57,9 @@ func TestFileStore_RoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadAll: %v", err)
 	}
-	if got != in {
+	// Settings now contains a map (KeyboardShortcuts) → can't use ==.
+	// Use reflect.DeepEqual via a small helper.
+	if !settingsEqual(got, in) {
 		t.Errorf("round trip lost data: got %+v, want %+v", got, in)
 	}
 

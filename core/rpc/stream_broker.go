@@ -17,6 +17,19 @@ const (
 	StreamClosedBackendError StreamCloseReason = "backend-error"
 )
 
+// Permission-pending push topics (mission cedar-credential-policy-01KQ8TDE,
+// WP02). One topic per resource family. The frontend subscribes to the
+// relevant family topic(s) to render the interactive permission modal.
+// Payloads are typed permission-request structs emitted by the gate
+// hooks when a resource evaluation returns NotApplicable and the
+// prompt registry enqueues the decision.
+const (
+	TopicBashPermissionPending       = "bash:permission-pending"
+	TopicCredPermissionPending       = "cred:permission-pending"
+	TopicFSPermissionPending         = "fs:permission-pending"
+	TopicToolPermissionPending       = "tool:permission-pending"
+)
+
 // StreamClosedPayload is the typed payload emitted on `<view>:stream-closed`.
 type StreamClosedPayload struct {
 	ID      string            `json:"id"`

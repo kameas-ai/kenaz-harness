@@ -107,7 +107,27 @@ type Config struct {
 	// without checking the token threshold. Production builds wire
 	// this; tests that don't exercise compaction leave it nil.
 	Compaction *CompactionDeps
+	// AutoTitle is the optional post-run auto-title trigger configuration
+	// (mission session-auto-titling-01KQ8TDS WP04). nil disables the
+	// trigger entirely. Production builds wire this; tests that don't
+	// exercise auto-titling leave it nil.
+	AutoTitle *AutoTitleDeps
+
+	// UsageHook is an optional callback fired by the LLMProviderAdapter
+	// once per LLM turn, after stream.Final() returns
+	// (token-cost-telemetry-01KQ8TD7 WP02). The callback receives the
+	// session id, message id (empty string when the writer hasn't been
+	// called yet), provider kind, model id, and the full llm.Response.
+	// nil disables usage capture entirely.
+	UsageHook UsageHookFunc
 }
+
+// UsageHookFunc is the callback signature for per-turn usage capture.
+// sessionID and messageID identify the turn; messageID may be empty
+// when the session_write node hasn't fired yet (test paths). The hook
+// must not block the chat turn — it should write async or accept the
+// latency.
+type UsageHookFunc func(ctx context.Context, sessionID, messageID string, resp corellm.Response)
 
 // CompactionDeps bundles every collaborator the pre-send compaction
 // hook needs. The runner reads the active aggressiveness tier on every
@@ -219,12 +239,14 @@ type ChatRunner struct {
 
 // chatSub is the per-StartStream bookkeeping entry.
 type chatSub struct {
-	id        string
-	sessionID string
-	cancel    context.CancelFunc
-	done      chan struct{}
-	bridge    *StreamBridge
-	finished  atomic.Bool
+	id            string
+	sessionID     string
+	profileID     string // retained for post-run auto-title trigger
+	modelOverride string // retained for post-run auto-title trigger
+	cancel        context.CancelFunc
+	done          chan struct{}
+	bridge        *StreamBridge
+	finished      atomic.Bool
 }
 
 // New constructs a ChatRunner. Every Config field is validated; a
@@ -372,12 +394,32 @@ func (r *ChatRunner) StartStream(ctx context.Context, profileID, sessionID, mode
 		r.cfg.EnvDefaults(env)
 	}
 
+	// Register the per-turn usage hook via HookPostLLM so it fires
+	// AFTER session_write has persisted the assistant message (and
+	// thus has a valid messageID). The adapter stores the most recent
+	// llm.Response so the hook can record token counts + cost
+	// (token-cost-telemetry-01KQ8TD7 WP02).
+	if r.cfg.UsageHook != nil {
+		if env.Hooks == nil {
+			env.Hooks = coreag.NewHookManager(env.Memory, env.SessionID, env.ProjectID)
+		}
+		usageHook := r.cfg.UsageHook
+		capturedAdapter := llmAdapter
+		capturedSessionID := sessionID
+		env.Hooks.RegisterPostHook(coreag.HookPostLLM, func(ctx context.Context, sID, messageID, _ string) {
+			resp := capturedAdapter.LastResponse()
+			usageHook(ctx, capturedSessionID, messageID, resp)
+		})
+	}
+
 	sub := &chatSub{
-		id:        subID,
-		sessionID: sessionID,
-		cancel:    cancel,
-		done:      make(chan struct{}),
-		bridge:    bridge,
+		id:            subID,
+		sessionID:     sessionID,
+		profileID:     profileID,
+		modelOverride: modelOverride,
+		cancel:        cancel,
+		done:          make(chan struct{}),
+		bridge:        bridge,
 	}
 	r.mu.Lock()
 	r.subs[subID] = sub
@@ -418,9 +460,11 @@ func (r *ChatRunner) driveRun(ctx context.Context, sub *chatSub, env *coreag.Env
 	reason := "completed"
 	message := ""
 	finishReason := ""
+	runTerminatedClean := false // true when kernel finished without error (or ErrPaused)
 	switch {
 	case err == nil:
 		reason = "completed"
+		runTerminatedClean = true
 	case errors.Is(err, coreag.ErrPaused):
 		// AskNode paused the run — chat surface treats this as the end
 		// of one turn; the next user message starts a fresh run. The
@@ -428,6 +472,7 @@ func (r *ChatRunner) driveRun(ctx context.Context, sub *chatSub, env *coreag.Env
 		// stop the typing indicator.
 		reason = "completed"
 		finishReason = "paused"
+		runTerminatedClean = true
 	case errors.Is(err, coreag.ErrBudgetExceeded):
 		reason = "backend-error"
 		message = "agent reached the per-run budget cap"
@@ -436,6 +481,19 @@ func (r *ChatRunner) driveRun(ctx context.Context, sub *chatSub, env *coreag.Env
 	default:
 		reason = "backend-error"
 		message = err.Error()
+	}
+
+	// Post-run auto-title trigger (session-auto-titling-01KQ8TDS WP04).
+	// Fires asynchronously so it never blocks the stream-closed
+	// emission. Conditions:
+	//   (1) run terminated cleanly (no error or ErrPaused),
+	//   (2) AutoTitle deps are wired.
+	// fireAutoTitle re-reads the session store to verify auto_titled is
+	// still false, the name still matches the placeholder pattern, and
+	// at least one assistant message exists — all inside a fresh
+	// 5-second context (NFR-001).
+	if runTerminatedClean && r.cfg.AutoTitle != nil {
+		go r.fireAutoTitle(sub.sessionID, sub.profileID, sub.modelOverride)
 	}
 
 	if !sub.finished.CompareAndSwap(false, true) {

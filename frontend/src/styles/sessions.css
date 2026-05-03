@@ -1,0 +1,12 @@
+/**
+ * sessions.css — session-list helpers.
+ *
+ * WP05: auto-titled sessions carry a subtle italic + muted hint in the
+ * rail so users can distinguish engine-chosen names from names they set
+ * themselves.  Using opacity (not a raw hex/rgba) keeps the treatment
+ * theme-agnostic.
+ */
+.session-row__name--auto {
+  font-style: italic;
+  opacity: 0.85;
+}

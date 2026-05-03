@@ -22,6 +22,7 @@ import type {
   TestResult,
   ModelInfo,
   MCPServer,
+  MCPTestResult,
   A2ACard,
   Job,
   SecretReference,
@@ -103,12 +104,19 @@ import type {
   BranchCreateOptions,
   BranchStatusInfo,
   BranchRecommendedModel,
+  ReintegrationProposal,
+  ReintegrationCommitOptions,
+  BranchReintegrationProposal,
+  BranchReintegrationCommitOpts,
   MCPImportRequest,
   MCPImportResponse,
   MCPImportEntry,
   MCPImportStatus,
   MCPTranslationReport,
   MCPImportWrotePath,
+  PermissionGrant,
+  PermissionMode,
+  SessionUsage,
 } from './types';
 
 /**
@@ -164,6 +172,8 @@ interface WailsBindingsLike {
     kind: 'system' | 'user_seed',
   ): Promise<void>;
   Sessions_MoveToProject(id: string, projectID: string): Promise<void>;
+  /** Returns the cumulative token + cost aggregate (token-cost-telemetry WP03). */
+  Sessions_GetUsage(id: string): Promise<SessionUsage>;
   Sessions_SaveAsArtifact(
     sessionID: string,
     messageID: string,
@@ -171,6 +181,8 @@ interface WailsBindingsLike {
     rangeStart: number,
     rangeEnd: number,
   ): Promise<Artifact>;
+  Sessions_SuggestTitle(id: string): Promise<string>;
+  Sessions_ClearTitle(id: string): Promise<void>;
 
   Artifacts_List(filter: ArtifactFilter): Promise<Artifact[]>;
   Artifacts_Get(id: string): Promise<WireArtifactWithBytes>;
@@ -180,6 +192,7 @@ interface WailsBindingsLike {
     newScopeID: string,
   ): Promise<Artifact>;
   Artifacts_Delete(id: string): Promise<void>;
+  Artifacts_SaveAs(id: string, suggestedName: string): Promise<string>;
 
   Projects_List(): Promise<Project[]>;
   Projects_Get(id: string): Promise<Project>;
@@ -208,9 +221,15 @@ interface WailsBindingsLike {
   MCP_ListServers(): Promise<MCPServer[]>;
   MCP_StartStream(id: string): Promise<string>;
   MCP_StopStream(id: string): Promise<void>;
+  MCP_TestRecipe(
+    recipeID: string,
+    env: Record<string, string>,
+    config: Record<string, unknown>,
+  ): Promise<MCPTestResult>;
   MCP_ImportClaudeDesktopConfig(
     req: MCPImportRequest,
   ): Promise<MCPImportResponse>;
+  MCP_TestRecipe(recipe: WireRecipe): Promise<MCPTestResult>;
 
   A2A_ListCards(): Promise<A2ACard[]>;
   A2A_StartStream(): Promise<string>;
@@ -275,6 +294,29 @@ interface WailsBindingsLike {
   Settings_SetSaveArtifactEnabled(enabled: boolean): Promise<void>;
   Settings_GetMaxAgentTurns(): Promise<number>;
   Settings_SetMaxAgentTurns(turns: number): Promise<void>;
+  // WP08 permission dials
+  Settings_GetPermissionMode(): Promise<string>;
+  Settings_SetPermissionMode(mode: string): Promise<void>;
+  Settings_GetPermissionCacheDangerousOps(): Promise<boolean>;
+  Settings_SetPermissionCacheDangerousOps(enabled: boolean): Promise<void>;
+  Settings_GetBashAllowlistMigrated(): Promise<boolean>;
+  Settings_SetBashAllowlistMigrated(migrated: boolean): Promise<void>;
+  Settings_GetPermissionsMigrationToastShown(): Promise<boolean>;
+  Settings_SetPermissionsMigrationToastShown(shown: boolean): Promise<void>;
+  // WP05 credential-gate strictness dial
+  Settings_GetCedarStrictCredentialMode(): Promise<boolean>;
+  Settings_SetCedarStrictCredentialMode(enabled: boolean): Promise<void>;
+  // runtime filesystem-access request built-in toggle
+  Settings_GetFSRequestAccessEnabled(): Promise<boolean>;
+  Settings_SetFSRequestAccessEnabled(enabled: boolean): Promise<void>;
+  /** Returns the full keyboard shortcut overrides map. */
+  Settings_GetShortcuts(): Promise<Record<string, string>>;
+  /** Persist a single shortcut override. Empty binding clears the override. */
+  Settings_SetShortcut(id: string, binding: string): Promise<void>;
+  /** Atomically replace the full shortcut overrides map. */
+  Settings_SetShortcuts(m: Record<string, string>): Promise<void>;
+  Settings_GetAutoTitleEnabled(): Promise<boolean>;
+  Settings_SetAutoTitleEnabled(enabled: boolean): Promise<void>;
 
   Memory_ListChunks(filter: MemoryListFilter): Promise<MemoryChunk[]>;
   Memory_RememberMessage(
@@ -326,6 +368,14 @@ interface WailsBindingsLike {
   Tools_ForgetRecipeKey(id: string, envName: string): Promise<void>;
   Tools_RecipeStatus(id: string): Promise<WireRecipeStatus>;
   Tools_RecipeConfig(id: string): Promise<Record<string, unknown>>;
+  Tools_PickDirectory(title: string, defaultDir: string): Promise<string>;
+  Tools_RequestAdditionalAllowedDir(
+    recipeID: string,
+    path: string,
+    reason: string,
+  ): Promise<{ granted: boolean; expanded: string; message: string }>;
+
+  Bash_Exec(sessionID: string, command: string): Promise<BashExecResult>;
 
   Shell_OpenInOSBrowser(path: string): Promise<void>;
   Shell_PathComplete(partial: string): Promise<string[]>;
@@ -394,6 +444,10 @@ interface WailsBindingsLike {
   Nodes_ListUserOverrides(): Promise<NodeUserOverrideInfo[]>;
   Nodes_Doctor(): Promise<NodeDoctorReport>;
 
+  // Cedar policy snippet writer/revoker (WP09).
+  CedarPolicy_WriteSnippet(name: string, body: string): Promise<void>;
+  CedarPolicy_RevokeSnippet(name: string): Promise<void>;
+
   // Branches view (agent-kernel-graph; Bundle B WP07/08).
   Branches_List(parentSessionID: string): Promise<Branch[]>;
   Branches_Create(opts: BranchCreateOptions): Promise<Branch>;
@@ -405,6 +459,35 @@ interface WailsBindingsLike {
     taskHint: string,
     preference: string,
   ): Promise<BranchRecommendedModel>;
+
+  // Search view (cross-session-search mission).
+  Search_Sessions(
+    query: string,
+    filters: SearchFilters,
+  ): Promise<SearchHit[]>;
+  // Branch-advisor RPC (branch-as-subagent-recommendation WP05/WP07).
+  Branches_ProposeReintegrationSummary(
+    branchSessionID: string,
+  ): Promise<ReintegrationProposal>;
+  Branches_CommitReintegration(
+    opts: ReintegrationCommitOptions,
+  ): Promise<void>;
+  Branches_SetAdvisorDismissed(
+    sessionID: string,
+    dismissed: boolean,
+  ): Promise<void>;
+
+  // Permissions view (cedar-credential-policy WP07/WP08).
+  Permissions_ListGrants(family: string): Promise<PermissionGrant[]>;
+  Permissions_RevokeGrant(id: string): Promise<void>;
+  Permissions_Resolve(requestID: string, decision: string): Promise<void>;
+  // WP06 — reintegration propose + commit.
+  Branches_ProposeReintegrationSummary(
+    branchSessionID: string,
+  ): Promise<BranchReintegrationProposal>;
+  Branches_CommitReintegration(
+    opts: BranchReintegrationCommitOpts,
+  ): Promise<void>;
 }
 
 /**
@@ -449,6 +532,7 @@ interface WireConfigOption {
   default?: unknown;
   required: boolean;
   description: string;
+  choices?: string[];
 }
 
 interface WireRecipe {
@@ -561,6 +645,7 @@ const KNOWN_CONFIG_KINDS: readonly ConfigKind[] = [
   'directory_list',
   'boolean',
   'string',
+  'enum',
 ];
 
 function adaptConfigKind(raw: string): ConfigKind {
@@ -577,6 +662,9 @@ function adaptConfigOption(w: WireConfigOption): ConfigOption {
     default: w.default,
     required: w.required,
     description: w.description,
+    choices: Array.isArray(w.choices)
+      ? w.choices.filter((c): c is string => typeof c === 'string')
+      : undefined,
   };
 }
 
@@ -640,6 +728,7 @@ declare global {
         cb: (payload: unknown) => void,
       ) => () => void;
       EventsOff?: (topic: string) => void;
+      ClipboardSetText?: (text: string) => Promise<boolean>;
     };
   }
 }
@@ -719,6 +808,11 @@ export interface SessionsClient {
    */
   moveToProject(id: string, projectId: string): Promise<void>;
   /**
+   * getUsage returns the cumulative token + cost aggregate for the
+   * session (token-cost-telemetry-01KQ8TD7 WP03).
+   */
+  getUsage(id: string): Promise<SessionUsage>;
+  /**
    * saveAsArtifact pins a message (or a sub-range thereof) as a
    * `user_pin` artifact. `rangeStart` / `rangeEnd` are byte offsets
    * into the message's content; `(0, 0)` captures the full message.
@@ -731,6 +825,10 @@ export interface SessionsClient {
     rangeStart?: number,
     rangeEnd?: number,
   ): Promise<Artifact>;
+  /** Ask the auto-title engine to generate a new title for the session. Returns the new title. */
+  suggestTitle(id: string): Promise<string>;
+  /** Clear the user-set title and revert to the auto-title engine's suggestion. */
+  clearTitle(id: string): Promise<void>;
 }
 
 /**
@@ -756,6 +854,13 @@ export interface ArtifactsClient {
     scopeId: string,
   ): Promise<Artifact>;
   remove(id: string): Promise<void>;
+  /**
+   * Save the artifact's bytes to a user-chosen path via the OS-native
+   * save dialog. Returns the absolute path written, or empty string
+   * when the user cancels. Bytes resolve server-side from the media
+   * store — no JS-side base64 round-trip.
+   */
+  saveAs(id: string, suggestedName?: string): Promise<string>;
 }
 
 /**
@@ -833,6 +938,21 @@ export interface MCPClient {
   startStream(id: string): Promise<string>;
   stopStream(id: string): Promise<void>;
   /**
+   * testRecipe — run a one-shot connection test against the recipe
+   * identified by recipeID (mission mcp-server-install-01KQ8TDP, WP07).
+   *
+   * `env` and `config` override the recipe's stored values and are safe
+   * to pass as empty objects. The result is always returned; transport-
+   * level failures are reflected in `result.ok === false` / `result.error`
+   * rather than a thrown error. A thrown error indicates a pre-flight
+   * failure (recipe not found, catalog not wired).
+   */
+  testRecipe(
+    recipeID: string,
+    env?: Record<string, string>,
+    config?: Record<string, unknown>,
+  ): Promise<MCPTestResult>;
+  /**
    * importClaudeDesktopConfig — translate a pasted Claude Desktop /
    * Cursor `mcpServers` JSON config into harness recipes (mission
    * mcp-server-install-01KQ8TDP, WP08).
@@ -845,15 +965,27 @@ export interface MCPClient {
   importClaudeDesktopConfig(
     req: MCPImportRequest,
   ): Promise<MCPImportResponse>;
+  /**
+   * testRecipe — opens a one-shot connection to the MCP server described
+   * by recipe, performs the initialize + capability listing handshake
+   * (30 s hard timeout), and returns a TestResult summary.
+   *
+   * The recipe is NOT registered with the production MCP pool — this is
+   * a pure fire-and-forget connectivity check (mission
+   * mcp-server-install-01KQ8TDP, WP07).
+   */
+  testRecipe(recipe: Recipe): Promise<MCPTestResult>;
 }
 
 export type {
+  MCPTestResult,
   MCPImportRequest,
   MCPImportResponse,
   MCPImportEntry,
   MCPImportStatus,
   MCPTranslationReport,
   MCPImportWrotePath,
+  MCPTestResult,
 };
 
 export interface A2AClient {
@@ -1022,6 +1154,110 @@ export interface SettingsClient {
    * to zero by the store.
    */
   setMaxAgentTurns(turns: number): Promise<void>;
+
+  // ── WP08 permission dials ─────────────────────────────────────────
+
+  /**
+   * Read the global permission posture dial. "normal" when unset.
+   */
+  getPermissionMode(): Promise<PermissionMode>;
+  /** Persist the global permission posture. */
+  setPermissionMode(mode: PermissionMode): Promise<void>;
+  /**
+   * Read the dangerous-ops override flag (default false).
+   * When true, "Allow always" is offered for dangerous-tier resources.
+   */
+  getPermissionCacheDangerousOps(): Promise<boolean>;
+  /** Persist the dangerous-ops override flag. */
+  setPermissionCacheDangerousOps(enabled: boolean): Promise<void>;
+  /**
+   * Read the WP10 migration marker (set by the first-boot migration).
+   * The UI reads this to suppress the one-time migration toast.
+   */
+  getBashAllowlistMigrated(): Promise<boolean>;
+  /** Mark the WP10 migration as completed. */
+  setBashAllowlistMigrated(migrated: boolean): Promise<void>;
+  /** Read the one-time migration toast marker. */
+  getPermissionsMigrationToastShown(): Promise<boolean>;
+  /** Mark the migration toast as shown. */
+  setPermissionsMigrationToastShown(shown: boolean): Promise<void>;
+
+  // ── WP05 credential-gate strictness dial ──────────────────────────
+
+  /**
+   * Read the WP05 Cedar credential-gate strictness flag (default
+   * false / lenient). When false, NotApplicable Cedar outcomes allow
+   * credential access. When true (strict), NotApplicable for
+   * non-mcp_spawn purposes is treated as deny.
+   */
+  getCedarStrictCredentialMode(): Promise<boolean>;
+  /**
+   * Persist the Cedar credential-gate strictness flag. Changes take
+   * effect on the next credential Use call without restarting the
+   * harness.
+   */
+  setCedarStrictCredentialMode(enabled: boolean): Promise<void>;
+  /**
+   * Return whether the runtime filesystem-access-request built-in
+   * (`kaneaz__request_filesystem_access`) is enabled. Default: true.
+   */
+  getFSRequestAccessEnabled(): Promise<boolean>;
+  /**
+   * Persist the runtime filesystem-access-request built-in toggle.
+   * Changes take effect on the next model turn without restarting.
+   */
+  setFSRequestAccessEnabled(enabled: boolean): Promise<void>;
+}
+
+/**
+ * PermissionsClient — the WP08 permission grants + resolution surface.
+ *
+ * Grants are persisted Cedar policy snippets written by "Allow always"
+ * decisions. The settings panels call listGrants(family) to populate
+ * their lists; revokeGrant deletes the underlying .cedar file and
+ * triggers a Cedar engine reload.
+ *
+ * resolve() is called by the four permission modals when the user
+ * clicks Allow Once, Allow Always, or Deny (or Esc / timeout fires
+ * the deny path automatically).
+ */
+export interface PermissionsClient {
+  /**
+   * List accumulated "Allow always" grants, optionally scoped to one
+   * resource family. Empty string or omitted = all families.
+   */
+  listGrants(family?: string): Promise<PermissionGrant[]>;
+  /**
+   * Revoke a grant by id. Deletes the underlying .cedar file and
+   * triggers a Cedar engine reload. The settings panel calls this from
+   * the row's "Revoke" button.
+   */
+  revokeGrant(id: string): Promise<void>;
+  /**
+   * Resolve a pending permission prompt. Called by each modal after
+   * the user decides. The pending backend goroutine unblocks server-side.
+   */
+  resolve(requestID: string, decision: string): Promise<void>;
+  /**
+   * Read the full keyboard shortcut overrides map. Empty map means all
+   * shortcuts use registry defaults.
+   * (keyboard-shortcuts-settings-01KQ8TDR plan §2.7)
+   */
+  getShortcuts(): Promise<Record<string, string>>;
+  /**
+   * Persist a single shortcut override. An empty binding value clears
+   * the override (resets to registry default).
+   */
+  setShortcut(id: string, binding: string): Promise<void>;
+  /**
+   * Atomically replace the full shortcut overrides map. Used for
+   * reset-all and batch-save flows.
+   */
+  setShortcuts(m: Record<string, string>): Promise<void>;
+  /** Read the auto-title opt-in flag (default true). */
+  getAutoTitleEnabled(): Promise<boolean>;
+  /** Persist the auto-title opt-in flag. */
+  setAutoTitleEnabled(enabled: boolean): Promise<void>;
 }
 
 /**
@@ -1144,8 +1380,34 @@ export interface ToolsRecipesClient {
   config(id: string): Promise<Record<string, unknown>>;
 }
 
+/** Result returned by requestAdditionalAllowedDir. */
+export interface FSAccessResult {
+  granted: boolean;
+  /** The expanded (resolved) absolute path, populated when granted. */
+  expanded: string;
+  /** Human-readable message for granted=false cases. */
+  message: string;
+}
+
 export interface ToolsClient {
   recipes: ToolsRecipesClient;
+  /**
+   * Open the OS-native directory-picker dialog and return the
+   * absolute path the user selects. Returns empty string when the
+   * user cancels.
+   */
+  pickDirectory(title?: string, defaultDir?: string): Promise<string>;
+  /**
+   * Request that the harness add path to the filesystem recipe's
+   * allowed_directories at runtime. Fires the Cedar interactive
+   * prompt; blocks until the user resolves or the context cancels.
+   * Returns { granted: true, expanded: canonicalPath } on approval.
+   */
+  requestAdditionalAllowedDir(
+    path: string,
+    reason: string,
+    recipeID?: string,
+  ): Promise<FSAccessResult>;
 }
 
 /**
@@ -1165,6 +1427,26 @@ export interface ShellClient {
   openInOSBrowser(path: string): Promise<void>;
   pathComplete(partial: string): Promise<string[]>;
   readFile(path: string): Promise<ShellReadFileResult>;
+}
+
+/**
+ * BashExecResult — kaneaz__bash tool's JSON return shape, surfaced via
+ * the Bash_Exec binding for the chat-input `!cmd` shell-escape.
+ */
+export interface BashExecResult {
+  stdout: string;
+  stderr: string;
+  exitCode: number;
+  truncated: boolean;
+}
+
+/**
+ * BashClient — chat-input shell-escape surface. `!cmd` in the composer
+ * dispatches here (Cedar gate applies); result is rendered inline as a
+ * synthetic system message.
+ */
+export interface BashClient {
+  exec(sessionID: string, command: string): Promise<BashExecResult>;
 }
 
 /**
@@ -1316,6 +1598,62 @@ export interface BranchesClient {
     taskHint: string,
     preference: string,
   ): Promise<BranchRecommendedModel>;
+  /** Propose a reintegration summary for a subagent branch (WP05/WP06). */
+  proposeReintegrationSummary(branchSessionID: string): Promise<ReintegrationProposal>;
+  /** Commit the reintegration — inserts summary into parent (WP07). */
+  commitReintegration(opts: ReintegrationCommitOptions): Promise<void>;
+  /** Persist per-session branch-advisor dismiss flag (WP02). */
+  setAdvisorDismissed(sessionID: string, dismissed: boolean): Promise<void>;
+}
+
+/**
+ * CedarPolicyClient — view-scoped surface for writing and revoking
+ * Cedar policy snippets on disk (mission cedar-credential-policy-01KQ8TDE,
+ * WP09).
+ */
+export interface CedarPolicyClient {
+  writeSnippet(name: string, body: string): Promise<void>;
+  revokeSnippet(name: string): Promise<void>;
+}
+
+// ── Search types (cross-session-search mission) ───────────────────────
+
+/**
+ * SearchFilters — optional predicates for a Search_Sessions call.
+ * Zero values mean "no filter". Limit defaults to 50 server-side when 0.
+ */
+export interface SearchFilters {
+  projectId?: string;
+  sessionId?: string;
+  roleFilter?: string;
+  limit?: number;
+}
+
+/** A byte-offset range [start, end) within a SearchHit.snippet string. */
+export interface SearchHighlight {
+  start: number;
+  end: number;
+}
+
+/**
+ * SearchHit — a single full-text match returned by Search_Sessions.
+ */
+export interface SearchHit {
+  sessionId: string;
+  sessionName: string;
+  messageId: string;
+  role: string;
+  snippet: string;
+  highlights: SearchHighlight[];
+  createdAt: string;
+  projectId?: string;
+}
+
+/**
+ * SearchClient — full-text search across all session messages.
+ */
+export interface SearchClient {
+  sessions(query: string, filters?: SearchFilters): Promise<SearchHit[]>;
 }
 
 export interface HarnessClient {
@@ -1336,10 +1674,12 @@ export interface HarnessClient {
   policy: PolicyClient;
   audit: AuditClient;
   settings: SettingsClient;
+  permissions: PermissionsClient;
   memory: MemoryClient;
   hooks: HooksClient;
   tools: ToolsClient;
   shell: ShellClient;
+  bash: BashClient;
   slash: SlashClient;
   artifacts: ArtifactsClient;
   corpus: CorpusClient;
@@ -1348,6 +1688,8 @@ export interface HarnessClient {
   branches: BranchesClient;
   dials: DialsClient;
   nodes: NodesClient;
+  cedarPolicy: CedarPolicyClient;
+  search: SearchClient;
 }
 
 // ── runtime client ─────────────────────────────────────────────────────
@@ -1391,6 +1733,8 @@ export function createHarnessClient(): HarnessClient {
         b().Sessions_SetSystemPrompt(id, content, kind),
       moveToProject: (id, projectId) =>
         b().Sessions_MoveToProject(id, projectId),
+      getUsage: (id: string): Promise<SessionUsage> =>
+        b().Sessions_GetUsage(id),
       saveAsArtifact: (sessionId, messageId, title, rangeStart, rangeEnd) =>
         b().Sessions_SaveAsArtifact(
           sessionId,
@@ -1399,6 +1743,8 @@ export function createHarnessClient(): HarnessClient {
           rangeStart ?? 0,
           rangeEnd ?? 0,
         ),
+      suggestTitle: (id) => b().Sessions_SuggestTitle(id),
+      clearTitle: (id) => b().Sessions_ClearTitle(id),
     },
     artifacts: {
       list: (filter) => b().Artifacts_List(filter ?? {}),
@@ -1412,6 +1758,8 @@ export function createHarnessClient(): HarnessClient {
       promote: (id, scopeKind, scopeId) =>
         b().Artifacts_Promote(id, scopeKind, scopeId),
       remove: (id) => b().Artifacts_Delete(id),
+      saveAs: (id, suggestedName) =>
+        b().Artifacts_SaveAs(id, suggestedName ?? ''),
     },
     projects: {
       list: () => b().Projects_List(),
@@ -1446,7 +1794,10 @@ export function createHarnessClient(): HarnessClient {
       listServers: () => b().MCP_ListServers(),
       startStream: (id) => b().MCP_StartStream(id),
       stopStream: (id) => b().MCP_StopStream(id),
+      testRecipe: (recipeID, env = {}, config = {}) =>
+        b().MCP_TestRecipe(recipeID, env, config),
       importClaudeDesktopConfig: (req) => b().MCP_ImportClaudeDesktopConfig(req),
+      testRecipe: (recipe) => b().MCP_TestRecipe(recipe as WireRecipe),
     },
     a2a: {
       listCards: () => b().A2A_ListCards(),
@@ -1531,6 +1882,40 @@ export function createHarnessClient(): HarnessClient {
       setSaveArtifact: (enabled) => b().Settings_SetSaveArtifactEnabled(enabled),
       getMaxAgentTurns: () => b().Settings_GetMaxAgentTurns(),
       setMaxAgentTurns: (turns) => b().Settings_SetMaxAgentTurns(turns),
+      getPermissionMode: () =>
+        b().Settings_GetPermissionMode() as Promise<PermissionMode>,
+      setPermissionMode: (mode) => b().Settings_SetPermissionMode(mode),
+      getPermissionCacheDangerousOps: () =>
+        b().Settings_GetPermissionCacheDangerousOps(),
+      setPermissionCacheDangerousOps: (enabled) =>
+        b().Settings_SetPermissionCacheDangerousOps(enabled),
+      getBashAllowlistMigrated: () => b().Settings_GetBashAllowlistMigrated(),
+      setBashAllowlistMigrated: (migrated) =>
+        b().Settings_SetBashAllowlistMigrated(migrated),
+      getPermissionsMigrationToastShown: () =>
+        b().Settings_GetPermissionsMigrationToastShown(),
+      setPermissionsMigrationToastShown: (shown) =>
+        b().Settings_SetPermissionsMigrationToastShown(shown),
+      getCedarStrictCredentialMode: () =>
+        b().Settings_GetCedarStrictCredentialMode(),
+      setCedarStrictCredentialMode: (enabled) =>
+        b().Settings_SetCedarStrictCredentialMode(enabled),
+      getFSRequestAccessEnabled: () =>
+        b().Settings_GetFSRequestAccessEnabled(),
+      setFSRequestAccessEnabled: (enabled) =>
+        b().Settings_SetFSRequestAccessEnabled(enabled),
+    },
+    permissions: {
+      listGrants: (family) =>
+        b().Permissions_ListGrants(family ?? ''),
+      revokeGrant: (id) => b().Permissions_RevokeGrant(id),
+      resolve: (requestID, decision) =>
+        b().Permissions_Resolve(requestID, decision),
+      getShortcuts: () => b().Settings_GetShortcuts(),
+      setShortcut: (id, binding) => b().Settings_SetShortcut(id, binding),
+      setShortcuts: (m) => b().Settings_SetShortcuts(m),
+      getAutoTitleEnabled: () => b().Settings_GetAutoTitleEnabled(),
+      setAutoTitleEnabled: (enabled) => b().Settings_SetAutoTitleEnabled(enabled),
     },
     memory: {
       listChunks: (filter) => b().Memory_ListChunks(filter ?? {}),
@@ -1577,11 +1962,18 @@ export function createHarnessClient(): HarnessClient {
           adaptRecipeStatus(await b().Tools_RecipeStatus(id)),
         config: (id) => b().Tools_RecipeConfig(id),
       },
+      pickDirectory: (title?: string, defaultDir?: string) =>
+        b().Tools_PickDirectory(title ?? '', defaultDir ?? ''),
+      requestAdditionalAllowedDir: (path, reason, recipeID = 'filesystem') =>
+        b().Tools_RequestAdditionalAllowedDir(recipeID, path, reason),
     },
     shell: {
       openInOSBrowser: (path) => b().Shell_OpenInOSBrowser(path),
       pathComplete: (partial) => b().Shell_PathComplete(partial),
       readFile: (path) => b().Shell_ReadFile(path),
+    },
+    bash: {
+      exec: (sessionID, command) => b().Bash_Exec(sessionID, command),
     },
     slash: {
       list: () => b().Slash_List(),
@@ -1628,6 +2020,12 @@ export function createHarnessClient(): HarnessClient {
       abandon: (branchID) => b().Branches_Abandon(branchID),
       recommendModel: (parentSessionID, taskHint, preference) =>
         b().Branches_RecommendModel(parentSessionID, taskHint, preference),
+      proposeReintegrationSummary: (branchSessionID) =>
+        b().Branches_ProposeReintegrationSummary(branchSessionID),
+      commitReintegration: (opts) =>
+        b().Branches_CommitReintegration(opts),
+      setAdvisorDismissed: (sessionID, dismissed) =>
+        b().Branches_SetAdvisorDismissed(sessionID, dismissed),
     },
     nodes: {
       catalog: () => b().Nodes_Catalog(),
@@ -1635,6 +2033,14 @@ export function createHarnessClient(): HarnessClient {
       reloadOverrides: () => b().Nodes_ReloadOverrides(),
       listUserOverrides: () => b().Nodes_ListUserOverrides(),
       doctor: () => b().Nodes_Doctor(),
+    },
+    cedarPolicy: {
+      writeSnippet: (name, body) => b().CedarPolicy_WriteSnippet(name, body),
+      revokeSnippet: (name) => b().CedarPolicy_RevokeSnippet(name),
+    },
+    search: {
+      sessions: (query, filters) =>
+        b().Search_Sessions(query, filters ?? {}),
     },
   };
 }
@@ -1713,6 +2119,15 @@ export function createFakeHarnessClient(
       loadDraft: async () => '',
       setSystemPrompt: noop,
       moveToProject: noop,
+      getUsage: async () => ({
+        promptTokens: 0,
+        completionTokens: 0,
+        totalTokens: 0,
+        costUsd: 0,
+        costSource: 'unknown' as const,
+        messageCount: 0,
+        pricingDataDate: '',
+      }),
       saveAsArtifact: async (sessionId, messageId, title) => ({
         id: `fake-art-${Math.random().toString(36).slice(2, 8)}`,
         sessionId,
@@ -1725,6 +2140,8 @@ export function createFakeHarnessClient(
         scopeKind: 'session',
         createdAt: new Date().toISOString(),
       }),
+      suggestTitle: async () => 'Fake suggested title',
+      clearTitle: noop,
     },
     projects: {
       list: async () => [],
@@ -1776,6 +2193,18 @@ export function createFakeHarnessClient(
           malformed_count: 0,
           collision_count: 0,
         },
+      }),
+      testRecipe: async () => ({
+        ok: true,
+        serverName: 'fake-server',
+        serverVersion: '0.0.0',
+        protocolVersion: '2024-11-05',
+        toolCount: 0,
+        resourceCount: 0,
+        promptCount: 0,
+        stderrTail: '',
+        errorMessage: '',
+        durationMs: 1,
       }),
     },
     a2a: {
@@ -1903,6 +2332,28 @@ export function createFakeHarnessClient(
       setSaveArtifact: noop,
       getMaxAgentTurns: async () => 0,
       setMaxAgentTurns: noop,
+      getPermissionMode: async () => 'normal' as PermissionMode,
+      setPermissionMode: noop,
+      getPermissionCacheDangerousOps: async () => false,
+      setPermissionCacheDangerousOps: noop,
+      getBashAllowlistMigrated: async () => false,
+      setBashAllowlistMigrated: noop,
+      getPermissionsMigrationToastShown: async () => false,
+      setPermissionsMigrationToastShown: noop,
+      getCedarStrictCredentialMode: async () => false,
+      setCedarStrictCredentialMode: noop,
+      getFSRequestAccessEnabled: async () => true,
+      setFSRequestAccessEnabled: noop,
+    },
+    permissions: {
+      listGrants: async () => [],
+      revokeGrant: noop,
+      resolve: noop,
+      getShortcuts: async () => ({}),
+      setShortcut: noop,
+      setShortcuts: noop,
+      getAutoTitleEnabled: async () => true,
+      setAutoTitleEnabled: noop,
     },
     memory: {
       listChunks: async () => [],
@@ -1996,11 +2447,20 @@ export function createFakeHarnessClient(
         }),
         config: async () => ({}),
       },
+      pickDirectory: async () => '',
+      requestAdditionalAllowedDir: async () => ({
+        granted: false,
+        expanded: '',
+        message: 'stub',
+      }),
     },
     shell: {
       openInOSBrowser: noop,
       pathComplete: async () => [],
       readFile: async () => ({ dataBase64: '', mediaType: '' }),
+    },
+    bash: {
+      exec: async () => ({ stdout: '', stderr: '', exitCode: 0, truncated: false }),
     },
     slash: {
       list: async () => [
@@ -2047,6 +2507,7 @@ export function createFakeHarnessClient(
         createdAt: new Date().toISOString(),
       }),
       remove: noop,
+      saveAs: async () => '',
     },
     corpus: {
       listCorpora: async () => [],
@@ -2225,6 +2686,14 @@ export function createFakeHarnessClient(
         tier: 'small',
         reason: 'default',
       }),
+      proposeReintegrationSummary: async () => ({
+        proposedSummary: '',
+        warningEdited: false,
+        tokenCount: 0,
+        model: '',
+      }),
+      commitReintegration: async () => undefined,
+      setAdvisorDismissed: async () => undefined,
     },
     nodes: {
       catalog: async () => [],
@@ -2249,6 +2718,13 @@ export function createFakeHarnessClient(
         aliasCount: 0,
         hotReloadEnabled: false,
       }),
+    },
+    cedarPolicy: {
+      writeSnippet: noop,
+      revokeSnippet: noop,
+    },
+    search: {
+      sessions: async () => [],
     },
   };
 

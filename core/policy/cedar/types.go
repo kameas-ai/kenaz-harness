@@ -50,6 +50,14 @@ const (
 	ActionReadFilesystem  = "read_filesystem"
 	ActionWriteFilesystem = "write_filesystem"
 	ActionUseTool         = "use_tool"
+
+	// MCP recipe family actions introduced by mission
+	// mcp-server-install-01KQ8TDP (WP10).
+	//
+	//   ActionAddRecipe   — gates AddRecipe + EditRecipe RPC calls
+	//   ActionSpawnRecipe — gates the spawn path when the pool opens a recipe
+	ActionAddRecipe   = "add_recipe"
+	ActionSpawnRecipe = "spawn_recipe"
 )
 
 // Entity-type names mirror spec §4.10's recommended mapping:
@@ -83,6 +91,11 @@ const (
 	EntityTypeCredential   = "Credential"
 	EntityTypeBashCommand  = "BashCommand"
 	EntityTypeFilesystemOp = "FilesystemOp"
+
+	// EntityTypeMCPRecipe is the Cedar entity type for MCP recipe resources.
+	// Introduced by mission mcp-server-install-01KQ8TDP (WP10).
+	// Resource UIDs take the shape MCPRecipe::"<recipe-id>".
+	EntityTypeMCPRecipe = "MCPRecipe"
 
 	// PrincipalLocal is the canonical EntityUID id for the single
 	// local user. The harness is single-user / privacy-first
@@ -297,4 +310,20 @@ func PermissionToolUID(toolName string) cedar.EntityUID {
 		id = invalidUIDID
 	}
 	return cedar.NewEntityUID(EntityTypeTool, cedar.String(id))
+}
+
+// MCPRecipeUID builds a Cedar EntityUID for the MCPRecipe family
+// introduced by mission mcp-server-install-01KQ8TDP (WP10). id is the
+// recipe's canonical identifier (e.g. "github", "sqlite", "my-custom").
+//
+// Malformed ids (empty / control characters / leading "..") are replaced
+// with the literal "invalid" so the resulting UID type-matches in
+// `resource is MCPRecipe` clauses but never satisfies any real permit —
+// a typo therefore never silently authorises.
+func MCPRecipeUID(id string) cedar.EntityUID {
+	safeID := id
+	if !validateFamilyID(id) {
+		safeID = invalidUIDID
+	}
+	return cedar.NewEntityUID(EntityTypeMCPRecipe, cedar.String(safeID))
 }

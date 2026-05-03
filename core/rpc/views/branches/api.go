@@ -28,6 +28,10 @@ type Branch struct {
 	UpdatedAt       string `json:"updatedAt"`
 	MergedAt        string `json:"mergedAt,omitempty"`
 	AbandonedAt     string `json:"abandonedAt,omitempty"`
+	// Subagent-enriched fields (branch-as-subagent-recommendation WP04).
+	SubagentBranch   bool     `json:"subagentBranch,omitempty"`
+	RecommendationID string   `json:"recommendationId,omitempty"`
+	AdvisorSignals   []string `json:"advisorSignals,omitempty"`
 }
 
 // CreateBranchOptions is the request body for CreateBranch.
@@ -50,6 +54,36 @@ type CreateBranchOptions struct {
 	SystemPromptOverride string `json:"systemPromptOverride,omitempty"`
 	// ChildName overrides the auto-generated "<parent> (branch)" name.
 	ChildName string `json:"childName,omitempty"`
+	// Subagent-enriched fields (WP04). When RecommendationID is
+	// non-empty, CreateBranch sets SubagentBranch = true on the row.
+	RecommendationID  string   `json:"recommendationId,omitempty"`
+	AdvisorSignals    []string `json:"advisorSignals,omitempty"`
+	AdvisorConfidence float64  `json:"advisorConfidence,omitempty"`
+}
+
+// ReintegrationProposal is the response shape for
+// ProposeReintegrationSummary (WP05).
+type ReintegrationProposal struct {
+	// ProposedSummary is the model-generated (or rule-based) summary.
+	// Empty when the branch has no assistant turns yet.
+	ProposedSummary string `json:"proposedSummary"`
+	// TokenCount is the estimated token count of ProposedSummary.
+	TokenCount int `json:"tokenCount"`
+	// Model is the (provider:model) string that produced the summary, or
+	// "rule_based" for the no-LLM path.
+	Model string `json:"model,omitempty"`
+}
+
+// CommitReintegrationOptions is the request body for CommitReintegration
+// (WP07).
+type CommitReintegrationOptions struct {
+	// BranchSessionID is the child session whose transcript was summarised.
+	BranchSessionID string `json:"branchSessionId"`
+	// FinalSummaryText is the (possibly edited) summary to insert.
+	FinalSummaryText string `json:"finalSummaryText"`
+	// WasEdited is true when the user modified the proposed text before
+	// submitting; carried through to the audit payload.
+	WasEdited bool `json:"wasEdited"`
 }
 
 // BranchStatus + ChildRunStatus is the wire shape for GetBranchStatus.
@@ -83,7 +117,8 @@ type BranchesAPI interface {
 	ListBranches(ctx context.Context, parentSessionID string) ([]Branch, error)
 	// CreateBranch allocates a new fork. Returns the populated row plus
 	// the new child session id (callers route the user into the child
-	// session immediately).
+	// session immediately). When opts.RecommendationID is set, the
+	// branch is flagged as a subagent branch (WP04).
 	CreateBranch(ctx context.Context, opts CreateBranchOptions) (Branch, error)
 	// GetBranchStatus returns the latest lifecycle state + child run
 	// snapshot.
@@ -98,6 +133,20 @@ type BranchesAPI interface {
 	// RecommendModel returns the recommended (provider, model) for a
 	// fork off parentSessionID with the given task hint + preference.
 	RecommendModel(ctx context.Context, parentSessionID, taskHint, preference string) (RecommendedModel, error)
+
+	// ProposeReintegrationSummary generates a proposed summary of the
+	// branch transcript (WP05 / FR-008a). Callers present this in the
+	// ReintegrationPreviewModal for user review + editing.
+	ProposeReintegrationSummary(ctx context.Context, branchSessionID string) (ReintegrationProposal, error)
+
+	// CommitReintegration inserts the final (possibly user-edited)
+	// summary as a synthetic system message in the parent session and
+	// flips the branch to merged status (WP07 / FR-008b).
+	CommitReintegration(ctx context.Context, opts CommitReintegrationOptions) error
+
+	// SetAdvisorDismissed persists the per-session "don't suggest again"
+	// flag for the branch advisor (FR-010 / WP04).
+	SetAdvisorDismissed(ctx context.Context, sessionID string, dismissed bool) error
 }
 
 // fmtTime renders a time.Time as RFC3339Nano UTC, returning "" for the

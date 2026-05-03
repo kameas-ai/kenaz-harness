@@ -6,6 +6,7 @@ import {
   Archive,
   Plus,
   MessageSquare,
+  Search,
   Wrench,
   FileText,
   Settings,
@@ -18,9 +19,10 @@ import {
   ChevronRight,
   Folder,
 } from './icons';
-import { useSessions, useProjects } from '@/lib/useHarnessAPI';
+import { useSessions, useProjects, useHarnessClient } from '@/lib/useHarnessAPI';
 import NewSessionDialog from './NewSessionDialog.vue';
 import type { Project, Session } from '@/lib/types';
+import '@/styles/sessions.css';
 
 /**
  * LeftRail — three vertical regions (plan §2.1):
@@ -45,8 +47,10 @@ const {
   rename: renameProject,
   remove: removeProject,
 } = useProjects();
+const client = useHarnessClient();
 
 const newSessionDialogOpen = ref(false);
+const newSessionProjectId = ref<string | undefined>(undefined);
 const deletingId = ref<string | null>(null);
 const renamingId = ref<string | null>(null);
 const renameDraft = ref('');
@@ -139,14 +143,26 @@ onMounted(() => {
   refreshProjects();
 });
 
-function newSession() {
+function newSession(projectId?: string) {
+  newSessionProjectId.value = projectId;
   newSessionDialogOpen.value = true;
 }
 
 async function onNewSessionDialogClose() {
   newSessionDialogOpen.value = false;
+  // Defensive double-refresh: the dialog calls
+  //   client.sessions.create() → client.sessions.moveToProject()
+  // directly (not via the useSessions composable) AND emits 'close'
+  // synchronously between those steps and a router.push() — so the
+  // first refresh can race with the moveToProject's commit visibility.
+  // A second refresh on a 100ms tail catches any commit lag and
+  // guarantees the new session appears under its project header.
   await refreshSessions();
   await refreshProjects();
+  setTimeout(() => {
+    void refreshSessions();
+    void refreshProjects();
+  }, 120);
 }
 
 function openSession(id: string) {
@@ -176,7 +192,17 @@ function cancelRename() {
 async function commitRename(id: string) {
   const next = renameDraft.value.trim();
   if (!next) {
-    cancelRename();
+    // Empty submission — clear any user-set title so the auto-title
+    // engine can take over (WP05 clear-title flow).
+    try {
+      await client.sessions.clearTitle(id);
+      await refreshSessions();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      lastError.value = `Clear title failed: ${msg}`;
+    } finally {
+      cancelRename();
+    }
     return;
   }
   const current = sessionList.value.find((s) => s.id === id);
@@ -407,7 +433,7 @@ async function onProjectDrop(evt: DragEvent, projectId: string) {
         type="button"
         class="flex items-center gap-2 px-3 py-2 rounded-sm w-full text-left text-sm font-ui text-accent border border-accent-hairline hover:bg-accent-glow transition-fast ease-kenaz disabled:opacity-50"
         aria-label="New session"
-        @click="newSession"
+        @click="newSession(activeProjectId || undefined)"
       >
         <Plus :size="14" />
         <span class="hidden two-col:inline">New session</span>
@@ -415,6 +441,7 @@ async function onProjectDrop(evt: DragEvent, projectId: string) {
     </div>
     <NewSessionDialog
       :open="newSessionDialogOpen"
+      :initial-project-id="newSessionProjectId"
       @close="onNewSessionDialogClose"
     />
 
@@ -524,13 +551,23 @@ async function onProjectDrop(evt: DragEvent, projectId: string) {
               >
                 <FileText :size="12" />
               </button>
+              <button
+                type="button"
+                class="shrink-0 p-1.5 rounded-sm text-ink-dim hover:text-accent hover:bg-surface-3 focus:outline-none focus:ring-1 focus:ring-accent"
+                :aria-label="`New session in ${project.name}`"
+                :data-testid="`new-session-in-project-${project.id}`"
+                @click.stop="newSession(project.id)"
+              >
+                <Plus :size="12" />
+              </button>
             </template>
           </div>
 
           <!-- nested sessions for this project -->
           <ul
-            v-if="!isCollapsed(project.id) && sessionsFor(project.id).length > 0"
-            class="mt-1 ml-3 space-y-1 border-l border-border-muted pl-2"
+            v-if="!isCollapsed(project.id)"
+            class="mt-1 ml-3 space-y-1 pl-2"
+            :class="{ 'border-l border-border-muted': sessionsFor(project.id).length > 0 }"
           >
             <li
               v-for="session in sessionsFor(project.id)"
@@ -561,7 +598,7 @@ async function onProjectDrop(evt: DragEvent, projectId: string) {
                       ? 'text-ink bg-surface-2 ring-1 ring-accent-hairline'
                       : 'text-ink-muted hover:text-ink hover:bg-surface-2'
                   "
-                  :title="session.name || session.id"
+                  :title="session.autoTitled ? 'Auto-generated title — click to edit' : (session.name || session.id)"
                   :aria-current="activeSessionId === session.id ? 'page' : undefined"
                   :data-testid="`open-session-${session.id}`"
                   @click="openSession(session.id)"
@@ -570,7 +607,11 @@ async function onProjectDrop(evt: DragEvent, projectId: string) {
                     :size="14"
                     :class="activeSessionId === session.id ? 'text-accent' : ''"
                   />
-                  <span class="truncate hidden two-col:inline">
+                  <span
+                    class="truncate hidden two-col:inline"
+                    :class="session.autoTitled ? 'session-row__name--auto' : ''"
+                    :data-testid="session.autoTitled ? `auto-titled-name-${session.id}` : undefined"
+                  >
                     {{ session.name }}
                   </span>
                 </button>
@@ -644,7 +685,7 @@ async function onProjectDrop(evt: DragEvent, projectId: string) {
                     ? 'text-ink bg-surface-2 ring-1 ring-accent-hairline'
                     : 'text-ink-muted hover:text-ink hover:bg-surface-2'
                 "
-                :title="session.name || session.id"
+                :title="session.autoTitled ? 'Auto-generated title — click to edit' : (session.name || session.id)"
                 :aria-current="activeSessionId === session.id ? 'page' : undefined"
                 :data-testid="`open-session-${session.id}`"
                 @click="openSession(session.id)"
@@ -653,7 +694,11 @@ async function onProjectDrop(evt: DragEvent, projectId: string) {
                   :size="14"
                   :class="activeSessionId === session.id ? 'text-accent' : ''"
                 />
-                <span class="truncate hidden two-col:inline">
+                <span
+                  class="truncate hidden two-col:inline"
+                  :class="session.autoTitled ? 'session-row__name--auto' : ''"
+                  :data-testid="session.autoTitled ? `auto-titled-name-${session.id}` : undefined"
+                >
                   {{ session.name }}
                 </span>
               </button>
@@ -785,6 +830,7 @@ async function onProjectDrop(evt: DragEvent, projectId: string) {
     <nav class="px-2 py-2 border-t border-border-muted" aria-label="Surfaces">
       <ul class="space-y-1">
         <li><RailEntry :icon="MessageSquare" label="Sessions" to="/sessions" /></li>
+        <li><RailEntry :icon="Search" label="Search" to="/search" /></li>
         <li><RailEntry :icon="Wrench" label="Tools" to="/tools" /></li>
         <li><RailEntry :icon="GitBranch" label="Workflows" to="/workflows" /></li>
         <li><RailEntry :icon="FileText" label="Contexts" to="/contexts" /></li>

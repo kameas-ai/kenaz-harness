@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/sigil-tech/kaneaz-harness/core/autonomy"
 	"github.com/sigil-tech/kaneaz-harness/core/llm"
 )
 
@@ -30,6 +31,11 @@ var (
 	// ErrInvalidContextKind is returned when SetSystemPrompt receives a
 	// kind outside {ContextKindSystem, ContextKindUserSeed}.
 	ErrInvalidContextKind = errors.New("session: invalid context kind")
+
+	// ErrAutoTitleSuperseded is returned by AutoTitle when the session's
+	// auto_titled flag is already 1 — meaning either the engine already
+	// fired or a user renamed the session — and the write is skipped.
+	ErrAutoTitleSuperseded = errors.New("session: auto-title superseded")
 )
 
 // Store is the persistence contract the Manager consumes. Two
@@ -54,6 +60,38 @@ type Store interface {
 	UpdateScrollPosition(ctx context.Context, id string, pos int64, now time.Time) error
 	SetSystemPrompt(ctx context.Context, id, content, kind string, now time.Time) error
 	SetProject(ctx context.Context, id string, projectID *string, now time.Time) error
+
+	// AutoTitle atomically sets name and auto_titled=1 on a session, but
+	// only when auto_titled is currently 0. If auto_titled is already 1,
+	// ErrAutoTitleSuperseded is returned and no write occurs.
+	// Both the predicate check and the write happen inside the same
+	// transaction to guard against races.
+	AutoTitle(ctx context.Context, id, name string, now time.Time) error
+	// MarkAutoTitleAttempted sets auto_titled=1 without changing the name.
+	// Used on the failure path so a crashed generator run doesn't
+	// retry indefinitely.
+	MarkAutoTitleAttempted(ctx context.Context, id string, now time.Time) error
+	// ClearTitle resets name to "" and auto_titled=0, re-enabling future
+	// auto-title attempts. The name empty is legal here (unlike Rename);
+	// callers own the validation that this is a deliberate user-clear.
+	ClearTitle(ctx context.Context, id string, now time.Time) error
+	// SetBranchAdvisorDismissed persists the per-session "don't suggest
+	// again" flag for the branch advisor (FR-010). When dismissed is
+	// true, the backend skips detection for this session.
+	SetBranchAdvisorDismissed(ctx context.Context, id string, dismissed bool, now time.Time) error
+
+	// SetAutonomyProfile persists the per-session autonomy.Layer
+	// (autonomy-dial-01KR3M2A WP02). An empty Layer (nil Level + empty
+	// Overrides) round-trips as both columns NULL — the upstream resolver
+	// then falls back to the project / global / tier-default chain.
+	// Mutating ID's session row is the only side effect; UpdatedAt is
+	// not bumped (this is a UI-state knob, not a content edit).
+	SetAutonomyProfile(ctx context.Context, id string, layer autonomy.Layer) error
+	// GetAutonomyProfile loads the per-session autonomy.Layer. Returns
+	// the empty Layer when both columns are NULL — callers feed the
+	// result straight into autonomy.Resolve which already understands
+	// the empty layer as "this layer contributes nothing."
+	GetAutonomyProfile(ctx context.Context, id string) (autonomy.Layer, error)
 
 	AppendMessage(ctx context.Context, m Message) (Message, error)
 	ListMessages(ctx context.Context, sessionID string) ([]Message, error)
@@ -195,6 +233,41 @@ func (s *memStore) SetProject(_ context.Context, id string, projectID *string, n
 	return nil
 }
 
+func (s *memStore) SetAutonomyProfile(_ context.Context, id string, layer autonomy.Layer) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	r, ok := s.records[id]
+	if !ok {
+		return ErrSessionNotFound
+	}
+	r.AutonomyLevel, r.AutonomyOverrides = cloneAutonomyLayer(layer)
+	s.records[id] = r
+	return nil
+}
+
+func (s *memStore) GetAutonomyProfile(_ context.Context, id string) (autonomy.Layer, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	r, ok := s.records[id]
+	if !ok {
+		return autonomy.Layer{}, ErrSessionNotFound
+	}
+	return autonomyLayerFromRecord(r.AutonomyLevel, r.AutonomyOverrides), nil
+}
+
+func (s *memStore) SetBranchAdvisorDismissed(_ context.Context, id string, dismissed bool, now time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	r, ok := s.records[id]
+	if !ok {
+		return ErrSessionNotFound
+	}
+	r.BranchAdvisorDismissed = dismissed
+	r.UpdatedAt = now
+	s.records[id] = r
+	return nil
+}
+
 func (s *memStore) Rename(_ context.Context, id, name string, now time.Time) error {
 	if name == "" {
 		return ErrInvalidName
@@ -206,6 +279,52 @@ func (s *memStore) Rename(_ context.Context, id, name string, now time.Time) err
 		return ErrSessionNotFound
 	}
 	r.Name = name
+	r.AutoTitled = true // non-empty rename locks out further auto-titling
+	r.UpdatedAt = now
+	s.records[id] = r
+	return nil
+}
+
+func (s *memStore) AutoTitle(_ context.Context, id, name string, now time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	r, ok := s.records[id]
+	if !ok {
+		return ErrSessionNotFound
+	}
+	// Re-check predicate inside the lock (same-transaction race safety).
+	if r.AutoTitled {
+		return ErrAutoTitleSuperseded
+	}
+	r.Name = name
+	r.AutoTitled = true
+	r.UpdatedAt = now
+	s.records[id] = r
+	return nil
+}
+
+func (s *memStore) MarkAutoTitleAttempted(_ context.Context, id string, now time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	r, ok := s.records[id]
+	if !ok {
+		return ErrSessionNotFound
+	}
+	r.AutoTitled = true
+	r.UpdatedAt = now
+	s.records[id] = r
+	return nil
+}
+
+func (s *memStore) ClearTitle(_ context.Context, id string, now time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	r, ok := s.records[id]
+	if !ok {
+		return ErrSessionNotFound
+	}
+	r.Name = ""
+	r.AutoTitled = false
 	r.UpdatedAt = now
 	s.records[id] = r
 	return nil
@@ -507,12 +626,22 @@ func (s *sqlStore) Create(ctx context.Context, r Record) error {
 		if r.ProjectID != nil {
 			projectID = *r.ProjectID
 		}
-		_, err := tx.Exec(ctx, `
+		var advisorDismissed int
+		if r.BranchAdvisorDismissed {
+			advisorDismissed = 1
+		}
+		autonomyLevel, autonomyOverrides, err := encodeAutonomySQL(autonomyLayerFromRecord(r.AutonomyLevel, r.AutonomyOverrides))
+		if err != nil {
+			return err
+		}
+		_, err = tx.Exec(ctx, `
             INSERT INTO sessions
                 (id, name, created_at, updated_at, last_active_at,
                  position, draft, scroll_position, archived_at,
-                 system_prompt, context_kind, project_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 system_prompt, context_kind, project_id,
+                 branch_advisor_dismissed,
+                 autonomy_level, autonomy_overrides)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `,
 			r.ID,
 			r.Name,
@@ -526,6 +655,9 @@ func (s *sqlStore) Create(ctx context.Context, r Record) error {
 			r.SystemPrompt,
 			r.ContextKind,
 			projectID,
+			advisorDismissed,
+			autonomyLevel,
+			autonomyOverrides,
 		)
 		return err
 	})
@@ -534,7 +666,9 @@ func (s *sqlStore) Create(ctx context.Context, r Record) error {
 const sqlSelectSession = `
     SELECT id, name, created_at, updated_at, last_active_at,
            position, draft, scroll_position, archived_at,
-           system_prompt, context_kind, project_id
+           system_prompt, context_kind, project_id, auto_titled,
+           COALESCE(branch_advisor_dismissed, 0),
+           autonomy_level, autonomy_overrides
     FROM sessions
 `
 
@@ -603,14 +737,110 @@ func (s *sqlStore) SetProject(ctx context.Context, id string, projectID *string,
 	})
 }
 
+func (s *sqlStore) SetBranchAdvisorDismissed(ctx context.Context, id string, dismissed bool, now time.Time) error {
+	var v int
+	if dismissed {
+		v = 1
+	}
+	return s.db.WriteTx(ctx, func(tx WriteTx) error {
+		res, err := tx.Exec(ctx,
+			"UPDATE sessions SET branch_advisor_dismissed = ?, updated_at = ? WHERE id = ?",
+			v, now.UnixNano(), id)
+		if err != nil {
+			return err
+		}
+		return rowsAffectedOrNotFound(res)
+	})
+}
+
+func (s *sqlStore) SetAutonomyProfile(ctx context.Context, id string, layer autonomy.Layer) error {
+	level, overrides, err := encodeAutonomySQL(layer)
+	if err != nil {
+		return err
+	}
+	return s.db.WriteTx(ctx, func(tx WriteTx) error {
+		res, err := tx.Exec(ctx,
+			"UPDATE sessions SET autonomy_level = ?, autonomy_overrides = ? WHERE id = ?",
+			level, overrides, id)
+		if err != nil {
+			return err
+		}
+		return rowsAffectedOrNotFound(res)
+	})
+}
+
+func (s *sqlStore) GetAutonomyProfile(ctx context.Context, id string) (autonomy.Layer, error) {
+	row := s.db.Reader().QueryRow(ctx,
+		"SELECT autonomy_level, autonomy_overrides FROM sessions WHERE id = ?", id)
+	var (
+		level     sql.NullInt64
+		overrides sql.NullString
+	)
+	if err := row.Scan(&level, &overrides); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return autonomy.Layer{}, ErrSessionNotFound
+		}
+		return autonomy.Layer{}, err
+	}
+	return decodeAutonomySQL(level, overrides)
+}
+
 func (s *sqlStore) Rename(ctx context.Context, id, name string, now time.Time) error {
 	if name == "" {
 		return ErrInvalidName
 	}
 	return s.db.WriteTx(ctx, func(tx WriteTx) error {
 		res, err := tx.Exec(ctx,
-			"UPDATE sessions SET name = ?, updated_at = ? WHERE id = ?",
+			"UPDATE sessions SET name = ?, auto_titled = 1, updated_at = ? WHERE id = ?",
 			name, now.UnixNano(), id)
+		if err != nil {
+			return err
+		}
+		return rowsAffectedOrNotFound(res)
+	})
+}
+
+func (s *sqlStore) AutoTitle(ctx context.Context, id, name string, now time.Time) error {
+	return s.db.WriteTx(ctx, func(tx WriteTx) error {
+		// Re-check predicate inside the transaction (race safety).
+		row := tx.QueryRow(ctx, "SELECT auto_titled FROM sessions WHERE id = ?", id)
+		var autoTitled int64
+		if err := row.Scan(&autoTitled); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return ErrSessionNotFound
+			}
+			return err
+		}
+		if autoTitled != 0 {
+			return ErrAutoTitleSuperseded
+		}
+		res, err := tx.Exec(ctx,
+			"UPDATE sessions SET name = ?, auto_titled = 1, updated_at = ? WHERE id = ?",
+			name, now.UnixNano(), id)
+		if err != nil {
+			return err
+		}
+		return rowsAffectedOrNotFound(res)
+	})
+}
+
+func (s *sqlStore) MarkAutoTitleAttempted(ctx context.Context, id string, now time.Time) error {
+	return s.db.WriteTx(ctx, func(tx WriteTx) error {
+		res, err := tx.Exec(ctx,
+			"UPDATE sessions SET auto_titled = 1, updated_at = ? WHERE id = ?",
+			now.UnixNano(), id)
+		if err != nil {
+			return err
+		}
+		return rowsAffectedOrNotFound(res)
+	})
+}
+
+func (s *sqlStore) ClearTitle(ctx context.Context, id string, now time.Time) error {
+	return s.db.WriteTx(ctx, func(tx WriteTx) error {
+		res, err := tx.Exec(ctx,
+			"UPDATE sessions SET name = '', auto_titled = 0, updated_at = ? WHERE id = ?",
+			now.UnixNano(), id)
 		if err != nil {
 			return err
 		}
@@ -1048,12 +1278,16 @@ func synthesizeBlocks(content string) []llm.ContentBlock {
 // (single row) and Rows (current row) since both expose Scan(dest...).
 func scanRecord(sc interface{ Scan(dest ...any) error }) (Record, error) {
 	var (
-		r          Record
-		createdAt  int64
-		updatedAt  int64
-		lastActive int64
-		archived   sql.NullInt64
-		projectID  sql.NullString
+		r                  Record
+		createdAt          int64
+		updatedAt          int64
+		lastActive         int64
+		archived           sql.NullInt64
+		projectID          sql.NullString
+		autoTitled         int64
+		advisorDismissed   int
+		autonomyLevel      sql.NullInt64
+		autonomyOverrides  sql.NullString
 	)
 	if err := sc.Scan(
 		&r.ID, &r.Name,
@@ -1061,7 +1295,9 @@ func scanRecord(sc interface{ Scan(dest ...any) error }) (Record, error) {
 		&r.Position, &r.Draft, &r.ScrollPosition,
 		&archived,
 		&r.SystemPrompt, &r.ContextKind,
-		&projectID,
+		&projectID, &autoTitled,
+		&advisorDismissed,
+		&autonomyLevel, &autonomyOverrides,
 	); err != nil {
 		return Record{}, err
 	}
@@ -1075,6 +1311,19 @@ func scanRecord(sc interface{ Scan(dest ...any) error }) (Record, error) {
 	if projectID.Valid {
 		v := projectID.String
 		r.ProjectID = &v
+	}
+	r.AutoTitled = autoTitled != 0
+	r.BranchAdvisorDismissed = advisorDismissed != 0
+	if autonomyLevel.Valid {
+		t := autonomy.Tier(int(autonomyLevel.Int64))
+		r.AutonomyLevel = &t
+	}
+	if autonomyOverrides.Valid && autonomyOverrides.String != "" {
+		ov, err := decodeAutonomyOverrides(autonomyOverrides.String)
+		if err != nil {
+			return Record{}, fmt.Errorf("session: decode autonomy_overrides: %w", err)
+		}
+		r.AutonomyOverrides = ov
 	}
 	return r, nil
 }

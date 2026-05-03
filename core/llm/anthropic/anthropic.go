@@ -14,6 +14,7 @@ import (
 
 	llm "github.com/sigil-tech/kaneaz-harness/core/llm"
 	"github.com/sigil-tech/kaneaz-harness/core/llm/capabilities"
+	"github.com/sigil-tech/kaneaz-harness/core/llm/httpx"
 )
 
 // Kind is the canonical provider kind for the Anthropic adapter. It
@@ -92,7 +93,7 @@ type Adapter struct {
 // reasoning for unknown models, so the failure is non-fatal.
 func New(opts ...Option) *Adapter {
 	a := &Adapter{
-		httpc:      &http.Client{}, // no Timeout — context drives lifetime
+		httpc:      &http.Client{Transport: httpx.DefaultTransport()}, // no Timeout — context drives lifetime
 		endpoint:   defaultEndpoint,
 		apiVersion: defaultAPIVersion,
 	}
@@ -147,9 +148,14 @@ func (a *Adapter) ListModels(ctx context.Context, cred []byte) ([]llm.ModelInfo,
 		if display == "" {
 			display = m.ID
 		}
+		cw := 0
+		if a.cat != nil {
+			cw = a.cat.ContextWindow(Kind, m.ID)
+		}
 		out = append(out, llm.ModelInfo{
-			ID:          m.ID,
-			DisplayName: display,
+			ID:            m.ID,
+			DisplayName:   display,
+			ContextWindow: cw,
 		})
 	}
 	return out, nil

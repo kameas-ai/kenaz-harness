@@ -12,7 +12,10 @@ import (
 
 	coreart "github.com/sigil-tech/kaneaz-harness/core/artifacts"
 	"github.com/sigil-tech/kaneaz-harness/core/attachments"
+	"github.com/sigil-tech/kaneaz-harness/core/llm/pricing"
 	"github.com/sigil-tech/kaneaz-harness/core/session"
+	autotitle "github.com/sigil-tech/kaneaz-harness/core/sessions/autotitle"
+	"github.com/sigil-tech/kaneaz-harness/core/usage"
 )
 
 // ErrEmptyContentBlocks is returned by SendMessageWithBlocks when the
@@ -49,6 +52,7 @@ func recordToView(r session.Record) Session {
 		UpdatedAt:    r.UpdatedAt.UTC().Format(time.RFC3339Nano),
 		SystemPrompt: r.SystemPrompt,
 		ContextKind:  kind,
+		AutoTitled:   r.AutoTitled,
 	}
 	if r.ProjectID != nil {
 		out.ProjectID = *r.ProjectID
@@ -75,7 +79,24 @@ type managerAPI struct {
 	artStore coreart.Store
 	media    attachments.MediaStore
 	dataDir  string
+	// titleGen is the optional auto-title generator used by SuggestTitle.
+	// nil causes SuggestTitle to return ErrTitleGeneratorNotConfigured.
+	titleGen TitleGenerator
+	// usageMgr is the optional usage manager for GetUsage. nil returns
+	// zeroed aggregate (feature disabled or not yet wired).
+	usageMgr usage.Manager
 }
+
+// TitleGenerator is the surface SuggestTitle needs. Matches
+// autotitle.Generator.GenerateTitle so the real generator satisfies it
+// without an adapter.
+type TitleGenerator interface {
+	GenerateTitle(ctx context.Context, transcript autotitle.Transcript) (string, error)
+}
+
+// ErrTitleGeneratorNotConfigured is returned by SuggestTitle when no
+// auto-title generator has been wired into the API.
+var ErrTitleGeneratorNotConfigured = errors.New("rpc/sessions: title generator not configured")
 
 // NewManagerAPI returns a SessionsAPI backed by the supplied Manager.
 // Manager must be non-nil; callers (typically core/rpc.New) must
@@ -121,6 +142,17 @@ func NewManagerAPIWithAttachmentsAndArtifacts(
 		media:       media,
 		dataDir:     dataDir,
 	}
+}
+
+// WithTitleGenerator returns a copy of the managerAPI wired with the
+// supplied TitleGenerator. Called by api.go during boot to attach the
+// auto-title generator to the sessions view without altering the
+// existing constructor signatures.
+func WithTitleGeneratorOpt(api SessionsAPI, gen TitleGenerator) SessionsAPI {
+	if m, ok := api.(*managerAPI); ok {
+		m.titleGen = gen
+	}
+	return api
 }
 
 // List implements SessionsAPI.
@@ -555,4 +587,84 @@ func (a *managerAPI) MoveToProject(ctx context.Context, id, projectID string) er
 		p = &v
 	}
 	return a.mgr.MoveToProject(ctx, id, p)
+}
+
+// SuggestTitle implements SessionsAPI. It re-generates a title from the
+// session's current active messages and writes it via RequestRetitle
+// (bypasses the auto_titled guard intentionally — this is the manual
+// "Suggest new title" path). Returns the generated title string.
+func (a *managerAPI) SuggestTitle(ctx context.Context, id string) (string, error) {
+	if a.titleGen == nil {
+		return "", ErrTitleGeneratorNotConfigured
+	}
+
+	msgs, err := a.mgr.ListMessagesActive(ctx, id)
+	if err != nil {
+		return "", fmt.Errorf("rpc/sessions: list messages: %w", err)
+	}
+
+	// Cap to the most-recent 10 messages.
+	if len(msgs) > 10 {
+		msgs = msgs[len(msgs)-10:]
+	}
+
+	transcript := make(autotitle.Transcript, 0, len(msgs))
+	for _, m := range msgs {
+		if m.Role == session.RoleUser || m.Role == session.RoleAssistant {
+			transcript = append(transcript, autotitle.TranscriptMessage{
+				Role: string(m.Role),
+				Text: m.Content,
+			})
+		}
+	}
+
+	title, err := a.titleGen.GenerateTitle(ctx, transcript)
+	if err != nil {
+		return "", fmt.Errorf("rpc/sessions: generate title: %w", err)
+	}
+
+	if err := a.mgr.RequestRetitle(ctx, id, title); err != nil {
+		return "", fmt.Errorf("rpc/sessions: write title: %w", err)
+	}
+	return title, nil
+}
+
+// ClearTitle implements SessionsAPI. Resets the session name to "" and
+// auto_titled=0, re-enabling future auto-title attempts.
+func (a *managerAPI) ClearTitle(ctx context.Context, id string) error {
+	return a.mgr.ClearTitle(ctx, id)
+}
+
+// WithUsageManager wires a usage.Manager into the sessions view so
+// GetUsage can return real aggregates (token-cost-telemetry WP03).
+// Safe to call at boot before any request arrives.
+func WithUsageManager(api SessionsAPI, mgr usage.Manager) SessionsAPI {
+	if m, ok := api.(*managerAPI); ok {
+		m.usageMgr = mgr
+	}
+	return api
+}
+
+// GetUsage implements SessionsAPI. Returns the per-session cumulative
+// token + cost aggregate from session_messages columns added in
+// migration 0314. Falls back to an zeroed Aggregate when the usage
+// manager is not wired.
+func (a *managerAPI) GetUsage(ctx context.Context, id string) (SessionUsage, error) {
+	pricingDate := pricing.LastUpdatedString()
+	if a.usageMgr == nil {
+		return SessionUsage{CostSource: "unknown", PricingDataDate: pricingDate}, nil
+	}
+	agg, err := a.usageMgr.GetSession(ctx, id)
+	if err != nil {
+		return SessionUsage{}, fmt.Errorf("rpc/sessions: GetUsage: %w", err)
+	}
+	return SessionUsage{
+		PromptTokens:     agg.PromptTokens,
+		CompletionTokens: agg.CompletionTokens,
+		TotalTokens:      agg.TotalTokens,
+		CostUSD:          agg.CostUSD,
+		CostSource:       agg.CostSource,
+		MessageCount:     agg.MessageCount,
+		PricingDataDate:  pricingDate,
+	}, nil
 }

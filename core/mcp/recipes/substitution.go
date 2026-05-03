@@ -73,6 +73,55 @@ func Substitute(template []string, vars map[string]string, listVars map[string][
 	return out
 }
 
+// SubstituteHeaders applies the same ${VAR} expansion Substitute
+// performs on argv to a header map. Header values are scalar-only
+// (the listVars multi-arg expansion has no analogue in HTTP headers
+// — there is no concept of "this header expands into N headers"),
+// so callers pass only the scalar vars map.
+//
+// Returns a fresh map; the input is not mutated. A nil headers
+// argument returns nil. Header keys are passed through unchanged so
+// the recipe author controls the canonical-casing on the wire.
+//
+// Unknown tokens follow the Substitute contract: literal ${X}
+// survives in the output and a warn is logged.
+func SubstituteHeaders(headers map[string]string, vars map[string]string) map[string]string {
+	if headers == nil {
+		return nil
+	}
+	out := make(map[string]string, len(headers))
+	for k, v := range headers {
+		out[k] = substituteString(v, vars)
+	}
+	return out
+}
+
+// SubstituteString is the public entry point for scalar-only token
+// expansion against a single string. Used by transports that
+// substitute into URLs (HTTP / SSE recipes whose URL embeds an
+// env-sourced subdomain or path segment).
+func SubstituteString(s string, vars map[string]string) string {
+	return substituteString(s, vars)
+}
+
+// substituteString is the scalar-substitution core shared by
+// SubstituteHeaders and SubstituteString. Unknown tokens stay
+// literal and emit a warn — same contract as Substitute's scalar
+// branch.
+func substituteString(s string, vars map[string]string) string {
+	if s == "" {
+		return s
+	}
+	return tokenPattern.ReplaceAllStringFunc(s, func(match string) string {
+		name := match[2 : len(match)-1]
+		if v, ok := vars[name]; ok {
+			return v
+		}
+		log.Printf("recipes: warn: unknown substitution token %s — leaving literal", match)
+		return match
+	})
+}
+
 // wholeToken reports whether arg is exactly "${IDENT}" with no other
 // characters around it, returning the bare IDENT on a match.
 func wholeToken(arg string) (string, bool) {
