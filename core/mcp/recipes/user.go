@@ -474,3 +474,102 @@ func isYAMLName(name string) bool {
 // already watching. Callers usually treat this as a programming
 // error.
 var ErrAlreadyWatching = errors.New("recipes: UserStore: already watching")
+
+// Save writes a user recipe to <DataDir>/mcp/recipes/<id>.yaml,
+// creating the directory if missing. The Recipe.Source field is
+// forced to SourceUser before writing. The file is written atomically
+// (write temp file + rename) to prevent torn reads. After writing,
+// the in-memory snapshot is reloaded so callers see the updated
+// catalog immediately.
+//
+// Callers MUST validate the recipe before calling Save; Save re-runs
+// Recipe.Validate as a safety net and returns an error on failure.
+func (s *UserStore) Save(r Recipe) error {
+	if s == nil {
+		return errors.New("recipes: UserStore.Save: nil receiver")
+	}
+	if s.DataDir == "" {
+		return errors.New("recipes: UserStore.Save: DataDir is empty")
+	}
+	r.Source = SourceUser
+	if err := r.Validate(); err != nil {
+		return fmt.Errorf("recipes: Save: validate: %w", err)
+	}
+
+	root := filepath.Join(s.DataDir, userRecipesSubdir)
+	if err := os.MkdirAll(root, 0o700); err != nil {
+		return fmt.Errorf("recipes: Save: mkdir: %w", err)
+	}
+
+	yamlBytes, err := encodeUserRecipeYAML(r)
+	if err != nil {
+		return fmt.Errorf("recipes: Save: encode: %w", err)
+	}
+
+	dst := filepath.Join(root, r.ID+".yaml")
+	tmp := dst + ".tmp"
+	if err := os.WriteFile(tmp, yamlBytes, 0o600); err != nil {
+		return fmt.Errorf("recipes: Save: write temp: %w", err)
+	}
+	if err := os.Rename(tmp, dst); err != nil {
+		_ = os.Remove(tmp)
+		return fmt.Errorf("recipes: Save: rename: %w", err)
+	}
+
+	// Refresh snapshot so callers see the new recipe immediately.
+	s.Reload()
+	return nil
+}
+
+// Delete removes the user recipe with the given id from disk (removes
+// <DataDir>/mcp/recipes/<id>.yaml) and reloads the snapshot. Returns
+// ErrRecipeNotFound when no file exists with that id. Only user-owned
+// files (top-level *.yaml in <DataDir>/mcp/recipes/) are deletable;
+// _imports/ and shipped recipes are out of scope for this method.
+func (s *UserStore) Delete(id string) error {
+	if s == nil {
+		return errors.New("recipes: UserStore.Delete: nil receiver")
+	}
+	if s.DataDir == "" {
+		return errors.New("recipes: UserStore.Delete: DataDir is empty")
+	}
+	if err := ValidateRecipeID(id); err != nil {
+		return fmt.Errorf("recipes: Delete: %w", err)
+	}
+
+	path := filepath.Join(s.DataDir, userRecipesSubdir, id+".yaml")
+	if err := os.Remove(path); err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return fmt.Errorf("%w: %q", ErrRecipeNotFound, id)
+		}
+		return fmt.Errorf("recipes: Delete: remove: %w", err)
+	}
+
+	// Refresh snapshot to evict the deleted recipe.
+	s.Reload()
+	return nil
+}
+
+// encodeUserRecipeYAML marshals a user recipe to YAML with a small
+// header comment. Reuses the json-round-trip approach from
+// encodeRecipeYAML in import.go so the YAML schema stays 1:1 with
+// shipped.json.
+func encodeUserRecipeYAML(r Recipe) ([]byte, error) {
+	jb, err := json.Marshal(r)
+	if err != nil {
+		return nil, err
+	}
+	var m map[string]any
+	if err := json.Unmarshal(jb, &m); err != nil {
+		return nil, err
+	}
+	// Remove runtime-only fields stamped by the loader.
+	delete(m, "source")
+	dropEmptyFields(m)
+	out, err := yaml.Marshal(m)
+	if err != nil {
+		return nil, err
+	}
+	header := "# User recipe — managed by the harness Add MCP Server flow.\n# Edit freely — your changes survive a reload via fsnotify.\n"
+	return append([]byte(header), out...), nil
+}

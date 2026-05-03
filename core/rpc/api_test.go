@@ -11,6 +11,8 @@ import (
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/audit"
 	branchesview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/branches"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/bundle"
+	cedarpolicyview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/cedarpolicy"
+	searchview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/search"
 	compactionview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/compaction"
 	contextsview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/contexts"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/contextview"
@@ -21,6 +23,7 @@ import (
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/mcp"
 	memoryview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/memory"
 	nodesview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/nodes"
+	permissionsview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/permissions"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/policy"
 	projectsview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/projects"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/sessions"
@@ -59,8 +62,11 @@ type fakeHarnessAPI struct {
 	graphAPI        graphview.API
 	compactionAPI   compactionview.CompactionAPI
 	branchesAPI     branchesview.BranchesAPI
+	cedarPolicyAPI  cedarpolicyview.CedarPolicyAPI
+	permissionsAPI  permissionsview.PermissionsAPI
 	dialsAPI        dialsview.DialsAPI
 	nodesAPI        nodesview.NodesAPI
+	searchAPI       searchview.SearchAPI
 }
 
 func (f *fakeHarnessAPI) ShellStatus(_ context.Context) (ShellStatus, error) {
@@ -92,8 +98,11 @@ func (f *fakeHarnessAPI) Corpus() corpusview.CorpusAPI                 { return 
 func (f *fakeHarnessAPI) Graph() graphview.API                         { return f.graphAPI }
 func (f *fakeHarnessAPI) Compaction() compactionview.CompactionAPI     { return f.compactionAPI }
 func (f *fakeHarnessAPI) Branches() branchesview.BranchesAPI           { return f.branchesAPI }
+func (f *fakeHarnessAPI) CedarPolicy() cedarpolicyview.CedarPolicyAPI  { return f.cedarPolicyAPI }
+func (f *fakeHarnessAPI) Permissions() permissionsview.PermissionsAPI  { return f.permissionsAPI }
 func (f *fakeHarnessAPI) Dials() dialsview.DialsAPI                    { return f.dialsAPI }
 func (f *fakeHarnessAPI) Nodes() nodesview.NodesAPI                    { return f.nodesAPI }
+func (f *fakeHarnessAPI) Search() searchview.SearchAPI                 { return f.searchAPI }
 
 // Compile-time interface witness (plan §4.2).
 var _ HarnessAPI = (*fakeHarnessAPI)(nil)

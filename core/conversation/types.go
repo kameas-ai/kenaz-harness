@@ -62,6 +62,21 @@ type Branch struct {
 	UpdatedAt       time.Time
 	MergedAt        *time.Time
 	AbandonedAt     *time.Time
+
+	// Subagent-branch-recommendation fields (branch-as-subagent WP04).
+	// These are populated only when the branch was spawned via the
+	// branch-advisor flow; manual forks from the BranchSidebar leave them
+	// at their zero values.
+
+	// SubagentBranch is true when this branch was spawned by the
+	// branch-advisor (HARNESS_BRANCH_ADVISOR flow).
+	SubagentBranch bool
+	// RecommendationID is the BranchSuggestion.ID — correlates with
+	// KindBranchAdvisorAccepted audit events.
+	RecommendationID string
+	// AdvisorSignals is the list of positive-signal labels that fired
+	// for this branch (e.g. ["can_you_also","also_figure_out"]).
+	AdvisorSignals []string
 }
 
 // MessageRef is one row of the copy-on-write reference table. Each

@@ -4,6 +4,20 @@ package llm
 
 import "context"
 
+// Redacted is the display-safe credential view carried over the RPC
+// boundary (credential-store-01KQ8TDD WP05). It mirrors
+// core/credstore.Redacted but is declared here so this package does
+// not take a hard dependency on credstore. Raw credential bytes never
+// appear in this struct (DIRECTIVE_001 / FR-006).
+type Redacted struct {
+	// Display is the human-readable redacted form (e.g. "sk-a…d4f9").
+	Display string `json:"display"`
+	// Kind is the CredentialReference.Kind string ("keychain", "env", …).
+	Kind string `json:"kind"`
+	// Locator is the redaction-safe reference ID — NOT the raw locator.
+	Locator string `json:"locator"`
+}
+
 // Provider is reference-only metadata about a configured LLM provider.
 // Credentials live behind secrets-keychain — never returned here.
 type Provider struct {
@@ -16,6 +30,10 @@ type Provider struct {
 	// the mid-conversation model switcher. Empty => single-model row
 	// — UI falls back to [Model].
 	Models []string `json:"models,omitempty"`
+	// ModelInfos carries capability metadata (contextWindow, etc.) for
+	// each entry in Models. Parallel by position; may be shorter than
+	// Models when capability data is unavailable for a given model.
+	ModelInfos []ModelInfo `json:"modelInfos,omitempty"`
 	// Region is non-empty for kinds that require it (bedrock today).
 	Region string `json:"region,omitempty"`
 	// Cred surfaces the indirect-reference shape so the UI can render
@@ -23,6 +41,10 @@ type Provider struct {
 	// locator is intentionally NOT a credential value — it's the
 	// keychain entry name or AWS profile name.
 	Cred CredentialReference `json:"cred,omitempty"`
+	// Redaction carries the display-safe credential view populated by
+	// credstore.Peek (WP05). The wire payload never carries raw key
+	// material — consumers read Redaction.Display for UI rendering.
+	Redaction Redacted `json:"redaction,omitempty"`
 	// Source is "bundle" or "personal" — the UI surfaces this so users
 	// know whether a provider came from a signed bundle or their own
 	// providers.json store.
@@ -67,7 +89,7 @@ type AddProviderInput struct {
 
 // TestResult is the structured outcome of TestProvider. The frontend
 // renders Success as a pill and Message inline.
-type TestResult struct {
+type TestResult struct { // privacy-allow: domain type, not a test fixture
 	Success   bool   `json:"success"`
 	LatencyMS int    `json:"latency_ms"`
 	Message   string `json:"message"`
@@ -76,9 +98,10 @@ type TestResult struct {
 // ModelInfo is the user-pickable model entry returned by ListModels.
 // Mirrors core/llm.ModelInfo for the rpc-frontend boundary.
 type ModelInfo struct {
-	ID          string `json:"id"`
-	DisplayName string `json:"displayName"`
-	Description string `json:"description,omitempty"`
+	ID            string `json:"id"`
+	DisplayName   string `json:"displayName"`
+	Description   string `json:"description,omitempty"`
+	ContextWindow int    `json:"contextWindow,omitempty"` // max tokens; 0 = unknown
 }
 
 // LLMConnectorAPI is the view-scoped accessor for provider metadata and
@@ -133,4 +156,12 @@ type LLMConnectorAPI interface {
 	// feature flag is off — the gateway is wired regardless of the
 	// flag, only the toolloop chooses whether to invoke it.
 	ResolveConfirm(ctx context.Context, requestID, decision string) error
+
+	// UpdateProviderCredential writes a new plaintext API key for
+	// profileID directly to the OS keychain and zeroes the in-memory
+	// buffer before returning. The "leave blank to keep current"
+	// frontend pattern is preserved — the UI ONLY calls this method
+	// when the user has entered a new value (credential-store-01KQ8TDD
+	// WP05 / FR-007).
+	UpdateProviderCredential(ctx context.Context, profileID, plaintext string) error
 }

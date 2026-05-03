@@ -403,3 +403,158 @@ func containsKind(kinds []string, want string) bool {
 	}
 	return false
 }
+
+// ── auto_titled manager method tests ────────────────────────────────────────
+
+func TestManager_AutoTitle_WritesAndEmitsEvent(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	m, audit := newTestManager(t)
+	r, err := m.Create(ctx, "New session")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := m.AutoTitle(ctx, r.ID, "Rust basics"); err != nil {
+		t.Fatalf("AutoTitle: %v", err)
+	}
+	got, _ := m.Get(ctx, r.ID)
+	if got.Name != "Rust basics" {
+		t.Errorf("Name = %q, want Rust basics", got.Name)
+	}
+	if !got.AutoTitled {
+		t.Error("AutoTitled = false, want true")
+	}
+	if !containsKind(audit.Kinds(), EventKindSessionAutoTitled) {
+		t.Errorf("no %q event emitted; events: %v", EventKindSessionAutoTitled, audit.Kinds())
+	}
+}
+
+func TestManager_AutoTitle_SupersededDropsWrite(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	m, _ := newTestManager(t)
+	r, err := m.Create(ctx, "New session")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// First auto-title succeeds.
+	if err := m.AutoTitle(ctx, r.ID, "First title"); err != nil {
+		t.Fatalf("first AutoTitle: %v", err)
+	}
+	// Second auto-title must return ErrAutoTitleSuperseded.
+	err = m.AutoTitle(ctx, r.ID, "Second title")
+	if !errors.Is(err, ErrAutoTitleSuperseded) {
+		t.Errorf("got %v, want ErrAutoTitleSuperseded", err)
+	}
+	got, _ := m.Get(ctx, r.ID)
+	if got.Name != "First title" {
+		t.Errorf("Name changed despite superseded; got %q", got.Name)
+	}
+}
+
+func TestManager_MarkAutoTitleAttempted_SetsFlag(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	m, audit := newTestManager(t)
+	r, err := m.Create(ctx, "New session")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := m.MarkAutoTitleAttempted(ctx, r.ID); err != nil {
+		t.Fatalf("MarkAutoTitleAttempted: %v", err)
+	}
+	got, _ := m.Get(ctx, r.ID)
+	if !got.AutoTitled {
+		t.Error("AutoTitled = false after MarkAutoTitleAttempted")
+	}
+	if got.Name != "New session" {
+		t.Errorf("Name changed; got %q", got.Name)
+	}
+	if !containsKind(audit.Kinds(), EventKindSessionAutoTitled) {
+		t.Errorf("no %q event emitted", EventKindSessionAutoTitled)
+	}
+}
+
+func TestManager_ClearTitle_ResetsAndEmitsRenamedEvent(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	m, audit := newTestManager(t)
+	r, err := m.Create(ctx, "some title")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Mark as auto-titled first.
+	if err := m.AutoTitle(ctx, r.ID, "auto title"); err != nil {
+		t.Fatalf("AutoTitle: %v", err)
+	}
+	if err := m.ClearTitle(ctx, r.ID); err != nil {
+		t.Fatalf("ClearTitle: %v", err)
+	}
+	got, _ := m.Get(ctx, r.ID)
+	if got.Name != "" {
+		t.Errorf("Name = %q, want empty", got.Name)
+	}
+	if got.AutoTitled {
+		t.Error("AutoTitled = true after ClearTitle, want false")
+	}
+	if !containsKind(audit.Kinds(), EventKindSessionRenamed) {
+		t.Errorf("no %q event emitted after ClearTitle; events: %v", EventKindSessionRenamed, audit.Kinds())
+	}
+}
+
+func TestManager_RequestRetitle_OverwritesTitle(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	m, audit := newTestManager(t)
+	r, err := m.Create(ctx, "old title")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// First auto-title locks the flag.
+	if err := m.AutoTitle(ctx, r.ID, "auto-generated"); err != nil {
+		t.Fatalf("AutoTitle: %v", err)
+	}
+	// RequestRetitle should overwrite even though auto_titled is already 1.
+	if err := m.RequestRetitle(ctx, r.ID, "new manual title"); err != nil {
+		t.Fatalf("RequestRetitle: %v", err)
+	}
+	got, _ := m.Get(ctx, r.ID)
+	if got.Name != "new manual title" {
+		t.Errorf("Name = %q, want new manual title", got.Name)
+	}
+	if !got.AutoTitled {
+		t.Error("AutoTitled = false after RequestRetitle, want true")
+	}
+	if !containsKind(audit.Kinds(), EventKindSessionAutoTitled) {
+		t.Errorf("no %q event emitted", EventKindSessionAutoTitled)
+	}
+}
+
+// TestManager_AutoTitle_RaceCheck verifies that when auto_titled is flipped
+// between the predicate check and the store write (simulated by a manual
+// AutoTitle call before the second), the second call is dropped.
+// This is the re-check-predicate-inside-transaction acceptance test.
+func TestManager_AutoTitle_RaceCheck(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	m, _ := newTestManager(t)
+	r, err := m.Create(ctx, "New session")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Simulate a user rename happening in the window: the store's AutoTitle
+	// predicate is checked inside the transaction, so calling store.Rename
+	// (which sets auto_titled=1) before AutoTitle will cause ErrAutoTitleSuperseded.
+	if err := m.Rename(ctx, r.ID, "User renamed me"); err != nil {
+		t.Fatalf("Rename: %v", err)
+	}
+	// Now AutoTitle should be superseded because auto_titled is already 1.
+	err = m.AutoTitle(ctx, r.ID, "Engine would set this")
+	if !errors.Is(err, ErrAutoTitleSuperseded) {
+		t.Errorf("got %v, want ErrAutoTitleSuperseded (race check)", err)
+	}
+	got, _ := m.Get(ctx, r.ID)
+	if got.Name != "User renamed me" {
+		t.Errorf("Name = %q, want User renamed me (user rename preserved)", got.Name)
+	}
+}

@@ -17,6 +17,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/sigil-tech/kaneaz-harness/core"
 	coreag "github.com/sigil-tech/kaneaz-harness/core/agentgraph"
@@ -29,6 +30,7 @@ import (
 	"github.com/sigil-tech/kaneaz-harness/core/event"
 	"github.com/sigil-tech/kaneaz-harness/core/hooks"
 	corellm "github.com/sigil-tech/kaneaz-harness/core/llm"
+	llmcap "github.com/sigil-tech/kaneaz-harness/core/llm/capabilities"
 	"github.com/sigil-tech/kaneaz-harness/core/llm/credref"
 	"github.com/sigil-tech/kaneaz-harness/core/llm/personal"
 	llmregistry "github.com/sigil-tech/kaneaz-harness/core/llm/registry"
@@ -48,6 +50,7 @@ import (
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/audit"
 	branchesview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/branches"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/bundle"
+	cedarpolicyview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/cedarpolicy"
 	compactionview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/compaction"
 	contextsview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/contexts"
 	contextview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/contextview"
@@ -58,8 +61,10 @@ import (
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/mcp"
 	memoryview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/memory"
 	nodesview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/nodes"
+	permissionsview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/permissions"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/policy"
 	projectsview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/projects"
+	searchview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/search"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/sessions"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/settings"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/shell"
@@ -72,7 +77,9 @@ import (
 	corebash "github.com/sigil-tech/kaneaz-harness/core/tools/bash"
 	secretsref "github.com/sigil-tech/kaneaz-harness/core/secrets/ref"
 	"github.com/sigil-tech/kaneaz-harness/core/session"
+	"github.com/sigil-tech/kaneaz-harness/core/storage"
 	"github.com/sigil-tech/kaneaz-harness/core/toolloop"
+	"github.com/sigil-tech/kaneaz-harness/core/usage"
 	"github.com/zalando/go-keyring"
 )
 
@@ -117,8 +124,20 @@ type HarnessAPI interface {
 	Graph() graphview.API
 	Compaction() compactionview.CompactionAPI
 	Branches() branchesview.BranchesAPI
+	// CedarPolicy exposes the cedarpolicy view-scoped RPC surface
+	// (mission cedar-credential-policy-01KQ8TDE, WP02). It lists
+	// loaded policy files, triggers reload, and surfaces recent
+	// gate decisions to the frontend Policy panel.
+	CedarPolicy() cedarpolicyview.CedarPolicyAPI
+
+	// Permissions exposes the universal interactive permission RPC
+	// surface (mission cedar-credential-policy-01KQ8TDE, WP02).
+	// Resolves modal decisions from the four prompt topics, lists
+	// accumulated grants, and revokes them.
+	Permissions() permissionsview.PermissionsAPI
 	Dials() dialsview.DialsAPI
 	Nodes() nodesview.NodesAPI
+	Search() searchview.SearchAPI
 }
 
 // ShellStatus drives the Toolbar status pills + LegendBar live-rate
@@ -156,6 +175,12 @@ type WindowSize struct {
 // stable for the lifetime of API. Real wiring lands in feature missions.
 type API struct {
 	core *core.Core
+
+	// builtins holds the in-binary tool registry so the chat-input
+	// `!cmd` shell-escape can dispatch directly to kaneaz__bash without
+	// going through the toolloop. Populated at boot from the same
+	// registry the LLM tool catalog reads.
+	builtins *toolloop.BuiltinRegistry
 
 	// Stable view-accessor instances (plan §4.2).
 	llmAPI      llm.LLMConnectorAPI
@@ -197,7 +222,26 @@ type API struct {
 	compactionAPI   compactionview.CompactionAPI
 	convMgr         *coreconv.Manager
 	branchesAPI     branchesview.BranchesAPI
+	// cedarPolicyAPI is the policy-panel RPC surface (mission
+	// cedar-credential-policy-01KQ8TDE, WP02). Constructed in New
+	// when a real *cedar.Engine is available; nil falls back to the
+	// cedarpolicy.NewAPI(nil) graceful-empty surface.
+	cedarPolicyAPI  cedarpolicyview.CedarPolicyAPI
+
+	// permissionsAPI is the universal interactive-permission RPC
+	// surface (mission cedar-credential-policy-01KQ8TDE, WP02). Backed
+	// by a process-singleton *cedar.Registry shared with the gate
+	// callers in WP03–WP06 (not yet wired). Until then the registry
+	// has no producers and ListPending returns empty.
+	permissionsAPI permissionsview.PermissionsAPI
+
+	// promptRegistry is the process-singleton cedar prompt registry.
+	// Held on the stack so future WPs (cedar WP03 bash gate, WP04 fs
+	// gate, etc.) can pass it into their gate constructors without
+	// re-plumbing through api.New.
+	promptRegistry *cedar.Registry
 	dialsAPI        dialsview.DialsAPI
+	searchAPI       searchview.SearchAPI
 
 	// Node manifest catalog (mission agent-kernel-graph-node-catalog;
 	// WP07). The manager owns the resolved catalog + user-override
@@ -213,6 +257,11 @@ type API struct {
 	// same pool the toolloop dispatches against.
 	stdioPool *stdio.Pool
 
+	// usageMgr is the per-session token + cost aggregate store
+	// (token-cost-telemetry-01KQ8TD7). Wired in New when a real
+	// Core is available; noop manager when not.
+	usageMgr usage.Manager
+
 	// broker fans typed source channels to Wails event topics. Held for
 	// the lifetime of the API value; per-view bridges (llm, sessions,
 	// audit, mcp, …) emit through it so the privacy CI invariant —
@@ -224,6 +273,12 @@ type API struct {
 	// API so OnStartup can call SetContext on it.
 	bindings *Bindings
 }
+
+// Builtins returns the in-binary tool registry. Used by the chat-input
+// `!cmd` shell-escape binding to dispatch directly to kaneaz__bash.
+// Concrete-type method; the HarnessAPI interface does not expose it
+// because no view-scoped consumer needs it.
+func (a *API) Builtins() *toolloop.BuiltinRegistry { return a.builtins }
 
 // SetContext threads the Wails app context to the Bindings surface
 // AND to the StreamBroker, which needs the OnStartup-supplied context
@@ -262,14 +317,42 @@ func (a *API) SetContext(ctx context.Context) {
 //     invariant (only emitter.go and stream_broker.go call
 //     runtime.EventsEmit) stays intact.
 func New(c *core.Core) *API {
+	// Capture the user's login PATH and prepend it to the process PATH
+	// before any tool construction or LookPath call site runs. macOS
+	// app-bundle launches inherit a stripped PATH (/usr/bin:/bin:...)
+	// so Homebrew + user-installed binaries are invisible to the bash
+	// tool. The shell spawn happens once at boot (~50–200ms); the
+	// merged PATH is process-wide so every subsequent exec.LookPath
+	// and child process sees the user's full setup.
+	if captured, err := corebash.CaptureLoginShellPath(context.Background()); err == nil {
+		if changed, merged := corebash.AugmentProcessPATH(captured); changed {
+			logging.L().Info("rpc.boot.path_augmented",
+				"prepended_chars", len(captured),
+				"merged_chars", len(merged),
+			)
+		}
+	} else {
+		logging.L().Warn("rpc.boot.path_augment_skipped", "err", err.Error())
+	}
+
 	media := newMediaStore(c)
 	attMgr := newAttachmentsManager(c, media)
 	artStore, artMgr := newArtifactsStack(c, media)
+
+	// Token + cost telemetry manager (token-cost-telemetry-01KQ8TD7).
+	// Backed by the same storage.DB as every other session-table writer.
+	// usage.New returns a noop manager when c is nil or HARNESS_COST_TELEMETRY=off.
+	var db storage.DB
+	if c != nil {
+		db = c.Storage()
+	}
+	usageMgr := usage.New(db)
+
 	a := &API{
 		core:           c,
 		a2aAPI:         &stubA2A{},
 		workflowAPI:    &stubWorkflow{},
-		sessionsAPI:    newSessionsAPI(c, attMgr, artStore, media),
+		sessionsAPI:    newSessionsAPI(c, attMgr, artStore, media, usageMgr),
 		trustAPI:       &stubTrust{},
 		contextAPI:     &stubContext{},
 		policyAPI:      &stubPolicy{},
@@ -278,13 +361,61 @@ func New(c *core.Core) *API {
 		artifactsMgr:   artMgr,
 		artifactsStore: artStore,
 		mediaStore:     media,
+		usageMgr:       usageMgr,
 	}
 	a.attachmentsAPI = newAttachmentsAPI(c, attMgr)
 	a.artifactsAPI = newArtifactsAPI(c, artStore, artMgr, media)
 	a.broker = NewStreamBroker(WailsEmitter{})
+
+	// Cedar prompt registry — process-singleton shared by every gate
+	// site (bash, fs, cred, tool) AND by the permissions view. Built
+	// here, right after the broker, so both newLLMStack (bash gate) and
+	// the cedar block below see the same instance. The dispatcher
+	// closure emits each pending request on the family's broker topic
+	// (`bash:permission-pending` / `fs:...` / `cred:...` / `tool:...`)
+	// using the broker's OnStartup-captured context — that's the only
+	// context Wails accepts for EventsEmit. Without this dispatcher
+	// the registry enqueues but never notifies the frontend, so the
+	// permission modal never renders and the gate hangs until timeout.
+	a.promptRegistry = cedar.NewRegistry(cedar.WithDispatcher(
+		cedar.PromptDispatcherFunc(func(_ context.Context, topic string, payload cedar.PendingRequest) {
+			if a.broker == nil {
+				return
+			}
+			// Project the typed surface into the flat PermissionRequest
+			// shape the frontend modal binds to (`resource_display`,
+			// `dangerous_tier`, etc.). The raw nested `surface` field
+			// stays included so future modal features (e.g. arg-list
+			// preview, working-dir display) can read it without a
+			// second backend trip.
+			a.broker.emitter.Emit(a.broker.EmitCtx(), topic, flattenPendingRequest(payload))
+		}),
+	))
+
 	a.auditImpl = audit.NewAPI(audit.WithSubscriber(a.broker))
 	a.auditAPI = a.auditImpl
 	a.mcpAPI = mcp.NewAPI(mcp.WithSubscriber(a.broker))
+	// MCP boot-time directory creation (mission mcp-server-install-01KQ8TDP,
+	// WP10). Best-effort: a failure here must never prevent the chassis from
+	// booting. The directory is needed by UserStore.Load; without it a fresh
+	// install would see a missing-dir warning on every load tick.
+	if c != nil && c.DataDir() != "" {
+		mcpRecipesDir := filepath.Join(c.DataDir(), "mcp", "recipes")
+		if err := os.MkdirAll(mcpRecipesDir, 0o700); err != nil {
+			logging.L().Warn("rpc: boot: could not create mcp/recipes dir",
+				"dir", mcpRecipesDir,
+				"err", err.Error(),
+			)
+		}
+	}
+	// Build the merged catalog once so both TestRecipe and the import
+	// surface share the same shipped + registry + user view.
+	mergedCat := recipes.NewMergedCatalog(
+		func() []recipes.Recipe { return recipes.Shipped().List() },
+		func() []recipes.Recipe { return recipes.Registry().List() },
+		nil, // user source wired by WP10 boot sequence
+	)
+	a.mcpAPI = mcp.NewAPI(mcp.WithSubscriber(a.broker), mcp.WithCatalog(mergedCat))
 	// MCP clipboard-import surface (mission mcp-server-install-01KQ8TDP,
 	// WP08). Wired only when we have a real Core (= a real DataDir);
 	// rpc.New(nil) test harness leaves it nil and the binding returns
@@ -387,9 +518,10 @@ func New(c *core.Core) *API {
 	a.corpusMgr = newCorpusManager(c, embedder)
 	a.graphMgr = newGraphManagerWithDeps(c, a.convMgr, a.corpusMgr, memStore, embedder, a_bashStore)
 
-	stack := newLLMStack(c, a.broker, personalForLLM, hooksRunner, attMgr, confirmEachEnabled, artifactSink, artifactSinkConcrete, settingsImpl, a_bashStore, artMgr, a.graphMgr)
+	stack := newLLMStack(c, a.broker, personalForLLM, hooksRunner, attMgr, confirmEachEnabled, artifactSink, artifactSinkConcrete, settingsImpl, a_bashStore, artMgr, a.graphMgr, a.promptRegistry, usageMgr)
 	a.llmAPI = stack.api
 	a.stdioPool = stack.pool
+	a.builtins = stack.builtins
 	// long-turn-resilience-01KR3PRS WP03: now that both the chat
 	// runner and the session manager are constructed, wire the
 	// ResumeStarter onto the existing sessionsAPI so
@@ -406,9 +538,26 @@ func New(c *core.Core) *API {
 		// Persisted-recipes bootstrap — Core.Start invokes this once
 		// Storage() is up, so the pool is populated before the chat
 		// surface accepts a turn (FR-030).
-		c.SetMCPRecipeBootstrap(makeMCPRecipeBootstrap(c, a.stdioPool, stack.secrets))
+		// Pass the Cedar engine so AllowAlways grants are persisted to
+		// disk (cedar-credential-policy follow-up: AllowAlways mcp_spawn).
+		c.SetMCPRecipeBootstrap(makeMCPRecipeBootstrap(c, a.stdioPool, stack.secrets, a.promptRegistry, buildCedarEngineOrNil(c.DataDir())))
 	}
-	a.toolsAPI = newToolsAPI(c, stack.pool, stack.secrets)
+	a.toolsAPI = newToolsAPI(c, stack.pool, stack.secrets, a.promptRegistry, a.cedarPolicyAPI)
+	// Register the fsrequest built-in after toolsAPI is wired so the
+	// tool's delegate can be the real (non-stub) implementation. The
+	// tool is registered unconditionally; the EnabledFilter gates
+	// dispatch based on the LoadFSRequestAccessEnabled setting.
+	registerFSRequestTool(a.builtins, a.toolsAPI)
+	// Wire the recipe-config trimmer into the permissions view now that
+	// toolsAPI is available. The tools.API implements
+	// permissions.RecipeConfigTrimmer via its TrimAllowedDir method.
+	if toolsImpl, ok := a.toolsAPI.(interface {
+		TrimAllowedDir(ctx context.Context, recipeID, path string)
+	}); ok {
+		if permsImpl, ok2 := a.permissionsAPI.(*permissionsview.API); ok2 {
+			permsImpl.SetConfigTrimmer(trimmerAdapter{toolsImpl})
+		}
+	}
 	a.shellImpl = shell.New(nil)
 	a.shellAPI = a.shellImpl
 	a.memoryAPI = memoryview.New(memoryview.Config{
@@ -481,10 +630,59 @@ func New(c *core.Core) *API {
 		a.nodesWatcher = startNodesWatcher(c, a.nodesMgr)
 	}
 
+	// CedarPolicy view (mission cedar-credential-policy-01KQ8TDE, WP02 + WP09).
+	// Constructs a process-singleton *cedar.Engine so the policy-panel
+	// RPC surface can list loaded policy files, surface recent decisions,
+	// and (WP09) write/revoke `<family>_allow_*.cedar` snippets with an
+	// engine reload after each mutation. nil Core / empty DataDir falls
+	// back to NewAPIWithDataDir(nil, "") which serves empty slices and
+	// rejects snippet writes with a typed error.
+	{
+		var cedarDataDir string
+		if c != nil {
+			cedarDataDir = c.DataDir()
+		}
+		var cedarEng cedarpolicyview.Engine
+		if eng := buildCedarEngineOrNil(cedarDataDir); eng != nil {
+			if e2, ok := any(eng).(cedarpolicyview.Engine); ok {
+				cedarEng = e2
+			}
+		}
+		a.cedarPolicyAPI = cedarpolicyview.NewAPIWithDataDir(cedarEng, cedarDataDir)
+
+		// Permissions view — uses the process-singleton prompt registry
+		// constructed at api.New() time (right after the broker) so the
+		// gate sites (bash, fs, cred, tool) and the permissions view
+		// share one pending-request map. Without sharing, a Resolve()
+		// call would hit a different registry from the one the gate
+		// enqueued in, and the resolution would never reach the waiter.
+		a.permissionsAPI = permissionsview.New(permissionsview.Config{
+			DataDir:  cedarDataDir,
+			Registry: a.promptRegistry,
+			// Engine left nil for now — RevokeGrant skips the reload
+			// gracefully when the engine is unset.
+			// ConfigTrimmer is wired after toolsAPI is constructed; see
+			// the wiring step below that calls setPermissionsConfigTrimmer.
+		})
+	}
+
 	a.bindings = NewBindings(a)
 	if a.settingsImpl != nil {
 		a.bindings.SetSettingsStore(a.settingsImpl.Store())
 	}
+
+	// Bash allowlist → Cedar migration bootstrap (WP10). Wired only
+	// when both a real Core with a DataDir and a settings store are
+	// available. The hook is best-effort: errors are logged at warn
+	// inside Core.Start and never block boot.
+	if c != nil && c.DataDir() != "" && a.settingsImpl != nil && a.settingsImpl.Store() != nil {
+		snippetWriter := cedarpolicyview.NewAPIWithDataDir(nil, c.DataDir())
+		store := a.settingsImpl.Store()
+		c.SetBashMigrationBootstrap(func(ctx context.Context) error {
+			return corebash.MigrateBashAllowlist(ctx, snippetWriter, store)
+		})
+	}
+
 	return a
 }
 
@@ -572,14 +770,21 @@ func (a *slashProviderLister) ListProviders(ctx context.Context) ([]coreslashcmd
 // session FK CASCADE, then refcount-sweeps any orphaned CAS files.
 // Both nil falls back to the pre-WP02 cascade (attachments + session
 // row, no artifacts cleanup).
-func newSessionsAPI(c *core.Core, attMgr *coreatt.Manager, artStore coreart.Store, media coreatt.MediaStore) sessions.SessionsAPI {
+//
+// mgr is the optional usage manager (token-cost-telemetry-01KQ8TD7).
+// nil disables GetUsage — it returns a zeroed aggregate with
+// CostSource="unknown" (the noopManager contract).
+func newSessionsAPI(c *core.Core, attMgr *coreatt.Manager, artStore coreart.Store, media coreatt.MediaStore, mgr usage.Manager) sessions.SessionsAPI {
 	if c == nil {
 		return &stubSessions{}
 	}
+	var base sessions.SessionsAPI
 	if attMgr == nil {
-		return sessions.NewManagerAPI(c.SessionManager())
+		base = sessions.NewManagerAPI(c.SessionManager())
+	} else {
+		base = sessions.NewManagerAPIWithAttachmentsAndArtifacts(c.SessionManager(), attMgr, artStore, media, c.DataDir())
 	}
-	return sessions.NewManagerAPIWithAttachmentsAndArtifacts(c.SessionManager(), attMgr, artStore, media, c.DataDir())
+	return sessions.WithUsageManager(base, mgr)
 }
 
 // newProjectsAPI returns the real Manager-backed ProjectsAPI when c is
@@ -808,13 +1013,23 @@ func mergedRecipeCatalog() *recipes.Catalog {
 
 // makeMCPRecipeBootstrap returns a closure suitable for
 // Core.SetMCPRecipeBootstrap. The closure walks the persisted enabled-
-// recipes list, resolves env via the shared secrets backend, builds
-// ServerSpec values via recipe.ToServerSpec, and Opens them onto the
-// pool. Per-recipe failures (missing required env, OS-keychain entry
-// purged out-of-band, recipe id no longer in the catalog) log at warn
-// and skip — the chat surface stays usable without that recipe's
-// tools (FR-030).
-func makeMCPRecipeBootstrap(c *core.Core, pool *stdio.Pool, secretsBackend *secrets.MemoryBackend) func(context.Context) error {
+// recipes list, gates credential access via the Cedar prompt registry
+// (mission cedar-credential-policy-01KQ8TDE WP05), resolves env via
+// the shared secrets backend, builds ServerSpec values via
+// recipe.ToServerSpec, and Opens them onto the pool. Per-recipe
+// failures (Cedar deny, missing required env, OS-keychain entry purged
+// out-of-band, recipe id no longer in the catalog) log at warn and
+// skip — the chat surface stays usable without that recipe's tools
+// (FR-030).
+//
+// promptRegistry may be nil (default-allow; pre-boot posture). When
+// wired, a recipe with env keys triggers an interactive credential
+// prompt via the CredentialPermissionModal before resolution proceeds.
+//
+// cedarEngine may be nil. When non-nil, an AllowAlways decision writes
+// a persistent .cedar snippet so the grant survives restarts
+// (cedar-credential-policy follow-up: AllowAlways mcp_spawn).
+func makeMCPRecipeBootstrap(c *core.Core, pool *stdio.Pool, secretsBackend *secrets.MemoryBackend, promptRegistry *cedar.Registry, cedarEngine *cedar.Engine) func(context.Context) error {
 	if c == nil || pool == nil || secretsBackend == nil {
 		return nil
 	}
@@ -840,6 +1055,19 @@ func makeMCPRecipeBootstrap(c *core.Core, pool *stdio.Pool, secretsBackend *secr
 			if !ok {
 				logging.L().Warn("rpc.mcp_bootstrap.unknown_recipe", "recipe_id", entry.ID)
 				continue
+			}
+			// Cedar credential gate (WP05): recipes with env keys trigger
+			// the mcp_spawn gate. The gate fires best-effort here —
+			// promptRegistry nil = default-allow (no engine wired at
+			// boot). An explicit deny or user-deny skips the recipe.
+			// cedarEngine + dataDir enable AllowAlways persistent grants
+			// (cedar-credential-policy follow-up).
+			if len(recipe.EnvKeys) > 0 {
+				if gateErr := cedar.GateMCPSpawn(ctx, nil, promptRegistry, recipe.ID, dataDir, cedarEngine); gateErr != nil {
+					logging.L().Warn("rpc.mcp_bootstrap.credential_gate_denied",
+						"recipe_id", recipe.ID, "err", gateErr.Error())
+					continue
+				}
 			}
 			resolved, err := recipes.ResolveEnv(ctx, secretsBackend, recipe)
 			if err != nil {
@@ -876,7 +1104,7 @@ func makeMCPRecipeBootstrap(c *core.Core, pool *stdio.Pool, secretsBackend *secr
 // Returns the stub when c is nil — the test harness path constructs
 // rpc.New(nil) and we keep the chassis bootable without crashing on
 // the catalog access.
-func newToolsAPI(c *core.Core, pool *stdio.Pool, secretsBackend *secrets.MemoryBackend) tools.ToolsAPI {
+func newToolsAPI(c *core.Core, pool *stdio.Pool, secretsBackend *secrets.MemoryBackend, promptReg *cedar.Registry, cedarPolicyAPI cedarpolicyview.CedarPolicyAPI) tools.ToolsAPI {
 	if c == nil {
 		return &stubTools{}
 	}
@@ -887,16 +1115,33 @@ func newToolsAPI(c *core.Core, pool *stdio.Pool, secretsBackend *secrets.MemoryB
 		enabled = &recipes.EnabledRecipes{}
 	}
 	cfg := tools.Config{
-		Catalog:   mergedRecipeCatalog(),
-		Enabled:   enabled,
-		Pool:      pool,
-		Secrets:   secretsBackend,
-		DataDir:   dataDir,
-		Audit:     nil, // TODO(audit-wired): reuse process-wide event.Emitter once it's available
-		Keychain:  &keychainWriter{backend: secretsBackend},
-		Forgetter: &keychainForgetter{backend: secretsBackend},
+		Catalog:        mergedRecipeCatalog(),
+		Enabled:        enabled,
+		Pool:           pool,
+		Secrets:        secretsBackend,
+		DataDir:        dataDir,
+		Audit:          nil, // TODO(audit-wired): reuse process-wide event.Emitter once it's available
+		Keychain:       &keychainWriter{backend: secretsBackend},
+		Forgetter:      &keychainForgetter{backend: secretsBackend},
+		PromptRegistry: promptReg,
+		CedarPolicy:    cedarPolicyAPI,
 	}
 	return tools.New(cfg)
+}
+
+// trimmerAdapter adapts tools.API.TrimAllowedDir to the
+// permissions.RecipeConfigTrimmer interface. Defined here so api.go
+// can wire the two packages without creating an import cycle.
+type trimmerAdapter struct {
+	inner interface {
+		TrimAllowedDir(ctx context.Context, recipeID, path string)
+	}
+}
+
+func (t trimmerAdapter) TrimAllowedDir(ctx context.Context, recipeID, path string) {
+	if t.inner != nil {
+		t.inner.TrimAllowedDir(ctx, recipeID, path)
+	}
 }
 
 // keychainForgetter is the deletion counterpart to keychainWriter.
@@ -992,6 +1237,8 @@ func newLLMStack(
 	bashStore *corebash.Store,
 	artifactsMgr *coreart.Manager,
 	graphMgr *graphview.Manager,
+	promptRegistry *cedar.Registry,
+	usageMgr usage.Manager,
 ) llmStack {
 	// Share ONE secrets backend between the credref resolver (which
 	// reads keys when streaming) and the keychain writer (which stages
@@ -1093,7 +1340,18 @@ func newLLMStack(
 	if settingsImpl != nil {
 		settingsStore = settingsImpl.Store()
 	}
-	registerBuiltinTools(c, builtinRegistry, bashStore, artifactsMgr, settingsStore)
+	// Cedar engine for the bash gate (WP03). Built per-stack so the
+	// bash tool's Cedar gate is wired at construction time. The prompt
+	// registry is the process-singleton constructed in api.New() (with
+	// a broker dispatcher) and threaded in here so every gate emits on
+	// the same topics the permissions view reads from. Both are nil-
+	// tolerant: when nil the bash tool falls back to the legacy
+	// allowlist gate so the test harness path (New(nil)) keeps working.
+	var bashCedarEngine *cedar.Engine
+	if dataDir != "" {
+		bashCedarEngine = buildCedarEngineOrNil(dataDir)
+	}
+	registerBuiltinTools(c, builtinRegistry, bashStore, artifactsMgr, settingsStore, bashCedarEngine, promptRegistry)
 	builtinFilter := toolloop.NewEnabledFilter(builtinRegistry, builtinEnabledPredicate(settingsImpl))
 	wrappedPool := toolloop.NewBuiltinPool(&mcpPoolAdapter{inner: mcpPool}, builtinFilter)
 	var attResolver llm.AttachmentsResolver
@@ -1141,7 +1399,11 @@ func newLLMStack(
 		sweepScheduler.Start(context.Background())
 	}
 
-	chatRunner := buildChatRunner(broker, reg, wrappedPool, perms, historyAdapter, settingsImpl, graphMgr, toolDiscoverer, artifactSinkConcrete, compactionDeps)
+	chatRunner := buildChatRunner(broker, reg, wrappedPool, perms, historyAdapter, settingsImpl, graphMgr, toolDiscoverer, artifactSinkConcrete, compactionDeps, usageMgr)
+	var capCatalog llm.CapCatalog
+	if cat, err := llmcap.LoadDefault(); err == nil {
+		capCatalog = cat
+	}
 	api := llm.New(llm.Config{
 		Registry:      reg,
 		Sink:          &streamSinkAdapter{broker: broker},
@@ -1155,7 +1417,28 @@ func newLLMStack(
 		ChatRunner:    chatRunner,
 		Tools:         toolDiscoverer,
 		Artifacts:     &llmArtifactSinkAdapter{inner: artifactSink},
+		CapCatalog:    capCatalog,
 	})
+
+	// Boot-time warm-up: kick a one-shot async ListModels refresh on every
+	// adapter that exposes the AdapterRefresher capability. By the time
+	// the user opens the first chat session, the per-adapter cache is
+	// populated and ListProviders surfaces real context_window values
+	// instead of the frontend's MODEL_CONTEXT_FALLBACK.
+	//
+	// This is best-effort and rate-limited inside each adapter, so a
+	// down upstream API simply leaves the cache empty until the next
+	// ListProviders call kicks another attempt.
+	for _, kind := range []string{"anthropic", "openai", "openrouter", "bedrock"} {
+		ad := reg.Adapter(kind)
+		if ad == nil {
+			continue
+		}
+		if rf, ok := ad.(interface{ RefreshModelsAsync(cred []byte) }); ok {
+			logging.L().Info("llm.boot.warmup_models", "kind", kind)
+			rf.RefreshModelsAsync(nil)
+		}
+	}
 	return llmStack{
 		api:                 api,
 		pool:                mcpPool,
@@ -1338,6 +1621,7 @@ func buildChatRunner(
 	tools corellm.ToolDiscoverer,
 	artifactSinkConcrete *artifactsview.Sink,
 	compactionDeps *chat.CompactionDeps,
+	usageMgr usage.Manager,
 ) *chat.ChatRunner {
 	if graphMgr == nil || graphMgr.Kernel() == nil {
 		logging.L().Warn("chat.runner.disabled", "reason", "graph manager unavailable")
@@ -1410,6 +1694,43 @@ func buildChatRunner(
 		})
 	}
 
+	// Usage hook (token-cost-telemetry-01KQ8TD7 WP02). The closure
+	// fires from HookPostLLM (after session_write persists the assistant
+	// message, so messageID is valid). It reads the provider cost and
+	// source from the llm.Response that the LLMProviderAdapter stored
+	// in LastResponse(), then records via usageMgr.Add.
+	var usageHookFn chat.UsageHookFunc
+	if usageMgr != nil {
+		capturedUsageMgr := usageMgr
+		usageHookFn = func(ctx context.Context, sessionID, messageID string, resp corellm.Response) {
+			var costUSD *float64
+			source := "unknown"
+			switch {
+			case resp.Cost.Source == "provider" && resp.Cost.Total > 0:
+				v := resp.Cost.Total
+				costUSD = &v
+				source = "provider"
+			case !resp.Cost.Indeterminate && resp.Cost.Total > 0:
+				v := resp.Cost.Total
+				costUSD = &v
+				source = "derived"
+			}
+			turn := usage.UsageTurn{
+				SessionID:        sessionID,
+				MessageID:        messageID,
+				PromptTokens:     resp.Usage.InputTokens,
+				CompletionTokens: resp.Usage.OutputTokens,
+				CostUSD:          costUSD,
+				CostSource:       source,
+			}
+			if err := capturedUsageMgr.Add(ctx, turn); err != nil {
+				logging.L().Warn("usage.add.failed",
+					"session_id", sessionID,
+					"message_id", messageID,
+					"err", err.Error())
+			}
+		}
+	}
 	runner, err := chat.New(chat.Config{
 		Kernel:           graphMgr.Kernel(),
 		Registry:         reg,
@@ -1424,6 +1745,7 @@ func buildChatRunner(
 		ToolDiscoverer:   chatToolDiscovererAdapter{inner: tools},
 		Compaction:       compactionDeps,
 		PartialPersister: partialPersister,
+		UsageHook:        usageHookFn,
 	})
 	if err != nil {
 		logging.L().Error("chat.runner.construct_failed", "err", err.Error())
@@ -1893,10 +2215,23 @@ func newGraphManagerWithDeps(
 		}
 	}
 
-	mgr, err := graphview.NewManager(
+	// Agent-graph event log: persist run events to SQLite (migration
+	// 0309) when the storage layer exposes a *sql.DB. Without this
+	// the manager defaults to NewMemoryEventLog and `agent_graph_events`
+	// stays empty across runs — RecentDecisions and the run-trace
+	// replay surfaces would have nothing to show. Best-effort: when
+	// the handle isn't available the manager falls back to memory.
+	mgrOpts := []graphview.ManagerOption{
 		graphview.WithDataDir(dataDir),
 		graphview.WithEnvDeps(deps),
-	)
+	}
+	if c != nil {
+		if log := buildAgentGraphEventLog(c); log != nil {
+			mgrOpts = append(mgrOpts, graphview.WithEventLog(log))
+		}
+	}
+
+	mgr, err := graphview.NewManager(mgrOpts...)
 	if err != nil {
 		// Construction is best-effort; surface returns
 		// ErrManagerUnavailable when nil.
@@ -2470,6 +2805,29 @@ func (a *API) Contexts() contextsview.ContextsAPI {
 }
 func (a *API) Bundle() bundle.BundleAPI          { return a.bundleAPI }
 func (a *API) Policy() policy.PolicyAPI          { return a.policyAPI }
+// CedarPolicy returns the policy-panel + snippet writer/revoker view
+// (mission cedar-credential-policy-01KQ8TDE, WP02 + WP09). The
+// nil-engine fallback returns a view that serves empty slices for
+// reads and rejects WritePolicySnippet / RevokePolicySnippet with a
+// typed error when no DataDir is wired (test-harness path).
+func (a *API) CedarPolicy() cedarpolicyview.CedarPolicyAPI {
+	if a == nil || a.cedarPolicyAPI == nil {
+		return cedarpolicyview.NewAPIWithDataDir(nil, "")
+	}
+	return a.cedarPolicyAPI
+}
+
+// Permissions returns the universal interactive-permission view surface
+// (mission cedar-credential-policy-01KQ8TDE, WP02). When the chassis
+// has not wired a registry (test harness path with New(nil)), a stub
+// view is returned that surfaces ErrRegistryUnavailable on Resolve and
+// empty slices on List* operations.
+func (a *API) Permissions() permissionsview.PermissionsAPI {
+	if a.permissionsAPI == nil {
+		return permissionsview.New(permissionsview.Config{})
+	}
+	return a.permissionsAPI
+}
 func (a *API) Audit() audit.AuditAPI             { return a.auditAPI }
 func (a *API) Settings() settings.SettingsAPI    { return a.settingsAPI }
 func (a *API) Memory() memoryview.MemoryAPI {
@@ -2588,6 +2946,38 @@ func (a *API) SetCompactionAPI(c compactionview.CompactionAPI) {
 	a.compactionAPI = c
 }
 
+// Search returns the full-text search view (cross-session-search
+// mission). Uses the raw *sql.DB handle from the storage backend to
+// query the messages_fts FTS5 virtual table directly.
+func (a *API) Search() searchview.SearchAPI {
+	if a.searchAPI != nil {
+		return a.searchAPI
+	}
+	// Wire lazily on first call using the structural SQL() interface
+	// (same dance as buildJournalWriter at the bottom of this file).
+	if a.core != nil {
+		store := a.core.Storage()
+		if store != nil {
+			type sqlHandle interface{ SQL() *sql.DB }
+			if h, ok := store.(sqlHandle); ok {
+				if rawDB := h.SQL(); rawDB != nil {
+					a.searchAPI = searchview.NewManagerAPI(rawDB)
+					return a.searchAPI
+				}
+			}
+		}
+	}
+	// Fallback: return a nil-safe stub that returns empty results.
+	return &stubSearch{}
+}
+
+// stubSearch is a safe no-op SearchAPI for use before storage is wired.
+type stubSearch struct{}
+
+func (s *stubSearch) Search(_ context.Context, _ string, _ searchview.SearchFilters) ([]searchview.SearchHit, error) {
+	return nil, nil
+}
+
 // Bindings returns the slice of Wails-bound objects. The Bindings struct
 // (bindings.go) is the flat-method surface Wails reflects. Stable for the
 // lifetime of API.
@@ -2598,6 +2988,31 @@ func (a *API) Bindings() []any { return []any{a.bindings} }
 // invariant #1 — only emitter.go / stream_broker.go call
 // runtime.EventsEmit — keeps holding.
 func (a *API) StreamBroker() *StreamBroker { return a.broker }
+
+// buildCedarEngineOrNil constructs a *cedar.Engine for callers that
+// need the concrete Engine type — the cedarpolicy view (ListPolicies /
+// Reload / RecentDecisions / WritePolicySnippet) and the bash gate
+// (WP03+). Returns nil when dataDir is empty so callers can degrade
+// gracefully rather than booting a disk-walk engine with nowhere to
+// walk. Mirrors buildCedarGate's options but returns *Engine instead
+// of the Gate interface.
+func buildCedarEngineOrNil(dataDir string) *cedar.Engine {
+	if dataDir == "" {
+		return nil
+	}
+	engine, err := cedar.NewEngine(cedar.Options{
+		DataDir:         dataDir,
+		LoadFromDisk:    true,
+		IncludeEmbedded: true,
+		DefaultDeny:     false,
+	})
+	if err != nil {
+		slog.Warn("cedar engine construction failed; consumer falls back to its safe-default behaviour",
+			"err", err, "data_dir", dataDir)
+		return nil
+	}
+	return engine
+}
 
 // buildCedarGate constructs the production Cedar policy gate. It loads
 // any user-supplied policies from <DataDir>/policy/*.cedar in addition
@@ -2665,4 +3080,115 @@ func buildJournalWriter(c *core.Core) coreag.JournalWriter {
 		return nil
 	}
 	return coreag.NewSQLJournalWriter(rawDB)
+}
+
+// flatPermissionRequest mirrors frontend `PermissionRequest` (see
+// frontend/src/lib/types.ts). Built per-emit so the modal binds
+// directly without walking the typed surface.
+type flatPermissionRequest struct {
+	RequestID       string             `json:"request_id"`
+	SessionID       string             `json:"session_id,omitempty"`
+	Family          string             `json:"family"`
+	ResourceDisplay string             `json:"resource_display"`
+	ResourceUID     string             `json:"resource_uid,omitempty"`
+	Reason          string             `json:"reason,omitempty"`
+	DangerousTier   bool               `json:"dangerous_tier,omitempty"`
+	DangerCopy      string             `json:"danger_copy,omitempty"`
+	Op              string             `json:"op,omitempty"`
+	Surface         cedar.PromptSurface `json:"surface"`
+	IssuedAt        string             `json:"issued_at"`
+	DeadlineAt      string             `json:"deadline_at"`
+}
+
+// flattenPendingRequest projects cedar.PendingRequest into the flat
+// shape the frontend permission modals bind to. Each family fills
+// resource_display from its surface fields:
+//   - bash: full argv joined (e.g. "aws --version") — what the user
+//     needs to see to make a decision, NOT just the derived pattern.
+//   - fs: canonical path + op (e.g. "read /Users/alice/code/main.go").
+//   - cred: provider_id + purpose (e.g. "openai · stream").
+//   - tool: server_name__tool_name (e.g. "filesystem__read_file").
+func flattenPendingRequest(p cedar.PendingRequest) flatPermissionRequest {
+	out := flatPermissionRequest{
+		RequestID:  p.RequestID,
+		SessionID:  p.Surface.SessionID,
+		Family:     string(p.Family),
+		Surface:    p.Surface,
+		IssuedAt:   p.IssuedAt.UTC().Format("2006-01-02T15:04:05.000Z07:00"),
+		DeadlineAt: p.DeadlineAt.UTC().Format("2006-01-02T15:04:05.000Z07:00"),
+	}
+	switch {
+	case p.Surface.Bash != nil:
+		argv := p.Surface.Bash.Argv
+		if len(argv) > 0 {
+			out.ResourceDisplay = strings.Join(argv, " ")
+		} else {
+			out.ResourceDisplay = p.Surface.Bash.Pattern
+		}
+		out.ResourceUID = p.Surface.Bash.Pattern
+		out.DangerousTier = p.Surface.Bash.Dangerous
+	case p.Surface.FS != nil:
+		op := p.Surface.FS.Op
+		path := p.Surface.FS.CanonicalPath
+		if op != "" && path != "" {
+			out.ResourceDisplay = op + " " + path
+		} else if path != "" {
+			out.ResourceDisplay = path
+		} else {
+			out.ResourceDisplay = op
+		}
+		out.ResourceUID = path
+		out.Op = op
+		out.DangerousTier = p.Surface.FS.Dangerous
+	case p.Surface.Cred != nil:
+		provider := p.Surface.Cred.ProviderID
+		purpose := p.Surface.Cred.Purpose
+		switch {
+		case provider != "" && purpose != "":
+			out.ResourceDisplay = provider + " · " + purpose
+		case provider != "":
+			out.ResourceDisplay = provider
+		default:
+			out.ResourceDisplay = purpose
+		}
+		out.ResourceUID = provider
+	case p.Surface.Tool != nil:
+		server := p.Surface.Tool.ServerName
+		tool := p.Surface.Tool.ToolName
+		switch {
+		case server != "" && tool != "":
+			out.ResourceDisplay = server + "__" + tool
+		case tool != "":
+			out.ResourceDisplay = tool
+		default:
+			out.ResourceDisplay = server
+		}
+		out.ResourceUID = out.ResourceDisplay
+	}
+	return out
+}
+
+// buildAgentGraphEventLog wires the agentgraph kernel's EventLog to the
+// SQLite-backed implementation when the storage layer exposes a stdlib
+// *sql.DB. Same structural-interface dance as buildJournalWriter so
+// storage.DB doesn't need to grow a public method. Returns nil when
+// the handle is unavailable; the manager falls back to NewMemoryEventLog.
+func buildAgentGraphEventLog(c *core.Core) coreag.EventLog {
+	if c == nil {
+		return nil
+	}
+	store := c.Storage()
+	if store == nil {
+		return nil
+	}
+	type sqlHandle interface{ SQL() *sql.DB }
+	h, ok := store.(sqlHandle)
+	if !ok {
+		return nil
+	}
+	rawDB := h.SQL()
+	if rawDB == nil {
+		return nil
+	}
+	return coreag.NewSQLEventLog(rawDB)
 }

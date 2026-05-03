@@ -30,8 +30,10 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	llm "github.com/sigil-tech/kaneaz-harness/core/llm"
+	"github.com/sigil-tech/kaneaz-harness/core/llm/httpx"
 	"github.com/sigil-tech/kaneaz-harness/core/logging"
 )
 
@@ -98,15 +100,31 @@ type Adapter struct {
 	endpoint string
 	referer  string
 	appTitle string
+
+	// modelCache caches the live /api/v1/models response so ListProviders
+	// (and any other caller that needs per-model context_window) can read
+	// the dynamic OpenRouter values without re-issuing the HTTP request on
+	// every ListProviders call. The OpenRouter /models endpoint is public
+	// (no auth required), so the cache is shared across profiles. Map
+	// values are llm.ModelInfo by model ID.
+	modelCache       sync.Map      // map[string]llm.ModelInfo
+	modelCacheTime   time.Time     // last successful fetch
+	modelCacheMu     sync.Mutex    // guards modelCacheTime + in-flight refresh
+	modelCacheTTL    time.Duration // entries older than this trigger background refresh
+	refreshInFlight  bool          // true while a background refresh is running
+	refreshFailedAt  time.Time     // when the last refresh failed (for backoff)
+	refreshBackoff   time.Duration // how long to wait after a failure
 }
 
 // New constructs an Adapter with the OpenRouter defaults.
 func New(opts ...Option) *Adapter {
 	a := &Adapter{
-		httpc:    &http.Client{}, // no Timeout — context drives lifetime
-		endpoint: defaultEndpoint,
-		referer:  defaultReferer,
-		appTitle: defaultAppTitle,
+		httpc:          &http.Client{Transport: httpx.DefaultTransport()}, // no Timeout — context drives lifetime
+		endpoint:       defaultEndpoint,
+		referer:        defaultReferer,
+		appTitle:       defaultAppTitle,
+		modelCacheTTL:  1 * time.Hour,
+		refreshBackoff: 5 * time.Minute,
 	}
 	for _, opt := range opts {
 		opt(a)
@@ -213,16 +231,24 @@ func (a *Adapter) Stream(ctx context.Context, req llm.GenerationRequest, prof ll
 // endpoint with the supplied API key and returns the parsed list. The
 // caller (rpc layer) zeros the cred buffer before this method's frame
 // returns so the plaintext key never lingers.
+//
+// OpenRouter's /api/v1/models endpoint is publicly accessible — auth is
+// optional. When cred is empty we still issue the request (no
+// Authorization header) so the AddProvider modal can populate the model
+// picker before the user has saved a key.
+//
+// The result is cached on the adapter so ListProviders can read live
+// context_length values via LookupModelInfo without re-fetching. See
+// modelCache for cache semantics.
 func (a *Adapter) ListModels(ctx context.Context, cred []byte) ([]llm.ModelInfo, error) {
-	if len(cred) == 0 {
-		return nil, &llm.ErrAuth{Message: "openrouter: empty credential"}
-	}
 	url := modelsURL(a.endpoint)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, fmt.Errorf("openrouter: build models request: %w", err)
 	}
-	req.Header.Set("Authorization", "Bearer "+string(cred))
+	if len(cred) > 0 {
+		req.Header.Set("Authorization", "Bearer "+string(cred))
+	}
 	req.Header.Set("Accept", "application/json")
 	if a.referer != "" {
 		req.Header.Set("HTTP-Referer", a.referer)
@@ -249,16 +275,117 @@ func (a *Adapter) ListModels(ctx context.Context, cred []byte) ([]llm.ModelInfo,
 		if display == "" {
 			display = m.ID
 		}
-		out = append(out, llm.ModelInfo{
-			ID:          m.ID,
-			DisplayName: display,
-			Description: m.Description,
-		})
+		info := llm.ModelInfo{
+			ID:            m.ID,
+			DisplayName:   display,
+			Description:   m.Description,
+			ContextWindow: m.ContextLength,
+		}
+		out = append(out, info)
+		// Populate the per-adapter cache so LookupModelInfo can serve
+		// ListProviders without re-fetching. context_length on the wire
+		// is in tokens and matches the value we surface upstream verbatim.
+		a.modelCache.Store(m.ID, info)
 	}
+	a.modelCacheMu.Lock()
+	a.modelCacheTime = time.Now()
+	a.refreshFailedAt = time.Time{} // success clears the backoff
+	a.modelCacheMu.Unlock()
+	logging.L().Info("openrouter.list_models.success",
+		"models", len(out),
+		"url", url)
 	sort.Slice(out, func(i, j int) bool {
 		return strings.ToLower(out[i].DisplayName) < strings.ToLower(out[j].DisplayName)
 	})
 	return out, nil
+}
+
+// LookupModelInfo returns the cached llm.ModelInfo for the given model
+// ID and reports whether the entry was present. ListProviders consults
+// this method via the ModelInfoLookup capability interface to surface
+// the live context_window value without re-issuing the /models HTTP
+// request on every ListProviders call.
+//
+// A miss (false) signals that either (a) ListModels has never run for
+// this adapter, or (b) the OpenRouter catalog doesn't list the model
+// id. The caller should kick a background refresh via RefreshModelsAsync
+// and fall back to 0 (frontend will use MODEL_CONTEXT_FALLBACK) for the
+// current call.
+func (a *Adapter) LookupModelInfo(modelID string) (llm.ModelInfo, bool) {
+	v, ok := a.modelCache.Load(modelID)
+	if !ok {
+		return llm.ModelInfo{}, false
+	}
+	info, ok := v.(llm.ModelInfo)
+	if !ok {
+		return llm.ModelInfo{}, false
+	}
+	return info, true
+}
+
+// CacheAge reports how long since the last successful ListModels fetch.
+// Returns a very large duration when the cache has never been populated.
+func (a *Adapter) CacheAge() time.Duration {
+	a.modelCacheMu.Lock()
+	defer a.modelCacheMu.Unlock()
+	if a.modelCacheTime.IsZero() {
+		return 365 * 24 * time.Hour
+	}
+	return time.Since(a.modelCacheTime)
+}
+
+// RefreshModelsAsync triggers a background ListModels fetch when the
+// cache is stale (older than modelCacheTTL) or empty, and de-duplicates
+// concurrent refresh attempts. It is a no-op when a refresh is already
+// in flight or when the previous refresh failed within the backoff
+// window. Safe to call from any goroutine.
+//
+// cred may be empty — OpenRouter's /models endpoint is public, so the
+// refresh succeeds regardless. When ListProviders has access to a
+// plaintext key it MAY pass it through; the auth header is only added
+// when cred is non-empty.
+func (a *Adapter) RefreshModelsAsync(cred []byte) {
+	a.modelCacheMu.Lock()
+	if a.refreshInFlight {
+		a.modelCacheMu.Unlock()
+		return
+	}
+	if !a.refreshFailedAt.IsZero() && time.Since(a.refreshFailedAt) < a.refreshBackoff {
+		a.modelCacheMu.Unlock()
+		logging.L().Debug("openrouter.refresh_models.skipped_backoff",
+			"failed_age_ms", time.Since(a.refreshFailedAt).Milliseconds(),
+			"backoff_ms", a.refreshBackoff.Milliseconds())
+		return
+	}
+	a.refreshInFlight = true
+	a.modelCacheMu.Unlock()
+
+	// Copy cred so the caller can zero its buffer without affecting our
+	// background fetch. The copy is cleared in the goroutine below.
+	credCopy := append([]byte(nil), cred...)
+
+	go func() {
+		defer func() {
+			for i := range credCopy {
+				credCopy[i] = 0
+			}
+			a.modelCacheMu.Lock()
+			a.refreshInFlight = false
+			a.modelCacheMu.Unlock()
+		}()
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		logging.L().Info("openrouter.refresh_models.start")
+		_, err := a.ListModels(ctx, credCopy)
+		if err != nil {
+			a.modelCacheMu.Lock()
+			a.refreshFailedAt = time.Now()
+			a.modelCacheMu.Unlock()
+			logging.L().Warn("openrouter.refresh_models.failed",
+				"err", err.Error())
+			return
+		}
+	}()
 }
 
 // modelsResponse mirrors the JSON shape returned by /api/v1/models.
@@ -532,9 +659,10 @@ type chatStream struct {
 	cancelled bool
 
 	// accumulators populated as the SSE pump runs.
-	textBuf    strings.Builder
-	usage      llm.Usage
-	finishStop string
+	textBuf         strings.Builder
+	usage           llm.Usage
+	providerCostUSD *float64 // non-nil when OpenRouter reports usage.cost
+	finishStop      string
 	// toolCalls is the index-keyed accumulator for streamed tool calls.
 	// OpenAI's wire format sends `id` and `function.name` once on the
 	// opening fragment of a given `index`, then fragments `arguments`
@@ -609,11 +737,20 @@ func (s *chatStream) pump() {
 					})
 				}
 			}
+			var cost llm.Cost
+			if s.providerCostUSD != nil {
+				cost = llm.Cost{
+					Currency: "USD",
+					Total:    *s.providerCostUSD,
+					Source:   "provider",
+				}
+			}
 			s.final = llm.Response{
 				Content:      []llm.ContentBlock{{Type: "text", Text: s.textBuf.String()}},
 				ToolCalls:    calls,
 				FinishReason: s.finishStop,
 				Usage:        s.usage,
+				Cost:         cost,
 			}
 		}
 		s.mu.Unlock()
@@ -733,9 +870,10 @@ func (s *chatStream) handleSSEData(raw []byte) {
 			FinishReason *string `json:"finish_reason"`
 		} `json:"choices"`
 		Usage *struct {
-			PromptTokens     int `json:"prompt_tokens"`
-			CompletionTokens int `json:"completion_tokens"`
-			TotalTokens      int `json:"total_tokens"`
+			PromptTokens     int      `json:"prompt_tokens"`
+			CompletionTokens int      `json:"completion_tokens"`
+			TotalTokens      int      `json:"total_tokens"`
+			Cost             *float64 `json:"cost,omitempty"`
 		} `json:"usage"`
 		Error *struct {
 			Message string `json:"message"`
@@ -825,6 +963,10 @@ func (s *chatStream) handleSSEData(raw []byte) {
 		s.mu.Lock()
 		s.usage.InputTokens = env.Usage.PromptTokens
 		s.usage.OutputTokens = env.Usage.CompletionTokens
+		if env.Usage.Cost != nil && *env.Usage.Cost > 0 {
+			v := *env.Usage.Cost
+			s.providerCostUSD = &v
+		}
 		usage := s.usage
 		s.mu.Unlock()
 		s.events <- llm.StreamEvent{Kind: llm.StreamUsage, Usage: &usage}

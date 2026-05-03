@@ -28,6 +28,7 @@ import { useHarnessClient } from '@/lib/useHarnessAPI';
 import type { ContextNode } from '@/lib/types';
 import ContextTree from './ContextTree.vue';
 import ContextPreview from './ContextPreview.vue';
+import GlobalContextPanel from '@/components/settings/GlobalContextPanel.vue';
 import ContextRecent from './ContextRecent.vue';
 
 const client = useHarnessClient();
@@ -263,6 +264,12 @@ onBeforeUnmount(() => {
         </div>
       </template>
     </CanvasHead>
+
+    <!-- Global-scope attachments — moved here from Settings (every
+         session inherits these as the prefix). -->
+    <div class="px-4 pt-3 pb-1 border-b border-border-muted">
+      <GlobalContextPanel />
+    </div>
 
     <div
       v-if="externalChangeToast"

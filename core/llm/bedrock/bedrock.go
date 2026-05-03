@@ -33,6 +33,8 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime/document"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime/types"
 	"github.com/sigil-tech/kaneaz-harness/core/llm"
+	"github.com/sigil-tech/kaneaz-harness/core/llm/capabilities"
+	"github.com/sigil-tech/kaneaz-harness/core/llm/httpx"
 )
 
 // imageFormatFromMediaType maps an IANA mime-type to the Bedrock
@@ -82,6 +84,16 @@ const Kind = "bedrock"
 // Option configures an Adapter at construction time.
 type Option func(*Adapter)
 
+// WithCatalog overrides the capability catalog. Tests inject a fixture
+// catalog; production uses the embedded default (loaded at construction).
+func WithCatalog(cat *capabilities.Catalog) Option {
+	return func(a *Adapter) {
+		if cat != nil {
+			a.cat = cat
+		}
+	}
+}
+
 // WithListModelsRegion overrides the region used for the
 // bedrock.ListFoundationModels call. Most callers pass per-profile
 // regions through Stream's prof argument and don't need this.
@@ -116,12 +128,22 @@ func WithHTTPClient(c *http.Client) Option {
 type Adapter struct {
 	listModelsRegion string
 	httpc            *http.Client
+	cat              *capabilities.Catalog
 }
 
 // New constructs an Adapter with default settings.
+//
+// The default *http.Client is built with the shared keepalive
+// transport from core/llm/httpx so long-lived bearer-auth Converse
+// streams survive edge-proxy idle timeouts. WithHTTPClient still
+// wins for tests/custom gateways.
 func New(opts ...Option) *Adapter {
 	a := &Adapter{
 		listModelsRegion: "us-east-1",
+		httpc:            &http.Client{Transport: httpx.DefaultTransport()}, // no Timeout — context drives lifetime
+	}
+	if cat, err := capabilities.LoadDefault(); err == nil {
+		a.cat = cat
 	}
 	for _, opt := range opts {
 		opt(a)
@@ -279,9 +301,14 @@ func (a *Adapter) ListModels(ctx context.Context, cred []byte) ([]llm.ModelInfo,
 			if name == "" {
 				name = id
 			}
+			cw := 0
+			if a.cat != nil {
+				cw = a.cat.ContextWindow(Kind, id)
+			}
 			out = append(out, llm.ModelInfo{
-				ID:          id,
-				DisplayName: name + " (inference profile)",
+				ID:            id,
+				DisplayName:   name + " (inference profile)",
+				ContextWindow: cw,
 			})
 		}
 	}
@@ -313,9 +340,14 @@ func (a *Adapter) ListModels(ctx context.Context, cred []byte) ([]llm.ModelInfo,
 			if display == "" {
 				display = id
 			}
+			cw := 0
+			if a.cat != nil {
+				cw = a.cat.ContextWindow(Kind, id)
+			}
 			out = append(out, llm.ModelInfo{
-				ID:          id,
-				DisplayName: display,
+				ID:            id,
+				DisplayName:   display,
+				ContextWindow: cw,
 			})
 		}
 	}

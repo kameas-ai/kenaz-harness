@@ -1,13 +1,21 @@
 {
   "$schema": "https://wails.io/schemas/config.v2.json",
-  "name": "kaneaz-harness",
-  "outputfilename": "kaneaz-harness",
+  "name": "kenaz-harness",
+  "outputfilename": "Kenaz",
   "frontend:install": "npm install",
   "frontend:build": "npm run build",
   "frontend:dev:watcher": "npm run dev",
   "frontend:dev:serverUrl": "auto",
   "author": {
-    "name": "alecfeeman",
-    "email": "alec@sigilos.io"
+    "name": "Kameas AI, Inc.",
+    "email": "engineering@kameas.ai"
+  },
+  "info": {
+    "companyName": "Kameas AI, Inc.",
+    "productName": "Kenaz",
+    "productIdentifier": "ai.kameas.harness",
+    "productVersion": "0.0.1",
+    "copyright": "Copyright © 2026 Kameas AI, Inc.",
+    "comments": "Kenaz Harness — host-side orchestration for the Kenaz secure AI workbench."
   }
 }

@@ -6,6 +6,66 @@ import (
 	"testing"
 )
 
+func TestFirstSegmentArgv(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		in   string
+		want []string // argv of the FIRST segment
+	}{
+		{
+			name: "simple single command",
+			in:   "aws --version",
+			want: []string{"aws", "--version"},
+		},
+		{
+			name: "pipe — first segment is before the pipe",
+			in:   "git status | head -20",
+			want: []string{"git", "status"},
+		},
+		{
+			name: "and-chain — first segment is before &&",
+			in:   "echo first && echo second",
+			want: []string{"echo", "first"},
+		},
+		{
+			name: "semicolon chain — first segment is before ;",
+			in:   "ls; echo done",
+			want: []string{"ls"},
+		},
+		{
+			name: "or-chain — first segment is before ||",
+			in:   "false || echo fallback",
+			want: []string{"false"},
+		},
+		{
+			name: "quoted pipe not an operator",
+			in:   `echo "a | b" | grep a`,
+			want: []string{"echo", "a | b"},
+		},
+		{
+			name: "single-quoted pipe not an operator",
+			in:   `echo 'a | b' | grep a`,
+			want: []string{"echo", "a | b"},
+		},
+		{
+			name: "no operators — whole command is the segment",
+			in:   "go test ./...",
+			want: []string{"go", "test", "./..."},
+		},
+	}
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := FirstSegmentArgv(tc.in)
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Errorf("FirstSegmentArgv(%q) = %#v, want %#v", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestParse(t *testing.T) {
 	cases := []struct {
 		name string

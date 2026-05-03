@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"time"
 )
 
@@ -16,13 +18,19 @@ import (
 const DefaultMaxOutputBytes = 64 * 1024
 
 // RunOpts carries the parameters Run needs to execute a single
-// command. Argv must already be allowlisted by the caller; Run does
-// not re-check the allowlist (NFR-005 keeps that gate at the bash.go
-// layer, before LookPath, so a planted binary cannot slip past).
+// command. When CommandLine is non-empty it is passed verbatim to
+// `bash -l -c`; Argv is ignored for execution but is still accepted
+// for callers that need it (unused in the shell-mode path).
+// The Cedar gate in bash.go gates on argv from FirstSegmentArgv before
+// Run is called, so NFR-005 is upheld at the layer above.
 type RunOpts struct {
-	// Argv is the program (Argv[0]) plus arguments. Argv[0] should
-	// be a name suitable for exec.LookPath OR an absolute path
-	// already resolved by the caller.
+	// CommandLine is the raw shell command string. When non-empty Run
+	// dispatches via `$SHELL -l -c CommandLine` (shell mode). When
+	// empty Run falls back to direct argv exec via Argv (legacy path,
+	// used by unit tests that drive Run directly).
+	CommandLine string
+	// Argv is the direct-exec fallback used when CommandLine is empty.
+	// Argv[0] must be an absolute path already resolved by the caller.
 	Argv []string
 	// Cwd is the absolute working directory. Caller validates that
 	// Cwd lies under the sandbox root (FR-013).
@@ -48,17 +56,21 @@ type RunResult struct {
 	Duration  time.Duration
 }
 
-// Run executes Opts.Argv with timeout + output cap. Stdout and stderr
+// Run executes a command with timeout + output cap. Stdout and stderr
 // are captured into capWriter buffers that drop bytes past
 // MaxOutputBytes (first-N strategy). The returned RunResult.Truncated
 // is true iff either stream hit its cap.
 //
-// Run never spawns a shell — it dispatches argv directly via
-// exec.CommandContext. ExitCode reflects the OS exit status: 0 on
-// success, the program's status on failure, or -1 if the process
-// could not be started (cmd.Start error).
+// When opts.CommandLine is non-empty the command is dispatched via
+// `$SHELL -l -c <CommandLine>` so pipes, redirects, variable
+// expansion, globbing, and command substitution all work.
+// When opts.CommandLine is empty Run falls back to direct argv exec
+// (legacy path; used by unit tests that drive Run directly).
+//
+// ExitCode reflects the OS exit status: 0 on success, the program's
+// exit status on failure, or -1 if the process could not be started.
 func Run(ctx context.Context, opts RunOpts) (RunResult, error) {
-	if len(opts.Argv) == 0 {
+	if opts.CommandLine == "" && len(opts.Argv) == 0 {
 		return RunResult{}, errors.New("bash: Run: empty argv")
 	}
 	maxBytes := opts.MaxOutputBytes
@@ -72,7 +84,16 @@ func Run(ctx context.Context, opts RunOpts) (RunResult, error) {
 	}
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, opts.Argv[0], opts.Argv[1:]...)
+	var cmd *exec.Cmd
+	if opts.CommandLine != "" {
+		shell := os.Getenv("SHELL")
+		if shell == "" || !filepath.IsAbs(shell) {
+			shell = "/bin/bash"
+		}
+		cmd = exec.CommandContext(ctx, shell, "-l", "-c", opts.CommandLine)
+	} else {
+		cmd = exec.CommandContext(ctx, opts.Argv[0], opts.Argv[1:]...)
+	}
 	cmd.Dir = opts.Cwd
 	if opts.Env != nil {
 		cmd.Env = opts.Env
@@ -92,16 +113,19 @@ func Run(ctx context.Context, opts RunOpts) (RunResult, error) {
 		if errors.As(err, &exitErr) {
 			exitCode = exitErr.ExitCode()
 		} else {
-			// Includes context-cancellation, LookPath miss when
-			// CommandContext defers to PATH lookup, etc. Caller
-			// surfaces these as failed runs with exit -1.
+			// Includes context-cancellation, shell not found, etc.
+			// Caller surfaces these as failed runs with exit -1.
+			label := opts.CommandLine
+			if label == "" && len(opts.Argv) > 0 {
+				label = opts.Argv[0]
+			}
 			return RunResult{
 				Stdout:    stdout.bytes(),
 				Stderr:    stderr.bytes(),
 				ExitCode:  -1,
 				Truncated: stdout.truncated || stderr.truncated,
 				Duration:  duration,
-			}, fmt.Errorf("bash: run %q: %w", opts.Argv[0], err)
+			}, fmt.Errorf("bash: run %q: %w", label, err)
 		}
 	}
 

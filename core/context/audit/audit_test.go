@@ -115,6 +115,62 @@ func TestEmit_RoundTripCompactionFailedPayload(t *testing.T) {
 	}
 }
 
+func TestEmit_RoundTripSessionAutoTitledPayload(t *testing.T) {
+	em := &recordingEmitter{}
+	now := time.Date(2026, 4, 29, 12, 0, 0, 0, time.UTC)
+	payload := SessionAutoTitledPayload{
+		SessionID:      "sess-auto-1",
+		GeneratedTitle: "Rust basics",
+		ModelUsed:      "claude-haiku-4-7",
+		DurationMs:     1234,
+		Trigger:        "first_turn",
+		ErrorKind:      "",
+	}
+	if err := Emit(context.Background(), em, KindSessionAutoTitled, payload, now); err != nil {
+		t.Fatalf("Emit: %v", err)
+	}
+	if len(em.events) != 1 {
+		t.Fatalf("emitted %d events, want 1", len(em.events))
+	}
+	e := em.events[0]
+	if e.Kind != KindSessionAutoTitled {
+		t.Errorf("Kind = %q, want %q", e.Kind, KindSessionAutoTitled)
+	}
+	var got SessionAutoTitledPayload
+	if err := json.Unmarshal(e.Payload, &got); err != nil {
+		t.Fatalf("payload unmarshal: %v", err)
+	}
+	if got != payload {
+		t.Errorf("payload round-trip mismatch: got %+v, want %+v", got, payload)
+	}
+}
+
+func TestEmit_RoundTripSessionAutoTitledPayload_FailurePath(t *testing.T) {
+	em := &recordingEmitter{}
+	now := time.Date(2026, 4, 29, 13, 0, 0, 0, time.UTC)
+	payload := SessionAutoTitledPayload{
+		SessionID:  "sess-auto-2",
+		ModelUsed:  "claude-haiku-4-7",
+		DurationMs: 500,
+		Trigger:    "first_turn",
+		ErrorKind:  "provider_error",
+	}
+	if err := Emit(context.Background(), em, KindSessionAutoTitled, payload, now); err != nil {
+		t.Fatalf("Emit: %v", err)
+	}
+	e := em.events[0]
+	var got SessionAutoTitledPayload
+	if err := json.Unmarshal(e.Payload, &got); err != nil {
+		t.Fatalf("payload unmarshal: %v", err)
+	}
+	if got.ErrorKind != "provider_error" {
+		t.Errorf("ErrorKind = %q, want provider_error", got.ErrorKind)
+	}
+	if got.GeneratedTitle != "" {
+		t.Errorf("GeneratedTitle = %q, want empty on failure path", got.GeneratedTitle)
+	}
+}
+
 func TestEmit_RoundTripCompactedOriginalsDeletedPayload(t *testing.T) {
 	em := &recordingEmitter{}
 	now := time.Date(2026, 4, 28, 12, 0, 0, 0, time.UTC)

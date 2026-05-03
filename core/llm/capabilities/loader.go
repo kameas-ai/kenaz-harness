@@ -26,16 +26,18 @@ type providerSpec struct {
 }
 
 type modelEntry struct {
-	Match           string `yaml:"match"`
-	Streaming       bool   `yaml:"streaming"`
-	ToolCalling     bool   `yaml:"tool_calling"`
-	Vision          bool   `yaml:"vision"`
-	Documents       bool   `yaml:"documents"`
-	JSONMode        bool   `yaml:"json_mode"`
-	PromptCaching   bool   `yaml:"prompt_caching"`
-	Reasoning       bool   `yaml:"reasoning"`
-	Cancellation    bool   `yaml:"cancellation"`
-	UsageReporting  bool   `yaml:"usage_reporting"`
+	Match          string `yaml:"match"`
+	Streaming      bool   `yaml:"streaming"`
+	ToolCalling    bool   `yaml:"tool_calling"`
+	Vision         bool   `yaml:"vision"`
+	Documents      bool   `yaml:"documents"`
+	JSONMode       bool   `yaml:"json_mode"`
+	PromptCaching  bool   `yaml:"prompt_caching"`
+	Reasoning      bool   `yaml:"reasoning"`
+	Cancellation   bool   `yaml:"cancellation"`
+	UsageReporting bool   `yaml:"usage_reporting"`
+	// ContextWindow is the model's max context length in tokens (0 = unknown).
+	ContextWindow int `yaml:"context_window"`
 }
 
 // Catalog holds the loaded per-provider data and answers per-(provider,
@@ -120,6 +122,22 @@ func (c *Catalog) Describe(provider, model string) llm.CapabilityDescriptor {
 	// Unknown model under a known provider: keep defaults but mark.
 	desc.Notes[llm.CapStreaming] = "unknown_model_default"
 	return desc
+}
+
+// ContextWindow returns the curated max context length in tokens for
+// (provider, model). Returns 0 when no entry matches (caller should
+// treat 0 as "unknown").
+func (c *Catalog) ContextWindow(provider, model string) int {
+	spec, ok := c.specs[provider]
+	if !ok {
+		return 0
+	}
+	for _, m := range spec.Models {
+		if matchGlob(m.Match, model) {
+			return m.ContextWindow
+		}
+	}
+	return 0
 }
 
 func applyDefaults(desc *llm.CapabilityDescriptor, defaults map[string]bool) {

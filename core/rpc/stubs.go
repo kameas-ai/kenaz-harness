@@ -51,6 +51,9 @@ func (s *stubLLM) ListModels(_ context.Context, _, _ string) ([]llm.ModelInfo, e
 	return nil, errNotWired
 }
 func (s *stubLLM) ResolveConfirm(_ context.Context, _, _ string) error { return errNotWired }
+func (s *stubLLM) UpdateProviderCredential(_ context.Context, _, _ string) error {
+	return errNotWired
+}
 
 // ── a2a ────────────────────────────────────────────────────────────────
 
@@ -89,6 +92,9 @@ func (s *stubSessions) DeleteWithOptions(_ context.Context, _ string, _ sessions
 	return errNotWired
 }
 func (s *stubSessions) Reorder(_ context.Context, _ []string) error { return errNotWired }
+func (s *stubSessions) GetUsage(_ context.Context, _ string) (sessions.SessionUsage, error) {
+	return sessions.SessionUsage{}, nil
+}
 func (s *stubSessions) StartStream(_ context.Context, _ string) (string, error) {
 	return "", errNotWired
 }
@@ -116,6 +122,12 @@ func (s *stubSessions) SetSystemPrompt(_ context.Context, _, _, _ string) error 
 	return errNotWired
 }
 func (s *stubSessions) MoveToProject(_ context.Context, _, _ string) error {
+	return errNotWired
+}
+func (s *stubSessions) SuggestTitle(_ context.Context, _ string) (string, error) {
+	return "", errNotWired
+}
+func (s *stubSessions) ClearTitle(_ context.Context, _ string) error {
 	return errNotWired
 }
 func (s *stubSessions) ResumeMessage(_ context.Context, _, _ string) (sessions.ResumeMessageResult, error) {
@@ -289,6 +301,10 @@ func (s *stubTools) RecipeStatus(_ context.Context, _ string) (stdio.RecipeStatu
 }
 func (s *stubTools) RecipeConfig(_ context.Context, _ string) (map[string]any, error) {
 	return map[string]any{}, nil
+}
+
+func (s *stubTools) RequestAdditionalAllowedDir(_ context.Context, _, _, _ string) (bool, string, error) {
+	return false, "", errNotWired
 }
 
 // ── shell ──────────────────────────────────────────────────────────────

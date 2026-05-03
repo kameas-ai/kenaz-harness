@@ -13,7 +13,12 @@ for d in "${DIRS[@]}"; do
   # Find non-_test.go files under d (recursive) and grep for exported
   # identifiers prefixed Test/Fake/Stub/Fixture.
   while IFS= read -r f; do
-    matches=$(grep -nE '^(func|type|var|const)\s+(Test|Fake|Stub|Fixture)[A-Z]' "$f" || true)
+    # Honour `// privacy-allow:` line-end annotations so legitimate
+    # domain types whose name happens to start with Test/Fake/Stub/
+    # Fixture (e.g. TestResult, the structured outcome of the
+    # TestProvider RPC) can opt out with a comment.
+    matches=$(grep -nE '^(func|type|var|const)\s+(Test|Fake|Stub|Fixture)[A-Z]' "$f" \
+      | grep -v 'privacy-allow:' || true)
     if [[ -n "$matches" ]]; then
       echo "[test-only-symbols] FAIL: $f exports test-only identifiers in a non-_test file:" >&2
       echo "$matches" >&2

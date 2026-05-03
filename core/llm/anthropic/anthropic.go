@@ -14,6 +14,7 @@ import (
 
 	llm "github.com/sigil-tech/kaneaz-harness/core/llm"
 	"github.com/sigil-tech/kaneaz-harness/core/llm/capabilities"
+	"github.com/sigil-tech/kaneaz-harness/core/llm/httpx"
 )
 
 // Kind is the canonical provider kind for the Anthropic adapter. It
@@ -92,7 +93,7 @@ type Adapter struct {
 // reasoning for unknown models, so the failure is non-fatal.
 func New(opts ...Option) *Adapter {
 	a := &Adapter{
-		httpc:      &http.Client{}, // no Timeout — context drives lifetime
+		httpc:      &http.Client{Transport: httpx.DefaultTransport()}, // no Timeout — context drives lifetime
 		endpoint:   defaultEndpoint,
 		apiVersion: defaultAPIVersion,
 	}
@@ -147,9 +148,14 @@ func (a *Adapter) ListModels(ctx context.Context, cred []byte) ([]llm.ModelInfo,
 		if display == "" {
 			display = m.ID
 		}
+		cw := 0
+		if a.cat != nil {
+			cw = a.cat.ContextWindow(Kind, m.ID)
+		}
 		out = append(out, llm.ModelInfo{
-			ID:          m.ID,
-			DisplayName: display,
+			ID:            m.ID,
+			DisplayName:   display,
+			ContextWindow: cw,
 		})
 	}
 	return out, nil
@@ -543,17 +549,13 @@ func convertContent(parts []llm.ContentBlock) []map[string]any {
 					block["tool_use_id"] = p.ToolResult.ToolUseID
 				}
 				if len(p.ToolResult.Content) > 0 {
-					var c any
-					_ = json.Unmarshal(p.ToolResult.Content, &c)
-					block["content"] = c
+					block["content"] = normalizeToolResultContent(p.ToolResult.Content)
 				}
 				if p.ToolResult.IsError {
 					block["is_error"] = true
 				}
 			} else if len(p.ToolData) > 0 {
-				var content any
-				_ = json.Unmarshal(p.ToolData, &content)
-				block["content"] = content
+				block["content"] = normalizeToolResultContent(p.ToolData)
 			}
 			out = append(out, block)
 		default:
@@ -570,6 +572,27 @@ func convertContent(parts []llm.ContentBlock) []map[string]any {
 		out = append(out, map[string]any{"type": "text", "text": ""})
 	}
 	return out
+}
+
+// normalizeToolResultContent coerces a tool result payload into one of the
+// two shapes Anthropic accepts on `tool_result.content`: a string, or a
+// list of content blocks. Bare JSON objects/numbers/bools/nulls are
+// rejected by the API with "Found an object, but `tool_result` content
+// must either be a string or a list of content blocks", so we wrap them
+// in a single text block carrying the JSON serialization.
+func normalizeToolResultContent(raw json.RawMessage) any {
+	var v any
+	if err := json.Unmarshal(raw, &v); err != nil {
+		return string(raw)
+	}
+	switch t := v.(type) {
+	case string:
+		return t
+	case []any:
+		return t
+	default:
+		return []map[string]any{{"type": "text", "text": string(raw)}}
+	}
 }
 
 // anthropicMediaSource builds the `source` object Anthropic expects for

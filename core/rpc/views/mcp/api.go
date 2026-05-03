@@ -1,7 +1,11 @@
 // Package mcp defines the MCPAPI view-scoped accessor.
 package mcp
 
-import "context"
+import (
+	"context"
+
+	coremcp "github.com/sigil-tech/kaneaz-harness/core/mcp"
+)
 
 // Server is reference-only metadata about a configured MCP server.
 //
@@ -23,4 +27,11 @@ type MCPAPI interface {
 	ListServers(ctx context.Context) ([]Server, error)
 	StartStream(ctx context.Context, serverID string) (subscriptionID string, err error)
 	StopStream(ctx context.Context, subscriptionID string) error
+	// TestRecipe runs a one-shot connection test against the recipe
+	// identified by id. env and config override the recipe's stored
+	// values (used by the "Custom" and "From registry" Add modal tabs
+	// before the user saves the recipe). Both are nil-tolerant.
+	// Returns a TestResult regardless of outcome; err is only set for
+	// pre-flight failures (recipe not found, empty catalog).
+	TestRecipe(ctx context.Context, recipeID string, env map[string]string, config map[string]any) (coremcp.TestResult, error)
 }

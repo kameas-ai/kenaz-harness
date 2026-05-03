@@ -248,6 +248,7 @@ defineExpose({ scrollToBottom });
           :role="m.role"
           :content="m.content"
           :streaming="m.streaming === true"
+          :streaming-error="m.streamingError"
           :tool-calls="m.toolCalls"
           :content-blocks="m.contentBlocks"
           :rememberable="rememberable === true && m.streaming !== true"

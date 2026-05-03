@@ -69,6 +69,11 @@ const router = createRouter({
       component: () => import('@/views/settings/SettingsView.vue'),
     },
     {
+      path: '/permissions/:family?',
+      name: 'permissions',
+      component: () => import('@/views/permissions/PermissionsView.vue'),
+    },
+    {
       path: '/artifacts',
       name: 'artifacts',
       component: () => import('@/views/artifacts/ArtifactsView.vue'),
@@ -97,6 +102,15 @@ const router = createRouter({
       path: '/agentgraph/run/:runId',
       name: 'graph-run',
       component: () => import('@/views/agentgraph/RunView.vue'),
+    },
+    {
+      // /search opens the sessions view with the search modal overlay.
+      // The modal is rendered by Shell.vue and triggered by the
+      // route-change guard below; this route makes the sidebar link work
+      // and keeps the URL bookmarkable.
+      path: '/search',
+      name: 'search',
+      component: () => import('@/views/sessions/SessionsView.vue'),
     },
   ],
 });

@@ -26,6 +26,9 @@
 
 import { computed, nextTick, ref, watch } from 'vue';
 import { Plus, X } from '@/shell/icons';
+import { useHarnessClient } from '@/lib/harnessClientContext';
+
+const client = useHarnessClient();
 
 const props = withDefaults(
   defineProps<{
@@ -127,7 +130,25 @@ function onEditKeydown(e: KeyboardEvent) {
   }
 }
 
-function openPicker() {
+async function openPicker() {
+  // Try the OS-native folder dialog first (Wails-bound, returns the
+  // absolute path). If it fails for any reason — Wails ctx not ready,
+  // platform without a native dialog, etc. — fall back to the
+  // <input type="file" webkitdirectory> path that gives us a
+  // relative-path chip the user can edit inline.
+  try {
+    const picked = await client.tools.pickDirectory('Allow this directory', '');
+    if (picked && picked.trim() !== '') {
+      add(picked.trim());
+      return;
+    }
+    // User cancelled the native dialog — empty string. Don't fall
+    // through to the webkitdirectory input; that would re-prompt
+    // immediately and feel like a UX bug.
+    return;
+  } catch {
+    // Native picker unavailable — fall through to webkit fallback.
+  }
   fileInput.value?.click();
 }
 

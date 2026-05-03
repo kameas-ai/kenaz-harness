@@ -301,6 +301,11 @@ func (r *Runner) execShell(ctx context.Context, h Hook, ev any) (shellResponse, 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
+	// Why: when ctx cancels, exec.CommandContext SIGKILLs /bin/sh, but
+	// child processes (e.g. `sleep 5`) get reparented and keep the pipe
+	// fds open — cmd.Wait then blocks until the orphan exits naturally.
+	// WaitDelay forces Wait to return promptly after Cancel fires.
+	cmd.WaitDelay = 500 * time.Millisecond
 	if err := cmd.Run(); err != nil {
 		return shellResponse{}, fmt.Errorf("run %q: %w (stderr: %s)",
 			h.Command, err, strings.TrimSpace(stderr.String()))

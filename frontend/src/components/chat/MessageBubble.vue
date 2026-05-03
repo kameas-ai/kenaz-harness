@@ -27,7 +27,7 @@
 
 import { computed, ref } from 'vue';
 import { Archive, Layers } from 'lucide-vue-next';
-import StreamingText from './StreamingText.vue';
+import MarkdownBlock from './MarkdownBlock.vue';
 import PinMenu from './PinMenu.vue';
 import ImageBlock from './ImageBlock.vue';
 import DocumentChip from './DocumentChip.vue';
@@ -44,6 +44,13 @@ const props = defineProps<{
   role: MessageRole;
   content: string;
   streaming?: boolean;
+  /**
+   * Stream-failure marker (long-turn-resilience WP00). When set, the
+   * bubble renders a muted "Connection lost — message may be
+   * incomplete." sub-line beneath the body. No Resume button yet —
+   * that lands in WP03.
+   */
+  streamingError?: string;
   toolCalls?: readonly ToolCall[];
   /**
    * Polymorphic content blocks for multimodal messages
@@ -237,6 +244,35 @@ function onSaveArtifact() {
   emit('save-artifact', props.messageId);
 }
 
+const copyFlash = ref(false);
+
+async function onCopyMessage() {
+  const text = props.content ?? '';
+  let ok = false;
+  try {
+    await navigator.clipboard.writeText(text);
+    ok = true;
+  } catch {
+    // Wails fallback — same path as the per-code-block copy in
+    // MarkdownBlock. Wails' webview rejects navigator.clipboard in
+    // some contexts; the runtime binding always works.
+    try {
+      const setter = window.runtime?.ClipboardSetText;
+      if (setter) {
+        ok = await setter(text);
+      }
+    } catch {
+      ok = false;
+    }
+  }
+  if (ok) {
+    copyFlash.value = true;
+    setTimeout(() => {
+      copyFlash.value = false;
+    }, 1200);
+  }
+}
+
 function onArtifactChipOpen(artifact: Artifact) {
   emit('open-artifact', artifact);
 }
@@ -382,9 +418,19 @@ function onResumeClick() {
             @close="closeMenu"
           />
         </div>
+        <button
+          type="button"
+          class="opacity-0 group-hover:opacity-100 focus:opacity-100 transition-fast text-[12px] px-1.5 py-0.5 rounded-sm border border-border-muted text-ink-dim hover:text-accent hover:bg-surface-2 ml-1"
+          :class="rememberable || (saveable && messageId) ? '' : 'ml-auto'"
+          aria-label="Copy message text"
+          :data-testid="'copy-message-button'"
+          @click="onCopyMessage"
+        >
+          {{ copyFlash ? 'copied' : 'copy' }}
+        </button>
         <div
           v-if="saveable && messageId"
-          :class="['relative', rememberable ? '' : flashConfirm ? '' : 'ml-auto']"
+          :class="['relative', rememberable ? '' : flashConfirm ? '' : '']"
         >
           <button
             type="button"
@@ -469,10 +515,12 @@ function onResumeClick() {
       <template v-if="!isTool">
         <template v-if="hasBlocks">
           <template v-for="(block, i) in blocks" :key="i">
-            <StreamingText
+            <MarkdownBlock
               v-if="block.type === 'text'"
-              :text="block.text ?? ''"
+              :source="block.text ?? ''"
               :streaming="streaming === true && isLastBlock(i)"
+              :session-id="undefined"
+              :message-id="messageId"
             />
             <ImageBlock
               v-else-if="block.type === 'image' && block.source"
@@ -484,15 +532,29 @@ function onResumeClick() {
             />
           </template>
         </template>
-        <StreamingText
+        <MarkdownBlock
           v-else
-          :text="content"
+          :source="content"
           :streaming="streaming === true"
+          :session-id="undefined"
+          :message-id="messageId"
         />
       </template>
       <span v-else class="font-mono text-[12px] text-ink-muted">
         {{ content }}
       </span>
+
+      <!-- Stream-failure sub-line (long-turn-resilience WP00). Surfaced
+           when the SSE stream closed with a non-completed reason and
+           the partial bubble was committed anyway. WP03 will replace
+           this with a Resume button. -->
+      <div
+        v-if="streamingError"
+        class="mt-2 font-ui text-[11px] text-ink-muted italic"
+        data-testid="message-streaming-error"
+      >
+        Connection lost — message may be incomplete.
+      </div>
 
       <div
         v-if="artifacts && artifacts.length > 0"

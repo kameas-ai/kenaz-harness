@@ -7,6 +7,7 @@ import {attachments} from '../models';
 import {audit} from '../models';
 import {branches} from '../models';
 import {bundle} from '../models';
+import {cedar} from '../models';
 import {compaction} from '../models';
 import {contextview} from '../models';
 import {contexts} from '../models';
@@ -18,8 +19,10 @@ import {llm} from '../models';
 import {mcp} from '../models';
 import {memory} from '../models';
 import {nodes} from '../models';
+import {permissions} from '../models';
 import {policy} from '../models';
 import {projects} from '../models';
+import {search} from '../models';
 import {sessions} from '../models';
 import {context} from '../models';
 import {settings} from '../models';
@@ -45,6 +48,8 @@ export function Artifacts_List(arg1:artifacts.ArtifactFilter):Promise<Array<arti
 
 export function Artifacts_Promote(arg1:string,arg2:string,arg3:string):Promise<artifacts.Artifact>;
 
+export function Artifacts_SaveAs(arg1:string,arg2:string):Promise<string>;
+
 export function Attachments_Add(arg1:attachments.AddInput):Promise<attachments.Attachment>;
 
 export function Attachments_AddMedia(arg1:attachments.AddMediaInput):Promise<attachments.Attachment>;
@@ -67,7 +72,11 @@ export function Audit_StopStream(arg1:string):Promise<void>;
 
 export function Audit_VerifyEntry(arg1:string):Promise<boolean>;
 
+export function Bash_Exec(arg1:string,arg2:string):Promise<rpc.BashExecResult>;
+
 export function Branches_Abandon(arg1:string):Promise<void>;
+
+export function Branches_CommitReintegration(arg1:branches.CommitReintegrationOptions):Promise<void>;
 
 export function Branches_Create(arg1:branches.CreateBranchOptions):Promise<branches.Branch>;
 
@@ -77,11 +86,25 @@ export function Branches_List(arg1:string):Promise<Array<branches.Branch>>;
 
 export function Branches_Merge(arg1:string):Promise<void>;
 
+export function Branches_ProposeReintegrationSummary(arg1:string):Promise<branches.ReintegrationProposal>;
+
 export function Branches_RecommendModel(arg1:string,arg2:string,arg3:string):Promise<branches.RecommendedModel>;
+
+export function Branches_SetAdvisorDismissed(arg1:string,arg2:boolean):Promise<void>;
 
 export function Bundle_Get(arg1:string):Promise<bundle.Bundle>;
 
 export function Bundle_List():Promise<Array<bundle.Bundle>>;
+
+export function CedarPolicy_ListPolicies():Promise<Array<cedar.PolicyFile>>;
+
+export function CedarPolicy_RecentDecisions(arg1:number):Promise<Array<cedar.Decision>>;
+
+export function CedarPolicy_ReloadPolicies():Promise<void>;
+
+export function CedarPolicy_RevokeSnippet(arg1:string):Promise<void>;
+
+export function CedarPolicy_WriteSnippet(arg1:string,arg2:string):Promise<void>;
 
 export function Compaction_GetConfig(arg1:compaction.Layer,arg2:string):Promise<compaction.Config>;
 
@@ -203,17 +226,23 @@ export function LLM_TestProvider(arg1:string):Promise<llm.TestResult>;
 
 export function LLM_UpdateProvider(arg1:llm.AddProviderInput):Promise<void>;
 
+export function LLM_UpdateProviderCredential(arg1:string,arg2:string):Promise<void>;
+
 export function LoadRoute():Promise<string>;
 
 export function LoadTheme():Promise<string>;
 
 export function LogRouteChange(arg1:string,arg2:string):Promise<void>;
 
+export function MCP_ImportClaudeDesktopConfig(arg1:mcp.ImportRequest):Promise<mcp.ImportResponse>;
+
 export function MCP_ListServers():Promise<Array<mcp.Server>>;
 
 export function MCP_StartStream(arg1:string):Promise<string>;
 
 export function MCP_StopStream(arg1:string):Promise<void>;
+
+export function MCP_TestRecipe(arg1:string,arg2:Record<string, string>,arg3:Record<string, any>):Promise<mcp.TestResult>;
 
 export function Memory_Forget(arg1:string):Promise<void>;
 
@@ -240,6 +269,14 @@ export function Nodes_Get(arg1:string):Promise<nodes.NodeManifestDetail>;
 export function Nodes_ListUserOverrides():Promise<Array<nodes.UserOverrideInfo>>;
 
 export function Nodes_ReloadOverrides():Promise<nodes.ReloadResult>;
+
+export function Permissions_ListGrants(arg1:string):Promise<Array<permissions.Grant>>;
+
+export function Permissions_ListPending():Promise<Array<cedar.PendingRequest>>;
+
+export function Permissions_Resolve(arg1:string,arg2:string):Promise<void>;
+
+export function Permissions_RevokeGrant(arg1:string):Promise<void>;
 
 export function Policy_Explain(arg1:Record<string, any>):Promise<policy.Denial>;
 
@@ -269,7 +306,11 @@ export function SaveRoute(arg1:string):Promise<void>;
 
 export function SaveTheme(arg1:string):Promise<void>;
 
+export function Search_Sessions(arg1:string,arg2:search.SearchFilters):Promise<Array<search.SearchHit>>;
+
 export function Sessions_AppendMessage(arg1:string,arg2:string,arg3:string):Promise<sessions.Message>;
+
+export function Sessions_ClearTitle(arg1:string):Promise<void>;
 
 export function Sessions_Create(arg1:string):Promise<sessions.Session>;
 
@@ -278,6 +319,8 @@ export function Sessions_Delete(arg1:string):Promise<void>;
 export function Sessions_DeleteWithOptions(arg1:string,arg2:sessions.DeleteOptions):Promise<void>;
 
 export function Sessions_Get(arg1:string):Promise<sessions.Session>;
+
+export function Sessions_GetUsage(arg1:string):Promise<sessions.SessionUsage>;
 
 export function Sessions_List():Promise<Array<sessions.Session>>;
 
@@ -307,6 +350,8 @@ export function Sessions_StartStream(arg1:string):Promise<string>;
 
 export function Sessions_StopStream(arg1:string):Promise<void>;
 
+export function Sessions_SuggestTitle(arg1:string):Promise<string>;
+
 export function SetContext(arg1:context.Context):Promise<void>;
 
 export function SetSettingsStore(arg1:settings.SettingsStore):Promise<void>;
@@ -315,13 +360,27 @@ export function Settings_Get():Promise<settings.Settings>;
 
 export function Settings_GetBash():Promise<boolean>;
 
+export function Settings_GetBashAllowlistMigrated():Promise<boolean>;
+
+export function Settings_GetCedarStrictCredentialMode():Promise<boolean>;
+
 export function Settings_GetConfirmEach():Promise<boolean>;
+
+export function Settings_GetFSRequestAccessEnabled():Promise<boolean>;
 
 export function Settings_GetMaxAgentTurns():Promise<number>;
 
 export function Settings_GetMemory():Promise<boolean>;
 
+export function Settings_GetPermissionCacheDangerousOps():Promise<boolean>;
+
+export function Settings_GetPermissionMode():Promise<string>;
+
+export function Settings_GetPermissionsMigrationToastShown():Promise<boolean>;
+
 export function Settings_GetSaveArtifactEnabled():Promise<boolean>;
+
+export function Settings_GetShortcuts():Promise<Record<string, string>>;
 
 export function Settings_GetWebSearch():Promise<boolean>;
 
@@ -329,13 +388,29 @@ export function Settings_Set(arg1:settings.Settings):Promise<void>;
 
 export function Settings_SetBash(arg1:boolean):Promise<void>;
 
+export function Settings_SetBashAllowlistMigrated(arg1:boolean):Promise<void>;
+
+export function Settings_SetCedarStrictCredentialMode(arg1:boolean):Promise<void>;
+
 export function Settings_SetConfirmEach(arg1:boolean):Promise<void>;
+
+export function Settings_SetFSRequestAccessEnabled(arg1:boolean):Promise<void>;
 
 export function Settings_SetMaxAgentTurns(arg1:number):Promise<void>;
 
 export function Settings_SetMemory(arg1:boolean):Promise<void>;
 
+export function Settings_SetPermissionCacheDangerousOps(arg1:boolean):Promise<void>;
+
+export function Settings_SetPermissionMode(arg1:string):Promise<void>;
+
+export function Settings_SetPermissionsMigrationToastShown(arg1:boolean):Promise<void>;
+
 export function Settings_SetSaveArtifactEnabled(arg1:boolean):Promise<void>;
+
+export function Settings_SetShortcut(arg1:string,arg2:string):Promise<void>;
+
+export function Settings_SetShortcuts(arg1:Record<string, string>):Promise<void>;
 
 export function Settings_SetWebSearch(arg1:boolean):Promise<void>;
 
@@ -357,9 +432,13 @@ export function Tools_InstallRecipe(arg1:string,arg2:Record<string, string>,arg3
 
 export function Tools_ListRecipes():Promise<Array<tools.RecipeListing>>;
 
+export function Tools_PickDirectory(arg1:string,arg2:string):Promise<string>;
+
 export function Tools_RecipeConfig(arg1:string):Promise<Record<string, any>>;
 
 export function Tools_RecipeStatus(arg1:string):Promise<transport.RecipeStatus>;
+
+export function Tools_RequestAdditionalAllowedDir(arg1:string,arg2:string,arg3:string):Promise<tools.FSAccessResult>;
 
 export function Tools_UninstallRecipe(arg1:string):Promise<void>;
 

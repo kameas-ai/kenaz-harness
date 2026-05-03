@@ -34,6 +34,10 @@ export function Artifacts_Promote(arg1, arg2, arg3) {
   return window['go']['rpc']['Bindings']['Artifacts_Promote'](arg1, arg2, arg3);
 }
 
+export function Artifacts_SaveAs(arg1, arg2) {
+  return window['go']['rpc']['Bindings']['Artifacts_SaveAs'](arg1, arg2);
+}
+
 export function Attachments_Add(arg1) {
   return window['go']['rpc']['Bindings']['Attachments_Add'](arg1);
 }
@@ -78,8 +82,16 @@ export function Audit_VerifyEntry(arg1) {
   return window['go']['rpc']['Bindings']['Audit_VerifyEntry'](arg1);
 }
 
+export function Bash_Exec(arg1, arg2) {
+  return window['go']['rpc']['Bindings']['Bash_Exec'](arg1, arg2);
+}
+
 export function Branches_Abandon(arg1) {
   return window['go']['rpc']['Bindings']['Branches_Abandon'](arg1);
+}
+
+export function Branches_CommitReintegration(arg1) {
+  return window['go']['rpc']['Bindings']['Branches_CommitReintegration'](arg1);
 }
 
 export function Branches_Create(arg1) {
@@ -98,8 +110,16 @@ export function Branches_Merge(arg1) {
   return window['go']['rpc']['Bindings']['Branches_Merge'](arg1);
 }
 
+export function Branches_ProposeReintegrationSummary(arg1) {
+  return window['go']['rpc']['Bindings']['Branches_ProposeReintegrationSummary'](arg1);
+}
+
 export function Branches_RecommendModel(arg1, arg2, arg3) {
   return window['go']['rpc']['Bindings']['Branches_RecommendModel'](arg1, arg2, arg3);
+}
+
+export function Branches_SetAdvisorDismissed(arg1, arg2) {
+  return window['go']['rpc']['Bindings']['Branches_SetAdvisorDismissed'](arg1, arg2);
 }
 
 export function Bundle_Get(arg1) {
@@ -108,6 +128,26 @@ export function Bundle_Get(arg1) {
 
 export function Bundle_List() {
   return window['go']['rpc']['Bindings']['Bundle_List']();
+}
+
+export function CedarPolicy_ListPolicies() {
+  return window['go']['rpc']['Bindings']['CedarPolicy_ListPolicies']();
+}
+
+export function CedarPolicy_RecentDecisions(arg1) {
+  return window['go']['rpc']['Bindings']['CedarPolicy_RecentDecisions'](arg1);
+}
+
+export function CedarPolicy_ReloadPolicies() {
+  return window['go']['rpc']['Bindings']['CedarPolicy_ReloadPolicies']();
+}
+
+export function CedarPolicy_RevokeSnippet(arg1) {
+  return window['go']['rpc']['Bindings']['CedarPolicy_RevokeSnippet'](arg1);
+}
+
+export function CedarPolicy_WriteSnippet(arg1, arg2) {
+  return window['go']['rpc']['Bindings']['CedarPolicy_WriteSnippet'](arg1, arg2);
 }
 
 export function Compaction_GetConfig(arg1, arg2) {
@@ -350,6 +390,10 @@ export function LLM_UpdateProvider(arg1) {
   return window['go']['rpc']['Bindings']['LLM_UpdateProvider'](arg1);
 }
 
+export function LLM_UpdateProviderCredential(arg1, arg2) {
+  return window['go']['rpc']['Bindings']['LLM_UpdateProviderCredential'](arg1, arg2);
+}
+
 export function LoadRoute() {
   return window['go']['rpc']['Bindings']['LoadRoute']();
 }
@@ -362,6 +406,10 @@ export function LogRouteChange(arg1, arg2) {
   return window['go']['rpc']['Bindings']['LogRouteChange'](arg1, arg2);
 }
 
+export function MCP_ImportClaudeDesktopConfig(arg1) {
+  return window['go']['rpc']['Bindings']['MCP_ImportClaudeDesktopConfig'](arg1);
+}
+
 export function MCP_ListServers() {
   return window['go']['rpc']['Bindings']['MCP_ListServers']();
 }
@@ -372,6 +420,10 @@ export function MCP_StartStream(arg1) {
 
 export function MCP_StopStream(arg1) {
   return window['go']['rpc']['Bindings']['MCP_StopStream'](arg1);
+}
+
+export function MCP_TestRecipe(arg1, arg2, arg3) {
+  return window['go']['rpc']['Bindings']['MCP_TestRecipe'](arg1, arg2, arg3);
 }
 
 export function Memory_Forget(arg1) {
@@ -424,6 +476,22 @@ export function Nodes_ListUserOverrides() {
 
 export function Nodes_ReloadOverrides() {
   return window['go']['rpc']['Bindings']['Nodes_ReloadOverrides']();
+}
+
+export function Permissions_ListGrants(arg1) {
+  return window['go']['rpc']['Bindings']['Permissions_ListGrants'](arg1);
+}
+
+export function Permissions_ListPending() {
+  return window['go']['rpc']['Bindings']['Permissions_ListPending']();
+}
+
+export function Permissions_Resolve(arg1, arg2) {
+  return window['go']['rpc']['Bindings']['Permissions_Resolve'](arg1, arg2);
+}
+
+export function Permissions_RevokeGrant(arg1) {
+  return window['go']['rpc']['Bindings']['Permissions_RevokeGrant'](arg1);
 }
 
 export function Policy_Explain(arg1) {
@@ -482,8 +550,16 @@ export function SaveTheme(arg1) {
   return window['go']['rpc']['Bindings']['SaveTheme'](arg1);
 }
 
+export function Search_Sessions(arg1, arg2) {
+  return window['go']['rpc']['Bindings']['Search_Sessions'](arg1, arg2);
+}
+
 export function Sessions_AppendMessage(arg1, arg2, arg3) {
   return window['go']['rpc']['Bindings']['Sessions_AppendMessage'](arg1, arg2, arg3);
+}
+
+export function Sessions_ClearTitle(arg1) {
+  return window['go']['rpc']['Bindings']['Sessions_ClearTitle'](arg1);
 }
 
 export function Sessions_Create(arg1) {
@@ -500,6 +576,10 @@ export function Sessions_DeleteWithOptions(arg1, arg2) {
 
 export function Sessions_Get(arg1) {
   return window['go']['rpc']['Bindings']['Sessions_Get'](arg1);
+}
+
+export function Sessions_GetUsage(arg1) {
+  return window['go']['rpc']['Bindings']['Sessions_GetUsage'](arg1);
 }
 
 export function Sessions_List() {
@@ -558,6 +638,10 @@ export function Sessions_StopStream(arg1) {
   return window['go']['rpc']['Bindings']['Sessions_StopStream'](arg1);
 }
 
+export function Sessions_SuggestTitle(arg1) {
+  return window['go']['rpc']['Bindings']['Sessions_SuggestTitle'](arg1);
+}
+
 export function SetContext(arg1) {
   return window['go']['rpc']['Bindings']['SetContext'](arg1);
 }
@@ -574,8 +658,20 @@ export function Settings_GetBash() {
   return window['go']['rpc']['Bindings']['Settings_GetBash']();
 }
 
+export function Settings_GetBashAllowlistMigrated() {
+  return window['go']['rpc']['Bindings']['Settings_GetBashAllowlistMigrated']();
+}
+
+export function Settings_GetCedarStrictCredentialMode() {
+  return window['go']['rpc']['Bindings']['Settings_GetCedarStrictCredentialMode']();
+}
+
 export function Settings_GetConfirmEach() {
   return window['go']['rpc']['Bindings']['Settings_GetConfirmEach']();
+}
+
+export function Settings_GetFSRequestAccessEnabled() {
+  return window['go']['rpc']['Bindings']['Settings_GetFSRequestAccessEnabled']();
 }
 
 export function Settings_GetMaxAgentTurns() {
@@ -586,8 +682,24 @@ export function Settings_GetMemory() {
   return window['go']['rpc']['Bindings']['Settings_GetMemory']();
 }
 
+export function Settings_GetPermissionCacheDangerousOps() {
+  return window['go']['rpc']['Bindings']['Settings_GetPermissionCacheDangerousOps']();
+}
+
+export function Settings_GetPermissionMode() {
+  return window['go']['rpc']['Bindings']['Settings_GetPermissionMode']();
+}
+
+export function Settings_GetPermissionsMigrationToastShown() {
+  return window['go']['rpc']['Bindings']['Settings_GetPermissionsMigrationToastShown']();
+}
+
 export function Settings_GetSaveArtifactEnabled() {
   return window['go']['rpc']['Bindings']['Settings_GetSaveArtifactEnabled']();
+}
+
+export function Settings_GetShortcuts() {
+  return window['go']['rpc']['Bindings']['Settings_GetShortcuts']();
 }
 
 export function Settings_GetWebSearch() {
@@ -602,8 +714,20 @@ export function Settings_SetBash(arg1) {
   return window['go']['rpc']['Bindings']['Settings_SetBash'](arg1);
 }
 
+export function Settings_SetBashAllowlistMigrated(arg1) {
+  return window['go']['rpc']['Bindings']['Settings_SetBashAllowlistMigrated'](arg1);
+}
+
+export function Settings_SetCedarStrictCredentialMode(arg1) {
+  return window['go']['rpc']['Bindings']['Settings_SetCedarStrictCredentialMode'](arg1);
+}
+
 export function Settings_SetConfirmEach(arg1) {
   return window['go']['rpc']['Bindings']['Settings_SetConfirmEach'](arg1);
+}
+
+export function Settings_SetFSRequestAccessEnabled(arg1) {
+  return window['go']['rpc']['Bindings']['Settings_SetFSRequestAccessEnabled'](arg1);
 }
 
 export function Settings_SetMaxAgentTurns(arg1) {
@@ -614,8 +738,28 @@ export function Settings_SetMemory(arg1) {
   return window['go']['rpc']['Bindings']['Settings_SetMemory'](arg1);
 }
 
+export function Settings_SetPermissionCacheDangerousOps(arg1) {
+  return window['go']['rpc']['Bindings']['Settings_SetPermissionCacheDangerousOps'](arg1);
+}
+
+export function Settings_SetPermissionMode(arg1) {
+  return window['go']['rpc']['Bindings']['Settings_SetPermissionMode'](arg1);
+}
+
+export function Settings_SetPermissionsMigrationToastShown(arg1) {
+  return window['go']['rpc']['Bindings']['Settings_SetPermissionsMigrationToastShown'](arg1);
+}
+
 export function Settings_SetSaveArtifactEnabled(arg1) {
   return window['go']['rpc']['Bindings']['Settings_SetSaveArtifactEnabled'](arg1);
+}
+
+export function Settings_SetShortcut(arg1, arg2) {
+  return window['go']['rpc']['Bindings']['Settings_SetShortcut'](arg1, arg2);
+}
+
+export function Settings_SetShortcuts(arg1) {
+  return window['go']['rpc']['Bindings']['Settings_SetShortcuts'](arg1);
 }
 
 export function Settings_SetWebSearch(arg1) {
@@ -658,12 +802,20 @@ export function Tools_ListRecipes() {
   return window['go']['rpc']['Bindings']['Tools_ListRecipes']();
 }
 
+export function Tools_PickDirectory(arg1, arg2) {
+  return window['go']['rpc']['Bindings']['Tools_PickDirectory'](arg1, arg2);
+}
+
 export function Tools_RecipeConfig(arg1) {
   return window['go']['rpc']['Bindings']['Tools_RecipeConfig'](arg1);
 }
 
 export function Tools_RecipeStatus(arg1) {
   return window['go']['rpc']['Bindings']['Tools_RecipeStatus'](arg1);
+}
+
+export function Tools_RequestAdditionalAllowedDir(arg1, arg2, arg3) {
+  return window['go']['rpc']['Bindings']['Tools_RequestAdditionalAllowedDir'](arg1, arg2, arg3);
 }
 
 export function Tools_UninstallRecipe(arg1) {

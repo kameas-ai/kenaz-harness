@@ -16,14 +16,28 @@ import { useRoute, useRouter } from 'vue-router';
 const route = useRoute() as ReturnType<typeof useRoute> | undefined;
 const router = useRouter() as ReturnType<typeof useRouter> | undefined;
 
-const tabs: ReadonlyArray<{ to: string; label: string }> = [
+interface Tab {
+  to: string;
+  label: string;
+  /** Optional path-prefix used to keep the tab highlighted across
+   *  nested routes (e.g. /permissions/fs still highlights Permissions). */
+  matchPrefix?: string;
+}
+
+const tabs: ReadonlyArray<Tab> = [
   { to: '/settings', label: 'General' },
   { to: '/providers', label: 'Providers' },
   { to: '/hooks', label: 'Hooks' },
   { to: '/bundles', label: 'Bundles' },
+  { to: '/permissions/bash', label: 'Permissions', matchPrefix: '/permissions' },
 ];
 
 const activePath = computed(() => route?.path ?? '');
+
+function isActive(t: Tab): boolean {
+  if (t.matchPrefix) return activePath.value.startsWith(t.matchPrefix);
+  return activePath.value === t.to;
+}
 
 function goto(to: string) {
   if (!router || activePath.value === to) return;
@@ -43,12 +57,12 @@ function goto(to: string) {
           type="button"
           class="px-3 py-1.5 -mb-px font-ui text-[12px] uppercase tracking-[0.16em] border-b-2 transition-colors"
           :class="
-            activePath === t.to
+            isActive(t)
               ? 'border-accent text-ink'
               : 'border-transparent text-ink-muted hover:text-ink'
           "
-          :aria-current="activePath === t.to ? 'page' : undefined"
-          :data-testid="`settings-tab-${t.label.toLowerCase()}`"
+          :aria-current="isActive(t) ? 'page' : undefined"
+          :data-testid="`settings-tab-${t.label.toLowerCase().replace(/\s+/g, '-')}`"
           @click="goto(t.to)"
         >
           {{ t.label }}

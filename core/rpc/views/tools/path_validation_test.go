@@ -47,10 +47,13 @@ func TestValidateAllowedDir_RejectsNonExistent(t *testing.T) {
 	}
 }
 
-func TestValidateAllowedDir_RejectsRoot(t *testing.T) {
-	err := ValidateAllowedDir("/")
-	if !errors.Is(err, ErrPathInDenyList) {
-		t.Errorf("got %v, want ErrPathInDenyList", err)
+func TestValidateAllowedDir_AllowsRoot(t *testing.T) {
+	// "/" is intentionally allowed so the filesystem recipe's "full"
+	// access tier can grant whole-system access. Child deny-roots
+	// (/etc, /System, etc.) remain rejected on direct assignment;
+	// "/" only short-circuits when the canonical path equals "/".
+	if err := ValidateAllowedDir("/"); err != nil {
+		t.Errorf("got %v, want nil (root should be allowed for full tier)", err)
 	}
 }
 
@@ -124,7 +127,10 @@ func TestValidateAllowedDir_TraversalLandingInDenyListRejected(t *testing.T) {
 	}
 }
 
-func TestValidateAllowedDir_RejectsUserHomeItself(t *testing.T) {
+func TestValidateAllowedDir_AllowsUserHomeItself(t *testing.T) {
+	// The home directory is intentionally allowed so that the
+	// filesystem recipe's "full" access tier can grant $HOME access.
+	// System paths (/, /etc, /System, etc.) remain denied.
 	home, err := os.UserHomeDir()
 	if err != nil || home == "" {
 		t.Skip("no resolvable user home dir")
@@ -133,8 +139,8 @@ func TestValidateAllowedDir_RejectsUserHomeItself(t *testing.T) {
 		t.Skip("user home dir does not exist on this host")
 	}
 	gotErr := ValidateAllowedDir(home)
-	if !errors.Is(gotErr, ErrPathInDenyList) {
-		t.Errorf("ValidateAllowedDir(home=%q) = %v, want ErrPathInDenyList", home, gotErr)
+	if gotErr != nil {
+		t.Errorf("ValidateAllowedDir(home=%q) = %v, want nil (home dir should be allowed)", home, gotErr)
 	}
 }
 

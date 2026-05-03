@@ -400,8 +400,9 @@ func (s *syntheticStream) emit() {
 }
 
 // bearerClient returns the HTTP client used for bearer-auth Bedrock
-// calls. Tests can swap via WithHTTPClient; production gets a stdlib
-// default with no per-request timeout (context drives lifetime).
+// calls. Production callers get the keepalive-armed client wired up
+// in New(); tests can swap via WithHTTPClient. The nil fallback is
+// defensive — current construction paths always set a.httpc.
 func (a *Adapter) bearerClient() *http.Client {
 	if a.httpc != nil {
 		return a.httpc

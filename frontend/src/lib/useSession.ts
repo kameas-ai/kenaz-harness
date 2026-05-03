@@ -242,6 +242,23 @@ export function useSession(id: Ref<string>): UseSessionResult {
         return;
       }
       case 'error': {
+        // long-turn-resilience WP00: when the stream errors mid-flight,
+        // commit any partial assistant content BEFORE surfacing the
+        // error so the user's bubble persists with a "Connection lost"
+        // sub-line. Dedupe by id — the subsequent stream-closed handler
+        // would otherwise re-append the same row.
+        const partial = currentlyStreaming.value;
+        if (partial && partial.content.length > 0) {
+          const already = messages.value.some((x) => x.id === partial.id);
+          if (!already) {
+            const committed: Message = {
+              ...partial,
+              streaming: false,
+              streamingError: ev.err || 'stream error',
+            };
+            messages.value = [...messages.value, committed];
+          }
+        }
         if (ev.err) error.value = ev.err;
         return;
       }
@@ -269,8 +286,22 @@ export function useSession(id: Ref<string>): UseSessionResult {
     clearStreamTimeout();
     const finished = currentlyStreaming.value;
     if (finished) {
-      const committed: Message = { ...finished, streaming: false };
-      messages.value = [...messages.value, committed];
+      // long-turn-resilience WP00: commit the partial buffer regardless
+      // of `reason`. Previously only `completed` would commit; any other
+      // reason silently dropped the bubble. Dedupe against the case-error
+      // path which may have already committed under the same stable id.
+      const already = messages.value.some((x) => x.id === finished.id);
+      if (!already) {
+        const isCompleted = payload.reason === 'completed';
+        const committed: Message = isCompleted
+          ? { ...finished, streaming: false }
+          : {
+              ...finished,
+              streaming: false,
+              streamingError: payload.reason || 'closed-without-finish',
+            };
+        messages.value = [...messages.value, committed];
+      }
     }
     currentlyStreaming.value = null;
     streamSubscriptionId.value = null;

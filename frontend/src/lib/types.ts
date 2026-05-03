@@ -33,6 +33,47 @@ export interface Session {
    * session.Record.ProjectID nullable column.
    */
   projectId?: string;
+  /**
+   * True when the auto-titling engine has written a generated title for
+   * this session (session-auto-titling-01KQ8TDS WP05). The rail renders
+   * the title in italic + muted style when this is true. Flips to false
+   * when the user renames the session or calls clearTitle.
+   * Mirrors session.Record.AutoTitled (Go-side).
+   */
+  autoTitled?: boolean;
+}
+
+/**
+ * SessionUsage — per-session cumulative token + cost aggregate.
+ * Mirrors core/rpc/views/sessions.SessionUsage (token-cost-telemetry WP03).
+ */
+export interface SessionUsage {
+  /** Sum of all input tokens for the session. */
+  promptTokens: number;
+  /** Sum of all output tokens. */
+  completionTokens: number;
+  /** promptTokens + completionTokens. */
+  totalTokens: number;
+  /** Summed cost in USD. 0 when no cost data. */
+  costUsd: number;
+  /**
+   * How the cost was determined:
+   *   'provider'  — directly reported by the upstream provider (exact).
+   *   'derived'   — estimated from the curated pricing table (~).
+   *   'mixed'     — some turns provider, some derived.
+   *   'unknown'   — no cost data at all; render tokens only.
+   */
+  costSource: 'provider' | 'derived' | 'mixed' | 'unknown';
+  /** Number of assistant turns that contributed usage data. */
+  messageCount: number;
+  /** Last-updated date of the pricing table used ("YYYY-MM-DD"). */
+  pricingDataDate: string;
+   * True when the auto-titling engine wrote the session name. Mirrors
+   * session.Record.AutoTitled. The rail renders auto-titled sessions
+   * with a subtle italic+muted hint so the user can distinguish
+   * engine-chosen titles from names they set themselves.
+   */
+  autoTitled?: boolean;
 }
 
 /**
@@ -58,6 +99,13 @@ export interface Provider {
    * reads this list (filtered to the active session's family).
    */
   models?: string[];
+  /**
+   * Capability metadata for each entry in `models`, parallel by
+   * position. The context-window meter reads contextWindow from here;
+   * 0 / missing means unknown — the meter renders an explicit unknown
+   * state rather than a misleading fallback denominator.
+   */
+  modelInfos?: ModelInfo[];
   region?: string;
   cred?: CredentialReference;
   /**
@@ -126,6 +174,8 @@ export interface ModelInfo {
   id: string;
   displayName: string;
   description?: string;
+  /** Max context length in tokens; 0 / undefined = unknown. */
+  contextWindow?: number;
 }
 
 export interface MCPServer {
@@ -135,6 +185,72 @@ export interface MCPServer {
   version: string;
   transport?: string;
   capabilities?: string[];
+}
+
+// ── MCP Test Connection (mission mcp-server-install-01KQ8TDP, WP07) ────
+//
+// Wire shape for `MCP_TestRecipe`. Field names match the Go JSON tags
+// (camelCase) on mcp.TestResult. The frontend renders the result in the
+// "Test Connection" drawer without any adaptation layer.
+
+/**
+ * MCPTestResult is the outcome of a one-shot Test Connection RPC.
+ * All string fields may be empty on failure; numeric counts default to 0
+ * when the server did not advertise the capability or the handshake
+ * did not complete.
+ */
+export interface MCPTestResult {
+  /** Whether the full initialize + capability listing completed without error. */
+  ok: boolean;
+  /** Server name from the initialize response serverInfo block. */
+  serverName: string;
+  /** Server version from the initialize response serverInfo block. */
+  serverVersion: string;
+  /** Protocol version echoed back by the server. */
+  protocolVersion: string;
+  /** Number of tools reported by tools/list (0 if not advertised). */
+  toolCount: number;
+  /** Number of resources reported by resources/list (0 if not advertised). */
+  resourceCount: number;
+  /** Number of prompts reported by prompts/list (0 if not advertised). */
+  promptCount: number;
+  /**
+   * Up to 4 KiB of the most recent stderr output (stdio recipes only).
+   * Empty for HTTP/SSE transports.
+   */
+  stderrTail: string;
+  /** Human-readable error when ok is false. Empty when ok is true. */
+  errorMessage: string;
+  /** Wall-clock elapsed time from connection open to close, in milliseconds. */
+  durationMs: number;
+}
+
+// Wire shape for `MCP_TestRecipe`. Field names follow Go JSON tags
+// (snake_case) verbatim. `ok` is the primary discriminant; `error`
+// is populated on failure. Capability counts are -1 when the server
+// did not advertise the capability (not 0, which means "advertised
+// but empty").
+
+export interface MCPTestResult {
+  ok: boolean;
+  protocol_version?: string;
+  server_info: { name: string; version: string };
+  capabilities: {
+    tools?: { listChanged?: boolean };
+    resources?: { subscribe?: boolean; listChanged?: boolean };
+    prompts?: { listChanged?: boolean };
+    logging?: Record<string, never>;
+  };
+  /** -1 when tools capability not advertised. */
+  tool_count: number;
+  /** -1 when resources capability not advertised. */
+  resource_count: number;
+  /** -1 when prompts capability not advertised. */
+  prompt_count: number;
+  /** Last 4 KiB of stderr from a stdio server on failure. */
+  stderr_tail?: string;
+  duration_ms: number;
+  error?: string;
 }
 
 // ── MCP clipboard import (mission mcp-server-install-01KQ8TDP, WP08) ───
@@ -440,7 +556,106 @@ export interface Settings {
    * never touch. Default 4. Negative is rejected at save.
    */
   compactionRecentWindow?: number;
+
+  // ── WP08 — Universal permission dials ────────────────────────────
+
+  /**
+   * Global permission posture for all four resource families.
+   * "strict" — every call prompts. "normal" (default) — Cedar gates.
+   * "permissive" — non-dangerous ops skip prompts.
+   * Empty/missing == "normal".
+   */
+  permissionMode?: PermissionMode;
+
+  /**
+   * When true, "Allow always" is offered for dangerous-tier resources
+   * (rm, sudo, system paths, etc). Default false — dangerous ops
+   * re-prompt every time. Requires confirm dialog to enable.
+   */
+  permissionCacheDangerousOps?: boolean;
+
+  /**
+   * Marker set by WP10's first-boot migration after it writes
+   * bash_allow_*.cedar files for the historical allowlist. The UI reads
+   * this to suppress the one-time migration toast after it fires.
+   */
+  bashAllowlistMigrated?: boolean;
+
+  /**
+   * Marker set after the one-time migration toast is shown. Once true
+   * the toast never displays again.
+   */
+  permissionsMigrationToastShown?: boolean;
+
+  /**
+   * Markdown rendering extensions dial (markdown-rendering-polish-01KQ8TDT).
+   * Controls which heavy renderers (KaTeX, Mermaid) are active.
+   * Empty / undefined == 'all' (default). Set to 'basic' to disable
+   * both KaTeX and Mermaid on slow machines.
+   */
+  markdownExtensions?: MarkdownExtensions;
+  // ── Branch Advisor dials (branch-as-subagent-recommendation WP08) ──
+
+  /**
+   * Master on/off for the branch advisor (FR-010). When false the banner
+   * never mounts, regardless of confidence. Default false.
+   */
+  branchAdvisorEnabled?: boolean;
+
+  /**
+   * Heuristic confidence threshold. Default 0.85. Range [0, 1].
+   * Banner only mounts when the detector returns confidence ≥ this value.
+   */
+  branchAdvisorMinConfidence?: number;
+
+  /**
+   * Reserved: enables the LLM-backed detector (FR-013). Default false.
+   */
+  branchAdvisorUseLLM?: boolean;
+
+  /**
+   * Reserved: enables auto-branching above a higher threshold (FR-014).
+   * Default false.
+   */
+  branchAutoMode?: boolean;
+
+  /**
+   * Token budget for the reintegration summarization call (FR-008a).
+   * Default 2000, min 500, max 16000.
+   */
+  branchReintegrationMaxTokens?: number;
+
+  /**
+   * Provider+model used for newly spawned subagent branches. Defaults to
+   * compactionModel, which itself defaults to the session's active model.
+   */
+  branchAdvisorDefaultModel?: ProviderProfileRef;
+  /**
+   * User-overridden keyboard shortcut bindings. Map of shortcut id
+   * (e.g. 'chat.send') → canonical binding string (e.g. 'Cmd+Shift+Enter').
+   * Empty or missing map means all shortcuts use their registry defaults.
+   * Backend validates: ≤200 entries, ≤64 chars/value, no control chars.
+   * (keyboard-shortcuts-settings-01KQ8TDR plan §2.7)
+   */
+  keyboardShortcuts?: Record<string, string>;
+
+  /**
+   * Reserved for a future keyboard-shortcut preset gallery (v1 ships
+   * with only the hardcoded defaults). Empty string = bundled defaults.
+   * (keyboard-shortcuts-settings-01KQ8TDR plan Q1=C)
+   */
+  keyboardShortcutsPreset?: string;
 }
+
+/**
+ * MarkdownExtensions — controls which rendering features are active in
+ * MarkdownBlock. Matches the four-stop dial in SettingsView.
+ *   'basic'    — GFM only; KaTeX and Mermaid disabled.
+ *   'math'     — GFM + KaTeX; Mermaid disabled.
+ *   'diagrams' — GFM + Mermaid; KaTeX disabled.
+ *   'all'      — all renderers active (default).
+ */
+export type MarkdownExtensions = 'basic' | 'math' | 'diagrams' | 'all';
 
 /**
  * ConfirmDecision — the four canonical responses to a confirm-each
@@ -515,6 +730,15 @@ export interface Message {
   createdAt: string;
   /** Streaming flag — true while the assistant is still emitting tokens. */
   streaming?: boolean;
+  /**
+   * Stream failure marker (long-turn-resilience WP00). When the SSE stream
+   * closes with a non-completed reason or an error event fires mid-flight,
+   * the partial assistant content is still committed to messages with this
+   * field stamped to the failure reason ("error", "cancelled", "transient",
+   * "closed-without-finish", etc.). Empty / undefined for healthy streams.
+   * Serialised omitempty.
+   */
+  streamingError?: string;
   toolCalls?: readonly ToolCall[];
   /**
    * Polymorphic content blocks for multimodal messages
@@ -974,15 +1198,16 @@ export interface RecipeCapabilities {
  * a given ConfigOption. Mirrors the `ConfigKind*` constants in
  * core/mcp/recipes/recipes.go.
  */
-export type ConfigKind = 'directory_list' | 'boolean' | 'string';
+export type ConfigKind = 'directory_list' | 'boolean' | 'string' | 'enum';
 
 /**
  * ConfigOption — one user-editable knob declared by a recipe. The
  * filesystem recipe declares `allowed_directories` (directory_list);
- * future recipes may declare booleans (e.g. read_only) or free-form
- * strings. `default` may carry the `${DATA_DIR}` substitution token
- * for directory_list defaults — the backend expands the token at
- * install time, the modal renders the literal as a placeholder.
+ * future recipes may declare booleans (e.g. read_only), free-form
+ * strings, or enums (closed-set choices rendered as a dropdown).
+ * `default` may carry the `${DATA_DIR}` substitution token for
+ * directory_list defaults — the backend expands the token at install
+ * time, the modal renders the literal as a placeholder.
  */
 export interface ConfigOption {
   name: string;
@@ -991,6 +1216,11 @@ export interface ConfigOption {
   default?: unknown;
   required: boolean;
   description: string;
+  /**
+   * Closed set of allowed values when `kind === 'enum'`. The install
+   * modal renders these as a dropdown; ignored for any other kind.
+   */
+  choices?: string[];
 }
 
 /**
@@ -1735,6 +1965,42 @@ export interface Branch {
   updatedAt: string;
   mergedAt?: string;
   abandonedAt?: string;
+  /**
+   * True when this branch was spawned via the branch-advisor
+   * (branch-as-subagent-recommendation WP04).
+   */
+  subagentBranch?: boolean;
+  /** Correlates with KindBranchAdvisorAccepted audit event. */
+  recommendationId?: string;
+  /** Positive-signal labels that fired for this branch. */
+  advisorSignals?: string[];
+  /** Parent session id — populated on subagent branches. */
+  parentSessionIdRef?: string;
+}
+
+/**
+ * BranchReintegrationProposal — wire shape returned by
+ * Branches_ProposeReintegrationSummary. Carries the model-generated
+ * summary text, the token count it consumed, and the model name used.
+ * An empty ProposedSummary signals an empty branch (zero user/assistant
+ * turns); the modal switches to a "discard branch" affordance in that
+ * case.
+ */
+export interface BranchReintegrationProposal {
+  proposedSummary: string;
+  tokenCount: number;
+  model: string;
+  warningEdited?: boolean;
+}
+
+/**
+ * BranchReintegrationCommitOpts — options for CommitReintegration.
+ */
+export interface BranchReintegrationCommitOpts {
+  branchSessionId: string;
+  parentSessionId: string;
+  summary: string;
+  wasEdited: boolean;
 }
 
 /**
@@ -1790,3 +2056,152 @@ export interface BranchRecommendedModel {
    */
   crossProviderWarning?: string;
 }
+
+// ── WP08 — Universal Permission system types ─────────────────────────────
+
+/**
+ * PermissionFamily — the four resource families that the permission
+ * system covers. Matches the Cedar entity type names.
+ */
+export type PermissionFamily = 'bash' | 'fs' | 'credential' | 'tool';
+
+/**
+ * PermissionDecision — the three possible responses to a permission prompt.
+ * Mirrors the three buttons in BasePermissionModal.
+ */
+export type PermissionDecision = 'allow_once' | 'allow_always' | 'deny';
+
+/**
+ * PermissionGrant — a persisted "Allow always" Cedar policy snippet,
+ * as returned by client.permissions.listGrants().
+ */
+export interface PermissionGrant {
+  /** Unique stable id (the Cedar policy filename, or transient resource key). */
+  id: string;
+  /** Resource family. */
+  family: PermissionFamily;
+  /** Human-readable resource key (e.g. "git status", "/home/user/foo.txt"). */
+  resourceKey: string;
+  /** ISO-8601 timestamp when the grant was created. */
+  createdAt?: string;
+  /** True when this is an in-memory Allow-once grant (no .cedar file). */
+  transient?: boolean;
+  /** When persisted, the .cedar filename under <DataDir>/policy/. */
+  policyFile?: string;
+}
+
+/**
+ * PermissionRequest — payload emitted on the four broker topics
+ * (`bash:permission-pending`, `fs:permission-pending`,
+ *  `cred:permission-pending`, `tool:permission-pending`).
+ */
+export interface PermissionRequest {
+  request_id: string;
+  session_id: string;
+  family: PermissionFamily;
+  /** Human-friendly label for the resource (argv, path, provider::purpose, tool). */
+  resource_display: string;
+  /** Optional: full canonical resource UID for Cedar. */
+  resource_uid?: string;
+  /** Optional: model's stated reason for the request. */
+  reason?: string;
+  /** True when the resource is in the dangerous tier for its family. */
+  dangerous_tier?: boolean;
+  /** Dangerous-tier one-line explanation copy (e.g. "Deletes files irreversibly"). */
+  danger_copy?: string;
+  // Filesystem-specific
+  op?: 'read' | 'write' | 'delete' | 'move' | 'recipe_dir_add';
+}
+
+/**
+ * PermissionMode — the three global permission posture values.
+ */
+export type PermissionMode = 'strict' | 'normal' | 'permissive';
+// ── Branch Advisor (branch-as-subagent-recommendation WP02/WP03/WP06/WP07) ─
+
+/**
+ * BranchSuggestion — payload the backend attaches to a user-message echo
+ * when the heuristic detector fires (C-004 / DIRECTIVE_001: rides on the
+ * existing chat broker channel, no new RPC layer).
+ */
+export interface BranchSuggestion {
+  /** Opaque ULID that correlates suggestion → accept/dismiss audit events. */
+  id: string;
+  /** Normalized score [0, 1]. */
+  confidence: number;
+  /** Human-readable explanation for the banner tooltip. */
+  rationale: string;
+  /** Stable signal-label list (e.g. ["can_you_also", "while_youre_at_it"]). */
+  signals: string[];
+  /** First ≤40 chars of the message trimmed at whitespace. */
+  proposedTitle: string;
+}
+
+/**
+ * BranchAdvisorDismissScope — how broadly the dismiss applies.
+ */
+export type BranchAdvisorDismissScope = 'message' | 'session';
+
+/**
+ * ContextItemKind — the kinds of context items the context-pick modal
+ * can include when spawning a subagent branch (FR-006).
+ */
+export type ContextItemKind =
+  | 'last_4_turns'
+  | 'pinned_memories'
+  | 'attached_artifacts'
+  | 'system_prompt';
+
+/**
+ * SubagentToolGrantMode — the tool-grant scope for a spawned subagent
+ * branch (FR-005). "inherit" copies the parent's grant; "readonly" limits
+ * to read-only tools; "none" disables tools entirely; "cedar" requires an
+ * explicit Cedar policy id (only rendered when cedar-policy-editor is
+ * shipped).
+ */
+export type SubagentToolGrantMode =
+  | 'inherit'
+  | 'readonly'
+  | 'none'
+  | 'cedar';
+
+/**
+ * SubagentCreateOptions — request body for the context-pick modal's
+ * Submit action. Extends BranchCreateOptions with the subagent-specific
+ * advisor metadata.
+ */
+export interface SubagentCreateOptions extends BranchCreateOptions {
+  /** ID from the BranchSuggestion that triggered this creation. */
+  recommendationId?: string;
+  /** Signal labels that fired for this suggestion. */
+  advisorSignals?: string[];
+  /** Confidence score from the detector. */
+  advisorConfidence?: number;
+  /** Which context items to seed the subagent session with. */
+  contextItems?: ContextItemKind[];
+  /** Tool-grant scope for the new branch. */
+  toolGrantMode?: SubagentToolGrantMode;
+  /** Cedar policy id when toolGrantMode === 'cedar'. */
+  cedarPolicyId?: string;
+}
+
+/**
+ * ReintegrationProposal — what ProposeReintegrationSummary returns.
+ */
+export interface ReintegrationProposal {
+  /** The model-generated summary text, pre-filled in the editable textarea. */
+  proposedSummary: string;
+  /** Approximate output token count for the summary. */
+  tokenCount: number;
+  /** Model used for summarization (e.g. "claude-haiku-4"). */
+  model: string;
+  /** Artifact IDs produced in the branch session. */
+  artifactRefs?: string[];
+}
+
+/**
+ * ReintegrationCommitOptions — body for CommitReintegration.
+ * Alias for BranchReintegrationCommitOpts so the BranchesClient
+ * interface and the WP06 modal share one shape.
+ */
+export type ReintegrationCommitOptions = BranchReintegrationCommitOpts;
