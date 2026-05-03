@@ -1,10 +1,24 @@
 import { describe, it, expect } from 'vitest';
 import { mount, flushPromises } from '@vue/test-utils';
 import DirectoryPicker from '@/views/tools/DirectoryPicker.vue';
+import { provideFakeClient } from '@/lib/harnessClientContext';
+
+const withFakeClient = {
+  global: {
+    plugins: [
+      {
+        install(app: import('vue').App) {
+          provideFakeClient(app);
+        },
+      },
+    ],
+  },
+};
 
 describe('DirectoryPicker', () => {
   it('renders an empty state with the add button when no paths', async () => {
     const w = mount(DirectoryPicker, {
+      ...withFakeClient,
       props: { modelValue: [] },
     });
     await flushPromises();
@@ -15,6 +29,7 @@ describe('DirectoryPicker', () => {
 
   it('renders one chip per path in modelValue', async () => {
     const w = mount(DirectoryPicker, {
+      ...withFakeClient,
       props: { modelValue: ['/tmp/a', '/tmp/b'] },
     });
     await flushPromises();
@@ -24,6 +39,7 @@ describe('DirectoryPicker', () => {
 
   it('removing a chip emits update:modelValue with the chip dropped', async () => {
     const w = mount(DirectoryPicker, {
+      ...withFakeClient,
       props: { modelValue: ['/tmp/a', '/tmp/b', '/tmp/c'] },
     });
     await flushPromises();
@@ -35,6 +51,7 @@ describe('DirectoryPicker', () => {
 
   it('inline-edit Enter commits the new value', async () => {
     const w = mount(DirectoryPicker, {
+      ...withFakeClient,
       props: { modelValue: ['/tmp/a'] },
     });
     await flushPromises();
@@ -51,6 +68,7 @@ describe('DirectoryPicker', () => {
 
   it('inline-edit Escape reverts the value', async () => {
     const w = mount(DirectoryPicker, {
+      ...withFakeClient,
       props: { modelValue: ['/tmp/a'] },
     });
     await flushPromises();
@@ -70,6 +88,7 @@ describe('DirectoryPicker', () => {
 
   it('committing an empty edit drops the chip', async () => {
     const w = mount(DirectoryPicker, {
+      ...withFakeClient,
       props: { modelValue: ['/tmp/a', '/tmp/b'] },
     });
     await flushPromises();
@@ -86,6 +105,7 @@ describe('DirectoryPicker', () => {
 
   it('webkitdirectory file pick adds the picked root once (de-duped)', async () => {
     const w = mount(DirectoryPicker, {
+      ...withFakeClient,
       props: { modelValue: [] },
     });
     await flushPromises();
@@ -119,6 +139,7 @@ describe('DirectoryPicker', () => {
 
   it('uses only design tokens — no raw hex / rgba', async () => {
     const w = mount(DirectoryPicker, {
+      ...withFakeClient,
       props: { modelValue: ['/tmp/a'] },
     });
     await flushPromises();
