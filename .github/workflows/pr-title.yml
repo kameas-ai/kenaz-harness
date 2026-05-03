@@ -41,14 +41,16 @@ jobs:
           # Scope is optional but if supplied must be lowercase tokens
           # (e.g. feat(llm): ..., fix(ui,sessions): ...).
           requireScope: false
-          # First character of the description must be a non-empty letter
-          # or digit; trailing period not allowed.
-          subjectPattern: ^(?![A-Z])([a-z0-9].+[^. ])$
+          # Subject must be non-empty and not end in a period or trailing
+          # space. We do NOT enforce lowercase-first because the repo's
+          # spec-kitty WP-naming convention uses uppercase prefixes like
+          # "feat(scope): WP## — description" (see git log for examples).
+          subjectPattern: ^[^\s.][^\n]*[^. ]$
           subjectPatternError: |
             The subject "{subject}" found in the PR title "{title}" is invalid.
             It must:
-              - start with a lowercase letter or digit
-              - not end with a period
+              - not start with whitespace or a period
+              - not end with a period or trailing space
               - not be empty
           # Disable validation on PRs whose head branch is the
           # release-please bot — the bot sets its own conventional title

@@ -14,6 +14,8 @@ import (
 
 	coreag "github.com/sigil-tech/kaneaz-harness/core/agentgraph"
 	corellm "github.com/sigil-tech/kaneaz-harness/core/llm"
+	"github.com/sigil-tech/kaneaz-harness/core/session"
+	autotitle "github.com/sigil-tech/kaneaz-harness/core/sessions/autotitle"
 )
 
 // These integration tests load the production chat_default.yaml graph
@@ -492,3 +494,462 @@ func TestChatRunnerIntegration_ProviderError(t *testing.T) {
 // _ ensures the integration tests compile when chat package is imported
 // elsewhere (smoke check).
 var _ = json.RawMessage(nil)
+
+// -- WP06 (session-auto-titling-01KQ8TDS) --
+// The four scenarios below pin the chat-runner auto-title trigger
+// against the real chat_default.yaml so any drift in the post-run
+// firing rules, the predicate-recheck race guard, or the audit-emit
+// surface fails loudly.
+//
+// All four share three fakes:
+//   - fakeAutoTitleManager: in-memory session.Record + message log;
+//     enforces the same auto_titled / placeholder-name / supersede
+//     semantics as the production sqlStore.
+//   - fakeAutoTitleGenerator: pre-staged response queue (string or
+//     err); records every Call.
+//   - fakeAutoTitleAudit: captures every Emit so the failure-path
+//     test can assert the audit row landed with error_kind set.
+
+// fakeAutoTitleManager is a hand-built session.Manager surface that
+// satisfies the chat package's AutoTitleManager interface. It mirrors
+// just the slice of session.Manager the trigger touches: Get,
+// ListMessagesActive, AutoTitle, MarkAutoTitleAttempted.
+type fakeAutoTitleManager struct {
+	mu        sync.Mutex
+	rec       session.Record
+	msgs      []session.Message
+	autoCalls int
+	markCalls int
+	autoErr   error
+}
+
+func (f *fakeAutoTitleManager) Get(_ context.Context, id string) (session.Record, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.rec.ID != id {
+		return session.Record{}, session.ErrSessionNotFound
+	}
+	// Return a copy so callers can't mutate internal state.
+	r := f.rec
+	return r, nil
+}
+
+func (f *fakeAutoTitleManager) ListMessagesActive(_ context.Context, _ string) ([]session.Message, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]session.Message, len(f.msgs))
+	copy(out, f.msgs)
+	return out, nil
+}
+
+func (f *fakeAutoTitleManager) AutoTitle(_ context.Context, id, title string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.autoCalls++
+	if f.autoErr != nil {
+		return f.autoErr
+	}
+	if f.rec.ID != id {
+		return session.ErrSessionNotFound
+	}
+	if f.rec.AutoTitled {
+		return session.ErrAutoTitleSuperseded
+	}
+	f.rec.Name = title
+	f.rec.AutoTitled = true
+	return nil
+}
+
+func (f *fakeAutoTitleManager) MarkAutoTitleAttempted(_ context.Context, id string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.markCalls++
+	if f.rec.ID != id {
+		return session.ErrSessionNotFound
+	}
+	f.rec.AutoTitled = true
+	return nil
+}
+
+func (f *fakeAutoTitleManager) snapshot() session.Record {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.rec
+}
+
+func (f *fakeAutoTitleManager) reset() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.rec.AutoTitled = false
+	f.rec.Name = ""
+	f.autoCalls = 0
+	f.markCalls = 0
+}
+
+// fakeAutoTitleGenerator returns a queued title or error per Call.
+type fakeAutoTitleGenerator struct {
+	mu    sync.Mutex
+	queue []autoTitleResp
+	calls int
+}
+
+type autoTitleResp struct {
+	title string
+	err   error
+}
+
+func (g *fakeAutoTitleGenerator) push(r autoTitleResp) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.queue = append(g.queue, r)
+}
+
+func (g *fakeAutoTitleGenerator) GenerateTitle(_ context.Context, _ autotitle.Transcript) (string, error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.calls++
+	if len(g.queue) == 0 {
+		return "", errors.New("fakeAutoTitleGenerator: queue exhausted")
+	}
+	r := g.queue[0]
+	g.queue = g.queue[1:]
+	return r.title, r.err
+}
+
+func (g *fakeAutoTitleGenerator) callCount() int {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.calls
+}
+
+// fakeAutoTitleAudit records every Emit.
+type fakeAutoTitleAudit struct {
+	mu      sync.Mutex
+	emitted []auditEmission
+}
+
+type auditEmission struct {
+	kind    string
+	payload map[string]any
+}
+
+func (a *fakeAutoTitleAudit) Emit(_ context.Context, kind string, payload map[string]any) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	cp := make(map[string]any, len(payload))
+	for k, v := range payload {
+		cp[k] = v
+	}
+	a.emitted = append(a.emitted, auditEmission{kind: kind, payload: cp})
+}
+
+func (a *fakeAutoTitleAudit) snapshot() []auditEmission {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	out := make([]auditEmission, len(a.emitted))
+	copy(out, a.emitted)
+	return out
+}
+
+// buildAutoTitleRunner extends buildIntegrationRunner with a wired
+// AutoTitleDeps. The session id used by all four WP06 scenarios is
+// "session-1"; the manager fake is seeded with a single user-assistant
+// pair so the predicate has the assistant message it needs.
+func buildAutoTitleRunner(
+	t *testing.T,
+	llm *stubLLM,
+	mgr *fakeAutoTitleManager,
+	gen *fakeAutoTitleGenerator,
+	audit *fakeAutoTitleAudit,
+	enabled func() bool,
+) (*ChatRunner, *recordingBroker, *recordingHistoryWriter) {
+	t.Helper()
+	graph := loadProductionChatGraph(t)
+	broker := &recordingBroker{}
+	writer := &recordingHistoryWriter{}
+	runner, err := New(Config{
+		Kernel:        coreag.NewKernel(),
+		Registry:      stubRegistry{},
+		Broker:        broker,
+		HistoryWriter: writer,
+		History:       staticHistoryReader{msgs: []coreag.Message{{Role: "user", Content: "what's a good way to learn rust?"}}},
+		GraphLoader:   func() (coreag.Graph, error) { return graph, nil },
+		MaxTurns:      func() int { return 25 },
+		EnvDefaults: func(env *coreag.Env) {
+			if llm != nil {
+				env.LLM = llm
+			}
+			env.Tools = newStubTools()
+		},
+		AutoTitle: &AutoTitleDeps{
+			Manager:          mgr,
+			Generator:        gen,
+			Audit:            audit,
+			EffectiveEnabled: enabled,
+		},
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	return runner, broker, writer
+}
+
+// seedSession primes the fake manager with a placeholder-named session
+// and a one-turn user/assistant transcript. Returns the same manager
+// for chaining.
+func seedSession(mgr *fakeAutoTitleManager, sessionID string) *fakeAutoTitleManager {
+	mgr.mu.Lock()
+	defer mgr.mu.Unlock()
+	mgr.rec = session.Record{
+		ID:         sessionID,
+		Name:       "",
+		AutoTitled: false,
+	}
+	mgr.msgs = []session.Message{
+		{ID: "m-1", SessionID: sessionID, Sequence: 1, Role: session.RoleUser, Content: "what's a good way to learn rust?"},
+		{ID: "m-2", SessionID: sessionID, Sequence: 2, Role: session.RoleAssistant, Content: "start with the official rust book and work through the examples."},
+	}
+	return mgr
+}
+
+// waitForAutoTitleAttempt polls the manager until either AutoTitle or
+// MarkAutoTitleAttempted has been called, or the deadline passes.
+// Returns true when the trigger fired; false on timeout.
+func waitForAutoTitleAttempt(mgr *fakeAutoTitleManager) bool {
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		mgr.mu.Lock()
+		fired := mgr.autoCalls > 0 || mgr.markCalls > 0
+		mgr.mu.Unlock()
+		if fired {
+			return true
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	return false
+}
+
+// TestChatRunnerIntegration_AutoTitle_HappyPath: stub LLM emits a
+// text-only assistant turn; the auto-title generator returns
+// "Learning Rust"; the manager rec ends up with the new name and
+// auto_titled=1, exactly one generator Call, exactly one AutoTitle
+// write, and one audit emission.
+func TestChatRunnerIntegration_AutoTitle_HappyPath(t *testing.T) {
+	t.Parallel()
+	llm := &stubLLM{}
+	llm.push(stubLLMResponse{
+		stream: []coreag.StreamEvent{
+			{Kind: coreag.StreamEventText, Text: "start with the rust book."},
+		},
+		resp: coreag.LLMResponse{Content: "start with the rust book.", FinishReason: "stop"},
+	})
+
+	mgr := seedSession(&fakeAutoTitleManager{}, "session-1")
+	gen := &fakeAutoTitleGenerator{}
+	gen.push(autoTitleResp{title: "Learning Rust"})
+	audit := &fakeAutoTitleAudit{}
+
+	runner, broker, _ := buildAutoTitleRunner(t, llm, mgr, gen, audit, nil)
+	if _, err := runner.StartStream(context.Background(), "profile-1", "session-1", "", "what's a good way to learn rust?"); err != nil {
+		t.Fatalf("StartStream: %v", err)
+	}
+	closed := waitForClosed(t, broker)
+	if closed.Reason == "backend-error" {
+		t.Fatalf("Reason = %q, want non-error; msg=%q", closed.Reason, closed.Message)
+	}
+
+	if !waitForAutoTitleAttempt(mgr) {
+		t.Fatalf("auto-title trigger did not fire within 2s")
+	}
+
+	rec := mgr.snapshot()
+	if rec.Name != "Learning Rust" {
+		t.Errorf("rec.Name = %q, want Learning Rust", rec.Name)
+	}
+	if !rec.AutoTitled {
+		t.Errorf("rec.AutoTitled = false, want true")
+	}
+	if got := gen.callCount(); got != 1 {
+		t.Errorf("generator calls = %d, want 1", got)
+	}
+
+	emitted := audit.snapshot()
+	if len(emitted) != 1 {
+		t.Fatalf("audit emissions = %d, want 1; got %+v", len(emitted), emitted)
+	}
+	if emitted[0].kind != session.EventKindSessionAutoTitled {
+		t.Errorf("audit kind = %q, want %q", emitted[0].kind, session.EventKindSessionAutoTitled)
+	}
+	if got, _ := emitted[0].payload["title"].(string); got != "Learning Rust" {
+		t.Errorf("audit payload title = %q, want Learning Rust", got)
+	}
+	if _, hasErr := emitted[0].payload["error_kind"]; hasErr {
+		t.Errorf("happy-path emission should not carry error_kind; got %+v", emitted[0].payload)
+	}
+}
+
+// TestChatRunnerIntegration_AutoTitle_DialOff: EffectiveEnabled
+// returns false → trigger short-circuits → no generator call, no
+// session rename, no audit emission.
+func TestChatRunnerIntegration_AutoTitle_DialOff(t *testing.T) {
+	t.Parallel()
+	llm := &stubLLM{}
+	llm.push(stubLLMResponse{
+		stream: []coreag.StreamEvent{
+			{Kind: coreag.StreamEventText, Text: "ok."},
+		},
+		resp: coreag.LLMResponse{Content: "ok.", FinishReason: "stop"},
+	})
+
+	mgr := seedSession(&fakeAutoTitleManager{}, "session-1")
+	gen := &fakeAutoTitleGenerator{}
+	gen.push(autoTitleResp{title: "Should Not Be Called"})
+	audit := &fakeAutoTitleAudit{}
+
+	runner, broker, _ := buildAutoTitleRunner(t, llm, mgr, gen, audit, func() bool { return false })
+	if _, err := runner.StartStream(context.Background(), "profile-1", "session-1", "", "hi"); err != nil {
+		t.Fatalf("StartStream: %v", err)
+	}
+	_ = waitForClosed(t, broker)
+
+	// Give the goroutine a moment to short-circuit before asserting.
+	time.Sleep(100 * time.Millisecond)
+
+	rec := mgr.snapshot()
+	if rec.Name != "" {
+		t.Errorf("rec.Name = %q, want empty (dial off should not rename)", rec.Name)
+	}
+	if rec.AutoTitled {
+		t.Errorf("rec.AutoTitled = true, want false (dial off should not flip flag)")
+	}
+	if got := gen.callCount(); got != 0 {
+		t.Errorf("generator calls = %d, want 0 when dial off", got)
+	}
+	if got := audit.snapshot(); len(got) != 0 {
+		t.Errorf("audit emissions = %d, want 0 when dial off; got %+v", len(got), got)
+	}
+}
+
+// TestChatRunnerIntegration_AutoTitle_GeneratorFailure: generator
+// returns an error → MarkAutoTitleAttempted runs → rec name stays
+// empty but AutoTitled flips to true → audit emission carries
+// error_kind so dashboards see the attempt.
+func TestChatRunnerIntegration_AutoTitle_GeneratorFailure(t *testing.T) {
+	t.Parallel()
+	llm := &stubLLM{}
+	llm.push(stubLLMResponse{
+		stream: []coreag.StreamEvent{
+			{Kind: coreag.StreamEventText, Text: "ok."},
+		},
+		resp: coreag.LLMResponse{Content: "ok.", FinishReason: "stop"},
+	})
+
+	mgr := seedSession(&fakeAutoTitleManager{}, "session-1")
+	gen := &fakeAutoTitleGenerator{}
+	gen.push(autoTitleResp{err: errors.New("provider unavailable")})
+	audit := &fakeAutoTitleAudit{}
+
+	runner, broker, _ := buildAutoTitleRunner(t, llm, mgr, gen, audit, nil)
+	if _, err := runner.StartStream(context.Background(), "profile-1", "session-1", "", "hi"); err != nil {
+		t.Fatalf("StartStream: %v", err)
+	}
+	_ = waitForClosed(t, broker)
+
+	if !waitForAutoTitleAttempt(mgr) {
+		t.Fatalf("auto-title trigger did not fire within 2s")
+	}
+
+	rec := mgr.snapshot()
+	if rec.Name != "" {
+		t.Errorf("rec.Name = %q, want empty on failure path", rec.Name)
+	}
+	if !rec.AutoTitled {
+		t.Errorf("rec.AutoTitled = false, want true (MarkAutoTitleAttempted should flip the flag on failure)")
+	}
+	if got := gen.callCount(); got != 1 {
+		t.Errorf("generator calls = %d, want 1", got)
+	}
+
+	emitted := audit.snapshot()
+	if len(emitted) != 1 {
+		t.Fatalf("audit emissions = %d, want 1; got %+v", len(emitted), emitted)
+	}
+	if emitted[0].kind != session.EventKindSessionAutoTitled {
+		t.Errorf("audit kind = %q, want %q", emitted[0].kind, session.EventKindSessionAutoTitled)
+	}
+	errKind, _ := emitted[0].payload["error_kind"].(string)
+	if errKind == "" {
+		t.Errorf("audit payload error_kind missing on failure path; got %+v", emitted[0].payload)
+	}
+	if title, ok := emitted[0].payload["title"]; ok && title != "" {
+		t.Errorf("audit payload title set on failure path: %v; want absent or empty", title)
+	}
+}
+
+// TestChatRunnerIntegration_AutoTitle_ManualReTrigger: simulate the
+// "Suggest new title" header affordance — first run auto-titles to
+// "Initial Title", user clears via ClearTitle (mgr.reset), then a
+// second chat run fires a fresh trigger with a new generator response.
+// Asserts the second run lands the second title and emits a second
+// audit row.
+func TestChatRunnerIntegration_AutoTitle_ManualReTrigger(t *testing.T) {
+	t.Parallel()
+	llm := &stubLLM{}
+	llm.push(stubLLMResponse{
+		stream: []coreag.StreamEvent{
+			{Kind: coreag.StreamEventText, Text: "first reply."},
+		},
+		resp: coreag.LLMResponse{Content: "first reply.", FinishReason: "stop"},
+	})
+	llm.push(stubLLMResponse{
+		stream: []coreag.StreamEvent{
+			{Kind: coreag.StreamEventText, Text: "second reply."},
+		},
+		resp: coreag.LLMResponse{Content: "second reply.", FinishReason: "stop"},
+	})
+
+	mgr := seedSession(&fakeAutoTitleManager{}, "session-1")
+	gen := &fakeAutoTitleGenerator{}
+	gen.push(autoTitleResp{title: "Initial Title"})
+	gen.push(autoTitleResp{title: "Refreshed Title"})
+	audit := &fakeAutoTitleAudit{}
+
+	runner, broker, _ := buildAutoTitleRunner(t, llm, mgr, gen, audit, nil)
+
+	if _, err := runner.StartStream(context.Background(), "profile-1", "session-1", "", "first turn"); err != nil {
+		t.Fatalf("StartStream #1: %v", err)
+	}
+	_ = waitForClosed(t, broker)
+	if !waitForAutoTitleAttempt(mgr) {
+		t.Fatalf("first auto-title did not fire")
+	}
+	if rec := mgr.snapshot(); rec.Name != "Initial Title" || !rec.AutoTitled {
+		t.Fatalf("first run rec = %+v, want name=Initial Title autoTitled=true", rec)
+	}
+
+	// Simulate Sessions_ClearTitle: name back to "", auto_titled back
+	// to false. (mgr.reset zeros the counters too so the second run's
+	// assertions are clean.)
+	mgr.reset()
+
+	if _, err := runner.StartStream(context.Background(), "profile-1", "session-1", "", "second turn"); err != nil {
+		t.Fatalf("StartStream #2: %v", err)
+	}
+	_ = waitForClosed(t, broker)
+	if !waitForAutoTitleAttempt(mgr) {
+		t.Fatalf("second auto-title did not fire after clear")
+	}
+	rec := mgr.snapshot()
+	if rec.Name != "Refreshed Title" {
+		t.Errorf("post-clear rec.Name = %q, want Refreshed Title", rec.Name)
+	}
+	if !rec.AutoTitled {
+		t.Errorf("post-clear rec.AutoTitled = false, want true")
+	}
+	if got := gen.callCount(); got != 2 {
+		t.Errorf("generator calls = %d, want 2 across both runs", got)
+	}
+	if got := audit.snapshot(); len(got) != 2 {
+		t.Errorf("audit emissions = %d, want 2 (one per run)", len(got))
+	}
+}
