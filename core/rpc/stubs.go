@@ -118,6 +118,9 @@ func (s *stubSessions) SetSystemPrompt(_ context.Context, _, _, _ string) error 
 func (s *stubSessions) MoveToProject(_ context.Context, _, _ string) error {
 	return errNotWired
 }
+func (s *stubSessions) ResumeMessage(_ context.Context, _, _ string) (sessions.ResumeMessageResult, error) {
+	return sessions.ResumeMessageResult{}, errNotWired
+}
 
 // ── trust ──────────────────────────────────────────────────────────────
 

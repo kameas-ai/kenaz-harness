@@ -7,6 +7,7 @@ import (
 	"os"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	coreag "github.com/sigil-tech/kaneaz-harness/core/agentgraph"
 	"github.com/sigil-tech/kaneaz-harness/core/compaction"
@@ -107,6 +108,53 @@ type Config struct {
 	// without checking the token threshold. Production builds wire
 	// this; tests that don't exercise compaction leave it nil.
 	Compaction *CompactionDeps
+
+	// PartialPersister is the long-turn-resilience-01KR3PRS WP03 seam
+	// that handles the "kernel returned an error mid-stream" case: when
+	// driveRun observes a non-nil err that classifies as backend-error
+	// AND the StreamBridge has accumulated text deltas, the runner
+	// invokes PartialPersister.PersistPartial so the chassis can land a
+	// session_messages row carrying the partial text + the resume-flow
+	// metadata (streaming_failed_at, streaming_failure_kind,
+	// streaming_recoverable). nil disables the seam entirely — the
+	// runner emits the existing backend-error close payload and the
+	// frontend's WP00 fallback (the partial bubble committed
+	// frontend-side via streamingError) remains the user-visible
+	// surface.
+	PartialPersister PartialPersister
+}
+
+// PartialPersister is the resume-flow persistence seam. Invoked by
+// driveRun once per failed turn after the kernel exits with an
+// unrecoverable backend error. The chassis production wiring binds
+// this to a small adapter over session.Manager.AppendMessage +
+// MarkStreamingFailure (long-turn-resilience-01KR3PRS WP03).
+//
+// PersistPartial:
+//   - sessionID identifies the active session.
+//   - partialText is the byte-equal accumulation of every text-delta
+//     the StreamBridge saw before the drop. Always non-empty when the
+//     runner invokes the seam (the runner skips PersistPartial when
+//     no text was seen — the user's bubble would be empty).
+//   - kind is the failure classification: "transient" | "auth" |
+//     "unknown".
+//   - recoverable is true when no tool_use block executed before the
+//     drop (continuation prompt is safe).
+//
+// PersistPartial returns the persisted message id so the runner can
+// surface it on the bridge's stream-closed payload — the frontend
+// uses the id to wire the Resume button click into Sessions_ResumeMessage.
+type PartialPersister interface {
+	PersistPartial(ctx context.Context, sessionID, partialText, kind string, recoverable bool) (messageID string, err error)
+}
+
+// PartialPersisterFunc adapts a function value to the PartialPersister
+// interface so production wiring can pass a closure inline.
+type PartialPersisterFunc func(ctx context.Context, sessionID, partialText, kind string, recoverable bool) (string, error)
+
+// PersistPartial satisfies PartialPersister.
+func (f PartialPersisterFunc) PersistPartial(ctx context.Context, sessionID, partialText, kind string, recoverable bool) (string, error) {
+	return f(ctx, sessionID, partialText, kind, recoverable)
 }
 
 // CompactionDeps bundles every collaborator the pre-send compaction
@@ -438,16 +486,141 @@ func (r *ChatRunner) driveRun(ctx context.Context, sub *chatSub, env *coreag.Env
 		message = err.Error()
 	}
 
+	// long-turn-resilience-01KR3PRS WP03: when the kernel exited with
+	// a backend-error AND the StreamBridge accumulated text deltas
+	// before the drop, persist a partial assistant row through
+	// PartialPersister so the resume RPC can land a continuation. The
+	// frontend receives the persisted message id on the closed payload
+	// and renders the Resume affordance against it.
+	//
+	// Skip persistence on every other terminal path:
+	//   - reason=="completed": the kernel ran cleanly; SessionWriteNode
+	//     already persisted the assistant row.
+	//   - reason=="stop-called": user-initiated stop; partial-persist
+	//     would surface a stale Resume button with no recovery upside.
+	//   - no PartialPersister wired: degrade to the WP00 frontend-only
+	//     fallback (the partial bubble's streamingError sub-line).
+	var (
+		partialMessageID   string
+		partialFailureKind string
+		partialRecoverable bool
+	)
+	if reason == "backend-error" && r.cfg.PartialPersister != nil {
+		partialText, hasTool := sub.bridge.PartialState()
+		if partialText != "" {
+			partialFailureKind = classifyPartialFailureKind(message)
+			partialRecoverable = !hasTool
+			// Use a fresh background context so a cancelled streamCtx
+			// does not abort the persist call. The chat-runner owns
+			// per-session serialization, so a 5s budget is safe.
+			persistCtx, cancel := context.WithTimeout(context.Background(), persistPartialTimeout)
+			mid, perr := r.cfg.PartialPersister.PersistPartial(persistCtx, sub.sessionID,
+				partialText, partialFailureKind, partialRecoverable)
+			cancel()
+			if perr != nil {
+				logging.L().Warn("chat.partial_persist.failed",
+					"sub_id", sub.id,
+					"session_id", sub.sessionID,
+					"err", perr.Error())
+			} else {
+				partialMessageID = mid
+				logging.L().Info("chat.partial_persist.ok",
+					"sub_id", sub.id,
+					"session_id", sub.sessionID,
+					"message_id", mid,
+					"failure_kind", partialFailureKind,
+					"recoverable", partialRecoverable,
+					"bytes", len(partialText),
+				)
+			}
+		}
+	}
+
 	if !sub.finished.CompareAndSwap(false, true) {
 		return
 	}
-	sub.bridge.EmitClosed(reason, message, finishReason)
+	sub.bridge.EmitClosedPartial(reason, message, finishReason,
+		partialMessageID, partialFailureKind, partialRecoverable)
 	log.Info("chat.run.complete",
 		"sub_id", sub.id,
 		"session_id", sub.sessionID,
 		"reason", reason,
 		"err", message,
 	)
+}
+
+// persistPartialTimeout caps the partial-persist call so a slow
+// session_messages write cannot block the chat-runner terminal goroutine
+// indefinitely. 5s is generous — the write is a single UPDATE.
+const persistPartialTimeout = 5 * time.Second
+
+// classifyPartialFailureKind returns the failure_kind string the
+// frontend persists alongside the partial row. The classifier only sees
+// the wrapped error message string at this point (the typed
+// llm.ErrTransient/ErrAuth wraps live deeper inside the kernel run, and
+// the runner's surface only carries err.Error()), so it does a
+// substring sniff over the canonical wrapping prefixes the chat path
+// uses (see core/llm/errors.go for the source taxonomy).
+//
+// long-turn-resilience-01KR3PRS WP03.
+func classifyPartialFailureKind(msg string) string {
+	switch {
+	case msg == "":
+		return "unknown"
+	case containsAny(msg, "auth", "401", "403", "unauthorized"):
+		return "auth"
+	case containsAny(msg, "transient", "stream", "network", "connection", "5"):
+		// Catch-all for ErrTransient wrapping; the leading "5" handles
+		// 5xx HTTP codes mentioned in the wrap. The classifier is
+		// best-effort — frontend uses this only to tailor the failure
+		// copy, never to gate the resume button.
+		return "transient"
+	default:
+		return "unknown"
+	}
+}
+
+// containsAny reports whether s contains any of the provided substrings.
+// Local helper so the classifier doesn't need a heavyweight import.
+func containsAny(s string, subs ...string) bool {
+	for _, sub := range subs {
+		if substr(s, sub) {
+			return true
+		}
+	}
+	return false
+}
+
+// substr is a tiny case-insensitive substring check.
+func substr(s, sub string) bool {
+	if sub == "" {
+		return true
+	}
+	if len(sub) > len(s) {
+		return false
+	}
+	// Fast lowercase comparison — sufficient for the small set of
+	// substrings classifyPartialFailureKind uses (no Unicode quirks).
+	for i := 0; i+len(sub) <= len(s); i++ {
+		match := true
+		for j := 0; j < len(sub); j++ {
+			cs, csub := s[i+j], sub[j]
+			if cs >= 'A' && cs <= 'Z' {
+				cs += 'a' - 'A'
+			}
+			if csub >= 'A' && csub <= 'Z' {
+				csub += 'a' - 'A'
+			}
+			if cs != csub {
+				match = false
+				break
+			}
+		}
+		if match {
+			return true
+		}
+	}
+	return false
 }
 
 // applyMaxTurnsDial walks every LoopNode in the graph and overrides

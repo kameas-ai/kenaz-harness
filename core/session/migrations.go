@@ -79,7 +79,10 @@ const sqlInitSchema = `
 // migrations_memory_hook_journal.go) and 0309 (agent_graph_events —
 // see migrations_agent_graph_events.go); compaction-strategy-ui WP01
 // lands as 0310 (compaction bookkeeping columns + indexes — see
-// migrations_compaction.go).
+// migrations_compaction.go); long-turn-resilience-01KR3PRS WP03 lands
+// as 0317 (streaming_failed_at + streaming_failure_kind +
+// streaming_recoverable + continuation_of columns on session_messages —
+// see migrations_resume.go).
 func Migrations() []migrations.Migration {
 	return []migrations.Migration{
 		{
@@ -122,6 +125,7 @@ func Migrations() []migrations.Migration {
 		migration0308(),
 		migration0309(),
 		migration0310(),
+		migration0317(),
 	}
 }
 

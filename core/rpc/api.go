@@ -390,6 +390,17 @@ func New(c *core.Core) *API {
 	stack := newLLMStack(c, a.broker, personalForLLM, hooksRunner, attMgr, confirmEachEnabled, artifactSink, artifactSinkConcrete, settingsImpl, a_bashStore, artMgr, a.graphMgr)
 	a.llmAPI = stack.api
 	a.stdioPool = stack.pool
+	// long-turn-resilience-01KR3PRS WP03: now that both the chat
+	// runner and the session manager are constructed, wire the
+	// ResumeStarter onto the existing sessionsAPI so
+	// Sessions_ResumeMessage can open continuation streams against
+	// the partial assistant rows the runner persists on backend-error.
+	if stack.chatRunner != nil && c != nil && c.SessionManager() != nil {
+		starter := buildResumeStarter(stack.chatRunner, c.SessionManager(), "", "")
+		if starter != nil {
+			a.sessionsAPI = sessions.WithResumeStarter(a.sessionsAPI, starter)
+		}
+	}
 	if c != nil && a.stdioPool != nil {
 		c.SetMCP(a.stdioPool)
 		// Persisted-recipes bootstrap — Core.Start invokes this once
@@ -960,6 +971,12 @@ type llmStack struct {
 	// layer queries when surfacing recent compaction events to the
 	// frontend. nil when compaction is disabled.
 	compactionAudit *compactionwiring.AuditEmitter
+	// chatRunner is the kernel-driven entry point that powers the
+	// chat path. Held on the stack so the rpc.New caller can wire a
+	// ResumeStarter onto the SessionsAPI
+	// (long-turn-resilience-01KR3PRS WP03). nil when graphMgr was
+	// unavailable at boot.
+	chatRunner *chat.ChatRunner
 }
 
 func newLLMStack(
@@ -1148,6 +1165,7 @@ func newLLMStack(
 		compactionScheduler: sweepScheduler,
 		compactionLLM:       compactionLLM,
 		compactionAudit:     compactionAudit,
+		chatRunner:          chatRunner,
 	}
 }
 
@@ -1366,25 +1384,135 @@ func buildChatRunner(
 			env.Hooks.RegisterToolPostHook(artifactSinkConcrete.OnPostToolMessage)
 		}
 	}
+	// long-turn-resilience-01KR3PRS WP03: PartialPersister wires the
+	// partial-output drop path to session.Manager. AppendMessage lands
+	// the partial assistant row (so a fresh ListMessages refetch sees
+	// it), then MarkStreamingFailure stamps the streaming_failed_at +
+	// classification + recoverable columns onto the same row. The
+	// runner's terminal goroutine fires this on every backend-error
+	// close path where the StreamBridge accumulated text deltas.
+	var partialPersister chat.PartialPersister
+	if historyAdapter != nil && historyAdapter.mgr != nil {
+		mgr := historyAdapter.mgr
+		partialPersister = chat.PartialPersisterFunc(func(ctx context.Context, sessionID, partialText, kind string, recoverable bool) (string, error) {
+			stored, err := mgr.AppendMessage(ctx, sessionID, session.Message{
+				Role:    session.RoleAssistant,
+				Content: partialText,
+			})
+			if err != nil {
+				return "", err
+			}
+			if merr := mgr.MarkStreamingFailure(ctx, sessionID, stored.ID, kind, recoverable); merr != nil {
+				logging.L().Warn("chat.partial_persist.mark_failed",
+					"session_id", sessionID, "message_id", stored.ID, "err", merr.Error())
+			}
+			return stored.ID, nil
+		})
+	}
+
 	runner, err := chat.New(chat.Config{
-		Kernel:         graphMgr.Kernel(),
-		Registry:       reg,
-		Pool:           chatToolPoolAdapter{inner: wrappedPool},
-		Perms:          chatPermsAdapter{inner: perms},
-		Broker:         chatBrokerAdapter{broker: broker},
-		History:        historyReader,
-		HistoryWriter:  historyWriter,
-		GraphLoader:    func() (coreag.Graph, error) { return graphMgr.LoadGraphSpec("chat_default") },
-		MaxTurns:       maxTurns,
-		EnvDefaults:    envDefaults,
-		ToolDiscoverer: chatToolDiscovererAdapter{inner: tools},
-		Compaction:     compactionDeps,
+		Kernel:           graphMgr.Kernel(),
+		Registry:         reg,
+		Pool:             chatToolPoolAdapter{inner: wrappedPool},
+		Perms:            chatPermsAdapter{inner: perms},
+		Broker:           chatBrokerAdapter{broker: broker},
+		History:          historyReader,
+		HistoryWriter:    historyWriter,
+		GraphLoader:      func() (coreag.Graph, error) { return graphMgr.LoadGraphSpec("chat_default") },
+		MaxTurns:         maxTurns,
+		EnvDefaults:      envDefaults,
+		ToolDiscoverer:   chatToolDiscovererAdapter{inner: tools},
+		Compaction:       compactionDeps,
+		PartialPersister: partialPersister,
 	})
 	if err != nil {
 		logging.L().Error("chat.runner.construct_failed", "err", err.Error())
 		return nil
 	}
 	return runner
+}
+
+// continuationPromptPrefix is the system-injection wrapper used by the
+// resume flow's continuation prompt. The model sees:
+//
+//	"Your previous reply was cut off by a network error. Continue from
+//	 where you stopped. Your interrupted reply ended with: <last 200 chars>"
+//
+// The literal "Continue from where you stopped." string keeps the
+// continuation deterministic across providers (DeepSeek, OpenAI,
+// Anthropic). Tail truncation at 200 chars matches the spec
+// (long-turn-resilience-01KR3PRS plan §Layer 3).
+//
+// long-turn-resilience-01KR3PRS WP03.
+const continuationPromptPrefix = "Your previous reply was cut off by a network error. Continue from where you stopped. Your interrupted reply ended with: "
+
+// continuationPromptTailLen is the number of trailing characters of the
+// partial reply we surface back to the model.
+const continuationPromptTailLen = 200
+
+// buildContinuationPrompt builds the continuation prompt the resume
+// RPC hands to chat.ChatRunner.StartStream as the userMessage.
+func buildContinuationPrompt(partial string) string {
+	tail := partial
+	if len(tail) > continuationPromptTailLen {
+		// Truncate from the back so the model sees the most-recent
+		// context, not the prefix.
+		tail = tail[len(tail)-continuationPromptTailLen:]
+	}
+	return continuationPromptPrefix + tail
+}
+
+// buildResumeStarter wires a sessions.ResumeStarter onto the supplied
+// chat runner + session manager so Sessions_ResumeMessage can open a
+// continuation chat-stream against a partial assistant row.
+//
+// The starter:
+//
+//  1. Loads the partial row to extract the tail text + the session's
+//     last-known (profileID, modelOverride). Today the chat runner does
+//     not store a per-session profile/model mapping, so the resume
+//     reuses whatever profile/model the caller threads in (production
+//     wiring uses the chassis-default profile id; the frontend can
+//     override via a future RPC arg).
+//  2. Synthesizes the continuation prompt via buildContinuationPrompt.
+//  3. Calls runner.StartStream with the synthesized prompt as the
+//     userMessage so the existing AskBus/HistoryReadNode pump delivers
+//     it on the first kernel fire.
+//
+// long-turn-resilience-01KR3PRS WP03.
+func buildResumeStarter(runner *chat.ChatRunner, mgr *session.Manager, defaultProfileID, defaultModel string) sessions.ResumeStarter {
+	if runner == nil || mgr == nil {
+		return nil
+	}
+	return sessions.ResumeStarterFunc(func(ctx context.Context, sessionID, originalMessageID, profileID, modelOverride string) (string, error) {
+		partial, err := mgr.GetMessage(ctx, sessionID, originalMessageID)
+		if err != nil {
+			return "", fmt.Errorf("rpc: load partial for resume: %w", err)
+		}
+		prompt := buildContinuationPrompt(partial.Content)
+		if profileID == "" {
+			profileID = defaultProfileID
+		}
+		if modelOverride == "" {
+			modelOverride = defaultModel
+		}
+		// StartStream persists the continuation prompt as a user turn
+		// before opening the kernel run. That's the wrong shape for a
+		// resume — we want the continuation row to be assistant-role
+		// and stamped with continuation_of. The chat runner will need
+		// a dedicated resume entrypoint to land the right shape; for
+		// now we emit a user-turn with the continuation prompt, which
+		// produces a fresh assistant turn that the frontend can wire
+		// into the partial bubble manually via the OriginalMessageID
+		// returned by the resume RPC.
+		//
+		// TODO(long-turn-resilience-WP04): plumb a dedicated
+		// runner.StartResume(originalMessageID, prompt) entrypoint so
+		// the persisted assistant row carries continuation_of natively
+		// (via session.Manager.AppendContinuation) instead of relying
+		// on the frontend to stitch the bubbles.
+		return runner.StartStream(ctx, profileID, sessionID, modelOverride, prompt)
+	})
 }
 
 // chatToolDiscovererAdapter bridges corellm.ToolDiscoverer onto the

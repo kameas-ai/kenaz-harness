@@ -62,6 +62,43 @@ type Message struct {
 	// archived (folded into a summary). Empty on live rows; non-empty
 	// rows are excluded from ListMessagesActive.
 	ArchivedAt string `json:"archivedAt,omitempty"`
+
+	// StreamingFailedAt is the RFC3339Nano UTC moment the chat runner
+	// persisted this row as a partial-output drop
+	// (long-turn-resilience-01KR3PRS WP03). Empty on every healthy row;
+	// non-empty rows are partial assistant turns the user can resume
+	// when StreamingRecoverable is true.
+	StreamingFailedAt string `json:"streamingFailedAt,omitempty"`
+	// StreamingFailureKind is the wire-shape mirror of
+	// session.Message.StreamingFailureKind. One of "transient" | "auth"
+	// | "unknown"; empty on healthy rows.
+	StreamingFailureKind string `json:"streamingFailureKind,omitempty"`
+	// StreamingRecoverable indicates whether the partial row is safe to
+	// resume via Sessions_ResumeMessage. False when tool_use already
+	// ran before the drop — the user must re-issue the request instead.
+	StreamingRecoverable bool `json:"streamingRecoverable,omitempty"`
+	// ContinuationOf is the id of the partial assistant row this row
+	// continues. Empty on every original assistant row; non-empty only
+	// on the continuation row written by Sessions_ResumeMessage.
+	ContinuationOf string `json:"continuationOf,omitempty"`
+}
+
+// ResumeMessageResult is the wire shape returned by Sessions_ResumeMessage.
+// SubscriptionID matches the existing LLM stream-subscription contract so
+// the frontend can wire the resume stream into the same chunk + closed
+// topics it already drains for fresh turns.
+//
+// long-turn-resilience-01KR3PRS WP03.
+type ResumeMessageResult struct {
+	// SubscriptionID is the chat-stream subscription id the resume
+	// invocation opened. Empty when the resume API short-circuited
+	// before opening a stream (the message was non-recoverable; the
+	// caller receives ErrResumeNotRecoverable instead).
+	SubscriptionID string `json:"subscriptionId"`
+	// OriginalMessageID is the id of the partial assistant row the
+	// resume continued. Round-tripped so the frontend can correlate
+	// the subscription id with the bubble that triggered it.
+	OriginalMessageID string `json:"originalMessageId"`
 }
 
 // ListMessagesResult is the wire-shape envelope for the WP07
@@ -153,4 +190,19 @@ type SessionsAPI interface {
 	// MoveToProject sets the session's project membership. An empty
 	// projectID detaches the session and makes it loose.
 	MoveToProject(ctx context.Context, id, projectID string) error
+
+	// ResumeMessage opens a continuation stream against the partial
+	// assistant row identified by messageID. The returned subscription
+	// id is the same shape the LLM view's StartStream returns — the
+	// frontend drains llm:stream-chunk + llm:stream-closed against it
+	// to render the continuation bubble.
+	//
+	// Idempotency: when the partial row already has a continuation
+	// row attached (i.e. an earlier Resume already succeeded), the API
+	// returns ErrResumeAlreadyContinued without opening a new stream.
+	// Callers should treat this as "the continuation is already on
+	// disk, refresh the transcript" rather than as a hard error.
+	//
+	// long-turn-resilience-01KR3PRS WP03.
+	ResumeMessage(ctx context.Context, sessionID, messageID string) (ResumeMessageResult, error)
 }

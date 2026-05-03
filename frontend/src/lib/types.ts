@@ -546,6 +546,33 @@ export interface Message {
   compactedIntoId?: string;
   compactedAt?: string;
   archivedAt?: string;
+  /**
+   * Long-turn-resilience-01KR3PRS WP03 — partial-output drop metadata.
+   * Populated by migration 0317 on assistant rows the chat runner
+   * persisted after a stream drop:
+   *
+   *   - streamingFailedAt    : RFC3339Nano UTC moment the runner
+   *                            decided the stream was lost. Empty on
+   *                            healthy rows.
+   *   - streamingFailureKind : "transient" | "auth" | "unknown".
+   *                            Selects the failure copy.
+   *   - streamingRecoverable : true when no tool_use ran before the
+   *                            drop, so the Resume button is safe.
+   *   - continuationOf       : id of the partial row this row
+   *                            continues. Set only on continuation
+   *                            rows written by Sessions_ResumeMessage;
+   *                            empty on every original assistant row.
+   */
+  streamingFailedAt?: string;
+  streamingFailureKind?: 'transient' | 'auth' | 'unknown' | string;
+  streamingRecoverable?: boolean;
+  continuationOf?: string;
+  /** Frontend-only marker for the WP03 partial-message bubble — set by
+   * the useSession close-handler when the stream dropped before the
+   * assistant turn could land via SessionWriteNode. Mirrors the WP00
+   * surface: the bubble shows "Connection lost — partial reply
+   * preserved." plus a Resume button when streamingRecoverable. */
+  streamingError?: string;
 }
 
 /**
@@ -563,6 +590,20 @@ export interface Message {
 export interface ListMessagesResult {
   messages: Message[];
   sweptCount: number;
+}
+
+/**
+ * ResumeMessageResult — wire shape returned by sessions.resumeMessage
+ * (long-turn-resilience-01KR3PRS WP03). subscriptionId matches the LLM
+ * stream-subscription contract so the caller drains the same
+ * llm:stream-chunk + llm:stream-closed topics it uses for fresh turns.
+ * originalMessageId echoes the partial bubble id the resume continues —
+ * the caller uses it to grey out the original bubble when the
+ * continuation lands.
+ */
+export interface ResumeMessageResult {
+  subscriptionId: string;
+  originalMessageId: string;
 }
 
 /**

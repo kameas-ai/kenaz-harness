@@ -40,6 +40,7 @@ import type {
   Settings,
   Theme,
   ListMessagesResult,
+  ResumeMessageResult,
   Message,
   MessageRole,
   MemoryChunk,
@@ -164,6 +165,10 @@ interface WailsBindingsLike {
     kind: 'system' | 'user_seed',
   ): Promise<void>;
   Sessions_MoveToProject(id: string, projectID: string): Promise<void>;
+  Sessions_ResumeMessage(
+    sessionID: string,
+    messageID: string,
+  ): Promise<ResumeMessageResult>;
   Sessions_SaveAsArtifact(
     sessionID: string,
     messageID: string,
@@ -718,6 +723,21 @@ export interface SessionsClient {
    * projectId detaches the session and makes it loose.
    */
   moveToProject(id: string, projectId: string): Promise<void>;
+  /**
+   * resumeMessage opens a continuation chat-stream against a partial
+   * assistant row that the chat runner persisted after a stream drop
+   * (long-turn-resilience-01KR3PRS WP03). Returns the new chat-stream
+   * subscription id so the caller can drain the same llm:stream-chunk +
+   * llm:stream-closed topics it already subscribes to for fresh turns.
+   *
+   * The frontend wires this from the Resume button on the partial
+   * MessageBubble, which is rendered when the message's
+   * streamingFailedAt + streamingRecoverable fields are set.
+   */
+  resumeMessage(
+    sessionId: string,
+    messageId: string,
+  ): Promise<ResumeMessageResult>;
   /**
    * saveAsArtifact pins a message (or a sub-range thereof) as a
    * `user_pin` artifact. `rangeStart` / `rangeEnd` are byte offsets
@@ -1391,6 +1411,8 @@ export function createHarnessClient(): HarnessClient {
         b().Sessions_SetSystemPrompt(id, content, kind),
       moveToProject: (id, projectId) =>
         b().Sessions_MoveToProject(id, projectId),
+      resumeMessage: (sessionId, messageId) =>
+        b().Sessions_ResumeMessage(sessionId, messageId),
       saveAsArtifact: (sessionId, messageId, title, rangeStart, rangeEnd) =>
         b().Sessions_SaveAsArtifact(
           sessionId,
@@ -1713,6 +1735,10 @@ export function createFakeHarnessClient(
       loadDraft: async () => '',
       setSystemPrompt: noop,
       moveToProject: noop,
+      resumeMessage: async (_sessionId, messageId) => ({
+        subscriptionId: `fake-resume-${Math.random().toString(36).slice(2, 8)}`,
+        originalMessageId: messageId,
+      }),
       saveAsArtifact: async (sessionId, messageId, title) => ({
         id: `fake-art-${Math.random().toString(36).slice(2, 8)}`,
         sessionId,
