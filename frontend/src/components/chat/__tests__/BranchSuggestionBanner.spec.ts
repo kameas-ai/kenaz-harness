@@ -139,7 +139,7 @@ describe('ChatInput branch-advisor', () => {
     await textarea.setValue('can you also figure out the license');
     await textarea.trigger('input');
     // Banner must NOT appear yet (debounce is 800ms)
-    expect(w.find('[data-testid="branch-suggestion-banner"]').exists()).toBe(false);
+    expect(w.find('[data-testid="chat-input-branch-banner"]').exists()).toBe(false);
   });
 
   it('banner appears after 800ms debounce when positive signal matched', async () => {
@@ -149,7 +149,7 @@ describe('ChatInput branch-advisor', () => {
     await textarea.trigger('input');
     vi.advanceTimersByTime(800);
     await flushPromises();
-    expect(w.find('[data-testid="branch-suggestion-banner"]').exists()).toBe(true);
+    expect(w.find('[data-testid="chat-input-branch-banner"]').exists()).toBe(true);
   });
 
   it('banner does not appear for plain text without signals', async () => {
@@ -159,7 +159,7 @@ describe('ChatInput branch-advisor', () => {
     await textarea.trigger('input');
     vi.advanceTimersByTime(800);
     await flushPromises();
-    expect(w.find('[data-testid="branch-suggestion-banner"]').exists()).toBe(false);
+    expect(w.find('[data-testid="chat-input-branch-banner"]').exists()).toBe(false);
   });
 
   it('rapid typing within 800ms suppresses the banner (debounce race guard)', async () => {
@@ -175,11 +175,11 @@ describe('ChatInput branch-advisor', () => {
     vi.advanceTimersByTime(400);
     // Only 400ms since last input — banner should still be hidden
     await flushPromises();
-    expect(w.find('[data-testid="branch-suggestion-banner"]').exists()).toBe(false);
+    expect(w.find('[data-testid="chat-input-branch-banner"]').exists()).toBe(false);
     // Now let the full 800ms expire from the second input
     vi.advanceTimersByTime(400);
     await flushPromises();
-    expect(w.find('[data-testid="branch-suggestion-banner"]').exists()).toBe(true);
+    expect(w.find('[data-testid="chat-input-branch-banner"]').exists()).toBe(true);
   });
 
   it('"No thanks" hides the banner (message-scope dismiss)', async () => {
@@ -189,10 +189,10 @@ describe('ChatInput branch-advisor', () => {
     await textarea.trigger('input');
     vi.advanceTimersByTime(800);
     await flushPromises();
-    expect(w.find('[data-testid="branch-suggestion-banner"]').exists()).toBe(true);
+    expect(w.find('[data-testid="chat-input-branch-banner"]').exists()).toBe(true);
     await w.find('[data-testid="branch-banner-no-thanks"]').trigger('click');
     await flushPromises();
-    expect(w.find('[data-testid="branch-suggestion-banner"]').exists()).toBe(false);
+    expect(w.find('[data-testid="chat-input-branch-banner"]').exists()).toBe(false);
   });
 
   it('"Don\'t suggest again" hides the banner, writes sessionStorage, and calls setAdvisorDismissed', async () => {
@@ -218,13 +218,13 @@ describe('ChatInput branch-advisor', () => {
     await textarea.trigger('input');
     vi.advanceTimersByTime(800);
     await flushPromises();
-    expect(w.find('[data-testid="branch-suggestion-banner"]').exists()).toBe(true);
+    expect(w.find('[data-testid="chat-input-branch-banner"]').exists()).toBe(true);
 
     await w.find('[data-testid="branch-banner-dont-suggest"]').trigger('click');
     await flushPromises();
 
     // Banner gone
-    expect(w.find('[data-testid="branch-suggestion-banner"]').exists()).toBe(false);
+    expect(w.find('[data-testid="chat-input-branch-banner"]').exists()).toBe(false);
     // sessionStorage key written
     expect(sessionStorage.getItem('branchAdvisorDismissed:sess-42')).toBe('true');
     // Backend called
@@ -242,7 +242,7 @@ describe('ChatInput branch-advisor', () => {
     vi.advanceTimersByTime(800);
     await flushPromises();
     // Even after full debounce, no banner because session is dismissed
-    expect(w.find('[data-testid="branch-suggestion-banner"]').exists()).toBe(false);
+    expect(w.find('[data-testid="chat-input-branch-banner"]').exists()).toBe(false);
   });
 
   it('banner is suppressed while streaming is true', async () => {
@@ -252,7 +252,7 @@ describe('ChatInput branch-advisor', () => {
     await textarea.trigger('input');
     vi.advanceTimersByTime(800);
     await flushPromises();
-    expect(w.find('[data-testid="branch-suggestion-banner"]').exists()).toBe(false);
+    expect(w.find('[data-testid="chat-input-branch-banner"]').exists()).toBe(false);
   });
 
   it('send clears the banner immediately (race guard on send)', async () => {
@@ -262,10 +262,10 @@ describe('ChatInput branch-advisor', () => {
     await textarea.trigger('input');
     vi.advanceTimersByTime(800);
     await flushPromises();
-    expect(w.find('[data-testid="branch-suggestion-banner"]').exists()).toBe(true);
+    expect(w.find('[data-testid="chat-input-branch-banner"]').exists()).toBe(true);
     // User sends
     await textarea.trigger('keydown', { key: 'Enter' });
     await flushPromises();
-    expect(w.find('[data-testid="branch-suggestion-banner"]').exists()).toBe(false);
+    expect(w.find('[data-testid="chat-input-branch-banner"]').exists()).toBe(false);
   });
 });

@@ -244,6 +244,18 @@ function makeSettingsClient(): HarnessClient['settings'] {
     setSaveArtifact: async () => undefined,
     getMaxAgentTurns: async () => 0,
     setMaxAgentTurns: async () => undefined,
+    getPermissionMode: async () => 'normal',
+    setPermissionMode: async () => undefined,
+    getPermissionCacheDangerousOps: async () => false,
+    setPermissionCacheDangerousOps: async () => undefined,
+    getBashAllowlistMigrated: async () => false,
+    setBashAllowlistMigrated: async () => undefined,
+    getPermissionsMigrationToastShown: async () => false,
+    setPermissionsMigrationToastShown: async () => undefined,
+    getCedarStrictCredentialMode: async () => false,
+    setCedarStrictCredentialMode: async () => undefined,
+    getFSRequestAccessEnabled: async () => true,
+    setFSRequestAccessEnabled: async () => undefined,
   };
 }
 

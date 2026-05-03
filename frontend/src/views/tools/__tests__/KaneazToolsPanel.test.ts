@@ -167,7 +167,10 @@ afterEach(() => {
 });
 
 describe('KaneazToolsPanel — recipes section', () => {
-  it('renders the existing Memory row plus a row per recipe', async () => {
+  it('renders the existing Memory row plus a row per enabled recipe (catalog rows hidden)', async () => {
+    // The panel intentionally only surfaces installed (enabled) recipes;
+    // catalog browsing lives in the Add MCP Server modal. So a clean-
+    // install (enabled=false) row should NOT render in the main list.
     const recipes = [
       makeListing(makeRecipe('brave-search'), {
         enabled: false,
@@ -184,40 +187,81 @@ describe('KaneazToolsPanel — recipes section', () => {
 
     expect(w.text()).toContain('Long-term memory');
     expect(w.text()).toContain('Connected MCP recipes');
-    expect(w.find('[data-testid=recipe-row-brave-search]').exists()).toBe(true);
+    // Disabled catalog row is hidden from the main panel.
+    expect(w.find('[data-testid=recipe-row-brave-search]').exists()).toBe(false);
+    // Enabled (installed) row renders with its current state pill.
     expect(w.find('[data-testid=recipe-row-filesystem]').exists()).toBe(true);
     expect(w.find('[data-testid=recipe-state-filesystem]').text()).toBe(
       'running',
     );
   });
 
-  it('toggle-on with keysPresent calls install({}) and does not open the modal', async () => {
+  it('edit-configuration flow on an enabled recipe forwards env+config to install via the modal', async () => {
+    // The panel hides catalog (disabled) rows; the equivalent install
+    // path on the panel itself is the per-row "Edit configuration"
+    // button on an already-enabled recipe with configOptions. Trigger
+    // it, capture the modal's install handler, and verify it forwards
+    // through tools.recipes.install with the expected args.
+    const fsRecipeWithConfig = makeRecipe('filesystem', {
+      category: 'filesystem',
+      envKeys: [],
+      configOptions: [
+        {
+          name: 'allowed_directories',
+          display: 'Allowed directories',
+          kind: 'directory_list',
+          required: true,
+          description: 'Allowed dirs.',
+          default: ['${DATA_DIR}/agent-workspace'],
+        },
+      ],
+    });
     const recipes = [
-      makeListing(makeRecipe('brave-search'), {
-        enabled: false,
+      makeListing(fsRecipeWithConfig, {
+        enabled: true,
         keysPresent: true,
-        status: makeStatus('brave-search', { keysPresent: true }),
+        status: makeStatus('filesystem', {
+          enabled: true,
+          state: 'running',
+          keysPresent: true,
+        }),
       }),
     ];
     const setup = makeClient(recipes);
     const w = await mountPanel(setup);
     await flushPromises();
 
-    const toggle = w.get('[data-testid=recipe-toggle-brave-search]');
-    await toggle.setValue(true);
+    await w
+      .get('[data-testid=recipe-edit-config-filesystem]')
+      .trigger('click');
+    await flushPromises();
+
+    const modal = w.findComponent(Stub);
+    expect(modal.exists()).toBe(true);
+    expect(modal.props('open')).toBe(true);
+    expect((modal.props('recipe') as Recipe).id).toBe('filesystem');
+
+    const install = modal.props('install') as (
+      id: string,
+      env: Record<string, string>,
+      config: Record<string, unknown>,
+    ) => Promise<RecipeStatus>;
+    await install('filesystem', {}, { allowed_directories: ['/tmp/x'] });
     await flushPromises();
 
     expect(setup.spies.install).toHaveBeenCalledTimes(1);
-    const [calledId, calledEnv] = setup.spies.install.mock.calls[0];
-    expect(calledId).toBe('brave-search');
+    const [calledId, calledEnv, calledConfig] =
+      setup.spies.install.mock.calls[0];
+    expect(calledId).toBe('filesystem');
     expect(calledEnv).toEqual({});
-
-    // Modal stub is rendered only when `modalRecipe` is non-null in the
-    // panel; with keysPresent the modal stays unmounted.
-    expect(w.findComponent(Stub).exists()).toBe(false);
+    expect(calledConfig).toEqual({ allowed_directories: ['/tmp/x'] });
   });
 
-  it('toggle-on with missing keys opens the modal (does not call install)', async () => {
+  it('recipes-empty placeholder renders when no recipes are enabled (clean install)', async () => {
+    // A clean install (no enabled recipes) shows the placeholder + the
+    // Add MCP Server CTA rather than any per-row toggles. This replaces
+    // the legacy "toggle-on opens modal" path which now lives in the
+    // Add MCP Server flow.
     const recipes = [
       makeListing(makeRecipe('brave-search'), {
         enabled: false,
@@ -229,15 +273,13 @@ describe('KaneazToolsPanel — recipes section', () => {
     const w = await mountPanel(setup);
     await flushPromises();
 
-    const toggle = w.get('[data-testid=recipe-toggle-brave-search]');
-    await toggle.setValue(true);
-    await flushPromises();
-
+    expect(w.find('[data-testid=recipes-empty]').exists()).toBe(true);
+    expect(w.find('[data-testid=add-mcp-server-btn]').exists()).toBe(true);
     expect(setup.spies.install).not.toHaveBeenCalled();
-    const modal = w.findComponent(Stub);
-    expect(modal.exists()).toBe(true);
-    expect(modal.props('open')).toBe(true);
-    expect((modal.props('recipe') as Recipe).id).toBe('brave-search');
+    // No per-row toggle for a non-enabled catalog entry.
+    expect(w.find('[data-testid=recipe-toggle-brave-search]').exists()).toBe(
+      false,
+    );
   });
 
   it('toggle-off calls uninstall', async () => {
@@ -343,20 +385,36 @@ describe('KaneazToolsPanel — recipes section', () => {
   it('renders the warming indicator only after 4 s in starting state', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(2026, 0, 1, 12, 0, 0));
-    // Start with a stopped row that we toggle on with keysPresent so
-    // useToolsRecipes records a startedAt timestamp.
+    // Mount an enabled recipe with configOptions so the panel renders
+    // its row + the "Edit configuration" affordance. Trigger that
+    // affordance, capture the modal's install handler, and call it —
+    // this seeds startedAt[id] in the same way the legacy toggle-on
+    // path used to. Then advance the clock past the cold-spawn
+    // threshold and verify the warming indicator surfaces.
+    const recipeWithConfig = makeRecipe('brave-search', {
+      envKeys: [],
+      configOptions: [
+        {
+          name: 'mode',
+          display: 'Mode',
+          kind: 'string',
+          required: false,
+          description: 'Optional flag.',
+          default: 'fast',
+        },
+      ],
+    });
     const recipes = [
-      makeListing(makeRecipe('brave-search'), {
-        enabled: false,
+      makeListing(recipeWithConfig, {
+        enabled: true,
         keysPresent: true,
         status: makeStatus('brave-search', {
-          enabled: false,
-          state: 'stopped',
+          enabled: true,
+          state: 'starting',
           keysPresent: true,
         }),
       }),
     ];
-    // After install the status sequence keeps the row in `starting`.
     const seq = [
       makeStatus('brave-search', {
         enabled: true,
@@ -399,8 +457,20 @@ describe('KaneazToolsPanel — recipes section', () => {
     const w = await mountPanel(setup);
     await flushPromises();
 
-    const toggle = w.get('[data-testid=recipe-toggle-brave-search]');
-    await toggle.setValue(true);
+    // Open the modal via Edit configuration, then call its install
+    // handler — this routes through tools.install and seeds startedAt.
+    await w
+      .get('[data-testid=recipe-edit-config-brave-search]')
+      .trigger('click');
+    await flushPromises();
+    const modal = w.findComponent(Stub);
+    expect(modal.exists()).toBe(true);
+    const installHandler = modal.props('install') as (
+      id: string,
+      env: Record<string, string>,
+      config: Record<string, unknown>,
+    ) => Promise<RecipeStatus>;
+    await installHandler('brave-search', {}, { mode: 'fast' });
     await flushPromises();
 
     // Before the cold-spawn threshold elapses, no warming hint.
@@ -561,14 +631,20 @@ describe('KaneazToolsPanel — recipes section', () => {
     );
   });
 
-  it('toggling on a filesystem row opens the modal (config flow)', async () => {
+  it('edit-configuration on an enabled filesystem row opens the modal pre-seeded with the recipe (config flow)', async () => {
+    // The legacy "toggle a stopped filesystem row" affordance is gone —
+    // catalog browsing/install lives in the Add MCP Server modal. The
+    // equivalent "open the config modal for filesystem" flow remains
+    // reachable via the per-row Edit configuration button on enabled
+    // rows. The contract under test is unchanged: opening the modal
+    // does not call install on its own.
     const recipes = [
       makeListing(fsRecipe(), {
-        enabled: false,
+        enabled: true,
         keysPresent: true,
         status: makeStatus('filesystem', {
-          enabled: false,
-          state: 'stopped',
+          enabled: true,
+          state: 'running',
           keysPresent: true,
         }),
       }),
@@ -577,16 +653,17 @@ describe('KaneazToolsPanel — recipes section', () => {
     const w = await mountPanel(setup);
     await flushPromises();
 
-    const toggle = w.get('[data-testid=recipe-toggle-filesystem]');
-    await toggle.setValue(true);
+    await w
+      .get('[data-testid=recipe-edit-config-filesystem]')
+      .trigger('click');
     await flushPromises();
 
-    // The modal stub is mounted with open=true and recipe=filesystem.
     const modal = w.findComponent(Stub);
     expect(modal.exists()).toBe(true);
     expect(modal.props('open')).toBe(true);
     expect((modal.props('recipe') as Recipe).id).toBe('filesystem');
-    // Install was NOT called yet — the config flow waits for modal commit.
+    // Opening the modal does not call install — install only fires
+    // when the modal commits.
     expect(setup.spies.install).not.toHaveBeenCalled();
   });
 });
