@@ -190,8 +190,31 @@ jobs:
       - name: wails doctor
         run: wails doctor || true
 
+      # Stamp the smoke binary with a traceable SemVer-2.0 label so a
+      # downloaded artifact identifies its origin (PR # + commit) at
+      # runtime via `Version`. Matches the release pipeline's "v0.0.0-…"
+      # placeholder convention; release-please tags supersede this on
+      # merge. Build-metadata segment (+sha) is ignored for precedence
+      # but preserved in display.
+      - name: derive smoke build version
+        id: ver
+        shell: bash
+        run: |
+          set -euo pipefail
+          SHORT=$(git rev-parse --short=8 HEAD)
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            VERSION="v0.0.0-pr.${{ github.event.number }}+${SHORT}"
+          else
+            VERSION="v0.0.0-main+${SHORT}"
+          fi
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "Resolved smoke version: ${VERSION}"
+
       - name: wails build (skipbindings, no-package)
-        run: wails build -nopackage -skipbindings -tags webkit2_41 -platform linux/amd64
+        run: |
+          wails build -nopackage -skipbindings -tags webkit2_41 \
+            -platform linux/amd64 \
+            -ldflags "-X main.Version=${{ steps.ver.outputs.version }}"
 
       - name: artifact
         uses: actions/upload-artifact@v4

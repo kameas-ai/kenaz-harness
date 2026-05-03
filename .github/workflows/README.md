@@ -1,6 +1,41 @@
 # Workflows
 
-Two workflows live in this directory.
+Four workflows live in this directory.
+
+## `tag-on-merge.yml` — semantic versioning
+
+Runs on every push to `main`. Parses the commit subject (= squashed PR
+title, since the `main` ruleset forces squash + `PR_TITLE` subject):
+
+| Conventional prefix | Bump | Release? |
+|---|---|---|
+| `feat:` (or `feat(scope):`) | minor (`0.x.0`) | yes — instant |
+| `fix:` `perf:` `revert:` `deps:` | patch (`0.x.y`) | yes — instant |
+| `feat!:` / `BREAKING CHANGE:` in body | major, **capped to minor while `< 1.0.0`** | yes — instant |
+| `docs:` `chore:` `ci:` `style:` `refactor:` `test:` `build:` | none | no |
+| Anything that isn't a conventional commit | none | no |
+
+On a release-worthy commit it: looks up the latest `vX.Y.Z` tag, computes
+the next version, generates GitHub's "What's Changed" auto-release notes
+(grouped by PR + contributor) since the previous tag, creates an
+annotated tag + GitHub Release, then dispatches `release.yml` against
+the new tag to build + sign + publish cross-platform binaries.
+
+No CHANGELOG file is maintained — the per-release auto-generated notes
+are the canonical changelog. No release PR — the merge of the original
+PR *is* the release.
+
+Source of truth for the next version: `git tag --list 'v*' --sort=-v:refname`.
+
+## `pr-title.yml` — conventional-commits enforcement
+
+Runs on every PR open / edit / synchronize. Validates the PR title against
+the conventional-commits spec and the type list above. Required by the
+`main` branch ruleset, so a non-conventional title cannot merge.
+
+Because the `main` branch settings squash with `squash_merge_commit_title=PR_TITLE`,
+the PR title becomes the merge-commit subject verbatim — which is exactly
+what release-please reads to compute the next version. Single point of truth.
 
 ## `pr.yml` — pull-request gate
 
@@ -18,12 +53,14 @@ Jobs:
 
 `build-smoke` waits for the three checks to pass; the rest run in parallel.
 
-## `release.yml` — main pipeline + binary publish
+## `release.yml` — tagged binary publish
 
-Runs on:
-- pushes to `main` (rolling pre-release at the `main` tag — overwritten each push)
-- tagged GitHub Releases (stable, kept indefinitely)
-- `workflow_dispatch` (manual, accepts a `version` input)
+Runs **only** for proper SemVer tags. Three entry points:
+- `release-please` dispatches it via `gh workflow run release.yml --ref vX.Y.Z` after a release PR is merged (the primary path).
+- A human creates a Release in the GitHub UI (rare manual path).
+- `workflow_dispatch` with an explicit `version=vX.Y.Z` (escape hatch / re-run).
+
+There is **no rolling pre-release channel** — non-versioning merges (chore/docs/ci/style/etc.) do not produce binaries. PR-time `build-smoke` covers build-health verification on every commit.
 
 Jobs:
 

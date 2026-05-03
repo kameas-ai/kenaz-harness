@@ -1,17 +1,19 @@
 name: Release
 
 on:
-  push:
-    branches: [main]
-    paths-ignore:
-      - 'docs/**'
-      - '*.md'
-      - '.github/**'
+  # release-please owns version bumps; this workflow only runs against
+  # real semver tags. Three entry points:
+  #   1. release-please dispatches it via `gh workflow run release.yml --ref vX.Y.Z`
+  #      after merging a release PR (the primary path).
+  #   2. A human creates a Release in the GitHub UI (manual path; rare).
+  #   3. workflow_dispatch with an explicit version (escape hatch / re-run).
+  # No more `push: branches: [main]` — non-versioning merges (chore/docs/ci/etc.)
+  # do not produce binaries; PR-time `build-smoke` covers build-health verification.
   workflow_dispatch:
     inputs:
       version:
-        description: 'Override version (e.g. v0.1.0). Leave empty to derive from sha.'
-        required: false
+        description: 'Tag to build (e.g. v0.1.0). Required.'
+        required: true
   release:
     types: [published]
 
@@ -34,26 +36,25 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.set.outputs.version }}
-      is_release: ${{ steps.set.outputs.is_release }}
     steps:
       - uses: actions/checkout@v4
       - id: set
         run: |
+          set -euo pipefail
           if [ "${{ github.event_name }}" = "release" ]; then
             VERSION="${{ github.event.release.tag_name }}"
-            IS_RELEASE=true
           elif [ -n "${{ github.event.inputs.version }}" ]; then
             VERSION="${{ github.event.inputs.version }}"
-            IS_RELEASE=true
           else
-            SHORT_SHA=$(git rev-parse --short=8 HEAD)
-            DATE=$(date -u +%Y%m%d)
-            VERSION="v0.0.0-main-${DATE}-${SHORT_SHA}"
-            IS_RELEASE=false
+            echo "::error::release.yml expects either a release event or a workflow_dispatch with version=vX.Y.Z"
+            exit 1
+          fi
+          if ! [[ "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.-]+)?$ ]]; then
+            echo "::error::version '$VERSION' is not a valid SemVer tag (vX.Y.Z[-pre])"
+            exit 1
           fi
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
-          echo "is_release=${IS_RELEASE}" >> "$GITHUB_OUTPUT"
-          echo "Resolved version: ${VERSION} (release=${IS_RELEASE})"
+          echo "Resolved version: ${VERSION}"
 
   build:
     name: Build ${{ matrix.label }}
@@ -147,6 +148,30 @@ jobs:
       - name: frontend deps
         working-directory: frontend
         run: npm ci
+
+      # Sync wails.json info.productVersion to the resolved release
+      # version BEFORE wails build, so the OS-visible bundle metadata
+      # (CFBundleShortVersionString on macOS, FileVersion on Windows)
+      # matches the tag instead of the source-tree default. Stable tag
+      # builds: source already matches (release-please bumped it). Rolling
+      # main builds: source is the last release version, so we overwrite
+      # with the rolling label here.
+      #
+      # Wails enforces a numeric productVersion (X.Y.Z[.W]); strip the
+      # leading "v" and any rolling/prerelease suffix before writing.
+      - name: sync wails.json productVersion
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${{ needs.derive-version.outputs.version }}"
+          NUMERIC=$(echo "$VERSION" | sed -E 's/^v//; s/-.*$//')
+          if ! [[ "$NUMERIC" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::warning::derived numeric version '$NUMERIC' is not X.Y.Z; leaving wails.json untouched"
+            exit 0
+          fi
+          tmp=$(mktemp)
+          jq --arg v "$NUMERIC" '.info.productVersion = $v' wails.json > "$tmp" && mv "$tmp" wails.json
+          echo "wails.json info.productVersion → $NUMERIC"
 
       - name: wails build
         shell: bash
@@ -385,43 +410,29 @@ jobs:
       - name: list artifacts
         run: ls -la dist-flat/
 
-      - name: create or update release
+      - name: upload artifacts to release
         id: create
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          set -e
+          set -euo pipefail
           VERSION="${{ needs.derive-version.outputs.version }}"
-          IS_RELEASE="${{ needs.derive-version.outputs.is_release }}"
-
-          if [ "$IS_RELEASE" = "true" ]; then
-            # Tagged release: upload to existing release if possible, otherwise create.
-            TAG="$VERSION"
-            if ! gh release view "$TAG" >/dev/null 2>&1; then
-              gh release create "$TAG" \
-                --title "$TAG" \
-                --notes "Automated release from main." \
-                --target "$GITHUB_SHA"
-            fi
-            gh release upload "$TAG" dist-flat/* --clobber
-            URL=$(gh release view "$TAG" --json url --jq .url)
-          else
-            # Pre-release rolling channel: replace the "main" prerelease.
-            TAG="main"
-            if gh release view "$TAG" >/dev/null 2>&1; then
-              gh release delete "$TAG" --yes --cleanup-tag
-            fi
+          TAG="$VERSION"
+          # release-please creates the Release before dispatching us, so
+          # `view` should always succeed. If a human runs this via
+          # workflow_dispatch against a tag that has no Release yet, fall
+          # back to creating one. Notes default to release-please's body
+          # when present.
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
             gh release create "$TAG" \
-              --title "main (rolling, $VERSION)" \
-              --notes "Rolling build from main. Not a stable release." \
-              --prerelease \
-              --target "$GITHUB_SHA" \
-              dist-flat/*
-            URL=$(gh release view "$TAG" --json url --jq .url)
+              --title "$TAG" \
+              --notes "Automated release for $TAG." \
+              --target "$GITHUB_SHA"
           fi
-
-          echo "tag=$TAG"   >> "$GITHUB_OUTPUT"
-          echo "url=$URL"   >> "$GITHUB_OUTPUT"
+          gh release upload "$TAG" dist-flat/* --clobber
+          URL=$(gh release view "$TAG" --json url --jq .url)
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "url=$URL" >> "$GITHUB_OUTPUT"
 
       - name: build asset manifest for docs site
         id: manifest
@@ -607,11 +618,61 @@ jobs:
             --metadata-directive REPLACE \
             --no-progress
 
+      - name: Update versions index
+        env:
+          TAG: ${{ needs.release.outputs.release_tag }}
+          VERSION: ${{ needs.derive-version.outputs.version }}
+          IS_RELEASE: ${{ needs.derive-version.outputs.is_release }}
+        run: |
+          set -euo pipefail
+          # Maintain s3://.../downloads/index.json — a sorted list of
+          # every version that's been published. The download page
+          # fetches this lazily when the user opens the version picker.
+          # Read-modify-write pattern; a missing index seeds an empty list.
+          INDEX_S3=s3://kameas-ai-docs-site/downloads/index.json
+          if aws s3 cp "$INDEX_S3" /tmp/index.json --no-progress 2>/dev/null; then
+            echo "fetched existing index"
+          else
+            echo '{"updated_at":"","versions":[]}' > /tmp/index.json
+            echo "seeded empty index"
+          fi
+          export NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          python3 - <<'PY' > /tmp/index.new.json
+          import json, os, pathlib
+          idx = json.loads(pathlib.Path('/tmp/index.json').read_text() or '{}')
+          versions = idx.get('versions') or []
+          tag = os.environ['TAG']
+          # Drop any prior entry for the same tag (rolling 'main' replaces
+          # itself; tagged releases shouldn't republish but if they do the
+          # latest wins).
+          versions = [v for v in versions if v.get('tag') != tag]
+          versions.append({
+              'tag': tag,
+              'version': os.environ['VERSION'],
+              'released_at': os.environ['NOW'],
+              'is_release': os.environ.get('IS_RELEASE', 'false') == 'true',
+              'manifest_url': f"https://docs.kameas.ai/downloads/{tag}/manifest.json",
+          })
+          # Newest first by released_at, with 'main' (rolling) pinned to
+          # the top so the picker shows it at the front.
+          versions.sort(key=lambda v: (0 if v.get('tag') == 'main' else 1, v.get('released_at', '')), reverse=True)
+          # Cap at 50 entries — very old builds drop off the picker but
+          # their /downloads/<tag>/ assets remain in S3 for direct linking.
+          versions = versions[:50]
+          print(json.dumps({'updated_at': os.environ['NOW'], 'versions': versions}, indent=2))
+          PY
+
+          aws s3 cp /tmp/index.new.json "$INDEX_S3" \
+            --cache-control 'public, max-age=120, must-revalidate' \
+            --content-type 'application/json' \
+            --metadata-directive REPLACE \
+            --no-progress
+
       - name: Invalidate CloudFront
         run: |
           set -euo pipefail
           INV=$(aws cloudfront create-invalidation \
             --distribution-id E266IHHD1ZE4J0 \
-            --paths '/downloads/manifest.json' '/downloads/*' \
+            --paths '/downloads/manifest.json' '/downloads/index.json' '/downloads/*' \
             --query 'Invalidation.Id' --output text)
           echo "Invalidation: $INV"
