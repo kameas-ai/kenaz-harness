@@ -60,7 +60,11 @@ jobs:
 
           # Parse conventional-commit prefix:
           #   <type>[(scope)][!]: <subject>
-          if [[ "$SUBJECT" =~ ^([a-z]+)(\([^)]+\))?(!?):[[:space:]] ]]; then
+          # Hold the regex in a variable — bash's `[[ =~ ]]` parser chokes
+          # on nested `[[:space:]]` POSIX classes when the regex is inline
+          # (the `[[` is misread as a nested test expression).
+          re='^([a-z]+)(\([^)]+\))?(!?):[[:space:]]'
+          if [[ "$SUBJECT" =~ $re ]]; then
             TYPE="${BASH_REMATCH[1]}"
             BANG="${BASH_REMATCH[3]}"
           else
