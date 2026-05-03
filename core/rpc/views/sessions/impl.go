@@ -79,6 +79,14 @@ type managerAPI struct {
 	artStore coreart.Store
 	media    attachments.MediaStore
 	dataDir  string
+	// resumeStarter is the long-turn-resilience-01KR3PRS WP03 seam
+	// that opens a continuation chat-stream against the partial
+	// assistant row identified by originalMessageID. The chassis wires
+	// this to chat.ChatRunner.StartStream with a synthesized
+	// continuation prompt; tests can substitute a recording fake.
+	// nil disables the seam: ResumeMessage returns
+	// ErrResumeNotConfigured.
+	resumeStarter ResumeStarter
 	// titleGen is the optional auto-title generator used by SuggestTitle.
 	// nil causes SuggestTitle to return ErrTitleGeneratorNotConfigured.
 	titleGen TitleGenerator
@@ -97,6 +105,71 @@ type TitleGenerator interface {
 // ErrTitleGeneratorNotConfigured is returned by SuggestTitle when no
 // auto-title generator has been wired into the API.
 var ErrTitleGeneratorNotConfigured = errors.New("rpc/sessions: title generator not configured")
+
+// ResumeStarter is the streaming surface ResumeMessage delegates to so
+// the sessions package never imports the chat package directly. The
+// closure produces a continuation prompt from the partial assistant
+// row, opens a fresh ChatRunner subscription, and returns its id.
+//
+// Production wiring (core/rpc/api.go) supplies an adapter that:
+//
+//	1. Builds the continuation system-injection prompt from the partial
+//	   row's content (last 200 chars).
+//	2. Calls chat.ChatRunner.StartStream with the synthesized prompt as
+//	   the userMessage so the existing AskBus/HistoryReadNode plumbing
+//	   delivers it to the model on the first kernel fire.
+//	3. Threads the original message id through to the continuation row
+//	   (via the AppendContinuation persistence path inside the kernel
+//	   run's terminal SessionWriteNode replacement — see WP03 task
+//	   block in plan §Layer 3).
+//
+// The signature returns the chat-stream subscription id so the resume
+// RPC can hand it to the frontend, which drains the same llm:stream-*
+// topics it already subscribes to for fresh turns.
+//
+// long-turn-resilience-01KR3PRS WP03.
+type ResumeStarter interface {
+	StartResume(ctx context.Context, sessionID, originalMessageID, profileID, modelOverride string) (subscriptionID string, err error)
+}
+
+// ResumeStarterFunc adapts a function value to the ResumeStarter
+// interface so chassis wiring can pass a closure inline.
+type ResumeStarterFunc func(ctx context.Context, sessionID, originalMessageID, profileID, modelOverride string) (string, error)
+
+// StartResume satisfies ResumeStarter.
+func (f ResumeStarterFunc) StartResume(ctx context.Context, sessionID, originalMessageID, profileID, modelOverride string) (string, error) {
+	return f(ctx, sessionID, originalMessageID, profileID, modelOverride)
+}
+
+// WithResumeStarter wires a ResumeStarter into the SessionsAPI so the
+// resume RPC can open continuation streams.
+func WithResumeStarter(api SessionsAPI, starter ResumeStarter) SessionsAPI {
+	if m, ok := api.(*managerAPI); ok {
+		m.resumeStarter = starter
+	}
+	return api
+}
+
+// ErrResumeNotConfigured is returned by ResumeMessage when the chassis
+// has not wired a ResumeStarter (test paths, boot failures).
+var ErrResumeNotConfigured = errors.New("rpc/sessions: resume starter not configured")
+
+// ErrResumeNotRecoverable is returned by ResumeMessage when the partial
+// row exists but its streaming_recoverable flag is false (tool_use
+// already executed before the drop). The user must re-issue the
+// request rather than continue.
+var ErrResumeNotRecoverable = errors.New("rpc/sessions: partial message is not recoverable; re-issue the request")
+
+// ErrResumeNotPartial is returned by ResumeMessage when the supplied
+// messageID exists but does not carry a streaming_failed_at timestamp
+// (the row landed cleanly; there is nothing to resume).
+var ErrResumeNotPartial = errors.New("rpc/sessions: message did not stream-fail; nothing to resume")
+
+// ErrResumeAlreadyContinued is returned by ResumeMessage when an
+// earlier resume already wrote a continuation row pointing at the
+// supplied partial id. Callers should refresh the transcript rather
+// than open a duplicate stream.
+var ErrResumeAlreadyContinued = errors.New("rpc/sessions: partial message already has a continuation; refresh transcript")
 
 // NewManagerAPI returns a SessionsAPI backed by the supplied Manager.
 // Manager must be non-nil; callers (typically core/rpc.New) must
@@ -393,6 +466,15 @@ func messageToView(m session.Message) Message {
 	if m.ArchivedAt != nil {
 		out.ArchivedAt = m.ArchivedAt.UTC().Format(time.RFC3339Nano)
 	}
+	// long-turn-resilience-01KR3PRS WP03: surface the partial-row
+	// metadata so the frontend can render the Resume affordance + the
+	// "(continued below)" caption.
+	if m.StreamingFailedAt != nil {
+		out.StreamingFailedAt = m.StreamingFailedAt.UTC().Format(time.RFC3339Nano)
+	}
+	out.StreamingFailureKind = m.StreamingFailureKind
+	out.StreamingRecoverable = m.StreamingRecoverable
+	out.ContinuationOf = m.ContinuationOf
 	return out
 }
 
@@ -666,5 +748,50 @@ func (a *managerAPI) GetUsage(ctx context.Context, id string) (SessionUsage, err
 		CostSource:       agg.CostSource,
 		MessageCount:     agg.MessageCount,
 		PricingDataDate:  pricingDate,
+	}, nil
+}
+
+// ResumeMessage implements SessionsAPI. Validates the partial row's
+// shape, ensures idempotency by scanning for an existing continuation
+// row, and delegates the actual stream open to the wired ResumeStarter.
+//
+// long-turn-resilience-01KR3PRS WP03.
+func (a *managerAPI) ResumeMessage(ctx context.Context, sessionID, messageID string) (ResumeMessageResult, error) {
+	if a.resumeStarter == nil {
+		return ResumeMessageResult{}, ErrResumeNotConfigured
+	}
+	partial, err := a.mgr.GetMessage(ctx, sessionID, messageID)
+	if err != nil {
+		return ResumeMessageResult{}, fmt.Errorf("rpc/sessions: load partial: %w", err)
+	}
+	if partial.StreamingFailedAt == nil {
+		return ResumeMessageResult{}, ErrResumeNotPartial
+	}
+	if !partial.StreamingRecoverable {
+		return ResumeMessageResult{}, ErrResumeNotRecoverable
+	}
+	// Idempotency: walk the session's messages and refuse to open a
+	// second stream when a continuation row already points at this id.
+	// O(n) scan is fine; chat sessions cap out in the low thousands and
+	// this is a click-driven path. Only walks active rows so a soft-
+	// archived continuation doesn't keep the original perpetually
+	// "already continued" — re-resume after compaction is intentional.
+	allMsgs, lerr := a.mgr.ListMessages(ctx, sessionID)
+	if lerr != nil {
+		return ResumeMessageResult{}, fmt.Errorf("rpc/sessions: list messages: %w", lerr)
+	}
+	for _, m := range allMsgs {
+		if m.ContinuationOf == messageID && m.ArchivedAt == nil {
+			return ResumeMessageResult{}, ErrResumeAlreadyContinued
+		}
+	}
+
+	subID, serr := a.resumeStarter.StartResume(ctx, sessionID, messageID, "", "")
+	if serr != nil {
+		return ResumeMessageResult{}, fmt.Errorf("rpc/sessions: start resume: %w", serr)
+	}
+	return ResumeMessageResult{
+		SubscriptionID:    subID,
+		OriginalMessageID: messageID,
 	}, nil
 }

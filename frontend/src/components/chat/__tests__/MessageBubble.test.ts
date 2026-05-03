@@ -408,4 +408,71 @@ describe('MessageBubble (chat-ui)', () => {
     await w.find('article').trigger('contextmenu');
     expect(w.find('[data-testid="save-artifact-menu"]').exists()).toBe(false);
   });
+
+  // Long-turn-resilience-01KR3PRS WP03 — partial-output footer + Resume.
+  it('renders Resume button on a recoverable partial assistant bubble', async () => {
+    const w = mount(MessageBubble, {
+      props: {
+        role: 'assistant',
+        content: 'hello par',
+        messageId: 'partial-1',
+        streamingFailedAt: '2026-04-30T12:00:00Z',
+        streamingFailureKind: 'transient',
+        streamingRecoverable: true,
+      },
+    });
+    const footer = w.find('[data-testid="message-partial-output-footer"]');
+    expect(footer.exists()).toBe(true);
+    expect(footer.text()).toContain('Connection lost');
+
+    const btn = w.find('[data-testid="message-partial-resume-button"]');
+    expect(btn.exists()).toBe(true);
+    expect(btn.attributes('data-message-id')).toBe('partial-1');
+
+    await btn.trigger('click');
+    expect(w.emitted('resume')).toBeTruthy();
+    expect(w.emitted('resume')![0]).toEqual(['partial-1']);
+  });
+
+  it('suppresses Resume button when streamingRecoverable is false', () => {
+    const w = mount(MessageBubble, {
+      props: {
+        role: 'assistant',
+        content: 'ran tool then died',
+        messageId: 'partial-2',
+        streamingFailedAt: '2026-04-30T12:00:00Z',
+        streamingFailureKind: 'transient',
+        streamingRecoverable: false,
+      },
+    });
+    expect(w.find('[data-testid="message-partial-output-footer"]').exists()).toBe(true);
+    expect(w.find('[data-testid="message-partial-resume-button"]').exists()).toBe(false);
+    // Non-recoverable copy steers the user to re-issue the request.
+    expect(w.text()).toContain('re-send your request');
+  });
+
+  it('renders the WP00 frontend-only fallback footer when only streamingError is set', () => {
+    // No streamingFailedAt → server-side row hasn't materialized yet, but
+    // the WP00 streamingError marker still drives the footer so the user
+    // sees something rather than a silent drop.
+    const w = mount(MessageBubble, {
+      props: {
+        role: 'assistant',
+        content: 'streaming text',
+        messageId: 'partial-3',
+        streamingError: 'backend-error',
+      },
+    });
+    expect(w.find('[data-testid="message-partial-output-footer"]').exists()).toBe(true);
+    // streamingRecoverable defaults to undefined → falsy → resume button
+    // suppressed (the row hasn't been classified yet).
+    expect(w.find('[data-testid="message-partial-resume-button"]').exists()).toBe(false);
+  });
+
+  it('does not render the partial-output footer on a healthy assistant bubble', () => {
+    const w = mount(MessageBubble, {
+      props: { role: 'assistant', content: 'all good' },
+    });
+    expect(w.find('[data-testid="message-partial-output-footer"]').exists()).toBe(false);
+  });
 });

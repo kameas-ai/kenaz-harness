@@ -130,6 +130,34 @@ type Store interface {
 	// a real DB.
 	DeleteArchivedBefore(ctx context.Context, cutoff time.Time, pageLimit int) (
 		deleted int, oldest, newest time.Time, err error)
+
+	// MarkStreamingFailure persists the resume metadata onto an assistant
+	// row that was just appended in the partial-output shape
+	// (long-turn-resilience-01KR3PRS WP03). The store unconditionally
+	// writes the four columns even when the row already carried a value
+	// — calling MarkStreamingFailure twice on the same id is idempotent
+	// and overwrites with the latest classification.
+	//
+	// failedAt is required (must be non-zero); kind is one of "transient"
+	// | "auth" | "unknown"; recoverable selects the UI affordance.
+	// Returns ErrSessionNotFound when the message is unknown.
+	MarkStreamingFailure(ctx context.Context, sessionID, messageID string,
+		failedAt time.Time, kind string, recoverable bool) error
+
+	// GetMessage returns one message by id within a session. Returns
+	// ErrSessionNotFound for an unknown id (mirrors the row-level "not
+	// found" shape every other lookup uses). Used by the resume RPC to
+	// load the partial assistant row before reconstructing the
+	// continuation prompt.
+	GetMessage(ctx context.Context, sessionID, messageID string) (Message, error)
+
+	// AppendContinuation persists a continuation assistant row (the
+	// "fresh" reply produced by Sessions_ResumeMessage) and stamps the
+	// continuation_of pointer onto the new row in a single transaction.
+	// originalID is the id of the partial row this continues; passing
+	// the empty string is a programmer error (the runtime will error
+	// rather than persist an unanchored continuation).
+	AppendContinuation(ctx context.Context, originalID string, m Message) (Message, error)
 }
 
 // memStore is the in-memory Store implementation. Backed by maps
@@ -552,6 +580,71 @@ func (s *memStore) DeleteArchivedBefore(_ context.Context, cutoff time.Time, pag
 		s.messages[sid] = kept
 	}
 	return deleted, oldest, newest, nil
+}
+
+// MarkStreamingFailure stamps the resume metadata on an in-memory
+// message row. Idempotent — re-marking the same row overwrites the
+// previous classification (mirrors the SQL UPDATE shape). Returns
+// ErrSessionNotFound when the message id is unknown.
+func (s *memStore) MarkStreamingFailure(_ context.Context, sessionID, messageID string,
+	failedAt time.Time, kind string, recoverable bool) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.records[sessionID]; !ok {
+		return ErrSessionNotFound
+	}
+	src := s.messages[sessionID]
+	for i := range src {
+		if src[i].ID != messageID {
+			continue
+		}
+		t := failedAt
+		s.messages[sessionID][i].StreamingFailedAt = &t
+		s.messages[sessionID][i].StreamingFailureKind = kind
+		s.messages[sessionID][i].StreamingRecoverable = recoverable
+		return nil
+	}
+	return ErrSessionNotFound
+}
+
+// GetMessage returns one message by id within a session. Mirrors the
+// SQL-store contract.
+func (s *memStore) GetMessage(_ context.Context, sessionID, messageID string) (Message, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if _, ok := s.records[sessionID]; !ok {
+		return Message{}, ErrSessionNotFound
+	}
+	for _, m := range s.messages[sessionID] {
+		if m.ID == messageID {
+			return m, nil
+		}
+	}
+	return Message{}, ErrSessionNotFound
+}
+
+// AppendContinuation persists a continuation row, stamping
+// ContinuationOf onto the new row. Mirrors the SQL store's atomicity
+// guarantees: caller-supplied id is preserved; sequence is the next
+// monotonic slot; the in-memory normalization keeps round-trip parity
+// with content_json reads.
+func (s *memStore) AppendContinuation(_ context.Context, originalID string, m Message) (Message, error) {
+	if originalID == "" {
+		return Message{}, fmt.Errorf("session: AppendContinuation: empty originalID")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.records[m.SessionID]; !ok {
+		return Message{}, ErrSessionNotFound
+	}
+	seq := s.seqByID[m.SessionID]
+	m.Sequence = seq
+	s.seqByID[m.SessionID] = seq + 1
+	m.ContinuationOf = originalID
+	m.ContentBlocks = canonicalBlocks(m)
+	m.Content = flattenContentText(m.ContentBlocks)
+	s.messages[m.SessionID] = append(s.messages[m.SessionID], m)
+	return m, nil
 }
 
 // ── SQL-backed implementation ──────────────────────────────────────────
@@ -1034,7 +1127,8 @@ func (s *sqlStore) listMessages(ctx context.Context, sessionID string, activeOnl
 	}
 	query := `
         SELECT id, session_id, sequence, role, content, tool_calls, created_at, content_json,
-               compacted_into_id, compacted_at, archived_at
+               compacted_into_id, compacted_at, archived_at,
+               streaming_failed_at, streaming_failure_kind, streaming_recoverable, continuation_of
         FROM session_messages
         WHERE session_id = ?
     `
@@ -1050,18 +1144,23 @@ func (s *sqlStore) listMessages(ctx context.Context, sessionID string, activeOnl
 	var out []Message
 	for rows.Next() {
 		var (
-			m               Message
-			roleStr         string
-			toolCalls       sql.NullString
-			createdAt       int64
-			contentJSON     sql.NullString
-			compactedIntoID sql.NullString
-			compactedAt     sql.NullInt64
-			archivedAt      sql.NullInt64
+			m                    Message
+			roleStr              string
+			toolCalls            sql.NullString
+			createdAt            int64
+			contentJSON          sql.NullString
+			compactedIntoID      sql.NullString
+			compactedAt          sql.NullInt64
+			archivedAt           sql.NullInt64
+			streamingFailedAt    sql.NullInt64
+			streamingFailureKind sql.NullString
+			streamingRecoverable sql.NullInt64
+			continuationOf       sql.NullString
 		)
 		if err := rows.Scan(&m.ID, &m.SessionID, &m.Sequence, &roleStr,
 			&m.Content, &toolCalls, &createdAt, &contentJSON,
-			&compactedIntoID, &compactedAt, &archivedAt); err != nil {
+			&compactedIntoID, &compactedAt, &archivedAt,
+			&streamingFailedAt, &streamingFailureKind, &streamingRecoverable, &continuationOf); err != nil {
 			return nil, err
 		}
 		m.Role = Role(roleStr)
@@ -1091,6 +1190,19 @@ func (s *sqlStore) listMessages(ctx context.Context, sessionID string, activeOnl
 		if archivedAt.Valid {
 			t := time.Unix(0, archivedAt.Int64).UTC()
 			m.ArchivedAt = &t
+		}
+		if streamingFailedAt.Valid {
+			t := time.Unix(0, streamingFailedAt.Int64).UTC()
+			m.StreamingFailedAt = &t
+		}
+		if streamingFailureKind.Valid {
+			m.StreamingFailureKind = streamingFailureKind.String
+		}
+		if streamingRecoverable.Valid {
+			m.StreamingRecoverable = streamingRecoverable.Int64 != 0
+		}
+		if continuationOf.Valid {
+			m.ContinuationOf = continuationOf.String
 		}
 		out = append(out, m)
 	}
@@ -1337,4 +1449,178 @@ func rowsAffectedOrNotFound(res Result) error {
 		return ErrSessionNotFound
 	}
 	return nil
+}
+
+// MarkStreamingFailure stamps the resume metadata onto the
+// session_messages row identified by messageID. Idempotent — re-marking
+// the same row overwrites the previous classification. Returns
+// ErrSessionNotFound when the row is unknown.
+//
+// long-turn-resilience-01KR3PRS WP03.
+func (s *sqlStore) MarkStreamingFailure(ctx context.Context, sessionID, messageID string,
+	failedAt time.Time, kind string, recoverable bool) error {
+	if messageID == "" {
+		return fmt.Errorf("session: MarkStreamingFailure: empty messageID")
+	}
+	recoverableArg := 0
+	if recoverable {
+		recoverableArg = 1
+	}
+	return s.db.WriteTx(ctx, func(tx WriteTx) error {
+		res, err := tx.Exec(ctx, `
+            UPDATE session_messages
+            SET streaming_failed_at = ?, streaming_failure_kind = ?, streaming_recoverable = ?
+            WHERE id = ? AND session_id = ?
+        `, failedAt.UnixNano(), kind, recoverableArg, messageID, sessionID)
+		if err != nil {
+			return err
+		}
+		return rowsAffectedOrNotFound(res)
+	})
+}
+
+// GetMessage returns one message by id within a session. Returns
+// ErrSessionNotFound for an unknown id (mirrors the row-level "not
+// found" shape every other lookup uses).
+//
+// long-turn-resilience-01KR3PRS WP03.
+func (s *sqlStore) GetMessage(ctx context.Context, sessionID, messageID string) (Message, error) {
+	row := s.db.Reader().QueryRow(ctx, `
+        SELECT id, session_id, sequence, role, content, tool_calls, created_at, content_json,
+               compacted_into_id, compacted_at, archived_at,
+               streaming_failed_at, streaming_failure_kind, streaming_recoverable, continuation_of
+        FROM session_messages
+        WHERE id = ? AND session_id = ?
+    `, messageID, sessionID)
+	var (
+		m                    Message
+		roleStr              string
+		toolCalls            sql.NullString
+		createdAt            int64
+		contentJSON          sql.NullString
+		compactedIntoID      sql.NullString
+		compactedAt          sql.NullInt64
+		archivedAt           sql.NullInt64
+		streamingFailedAt    sql.NullInt64
+		streamingFailureKind sql.NullString
+		streamingRecoverable sql.NullInt64
+		continuationOf       sql.NullString
+	)
+	if err := row.Scan(&m.ID, &m.SessionID, &m.Sequence, &roleStr,
+		&m.Content, &toolCalls, &createdAt, &contentJSON,
+		&compactedIntoID, &compactedAt, &archivedAt,
+		&streamingFailedAt, &streamingFailureKind, &streamingRecoverable, &continuationOf); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return Message{}, ErrSessionNotFound
+		}
+		return Message{}, err
+	}
+	m.Role = Role(roleStr)
+	m.CreatedAt = time.Unix(0, createdAt).UTC()
+	if toolCalls.Valid && toolCalls.String != "" {
+		if err := json.Unmarshal([]byte(toolCalls.String), &m.ToolCalls); err != nil {
+			return Message{}, err
+		}
+	}
+	if contentJSON.Valid && contentJSON.String != "" {
+		if err := json.Unmarshal([]byte(contentJSON.String), &m.ContentBlocks); err != nil {
+			return Message{}, fmt.Errorf("session: unmarshal content_json: %w", err)
+		}
+	} else {
+		m.ContentBlocks = synthesizeBlocks(m.Content)
+	}
+	if compactedIntoID.Valid {
+		id := compactedIntoID.String
+		m.CompactedIntoID = &id
+	}
+	if compactedAt.Valid {
+		t := time.Unix(0, compactedAt.Int64).UTC()
+		m.CompactedAt = &t
+	}
+	if archivedAt.Valid {
+		t := time.Unix(0, archivedAt.Int64).UTC()
+		m.ArchivedAt = &t
+	}
+	if streamingFailedAt.Valid {
+		t := time.Unix(0, streamingFailedAt.Int64).UTC()
+		m.StreamingFailedAt = &t
+	}
+	if streamingFailureKind.Valid {
+		m.StreamingFailureKind = streamingFailureKind.String
+	}
+	if streamingRecoverable.Valid {
+		m.StreamingRecoverable = streamingRecoverable.Int64 != 0
+	}
+	if continuationOf.Valid {
+		m.ContinuationOf = continuationOf.String
+	}
+	return m, nil
+}
+
+// AppendContinuation persists a continuation row, stamping the
+// continuation_of pointer onto the new row in the same transaction
+// that allocates the next sequence. Mirrors AppendMessage's sequencing
+// semantics — concurrent calls serialize on the SELECT MAX(sequence)
+// step, so two simultaneous resumes of different sessions don't
+// collide.
+//
+// long-turn-resilience-01KR3PRS WP03.
+func (s *sqlStore) AppendContinuation(ctx context.Context, originalID string, m Message) (Message, error) {
+	if originalID == "" {
+		return Message{}, fmt.Errorf("session: AppendContinuation: empty originalID")
+	}
+	canonical := canonicalBlocks(m)
+	contentText := flattenContentText(canonical)
+	contentJSON, err := json.Marshal(canonical)
+	if err != nil {
+		return Message{}, fmt.Errorf("session: marshal content_json: %w", err)
+	}
+	m.ContentBlocks = canonical
+	m.Content = contentText
+	m.ContinuationOf = originalID
+
+	var out Message
+	err = s.db.WriteTx(ctx, func(tx WriteTx) error {
+		row := tx.QueryRow(ctx, "SELECT 1 FROM sessions WHERE id = ?", m.SessionID)
+		var one int
+		if err := row.Scan(&one); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return ErrSessionNotFound
+			}
+			return err
+		}
+		seqRow := tx.QueryRow(ctx,
+			"SELECT COALESCE(MAX(sequence), -1) + 1 FROM session_messages WHERE session_id = ?",
+			m.SessionID)
+		var next int64
+		if err := seqRow.Scan(&next); err != nil {
+			return err
+		}
+		m.Sequence = next
+
+		var toolCallsJSON any
+		if len(m.ToolCalls) > 0 {
+			b, jerr := json.Marshal(m.ToolCalls)
+			if jerr != nil {
+				return jerr
+			}
+			toolCallsJSON = string(b)
+		}
+		if _, err := tx.Exec(ctx, `
+            INSERT INTO session_messages
+                (id, session_id, sequence, role, content, tool_calls, created_at, content_json, continuation_of)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `,
+			m.ID, m.SessionID, m.Sequence, string(m.Role),
+			m.Content, toolCallsJSON, m.CreatedAt.UnixNano(),
+			string(contentJSON), originalID); err != nil {
+			return err
+		}
+		out = m
+		return nil
+	})
+	if err != nil {
+		return Message{}, err
+	}
+	return out, nil
 }

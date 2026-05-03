@@ -130,6 +130,9 @@ func (s *stubSessions) SuggestTitle(_ context.Context, _ string) (string, error)
 func (s *stubSessions) ClearTitle(_ context.Context, _ string) error {
 	return errNotWired
 }
+func (s *stubSessions) ResumeMessage(_ context.Context, _, _ string) (sessions.ResumeMessageResult, error) {
+	return sessions.ResumeMessageResult{}, errNotWired
+}
 
 // ── trust ──────────────────────────────────────────────────────────────
 

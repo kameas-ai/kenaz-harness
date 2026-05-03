@@ -371,6 +371,65 @@ func (m *Manager) ListMessages(ctx context.Context, sessionID string) ([]Message
 	return m.store.ListMessages(ctx, sessionID)
 }
 
+// GetMessage returns one message by id within a session. Used by the
+// resume RPC to load the partial assistant row before reconstructing
+// the continuation prompt (long-turn-resilience-01KR3PRS WP03).
+func (m *Manager) GetMessage(ctx context.Context, sessionID, messageID string) (Message, error) {
+	return m.store.GetMessage(ctx, sessionID, messageID)
+}
+
+// MarkStreamingFailure stamps the resume metadata on an assistant row
+// after a stream drop. Best-effort audit emission so a failed write to
+// the audit pipeline does not abort the underlying mutation.
+//
+// long-turn-resilience-01KR3PRS WP03.
+func (m *Manager) MarkStreamingFailure(ctx context.Context, sessionID, messageID string,
+	kind string, recoverable bool) error {
+	if err := m.store.MarkStreamingFailure(ctx, sessionID, messageID, m.now(), kind, recoverable); err != nil {
+		return err
+	}
+	m.audit.Emit(ctx, EventKindSessionMessageAppended, map[string]any{
+		"session_id":             sessionID,
+		"message_id":             messageID,
+		"streaming_failure_kind": kind,
+		"streaming_recoverable":  recoverable,
+	})
+	return nil
+}
+
+// AppendContinuation persists a continuation assistant row produced by
+// the Sessions_ResumeMessage RPC. Mirrors AppendMessage semantics
+// (assigns id + sequence + created_at when zero) and stamps the
+// continuation_of pointer onto the new row.
+//
+// long-turn-resilience-01KR3PRS WP03.
+func (m *Manager) AppendContinuation(ctx context.Context, sessionID, originalID string, msg Message) (Message, error) {
+	if msg.ID == "" {
+		id, err := m.idGen()
+		if err != nil {
+			return Message{}, fmt.Errorf("session: id gen: %w", err)
+		}
+		msg.ID = id
+	}
+	msg.SessionID = sessionID
+	if msg.CreatedAt.IsZero() {
+		msg.CreatedAt = m.now()
+	}
+	stored, err := m.store.AppendContinuation(ctx, originalID, msg)
+	if err != nil {
+		return Message{}, err
+	}
+	_ = m.store.UpdateLastActive(ctx, sessionID, stored.CreatedAt)
+	m.audit.Emit(ctx, EventKindSessionMessageAppended, map[string]any{
+		"session_id":      sessionID,
+		"message_id":      stored.ID,
+		"sequence":        stored.Sequence,
+		"role":            string(stored.Role),
+		"continuation_of": originalID,
+	})
+	return stored, nil
+}
+
 // ListMessagesActive returns only the messages whose ArchivedAt is nil
 // — i.e. the live scrollback view, with soft-archived originals folded
 // into a summary hidden. Used by the compaction-strategy-ui WP07 RPC

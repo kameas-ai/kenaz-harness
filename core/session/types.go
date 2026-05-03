@@ -132,4 +132,25 @@ type Message struct {
 	// rows; non-NULL rows are excluded from the default scrollback fetch
 	// (Sessions.ListMessagesActive).
 	ArchivedAt *time.Time
+
+	// StreamingFailedAt is the unix-nanos moment the chat runner decided
+	// the LLM stream was lost mid-turn and persisted the partial assistant
+	// row (long-turn-resilience-01KR3PRS WP03). NULL on every healthy
+	// assistant row. Populated by migration 0317.
+	StreamingFailedAt *time.Time
+	// StreamingFailureKind is the classification of the drop:
+	// "transient" (network blip / 5xx after retry exhaustion), "auth"
+	// (401/403 mid-flight), or "unknown" (everything else). Empty on
+	// healthy rows.
+	StreamingFailureKind string
+	// StreamingRecoverable is true when no tool_use block executed before
+	// the drop, so a continuation prompt is safe to issue. False when
+	// tool calls already ran — the user must re-issue the request.
+	// Carries no meaning when StreamingFailedAt is nil.
+	StreamingRecoverable bool
+	// ContinuationOf is the id of the partial assistant row that this row
+	// continues. Empty on every original assistant row; populated only on
+	// the continuation row written by Sessions_ResumeMessage so the
+	// frontend can grey out the original and stitch the bubbles together.
+	ContinuationOf string
 }

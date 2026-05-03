@@ -82,14 +82,17 @@ const sqlInitSchema = `
 // migrations_compaction.go); session-auto-titling WP01 lands as 0311
 // (auto_titled column — see migrations_auto_titled.go);
 // cross-session-search WP01 lands as 0312 (FTS5 virtual table +
-// triggers — see migrations_search_fts.go).
-// migrations_compaction.go); branch-as-subagent-recommendation WP04
-// lands as 0313 (subagent metadata columns — see
-// migrations_subagent.go); token-cost-telemetry-01KQ8TD7 WP02 lands
-// as 0314 (session_messages usage columns — see
-// migrations_session_usage.go); autonomy-dial-01KR3M2A WP02 lands as
-// 0316 (autonomy_level + autonomy_overrides columns on projects +
-// sessions — see migrations_autonomy.go). 0315 is reserved/skipped.
+// triggers — see migrations_search_fts.go);
+// branch-as-subagent-recommendation WP04 lands as 0313 (subagent
+// metadata columns — see migrations_subagent.go);
+// token-cost-telemetry-01KQ8TD7 WP02 lands as 0314 (session_messages
+// usage columns — see migrations_session_usage.go);
+// autonomy-dial-01KR3M2A WP02 lands as 0316 (autonomy_level +
+// autonomy_overrides columns on projects + sessions — see
+// migrations_autonomy.go); long-turn-resilience-01KR3PRS WP03 lands
+// as 0317 (streaming_failed_at + streaming_failure_kind +
+// streaming_recoverable + continuation_of columns on session_messages —
+// see migrations_resume.go). 0315 is reserved/skipped.
 func Migrations() []migrations.Migration {
 	return []migrations.Migration{
 		{
@@ -137,6 +140,7 @@ func Migrations() []migrations.Migration {
 		migration0313(),
 		migration0314(),
 		migration0316(),
+		migration0317(),
 	}
 }
 
