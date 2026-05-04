@@ -645,6 +645,15 @@ export interface Settings {
    * (keyboard-shortcuts-settings-01KQ8TDR plan Q1=C)
    */
   keyboardShortcutsPreset?: string;
+
+  /**
+   * cross-session-search WP07 — inverted persisted bit for the Cmd+F
+   * search modal. Default false (= search enabled). When true, the
+   * SearchAPI short-circuits and returns no hits regardless of what
+   * is in the FTS5 index. The on-disk index itself is unaffected;
+   * toggling back resumes search immediately.
+   */
+  searchDisabled?: boolean;
 }
 
 /**

@@ -2,10 +2,36 @@ package search
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"strings"
 	"time"
 )
+
+// AuditEmitter is the narrow seam the search view calls when emitting
+// search-executed audit events (cross-session-search WP07). Mirrors the
+// tools view's AuditEmitter shape so the chassis can wire one
+// process-wide emitter into both surfaces. nil-tolerant — when nil, no
+// audit row is emitted.
+//
+// Privacy contract: the raw query string MUST NOT appear in the
+// emitted attrs map. Callers receive only a sha256-hex prefix
+// (`query_hash`), the result count, the list of applied filter names,
+// and the wall-clock duration.
+type AuditEmitter interface {
+	Emit(ctx context.Context, kind string, attrs map[string]any)
+}
+
+// EnabledFn returns whether the search subsystem is enabled. Wired
+// from the Settings store by the chassis. nil → always enabled.
+type EnabledFn func() bool
+
+// KindSearchExecuted is the audit event kind emitted on every Search
+// call (cross-session-search WP07). The payload carries query_hash
+// (sha256 hex prefix), result_count, filters_applied, took_ms — the
+// raw query never appears.
+const KindSearchExecuted = "search.executed"
 
 // sqlQuerier is the minimal interface over *sql.DB that the search
 // implementation needs.  The real backend satisfies it; tests can pass
@@ -17,18 +43,75 @@ type sqlQuerier interface {
 // managerAPI is the concrete SearchAPI backed by a raw *sql.DB (or
 // anything that satisfies sqlQuerier).
 type managerAPI struct {
-	db sqlQuerier
+	db      sqlQuerier
+	audit   AuditEmitter
+	enabled EnabledFn
 }
 
 // NewManagerAPI returns a SearchAPI backed by the supplied *sql.DB.
-// db must be non-nil.
+// db must be non-nil. Audit emission and the enabled gate are not
+// wired by this constructor — use NewManagerAPIWithConfig for v0.3.0+
+// callers that want WP07 behaviour.
 func NewManagerAPI(db *sql.DB) SearchAPI {
 	return &managerAPI{db: db}
+}
+
+// Config bundles the optional dependencies the search view consumes
+// for WP07 (audit + enable dial). All fields are nil-tolerant.
+type Config struct {
+	// Audit receives the search.executed event on every Search call.
+	// nil → no audit emission.
+	Audit AuditEmitter
+	// Enabled is consulted at the top of every Search call. When the
+	// callback returns false, Search returns an empty result without
+	// touching the FTS5 index. nil → always enabled.
+	Enabled EnabledFn
+}
+
+// NewManagerAPIWithConfig returns a SearchAPI with the WP07 audit +
+// enable dial wired in. db must be non-nil; cfg fields are
+// nil-tolerant.
+func NewManagerAPIWithConfig(db *sql.DB, cfg Config) SearchAPI {
+	return &managerAPI{db: db, audit: cfg.Audit, enabled: cfg.Enabled}
 }
 
 // newManagerAPIFromQuerier is used by tests that supply a fake querier.
 func newManagerAPIFromQuerier(q sqlQuerier) SearchAPI {
 	return &managerAPI{db: q}
+}
+
+// newManagerAPIFromQuerierWithConfig is the test-side analogue of
+// NewManagerAPIWithConfig.
+func newManagerAPIFromQuerierWithConfig(q sqlQuerier, cfg Config) SearchAPI {
+	return &managerAPI{db: q, audit: cfg.Audit, enabled: cfg.Enabled}
+}
+
+// queryHash returns the 16-hex-char prefix of sha256(lowercased trimmed
+// query). Used for audit so the raw query never lands in the log.
+func queryHash(q string) string {
+	sum := sha256.Sum256([]byte(strings.ToLower(strings.TrimSpace(q))))
+	return hex.EncodeToString(sum[:])[:16]
+}
+
+// filtersApplied returns the names of non-zero filter fields. Used as
+// audit metadata so the chassis can surface "was the project filter
+// active?" without leaking the actual id (which may itself be
+// sensitive — e.g. a project named after a customer).
+func filtersApplied(f SearchFilters) []string {
+	var out []string
+	if f.ProjectID != "" {
+		out = append(out, "project")
+	}
+	if f.SessionID != "" {
+		out = append(out, "session")
+	}
+	if f.RoleFilter != "" {
+		out = append(out, "role")
+	}
+	if f.Limit > 0 {
+		out = append(out, "limit")
+	}
+	return out
 }
 
 // sanitise returns a safe FTS5 query term, or "" if the input is
@@ -146,10 +229,36 @@ const defaultLimit = 50
 //	 ORDER BY rank
 //	 LIMIT ?
 func (a *managerAPI) Search(ctx context.Context, query string, filters SearchFilters) ([]SearchHit, error) {
+	// WP07 — settings dial. When the user has flipped SearchDisabled
+	// (or the chassis hasn't wired the gate yet and we want to fail
+	// closed in the future), short-circuit before touching the index.
+	if a.enabled != nil && !a.enabled() {
+		return nil, nil
+	}
+
 	q := sanitise(query)
 	if q == "" {
 		return nil, nil
 	}
+
+	// WP07 — audit. We capture the start time outside the deferred emit
+	// so the took_ms attribute reflects the full Search call, not just
+	// the SQL round-trip. The raw query string is hashed and truncated
+	// per the privacy contract on AuditEmitter — this method MUST NOT
+	// pass `query` itself into the audit attrs map.
+	start := time.Now()
+	resultCount := 0
+	defer func() {
+		if a.audit == nil {
+			return
+		}
+		a.audit.Emit(ctx, KindSearchExecuted, map[string]any{
+			"query_hash":      queryHash(query),
+			"result_count":    resultCount,
+			"filters_applied": filtersApplied(filters),
+			"took_ms":         time.Since(start).Milliseconds(),
+		})
+	}()
 
 	limit := filters.Limit
 	if limit <= 0 {
@@ -213,5 +322,6 @@ SELECT s.id, s.name, m.id, m.role,
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
+	resultCount = len(hits)
 	return hits, nil
 }
