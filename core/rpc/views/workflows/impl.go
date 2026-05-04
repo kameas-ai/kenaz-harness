@@ -10,6 +10,8 @@ import (
 	"github.com/sigil-tech/kaneaz-harness/core/context/audit"
 	"github.com/sigil-tech/kaneaz-harness/core/policy/cedar"
 	corewf "github.com/sigil-tech/kaneaz-harness/core/workflows"
+	wfcatalog "github.com/sigil-tech/kaneaz-harness/core/workflows/catalog"
+	wfsched "github.com/sigil-tech/kaneaz-harness/core/workflows/scheduler"
 )
 
 // ErrEngineUnavailable is returned when the chassis booted without
@@ -32,6 +34,14 @@ var ErrInvalidSaveInput = errors.New("workflows: save requires yaml or workflow"
 // from the cedar gate is preserved via errors.Unwrap so callers can
 // inspect Decision details.
 var ErrCedarDenied = errors.New("workflows: denied by cedar policy")
+
+// ErrSchedulerUnavailable is returned by ScheduleSet / ScheduleClear /
+// ScheduleList / RunNow when no scheduler is wired into the chassis.
+var ErrSchedulerUnavailable = errors.New("workflows: scheduler unavailable")
+
+// ErrCatalogUnavailable is returned by Catalog_* methods when no
+// catalog backend is wired into the chassis.
+var ErrCatalogUnavailable = errors.New("workflows: catalog unavailable")
 
 // ProgressPublisher is the interface the API uses to fan progress
 // events onto the broker. Decoupled from rpc.StreamBroker so the
@@ -61,6 +71,13 @@ type Config struct {
 	// WP11). nil drops every event silently — acceptable in test
 	// harnesses without an emitter wired.
 	Audit audit.Emitter
+	// Scheduler is the cron-scheduler surface (workflows-agentic-01KW2D3X
+	// WP02). nil causes ScheduleSet / ScheduleClear / ScheduleList /
+	// RunNow to return ErrSchedulerUnavailable.
+	Scheduler wfsched.Scheduler
+	// WorkflowCatalog is the browsable catalog backend (WP03). nil
+	// causes Catalog_* methods to return ErrCatalogUnavailable.
+	WorkflowCatalog wfcatalog.Catalog
 }
 
 // API is the concrete WorkflowsAPI.
@@ -70,7 +87,9 @@ type API struct {
 	byID map[string]corewf.Workflow
 	// source tracks per-id provenance ("builtin" | "user") so List
 	// surfaces the right tag in the catalog after a Save round-trip.
-	source map[string]string
+	source    map[string]string
+	scheduler wfsched.Scheduler
+	catalog   wfcatalog.Catalog
 }
 
 // New returns a real-engine-backed API. A nil engine returns a
@@ -78,9 +97,11 @@ type API struct {
 // ErrEngineUnavailable).
 func New(cfg Config) *API {
 	a := &API{
-		cfg:    cfg,
-		byID:   make(map[string]corewf.Workflow, len(cfg.Catalog)),
-		source: make(map[string]string, len(cfg.Catalog)),
+		cfg:       cfg,
+		byID:      make(map[string]corewf.Workflow, len(cfg.Catalog)),
+		source:    make(map[string]string, len(cfg.Catalog)),
+		scheduler: cfg.Scheduler,
+		catalog:   cfg.WorkflowCatalog,
 	}
 	for _, w := range cfg.Catalog {
 		a.byID[w.ID] = w
@@ -414,6 +435,159 @@ func unprojectWorkflow(w Workflow) corewf.Workflow {
 		})
 	}
 	return out
+}
+
+// ScheduleSet implements WorkflowsAPI.
+func (a *API) ScheduleSet(ctx context.Context, in ScheduleSetInput) error {
+	if a == nil || a.cfg.Disabled {
+		return ErrFeatureDisabled
+	}
+	if a.scheduler == nil {
+		return ErrSchedulerUnavailable
+	}
+	return a.scheduler.Register(ctx, in.WorkflowID, in.Cron, in.Timezone)
+}
+
+// ScheduleClear implements WorkflowsAPI.
+func (a *API) ScheduleClear(ctx context.Context, workflowID string) error {
+	if a == nil || a.cfg.Disabled {
+		return ErrFeatureDisabled
+	}
+	if a.scheduler == nil {
+		return ErrSchedulerUnavailable
+	}
+	return a.scheduler.Unregister(ctx, workflowID)
+}
+
+// ScheduleList implements WorkflowsAPI.
+func (a *API) ScheduleList(ctx context.Context) ([]ScheduleEntry, error) {
+	if a == nil || a.cfg.Disabled {
+		return nil, ErrFeatureDisabled
+	}
+	if a.scheduler == nil {
+		return nil, ErrSchedulerUnavailable
+	}
+	internal, err := a.scheduler.List(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]ScheduleEntry, 0, len(internal))
+	for _, e := range internal {
+		out = append(out, ScheduleEntry{
+			WorkflowID: e.WorkflowID,
+			Cron:       e.Cron,
+			Timezone:   e.Timezone,
+			Enabled:    e.Enabled,
+		})
+	}
+	return out, nil
+}
+
+// RunNow implements WorkflowsAPI.
+func (a *API) RunNow(ctx context.Context, workflowID string) (RunSummary, error) {
+	if a == nil || a.cfg.Disabled {
+		return RunSummary{}, ErrFeatureDisabled
+	}
+	if a.scheduler == nil {
+		return RunSummary{}, ErrSchedulerUnavailable
+	}
+	internal, err := a.scheduler.RunNow(ctx, workflowID)
+	if err != nil {
+		return RunSummary{}, err
+	}
+	return RunSummary{
+		RunID:      internal.RunID,
+		WorkflowID: internal.WorkflowID,
+		Status:     internal.Status,
+		StartedAt:  internal.StartedAt,
+		EndedAt:    internal.EndedAt,
+		Err:        internal.Err,
+		Scheduled:  internal.Scheduled,
+	}, nil
+}
+
+// --- Catalog methods (workflows-agentic-01KW2D3X WP03) ---
+
+// Catalog_List implements WorkflowsAPI.
+func (a *API) Catalog_List(ctx context.Context) ([]CatalogEntry, error) {
+	if a == nil || a.cfg.Disabled {
+		return nil, ErrFeatureDisabled
+	}
+	if a.catalog == nil {
+		return nil, ErrCatalogUnavailable
+	}
+	entries, err := a.catalog.List(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]CatalogEntry, 0, len(entries))
+	for _, e := range entries {
+		out = append(out, projectCatalogEntry(e))
+	}
+	return out, nil
+}
+
+// Catalog_Get implements WorkflowsAPI.
+func (a *API) Catalog_Get(ctx context.Context, id string) (CatalogPreview, error) {
+	if a == nil || a.cfg.Disabled {
+		return CatalogPreview{}, ErrFeatureDisabled
+	}
+	if a.catalog == nil {
+		return CatalogPreview{}, ErrCatalogUnavailable
+	}
+	doc, err := a.catalog.Get(ctx, id)
+	if err != nil {
+		return CatalogPreview{}, err
+	}
+	return CatalogPreview{
+		Entry:      projectCatalogEntry(doc.Entry),
+		YAMLSource: doc.YAMLSource,
+	}, nil
+}
+
+// Catalog_Install implements WorkflowsAPI.
+func (a *API) Catalog_Install(ctx context.Context, id string) (CatalogInstallResult, error) {
+	if a == nil || a.cfg.Disabled {
+		return CatalogInstallResult{}, ErrFeatureDisabled
+	}
+	if a.catalog == nil {
+		return CatalogInstallResult{}, ErrCatalogUnavailable
+	}
+	ref, err := a.catalog.Install(ctx, id)
+	if err != nil {
+		return CatalogInstallResult{}, err
+	}
+	// After install, refresh the in-memory byID cache so List/Get picks
+	// up the newly persisted workflow without a chassis restart.
+	if a.cfg.Store != nil {
+		if w, lerr := a.cfg.Store.Load(ctx, ref.WorkflowID); lerr == nil {
+			a.mu.Lock()
+			a.byID[w.ID] = w
+			a.source[w.ID] = "user"
+			a.mu.Unlock()
+		}
+	}
+	return CatalogInstallResult{
+		WorkflowID:         ref.WorkflowID,
+		Scheduled:          ref.Scheduled,
+		MissingCredentials: ref.MissingCredentials,
+	}, nil
+}
+
+// projectCatalogEntry converts a catalog.Entry to the wire CatalogEntry.
+func projectCatalogEntry(e wfcatalog.Entry) CatalogEntry {
+	return CatalogEntry{
+		ID:                  e.ID,
+		Name:                e.Name,
+		Description:         e.Description,
+		Source:              e.Source,
+		Version:             e.Version,
+		Icon:                e.Icon,
+		RequiresCedarGrants: e.RequiresCedarGrants,
+		RequiresCredentials: e.RequiresCredentials,
+		EstimatedCostUSD:    e.EstimatedCostUSD,
+		InstallStatus:       e.InstallStatus,
+	}
 }
 
 func projectWorkflow(w corewf.Workflow) Workflow {

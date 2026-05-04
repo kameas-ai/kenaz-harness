@@ -7,10 +7,14 @@
 // per-step transcript. Streaming progress is published on the
 // `workflows:run-progress` broker topic; the wire shape there mirrors
 // ProgressEvent on this surface.
+//
+// WP02 (workflows-agentic-01KW2D3X) adds scheduler methods:
+// ScheduleSet, ScheduleClear, ScheduleList, and RunNow.
 package workflows
 
 import (
 	"context"
+	"time"
 )
 
 // Summary is the lightweight catalog entry returned by List.
@@ -116,6 +120,64 @@ type RunRequest struct {
 	SkipCache bool `json:"skipCache,omitempty"`
 }
 
+// ScheduleSetInput is the wire shape for ScheduleSet.
+type ScheduleSetInput struct {
+	WorkflowID string `json:"workflowId"`
+	// Cron is a standard 5-field cron expression (minute hour dom month dow).
+	Cron string `json:"cron"`
+	// Timezone is an IANA timezone name (e.g. "America/New_York").
+	// Empty falls back to UTC.
+	Timezone string `json:"timezone,omitempty"`
+}
+
+// ScheduleEntry is the wire shape returned by ScheduleList.
+type ScheduleEntry struct {
+	WorkflowID string `json:"workflowId"`
+	Cron       string `json:"cron"`
+	Timezone   string `json:"timezone,omitempty"`
+	Enabled    bool   `json:"enabled"`
+}
+
+// RunSummary is returned by RunNow and embedded in ScheduleHistory.
+type RunSummary struct {
+	RunID      string    `json:"runId"`
+	WorkflowID string    `json:"workflowId"`
+	Status     string    `json:"status"` // completed | failed | running
+	StartedAt  time.Time `json:"startedAt"`
+	EndedAt    time.Time `json:"endedAt,omitempty"`
+	Err        string    `json:"error,omitempty"`
+	Scheduled  bool      `json:"scheduled"`
+}
+
+// --- Catalog types (workflows-agentic-01KW2D3X WP03) ---
+
+// CatalogEntry is the wire shape for one card in the catalog grid.
+type CatalogEntry struct {
+	ID                  string   `json:"id"`
+	Name                string   `json:"name"`
+	Description         string   `json:"description,omitempty"`
+	Source              string   `json:"source"` // "builtin" | "user"
+	Version             string   `json:"version"`
+	Icon                string   `json:"icon,omitempty"`
+	RequiresCedarGrants []string `json:"requiresCedarGrants,omitempty"`
+	RequiresCredentials []string `json:"requiresCredentials,omitempty"`
+	EstimatedCostUSD    float64  `json:"estimatedCostUSD"`
+	InstallStatus       string   `json:"installStatus"`
+}
+
+// CatalogPreview is the full payload returned by Catalog_Get.
+type CatalogPreview struct {
+	Entry      CatalogEntry `json:"entry"`
+	YAMLSource string       `json:"yamlSource"`
+}
+
+// CatalogInstallResult is the result of Catalog_Install.
+type CatalogInstallResult struct {
+	WorkflowID         string   `json:"workflowId"`
+	Scheduled          bool     `json:"scheduled"`
+	MissingCredentials []string `json:"missingCredentials,omitempty"`
+}
+
 // WorkflowsAPI is the view-scoped accessor.
 //
 // A nil engine is allowed — methods return ErrEngineUnavailable so
@@ -142,4 +204,39 @@ type WorkflowsAPI interface {
 	// corewf.ErrWorkflowNotFound when the id is unknown and
 	// ErrStorageUnavailable when no Store is wired.
 	Delete(ctx context.Context, id string) error
+
+	// --- Scheduler methods (workflows-agentic-01KW2D3X WP02) ---
+
+	// ScheduleSet registers or replaces a cron schedule for the
+	// workflow identified by in.WorkflowID. The schedule is persisted
+	// in DB so it survives chassis restarts. Returns
+	// ErrSchedulerUnavailable when no scheduler is wired.
+	ScheduleSet(ctx context.Context, in ScheduleSetInput) error
+	// ScheduleClear removes the cron schedule for the given workflow.
+	// Returns nil if no schedule was registered.
+	ScheduleClear(ctx context.Context, workflowID string) error
+	// ScheduleList returns all registered schedules.
+	ScheduleList(ctx context.Context) ([]ScheduleEntry, error)
+	// RunNow dispatches an immediate off-schedule run. Does not
+	// require an active cron entry. Returns ErrSchedulerUnavailable
+	// when no scheduler is wired.
+	RunNow(ctx context.Context, workflowID string) (RunSummary, error)
+
+	// --- Catalog methods (workflows-agentic-01KW2D3X WP03) ---
+
+	// Catalog_List returns every Entry the workflow catalog exposes,
+	// with per-entry InstallStatus reflecting the current storage state.
+	Catalog_List(ctx context.Context) ([]CatalogEntry, error)
+
+	// Catalog_Get returns the full YAML + Entry metadata for id.
+	// Returns ErrCatalogUnavailable when no catalog is wired or
+	// corewf.ErrWorkflowNotFound when the id is unknown.
+	Catalog_Get(ctx context.Context, id string) (CatalogPreview, error)
+
+	// Catalog_Install copies the workflow from the catalog to user
+	// storage, optionally arms a cron schedule, and returns a ref
+	// describing what happened. On missing credentials the install
+	// still succeeds — callers inspect MissingCredentials and may
+	// redirect to /providers/add.
+	Catalog_Install(ctx context.Context, id string) (CatalogInstallResult, error)
 }

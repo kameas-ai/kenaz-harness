@@ -2,6 +2,7 @@ package workflows
 
 import (
 	"fmt"
+	"strings"
 )
 
 // validKinds is the set returned by AllStepKinds, indexed for O(1)
@@ -78,6 +79,18 @@ func Validate(w Workflow) error {
 		allSteps[st.Name] = true
 	}
 
+	// Determine whether ANY step uses inputs_from. When none do, the
+	// workflow is pure-linear and the old implicit-ordering semantics
+	// apply (back-compat). When at least one step uses inputs_from the
+	// DAG validator runs.
+	hasDAG := false
+	for _, st := range w.Steps {
+		if len(st.InputsFrom) > 0 {
+			hasDAG = true
+			break
+		}
+	}
+
 	for _, st := range w.Steps {
 		if st.Name == "" {
 			return fmt.Errorf("workflows: step name required")
@@ -91,14 +104,86 @@ func Validate(w Workflow) error {
 		if err := validateStepFields(st); err != nil {
 			return err
 		}
-		// Validate references in user-text fields point at known
-		// inputs / earlier steps.
-		for _, field := range collectRefBearingFields(st) {
-			if err := validateRefs(field, inputSet, stepNames, allSteps); err != nil {
-				return fmt.Errorf("step %q: %w", st.Name, err)
+
+		// Validate inputs_from entries reference known step names.
+		// We check against allSteps (not stepNames which grows
+		// iteratively) because DAG order is determined by the graph,
+		// not declaration order.
+		for _, ref := range st.InputsFrom {
+			if !allSteps[ref] {
+				return fmt.Errorf("%w: step %q inputs_from unknown step %q",
+					ErrUnknownReference, st.Name, ref)
+			}
+			if ref == st.Name {
+				return fmt.Errorf("%w: step %q inputs_from itself",
+					ErrWorkflowCycle, st.Name)
+			}
+		}
+
+		// Validate ${...} refs in user-text fields.
+		// For linear workflows (no inputs_from) enforce the strict
+		// forward-ref check — references must point at earlier steps.
+		// For DAG workflows the execution order is determined by the
+		// graph, so we only verify that referenced step names exist
+		// (the topological sort in the loader will catch bad orderings).
+		if !hasDAG {
+			for _, field := range collectRefBearingFields(st) {
+				if err := validateRefs(field, inputSet, stepNames, allSteps); err != nil {
+					return fmt.Errorf("step %q: %w", st.Name, err)
+				}
+			}
+		} else {
+			for _, field := range collectRefBearingFields(st) {
+				if err := validateRefsDAG(field, inputSet, allSteps); err != nil {
+					return fmt.Errorf("step %q: %w", st.Name, err)
+				}
 			}
 		}
 		stepNames[st.Name] = true
+	}
+
+	// Run the topological sort for DAG workflows to catch cycles early.
+	if hasDAG {
+		if _, err := topoSort(w.Steps); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// validateRefsDAG is like validateRefs but relaxed for DAG workflows:
+// it only verifies that step references name a real step (not that the
+// step has already been declared). Execution order is guaranteed by the
+// topological sort.
+func validateRefsDAG(s string, inputs map[string]bool, allSteps map[string]bool) error {
+	i := 0
+	for i < len(s) {
+		ch := s[i]
+		if ch != '$' || i+1 >= len(s) || s[i+1] != '{' {
+			i++
+			continue
+		}
+		end := strings.IndexByte(s[i+2:], '}')
+		if end < 0 {
+			return nil
+		}
+		expr := strings.TrimSpace(s[i+2 : i+2+end])
+		parts := strings.Split(expr, ".")
+		if len(parts) >= 2 {
+			switch parts[0] {
+			case "input":
+				if !inputs[parts[1]] {
+					return fmt.Errorf("%w: input %q", ErrUnknownReference, parts[1])
+				}
+			case "step":
+				name := parts[1]
+				if !allSteps[name] {
+					return fmt.Errorf("%w: step %q", ErrUnknownReference, name)
+				}
+			}
+		}
+		i += 2 + end + 1
 	}
 	return nil
 }
@@ -154,6 +239,56 @@ func validateStepFields(st Step) error {
 		}
 		if st.ThenStep == "" && st.ElseStep == "" {
 			return fmt.Errorf("step %q: conditional requires then_step or else_step", st.Name)
+		}
+	case StepKindWebFetch:
+		if st.URL == "" {
+			return fmt.Errorf("step %q: web_fetch requires url", st.Name)
+		}
+	case StepKindWebScrape:
+		if st.URL == "" {
+			return fmt.Errorf("step %q: web_scrape requires url", st.Name)
+		}
+		// mode must be empty/"css" or "llm"
+		switch st.Mode {
+		case "", "css", "llm":
+		default:
+			return fmt.Errorf("step %q: web_scrape mode must be css or llm (got %q)", st.Name, st.Mode)
+		}
+		if st.Mode == "llm" || st.ExtractWithModel != "" {
+			if st.ExtractPrompt == "" {
+				return fmt.Errorf("step %q: web_scrape llm mode requires extract_prompt", st.Name)
+			}
+		}
+	case StepKindNotify:
+		if st.NotifyTitle == "" {
+			return fmt.Errorf("step %q: notify requires notify_title", st.Name)
+		}
+		if len(st.Surface) == 0 {
+			return fmt.Errorf("step %q: notify requires surface", st.Name)
+		}
+	case StepKindWaitUntil:
+		set := 0
+		if st.Until != "" {
+			set++
+		}
+		if st.WaitDuration != "" {
+			set++
+		}
+		if st.Condition != "" {
+			set++
+		}
+		if set == 0 {
+			return fmt.Errorf("step %q: wait_until requires until, duration, or condition", st.Name)
+		}
+		if set > 1 {
+			return fmt.Errorf("step %q: wait_until: only one of until, duration, condition allowed", st.Name)
+		}
+	case StepKindAggregate:
+		if st.Strategy == "" {
+			return fmt.Errorf("step %q: aggregate requires strategy", st.Name)
+		}
+		if len(st.InputsFrom) == 0 {
+			return fmt.Errorf("step %q: aggregate requires inputs_from", st.Name)
 		}
 	}
 	return nil

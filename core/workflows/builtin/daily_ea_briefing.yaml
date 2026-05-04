@@ -1,0 +1,57 @@
+id: daily_ea_briefing
+name: "Daily EA Briefing"
+description: |
+  The headline EA automation: pulls emails, Slack messages, and calendar
+  events at 7 am, fans the three sources into a single model_turn that
+  writes a concise briefing, then pushes an OS notification.
+  Requires MCP servers: gmail, slack, google_calendar.
+version: 1
+schedule: "0 7 * * *"
+timezone: "America/New_York"
+steps:
+  - name: fetch_emails
+    kind: mcp_call
+    server: gmail
+    tool_name: search_threads
+    tool_args:
+      query: "is:unread newer_than:1d"
+
+  - name: fetch_slack
+    kind: mcp_call
+    server: slack
+    tool_name: list_messages
+    tool_args:
+      since: "24h"
+
+  - name: fetch_calendar
+    kind: mcp_call
+    server: google_calendar
+    tool_name: list_events
+    tool_args:
+      time_min: "today"
+      time_max: "today+1d"
+
+  - name: write_briefing
+    kind: model_turn
+    inputs_from: [fetch_emails, fetch_slack, fetch_calendar]
+    user_prompt: |
+      You are a personal executive assistant. Write a concise morning briefing
+      (max 300 words) covering the most important items from the last 24 hours.
+
+      EMAILS:
+      ${step.fetch_emails.output}
+
+      SLACK:
+      ${step.fetch_slack.output}
+
+      CALENDAR TODAY:
+      ${step.fetch_calendar.output}
+
+      Highlight action items, deadlines, and anything requiring a reply today.
+
+  - name: notify
+    kind: notify
+    inputs_from: [write_briefing]
+    notify_title: "Morning Briefing"
+    notify_body: "${step.write_briefing.output}"
+    surface: [os]

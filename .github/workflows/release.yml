@@ -220,17 +220,17 @@ jobs:
 
       # ── macOS rename + code signing + notarization ──────────────────────
       # Wails names the .app bundle from wails.json `name` (kenaz-harness),
-      # ignoring info.productName for the directory name. Rename to "Kenaz.app"
-      # so the user-visible artifact matches CFBundleName.
-      - name: rename .app bundle to Kenaz.app (macos only)
+      # ignoring info.productName for the directory name. Rename to
+      # "Kenaz Harness.app" so the user-visible artifact matches CFBundleName.
+      - name: rename .app bundle to "Kenaz Harness.app" (macos only)
         if: runner.os == 'macOS'
         shell: bash
         run: |
           set -euo pipefail
-          if [ -d "build/bin/kenaz-harness.app" ] && [ ! -d "build/bin/Kenaz.app" ]; then
-            mv "build/bin/kenaz-harness.app" "build/bin/Kenaz.app"
+          if [ -d "build/bin/kenaz-harness.app" ] && [ ! -d "build/bin/Kenaz Harness.app" ]; then
+            mv "build/bin/kenaz-harness.app" "build/bin/Kenaz Harness.app"
           fi
-          test -d "build/bin/Kenaz.app" || { echo "::error::expected build/bin/Kenaz.app"; ls -la build/bin; exit 1; }
+          test -d "build/bin/Kenaz Harness.app" || { echo "::error::expected build/bin/Kenaz Harness.app"; ls -la build/bin; exit 1; }
 
       # Org-level secret APPLE_CERT_P12 is the base64 of a Developer ID
       # Application .p12 export. Imported into a temp keychain that's
@@ -265,7 +265,7 @@ jobs:
 
           security find-identity -v -p codesigning "$KEYCHAIN_PATH"
 
-      - name: codesign Kenaz.app (macos only)
+      - name: codesign "Kenaz Harness.app" (macos only)
         if: runner.os == 'macOS' && env.APPLE_CERT_P12_PRESENT == 'true'
         env:
           APPLE_CERT_P12: ${{ secrets.APPLE_CERT_P12 }}
@@ -278,11 +278,11 @@ jobs:
           codesign --force --deep --options runtime --timestamp \
             --entitlements build/darwin/entitlements.plist \
             --sign "Developer ID Application: Kameas AI, Inc. (K54JDRHBA7)" \
-            build/bin/Kenaz.app
-          codesign --verify --deep --strict --verbose=2 build/bin/Kenaz.app
-          codesign -dv --verbose=4 build/bin/Kenaz.app
+            "build/bin/Kenaz Harness.app"
+          codesign --verify --deep --strict --verbose=2 "build/bin/Kenaz Harness.app"
+          codesign -dv --verbose=4 "build/bin/Kenaz Harness.app"
 
-      - name: notarize Kenaz.app (macos only)
+      - name: notarize "Kenaz Harness.app" (macos only)
         if: runner.os == 'macOS' && env.APPLE_CERT_P12_PRESENT == 'true'
         env:
           APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
@@ -291,19 +291,65 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          ZIP_PATH="$RUNNER_TEMP/Kenaz-notarize.zip"
+          ZIP_PATH="$RUNNER_TEMP/Kenaz-Harness-notarize.zip"
           P8_PATH="$RUNNER_TEMP/AuthKey_${APPLE_API_KEY_ID}.p8"
           echo "$APPLE_API_KEY_P8" > "$P8_PATH"
           chmod 600 "$P8_PATH"
 
-          ditto -c -k --sequesterRsrc --keepParent build/bin/Kenaz.app "$ZIP_PATH"
+          ditto -c -k --sequesterRsrc --keepParent "build/bin/Kenaz Harness.app" "$ZIP_PATH"
           xcrun notarytool submit "$ZIP_PATH" \
             --key "$P8_PATH" --key-id "$APPLE_API_KEY_ID" --issuer "$APPLE_API_ISSUER_ID" \
             --wait --timeout 30m
 
-          xcrun stapler staple build/bin/Kenaz.app
+          xcrun stapler staple "build/bin/Kenaz Harness.app"
           # Final acceptance check — should print "accepted source=Notarized Developer ID"
-          spctl -a -vv build/bin/Kenaz.app
+          spctl -a -vv "build/bin/Kenaz Harness.app"
+          rm -f "$P8_PATH"
+
+      - name: install create-dmg (macOS only)
+        if: runner.os == 'macOS'
+        run: npm install -g create-dmg
+
+      - name: build .dmg installer (macOS only)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd build/bin
+          # create-dmg auto-detects the .app and produces a properly-styled
+          # installer with /Applications shortcut + drag prompt.
+          # It exits non-zero if the app isn't signed (on unsigned CI runs),
+          # so we tolerate that and verify the .dmg was produced regardless.
+          create-dmg "Kenaz Harness.app" || true
+          # create-dmg names the output "<AppName> <Version>.dmg"; glob and rename.
+          DMG_FOUND=$(ls *.dmg 2>/dev/null | head -1)
+          if [ -z "$DMG_FOUND" ]; then
+            echo "::error::create-dmg produced no .dmg — listing dir:" && ls -la && exit 1
+          fi
+          mv "$DMG_FOUND" "Kenaz-Harness.dmg"
+          echo "DMG produced: Kenaz-Harness.dmg ($(du -h Kenaz-Harness.dmg | cut -f1))"
+
+      - name: codesign + notarize + staple the .dmg (macOS only)
+        if: runner.os == 'macOS' && env.APPLE_CERT_P12_PRESENT == 'true'
+        env:
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          DMG="build/bin/Kenaz-Harness.dmg"
+          P8_PATH="$RUNNER_TEMP/AuthKey_${APPLE_API_KEY_ID}.p8"
+          echo "$APPLE_API_KEY_P8" > "$P8_PATH"
+          chmod 600 "$P8_PATH"
+
+          codesign --sign "Developer ID Application: Kameas AI, Inc. (K54JDRHBA7)" \
+            --timestamp --options runtime "$DMG"
+          xcrun notarytool submit "$DMG" \
+            --key "$P8_PATH" \
+            --key-id "$APPLE_API_KEY_ID" --issuer "$APPLE_API_ISSUER_ID" \
+            --wait --timeout 30m
+          xcrun stapler staple "$DMG"
           rm -f "$P8_PATH"
 
       - name: cleanup keychain (macos, always)
@@ -386,10 +432,16 @@ jobs:
         if: runner.os != 'Windows'
         shell: bash
         run: |
+          set -euo pipefail
           VERSION="${{ needs.derive-version.outputs.version }}"
           LABEL="${{ matrix.label }}"
           STAGE="kaneaz-harness-${VERSION}-${LABEL}"
           mkdir -p dist
+          # On macOS, pull the .dmg out before renaming build/bin (the auto-update
+          # .zip and the human-install .dmg are separate release assets).
+          if [ "${{ runner.os }}" = "macOS" ] && [ -f "build/bin/Kenaz-Harness.dmg" ]; then
+            cp "build/bin/Kenaz-Harness.dmg" "dist/${STAGE}.dmg"
+          fi
           mv build/bin "${STAGE}"
           if [ "${{ matrix.archive_ext }}" = "tar.gz" ]; then
             tar -czf "dist/${STAGE}.tar.gz" "${STAGE}"
@@ -494,9 +546,17 @@ jobs:
           repo = os.environ.get('GITHUB_REPOSITORY', 'kameas-ai/kaneaz-harness')
           base = f"https://github.com/{repo}/releases/download/{tag}"
           dist = pathlib.Path('dist-flat')
+          # Build a lookup of darwin installer (.dmg) URLs keyed by platform.
+          # Pattern: kaneaz-harness-<version>-darwin-<arch>.dmg
+          dmg_urls: dict = {}
+          for f in sorted(dist.iterdir()):
+              dm = re.match(r'kaneaz-harness-.+?-(darwin)-(amd64|arm64)\.dmg$', f.name)
+              if dm:
+                  os_label, arch = dm.groups()
+                  dmg_urls[f"{os_label}-{arch}"] = f"{base}/{f.name}"
           assets = []
           for f in sorted(dist.iterdir()):
-              if f.suffix == '.sha256':
+              if f.suffix in ('.sha256',) or f.suffix == '.dmg':
                   continue
               sha_path = dist / f"{f.name}.sha256"
               sha = ''
@@ -507,7 +567,7 @@ jobs:
               if not m:
                   continue
               os_label, arch, ext = m.groups()
-              assets.append({
+              entry = {
                   'platform': f"{os_label}-{arch}",
                   'os': os_label,
                   'arch': arch,
@@ -516,7 +576,14 @@ jobs:
                   'sha256': sha,
                   'ext': ext,
                   'size_bytes': f.stat().st_size,
-              })
+              }
+              # For macOS, surface the .dmg as installer_url so download pages
+              # can offer the drag-to-Applications installer for first installs,
+              # while `url` (the .zip) continues to serve auto-update machinery.
+              installer = dmg_urls.get(f"{os_label}-{arch}")
+              if installer:
+                  entry['installer_url'] = installer
+              assets.append(entry)
           manifest = {
               'version': version,
               'tag': tag,
@@ -571,9 +638,16 @@ jobs:
           # serves /downloads/<tag>/<file> from s3://kameas-ai-docs-site.
           base = f"https://docs.kameas.ai/downloads/{tag}"
           dist = pathlib.Path('dist-flat')
+          # Build a lookup of darwin installer (.dmg) URLs keyed by platform.
+          dmg_urls: dict = {}
+          for f in sorted(dist.iterdir()):
+              dm = re.match(r'kaneaz-harness-.+?-(darwin)-(amd64|arm64)\.dmg$', f.name)
+              if dm:
+                  os_label, arch = dm.groups()
+                  dmg_urls[f"{os_label}-{arch}"] = f"{base}/{f.name}"
           assets = []
           for f in sorted(dist.iterdir()):
-              if f.suffix == '.sha256' or f.name == 'manifest.json':
+              if f.suffix in ('.sha256',) or f.suffix == '.dmg' or f.name == 'manifest.json':
                   continue
               sha_path = dist / f"{f.name}.sha256"
               sha = ''
@@ -583,7 +657,7 @@ jobs:
               if not m:
                   continue
               os_label, arch, ext = m.groups()
-              assets.append({
+              entry = {
                   'platform': f"{os_label}-{arch}",
                   'os': os_label,
                   'arch': arch,
@@ -592,7 +666,12 @@ jobs:
                   'sha256': sha,
                   'ext': ext,
                   'size_bytes': f.stat().st_size,
-              })
+              }
+              # For macOS, surface the .dmg as installer_url (CDN path).
+              installer = dmg_urls.get(f"{os_label}-{arch}")
+              if installer:
+                  entry['installer_url'] = installer
+              assets.append(entry)
           manifest = {
               'version': version,
               'tag': tag,

@@ -99,6 +99,12 @@ const (
 	KindWorkflowSaved      Kind = "workflow.saved"
 	KindWorkflowDeleted    Kind = "workflow.deleted"
 	KindWorkflowStepFailed Kind = "workflow.step_failed"
+	// KindWorkflowNetworkFetch fires once per web_fetch / web_scrape step
+	// that successfully completes a network request (WP05). The payload
+	// carries the request hostname, HTTP status, and response byte count.
+	// Full URL (which may contain auth tokens) and response body are NEVER
+	// recorded (privacy invariant).
+	KindWorkflowNetworkFetch Kind = "workflow.network_fetch"
 
 	// Auto-update lifecycle kinds (auto-update mission, v0.4.0 WP06).
 	// Six kinds mirror the Service lifecycle: every Check call,
@@ -431,6 +437,24 @@ func Marshal(kind Kind, payload any, now time.Time) (Event, error) {
 		return Event{}, err
 	}
 	return Event{Kind: kind, TS: now, Payload: raw}, nil
+}
+
+// WorkflowNetworkFetchPayload carries signalling for
+// KindWorkflowNetworkFetch (workflows-agentic-01KW2D3X WP05).
+//
+// Privacy invariant: only the request hostname, HTTP status code, and
+// response size in bytes are recorded. The full URL (which can carry
+// signed auth tokens), response body, and extraction output are NEVER
+// included.
+type WorkflowNetworkFetchPayload struct {
+	WorkflowID string `json:"workflow_id"`
+	RunID      string `json:"run_id"`
+	StepID     string `json:"step_id"`
+	StepKind   string `json:"step_kind"` // "web_fetch" | "web_scrape"
+	// Hostname is the request hostname only — never the full URL.
+	Hostname   string `json:"hostname"`
+	Status     int    `json:"status"`
+	Bytes      int    `json:"bytes"`
 }
 
 // Emit is a small convenience wrapper for callers that have a payload

@@ -1327,6 +1327,21 @@ func (b *Bindings) Workflows_Delete(id string) error {
 	return b.api.Workflows().Delete(b.ctx(), id)
 }
 
+// ── workflow scheduler (workflows-agentic-01KW2D3X WP02) ──────────────
+
+func (b *Bindings) Workflows_ScheduleSet(in workflowsview.ScheduleSetInput) error {
+	return b.api.Workflows().ScheduleSet(b.ctx(), in)
+}
+func (b *Bindings) Workflows_ScheduleClear(workflowID string) error {
+	return b.api.Workflows().ScheduleClear(b.ctx(), workflowID)
+}
+func (b *Bindings) Workflows_ScheduleList() ([]workflowsview.ScheduleEntry, error) {
+	return b.api.Workflows().ScheduleList(b.ctx())
+}
+func (b *Bindings) Workflows_RunNow(workflowID string) (workflowsview.RunSummary, error) {
+	return b.api.Workflows().RunNow(b.ctx(), workflowID)
+}
+
 // ── update (mission auto-update, v0.4.0 WP03) ─────────────────────────
 //
 // TODO: regenerate via `wails generate module` once the WP04 + WP05 UI

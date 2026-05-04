@@ -864,6 +864,20 @@ export function Workflows_Delete(arg1) {
   return window['go']['rpc']['Bindings']['Workflows_Delete'](arg1);
 }
 
+// TODO: regenerate via `wails generate module` once WP03 catalog is stable.
+// Hand-added in WP03 so the frontend CatalogView / workflowsClient has typed bindings.
+export function Workflows_Catalog_List() {
+  return window['go']['rpc']['Bindings']['Workflows_Catalog_List']();
+}
+
+export function Workflows_Catalog_Get(arg1) {
+  return window['go']['rpc']['Bindings']['Workflows_Catalog_Get'](arg1);
+}
+
+export function Workflows_Catalog_Install(arg1) {
+  return window['go']['rpc']['Bindings']['Workflows_Catalog_Install'](arg1);
+}
+
 // TODO: regenerate via `wails generate module` once the WP04+WP05 update UI lands.
 // Hand-added in WP03 so the frontend updateClient.ts has typed bindings.
 export function Update_Status() {
