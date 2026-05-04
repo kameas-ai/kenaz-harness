@@ -419,7 +419,7 @@ jobs:
           echo "$APPLE_API_KEY_P8" > "$P8_PATH"
           chmod 600 "$P8_PATH"
 
-          codesign --sign "Developer ID Application: Kameas AI, Inc. (K54JDRHBA7)" \
+          codesign --force --sign "Developer ID Application: Kameas AI, Inc. (K54JDRHBA7)" \
             --timestamp --options runtime "$DMG"
           xcrun notarytool submit "$DMG" \
             --key "$P8_PATH" \
