@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, watch, nextTick, onMounted, onBeforeUnmount, h, type VNode } from 'vue';
-import { useRouter } from 'vue-router';
+import { useRoute, useRouter } from 'vue-router';
 import { useHarnessClient } from '@/lib/harnessClientContext';
 import type { SearchHit, SearchHighlight, SearchFilters } from '@/lib/harnessClient';
 import { useProjects } from '@/lib/useHarnessAPI';
@@ -27,16 +27,56 @@ const emit = defineEmits<{
 
 const client = useHarnessClient();
 const router = useRouter();
+const route = useRoute();
 const { list: projects, refresh: refreshProjects } = useProjects();
 
 // ── state ──────────────────────────────────────────────────────────────
+//
+// WP06 — filter sidebar + URL state. The modal reads `?q=…&project=…
+// &role=…&from=…&to=…` from the current route on mount so a Cmd+F
+// follow-up after a deep-link (or a back-button trip) reopens with the
+// same filters. Subsequent changes call router.replace so the URL
+// stays canonical without polluting the browser history with each
+// keystroke. `from` / `to` are inclusive YYYY-MM-DD strings.
 const inputEl = ref<HTMLInputElement | null>(null);
 const query = ref('');
 const roleFilter = ref('');
 const projectFilter = ref('');
+const dateFrom = ref('');
+const dateTo = ref('');
 const hits = ref<SearchHit[]>([]);
 const loading = ref(false);
 const highlightedIndex = ref(-1);
+
+function readFromRoute() {
+  const q = route.query;
+  const get = (k: string): string => {
+    const v = q[k];
+    if (Array.isArray(v)) return typeof v[0] === 'string' ? v[0] : '';
+    return typeof v === 'string' ? v : '';
+  };
+  query.value = get('q');
+  projectFilter.value = get('project');
+  roleFilter.value = get('role');
+  dateFrom.value = get('from');
+  dateTo.value = get('to');
+}
+
+function syncRoute() {
+  const next: Record<string, string> = { ...(route.query as Record<string, string>) };
+  // Replace the search-related keys; preserve any unrelated query keys
+  // the host route was already carrying.
+  const setOrDelete = (k: string, v: string) => {
+    if (v) next[k] = v;
+    else delete next[k];
+  };
+  setOrDelete('q', query.value);
+  setOrDelete('project', projectFilter.value);
+  setOrDelete('role', roleFilter.value);
+  setOrDelete('from', dateFrom.value);
+  setOrDelete('to', dateTo.value);
+  void router.replace({ query: next });
+}
 
 // ── debounced search ───────────────────────────────────────────────────
 let debounceTimer: ReturnType<typeof setTimeout> | null = null;
@@ -53,11 +93,18 @@ watch(query, () => {
   debounceTimer = setTimeout(runSearch, 150);
 });
 
-watch([roleFilter, projectFilter], () => {
+watch([roleFilter, projectFilter, dateFrom, dateTo], () => {
+  syncRoute();
   if (query.value.trim()) {
     if (debounceTimer) clearTimeout(debounceTimer);
     debounceTimer = setTimeout(runSearch, 150);
   }
+});
+
+// Mirror q changes into the URL too — separate watcher so we don't
+// re-sync on filter-only changes that already syncRoute above.
+watch(query, () => {
+  syncRoute();
 });
 
 async function runSearch() {
@@ -72,13 +119,35 @@ async function runSearch() {
   if (projectFilter.value) filters.projectId = projectFilter.value;
   loading.value = true;
   try {
-    hits.value = await client.search.sessions(q, filters);
+    const raw = await client.search.sessions(q, filters);
+    hits.value = applyDateFilter(raw);
     highlightedIndex.value = hits.value.length > 0 ? 0 : -1;
   } catch {
     hits.value = [];
   } finally {
     loading.value = false;
   }
+}
+
+// applyDateFilter — client-side post-filter on createdAt. The backend
+// doesn't support date predicates yet (deferred to a follow-up
+// mission); for v0.3.0 we keep the round-trip cheap by filtering the
+// already-truncated hit set in the browser. `from` / `to` are
+// inclusive YYYY-MM-DD strings; an empty string means "no bound".
+function applyDateFilter(raw: SearchHit[]): SearchHit[] {
+  const fromMs = dateFrom.value ? Date.parse(dateFrom.value) : NaN;
+  const toMs = dateTo.value
+    // dateTo is inclusive end-of-day → +24h for comparison.
+    ? Date.parse(dateTo.value) + 24 * 60 * 60 * 1000
+    : NaN;
+  if (Number.isNaN(fromMs) && Number.isNaN(toMs)) return raw;
+  return raw.filter((h) => {
+    const t = Date.parse(h.createdAt);
+    if (Number.isNaN(t)) return true;
+    if (!Number.isNaN(fromMs) && t < fromMs) return false;
+    if (!Number.isNaN(toMs) && t >= toMs) return false;
+    return true;
+  });
 }
 
 // ── keyboard navigation ────────────────────────────────────────────────
@@ -193,8 +262,15 @@ function relativeTime(iso: string): string {
 
 // ── lifecycle ──────────────────────────────────────────────────────────
 onMounted(() => {
+  // WP06 — hydrate filters from the URL before focusing so the input
+  // shows the deep-linked query immediately.
+  readFromRoute();
   void nextTick(() => inputEl.value?.focus());
   void refreshProjects();
+  if (query.value.trim()) {
+    // Kick the search if we arrived with `?q=...` already set.
+    void runSearch();
+  }
 });
 
 onBeforeUnmount(() => {
@@ -257,8 +333,10 @@ const projectMap = computed(() => {
         </kbd>
       </div>
 
-      <!-- Filters row -->
-      <div class="px-3 py-1.5 border-b border-border-muted flex items-center gap-3 text-xs">
+      <!-- Filters row (WP06 — sidebar collapsed into a horizontal strip
+           so the modal stays one column on narrow screens; the keyboard
+           navigation contract for results is unchanged). -->
+      <div class="px-3 py-1.5 border-b border-border-muted flex items-center gap-3 text-xs flex-wrap">
         <label class="flex items-center gap-1 text-ink-subtle">
           Role
           <select
@@ -284,6 +362,26 @@ const projectMap = computed(() => {
               {{ p.name }}
             </option>
           </select>
+        </label>
+        <label class="flex items-center gap-1 text-ink-subtle">
+          From
+          <input
+            v-model="dateFrom"
+            type="date"
+            class="bg-surface-1 border border-border-muted rounded px-1 py-0.5 text-ink text-xs outline-none focus:ring-1 focus:ring-accent-a"
+            aria-label="Filter from date"
+            data-testid="search-date-from"
+          />
+        </label>
+        <label class="flex items-center gap-1 text-ink-subtle">
+          To
+          <input
+            v-model="dateTo"
+            type="date"
+            class="bg-surface-1 border border-border-muted rounded px-1 py-0.5 text-ink text-xs outline-none focus:ring-1 focus:ring-accent-a"
+            aria-label="Filter to date"
+            data-testid="search-date-to"
+          />
         </label>
       </div>
 

@@ -20,8 +20,13 @@ import { HarnessClientKey } from '@/lib/harnessClientContext';
 
 // ── mock vue-router ────────────────────────────────────────────────────
 const pushMock = vi.fn();
+const replaceMock = vi.fn();
 vi.mock('vue-router', () => ({
-  useRouter: () => ({ push: pushMock }),
+  useRouter: () => ({ push: pushMock, replace: replaceMock }),
+  // useRoute is consumed by SearchModal for WP06 URL-state hydration;
+  // returning a frozen empty-query object keeps the mount path identical
+  // to a fresh / no-deep-link open.
+  useRoute: () => ({ query: {} as Record<string, string> }),
 }));
 
 // ── helpers ────────────────────────────────────────────────────────────

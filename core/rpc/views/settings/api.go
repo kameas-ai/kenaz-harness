@@ -211,6 +211,15 @@ type Settings struct {
 	// FSRequestAccessEnabled() accessor; never read directly.
 	FSRequestAccessDisabled bool `json:"fsRequestAccessDisabled,omitempty"`
 
+	// SearchDisabled is the inverted persisted bit for the cross-session
+	// search modal (cross-session-search-01KQ8TDQ WP07). Default ON
+	// (zero-value Disabled → search enabled). When true, the SearchAPI
+	// short-circuits with an empty result set regardless of what is in
+	// the FTS5 index — privacy escape hatch for users who don't want
+	// their message corpus surfaced through Cmd+F. Read via the
+	// SearchEnabled() accessor; never read directly.
+	SearchDisabled bool `json:"searchDisabled,omitempty"`
+
 	// Autonomy is the persisted global autonomy.Layer
 	// (autonomy-dial-01KR3M2A WP02). Empty value (no level + no
 	// overrides) means "use the tier-default fallback." The wire shape
@@ -284,6 +293,11 @@ func (s Settings) AutoCaptureToolOutputs() bool { return !s.AutoCaptureToolOutpu
 // FSRequestAccessEnabled reports whether kaneaz__request_filesystem_access
 // is enabled. Default true on a fresh install (zero-value Disabled).
 func (s Settings) FSRequestAccessEnabled() bool { return !s.FSRequestAccessDisabled }
+
+// SearchEnabled reports whether the cross-session search modal is
+// enabled. Default true on a fresh install (zero-value SearchDisabled).
+// (cross-session-search-01KQ8TDQ WP07)
+func (s Settings) SearchEnabled() bool { return !s.SearchDisabled }
 
 // EffectiveCodeBlockMinLines returns the user-tuned threshold or the
 // spec default (10) when the persisted value is zero.
