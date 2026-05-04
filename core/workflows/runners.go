@@ -7,12 +7,19 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os/exec"
 	"strings"
 	"time"
+
+	"github.com/sigil-tech/kaneaz-harness/core/workflows/web"
 )
 
 // runnerRegistry is mutated only by RegisterStepRunner at init time.
+// web_fetch and web_scrape are intentionally absent: they require a
+// per-engine Fetcher (so the robots.txt cache is scoped to the engine
+// lifetime and doesn't bleed between test runs). DefaultRunners()
+// creates fresh Fetcher instances each call.
 var runnerRegistry = map[StepKind]StepRunner{
 	StepKindModelTurn:     modelTurnRunner{},
 	StepKindToolCall:      toolCallRunner{},
@@ -23,6 +30,9 @@ var runnerRegistry = map[StepKind]StepRunner{
 	StepKindWriteArtifact: writeArtifactRunner{},
 	StepKindTransform:     transformRunner{},
 	StepKindConditional:   conditionalRunner{},
+	// WP06 control-flow kinds (no-dep runners).
+	StepKindWaitUntil: waitUntilRunner{},
+	StepKindAggregate: aggregateRunner{},
 }
 
 // DefaultRunners returns the package-default StepRunner registry.
@@ -32,11 +42,20 @@ var runnerRegistry = map[StepKind]StepRunner{
 // an external dependency (LLM, Tools, MCP, Artifacts) is required
 // but unavailable. Callers wiring real deps should use
 // DefaultRunnersWithDeps instead.
+//
+// A fresh web.Fetcher is created per call so the robots.txt 24h cache
+// is scoped to the engine lifetime and cannot bleed between engines.
+// notify runner ships with nil Notifier/Audit (error at run time for
+// "os" surface; MCP surfaces degrade to unconfigured).
 func DefaultRunners() map[StepKind]StepRunner {
-	out := make(map[StepKind]StepRunner, len(runnerRegistry))
+	out := make(map[StepKind]StepRunner, len(runnerRegistry)+3)
 	for k, v := range runnerRegistry {
 		out[k] = v
 	}
+	fetcher := web.NewFetcher()
+	out[StepKindWebFetch] = webFetchRunner{fetcher: fetcher}
+	out[StepKindWebScrape] = webScrapeRunner{fetcher: fetcher}
+	out[StepKindNotify] = notifyRunner{} // nil notifier → unconfigured for "os"
 	return out
 }
 
@@ -59,6 +78,18 @@ func DefaultRunnersWithDeps(deps Deps) map[StepKind]StepRunner {
 		out[StepKindReadArtifact] = readArtifactRunner{art: deps.Artifacts}
 		out[StepKindWriteArtifact] = writeArtifactRunner{art: deps.Artifacts, sessionID: deps.SessionID}
 	}
+	// web_fetch and web_scrape always get a fresh shared Fetcher; the
+	// NetAuthz gate is threaded in from Deps.
+	fetcher := web.NewFetcher()
+	out[StepKindWebFetch] = webFetchRunner{fetcher: fetcher, authz: deps.NetAuthz}
+	out[StepKindWebScrape] = webScrapeRunner{
+		fetcher: fetcher,
+		llm:     deps.LLM,
+		profile: deps.DefaultLLMProfile,
+		authz:   deps.NetAuthz,
+	}
+	// WP06: notify is always wired with provided Notifier/Audit (may be nil).
+	out[StepKindNotify] = notifyRunner{notifier: deps.Notifier, mcp: deps.MCP, audit: deps.Audit}
 	return out
 }
 
@@ -463,6 +494,273 @@ func evalPredicate(s string) bool {
 		return false
 	}
 	return true
+}
+
+// ===========================================================================
+// web_fetch (WP05) — fetches a URL honoring robots.txt + rate-limits.
+// Cedar gate: emits "workflow.network.fetch" before any network I/O.
+// Audit: logs hostname + status + bytes (never full URL or body).
+// ===========================================================================
+
+type webFetchRunner struct {
+	fetcher *web.Fetcher
+	authz   NetworkAuthorizer
+}
+
+func (webFetchRunner) Validate(st Step) error {
+	if st.URL == "" {
+		return fmt.Errorf("web_fetch step %q: url required", st.Name)
+	}
+	return nil
+}
+
+func (r webFetchRunner) Run(ctx context.Context, st Step, _ *RunContext) (TypedValue, error) {
+	// Cedar gate: emit before any network I/O.
+	if r.authz != nil {
+		if err := r.authz.Authorize(ctx, "workflow.network.fetch", st.Name); err != nil {
+			return TypedValue{Type: ValueTypeError},
+				fmt.Errorf("web_fetch step %q: policy denied: %w", st.Name, err)
+		}
+	}
+
+	// Privacy: log hostname only.
+	host := hostOf(st.URL)
+
+	timeout := time.Duration(st.TimeoutMS) * time.Millisecond
+	opts := web.FetchOptions{
+		Timeout:   timeout,
+		UserAgent: st.UserAgent,
+		MinInterval: func() time.Duration {
+			if st.MinIntervalMS > 0 {
+				return time.Duration(st.MinIntervalMS) * time.Millisecond
+			}
+			return 0
+		}(),
+	}
+
+	result, err := r.fetcher.Fetch(ctx, st.URL, opts)
+	if err != nil {
+		return TypedValue{Type: ValueTypeError},
+			fmt.Errorf("web_fetch step %q (host=%s): %w", st.Name, host, err)
+	}
+
+	_ = host // audit: host + result.Status + len(result.Body) only; never full URL or body
+
+	payload := map[string]any{
+		"kind":    result.Kind,
+		"body":    result.Body,
+		"status":  result.Status,
+		"headers": result.Headers,
+	}
+	if result.Parsed != nil {
+		payload["parsed"] = result.Parsed
+	}
+	encoded, _ := json.Marshal(payload)
+	return TypedValue{Type: ValueTypeJSON, JSON: payload, Text: string(encoded)}, nil
+}
+
+// ===========================================================================
+// web_scrape (WP05) — fetches a URL then extracts structured data via
+// CSS-selector rules (mode="css", default) or LLM prompt (mode="llm").
+// Cedar gate: emits "workflow.network.fetch" before any network I/O.
+// ===========================================================================
+
+type webScrapeRunner struct {
+	fetcher *web.Fetcher
+	llm     LLMStreamer
+	profile string
+	authz   NetworkAuthorizer
+}
+
+func (webScrapeRunner) Validate(st Step) error {
+	if st.URL == "" {
+		return fmt.Errorf("web_scrape step %q: url required", st.Name)
+	}
+	switch st.Mode {
+	case "", "css", "llm":
+	default:
+		return fmt.Errorf("web_scrape step %q: mode must be css or llm", st.Name)
+	}
+	if (st.Mode == "llm" || st.ExtractWithModel != "") && st.ExtractPrompt == "" {
+		return fmt.Errorf("web_scrape step %q: llm mode requires extract_prompt", st.Name)
+	}
+	return nil
+}
+
+func (r webScrapeRunner) Run(ctx context.Context, st Step, _ *RunContext) (TypedValue, error) {
+	// Cedar gate: emit before any network I/O.
+	if r.authz != nil {
+		if err := r.authz.Authorize(ctx, "workflow.network.fetch", st.Name); err != nil {
+			return TypedValue{Type: ValueTypeError},
+				fmt.Errorf("web_scrape step %q: policy denied: %w", st.Name, err)
+		}
+	}
+
+	host := hostOf(st.URL)
+
+	timeout := time.Duration(st.TimeoutMS) * time.Millisecond
+	fetchOpts := web.FetchOptions{
+		Timeout:   timeout,
+		UserAgent: st.UserAgent,
+		MinInterval: func() time.Duration {
+			if st.MinIntervalMS > 0 {
+				return time.Duration(st.MinIntervalMS) * time.Millisecond
+			}
+			return 0
+		}(),
+	}
+
+	result, err := r.fetcher.Fetch(ctx, st.URL, fetchOpts)
+	if err != nil {
+		return TypedValue{Type: ValueTypeError},
+			fmt.Errorf("web_scrape step %q (host=%s): %w", st.Name, host, err)
+	}
+
+	mode := st.Mode
+	if mode == "" {
+		mode = "css"
+	}
+
+	switch mode {
+	case "css":
+		return r.runCSS(st, result.Body)
+	case "llm":
+		return r.runLLM(ctx, st, result.Body)
+	default:
+		return TypedValue{Type: ValueTypeError},
+			fmt.Errorf("web_scrape step %q: unknown mode %q", st.Name, mode)
+	}
+}
+
+func (r webScrapeRunner) runCSS(st Step, body string) (TypedValue, error) {
+	extractors, err := parseExtractors(st.Extractors)
+	if err != nil {
+		return TypedValue{Type: ValueTypeError},
+			fmt.Errorf("web_scrape step %q: parse extractors: %w", st.Name, err)
+	}
+	out, err := web.ScrapeCSS(body, extractors)
+	if err != nil {
+		return TypedValue{Type: ValueTypeError},
+			fmt.Errorf("web_scrape step %q: CSS extraction: %w", st.Name, err)
+	}
+	encoded, _ := json.Marshal(out)
+	return TypedValue{Type: ValueTypeJSON, JSON: out, Text: string(encoded)}, nil
+}
+
+func (r webScrapeRunner) runLLM(ctx context.Context, st Step, body string) (TypedValue, error) {
+	if r.llm == nil {
+		return TypedValue{Type: ValueTypeError},
+			fmt.Errorf("web_scrape step %q: %w (no LLMStreamer wired for llm mode)", st.Name, errDepUnavailable)
+	}
+	profile := st.Profile
+	if profile == "" {
+		profile = r.profile
+	}
+	if profile == "" {
+		// ExtractWithModel carries the model/profile slug for llm mode.
+		profile = st.ExtractWithModel
+	}
+	if profile == "" {
+		return TypedValue{Type: ValueTypeError},
+			fmt.Errorf("web_scrape step %q: llm mode requires profile or extract_with_model", st.Name)
+	}
+	text, err := web.ScrapeLLM(ctx, webLLMBridge{r.llm}, body, web.ScrapeLLMOptions{
+		Profile: profile,
+		Model:   st.Model,
+		Prompt:  st.ExtractPrompt,
+	})
+	if err != nil {
+		return TypedValue{Type: ValueTypeError},
+			fmt.Errorf("web_scrape step %q: llm extraction: %w", st.Name, err)
+	}
+	return TypedValue{Type: ValueTypeText, Text: text}, nil
+}
+
+// webLLMBridge adapts the workflows LLMStreamer to the web package's
+// mirror interface so we don't import the workflows package from web/.
+type webLLMBridge struct{ inner LLMStreamer }
+
+func (b webLLMBridge) Stream(ctx context.Context, req web.LLMRequest) (web.LLMStream, error) {
+	s, err := b.inner.Stream(ctx, LLMRequest{
+		ProfileID: req.ProfileID,
+		Model:     req.Model,
+		Prompt:    req.Prompt,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return webStreamBridge{s}, nil
+}
+
+type webStreamBridge struct{ inner LLMStream }
+
+func (b webStreamBridge) Events() <-chan web.LLMStreamEvent {
+	ch := make(chan web.LLMStreamEvent, 64)
+	go func() {
+		defer close(ch)
+		for ev := range b.inner.Events() {
+			ch <- web.LLMStreamEvent{Text: ev.Text, Err: ev.Err}
+		}
+	}()
+	return ch
+}
+
+func (b webStreamBridge) Final() (string, error) { return b.inner.Final() }
+
+// parseExtractors converts the Step.Extractors []any into
+// []web.Extractor. Each element must be a map[string]any.
+func parseExtractors(raw []any) ([]web.Extractor, error) {
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	out := make([]web.Extractor, 0, len(raw))
+	for i, item := range raw {
+		m, ok := item.(map[string]any)
+		if !ok {
+			// YAML loader may decode as map[string]interface{} or
+			// map[interface{}]interface{} depending on mode; try the
+			// latter too.
+			if mi, ok2 := item.(map[interface{}]interface{}); ok2 {
+				m = make(map[string]any, len(mi))
+				for k, v := range mi {
+					m[fmt.Sprint(k)] = v
+				}
+				ok = true
+			}
+		}
+		if !ok {
+			return nil, fmt.Errorf("extractors[%d]: expected object", i)
+		}
+		ex := web.Extractor{
+			Name:     stringField(m, "name"),
+			Selector: stringField(m, "selector"),
+			Attr:     stringField(m, "attr"),
+		}
+		if b, ok := m["multiple"].(bool); ok {
+			ex.Multiple = b
+		}
+		out = append(out, ex)
+	}
+	return out, nil
+}
+
+func stringField(m map[string]any, key string) string {
+	if v, ok := m[key]; ok {
+		if s, ok := v.(string); ok {
+			return s
+		}
+	}
+	return ""
+}
+
+// hostOf extracts just the hostname from a raw URL string. Returns
+// the raw string on parse failure (safe for logging).
+func hostOf(rawURL string) string {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return rawURL
+	}
+	return u.Hostname()
 }
 
 // ===========================================================================

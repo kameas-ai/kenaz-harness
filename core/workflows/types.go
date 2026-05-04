@@ -64,6 +64,13 @@ const (
 	StepKindWriteArtifact StepKind = "write_artifact"
 	StepKindTransform     StepKind = "transform"
 	StepKindConditional   StepKind = "conditional"
+	// WP05 — external-network step kinds.
+	StepKindWebFetch  StepKind = "web_fetch"
+	StepKindWebScrape StepKind = "web_scrape"
+	// WP06 — control-flow step kinds.
+	StepKindNotify    StepKind = "notify"
+	StepKindWaitUntil StepKind = "wait_until"
+	StepKindAggregate StepKind = "aggregate"
 )
 
 // AllStepKinds is the closed enum the loader validates against.
@@ -72,6 +79,8 @@ func AllStepKinds() []StepKind {
 		StepKindModelTurn, StepKindToolCall, StepKindMCPCall,
 		StepKindHTTPRequest, StepKindShell, StepKindReadArtifact,
 		StepKindWriteArtifact, StepKindTransform, StepKindConditional,
+		StepKindWebFetch, StepKindWebScrape,
+		StepKindNotify, StepKindWaitUntil, StepKindAggregate,
 	}
 }
 
@@ -100,6 +109,14 @@ type Input struct {
 type Step struct {
 	Name string   `yaml:"name" json:"name"`
 	Kind StepKind `yaml:"kind" json:"kind"`
+
+	// InputsFrom declares explicit upstream dependencies for DAG
+	// semantics. When non-empty the loader uses these edges (instead
+	// of implicit linear order) to topologically sort the step graph.
+	// Each entry must be the Name of another step that appears in the
+	// same workflow; forward references are detected during Validate and
+	// cycles are rejected with ErrWorkflowCycle.
+	InputsFrom []string `yaml:"inputs_from,omitempty" json:"inputsFrom,omitempty"`
 
 	// model_turn fields
 	UserPrompt string   `yaml:"user_prompt,omitempty" json:"userPrompt,omitempty"`
@@ -144,6 +161,44 @@ type Step struct {
 	If       string `yaml:"if,omitempty" json:"if,omitempty"`
 	ThenStep string `yaml:"then_step,omitempty" json:"thenStep,omitempty"`
 	ElseStep string `yaml:"else_step,omitempty" json:"elseStep,omitempty"`
+
+	// web_fetch fields (WP05).
+	// URL is shared with http_request. UserAgent overrides the default.
+	// MinIntervalMS is the per-host rate-limit floor in milliseconds.
+	UserAgent     string `yaml:"user_agent,omitempty" json:"userAgent,omitempty"`
+	MinIntervalMS int    `yaml:"min_interval_ms,omitempty" json:"minIntervalMs,omitempty"`
+
+	// web_scrape fields (WP05).
+	// Mode selects the extraction engine: "css" (default) or "llm".
+	// For "css": Extractors declares the CSS-selector rules.
+	// For "llm": ExtractWithModel + ExtractPrompt configure LLM-driven
+	// extraction; internally calls the model_turn runner.
+	Mode             string         `yaml:"mode,omitempty" json:"mode,omitempty"`
+	Extractors       []any          `yaml:"extractors,omitempty" json:"extractors,omitempty"`
+	ExtractWithModel string         `yaml:"extract_with_model,omitempty" json:"extractWithModel,omitempty"`
+	ExtractPrompt    string         `yaml:"extract_prompt,omitempty" json:"extractPrompt,omitempty"`
+
+	// notify fields (WP06)
+	// NotifyTitle is the short title shown on each notification surface.
+	NotifyTitle string `yaml:"notify_title,omitempty" json:"notifyTitle,omitempty"`
+	// NotifyBody is the full notification body. NEVER put in audit attrs.
+	NotifyBody string `yaml:"notify_body,omitempty" json:"notifyBody,omitempty"`
+	// Surface is the list of targets: os, slack, email, push.
+	Surface []string `yaml:"surface,omitempty" json:"surface,omitempty"`
+
+	// wait_until fields (WP06)
+	// Until is an RFC 3339 absolute wall-clock time to wait until.
+	Until string `yaml:"until,omitempty" json:"until,omitempty"`
+	// WaitDuration is a relative duration string (e.g. "5m").
+	WaitDuration string `yaml:"duration,omitempty" json:"duration,omitempty"`
+	// Condition is a workflow expression polled until truthy.
+	Condition string `yaml:"condition,omitempty" json:"condition,omitempty"`
+
+	// aggregate fields (WP06) — Strategy, Separator reuse inputs_from (InputsFrom).
+	// Strategy is one of "merge", "array", "concat".
+	Strategy string `yaml:"strategy,omitempty" json:"strategy,omitempty"`
+	// Separator is used by the "concat" strategy (default ",").
+	Separator string `yaml:"separator,omitempty" json:"separator,omitempty"`
 }
 
 // Workflow is the in-memory representation of one workflow YAML file.
@@ -155,6 +210,13 @@ type Workflow struct {
 	InlineRun     bool    `yaml:"inline_run,omitempty" json:"inlineRun,omitempty"`
 	RerunPolicy   string  `yaml:"rerun_policy,omitempty" json:"rerunPolicy,omitempty"`
 	SlashCommand  string  `yaml:"slash_command,omitempty" json:"slashCommand,omitempty"`
+	// Schedule is a 5-field cron expression (e.g. "0 7 * * *") that the
+	// scheduler uses to fire the workflow automatically. Empty means no
+	// recurring schedule. Introduced in WP04 (starter library).
+	Schedule string `yaml:"schedule,omitempty" json:"schedule,omitempty"`
+	// Timezone is an IANA timezone name (e.g. "America/New_York") paired
+	// with Schedule. Defaults to UTC when empty.
+	Timezone string `yaml:"timezone,omitempty" json:"timezone,omitempty"`
 	Inputs        []Input `yaml:"inputs,omitempty" json:"inputs,omitempty"`
 	Steps         []Step  `yaml:"steps" json:"steps"`
 
@@ -321,6 +383,31 @@ type ArtifactWrite struct {
 	Content   []byte
 }
 
+// NetworkAuthorizer is the Cedar gate for external-network step kinds.
+// Before any web_fetch or web_scrape step makes a network request, the
+// engine calls Authorize with action "workflow.network.fetch". A non-nil
+// error aborts the step with a policy_denied classification.
+//
+// nil is a no-op (permit by default) so test harnesses and the chassis
+// boot path can run without a wired Cedar engine.
+type NetworkAuthorizer interface {
+	Authorize(ctx context.Context, action, resourceID string) error
+}
+
+// Notifier is the interface the notify runner dispatches OS notifications
+// through. Inject a fake in tests; the production implementation wraps
+// the Wails runtime.
+type Notifier interface {
+	Notify(ctx context.Context, title, body string) error
+}
+
+// AuditEmitter is the narrow slice of audit.Emitter the workflow runners
+// consume. Keeping it local avoids a hard import of the audit package from
+// the runner files while preserving testability.
+type AuditEmitter interface {
+	EmitNotifySent(ctx context.Context, target, title string) error
+}
+
 // Deps bundles the optional external dependencies workflow runners
 // need. nil entries cause the corresponding runner to error at Run
 // time with a clear "dependency unavailable" message — keeping
@@ -335,6 +422,14 @@ type Deps struct {
 	// under the right session in the artifacts table. Empty disables
 	// artifact writes (write_artifact returns an error).
 	SessionID string
+	// NetAuthz, when non-nil, gates web_fetch and web_scrape steps via
+	// Cedar action "workflow.network.fetch". nil permits all fetches.
+	NetAuthz NetworkAuthorizer
+	// Notifier is the OS notification dispatch surface for the notify
+	// runner. nil disables the "os" surface without failing the run.
+	Notifier Notifier
+	// Audit, when non-nil, receives notify.sent events. nil is a no-op.
+	Audit AuditEmitter
 }
 
 // Sentinels.
@@ -348,9 +443,24 @@ var (
 	ErrUnknownReference = errors.New("workflows: unknown reference")
 	ErrCancelled        = errors.New("workflows: run cancelled")
 	ErrWorkflowNotFound = errors.New("workflows: workflow not found")
+	// ErrWorkflowCycle is returned by the loader when it detects a
+	// cycle in the inputs_from dependency graph. The error message
+	// includes the offending cycle path.
+	ErrWorkflowCycle = errors.New("workflows: cycle detected in inputs_from graph")
 	// ErrRerunPolicyAsk is the typed envelope returned by ResolveRerun
 	// when policy=prompt and a cached identical run exists. Callers
 	// catch this and surface a confirm prompt to the user; the user's
 	// choice routes back through Run with RunOptions.SkipCache=true.
 	ErrRerunPolicyAsk = errors.New("workflows: rerun_policy=prompt requires user confirmation")
+	// ErrBlockedByRobots is re-exported from the web sub-package so
+	// callers can identify robots.txt refusals without importing
+	// core/workflows/web directly.
+	ErrBlockedByRobots = errors.New("web: URL blocked by robots.txt")
+	// ErrNetworkPolicyDenied is returned when the Cedar gate refuses a
+	// web_fetch or web_scrape step.
+	ErrNetworkPolicyDenied = errors.New("workflows: network fetch denied by policy")
+	// ErrNotifyTargetUnconfigured is returned by a notify runner when a
+	// requested surface (e.g. "slack") is not configured. The run
+	// continues with any successfully dispatched surfaces.
+	ErrNotifyTargetUnconfigured = errors.New("workflows: notify target not configured")
 )

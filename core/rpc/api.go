@@ -90,6 +90,8 @@ import (
 	"github.com/sigil-tech/kaneaz-harness/core/toolloop"
 	"github.com/sigil-tech/kaneaz-harness/core/usage"
 	corewf "github.com/sigil-tech/kaneaz-harness/core/workflows"
+	wfcatalogpkg "github.com/sigil-tech/kaneaz-harness/core/workflows/catalog"
+	wfsched "github.com/sigil-tech/kaneaz-harness/core/workflows/scheduler"
 	"github.com/zalando/go-keyring"
 )
 
@@ -323,6 +325,12 @@ type API struct {
 	// in-process transport (WP09) can attach it to the session's MCP pool
 	// without re-constructing.
 	harnessServer *harnessServer
+
+	// wfScheduler is the cron-backed workflow scheduler
+	// (workflows-agentic-01KW2D3X WP02). Started on SetContext; stopped
+	// on Shutdown. nil when the workflows feature is disabled or when the
+	// chassis has no DB.
+	wfScheduler *wfsched.CronScheduler
 }
 
 // Builtins returns the in-binary tool registry. Used by the chat-input
@@ -348,6 +356,13 @@ func (a *API) SetContext(ctx context.Context) {
 	if a.shellImpl != nil {
 		a.shellImpl.SetContext(ctx)
 	}
+	// Start the workflow cron scheduler (workflows-agentic-01KW2D3X WP02).
+	// SetContext is called with the Wails-supplied app context, which is
+	// the correct lifetime for background goroutines. Idempotent.
+	if a.wfScheduler != nil {
+		a.wfScheduler.Start()
+	}
+
 	// Start the auto-update background poller on the Wails-supplied
 	// app context. The 6h interval matches the WP01 spec; channel is
 	// "stable" — switching to "prerelease" requires a separate UI
@@ -369,9 +384,10 @@ func (a *API) SetContext(ctx context.Context) {
 	}
 }
 
-// Shutdown cancels the auto-update background poller. main.go calls
-// this from OnShutdown so the poll goroutine exits cleanly. Safe to
-// call when no poller is running.
+// Shutdown cancels the auto-update background poller and stops the
+// workflow cron scheduler. main.go calls this from OnShutdown so all
+// background goroutines exit cleanly. Safe to call when no poller is
+// running.
 func (a *API) Shutdown() {
 	if a == nil {
 		return
@@ -379,6 +395,9 @@ func (a *API) Shutdown() {
 	if a.updatePollCancel != nil {
 		a.updatePollCancel()
 		a.updatePollCancel = nil
+	}
+	if a.wfScheduler != nil {
+		a.wfScheduler.Stop()
 	}
 }
 
@@ -744,16 +763,6 @@ func New(c *core.Core) *API {
 		Recommender:   newBranchRecommender(),
 	})
 
-	// Slash-command surface — registry constructed against narrow
-	// adapters over the session manager (for /clear), the LLM
-	// connector view (for /model), the memory store + embedder (for
-	// /memorize, /recall, /forget), and the branches API (for /branch).
-	// A construction failure soft-fails to a nil-registry surface; the
-	// chassis still boots and Execute returns a friendly "not wired"
-	// error per command.
-	slashRegistry := newSlashRegistry(c, a.llmAPI, memStore, embedder, a.branchesAPI)
-	a.slashAPI = slashview.New(slashRegistry)
-
 	// Agent-graph view surface — graph manager already built above so
 	// the chat-migration ChatRunner could share its kernel.
 	a.graphAPI = graphview.New(a.graphMgr)
@@ -781,13 +790,51 @@ func New(c *core.Core) *API {
 		if db != nil && !disabled {
 			wfStore = corewf.NewSQLiteStore(db)
 		}
-		a.workflowsAPI = workflowsview.New(workflowsview.Config{
-			Engine:    corewf.NewEngine(),
-			Catalog:   catalog,
-			Publisher: brokerPublisher{broker: a.broker},
-			Disabled:  disabled,
+		// WP02 (workflows-agentic-01KW2D3X): cron scheduler with DB
+		// persistence. Constructed before the view so the Config.Scheduler
+		// field can reference it. Nil when disabled or no DB.
+		var sched *wfsched.CronScheduler
+		if !disabled && db != nil {
+			schedStore := wfsched.NewSQLiteStorage(db)
+			var err error
+			sched, err = wfsched.New(context.Background(), wfsched.Config{
+				Store: schedStore,
+			})
+			if err != nil {
+				logging.L().Warn("wf.scheduler.init_failed", "err", err.Error())
+				sched = nil
+			} else {
+				a.wfScheduler = sched
+				logging.L().Info("wf.scheduler.init_ok")
+			}
+		}
+		// WP03 (workflows-agentic-01KW2D3X): catalog backend wired with
+		// the same Store + Scheduler constructed above so Install can
+		// persist and arm schedules. nil Store / Scheduler degrade
+		// gracefully inside the catalog implementation.
+		wfCatalog := wfcatalogpkg.New(wfcatalogpkg.Config{
 			Store:     wfStore,
+			Scheduler: sched,
 		})
+		a.workflowsAPI = workflowsview.New(workflowsview.Config{
+			Engine:          corewf.NewEngine(),
+			Catalog:         catalog,
+			Publisher:       brokerPublisher{broker: a.broker},
+			Disabled:        disabled,
+			Store:           wfStore,
+			Scheduler:       sched,
+			WorkflowCatalog: wfCatalog,
+		})
+	}
+
+	// Slash-command surface — registry constructed after the workflows
+	// subsystem so the /wf gateway can reference a.workflowsAPI. A
+	// construction failure soft-fails to a nil-registry surface; the
+	// chassis still boots and Execute returns a friendly "not wired"
+	// error per command.
+	{
+		slashRegistry := newSlashRegistry(c, a.llmAPI, memStore, embedder, a.branchesAPI, a.workflowsAPI)
+		a.slashAPI = slashview.New(slashRegistry)
 	}
 
 	// Auto-update subsystem (mission auto-update, v0.4.0 WP03).
@@ -917,10 +964,11 @@ func New(c *core.Core) *API {
 // newSlashRegistry wires the slash-command registry against the
 // session manager (used by /clear), the LLM connector view (used
 // by /model), the memory store + embedder (used by /memorize,
-// /recall, /forget), and the branches API (used by /branch).
+// /recall, /forget), the branches API (used by /branch), and the
+// workflows API (used by /wf).
 // Returns nil when registry construction fails; the view degrades
 // to a friendly error response on every Execute.
-func newSlashRegistry(c *core.Core, llmAPI llm.LLMConnectorAPI, memStore corememory.Store, embedder corememory.Embedder, branchesAPI branchesview.BranchesAPI) *coreslashcmd.Registry {
+func newSlashRegistry(c *core.Core, llmAPI llm.LLMConnectorAPI, memStore corememory.Store, embedder corememory.Embedder, branchesAPI branchesview.BranchesAPI, workflowsAPI workflowsview.WorkflowsAPI) *coreslashcmd.Registry {
 	deps := coreslashcmd.Deps{}
 	if c != nil && c.SessionManager() != nil {
 		deps.Sessions = &slashSessionAppender{mgr: c.SessionManager()}
@@ -933,6 +981,9 @@ func newSlashRegistry(c *core.Core, llmAPI llm.LLMConnectorAPI, memStore coremem
 	}
 	if branchesAPI != nil {
 		deps.Branches = &slashBranchGateway{inner: branchesAPI}
+	}
+	if workflowsAPI != nil {
+		deps.Workflows = &slashWorkflowsGateway{inner: workflowsAPI}
 	}
 	registry, err := coreslashcmd.NewRegistry(deps)
 	if err != nil {
@@ -1165,6 +1216,86 @@ func (g *slashBranchGateway) RecommendModels(ctx context.Context, parentSessionI
 		Same:    pick("same"),
 		Larger:  pick("larger"),
 	}, nil
+}
+
+// slashWorkflowsGateway adapts the WorkflowsAPI onto the narrow
+// WorkflowsGateway contract /wf consumes. List, Get, and Run project
+// the wire shapes down to the slashcmd-local types so the slashcmd
+// package never imports the rpc/views/workflows package directly.
+type slashWorkflowsGateway struct {
+	inner workflowsview.WorkflowsAPI
+}
+
+func (g *slashWorkflowsGateway) List(ctx context.Context) ([]coreslashcmd.WorkflowSummary, error) {
+	if g == nil || g.inner == nil {
+		return nil, errors.New("slashcmd: workflows surface unavailable")
+	}
+	rows, err := g.inner.List(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]coreslashcmd.WorkflowSummary, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, coreslashcmd.WorkflowSummary{
+			ID:          r.ID,
+			Name:        r.Name,
+			Description: r.Description,
+		})
+	}
+	return out, nil
+}
+
+func (g *slashWorkflowsGateway) Get(ctx context.Context, id string) (coreslashcmd.WorkflowDetail, error) {
+	if g == nil || g.inner == nil {
+		return coreslashcmd.WorkflowDetail{}, errors.New("slashcmd: workflows surface unavailable")
+	}
+	wf, err := g.inner.Get(ctx, id)
+	if err != nil {
+		return coreslashcmd.WorkflowDetail{}, err
+	}
+	inputs := make([]coreslashcmd.WorkflowInput, 0, len(wf.Inputs))
+	for _, inp := range wf.Inputs {
+		inputs = append(inputs, coreslashcmd.WorkflowInput{
+			Name:     inp.Name,
+			Required: inp.Required,
+			Default:  inp.Default,
+		})
+	}
+	return coreslashcmd.WorkflowDetail{
+		ID:          wf.ID,
+		Name:        wf.Name,
+		Description: wf.Description,
+		Inputs:      inputs,
+	}, nil
+}
+
+func (g *slashWorkflowsGateway) Run(ctx context.Context, id string, inputs map[string]string, opts coreslashcmd.WorkflowRunOptions) (<-chan coreslashcmd.WorkflowProgressEvent, error) {
+	if g == nil || g.inner == nil {
+		return nil, errors.New("slashcmd: workflows surface unavailable")
+	}
+	res, err := g.inner.RunWithOptions(ctx, workflowsview.RunRequest{
+		ID:     id,
+		Inputs: inputs,
+		Inline: opts.Inline,
+	})
+	if err != nil {
+		return nil, err
+	}
+	// Project the synchronous RunResult into a channel so the /wf handler
+	// can drain it with the same ranging loop regardless of whether the
+	// underlying engine ran synchronously or asynchronously.
+	ch := make(chan coreslashcmd.WorkflowProgressEvent, len(res.Steps)+1)
+	for _, s := range res.Steps {
+		ch <- coreslashcmd.WorkflowProgressEvent{
+			RunID:  res.RunID,
+			Step:   s.Name,
+			Status: s.Status,
+			Output: s.Output,
+			Err:    s.Err,
+		}
+	}
+	close(ch)
+	return ch, nil
 }
 
 // newSessionsAPI returns the real Manager-backed SessionsAPI when c

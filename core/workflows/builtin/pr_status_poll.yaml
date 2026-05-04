@@ -1,0 +1,68 @@
+id: pr_status_poll
+name: "PR Status Poll"
+description: |
+  Polls GitHub pull request status every 30 minutes. Fetches each PR in
+  parallel, aggregates the statuses, then uses a conditional to notify only
+  when a PR state has changed since the last run (uses workflow run cache
+  for history comparison).
+version: 1
+schedule: "*/30 * * * *"
+inputs:
+  - name: repo
+    kind: string
+    required: true
+    default: "owner/repo"
+  - name: pr_numbers
+    kind: string
+    required: true
+    default: "1,2,3"
+steps:
+  - name: fetch_pr_1
+    kind: http_request
+    url: "https://api.github.com/repos/${input.repo}/pulls/1"
+    method: GET
+    headers:
+      Accept: "application/vnd.github+json"
+      X-GitHub-Api-Version: "2022-11-28"
+
+  - name: fetch_pr_2
+    kind: http_request
+    url: "https://api.github.com/repos/${input.repo}/pulls/2"
+    method: GET
+    headers:
+      Accept: "application/vnd.github+json"
+      X-GitHub-Api-Version: "2022-11-28"
+
+  - name: fetch_pr_3
+    kind: http_request
+    url: "https://api.github.com/repos/${input.repo}/pulls/3"
+    method: GET
+    headers:
+      Accept: "application/vnd.github+json"
+      X-GitHub-Api-Version: "2022-11-28"
+
+  - name: aggregate_statuses
+    kind: aggregate
+    inputs_from: [fetch_pr_1, fetch_pr_2, fetch_pr_3]
+    strategy: array
+
+  - name: check_changed
+    kind: conditional
+    inputs_from: [aggregate_statuses]
+    if: "${step.aggregate_statuses.output}"
+    then_step: notify_changed
+    else_step: skip_notify
+
+  - name: notify_changed
+    kind: notify
+    inputs_from: [aggregate_statuses]
+    notify_title: "PR Status Changed"
+    notify_body: |
+      One or more PRs in ${input.repo} changed state:
+      ${step.aggregate_statuses.output}
+    surface: [os]
+
+  - name: skip_notify
+    kind: shell
+    cmd: "echo"
+    args: ["no PR state changes detected"]
