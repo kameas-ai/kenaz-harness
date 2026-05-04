@@ -19,6 +19,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 	"unicode"
 
 	"github.com/sigil-tech/kaneaz-harness/core/autonomy"
@@ -107,6 +108,9 @@ func (s *FileStore) SaveAll(in Settings) error {
 	if err := validateShortcuts(in); err != nil {
 		return err
 	}
+	if err := validateUpdateFields(in); err != nil {
+		return err
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.saveLocked(in)
@@ -135,6 +139,34 @@ var ErrInvalidMonthlyCostNotifyUSD = fmt.Errorf(
 	"settings: invalid monthlyCostNotifyUsd — must be 0 (disabled) or in (0, %g]",
 	MaxMonthlyCostNotifyUSD,
 )
+
+// ErrInvalidUpdateChannel is returned when the persisted UpdateChannel
+// is neither "stable", "prerelease", nor empty (auto-update-v0.4.0 WP05).
+var ErrInvalidUpdateChannel = errors.New("settings: invalid updateChannel — must be stable or prerelease")
+
+// ErrInvalidUpdateCheckInterval is returned when the persisted
+// UpdateCheckIntervalSec is negative or outside [Min, Max]. Zero is
+// valid (resolves to DefaultUpdateCheckIntervalSec).
+var ErrInvalidUpdateCheckInterval = fmt.Errorf(
+	"settings: invalid updateCheckIntervalSec — must be 0 (default) or in [%d, %d]",
+	MinUpdateCheckIntervalSec, MaxUpdateCheckIntervalSec,
+)
+
+// validateUpdateFields enforces the WP05 update-dial constraints at
+// SAVE time. Empty string / zero are valid (they resolve to defaults
+// via the Effective accessors); only out-of-band values trip an error.
+func validateUpdateFields(in Settings) error {
+	switch in.UpdateChannel {
+	case "", UpdateChannelStable, UpdateChannelPrerelease:
+		// ok
+	default:
+		return ErrInvalidUpdateChannel
+	}
+	if v := in.UpdateCheckIntervalSec; v != 0 && (v < MinUpdateCheckIntervalSec || v > MaxUpdateCheckIntervalSec) {
+		return ErrInvalidUpdateCheckInterval
+	}
+	return nil
+}
 
 // validateCompactionFields runs the per-field validation rules for the
 // four compaction settings (mission compaction-strategy-ui-01KQ8TDI
@@ -711,6 +743,188 @@ func decodeAutonomyField(raw json.RawMessage) (autonomy.Layer, error) {
 	return l, nil
 }
 
+// ── Auto-update FileStore accessors (auto-update-v0.4.0 WP05) ─────────
+
+// LoadAutoCheckUpdates returns the master auto-check toggle. Default
+// true on a fresh install (zero-value AutoCheckUpdatesDisabled). Errors
+// return the safe default so the checker scheduler keeps running even
+// if the settings file is unreadable.
+func (s *FileStore) LoadAutoCheckUpdates() (bool, error) {
+	got, err := s.LoadAll()
+	if err != nil {
+		return got.AutoCheckUpdates(), err
+	}
+	return got.AutoCheckUpdates(), nil
+}
+
+// SaveAutoCheckUpdates persists the master auto-check toggle. Persists
+// as the inverted AutoCheckUpdatesDisabled bit so the JSON shape matches
+// the storage contract (default ON without writing any state).
+func (s *FileStore) SaveAutoCheckUpdates(enabled bool) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	got, err := s.loadLocked()
+	if err != nil {
+		return err
+	}
+	got.AutoCheckUpdatesDisabled = !enabled
+	return s.saveLocked(got)
+}
+
+// LoadUpdateChannel returns the persisted release channel, falling back
+// to "stable" via EffectiveUpdateChannel for unknown / empty values.
+func (s *FileStore) LoadUpdateChannel() (string, error) {
+	got, err := s.LoadAll()
+	if err != nil {
+		return got.EffectiveUpdateChannel(), err
+	}
+	return got.EffectiveUpdateChannel(), nil
+}
+
+// SaveUpdateChannel persists the release channel. Empty string clears
+// the override (resets to "stable"); unknown values are rejected with
+// the typed error so the UI can render specific copy.
+func (s *FileStore) SaveUpdateChannel(channel string) error {
+	switch channel {
+	case "", UpdateChannelStable, UpdateChannelPrerelease:
+		// ok
+	default:
+		return ErrInvalidUpdateChannel
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	got, err := s.loadLocked()
+	if err != nil {
+		return err
+	}
+	got.UpdateChannel = channel
+	return s.saveLocked(got)
+}
+
+// LoadUpdateCheckInterval returns the user-tuned poll interval as a
+// time.Duration, falling back to DefaultUpdateCheckIntervalSec.
+func (s *FileStore) LoadUpdateCheckInterval() (time.Duration, error) {
+	got, err := s.LoadAll()
+	if err != nil {
+		return time.Duration(got.EffectiveUpdateCheckIntervalSec()) * time.Second, err
+	}
+	return time.Duration(got.EffectiveUpdateCheckIntervalSec()) * time.Second, nil
+}
+
+// SaveUpdateCheckInterval persists the poll interval. Zero clears the
+// override; out-of-range values are rejected with the typed error.
+func (s *FileStore) SaveUpdateCheckInterval(d time.Duration) error {
+	secs := int(d / time.Second)
+	if secs < 0 {
+		secs = 0
+	}
+	if secs != 0 && (secs < MinUpdateCheckIntervalSec || secs > MaxUpdateCheckIntervalSec) {
+		return ErrInvalidUpdateCheckInterval
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	got, err := s.loadLocked()
+	if err != nil {
+		return err
+	}
+	got.UpdateCheckIntervalSec = secs
+	return s.saveLocked(got)
+}
+
+// LoadSkippedUpdateVersions returns the user's skip-list. Always
+// returns a non-nil slice (defensive copy) so callers can iterate.
+func (s *FileStore) LoadSkippedUpdateVersions() ([]string, error) {
+	got, err := s.LoadAll()
+	if err != nil {
+		return []string{}, err
+	}
+	if len(got.SkippedUpdateVersions) == 0 {
+		return []string{}, nil
+	}
+	out := make([]string, len(got.SkippedUpdateVersions))
+	copy(out, got.SkippedUpdateVersions)
+	return out, nil
+}
+
+// SaveSkippedUpdateVersions atomically replaces the full skip-list. The
+// caller is expected to dedup; we do a defensive normalise here so a
+// hand-edited file with duplicates round-trips cleanly.
+func (s *FileStore) SaveSkippedUpdateVersions(versions []string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	got, err := s.loadLocked()
+	if err != nil {
+		return err
+	}
+	got.SkippedUpdateVersions = dedupNonEmpty(versions)
+	return s.saveLocked(got)
+}
+
+// AppendSkippedUpdateVersion adds one version (idempotent — duplicates
+// are coalesced). Empty strings are ignored so the UpdateMenu's "Skip"
+// button is safe to call even if the version field hasn't loaded yet.
+func (s *FileStore) AppendSkippedUpdateVersion(version string) error {
+	if version == "" {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	got, err := s.loadLocked()
+	if err != nil {
+		return err
+	}
+	for _, v := range got.SkippedUpdateVersions {
+		if v == version {
+			return nil // already present
+		}
+	}
+	got.SkippedUpdateVersions = append(got.SkippedUpdateVersions, version)
+	return s.saveLocked(got)
+}
+
+// RemoveSkippedUpdateVersion removes one version. No-op if missing.
+func (s *FileStore) RemoveSkippedUpdateVersion(version string) error {
+	if version == "" {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	got, err := s.loadLocked()
+	if err != nil {
+		return err
+	}
+	out := got.SkippedUpdateVersions[:0]
+	for _, v := range got.SkippedUpdateVersions {
+		if v != version {
+			out = append(out, v)
+		}
+	}
+	got.SkippedUpdateVersions = out
+	return s.saveLocked(got)
+}
+
+// dedupNonEmpty preserves order, drops empty strings, and coalesces
+// duplicates. Used by SaveSkippedUpdateVersions so a defensive call
+// from a buggy client round-trips cleanly.
+func dedupNonEmpty(in []string) []string {
+	if len(in) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(in))
+	out := make([]string, 0, len(in))
+	for _, v := range in {
+		if v == "" {
+			continue
+		}
+		if _, ok := seen[v]; ok {
+			continue
+		}
+		seen[v] = struct{}{}
+		out = append(out, v)
+	}
+	return out
+}
+
 // defaultSettings is the safe-baseline a fresh install starts with.
 func defaultSettings() Settings {
 	return Settings{
@@ -783,6 +997,9 @@ func (m *memoryStore) LoadAll() (Settings, error) {
 
 func (m *memoryStore) SaveAll(s Settings) error {
 	if err := validateCompactionFields(s); err != nil {
+		return err
+	}
+	if err := validateUpdateFields(s); err != nil {
 		return err
 	}
 	m.mu.Lock()
@@ -1016,5 +1233,108 @@ func (m *memoryStore) SaveAutonomyProfile(layer autonomy.Layer) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.data.Autonomy = encoded
+	return nil
+}
+
+// ── Auto-update memoryStore accessors (auto-update-v0.4.0 WP05) ────────
+
+func (m *memoryStore) LoadAutoCheckUpdates() (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.data.AutoCheckUpdates(), nil
+}
+
+func (m *memoryStore) SaveAutoCheckUpdates(enabled bool) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.data.AutoCheckUpdatesDisabled = !enabled
+	return nil
+}
+
+func (m *memoryStore) LoadUpdateChannel() (string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.data.EffectiveUpdateChannel(), nil
+}
+
+func (m *memoryStore) SaveUpdateChannel(channel string) error {
+	switch channel {
+	case "", UpdateChannelStable, UpdateChannelPrerelease:
+		// ok
+	default:
+		return ErrInvalidUpdateChannel
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.data.UpdateChannel = channel
+	return nil
+}
+
+func (m *memoryStore) LoadUpdateCheckInterval() (time.Duration, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return time.Duration(m.data.EffectiveUpdateCheckIntervalSec()) * time.Second, nil
+}
+
+func (m *memoryStore) SaveUpdateCheckInterval(d time.Duration) error {
+	secs := int(d / time.Second)
+	if secs < 0 {
+		secs = 0
+	}
+	if secs != 0 && (secs < MinUpdateCheckIntervalSec || secs > MaxUpdateCheckIntervalSec) {
+		return ErrInvalidUpdateCheckInterval
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.data.UpdateCheckIntervalSec = secs
+	return nil
+}
+
+func (m *memoryStore) LoadSkippedUpdateVersions() ([]string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if len(m.data.SkippedUpdateVersions) == 0 {
+		return []string{}, nil
+	}
+	out := make([]string, len(m.data.SkippedUpdateVersions))
+	copy(out, m.data.SkippedUpdateVersions)
+	return out, nil
+}
+
+func (m *memoryStore) SaveSkippedUpdateVersions(versions []string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.data.SkippedUpdateVersions = dedupNonEmpty(versions)
+	return nil
+}
+
+func (m *memoryStore) AppendSkippedUpdateVersion(version string) error {
+	if version == "" {
+		return nil
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, v := range m.data.SkippedUpdateVersions {
+		if v == version {
+			return nil
+		}
+	}
+	m.data.SkippedUpdateVersions = append(m.data.SkippedUpdateVersions, version)
+	return nil
+}
+
+func (m *memoryStore) RemoveSkippedUpdateVersion(version string) error {
+	if version == "" {
+		return nil
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := m.data.SkippedUpdateVersions[:0]
+	for _, v := range m.data.SkippedUpdateVersions {
+		if v != version {
+			out = append(out, v)
+		}
+	}
+	m.data.SkippedUpdateVersions = out
 	return nil
 }

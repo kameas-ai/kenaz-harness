@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/sigil-tech/kaneaz-harness/core/compaction"
 )
@@ -564,6 +565,187 @@ func TestFileStore_CompactionFields_RoundTrip(t *testing.T) {
 	}
 	if _, ok := model["modelId"]; !ok {
 		t.Errorf("compactionModel missing modelId")
+	}
+}
+
+// ── Auto-update WP05 tests (auto-update-v0.4.0) ────────────────────────
+
+// TestFileStore_AutoCheckUpdates_DefaultsOn verifies a fresh install
+// returns enabled=true (zero-value AutoCheckUpdatesDisabled inverts to
+// "checker on" by default).
+func TestFileStore_AutoCheckUpdates_DefaultsOn(t *testing.T) {
+	dir := t.TempDir()
+	store, err := NewFileStore(dir)
+	if err != nil {
+		t.Fatalf("NewFileStore: %v", err)
+	}
+	got, err := store.LoadAutoCheckUpdates()
+	if err != nil {
+		t.Fatalf("LoadAutoCheckUpdates: %v", err)
+	}
+	if !got {
+		t.Errorf("fresh install AutoCheckUpdates = false, want true (zero-value disabled inverts to enabled)")
+	}
+	if err := store.SaveAutoCheckUpdates(false); err != nil {
+		t.Fatalf("SaveAutoCheckUpdates(false): %v", err)
+	}
+	got, _ = store.LoadAutoCheckUpdates()
+	if got {
+		t.Errorf("after Save(false): AutoCheckUpdates = true, want false")
+	}
+	// Verify the persisted bit is the inverted form.
+	settings, _ := store.LoadAll()
+	if !settings.AutoCheckUpdatesDisabled {
+		t.Errorf("expected AutoCheckUpdatesDisabled=true after SaveAutoCheckUpdates(false)")
+	}
+}
+
+// TestFileStore_UpdateChannel covers default, round-trip, and the
+// rejection of unknown values via the typed error.
+func TestFileStore_UpdateChannel(t *testing.T) {
+	dir := t.TempDir()
+	store, err := NewFileStore(dir)
+	if err != nil {
+		t.Fatalf("NewFileStore: %v", err)
+	}
+	got, _ := store.LoadUpdateChannel()
+	if got != UpdateChannelStable {
+		t.Errorf("default UpdateChannel = %q, want %q", got, UpdateChannelStable)
+	}
+	if err := store.SaveUpdateChannel(UpdateChannelPrerelease); err != nil {
+		t.Fatalf("SaveUpdateChannel(prerelease): %v", err)
+	}
+	got, _ = store.LoadUpdateChannel()
+	if got != UpdateChannelPrerelease {
+		t.Errorf("after Save(prerelease): got %q", got)
+	}
+	// Unknown value rejected with typed error.
+	err = store.SaveUpdateChannel("nightly")
+	if !errors.Is(err, ErrInvalidUpdateChannel) {
+		t.Errorf("SaveUpdateChannel(nightly) err = %v, want ErrInvalidUpdateChannel", err)
+	}
+	// Empty clears back to default.
+	if err := store.SaveUpdateChannel(""); err != nil {
+		t.Fatalf("SaveUpdateChannel(\"\"): %v", err)
+	}
+	got, _ = store.LoadUpdateChannel()
+	if got != UpdateChannelStable {
+		t.Errorf("after Save(\"\"): got %q, want %q (cleared to default)", got, UpdateChannelStable)
+	}
+}
+
+// TestFileStore_UpdateCheckInterval covers round-trip + bounds.
+func TestFileStore_UpdateCheckInterval(t *testing.T) {
+	dir := t.TempDir()
+	store, err := NewFileStore(dir)
+	if err != nil {
+		t.Fatalf("NewFileStore: %v", err)
+	}
+	// Default is 6 hours.
+	got, _ := store.LoadUpdateCheckInterval()
+	want := time.Duration(DefaultUpdateCheckIntervalSec) * time.Second
+	if got != want {
+		t.Errorf("default UpdateCheckInterval = %v, want %v", got, want)
+	}
+	// Round-trip 1h.
+	if err := store.SaveUpdateCheckInterval(time.Hour); err != nil {
+		t.Fatalf("SaveUpdateCheckInterval(1h): %v", err)
+	}
+	got, _ = store.LoadUpdateCheckInterval()
+	if got != time.Hour {
+		t.Errorf("after Save(1h): got %v, want %v", got, time.Hour)
+	}
+	// Below the minimum is rejected.
+	err = store.SaveUpdateCheckInterval(30 * time.Minute)
+	if !errors.Is(err, ErrInvalidUpdateCheckInterval) {
+		t.Errorf("SaveUpdateCheckInterval(30m) err = %v, want ErrInvalidUpdateCheckInterval", err)
+	}
+	// Above the maximum is rejected.
+	err = store.SaveUpdateCheckInterval(48 * time.Hour)
+	if !errors.Is(err, ErrInvalidUpdateCheckInterval) {
+		t.Errorf("SaveUpdateCheckInterval(48h) err = %v, want ErrInvalidUpdateCheckInterval", err)
+	}
+	// Negative normalised to zero (clears the override).
+	if err := store.SaveUpdateCheckInterval(-time.Hour); err != nil {
+		t.Fatalf("SaveUpdateCheckInterval(-1h): %v", err)
+	}
+	got, _ = store.LoadUpdateCheckInterval()
+	if got != want {
+		t.Errorf("after Save(-1h): got %v, want default %v", got, want)
+	}
+}
+
+// TestFileStore_SkippedUpdateVersions exercises append/remove/replace.
+func TestFileStore_SkippedUpdateVersions(t *testing.T) {
+	dir := t.TempDir()
+	store, err := NewFileStore(dir)
+	if err != nil {
+		t.Fatalf("NewFileStore: %v", err)
+	}
+	// Empty on fresh install — must be non-nil so callers can iterate.
+	got, _ := store.LoadSkippedUpdateVersions()
+	if got == nil || len(got) != 0 {
+		t.Errorf("fresh install SkippedUpdateVersions = %v, want non-nil empty slice", got)
+	}
+	// Append two versions.
+	_ = store.AppendSkippedUpdateVersion("v0.3.4")
+	_ = store.AppendSkippedUpdateVersion("v0.3.5")
+	got, _ = store.LoadSkippedUpdateVersions()
+	if !reflect.DeepEqual(got, []string{"v0.3.4", "v0.3.5"}) {
+		t.Errorf("after appends: got %v", got)
+	}
+	// Append duplicate — idempotent.
+	_ = store.AppendSkippedUpdateVersion("v0.3.4")
+	got, _ = store.LoadSkippedUpdateVersions()
+	if len(got) != 2 {
+		t.Errorf("duplicate append: got %v, want length 2 (idempotent)", got)
+	}
+	// Remove one.
+	_ = store.RemoveSkippedUpdateVersion("v0.3.4")
+	got, _ = store.LoadSkippedUpdateVersions()
+	if !reflect.DeepEqual(got, []string{"v0.3.5"}) {
+		t.Errorf("after remove: got %v", got)
+	}
+	// Remove missing — no-op.
+	if err := store.RemoveSkippedUpdateVersion("v9.9.9"); err != nil {
+		t.Errorf("RemoveSkippedUpdateVersion(missing): %v", err)
+	}
+	// Replace via Save.
+	_ = store.SaveSkippedUpdateVersions([]string{"v1.0.0", "v1.0.0", "", "v1.0.1"})
+	got, _ = store.LoadSkippedUpdateVersions()
+	if !reflect.DeepEqual(got, []string{"v1.0.0", "v1.0.1"}) {
+		t.Errorf("after Save with dups + empties: got %v, want [v1.0.0 v1.0.1] (deduped)", got)
+	}
+}
+
+// TestSaveAll_RejectsInvalidUpdateFields covers SaveAll-level
+// validation for the WP05 dials.
+func TestSaveAll_RejectsInvalidUpdateFields(t *testing.T) {
+	dir := t.TempDir()
+	store, _ := NewFileStore(dir)
+	err := store.SaveAll(Settings{UpdateChannel: "nightly"})
+	if !errors.Is(err, ErrInvalidUpdateChannel) {
+		t.Errorf("SaveAll(channel=nightly) err = %v, want ErrInvalidUpdateChannel", err)
+	}
+	err = store.SaveAll(Settings{UpdateCheckIntervalSec: 30})
+	if !errors.Is(err, ErrInvalidUpdateCheckInterval) {
+		t.Errorf("SaveAll(interval=30) err = %v, want ErrInvalidUpdateCheckInterval", err)
+	}
+}
+
+// TestEffectiveUpdate_DefaultsOnEmpty mirrors the compaction-defaults
+// table; the Settings panel reads through these so a regression would
+// silently shift the displayed default.
+func TestEffectiveUpdate_DefaultsOnEmpty(t *testing.T) {
+	var s Settings
+	if got := s.AutoCheckUpdates(); !got {
+		t.Errorf("AutoCheckUpdates default = false, want true")
+	}
+	if got := s.EffectiveUpdateChannel(); got != UpdateChannelStable {
+		t.Errorf("EffectiveUpdateChannel default = %q, want %q", got, UpdateChannelStable)
+	}
+	if got := s.EffectiveUpdateCheckIntervalSec(); got != DefaultUpdateCheckIntervalSec {
+		t.Errorf("EffectiveUpdateCheckIntervalSec default = %d, want %d", got, DefaultUpdateCheckIntervalSec)
 	}
 }
 
