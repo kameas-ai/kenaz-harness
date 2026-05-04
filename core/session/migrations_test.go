@@ -406,7 +406,7 @@ func TestMigrations_RegisterAndApply(t *testing.T) {
 		}
 	}
 
-	// Ledger rows: 2 storage bootstrap + 21 sessions migrations
+	// Ledger rows: 2 storage bootstrap + 22 sessions migrations
 	// (0300 init + 0301 context_attachments + 0302 content_json +
 	// 0303 artifacts + 0304 artifacts-promote + 0305 telemetry +
 	// 0306 branches + 0307 corpora + 0308 memory_hook_journal +
@@ -414,12 +414,13 @@ func TestMigrations_RegisterAndApply(t *testing.T) {
 	// 0312 search_fts5 + 0313 subagent-metadata +
 	// 0314 session_usage_columns + 0315 cost_threshold_fired +
 	// 0316 autonomy_columns + 0317 streaming_resume_columns +
-	// 0318 kind + 0319 workflows + 0320 workflow_runs_cache) =
-	// 23 applied entries (2 chassis bootstrap + 21 sessions migrations).
-	if got := len(db.ledger); got != 23 {
-		t.Fatalf("ledger size = %d, want 23", got)
+	// 0318 kind + 0319 workflows + 0320 workflow_runs_cache +
+	// 0321 workflow_schedules) =
+	// 24 applied entries (2 chassis bootstrap + 22 sessions migrations).
+	if got := len(db.ledger); got != 24 {
+		t.Fatalf("ledger size = %d, want 24", got)
 	}
-	wantVersions := []int{1, 2, 300, 301, 302, 303, 304, 305, 306, 307, 308, 309, 310, 311, 312, 313, 314, 315, 316, 317, 318, 319, 320}
+	wantVersions := []int{1, 2, 300, 301, 302, 303, 304, 305, 306, 307, 308, 309, 310, 311, 312, 313, 314, 315, 316, 317, 318, 319, 320, 321}
 
 	for i, want := range wantVersions {
 		if db.ledger[i].Version != want {

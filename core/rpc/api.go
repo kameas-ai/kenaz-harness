@@ -89,6 +89,7 @@ import (
 	"github.com/sigil-tech/kaneaz-harness/core/toolloop"
 	"github.com/sigil-tech/kaneaz-harness/core/usage"
 	corewf "github.com/sigil-tech/kaneaz-harness/core/workflows"
+	wfsched "github.com/sigil-tech/kaneaz-harness/core/workflows/scheduler"
 	"github.com/zalando/go-keyring"
 )
 
@@ -322,6 +323,12 @@ type API struct {
 	// in-process transport (WP09) can attach it to the session's MCP pool
 	// without re-constructing.
 	harnessServer *harnessServer
+
+	// wfScheduler is the cron-backed workflow scheduler
+	// (workflows-agentic-01KW2D3X WP02). Started on SetContext; stopped
+	// on Shutdown. nil when the workflows feature is disabled or when the
+	// chassis has no DB.
+	wfScheduler *wfsched.CronScheduler
 }
 
 // Builtins returns the in-binary tool registry. Used by the chat-input
@@ -347,6 +354,13 @@ func (a *API) SetContext(ctx context.Context) {
 	if a.shellImpl != nil {
 		a.shellImpl.SetContext(ctx)
 	}
+	// Start the workflow cron scheduler (workflows-agentic-01KW2D3X WP02).
+	// SetContext is called with the Wails-supplied app context, which is
+	// the correct lifetime for background goroutines. Idempotent.
+	if a.wfScheduler != nil {
+		a.wfScheduler.Start()
+	}
+
 	// Start the auto-update background poller on the Wails-supplied
 	// app context. The 6h interval matches the WP01 spec; channel is
 	// "stable" — switching to "prerelease" requires a separate UI
@@ -368,9 +382,10 @@ func (a *API) SetContext(ctx context.Context) {
 	}
 }
 
-// Shutdown cancels the auto-update background poller. main.go calls
-// this from OnShutdown so the poll goroutine exits cleanly. Safe to
-// call when no poller is running.
+// Shutdown cancels the auto-update background poller and stops the
+// workflow cron scheduler. main.go calls this from OnShutdown so all
+// background goroutines exit cleanly. Safe to call when no poller is
+// running.
 func (a *API) Shutdown() {
 	if a == nil {
 		return
@@ -378,6 +393,9 @@ func (a *API) Shutdown() {
 	if a.updatePollCancel != nil {
 		a.updatePollCancel()
 		a.updatePollCancel = nil
+	}
+	if a.wfScheduler != nil {
+		a.wfScheduler.Stop()
 	}
 }
 
@@ -780,12 +798,31 @@ func New(c *core.Core) *API {
 		if db != nil && !disabled {
 			wfStore = corewf.NewSQLiteStore(db)
 		}
+		// WP02 (workflows-agentic-01KW2D3X): cron scheduler with DB
+		// persistence. Constructed before the view so the Config.Scheduler
+		// field can reference it. Nil when disabled or no DB.
+		var sched *wfsched.CronScheduler
+		if !disabled && db != nil {
+			schedStore := wfsched.NewSQLiteStorage(db)
+			var err error
+			sched, err = wfsched.New(context.Background(), wfsched.Config{
+				Store: schedStore,
+			})
+			if err != nil {
+				logging.L().Warn("wf.scheduler.init_failed", "err", err.Error())
+				sched = nil
+			} else {
+				a.wfScheduler = sched
+				logging.L().Info("wf.scheduler.init_ok")
+			}
+		}
 		a.workflowsAPI = workflowsview.New(workflowsview.Config{
 			Engine:    corewf.NewEngine(),
 			Catalog:   catalog,
 			Publisher: brokerPublisher{broker: a.broker},
 			Disabled:  disabled,
 			Store:     wfStore,
+			Scheduler: sched,
 		})
 	}
 
