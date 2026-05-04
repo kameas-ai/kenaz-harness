@@ -229,6 +229,15 @@ type Settings struct {
 	// settings), so the global autonomy layer rides on top of the
 	// existing settings.json round-trip rather than its own migration.
 	Autonomy json.RawMessage `json:"autonomy,omitempty"`
+
+	// MonthlyCostNotifyUSD is the per-month spend threshold at which
+	// the harness fires escalating notifications at 50 / 80 / 100 /
+	// 150 / 200 % of the dial value (token-cost-telemetry-01KQ8TD7
+	// WP06). Zero (the default) disables the scheduler entirely.
+	// Range [0, MaxMonthlyCostNotifyUSD]; Save rejects negative or
+	// out-of-range values. FR-007c: this is a visibility dial — hard
+	// caps live in the user's provider dashboard.
+	MonthlyCostNotifyUSD float64 `json:"monthlyCostNotifyUsd,omitempty"`
 }
 
 // ProviderProfileRef is the wire shape that identifies a provider+model
@@ -441,6 +450,20 @@ func (s Settings) EffectiveBranchAdvisorDefaultModel() ProviderProfileRef {
 	return s.CompactionModel
 }
 
+// MaxMonthlyCostNotifyUSD is the upper clamp on the monthly-spend
+// notification dial. Values above this are rejected at Save and at
+// effective-read time (token-cost-telemetry-01KQ8TD7 WP06). The cap
+// keeps the dial usable for sane provider-billing budgets without
+// masking absurd hand-edited values.
+const MaxMonthlyCostNotifyUSD = 10000.0
+
+// MonthlyCostNotifyEnabled reports whether the threshold scheduler
+// should fire for this settings record. Zero (or any negative slip-in
+// from a hand-edited file) disables the scheduler completely.
+func (s Settings) MonthlyCostNotifyEnabled() bool {
+	return s.MonthlyCostNotifyUSD > 0
+}
+
 // WindowSize mirrors the charter's WindowSize type.
 type WindowSize struct {
 	Width  int `json:"width"`
@@ -534,6 +557,15 @@ type SettingsStore interface {
 	// convenience that should work on a fresh install.
 	LoadFSRequestAccessEnabled() (bool, error)
 	SaveFSRequestAccessEnabled(enabled bool) error
+
+	// LoadMonthlyCostNotifyUSD / SaveMonthlyCostNotifyUSD expose the
+	// monthly-spend notification threshold dial
+	// (token-cost-telemetry-01KQ8TD7 WP06). Zero disables the
+	// scheduler. Save rejects negative values and values above
+	// MaxMonthlyCostNotifyUSD; the threshold checker reads through
+	// LoadMonthlyCostNotifyUSD on every Manager.Add tail.
+	LoadMonthlyCostNotifyUSD() (float64, error)
+	SaveMonthlyCostNotifyUSD(usd float64) error
 
 	// LoadAutonomyProfile / SaveAutonomyProfile expose the global
 	// autonomy.Layer (autonomy-dial-01KR3M2A WP02) independently of the

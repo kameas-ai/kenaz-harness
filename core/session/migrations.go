@@ -92,7 +92,9 @@ const sqlInitSchema = `
 // migrations_autonomy.go); long-turn-resilience-01KR3PRS WP03 lands
 // as 0317 (streaming_failed_at + streaming_failure_kind +
 // streaming_recoverable + continuation_of columns on session_messages —
-// see migrations_resume.go). 0315 is reserved/skipped.
+// see migrations_resume.go). 0315 lands the cost_threshold_fired
+// idempotency table for the threshold-notification scheduler
+// (token-cost-telemetry-01KQ8TD7 WP06 — see migrations_cost_threshold.go).
 func Migrations() []migrations.Migration {
 	return []migrations.Migration{
 		{
@@ -139,6 +141,7 @@ func Migrations() []migrations.Migration {
 		migration0312(),
 		migration0313(),
 		migration0314(),
+		migration0315(),
 		migration0316(),
 		migration0317(),
 		migration0318(),
