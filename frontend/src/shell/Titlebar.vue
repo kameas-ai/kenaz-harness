@@ -2,6 +2,7 @@
 import { Sun } from './icons';
 import { useCommandPalette } from '@/lib/useCommandPalette';
 import { useTheme } from '@/lib/useTheme';
+import UpdateIndicator from '@/components/updates/UpdateIndicator.vue';
 
 defineProps<{
   /** Per-surface override; defaults to true so AI-output disclaimer is
@@ -26,6 +27,10 @@ const theme = useTheme();
     </div>
 
     <div class="flex items-center gap-1">
+      <!-- WP04 auto-update indicator — hidden when no update is offered.
+           Sits to the left of the theme toggle so the user's eye finds it
+           in the same Chrome-style chrome region as the menu / settings. -->
+      <UpdateIndicator />
       <button
         type="button"
         class="rounded-sm px-2 py-1 text-ink-muted hover:text-ink hover:bg-surface-2 transition-fast ease-kenaz"
