@@ -8,6 +8,7 @@ import (
 	"github.com/sigil-tech/kaneaz-harness/core/storage"
 	storagesqlite "github.com/sigil-tech/kaneaz-harness/core/storage/sqlite"
 	corewf "github.com/sigil-tech/kaneaz-harness/core/workflows"
+	wfcatalog "github.com/sigil-tech/kaneaz-harness/core/workflows/catalog"
 
 	_ "modernc.org/sqlite"
 )
@@ -270,4 +271,106 @@ func TestDelete_NoStoreErrors(t *testing.T) {
 	if !errors.Is(err, ErrStorageUnavailable) {
 		t.Errorf("want ErrStorageUnavailable, got %v", err)
 	}
+}
+
+// --- WP03 Catalog RPC tests ---
+
+// TestCatalogList_NoCatalogReturnsUnavailable confirms the nil-catalog
+// guard.
+func TestCatalogList_NoCatalogReturnsUnavailable(t *testing.T) {
+	api := New(Config{Engine: corewf.NewEngine()})
+	_, err := api.Catalog_List(context.Background())
+	if !errors.Is(err, ErrCatalogUnavailable) {
+		t.Errorf("want ErrCatalogUnavailable, got %v", err)
+	}
+}
+
+// TestCatalogList_ReturnsCatalogEntries confirms that Catalog_List
+// surfaces the builtin entries when a real catalog is wired.
+func TestCatalogList_ReturnsCatalogEntries(t *testing.T) {
+	wfCatalog := newTestCatalog(t)
+	api := New(Config{Engine: corewf.NewEngine(), WorkflowCatalog: wfCatalog})
+
+	entries, err := api.Catalog_List(context.Background())
+	if err != nil {
+		t.Fatalf("Catalog_List: %v", err)
+	}
+	if len(entries) == 0 {
+		t.Fatal("expected at least one catalog entry")
+	}
+	found := false
+	for _, e := range entries {
+		if e.ID == "plan_implement_review" {
+			found = true
+			if e.Name == "" {
+				t.Error("entry.Name must not be empty")
+			}
+			if e.InstallStatus == "" {
+				t.Error("entry.InstallStatus must not be empty")
+			}
+		}
+	}
+	if !found {
+		t.Error("plan_implement_review not in Catalog_List")
+	}
+}
+
+// TestCatalogGet_ReturnsPreview confirms Catalog_Get returns both YAML
+// and structured entry metadata.
+func TestCatalogGet_ReturnsPreview(t *testing.T) {
+	wfCatalog := newTestCatalog(t)
+	api := New(Config{Engine: corewf.NewEngine(), WorkflowCatalog: wfCatalog})
+
+	preview, err := api.Catalog_Get(context.Background(), "plan_implement_review")
+	if err != nil {
+		t.Fatalf("Catalog_Get: %v", err)
+	}
+	if preview.YAMLSource == "" {
+		t.Error("CatalogPreview.YAMLSource must not be empty")
+	}
+	if preview.Entry.ID != "plan_implement_review" {
+		t.Errorf("Entry.ID: got %q want plan_implement_review", preview.Entry.ID)
+	}
+}
+
+// TestCatalogInstall_PersistsAndReturnsRef confirms that Catalog_Install
+// stores the workflow and returns a non-empty WorkflowID.
+func TestCatalogInstall_PersistsAndReturnsRef(t *testing.T) {
+	store := newWP07TestStore(t)
+	wfCatalog := newTestCatalogWithStore(t, store)
+	api := New(Config{
+		Engine:          corewf.NewEngine(),
+		Store:           store,
+		WorkflowCatalog: wfCatalog,
+	})
+
+	result, err := api.Catalog_Install(context.Background(), "plan_implement_review")
+	if err != nil {
+		t.Fatalf("Catalog_Install: %v", err)
+	}
+	if result.WorkflowID == "" {
+		t.Error("CatalogInstallResult.WorkflowID must not be empty")
+	}
+}
+
+// TestCatalogInstall_NoCatalogReturnsUnavailable.
+func TestCatalogInstall_NoCatalogReturnsUnavailable(t *testing.T) {
+	api := New(Config{Engine: corewf.NewEngine()})
+	_, err := api.Catalog_Install(context.Background(), "plan_implement_review")
+	if !errors.Is(err, ErrCatalogUnavailable) {
+		t.Errorf("want ErrCatalogUnavailable, got %v", err)
+	}
+}
+
+// newTestCatalog returns a catalog.Catalog backed by the embedded builtins.
+func newTestCatalog(t *testing.T) wfcatalog.Catalog {
+	t.Helper()
+	return wfcatalog.New(wfcatalog.Config{})
+}
+
+// newTestCatalogWithStore returns a catalog.Catalog backed by the embedded
+// builtins plus the provided Store so Install can persist.
+func newTestCatalogWithStore(t *testing.T, store corewf.Store) wfcatalog.Catalog {
+	t.Helper()
+	return wfcatalog.New(wfcatalog.Config{Store: store})
 }

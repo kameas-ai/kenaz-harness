@@ -20,6 +20,8 @@ import { ref, computed, onMounted } from 'vue';
 import CanvasHead from '@/shell/CanvasHead.vue';
 import WorkflowEditor from './WorkflowEditor.vue';
 import SimpleTemplateEditor from './SimpleTemplateEditor.vue';
+import CatalogView from './CatalogView.vue';
+import CatalogPreviewDrawer from './CatalogPreviewDrawer.vue';
 import {
   createWorkflowsClient,
   type WorkflowsClient,
@@ -27,6 +29,7 @@ import {
   type WorkflowsWorkflow,
   type WorkflowsRunResult,
   type WorkflowsSaveOutput,
+  type WorkflowsCatalogEntry,
 } from '@/lib/workflowsClient';
 
 const props = defineProps<{
@@ -128,6 +131,20 @@ async function deleteSelected() {
 // to wire a hidden file input. Production WP09 will replace it with the
 // real editor's save button.
 defineExpose({ importFromYaml, deleteSelected });
+
+// WP03: tab navigation. "Library" is the default (preserving existing UX);
+// "Catalog" opens the install-flow surface; "Runs" is reserved.
+type Tab = 'Library' | 'Catalog' | 'Runs';
+const activeTab = ref<Tab>('Library');
+
+// WP03: catalog selection for the preview drawer.
+const catalogSelectedEntry = ref<WorkflowsCatalogEntry | null>(null);
+
+function onCatalogInstalled(workflowId: string) {
+  // Refresh the library list so the newly installed workflow shows up.
+  void loadCatalog();
+  catalogSelectedEntry.value = null;
+}
 
 // WP09: editor mode. The catalog is the default surface; "New" or
 // "Edit" flips us into one of the editor modes. The editors emit
@@ -251,6 +268,47 @@ onMounted(loadCatalog);
       subtitle="Pre-canned multi-step agent recipes."
     />
     <div class="px-6 py-4 space-y-4" data-testid="workflows-view">
+      <!-- Tab nav (WP03) -->
+      <nav class="flex gap-1 border-b border-border-muted" data-testid="workflows-tab-nav">
+        <button
+          v-for="tab in (['Library', 'Catalog', 'Runs'] as const)"
+          :key="tab"
+          type="button"
+          class="px-4 py-2 font-ui text-sm focus:outline-none"
+          :class="
+            activeTab === tab
+              ? 'border-b-2 border-accent text-ink'
+              : 'text-ink-muted hover:text-ink'
+          "
+          :data-testid="`workflows-tab-${tab.toLowerCase()}`"
+          @click="activeTab = tab"
+        >
+          {{ tab }}
+        </button>
+      </nav>
+
+      <!-- Catalog tab (WP03) -->
+      <template v-if="activeTab === 'Catalog'">
+        <CatalogView
+          :client="client"
+          @select="catalogSelectedEntry = $event"
+        />
+        <CatalogPreviewDrawer
+          :client="client"
+          :entry="catalogSelectedEntry"
+          @close="catalogSelectedEntry = null"
+          @installed="onCatalogInstalled"
+          @redirect-providers="activeTab = 'Library'"
+        />
+      </template>
+
+      <!-- Runs tab stub -->
+      <template v-else-if="activeTab === 'Runs'">
+        <p class="font-ui text-sm text-ink-muted">Run history coming soon.</p>
+      </template>
+
+      <!-- Library tab (existing content) -->
+      <template v-else>
       <div class="flex items-center justify-end gap-2 relative">
         <button
           type="button"
@@ -498,6 +556,7 @@ onMounted(loadCatalog);
           </div>
         </section>
       </div>
+      </template><!-- end Library tab -->
     </div>
   </div>
 </template>
