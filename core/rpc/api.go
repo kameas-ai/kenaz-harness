@@ -583,7 +583,10 @@ func New(c *core.Core) *API {
 	// frontend's empty-state path expects.
 	bundleOpts := []bundle.Option{}
 	if c != nil {
-		bundleOpts = append(bundleOpts, bundle.WithReader(bundle.NewFSReader(c.DataDir())))
+		bundleOpts = append(bundleOpts,
+			bundle.WithReader(bundle.NewFSReader(c.DataDir())),
+			bundle.WithWriter(bundle.NewFSWriter(c.DataDir())),
+		)
 		if cas, err := c.BundleCache(); err == nil && cas != nil {
 			bundleOpts = append(bundleOpts, bundle.WithCAS(bundle.CASFromCache(cas)))
 		}
