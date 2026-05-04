@@ -16,6 +16,7 @@ import SettingsTabs from '@/views/settings/SettingsTabs.vue';
 import KeyboardShortcuts from '@/components/settings/KeyboardShortcuts.vue';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
 import { debouncedSave } from '@/lib/settings';
+import { markdownExtensionsRef } from '@/lib/markdown/injectionKeys';
 import { Plus } from '@/shell/icons';
 import AttachmentRow from '@/components/contexts/AttachmentRow.vue';
 import AttachmentTreePicker from '@/components/contexts/AttachmentTreePicker.vue';
@@ -24,6 +25,7 @@ import type {
   Attachment,
   CompactionAggressiveness,
   CompactionTierExplain,
+  MarkdownExtensions,
   Provider,
   Settings,
   Theme,
@@ -172,6 +174,10 @@ async function refresh() {
     appInfo.value = await client.appInfo();
   } catch {
     appInfo.value = null;
+  }
+  // Hydrate the markdown extensions ref so it round-trips through this view.
+  if (settings.value.markdownExtensions) {
+    markdownExtensionsRef.value = settings.value.markdownExtensions;
   }
   // Hydrate the compaction working copies from the persisted settings.
   compactionTier.value =
@@ -359,6 +365,25 @@ function setTheme(t: Theme) {
   void client.settings.saveTheme(t).catch(() => {});
 }
 
+/* ── Markdown rendering extensions (markdown-rendering-polish-01KQ8TDT) ── */
+
+const MARKDOWN_EXTENSIONS: ReadonlyArray<{
+  value: MarkdownExtensions;
+  label: string;
+}> = [
+  { value: 'basic', label: 'Basic' },
+  { value: 'math', label: 'Math' },
+  { value: 'diagrams', label: 'Diagrams' },
+  { value: 'all', label: 'All' },
+];
+
+function setMarkdownExtensions(v: MarkdownExtensions) {
+  settings.value = { ...settings.value, markdownExtensions: v };
+  // Live-update mounted MarkdownBlocks via the App-level ref.
+  markdownExtensionsRef.value = v;
+  debouncedSave(client, { ...settings.value, markdownExtensions: v });
+}
+
 function toggleRestore() {
   restoreOnLaunch.value = !restoreOnLaunch.value;
   // When restore is off the chassis still records lastRoute for audit
@@ -407,6 +432,37 @@ onMounted(() => {
             <span v-if="t.note" class="ml-1 text-[10px] text-ink-subtle">({{ t.note }})</span>
           </button>
         </div>
+      </section>
+
+      <section data-testid="rendering-section">
+        <h2 class="font-ui text-[11px] uppercase tracking-[0.18em] text-ink-subtle">
+          Rendering
+        </h2>
+        <div
+          class="mt-2 inline-flex rounded-sm border border-border"
+          role="radiogroup"
+          aria-label="Markdown extensions"
+        >
+          <button
+            v-for="opt in MARKDOWN_EXTENSIONS"
+            :key="opt.value"
+            type="button"
+            role="radio"
+            :aria-checked="(settings.markdownExtensions ?? 'all') === opt.value"
+            class="px-3 py-1.5 font-ui text-[12px] border-r border-border last:border-r-0 transition-colors"
+            :class="(settings.markdownExtensions ?? 'all') === opt.value
+              ? 'bg-surface-3 text-ink'
+              : 'bg-surface-1 text-ink-muted hover:text-ink'"
+            :data-testid="`markdown-extensions-${opt.value}`"
+            @click="setMarkdownExtensions(opt.value)"
+          >
+            {{ opt.label }}
+          </button>
+        </div>
+        <p class="mt-1 text-[11px] text-ink-muted">
+          Disable on slow machines if heavy diagrams or math feel laggy.
+          <span class="font-mono">basic</span> turns off both KaTeX and Mermaid.
+        </p>
       </section>
 
       <section>
