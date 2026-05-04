@@ -27,8 +27,8 @@ import {
 } from 'vue';
 import { useRouter } from 'vue-router';
 import { detectPlatform } from '@/lib/shortcuts/platform';
+import { useHarnessClient } from '@/lib/harnessClientContext';
 import { useUpdateStore } from './useUpdateStore';
-import { BrowserOpenURL } from '../../../wailsjs/runtime/runtime';
 
 // Resolve the router only when the app actually installed one. In isolated
 // unit tests we mount the menu without vue-router, and calling useRouter()
@@ -57,6 +57,7 @@ const emit = defineEmits<{
 }>();
 
 const store = useUpdateStore();
+const client = useHarnessClient();
 const popoverRef = useTemplateRef<HTMLDivElement>('popoverRef');
 const busy = ref(false);
 const errMsg = ref<string | null>(null);
@@ -137,9 +138,9 @@ function onSettings() {
 function onWhatsNew() {
   if (!releaseUrl.value) return;
   try {
-    BrowserOpenURL(releaseUrl.value);
+    client.openExternalURL(releaseUrl.value);
   } catch {
-    // BrowserOpenURL is unavailable outside Wails; absorb so tests don't
+    // openExternalURL is unavailable outside Wails; absorb so tests don't
     // fail when the runtime is stubbed.
   }
 }

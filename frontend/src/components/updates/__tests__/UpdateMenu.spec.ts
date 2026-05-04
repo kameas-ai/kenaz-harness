@@ -19,6 +19,15 @@ import {
   type UpdateStatus,
 } from '@/lib/updateClient';
 import { _resetPlatformCache } from '@/lib/shortcuts/platform';
+import { provideFakeClient } from '@/lib/harnessClientContext';
+
+const mountOpts = {
+  global: {
+    plugins: [(app: { provide: (...a: unknown[]) => void }) => {
+      provideFakeClient(app as never);
+    }],
+  },
+};
 
 const baseStatus: UpdateStatus = {
   currentVersion: '0.4.0',
@@ -67,7 +76,7 @@ describe('UpdateMenu', () => {
   it('shows "Install & Restart" on Mac', async () => {
     setPlatform('mac');
     await bootStoreWith(baseStatus);
-    const w = mount(UpdateMenu);
+    const w = mount(UpdateMenu, mountOpts);
     await flushPromises();
     expect(w.find('[data-testid="update-menu-primary"]').text()).toBe(
       'Install & Restart',
@@ -77,7 +86,7 @@ describe('UpdateMenu', () => {
   it('shows "Install & Restart" on Linux', async () => {
     setPlatform('linux');
     await bootStoreWith(baseStatus);
-    const w = mount(UpdateMenu);
+    const w = mount(UpdateMenu, mountOpts);
     await flushPromises();
     expect(w.find('[data-testid="update-menu-primary"]').text()).toBe(
       'Install & Restart',
@@ -90,7 +99,7 @@ describe('UpdateMenu', () => {
     // wait-rename-relaunch dance outside the harness process.
     setPlatform('win');
     await bootStoreWith(baseStatus);
-    const w = mount(UpdateMenu);
+    const w = mount(UpdateMenu, mountOpts);
     await flushPromises();
     expect(w.find('[data-testid="update-menu-primary"]').text()).toBe(
       'Install & Restart',
@@ -100,7 +109,7 @@ describe('UpdateMenu', () => {
   it('renders the headline + notes for the offered version', async () => {
     setPlatform('mac');
     await bootStoreWith(baseStatus);
-    const w = mount(UpdateMenu);
+    const w = mount(UpdateMenu, mountOpts);
     await flushPromises();
     expect(w.find('[data-testid="update-menu-headline"]').text()).toContain(
       '0.4.1',
@@ -117,7 +126,7 @@ describe('UpdateMenu', () => {
       downloadState: 'downloading',
       downloadProgress: 0.42,
     });
-    const w = mount(UpdateMenu);
+    const w = mount(UpdateMenu, mountOpts);
     await flushPromises();
     const progress = w.find('[data-testid="update-menu-progress"]');
     expect(progress.exists()).toBe(true);
@@ -129,7 +138,7 @@ describe('UpdateMenu', () => {
   it('renders the "ready to apply" hint when staged', async () => {
     setPlatform('mac');
     await bootStoreWith({ ...baseStatus, downloadState: 'staged' });
-    const w = mount(UpdateMenu);
+    const w = mount(UpdateMenu, mountOpts);
     await flushPromises();
     expect(w.find('[data-testid="update-menu-staged"]').exists()).toBe(true);
   });
@@ -137,7 +146,7 @@ describe('UpdateMenu', () => {
   it('shows the failed banner when the last attempt failed', async () => {
     setPlatform('mac');
     await bootStoreWith({ ...baseStatus, downloadState: 'failed' });
-    const w = mount(UpdateMenu);
+    const w = mount(UpdateMenu, mountOpts);
     await flushPromises();
     expect(w.find('[data-testid="update-menu-failed"]').exists()).toBe(true);
     expect(w.find('[data-testid="update-menu-primary"]').text()).toBe('Retry');
@@ -146,7 +155,7 @@ describe('UpdateMenu', () => {
   it('emits close when Later is clicked', async () => {
     setPlatform('mac');
     await bootStoreWith(baseStatus);
-    const w = mount(UpdateMenu);
+    const w = mount(UpdateMenu, mountOpts);
     await flushPromises();
     await w.find('[data-testid="update-menu-later"]').trigger('click');
     expect(w.emitted('close')).toBeTruthy();
@@ -156,7 +165,7 @@ describe('UpdateMenu', () => {
     setPlatform('mac');
     const skipFn = vi.fn().mockResolvedValue(undefined);
     await bootStoreWith(baseStatus, { skipVersion: skipFn });
-    const w = mount(UpdateMenu);
+    const w = mount(UpdateMenu, mountOpts);
     await flushPromises();
     await w.find('[data-testid="update-menu-skip"]').trigger('click');
     await flushPromises();
@@ -168,7 +177,7 @@ describe('UpdateMenu', () => {
   it('emits navigate-settings when Settings is clicked', async () => {
     setPlatform('mac');
     await bootStoreWith(baseStatus);
-    const w = mount(UpdateMenu);
+    const w = mount(UpdateMenu, mountOpts);
     await flushPromises();
     await w.find('[data-testid="update-menu-settings"]').trigger('click');
     expect(w.emitted('navigate-settings')).toBeTruthy();
@@ -183,7 +192,7 @@ describe('UpdateMenu', () => {
       startDownload: download,
       apply,
     });
-    const w = mount(UpdateMenu);
+    const w = mount(UpdateMenu, mountOpts);
     await flushPromises();
     await w.find('[data-testid="update-menu-primary"]').trigger('click');
     await flushPromises();
@@ -200,7 +209,7 @@ describe('UpdateMenu', () => {
       { ...baseStatus, downloadState: 'staged' },
       { startDownload: download, apply },
     );
-    const w = mount(UpdateMenu);
+    const w = mount(UpdateMenu, mountOpts);
     await flushPromises();
     await w.find('[data-testid="update-menu-primary"]').trigger('click');
     await flushPromises();

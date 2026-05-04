@@ -17,6 +17,15 @@ import {
   createFakeUpdateClient,
   type UpdateStatus,
 } from '@/lib/updateClient';
+import { provideFakeClient } from '@/lib/harnessClientContext';
+
+const mountOpts = {
+  global: {
+    plugins: [(app: { provide: (...a: unknown[]) => void }) => {
+      provideFakeClient(app as never);
+    }],
+  },
+};
 
 interface FakeRuntime {
   EventsOn: (topic: string, cb: (payload: unknown) => void) => () => void;
@@ -84,7 +93,7 @@ describe('UpdateIndicator', () => {
         status: () => Promise.resolve(noUpdate),
       }),
     });
-    const w = mount(UpdateIndicator);
+    const w = mount(UpdateIndicator, mountOpts);
     await flushPromises();
     expect(w.find('[data-testid="update-indicator"]').exists()).toBe(false);
   });
@@ -95,7 +104,7 @@ describe('UpdateIndicator', () => {
         status: () => Promise.resolve(updateAvailable),
       }),
     });
-    const w = mount(UpdateIndicator);
+    const w = mount(UpdateIndicator, mountOpts);
     await flushPromises();
     const btn = w.find('[data-testid="update-indicator"]');
     expect(btn.exists()).toBe(true);
@@ -111,7 +120,7 @@ describe('UpdateIndicator', () => {
           Promise.resolve({ ...updateAvailable, downloadState: 'staged' }),
       }),
     });
-    const w = mount(UpdateIndicator);
+    const w = mount(UpdateIndicator, mountOpts);
     await flushPromises();
     const dot = w.find('[data-testid="update-indicator-dot"]');
     expect(dot.attributes('data-state')).toBe('solid');
@@ -125,7 +134,7 @@ describe('UpdateIndicator', () => {
           Promise.resolve({ ...updateAvailable, downloadState: 'failed' }),
       }),
     });
-    const w = mount(UpdateIndicator);
+    const w = mount(UpdateIndicator, mountOpts);
     await flushPromises();
     const dot = w.find('[data-testid="update-indicator-dot"]');
     expect(dot.attributes('data-state')).toBe('failed');
@@ -138,7 +147,7 @@ describe('UpdateIndicator', () => {
         status: () => Promise.resolve(updateAvailable),
       }),
     });
-    const w = mount(UpdateIndicator);
+    const w = mount(UpdateIndicator, mountOpts);
     await flushPromises();
     expect(w.find('[data-testid="update-menu-popover"]').exists()).toBe(false);
     await w.find('[data-testid="update-indicator"]').trigger('click');
@@ -153,7 +162,7 @@ describe('UpdateIndicator', () => {
       }),
     });
     const rt = installFakeRuntime();
-    const w = mount(UpdateIndicator);
+    const w = mount(UpdateIndicator, mountOpts);
     await flushPromises();
     expect(w.find('[data-testid="update-indicator"]').exists()).toBe(false);
 
@@ -169,7 +178,7 @@ describe('UpdateIndicator', () => {
         status: () => Promise.resolve(updateAvailable),
       }),
     });
-    const w = mount(UpdateIndicator);
+    const w = mount(UpdateIndicator, mountOpts);
     await flushPromises();
     expect(w.find('[data-testid="update-indicator"]').exists()).toBe(true);
 
