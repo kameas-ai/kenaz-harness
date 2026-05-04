@@ -5,9 +5,10 @@
  * Critical UX guardrails (mission auto-update WP04):
  *   - NOT a full modal. No scrim, no focus trap that hijacks the canvas.
  *   - Auto-closes on outside click + Escape.
- *   - Primary action is platform-aware:
- *       Mac/Linux → "Install & Restart"
- *       Windows   → "Install on Next Launch"
+ *   - Primary action is "Install & Restart" on every supported platform.
+ *     v0.4.0 added a Windows helper updater (kenaz-updater.exe) that
+ *     waits-then-relaunches outside the harness process, so Windows
+ *     now matches the Mac/Linux UX.
  *   - "What's new" deep-links to GitHub Releases via Wails BrowserOpenURL
  *     (NEVER `window.open` — Wails strips that to nothing in production).
  *   - "Settings →" emits `navigate-settings` for the parent to route; the
@@ -81,9 +82,14 @@ const downloadPct = computed(() => {
 const primaryLabel = computed(() => {
   if (busy.value) return 'Working…';
   if (isFailed.value) return 'Retry';
-  // Windows applies updates on next launch (no in-place restart). Mac/Linux
-  // can replace the running binary, so we own the restart UX.
-  if (platform.value === 'win') return 'Install on Next Launch';
+  // Every platform now performs a true restart: Mac/Linux do it inline,
+  // Windows hands off to the bundled kenaz-updater.exe helper which
+  // waits-then-relaunches the new binary. The deferred-pending-marker
+  // path still exists as a fallback if the helper isn't bundled, but
+  // that path is invisible to the user — the CTA stays consistent.
+  // platform is read here only so future per-OS divergence (e.g. an
+  // elevated-install confirmation modal on Windows) has a hook.
+  void platform.value;
   return 'Install & Restart';
 });
 

@@ -33,8 +33,9 @@ and reversible (skip per-version, choose channel).
 | **Service** | `core/update/service.go` | Owns the lifecycle: `Check` (manifest fetch + parse), `Download` (streaming + sha256), `ApplyAndRestart` (Swapper dispatch), `SkipVersion`, `BackgroundPoll`. Stateless beyond the on-disk skip set; no shared mutex contention. |
 | **Manifest** | `core/update/manifest.go` | Decodes the JSON shape served at `https://docs.kameas.ai/downloads/manifest.json`. Forward-compatible (unknown fields ignored). 1 MiB cap. |
 | **Swap (Unix)** | `core/update/swap_unix.go` | Atomic `os.Rename` of the staged path over the running binary, then fork-exec + `os.Exit(0)`. Works while the binary is executing on macOS and Linux. |
-| **Swap (Windows)** | `core/update/swap_windows.go` | Cannot rename a running `.exe`; instead writes `<DataDir>/update/pending.json` (see `pending.go`) and exits. |
-| **Boot-swap shim** | `core/update/bootswap/` | Runs at next launch, re-verifies the staged sha256, renames into place, deletes the marker, and re-execs the new binary. |
+| **Swap (Windows)** | `core/update/swap_windows.go` | Cannot rename a running `.exe`. Default path: spawn the bundled `kenaz-updater.exe` helper, exit. Fallback path (helper missing or spawn fails): write `<DataDir>/update/pending.json` for the bootswap shim. |
+| **Helper updater (Windows)** | `cmd/kenaz-updater/main.go` | Stand-alone `.exe` shipped next to the harness in the Windows zip. Waits for the parent PID via `WaitForSingleObject` (30s), re-verifies the staged sha256, renames it over the target, and fork-execs the new binary. Logs every step to `<DataDir>/update/updater.log`. |
+| **Boot-swap shim** | `core/update/bootswap/` | Safety net for the deferred-pending path. Runs at next launch, re-verifies the staged sha256, renames into place, deletes the marker, and re-execs the new binary. |
 | **RPC view** | `core/rpc/views/update/` | Wails-bound surface: `Check`, `Download`, `ApplyAndRestart`, `SkipVersion`, `UnskipVersion`, `ListSkipped`. Adapts `core/update.Service` for the frontend. |
 | **Indicator + menu** | `frontend/src/components/UpdateIndicator.vue`, `UpdateMenu.vue`, `UpdateToast.vue` | Titlebar dot + popover + one-shot toast. Subscribes to the broker `update:available` topic. |
 | **Settings panel** | `frontend/src/views/settings/UpdatesPanel.vue` | Auto-check toggle, channel picker, interval selector, skipped-versions list (with "Restore" affordance via `UnskipVersion`). |
@@ -80,7 +81,8 @@ running binary path.
 |---|---|
 | **macOS** | Atomic `.app` bundle rename + fork-exec. Works while the binary is running because the rename is on the bundle directory, not the running Mach-O image. The OS closes file descriptors against the renamed path; the new binary starts with a fresh image. Tarball install assumed for non-bundle distributions. |
 | **Linux** | Same atomic rename + fork-exec pattern. Tarball / AppImage install assumed; desktop-entry remains stable across versions. |
-| **Windows** | Cannot rename a running `.exe`. The Service writes `<DataDir>/update/pending.json` (struct: `target_path`, `staged_path`, `sha256`, `target_version`, `platform`) and exits. The bootswap shim runs at next launch — re-verifies the sha256, atomically renames the staged file over the target, deletes the marker, and re-execs. Today the user has to relaunch by hand; a Windows helper service that auto-restarts is in "Open follow-ups". |
+| **Windows (Install & Restart)** | The Service spawns `kenaz-updater.exe` (bundled next to the main binary in the release zip) with `--parent-pid`, `--staged`, `--target`, `--sha256`, plus repeated `--launch-args` carrying the original argv. The harness then `os.Exit(0)`s. The helper waits up to 30s for the parent PID via `WaitForSingleObject`, re-verifies the staged sha256, atomically renames it over the running .exe path (which is now unlocked), and `exec.Cmd.Start`s the new binary. Total UX: identical to Mac/Linux — user clicks "Install & Restart", app exits, new version comes back up. |
+| **Windows (deferred-swap fallback)** | If the helper is missing (hand-curated install stripped it) or `cmd.Start` fails (AV quarantine, disk error), the Service falls back to writing `<DataDir>/update/pending.json` (struct: `target_path`, `staged_path`, `sha256`, `target_version`, `platform`) and exiting. The bootswap shim picks it up on next launch, re-verifies the sha256, renames into place, deletes the marker, and re-execs. The user has to relaunch by hand in this fallback; the helper-spawn path is the production default. |
 
 ## UX
 
@@ -170,22 +172,35 @@ DNS / dial / read errors all classify uniformly.
 
 ## Open follow-ups
 
-1. **Windows helper updater** — today Windows defers the swap to next
-   launch via `pending.json`. Auto-restart on Windows requires a
-   helper service (or a scheduled task) that watches the marker, exits
-   the running process, performs the rename, and relaunches. Tracked
-   for v0.5.0.
-2. **Richer changelog UI** — the popover today shows a truncated
+1. **Windows helper — elevated install paths** — `kenaz-updater.exe`
+   today assumes the running binary lives in a user-writable location
+   (`%LOCALAPPDATA%\Programs\Kenaz\` or a portable folder). An install
+   under `Program Files` is read-only without UAC elevation; the
+   rename will fail with `ERROR_ACCESS_DENIED` and the helper exits 1
+   so the user falls through to a manual reinstall. Future v0.5.x: ship
+   a manifest entry that triggers a UAC prompt + ShellExecute(verb=runas)
+   re-spawn of the helper, or a per-machine service path. Out of scope
+   for v0.4.0 because the published installer puts Kenaz under LocalAppData.
+2. **Windows helper — AV / SmartScreen first-run flagging** — the
+   first build of `kenaz-updater.exe` is signed by Trusted Signing
+   alongside the main binary, but Microsoft Defender SmartScreen still
+   builds reputation per filename. A small fraction of users may see
+   a "Windows protected your PC" dialog the first time the helper
+   runs. Mitigation: Trusted Signing's reputation aggregates across
+   the Kameas publisher identity, so subsequent releases inherit the
+   reputation built by the harness exe. Track via release-day
+   telemetry in v0.4.x.
+3. **Richer changelog UI** — the popover today shows a truncated
    `notes` blurb. A future iteration would render a real markdown view
    with diff-summary bullets sourced from the manifest's
    `notes_markdown` field. Requires a manifest schema bump.
-3. **Signed binary verification post-download** — sha256 is sufficient
+4. **Signed binary verification post-download** — sha256 is sufficient
    to detect corruption / MITM. Cosign-style signature verification
    (the manifest carries an additional `signature` field; the public
    key is shipped with the binary) would defend against a manifest-
    server compromise. Tracked separately; requires a key-management
    plan (KMS rotation, embedded public-key staleness).
-4. **Process-wide `audit.Emitter` wiring in the rpc layer** — today
+5. **Process-wide `audit.Emitter` wiring in the rpc layer** — today
    the chassis runs with `Audit: nil` because the rpc layer hasn't
    materialized a process-wide emitter yet (see
    `core/rpc/api.go:1654` `TODO(audit)`). Once the event-log mission
