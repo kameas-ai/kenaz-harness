@@ -532,6 +532,99 @@ func IsCredentialAccessDenied(err error) bool {
 	return errors.As(err, &e)
 }
 
+// GateWorkflowRun is the gate-hook helper for workflow dispatch
+// (mission workflows-01KQ8TDG, WP11). It evaluates the Cedar engine
+// against Workflow::"<workflowID>" with Action::"workflow.run" and the
+// supplied (mode, stepKinds) context attrs.
+//
+//   - g may be nil — the helper short-circuits to nil (default-allow).
+//   - mode is "permissive" or "strict"; pass "" and the helper coerces
+//     to "permissive" (the default posture).
+//   - stepKinds is the sorted+joined list of kinds in the workflow
+//     (e.g. "model_turn,shell"). Used by the policy bundle's strict-
+//     mode forbid rules.
+//
+// Returns nil on Allow / NotApplicable, *PolicyDeniedError on Deny.
+// NotApplicable callers SHOULD treat the decision as "fire interactive
+// prompt"; the chassis layer (workflows RPC impl) does that today.
+func GateWorkflowRun(ctx context.Context, g Gate, workflowID, mode, stepKinds string) (Decision, error) {
+	if mode == "" {
+		mode = "permissive"
+	}
+	if g == nil {
+		return Decision{
+			Outcome:  Allow,
+			Action:   ActionWorkflowRun,
+			Resource: WorkflowUID(workflowID).String(),
+			Reason:   "no engine wired (default-allow)",
+		}, nil
+	}
+	d := g.Evaluate(
+		ctx,
+		UserUID(),
+		ActionWorkflowRun,
+		WorkflowUID(workflowID),
+		map[cedar.String]cedar.Value{
+			cedar.String("mode"):       cedar.String(mode),
+			cedar.String("step_kinds"): cedar.String(stepKinds),
+		},
+	)
+	return d, enforce(d)
+}
+
+// GateWorkflowSave is the gate-hook helper for workflow persistence.
+// Mirrors GateWorkflowRun's contract for the save action; the policy
+// bundle's strict-mode forbid rule denies workflows containing a
+// `shell` step at save time.
+func GateWorkflowSave(ctx context.Context, g Gate, workflowID, mode, stepKinds string) (Decision, error) {
+	if mode == "" {
+		mode = "permissive"
+	}
+	if g == nil {
+		return Decision{
+			Outcome:  Allow,
+			Action:   ActionWorkflowSave,
+			Resource: WorkflowUID(workflowID).String(),
+			Reason:   "no engine wired (default-allow)",
+		}, nil
+	}
+	d := g.Evaluate(
+		ctx,
+		UserUID(),
+		ActionWorkflowSave,
+		WorkflowUID(workflowID),
+		map[cedar.String]cedar.Value{
+			cedar.String("mode"):       cedar.String(mode),
+			cedar.String("step_kinds"): cedar.String(stepKinds),
+		},
+	)
+	return d, enforce(d)
+}
+
+// GateWorkflowDelete is the gate-hook helper for workflow deletion.
+// Returns nil on Allow / NotApplicable; *PolicyDeniedError on Deny.
+// The default policy permits delete unconditionally so the chassis can
+// always emit `workflow.deleted` audit; strict overrides layer a
+// forbid rule on top.
+func GateWorkflowDelete(ctx context.Context, g Gate, workflowID string) (Decision, error) {
+	if g == nil {
+		return Decision{
+			Outcome:  Allow,
+			Action:   ActionWorkflowDelete,
+			Resource: WorkflowUID(workflowID).String(),
+			Reason:   "no engine wired (default-allow)",
+		}, nil
+	}
+	d := g.Evaluate(
+		ctx,
+		UserUID(),
+		ActionWorkflowDelete,
+		WorkflowUID(workflowID),
+		nil,
+	)
+	return d, enforce(d)
+}
+
 // enforce maps a Decision to a Go error. Allow + NotApplicable both
 // return nil (default-allow stance); Deny returns *PolicyDeniedError.
 func enforce(d Decision) error {

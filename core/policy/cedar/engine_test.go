@@ -162,11 +162,12 @@ func TestEngine_ReloadFromDisk(t *testing.T) {
 		t.Fatalf("NewEngine: %v", err)
 	}
 
-	// Listing should report 7 files: the 5 embedded defaults
-	// (default_policy + the four WP01 family defaults) + 2 disk files.
+	// Listing should report 8 files: the 6 embedded defaults
+	// (default_policy + the four WP01 family defaults + the WP11
+	// workflows family default) + 2 disk files.
 	files := e.ListPolicies()
-	if len(files) != 7 {
-		t.Fatalf("ListPolicies len=%d, want 7", len(files))
+	if len(files) != 8 {
+		t.Fatalf("ListPolicies len=%d, want 8", len(files))
 	}
 	if !files[0].Embedded {
 		t.Fatalf("first file should be embedded default, got %+v", files[0])

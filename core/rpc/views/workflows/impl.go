@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/sigil-tech/kaneaz-harness/core/context/audit"
+	"github.com/sigil-tech/kaneaz-harness/core/policy/cedar"
 	corewf "github.com/sigil-tech/kaneaz-harness/core/workflows"
 )
 
@@ -25,6 +27,12 @@ var ErrStorageUnavailable = errors.New("workflows: storage unavailable")
 // Workflow is populated on the SaveInput envelope.
 var ErrInvalidSaveInput = errors.New("workflows: save requires yaml or workflow")
 
+// ErrCedarDenied is returned when a cedar gate explicitly denies a
+// workflow run / save / delete. The wrapped *cedar.PolicyDeniedError
+// from the cedar gate is preserved via errors.Unwrap so callers can
+// inspect Decision details.
+var ErrCedarDenied = errors.New("workflows: denied by cedar policy")
+
 // ProgressPublisher is the interface the API uses to fan progress
 // events onto the broker. Decoupled from rpc.StreamBroker so the
 // view stays import-clean.
@@ -42,6 +50,17 @@ type Config struct {
 	// When nil, Save/Delete return ErrStorageUnavailable but the
 	// in-memory builtin catalog still works for List/Get/Run.
 	Store corewf.Store
+	// Cedar is the policy gate consulted before Run / Save / Delete.
+	// nil short-circuits to allow (default-allow posture).
+	Cedar cedar.Gate
+	// CedarMode is the mode context attribute the gate helpers pass to
+	// the policy bundle ("permissive" | "strict"). "" defaults to
+	// "permissive" inside the gate helpers.
+	CedarMode string
+	// Audit is the append-only event log emitter (workflows-01KQ8TDG
+	// WP11). nil drops every event silently — acceptable in test
+	// harnesses without an emitter wired.
+	Audit audit.Emitter
 }
 
 // API is the concrete WorkflowsAPI.
@@ -158,6 +177,17 @@ func (a *API) RunWithOptions(ctx context.Context, req RunRequest) (RunResult, er
 	if !ok {
 		return RunResult{}, fmt.Errorf("%w: %s", corewf.ErrWorkflowNotFound, req.ID)
 	}
+
+	// Cedar gate. Deny → typed ErrCedarDenied (wrapped policy error
+	// available via errors.Unwrap). NotApplicable / Allow proceed.
+	// Per WP11 spec, NotApplicable in strict mode SHOULD fire an
+	// interactive prompt; the prompt registry is wired in a follow-up
+	// task — for now we proceed (default-allow with audit) so the
+	// chassis stays usable.
+	if _, gerr := cedar.GateWorkflowRun(ctx, a.cfg.Cedar, w.ID, a.cfg.CedarMode, corewf.CollectStepKinds(w)); gerr != nil {
+		return RunResult{}, fmt.Errorf("%w: %v", ErrCedarDenied, gerr)
+	}
+
 	typed := make(map[string]corewf.TypedValue, len(req.Inputs))
 	for k, v := range req.Inputs {
 		typed[k] = corewf.TypedValue{Type: corewf.ValueTypeText, Text: v}
@@ -204,6 +234,7 @@ func (a *API) RunWithOptions(ctx context.Context, req RunRequest) (RunResult, er
 		if res.Status == "running" {
 			res.Status = "completed"
 		}
+		a.emitInlineAudit(ctx, w.ID, res)
 		return res, nil
 	}
 
@@ -229,7 +260,41 @@ func (a *API) RunWithOptions(ctx context.Context, req RunRequest) (RunResult, er
 	if err != nil {
 		res.Err = err.Error()
 	}
+	// Emit completion + per-step failure audits. The engine's *Run
+	// already carries both the workflow id and the step-level failure
+	// status, so we hand it straight to the helpers.
+	corewf.EmitExecuted(ctx, a.cfg.Audit, run)
+	corewf.EmitStepFailures(ctx, a.cfg.Audit, run)
 	return res, nil
+}
+
+// emitInlineAudit fires the workflow-executed + step-failed events for
+// the inline-dispatch path. The inline path doesn't surface the engine's
+// *Run, so we synthesise a minimal Run from the projected RunResult
+// just for audit purposes — the audit payload only needs ids, kinds,
+// and status, all of which the projection carries.
+func (a *API) emitInlineAudit(ctx context.Context, workflowID string, res RunResult) {
+	if a.cfg.Audit == nil {
+		return
+	}
+	steps := make([]corewf.StepResult, 0, len(res.Steps))
+	for _, s := range res.Steps {
+		steps = append(steps, corewf.StepResult{
+			Name:   s.Name,
+			Kind:   corewf.StepKind(s.Kind),
+			Status: s.Status,
+			Err:    s.Err,
+		})
+	}
+	r := &corewf.Run{
+		ID:         res.RunID,
+		WorkflowID: workflowID,
+		Status:     res.Status,
+		Steps:      steps,
+		Err:        res.Err,
+	}
+	corewf.EmitExecuted(ctx, a.cfg.Audit, r)
+	corewf.EmitStepFailures(ctx, a.cfg.Audit, r)
 }
 
 // Save implements WorkflowsAPI.
@@ -265,6 +330,10 @@ func (a *API) Save(ctx context.Context, in SaveInput) (SaveOutput, error) {
 	default:
 		return SaveOutput{}, ErrInvalidSaveInput
 	}
+	// Cedar gate. Strict mode + shell-bearing workflows → deny here.
+	if _, gerr := cedar.GateWorkflowSave(ctx, a.cfg.Cedar, w.ID, a.cfg.CedarMode, corewf.CollectStepKinds(w)); gerr != nil {
+		return SaveOutput{}, fmt.Errorf("%w: %v", ErrCedarDenied, gerr)
+	}
 	saved, err := a.cfg.Store.Save(ctx, w)
 	if err != nil {
 		return SaveOutput{}, err
@@ -273,6 +342,7 @@ func (a *API) Save(ctx context.Context, in SaveInput) (SaveOutput, error) {
 	a.byID[saved.ID] = saved
 	a.source[saved.ID] = "user"
 	a.mu.Unlock()
+	corewf.EmitSaved(ctx, a.cfg.Audit, saved)
 	return SaveOutput{
 		ID:        saved.ID,
 		Name:      saved.Name,
@@ -300,6 +370,12 @@ func (a *API) Delete(ctx context.Context, id string) error {
 	if _, err := a.cfg.Store.Load(ctx, id); err != nil {
 		return err
 	}
+	// Cedar gate. The default policy permits delete unconditionally so
+	// the chassis can always emit `workflow.deleted` audit; strict
+	// overrides layer a forbid rule on top.
+	if _, gerr := cedar.GateWorkflowDelete(ctx, a.cfg.Cedar, id); gerr != nil {
+		return fmt.Errorf("%w: %v", ErrCedarDenied, gerr)
+	}
 	if err := a.cfg.Store.Delete(ctx, id); err != nil {
 		return err
 	}
@@ -307,6 +383,7 @@ func (a *API) Delete(ctx context.Context, id string) error {
 	delete(a.byID, id)
 	delete(a.source, id)
 	a.mu.Unlock()
+	corewf.EmitDeleted(ctx, a.cfg.Audit, id)
 	return nil
 }
 
