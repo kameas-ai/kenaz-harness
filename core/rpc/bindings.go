@@ -40,6 +40,7 @@ import (
 	slashview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/slashcmd"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/tools"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/trust"
+	updateview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/update"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/workflow"
 	workflowsview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/workflows"
 	"github.com/sigil-tech/kaneaz-harness/core/logging"
@@ -1324,6 +1325,34 @@ func (b *Bindings) Workflows_Save(in workflowsview.SaveInput) (workflowsview.Sav
 }
 func (b *Bindings) Workflows_Delete(id string) error {
 	return b.api.Workflows().Delete(b.ctx(), id)
+}
+
+// ── update (mission auto-update, v0.4.0 WP03) ─────────────────────────
+//
+// TODO: regenerate via `wails generate module` once the WP04 + WP05 UI
+// lands. Hand-added in WP03 so the frontend updateClient.ts has typed
+// bindings to consume.
+
+func (b *Bindings) Update_Status() (updateview.StatusOutput, error) {
+	return b.api.Update().Status(b.ctx())
+}
+func (b *Bindings) Update_StartCheck() error {
+	return b.api.Update().StartCheck(b.ctx())
+}
+func (b *Bindings) Update_StartDownload() error {
+	return b.api.Update().StartDownload(b.ctx())
+}
+func (b *Bindings) Update_Apply() error {
+	return b.api.Update().Apply(b.ctx())
+}
+func (b *Bindings) Update_SkipVersion(version string) error {
+	return b.api.Update().SkipVersion(b.ctx(), version)
+}
+func (b *Bindings) Update_ListSkippedVersions() ([]string, error) {
+	return b.api.Update().ListSkippedVersions(b.ctx())
+}
+func (b *Bindings) Update_UnskipVersion(version string) error {
+	return b.api.Update().UnskipVersion(b.ctx(), version)
 }
 
 // ── nodes (manifest-driven node catalog; WP07) ────────────────────────

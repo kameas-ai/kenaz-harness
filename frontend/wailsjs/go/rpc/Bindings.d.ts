@@ -30,6 +30,7 @@ import {slashcmd} from '../models';
 import {transport} from '../models';
 import {tools} from '../models';
 import {trust} from '../models';
+import {update} from '../models';
 import {workflow} from '../models';
 import {workflows} from '../models';
 
@@ -464,3 +465,19 @@ export function Workflows_Run(arg1:string,arg2:Record<string, string>):Promise<w
 export function Workflows_Save(arg1:workflows.SaveInput):Promise<workflows.SaveOutput>;
 
 export function Workflows_Delete(arg1:string):Promise<void>;
+
+// TODO: regenerate via `wails generate module` once the WP04+WP05 update UI lands.
+// Hand-added in WP03 so the frontend updateClient.ts has typed bindings.
+export function Update_Status():Promise<update.StatusOutput>;
+
+export function Update_StartCheck():Promise<void>;
+
+export function Update_StartDownload():Promise<void>;
+
+export function Update_Apply():Promise<void>;
+
+export function Update_SkipVersion(arg1:string):Promise<void>;
+
+export function Update_ListSkippedVersions():Promise<Array<string>>;
+
+export function Update_UnskipVersion(arg1:string):Promise<void>;

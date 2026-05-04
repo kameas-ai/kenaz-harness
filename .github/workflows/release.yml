@@ -192,6 +192,32 @@ jobs:
           fi
           wails build "${ARGS[@]}"
 
+      # ── kenaz-updater.exe (Windows only) ────────────────────────────────
+      # Stand-alone helper binary that performs the wait-rename-relaunch
+      # outside the harness process. Bundled into the same build/bin/ dir
+      # so the existing Trusted Signing step picks it up via
+      # `files-folder-filter: exe` and the archive (windows) step zips it
+      # into the release artifact alongside the main exe. See
+      # cmd/kenaz-updater/main.go and core/update/swap_windows.go.
+      - name: build kenaz-updater (windows only)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${{ needs.derive-version.outputs.version }}"
+          # Match the wails-build target arch (matrix.wails_platform is
+          # windows/amd64 or windows/arm64). Cross-compile the helper
+          # accordingly so a windows-arm64 install ships an arm64 helper.
+          PLATFORM="${{ matrix.wails_platform }}"
+          GOARCH="${PLATFORM##*/}"
+          GOOS=windows GOARCH="${GOARCH}" \
+            go build \
+              -ldflags="-X main.version=${VERSION}" \
+              -trimpath \
+              -o "build/bin/kenaz-updater.exe" \
+              ./cmd/kenaz-updater
+          ls -la build/bin/kenaz-updater.exe
+
       # ── macOS rename + code signing + notarization ──────────────────────
       # Wails names the .app bundle from wails.json `name` (kenaz-harness),
       # ignoring info.productName for the directory name. Rename to "Kenaz.app"

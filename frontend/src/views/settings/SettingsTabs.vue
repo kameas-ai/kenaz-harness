@@ -22,10 +22,22 @@ interface Tab {
   /** Optional path-prefix used to keep the tab highlighted across
    *  nested routes (e.g. /permissions/fs still highlights Permissions). */
   matchPrefix?: string;
+  /**
+   * Optional query-param marker used to keep two tabs that share the
+   * same path distinguishable (e.g. General and Updates both live under
+   * /settings; Updates is reached via /settings?tab=updates). When set,
+   * isActive() requires both the path AND the query.tab to match this
+   * value. Tabs without a `query` only match when query.tab is absent.
+   */
+  query?: string;
 }
 
 const tabs: ReadonlyArray<Tab> = [
   { to: '/settings', label: 'General' },
+  // auto-update-v0.4.0 WP05 — Updates tab. Shares /settings with the
+  // General tab and disambiguates via ?tab=updates so we don't have to
+  // touch the router. See SettingsView.vue for the mount switch.
+  { to: '/settings?tab=updates', label: 'Updates', query: 'updates' },
   { to: '/providers', label: 'Providers' },
   { to: '/hooks', label: 'Hooks' },
   { to: '/bundles', label: 'Bundles' },
@@ -33,14 +45,27 @@ const tabs: ReadonlyArray<Tab> = [
 ];
 
 const activePath = computed(() => route?.path ?? '');
+const activeQuery = computed<string>(() => {
+  const v = route?.query?.tab;
+  if (typeof v === 'string') return v;
+  return '';
+});
 
 function isActive(t: Tab): boolean {
   if (t.matchPrefix) return activePath.value.startsWith(t.matchPrefix);
+  // For tabs that share /settings, require an exact query.tab match so
+  // General and Updates highlight independently.
+  if (t.to.startsWith('/settings')) {
+    if (activePath.value !== '/settings') return false;
+    return (t.query ?? '') === activeQuery.value;
+  }
   return activePath.value === t.to;
 }
 
 function goto(to: string) {
-  if (!router || activePath.value === to) return;
+  if (!router) return;
+  // Preserve the query-param semantics — vue-router parses ?tab=… off
+  // the string-form push target so we don't have to split it manually.
   void router.push(to);
 }
 </script>

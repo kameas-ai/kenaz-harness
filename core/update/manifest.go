@@ -1,0 +1,104 @@
+package update
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"runtime"
+)
+
+// manifest mirrors the JSON shape served at
+// https://docs.kameas.ai/downloads/manifest.json. Unknown fields are
+// ignored by encoding/json so future server-side fields don't break
+// older clients.
+type manifest struct {
+	Version string          `json:"version"`
+	Notes   string          `json:"notes,omitempty"`
+	Assets  []manifestAsset `json:"assets"`
+}
+
+type manifestAsset struct {
+	Platform string `json:"platform"` // e.g. "darwin/arm64"
+	URL      string `json:"url"`
+	Sha256   string `json:"sha256"`
+}
+
+// stableManifestURL and prereleaseManifestURL are the production
+// manifest endpoints. Tests override them via Config.ManifestURL.
+const (
+	stableManifestURL     = "https://docs.kameas.ai/downloads/manifest.json"
+	prereleaseManifestURL = "https://docs.kameas.ai/downloads/manifest-prerelease.json"
+)
+
+// channelManifestURL returns the manifest URL for the given channel.
+// "prerelease" maps to the prerelease URL; everything else (including
+// the empty string) maps to stable.
+func channelManifestURL(channel string) string {
+	if channel == "prerelease" {
+		return prereleaseManifestURL
+	}
+	return stableManifestURL
+}
+
+// fetchManifest GETs the URL and decodes the JSON body. Network and
+// decode errors are returned with enough context to debug from a log
+// line alone; the manifest endpoint is operationally critical and
+// silent failures are never acceptable.
+//
+// On a 404 for a prerelease URL the caller (Service.Check) falls
+// back to the stable manifest with a TODO log line; this is the
+// agreed contract until the prerelease channel ships its own JSON.
+func fetchManifest(ctx context.Context, client *http.Client, url string) (manifest, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return manifest{}, fmt.Errorf("update: build manifest request: %w", err)
+	}
+	req.Header.Set("Accept", "application/json")
+	resp, err := client.Do(req)
+	if err != nil {
+		return manifest{}, fmt.Errorf("update: fetch manifest %s: %w", url, err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusNotFound {
+		return manifest{}, errManifestNotFound
+	}
+	if resp.StatusCode/100 != 2 {
+		return manifest{}, fmt.Errorf("update: manifest %s returned %s", url, resp.Status)
+	}
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20)) // 1 MiB cap
+	if err != nil {
+		return manifest{}, fmt.Errorf("update: read manifest body: %w", err)
+	}
+	var m manifest
+	if err := json.Unmarshal(body, &m); err != nil {
+		return manifest{}, fmt.Errorf("update: decode manifest: %w", err)
+	}
+	if m.Version == "" {
+		return manifest{}, fmt.Errorf("update: manifest %s missing version", url)
+	}
+	return m, nil
+}
+
+// pickAsset selects the asset entry whose Platform matches the running
+// build (GOOS/GOARCH). Returns the asset and true, or an empty asset
+// and false if no match.
+func pickAsset(m manifest) (manifestAsset, bool) {
+	want := platformTuple()
+	for _, a := range m.Assets {
+		if a.Platform == want {
+			return a, true
+		}
+	}
+	return manifestAsset{}, false
+}
+
+// platformTuple returns "GOOS/GOARCH" for the running binary. Exposed
+// as a separate fn so tests can stub it via the Service.platform
+// override below.
+func platformTuple() string {
+	return runtime.GOOS + "/" + runtime.GOARCH
+}
