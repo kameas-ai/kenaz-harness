@@ -210,6 +210,13 @@ type Workflow struct {
 	InlineRun     bool    `yaml:"inline_run,omitempty" json:"inlineRun,omitempty"`
 	RerunPolicy   string  `yaml:"rerun_policy,omitempty" json:"rerunPolicy,omitempty"`
 	SlashCommand  string  `yaml:"slash_command,omitempty" json:"slashCommand,omitempty"`
+	// Schedule is a 5-field cron expression (e.g. "0 7 * * *") that the
+	// scheduler uses to fire the workflow automatically. Empty means no
+	// recurring schedule. Introduced in WP04 (starter library).
+	Schedule string `yaml:"schedule,omitempty" json:"schedule,omitempty"`
+	// Timezone is an IANA timezone name (e.g. "America/New_York") paired
+	// with Schedule. Defaults to UTC when empty.
+	Timezone string `yaml:"timezone,omitempty" json:"timezone,omitempty"`
 	Inputs        []Input `yaml:"inputs,omitempty" json:"inputs,omitempty"`
 	Steps         []Step  `yaml:"steps" json:"steps"`
 
