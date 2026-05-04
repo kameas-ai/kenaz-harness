@@ -10,7 +10,9 @@ package rpc
 
 import (
 	"context"
+	cryptorand "crypto/rand"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -18,6 +20,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/sigil-tech/kaneaz-harness/core"
 	coreag "github.com/sigil-tech/kaneaz-harness/core/agentgraph"
@@ -72,6 +75,8 @@ import (
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/tools"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/trust"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/workflow"
+	workflowsview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/workflows"
+	"github.com/sigil-tech/kaneaz-harness/core/autonomy"
 	"github.com/sigil-tech/kaneaz-harness/core/secrets"
 	coreslashcmd "github.com/sigil-tech/kaneaz-harness/core/slashcmd"
 	corebash "github.com/sigil-tech/kaneaz-harness/core/tools/bash"
@@ -80,6 +85,7 @@ import (
 	"github.com/sigil-tech/kaneaz-harness/core/storage"
 	"github.com/sigil-tech/kaneaz-harness/core/toolloop"
 	"github.com/sigil-tech/kaneaz-harness/core/usage"
+	corewf "github.com/sigil-tech/kaneaz-harness/core/workflows"
 	"github.com/zalando/go-keyring"
 )
 
@@ -104,6 +110,10 @@ type HarnessAPI interface {
 	MCPImport() *mcp.ImportAPI
 	A2A() a2a.A2AAPI
 	Workflow() workflow.WorkflowAPI
+	// Workflows is the agentic workflows surface (mission
+	// workflows-01KQ8TDG, v0.3.0 beta). Distinct from Workflow
+	// (scheduler/jobs) — the names will reconcile in a follow-up.
+	Workflows() workflowsview.WorkflowsAPI
 	Sessions() sessions.SessionsAPI
 	Trust() trust.TrustAPI
 	Context() contextview.ContextAPI
@@ -192,6 +202,7 @@ type API struct {
 	mcpImportAPI *mcp.ImportAPI
 	a2aAPI      a2a.A2AAPI
 	workflowAPI workflow.WorkflowAPI
+	workflowsAPI workflowsview.WorkflowsAPI
 	sessionsAPI sessions.SessionsAPI
 	trustAPI    trust.TrustAPI
 	contextAPI  contextview.ContextAPI
@@ -440,6 +451,28 @@ func New(c *core.Core) *API {
 	a.settingsAPI = settingsImpl
 	a.settingsImpl = settingsImpl
 
+	// Threshold scheduler wiring (token-cost-telemetry-01KQ8TD7 WP06).
+	// Built once; reads the dial fresh on every Manager.Add tail via
+	// the LoadMonthlyCostNotifyUSD callback so changes to the setting
+	// take effect on the next chat turn without restarting. The
+	// publisher routes events through the same broker used by the
+	// permission-pending topics, so the privacy-CI single-emitter
+	// invariant stays intact.
+	if mwc, ok := usageMgr.(usage.ManagerWithChecker); ok && a.broker != nil {
+		thresholdReader := usage.ThresholdReader(func() (float64, error) {
+			if settingsImpl == nil || settingsImpl.Store() == nil {
+				return 0, nil
+			}
+			return settingsImpl.Store().LoadMonthlyCostNotifyUSD()
+		})
+		publisher := &thresholdPublisher{broker: a.broker}
+		if checker, err := usage.NewCheckerFromManager(mwc, thresholdReader, publisher); err == nil {
+			usageMgr.SetThresholdChecker(checker)
+		} else {
+			logging.L().Warn("usage.threshold.wire_failed", "err", err.Error())
+		}
+	}
+
 	// LLM stack uses the settings store as the opt-in gate for
 	// retrieval, and shares the memory store with the MemoryAPI so a
 	// pin in the chat surface and a retrieval at send-time see the
@@ -533,6 +566,38 @@ func New(c *core.Core) *API {
 			a.sessionsAPI = sessions.WithResumeStarter(a.sessionsAPI, starter)
 		}
 	}
+	// autonomy-dial-01KR3M2A WP03: wire the AutonomyContextProvider so
+	// Sessions_ResolveAutonomy folds global → project → session layers
+	// using the live settings store + project manager. Tolerates a nil
+	// store (returns the empty Layer for that side of the chain).
+	if c != nil && c.SessionManager() != nil {
+		store := settingsStore
+		projects := c.ProjectManager()
+		sessionMgr := c.SessionManager()
+		ctxProvider := sessions.AutonomyContextFunc{
+			Global: func(ctx context.Context) (autonomy.Layer, error) {
+				if store == nil {
+					return autonomy.Layer{}, nil
+				}
+				return store.LoadAutonomyProfile()
+			},
+			ProjectForSession: func(ctx context.Context, sessionID string) (autonomy.Layer, error) {
+				rec, err := sessionMgr.Get(ctx, sessionID)
+				if err != nil {
+					return autonomy.Layer{}, nil
+				}
+				if rec.ProjectID == nil || *rec.ProjectID == "" || projects == nil {
+					return autonomy.Layer{}, nil
+				}
+				layer, err := projects.GetAutonomyProfile(ctx, *rec.ProjectID)
+				if err != nil {
+					return autonomy.Layer{}, nil
+				}
+				return layer, nil
+			},
+		}
+		a.sessionsAPI = sessions.WithAutonomyContext(a.sessionsAPI, ctxProvider)
+	}
 	if c != nil && a.stdioPool != nil {
 		c.SetMCP(a.stdioPool)
 		// Persisted-recipes bootstrap — Core.Start invokes this once
@@ -580,20 +645,15 @@ func New(c *core.Core) *API {
 	// frontend's empty-state path expects.
 	bundleOpts := []bundle.Option{}
 	if c != nil {
-		bundleOpts = append(bundleOpts, bundle.WithReader(bundle.NewFSReader(c.DataDir())))
+		bundleOpts = append(bundleOpts,
+			bundle.WithReader(bundle.NewFSReader(c.DataDir())),
+			bundle.WithWriter(bundle.NewFSWriter(c.DataDir())),
+		)
 		if cas, err := c.BundleCache(); err == nil && cas != nil {
 			bundleOpts = append(bundleOpts, bundle.WithCAS(bundle.CASFromCache(cas)))
 		}
 	}
 	a.bundleAPI = bundle.NewAPI(bundleOpts...)
-
-	// Slash-command surface — registry constructed against narrow
-	// adapters over the session manager (for /clear) and the LLM
-	// connector view (for /model). A construction failure soft-fails
-	// to a nil-registry surface; the chassis still boots and Execute
-	// returns a friendly "not wired" error.
-	slashRegistry := newSlashRegistry(c, a.llmAPI)
-	a.slashAPI = slashview.New(slashRegistry)
 
 	// Corpora subsystem (mission agent-kernel-graph; Bundle C). Wired
 	// only when the chassis has a real DataDir + storage; otherwise the
@@ -612,6 +672,16 @@ func New(c *core.Core) *API {
 		Recommender:   newBranchRecommender(),
 	})
 
+	// Slash-command surface — registry constructed against narrow
+	// adapters over the session manager (for /clear), the LLM
+	// connector view (for /model), the memory store + embedder (for
+	// /memorize, /recall, /forget), and the branches API (for /branch).
+	// A construction failure soft-fails to a nil-registry surface; the
+	// chassis still boots and Execute returns a friendly "not wired"
+	// error per command.
+	slashRegistry := newSlashRegistry(c, a.llmAPI, memStore, embedder, a.branchesAPI)
+	a.slashAPI = slashview.New(slashRegistry)
+
 	// Agent-graph view surface — graph manager already built above so
 	// the chat-migration ChatRunner could share its kernel.
 	a.graphAPI = graphview.New(a.graphMgr)
@@ -620,6 +690,24 @@ func New(c *core.Core) *API {
 	// only when no kernel resumer is wired — the chassis still boots
 	// and BumpAndResume returns ErrNoPause until a kernel binds.
 	a.dialsAPI = dialsview.New(dialsview.Config{})
+
+	// Workflows subsystem (mission workflows-01KQ8TDG, v0.3.0 beta).
+	// Loads embedded builtin/*.yaml at boot; HARNESS_WORKFLOWS=off
+	// disables the surface entirely.
+	{
+		disabled := strings.EqualFold(os.Getenv("HARNESS_WORKFLOWS"), "off") ||
+			os.Getenv("HARNESS_WORKFLOWS") == "0"
+		var catalog []corewf.Workflow
+		if !disabled {
+			catalog, _ = corewf.LoadBuiltins()
+		}
+		a.workflowsAPI = workflowsview.New(workflowsview.Config{
+			Engine:    corewf.NewEngine(),
+			Catalog:   catalog,
+			Publisher: brokerPublisher{broker: a.broker},
+			Disabled:  disabled,
+		})
+	}
 
 	// Node manifest catalog (mission agent-kernel-graph-node-catalog
 	// WP07). Loads shipped manifests + user-overrides at chassis boot;
@@ -687,16 +775,24 @@ func New(c *core.Core) *API {
 }
 
 // newSlashRegistry wires the slash-command registry against the
-// session manager (used by /clear) and the LLM connector view (used
-// by /model). Returns nil when neither dependency is available; the
-// view degrades to a friendly error response on every Execute.
-func newSlashRegistry(c *core.Core, llmAPI llm.LLMConnectorAPI) *coreslashcmd.Registry {
+// session manager (used by /clear), the LLM connector view (used
+// by /model), the memory store + embedder (used by /memorize,
+// /recall, /forget), and the branches API (used by /branch).
+// Returns nil when registry construction fails; the view degrades
+// to a friendly error response on every Execute.
+func newSlashRegistry(c *core.Core, llmAPI llm.LLMConnectorAPI, memStore corememory.Store, embedder corememory.Embedder, branchesAPI branchesview.BranchesAPI) *coreslashcmd.Registry {
 	deps := coreslashcmd.Deps{}
 	if c != nil && c.SessionManager() != nil {
 		deps.Sessions = &slashSessionAppender{mgr: c.SessionManager()}
 	}
 	if llmAPI != nil {
 		deps.Providers = &slashProviderLister{inner: llmAPI}
+	}
+	if memStore != nil && embedder != nil {
+		deps.Memory = &slashMemoryGateway{store: memStore, embedder: embedder}
+	}
+	if branchesAPI != nil {
+		deps.Branches = &slashBranchGateway{inner: branchesAPI}
 	}
 	registry, err := coreslashcmd.NewRegistry(deps)
 	if err != nil {
@@ -755,6 +851,180 @@ func (a *slashProviderLister) ListProviders(ctx context.Context) ([]coreslashcmd
 		})
 	}
 	return out, nil
+}
+
+// slashMemoryGateway adapts core/memory.Store + core/memory.Embedder
+// onto the narrow MemoryGateway contract /memorize, /recall, /forget
+// consume. The translation owns chunk-id allocation, the pin-after-add
+// step (so /memorize chunks survive the prune sweep), and the
+// "store reports not found" → ErrMemoryChunkNotFound mapping that
+// /forget reads.
+type slashMemoryGateway struct {
+	store    corememory.Store
+	embedder corememory.Embedder
+}
+
+func (g *slashMemoryGateway) Memorize(ctx context.Context, sessionID, text string) (string, error) {
+	if g == nil || g.store == nil {
+		return "", errors.New("slashcmd: memory store unavailable")
+	}
+	if g.embedder == nil {
+		return "", corememory.ErrEmbedderUnavailable
+	}
+	if _, ok := g.embedder.(corememory.NoopEmbedder); ok {
+		return "", corememory.ErrEmbedderUnavailable
+	}
+	vecs, err := g.embedder.Embed(ctx, []string{text})
+	if err != nil {
+		return "", fmt.Errorf("slashcmd: embed: %w", err)
+	}
+	if len(vecs) == 0 {
+		return "", errors.New("slashcmd: embedder returned no vectors")
+	}
+	id, err := newSlashChunkID()
+	if err != nil {
+		return "", err
+	}
+	chunk := corememory.Chunk{
+		ID:          id,
+		SessionID:   sessionID,
+		ScopeKind:   corememory.ScopeKindSession,
+		ScopeID:     sessionID,
+		Content:     text,
+		ContentHash: corememory.HashContent(text),
+		Embedding:   vecs[0],
+		CreatedAt:   time.Now().UTC(),
+		Pinned:      true,
+		Source:      "slash:/memorize",
+	}
+	if err := g.store.Add(ctx, chunk); err != nil {
+		return "", err
+	}
+	// Belt-and-braces: if the store implements PruneCapable, set the
+	// pin flag explicitly. The chunk-level Pinned field above already
+	// covers the chromem store; this guards against future stores that
+	// honor SetPinned but not the chunk field.
+	if pruner, ok := g.store.(corememory.PruneCapable); ok {
+		_ = pruner.SetPinned(ctx, id, true)
+	}
+	return id, nil
+}
+
+func (g *slashMemoryGateway) Recall(ctx context.Context, sessionID, query string, k int) ([]coreslashcmd.MemoryHit, error) {
+	if g == nil || g.store == nil {
+		return nil, errors.New("slashcmd: memory store unavailable")
+	}
+	if g.embedder == nil {
+		return nil, corememory.ErrEmbedderUnavailable
+	}
+	if _, ok := g.embedder.(corememory.NoopEmbedder); ok {
+		return nil, corememory.ErrEmbedderUnavailable
+	}
+	vecs, err := g.embedder.Embed(ctx, []string{query})
+	if err != nil {
+		return nil, fmt.Errorf("slashcmd: embed: %w", err)
+	}
+	if len(vecs) == 0 {
+		return nil, nil
+	}
+	scopes := []corememory.ScopeFilter{
+		{Kind: corememory.ScopeKindGlobal},
+	}
+	if sessionID != "" {
+		scopes = append(scopes, corememory.ScopeFilter{Kind: corememory.ScopeKindSession, ID: sessionID})
+	}
+	results, err := g.store.Query(ctx, vecs[0], k, scopes...)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]coreslashcmd.MemoryHit, 0, len(results))
+	for _, r := range results {
+		out = append(out, coreslashcmd.MemoryHit{
+			ID:      r.Chunk.ID,
+			Content: r.Chunk.Content,
+			Score:   r.Similarity,
+		})
+	}
+	return out, nil
+}
+
+func (g *slashMemoryGateway) Forget(ctx context.Context, id string) error {
+	if g == nil || g.store == nil {
+		return errors.New("slashcmd: memory store unavailable")
+	}
+	if err := g.store.Delete(ctx, id); err != nil {
+		// chromemStore returns a fmt.Errorf("memory: chunk %q not
+		// found", id) — match on the substring since the underlying
+		// error is not a typed sentinel.
+		if strings.Contains(err.Error(), "not found") {
+			return coreslashcmd.ErrMemoryChunkNotFound
+		}
+		return err
+	}
+	return nil
+}
+
+// newSlashChunkID returns a 16-byte hex-encoded random id with the
+// "mem-" prefix the rest of the memory subsystem uses. crypto/rand so
+// concurrent /memorize calls cannot collide.
+func newSlashChunkID() (string, error) {
+	b := make([]byte, 16)
+	if _, err := cryptorand.Read(b); err != nil {
+		return "", fmt.Errorf("slashcmd: random id: %w", err)
+	}
+	return "mem-" + hex.EncodeToString(b), nil
+}
+
+// slashBranchGateway adapts the BranchesAPI onto the narrow BranchGateway
+// contract /branch consumes. CreateBranch translates a (sessionID,
+// modelID) pair into a CreateBranchOptions with the "exact" preference;
+// RecommendModels asks the BranchesAPI for the smaller / larger / same
+// triple by calling RecommendModel three times.
+type slashBranchGateway struct {
+	inner branchesview.BranchesAPI
+}
+
+func (g *slashBranchGateway) CreateBranch(ctx context.Context, parentSessionID, modelID string) (coreslashcmd.BranchHandle, error) {
+	if g == nil || g.inner == nil {
+		return coreslashcmd.BranchHandle{}, errors.New("slashcmd: branches surface unavailable")
+	}
+	br, err := g.inner.CreateBranch(ctx, branchesview.CreateBranchOptions{
+		ParentSessionID: parentSessionID,
+		ModelPreference: "exact",
+		ExactModelID:    modelID,
+	})
+	if err != nil {
+		return coreslashcmd.BranchHandle{}, err
+	}
+	return coreslashcmd.BranchHandle{
+		BranchID:       br.ID,
+		ChildSessionID: br.ChildSessionID,
+		ProviderID:     br.ProviderID,
+		ModelID:        br.ModelID,
+	}, nil
+}
+
+func (g *slashBranchGateway) RecommendModels(ctx context.Context, parentSessionID string) (coreslashcmd.BranchRecommendations, error) {
+	if g == nil || g.inner == nil {
+		return coreslashcmd.BranchRecommendations{}, errors.New("slashcmd: branches surface unavailable")
+	}
+	pick := func(pref string) coreslashcmd.BranchModel {
+		rec, err := g.inner.RecommendModel(ctx, parentSessionID, "", pref)
+		if err != nil {
+			return coreslashcmd.BranchModel{}
+		}
+		return coreslashcmd.BranchModel{
+			ProviderID: rec.ProviderID,
+			ModelID:    rec.ModelID,
+			Tier:       rec.Tier,
+			Reason:     rec.Reason,
+		}
+	}
+	return coreslashcmd.BranchRecommendations{
+		Smaller: pick("smaller"),
+		Same:    pick("same"),
+		Larger:  pick("larger"),
+	}, nil
 }
 
 // newSessionsAPI returns the real Manager-backed SessionsAPI when c
@@ -1967,6 +2237,21 @@ func (p *poolEventPublisher) Publish(topic string, payload any) {
 	p.broker.emitter.Emit(p.broker.EmitCtx(), topic, payload)
 }
 
+// thresholdPublisher adapts the rpc.StreamBroker to the
+// usage.Publisher contract used by the WP06 threshold scheduler.
+// Identical-shape sibling of poolEventPublisher; lives separately so
+// the usage package never imports rpc internals.
+type thresholdPublisher struct {
+	broker *StreamBroker
+}
+
+func (p *thresholdPublisher) Publish(topic string, payload any) {
+	if p == nil || p.broker == nil {
+		return
+	}
+	p.broker.emitter.Emit(p.broker.EmitCtx(), topic, payload)
+}
+
 // attachmentsResolverAdapter bridges core/attachments.Manager into the
 // llm view's AttachmentsResolver shape so the LLM impl never imports
 // core/attachments directly.
@@ -2788,12 +3073,35 @@ func (a *API) AppInfo(_ context.Context) (AppInfo, error) {
 	}, nil
 }
 
+// brokerPublisher adapts *StreamBroker to the workflowsview.ProgressPublisher
+// interface so the workflows engine can fan progress events onto the
+// `workflows:run-progress` topic without importing rpc.
+type brokerPublisher struct{ broker *StreamBroker }
+
+func (b brokerPublisher) Publish(topic string, payload any) {
+	if b.broker == nil || b.broker.emitter == nil {
+		return
+	}
+	b.broker.emitter.Emit(b.broker.EmitCtx(), topic, payload)
+}
+
 // View accessors return the stable instance constructed in New.
 func (a *API) LLMConnector() llm.LLMConnectorAPI { return a.llmAPI }
 func (a *API) MCP() mcp.MCPAPI                   { return a.mcpAPI }
 func (a *API) MCPImport() *mcp.ImportAPI         { return a.mcpImportAPI }
 func (a *API) A2A() a2a.A2AAPI                   { return a.a2aAPI }
 func (a *API) Workflow() workflow.WorkflowAPI    { return a.workflowAPI }
+
+// Workflows returns the agentic workflows view surface (mission
+// workflows-01KQ8TDG, v0.3.0 beta). When the chassis hasn't wired a
+// real engine (test-harness rpc.New(nil) path), the fallback returns
+// an empty-catalog API whose Run / Get surface ErrEngineUnavailable.
+func (a *API) Workflows() workflowsview.WorkflowsAPI {
+	if a == nil || a.workflowsAPI == nil {
+		return workflowsview.New(workflowsview.Config{})
+	}
+	return a.workflowsAPI
+}
 func (a *API) Sessions() sessions.SessionsAPI    { return a.sessionsAPI }
 func (a *API) Trust() trust.TrustAPI             { return a.trustAPI }
 func (a *API) Context() contextview.ContextAPI   { return a.contextAPI }

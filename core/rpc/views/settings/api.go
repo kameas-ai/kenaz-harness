@@ -211,6 +211,15 @@ type Settings struct {
 	// FSRequestAccessEnabled() accessor; never read directly.
 	FSRequestAccessDisabled bool `json:"fsRequestAccessDisabled,omitempty"`
 
+	// SearchDisabled is the inverted persisted bit for the cross-session
+	// search modal (cross-session-search-01KQ8TDQ WP07). Default ON
+	// (zero-value Disabled → search enabled). When true, the SearchAPI
+	// short-circuits with an empty result set regardless of what is in
+	// the FTS5 index — privacy escape hatch for users who don't want
+	// their message corpus surfaced through Cmd+F. Read via the
+	// SearchEnabled() accessor; never read directly.
+	SearchDisabled bool `json:"searchDisabled,omitempty"`
+
 	// Autonomy is the persisted global autonomy.Layer
 	// (autonomy-dial-01KR3M2A WP02). Empty value (no level + no
 	// overrides) means "use the tier-default fallback." The wire shape
@@ -220,6 +229,15 @@ type Settings struct {
 	// settings), so the global autonomy layer rides on top of the
 	// existing settings.json round-trip rather than its own migration.
 	Autonomy json.RawMessage `json:"autonomy,omitempty"`
+
+	// MonthlyCostNotifyUSD is the per-month spend threshold at which
+	// the harness fires escalating notifications at 50 / 80 / 100 /
+	// 150 / 200 % of the dial value (token-cost-telemetry-01KQ8TD7
+	// WP06). Zero (the default) disables the scheduler entirely.
+	// Range [0, MaxMonthlyCostNotifyUSD]; Save rejects negative or
+	// out-of-range values. FR-007c: this is a visibility dial — hard
+	// caps live in the user's provider dashboard.
+	MonthlyCostNotifyUSD float64 `json:"monthlyCostNotifyUsd,omitempty"`
 }
 
 // ProviderProfileRef is the wire shape that identifies a provider+model
@@ -284,6 +302,11 @@ func (s Settings) AutoCaptureToolOutputs() bool { return !s.AutoCaptureToolOutpu
 // FSRequestAccessEnabled reports whether kaneaz__request_filesystem_access
 // is enabled. Default true on a fresh install (zero-value Disabled).
 func (s Settings) FSRequestAccessEnabled() bool { return !s.FSRequestAccessDisabled }
+
+// SearchEnabled reports whether the cross-session search modal is
+// enabled. Default true on a fresh install (zero-value SearchDisabled).
+// (cross-session-search-01KQ8TDQ WP07)
+func (s Settings) SearchEnabled() bool { return !s.SearchDisabled }
 
 // EffectiveCodeBlockMinLines returns the user-tuned threshold or the
 // spec default (10) when the persisted value is zero.
@@ -427,6 +450,20 @@ func (s Settings) EffectiveBranchAdvisorDefaultModel() ProviderProfileRef {
 	return s.CompactionModel
 }
 
+// MaxMonthlyCostNotifyUSD is the upper clamp on the monthly-spend
+// notification dial. Values above this are rejected at Save and at
+// effective-read time (token-cost-telemetry-01KQ8TD7 WP06). The cap
+// keeps the dial usable for sane provider-billing budgets without
+// masking absurd hand-edited values.
+const MaxMonthlyCostNotifyUSD = 10000.0
+
+// MonthlyCostNotifyEnabled reports whether the threshold scheduler
+// should fire for this settings record. Zero (or any negative slip-in
+// from a hand-edited file) disables the scheduler completely.
+func (s Settings) MonthlyCostNotifyEnabled() bool {
+	return s.MonthlyCostNotifyUSD > 0
+}
+
 // WindowSize mirrors the charter's WindowSize type.
 type WindowSize struct {
 	Width  int `json:"width"`
@@ -521,6 +558,15 @@ type SettingsStore interface {
 	LoadFSRequestAccessEnabled() (bool, error)
 	SaveFSRequestAccessEnabled(enabled bool) error
 
+	// LoadMonthlyCostNotifyUSD / SaveMonthlyCostNotifyUSD expose the
+	// monthly-spend notification threshold dial
+	// (token-cost-telemetry-01KQ8TD7 WP06). Zero disables the
+	// scheduler. Save rejects negative values and values above
+	// MaxMonthlyCostNotifyUSD; the threshold checker reads through
+	// LoadMonthlyCostNotifyUSD on every Manager.Add tail.
+	LoadMonthlyCostNotifyUSD() (float64, error)
+	SaveMonthlyCostNotifyUSD(usd float64) error
+
 	// LoadAutonomyProfile / SaveAutonomyProfile expose the global
 	// autonomy.Layer (autonomy-dial-01KR3M2A WP02) independently of the
 	// full Settings record so the autonomy resolver can read it on the
@@ -538,6 +584,13 @@ type SettingsStore interface {
 type SettingsAPI interface {
 	Get(ctx context.Context) (Settings, error)
 	Set(ctx context.Context, s Settings) error
+	// LoadAutonomyProfile returns the persisted global autonomy.Layer.
+	// Empty Layer means "use the tier-default fallback."
+	// (autonomy-dial-01KR3M2A WP03)
+	LoadAutonomyProfile(ctx context.Context) (autonomy.Layer, error)
+	// SaveAutonomyProfile persists the global autonomy.Layer. An empty
+	// Layer clears the field.
+	SaveAutonomyProfile(ctx context.Context, layer autonomy.Layer) error
 }
 
 // ShortcutsStore is the persistence interface for keyboard shortcut

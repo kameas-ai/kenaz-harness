@@ -68,6 +68,7 @@ export interface SessionUsage {
   messageCount: number;
   /** Last-updated date of the pricing table used ("YYYY-MM-DD"). */
   pricingDataDate: string;
+  /**
    * True when the auto-titling engine wrote the session name. Mirrors
    * session.Record.AutoTitled. The rail renders auto-titled sessions
    * with a subtle italic+muted hint so the user can distinguish
@@ -645,6 +646,49 @@ export interface Settings {
    * (keyboard-shortcuts-settings-01KQ8TDR plan Q1=C)
    */
   keyboardShortcutsPreset?: string;
+
+  /**
+   * Per-month spend notification threshold in USD
+   * (token-cost-telemetry-01KQ8TD7 WP06). Zero (the default) disables
+   * the scheduler; any positive value up to $10,000 enables the
+   * 50/80/100/150/200% escalating notifications. The dial takes effect
+   * on the next chat turn — the threshold checker reads it fresh on
+   * every Manager.Add tail. FR-007c: visibility only — hard caps live
+   * in the user's provider dashboard.
+   */
+  monthlyCostNotifyUsd?: number;
+
+  /**
+   * cross-session-search WP07 — inverted persisted bit for the Cmd+F
+   * search modal. Default false (= search enabled). When true, the
+   * SearchAPI short-circuits and returns no hits regardless of what
+   * is in the FTS5 index. The on-disk index itself is unaffected;
+   * toggling back resumes search immediately.
+   */
+  searchDisabled?: boolean;
+}
+
+/**
+ * CostThresholdCrossedPayload — the event the WP06 scheduler publishes
+ * on the `cost.threshold.crossed` broker topic when a per-month spend
+ * tier (50/80/100/150/200 % of monthlyCostNotifyUsd) is newly crossed.
+ * Mirrors core/usage.ThresholdCrossedPayload exactly.
+ */
+export interface CostThresholdCrossedPayload {
+  /** Tier just crossed: 50 / 80 / 100 / 150 / 200. */
+  pct: number;
+  /** Calendar-month total spend in USD as of the triggering turn. */
+  monthTotalUsd: number;
+  /**
+   * The monthlyCostNotifyUsd setting value at the moment of firing.
+   * Surfaced so the toast can render "you've used 80% of your $25/mo
+   * budget" without re-reading Settings.
+   */
+  thresholdUsd: number;
+  /** Local-time YYYY-MM key the row was written under. */
+  yearMonth: string;
+  /** RFC-3339 timestamp string the firing was recorded at. */
+  firedAt: string;
 }
 
 /**
@@ -2205,3 +2249,122 @@ export interface ReintegrationProposal {
  * interface and the WP06 modal share one shape.
  */
 export type ReintegrationCommitOptions = BranchReintegrationCommitOpts;
+
+// ── autonomy-dial-01KR3M2A WP03 wire types ────────────────────────────
+
+/**
+ * AutonomyTier is the user-facing 5-stop preset enum mirroring
+ * `core/autonomy.Tier`. Sent as a lowercase string on the wire.
+ */
+export type AutonomyTier =
+  | 'strict'
+  | 'cautious'
+  | 'default'
+  | 'bold'
+  | 'autonomous';
+
+/** Canonical knob names. */
+export type AutonomyKnob =
+  | 'maxIterations'
+  | 'askOnAmbiguity'
+  | 'autoApproveFamilies'
+  | 'tokenCeilingPerTurn'
+  | 'recapStyle'
+  | 'continueOnError'
+  | 'destructiveActionPosture';
+
+/**
+ * AutonomyLayer is the wire shape of one rung in the global → project
+ * → session override hierarchy. `level: null` means "this layer
+ * contributes no tier preset"; `overrides` is always present.
+ *
+ * Mirrors core/autonomy.Layer.MarshalJSON exactly.
+ */
+export interface AutonomyLayer {
+  level: AutonomyTier | null;
+  overrides: Partial<Record<AutonomyKnob, unknown>>;
+}
+
+/** Default empty Layer used as the "inherit from upstream" placeholder. */
+export function emptyAutonomyLayer(): AutonomyLayer {
+  return { level: null, overrides: {} };
+}
+
+/** True when the Layer contributes nothing to resolution. */
+export function isAutonomyLayerEmpty(
+  l: AutonomyLayer | null | undefined,
+): boolean {
+  if (!l) return true;
+  if (l.level !== null) return false;
+  return !l.overrides || Object.keys(l.overrides).length === 0;
+}
+
+/**
+ * AutonomyKnobValues is the resolved per-knob payload returned by
+ * Sessions_ResolveAutonomy.
+ */
+export interface AutonomyKnobValues {
+  maxIterations: number;
+  askOnAmbiguity: string;
+  autoApproveFamilies: string[];
+  tokenCeilingPerTurn: number;
+  recapStyle: string;
+  continueOnError: string;
+  destructiveActionPosture: string;
+  sourceTrace: Record<string, string>;
+  /** Effective tier label for chat-header chip display. */
+  tier: AutonomyTier | string;
+}
+
+/** Full ResolveAutonomy RPC payload. */
+export interface ResolvedAutonomy {
+  resolved: AutonomyKnobValues;
+  global: AutonomyLayer;
+  project: AutonomyLayer;
+  session: AutonomyLayer;
+}
+
+/** User-facing tier descriptions used by panel components. */
+export const AUTONOMY_TIER_LABELS: Record<AutonomyTier, string> = {
+  strict: 'Strict',
+  cautious: 'Cautious',
+  default: 'Default',
+  bold: 'Bold',
+  autonomous: 'Autonomous',
+};
+
+/** One-line tier description copy. */
+export const AUTONOMY_TIER_DESCRIPTIONS: Record<AutonomyTier, string> = {
+  strict:
+    'Asks on every ambiguity. Tightest iteration cap. No tool family auto-approves.',
+  cautious:
+    'Small iteration budget. Asks on hard calls. Only read ops auto-approve.',
+  default:
+    'Balanced defaults. Read+write auto-approve. Retry once on tool error.',
+  bold:
+    'Generous iteration budget. Proceeds on minor ambiguity. Shell-safe ops auto-approve.',
+  autonomous:
+    'Unbounded iterations. Never asks. All canonical tool families auto-approve. Cedar deny remains the floor.',
+};
+
+/** Stable knob ordering for advanced override panels. */
+export const AUTONOMY_KNOB_ORDER: readonly AutonomyKnob[] = [
+  'maxIterations',
+  'askOnAmbiguity',
+  'autoApproveFamilies',
+  'tokenCeilingPerTurn',
+  'recapStyle',
+  'continueOnError',
+  'destructiveActionPosture',
+];
+
+/** Display label for a knob. */
+export const AUTONOMY_KNOB_LABELS: Record<AutonomyKnob, string> = {
+  maxIterations: 'Max iterations',
+  askOnAmbiguity: 'Ask on ambiguity',
+  autoApproveFamilies: 'Auto-approve families',
+  tokenCeilingPerTurn: 'Token ceiling / turn',
+  recapStyle: 'Recap style',
+  continueOnError: 'On tool error',
+  destructiveActionPosture: 'Destructive actions',
+};

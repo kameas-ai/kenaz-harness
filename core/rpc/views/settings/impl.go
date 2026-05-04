@@ -127,6 +127,15 @@ var ErrInvalidCompactionArchiveDays = fmt.Errorf("settings: invalid compactionAr
 // override is negative.
 var ErrInvalidCompactionRecentWindow = errors.New("settings: invalid compactionRecentWindow — must be >= 0")
 
+// ErrInvalidMonthlyCostNotifyUSD is returned when the monthly-spend
+// notification dial is negative or exceeds MaxMonthlyCostNotifyUSD.
+// Zero IS valid — it disables the scheduler completely
+// (token-cost-telemetry-01KQ8TD7 WP06).
+var ErrInvalidMonthlyCostNotifyUSD = fmt.Errorf(
+	"settings: invalid monthlyCostNotifyUsd — must be 0 (disabled) or in (0, %g]",
+	MaxMonthlyCostNotifyUSD,
+)
+
 // validateCompactionFields runs the per-field validation rules for the
 // four compaction settings (mission compaction-strategy-ui-01KQ8TDI
 // WP06 acceptance: clamp rejects out-of-range values at SAVE, not just
@@ -154,6 +163,10 @@ func validateCompactionFields(in Settings) error {
 
 	if in.CompactionRecentWindow < 0 {
 		return ErrInvalidCompactionRecentWindow
+	}
+
+	if v := in.MonthlyCostNotifyUSD; v < 0 || v > MaxMonthlyCostNotifyUSD {
+		return ErrInvalidMonthlyCostNotifyUSD
 	}
 
 	return nil
@@ -597,6 +610,40 @@ func (s *FileStore) SaveFSRequestAccessEnabled(enabled bool) error {
 	return s.saveLocked(got)
 }
 
+// LoadMonthlyCostNotifyUSD returns the persisted monthly-spend
+// notification threshold (token-cost-telemetry-01KQ8TD7 WP06). Zero
+// (the default) disables the scheduler. Errors return zero so a broken
+// settings file silently disables the scheduler rather than spamming
+// a default-on threshold.
+func (s *FileStore) LoadMonthlyCostNotifyUSD() (float64, error) {
+	got, err := s.LoadAll()
+	if err != nil {
+		return 0, err
+	}
+	return got.MonthlyCostNotifyUSD, nil
+}
+
+// SaveMonthlyCostNotifyUSD persists the monthly-spend notification
+// threshold. Negative values are normalised to zero (the disabled
+// state); values above MaxMonthlyCostNotifyUSD are rejected with the
+// typed error so the UI can render specific copy.
+func (s *FileStore) SaveMonthlyCostNotifyUSD(usd float64) error {
+	if usd < 0 {
+		usd = 0
+	}
+	if usd > MaxMonthlyCostNotifyUSD {
+		return ErrInvalidMonthlyCostNotifyUSD
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	got, err := s.loadLocked()
+	if err != nil {
+		return err
+	}
+	got.MonthlyCostNotifyUSD = usd
+	return s.saveLocked(got)
+}
+
 // LoadAutonomyProfile returns the persisted global autonomy.Layer
 // (autonomy-dial-01KR3M2A WP02). Empty / missing field returns the
 // zero Layer, which the resolver treats as "fall through to the next
@@ -705,6 +752,17 @@ func (a *API) Get(_ context.Context) (Settings, error) {
 // Set persists every field.
 func (a *API) Set(_ context.Context, s Settings) error {
 	return a.store.SaveAll(s)
+}
+
+// LoadAutonomyProfile delegates to the store. Returns the empty Layer
+// when no override is persisted.
+func (a *API) LoadAutonomyProfile(_ context.Context) (autonomy.Layer, error) {
+	return a.store.LoadAutonomyProfile()
+}
+
+// SaveAutonomyProfile delegates to the store.
+func (a *API) SaveAutonomyProfile(_ context.Context, layer autonomy.Layer) error {
+	return a.store.SaveAutonomyProfile(layer)
 }
 
 // memoryStore is the test-only in-memory SettingsStore.
@@ -922,6 +980,25 @@ func (m *memoryStore) SaveFSRequestAccessEnabled(enabled bool) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.data.FSRequestAccessDisabled = !enabled
+	return nil
+}
+
+func (m *memoryStore) LoadMonthlyCostNotifyUSD() (float64, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.data.MonthlyCostNotifyUSD, nil
+}
+
+func (m *memoryStore) SaveMonthlyCostNotifyUSD(usd float64) error {
+	if usd < 0 {
+		usd = 0
+	}
+	if usd > MaxMonthlyCostNotifyUSD {
+		return ErrInvalidMonthlyCostNotifyUSD
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.data.MonthlyCostNotifyUSD = usd
 	return nil
 }
 

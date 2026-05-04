@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 
+	"github.com/sigil-tech/kaneaz-harness/core/autonomy"
 	"github.com/sigil-tech/kaneaz-harness/core/mcp/stdio"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/a2a"
 	artifactsview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/artifacts"
@@ -133,6 +134,15 @@ func (s *stubSessions) ClearTitle(_ context.Context, _ string) error {
 func (s *stubSessions) ResumeMessage(_ context.Context, _, _ string) (sessions.ResumeMessageResult, error) {
 	return sessions.ResumeMessageResult{}, errNotWired
 }
+func (s *stubSessions) LoadAutonomyProfile(_ context.Context, _ string) (autonomy.Layer, error) {
+	return autonomy.Layer{}, nil
+}
+func (s *stubSessions) SaveAutonomyProfile(_ context.Context, _ string, _ autonomy.Layer) error {
+	return errNotWired
+}
+func (s *stubSessions) ResolveAutonomy(_ context.Context, _ string) (sessions.ResolvedAutonomy, error) {
+	return sessions.ResolvedAutonomy{}, errNotWired
+}
 
 // ── trust ──────────────────────────────────────────────────────────────
 
@@ -238,6 +248,12 @@ func (s *stubProjects) AddSession(_ context.Context, _, _ string) error        {
 func (s *stubProjects) RemoveSession(_ context.Context, _ string) error        { return errNotWired }
 func (s *stubProjects) ListSessions(_ context.Context, _ string) ([]projectsview.Session, error) {
 	return []projectsview.Session{}, nil
+}
+func (s *stubProjects) LoadAutonomyProfile(_ context.Context, _ string) (autonomy.Layer, error) {
+	return autonomy.Layer{}, nil
+}
+func (s *stubProjects) SaveAutonomyProfile(_ context.Context, _ string, _ autonomy.Layer) error {
+	return errNotWired
 }
 
 // ── attachments ────────────────────────────────────────────────────────

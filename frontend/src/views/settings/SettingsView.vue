@@ -14,8 +14,10 @@ import { computed, onMounted, ref } from 'vue';
 import CanvasHead from '@/shell/CanvasHead.vue';
 import SettingsTabs from '@/views/settings/SettingsTabs.vue';
 import KeyboardShortcuts from '@/components/settings/KeyboardShortcuts.vue';
+import AutonomyPanel from '@/views/settings/AutonomyPanel.vue';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
 import { debouncedSave } from '@/lib/settings';
+import { markdownExtensionsRef } from '@/lib/markdown/injectionKeys';
 import { Plus } from '@/shell/icons';
 import AttachmentRow from '@/components/contexts/AttachmentRow.vue';
 import AttachmentTreePicker from '@/components/contexts/AttachmentTreePicker.vue';
@@ -24,6 +26,7 @@ import type {
   Attachment,
   CompactionAggressiveness,
   CompactionTierExplain,
+  MarkdownExtensions,
   Provider,
   Settings,
   Theme,
@@ -72,6 +75,18 @@ const compactionTiers = ref<CompactionTierExplain[]>([]);
 const compactionProviders = ref<Provider[]>([]);
 const compactionArchiveDaysError = ref<string | null>(null);
 const compactionRecentWindowError = ref<string | null>(null);
+
+/* ── Cost notifications (token-cost-telemetry-01KQ8TD7 §2.5 / WP06) ── */
+/** Working copy of the monthly-spend notification threshold dial in
+ * USD. Zero (the default) disables the scheduler; positive values up
+ * to $10,000 enable the 50/80/100/150/200% escalating notifications.
+ * The dial takes effect on the next chat turn — the threshold checker
+ * reads it fresh on every Manager.Add tail. */
+const monthlyCostNotifyUsd = ref<number>(0);
+const monthlyCostNotifyUsdError = ref<string | null>(null);
+/** Above this the backend rejects with a typed error. Mirrors the
+ * settings.MaxMonthlyCostNotifyUSD constant. */
+const MAX_MONTHLY_COST_NOTIFY_USD = 10000;
 
 /** Derived: the explain row matching the currently-selected tier. */
 const selectedTierExplain = computed<CompactionTierExplain | null>(() => {
@@ -173,6 +188,10 @@ async function refresh() {
   } catch {
     appInfo.value = null;
   }
+  // Hydrate the markdown extensions ref so it round-trips through this view.
+  if (settings.value.markdownExtensions) {
+    markdownExtensionsRef.value = settings.value.markdownExtensions;
+  }
   // Hydrate the compaction working copies from the persisted settings.
   compactionTier.value =
     (settings.value.compactionAggressiveness as CompactionAggressiveness) ||
@@ -183,6 +202,8 @@ async function refresh() {
   compactionRecentWindow.value = settings.value.compactionRecentWindow || 4;
   compactionArchiveDaysError.value = null;
   compactionRecentWindowError.value = null;
+  monthlyCostNotifyUsd.value = settings.value.monthlyCostNotifyUsd ?? 0;
+  monthlyCostNotifyUsdError.value = null;
   // Tier-explain payload + provider list both feed the Compaction
   // section; either failing returns the empty-state UI rather than
   // bricking the page.
@@ -244,6 +265,29 @@ function onCompactionRecentWindowInput(evt: Event) {
   compactionRecentWindowError.value = null;
   compactionRecentWindow.value = n;
   persistCompactionFields();
+}
+
+async function onMonthlyCostNotifyInput(evt: Event) {
+  const raw = (evt.target as HTMLInputElement).value;
+  // Empty string ⇒ user cleared the field ⇒ disable the scheduler (0).
+  const n = raw === '' ? 0 : Number.parseFloat(raw);
+  if (Number.isNaN(n) || n < 0 || n > MAX_MONTHLY_COST_NOTIFY_USD) {
+    monthlyCostNotifyUsdError.value =
+      `Threshold must be 0 (disabled) or between 0.01 and ${MAX_MONTHLY_COST_NOTIFY_USD}.`;
+    return;
+  }
+  monthlyCostNotifyUsdError.value = null;
+  monthlyCostNotifyUsd.value = n;
+  // Persist via the field-level RPC so the threshold checker sees the
+  // change on the very next chat turn without waiting for the
+  // debounced full-Settings save.
+  try {
+    await client.settings.setMonthlyCostNotifyUSD(n);
+    settings.value = { ...settings.value, monthlyCostNotifyUsd: n };
+  } catch (err) {
+    monthlyCostNotifyUsdError.value =
+      err instanceof Error ? err.message : String(err);
+  }
 }
 
 function persistCompactionFields() {
@@ -354,9 +398,49 @@ async function toggleConfirmEach() {
   }
 }
 
+// cross-session-search WP07 — searchEnabled toggle. Inverts the
+// persisted SearchDisabled bit so the on-the-wire shape matches the
+// "default ON / opt-out" contract documented in core/rpc/views/settings.
+const searchEnabled = computed({
+  get: () => !(settings.value.searchDisabled ?? false),
+  set: (next: boolean) => {
+    settings.value = { ...settings.value, searchDisabled: !next };
+  },
+});
+
+async function toggleSearchEnabled() {
+  const next = !searchEnabled.value;
+  searchEnabled.value = next;
+  try {
+    await client.settings.set({ ...settings.value, searchDisabled: !next });
+  } catch {
+    // Revert visually if the write failed.
+    searchEnabled.value = !next;
+  }
+}
+
 function setTheme(t: Theme) {
   settings.value = { ...settings.value, theme: t };
   void client.settings.saveTheme(t).catch(() => {});
+}
+
+/* ── Markdown rendering extensions (markdown-rendering-polish-01KQ8TDT) ── */
+
+const MARKDOWN_EXTENSIONS: ReadonlyArray<{
+  value: MarkdownExtensions;
+  label: string;
+}> = [
+  { value: 'basic', label: 'Basic' },
+  { value: 'math', label: 'Math' },
+  { value: 'diagrams', label: 'Diagrams' },
+  { value: 'all', label: 'All' },
+];
+
+function setMarkdownExtensions(v: MarkdownExtensions) {
+  settings.value = { ...settings.value, markdownExtensions: v };
+  // Live-update mounted MarkdownBlocks via the App-level ref.
+  markdownExtensionsRef.value = v;
+  debouncedSave(client, { ...settings.value, markdownExtensions: v });
 }
 
 function toggleRestore() {
@@ -409,6 +493,37 @@ onMounted(() => {
         </div>
       </section>
 
+      <section data-testid="rendering-section">
+        <h2 class="font-ui text-[11px] uppercase tracking-[0.18em] text-ink-subtle">
+          Rendering
+        </h2>
+        <div
+          class="mt-2 inline-flex rounded-sm border border-border"
+          role="radiogroup"
+          aria-label="Markdown extensions"
+        >
+          <button
+            v-for="opt in MARKDOWN_EXTENSIONS"
+            :key="opt.value"
+            type="button"
+            role="radio"
+            :aria-checked="(settings.markdownExtensions ?? 'all') === opt.value"
+            class="px-3 py-1.5 font-ui text-[12px] border-r border-border last:border-r-0 transition-colors"
+            :class="(settings.markdownExtensions ?? 'all') === opt.value
+              ? 'bg-surface-3 text-ink'
+              : 'bg-surface-1 text-ink-muted hover:text-ink'"
+            :data-testid="`markdown-extensions-${opt.value}`"
+            @click="setMarkdownExtensions(opt.value)"
+          >
+            {{ opt.label }}
+          </button>
+        </div>
+        <p class="mt-1 text-[11px] text-ink-muted">
+          Disable on slow machines if heavy diagrams or math feel laggy.
+          <span class="font-mono">basic</span> turns off both KaTeX and Mermaid.
+        </p>
+      </section>
+
       <section>
         <h2 class="font-ui text-[11px] uppercase tracking-[0.18em] text-ink-subtle">
           Route restoration
@@ -446,6 +561,33 @@ onMounted(() => {
           When on, the harness asks the model to generate a short title for
           each new session after the first exchange. You can override or
           clear it at any time.
+        </p>
+      </section>
+
+      <AutonomyPanel />
+
+      <section data-testid="search-section">
+        <h2 class="font-ui text-[11px] uppercase tracking-[0.18em] text-ink-subtle">
+          Search
+        </h2>
+        <label class="mt-2 flex items-center gap-3 font-ui text-[12px] text-ink">
+          <input
+            type="checkbox"
+            class="accent-accent"
+            :checked="searchEnabled"
+            data-testid="search-enabled-toggle"
+            @change="toggleSearchEnabled"
+          />
+          Enable cross-session search (Cmd+F)
+        </label>
+        <p class="mt-1 text-[11px] text-ink-muted">
+          When on, the Cmd+F modal queries the local FTS5 index across every
+          session. Turning this off short-circuits the search and never
+          touches the index — your message corpus stays out of any UI
+          response. The on-disk index itself is unaffected; toggling back
+          on resumes search immediately. Search activity is logged with a
+          truncated <span class="font-mono">query_hash</span>; the raw query
+          is never recorded.
         </p>
       </section>
 
@@ -660,6 +802,56 @@ onMounted(() => {
             </p>
             <p v-else class="mt-1 font-ui text-[11px] text-ink-muted">
               Most-recent user-assistant pairs that compaction never touches. Default 4.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <section data-testid="cost-notifications-section">
+        <h2 class="font-ui text-[11px] uppercase tracking-[0.18em] text-ink-subtle">
+          Cost notifications
+        </h2>
+        <p class="mt-1 font-ui text-[11px] text-ink-muted">
+          Get a desktop notification when your monthly LLM spend hits
+          50%, 80%, 100%, 150%, or 200% of the threshold below. Each
+          tier fires at most once per calendar month. Hard caps live in
+          your provider dashboard — this dial is visibility only (FR-007c).
+        </p>
+        <div class="mt-3 grid gap-2" style="grid-template-columns: 14ch 1fr">
+          <label
+            for="monthly-cost-notify"
+            class="self-center font-ui text-[12px] text-ink-muted"
+          >
+            Monthly threshold
+          </label>
+          <div>
+            <div class="flex items-center gap-1.5">
+              <span class="font-mono text-[12px] text-ink-muted">$</span>
+              <input
+                id="monthly-cost-notify"
+                type="number"
+                min="0"
+                :max="MAX_MONTHLY_COST_NOTIFY_USD"
+                step="0.01"
+                :value="monthlyCostNotifyUsd"
+                placeholder="0 (disabled)"
+                class="w-28 rounded-sm border border-border bg-surface-1 px-2 py-1 font-ui text-[12px] text-ink"
+                data-testid="monthly-cost-notify-input"
+                @input="onMonthlyCostNotifyInput"
+              />
+              <span class="font-ui text-[11px] text-ink-muted">USD / month</span>
+            </div>
+            <p
+              v-if="monthlyCostNotifyUsdError"
+              class="mt-1 font-ui text-[11px] text-signal-danger"
+              role="alert"
+              data-testid="monthly-cost-notify-error"
+            >
+              {{ monthlyCostNotifyUsdError }}
+            </p>
+            <p v-else class="mt-1 font-ui text-[11px] text-ink-muted">
+              Set to 0 to disable notifications. Maximum
+              ${{ MAX_MONTHLY_COST_NOTIFY_USD }}.
             </p>
           </div>
         </div>
