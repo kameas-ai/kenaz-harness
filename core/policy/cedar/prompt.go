@@ -280,6 +280,13 @@ type pendingEntry struct {
 type Registry struct {
 	dispatcher PromptDispatcher
 
+	// posture controls how interactive prompts are handled based on the
+	// session's resolved autonomy tier (WP05). PostureDefault is the
+	// baseline; PostureAutoAllow short-circuits every RequestInteractive
+	// to Allow without UI dispatch; PostureAlwaysPrompt skips the
+	// transient-grants cache so every call surfaces to the user.
+	posture PromptPosture
+
 	// mu guards pending + transient. RWMutex chosen because the gate
 	// fast path (transient lookup) is read-heavy.
 	mu        sync.RWMutex
@@ -298,6 +305,35 @@ type Registry struct {
 	timeout time.Duration
 }
 
+// PromptPosture controls how the registry handles interactive prompts
+// based on the session's resolved autonomy tier.
+//
+// PostureDefault is the unchanged v0.3.0 behaviour: prompts surface to
+// the UI on NotApplicable, transient-grants cache short-circuits repeat
+// requests.
+//
+// PostureAutoAllow bypasses the prompt entirely: RequestInteractive
+// returns Allow immediately without dispatching any broker event. This
+// is the autonomy-dial "autonomous" / "bold" fast-path (WP05).
+//
+// PostureAlwaysPrompt skips the transient-grants cache and always
+// surfaces the prompt to the UI, even when a prior Allow-once grant
+// covers the resource. This is the "strict" / "cautious" posture that
+// forces explicit user confirmation on every call (WP05).
+type PromptPosture string
+
+const (
+	// PostureDefault is the unmodified prompt behaviour (v0.3.0 baseline).
+	PostureDefault PromptPosture = "default"
+	// PostureAutoAllow auto-resolves every prompt as Allow without
+	// surfacing the UI modal. Cedar deny remains the floor — callers MUST
+	// gate through the engine before calling RequestInteractive.
+	PostureAutoAllow PromptPosture = "auto-allow"
+	// PostureAlwaysPrompt skips the transient-grants cache so every call
+	// is surfaced to the user, even when a cached Allow-once grant exists.
+	PostureAlwaysPrompt PromptPosture = "always-prompt"
+)
+
 // RegistryOption configures a Registry at construction time.
 type RegistryOption func(*Registry)
 
@@ -306,6 +342,14 @@ type RegistryOption func(*Registry)
 // that drive the round-trip without a broker.
 func WithDispatcher(d PromptDispatcher) RegistryOption {
 	return func(r *Registry) { r.dispatcher = d }
+}
+
+// WithPosture sets the prompt posture for the registry. Defaults to
+// PostureDefault when not supplied. Tests and production wiring can
+// override to PostureAutoAllow (autonomous tier) or PostureAlwaysPrompt
+// (strict tier). See PromptPosture for semantics.
+func WithPosture(p PromptPosture) RegistryOption {
+	return func(r *Registry) { r.posture = p }
 }
 
 // WithTimeout overrides PromptTimeout. Test-only seam; production
@@ -394,15 +438,30 @@ func (r *Registry) RequestInteractive(
 		return Resolution{Decision: DecisionDeny, Reason: "invalid surface"}, ErrInvalidSurface
 	}
 
+	// WP05 — autonomy posture fast paths.
+	//
+	// PostureAutoAllow: the resolved tier (autonomous/bold) permits the
+	// call without user interaction. Return Allow immediately, before any
+	// transient-cache or dispatcher work. Cedar deny has already been
+	// checked by the call site gate; this path is only reached on
+	// NotApplicable where no Cedar policy matched.
+	if r.posture == PostureAutoAllow {
+		return Resolution{Decision: DecisionAllowOnce, Reason: "auto-allow (autonomy posture)"}, nil
+	}
+
 	// Transient-grants fast path: a previous Allow-once for the same
 	// resource short-circuits with Allow. FR-010.
+	// PostureAlwaysPrompt skips this cache so every call surfaces to the
+	// UI regardless of prior grants (strict/cautious tier).
 	key := surface.resourceKey()
-	r.mu.RLock()
-	if existing, ok := r.transient[key]; ok && existing.Decision == DecisionAllowOnce {
+	if r.posture != PostureAlwaysPrompt {
+		r.mu.RLock()
+		if existing, ok := r.transient[key]; ok && existing.Decision == DecisionAllowOnce {
+			r.mu.RUnlock()
+			return existing, nil
+		}
 		r.mu.RUnlock()
-		return existing, nil
 	}
-	r.mu.RUnlock()
 
 	// Try to enqueue. Overflow auto-denies without touching the
 	// dispatcher.
@@ -628,5 +687,27 @@ type TransientGrant struct {
 func (r *Registry) ClearTransientGrants() {
 	r.mu.Lock()
 	r.transient = map[string]Resolution{}
+	r.mu.Unlock()
+}
+
+// Posture returns the registry's current prompt posture. A zero-value
+// posture (not set via WithPosture) is normalised to PostureDefault.
+func (r *Registry) Posture() PromptPosture {
+	r.mu.RLock()
+	p := r.posture
+	r.mu.RUnlock()
+	if p == "" {
+		return PostureDefault
+	}
+	return p
+}
+
+// SetPosture updates the prompt posture on a live registry. Safe for
+// concurrent use; takes effect on the next RequestInteractive call.
+// Production wiring calls this when the session's resolved autonomy
+// tier changes (e.g. session override applied mid-turn).
+func (r *Registry) SetPosture(p PromptPosture) {
+	r.mu.Lock()
+	r.posture = p
 	r.mu.Unlock()
 }
