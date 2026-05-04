@@ -14,6 +14,7 @@ import (
 
 	"golang.org/x/mod/semver"
 
+	"github.com/sigil-tech/kaneaz-harness/core/context/audit"
 	"github.com/sigil-tech/kaneaz-harness/core/logging"
 )
 
@@ -61,6 +62,14 @@ type Config struct {
 	// Platform overrides runtime.GOOS+"/"+runtime.GOARCH for tests.
 	// Empty means "use the running build's tuple".
 	Platform string
+
+	// Audit is the optional audit.Emitter the Service uses to record
+	// lifecycle events (auto-update mission WP06). nil disables audit
+	// emission silently — the Service keeps running. The rpc layer
+	// wires the process-wide emitter here once it materializes one;
+	// today the chassis runs with Audit=nil and the privacy-CI guard
+	// is "no emitter, no leak".
+	Audit audit.Emitter
 }
 
 // Service is the production implementation of update.Service. Wired
@@ -114,6 +123,7 @@ func (s *service) Check(ctx context.Context) (Info, error) {
 // resolves the Info. Used by both Check (default channel) and
 // BackgroundPoll (configurable channel).
 func (s *service) checkChannel(ctx context.Context, channel string) (Info, error) {
+	start := time.Now()
 	url := s.cfg.ManifestURL
 	if url == "" {
 		url = channelManifestURL(channel)
@@ -133,6 +143,7 @@ func (s *service) checkChannel(ctx context.Context, channel string) (Info, error
 		Channel:        channel,
 	}
 	if err != nil {
+		emitFailed(ctx, s.cfg.Audit, "check", err)
 		return info, err
 	}
 	info.AvailableVersion = m.Version
@@ -156,6 +167,7 @@ func (s *service) checkChannel(ctx context.Context, channel string) (Info, error
 		"available", info.AvailableVersion,
 		"actionable", info.Available && !info.SkippedByUser,
 	)
+	emitChecked(ctx, s.cfg.Audit, channel, info.AvailableVersion, time.Since(start))
 	return info, nil
 }
 
@@ -241,7 +253,9 @@ func (s *service) downloadPump(ctx context.Context, info Info, dest string, prog
 	tmp := dest + ".part"
 	f, err := os.Create(tmp)
 	if err != nil {
-		progress <- DownloadProgress{Done: true, Err: fmt.Errorf("update: create staged %s: %w", tmp, err)}
+		err = fmt.Errorf("update: create staged %s: %w", tmp, err)
+		emitFailed(ctx, s.cfg.Audit, "download", err)
+		progress <- DownloadProgress{Done: true, Err: err}
 		return
 	}
 	closed := false
@@ -255,17 +269,23 @@ func (s *service) downloadPump(ctx context.Context, info Info, dest string, prog
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, info.DownloadURL, nil)
 	if err != nil {
-		progress <- DownloadProgress{Done: true, Err: fmt.Errorf("update: build download request: %w", err)}
+		err = fmt.Errorf("update: build download request: %w", err)
+		emitFailed(ctx, s.cfg.Audit, "download", err)
+		progress <- DownloadProgress{Done: true, Err: err}
 		return
 	}
 	resp, err := s.client.Do(req)
 	if err != nil {
-		progress <- DownloadProgress{Done: true, Err: fmt.Errorf("update: GET %s: %w", info.DownloadURL, err)}
+		err = fmt.Errorf("update: GET %s: %w", info.DownloadURL, err)
+		emitFailed(ctx, s.cfg.Audit, "download", err)
+		progress <- DownloadProgress{Done: true, Err: err}
 		return
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode/100 != 2 {
-		progress <- DownloadProgress{Done: true, Err: fmt.Errorf("update: download %s returned %s", info.DownloadURL, resp.Status)}
+		err = fmt.Errorf("update: download %s returned %s", info.DownloadURL, resp.Status)
+		emitFailed(ctx, s.cfg.Audit, "download", err)
+		progress <- DownloadProgress{Done: true, Err: err}
 		return
 	}
 
@@ -277,14 +297,18 @@ func (s *service) downloadPump(ctx context.Context, info Info, dest string, prog
 	for {
 		select {
 		case <-ctx.Done():
-			progress <- DownloadProgress{Bytes: bytes, Total: total, Done: true, Err: ctx.Err()}
+			cerr := ctx.Err()
+			emitFailed(ctx, s.cfg.Audit, "download", cerr)
+			progress <- DownloadProgress{Bytes: bytes, Total: total, Done: true, Err: cerr}
 			return
 		default:
 		}
 		n, rerr := resp.Body.Read(buf)
 		if n > 0 {
 			if _, werr := f.Write(buf[:n]); werr != nil {
-				progress <- DownloadProgress{Bytes: bytes, Total: total, Done: true, Err: fmt.Errorf("update: write staged: %w", werr)}
+				werr = fmt.Errorf("update: write staged: %w", werr)
+				emitFailed(ctx, s.cfg.Audit, "download", werr)
+				progress <- DownloadProgress{Bytes: bytes, Total: total, Done: true, Err: werr}
 				return
 			}
 			_, _ = hasher.Write(buf[:n])
@@ -301,7 +325,9 @@ func (s *service) downloadPump(ctx context.Context, info Info, dest string, prog
 			break
 		}
 		if rerr != nil {
-			progress <- DownloadProgress{Bytes: bytes, Total: total, Done: true, Err: fmt.Errorf("update: read body: %w", rerr)}
+			rerr = fmt.Errorf("update: read body: %w", rerr)
+			emitFailed(ctx, s.cfg.Audit, "download", rerr)
+			progress <- DownloadProgress{Bytes: bytes, Total: total, Done: true, Err: rerr}
 			return
 		}
 	}
@@ -311,13 +337,17 @@ func (s *service) downloadPump(ctx context.Context, info Info, dest string, prog
 	got := hasher.Sum()
 	if !equalFold(got, info.Sha256) {
 		_ = os.Remove(tmp)
-		progress <- DownloadProgress{Bytes: bytes, Total: total, Done: true, Err: fmt.Errorf("%w: got %s want %s", errSha256Mismatch, got, info.Sha256)}
+		err = fmt.Errorf("%w: got %s want %s", errSha256Mismatch, got, info.Sha256)
+		emitFailed(ctx, s.cfg.Audit, "download", err)
+		progress <- DownloadProgress{Bytes: bytes, Total: total, Done: true, Err: err}
 		return
 	}
 
 	if err := os.Rename(tmp, dest); err != nil {
 		_ = os.Remove(tmp)
-		progress <- DownloadProgress{Bytes: bytes, Total: total, Done: true, Err: fmt.Errorf("update: rename staged %s: %w", tmp, err)}
+		err = fmt.Errorf("update: rename staged %s: %w", tmp, err)
+		emitFailed(ctx, s.cfg.Audit, "download", err)
+		progress <- DownloadProgress{Bytes: bytes, Total: total, Done: true, Err: err}
 		return
 	}
 
@@ -327,6 +357,7 @@ func (s *service) downloadPump(ctx context.Context, info Info, dest string, prog
 		"sha256", got,
 		"platform", s.platform(),
 	)
+	emitDownloaded(ctx, s.cfg.Audit, info.AvailableVersion, bytes)
 	progress <- DownloadProgress{Bytes: bytes, Total: total, Done: true}
 }
 
@@ -369,12 +400,19 @@ func defaultStagedName(platform, version string) string {
 // ApplyAndRestart performs the platform-specific swap via Swapper
 // and exits. Tests inject a fake Swapper whose Restart records the
 // call instead of os.Exit.
+//
+// emitApplied fires BEFORE Swap so the audit event lands even if the
+// downstream Swap or Restart call kills the process (the macOS/Linux
+// happy path's Restart is fork-exec + os.Exit; the audit flush would
+// otherwise race with process teardown).
 func (s *service) ApplyAndRestart(ctx context.Context, staged StagedUpdate) error {
 	running := s.cfg.RunningBinaryPath
 	if running == "" {
 		exe, err := os.Executable()
 		if err != nil {
-			return fmt.Errorf("update: resolve running binary: %w", err)
+			err = fmt.Errorf("update: resolve running binary: %w", err)
+			emitFailed(ctx, s.cfg.Audit, "apply", err)
+			return err
 		}
 		running = exe
 	}
@@ -383,12 +421,18 @@ func (s *service) ApplyAndRestart(ctx context.Context, staged StagedUpdate) erro
 		"platform", staged.Platform,
 		"sha256", staged.Sha256,
 	)
+	emitApplied(ctx, s.cfg.Audit, s.cfg.CurrentVersion, staged.TargetVersion, staged.Platform)
 	if err := s.swapper.Swap(ctx, staged, running, s.cfg.DataDir); err != nil {
 		logging.L().Warn("update.apply.failed", "err", err.Error())
+		emitFailed(ctx, s.cfg.Audit, "apply", err)
 		return err
 	}
 	logging.L().Info("update.apply.swapped", "version", staged.TargetVersion)
-	return s.swapper.Restart(ctx, running)
+	if err := s.swapper.Restart(ctx, running); err != nil {
+		emitFailed(ctx, s.cfg.Audit, "apply", err)
+		return err
+	}
+	return nil
 }
 
 // ListSkipped returns a snapshot of the persisted skip set. Sorted
@@ -458,6 +502,7 @@ func (s *service) SkipVersion(ctx context.Context, version string) error {
 		return fmt.Errorf("update: persist skip: %w", err)
 	}
 	logging.L().Info("update.skip", "version", version)
+	emitSkipped(ctx, s.cfg.Audit, version, "user_clicked_skip")
 	return nil
 }
 
@@ -475,13 +520,23 @@ func (s *service) BackgroundPoll(ctx context.Context, interval time.Duration, ch
 	t := time.NewTicker(interval)
 	defer t.Stop()
 
+	// previousAvailable tracks the prior tick's actionable-available
+	// signal so we can fire KindUpdateAvailable only on the false→true
+	// transition (not every tick). Reset to false when the user skips
+	// the version mid-flight (SkippedByUser flips back to suppress).
+	previousAvailable := false
 	tick := func() {
 		info, err := s.checkChannel(ctx, channel)
 		if err != nil {
 			logging.L().Warn("update.poll.failed", "channel", channel, "err", err.Error())
 			return
 		}
-		if info.Available && !info.SkippedByUser && s.cfg.Publisher != nil {
+		actionable := info.Available && !info.SkippedByUser
+		if actionable && !previousAvailable {
+			emitAvailable(ctx, s.cfg.Audit, info.CurrentVersion, info.AvailableVersion, channel)
+		}
+		previousAvailable = actionable
+		if actionable && s.cfg.Publisher != nil {
 			s.cfg.Publisher.Publish(AvailableTopic, info)
 			logging.L().Info("update.poll.announced",
 				"channel", channel,

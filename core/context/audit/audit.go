@@ -28,7 +28,12 @@ const (
 	KindResolutionCompleted Kind = "context.resolution_completed"
 	KindInjectionEmitted    Kind = "context.injection_emitted"
 	KindScopeRevoked        Kind = "context.scope_revoked"
-	KindUpdateAvailable     Kind = "context.update_available"
+	// KindContextUpdateAvailable signals that a context-pack update is
+	// available (FR-017). Distinct from KindUpdateAvailable below, which
+	// is the harness binary auto-update mission's "newer release found"
+	// kind. Both are intentional — the strings differ
+	// ("context.update_available" vs "update.available").
+	KindContextUpdateAvailable Kind = "context.update_available"
 
 	// Compaction kinds (compaction-strategy-ui-01KQ8TDI WP01). These
 	// signal lifecycle events of the summarize-then-replace compaction
@@ -94,6 +99,24 @@ const (
 	KindWorkflowSaved      Kind = "workflow.saved"
 	KindWorkflowDeleted    Kind = "workflow.deleted"
 	KindWorkflowStepFailed Kind = "workflow.step_failed"
+
+	// Auto-update lifecycle kinds (auto-update mission, v0.4.0 WP06).
+	// Six kinds mirror the Service lifecycle: every Check call,
+	// transition false→true on Available, Download success, Apply
+	// (emitted before the swap so it lands even if exec fails),
+	// SkipVersion, and any classified failure across Check / Download
+	// / Apply.
+	//
+	// Privacy invariant — payloads carry ONLY version strings, sizes,
+	// and error class labels. Manifest URLs (which can carry signed
+	// query tokens), manifest body, release notes, and download URLs
+	// are NEVER emitted.
+	KindUpdateChecked    Kind = "update.checked"
+	KindUpdateAvailable  Kind = "update.available"
+	KindUpdateDownloaded Kind = "update.downloaded"
+	KindUpdateApplied    Kind = "update.applied"
+	KindUpdateSkipped    Kind = "update.skipped"
+	KindUpdateFailed     Kind = "update.failed"
 )
 
 // Event is the wire shape passed to the event log. The concrete event-log
@@ -178,8 +201,9 @@ type ScopeRevokedPayload struct {
 	Role string       `json:"role"`
 }
 
-// UpdateAvailablePayload — FR-017.
-type UpdateAvailablePayload struct {
+// ContextUpdateAvailablePayload — FR-017. Carries signalling for
+// KindContextUpdateAvailable (context-pack update available).
+type ContextUpdateAvailablePayload struct {
 	Pack             pack.PackRef `json:"pack"`
 	AvailableVersion string       `json:"available_version"`
 	DiffSummary      string       `json:"diff_summary"`
@@ -322,6 +346,80 @@ type WorkflowStepFailedPayload struct {
 	RunID      string `json:"run_id"`
 	StepID     string `json:"step_id"`
 	StepKind   string `json:"step_kind"`
+	ErrorClass string `json:"error_class"`
+}
+
+// ─── Auto-update payloads (auto-update mission, v0.4.0 WP06) ─────────
+//
+// Privacy invariant: every field below is either a version string, a
+// size, a duration, a platform tuple, a boolean, or a typed error class
+// label. Manifest URLs (which can carry signed query tokens), download
+// URLs, manifest body bytes, and release-notes content are NEVER
+// recorded.
+
+// UpdateCheckedAttrs is emitted on every successful Service.Check
+// return (background poll or manual). Took is the wall-clock manifest
+// fetch + parse cost in milliseconds; ResultVersion is the manifest's
+// advertised version (empty on a manifest fetch error — the failure
+// path emits KindUpdateFailed instead, never UpdateChecked).
+type UpdateCheckedAttrs struct {
+	Channel       string `json:"channel"`
+	ResultVersion string `json:"result_version,omitempty"`
+	Took          int    `json:"took_ms"`
+}
+
+// UpdateAvailableAttrs fires on the false→true transition of
+// Info.Available during a background poll. CurrentVersion is the
+// running build's version; AvailableVersion is the manifest's newer
+// version. Channel is "stable" or "prerelease".
+type UpdateAvailableAttrs struct {
+	CurrentVersion   string `json:"current_version"`
+	AvailableVersion string `json:"available_version"`
+	Channel          string `json:"channel"`
+}
+
+// UpdateDownloadedAttrs fires on Service.Download success. Bytes is
+// the streamed payload size in bytes; Sha256Match is true (the success
+// path implies a verified digest — the field is recorded so audit
+// consumers can pivot on it explicitly without parsing free text).
+type UpdateDownloadedAttrs struct {
+	Version     string `json:"version"`
+	Bytes       int64  `json:"bytes"`
+	Sha256Match bool   `json:"sha256_match"`
+}
+
+// UpdateAppliedAttrs fires immediately BEFORE the platform Swap call
+// in Service.ApplyAndRestart, so the event lands in the audit log even
+// if the subsequent fork-exec fails. Platform is the GOOS/GOARCH tuple
+// of the staged artifact.
+type UpdateAppliedAttrs struct {
+	FromVersion string `json:"from_version"`
+	ToVersion   string `json:"to_version"`
+	Platform    string `json:"platform"`
+}
+
+// UpdateSkippedAttrs fires on Service.SkipVersion success. Reason is a
+// short opaque label ("user_clicked_skip" today; reserved for future
+// "auto_skipped_due_to_signature_failure" etc).
+type UpdateSkippedAttrs struct {
+	Version string `json:"version"`
+	Reason  string `json:"reason"`
+}
+
+// UpdateFailedAttrs fires on any classified failure from Check,
+// Download, or Apply. Action is one of {"check","download","apply"}.
+// ErrorClass is one of:
+//
+//	"network"          — DNS / connect / read-error / non-2xx HTTP
+//	"sha_mismatch"     — staged bytes failed sha256 verification
+//	"swap_failed"      — platform Swap returned an error
+//	"manifest_invalid" — manifest body decoded to garbage / missing version
+//	"other"            — fall-through bucket
+//
+// The raw error message is NEVER recorded (it can carry user inputs or
+// URL fragments) — only the classification.
+type UpdateFailedAttrs struct {
+	Action     string `json:"action"`
 	ErrorClass string `json:"error_class"`
 }
 
