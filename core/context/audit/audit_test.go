@@ -171,6 +171,76 @@ func TestEmit_RoundTripSessionAutoTitledPayload_FailurePath(t *testing.T) {
 	}
 }
 
+func TestEmit_RoundTripUpdateAttrs(t *testing.T) {
+	// Six-kind round-trip for the auto-update mission (v0.4.0 WP06).
+	// Verifies every Attrs payload survives Marshal/Unmarshal so the
+	// audit consumer sees the fields the Service emitted.
+	em := &recordingEmitter{}
+	now := time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC)
+
+	cases := []struct {
+		name    string
+		kind    Kind
+		payload any
+	}{
+		{"checked", KindUpdateChecked, UpdateCheckedAttrs{Channel: "stable", ResultVersion: "v0.4.0", Took: 42}},
+		{"available", KindUpdateAvailable, UpdateAvailableAttrs{CurrentVersion: "v0.3.0", AvailableVersion: "v0.4.0", Channel: "stable"}},
+		{"downloaded", KindUpdateDownloaded, UpdateDownloadedAttrs{Version: "v0.4.0", Bytes: 31_457_280, Sha256Match: true}},
+		{"applied", KindUpdateApplied, UpdateAppliedAttrs{FromVersion: "v0.3.0", ToVersion: "v0.4.0", Platform: "darwin/arm64"}},
+		{"skipped", KindUpdateSkipped, UpdateSkippedAttrs{Version: "v0.4.0", Reason: "user_clicked_skip"}},
+		{"failed", KindUpdateFailed, UpdateFailedAttrs{Action: "download", ErrorClass: "sha_mismatch"}},
+	}
+	for _, c := range cases {
+		em.events = nil
+		if err := Emit(context.Background(), em, c.kind, c.payload, now); err != nil {
+			t.Fatalf("Emit %s: %v", c.name, err)
+		}
+		if len(em.events) != 1 {
+			t.Fatalf("emitted %d events, want 1", len(em.events))
+		}
+		e := em.events[0]
+		if e.Kind != c.kind {
+			t.Errorf("Kind = %q, want %q", e.Kind, c.kind)
+		}
+		if !e.TS.Equal(now) {
+			t.Errorf("TS = %v, want %v", e.TS, now)
+		}
+		// Round-trip: the marshaled payload must contain the source
+		// fields verbatim.
+		raw, _ := json.Marshal(c.payload)
+		if string(e.Payload) != string(raw) {
+			t.Errorf("payload mismatch: got %s want %s", e.Payload, raw)
+		}
+		// Privacy invariant — none of the auto-update payload bytes
+		// should contain a URL fragment.
+		if bytesContains(e.Payload, "http://") || bytesContains(e.Payload, "https://") {
+			t.Errorf("auto-update payload leaks a URL: %s", e.Payload)
+		}
+	}
+}
+
+// bytesContains is a tiny helper to keep the privacy assertion above
+// readable without importing strings/bytes for one call.
+func bytesContains(s json.RawMessage, sub string) bool {
+	if len(sub) == 0 {
+		return true
+	}
+	b := []byte(sub)
+	for i := 0; i+len(b) <= len(s); i++ {
+		match := true
+		for j := 0; j < len(b); j++ {
+			if s[i+j] != b[j] {
+				match = false
+				break
+			}
+		}
+		if match {
+			return true
+		}
+	}
+	return false
+}
+
 func TestEmit_RoundTripCompactedOriginalsDeletedPayload(t *testing.T) {
 	em := &recordingEmitter{}
 	now := time.Date(2026, 4, 28, 12, 0, 0, 0, time.UTC)
