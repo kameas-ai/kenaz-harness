@@ -208,7 +208,9 @@ jobs:
 
           APPDIR="build/bin/Kenaz_Harness.AppDir"
           mkdir -p "$APPDIR/usr/bin"
-          cp build/bin/kenaz-harness "$APPDIR/usr/bin/kenaz-harness"
+          # wails build outputs to build/bin/Kenaz on Linux
+          # (productName="Kenaz Harness", outputfilename="Kenaz" in wails.json).
+          cp "build/bin/Kenaz" "$APPDIR/usr/bin/kenaz-harness"
           cp build/appicon.png "$APPDIR/Kenaz_Harness.png"
           cp build/appicon.png "$APPDIR/.DirIcon"
 
