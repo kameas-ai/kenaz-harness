@@ -198,6 +198,11 @@ type RunOptions struct {
 	// ProgressSink, when non-nil, receives one event per step
 	// transition. The RPC layer fans these onto the broker topic.
 	ProgressSink func(ProgressEvent)
+	// SkipCache, when true, bypasses the rerun_policy cache check
+	// even if the workflow declares a policy. Used by the
+	// confirmation-prompt path: the user said "yes, re-run anyway",
+	// so the second invocation needs to dispatch fresh.
+	SkipCache bool
 }
 
 // ProgressEvent is published once per step transition.
@@ -210,6 +215,10 @@ type ProgressEvent struct {
 	Output     string    `json:"output,omitempty"`
 	Err        string    `json:"error,omitempty"`
 	At         time.Time `json:"at"`
+	// Inline is true when the event was emitted by InlineRun. The
+	// chat composer uses this flag to route events to the inline
+	// transcript instead of spawning a workflow_run session row.
+	Inline bool `json:"inline,omitempty"`
 }
 
 // StepRunner is the per-kind execution interface. Beta ships
@@ -222,13 +231,18 @@ type StepRunner interface {
 
 // Sentinels.
 var (
-	ErrFeatureDisabled    = errors.New("workflows: feature disabled")
-	ErrUnknownStepKind    = errors.New("workflows: unknown step kind")
-	ErrInlineMultiStep    = errors.New("workflows: inline_run requires exactly one model_turn step")
-	ErrForwardStepRef     = errors.New("workflows: step references a later step")
-	ErrFileTooLarge       = errors.New("workflows: file exceeds 256 KiB")
-	ErrInvalidID          = errors.New("workflows: invalid id")
-	ErrUnknownReference   = errors.New("workflows: unknown reference")
-	ErrCancelled          = errors.New("workflows: run cancelled")
-	ErrWorkflowNotFound   = errors.New("workflows: workflow not found")
+	ErrFeatureDisabled  = errors.New("workflows: feature disabled")
+	ErrUnknownStepKind  = errors.New("workflows: unknown step kind")
+	ErrInlineMultiStep  = errors.New("workflows: inline_run requires exactly one model_turn step")
+	ErrForwardStepRef   = errors.New("workflows: step references a later step")
+	ErrFileTooLarge     = errors.New("workflows: file exceeds 256 KiB")
+	ErrInvalidID        = errors.New("workflows: invalid id")
+	ErrUnknownReference = errors.New("workflows: unknown reference")
+	ErrCancelled        = errors.New("workflows: run cancelled")
+	ErrWorkflowNotFound = errors.New("workflows: workflow not found")
+	// ErrRerunPolicyAsk is the typed envelope returned by ResolveRerun
+	// when policy=prompt and a cached identical run exists. Callers
+	// catch this and surface a confirm prompt to the user; the user's
+	// choice routes back through Run with RunOptions.SkipCache=true.
+	ErrRerunPolicyAsk = errors.New("workflows: rerun_policy=prompt requires user confirmation")
 )
