@@ -37,6 +37,11 @@ type Engine struct {
 	Runners map[StepKind]StepRunner
 	// Now is a pluggable wall-clock; nil uses time.Now().UTC().
 	Now func() time.Time
+	// Cache, when non-nil, is consulted before dispatching steps and
+	// updated after a successful run. The (workflow, inputs) tuple
+	// keys the cache; the workflow's RerunPolicy controls how a hit
+	// is handled (see ResolveRerun).
+	Cache Cache
 }
 
 // NewEngine returns an Engine wired with the package-default runners.
@@ -81,6 +86,34 @@ func (e *Engine) Run(ctx context.Context, wf Workflow, inputs map[string]TypedVa
 			Err:        err.Error(),
 		}, err
 	}
+
+	// rerun_policy gate. Honoured only when the engine has a cache
+	// wired AND the workflow declares a non-empty policy. The default
+	// (empty / "always" / "fresh") proceeds straight to dispatch.
+	if e.Cache != nil && wf.RerunPolicy != "" && !opts.SkipCache {
+		policy := NormalizeRerunPolicy(wf.RerunPolicy)
+		hashable := typedValuesAsAny(inputs)
+		cached, prompt, rerr := ResolveRerun(ctx, e.Cache, wf.ID, hashable, policy)
+		switch {
+		case prompt:
+			return &Run{
+				ID:         randomRunID(),
+				WorkflowID: wf.ID,
+				Status:     "needs_confirmation",
+				StartedAt:  e.now(),
+				EndedAt:    e.now(),
+				Err:        ErrRerunPolicyAsk.Error(),
+			}, ErrRerunPolicyAsk
+		case rerr != nil:
+			// Resolver errors are non-fatal — proceed with a fresh run
+			// rather than blocking on a transient cache failure.
+			_ = rerr
+		case cached != nil:
+			r := applyCachedRun(cached, wf.ID, e.now())
+			return r, nil
+		}
+	}
+
 	rc := &RunContext{
 		RunID:       randomRunID(),
 		Workflow:    wf,
@@ -177,7 +210,28 @@ func (e *Engine) Run(ctx context.Context, wf Workflow, inputs map[string]TypedVa
 	run.Status = "completed"
 	run.EndedAt = e.now()
 	run.Outputs = copyOutputs(rc)
+
+	// Cache write-back. Only successful runs are cached; failed /
+	// interrupted runs leave the prior cache row (if any) untouched.
+	if e.Cache != nil && wf.RerunPolicy != "" {
+		hashable := typedValuesAsAny(inputs)
+		hash := HashInputs(hashable)
+		_ = e.Cache.Put(ctx, wf.ID, hash, runResultFromRun(run))
+	}
 	return run, nil
+}
+
+// typedValuesAsAny lifts the engine's TypedValue inputs map into the
+// loose map[string]any shape ResolveRerun / HashInputs accept.
+func typedValuesAsAny(in map[string]TypedValue) map[string]any {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]any, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
 }
 
 func mergeInputDefaults(wf Workflow, supplied map[string]TypedValue) map[string]TypedValue {

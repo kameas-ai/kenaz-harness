@@ -38,7 +38,13 @@ func Validate(w Workflow) error {
 	if len(w.Steps) == 0 {
 		return fmt.Errorf("workflows: at least one step required")
 	}
-	if w.RerunPolicy != "" && w.RerunPolicy != "fresh" && w.RerunPolicy != "continue" && w.RerunPolicy != "ask" {
+	switch w.RerunPolicy {
+	case "", "fresh", "continue", "ask",
+		// WP08 canonical aliases — kept alongside the WP01 vocabulary
+		// so existing fixtures keep parsing while new authors can use
+		// the names that match the rerun resolver behaviour.
+		"always", "skip", "prompt":
+	default:
 		return fmt.Errorf("workflows: invalid rerun_policy %q", w.RerunPolicy)
 	}
 
