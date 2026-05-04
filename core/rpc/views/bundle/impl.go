@@ -18,6 +18,7 @@ import (
 
 	"github.com/sigil-tech/kaneaz-harness/core/bundle/cache"
 	"github.com/sigil-tech/kaneaz-harness/core/bundle/lockfile"
+	"github.com/sigil-tech/kaneaz-harness/core/bundle/manifest"
 )
 
 // Reader is the minimal interface this impl needs — backed in
@@ -25,6 +26,13 @@ import (
 // in-memory blob in tests.
 type Reader interface {
 	ReadLockfile() ([]byte, error)
+}
+
+// Writer mirrors Reader for the install/remove path. Implementations
+// are responsible for atomic on-disk replacement; the fsReader/Writer
+// in this package uses a tmp-file + os.Rename to satisfy that.
+type Writer interface {
+	WriteLockfile(data []byte) error
 }
 
 // CASLike is the slimmed view of cache.CAS used here. Lets tests
@@ -37,6 +45,7 @@ type CASLike interface {
 type API struct {
 	mu     sync.RWMutex
 	reader Reader
+	writer Writer
 	cas    CASLike
 }
 
@@ -46,6 +55,11 @@ type Option func(*API)
 // WithReader injects a lockfile reader.
 func WithReader(r Reader) Option {
 	return func(a *API) { a.reader = r }
+}
+
+// WithWriter injects a lockfile writer. Required for Install/Remove.
+func WithWriter(w Writer) Option {
+	return func(a *API) { a.writer = w }
 }
 
 // WithCAS injects the bundle cache (cache.CAS satisfies CASLike).
@@ -83,6 +97,47 @@ func (r *fsReader) ReadLockfile() ([]byte, error) {
 		return nil, fmt.Errorf("bundle: read lockfile: %w", err)
 	}
 	return b, nil
+}
+
+// fsWriter writes the lockfile back atomically (tmp + rename).
+type fsWriter struct {
+	path string
+}
+
+// NewFSWriter returns a writer anchored at the harness data dir.
+func NewFSWriter(dataDir string) Writer {
+	return &fsWriter{path: filepath.Join(dataDir, "kaneaz.lock")}
+}
+
+func (w *fsWriter) WriteLockfile(data []byte) error {
+	dir := filepath.Dir(w.path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("bundle: mkdir %s: %w", dir, err)
+	}
+	tmp, err := os.CreateTemp(dir, ".kaneaz.lock.tmp-*")
+	if err != nil {
+		return fmt.Errorf("bundle: create tmp lockfile: %w", err)
+	}
+	tmpPath := tmp.Name()
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("bundle: write tmp lockfile: %w", err)
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("bundle: sync tmp lockfile: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("bundle: close tmp lockfile: %w", err)
+	}
+	if err := os.Rename(tmpPath, w.path); err != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("bundle: rename lockfile: %w", err)
+	}
+	return nil
 }
 
 // List returns every bundle in the lockfile. Sorted by name for a
@@ -171,6 +226,139 @@ func lockedToBundle(lb lockfile.LockedBundle, cas CASLike, includeArtifacts bool
 		out.Artifacts = arts
 	}
 	return out
+}
+
+// Install registers a bundle in the lockfile. Beta-scoped to the
+// local_path channel: req.Path must point at a directory that contains
+// a kaneaz.yaml manifest at its root. The manifest is parsed, validated,
+// and converted into a LockedBundle entry that's appended to the
+// lockfile (replacing any existing entry of the same name). Artifact
+// bytes are NOT fetched into the CAS by this minimal install path —
+// the resolver mission ships the byte-fetch pipeline; this beta surface
+// surfaces "uncached" tier annotations on the resulting list rows so
+// the operator knows the bundle is registered but not yet materialized.
+func (a *API) Install(_ context.Context, req InstallRequest) (Bundle, error) {
+	if a.reader == nil || a.writer == nil {
+		return Bundle{}, fmt.Errorf("bundle: install requires a writable lockfile")
+	}
+	if req.Kind != "local_path" {
+		return Bundle{}, fmt.Errorf("bundle: install kind %q unsupported (v0.3.0 beta: local_path only)", req.Kind)
+	}
+	if req.Path == "" {
+		return Bundle{}, fmt.Errorf("bundle: install path is required")
+	}
+	if !filepath.IsAbs(req.Path) {
+		return Bundle{}, fmt.Errorf("bundle: install path %q must be absolute", req.Path)
+	}
+	manifestPath := filepath.Join(req.Path, "kaneaz.yaml")
+	raw, err := os.ReadFile(manifestPath)
+	if err != nil {
+		return Bundle{}, fmt.Errorf("bundle: read manifest %s: %w", manifestPath, err)
+	}
+	m, err := manifest.Parse(raw)
+	if err != nil {
+		return Bundle{}, fmt.Errorf("bundle: parse manifest: %w", err)
+	}
+	if err := m.Validate(manifest.ValidateOpts{}); err != nil {
+		return Bundle{}, fmt.Errorf("bundle: validate manifest: %w", err)
+	}
+
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	existing, err := a.reader.ReadLockfile()
+	if err != nil {
+		return Bundle{}, err
+	}
+	lf, err := lockfile.Read(existing)
+	if err != nil {
+		return Bundle{}, fmt.Errorf("bundle: parse lockfile: %w", err)
+	}
+
+	lb := lockfile.LockedBundle{
+		Name:        m.Name,
+		Version:     m.Version,
+		Source:      "local_path:" + req.Path,
+		ContentHash: m.ContentHash(),
+	}
+	for _, ad := range m.Artifacts {
+		lb.Artifacts = append(lb.Artifacts, lockfile.LockedArtifact{
+			Name:        ad.Name,
+			Kind:        ad.Kind,
+			ContentHash: ad.ContentHash,
+		})
+	}
+	if len(m.Signatures) > 0 {
+		// Lockfile carries a single signature ref — surface the first one
+		// as a presence marker; richer trust metadata is the resolver
+		// mission's responsibility.
+		lb.SignatureRef = m.Signatures[0].Locator
+	}
+
+	// Replace any existing entry with the same name.
+	replaced := false
+	for i := range lf.Bundles {
+		if lf.Bundles[i].Name == lb.Name {
+			lf.Bundles[i] = lb
+			replaced = true
+			break
+		}
+	}
+	if !replaced {
+		lf.Bundles = append(lf.Bundles, lb)
+	}
+
+	out, err := lockfile.Write(lf)
+	if err != nil {
+		return Bundle{}, fmt.Errorf("bundle: write lockfile: %w", err)
+	}
+	if err := a.writer.WriteLockfile(out); err != nil {
+		return Bundle{}, err
+	}
+	return lockedToBundle(lb, a.cas, true), nil
+}
+
+// Remove drops the bundle whose name matches id from the lockfile and
+// writes the result back. Removing an unknown id is a no-op (returns
+// nil) so the UI can surface "remove" without first verifying presence.
+func (a *API) Remove(_ context.Context, id string) error {
+	if a.reader == nil || a.writer == nil {
+		return fmt.Errorf("bundle: remove requires a writable lockfile")
+	}
+	if id == "" {
+		return fmt.Errorf("bundle: remove id is required")
+	}
+
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	existing, err := a.reader.ReadLockfile()
+	if err != nil {
+		return err
+	}
+	lf, err := lockfile.Read(existing)
+	if err != nil {
+		return fmt.Errorf("bundle: parse lockfile: %w", err)
+	}
+	kept := make([]lockfile.LockedBundle, 0, len(lf.Bundles))
+	removed := false
+	for _, b := range lf.Bundles {
+		if b.Name == id {
+			removed = true
+			continue
+		}
+		kept = append(kept, b)
+	}
+	if !removed {
+		// Idempotent: nothing to do.
+		return nil
+	}
+	lf.Bundles = kept
+	out, err := lockfile.Write(lf)
+	if err != nil {
+		return fmt.Errorf("bundle: write lockfile: %w", err)
+	}
+	return a.writer.WriteLockfile(out)
 }
 
 // CASFromCache adapts a cache.CAS into the CASLike interface. Lets

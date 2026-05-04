@@ -137,6 +137,13 @@ type Env struct {
 	// it to look up which provider authorises the requested model.
 	// Nil means /model returns an error result.
 	Providers ProviderLister
+	// Memory is the long-term-memory gateway used by /memorize,
+	// /recall, /forget. Nil means those commands return a friendly
+	// "memory subsystem not wired" error result.
+	Memory MemoryGateway
+	// Branches is the conversation-branching gateway used by /branch.
+	// Nil means /branch returns a friendly "branching not wired" error.
+	Branches BranchGateway
 	// Registry references the owning Registry so meta-commands like
 	// /help can enumerate their siblings without a back-reference
 	// the registry would have to inject post-construction. Always
@@ -176,6 +183,88 @@ type Provider struct {
 	Kind         string
 	DefaultModel string
 	Models       []string
+}
+
+// MemoryGateway is the narrow contract /memorize, /recall, /forget
+// consume. The rpc layer adapts core/memory.Store + core/memory.Embedder
+// (plus the project resolver) onto this shape so the slashcmd package
+// stays out of the core/memory import graph for unit-test isolation.
+//
+// Memorize persists the supplied text as a new chunk, marks it pinned
+// (immune to the prune sweep) and returns the new chunk id.
+//
+// Recall runs a similarity query against the memory store and returns
+// up to k matches above the configured threshold, newest-first within
+// equal-similarity buckets. The implementation decides the threshold —
+// the slash command only cares about the returned hit list.
+//
+// Forget removes the chunk by id; ErrMemoryChunkNotFound surfaces the
+// "no such id" case so /forget can render the right user-facing text.
+type MemoryGateway interface {
+	Memorize(ctx context.Context, sessionID, text string) (string, error)
+	Recall(ctx context.Context, sessionID, query string, k int) ([]MemoryHit, error)
+	Forget(ctx context.Context, id string) error
+}
+
+// MemoryHit is a single recall result the slash command renders. The
+// Score is the cosine similarity (0..1); the slash command formats it
+// as a percentage in the bubble.
+type MemoryHit struct {
+	ID      string
+	Content string
+	Score   float32
+}
+
+// ErrMemoryChunkNotFound is the typed sentinel /forget surfaces when
+// the supplied id does not match any chunk. MemoryGateway implementations
+// should wrap their backend's "not found" error so errors.Is works.
+var ErrMemoryChunkNotFound = errors.New("slashcmd: memory chunk not found")
+
+// BranchGateway is the narrow contract /branch consumes. The rpc layer
+// adapts the BranchesAPI (CreateBranch + RecommendModel) onto this shape.
+//
+// CreateBranch forks the parent session onto a new child session that
+// uses the supplied (providerID, modelID) tuple. Returns the new
+// branch id + the child session id; both are echoed in the result body
+// so the frontend can route the user into the child session immediately.
+//
+// RecommendModels returns the recommended smaller / larger models for
+// the parent session, used by the no-arg /branch listing path. Either
+// recommendation may be a zero value when no fit exists.
+type BranchGateway interface {
+	CreateBranch(ctx context.Context, parentSessionID, modelID string) (BranchHandle, error)
+	RecommendModels(ctx context.Context, parentSessionID string) (BranchRecommendations, error)
+}
+
+// BranchHandle is the result of a successful CreateBranch call.
+type BranchHandle struct {
+	BranchID       string
+	ChildSessionID string
+	ProviderID     string
+	ModelID        string
+}
+
+// BranchRecommendations bundles the smaller / larger / same-tier
+// recommendations RecommendModels returns. The Same field carries the
+// parent's current pair so /branch's listing path can show it as a
+// sanity-check baseline.
+type BranchRecommendations struct {
+	Smaller BranchModel
+	Larger  BranchModel
+	Same    BranchModel
+}
+
+// BranchModel is one (provider, model) row in a recommendation list.
+type BranchModel struct {
+	ProviderID string
+	ModelID    string
+	Tier       string
+	Reason     string
+}
+
+// IsZero reports whether the model row is unpopulated.
+func (m BranchModel) IsZero() bool {
+	return m.ProviderID == "" && m.ModelID == ""
 }
 
 // AuthorisedModels returns the union of DefaultModel + Models with

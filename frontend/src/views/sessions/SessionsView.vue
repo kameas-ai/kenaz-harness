@@ -14,7 +14,7 @@
  * `wailsjs/*` directly — that's the FR-007 isolation rule.
  */
 
-import { computed, onMounted, ref, watch } from 'vue';
+import { computed, nextTick, onMounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import CanvasHead from '@/shell/CanvasHead.vue';
 import NewSessionDialog from '@/shell/NewSessionDialog.vue';
@@ -639,6 +639,44 @@ window.addEventListener('focus', () => {
   void refreshMemoryFlag();
   void refreshCompactionSettings();
 });
+
+// ── search-focus pulse (cross-session-search WP05) ─────────────────────
+//
+// When the SearchModal navigates to /sessions/<id>#<messageId>, scroll
+// the matching message into view and apply a brief 'search-focus-pulse'
+// CSS class. The class is removed after the animation finishes (3 s)
+// so the pulse plays exactly once per arrival.
+//
+// We poll for a short window because the message list mounts
+// asynchronously after the session loads. If the message is never found
+// (e.g. archived / wrong session) the polling gives up silently.
+function focusSearchHashTarget(messageId: string) {
+  if (!messageId) return;
+  const start = Date.now();
+  const tryFocus = () => {
+    const el = document.querySelector(
+      `[data-message-id="${CSS.escape(messageId)}"]`,
+    ) as HTMLElement | null;
+    if (el) {
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      el.classList.add('search-focus-pulse');
+      window.setTimeout(() => el.classList.remove('search-focus-pulse'), 3000);
+      return;
+    }
+    if (Date.now() - start > 5000) return;
+    window.setTimeout(tryFocus, 100);
+  };
+  tryFocus();
+}
+
+watch(
+  () => [route.path, route.hash] as const,
+  ([_path, hash]) => {
+    if (!hash || !hash.startsWith('#')) return;
+    void nextTick(() => focusSearchHashTarget(hash.slice(1)));
+  },
+  { immediate: true },
+);
 
 async function onRemember(m: Message, scope: MemoryScopeKind = 'session') {
   if (!sessionId.value || !m.id) return;

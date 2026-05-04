@@ -16,6 +16,7 @@ import SettingsTabs from '@/views/settings/SettingsTabs.vue';
 import KeyboardShortcuts from '@/components/settings/KeyboardShortcuts.vue';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
 import { debouncedSave } from '@/lib/settings';
+import { markdownExtensionsRef } from '@/lib/markdown/injectionKeys';
 import { Plus } from '@/shell/icons';
 import AttachmentRow from '@/components/contexts/AttachmentRow.vue';
 import AttachmentTreePicker from '@/components/contexts/AttachmentTreePicker.vue';
@@ -24,6 +25,7 @@ import type {
   Attachment,
   CompactionAggressiveness,
   CompactionTierExplain,
+  MarkdownExtensions,
   Provider,
   Settings,
   Theme,
@@ -184,6 +186,10 @@ async function refresh() {
     appInfo.value = await client.appInfo();
   } catch {
     appInfo.value = null;
+  }
+  // Hydrate the markdown extensions ref so it round-trips through this view.
+  if (settings.value.markdownExtensions) {
+    markdownExtensionsRef.value = settings.value.markdownExtensions;
   }
   // Hydrate the compaction working copies from the persisted settings.
   compactionTier.value =
@@ -391,9 +397,49 @@ async function toggleConfirmEach() {
   }
 }
 
+// cross-session-search WP07 — searchEnabled toggle. Inverts the
+// persisted SearchDisabled bit so the on-the-wire shape matches the
+// "default ON / opt-out" contract documented in core/rpc/views/settings.
+const searchEnabled = computed({
+  get: () => !(settings.value.searchDisabled ?? false),
+  set: (next: boolean) => {
+    settings.value = { ...settings.value, searchDisabled: !next };
+  },
+});
+
+async function toggleSearchEnabled() {
+  const next = !searchEnabled.value;
+  searchEnabled.value = next;
+  try {
+    await client.settings.set({ ...settings.value, searchDisabled: !next });
+  } catch {
+    // Revert visually if the write failed.
+    searchEnabled.value = !next;
+  }
+}
+
 function setTheme(t: Theme) {
   settings.value = { ...settings.value, theme: t };
   void client.settings.saveTheme(t).catch(() => {});
+}
+
+/* ── Markdown rendering extensions (markdown-rendering-polish-01KQ8TDT) ── */
+
+const MARKDOWN_EXTENSIONS: ReadonlyArray<{
+  value: MarkdownExtensions;
+  label: string;
+}> = [
+  { value: 'basic', label: 'Basic' },
+  { value: 'math', label: 'Math' },
+  { value: 'diagrams', label: 'Diagrams' },
+  { value: 'all', label: 'All' },
+];
+
+function setMarkdownExtensions(v: MarkdownExtensions) {
+  settings.value = { ...settings.value, markdownExtensions: v };
+  // Live-update mounted MarkdownBlocks via the App-level ref.
+  markdownExtensionsRef.value = v;
+  debouncedSave(client, { ...settings.value, markdownExtensions: v });
 }
 
 function toggleRestore() {
@@ -446,6 +492,37 @@ onMounted(() => {
         </div>
       </section>
 
+      <section data-testid="rendering-section">
+        <h2 class="font-ui text-[11px] uppercase tracking-[0.18em] text-ink-subtle">
+          Rendering
+        </h2>
+        <div
+          class="mt-2 inline-flex rounded-sm border border-border"
+          role="radiogroup"
+          aria-label="Markdown extensions"
+        >
+          <button
+            v-for="opt in MARKDOWN_EXTENSIONS"
+            :key="opt.value"
+            type="button"
+            role="radio"
+            :aria-checked="(settings.markdownExtensions ?? 'all') === opt.value"
+            class="px-3 py-1.5 font-ui text-[12px] border-r border-border last:border-r-0 transition-colors"
+            :class="(settings.markdownExtensions ?? 'all') === opt.value
+              ? 'bg-surface-3 text-ink'
+              : 'bg-surface-1 text-ink-muted hover:text-ink'"
+            :data-testid="`markdown-extensions-${opt.value}`"
+            @click="setMarkdownExtensions(opt.value)"
+          >
+            {{ opt.label }}
+          </button>
+        </div>
+        <p class="mt-1 text-[11px] text-ink-muted">
+          Disable on slow machines if heavy diagrams or math feel laggy.
+          <span class="font-mono">basic</span> turns off both KaTeX and Mermaid.
+        </p>
+      </section>
+
       <section>
         <h2 class="font-ui text-[11px] uppercase tracking-[0.18em] text-ink-subtle">
           Route restoration
@@ -483,6 +560,31 @@ onMounted(() => {
           When on, the harness asks the model to generate a short title for
           each new session after the first exchange. You can override or
           clear it at any time.
+        </p>
+      </section>
+
+      <section data-testid="search-section">
+        <h2 class="font-ui text-[11px] uppercase tracking-[0.18em] text-ink-subtle">
+          Search
+        </h2>
+        <label class="mt-2 flex items-center gap-3 font-ui text-[12px] text-ink">
+          <input
+            type="checkbox"
+            class="accent-accent"
+            :checked="searchEnabled"
+            data-testid="search-enabled-toggle"
+            @change="toggleSearchEnabled"
+          />
+          Enable cross-session search (Cmd+F)
+        </label>
+        <p class="mt-1 text-[11px] text-ink-muted">
+          When on, the Cmd+F modal queries the local FTS5 index across every
+          session. Turning this off short-circuits the search and never
+          touches the index — your message corpus stays out of any UI
+          response. The on-disk index itself is unaffected; toggling back
+          on resumes search immediately. Search activity is logged with a
+          truncated <span class="font-mono">query_hash</span>; the raw query
+          is never recorded.
         </p>
       </section>
 

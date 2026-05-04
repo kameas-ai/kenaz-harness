@@ -1,0 +1,34 @@
+id: plan_implement_review
+name: "Plan → Implement → Review"
+description: |
+  The canonical agentic loop. Four chained model_turn steps that draft a
+  plan, research it, implement against it, then review the implementation.
+  Each step's output is threaded into the next via ${step.X.output}.
+  v0.3.0 beta: model_turn dispatch is stubbed; outputs are echoed.
+version: 1
+inputs:
+  - name: task
+    kind: string
+    required: true
+    default: "Add a small feature"
+steps:
+  - name: plan
+    kind: model_turn
+    user_prompt: |
+      Draft a 3-5 step plan for this task: ${input.task}
+  - name: research
+    kind: model_turn
+    user_prompt: |
+      Given this plan: ${step.plan.output}
+      List the files / APIs / docs I should read before starting.
+  - name: implement
+    kind: model_turn
+    user_prompt: |
+      Implement the plan, using the research as context.
+      Plan: ${step.plan.output}
+      Research: ${step.research.output}
+  - name: review
+    kind: model_turn
+    user_prompt: |
+      Review the implementation for correctness and style.
+      Implementation: ${step.implement.output}

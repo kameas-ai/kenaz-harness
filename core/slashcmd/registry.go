@@ -13,6 +13,8 @@ import (
 type Deps struct {
 	Sessions  SessionAppender
 	Providers ProviderLister
+	Memory    MemoryGateway
+	Branches  BranchGateway
 }
 
 // Registry is the dispatch table. Construct with NewRegistry(deps);
@@ -26,7 +28,7 @@ type Registry struct {
 	commands map[string]Command
 }
 
-// NewRegistry constructs a Registry with the six v1 commands
+// NewRegistry constructs a Registry with the seven v1 commands
 // pre-registered.
 //
 // The default registration set:
@@ -34,10 +36,10 @@ type Registry struct {
 //   - /help
 //   - /clear
 //   - /model
-//   - /memorize (stub)
-//   - /recall   (stub)
-//   - /forget   (stub)
-//   - /branch   (stub)
+//   - /memorize  (wired against Deps.Memory; returns "not wired" when nil)
+//   - /recall    (wired against Deps.Memory; returns "not wired" when nil)
+//   - /forget    (wired against Deps.Memory; returns "not wired" when nil)
+//   - /branch    (wired against Deps.Branches; returns "not wired" when nil)
 //
 // Returns an error if a default command name collides — defensive
 // only; the test suite catches drift.
@@ -127,6 +129,8 @@ func (r *Registry) Execute(ctx context.Context, sessionID, raw string) (Result, 
 		SessionID: sessionID,
 		Sessions:  r.deps.Sessions,
 		Providers: r.deps.Providers,
+		Memory:    r.deps.Memory,
+		Branches:  r.deps.Branches,
 		Registry:  r,
 	}
 	return cmd.Run(ctx, env, args)
@@ -163,9 +167,9 @@ func defaultCommands() []Command {
 		helpCommand{},
 		clearCommand{},
 		modelCommand{},
-		stubCommand{name: "memorize", description: "Pin text to long-term memory (coming soon)."},
-		stubCommand{name: "recall", description: "Recall memory chunks matching a query (coming soon)."},
-		stubCommand{name: "forget", description: "Forget a memory chunk by id (coming soon)."},
-		stubCommand{name: "branch", description: "Branch the conversation onto a smaller or larger model (coming soon)."},
+		memorizeCommand{},
+		recallCommand{},
+		forgetCommand{},
+		branchCommand{},
 	}
 }

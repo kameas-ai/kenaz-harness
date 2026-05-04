@@ -56,3 +56,29 @@ body {
 *::-webkit-scrollbar-track {
   background: transparent;
 }
+
+/*
+ * search-focus-pulse — a 3-second one-shot highlight pulse applied to
+ * a message bubble when the SearchModal navigates to /sessions/<id>#<msgId>.
+ * (cross-session-search WP05). Uses the accent-a token so the highlight
+ * matches the inline <mark> color used inside the search modal results.
+ */
+@keyframes search-focus-pulse {
+  0% {
+    background-color: color-mix(in srgb, var(--color-accent-a, #f59e0b) 0%, transparent); /* css-tokens-allow: --color-accent-a fallback for older render paths */
+    box-shadow: 0 0 0 0 transparent;
+  }
+  20% {
+    background-color: color-mix(in srgb, var(--color-accent-a, #f59e0b) 28%, transparent); /* css-tokens-allow: --color-accent-a fallback for legacy render paths */
+    box-shadow: 0 0 0 6px color-mix(in srgb, var(--color-accent-a, #f59e0b) 18%, transparent); /* css-tokens-allow: --color-accent-a fallback for legacy render paths */
+  }
+  100% {
+    background-color: color-mix(in srgb, var(--color-accent-a, #f59e0b) 0%, transparent); /* css-tokens-allow: --color-accent-a fallback for legacy render paths */
+    box-shadow: 0 0 0 0 transparent;
+  }
+}
+
+.search-focus-pulse {
+  animation: search-focus-pulse 3000ms ease-out 1;
+  border-radius: var(--radius-sm, 4px);
+}

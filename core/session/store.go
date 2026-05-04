@@ -727,14 +727,18 @@ func (s *sqlStore) Create(ctx context.Context, r Record) error {
 		if err != nil {
 			return err
 		}
+		kindCol := r.Kind
+		if kindCol == "" {
+			kindCol = SessionKindChat
+		}
 		_, err = tx.Exec(ctx, `
             INSERT INTO sessions
                 (id, name, created_at, updated_at, last_active_at,
                  position, draft, scroll_position, archived_at,
                  system_prompt, context_kind, project_id,
                  branch_advisor_dismissed,
-                 autonomy_level, autonomy_overrides)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 autonomy_level, autonomy_overrides, kind)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `,
 			r.ID,
 			r.Name,
@@ -751,6 +755,7 @@ func (s *sqlStore) Create(ctx context.Context, r Record) error {
 			advisorDismissed,
 			autonomyLevel,
 			autonomyOverrides,
+			kindCol,
 		)
 		return err
 	})
@@ -761,7 +766,8 @@ const sqlSelectSession = `
            position, draft, scroll_position, archived_at,
            system_prompt, context_kind, project_id, auto_titled,
            COALESCE(branch_advisor_dismissed, 0),
-           autonomy_level, autonomy_overrides
+           autonomy_level, autonomy_overrides,
+           COALESCE(kind, 'chat')
     FROM sessions
 `
 
@@ -1400,6 +1406,7 @@ func scanRecord(sc interface{ Scan(dest ...any) error }) (Record, error) {
 		advisorDismissed   int
 		autonomyLevel      sql.NullInt64
 		autonomyOverrides  sql.NullString
+		kindCol            string
 	)
 	if err := sc.Scan(
 		&r.ID, &r.Name,
@@ -1410,8 +1417,13 @@ func scanRecord(sc interface{ Scan(dest ...any) error }) (Record, error) {
 		&projectID, &autoTitled,
 		&advisorDismissed,
 		&autonomyLevel, &autonomyOverrides,
+		&kindCol,
 	); err != nil {
 		return Record{}, err
+	}
+	r.Kind = kindCol
+	if r.Kind == "" {
+		r.Kind = SessionKindChat
 	}
 	r.CreatedAt = time.Unix(0, createdAt).UTC()
 	r.UpdatedAt = time.Unix(0, updatedAt).UTC()

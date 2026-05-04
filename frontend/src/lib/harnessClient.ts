@@ -275,6 +275,8 @@ interface WailsBindingsLike {
 
   Bundle_List(): Promise<Bundle[]>;
   Bundle_Get(id: string): Promise<Bundle>;
+  Bundle_Install(req: { kind: string; path: string }): Promise<Bundle>;
+  Bundle_Remove(id: string): Promise<void>;
 
   Policy_Explain(input: Record<string, unknown>): Promise<Denial>;
   Policy_StartStream(): Promise<string>;
@@ -1111,6 +1113,8 @@ export interface AttachmentsClient {
 export interface BundleClient {
   list(): Promise<Bundle[]>;
   get(id: string): Promise<Bundle>;
+  install(req: { kind: string; path: string }): Promise<Bundle>;
+  remove(id: string): Promise<void>;
 }
 
 export interface PolicyClient {
@@ -1891,6 +1895,8 @@ export function createHarnessClient(): HarnessClient {
     bundle: {
       list: () => b().Bundle_List(),
       get: (id) => b().Bundle_Get(id),
+      install: (req) => b().Bundle_Install(req),
+      remove: (id) => b().Bundle_Remove(id),
     },
     policy: {
       explain: (input) => b().Policy_Explain(input),
@@ -2335,6 +2341,14 @@ export function createFakeHarnessClient(
         tier: '',
         artifactCount: 0,
       }),
+      install: async (_req) => ({
+        id: 'fake',
+        name: 'fake',
+        version: '0.0.0',
+        tier: 'channel (uncached)',
+        artifactCount: 0,
+      }),
+      remove: async (_id) => {},
     },
     policy: {
       explain: async () => ({
