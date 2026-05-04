@@ -67,6 +67,10 @@ const (
 	// WP05 — external-network step kinds.
 	StepKindWebFetch  StepKind = "web_fetch"
 	StepKindWebScrape StepKind = "web_scrape"
+	// WP06 — control-flow step kinds.
+	StepKindNotify    StepKind = "notify"
+	StepKindWaitUntil StepKind = "wait_until"
+	StepKindAggregate StepKind = "aggregate"
 )
 
 // AllStepKinds is the closed enum the loader validates against.
@@ -76,6 +80,7 @@ func AllStepKinds() []StepKind {
 		StepKindHTTPRequest, StepKindShell, StepKindReadArtifact,
 		StepKindWriteArtifact, StepKindTransform, StepKindConditional,
 		StepKindWebFetch, StepKindWebScrape,
+		StepKindNotify, StepKindWaitUntil, StepKindAggregate,
 	}
 }
 
@@ -172,6 +177,28 @@ type Step struct {
 	Extractors       []any          `yaml:"extractors,omitempty" json:"extractors,omitempty"`
 	ExtractWithModel string         `yaml:"extract_with_model,omitempty" json:"extractWithModel,omitempty"`
 	ExtractPrompt    string         `yaml:"extract_prompt,omitempty" json:"extractPrompt,omitempty"`
+
+	// notify fields (WP06)
+	// NotifyTitle is the short title shown on each notification surface.
+	NotifyTitle string `yaml:"notify_title,omitempty" json:"notifyTitle,omitempty"`
+	// NotifyBody is the full notification body. NEVER put in audit attrs.
+	NotifyBody string `yaml:"notify_body,omitempty" json:"notifyBody,omitempty"`
+	// Surface is the list of targets: os, slack, email, push.
+	Surface []string `yaml:"surface,omitempty" json:"surface,omitempty"`
+
+	// wait_until fields (WP06)
+	// Until is an RFC 3339 absolute wall-clock time to wait until.
+	Until string `yaml:"until,omitempty" json:"until,omitempty"`
+	// WaitDuration is a relative duration string (e.g. "5m").
+	WaitDuration string `yaml:"duration,omitempty" json:"duration,omitempty"`
+	// Condition is a workflow expression polled until truthy.
+	Condition string `yaml:"condition,omitempty" json:"condition,omitempty"`
+
+	// aggregate fields (WP06) — Strategy, Separator reuse inputs_from (InputsFrom).
+	// Strategy is one of "merge", "array", "concat".
+	Strategy string `yaml:"strategy,omitempty" json:"strategy,omitempty"`
+	// Separator is used by the "concat" strategy (default ",").
+	Separator string `yaml:"separator,omitempty" json:"separator,omitempty"`
 }
 
 // Workflow is the in-memory representation of one workflow YAML file.
@@ -360,6 +387,20 @@ type NetworkAuthorizer interface {
 	Authorize(ctx context.Context, action, resourceID string) error
 }
 
+// Notifier is the interface the notify runner dispatches OS notifications
+// through. Inject a fake in tests; the production implementation wraps
+// the Wails runtime.
+type Notifier interface {
+	Notify(ctx context.Context, title, body string) error
+}
+
+// AuditEmitter is the narrow slice of audit.Emitter the workflow runners
+// consume. Keeping it local avoids a hard import of the audit package from
+// the runner files while preserving testability.
+type AuditEmitter interface {
+	EmitNotifySent(ctx context.Context, target, title string) error
+}
+
 // Deps bundles the optional external dependencies workflow runners
 // need. nil entries cause the corresponding runner to error at Run
 // time with a clear "dependency unavailable" message — keeping
@@ -377,6 +418,11 @@ type Deps struct {
 	// NetAuthz, when non-nil, gates web_fetch and web_scrape steps via
 	// Cedar action "workflow.network.fetch". nil permits all fetches.
 	NetAuthz NetworkAuthorizer
+	// Notifier is the OS notification dispatch surface for the notify
+	// runner. nil disables the "os" surface without failing the run.
+	Notifier Notifier
+	// Audit, when non-nil, receives notify.sent events. nil is a no-op.
+	Audit AuditEmitter
 }
 
 // Sentinels.
@@ -406,4 +452,8 @@ var (
 	// ErrNetworkPolicyDenied is returned when the Cedar gate refuses a
 	// web_fetch or web_scrape step.
 	ErrNetworkPolicyDenied = errors.New("workflows: network fetch denied by policy")
+	// ErrNotifyTargetUnconfigured is returned by a notify runner when a
+	// requested surface (e.g. "slack") is not configured. The run
+	// continues with any successfully dispatched surfaces.
+	ErrNotifyTargetUnconfigured = errors.New("workflows: notify target not configured")
 )

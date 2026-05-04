@@ -259,6 +259,37 @@ func validateStepFields(st Step) error {
 				return fmt.Errorf("step %q: web_scrape llm mode requires extract_prompt", st.Name)
 			}
 		}
+	case StepKindNotify:
+		if st.NotifyTitle == "" {
+			return fmt.Errorf("step %q: notify requires notify_title", st.Name)
+		}
+		if len(st.Surface) == 0 {
+			return fmt.Errorf("step %q: notify requires surface", st.Name)
+		}
+	case StepKindWaitUntil:
+		set := 0
+		if st.Until != "" {
+			set++
+		}
+		if st.WaitDuration != "" {
+			set++
+		}
+		if st.Condition != "" {
+			set++
+		}
+		if set == 0 {
+			return fmt.Errorf("step %q: wait_until requires until, duration, or condition", st.Name)
+		}
+		if set > 1 {
+			return fmt.Errorf("step %q: wait_until: only one of until, duration, condition allowed", st.Name)
+		}
+	case StepKindAggregate:
+		if st.Strategy == "" {
+			return fmt.Errorf("step %q: aggregate requires strategy", st.Name)
+		}
+		if len(st.InputsFrom) == 0 {
+			return fmt.Errorf("step %q: aggregate requires inputs_from", st.Name)
+		}
 	}
 	return nil
 }

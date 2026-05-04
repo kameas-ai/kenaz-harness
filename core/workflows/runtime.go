@@ -22,6 +22,11 @@ type RunContext struct {
 	// branchSkip records the step name a conditional asked the
 	// engine to skip (the not-chosen branch). Cleared once consumed.
 	branchSkip string
+	// wakeup carries the pending wakeup state for wait_until steps.
+	// Set by the runner before blocking; cleared on resume. Exported
+	// methods in runners_wait.go (SetWakeup / ClearWakeup / Wakeup)
+	// provide safe access.
+	wakeup *WakeupState
 }
 
 // SetOutput stores a step output. Safe for concurrent reads from
