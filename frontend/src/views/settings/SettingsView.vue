@@ -73,6 +73,18 @@ const compactionProviders = ref<Provider[]>([]);
 const compactionArchiveDaysError = ref<string | null>(null);
 const compactionRecentWindowError = ref<string | null>(null);
 
+/* ── Cost notifications (token-cost-telemetry-01KQ8TD7 §2.5 / WP06) ── */
+/** Working copy of the monthly-spend notification threshold dial in
+ * USD. Zero (the default) disables the scheduler; positive values up
+ * to $10,000 enable the 50/80/100/150/200% escalating notifications.
+ * The dial takes effect on the next chat turn — the threshold checker
+ * reads it fresh on every Manager.Add tail. */
+const monthlyCostNotifyUsd = ref<number>(0);
+const monthlyCostNotifyUsdError = ref<string | null>(null);
+/** Above this the backend rejects with a typed error. Mirrors the
+ * settings.MaxMonthlyCostNotifyUSD constant. */
+const MAX_MONTHLY_COST_NOTIFY_USD = 10000;
+
 /** Derived: the explain row matching the currently-selected tier. */
 const selectedTierExplain = computed<CompactionTierExplain | null>(() => {
   return (
@@ -183,6 +195,8 @@ async function refresh() {
   compactionRecentWindow.value = settings.value.compactionRecentWindow || 4;
   compactionArchiveDaysError.value = null;
   compactionRecentWindowError.value = null;
+  monthlyCostNotifyUsd.value = settings.value.monthlyCostNotifyUsd ?? 0;
+  monthlyCostNotifyUsdError.value = null;
   // Tier-explain payload + provider list both feed the Compaction
   // section; either failing returns the empty-state UI rather than
   // bricking the page.
@@ -244,6 +258,29 @@ function onCompactionRecentWindowInput(evt: Event) {
   compactionRecentWindowError.value = null;
   compactionRecentWindow.value = n;
   persistCompactionFields();
+}
+
+async function onMonthlyCostNotifyInput(evt: Event) {
+  const raw = (evt.target as HTMLInputElement).value;
+  // Empty string ⇒ user cleared the field ⇒ disable the scheduler (0).
+  const n = raw === '' ? 0 : Number.parseFloat(raw);
+  if (Number.isNaN(n) || n < 0 || n > MAX_MONTHLY_COST_NOTIFY_USD) {
+    monthlyCostNotifyUsdError.value =
+      `Threshold must be 0 (disabled) or between 0.01 and ${MAX_MONTHLY_COST_NOTIFY_USD}.`;
+    return;
+  }
+  monthlyCostNotifyUsdError.value = null;
+  monthlyCostNotifyUsd.value = n;
+  // Persist via the field-level RPC so the threshold checker sees the
+  // change on the very next chat turn without waiting for the
+  // debounced full-Settings save.
+  try {
+    await client.settings.setMonthlyCostNotifyUSD(n);
+    settings.value = { ...settings.value, monthlyCostNotifyUsd: n };
+  } catch (err) {
+    monthlyCostNotifyUsdError.value =
+      err instanceof Error ? err.message : String(err);
+  }
 }
 
 function persistCompactionFields() {
@@ -660,6 +697,56 @@ onMounted(() => {
             </p>
             <p v-else class="mt-1 font-ui text-[11px] text-ink-muted">
               Most-recent user-assistant pairs that compaction never touches. Default 4.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <section data-testid="cost-notifications-section">
+        <h2 class="font-ui text-[11px] uppercase tracking-[0.18em] text-ink-subtle">
+          Cost notifications
+        </h2>
+        <p class="mt-1 font-ui text-[11px] text-ink-muted">
+          Get a desktop notification when your monthly LLM spend hits
+          50%, 80%, 100%, 150%, or 200% of the threshold below. Each
+          tier fires at most once per calendar month. Hard caps live in
+          your provider dashboard — this dial is visibility only (FR-007c).
+        </p>
+        <div class="mt-3 grid gap-2" style="grid-template-columns: 14ch 1fr">
+          <label
+            for="monthly-cost-notify"
+            class="self-center font-ui text-[12px] text-ink-muted"
+          >
+            Monthly threshold
+          </label>
+          <div>
+            <div class="flex items-center gap-1.5">
+              <span class="font-mono text-[12px] text-ink-muted">$</span>
+              <input
+                id="monthly-cost-notify"
+                type="number"
+                min="0"
+                :max="MAX_MONTHLY_COST_NOTIFY_USD"
+                step="0.01"
+                :value="monthlyCostNotifyUsd"
+                placeholder="0 (disabled)"
+                class="w-28 rounded-sm border border-border bg-surface-1 px-2 py-1 font-ui text-[12px] text-ink"
+                data-testid="monthly-cost-notify-input"
+                @input="onMonthlyCostNotifyInput"
+              />
+              <span class="font-ui text-[11px] text-ink-muted">USD / month</span>
+            </div>
+            <p
+              v-if="monthlyCostNotifyUsdError"
+              class="mt-1 font-ui text-[11px] text-signal-danger"
+              role="alert"
+              data-testid="monthly-cost-notify-error"
+            >
+              {{ monthlyCostNotifyUsdError }}
+            </p>
+            <p v-else class="mt-1 font-ui text-[11px] text-ink-muted">
+              Set to 0 to disable notifications. Maximum
+              ${{ MAX_MONTHLY_COST_NOTIFY_USD }}.
             </p>
           </div>
         </div>

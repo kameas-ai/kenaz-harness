@@ -440,6 +440,28 @@ func New(c *core.Core) *API {
 	a.settingsAPI = settingsImpl
 	a.settingsImpl = settingsImpl
 
+	// Threshold scheduler wiring (token-cost-telemetry-01KQ8TD7 WP06).
+	// Built once; reads the dial fresh on every Manager.Add tail via
+	// the LoadMonthlyCostNotifyUSD callback so changes to the setting
+	// take effect on the next chat turn without restarting. The
+	// publisher routes events through the same broker used by the
+	// permission-pending topics, so the privacy-CI single-emitter
+	// invariant stays intact.
+	if mwc, ok := usageMgr.(usage.ManagerWithChecker); ok && a.broker != nil {
+		thresholdReader := usage.ThresholdReader(func() (float64, error) {
+			if settingsImpl == nil || settingsImpl.Store() == nil {
+				return 0, nil
+			}
+			return settingsImpl.Store().LoadMonthlyCostNotifyUSD()
+		})
+		publisher := &thresholdPublisher{broker: a.broker}
+		if checker, err := usage.NewCheckerFromManager(mwc, thresholdReader, publisher); err == nil {
+			usageMgr.SetThresholdChecker(checker)
+		} else {
+			logging.L().Warn("usage.threshold.wire_failed", "err", err.Error())
+		}
+	}
+
 	// LLM stack uses the settings store as the opt-in gate for
 	// retrieval, and shares the memory store with the MemoryAPI so a
 	// pin in the chat surface and a retrieval at send-time see the
@@ -1961,6 +1983,21 @@ type poolEventPublisher struct {
 }
 
 func (p *poolEventPublisher) Publish(topic string, payload any) {
+	if p == nil || p.broker == nil {
+		return
+	}
+	p.broker.emitter.Emit(p.broker.EmitCtx(), topic, payload)
+}
+
+// thresholdPublisher adapts the rpc.StreamBroker to the
+// usage.Publisher contract used by the WP06 threshold scheduler.
+// Identical-shape sibling of poolEventPublisher; lives separately so
+// the usage package never imports rpc internals.
+type thresholdPublisher struct {
+	broker *StreamBroker
+}
+
+func (p *thresholdPublisher) Publish(topic string, payload any) {
 	if p == nil || p.broker == nil {
 		return
 	}

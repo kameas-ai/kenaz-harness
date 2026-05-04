@@ -645,6 +645,40 @@ export interface Settings {
    * (keyboard-shortcuts-settings-01KQ8TDR plan Q1=C)
    */
   keyboardShortcutsPreset?: string;
+
+  /**
+   * Per-month spend notification threshold in USD
+   * (token-cost-telemetry-01KQ8TD7 WP06). Zero (the default) disables
+   * the scheduler; any positive value up to $10,000 enables the
+   * 50/80/100/150/200% escalating notifications. The dial takes effect
+   * on the next chat turn — the threshold checker reads it fresh on
+   * every Manager.Add tail. FR-007c: visibility only — hard caps live
+   * in the user's provider dashboard.
+   */
+  monthlyCostNotifyUsd?: number;
+}
+
+/**
+ * CostThresholdCrossedPayload — the event the WP06 scheduler publishes
+ * on the `cost.threshold.crossed` broker topic when a per-month spend
+ * tier (50/80/100/150/200 % of monthlyCostNotifyUsd) is newly crossed.
+ * Mirrors core/usage.ThresholdCrossedPayload exactly.
+ */
+export interface CostThresholdCrossedPayload {
+  /** Tier just crossed: 50 / 80 / 100 / 150 / 200. */
+  pct: number;
+  /** Calendar-month total spend in USD as of the triggering turn. */
+  monthTotalUsd: number;
+  /**
+   * The monthlyCostNotifyUsd setting value at the moment of firing.
+   * Surfaced so the toast can render "you've used 80% of your $25/mo
+   * budget" without re-reading Settings.
+   */
+  thresholdUsd: number;
+  /** Local-time YYYY-MM key the row was written under. */
+  yearMonth: string;
+  /** RFC-3339 timestamp string the firing was recorded at. */
+  firedAt: string;
 }
 
 /**

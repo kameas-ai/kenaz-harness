@@ -629,6 +629,30 @@ func (b *Bindings) Settings_SetMaxAgentTurns(turns int) error {
 	return b.storeFn().SaveMaxAgentTurns(turns)
 }
 
+// Settings_GetMonthlyCostNotifyUSD returns the per-month spend
+// notification threshold dial (token-cost-telemetry-01KQ8TD7 WP06).
+// Zero (the default) means the scheduler is disabled — the frontend
+// renders the placeholder accordingly.
+func (b *Bindings) Settings_GetMonthlyCostNotifyUSD() (float64, error) {
+	if b.storeFn == nil {
+		return 0, nil
+	}
+	return b.storeFn().LoadMonthlyCostNotifyUSD()
+}
+
+// Settings_SetMonthlyCostNotifyUSD persists the per-month spend
+// notification threshold dial. Zero disables the scheduler;
+// negatives are normalised to zero; values above the documented cap
+// (settings.MaxMonthlyCostNotifyUSD = $10,000) are rejected with the
+// typed ErrInvalidMonthlyCostNotifyUSD so the UI can render specific
+// copy.
+func (b *Bindings) Settings_SetMonthlyCostNotifyUSD(usd float64) error {
+	if b.storeFn == nil {
+		return nil
+	}
+	return b.storeFn().SaveMonthlyCostNotifyUSD(usd)
+}
+
 // ── WP08 permission dials ──────────────────────────────────────────
 
 // Settings_GetPermissionMode returns the global permission posture.

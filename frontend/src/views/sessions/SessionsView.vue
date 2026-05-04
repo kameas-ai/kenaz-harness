@@ -26,6 +26,7 @@ import ConfirmToolModal from '@/components/chat/ConfirmToolModal.vue';
 import BranchSidebar from '@/components/chat/BranchSidebar.vue';
 import CreateBranchModal from '@/components/chat/CreateBranchModal.vue';
 import MergeSuggestionToast from '@/components/chat/MergeSuggestionToast.vue';
+import CostThresholdToast from '@/components/chat/CostThresholdToast.vue';
 import BashPermissionModal from '@/components/permissions/BashPermissionModal.vue';
 import FilesystemPermissionModal from '@/components/permissions/FilesystemPermissionModal.vue';
 import CredentialPermissionModal from '@/components/permissions/CredentialPermissionModal.vue';
@@ -1323,6 +1324,7 @@ function formatSize(bytes: number): string {
       @created="closeCreateBranchModal"
     />
     <MergeSuggestionToast />
+    <CostThresholdToast />
     <!-- WP08 — universal permission modals (one per family) -->
     <BashPermissionModal />
     <FilesystemPermissionModal />

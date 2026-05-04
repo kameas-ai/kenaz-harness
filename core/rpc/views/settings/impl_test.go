@@ -256,6 +256,84 @@ func TestFileStore_MaxAgentTurnsRoundTrip(t *testing.T) {
 	}
 }
 
+// TestFileStore_MonthlyCostNotifyUSDRoundTrip verifies the WP06
+// dial round-trips, defaults to zero (disabled), normalises negatives
+// to zero, and rejects values above MaxMonthlyCostNotifyUSD with the
+// typed error.
+func TestFileStore_MonthlyCostNotifyUSDRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	store, err := NewFileStore(dir)
+	if err != nil {
+		t.Fatalf("NewFileStore: %v", err)
+	}
+
+	// Fresh install: zero (scheduler disabled).
+	got, err := store.LoadMonthlyCostNotifyUSD()
+	if err != nil {
+		t.Fatalf("LoadMonthlyCostNotifyUSD: %v", err)
+	}
+	if got != 0 {
+		t.Errorf("fresh install MonthlyCostNotifyUSD = %v, want 0", got)
+	}
+
+	// Round-trip a sane value.
+	if err := store.SaveMonthlyCostNotifyUSD(25.0); err != nil {
+		t.Fatalf("SaveMonthlyCostNotifyUSD(25): %v", err)
+	}
+	got, _ = store.LoadMonthlyCostNotifyUSD()
+	if got != 25.0 {
+		t.Errorf("after Save(25): got %v, want 25", got)
+	}
+
+	// Negative normalised to zero (matches MaxAgentTurns convention).
+	if err := store.SaveMonthlyCostNotifyUSD(-5); err != nil {
+		t.Fatalf("SaveMonthlyCostNotifyUSD(-5): %v", err)
+	}
+	got, _ = store.LoadMonthlyCostNotifyUSD()
+	if got != 0 {
+		t.Errorf("after Save(-5): got %v, want 0", got)
+	}
+
+	// Above-cap rejected with typed error.
+	err = store.SaveMonthlyCostNotifyUSD(MaxMonthlyCostNotifyUSD + 1)
+	if !errors.Is(err, ErrInvalidMonthlyCostNotifyUSD) {
+		t.Errorf("SaveMonthlyCostNotifyUSD(over-cap) err = %v, want ErrInvalidMonthlyCostNotifyUSD", err)
+	}
+}
+
+// TestMonthlyCostNotifyEnabled covers the dial-disabled accessor.
+func TestMonthlyCostNotifyEnabled(t *testing.T) {
+	for _, tc := range []struct {
+		raw     float64
+		enabled bool
+	}{
+		{0, false},
+		{0.0001, true},
+		{25, true},
+		{-1, false}, // defensive: hand-edited file slipping in a negative
+	} {
+		s := Settings{MonthlyCostNotifyUSD: tc.raw}
+		if got := s.MonthlyCostNotifyEnabled(); got != tc.enabled {
+			t.Errorf("MonthlyCostNotifyEnabled(%v) = %v, want %v", tc.raw, got, tc.enabled)
+		}
+	}
+}
+
+// TestSaveAll_RejectsOverCapMonthlyCostNotify covers the SaveAll
+// validation path (vs the field-level SaveMonthlyCostNotifyUSD which
+// has its own clamp).
+func TestSaveAll_RejectsOverCapMonthlyCostNotify(t *testing.T) {
+	dir := t.TempDir()
+	store, err := NewFileStore(dir)
+	if err != nil {
+		t.Fatalf("NewFileStore: %v", err)
+	}
+	err = store.SaveAll(Settings{MonthlyCostNotifyUSD: MaxMonthlyCostNotifyUSD + 100})
+	if !errors.Is(err, ErrInvalidMonthlyCostNotifyUSD) {
+		t.Errorf("SaveAll(over-cap) err = %v, want ErrInvalidMonthlyCostNotifyUSD", err)
+	}
+}
+
 // TestEffectiveCompaction_DefaultsOnEmptySettings verifies the
 // documented defaults the chat runner reads on a fresh install:
 // balanced tier, 90-day retention, 4-pair recent window. The defaults
