@@ -495,3 +495,148 @@ func TestAllTopics(t *testing.T) {
 		}
 	}
 }
+
+// ── WP05: autonomy-dial posture wiring tests ─────────────────────────────────
+
+// TestPostureAutoAllow_SkipsDispatchAndReturnsAllow confirms that a
+// registry constructed with PostureAutoAllow resolves every
+// RequestInteractive call immediately as Allow without dispatching any
+// broker event and without touching the pending-request map.
+// This covers the "autonomous" / "bold" tier fast-path (WP05).
+func TestPostureAutoAllow_SkipsDispatchAndReturnsAllow(t *testing.T) {
+	t.Parallel()
+	disp := newRecordingDispatcher()
+	r := NewRegistry(WithDispatcher(disp), WithPosture(PostureAutoAllow))
+
+	res, err := r.RequestInteractive(context.Background(), makeBashSurface("git status"))
+	if err != nil {
+		t.Fatalf("RequestInteractive: %v", err)
+	}
+	if res.Decision != DecisionAllowOnce {
+		t.Fatalf("decision = %q, want %q", res.Decision, DecisionAllowOnce)
+	}
+	// No broker event must have been dispatched.
+	if got := len(disp.snapshot()); got != 0 {
+		t.Fatalf("dispatch count = %d, want 0 (auto-allow should skip dispatch)", got)
+	}
+	// No pending entries (the auto-allow path never enqueues).
+	if r.PendingCount() != 0 {
+		t.Fatalf("pending = %d, want 0", r.PendingCount())
+	}
+}
+
+// TestPostureAutoAllow_MultipleCallsAllAutoResolve confirms that repeated
+// calls all return Allow without interaction, simulating the autonomous
+// tier across many tool calls in one turn.
+func TestPostureAutoAllow_MultipleCallsAllAutoResolve(t *testing.T) {
+	t.Parallel()
+	disp := newRecordingDispatcher()
+	r := NewRegistry(WithDispatcher(disp), WithPosture(PostureAutoAllow))
+
+	patterns := []string{"ls", "cat /etc/hosts", "git log", "npm install", "curl https://example.com"}
+	for _, p := range patterns {
+		res, err := r.RequestInteractive(context.Background(), makeBashSurface(p))
+		if err != nil {
+			t.Fatalf("pattern %q: RequestInteractive: %v", p, err)
+		}
+		if res.Decision != DecisionAllowOnce {
+			t.Fatalf("pattern %q: decision = %q, want Allow", p, res.Decision)
+		}
+	}
+	if got := len(disp.snapshot()); got != 0 {
+		t.Fatalf("dispatch count = %d, want 0", got)
+	}
+}
+
+// TestPostureAlwaysPrompt_SkipsTransientCache confirms that a registry
+// with PostureAlwaysPrompt does NOT short-circuit on a cached Allow-once
+// grant — every call surfaces to the UI regardless. This covers the
+// "strict" / "cautious" tier (WP05).
+func TestPostureAlwaysPrompt_SkipsTransientCache(t *testing.T) {
+	t.Parallel()
+	disp := newRecordingDispatcher()
+	r := NewRegistry(WithDispatcher(disp), WithPosture(PostureAlwaysPrompt))
+
+	// First request — resolve as Allow-once (seeds transient cache).
+	go func() {
+		select {
+		case <-disp.emitted:
+			emits := disp.snapshot()
+			_ = r.Resolve(emits[0].payload.RequestID, DecisionAllowOnce)
+		case <-time.After(2 * time.Second):
+		}
+	}()
+	res1, err := r.RequestInteractive(context.Background(), makeBashSurface("ls"))
+	if err != nil {
+		t.Fatalf("first RequestInteractive: %v", err)
+	}
+	if res1.Decision != DecisionAllowOnce {
+		t.Fatalf("res1 = %q, want Allow-once", res1.Decision)
+	}
+	// Transient cache has an entry — but PostureAlwaysPrompt must ignore it.
+	if r.TransientGrantCount() != 1 {
+		t.Fatalf("transient count = %d, want 1", r.TransientGrantCount())
+	}
+
+	// Second request for the SAME resource: must surface again (not cache-hit).
+	emitsBefore := len(disp.snapshot())
+	go func() {
+		// Wait until a new emit appears, then deny it.
+		deadline := time.Now().Add(2 * time.Second)
+		for time.Now().Before(deadline) {
+			if len(disp.snapshot()) > emitsBefore {
+				emits := disp.snapshot()
+				_ = r.Resolve(emits[len(emits)-1].payload.RequestID, DecisionDeny)
+				return
+			}
+			time.Sleep(time.Millisecond)
+		}
+	}()
+	res2, err := r.RequestInteractive(context.Background(), makeBashSurface("ls"))
+	if err != nil {
+		t.Fatalf("second RequestInteractive: %v", err)
+	}
+	// Deny proves the cache was skipped — if it had hit the cache it would
+	// have returned DecisionAllowOnce immediately.
+	if res2.Decision != DecisionDeny {
+		t.Fatalf("res2 = %q, want Deny (cache must have been skipped)", res2.Decision)
+	}
+	if got := len(disp.snapshot()); got <= emitsBefore {
+		t.Fatalf("dispatch count = %d, want > %d (second call must have dispatched)", got, emitsBefore)
+	}
+
+	// Leak check.
+	if r.PendingCount() != 0 {
+		t.Fatalf("pending = %d, want 0", r.PendingCount())
+	}
+}
+
+// TestSetPosture_DynamicUpdate confirms that SetPosture on a live
+// registry takes effect on the next RequestInteractive call.
+func TestSetPosture_DynamicUpdate(t *testing.T) {
+	t.Parallel()
+	disp := newRecordingDispatcher()
+	r := NewRegistry(WithDispatcher(disp), WithTimeout(50*time.Millisecond))
+
+	// Default posture: prompts surface (will timeout).
+	if r.Posture() != PostureDefault {
+		t.Fatalf("initial posture = %q, want %q", r.Posture(), PostureDefault)
+	}
+	res1, _ := r.RequestInteractive(context.Background(), makeBashSurface("cmd"))
+	if res1.Decision != DecisionDeny || res1.Reason != "timeout" {
+		t.Fatalf("res1 = %+v, want Deny/timeout under default posture", res1)
+	}
+
+	// Switch to auto-allow.
+	r.SetPosture(PostureAutoAllow)
+	if r.Posture() != PostureAutoAllow {
+		t.Fatalf("posture after Set = %q, want %q", r.Posture(), PostureAutoAllow)
+	}
+	res2, err := r.RequestInteractive(context.Background(), makeBashSurface("cmd"))
+	if err != nil {
+		t.Fatalf("RequestInteractive after SetPosture: %v", err)
+	}
+	if res2.Decision != DecisionAllowOnce {
+		t.Fatalf("res2 = %q, want Allow after auto-allow posture set", res2.Decision)
+	}
+}

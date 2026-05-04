@@ -11,8 +11,8 @@ Target release: **v0.3.0 beta**.
 | WP01 | `core/autonomy/` package + preset table | Merged |
 | WP02 | Migration 0316 + settings/project/session schema | Merged |
 | WP03 | RPC view methods (settings/projects/sessions) | **This branch** |
-| WP04 | Toolloop integration | **Deferred** (see Gaps) |
-| WP05 | Cedar prompt registry posture wiring | **Deferred** (see Gaps) |
+| WP04 | Toolloop integration | **Shipped** (v0.4.1) |
+| WP05 | Cedar prompt registry posture wiring | **Shipped** (v0.4.1) |
 | WP06 | Settings global panel | **This branch** |
 | WP07 | Project + session panels + chat header chip | **This branch** |
 | WP08 | Acceptance smoke + docs | **This branch** |
@@ -64,26 +64,28 @@ Cedar deny remains the floor regardless of tier.
 - **New layer** (e.g. organisation-wide): extend `Resolve(global,
   project, session, ...)` and add a fourth column to the panel grid.
 
-## Gaps documented for follow-up
+## Gaps closed in v0.4.1
 
-**WP04 — Toolloop integration**: the resolved `MaxIterations`,
-`TokenCeilingPerTurn`, `ContinueOnError`, and the `(AskOnAmbiguity,
-RecapStyle)` postscript are NOT yet read by the chat-graph LoopNode.
-The dial persists and surfaces correctly, and the resolver is
-exercised, but it has no live effect on a turn until the LoopNode
-threads `Sessions_ResolveAutonomy` through its boundary. Tracked as a
-follow-up before v0.3.0 GA.
+**WP04 — Toolloop integration** (shipped v0.4.1): `kernelToolAdapter`
+now reads `AutoApproveFamilies` via an `AutonomyKnobsProvider` before
+each tool call. When the resolved knobs include `FamilyShellSafe` or
+`FamilyNetwork` (bold / autonomous tier), the adapter bypasses the
+interactive-prompt branch while still consulting the resolver for
+explicit Cedar denials (cedar deny remains the floor). The provider is
+wired into `Config.AutonomyKnobs` on `ChatRunner`; nil disables the
+behaviour (v0.3.0 baseline). Tests: four cases covering autonomous
+bypass, strict fall-through, deny floor enforcement, and nil-provider
+baseline.
 
-**WP05 — Cedar prompt registry posture wiring**: the
-`AutoApproveFamilies` set + `DestructiveActionPosture` are NOT yet
-consulted by `core/policy/cedar/registry.go` to short-circuit the
-prompt path. The fields persist and are visible in the panels, but the
-`cedar:permission-pending` flow still fires for every non-grant call
-regardless of tier. Same follow-up bracket as WP04.
-
-Both deferrals are *additive*: the v0.3.0 release ships the persistent
-dial UX so beta users can pin their preference, and the live behaviour
-catches up in a follow-up before GA.
+**WP05 — Cedar prompt registry posture wiring** (shipped v0.4.1):
+`core/policy/cedar.Registry` gains a `PromptPosture` type with three
+values: `PostureDefault` (v0.3.0 baseline), `PostureAutoAllow`
+(autonomous/bold — `RequestInteractive` returns Allow immediately
+without dispatching), and `PostureAlwaysPrompt` (strict/cautious —
+transient-grants cache is skipped so every call surfaces to the UI).
+Configured via `WithPosture` at construction time or changed live via
+`SetPosture`. Tests confirm auto-resolve, forced-dispatch, and dynamic
+update behaviours.
 
 ## Acceptance smoke (manual)
 
@@ -124,8 +126,6 @@ session store + injected context provider.
 
 ## Follow-ups
 
-- Wire the resolver into the chat-graph LoopNode (WP04).
-- Wire `AutoApproveFamilies` into `core/policy/cedar/registry.go` (WP05).
 - Autonomy-aware compaction: have the compaction tier read the
   session's autonomy.Tier so `autonomous` sessions get more aggressive
   compaction.
