@@ -402,6 +402,12 @@ func (b *Bindings) Bundle_List() ([]bundle.Bundle, error) {
 func (b *Bindings) Bundle_Get(id string) (bundle.Bundle, error) {
 	return b.api.Bundle().Get(b.ctx(), id)
 }
+func (b *Bindings) Bundle_Install(req bundle.InstallRequest) (bundle.Bundle, error) {
+	return b.api.Bundle().Install(b.ctx(), req)
+}
+func (b *Bindings) Bundle_Remove(id string) error {
+	return b.api.Bundle().Remove(b.ctx(), id)
+}
 
 // ── policy ─────────────────────────────────────────────────────────────
 
