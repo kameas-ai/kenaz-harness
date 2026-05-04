@@ -15,6 +15,8 @@
  */
 
 import type {
+  AutonomyLayer,
+  ResolvedAutonomy,
   Session,
   Project,
   Provider,
@@ -208,6 +210,14 @@ interface WailsBindingsLike {
   Projects_AddSession(projectID: string, sessionID: string): Promise<void>;
   Projects_RemoveSession(sessionID: string): Promise<void>;
   Projects_ListSessions(projectID: string): Promise<Session[]>;
+  // ── autonomy-dial-01KR3M2A WP03 ─────────────────────────────────────
+  Settings_GetAutonomy(): Promise<AutonomyLayer>;
+  Settings_SetAutonomy(layer: AutonomyLayer): Promise<void>;
+  Projects_GetAutonomy(projectID: string): Promise<AutonomyLayer>;
+  Projects_SetAutonomy(projectID: string, layer: AutonomyLayer): Promise<void>;
+  Sessions_GetAutonomy(sessionID: string): Promise<AutonomyLayer>;
+  Sessions_SetAutonomy(sessionID: string, layer: AutonomyLayer): Promise<void>;
+  Sessions_ResolveAutonomy(sessionID: string): Promise<ResolvedAutonomy>;
 
   LLM_ListProviders(): Promise<Provider[]>;
   LLM_StartStream(
@@ -275,6 +285,8 @@ interface WailsBindingsLike {
 
   Bundle_List(): Promise<Bundle[]>;
   Bundle_Get(id: string): Promise<Bundle>;
+  Bundle_Install(req: { kind: string; path: string }): Promise<Bundle>;
+  Bundle_Remove(id: string): Promise<void>;
 
   Policy_Explain(input: Record<string, unknown>): Promise<Denial>;
   Policy_StartStream(): Promise<string>;
@@ -299,6 +311,9 @@ interface WailsBindingsLike {
   Settings_SetSaveArtifactEnabled(enabled: boolean): Promise<void>;
   Settings_GetMaxAgentTurns(): Promise<number>;
   Settings_SetMaxAgentTurns(turns: number): Promise<void>;
+  // WP06 monthly-spend notification dial (token-cost-telemetry-01KQ8TD7)
+  Settings_GetMonthlyCostNotifyUSD(): Promise<number>;
+  Settings_SetMonthlyCostNotifyUSD(usd: number): Promise<void>;
   // WP08 permission dials
   Settings_GetPermissionMode(): Promise<string>;
   Settings_SetPermissionMode(mode: string): Promise<void>;
@@ -849,6 +864,18 @@ export interface SessionsClient {
   suggestTitle(id: string): Promise<string>;
   /** Clear the user-set title and revert to the auto-title engine's suggestion. */
   clearTitle(id: string): Promise<void>;
+
+  // ── autonomy-dial-01KR3M2A WP03 ─────────────────────────────────────
+  /** Read the session's persisted autonomy.Layer override. */
+  getAutonomy(id: string): Promise<AutonomyLayer>;
+  /** Persist the session's autonomy.Layer override. */
+  setAutonomy(id: string, layer: AutonomyLayer): Promise<void>;
+  /**
+   * Resolve the effective autonomy for the session by folding
+   * global → project → session layers. Used by the chat header chip
+   * + per-session panel.
+   */
+  resolveAutonomy(id: string): Promise<ResolvedAutonomy>;
 }
 
 /**
@@ -902,6 +929,12 @@ export interface ProjectsClient {
   addSession(projectId: string, sessionId: string): Promise<void>;
   removeSession(sessionId: string): Promise<void>;
   listSessions(projectId: string): Promise<Session[]>;
+
+  // ── autonomy-dial-01KR3M2A WP03 ─────────────────────────────────────
+  /** Read the project's persisted autonomy.Layer override. */
+  getAutonomy(id: string): Promise<AutonomyLayer>;
+  /** Persist the project's autonomy.Layer override. */
+  setAutonomy(id: string, layer: AutonomyLayer): Promise<void>;
 }
 
 export interface LLMConnectorClient {
@@ -1108,6 +1141,8 @@ export interface AttachmentsClient {
 export interface BundleClient {
   list(): Promise<Bundle[]>;
   get(id: string): Promise<Bundle>;
+  install(req: { kind: string; path: string }): Promise<Bundle>;
+  remove(id: string): Promise<void>;
 }
 
 export interface PolicyClient {
@@ -1175,6 +1210,22 @@ export interface SettingsClient {
    */
   setMaxAgentTurns(turns: number): Promise<void>;
 
+  /**
+   * Read the monthly-spend notification threshold dial in USD
+   * (token-cost-telemetry-01KQ8TD7 WP06). Zero (the default) means
+   * the scheduler is disabled; the frontend renders a placeholder
+   * accordingly.
+   */
+  getMonthlyCostNotifyUSD(): Promise<number>;
+  /**
+   * Persist the monthly-spend notification threshold dial in USD.
+   * Zero disables the scheduler. Negatives are normalised to zero by
+   * the store; values above $10,000 are rejected with a typed error.
+   * The dial takes effect on the next chat turn — the threshold
+   * checker reads it fresh on every Manager.Add tail.
+   */
+  setMonthlyCostNotifyUSD(usd: number): Promise<void>;
+
   // ── WP08 permission dials ─────────────────────────────────────────
 
   /**
@@ -1227,6 +1278,12 @@ export interface SettingsClient {
    * Changes take effect on the next model turn without restarting.
    */
   setFSRequestAccessEnabled(enabled: boolean): Promise<void>;
+
+  // ── autonomy-dial-01KR3M2A WP03 ─────────────────────────────────────
+  /** Read the persisted global autonomy.Layer. */
+  getAutonomy(): Promise<AutonomyLayer>;
+  /** Persist the global autonomy.Layer. Empty Layer clears overrides. */
+  setAutonomy(layer: AutonomyLayer): Promise<void>;
 }
 
 /**
@@ -1767,6 +1824,9 @@ export function createHarnessClient(): HarnessClient {
         ),
       suggestTitle: (id) => b().Sessions_SuggestTitle(id),
       clearTitle: (id) => b().Sessions_ClearTitle(id),
+      getAutonomy: (id) => b().Sessions_GetAutonomy(id),
+      setAutonomy: (id, layer) => b().Sessions_SetAutonomy(id, layer),
+      resolveAutonomy: (id) => b().Sessions_ResolveAutonomy(id),
     },
     artifacts: {
       list: (filter) => b().Artifacts_List(filter ?? {}),
@@ -1797,6 +1857,8 @@ export function createHarnessClient(): HarnessClient {
         b().Projects_AddSession(projectId, sessionId),
       removeSession: (sessionId) => b().Projects_RemoveSession(sessionId),
       listSessions: (projectId) => b().Projects_ListSessions(projectId),
+      getAutonomy: (id) => b().Projects_GetAutonomy(id),
+      setAutonomy: (id, layer) => b().Projects_SetAutonomy(id, layer),
     },
     llm: {
       listProviders: () => b().LLM_ListProviders(),
@@ -1872,6 +1934,8 @@ export function createHarnessClient(): HarnessClient {
     bundle: {
       list: () => b().Bundle_List(),
       get: (id) => b().Bundle_Get(id),
+      install: (req) => b().Bundle_Install(req),
+      remove: (id) => b().Bundle_Remove(id),
     },
     policy: {
       explain: (input) => b().Policy_Explain(input),
@@ -1904,6 +1968,9 @@ export function createHarnessClient(): HarnessClient {
       setSaveArtifact: (enabled) => b().Settings_SetSaveArtifactEnabled(enabled),
       getMaxAgentTurns: () => b().Settings_GetMaxAgentTurns(),
       setMaxAgentTurns: (turns) => b().Settings_SetMaxAgentTurns(turns),
+      getMonthlyCostNotifyUSD: () => b().Settings_GetMonthlyCostNotifyUSD(),
+      setMonthlyCostNotifyUSD: (usd) =>
+        b().Settings_SetMonthlyCostNotifyUSD(usd),
       getPermissionMode: () =>
         b().Settings_GetPermissionMode() as Promise<PermissionMode>,
       setPermissionMode: (mode) => b().Settings_SetPermissionMode(mode),
@@ -1926,6 +1993,8 @@ export function createHarnessClient(): HarnessClient {
         b().Settings_GetFSRequestAccessEnabled(),
       setFSRequestAccessEnabled: (enabled) =>
         b().Settings_SetFSRequestAccessEnabled(enabled),
+      getAutonomy: () => b().Settings_GetAutonomy(),
+      setAutonomy: (layer) => b().Settings_SetAutonomy(layer),
     },
     permissions: {
       listGrants: (family) =>
@@ -2168,6 +2237,24 @@ export function createFakeHarnessClient(
       }),
       suggestTitle: async () => 'Fake suggested title',
       clearTitle: noop,
+      getAutonomy: async () => ({ level: null, overrides: {} }),
+      setAutonomy: noop,
+      resolveAutonomy: async () => ({
+        resolved: {
+          maxIterations: 25,
+          askOnAmbiguity: 'major',
+          autoApproveFamilies: ['read', 'write'],
+          tokenCeilingPerTurn: 0,
+          recapStyle: 'brief',
+          continueOnError: 'retry-once',
+          destructiveActionPosture: 'confirm',
+          sourceTrace: {},
+          tier: 'default',
+        },
+        global: { level: null, overrides: {} },
+        project: { level: null, overrides: {} },
+        session: { level: null, overrides: {} },
+      }),
     },
     projects: {
       list: async () => [],
@@ -2191,6 +2278,8 @@ export function createFakeHarnessClient(
       addSession: noop,
       removeSession: noop,
       listSessions: async () => [],
+      getAutonomy: async () => ({ level: null, overrides: {} }),
+      setAutonomy: noop,
     },
     llm: {
       listProviders: async () => [],
@@ -2313,6 +2402,14 @@ export function createFakeHarnessClient(
         tier: '',
         artifactCount: 0,
       }),
+      install: async (_req) => ({
+        id: 'fake',
+        name: 'fake',
+        version: '0.0.0',
+        tier: 'channel (uncached)',
+        artifactCount: 0,
+      }),
+      remove: async (_id) => {},
     },
     policy: {
       explain: async () => ({
@@ -2358,6 +2455,8 @@ export function createFakeHarnessClient(
       setSaveArtifact: noop,
       getMaxAgentTurns: async () => 0,
       setMaxAgentTurns: noop,
+      getMonthlyCostNotifyUSD: async () => 0,
+      setMonthlyCostNotifyUSD: noop,
       getPermissionMode: async () => 'normal' as PermissionMode,
       setPermissionMode: noop,
       getPermissionCacheDangerousOps: async () => false,
@@ -2370,6 +2469,8 @@ export function createFakeHarnessClient(
       setCedarStrictCredentialMode: noop,
       getFSRequestAccessEnabled: async () => true,
       setFSRequestAccessEnabled: noop,
+      getAutonomy: async () => ({ level: null, overrides: {} }),
+      setAutonomy: noop,
     },
     permissions: {
       listGrants: async () => [],

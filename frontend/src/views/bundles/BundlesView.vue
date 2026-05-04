@@ -9,6 +9,10 @@
  *
  * Empty state surfaces a doc link the user can follow when they want
  * to install a bundle (resolver mission ships the resolver itself).
+ *
+ * v0.3.0 beta also exposes a minimal Install form (local_path channel
+ * only) and a per-row Remove affordance. Both call straight through to
+ * Bundle_Install / Bundle_Remove on the harness.
  */
 import { onMounted, ref } from 'vue';
 import CanvasHead from '@/shell/CanvasHead.vue';
@@ -23,6 +27,11 @@ const loading = ref(false);
 const error = ref<string | null>(null);
 
 const expanded = ref<Record<string, Bundle | undefined>>({});
+
+const installPath = ref('');
+const installBusy = ref(false);
+const installError = ref<string | null>(null);
+const removingId = ref<string | null>(null);
 
 async function refresh() {
   loading.value = true;
@@ -47,6 +56,38 @@ async function toggle(id: string) {
     expanded.value = { ...expanded.value, [id]: detail };
   } catch {
     // Leave un-expanded on error; the row still renders the summary.
+  }
+}
+
+async function install() {
+  installError.value = null;
+  const path = installPath.value.trim();
+  if (!path) {
+    installError.value = 'Path is required.';
+    return;
+  }
+  installBusy.value = true;
+  try {
+    await client.bundle.install({ kind: 'local_path', path });
+    installPath.value = '';
+    await refresh();
+  } catch (e) {
+    installError.value = e instanceof Error ? e.message : 'Install failed.';
+  } finally {
+    installBusy.value = false;
+  }
+}
+
+async function remove(id: string) {
+  removingId.value = id;
+  try {
+    await client.bundle.remove(id);
+    expanded.value = { ...expanded.value, [id]: undefined };
+    await refresh();
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : `Failed to remove ${id}.`;
+  } finally {
+    removingId.value = null;
   }
 }
 
@@ -120,7 +161,7 @@ onMounted(() => {
               </span>
             </td>
             <td class="px-4 py-2 text-ink-muted">{{ b.artifactCount }}</td>
-            <td class="px-4 py-2 text-right">
+            <td class="px-4 py-2 text-right space-x-3">
               <button
                 type="button"
                 class="text-[11px] text-ink-muted hover:text-ink"
@@ -128,6 +169,15 @@ onMounted(() => {
                 @click="toggle(b.id)"
               >
                 {{ expanded[b.id] ? 'Hide' : 'View artifacts' }}
+              </button>
+              <button
+                type="button"
+                class="text-[11px] text-signal-danger hover:text-ink disabled:opacity-50"
+                :data-testid="`bundle-remove-${b.id}`"
+                :disabled="removingId === b.id"
+                @click="remove(b.id)"
+              >
+                {{ removingId === b.id ? 'Removing…' : 'Remove' }}
               </button>
             </td>
           </tr>
@@ -155,5 +205,45 @@ onMounted(() => {
         </template>
       </tbody>
     </table>
+
+    <form
+      class="mt-6 px-6 py-4 border-t border-border-muted font-ui text-[12px]"
+      data-testid="bundle-install-form"
+      @submit.prevent="install"
+    >
+      <div class="text-ink mb-2">Install a local_path bundle</div>
+      <p class="text-ink-muted mb-3 max-w-prose">
+        Beta scope: point at an absolute filesystem path that contains a
+        <code class="font-mono">kaneaz.yaml</code> manifest at its root.
+        The bundle is registered in the lockfile; artifact bytes stay
+        on disk where they already are.
+      </p>
+      <div class="flex items-center gap-2">
+        <input
+          v-model="installPath"
+          type="text"
+          placeholder="/absolute/path/to/bundle"
+          class="flex-1 px-2 py-1 font-mono text-[12px] bg-surface-1 text-ink border border-border-muted rounded"
+          :disabled="installBusy"
+          data-testid="bundle-install-path"
+        />
+        <button
+          type="submit"
+          class="px-3 py-1 text-[11px] bg-accent text-ink hover:bg-accent-muted disabled:opacity-50 rounded"
+          :disabled="installBusy || !installPath.trim()"
+          data-testid="bundle-install-submit"
+        >
+          {{ installBusy ? 'Installing…' : 'Install' }}
+        </button>
+      </div>
+      <div
+        v-if="installError"
+        class="mt-2 text-[11px] text-signal-danger"
+        role="alert"
+        data-testid="bundle-install-error"
+      >
+        {{ installError }}
+      </div>
+    </form>
   </div>
 </template>

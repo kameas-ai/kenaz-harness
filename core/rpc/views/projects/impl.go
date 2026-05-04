@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/sigil-tech/kaneaz-harness/core/autonomy"
 	coreprojects "github.com/sigil-tech/kaneaz-harness/core/projects"
 	"github.com/sigil-tech/kaneaz-harness/core/session"
 )
@@ -142,6 +143,16 @@ func (a *API) ListSessions(ctx context.Context, projectID string) ([]Session, er
 		out = append(out, sessionToView(r))
 	}
 	return out, nil
+}
+
+// LoadAutonomyProfile implements ProjectsAPI.
+func (a *API) LoadAutonomyProfile(ctx context.Context, projectID string) (autonomy.Layer, error) {
+	return a.projects.GetAutonomyProfile(ctx, projectID)
+}
+
+// SaveAutonomyProfile implements ProjectsAPI.
+func (a *API) SaveAutonomyProfile(ctx context.Context, projectID string, layer autonomy.Layer) error {
+	return a.projects.SetAutonomyProfile(ctx, projectID, layer)
 }
 
 // Compile-time witness.

@@ -8,9 +8,12 @@ import type { Bundle } from '@/lib/types';
 function provide(seed: Bundle[] = []) {
   const detail = new Map<string, Bundle>();
   for (const b of seed) detail.set(b.id, b);
+  let store: Bundle[] = [...seed];
+  const installs: Array<{ kind: string; path: string }> = [];
+  const removes: string[] = [];
   const client = createFakeHarnessClient({
     bundle: {
-      list: async () => seed,
+      list: async () => [...store],
       get: async (id) =>
         detail.get(id) ?? {
           id,
@@ -19,9 +22,26 @@ function provide(seed: Bundle[] = []) {
           tier: '',
           artifactCount: 0,
         },
+      install: async (req) => {
+        installs.push(req);
+        const installed: Bundle = {
+          id: 'installed-' + req.path,
+          name: 'installed-' + req.path,
+          version: '0.1.0',
+          tier: 'channel (uncached)',
+          source: req.kind + ':' + req.path,
+          artifactCount: 0,
+        };
+        store = [...store, installed];
+        return installed;
+      },
+      remove: async (id) => {
+        removes.push(id);
+        store = store.filter((b) => b.id !== id);
+      },
     },
   });
-  return { client };
+  return { client, installs, removes };
 }
 
 describe('BundlesView (FR-001b numbered-section header)', () => {
@@ -113,6 +133,78 @@ describe('BundlesView (FR-001b numbered-section header)', () => {
     await flushPromises();
     expect(w.text()).toContain('policy.toml');
     expect(w.text()).toContain('policy');
+  });
+
+  it('install form calls Bundle_Install and refreshes the list', async () => {
+    const { client, installs } = provide();
+    const w = mount(BundlesView, {
+      global: {
+        provide: { [HarnessClientKey as symbol]: client },
+      },
+    });
+    await flushPromises();
+    const input = w.find('[data-testid="bundle-install-path"]');
+    await input.setValue('/abs/path/to/alpha');
+    await w.find('[data-testid="bundle-install-form"]').trigger('submit');
+    await flushPromises();
+    expect(installs).toHaveLength(1);
+    expect(installs[0]).toEqual({ kind: 'local_path', path: '/abs/path/to/alpha' });
+    // refresh repopulated the table
+    expect(w.text()).toContain('installed-/abs/path/to/alpha');
+  });
+
+  it('install form surfaces errors and does not refresh on failure', async () => {
+    const client = createFakeHarnessClient({
+      bundle: {
+        list: async () => [],
+        get: async (id) => ({
+          id,
+          name: id,
+          version: '',
+          tier: '',
+          artifactCount: 0,
+        }),
+        install: async () => {
+          throw new Error('manifest missing');
+        },
+        remove: async () => {},
+      },
+    });
+    const w = mount(BundlesView, {
+      global: {
+        provide: { [HarnessClientKey as symbol]: client },
+      },
+    });
+    await flushPromises();
+    await w.find('[data-testid="bundle-install-path"]').setValue('/nope');
+    await w.find('[data-testid="bundle-install-form"]').trigger('submit');
+    await flushPromises();
+    expect(w.find('[data-testid="bundle-install-error"]').text()).toContain('manifest missing');
+  });
+
+  it('row Remove button calls Bundle_Remove and refreshes', async () => {
+    const seed: Bundle[] = [
+      {
+        id: 'alpha',
+        name: 'alpha',
+        version: '0.2.0',
+        tier: 'signed',
+        artifactCount: 0,
+      },
+    ];
+    const { client, removes } = provide(seed);
+    const w = mount(BundlesView, {
+      global: {
+        provide: { [HarnessClientKey as symbol]: client },
+      },
+    });
+    await flushPromises();
+    expect(w.text()).toContain('alpha');
+    await w.find('[data-testid="bundle-remove-alpha"]').trigger('click');
+    await flushPromises();
+    expect(removes).toEqual(['alpha']);
+    // After remove the table is empty so the empty-state appears
+    expect(w.text()).toContain('No bundles installed');
   });
 
   it('uses only design tokens — no raw hex/rgba', async () => {

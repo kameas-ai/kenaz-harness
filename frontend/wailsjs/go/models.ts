@@ -3874,3 +3874,137 @@ export namespace workflow {
 
 }
 
+
+export namespace workflows {
+
+	export class Summary {
+	    id: string;
+	    name: string;
+	    description?: string;
+	    version: number;
+	    stepCount: number;
+	    source: string;
+
+	    static createFrom(source: any = {}) {
+	        return new Summary(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.name = source["name"];
+	        this.description = source["description"];
+	        this.version = source["version"];
+	        this.stepCount = source["stepCount"];
+	        this.source = source["source"];
+	    }
+	}
+
+	export class Input {
+	    name: string;
+	    kind: string;
+	    required?: boolean;
+	    default?: string;
+	    options?: string[];
+
+	    static createFrom(source: any = {}) {
+	        return new Input(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.kind = source["kind"];
+	        this.required = source["required"];
+	        this.default = source["default"];
+	        this.options = source["options"];
+	    }
+	}
+
+	export class Step {
+	    name: string;
+	    kind: string;
+	    userPrompt?: string;
+	    cmd?: string;
+	    args?: string[];
+
+	    static createFrom(source: any = {}) {
+	        return new Step(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.kind = source["kind"];
+	        this.userPrompt = source["userPrompt"];
+	        this.cmd = source["cmd"];
+	        this.args = source["args"];
+	    }
+	}
+
+	export class Workflow {
+	    id: string;
+	    name: string;
+	    description?: string;
+	    version: number;
+	    inputs?: Input[];
+	    steps: Step[];
+
+	    static createFrom(source: any = {}) {
+	        return new Workflow(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.name = source["name"];
+	        this.description = source["description"];
+	        this.version = source["version"];
+	        this.inputs = (source["inputs"] || []).map((s: any) => new Input(s));
+	        this.steps = (source["steps"] || []).map((s: any) => new Step(s));
+	    }
+	}
+
+	export class StepRun {
+	    name: string;
+	    kind: string;
+	    status: string;
+	    output?: string;
+	    error?: string;
+
+	    static createFrom(source: any = {}) {
+	        return new StepRun(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.kind = source["kind"];
+	        this.status = source["status"];
+	        this.output = source["output"];
+	        this.error = source["error"];
+	    }
+	}
+
+	export class RunResult {
+	    runId: string;
+	    workflowId: string;
+	    status: string;
+	    steps: StepRun[];
+	    error?: string;
+
+	    static createFrom(source: any = {}) {
+	        return new RunResult(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.runId = source["runId"];
+	        this.workflowId = source["workflowId"];
+	        this.status = source["status"];
+	        this.steps = (source["steps"] || []).map((s: any) => new StepRun(s));
+	        this.error = source["error"];
+	    }
+	}
+
+}

@@ -841,3 +841,15 @@ export function Workflow_StartStream() {
 export function Workflow_StopStream(arg1) {
   return window['go']['rpc']['Bindings']['Workflow_StopStream'](arg1);
 }
+
+export function Workflows_List() {
+  return window['go']['rpc']['Bindings']['Workflows_List']();
+}
+
+export function Workflows_Get(arg1) {
+  return window['go']['rpc']['Bindings']['Workflows_Get'](arg1);
+}
+
+export function Workflows_Run(arg1, arg2) {
+  return window['go']['rpc']['Bindings']['Workflows_Run'](arg1, arg2);
+}

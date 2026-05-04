@@ -66,6 +66,25 @@ const (
 	// Reset emits new_binding: "".
 	// (keyboard-shortcuts-settings-01KQ8TDR plan §2.9)
 	KindShortcutOverridden Kind = "settings.shortcut.overridden"
+
+	// Harness-self MCP audit kinds (mission harness-self-mcp-onboarding-01KQ8TDU
+	// WP10). Emitted by the in-process harness-self server on every tool
+	// dispatch; payload values respect the per-tool Redact list (api_key
+	// values are removed before emission).
+	//
+	//   KindHarnessSelfToolCalled        — every harness_read_*/harness_write_*
+	//                                      tool call. Payload:
+	//                                      {tool_name, success, duration_ms}.
+	//   KindHarnessSelfPolicyProposed    — propose_cedar_policy received a
+	//                                      proposal; payload {name}.
+	//   KindHarnessSelfPolicyWritten     — user approved the proposal; payload
+	//                                      {name, body_size}.
+	//   KindHarnessSelfPolicyRejected    — user rejected (or timed out) the
+	//                                      proposal; payload {name, reason}.
+	KindHarnessSelfToolCalled     Kind = "harness-self.tool.called"
+	KindHarnessSelfPolicyProposed Kind = "harness-self.policy.proposed"
+	KindHarnessSelfPolicyWritten  Kind = "harness-self.policy.written"
+	KindHarnessSelfPolicyRejected Kind = "harness-self.policy.rejected"
 )
 
 var builtIn = []Kind{
@@ -82,6 +101,9 @@ var builtIn = []Kind{
 	// MCP recipe lifecycle (WP07 + WP10).
 	KindMCPRecipeAdded, KindMCPRecipeRemoved, KindMCPRecipeTested,
 	KindShortcutOverridden,
+	// Harness-self MCP audit (harness-self-mcp-onboarding-01KQ8TDU WP10).
+	KindHarnessSelfToolCalled, KindHarnessSelfPolicyProposed,
+	KindHarnessSelfPolicyWritten, KindHarnessSelfPolicyRejected,
 }
 
 var (
