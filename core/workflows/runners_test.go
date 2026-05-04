@@ -514,3 +514,188 @@ func TestConditional_RejectsMissingIf(t *testing.T) {
 	}
 }
 
+// =============================================================================
+// web_fetch (WP05)
+// =============================================================================
+
+func TestWebFetch_FetchesHTMLPage(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/robots.txt" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "text/html")
+		fmt.Fprint(w, "<html><h1>Hello</h1></html>")
+	}))
+	defer srv.Close()
+
+	wf := Workflow{
+		ID: "wf", Name: "wf", Version: 1,
+		Steps: []Step{{Name: "fetch", Kind: StepKindWebFetch, URL: srv.URL + "/page"}},
+	}
+	run, err := NewEngine().Run(context.Background(), wf, nil, RunOptions{})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if run.Status != "completed" {
+		t.Fatalf("status: %s err=%s", run.Status, run.Err)
+	}
+	if !strings.Contains(run.Steps[0].Output, "html") {
+		t.Errorf("output should contain kind=html: %s", run.Steps[0].Output)
+	}
+}
+
+func TestWebFetch_BlockedByRobots(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/robots.txt":
+			w.Header().Set("Content-Type", "text/plain")
+			fmt.Fprint(w, "User-agent: *\nDisallow: /\n")
+		default:
+			fmt.Fprint(w, "nope")
+		}
+	}))
+	defer srv.Close()
+
+	wf := Workflow{
+		ID: "wf", Name: "wf", Version: 1,
+		Steps: []Step{{Name: "fetch", Kind: StepKindWebFetch, URL: srv.URL + "/secret"}},
+	}
+	run, err := NewEngine().Run(context.Background(), wf, nil, RunOptions{})
+	if err == nil || run.Status != "failed" {
+		t.Fatalf("expected failure for robots.txt block: status=%s", run.Status)
+	}
+	if !strings.Contains(err.Error(), "robots") {
+		t.Errorf("error should mention robots: %v", err)
+	}
+}
+
+func TestWebFetch_CedarGateDenies(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		fmt.Fprint(w, "<html>ok</html>")
+	}))
+	defer srv.Close()
+
+	wf := Workflow{
+		ID: "wf", Name: "wf", Version: 1,
+		Steps: []Step{{Name: "fetch", Kind: StepKindWebFetch, URL: srv.URL + "/page"}},
+	}
+	e := NewEngineWithDeps(Deps{NetAuthz: &denyAllAuthz{}})
+	run, err := e.Run(context.Background(), wf, nil, RunOptions{})
+	if err == nil || run.Status != "failed" {
+		t.Fatalf("expected policy denial: status=%s err=%v", run.Status, err)
+	}
+	if !strings.Contains(err.Error(), "policy denied") {
+		t.Errorf("error should mention policy denied: %v", err)
+	}
+}
+
+func TestWebFetch_RejectsEmptyURL(t *testing.T) {
+	wf := Workflow{
+		ID: "wf", Name: "wf", Version: 1,
+		Steps: []Step{{Name: "fetch", Kind: StepKindWebFetch, URL: ""}},
+	}
+	_, err := NewEngine().Run(context.Background(), wf, nil, RunOptions{})
+	if err == nil || !strings.Contains(err.Error(), "url") {
+		t.Fatalf("expected url-required error, got %v", err)
+	}
+}
+
+// =============================================================================
+// web_scrape (WP05)
+// =============================================================================
+
+func TestWebScrape_CSSExtraction(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/robots.txt" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "text/html")
+		fmt.Fprint(w, `<html><body><h1>Hello World</h1><a href="https://x.com">Link</a></body></html>`)
+	}))
+	defer srv.Close()
+
+	wf := Workflow{
+		ID: "wf", Name: "wf", Version: 1,
+		Steps: []Step{{
+			Name: "scrape", Kind: StepKindWebScrape,
+			URL:  srv.URL + "/page",
+			Mode: "css",
+			Extractors: []any{
+				map[string]any{"name": "title", "selector": "h1"},
+				map[string]any{"name": "links", "selector": "a", "attr": "href", "multiple": true},
+			},
+		}},
+	}
+	run, err := NewEngine().Run(context.Background(), wf, nil, RunOptions{})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if run.Status != "completed" {
+		t.Fatalf("status: %s err=%s", run.Status, run.Err)
+	}
+	if !strings.Contains(run.Steps[0].Output, "Hello World") {
+		t.Errorf("output should contain extracted title: %s", run.Steps[0].Output)
+	}
+}
+
+func TestWebScrape_LLMMode(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/robots.txt" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "text/html")
+		fmt.Fprint(w, `<html><body><h1>Breaking News</h1></body></html>`)
+	}))
+	defer srv.Close()
+
+	llm := &fakeLLM{chunks: []string{"headline: Breaking News"}}
+	wf := Workflow{
+		ID: "wf", Name: "wf", Version: 1,
+		Steps: []Step{{
+			Name:             "scrape",
+			Kind:             StepKindWebScrape,
+			URL:              srv.URL + "/page",
+			Mode:             "llm",
+			ExtractWithModel: "p1",
+			ExtractPrompt:    "Extract the headline article title",
+		}},
+	}
+	e := NewEngineWithDeps(Deps{LLM: llm, DefaultLLMProfile: "p1"})
+	run, err := e.Run(context.Background(), wf, nil, RunOptions{})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if run.Status != "completed" {
+		t.Fatalf("status: %s err=%s", run.Status, run.Err)
+	}
+	if !strings.Contains(run.Steps[0].Output, "Breaking News") {
+		t.Errorf("output should contain LLM extraction: %s", run.Steps[0].Output)
+	}
+}
+
+func TestWebScrape_InvalidMode(t *testing.T) {
+	wf := Workflow{
+		ID: "wf", Name: "wf", Version: 1,
+		Steps: []Step{{
+			Name: "scrape", Kind: StepKindWebScrape,
+			URL:  "https://example.com",
+			Mode: "xpath", // unsupported
+		}},
+	}
+	_, err := NewEngine().Run(context.Background(), wf, nil, RunOptions{})
+	if err == nil || !strings.Contains(err.Error(), "mode") {
+		t.Fatalf("expected mode validation error, got %v", err)
+	}
+}
+
+// denyAllAuthz is a NetworkAuthorizer that always denies.
+type denyAllAuthz struct{}
+
+func (denyAllAuthz) Authorize(_ context.Context, _, _ string) error {
+	return fmt.Errorf("policy denied: network access not permitted in test")
+}
+

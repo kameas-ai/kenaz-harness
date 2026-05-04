@@ -72,3 +72,18 @@ permit (
     action == Action::"workflow.delete",
     resource is Workflow
 );
+
+// --- network.fetch (WP05) -----------------------------------------------
+// Actions:
+//   `Action::"workflow.network.fetch"` — any web_fetch / web_scrape step
+//
+// Permissive default: all outbound fetches are permitted.
+// In strict mode the permit is absent (NotApplicable); the chassis may
+// layer a forbid rule that requires an explicit allowlist by domain.
+permit (
+    principal == User::"local",
+    action == Action::"workflow.network.fetch",
+    resource is Workflow
+) when {
+    context.mode == "permissive"
+};

@@ -155,6 +155,25 @@ func validateStepFields(st Step) error {
 		if st.ThenStep == "" && st.ElseStep == "" {
 			return fmt.Errorf("step %q: conditional requires then_step or else_step", st.Name)
 		}
+	case StepKindWebFetch:
+		if st.URL == "" {
+			return fmt.Errorf("step %q: web_fetch requires url", st.Name)
+		}
+	case StepKindWebScrape:
+		if st.URL == "" {
+			return fmt.Errorf("step %q: web_scrape requires url", st.Name)
+		}
+		// mode must be empty/"css" or "llm"
+		switch st.Mode {
+		case "", "css", "llm":
+		default:
+			return fmt.Errorf("step %q: web_scrape mode must be css or llm (got %q)", st.Name, st.Mode)
+		}
+		if st.Mode == "llm" || st.ExtractWithModel != "" {
+			if st.ExtractPrompt == "" {
+				return fmt.Errorf("step %q: web_scrape llm mode requires extract_prompt", st.Name)
+			}
+		}
 	}
 	return nil
 }

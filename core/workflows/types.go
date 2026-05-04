@@ -64,6 +64,9 @@ const (
 	StepKindWriteArtifact StepKind = "write_artifact"
 	StepKindTransform     StepKind = "transform"
 	StepKindConditional   StepKind = "conditional"
+	// WP05 — external-network step kinds.
+	StepKindWebFetch  StepKind = "web_fetch"
+	StepKindWebScrape StepKind = "web_scrape"
 )
 
 // AllStepKinds is the closed enum the loader validates against.
@@ -72,6 +75,7 @@ func AllStepKinds() []StepKind {
 		StepKindModelTurn, StepKindToolCall, StepKindMCPCall,
 		StepKindHTTPRequest, StepKindShell, StepKindReadArtifact,
 		StepKindWriteArtifact, StepKindTransform, StepKindConditional,
+		StepKindWebFetch, StepKindWebScrape,
 	}
 }
 
@@ -144,6 +148,22 @@ type Step struct {
 	If       string `yaml:"if,omitempty" json:"if,omitempty"`
 	ThenStep string `yaml:"then_step,omitempty" json:"thenStep,omitempty"`
 	ElseStep string `yaml:"else_step,omitempty" json:"elseStep,omitempty"`
+
+	// web_fetch fields (WP05).
+	// URL is shared with http_request. UserAgent overrides the default.
+	// MinIntervalMS is the per-host rate-limit floor in milliseconds.
+	UserAgent     string `yaml:"user_agent,omitempty" json:"userAgent,omitempty"`
+	MinIntervalMS int    `yaml:"min_interval_ms,omitempty" json:"minIntervalMs,omitempty"`
+
+	// web_scrape fields (WP05).
+	// Mode selects the extraction engine: "css" (default) or "llm".
+	// For "css": Extractors declares the CSS-selector rules.
+	// For "llm": ExtractWithModel + ExtractPrompt configure LLM-driven
+	// extraction; internally calls the model_turn runner.
+	Mode             string         `yaml:"mode,omitempty" json:"mode,omitempty"`
+	Extractors       []any          `yaml:"extractors,omitempty" json:"extractors,omitempty"`
+	ExtractWithModel string         `yaml:"extract_with_model,omitempty" json:"extractWithModel,omitempty"`
+	ExtractPrompt    string         `yaml:"extract_prompt,omitempty" json:"extractPrompt,omitempty"`
 }
 
 // Workflow is the in-memory representation of one workflow YAML file.
@@ -321,6 +341,17 @@ type ArtifactWrite struct {
 	Content   []byte
 }
 
+// NetworkAuthorizer is the Cedar gate for external-network step kinds.
+// Before any web_fetch or web_scrape step makes a network request, the
+// engine calls Authorize with action "workflow.network.fetch". A non-nil
+// error aborts the step with a policy_denied classification.
+//
+// nil is a no-op (permit by default) so test harnesses and the chassis
+// boot path can run without a wired Cedar engine.
+type NetworkAuthorizer interface {
+	Authorize(ctx context.Context, action, resourceID string) error
+}
+
 // Deps bundles the optional external dependencies workflow runners
 // need. nil entries cause the corresponding runner to error at Run
 // time with a clear "dependency unavailable" message — keeping
@@ -335,6 +366,9 @@ type Deps struct {
 	// under the right session in the artifacts table. Empty disables
 	// artifact writes (write_artifact returns an error).
 	SessionID string
+	// NetAuthz, when non-nil, gates web_fetch and web_scrape steps via
+	// Cedar action "workflow.network.fetch". nil permits all fetches.
+	NetAuthz NetworkAuthorizer
 }
 
 // Sentinels.
@@ -353,4 +387,11 @@ var (
 	// catch this and surface a confirm prompt to the user; the user's
 	// choice routes back through Run with RunOptions.SkipCache=true.
 	ErrRerunPolicyAsk = errors.New("workflows: rerun_policy=prompt requires user confirmation")
+	// ErrBlockedByRobots is re-exported from the web sub-package so
+	// callers can identify robots.txt refusals without importing
+	// core/workflows/web directly.
+	ErrBlockedByRobots = errors.New("web: URL blocked by robots.txt")
+	// ErrNetworkPolicyDenied is returned when the Cedar gate refuses a
+	// web_fetch or web_scrape step.
+	ErrNetworkPolicyDenied = errors.New("workflows: network fetch denied by policy")
 )
