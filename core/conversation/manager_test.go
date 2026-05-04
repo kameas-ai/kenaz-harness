@@ -2,6 +2,7 @@ package conversation
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -253,6 +254,72 @@ func TestManager_ListBranchesByProject(t *testing.T) {
 	}
 	if branches[0].ParentSessionID != parent.ID {
 		t.Errorf("parent id mismatch")
+	}
+}
+
+func TestManager_DeleteChildrenOf_CascadesRecursively(t *testing.T) {
+	t.Parallel()
+	store := NewMemoryStore()
+	sessStore := session.NewMemoryStore()
+	sessMgr := session.NewManager(sessStore)
+	ctx := context.Background()
+
+	// Build a tree: root → child → grandchild.
+	root, err := sessMgr.Create(ctx, "root")
+	if err != nil {
+		t.Fatalf("create root: %v", err)
+	}
+	mRoot, _ := sessMgr.AppendMessage(ctx, root.ID, session.Message{Role: session.RoleUser, Content: "hi"})
+
+	mgr := NewManager(store, sessMgr,
+		WithIDGen(func() (string, error) {
+			// sequential id generator using a closure counter.
+			return "br-cascade-1", nil
+		}),
+	)
+	counter := 0
+	mgr.idGen = func() (string, error) {
+		counter++
+		return fmt.Sprintf("br-cas-%d", counter), nil
+	}
+
+	// Create child branch.
+	_, child, err := mgr.CreateBranchAtMessage(ctx, ForkAtMessageOptions{
+		ParentSessionID: root.ID,
+		ParentMessageID: mRoot.ID,
+		Title:           "child",
+	})
+	if err != nil {
+		t.Fatalf("CreateBranchAtMessage (child): %v", err)
+	}
+
+	// Append a message to child and create grandchild.
+	mChild, _ := sessMgr.AppendMessage(ctx, child.ID, session.Message{Role: session.RoleUser, Content: "child-msg"})
+	_, grandchild, err := mgr.CreateBranchAtMessage(ctx, ForkAtMessageOptions{
+		ParentSessionID: child.ID,
+		ParentMessageID: mChild.ID,
+		Title:           "grandchild",
+	})
+	if err != nil {
+		t.Fatalf("CreateBranchAtMessage (grandchild): %v", err)
+	}
+
+	// DeleteChildrenOf(root) should remove child and grandchild sessions.
+	if err := mgr.DeleteChildrenOf(ctx, root.ID); err != nil {
+		t.Fatalf("DeleteChildrenOf: %v", err)
+	}
+
+	// Child session should be gone.
+	if _, err := sessMgr.Get(ctx, child.ID); err == nil {
+		t.Errorf("child session %q should have been deleted", child.ID)
+	}
+	// Grandchild session should be gone.
+	if _, err := sessMgr.Get(ctx, grandchild.ID); err == nil {
+		t.Errorf("grandchild session %q should have been deleted", grandchild.ID)
+	}
+	// Root session should be untouched.
+	if _, err := sessMgr.Get(ctx, root.ID); err != nil {
+		t.Errorf("root session %q should still exist: %v", root.ID, err)
 	}
 }
 

@@ -244,6 +244,8 @@ async function refresh() {
   monthlyCostNotifyUsdError.value = null;
   // WP05: hydrate per-provider context-window override map.
   contextWindowOverrides.value = { ...(settings.value.contextWindowOverrides ?? {}) };
+  // Hydrate branching UX dials (branching-ux-polish-01KQ8TD7 WP06).
+  maxVisibleBranchDepth.value = settings.value.maxVisibleBranchDepth ?? 5;
   // Tier-explain payload + provider list both feed the Compaction
   // section; either failing returns the empty-state UI rather than
   // bricking the page.
@@ -492,6 +494,59 @@ function toggleRestore() {
     ...settings.value,
     lastRoute: restoreOnLaunch.value ? settings.value.lastRoute : '/sessions',
   });
+}
+
+/* ── Branching UX dials (branching-ux-polish-01KQ8TD7 WP06) ─────────────── */
+
+/** autoCollapseBranchesInSidebar — default true per spec. */
+const autoCollapseBranches = computed({
+  get: () => settings.value.autoCollapseBranchesInSidebar ?? true,
+  set: (next: boolean) => {
+    settings.value = { ...settings.value, autoCollapseBranchesInSidebar: next };
+  },
+});
+
+async function toggleAutoCollapseBranches() {
+  const next = !autoCollapseBranches.value;
+  autoCollapseBranches.value = next;
+  try {
+    await client.settings.set({ ...settings.value, autoCollapseBranchesInSidebar: next });
+  } catch {
+    autoCollapseBranches.value = !next;
+  }
+}
+
+/** deleteBranchesWithParent — default false (safe orphan behaviour). */
+const deleteBranchesWithParent = computed({
+  get: () => settings.value.deleteBranchesWithParent ?? false,
+  set: (next: boolean) => {
+    settings.value = { ...settings.value, deleteBranchesWithParent: next };
+  },
+});
+
+async function toggleDeleteBranchesWithParent() {
+  const next = !deleteBranchesWithParent.value;
+  deleteBranchesWithParent.value = next;
+  try {
+    await client.settings.set({ ...settings.value, deleteBranchesWithParent: next });
+  } catch {
+    deleteBranchesWithParent.value = !next;
+  }
+}
+
+/** maxVisibleBranchDepth — default 5 per spec. */
+const maxVisibleBranchDepth = ref<number>(5);
+
+async function setMaxVisibleBranchDepth(n: number) {
+  const clamped = Math.max(1, Math.min(32, n));
+  maxVisibleBranchDepth.value = clamped;
+  try {
+    await client.settings.set({ ...settings.value, maxVisibleBranchDepth: clamped });
+    settings.value = { ...settings.value, maxVisibleBranchDepth: clamped };
+  } catch {
+    // keep the ref at the last-known-good from settings.value
+    maxVisibleBranchDepth.value = settings.value.maxVisibleBranchDepth ?? 5;
+  }
 }
 
 onMounted(() => {
@@ -945,6 +1000,86 @@ onMounted(() => {
               @input="onContextWindowOverrideInput(kind, $event)"
             />
           </div>
+        </div>
+      </section>
+
+      <!-- Branching UX dials (branching-ux-polish-01KQ8TD7 WP06) -->
+      <section data-testid="branching-section">
+        <h2 class="font-ui text-[11px] uppercase tracking-[0.18em] text-ink-subtle">
+          Branching
+        </h2>
+        <!-- Auto-collapse -->
+        <div class="mt-2 flex items-start justify-between gap-4">
+          <div>
+            <p class="font-ui text-[12px] text-ink">Sidebar shows branches collapsed by default</p>
+            <p class="font-ui text-[11px] text-ink-dim">
+              When on, parent sessions with branch children start collapsed in the left rail.
+              Individual expand/collapse choices persist across sessions.
+            </p>
+          </div>
+          <button
+            type="button"
+            role="switch"
+            :aria-checked="autoCollapseBranches"
+            class="relative mt-0.5 h-5 w-9 flex-shrink-0 rounded-full border transition-colors"
+            :class="autoCollapseBranches
+              ? 'border-accent bg-accent'
+              : 'border-surface-3 bg-surface-2'"
+            data-testid="auto-collapse-branches-toggle"
+            @click="toggleAutoCollapseBranches"
+          >
+            <span
+              class="absolute top-0.5 h-4 w-4 rounded-full bg-white shadow-sm transition-transform"
+              :class="autoCollapseBranches ? 'translate-x-4' : 'translate-x-0.5'"
+            />
+          </button>
+        </div>
+        <!-- Delete branches with parent -->
+        <div class="mt-3 flex items-start justify-between gap-4">
+          <div>
+            <p class="font-ui text-[12px] text-ink">Delete branches when their parent session is deleted (cascade)</p>
+            <p class="font-ui text-[11px] text-ink-dim">
+              When on, deleting a parent session also removes all its branch descendants.
+              When off (default), branches become independent root sessions.
+            </p>
+          </div>
+          <button
+            type="button"
+            role="switch"
+            :aria-checked="deleteBranchesWithParent"
+            class="relative mt-0.5 h-5 w-9 flex-shrink-0 rounded-full border transition-colors"
+            :class="deleteBranchesWithParent
+              ? 'border-accent bg-accent'
+              : 'border-surface-3 bg-surface-2'"
+            data-testid="delete-branches-with-parent-toggle"
+            @click="toggleDeleteBranchesWithParent"
+          >
+            <span
+              class="absolute top-0.5 h-4 w-4 rounded-full bg-white shadow-sm transition-transform"
+              :class="deleteBranchesWithParent ? 'translate-x-4' : 'translate-x-0.5'"
+            />
+          </button>
+        </div>
+        <!-- Max visible depth -->
+        <div class="mt-3">
+          <div class="flex items-center justify-between">
+            <p class="font-ui text-[12px] text-ink">Maximum branch depth visible in the sidebar</p>
+            <span class="font-mono text-[12px] text-ink" data-testid="max-branch-depth-value">{{ maxVisibleBranchDepth }}</span>
+          </div>
+          <p class="font-ui text-[11px] text-ink-dim">
+            Sessions nested deeper than this number show a "+N more depths" affordance.
+            Range 1–32; default 5.
+          </p>
+          <input
+            type="range"
+            min="1"
+            max="32"
+            step="1"
+            :value="maxVisibleBranchDepth"
+            class="mt-2 w-full accent-accent"
+            data-testid="max-branch-depth-slider"
+            @change="setMaxVisibleBranchDepth(+($event.target as HTMLInputElement).value)"
+          />
         </div>
       </section>
 

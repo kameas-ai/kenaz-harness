@@ -3635,6 +3635,9 @@ export namespace settings {
 	    fsWriteDisabled?: boolean;
 	    editFileArtifactSyncDisabled?: boolean;
 	    contextWindowOverrides?: Record<string, number>;
+	    autoCollapseBranchesInSidebar?: boolean;
+	    deleteBranchesWithParent?: boolean;
+	    maxVisibleBranchDepth?: number;
 	
 	    static createFrom(source: any = {}) {
 	        return new Settings(source);
@@ -3688,6 +3691,9 @@ export namespace settings {
 	        this.fsWriteDisabled = source["fsWriteDisabled"];
 	        this.editFileArtifactSyncDisabled = source["editFileArtifactSyncDisabled"];
 	        this.contextWindowOverrides = source["contextWindowOverrides"];
+	        this.autoCollapseBranchesInSidebar = source["autoCollapseBranchesInSidebar"];
+	        this.deleteBranchesWithParent = source["deleteBranchesWithParent"];
+	        this.maxVisibleBranchDepth = source["maxVisibleBranchDepth"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {

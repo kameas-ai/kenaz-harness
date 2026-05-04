@@ -709,6 +709,30 @@ export interface Settings {
    * Zero or absent means "use catalog values."
    */
   contextWindowOverrides?: Record<string, number>;
+
+  /**
+   * Branching UX dials — branching-ux-polish-01KQ8TD7 WP06.
+   *
+   * autoCollapseBranchesInSidebar: when true (default), every parent
+   * session that has branch children starts collapsed in the left rail
+   * so the sidebar doesn't sprawl on first load. Users can expand
+   * individually; their choices persist in localStorage.
+   */
+  autoCollapseBranchesInSidebar?: boolean;
+
+  /**
+   * deleteBranchesWithParent: when true, deleting a parent session
+   * recursively removes all descendant branch sessions before the
+   * branch row is cascaded. Default false (safe / orphan behaviour).
+   */
+  deleteBranchesWithParent?: boolean;
+
+  /**
+   * maxVisibleBranchDepth: caps the number of nesting levels shown in
+   * the sidebar branch tree. Default 5. Sessions deeper than the cap
+   * are replaced by a "+N more depths" affordance.
+   */
+  maxVisibleBranchDepth?: number;
 }
 
 /**

@@ -371,6 +371,36 @@ func (m *Manager) ListBranchesByProject(ctx context.Context, projectID string) (
 	return out, nil
 }
 
+// DeleteChildrenOf recursively deletes all descendant sessions of
+// parentSessionID in depth-first order (leaves first). This is the
+// cascade-delete implementation for Settings.DeleteBranchesWithParent=true
+// (branching-ux-polish-01KQ8TD7 WP06).
+//
+// Each child session is deleted via session.Manager.Delete; the branch
+// row is removed by the ON DELETE CASCADE FK that already exists in
+// migration 0306. Returns the first error encountered; partial deletion
+// may occur.
+func (m *Manager) DeleteChildrenOf(ctx context.Context, parentSessionID string) error {
+	if m.sessions == nil {
+		return fmt.Errorf("conversation: DeleteChildrenOf requires session.Manager")
+	}
+	branches, err := m.store.ListByParent(ctx, parentSessionID)
+	if err != nil {
+		return fmt.Errorf("conversation: list branches of %q: %w", parentSessionID, err)
+	}
+	for _, br := range branches {
+		// Recurse depth-first so grandchildren are deleted before their
+		// parent child sessions, avoiding FK constraint violations.
+		if err := m.DeleteChildrenOf(ctx, br.ChildSessionID); err != nil {
+			return err
+		}
+		if err := m.sessions.Delete(ctx, br.ChildSessionID); err != nil {
+			return fmt.Errorf("conversation: delete child session %q: %w", br.ChildSessionID, err)
+		}
+	}
+	return nil
+}
+
 // detectCycle walks up the branch ancestor chain from sessionID and
 // returns ErrCycle if depth exceeds 32 (a cap that catches any practical
 // cycle without infinite looping). This is a belt-and-braces guard;
