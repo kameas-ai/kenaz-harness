@@ -285,6 +285,8 @@ interface WailsBindingsLike {
 
   Bundle_List(): Promise<Bundle[]>;
   Bundle_Get(id: string): Promise<Bundle>;
+  Bundle_Install(req: { kind: string; path: string }): Promise<Bundle>;
+  Bundle_Remove(id: string): Promise<void>;
 
   Policy_Explain(input: Record<string, unknown>): Promise<Denial>;
   Policy_StartStream(): Promise<string>;
@@ -309,6 +311,9 @@ interface WailsBindingsLike {
   Settings_SetSaveArtifactEnabled(enabled: boolean): Promise<void>;
   Settings_GetMaxAgentTurns(): Promise<number>;
   Settings_SetMaxAgentTurns(turns: number): Promise<void>;
+  // WP06 monthly-spend notification dial (token-cost-telemetry-01KQ8TD7)
+  Settings_GetMonthlyCostNotifyUSD(): Promise<number>;
+  Settings_SetMonthlyCostNotifyUSD(usd: number): Promise<void>;
   // WP08 permission dials
   Settings_GetPermissionMode(): Promise<string>;
   Settings_SetPermissionMode(mode: string): Promise<void>;
@@ -1136,6 +1141,8 @@ export interface AttachmentsClient {
 export interface BundleClient {
   list(): Promise<Bundle[]>;
   get(id: string): Promise<Bundle>;
+  install(req: { kind: string; path: string }): Promise<Bundle>;
+  remove(id: string): Promise<void>;
 }
 
 export interface PolicyClient {
@@ -1202,6 +1209,22 @@ export interface SettingsClient {
    * to zero by the store.
    */
   setMaxAgentTurns(turns: number): Promise<void>;
+
+  /**
+   * Read the monthly-spend notification threshold dial in USD
+   * (token-cost-telemetry-01KQ8TD7 WP06). Zero (the default) means
+   * the scheduler is disabled; the frontend renders a placeholder
+   * accordingly.
+   */
+  getMonthlyCostNotifyUSD(): Promise<number>;
+  /**
+   * Persist the monthly-spend notification threshold dial in USD.
+   * Zero disables the scheduler. Negatives are normalised to zero by
+   * the store; values above $10,000 are rejected with a typed error.
+   * The dial takes effect on the next chat turn — the threshold
+   * checker reads it fresh on every Manager.Add tail.
+   */
+  setMonthlyCostNotifyUSD(usd: number): Promise<void>;
 
   // ── WP08 permission dials ─────────────────────────────────────────
 
@@ -1911,6 +1934,8 @@ export function createHarnessClient(): HarnessClient {
     bundle: {
       list: () => b().Bundle_List(),
       get: (id) => b().Bundle_Get(id),
+      install: (req) => b().Bundle_Install(req),
+      remove: (id) => b().Bundle_Remove(id),
     },
     policy: {
       explain: (input) => b().Policy_Explain(input),
@@ -1943,6 +1968,9 @@ export function createHarnessClient(): HarnessClient {
       setSaveArtifact: (enabled) => b().Settings_SetSaveArtifactEnabled(enabled),
       getMaxAgentTurns: () => b().Settings_GetMaxAgentTurns(),
       setMaxAgentTurns: (turns) => b().Settings_SetMaxAgentTurns(turns),
+      getMonthlyCostNotifyUSD: () => b().Settings_GetMonthlyCostNotifyUSD(),
+      setMonthlyCostNotifyUSD: (usd) =>
+        b().Settings_SetMonthlyCostNotifyUSD(usd),
       getPermissionMode: () =>
         b().Settings_GetPermissionMode() as Promise<PermissionMode>,
       setPermissionMode: (mode) => b().Settings_SetPermissionMode(mode),
@@ -2374,6 +2402,14 @@ export function createFakeHarnessClient(
         tier: '',
         artifactCount: 0,
       }),
+      install: async (_req) => ({
+        id: 'fake',
+        name: 'fake',
+        version: '0.0.0',
+        tier: 'channel (uncached)',
+        artifactCount: 0,
+      }),
+      remove: async (_id) => {},
     },
     policy: {
       explain: async () => ({
@@ -2419,6 +2455,8 @@ export function createFakeHarnessClient(
       setSaveArtifact: noop,
       getMaxAgentTurns: async () => 0,
       setMaxAgentTurns: noop,
+      getMonthlyCostNotifyUSD: async () => 0,
+      setMonthlyCostNotifyUSD: noop,
       getPermissionMode: async () => 'normal' as PermissionMode,
       setPermissionMode: noop,
       getPermissionCacheDangerousOps: async () => false,

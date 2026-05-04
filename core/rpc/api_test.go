@@ -33,6 +33,7 @@ import (
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/tools"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/trust"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/workflow"
+	workflowsview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/workflows"
 )
 
 // fakeHarnessAPI is a compile-time witness that the HarnessAPI interface
@@ -42,6 +43,7 @@ type fakeHarnessAPI struct {
 	mcpAPI      mcp.MCPAPI
 	a2aAPI      a2a.A2AAPI
 	workflowAPI workflow.WorkflowAPI
+	workflowsAPI workflowsview.WorkflowsAPI
 	sessionsAPI sessions.SessionsAPI
 	trustAPI    trust.TrustAPI
 	contextAPI  contextview.ContextAPI
@@ -78,6 +80,7 @@ func (f *fakeHarnessAPI) MCP() mcp.MCPAPI                            { return f.
 func (f *fakeHarnessAPI) MCPImport() *mcp.ImportAPI                   { return nil }
 func (f *fakeHarnessAPI) A2A() a2a.A2AAPI                            { return f.a2aAPI }
 func (f *fakeHarnessAPI) Workflow() workflow.WorkflowAPI             { return f.workflowAPI }
+func (f *fakeHarnessAPI) Workflows() workflowsview.WorkflowsAPI       { return f.workflowsAPI }
 func (f *fakeHarnessAPI) Sessions() sessions.SessionsAPI             { return f.sessionsAPI }
 func (f *fakeHarnessAPI) Trust() trust.TrustAPI                      { return f.trustAPI }
 func (f *fakeHarnessAPI) Context() contextview.ContextAPI            { return f.contextAPI }

@@ -24,10 +24,18 @@ const (
 // hooks when a resource evaluation returns NotApplicable and the
 // prompt registry enqueues the decision.
 const (
-	TopicBashPermissionPending       = "bash:permission-pending"
-	TopicCredPermissionPending       = "cred:permission-pending"
-	TopicFSPermissionPending         = "fs:permission-pending"
-	TopicToolPermissionPending       = "tool:permission-pending"
+	TopicBashPermissionPending = "bash:permission-pending"
+	TopicCredPermissionPending = "cred:permission-pending"
+	TopicFSPermissionPending   = "fs:permission-pending"
+	TopicToolPermissionPending = "tool:permission-pending"
+
+	// TopicCostThresholdCrossed is the broker topic the WP06 threshold
+	// scheduler publishes on when a per-month spend tier (50/80/100/
+	// 150/200 % of MonthlyCostNotifyUSD) is newly crossed. Frontend's
+	// CostThresholdToast component listens here via the existing
+	// useEventStream composable. Payload shape:
+	// usage.ThresholdCrossedPayload (see core/usage/threshold.go).
+	TopicCostThresholdCrossed = "cost.threshold.crossed"
 )
 
 // StreamClosedPayload is the typed payload emitted on `<view>:stream-closed`.

@@ -39,7 +39,7 @@ func newView(t *testing.T) *slashview.API {
 	return slashview.New(reg)
 }
 
-func TestAPI_List_SortedAndIncludesComingSoon(t *testing.T) {
+func TestAPI_List_SortedAndNoneComingSoon(t *testing.T) {
 	t.Parallel()
 	api := newView(t)
 	cmds, err := api.List(context.Background())
@@ -55,13 +55,12 @@ func TestAPI_List_SortedAndIncludesComingSoon(t *testing.T) {
 			t.Errorf("cmds[%d].Name = %q, want %q", i, cmds[i].Name, name)
 		}
 	}
-	stubs := map[string]bool{
-		"branch": true, "forget": true, "memorize": true, "recall": true,
-	}
+	// /memorize, /recall, /forget, /branch were stubs in v0.2.0; v0.3.0
+	// wires them to the memory + branches subsystems so none of the
+	// default seven commands renders the (coming soon) tag.
 	for _, c := range cmds {
-		want := stubs[c.Name]
-		if c.ComingSoon != want {
-			t.Errorf("%s.ComingSoon = %v, want %v", c.Name, c.ComingSoon, want)
+		if c.ComingSoon {
+			t.Errorf("%s.ComingSoon = true, want false (all default commands are wired in v0.3.0)", c.Name)
 		}
 	}
 }

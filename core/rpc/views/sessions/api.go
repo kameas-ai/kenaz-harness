@@ -62,6 +62,10 @@ type Session struct {
 	// out further auto-titling). Mirrors session.Record.AutoTitled.
 	// Populated by migration 0311 (session-auto-titling-01KQ8TDS WP01).
 	AutoTitled bool `json:"autoTitled"`
+	// Kind tags the session for capability gating. Empty / absent
+	// values are treated as "chat". Populated by migration 0318
+	// (harness-self-mcp-onboarding-01KQ8TDU WP03).
+	Kind string `json:"kind,omitempty"`
 }
 
 // ToolCall mirrors the frontend ToolCall shape for tool-use rendering.
@@ -281,8 +285,10 @@ type SessionsAPI interface {
 	// (autonomy-dial-01KR3M2A WP03)
 	LoadAutonomyProfile(ctx context.Context, id string) (autonomy.Layer, error)
 	// SaveAutonomyProfile persists the per-session autonomy.Layer.
+	// Pass an empty Layer to clear the override.
 	SaveAutonomyProfile(ctx context.Context, id string, layer autonomy.Layer) error
-	// ResolveAutonomy folds global → project → session layers and
-	// returns the resolved knobs plus the three input layers.
+	// ResolveAutonomy resolves the effective knobs for a session by
+	// folding global → project → session layers. Returns the resolved
+	// knobs plus the three input layers so panels can render badges.
 	ResolveAutonomy(ctx context.Context, id string) (ResolvedAutonomy, error)
 }

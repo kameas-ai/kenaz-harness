@@ -41,6 +41,7 @@ import (
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/tools"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/trust"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/workflow"
+	workflowsview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/workflows"
 	"github.com/sigil-tech/kaneaz-harness/core/logging"
 	"github.com/sigil-tech/kaneaz-harness/core/mcp/stdio"
 )
@@ -403,6 +404,12 @@ func (b *Bindings) Bundle_List() ([]bundle.Bundle, error) {
 func (b *Bindings) Bundle_Get(id string) (bundle.Bundle, error) {
 	return b.api.Bundle().Get(b.ctx(), id)
 }
+func (b *Bindings) Bundle_Install(req bundle.InstallRequest) (bundle.Bundle, error) {
+	return b.api.Bundle().Install(b.ctx(), req)
+}
+func (b *Bindings) Bundle_Remove(id string) error {
+	return b.api.Bundle().Remove(b.ctx(), id)
+}
 
 // ── policy ─────────────────────────────────────────────────────────────
 
@@ -628,6 +635,30 @@ func (b *Bindings) Settings_SetMaxAgentTurns(turns int) error {
 		return nil
 	}
 	return b.storeFn().SaveMaxAgentTurns(turns)
+}
+
+// Settings_GetMonthlyCostNotifyUSD returns the per-month spend
+// notification threshold dial (token-cost-telemetry-01KQ8TD7 WP06).
+// Zero (the default) means the scheduler is disabled — the frontend
+// renders the placeholder accordingly.
+func (b *Bindings) Settings_GetMonthlyCostNotifyUSD() (float64, error) {
+	if b.storeFn == nil {
+		return 0, nil
+	}
+	return b.storeFn().LoadMonthlyCostNotifyUSD()
+}
+
+// Settings_SetMonthlyCostNotifyUSD persists the per-month spend
+// notification threshold dial. Zero disables the scheduler;
+// negatives are normalised to zero; values above the documented cap
+// (settings.MaxMonthlyCostNotifyUSD = $10,000) are rejected with the
+// typed ErrInvalidMonthlyCostNotifyUSD so the UI can render specific
+// copy.
+func (b *Bindings) Settings_SetMonthlyCostNotifyUSD(usd float64) error {
+	if b.storeFn == nil {
+		return nil
+	}
+	return b.storeFn().SaveMonthlyCostNotifyUSD(usd)
 }
 
 // ── WP08 permission dials ──────────────────────────────────────────
@@ -1275,6 +1306,18 @@ func (b *Bindings) Branches_CommitReintegration(opts branchesview.CommitReintegr
 }
 func (b *Bindings) Branches_SetAdvisorDismissed(sessionID string, dismissed bool) error {
 	return b.api.Branches().SetAdvisorDismissed(b.ctx(), sessionID, dismissed)
+}
+
+// ── workflows (mission workflows-01KQ8TDG, v0.3.0 beta) ───────────────
+
+func (b *Bindings) Workflows_List() ([]workflowsview.Summary, error) {
+	return b.api.Workflows().List(b.ctx())
+}
+func (b *Bindings) Workflows_Get(id string) (workflowsview.Workflow, error) {
+	return b.api.Workflows().Get(b.ctx(), id)
+}
+func (b *Bindings) Workflows_Run(id string, inputs map[string]string) (workflowsview.RunResult, error) {
+	return b.api.Workflows().Run(b.ctx(), id, inputs)
 }
 
 // ── nodes (manifest-driven node catalog; WP07) ────────────────────────

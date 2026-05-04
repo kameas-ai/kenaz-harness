@@ -11,7 +11,9 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"time"
 
+	"github.com/sigil-tech/kaneaz-harness/core/logging"
 	"github.com/sigil-tech/kaneaz-harness/core/storage"
 )
 
@@ -71,11 +73,27 @@ type Manager interface {
 	Add(ctx context.Context, turn UsageTurn) error
 	// GetSession returns the cumulative aggregate for a session.
 	GetSession(ctx context.Context, sessionID string) (Aggregate, error)
+	// SetThresholdChecker wires the WP06 threshold scheduler into
+	// Add's tail. Safe to call once after construction (the rpc layer
+	// builds the checker after the broker + settings store exist, so
+	// this setter avoids a circular dependency at usage.New time).
+	// Passing nil removes the scheduler; per-turn rows still record.
+	SetThresholdChecker(c *Checker)
+	// MonthlyTotalUSD returns the total cost_usd in USD across every
+	// session for the calendar month containing now (in now's
+	// location). Drives the WP06 threshold scheduler's
+	// MonthlyTotalReader callback and is exposed for tests +
+	// integration tests.
+	MonthlyTotalUSD(ctx context.Context, now time.Time) (float64, error)
 }
 
 // sqlManager is the production Manager backed by session_messages SQL columns.
 type sqlManager struct {
 	db storage.DB
+	// checker is the optional WP06 threshold scheduler. Wired via
+	// SetThresholdChecker after the broker + settings store exist.
+	// nil → Add does not fire threshold events.
+	checker *Checker
 }
 
 // New returns a Manager that writes to the session_messages table columns
@@ -93,11 +111,17 @@ func New(db storage.DB) Manager {
 
 // Add writes the four usage columns onto the session_messages row
 // identified by turn.MessageID. It is a no-op when MessageID is empty.
+//
+// Tail behaviour (token-cost-telemetry-01KQ8TD7 WP06): after the row
+// is persisted, Add invokes the wired threshold Checker (when present)
+// to evaluate the new calendar-month total against the user's
+// MonthlyCostNotifyUSD dial. Threshold errors are logged-and-swallowed
+// — they never break the user's chat turn.
 func (m *sqlManager) Add(ctx context.Context, turn UsageTurn) error {
 	if turn.MessageID == "" {
 		return nil
 	}
-	return m.db.WriteTx(ctx, func(tx storage.WriteTx) error {
+	if err := m.db.WriteTx(ctx, func(tx storage.WriteTx) error {
 		var costArg any
 		if turn.CostUSD != nil {
 			costArg = *turn.CostUSD
@@ -117,7 +141,75 @@ func (m *sqlManager) Add(ctx context.Context, turn UsageTurn) error {
 			turn.MessageID,
 		)
 		return err
+	}); err != nil {
+		return err
+	}
+
+	if m.checker != nil {
+		if _, err := m.checker.Check(ctx); err != nil {
+			// Log-and-swallow: a transient threshold error must not
+			// fail the user's chat turn.
+			logging.L().Warn("usage.threshold.check_failed",
+				"session_id", turn.SessionID,
+				"err", err.Error())
+		}
+	}
+	return nil
+}
+
+// SetThresholdChecker wires the WP06 threshold scheduler. Idempotent
+// — call once at API construction after the broker is built.
+func (m *sqlManager) SetThresholdChecker(c *Checker) {
+	m.checker = c
+}
+
+// MonthlyTotalUSD sums cost_usd across every session_messages
+// assistant row created in the calendar month containing now (in
+// now's location). NULL cost_usd contributes zero.
+func (m *sqlManager) MonthlyTotalUSD(ctx context.Context, now time.Time) (float64, error) {
+	start, end := MonthBoundsLocal(now)
+	row := m.db.Reader().QueryRow(ctx,
+		`SELECT COALESCE(SUM(COALESCE(cost_usd, 0)), 0.0)
+		 FROM session_messages
+		 WHERE role = 'assistant'
+		   AND created_at >= ? AND created_at < ?`,
+		start.UnixNano(),
+		end.UnixNano(),
+	)
+	var total float64
+	if err := row.Scan(&total); err != nil {
+		return 0, fmt.Errorf("usage: MonthlyTotalUSD: %w", err)
+	}
+	return total, nil
+}
+
+// RecordFired is the FiredRecorder primitive backing the threshold
+// scheduler. It INSERT-OR-IGNOREs into cost_threshold_fired and
+// returns inserted=true ONLY when a fresh row was written. A second
+// caller for the same (year_month, pct) returns inserted=false with
+// no error — the scheduler relies on this to dedupe.
+func (m *sqlManager) RecordFired(ctx context.Context, ym string, pct int, firedAt time.Time) (bool, error) {
+	var inserted bool
+	err := m.db.WriteTx(ctx, func(tx storage.WriteTx) error {
+		res, ierr := tx.Exec(ctx,
+			`INSERT OR IGNORE INTO cost_threshold_fired (year_month, pct, fired_at)
+			 VALUES (?, ?, ?)`,
+			ym, pct, firedAt.UnixNano(),
+		)
+		if ierr != nil {
+			return ierr
+		}
+		n, raErr := res.RowsAffected()
+		if raErr != nil {
+			return raErr
+		}
+		inserted = n > 0
+		return nil
 	})
+	if err != nil {
+		return false, fmt.Errorf("usage: RecordFired: %w", err)
+	}
+	return inserted, nil
 }
 
 // GetSession returns the aggregated usage across all assistant turns for
@@ -177,3 +269,5 @@ func (n *noopManager) Add(_ context.Context, _ UsageTurn) error { return nil }
 func (n *noopManager) GetSession(_ context.Context, _ string) (Aggregate, error) {
 	return Aggregate{CostSource: "unknown"}, nil
 }
+func (n *noopManager) SetThresholdChecker(_ *Checker)                                {}
+func (n *noopManager) MonthlyTotalUSD(_ context.Context, _ time.Time) (float64, error) { return 0, nil }

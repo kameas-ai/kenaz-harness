@@ -31,6 +31,7 @@ import {transport} from '../models';
 import {tools} from '../models';
 import {trust} from '../models';
 import {workflow} from '../models';
+import {workflows} from '../models';
 
 export function A2A_ListCards():Promise<Array<a2a.Card>>;
 
@@ -451,3 +452,9 @@ export function Workflow_ListJobs():Promise<Array<workflow.Job>>;
 export function Workflow_StartStream():Promise<string>;
 
 export function Workflow_StopStream(arg1:string):Promise<void>;
+
+export function Workflows_List():Promise<Array<workflows.Summary>>;
+
+export function Workflows_Get(arg1:string):Promise<workflows.Workflow>;
+
+export function Workflows_Run(arg1:string,arg2:Record<string, string>):Promise<workflows.RunResult>;

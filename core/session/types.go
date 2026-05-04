@@ -44,6 +44,15 @@ type Record struct {
 	// Populated by migration 0311 (session-auto-titling-01KQ8TDS WP01).
 	AutoTitled bool
 
+	// Kind tags the session for capability gating. Known values:
+	//   "chat"       — default user session.
+	//   "onboarding" — spawned by the onboarding flow; harness-self write
+	//                  tools are permitted by default policy.
+	//   "system"     — reserved for future internal sessions.
+	// Empty string is normalised to "chat" by the manager / store.
+	// Populated by migration 0318 (harness-self-mcp-onboarding-01KQ8TDU WP03).
+	Kind string
+
 	// BranchAdvisorDismissed is set when the user clicks "Don't suggest
 	// again" in the branch-advisor banner (FR-010). When true, the
 	// backend skips running the detector for this session regardless of

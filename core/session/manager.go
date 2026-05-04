@@ -167,6 +167,21 @@ func (m *Manager) Create(ctx context.Context, name string) (Record, error) {
 // CreateInProject is Create with an optional project membership. A nil
 // projectID creates a loose session.
 func (m *Manager) CreateInProject(ctx context.Context, name string, projectID *string) (Record, error) {
+	return m.createInternal(ctx, name, projectID, SessionKindChat)
+}
+
+// CreateWithKind is CreateInProject + an explicit session Kind tag. An
+// empty kind is normalised to SessionKindChat. Used by the onboarding
+// flow (harness-self-mcp-onboarding-01KQ8TDU WP03) to mark the session
+// for capability gating in the Cedar policy layer.
+func (m *Manager) CreateWithKind(ctx context.Context, name string, projectID *string, kind string) (Record, error) {
+	if kind == "" {
+		kind = SessionKindChat
+	}
+	return m.createInternal(ctx, name, projectID, kind)
+}
+
+func (m *Manager) createInternal(ctx context.Context, name string, projectID *string, kind string) (Record, error) {
 	name = strings.TrimSpace(name)
 	if name == "" {
 		return Record{}, ErrInvalidName
@@ -198,6 +213,7 @@ func (m *Manager) CreateInProject(ctx context.Context, name string, projectID *s
 		UpdatedAt:    now,
 		LastActiveAt: now,
 		Position:     nextPos,
+		Kind:         kind,
 	}
 	if projectID != nil {
 		v := *projectID
@@ -210,6 +226,7 @@ func (m *Manager) CreateInProject(ctx context.Context, name string, projectID *s
 		"session_id": rec.ID,
 		"name":       rec.Name,
 		"position":   rec.Position,
+		"kind":       rec.Kind,
 	})
 	return rec, nil
 }
@@ -284,7 +301,9 @@ func (m *Manager) Delete(ctx context.Context, id string) error {
 }
 
 // SetAutonomyProfile persists the per-session autonomy.Layer
-// (autonomy-dial-01KR3M2A WP03 RPC plumbing).
+// (autonomy-dial-01KR3M2A WP03 RPC plumbing). An empty Layer (nil
+// Level + empty Overrides) clears the columns so the resolver folds
+// through to the project / global / tier-default chain.
 func (m *Manager) SetAutonomyProfile(ctx context.Context, id string, layer autonomy.Layer) error {
 	return m.store.SetAutonomyProfile(ctx, id, layer)
 }
