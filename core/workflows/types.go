@@ -104,6 +104,11 @@ type Step struct {
 	// model_turn fields
 	UserPrompt string   `yaml:"user_prompt,omitempty" json:"userPrompt,omitempty"`
 	AllowTools []string `yaml:"allow_tools,omitempty" json:"allowTools,omitempty"`
+	// Profile is the LLM provider profile id; the registry resolves
+	// it to a kind+model. Empty falls back to Engine.Deps.DefaultLLMProfile.
+	Profile string `yaml:"profile,omitempty" json:"profile,omitempty"`
+	// Model overrides the profile's default model for this turn.
+	Model string `yaml:"model,omitempty" json:"model,omitempty"`
 
 	// shell / tool_call fields
 	Cmd       string            `yaml:"cmd,omitempty" json:"cmd,omitempty"`
@@ -120,11 +125,25 @@ type Step struct {
 	Headers map[string]string `yaml:"headers,omitempty" json:"headers,omitempty"`
 	Body    string            `yaml:"body,omitempty" json:"body,omitempty"`
 
+	// mcp_call fields
+	Server string `yaml:"server,omitempty" json:"server,omitempty"`
+
 	// write_artifact / read_artifact fields
 	Title         string `yaml:"title,omitempty" json:"title,omitempty"`
 	ContentRef    string `yaml:"content_ref,omitempty" json:"contentRef,omitempty"`
 	MimeType      string `yaml:"mime_type,omitempty" json:"mimeType,omitempty"`
 	ArtifactIDRef string `yaml:"artifact_id_ref,omitempty" json:"artifactIdRef,omitempty"`
+	// Content is the inline content body for write_artifact (template
+	// expanded at run time).
+	Content string `yaml:"content,omitempty" json:"content,omitempty"`
+
+	// transform fields
+	Template string `yaml:"template,omitempty" json:"template,omitempty"`
+
+	// conditional fields
+	If       string `yaml:"if,omitempty" json:"if,omitempty"`
+	ThenStep string `yaml:"then_step,omitempty" json:"thenStep,omitempty"`
+	ElseStep string `yaml:"else_step,omitempty" json:"elseStep,omitempty"`
 }
 
 // Workflow is the in-memory representation of one workflow YAML file.
@@ -222,11 +241,100 @@ type ProgressEvent struct {
 }
 
 // StepRunner is the per-kind execution interface. Beta ships
-// implementations for model_turn + shell only; future WPs register
-// the rest.
+// implementations for every declared kind, but runners that need an
+// external dependency (LLMRegistry, ToolRegistry, MCPCaller,
+// ArtifactsManager) error at Run time when their dep is missing.
 type StepRunner interface {
 	Validate(step Step) error
 	Run(ctx context.Context, step Step, rc *RunContext) (TypedValue, error)
+}
+
+// LLMStreamer is the narrow interface model_turn dispatches against.
+// Mirrors core/llm/registry.Registry.Stream so the workflows package
+// stays import-clean.
+type LLMStreamer interface {
+	Stream(ctx context.Context, req LLMRequest) (LLMStream, error)
+}
+
+// LLMRequest is the workflows-side mirror of llm.GenerationRequest,
+// trimmed to the fields model_turn actually populates.
+type LLMRequest struct {
+	ProfileID string
+	Model     string
+	Prompt    string
+}
+
+// LLMStream is the narrow streaming surface model_turn consumes.
+// It mirrors llm.Stream's Events / Final pair so callers can adapt
+// the registry's stream with a thin shim.
+type LLMStream interface {
+	Events() <-chan LLMStreamEvent
+	Final() (string, error)
+}
+
+// LLMStreamEvent is the single text-delta envelope model_turn cares
+// about; non-text events are dropped by the adapter shim.
+type LLMStreamEvent struct {
+	Text string
+	Err  string
+}
+
+// ToolCaller is the interface tool_call dispatches against. Mirrors
+// agentgraph.ToolRegistry's Call surface.
+type ToolCaller interface {
+	Call(ctx context.Context, name string, args map[string]any) (ToolResult, error)
+}
+
+// ToolResult is what a tool call returns.
+type ToolResult struct {
+	Content string
+	IsError bool
+}
+
+// MCPCaller is the interface mcp_call dispatches against. Mirrors
+// transport/stdio.Pool.Call's surface.
+type MCPCaller interface {
+	Call(ctx context.Context, server, tool string, args map[string]any) (string, error)
+}
+
+// ArtifactsReadWriter is the interface read_artifact / write_artifact
+// dispatch against. Mirrors the relevant subset of
+// core/artifacts.Manager + Store + MediaStore.
+type ArtifactsReadWriter interface {
+	Read(ctx context.Context, id string) (ArtifactView, error)
+	Write(ctx context.Context, in ArtifactWrite) (string, error)
+}
+
+// ArtifactView is what read_artifact returns: bytes + metadata.
+type ArtifactView struct {
+	ID       string
+	Title    string
+	MimeType string
+	Content  []byte
+}
+
+// ArtifactWrite is what write_artifact submits.
+type ArtifactWrite struct {
+	SessionID string
+	Title     string
+	MimeType  string
+	Content   []byte
+}
+
+// Deps bundles the optional external dependencies workflow runners
+// need. nil entries cause the corresponding runner to error at Run
+// time with a clear "dependency unavailable" message — keeping
+// NewEngine() callable from boot paths that haven't wired everything.
+type Deps struct {
+	LLM               LLMStreamer
+	DefaultLLMProfile string
+	Tools             ToolCaller
+	MCP               MCPCaller
+	Artifacts         ArtifactsReadWriter
+	// SessionID is threaded into write_artifact rows so they show up
+	// under the right session in the artifacts table. Empty disables
+	// artifact writes (write_artifact returns an error).
+	SessionID string
 }
 
 // Sentinels.
