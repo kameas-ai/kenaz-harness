@@ -30,6 +30,9 @@ var runnerRegistry = map[StepKind]StepRunner{
 	StepKindWriteArtifact: writeArtifactRunner{},
 	StepKindTransform:     transformRunner{},
 	StepKindConditional:   conditionalRunner{},
+	// WP06 control-flow kinds (no-dep runners).
+	StepKindWaitUntil: waitUntilRunner{},
+	StepKindAggregate: aggregateRunner{},
 }
 
 // DefaultRunners returns the package-default StepRunner registry.
@@ -42,14 +45,17 @@ var runnerRegistry = map[StepKind]StepRunner{
 //
 // A fresh web.Fetcher is created per call so the robots.txt 24h cache
 // is scoped to the engine lifetime and cannot bleed between engines.
+// notify runner ships with nil Notifier/Audit (error at run time for
+// "os" surface; MCP surfaces degrade to unconfigured).
 func DefaultRunners() map[StepKind]StepRunner {
-	out := make(map[StepKind]StepRunner, len(runnerRegistry)+2)
+	out := make(map[StepKind]StepRunner, len(runnerRegistry)+3)
 	for k, v := range runnerRegistry {
 		out[k] = v
 	}
 	fetcher := web.NewFetcher()
 	out[StepKindWebFetch] = webFetchRunner{fetcher: fetcher}
 	out[StepKindWebScrape] = webScrapeRunner{fetcher: fetcher}
+	out[StepKindNotify] = notifyRunner{} // nil notifier → unconfigured for "os"
 	return out
 }
 
@@ -82,6 +88,8 @@ func DefaultRunnersWithDeps(deps Deps) map[StepKind]StepRunner {
 		profile: deps.DefaultLLMProfile,
 		authz:   deps.NetAuthz,
 	}
+	// WP06: notify is always wired with provided Notifier/Audit (may be nil).
+	out[StepKindNotify] = notifyRunner{notifier: deps.Notifier, mcp: deps.MCP, audit: deps.Audit}
 	return out
 }
 
