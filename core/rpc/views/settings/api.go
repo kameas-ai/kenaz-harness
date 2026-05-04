@@ -6,6 +6,7 @@ package settings
 import (
 	"context"
 	"encoding/json"
+	"time"
 
 	"github.com/sigil-tech/kaneaz-harness/core/autonomy"
 	"github.com/sigil-tech/kaneaz-harness/core/compaction"
@@ -230,6 +231,35 @@ type Settings struct {
 	// existing settings.json round-trip rather than its own migration.
 	Autonomy json.RawMessage `json:"autonomy,omitempty"`
 
+	// ── Auto-update dials (auto-update-v0.4.0 WP05) ─────────────────────
+	//
+	// AutoCheckUpdatesDisabled is the inverted-form persisted bit for the
+	// "Automatically check for updates" toggle. Default ON (zero-value
+	// Disabled → checker enabled) — fresh installs poll the release feed
+	// at the configured interval without any user setup. Read via the
+	// AutoCheckUpdates() accessor; never read directly.
+	AutoCheckUpdatesDisabled bool `json:"autoCheckUpdatesDisabled,omitempty"`
+
+	// UpdateChannel selects which release feed the checker subscribes to.
+	// One of: "stable" (default, empty == stable), "prerelease". Other
+	// values are rejected at Save with ErrInvalidUpdateChannel; the
+	// EffectiveUpdateChannel accessor falls back to "stable" for defensive
+	// reads (e.g. against a hand-edited settings file).
+	UpdateChannel string `json:"updateChannel,omitempty"`
+
+	// UpdateCheckIntervalSec is the poll interval in seconds. Spec values:
+	// 3600 (1h), 21600 (6h, default), 86400 (24h). Zero == default. Save
+	// rejects negatives and out-of-range values via ErrInvalidUpdateCheckInterval.
+	UpdateCheckIntervalSec int `json:"updateCheckIntervalSec,omitempty"`
+
+	// SkippedUpdateVersions is the list of release versions the user
+	// clicked "Skip this version" on. The updater's "is there a new
+	// release?" check filters these out so the user is not re-prompted.
+	// The Settings panel's collapsible "Skipped versions" section lets the
+	// user un-skip a row; mutated via SaveSkippedUpdateVersions /
+	// AppendSkippedUpdateVersion / RemoveSkippedUpdateVersion.
+	SkippedUpdateVersions []string `json:"skippedUpdateVersions,omitempty"`
+
 	// MonthlyCostNotifyUSD is the per-month spend threshold at which
 	// the harness fires escalating notifications at 50 / 80 / 100 /
 	// 150 / 200 % of the dial value (token-cost-telemetry-01KQ8TD7
@@ -307,6 +337,65 @@ func (s Settings) FSRequestAccessEnabled() bool { return !s.FSRequestAccessDisab
 // enabled. Default true on a fresh install (zero-value SearchDisabled).
 // (cross-session-search-01KQ8TDQ WP07)
 func (s Settings) SearchEnabled() bool { return !s.SearchDisabled }
+
+// ── Auto-update accessors / constants (auto-update-v0.4.0 WP05) ─────────
+
+// UpdateChannelStable is the canonical value for the production release
+// feed (signed releases on the GitHub release page).
+const UpdateChannelStable = "stable"
+
+// UpdateChannelPrerelease is the canonical value for the early-access
+// feed (releases marked "prerelease" on GitHub).
+const UpdateChannelPrerelease = "prerelease"
+
+// DefaultUpdateCheckIntervalSec is the spec-locked poll interval the
+// checker uses when UpdateCheckIntervalSec is zero. Six hours strikes
+// the balance between catching same-day hotfixes and not hammering
+// GitHub from every long-running session.
+const DefaultUpdateCheckIntervalSec = 21600
+
+// MinUpdateCheckIntervalSec is the lowest poll interval the user may
+// set from the Settings panel — once an hour. Below this, the rate-limit
+// guard would trip on bursty session restarts.
+const MinUpdateCheckIntervalSec = 3600
+
+// MaxUpdateCheckIntervalSec is the upper clamp — once a day. Above this,
+// the checker is effectively off; users who want it off should toggle
+// AutoCheckUpdates instead.
+const MaxUpdateCheckIntervalSec = 86400
+
+// AutoCheckUpdates reports whether the auto-update checker fires on
+// schedule. Default true on a fresh install (zero-value Disabled).
+func (s Settings) AutoCheckUpdates() bool { return !s.AutoCheckUpdatesDisabled }
+
+// EffectiveUpdateChannel returns the persisted channel or "stable" when
+// the field is empty / unknown. Save rejects unknown values up front; the
+// fallback exists so a hand-edited settings file never bricks the panel.
+func (s Settings) EffectiveUpdateChannel() string {
+	switch s.UpdateChannel {
+	case UpdateChannelStable, UpdateChannelPrerelease:
+		return s.UpdateChannel
+	default:
+		return UpdateChannelStable
+	}
+}
+
+// EffectiveUpdateCheckIntervalSec returns the user-tuned poll interval
+// or DefaultUpdateCheckIntervalSec when zero. Out-of-range persisted
+// values are clamped to [Min, Max] for defensive reads.
+func (s Settings) EffectiveUpdateCheckIntervalSec() int {
+	v := s.UpdateCheckIntervalSec
+	if v <= 0 {
+		return DefaultUpdateCheckIntervalSec
+	}
+	if v < MinUpdateCheckIntervalSec {
+		return MinUpdateCheckIntervalSec
+	}
+	if v > MaxUpdateCheckIntervalSec {
+		return MaxUpdateCheckIntervalSec
+	}
+	return v
+}
 
 // EffectiveCodeBlockMinLines returns the user-tuned threshold or the
 // spec default (10) when the persisted value is zero.
@@ -566,6 +655,42 @@ type SettingsStore interface {
 	// LoadMonthlyCostNotifyUSD on every Manager.Add tail.
 	LoadMonthlyCostNotifyUSD() (float64, error)
 	SaveMonthlyCostNotifyUSD(usd float64) error
+
+	// ── Auto-update dial accessors (auto-update-v0.4.0 WP05) ────────────
+	//
+	// LoadAutoCheckUpdates / SaveAutoCheckUpdates expose the master
+	// "automatically check for updates" toggle. Default true on a fresh
+	// install (zero-value AutoCheckUpdatesDisabled).
+	LoadAutoCheckUpdates() (bool, error)
+	SaveAutoCheckUpdates(enabled bool) error
+
+	// LoadUpdateChannel / SaveUpdateChannel expose the release channel
+	// dial. Returns "stable" when unset / unknown. Save rejects unknown
+	// values with ErrInvalidUpdateChannel.
+	LoadUpdateChannel() (string, error)
+	SaveUpdateChannel(channel string) error
+
+	// LoadUpdateCheckInterval / SaveUpdateCheckInterval expose the poll
+	// interval as a time.Duration. The wire shape is seconds; the API
+	// sugar returns / accepts a Duration so callers don't have to multiply.
+	// Zero on Load means "use the default"; SaveUpdateCheckInterval(0)
+	// clears the override.
+	LoadUpdateCheckInterval() (time.Duration, error)
+	SaveUpdateCheckInterval(d time.Duration) error
+
+	// LoadSkippedUpdateVersions returns the user's skip-list. Empty slice
+	// when unset.
+	LoadSkippedUpdateVersions() ([]string, error)
+	// SaveSkippedUpdateVersions atomically replaces the full skip-list.
+	// Used by the Settings panel's reset / batch flows; the per-version
+	// helpers below dispatch through this under the hood.
+	SaveSkippedUpdateVersions(versions []string) error
+	// AppendSkippedUpdateVersion adds one version (idempotent). Called
+	// from the UpdateMenu's "Skip this version" action.
+	AppendSkippedUpdateVersion(version string) error
+	// RemoveSkippedUpdateVersion removes one version (no-op if missing).
+	// Called from the Settings panel's per-row "Unskip" link.
+	RemoveSkippedUpdateVersion(version string) error
 
 	// LoadAutonomyProfile / SaveAutonomyProfile expose the global
 	// autonomy.Layer (autonomy-dial-01KR3M2A WP02) independently of the

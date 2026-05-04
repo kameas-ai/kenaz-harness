@@ -666,6 +666,32 @@ export interface Settings {
    * toggling back resumes search immediately.
    */
   searchDisabled?: boolean;
+
+  /**
+   * auto-update v0.4.0 WP05 — inverted persisted bit for the
+   * "Automatically check for updates" toggle. Default false (= checker
+   * enabled). When true, the auto-update scheduler is suspended.
+   */
+  autoCheckUpdatesDisabled?: boolean;
+
+  /**
+   * auto-update v0.4.0 WP05 — release channel the checker subscribes
+   * to. Empty == "stable". Valid: "stable" | "prerelease".
+   */
+  updateChannel?: 'stable' | 'prerelease';
+
+  /**
+   * auto-update v0.4.0 WP05 — poll interval in seconds. Spec values:
+   * 3600 (1h), 21600 (6h, default), 86400 (24h). Zero == default.
+   */
+  updateCheckIntervalSec?: number;
+
+  /**
+   * auto-update v0.4.0 WP05 — versions the user clicked "Skip this
+   * version" on. The checker filters these out so the user is not
+   * re-prompted; the Settings panel offers a per-row "Unskip" link.
+   */
+  skippedUpdateVersions?: string[];
 }
 
 /**

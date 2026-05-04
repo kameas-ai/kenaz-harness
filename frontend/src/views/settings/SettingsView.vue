@@ -11,10 +11,12 @@
  * to coalesce rapid toggles into a single disk write.
  */
 import { computed, onMounted, ref } from 'vue';
+import { useRoute } from 'vue-router';
 import CanvasHead from '@/shell/CanvasHead.vue';
 import SettingsTabs from '@/views/settings/SettingsTabs.vue';
 import KeyboardShortcuts from '@/components/settings/KeyboardShortcuts.vue';
 import AutonomyPanel from '@/views/settings/AutonomyPanel.vue';
+import UpdatesPanel from '@/views/settings/UpdatesPanel.vue';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
 import { debouncedSave } from '@/lib/settings';
 import { markdownExtensionsRef } from '@/lib/markdown/injectionKeys';
@@ -33,6 +35,15 @@ import type {
 } from '@/lib/types';
 
 const client = useHarnessClient();
+
+// auto-update-v0.4.0 WP05 — Updates is a sub-tab on the same /settings
+// route. We disambiguate via ?tab=updates so we don't have to touch the
+// router config. The tab's mount switch is at the bottom of <template>.
+const route = useRoute() as ReturnType<typeof useRoute> | undefined;
+const showUpdatesTab = computed<boolean>(() => {
+  const v = route?.query?.tab;
+  return typeof v === 'string' && v === 'updates';
+});
 
 const settings = ref<Settings>({
   schemaVersion: 1,
@@ -469,7 +480,22 @@ onMounted(() => {
     />
     <SettingsTabs />
 
-    <div class="px-6 py-4 grid gap-6 max-w-3xl" data-testid="settings-form">
+    <!-- auto-update-v0.4.0 WP05 — Updates sub-tab. Mounts in place of
+         the General settings sections when ?tab=updates is set on the
+         /settings route. -->
+    <div
+      v-if="showUpdatesTab"
+      class="px-6 py-4 grid gap-6 max-w-3xl"
+      data-testid="settings-updates-pane"
+    >
+      <UpdatesPanel />
+    </div>
+
+    <div
+      v-else
+      class="px-6 py-4 grid gap-6 max-w-3xl"
+      data-testid="settings-form"
+    >
       <section>
         <h2 class="font-ui text-[11px] uppercase tracking-[0.18em] text-ink-subtle">
           Theme

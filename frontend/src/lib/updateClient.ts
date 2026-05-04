@@ -1,28 +1,29 @@
 /**
- * updateClient — minimal direct-bridge accessor for the v0.4.0 auto-update
- * surface (mission auto-update, WP04).
+ * updateClient — frontend shim for the auto-update v0.4.0 RPC surface.
  *
- * The full RPC view (Update_Status / Update_StartCheck / Update_StartDownload /
- * Update_Apply / Update_SkipVersion) is being landed in WP03 by another agent.
- * Until that PR merges + `wails generate module` regenerates the bindings,
- * the WP04 indicator + menu talk to the bridge through this tiny shim — same
- * shape as `workflowsClient.ts`, which served the same purpose for the
- * workflows surface in v0.3.0-beta.
- *
- * The hand-stubbed bindings live in `frontend/wailsjs/go/rpc/Bindings.{d.ts,js}`
- * (see the WP04 hand-add block). Real bindings will overwrite them on next
- * generation.
+ * Unified surface for three work packages:
+ *   - WP03 wires the real Wails bindings (Update_Status returns
+ *     update.StatusOutput; Update_StartCheck / StartDownload / Apply /
+ *     SkipVersion / ListSkippedVersions / UnskipVersion).
+ *   - WP04 (Chrome-style indicator + UpdateMenu) consumes the flat
+ *     UpdateStatus directly: availableVersion, downloadState,
+ *     downloadProgress, releaseUrl, skippedByUser.
+ *   - WP05 (Settings → Updates panel) consumes the same status and
+ *     additionally drives listSkippedVersions / unskipVersion plus
+ *     install. The Settings panel reads channel + interval + auto-check
+ *     out of the Settings record (not UpdateStatus) via SettingsClient.
  *
  * Status shape mirrors the WP02 backend `update.Status` struct:
  *   currentVersion: semver of the running binary
  *   available     : true iff a newer version on the configured channel exists
  *   availableVersion: semver of the offered upgrade (only set when available)
- *   channel       : 'stable' | 'beta' | 'dev'
+ *   channel       : 'stable' | 'beta' | 'dev' | 'prerelease'
  *   downloadState : staged-download lifecycle
  *   downloadProgress: 0..1, only meaningful while downloading
  *   notes         : short markdown blurb pulled from the release manifest
  *   releaseUrl    : GitHub Releases URL for the offered version
  *   skippedByUser : true iff the user already chose Skip on this version
+ *   lastCheckedAt : Unix-seconds timestamp of the most recent check
  */
 
 export interface UpdateStatus {
@@ -35,6 +36,9 @@ export interface UpdateStatus {
   notes?: string;
   releaseUrl?: string;
   skippedByUser?: boolean;
+  /** Unix-seconds since the last successful check; null/undefined when
+   *  the checker has never run on this install. */
+  lastCheckedAt?: number;
 }
 
 export interface UpdateClient {
@@ -50,8 +54,19 @@ export interface UpdateClient {
    * - Windows  : stages the installer for the next launch (no restart).
    */
   apply(): Promise<void>;
+  /**
+   * Convenience shim used by the Settings → Updates "Install" button.
+   * Triggers a download (if not already staged) then applies. The
+   * version arg is informational; the backend installs whatever the
+   * current channel manifest advertises.
+   */
+  installLatest(version: string): Promise<void>;
   /** Persist a "skip this version" choice; backend won't re-prompt. */
   skipVersion(version: string): Promise<void>;
+  /** Read the user's skipped-versions list. */
+  listSkippedVersions(): Promise<string[]>;
+  /** Remove a version from the skip-list. No-op if missing. */
+  unskipVersion(version: string): Promise<void>;
 }
 
 interface BridgeShape {
@@ -60,6 +75,8 @@ interface BridgeShape {
   Update_StartDownload: () => Promise<void>;
   Update_Apply: () => Promise<void>;
   Update_SkipVersion: (version: string) => Promise<void>;
+  Update_ListSkippedVersions: () => Promise<string[]>;
+  Update_UnskipVersion: (version: string) => Promise<void>;
 }
 
 // NOTE: not declaring `interface Window` here. `harnessClient.ts` and
@@ -91,14 +108,25 @@ export function createUpdateClient(): UpdateClient {
     startCheck: () => bridge().Update_StartCheck(),
     startDownload: () => bridge().Update_StartDownload(),
     apply: () => bridge().Update_Apply(),
+    installLatest: async (_version: string) => {
+      // The Settings panel's "Install" button is a one-shot: kick off
+      // the download then apply when ready. The version arg is
+      // informational; the backend installs the current manifest's
+      // advertised version.
+      await bridge().Update_StartDownload();
+      await bridge().Update_Apply();
+    },
     skipVersion: (version) => bridge().Update_SkipVersion(version),
+    listSkippedVersions: () => bridge().Update_ListSkippedVersions(),
+    unskipVersion: (version) => bridge().Update_UnskipVersion(version),
   };
 }
 
 /**
- * createFakeUpdateClient — stub used by UpdateIndicator / UpdateMenu tests
- * (and dev builds where the live bridge isn't wired yet). `seed` lets a
- * caller inject specific behaviour; everything else returns a safe no-op.
+ * createFakeUpdateClient — stub used by UpdateIndicator / UpdateMenu /
+ * UpdatesPanel tests (and dev builds where the live bridge isn't wired
+ * yet). `seed` lets a caller inject specific behaviour; everything else
+ * returns a safe no-op or in-memory default.
  *
  * Default `status()` returns a "no update available" snapshot so consumers
  * boot into the hidden state.
@@ -106,19 +134,26 @@ export function createUpdateClient(): UpdateClient {
 export function createFakeUpdateClient(
   seed: Partial<UpdateClient> = {},
 ): UpdateClient {
-  return {
-    status:
-      seed.status ??
-      (() =>
-        Promise.resolve({
-          currentVersion: '0.4.0',
-          available: false,
-          channel: 'stable',
-          downloadState: 'idle',
-        })),
-    startCheck: seed.startCheck ?? (() => Promise.resolve()),
-    startDownload: seed.startDownload ?? (() => Promise.resolve()),
-    apply: seed.apply ?? (() => Promise.resolve()),
-    skipVersion: seed.skipVersion ?? (() => Promise.resolve()),
+  const skipped = new Set<string>();
+  const defaults: UpdateClient = {
+    status: () =>
+      Promise.resolve({
+        currentVersion: '0.4.0',
+        available: false,
+        channel: 'stable',
+        downloadState: 'idle',
+      }),
+    startCheck: () => Promise.resolve(),
+    startDownload: () => Promise.resolve(),
+    apply: () => Promise.resolve(),
+    installLatest: () => Promise.resolve(),
+    skipVersion: async (v) => {
+      if (v) skipped.add(v);
+    },
+    listSkippedVersions: () => Promise.resolve([...skipped]),
+    unskipVersion: async (v) => {
+      skipped.delete(v);
+    },
   };
+  return { ...defaults, ...seed };
 }
