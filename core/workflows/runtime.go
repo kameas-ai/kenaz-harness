@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"sort"
 	"sync"
 	"time"
 )
@@ -173,12 +174,56 @@ func (e *Engine) Run(ctx context.Context, wf Workflow, inputs map[string]TypedVa
 		opts.ProgressSink(ev)
 	}
 
+	// Determine whether any step uses inputs_from (DAG mode) or whether
+	// the workflow is pure-linear (back-compat mode).
+	hasDAG := false
+	for _, st := range wf.Steps {
+		if len(st.InputsFrom) > 0 {
+			hasDAG = true
+			break
+		}
+	}
+
+	if !hasDAG {
+		// ── Linear mode (original behaviour, unchanged) ──────────────
+		if err := e.runLinear(ctx, wf, rc, run, emit); err != nil {
+			return run, err
+		}
+	} else {
+		// ── DAG mode: topological batch executor ─────────────────────
+		if err := e.runDAG(ctx, wf, rc, run, emit); err != nil {
+			return run, err
+		}
+	}
+
+	run.Status = "completed"
+	run.EndedAt = e.now()
+	run.Outputs = copyOutputs(rc)
+
+	// Cache write-back. Only successful runs are cached; failed /
+	// interrupted runs leave the prior cache row (if any) untouched.
+	if e.Cache != nil && wf.RerunPolicy != "" {
+		hashable := typedValuesAsAny(inputs)
+		hash := HashInputs(hashable)
+		_ = e.Cache.Put(ctx, wf.ID, hash, runResultFromRun(run))
+	}
+	return run, nil
+}
+
+// runLinear is the original sequential step executor, preserved byte-
+// for-byte so existing linear workflows behave identically to v0.4.2.
+func (e *Engine) runLinear(
+	ctx context.Context,
+	wf Workflow,
+	rc *RunContext,
+	run *Run,
+	emit func(ProgressEvent),
+) error {
 	for i, st := range wf.Steps {
 		select {
 		case <-ctx.Done():
 			run.Status = "interrupted"
 			run.Err = ErrCancelled.Error()
-			// Mark remaining steps as skipped.
 			for j := i; j < len(wf.Steps); j++ {
 				run.Steps = append(run.Steps, StepResult{
 					Name:   wf.Steps[j].Name,
@@ -187,15 +232,10 @@ func (e *Engine) Run(ctx context.Context, wf Workflow, inputs map[string]TypedVa
 				})
 			}
 			run.EndedAt = e.now()
-			return run, ctx.Err()
+			return ctx.Err()
 		default:
 		}
 
-		// Honor a conditional's branch skip: if the prior step asked
-		// us to bypass a named target, mark it skipped without
-		// dispatching its runner. The hint persists across non-
-		// matching iterations so a later `no`-branch step still
-		// triggers the skip.
 		if skip := rc.peekBranchSkip(); skip != "" && skip == st.Name {
 			rc.clearBranchSkip()
 			run.Steps = append(run.Steps, StepResult{
@@ -220,11 +260,9 @@ func (e *Engine) Run(ctx context.Context, wf Workflow, inputs map[string]TypedVa
 			run.Err = err.Error()
 			run.EndedAt = e.now()
 			emit(ProgressEvent{RunID: rc.RunID, WorkflowID: wf.ID, Step: st.Name, Kind: st.Kind, Status: "failed", Err: err.Error(), At: e.now()})
-			return run, err
+			return err
 		}
 
-		// Resolve refs in any user-text fields on a per-step copy so
-		// the StepRunner sees fully-substituted strings.
 		expanded, err := expandStep(st, rc)
 		if err != nil {
 			run.Steps = append(run.Steps, StepResult{
@@ -235,7 +273,7 @@ func (e *Engine) Run(ctx context.Context, wf Workflow, inputs map[string]TypedVa
 			run.Err = err.Error()
 			run.EndedAt = e.now()
 			emit(ProgressEvent{RunID: rc.RunID, WorkflowID: wf.ID, Step: st.Name, Kind: st.Kind, Status: "failed", Err: err.Error(), At: e.now()})
-			return run, err
+			return err
 		}
 
 		out, err := runner.Run(ctx, expanded, rc)
@@ -250,7 +288,7 @@ func (e *Engine) Run(ctx context.Context, wf Workflow, inputs map[string]TypedVa
 			run.Err = err.Error()
 			run.EndedAt = stepEnd
 			emit(ProgressEvent{RunID: rc.RunID, WorkflowID: wf.ID, Step: st.Name, Kind: st.Kind, Status: "failed", Err: err.Error(), At: stepEnd})
-			return run, err
+			return err
 		}
 		rc.SetOutput(st.Name, out)
 		run.Steps = append(run.Steps, StepResult{
@@ -259,19 +297,195 @@ func (e *Engine) Run(ctx context.Context, wf Workflow, inputs map[string]TypedVa
 		})
 		emit(ProgressEvent{RunID: rc.RunID, WorkflowID: wf.ID, Step: st.Name, Kind: st.Kind, Status: "completed", Output: out.Text, At: stepEnd})
 	}
+	return nil
+}
 
-	run.Status = "completed"
-	run.EndedAt = e.now()
-	run.Outputs = copyOutputs(rc)
+// runDAG executes a workflow whose steps carry inputs_from edges.
+// It builds batches of steps whose parents have all completed, fires
+// them concurrently via goroutines+WaitGroup, then advances to the
+// next batch. Step results are appended in completion order (not
+// declaration order) — RunContext.StepOutputs is the authoritative
+// output map; run.Steps is for audit/progress only.
+func (e *Engine) runDAG(
+	ctx context.Context,
+	wf Workflow,
+	rc *RunContext,
+	run *Run,
+	emit func(ProgressEvent),
+) error {
+	n := len(wf.Steps)
 
-	// Cache write-back. Only successful runs are cached; failed /
-	// interrupted runs leave the prior cache row (if any) untouched.
-	if e.Cache != nil && wf.RerunPolicy != "" {
-		hashable := typedValuesAsAny(inputs)
-		hash := HashInputs(hashable)
-		_ = e.Cache.Put(ctx, wf.ID, hash, runResultFromRun(run))
+	// Index step name → Step for O(1) lookup.
+	byName := make(map[string]Step, n)
+	for _, st := range wf.Steps {
+		byName[st.Name] = st
 	}
-	return run, nil
+
+	// Build parent count (in-degree) and children map.
+	inDegree := make(map[string]int, n)
+	children := make(map[string][]string, n)
+	for _, st := range wf.Steps {
+		if _, exists := inDegree[st.Name]; !exists {
+			inDegree[st.Name] = 0
+		}
+		for _, parent := range st.InputsFrom {
+			children[parent] = append(children[parent], st.Name)
+			inDegree[st.Name]++
+		}
+	}
+
+	// ready holds names of steps ready to execute (in-degree == 0).
+	ready := make([]string, 0, n)
+	for name, deg := range inDegree {
+		if deg == 0 {
+			ready = append(ready, name)
+		}
+	}
+	sort.Strings(ready) // deterministic ordering within a batch
+
+	completed := make(map[string]bool, n)
+
+	// mu guards run.Steps appends and the ready/inDegree mutation that
+	// happens as goroutines finish.
+	var runMu sync.Mutex
+
+	for len(ready) > 0 {
+		// Check cancellation before each batch.
+		select {
+		case <-ctx.Done():
+			run.Status = "interrupted"
+			run.Err = ErrCancelled.Error()
+			// Mark all remaining steps as skipped.
+			for _, st := range wf.Steps {
+				if !completed[st.Name] {
+					run.Steps = append(run.Steps, StepResult{
+						Name: st.Name, Kind: st.Kind, Status: "skipped",
+					})
+				}
+			}
+			run.EndedAt = e.now()
+			return ctx.Err()
+		default:
+		}
+
+		batch := ready
+		ready = nil
+
+		// Channel to collect per-step errors from goroutines.
+		type stepOutcome struct {
+			name string
+			st   Step
+			res  StepResult
+			out  TypedValue
+			err  error
+		}
+		outcomes := make(chan stepOutcome, len(batch))
+
+		var wg sync.WaitGroup
+		for _, name := range batch {
+			st := byName[name]
+			wg.Add(1)
+			go func(st Step) {
+				defer wg.Done()
+				stepStart := e.now()
+				emit(ProgressEvent{RunID: rc.RunID, WorkflowID: wf.ID, Step: st.Name, Kind: st.Kind, Status: "running", At: stepStart})
+
+				runner, ok := e.runner(st.Kind)
+				if !ok {
+					err := fmt.Errorf("%w: %s", ErrUnknownStepKind, st.Kind)
+					outcomes <- stepOutcome{name: st.Name, st: st, err: err, res: StepResult{
+						Name: st.Name, Kind: st.Kind, Status: "failed",
+						StartedAt: stepStart, EndedAt: e.now(), Err: err.Error(),
+					}}
+					emit(ProgressEvent{RunID: rc.RunID, WorkflowID: wf.ID, Step: st.Name, Kind: st.Kind, Status: "failed", Err: err.Error(), At: e.now()})
+					return
+				}
+
+				expanded, err := expandStep(st, rc)
+				if err != nil {
+					outcomes <- stepOutcome{name: st.Name, st: st, err: err, res: StepResult{
+						Name: st.Name, Kind: st.Kind, Status: "failed",
+						StartedAt: stepStart, EndedAt: e.now(), Err: err.Error(),
+					}}
+					emit(ProgressEvent{RunID: rc.RunID, WorkflowID: wf.ID, Step: st.Name, Kind: st.Kind, Status: "failed", Err: err.Error(), At: e.now()})
+					return
+				}
+
+				out, err := runner.Run(ctx, expanded, rc)
+				stepEnd := e.now()
+				if err != nil {
+					outcomes <- stepOutcome{name: st.Name, st: st, err: err, out: out, res: StepResult{
+						Name: st.Name, Kind: st.Kind, Status: "failed",
+						StartedAt: stepStart, EndedAt: stepEnd, Err: err.Error(), Output: out.Text,
+					}}
+					emit(ProgressEvent{RunID: rc.RunID, WorkflowID: wf.ID, Step: st.Name, Kind: st.Kind, Status: "failed", Err: err.Error(), At: stepEnd})
+					return
+				}
+
+				rc.SetOutput(st.Name, out)
+				outcomes <- stepOutcome{name: st.Name, st: st, out: out, res: StepResult{
+					Name: st.Name, Kind: st.Kind, Status: "completed",
+					StartedAt: stepStart, EndedAt: stepEnd, Output: out.Text,
+				}}
+				emit(ProgressEvent{RunID: rc.RunID, WorkflowID: wf.ID, Step: st.Name, Kind: st.Kind, Status: "completed", Output: out.Text, At: stepEnd})
+			}(st)
+		}
+
+		wg.Wait()
+		close(outcomes)
+
+		// Collect outcomes; on first error, fail fast.
+		var firstErr error
+		for oc := range outcomes {
+			runMu.Lock()
+			run.Steps = append(run.Steps, oc.res)
+			runMu.Unlock()
+
+			if oc.err != nil {
+				if firstErr == nil {
+					firstErr = oc.err
+				}
+				continue
+			}
+			completed[oc.name] = true
+
+			// Decrement in-degree of children; enqueue newly ready.
+			for _, child := range children[oc.name] {
+				inDegree[child]--
+				if inDegree[child] == 0 {
+					ready = append(ready, child)
+				}
+			}
+		}
+		sort.Strings(ready) // deterministic ordering within each batch
+
+		if firstErr != nil {
+			run.Status = "failed"
+			run.Err = firstErr.Error()
+			run.EndedAt = e.now()
+			// Mark unstarted steps as skipped.
+			for _, st := range wf.Steps {
+				if !completed[st.Name] {
+					alreadyRecorded := false
+					runMu.Lock()
+					for _, sr := range run.Steps {
+						if sr.Name == st.Name {
+							alreadyRecorded = true
+							break
+						}
+					}
+					if !alreadyRecorded {
+						run.Steps = append(run.Steps, StepResult{
+							Name: st.Name, Kind: st.Kind, Status: "skipped",
+						})
+					}
+					runMu.Unlock()
+				}
+			}
+			return firstErr
+		}
+	}
+	return nil
 }
 
 // typedValuesAsAny lifts the engine's TypedValue inputs map into the
