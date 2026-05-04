@@ -130,11 +130,14 @@ func TestOpen_RegistersSessionMigrations(t *testing.T) {
 	// 0307 (corpora), 0308 (memory_hook_journal), 0309 (agent_graph_events);
 	// 0310 (compaction); 0311 (auto_titled); 0312 (FTS5 messages_fts);
 	// 0313 (subagent-metadata) lands with branch-as-subagent-recommendation WP04;
-	// 0314 (session_usage_columns); 0316 (autonomy_columns) lands with
-	// autonomy-dial-01KR3M2A WP02 — 0315 is reserved/skipped;
-	// 0317 (streaming-resume columns on session_messages) lands with
-	// long-turn-resilience-01KR3PRS WP03.
-	want := []int{300, 301, 302, 303, 304, 305, 306, 307, 308, 309, 310, 311, 312, 313, 314, 316, 317}
+	// 0314 (session_usage_columns); 0315 (cost_threshold_fired) lands with
+	// token-cost-telemetry-01KQ8TD7 WP06; 0316 (autonomy_columns) lands
+	// with autonomy-dial-01KR3M2A WP02; 0317 (streaming-resume columns on
+	// session_messages) lands with long-turn-resilience-01KR3PRS WP03;
+	// 0318 (sessions.kind) lands with harness-self-mcp-onboarding-01KQ8TDU
+	// WP03; 0319 (workflows + workflow_versions) lands with
+	// workflows-01KQ8TDG WP06.
+	want := []int{300, 301, 302, 303, 304, 305, 306, 307, 308, 309, 310, 311, 312, 313, 314, 315, 316, 317, 318, 319}
 	if len(versions) != len(want) {
 		t.Fatalf("session migrations applied = %v, want %v", versions, want)
 	}
@@ -175,9 +178,11 @@ func TestOpen_ApplyIdempotent(t *testing.T) {
 	// 1 agent_graph_events (0309) + 1 compaction (0310) +
 	// 1 sessions.auto_titled (0311) + 1 search-fts5 (0312) +
 	// 1 subagent-metadata (0313) + 1 session_usage (0314) +
-	// 1 autonomy_columns (0316) + 1 streaming-resume (0317) = 19.
-	if count != 19 {
-		t.Errorf("ledger count = %d, want 19", count)
+	// 1 cost_threshold_fired (0315) + 1 autonomy_columns (0316) +
+	// 1 streaming-resume (0317) + 1 sessions.kind (0318) +
+	// 1 workflows (0319) = 22.
+	if count != 22 {
+		t.Errorf("ledger count = %d, want 22", count)
 	}
 }
 
