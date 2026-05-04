@@ -21,6 +21,7 @@ import {
 } from './icons';
 import { useSessions, useProjects, useHarnessClient } from '@/lib/useHarnessAPI';
 import NewSessionDialog from './NewSessionDialog.vue';
+import WorkflowRunsSection from '@/components/workflows/WorkflowRunsSection.vue';
 import type { Project, Session } from '@/lib/types';
 import '@/styles/sessions.css';
 
@@ -825,6 +826,9 @@ async function onProjectDrop(evt: DragEvent, projectId: string) {
         </div>
       </div>
     </div>
+
+    <!-- WP10 — workflow runs section (hidden when no runs) -->
+    <WorkflowRunsSection />
 
     <!-- primary-surfaces nav -->
     <nav class="px-2 py-2 border-t border-border-muted" aria-label="Surfaces">
