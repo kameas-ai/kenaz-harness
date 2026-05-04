@@ -7,10 +7,14 @@
 // per-step transcript. Streaming progress is published on the
 // `workflows:run-progress` broker topic; the wire shape there mirrors
 // ProgressEvent on this surface.
+//
+// WP02 (workflows-agentic-01KW2D3X) adds scheduler methods:
+// ScheduleSet, ScheduleClear, ScheduleList, and RunNow.
 package workflows
 
 import (
 	"context"
+	"time"
 )
 
 // Summary is the lightweight catalog entry returned by List.
@@ -116,6 +120,35 @@ type RunRequest struct {
 	SkipCache bool `json:"skipCache,omitempty"`
 }
 
+// ScheduleSetInput is the wire shape for ScheduleSet.
+type ScheduleSetInput struct {
+	WorkflowID string `json:"workflowId"`
+	// Cron is a standard 5-field cron expression (minute hour dom month dow).
+	Cron string `json:"cron"`
+	// Timezone is an IANA timezone name (e.g. "America/New_York").
+	// Empty falls back to UTC.
+	Timezone string `json:"timezone,omitempty"`
+}
+
+// ScheduleEntry is the wire shape returned by ScheduleList.
+type ScheduleEntry struct {
+	WorkflowID string `json:"workflowId"`
+	Cron       string `json:"cron"`
+	Timezone   string `json:"timezone,omitempty"`
+	Enabled    bool   `json:"enabled"`
+}
+
+// RunSummary is returned by RunNow and embedded in ScheduleHistory.
+type RunSummary struct {
+	RunID      string    `json:"runId"`
+	WorkflowID string    `json:"workflowId"`
+	Status     string    `json:"status"` // completed | failed | running
+	StartedAt  time.Time `json:"startedAt"`
+	EndedAt    time.Time `json:"endedAt,omitempty"`
+	Err        string    `json:"error,omitempty"`
+	Scheduled  bool      `json:"scheduled"`
+}
+
 // WorkflowsAPI is the view-scoped accessor.
 //
 // A nil engine is allowed — methods return ErrEngineUnavailable so
@@ -142,4 +175,21 @@ type WorkflowsAPI interface {
 	// corewf.ErrWorkflowNotFound when the id is unknown and
 	// ErrStorageUnavailable when no Store is wired.
 	Delete(ctx context.Context, id string) error
+
+	// --- Scheduler methods (workflows-agentic-01KW2D3X WP02) ---
+
+	// ScheduleSet registers or replaces a cron schedule for the
+	// workflow identified by in.WorkflowID. The schedule is persisted
+	// in DB so it survives chassis restarts. Returns
+	// ErrSchedulerUnavailable when no scheduler is wired.
+	ScheduleSet(ctx context.Context, in ScheduleSetInput) error
+	// ScheduleClear removes the cron schedule for the given workflow.
+	// Returns nil if no schedule was registered.
+	ScheduleClear(ctx context.Context, workflowID string) error
+	// ScheduleList returns all registered schedules.
+	ScheduleList(ctx context.Context) ([]ScheduleEntry, error)
+	// RunNow dispatches an immediate off-schedule run. Does not
+	// require an active cron entry. Returns ErrSchedulerUnavailable
+	// when no scheduler is wired.
+	RunNow(ctx context.Context, workflowID string) (RunSummary, error)
 }

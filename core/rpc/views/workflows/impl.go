@@ -10,6 +10,7 @@ import (
 	"github.com/sigil-tech/kaneaz-harness/core/context/audit"
 	"github.com/sigil-tech/kaneaz-harness/core/policy/cedar"
 	corewf "github.com/sigil-tech/kaneaz-harness/core/workflows"
+	wfsched "github.com/sigil-tech/kaneaz-harness/core/workflows/scheduler"
 )
 
 // ErrEngineUnavailable is returned when the chassis booted without
@@ -32,6 +33,10 @@ var ErrInvalidSaveInput = errors.New("workflows: save requires yaml or workflow"
 // from the cedar gate is preserved via errors.Unwrap so callers can
 // inspect Decision details.
 var ErrCedarDenied = errors.New("workflows: denied by cedar policy")
+
+// ErrSchedulerUnavailable is returned by ScheduleSet / ScheduleClear /
+// ScheduleList / RunNow when no scheduler is wired into the chassis.
+var ErrSchedulerUnavailable = errors.New("workflows: scheduler unavailable")
 
 // ProgressPublisher is the interface the API uses to fan progress
 // events onto the broker. Decoupled from rpc.StreamBroker so the
@@ -61,6 +66,10 @@ type Config struct {
 	// WP11). nil drops every event silently — acceptable in test
 	// harnesses without an emitter wired.
 	Audit audit.Emitter
+	// Scheduler is the cron-scheduler surface (workflows-agentic-01KW2D3X
+	// WP02). nil causes ScheduleSet / ScheduleClear / ScheduleList /
+	// RunNow to return ErrSchedulerUnavailable.
+	Scheduler wfsched.Scheduler
 }
 
 // API is the concrete WorkflowsAPI.
@@ -70,7 +79,8 @@ type API struct {
 	byID map[string]corewf.Workflow
 	// source tracks per-id provenance ("builtin" | "user") so List
 	// surfaces the right tag in the catalog after a Save round-trip.
-	source map[string]string
+	source    map[string]string
+	scheduler wfsched.Scheduler
 }
 
 // New returns a real-engine-backed API. A nil engine returns a
@@ -78,9 +88,10 @@ type API struct {
 // ErrEngineUnavailable).
 func New(cfg Config) *API {
 	a := &API{
-		cfg:    cfg,
-		byID:   make(map[string]corewf.Workflow, len(cfg.Catalog)),
-		source: make(map[string]string, len(cfg.Catalog)),
+		cfg:       cfg,
+		byID:      make(map[string]corewf.Workflow, len(cfg.Catalog)),
+		source:    make(map[string]string, len(cfg.Catalog)),
+		scheduler: cfg.Scheduler,
 	}
 	for _, w := range cfg.Catalog {
 		a.byID[w.ID] = w
@@ -414,6 +425,75 @@ func unprojectWorkflow(w Workflow) corewf.Workflow {
 		})
 	}
 	return out
+}
+
+// ScheduleSet implements WorkflowsAPI.
+func (a *API) ScheduleSet(ctx context.Context, in ScheduleSetInput) error {
+	if a == nil || a.cfg.Disabled {
+		return ErrFeatureDisabled
+	}
+	if a.scheduler == nil {
+		return ErrSchedulerUnavailable
+	}
+	return a.scheduler.Register(ctx, in.WorkflowID, in.Cron, in.Timezone)
+}
+
+// ScheduleClear implements WorkflowsAPI.
+func (a *API) ScheduleClear(ctx context.Context, workflowID string) error {
+	if a == nil || a.cfg.Disabled {
+		return ErrFeatureDisabled
+	}
+	if a.scheduler == nil {
+		return ErrSchedulerUnavailable
+	}
+	return a.scheduler.Unregister(ctx, workflowID)
+}
+
+// ScheduleList implements WorkflowsAPI.
+func (a *API) ScheduleList(ctx context.Context) ([]ScheduleEntry, error) {
+	if a == nil || a.cfg.Disabled {
+		return nil, ErrFeatureDisabled
+	}
+	if a.scheduler == nil {
+		return nil, ErrSchedulerUnavailable
+	}
+	internal, err := a.scheduler.List(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]ScheduleEntry, 0, len(internal))
+	for _, e := range internal {
+		out = append(out, ScheduleEntry{
+			WorkflowID: e.WorkflowID,
+			Cron:       e.Cron,
+			Timezone:   e.Timezone,
+			Enabled:    e.Enabled,
+		})
+	}
+	return out, nil
+}
+
+// RunNow implements WorkflowsAPI.
+func (a *API) RunNow(ctx context.Context, workflowID string) (RunSummary, error) {
+	if a == nil || a.cfg.Disabled {
+		return RunSummary{}, ErrFeatureDisabled
+	}
+	if a.scheduler == nil {
+		return RunSummary{}, ErrSchedulerUnavailable
+	}
+	internal, err := a.scheduler.RunNow(ctx, workflowID)
+	if err != nil {
+		return RunSummary{}, err
+	}
+	return RunSummary{
+		RunID:      internal.RunID,
+		WorkflowID: internal.WorkflowID,
+		Status:     internal.Status,
+		StartedAt:  internal.StartedAt,
+		EndedAt:    internal.EndedAt,
+		Err:        internal.Err,
+		Scheduled:  internal.Scheduled,
+	}, nil
 }
 
 func projectWorkflow(w corewf.Workflow) Workflow {
