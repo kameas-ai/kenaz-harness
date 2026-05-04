@@ -5,7 +5,11 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/sigil-tech/kaneaz-harness/core/storage"
+	storagesqlite "github.com/sigil-tech/kaneaz-harness/core/storage/sqlite"
 	corewf "github.com/sigil-tech/kaneaz-harness/core/workflows"
+
+	_ "modernc.org/sqlite"
 )
 
 func newTestAPI(t *testing.T) *API {
@@ -125,5 +129,145 @@ func TestRun_NilEngineErrors(t *testing.T) {
 	_, err := api.Run(context.Background(), "plan_implement_review", nil)
 	if !errors.Is(err, ErrEngineUnavailable) {
 		t.Errorf("want ErrEngineUnavailable, got %v", err)
+	}
+}
+
+// newWP07TestStore returns a real corewf.Store backed by an on-disk
+// sqlite DB so the Save/Delete RPC tests exercise the same code path
+// production hits. A fake-Store route would need to fabricate the
+// unexported Workflow metadata fields, which would force a
+// not-allowed change to the WP06 storage API.
+func newWP07TestStore(t *testing.T) corewf.Store {
+	t.Helper()
+	dir := t.TempDir()
+	db, err := storagesqlite.Open(storage.Config{
+		DataDir:          dir,
+		EncryptionStatus: storage.EncryptionStatusDisabledWithDiskEncryption,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close(context.Background()) })
+	return corewf.NewSQLiteStore(db)
+}
+
+const wp07ValidYAML = `
+id: wp07_test
+name: "WP07 test flow"
+version: 1
+steps:
+  - name: a
+    kind: shell
+    cmd: "echo"
+    args: ["hi"]
+`
+
+func TestSave_YAMLImportPath(t *testing.T) {
+	api := New(Config{Catalog: nil, Store: newWP07TestStore(t)})
+
+	out, err := api.Save(context.Background(), SaveInput{YAML: wp07ValidYAML})
+	if err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	if out.ID == "" || out.ID == "wp07_test" {
+		// ImportYAML must rewrite the id.
+		t.Errorf("Save: expected fresh id, got %q", out.ID)
+	}
+	if out.Version != 1 {
+		t.Errorf("Save: version = %d, want 1", out.Version)
+	}
+	if out.Hash == "" {
+		t.Errorf("Save: empty hash")
+	}
+	// Catalog should now include the freshly saved row tagged "user".
+	list, err := api.List(context.Background())
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	found := false
+	for _, s := range list {
+		if s.ID == out.ID {
+			found = true
+			if s.Source != "user" {
+				t.Errorf("Source = %q, want user", s.Source)
+			}
+		}
+	}
+	if !found {
+		t.Errorf("saved workflow %q missing from catalog", out.ID)
+	}
+}
+
+func TestSave_WorkflowPath_IsIdempotent(t *testing.T) {
+	api := New(Config{Catalog: nil, Store: newWP07TestStore(t)})
+
+	wf := Workflow{
+		ID: "wp07_idem", Name: "Idem", Version: 1,
+		Steps: []Step{{Name: "a", Kind: "shell", Cmd: "echo", Args: []string{"hi"}}},
+	}
+	first, err := api.Save(context.Background(), SaveInput{Workflow: &wf})
+	if err != nil {
+		t.Fatalf("Save#1: %v", err)
+	}
+	second, err := api.Save(context.Background(), SaveInput{Workflow: &wf})
+	if err != nil {
+		t.Fatalf("Save#2: %v", err)
+	}
+	if second.Version != first.Version {
+		t.Errorf("idempotent re-save bumped version: %d → %d", first.Version, second.Version)
+	}
+	if second.Hash != first.Hash {
+		t.Errorf("hash drifted on no-op Save")
+	}
+}
+
+func TestSave_RequiresInput(t *testing.T) {
+	api := New(Config{Store: newWP07TestStore(t)})
+	_, err := api.Save(context.Background(), SaveInput{})
+	if !errors.Is(err, ErrInvalidSaveInput) {
+		t.Errorf("want ErrInvalidSaveInput, got %v", err)
+	}
+}
+
+func TestSave_NoStoreErrors(t *testing.T) {
+	api := New(Config{})
+	_, err := api.Save(context.Background(), SaveInput{YAML: wp07ValidYAML})
+	if !errors.Is(err, ErrStorageUnavailable) {
+		t.Errorf("want ErrStorageUnavailable, got %v", err)
+	}
+}
+
+func TestDelete_HappyPath(t *testing.T) {
+	api := New(Config{Store: newWP07TestStore(t)})
+
+	out, err := api.Save(context.Background(), SaveInput{YAML: wp07ValidYAML})
+	if err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	if err := api.Delete(context.Background(), out.ID); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	// Catalog no longer contains the row.
+	list, _ := api.List(context.Background())
+	for _, s := range list {
+		if s.ID == out.ID {
+			t.Errorf("deleted workflow %q still in catalog", out.ID)
+		}
+	}
+}
+
+func TestDelete_MissingReturnsNotFound(t *testing.T) {
+	api := New(Config{Store: newWP07TestStore(t)})
+	err := api.Delete(context.Background(), "no-such-id")
+	if !errors.Is(err, corewf.ErrWorkflowNotFound) {
+		t.Errorf("want ErrWorkflowNotFound, got %v", err)
+	}
+}
+
+func TestDelete_NoStoreErrors(t *testing.T) {
+	api := New(Config{})
+	err := api.Delete(context.Background(), "anything")
+	if !errors.Is(err, ErrStorageUnavailable) {
+		t.Errorf("want ErrStorageUnavailable, got %v", err)
 	}
 }

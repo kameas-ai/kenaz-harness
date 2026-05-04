@@ -62,10 +62,34 @@ export interface WorkflowsRunResult {
   error?: string;
 }
 
+/**
+ * WorkflowsSaveInput — exactly one of `yaml` or `workflow` must be set.
+ * `yaml` routes through ImportYAML on the backend (fresh id); `workflow`
+ * is a structured update keyed by the supplied id.
+ */
+export interface WorkflowsSaveInput {
+  yaml?: string;
+  workflow?: WorkflowsWorkflow;
+}
+
+export interface WorkflowsSaveOutput {
+  id: string;
+  name: string;
+  version: number;
+  hash: string;
+  yaml: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface WorkflowsClient {
   list(): Promise<WorkflowsSummary[]>;
   get(id: string): Promise<WorkflowsWorkflow>;
   run(id: string, inputs: Record<string, string>): Promise<WorkflowsRunResult>;
+  /** WP07: persist a user workflow (yaml import or structured update). */
+  save(input: WorkflowsSaveInput): Promise<WorkflowsSaveOutput>;
+  /** WP07: delete a stored workflow by id. */
+  remove(id: string): Promise<void>;
 }
 
 interface BridgeShape {
@@ -75,6 +99,8 @@ interface BridgeShape {
     id: string,
     inputs: Record<string, string>,
   ) => Promise<WorkflowsRunResult>;
+  Workflows_Save: (input: WorkflowsSaveInput) => Promise<WorkflowsSaveOutput>;
+  Workflows_Delete: (id: string) => Promise<void>;
 }
 
 declare global {
@@ -101,6 +127,8 @@ export function createWorkflowsClient(): WorkflowsClient {
     list: () => bridge().Workflows_List(),
     get: (id) => bridge().Workflows_Get(id),
     run: (id, inputs) => bridge().Workflows_Run(id, inputs),
+    save: (input) => bridge().Workflows_Save(input),
+    remove: (id) => bridge().Workflows_Delete(id),
   };
 }
 
@@ -132,5 +160,18 @@ export function createFakeWorkflowsClient(
           status: 'completed',
           steps: [],
         })),
+    save:
+      seed.save ??
+      ((input) =>
+        Promise.resolve({
+          id: input.workflow?.id ?? 'wf-stub',
+          name: input.workflow?.name ?? '',
+          version: 1,
+          hash: 'stub-hash',
+          yaml: input.yaml ?? '',
+          createdAt: '1970-01-01T00:00:00.000Z',
+          updatedAt: '1970-01-01T00:00:00.000Z',
+        })),
+    remove: seed.remove ?? (() => Promise.resolve()),
   };
 }
