@@ -97,6 +97,25 @@ type SaveOutput struct {
 	UpdatedAt string `json:"updatedAt"`
 }
 
+// RunRequest is the WP08 envelope shape callers pass to RunWithOptions
+// when they need to opt into the inline-dispatch path or override the
+// rerun_policy confirmation gate. The legacy positional Run(id, inputs)
+// signature is preserved for back-compat.
+type RunRequest struct {
+	ID     string            `json:"id"`
+	Inputs map[string]string `json:"inputs,omitempty"`
+	// Inline, when true, routes through workflows.InlineRun instead
+	// of the spawned-session path. The progress events flow on the
+	// same broker topic but each carries Inline=true so the chat
+	// renderer can append them to the current session transcript
+	// rather than spawning a new workflow_run row.
+	Inline bool `json:"inline,omitempty"`
+	// SkipCache, when true, bypasses the rerun_policy cache check.
+	// Used after the user confirms a "rerun_policy=prompt" gate so
+	// the second invocation dispatches fresh.
+	SkipCache bool `json:"skipCache,omitempty"`
+}
+
 // WorkflowsAPI is the view-scoped accessor.
 //
 // A nil engine is allowed — methods return ErrEngineUnavailable so
@@ -111,6 +130,9 @@ type WorkflowsAPI interface {
 	// transcript. Long-running steps in production WPs will move to
 	// async + broker progress; the beta engine completes inline.
 	Run(ctx context.Context, id string, inputs map[string]string) (RunResult, error)
+	// RunWithOptions is the WP08 entrypoint that honours the inline
+	// + skip-cache flags. The legacy Run is wired as a thin shim.
+	RunWithOptions(ctx context.Context, req RunRequest) (RunResult, error)
 	// Save persists a user workflow via the WP06 storage layer.
 	// Returns ErrStorageUnavailable when no Store is wired.
 	// Save is idempotent on yaml hash: re-saving identical canonical

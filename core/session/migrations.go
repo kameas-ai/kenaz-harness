@@ -97,7 +97,9 @@ const sqlInitSchema = `
 // (token-cost-telemetry-01KQ8TD7 WP06 — see migrations_cost_threshold.go).
 // 0319 lands the workflows + workflow_versions tables that back the
 // user-defined workflows store (workflows-01KQ8TDG WP06 — see
-// migrations_workflows.go).
+// migrations_workflows.go). 0320 lands the workflow_runs_cache table
+// that backs the rerun_policy resolver (workflows-01KQ8TDG WP08 — see
+// migrations_workflows_cache.go).
 func Migrations() []migrations.Migration {
 	return []migrations.Migration{
 		{
@@ -149,6 +151,7 @@ func Migrations() []migrations.Migration {
 		migration0317(),
 		migration0318(),
 		migration0319(),
+		migration0320(),
 	}
 }
 

@@ -126,8 +126,26 @@ func (a *API) Get(_ context.Context, id string) (Workflow, error) {
 	return projectWorkflow(w), nil
 }
 
-// Run implements WorkflowsAPI.
+// Run implements WorkflowsAPI. Thin shim over RunWithOptions for the
+// pre-WP08 callers that don't need inline / skip-cache flags.
 func (a *API) Run(ctx context.Context, id string, inputs map[string]string) (RunResult, error) {
+	return a.RunWithOptions(ctx, RunRequest{ID: id, Inputs: inputs})
+}
+
+// RunWithOptions implements WorkflowsAPI. Honours the inline +
+// skip-cache envelope flags introduced by WP08.
+//
+// Inline path:
+//   - Resolves the workflow from the catalog.
+//   - Calls workflows.InlineRun, which validates inline_run:true and
+//     spins a goroutine that streams ProgressEvents (tagged Inline=true)
+//     into the broker on the same `workflows:run-progress` topic.
+//   - Returns synchronously after the inline goroutine drains; the
+//     RunResult shape mirrors the spawned-session path so the chat
+//     renderer doesn't have to fork.
+//
+// Spawned path (the default): unchanged from the WP07 baseline.
+func (a *API) RunWithOptions(ctx context.Context, req RunRequest) (RunResult, error) {
 	if a == nil || a.cfg.Disabled {
 		return RunResult{}, ErrFeatureDisabled
 	}
@@ -135,18 +153,61 @@ func (a *API) Run(ctx context.Context, id string, inputs map[string]string) (Run
 		return RunResult{}, ErrEngineUnavailable
 	}
 	a.mu.RLock()
-	w, ok := a.byID[id]
+	w, ok := a.byID[req.ID]
 	a.mu.RUnlock()
 	if !ok {
-		return RunResult{}, fmt.Errorf("%w: %s", corewf.ErrWorkflowNotFound, id)
+		return RunResult{}, fmt.Errorf("%w: %s", corewf.ErrWorkflowNotFound, req.ID)
 	}
-	typed := make(map[string]corewf.TypedValue, len(inputs))
-	for k, v := range inputs {
+	typed := make(map[string]corewf.TypedValue, len(req.Inputs))
+	for k, v := range req.Inputs {
 		typed[k] = corewf.TypedValue{Type: corewf.ValueTypeText, Text: v}
 	}
 
 	pub := a.cfg.Publisher
-	opts := corewf.RunOptions{}
+
+	if req.Inline {
+		// Inline dispatch: hand the workflow + loose-typed inputs to
+		// InlineRun, drain the channel into the broker (so the chat
+		// renderer sees the same event stream the spawned path emits),
+		// and project the terminal events into a RunResult.
+		loose := make(map[string]any, len(req.Inputs))
+		for k, v := range req.Inputs {
+			loose[k] = v
+		}
+		ch, err := corewf.InlineRun(ctx, a.cfg.Engine, w, loose)
+		if err != nil {
+			return RunResult{}, err
+		}
+		res := RunResult{WorkflowID: w.ID, Status: "running"}
+		stepIdx := make(map[string]int)
+		for ev := range ch {
+			if pub != nil {
+				pub.Publish("workflows:run-progress", ev)
+			}
+			res.RunID = ev.RunID
+			i, ok := stepIdx[ev.Step]
+			if !ok {
+				i = len(res.Steps)
+				res.Steps = append(res.Steps, StepRun{Name: ev.Step, Kind: string(ev.Kind)})
+				stepIdx[ev.Step] = i
+			}
+			res.Steps[i].Status = ev.Status
+			if ev.Output != "" {
+				res.Steps[i].Output = ev.Output
+			}
+			if ev.Err != "" {
+				res.Steps[i].Err = ev.Err
+				res.Err = ev.Err
+				res.Status = "failed"
+			}
+		}
+		if res.Status == "running" {
+			res.Status = "completed"
+		}
+		return res, nil
+	}
+
+	opts := corewf.RunOptions{SkipCache: req.SkipCache}
 	if pub != nil {
 		opts.ProgressSink = func(ev corewf.ProgressEvent) {
 			pub.Publish("workflows:run-progress", ev)
