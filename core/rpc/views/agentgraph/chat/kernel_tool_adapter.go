@@ -7,8 +7,17 @@ import (
 	"fmt"
 
 	coreag "github.com/sigil-tech/kaneaz-harness/core/agentgraph"
+	"github.com/sigil-tech/kaneaz-harness/core/autonomy"
 	"github.com/sigil-tech/kaneaz-harness/core/toolloop"
 )
+
+// AutonomyKnobsProvider is the narrow surface the kernel tool adapter
+// needs to apply the autonomy posture before each tool call. The
+// production wiring binds this to a closure over the session's resolved
+// autonomy knobs (autonomy-dial WP04). nil disables posture-aware
+// short-circuiting — the adapter falls through to the permission
+// resolver on every call (v0.3.0 baseline behaviour).
+type AutonomyKnobsProvider func() autonomy.ResolvedKnobs
 
 // kernelToolAdapter satisfies agentgraph.ToolRegistry by routing
 // dispatch through the chat-package-local ToolPool surface (which the
@@ -23,6 +32,12 @@ type kernelToolAdapter struct {
 	perms     ToolPermissionResolver
 	sessionID string
 	catalog   []ToolEntry
+
+	// autonomy is the optional knobs provider for autonomy-dial WP04.
+	// When non-nil the adapter reads AutoApproveFamilies before each
+	// tool call to determine whether the permission-resolver prompt path
+	// can be bypassed for the "tool" family.
+	autonomy AutonomyKnobsProvider
 }
 
 // newKernelToolAdapter wraps the chassis-side pool + resolver.
@@ -32,6 +47,13 @@ func newKernelToolAdapter(pool ToolPool, perms ToolPermissionResolver, sessionID
 		perms:     perms,
 		sessionID: sessionID,
 	}
+}
+
+// withAutonomy attaches an AutonomyKnobsProvider to the adapter.
+// Returns the same pointer so callers can chain at construction time.
+func (a *kernelToolAdapter) withAutonomy(provider AutonomyKnobsProvider) *kernelToolAdapter {
+	a.autonomy = provider
+	return a
 }
 
 // Has satisfies agentgraph.ToolRegistry. Lazy-loads the catalog on
@@ -94,7 +116,37 @@ func (a *kernelToolAdapter) Call(ctx context.Context, call coreag.ToolCall) (cor
 			return coreag.ToolResult{}, fmt.Errorf("chat: unknown tool %q", call.Name)
 		}
 	}
-	if a.perms != nil {
+	// WP04 — autonomy-dial posture gate.
+	//
+	// Before consulting the permission resolver, check whether the
+	// session's resolved autonomy knobs auto-approve the "tool" family.
+	// AutoApproveFamilies is set by the tier presets:
+	//   - strict / cautious: empty or read-only → resolver always runs
+	//   - default / bold / autonomous: includes "tool" (via FamilyShellSafe
+	//     or FamilyNetwork in the autonomous preset) — BUT the autonomy
+	//     package maps its preset families (read/write/shell-safe/network)
+	//     onto the cedar FamilyTool via the "tool" family name directly.
+	//
+	// The canonical family for any MCP / external tool call is
+	// autonomy.FamilyShellSafe when the tool is a general tool, and we
+	// treat any non-empty AutoApproveFamilies that includes at least one
+	// of the four families as a signal to skip the interactive-prompt
+	// path. We check for the explicit "tool" sentinel first, then fall
+	// back to "shell-safe" (the lowest rung that covers tool dispatch in
+	// the presets). Cedar deny (explicit forbid) is NOT bypassed —
+	// callers gate through the engine before reaching the permission
+	// resolver; this path only skips the NotApplicable→interactive-prompt
+	// branch by short-circuiting Resolve to "auto_allow".
+	skipPrompt := false
+	if a.autonomy != nil {
+		knobs := a.autonomy()
+		fs := knobs.AutoApproveFamilies
+		if fs.Has(autonomy.FamilyShellSafe) || fs.Has(autonomy.FamilyNetwork) {
+			skipPrompt = true
+		}
+	}
+
+	if a.perms != nil && !skipPrompt {
 		v, err := a.perms.Resolve(ctx, a.sessionID, server, tool)
 		if err != nil {
 			return coreag.ToolResult{}, fmt.Errorf("chat: permission resolve: %w", err)
@@ -109,6 +161,26 @@ func (a *kernelToolAdapter) Call(ctx context.Context, call coreag.ToolCall) (cor
 				IsError: true,
 			}, nil
 		}
+	} else if a.perms != nil && skipPrompt {
+		// Still run the resolver when it returns "deny" (explicit Cedar
+		// deny must remain the floor), but skip interactive prompts by
+		// checking only the policy string — NotApplicable maps to
+		// "confirm_each" in the resolver, which we bypass here.
+		v, err := a.perms.Resolve(ctx, a.sessionID, server, tool)
+		if err != nil {
+			return coreag.ToolResult{}, fmt.Errorf("chat: permission resolve: %w", err)
+		}
+		if v.Policy == "deny" {
+			reason := v.Reason
+			if reason == "" {
+				reason = "denied by permission policy"
+			}
+			return coreag.ToolResult{
+				Content: fmt.Sprintf("tool %q denied: %s", call.Name, reason),
+				IsError: true,
+			}, nil
+		}
+		// "confirm_each" path: autonomy posture says auto-allow — proceed.
 	}
 
 	argsJSON, err := json.Marshal(call.Args)

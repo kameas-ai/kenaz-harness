@@ -136,6 +136,16 @@ type Config struct {
 	// frontend-side via streamingError) remains the user-visible
 	// surface.
 	PartialPersister PartialPersister
+
+	// AutonomyKnobs is the optional autonomy-dial knobs provider
+	// (autonomy-dial WP04). When non-nil, the kernel tool adapter reads
+	// the resolved knobs before each tool call and bypasses the
+	// interactive-prompt path for tool families covered by
+	// AutoApproveFamilies. nil disables posture-aware short-circuiting —
+	// the adapter falls through to the permission resolver on every call
+	// (v0.3.0 baseline behaviour). Production wiring threads this from
+	// the session's resolved autonomy knobs at StartStream time.
+	AutonomyKnobs AutonomyKnobsProvider
 }
 
 // PartialPersister is the resume-flow persistence seam. Invoked by
@@ -400,6 +410,9 @@ func (r *ChatRunner) StartStream(ctx context.Context, profileID, sessionID, mode
 	}
 	llmAdapter := NewLLMProviderAdapter(r.cfg.Registry, profileID, modelOverride, toolCatalog)
 	toolAdapter := newKernelToolAdapter(r.cfg.Pool, r.cfg.Perms, sessionID)
+	if r.cfg.AutonomyKnobs != nil {
+		toolAdapter.withAutonomy(r.cfg.AutonomyKnobs)
+	}
 
 	r.mu.Lock()
 	r.nextID++
