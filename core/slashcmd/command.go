@@ -144,6 +144,9 @@ type Env struct {
 	// Branches is the conversation-branching gateway used by /branch.
 	// Nil means /branch returns a friendly "branching not wired" error.
 	Branches BranchGateway
+	// Workflows is the workflow gateway used by /wf.
+	// Nil means /wf returns a friendly "workflows not wired" error.
+	Workflows WorkflowsGateway
 	// Registry references the owning Registry so meta-commands like
 	// /help can enumerate their siblings without a back-reference
 	// the registry would have to inject post-construction. Always
@@ -260,6 +263,64 @@ type BranchModel struct {
 	ModelID    string
 	Tier       string
 	Reason     string
+}
+
+// WorkflowsGateway is the narrow contract /wf consumes. The rpc layer
+// adapts the real *workflowsview.API onto this shape so the slashcmd
+// package never imports the rpc/views/workflows package directly.
+//
+// List returns the installed workflow catalog (id, name, description).
+//
+// Get returns the full workflow including declared inputs so /wf can
+// detect required fields that lack defaults.
+//
+// Run dispatches the workflow inline — inputs is a loose string map
+// and opts.Inline must be true for the chat-invocation path. Returns
+// a channel of progress events that is closed once the run terminates.
+type WorkflowsGateway interface {
+	List(ctx context.Context) ([]WorkflowSummary, error)
+	Get(ctx context.Context, id string) (WorkflowDetail, error)
+	Run(ctx context.Context, id string, inputs map[string]string, opts WorkflowRunOptions) (<-chan WorkflowProgressEvent, error)
+}
+
+// WorkflowSummary is the slashcmd-local view of one catalog entry.
+type WorkflowSummary struct {
+	ID          string
+	Name        string
+	Description string
+}
+
+// WorkflowInput is one declared input field on a workflow.
+type WorkflowInput struct {
+	Name     string
+	Required bool
+	Default  string
+}
+
+// WorkflowDetail carries the workflow fields /wf needs to prompt for
+// missing required inputs before dispatching.
+type WorkflowDetail struct {
+	ID          string
+	Name        string
+	Description string
+	Inputs      []WorkflowInput
+}
+
+// WorkflowRunOptions tunes a /wf dispatch call.
+type WorkflowRunOptions struct {
+	// Inline, when true, routes through the inline-run path so progress
+	// events stream into the current session transcript.
+	Inline bool
+}
+
+// WorkflowProgressEvent is one step-transition event forwarded from
+// the engine into the chat turn.
+type WorkflowProgressEvent struct {
+	RunID  string
+	Step   string
+	Status string
+	Output string
+	Err    string
 }
 
 // IsZero reports whether the model row is unpopulated.
