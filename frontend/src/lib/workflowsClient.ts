@@ -82,6 +82,42 @@ export interface WorkflowsSaveOutput {
   updatedAt: string;
 }
 
+// --- WP03 Catalog types ---
+
+/** CatalogEntry is one card in the catalog grid. */
+export interface WorkflowsCatalogEntry {
+  id: string;
+  name: string;
+  description?: string;
+  source: string;
+  version: string;
+  icon?: string;
+  requiresCedarGrants?: string[];
+  requiresCredentials?: string[];
+  estimatedCostUSD: number;
+  installStatus: string; // "not_installed" | "installed" | "installed_outdated"
+}
+
+/** CatalogPreview is returned by catalog.get() — full YAML + entry metadata. */
+export interface WorkflowsCatalogPreview {
+  entry: WorkflowsCatalogEntry;
+  yamlSource: string;
+}
+
+/** CatalogInstallResult is returned by catalog.install(). */
+export interface WorkflowsCatalogInstallResult {
+  workflowId: string;
+  scheduled: boolean;
+  missingCredentials?: string[];
+}
+
+/** WorkflowsCatalogClient groups the WP03 catalog methods. */
+export interface WorkflowsCatalogClient {
+  list(): Promise<WorkflowsCatalogEntry[]>;
+  get(id: string): Promise<WorkflowsCatalogPreview>;
+  install(id: string): Promise<WorkflowsCatalogInstallResult>;
+}
+
 export interface WorkflowsClient {
   list(): Promise<WorkflowsSummary[]>;
   get(id: string): Promise<WorkflowsWorkflow>;
@@ -90,6 +126,8 @@ export interface WorkflowsClient {
   save(input: WorkflowsSaveInput): Promise<WorkflowsSaveOutput>;
   /** WP07: delete a stored workflow by id. */
   remove(id: string): Promise<void>;
+  /** WP03: catalog sub-client. */
+  catalog: WorkflowsCatalogClient;
 }
 
 interface BridgeShape {
@@ -101,6 +139,9 @@ interface BridgeShape {
   ) => Promise<WorkflowsRunResult>;
   Workflows_Save: (input: WorkflowsSaveInput) => Promise<WorkflowsSaveOutput>;
   Workflows_Delete: (id: string) => Promise<void>;
+  Workflows_Catalog_List: () => Promise<WorkflowsCatalogEntry[]>;
+  Workflows_Catalog_Get: (id: string) => Promise<WorkflowsCatalogPreview>;
+  Workflows_Catalog_Install: (id: string) => Promise<WorkflowsCatalogInstallResult>;
 }
 
 declare global {
@@ -129,6 +170,11 @@ export function createWorkflowsClient(): WorkflowsClient {
     run: (id, inputs) => bridge().Workflows_Run(id, inputs),
     save: (input) => bridge().Workflows_Save(input),
     remove: (id) => bridge().Workflows_Delete(id),
+    catalog: {
+      list: () => bridge().Workflows_Catalog_List(),
+      get: (id) => bridge().Workflows_Catalog_Get(id),
+      install: (id) => bridge().Workflows_Catalog_Install(id),
+    },
   };
 }
 
@@ -139,6 +185,7 @@ export function createWorkflowsClient(): WorkflowsClient {
  */
 export function createFakeWorkflowsClient(
   seed: Partial<WorkflowsClient> = {},
+  catalogSeed: Partial<WorkflowsCatalogClient> = {},
 ): WorkflowsClient {
   return {
     list: seed.list ?? (() => Promise.resolve([])),
@@ -173,5 +220,31 @@ export function createFakeWorkflowsClient(
           updatedAt: '1970-01-01T00:00:00.000Z',
         })),
     remove: seed.remove ?? (() => Promise.resolve()),
+    catalog: {
+      list:
+        catalogSeed.list ??
+        (() => Promise.resolve([])),
+      get:
+        catalogSeed.get ??
+        ((id) =>
+          Promise.resolve({
+            entry: {
+              id,
+              name: '',
+              source: 'builtin',
+              version: 'v1',
+              estimatedCostUSD: 0,
+              installStatus: 'not_installed',
+            },
+            yamlSource: '',
+          })),
+      install:
+        catalogSeed.install ??
+        ((id) =>
+          Promise.resolve({
+            workflowId: id,
+            scheduled: false,
+          })),
+    },
   };
 }

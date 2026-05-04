@@ -466,6 +466,14 @@ export function Workflows_Save(arg1:workflows.SaveInput):Promise<workflows.SaveO
 
 export function Workflows_Delete(arg1:string):Promise<void>;
 
+// TODO: regenerate via `wails generate module` once WP03 catalog is stable.
+// Hand-added in WP03 so the frontend CatalogView / workflowsClient has typed bindings.
+export function Workflows_Catalog_List():Promise<Array<workflows.CatalogEntry>>;
+
+export function Workflows_Catalog_Get(arg1:string):Promise<workflows.CatalogPreview>;
+
+export function Workflows_Catalog_Install(arg1:string):Promise<workflows.CatalogInstallResult>;
+
 // TODO: regenerate via `wails generate module` once the WP04+WP05 update UI lands.
 // Hand-added in WP03 so the frontend updateClient.ts has typed bindings.
 export function Update_Status():Promise<update.StatusOutput>;

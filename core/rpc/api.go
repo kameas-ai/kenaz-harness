@@ -89,6 +89,7 @@ import (
 	"github.com/sigil-tech/kaneaz-harness/core/toolloop"
 	"github.com/sigil-tech/kaneaz-harness/core/usage"
 	corewf "github.com/sigil-tech/kaneaz-harness/core/workflows"
+	wfcatalogpkg "github.com/sigil-tech/kaneaz-harness/core/workflows/catalog"
 	wfsched "github.com/sigil-tech/kaneaz-harness/core/workflows/scheduler"
 	"github.com/zalando/go-keyring"
 )
@@ -816,13 +817,22 @@ func New(c *core.Core) *API {
 				logging.L().Info("wf.scheduler.init_ok")
 			}
 		}
-		a.workflowsAPI = workflowsview.New(workflowsview.Config{
-			Engine:    corewf.NewEngine(),
-			Catalog:   catalog,
-			Publisher: brokerPublisher{broker: a.broker},
-			Disabled:  disabled,
+		// WP03 (workflows-agentic-01KW2D3X): catalog backend wired with
+		// the same Store + Scheduler constructed above so Install can
+		// persist and arm schedules. nil Store / Scheduler degrade
+		// gracefully inside the catalog implementation.
+		wfCatalog := wfcatalogpkg.New(wfcatalogpkg.Config{
 			Store:     wfStore,
 			Scheduler: sched,
+		})
+		a.workflowsAPI = workflowsview.New(workflowsview.Config{
+			Engine:          corewf.NewEngine(),
+			Catalog:         catalog,
+			Publisher:       brokerPublisher{broker: a.broker},
+			Disabled:        disabled,
+			Store:           wfStore,
+			Scheduler:       sched,
+			WorkflowCatalog: wfCatalog,
 		})
 	}
 
