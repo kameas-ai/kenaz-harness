@@ -76,6 +76,7 @@ import (
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/trust"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/workflow"
 	workflowsview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/workflows"
+	"github.com/sigil-tech/kaneaz-harness/core/autonomy"
 	"github.com/sigil-tech/kaneaz-harness/core/secrets"
 	coreslashcmd "github.com/sigil-tech/kaneaz-harness/core/slashcmd"
 	corebash "github.com/sigil-tech/kaneaz-harness/core/tools/bash"
@@ -564,6 +565,38 @@ func New(c *core.Core) *API {
 		if starter != nil {
 			a.sessionsAPI = sessions.WithResumeStarter(a.sessionsAPI, starter)
 		}
+	}
+	// autonomy-dial-01KR3M2A WP03: wire the AutonomyContextProvider so
+	// Sessions_ResolveAutonomy folds global → project → session layers
+	// using the live settings store + project manager. Tolerates a nil
+	// store (returns the empty Layer for that side of the chain).
+	if c != nil && c.SessionManager() != nil {
+		store := settingsStore
+		projects := c.ProjectManager()
+		sessionMgr := c.SessionManager()
+		ctxProvider := sessions.AutonomyContextFunc{
+			Global: func(ctx context.Context) (autonomy.Layer, error) {
+				if store == nil {
+					return autonomy.Layer{}, nil
+				}
+				return store.LoadAutonomyProfile()
+			},
+			ProjectForSession: func(ctx context.Context, sessionID string) (autonomy.Layer, error) {
+				rec, err := sessionMgr.Get(ctx, sessionID)
+				if err != nil {
+					return autonomy.Layer{}, nil
+				}
+				if rec.ProjectID == nil || *rec.ProjectID == "" || projects == nil {
+					return autonomy.Layer{}, nil
+				}
+				layer, err := projects.GetAutonomyProfile(ctx, *rec.ProjectID)
+				if err != nil {
+					return autonomy.Layer{}, nil
+				}
+				return layer, nil
+			},
+		}
+		a.sessionsAPI = sessions.WithAutonomyContext(a.sessionsAPI, ctxProvider)
 	}
 	if c != nil && a.stdioPool != nil {
 		c.SetMCP(a.stdioPool)

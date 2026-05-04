@@ -23,9 +23,7 @@ type AutonomyKnobValues struct {
 	DestructiveActionPosture string            `json:"destructiveActionPosture"`
 	SourceTrace              map[string]string `json:"sourceTrace"`
 	// Tier is the effective tier label resolved from the highest-priority
-	// layer that contributed the AskOnAmbiguity knob (a stable proxy for
-	// "what tier is this session running under?"). For pure custom
-	// overrides with no Level set anywhere, falls back to "default".
+	// layer that contributed a Level (session > project > global > default).
 	Tier string `json:"tier"`
 }
 

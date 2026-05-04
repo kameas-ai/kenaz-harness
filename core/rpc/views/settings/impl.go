@@ -754,6 +754,17 @@ func (a *API) Set(_ context.Context, s Settings) error {
 	return a.store.SaveAll(s)
 }
 
+// LoadAutonomyProfile delegates to the store. Returns the empty Layer
+// when no override is persisted.
+func (a *API) LoadAutonomyProfile(_ context.Context) (autonomy.Layer, error) {
+	return a.store.LoadAutonomyProfile()
+}
+
+// SaveAutonomyProfile delegates to the store.
+func (a *API) SaveAutonomyProfile(_ context.Context, layer autonomy.Layer) error {
+	return a.store.SaveAutonomyProfile(layer)
+}
+
 // memoryStore is the test-only in-memory SettingsStore.
 type memoryStore struct {
 	mu   sync.Mutex

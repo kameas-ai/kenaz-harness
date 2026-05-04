@@ -3,7 +3,11 @@
 // the Wails boundary stays compact.
 package projects
 
-import "context"
+import (
+	"context"
+
+	"github.com/sigil-tech/kaneaz-harness/core/autonomy"
+)
 
 // Project is the wire shape for a project entity. Timestamps render as
 // RFC3339Nano UTC for byte-stable JSON.
@@ -46,4 +50,12 @@ type ProjectsAPI interface {
 	AddSession(ctx context.Context, projectID, sessionID string) error
 	RemoveSession(ctx context.Context, sessionID string) error
 	ListSessions(ctx context.Context, projectID string) ([]Session, error)
+
+	// LoadAutonomyProfile returns the persisted per-project autonomy
+	// override Layer. Empty Layer means "inherit from global."
+	// (autonomy-dial-01KR3M2A WP03)
+	LoadAutonomyProfile(ctx context.Context, projectID string) (autonomy.Layer, error)
+	// SaveAutonomyProfile persists the per-project autonomy.Layer.
+	// Pass an empty Layer to clear the override.
+	SaveAutonomyProfile(ctx context.Context, projectID string, layer autonomy.Layer) error
 }

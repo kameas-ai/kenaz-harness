@@ -12,6 +12,7 @@
 import { ref } from 'vue';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
 import type { Session } from '@/lib/types';
+import AutonomyChip from '@/components/chat/AutonomyChip.vue';
 
 const props = defineProps<{
   session: Session;
@@ -68,6 +69,8 @@ function cancelConfirm() {
     <span class="flex-1 truncate text-sm font-medium text-ink">
       {{ session.name || session.id }}
     </span>
+
+    <AutonomyChip :session-id="session.id" />
 
     <button
       type="button"

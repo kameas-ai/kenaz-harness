@@ -93,6 +93,11 @@ type managerAPI struct {
 	// usageMgr is the optional usage manager for GetUsage. nil returns
 	// zeroed aggregate (feature disabled or not yet wired).
 	usageMgr usage.Manager
+	// autonomyCtx provides global + project autonomy.Layer values to
+	// ResolveAutonomy. nil falls back to "no upstream layers" — the
+	// session-level + tier-default chain still resolves correctly.
+	// (autonomy-dial-01KR3M2A WP03)
+	autonomyCtx AutonomyContextProvider
 }
 
 // TitleGenerator is the surface SuggestTitle needs. Matches

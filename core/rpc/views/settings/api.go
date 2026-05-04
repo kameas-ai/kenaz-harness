@@ -584,6 +584,13 @@ type SettingsStore interface {
 type SettingsAPI interface {
 	Get(ctx context.Context) (Settings, error)
 	Set(ctx context.Context, s Settings) error
+	// LoadAutonomyProfile returns the persisted global autonomy.Layer.
+	// Empty Layer means "use the tier-default fallback."
+	// (autonomy-dial-01KR3M2A WP03)
+	LoadAutonomyProfile(ctx context.Context) (autonomy.Layer, error)
+	// SaveAutonomyProfile persists the global autonomy.Layer. An empty
+	// Layer clears the field.
+	SaveAutonomyProfile(ctx context.Context, layer autonomy.Layer) error
 }
 
 // ShortcutsStore is the persistence interface for keyboard shortcut
