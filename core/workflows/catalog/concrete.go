@@ -181,15 +181,8 @@ func (c *concreteCatalog) missingCredentials(w corewf.Workflow) []string {
 }
 
 // extractSchedule reads schedule + timezone from a workflow's metadata.
-// The Workflow type doesn't currently have a first-class schedule field
-// (that's WP04), so we use a best-effort approach: look for a step named
-// "schedule" or check the slash_command field as a convention signal.
-// This stub returns empty strings (no schedule) until WP04 adds the
-// field to the schema. Tests can exercise Install-with-scheduling by
-// wiring a scheduler and verifying the Scheduled flag via a stub.
+// WP04 added first-class schedule:/timezone: top-level fields to the
+// Workflow struct; this function reads them directly.
 func extractSchedule(w corewf.Workflow) (cron, tz string) {
-	// WP04 will add schedule:/timezone: top-level fields to the Workflow
-	// struct. Until then this is always a no-op.
-	_ = w
-	return "", ""
+	return w.Schedule, w.Timezone
 }

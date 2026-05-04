@@ -1,0 +1,63 @@
+id: web_research
+name: "Web Research"
+description: |
+  Autonomous web research brief. Fetches a search results page, scrapes
+  the top article URLs with LLM extraction, fetches each article in
+  parallel via inputs_from fan-out, concatenates the bodies, then
+  synthesises a research brief.
+version: 1
+inputs:
+  - name: query
+    kind: string
+    required: true
+    default: "latest AI research 2025"
+  - name: top_n
+    kind: string
+    required: false
+    default: "3"
+steps:
+  - name: search
+    kind: web_fetch
+    url: "https://search.brave.com/search?q=${input.query}&source=web"
+
+  - name: scrape_top
+    kind: web_scrape
+    url: "https://search.brave.com/search?q=${input.query}&source=web"
+    mode: llm
+    extract_prompt: |
+      Extract the top ${input.top_n} article URLs from the search results page.
+      Return them as a newline-separated list of absolute URLs. No other text.
+
+  - name: fetch_article_1
+    kind: web_fetch
+    inputs_from: [scrape_top]
+    url: "${step.scrape_top.output}"
+
+  - name: fetch_article_2
+    kind: web_fetch
+    inputs_from: [scrape_top]
+    url: "${step.scrape_top.output}"
+
+  - name: fetch_article_3
+    kind: web_fetch
+    inputs_from: [scrape_top]
+    url: "${step.scrape_top.output}"
+
+  - name: aggregate_text
+    kind: aggregate
+    inputs_from: [fetch_article_1, fetch_article_2, fetch_article_3]
+    strategy: concat
+    separator: "\n\n---\n\n"
+
+  - name: summarize
+    kind: model_turn
+    inputs_from: [aggregate_text]
+    user_prompt: |
+      You are a research analyst. Write a concise, well-structured research
+      brief (400-600 words) synthesising the following web articles on the
+      topic: "${input.query}"
+
+      SOURCE ARTICLES:
+      ${step.aggregate_text.output}
+
+      Include: key findings, notable sources, open questions.

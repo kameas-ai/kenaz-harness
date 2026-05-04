@@ -1,0 +1,62 @@
+id: doc_generator
+name: "Doc Generator"
+description: |
+  Generates a README.md for a Go package from its source files. Uses a shell
+  find to list .go files, reads them in parallel via shell steps, concatenates
+  the source with a separator, then asks the model to write a README that is
+  saved as an artifact.
+version: 1
+inputs:
+  - name: pkg_path
+    kind: string
+    required: true
+    default: "core/workflows"
+steps:
+  - name: list_files
+    kind: shell
+    cmd: "find"
+    args: ["${input.pkg_path}", "-name", "*.go", "-not", "-path", "*/vendor/*"]
+
+  - name: read_file_1
+    kind: shell
+    inputs_from: [list_files]
+    cmd: "head"
+    args: ["-200", "${input.pkg_path}/types.go"]
+
+  - name: read_file_2
+    kind: shell
+    inputs_from: [list_files]
+    cmd: "head"
+    args: ["-200", "${input.pkg_path}/loader.go"]
+
+  - name: read_file_3
+    kind: shell
+    inputs_from: [list_files]
+    cmd: "head"
+    args: ["-200", "${input.pkg_path}/schema.go"]
+
+  - name: aggregate_source
+    kind: aggregate
+    inputs_from: [read_file_1, read_file_2, read_file_3]
+    strategy: concat
+    separator: "\n\n---\n\n"
+
+  - name: synthesize_readme
+    kind: model_turn
+    inputs_from: [aggregate_source]
+    user_prompt: |
+      You are a technical writer. Write a README.md for the Go package at
+      "${input.pkg_path}" based on the following source excerpts.
+
+      Include: package overview, key types, how to use the public API,
+      and any notable design decisions visible in the code.
+
+      SOURCE:
+      ${step.aggregate_source.output}
+
+  - name: save
+    kind: write_artifact
+    inputs_from: [synthesize_readme]
+    title: "${input.pkg_path}/README.md"
+    content: "${step.synthesize_readme.output}"
+    mime_type: "text/markdown"
