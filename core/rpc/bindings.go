@@ -40,6 +40,7 @@ import (
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/tools"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/trust"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/workflow"
+	workflowsview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/workflows"
 	"github.com/sigil-tech/kaneaz-harness/core/logging"
 	"github.com/sigil-tech/kaneaz-harness/core/mcp/stdio"
 )
@@ -1280,6 +1281,18 @@ func (b *Bindings) Branches_CommitReintegration(opts branchesview.CommitReintegr
 }
 func (b *Bindings) Branches_SetAdvisorDismissed(sessionID string, dismissed bool) error {
 	return b.api.Branches().SetAdvisorDismissed(b.ctx(), sessionID, dismissed)
+}
+
+// ── workflows (mission workflows-01KQ8TDG, v0.3.0 beta) ───────────────
+
+func (b *Bindings) Workflows_List() ([]workflowsview.Summary, error) {
+	return b.api.Workflows().List(b.ctx())
+}
+func (b *Bindings) Workflows_Get(id string) (workflowsview.Workflow, error) {
+	return b.api.Workflows().Get(b.ctx(), id)
+}
+func (b *Bindings) Workflows_Run(id string, inputs map[string]string) (workflowsview.RunResult, error) {
+	return b.api.Workflows().Run(b.ctx(), id, inputs)
 }
 
 // ── nodes (manifest-driven node catalog; WP07) ────────────────────────
