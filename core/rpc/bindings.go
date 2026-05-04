@@ -322,6 +322,21 @@ func (b *Bindings) MCP_ImportClaudeDesktopConfig(req mcp.ImportRequest) (mcp.Imp
 	return importer.ImportClaudeDesktopConfig(b.ctx(), req)
 }
 
+// MCP_HealthSnapshot returns the current health status for every installed
+// MCP recipe as a map of recipe-id → HealthEntry.
+// (mcp-server-health-ui-01KQ8TD6 WP01)
+func (b *Bindings) MCP_HealthSnapshot() (map[string]mcp.HealthEntry, error) {
+	return b.api.MCP().HealthSnapshot(b.ctx())
+}
+
+// MCP_SubscribeHealthChanges registers a broker subscription for
+// mcp:health-changed events. Returns a subscription id for use with
+// MCP_StopStream.
+// (mcp-server-health-ui-01KQ8TD6 WP02)
+func (b *Bindings) MCP_SubscribeHealthChanges() (string, error) {
+	return b.api.MCP().SubscribeHealthChanges(b.ctx())
+}
+
 // ── a2a ────────────────────────────────────────────────────────────────
 
 func (b *Bindings) A2A_ListCards() ([]a2a.Card, error) {
@@ -838,6 +853,18 @@ func (b *Bindings) Settings_SetShortcuts(m map[string]string) error {
 	}
 	s.KeyboardShortcuts = m
 	return store.SaveAll(s)
+}
+
+// Settings_GetMCPAutoRestart returns whether MCP servers should auto-restart
+// after two consecutive ping failures. Default true.
+// (mcp-server-health-ui-01KQ8TD6 WP06)
+func (b *Bindings) Settings_GetMCPAutoRestart() (bool, error) {
+	return b.api.Settings().GetMCPAutoRestart(b.ctx())
+}
+
+// Settings_SetMCPAutoRestart persists the MCP auto-restart dial.
+func (b *Bindings) Settings_SetMCPAutoRestart(enabled bool) error {
+	return b.api.Settings().SetMCPAutoRestart(b.ctx(), enabled)
 }
 
 // ── memory ─────────────────────────────────────────────────────────────

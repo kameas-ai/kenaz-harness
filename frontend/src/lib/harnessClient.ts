@@ -1286,6 +1286,15 @@ export interface SettingsClient {
   getAutonomy(): Promise<AutonomyLayer>;
   /** Persist the global autonomy.Layer. Empty Layer clears overrides. */
   setAutonomy(layer: AutonomyLayer): Promise<void>;
+
+  // ── mcp-server-health-ui-01KQ8TD6 WP06 ──────────────────────────────
+  /**
+   * Returns whether MCP servers should auto-restart after two consecutive
+   * ping failures. Default: true.
+   */
+  getMCPAutoRestart(): Promise<boolean>;
+  /** Persist the MCP auto-restart dial. */
+  setMCPAutoRestart(enabled: boolean): Promise<void>;
 }
 
 /**
@@ -2032,6 +2041,8 @@ export function createHarnessClient(): HarnessClient {
         b().Settings_SetFSRequestAccessEnabled(enabled),
       getAutonomy: () => b().Settings_GetAutonomy(),
       setAutonomy: (layer) => b().Settings_SetAutonomy(layer),
+      getMCPAutoRestart: () => b().Settings_GetMCPAutoRestart(),
+      setMCPAutoRestart: (enabled) => b().Settings_SetMCPAutoRestart(enabled),
     },
     permissions: {
       listGrants: (family) =>
@@ -2512,6 +2523,8 @@ export function createFakeHarnessClient(
       setFSRequestAccessEnabled: noop,
       getAutonomy: async () => ({ level: null, overrides: {} }),
       setAutonomy: noop,
+      getMCPAutoRestart: async () => true,
+      setMCPAutoRestart: noop,
     },
     permissions: {
       listGrants: async () => [],

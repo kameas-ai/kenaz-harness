@@ -28,6 +28,7 @@ import {
 } from '@/shell/icons';
 import RecipeKeyPromptModal from './RecipeKeyPromptModal.vue';
 import AddMCPServerModal from './AddMCPServerModal.vue';
+import HealthPill from './HealthPill.vue';
 import type {
   EnvKey,
   Recipe,
@@ -800,13 +801,11 @@ watch(
           <div>
             <div class="flex items-center gap-2 font-ui text-[13px] text-ink">
               <span>{{ listing.recipe.displayName }}</span>
-              <span
-                class="text-[10px] uppercase tracking-[0.16em]"
-                :class="stateColor(statusOf(listing).state)"
+              <!-- WP04: HealthPill replaces the plain-text state span -->
+              <HealthPill
+                :state="statusOf(listing).state"
                 :data-testid="`recipe-state-${listing.recipe.id}`"
-              >
-                {{ statusOf(listing).state }}
-              </span>
+              />
               <!-- Source badge -->
               <span
                 class="text-[10px] uppercase tracking-[0.14em]"
@@ -826,6 +825,17 @@ watch(
             <p class="mt-1 text-[11px] text-ink-muted max-w-prose">
               {{ listing.recipe.description }}
             </p>
+            <!-- WP05: Health alert banner — visible when server is in an
+                 error or failed state. Surfaces lastError without the
+                 user having to expand the detail panel. -->
+            <div
+              v-if="statusOf(listing).state === 'failed' && statusOf(listing).lastError"
+              class="mt-1 rounded-sm border border-signal-danger bg-signal-danger/10 px-2 py-1 font-mono text-[10px] text-signal-danger"
+              role="alert"
+              :data-testid="`recipe-health-alert-${listing.recipe.id}`"
+            >
+              {{ statusOf(listing).lastError }}
+            </div>
             <div
               v-if="rowError[listing.recipe.id]"
               class="mt-1 text-[11px] text-signal-danger"

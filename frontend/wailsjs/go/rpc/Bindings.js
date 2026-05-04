@@ -426,6 +426,14 @@ export function MCP_TestRecipe(arg1, arg2, arg3) {
   return window['go']['rpc']['Bindings']['MCP_TestRecipe'](arg1, arg2, arg3);
 }
 
+export function MCP_HealthSnapshot() {
+  return window['go']['rpc']['Bindings']['MCP_HealthSnapshot']();
+}
+
+export function MCP_SubscribeHealthChanges() {
+  return window['go']['rpc']['Bindings']['MCP_SubscribeHealthChanges']();
+}
+
 export function Memory_Forget(arg1) {
   return window['go']['rpc']['Bindings']['Memory_Forget'](arg1);
 }
@@ -760,6 +768,14 @@ export function Settings_SetShortcut(arg1, arg2) {
 
 export function Settings_SetShortcuts(arg1) {
   return window['go']['rpc']['Bindings']['Settings_SetShortcuts'](arg1);
+}
+
+export function Settings_GetMCPAutoRestart() {
+  return window['go']['rpc']['Bindings']['Settings_GetMCPAutoRestart']();
+}
+
+export function Settings_SetMCPAutoRestart(arg1) {
+  return window['go']['rpc']['Bindings']['Settings_SetMCPAutoRestart'](arg1);
 }
 
 export function Settings_SetWebSearch(arg1) {
