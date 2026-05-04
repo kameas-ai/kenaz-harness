@@ -391,6 +391,54 @@ func (s *service) ApplyAndRestart(ctx context.Context, staged StagedUpdate) erro
 	return s.swapper.Restart(ctx, running)
 }
 
+// ListSkipped returns a snapshot of the persisted skip set. Sorted
+// alphabetically so callers (and golden tests) get a deterministic
+// order. The view layer (core/rpc/views/update) consumes this via an
+// optional-interface assertion; tests injecting a fake Service may
+// omit the method entirely.
+func (s *service) ListSkipped() []string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]string, 0, len(s.skipped))
+	for v := range s.skipped {
+		out = append(out, v)
+	}
+	// Cheap insertion sort; the skip set is bounded by the number of
+	// releases the user has actively dismissed (~1-3 in practice).
+	for i := 1; i < len(out); i++ {
+		for j := i; j > 0 && out[j-1] > out[j]; j-- {
+			out[j-1], out[j] = out[j], out[j-1]
+		}
+	}
+	return out
+}
+
+// UnskipVersion removes a version from the skip set so the banner
+// re-appears on the next Check. The on-disk store is rewritten in the
+// same atomic temp-rename pattern SkipVersion uses.
+func (s *service) UnskipVersion(ctx context.Context, version string) error {
+	_ = ctx
+	if version == "" {
+		return errors.New("update: UnskipVersion: empty version")
+	}
+	s.mu.Lock()
+	if _, ok := s.skipped[version]; !ok {
+		s.mu.Unlock()
+		return nil
+	}
+	delete(s.skipped, version)
+	versions := make([]string, 0, len(s.skipped))
+	for v := range s.skipped {
+		versions = append(versions, v)
+	}
+	s.mu.Unlock()
+	if err := s.persistSkipped(versions); err != nil {
+		return fmt.Errorf("update: persist unskip: %w", err)
+	}
+	logging.L().Info("update.unskip", "removed", true)
+	return nil
+}
+
 // SkipVersion records `version` in the in-memory and on-disk skip
 // set. Subsequent Check calls return Info{SkippedByUser: true} when
 // the manifest version matches.

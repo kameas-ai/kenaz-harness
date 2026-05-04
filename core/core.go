@@ -371,6 +371,11 @@ func (c *Core) Shutdown(ctx context.Context) error {
 // with. Subsystems use this as the base for their on-disk state.
 func (c *Core) DataDir() string { return c.opts.DataDir }
 
+// BuildVersion returns the harness build label (semver string set
+// from main.Version via ldflags). Used by the auto-update subsystem
+// to compare against the manifest's `version` field.
+func (c *Core) BuildVersion() string { return c.opts.BuildVersion }
+
 // SessionManager returns the chat-rail session manager, lazily
 // constructed on first call. The manager is wired against the unified
 // storage.DB once it is available; an open / migration failure

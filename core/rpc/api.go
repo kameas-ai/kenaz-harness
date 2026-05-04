@@ -30,6 +30,7 @@ import (
 	compactionwiring "github.com/sigil-tech/kaneaz-harness/core/compaction/wiring"
 	corecontexts "github.com/sigil-tech/kaneaz-harness/core/contexts"
 	corecorpus "github.com/sigil-tech/kaneaz-harness/core/corpus"
+	coreupdate "github.com/sigil-tech/kaneaz-harness/core/update"
 	"github.com/sigil-tech/kaneaz-harness/core/event"
 	"github.com/sigil-tech/kaneaz-harness/core/hooks"
 	corellm "github.com/sigil-tech/kaneaz-harness/core/llm"
@@ -74,6 +75,7 @@ import (
 	slashview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/slashcmd"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/tools"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/trust"
+	updateview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/update"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/workflow"
 	workflowsview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/workflows"
 	"github.com/sigil-tech/kaneaz-harness/core/autonomy"
@@ -148,6 +150,11 @@ type HarnessAPI interface {
 	Dials() dialsview.DialsAPI
 	Nodes() nodesview.NodesAPI
 	Search() searchview.SearchAPI
+	// Update is the auto-update view (mission auto-update, v0.4.0 WP03).
+	// Backed by core/update.Service; nil-service chassis path returns a
+	// surface that surfaces ErrServiceUnavailable on every state-mutating
+	// method.
+	Update() updateview.UpdateAPI
 }
 
 // ShellStatus drives the Toolbar status pills + LegendBar live-rate
@@ -283,6 +290,19 @@ type API struct {
 	// bindings is the Wails-reflected surface; held for the lifetime of
 	// API so OnStartup can call SetContext on it.
 	bindings *Bindings
+
+	// updateAPI is the auto-update view (mission auto-update, v0.4.0
+	// WP03). Wraps a core/update.Service plus an in-memory state
+	// mirror for the StatusOutput shape.
+	updateAPI *updateview.Manager
+	// updateSvc is the concrete update.Service held so the
+	// SetContext hook can kick off BackgroundPoll on the Wails-supplied
+	// app context (the only context that can produce the broker emit
+	// runtime.EventsEmit accepts).
+	updateSvc coreupdate.Service
+	// updatePollCancel cancels the BackgroundPoll goroutine on chassis
+	// shutdown / context replacement.
+	updatePollCancel context.CancelFunc
 }
 
 // Builtins returns the in-binary tool registry. Used by the chat-input
@@ -307,6 +327,38 @@ func (a *API) SetContext(ctx context.Context) {
 	}
 	if a.shellImpl != nil {
 		a.shellImpl.SetContext(ctx)
+	}
+	// Start the auto-update background poller on the Wails-supplied
+	// app context. The 6h interval matches the WP01 spec; channel is
+	// "stable" — switching to "prerelease" requires a separate UI
+	// path that hasn't shipped yet. Cancel any prior poller so
+	// repeated SetContext calls (test harness re-init) don't pile up
+	// goroutines.
+	if a.updateSvc != nil {
+		if a.updatePollCancel != nil {
+			a.updatePollCancel()
+		}
+		pollCtx, cancel := context.WithCancel(ctx)
+		a.updatePollCancel = cancel
+		go func() {
+			if err := a.updateSvc.BackgroundPoll(pollCtx, 6*time.Hour, "stable"); err != nil &&
+				!errors.Is(err, context.Canceled) {
+				logging.L().Warn("update.poll.exit", "err", err.Error())
+			}
+		}()
+	}
+}
+
+// Shutdown cancels the auto-update background poller. main.go calls
+// this from OnShutdown so the poll goroutine exits cleanly. Safe to
+// call when no poller is running.
+func (a *API) Shutdown() {
+	if a == nil {
+		return
+	}
+	if a.updatePollCancel != nil {
+		a.updatePollCancel()
+		a.updatePollCancel = nil
 	}
 }
 
@@ -716,6 +768,32 @@ func New(c *core.Core) *API {
 			Disabled:  disabled,
 			Store:     wfStore,
 		})
+	}
+
+	// Auto-update subsystem (mission auto-update, v0.4.0 WP03).
+	// Constructs the production core/update.Service when a real Core
+	// is available; the test-chassis path (c == nil / empty DataDir /
+	// empty BuildVersion) leaves both updateSvc and updateAPI nil, in
+	// which case the Update() accessor falls back to a graceful-empty
+	// surface that returns ErrServiceUnavailable on every state-mutating
+	// method.
+	if c != nil && c.DataDir() != "" && c.BuildVersion() != "" {
+		svc, err := coreupdate.NewService(coreupdate.Config{
+			CurrentVersion: c.BuildVersion(),
+			DataDir:        c.DataDir(),
+			Publisher:      brokerPublisher{broker: a.broker},
+		})
+		if err != nil {
+			logging.L().Warn("update.service.init_failed", "err", err.Error())
+		} else {
+			a.updateSvc = svc
+			a.updateAPI = updateview.New(updateview.Config{
+				Service:        svc,
+				Publisher:      brokerPublisher{broker: a.broker},
+				CurrentVersion: c.BuildVersion(),
+			})
+			logging.L().Info("update.service.init_ok")
+		}
 	}
 
 	// Node manifest catalog (mission agent-kernel-graph-node-catalog
@@ -3286,6 +3364,18 @@ func (a *API) Search() searchview.SearchAPI {
 	}
 	// Fallback: return a nil-safe stub that returns empty results.
 	return &stubSearch{}
+}
+
+// Update returns the auto-update view (mission auto-update, v0.4.0 WP03).
+// When the chassis booted without a real core/update.Service (test
+// path / empty DataDir / empty BuildVersion), the fallback returns a
+// graceful-empty surface that surfaces ErrServiceUnavailable on every
+// state-mutating method.
+func (a *API) Update() updateview.UpdateAPI {
+	if a == nil || a.updateAPI == nil {
+		return updateview.New(updateview.Config{})
+	}
+	return a.updateAPI
 }
 
 // stubSearch is a safe no-op SearchAPI for use before storage is wired.

@@ -4050,3 +4050,83 @@ export namespace workflows {
 	}
 
 }
+
+// Hand-added in WP03 (mission auto-update, v0.4.0); regenerate via
+// `wails generate module` once the WP04+WP05 update UI lands.
+export namespace update {
+
+	export class StatusOutput {
+	    currentVersion: string;
+	    available: boolean;
+	    availableVersion?: string;
+	    channel: string;
+	    downloadState: string;
+	    downloadProgress?: number;
+	    notes?: string;
+	    releaseUrl?: string;
+	    skippedByUser: boolean;
+	    lastCheckedAt?: number;
+
+	    static createFrom(source: any = {}) {
+	        return new StatusOutput(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.currentVersion = source["currentVersion"];
+	        this.available = source["available"];
+	        this.availableVersion = source["availableVersion"];
+	        this.channel = source["channel"];
+	        this.downloadState = source["downloadState"];
+	        this.downloadProgress = source["downloadProgress"];
+	        this.notes = source["notes"];
+	        this.releaseUrl = source["releaseUrl"];
+	        this.skippedByUser = source["skippedByUser"];
+	        this.lastCheckedAt = source["lastCheckedAt"];
+	    }
+	}
+
+	export class DownloadProgressPayload {
+	    bytes: number;
+	    total: number;
+	    percent: number;
+
+	    static createFrom(source: any = {}) {
+	        return new DownloadProgressPayload(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.bytes = source["bytes"];
+	        this.total = source["total"];
+	        this.percent = source["percent"];
+	    }
+	}
+
+	export class StagedPayload {
+	    targetVersion: string;
+
+	    static createFrom(source: any = {}) {
+	        return new StagedPayload(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.targetVersion = source["targetVersion"];
+	    }
+	}
+
+	export class DownloadFailedPayload {
+	    err: string;
+
+	    static createFrom(source: any = {}) {
+	        return new DownloadFailedPayload(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.err = source["err"];
+	    }
+	}
+
+}
