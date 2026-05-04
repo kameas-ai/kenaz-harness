@@ -4007,4 +4007,46 @@ export namespace workflows {
 	    }
 	}
 
+	// Hand-added in WP07; regenerate via `wails generate module` once the
+	// WP09 editor lands.
+	export class SaveInput {
+	    yaml?: string;
+	    workflow?: Workflow;
+
+	    static createFrom(source: any = {}) {
+	        return new SaveInput(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.yaml = source["yaml"];
+	        this.workflow = source["workflow"] ? new Workflow(source["workflow"]) : undefined;
+	    }
+	}
+
+	export class SaveOutput {
+	    id: string;
+	    name: string;
+	    version: number;
+	    hash: string;
+	    yaml: string;
+	    createdAt: string;
+	    updatedAt: string;
+
+	    static createFrom(source: any = {}) {
+	        return new SaveOutput(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.name = source["name"];
+	        this.version = source["version"];
+	        this.hash = source["hash"];
+	        this.yaml = source["yaml"];
+	        this.createdAt = source["createdAt"];
+	        this.updatedAt = source["updatedAt"];
+	    }
+	}
+
 }

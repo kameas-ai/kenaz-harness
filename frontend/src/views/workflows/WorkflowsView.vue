@@ -79,6 +79,53 @@ async function selectWorkflow(id: string) {
   }
 }
 
+// WP07: save / delete affordances. The full editor lands in WP09; this
+// surface just exposes the client.save / client.remove round-trip so the
+// import-from-yaml + delete-stored-workflow flows are reachable end-to-end.
+const saving = ref(false);
+const saveError = ref<string | null>(null);
+
+async function importFromYaml(yaml: string) {
+  if (!yaml.trim()) return;
+  saving.value = true;
+  saveError.value = null;
+  try {
+    const out = await client.save({ yaml });
+    // Refresh the catalog so the freshly persisted row shows up, and
+    // jump to the new selection so the user sees the import landed.
+    await loadCatalog();
+    await selectWorkflow(out.id);
+  } catch (err) {
+    saveError.value = err instanceof Error ? err.message : String(err);
+  } finally {
+    saving.value = false;
+  }
+}
+
+async function deleteSelected() {
+  if (!selected.value) return;
+  const id = selected.value.id;
+  saving.value = true;
+  saveError.value = null;
+  try {
+    await client.remove(id);
+    selectedID.value = null;
+    selected.value = null;
+    runResult.value = null;
+    runError.value = null;
+    await loadCatalog();
+  } catch (err) {
+    saveError.value = err instanceof Error ? err.message : String(err);
+  } finally {
+    saving.value = false;
+  }
+}
+
+// Test seam: the spec drives import via this method so it doesn't need
+// to wire a hidden file input. Production WP09 will replace it with the
+// real editor's save button.
+defineExpose({ importFromYaml, deleteSelected });
+
 async function runWorkflow() {
   if (!selected.value) return;
   running.value = true;
@@ -224,7 +271,7 @@ onMounted(loadCatalog);
             </div>
           </div>
 
-          <div>
+          <div class="flex items-center gap-2">
             <button
               type="button"
               class="rounded-sm border border-accent bg-accent px-4 py-1.5 font-ui text-sm text-bg hover:opacity-90 disabled:opacity-50"
@@ -234,6 +281,23 @@ onMounted(loadCatalog);
             >
               {{ running ? 'Running…' : 'Run workflow' }}
             </button>
+            <button
+              type="button"
+              class="rounded-sm border border-border-muted bg-surface-2 px-3 py-1.5 font-ui text-sm text-ink-muted hover:text-red-300 hover:border-red-700 disabled:opacity-50"
+              :disabled="saving"
+              data-testid="workflows-delete-button"
+              @click="deleteSelected"
+            >
+              Delete
+            </button>
+          </div>
+
+          <div
+            v-if="saveError"
+            class="font-ui text-sm text-red-300"
+            data-testid="workflows-save-error"
+          >
+            {{ saveError }}
           </div>
 
           <div v-if="runError" class="font-ui text-sm text-red-300" data-testid="workflows-run-error">

@@ -1319,6 +1319,12 @@ func (b *Bindings) Workflows_Get(id string) (workflowsview.Workflow, error) {
 func (b *Bindings) Workflows_Run(id string, inputs map[string]string) (workflowsview.RunResult, error) {
 	return b.api.Workflows().Run(b.ctx(), id, inputs)
 }
+func (b *Bindings) Workflows_Save(in workflowsview.SaveInput) (workflowsview.SaveOutput, error) {
+	return b.api.Workflows().Save(b.ctx(), in)
+}
+func (b *Bindings) Workflows_Delete(id string) error {
+	return b.api.Workflows().Delete(b.ctx(), id)
+}
 
 // ── nodes (manifest-driven node catalog; WP07) ────────────────────────
 
