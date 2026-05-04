@@ -458,3 +458,9 @@ export function Workflows_List():Promise<Array<workflows.Summary>>;
 export function Workflows_Get(arg1:string):Promise<workflows.Workflow>;
 
 export function Workflows_Run(arg1:string,arg2:Record<string, string>):Promise<workflows.RunResult>;
+
+// TODO: regenerate via `wails generate module` once the WP09 editor lands.
+// Hand-added in WP07 so the frontend Save / Delete shim has a typed binding.
+export function Workflows_Save(arg1:workflows.SaveInput):Promise<workflows.SaveOutput>;
+
+export function Workflows_Delete(arg1:string):Promise<void>;

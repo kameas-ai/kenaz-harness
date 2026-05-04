@@ -18,6 +18,9 @@ type RunContext struct {
 	Inputs      map[string]TypedValue
 	StepOutputs map[string]TypedValue
 	mu          sync.RWMutex
+	// branchSkip records the step name a conditional asked the
+	// engine to skip (the not-chosen branch). Cleared once consumed.
+	branchSkip string
 }
 
 // SetOutput stores a step output. Safe for concurrent reads from
@@ -25,6 +28,30 @@ type RunContext struct {
 func (rc *RunContext) SetOutput(name string, v TypedValue) {
 	rc.mu.Lock()
 	rc.StepOutputs[name] = v
+	rc.mu.Unlock()
+}
+
+// SetBranchSkip records the step name a conditional runner wants the
+// engine to skip on the next iteration. Used by conditionalRunner to
+// prune the not-chosen branch.
+func (rc *RunContext) SetBranchSkip(name string) {
+	rc.mu.Lock()
+	rc.branchSkip = name
+	rc.mu.Unlock()
+}
+
+// peekBranchSkip returns the pending skip target without clearing it.
+func (rc *RunContext) peekBranchSkip() string {
+	rc.mu.RLock()
+	defer rc.mu.RUnlock()
+	return rc.branchSkip
+}
+
+// clearBranchSkip drops the pending skip target. Called by the
+// engine after the matching step is observed.
+func (rc *RunContext) clearBranchSkip() {
+	rc.mu.Lock()
+	rc.branchSkip = ""
 	rc.mu.Unlock()
 }
 
@@ -37,11 +64,27 @@ type Engine struct {
 	Runners map[StepKind]StepRunner
 	// Now is a pluggable wall-clock; nil uses time.Now().UTC().
 	Now func() time.Time
+	// Cache, when non-nil, is consulted before dispatching steps and
+	// updated after a successful run. The (workflow, inputs) tuple
+	// keys the cache; the workflow's RerunPolicy controls how a hit
+	// is handled (see ResolveRerun).
+	Cache Cache
 }
 
 // NewEngine returns an Engine wired with the package-default runners.
+// Runners that require an external dependency (LLM, Tools, MCP,
+// Artifacts) are present in the registry but error at Run time
+// because their dep is nil. Use NewEngineWithDeps when those
+// runners need to actually dispatch.
 func NewEngine() *Engine {
 	return &Engine{Runners: DefaultRunners(), Now: func() time.Time { return time.Now().UTC() }}
+}
+
+// NewEngineWithDeps returns an Engine whose runners are pre-bound to
+// the supplied dependencies. Pass nil entries on Deps to keep the
+// no-dep behavior for that step kind.
+func NewEngineWithDeps(deps Deps) *Engine {
+	return &Engine{Runners: DefaultRunnersWithDeps(deps), Now: func() time.Time { return time.Now().UTC() }}
 }
 
 // runner returns the registered StepRunner for kind, falling back to
@@ -81,6 +124,34 @@ func (e *Engine) Run(ctx context.Context, wf Workflow, inputs map[string]TypedVa
 			Err:        err.Error(),
 		}, err
 	}
+
+	// rerun_policy gate. Honoured only when the engine has a cache
+	// wired AND the workflow declares a non-empty policy. The default
+	// (empty / "always" / "fresh") proceeds straight to dispatch.
+	if e.Cache != nil && wf.RerunPolicy != "" && !opts.SkipCache {
+		policy := NormalizeRerunPolicy(wf.RerunPolicy)
+		hashable := typedValuesAsAny(inputs)
+		cached, prompt, rerr := ResolveRerun(ctx, e.Cache, wf.ID, hashable, policy)
+		switch {
+		case prompt:
+			return &Run{
+				ID:         randomRunID(),
+				WorkflowID: wf.ID,
+				Status:     "needs_confirmation",
+				StartedAt:  e.now(),
+				EndedAt:    e.now(),
+				Err:        ErrRerunPolicyAsk.Error(),
+			}, ErrRerunPolicyAsk
+		case rerr != nil:
+			// Resolver errors are non-fatal — proceed with a fresh run
+			// rather than blocking on a transient cache failure.
+			_ = rerr
+		case cached != nil:
+			r := applyCachedRun(cached, wf.ID, e.now())
+			return r, nil
+		}
+	}
+
 	rc := &RunContext{
 		RunID:       randomRunID(),
 		Workflow:    wf,
@@ -118,6 +189,21 @@ func (e *Engine) Run(ctx context.Context, wf Workflow, inputs map[string]TypedVa
 			run.EndedAt = e.now()
 			return run, ctx.Err()
 		default:
+		}
+
+		// Honor a conditional's branch skip: if the prior step asked
+		// us to bypass a named target, mark it skipped without
+		// dispatching its runner. The hint persists across non-
+		// matching iterations so a later `no`-branch step still
+		// triggers the skip.
+		if skip := rc.peekBranchSkip(); skip != "" && skip == st.Name {
+			rc.clearBranchSkip()
+			run.Steps = append(run.Steps, StepResult{
+				Name: st.Name, Kind: st.Kind, Status: "skipped",
+				StartedAt: e.now(), EndedAt: e.now(),
+			})
+			emit(ProgressEvent{RunID: rc.RunID, WorkflowID: wf.ID, Step: st.Name, Kind: st.Kind, Status: "skipped", At: e.now()})
+			continue
 		}
 
 		stepStart := e.now()
@@ -177,7 +263,28 @@ func (e *Engine) Run(ctx context.Context, wf Workflow, inputs map[string]TypedVa
 	run.Status = "completed"
 	run.EndedAt = e.now()
 	run.Outputs = copyOutputs(rc)
+
+	// Cache write-back. Only successful runs are cached; failed /
+	// interrupted runs leave the prior cache row (if any) untouched.
+	if e.Cache != nil && wf.RerunPolicy != "" {
+		hashable := typedValuesAsAny(inputs)
+		hash := HashInputs(hashable)
+		_ = e.Cache.Put(ctx, wf.ID, hash, runResultFromRun(run))
+	}
 	return run, nil
+}
+
+// typedValuesAsAny lifts the engine's TypedValue inputs map into the
+// loose map[string]any shape ResolveRerun / HashInputs accept.
+func typedValuesAsAny(in map[string]TypedValue) map[string]any {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]any, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
 }
 
 func mergeInputDefaults(wf Workflow, supplied map[string]TypedValue) map[string]TypedValue {
@@ -222,6 +329,13 @@ func expandStep(st Step, rc *RunContext) (Step, error) {
 	if out.ArtifactIDRef, err = expandRefs(st.ArtifactIDRef, rc); err != nil {
 		return st, err
 	}
+	if out.Content, err = expandRefs(st.Content, rc); err != nil {
+		return st, err
+	}
+	// Template and If are NOT pre-expanded — transform runs the
+	// text/template renderer itself and conditionalRunner expands
+	// `if` post-validation so the predicate can see the post-expanded
+	// step outputs without double-expansion artifacts.
 	if len(st.Args) > 0 {
 		out.Args = make([]string, len(st.Args))
 		for i, a := range st.Args {

@@ -701,11 +701,20 @@ func New(c *core.Core) *API {
 		if !disabled {
 			catalog, _ = corewf.LoadBuiltins()
 		}
+		// WP07: thread the WP06 SQLite storage layer through so Save +
+		// Delete can persist user workflows. nil DB (test chassis) leaves
+		// Store unset; the view returns ErrStorageUnavailable on those
+		// methods rather than crashing.
+		var wfStore corewf.Store
+		if db != nil && !disabled {
+			wfStore = corewf.NewSQLiteStore(db)
+		}
 		a.workflowsAPI = workflowsview.New(workflowsview.Config{
 			Engine:    corewf.NewEngine(),
 			Catalog:   catalog,
 			Publisher: brokerPublisher{broker: a.broker},
 			Disabled:  disabled,
+			Store:     wfStore,
 		})
 	}
 

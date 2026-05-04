@@ -58,6 +58,21 @@ const (
 	//   ActionSpawnRecipe — gates the spawn path when the pool opens a recipe
 	ActionAddRecipe   = "add_recipe"
 	ActionSpawnRecipe = "spawn_recipe"
+
+	// Workflow-family action UIDs introduced by mission
+	// workflows-01KQ8TDG (WP11). They gate the three RPC-level
+	// operations on workflow definitions:
+	//
+	//   ActionWorkflowRun    — gates Engine.Run (workflow dispatch)
+	//   ActionWorkflowSave   — gates Save (persist a definition)
+	//   ActionWorkflowDelete — gates Delete (remove a definition)
+	//
+	// The action UIDs use dotted form to match the audit kind names
+	// (workflow.executed / workflow.saved / workflow.deleted) so the
+	// audit panel cross-references the same surface.
+	ActionWorkflowRun    = "workflow.run"
+	ActionWorkflowSave   = "workflow.save"
+	ActionWorkflowDelete = "workflow.delete"
 )
 
 // Entity-type names mirror spec §4.10's recommended mapping:
@@ -96,6 +111,11 @@ const (
 	// Introduced by mission mcp-server-install-01KQ8TDP (WP10).
 	// Resource UIDs take the shape MCPRecipe::"<recipe-id>".
 	EntityTypeMCPRecipe = "MCPRecipe"
+
+	// EntityTypeWorkflow is the Cedar entity type for workflow
+	// definitions. Introduced by mission workflows-01KQ8TDG (WP11).
+	// Resource UIDs take the shape Workflow::"<workflow-id>".
+	EntityTypeWorkflow = "Workflow"
 
 	// PrincipalLocal is the canonical EntityUID id for the single
 	// local user. The harness is single-user / privacy-first
@@ -310,6 +330,20 @@ func PermissionToolUID(toolName string) cedar.EntityUID {
 		id = invalidUIDID
 	}
 	return cedar.NewEntityUID(EntityTypeTool, cedar.String(id))
+}
+
+// WorkflowUID builds a Cedar EntityUID for the Workflow family
+// introduced by mission workflows-01KQ8TDG (WP11). id is the workflow's
+// canonical identifier (e.g. "wf-abc123", "summarize-code"). Malformed
+// ids (empty / control characters / leading "..") are replaced with the
+// literal "invalid" so the resulting UID type-matches in `resource is
+// Workflow` clauses but never satisfies any real permit.
+func WorkflowUID(id string) cedar.EntityUID {
+	safeID := id
+	if !validateFamilyID(id) {
+		safeID = invalidUIDID
+	}
+	return cedar.NewEntityUID(EntityTypeWorkflow, cedar.String(safeID))
 }
 
 // MCPRecipeUID builds a Cedar EntityUID for the MCPRecipe family
