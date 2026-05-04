@@ -40,6 +40,7 @@ import (
 	llmregistry "github.com/sigil-tech/kaneaz-harness/core/llm/registry"
 	"github.com/sigil-tech/kaneaz-harness/core/logging"
 	coremcp "github.com/sigil-tech/kaneaz-harness/core/mcp"
+	harnessmcp "github.com/sigil-tech/kaneaz-harness/core/mcp/builtin/harness"
 	"github.com/sigil-tech/kaneaz-harness/core/mcp/recipes"
 	"github.com/sigil-tech/kaneaz-harness/core/mcp/stdio"
 	corememory "github.com/sigil-tech/kaneaz-harness/core/memory"
@@ -303,6 +304,12 @@ type API struct {
 	// updatePollCancel cancels the BackgroundPoll goroutine on chassis
 	// shutdown / context replacement.
 	updatePollCancel context.CancelFunc
+
+	// harnessServer is the in-process harness-self MCP server (WP04/WP05).
+	// Constructed once in New with real manager adapters; held here so the
+	// in-process transport (WP09) can attach it to the session's MCP pool
+	// without re-constructing.
+	harnessServer *harnessServer
 }
 
 // Builtins returns the in-binary tool registry. Used by the chat-input
@@ -856,6 +863,30 @@ func New(c *core.Core) *API {
 		c.SetBashMigrationBootstrap(func(ctx context.Context) error {
 			return corebash.MigrateBashAllowlist(ctx, snippetWriter, store)
 		})
+	}
+
+	// Harness-self MCP server (WP04/WP05). Build with real adapters so
+	// the onboarding agent can call list_settings, list_providers, etc.
+	// The server is held on a.harnessServer; the in-process transport
+	// wiring (WP09) will attach it to the session pool.
+	{
+		var sessionMgr *session.Manager
+		if c != nil {
+			sessionMgr = c.SessionManager()
+		}
+		hManagers := buildHarnessManagers(
+			a.llmAPI,
+			a.settingsAPI,
+			a.sessionsAPI,
+			sessionMgr,
+			mergedCat,
+		)
+		a.harnessServer = &harnessServer{
+			srv: harnessmcp.RegisterAll(harnessmcp.NewServer(), hManagers),
+		}
+		logging.L().Info("harness.self.server.ready",
+			"tools", len(a.harnessServer.srv.Tools()),
+		)
 	}
 
 	return a
