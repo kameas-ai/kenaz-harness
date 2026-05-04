@@ -27,6 +27,7 @@
  */
 import {
   computed,
+  isRef,
   onBeforeUnmount,
   onMounted,
   ref,
@@ -35,13 +36,12 @@ import {
   inject,
   nextTick,
   type App,
+  type Ref,
 } from 'vue';
 import { marked, type Tokens } from 'marked';
 import { sanitize } from '@/lib/markdown/sanitize';
+import { MD_EXTENSIONS_KEY } from '@/lib/markdown/injectionKeys';
 import type { MarkdownExtensions } from '@/lib/types';
-
-// Injected by App.vue (or passed directly via prop for tests).
-const MD_EXTENSIONS_KEY = Symbol('mdExtensions');
 
 const props = withDefaults(
   defineProps<{
@@ -60,13 +60,14 @@ const props = withDefaults(
 );
 
 // Resolved extensions — prop wins; fallback to injection; fallback to 'all'.
-const injectedExtensions = inject<MarkdownExtensions>(
-  MD_EXTENSIONS_KEY as symbol,
+const injectedExtensions = inject<MarkdownExtensions | Ref<MarkdownExtensions>>(
+  MD_EXTENSIONS_KEY,
   'all',
 );
-const effectiveExtensions = computed<MarkdownExtensions>(
-  () => props.extensions ?? injectedExtensions,
-);
+const effectiveExtensions = computed<MarkdownExtensions>(() => {
+  if (props.extensions) return props.extensions;
+  return isRef(injectedExtensions) ? injectedExtensions.value : injectedExtensions;
+});
 
 // ─── Math marked extension ──────────────────────────────────────────────────
 
@@ -341,6 +342,141 @@ function escapeHtml(str: string): string {
     .replace(/'/g, '&#039;'); // css-tokens-allow: HTML numeric entity, not a hex color literal
 }
 
+// ─── @-mention text walker ───────────────────────────────────────────────────
+// Recognises `@artifact:<id>` (matched first) and `@<path>` mentions in
+// rendered text nodes. Anchored at word boundaries so email-like patterns
+// don't false-positive. Skips text inside <pre>, <code>, <a>, and inside
+// existing mention/code/math placeholders.
+const MENTION_RE =
+  /(^|[\s(\[])@(artifact:[\w.-]+|[\w./~-]+\.[A-Za-z0-9]{1,8}|[\w./~-]+\/[\w./~-]+)/g;
+
+function shouldSkipForMentions(node: Node): boolean {
+  let cur: Node | null = node.parentNode;
+  while (cur && cur !== document) {
+    if (cur.nodeType === 1) {
+      const el = cur as HTMLElement;
+      const tag = el.tagName.toLowerCase();
+      if (tag === 'pre' || tag === 'code' || tag === 'a') return true;
+      if (el.hasAttribute('data-md-block') || el.hasAttribute('data-md-mention')) {
+        return true;
+      }
+    }
+    cur = cur.parentNode;
+  }
+  return false;
+}
+
+function walkTextNodes(root: HTMLElement, visit: (node: Text) => void) {
+  // Recursive descent — happy-dom's TreeWalker does not reliably visit
+  // descendant text nodes, so we collect them ourselves.
+  const queue: Text[] = [];
+  function recurse(node: Node) {
+    for (let i = 0; i < node.childNodes.length; i++) {
+      const child = node.childNodes[i];
+      if (child.nodeType === 3 /* TEXT_NODE */) {
+        queue.push(child as Text);
+      } else if (child.nodeType === 1 /* ELEMENT_NODE */) {
+        recurse(child);
+      }
+    }
+  }
+  recurse(root);
+  for (const t of queue) visit(t);
+}
+
+function injectMentionPlaceholders(root: HTMLElement) {
+  walkTextNodes(root, (textNode) => {
+    if (!textNode.nodeValue) return;
+    if (shouldSkipForMentions(textNode)) return;
+    const value = textNode.nodeValue;
+    if (value.indexOf('@') < 0) return;
+    MENTION_RE.lastIndex = 0;
+    if (!MENTION_RE.test(value)) return;
+    MENTION_RE.lastIndex = 0;
+
+    const frag = document.createDocumentFragment();
+    let lastIndex = 0;
+    let m: RegExpExecArray | null;
+    while ((m = MENTION_RE.exec(value)) !== null) {
+      const [whole, lead, target] = m;
+      const start = m.index;
+      const end = start + whole.length;
+      // Append text before match (including the leading boundary char).
+      if (start > lastIndex) {
+        frag.appendChild(document.createTextNode(value.slice(lastIndex, start)));
+      }
+      if (lead) frag.appendChild(document.createTextNode(lead));
+
+      const span = document.createElement('span');
+      if (target.startsWith('artifact:')) {
+        span.setAttribute('data-md-mention', 'artifact');
+        span.setAttribute('data-artifact-id', target.slice('artifact:'.length));
+      } else {
+        span.setAttribute('data-md-mention', 'file');
+        span.setAttribute('data-path', target);
+      }
+      frag.appendChild(span);
+      lastIndex = end;
+    }
+    if (lastIndex < value.length) {
+      frag.appendChild(document.createTextNode(value.slice(lastIndex)));
+    }
+    textNode.replaceWith(frag);
+  });
+}
+
+async function upgradeMentions(root: HTMLElement) {
+  // Placeholders were injected synchronously by runUpgrades. This step
+  // hydrates them into mounted Vue instances (FilenameChip) and inline
+  // artifact-mention buttons.
+  const fileNodes = root.querySelectorAll<HTMLElement>(
+    'span[data-md-mention="file"]',
+  );
+  const artifactNodes = root.querySelectorAll<HTMLElement>(
+    'span[data-md-mention="artifact"]',
+  );
+  if (!fileNodes.length && !artifactNodes.length) return;
+
+  if (fileNodes.length) {
+    const { default: FilenameChip } = await import(
+      '@/components/rendering/FilenameChip.vue'
+    );
+    for (const node of fileNodes) {
+      const path = node.getAttribute('data-path') ?? '';
+      if (!path) continue;
+      const host = document.createElement('span');
+      node.replaceWith(host);
+      const app = createApp(FilenameChip, { path });
+      app.mount(host);
+      mountedApps.push(app);
+    }
+  }
+
+  if (artifactNodes.length) {
+    // Inline lightweight artifact chip — opens the artifact modal via
+    // a custom event the host MessageBubble already handles.
+    for (const node of artifactNodes) {
+      const id = node.getAttribute('data-artifact-id') ?? '';
+      if (!id) continue;
+      const host = document.createElement('span');
+      node.replaceWith(host);
+      // Render a clickable placeholder that mirrors FilenameChip's pill
+      // styling. Click dispatches an `md-open-artifact` CustomEvent so
+      // the parent MessageBubble can mount the existing ArtifactPreview.
+      host.innerHTML = `<button type="button" class="md-mention-chip" data-testid="artifact-mention-${id}" title="Open artifact"><span class="md-mention-chip-label">@artifact:${id}</span></button>`;
+      const btn = host.querySelector('button');
+      btn?.addEventListener('click', () => {
+        host.dispatchEvent(
+          new CustomEvent('md-open-artifact', {
+            bubbles: true,
+            detail: { id },
+          }),
+        );
+      });
+    }
+  }
+}
+
 /** Wrap bare <table> elements in a horizontal-scroll container. */
 function upgradeTables(root: HTMLElement) {
   // Avoid double-wrapping tables that already sit inside md-table-wrap.
@@ -364,8 +500,13 @@ async function runUpgrades() {
   if (!root) return;
   unmountAll();
   upgradeTables(root);
+  // Inject mention placeholders before any async work so they survive
+  // even if a downstream dynamic import resolves slowly (or never, in
+  // exotic test environments). The walker only mutates text nodes.
+  injectMentionPlaceholders(root);
   await upgradeMathBlocks(root);
   await upgradeCodeBlocks(root);
+  await upgradeMentions(root);
 }
 
 // Run upgrades whenever html changes (which fires on every text update).
@@ -376,6 +517,7 @@ watch(html, async () => {
 }, { flush: 'post' });
 
 onMounted(async () => {
+  await nextTick();
   await runUpgrades();
 });
 
@@ -519,5 +661,27 @@ onBeforeUnmount(() => {
 /* KaTeX overrides to use design tokens */
 .md-body :deep(.katex) {
   font-size: 1.05em;
+}
+
+/* Inline artifact mention chip (file chip is owned by FilenameChip.vue) */
+.md-body :deep(.md-mention-chip) {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3em;
+  padding: 0.05em 0.45em;
+  margin: 0 0.1em;
+  background: var(--surface-2);
+  border: 1px solid var(--border-muted);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: 0.85em;
+  color: var(--ink);
+  cursor: pointer;
+  vertical-align: baseline;
+  line-height: 1.3;
+}
+.md-body :deep(.md-mention-chip:hover) {
+  background: var(--surface-3);
+  color: var(--accent);
 }
 </style>
