@@ -15,6 +15,7 @@ type Deps struct {
 	Providers ProviderLister
 	Memory    MemoryGateway
 	Branches  BranchGateway
+	Workflows WorkflowsGateway
 }
 
 // Registry is the dispatch table. Construct with NewRegistry(deps);
@@ -28,7 +29,7 @@ type Registry struct {
 	commands map[string]Command
 }
 
-// NewRegistry constructs a Registry with the seven v1 commands
+// NewRegistry constructs a Registry with the eight v1 commands
 // pre-registered.
 //
 // The default registration set:
@@ -40,6 +41,7 @@ type Registry struct {
 //   - /recall    (wired against Deps.Memory; returns "not wired" when nil)
 //   - /forget    (wired against Deps.Memory; returns "not wired" when nil)
 //   - /branch    (wired against Deps.Branches; returns "not wired" when nil)
+//   - /wf        (wired against Deps.Workflows; returns "not wired" when nil)
 //
 // Returns an error if a default command name collides — defensive
 // only; the test suite catches drift.
@@ -131,6 +133,7 @@ func (r *Registry) Execute(ctx context.Context, sessionID, raw string) (Result, 
 		Providers: r.deps.Providers,
 		Memory:    r.deps.Memory,
 		Branches:  r.deps.Branches,
+		Workflows: r.deps.Workflows,
 		Registry:  r,
 	}
 	return cmd.Run(ctx, env, args)
@@ -171,5 +174,6 @@ func defaultCommands() []Command {
 		recallCommand{},
 		forgetCommand{},
 		branchCommand{},
+		wfCommand{},
 	}
 }

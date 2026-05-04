@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	coreslashcmd "github.com/sigil-tech/kaneaz-harness/core/slashcmd"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/a2a"
 	graphview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/agentgraph"
 	artifactsview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/artifacts"
@@ -169,6 +170,37 @@ func TestViewAccessorStability(t *testing.T) {
 	// only when slashAPI is nil at construction time.
 	if api.slashAPI != nil && api.Slash() != api.Slash() {
 		t.Errorf("Slash() returned different pointers across calls")
+	}
+}
+
+// TestSlashWorkflowsGatewayInterface is a compile-time + runtime check
+// that slashWorkflowsGateway (the adapter struct in api.go) satisfies the
+// coreslashcmd.WorkflowsGateway interface that /wf consumes, and that the
+// real *workflowsview.API assigned to it compiles cleanly.
+func TestSlashWorkflowsGatewayInterface(t *testing.T) {
+	t.Parallel()
+	// Compile-time: *slashWorkflowsGateway must implement WorkflowsGateway.
+	// If this assignment fails the file won't compile.
+	var _ coreslashcmd.WorkflowsGateway = (*slashWorkflowsGateway)(nil)
+
+	// Runtime: construct a real workflowsview.API (empty config — no
+	// engine, no store) and verify the adapter's methods don't panic.
+	inner := workflowsview.New(workflowsview.Config{})
+	gw := &slashWorkflowsGateway{inner: inner}
+
+	ctx := context.Background()
+
+	// List — disabled engine returns ErrFeatureDisabled or an empty list.
+	_, _ = gw.List(ctx)
+
+	// Get — will error (no workflows loaded) but must not panic.
+	_, _ = gw.Get(ctx, "nonexistent")
+
+	// Run — no engine wired so RunWithOptions returns an error; the
+	// gateway must propagate it cleanly (no panic).
+	_, runErr := gw.Run(ctx, "nonexistent", nil, coreslashcmd.WorkflowRunOptions{Inline: true})
+	if runErr == nil {
+		t.Log("Run with no engine returned nil error (engine available) — ok")
 	}
 }
 

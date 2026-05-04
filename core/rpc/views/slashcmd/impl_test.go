@@ -46,10 +46,10 @@ func TestAPI_List_SortedAndNoneComingSoon(t *testing.T) {
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
-	if len(cmds) != 7 {
-		t.Fatalf("len(cmds) = %d, want 7", len(cmds))
+	if len(cmds) != 8 {
+		t.Fatalf("len(cmds) = %d, want 8", len(cmds))
 	}
-	want := []string{"branch", "clear", "forget", "help", "memorize", "model", "recall"}
+	want := []string{"branch", "clear", "forget", "help", "memorize", "model", "recall", "wf"}
 	for i, name := range want {
 		if cmds[i].Name != name {
 			t.Errorf("cmds[%d].Name = %q, want %q", i, cmds[i].Name, name)
