@@ -72,6 +72,7 @@ func main() {
 	c, err := core.New(core.Options{
 		DataDir:                 dataDir,
 		EnableManifestHotReload: *enableHotReload,
+		BuildVersion:            Version,
 	})
 	if err != nil {
 		log.Fatalf("core init: %v", err)
