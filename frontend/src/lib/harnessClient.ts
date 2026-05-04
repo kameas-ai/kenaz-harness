@@ -1737,6 +1737,13 @@ export interface HarnessClient {
   shellStatus(): Promise<ShellStatus>;
   appInfo(): Promise<AppInfo>;
 
+  // openExternalURL forwards to Wails's BrowserOpenURL so the user's
+  // default system browser handles the link (vs opening inside the
+  // webview). Centralized here because the wailsjs-isolation guard
+  // (privacy CI #1 / FR-007) only permits wailsjs/* imports from
+  // this file.
+  openExternalURL(url: string): void;
+
   sessions: SessionsClient;
   projects: ProjectsClient;
   llm: LLMConnectorClient;
@@ -1781,12 +1788,38 @@ function wailsBindings(): WailsBindingsLike {
   return b;
 }
 
+// Lazy import: BrowserOpenURL is loaded only when a real Wails runtime
+// is present (i.e. window.go is set). Tests run under jsdom without
+// the wailsjs runtime, so we fall back to window.open.
+async function loadBrowserOpenURL(): Promise<((url: string) => void) | null> {
+  if (typeof window === 'undefined' || !window.go) {
+    return null;
+  }
+  try {
+    const rt = await import('../../wailsjs/runtime/runtime');
+    return typeof rt.BrowserOpenURL === 'function' ? rt.BrowserOpenURL : null;
+  } catch {
+    return null;
+  }
+}
+
 export function createHarnessClient(): HarnessClient {
   const b: () => WailsBindingsLike = () => wailsBindings();
+
+  const openExternalURL = (url: string): void => {
+    void loadBrowserOpenURL().then((open) => {
+      if (open) {
+        open(url);
+      } else if (typeof window !== 'undefined' && typeof window.open === 'function') {
+        window.open(url, '_blank', 'noopener,noreferrer');
+      }
+    });
+  };
 
   return {
     shellStatus: () => b().ShellStatus(),
     appInfo: () => b().AppInfo(),
+    openExternalURL,
 
     sessions: {
       list: () => b().Sessions_List(),
@@ -2167,6 +2200,9 @@ export function createFakeHarnessClient(
       platform: 'fake',
       windowSize: { width: 1280, height: 800 },
     }),
+    openExternalURL: () => {
+      // No-op in fake; tests assert the call shape via vi.fn() seeds.
+    },
     sessions: {
       list: async () => [],
       get: async (id) => ({ id, name: id, createdAt: '', updatedAt: '' }),
