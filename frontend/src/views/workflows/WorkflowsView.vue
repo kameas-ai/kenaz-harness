@@ -18,12 +18,15 @@
  */
 import { ref, computed, onMounted } from 'vue';
 import CanvasHead from '@/shell/CanvasHead.vue';
+import WorkflowEditor from './WorkflowEditor.vue';
+import SimpleTemplateEditor from './SimpleTemplateEditor.vue';
 import {
   createWorkflowsClient,
   type WorkflowsClient,
   type WorkflowsSummary,
   type WorkflowsWorkflow,
   type WorkflowsRunResult,
+  type WorkflowsSaveOutput,
 } from '@/lib/workflowsClient';
 
 const props = defineProps<{
@@ -126,6 +129,92 @@ async function deleteSelected() {
 // real editor's save button.
 defineExpose({ importFromYaml, deleteSelected });
 
+// WP09: editor mode. The catalog is the default surface; "New" or
+// "Edit" flips us into one of the editor modes. The editors emit
+// `cancel` / `saved` — both routes return us to the catalog and (on
+// save) refresh + jump to the freshly persisted workflow.
+type EditorMode = null | 'yaml-new' | 'yaml-edit' | 'template';
+const editorMode = ref<EditorMode>(null);
+const newMenuOpen = ref(false);
+const editorYaml = ref<string>('');
+const editorTitle = ref<string>('');
+
+/**
+ * yamlFromWorkflow — synthesize a YAML stub from the structured
+ * `Get` response so the WorkflowEditor can be pre-filled with the
+ * existing workflow. v0.3.0-beta does not surface the canonical YAML
+ * over the bridge; round-tripping through the structured shape is
+ * lossy but it's enough for the typical "tweak a prompt and resave"
+ * editor path. WP07's structured-update mode would be cleaner here,
+ * but the beta client only routes save-by-yaml.
+ */
+function yamlFromWorkflow(w: WorkflowsWorkflow): string {
+  const lines: string[] = [];
+  lines.push(`id: '${w.id}'`);
+  lines.push(`name: '${(w.name || '').replace(/'/g, "''")}'`);
+  if (w.description) {
+    lines.push(`description: '${w.description.replace(/'/g, "''")}'`);
+  }
+  lines.push(`version: ${w.version || 1}`);
+  if (w.inputs && w.inputs.length > 0) {
+    lines.push('inputs:');
+    for (const inp of w.inputs) {
+      lines.push(`  - name: ${inp.name}`);
+      lines.push(`    kind: ${inp.kind}`);
+      if (inp.required) lines.push('    required: true');
+      if (inp.default !== undefined && inp.default !== '') {
+        lines.push(`    default: '${inp.default.replace(/'/g, "''")}'`);
+      }
+    }
+  }
+  lines.push('steps:');
+  for (const s of w.steps) {
+    lines.push(`  - name: ${s.name}`);
+    lines.push(`    kind: ${s.kind}`);
+    if (s.userPrompt) {
+      lines.push("    user_prompt: |");
+      for (const ln of s.userPrompt.split('\n')) {
+        lines.push(`      ${ln}`);
+      }
+    }
+    if (s.cmd) lines.push(`    cmd: '${s.cmd.replace(/'/g, "''")}'`);
+    if (s.args && s.args.length > 0) {
+      const escaped = s.args.map((a) => `'${a.replace(/'/g, "''")}'`).join(', ');
+      lines.push(`    args: [${escaped}]`);
+    }
+  }
+  return lines.join('\n') + '\n';
+}
+
+function openTemplateEditor() {
+  editorMode.value = 'template';
+  newMenuOpen.value = false;
+}
+
+function openBlankYamlEditor() {
+  editorYaml.value = '';
+  editorTitle.value = 'New workflow (YAML)';
+  editorMode.value = 'yaml-new';
+  newMenuOpen.value = false;
+}
+
+function openEditExisting() {
+  if (!selected.value) return;
+  editorYaml.value = yamlFromWorkflow(selected.value);
+  editorTitle.value = `Edit ${selected.value.name}`;
+  editorMode.value = 'yaml-edit';
+}
+
+function closeEditor() {
+  editorMode.value = null;
+}
+
+async function onEditorSaved(out: WorkflowsSaveOutput) {
+  editorMode.value = null;
+  await loadCatalog();
+  await selectWorkflow(out.id);
+}
+
 async function runWorkflow() {
   if (!selected.value) return;
   running.value = true;
@@ -162,6 +251,64 @@ onMounted(loadCatalog);
       subtitle="Pre-canned multi-step agent recipes."
     />
     <div class="px-6 py-4 space-y-4" data-testid="workflows-view">
+      <div class="flex items-center justify-end gap-2 relative">
+        <button
+          type="button"
+          class="rounded-sm border border-accent bg-accent px-3 py-1.5 font-ui text-sm text-bg hover:opacity-90"
+          data-testid="workflows-new-button"
+          @click="newMenuOpen = !newMenuOpen"
+        >
+          + New
+        </button>
+        <div
+          v-if="newMenuOpen"
+          class="absolute right-0 top-full mt-1 w-56 rounded-sm border border-border-muted bg-surface-1 shadow-lg z-10"
+          data-testid="workflows-new-menu"
+        >
+          <button
+            type="button"
+            class="block w-full text-left px-3 py-2 font-ui text-sm text-ink hover:bg-surface-2"
+            data-testid="workflows-new-template"
+            @click="openTemplateEditor"
+          >
+            From template
+          </button>
+          <button
+            type="button"
+            class="block w-full text-left px-3 py-2 font-ui text-sm text-ink hover:bg-surface-2"
+            data-testid="workflows-new-yaml"
+            @click="openBlankYamlEditor"
+          >
+            From YAML
+          </button>
+        </div>
+      </div>
+
+      <div
+        v-if="editorMode === 'template'"
+        data-testid="workflows-editor-slot-template"
+      >
+        <SimpleTemplateEditor
+          :client="client"
+          @cancel="closeEditor"
+          @saved="onEditorSaved"
+        />
+      </div>
+
+      <div
+        v-else-if="editorMode === 'yaml-new' || editorMode === 'yaml-edit'"
+        data-testid="workflows-editor-slot-yaml"
+      >
+        <WorkflowEditor
+          :client="client"
+          :initial-yaml="editorYaml"
+          :title="editorTitle"
+          @cancel="closeEditor"
+          @saved="onEditorSaved"
+          @ran="onEditorSaved($event.save)"
+        />
+      </div>
+
       <div v-if="loading" class="font-ui text-sm text-ink-muted">
         Loading workflows…
       </div>
@@ -280,6 +427,14 @@ onMounted(loadCatalog);
               @click="runWorkflow"
             >
               {{ running ? 'Running…' : 'Run workflow' }}
+            </button>
+            <button
+              type="button"
+              class="rounded-sm border border-border-muted bg-surface-2 px-3 py-1.5 font-ui text-sm text-ink hover:bg-surface-1 disabled:opacity-50"
+              data-testid="workflows-edit-button"
+              @click="openEditExisting"
+            >
+              Edit
             </button>
             <button
               type="button"
