@@ -17,6 +17,7 @@ import (
 
 	coremcp "github.com/sigil-tech/kaneaz-harness/core/mcp"
 	"github.com/sigil-tech/kaneaz-harness/core/mcp/recipes"
+	"github.com/sigil-tech/kaneaz-harness/core/mcp/stdio"
 )
 
 // Subscriber is the broker contract used by API.StartStream. Mirrors
@@ -40,13 +41,24 @@ type RecipeCatalog interface {
 	Get(id string) (recipes.Recipe, bool)
 }
 
+// HealthPool is the subset of *stdio.Pool used by HealthSnapshot.
+// Defined as an interface so tests can inject a fake.
+type HealthPool interface {
+	AllRecipeStatuses() []stdio.RecipeStatus
+}
+
+// Compile-time witness: *stdio.Pool satisfies HealthPool.
+var _ HealthPool = (*stdio.Pool)(nil)
+
 // API is the concrete MCPAPI implementation.
 type API struct {
-	mu       sync.RWMutex
-	registry Registry
-	broker   Subscriber
-	catalog  RecipeCatalog
-	subs     map[string]chan any
+	mu          sync.RWMutex
+	registry    Registry
+	broker      Subscriber
+	catalog     RecipeCatalog
+	healthPool  HealthPool
+	healthSubs  map[string]chan any
+	subs        map[string]chan any
 }
 
 // Option configures NewAPI.
@@ -70,9 +82,19 @@ func WithCatalog(c RecipeCatalog) Option {
 	return func(a *API) { a.catalog = c }
 }
 
+// WithHealthPool injects the stdio pool used by HealthSnapshot and
+// SubscribeHealthChanges (mcp-server-health-ui WP01/WP02). nil is
+// safe — HealthSnapshot returns an empty map.
+func WithHealthPool(p HealthPool) Option {
+	return func(a *API) { a.healthPool = p }
+}
+
 // NewAPI constructs the mcp view-scoped API.
 func NewAPI(opts ...Option) *API {
-	a := &API{subs: make(map[string]chan any)}
+	a := &API{
+		subs:       make(map[string]chan any),
+		healthSubs: make(map[string]chan any),
+	}
 	for _, opt := range opts {
 		opt(a)
 	}
@@ -120,13 +142,22 @@ func (a *API) StartStream(ctx context.Context, _ string) (string, error) {
 }
 
 // StopStream tears down the subscription and releases broker state.
+// Handles both regular event subs and health-change subs.
 func (a *API) StopStream(_ context.Context, id string) error {
 	if a.broker == nil {
 		return nil
 	}
 	a.mu.Lock()
 	ch, ok := a.subs[id]
-	delete(a.subs, id)
+	if ok {
+		delete(a.subs, id)
+	} else {
+		// Check health subs.
+		ch, ok = a.healthSubs[id]
+		if ok {
+			delete(a.healthSubs, id)
+		}
+	}
 	a.mu.Unlock()
 	if ok {
 		close(ch)
@@ -150,6 +181,73 @@ func (a *API) Publish(ev any) {
 		default:
 			// Drop rather than block — the canonical record is the
 			// mcp-client's own log; this surface is best-effort fan-out.
+		}
+	}
+}
+
+// HealthSnapshot returns the current health for every recipe in the pool as a
+// map of recipe-id → HealthEntry. When no pool is wired the map is empty —
+// that is the expected v1 state until a pool is registered.
+// (mcp-server-health-ui WP01)
+func (a *API) HealthSnapshot(_ context.Context) (map[string]HealthEntry, error) {
+	a.mu.RLock()
+	pool := a.healthPool
+	a.mu.RUnlock()
+
+	out := make(map[string]HealthEntry)
+	if pool == nil {
+		return out, nil
+	}
+	for _, rs := range pool.AllRecipeStatuses() {
+		out[rs.ID] = HealthEntry{
+			ID:              rs.ID,
+			State:           rs.State,
+			LastError:       rs.LastError,
+			RestartAttempts: rs.RestartAttempts,
+			StderrTail:      rs.StderrTail,
+			ToolCount:       rs.ToolCount,
+			ServerName:      rs.ServerName,
+			ServerVersion:   rs.ServerVersion,
+			ProtocolVersion: rs.ProtocolVersion,
+		}
+	}
+	return out, nil
+}
+
+// SubscribeHealthChanges registers a broker subscription for
+// `mcp:health-changed` events. The caller tears it down via StopStream.
+// Events are pushed by PublishHealthChange.
+// (mcp-server-health-ui WP02)
+func (a *API) SubscribeHealthChanges(ctx context.Context) (string, error) {
+	if a.broker == nil {
+		return "", nil
+	}
+	ch := make(chan any, 64)
+	id, err := a.broker.Subscribe(ctx, "mcp", "health-changed", ch)
+	if err != nil {
+		return "", err
+	}
+	a.mu.Lock()
+	a.healthSubs[id] = ch
+	a.mu.Unlock()
+	return id, nil
+}
+
+// PublishHealthChange fans a HealthEntry event to every active health
+// subscriber. Called by the pool supervisor or audit hook when a recipe's
+// state transitions. Best-effort: drops rather than blocks on slow consumers.
+// (mcp-server-health-ui WP02)
+func (a *API) PublishHealthChange(entry HealthEntry) {
+	a.mu.RLock()
+	subs := make([]chan any, 0, len(a.healthSubs))
+	for _, ch := range a.healthSubs {
+		subs = append(subs, ch)
+	}
+	a.mu.RUnlock()
+	for _, ch := range subs {
+		select {
+		case ch <- entry:
+		default:
 		}
 	}
 }

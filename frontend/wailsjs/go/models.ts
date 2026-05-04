@@ -2221,11 +2221,11 @@ export namespace mcp {
 	    stderr_tail?: string;
 	    duration_ms: number;
 	    error?: string;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new TestResult(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.ok = source["ok"];
@@ -2239,7 +2239,7 @@ export namespace mcp {
 	        this.duration_ms = source["duration_ms"];
 	        this.error = source["error"];
 	    }
-	
+
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -2257,6 +2257,35 @@ export namespace mcp {
 		    }
 		    return a;
 		}
+	}
+
+	export class HealthEntry {
+	    id: string;
+	    state: string;
+	    last_error?: string;
+	    restart_attempts: number;
+	    stderr_tail?: string;
+	    tool_count: number;
+	    server_name?: string;
+	    server_version?: string;
+	    protocol_version?: string;
+
+	    static createFrom(source: any = {}) {
+	        return new HealthEntry(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.state = source["state"];
+	        this.last_error = source["last_error"];
+	        this.restart_attempts = source["restart_attempts"] ?? 0;
+	        this.stderr_tail = source["stderr_tail"];
+	        this.tool_count = source["tool_count"] ?? 0;
+	        this.server_name = source["server_name"];
+	        this.server_version = source["server_version"];
+	        this.protocol_version = source["protocol_version"];
+	    }
 	}
 
 }

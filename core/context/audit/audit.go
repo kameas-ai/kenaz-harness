@@ -106,6 +106,12 @@ const (
 	// recorded (privacy invariant).
 	KindWorkflowNetworkFetch Kind = "workflow.network_fetch"
 
+	// KindMCPHealthChanged fires when an installed MCP recipe transitions
+	// state (stopped → starting → running → restarting → failed).
+	// Payload: MCPHealthChangedPayload.
+	// (mcp-server-health-ui-01KQ8TD6 WP07)
+	KindMCPHealthChanged Kind = "mcp.recipe.health_changed"
+
 	// Auto-update lifecycle kinds (auto-update mission, v0.4.0 WP06).
 	// Six kinds mirror the Service lifecycle: every Check call,
 	// transition false→true on Available, Download success, Apply
@@ -427,6 +433,22 @@ type UpdateSkippedAttrs struct {
 type UpdateFailedAttrs struct {
 	Action     string `json:"action"`
 	ErrorClass string `json:"error_class"`
+}
+
+// MCPHealthChangedPayload carries signalling for KindMCPHealthChanged
+// (mcp-server-health-ui-01KQ8TD6 WP07). Emitted on every lifecycle
+// state transition of an installed recipe. Carries only the recipe id
+// and the new + previous state strings — no tool inputs / outputs or
+// credential material (DIRECTIVE_001 / privacy invariant).
+type MCPHealthChangedPayload struct {
+	RecipeID        string `json:"recipe_id"`
+	PreviousState   string `json:"previous_state"`
+	NewState        string `json:"new_state"`
+	RestartAttempts int    `json:"restart_attempts"`
+	// ErrorClass is the typed error category when transitioning to
+	// "failed" state: "ping_timeout", "crash", "unknown". Empty on
+	// non-failed transitions.
+	ErrorClass string `json:"error_class,omitempty"`
 }
 
 // Marshal is a small convenience wrapper that builds an [Event] for any

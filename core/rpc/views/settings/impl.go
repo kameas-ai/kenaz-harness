@@ -708,6 +708,30 @@ func (s *FileStore) SaveAutonomyProfile(layer autonomy.Layer) error {
 	return s.saveLocked(got)
 }
 
+// LoadMCPAutoRestart returns whether MCP servers should auto-restart.
+// Default true (zero-value Disabled → restart enabled).
+// (mcp-server-health-ui-01KQ8TD6 WP06)
+func (s *FileStore) LoadMCPAutoRestart() (bool, error) {
+	got, err := s.LoadAll()
+	if err != nil {
+		return got.MCPAutoRestart(), err
+	}
+	return got.MCPAutoRestart(), nil
+}
+
+// SaveMCPAutoRestart persists the MCP auto-restart dial. Stored as the
+// inverted MCPAutoRestartDisabled bit.
+func (s *FileStore) SaveMCPAutoRestart(enabled bool) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	got, err := s.loadLocked()
+	if err != nil {
+		return err
+	}
+	got.MCPAutoRestartDisabled = !enabled
+	return s.saveLocked(got)
+}
+
 // encodeAutonomyField marshals a Layer to the json.RawMessage stored
 // on Settings.Autonomy. The empty Layer encodes as nil so it omits via
 // `omitempty` on disk.
@@ -979,6 +1003,17 @@ func (a *API) SaveAutonomyProfile(_ context.Context, layer autonomy.Layer) error
 	return a.store.SaveAutonomyProfile(layer)
 }
 
+// GetMCPAutoRestart returns whether MCP servers should auto-restart.
+// (mcp-server-health-ui-01KQ8TD6 WP06)
+func (a *API) GetMCPAutoRestart(_ context.Context) (bool, error) {
+	return a.store.LoadMCPAutoRestart()
+}
+
+// SetMCPAutoRestart persists the MCP auto-restart dial.
+func (a *API) SetMCPAutoRestart(_ context.Context, enabled bool) error {
+	return a.store.SaveMCPAutoRestart(enabled)
+}
+
 // memoryStore is the test-only in-memory SettingsStore.
 type memoryStore struct {
 	mu   sync.Mutex
@@ -1233,6 +1268,21 @@ func (m *memoryStore) SaveAutonomyProfile(layer autonomy.Layer) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.data.Autonomy = encoded
+	return nil
+}
+
+// ── MCP auto-restart memoryStore accessors (mcp-server-health-ui WP06) ──
+
+func (m *memoryStore) LoadMCPAutoRestart() (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.data.MCPAutoRestart(), nil
+}
+
+func (m *memoryStore) SaveMCPAutoRestart(enabled bool) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.data.MCPAutoRestartDisabled = !enabled
 	return nil
 }
 

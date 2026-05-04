@@ -246,6 +246,10 @@ export function MCP_StopStream(arg1:string):Promise<void>;
 
 export function MCP_TestRecipe(arg1:string,arg2:Record<string, string>,arg3:Record<string, any>):Promise<mcp.TestResult>;
 
+export function MCP_HealthSnapshot():Promise<Record<string, mcp.HealthEntry>>;
+
+export function MCP_SubscribeHealthChanges():Promise<string>;
+
 export function Memory_Forget(arg1:string):Promise<void>;
 
 export function Memory_JournalTail(arg1:string,arg2:number,arg3:number):Promise<Array<memory.JournalEntry>>;
@@ -413,6 +417,10 @@ export function Settings_SetSaveArtifactEnabled(arg1:boolean):Promise<void>;
 export function Settings_SetShortcut(arg1:string,arg2:string):Promise<void>;
 
 export function Settings_SetShortcuts(arg1:Record<string, string>):Promise<void>;
+
+export function Settings_GetMCPAutoRestart():Promise<boolean>;
+
+export function Settings_SetMCPAutoRestart(arg1:boolean):Promise<void>;
 
 export function Settings_SetWebSearch(arg1:boolean):Promise<void>;
 

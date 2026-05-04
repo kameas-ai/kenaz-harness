@@ -385,6 +385,30 @@ func (s *ServerInstance) setSamplingEnabled(on bool) {
 	s.mu.Unlock()
 }
 
+// AllRecipeStatuses returns a snapshot of every server's RecipeStatus in
+// the pool. Used by the health-snapshot RPC (mcp-server-health-ui WP01) to
+// return the full picture in a single round-trip. Closed pool returns nil.
+func (p *Pool) AllRecipeStatuses() []RecipeStatus {
+	p.mu.RLock()
+	if p.closed {
+		p.mu.RUnlock()
+		return nil
+	}
+	ids := make([]string, 0, len(p.servers))
+	for id := range p.servers {
+		ids = append(ids, id)
+	}
+	p.mu.RUnlock()
+
+	out := make([]RecipeStatus, 0, len(ids))
+	for _, id := range ids {
+		if s, ok := p.RecipeStatus(id); ok {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
 // SamplingEnabled reads the per-server gate. Test-only convenience.
 func (s *ServerInstance) SamplingEnabled() bool {
 	s.mu.RLock()

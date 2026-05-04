@@ -268,6 +268,14 @@ type Settings struct {
 	// out-of-range values. FR-007c: this is a visibility dial — hard
 	// caps live in the user's provider dashboard.
 	MonthlyCostNotifyUSD float64 `json:"monthlyCostNotifyUsd,omitempty"`
+
+	// MCPAutoRestartDisabled is the inverted persisted bit for the
+	// "Auto-restart MCP servers on disconnect" dial
+	// (mcp-server-health-ui-01KQ8TD6 WP06). Default ON (zero-value
+	// Disabled → auto-restart enabled) so a crashed server recovers
+	// without user intervention on a fresh install. Read via the
+	// MCPAutoRestart() accessor; never read directly.
+	MCPAutoRestartDisabled bool `json:"mcpAutoRestartDisabled,omitempty"`
 }
 
 // ProviderProfileRef is the wire shape that identifies a provider+model
@@ -553,6 +561,12 @@ func (s Settings) MonthlyCostNotifyEnabled() bool {
 	return s.MonthlyCostNotifyUSD > 0
 }
 
+// MCPAutoRestart reports whether MCP servers should be automatically
+// restarted after two consecutive ping failures. Default true on a fresh
+// install (zero-value Disabled → restart enabled).
+// (mcp-server-health-ui-01KQ8TD6 WP06)
+func (s Settings) MCPAutoRestart() bool { return !s.MCPAutoRestartDisabled }
+
 // WindowSize mirrors the charter's WindowSize type.
 type WindowSize struct {
 	Width  int `json:"width"`
@@ -703,6 +717,12 @@ type SettingsStore interface {
 	// canonical Default tier.
 	LoadAutonomyProfile() (autonomy.Layer, error)
 	SaveAutonomyProfile(layer autonomy.Layer) error
+
+	// LoadMCPAutoRestart / SaveMCPAutoRestart expose the MCP server
+	// auto-restart dial (mcp-server-health-ui-01KQ8TD6 WP06). Default
+	// true on a fresh install (zero-value Disabled → restart enabled).
+	LoadMCPAutoRestart() (bool, error)
+	SaveMCPAutoRestart(enabled bool) error
 }
 
 // SettingsAPI is the view-scoped accessor exposed via HarnessAPI.
@@ -716,6 +736,12 @@ type SettingsAPI interface {
 	// SaveAutonomyProfile persists the global autonomy.Layer. An empty
 	// Layer clears the field.
 	SaveAutonomyProfile(ctx context.Context, layer autonomy.Layer) error
+	// GetMCPAutoRestart returns whether MCP servers should auto-restart
+	// after two consecutive ping failures. Default true.
+	// (mcp-server-health-ui-01KQ8TD6 WP06)
+	GetMCPAutoRestart(ctx context.Context) (bool, error)
+	// SetMCPAutoRestart persists the MCP auto-restart dial.
+	SetMCPAutoRestart(ctx context.Context, enabled bool) error
 }
 
 // ShortcutsStore is the persistence interface for keyboard shortcut
