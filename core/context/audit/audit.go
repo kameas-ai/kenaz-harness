@@ -74,6 +74,26 @@ const (
 	// synthetic system message to the parent session. Payload:
 	// BranchReintegratedPayload.
 	KindBranchReintegrated Kind = "branch_advisor.reintegrated"
+
+	// Workflow-family audit kinds (workflows-01KQ8TDG WP11). These cover
+	// the four lifecycle events the workflows RPC + engine emit:
+	//
+	//   KindWorkflowExecuted   — emitted on Run completion (success or
+	//                            failure). Payload: WorkflowExecutedPayload.
+	//   KindWorkflowSaved      — emitted on Save success.
+	//                            Payload: WorkflowSavedPayload.
+	//   KindWorkflowDeleted    — emitted on Delete success.
+	//                            Payload: WorkflowDeletedPayload.
+	//   KindWorkflowStepFailed — emitted per failed step inside a Run.
+	//                            Payload: WorkflowStepFailedPayload.
+	//
+	// Per the privacy invariant, these payloads MUST NOT carry step
+	// inputs, step outputs, or prompt bytes — only ids, kinds, and
+	// classification metadata.
+	KindWorkflowExecuted   Kind = "workflow.executed"
+	KindWorkflowSaved      Kind = "workflow.saved"
+	KindWorkflowDeleted    Kind = "workflow.deleted"
+	KindWorkflowStepFailed Kind = "workflow.step_failed"
 )
 
 // Event is the wire shape passed to the event log. The concrete event-log
@@ -266,6 +286,43 @@ type BranchReintegratedPayload struct {
 	BranchSessionID   string `json:"branch_session_id"`
 	SummaryTokenCount int    `json:"summary_token_count"`
 	WasEdited         bool   `json:"was_edited"`
+}
+
+// WorkflowExecutedPayload carries signalling for KindWorkflowExecuted
+// (workflows-01KQ8TDG WP11). Emitted once per Run completion (success
+// or failure). No step inputs / outputs / prompt bytes are recorded.
+type WorkflowExecutedPayload struct {
+	WorkflowID string `json:"workflow_id"`
+	RunID      string `json:"run_id"`
+	Status     string `json:"status"` // completed | failed | interrupted
+	DurationMs int64  `json:"duration_ms"`
+	StepCount  int    `json:"step_count"`
+}
+
+// WorkflowSavedPayload carries signalling for KindWorkflowSaved
+// (workflows-01KQ8TDG WP11). Hash is the canonical sha256 hex digest
+// the storage layer computes on the canonical YAML source.
+type WorkflowSavedPayload struct {
+	WorkflowID string `json:"workflow_id"`
+	Version    int    `json:"version"`
+	Hash       string `json:"hash"`
+}
+
+// WorkflowDeletedPayload carries signalling for KindWorkflowDeleted.
+type WorkflowDeletedPayload struct {
+	WorkflowID string `json:"workflow_id"`
+}
+
+// WorkflowStepFailedPayload carries signalling for
+// KindWorkflowStepFailed. ErrorClass is the typed error category
+// (e.g. "context_canceled", "step_validation", "runner_error") — not
+// the raw error message, which can carry user inputs.
+type WorkflowStepFailedPayload struct {
+	WorkflowID string `json:"workflow_id"`
+	RunID      string `json:"run_id"`
+	StepID     string `json:"step_id"`
+	StepKind   string `json:"step_kind"`
+	ErrorClass string `json:"error_class"`
 }
 
 // Marshal is a small convenience wrapper that builds an [Event] for any

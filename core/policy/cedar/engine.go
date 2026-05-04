@@ -57,6 +57,14 @@ var defaultFilesystemPolicySource []byte
 //go:embed policies/default_tool_policy.cedar
 var defaultToolPolicySource []byte
 
+// defaultWorkflowsPolicySource is the embedded Workflow-family default
+// for mission workflows-01KQ8TDG (WP11). Posture: permissive defaults
+// for run/save/delete; deny shell-bearing workflows on save in strict
+// mode. See the file's leading comment for the full posture.
+//
+//go:embed policies/default_workflows_policy.cedar
+var defaultWorkflowsPolicySource []byte
+
 // DefaultPolicyName is the synthetic filename used when reporting the
 // embedded policy to the frontend.
 const DefaultPolicyName = "default_policy.cedar"
@@ -73,6 +81,7 @@ const (
 	DefaultBashPolicyName       = "default_bash_policy.cedar"
 	DefaultFilesystemPolicyName = "default_filesystem_policy.cedar"
 	DefaultToolPolicyName       = "default_tool_policy.cedar"
+	DefaultWorkflowsPolicyName  = "default_workflows_policy.cedar"
 )
 
 // PolicyDir is the directory under DataDir where user-authored
@@ -224,6 +233,7 @@ func (e *Engine) Reload(ctx context.Context) error {
 			{DefaultBashPolicyName, defaultBashPolicySource},
 			{DefaultFilesystemPolicyName, defaultFilesystemPolicySource},
 			{DefaultToolPolicyName, defaultToolPolicySource},
+			{DefaultWorkflowsPolicyName, defaultWorkflowsPolicySource},
 		}
 		for _, em := range embedded {
 			sources = append(sources, policySource{
