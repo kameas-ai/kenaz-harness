@@ -84,13 +84,16 @@ describe('UpdateMenu', () => {
     );
   });
 
-  it('shows "Install on Next Launch" on Windows', async () => {
+  it('shows "Install & Restart" on Windows (helper updater path)', async () => {
+    // v0.4.0 ships kenaz-updater.exe alongside the main binary, so the
+    // primary CTA is the same as Mac/Linux. The helper handles the
+    // wait-rename-relaunch dance outside the harness process.
     setPlatform('win');
     await bootStoreWith(baseStatus);
     const w = mount(UpdateMenu);
     await flushPromises();
     expect(w.find('[data-testid="update-menu-primary"]').text()).toBe(
-      'Install on Next Launch',
+      'Install & Restart',
     );
   });
 
