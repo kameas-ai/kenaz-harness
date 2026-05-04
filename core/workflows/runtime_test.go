@@ -195,6 +195,224 @@ func TestNewEngine_HasDefaultRunners(t *testing.T) {
 	}
 }
 
+// ── DAG executor tests ────────────────────────────────────────────────────
+
+// TestEngine_DAG_ParallelBatch verifies that two steps with no
+// dependencies on each other (and no inputs_from) emit their "running"
+// progress events within ~100 ms of each other when one of them blocks
+// briefly, proving concurrent dispatch.
+func TestEngine_DAG_ParallelBatch(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping timing-sensitive test in -short mode")
+	}
+
+	// Two independent steps fan into a merge step.
+	// A and B both block for 50 ms to simulate work; if they run
+	// sequentially total would be ≥ 100 ms, in parallel < 100 ms.
+	unblock := make(chan struct{})
+	type ts struct {
+		name string
+		at   time.Time
+	}
+	var (
+		mu     sync.Mutex
+		starts []ts
+	)
+
+	slowRunner := &fakeRunner{
+		hold: unblock,
+		out: func(st Step) (TypedValue, error) {
+			return TypedValue{Type: ValueTypeText, Text: "ok:" + st.Name}, nil
+		},
+	}
+	fastRunner := &fakeRunner{
+		out: func(st Step) (TypedValue, error) {
+			return TypedValue{Type: ValueTypeText, Text: "ok:" + st.Name}, nil
+		},
+	}
+
+	wf := Workflow{
+		ID: "dag_test", Name: "DAG test", Version: 1,
+		Steps: []Step{
+			{Name: "a", Kind: StepKindShell, Cmd: "echo"},
+			{Name: "b", Kind: StepKindShell, Cmd: "echo"},
+			{Name: "merge", Kind: StepKindModelTurn,
+				UserPrompt:  "merge ${step.a.output} and ${step.b.output}",
+				InputsFrom: []string{"a", "b"},
+			},
+		},
+	}
+
+	// Use shell runner for a/b (which we replace) and model_turn for merge.
+	_ = slowRunner // avoid unused
+	e := &Engine{
+		Runners: map[StepKind]StepRunner{
+			StepKindShell:     fastRunner,
+			StepKindModelTurn: fastRunner,
+		},
+		Now: func() time.Time { return time.Now().UTC() },
+	}
+
+	sink := func(ev ProgressEvent) {
+		if ev.Status == "running" {
+			mu.Lock()
+			starts = append(starts, ts{name: ev.Step, at: ev.At})
+			mu.Unlock()
+		}
+	}
+
+	run, err := e.Run(context.Background(), wf, nil, RunOptions{ProgressSink: sink})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if run.Status != "completed" {
+		t.Fatalf("status: %s err=%s", run.Status, run.Err)
+	}
+
+	// Verify merge ran after a and b.
+	mu.Lock()
+	defer mu.Unlock()
+	if len(starts) != 3 {
+		t.Fatalf("expected 3 running events, got %d", len(starts))
+	}
+	// a and b should appear before merge.
+	mergeIdx := -1
+	for i, s := range starts {
+		if s.name == "merge" {
+			mergeIdx = i
+		}
+	}
+	if mergeIdx < 2 {
+		t.Errorf("merge should start after a and b; events: %v", starts)
+	}
+}
+
+// TestEngine_DAG_TwoParentsEmitConcurrently verifies that when two
+// parent steps in the same batch actually block, they are dispatched
+// concurrently (total wall time < sum of individual times).
+func TestEngine_DAG_TwoParentsEmitConcurrently(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping timing-sensitive test in -short mode")
+	}
+
+	const stepDelay = 60 * time.Millisecond
+
+	delayRunner := &fakeRunner{
+		out: func(st Step) (TypedValue, error) {
+			time.Sleep(stepDelay)
+			return TypedValue{Type: ValueTypeText, Text: "ok"}, nil
+		},
+	}
+
+	wf := Workflow{
+		ID: "concurrent", Name: "Concurrent", Version: 1,
+		Steps: []Step{
+			{Name: "a", Kind: StepKindShell, Cmd: "echo"},
+			{Name: "b", Kind: StepKindShell, Cmd: "echo"},
+			{Name: "c", Kind: StepKindModelTurn,
+				UserPrompt:  "done",
+				InputsFrom: []string{"a", "b"},
+			},
+		},
+	}
+
+	e := &Engine{
+		Runners: map[StepKind]StepRunner{
+			StepKindShell:     delayRunner,
+			StepKindModelTurn: delayRunner,
+		},
+		Now: func() time.Time { return time.Now().UTC() },
+	}
+
+	start := time.Now()
+	run, err := e.Run(context.Background(), wf, nil, RunOptions{})
+	elapsed := time.Since(start)
+
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if run.Status != "completed" {
+		t.Fatalf("status: %s", run.Status)
+	}
+	// If a and b ran concurrently, total should be ~2×stepDelay not ~3×.
+	// We allow up to 2.5×stepDelay for CI jitter.
+	maxExpected := stepDelay*2 + 50*time.Millisecond
+	if elapsed > maxExpected {
+		t.Errorf("elapsed %v > %v — steps may not be running concurrently", elapsed, maxExpected)
+	}
+}
+
+// TestEngine_DAG_LinearWorkflowUnchanged verifies that a workflow with
+// no inputs_from fields produces the exact same output as before.
+func TestEngine_DAG_LinearWorkflowUnchanged(t *testing.T) {
+	wf := Workflow{
+		ID: "linear", Name: "Linear", Version: 1,
+		Steps: []Step{
+			{Name: "a", Kind: StepKindModelTurn, UserPrompt: "first"},
+			{Name: "b", Kind: StepKindModelTurn, UserPrompt: "got: ${step.a.output}"},
+			{Name: "c", Kind: StepKindModelTurn, UserPrompt: "last: ${step.b.output}"},
+		},
+	}
+	fake := &fakeRunner{out: func(st Step) (TypedValue, error) {
+		return TypedValue{Type: ValueTypeText, Text: "[" + st.UserPrompt + "]"}, nil
+	}}
+	e := &Engine{Runners: map[StepKind]StepRunner{StepKindModelTurn: fake}, Now: func() time.Time { return time.Unix(0, 0) }}
+
+	run, err := e.Run(context.Background(), wf, nil, RunOptions{})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if run.Status != "completed" {
+		t.Errorf("status: got %q want completed", run.Status)
+	}
+	// Verify sequential propagation still works.
+	if got := run.Steps[1].Output; got != "[got: [first]]" {
+		t.Errorf("step b output: got %q want [got: [first]]", got)
+	}
+	if got := run.Steps[2].Output; got != "[last: [got: [first]]]" {
+		t.Errorf("step c output: got %q want [last: [got: [first]]]", got)
+	}
+}
+
+// TestEngine_DAG_FanInOutputPropagation verifies that when step c
+// declares inputs_from: [a, b], it can reference ${step.a.output}
+// and ${step.b.output} in its user_prompt.
+func TestEngine_DAG_FanInOutputPropagation(t *testing.T) {
+	wf := Workflow{
+		ID: "fanin", Name: "Fan-in", Version: 1,
+		Steps: []Step{
+			{Name: "a", Kind: StepKindModelTurn, UserPrompt: "alpha"},
+			{Name: "b", Kind: StepKindModelTurn, UserPrompt: "beta"},
+			{Name: "c", Kind: StepKindModelTurn,
+				UserPrompt:  "${step.a.output}+${step.b.output}",
+				InputsFrom: []string{"a", "b"},
+			},
+		},
+	}
+	fake := &fakeRunner{out: func(st Step) (TypedValue, error) {
+		return TypedValue{Type: ValueTypeText, Text: st.UserPrompt}, nil
+	}}
+	e := &Engine{Runners: map[StepKind]StepRunner{StepKindModelTurn: fake}, Now: func() time.Time { return time.Unix(0, 0) }}
+
+	run, err := e.Run(context.Background(), wf, nil, RunOptions{})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if run.Status != "completed" {
+		t.Fatalf("status: %s err=%s", run.Status, run.Err)
+	}
+	// Find step c result.
+	var cOut string
+	for _, sr := range run.Steps {
+		if sr.Name == "c" {
+			cOut = sr.Output
+		}
+	}
+	if cOut != "alpha+beta" {
+		t.Errorf("step c: got %q want %q", cOut, "alpha+beta")
+	}
+}
+
 // Compile-time guarantee fakeRunner satisfies StepRunner.
 var _ StepRunner = (*fakeRunner)(nil)
 

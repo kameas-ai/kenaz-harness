@@ -101,6 +101,14 @@ type Step struct {
 	Name string   `yaml:"name" json:"name"`
 	Kind StepKind `yaml:"kind" json:"kind"`
 
+	// InputsFrom declares explicit upstream dependencies for DAG
+	// semantics. When non-empty the loader uses these edges (instead
+	// of implicit linear order) to topologically sort the step graph.
+	// Each entry must be the Name of another step that appears in the
+	// same workflow; forward references are detected during Validate and
+	// cycles are rejected with ErrWorkflowCycle.
+	InputsFrom []string `yaml:"inputs_from,omitempty" json:"inputsFrom,omitempty"`
+
 	// model_turn fields
 	UserPrompt string   `yaml:"user_prompt,omitempty" json:"userPrompt,omitempty"`
 	AllowTools []string `yaml:"allow_tools,omitempty" json:"allowTools,omitempty"`
@@ -348,6 +356,10 @@ var (
 	ErrUnknownReference = errors.New("workflows: unknown reference")
 	ErrCancelled        = errors.New("workflows: run cancelled")
 	ErrWorkflowNotFound = errors.New("workflows: workflow not found")
+	// ErrWorkflowCycle is returned by the loader when it detects a
+	// cycle in the inputs_from dependency graph. The error message
+	// includes the offending cycle path.
+	ErrWorkflowCycle = errors.New("workflows: cycle detected in inputs_from graph")
 	// ErrRerunPolicyAsk is the typed envelope returned by ResolveRerun
 	// when policy=prompt and a cached identical run exists. Callers
 	// catch this and surface a confirm prompt to the user; the user's

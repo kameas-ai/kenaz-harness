@@ -6,6 +6,7 @@ import (
 	"testing"
 )
 
+
 func TestLoadYAML_Valid(t *testing.T) {
 	yamlSrc := `
 id: my_flow
@@ -144,6 +145,131 @@ steps:
 	_, err := LoadYAML([]byte(bad))
 	if !errors.Is(err, ErrUnknownStepKind) {
 		t.Errorf("want ErrUnknownStepKind, got %v", err)
+	}
+}
+
+// ── DAG / inputs_from tests ────────────────────────────────────────────────
+
+func TestLoadYAML_DAG_MultiParentHappyPath(t *testing.T) {
+	yaml := `
+id: fan_in
+name: "Fan-in"
+version: 1
+steps:
+  - name: a
+    kind: shell
+    cmd: "echo"
+  - name: b
+    kind: shell
+    cmd: "echo"
+  - name: c
+    kind: model_turn
+    user_prompt: "merge ${step.a.output} and ${step.b.output}"
+    inputs_from: [a, b]
+`
+	w, err := LoadYAML([]byte(yaml))
+	if err != nil {
+		t.Fatalf("LoadYAML: %v", err)
+	}
+	if len(w.Steps) != 3 {
+		t.Errorf("want 3 steps, got %d", len(w.Steps))
+	}
+	// Verify c has the right inputs_from.
+	var c *Step
+	for i := range w.Steps {
+		if w.Steps[i].Name == "c" {
+			c = &w.Steps[i]
+		}
+	}
+	if c == nil {
+		t.Fatal("step c not found")
+	}
+	if len(c.InputsFrom) != 2 {
+		t.Errorf("c.InputsFrom: got %v want [a b]", c.InputsFrom)
+	}
+}
+
+func TestLoadYAML_DAG_RejectsCycle(t *testing.T) {
+	yaml := `
+id: cyclic
+name: "Cyclic"
+version: 1
+steps:
+  - name: a
+    kind: shell
+    cmd: "echo"
+    inputs_from: [b]
+  - name: b
+    kind: shell
+    cmd: "echo"
+    inputs_from: [a]
+`
+	_, err := LoadYAML([]byte(yaml))
+	if !errors.Is(err, ErrWorkflowCycle) {
+		t.Errorf("want ErrWorkflowCycle, got %v", err)
+	}
+	// The error message must include the cycle path.
+	if err != nil && !strings.Contains(err.Error(), "→") {
+		t.Errorf("cycle error should include path with '→', got: %v", err)
+	}
+}
+
+func TestLoadYAML_DAG_RejectsMissingRef(t *testing.T) {
+	yaml := `
+id: missing
+name: "Missing ref"
+version: 1
+steps:
+  - name: a
+    kind: shell
+    cmd: "echo"
+    inputs_from: [nonexistent]
+`
+	_, err := LoadYAML([]byte(yaml))
+	if !errors.Is(err, ErrUnknownReference) {
+		t.Errorf("want ErrUnknownReference, got %v", err)
+	}
+}
+
+func TestLoadYAML_DAG_RejectsSelfRef(t *testing.T) {
+	yaml := `
+id: selfref
+name: "Self ref"
+version: 1
+steps:
+  - name: a
+    kind: shell
+    cmd: "echo"
+    inputs_from: [a]
+`
+	_, err := LoadYAML([]byte(yaml))
+	if !errors.Is(err, ErrWorkflowCycle) {
+		t.Errorf("want ErrWorkflowCycle, got %v", err)
+	}
+}
+
+func TestLoadYAML_DAG_ThreeNodeCycle(t *testing.T) {
+	yaml := `
+id: three_cycle
+name: "Three node cycle"
+version: 1
+steps:
+  - name: a
+    kind: shell
+    cmd: "echo"
+    inputs_from: [c]
+  - name: b
+    kind: shell
+    cmd: "echo"
+    inputs_from: [a]
+  - name: c
+    kind: shell
+    cmd: "echo"
+    inputs_from: [b]
+`
+	_, err := LoadYAML([]byte(yaml))
+	if !errors.Is(err, ErrWorkflowCycle) {
+		t.Errorf("want ErrWorkflowCycle, got %v", err)
 	}
 }
 
