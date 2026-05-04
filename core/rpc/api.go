@@ -72,6 +72,7 @@ import (
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/tools"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/trust"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/workflow"
+	workflowsview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/workflows"
 	"github.com/sigil-tech/kaneaz-harness/core/secrets"
 	coreslashcmd "github.com/sigil-tech/kaneaz-harness/core/slashcmd"
 	corebash "github.com/sigil-tech/kaneaz-harness/core/tools/bash"
@@ -80,6 +81,7 @@ import (
 	"github.com/sigil-tech/kaneaz-harness/core/storage"
 	"github.com/sigil-tech/kaneaz-harness/core/toolloop"
 	"github.com/sigil-tech/kaneaz-harness/core/usage"
+	corewf "github.com/sigil-tech/kaneaz-harness/core/workflows"
 	"github.com/zalando/go-keyring"
 )
 
@@ -104,6 +106,10 @@ type HarnessAPI interface {
 	MCPImport() *mcp.ImportAPI
 	A2A() a2a.A2AAPI
 	Workflow() workflow.WorkflowAPI
+	// Workflows is the agentic workflows surface (mission
+	// workflows-01KQ8TDG, v0.3.0 beta). Distinct from Workflow
+	// (scheduler/jobs) — the names will reconcile in a follow-up.
+	Workflows() workflowsview.WorkflowsAPI
 	Sessions() sessions.SessionsAPI
 	Trust() trust.TrustAPI
 	Context() contextview.ContextAPI
@@ -192,6 +198,7 @@ type API struct {
 	mcpImportAPI *mcp.ImportAPI
 	a2aAPI      a2a.A2AAPI
 	workflowAPI workflow.WorkflowAPI
+	workflowsAPI workflowsview.WorkflowsAPI
 	sessionsAPI sessions.SessionsAPI
 	trustAPI    trust.TrustAPI
 	contextAPI  contextview.ContextAPI
@@ -620,6 +627,24 @@ func New(c *core.Core) *API {
 	// only when no kernel resumer is wired — the chassis still boots
 	// and BumpAndResume returns ErrNoPause until a kernel binds.
 	a.dialsAPI = dialsview.New(dialsview.Config{})
+
+	// Workflows subsystem (mission workflows-01KQ8TDG, v0.3.0 beta).
+	// Loads embedded builtin/*.yaml at boot; HARNESS_WORKFLOWS=off
+	// disables the surface entirely.
+	{
+		disabled := strings.EqualFold(os.Getenv("HARNESS_WORKFLOWS"), "off") ||
+			os.Getenv("HARNESS_WORKFLOWS") == "0"
+		var catalog []corewf.Workflow
+		if !disabled {
+			catalog, _ = corewf.LoadBuiltins()
+		}
+		a.workflowsAPI = workflowsview.New(workflowsview.Config{
+			Engine:    corewf.NewEngine(),
+			Catalog:   catalog,
+			Publisher: brokerPublisher{broker: a.broker},
+			Disabled:  disabled,
+		})
+	}
 
 	// Node manifest catalog (mission agent-kernel-graph-node-catalog
 	// WP07). Loads shipped manifests + user-overrides at chassis boot;
@@ -2788,12 +2813,35 @@ func (a *API) AppInfo(_ context.Context) (AppInfo, error) {
 	}, nil
 }
 
+// brokerPublisher adapts *StreamBroker to the workflowsview.ProgressPublisher
+// interface so the workflows engine can fan progress events onto the
+// `workflows:run-progress` topic without importing rpc.
+type brokerPublisher struct{ broker *StreamBroker }
+
+func (b brokerPublisher) Publish(topic string, payload any) {
+	if b.broker == nil || b.broker.emitter == nil {
+		return
+	}
+	b.broker.emitter.Emit(b.broker.EmitCtx(), topic, payload)
+}
+
 // View accessors return the stable instance constructed in New.
 func (a *API) LLMConnector() llm.LLMConnectorAPI { return a.llmAPI }
 func (a *API) MCP() mcp.MCPAPI                   { return a.mcpAPI }
 func (a *API) MCPImport() *mcp.ImportAPI         { return a.mcpImportAPI }
 func (a *API) A2A() a2a.A2AAPI                   { return a.a2aAPI }
 func (a *API) Workflow() workflow.WorkflowAPI    { return a.workflowAPI }
+
+// Workflows returns the agentic workflows view surface (mission
+// workflows-01KQ8TDG, v0.3.0 beta). When the chassis hasn't wired a
+// real engine (test-harness rpc.New(nil) path), the fallback returns
+// an empty-catalog API whose Run / Get surface ErrEngineUnavailable.
+func (a *API) Workflows() workflowsview.WorkflowsAPI {
+	if a == nil || a.workflowsAPI == nil {
+		return workflowsview.New(workflowsview.Config{})
+	}
+	return a.workflowsAPI
+}
 func (a *API) Sessions() sessions.SessionsAPI    { return a.sessionsAPI }
 func (a *API) Trust() trust.TrustAPI             { return a.trustAPI }
 func (a *API) Context() contextview.ContextAPI   { return a.contextAPI }
