@@ -138,7 +138,34 @@ type Workflow struct {
 	SlashCommand  string  `yaml:"slash_command,omitempty" json:"slashCommand,omitempty"`
 	Inputs        []Input `yaml:"inputs,omitempty" json:"inputs,omitempty"`
 	Steps         []Step  `yaml:"steps" json:"steps"`
+
+	// Storage-layer metadata. Populated by Store.Load / Store.Save so
+	// callers can round-trip the canonical yaml_source and surface
+	// version-bookkeeping fields to the UI without making them part of
+	// the YAML schema. Unexported so the YAML/JSON marshallers don't
+	// touch them.
+	yamlSource string
+	hash       string
+	createdAt  time.Time
+	updatedAt  time.Time
 }
+
+// YAMLSource returns the canonical yaml_source bytes the workflow was
+// loaded from. Empty for workflows constructed in memory and never
+// persisted.
+func (w Workflow) YAMLSource() string { return w.yamlSource }
+
+// Hash returns the sha256 hex digest of YAMLSource. Empty for
+// in-memory-only workflows.
+func (w Workflow) Hash() string { return w.hash }
+
+// CreatedAt returns the storage-layer creation timestamp. Zero for
+// in-memory-only workflows.
+func (w Workflow) CreatedAt() time.Time { return w.createdAt }
+
+// UpdatedAt returns the storage-layer last-modified timestamp. Zero
+// for in-memory-only workflows.
+func (w Workflow) UpdatedAt() time.Time { return w.updatedAt }
 
 // Run is the result of an Engine.Run invocation.
 type Run struct {

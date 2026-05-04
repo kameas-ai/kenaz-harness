@@ -95,6 +95,9 @@ const sqlInitSchema = `
 // see migrations_resume.go). 0315 lands the cost_threshold_fired
 // idempotency table for the threshold-notification scheduler
 // (token-cost-telemetry-01KQ8TD7 WP06 — see migrations_cost_threshold.go).
+// 0319 lands the workflows + workflow_versions tables that back the
+// user-defined workflows store (workflows-01KQ8TDG WP06 — see
+// migrations_workflows.go).
 func Migrations() []migrations.Migration {
 	return []migrations.Migration{
 		{
@@ -145,6 +148,7 @@ func Migrations() []migrations.Migration {
 		migration0316(),
 		migration0317(),
 		migration0318(),
+		migration0319(),
 	}
 }
 
