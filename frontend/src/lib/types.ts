@@ -2184,6 +2184,20 @@ export interface PermissionRequest {
 }
 
 /**
+ * CedarProposalPayload — payload emitted on the `cedar:propose-pending`
+ * broker topic when an agent proposes a new Cedar policy snippet.
+ * Mirrors core/mcp/builtin/harness.CedarProposalPayload (WP07).
+ */
+export interface CedarProposalPayload {
+  request_id: string;
+  name: string;
+  body: string;
+  rationale?: string;
+  issued_at: string;
+  deadline_at: string;
+}
+
+/**
  * PermissionMode — the three global permission posture values.
  */
 export type PermissionMode = 'strict' | 'normal' | 'permissive';

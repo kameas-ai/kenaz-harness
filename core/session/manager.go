@@ -273,6 +273,25 @@ func (m *Manager) SetBranchAdvisorDismissed(ctx context.Context, id string, dism
 	return m.store.SetBranchAdvisorDismissed(ctx, id, dismissed, m.now())
 }
 
+// EventKindSessionKindTransitioned is emitted when a session's Kind column
+// changes. Used by the onboarding FSM when it reaches its terminal state
+// and transitions the session from "onboarding" → "chat" (WP09).
+const EventKindSessionKindTransitioned = "session.kind_transitioned"
+
+// SetKind updates a session's Kind and emits an audit event. Used by the
+// onboarding FSM to transition the session from "onboarding" → "chat" on
+// terminal state (harness-self-mcp-onboarding-01KQ8TDU WP09).
+func (m *Manager) SetKind(ctx context.Context, id, kind string) error {
+	if err := m.store.SetKind(ctx, id, kind); err != nil {
+		return err
+	}
+	m.audit.Emit(ctx, EventKindSessionKindTransitioned, map[string]any{
+		"session_id": id,
+		"kind":       kind,
+	})
+	return nil
+}
+
 // Rename changes a session's display name.
 func (m *Manager) Rename(ctx context.Context, id, name string) error {
 	name = strings.TrimSpace(name)

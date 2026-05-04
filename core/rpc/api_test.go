@@ -109,6 +109,7 @@ func (f *fakeHarnessAPI) Dials() dialsview.DialsAPI                    { return 
 func (f *fakeHarnessAPI) Nodes() nodesview.NodesAPI                    { return f.nodesAPI }
 func (f *fakeHarnessAPI) Search() searchview.SearchAPI                 { return f.searchAPI }
 func (f *fakeHarnessAPI) Update() updateview.UpdateAPI                  { return f.updateAPI }
+func (f *fakeHarnessAPI) CedarProposeResolve(_, _ string) error         { return nil }
 
 // Compile-time interface witness (plan §4.2).
 var _ HarnessAPI = (*fakeHarnessAPI)(nil)

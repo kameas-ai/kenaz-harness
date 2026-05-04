@@ -13,6 +13,8 @@ const (
 	ToolListSettings         = "harness_read_list_settings"
 	ToolGetStatus            = "harness_read_get_status"
 	ToolGetRecommendations   = "harness_read_get_onboarding_recommendations"
+	ToolListSessions         = "harness_read_list_sessions"
+	ToolListModels           = "harness_read_list_models"
 
 	ToolAddProvider          = "harness_write_add_provider"
 	ToolRemoveProvider       = "harness_write_remove_provider"
@@ -20,6 +22,7 @@ const (
 	ToolSetSetting           = "harness_write_set_setting"
 	ToolCreateProject        = "harness_write_create_project"
 	ToolProposeCedarPolicy   = "harness_write_propose_cedar_policy"
+	ToolCreateSession        = "harness_write_create_session"
 )
 
 // schemaObject is a tiny helper to build a top-level JSON schema object.
@@ -72,6 +75,18 @@ func RegisterAll(srv *Server, m Managers) *Server {
 		Description: "Curated onboarding next-step recommendations based on current state.",
 		InputSchema: schemaObject(`{}`),
 		Handler:     m.handleGetRecommendations,
+	})
+	srv.Register(ToolSpec{
+		Name:        ToolListSessions,
+		Description: "List sessions (id, name, kind, timestamps). Never carries message content.",
+		InputSchema: schemaObject(`{}`),
+		Handler:     m.handleListSessions,
+	})
+	srv.Register(ToolSpec{
+		Name:        ToolListModels,
+		Description: "List available LLM models across all configured providers.",
+		InputSchema: schemaObject(`{}`),
+		Handler:     m.handleListModels,
 	})
 
 	// Write tools.
@@ -128,6 +143,15 @@ func RegisterAll(srv *Server, m Managers) *Server {
             "body":{"type":"string","description":"Full Cedar policy body."}
         }`, "name", "body"),
 		Handler: m.handleProposeCedarPolicy,
+	})
+	srv.Register(ToolSpec{
+		Name:        ToolCreateSession,
+		Description: "Create a new chat session. kind defaults to \"chat\"; use \"onboarding\" for harness-self onboarding sessions.",
+		InputSchema: schemaObject(`{
+            "name":{"type":"string"},
+            "kind":{"type":"string","description":"Session kind: chat (default) | onboarding"}
+        }`, "name"),
+		Handler: m.handleCreateSession,
 	})
 
 	return srv

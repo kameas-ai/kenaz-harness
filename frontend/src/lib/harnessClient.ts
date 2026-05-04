@@ -467,6 +467,8 @@ interface WailsBindingsLike {
   // Cedar policy snippet writer/revoker (WP09).
   CedarPolicy_WriteSnippet(name: string, body: string): Promise<void>;
   CedarPolicy_RevokeSnippet(name: string): Promise<void>;
+  // Cedar propose modal resolution (harness-self-mcp-onboarding WP07).
+  CedarPolicy_ResolvePropose(requestID: string, decision: string): Promise<void>;
 
   // Branches view (agent-kernel-graph; Bundle B WP07/08).
   Branches_List(parentSessionID: string): Promise<Branch[]>;
@@ -1691,6 +1693,8 @@ export interface BranchesClient {
 export interface CedarPolicyClient {
   writeSnippet(name: string, body: string): Promise<void>;
   revokeSnippet(name: string): Promise<void>;
+  /** Deliver user decision for a pending cedar-propose-pending modal. */
+  resolvePropose(requestID: string, decision: string): Promise<void>;
 }
 
 // ── Search types (cross-session-search mission) ───────────────────────
@@ -2161,6 +2165,7 @@ export function createHarnessClient(): HarnessClient {
     cedarPolicy: {
       writeSnippet: (name, body) => b().CedarPolicy_WriteSnippet(name, body),
       revokeSnippet: (name) => b().CedarPolicy_RevokeSnippet(name),
+      resolvePropose: (requestID, decision) => b().CedarPolicy_ResolvePropose(requestID, decision),
     },
     search: {
       sessions: (query, filters) =>
@@ -2885,6 +2890,7 @@ export function createFakeHarnessClient(
     cedarPolicy: {
       writeSnippet: noop,
       revokeSnippet: noop,
+      resolvePropose: noop,
     },
     search: {
       sessions: async () => [],

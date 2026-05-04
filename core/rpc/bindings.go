@@ -1387,6 +1387,13 @@ func (b *Bindings) CedarPolicy_RevokeSnippet(name string) error {
 	return b.api.CedarPolicy().RevokePolicySnippet(b.ctx(), name)
 }
 
+// CedarPolicy_ResolvePropose delivers a user decision (accept | reject)
+// for a pending cedar-policy proposal surfaced by the CedarProposeModal.
+// requestID came in on the "cedar:propose-pending" broker topic.
+func (b *Bindings) CedarPolicy_ResolvePropose(requestID string, decision string) error {
+	return b.api.CedarProposeResolve(requestID, decision)
+}
+
 // ── search (cross-session-search mission) ─────────────────────────────
 
 // Search_Sessions executes a full-text search across all session

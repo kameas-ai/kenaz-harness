@@ -40,6 +40,7 @@ import (
 	llmregistry "github.com/sigil-tech/kaneaz-harness/core/llm/registry"
 	"github.com/sigil-tech/kaneaz-harness/core/logging"
 	coremcp "github.com/sigil-tech/kaneaz-harness/core/mcp"
+	harnessmcp "github.com/sigil-tech/kaneaz-harness/core/mcp/builtin/harness"
 	"github.com/sigil-tech/kaneaz-harness/core/mcp/recipes"
 	"github.com/sigil-tech/kaneaz-harness/core/mcp/stdio"
 	corememory "github.com/sigil-tech/kaneaz-harness/core/memory"
@@ -155,6 +156,11 @@ type HarnessAPI interface {
 	// surface that surfaces ErrServiceUnavailable on every state-mutating
 	// method.
 	Update() updateview.UpdateAPI
+	// CedarProposeResolve delivers a user decision (accept | reject)
+	// for a pending cedar-policy proposal surfaced by CedarProposeModal
+	// (harness-self-mcp-onboarding-01KQ8TDU WP07). requestID comes in on
+	// the "cedar:propose-pending" broker topic.
+	CedarProposeResolve(requestID, decision string) error
 }
 
 // ShellStatus drives the Toolbar status pills + LegendBar live-rate
@@ -246,6 +252,13 @@ type API struct {
 	// cedarpolicy.NewAPI(nil) graceful-empty surface.
 	cedarPolicyAPI  cedarpolicyview.CedarPolicyAPI
 
+	// cedarProposeResolver is the in-process resolver for pending
+	// cedar:propose-pending requests (WP07 of
+	// harness-self-mcp-onboarding-01KQ8TDU). Set by the onboarding
+	// flow when it wires a CedarProposerImpl; nil falls back to a
+	// stub that returns ErrCedarProposeNotWired.
+	cedarProposeResolver CedarProposeResolver
+
 	// permissionsAPI is the universal interactive-permission RPC
 	// surface (mission cedar-credential-policy-01KQ8TDE, WP02). Backed
 	// by a process-singleton *cedar.Registry shared with the gate
@@ -303,6 +316,12 @@ type API struct {
 	// updatePollCancel cancels the BackgroundPoll goroutine on chassis
 	// shutdown / context replacement.
 	updatePollCancel context.CancelFunc
+
+	// harnessServer is the in-process harness-self MCP server (WP04/WP05).
+	// Constructed once in New with real manager adapters; held here so the
+	// in-process transport (WP09) can attach it to the session's MCP pool
+	// without re-constructing.
+	harnessServer *harnessServer
 }
 
 // Builtins returns the in-binary tool registry. Used by the chat-input
@@ -856,6 +875,30 @@ func New(c *core.Core) *API {
 		c.SetBashMigrationBootstrap(func(ctx context.Context) error {
 			return corebash.MigrateBashAllowlist(ctx, snippetWriter, store)
 		})
+	}
+
+	// Harness-self MCP server (WP04/WP05). Build with real adapters so
+	// the onboarding agent can call list_settings, list_providers, etc.
+	// The server is held on a.harnessServer; the in-process transport
+	// wiring (WP09) will attach it to the session pool.
+	{
+		var sessionMgr *session.Manager
+		if c != nil {
+			sessionMgr = c.SessionManager()
+		}
+		hManagers := buildHarnessManagers(
+			a.llmAPI,
+			a.settingsAPI,
+			a.sessionsAPI,
+			sessionMgr,
+			mergedCat,
+		)
+		a.harnessServer = &harnessServer{
+			srv: harnessmcp.RegisterAll(harnessmcp.NewServer(), hManagers),
+		}
+		logging.L().Info("harness.self.server.ready",
+			"tools", len(a.harnessServer.srv.Tools()),
+		)
 	}
 
 	return a
@@ -3210,6 +3253,39 @@ func (a *API) CedarPolicy() cedarpolicyview.CedarPolicyAPI {
 		return cedarpolicyview.NewAPIWithDataDir(nil, "")
 	}
 	return a.cedarPolicyAPI
+}
+
+// CedarProposeResolver is the narrow surface the Bindings layer calls to
+// resolve an in-flight cedar:propose-pending request from the frontend
+// CedarProposeModal (harness-self-mcp-onboarding-01KQ8TDU WP07).
+//
+// In production it is satisfied by *harness.CedarProposerImpl.
+// decision is one of: "accept" | "reject".
+type CedarProposeResolver interface {
+	ResolveProposeRequestRaw(id, decision string) error
+}
+
+// ErrCedarProposeNotWired is returned by CedarProposeResolve when no
+// CedarProposerImpl has been wired into the API.
+var ErrCedarProposeNotWired = errors.New("cedar: propose resolver not wired; no onboarding session active")
+
+// CedarProposeResolve delivers a user decision (accept | reject) to the
+// in-flight propose-pending request identified by requestID. The
+// Bindings layer calls this via CedarPolicy_ResolvePropose (WP07).
+func (a *API) CedarProposeResolve(requestID, decision string) error {
+	if a == nil || a.cedarProposeResolver == nil {
+		return ErrCedarProposeNotWired
+	}
+	return a.cedarProposeResolver.ResolveProposeRequestRaw(requestID, decision)
+}
+
+// SetCedarProposeResolver wires a resolver at runtime. Called by the
+// onboarding flow when it creates a CedarProposerImpl (WP07).
+func (a *API) SetCedarProposeResolver(r CedarProposeResolver) {
+	if a == nil {
+		return
+	}
+	a.cedarProposeResolver = r
 }
 
 // Permissions returns the universal interactive-permission view surface

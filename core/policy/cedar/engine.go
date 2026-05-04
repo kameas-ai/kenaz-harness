@@ -474,6 +474,12 @@ const (
 	CtxKeyRecipeID        = "recipe_id"
 	CtxKeyRecipeCommand   = "recipe_command"
 	CtxKeyRecipeTransport = "recipe_transport"
+
+	// Harness-self session gating (harness-self-mcp-onboarding-01KQ8TDU WP06).
+	// Callers populate this key with the calling session's Kind string
+	// ("onboarding" | "chat") so the harness_write_* default policies can
+	// gate by session kind without needing a separate mechanism.
+	CtxKeySessionKind = "session_kind"
 )
 
 // populateFamilyContext fills in context-attribute defaults for the
@@ -573,6 +579,11 @@ func populateFamilyContext(
 		ensure(CtxKeyToolName, toolName)
 		ensure(CtxKeyServerName, serverName)
 		ensureBool(CtxKeyPromptOnFirstUse, false)
+		// session_kind is populated by the caller for harness-self tool
+		// calls (WP06); ensure a sane zero-value so the harness_write_*
+		// forbid policy never produces a Cedar evaluation error from a
+		// missing attribute.
+		ensure(CtxKeySessionKind, "")
 
 	case ActionAddRecipe, ActionSpawnRecipe:
 		// Mirror the resource id as recipe_id; callers supply the
@@ -586,6 +597,69 @@ func populateFamilyContext(
 	}
 
 	return out
+}
+
+// LoadHarnessSnippets ingests the three default harness-self Cedar
+// policy snippets into the engine's active PolicySet. Called at boot so
+// the harness_read_default / harness_write_onboarding /
+// harness_write_forbid policies are active without any on-disk file.
+//
+// snippets is a map of virtual filename → Cedar source. Each snippet is
+// added under a deterministic synthetic PolicyID "harness-self/<filename>#<n>"
+// so later Reload calls can coexist without stomping the harness entries.
+//
+// The function is additive and serialised under reloadMu. Calling it
+// more than once replaces the previously installed harness-self entries.
+//
+// WP06: harness-self-mcp-onboarding-01KQ8TDU
+func (e *Engine) LoadHarnessSnippets(snippets map[string][]byte) error {
+	if len(snippets) == 0 {
+		return nil
+	}
+	e.reloadMu.Lock()
+	defer e.reloadMu.Unlock()
+
+	// Start from the currently active PolicySet and extend it.
+	current := e.policies.Load()
+	if current == nil {
+		current = cedar.NewPolicySet()
+	}
+	ps := current
+
+	for name, body := range snippets {
+		fileSet, err := cedar.NewPolicySetFromBytes(name, body)
+		if err != nil {
+			return fmt.Errorf("cedar: LoadHarnessSnippets parse %s: %w", name, err)
+		}
+		idx := 0
+		for _, p := range fileSet.Map() {
+			id := cedar.PolicyID(fmt.Sprintf("harness-self/%s#%d", name, idx))
+			ps.Add(id, p)
+			idx++
+		}
+		// Track in the files list so ListPolicies shows the snippets.
+		e.filesMu.Lock()
+		found := false
+		for i, f := range e.files {
+			if f.Name == name {
+				e.files[i].ParseOK = true
+				e.files[i].ParseErr = ""
+				found = true
+				break
+			}
+		}
+		if !found {
+			e.files = append(e.files, PolicyFile{
+				Name:     name,
+				Bytes:    len(body),
+				Embedded: true,
+				ParseOK:  true,
+			})
+		}
+		e.filesMu.Unlock()
+	}
+	e.policies.Store(ps)
+	return nil
 }
 
 // isFamilyAction reports whether action is one of the WP01

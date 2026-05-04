@@ -21,9 +21,6 @@ type ToolResult struct {
 // handlers reach into. Keeping the surface narrow lets tests stub one
 // dependency at a time. WP04/WP05 add real fields; WP02 ships an empty
 // struct so the wiring path is in place.
-//
-// TODO(v0.3.x): wire concrete managers (llm.Registry, recipes.Registry,
-// session.Manager, settings.API, projects manager, cedar engine).
 type Managers struct {
 	// Read-side managers (WP04). Nil-safe: handlers fall back to a
 	// "not configured" ToolResult when their backing manager is nil.
@@ -31,12 +28,15 @@ type Managers struct {
 	Recipes   RecipeLister
 	Settings  SettingsReader
 	Status    StatusReporter
+	Sessions  SessionLister
+	Models    ModelLister
 
 	// Write-side managers (WP05). Nil-safe in the same way.
 	ProvidersWriter ProviderWriter
 	RecipesWriter   RecipeWriter
 	SettingsWriter  SettingsWriter
 	ProjectsWriter  ProjectWriter
+	SessionsWriter  SessionCreator
 
 	// Cedar proposal broker (WP07). Nil-safe.
 	CedarProposer CedarProposer
@@ -80,6 +80,34 @@ type StatusReporter interface {
 	HarnessStatus(ctx context.Context) (StatusSnapshot, error)
 }
 
+// SessionLister returns a sanitized list of sessions.
+type SessionLister interface {
+	ListSessions(ctx context.Context) ([]SessionSummary, error)
+}
+
+// SessionSummary is the JSON shape returned to the model. Never carries
+// message content.
+type SessionSummary struct {
+	ID        string `json:"id"`
+	Name      string `json:"name"`
+	Kind      string `json:"kind,omitempty"`
+	CreatedAt string `json:"createdAt"`
+	UpdatedAt string `json:"updatedAt"`
+}
+
+// ModelLister returns a list of models available for a given provider kind.
+type ModelLister interface {
+	ListModels(ctx context.Context) ([]ModelSummary, error)
+}
+
+// ModelSummary is the JSON shape returned to the model for each LLM model.
+type ModelSummary struct {
+	ProviderID   string `json:"providerId"`
+	ProviderKind string `json:"providerKind"`
+	ModelID      string `json:"modelId"`
+	DisplayName  string `json:"displayName,omitempty"`
+}
+
 type StatusSnapshot struct {
 	Providers int `json:"providers"`
 	MCPInstalled int `json:"mcpInstalled"`
@@ -108,6 +136,11 @@ type SettingsWriter interface {
 
 type ProjectWriter interface {
 	CreateProject(ctx context.Context, name, description string) (string, error)
+}
+
+// SessionCreator creates a new session with an optional kind tag.
+type SessionCreator interface {
+	CreateSession(ctx context.Context, name, kind string) (SessionSummary, error)
 }
 
 // CedarProposer brokers the propose_cedar_policy confirm-flow (WP07).
@@ -299,6 +332,52 @@ func (m Managers) handleCreateProject(ctx context.Context, args json.RawMessage)
 		return nil, err
 	}
 	return ToolResult{OK: true, Message: fmt.Sprintf("Created project %q", p.Name), Data: map[string]string{"id": id}}, nil
+}
+
+func (m Managers) handleListSessions(ctx context.Context, _ json.RawMessage) (any, error) {
+	if m.Sessions == nil {
+		return nil, errNotConfigured
+	}
+	out, err := m.Sessions.ListSessions(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return ToolResult{OK: true, Message: fmt.Sprintf("%d session(s)", len(out)), Data: out}, nil
+}
+
+func (m Managers) handleListModels(ctx context.Context, _ json.RawMessage) (any, error) {
+	if m.Models == nil {
+		return nil, errNotConfigured
+	}
+	out, err := m.Models.ListModels(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return ToolResult{OK: true, Message: fmt.Sprintf("%d model(s) across configured providers", len(out)), Data: out}, nil
+}
+
+func (m Managers) handleCreateSession(ctx context.Context, args json.RawMessage) (any, error) {
+	if m.SessionsWriter == nil {
+		return nil, errNotConfigured
+	}
+	var p struct {
+		Name string `json:"name"`
+		Kind string `json:"kind,omitempty"`
+	}
+	if err := json.Unmarshal(args, &p); err != nil {
+		return nil, fmt.Errorf("harness_write_create_session: %w", err)
+	}
+	if p.Name == "" {
+		return nil, errors.New("harness_write_create_session: name is required")
+	}
+	if p.Kind == "" {
+		p.Kind = "chat"
+	}
+	sum, err := m.SessionsWriter.CreateSession(ctx, p.Name, p.Kind)
+	if err != nil {
+		return nil, err
+	}
+	return ToolResult{OK: true, Message: fmt.Sprintf("Created session %q (kind=%s)", sum.Name, sum.Kind), Data: sum}, nil
 }
 
 func (m Managers) handleProposeCedarPolicy(ctx context.Context, args json.RawMessage) (any, error) {
