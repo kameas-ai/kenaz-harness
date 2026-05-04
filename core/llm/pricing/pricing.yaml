@@ -1,0 +1,155 @@
+last_updated: "2026-04-27"
+
+# Curated per-(provider_kind, model_pattern) pricing table.
+# Units: USD per 1 million tokens.
+# Sources: public pricing pages as of last_updated date above.
+# Tilde-prefixed figures ("~$X.XX") are shown in the UI when these
+# rates are used, reminding the user this is an estimate, not a
+# provider-reported figure. Set pricing.yaml last_updated to today
+# whenever rates are refreshed.
+
+entries:
+
+  # ── Anthropic ────────────────────────────────────────────────────────
+  - provider_kind: anthropic
+    model_pattern: "claude-opus-4*"
+    input_per_1m_usd: 15.00
+    output_per_1m_usd: 75.00
+    cached_input_per_1m_usd: 1.50
+    cached_input_write_per_1m_usd: 18.75
+
+  - provider_kind: anthropic
+    model_pattern: "claude-sonnet-4*"
+    input_per_1m_usd: 3.00
+    output_per_1m_usd: 15.00
+    cached_input_per_1m_usd: 0.30
+    cached_input_write_per_1m_usd: 3.75
+
+  - provider_kind: anthropic
+    model_pattern: "claude-sonnet-3*"
+    input_per_1m_usd: 3.00
+    output_per_1m_usd: 15.00
+    cached_input_per_1m_usd: 0.30
+    cached_input_write_per_1m_usd: 3.75
+
+  - provider_kind: anthropic
+    model_pattern: "claude-haiku-3*"
+    input_per_1m_usd: 0.80
+    output_per_1m_usd: 4.00
+    cached_input_per_1m_usd: 0.08
+    cached_input_write_per_1m_usd: 1.00
+
+  - provider_kind: anthropic
+    model_pattern: "claude-3-5-sonnet*"
+    input_per_1m_usd: 3.00
+    output_per_1m_usd: 15.00
+    cached_input_per_1m_usd: 0.30
+    cached_input_write_per_1m_usd: 3.75
+
+  - provider_kind: anthropic
+    model_pattern: "claude-3-5-haiku*"
+    input_per_1m_usd: 0.80
+    output_per_1m_usd: 4.00
+    cached_input_per_1m_usd: 0.08
+    cached_input_write_per_1m_usd: 1.00
+
+  - provider_kind: anthropic
+    model_pattern: "claude-3-opus*"
+    input_per_1m_usd: 15.00
+    output_per_1m_usd: 75.00
+    cached_input_per_1m_usd: 1.50
+    cached_input_write_per_1m_usd: 18.75
+
+  - provider_kind: anthropic
+    model_pattern: "claude-3-sonnet*"
+    input_per_1m_usd: 3.00
+    output_per_1m_usd: 15.00
+
+  - provider_kind: anthropic
+    model_pattern: "claude-3-haiku*"
+    input_per_1m_usd: 0.25
+    output_per_1m_usd: 1.25
+
+  # ── OpenAI ───────────────────────────────────────────────────────────
+  - provider_kind: openai
+    model_pattern: "gpt-4o-mini*"
+    input_per_1m_usd: 0.15
+    output_per_1m_usd: 0.60
+
+  - provider_kind: openai
+    model_pattern: "gpt-4o*"
+    input_per_1m_usd: 2.50
+    output_per_1m_usd: 10.00
+
+  - provider_kind: openai
+    model_pattern: "gpt-4-turbo*"
+    input_per_1m_usd: 10.00
+    output_per_1m_usd: 30.00
+
+  - provider_kind: openai
+    model_pattern: "o1-mini*"
+    input_per_1m_usd: 3.00
+    output_per_1m_usd: 12.00
+    reasoning_per_1m_usd: 12.00
+
+  - provider_kind: openai
+    model_pattern: "o1*"
+    input_per_1m_usd: 15.00
+    output_per_1m_usd: 60.00
+    reasoning_per_1m_usd: 60.00
+
+  - provider_kind: openai
+    model_pattern: "o3-mini*"
+    input_per_1m_usd: 1.10
+    output_per_1m_usd: 4.40
+    reasoning_per_1m_usd: 4.40
+
+  - provider_kind: openai
+    model_pattern: "o3*"
+    input_per_1m_usd: 10.00
+    output_per_1m_usd: 40.00
+    reasoning_per_1m_usd: 40.00
+
+  # ── OpenRouter fallback (prefer provider-reported cost when available) ─
+  # Rates below are only used if OpenRouter doesn't return usage.cost.
+  - provider_kind: openrouter
+    model_pattern: "*"
+    input_per_1m_usd: 2.00
+    output_per_1m_usd: 8.00
+
+  # ── Bedrock ──────────────────────────────────────────────────────────
+  - provider_kind: bedrock
+    model_pattern: "anthropic.claude-3-5-sonnet*"
+    input_per_1m_usd: 3.00
+    output_per_1m_usd: 15.00
+
+  - provider_kind: bedrock
+    model_pattern: "anthropic.claude-3-5-haiku*"
+    input_per_1m_usd: 0.80
+    output_per_1m_usd: 4.00
+
+  - provider_kind: bedrock
+    model_pattern: "anthropic.claude-3-opus*"
+    input_per_1m_usd: 15.00
+    output_per_1m_usd: 75.00
+
+  - provider_kind: bedrock
+    model_pattern: "anthropic.claude-3-sonnet*"
+    input_per_1m_usd: 3.00
+    output_per_1m_usd: 15.00
+
+  - provider_kind: bedrock
+    model_pattern: "anthropic.claude-3-haiku*"
+    input_per_1m_usd: 0.25
+    output_per_1m_usd: 1.25
+
+  - provider_kind: bedrock
+    model_pattern: "anthropic.claude-*"
+    input_per_1m_usd: 3.00
+    output_per_1m_usd: 15.00
+
+  # ── Ollama (local, zero cost) ─────────────────────────────────────────
+  - provider_kind: ollama
+    model_pattern: "*"
+    input_per_1m_usd: 0.00
+    output_per_1m_usd: 0.00

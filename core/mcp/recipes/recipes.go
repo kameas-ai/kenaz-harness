@@ -21,9 +21,20 @@ package recipes
 import (
 	"errors"
 	"fmt"
+	"net/url"
 	"regexp"
+	"strings"
 
 	"github.com/sigil-tech/kaneaz-harness/core/mcp"
+)
+
+// Recognised transport identifiers. Empty string is treated as
+// TransportStdio for backwards compatibility with the shipped
+// catalog (which predates the transport field).
+const (
+	TransportStdio = "stdio"
+	TransportHTTP  = "http"
+	TransportSSE   = "sse"
 )
 
 // Recipe is one entry in the shipped catalog. The fields mirror the
@@ -43,8 +54,23 @@ type Recipe struct {
 	// "memory", "fetch", ...).
 	Category string `json:"category"`
 	// Command is the argv used to spawn the stdio server.
-	// Command[0] must be non-empty.
+	// Command[0] must be non-empty for stdio recipes.
 	Command []string `json:"command"`
+	// Transport names the wire protocol the recipe speaks. Empty (or
+	// "stdio") preserves backwards compatibility with the shipped
+	// stdio catalog. Recognised values: "stdio", "http", "sse".
+	Transport string `json:"transport,omitempty" yaml:"transport,omitempty"`
+	// URL is the endpoint for HTTP/SSE recipes. Required when
+	// Transport is non-stdio. Subject to ${VAR} env-var substitution
+	// at connection-open time.
+	URL string `json:"url,omitempty" yaml:"url,omitempty"`
+	// HeadersTemplate is the per-request HTTP header set applied on
+	// every outbound request. Values are subject to ${VAR}
+	// substitution at Open time.
+	HeadersTemplate map[string]string `json:"headers_template,omitempty" yaml:"headers_template,omitempty"`
+	// PostURL is the SSE client→server endpoint. Required when
+	// Transport=="sse". Subject to ${VAR} substitution at Open time.
+	PostURL string `json:"post_url,omitempty" yaml:"post_url,omitempty"`
 	// EnvKeys are the credential-bearing env vars the server reads.
 	// Slice order is render order in the install modal.
 	EnvKeys []EnvKey `json:"env_keys"`
@@ -78,6 +104,46 @@ type Recipe struct {
 	// install alongside this recipe. The install modal surfaces a
 	// "copy recommended policy" affordance when set.
 	RecommendedPolicyTemplate string `json:"recommended_policy_template,omitempty"`
+	// PromptOnFirstUse lists tool names (bare, without the server prefix)
+	// within this recipe that opt into the universal interactive-permission
+	// prompt gate on their first invocation. When the Cedar engine returns
+	// NotApplicable for one of these tools, the toolloop dispatcher routes
+	// through the prompt registry so the user can grant or deny access
+	// interactively.
+	//
+	// An empty (or nil) slice — the default — means no per-tool prompts:
+	// the caller's existing allow/deny policy drives the verdict, exactly
+	// as before WP06. Recipe authors SHOULD list only tools whose default
+	// posture is NotApplicable (i.e. not already covered by a broad
+	// server-level Cedar permit rule); listing a builtin kaneaz tool here
+	// has no effect because the default_tool_policy.cedar already allows
+	// them unconditionally.
+	//
+	// Tools listed here are also EXCLUDED from WP11's install-time pre-seed
+	// loop: they keep the gate prompt instead of getting a silent
+	// tool_allow_*.cedar snippet.
+	//
+	// Example: a recipe with tool names "write_file" and "delete_file"
+	// that wants first-use confirmation only on "delete_file" would set:
+	//
+	//   "prompt_on_first_use": ["delete_file"]
+	//
+	// JSON key: prompt_on_first_use. omitempty: present only when non-empty.
+	PromptOnFirstUse []string `json:"prompt_on_first_use,omitempty"`
+	// PreSeedingPolicy controls how Cedar permit snippets are written
+	// for the recipe's tools at install time (cedar WP11). Recognised values:
+	//
+	//   ""           — same as "allow_all" (backwards-compatible default).
+	//   "allow_all"  — write a permit snippet for every discovered tool
+	//                  except those named in PromptOnFirstUse.
+	//   "prompt_only"— skip pre-seeding entirely; the Cedar gate prompt
+	//                  fires for every tool on first call.
+	//   "none"       — synonym for "prompt_only"; no snippets written.
+	//
+	// Failure to write any single snippet is best-effort: a warning is
+	// logged and the install continues. The install never rolls back on
+	// snippet write failure.
+	PreSeedingPolicy string `json:"pre_seeding_policy,omitempty"`
 	// Source tags the loader that produced this Recipe. It is set by
 	// loaders (LoadShipped → SourceShipped, registry loader →
 	// SourceRegistry, UserStore → SourceUser/SourceImported) and is
@@ -109,12 +175,16 @@ const (
 // used value is stashed. The struct intentionally carries no
 // validation logic — the install path validates by Kind.
 type ConfigOption struct {
-	Name        string `json:"name"`
-	Display     string `json:"display"`
-	Kind        string `json:"kind"`
-	Default     any    `json:"default,omitempty"`
-	Required    bool   `json:"required"`
-	Description string `json:"description"`
+	Name        string   `json:"name"`
+	Display     string   `json:"display"`
+	Kind        string   `json:"kind"`
+	Default     any      `json:"default,omitempty"`
+	Required    bool     `json:"required"`
+	Description string   `json:"description"`
+	// Choices is the closed set of allowed values when Kind ==
+	// ConfigKindEnum. The install modal renders a dropdown; any other
+	// Kind ignores this field. Empty for non-enum kinds.
+	Choices []string `json:"choices,omitempty"`
 }
 
 // Recognised values for ConfigOption.Kind.
@@ -122,6 +192,7 @@ const (
 	ConfigKindDirectoryList = "directory_list"
 	ConfigKindBoolean       = "boolean"
 	ConfigKindString        = "string"
+	ConfigKindEnum          = "enum"
 )
 
 // EnvKey is one credential-bearing env var the server reads.
@@ -206,6 +277,10 @@ var (
 	// ErrInvalidRecipe is returned by validation for non-ID problems
 	// (empty Command, etc.).
 	ErrInvalidRecipe = errors.New("recipes: invalid recipe")
+	// ErrUserRecipesDisabled is returned by AddRecipe / EditRecipe /
+	// RemoveRecipe when the user-recipe store is not wired (e.g.
+	// HARNESS_MCP_USER_RECIPES=off or no DataDir configured).
+	ErrUserRecipesDisabled = errors.New("recipes: user-recipe store not configured")
 )
 
 // recipeIDPattern is the canonical recipe ID validation regex.
@@ -221,20 +296,97 @@ func ValidateRecipeID(id string) error {
 	return nil
 }
 
+// validTransports is the exhaustive set of recognised transport values.
+var validTransports = map[string]bool{
+	"":     true, // empty = stdio (back-compat)
+	"stdio": true,
+	"http":  true,
+	"sse":   true,
+}
+
 // Validate runs the recipe-level invariants. It is called by
 // LoadShipped on every parsed recipe so that a bad shipped.json fails
 // the binary at init time.
+//
+// Transport-specific rules:
+//   - Empty / "stdio": Command[0] must be non-empty. URL and
+//     HeadersTemplate are tolerated but unused (a stdio recipe with a
+//     stray URL is a noop, not an error — keeps the import path more
+//     forgiving).
+//   - "http" / "sse": URL must be set, must parse, must use http or
+//     https scheme, must not carry a fragment, and must not embed
+//     userinfo (credentials route through HeadersTemplate). For "sse"
+//     PostURL must additionally be set and validated identically.
+//   - Any other transport string is rejected.
 func (r *Recipe) Validate() error {
 	if err := ValidateRecipeID(r.ID); err != nil {
 		return err
 	}
-	if len(r.Command) == 0 || r.Command[0] == "" {
-		return fmt.Errorf("%w: recipe %q has empty Command", ErrInvalidRecipe, r.ID)
+	transport := r.Transport
+	if transport == "" {
+		transport = TransportStdio
+	}
+	switch transport {
+	case TransportStdio:
+		if len(r.Command) == 0 || r.Command[0] == "" {
+			return fmt.Errorf("%w: recipe %q has empty Command", ErrInvalidRecipe, r.ID)
+		}
+	case TransportHTTP, TransportSSE:
+		if strings.TrimSpace(r.URL) == "" {
+			return fmt.Errorf("%w: recipe %q transport %q requires URL", ErrInvalidRecipe, r.ID, transport)
+		}
+		if err := validateRecipeURL(r.URL); err != nil {
+			return fmt.Errorf("%w: recipe %q: %v", ErrInvalidRecipe, r.ID, err)
+		}
+		if transport == TransportSSE {
+			if strings.TrimSpace(r.PostURL) == "" {
+				return fmt.Errorf("%w: recipe %q transport %q requires PostURL", ErrInvalidRecipe, r.ID, transport)
+			}
+			if err := validateRecipeURL(r.PostURL); err != nil {
+				return fmt.Errorf("%w: recipe %q post_url: %v", ErrInvalidRecipe, r.ID, err)
+			}
+		}
+	default:
+		return fmt.Errorf("%w: recipe %q has unknown transport %q", ErrInvalidRecipe, r.ID, transport)
 	}
 	for i, k := range r.EnvKeys {
 		if k.Name == "" {
 			return fmt.Errorf("%w: recipe %q env_keys[%d] has empty Name", ErrInvalidRecipe, r.ID, i)
 		}
+	}
+	switch r.PreSeedingPolicy {
+	case "", "allow_all", "prompt_only", "none":
+		// valid
+	default:
+		return fmt.Errorf("%w: recipe %q has invalid pre_seeding_policy %q (want \"\", \"allow_all\", \"prompt_only\", or \"none\")", ErrInvalidRecipe, r.ID, r.PreSeedingPolicy)
+	}
+	return nil
+}
+
+// validateRecipeURL enforces the URL constraints documented on
+// Recipe.URL. The URL is allowed to contain ${VAR} substitution
+// tokens — those are stripped before parsing so the validator does
+// not fight the recipe author who routes part of the path through a
+// keychain-sourced env var. Token substitution is re-validated at
+// connection-open time.
+func validateRecipeURL(raw string) error {
+	probe := tokenPattern.ReplaceAllString(raw, "x")
+	u, err := url.Parse(probe)
+	if err != nil {
+		return fmt.Errorf("invalid URL %q: %w", raw, err)
+	}
+	scheme := strings.ToLower(u.Scheme)
+	if scheme != "http" && scheme != "https" {
+		return fmt.Errorf("invalid URL %q: scheme must be http or https", raw)
+	}
+	if u.Host == "" {
+		return fmt.Errorf("invalid URL %q: host required", raw)
+	}
+	if u.Fragment != "" || strings.Contains(probe, "#") {
+		return fmt.Errorf("invalid URL %q: fragment not permitted", raw)
+	}
+	if u.User != nil {
+		return fmt.Errorf("invalid URL %q: userinfo not permitted (use headers_template)", raw)
 	}
 	return nil
 }
@@ -275,10 +427,16 @@ func (r *Recipe) ToServerSpec(env map[string]string, config map[string]any) mcp.
 		}
 	}
 
+	transport := r.Transport
+	if transport == "" {
+		transport = TransportStdio
+	}
+
 	return mcp.ServerSpec{
 		Name:      r.ID,
-		Transport: "stdio",
+		Transport: transport,
 		Command:   cmd,
+		URL:       r.URL,
 		Env:       envCopy,
 	}
 }
@@ -307,6 +465,53 @@ func buildSubstitutionVars(config map[string]any) (map[string]string, map[string
 		}
 	}
 	return vars, listVars
+}
+
+// RecipeDirs extracts the union of all "allowed_directories" config
+// values declared across the supplied recipes. It is the canonical
+// source-of-truth builder that the fs gate's NotifyRecipeDirs call
+// site invokes at recipe-install / recipe-uninstall time.
+//
+// Each recipe may declare zero or more ConfigOption entries with
+// Kind == ConfigKindDirectoryList whose Default field holds a
+// pre-configured list of allowed directories. When a recipe has no
+// such option the recipe contributes nothing to the result.
+//
+// The returned slice is deduplicated (last-write-wins within a single
+// recipe; across recipes all unique entries are retained). Callers
+// should pass the combined enabled-recipe set; passing a partial list
+// replaces the prior full set.
+//
+// This function is intentionally minimal (one exported symbol, no new
+// struct fields) per the WP04 constraint.
+func RecipeDirs(recipes []Recipe) []string {
+	seen := make(map[string]struct{})
+	var out []string
+	for _, r := range recipes {
+		for _, opt := range r.ConfigOptions {
+			if opt.Kind != ConfigKindDirectoryList {
+				continue
+			}
+			if opt.Default == nil {
+				continue
+			}
+			list, ok := coerceStringSlice(opt.Default)
+			if !ok {
+				continue
+			}
+			for _, d := range list {
+				if d == "" {
+					continue
+				}
+				if _, dup := seen[d]; dup {
+					continue
+				}
+				seen[d] = struct{}{}
+				out = append(out, d)
+			}
+		}
+	}
+	return out
 }
 
 // coerceStringSlice accepts the two shapes a JSON-loaded config may

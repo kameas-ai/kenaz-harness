@@ -7,6 +7,7 @@ import (
 	"os"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	coreag "github.com/sigil-tech/kaneaz-harness/core/agentgraph"
 	"github.com/sigil-tech/kaneaz-harness/core/compaction"
@@ -107,7 +108,75 @@ type Config struct {
 	// without checking the token threshold. Production builds wire
 	// this; tests that don't exercise compaction leave it nil.
 	Compaction *CompactionDeps
+
+	// AutoTitle is the optional post-run auto-title trigger configuration
+	// (mission session-auto-titling-01KQ8TDS WP04). nil disables the
+	// trigger entirely. Production builds wire this; tests that don't
+	// exercise auto-titling leave it nil.
+	AutoTitle *AutoTitleDeps
+
+	// UsageHook is an optional callback fired by the LLMProviderAdapter
+	// once per LLM turn, after stream.Final() returns
+	// (token-cost-telemetry-01KQ8TD7 WP02). The callback receives the
+	// session id, message id (empty string when the writer hasn't been
+	// called yet), provider kind, model id, and the full llm.Response.
+	// nil disables usage capture entirely.
+	UsageHook UsageHookFunc
+
+	// PartialPersister is the long-turn-resilience-01KR3PRS WP03 seam
+	// that handles the "kernel returned an error mid-stream" case: when
+	// driveRun observes a non-nil err that classifies as backend-error
+	// AND the StreamBridge has accumulated text deltas, the runner
+	// invokes PartialPersister.PersistPartial so the chassis can land a
+	// session_messages row carrying the partial text + the resume-flow
+	// metadata (streaming_failed_at, streaming_failure_kind,
+	// streaming_recoverable). nil disables the seam entirely — the
+	// runner emits the existing backend-error close payload and the
+	// frontend's WP00 fallback (the partial bubble committed
+	// frontend-side via streamingError) remains the user-visible
+	// surface.
+	PartialPersister PartialPersister
 }
+
+// PartialPersister is the resume-flow persistence seam. Invoked by
+// driveRun once per failed turn after the kernel exits with an
+// unrecoverable backend error. The chassis production wiring binds
+// this to a small adapter over session.Manager.AppendMessage +
+// MarkStreamingFailure (long-turn-resilience-01KR3PRS WP03).
+//
+// PersistPartial:
+//   - sessionID identifies the active session.
+//   - partialText is the byte-equal accumulation of every text-delta
+//     the StreamBridge saw before the drop. Always non-empty when the
+//     runner invokes the seam (the runner skips PersistPartial when
+//     no text was seen — the user's bubble would be empty).
+//   - kind is the failure classification: "transient" | "auth" |
+//     "unknown".
+//   - recoverable is true when no tool_use block executed before the
+//     drop (continuation prompt is safe).
+//
+// PersistPartial returns the persisted message id so the runner can
+// surface it on the bridge's stream-closed payload — the frontend
+// uses the id to wire the Resume button click into Sessions_ResumeMessage.
+type PartialPersister interface {
+	PersistPartial(ctx context.Context, sessionID, partialText, kind string, recoverable bool) (messageID string, err error)
+}
+
+// PartialPersisterFunc adapts a function value to the PartialPersister
+// interface so production wiring can pass a closure inline.
+type PartialPersisterFunc func(ctx context.Context, sessionID, partialText, kind string, recoverable bool) (string, error)
+
+// PersistPartial satisfies PartialPersister.
+func (f PartialPersisterFunc) PersistPartial(ctx context.Context, sessionID, partialText, kind string, recoverable bool) (string, error) {
+	return f(ctx, sessionID, partialText, kind, recoverable)
+}
+
+// UsageHookFunc is the callback signature for per-turn usage capture.
+// sessionID and messageID identify the turn; messageID may be empty
+// when the session_write node hasn't fired yet (test paths). The hook
+// must not block the chat turn — it should write async or accept the
+// latency.
+type UsageHookFunc func(ctx context.Context, sessionID, messageID string, resp corellm.Response)
 
 // CompactionDeps bundles every collaborator the pre-send compaction
 // hook needs. The runner reads the active aggressiveness tier on every
@@ -219,12 +288,14 @@ type ChatRunner struct {
 
 // chatSub is the per-StartStream bookkeeping entry.
 type chatSub struct {
-	id        string
-	sessionID string
-	cancel    context.CancelFunc
-	done      chan struct{}
-	bridge    *StreamBridge
-	finished  atomic.Bool
+	id            string
+	sessionID     string
+	profileID     string // retained for post-run auto-title trigger
+	modelOverride string // retained for post-run auto-title trigger
+	cancel        context.CancelFunc
+	done          chan struct{}
+	bridge        *StreamBridge
+	finished      atomic.Bool
 }
 
 // New constructs a ChatRunner. Every Config field is validated; a
@@ -372,12 +443,32 @@ func (r *ChatRunner) StartStream(ctx context.Context, profileID, sessionID, mode
 		r.cfg.EnvDefaults(env)
 	}
 
+	// Register the per-turn usage hook via HookPostLLM so it fires
+	// AFTER session_write has persisted the assistant message (and
+	// thus has a valid messageID). The adapter stores the most recent
+	// llm.Response so the hook can record token counts + cost
+	// (token-cost-telemetry-01KQ8TD7 WP02).
+	if r.cfg.UsageHook != nil {
+		if env.Hooks == nil {
+			env.Hooks = coreag.NewHookManager(env.Memory, env.SessionID, env.ProjectID)
+		}
+		usageHook := r.cfg.UsageHook
+		capturedAdapter := llmAdapter
+		capturedSessionID := sessionID
+		env.Hooks.RegisterPostHook(coreag.HookPostLLM, func(ctx context.Context, sID, messageID, _ string) {
+			resp := capturedAdapter.LastResponse()
+			usageHook(ctx, capturedSessionID, messageID, resp)
+		})
+	}
+
 	sub := &chatSub{
-		id:        subID,
-		sessionID: sessionID,
-		cancel:    cancel,
-		done:      make(chan struct{}),
-		bridge:    bridge,
+		id:            subID,
+		sessionID:     sessionID,
+		profileID:     profileID,
+		modelOverride: modelOverride,
+		cancel:        cancel,
+		done:          make(chan struct{}),
+		bridge:        bridge,
 	}
 	r.mu.Lock()
 	r.subs[subID] = sub
@@ -418,9 +509,11 @@ func (r *ChatRunner) driveRun(ctx context.Context, sub *chatSub, env *coreag.Env
 	reason := "completed"
 	message := ""
 	finishReason := ""
+	runTerminatedClean := false // true when kernel finished without error (or ErrPaused)
 	switch {
 	case err == nil:
 		reason = "completed"
+		runTerminatedClean = true
 	case errors.Is(err, coreag.ErrPaused):
 		// AskNode paused the run — chat surface treats this as the end
 		// of one turn; the next user message starts a fresh run. The
@@ -428,6 +521,7 @@ func (r *ChatRunner) driveRun(ctx context.Context, sub *chatSub, env *coreag.Env
 		// stop the typing indicator.
 		reason = "completed"
 		finishReason = "paused"
+		runTerminatedClean = true
 	case errors.Is(err, coreag.ErrBudgetExceeded):
 		reason = "backend-error"
 		message = "agent reached the per-run budget cap"
@@ -438,16 +532,154 @@ func (r *ChatRunner) driveRun(ctx context.Context, sub *chatSub, env *coreag.Env
 		message = err.Error()
 	}
 
+	// long-turn-resilience-01KR3PRS WP03: when the kernel exited with
+	// a backend-error AND the StreamBridge accumulated text deltas
+	// before the drop, persist a partial assistant row through
+	// PartialPersister so the resume RPC can land a continuation. The
+	// frontend receives the persisted message id on the closed payload
+	// and renders the Resume affordance against it.
+	//
+	// Skip persistence on every other terminal path:
+	//   - reason=="completed": the kernel ran cleanly; SessionWriteNode
+	//     already persisted the assistant row.
+	//   - reason=="stop-called": user-initiated stop; partial-persist
+	//     would surface a stale Resume button with no recovery upside.
+	//   - no PartialPersister wired: degrade to the WP00 frontend-only
+	//     fallback (the partial bubble's streamingError sub-line).
+	var (
+		partialMessageID   string
+		partialFailureKind string
+		partialRecoverable bool
+	)
+	if reason == "backend-error" && r.cfg.PartialPersister != nil {
+		partialText, hasTool := sub.bridge.PartialState()
+		if partialText != "" {
+			partialFailureKind = classifyPartialFailureKind(message)
+			partialRecoverable = !hasTool
+			// Use a fresh background context so a cancelled streamCtx
+			// does not abort the persist call. The chat-runner owns
+			// per-session serialization, so a 5s budget is safe.
+			persistCtx, cancel := context.WithTimeout(context.Background(), persistPartialTimeout)
+			mid, perr := r.cfg.PartialPersister.PersistPartial(persistCtx, sub.sessionID,
+				partialText, partialFailureKind, partialRecoverable)
+			cancel()
+			if perr != nil {
+				logging.L().Warn("chat.partial_persist.failed",
+					"sub_id", sub.id,
+					"session_id", sub.sessionID,
+					"err", perr.Error())
+			} else {
+				partialMessageID = mid
+				logging.L().Info("chat.partial_persist.ok",
+					"sub_id", sub.id,
+					"session_id", sub.sessionID,
+					"message_id", mid,
+					"failure_kind", partialFailureKind,
+					"recoverable", partialRecoverable,
+					"bytes", len(partialText),
+				)
+			}
+		}
+	}
+
+	// Post-run auto-title trigger (session-auto-titling-01KQ8TDS WP04).
+	// Fires asynchronously so it never blocks the stream-closed
+	// emission. Conditions:
+	//   (1) run terminated cleanly (no error or ErrPaused),
+	//   (2) AutoTitle deps are wired.
+	// fireAutoTitle re-reads the session store to verify auto_titled is
+	// still false, the name still matches the placeholder pattern, and
+	// at least one assistant message exists — all inside a fresh
+	// 5-second context (NFR-001).
+	if runTerminatedClean && r.cfg.AutoTitle != nil {
+		go r.fireAutoTitle(sub.sessionID, sub.profileID, sub.modelOverride)
+	}
+
 	if !sub.finished.CompareAndSwap(false, true) {
 		return
 	}
-	sub.bridge.EmitClosed(reason, message, finishReason)
+	sub.bridge.EmitClosedPartial(reason, message, finishReason,
+		partialMessageID, partialFailureKind, partialRecoverable)
 	log.Info("chat.run.complete",
 		"sub_id", sub.id,
 		"session_id", sub.sessionID,
 		"reason", reason,
 		"err", message,
 	)
+}
+
+// persistPartialTimeout caps the partial-persist call so a slow
+// session_messages write cannot block the chat-runner terminal goroutine
+// indefinitely. 5s is generous — the write is a single UPDATE.
+const persistPartialTimeout = 5 * time.Second
+
+// classifyPartialFailureKind returns the failure_kind string the
+// frontend persists alongside the partial row. The classifier only sees
+// the wrapped error message string at this point (the typed
+// llm.ErrTransient/ErrAuth wraps live deeper inside the kernel run, and
+// the runner's surface only carries err.Error()), so it does a
+// substring sniff over the canonical wrapping prefixes the chat path
+// uses (see core/llm/errors.go for the source taxonomy).
+//
+// long-turn-resilience-01KR3PRS WP03.
+func classifyPartialFailureKind(msg string) string {
+	switch {
+	case msg == "":
+		return "unknown"
+	case containsAny(msg, "auth", "401", "403", "unauthorized"):
+		return "auth"
+	case containsAny(msg, "transient", "stream", "network", "connection", "5"):
+		// Catch-all for ErrTransient wrapping; the leading "5" handles
+		// 5xx HTTP codes mentioned in the wrap. The classifier is
+		// best-effort — frontend uses this only to tailor the failure
+		// copy, never to gate the resume button.
+		return "transient"
+	default:
+		return "unknown"
+	}
+}
+
+// containsAny reports whether s contains any of the provided substrings.
+// Local helper so the classifier doesn't need a heavyweight import.
+func containsAny(s string, subs ...string) bool {
+	for _, sub := range subs {
+		if substr(s, sub) {
+			return true
+		}
+	}
+	return false
+}
+
+// substr is a tiny case-insensitive substring check.
+func substr(s, sub string) bool {
+	if sub == "" {
+		return true
+	}
+	if len(sub) > len(s) {
+		return false
+	}
+	// Fast lowercase comparison — sufficient for the small set of
+	// substrings classifyPartialFailureKind uses (no Unicode quirks).
+	for i := 0; i+len(sub) <= len(s); i++ {
+		match := true
+		for j := 0; j < len(sub); j++ {
+			cs, csub := s[i+j], sub[j]
+			if cs >= 'A' && cs <= 'Z' {
+				cs += 'a' - 'A'
+			}
+			if csub >= 'A' && csub <= 'Z' {
+				csub += 'a' - 'A'
+			}
+			if cs != csub {
+				match = false
+				break
+			}
+		}
+		if match {
+			return true
+		}
+	}
+	return false
 }
 
 // applyMaxTurnsDial walks every LoopNode in the graph and overrides

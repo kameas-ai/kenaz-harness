@@ -13,8 +13,8 @@ func TestShippedSingletonParses(t *testing.T) {
 	if cat == nil {
 		t.Fatal("Shipped() returned nil")
 	}
-	if got := len(cat.List()); got != 3 {
-		t.Fatalf("want 3 recipes, got %d", got)
+	if got := len(cat.List()); got != 1 {
+		t.Fatalf("want 1 recipe, got %d", got)
 	}
 }
 
@@ -52,7 +52,7 @@ func TestFilesystemEntry(t *testing.T) {
 	if !ok {
 		t.Fatal("filesystem not in shipped catalog")
 	}
-	if r.DisplayName != "Filesystem (sandboxed)" {
+	if r.DisplayName != "Filesystem" {
 		t.Errorf("DisplayName = %q", r.DisplayName)
 	}
 	if r.Category != "filesystem" {
@@ -73,18 +73,32 @@ func TestFilesystemEntry(t *testing.T) {
 	if len(r.ArgsTemplate) != 1 || r.ArgsTemplate[0] != "${ALLOWED_DIRS}" {
 		t.Errorf("ArgsTemplate = %v, want [${ALLOWED_DIRS}]", r.ArgsTemplate)
 	}
-	if len(r.ConfigOptions) != 1 {
-		t.Fatalf("ConfigOptions len = %d, want 1", len(r.ConfigOptions))
+	// Consolidated: two config options — access_tier (string) +
+	// allowed_directories (directory_list). Tier names: sandbox /
+	// project / full.
+	if len(r.ConfigOptions) != 2 {
+		t.Fatalf("ConfigOptions len = %d, want 2", len(r.ConfigOptions))
 	}
-	opt := r.ConfigOptions[0]
-	if opt.Name != "allowed_directories" {
-		t.Errorf("ConfigOptions[0].Name = %q", opt.Name)
+	var tierOpt, dirsOpt *recipes.ConfigOption
+	for i := range r.ConfigOptions {
+		switch r.ConfigOptions[i].Name {
+		case "access_tier":
+			tierOpt = &r.ConfigOptions[i]
+		case "allowed_directories":
+			dirsOpt = &r.ConfigOptions[i]
+		}
 	}
-	if opt.Kind != recipes.ConfigKindDirectoryList {
-		t.Errorf("ConfigOptions[0].Kind = %q, want %q", opt.Kind, recipes.ConfigKindDirectoryList)
+	if tierOpt == nil {
+		t.Fatal("missing access_tier config option")
 	}
-	if !opt.Required {
-		t.Error("ConfigOptions[0].Required = false, want true")
+	if dirsOpt == nil {
+		t.Fatal("missing allowed_directories config option")
+	}
+	if dirsOpt.Kind != recipes.ConfigKindDirectoryList {
+		t.Errorf("allowed_directories.Kind = %q, want %q", dirsOpt.Kind, recipes.ConfigKindDirectoryList)
+	}
+	if !dirsOpt.Required {
+		t.Error("allowed_directories.Required = false, want true")
 	}
 	if !r.Capabilities.Tools {
 		t.Error("Capabilities.Tools = false, want true")
@@ -98,54 +112,10 @@ func TestCatalogGetMiss(t *testing.T) {
 	}
 }
 
-func TestFilesystemProjectEntry(t *testing.T) {
-	cat := recipes.Shipped()
-	r, ok := cat.Get("filesystem-project")
-	if !ok {
-		t.Fatal("filesystem-project not in shipped catalog")
-	}
-	if r.Category != "filesystem" {
-		t.Errorf("Category = %q, want filesystem", r.Category)
-	}
-	if len(r.ConfigOptions) != 1 {
-		t.Fatalf("ConfigOptions len = %d, want 1", len(r.ConfigOptions))
-	}
-	opt := r.ConfigOptions[0]
-	if !opt.Required {
-		t.Error("project root should be required")
-	}
-	// Default is empty so user must pick a project.
-	if defaults, ok := opt.Default.([]any); !ok || len(defaults) != 0 {
-		t.Errorf("default = %#v, want empty slice", opt.Default)
-	}
-	if r.Warning != "" {
-		t.Errorf("project recipe should not carry a warning, got %q", r.Warning)
-	}
-}
-
-func TestFilesystemFullEntry(t *testing.T) {
-	cat := recipes.Shipped()
-	r, ok := cat.Get("filesystem-full")
-	if !ok {
-		t.Fatal("filesystem-full not in shipped catalog")
-	}
-	if r.Category != "filesystem" {
-		t.Errorf("Category = %q, want filesystem", r.Category)
-	}
-	// Hardcoded args, no user config knobs.
-	if len(r.ArgsTemplate) != 1 || r.ArgsTemplate[0] != "/" {
-		t.Errorf("ArgsTemplate = %v, want [/]", r.ArgsTemplate)
-	}
-	if len(r.ConfigOptions) != 0 {
-		t.Errorf("ConfigOptions = %v, want none (path is hardcoded to /)", r.ConfigOptions)
-	}
-	if r.Warning == "" {
-		t.Error("filesystem-full MUST carry a Warning string")
-	}
-	if r.RecommendedPolicyTemplate != "filesystem-full-recommended.cedar" {
-		t.Errorf("RecommendedPolicyTemplate = %q, want filesystem-full-recommended.cedar", r.RecommendedPolicyTemplate)
-	}
-}
+// Note: filesystem-project and filesystem-full were consolidated into
+// the single `filesystem` recipe with an `access_tier` config option
+// (sandbox / project / full). The dedicated tests for those two
+// separate recipes were retired with the consolidation.
 
 func TestCatalogListIsCopy(t *testing.T) {
 	cat := recipes.Shipped()
@@ -399,6 +369,93 @@ func TestToServerSpec_ConfigDataDirScalar(t *testing.T) {
 	if len(spec.Command) != 2 || spec.Command[1] != want {
 		t.Errorf("Command = %v, want [npx %q]", spec.Command, want)
 	}
+}
+
+// TestPromptOnFirstUseRoundTrip verifies that the PromptOnFirstUse slice
+// survives JSON marshal → unmarshal exactly (WP06 requirement).
+func TestPromptOnFirstUseRoundTrip(t *testing.T) {
+	// When the JSON blob includes prompt_on_first_use, it must decode.
+	const blobWith = `{
+		"id": "fs",
+		"display_name": "FS",
+		"description": "",
+		"category": "filesystem",
+		"command": ["npx", "-y", "server-fs"],
+		"env_keys": [],
+		"capabilities": {"tools": true, "resources": false, "prompts": false, "sampling": false},
+		"docs_url": "",
+		"init_timeout_ms": 5000,
+		"ping_period_ms": 30000,
+		"sampling_policy": {"allowed": false, "default": false},
+		"prompt_on_first_use": ["write_file", "delete_file"]
+	}`
+	var r recipes.Recipe
+	if err := json.Unmarshal([]byte(blobWith), &r); err != nil {
+		t.Fatalf("Unmarshal with prompt_on_first_use: %v", err)
+	}
+	if len(r.PromptOnFirstUse) != 2 {
+		t.Fatalf("PromptOnFirstUse len = %d, want 2", len(r.PromptOnFirstUse))
+	}
+	if r.PromptOnFirstUse[0] != "write_file" || r.PromptOnFirstUse[1] != "delete_file" {
+		t.Errorf("PromptOnFirstUse = %v, want [write_file delete_file]", r.PromptOnFirstUse)
+	}
+
+	// Re-marshal and confirm the key appears.
+	out, err := json.Marshal(r)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	var r2 recipes.Recipe
+	if err := json.Unmarshal(out, &r2); err != nil {
+		t.Fatalf("Unmarshal round-trip: %v", err)
+	}
+	if len(r2.PromptOnFirstUse) != 2 {
+		t.Fatalf("round-trip PromptOnFirstUse len = %d, want 2", len(r2.PromptOnFirstUse))
+	}
+
+	// When the JSON blob omits prompt_on_first_use, the field is nil (not []).
+	const blobWithout = `{
+		"id": "fs",
+		"display_name": "FS",
+		"description": "",
+		"category": "filesystem",
+		"command": ["npx", "-y", "server-fs"],
+		"env_keys": [],
+		"capabilities": {"tools": false, "resources": false, "prompts": false, "sampling": false},
+		"docs_url": "",
+		"init_timeout_ms": 5000,
+		"ping_period_ms": 30000,
+		"sampling_policy": {"allowed": false, "default": false}
+	}`
+	var r3 recipes.Recipe
+	if err := json.Unmarshal([]byte(blobWithout), &r3); err != nil {
+		t.Fatalf("Unmarshal without prompt_on_first_use: %v", err)
+	}
+	if r3.PromptOnFirstUse != nil {
+		t.Errorf("PromptOnFirstUse = %v, want nil when JSON omits field", r3.PromptOnFirstUse)
+	}
+
+	// A recipe with no PromptOnFirstUse must NOT emit the key in JSON
+	// (omitempty). Confirmed by checking the marshalled form contains no
+	// "prompt_on_first_use" substring.
+	outWithout, err := json.Marshal(r3)
+	if err != nil {
+		t.Fatalf("Marshal without: %v", err)
+	}
+	if bytes := string(outWithout); containsSubstring(bytes, "prompt_on_first_use") {
+		t.Errorf("empty PromptOnFirstUse should be omitted from JSON, got: %s", bytes)
+	}
+}
+
+// containsSubstring is a pure helper that avoids importing strings in
+// this test file.
+func containsSubstring(haystack, needle string) bool {
+	for i := 0; i+len(needle) <= len(haystack); i++ {
+		if haystack[i:i+len(needle)] == needle {
+			return true
+		}
+	}
+	return false
 }
 
 func TestSentinelErrorsDistinct(t *testing.T) {

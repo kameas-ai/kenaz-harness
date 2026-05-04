@@ -60,11 +60,18 @@ var denyRoots = []string{
 // form. These exist because macOS canonicalizes legitimate test- and
 // agent-workspace dirs into "/private/..." (a denied prefix). The
 // override is intentionally narrow: it only re-allows known temp-dir
-// roots and harness data subtrees.
+// roots, harness data subtrees, and the literal filesystem root.
 //
 // Match is a longest-prefix-with-separator rule, so "/private/tmp"
-// allows "/private/tmp/foo" but does NOT re-allow "/private/etc".
+// allows "/private/tmp/foo" but does NOT re-allow "/private/etc". The
+// "/" entry is special-cased in matchesDenyRoot to allow ONLY the
+// literal "/" — child paths still hit the deny-list normally, so
+// granting "/" works for the filesystem recipe's "full" access tier
+// but typing "/etc" still fails. Once "/" is granted, the MCP server
+// reaches everything under it; the deny-list's job is only to gate
+// what can be assigned as the recipe's allowed_directories root.
 var allowOverrides = []string{
+	"/",
 	"/tmp",
 	"/private/tmp",
 	"/var/folders",
@@ -200,10 +207,15 @@ func IsDeniedPath(canonical string) bool {
 }
 
 // isDenied reports whether canonical is the same as, or sits under,
-// any path in the denyRoots list, OR whether it is the user's home
-// directory itself. allowOverrides are checked first; a match there
-// short-circuits to "allowed" so test-isolation dirs survive the
-// "/private/..." canonicalization on macOS.
+// any path in the denyRoots list. allowOverrides are checked first;
+// a match there short-circuits to "allowed" so test-isolation dirs
+// survive the "/private/..." canonicalization on macOS.
+//
+// Note: the user's home directory itself is NOT denied — recipes that
+// declare an "access_tier=full" need to be able to grant access to
+// $HOME and its subtrees. System paths (/, /etc, /System, etc.) remain
+// in the deny-list. Users who grant home-directory access should
+// understand the risk; the recipe's warning field surfaces that context.
 func isDenied(canonical string) bool {
 	clean := filepath.Clean(canonical)
 	for _, allow := range allowOverrides {
@@ -213,11 +225,6 @@ func isDenied(canonical string) bool {
 	}
 	for _, root := range denyRoots {
 		if matchesDenyRoot(clean, root) {
-			return true
-		}
-	}
-	if home, err := os.UserHomeDir(); err == nil && home != "" {
-		if cleanHome := filepath.Clean(home); cleanHome != "" && clean == cleanHome {
 			return true
 		}
 	}

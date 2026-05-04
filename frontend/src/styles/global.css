@@ -12,11 +12,18 @@
 @tailwind components;
 @tailwind utilities;
 
-/* Default body chrome — colors strictly via tokens. */
+/* Default body chrome — colors strictly via tokens. The 100vh /
+ * overflow:hidden lock keeps the page-level scroll context out of the
+ * way; only the .shell-canvas region is allowed to scroll. Without
+ * this, any view whose content briefly overshoots height grants the
+ * BODY a scrollbar in addition to the canvas's own — the user ends
+ * up scrolling the entire window (rail and all). */
 html,
 body {
   margin: 0;
   padding: 0;
+  height: 100vh;
+  overflow: hidden;
   font-family: var(--font-ui);
   background: var(--surface-0);
   color: var(--ink);
@@ -25,7 +32,8 @@ body {
 }
 
 #app {
-  min-height: 100vh;
+  height: 100vh;
+  overflow: hidden;
   display: flex;
   flex-direction: column;
 }

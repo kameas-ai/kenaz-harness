@@ -92,6 +92,10 @@ function defaultForOption(opt: ConfigOption): unknown {
       return [];
     case 'boolean':
       return false;
+    case 'enum':
+      // First choice is the safe fallback when no `default` is set;
+      // the recipe author should normally declare a default explicitly.
+      return opt.choices?.[0] ?? '';
     case 'string':
     default:
       return '';
@@ -122,6 +126,15 @@ function cloneDefault(value: unknown, opt: ConfigOption): unknown {
   if (opt.kind === 'boolean') {
     return typeof value === 'boolean' ? value : false;
   }
+  if (opt.kind === 'enum') {
+    // Coerce to a valid choice — fall back to the first declared
+    // choice if the persisted value is unknown. Empty choices yields
+    // "" which the required-validator catches.
+    if (typeof value === 'string' && opt.choices?.includes(value)) {
+      return value;
+    }
+    return opt.choices?.[0] ?? '';
+  }
   return typeof value === 'string' ? value : '';
 }
 
@@ -147,6 +160,34 @@ watch(
   { immediate: true },
 );
 
+// access_tier (recipe-author-defined enum) → allowed_directories
+// (recipe-author-defined directory_list) coupling. When the recipe
+// declares both options, changing the tier rewrites the directory
+// list to the tier's canonical paths so the user doesn't have to
+// understand that the backend reads `allowed_directories`. The user
+// can still edit the list afterward — we only update on tier change,
+// not on every render. Sandbox tier maps to the data-dir workspace,
+// project tier clears the list (user must pick), full tier expands
+// to "/" by convention.
+const TIER_DIR_PRESETS: Record<string, string[]> = {
+  sandbox: ['${DATA_DIR}/agent-workspace'],
+  project: [],
+  full: ['/'],
+};
+
+watch(
+  () => configValues.value.access_tier,
+  (tier, prev) => {
+    if (!prev || tier === prev) return;
+    const dirsOpt = configOptions.value.find((o) => o.name === 'allowed_directories');
+    if (!dirsOpt || dirsOpt.kind !== 'directory_list') return;
+    if (typeof tier !== 'string') return;
+    const preset = TIER_DIR_PRESETS[tier];
+    if (preset === undefined) return;
+    configValues.value = { ...configValues.value, allowed_directories: preset.slice() };
+  },
+);
+
 const requiredEnvFilled = computed(() => {
   for (const k of props.recipe.envKeys) {
     if (k.required && !envValues.value[k.name]?.trim()) return false;
@@ -162,6 +203,8 @@ const requiredConfigFilled = computed(() => {
       if (!Array.isArray(v) || v.length === 0) return false;
     } else if (opt.kind === 'string') {
       if (typeof v !== 'string' || v.trim() === '') return false;
+    } else if (opt.kind === 'enum') {
+      if (typeof v !== 'string' || !opt.choices?.includes(v)) return false;
     }
     // boolean: presence is implied (false is a valid filled value).
   }
@@ -236,6 +279,14 @@ async function submit() {
       }
     } else if (opt.kind === 'boolean') {
       config[opt.name] = typeof raw === 'boolean' ? raw : false;
+    } else if (opt.kind === 'enum') {
+      // Snapshot only valid choices; fall back to the declared default
+      // (and ultimately first choice) so a tampered form value never
+      // ships an out-of-set string to the backend.
+      const v = typeof raw === 'string' ? raw : '';
+      config[opt.name] = opt.choices?.includes(v)
+        ? v
+        : (typeof opt.default === 'string' ? opt.default : (opt.choices?.[0] ?? ''));
     } else {
       config[opt.name] = typeof raw === 'string' ? raw : '';
     }
@@ -476,6 +527,16 @@ function onKeydown(event: KeyboardEvent) {
               class="w-full rounded-sm border border-border-muted bg-surface-1 px-2.5 py-1.5 font-mono text-sm text-ink focus:border-accent focus:outline-none"
               :data-testid="`recipe-config-string-${opt.name}`"
             />
+            <select
+              v-else-if="opt.kind === 'enum'"
+              v-model="configValues[opt.name] as string"
+              class="w-full rounded-sm border border-border-muted bg-surface-1 px-2.5 py-1.5 font-mono text-sm text-ink focus:border-accent focus:outline-none"
+              :data-testid="`recipe-config-enum-${opt.name}`"
+            >
+              <option v-for="choice in opt.choices ?? []" :key="choice" :value="choice">
+                {{ choice }}
+              </option>
+            </select>
             <label
               v-else-if="opt.kind === 'boolean'"
               class="inline-flex items-center gap-2 cursor-pointer select-none"

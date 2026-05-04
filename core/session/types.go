@@ -3,6 +3,7 @@ package session
 import (
 	"time"
 
+	"github.com/sigil-tech/kaneaz-harness/core/autonomy"
 	"github.com/sigil-tech/kaneaz-harness/core/llm"
 )
 
@@ -37,6 +38,31 @@ type Record struct {
 	// (no project). The pointer matches the SQL column's nullability so
 	// readers can distinguish "no project" from "project with empty id".
 	ProjectID *string
+	// AutoTitled is true when the auto-titling engine has written a
+	// generated title to this session, or when a user has manually
+	// renamed it (locking out further auto-titling).
+	// Populated by migration 0311 (session-auto-titling-01KQ8TDS WP01).
+	AutoTitled bool
+
+	// BranchAdvisorDismissed is set when the user clicks "Don't suggest
+	// again" in the branch-advisor banner (FR-010). When true, the
+	// backend skips running the detector for this session regardless of
+	// the project-level setting (resolution order step 4). Persisted
+	// in the sessions table via migration 0311.
+	BranchAdvisorDismissed bool
+
+	// AutonomyLevel is this session's tier override (autonomy-dial-01KR3M2A
+	// WP02). nil means "inherit from the upstream layer" (project →
+	// global → tier-default). Persisted in sessions.autonomy_level via
+	// migration 0316. The autonomy.Layer for the session is reconstructed
+	// from (AutonomyLevel, AutonomyOverrides) by the autonomy resolver.
+	AutonomyLevel *autonomy.Tier `json:"autonomyLevel,omitempty"`
+	// AutonomyOverrides are the per-knob overrides this session pinned.
+	// Empty / nil means "no overrides at this layer." Persisted as a
+	// JSON blob in sessions.autonomy_overrides via migration 0316. The
+	// map key is the canonical autonomy.Knob name (matches the wire
+	// shape produced by autonomy.Layer.MarshalJSON).
+	AutonomyOverrides map[autonomy.Knob]any `json:"autonomyOverrides,omitempty"`
 }
 
 // ContextKind values for Record.ContextKind. Validated at the manager
@@ -106,4 +132,25 @@ type Message struct {
 	// rows; non-NULL rows are excluded from the default scrollback fetch
 	// (Sessions.ListMessagesActive).
 	ArchivedAt *time.Time
+
+	// StreamingFailedAt is the unix-nanos moment the chat runner decided
+	// the LLM stream was lost mid-turn and persisted the partial assistant
+	// row (long-turn-resilience-01KR3PRS WP03). NULL on every healthy
+	// assistant row. Populated by migration 0317.
+	StreamingFailedAt *time.Time
+	// StreamingFailureKind is the classification of the drop:
+	// "transient" (network blip / 5xx after retry exhaustion), "auth"
+	// (401/403 mid-flight), or "unknown" (everything else). Empty on
+	// healthy rows.
+	StreamingFailureKind string
+	// StreamingRecoverable is true when no tool_use block executed before
+	// the drop, so a continuation prompt is safe to issue. False when
+	// tool calls already ran — the user must re-issue the request.
+	// Carries no meaning when StreamingFailedAt is nil.
+	StreamingRecoverable bool
+	// ContinuationOf is the id of the partial assistant row that this row
+	// continues. Empty on every original assistant row; populated only on
+	// the continuation row written by Sessions_ResumeMessage so the
+	// frontend can grey out the original and stitch the bubbles together.
+	ContinuationOf string
 }

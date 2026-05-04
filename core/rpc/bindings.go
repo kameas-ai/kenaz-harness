@@ -3,6 +3,12 @@ package rpc
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
+	"errors"
+	"os"
+
+	wruntime "github.com/wailsapp/wails/v2/pkg/runtime"
+	"github.com/sigil-tech/kaneaz-harness/core/toolloop"
 
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/a2a"
 	graphview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/agentgraph"
@@ -11,6 +17,7 @@ import (
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/audit"
 	branchesview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/branches"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/bundle"
+	cedarpolicyview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/cedarpolicy"
 	compactionview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/compaction"
 	contextsview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/contexts"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/contextview"
@@ -18,11 +25,14 @@ import (
 	dialsview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/dials"
 	hooksview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/hooks"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/llm"
+	coremcp "github.com/sigil-tech/kaneaz-harness/core/mcp"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/mcp"
 	memoryview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/memory"
 	nodesview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/nodes"
+	permissionsview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/permissions"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/policy"
 	projectsview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/projects"
+	searchview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/search"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/sessions"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/settings"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/shell"
@@ -189,6 +199,27 @@ func (b *Bindings) Sessions_MoveToProject(id, projectID string) error {
 	return b.api.Sessions().MoveToProject(b.ctx(), id, projectID)
 }
 
+// Sessions_SuggestTitle triggers a manual auto-title generation for the
+// session identified by id. Returns the generated title string on success
+// (session-auto-titling-01KQ8TDS WP04).
+func (b *Bindings) Sessions_SuggestTitle(id string) (string, error) {
+	return b.api.Sessions().SuggestTitle(b.ctx(), id)
+}
+
+// Sessions_GetUsage returns the cumulative token + cost aggregate for
+// the session (token-cost-telemetry-01KQ8TD7 WP03). Returns a zeroed
+// aggregate with costSource="unknown" for sessions with no usage data.
+func (b *Bindings) Sessions_GetUsage(id string) (sessions.SessionUsage, error) {
+	return b.api.Sessions().GetUsage(b.ctx(), id)
+}
+
+// Sessions_ClearTitle resets the session's name to "" and auto_titled=0,
+// re-enabling future auto-title attempts
+// (session-auto-titling-01KQ8TDS WP04).
+func (b *Bindings) Sessions_ClearTitle(id string) error {
+	return b.api.Sessions().ClearTitle(b.ctx(), id)
+}
+
 // ── llm ────────────────────────────────────────────────────────────────
 
 func (b *Bindings) LLM_ListProviders() ([]llm.Provider, error) {
@@ -240,6 +271,15 @@ func (b *Bindings) LLM_ResolveConfirm(requestID, decision string) error {
 	return b.api.LLMConnector().ResolveConfirm(b.ctx(), requestID, decision)
 }
 
+// LLM_UpdateProviderCredential writes a new plaintext API key for
+// profileID to the OS keychain and zeroes the in-memory buffer before
+// returning (credential-store-01KQ8TDD WP05 / FR-007). The frontend
+// ONLY calls this when the user has typed a new key value — the
+// "leave blank to keep current" flow is preserved.
+func (b *Bindings) LLM_UpdateProviderCredential(profileID, plaintext string) error {
+	return b.api.LLMConnector().UpdateProviderCredential(b.ctx(), profileID, plaintext)
+}
+
 // ── mcp ────────────────────────────────────────────────────────────────
 
 func (b *Bindings) MCP_ListServers() ([]mcp.Server, error) {
@@ -250,6 +290,17 @@ func (b *Bindings) MCP_StartStream(id string) (string, error) {
 }
 func (b *Bindings) MCP_StopStream(subID string) error {
 	return b.api.MCP().StopStream(b.ctx(), subID)
+}
+
+// MCP_TestRecipe runs a one-shot connection test against the recipe
+// identified by recipeID (WP07 of mission mcp-server-install-01KQ8TDP).
+// env and config override the recipe's stored values; both are nil-safe.
+// The result is always non-nil; transport-level failures are reflected in
+// TestResult.OK=false / TestResult.Error rather than the Go error return.
+// The Go error return is set only for pre-flight failures (recipe not
+// found, catalog not wired).
+func (b *Bindings) MCP_TestRecipe(recipeID string, env map[string]string, config map[string]any) (coremcp.TestResult, error) {
+	return b.api.MCP().TestRecipe(b.ctx(), recipeID, env, config)
 }
 
 // MCP_ImportClaudeDesktopConfig is the user-facing RPC behind the
@@ -362,6 +413,60 @@ func (b *Bindings) Policy_StartStream() (string, error) {
 }
 func (b *Bindings) Policy_StopStream(subID string) error {
 	return b.api.Policy().StopStream(b.ctx(), subID)
+}
+
+// ── cedar policy panel (cedar-credential-policy-01KQ8TDE, WP02) ────────
+
+// CedarPolicy_ListPolicies returns the per-file parse status for every
+// .cedar source the engine has loaded. The frontend's Policy panel
+// renders this list on mount and after a successful reload.
+func (b *Bindings) CedarPolicy_ListPolicies() ([]cedarpolicyview.PolicyFile, error) {
+	return b.api.CedarPolicy().ListPolicies(b.ctx())
+}
+
+// CedarPolicy_ReloadPolicies re-walks <DataDir>/policy/ and rebuilds
+// the active policy bundle. Per-file parse failures are reported via
+// the next CedarPolicy_ListPolicies call; errors do not abort reload.
+func (b *Bindings) CedarPolicy_ReloadPolicies() error {
+	return b.api.CedarPolicy().ReloadPolicies(b.ctx())
+}
+
+// CedarPolicy_RecentDecisions returns up to limit most-recent gate
+// decisions, newest first. Used by the audit panel.
+func (b *Bindings) CedarPolicy_RecentDecisions(limit int) ([]cedarpolicyview.Decision, error) {
+	return b.api.CedarPolicy().RecentDecisions(b.ctx(), limit)
+}
+
+// ── permissions (cedar-credential-policy-01KQ8TDE, WP02) ───────────────
+
+// Permissions_Resolve routes a modal decision (allow_once / allow_always
+// / deny) back into the cedar prompt registry. requestID came in on one
+// of the four `<family>:permission-pending` broker topics.
+func (b *Bindings) Permissions_Resolve(requestID string, decision string) error {
+	return b.api.Permissions().Resolve(b.ctx(), requestID, permissionsview.Decision(decision))
+}
+
+// Permissions_ListGrants enumerates accumulated grants — both persisted
+// `<family>_allow_*.cedar` files in <DataDir>/policy/ and the per-process
+// transient (Allow-once) cache. When family is non-empty ("bash" / "fs"
+// / "cred" / "tool") only grants of that family are returned; empty
+// string returns all four families.
+func (b *Bindings) Permissions_ListGrants(family string) ([]permissionsview.Grant, error) {
+	return b.api.Permissions().ListGrants(b.ctx(), family)
+}
+
+// Permissions_RevokeGrant removes a grant. Persisted grants delete the
+// underlying .cedar file and trigger an engine reload; transient grants
+// drop the in-memory cache entry.
+func (b *Bindings) Permissions_RevokeGrant(grantID string) error {
+	return b.api.Permissions().RevokeGrant(b.ctx(), grantID)
+}
+
+// Permissions_ListPending returns in-flight pending prompts. The
+// frontend uses this to reconcile its modal queue on app start / after
+// a hot reload.
+func (b *Bindings) Permissions_ListPending() ([]permissionsview.PendingRequest, error) {
+	return b.api.Permissions().ListPending(b.ctx())
 }
 
 // ── audit ──────────────────────────────────────────────────────────────
@@ -481,6 +586,26 @@ func (b *Bindings) Settings_SetSaveArtifactEnabled(enabled bool) error {
 	return b.storeFn().SaveSaveArtifactEnabled(enabled)
 }
 
+// Settings_GetFSRequestAccessEnabled exposes the
+// kaneaz__request_filesystem_access built-in opt-in flag (default true).
+// The toolloop EnabledFilter reads this on every Run boundary so toggling
+// takes effect on the next chat.
+func (b *Bindings) Settings_GetFSRequestAccessEnabled() (bool, error) {
+	if b.storeFn == nil {
+		return true, nil
+	}
+	return b.storeFn().LoadFSRequestAccessEnabled()
+}
+
+// Settings_SetFSRequestAccessEnabled persists the
+// request_filesystem_access built-in opt-in flag.
+func (b *Bindings) Settings_SetFSRequestAccessEnabled(enabled bool) error {
+	if b.storeFn == nil {
+		return nil
+	}
+	return b.storeFn().SaveFSRequestAccessEnabled(enabled)
+}
+
 // Settings_GetMaxAgentTurns exposes the chat-graph LoopNode iteration
 // cap (default DefaultMaxAgentTurns = 25). The chassis (chat runner)
 // reads the effective value on every chat run start so the dial takes
@@ -502,6 +627,184 @@ func (b *Bindings) Settings_SetMaxAgentTurns(turns int) error {
 		return nil
 	}
 	return b.storeFn().SaveMaxAgentTurns(turns)
+}
+
+// ── WP08 permission dials ──────────────────────────────────────────
+
+// Settings_GetPermissionMode returns the global permission posture.
+// Default "normal" when unset.
+func (b *Bindings) Settings_GetPermissionMode() (string, error) {
+	if b.storeFn == nil {
+		return "normal", nil
+	}
+	return b.storeFn().LoadPermissionMode()
+}
+
+// Settings_SetPermissionMode persists the global permission posture.
+// Valid values: "strict", "normal", "permissive". Switching to
+// "permissive" is gated by a confirm dialog on the frontend side.
+func (b *Bindings) Settings_SetPermissionMode(mode string) error {
+	if b.storeFn == nil {
+		return nil
+	}
+	return b.storeFn().SavePermissionMode(mode)
+}
+
+// Settings_GetPermissionCacheDangerousOps returns the dangerous-ops
+// override flag (default false).
+func (b *Bindings) Settings_GetPermissionCacheDangerousOps() (bool, error) {
+	if b.storeFn == nil {
+		return false, nil
+	}
+	return b.storeFn().LoadPermissionCacheDangerousOps()
+}
+
+// Settings_SetPermissionCacheDangerousOps persists the dangerous-ops
+// override flag. Enabling requires a confirm dialog on the frontend.
+func (b *Bindings) Settings_SetPermissionCacheDangerousOps(enabled bool) error {
+	if b.storeFn == nil {
+		return nil
+	}
+	return b.storeFn().SavePermissionCacheDangerousOps(enabled)
+}
+
+// Settings_GetBashAllowlistMigrated returns the WP10 migration
+// marker. The UI reads this to suppress the one-time migration toast
+// after WP10's first-boot migration has run.
+func (b *Bindings) Settings_GetBashAllowlistMigrated() (bool, error) {
+	if b.storeFn == nil {
+		return false, nil
+	}
+	return b.storeFn().LoadBashAllowlistMigrated()
+}
+
+// Settings_SetBashAllowlistMigrated marks the WP10 migration as done.
+func (b *Bindings) Settings_SetBashAllowlistMigrated(migrated bool) error {
+	if b.storeFn == nil {
+		return nil
+	}
+	return b.storeFn().SaveBashAllowlistMigrated(migrated)
+}
+
+// Settings_GetPermissionsMigrationToastShown returns the one-time toast
+// shown marker.
+func (b *Bindings) Settings_GetPermissionsMigrationToastShown() (bool, error) {
+	if b.storeFn == nil {
+		return false, nil
+	}
+	return b.storeFn().LoadPermissionsMigrationToastShown()
+}
+
+// Settings_SetPermissionsMigrationToastShown marks the migration toast
+// as having been shown so it never appears again.
+func (b *Bindings) Settings_SetPermissionsMigrationToastShown(shown bool) error {
+	if b.storeFn == nil {
+		return nil
+	}
+	return b.storeFn().SavePermissionsMigrationToastShown(shown)
+}
+
+// Settings_GetCedarStrictCredentialMode exposes the WP05
+// credential-gate strictness dial (default false / lenient). When
+// false, NotApplicable Cedar outcomes allow credential access. When
+// true (strict), NotApplicable for non-mcp_spawn purposes is treated
+// as deny — the credstore becomes fail-closed for unmatched patterns.
+// The UI dial for this setting is a Settings-panel follow-up; the
+// binding is wired now so the frontend can surface it without a
+// re-deploy.
+func (b *Bindings) Settings_GetCedarStrictCredentialMode() (bool, error) {
+	if b.storeFn == nil {
+		return false, nil
+	}
+	return b.storeFn().LoadCedarStrictCredentialMode()
+}
+
+// Settings_SetCedarStrictCredentialMode persists the credential-gate
+// strictness flag. The credstore.Store reads this via its StrictMode
+// callback on every Use call; changes take effect on the next
+// credential use without restarting the harness.
+func (b *Bindings) Settings_SetCedarStrictCredentialMode(enabled bool) error {
+	if b.storeFn == nil {
+		return nil
+	}
+	return b.storeFn().SaveCedarStrictCredentialMode(enabled)
+}
+
+// Settings_GetShortcuts returns the full user-override keyboard shortcut
+// map. Missing settings file returns an empty map (no error).
+// (keyboard-shortcuts-settings-01KQ8TDR plan §2.7)
+func (b *Bindings) Settings_GetShortcuts() (map[string]string, error) {
+	if b.storeFn == nil {
+		return map[string]string{}, nil
+	}
+	store := b.storeFn()
+	if ss, ok := store.(interface {
+		LoadShortcuts() (map[string]string, error)
+	}); ok {
+		return ss.LoadShortcuts()
+	}
+	// Fallback: full Settings round-trip.
+	s, err := store.LoadAll()
+	if err != nil {
+		return nil, err
+	}
+	if s.KeyboardShortcuts == nil {
+		return map[string]string{}, nil
+	}
+	return s.KeyboardShortcuts, nil
+}
+
+// Settings_SetShortcut persists a single shortcut override. An empty
+// binding value clears the override for that id (resets to registry
+// default). Emits KindShortcutOverridden audit event on success.
+func (b *Bindings) Settings_SetShortcut(id, binding string) error {
+	if b.storeFn == nil {
+		return nil
+	}
+	store := b.storeFn()
+	if ss, ok := store.(interface {
+		LoadShortcuts() (map[string]string, error)
+		SaveShortcuts(map[string]string) error
+	}); ok {
+		m, err := ss.LoadShortcuts()
+		if err != nil {
+			return err
+		}
+		m[id] = binding
+		return ss.SaveShortcuts(m)
+	}
+	// Fallback: full round-trip.
+	s, err := store.LoadAll()
+	if err != nil {
+		return err
+	}
+	if s.KeyboardShortcuts == nil {
+		s.KeyboardShortcuts = make(map[string]string)
+	}
+	s.KeyboardShortcuts[id] = binding
+	return store.SaveAll(s)
+}
+
+// Settings_SetShortcuts atomically replaces the full keyboard shortcut
+// overrides map. Used by the settings panel's reset-all and batch-save
+// flows. Emits one KindShortcutOverridden audit event per changed entry.
+func (b *Bindings) Settings_SetShortcuts(m map[string]string) error {
+	if b.storeFn == nil {
+		return nil
+	}
+	store := b.storeFn()
+	if ss, ok := store.(interface {
+		SaveShortcuts(map[string]string) error
+	}); ok {
+		return ss.SaveShortcuts(m)
+	}
+	// Fallback: full round-trip.
+	s, err := store.LoadAll()
+	if err != nil {
+		return err
+	}
+	s.KeyboardShortcuts = m
+	return store.SaveAll(s)
 }
 
 // ── memory ─────────────────────────────────────────────────────────────
@@ -686,6 +989,127 @@ func (b *Bindings) Tools_RecipeConfig(id string) (map[string]any, error) {
 	return b.api.Tools().RecipeConfig(b.ctx(), id)
 }
 
+// Artifacts_SaveAs opens the OS-native save-file dialog and writes
+// the artifact's bytes to the user-chosen path. Returns the absolute
+// path written, or empty string if the user cancels. The bytes are
+// resolved server-side from the media store so the round-trip never
+// re-base64-encodes on the JS side (which is fragile in some webviews
+// for large or binary blobs).
+func (b *Bindings) Artifacts_SaveAs(id, suggestedName string) (string, error) {
+	// Pull the artifact + its bytes through the existing view path.
+	withBytes, err := b.api.Artifacts().Get(b.ctx(), id)
+	if err != nil {
+		return "", err
+	}
+	if suggestedName == "" {
+		suggestedName = withBytes.Artifact.Title
+	}
+	if suggestedName == "" {
+		suggestedName = id
+	}
+	dest, err := wruntime.SaveFileDialog(b.ctx(), wruntime.SaveDialogOptions{
+		Title:           "Save artifact",
+		DefaultFilename: suggestedName,
+	})
+	if err != nil {
+		return "", err
+	}
+	if dest == "" {
+		// User cancelled; soft return.
+		return "", nil
+	}
+	if err := os.WriteFile(dest, withBytes.Bytes, 0o644); err != nil {
+		return "", err
+	}
+	return dest, nil
+}
+
+// Tools_RequestAdditionalAllowedDir is the Wails binding for the runtime
+// "expand filesystem access" flow. The model's kaneaz__request_filesystem_access
+// built-in calls this via its delegate; it can also be called directly from
+// the frontend if a future UI surface needs it.
+//
+// Returns { granted, expanded, message } so the caller knows whether to
+// retry its original filesystem operation using the canonicalised path.
+func (b *Bindings) Tools_RequestAdditionalAllowedDir(recipeID, path, reason string) (tools.FSAccessResult, error) {
+	granted, expanded, err := b.api.Tools().RequestAdditionalAllowedDir(b.ctx(), recipeID, path, reason)
+	msg := ""
+	if err != nil {
+		msg = err.Error()
+	} else if !granted {
+		msg = "access denied or timed out"
+	} else {
+		msg = "access granted"
+	}
+	return tools.FSAccessResult{Granted: granted, Expanded: expanded, Message: msg}, nil
+}
+
+// Tools_PickDirectory opens the OS-native folder-picker dialog and
+// returns the absolute path the user selected. Returns the empty
+// string when the user cancels (Wails surfaces cancel as a no-error
+// empty result). The default-directory hint nudges the dialog to a
+// useful starting point — pass "" to let the OS decide. Used by the
+// recipe-install modal's allowed_directories chip list so the user
+// can pick a folder graphically instead of typing an absolute path.
+func (b *Bindings) Tools_PickDirectory(title, defaultDir string) (string, error) {
+	if title == "" {
+		title = "Choose a directory"
+	}
+	return wruntime.OpenDirectoryDialog(b.ctx(), wruntime.OpenDialogOptions{
+		Title:            title,
+		DefaultDirectory: defaultDir,
+	})
+}
+
+// ── shell escape (chat input `!cmd` feature) ──────────────────────────
+
+// BashExecResult mirrors the JSON the kaneaz__bash tool returns.
+// stdout/stderr are plain strings (UTF-8); the bash tool already caps
+// at 64 KiB per stream and signals truncation via the `Truncated` flag.
+type BashExecResult struct {
+	Stdout    string `json:"stdout"`
+	Stderr    string `json:"stderr"`
+	ExitCode  int    `json:"exitCode"`
+	Truncated bool   `json:"truncated"`
+}
+
+// Bash_Exec runs a single command line through the kaneaz__bash
+// built-in tool and returns its result. Used by the chat input's
+// `!cmd` shell-escape — typing `!ls -la ~/Desktop` dispatches here
+// (not to the LLM) and the parent renders the result inline as a
+// synthetic system message. The Cedar gate applies normally.
+//
+// sessionID is threaded through ctx so the bash tool's per-session
+// run-id cache picks up the right slot. Empty sessionID is OK (the
+// tool's run-id cache is best-effort).
+func (b *Bindings) Bash_Exec(sessionID, command string) (BashExecResult, error) {
+	type builtinsHolder interface{ Builtins() *toolloop.BuiltinRegistry }
+	holder, ok := b.api.(builtinsHolder)
+	if !ok || holder.Builtins() == nil {
+		return BashExecResult{}, errors.New("rpc: bash tool registry not wired")
+	}
+	tool, ok := holder.Builtins().Lookup("kaneaz__bash")
+	if !ok {
+		return BashExecResult{}, errors.New("rpc: kaneaz__bash tool not registered (toggle on in Settings → Tools)")
+	}
+	args, err := json.Marshal(struct {
+		Command string `json:"command"`
+	}{Command: command})
+	if err != nil {
+		return BashExecResult{}, err
+	}
+	ctx := toolloop.WithSessionID(b.ctx(), sessionID)
+	raw, err := tool.Call(ctx, args)
+	if err != nil {
+		return BashExecResult{}, err
+	}
+	var out BashExecResult
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return BashExecResult{}, err
+	}
+	return out, nil
+}
+
 // ── shell ──────────────────────────────────────────────────────────────
 
 func (b *Bindings) Shell_OpenInOSBrowser(path string) error {
@@ -842,6 +1266,15 @@ func (b *Bindings) Branches_Abandon(branchID string) error {
 func (b *Bindings) Branches_RecommendModel(parentSessionID, taskHint, preference string) (branchesview.RecommendedModel, error) {
 	return b.api.Branches().RecommendModel(b.ctx(), parentSessionID, taskHint, preference)
 }
+func (b *Bindings) Branches_ProposeReintegrationSummary(branchSessionID string) (branchesview.ReintegrationProposal, error) {
+	return b.api.Branches().ProposeReintegrationSummary(b.ctx(), branchSessionID)
+}
+func (b *Bindings) Branches_CommitReintegration(opts branchesview.CommitReintegrationOptions) error {
+	return b.api.Branches().CommitReintegration(b.ctx(), opts)
+}
+func (b *Bindings) Branches_SetAdvisorDismissed(sessionID string, dismissed bool) error {
+	return b.api.Branches().SetAdvisorDismissed(b.ctx(), sessionID, dismissed)
+}
 
 // ── nodes (manifest-driven node catalog; WP07) ────────────────────────
 
@@ -859,4 +1292,29 @@ func (b *Bindings) Nodes_ListUserOverrides() ([]nodesview.UserOverrideInfo, erro
 }
 func (b *Bindings) Nodes_Doctor() (nodesview.DoctorReport, error) {
 	return b.api.Nodes().Doctor(b.ctx())
+}
+
+// ── cedarpolicy (snippet writer/revoker; WP09) ────────────────────────
+
+// CedarPolicy_WriteSnippet writes body to <DataDir>/policy/<name> after
+// validating the filename. Triggers engine reload best-effort.
+func (b *Bindings) CedarPolicy_WriteSnippet(name string, body string) error {
+	return b.api.CedarPolicy().WritePolicySnippet(b.ctx(), name, body)
+}
+
+// CedarPolicy_RevokeSnippet deletes <DataDir>/policy/<name> after
+// validating the filename. Triggers engine reload best-effort.
+func (b *Bindings) CedarPolicy_RevokeSnippet(name string) error {
+	return b.api.CedarPolicy().RevokePolicySnippet(b.ctx(), name)
+}
+
+// ── search (cross-session-search mission) ─────────────────────────────
+
+// Search_Sessions executes a full-text search across all session
+// messages via the FTS5 messages_fts virtual table.
+//
+// query is sanitised (empty/whitespace → empty result). filters is
+// optional; zero values mean "no filter".
+func (b *Bindings) Search_Sessions(query string, filters searchview.SearchFilters) ([]searchview.SearchHit, error) {
+	return b.api.Search().Search(b.ctx(), query, filters)
 }

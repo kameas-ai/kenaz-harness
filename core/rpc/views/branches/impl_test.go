@@ -3,6 +3,7 @@ package branches
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -200,5 +201,205 @@ func TestAPI_InvalidArgs(t *testing.T) {
 	}
 	if _, err := api.CreateBranch(ctx, CreateBranchOptions{}); !errors.Is(err, ErrInvalidArg) {
 		t.Errorf("CreateBranch empty parent: got %v", err)
+	}
+}
+
+// ── WP04: CreateBranch subagent enrichment ───────────────────────────────
+
+func TestAPI_CreateBranch_SubagentEnrichment(t *testing.T) {
+	t.Parallel()
+	api, sessMgr, convMgr := newTestStack(t)
+	ctx := context.Background()
+	parent, _ := sessMgr.Create(ctx, "trunk")
+	br, err := api.CreateBranch(ctx, CreateBranchOptions{
+		ParentSessionID:   parent.ID,
+		Title:             "Parallel task",
+		RecommendationID:  "rec-abc123",
+		AdvisorSignals:    []string{"can_you_also", "while_youre_at_it"},
+		AdvisorConfidence: 0.91,
+	})
+	if err != nil {
+		t.Fatalf("CreateBranch: %v", err)
+	}
+	if !br.SubagentBranch {
+		t.Error("SubagentBranch = false, want true")
+	}
+	if br.RecommendationID != "rec-abc123" {
+		t.Errorf("RecommendationID = %q, want rec-abc123", br.RecommendationID)
+	}
+	if len(br.AdvisorSignals) != 2 {
+		t.Errorf("AdvisorSignals len = %d, want 2", len(br.AdvisorSignals))
+	}
+	// Verify the row was persisted with subagent metadata.
+	row, err := convMgr.Get(ctx, br.ID)
+	if err != nil {
+		t.Fatalf("Get branch: %v", err)
+	}
+	if !row.SubagentBranch {
+		t.Error("persisted SubagentBranch = false, want true")
+	}
+}
+
+// ── WP04: SetAdvisorDismissed ────────────────────────────────────────────
+
+func TestAPI_SetAdvisorDismissed(t *testing.T) {
+	t.Parallel()
+	api, sessMgr, _ := newTestStack(t)
+	ctx := context.Background()
+	sess, _ := sessMgr.Create(ctx, "my-session")
+	if err := api.SetAdvisorDismissed(ctx, sess.ID, true); err != nil {
+		t.Fatalf("SetAdvisorDismissed: %v", err)
+	}
+	// Verify the store has the dismissed flag.
+	rec, err := sessMgr.Get(ctx, sess.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if !rec.BranchAdvisorDismissed {
+		t.Error("BranchAdvisorDismissed = false, want true")
+	}
+	// Unset it.
+	if err := api.SetAdvisorDismissed(ctx, sess.ID, false); err != nil {
+		t.Fatalf("SetAdvisorDismissed(false): %v", err)
+	}
+	rec2, _ := sessMgr.Get(ctx, sess.ID)
+	if rec2.BranchAdvisorDismissed {
+		t.Error("BranchAdvisorDismissed = true after unset, want false")
+	}
+}
+
+func TestAPI_SetAdvisorDismissed_EmptyID(t *testing.T) {
+	t.Parallel()
+	api, _, _ := newTestStack(t)
+	if err := api.SetAdvisorDismissed(context.Background(), "", true); !errors.Is(err, ErrInvalidArg) {
+		t.Errorf("got %v, want ErrInvalidArg", err)
+	}
+}
+
+// ── WP05: ProposeReintegrationSummary ───────────────────────────────────
+
+func TestAPI_ProposeReintegrationSummary_HappyPath(t *testing.T) {
+	t.Parallel()
+	api, sessMgr, _ := newTestStack(t)
+	ctx := context.Background()
+	parent, _ := sessMgr.Create(ctx, "trunk")
+	br, _ := api.CreateBranch(ctx, CreateBranchOptions{
+		ParentSessionID: parent.ID, Title: "side",
+	})
+	// Add some assistant messages on the child branch.
+	_, _ = sessMgr.AppendMessage(ctx, br.ChildSessionID, session.Message{Role: session.RoleUser, Content: "user turn"})
+	_, _ = sessMgr.AppendMessage(ctx, br.ChildSessionID, session.Message{Role: session.RoleAssistant, Content: "assistant turn one"})
+	_, _ = sessMgr.AppendMessage(ctx, br.ChildSessionID, session.Message{Role: session.RoleAssistant, Content: "assistant turn two"})
+
+	prop, err := api.ProposeReintegrationSummary(ctx, br.ChildSessionID)
+	if err != nil {
+		t.Fatalf("ProposeReintegrationSummary: %v", err)
+	}
+	if prop.ProposedSummary == "" {
+		t.Error("ProposedSummary = empty, want non-empty")
+	}
+	if prop.TokenCount <= 0 {
+		t.Errorf("TokenCount = %d, want > 0", prop.TokenCount)
+	}
+	if prop.Model != "rule_based" {
+		t.Errorf("Model = %q, want rule_based", prop.Model)
+	}
+}
+
+func TestAPI_ProposeReintegrationSummary_EmptyBranch(t *testing.T) {
+	t.Parallel()
+	api, sessMgr, _ := newTestStack(t)
+	ctx := context.Background()
+	parent, _ := sessMgr.Create(ctx, "trunk")
+	br, _ := api.CreateBranch(ctx, CreateBranchOptions{
+		ParentSessionID: parent.ID, Title: "empty-branch",
+	})
+	// Branch has only the handoff user message — no assistant turns.
+	prop, err := api.ProposeReintegrationSummary(ctx, br.ChildSessionID)
+	if err != nil {
+		t.Fatalf("ProposeReintegrationSummary: %v", err)
+	}
+	if prop.ProposedSummary != "" {
+		t.Errorf("ProposedSummary = %q, want empty for no-assistant-turns case", prop.ProposedSummary)
+	}
+}
+
+func TestAPI_ProposeReintegrationSummary_EmptyID(t *testing.T) {
+	t.Parallel()
+	api, _, _ := newTestStack(t)
+	if _, err := api.ProposeReintegrationSummary(context.Background(), ""); !errors.Is(err, ErrInvalidArg) {
+		t.Errorf("got %v, want ErrInvalidArg", err)
+	}
+}
+
+// ── WP07: CommitReintegration ────────────────────────────────────────────
+
+func TestAPI_CommitReintegration_HappyPath(t *testing.T) {
+	t.Parallel()
+	api, sessMgr, _ := newTestStack(t)
+	ctx := context.Background()
+	parent, _ := sessMgr.Create(ctx, "trunk")
+	br, _ := api.CreateBranch(ctx, CreateBranchOptions{
+		ParentSessionID: parent.ID, Title: "side-work",
+	})
+	_, _ = sessMgr.AppendMessage(ctx, br.ChildSessionID, session.Message{
+		Role: session.RoleAssistant, Content: "Here is what I did on the side task.",
+	})
+
+	err := api.CommitReintegration(ctx, CommitReintegrationOptions{
+		BranchSessionID:  br.ChildSessionID,
+		FinalSummaryText: "The side task was completed successfully. Endpoint deployed.",
+		WasEdited:        true,
+	})
+	if err != nil {
+		t.Fatalf("CommitReintegration: %v", err)
+	}
+
+	// Branch should be merged.
+	st, _ := api.GetBranchStatus(ctx, br.ID)
+	if st.Branch.Status != "merged" {
+		t.Errorf("status = %q, want merged", st.Branch.Status)
+	}
+
+	// Parent should have a system message with the summary.
+	msgs, _ := sessMgr.ListMessages(ctx, parent.ID)
+	var found bool
+	for _, m := range msgs {
+		if m.Role == session.RoleSystem && strings.Contains(m.Content, "The side task was completed") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("parent missing system message with committed summary")
+	}
+}
+
+func TestAPI_CommitReintegration_EmptyID(t *testing.T) {
+	t.Parallel()
+	api, _, _ := newTestStack(t)
+	err := api.CommitReintegration(context.Background(), CommitReintegrationOptions{
+		BranchSessionID:  "",
+		FinalSummaryText: "summary",
+	})
+	if !errors.Is(err, ErrInvalidArg) {
+		t.Errorf("got %v, want ErrInvalidArg", err)
+	}
+}
+
+func TestAPI_CommitReintegration_EmptySummary(t *testing.T) {
+	t.Parallel()
+	api, sessMgr, _ := newTestStack(t)
+	ctx := context.Background()
+	parent, _ := sessMgr.Create(ctx, "trunk")
+	br, _ := api.CreateBranch(ctx, CreateBranchOptions{
+		ParentSessionID: parent.ID, Title: "side",
+	})
+	err := api.CommitReintegration(ctx, CommitReintegrationOptions{
+		BranchSessionID:  br.ChildSessionID,
+		FinalSummaryText: "   ",
+	})
+	if err == nil {
+		t.Error("expected error for empty summary, got nil")
 	}
 }

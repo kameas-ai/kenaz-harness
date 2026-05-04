@@ -13,6 +13,7 @@
 import { computed, onMounted, ref } from 'vue';
 import CanvasHead from '@/shell/CanvasHead.vue';
 import SettingsTabs from '@/views/settings/SettingsTabs.vue';
+import KeyboardShortcuts from '@/components/settings/KeyboardShortcuts.vue';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
 import { debouncedSave } from '@/lib/settings';
 import { Plus } from '@/shell/icons';
@@ -134,6 +135,28 @@ const globalAttachmentsLoading = ref(false);
 const globalPickerOpen = ref(false);
 const draggedId = ref<string | null>(null);
 
+// WP05: auto-title toggle
+const autoTitleEnabled = ref(true);
+
+async function loadAutoTitleEnabled() {
+  try {
+    autoTitleEnabled.value = await client.settings.getAutoTitleEnabled();
+  } catch {
+    // Graceful fallback: the Go binding may not exist yet; default true.
+    autoTitleEnabled.value = true;
+  }
+}
+
+async function toggleAutoTitleEnabled() {
+  const next = !autoTitleEnabled.value;
+  autoTitleEnabled.value = next;
+  try {
+    await client.settings.setAutoTitleEnabled(next);
+  } catch {
+    autoTitleEnabled.value = !next;
+  }
+}
+
 async function refresh() {
   try {
     settings.value = await client.settings.get();
@@ -174,6 +197,7 @@ async function refresh() {
     compactionProviders.value = [];
   }
   await loadGlobalAttachments();
+  await loadAutoTitleEnabled();
 }
 
 function setCompactionTier(t: CompactionAggressiveness) {
@@ -401,6 +425,27 @@ onMounted(() => {
         </label>
         <p class="mt-1 text-[11px] text-ink-muted">
           Last route: <span class="font-mono">{{ settings.lastRoute }}</span>
+        </p>
+      </section>
+
+      <section data-testid="auto-title-section">
+        <h2 class="font-ui text-[11px] uppercase tracking-[0.18em] text-ink-subtle">
+          Sessions
+        </h2>
+        <label class="mt-2 flex items-center gap-3 font-ui text-[12px] text-ink">
+          <input
+            type="checkbox"
+            class="accent-accent"
+            :checked="autoTitleEnabled"
+            data-testid="auto-title-toggle"
+            @change="toggleAutoTitleEnabled"
+          />
+          Auto-title new sessions using the active model
+        </label>
+        <p class="mt-1 text-[11px] text-ink-muted">
+          When on, the harness asks the model to generate a short title for
+          each new session after the first exchange. You can override or
+          clear it at any time.
         </p>
       </section>
 
@@ -682,6 +727,9 @@ onMounted(() => {
           No global context yet. Pick a file from the library to attach.
         </p>
       </section>
+
+      <!-- Keyboard shortcuts (keyboard-shortcuts-settings-01KQ8TDR) -->
+      <KeyboardShortcuts />
 
       <section v-if="appInfo">
         <h2 class="font-ui text-[11px] uppercase tracking-[0.18em] text-ink-subtle">

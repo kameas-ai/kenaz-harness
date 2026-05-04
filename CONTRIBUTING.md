@@ -75,6 +75,33 @@ go generate ./core/agentgraph/...
 Then commit both the manifest and the regenerated `core/agentgraph/{attrs,wire}_gen.go`.
 CI runs `scripts/ci/check-codegen.sh` and fails on drift.
 
+## Credential Hygiene
+
+Never pass raw API keys or credential bytes through RPC or handler layers. The
+project enforces this with `scripts/ci/check-no-cred-bytes-in-rpc.sh`, which
+runs before `golangci-lint` on every PR and fails the build if either condition
+is violated:
+
+1. **`cred []byte` in non-credstore packages** — the pattern `cred []byte` is
+   reserved for `core/credstore/` (the canonical credential store),
+   `core/secrets/` (opaque secret primitives), and the pre-existing
+   `core/llm/` adapter boundary (being migrated by the `credential-store`
+   mission). Everywhere else, pass credentials via `credstore.Use` or
+   `credstore.RoundTrip` — helpers provided by `core/credstore/`. These keep
+   secrets opaque and never let the raw bytes escape into logs or RPC payloads.
+
+2. **Hard-coded API key literals** — literals matching `sk-ant-[A-Za-z0-9]{16,}`
+   (Anthropic) or `sk-[A-Za-z0-9]{20,}` (OpenAI-style) outside test files,
+   `testdata/`, `vendor/`, or `kitty-specs/` fail the check. Load credentials
+   at runtime from the OS keychain via `credstore.Use`, or from environment
+   variables in local dev.
+
+Run the check locally before pushing:
+
+```bash
+bash scripts/ci/check-no-cred-bytes-in-rpc.sh
+```
+
 ## Areas where help is welcome
 
 - New MCP recipes (`core/mcp/recipes/`)
@@ -94,6 +121,7 @@ CI runs `scripts/ci/check-codegen.sh` and fails on drift.
 - [ ] Frontend tests pass
 - [ ] No new third-party SDKs in `core/` (or carve-out documented in `docs/adr/`)
 - [ ] No imports that violate DIRECTIVE-001
+- [ ] `bash scripts/ci/check-no-cred-bytes-in-rpc.sh` exits 0 (credential hygiene)
 
 ## License
 

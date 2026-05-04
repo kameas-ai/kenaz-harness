@@ -2,6 +2,10 @@ package cedar
 
 import (
 	"context"
+	"errors"
+	"os"
+	"path/filepath"
+	"strings"
 
 	cedar "github.com/cedar-policy/cedar-go"
 )
@@ -199,6 +203,333 @@ func CheckStateWrite(ctx context.Context, g Gate, target string) error {
 		nil,
 	)
 	return enforce(d)
+}
+
+// EvaluateUseTool runs the Cedar engine against the Tool resource family
+// for the given (serverName, toolName) pair and returns the raw Decision.
+// The context attribute map is pre-populated with the tool-family attrs
+// (server_name, tool_name, prompt_on_first_use) before evaluation.
+//
+// This helper is the gate-hook entry point for WP06: callers that need
+// to act differently on Allow / Deny / NotApplicable call this rather
+// than CheckTool so they can inspect the Outcome directly.
+//
+// g may be nil — returns a NotApplicable Decision with reason "no engine".
+// toolName is the bare tool name (without server prefix). serverName is
+// the bare server name. promptOnFirstUse is the recipe-metadata flag
+// (FR-024) — it is injected into context so Cedar policies can inspect it.
+func EvaluateUseTool(
+	ctx context.Context,
+	g Gate,
+	serverName, toolName string,
+	promptOnFirstUse bool,
+) Decision {
+	if g == nil {
+		return Decision{
+			Outcome:  NotApplicable,
+			Action:   ActionUseTool,
+			Resource: PermissionToolUID(serverName + "__" + toolName).String(),
+			Reason:   "no engine (nil gate)",
+		}
+	}
+	fqName := toolName
+	if serverName != "" {
+		fqName = serverName + "__" + toolName
+	}
+	attrs := map[cedar.String]cedar.Value{
+		cedar.String(CtxKeyServerName):       cedar.String(serverName),
+		cedar.String(CtxKeyToolName):         cedar.String(toolName),
+		cedar.String(CtxKeyPromptOnFirstUse): cedar.Boolean(promptOnFirstUse),
+	}
+	return g.Evaluate(ctx, UserUID(), ActionUseTool, PermissionToolUID(fqName), attrs)
+}
+
+// CheckRecipeAdd is the gate-hook helper for AddRecipe / EditRecipe RPC
+// paths (mission mcp-server-install-01KQ8TDP, WP10). recipeID is the
+// canonical recipe identifier; command is Command[0] (first argv element,
+// e.g. "npx", "uvx", "/usr/local/bin/my-server"); transport is "stdio",
+// "http", or "sse".
+//
+// When g is nil the helper returns nil (boot-stage default-allow). Cedar
+// evaluation errors (engine not fully loaded) are also mapped to nil
+// (default-permit) to keep the chassis from blocking on a Cedar bug.
+func CheckRecipeAdd(ctx context.Context, g Gate, recipeID, command, transport string) error {
+	if g == nil {
+		return nil
+	}
+	d := g.Evaluate(
+		ctx,
+		UserUID(),
+		ActionAddRecipe,
+		MCPRecipeUID(recipeID),
+		map[cedar.String]cedar.Value{
+			cedar.String(CtxKeyRecipeID):        cedar.String(recipeID),
+			cedar.String(CtxKeyRecipeCommand):   cedar.String(command),
+			cedar.String(CtxKeyRecipeTransport): cedar.String(transport),
+		},
+	)
+	return enforce(d)
+}
+
+// CheckRecipeSpawn is the gate-hook helper for the pool's OpenOne path
+// (mission mcp-server-install-01KQ8TDP, WP10). recipeID is the canonical
+// recipe identifier; command is Command[0]; transport is "stdio"/"http"/"sse".
+//
+// When g is nil the helper returns nil (boot-stage default-allow). Cedar
+// evaluation errors are mapped to nil (default-permit — best-effort gate).
+func CheckRecipeSpawn(ctx context.Context, g Gate, recipeID, command, transport string) error {
+	if g == nil {
+		return nil
+	}
+	d := g.Evaluate(
+		ctx,
+		UserUID(),
+		ActionSpawnRecipe,
+		MCPRecipeUID(recipeID),
+		map[cedar.String]cedar.Value{
+			cedar.String(CtxKeyRecipeID):        cedar.String(recipeID),
+			cedar.String(CtxKeyRecipeCommand):   cedar.String(command),
+			cedar.String(CtxKeyRecipeTransport): cedar.String(transport),
+		},
+	)
+	return enforce(d)
+}
+
+// CheckCredentialAccess is the gate-hook helper for credstore.Use
+// (mission cedar-credential-policy-01KQ8TDE, WP05). It fires inside
+// Use BEFORE the secret bytes are returned so an explicit Deny always
+// blocks resolution.
+//
+// refID is the credential-provider identifier (e.g. "openai");
+// purpose is the string form of an AccessPurpose (e.g.
+// "provider_call", "manual_export", "mcp_spawn"). The Cedar resource
+// entity is built as Credential::"<refID>::<purpose>" per spec §3.
+//
+// strictMode controls NotApplicable handling:
+//   - false (default / lenient): NotApplicable → nil (allow).
+//   - true (strict): NotApplicable → credstore.ErrCredentialAccessDenied.
+//
+// Nil gate → nil error (default-allow; no engine wired).
+// Evaluation errors on the gate itself → nil (best-effort; only
+// explicit Deny outcomes block).
+func CheckCredentialAccess(ctx context.Context, g Gate, refID, purpose string, strictMode bool) error {
+	if g == nil {
+		return nil
+	}
+	ctxAttrs := map[cedar.String]cedar.Value{
+		cedar.String("purpose"): cedar.String(purpose),
+		cedar.String("ref_id"):  cedar.String(refID),
+	}
+	d := g.Evaluate(
+		ctx,
+		UserUID(),
+		ActionUseCredential,
+		CredentialUID(refID, purpose),
+		ctxAttrs,
+	)
+	switch d.Outcome {
+	case Allow:
+		return nil
+	case Deny:
+		return &PolicyDeniedError{Decision: d}
+	case NotApplicable:
+		if strictMode {
+			return errCredentialAccessDenied
+		}
+		return nil
+	default:
+		return nil
+	}
+}
+
+// GateMCPSpawn is the full WP05 credential gate for MCP spawn. It:
+//
+//  1. Evaluates the Cedar engine with purpose="mcp_spawn" and the
+//     recipe id as the Credential resource UID.
+//  2. Allow → returns nil.
+//  3. Deny → returns *PolicyDeniedError.
+//  4. NotApplicable + registry != nil → fires
+//     Registry.RequestInteractive with a CredPromptSurface
+//     (ProviderID = recipeID, Purpose = "mcp_spawn"). Resolves to
+//     Allow-once / Allow-always → nil; Deny / timeout / overflow →
+//     returns errMCPSpawnDenied.
+//  5. NotApplicable + registry == nil → nil (default-allow; pre-boot
+//     posture so a nil-registry chassis never blocks).
+//
+// When the interactive prompt resolves to DecisionAllowAlways AND
+// dataDir + engine are both non-nil, a persistent Cedar policy snippet
+// is written to <dataDir>/policy/cred_allow_mcp_<sanitized>.cedar so
+// the grant survives a process restart. The engine is then reloaded so
+// the new permit takes effect immediately without a restart. Both the
+// persistent snippet and the existing in-memory transient grant (seeded
+// by DecisionAllowOnce via Registry.Resolve) cover the current session.
+//
+// g may be nil (no engine wired) → nil (default-allow).
+// registry may be nil → NotApplicable treated as allow (step 5).
+// dataDir / engine may be nil → AllowAlways behaves as AllowOnce (no
+// persistent grant written, same behaviour as before this follow-up).
+func GateMCPSpawn(
+	ctx context.Context,
+	g Gate,
+	registry *Registry,
+	recipeID string,
+	dataDir string,
+	engine *Engine,
+) error {
+	ctxAttrs := map[cedar.String]cedar.Value{
+		cedar.String("purpose"): cedar.String("mcp_spawn"),
+		cedar.String("ref_id"):  cedar.String(recipeID),
+	}
+
+	var outcome Outcome
+	if g != nil {
+		d := g.Evaluate(
+			ctx,
+			UserUID(),
+			ActionUseCredential,
+			CredentialUID(recipeID, "mcp_spawn"),
+			ctxAttrs,
+		)
+		switch d.Outcome {
+		case Allow:
+			return nil
+		case Deny:
+			return &PolicyDeniedError{Decision: d}
+		default:
+			outcome = NotApplicable
+		}
+	} else {
+		outcome = NotApplicable
+	}
+
+	_ = outcome // NotApplicable path
+
+	if registry == nil {
+		// No registry — default-allow (pre-boot / nil-registry posture).
+		return nil
+	}
+
+	// Fire the interactive prompt for the Credential family.
+	surface := PromptSurface{
+		Cred: &CredPromptSurface{
+			ProviderID: recipeID,
+			Purpose:    "mcp_spawn",
+		},
+	}
+	res, err := registry.RequestInteractive(ctx, surface)
+	if err != nil {
+		return errMCPSpawnDenied
+	}
+	switch res.Decision {
+	case DecisionAllowOnce:
+		return nil
+	case DecisionAllowAlways:
+		// Write a persistent Cedar snippet so the grant survives restarts,
+		// then reload the engine so the permit is active immediately.
+		// Failure is non-fatal: the user approved the spawn this session;
+		// future sessions will re-prompt if the write failed.
+		if dataDir != "" && engine != nil {
+			if writeErr := WriteMCPSpawnSnippet(ctx, dataDir, engine, recipeID); writeErr != nil {
+				// Log-only: do not block the spawn on a write error.
+				_ = writeErr
+			}
+		}
+		return nil
+	default:
+		return errMCPSpawnDenied
+	}
+}
+
+// WriteMCPSpawnSnippet writes a persistent Cedar permit snippet for an
+// mcp_spawn grant to <dataDir>/policy/cred_allow_mcp_<sanitized>.cedar.
+//
+// The snippet body is a single permit that allows
+// Action::"use_credential" on Credential::"<recipeID>::mcp_spawn".
+// After writing, Engine.Reload is called so the new permit takes effect
+// in the current process without a restart.
+//
+// Filename sanitisation: recipeID characters outside [a-zA-Z0-9\-.] are
+// replaced with underscores, then lowercased, giving a filename that:
+//   - matches familyFromFilename's "cred_allow_" prefix check in the
+//     permissions view (ListGrants / RevokeGrant path);
+//   - satisfies isPolicyFilename's path-traversal guard.
+//
+// When dataDir is empty, or the engine is nil, the function is a no-op
+// (callers on the pre-boot / test path pass nil engine). Errors from
+// mkdir or file-write are returned; callers SHOULD treat them as
+// non-fatal (the interactive grant covers the current session).
+func WriteMCPSpawnSnippet(ctx context.Context, dataDir string, engine *Engine, recipeID string) error {
+	if dataDir == "" || engine == nil {
+		return nil
+	}
+	sanitized := sanitizeMCPIDForFilename(recipeID)
+	dir := filepath.Join(dataDir, PolicyDir)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	filename := filepath.Join(dir, "cred_allow_mcp_"+sanitized+".cedar")
+	// Credential resource UID encodes both provider and purpose in the
+	// "<provider>::<purpose>" shape (spec §3). A permit on the exact UID
+	// Credential::"<recipeID>::mcp_spawn" covers only this recipe's spawn.
+	body := "permit(\n" +
+		"  principal,\n" +
+		"  action == Action::\"use_credential\",\n" +
+		"  resource == Credential::\"" + recipeID + "::mcp_spawn\"\n" +
+		");\n"
+	if err := os.WriteFile(filename, []byte(body), 0o644); err != nil {
+		return err
+	}
+	// Best-effort reload: failure is non-fatal; the current session's
+	// transient grant (seeded by DecisionAllowOnce on the Registry.Resolve
+	// path) already permits the spawn.
+	if err := engine.Reload(ctx); err != nil {
+		return err
+	}
+	return nil
+}
+
+// sanitizeMCPIDForFilename replaces characters outside [a-zA-Z0-9\-.]
+// with underscores and lowercases the result. Mirrors the same logic
+// used by core/tools/bash.sanitizePatternForFilename so the filename
+// safety invariant is shared across all snippet writers.
+func sanitizeMCPIDForFilename(id string) string {
+	var sb strings.Builder
+	for _, r := range strings.ToLower(id) {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9', r == '-', r == '.':
+			sb.WriteRune(r)
+		default:
+			sb.WriteRune('_')
+		}
+	}
+	return sb.String()
+}
+
+// errMCPSpawnDenied is the package-local sentinel returned by
+// GateMCPSpawn when the interactive prompt denies the request.
+// credstore maps this onto ErrMCPSpawnDenied before surfacing to
+// callers.
+var errMCPSpawnDenied = errors.New("cedar: mcp_spawn credential denied by prompt")
+
+// errCredentialAccessDenied is the package-local sentinel returned by
+// CheckCredentialAccess in strict-mode / NotApplicable cases. Callers
+// in credstore surface this as credstore.ErrCredentialAccessDenied;
+// the cedar package avoids importing credstore to prevent a cycle.
+var errCredentialAccessDenied = &credentialAccessDeniedError{}
+
+type credentialAccessDeniedError struct{}
+
+func (*credentialAccessDeniedError) Error() string {
+	return "credstore: credential access denied by policy"
+}
+
+// IsCredentialAccessDenied reports whether err is the strict-mode
+// NotApplicable denial produced by CheckCredentialAccess. Credstore
+// uses this to map the error onto its own ErrCredentialAccessDenied
+// sentinel before returning it to callers.
+func IsCredentialAccessDenied(err error) bool {
+	var e *credentialAccessDeniedError
+	return errors.As(err, &e)
 }
 
 // enforce maps a Decision to a Go error. Allow + NotApplicable both

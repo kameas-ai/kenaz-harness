@@ -27,7 +27,7 @@
 
 import { computed, ref } from 'vue';
 import { Archive, Layers } from 'lucide-vue-next';
-import StreamingText from './StreamingText.vue';
+import MarkdownBlock from './MarkdownBlock.vue';
 import PinMenu from './PinMenu.vue';
 import ImageBlock from './ImageBlock.vue';
 import DocumentChip from './DocumentChip.vue';
@@ -44,6 +44,13 @@ const props = defineProps<{
   role: MessageRole;
   content: string;
   streaming?: boolean;
+  /**
+   * Stream-failure marker (long-turn-resilience WP00). When set, the
+   * bubble renders a muted "Connection lost — message may be
+   * incomplete." sub-line beneath the body. No Resume button yet —
+   * that lands in WP03.
+   */
+  streamingError?: string;
   toolCalls?: readonly ToolCall[];
   /**
    * Polymorphic content blocks for multimodal messages
@@ -97,6 +104,28 @@ const props = defineProps<{
   summaryFoldedCount?: number;
   isArchived?: boolean;
   archivedFromSummaryId?: string;
+  /**
+   * Long-turn-resilience-01KR3PRS WP03 — partial-output bubble state.
+   * When streamingFailedAt is non-empty, the bubble carries a
+   * "Connection lost" sub-line; when streamingRecoverable is also true
+   * a "Resume" button surfaces and emits `resume`. The parent wires
+   * the resume click to client.sessions.resumeMessage.
+   *
+   * streamingFailureKind is a hint the parent can use to tailor copy
+   * ("transient" → "Network blip"; "auth" → "Re-authenticate";
+   * everything else falls back to the generic "Connection lost").
+   */
+  streamingFailedAt?: string;
+  streamingFailureKind?: string;
+  streamingRecoverable?: boolean;
+  /**
+   * Frontend-only marker: set by useSession's stream-closed handler
+   * when the close payload carried reason=backend-error AND the
+   * session_messages row hasn't been persisted server-side yet (WP00
+   * surface). Used to render the partial-output footer even before the
+   * server-side row materializes via ListMessages refresh.
+   */
+  streamingError?: string;
 }>();
 
 const emit = defineEmits<{
@@ -122,6 +151,12 @@ const emit = defineEmits<{
    * (compaction-strategy-ui WP07).
    */
   (e: 'jump-to-summary', summaryId: string): void;
+  /**
+   * User clicked the "Resume" button on a partial assistant bubble
+   * (long-turn-resilience-01KR3PRS WP03). The parent wires the click
+   * to client.sessions.resumeMessage(sessionId, messageId).
+   */
+  (e: 'resume', messageId: string): void;
 }>();
 
 const menuOpen = ref(false);
@@ -209,6 +244,35 @@ function onSaveArtifact() {
   emit('save-artifact', props.messageId);
 }
 
+const copyFlash = ref(false);
+
+async function onCopyMessage() {
+  const text = props.content ?? '';
+  let ok = false;
+  try {
+    await navigator.clipboard.writeText(text);
+    ok = true;
+  } catch {
+    // Wails fallback — same path as the per-code-block copy in
+    // MarkdownBlock. Wails' webview rejects navigator.clipboard in
+    // some contexts; the runtime binding always works.
+    try {
+      const setter = window.runtime?.ClipboardSetText;
+      if (setter) {
+        ok = await setter(text);
+      }
+    } catch {
+      ok = false;
+    }
+  }
+  if (ok) {
+    copyFlash.value = true;
+    setTimeout(() => {
+      copyFlash.value = false;
+    }, 1200);
+  }
+}
+
 function onArtifactChipOpen(artifact: Artifact) {
   emit('open-artifact', artifact);
 }
@@ -274,6 +338,41 @@ const hasBlocks = computed(() => blocks.value.length > 0);
 function isLastBlock(idx: number): boolean {
   return idx === blocks.value.length - 1;
 }
+
+// Long-turn-resilience-01KR3PRS WP03 — partial-output bubble logic.
+//
+// isPartialOutputBubble: true on assistant rows whose stream dropped
+// before the kernel could land a clean assistant turn. The flag rides
+// streamingFailedAt OR the frontend-only streamingError marker (set by
+// useSession's stream-closed handler when the close payload carried
+// reason=backend-error). Both surfaces converge so the WP00 fallback
+// keeps working on rows that haven't been persisted server-side yet.
+const isPartialOutputBubble = computed(() => {
+  if (!isAssistant.value) return false;
+  return Boolean(props.streamingFailedAt) || Boolean(props.streamingError);
+});
+
+// partialOutputCopy: tailored failure copy by classification kind.
+// Recoverable rows get the "preserved" framing; non-recoverable rows
+// (tool_use already ran) get the "re-issue your request" framing.
+const partialOutputCopy = computed(() => {
+  if (!props.streamingRecoverable) {
+    return 'Connection lost mid-tool-call — please re-send your request.';
+  }
+  switch (props.streamingFailureKind) {
+    case 'auth':
+      return 'Connection lost — partial reply preserved (auth issue).';
+    case 'transient':
+      return 'Connection lost — partial reply preserved.';
+    default:
+      return 'Connection lost — partial reply preserved.';
+  }
+});
+
+function onResumeClick() {
+  if (!props.messageId) return;
+  emit('resume', props.messageId);
+}
 </script>
 
 <template>
@@ -319,9 +418,19 @@ function isLastBlock(idx: number): boolean {
             @close="closeMenu"
           />
         </div>
+        <button
+          type="button"
+          class="opacity-0 group-hover:opacity-100 focus:opacity-100 transition-fast text-[12px] px-1.5 py-0.5 rounded-sm border border-border-muted text-ink-dim hover:text-accent hover:bg-surface-2 ml-1"
+          :class="rememberable || (saveable && messageId) ? '' : 'ml-auto'"
+          aria-label="Copy message text"
+          :data-testid="'copy-message-button'"
+          @click="onCopyMessage"
+        >
+          {{ copyFlash ? 'copied' : 'copy' }}
+        </button>
         <div
           v-if="saveable && messageId"
-          :class="['relative', rememberable ? '' : flashConfirm ? '' : 'ml-auto']"
+          :class="['relative', rememberable ? '' : flashConfirm ? '' : '']"
         >
           <button
             type="button"
@@ -406,10 +515,12 @@ function isLastBlock(idx: number): boolean {
       <template v-if="!isTool">
         <template v-if="hasBlocks">
           <template v-for="(block, i) in blocks" :key="i">
-            <StreamingText
+            <MarkdownBlock
               v-if="block.type === 'text'"
-              :text="block.text ?? ''"
+              :source="block.text ?? ''"
               :streaming="streaming === true && isLastBlock(i)"
+              :session-id="undefined"
+              :message-id="messageId"
             />
             <ImageBlock
               v-else-if="block.type === 'image' && block.source"
@@ -421,15 +532,29 @@ function isLastBlock(idx: number): boolean {
             />
           </template>
         </template>
-        <StreamingText
+        <MarkdownBlock
           v-else
-          :text="content"
+          :source="content"
           :streaming="streaming === true"
+          :session-id="undefined"
+          :message-id="messageId"
         />
       </template>
       <span v-else class="font-mono text-[12px] text-ink-muted">
         {{ content }}
       </span>
+
+      <!-- Stream-failure sub-line (long-turn-resilience WP00). Surfaced
+           when the SSE stream closed with a non-completed reason and
+           the partial bubble was committed anyway. WP03 will replace
+           this with a Resume button. -->
+      <div
+        v-if="streamingError"
+        class="mt-2 font-ui text-[11px] text-ink-muted italic"
+        data-testid="message-streaming-error"
+      >
+        Connection lost — message may be incomplete.
+      </div>
 
       <div
         v-if="artifacts && artifacts.length > 0"
@@ -442,6 +567,34 @@ function isLastBlock(idx: number): boolean {
           :artifact="a"
           @open="onArtifactChipOpen"
         />
+      </div>
+
+      <!--
+        Long-turn-resilience-01KR3PRS WP03 — partial-output footer.
+        Renders for assistant rows whose stream dropped before the
+        kernel could land a clean assistant turn. When recoverable, a
+        Resume button surfaces; otherwise a static caption tells the
+        user the turn cannot be resumed (tool_use already ran) and to
+        re-issue the request.
+      -->
+      <div
+        v-if="isPartialOutputBubble"
+        class="mt-2 flex items-center gap-2 font-ui text-[11px] text-ink-subtle"
+        data-testid="message-partial-output-footer"
+      >
+        <span :data-failure-kind="streamingFailureKind || 'unknown'">
+          {{ partialOutputCopy }}
+        </span>
+        <button
+          v-if="streamingRecoverable && messageId"
+          type="button"
+          class="ml-1 px-1.5 py-0.5 rounded border border-accent/60 text-accent hover:bg-accent/10 normal-case tracking-normal"
+          data-testid="message-partial-resume-button"
+          :data-message-id="messageId"
+          @click="onResumeClick"
+        >
+          Resume
+        </button>
       </div>
     </div>
   </article>

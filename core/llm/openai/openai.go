@@ -29,6 +29,7 @@ import (
 
 	llm "github.com/sigil-tech/kaneaz-harness/core/llm"
 	"github.com/sigil-tech/kaneaz-harness/core/llm/capabilities"
+	"github.com/sigil-tech/kaneaz-harness/core/llm/httpx"
 	"github.com/sigil-tech/kaneaz-harness/core/logging"
 )
 
@@ -94,7 +95,7 @@ type Adapter struct {
 // catalog and Capabilities() returns an inline conservative descriptor.
 func New(opts ...Option) *Adapter {
 	a := &Adapter{
-		httpc:    &http.Client{}, // no Timeout — context drives lifetime
+		httpc:    &http.Client{Transport: httpx.DefaultTransport()}, // no Timeout — context drives lifetime
 		endpoint: defaultChatEndpoint,
 	}
 	if cat, err := capabilities.LoadDefault(); err == nil {
@@ -778,9 +779,14 @@ func (a *Adapter) ListModels(ctx context.Context, cred []byte) ([]llm.ModelInfo,
 		if !isChatCapable(m.ID) {
 			continue
 		}
+		cw := 0
+		if a.cat != nil {
+			cw = a.cat.ContextWindow(Kind, m.ID)
+		}
 		out = append(out, llm.ModelInfo{
-			ID:          m.ID,
-			DisplayName: m.ID,
+			ID:            m.ID,
+			DisplayName:   m.ID,
+			ContextWindow: cw,
 		})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })

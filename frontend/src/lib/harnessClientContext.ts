@@ -9,8 +9,13 @@ import {
  * composables consume the client through `useHarnessClient()`; tests
  * swap a fake via `provideFakeClient(seed)`. FR-007 / FR-008 / SC-006.
  */
+// Use Symbol.for so the symbol identity survives Vite HMR. A plain
+// `Symbol(...)` would mint a fresh identity each time this module hot-
+// replaces, causing inject() in newly-mounted components to miss the
+// provide() that ran with the OLD symbol at boot — surfacing as
+// "useHarnessClient called outside of a HarnessClient provider".
 export const HarnessClientKey: InjectionKey<HarnessClient> =
-  Symbol('HarnessClient');
+  Symbol.for('kaneaz.harnessClient') as InjectionKey<HarnessClient>;
 
 export function installHarnessClient(app: App, client: HarnessClient): void {
   app.provide(HarnessClientKey, client);

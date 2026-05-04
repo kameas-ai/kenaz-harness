@@ -2,6 +2,19 @@ import { describe, it, expect, vi } from 'vitest';
 import { mount, flushPromises } from '@vue/test-utils';
 import RecipeKeyPromptModal from '@/views/tools/RecipeKeyPromptModal.vue';
 import type { ConfigOption, Recipe, RecipeStatus } from '@/lib/types';
+import { provideFakeClient } from '@/lib/harnessClientContext';
+
+const withFakeClient = {
+  global: {
+    plugins: [
+      {
+        install(app: import('vue').App) {
+          provideFakeClient(app);
+        },
+      },
+    ],
+  },
+};
 
 function makeRecipe(overrides: Partial<Recipe> = {}): Recipe {
   return {
@@ -47,6 +60,7 @@ describe('RecipeKeyPromptModal', () => {
     const recipe = makeRecipe();
     const install = vi.fn(async () => okStatus(recipe.id));
     const w = mount(RecipeKeyPromptModal, {
+      ...withFakeClient,
       props: { open: true, recipe, install },
     });
     await flushPromises();
@@ -73,6 +87,7 @@ describe('RecipeKeyPromptModal', () => {
     });
     const install = vi.fn(async () => okStatus(recipe.id));
     const w = mount(RecipeKeyPromptModal, {
+      ...withFakeClient,
       props: { open: true, recipe, install },
     });
     await flushPromises();
@@ -85,6 +100,7 @@ describe('RecipeKeyPromptModal', () => {
     const recipe = makeRecipe();
     const install = vi.fn(async () => okStatus(recipe.id));
     const w = mount(RecipeKeyPromptModal, {
+      ...withFakeClient,
       props: { open: true, recipe, install },
     });
     await flushPromises();
@@ -109,6 +125,7 @@ describe('RecipeKeyPromptModal', () => {
     });
     const install = vi.fn(async () => okStatus(recipe.id));
     const w = mount(RecipeKeyPromptModal, {
+      ...withFakeClient,
       props: { open: true, recipe, install },
     });
     await flushPromises();
@@ -121,6 +138,7 @@ describe('RecipeKeyPromptModal', () => {
     const recipe = makeRecipe();
     const install = vi.fn(async () => okStatus(recipe.id));
     const w = mount(RecipeKeyPromptModal, {
+      ...withFakeClient,
       props: { open: true, recipe, install },
     });
     await flushPromises();
@@ -148,6 +166,7 @@ describe('RecipeKeyPromptModal', () => {
       throw new Error('keychain unavailable');
     });
     const w = mount(RecipeKeyPromptModal, {
+      ...withFakeClient,
       props: { open: true, recipe, install },
     });
     await flushPromises();
@@ -168,6 +187,7 @@ describe('RecipeKeyPromptModal', () => {
     const recipe = makeRecipe();
     const install = vi.fn(async () => okStatus(recipe.id));
     const w = mount(RecipeKeyPromptModal, {
+      ...withFakeClient,
       props: { open: true, recipe, install },
     });
     await flushPromises();
@@ -183,6 +203,7 @@ describe('RecipeKeyPromptModal', () => {
     const recipe = makeRecipe();
     const install = vi.fn(async () => okStatus(recipe.id));
     const w = mount(RecipeKeyPromptModal, {
+      ...withFakeClient,
       props: { open: true, recipe, install },
     });
     await flushPromises();
@@ -199,6 +220,7 @@ describe('RecipeKeyPromptModal', () => {
     const recipe = makeRecipe();
     const install = vi.fn(async () => okStatus(recipe.id));
     const w = mount(RecipeKeyPromptModal, {
+      ...withFakeClient,
       props: { open: true, recipe, install },
     });
     await flushPromises();
@@ -251,6 +273,7 @@ describe('RecipeKeyPromptModal', () => {
     });
     const install = vi.fn(async () => okStatus(recipe.id));
     const w = mount(RecipeKeyPromptModal, {
+      ...withFakeClient,
       props: { open: true, recipe, install },
     });
     await flushPromises();
@@ -266,6 +289,7 @@ describe('RecipeKeyPromptModal', () => {
     const recipe = fsRecipe();
     const install = vi.fn(async () => okStatus(recipe.id));
     const w = mount(RecipeKeyPromptModal, {
+      ...withFakeClient,
       props: { open: true, recipe, install },
     });
     await flushPromises();
@@ -281,6 +305,7 @@ describe('RecipeKeyPromptModal', () => {
     const recipe = fsRecipe();
     const install = vi.fn(async () => okStatus(recipe.id));
     const w = mount(RecipeKeyPromptModal, {
+      ...withFakeClient,
       props: { open: true, recipe, install },
     });
     await flushPromises();
@@ -308,6 +333,7 @@ describe('RecipeKeyPromptModal', () => {
     });
     const install = vi.fn(async () => okStatus(recipe.id));
     const w = mount(RecipeKeyPromptModal, {
+      ...withFakeClient,
       props: { open: true, recipe, install },
     });
     await flushPromises();
@@ -319,6 +345,7 @@ describe('RecipeKeyPromptModal', () => {
     const recipe = fsRecipe();
     const install = vi.fn(async () => okStatus(recipe.id));
     const w = mount(RecipeKeyPromptModal, {
+      ...withFakeClient,
       props: { open: true, recipe, install },
     });
     await flushPromises();
@@ -339,6 +366,7 @@ describe('RecipeKeyPromptModal', () => {
     const recipe = fsRecipe();
     const install = vi.fn(async () => okStatus(recipe.id));
     const w = mount(RecipeKeyPromptModal, {
+      ...withFakeClient,
       props: {
         open: true,
         recipe,

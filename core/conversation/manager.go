@@ -89,6 +89,12 @@ type ForkOptions struct {
 	ModelID    string
 	// Kind defaults to BranchKindFork.
 	Kind BranchKind
+	// Subagent-enriched fields (branch-as-subagent-recommendation WP04).
+	// When SubagentBranch is true, the branch row is flagged as a
+	// subagent branch in the DB.
+	SubagentBranch   bool
+	RecommendationID string
+	AdvisorSignals   []string
 }
 
 // CreateBranch allocates a new child session via session.Manager, then
@@ -130,17 +136,20 @@ func (m *Manager) CreateBranch(ctx context.Context, opts ForkOptions) (Branch, s
 		kind = BranchKindFork
 	}
 	br := Branch{
-		ID:              id,
-		ParentSessionID: opts.ParentSessionID,
-		ChildSessionID:  child.ID,
-		Kind:            kind,
-		Status:          BranchStatusActive,
-		ProviderID:      opts.ProviderID,
-		ModelID:         opts.ModelID,
-		Title:           opts.Title,
-		TaskHint:        opts.TaskHint,
-		CreatedAt:       now,
-		UpdatedAt:       now,
+		ID:               id,
+		ParentSessionID:  opts.ParentSessionID,
+		ChildSessionID:   child.ID,
+		Kind:             kind,
+		Status:           BranchStatusActive,
+		ProviderID:       opts.ProviderID,
+		ModelID:          opts.ModelID,
+		Title:            opts.Title,
+		TaskHint:         opts.TaskHint,
+		SubagentBranch:   opts.SubagentBranch,
+		RecommendationID: opts.RecommendationID,
+		AdvisorSignals:   opts.AdvisorSignals,
+		CreatedAt:        now,
+		UpdatedAt:        now,
 	}
 	if err := m.store.Create(ctx, br); err != nil {
 		return Branch{}, session.Record{}, fmt.Errorf("conversation: persist branch: %w", err)

@@ -346,6 +346,21 @@ func isExpectedExit(err error) bool {
 		strings.Contains(msg, "exit status")
 }
 
+// ServerTools returns the cached tool list for the named server. It
+// returns nil when the server is not in the pool (including when the
+// pool is closed). This is the per-recipe counterpart to the
+// aggregate Tools() method; it is used by the recipe install path to
+// discover which tools need Cedar permit snippets.
+func (p *Pool) ServerTools(id string) []coremcp.Tool {
+	p.mu.RLock()
+	inst, ok := p.servers[id]
+	p.mu.RUnlock()
+	if !ok {
+		return nil
+	}
+	return inst.Tools()
+}
+
 // SetSamplingEnabled flips the per-server sampling gate. When off,
 // the reader-loop dispatch path returns -32601 to the server
 // without invoking the SamplingHandler. This is the user's consent

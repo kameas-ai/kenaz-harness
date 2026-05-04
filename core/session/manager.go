@@ -26,6 +26,9 @@ const (
 	EventKindSessionLastActiveBumped = "session.last_active_bumped"
 	EventKindSessionSystemPromptSet  = "session.system_prompt_set"
 	EventKindSessionMovedToProject   = "session.moved_to_project"
+	// EventKindSessionAutoTitled is emitted by AutoTitle (success path),
+	// MarkAutoTitleAttempted (failure path), and RequestRetitle.
+	EventKindSessionAutoTitled = "session.auto_titled"
 )
 
 // Audit is the narrowed event surface the Manager uses. Unlike
@@ -245,6 +248,13 @@ func (m *Manager) MoveToProject(ctx context.Context, sessionID string, projectID
 	return nil
 }
 
+// SetBranchAdvisorDismissed persists the per-session "don't suggest
+// again" flag for the branch advisor. When dismissed is true the
+// backend skips detection for this session (FR-010 resolution step 4).
+func (m *Manager) SetBranchAdvisorDismissed(ctx context.Context, id string, dismissed bool) error {
+	return m.store.SetBranchAdvisorDismissed(ctx, id, dismissed, m.now())
+}
+
 // Rename changes a session's display name.
 func (m *Manager) Rename(ctx context.Context, id, name string) error {
 	name = strings.TrimSpace(name)
@@ -361,6 +371,65 @@ func (m *Manager) ListMessages(ctx context.Context, sessionID string) ([]Message
 	return m.store.ListMessages(ctx, sessionID)
 }
 
+// GetMessage returns one message by id within a session. Used by the
+// resume RPC to load the partial assistant row before reconstructing
+// the continuation prompt (long-turn-resilience-01KR3PRS WP03).
+func (m *Manager) GetMessage(ctx context.Context, sessionID, messageID string) (Message, error) {
+	return m.store.GetMessage(ctx, sessionID, messageID)
+}
+
+// MarkStreamingFailure stamps the resume metadata on an assistant row
+// after a stream drop. Best-effort audit emission so a failed write to
+// the audit pipeline does not abort the underlying mutation.
+//
+// long-turn-resilience-01KR3PRS WP03.
+func (m *Manager) MarkStreamingFailure(ctx context.Context, sessionID, messageID string,
+	kind string, recoverable bool) error {
+	if err := m.store.MarkStreamingFailure(ctx, sessionID, messageID, m.now(), kind, recoverable); err != nil {
+		return err
+	}
+	m.audit.Emit(ctx, EventKindSessionMessageAppended, map[string]any{
+		"session_id":             sessionID,
+		"message_id":             messageID,
+		"streaming_failure_kind": kind,
+		"streaming_recoverable":  recoverable,
+	})
+	return nil
+}
+
+// AppendContinuation persists a continuation assistant row produced by
+// the Sessions_ResumeMessage RPC. Mirrors AppendMessage semantics
+// (assigns id + sequence + created_at when zero) and stamps the
+// continuation_of pointer onto the new row.
+//
+// long-turn-resilience-01KR3PRS WP03.
+func (m *Manager) AppendContinuation(ctx context.Context, sessionID, originalID string, msg Message) (Message, error) {
+	if msg.ID == "" {
+		id, err := m.idGen()
+		if err != nil {
+			return Message{}, fmt.Errorf("session: id gen: %w", err)
+		}
+		msg.ID = id
+	}
+	msg.SessionID = sessionID
+	if msg.CreatedAt.IsZero() {
+		msg.CreatedAt = m.now()
+	}
+	stored, err := m.store.AppendContinuation(ctx, originalID, msg)
+	if err != nil {
+		return Message{}, err
+	}
+	_ = m.store.UpdateLastActive(ctx, sessionID, stored.CreatedAt)
+	m.audit.Emit(ctx, EventKindSessionMessageAppended, map[string]any{
+		"session_id":      sessionID,
+		"message_id":      stored.ID,
+		"sequence":        stored.Sequence,
+		"role":            string(stored.Role),
+		"continuation_of": originalID,
+	})
+	return stored, nil
+}
+
 // ListMessagesActive returns only the messages whose ArchivedAt is nil
 // — i.e. the live scrollback view, with soft-archived originals folded
 // into a summary hidden. Used by the compaction-strategy-ui WP07 RPC
@@ -385,6 +454,73 @@ func (m *Manager) SetSystemPrompt(ctx context.Context, sessionID, content, kind 
 		"session_id":     sessionID,
 		"kind":           kind,
 		"content_length": len(content),
+	})
+	return nil
+}
+
+// AutoTitle writes a generated title and sets auto_titled=1 on the
+// session, but only when auto_titled is currently 0. If the row's
+// auto_titled flag is already 1 — either because the engine already ran
+// or a user manually renamed — ErrAutoTitleSuperseded is returned and no
+// write occurs. The predicate check and the write happen inside the same
+// transaction in the store layer (race-safe).
+func (m *Manager) AutoTitle(ctx context.Context, id, title string) error {
+	if err := m.store.AutoTitle(ctx, id, title, m.now()); err != nil {
+		return err
+	}
+	m.audit.Emit(ctx, EventKindSessionAutoTitled, map[string]any{
+		"session_id": id,
+		"title":      title,
+		"trigger":    "auto",
+	})
+	return nil
+}
+
+// MarkAutoTitleAttempted sets auto_titled=1 without changing the name.
+// Used on the failure path so a crashed generator run does not retry
+// indefinitely.
+func (m *Manager) MarkAutoTitleAttempted(ctx context.Context, id string) error {
+	if err := m.store.MarkAutoTitleAttempted(ctx, id, m.now()); err != nil {
+		return err
+	}
+	m.audit.Emit(ctx, EventKindSessionAutoTitled, map[string]any{
+		"session_id": id,
+		"trigger":    "auto",
+		"error_kind": "attempted_no_title",
+	})
+	return nil
+}
+
+// ClearTitle writes name="" and auto_titled=0, re-enabling future
+// auto-title attempts. Emits EventKindSessionRenamed so the rail
+// refreshes the session row.
+func (m *Manager) ClearTitle(ctx context.Context, id string) error {
+	if err := m.store.ClearTitle(ctx, id, m.now()); err != nil {
+		return err
+	}
+	m.audit.Emit(ctx, EventKindSessionRenamed, map[string]any{
+		"session_id": id,
+		"name":       "",
+	})
+	return nil
+}
+
+// RequestRetitle forces a new auto-title run regardless of the current
+// auto_titled state. It clears the flag first so AutoTitle's predicate
+// check passes, then sets the new title atomically. This is the "Suggest
+// new title" manual path — it bypasses the auto_titled guard intentionally.
+func (m *Manager) RequestRetitle(ctx context.Context, id, title string) error {
+	// Clear first so AutoTitle's predicate (auto_titled == 0) passes.
+	if err := m.store.ClearTitle(ctx, id, m.now()); err != nil {
+		return err
+	}
+	if err := m.store.AutoTitle(ctx, id, title, m.now()); err != nil {
+		return err
+	}
+	m.audit.Emit(ctx, EventKindSessionAutoTitled, map[string]any{
+		"session_id": id,
+		"title":      title,
+		"trigger":    "manual",
 	})
 	return nil
 }

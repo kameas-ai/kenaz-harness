@@ -12,6 +12,21 @@ import (
 	"gopkg.in/yaml.v3"
 
 	llm "github.com/sigil-tech/kaneaz-harness/core/llm"
+	"github.com/sigil-tech/kaneaz-harness/core/llm/pricing"
+)
+
+// Cost source constants used in llm.Cost.Source and the
+// token-cost-telemetry mission's session_usage_turns table.
+const (
+	// SourceProvider means the cost figure was reported directly by the
+	// upstream provider (e.g. OpenRouter's usage.cost field). Exact.
+	SourceProvider = "provider"
+	// SourceDerived means the cost was estimated from token counts
+	// using the curated pricing.yaml table. Approximate; rendered with
+	// a tilde prefix in the UI (~$X.XX).
+	SourceDerived = "derived"
+	// SourceUnknown means no pricing entry was found; cost is nil.
+	SourceUnknown = "unknown"
 )
 
 // KindCompaction is the cost-tagging kind compaction-driven LLM calls
@@ -27,6 +42,13 @@ import (
 // filter "where did this token spend land" without re-deriving by
 // model / session.
 const KindCompaction = "compaction"
+
+// KindAutoTitle is the cost-tagging kind the auto-titling wiring adapter
+// attaches to every LLM call it issues, mirroring the KindCompaction
+// convention (session-auto-titling-01KQ8TDS WP01 / plan §2.8).
+// Dashboards can use this tag to break out auto-title overhead from
+// regular chat and compaction costs.
+const KindAutoTitle = "auto_title"
 
 //go:embed starter_table.yaml
 var starterTable []byte
@@ -126,6 +148,42 @@ func (r *Reducer) Derive(usage llm.Usage, kind, model string) llm.Cost {
 		ReasoningCost: reasoningCost,
 		Source:        "starter",
 	}
+}
+
+// DeriveWithSource applies the three-branch cost derivation policy for
+// the token-cost-telemetry mission:
+//
+//  1. If providerCostUSD is non-nil and > 0, return it as-is with
+//     source="provider" (OpenRouter direct reports, future Anthropic
+//     billing extension).
+//  2. Otherwise, look up the (kind, model) pair in the curated
+//     pricing.yaml table. If found, derive from token counts and
+//     return source="derived".
+//  3. If no entry exists, return source="unknown" with a nil CostUSD.
+//
+// The returned *float64 is nil in case 3; callers must handle nil and
+// render tokens-only with no dollar figure (FR-005b "we don't lie").
+func DeriveWithSource(usage llm.Usage, kind, model string, providerCostUSD *float64) (costUSD *float64, source string) {
+	// Branch 1: provider-reported cost.
+	if providerCostUSD != nil && *providerCostUSD > 0 {
+		v := *providerCostUSD
+		return &v, SourceProvider
+	}
+
+	// Branch 2: pricing-table derivation.
+	entry, ok := pricing.Lookup(kind, model)
+	if ok {
+		const million = 1_000_000.0
+		total := float64(usage.InputTokens)/million*entry.InputPer1MUSD +
+			float64(usage.OutputTokens)/million*entry.OutputPer1MUSD +
+			float64(usage.CachedInputRead)/million*entry.CachedInputPer1MUSD +
+			float64(usage.CachedInputWrite)/million*entry.CachedInputWritePer1MUSD +
+			float64(usage.ReasoningTokens)/million*entry.ReasoningPer1MUSD
+		return &total, SourceDerived
+	}
+
+	// Branch 3: unknown.
+	return nil, SourceUnknown
 }
 
 func (r *Reducer) lookup(kind, model string) (Entry, bool) {

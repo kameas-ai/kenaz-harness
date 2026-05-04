@@ -538,3 +538,134 @@ func TestMemStore_DeleteArchivedBefore_NeverDeletesSummary(t *testing.T) {
 		t.Error("summary row was deleted; sweep must never delete summaries")
 	}
 }
+
+// ── auto_titled store method tests ──────────────────────────────────────────
+
+func TestMemStore_AutoTitle_SetsNameAndFlag(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s := NewMemoryStore()
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	if err := s.Create(ctx, mustRecord("s1", "New session", 0, now)); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AutoTitle(ctx, "s1", "Rust basics", now.Add(time.Second)); err != nil {
+		t.Fatalf("AutoTitle: %v", err)
+	}
+	got, _ := s.Get(ctx, "s1")
+	if got.Name != "Rust basics" {
+		t.Errorf("Name = %q, want Rust basics", got.Name)
+	}
+	if !got.AutoTitled {
+		t.Error("AutoTitled = false, want true")
+	}
+}
+
+func TestMemStore_AutoTitle_SupersededWhenAlreadySet(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s := NewMemoryStore()
+	now := time.Now()
+	r := mustRecord("s1", "New session", 0, now)
+	r.AutoTitled = true
+	if err := s.Create(ctx, r); err != nil {
+		t.Fatal(err)
+	}
+	err := s.AutoTitle(ctx, "s1", "Should not apply", now)
+	if !errors.Is(err, ErrAutoTitleSuperseded) {
+		t.Errorf("got %v, want ErrAutoTitleSuperseded", err)
+	}
+	got, _ := s.Get(ctx, "s1")
+	if got.Name != "New session" {
+		t.Errorf("Name changed despite superseded; got %q", got.Name)
+	}
+}
+
+func TestMemStore_AutoTitle_NotFound(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s := NewMemoryStore()
+	err := s.AutoTitle(ctx, "ghost", "title", time.Now())
+	if !errors.Is(err, ErrSessionNotFound) {
+		t.Errorf("got %v, want ErrSessionNotFound", err)
+	}
+}
+
+func TestMemStore_MarkAutoTitleAttempted_SetsFlag(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s := NewMemoryStore()
+	now := time.Now()
+	if err := s.Create(ctx, mustRecord("s1", "session", 0, now)); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.MarkAutoTitleAttempted(ctx, "s1", now.Add(time.Second)); err != nil {
+		t.Fatalf("MarkAutoTitleAttempted: %v", err)
+	}
+	got, _ := s.Get(ctx, "s1")
+	if !got.AutoTitled {
+		t.Error("AutoTitled = false after MarkAutoTitleAttempted, want true")
+	}
+	if got.Name != "session" {
+		t.Errorf("Name changed; got %q, want %q", got.Name, "session")
+	}
+}
+
+func TestMemStore_MarkAutoTitleAttempted_NotFound(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s := NewMemoryStore()
+	err := s.MarkAutoTitleAttempted(ctx, "ghost", time.Now())
+	if !errors.Is(err, ErrSessionNotFound) {
+		t.Errorf("got %v, want ErrSessionNotFound", err)
+	}
+}
+
+func TestMemStore_ClearTitle_ResetsNameAndFlag(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s := NewMemoryStore()
+	now := time.Now()
+	r := mustRecord("s1", "some title", 0, now)
+	r.AutoTitled = true
+	if err := s.Create(ctx, r); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ClearTitle(ctx, "s1", now.Add(time.Second)); err != nil {
+		t.Fatalf("ClearTitle: %v", err)
+	}
+	got, _ := s.Get(ctx, "s1")
+	if got.Name != "" {
+		t.Errorf("Name = %q, want empty", got.Name)
+	}
+	if got.AutoTitled {
+		t.Error("AutoTitled = true after ClearTitle, want false")
+	}
+}
+
+func TestMemStore_ClearTitle_NotFound(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s := NewMemoryStore()
+	err := s.ClearTitle(ctx, "ghost", time.Now())
+	if !errors.Is(err, ErrSessionNotFound) {
+		t.Errorf("got %v, want ErrSessionNotFound", err)
+	}
+}
+
+func TestMemStore_Rename_SetsAutoTitled(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s := NewMemoryStore()
+	now := time.Now()
+	if err := s.Create(ctx, mustRecord("s1", "old", 0, now)); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Rename(ctx, "s1", "new name", now.Add(time.Second)); err != nil {
+		t.Fatalf("Rename: %v", err)
+	}
+	got, _ := s.Get(ctx, "s1")
+	if !got.AutoTitled {
+		t.Error("AutoTitled = false after non-empty Rename, want true")
+	}
+}

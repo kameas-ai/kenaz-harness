@@ -15,7 +15,9 @@ import (
 	"github.com/sigil-tech/kaneaz-harness/core/logging"
 	"github.com/sigil-tech/kaneaz-harness/core/policy/cedar"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/settings"
+	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/tools"
 	corebash "github.com/sigil-tech/kaneaz-harness/core/tools/bash"
+	corefsrequest "github.com/sigil-tech/kaneaz-harness/core/tools/fsrequest"
 	coresaveartifact "github.com/sigil-tech/kaneaz-harness/core/tools/saveartifact"
 	corewebsearch "github.com/sigil-tech/kaneaz-harness/core/tools/websearch"
 	"github.com/sigil-tech/kaneaz-harness/core/toolloop"
@@ -33,7 +35,20 @@ import (
 // nil artifactsMgr is tolerated too: the save_artifact tool is simply
 // not registered when no artifacts manager is wired (test harness
 // path). EnabledFilter then naturally returns nil for the tool name.
-func registerBuiltinTools(c *core.Core, registry *toolloop.BuiltinRegistry, bashStore *corebash.Store, artifactsMgr *coreart.Manager, store settings.SettingsStore) {
+//
+// cedarEngine and promptRegistry are WP03 Cedar gate dependencies.
+// Both are nil-tolerant: when nil the bash tool falls back to the
+// legacy allowlist-based gate so the test harness path and nil-core
+// callers keep working unchanged.
+func registerBuiltinTools(
+	c *core.Core,
+	registry *toolloop.BuiltinRegistry,
+	bashStore *corebash.Store,
+	artifactsMgr *coreart.Manager,
+	store settings.SettingsStore,
+	cedarEngine *cedar.Engine,
+	promptRegistry *cedar.Registry,
+) {
 	if registry == nil {
 		return
 	}
@@ -53,15 +68,27 @@ func registerBuiltinTools(c *core.Core, registry *toolloop.BuiltinRegistry, bash
 	// bash: requires a sandbox root. Prefer <DataDir>/agent-workspace
 	// when available; fall back to the OS tempdir so tests + nil-core
 	// callers still get a working tool.
+	//
+	// CedarEngine and PromptRegistry are wired when the chassis has a
+	// real DataDir; nil falls back to the legacy allowlist gate so the
+	// test harness path (registerBuiltinTools with nil core) still works.
 	sandboxRoot := defaultBashSandbox(c)
+	var dataDir string
+	if c != nil {
+		dataDir = c.DataDir()
+	}
 	bashTool := corebash.New(corebash.Options{
-		SandboxRoot: sandboxRoot,
-		Store:       bashStore,
+		SandboxRoot:    sandboxRoot,
+		Store:          bashStore,
+		CedarEngine:    cedarEngine,
+		PromptRegistry: promptRegistry,
+		DataDir:        dataDir,
 	})
 	registry.Register(bashTool)
 	logging.L().Info("rpc.builtins.register",
 		"tool", bashTool.Name(),
 		"sandbox", sandboxRoot,
+		"cedar_gate", cedarEngine != nil,
 	)
 
 	// save_artifact: pipes (title, content) into the artifact CAS
@@ -85,6 +112,21 @@ func registerBuiltinTools(c *core.Core, registry *toolloop.BuiltinRegistry, bash
 		logging.L().Info("rpc.builtins.save_artifact_skipped",
 			"reason", "no artifacts manager wired")
 	}
+}
+
+// registerFSRequestTool registers the kaneaz__request_filesystem_access
+// built-in after the toolsAPI is wired (must be called after
+// newToolsAPI returns). nil registry or nil toolsAPI are no-ops so the
+// test harness path stays clean.
+func registerFSRequestTool(registry *toolloop.BuiltinRegistry, toolsAPI tools.ToolsAPI) {
+	if registry == nil || toolsAPI == nil {
+		return
+	}
+	fsReqTool := corefsrequest.New(corefsrequest.Options{
+		Delegate: toolsAPI,
+	})
+	registry.Register(fsReqTool)
+	logging.L().Info("rpc.builtins.register", "tool", fsReqTool.Name())
 }
 
 // saveArtifactEnabledLookup returns a closure the saveartifact tool
@@ -186,6 +228,16 @@ func builtinEnabledPredicate(s *settings.API) func(string) bool {
 				// Default-on tool: soft-fail to enabled on a transient
 				// store error so first-launch ergonomics survive a
 				// settings-file glitch.
+				return true
+			}
+			logging.L().Info("rpc.builtins.predicate", "tool", name, "enabled", v)
+			return v
+		case corefsrequest.ToolName:
+			v, err := store.LoadFSRequestAccessEnabled()
+			if err != nil {
+				logging.L().Warn("rpc.builtins.predicate.read_failed",
+					"tool", name, "err", err.Error())
+				// Default-on: soft-fail to enabled so the tool works on first launch.
 				return true
 			}
 			logging.L().Info("rpc.builtins.predicate", "tool", name, "enabled", v)

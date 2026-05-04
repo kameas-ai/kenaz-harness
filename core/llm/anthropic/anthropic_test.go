@@ -551,6 +551,10 @@ func TestAdapter_ListModels(t *testing.T) {
 	if models[0].ID != "claude-sonnet-4-5" || models[0].DisplayName != "Claude Sonnet 4.5" {
 		t.Fatalf("first model = %+v", models[0])
 	}
+	// ContextWindow should be populated from the curated catalog.
+	if models[0].ContextWindow != 200_000 {
+		t.Errorf("expected ContextWindow=200000 for claude-sonnet-4-5, got %d", models[0].ContextWindow)
+	}
 }
 
 func TestAdapter_ListModels_EmptyCredential(t *testing.T) {

@@ -19,15 +19,23 @@ import { useRoute, useRouter } from 'vue-router';
 import CanvasHead from '@/shell/CanvasHead.vue';
 import NewSessionDialog from '@/shell/NewSessionDialog.vue';
 import MessageList from '@/components/chat/MessageList.vue';
+import SessionHeader from '@/components/chat/SessionHeader.vue';
 import ChatInput from '@/components/chat/ChatInput.vue';
 import ResolvedContextPanel from '@/views/sessions/ResolvedContextPanel.vue';
 import ConfirmToolModal from '@/components/chat/ConfirmToolModal.vue';
 import BranchSidebar from '@/components/chat/BranchSidebar.vue';
 import CreateBranchModal from '@/components/chat/CreateBranchModal.vue';
 import MergeSuggestionToast from '@/components/chat/MergeSuggestionToast.vue';
+import BashPermissionModal from '@/components/permissions/BashPermissionModal.vue';
+import FilesystemPermissionModal from '@/components/permissions/FilesystemPermissionModal.vue';
+import CredentialPermissionModal from '@/components/permissions/CredentialPermissionModal.vue';
+import ToolPermissionModal from '@/components/permissions/ToolPermissionModal.vue';
+import MigrationToast from '@/components/permissions/MigrationToast.vue';
 import ArtifactPreview from '@/views/artifacts/ArtifactPreview.vue';
+import CostCell from '@/components/chat/CostCell.vue';
 import { useArtifacts, useHarnessClient, useSessions } from '@/lib/useHarnessAPI';
 import { useSession } from '@/lib/useSession';
+import { useEventStream } from '@/lib/useEventStream';
 import type {
   Artifact,
   ArtifactScope,
@@ -35,6 +43,7 @@ import type {
   MemoryScopeKind,
   Message,
   Provider,
+  SessionUsage,
   SlashExecuteResult,
 } from '@/lib/types';
 import { flattenChoices, inferFamily } from '@/lib/modelFamily';
@@ -283,69 +292,45 @@ const isWaitingForFirstChunk = computed(
     session.currentlyStreaming.value === null,
 );
 
-// Per-model context window. The connector's /models endpoint knows
-// these but they're not surfaced through the Provider type yet, so
-// we keep a small substring-matched fallback table here. Anything
-// unmatched falls back to 200k (covers the modern Anthropic /
-// OpenAI flagships). Move this to a backend-derived prop when the
-// model-info plumbing lands.
-const MODEL_CONTEXT_FALLBACK = 200_000;
-const MODEL_CONTEXT_HINTS: Array<[RegExp, number]> = [
-  [/claude-(?:opus|sonnet)-(?:4(?:-?[1-9])?|3-?7)/, 200_000],
-  [/claude-haiku/, 200_000],
-  [/claude-3(?:-5)?-haiku/, 200_000],
-  [/claude-3-(?:opus|sonnet|haiku)/, 200_000],
-  [/gpt-5/, 256_000],
-  [/gpt-4o|gpt-4-turbo/, 128_000],
-  [/gpt-4(?!o)/, 8_192],
-  [/o1|o3/, 200_000],
-  [/gemini-(?:1\.5|2)/, 1_000_000],
-  [/llama-3\.1-405/, 128_000],
-];
-
-function modelContextWindow(modelId: string): number {
-  if (!modelId) return MODEL_CONTEXT_FALLBACK;
-  const id = modelId.toLowerCase();
-  for (const [re, n] of MODEL_CONTEXT_HINTS) {
-    if (re.test(id)) return n;
-  }
-  return MODEL_CONTEXT_FALLBACK;
-}
-
-// Cheap client-side token estimate. The backend's estimateTokens uses
-// a similar chars/4 heuristic so the % we display roughly tracks what
-// the kernel sees. Don't trust this to the digit — it's a usage cue,
-// not a billing surface.
-function estimateMessageTokens(s: string): number {
-  if (!s) return 0;
-  return Math.ceil(s.length / 4);
-}
-
-const conversationTokens = computed(() => {
-  let total = 0;
-  for (const m of visibleMessages.value) {
-    total += estimateMessageTokens(m.content);
-  }
-  const streaming = session.currentlyStreaming.value;
-  if (streaming?.content) total += estimateMessageTokens(streaming.content);
-  return total;
+// Per-model context window — sourced from the backend's curated
+// capability table via Provider.modelInfos. 0 means "unknown"; the
+// meter enters an explicit "unknown" state rather than a misleading
+// 200k fallback. Real input-token counts will be wired by the
+// per-message-token-meter mission once it lands.
+//
+// contextDenominator: >0 = known window; 0 = unknown.
+const contextDenominator = computed((): number => {
+  const provider = activeProvider.value;
+  const modelId = activeModelId.value;
+  if (!provider || !modelId) return 0;
+  const info = provider.modelInfos?.find((m) => m.id === modelId);
+  const cw = info?.contextWindow ?? 0;
+  return cw > 0 ? cw : 0;
 });
 
+// hasContextWindow: true when the backend has supplied a non-zero cap.
+const hasContextWindow = computed(() => contextDenominator.value > 0);
+
+// contextNumerator: 0 until the per-message-token-meter mission wires
+// real input-token counts from session.lastUsage.
+const contextNumerator = computed(() => 0);
+
 const contextWindowPct = computed(() => {
-  const max = modelContextWindow(activeModelId.value);
+  const max = contextDenominator.value;
   if (max <= 0) return 0;
-  return Math.min(100, Math.round((conversationTokens.value / max) * 100));
+  return Math.min(100, Math.round((contextNumerator.value / max) * 100));
 });
 
 const contextWindowLabel = computed(() => {
-  const max = modelContextWindow(activeModelId.value);
-  const used = conversationTokens.value;
+  const max = contextDenominator.value;
+  const used = contextNumerator.value;
   // Compact thousands formatter ("1.2k", "12k", "128k").
   const fmt = (n: number) => {
     if (n < 1_000) return String(n);
     if (n < 10_000) return (n / 1_000).toFixed(1).replace(/\.0$/, '') + 'k';
     return Math.round(n / 1_000) + 'k';
   };
+  if (!hasContextWindow.value) return '—';
   return `${fmt(used)} / ${fmt(max)}`;
 });
 
@@ -355,6 +340,19 @@ const contextBarTone = computed<'ok' | 'warn' | 'danger'>(() => {
   if (pct >= 65) return 'warn';
   return 'ok';
 });
+
+// ── send queue ─────────────────────────────────────────────────────
+//
+// While a turn is streaming, follow-up sends are queued instead of
+// blocked. The watch on `isStreaming` drains the queue as soon as the
+// current turn ends (whether by completion or cancel). A queued turn
+// dispatches with whatever provider/model is active at drain time, so
+// the user can switch models between queueing and dispatch.
+type QueuedTurn =
+  | { kind: 'text'; content: string }
+  | { kind: 'blocks'; blocks: import('@/lib/types').ContentBlock[] };
+
+const sendQueue = ref<QueuedTurn[]>([]);
 
 async function onSend(content: string) {
   if (!hasSession.value || !activeProvider.value) return;
@@ -367,6 +365,10 @@ async function onSend(content: string) {
     sentBlocksThisTurn.value = false;
     return;
   }
+  if (isStreaming.value) {
+    sendQueue.value = [...sendQueue.value, { kind: 'text', content }];
+    return;
+  }
   await session.send(content, activeProvider.value.id, activeModelId.value);
 }
 
@@ -375,12 +377,42 @@ const sentBlocksThisTurn = ref(false);
 async function onSendBlocks(contentBlocks: import('@/lib/types').ContentBlock[]) {
   if (!hasSession.value || !activeProvider.value) return;
   sentBlocksThisTurn.value = true;
+  if (isStreaming.value) {
+    sendQueue.value = [
+      ...sendQueue.value,
+      { kind: 'blocks', blocks: contentBlocks },
+    ];
+    return;
+  }
   await session.sendBlocks(
     contentBlocks,
     activeProvider.value.id,
     activeModelId.value,
   );
 }
+
+// Drain one queued turn each time the stream ends. Recursively re-fires
+// itself via the watch — one streaming turn at a time, in FIFO order.
+watch(isStreaming, async (now, prev) => {
+  if (!prev || now) return; // only act on true → false transitions
+  if (sendQueue.value.length === 0) return;
+  if (!hasSession.value || !activeProvider.value) return;
+  const [next, ...rest] = sendQueue.value;
+  sendQueue.value = rest;
+  if (next.kind === 'text') {
+    await session.send(
+      next.content,
+      activeProvider.value.id,
+      activeModelId.value,
+    );
+  } else {
+    await session.sendBlocks(
+      next.blocks,
+      activeProvider.value.id,
+      activeModelId.value,
+    );
+  }
+});
 
 async function onCancel() {
   await session.cancel();
@@ -466,6 +498,26 @@ async function onSlashCommand(raw: string) {
   // message list so the divider shows up in the transcript.
   if (raw.trim().startsWith('/clear')) {
     void refreshActiveMessages();
+  }
+}
+
+async function onBashCommand(cmd: string) {
+  const sid = sessionId.value;
+  if (!sid) return;
+  // Echo the user's command first (mirrors what the user typed) so the
+  // transcript reads naturally — same convention slash commands follow.
+  appendSlashResult(sid, 'info', `$ ${cmd}`);
+  try {
+    const result = await client.bash.exec(sid, cmd);
+    const parts: string[] = [];
+    if (result.stdout) parts.push(result.stdout.trimEnd());
+    if (result.stderr) parts.push(`stderr:\n${result.stderr.trimEnd()}`);
+    if (result.exitCode !== 0) parts.push(`exit ${result.exitCode}`);
+    if (result.truncated) parts.push('… (output truncated at 64 KiB)');
+    const body = parts.length > 0 ? parts.join('\n\n') : '(no output)';
+    appendSlashResult(sid, result.exitCode === 0 ? 'info' : 'error', body);
+  } catch (err) {
+    appendSlashResult(sid, 'error', err instanceof Error ? err.message : String(err));
   }
 }
 
@@ -616,6 +668,37 @@ function refreshSessionArtifacts() {
 
 watch(sessionId, () => {
   refreshSessionArtifacts();
+}, { immediate: true });
+
+// Refresh the session artifact list when the LLM stream closes so that
+// tool-created artifacts (e.g. kaneaz__save_artifact) appear immediately
+// without requiring a manual navigation or session switch.
+useEventStream<{ session_id?: string }>('llm:stream-closed', (payload) => {
+  if (payload?.session_id && payload.session_id !== sessionId.value) return;
+  refreshSessionArtifacts();
+  // Refresh cost pill on every stream close (token-cost-telemetry WP04).
+  void refreshSessionUsage();
+});
+
+// ── Cost telemetry (token-cost-telemetry-01KQ8TD7 WP04) ──────────────
+const sessionUsage = ref<SessionUsage | null>(null);
+const sessionUsageLoading = ref(false);
+
+async function refreshSessionUsage() {
+  if (!sessionId.value) return;
+  sessionUsageLoading.value = true;
+  try {
+    sessionUsage.value = await client.sessions.getUsage(sessionId.value);
+  } catch {
+    // Non-fatal: leave existing value, don't surface error to user.
+  } finally {
+    sessionUsageLoading.value = false;
+  }
+}
+
+watch(sessionId, () => {
+  sessionUsage.value = null;
+  void refreshSessionUsage();
 }, { immediate: true });
 
 const artifactsByMessage = computed<ReadonlyMap<string, readonly Artifact[]>>(() => {
@@ -988,6 +1071,11 @@ function formatSize(bytes: number): string {
         >
           {{ lastArtifactError }}
         </div>
+        <SessionHeader
+          v-if="session.session.value && activeTab === 'chat'"
+          :session="session.session.value"
+          @title-changed="session.refresh()"
+        />
         <div
           v-if="activeTab === 'chat'"
           class="flex-1 min-h-0 grid grid-cols-[minmax(0,1fr)_auto]"
@@ -1152,36 +1240,60 @@ function formatSize(bytes: number): string {
               </div>
             </div>
           </div>
+          <!-- Cost pill (token-cost-telemetry-01KQ8TD7 WP04) -->
+          <CostCell
+            :usage="sessionUsage"
+            :loading="sessionUsageLoading"
+          />
+          <!-- Context window meter.
+               Known window (hasContextWindow): bar + pct + used/max label.
+               Unknown window (!hasContextWindow): greyed label only — no bar,
+               no percentage, no misleading 200k fallback. -->
           <div
             class="flex items-center gap-2"
             data-testid="session-context-meter"
-            :title="`Estimated context use — ${conversationTokens.toLocaleString()} of ${modelContextWindow(activeModelId).toLocaleString()} tokens`"
+            :title="hasContextWindow
+              ? `Context use — ${contextNumerator.toLocaleString()} of ${contextDenominator.toLocaleString()} tokens`
+              : 'Context window size unknown for this model'"
           >
-            <span class="uppercase tracking-[0.14em] text-ink-subtle">
+            <span
+              class="uppercase tracking-[0.14em]"
+              :class="hasContextWindow ? 'text-ink-subtle' : 'text-ink-dim'"
+            >
               context
             </span>
-            <div class="h-1 w-24 rounded-full bg-surface-2 overflow-hidden">
-              <div
-                class="h-full transition-[width] duration-300"
-                :class="{
-                  'bg-signal-ok': contextBarTone === 'ok',
-                  'bg-signal-warn': contextBarTone === 'warn',
-                  'bg-signal-danger': contextBarTone === 'danger',
-                }"
-                :style="{ width: contextWindowPct + '%' }"
-              ></div>
-            </div>
-            <span class="font-mono text-ink-muted tabular-nums">
-              {{ contextWindowPct }}%
-            </span>
-            <span class="font-mono text-ink-subtle">
-              {{ contextWindowLabel }}
+            <template v-if="hasContextWindow">
+              <div class="h-1 w-24 rounded-full bg-surface-2 overflow-hidden">
+                <div
+                  class="h-full transition-[width] duration-300"
+                  :class="{
+                    'bg-signal-ok': contextBarTone === 'ok',
+                    'bg-signal-warn': contextBarTone === 'warn',
+                    'bg-signal-danger': contextBarTone === 'danger',
+                  }"
+                  :style="{ width: contextWindowPct + '%' }"
+                ></div>
+              </div>
+              <span class="font-mono text-ink-muted tabular-nums">
+                {{ contextWindowPct }}%
+              </span>
+              <span class="font-mono text-ink-subtle">
+                {{ contextWindowLabel }}
+              </span>
+            </template>
+            <span
+              v-else
+              class="font-mono text-ink-dim"
+              data-testid="session-context-meter-unknown"
+            >
+              unknown
             </span>
           </div>
         </div>
         <ChatInput
           v-model="session.draft.value"
           :streaming="isStreaming"
+          :queue-depth="sendQueue.length"
           :disabled="
             !activeProvider ||
             activeProviderUnsupported ||
@@ -1194,6 +1306,7 @@ function formatSize(bytes: number): string {
           @send-blocks="onSendBlocks"
           @cancel="onCancel"
           @slash-command="onSlashCommand"
+          @bash-command="onBashCommand"
         />
       </template>
     </div>
@@ -1210,6 +1323,12 @@ function formatSize(bytes: number): string {
       @created="closeCreateBranchModal"
     />
     <MergeSuggestionToast />
+    <!-- WP08 — universal permission modals (one per family) -->
+    <BashPermissionModal />
+    <FilesystemPermissionModal />
+    <CredentialPermissionModal />
+    <ToolPermissionModal />
+    <MigrationToast />
     <ArtifactPreview
       :open="artifactPreviewOpen"
       :payload="artifactPreviewPayload"

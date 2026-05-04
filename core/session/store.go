@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/sigil-tech/kaneaz-harness/core/autonomy"
 	"github.com/sigil-tech/kaneaz-harness/core/llm"
 )
 
@@ -30,6 +31,11 @@ var (
 	// ErrInvalidContextKind is returned when SetSystemPrompt receives a
 	// kind outside {ContextKindSystem, ContextKindUserSeed}.
 	ErrInvalidContextKind = errors.New("session: invalid context kind")
+
+	// ErrAutoTitleSuperseded is returned by AutoTitle when the session's
+	// auto_titled flag is already 1 — meaning either the engine already
+	// fired or a user renamed the session — and the write is skipped.
+	ErrAutoTitleSuperseded = errors.New("session: auto-title superseded")
 )
 
 // Store is the persistence contract the Manager consumes. Two
@@ -54,6 +60,38 @@ type Store interface {
 	UpdateScrollPosition(ctx context.Context, id string, pos int64, now time.Time) error
 	SetSystemPrompt(ctx context.Context, id, content, kind string, now time.Time) error
 	SetProject(ctx context.Context, id string, projectID *string, now time.Time) error
+
+	// AutoTitle atomically sets name and auto_titled=1 on a session, but
+	// only when auto_titled is currently 0. If auto_titled is already 1,
+	// ErrAutoTitleSuperseded is returned and no write occurs.
+	// Both the predicate check and the write happen inside the same
+	// transaction to guard against races.
+	AutoTitle(ctx context.Context, id, name string, now time.Time) error
+	// MarkAutoTitleAttempted sets auto_titled=1 without changing the name.
+	// Used on the failure path so a crashed generator run doesn't
+	// retry indefinitely.
+	MarkAutoTitleAttempted(ctx context.Context, id string, now time.Time) error
+	// ClearTitle resets name to "" and auto_titled=0, re-enabling future
+	// auto-title attempts. The name empty is legal here (unlike Rename);
+	// callers own the validation that this is a deliberate user-clear.
+	ClearTitle(ctx context.Context, id string, now time.Time) error
+	// SetBranchAdvisorDismissed persists the per-session "don't suggest
+	// again" flag for the branch advisor (FR-010). When dismissed is
+	// true, the backend skips detection for this session.
+	SetBranchAdvisorDismissed(ctx context.Context, id string, dismissed bool, now time.Time) error
+
+	// SetAutonomyProfile persists the per-session autonomy.Layer
+	// (autonomy-dial-01KR3M2A WP02). An empty Layer (nil Level + empty
+	// Overrides) round-trips as both columns NULL — the upstream resolver
+	// then falls back to the project / global / tier-default chain.
+	// Mutating ID's session row is the only side effect; UpdatedAt is
+	// not bumped (this is a UI-state knob, not a content edit).
+	SetAutonomyProfile(ctx context.Context, id string, layer autonomy.Layer) error
+	// GetAutonomyProfile loads the per-session autonomy.Layer. Returns
+	// the empty Layer when both columns are NULL — callers feed the
+	// result straight into autonomy.Resolve which already understands
+	// the empty layer as "this layer contributes nothing."
+	GetAutonomyProfile(ctx context.Context, id string) (autonomy.Layer, error)
 
 	AppendMessage(ctx context.Context, m Message) (Message, error)
 	ListMessages(ctx context.Context, sessionID string) ([]Message, error)
@@ -92,6 +130,34 @@ type Store interface {
 	// a real DB.
 	DeleteArchivedBefore(ctx context.Context, cutoff time.Time, pageLimit int) (
 		deleted int, oldest, newest time.Time, err error)
+
+	// MarkStreamingFailure persists the resume metadata onto an assistant
+	// row that was just appended in the partial-output shape
+	// (long-turn-resilience-01KR3PRS WP03). The store unconditionally
+	// writes the four columns even when the row already carried a value
+	// — calling MarkStreamingFailure twice on the same id is idempotent
+	// and overwrites with the latest classification.
+	//
+	// failedAt is required (must be non-zero); kind is one of "transient"
+	// | "auth" | "unknown"; recoverable selects the UI affordance.
+	// Returns ErrSessionNotFound when the message is unknown.
+	MarkStreamingFailure(ctx context.Context, sessionID, messageID string,
+		failedAt time.Time, kind string, recoverable bool) error
+
+	// GetMessage returns one message by id within a session. Returns
+	// ErrSessionNotFound for an unknown id (mirrors the row-level "not
+	// found" shape every other lookup uses). Used by the resume RPC to
+	// load the partial assistant row before reconstructing the
+	// continuation prompt.
+	GetMessage(ctx context.Context, sessionID, messageID string) (Message, error)
+
+	// AppendContinuation persists a continuation assistant row (the
+	// "fresh" reply produced by Sessions_ResumeMessage) and stamps the
+	// continuation_of pointer onto the new row in a single transaction.
+	// originalID is the id of the partial row this continues; passing
+	// the empty string is a programmer error (the runtime will error
+	// rather than persist an unanchored continuation).
+	AppendContinuation(ctx context.Context, originalID string, m Message) (Message, error)
 }
 
 // memStore is the in-memory Store implementation. Backed by maps
@@ -195,6 +261,41 @@ func (s *memStore) SetProject(_ context.Context, id string, projectID *string, n
 	return nil
 }
 
+func (s *memStore) SetAutonomyProfile(_ context.Context, id string, layer autonomy.Layer) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	r, ok := s.records[id]
+	if !ok {
+		return ErrSessionNotFound
+	}
+	r.AutonomyLevel, r.AutonomyOverrides = cloneAutonomyLayer(layer)
+	s.records[id] = r
+	return nil
+}
+
+func (s *memStore) GetAutonomyProfile(_ context.Context, id string) (autonomy.Layer, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	r, ok := s.records[id]
+	if !ok {
+		return autonomy.Layer{}, ErrSessionNotFound
+	}
+	return autonomyLayerFromRecord(r.AutonomyLevel, r.AutonomyOverrides), nil
+}
+
+func (s *memStore) SetBranchAdvisorDismissed(_ context.Context, id string, dismissed bool, now time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	r, ok := s.records[id]
+	if !ok {
+		return ErrSessionNotFound
+	}
+	r.BranchAdvisorDismissed = dismissed
+	r.UpdatedAt = now
+	s.records[id] = r
+	return nil
+}
+
 func (s *memStore) Rename(_ context.Context, id, name string, now time.Time) error {
 	if name == "" {
 		return ErrInvalidName
@@ -206,6 +307,52 @@ func (s *memStore) Rename(_ context.Context, id, name string, now time.Time) err
 		return ErrSessionNotFound
 	}
 	r.Name = name
+	r.AutoTitled = true // non-empty rename locks out further auto-titling
+	r.UpdatedAt = now
+	s.records[id] = r
+	return nil
+}
+
+func (s *memStore) AutoTitle(_ context.Context, id, name string, now time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	r, ok := s.records[id]
+	if !ok {
+		return ErrSessionNotFound
+	}
+	// Re-check predicate inside the lock (same-transaction race safety).
+	if r.AutoTitled {
+		return ErrAutoTitleSuperseded
+	}
+	r.Name = name
+	r.AutoTitled = true
+	r.UpdatedAt = now
+	s.records[id] = r
+	return nil
+}
+
+func (s *memStore) MarkAutoTitleAttempted(_ context.Context, id string, now time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	r, ok := s.records[id]
+	if !ok {
+		return ErrSessionNotFound
+	}
+	r.AutoTitled = true
+	r.UpdatedAt = now
+	s.records[id] = r
+	return nil
+}
+
+func (s *memStore) ClearTitle(_ context.Context, id string, now time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	r, ok := s.records[id]
+	if !ok {
+		return ErrSessionNotFound
+	}
+	r.Name = ""
+	r.AutoTitled = false
 	r.UpdatedAt = now
 	s.records[id] = r
 	return nil
@@ -435,6 +582,71 @@ func (s *memStore) DeleteArchivedBefore(_ context.Context, cutoff time.Time, pag
 	return deleted, oldest, newest, nil
 }
 
+// MarkStreamingFailure stamps the resume metadata on an in-memory
+// message row. Idempotent — re-marking the same row overwrites the
+// previous classification (mirrors the SQL UPDATE shape). Returns
+// ErrSessionNotFound when the message id is unknown.
+func (s *memStore) MarkStreamingFailure(_ context.Context, sessionID, messageID string,
+	failedAt time.Time, kind string, recoverable bool) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.records[sessionID]; !ok {
+		return ErrSessionNotFound
+	}
+	src := s.messages[sessionID]
+	for i := range src {
+		if src[i].ID != messageID {
+			continue
+		}
+		t := failedAt
+		s.messages[sessionID][i].StreamingFailedAt = &t
+		s.messages[sessionID][i].StreamingFailureKind = kind
+		s.messages[sessionID][i].StreamingRecoverable = recoverable
+		return nil
+	}
+	return ErrSessionNotFound
+}
+
+// GetMessage returns one message by id within a session. Mirrors the
+// SQL-store contract.
+func (s *memStore) GetMessage(_ context.Context, sessionID, messageID string) (Message, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if _, ok := s.records[sessionID]; !ok {
+		return Message{}, ErrSessionNotFound
+	}
+	for _, m := range s.messages[sessionID] {
+		if m.ID == messageID {
+			return m, nil
+		}
+	}
+	return Message{}, ErrSessionNotFound
+}
+
+// AppendContinuation persists a continuation row, stamping
+// ContinuationOf onto the new row. Mirrors the SQL store's atomicity
+// guarantees: caller-supplied id is preserved; sequence is the next
+// monotonic slot; the in-memory normalization keeps round-trip parity
+// with content_json reads.
+func (s *memStore) AppendContinuation(_ context.Context, originalID string, m Message) (Message, error) {
+	if originalID == "" {
+		return Message{}, fmt.Errorf("session: AppendContinuation: empty originalID")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.records[m.SessionID]; !ok {
+		return Message{}, ErrSessionNotFound
+	}
+	seq := s.seqByID[m.SessionID]
+	m.Sequence = seq
+	s.seqByID[m.SessionID] = seq + 1
+	m.ContinuationOf = originalID
+	m.ContentBlocks = canonicalBlocks(m)
+	m.Content = flattenContentText(m.ContentBlocks)
+	s.messages[m.SessionID] = append(s.messages[m.SessionID], m)
+	return m, nil
+}
+
 // ── SQL-backed implementation ──────────────────────────────────────────
 
 // Result is the minimal write-result shape the SQL store needs. It
@@ -507,12 +719,22 @@ func (s *sqlStore) Create(ctx context.Context, r Record) error {
 		if r.ProjectID != nil {
 			projectID = *r.ProjectID
 		}
-		_, err := tx.Exec(ctx, `
+		var advisorDismissed int
+		if r.BranchAdvisorDismissed {
+			advisorDismissed = 1
+		}
+		autonomyLevel, autonomyOverrides, err := encodeAutonomySQL(autonomyLayerFromRecord(r.AutonomyLevel, r.AutonomyOverrides))
+		if err != nil {
+			return err
+		}
+		_, err = tx.Exec(ctx, `
             INSERT INTO sessions
                 (id, name, created_at, updated_at, last_active_at,
                  position, draft, scroll_position, archived_at,
-                 system_prompt, context_kind, project_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 system_prompt, context_kind, project_id,
+                 branch_advisor_dismissed,
+                 autonomy_level, autonomy_overrides)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `,
 			r.ID,
 			r.Name,
@@ -526,6 +748,9 @@ func (s *sqlStore) Create(ctx context.Context, r Record) error {
 			r.SystemPrompt,
 			r.ContextKind,
 			projectID,
+			advisorDismissed,
+			autonomyLevel,
+			autonomyOverrides,
 		)
 		return err
 	})
@@ -534,7 +759,9 @@ func (s *sqlStore) Create(ctx context.Context, r Record) error {
 const sqlSelectSession = `
     SELECT id, name, created_at, updated_at, last_active_at,
            position, draft, scroll_position, archived_at,
-           system_prompt, context_kind, project_id
+           system_prompt, context_kind, project_id, auto_titled,
+           COALESCE(branch_advisor_dismissed, 0),
+           autonomy_level, autonomy_overrides
     FROM sessions
 `
 
@@ -603,14 +830,110 @@ func (s *sqlStore) SetProject(ctx context.Context, id string, projectID *string,
 	})
 }
 
+func (s *sqlStore) SetBranchAdvisorDismissed(ctx context.Context, id string, dismissed bool, now time.Time) error {
+	var v int
+	if dismissed {
+		v = 1
+	}
+	return s.db.WriteTx(ctx, func(tx WriteTx) error {
+		res, err := tx.Exec(ctx,
+			"UPDATE sessions SET branch_advisor_dismissed = ?, updated_at = ? WHERE id = ?",
+			v, now.UnixNano(), id)
+		if err != nil {
+			return err
+		}
+		return rowsAffectedOrNotFound(res)
+	})
+}
+
+func (s *sqlStore) SetAutonomyProfile(ctx context.Context, id string, layer autonomy.Layer) error {
+	level, overrides, err := encodeAutonomySQL(layer)
+	if err != nil {
+		return err
+	}
+	return s.db.WriteTx(ctx, func(tx WriteTx) error {
+		res, err := tx.Exec(ctx,
+			"UPDATE sessions SET autonomy_level = ?, autonomy_overrides = ? WHERE id = ?",
+			level, overrides, id)
+		if err != nil {
+			return err
+		}
+		return rowsAffectedOrNotFound(res)
+	})
+}
+
+func (s *sqlStore) GetAutonomyProfile(ctx context.Context, id string) (autonomy.Layer, error) {
+	row := s.db.Reader().QueryRow(ctx,
+		"SELECT autonomy_level, autonomy_overrides FROM sessions WHERE id = ?", id)
+	var (
+		level     sql.NullInt64
+		overrides sql.NullString
+	)
+	if err := row.Scan(&level, &overrides); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return autonomy.Layer{}, ErrSessionNotFound
+		}
+		return autonomy.Layer{}, err
+	}
+	return decodeAutonomySQL(level, overrides)
+}
+
 func (s *sqlStore) Rename(ctx context.Context, id, name string, now time.Time) error {
 	if name == "" {
 		return ErrInvalidName
 	}
 	return s.db.WriteTx(ctx, func(tx WriteTx) error {
 		res, err := tx.Exec(ctx,
-			"UPDATE sessions SET name = ?, updated_at = ? WHERE id = ?",
+			"UPDATE sessions SET name = ?, auto_titled = 1, updated_at = ? WHERE id = ?",
 			name, now.UnixNano(), id)
+		if err != nil {
+			return err
+		}
+		return rowsAffectedOrNotFound(res)
+	})
+}
+
+func (s *sqlStore) AutoTitle(ctx context.Context, id, name string, now time.Time) error {
+	return s.db.WriteTx(ctx, func(tx WriteTx) error {
+		// Re-check predicate inside the transaction (race safety).
+		row := tx.QueryRow(ctx, "SELECT auto_titled FROM sessions WHERE id = ?", id)
+		var autoTitled int64
+		if err := row.Scan(&autoTitled); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return ErrSessionNotFound
+			}
+			return err
+		}
+		if autoTitled != 0 {
+			return ErrAutoTitleSuperseded
+		}
+		res, err := tx.Exec(ctx,
+			"UPDATE sessions SET name = ?, auto_titled = 1, updated_at = ? WHERE id = ?",
+			name, now.UnixNano(), id)
+		if err != nil {
+			return err
+		}
+		return rowsAffectedOrNotFound(res)
+	})
+}
+
+func (s *sqlStore) MarkAutoTitleAttempted(ctx context.Context, id string, now time.Time) error {
+	return s.db.WriteTx(ctx, func(tx WriteTx) error {
+		res, err := tx.Exec(ctx,
+			"UPDATE sessions SET auto_titled = 1, updated_at = ? WHERE id = ?",
+			now.UnixNano(), id)
+		if err != nil {
+			return err
+		}
+		return rowsAffectedOrNotFound(res)
+	})
+}
+
+func (s *sqlStore) ClearTitle(ctx context.Context, id string, now time.Time) error {
+	return s.db.WriteTx(ctx, func(tx WriteTx) error {
+		res, err := tx.Exec(ctx,
+			"UPDATE sessions SET name = '', auto_titled = 0, updated_at = ? WHERE id = ?",
+			now.UnixNano(), id)
 		if err != nil {
 			return err
 		}
@@ -804,7 +1127,8 @@ func (s *sqlStore) listMessages(ctx context.Context, sessionID string, activeOnl
 	}
 	query := `
         SELECT id, session_id, sequence, role, content, tool_calls, created_at, content_json,
-               compacted_into_id, compacted_at, archived_at
+               compacted_into_id, compacted_at, archived_at,
+               streaming_failed_at, streaming_failure_kind, streaming_recoverable, continuation_of
         FROM session_messages
         WHERE session_id = ?
     `
@@ -820,18 +1144,23 @@ func (s *sqlStore) listMessages(ctx context.Context, sessionID string, activeOnl
 	var out []Message
 	for rows.Next() {
 		var (
-			m               Message
-			roleStr         string
-			toolCalls       sql.NullString
-			createdAt       int64
-			contentJSON     sql.NullString
-			compactedIntoID sql.NullString
-			compactedAt     sql.NullInt64
-			archivedAt      sql.NullInt64
+			m                    Message
+			roleStr              string
+			toolCalls            sql.NullString
+			createdAt            int64
+			contentJSON          sql.NullString
+			compactedIntoID      sql.NullString
+			compactedAt          sql.NullInt64
+			archivedAt           sql.NullInt64
+			streamingFailedAt    sql.NullInt64
+			streamingFailureKind sql.NullString
+			streamingRecoverable sql.NullInt64
+			continuationOf       sql.NullString
 		)
 		if err := rows.Scan(&m.ID, &m.SessionID, &m.Sequence, &roleStr,
 			&m.Content, &toolCalls, &createdAt, &contentJSON,
-			&compactedIntoID, &compactedAt, &archivedAt); err != nil {
+			&compactedIntoID, &compactedAt, &archivedAt,
+			&streamingFailedAt, &streamingFailureKind, &streamingRecoverable, &continuationOf); err != nil {
 			return nil, err
 		}
 		m.Role = Role(roleStr)
@@ -861,6 +1190,19 @@ func (s *sqlStore) listMessages(ctx context.Context, sessionID string, activeOnl
 		if archivedAt.Valid {
 			t := time.Unix(0, archivedAt.Int64).UTC()
 			m.ArchivedAt = &t
+		}
+		if streamingFailedAt.Valid {
+			t := time.Unix(0, streamingFailedAt.Int64).UTC()
+			m.StreamingFailedAt = &t
+		}
+		if streamingFailureKind.Valid {
+			m.StreamingFailureKind = streamingFailureKind.String
+		}
+		if streamingRecoverable.Valid {
+			m.StreamingRecoverable = streamingRecoverable.Int64 != 0
+		}
+		if continuationOf.Valid {
+			m.ContinuationOf = continuationOf.String
 		}
 		out = append(out, m)
 	}
@@ -1048,12 +1390,16 @@ func synthesizeBlocks(content string) []llm.ContentBlock {
 // (single row) and Rows (current row) since both expose Scan(dest...).
 func scanRecord(sc interface{ Scan(dest ...any) error }) (Record, error) {
 	var (
-		r          Record
-		createdAt  int64
-		updatedAt  int64
-		lastActive int64
-		archived   sql.NullInt64
-		projectID  sql.NullString
+		r                  Record
+		createdAt          int64
+		updatedAt          int64
+		lastActive         int64
+		archived           sql.NullInt64
+		projectID          sql.NullString
+		autoTitled         int64
+		advisorDismissed   int
+		autonomyLevel      sql.NullInt64
+		autonomyOverrides  sql.NullString
 	)
 	if err := sc.Scan(
 		&r.ID, &r.Name,
@@ -1061,7 +1407,9 @@ func scanRecord(sc interface{ Scan(dest ...any) error }) (Record, error) {
 		&r.Position, &r.Draft, &r.ScrollPosition,
 		&archived,
 		&r.SystemPrompt, &r.ContextKind,
-		&projectID,
+		&projectID, &autoTitled,
+		&advisorDismissed,
+		&autonomyLevel, &autonomyOverrides,
 	); err != nil {
 		return Record{}, err
 	}
@@ -1076,6 +1424,19 @@ func scanRecord(sc interface{ Scan(dest ...any) error }) (Record, error) {
 		v := projectID.String
 		r.ProjectID = &v
 	}
+	r.AutoTitled = autoTitled != 0
+	r.BranchAdvisorDismissed = advisorDismissed != 0
+	if autonomyLevel.Valid {
+		t := autonomy.Tier(int(autonomyLevel.Int64))
+		r.AutonomyLevel = &t
+	}
+	if autonomyOverrides.Valid && autonomyOverrides.String != "" {
+		ov, err := decodeAutonomyOverrides(autonomyOverrides.String)
+		if err != nil {
+			return Record{}, fmt.Errorf("session: decode autonomy_overrides: %w", err)
+		}
+		r.AutonomyOverrides = ov
+	}
 	return r, nil
 }
 
@@ -1088,4 +1449,178 @@ func rowsAffectedOrNotFound(res Result) error {
 		return ErrSessionNotFound
 	}
 	return nil
+}
+
+// MarkStreamingFailure stamps the resume metadata onto the
+// session_messages row identified by messageID. Idempotent — re-marking
+// the same row overwrites the previous classification. Returns
+// ErrSessionNotFound when the row is unknown.
+//
+// long-turn-resilience-01KR3PRS WP03.
+func (s *sqlStore) MarkStreamingFailure(ctx context.Context, sessionID, messageID string,
+	failedAt time.Time, kind string, recoverable bool) error {
+	if messageID == "" {
+		return fmt.Errorf("session: MarkStreamingFailure: empty messageID")
+	}
+	recoverableArg := 0
+	if recoverable {
+		recoverableArg = 1
+	}
+	return s.db.WriteTx(ctx, func(tx WriteTx) error {
+		res, err := tx.Exec(ctx, `
+            UPDATE session_messages
+            SET streaming_failed_at = ?, streaming_failure_kind = ?, streaming_recoverable = ?
+            WHERE id = ? AND session_id = ?
+        `, failedAt.UnixNano(), kind, recoverableArg, messageID, sessionID)
+		if err != nil {
+			return err
+		}
+		return rowsAffectedOrNotFound(res)
+	})
+}
+
+// GetMessage returns one message by id within a session. Returns
+// ErrSessionNotFound for an unknown id (mirrors the row-level "not
+// found" shape every other lookup uses).
+//
+// long-turn-resilience-01KR3PRS WP03.
+func (s *sqlStore) GetMessage(ctx context.Context, sessionID, messageID string) (Message, error) {
+	row := s.db.Reader().QueryRow(ctx, `
+        SELECT id, session_id, sequence, role, content, tool_calls, created_at, content_json,
+               compacted_into_id, compacted_at, archived_at,
+               streaming_failed_at, streaming_failure_kind, streaming_recoverable, continuation_of
+        FROM session_messages
+        WHERE id = ? AND session_id = ?
+    `, messageID, sessionID)
+	var (
+		m                    Message
+		roleStr              string
+		toolCalls            sql.NullString
+		createdAt            int64
+		contentJSON          sql.NullString
+		compactedIntoID      sql.NullString
+		compactedAt          sql.NullInt64
+		archivedAt           sql.NullInt64
+		streamingFailedAt    sql.NullInt64
+		streamingFailureKind sql.NullString
+		streamingRecoverable sql.NullInt64
+		continuationOf       sql.NullString
+	)
+	if err := row.Scan(&m.ID, &m.SessionID, &m.Sequence, &roleStr,
+		&m.Content, &toolCalls, &createdAt, &contentJSON,
+		&compactedIntoID, &compactedAt, &archivedAt,
+		&streamingFailedAt, &streamingFailureKind, &streamingRecoverable, &continuationOf); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return Message{}, ErrSessionNotFound
+		}
+		return Message{}, err
+	}
+	m.Role = Role(roleStr)
+	m.CreatedAt = time.Unix(0, createdAt).UTC()
+	if toolCalls.Valid && toolCalls.String != "" {
+		if err := json.Unmarshal([]byte(toolCalls.String), &m.ToolCalls); err != nil {
+			return Message{}, err
+		}
+	}
+	if contentJSON.Valid && contentJSON.String != "" {
+		if err := json.Unmarshal([]byte(contentJSON.String), &m.ContentBlocks); err != nil {
+			return Message{}, fmt.Errorf("session: unmarshal content_json: %w", err)
+		}
+	} else {
+		m.ContentBlocks = synthesizeBlocks(m.Content)
+	}
+	if compactedIntoID.Valid {
+		id := compactedIntoID.String
+		m.CompactedIntoID = &id
+	}
+	if compactedAt.Valid {
+		t := time.Unix(0, compactedAt.Int64).UTC()
+		m.CompactedAt = &t
+	}
+	if archivedAt.Valid {
+		t := time.Unix(0, archivedAt.Int64).UTC()
+		m.ArchivedAt = &t
+	}
+	if streamingFailedAt.Valid {
+		t := time.Unix(0, streamingFailedAt.Int64).UTC()
+		m.StreamingFailedAt = &t
+	}
+	if streamingFailureKind.Valid {
+		m.StreamingFailureKind = streamingFailureKind.String
+	}
+	if streamingRecoverable.Valid {
+		m.StreamingRecoverable = streamingRecoverable.Int64 != 0
+	}
+	if continuationOf.Valid {
+		m.ContinuationOf = continuationOf.String
+	}
+	return m, nil
+}
+
+// AppendContinuation persists a continuation row, stamping the
+// continuation_of pointer onto the new row in the same transaction
+// that allocates the next sequence. Mirrors AppendMessage's sequencing
+// semantics — concurrent calls serialize on the SELECT MAX(sequence)
+// step, so two simultaneous resumes of different sessions don't
+// collide.
+//
+// long-turn-resilience-01KR3PRS WP03.
+func (s *sqlStore) AppendContinuation(ctx context.Context, originalID string, m Message) (Message, error) {
+	if originalID == "" {
+		return Message{}, fmt.Errorf("session: AppendContinuation: empty originalID")
+	}
+	canonical := canonicalBlocks(m)
+	contentText := flattenContentText(canonical)
+	contentJSON, err := json.Marshal(canonical)
+	if err != nil {
+		return Message{}, fmt.Errorf("session: marshal content_json: %w", err)
+	}
+	m.ContentBlocks = canonical
+	m.Content = contentText
+	m.ContinuationOf = originalID
+
+	var out Message
+	err = s.db.WriteTx(ctx, func(tx WriteTx) error {
+		row := tx.QueryRow(ctx, "SELECT 1 FROM sessions WHERE id = ?", m.SessionID)
+		var one int
+		if err := row.Scan(&one); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return ErrSessionNotFound
+			}
+			return err
+		}
+		seqRow := tx.QueryRow(ctx,
+			"SELECT COALESCE(MAX(sequence), -1) + 1 FROM session_messages WHERE session_id = ?",
+			m.SessionID)
+		var next int64
+		if err := seqRow.Scan(&next); err != nil {
+			return err
+		}
+		m.Sequence = next
+
+		var toolCallsJSON any
+		if len(m.ToolCalls) > 0 {
+			b, jerr := json.Marshal(m.ToolCalls)
+			if jerr != nil {
+				return jerr
+			}
+			toolCallsJSON = string(b)
+		}
+		if _, err := tx.Exec(ctx, `
+            INSERT INTO session_messages
+                (id, session_id, sequence, role, content, tool_calls, created_at, content_json, continuation_of)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `,
+			m.ID, m.SessionID, m.Sequence, string(m.Role),
+			m.Content, toolCallsJSON, m.CreatedAt.UnixNano(),
+			string(contentJSON), originalID); err != nil {
+			return err
+		}
+		out = m
+		return nil
+	})
+	if err != nil {
+		return Message{}, err
+	}
+	return out, nil
 }

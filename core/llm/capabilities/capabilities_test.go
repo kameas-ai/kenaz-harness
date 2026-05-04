@@ -94,6 +94,48 @@ func TestCatalog_DocumentsExcludesNonDocModels(t *testing.T) {
 	}
 }
 
+// TestCatalog_ContextWindow asserts that curated context-window values
+// are populated correctly for the key models in the embedded YAML data.
+func TestCatalog_ContextWindow(t *testing.T) {
+	t.Parallel()
+	c := mustCatalog(t)
+	cases := []struct {
+		provider string
+		model    string
+		want     int
+	}{
+		// Anthropic — all 200k
+		{"anthropic", "claude-sonnet-4-5", 200_000},
+		{"anthropic", "claude-opus-4-1", 200_000},
+		{"anthropic", "claude-3-5-sonnet-20240620", 200_000},
+		{"anthropic", "claude-3-5-haiku-20241022", 200_000},
+		{"anthropic", "claude-3-haiku-20240307", 200_000},
+		{"anthropic", "claude-3-sonnet-20240229", 200_000},
+		{"anthropic", "claude-3-opus-20240229", 200_000},
+		// OpenAI
+		{"openai", "gpt-4o", 128_000},
+		{"openai", "gpt-4o-mini", 128_000},
+		{"openai", "gpt-4-turbo", 128_000},
+		{"openai", "gpt-3.5-turbo", 16_385},
+		// Bedrock Claude
+		{"bedrock", "anthropic.claude-3-5-sonnet-20240620-v1:0", 200_000},
+		{"bedrock", "anthropic.claude-sonnet-4-5-v1:0", 200_000},
+		{"bedrock", "anthropic.claude-3-haiku-20240307-v1:0", 200_000},
+		// Bedrock Nova
+		{"bedrock", "amazon.nova-lite-v1", 300_000},
+		{"bedrock", "amazon.nova-pro-v1", 300_000},
+		// Unknown model — should return 0
+		{"anthropic", "claude-unknown-future-9000", 0},
+		{"openai", "gpt-unknown-99", 0},
+	}
+	for _, tc := range cases {
+		got := c.ContextWindow(tc.provider, tc.model)
+		if got != tc.want {
+			t.Errorf("ContextWindow(%q, %q) = %d, want %d", tc.provider, tc.model, got, tc.want)
+		}
+	}
+}
+
 // TestCapabilityDescriptor_JSONRoundTrip pins the descriptor JSON
 // shape end-to-end including the new documents capability.
 func TestCapabilityDescriptor_JSONRoundTrip(t *testing.T) {

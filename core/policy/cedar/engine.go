@@ -459,6 +459,11 @@ const (
 	CtxKeyToolName         = "tool_name"
 	CtxKeyServerName       = "server_name"
 	CtxKeyPromptOnFirstUse = "prompt_on_first_use"
+
+	// MCPRecipe family (mission mcp-server-install-01KQ8TDP WP10).
+	CtxKeyRecipeID        = "recipe_id"
+	CtxKeyRecipeCommand   = "recipe_command"
+	CtxKeyRecipeTransport = "recipe_transport"
 )
 
 // populateFamilyContext fills in context-attribute defaults for the
@@ -558,21 +563,34 @@ func populateFamilyContext(
 		ensure(CtxKeyToolName, toolName)
 		ensure(CtxKeyServerName, serverName)
 		ensureBool(CtxKeyPromptOnFirstUse, false)
+
+	case ActionAddRecipe, ActionSpawnRecipe:
+		// Mirror the resource id as recipe_id; callers supply the
+		// fuller recipe_command and recipe_transport via the context
+		// map. We ensure zero-values here so the policy's `when`
+		// clauses never see a missing attribute (Cedar evaluation error
+		// on a missing attr lands as Deny).
+		ensure(CtxKeyRecipeID, resourceID)
+		ensure(CtxKeyRecipeCommand, "")
+		ensure(CtxKeyRecipeTransport, "stdio")
 	}
 
 	return out
 }
 
 // isFamilyAction reports whether action is one of the WP01
-// universal-permission family actions. Used by populateFamilyContext
-// to keep agent-kernel-graph call sites unaffected.
+// universal-permission family actions or the WP10 MCP recipe family
+// actions. Used by populateFamilyContext to keep agent-kernel-graph
+// call sites unaffected.
 func isFamilyAction(action string) bool {
 	switch action {
 	case ActionUseCredential,
 		ActionRunBashCommand,
 		ActionReadFilesystem,
 		ActionWriteFilesystem,
-		ActionUseTool:
+		ActionUseTool,
+		ActionAddRecipe,
+		ActionSpawnRecipe:
 		return true
 	}
 	return false

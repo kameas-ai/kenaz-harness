@@ -2,6 +2,19 @@ import { describe, it, expect, vi } from 'vitest';
 import { mount, flushPromises } from '@vue/test-utils';
 import ArtifactPreview from '@/views/artifacts/ArtifactPreview.vue';
 import type { Artifact, ArtifactWithBytes } from '@/lib/types';
+import { provideFakeClient } from '@/lib/harnessClientContext';
+
+const withFakeClient = {
+  global: {
+    plugins: [
+      {
+        install(app: import('vue').App) {
+          provideFakeClient(app);
+        },
+      },
+    ],
+  },
+};
 
 function makeArtifact(overrides: Partial<Artifact> = {}): Artifact {
   return {
@@ -30,6 +43,7 @@ describe('ArtifactPreview', () => {
   it('renders the title and mime header', () => {
     const a = makeArtifact();
     const w = mount(ArtifactPreview, {
+      ...withFakeClient,
       props: { open: true, payload: payloadFor(a) },
     });
     expect(w.find('[data-testid="artifact-preview"]').exists()).toBe(true);
@@ -40,6 +54,7 @@ describe('ArtifactPreview', () => {
   it('renders text/plain inside a <pre>', () => {
     const a = makeArtifact({ mimeType: 'text/plain' });
     const w = mount(ArtifactPreview, {
+      ...withFakeClient,
       props: { open: true, payload: payloadFor(a, 'plain code') },
     });
     expect(w.find('[data-testid="artifact-preview-text"]').exists()).toBe(true);
@@ -49,6 +64,7 @@ describe('ArtifactPreview', () => {
   it('renders text/markdown via the marked-backed StreamingText', () => {
     const a = makeArtifact({ mimeType: 'text/markdown' });
     const w = mount(ArtifactPreview, {
+      ...withFakeClient,
       props: { open: true, payload: payloadFor(a, '# Heading\n\nbody') },
     });
     expect(w.find('[data-testid="artifact-preview-markdown"]').exists()).toBe(true);
@@ -59,6 +75,7 @@ describe('ArtifactPreview', () => {
   it('renders text/html in a sandboxed iframe with no allow flags by default', () => {
     const a = makeArtifact({ mimeType: 'text/html' });
     const w = mount(ArtifactPreview, {
+      ...withFakeClient,
       props: { open: true, payload: payloadFor(a, '<p>html</p>') },
     });
     const iframe = w.find('iframe');
@@ -72,6 +89,7 @@ describe('ArtifactPreview', () => {
   it('toggling Run scripts adds allow-scripts to the sandbox', async () => {
     const a = makeArtifact({ mimeType: 'text/html' });
     const w = mount(ArtifactPreview, {
+      ...withFakeClient,
       props: { open: true, payload: payloadFor(a, '<p>html</p>') },
     });
     await w.find('[data-testid="artifact-preview-run-scripts"]').trigger('click');
@@ -86,6 +104,7 @@ describe('ArtifactPreview', () => {
   it('renders image/* via an <img> tag with a data: URL', () => {
     const a = makeArtifact({ mimeType: 'image/png' });
     const w = mount(ArtifactPreview, {
+      ...withFakeClient,
       props: { open: true, payload: { artifact: a, bytes: 'aGVsbG8=' } },
     });
     expect(w.find('[data-testid="artifact-preview-image"]').exists()).toBe(true);
@@ -97,6 +116,7 @@ describe('ArtifactPreview', () => {
   it('renders a "Preview not available" fallback for unknown mime types', () => {
     const a = makeArtifact({ mimeType: 'application/zip' });
     const w = mount(ArtifactPreview, {
+      ...withFakeClient,
       props: { open: true, payload: payloadFor(a, 'binary') },
     });
     expect(w.find('[data-testid="artifact-preview-other"]').exists()).toBe(true);
@@ -108,6 +128,7 @@ describe('ArtifactPreview', () => {
     const updated = { ...a, scopeKind: 'project' as const, projectId: 'proj-1' };
     const onPromote = vi.fn(async () => updated);
     const w = mount(ArtifactPreview, {
+      ...withFakeClient,
       props: {
         open: true,
         payload: payloadFor(a),
@@ -125,6 +146,7 @@ describe('ArtifactPreview', () => {
   it('Promote button is disabled when scope is already project (no global tier in v1)', () => {
     const a = makeArtifact({ scopeKind: 'project' });
     const w = mount(ArtifactPreview, {
+      ...withFakeClient,
       props: { open: true, payload: payloadFor(a), projectId: 'proj-1' },
     });
     const btn = w.find('[data-testid="artifact-preview-promote"]');
@@ -136,6 +158,7 @@ describe('ArtifactPreview', () => {
     const a = makeArtifact();
     const onDelete = vi.fn(async () => undefined);
     const w = mount(ArtifactPreview, {
+      ...withFakeClient,
       props: { open: true, payload: payloadFor(a), onDelete },
     });
     await w.find('[data-testid="artifact-preview-delete"]').trigger('click');
@@ -145,31 +168,39 @@ describe('ArtifactPreview', () => {
     expect(w.emitted('deleted')).toBeTruthy();
   });
 
-  it('Download button creates and clicks an anchor with the artifact data URL', async () => {
-    const a = makeArtifact({ mimeType: 'text/plain' });
+  it('Download button calls artifacts.saveAs with id and suggested filename', async () => {
+    const a = makeArtifact({
+      mimeType: 'text/plain',
+      title: 'preview.txt',
+      sourceRef: { messageId: 'm-1' },
+    });
+    const saveAs = vi.fn(async () => '/tmp/preview.txt');
     const w = mount(ArtifactPreview, {
+      global: {
+        plugins: [
+          {
+            install(app: import('vue').App) {
+              provideFakeClient(app, {
+                artifacts: {
+                  list: async () => [],
+                  get: async (id) => ({
+                    artifact: { ...a, id },
+                    bytes: btoa('hello'),
+                  }),
+                  promote: async () => a,
+                  remove: async () => undefined,
+                  saveAs,
+                },
+              });
+            },
+          },
+        ],
+      },
       props: { open: true, payload: payloadFor(a, 'hello') },
     });
-    const captured: HTMLAnchorElement[] = [];
-    const realAppend = document.body.appendChild.bind(document.body);
-    const realRemove = document.body.removeChild.bind(document.body);
-    const appendSpy = vi
-      .spyOn(document.body, 'appendChild')
-      .mockImplementation((node) => {
-        if (node instanceof HTMLAnchorElement) captured.push(node);
-        return realAppend(node);
-      });
-    const removeSpy = vi
-      .spyOn(document.body, 'removeChild')
-      .mockImplementation((node) => realRemove(node));
-    try {
-      await w.find('[data-testid="artifact-preview-download"]').trigger('click');
-      expect(captured.length).toBe(1);
-      expect(captured[0].href).toContain('data:text/plain;base64,');
-    } finally {
-      appendSpy.mockRestore();
-      removeSpy.mockRestore();
-    }
+    await w.find('[data-testid="artifact-preview-download"]').trigger('click');
+    await flushPromises();
+    expect(saveAs).toHaveBeenCalledWith('art-1', 'preview.txt');
   });
 
   it('Copy button writes decoded text to the clipboard for text mimes', async () => {
@@ -182,6 +213,7 @@ describe('ArtifactPreview', () => {
     });
     try {
       const w = mount(ArtifactPreview, {
+        ...withFakeClient,
         props: { open: true, payload: payloadFor(a, 'hello') },
       });
       await w.find('[data-testid="artifact-preview-copy"]').trigger('click');
@@ -198,6 +230,7 @@ describe('ArtifactPreview', () => {
   it('uses no raw color literal (privacy CI invariant #4)', () => {
     const a = makeArtifact();
     const w = mount(ArtifactPreview, {
+      ...withFakeClient,
       props: { open: true, payload: payloadFor(a) },
     });
     expect(w.html()).not.toMatch(/#[0-9a-fA-F]{3,8}\b/);

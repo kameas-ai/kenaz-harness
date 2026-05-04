@@ -13,6 +13,34 @@ func TestBuiltInsRegistered(t *testing.T) {
 	}
 }
 
+func TestPermissionKindsRegistered(t *testing.T) {
+	permKinds := []Kind{
+		KindPermissionGranted,
+		KindPermissionDenied,
+		KindPermissionPrompted,
+		KindPermissionTimeout,
+		KindPermissionRevoked,
+		KindBashPermission,
+		KindFilesystemPermission,
+		KindCredentialPermission,
+		KindToolPermission,
+	}
+	for _, k := range permKinds {
+		if !IsRegistered(k) {
+			t.Errorf("permission kind %q should be registered on init", k)
+		}
+	}
+}
+
+func TestMCPRecipeTestedRegistered(t *testing.T) {
+	if !IsRegistered(KindMCPRecipeTested) {
+		t.Errorf("KindMCPRecipeTested %q should be registered as a built-in", KindMCPRecipeTested)
+	}
+	if err := Validate(KindMCPRecipeTested); err != nil {
+		t.Errorf("KindMCPRecipeTested should be valid: %v", err)
+	}
+}
+
 func TestValidateGoodKinds(t *testing.T) {
 	good := []Kind{
 		"llm.request.started",
@@ -78,5 +106,44 @@ func TestUnknownButWellFormedKindAccepted(t *testing.T) {
 	}
 	if IsRegistered(k) {
 		t.Fatalf("unknown kind should NOT report IsRegistered until Register is called")
+	}
+}
+
+// TestMCPRecipeKindsRegistered asserts that the three MCP recipe
+// lifecycle audit kinds introduced by mission mcp-server-install-01KQ8TDP
+// (WP10) are registered as built-ins at package init time.
+func TestMCPRecipeKindsRegistered(t *testing.T) {
+	mcpKinds := []Kind{
+		KindMCPRecipeAdded,
+		KindMCPRecipeRemoved,
+		KindMCPRecipeTested,
+	}
+	for _, k := range mcpKinds {
+		if !IsRegistered(k) {
+			t.Errorf("MCP recipe kind %q should be registered as a built-in", k)
+		}
+		if err := Validate(k); err != nil {
+			t.Errorf("MCP recipe kind %q should validate: %v", k, err)
+		}
+	}
+}
+
+// TestMCPRecipeKindsInBuiltIn asserts that all three MCP kinds appear
+// in the builtIn slice (regression guard against accidental removal).
+func TestMCPRecipeKindsInBuiltIn(t *testing.T) {
+	want := map[Kind]bool{
+		KindMCPRecipeAdded:   false,
+		KindMCPRecipeRemoved: false,
+		KindMCPRecipeTested:  false,
+	}
+	for _, k := range builtIn {
+		if _, ok := want[k]; ok {
+			want[k] = true
+		}
+	}
+	for k, found := range want {
+		if !found {
+			t.Errorf("kind %q missing from builtIn slice", k)
+		}
 	}
 }
