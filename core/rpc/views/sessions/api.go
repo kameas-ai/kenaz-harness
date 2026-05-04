@@ -6,8 +6,36 @@ package sessions
 import (
 	"context"
 
+	"github.com/sigil-tech/kaneaz-harness/core/autonomy"
 	"github.com/sigil-tech/kaneaz-harness/core/llm"
 )
+
+// AutonomyKnobValues is the wire shape for a ResolvedKnobs payload.
+// Concrete typed fields for every knob plus the per-knob source trace.
+// (autonomy-dial-01KR3M2A WP03)
+type AutonomyKnobValues struct {
+	MaxIterations            int               `json:"maxIterations"`
+	AskOnAmbiguity           string            `json:"askOnAmbiguity"`
+	AutoApproveFamilies      []string          `json:"autoApproveFamilies"`
+	TokenCeilingPerTurn      int               `json:"tokenCeilingPerTurn"`
+	RecapStyle               string            `json:"recapStyle"`
+	ContinueOnError          string            `json:"continueOnError"`
+	DestructiveActionPosture string            `json:"destructiveActionPosture"`
+	SourceTrace              map[string]string `json:"sourceTrace"`
+	// Tier is the effective tier label resolved from the highest-priority
+	// layer that contributed a Level (session > project > global > default).
+	Tier string `json:"tier"`
+}
+
+// ResolvedAutonomy is the full ResolveAutonomy RPC payload: the
+// resolved knobs plus the three input layers so the panels can render
+// per-layer override badges without a second round-trip.
+type ResolvedAutonomy struct {
+	Resolved AutonomyKnobValues `json:"resolved"`
+	Global   autonomy.Layer     `json:"global"`
+	Project  autonomy.Layer     `json:"project"`
+	Session  autonomy.Layer     `json:"session"`
+}
 
 // ContentBlock mirrors core/llm.ContentBlock on the rpc wire so the
 // frontend (multimodal-io WP04) can hand assembled image / document
@@ -247,4 +275,14 @@ type SessionsAPI interface {
 	//
 	// long-turn-resilience-01KR3PRS WP03.
 	ResumeMessage(ctx context.Context, sessionID, messageID string) (ResumeMessageResult, error)
+
+	// LoadAutonomyProfile returns the persisted per-session autonomy
+	// override Layer. Empty Layer means "inherit from project / global."
+	// (autonomy-dial-01KR3M2A WP03)
+	LoadAutonomyProfile(ctx context.Context, id string) (autonomy.Layer, error)
+	// SaveAutonomyProfile persists the per-session autonomy.Layer.
+	SaveAutonomyProfile(ctx context.Context, id string, layer autonomy.Layer) error
+	// ResolveAutonomy folds global → project → session layers and
+	// returns the resolved knobs plus the three input layers.
+	ResolveAutonomy(ctx context.Context, id string) (ResolvedAutonomy, error)
 }

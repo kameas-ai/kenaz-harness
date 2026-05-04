@@ -8,6 +8,7 @@ import (
 	"os"
 
 	wruntime "github.com/wailsapp/wails/v2/pkg/runtime"
+	"github.com/sigil-tech/kaneaz-harness/core/autonomy"
 	"github.com/sigil-tech/kaneaz-harness/core/toolloop"
 
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/a2a"
@@ -1317,4 +1318,43 @@ func (b *Bindings) CedarPolicy_RevokeSnippet(name string) error {
 // optional; zero values mean "no filter".
 func (b *Bindings) Search_Sessions(query string, filters searchview.SearchFilters) ([]searchview.SearchHit, error) {
 	return b.api.Search().Search(b.ctx(), query, filters)
+}
+
+// ── autonomy (autonomy-dial-01KR3M2A WP03) ────────────────────────────
+
+// Settings_GetAutonomy returns the persisted global autonomy.Layer.
+func (b *Bindings) Settings_GetAutonomy() (autonomy.Layer, error) {
+	return b.api.Settings().LoadAutonomyProfile(b.ctx())
+}
+
+// Settings_SetAutonomy persists the global autonomy.Layer.
+func (b *Bindings) Settings_SetAutonomy(layer autonomy.Layer) error {
+	return b.api.Settings().SaveAutonomyProfile(b.ctx(), layer)
+}
+
+// Projects_GetAutonomy returns the project's persisted autonomy.Layer
+// override.
+func (b *Bindings) Projects_GetAutonomy(projectID string) (autonomy.Layer, error) {
+	return b.api.Projects().LoadAutonomyProfile(b.ctx(), projectID)
+}
+
+// Projects_SetAutonomy persists the project's autonomy.Layer override.
+func (b *Bindings) Projects_SetAutonomy(projectID string, layer autonomy.Layer) error {
+	return b.api.Projects().SaveAutonomyProfile(b.ctx(), projectID, layer)
+}
+
+// Sessions_GetAutonomy returns the session's persisted autonomy.Layer
+// override.
+func (b *Bindings) Sessions_GetAutonomy(sessionID string) (autonomy.Layer, error) {
+	return b.api.Sessions().LoadAutonomyProfile(b.ctx(), sessionID)
+}
+
+// Sessions_SetAutonomy persists the session's autonomy.Layer override.
+func (b *Bindings) Sessions_SetAutonomy(sessionID string, layer autonomy.Layer) error {
+	return b.api.Sessions().SaveAutonomyProfile(b.ctx(), sessionID, layer)
+}
+
+// Sessions_ResolveAutonomy folds global → project → session layers.
+func (b *Bindings) Sessions_ResolveAutonomy(sessionID string) (sessions.ResolvedAutonomy, error) {
+	return b.api.Sessions().ResolveAutonomy(b.ctx(), sessionID)
 }

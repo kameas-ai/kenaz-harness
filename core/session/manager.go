@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/sigil-tech/kaneaz-harness/core/autonomy"
 	"github.com/sigil-tech/kaneaz-harness/core/event"
 )
 
@@ -280,6 +281,17 @@ func (m *Manager) Delete(ctx context.Context, id string) error {
 		"session_id": id,
 	})
 	return nil
+}
+
+// SetAutonomyProfile persists the per-session autonomy.Layer
+// (autonomy-dial-01KR3M2A WP03 RPC plumbing).
+func (m *Manager) SetAutonomyProfile(ctx context.Context, id string, layer autonomy.Layer) error {
+	return m.store.SetAutonomyProfile(ctx, id, layer)
+}
+
+// GetAutonomyProfile loads the per-session autonomy.Layer.
+func (m *Manager) GetAutonomyProfile(ctx context.Context, id string) (autonomy.Layer, error) {
+	return m.store.GetAutonomyProfile(ctx, id)
 }
 
 // Reorder rewrites the position field for every session in ids,

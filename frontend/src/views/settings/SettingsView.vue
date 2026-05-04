@@ -14,6 +14,7 @@ import { computed, onMounted, ref } from 'vue';
 import CanvasHead from '@/shell/CanvasHead.vue';
 import SettingsTabs from '@/views/settings/SettingsTabs.vue';
 import KeyboardShortcuts from '@/components/settings/KeyboardShortcuts.vue';
+import AutonomyPanel from '@/views/settings/AutonomyPanel.vue';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
 import { debouncedSave } from '@/lib/settings';
 import { Plus } from '@/shell/icons';
@@ -448,6 +449,8 @@ onMounted(() => {
           clear it at any time.
         </p>
       </section>
+
+      <AutonomyPanel />
 
       <section>
         <h2 class="font-ui text-[11px] uppercase tracking-[0.18em] text-ink-subtle">

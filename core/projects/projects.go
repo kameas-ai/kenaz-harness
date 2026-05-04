@@ -194,6 +194,20 @@ func (m *Manager) Delete(ctx context.Context, id string) error {
 	return m.store.Delete(ctx, id)
 }
 
+// SetAutonomyProfile persists the per-project autonomy.Layer
+// (autonomy-dial-01KR3M2A WP03 RPC plumbing). An empty Layer (nil
+// Level + empty Overrides) clears both columns so the resolver folds
+// through to the global / tier-default chain.
+func (m *Manager) SetAutonomyProfile(ctx context.Context, id string, layer autonomy.Layer) error {
+	return m.store.SetAutonomyProfile(ctx, id, layer)
+}
+
+// GetAutonomyProfile loads the per-project autonomy.Layer. Returns the
+// empty Layer when the project has no overrides.
+func (m *Manager) GetAutonomyProfile(ctx context.Context, id string) (autonomy.Layer, error) {
+	return m.store.GetAutonomyProfile(ctx, id)
+}
+
 // defaultIDGen returns a 16-byte hex id (32 chars). Matches the
 // session manager's id shape so the two namespaces look uniform in
 // audit and storage rows.
