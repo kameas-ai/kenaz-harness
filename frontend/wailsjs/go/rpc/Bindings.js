@@ -864,10 +864,8 @@ export function Workflows_Delete(arg1) {
   return window['go']['rpc']['Bindings']['Workflows_Delete'](arg1);
 }
 
-// TODO: regenerate via `wails generate module` once the WP03 RPC view lands.
-// Hand-added in WP04 (auto-update) so the Chrome-style update indicator
-// + menu can compile against typed bindings; the real generated stubs will
-// overwrite these on the next module generation.
+// TODO: regenerate via `wails generate module` once the WP04+WP05 update UI lands.
+// Hand-added in WP03 so the frontend updateClient.ts has typed bindings.
 export function Update_Status() {
   return window['go']['rpc']['Bindings']['Update_Status']();
 }
@@ -886,4 +884,12 @@ export function Update_Apply() {
 
 export function Update_SkipVersion(arg1) {
   return window['go']['rpc']['Bindings']['Update_SkipVersion'](arg1);
+}
+
+export function Update_ListSkippedVersions() {
+  return window['go']['rpc']['Bindings']['Update_ListSkippedVersions']();
+}
+
+export function Update_UnskipVersion(arg1) {
+  return window['go']['rpc']['Bindings']['Update_UnskipVersion'](arg1);
 }

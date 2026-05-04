@@ -30,6 +30,7 @@ import {slashcmd} from '../models';
 import {transport} from '../models';
 import {tools} from '../models';
 import {trust} from '../models';
+import {update} from '../models';
 import {workflow} from '../models';
 import {workflows} from '../models';
 
@@ -465,22 +466,9 @@ export function Workflows_Save(arg1:workflows.SaveInput):Promise<workflows.SaveO
 
 export function Workflows_Delete(arg1:string):Promise<void>;
 
-// TODO: regenerate via `wails generate module` once the WP03 RPC view lands.
-// Hand-added in WP04 (auto-update) for the indicator + menu shim. Real
-// types will arrive once the backend ships an `update.Status` model.
-export interface UpdateStatus {
-  currentVersion: string;
-  available: boolean;
-  availableVersion?: string;
-  channel: string;
-  downloadState: 'idle' | 'downloading' | 'staged' | 'failed';
-  downloadProgress?: number;
-  notes?: string;
-  releaseUrl?: string;
-  skippedByUser?: boolean;
-}
-
-export function Update_Status():Promise<UpdateStatus>;
+// TODO: regenerate via `wails generate module` once the WP04+WP05 update UI lands.
+// Hand-added in WP03 so the frontend updateClient.ts has typed bindings.
+export function Update_Status():Promise<update.StatusOutput>;
 
 export function Update_StartCheck():Promise<void>;
 
@@ -489,3 +477,7 @@ export function Update_StartDownload():Promise<void>;
 export function Update_Apply():Promise<void>;
 
 export function Update_SkipVersion(arg1:string):Promise<void>;
+
+export function Update_ListSkippedVersions():Promise<Array<string>>;
+
+export function Update_UnskipVersion(arg1:string):Promise<void>;
