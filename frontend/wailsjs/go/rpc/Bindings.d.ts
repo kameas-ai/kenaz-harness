@@ -22,6 +22,7 @@ import {nodes} from '../models';
 import {permissions} from '../models';
 import {policy} from '../models';
 import {projects} from '../models';
+import {autonomy} from '../models';
 import {search} from '../models';
 import {sessions} from '../models';
 import {context} from '../models';
@@ -96,13 +97,19 @@ export function Branches_SetAdvisorDismissed(arg1:string,arg2:boolean):Promise<v
 
 export function Bundle_Get(arg1:string):Promise<bundle.Bundle>;
 
+export function Bundle_Install(arg1:bundle.InstallRequest):Promise<bundle.Bundle>;
+
 export function Bundle_List():Promise<Array<bundle.Bundle>>;
+
+export function Bundle_Remove(arg1:string):Promise<void>;
 
 export function CedarPolicy_ListPolicies():Promise<Array<cedar.PolicyFile>>;
 
 export function CedarPolicy_RecentDecisions(arg1:number):Promise<Array<cedar.Decision>>;
 
 export function CedarPolicy_ReloadPolicies():Promise<void>;
+
+export function CedarPolicy_ResolvePropose(arg1:string,arg2:string):Promise<void>;
 
 export function CedarPolicy_RevokeSnippet(arg1:string):Promise<void>;
 
@@ -236,6 +243,8 @@ export function LoadTheme():Promise<string>;
 
 export function LogRouteChange(arg1:string,arg2:string):Promise<void>;
 
+export function MCP_HealthSnapshot():Promise<Record<string, mcp.HealthEntry>>;
+
 export function MCP_ImportClaudeDesktopConfig(arg1:mcp.ImportRequest):Promise<mcp.ImportResponse>;
 
 export function MCP_ListServers():Promise<Array<mcp.Server>>;
@@ -244,11 +253,9 @@ export function MCP_StartStream(arg1:string):Promise<string>;
 
 export function MCP_StopStream(arg1:string):Promise<void>;
 
-export function MCP_TestRecipe(arg1:string,arg2:Record<string, string>,arg3:Record<string, any>):Promise<mcp.TestResult>;
-
-export function MCP_HealthSnapshot():Promise<Record<string, mcp.HealthEntry>>;
-
 export function MCP_SubscribeHealthChanges():Promise<string>;
+
+export function MCP_TestRecipe(arg1:string,arg2:Record<string, string>,arg3:Record<string, any>):Promise<mcp.TestResult>;
 
 export function Memory_Forget(arg1:string):Promise<void>;
 
@@ -298,6 +305,8 @@ export function Projects_Delete(arg1:string,arg2:boolean):Promise<void>;
 
 export function Projects_Get(arg1:string):Promise<projects.Project>;
 
+export function Projects_GetAutonomy(arg1:string):Promise<autonomy.Layer>;
+
 export function Projects_List():Promise<Array<projects.Project>>;
 
 export function Projects_ListSessions(arg1:string):Promise<Array<projects.Session>>;
@@ -305,6 +314,8 @@ export function Projects_ListSessions(arg1:string):Promise<Array<projects.Sessio
 export function Projects_RemoveSession(arg1:string):Promise<void>;
 
 export function Projects_Rename(arg1:string,arg2:string):Promise<void>;
+
+export function Projects_SetAutonomy(arg1:string,arg2:autonomy.Layer):Promise<void>;
 
 export function Projects_UpdateDescription(arg1:string,arg2:string):Promise<void>;
 
@@ -326,6 +337,8 @@ export function Sessions_DeleteWithOptions(arg1:string,arg2:sessions.DeleteOptio
 
 export function Sessions_Get(arg1:string):Promise<sessions.Session>;
 
+export function Sessions_GetAutonomy(arg1:string):Promise<autonomy.Layer>;
+
 export function Sessions_GetUsage(arg1:string):Promise<sessions.SessionUsage>;
 
 export function Sessions_List():Promise<Array<sessions.Session>>;
@@ -344,11 +357,15 @@ export function Sessions_Rename(arg1:string,arg2:string):Promise<void>;
 
 export function Sessions_Reorder(arg1:Array<string>):Promise<void>;
 
+export function Sessions_ResolveAutonomy(arg1:string):Promise<sessions.ResolvedAutonomy>;
+
 export function Sessions_SaveAsArtifact(arg1:string,arg2:string,arg3:string,arg4:number,arg5:number):Promise<artifacts.Artifact>;
 
 export function Sessions_SaveDraft(arg1:string,arg2:string):Promise<void>;
 
 export function Sessions_SendMessageWithBlocks(arg1:string,arg2:Array<llm.ContentBlock>):Promise<sessions.Message>;
+
+export function Sessions_SetAutonomy(arg1:string,arg2:autonomy.Layer):Promise<void>;
 
 export function Sessions_SetSystemPrompt(arg1:string,arg2:string,arg3:string):Promise<void>;
 
@@ -364,6 +381,8 @@ export function SetSettingsStore(arg1:settings.SettingsStore):Promise<void>;
 
 export function Settings_Get():Promise<settings.Settings>;
 
+export function Settings_GetAutonomy():Promise<autonomy.Layer>;
+
 export function Settings_GetBash():Promise<boolean>;
 
 export function Settings_GetBashAllowlistMigrated():Promise<boolean>;
@@ -374,9 +393,13 @@ export function Settings_GetConfirmEach():Promise<boolean>;
 
 export function Settings_GetFSRequestAccessEnabled():Promise<boolean>;
 
+export function Settings_GetMCPAutoRestart():Promise<boolean>;
+
 export function Settings_GetMaxAgentTurns():Promise<number>;
 
 export function Settings_GetMemory():Promise<boolean>;
+
+export function Settings_GetMonthlyCostNotifyUSD():Promise<number>;
 
 export function Settings_GetPermissionCacheDangerousOps():Promise<boolean>;
 
@@ -392,6 +415,8 @@ export function Settings_GetWebSearch():Promise<boolean>;
 
 export function Settings_Set(arg1:settings.Settings):Promise<void>;
 
+export function Settings_SetAutonomy(arg1:autonomy.Layer):Promise<void>;
+
 export function Settings_SetBash(arg1:boolean):Promise<void>;
 
 export function Settings_SetBashAllowlistMigrated(arg1:boolean):Promise<void>;
@@ -402,9 +427,13 @@ export function Settings_SetConfirmEach(arg1:boolean):Promise<void>;
 
 export function Settings_SetFSRequestAccessEnabled(arg1:boolean):Promise<void>;
 
+export function Settings_SetMCPAutoRestart(arg1:boolean):Promise<void>;
+
 export function Settings_SetMaxAgentTurns(arg1:number):Promise<void>;
 
 export function Settings_SetMemory(arg1:boolean):Promise<void>;
+
+export function Settings_SetMonthlyCostNotifyUSD(arg1:number):Promise<void>;
 
 export function Settings_SetPermissionCacheDangerousOps(arg1:boolean):Promise<void>;
 
@@ -417,10 +446,6 @@ export function Settings_SetSaveArtifactEnabled(arg1:boolean):Promise<void>;
 export function Settings_SetShortcut(arg1:string,arg2:string):Promise<void>;
 
 export function Settings_SetShortcuts(arg1:Record<string, string>):Promise<void>;
-
-export function Settings_GetMCPAutoRestart():Promise<boolean>;
-
-export function Settings_SetMCPAutoRestart(arg1:boolean):Promise<void>;
 
 export function Settings_SetWebSearch(arg1:boolean):Promise<void>;
 
@@ -456,44 +481,40 @@ export function Trust_GetSecretReference(arg1:string):Promise<trust.SecretRefere
 
 export function Trust_ListSecretReferences():Promise<Array<trust.SecretReference>>;
 
+export function Update_Apply():Promise<void>;
+
+export function Update_ListSkippedVersions():Promise<Array<string>>;
+
+export function Update_SkipVersion(arg1:string):Promise<void>;
+
+export function Update_StartCheck():Promise<void>;
+
+export function Update_StartDownload():Promise<void>;
+
+export function Update_Status():Promise<update.StatusOutput>;
+
+export function Update_UnskipVersion(arg1:string):Promise<void>;
+
 export function Workflow_ListJobs():Promise<Array<workflow.Job>>;
 
 export function Workflow_StartStream():Promise<string>;
 
 export function Workflow_StopStream(arg1:string):Promise<void>;
 
-export function Workflows_List():Promise<Array<workflows.Summary>>;
+export function Workflows_Delete(arg1:string):Promise<void>;
 
 export function Workflows_Get(arg1:string):Promise<workflows.Workflow>;
 
+export function Workflows_List():Promise<Array<workflows.Summary>>;
+
 export function Workflows_Run(arg1:string,arg2:Record<string, string>):Promise<workflows.RunResult>;
 
-// TODO: regenerate via `wails generate module` once the WP09 editor lands.
-// Hand-added in WP07 so the frontend Save / Delete shim has a typed binding.
+export function Workflows_RunNow(arg1:string):Promise<workflows.RunSummary>;
+
 export function Workflows_Save(arg1:workflows.SaveInput):Promise<workflows.SaveOutput>;
 
-export function Workflows_Delete(arg1:string):Promise<void>;
+export function Workflows_ScheduleClear(arg1:string):Promise<void>;
 
-// TODO: regenerate via `wails generate module` once WP03 catalog is stable.
-// Hand-added in WP03 so the frontend CatalogView / workflowsClient has typed bindings.
-export function Workflows_Catalog_List():Promise<Array<workflows.CatalogEntry>>;
+export function Workflows_ScheduleList():Promise<Array<workflows.ScheduleEntry>>;
 
-export function Workflows_Catalog_Get(arg1:string):Promise<workflows.CatalogPreview>;
-
-export function Workflows_Catalog_Install(arg1:string):Promise<workflows.CatalogInstallResult>;
-
-// TODO: regenerate via `wails generate module` once the WP04+WP05 update UI lands.
-// Hand-added in WP03 so the frontend updateClient.ts has typed bindings.
-export function Update_Status():Promise<update.StatusOutput>;
-
-export function Update_StartCheck():Promise<void>;
-
-export function Update_StartDownload():Promise<void>;
-
-export function Update_Apply():Promise<void>;
-
-export function Update_SkipVersion(arg1:string):Promise<void>;
-
-export function Update_ListSkippedVersions():Promise<Array<string>>;
-
-export function Update_UnskipVersion(arg1:string):Promise<void>;
+export function Workflows_ScheduleSet(arg1:workflows.ScheduleSetInput):Promise<void>;

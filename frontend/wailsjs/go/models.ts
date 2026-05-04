@@ -259,6 +259,7 @@ export namespace artifacts {
 	    toolCallId?: string;
 	    codeBlockIndex?: number;
 	    filename?: string;
+	    absolutePath?: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new ArtifactSourceRef(source);
@@ -270,6 +271,7 @@ export namespace artifacts {
 	        this.toolCallId = source["toolCallId"];
 	        this.codeBlockIndex = source["codeBlockIndex"];
 	        this.filename = source["filename"];
+	        this.absolutePath = source["absolutePath"];
 	    }
 	}
 	export class Artifact {
@@ -496,6 +498,25 @@ export namespace audit {
 
 }
 
+export namespace autonomy {
+	
+	export class Layer {
+	    Level?: number;
+	    Overrides: Record<string, any>;
+	
+	    static createFrom(source: any = {}) {
+	        return new Layer(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.Level = source["Level"];
+	        this.Overrides = source["Overrides"];
+	    }
+	}
+
+}
+
 export namespace branches {
 	
 	export class Branch {
@@ -596,6 +617,8 @@ export namespace branches {
 	}
 	export class CreateBranchOptions {
 	    parentSessionId: string;
+	    parentMessageId?: string;
+	    creationPath?: string;
 	    title?: string;
 	    taskHint?: string;
 	    modelPreference?: string;
@@ -614,6 +637,8 @@ export namespace branches {
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.parentSessionId = source["parentSessionId"];
+	        this.parentMessageId = source["parentMessageId"];
+	        this.creationPath = source["creationPath"];
 	        this.title = source["title"];
 	        this.taskHint = source["taskHint"];
 	        this.modelPreference = source["modelPreference"];
@@ -728,6 +753,20 @@ export namespace bundle {
 		    }
 		    return a;
 		}
+	}
+	export class InstallRequest {
+	    kind: string;
+	    path: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new InstallRequest(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.kind = source["kind"];
+	        this.path = source["path"];
+	    }
 	}
 
 }
@@ -2019,6 +2058,7 @@ export namespace llm {
 	    displayName: string;
 	    description?: string;
 	    contextWindow?: number;
+	    maxOutputTokens?: number;
 	
 	    static createFrom(source: any = {}) {
 	        return new ModelInfo(source);
@@ -2030,6 +2070,7 @@ export namespace llm {
 	        this.displayName = source["displayName"];
 	        this.description = source["description"];
 	        this.contextWindow = source["contextWindow"];
+	        this.maxOutputTokens = source["maxOutputTokens"];
 	    }
 	}
 	export class Redacted {
@@ -2221,11 +2262,11 @@ export namespace mcp {
 	    stderr_tail?: string;
 	    duration_ms: number;
 	    error?: string;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new TestResult(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.ok = source["ok"];
@@ -2239,7 +2280,7 @@ export namespace mcp {
 	        this.duration_ms = source["duration_ms"];
 	        this.error = source["error"];
 	    }
-
+	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -2257,35 +2298,6 @@ export namespace mcp {
 		    }
 		    return a;
 		}
-	}
-
-	export class HealthEntry {
-	    id: string;
-	    state: string;
-	    last_error?: string;
-	    restart_attempts: number;
-	    stderr_tail?: string;
-	    tool_count: number;
-	    server_name?: string;
-	    server_version?: string;
-	    protocol_version?: string;
-
-	    static createFrom(source: any = {}) {
-	        return new HealthEntry(source);
-	    }
-
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.id = source["id"];
-	        this.state = source["state"];
-	        this.last_error = source["last_error"];
-	        this.restart_attempts = source["restart_attempts"] ?? 0;
-	        this.stderr_tail = source["stderr_tail"];
-	        this.tool_count = source["tool_count"] ?? 0;
-	        this.server_name = source["server_name"];
-	        this.server_version = source["server_version"];
-	        this.protocol_version = source["protocol_version"];
-	    }
 	}
 
 }
@@ -3298,6 +3310,34 @@ export namespace search {
 
 export namespace sessions {
 	
+	export class AutonomyKnobValues {
+	    maxIterations: number;
+	    askOnAmbiguity: string;
+	    autoApproveFamilies: string[];
+	    tokenCeilingPerTurn: number;
+	    recapStyle: string;
+	    continueOnError: string;
+	    destructiveActionPosture: string;
+	    sourceTrace: Record<string, string>;
+	    tier: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new AutonomyKnobValues(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.maxIterations = source["maxIterations"];
+	        this.askOnAmbiguity = source["askOnAmbiguity"];
+	        this.autoApproveFamilies = source["autoApproveFamilies"];
+	        this.tokenCeilingPerTurn = source["tokenCeilingPerTurn"];
+	        this.recapStyle = source["recapStyle"];
+	        this.continueOnError = source["continueOnError"];
+	        this.destructiveActionPosture = source["destructiveActionPosture"];
+	        this.sourceTrace = source["sourceTrace"];
+	        this.tier = source["tier"];
+	    }
+	}
 	export class DeleteOptions {
 	    preserveArtifacts?: boolean;
 	    promoteArtifactsToProject?: boolean;
@@ -3341,6 +3381,10 @@ export namespace sessions {
 	    compactedIntoId?: string;
 	    compactedAt?: string;
 	    archivedAt?: string;
+	    streamingFailedAt?: string;
+	    streamingFailureKind?: string;
+	    streamingRecoverable?: boolean;
+	    continuationOf?: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new Message(source);
@@ -3358,6 +3402,10 @@ export namespace sessions {
 	        this.compactedIntoId = source["compactedIntoId"];
 	        this.compactedAt = source["compactedAt"];
 	        this.archivedAt = source["archivedAt"];
+	        this.streamingFailedAt = source["streamingFailedAt"];
+	        this.streamingFailureKind = source["streamingFailureKind"];
+	        this.streamingRecoverable = source["streamingRecoverable"];
+	        this.continuationOf = source["continuationOf"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -3411,6 +3459,42 @@ export namespace sessions {
 		}
 	}
 	
+	export class ResolvedAutonomy {
+	    resolved: AutonomyKnobValues;
+	    global: autonomy.Layer;
+	    project: autonomy.Layer;
+	    session: autonomy.Layer;
+	
+	    static createFrom(source: any = {}) {
+	        return new ResolvedAutonomy(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.resolved = this.convertValues(source["resolved"], AutonomyKnobValues);
+	        this.global = this.convertValues(source["global"], autonomy.Layer);
+	        this.project = this.convertValues(source["project"], autonomy.Layer);
+	        this.session = this.convertValues(source["session"], autonomy.Layer);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	export class Session {
 	    id: string;
 	    name: string;
@@ -3420,6 +3504,11 @@ export namespace sessions {
 	    contextKind: string;
 	    projectId?: string;
 	    autoTitled: boolean;
+	    kind?: string;
+	    parentSessionId?: string;
+	    parentMessageId?: string;
+	    branchTitle?: string;
+	    branchDepth?: number;
 	
 	    static createFrom(source: any = {}) {
 	        return new Session(source);
@@ -3435,6 +3524,11 @@ export namespace sessions {
 	        this.contextKind = source["contextKind"];
 	        this.projectId = source["projectId"];
 	        this.autoTitled = source["autoTitled"];
+	        this.kind = source["kind"];
+	        this.parentSessionId = source["parentSessionId"];
+	        this.parentMessageId = source["parentMessageId"];
+	        this.branchTitle = source["branchTitle"];
+	        this.branchDepth = source["branchDepth"];
 	    }
 	}
 	export class SessionUsage {
@@ -3529,7 +3623,18 @@ export namespace settings {
 	    keyboardShortcuts?: Record<string, string>;
 	    keyboardShortcutsPreset?: string;
 	    fsRequestAccessDisabled?: boolean;
+	    searchDisabled?: boolean;
 	    autonomy?: number[];
+	    autoCheckUpdatesDisabled?: boolean;
+	    updateChannel?: string;
+	    updateCheckIntervalSec?: number;
+	    skippedUpdateVersions?: string[];
+	    monthlyCostNotifyUsd?: number;
+	    mcpAutoRestartDisabled?: boolean;
+	    fsReadDisabled?: boolean;
+	    fsWriteDisabled?: boolean;
+	    editFileArtifactSyncDisabled?: boolean;
+	    contextWindowOverrides?: Record<string, number>;
 	
 	    static createFrom(source: any = {}) {
 	        return new Settings(source);
@@ -3571,7 +3676,18 @@ export namespace settings {
 	        this.keyboardShortcuts = source["keyboardShortcuts"];
 	        this.keyboardShortcutsPreset = source["keyboardShortcutsPreset"];
 	        this.fsRequestAccessDisabled = source["fsRequestAccessDisabled"];
+	        this.searchDisabled = source["searchDisabled"];
 	        this.autonomy = source["autonomy"];
+	        this.autoCheckUpdatesDisabled = source["autoCheckUpdatesDisabled"];
+	        this.updateChannel = source["updateChannel"];
+	        this.updateCheckIntervalSec = source["updateCheckIntervalSec"];
+	        this.skippedUpdateVersions = source["skippedUpdateVersions"];
+	        this.monthlyCostNotifyUsd = source["monthlyCostNotifyUsd"];
+	        this.mcpAutoRestartDisabled = source["mcpAutoRestartDisabled"];
+	        this.fsReadDisabled = source["fsReadDisabled"];
+	        this.fsWriteDisabled = source["fsWriteDisabled"];
+	        this.editFileArtifactSyncDisabled = source["editFileArtifactSyncDisabled"];
+	        this.contextWindowOverrides = source["contextWindowOverrides"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -3880,6 +3996,41 @@ export namespace trust {
 
 }
 
+export namespace update {
+	
+	export class StatusOutput {
+	    currentVersion: string;
+	    available: boolean;
+	    availableVersion?: string;
+	    channel: string;
+	    downloadState: string;
+	    downloadProgress?: number;
+	    notes?: string;
+	    releaseUrl?: string;
+	    skippedByUser: boolean;
+	    lastCheckedAt?: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new StatusOutput(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.currentVersion = source["currentVersion"];
+	        this.available = source["available"];
+	        this.availableVersion = source["availableVersion"];
+	        this.channel = source["channel"];
+	        this.downloadState = source["downloadState"];
+	        this.downloadProgress = source["downloadProgress"];
+	        this.notes = source["notes"];
+	        this.releaseUrl = source["releaseUrl"];
+	        this.skippedByUser = source["skippedByUser"];
+	        this.lastCheckedAt = source["lastCheckedAt"];
+	    }
+	}
+
+}
+
 export namespace workflow {
 	
 	export class Job {
@@ -3903,43 +4054,19 @@ export namespace workflow {
 
 }
 
-
 export namespace workflows {
-
-	export class Summary {
-	    id: string;
-	    name: string;
-	    description?: string;
-	    version: number;
-	    stepCount: number;
-	    source: string;
-
-	    static createFrom(source: any = {}) {
-	        return new Summary(source);
-	    }
-
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.id = source["id"];
-	        this.name = source["name"];
-	        this.description = source["description"];
-	        this.version = source["version"];
-	        this.stepCount = source["stepCount"];
-	        this.source = source["source"];
-	    }
-	}
-
+	
 	export class Input {
 	    name: string;
 	    kind: string;
 	    required?: boolean;
 	    default?: string;
 	    options?: string[];
-
+	
 	    static createFrom(source: any = {}) {
 	        return new Input(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.name = source["name"];
@@ -3949,62 +4076,17 @@ export namespace workflows {
 	        this.options = source["options"];
 	    }
 	}
-
-	export class Step {
-	    name: string;
-	    kind: string;
-	    userPrompt?: string;
-	    cmd?: string;
-	    args?: string[];
-
-	    static createFrom(source: any = {}) {
-	        return new Step(source);
-	    }
-
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.name = source["name"];
-	        this.kind = source["kind"];
-	        this.userPrompt = source["userPrompt"];
-	        this.cmd = source["cmd"];
-	        this.args = source["args"];
-	    }
-	}
-
-	export class Workflow {
-	    id: string;
-	    name: string;
-	    description?: string;
-	    version: number;
-	    inputs?: Input[];
-	    steps: Step[];
-
-	    static createFrom(source: any = {}) {
-	        return new Workflow(source);
-	    }
-
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.id = source["id"];
-	        this.name = source["name"];
-	        this.description = source["description"];
-	        this.version = source["version"];
-	        this.inputs = (source["inputs"] || []).map((s: any) => new Input(s));
-	        this.steps = (source["steps"] || []).map((s: any) => new Step(s));
-	    }
-	}
-
 	export class StepRun {
 	    name: string;
 	    kind: string;
 	    status: string;
 	    output?: string;
 	    error?: string;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new StepRun(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.name = source["name"];
@@ -4014,45 +4096,180 @@ export namespace workflows {
 	        this.error = source["error"];
 	    }
 	}
-
 	export class RunResult {
 	    runId: string;
 	    workflowId: string;
 	    status: string;
 	    steps: StepRun[];
 	    error?: string;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new RunResult(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.runId = source["runId"];
 	        this.workflowId = source["workflowId"];
 	        this.status = source["status"];
-	        this.steps = (source["steps"] || []).map((s: any) => new StepRun(s));
+	        this.steps = this.convertValues(source["steps"], StepRun);
 	        this.error = source["error"];
 	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
 	}
-
-	// Hand-added in WP07; regenerate via `wails generate module` once the
-	// WP09 editor lands.
+	export class RunSummary {
+	    runId: string;
+	    workflowId: string;
+	    status: string;
+	    // Go type: time
+	    startedAt: any;
+	    // Go type: time
+	    endedAt?: any;
+	    error?: string;
+	    scheduled: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new RunSummary(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.runId = source["runId"];
+	        this.workflowId = source["workflowId"];
+	        this.status = source["status"];
+	        this.startedAt = this.convertValues(source["startedAt"], null);
+	        this.endedAt = this.convertValues(source["endedAt"], null);
+	        this.error = source["error"];
+	        this.scheduled = source["scheduled"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class Step {
+	    name: string;
+	    kind: string;
+	    userPrompt?: string;
+	    cmd?: string;
+	    args?: string[];
+	
+	    static createFrom(source: any = {}) {
+	        return new Step(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.kind = source["kind"];
+	        this.userPrompt = source["userPrompt"];
+	        this.cmd = source["cmd"];
+	        this.args = source["args"];
+	    }
+	}
+	export class Workflow {
+	    id: string;
+	    name: string;
+	    description?: string;
+	    version: number;
+	    inputs?: Input[];
+	    steps: Step[];
+	
+	    static createFrom(source: any = {}) {
+	        return new Workflow(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.name = source["name"];
+	        this.description = source["description"];
+	        this.version = source["version"];
+	        this.inputs = this.convertValues(source["inputs"], Input);
+	        this.steps = this.convertValues(source["steps"], Step);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	export class SaveInput {
 	    yaml?: string;
 	    workflow?: Workflow;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new SaveInput(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.yaml = source["yaml"];
-	        this.workflow = source["workflow"] ? new Workflow(source["workflow"]) : undefined;
+	        this.workflow = this.convertValues(source["workflow"], Workflow);
 	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
 	}
-
 	export class SaveOutput {
 	    id: string;
 	    name: string;
@@ -4061,11 +4278,11 @@ export namespace workflows {
 	    yaml: string;
 	    createdAt: string;
 	    updatedAt: string;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new SaveOutput(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.id = source["id"];
@@ -4077,85 +4294,64 @@ export namespace workflows {
 	        this.updatedAt = source["updatedAt"];
 	    }
 	}
-
-}
-
-// Hand-added in WP03 (mission auto-update, v0.4.0); regenerate via
-// `wails generate module` once the WP04+WP05 update UI lands.
-export namespace update {
-
-	export class StatusOutput {
-	    currentVersion: string;
-	    available: boolean;
-	    availableVersion?: string;
-	    channel: string;
-	    downloadState: string;
-	    downloadProgress?: number;
-	    notes?: string;
-	    releaseUrl?: string;
-	    skippedByUser: boolean;
-	    lastCheckedAt?: number;
-
+	export class ScheduleEntry {
+	    workflowId: string;
+	    cron: string;
+	    timezone?: string;
+	    enabled: boolean;
+	
 	    static createFrom(source: any = {}) {
-	        return new StatusOutput(source);
+	        return new ScheduleEntry(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.currentVersion = source["currentVersion"];
-	        this.available = source["available"];
-	        this.availableVersion = source["availableVersion"];
-	        this.channel = source["channel"];
-	        this.downloadState = source["downloadState"];
-	        this.downloadProgress = source["downloadProgress"];
-	        this.notes = source["notes"];
-	        this.releaseUrl = source["releaseUrl"];
-	        this.skippedByUser = source["skippedByUser"];
-	        this.lastCheckedAt = source["lastCheckedAt"];
+	        this.workflowId = source["workflowId"];
+	        this.cron = source["cron"];
+	        this.timezone = source["timezone"];
+	        this.enabled = source["enabled"];
 	    }
 	}
-
-	export class DownloadProgressPayload {
-	    bytes: number;
-	    total: number;
-	    percent: number;
-
+	export class ScheduleSetInput {
+	    workflowId: string;
+	    cron: string;
+	    timezone?: string;
+	
 	    static createFrom(source: any = {}) {
-	        return new DownloadProgressPayload(source);
+	        return new ScheduleSetInput(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.bytes = source["bytes"];
-	        this.total = source["total"];
-	        this.percent = source["percent"];
+	        this.workflowId = source["workflowId"];
+	        this.cron = source["cron"];
+	        this.timezone = source["timezone"];
 	    }
 	}
-
-	export class StagedPayload {
-	    targetVersion: string;
-
+	
+	
+	export class Summary {
+	    id: string;
+	    name: string;
+	    description?: string;
+	    version: number;
+	    stepCount: number;
+	    source: string;
+	
 	    static createFrom(source: any = {}) {
-	        return new StagedPayload(source);
+	        return new Summary(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.targetVersion = source["targetVersion"];
-	    }
-	}
-
-	export class DownloadFailedPayload {
-	    err: string;
-
-	    static createFrom(source: any = {}) {
-	        return new DownloadFailedPayload(source);
-	    }
-
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.err = source["err"];
+	        this.id = source["id"];
+	        this.name = source["name"];
+	        this.description = source["description"];
+	        this.version = source["version"];
+	        this.stepCount = source["stepCount"];
+	        this.source = source["source"];
 	    }
 	}
 
 }
+

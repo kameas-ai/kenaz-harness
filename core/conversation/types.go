@@ -77,6 +77,25 @@ type Branch struct {
 	// AdvisorSignals is the list of positive-signal labels that fired
 	// for this branch (e.g. ["can_you_also","also_figure_out"]).
 	AdvisorSignals []string
+
+	// Display-meta fields added by migration 0322
+	// (branching-ux-polish-01KQ8TD7 WP01).
+
+	// ParentMessageID is the message anchor used by the breadcrumb to
+	// compute "Branch from turn N of <parent>". Empty for branches
+	// created before migration 0322 (breadcrumb degrades gracefully).
+	ParentMessageID string
+	// BranchTitle is a display-name override. When non-empty, the
+	// sidebar tree renders this instead of the parent-derived label.
+	BranchTitle string
+	// CreationPath discriminates how the branch was created:
+	// "edit_resend" | "explicit" | "unknown".
+	CreationPath string
+	// ParentSessionTitle is a snapshot of the parent session's display
+	// name at fork time. Used by the breadcrumb when the parent session
+	// has since been deleted — renders "Branch of [parent deleted: <name>]"
+	// instead of going blank.
+	ParentSessionTitle string
 }
 
 // MessageRef is one row of the copy-on-write reference table. Each

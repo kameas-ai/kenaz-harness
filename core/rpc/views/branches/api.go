@@ -37,6 +37,14 @@ type Branch struct {
 // CreateBranchOptions is the request body for CreateBranch.
 type CreateBranchOptions struct {
 	ParentSessionID string `json:"parentSessionId"`
+	// ParentMessageID is set when the fork anchors at a specific message
+	// (branching-ux-polish-01KQ8TD7 WP02). When non-empty, CreateBranch
+	// delegates to CreateBranchAtMessage internally.
+	ParentMessageID string `json:"parentMessageId,omitempty"`
+	// CreationPath is "explicit" | "edit_resend" | "unknown". Defaults to
+	// "unknown" when unset; "explicit" is set by the "Branch from this
+	// turn" menu item.
+	CreationPath string `json:"creationPath,omitempty"`
 	// Title is a short user-facing branch title.
 	Title string `json:"title,omitempty"`
 	// TaskHint is the user's free-text description; the recommendation
@@ -59,6 +67,34 @@ type CreateBranchOptions struct {
 	RecommendationID  string   `json:"recommendationId,omitempty"`
 	AdvisorSignals    []string `json:"advisorSignals,omitempty"`
 	AdvisorConfidence float64  `json:"advisorConfidence,omitempty"`
+}
+
+// SessionWithBranchPointer is the wire shape for ListWithBranchTree.
+// It embeds the session metadata plus the branch-linkage fields so the
+// frontend can build a tree without a second round-trip.
+// (branching-ux-polish-01KQ8TD7 WP02)
+type SessionWithBranchPointer struct {
+	// SessionID mirrors sessions.Session.ID.
+	SessionID string `json:"sessionId"`
+	// SessionName mirrors sessions.Session.Name.
+	SessionName string `json:"sessionName"`
+	// CreatedAt mirrors sessions.Session.CreatedAt (RFC3339Nano UTC).
+	CreatedAt string `json:"createdAt"`
+	// ParentSessionID is non-empty when this session is a branch.
+	ParentSessionID string `json:"parentSessionId,omitempty"`
+	// ParentMessageID is the message anchor the branch forked from.
+	// Empty for branches created before migration 0322.
+	ParentMessageID string `json:"parentMessageId,omitempty"`
+	// BranchTitle is the display-name override for the branch. Empty
+	// for branches without an explicit title.
+	BranchTitle string `json:"branchTitle,omitempty"`
+	// BranchDepth is 0 for top-level sessions; pre-computed server-side
+	// via iterative ancestor walks (capped at 32).
+	BranchDepth int `json:"branchDepth,omitempty"`
+	// ParentSessionTitle is a snapshot of the parent's display name at
+	// fork time. Non-empty only for branch sessions; used by the
+	// breadcrumb when the parent has been deleted.
+	ParentSessionTitle string `json:"parentSessionTitle,omitempty"`
 }
 
 // ReintegrationProposal is the response shape for
@@ -147,6 +183,13 @@ type BranchesAPI interface {
 	// SetAdvisorDismissed persists the per-session "don't suggest again"
 	// flag for the branch advisor (FR-010 / WP04).
 	SetAdvisorDismissed(ctx context.Context, sessionID string, dismissed bool) error
+
+	// ListWithBranchTree returns a flat list of sessions with parent
+	// pointers populated for branches. The frontend builds the tree by
+	// grouping on ParentSessionID. Sessions are returned oldest-first.
+	// Depth is pre-computed server-side (iterative walk, cap 32).
+	// (branching-ux-polish-01KQ8TD7 WP02)
+	ListWithBranchTree(ctx context.Context, projectID string) ([]SessionWithBranchPointer, error)
 }
 
 // fmtTime renders a time.Time as RFC3339Nano UTC, returning "" for the

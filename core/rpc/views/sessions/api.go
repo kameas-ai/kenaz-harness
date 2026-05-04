@@ -66,6 +66,24 @@ type Session struct {
 	// values are treated as "chat". Populated by migration 0318
 	// (harness-self-mcp-onboarding-01KQ8TDU WP03).
 	Kind string `json:"kind,omitempty"`
+
+	// Branch linkage fields (branching-ux-polish-01KQ8TD7 WP02).
+	// These are omitted for top-level sessions; non-empty only for
+	// branch sessions. They are projected from the branches table via
+	// a join — the sessions table itself has no parent column.
+
+	// ParentSessionId is the id of the parent session this session
+	// branched from. Empty for root sessions.
+	ParentSessionId string `json:"parentSessionId,omitempty"`
+	// ParentMessageId is the message anchor used by the breadcrumb.
+	// Empty for branches created before migration 0322.
+	ParentMessageId string `json:"parentMessageId,omitempty"`
+	// BranchTitle is the display-name override for the branch. Empty
+	// when no explicit title was set.
+	BranchTitle string `json:"branchTitle,omitempty"`
+	// BranchDepth is 0 for top-level sessions; pre-computed by iterative
+	// ancestor walks capped at 32.
+	BranchDepth int `json:"branchDepth,omitempty"`
 }
 
 // ToolCall mirrors the frontend ToolCall shape for tool-use rendering.
