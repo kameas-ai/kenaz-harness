@@ -777,3 +777,158 @@ func TestCheckRecipeAdd_AllowAllPermits(t *testing.T) {
 		t.Fatalf("AllowAll CheckRecipeSpawn should permit: %v", err)
 	}
 }
+
+// ── WP06: harness-self session-kind gating ────────────────────────────────
+
+// harnessSnippets returns the three default harness-self Cedar snippets
+// used by WP06 tests. They mirror what harness.EmbeddedCedar holds.
+// tool_name in context.* carries only the part after the "__" separator
+// (i.e. "harness_write_set_setting"), so patterns use "harness_write_*"
+// without a leading "*__".
+func harnessSnippets() map[string][]byte {
+	return map[string][]byte{
+		"harness_read_default.cedar": []byte(`
+permit (
+    principal == User::"local",
+    action == Action::"use_tool",
+    resource is Tool
+) when {
+    context.server_name == "harness-self" &&
+    context.tool_name like "harness_read_*"
+};`),
+		"harness_write_onboarding.cedar": []byte(`
+permit (
+    principal == User::"local",
+    action == Action::"use_tool",
+    resource is Tool
+) when {
+    context.server_name == "harness-self" &&
+    context.tool_name like "harness_write_*" &&
+    context.session_kind == "onboarding"
+};`),
+		"harness_write_forbid.cedar": []byte(`
+forbid (
+    principal == User::"local",
+    action == Action::"use_tool",
+    resource is Tool
+) when {
+    context.server_name == "harness-self" &&
+    context.tool_name like "harness_write_*" &&
+    context.session_kind != "onboarding"
+};`),
+	}
+}
+
+// TestLoadHarnessSnippets_Read verifies that harness_read_* tools are
+// permitted in any session kind after LoadHarnessSnippets is called.
+func TestLoadHarnessSnippets_Read(t *testing.T) {
+	t.Parallel()
+	e, err := NewEngine(Options{IncludeEmbedded: false, LoadFromDisk: false})
+	if err != nil {
+		t.Fatalf("NewEngine: %v", err)
+	}
+	if err := e.LoadHarnessSnippets(harnessSnippets()); err != nil {
+		t.Fatalf("LoadHarnessSnippets: %v", err)
+	}
+	// A read tool from a chat session must be allowed.
+	d := e.Evaluate(
+		context.Background(),
+		UserUID(),
+		ActionUseTool,
+		PermissionToolUID("harness-self__harness_read_list_providers"),
+		map[cedarlib.String]cedarlib.Value{
+			cedarlib.String(CtxKeySessionKind): cedarlib.String("chat"),
+		},
+	)
+	if d.Outcome != Allow {
+		t.Fatalf("read tool from chat session: want Allow, got %s (reason=%s matched=%s)",
+			d.Outcome, d.Reason, d.MatchedPolicy)
+	}
+}
+
+// TestLoadHarnessSnippets_WriteOnboarding verifies that harness_write_*
+// tools are permitted when session_kind == "onboarding".
+func TestLoadHarnessSnippets_WriteOnboarding(t *testing.T) {
+	t.Parallel()
+	e, err := NewEngine(Options{IncludeEmbedded: false, LoadFromDisk: false})
+	if err != nil {
+		t.Fatalf("NewEngine: %v", err)
+	}
+	if err := e.LoadHarnessSnippets(harnessSnippets()); err != nil {
+		t.Fatalf("LoadHarnessSnippets: %v", err)
+	}
+	d := e.Evaluate(
+		context.Background(),
+		UserUID(),
+		ActionUseTool,
+		PermissionToolUID("harness-self__harness_write_set_setting"),
+		map[cedarlib.String]cedarlib.Value{
+			cedarlib.String(CtxKeySessionKind): cedarlib.String("onboarding"),
+		},
+	)
+	if d.Outcome != Allow {
+		t.Fatalf("write tool from onboarding session: want Allow, got %s (reason=%s)",
+			d.Outcome, d.Reason)
+	}
+}
+
+// TestLoadHarnessSnippets_WriteForbidFromChat verifies that harness_write_*
+// tools are denied when session_kind != "onboarding" (WP06 forbid rule).
+func TestLoadHarnessSnippets_WriteForbidFromChat(t *testing.T) {
+	t.Parallel()
+	e, err := NewEngine(Options{IncludeEmbedded: false, LoadFromDisk: false})
+	if err != nil {
+		t.Fatalf("NewEngine: %v", err)
+	}
+	if err := e.LoadHarnessSnippets(harnessSnippets()); err != nil {
+		t.Fatalf("LoadHarnessSnippets: %v", err)
+	}
+	d := e.Evaluate(
+		context.Background(),
+		UserUID(),
+		ActionUseTool,
+		PermissionToolUID("harness-self__harness_write_set_setting"),
+		map[cedarlib.String]cedarlib.Value{
+			cedarlib.String(CtxKeySessionKind): cedarlib.String("chat"),
+		},
+	)
+	if d.Outcome != Deny {
+		t.Fatalf("write tool from chat session: want Deny, got %s (reason=%s matched=%s)",
+			d.Outcome, d.Reason, d.MatchedPolicy)
+	}
+}
+
+// TestLoadHarnessSnippets_ListPolicies verifies that the harness snippets
+// appear in Engine.ListPolicies after loading.
+func TestLoadHarnessSnippets_ListPolicies(t *testing.T) {
+	t.Parallel()
+	e, err := NewEngine(Options{IncludeEmbedded: false, LoadFromDisk: false})
+	if err != nil {
+		t.Fatalf("NewEngine: %v", err)
+	}
+	if err := e.LoadHarnessSnippets(harnessSnippets()); err != nil {
+		t.Fatalf("LoadHarnessSnippets: %v", err)
+	}
+	files := e.ListPolicies()
+	byName := map[string]PolicyFile{}
+	for _, f := range files {
+		byName[f.Name] = f
+	}
+	for _, name := range []string{
+		"harness_read_default.cedar",
+		"harness_write_onboarding.cedar",
+		"harness_write_forbid.cedar",
+	} {
+		f, ok := byName[name]
+		if !ok {
+			t.Errorf("ListPolicies: missing %s", name)
+			continue
+		}
+		if !f.Embedded {
+			t.Errorf("ListPolicies: %s Embedded=false, want true", name)
+		}
+		if !f.ParseOK {
+			t.Errorf("ListPolicies: %s ParseOK=false (err=%s)", name, f.ParseErr)
+		}
+	}
+}
