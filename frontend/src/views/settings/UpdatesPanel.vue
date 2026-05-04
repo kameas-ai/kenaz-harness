@@ -96,12 +96,12 @@ onMounted(() => {
 
 /** Friendly relative-time renderer for "Last checked" — matches the
  *  mission brief's "14 minutes ago" / "Never" copy. Avoids a date-fns
- *  dep so the panel stays light. */
-function relativeTime(isoOrNull: string | null): string {
-  if (!isoOrNull) return 'Never';
-  const t = Date.parse(isoOrNull);
-  if (Number.isNaN(t)) return 'Never';
-  const diffSec = Math.max(0, (Date.now() - t) / 1000);
+ *  dep so the panel stays light. Accepts a Unix-seconds number (the
+ *  backend's UpdateStatus.lastCheckedAt shape) or null/undefined. */
+function relativeTime(unixSec: number | null | undefined): string {
+  if (unixSec == null || unixSec <= 0) return 'Never';
+  const tMs = unixSec * 1000;
+  const diffSec = Math.max(0, (Date.now() - tMs) / 1000);
   if (diffSec < 60) return 'just now';
   const diffMin = Math.floor(diffSec / 60);
   if (diffMin < 60)
@@ -116,9 +116,12 @@ const lastCheckedLabel = computed(() =>
   status.value ? relativeTime(status.value.lastCheckedAt) : '—',
 );
 
+// auto-check is owned by the Settings record (autoCheckUpdatesDisabled
+// inverted), not by the UpdateStatus payload. Read it from settings so
+// the indicator matches the toggle below.
 const autoCheckLabel = computed(() => {
-  if (!status.value) return '—';
-  return status.value.autoCheckEnabled ? 'on' : 'off';
+  if (!settings.value) return '—';
+  return settings.value.autoCheckUpdatesDisabled ? 'off' : 'on';
 });
 
 async function onCheckNow() {
@@ -137,7 +140,7 @@ async function onCheckNow() {
 }
 
 async function onInstallAvailable() {
-  const v = status.value?.available?.version;
+  const v = status.value?.availableVersion;
   if (!v || installing.value) return;
   installing.value = true;
   errorMessage.value = null;
@@ -317,16 +320,16 @@ async function onUnskip(version: string) {
 
       <!-- Inline "vX.Y.Z available" mini-panel — mirrors UpdateMenu. -->
       <div
-        v-if="status?.available"
+        v-if="status?.available && status.availableVersion"
         class="mt-3 flex items-center justify-between gap-3 rounded-sm border border-accent-hairline bg-surface-2 px-3 py-2"
         data-testid="updates-available-panel"
       >
         <div class="font-ui text-[12px] text-ink">
-          <span class="font-mono">{{ status.available.version }}</span>
+          <span class="font-mono">{{ status.availableVersion }}</span>
           available
           <a
-            v-if="status.available.notesUrl"
-            :href="status.available.notesUrl"
+            v-if="status.releaseUrl"
+            :href="status.releaseUrl"
             target="_blank"
             rel="noopener noreferrer"
             class="ml-2 text-accent hover:underline"

@@ -92,11 +92,9 @@ function mountPanel(opts: {
   const { client, set } = buildClient(makeSettings(opts.settings));
   const fullStatus: UpdateStatus = {
     currentVersion: 'v0.3.3',
-    autoCheckEnabled: true,
-    lastCheckedAt: null,
+    available: false,
     channel: 'stable',
-    available: null,
-    checking: false,
+    downloadState: 'idle',
     ...opts.status,
   };
   const startCheck = vi.fn(async () => {});
@@ -158,11 +156,9 @@ describe('UpdatesPanel — status block', () => {
   it('renders the available-update mini-panel when status reports one', async () => {
     const { wrapper, installLatest } = mountPanel({
       status: {
-        available: {
-          version: 'v0.3.4',
-          notesUrl: 'https://example.com/r/v0.3.4',
-          publishedAt: '2026-04-25T00:00:00Z',
-        },
+        available: true,
+        availableVersion: 'v0.3.4',
+        releaseUrl: 'https://example.com/r/v0.3.4',
       },
     });
     await flushPromises();

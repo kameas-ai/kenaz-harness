@@ -16,13 +16,16 @@ import (
 	"github.com/sigil-tech/kaneaz-harness/core"
 	"github.com/sigil-tech/kaneaz-harness/core/logging"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc"
+	"github.com/sigil-tech/kaneaz-harness/core/update/bootswap"
 )
 
 //go:embed all:frontend/dist
 var assets embed.FS
 
 // Version is injected by the release pipeline via:
-//   wails build -ldflags "-X main.Version=v0.1.2"
+//
+//	wails build -ldflags "-X main.Version=v0.1.2"
+//
 // Release-please bumps this string indirectly: the source of truth is the
 // release-please manifest + git tag; the ldflag wires the resolved tag into
 // the binary at link time. "dev" is the local, untagged default.
@@ -49,6 +52,21 @@ func main() {
 	}
 	if err := os.MkdirAll(dataDir, 0o755); err != nil {
 		log.Fatalf("mkdir data dir: %v", err)
+	}
+
+	// Boot-time auto-update swap (mission auto-update WP02). On
+	// Windows this completes a deferred swap from a previous session;
+	// on macOS/Linux it is a no-op (the marker is never written).
+	// Errors are NON-FATAL: we log and continue so a corrupt staged
+	// update never prevents the user from launching their existing
+	// (un-updated) build. The Relauncher is nil → real os.Exit path.
+	if res, err := bootswap.MaybeSwapAndRelaunch(bootswap.Config{
+		DataDir: dataDir,
+		Args:    os.Args[1:],
+	}); err != nil {
+		logging.L().Warn("update.bootswap.error", "err", err.Error())
+	} else if res.Swapped {
+		logging.L().Info("update.bootswap.completed", "version", res.TargetVersion)
 	}
 
 	c, err := core.New(core.Options{

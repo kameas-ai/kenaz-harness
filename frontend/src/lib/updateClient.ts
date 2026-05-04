@@ -1,181 +1,156 @@
 /**
  * updateClient — frontend shim for the auto-update v0.4.0 RPC surface.
  *
- * WP04 introduces this module so the UpdateMenu / UpdatesPanel can speak
- * to the updater without going through the typed HarnessClient (the
- * update RPC lives outside the SettingsAPI / view-scoped surface). WP05
- * extends it with the skip-list operations the Settings panel needs:
- * `listSkippedVersions` (collapsible list source) and `unskipVersion`
- * (the per-row "Unskip" link).
+ * Unified surface for three work packages:
+ *   - WP03 wires the real Wails bindings (Update_Status returns
+ *     update.StatusOutput; Update_StartCheck / StartDownload / Apply /
+ *     SkipVersion / ListSkippedVersions / UnskipVersion).
+ *   - WP04 (Chrome-style indicator + UpdateMenu) consumes the flat
+ *     UpdateStatus directly: availableVersion, downloadState,
+ *     downloadProgress, releaseUrl, skippedByUser.
+ *   - WP05 (Settings → Updates panel) consumes the same status and
+ *     additionally drives listSkippedVersions / unskipVersion plus
+ *     install. The Settings panel reads channel + interval + auto-check
+ *     out of the Settings record (not UpdateStatus) via SettingsClient.
  *
- * Until WP03 wires the real backend, every call here resolves through a
- * mock implementation: `status()` returns a deterministic snapshot,
- * `startCheck()` is a no-op, `installLatest()` is a no-op, and the
- * skip-list operations round-trip through Settings_GetSkippedUpdateVersions
- * / Settings_RemoveSkippedUpdateVersion when those bindings exist (added
- * in this WP), falling back to an in-memory list otherwise.
- *
- * The shim is intentionally narrow — no event streams, no progress
- * payloads — so WP03 can drop the mock and wire the real RPC without
- * touching every call site.
+ * Status shape mirrors the WP02 backend `update.Status` struct:
+ *   currentVersion: semver of the running binary
+ *   available     : true iff a newer version on the configured channel exists
+ *   availableVersion: semver of the offered upgrade (only set when available)
+ *   channel       : 'stable' | 'beta' | 'dev' | 'prerelease'
+ *   downloadState : staged-download lifecycle
+ *   downloadProgress: 0..1, only meaningful while downloading
+ *   notes         : short markdown blurb pulled from the release manifest
+ *   releaseUrl    : GitHub Releases URL for the offered version
+ *   skippedByUser : true iff the user already chose Skip on this version
+ *   lastCheckedAt : Unix-seconds timestamp of the most recent check
  */
 
-export interface UpdateRelease {
-  /** Canonical version string, e.g. "v0.3.4". */
-  version: string;
-  /** GitHub release URL the "Release notes" link points at. */
-  notesUrl: string;
-  /** Human-readable publish date. */
-  publishedAt: string;
-}
-
 export interface UpdateStatus {
-  /** Currently-installed version (mirrors AppInfo.build, but stripped
-   *  of any "+commit" suffix the build pipeline adds). */
   currentVersion: string;
-  /** Whether the auto-check scheduler is enabled. Mirror of
-   *  Settings.AutoCheckUpdates(). */
-  autoCheckEnabled: boolean;
-  /** Last time the checker ran, as an ISO-8601 string, or null when
+  available: boolean;
+  availableVersion?: string;
+  channel: string;
+  downloadState: 'idle' | 'downloading' | 'staged' | 'failed';
+  downloadProgress?: number;
+  notes?: string;
+  releaseUrl?: string;
+  skippedByUser?: boolean;
+  /** Unix-seconds since the last successful check; null/undefined when
    *  the checker has never run on this install. */
-  lastCheckedAt: string | null;
-  /** Active release channel — either "stable" or "prerelease". */
-  channel: 'stable' | 'prerelease';
-  /** The latest release the checker found, or null when nothing newer
-   *  than `currentVersion` is available on the configured channel. */
-  available: UpdateRelease | null;
-  /** Whether a check is currently in flight (drives the "Check for
-   *  updates now" button's disabled state). */
-  checking: boolean;
+  lastCheckedAt?: number;
 }
 
 export interface UpdateClient {
-  /** Read the full update status snapshot. */
+  /** Read the current update status (cheap; backend caches the manifest). */
   status(): Promise<UpdateStatus>;
-  /** Trigger an immediate check. The backend updates `lastCheckedAt`
-   *  and `available` fields; status() reflects the new values once it
-   *  resolves. */
+  /** Force an immediate check against the channel manifest. */
   startCheck(): Promise<void>;
-  /** Install a known release. The backend kicks off the platform-native
-   *  installer flow (signed dmg / msi / AppImage); the harness exits
-   *  shortly after so the installer can replace the running binary. */
+  /** Begin (or resume) downloading the staged binary in the background. */
+  startDownload(): Promise<void>;
+  /**
+   * Apply the staged update.
+   * - Mac/Linux: replaces the binary and restarts the app.
+   * - Windows  : stages the installer for the next launch (no restart).
+   */
+  apply(): Promise<void>;
+  /**
+   * Convenience shim used by the Settings → Updates "Install" button.
+   * Triggers a download (if not already staged) then applies. The
+   * version arg is informational; the backend installs whatever the
+   * current channel manifest advertises.
+   */
   installLatest(version: string): Promise<void>;
-
-  // ── Skip-list operations (WP05) ──────────────────────────────────────
-
+  /** Persist a "skip this version" choice; backend won't re-prompt. */
+  skipVersion(version: string): Promise<void>;
   /** Read the user's skipped-versions list. */
   listSkippedVersions(): Promise<string[]>;
-  /** Add a version to the skip-list. Idempotent. */
-  skipVersion(version: string): Promise<void>;
   /** Remove a version from the skip-list. No-op if missing. */
   unskipVersion(version: string): Promise<void>;
 }
 
-/* eslint-disable  @typescript-eslint/no-explicit-any */
-type WailsBindings = Record<string, (...args: any[]) => Promise<any>>;
-/* eslint-enable  @typescript-eslint/no-explicit-any */
-
-function bindings(): WailsBindings | null {
-  // The wails runtime injects window.go.* lazily. Returning null lets
-  // the mock pathway take over for vitest + storybook.
-  const w = (typeof window !== 'undefined' ? window : undefined) as
-    | (Window & { go?: { main?: { App?: WailsBindings } } })
-    | undefined;
-  const b = w?.go?.main?.App;
-  return b ?? null;
+interface BridgeShape {
+  Update_Status: () => Promise<UpdateStatus>;
+  Update_StartCheck: () => Promise<void>;
+  Update_StartDownload: () => Promise<void>;
+  Update_Apply: () => Promise<void>;
+  Update_SkipVersion: (version: string) => Promise<void>;
+  Update_ListSkippedVersions: () => Promise<string[]>;
+  Update_UnskipVersion: (version: string) => Promise<void>;
 }
 
-/**
- * createUpdateClient — production factory. Reads through the wails
- * bindings when available (WP03 wires `Update_Status`, `Update_StartCheck`,
- * `Update_InstallLatest`, `Settings_GetSkippedUpdateVersions`,
- * `Settings_AppendSkippedUpdateVersion`, `Settings_RemoveSkippedUpdateVersion`);
- * falls back to a deterministic mock so the panel mounts cleanly in
- * dev / tests where the wails runtime is absent.
- */
+// NOTE: not declaring `interface Window` here. `harnessClient.ts` and
+// `workflowsClient.ts` already extend the global Window with their own
+// (different) `Bindings` shapes; declaring a third would either collide or
+// narrow the union. We cast at access time instead.
+
+interface BridgesContainer {
+  go?: { rpc?: { Bindings?: unknown } };
+}
+
+function bridge(): BridgeShape {
+  const w =
+    typeof window !== 'undefined'
+      ? (window as unknown as BridgesContainer)
+      : undefined;
+  const b = w?.go?.rpc?.Bindings;
+  if (!b) {
+    throw new Error(
+      'window.go.rpc.Bindings is not available. The harness frontend must run inside Wails.',
+    );
+  }
+  return b as BridgeShape;
+}
+
 export function createUpdateClient(): UpdateClient {
   return {
-    status: async () => {
-      const b = bindings();
-      if (b && typeof b.Update_Status === 'function') {
-        return (await b.Update_Status()) as UpdateStatus;
-      }
-      // Mock — see fakeUpdateStatus() for the canonical shape.
-      return fakeUpdateStatus();
+    status: () => bridge().Update_Status(),
+    startCheck: () => bridge().Update_StartCheck(),
+    startDownload: () => bridge().Update_StartDownload(),
+    apply: () => bridge().Update_Apply(),
+    installLatest: async (_version: string) => {
+      // The Settings panel's "Install" button is a one-shot: kick off
+      // the download then apply when ready. The version arg is
+      // informational; the backend installs the current manifest's
+      // advertised version.
+      await bridge().Update_StartDownload();
+      await bridge().Update_Apply();
     },
-    startCheck: async () => {
-      const b = bindings();
-      if (b && typeof b.Update_StartCheck === 'function') {
-        await b.Update_StartCheck();
-      }
-      // No-op fallback; WP03 wires the real check.
-    },
-    installLatest: async (version: string) => {
-      const b = bindings();
-      if (b && typeof b.Update_InstallLatest === 'function') {
-        await b.Update_InstallLatest(version);
-      }
-    },
-    listSkippedVersions: async () => {
-      const b = bindings();
-      if (b && typeof b.Settings_GetSkippedUpdateVersions === 'function') {
-        return (await b.Settings_GetSkippedUpdateVersions()) as string[];
-      }
-      return [...mockSkipped];
-    },
-    skipVersion: async (version: string) => {
-      const b = bindings();
-      if (b && typeof b.Settings_AppendSkippedUpdateVersion === 'function') {
-        await b.Settings_AppendSkippedUpdateVersion(version);
-        return;
-      }
-      if (version && !mockSkipped.includes(version)) {
-        mockSkipped.push(version);
-      }
-    },
-    unskipVersion: async (version: string) => {
-      const b = bindings();
-      if (b && typeof b.Settings_RemoveSkippedUpdateVersion === 'function') {
-        await b.Settings_RemoveSkippedUpdateVersion(version);
-        return;
-      }
-      const idx = mockSkipped.indexOf(version);
-      if (idx >= 0) mockSkipped.splice(idx, 1);
-    },
-  };
-}
-
-/* ── Mock fixtures (WP04 default; WP03 will replace) ─────────────────── */
-
-const mockSkipped: string[] = [];
-
-function fakeUpdateStatus(): UpdateStatus {
-  return {
-    currentVersion: 'v0.3.3',
-    autoCheckEnabled: true,
-    lastCheckedAt: null,
-    channel: 'stable',
-    available: null,
-    checking: false,
+    skipVersion: (version) => bridge().Update_SkipVersion(version),
+    listSkippedVersions: () => bridge().Update_ListSkippedVersions(),
+    unskipVersion: (version) => bridge().Update_UnskipVersion(version),
   };
 }
 
 /**
- * createFakeUpdateClient — test factory. Tests pass `seed` to override
- * specific methods; everything else routes through deterministic mocks.
+ * createFakeUpdateClient — stub used by UpdateIndicator / UpdateMenu /
+ * UpdatesPanel tests (and dev builds where the live bridge isn't wired
+ * yet). `seed` lets a caller inject specific behaviour; everything else
+ * returns a safe no-op or in-memory default.
+ *
+ * Default `status()` returns a "no update available" snapshot so consumers
+ * boot into the hidden state.
  */
 export function createFakeUpdateClient(
   seed: Partial<UpdateClient> = {},
 ): UpdateClient {
   const skipped = new Set<string>();
   const defaults: UpdateClient = {
-    status: async () => fakeUpdateStatus(),
-    startCheck: async () => {},
-    installLatest: async () => {},
-    listSkippedVersions: async () => [...skipped],
+    status: () =>
+      Promise.resolve({
+        currentVersion: '0.4.0',
+        available: false,
+        channel: 'stable',
+        downloadState: 'idle',
+      }),
+    startCheck: () => Promise.resolve(),
+    startDownload: () => Promise.resolve(),
+    apply: () => Promise.resolve(),
+    installLatest: () => Promise.resolve(),
     skipVersion: async (v) => {
       if (v) skipped.add(v);
     },
+    listSkippedVersions: () => Promise.resolve([...skipped]),
     unskipVersion: async (v) => {
       skipped.delete(v);
     },
