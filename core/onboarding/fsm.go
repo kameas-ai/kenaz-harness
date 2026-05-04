@@ -65,6 +65,15 @@ type LLMTester interface {
 	TestProvider(ctx context.Context, kind ProviderKind, apiKey string) error
 }
 
+// SessionKindTransitioner transitions a session's Kind when the onboarding
+// FSM reaches its terminal state (harness-self-mcp-onboarding-01KQ8TDU
+// WP09). In production it is satisfied by session.Manager.SetKind; in
+// tests it is satisfied by a mock or left nil (nil-safe: the FSM skips
+// the call when no transitioner is configured).
+type SessionKindTransitioner interface {
+	SetKind(ctx context.Context, sessionID, kind string) error
+}
+
 // FSMContext carries the mutable context that accumulates as the user
 // progresses through the flow. It is held by the caller (not the FSM)
 // because the FSM is stateless from the chassis perspective.
@@ -78,6 +87,10 @@ type FSMContext struct {
 	RetriesLeft int
 	// LastError is the human-readable error from the most recent failed test.
 	LastError string
+	// SessionID is the id of the onboarding session. When set, the FSM
+	// transitions its Kind from "onboarding" → "chat" on terminal state
+	// via the configured SessionKindTransitioner (WP09).
+	SessionID string
 }
 
 // NewFSMContext returns a fresh FSMContext with all retry budget available.
@@ -94,7 +107,8 @@ type StepResult struct {
 // FSM is the onboarding finite-state machine. It is stateless: all mutable
 // data lives in FSMContext, which the caller holds across requests.
 type FSM struct {
-	tester LLMTester
+	tester      LLMTester
+	transitioner SessionKindTransitioner
 }
 
 // New constructs an FSM. tester may be nil, in which case the
@@ -102,6 +116,13 @@ type FSM struct {
 // where no real LLM is available, like a guided demo).
 func New(tester LLMTester) *FSM {
 	return &FSM{tester: tester}
+}
+
+// NewWithTransitioner constructs an FSM with a SessionKindTransitioner that
+// is called when the FSM reaches its terminal state (WP09). transitioner may
+// be nil — the FSM then skips the kind transition (backwards-compatible).
+func NewWithTransitioner(tester LLMTester, transitioner SessionKindTransitioner) *FSM {
+	return &FSM{tester: tester, transitioner: transitioner}
 }
 
 // InitialCard returns the card for the initial state without consuming an event.
@@ -141,7 +162,7 @@ func (f *FSM) Step(
 	case StateTestConnection:
 		return f.stepTestConnection(event, fsmCtx)
 	case StateDone:
-		return f.stepDone(event, fsmCtx)
+		return f.stepDone(ctx, event, fsmCtx)
 	default:
 		return StepResult{}, fmt.Errorf("onboarding: unknown state %q", current)
 	}
@@ -280,9 +301,20 @@ func (f *FSM) stepTestConnection(event Event, fsmCtx *FSMContext) (StepResult, e
 }
 
 // stepDone handles transitions from the done state.
-func (f *FSM) stepDone(event Event, fsmCtx *FSMContext) (StepResult, error) {
+//
+// On EventFinish the FSM performs the phase-2 handoff (WP09): if a
+// SessionKindTransitioner is configured and FSMContext.SessionID is set,
+// the session's Kind is transitioned from "onboarding" → "chat" so
+// Cedar write-tool policies no longer apply. The transition error is
+// non-fatal — the card is returned regardless.
+func (f *FSM) stepDone(ctx context.Context, event Event, fsmCtx *FSMContext) (StepResult, error) {
 	switch event {
 	case EventFinish:
+		// Phase-2 handoff: transition session kind onboarding → chat.
+		if f.transitioner != nil && fsmCtx.SessionID != "" {
+			// Non-fatal: a DB error here should not abort the UX flow.
+			_ = f.transitioner.SetKind(ctx, fsmCtx.SessionID, "chat")
+		}
 		// Terminal — return the same done card; the caller closes the flow.
 		return StepResult{
 			State: StateDone,

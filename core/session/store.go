@@ -158,6 +158,12 @@ type Store interface {
 	// the empty string is a programmer error (the runtime will error
 	// rather than persist an unanchored continuation).
 	AppendContinuation(ctx context.Context, originalID string, m Message) (Message, error)
+
+	// SetKind updates the Kind column of an existing session.
+	// Used by the onboarding FSM to transition a session from
+	// "onboarding" → "chat" on terminal state (WP09).
+	// Returns ErrSessionNotFound when the session does not exist.
+	SetKind(ctx context.Context, id, kind string) error
 }
 
 // memStore is the in-memory Store implementation. Backed by maps
@@ -367,6 +373,18 @@ func (s *memStore) Delete(_ context.Context, id string) error {
 	delete(s.records, id)
 	delete(s.messages, id)
 	delete(s.seqByID, id)
+	return nil
+}
+
+func (s *memStore) SetKind(_ context.Context, id, kind string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	r, ok := s.records[id]
+	if !ok {
+		return ErrSessionNotFound
+	}
+	r.Kind = kind
+	s.records[id] = r
 	return nil
 }
 
@@ -950,6 +968,19 @@ func (s *sqlStore) ClearTitle(ctx context.Context, id string, now time.Time) err
 func (s *sqlStore) Delete(ctx context.Context, id string) error {
 	return s.db.WriteTx(ctx, func(tx WriteTx) error {
 		res, err := tx.Exec(ctx, "DELETE FROM sessions WHERE id = ?", id)
+		if err != nil {
+			return err
+		}
+		return rowsAffectedOrNotFound(res)
+	})
+}
+
+// SetKind updates the kind column for the given session.
+// WP09: harness-self-mcp-onboarding-01KQ8TDU — transitions a session from
+// "onboarding" → "chat" when the onboarding FSM reaches its terminal state.
+func (s *sqlStore) SetKind(ctx context.Context, id, kind string) error {
+	return s.db.WriteTx(ctx, func(tx WriteTx) error {
+		res, err := tx.Exec(ctx, "UPDATE sessions SET kind = ? WHERE id = ?", kind, id)
 		if err != nil {
 			return err
 		}
