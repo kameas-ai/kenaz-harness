@@ -814,6 +814,15 @@ func New(c *core.Core) *API {
 			})
 			logging.L().Info("update.service.init_ok")
 		}
+	} else {
+		// Log a loud warning so that misconfiguration (missing BuildVersion
+		// or DataDir) is never silent. This is the class of bug that silently
+		// broke auto-update in v0.4.0–v0.4.2.
+		logging.L().Warn("update.service.skipped",
+			"core_nil", c == nil,
+			"data_dir_empty", c == nil || c.DataDir() == "",
+			"build_version_empty", c == nil || c.BuildVersion() == "",
+		)
 	}
 
 	// Node manifest catalog (mission agent-kernel-graph-node-catalog
