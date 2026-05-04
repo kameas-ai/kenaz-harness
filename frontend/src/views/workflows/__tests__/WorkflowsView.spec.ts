@@ -147,6 +147,88 @@ describe('WorkflowsView', () => {
     expect(wrapper.text()).toContain('boom');
   });
 
+  it('saves an imported workflow and refreshes the catalog (WP07)', async () => {
+    // Two-stage list seam: first call returns just the builtin; after
+    // save the catalog has gained the imported user workflow.
+    let calls = 0;
+    const importedSummary: WorkflowsSummary = {
+      id: 'wf-imported',
+      name: 'Imported flow',
+      version: 1,
+      stepCount: 1,
+      source: 'user',
+    };
+    const importedDetail: WorkflowsWorkflow = {
+      id: 'wf-imported',
+      name: 'Imported flow',
+      version: 1,
+      steps: [{ name: 'a', kind: 'shell', cmd: 'echo', args: ['hi'] }],
+    };
+    const list = vi.fn(() => {
+      calls += 1;
+      return Promise.resolve(calls === 1 ? [summary] : [summary, importedSummary]);
+    });
+    const get = vi.fn((id: string) =>
+      Promise.resolve(id === 'wf-imported' ? importedDetail : detail),
+    );
+    const save = vi.fn(() =>
+      Promise.resolve({
+        id: 'wf-imported',
+        name: 'Imported flow',
+        version: 1,
+        hash: 'h',
+        yaml: 'id: imported\n',
+        createdAt: '1970-01-01T00:00:00.000Z',
+        updatedAt: '1970-01-01T00:00:00.000Z',
+      }),
+    );
+    const wrapper = mount(WorkflowsView, {
+      props: { client: fakeClient({ list, get, save }) },
+    });
+    await flushPromises();
+
+    // Drive the import flow through the exposed test seam. The shim
+    // is what production WP09 will replace with the real editor.
+    await (wrapper.vm as unknown as {
+      importFromYaml: (yaml: string) => Promise<void>;
+    }).importFromYaml('id: imported\n');
+    await flushPromises();
+
+    expect(save).toHaveBeenCalledWith({ yaml: 'id: imported\n' });
+    // Catalog refreshed (List called again post-save).
+    expect(list).toHaveBeenCalledTimes(2);
+    // UI reflects the new row.
+    expect(
+      wrapper.find('[data-testid="workflow-row-wf-imported"]').exists(),
+    ).toBe(true);
+  });
+
+  it('deletes the selected workflow and refreshes the catalog (WP07)', async () => {
+    let calls = 0;
+    const list = vi.fn(() => {
+      calls += 1;
+      // First List returns the builtin; second List (post-delete)
+      // returns an empty catalog so the UI flips to the empty state.
+      return Promise.resolve(calls === 1 ? [summary] : []);
+    });
+    const remove = vi.fn(() => Promise.resolve());
+    const wrapper = mount(WorkflowsView, {
+      props: { client: fakeClient({ list, remove }) },
+    });
+    await flushPromises();
+
+    await wrapper.find('[data-testid="workflows-delete-button"]').trigger('click');
+    await flushPromises();
+
+    expect(remove).toHaveBeenCalledWith('plan_implement_review');
+    expect(list).toHaveBeenCalledTimes(2);
+    // The catalog row is gone; the empty-state copy appears.
+    expect(
+      wrapper.find('[data-testid="workflow-row-plan_implement_review"]').exists(),
+    ).toBe(false);
+    expect(wrapper.text()).toContain('No workflows installed yet');
+  });
+
   it('surfaces a run error when the result carries an error string', async () => {
     const wrapper = mount(WorkflowsView, {
       props: {

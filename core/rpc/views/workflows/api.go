@@ -70,6 +70,33 @@ type RunResult struct {
 	Err        string    `json:"error,omitempty"`
 }
 
+// SaveInput is the wire shape for Save. Exactly one of YAML or
+// Workflow must be populated. YAML wins when both are set so the
+// import-from-clipboard path keeps its byte-for-byte fidelity.
+//
+// When YAML is non-empty it is routed through ImportYAML so the
+// resulting workflow row gets a fresh id (the share/import safety net
+// from the storage layer). When Workflow is set the caller is
+// updating a known id and the storage layer hash-dedupes idempotent
+// re-saves.
+type SaveInput struct {
+	YAML     string    `json:"yaml,omitempty"`
+	Workflow *Workflow `json:"workflow,omitempty"`
+}
+
+// SaveOutput mirrors the persisted record on the wire so the UI can
+// pick up the freshly assigned version + timestamps without a
+// follow-up Get.
+type SaveOutput struct {
+	ID        string `json:"id"`
+	Name      string `json:"name"`
+	Version   int    `json:"version"`
+	Hash      string `json:"hash"`
+	YAML      string `json:"yaml"`
+	CreatedAt string `json:"createdAt"`
+	UpdatedAt string `json:"updatedAt"`
+}
+
 // WorkflowsAPI is the view-scoped accessor.
 //
 // A nil engine is allowed — methods return ErrEngineUnavailable so
@@ -84,4 +111,13 @@ type WorkflowsAPI interface {
 	// transcript. Long-running steps in production WPs will move to
 	// async + broker progress; the beta engine completes inline.
 	Run(ctx context.Context, id string, inputs map[string]string) (RunResult, error)
+	// Save persists a user workflow via the WP06 storage layer.
+	// Returns ErrStorageUnavailable when no Store is wired.
+	// Save is idempotent on yaml hash: re-saving identical canonical
+	// YAML returns the unchanged stored record.
+	Save(ctx context.Context, in SaveInput) (SaveOutput, error)
+	// Delete removes a stored workflow by id. Returns
+	// corewf.ErrWorkflowNotFound when the id is unknown and
+	// ErrStorageUnavailable when no Store is wired.
+	Delete(ctx context.Context, id string) error
 }

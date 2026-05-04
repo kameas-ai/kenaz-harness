@@ -853,3 +853,13 @@ export function Workflows_Get(arg1) {
 export function Workflows_Run(arg1, arg2) {
   return window['go']['rpc']['Bindings']['Workflows_Run'](arg1, arg2);
 }
+
+// TODO: regenerate via `wails generate module` once the WP09 editor lands.
+// Hand-added in WP07 so the frontend Save / Delete shim has a typed binding.
+export function Workflows_Save(arg1) {
+  return window['go']['rpc']['Bindings']['Workflows_Save'](arg1);
+}
+
+export function Workflows_Delete(arg1) {
+  return window['go']['rpc']['Bindings']['Workflows_Delete'](arg1);
+}
