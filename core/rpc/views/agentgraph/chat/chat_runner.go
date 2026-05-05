@@ -183,10 +183,14 @@ func (f PartialPersisterFunc) PersistPartial(ctx context.Context, sessionID, par
 
 // UsageHookFunc is the callback signature for per-turn usage capture.
 // sessionID and messageID identify the turn; messageID may be empty
-// when the session_write node hasn't fired yet (test paths). The hook
+// when the session_write node hasn't fired yet (test paths). providerKind
+// and modelID carry the resolved provider kind ("anthropic", "openai", …)
+// and the effective model id for the turn — used to populate
+// UsageTurn.ProviderKind / UsageTurn.ModelID for token-cost-telemetry
+// alignment (backend-context-window-length-01KQ8TD3 WP06). The hook
 // must not block the chat turn — it should write async or accept the
 // latency.
-type UsageHookFunc func(ctx context.Context, sessionID, messageID string, resp corellm.Response)
+type UsageHookFunc func(ctx context.Context, sessionID, messageID, providerKind, modelID string, resp corellm.Response)
 
 // CompactionDeps bundles every collaborator the pre-send compaction
 // hook needs. The runner reads the active aggressiveness tier on every
@@ -461,6 +465,11 @@ func (r *ChatRunner) StartStream(ctx context.Context, profileID, sessionID, mode
 	// thus has a valid messageID). The adapter stores the most recent
 	// llm.Response so the hook can record token counts + cost
 	// (token-cost-telemetry-01KQ8TD7 WP02).
+	//
+	// WP06 (backend-context-window-length-01KQ8TD3): also resolve the
+	// provider kind and model id from the adapter so the usage hook can
+	// populate UsageTurn.ProviderKind / UsageTurn.ModelID for full
+	// token-cost-telemetry alignment.
 	if r.cfg.UsageHook != nil {
 		if env.Hooks == nil {
 			env.Hooks = coreag.NewHookManager(env.Memory, env.SessionID, env.ProjectID)
@@ -470,7 +479,9 @@ func (r *ChatRunner) StartStream(ctx context.Context, profileID, sessionID, mode
 		capturedSessionID := sessionID
 		env.Hooks.RegisterPostHook(coreag.HookPostLLM, func(ctx context.Context, sID, messageID, _ string) {
 			resp := capturedAdapter.LastResponse()
-			usageHook(ctx, capturedSessionID, messageID, resp)
+			providerKind := capturedAdapter.ProviderKind()
+			modelID := capturedAdapter.ActiveModelID()
+			usageHook(ctx, capturedSessionID, messageID, providerKind, modelID, resp)
 		})
 	}
 

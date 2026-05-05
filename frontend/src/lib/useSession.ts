@@ -29,6 +29,20 @@ import { useEventStream } from './useEventStream';
 import { logEvent } from './eventLog';
 import type { ContentBlock, Message, Session } from './types';
 
+/**
+ * SessionUsagePayload is the wire shape emitted on `session.usage.updated`
+ * (backend-context-window-length-01KQ8TD3 WP03). The context-window
+ * indicator reads promptTokens to update its numerator in near-real-time.
+ */
+export interface SessionUsagePayload {
+  sessionId: string;
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+  costUsd: number;
+  costSource: string;
+}
+
 export interface UseSessionResult {
   session: Ref<Session | null>;
   messages: Ref<readonly Message[]>;
@@ -56,6 +70,14 @@ export interface UseSessionResult {
    * Always 0 today — the per-session counter lands in WP09.
    */
   sweptCount: Ref<number>;
+  /**
+   * Most-recent per-turn usage snapshot received via the
+   * `session.usage.updated` broker event
+   * (backend-context-window-length-01KQ8TD3 WP03). null until the
+   * first turn completes. The context-window indicator reads
+   * promptTokens from this to update its numerator in near-real-time.
+   */
+  lastUsage: Ref<SessionUsagePayload | null>;
   refresh(): Promise<void>;
   /**
    * Append a user message and start the assistant stream. modelOverride
@@ -95,6 +117,7 @@ export function useSession(id: Ref<string>): UseSessionResult {
   const draft = ref('');
   const showFullHistory = ref(false);
   const sweptCount = ref(0);
+  const lastUsage = ref<SessionUsagePayload | null>(null);
 
   let streamTimeoutHandle: ReturnType<typeof setTimeout> | null = null;
   let draftDebounceHandle: ReturnType<typeof setTimeout> | null = null;
@@ -180,6 +203,16 @@ export function useSession(id: Ref<string>): UseSessionResult {
     // Append, dedup by id.
     if (messages.value.some((x) => x.id === m.id)) return;
     messages.value = [...messages.value, m];
+  });
+
+  // Subscribe to per-turn usage snapshots emitted after each completed
+  // LLM turn (backend-context-window-length-01KQ8TD3 WP03). Updates
+  // lastUsage so the context-window indicator reads promptTokens
+  // without calling GetUsage.
+  useEventStream<SessionUsagePayload>('session.usage.updated', (payload) => {
+    if (!payload) return;
+    if (payload.sessionId !== id.value) return;
+    lastUsage.value = payload;
   });
 
   // Wire-shape payload from core/rpc/views/llm.StreamChunkPayload:
@@ -454,6 +487,7 @@ export function useSession(id: Ref<string>): UseSessionResult {
       currentlyStreaming.value = null;
       streamSubscriptionId.value = null;
       streamingTimedOut.value = false;
+      lastUsage.value = null;
       // showFullHistory is per-session UI state — reset on every
       // session reopen so a switch-back never resurrects the previous
       // view (compaction-strategy-ui WP07 plan §2.8).
@@ -495,6 +529,7 @@ export function useSession(id: Ref<string>): UseSessionResult {
     draft,
     showFullHistory,
     sweptCount,
+    lastUsage,
     refresh,
     send,
     sendBlocks,

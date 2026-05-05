@@ -36,7 +36,27 @@ const (
 	// useEventStream composable. Payload shape:
 	// usage.ThresholdCrossedPayload (see core/usage/threshold.go).
 	TopicCostThresholdCrossed = "cost.threshold.crossed"
+
+	// TopicSessionUsageUpdated is the broker topic emitted by the chat
+	// runner's usage hook after each completed LLM turn. The frontend
+	// context-window indicator subscribes here to update its numerator
+	// without calling GetUsage (backend-context-window-length-01KQ8TD3
+	// WP03). Payload shape: SessionUsagePayload.
+	TopicSessionUsageUpdated = "session.usage.updated"
 )
+
+// SessionUsagePayload is the typed payload emitted on
+// TopicSessionUsageUpdated after each completed LLM turn
+// (backend-context-window-length-01KQ8TD3 WP03). The frontend
+// context-window indicator reads PromptTokens to update its numerator.
+type SessionUsagePayload struct {
+	SessionID        string  `json:"sessionId"`
+	PromptTokens     int     `json:"promptTokens"`
+	CompletionTokens int     `json:"completionTokens"`
+	TotalTokens      int     `json:"totalTokens"`
+	CostUSD          float64 `json:"costUsd"`
+	CostSource       string  `json:"costSource"`
+}
 
 // StreamClosedPayload is the typed payload emitted on `<view>:stream-closed`.
 type StreamClosedPayload struct {
@@ -169,6 +189,14 @@ func (b *StreamBroker) Subscribe(
 	}()
 
 	return id, nil
+}
+
+// Publish emits a one-shot payload on a topic without a subscription
+// lifetime. Used for push notifications that don't follow the
+// subscribe/unsubscribe lifecycle (e.g. session.usage.updated).
+// The Wails ctx is obtained from the broker's SetContext store.
+func (b *StreamBroker) Publish(topic string, payload any) {
+	b.emitter.Emit(b.EmitCtx(), topic, payload)
 }
 
 // Unsubscribe stops the subscription. The pump emits stream-closed

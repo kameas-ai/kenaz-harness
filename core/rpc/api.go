@@ -1957,7 +1957,11 @@ func newLLMStack(
 		sweepScheduler.Start(context.Background())
 	}
 
-	chatRunner := buildChatRunner(broker, reg, wrappedPool, perms, historyAdapter, settingsImpl, graphMgr, toolDiscoverer, artifactSinkConcrete, compactionDeps, usageMgr)
+	var sessionMgrForUsage *session.Manager
+	if c != nil {
+		sessionMgrForUsage = c.SessionManager()
+	}
+	chatRunner := buildChatRunner(broker, reg, wrappedPool, perms, historyAdapter, settingsImpl, graphMgr, toolDiscoverer, artifactSinkConcrete, compactionDeps, usageMgr, sessionMgrForUsage)
 	var capCatalog llm.CapCatalog
 	if cat, err := llmcap.LoadDefault(); err == nil {
 		capCatalog = cat
@@ -2180,6 +2184,7 @@ func buildChatRunner(
 	artifactSinkConcrete *artifactsview.Sink,
 	compactionDeps *chat.CompactionDeps,
 	usageMgr usage.Manager,
+	sessionMgr *session.Manager,
 ) *chat.ChatRunner {
 	if graphMgr == nil || graphMgr.Kernel() == nil {
 		logging.L().Warn("chat.runner.disabled", "reason", "graph manager unavailable")
@@ -2252,15 +2257,24 @@ func buildChatRunner(
 		})
 	}
 
-	// Usage hook (token-cost-telemetry-01KQ8TD7 WP02). The closure
-	// fires from HookPostLLM (after session_write persists the assistant
-	// message, so messageID is valid). It reads the provider cost and
-	// source from the llm.Response that the LLMProviderAdapter stored
-	// in LastResponse(), then records via usageMgr.Add.
+	// Usage hook (token-cost-telemetry-01KQ8TD7 WP02 + backend-context-
+	// window-length-01KQ8TD3 WP02 + WP03). The closure fires from
+	// HookPostLLM (after session_write persists the assistant message, so
+	// messageID is valid). It reads the provider cost and source from the
+	// llm.Response that the LLMProviderAdapter stored in LastResponse(), then:
+	//   1. records via usageMgr.Add (token-cost-telemetry).
+	//   2. persists the per-session last_usage_json snapshot so the
+	//      frontend context-window indicator can update in near-real-time
+	//      (backend-context-window-length-01KQ8TD3 WP02).
+	//   3. publishes session.usage.updated on the broker so the frontend
+	//      updates the context-window indicator in near-real-time without
+	//      polling (backend-context-window-length-01KQ8TD3 WP03).
 	var usageHookFn chat.UsageHookFunc
-	if usageMgr != nil {
+	if usageMgr != nil || sessionMgr != nil {
 		capturedUsageMgr := usageMgr
-		usageHookFn = func(ctx context.Context, sessionID, messageID string, resp corellm.Response) {
+		capturedSessionMgr := sessionMgr
+		capturedBroker := broker
+		usageHookFn = func(ctx context.Context, sessionID, messageID, providerKind, modelID string, resp corellm.Response) {
 			var costUSD *float64
 			source := "unknown"
 			switch {
@@ -2273,19 +2287,57 @@ func buildChatRunner(
 				costUSD = &v
 				source = "derived"
 			}
-			turn := usage.UsageTurn{
-				SessionID:        sessionID,
-				MessageID:        messageID,
+			if capturedUsageMgr != nil {
+				turn := usage.UsageTurn{
+					SessionID:        sessionID,
+					MessageID:        messageID,
+					ProviderKind:     providerKind,
+					ModelID:          modelID,
+					PromptTokens:     resp.Usage.InputTokens,
+					CompletionTokens: resp.Usage.OutputTokens,
+					CostUSD:          costUSD,
+					CostSource:       source,
+				}
+				if err := capturedUsageMgr.Add(ctx, turn); err != nil {
+					logging.L().Warn("usage.add.failed",
+						"session_id", sessionID,
+						"message_id", messageID,
+						"err", err.Error())
+				}
+			}
+			costVal := 0.0
+			if costUSD != nil {
+				costVal = *costUSD
+			}
+			snap := session.LastUsage{
 				PromptTokens:     resp.Usage.InputTokens,
 				CompletionTokens: resp.Usage.OutputTokens,
-				CostUSD:          costUSD,
+				TotalTokens:      resp.Usage.InputTokens + resp.Usage.OutputTokens,
+				CostUSD:          costVal,
 				CostSource:       source,
 			}
-			if err := capturedUsageMgr.Add(ctx, turn); err != nil {
-				logging.L().Warn("usage.add.failed",
-					"session_id", sessionID,
-					"message_id", messageID,
-					"err", err.Error())
+			// Persist the per-session last_usage_json snapshot so the frontend
+			// context-window indicator refreshes without a full GetUsage RPC.
+			if capturedSessionMgr != nil {
+				if err := capturedSessionMgr.SetLastUsage(ctx, sessionID, snap); err != nil {
+					logging.L().Warn("session.last_usage.set.failed",
+						"session_id", sessionID,
+						"err", err.Error())
+				}
+			}
+			// Push session.usage.updated to the frontend so the context-window
+			// indicator updates in near-real-time (WP03). The broker's
+			// Publish method uses the stored Wails ctx and is safe to call
+			// from any goroutine.
+			if capturedBroker != nil {
+				capturedBroker.Publish(TopicSessionUsageUpdated, SessionUsagePayload{
+					SessionID:        sessionID,
+					PromptTokens:     snap.PromptTokens,
+					CompletionTokens: snap.CompletionTokens,
+					TotalTokens:      snap.TotalTokens,
+					CostUSD:          snap.CostUSD,
+					CostSource:       snap.CostSource,
+				})
 			}
 		}
 	}

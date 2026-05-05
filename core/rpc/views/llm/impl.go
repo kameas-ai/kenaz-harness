@@ -108,13 +108,17 @@ type BundleSource interface {
 }
 
 // CapCatalog is the capability-lookup seam used to populate ModelInfos
-// (contextWindow) on Provider at ListProviders time. The concrete
-// *capabilities.Catalog satisfies it; tests may inject a fake.
-// nil → ModelInfos fields default to 0 (unknown).
+// (contextWindow, maxOutputTokens) on Provider at ListProviders time.
+// The concrete *capabilities.Catalog satisfies it; tests may inject a
+// fake. nil → ModelInfos fields default to 0 (unknown).
 type CapCatalog interface {
 	// ContextWindow returns the curated max context length in tokens
 	// for (provider, model). Returns 0 when the model is unknown.
 	ContextWindow(provider, model string) int
+	// MaxOutputTokens returns the curated per-turn output token cap for
+	// (provider, model). Returns 0 when the model is unknown
+	// (backend-context-window-length-01KQ8TD3 WP01).
+	MaxOutputTokens(provider, model string) int
 }
 
 // CredPeeker resolves a credential reference to a display-safe Redacted
@@ -635,6 +639,7 @@ func (a *API) ListProviders(ctx context.Context) ([]Provider, error) {
 				if lookup != nil {
 					if mi, ok := lookup.LookupModelInfo(modelID); ok {
 						info.ContextWindow = mi.ContextWindow
+						info.MaxOutputTokens = mi.MaxOutputTokens
 						if mi.DisplayName != "" {
 							info.DisplayName = mi.DisplayName
 						}
@@ -644,19 +649,23 @@ func (a *API) ListProviders(ctx context.Context) ([]Provider, error) {
 							"provider_id", v.ID,
 							"kind", v.Kind,
 							"model_id", modelID,
-							"context_window", mi.ContextWindow)
+							"context_window", mi.ContextWindow,
+							"max_output_tokens", mi.MaxOutputTokens)
 					}
 				}
 				if !resolved && a.capCatalog != nil {
 					cw := a.capCatalog.ContextWindow(v.Kind, modelID)
+					mot := a.capCatalog.MaxOutputTokens(v.Kind, modelID)
 					info.ContextWindow = cw
+					info.MaxOutputTokens = mot
 					if cw > 0 {
 						resolved = true
 						logging.L().Debug("llm.model_info.catalog_hit",
 							"provider_id", v.ID,
 							"kind", v.Kind,
 							"model_id", modelID,
-							"context_window", cw)
+							"context_window", cw,
+							"max_output_tokens", mot)
 					}
 				}
 				if !resolved {
@@ -1007,10 +1016,11 @@ func (a *API) ListModels(ctx context.Context, kind, plaintextApiKey string) ([]M
 	out := make([]ModelInfo, 0, len(models))
 	for _, m := range models {
 		out = append(out, ModelInfo{
-			ID:            m.ID,
-			DisplayName:   m.DisplayName,
-			Description:   m.Description,
-			ContextWindow: m.ContextWindow,
+			ID:              m.ID,
+			DisplayName:     m.DisplayName,
+			Description:     m.Description,
+			ContextWindow:   m.ContextWindow,
+			MaxOutputTokens: m.MaxOutputTokens,
 		})
 	}
 	return out, nil

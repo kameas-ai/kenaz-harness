@@ -21,6 +21,7 @@ models:
     cancellation: true
     usage_reporting: true
     context_window: 128000
+    max_output_tokens: 16384
   - match: "gpt-4-turbo*"
     streaming: true
     tool_calling: true
@@ -32,6 +33,7 @@ models:
     cancellation: true
     usage_reporting: true
     context_window: 128000
+    max_output_tokens: 4096
   - match: "gpt-4-vision*"
     streaming: true
     tool_calling: true
@@ -43,6 +45,7 @@ models:
     cancellation: true
     usage_reporting: true
     context_window: 128000
+    max_output_tokens: 4096
   - match: "o1*"
     streaming: true
     tool_calling: true
@@ -54,6 +57,7 @@ models:
     cancellation: true
     usage_reporting: true
     context_window: 200000
+    max_output_tokens: 100000
   - match: "gpt-3.5-turbo*"
     streaming: true
     tool_calling: true
@@ -65,6 +69,7 @@ models:
     cancellation: true
     usage_reporting: true
     context_window: 16385
+    max_output_tokens: 4096
   - match: "gpt-4*"
     streaming: true
     tool_calling: true
@@ -76,3 +81,4 @@ models:
     cancellation: true
     usage_reporting: true
     context_window: 8192
+    max_output_tokens: 8192

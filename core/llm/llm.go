@@ -405,10 +405,15 @@ type ProviderAdapter interface {
 // carries enough metadata to populate the AddProvider model-picker
 // dropdown without round-tripping back to the adapter.
 type ModelInfo struct {
-	ID            string `json:"id"`                        // canonical model id (e.g. "claude-sonnet-4-5")
-	DisplayName   string `json:"display_name"`              // user-facing label (e.g. "Claude Sonnet 4.5")
+	ID            string `json:"id"`                          // canonical model id (e.g. "claude-sonnet-4-5")
+	DisplayName   string `json:"display_name"`                // user-facing label (e.g. "Claude Sonnet 4.5")
 	Description   string `json:"description,omitempty"`
-	ContextWindow int    `json:"context_window,omitempty"` // max input+output tokens; 0 = unknown
+	ContextWindow int    `json:"context_window,omitempty"`   // max input+output tokens; 0 = unknown
+	// MaxOutputTokens is the provider's hard cap on tokens in a single
+	// response. 0 means unknown — the UI should not render an explicit
+	// cap in that case. Sourced from the capabilities catalog
+	// (backend-context-window-length-01KQ8TD3 WP01).
+	MaxOutputTokens int `json:"max_output_tokens,omitempty"` // max completion tokens per turn; 0 = unknown
 }
 
 // ModelLister is the optional capability adapters opt into when their
