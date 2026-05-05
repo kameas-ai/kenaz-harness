@@ -505,6 +505,19 @@ func (a *API) RunPruneNow(ctx context.Context, scope string) (PruneStats, error)
 	return stats, nil
 }
 
+// CaptureRate returns the live capture-rate snapshot for the §2.7
+// LegendBar pill. The data comes from the process-scoped
+// corememory.GlobalCaptureTracker() — no store access needed.
+func (a *API) CaptureRate(_ context.Context) (CaptureRateSnapshot, error) {
+	snap := corememory.GlobalCaptureTracker().Snapshot(time.Now().UTC())
+	return CaptureRateSnapshot{
+		ChunksPerMinute:  snap.ChunksPerMinute,
+		EmbedderHealth:   snap.EmbedderHealth,
+		LastErrorAt:      snap.LastErrorAt,
+		RecentErrorCount: snap.RecentErrorCount,
+	}, nil
+}
+
 // ErrPinUnsupported is returned by Pin when the wired store predates
 // the PruneCapable interface (in-memory test stubs etc.).
 var ErrPinUnsupported = errors.New("memory: store does not support pinning")

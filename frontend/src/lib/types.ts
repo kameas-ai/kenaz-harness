@@ -1207,6 +1207,17 @@ export interface MemoryHealthSnapshot {
 }
 
 /**
+ * MemoryCaptureRateSnapshot — response from Memory_CaptureRate (§2.7).
+ * Drives the LegendBar capture-rate pill.
+ */
+export interface MemoryCaptureRateSnapshot {
+  chunksPerMinute: number;
+  embedderHealth: 'ok' | 'slow' | 'error';
+  lastErrorAt: string | null; // RFC3339 or null
+  recentErrorCount: number;
+}
+
+/**
  * DialScope — the cascading-config layer keys.
  */
 export type DialScope =
