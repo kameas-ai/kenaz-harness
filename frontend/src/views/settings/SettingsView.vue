@@ -18,6 +18,7 @@ import KeyboardShortcuts from '@/components/settings/KeyboardShortcuts.vue';
 import AutonomyPanel from '@/views/settings/AutonomyPanel.vue';
 import UpdatesPanel from '@/views/settings/UpdatesPanel.vue';
 import MigrationDriftPanel from '@/views/settings/health/MigrationDriftPanel.vue';
+import CompactionStrategyPanel from '@/views/settings/compaction/CompactionStrategyPanel.vue';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
 import { debouncedSave } from '@/lib/settings';
 import { markdownExtensionsRef } from '@/lib/markdown/injectionKeys';
@@ -51,6 +52,13 @@ const showUpdatesTab = computed<boolean>(() => {
 const showHealthTab = computed<boolean>(() => {
   const v = route?.query?.tab;
   return typeof v === 'string' && v === 'health';
+});
+
+// compaction-strategy-ui-01KQ8TD8 — Compaction strategy-authoring sub-tab.
+// Disambiguates via ?tab=compaction. Mount switch is in <template> below.
+const showCompactionTab = computed<boolean>(() => {
+  const v = route?.query?.tab;
+  return typeof v === 'string' && v === 'compaction';
 });
 
 const settings = ref<Settings>({
@@ -589,6 +597,14 @@ onMounted(() => {
       data-testid="settings-health-pane"
     >
       <MigrationDriftPanel />
+    </div>
+
+    <!-- compaction-strategy-ui-01KQ8TD8 — Compaction strategy-authoring sub-tab. -->
+    <div
+      v-else-if="showCompactionTab"
+      data-testid="settings-compaction-pane"
+    >
+      <CompactionStrategyPanel />
     </div>
 
     <div

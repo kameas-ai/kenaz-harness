@@ -41,6 +41,9 @@ const tabs: ReadonlyArray<Tab> = [
   // v0.5.1 migration-doctor — Health tab. Disambiguates via ?tab=health.
   // See SettingsView.vue for the mount switch.
   { to: '/settings?tab=health', label: 'Health', query: 'health' },
+  // compaction-strategy-ui-01KQ8TD8 — Compaction strategy-authoring tab.
+  // Disambiguates via ?tab=compaction. See SettingsView.vue for the mount switch.
+  { to: '/settings?tab=compaction', label: 'Compaction', query: 'compaction' },
   { to: '/providers', label: 'Providers' },
   { to: '/hooks', label: 'Hooks' },
   { to: '/bundles', label: 'Bundles' },
