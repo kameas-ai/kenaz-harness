@@ -24,6 +24,7 @@ import ChatInput from '@/components/chat/ChatInput.vue';
 import ResolvedContextPanel from '@/views/sessions/ResolvedContextPanel.vue';
 import ConfirmToolModal from '@/components/chat/ConfirmToolModal.vue';
 import BranchSidebar from '@/components/chat/BranchSidebar.vue';
+import BranchBreadcrumb from '@/components/chat/BranchBreadcrumb.vue';
 import CreateBranchModal from '@/components/chat/CreateBranchModal.vue';
 import MergeSuggestionToast from '@/components/chat/MergeSuggestionToast.vue';
 import CostThresholdToast from '@/components/chat/CostThresholdToast.vue';
@@ -45,6 +46,7 @@ import type {
   Message,
   Provider,
   SessionUsage,
+  Settings,
   SlashExecuteResult,
 } from '@/lib/types';
 import { flattenChoices, inferFamily } from '@/lib/modelFamily';
@@ -282,6 +284,36 @@ const showSessionBreadcrumb = computed(
   () => surfaceState.value !== 'loaded',
 );
 
+// ── Branch breadcrumb (branching-ux-polish-01KQ8TD7 WP04) ───────────────────
+// Displayed just below CanvasHead when the active session is a branch.
+
+/** Whether the current session is a branch (has a parent). */
+const isBranchSession = computed(
+  () => !!session.session.value?.parentSessionId,
+);
+
+/** The parent session ID (empty string for root sessions). */
+const breadcrumbParentSessionId = computed(
+  () => session.session.value?.parentSessionId ?? '',
+);
+
+/** Parent session's display name — looked up in the rail's session list. */
+const breadcrumbParentTitle = computed(() => {
+  const parentId = breadcrumbParentSessionId.value;
+  if (!parentId) return '';
+  const parent = sessionList.value.find((s) => s.id === parentId);
+  if (parent) return parent.name;
+  // Parent may have been deleted — use branchTitle snapshot if available.
+  return session.session.value?.branchTitle ?? 'Deleted session';
+});
+
+/** Whether the parent session no longer exists in the session list. */
+const breadcrumbParentDeleted = computed(() => {
+  const parentId = breadcrumbParentSessionId.value;
+  if (!parentId) return false;
+  return !sessionList.value.some((s) => s.id === parentId);
+});
+
 const isStreaming = computed(
   () => session.streamSubscriptionId.value !== null,
 );
@@ -296,14 +328,26 @@ const isWaitingForFirstChunk = computed(
 // Per-model context window — sourced from the backend's curated
 // capability table via Provider.modelInfos. 0 means "unknown"; the
 // meter enters an explicit "unknown" state rather than a misleading
-// 200k fallback. Real input-token counts will be wired by the
-// per-message-token-meter mission once it lands.
+// 200k fallback.
+//
+// Resolution order (WP05):
+//   1. User override from contextWindowOverrides[provider.kind]
+//   2. Catalog value from provider.modelInfos[].contextWindow
+//   3. 0 (unknown — meter shows "—")
 //
 // contextDenominator: >0 = known window; 0 = unknown.
 const contextDenominator = computed((): number => {
   const provider = activeProvider.value;
   const modelId = activeModelId.value;
   if (!provider || !modelId) return 0;
+  // WP05: prefer any user-supplied override for this provider kind.
+  const providerKind = provider.kind ?? '';
+  const override =
+    providerKind && contextWindowOverrides.value
+      ? contextWindowOverrides.value[providerKind]
+      : undefined;
+  if (typeof override === 'number' && override > 0) return override;
+  // Fall back to the catalog-derived value from ModelInfos.
   const info = provider.modelInfos?.find((m) => m.id === modelId);
   const cw = info?.contextWindow ?? 0;
   return cw > 0 ? cw : 0;
@@ -312,9 +356,14 @@ const contextDenominator = computed((): number => {
 // hasContextWindow: true when the backend has supplied a non-zero cap.
 const hasContextWindow = computed(() => contextDenominator.value > 0);
 
-// contextNumerator: 0 until the per-message-token-meter mission wires
-// real input-token counts from session.lastUsage.
-const contextNumerator = computed(() => 0);
+// contextNumerator: the cumulative input-token count for the session.
+// Reads from session.lastUsage which is updated in near-real-time via
+// the `session.usage.updated` broker event after each LLM turn
+// (backend-context-window-length-01KQ8TD3 WP03+WP04).
+// Falls back to 0 when no turn has completed yet.
+const contextNumerator = computed(
+  () => session.lastUsage.value?.promptTokens ?? 0,
+);
 
 const contextWindowPct = computed(() => {
   const max = contextDenominator.value;
@@ -578,6 +627,32 @@ function onBranchOpen(childSessionId: string) {
   void router.push(`/sessions/${childSessionId}`);
 }
 
+// ── "Branch from this turn" handler (branching-ux-polish-01KQ8TD7 WP05) ─────
+const branchFromTurnError = ref<string | null>(null);
+const branchFromTurnLoading = ref(false);
+
+async function onBranchFromTurn(message: { id?: string }) {
+  const parentSessionId = sessionId.value;
+  const parentMessageId = message.id;
+  if (!parentSessionId || !parentMessageId) return;
+  if (branchFromTurnLoading.value) return;
+  branchFromTurnLoading.value = true;
+  branchFromTurnError.value = null;
+  try {
+    const branch = await client.branches.createExplicit({
+      parentSessionId,
+      parentMessageId,
+    });
+    if (branch.childSessionId) {
+      void router.push(`/sessions/${branch.childSessionId}`);
+    }
+  } catch (err) {
+    branchFromTurnError.value = err instanceof Error ? err.message : String(err);
+  } finally {
+    branchFromTurnLoading.value = false;
+  }
+}
+
 const hasAnyProvider = computed(() => providers.value.length > 0);
 
 // Long-term-memory opt-in. Off by default (privacy posture); read once
@@ -590,6 +665,13 @@ const lastRememberError = ref<string | null>(null);
 // copy in MessageList. Falls back to the locked default 90 (plan §2.9)
 // when settings have not been loaded or the call fails.
 const compactionArchiveDays = ref<number>(90);
+
+// Per-provider-kind context-window overrides
+// (backend-context-window-length-01KQ8TD3 WP05). Loaded once on mount
+// and refreshed on window focus so settings changes in the Settings
+// panel take effect without a full reload. When a key is absent the
+// contextDenominator falls back to the catalog-derived value.
+const contextWindowOverrides = ref<Settings['contextWindowOverrides']>({});
 
 // Compaction overhead surface (mission compaction-strategy-ui-01KQ8TDI
 // WP08 / plan §2.11). The backend tags every compaction-driven LLM
@@ -625,6 +707,11 @@ async function refreshCompactionSettings() {
     const s = await client.settings.get();
     if (typeof s.compactionArchiveDays === 'number' && s.compactionArchiveDays > 0) {
       compactionArchiveDays.value = s.compactionArchiveDays;
+    }
+    // WP05: pull context-window overrides so contextDenominator respects
+    // any user-supplied values without requiring a full reload.
+    if (s.contextWindowOverrides && typeof s.contextWindowOverrides === 'object') {
+      contextWindowOverrides.value = s.contextWindowOverrides;
     }
   } catch {
     // Soft-fail: leave the locked default in place.
@@ -841,6 +928,13 @@ function formatSize(bytes: number): string {
         :section="showSessionBreadcrumb ? 'SESSIONS' : undefined"
         :title="sessionTitle"
         :subtitle="sessionSubtitle"
+      />
+      <!-- Branch breadcrumb (branching-ux-polish-01KQ8TD7 WP04) -->
+      <BranchBreadcrumb
+        v-if="isBranchSession"
+        :parent-session-id="breadcrumbParentSessionId"
+        :parent-title="breadcrumbParentTitle"
+        :parent-deleted="breadcrumbParentDeleted"
       />
     </div>
 
@@ -1134,6 +1228,7 @@ function formatSize(bytes: number): string {
             @remember="onRemember"
             @save-artifact="onSaveArtifactFromMessage"
             @open-artifact="openArtifactPreview"
+            @branch-from-turn="onBranchFromTurn"
           />
           <BranchSidebar
             v-if="hasSession"

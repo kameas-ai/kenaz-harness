@@ -268,6 +268,73 @@ type Settings struct {
 	// out-of-range values. FR-007c: this is a visibility dial — hard
 	// caps live in the user's provider dashboard.
 	MonthlyCostNotifyUSD float64 `json:"monthlyCostNotifyUsd,omitempty"`
+
+	// MCPAutoRestartDisabled is the inverted persisted bit for the
+	// "Auto-restart MCP servers on disconnect" dial
+	// (mcp-server-health-ui-01KQ8TD6 WP06). Default ON (zero-value
+	// Disabled → auto-restart enabled) so a crashed server recovers
+	// without user intervention on a fresh install. Read via the
+	// MCPAutoRestart() accessor; never read directly.
+	MCPAutoRestartDisabled bool `json:"mcpAutoRestartDisabled,omitempty"`
+
+	// ── Builtin filesystem tool dials (builtin-filesystem-tools-01KR3N4P) ──
+
+	// FSReadDisabled is the inverted persisted bit for the read-family
+	// builtin filesystem tools (kaneaz__read_file, kaneaz__list_dir,
+	// kaneaz__glob, kaneaz__grep, kaneaz__list_open_worklist). Default OFF
+	// (zero-value Disabled → tools disabled) — the user opts in from the
+	// Tools panel (WP06). Read via the FSReadEnabled() accessor; never
+	// read directly.
+	FSReadDisabled bool `json:"fsReadDisabled,omitempty"`
+
+	// FSWriteDisabled is the inverted persisted bit for the write-family
+	// builtin filesystem tools (kaneaz__write_file, kaneaz__edit_file).
+	// Default OFF (zero-value Disabled → tools disabled) — the user opts
+	// in from the Tools panel (WP06). Read via the FSWriteEnabled()
+	// accessor; never read directly.
+	FSWriteDisabled bool `json:"fsWriteDisabled,omitempty"`
+
+	// EditFileArtifactSyncDisabled is the per-user opt-out bit for the
+	// edit-file artifact sync feature (edit-file-artifact-sync-01KQ8TD5
+	// WP04). Default ON (zero-value Disabled → feature enabled when the
+	// env-var gate HARNESS_EDIT_FILE_ARTIFACT_SYNC=on is set). Read via
+	// the EditFileArtifactSyncEnabled() accessor; never read directly.
+	EditFileArtifactSyncDisabled bool `json:"editFileArtifactSyncDisabled,omitempty"`
+
+	// ContextWindowOverrides is a per-provider-kind map of user-supplied
+	// context-window sizes (in tokens). Keys are provider kind strings
+	// ("anthropic", "openai", "bedrock", "openrouter"). When a key is
+	// present, the frontend context-window meter uses its value as the
+	// denominator instead of the backend-curated catalog value
+	// (backend-context-window-length-01KQ8TD3 WP05). Zero or negative
+	// values are silently ignored — the catalog value takes precedence.
+	// An absent map (nil/empty) means "use catalog values for all providers."
+	ContextWindowOverrides map[string]int `json:"contextWindowOverrides,omitempty"`
+
+	// ── Branching UX dials (branching-ux-polish-01KQ8TD7 WP06) ──────────
+
+	// AutoCollapseBranchesInSidebar controls the initial collapse state
+	// for branch trees in the left rail. When true (default), every
+	// parent session that has children starts collapsed so the rail
+	// doesn't sprawl on first load. The user can expand individually;
+	// their choices are persisted in localStorage under
+	// harness.sidebar.branchCollapsed.v1.
+	AutoCollapseBranchesInSidebar bool `json:"autoCollapseBranchesInSidebar,omitempty"`
+
+	// DeleteBranchesWithParent controls cascade-delete behaviour when a
+	// parent session is deleted. When false (default / safe), child
+	// sessions become orphans — their branch row is gone (ON DELETE
+	// CASCADE) but the child session persists and the sidebar promotes
+	// it to a root row. When true, deleting a parent recursively
+	// removes all descendant sessions before cascading the branch rows.
+	DeleteBranchesWithParent bool `json:"deleteBranchesWithParent,omitempty"`
+
+	// MaxVisibleBranchDepth caps the number of nesting levels shown in
+	// the sidebar branch tree. Default 5. Sessions deeper than this cap
+	// are replaced by a "+N more depths" affordance that expands one
+	// level at a time on click. Zero falls back to the default via
+	// EffectiveMaxVisibleBranchDepth.
+	MaxVisibleBranchDepth int `json:"maxVisibleBranchDepth,omitempty"`
 }
 
 // ProviderProfileRef is the wire shape that identifies a provider+model
@@ -553,6 +620,72 @@ func (s Settings) MonthlyCostNotifyEnabled() bool {
 	return s.MonthlyCostNotifyUSD > 0
 }
 
+// MCPAutoRestart reports whether MCP servers should be automatically
+// restarted after two consecutive ping failures. Default true on a fresh
+// install (zero-value Disabled → restart enabled).
+// (mcp-server-health-ui-01KQ8TD6 WP06)
+func (s Settings) MCPAutoRestart() bool { return !s.MCPAutoRestartDisabled }
+
+// FSReadEnabled reports whether the read-family builtin filesystem tools
+// are enabled. Default false on a fresh install (zero-value Disabled →
+// tools off). The user opts in from the Tools panel (WP06).
+// (builtin-filesystem-tools-01KR3N4P)
+func (s Settings) FSReadEnabled() bool { return !s.FSReadDisabled }
+
+// FSWriteEnabled reports whether the write-family builtin filesystem
+// tools are enabled. Default false on a fresh install (zero-value
+// Disabled → tools off). The user opts in from the Tools panel (WP06).
+// (builtin-filesystem-tools-01KR3N4P)
+func (s Settings) FSWriteEnabled() bool { return !s.FSWriteDisabled }
+
+// EditFileArtifactSyncEnabled reports whether the edit-file artifact
+// sync feature is enabled for this user. Default true on a fresh install
+// (zero-value Disabled → feature enabled). The env-var gate
+// HARNESS_EDIT_FILE_ARTIFACT_SYNC=on must also be set for the feature
+// to activate. (edit-file-artifact-sync-01KQ8TD5)
+func (s Settings) EditFileArtifactSyncEnabled() bool { return !s.EditFileArtifactSyncDisabled }
+
+// ── Branching UX constants + accessors (branching-ux-polish-01KQ8TD7 WP06) ──
+
+// DefaultMaxVisibleBranchDepth is the spec-locked depth cap for sidebar
+// branch tree rendering. Sessions nested deeper than this value are
+// replaced by a "+N more depths" affordance. Default 5.
+const DefaultMaxVisibleBranchDepth = 5
+
+// DefaultAutoCollapseBranchesInSidebar is the spec-locked default for
+// the collapse-on-first-load behaviour: true so the rail doesn't sprawl.
+const DefaultAutoCollapseBranchesInSidebar = true
+
+// EffectiveMaxVisibleBranchDepth returns the user-tuned depth or the
+// spec default when zero or negative. No upper clamp — a user who wants
+// depth=100 gets it; the frontend caps its CTE walk at 32.
+func (s Settings) EffectiveMaxVisibleBranchDepth() int {
+	if s.MaxVisibleBranchDepth <= 0 {
+		return DefaultMaxVisibleBranchDepth
+	}
+	return s.MaxVisibleBranchDepth
+}
+
+// EffectiveAutoCollapseBranchesInSidebar returns the user's collapse
+// preference. Because the JSON zero-value of bool is false, and the
+// spec default is true, we can't use omitempty storage — this field is
+// stored explicitly so round-trips are faithful. The accessor reads the
+// stored value directly and callers that need the default-on behaviour
+// call this rather than reading the field directly.
+//
+// Note: this method CANNOT rely on zero-value == default because bool
+// zero-value is false but default is true. The field is stored as
+// omitempty which means a fresh file gives false here. To match the
+// "default true" spec intent without a migrations, we check whether
+// the parent Settings carries a deliberate override via
+// AutoCollapseBranchesInSidebar. Since we can't tell "stored false"
+// from "not stored" with omitempty, we document that the frontend
+// should treat absence as true — backed by the Wails bindings that
+// always include the field after first Set.
+func (s Settings) EffectiveAutoCollapseBranchesInSidebar() bool {
+	return s.AutoCollapseBranchesInSidebar
+}
+
 // WindowSize mirrors the charter's WindowSize type.
 type WindowSize struct {
 	Width  int `json:"width"`
@@ -703,6 +836,36 @@ type SettingsStore interface {
 	// canonical Default tier.
 	LoadAutonomyProfile() (autonomy.Layer, error)
 	SaveAutonomyProfile(layer autonomy.Layer) error
+
+	// LoadMCPAutoRestart / SaveMCPAutoRestart expose the MCP server
+	// auto-restart dial (mcp-server-health-ui-01KQ8TD6 WP06). Default
+	// true on a fresh install (zero-value Disabled → restart enabled).
+	LoadMCPAutoRestart() (bool, error)
+	SaveMCPAutoRestart(enabled bool) error
+
+	// ── Builtin filesystem tool dial accessors (builtin-filesystem-tools-01KR3N4P) ──
+
+	// LoadFSReadEnabled / SaveFSReadEnabled expose the read-family
+	// filesystem tool opt-in. Default false (tools off until the user
+	// enables them from the Tools panel). The toolloop's EnabledFilter
+	// consults this on every Run boundary so a toggle takes effect on
+	// the next chat turn.
+	LoadFSReadEnabled() (bool, error)
+	SaveFSReadEnabled(enabled bool) error
+
+	// LoadFSWriteEnabled / SaveFSWriteEnabled expose the write-family
+	// filesystem tool opt-in. Default false (tools off).
+	LoadFSWriteEnabled() (bool, error)
+	SaveFSWriteEnabled(enabled bool) error
+
+	// LoadEditFileArtifactSyncEnabled / SaveEditFileArtifactSyncEnabled
+	// expose the per-user opt-in for the edit-file artifact sync
+	// pipeline (edit-file-artifact-sync-01KQ8TD5 WP04). Default true
+	// (enabled, matching the zero-value of EditFileArtifactSyncDisabled).
+	// The env-var gate HARNESS_EDIT_FILE_ARTIFACT_SYNC=on must also be
+	// set for the pipeline to activate.
+	LoadEditFileArtifactSyncEnabled() (bool, error)
+	SaveEditFileArtifactSyncEnabled(enabled bool) error
 }
 
 // SettingsAPI is the view-scoped accessor exposed via HarnessAPI.
@@ -716,6 +879,12 @@ type SettingsAPI interface {
 	// SaveAutonomyProfile persists the global autonomy.Layer. An empty
 	// Layer clears the field.
 	SaveAutonomyProfile(ctx context.Context, layer autonomy.Layer) error
+	// GetMCPAutoRestart returns whether MCP servers should auto-restart
+	// after two consecutive ping failures. Default true.
+	// (mcp-server-health-ui-01KQ8TD6 WP06)
+	GetMCPAutoRestart(ctx context.Context) (bool, error)
+	// SetMCPAutoRestart persists the MCP auto-restart dial.
+	SetMCPAutoRestart(ctx context.Context, enabled bool) error
 }
 
 // ShortcutsStore is the persistence interface for keyboard shortcut

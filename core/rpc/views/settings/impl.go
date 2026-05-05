@@ -708,6 +708,106 @@ func (s *FileStore) SaveAutonomyProfile(layer autonomy.Layer) error {
 	return s.saveLocked(got)
 }
 
+// LoadMCPAutoRestart returns whether MCP servers should auto-restart.
+// Default true (zero-value Disabled → restart enabled).
+// (mcp-server-health-ui-01KQ8TD6 WP06)
+func (s *FileStore) LoadMCPAutoRestart() (bool, error) {
+	got, err := s.LoadAll()
+	if err != nil {
+		return got.MCPAutoRestart(), err
+	}
+	return got.MCPAutoRestart(), nil
+}
+
+// SaveMCPAutoRestart persists the MCP auto-restart dial. Stored as the
+// inverted MCPAutoRestartDisabled bit.
+func (s *FileStore) SaveMCPAutoRestart(enabled bool) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	got, err := s.loadLocked()
+	if err != nil {
+		return err
+	}
+	got.MCPAutoRestartDisabled = !enabled
+	return s.saveLocked(got)
+}
+
+// ── Builtin filesystem tool FileStore accessors (builtin-filesystem-tools-01KR3N4P) ──
+
+// LoadFSReadEnabled returns the read-family filesystem tool opt-in.
+// Default false (tools off until the user enables them). Errors return
+// the safe default (false) so the tools remain disabled when the
+// settings file is unreadable.
+func (s *FileStore) LoadFSReadEnabled() (bool, error) {
+	got, err := s.LoadAll()
+	if err != nil {
+		return got.FSReadEnabled(), err
+	}
+	return got.FSReadEnabled(), nil
+}
+
+// SaveFSReadEnabled persists the read-family filesystem tool opt-in.
+// Persists as the inverted FSReadDisabled bit.
+func (s *FileStore) SaveFSReadEnabled(enabled bool) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	got, err := s.loadLocked()
+	if err != nil {
+		return err
+	}
+	got.FSReadDisabled = !enabled
+	return s.saveLocked(got)
+}
+
+// LoadFSWriteEnabled returns the write-family filesystem tool opt-in.
+// Default false (tools off). Errors return the safe default (false).
+func (s *FileStore) LoadFSWriteEnabled() (bool, error) {
+	got, err := s.LoadAll()
+	if err != nil {
+		return got.FSWriteEnabled(), err
+	}
+	return got.FSWriteEnabled(), nil
+}
+
+// SaveFSWriteEnabled persists the write-family filesystem tool opt-in.
+// Persists as the inverted FSWriteDisabled bit.
+func (s *FileStore) SaveFSWriteEnabled(enabled bool) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	got, err := s.loadLocked()
+	if err != nil {
+		return err
+	}
+	got.FSWriteDisabled = !enabled
+	return s.saveLocked(got)
+}
+
+// LoadEditFileArtifactSyncEnabled returns the per-user opt-in for the
+// edit-file artifact sync pipeline. Default true (enabled, matching
+// the zero-value of EditFileArtifactSyncDisabled). Errors return the
+// safe default (true) so the feature stays on through a settings glitch.
+func (s *FileStore) LoadEditFileArtifactSyncEnabled() (bool, error) {
+	got, err := s.LoadAll()
+	if err != nil {
+		return got.EditFileArtifactSyncEnabled(), err
+	}
+	return got.EditFileArtifactSyncEnabled(), nil
+}
+
+// SaveEditFileArtifactSyncEnabled persists the per-user opt-in for the
+// edit-file artifact sync pipeline. Persists as the inverted
+// EditFileArtifactSyncDisabled bit.
+func (s *FileStore) SaveEditFileArtifactSyncEnabled(enabled bool) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	got, err := s.loadLocked()
+	if err != nil {
+		return err
+	}
+	got.EditFileArtifactSyncDisabled = !enabled
+	return s.saveLocked(got)
+}
+
 // encodeAutonomyField marshals a Layer to the json.RawMessage stored
 // on Settings.Autonomy. The empty Layer encodes as nil so it omits via
 // `omitempty` on disk.
@@ -933,6 +1033,12 @@ func defaultSettings() Settings {
 		Theme:         "system",
 		Accent:        "default",
 		WindowSize:    WindowSize{Width: 1280, Height: 800},
+		// Branching UX dials (branching-ux-polish-01KQ8TD7 WP06).
+		// AutoCollapseBranchesInSidebar defaults to true (spec default).
+		// DeleteBranchesWithParent defaults to false (safe: orphan, not cascade).
+		// MaxVisibleBranchDepth defaults to 5 (spec default).
+		AutoCollapseBranchesInSidebar: DefaultAutoCollapseBranchesInSidebar,
+		MaxVisibleBranchDepth:         DefaultMaxVisibleBranchDepth,
 	}
 }
 
@@ -977,6 +1083,17 @@ func (a *API) LoadAutonomyProfile(_ context.Context) (autonomy.Layer, error) {
 // SaveAutonomyProfile delegates to the store.
 func (a *API) SaveAutonomyProfile(_ context.Context, layer autonomy.Layer) error {
 	return a.store.SaveAutonomyProfile(layer)
+}
+
+// GetMCPAutoRestart returns whether MCP servers should auto-restart.
+// (mcp-server-health-ui-01KQ8TD6 WP06)
+func (a *API) GetMCPAutoRestart(_ context.Context) (bool, error) {
+	return a.store.LoadMCPAutoRestart()
+}
+
+// SetMCPAutoRestart persists the MCP auto-restart dial.
+func (a *API) SetMCPAutoRestart(_ context.Context, enabled bool) error {
+	return a.store.SaveMCPAutoRestart(enabled)
 }
 
 // memoryStore is the test-only in-memory SettingsStore.
@@ -1233,6 +1350,62 @@ func (m *memoryStore) SaveAutonomyProfile(layer autonomy.Layer) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.data.Autonomy = encoded
+	return nil
+}
+
+// ── MCP auto-restart memoryStore accessors (mcp-server-health-ui WP06) ──
+
+func (m *memoryStore) LoadMCPAutoRestart() (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.data.MCPAutoRestart(), nil
+}
+
+func (m *memoryStore) SaveMCPAutoRestart(enabled bool) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.data.MCPAutoRestartDisabled = !enabled
+	return nil
+}
+
+// ── Builtin filesystem tool memoryStore accessors (builtin-filesystem-tools-01KR3N4P) ──
+
+func (m *memoryStore) LoadFSReadEnabled() (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.data.FSReadEnabled(), nil
+}
+
+func (m *memoryStore) SaveFSReadEnabled(enabled bool) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.data.FSReadDisabled = !enabled
+	return nil
+}
+
+func (m *memoryStore) LoadFSWriteEnabled() (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.data.FSWriteEnabled(), nil
+}
+
+func (m *memoryStore) SaveFSWriteEnabled(enabled bool) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.data.FSWriteDisabled = !enabled
+	return nil
+}
+
+func (m *memoryStore) LoadEditFileArtifactSyncEnabled() (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.data.EditFileArtifactSyncEnabled(), nil
+}
+
+func (m *memoryStore) SaveEditFileArtifactSyncEnabled(enabled bool) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.data.EditFileArtifactSyncDisabled = !enabled
 	return nil
 }
 

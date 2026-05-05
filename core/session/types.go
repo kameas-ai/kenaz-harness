@@ -74,6 +74,21 @@ type Record struct {
 	AutonomyOverrides map[autonomy.Knob]any `json:"autonomyOverrides,omitempty"`
 }
 
+// LastUsage is the per-session token-usage snapshot persisted after each
+// completed LLM turn (backend-context-window-length-01KQ8TD3 WP02). The
+// frontend reads this snapshot via the session.usage.updated broker event
+// (WP03) to update the context-window indicator in near-real-time.
+//
+// CostSource mirrors the token-cost-telemetry taxonomy:
+// "provider" | "derived" | "mixed" | "unknown".
+type LastUsage struct {
+	PromptTokens     int     `json:"promptTokens"`
+	CompletionTokens int     `json:"completionTokens"`
+	TotalTokens      int     `json:"totalTokens"`
+	CostUSD          float64 `json:"costUsd"`
+	CostSource       string  `json:"costSource"`
+}
+
 // ContextKind values for Record.ContextKind. Validated at the manager
 // boundary so callers cannot persist unknown values.
 const (

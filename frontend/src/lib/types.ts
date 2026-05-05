@@ -41,6 +41,21 @@ export interface Session {
    * Mirrors session.Record.AutoTitled (Go-side).
    */
   autoTitled?: boolean;
+
+  /**
+   * Branch linkage fields (branching-ux-polish-01KQ8TD7 WP02/WP03).
+   * Populated only for branch sessions; absent / undefined for root sessions.
+   * Projected server-side from the branches table via JOIN.
+   */
+
+  /** ID of the parent session this session branched from. */
+  parentSessionId?: string;
+  /** Message anchor in the parent the branch forked at. */
+  parentMessageId?: string;
+  /** Display-name override for the branch. */
+  branchTitle?: string;
+  /** Nesting depth; 0 for root sessions; pre-computed server-side. */
+  branchDepth?: number;
 }
 
 /**
@@ -177,6 +192,13 @@ export interface ModelInfo {
   description?: string;
   /** Max context length in tokens; 0 / undefined = unknown. */
   contextWindow?: number;
+  /**
+   * Provider's hard cap on output tokens per turn.
+   * 0 / undefined = unknown — the UI should not render an explicit cap.
+   * Sourced from the backend capability catalog
+   * (backend-context-window-length-01KQ8TD3 WP01).
+   */
+  maxOutputTokens?: number;
 }
 
 export interface MCPServer {
@@ -692,6 +714,40 @@ export interface Settings {
    * re-prompted; the Settings panel offers a per-row "Unskip" link.
    */
   skippedUpdateVersions?: string[];
+
+  /**
+   * Per-provider-kind context-window override map
+   * (backend-context-window-length-01KQ8TD3 WP05). Keys are provider
+   * kind strings ("anthropic", "openai", "bedrock", "openrouter").
+   * When a key is present, the context-window meter uses its value as
+   * the denominator instead of the backend-curated catalog value.
+   * Zero or absent means "use catalog values."
+   */
+  contextWindowOverrides?: Record<string, number>;
+
+  /**
+   * Branching UX dials — branching-ux-polish-01KQ8TD7 WP06.
+   *
+   * autoCollapseBranchesInSidebar: when true (default), every parent
+   * session that has branch children starts collapsed in the left rail
+   * so the sidebar doesn't sprawl on first load. Users can expand
+   * individually; their choices persist in localStorage.
+   */
+  autoCollapseBranchesInSidebar?: boolean;
+
+  /**
+   * deleteBranchesWithParent: when true, deleting a parent session
+   * recursively removes all descendant branch sessions before the
+   * branch row is cascaded. Default false (safe / orphan behaviour).
+   */
+  deleteBranchesWithParent?: boolean;
+
+  /**
+   * maxVisibleBranchDepth: caps the number of nesting levels shown in
+   * the sidebar branch tree. Default 5. Sessions deeper than the cap
+   * are replaced by a "+N more depths" affordance.
+   */
+  maxVisibleBranchDepth?: number;
 }
 
 /**

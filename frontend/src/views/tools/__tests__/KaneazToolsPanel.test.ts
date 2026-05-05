@@ -191,7 +191,8 @@ describe('KaneazToolsPanel — recipes section', () => {
     expect(w.find('[data-testid=recipe-row-brave-search]').exists()).toBe(false);
     // Enabled (installed) row renders with its current state pill.
     expect(w.find('[data-testid=recipe-row-filesystem]').exists()).toBe(true);
-    expect(w.find('[data-testid=recipe-state-filesystem]').text()).toBe(
+    // HealthPill renders "●running" — check contain rather than exact match.
+    expect(w.find('[data-testid=recipe-state-filesystem]').text()).toContain(
       'running',
     );
   });

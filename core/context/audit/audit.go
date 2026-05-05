@@ -106,6 +106,12 @@ const (
 	// recorded (privacy invariant).
 	KindWorkflowNetworkFetch Kind = "workflow.network_fetch"
 
+	// KindMCPHealthChanged fires when an installed MCP recipe transitions
+	// state (stopped → starting → running → restarting → failed).
+	// Payload: MCPHealthChangedPayload.
+	// (mcp-server-health-ui-01KQ8TD6 WP07)
+	KindMCPHealthChanged Kind = "mcp.recipe.health_changed"
+
 	// Auto-update lifecycle kinds (auto-update mission, v0.4.0 WP06).
 	// Six kinds mirror the Service lifecycle: every Check call,
 	// transition false→true on Available, Download success, Apply
@@ -123,6 +129,16 @@ const (
 	KindUpdateApplied    Kind = "update.applied"
 	KindUpdateSkipped    Kind = "update.skipped"
 	KindUpdateFailed     Kind = "update.failed"
+
+	// KindBranchCreated fires when a branch is created via either the
+	// explicit "Branch from this turn" path or the implicit edit-and-resend
+	// path (branching-ux-polish-01KQ8TD7 WP01). Payload:
+	// BranchCreatedPayload.
+	//
+	// CreationPath discriminates:
+	//   "explicit"    — user chose "Branch from this turn" in the menu.
+	//   "edit_resend" — implicit fork from the edit-and-resend flow.
+	KindBranchCreated Kind = "branch.created"
 )
 
 // Event is the wire shape passed to the event log. The concrete event-log
@@ -429,6 +445,22 @@ type UpdateFailedAttrs struct {
 	ErrorClass string `json:"error_class"`
 }
 
+// MCPHealthChangedPayload carries signalling for KindMCPHealthChanged
+// (mcp-server-health-ui-01KQ8TD6 WP07). Emitted on every lifecycle
+// state transition of an installed recipe. Carries only the recipe id
+// and the new + previous state strings — no tool inputs / outputs or
+// credential material (DIRECTIVE_001 / privacy invariant).
+type MCPHealthChangedPayload struct {
+	RecipeID        string `json:"recipe_id"`
+	PreviousState   string `json:"previous_state"`
+	NewState        string `json:"new_state"`
+	RestartAttempts int    `json:"restart_attempts"`
+	// ErrorClass is the typed error category when transitioning to
+	// "failed" state: "ping_timeout", "crash", "unknown". Empty on
+	// non-failed transitions.
+	ErrorClass string `json:"error_class,omitempty"`
+}
+
 // Marshal is a small convenience wrapper that builds an [Event] for any
 // payload value with the current timestamp.
 func Marshal(kind Kind, payload any, now time.Time) (Event, error) {
@@ -455,6 +487,21 @@ type WorkflowNetworkFetchPayload struct {
 	Hostname   string `json:"hostname"`
 	Status     int    `json:"status"`
 	Bytes      int    `json:"bytes"`
+}
+
+// BranchCreatedPayload carries signalling for KindBranchCreated
+// (branching-ux-polish-01KQ8TD7 WP01). Emitted from both creation
+// paths so the audit view can show two distinct events after the
+// manual acceptance smoke.
+//
+// Privacy invariant: ParentMessageID is a stable opaque id (no content
+// bytes). Neither session names nor message bodies are included here.
+type BranchCreatedPayload struct {
+	ParentSessionID string `json:"parent_session_id"`
+	ParentMessageID string `json:"parent_message_id,omitempty"`
+	BranchSessionID string `json:"branch_session_id"`
+	// CreationPath is "explicit" | "edit_resend".
+	CreationPath string `json:"creation_path"`
 }
 
 // Emit is a small convenience wrapper for callers that have a payload

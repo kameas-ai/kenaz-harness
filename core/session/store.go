@@ -164,6 +164,20 @@ type Store interface {
 	// "onboarding" → "chat" on terminal state (WP09).
 	// Returns ErrSessionNotFound when the session does not exist.
 	SetKind(ctx context.Context, id, kind string) error
+
+	// SetLastUsage persists the per-turn usage snapshot onto the session
+	// row. Called by the chat runner's UsageHook after every completed
+	// LLM turn so the frontend can update the context-window indicator
+	// without a round-trip to GetUsage
+	// (backend-context-window-length-01KQ8TD3 WP02).
+	// Returns ErrSessionNotFound when the session does not exist.
+	SetLastUsage(ctx context.Context, id string, u LastUsage) error
+
+	// GetLastUsage loads the most-recently-persisted usage snapshot for
+	// the session. Returns a zero LastUsage (not an error) when no turn
+	// has completed yet (column is NULL).
+	// Returns ErrSessionNotFound when the session does not exist.
+	GetLastUsage(ctx context.Context, id string) (LastUsage, error)
 }
 
 // memStore is the in-memory Store implementation. Backed by maps
@@ -172,17 +186,19 @@ type Store interface {
 type memStore struct {
 	mu        sync.RWMutex
 	records   map[string]Record
-	messages  map[string][]Message // session_id -> ordered messages
-	seqByID   map[string]int64     // session_id -> next sequence
+	messages  map[string][]Message   // session_id -> ordered messages
+	seqByID   map[string]int64       // session_id -> next sequence
+	lastUsage map[string]*LastUsage  // session_id -> last usage snapshot
 }
 
 // NewMemoryStore returns an in-memory Store. Useful for tests and as
 // the manager's default before storage-foundations wires a real DB.
 func NewMemoryStore() Store {
 	return &memStore{
-		records:  map[string]Record{},
-		messages: map[string][]Message{},
-		seqByID:  map[string]int64{},
+		records:   map[string]Record{},
+		messages:  map[string][]Message{},
+		seqByID:   map[string]int64{},
+		lastUsage: map[string]*LastUsage{},
 	}
 }
 
@@ -386,6 +402,29 @@ func (s *memStore) SetKind(_ context.Context, id, kind string) error {
 	r.Kind = kind
 	s.records[id] = r
 	return nil
+}
+
+func (s *memStore) SetLastUsage(_ context.Context, id string, u LastUsage) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.records[id]; !ok {
+		return ErrSessionNotFound
+	}
+	dup := u
+	s.lastUsage[id] = &dup
+	return nil
+}
+
+func (s *memStore) GetLastUsage(_ context.Context, id string) (LastUsage, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if _, ok := s.records[id]; !ok {
+		return LastUsage{}, ErrSessionNotFound
+	}
+	if u, ok := s.lastUsage[id]; ok {
+		return *u, nil
+	}
+	return LastUsage{}, nil
 }
 
 func (s *memStore) Reorder(_ context.Context, ids []string, now time.Time) error {
@@ -986,6 +1025,45 @@ func (s *sqlStore) SetKind(ctx context.Context, id, kind string) error {
 		}
 		return rowsAffectedOrNotFound(res)
 	})
+}
+
+// SetLastUsage persists the per-turn usage snapshot onto the sessions row
+// (backend-context-window-length-01KQ8TD3 WP02). The column is added by
+// migration 0322; on pre-migration databases the update silently writes
+// to a NULL column (SQLite ignores unknown column updates gracefully by
+// returning rowsAffectedOrNotFound, which is fine here).
+func (s *sqlStore) SetLastUsage(ctx context.Context, id string, u LastUsage) error {
+	raw, err := marshalLastUsage(u)
+	if err != nil {
+		return fmt.Errorf("session: marshal last_usage_json: %w", err)
+	}
+	return s.db.WriteTx(ctx, func(tx WriteTx) error {
+		res, err := tx.Exec(ctx,
+			"UPDATE sessions SET last_usage_json = ? WHERE id = ?", raw, id)
+		if err != nil {
+			return err
+		}
+		return rowsAffectedOrNotFound(res)
+	})
+}
+
+// GetLastUsage loads the most-recently-persisted usage snapshot for the
+// session. Returns a zero LastUsage (not an error) when the column is NULL
+// (backend-context-window-length-01KQ8TD3 WP02).
+func (s *sqlStore) GetLastUsage(ctx context.Context, id string) (LastUsage, error) {
+	row := s.db.Reader().QueryRow(ctx,
+		"SELECT last_usage_json FROM sessions WHERE id = ?", id)
+	var raw *string
+	if err := row.Scan(&raw); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return LastUsage{}, ErrSessionNotFound
+		}
+		return LastUsage{}, err
+	}
+	if raw == nil || *raw == "" {
+		return LastUsage{}, nil
+	}
+	return unmarshalLastUsage(*raw)
 }
 
 func (s *sqlStore) Reorder(ctx context.Context, ids []string, now time.Time) error {
@@ -1666,4 +1744,24 @@ func (s *sqlStore) AppendContinuation(ctx context.Context, originalID string, m 
 		return Message{}, err
 	}
 	return out, nil
+}
+
+// marshalLastUsage encodes a LastUsage snapshot to JSON for the
+// sessions.last_usage_json column.
+func marshalLastUsage(u LastUsage) (string, error) {
+	b, err := json.Marshal(u)
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
+}
+
+// unmarshalLastUsage decodes the sessions.last_usage_json column back
+// into a LastUsage value.
+func unmarshalLastUsage(raw string) (LastUsage, error) {
+	var u LastUsage
+	if err := json.Unmarshal([]byte(raw), &u); err != nil {
+		return LastUsage{}, fmt.Errorf("session: unmarshal last_usage_json: %w", err)
+	}
+	return u, nil
 }

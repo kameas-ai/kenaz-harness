@@ -102,6 +102,13 @@ const sqlInitSchema = `
 // migrations_workflows_cache.go). 0321 lands the workflow_schedules
 // table that backs the cron-scheduler persistence layer
 // (workflows-agentic-01KW2D3X WP02 — see migrations_workflow_schedules.go).
+// 0322 lands the sessions.last_usage_json column for the per-session usage
+// snapshot (backend-context-window-length-01KQ8TD3 WP02 — see
+// migrations_last_usage.go).
+// 0323 lands the additive display-meta columns on branches
+// (parent_message_id, branch_title, creation_path, parent_session_title)
+// needed by the branching-ux-polish-01KQ8TD7 WP01 breadcrumb + sidebar
+// (spec §3 / plan §1).
 func Migrations() []migrations.Migration {
 	return []migrations.Migration{
 		{
@@ -155,6 +162,8 @@ func Migrations() []migrations.Migration {
 		migration0319(),
 		migration0320(),
 		migration0321(),
+		migration0322(),
+		migration0323(),
 	}
 }
 

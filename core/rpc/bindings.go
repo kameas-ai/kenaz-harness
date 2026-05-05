@@ -322,6 +322,21 @@ func (b *Bindings) MCP_ImportClaudeDesktopConfig(req mcp.ImportRequest) (mcp.Imp
 	return importer.ImportClaudeDesktopConfig(b.ctx(), req)
 }
 
+// MCP_HealthSnapshot returns the current health status for every installed
+// MCP recipe as a map of recipe-id → HealthEntry.
+// (mcp-server-health-ui-01KQ8TD6 WP01)
+func (b *Bindings) MCP_HealthSnapshot() (map[string]mcp.HealthEntry, error) {
+	return b.api.MCP().HealthSnapshot(b.ctx())
+}
+
+// MCP_SubscribeHealthChanges registers a broker subscription for
+// mcp:health-changed events. Returns a subscription id for use with
+// MCP_StopStream.
+// (mcp-server-health-ui-01KQ8TD6 WP02)
+func (b *Bindings) MCP_SubscribeHealthChanges() (string, error) {
+	return b.api.MCP().SubscribeHealthChanges(b.ctx())
+}
+
 // ── a2a ────────────────────────────────────────────────────────────────
 
 func (b *Bindings) A2A_ListCards() ([]a2a.Card, error) {
@@ -840,6 +855,18 @@ func (b *Bindings) Settings_SetShortcuts(m map[string]string) error {
 	return store.SaveAll(s)
 }
 
+// Settings_GetMCPAutoRestart returns whether MCP servers should auto-restart
+// after two consecutive ping failures. Default true.
+// (mcp-server-health-ui-01KQ8TD6 WP06)
+func (b *Bindings) Settings_GetMCPAutoRestart() (bool, error) {
+	return b.api.Settings().GetMCPAutoRestart(b.ctx())
+}
+
+// Settings_SetMCPAutoRestart persists the MCP auto-restart dial.
+func (b *Bindings) Settings_SetMCPAutoRestart(enabled bool) error {
+	return b.api.Settings().SetMCPAutoRestart(b.ctx(), enabled)
+}
+
 // ── memory ─────────────────────────────────────────────────────────────
 
 func (b *Bindings) Memory_ListChunks(filter memoryview.ListFilter) ([]memoryview.Chunk, error) {
@@ -1307,6 +1334,14 @@ func (b *Bindings) Branches_CommitReintegration(opts branchesview.CommitReintegr
 }
 func (b *Bindings) Branches_SetAdvisorDismissed(sessionID string, dismissed bool) error {
 	return b.api.Branches().SetAdvisorDismissed(b.ctx(), sessionID, dismissed)
+}
+
+// Branches_ListWithBranchTree returns a flat list of sessions with parent
+// pointers for all branches in a project. The frontend builds the visual
+// tree by grouping on parentSessionId. BranchDepth is pre-computed.
+// (branching-ux-polish-01KQ8TD7 WP02/WP03)
+func (b *Bindings) Branches_ListWithBranchTree(projectID string) ([]branchesview.SessionWithBranchPointer, error) {
+	return b.api.Branches().ListWithBranchTree(b.ctx(), projectID)
 }
 
 // ── workflows (mission workflows-01KQ8TDG, v0.3.0 beta) ───────────────

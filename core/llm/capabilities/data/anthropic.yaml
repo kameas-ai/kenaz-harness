@@ -21,6 +21,7 @@ models:
     cancellation: true
     usage_reporting: true
     context_window: 200000
+    max_output_tokens: 64000
   - match: "claude-opus-*"
     streaming: true
     tool_calling: true
@@ -32,6 +33,7 @@ models:
     cancellation: true
     usage_reporting: true
     context_window: 200000
+    max_output_tokens: 32000
   - match: "claude-haiku-*"
     streaming: true
     tool_calling: true
@@ -43,6 +45,7 @@ models:
     cancellation: true
     usage_reporting: true
     context_window: 200000
+    max_output_tokens: 16000
   - match: "claude-3-5-sonnet*"
     streaming: true
     tool_calling: true
@@ -54,6 +57,7 @@ models:
     cancellation: true
     usage_reporting: true
     context_window: 200000
+    max_output_tokens: 8192
   - match: "claude-3-5-haiku*"
     streaming: true
     tool_calling: true
@@ -65,6 +69,7 @@ models:
     cancellation: true
     usage_reporting: true
     context_window: 200000
+    max_output_tokens: 8192
   - match: "claude-3-haiku*"
     streaming: true
     tool_calling: true
@@ -76,6 +81,7 @@ models:
     cancellation: true
     usage_reporting: true
     context_window: 200000
+    max_output_tokens: 4096
   - match: "claude-3-sonnet*"
     streaming: true
     tool_calling: true
@@ -87,6 +93,7 @@ models:
     cancellation: true
     usage_reporting: true
     context_window: 200000
+    max_output_tokens: 4096
   - match: "claude-3-opus*"
     streaming: true
     tool_calling: true
@@ -98,3 +105,4 @@ models:
     cancellation: true
     usage_reporting: true
     context_window: 200000
+    max_output_tokens: 4096

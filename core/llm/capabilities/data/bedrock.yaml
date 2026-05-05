@@ -21,6 +21,7 @@ models:
     cancellation: true
     usage_reporting: true
     context_window: 200000
+    max_output_tokens: 8192
   - match: "anthropic.claude-3-5-haiku*"
     streaming: true
     tool_calling: true
@@ -32,6 +33,7 @@ models:
     cancellation: true
     usage_reporting: true
     context_window: 200000
+    max_output_tokens: 8192
   - match: "anthropic.claude-sonnet-*"
     streaming: true
     tool_calling: true
@@ -43,6 +45,7 @@ models:
     cancellation: true
     usage_reporting: true
     context_window: 200000
+    max_output_tokens: 64000
   - match: "anthropic.claude-opus-*"
     streaming: true
     tool_calling: true
@@ -54,6 +57,7 @@ models:
     cancellation: true
     usage_reporting: true
     context_window: 200000
+    max_output_tokens: 32000
   - match: "anthropic.claude-3-*"
     streaming: true
     tool_calling: true
@@ -65,6 +69,7 @@ models:
     cancellation: true
     usage_reporting: true
     context_window: 200000
+    max_output_tokens: 4096
   - match: "amazon.nova-lite-*"
     streaming: true
     tool_calling: true
@@ -76,6 +81,7 @@ models:
     cancellation: true
     usage_reporting: true
     context_window: 300000
+    max_output_tokens: 5120
   - match: "amazon.nova-pro-*"
     streaming: true
     tool_calling: true
@@ -87,6 +93,7 @@ models:
     cancellation: true
     usage_reporting: true
     context_window: 300000
+    max_output_tokens: 5120
   - match: "meta.llama3-*"
     streaming: true
     tool_calling: true
@@ -98,6 +105,7 @@ models:
     cancellation: true
     usage_reporting: true
     context_window: 128000
+    max_output_tokens: 8192
   - match: "*llama3-1-405*"
     streaming: true
     tool_calling: true
@@ -109,6 +117,7 @@ models:
     cancellation: true
     usage_reporting: true
     context_window: 128000
+    max_output_tokens: 8192
   - match: "*llama3-1-8*"
     streaming: true
     tool_calling: true
@@ -120,6 +129,7 @@ models:
     cancellation: true
     usage_reporting: true
     context_window: 128000
+    max_output_tokens: 8192
   - match: "*llama3-1-70*"
     streaming: true
     tool_calling: true
@@ -131,6 +141,7 @@ models:
     cancellation: true
     usage_reporting: true
     context_window: 128000
+    max_output_tokens: 8192
   - match: "anthropic.claude-*"
     streaming: true
     tool_calling: true
@@ -142,3 +153,4 @@ models:
     cancellation: true
     usage_reporting: true
     context_window: 200000
+    max_output_tokens: 4096

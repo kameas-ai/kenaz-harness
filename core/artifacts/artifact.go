@@ -72,6 +72,12 @@ type ArtifactSourceRef struct {
 	// Filename is the title hint extracted from the block (sanitized
 	// for display — path separators replaced).
 	Filename string `json:"filename,omitempty"`
+	// AbsolutePath is the canonical on-disk path when the artifact
+	// originated from a kaneaz__edit_file / kaneaz__write_file call
+	// (edit-file-artifact-sync-01KQ8TD5 WP01). Empty for all other
+	// sources. When set, the Artifacts tab can render a "Show in Finder /
+	// Open in editor" affordance pointing at the live file on disk.
+	AbsolutePath string `json:"absolute_path,omitempty"`
 }
 
 // ArtifactFilter narrows the List query. Empty fields match every row.

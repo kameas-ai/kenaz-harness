@@ -93,6 +93,12 @@ const emit = defineEmits<{
    * summary row into view.
    */
   (e: 'jump-to-summary', summaryId: string): void;
+  /**
+   * Forwarded from MessageBubble's "Branch from this turn" button
+   * (branching-ux-polish-01KQ8TD7 WP05). Parent calls
+   * client.branches.createExplicit and navigates to the child session.
+   */
+  (e: 'branch-from-turn', message: Message): void;
 }>();
 
 function artifactsFor(messageId: string): readonly Artifact[] {
@@ -264,6 +270,7 @@ defineExpose({ scrollToBottom });
           @save-artifact="() => emit('save-artifact', m)"
           @open-artifact="(a) => emit('open-artifact', a)"
           @jump-to-summary="onJumpToSummary"
+          @branch-from-turn="() => emit('branch-from-turn', m)"
         />
       </div>
 
