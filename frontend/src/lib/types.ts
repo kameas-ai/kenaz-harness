@@ -41,6 +41,21 @@ export interface Session {
    * Mirrors session.Record.AutoTitled (Go-side).
    */
   autoTitled?: boolean;
+
+  /**
+   * Branch linkage fields (branching-ux-polish-01KQ8TD7 WP02/WP03).
+   * Populated only for branch sessions; absent / undefined for root sessions.
+   * Projected server-side from the branches table via JOIN.
+   */
+
+  /** ID of the parent session this session branched from. */
+  parentSessionId?: string;
+  /** Message anchor in the parent the branch forked at. */
+  parentMessageId?: string;
+  /** Display-name override for the branch. */
+  branchTitle?: string;
+  /** Nesting depth; 0 for root sessions; pre-computed server-side. */
+  branchDepth?: number;
 }
 
 /**

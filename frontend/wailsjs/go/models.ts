@@ -689,6 +689,32 @@ export namespace branches {
 	        this.model = source["model"];
 	    }
 	}
+	export class SessionWithBranchPointer {
+	    sessionId: string;
+	    sessionName: string;
+	    createdAt: string;
+	    parentSessionId?: string;
+	    parentMessageId?: string;
+	    branchTitle?: string;
+	    branchDepth?: number;
+	    parentSessionTitle?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new SessionWithBranchPointer(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.sessionId = source["sessionId"];
+	        this.sessionName = source["sessionName"];
+	        this.createdAt = source["createdAt"];
+	        this.parentSessionId = source["parentSessionId"];
+	        this.parentMessageId = source["parentMessageId"];
+	        this.branchTitle = source["branchTitle"];
+	        this.branchDepth = source["branchDepth"];
+	        this.parentSessionTitle = source["parentSessionTitle"];
+	    }
+	}
 
 }
 

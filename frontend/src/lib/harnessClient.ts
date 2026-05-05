@@ -499,6 +499,9 @@ interface WailsBindingsLike {
     dismissed: boolean,
   ): Promise<void>;
 
+  // branching-ux-polish-01KQ8TD7 WP02/WP03.
+  Branches_ListWithBranchTree(projectID: string): Promise<SessionWithBranchPointer[]>;
+
   // Permissions view (cedar-credential-policy WP07/WP08).
   Permissions_ListGrants(family: string): Promise<PermissionGrant[]>;
   Permissions_RevokeGrant(id: string): Promise<void>;
@@ -1675,9 +1678,27 @@ export interface NodesClient {
  * Spec §4.6 / FR-040 explicitly defers semantic merge / multi-merge /
  * branch-of-branch to v2.
  */
+/**
+ * SessionWithBranchPointer — flat wire shape returned by
+ * Branches_ListWithBranchTree. The frontend builds the tree by grouping
+ * on parentSessionId. (branching-ux-polish-01KQ8TD7 WP02/WP03)
+ */
+export interface SessionWithBranchPointer {
+  sessionId: string;
+  sessionName: string;
+  createdAt: string;
+  parentSessionId?: string;
+  parentMessageId?: string;
+  branchTitle?: string;
+  branchDepth?: number;
+  parentSessionTitle?: string;
+}
+
 export interface BranchesClient {
   list(parentSessionID: string): Promise<Branch[]>;
   create(opts: BranchCreateOptions): Promise<Branch>;
+  /** createExplicit creates a branch anchored at a specific message. */
+  createExplicit(opts: Pick<BranchCreateOptions, 'parentSessionId' | 'parentMessageId' | 'title'>): Promise<Branch>;
   status(branchID: string): Promise<BranchStatusInfo>;
   merge(branchID: string): Promise<void>;
   abandon(branchID: string): Promise<void>;
@@ -1692,6 +1713,13 @@ export interface BranchesClient {
   commitReintegration(opts: ReintegrationCommitOptions): Promise<void>;
   /** Persist per-session branch-advisor dismiss flag (WP02). */
   setAdvisorDismissed(sessionID: string, dismissed: boolean): Promise<void>;
+  /**
+   * listWithBranchTree returns a flat list of sessions with parent
+   * pointers for branches under a project. The frontend builds the tree
+   * by grouping on parentSessionId. BranchDepth is pre-computed server-side.
+   * (branching-ux-polish-01KQ8TD7 WP02/WP03)
+   */
+  listWithBranchTree(projectId: string): Promise<SessionWithBranchPointer[]>;
 }
 
 /**
@@ -2154,6 +2182,12 @@ export function createHarnessClient(): HarnessClient {
     branches: {
       list: (parentSessionID) => b().Branches_List(parentSessionID),
       create: (opts) => b().Branches_Create(opts),
+      createExplicit: (opts) => b().Branches_Create({
+        parentSessionId: opts.parentSessionId,
+        parentMessageId: opts.parentMessageId,
+        title: opts.title,
+        creationPath: 'explicit',
+      }),
       status: (branchID) => b().Branches_GetStatus(branchID),
       merge: (branchID) => b().Branches_Merge(branchID),
       abandon: (branchID) => b().Branches_Abandon(branchID),
@@ -2165,6 +2199,8 @@ export function createHarnessClient(): HarnessClient {
         b().Branches_CommitReintegration(opts),
       setAdvisorDismissed: (sessionID, dismissed) =>
         b().Branches_SetAdvisorDismissed(sessionID, dismissed),
+      listWithBranchTree: (projectId) =>
+        b().Branches_ListWithBranchTree(projectId),
     },
     nodes: {
       catalog: () => b().Nodes_Catalog(),
@@ -2875,6 +2911,17 @@ export function createFakeHarnessClient(
       }),
       commitReintegration: async () => undefined,
       setAdvisorDismissed: async () => undefined,
+      createExplicit: async (opts) => ({
+        id: `fake-branch-${Math.random().toString(36).slice(2, 8)}`,
+        parentSessionId: opts.parentSessionId ?? '',
+        childSessionId: `fake-child-${Math.random().toString(36).slice(2, 8)}`,
+        kind: 'fork',
+        status: 'active',
+        title: opts.title ?? '',
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }),
+      listWithBranchTree: async () => [],
     },
     nodes: {
       catalog: async () => [],

@@ -87,6 +87,8 @@ export function Branches_GetStatus(arg1:string):Promise<branches.BranchStatus>;
 
 export function Branches_List(arg1:string):Promise<Array<branches.Branch>>;
 
+export function Branches_ListWithBranchTree(arg1:string):Promise<Array<branches.SessionWithBranchPointer>>;
+
 export function Branches_Merge(arg1:string):Promise<void>;
 
 export function Branches_ProposeReintegrationSummary(arg1:string):Promise<branches.ReintegrationProposal>;

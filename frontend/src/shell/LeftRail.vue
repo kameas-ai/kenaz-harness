@@ -2,6 +2,7 @@
 import { computed, ref, onMounted } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import RailEntry from './RailEntry.vue';
+import SessionTreeRow from './SessionTreeRow.vue';
 import {
   Archive,
   Plus,
@@ -138,6 +139,87 @@ function toggleCollapsed(projectId: string) {
   }
   collapsed.value = next;
 }
+
+// ── Branching UX (branching-ux-polish-01KQ8TD7 WP03) ────────────────────────
+
+/**
+ * HARNESS_BRANCHING_POLISH feature flag. Defaults to true (on) per plan §4.
+ * Can be overridden by localStorage for operator debugging.
+ */
+const BRANCHING_POLISH_ENABLED: boolean = (() => {
+  try {
+    const v = localStorage.getItem('harness.feature.branchingPolish');
+    if (v === 'off' || v === 'false') return false;
+  } catch { /* ignore */ }
+  return true;
+})();
+
+/** Branch-collapse state — keyed by parent session id. */
+const branchCollapsed = ref<Set<string>>((() => {
+  try {
+    const raw = localStorage.getItem('harness.sidebar.branchCollapsed.v1');
+    if (raw) {
+      const arr: string[] = JSON.parse(raw);
+      if (Array.isArray(arr)) return new Set(arr);
+    }
+  } catch { /* ignore */ }
+  return new Set<string>();
+})());
+
+function saveBranchCollapsed(s: Set<string>) {
+  try {
+    localStorage.setItem(
+      'harness.sidebar.branchCollapsed.v1',
+      JSON.stringify([...s]),
+    );
+  } catch { /* ignore */ }
+}
+
+function isBranchCollapsed(parentId: string): boolean {
+  return branchCollapsed.value.has(parentId);
+}
+
+function toggleBranchCollapsed(parentId: string) {
+  const next = new Set(branchCollapsed.value);
+  if (next.has(parentId)) {
+    next.delete(parentId);
+  } else {
+    next.add(parentId);
+  }
+  branchCollapsed.value = next;
+  saveBranchCollapsed(next);
+}
+
+/**
+ * sessionsByParent — Map<parentSessionId | '__root__', Session[]>.
+ * Used by the branch tree renderer to group children under their parent.
+ */
+const sessionsByParent = computed<Map<string, Session[]>>(() => {
+  const map = new Map<string, Session[]>();
+  for (const s of sessionList.value) {
+    const key = s.parentSessionId ?? '__root__';
+    const list = map.get(key) ?? [];
+    list.push(s);
+    map.set(key, list);
+  }
+  return map;
+});
+
+/** Sessions that are top-level (no parentSessionId). */
+function rootSessionsFor(projectId: string): Session[] {
+  return sessionsFor(projectId).filter((s) => !s.parentSessionId);
+}
+
+function childSessionsOf(parentId: string): Session[] {
+  return sessionsByParent.value.get(parentId) ?? [];
+}
+
+function hasChildren(sessionId: string): boolean {
+  return (sessionsByParent.value.get(sessionId)?.length ?? 0) > 0;
+}
+
+/** Max visible branch depth — read from settings if available. */
+const maxBranchDepth = ref<number>(5);
 
 onMounted(() => {
   refreshSessions();
@@ -388,6 +470,19 @@ function onSessionDragStart(evt: DragEvent, sessionId: string) {
       /* harmless — Firefox 100+ tolerates omission */
     }
   }
+}
+
+/**
+ * Native drag handler for tree-view SessionTreeRow rows.
+ * SessionTreeRow emits no component event for drag — the native dragstart
+ * bubbles up from the <li> root. We read the session id from the
+ * data-session-id attribute so the handler works even on detached elements
+ * (important for the second leg of a project→loose drag in tests).
+ */
+function onTreeSessionDragStart(evt: DragEvent) {
+  const target = evt.currentTarget as HTMLElement | null;
+  const sessionId = target?.dataset?.sessionId ?? '';
+  if (sessionId) onSessionDragStart(evt, sessionId);
 }
 
 function onSessionDragEnd() {
@@ -656,7 +751,98 @@ async function onProjectDrop(evt: DragEvent, projectId: string) {
         >
           Global
         </div>
-        <ul class="space-y-1">
+        <!-- Branch-tree view (branching-ux-polish-01KQ8TD7 WP03) -->
+        <ul v-if="BRANCHING_POLISH_ENABLED" class="space-y-0.5" data-testid="loose-sessions-tree">
+          <template
+            v-for="session in looseSessions.filter((s) => !s.parentSessionId)"
+            :key="session.id"
+          >
+            <SessionTreeRow
+              :session="session"
+              :depth="0"
+              :has-children="hasChildren(session.id)"
+              :is-collapsed="isBranchCollapsed(session.id)"
+              :is-active="activeSessionId === session.id"
+              :is-renaming="renamingId === session.id"
+              :max-depth="maxBranchDepth"
+              :rename-draft="renameDraft"
+              :draggable="true"
+              @open="openSession"
+              @toggle-collapse="toggleBranchCollapsed"
+              @commit-rename="commitRename"
+              @cancel-rename="cancelRename"
+              @update:rename-draft="renameDraft = $event"
+              @dragstart="onTreeSessionDragStart"
+              @dragend="onSessionDragEnd"
+            >
+              <template #actions>
+                <button
+                  type="button"
+                  class="p-2 rounded-sm text-ink-dim hover:text-ink hover:bg-surface-3"
+                  :aria-label="`Rename session ${session.name}`"
+                  :data-testid="`rename-session-${session.id}`"
+                  @click.stop="startRename(session.id, session.name, $event)"
+                >
+                  <Pencil :size="13" />
+                </button>
+                <button
+                  type="button"
+                  class="p-2 rounded-sm text-ink-dim hover:text-signal-danger hover:bg-surface-3"
+                  :aria-label="`Delete session ${session.name}`"
+                  :disabled="deletingId === session.id"
+                  :data-testid="`delete-session-${session.id}`"
+                  @click.stop="deleteSession(session.id, $event)"
+                >
+                  <X :size="14" />
+                </button>
+              </template>
+            </SessionTreeRow>
+            <!-- Recursively render children if not collapsed -->
+            <template v-if="hasChildren(session.id) && !isBranchCollapsed(session.id)">
+              <SessionTreeRow
+                v-for="child in childSessionsOf(session.id)"
+                :key="child.id"
+                :session="child"
+                :depth="(child.branchDepth ?? 1)"
+                :has-children="hasChildren(child.id)"
+                :is-collapsed="isBranchCollapsed(child.id)"
+                :is-active="activeSessionId === child.id"
+                :is-renaming="renamingId === child.id"
+                :max-depth="maxBranchDepth"
+                :rename-draft="renameDraft"
+                @open="openSession"
+                @toggle-collapse="toggleBranchCollapsed"
+                @commit-rename="commitRename"
+                @cancel-rename="cancelRename"
+                @update:rename-draft="renameDraft = $event"
+              >
+                <template #actions>
+                  <button
+                    type="button"
+                    class="p-2 rounded-sm text-ink-dim hover:text-ink hover:bg-surface-3"
+                    :aria-label="`Rename session ${child.name}`"
+                    :data-testid="`rename-session-${child.id}`"
+                    @click.stop="startRename(child.id, child.name, $event)"
+                  >
+                    <Pencil :size="13" />
+                  </button>
+                  <button
+                    type="button"
+                    class="p-2 rounded-sm text-ink-dim hover:text-signal-danger hover:bg-surface-3"
+                    :aria-label="`Delete session ${child.name}`"
+                    :disabled="deletingId === child.id"
+                    :data-testid="`delete-session-${child.id}`"
+                    @click.stop="deleteSession(child.id, $event)"
+                  >
+                    <X :size="14" />
+                  </button>
+                </template>
+              </SessionTreeRow>
+            </template>
+          </template>
+        </ul>
+        <!-- Flat view (feature flag off) -->
+        <ul v-else class="space-y-1">
           <li
             v-for="session in looseSessions"
             :key="session.id"

@@ -106,6 +106,10 @@ export function Branches_List(arg1) {
   return window['go']['rpc']['Bindings']['Branches_List'](arg1);
 }
 
+export function Branches_ListWithBranchTree(arg1) {
+  return window['go']['rpc']['Bindings']['Branches_ListWithBranchTree'](arg1);
+}
+
 export function Branches_Merge(arg1) {
   return window['go']['rpc']['Bindings']['Branches_Merge'](arg1);
 }
