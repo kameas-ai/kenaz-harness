@@ -33,6 +33,7 @@ import (
 	corecorpus "github.com/sigil-tech/kaneaz-harness/core/corpus"
 	coreupdate "github.com/sigil-tech/kaneaz-harness/core/update"
 	"github.com/sigil-tech/kaneaz-harness/core/event"
+	kindpkg "github.com/sigil-tech/kaneaz-harness/core/event/kind"
 	"github.com/sigil-tech/kaneaz-harness/core/hooks"
 	corellm "github.com/sigil-tech/kaneaz-harness/core/llm"
 	llmcap "github.com/sigil-tech/kaneaz-harness/core/llm/capabilities"
@@ -80,6 +81,7 @@ import (
 	updateview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/update"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/workflow"
 	workflowsview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/workflows"
+	storageview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/storage"
 	"github.com/sigil-tech/kaneaz-harness/core/autonomy"
 	"github.com/sigil-tech/kaneaz-harness/core/secrets"
 	coreslashcmd "github.com/sigil-tech/kaneaz-harness/core/slashcmd"
@@ -159,6 +161,12 @@ type HarnessAPI interface {
 	// surface that surfaces ErrServiceUnavailable on every state-mutating
 	// method.
 	Update() updateview.UpdateAPI
+	// Storage exposes the storage-health RPC surface (v0.5.1
+	// migration-doctor). Surfaces drift between the live ledger and the
+	// registered migration set; provides an automated repair for
+	// id_mismatch entries. Wired when a real Core (storage.DB) is
+	// available; otherwise returns ErrStorageUnavailable on every call.
+	Storage() storageview.StorageAPI
 	// CedarProposeResolve delivers a user decision (accept | reject)
 	// for a pending cedar-policy proposal surfaced by CedarProposeModal
 	// (harness-self-mcp-onboarding-01KQ8TDU WP07). requestID comes in on
@@ -276,6 +284,7 @@ type API struct {
 	promptRegistry *cedar.Registry
 	dialsAPI        dialsview.DialsAPI
 	searchAPI       searchview.SearchAPI
+	storageAPI      storageview.StorageAPI
 
 	// Node manifest catalog (mission agent-kernel-graph-node-catalog;
 	// WP07). The manager owns the resolved catalog + user-override
@@ -361,6 +370,44 @@ func (a *API) SetContext(ctx context.Context) {
 	// the correct lifetime for background goroutines. Idempotent.
 	if a.wfScheduler != nil {
 		a.wfScheduler.Start()
+	}
+
+	// Boot-time migration drift detection (v0.5.1 migration-doctor).
+	// Run in a goroutine so the SetContext critical path (which must
+	// complete before the UI renders) is not delayed by the ledger read.
+	// Emits KindMigrationDriftDetected into the audit log when N > 0
+	// drifts are found so operators can correlate the incident via the
+	// audit trail even before they open Settings → Health.
+	if a.storageAPI != nil {
+		driftCtx := ctx
+		go func() {
+			report, driftErr := a.storageAPI.GetMigrationDriftReport(driftCtx)
+			if driftErr != nil {
+				logging.L().Warn("migration.drift.detect.failed", "err", driftErr.Error())
+				return
+			}
+			n := len(report.Drifts)
+			if n == 0 {
+				return
+			}
+			versions := make([]int, 0, n)
+			for _, d := range report.Drifts {
+				versions = append(versions, d.Version)
+			}
+			logging.L().Warn("migration.drift.detected",
+				"count", n,
+				"versions", fmt.Sprint(versions),
+			)
+			if a.auditImpl != nil {
+				a.auditImpl.Push(audit.Entry{
+					ID:        fmt.Sprintf("migration-drift-%d", len(versions)),
+					Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+					Category:  "STORAGE",
+					Subject:   string(kindpkg.KindMigrationDriftDetected),
+					Trailing:  fmt.Sprintf("count=%d", n),
+				})
+			}
+		}()
 	}
 
 	// Start the auto-update background poller on the Wails-supplied
@@ -450,6 +497,15 @@ func New(c *core.Core) *API {
 	}
 	usageMgr := usage.New(db)
 
+	// Storage health view (v0.5.1 migration-doctor). Wired only when a
+	// real Core (= a real storage.DB) is available; otherwise the API
+	// returns ErrStorageUnavailable on every call so the Settings panel
+	// can display a graceful "not available" state.
+	var dataDir string
+	if c != nil {
+		dataDir = c.DataDir()
+	}
+
 	a := &API{
 		core:           c,
 		a2aAPI:         &stubA2A{},
@@ -464,6 +520,7 @@ func New(c *core.Core) *API {
 		artifactsStore: artStore,
 		mediaStore:     media,
 		usageMgr:       usageMgr,
+		storageAPI:     storageview.NewAPI(db, dataDir),
 	}
 	a.attachmentsAPI = newAttachmentsAPI(c, attMgr)
 	a.artifactsAPI = newArtifactsAPI(c, artStore, artMgr, media)
@@ -3687,6 +3744,16 @@ func (a *API) Update() updateview.UpdateAPI {
 		return updateview.New(updateview.Config{})
 	}
 	return a.updateAPI
+}
+
+// Storage returns the storage-health view accessor (v0.5.1 migration-doctor).
+// Always non-nil; returns ErrStorageUnavailable on every method when the
+// chassis has no real storage.DB (e.g. rpc.New(nil) test path).
+func (a *API) Storage() storageview.StorageAPI {
+	if a == nil || a.storageAPI == nil {
+		return storageview.NewAPI(nil, "")
+	}
+	return a.storageAPI
 }
 
 // stubSearch is a safe no-op SearchAPI for use before storage is wired.

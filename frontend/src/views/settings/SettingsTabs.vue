@@ -38,6 +38,9 @@ const tabs: ReadonlyArray<Tab> = [
   // General tab and disambiguates via ?tab=updates so we don't have to
   // touch the router. See SettingsView.vue for the mount switch.
   { to: '/settings?tab=updates', label: 'Updates', query: 'updates' },
+  // v0.5.1 migration-doctor — Health tab. Disambiguates via ?tab=health.
+  // See SettingsView.vue for the mount switch.
+  { to: '/settings?tab=health', label: 'Health', query: 'health' },
   { to: '/providers', label: 'Providers' },
   { to: '/hooks', label: 'Hooks' },
   { to: '/bundles', label: 'Bundles' },

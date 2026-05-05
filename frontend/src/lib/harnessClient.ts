@@ -120,6 +120,7 @@ import type {
   PermissionGrant,
   PermissionMode,
   SessionUsage,
+  DriftReport,
 } from './types';
 
 /**
@@ -513,6 +514,10 @@ interface WailsBindingsLike {
   Branches_CommitReintegration(
     opts: BranchReintegrationCommitOpts,
   ): Promise<void>;
+
+  // ── storage health (v0.5.1 migration-doctor) ────────────────────────
+  Storage_GetMigrationDriftReport(): Promise<DriftReport>;
+  Storage_ApplyDriftFix(version: number): Promise<void>;
 }
 
 /**
@@ -1284,30 +1289,6 @@ export interface SettingsClient {
    */
   setFSRequestAccessEnabled(enabled: boolean): Promise<void>;
 
-  // ── builtin-filesystem-tools-01KR3N4P WP06 ────────────────────────
-
-  /**
-   * Return whether the read-family builtin filesystem tools
-   * (kaneaz__read_file, kaneaz__list_dir, kaneaz__glob, kaneaz__grep,
-   * kaneaz__list_open_worklist) are enabled. Default: false.
-   */
-  getFSReadEnabled(): Promise<boolean>;
-  /**
-   * Persist the read-family builtin filesystem tool opt-in.
-   * Changes take effect on the next model turn without restarting.
-   */
-  setFSReadEnabled(enabled: boolean): Promise<void>;
-  /**
-   * Return whether the write-family builtin filesystem tools
-   * (kaneaz__write_file, kaneaz__edit_file) are enabled. Default: false.
-   */
-  getFSWriteEnabled(): Promise<boolean>;
-  /**
-   * Persist the write-family builtin filesystem tool opt-in.
-   * Changes take effect on the next model turn without restarting.
-   */
-  setFSWriteEnabled(enabled: boolean): Promise<void>;
-
   // ── autonomy-dial-01KR3M2A WP03 ─────────────────────────────────────
   /** Read the persisted global autonomy.Layer. */
   getAutonomy(): Promise<AutonomyLayer>;
@@ -1798,6 +1779,22 @@ export interface SearchClient {
   sessions(query: string, filters?: SearchFilters): Promise<SearchHit[]>;
 }
 
+/**
+ * StorageClient — storage-health operations (v0.5.1 migration-doctor).
+ *
+ * getMigrationDriftReport reads the harness_migrations ledger and the
+ * registered migration set, compares them, and returns every discrepancy.
+ * Never modifies the database.
+ *
+ * applyDriftFix repairs an id_mismatch entry by backing up data.db and
+ * renaming the ledger row's id to match the registered migration's ID.
+ * Returns an error for ledger_only / code_only entries.
+ */
+export interface StorageClient {
+  getMigrationDriftReport(): Promise<DriftReport>;
+  applyDriftFix(version: number): Promise<void>;
+}
+
 export interface HarnessClient {
   shellStatus(): Promise<ShellStatus>;
   appInfo(): Promise<AppInfo>;
@@ -1839,6 +1836,7 @@ export interface HarnessClient {
   nodes: NodesClient;
   cedarPolicy: CedarPolicyClient;
   search: SearchClient;
+  storage: StorageClient;
 }
 
 // ── runtime client ─────────────────────────────────────────────────────
@@ -2091,10 +2089,6 @@ export function createHarnessClient(): HarnessClient {
         b().Settings_GetFSRequestAccessEnabled(),
       setFSRequestAccessEnabled: (enabled) =>
         b().Settings_SetFSRequestAccessEnabled(enabled),
-      getFSReadEnabled: () => b().Settings_GetFSReadEnabled(),
-      setFSReadEnabled: (enabled) => b().Settings_SetFSReadEnabled(enabled),
-      getFSWriteEnabled: () => b().Settings_GetFSWriteEnabled(),
-      setFSWriteEnabled: (enabled) => b().Settings_SetFSWriteEnabled(enabled),
       getAutonomy: () => b().Settings_GetAutonomy(),
       setAutonomy: (layer) => b().Settings_SetAutonomy(layer),
       getMCPAutoRestart: () => b().Settings_GetMCPAutoRestart(),
@@ -2245,6 +2239,10 @@ export function createHarnessClient(): HarnessClient {
     search: {
       sessions: (query, filters) =>
         b().Search_Sessions(query, filters ?? {}),
+    },
+    storage: {
+      getMigrationDriftReport: () => b().Storage_GetMigrationDriftReport(),
+      applyDriftFix: (version) => b().Storage_ApplyDriftFix(version),
     },
   };
 }
@@ -2585,10 +2583,6 @@ export function createFakeHarnessClient(
       setCedarStrictCredentialMode: noop,
       getFSRequestAccessEnabled: async () => true,
       setFSRequestAccessEnabled: noop,
-      getFSReadEnabled: async () => false,
-      setFSReadEnabled: noop,
-      getFSWriteEnabled: async () => false,
-      setFSWriteEnabled: noop,
       getAutonomy: async () => ({ level: null, overrides: {} }),
       setAutonomy: noop,
       getMCPAutoRestart: async () => true,
@@ -2986,6 +2980,10 @@ export function createFakeHarnessClient(
     },
     search: {
       sessions: async () => [],
+    },
+    storage: {
+      getMigrationDriftReport: async () => ({ drifts: [] }),
+      applyDriftFix: noop,
     },
   };
 
