@@ -39,6 +39,8 @@ kitty-specs/
 # Local-only — explicitly excluded from public repo
 .kittify/
 .claude/settings.local.json
+# Roadmap references gitignored kitty-specs by ULID; keep local-only.
+docs/roadmap.md
 
 # Test runner output caches
 .vite/
