@@ -292,6 +292,19 @@ func (m *Manager) SetKind(ctx context.Context, id, kind string) error {
 	return nil
 }
 
+// SetLastUsage persists the per-turn usage snapshot for the session.
+// Called by the chat runner's UsageHook after every completed LLM turn
+// (backend-context-window-length-01KQ8TD3 WP02).
+func (m *Manager) SetLastUsage(ctx context.Context, id string, u LastUsage) error {
+	return m.store.SetLastUsage(ctx, id, u)
+}
+
+// GetLastUsage loads the most-recently-persisted usage snapshot.
+// Returns a zero LastUsage (not an error) when no turn has completed yet.
+func (m *Manager) GetLastUsage(ctx context.Context, id string) (LastUsage, error) {
+	return m.store.GetLastUsage(ctx, id)
+}
+
 // Rename changes a session's display name.
 func (m *Manager) Rename(ctx context.Context, id, name string) error {
 	name = strings.TrimSpace(name)

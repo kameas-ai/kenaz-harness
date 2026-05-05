@@ -76,6 +76,42 @@ func (a *LLMProviderAdapter) LastResponse() corellm.Response {
 	return a.lastResp
 }
 
+// ProviderKind resolves the provider kind string for the active profile
+// (e.g. "anthropic", "openai", "bedrock"). Used by the usage hook to
+// populate UsageTurn.ProviderKind for token-cost-telemetry alignment
+// (backend-context-window-length-01KQ8TD3 WP06). Returns "" when the
+// registry is unavailable or the profile cannot be found.
+func (a *LLMProviderAdapter) ProviderKind() string {
+	if a == nil || a.reg == nil || a.profileID == "" {
+		return ""
+	}
+	prof, err := a.reg.Profile(a.profileID)
+	if err != nil {
+		return ""
+	}
+	return prof.Kind
+}
+
+// ActiveModelID returns the effective model id for the current turn.
+// Prefers modelOverride when set; falls back to the profile's default
+// model. Used alongside ProviderKind by the usage hook.
+func (a *LLMProviderAdapter) ActiveModelID() string {
+	if a == nil {
+		return ""
+	}
+	if a.modelOverride != "" {
+		return a.modelOverride
+	}
+	if a.reg == nil || a.profileID == "" {
+		return ""
+	}
+	prof, err := a.reg.Profile(a.profileID)
+	if err != nil || len(prof.AvailableModels()) == 0 {
+		return ""
+	}
+	return prof.AvailableModels()[0]
+}
+
 // Generate satisfies agentgraph.LLMProvider. Translates the kernel
 // request → corellm.GenerationRequest, opens a stream, fans events
 // into the kernel's StreamSink (pulled from ctx via the kernel-pinned

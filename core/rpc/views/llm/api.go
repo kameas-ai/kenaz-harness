@@ -102,6 +102,10 @@ type ModelInfo struct {
 	DisplayName   string `json:"displayName"`
 	Description   string `json:"description,omitempty"`
 	ContextWindow int    `json:"contextWindow,omitempty"` // max tokens; 0 = unknown
+	// MaxOutputTokens is the provider's hard cap on tokens in a single
+	// response. 0 / missing means unknown — the UI should not render an
+	// explicit cap in that case (backend-context-window-length-01KQ8TD3 WP01).
+	MaxOutputTokens int `json:"maxOutputTokens,omitempty"`
 }
 
 // LLMConnectorAPI is the view-scoped accessor for provider metadata and

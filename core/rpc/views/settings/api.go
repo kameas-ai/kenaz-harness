@@ -300,6 +300,16 @@ type Settings struct {
 	// env-var gate HARNESS_EDIT_FILE_ARTIFACT_SYNC=on is set). Read via
 	// the EditFileArtifactSyncEnabled() accessor; never read directly.
 	EditFileArtifactSyncDisabled bool `json:"editFileArtifactSyncDisabled,omitempty"`
+
+	// ContextWindowOverrides is a per-provider-kind map of user-supplied
+	// context-window sizes (in tokens). Keys are provider kind strings
+	// ("anthropic", "openai", "bedrock", "openrouter"). When a key is
+	// present, the frontend context-window meter uses its value as the
+	// denominator instead of the backend-curated catalog value
+	// (backend-context-window-length-01KQ8TD3 WP05). Zero or negative
+	// values are silently ignored — the catalog value takes precedence.
+	// An absent map (nil/empty) means "use catalog values for all providers."
+	ContextWindowOverrides map[string]int `json:"contextWindowOverrides,omitempty"`
 }
 
 // ProviderProfileRef is the wire shape that identifies a provider+model

@@ -45,6 +45,7 @@ import type {
   Message,
   Provider,
   SessionUsage,
+  Settings,
   SlashExecuteResult,
 } from '@/lib/types';
 import { flattenChoices, inferFamily } from '@/lib/modelFamily';
@@ -296,14 +297,26 @@ const isWaitingForFirstChunk = computed(
 // Per-model context window — sourced from the backend's curated
 // capability table via Provider.modelInfos. 0 means "unknown"; the
 // meter enters an explicit "unknown" state rather than a misleading
-// 200k fallback. Real input-token counts will be wired by the
-// per-message-token-meter mission once it lands.
+// 200k fallback.
+//
+// Resolution order (WP05):
+//   1. User override from contextWindowOverrides[provider.kind]
+//   2. Catalog value from provider.modelInfos[].contextWindow
+//   3. 0 (unknown — meter shows "—")
 //
 // contextDenominator: >0 = known window; 0 = unknown.
 const contextDenominator = computed((): number => {
   const provider = activeProvider.value;
   const modelId = activeModelId.value;
   if (!provider || !modelId) return 0;
+  // WP05: prefer any user-supplied override for this provider kind.
+  const providerKind = provider.kind ?? '';
+  const override =
+    providerKind && contextWindowOverrides.value
+      ? contextWindowOverrides.value[providerKind]
+      : undefined;
+  if (typeof override === 'number' && override > 0) return override;
+  // Fall back to the catalog-derived value from ModelInfos.
   const info = provider.modelInfos?.find((m) => m.id === modelId);
   const cw = info?.contextWindow ?? 0;
   return cw > 0 ? cw : 0;
@@ -312,9 +325,14 @@ const contextDenominator = computed((): number => {
 // hasContextWindow: true when the backend has supplied a non-zero cap.
 const hasContextWindow = computed(() => contextDenominator.value > 0);
 
-// contextNumerator: 0 until the per-message-token-meter mission wires
-// real input-token counts from session.lastUsage.
-const contextNumerator = computed(() => 0);
+// contextNumerator: the cumulative input-token count for the session.
+// Reads from session.lastUsage which is updated in near-real-time via
+// the `session.usage.updated` broker event after each LLM turn
+// (backend-context-window-length-01KQ8TD3 WP03+WP04).
+// Falls back to 0 when no turn has completed yet.
+const contextNumerator = computed(
+  () => session.lastUsage.value?.promptTokens ?? 0,
+);
 
 const contextWindowPct = computed(() => {
   const max = contextDenominator.value;
@@ -591,6 +609,13 @@ const lastRememberError = ref<string | null>(null);
 // when settings have not been loaded or the call fails.
 const compactionArchiveDays = ref<number>(90);
 
+// Per-provider-kind context-window overrides
+// (backend-context-window-length-01KQ8TD3 WP05). Loaded once on mount
+// and refreshed on window focus so settings changes in the Settings
+// panel take effect without a full reload. When a key is absent the
+// contextDenominator falls back to the catalog-derived value.
+const contextWindowOverrides = ref<Settings['contextWindowOverrides']>({});
+
 // Compaction overhead surface (mission compaction-strategy-ui-01KQ8TDI
 // WP08 / plan §2.11). The backend tags every compaction-driven LLM
 // call with cost.kind = "compaction" and accumulates a running total
@@ -625,6 +650,11 @@ async function refreshCompactionSettings() {
     const s = await client.settings.get();
     if (typeof s.compactionArchiveDays === 'number' && s.compactionArchiveDays > 0) {
       compactionArchiveDays.value = s.compactionArchiveDays;
+    }
+    // WP05: pull context-window overrides so contextDenominator respects
+    // any user-supplied values without requiring a full reload.
+    if (s.contextWindowOverrides && typeof s.contextWindowOverrides === 'object') {
+      contextWindowOverrides.value = s.contextWindowOverrides;
     }
   } catch {
     // Soft-fail: leave the locked default in place.

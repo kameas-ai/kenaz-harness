@@ -38,6 +38,11 @@ type modelEntry struct {
 	UsageReporting bool   `yaml:"usage_reporting"`
 	// ContextWindow is the model's max context length in tokens (0 = unknown).
 	ContextWindow int `yaml:"context_window"`
+	// MaxOutputTokens is the provider's hard cap on completion tokens per
+	// turn (0 = unknown). Sourced from provider documentation; surfaced in
+	// ModelInfo for the frontend context-window indicator
+	// (backend-context-window-length-01KQ8TD3 WP01).
+	MaxOutputTokens int `yaml:"max_output_tokens"`
 }
 
 // Catalog holds the loaded per-provider data and answers per-(provider,
@@ -135,6 +140,23 @@ func (c *Catalog) ContextWindow(provider, model string) int {
 	for _, m := range spec.Models {
 		if matchGlob(m.Match, model) {
 			return m.ContextWindow
+		}
+	}
+	return 0
+}
+
+// MaxOutputTokens returns the curated per-turn output token cap for
+// (provider, model). Returns 0 when no entry matches or the field
+// was not populated in the YAML — callers treat 0 as "unknown"
+// (backend-context-window-length-01KQ8TD3 WP01).
+func (c *Catalog) MaxOutputTokens(provider, model string) int {
+	spec, ok := c.specs[provider]
+	if !ok {
+		return 0
+	}
+	for _, m := range spec.Models {
+		if matchGlob(m.Match, model) {
+			return m.MaxOutputTokens
 		}
 	}
 	return 0

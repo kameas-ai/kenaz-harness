@@ -161,6 +161,33 @@ const globalAttachmentsLoading = ref(false);
 const globalPickerOpen = ref(false);
 const draggedId = ref<string | null>(null);
 
+// ── Context window overrides (backend-context-window-length-01KQ8TD3 WP05) ──
+
+// The four provider kinds the harness currently ships stream adapters for.
+// This list mirrors the SUPPORTED_KINDS set in SessionsView.vue and the
+// kind strings emitted by ListProviders.
+const CONTEXT_WINDOW_KINDS = ['anthropic', 'openai', 'bedrock', 'openrouter'] as const;
+
+/** Local working copy of the per-kind override map. Mirrors the
+ * Settings.contextWindowOverrides field; 0 means "cleared / use catalog." */
+const contextWindowOverrides = ref<Record<string, number>>({});
+
+function onContextWindowOverrideInput(kind: string, evt: Event) {
+  const raw = (evt.target as HTMLInputElement).value;
+  const n = raw === '' ? 0 : Number.parseInt(raw, 10);
+  const next = { ...contextWindowOverrides.value };
+  if (Number.isNaN(n) || n <= 0) {
+    delete next[kind];
+  } else {
+    next[kind] = n;
+  }
+  contextWindowOverrides.value = next;
+  debouncedSave(client, {
+    ...settings.value,
+    contextWindowOverrides: Object.keys(next).length > 0 ? next : undefined,
+  });
+}
+
 // WP05: auto-title toggle
 const autoTitleEnabled = ref(true);
 
@@ -215,6 +242,8 @@ async function refresh() {
   compactionRecentWindowError.value = null;
   monthlyCostNotifyUsd.value = settings.value.monthlyCostNotifyUsd ?? 0;
   monthlyCostNotifyUsdError.value = null;
+  // WP05: hydrate per-provider context-window override map.
+  contextWindowOverrides.value = { ...(settings.value.contextWindowOverrides ?? {}) };
   // Tier-explain payload + provider list both feed the Compaction
   // section; either failing returns the empty-state UI rather than
   // bricking the page.
@@ -879,6 +908,42 @@ onMounted(() => {
               Set to 0 to disable notifications. Maximum
               ${{ MAX_MONTHLY_COST_NOTIFY_USD }}.
             </p>
+          </div>
+        </div>
+      </section>
+
+      <section data-testid="context-window-overrides-section">
+        <h2 class="font-ui text-[11px] uppercase tracking-[0.18em] text-ink-subtle">
+          Context window overrides
+        </h2>
+        <p class="mt-1 font-ui text-[11px] text-ink-muted">
+          Override the backend-derived context-window size for a provider kind. Leave a field
+          blank to use the curated catalog value. Changes take effect immediately in
+          the session context meter.
+        </p>
+        <div class="mt-3 grid gap-2">
+          <div
+            v-for="kind in CONTEXT_WINDOW_KINDS"
+            :key="kind"
+            class="grid gap-2"
+            style="grid-template-columns: 10ch 1fr"
+          >
+            <label
+              :for="`cw-override-${kind}`"
+              class="self-center font-ui text-[12px] text-ink-muted capitalize"
+            >
+              {{ kind }}
+            </label>
+            <input
+              :id="`cw-override-${kind}`"
+              type="number"
+              min="0"
+              :placeholder="'catalog (default)'"
+              :value="contextWindowOverrides[kind] || ''"
+              class="w-36 rounded-sm border border-border bg-surface-1 px-2 py-1 font-ui text-[12px] text-ink"
+              :data-testid="`cw-override-${kind}`"
+              @input="onContextWindowOverrideInput(kind, $event)"
+            />
           </div>
         </div>
       </section>
