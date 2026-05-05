@@ -454,6 +454,10 @@ export function Memory_Forget(arg1) {
   return window['go']['rpc']['Bindings']['Memory_Forget'](arg1);
 }
 
+export function Memory_HealthSnapshot() {
+  return window['go']['rpc']['Bindings']['Memory_HealthSnapshot']();
+}
+
 export function Memory_JournalTail(arg1, arg2, arg3) {
   return window['go']['rpc']['Bindings']['Memory_JournalTail'](arg1, arg2, arg3);
 }
@@ -480,6 +484,10 @@ export function Memory_RememberMessage(arg1, arg2, arg3) {
 
 export function Memory_RunPruneNow(arg1) {
   return window['go']['rpc']['Bindings']['Memory_RunPruneNow'](arg1);
+}
+
+export function Memory_TestEmbedder() {
+  return window['go']['rpc']['Bindings']['Memory_TestEmbedder']();
 }
 
 export function Nodes_Catalog() {

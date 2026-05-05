@@ -262,6 +262,8 @@ export function MCP_TestRecipe(arg1:string,arg2:Record<string, string>,arg3:Reco
 
 export function Memory_Forget(arg1:string):Promise<void>;
 
+export function Memory_HealthSnapshot():Promise<memory.HealthSnapshot>;
+
 export function Memory_JournalTail(arg1:string,arg2:number,arg3:number):Promise<Array<memory.JournalEntry>>;
 
 export function Memory_ListChunks(arg1:memory.ListFilter):Promise<Array<memory.Chunk>>;
@@ -275,6 +277,8 @@ export function Memory_PrunePreview(arg1:string):Promise<memory.PrunePreview>;
 export function Memory_RememberMessage(arg1:string,arg2:string,arg3:string):Promise<string>;
 
 export function Memory_RunPruneNow(arg1:string):Promise<memory.PruneStats>;
+
+export function Memory_TestEmbedder():Promise<number>;
 
 export function Nodes_Catalog():Promise<Array<nodes.NodeManifestSummary>>;
 

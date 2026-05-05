@@ -131,6 +131,11 @@ export interface UseSessionsResult {
   moveToProject(sessionId: string, projectId: string): Promise<void>;
 }
 
+/** Debounce delay (ms) for broker-driven list refresh. Non-negotiable:
+ * prevents refresh storms when a busy chat run emits multiple events
+ * in quick succession (e.g. create → auto-title → usage). */
+const SESSION_LIST_CHANGED_DEBOUNCE_MS = 150;
+
 export function useSessions(): UseSessionsResult {
   const client = useHarnessClient();
   const list = shallowRef<readonly Session[]>([]);
@@ -180,6 +185,40 @@ export function useSessions(): UseSessionsResult {
     await client.sessions.moveToProject(sessionId, projectId);
     await refresh();
   }
+
+  // Broker-driven invalidation: subscribe to session.list_changed so the
+  // LeftRail updates when auto-titling, suggest-title, branch-creation, or
+  // any other external write mutates the sessions list. Debounced by
+  // SESSION_LIST_CHANGED_DEBOUNCE_MS to prevent refresh storms.
+  let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+  let offListChanged: (() => void) | undefined;
+
+  function scheduleRefresh() {
+    if (debounceTimer !== null) {
+      clearTimeout(debounceTimer);
+    }
+    debounceTimer = setTimeout(() => {
+      debounceTimer = null;
+      void refresh();
+    }, SESSION_LIST_CHANGED_DEBOUNCE_MS);
+  }
+
+  onMounted(() => {
+    if (typeof window !== 'undefined' && window.runtime?.EventsOn) {
+      offListChanged = window.runtime.EventsOn('session.list_changed', scheduleRefresh);
+    }
+  });
+
+  onBeforeUnmount(() => {
+    if (offListChanged) {
+      offListChanged();
+      offListChanged = undefined;
+    }
+    if (debounceTimer !== null) {
+      clearTimeout(debounceTimer);
+      debounceTimer = null;
+    }
+  });
 
   return { list, loading, refresh, create, rename, remove, moveToProject };
 }

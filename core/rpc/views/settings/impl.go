@@ -1165,6 +1165,7 @@ func parseInt64Positive(s string) (int64, error) {
 	return n, nil
 }
 
+
 // GetEmbedderConfig returns the persisted (profileID, modelOverride)
 // pair for the memory embedder.  Empty strings mean "auto-pick".
 // (v0.5.2 universal-embedder fix)
