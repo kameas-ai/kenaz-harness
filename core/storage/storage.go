@@ -205,6 +205,9 @@ type Result interface {
 // check. The concrete type lives in core/storage/migrations.
 type MigrationRegistry interface {
 	Register(m Migration) error
+	// All returns every registered migration, sorted by Version ascending.
+	// Used by the drift detector to compare the registry against the ledger.
+	All() []Migration
 	Applied() ([]LedgerEntry, error)
 	Pending() ([]Migration, error)
 	Apply(ctx context.Context) error

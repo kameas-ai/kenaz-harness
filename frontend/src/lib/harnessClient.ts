@@ -120,6 +120,7 @@ import type {
   PermissionGrant,
   PermissionMode,
   SessionUsage,
+  DriftReport,
 } from './types';
 
 /**
@@ -513,6 +514,10 @@ interface WailsBindingsLike {
   Branches_CommitReintegration(
     opts: BranchReintegrationCommitOpts,
   ): Promise<void>;
+
+  // ── storage health (v0.5.1 migration-doctor) ────────────────────────
+  Storage_GetMigrationDriftReport(): Promise<DriftReport>;
+  Storage_ApplyDriftFix(version: number): Promise<void>;
 }
 
 /**
@@ -1774,6 +1779,22 @@ export interface SearchClient {
   sessions(query: string, filters?: SearchFilters): Promise<SearchHit[]>;
 }
 
+/**
+ * StorageClient — storage-health operations (v0.5.1 migration-doctor).
+ *
+ * getMigrationDriftReport reads the harness_migrations ledger and the
+ * registered migration set, compares them, and returns every discrepancy.
+ * Never modifies the database.
+ *
+ * applyDriftFix repairs an id_mismatch entry by backing up data.db and
+ * renaming the ledger row's id to match the registered migration's ID.
+ * Returns an error for ledger_only / code_only entries.
+ */
+export interface StorageClient {
+  getMigrationDriftReport(): Promise<DriftReport>;
+  applyDriftFix(version: number): Promise<void>;
+}
+
 export interface HarnessClient {
   shellStatus(): Promise<ShellStatus>;
   appInfo(): Promise<AppInfo>;
@@ -1815,6 +1836,7 @@ export interface HarnessClient {
   nodes: NodesClient;
   cedarPolicy: CedarPolicyClient;
   search: SearchClient;
+  storage: StorageClient;
 }
 
 // ── runtime client ─────────────────────────────────────────────────────
@@ -2217,6 +2239,10 @@ export function createHarnessClient(): HarnessClient {
     search: {
       sessions: (query, filters) =>
         b().Search_Sessions(query, filters ?? {}),
+    },
+    storage: {
+      getMigrationDriftReport: () => b().Storage_GetMigrationDriftReport(),
+      applyDriftFix: (version) => b().Storage_ApplyDriftFix(version),
     },
   };
 }
@@ -2954,6 +2980,10 @@ export function createFakeHarnessClient(
     },
     search: {
       sessions: async () => [],
+    },
+    storage: {
+      getMigrationDriftReport: async () => ({ drifts: [] }),
+      applyDriftFix: noop,
     },
   };
 

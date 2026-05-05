@@ -17,6 +17,7 @@ import SettingsTabs from '@/views/settings/SettingsTabs.vue';
 import KeyboardShortcuts from '@/components/settings/KeyboardShortcuts.vue';
 import AutonomyPanel from '@/views/settings/AutonomyPanel.vue';
 import UpdatesPanel from '@/views/settings/UpdatesPanel.vue';
+import MigrationDriftPanel from '@/views/settings/health/MigrationDriftPanel.vue';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
 import { debouncedSave } from '@/lib/settings';
 import { markdownExtensionsRef } from '@/lib/markdown/injectionKeys';
@@ -43,6 +44,13 @@ const route = useRoute() as ReturnType<typeof useRoute> | undefined;
 const showUpdatesTab = computed<boolean>(() => {
   const v = route?.query?.tab;
   return typeof v === 'string' && v === 'updates';
+});
+
+// v0.5.1 migration-doctor — Health sub-tab (same route disambiguation
+// as Updates; mount switch is in <template> below).
+const showHealthTab = computed<boolean>(() => {
+  const v = route?.query?.tab;
+  return typeof v === 'string' && v === 'health';
 });
 
 const settings = ref<Settings>({
@@ -573,6 +581,14 @@ onMounted(() => {
       data-testid="settings-updates-pane"
     >
       <UpdatesPanel />
+    </div>
+
+    <!-- v0.5.1 migration-doctor — Health sub-tab. -->
+    <div
+      v-else-if="showHealthTab"
+      data-testid="settings-health-pane"
+    >
+      <MigrationDriftPanel />
     </div>
 
     <div

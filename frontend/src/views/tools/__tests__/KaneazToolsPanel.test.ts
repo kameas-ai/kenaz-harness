@@ -668,3 +668,164 @@ describe('KaneazToolsPanel — recipes section', () => {
     expect(setup.spies.install).not.toHaveBeenCalled();
   });
 });
+
+// ── builtin-filesystem-tools-01KR3N4P WP06 — FS toggle UI ──────────────
+
+describe('KaneazToolsPanel — builtin filesystem tools toggles', () => {
+  it('renders the fs-read and fs-write toggle rows', async () => {
+    const setup = makeClient([]);
+    const w = await mountPanel(setup);
+    await flushPromises();
+
+    expect(w.find('[data-testid=fs-read-tool-row]').exists()).toBe(true);
+    expect(w.find('[data-testid=fs-write-tool-row]').exists()).toBe(true);
+  });
+
+  it('fs-read toggle is unchecked by default (FSReadEnabled defaults false)', async () => {
+    const setup = makeClient([]);
+    const w = await mountPanel(setup);
+    await flushPromises();
+
+    const toggle = w.find<HTMLInputElement>('[data-testid=fs-read-toggle]');
+    expect(toggle.exists()).toBe(true);
+    expect((toggle.element as HTMLInputElement).checked).toBe(false);
+  });
+
+  it('fs-write toggle is unchecked by default (FSWriteEnabled defaults false)', async () => {
+    const setup = makeClient([]);
+    const w = await mountPanel(setup);
+    await flushPromises();
+
+    const toggle = w.find<HTMLInputElement>('[data-testid=fs-write-toggle]');
+    expect(toggle.exists()).toBe(true);
+    expect((toggle.element as HTMLInputElement).checked).toBe(false);
+  });
+
+  it('toggling fs-read calls settings.setFSReadEnabled with the new value', async () => {
+    const setFSReadEnabled = vi.fn(async () => undefined);
+    const setup = makeClient([]);
+    setup.client.settings.setFSReadEnabled = setFSReadEnabled;
+
+    const w = await mountPanel(setup);
+    await flushPromises();
+
+    const toggle = w.find('[data-testid=fs-read-toggle]');
+    // Trigger the change event (the handler reads event.target.checked).
+    const el = toggle.element as HTMLInputElement;
+    el.checked = true;
+    await toggle.trigger('change');
+    await flushPromises();
+
+    expect(setFSReadEnabled).toHaveBeenCalledTimes(1);
+    expect(setFSReadEnabled).toHaveBeenCalledWith(true);
+  });
+
+  it('toggling fs-write calls settings.setFSWriteEnabled with the new value', async () => {
+    const setFSWriteEnabled = vi.fn(async () => undefined);
+    const setup = makeClient([]);
+    setup.client.settings.setFSWriteEnabled = setFSWriteEnabled;
+
+    const w = await mountPanel(setup);
+    await flushPromises();
+
+    const toggle = w.find('[data-testid=fs-write-toggle]');
+    const el = toggle.element as HTMLInputElement;
+    el.checked = true;
+    await toggle.trigger('change');
+    await flushPromises();
+
+    expect(setFSWriteEnabled).toHaveBeenCalledTimes(1);
+    expect(setFSWriteEnabled).toHaveBeenCalledWith(true);
+  });
+
+  it('fs-read toggle reflects the value returned by settings.getFSReadEnabled', async () => {
+    const setup = makeClient([]);
+    setup.client.settings.getFSReadEnabled = async () => true;
+
+    const w = await mountPanel(setup);
+    await flushPromises();
+
+    const toggle = w.find<HTMLInputElement>('[data-testid=fs-read-toggle]');
+    expect((toggle.element as HTMLInputElement).checked).toBe(true);
+  });
+
+  it('fs-write toggle reflects the value returned by settings.getFSWriteEnabled', async () => {
+    const setup = makeClient([]);
+    setup.client.settings.getFSWriteEnabled = async () => true;
+
+    const w = await mountPanel(setup);
+    await flushPromises();
+
+    const toggle = w.find<HTMLInputElement>('[data-testid=fs-write-toggle]');
+    expect((toggle.element as HTMLInputElement).checked).toBe(true);
+  });
+
+  it('reverts fs-read toggle on error and shows error message', async () => {
+    const setup = makeClient([]);
+    setup.client.settings.setFSReadEnabled = vi.fn(async () => {
+      throw new Error('store write failed');
+    });
+
+    const w = await mountPanel(setup);
+    await flushPromises();
+
+    const toggle = w.find('[data-testid=fs-read-toggle]');
+    const el = toggle.element as HTMLInputElement;
+    el.checked = true;
+    await toggle.trigger('change');
+    await flushPromises();
+
+    // The toggle should revert to false after the error.
+    expect((toggle.element as HTMLInputElement).checked).toBe(false);
+    // The error message from the thrown Error is surfaced to the user.
+    const row = w.find('[data-testid=fs-read-tool-row]');
+    expect(row.text()).toContain('store write failed');
+  });
+
+  it('reverts fs-write toggle on error and shows error message', async () => {
+    const setup = makeClient([]);
+    setup.client.settings.setFSWriteEnabled = vi.fn(async () => {
+      throw new Error('store write failed');
+    });
+
+    const w = await mountPanel(setup);
+    await flushPromises();
+
+    const toggle = w.find('[data-testid=fs-write-toggle]');
+    const el = toggle.element as HTMLInputElement;
+    el.checked = true;
+    await toggle.trigger('change');
+    await flushPromises();
+
+    // The toggle should revert to false after the error.
+    expect((toggle.element as HTMLInputElement).checked).toBe(false);
+    // The error message from the thrown Error is surfaced to the user.
+    const row = w.find('[data-testid=fs-write-tool-row]');
+    expect(row.text()).toContain('store write failed');
+  });
+
+  it('fs-read row lists the 5 read-family tool names', async () => {
+    const setup = makeClient([]);
+    const w = await mountPanel(setup);
+    await flushPromises();
+
+    const row = w.find('[data-testid=fs-read-tool-row]');
+    const text = row.text();
+    expect(text).toContain('kaneaz__read_file');
+    expect(text).toContain('kaneaz__list_dir');
+    expect(text).toContain('kaneaz__glob');
+    expect(text).toContain('kaneaz__grep');
+    expect(text).toContain('kaneaz__list_open_worklist');
+  });
+
+  it('fs-write row lists the 2 write-family tool names', async () => {
+    const setup = makeClient([]);
+    const w = await mountPanel(setup);
+    await flushPromises();
+
+    const row = w.find('[data-testid=fs-write-tool-row]');
+    const text = row.text();
+    expect(text).toContain('kaneaz__write_file');
+    expect(text).toContain('kaneaz__edit_file');
+  });
+});

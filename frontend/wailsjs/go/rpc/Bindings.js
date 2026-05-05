@@ -722,6 +722,22 @@ export function Settings_GetFSRequestAccessEnabled() {
   return window['go']['rpc']['Bindings']['Settings_GetFSRequestAccessEnabled']();
 }
 
+export function Settings_GetFSReadEnabled() {
+  return window['go']['rpc']['Bindings']['Settings_GetFSReadEnabled']();
+}
+
+export function Settings_SetFSReadEnabled(arg1) {
+  return window['go']['rpc']['Bindings']['Settings_SetFSReadEnabled'](arg1);
+}
+
+export function Settings_GetFSWriteEnabled() {
+  return window['go']['rpc']['Bindings']['Settings_GetFSWriteEnabled']();
+}
+
+export function Settings_SetFSWriteEnabled(arg1) {
+  return window['go']['rpc']['Bindings']['Settings_SetFSWriteEnabled'](arg1);
+}
+
 export function Settings_GetMCPAutoRestart() {
   return window['go']['rpc']['Bindings']['Settings_GetMCPAutoRestart']();
 }

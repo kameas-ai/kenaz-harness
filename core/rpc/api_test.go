@@ -36,6 +36,7 @@ import (
 	updateview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/update"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/workflow"
 	workflowsview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/workflows"
+	storageview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/storage"
 )
 
 // fakeHarnessAPI is a compile-time witness that the HarnessAPI interface
@@ -72,6 +73,7 @@ type fakeHarnessAPI struct {
 	nodesAPI        nodesview.NodesAPI
 	searchAPI       searchview.SearchAPI
 	updateAPI       updateview.UpdateAPI
+	storageAPI      storageview.StorageAPI
 }
 
 func (f *fakeHarnessAPI) ShellStatus(_ context.Context) (ShellStatus, error) {
@@ -110,6 +112,7 @@ func (f *fakeHarnessAPI) Dials() dialsview.DialsAPI                    { return 
 func (f *fakeHarnessAPI) Nodes() nodesview.NodesAPI                    { return f.nodesAPI }
 func (f *fakeHarnessAPI) Search() searchview.SearchAPI                 { return f.searchAPI }
 func (f *fakeHarnessAPI) Update() updateview.UpdateAPI                  { return f.updateAPI }
+func (f *fakeHarnessAPI) Storage() storageview.StorageAPI               { return f.storageAPI }
 func (f *fakeHarnessAPI) CedarProposeResolve(_, _ string) error         { return nil }
 
 // Compile-time interface witness (plan §4.2).

@@ -85,6 +85,14 @@ const (
 	KindHarnessSelfPolicyProposed Kind = "harness-self.policy.proposed"
 	KindHarnessSelfPolicyWritten  Kind = "harness-self.policy.written"
 	KindHarnessSelfPolicyRejected Kind = "harness-self.policy.rejected"
+
+	// KindMigrationDriftDetected is emitted once per chassis boot when the
+	// migration drift detector finds one or more discrepancies between the
+	// harness_migrations ledger and the registered migration set (v0.5.1
+	// migration-doctor). Payload: {drift_count int, versions []int}.
+	// Severity: "warning" when any id_mismatch or ledger_only entries exist;
+	// "info" when only code_only (pending) entries are present.
+	KindMigrationDriftDetected Kind = "storage.migration.drift-detected"
 )
 
 var builtIn = []Kind{
@@ -104,6 +112,8 @@ var builtIn = []Kind{
 	// Harness-self MCP audit (harness-self-mcp-onboarding-01KQ8TDU WP10).
 	KindHarnessSelfToolCalled, KindHarnessSelfPolicyProposed,
 	KindHarnessSelfPolicyWritten, KindHarnessSelfPolicyRejected,
+	// Migration drift detector (v0.5.1 migration-doctor).
+	KindMigrationDriftDetected,
 }
 
 var (

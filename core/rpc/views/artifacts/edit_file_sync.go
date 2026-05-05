@@ -14,6 +14,11 @@
 //	        one artifact per flush boundary.
 //	WP05 — captureFromEditFile: read the post-edit content and create a
 //	        CaptureCandidate with AbsolutePath set.
+//	WP06 — OTel instrumentation: artifact.editfile.enqueue and
+//	        artifact.editfile.flush spans emitted around the hot paths.
+//	        private.* attribute prefix used for any attribute carrying
+//	        user content (path values are treated as user content,
+//	        defence-in-depth per NFR-004).
 //
 // WP04 feature-gate: editFileArtifactSyncActive() checks the env-var.
 // The sink also checks the per-user settings dial (LoadEditFileArtifactSyncEnabled).
@@ -32,7 +37,14 @@ import (
 	"time"
 
 	coreart "github.com/sigil-tech/kaneaz-harness/core/artifacts"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
 )
+
+// editFileSyncTracer is the instrumentation library name used for all
+// spans emitted by the edit-file sync pipeline (WP06).
+const editFileSyncTracerName = "kaneaz-harness/artifacts/edit-file-sync"
 
 // envEditFileArtifactSync is the primary feature-gate env-var for the
 // edit-file artifact sync feature (WP04).
@@ -101,6 +113,18 @@ func (b *CoalesceBuffer) Flush(sessionID string) []string {
 	}
 	delete(b.sessions, sessionID)
 	return out
+}
+
+// pendingCount returns the number of unique paths currently buffered for
+// sessionID. Called by the OTel instrumentation to populate the
+// path_count_after attribute on the artifact.editfile.enqueue span (WP06).
+func (b *CoalesceBuffer) pendingCount(sessionID string) int {
+	if b == nil {
+		return 0
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return len(b.sessions[sessionID])
 }
 
 // Drop removes all pending entries for sessionID (called when a session ends).
@@ -179,26 +203,49 @@ func captureFromEditFile(toolName, absPath string) *coreart.CaptureCandidate {
 //  1. Extracts the path from args.
 //  2. Adds to the CoalesceBuffer (dedup within one turn).
 //  3. Immediately captures the post-edit content.
+//
+// WP06: emits an artifact.editfile.enqueue span on each invocation.
+// Attributes carrying user content use the private.* prefix per
+// NFR-004 defence-in-depth.
 func (s *sink) onPostEditFileMessage(
 	ctx context.Context,
 	sessionID, toolName, toolArgs string,
 	buf *CoalesceBuffer,
 ) {
+	// WP06 — OTel: start enqueue span before path extraction so the
+	// span captures the full cost of this dispatch (including JSON parse).
+	tracer := otel.GetTracerProvider().Tracer(editFileSyncTracerName)
+	ctx, span := tracer.Start(ctx, "artifact.editfile.enqueue")
+	defer span.End()
+
+	span.SetAttributes(attribute.String("tool_name", toolName))
+
 	absPath := ExtractEditFilePath(toolName, toolArgs)
 	if absPath == "" {
+		span.SetStatus(codes.Ok, "path_empty")
 		return
 	}
 
 	// Dedup: only capture once per turn per path.
 	if buf != nil && !buf.Add(sessionID, absPath) {
+		// Count the paths currently in the buffer for the attribute.
+		// We use the session's pending set size post-dedup.
+		span.SetAttributes(attribute.Int("path_count_after", buf.pendingCount(sessionID)))
+		span.SetStatus(codes.Ok, "coalesced")
 		return
+	}
+
+	// Record path count after the add (first occurrence).
+	if buf != nil {
+		span.SetAttributes(attribute.Int("path_count_after", buf.pendingCount(sessionID)))
 	}
 
 	cand := captureFromEditFile(toolName, absPath)
 	if cand == nil {
 		s.log.Warn("artifacts.edit_file_sync.read_failed",
 			"session_id", sessionID,
-			"path", absPath)
+			"private.path", absPath)
+		span.SetStatus(codes.Error, "read_failed")
 		return
 	}
 
@@ -206,16 +253,56 @@ func (s *sink) onPostEditFileMessage(
 	if err != nil {
 		s.log.Warn("artifacts.edit_file_sync.capture_failed",
 			"session_id", sessionID,
-			"path", absPath,
+			"private.path", absPath,
 			"err", err.Error())
+		span.SetStatus(codes.Error, "capture_failed")
 		return
 	}
+	span.SetStatus(codes.Ok, "")
 	if len(captured) > 0 {
 		s.log.Info("artifacts.edit_file_sync.captured",
 			"count", len(captured),
 			"session_id", sessionID,
 			"tool", toolName,
-			"path", absPath,
+			"private.path", absPath,
+		)
+	}
+}
+
+// FlushSession drains the CoalesceBuffer for sessionID and resets it
+// for the next turn. Call this at turn/run completion (OnChatRunComplete)
+// so same-file edits in a subsequent turn are re-captured as new
+// revisions rather than coalesced with the previous turn.
+//
+// WP06: emits an artifact.editfile.flush span around the drain.
+// Attributes:
+//   - paths_drained      — count of unique paths flushed
+//   - artifacts_captured — always 0 here (capture happened at enqueue time)
+//   - duration_ms        — wall-clock duration of the flush operation
+func (s *sinkWithEditSync) FlushSession(ctx context.Context, sessionID string) {
+	if s == nil || s.buf == nil {
+		return
+	}
+
+	tracer := otel.GetTracerProvider().Tracer(editFileSyncTracerName)
+	_, span := tracer.Start(ctx, "artifact.editfile.flush")
+	defer span.End()
+
+	t0 := time.Now()
+	paths := s.buf.Flush(sessionID)
+	durMS := time.Since(t0).Milliseconds()
+
+	span.SetAttributes(
+		attribute.Int("paths_drained", len(paths)),
+		attribute.Int("artifacts_captured", 0), // capture happens at enqueue time
+		attribute.Int64("duration_ms", durMS),
+	)
+	span.SetStatus(codes.Ok, "")
+
+	if len(paths) > 0 {
+		s.sink.log.Info("artifacts.edit_file_sync.session_flushed",
+			"session_id", sessionID,
+			"paths_drained", len(paths),
 		)
 	}
 }

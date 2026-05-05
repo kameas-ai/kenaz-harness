@@ -143,6 +143,70 @@ async function toggleBash(event: Event) {
   }
 }
 
+// ── Builtin filesystem read tools (builtin-filesystem-tools-01KR3N4P WP06) ──
+// Default OFF — tools are disabled until the user opts in.
+const fsReadEnabled = ref(false);
+const fsReadError = ref<string | null>(null);
+const fsReadBusy = ref(false);
+
+async function refreshFSRead() {
+  try {
+    fsReadEnabled.value = await client.settings.getFSReadEnabled();
+  } catch {
+    fsReadEnabled.value = false;
+  }
+}
+
+async function toggleFSRead(event: Event) {
+  if (fsReadBusy.value) return;
+  const next = (event.target as HTMLInputElement).checked;
+  fsReadBusy.value = true;
+  fsReadError.value = null;
+  const previous = fsReadEnabled.value;
+  fsReadEnabled.value = next;
+  try {
+    await client.settings.setFSReadEnabled(next);
+  } catch (e) {
+    fsReadEnabled.value = previous;
+    fsReadError.value =
+      e instanceof Error ? e.message : 'Failed to toggle filesystem read tools.';
+  } finally {
+    fsReadBusy.value = false;
+  }
+}
+
+// ── Builtin filesystem write tools (builtin-filesystem-tools-01KR3N4P WP06) ──
+// Default OFF — write tools are disabled until the user opts in.
+const fsWriteEnabled = ref(false);
+const fsWriteError = ref<string | null>(null);
+const fsWriteBusy = ref(false);
+
+async function refreshFSWrite() {
+  try {
+    fsWriteEnabled.value = await client.settings.getFSWriteEnabled();
+  } catch {
+    fsWriteEnabled.value = false;
+  }
+}
+
+async function toggleFSWrite(event: Event) {
+  if (fsWriteBusy.value) return;
+  const next = (event.target as HTMLInputElement).checked;
+  fsWriteBusy.value = true;
+  fsWriteError.value = null;
+  const previous = fsWriteEnabled.value;
+  fsWriteEnabled.value = next;
+  try {
+    await client.settings.setFSWriteEnabled(next);
+  } catch (e) {
+    fsWriteEnabled.value = previous;
+    fsWriteError.value =
+      e instanceof Error ? e.message : 'Failed to toggle filesystem write tools.';
+  } finally {
+    fsWriteBusy.value = false;
+  }
+}
+
 // ── Save artifact built-in (core/tools/saveartifact) ───────────────────
 // Default ON: saving deliverables is a low-risk primitive that should
 // work on first launch. Reads default to true on backend errors so a
@@ -181,6 +245,8 @@ onMounted(() => {
   void refreshMemory();
   void refreshWebSearch();
   void refreshBash();
+  void refreshFSRead();
+  void refreshFSWrite();
   void refreshSaveArtifact();
 });
 
@@ -677,6 +743,115 @@ watch(
             :disabled="saveArtifactBusy"
             data-testid="saveartifact-toggle"
             @change="toggleSaveArtifact"
+          />
+        </label>
+      </div>
+
+      <!-- Builtin filesystem read tools row (builtin-filesystem-tools-01KR3N4P WP06) -->
+      <div
+        class="px-4 py-3 grid gap-3 items-start"
+        style="grid-template-columns: 1fr auto"
+        data-testid="fs-read-tool-row"
+      >
+        <div>
+          <div class="flex items-center gap-2 font-ui text-[13px] text-ink">
+            <span>Filesystem read tools</span>
+            <span
+              v-if="fsReadEnabled"
+              class="text-[10px] uppercase tracking-[0.16em] text-signal-ok"
+            >
+              on
+            </span>
+          </div>
+          <p class="mt-1 text-[11px] text-ink-muted max-w-prose">
+            Enables the read-family builtin tools shipped with the harness:
+          </p>
+          <ul class="mt-1 font-mono text-[10px] text-ink-dim list-none">
+            <li>kaneaz__read_file</li>
+            <li>kaneaz__list_dir</li>
+            <li>kaneaz__glob</li>
+            <li>kaneaz__grep</li>
+            <li>kaneaz__list_open_worklist</li>
+          </ul>
+          <p class="mt-1 text-[11px] text-ink-muted max-w-prose">
+            Default OFF. Cedar policy still applies to every call. Filesystem access
+            requests are gated by the per-directory allowlist.
+          </p>
+          <div
+            v-if="fsReadError"
+            class="mt-2 text-[11px] text-signal-danger"
+            role="alert"
+          >
+            {{ fsReadError }}
+          </div>
+        </div>
+        <label
+          class="inline-flex items-center cursor-pointer select-none"
+          :class="fsReadBusy ? 'opacity-60 cursor-wait' : ''"
+        >
+          <input
+            type="checkbox"
+            class="accent-accent w-4 h-4"
+            :checked="fsReadEnabled"
+            :disabled="fsReadBusy"
+            data-testid="fs-read-toggle"
+            @change="toggleFSRead"
+          />
+        </label>
+      </div>
+
+      <!-- Builtin filesystem write tools row (builtin-filesystem-tools-01KR3N4P WP06) -->
+      <div
+        class="px-4 py-3 grid gap-3 items-start"
+        style="grid-template-columns: 1fr auto"
+        data-testid="fs-write-tool-row"
+      >
+        <div>
+          <div class="flex items-center gap-2 font-ui text-[13px] text-ink">
+            <span>Filesystem write tools</span>
+            <span
+              v-if="fsWriteEnabled"
+              class="text-[10px] uppercase tracking-[0.16em] text-signal-ok"
+            >
+              on
+            </span>
+          </div>
+          <p class="mt-1 text-[11px] text-ink-muted max-w-prose">
+            Enables the write-family builtin tools shipped with the harness:
+          </p>
+          <ul class="mt-1 font-mono text-[10px] text-ink-dim list-none">
+            <li>kaneaz__write_file</li>
+            <li>kaneaz__edit_file</li>
+          </ul>
+          <p class="mt-1 text-[11px] text-ink-muted max-w-prose">
+            Default OFF. Write tools modify your filesystem directly.
+            Cedar policy still applies — read about gating in the
+            <a
+              href="https://cedar-spec.org/docs"
+              target="_blank"
+              rel="noopener noreferrer"
+              class="underline hover:text-ink"
+            >Cedar policy docs</a>.
+          </p>
+          <div
+            v-if="fsWriteError"
+            class="mt-2 text-[11px] text-signal-danger"
+            role="alert"
+          >
+            {{ fsWriteError }}
+          </div>
+        </div>
+        <label
+          class="inline-flex items-center cursor-pointer select-none"
+          :class="fsWriteBusy ? 'opacity-60 cursor-wait' : ''"
+        >
+          <input
+            type="checkbox"
+            class="accent-accent w-4 h-4"
+            :checked="fsWriteEnabled"
+            :disabled="fsWriteBusy"
+            data-testid="fs-write-toggle"
+            @change="toggleFSWrite"
           />
         </label>
       </div>
