@@ -283,22 +283,27 @@ jobs:
         run: |
           set -euo pipefail
           VERSION="${{ needs.derive-version.outputs.version }}"
-          # Wails names the NSIS output "<outputfilename>-amd64-installer.exe"
-          # using wails.json `outputfilename` ("Kenaz"), NOT info.productName.
-          # Same gotcha as the AppImage step on linux which uses build/bin/Kenaz.
-          # Rename to a version-stamped, URL-safe filename before signing picks
-          # it up. v0.5.0 release silently dropped the .exe asset because this
-          # path used "Kenaz Harness-amd64-installer.exe" (productName-shaped)
-          # which doesn't exist; the if-check is non-fatal so the missing file
-          # only logged a warning and shipped a Windows release without an
-          # installer.exe.
-          SRC="build/bin/Kenaz-amd64-installer.exe"
+          # Wails picks the installer filename from wails.json `name` field
+          # ("kenaz-harness"), NOT productName ("Kenaz Harness") and NOT
+          # outputfilename ("Kenaz"). Both prior fixes used the wrong field
+          # (v0.5.0 used productName, v0.5.1 used outputfilename, both
+          # silently failed). Use a glob match so we don't have to keep
+          # guessing which wails.json field NSIS reads from.
           DST="build/bin/Kenaz-Harness-Setup-${VERSION}-windows-amd64.exe"
-          if [ -f "$SRC" ]; then
+          # Find the *-amd64-installer.exe Wails just produced (exactly one expected).
+          shopt -s nullglob
+          installers=( build/bin/*-amd64-installer.exe )
+          shopt -u nullglob
+          if [ "${#installers[@]}" -eq 1 ]; then
+            SRC="${installers[0]}"
             mv "$SRC" "$DST"
-            echo "Renamed NSIS installer → $DST"
+            echo "Renamed NSIS installer → $DST (was $SRC)"
+          elif [ "${#installers[@]}" -eq 0 ]; then
+            echo "::error::No *-amd64-installer.exe found in build/bin — listing:"
+            ls -la "build/bin/"
+            exit 1
           else
-            echo "::error::NSIS installer not found at '$SRC' — listing build/bin:"
+            echo "::error::Multiple *-amd64-installer.exe candidates: ${installers[*]}"
             ls -la "build/bin/"
             exit 1
           fi
