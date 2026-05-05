@@ -698,6 +698,10 @@ export function Settings_Get() {
   return window['go']['rpc']['Bindings']['Settings_Get']();
 }
 
+export function Settings_GetArtifactPreview() {
+  return window['go']['rpc']['Bindings']['Settings_GetArtifactPreview']();
+}
+
 export function Settings_GetAutonomy() {
   return window['go']['rpc']['Bindings']['Settings_GetAutonomy']();
 }
@@ -718,24 +722,12 @@ export function Settings_GetConfirmEach() {
   return window['go']['rpc']['Bindings']['Settings_GetConfirmEach']();
 }
 
+export function Settings_GetEmbedderConfig() {
+  return window['go']['rpc']['Bindings']['Settings_GetEmbedderConfig']();
+}
+
 export function Settings_GetFSRequestAccessEnabled() {
   return window['go']['rpc']['Bindings']['Settings_GetFSRequestAccessEnabled']();
-}
-
-export function Settings_GetFSReadEnabled() {
-  return window['go']['rpc']['Bindings']['Settings_GetFSReadEnabled']();
-}
-
-export function Settings_SetFSReadEnabled(arg1) {
-  return window['go']['rpc']['Bindings']['Settings_SetFSReadEnabled'](arg1);
-}
-
-export function Settings_GetFSWriteEnabled() {
-  return window['go']['rpc']['Bindings']['Settings_GetFSWriteEnabled']();
-}
-
-export function Settings_SetFSWriteEnabled(arg1) {
-  return window['go']['rpc']['Bindings']['Settings_SetFSWriteEnabled'](arg1);
 }
 
 export function Settings_GetMCPAutoRestart() {
@@ -774,6 +766,10 @@ export function Settings_GetShortcuts() {
   return window['go']['rpc']['Bindings']['Settings_GetShortcuts']();
 }
 
+export function Settings_GetShowPerMessageTokenMeter() {
+  return window['go']['rpc']['Bindings']['Settings_GetShowPerMessageTokenMeter']();
+}
+
 export function Settings_GetWebSearch() {
   return window['go']['rpc']['Bindings']['Settings_GetWebSearch']();
 }
@@ -800,6 +796,10 @@ export function Settings_SetCedarStrictCredentialMode(arg1) {
 
 export function Settings_SetConfirmEach(arg1) {
   return window['go']['rpc']['Bindings']['Settings_SetConfirmEach'](arg1);
+}
+
+export function Settings_SetEmbedderConfig(arg1, arg2) {
+  return window['go']['rpc']['Bindings']['Settings_SetEmbedderConfig'](arg1, arg2);
 }
 
 export function Settings_SetFSRequestAccessEnabled(arg1) {
@@ -846,6 +846,10 @@ export function Settings_SetShortcuts(arg1) {
   return window['go']['rpc']['Bindings']['Settings_SetShortcuts'](arg1);
 }
 
+export function Settings_SetShowPerMessageTokenMeter(arg1) {
+  return window['go']['rpc']['Bindings']['Settings_SetShowPerMessageTokenMeter'](arg1);
+}
+
 export function Settings_SetWebSearch(arg1) {
   return window['go']['rpc']['Bindings']['Settings_SetWebSearch'](arg1);
 }
@@ -872,6 +876,14 @@ export function Slash_Execute(arg1, arg2) {
 
 export function Slash_List() {
   return window['go']['rpc']['Bindings']['Slash_List']();
+}
+
+export function Storage_ApplyDriftFix(arg1) {
+  return window['go']['rpc']['Bindings']['Storage_ApplyDriftFix'](arg1);
+}
+
+export function Storage_GetMigrationDriftReport() {
+  return window['go']['rpc']['Bindings']['Storage_GetMigrationDriftReport']();
 }
 
 export function Tools_ForgetRecipeKey(arg1, arg2) {

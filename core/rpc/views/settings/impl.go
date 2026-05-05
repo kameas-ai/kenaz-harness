@@ -1123,6 +1123,48 @@ func (a *API) SetMCPAutoRestart(_ context.Context, enabled bool) error {
 	return a.store.SaveMCPAutoRestart(enabled)
 }
 
+// envArtifactBinaryPreview is the feature-flag env-var for the binary
+// preview feature. Default: on (empty or any non-"false" value).
+const envArtifactBinaryPreview = "HARNESS_ARTIFACT_BINARY_PREVIEW"
+
+// envArtifactPreviewMaxBytes overrides the byte cap enforced by the frontend
+// before handing bytes to a renderer. Default: 5 MiB.
+const envArtifactPreviewMaxBytes = "HARNESS_ARTIFACT_PREVIEW_MAX_BYTES"
+
+// defaultArtifactPreviewMaxBytes is 5 MiB.
+const defaultArtifactPreviewMaxBytes int64 = 5 * 1024 * 1024
+
+// defaultArtifactPreviewTimeoutMs is 2 seconds.
+const defaultArtifactPreviewTimeoutMs int64 = 2000
+
+// GetArtifactPreview returns the runtime artifact-preview feature config.
+// (artifact-preview-binary-rendering-01KQ8TD5 WP07)
+func (a *API) GetArtifactPreview(_ context.Context) (enabled bool, maxBytes int64, timeoutMs int64, err error) {
+	enabled = os.Getenv(envArtifactBinaryPreview) != "false"
+	maxBytes = defaultArtifactPreviewMaxBytes
+	if v := os.Getenv(envArtifactPreviewMaxBytes); v != "" {
+		if parsed, parseErr := parseInt64Positive(v); parseErr == nil {
+			maxBytes = parsed
+		}
+	}
+	timeoutMs = defaultArtifactPreviewTimeoutMs
+	return enabled, maxBytes, timeoutMs, nil
+}
+
+// parseInt64Positive parses a decimal string and returns an error if the
+// value is not a positive integer.
+func parseInt64Positive(s string) (int64, error) {
+	var n int64
+	_, parseErr := fmt.Sscanf(s, "%d", &n)
+	if parseErr != nil {
+		return 0, parseErr
+	}
+	if n <= 0 {
+		return 0, fmt.Errorf("settings: must be positive, got %d", n)
+	}
+	return n, nil
+}
+
 // GetEmbedderConfig returns the persisted (profileID, modelOverride)
 // pair for the memory embedder.  Empty strings mean "auto-pick".
 // (v0.5.2 universal-embedder fix)

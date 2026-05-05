@@ -3192,6 +3192,22 @@ export namespace rpc {
 		    return a;
 		}
 	}
+	export class ArtifactPreviewConfig {
+	    enabled: boolean;
+	    maxBytes: number;
+	    timeoutMs: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new ArtifactPreviewConfig(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.enabled = source["enabled"];
+	        this.maxBytes = source["maxBytes"];
+	        this.timeoutMs = source["timeoutMs"];
+	    }
+	}
 	export class BashExecResult {
 	    stdout: string;
 	    stderr: string;
@@ -3208,6 +3224,20 @@ export namespace rpc {
 	        this.stderr = source["stderr"];
 	        this.exitCode = source["exitCode"];
 	        this.truncated = source["truncated"];
+	    }
+	}
+	export class EmbedderConfigResult {
+	    profileId: string;
+	    modelOverride: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new EmbedderConfigResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.profileId = source["profileId"];
+	        this.modelOverride = source["modelOverride"];
 	    }
 	}
 	export class ShellReadFileResult {
@@ -3411,6 +3441,10 @@ export namespace sessions {
 	    streamingFailureKind?: string;
 	    streamingRecoverable?: boolean;
 	    continuationOf?: string;
+	    promptTokens?: number;
+	    completionTokens?: number;
+	    costUsd?: number;
+	    messageCostSource?: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new Message(source);
@@ -3432,6 +3466,10 @@ export namespace sessions {
 	        this.streamingFailureKind = source["streamingFailureKind"];
 	        this.streamingRecoverable = source["streamingRecoverable"];
 	        this.continuationOf = source["continuationOf"];
+	        this.promptTokens = source["promptTokens"];
+	        this.completionTokens = source["completionTokens"];
+	        this.costUsd = source["costUsd"];
+	        this.messageCostSource = source["messageCostSource"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -3664,6 +3702,9 @@ export namespace settings {
 	    autoCollapseBranchesInSidebar?: boolean;
 	    deleteBranchesWithParent?: boolean;
 	    maxVisibleBranchDepth?: number;
+	    embedderProviderProfileId?: string;
+	    embedderModelOverride?: string;
+	    showPerMessageTokenMeter?: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new Settings(source);
@@ -3720,6 +3761,9 @@ export namespace settings {
 	        this.autoCollapseBranchesInSidebar = source["autoCollapseBranchesInSidebar"];
 	        this.deleteBranchesWithParent = source["deleteBranchesWithParent"];
 	        this.maxVisibleBranchDepth = source["maxVisibleBranchDepth"];
+	        this.embedderProviderProfileId = source["embedderProviderProfileId"];
+	        this.embedderModelOverride = source["embedderModelOverride"];
+	        this.showPerMessageTokenMeter = source["showPerMessageTokenMeter"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -3776,6 +3820,63 @@ export namespace slashcmd {
 	        this.kind = source["kind"];
 	        this.metadata = source["metadata"];
 	    }
+	}
+
+}
+
+export namespace storage {
+	
+	export class DriftEntry {
+	    version: number;
+	    ledgerId: string;
+	    expectedId: string;
+	    kind: string;
+	    severity: string;
+	    suggestion: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new DriftEntry(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.version = source["version"];
+	        this.ledgerId = source["ledgerId"];
+	        this.expectedId = source["expectedId"];
+	        this.kind = source["kind"];
+	        this.severity = source["severity"];
+	        this.suggestion = source["suggestion"];
+	    }
+	}
+	export class DriftReport {
+	    drifts: DriftEntry[];
+	
+	    static createFrom(source: any = {}) {
+	        return new DriftReport(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.drifts = this.convertValues(source["drifts"], DriftEntry);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
 	}
 
 }

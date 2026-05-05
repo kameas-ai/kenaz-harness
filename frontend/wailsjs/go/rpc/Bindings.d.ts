@@ -28,6 +28,7 @@ import {sessions} from '../models';
 import {context} from '../models';
 import {settings} from '../models';
 import {slashcmd} from '../models';
+import {storage} from '../models';
 import {transport} from '../models';
 import {tools} from '../models';
 import {trust} from '../models';
@@ -383,6 +384,8 @@ export function SetSettingsStore(arg1:settings.SettingsStore):Promise<void>;
 
 export function Settings_Get():Promise<settings.Settings>;
 
+export function Settings_GetArtifactPreview():Promise<rpc.ArtifactPreviewConfig>;
+
 export function Settings_GetAutonomy():Promise<autonomy.Layer>;
 
 export function Settings_GetBash():Promise<boolean>;
@@ -393,15 +396,9 @@ export function Settings_GetCedarStrictCredentialMode():Promise<boolean>;
 
 export function Settings_GetConfirmEach():Promise<boolean>;
 
+export function Settings_GetEmbedderConfig():Promise<rpc.EmbedderConfigResult>;
+
 export function Settings_GetFSRequestAccessEnabled():Promise<boolean>;
-
-export function Settings_GetFSReadEnabled():Promise<boolean>;
-
-export function Settings_SetFSReadEnabled(arg1:boolean):Promise<void>;
-
-export function Settings_GetFSWriteEnabled():Promise<boolean>;
-
-export function Settings_SetFSWriteEnabled(arg1:boolean):Promise<void>;
 
 export function Settings_GetMCPAutoRestart():Promise<boolean>;
 
@@ -421,6 +418,8 @@ export function Settings_GetSaveArtifactEnabled():Promise<boolean>;
 
 export function Settings_GetShortcuts():Promise<Record<string, string>>;
 
+export function Settings_GetShowPerMessageTokenMeter():Promise<boolean>;
+
 export function Settings_GetWebSearch():Promise<boolean>;
 
 export function Settings_Set(arg1:settings.Settings):Promise<void>;
@@ -434,6 +433,8 @@ export function Settings_SetBashAllowlistMigrated(arg1:boolean):Promise<void>;
 export function Settings_SetCedarStrictCredentialMode(arg1:boolean):Promise<void>;
 
 export function Settings_SetConfirmEach(arg1:boolean):Promise<void>;
+
+export function Settings_SetEmbedderConfig(arg1:string,arg2:string):Promise<void>;
 
 export function Settings_SetFSRequestAccessEnabled(arg1:boolean):Promise<void>;
 
@@ -457,6 +458,8 @@ export function Settings_SetShortcut(arg1:string,arg2:string):Promise<void>;
 
 export function Settings_SetShortcuts(arg1:Record<string, string>):Promise<void>;
 
+export function Settings_SetShowPerMessageTokenMeter(arg1:boolean):Promise<void>;
+
 export function Settings_SetWebSearch(arg1:boolean):Promise<void>;
 
 export function ShellStatus():Promise<rpc.ShellStatus>;
@@ -470,6 +473,10 @@ export function Shell_ReadFile(arg1:string):Promise<rpc.ShellReadFileResult>;
 export function Slash_Execute(arg1:string,arg2:string):Promise<slashcmd.ExecuteResult>;
 
 export function Slash_List():Promise<Array<slashcmd.CommandInfo>>;
+
+export function Storage_ApplyDriftFix(arg1:number):Promise<void>;
+
+export function Storage_GetMigrationDriftReport():Promise<storage.DriftReport>;
 
 export function Tools_ForgetRecipeKey(arg1:string,arg2:string):Promise<void>;
 

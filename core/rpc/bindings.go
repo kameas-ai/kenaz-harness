@@ -891,6 +891,27 @@ func (b *Bindings) Settings_SetEmbedderConfig(profileID, modelOverride string) e
 	return b.api.Settings().SetEmbedderConfig(b.ctx(), profileID, modelOverride)
 }
 
+// ArtifactPreviewConfig is the wire shape returned by
+// Settings_GetArtifactPreview so the frontend can bind all fields in a
+// single RPC call (artifact-preview-binary-rendering-01KQ8TD5 WP07).
+type ArtifactPreviewConfig struct {
+	Enabled   bool  `json:"enabled"`
+	MaxBytes  int64 `json:"maxBytes"`
+	TimeoutMs int64 `json:"timeoutMs"`
+}
+
+// Settings_GetArtifactPreview returns the runtime artifact-preview feature
+// config: enabled flag, byte cap, and timeout.
+// (artifact-preview-binary-rendering-01KQ8TD5 WP07)
+func (b *Bindings) Settings_GetArtifactPreview() (ArtifactPreviewConfig, error) {
+	enabled, maxBytes, timeoutMs, err := b.api.Settings().GetArtifactPreview(b.ctx())
+	return ArtifactPreviewConfig{
+		Enabled:   enabled,
+		MaxBytes:  maxBytes,
+		TimeoutMs: timeoutMs,
+	}, err
+}
+
 // Settings_GetShowPerMessageTokenMeter returns whether the per-message
 // token meter chip is enabled (default false — chip hidden by default to
 // keep the chat uncluttered). (per-message-token-meter-01KR3PQR)

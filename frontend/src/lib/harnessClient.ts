@@ -353,6 +353,8 @@ interface WailsBindingsLike {
   // per-message-token-meter-01KR3PQR
   Settings_GetShowPerMessageTokenMeter(): Promise<boolean>;
   Settings_SetShowPerMessageTokenMeter(enabled: boolean): Promise<void>;
+  // artifact-preview-binary-rendering-01KQ8TD5 WP07
+  Settings_GetArtifactPreview(): Promise<{ enabled: boolean; maxBytes: number; timeoutMs: number }>;
 
   Memory_ListChunks(filter: MemoryListFilter): Promise<MemoryChunk[]>;
   Memory_RememberMessage(
@@ -1333,6 +1335,15 @@ export interface SettingsClient {
   getShowPerMessageTokenMeter(): Promise<boolean>;
   /** Persist the per-message token meter visibility toggle. */
   setShowPerMessageTokenMeter(enabled: boolean): Promise<void>;
+
+  // ── artifact-preview-binary-rendering-01KQ8TD5 WP07 ─────────────────
+  /**
+   * Returns the runtime artifact-preview feature config:
+   *   - enabled: false when HARNESS_ARTIFACT_BINARY_PREVIEW=false (default true)
+   *   - maxBytes: byte cap from HARNESS_ARTIFACT_PREVIEW_MAX_BYTES (default 5 MiB)
+   *   - timeoutMs: preview abort timeout (default 2000 ms)
+   */
+  getArtifactPreview(): Promise<{ enabled: boolean; maxBytes: number; timeoutMs: number }>;
 }
 
 /**
@@ -2130,6 +2141,7 @@ export function createHarnessClient(): HarnessClient {
         b().Settings_GetShowPerMessageTokenMeter(),
       setShowPerMessageTokenMeter: (enabled) =>
         b().Settings_SetShowPerMessageTokenMeter(enabled),
+      getArtifactPreview: () => b().Settings_GetArtifactPreview(),
     },
     permissions: {
       listGrants: (family) =>
@@ -2628,6 +2640,16 @@ export function createFakeHarnessClient(
       setEmbedderConfig: noop,
       getShowPerMessageTokenMeter: async () => false,
       setShowPerMessageTokenMeter: noop,
+      getArtifactPreview: async () => ({
+        // Default false in tests so that existing ArtifactPreview.test.ts
+        // cases run through the legacy text-only branch unmodified
+        // (artifact-preview-binary-rendering-01KQ8TD5 WP07 acceptance:
+        // "existing ArtifactPreview.test.ts cases pass unmodified under
+        // flag-off").
+        enabled: false,
+        maxBytes: 5 * 1024 * 1024,
+        timeoutMs: 2000,
+      }),
     },
     permissions: {
       listGrants: async () => [],
