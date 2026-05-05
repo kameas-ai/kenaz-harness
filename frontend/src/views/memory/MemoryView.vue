@@ -19,6 +19,10 @@
  *     Move semantics: backend deletes the original row and inserts a
  *     new one with a new ID; we just refresh.
  *   - "Forget at scope" reuses the existing forget RPC.
+ *
+ * v0.5.3 cherry-picks (memory-inspection-ui-01KX5R8E):
+ *   §2.4 — "Health" tab with MemoryHealthPanel.
+ *   §2.5 — PrunePreviewModal shown before "Prune now" confirms.
  */
 import { computed, onMounted, ref } from 'vue';
 import { useRoute } from 'vue-router';
@@ -27,11 +31,18 @@ import { useHarnessClient } from '@/lib/useHarnessAPI';
 import type {
   MemoryChunk,
   MemoryListFilter,
+  MemoryPrunePreview,
   MemoryScopeKind,
 } from '@/lib/types';
+import MemoryHealthPanel from './MemoryHealthPanel.vue';
+import PrunePreviewModal from './PrunePreviewModal.vue';
 
 const client = useHarnessClient();
 const route = useRoute();
+
+// §2.4 — top-level tab: "Chunks" (existing) vs. "Health" (new).
+type MainTab = 'chunks' | 'health';
+const activeMainTab = ref<MainTab>('chunks');
 
 type FilterPill = 'all' | MemoryScopeKind;
 
@@ -118,24 +129,49 @@ async function togglePin(chunk: MemoryChunk) {
 }
 
 // Bundle E WP15 — prune controls.
+// §2.5 extension: "Prune now" now first fetches a preview and shows the
+// confirmation modal. The user reviews the would-prune list before the
+// sweep runs.
 const pruneRunning = ref(false);
 const pruneLastResult = ref<string | null>(null);
+const prunePreview = ref<MemoryPrunePreview | null>(null);
+const pruneModalRunning = ref(false);
 
-async function runPruneNow() {
+async function openPrunePreview() {
   pruneRunning.value = true;
   pruneLastResult.value = null;
+  error.value = null;
+  try {
+    const scope = activeFilter.value === 'all' ? '' : activeFilter.value;
+    const preview = await client.memory.prunePreview(scope);
+    prunePreview.value = preview;
+  } catch (err) {
+    error.value = err instanceof Error ? err.message : String(err);
+  } finally {
+    pruneRunning.value = false;
+  }
+}
+
+async function confirmPruneNow() {
+  if (!prunePreview.value) return;
+  pruneModalRunning.value = true;
   try {
     const scope = activeFilter.value === 'all' ? '' : activeFilter.value;
     const stats = await client.memory.runPruneNow(scope);
     pruneLastResult.value =
       `kept ${stats.kept} · dropped ${stats.dropped} · ` +
       `collapsed ${stats.collapsed} · pinned ${stats.pinned}`;
+    prunePreview.value = null;
     await refresh();
   } catch (err) {
     error.value = err instanceof Error ? err.message : String(err);
   } finally {
-    pruneRunning.value = false;
+    pruneModalRunning.value = false;
   }
+}
+
+function cancelPrunePreview() {
+  prunePreview.value = null;
 }
 
 function toggleMenu(id: string) {
@@ -287,7 +323,39 @@ defineExpose({ refresh });
       subtitle="Every snippet you have asked the harness to remember. These are pulled into future conversations across all sessions."
     />
 
-    <div class="px-6 py-4 max-w-4xl">
+    <!-- §2.4 — Main tab bar: Chunks / Health -->
+    <div
+      class="flex border-b border-border-muted px-6"
+      role="tablist"
+      aria-label="Memory view tabs"
+      data-testid="memory-main-tabs"
+    >
+      <button
+        v-for="tab in [{ id: 'chunks', label: 'Chunks' }, { id: 'health', label: 'Health' }]"
+        :key="tab.id"
+        type="button"
+        role="tab"
+        :aria-selected="activeMainTab === tab.id"
+        :data-testid="`memory-main-tab-${tab.id}`"
+        class="px-4 py-2 font-ui text-[11px] uppercase tracking-[0.18em] border-b-2 -mb-px transition-colors"
+        :class="
+          activeMainTab === tab.id
+            ? 'border-accent text-accent'
+            : 'border-transparent text-ink-dim hover:text-ink'
+        "
+        @click="activeMainTab = tab.id as MainTab"
+      >
+        {{ tab.label }}
+      </button>
+    </div>
+
+    <!-- §2.4 — Health tab panel -->
+    <MemoryHealthPanel
+      v-if="activeMainTab === 'health'"
+      data-testid="memory-health-tab-panel"
+    />
+
+    <div v-if="activeMainTab === 'chunks'" class="px-6 py-4 max-w-4xl">
       <!-- Scope filter pills (WP06 T005) -->
       <div
         class="mb-4 flex flex-wrap gap-2"
@@ -315,7 +383,7 @@ defineExpose({ refresh });
         </button>
       </div>
 
-      <!-- Prune controls (Bundle E WP15) -->
+      <!-- Prune controls (Bundle E WP15 + §2.5 preview modal) -->
       <div
         class="mb-3 flex flex-wrap items-center gap-2"
         data-testid="memory-prune-controls"
@@ -325,9 +393,9 @@ defineExpose({ refresh });
           class="px-3 py-1 rounded-sm border border-border-muted font-ui text-[11px] uppercase tracking-[0.18em] text-ink-dim hover:bg-surface-2 disabled:opacity-50"
           :disabled="pruneRunning"
           data-testid="memory-prune-now"
-          @click="runPruneNow"
+          @click="openPrunePreview"
         >
-          {{ pruneRunning ? 'Pruning…' : 'Prune now' }}
+          {{ pruneRunning ? 'Loading preview…' : 'Prune now' }}
         </button>
         <span
           v-if="pruneLastResult"
@@ -450,7 +518,16 @@ defineExpose({ refresh });
           </p>
         </li>
       </ul>
-    </div>
+    </div><!-- end v-if chunks tab -->
+
+    <!-- §2.5 — Prune preview confirmation modal -->
+    <PrunePreviewModal
+      v-if="prunePreview"
+      :preview="prunePreview"
+      :running="pruneModalRunning"
+      @confirm="confirmPruneNow"
+      @cancel="cancelPrunePreview"
+    />
 
     <!-- Promotion confirmation modal -->
     <div

@@ -52,6 +52,7 @@ import type {
   MemoryJournalEntry,
   MemoryPruneStats,
   MemoryPrunePreview,
+  MemoryHealthSnapshot,
   DialConfig,
   DialDelta,
   DialEffectiveDials,
@@ -374,6 +375,8 @@ interface WailsBindingsLike {
   ): Promise<MemoryJournalEntry[]>;
   Memory_PrunePreview(scope: string): Promise<MemoryPrunePreview>;
   Memory_RunPruneNow(scope: string): Promise<MemoryPruneStats>;
+  Memory_HealthSnapshot(): Promise<MemoryHealthSnapshot>;
+  Memory_TestEmbedder(): Promise<number>;
 
   Dials_Get(key: DialScopeKey): Promise<DialConfig>;
   Dials_Set(key: DialScopeKey, cfg: DialConfig): Promise<void>;
@@ -1424,6 +1427,10 @@ export interface MemoryClient {
   prunePreview(scope: string): Promise<MemoryPrunePreview>;
   /** Apply the prune sweep immediately (WP15). */
   runPruneNow(scope: string): Promise<MemoryPruneStats>;
+  /** Return the §2.4 health snapshot (counts, activity, embedder info). */
+  healthSnapshot(): Promise<MemoryHealthSnapshot>;
+  /** Probe the wired embedder against "hello world"; returns vector dims. */
+  testEmbedder(): Promise<number>;
 }
 
 /**
@@ -2155,6 +2162,8 @@ export function createHarnessClient(): HarnessClient {
         b().Memory_JournalTail(scope, sinceSeq, limit),
       prunePreview: (scope) => b().Memory_PrunePreview(scope),
       runPruneNow: (scope) => b().Memory_RunPruneNow(scope),
+      healthSnapshot: () => b().Memory_HealthSnapshot(),
+      testEmbedder: () => b().Memory_TestEmbedder(),
     },
     dials: {
       get: (key) => b().Dials_Get(key),
@@ -2665,6 +2674,20 @@ export function createFakeHarnessClient(
         collapsed: 0,
         pinned: 0,
       }),
+      healthSnapshot: async () => ({
+        counts: {
+          total: 0,
+          raw: 0,
+          narrative: 0,
+          longTermPromoted: 0,
+          embedded: 0,
+          unembedded: 0,
+        },
+        activity: { captured: 0, pruned: 0, promoted: 0 },
+        embedder: { kind: 'noop', model: '', dimensions: 0 },
+        capturedAt: new Date().toISOString(),
+      }),
+      testEmbedder: async () => 0,
     },
     dials: {
       get: async () => ({}),

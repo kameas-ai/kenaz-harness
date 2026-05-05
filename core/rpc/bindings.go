@@ -954,6 +954,19 @@ func (b *Bindings) Memory_RunPruneNow(scope string) (memoryview.PruneStats, erro
 	return b.api.Memory().RunPruneNow(b.ctx(), scope)
 }
 
+// Memory_HealthSnapshot returns an at-a-glance health snapshot for the
+// §2.4 memory health dashboard (memory-inspection-ui-01KX5R8E §2.4).
+func (b *Bindings) Memory_HealthSnapshot() (memoryview.HealthSnapshot, error) {
+	return b.api.Memory().HealthSnapshot(b.ctx())
+}
+
+// Memory_TestEmbedder probes the wired embedder against "hello world"
+// and returns the resulting vector dimensions. Used by the §2.4
+// "Test embedder" button.
+func (b *Bindings) Memory_TestEmbedder() (int, error) {
+	return b.api.Memory().TestEmbedder(b.ctx())
+}
+
 // ── dials (Bundle E WP17) ──────────────────────────────────────────────
 
 func (b *Bindings) Dials_Get(key dialsview.ScopeKey) (dialsview.DialConfig, error) {

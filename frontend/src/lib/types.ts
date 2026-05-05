@@ -1141,11 +1141,69 @@ export interface MemoryPruneVerdict {
 }
 
 /**
+ * MemoryPruneRow — §2.5 confirmation modal row. One per would-be-dropped
+ * or would-be-collapsed chunk, enriched with a snippet for user review.
+ */
+export interface MemoryPruneRow {
+  id: string;
+  snippet: string;
+  reason: string;
+  action: 'drop' | 'collapse';
+}
+
+/**
  * MemoryPrunePreview — dry-run prune result.
+ * §2.5 extension: `rows` carries the drop/collapse subset enriched
+ * with content snippets for the confirmation modal.
  */
 export interface MemoryPrunePreview {
   verdicts: MemoryPruneVerdict[];
   stats: MemoryPruneStats;
+  /** §2.5 — row list for the confirmation modal; may be undefined on
+   * older backends that predate this field. */
+  rows?: MemoryPruneRow[];
+}
+
+/**
+ * MemoryHealthCounts — per-kind chunk breakdown (§2.4 health panel).
+ */
+export interface MemoryHealthCounts {
+  total: number;
+  raw: number;
+  narrative: number;
+  longTermPromoted: number;
+  embedded: number;
+  unembedded: number;
+}
+
+/**
+ * MemoryHealthActivity — last-7-day activity window (§2.4).
+ */
+export interface MemoryHealthActivity {
+  captured: number;
+  pruned: number;
+  promoted: number;
+}
+
+/**
+ * MemoryHealthEmbedder — static embedder properties surfaced in the §2.4
+ * health panel without a network call.
+ */
+export interface MemoryHealthEmbedder {
+  kind: string;
+  model: string;
+  dimensions: number;
+}
+
+/**
+ * MemoryHealthSnapshot — response from Memory_HealthSnapshot (§2.4).
+ * All counts come from an indexed O(n) pass; no full-table scan.
+ */
+export interface MemoryHealthSnapshot {
+  counts: MemoryHealthCounts;
+  activity: MemoryHealthActivity;
+  embedder: MemoryHealthEmbedder;
+  capturedAt: string; // RFC3339
 }
 
 /**

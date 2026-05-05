@@ -189,6 +189,12 @@ func (s *stubMemory) PrunePreview(_ context.Context, _ string) (memoryview.Prune
 func (s *stubMemory) RunPruneNow(_ context.Context, _ string) (memoryview.PruneStats, error) {
 	return memoryview.PruneStats{}, nil
 }
+func (s *stubMemory) HealthSnapshot(_ context.Context) (memoryview.HealthSnapshot, error) {
+	return memoryview.HealthSnapshot{}, nil
+}
+func (s *stubMemory) TestEmbedder(_ context.Context) (int, error) {
+	return 0, errNotWired
+}
 
 // ── dials ──────────────────────────────────────────────────────────────
 
