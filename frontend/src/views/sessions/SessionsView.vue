@@ -627,6 +627,32 @@ function onBranchOpen(childSessionId: string) {
   void router.push(`/sessions/${childSessionId}`);
 }
 
+// ── "Branch from this turn" handler (branching-ux-polish-01KQ8TD7 WP05) ─────
+const branchFromTurnError = ref<string | null>(null);
+const branchFromTurnLoading = ref(false);
+
+async function onBranchFromTurn(message: { id?: string }) {
+  const parentSessionId = sessionId.value;
+  const parentMessageId = message.id;
+  if (!parentSessionId || !parentMessageId) return;
+  if (branchFromTurnLoading.value) return;
+  branchFromTurnLoading.value = true;
+  branchFromTurnError.value = null;
+  try {
+    const branch = await client.branches.createExplicit({
+      parentSessionId,
+      parentMessageId,
+    });
+    if (branch.childSessionId) {
+      void router.push(`/sessions/${branch.childSessionId}`);
+    }
+  } catch (err) {
+    branchFromTurnError.value = err instanceof Error ? err.message : String(err);
+  } finally {
+    branchFromTurnLoading.value = false;
+  }
+}
+
 const hasAnyProvider = computed(() => providers.value.length > 0);
 
 // Long-term-memory opt-in. Off by default (privacy posture); read once
@@ -1202,6 +1228,7 @@ function formatSize(bytes: number): string {
             @remember="onRemember"
             @save-artifact="onSaveArtifactFromMessage"
             @open-artifact="openArtifactPreview"
+            @branch-from-turn="onBranchFromTurn"
           />
           <BranchSidebar
             v-if="hasSession"

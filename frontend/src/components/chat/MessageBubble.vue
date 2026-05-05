@@ -157,7 +157,26 @@ const emit = defineEmits<{
    * to client.sessions.resumeMessage(sessionId, messageId).
    */
   (e: 'resume', messageId: string): void;
+  /**
+   * User clicked "Branch from this turn" (branching-ux-polish-01KQ8TD7 WP05).
+   * The parent calls client.branches.createExplicit and navigates to the child.
+   */
+  (e: 'branch-from-turn', messageId: string): void;
 }>();
+
+// Feature flag (branching-ux-polish-01KQ8TD7 WP05) — consistent with LeftRail.
+const BRANCHING_POLISH_ENABLED: boolean = (() => {
+  try {
+    const v = localStorage.getItem('harness.feature.branchingPolish');
+    if (v === 'off' || v === 'false') return false;
+  } catch { /* ignore */ }
+  return true;
+})();
+
+function onBranchFromTurn() {
+  if (!props.messageId) return;
+  emit('branch-from-turn', props.messageId);
+}
 
 const menuOpen = ref(false);
 const flashConfirm = ref(false);
@@ -458,6 +477,21 @@ function onResumeClick() {
             </button>
           </div>
         </div>
+        <!-- "Branch from this turn" button (branching-ux-polish-01KQ8TD7 WP05).
+             Visible on assistant messages with a stable messageId when
+             HARNESS_BRANCHING_POLISH is on. Disabled while streaming. -->
+        <button
+          v-if="BRANCHING_POLISH_ENABLED && isAssistant && messageId"
+          type="button"
+          class="opacity-0 group-hover:opacity-100 focus:opacity-100 transition-fast text-[12px] px-1.5 py-0.5 rounded-sm border border-border-muted text-ink-dim hover:text-accent hover:bg-surface-2 ml-1 disabled:opacity-40 disabled:cursor-not-allowed"
+          :disabled="!!streaming"
+          :title="streaming ? 'Wait for the response to finish' : 'Branch from this turn'"
+          :aria-label="'Branch from this turn'"
+          data-testid="branch-from-turn-button"
+          @click="onBranchFromTurn"
+        >
+          ⎇
+        </button>
       </header>
 
       <!-- Compaction summary indicator (WP07): rendered on the
