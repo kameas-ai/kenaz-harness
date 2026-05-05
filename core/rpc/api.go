@@ -54,6 +54,7 @@ import (
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/a2a"
 	graphview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/agentgraph"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/agentgraph/chat"
+	onboardingview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/onboarding"
 	artifactsview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/artifacts"
 	attachmentsview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/attachments"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/audit"
@@ -174,6 +175,13 @@ type HarnessAPI interface {
 	// (harness-self-mcp-onboarding-01KQ8TDU WP07). requestID comes in on
 	// the "cedar:propose-pending" broker topic.
 	CedarProposeResolve(requestID, decision string) error
+
+	// Onboarding exposes the first-run onboarding RPC surface (mission
+	// harness-self-mcp-onboarding-01KQ8TDU WP08). The frontend's
+	// OnboardingDialog binds here to drive the Phase-1 FSM, read
+	// OnboardingState on boot, dismiss the dialog, and restart Phase 2
+	// via "Reconfigure with assistant".
+	Onboarding() onboardingview.OnboardingAPI
 }
 
 // ShellStatus drives the Toolbar status pills + LegendBar live-rate
@@ -336,6 +344,12 @@ type API struct {
 	// in-process transport (WP09) can attach it to the session's MCP pool
 	// without re-constructing.
 	harnessServer *harnessServer
+
+	// onboardingAPI is the first-run onboarding view (WP08). Wired in
+	// New when a real Core is available; falls back to a zero-config
+	// stub that returns sensible defaults so the chassis-only test
+	// fixture compiles.
+	onboardingAPI onboardingview.OnboardingAPI
 
 	// wfScheduler is the cron-backed workflow scheduler
 	// (workflows-agentic-01KW2D3X WP02). Started on SetContext; stopped
@@ -1083,6 +1097,27 @@ func New(c *core.Core) *API {
 		logging.L().Info("harness.self.server.ready",
 			"tools", len(a.harnessServer.srv.Tools()),
 		)
+	}
+
+	// Onboarding view (harness-self-mcp-onboarding-01KQ8TDU WP08).
+	// Wired with real providers when a core is available; the zero-value
+	// onboardingview.New(onboardingview.Config{}) stub handles the nil
+	// chassis path gracefully.
+	{
+		firstRunDetector := onboardingFirstRunAdapter{llmAPI: a.llmAPI}
+		var sessionStarter onboardingSessionStarterAdapter
+		if c != nil {
+			sessionStarter.sessionMgr = c.SessionManager()
+			sessionStarter.dataDir = dataDir
+		}
+		a.onboardingAPI = onboardingview.New(onboardingview.Config{
+			FirstRun:       firstRunDetector,
+			Completion:     onboardingCompletionAdapter{},
+			SessionStarter: sessionStarter,
+			SettingsDial:   onboardingSettingsDialAdapter{},
+			DataDir:        dataDir,
+		})
+		logging.L().Info("onboarding.api.ready")
 	}
 
 	return a
@@ -3784,6 +3819,16 @@ func (a *API) CedarProposeResolve(requestID, decision string) error {
 		return ErrCedarProposeNotWired
 	}
 	return a.cedarProposeResolver.ResolveProposeRequestRaw(requestID, decision)
+}
+
+// Onboarding returns the first-run onboarding view surface (mission
+// harness-self-mcp-onboarding-01KQ8TDU WP08). Always non-nil; the
+// zero-config stub returns safe defaults when the chassis has no core.
+func (a *API) Onboarding() onboardingview.OnboardingAPI {
+	if a.onboardingAPI == nil {
+		return onboardingview.New(onboardingview.Config{})
+	}
+	return a.onboardingAPI
 }
 
 // SetCedarProposeResolver wires a resolver at runtime. Called by the

@@ -540,6 +540,14 @@ interface WailsBindingsLike {
   // ── storage health (v0.5.1 migration-doctor) ────────────────────────
   Storage_GetMigrationDriftReport(): Promise<DriftReport>;
   Storage_ApplyDriftFix(version: number): Promise<void>;
+
+  // ── onboarding (harness-self-mcp-onboarding-01KQ8TDU WP08) ──────────
+  Onboarding_State(): Promise<OnboardingState>;
+  Onboarding_Begin(): Promise<OnboardingStepResponse>;
+  Onboarding_Step(req: OnboardingStepRequest): Promise<OnboardingStepResponse>;
+  Onboarding_Dismiss(): Promise<void>;
+  Onboarding_RestartPhase2(req: OnboardingRestartPhase2Request): Promise<OnboardingRestartPhase2Response>;
+  Onboarding_ListStarters(): Promise<StarterSummary[]>;
 }
 
 /**
@@ -1847,6 +1855,88 @@ export interface StorageClient {
   applyDriftFix(version: number): Promise<void>;
 }
 
+// ── Onboarding types (harness-self-mcp-onboarding-01KQ8TDU WP08) ─────────
+
+/**
+ * OnboardingState — boot-time state the frontend reads on mount to decide
+ * whether to show the onboarding dialog.
+ */
+export interface OnboardingState {
+  firstRun: boolean;
+  completed: boolean;
+  phase?: string;
+  currentState?: string;
+  harnessSelfMCPDisabled: boolean;
+}
+
+/**
+ * OnboardingStepRequest — the (state, event, payload) tuple for FSM.Step.
+ */
+export interface OnboardingStepRequest {
+  state: string;
+  event: string;
+  payload?: Record<string, string>;
+}
+
+/**
+ * OnboardingCard — the render descriptor returned by each FSM step.
+ */
+export interface OnboardingCard {
+  title: string;
+  body?: string;
+  actions?: Array<{ id: string; label: string; primary?: boolean }>;
+  fields?: Array<{ id: string; label: string; placeholder?: string; secret?: boolean }>;
+  error_message?: string;
+  provider_hint?: string;
+}
+
+/**
+ * OnboardingStepResponse — FSM state + render card returned by Begin/Step.
+ */
+export interface OnboardingStepResponse {
+  state: string;
+  card: OnboardingCard;
+}
+
+/**
+ * StarterSummary — one curated starter prompt descriptor.
+ */
+export interface StarterSummary {
+  id: string;
+  title: string;
+  description: string;
+  recommendedProvider?: string;
+  recommendedModel?: string;
+  recommendedRecipes?: string[];
+}
+
+/**
+ * OnboardingRestartPhase2Request — picks the starter for a new onboarding session.
+ */
+export interface OnboardingRestartPhase2Request {
+  starterId: string;
+}
+
+/**
+ * OnboardingRestartPhase2Response — carries the new session id to navigate to.
+ */
+export interface OnboardingRestartPhase2Response {
+  sessionId: string;
+}
+
+/**
+ * OnboardingClient — view-scoped surface for the harness first-run dialog.
+ * Mission: harness-self-mcp-onboarding-01KQ8TDU WP08.
+ */
+export interface OnboardingClient {
+  state(): Promise<OnboardingState>;
+  begin(): Promise<OnboardingStepResponse>;
+  step(req: OnboardingStepRequest): Promise<OnboardingStepResponse>;
+  dismiss(): Promise<void>;
+  restartPhase2(req: OnboardingRestartPhase2Request): Promise<OnboardingRestartPhase2Response>;
+  listStarters(): Promise<StarterSummary[]>;
+}
+
 export interface HarnessClient {
   shellStatus(): Promise<ShellStatus>;
   appInfo(): Promise<AppInfo>;
@@ -1889,6 +1979,7 @@ export interface HarnessClient {
   cedarPolicy: CedarPolicyClient;
   search: SearchClient;
   storage: StorageClient;
+  onboarding: OnboardingClient;
 }
 
 // ── runtime client ─────────────────────────────────────────────────────
@@ -2306,6 +2397,14 @@ export function createHarnessClient(): HarnessClient {
     storage: {
       getMigrationDriftReport: () => b().Storage_GetMigrationDriftReport(),
       applyDriftFix: (version) => b().Storage_ApplyDriftFix(version),
+    },
+    onboarding: {
+      state: () => b().Onboarding_State(),
+      begin: () => b().Onboarding_Begin(),
+      step: (req) => b().Onboarding_Step(req),
+      dismiss: () => b().Onboarding_Dismiss(),
+      restartPhase2: (req) => b().Onboarding_RestartPhase2(req),
+      listStarters: () => b().Onboarding_ListStarters(),
     },
   };
 }
@@ -3081,6 +3180,24 @@ export function createFakeHarnessClient(
     storage: {
       getMigrationDriftReport: async () => ({ drifts: [] }),
       applyDriftFix: noop,
+    },
+    onboarding: {
+      state: async () => ({
+        firstRun: false,
+        completed: true,
+        harnessSelfMCPDisabled: false,
+      }),
+      begin: async () => ({
+        state: 'welcome',
+        card: { title: 'Welcome' },
+      }),
+      step: async () => ({
+        state: 'done',
+        card: { title: 'Done' },
+      }),
+      dismiss: noop,
+      restartPhase2: async () => ({ sessionId: '' }),
+      listStarters: async () => [],
     },
   };
 
