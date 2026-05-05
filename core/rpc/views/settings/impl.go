@@ -808,6 +808,33 @@ func (s *FileStore) SaveEditFileArtifactSyncEnabled(enabled bool) error {
 	return s.saveLocked(got)
 }
 
+// LoadEmbedderConfig returns the persisted embedder provider profile ID
+// and model override.  Empty strings mean "use defaults" (auto-pick
+// first eligible provider, per-Kind default model).
+// (v0.5.2 universal-embedder fix)
+func (s *FileStore) LoadEmbedderConfig() (profileID, modelOverride string, err error) {
+	got, lerr := s.LoadAll()
+	if lerr != nil {
+		return "", "", lerr
+	}
+	return got.EmbedderProviderProfileID, got.EmbedderModelOverride, nil
+}
+
+// SaveEmbedderConfig persists the embedder provider selection and
+// optional model override.  Empty strings reset to auto-pick /
+// per-Kind-default behaviour.
+func (s *FileStore) SaveEmbedderConfig(profileID, modelOverride string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	got, err := s.loadLocked()
+	if err != nil {
+		return err
+	}
+	got.EmbedderProviderProfileID = profileID
+	got.EmbedderModelOverride = modelOverride
+	return s.saveLocked(got)
+}
+
 // encodeAutonomyField marshals a Layer to the json.RawMessage stored
 // on Settings.Autonomy. The empty Layer encodes as nil so it omits via
 // `omitempty` on disk.
@@ -1094,6 +1121,20 @@ func (a *API) GetMCPAutoRestart(_ context.Context) (bool, error) {
 // SetMCPAutoRestart persists the MCP auto-restart dial.
 func (a *API) SetMCPAutoRestart(_ context.Context, enabled bool) error {
 	return a.store.SaveMCPAutoRestart(enabled)
+}
+
+// GetEmbedderConfig returns the persisted (profileID, modelOverride)
+// pair for the memory embedder.  Empty strings mean "auto-pick".
+// (v0.5.2 universal-embedder fix)
+func (a *API) GetEmbedderConfig(_ context.Context) (profileID, modelOverride string, err error) {
+	return a.store.LoadEmbedderConfig()
+}
+
+// SetEmbedderConfig persists the embedder provider selection and
+// optional model override.  Empty strings reset to auto-pick /
+// per-Kind-default behaviour.
+func (a *API) SetEmbedderConfig(_ context.Context, profileID, modelOverride string) error {
+	return a.store.SaveEmbedderConfig(profileID, modelOverride)
 }
 
 // memoryStore is the test-only in-memory SettingsStore.
@@ -1406,6 +1447,20 @@ func (m *memoryStore) SaveEditFileArtifactSyncEnabled(enabled bool) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.data.EditFileArtifactSyncDisabled = !enabled
+	return nil
+}
+
+func (m *memoryStore) LoadEmbedderConfig() (profileID, modelOverride string, err error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.data.EmbedderProviderProfileID, m.data.EmbedderModelOverride, nil
+}
+
+func (m *memoryStore) SaveEmbedderConfig(profileID, modelOverride string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.data.EmbedderProviderProfileID = profileID
+	m.data.EmbedderModelOverride = modelOverride
 	return nil
 }
 

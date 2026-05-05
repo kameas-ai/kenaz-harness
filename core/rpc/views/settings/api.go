@@ -336,6 +336,23 @@ type Settings struct {
 	// EffectiveMaxVisibleBranchDepth.
 	MaxVisibleBranchDepth int `json:"maxVisibleBranchDepth,omitempty"`
 
+	// ── Embedder configuration (v0.5.2 universal-embedder fix) ──────────────
+	//
+	// EmbedderProviderProfileID is the personal-provider profile to use
+	// for embedding.  Empty (default) means "auto-pick the first eligible
+	// provider" — openai > openrouter > custom_openai_compatible > azure,
+	// in store order.  The value must match a profile ID returned by
+	// Settings → Models so the embedder picker dropdown can round-trip it.
+	EmbedderProviderProfileID string `json:"embedderProviderProfileId,omitempty"`
+
+	// EmbedderModelOverride is the model to pass to the embeddings API.
+	// Empty (default) applies the per-Kind default:
+	//   - openai / openrouter / custom_openai_compatible → "text-embedding-3-small"
+	//   - azure → the profile's own Model field
+	// The Settings → Memory text input surfaces this with the per-Kind
+	// default as a placeholder so the user knows what they're overriding.
+	EmbedderModelOverride string `json:"embedderModelOverride,omitempty"`
+
 	// ShowPerMessageTokenMeter controls the per-message token-cost chip
 	// (per-message-token-meter-01KR3PQR). Default false (OFF) — the chip
 	// is hidden to keep the chat uncluttered. When true, every completed
@@ -875,6 +892,18 @@ type SettingsStore interface {
 	// set for the pipeline to activate.
 	LoadEditFileArtifactSyncEnabled() (bool, error)
 	SaveEditFileArtifactSyncEnabled(enabled bool) error
+
+	// ── Embedder configuration (v0.5.2 universal-embedder fix) ──────────────
+	//
+	// LoadEmbedderConfig returns the persisted (profileID, modelOverride)
+	// pair.  Empty strings mean "use defaults" (auto-pick first eligible
+	// provider, per-Kind default model).  Never returns an error for a
+	// missing settings file — returns ("", "") and nil.
+	LoadEmbedderConfig() (profileID, modelOverride string, err error)
+	// SaveEmbedderConfig persists the embedder provider selection and
+	// optional model override.  Either or both may be the empty string to
+	// reset to the auto-pick / per-Kind-default behaviour.
+	SaveEmbedderConfig(profileID, modelOverride string) error
 }
 
 // SettingsAPI is the view-scoped accessor exposed via HarnessAPI.
@@ -894,6 +923,14 @@ type SettingsAPI interface {
 	GetMCPAutoRestart(ctx context.Context) (bool, error)
 	// SetMCPAutoRestart persists the MCP auto-restart dial.
 	SetMCPAutoRestart(ctx context.Context, enabled bool) error
+	// GetEmbedderConfig returns the persisted (profileID, modelOverride)
+	// pair for the memory embedder.  Empty strings mean "auto-pick".
+	// (v0.5.2 universal-embedder fix)
+	GetEmbedderConfig(ctx context.Context) (profileID, modelOverride string, err error)
+	// SetEmbedderConfig persists the embedder provider selection and
+	// optional model override.  Empty strings reset to auto-pick /
+	// per-Kind-default behaviour.
+	SetEmbedderConfig(ctx context.Context, profileID, modelOverride string) error
 }
 
 // ShortcutsStore is the persistence interface for keyboard shortcut

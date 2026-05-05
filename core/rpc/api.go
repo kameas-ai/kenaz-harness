@@ -47,6 +47,8 @@ import (
 	"github.com/sigil-tech/kaneaz-harness/core/mcp/stdio"
 	corememory "github.com/sigil-tech/kaneaz-harness/core/memory"
 	"github.com/sigil-tech/kaneaz-harness/core/policy/cedar"
+	autotitle "github.com/sigil-tech/kaneaz-harness/core/sessions/autotitle"
+	autotitlewiring "github.com/sigil-tech/kaneaz-harness/core/sessions/autotitle/wiring"
 	coreart "github.com/sigil-tech/kaneaz-harness/core/artifacts"
 	coreconv "github.com/sigil-tech/kaneaz-harness/core/conversation"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/a2a"
@@ -634,7 +636,7 @@ func New(c *core.Core) *API {
 		gs.SetGate(&memoryGateAdapter{gate: cedar.AllowAll{}})
 	}
 	personalForLLM := newPersonalStore(c)
-	embedder := newEmbedder(c, personalForLLM)
+	embedder := newEmbedder(c, personalForLLM, settingsImpl)
 	memoryEnabled := func() bool {
 		if settingsImpl == nil || settingsImpl.Store() == nil {
 			return false
@@ -767,6 +769,42 @@ func New(c *core.Core) *API {
 			},
 		}
 		a.sessionsAPI = sessions.WithAutonomyContext(a.sessionsAPI, ctxProvider)
+	}
+	// Bug #1 fix: wire TitleGenerator so Sessions_SuggestTitle works.
+	// The manual "Suggest title" path uses the same autotitle.Generator
+	// and wiring as the chat-runner's automatic post-run trigger, but is
+	// attached here (on the sessions API) rather than inside the chat
+	// runner.  A ProfileResolver that picks the first registered profile
+	// as the fallback ensures the generator works with ANY provider the
+	// user has configured (OpenRouter-only, Anthropic-only, etc.) and
+	// picks whichever model the chat runner is already using so manual
+	// titling matches the conversation experience.
+	if stack.reg != nil {
+		capturedPersonalStore := personalForLLM
+		llmCaller := autotitlewiring.NewLLMCaller(stack.reg,
+			autotitlewiring.WithProfileResolver(func(_ context.Context, profileID, modelOverride string) (string, string, bool) {
+				// If a specific profileID was requested (e.g. forwarded
+				// from a chat session context), use it unchanged.
+				if profileID != "" {
+					return profileID, modelOverride, true
+				}
+				// Fallback: pick the first personal provider profile so
+				// a "Suggest title" click in any session (even one whose
+				// profileID wasn't threaded down to this closure) still
+				// calls through to a real model.  This ensures titling
+				// matches the active chat model without hard-coding a kind.
+				if capturedPersonalStore != nil {
+					profs, perr := capturedPersonalStore.List()
+					if perr == nil && len(profs) > 0 {
+						return profs[0].ID, profs[0].Model, true
+					}
+				}
+				return "", "", false
+			}),
+		)
+		gen := autotitle.New(llmCaller)
+		a.sessionsAPI = sessions.WithTitleGeneratorOpt(a.sessionsAPI, gen)
+		logging.L().Info("sessions.titlegenerator.wired")
 	}
 	if c != nil && a.stdioPool != nil {
 		c.SetMCP(a.stdioPool)
@@ -1811,6 +1849,11 @@ type llmStack struct {
 	api      llm.LLMConnectorAPI
 	pool     *stdio.Pool
 	secrets  *secrets.MemoryBackend
+	// reg is the LLM registry used by the auto-title generator and any
+	// other post-stack consumers that need direct registry access. Held
+	// here so New() can wire the TitleGenerator without refactoring
+	// newLLMStack's signature.
+	reg corellm.Registry
 	// builtins is the registry of in-binary tools (websearch, bash)
 	// the chassis fills in based on the Settings toggles. Holding it
 	// on the stack so the chassis-level wiring path can register and
@@ -2072,6 +2115,7 @@ func newLLMStack(
 		api:                 api,
 		pool:                mcpPool,
 		secrets:             secretsBackend,
+		reg:                 reg,
 		builtins:            builtinRegistry,
 		bashStore:           bashStore,
 		compactionScheduler: sweepScheduler,
@@ -2789,12 +2833,34 @@ func openMemoryStore(c *core.Core) corememory.Store {
 	return store
 }
 
-// newEmbedder picks the first openai-kind personal provider and wires
-// its keychain credential as the embedder's key source. When no openai
-// provider exists, we return the NoopEmbedder so RememberMessage can
-// surface a friendly "configure an OpenAI provider" error and the
-// retriever's Retrieve becomes a cheap noop.
-func newEmbedder(_ *core.Core, store personal.Store) corememory.Embedder {
+// newEmbedder picks an eligible OpenAI-API-compatible personal provider
+// and wires its keychain credential as the embedder's key source.
+//
+// Eligible provider Kinds (Bug #2 fix — universal embedder):
+//
+//   - "openai"                   → https://api.openai.com/v1/embeddings
+//   - "openrouter"               → https://openrouter.ai/api/v1/embeddings
+//   - "custom_openai_compatible" → <profile.Endpoint>/embeddings
+//     (any profile whose Endpoint is set and whose Kind signals
+//     OpenAI-API compatibility; covers llama-server, LM Studio,
+//     Ollama, and any self-hosted proxy)
+//   - "azure"                    → only when profile.Defaults contains
+//     "deployment_id", "api_version", and "resource_name"; skipped
+//     otherwise.
+//
+// Non-eligible Kinds (explicit exclusions):
+//
+//   - "anthropic" — Anthropic's API has no /v1/embeddings endpoint.
+//   - "bedrock"   — AWS Titan Embeddings uses a different wire shape;
+//     deferred — needs a dedicated Titan embedder (separate mission).
+//
+// Selection order: if Settings.EmbedderProviderProfileID is non-empty,
+// that profile is used (when eligible). Otherwise the first eligible
+// profile in store order is chosen.
+//
+// The selected model is Settings.EmbedderModelOverride when non-empty;
+// otherwise a per-Kind default applies.
+func newEmbedder(_ *core.Core, store personal.Store, settingsImpl *settings.API) corememory.Embedder {
 	if store == nil {
 		return corememory.NoopEmbedder{}
 	}
@@ -2802,16 +2868,155 @@ func newEmbedder(_ *core.Core, store personal.Store) corememory.Embedder {
 	if err != nil {
 		return corememory.NoopEmbedder{}
 	}
-	for _, p := range profiles {
-		if p.Kind == "openai" && p.Cred.Kind == "keychain" && p.Cred.Locator != "" {
+	// Read user preferences from settings.
+	var profileIDOverride, modelOverride string
+	if settingsImpl != nil && settingsImpl.Store() != nil {
+		if all, lerr := settingsImpl.Store().LoadAll(); lerr == nil {
+			profileIDOverride = all.EmbedderProviderProfileID
+			modelOverride = all.EmbedderModelOverride
+		}
+	}
+	return newEmbedderFromProfiles(profiles, profileIDOverride, modelOverride)
+}
+
+// newEmbedderFromProfiles is the testable core of newEmbedder. It picks
+// the best eligible profile from profiles given the optional overrides
+// for profile ID and model.
+func newEmbedderFromProfiles(profiles []corellm.ProviderProfile, profileIDOverride, modelOverride string) corememory.Embedder {
+	// Build a key resolver for a keychain-backed profile locator.
+	makeKeychainResolver := func(locator string) corememory.KeyResolver {
+		return func(_ context.Context) ([]byte, error) {
+			val, err := keyring.Get(keyringService, locator)
+			if err != nil {
+				return nil, fmt.Errorf("memory: keychain get %q: %w", locator, err)
+			}
+			return []byte(val), nil
+		}
+	}
+
+	// resolveKeyForProfile returns a KeyResolver for the supported cred
+	// kinds; nil when the cred kind is not supported by the embedder.
+	resolveKeyForProfile := func(p corellm.ProviderProfile) corememory.KeyResolver {
+		switch p.Cred.Kind {
+		case "keychain":
+			if p.Cred.Locator == "" {
+				return nil
+			}
+			return makeKeychainResolver(p.Cred.Locator)
+		case "env":
+			if p.Cred.Locator == "" {
+				return nil
+			}
 			locator := p.Cred.Locator
-			return corememory.NewOpenAIEmbedder(func(_ context.Context) ([]byte, error) {
-				val, err := keyring.Get(keyringService, locator)
-				if err != nil {
-					return nil, fmt.Errorf("memory: keychain get %q: %w", locator, err)
+			return func(_ context.Context) ([]byte, error) {
+				val := os.Getenv(locator)
+				if val == "" {
+					return nil, fmt.Errorf("memory: env var %q is empty", locator)
 				}
 				return []byte(val), nil
-			})
+			}
+		default:
+			// aws_profile, file, kms — not yet supported for embeddings.
+			return nil
+		}
+	}
+
+	// eligibleEmbedder constructs an OpenAIEmbedder for a known-eligible
+	// profile. Returns nil when the profile is not eligible.
+	eligibleEmbedder := func(p corellm.ProviderProfile, model string) corememory.Embedder {
+		resolver := resolveKeyForProfile(p)
+		if resolver == nil {
+			return nil
+		}
+		const defaultModel = "text-embedding-3-small"
+		switch p.Kind {
+		case "openai":
+			m := defaultModel
+			if model != "" {
+				m = model
+			}
+			return corememory.NewOpenAIEmbedder(resolver,
+				corememory.WithOpenAIModel(m))
+
+		case "openrouter":
+			m := defaultModel
+			if model != "" {
+				m = model
+			}
+			return corememory.NewOpenAIEmbedder(resolver,
+				corememory.WithOpenAIEndpoint("https://openrouter.ai/api/v1/embeddings"),
+				corememory.WithOpenAIModel(m))
+
+		case "custom_openai_compatible":
+			// The profile's Endpoint is the base URL of the
+			// OpenAI-compatible server.  We append "/embeddings" to
+			// build the full path.  A missing or empty Endpoint is
+			// treated as ineligible so we don't silently hit the default
+			// OpenAI URL under an unrecognised profile.
+			if p.Endpoint == "" {
+				return nil
+			}
+			endpoint := strings.TrimRight(p.Endpoint, "/") + "/embeddings"
+			m := defaultModel
+			if model != "" {
+				m = model
+			} else if p.Model != "" {
+				// For custom servers the profile's own model is the
+				// most sensible default (the server may not serve
+				// text-embedding-3-small at all).
+				m = p.Model
+			}
+			return corememory.NewOpenAIEmbedder(resolver,
+				corememory.WithOpenAIEndpoint(endpoint),
+				corememory.WithOpenAIModel(m))
+
+		case "azure":
+			// Azure OpenAI embeddings require a deployment ID and API
+			// version, which are stored in the profile's Defaults map.
+			// Skip when either is missing rather than falling back to a
+			// bad URL.
+			defaults := p.Defaults
+			deploymentID, _ := defaults["deployment_id"].(string)
+			apiVersion, _ := defaults["api_version"].(string)
+			resource, _ := defaults["resource_name"].(string)
+			if deploymentID == "" || apiVersion == "" || resource == "" {
+				return nil
+			}
+			endpoint := fmt.Sprintf(
+				"https://%s.openai.azure.com/openai/deployments/%s/embeddings?api-version=%s",
+				resource, deploymentID, apiVersion,
+			)
+			m := p.Model
+			if model != "" {
+				m = model
+			}
+			return corememory.NewOpenAIEmbedder(resolver,
+				corememory.WithOpenAIEndpoint(endpoint),
+				corememory.WithOpenAIModel(m))
+
+		default:
+			// anthropic, bedrock, and any unknown kind are not eligible.
+			return nil
+		}
+	}
+
+	// If a specific profile ID is requested, try it first.
+	if profileIDOverride != "" {
+		for _, p := range profiles {
+			if p.ID == profileIDOverride {
+				if emb := eligibleEmbedder(p, modelOverride); emb != nil {
+					return emb
+				}
+				// Requested profile is ineligible — fall through to auto-pick.
+				break
+			}
+		}
+	}
+
+	// Auto-pick: first eligible profile in store order.
+	for _, p := range profiles {
+		if emb := eligibleEmbedder(p, modelOverride); emb != nil {
+			return emb
 		}
 	}
 	return corememory.NoopEmbedder{}

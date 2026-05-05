@@ -868,6 +868,29 @@ func (b *Bindings) Settings_SetMCPAutoRestart(enabled bool) error {
 	return b.api.Settings().SetMCPAutoRestart(b.ctx(), enabled)
 }
 
+// EmbedderConfigResult is the wire shape returned by
+// Settings_GetEmbedderConfig so the frontend can bind both fields in
+// a single RPC call.
+type EmbedderConfigResult struct {
+	ProfileID     string `json:"profileId"`
+	ModelOverride string `json:"modelOverride"`
+}
+
+// Settings_GetEmbedderConfig returns the persisted embedder provider
+// selection and optional model override.
+// (v0.5.2 universal-embedder fix)
+func (b *Bindings) Settings_GetEmbedderConfig() (EmbedderConfigResult, error) {
+	id, model, err := b.api.Settings().GetEmbedderConfig(b.ctx())
+	return EmbedderConfigResult{ProfileID: id, ModelOverride: model}, err
+}
+
+// Settings_SetEmbedderConfig persists the embedder provider selection
+// and optional model override.  Empty strings reset to auto-pick /
+// per-Kind-default behaviour.
+func (b *Bindings) Settings_SetEmbedderConfig(profileID, modelOverride string) error {
+	return b.api.Settings().SetEmbedderConfig(b.ctx(), profileID, modelOverride)
+}
+
 // Settings_GetShowPerMessageTokenMeter returns whether the per-message
 // token meter chip is enabled (default false — chip hidden by default to
 // keep the chat uncluttered). (per-message-token-meter-01KR3PQR)
