@@ -417,10 +417,10 @@ func TestMigrations_RegisterAndApply(t *testing.T) {
 	// 0318 kind + 0319 workflows + 0320 workflow_runs_cache +
 	// 0321 workflow_schedules + 0322 last_usage_json + 0323 branch_display_meta) =
 	// 26 applied entries (2 chassis bootstrap + 24 sessions migrations).
-	if got := len(db.ledger); got != 26 {
-		t.Fatalf("ledger size = %d, want 26", got)
+	if got := len(db.ledger); got != 27 {
+		t.Fatalf("ledger size = %d, want 27", got)
 	}
-	wantVersions := []int{1, 2, 300, 301, 302, 303, 304, 305, 306, 307, 308, 309, 310, 311, 312, 313, 314, 315, 316, 317, 318, 319, 320, 321, 322, 323}
+	wantVersions := []int{1, 2, 300, 301, 302, 303, 304, 305, 306, 307, 308, 309, 310, 311, 312, 313, 314, 315, 316, 317, 318, 319, 320, 321, 322, 323, 324}
 
 	for i, want := range wantVersions {
 		if db.ledger[i].Version != want {
