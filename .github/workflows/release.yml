@@ -283,17 +283,24 @@ jobs:
         run: |
           set -euo pipefail
           VERSION="${{ needs.derive-version.outputs.version }}"
-          # Wails names the NSIS output "<ProductName>-amd64-installer.exe"
-          # (using info.productName from wails.json). Rename to a
-          # version-stamped, URL-safe filename before signing picks it up.
-          SRC="build/bin/Kenaz Harness-amd64-installer.exe"
+          # Wails names the NSIS output "<outputfilename>-amd64-installer.exe"
+          # using wails.json `outputfilename` ("Kenaz"), NOT info.productName.
+          # Same gotcha as the AppImage step on linux which uses build/bin/Kenaz.
+          # Rename to a version-stamped, URL-safe filename before signing picks
+          # it up. v0.5.0 release silently dropped the .exe asset because this
+          # path used "Kenaz Harness-amd64-installer.exe" (productName-shaped)
+          # which doesn't exist; the if-check is non-fatal so the missing file
+          # only logged a warning and shipped a Windows release without an
+          # installer.exe.
+          SRC="build/bin/Kenaz-amd64-installer.exe"
           DST="build/bin/Kenaz-Harness-Setup-${VERSION}-windows-amd64.exe"
           if [ -f "$SRC" ]; then
             mv "$SRC" "$DST"
             echo "Renamed NSIS installer → $DST"
           else
-            echo "::warning::Expected NSIS installer at '$SRC' — listing build/bin:"
+            echo "::error::NSIS installer not found at '$SRC' — listing build/bin:"
             ls -la "build/bin/"
+            exit 1
           fi
 
       # ── macOS rename + code signing + notarization ──────────────────────
