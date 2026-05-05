@@ -24,6 +24,13 @@ var ErrManagerUnavailable = errors.New("branches: manager unavailable")
 // ErrInvalidArg covers trivially invalid inputs.
 var ErrInvalidArg = errors.New("branches: invalid argument")
 
+// BranchListBroker is the narrow publish surface the branches API needs
+// to emit session.list_changed events after a new branch session is created.
+// Production binds this to *rpc.StreamBroker; tests inject a recording fake.
+type BranchListBroker interface {
+	Publish(topic string, payload any)
+}
+
 // Config bundles the dependencies the impl needs.
 type Config struct {
 	// Conversations is the conversation.Manager (branches table).
@@ -44,6 +51,11 @@ type Config struct {
 	Audit audit.Emitter
 	// Now is the wall-clock source. nil uses time.Now().UTC().
 	Now func() time.Time
+	// Broker is the optional event publisher for session.list_changed.
+	// When non-nil, every successful CreateBranch (which creates a new
+	// child session row) emits a "branch_created" event so the LeftRail
+	// refreshes in real-time (v0.5.3 fix).
+	Broker BranchListBroker
 }
 
 // API is the concrete BranchesAPI implementation.
@@ -55,6 +67,29 @@ type API struct {
 // allowed — methods then return ErrManagerUnavailable.
 func New(cfg Config) *API {
 	return &API{cfg: cfg}
+}
+
+// branchListChangedPayload is the local mirror of
+// rpc.SessionListChangedPayload. Duplicated here to avoid an import cycle
+// (rpc imports views/branches; views/branches must not import rpc).
+// JSON field names are identical so the frontend deserialises them the same.
+type branchListChangedPayload struct {
+	Reason    string `json:"reason"`
+	SessionID string `json:"sessionId,omitempty"`
+	Timestamp int64  `json:"timestamp"`
+}
+
+// publishBranchCreated emits a "branch_created" list-changed event when
+// a Broker is wired. childSessionID is the newly created session row.
+func (a *API) publishBranchCreated(childSessionID string) {
+	if a == nil || a.cfg.Broker == nil {
+		return
+	}
+	a.cfg.Broker.Publish("session.list_changed", branchListChangedPayload{
+		Reason:    "branch_created",
+		SessionID: childSessionID,
+		Timestamp: time.Now().UnixMilli(),
+	})
 }
 
 // now returns the current UTC time, using the configured clock or
@@ -116,6 +151,7 @@ func (a *API) CreateBranch(ctx context.Context, opts CreateBranchOptions) (Branc
 				BranchSessionID: br.ChildSessionID,
 				CreationPath:    "explicit",
 			}, a.now())
+		a.publishBranchCreated(br.ChildSessionID)
 		return toWire(br), nil
 	}
 
@@ -193,6 +229,7 @@ func (a *API) CreateBranch(ctx context.Context, opts CreateBranchOptions) (Branc
 			}, a.now())
 	}
 
+	a.publishBranchCreated(br.ChildSessionID)
 	return toWire(br), nil
 }
 

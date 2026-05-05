@@ -52,6 +52,7 @@ import type {
   MemoryJournalEntry,
   MemoryPruneStats,
   MemoryPrunePreview,
+  MemoryHealthSnapshot,
   DialConfig,
   DialDelta,
   DialEffectiveDials,
@@ -353,6 +354,8 @@ interface WailsBindingsLike {
   // per-message-token-meter-01KR3PQR
   Settings_GetShowPerMessageTokenMeter(): Promise<boolean>;
   Settings_SetShowPerMessageTokenMeter(enabled: boolean): Promise<void>;
+  // artifact-preview-binary-rendering-01KQ8TD5 WP07
+  Settings_GetArtifactPreview(): Promise<{ enabled: boolean; maxBytes: number; timeoutMs: number }>;
 
   Memory_ListChunks(filter: MemoryListFilter): Promise<MemoryChunk[]>;
   Memory_RememberMessage(
@@ -374,6 +377,8 @@ interface WailsBindingsLike {
   ): Promise<MemoryJournalEntry[]>;
   Memory_PrunePreview(scope: string): Promise<MemoryPrunePreview>;
   Memory_RunPruneNow(scope: string): Promise<MemoryPruneStats>;
+  Memory_HealthSnapshot(): Promise<MemoryHealthSnapshot>;
+  Memory_TestEmbedder(): Promise<number>;
 
   Dials_Get(key: DialScopeKey): Promise<DialConfig>;
   Dials_Set(key: DialScopeKey, cfg: DialConfig): Promise<void>;
@@ -1333,6 +1338,15 @@ export interface SettingsClient {
   getShowPerMessageTokenMeter(): Promise<boolean>;
   /** Persist the per-message token meter visibility toggle. */
   setShowPerMessageTokenMeter(enabled: boolean): Promise<void>;
+
+  // ── artifact-preview-binary-rendering-01KQ8TD5 WP07 ─────────────────
+  /**
+   * Returns the runtime artifact-preview feature config:
+   *   - enabled: false when HARNESS_ARTIFACT_BINARY_PREVIEW=false (default true)
+   *   - maxBytes: byte cap from HARNESS_ARTIFACT_PREVIEW_MAX_BYTES (default 5 MiB)
+   *   - timeoutMs: preview abort timeout (default 2000 ms)
+   */
+  getArtifactPreview(): Promise<{ enabled: boolean; maxBytes: number; timeoutMs: number }>;
 }
 
 /**
@@ -1424,6 +1438,10 @@ export interface MemoryClient {
   prunePreview(scope: string): Promise<MemoryPrunePreview>;
   /** Apply the prune sweep immediately (WP15). */
   runPruneNow(scope: string): Promise<MemoryPruneStats>;
+  /** Return the §2.4 health snapshot (counts, activity, embedder info). */
+  healthSnapshot(): Promise<MemoryHealthSnapshot>;
+  /** Probe the wired embedder against "hello world"; returns vector dims. */
+  testEmbedder(): Promise<number>;
 }
 
 /**
@@ -2130,6 +2148,7 @@ export function createHarnessClient(): HarnessClient {
         b().Settings_GetShowPerMessageTokenMeter(),
       setShowPerMessageTokenMeter: (enabled) =>
         b().Settings_SetShowPerMessageTokenMeter(enabled),
+      getArtifactPreview: () => b().Settings_GetArtifactPreview(),
     },
     permissions: {
       listGrants: (family) =>
@@ -2155,6 +2174,8 @@ export function createHarnessClient(): HarnessClient {
         b().Memory_JournalTail(scope, sinceSeq, limit),
       prunePreview: (scope) => b().Memory_PrunePreview(scope),
       runPruneNow: (scope) => b().Memory_RunPruneNow(scope),
+      healthSnapshot: () => b().Memory_HealthSnapshot(),
+      testEmbedder: () => b().Memory_TestEmbedder(),
     },
     dials: {
       get: (key) => b().Dials_Get(key),
@@ -2628,6 +2649,16 @@ export function createFakeHarnessClient(
       setEmbedderConfig: noop,
       getShowPerMessageTokenMeter: async () => false,
       setShowPerMessageTokenMeter: noop,
+      getArtifactPreview: async () => ({
+        // Default false in tests so that existing ArtifactPreview.test.ts
+        // cases run through the legacy text-only branch unmodified
+        // (artifact-preview-binary-rendering-01KQ8TD5 WP07 acceptance:
+        // "existing ArtifactPreview.test.ts cases pass unmodified under
+        // flag-off").
+        enabled: false,
+        maxBytes: 5 * 1024 * 1024,
+        timeoutMs: 2000,
+      }),
     },
     permissions: {
       listGrants: async () => [],
@@ -2665,6 +2696,20 @@ export function createFakeHarnessClient(
         collapsed: 0,
         pinned: 0,
       }),
+      healthSnapshot: async () => ({
+        counts: {
+          total: 0,
+          raw: 0,
+          narrative: 0,
+          longTermPromoted: 0,
+          embedded: 0,
+          unembedded: 0,
+        },
+        activity: { captured: 0, pruned: 0, promoted: 0 },
+        embedder: { kind: 'noop', model: '', dimensions: 0 },
+        capturedAt: new Date().toISOString(),
+      }),
+      testEmbedder: async () => 0,
     },
     dials: {
       get: async () => ({}),

@@ -318,6 +318,11 @@ func (a *API) JournalTail(_ context.Context, scope string, sinceSeq int64, limit
 // PrunePreview computes the would-prune verdict without mutating the
 // store. The frontend renders the verdict list before letting the user
 // confirm with RunPruneNow.
+//
+// §2.5 extension: the returned PrunePreview now includes a Rows field
+// containing the drop/collapse verdicts enriched with a human-readable
+// content snippet so the confirmation modal can display them. The prune
+// ALGORITHM is unchanged — only the wire shape is extended.
 func (a *API) PrunePreview(ctx context.Context, scope string) (PrunePreview, error) {
 	if a == nil || a.store == nil {
 		return PrunePreview{}, ErrStoreUnavailable
@@ -330,6 +335,15 @@ func (a *API) PrunePreview(ctx context.Context, scope string) (PrunePreview, err
 		return PrunePreview{}, err
 	}
 	dur := time.Since(started)
+
+	// Build a snippet index from the store so Rows can include content
+	// previews without an extra List call (we already hold the plan result).
+	chunks, _ := a.store.List(ctx, scopes...)
+	snippetByID := make(map[string]string, len(chunks))
+	for _, c := range chunks {
+		snippetByID[c.ID] = pruneSnippet(c.Content)
+	}
+
 	out := PrunePreview{
 		Stats: PruneStats{
 			StartedAt:  started,
@@ -349,8 +363,114 @@ func (a *API) PrunePreview(ctx context.Context, scope string) (PrunePreview, err
 			KeepScore:     v.KeepScore,
 			CollapsedInto: v.CollapsedInto,
 		})
+		if v.Action == "drop" || v.Action == "collapse" {
+			reason := v.Reason
+			if reason == "" {
+				reason = v.Action
+			}
+			out.Rows = append(out.Rows, PruneRow{
+				ID:      v.ID,
+				Snippet: snippetByID[v.ID],
+				Reason:  reason,
+				Action:  v.Action,
+			})
+		}
 	}
 	return out, nil
+}
+
+// pruneSnippet returns a short human-readable excerpt of content for
+// display in the §2.5 prune-preview modal. Limited to 120 runes.
+func pruneSnippet(content string) string {
+	const maxRunes = 120
+	runes := []rune(content)
+	if len(runes) <= maxRunes {
+		return content
+	}
+	return string(runes[:maxRunes]) + "…"
+}
+
+// HealthSnapshot returns an at-a-glance health snapshot (§2.4). It
+// delegates to the store's HealthSnapshotter capability when available;
+// otherwise it builds the snapshot from a List call (same semantics,
+// slightly more allocations).
+func (a *API) HealthSnapshot(ctx context.Context) (HealthSnapshot, error) {
+	if a == nil || a.store == nil {
+		return HealthSnapshot{}, ErrStoreUnavailable
+	}
+
+	var coresnap corememory.HealthSnapshot
+	if hs, ok := a.store.(corememory.HealthSnapshotter); ok {
+		var err error
+		coresnap, err = hs.SnapshotHealth(ctx)
+		if err != nil {
+			return HealthSnapshot{}, err
+		}
+		// Inject embedder info that the store doesn't have access to.
+		if a.embedder != nil {
+			coresnap.Embedder = corememory.EmbedderInfo{
+				Kind:       a.embedder.Kind(),
+				Dimensions: a.embedder.Dimensions(),
+			}
+			if namer, ok := a.embedder.(interface{ Model() string }); ok {
+				coresnap.Embedder.Model = namer.Model()
+			}
+		}
+	} else {
+		// Fallback: build snapshot from List (identical result, more allocs).
+		chunks, err := a.store.List(ctx)
+		if err != nil {
+			return HealthSnapshot{}, err
+		}
+		var embedder corememory.Embedder
+		if a.embedder != nil {
+			embedder = a.embedder
+		}
+		coresnap = corememory.SnapshotHealth(chunks, embedder, time.Now().UTC())
+	}
+
+	out := HealthSnapshot{
+		Counts: HealthCounts{
+			Total:            coresnap.Counts.Total,
+			Raw:              coresnap.Counts.Raw,
+			Narrative:        coresnap.Counts.Narrative,
+			LongTermPromoted: coresnap.Counts.LongTermPromoted,
+			Embedded:         coresnap.Counts.Embedded,
+			Unembedded:       coresnap.Counts.Unembedded,
+		},
+		Activity: HealthActivity{
+			Captured: coresnap.Activity.Captured,
+			Pruned:   coresnap.Activity.Pruned,
+			Promoted: coresnap.Activity.Promoted,
+		},
+		Embedder: HealthEmbedder{
+			Kind:       coresnap.Embedder.Kind,
+			Model:      coresnap.Embedder.Model,
+			Dimensions: coresnap.Embedder.Dimensions,
+		},
+		CapturedAt: coresnap.CapturedAt.UTC().Format(time.RFC3339),
+	}
+	return out, nil
+}
+
+// TestEmbedder probes the wired embedder against the fixed string
+// "hello world" and returns the resulting vector dimensions on success.
+// The §2.4 "Test embedder" button calls this RPC.
+func (a *API) TestEmbedder(ctx context.Context) (int, error) {
+	if a == nil || a.embedder == nil {
+		return 0, ErrEmbedderUnavailable
+	}
+	if _, ok := a.embedder.(corememory.NoopEmbedder); ok {
+		return 0, ErrEmbedderUnavailable
+	}
+	vecs, err := a.embedder.Embed(ctx, []string{"hello world"})
+	if err != nil {
+		return 0, err
+	}
+	if len(vecs) == 0 || len(vecs[0]) == 0 {
+		return 0, errors.New("memory: embedder returned empty vector")
+	}
+	return len(vecs[0]), nil
 }
 
 // RunPruneNow applies the prune sweep immediately. Returns aggregated

@@ -2394,6 +2394,96 @@ export namespace memory {
 		    return a;
 		}
 	}
+	export class HealthActivity {
+	    captured: number;
+	    pruned: number;
+	    promoted: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new HealthActivity(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.captured = source["captured"];
+	        this.pruned = source["pruned"];
+	        this.promoted = source["promoted"];
+	    }
+	}
+	export class HealthCounts {
+	    total: number;
+	    raw: number;
+	    narrative: number;
+	    longTermPromoted: number;
+	    embedded: number;
+	    unembedded: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new HealthCounts(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.total = source["total"];
+	        this.raw = source["raw"];
+	        this.narrative = source["narrative"];
+	        this.longTermPromoted = source["longTermPromoted"];
+	        this.embedded = source["embedded"];
+	        this.unembedded = source["unembedded"];
+	    }
+	}
+	export class HealthEmbedder {
+	    kind: string;
+	    model: string;
+	    dimensions: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new HealthEmbedder(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.kind = source["kind"];
+	        this.model = source["model"];
+	        this.dimensions = source["dimensions"];
+	    }
+	}
+	export class HealthSnapshot {
+	    counts: HealthCounts;
+	    activity: HealthActivity;
+	    embedder: HealthEmbedder;
+	    capturedAt: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new HealthSnapshot(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.counts = this.convertValues(source["counts"], HealthCounts);
+	        this.activity = this.convertValues(source["activity"], HealthActivity);
+	        this.embedder = this.convertValues(source["embedder"], HealthEmbedder);
+	        this.capturedAt = source["capturedAt"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	export class JournalEntry {
 	    seq: number;
 	    boundary: string;
@@ -2461,6 +2551,24 @@ export namespace memory {
 	        this.scopeId = source["scopeId"];
 	    }
 	}
+	export class PruneRow {
+	    id: string;
+	    snippet: string;
+	    reason: string;
+	    action: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new PruneRow(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.snippet = source["snippet"];
+	        this.reason = source["reason"];
+	        this.action = source["action"];
+	    }
+	}
 	export class PruneStats {
 	    // Go type: time
 	    startedAt: any;
@@ -2525,6 +2633,7 @@ export namespace memory {
 	export class PrunePreview {
 	    verdicts: PruneVerdict[];
 	    stats: PruneStats;
+	    rows: PruneRow[];
 	
 	    static createFrom(source: any = {}) {
 	        return new PrunePreview(source);
@@ -2534,6 +2643,7 @@ export namespace memory {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.verdicts = this.convertValues(source["verdicts"], PruneVerdict);
 	        this.stats = this.convertValues(source["stats"], PruneStats);
+	        this.rows = this.convertValues(source["rows"], PruneRow);
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -2554,6 +2664,7 @@ export namespace memory {
 		    return a;
 		}
 	}
+	
 	
 
 }
@@ -3192,6 +3303,22 @@ export namespace rpc {
 		    return a;
 		}
 	}
+	export class ArtifactPreviewConfig {
+	    enabled: boolean;
+	    maxBytes: number;
+	    timeoutMs: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new ArtifactPreviewConfig(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.enabled = source["enabled"];
+	        this.maxBytes = source["maxBytes"];
+	        this.timeoutMs = source["timeoutMs"];
+	    }
+	}
 	export class BashExecResult {
 	    stdout: string;
 	    stderr: string;
@@ -3208,6 +3335,20 @@ export namespace rpc {
 	        this.stderr = source["stderr"];
 	        this.exitCode = source["exitCode"];
 	        this.truncated = source["truncated"];
+	    }
+	}
+	export class EmbedderConfigResult {
+	    profileId: string;
+	    modelOverride: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new EmbedderConfigResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.profileId = source["profileId"];
+	        this.modelOverride = source["modelOverride"];
 	    }
 	}
 	export class ShellReadFileResult {
@@ -3411,6 +3552,10 @@ export namespace sessions {
 	    streamingFailureKind?: string;
 	    streamingRecoverable?: boolean;
 	    continuationOf?: string;
+	    promptTokens?: number;
+	    completionTokens?: number;
+	    costUsd?: number;
+	    messageCostSource?: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new Message(source);
@@ -3432,6 +3577,10 @@ export namespace sessions {
 	        this.streamingFailureKind = source["streamingFailureKind"];
 	        this.streamingRecoverable = source["streamingRecoverable"];
 	        this.continuationOf = source["continuationOf"];
+	        this.promptTokens = source["promptTokens"];
+	        this.completionTokens = source["completionTokens"];
+	        this.costUsd = source["costUsd"];
+	        this.messageCostSource = source["messageCostSource"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -3664,6 +3813,9 @@ export namespace settings {
 	    autoCollapseBranchesInSidebar?: boolean;
 	    deleteBranchesWithParent?: boolean;
 	    maxVisibleBranchDepth?: number;
+	    embedderProviderProfileId?: string;
+	    embedderModelOverride?: string;
+	    showPerMessageTokenMeter?: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new Settings(source);
@@ -3720,6 +3872,9 @@ export namespace settings {
 	        this.autoCollapseBranchesInSidebar = source["autoCollapseBranchesInSidebar"];
 	        this.deleteBranchesWithParent = source["deleteBranchesWithParent"];
 	        this.maxVisibleBranchDepth = source["maxVisibleBranchDepth"];
+	        this.embedderProviderProfileId = source["embedderProviderProfileId"];
+	        this.embedderModelOverride = source["embedderModelOverride"];
+	        this.showPerMessageTokenMeter = source["showPerMessageTokenMeter"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -3776,6 +3931,63 @@ export namespace slashcmd {
 	        this.kind = source["kind"];
 	        this.metadata = source["metadata"];
 	    }
+	}
+
+}
+
+export namespace storage {
+	
+	export class DriftEntry {
+	    version: number;
+	    ledgerId: string;
+	    expectedId: string;
+	    kind: string;
+	    severity: string;
+	    suggestion: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new DriftEntry(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.version = source["version"];
+	        this.ledgerId = source["ledgerId"];
+	        this.expectedId = source["expectedId"];
+	        this.kind = source["kind"];
+	        this.severity = source["severity"];
+	        this.suggestion = source["suggestion"];
+	    }
+	}
+	export class DriftReport {
+	    drifts: DriftEntry[];
+	
+	    static createFrom(source: any = {}) {
+	        return new DriftReport(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.drifts = this.convertValues(source["drifts"], DriftEntry);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
 	}
 
 }

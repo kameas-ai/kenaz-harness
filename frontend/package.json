@@ -23,6 +23,7 @@
     "lucide-vue-next": "^0.468.0",
     "marked": "^18.0.2",
     "mermaid": "^11.4.1",
+    "pdfjs-dist": "^5.7.284",
     "radix-vue": "^1.9.10",
     "vue": "^3.5.13",
     "vue-router": "^4.5.0"

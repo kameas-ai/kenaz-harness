@@ -18,6 +18,13 @@ import (
 	"github.com/sigil-tech/kaneaz-harness/core/usage"
 )
 
+// SessionListBroker is the narrow publish surface the sessions view needs
+// to emit TopicSessionListChanged events. Production binds this to
+// *rpc.StreamBroker; tests inject a recording fake.
+type SessionListBroker interface {
+	Publish(topic string, payload any)
+}
+
 // ErrEmptyContentBlocks is returned by SendMessageWithBlocks when the
 // caller passes a nil or empty slice. Mirrors the existing
 // AppendMessage behaviour where the manager rejects empty content.
@@ -98,6 +105,11 @@ type managerAPI struct {
 	// session-level + tier-default chain still resolves correctly.
 	// (autonomy-dial-01KR3M2A WP03)
 	autonomyCtx AutonomyContextProvider
+	// broker is the optional event publisher wired by WithBrokerOpt.
+	// When non-nil, every session-list mutation emits
+	// TopicSessionListChanged so the LeftRail updates in real-time
+	// without polling (v0.5.3 fix).
+	broker SessionListBroker
 }
 
 // TitleGenerator is the surface SuggestTitle needs. Matches
@@ -233,6 +245,44 @@ func WithTitleGeneratorOpt(api SessionsAPI, gen TitleGenerator) SessionsAPI {
 	return api
 }
 
+// WithBrokerOpt wires a SessionListBroker into the SessionsAPI so every
+// session-list mutation (create, rename, delete, move, title-set,
+// title-cleared) emits TopicSessionListChanged. The LeftRail subscribes
+// to this topic via the frontend useSessions() composable and debounces
+// a refresh() call, solving the stale-rail bug (v0.5.3).
+func WithBrokerOpt(api SessionsAPI, broker SessionListBroker) SessionsAPI {
+	if m, ok := api.(*managerAPI); ok {
+		m.broker = broker
+	}
+	return api
+}
+
+// publishListChanged emits TopicSessionListChanged when a broker is wired.
+// reason is one of: "created" | "renamed" | "deleted" | "moved" |
+// "title_set" | "title_cleared". sessionID and projectID are optional.
+func (a *managerAPI) publishListChanged(reason, sessionID, projectID string) {
+	if a.broker == nil {
+		return
+	}
+	a.broker.Publish("session.list_changed", listChangedPayload{
+		Reason:    reason,
+		SessionID: sessionID,
+		ProjectID: projectID,
+		Timestamp: time.Now().UnixMilli(),
+	})
+}
+
+// listChangedPayload is the local mirror of rpc.SessionListChangedPayload.
+// Duplicated here to avoid an import cycle (rpc imports sessions, so
+// sessions must not import rpc). The JSON field names are identical so
+// the frontend deserialises them identically.
+type listChangedPayload struct {
+	Reason    string `json:"reason"`
+	SessionID string `json:"sessionId,omitempty"`
+	ProjectID string `json:"projectId,omitempty"`
+	Timestamp int64  `json:"timestamp"`
+}
+
 // List implements SessionsAPI.
 func (a *managerAPI) List(ctx context.Context) ([]Session, error) {
 	records, err := a.mgr.List(ctx)
@@ -261,12 +311,17 @@ func (a *managerAPI) Create(ctx context.Context, name string) (Session, error) {
 	if err != nil {
 		return Session{}, err
 	}
+	a.publishListChanged("created", r.ID, "")
 	return recordToView(r), nil
 }
 
 // Rename implements SessionsAPI.
 func (a *managerAPI) Rename(ctx context.Context, id, name string) error {
-	return a.mgr.Rename(ctx, id, name)
+	if err := a.mgr.Rename(ctx, id, name); err != nil {
+		return err
+	}
+	a.publishListChanged("renamed", id, "")
+	return nil
 }
 
 // Delete implements SessionsAPI with the default cascade (delete
@@ -414,6 +469,7 @@ func (a *managerAPI) DeleteWithOptions(ctx context.Context, id string, opts Dele
 			}
 		}
 	}
+	a.publishListChanged("deleted", id, "")
 	return nil
 }
 
@@ -678,7 +734,11 @@ func (a *managerAPI) MoveToProject(ctx context.Context, id, projectID string) er
 		v := projectID
 		p = &v
 	}
-	return a.mgr.MoveToProject(ctx, id, p)
+	if err := a.mgr.MoveToProject(ctx, id, p); err != nil {
+		return err
+	}
+	a.publishListChanged("moved", id, projectID)
+	return nil
 }
 
 // SuggestTitle implements SessionsAPI. It re-generates a title from the
@@ -718,13 +778,18 @@ func (a *managerAPI) SuggestTitle(ctx context.Context, id string) (string, error
 	if err := a.mgr.RequestRetitle(ctx, id, title); err != nil {
 		return "", fmt.Errorf("rpc/sessions: write title: %w", err)
 	}
+	a.publishListChanged("title_set", id, "")
 	return title, nil
 }
 
 // ClearTitle implements SessionsAPI. Resets the session name to "" and
 // auto_titled=0, re-enabling future auto-title attempts.
 func (a *managerAPI) ClearTitle(ctx context.Context, id string) error {
-	return a.mgr.ClearTitle(ctx, id)
+	if err := a.mgr.ClearTitle(ctx, id); err != nil {
+		return err
+	}
+	a.publishListChanged("title_cleared", id, "")
+	return nil
 }
 
 // WithUsageManager wires a usage.Manager into the sessions view so

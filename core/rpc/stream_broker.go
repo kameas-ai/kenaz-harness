@@ -43,6 +43,14 @@ const (
 	// without calling GetUsage (backend-context-window-length-01KQ8TD3
 	// WP03). Payload shape: SessionUsagePayload.
 	TopicSessionUsageUpdated = "session.usage.updated"
+
+	// TopicSessionListChanged is emitted by every backend write site that
+	// mutates the sessions-list shape (create, rename, delete, move,
+	// title-set, title-cleared, branch-created). The frontend
+	// useSessions() composable subscribes here to invalidate its list
+	// without polling, solving the stale-LeftRail bug (v0.5.3).
+	// Payload shape: SessionListChangedPayload.
+	TopicSessionListChanged = "session.list_changed"
 )
 
 // SessionUsagePayload is the typed payload emitted on
@@ -56,6 +64,24 @@ type SessionUsagePayload struct {
 	TotalTokens      int     `json:"totalTokens"`
 	CostUSD          float64 `json:"costUsd"`
 	CostSource       string  `json:"costSource"`
+}
+
+// SessionListChangedPayload is the typed payload emitted on
+// TopicSessionListChanged after any backend write that mutates the
+// sessions list visible in the LeftRail (create, rename, delete, move,
+// title-set, title-cleared, branch-created). The frontend useSessions()
+// composable debounces 150 ms then calls refresh() on receipt.
+type SessionListChangedPayload struct {
+	// Reason is one of: "created" | "renamed" | "deleted" | "moved" |
+	// "title_set" | "title_cleared" | "branch_created".
+	Reason string `json:"reason"`
+	// SessionID is the affected session. Empty when the change is list-wide.
+	SessionID string `json:"sessionId,omitempty"`
+	// ProjectID is the project the session was moved into/out of.
+	// Empty when not applicable.
+	ProjectID string `json:"projectId,omitempty"`
+	// Timestamp is Unix milliseconds at the moment of the write.
+	Timestamp int64 `json:"timestamp"`
 }
 
 // StreamClosedPayload is the typed payload emitted on `<view>:stream-closed`.
