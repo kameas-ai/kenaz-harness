@@ -19,6 +19,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -882,6 +883,15 @@ func New(c *core.Core) *API {
 			})
 			logging.L().Info("update.service.init_ok")
 		}
+	} else {
+		// Log a loud warning so that misconfiguration (missing BuildVersion
+		// or DataDir) is never silent. This is the class of bug that silently
+		// broke auto-update in v0.4.0–v0.4.2.
+		logging.L().Warn("update.service.skipped",
+			"core_nil", c == nil,
+			"data_dir_empty", c == nil || c.DataDir() == "",
+			"build_version_empty", c == nil || c.BuildVersion() == "",
+		)
 	}
 
 	// Node manifest catalog (mission agent-kernel-graph-node-catalog
@@ -3389,10 +3399,11 @@ func (a *API) AuditObserver() func(event.Event) {
 // ShellStatus returns a default shell status. Real values are filled by
 // downstream missions; for now the chassis renders a quiet baseline.
 func (a *API) ShellStatus(_ context.Context) (ShellStatus, error) {
+	build := buildLabel(a.core)
 	return ShellStatus{
 		ActiveProvider: "—",
 		TrustTier:      "Local",
-		HarnessBuild:   "0.0.0-dev",
+		HarnessBuild:   build,
 		Connection:     "ready",
 		EventRate:      0,
 		PolicyApplied:  true,
@@ -3401,14 +3412,28 @@ func (a *API) ShellStatus(_ context.Context) (ShellStatus, error) {
 	}, nil
 }
 
-// AppInfo returns build metadata. Real values come from build-time ldflags.
+// buildLabel returns the harness build version stamped via
+// `wails build -ldflags "-X main.Version=vX.Y.Z"` and threaded through
+// core.Options.BuildVersion. Local untagged builds show "dev".
+func buildLabel(c *core.Core) string {
+	if c == nil {
+		return "dev"
+	}
+	if v := c.BuildVersion(); v != "" {
+		return v
+	}
+	return "dev"
+}
+
+// AppInfo returns build metadata. Build comes from main.Version via
+// core.BuildVersion(); GoVersion and Platform come from runtime.
 func (a *API) AppInfo(_ context.Context) (AppInfo, error) {
 	return AppInfo{
-		Build:      "dev",
+		Build:      buildLabel(a.core),
 		Commit:     "unknown",
 		BuildTime:  "",
-		GoVersion:  "",
-		Platform:   "",
+		GoVersion:  runtime.Version(),
+		Platform:   runtime.GOOS + "/" + runtime.GOARCH,
 		WindowSize: WindowSize{Width: 1280, Height: 800},
 	}, nil
 }

@@ -192,6 +192,49 @@ jobs:
           fi
           wails build "${ARGS[@]}"
 
+      # ── Linux AppImage (linux/amd64 only) ────────────────────────────────
+      # Produces a self-contained, portable AppImage alongside the tarball.
+      # linux/arm64 ships tarball-only in this PR; the AppDir scaffold and
+      # appimagetool for arm64 require a cross-tool chain not yet validated.
+      # Linux binaries are not codesigned; users may need to `chmod +x`.
+      - name: build AppImage (linux-amd64 only)
+        if: runner.os == 'Linux' && matrix.wails_platform == 'linux/amd64'
+        run: |
+          set -euo pipefail
+          VERSION="${{ needs.derive-version.outputs.version }}"
+          wget -q https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage \
+            -O /tmp/appimagetool
+          chmod +x /tmp/appimagetool
+
+          APPDIR="build/bin/Kenaz_Harness.AppDir"
+          mkdir -p "$APPDIR/usr/bin"
+          # wails build outputs to build/bin/Kenaz on Linux
+          # (productName="Kenaz Harness", outputfilename="Kenaz" in wails.json).
+          cp "build/bin/Kenaz" "$APPDIR/usr/bin/kenaz-harness"
+          cp build/appicon.png "$APPDIR/Kenaz_Harness.png"
+          cp build/appicon.png "$APPDIR/.DirIcon"
+
+          cat > "$APPDIR/AppRun" <<'EOF'
+          #!/bin/sh
+          HERE="$(dirname "$(readlink -f "$0")")"
+          exec "$HERE/usr/bin/kenaz-harness" "$@"
+          EOF
+          chmod +x "$APPDIR/AppRun"
+
+          cat > "$APPDIR/kenaz-harness.desktop" <<'EOF'
+          [Desktop Entry]
+          Name=Kenaz Harness
+          Exec=kenaz-harness
+          Icon=Kenaz_Harness
+          Type=Application
+          Categories=Development;
+          EOF
+
+          ARCH=x86_64 /tmp/appimagetool --no-appstream \
+            "$APPDIR" \
+            "build/bin/Kenaz-Harness-${VERSION}-linux-amd64.AppImage"
+          echo "AppImage produced: $(ls -lh "build/bin/Kenaz-Harness-${VERSION}-linux-amd64.AppImage")"
+
       # ── kenaz-updater.exe (Windows only) ────────────────────────────────
       # Stand-alone helper binary that performs the wait-rename-relaunch
       # outside the harness process. Bundled into the same build/bin/ dir
@@ -217,6 +260,41 @@ jobs:
               -o "build/bin/kenaz-updater.exe" \
               ./cmd/kenaz-updater
           ls -la build/bin/kenaz-updater.exe
+
+      # ── Windows NSIS installer ────────────────────────────────────────────
+      # Builds a second output (NSIS-backed installer.exe) alongside the bare
+      # binary. Only for amd64 — arm64 ships tarball-only in this release.
+      # The Trusted Signing step below uses `files-folder-filter: exe` which
+      # picks up ALL .exe files in build/bin, so the installer gets signed
+      # without any extra configuration.
+      - name: wails build (nsis installer, windows-amd64 only)
+        if: runner.os == 'Windows' && matrix.wails_platform == 'windows/amd64'
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${{ needs.derive-version.outputs.version }}"
+          wails build -platform ${{ matrix.wails_platform }} -nsis \
+            -ldflags "-X main.Version=${VERSION}" \
+            -trimpath
+
+      - name: rename NSIS installer for clean asset name (windows-amd64 only)
+        if: runner.os == 'Windows' && matrix.wails_platform == 'windows/amd64'
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${{ needs.derive-version.outputs.version }}"
+          # Wails names the NSIS output "<ProductName>-amd64-installer.exe"
+          # (using info.productName from wails.json). Rename to a
+          # version-stamped, URL-safe filename before signing picks it up.
+          SRC="build/bin/Kenaz Harness-amd64-installer.exe"
+          DST="build/bin/Kenaz-Harness-Setup-${VERSION}-windows-amd64.exe"
+          if [ -f "$SRC" ]; then
+            mv "$SRC" "$DST"
+            echo "Renamed NSIS installer → $DST"
+          else
+            echo "::warning::Expected NSIS installer at '$SRC' — listing build/bin:"
+            ls -la "build/bin/"
+          fi
 
       # ── macOS rename + code signing + notarization ──────────────────────
       # Wails names the .app bundle from wails.json `name` (kenaz-harness),
@@ -343,7 +421,7 @@ jobs:
           echo "$APPLE_API_KEY_P8" > "$P8_PATH"
           chmod 600 "$P8_PATH"
 
-          codesign --sign "Developer ID Application: Kameas AI, Inc. (K54JDRHBA7)" \
+          codesign --force --sign "Developer ID Application: Kameas AI, Inc. (K54JDRHBA7)" \
             --timestamp --options runtime "$DMG"
           xcrun notarytool submit "$DMG" \
             --key "$P8_PATH" \
@@ -442,6 +520,18 @@ jobs:
           if [ "${{ runner.os }}" = "macOS" ] && [ -f "build/bin/Kenaz-Harness.dmg" ]; then
             cp "build/bin/Kenaz-Harness.dmg" "dist/${STAGE}.dmg"
           fi
+          # On linux-amd64, pull the AppImage out before renaming build/bin.
+          # The tarball (auto-update payload) and the AppImage (user installer)
+          # are separate release assets; arm64 ships tarball-only.
+          if [ "${{ runner.os }}" = "Linux" ] && [ "${{ matrix.wails_platform }}" = "linux/amd64" ]; then
+            APPIMAGE="build/bin/Kenaz-Harness-${VERSION}-linux-amd64.AppImage"
+            if [ -f "$APPIMAGE" ]; then
+              cp "$APPIMAGE" "dist/kaneaz-harness-${VERSION}-linux-amd64.AppImage"
+              echo "Copied AppImage → dist/kaneaz-harness-${VERSION}-linux-amd64.AppImage"
+            else
+              echo "::warning::AppImage not found at $APPIMAGE — skipping"
+            fi
+          fi
           mv build/bin "${STAGE}"
           if [ "${{ matrix.archive_ext }}" = "tar.gz" ]; then
             tar -czf "dist/${STAGE}.tar.gz" "${STAGE}"
@@ -458,6 +548,19 @@ jobs:
           $label   = "${{ matrix.label }}"
           $stage   = "kaneaz-harness-$version-$label"
           New-Item -ItemType Directory -Force -Path dist | Out-Null
+          # For windows-amd64, copy the NSIS installer to dist/ as a separate
+          # release asset before moving build/bin (the .zip auto-update payload
+          # and the installer .exe are both published). arm64 ships zip-only.
+          if ("${{ matrix.wails_platform }}" -eq "windows/amd64") {
+            $installer = "build/bin/Kenaz-Harness-Setup-$version-windows-amd64.exe"
+            if (Test-Path $installer) {
+              Copy-Item $installer "dist/kaneaz-harness-$version-windows-amd64-setup.exe"
+              Write-Output "Copied NSIS installer → dist/kaneaz-harness-$version-windows-amd64-setup.exe"
+            } else {
+              Write-Warning "NSIS installer not found at $installer — listing build/bin:"
+              Get-ChildItem "build/bin"
+            }
+          }
           # Move-Item (not Rename-Item) — Rename-Item only changes the name
           # in place ("build/$stage"), but Compress-Archive expects the staged
           # folder at cwd. Move-Item relocates it to the working directory.
@@ -546,17 +649,36 @@ jobs:
           repo = os.environ.get('GITHUB_REPOSITORY', 'kameas-ai/kaneaz-harness')
           base = f"https://github.com/{repo}/releases/download/{tag}"
           dist = pathlib.Path('dist-flat')
-          # Build a lookup of darwin installer (.dmg) URLs keyed by platform.
-          # Pattern: kaneaz-harness-<version>-darwin-<arch>.dmg
-          dmg_urls: dict = {}
+          # Build installer URL lookups keyed by platform string.
+          # darwin: .dmg  |  windows-amd64: NSIS -setup.exe  |  linux-amd64: .AppImage
+          installer_urls: dict = {}
+          # Set of filenames that ARE installer assets (skip in main asset loop
+          # so they don't also appear as top-level auto-update entries).
+          installer_filenames: set = set()
           for f in sorted(dist.iterdir()):
+              # macOS .dmg — pattern: kaneaz-harness-<version>-darwin-<arch>.dmg
               dm = re.match(r'kaneaz-harness-.+?-(darwin)-(amd64|arm64)\.dmg$', f.name)
               if dm:
                   os_label, arch = dm.groups()
-                  dmg_urls[f"{os_label}-{arch}"] = f"{base}/{f.name}"
+                  installer_urls[f"{os_label}-{arch}"] = f"{base}/{f.name}"
+                  installer_filenames.add(f.name)
+                  continue
+              # Windows NSIS installer — pattern: kaneaz-harness-<version>-windows-amd64-setup.exe
+              wn = re.match(r'kaneaz-harness-.+?-(windows)-(amd64)-setup\.exe$', f.name)
+              if wn:
+                  os_label, arch = wn.groups()
+                  installer_urls[f"{os_label}-{arch}"] = f"{base}/{f.name}"
+                  installer_filenames.add(f.name)
+                  continue
+              # Linux AppImage — pattern: kaneaz-harness-<version>-linux-amd64.AppImage
+              ai = re.match(r'kaneaz-harness-.+?-(linux)-(amd64)\.AppImage$', f.name)
+              if ai:
+                  os_label, arch = ai.groups()
+                  installer_urls[f"{os_label}-{arch}"] = f"{base}/{f.name}"
+                  installer_filenames.add(f.name)
           assets = []
           for f in sorted(dist.iterdir()):
-              if f.suffix in ('.sha256',) or f.suffix == '.dmg':
+              if f.suffix in ('.sha256',) or f.name in installer_filenames:
                   continue
               sha_path = dist / f"{f.name}.sha256"
               sha = ''
@@ -577,10 +699,13 @@ jobs:
                   'ext': ext,
                   'size_bytes': f.stat().st_size,
               }
-              # For macOS, surface the .dmg as installer_url so download pages
-              # can offer the drag-to-Applications installer for first installs,
-              # while `url` (the .zip) continues to serve auto-update machinery.
-              installer = dmg_urls.get(f"{os_label}-{arch}")
+              # Wire installer_url for platforms that ship a dedicated installer:
+              #   darwin-{amd64,arm64} → .dmg
+              #   windows-amd64        → NSIS setup .exe
+              #   linux-amd64          → .AppImage
+              # windows-arm64 and linux-arm64 have no installer in this release.
+              # The `url` field always points at the auto-update payload.
+              installer = installer_urls.get(f"{os_label}-{arch}")
               if installer:
                   entry['installer_url'] = installer
               assets.append(entry)
@@ -638,16 +763,34 @@ jobs:
           # serves /downloads/<tag>/<file> from s3://kameas-ai-docs-site.
           base = f"https://docs.kameas.ai/downloads/{tag}"
           dist = pathlib.Path('dist-flat')
-          # Build a lookup of darwin installer (.dmg) URLs keyed by platform.
-          dmg_urls: dict = {}
+          # Build installer URL lookups keyed by platform string.
+          # darwin: .dmg  |  windows-amd64: NSIS -setup.exe  |  linux-amd64: .AppImage
+          installer_urls: dict = {}
+          installer_filenames: set = set()
           for f in sorted(dist.iterdir()):
+              # macOS .dmg
               dm = re.match(r'kaneaz-harness-.+?-(darwin)-(amd64|arm64)\.dmg$', f.name)
               if dm:
                   os_label, arch = dm.groups()
-                  dmg_urls[f"{os_label}-{arch}"] = f"{base}/{f.name}"
+                  installer_urls[f"{os_label}-{arch}"] = f"{base}/{f.name}"
+                  installer_filenames.add(f.name)
+                  continue
+              # Windows NSIS installer
+              wn = re.match(r'kaneaz-harness-.+?-(windows)-(amd64)-setup\.exe$', f.name)
+              if wn:
+                  os_label, arch = wn.groups()
+                  installer_urls[f"{os_label}-{arch}"] = f"{base}/{f.name}"
+                  installer_filenames.add(f.name)
+                  continue
+              # Linux AppImage
+              ai = re.match(r'kaneaz-harness-.+?-(linux)-(amd64)\.AppImage$', f.name)
+              if ai:
+                  os_label, arch = ai.groups()
+                  installer_urls[f"{os_label}-{arch}"] = f"{base}/{f.name}"
+                  installer_filenames.add(f.name)
           assets = []
           for f in sorted(dist.iterdir()):
-              if f.suffix in ('.sha256',) or f.suffix == '.dmg' or f.name == 'manifest.json':
+              if f.suffix in ('.sha256',) or f.name in installer_filenames or f.name == 'manifest.json':
                   continue
               sha_path = dist / f"{f.name}.sha256"
               sha = ''
@@ -667,8 +810,12 @@ jobs:
                   'ext': ext,
                   'size_bytes': f.stat().st_size,
               }
-              # For macOS, surface the .dmg as installer_url (CDN path).
-              installer = dmg_urls.get(f"{os_label}-{arch}")
+              # Wire installer_url for platforms with a dedicated installer (CDN path):
+              #   darwin-{amd64,arm64} → .dmg
+              #   windows-amd64        → NSIS setup .exe
+              #   linux-amd64          → .AppImage
+              # windows-arm64 and linux-arm64 have no installer in this release.
+              installer = installer_urls.get(f"{os_label}-{arch}")
               if installer:
                   entry['installer_url'] = installer
               assets.append(entry)
