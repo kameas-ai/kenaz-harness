@@ -106,6 +106,10 @@ export function Branches_List(arg1) {
   return window['go']['rpc']['Bindings']['Branches_List'](arg1);
 }
 
+export function Branches_ListWithBranchTree(arg1) {
+  return window['go']['rpc']['Bindings']['Branches_ListWithBranchTree'](arg1);
+}
+
 export function Branches_Merge(arg1) {
   return window['go']['rpc']['Bindings']['Branches_Merge'](arg1);
 }
@@ -126,8 +130,16 @@ export function Bundle_Get(arg1) {
   return window['go']['rpc']['Bindings']['Bundle_Get'](arg1);
 }
 
+export function Bundle_Install(arg1) {
+  return window['go']['rpc']['Bindings']['Bundle_Install'](arg1);
+}
+
 export function Bundle_List() {
   return window['go']['rpc']['Bindings']['Bundle_List']();
+}
+
+export function Bundle_Remove(arg1) {
+  return window['go']['rpc']['Bindings']['Bundle_Remove'](arg1);
 }
 
 export function CedarPolicy_ListPolicies() {
@@ -140,6 +152,10 @@ export function CedarPolicy_RecentDecisions(arg1) {
 
 export function CedarPolicy_ReloadPolicies() {
   return window['go']['rpc']['Bindings']['CedarPolicy_ReloadPolicies']();
+}
+
+export function CedarPolicy_ResolvePropose(arg1, arg2) {
+  return window['go']['rpc']['Bindings']['CedarPolicy_ResolvePropose'](arg1, arg2);
 }
 
 export function CedarPolicy_RevokeSnippet(arg1) {
@@ -406,6 +422,10 @@ export function LogRouteChange(arg1, arg2) {
   return window['go']['rpc']['Bindings']['LogRouteChange'](arg1, arg2);
 }
 
+export function MCP_HealthSnapshot() {
+  return window['go']['rpc']['Bindings']['MCP_HealthSnapshot']();
+}
+
 export function MCP_ImportClaudeDesktopConfig(arg1) {
   return window['go']['rpc']['Bindings']['MCP_ImportClaudeDesktopConfig'](arg1);
 }
@@ -422,16 +442,12 @@ export function MCP_StopStream(arg1) {
   return window['go']['rpc']['Bindings']['MCP_StopStream'](arg1);
 }
 
-export function MCP_TestRecipe(arg1, arg2, arg3) {
-  return window['go']['rpc']['Bindings']['MCP_TestRecipe'](arg1, arg2, arg3);
-}
-
-export function MCP_HealthSnapshot() {
-  return window['go']['rpc']['Bindings']['MCP_HealthSnapshot']();
-}
-
 export function MCP_SubscribeHealthChanges() {
   return window['go']['rpc']['Bindings']['MCP_SubscribeHealthChanges']();
+}
+
+export function MCP_TestRecipe(arg1, arg2, arg3) {
+  return window['go']['rpc']['Bindings']['MCP_TestRecipe'](arg1, arg2, arg3);
 }
 
 export function Memory_Forget(arg1) {
@@ -530,6 +546,10 @@ export function Projects_Get(arg1) {
   return window['go']['rpc']['Bindings']['Projects_Get'](arg1);
 }
 
+export function Projects_GetAutonomy(arg1) {
+  return window['go']['rpc']['Bindings']['Projects_GetAutonomy'](arg1);
+}
+
 export function Projects_List() {
   return window['go']['rpc']['Bindings']['Projects_List']();
 }
@@ -544,6 +564,10 @@ export function Projects_RemoveSession(arg1) {
 
 export function Projects_Rename(arg1, arg2) {
   return window['go']['rpc']['Bindings']['Projects_Rename'](arg1, arg2);
+}
+
+export function Projects_SetAutonomy(arg1, arg2) {
+  return window['go']['rpc']['Bindings']['Projects_SetAutonomy'](arg1, arg2);
 }
 
 export function Projects_UpdateDescription(arg1, arg2) {
@@ -586,6 +610,10 @@ export function Sessions_Get(arg1) {
   return window['go']['rpc']['Bindings']['Sessions_Get'](arg1);
 }
 
+export function Sessions_GetAutonomy(arg1) {
+  return window['go']['rpc']['Bindings']['Sessions_GetAutonomy'](arg1);
+}
+
 export function Sessions_GetUsage(arg1) {
   return window['go']['rpc']['Bindings']['Sessions_GetUsage'](arg1);
 }
@@ -622,6 +650,10 @@ export function Sessions_Reorder(arg1) {
   return window['go']['rpc']['Bindings']['Sessions_Reorder'](arg1);
 }
 
+export function Sessions_ResolveAutonomy(arg1) {
+  return window['go']['rpc']['Bindings']['Sessions_ResolveAutonomy'](arg1);
+}
+
 export function Sessions_SaveAsArtifact(arg1, arg2, arg3, arg4, arg5) {
   return window['go']['rpc']['Bindings']['Sessions_SaveAsArtifact'](arg1, arg2, arg3, arg4, arg5);
 }
@@ -632,6 +664,10 @@ export function Sessions_SaveDraft(arg1, arg2) {
 
 export function Sessions_SendMessageWithBlocks(arg1, arg2) {
   return window['go']['rpc']['Bindings']['Sessions_SendMessageWithBlocks'](arg1, arg2);
+}
+
+export function Sessions_SetAutonomy(arg1, arg2) {
+  return window['go']['rpc']['Bindings']['Sessions_SetAutonomy'](arg1, arg2);
 }
 
 export function Sessions_SetSystemPrompt(arg1, arg2, arg3) {
@@ -662,6 +698,10 @@ export function Settings_Get() {
   return window['go']['rpc']['Bindings']['Settings_Get']();
 }
 
+export function Settings_GetAutonomy() {
+  return window['go']['rpc']['Bindings']['Settings_GetAutonomy']();
+}
+
 export function Settings_GetBash() {
   return window['go']['rpc']['Bindings']['Settings_GetBash']();
 }
@@ -682,12 +722,20 @@ export function Settings_GetFSRequestAccessEnabled() {
   return window['go']['rpc']['Bindings']['Settings_GetFSRequestAccessEnabled']();
 }
 
+export function Settings_GetMCPAutoRestart() {
+  return window['go']['rpc']['Bindings']['Settings_GetMCPAutoRestart']();
+}
+
 export function Settings_GetMaxAgentTurns() {
   return window['go']['rpc']['Bindings']['Settings_GetMaxAgentTurns']();
 }
 
 export function Settings_GetMemory() {
   return window['go']['rpc']['Bindings']['Settings_GetMemory']();
+}
+
+export function Settings_GetMonthlyCostNotifyUSD() {
+  return window['go']['rpc']['Bindings']['Settings_GetMonthlyCostNotifyUSD']();
 }
 
 export function Settings_GetPermissionCacheDangerousOps() {
@@ -718,6 +766,10 @@ export function Settings_Set(arg1) {
   return window['go']['rpc']['Bindings']['Settings_Set'](arg1);
 }
 
+export function Settings_SetAutonomy(arg1) {
+  return window['go']['rpc']['Bindings']['Settings_SetAutonomy'](arg1);
+}
+
 export function Settings_SetBash(arg1) {
   return window['go']['rpc']['Bindings']['Settings_SetBash'](arg1);
 }
@@ -738,12 +790,20 @@ export function Settings_SetFSRequestAccessEnabled(arg1) {
   return window['go']['rpc']['Bindings']['Settings_SetFSRequestAccessEnabled'](arg1);
 }
 
+export function Settings_SetMCPAutoRestart(arg1) {
+  return window['go']['rpc']['Bindings']['Settings_SetMCPAutoRestart'](arg1);
+}
+
 export function Settings_SetMaxAgentTurns(arg1) {
   return window['go']['rpc']['Bindings']['Settings_SetMaxAgentTurns'](arg1);
 }
 
 export function Settings_SetMemory(arg1) {
   return window['go']['rpc']['Bindings']['Settings_SetMemory'](arg1);
+}
+
+export function Settings_SetMonthlyCostNotifyUSD(arg1) {
+  return window['go']['rpc']['Bindings']['Settings_SetMonthlyCostNotifyUSD'](arg1);
 }
 
 export function Settings_SetPermissionCacheDangerousOps(arg1) {
@@ -768,14 +828,6 @@ export function Settings_SetShortcut(arg1, arg2) {
 
 export function Settings_SetShortcuts(arg1) {
   return window['go']['rpc']['Bindings']['Settings_SetShortcuts'](arg1);
-}
-
-export function Settings_GetMCPAutoRestart() {
-  return window['go']['rpc']['Bindings']['Settings_GetMCPAutoRestart']();
-}
-
-export function Settings_SetMCPAutoRestart(arg1) {
-  return window['go']['rpc']['Bindings']['Settings_SetMCPAutoRestart'](arg1);
 }
 
 export function Settings_SetWebSearch(arg1) {
@@ -846,6 +898,34 @@ export function Trust_ListSecretReferences() {
   return window['go']['rpc']['Bindings']['Trust_ListSecretReferences']();
 }
 
+export function Update_Apply() {
+  return window['go']['rpc']['Bindings']['Update_Apply']();
+}
+
+export function Update_ListSkippedVersions() {
+  return window['go']['rpc']['Bindings']['Update_ListSkippedVersions']();
+}
+
+export function Update_SkipVersion(arg1) {
+  return window['go']['rpc']['Bindings']['Update_SkipVersion'](arg1);
+}
+
+export function Update_StartCheck() {
+  return window['go']['rpc']['Bindings']['Update_StartCheck']();
+}
+
+export function Update_StartDownload() {
+  return window['go']['rpc']['Bindings']['Update_StartDownload']();
+}
+
+export function Update_Status() {
+  return window['go']['rpc']['Bindings']['Update_Status']();
+}
+
+export function Update_UnskipVersion(arg1) {
+  return window['go']['rpc']['Bindings']['Update_UnskipVersion'](arg1);
+}
+
 export function Workflow_ListJobs() {
   return window['go']['rpc']['Bindings']['Workflow_ListJobs']();
 }
@@ -858,68 +938,38 @@ export function Workflow_StopStream(arg1) {
   return window['go']['rpc']['Bindings']['Workflow_StopStream'](arg1);
 }
 
-export function Workflows_List() {
-  return window['go']['rpc']['Bindings']['Workflows_List']();
+export function Workflows_Delete(arg1) {
+  return window['go']['rpc']['Bindings']['Workflows_Delete'](arg1);
 }
 
 export function Workflows_Get(arg1) {
   return window['go']['rpc']['Bindings']['Workflows_Get'](arg1);
 }
 
+export function Workflows_List() {
+  return window['go']['rpc']['Bindings']['Workflows_List']();
+}
+
 export function Workflows_Run(arg1, arg2) {
   return window['go']['rpc']['Bindings']['Workflows_Run'](arg1, arg2);
 }
 
-// TODO: regenerate via `wails generate module` once the WP09 editor lands.
-// Hand-added in WP07 so the frontend Save / Delete shim has a typed binding.
+export function Workflows_RunNow(arg1) {
+  return window['go']['rpc']['Bindings']['Workflows_RunNow'](arg1);
+}
+
 export function Workflows_Save(arg1) {
   return window['go']['rpc']['Bindings']['Workflows_Save'](arg1);
 }
 
-export function Workflows_Delete(arg1) {
-  return window['go']['rpc']['Bindings']['Workflows_Delete'](arg1);
+export function Workflows_ScheduleClear(arg1) {
+  return window['go']['rpc']['Bindings']['Workflows_ScheduleClear'](arg1);
 }
 
-// TODO: regenerate via `wails generate module` once WP03 catalog is stable.
-// Hand-added in WP03 so the frontend CatalogView / workflowsClient has typed bindings.
-export function Workflows_Catalog_List() {
-  return window['go']['rpc']['Bindings']['Workflows_Catalog_List']();
+export function Workflows_ScheduleList() {
+  return window['go']['rpc']['Bindings']['Workflows_ScheduleList']();
 }
 
-export function Workflows_Catalog_Get(arg1) {
-  return window['go']['rpc']['Bindings']['Workflows_Catalog_Get'](arg1);
-}
-
-export function Workflows_Catalog_Install(arg1) {
-  return window['go']['rpc']['Bindings']['Workflows_Catalog_Install'](arg1);
-}
-
-// TODO: regenerate via `wails generate module` once the WP04+WP05 update UI lands.
-// Hand-added in WP03 so the frontend updateClient.ts has typed bindings.
-export function Update_Status() {
-  return window['go']['rpc']['Bindings']['Update_Status']();
-}
-
-export function Update_StartCheck() {
-  return window['go']['rpc']['Bindings']['Update_StartCheck']();
-}
-
-export function Update_StartDownload() {
-  return window['go']['rpc']['Bindings']['Update_StartDownload']();
-}
-
-export function Update_Apply() {
-  return window['go']['rpc']['Bindings']['Update_Apply']();
-}
-
-export function Update_SkipVersion(arg1) {
-  return window['go']['rpc']['Bindings']['Update_SkipVersion'](arg1);
-}
-
-export function Update_ListSkippedVersions() {
-  return window['go']['rpc']['Bindings']['Update_ListSkippedVersions']();
-}
-
-export function Update_UnskipVersion(arg1) {
-  return window['go']['rpc']['Bindings']['Update_UnskipVersion'](arg1);
+export function Workflows_ScheduleSet(arg1) {
+  return window['go']['rpc']['Bindings']['Workflows_ScheduleSet'](arg1);
 }

@@ -1033,6 +1033,12 @@ func defaultSettings() Settings {
 		Theme:         "system",
 		Accent:        "default",
 		WindowSize:    WindowSize{Width: 1280, Height: 800},
+		// Branching UX dials (branching-ux-polish-01KQ8TD7 WP06).
+		// AutoCollapseBranchesInSidebar defaults to true (spec default).
+		// DeleteBranchesWithParent defaults to false (safe: orphan, not cascade).
+		// MaxVisibleBranchDepth defaults to 5 (spec default).
+		AutoCollapseBranchesInSidebar: DefaultAutoCollapseBranchesInSidebar,
+		MaxVisibleBranchDepth:         DefaultMaxVisibleBranchDepth,
 	}
 }
 

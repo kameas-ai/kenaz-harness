@@ -129,6 +129,16 @@ const (
 	KindUpdateApplied    Kind = "update.applied"
 	KindUpdateSkipped    Kind = "update.skipped"
 	KindUpdateFailed     Kind = "update.failed"
+
+	// KindBranchCreated fires when a branch is created via either the
+	// explicit "Branch from this turn" path or the implicit edit-and-resend
+	// path (branching-ux-polish-01KQ8TD7 WP01). Payload:
+	// BranchCreatedPayload.
+	//
+	// CreationPath discriminates:
+	//   "explicit"    — user chose "Branch from this turn" in the menu.
+	//   "edit_resend" — implicit fork from the edit-and-resend flow.
+	KindBranchCreated Kind = "branch.created"
 )
 
 // Event is the wire shape passed to the event log. The concrete event-log
@@ -477,6 +487,21 @@ type WorkflowNetworkFetchPayload struct {
 	Hostname   string `json:"hostname"`
 	Status     int    `json:"status"`
 	Bytes      int    `json:"bytes"`
+}
+
+// BranchCreatedPayload carries signalling for KindBranchCreated
+// (branching-ux-polish-01KQ8TD7 WP01). Emitted from both creation
+// paths so the audit view can show two distinct events after the
+// manual acceptance smoke.
+//
+// Privacy invariant: ParentMessageID is a stable opaque id (no content
+// bytes). Neither session names nor message bodies are included here.
+type BranchCreatedPayload struct {
+	ParentSessionID string `json:"parent_session_id"`
+	ParentMessageID string `json:"parent_message_id,omitempty"`
+	BranchSessionID string `json:"branch_session_id"`
+	// CreationPath is "explicit" | "edit_resend".
+	CreationPath string `json:"creation_path"`
 }
 
 // Emit is a small convenience wrapper for callers that have a payload

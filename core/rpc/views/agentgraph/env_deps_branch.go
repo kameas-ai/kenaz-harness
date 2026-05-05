@@ -56,6 +56,11 @@ func (a *BranchSeamAdapter) Fork(ctx context.Context, req coreag.ForkRequest) (c
 		TaskHint:        req.TaskHint,
 		ProviderID:      req.ProviderID,
 		ModelID:         req.ModelID,
+		// The BranchSeamAdapter is the implicit edit-and-resend path.
+		// Mark the branch row so audit consumers can distinguish it from
+		// explicit "Branch from this turn" forks.
+		// (branching-ux-polish-01KQ8TD7 WP01)
+		CreationPath: "edit_resend",
 	})
 	if err != nil {
 		return coreag.BranchHandle{}, fmt.Errorf("branch_seam: create branch: %w", err)

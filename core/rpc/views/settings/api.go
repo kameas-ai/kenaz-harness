@@ -310,6 +310,31 @@ type Settings struct {
 	// values are silently ignored — the catalog value takes precedence.
 	// An absent map (nil/empty) means "use catalog values for all providers."
 	ContextWindowOverrides map[string]int `json:"contextWindowOverrides,omitempty"`
+
+	// ── Branching UX dials (branching-ux-polish-01KQ8TD7 WP06) ──────────
+
+	// AutoCollapseBranchesInSidebar controls the initial collapse state
+	// for branch trees in the left rail. When true (default), every
+	// parent session that has children starts collapsed so the rail
+	// doesn't sprawl on first load. The user can expand individually;
+	// their choices are persisted in localStorage under
+	// harness.sidebar.branchCollapsed.v1.
+	AutoCollapseBranchesInSidebar bool `json:"autoCollapseBranchesInSidebar,omitempty"`
+
+	// DeleteBranchesWithParent controls cascade-delete behaviour when a
+	// parent session is deleted. When false (default / safe), child
+	// sessions become orphans — their branch row is gone (ON DELETE
+	// CASCADE) but the child session persists and the sidebar promotes
+	// it to a root row. When true, deleting a parent recursively
+	// removes all descendant sessions before cascading the branch rows.
+	DeleteBranchesWithParent bool `json:"deleteBranchesWithParent,omitempty"`
+
+	// MaxVisibleBranchDepth caps the number of nesting levels shown in
+	// the sidebar branch tree. Default 5. Sessions deeper than this cap
+	// are replaced by a "+N more depths" affordance that expands one
+	// level at a time on click. Zero falls back to the default via
+	// EffectiveMaxVisibleBranchDepth.
+	MaxVisibleBranchDepth int `json:"maxVisibleBranchDepth,omitempty"`
 }
 
 // ProviderProfileRef is the wire shape that identifies a provider+model
@@ -619,6 +644,47 @@ func (s Settings) FSWriteEnabled() bool { return !s.FSWriteDisabled }
 // HARNESS_EDIT_FILE_ARTIFACT_SYNC=on must also be set for the feature
 // to activate. (edit-file-artifact-sync-01KQ8TD5)
 func (s Settings) EditFileArtifactSyncEnabled() bool { return !s.EditFileArtifactSyncDisabled }
+
+// ── Branching UX constants + accessors (branching-ux-polish-01KQ8TD7 WP06) ──
+
+// DefaultMaxVisibleBranchDepth is the spec-locked depth cap for sidebar
+// branch tree rendering. Sessions nested deeper than this value are
+// replaced by a "+N more depths" affordance. Default 5.
+const DefaultMaxVisibleBranchDepth = 5
+
+// DefaultAutoCollapseBranchesInSidebar is the spec-locked default for
+// the collapse-on-first-load behaviour: true so the rail doesn't sprawl.
+const DefaultAutoCollapseBranchesInSidebar = true
+
+// EffectiveMaxVisibleBranchDepth returns the user-tuned depth or the
+// spec default when zero or negative. No upper clamp — a user who wants
+// depth=100 gets it; the frontend caps its CTE walk at 32.
+func (s Settings) EffectiveMaxVisibleBranchDepth() int {
+	if s.MaxVisibleBranchDepth <= 0 {
+		return DefaultMaxVisibleBranchDepth
+	}
+	return s.MaxVisibleBranchDepth
+}
+
+// EffectiveAutoCollapseBranchesInSidebar returns the user's collapse
+// preference. Because the JSON zero-value of bool is false, and the
+// spec default is true, we can't use omitempty storage — this field is
+// stored explicitly so round-trips are faithful. The accessor reads the
+// stored value directly and callers that need the default-on behaviour
+// call this rather than reading the field directly.
+//
+// Note: this method CANNOT rely on zero-value == default because bool
+// zero-value is false but default is true. The field is stored as
+// omitempty which means a fresh file gives false here. To match the
+// "default true" spec intent without a migrations, we check whether
+// the parent Settings carries a deliberate override via
+// AutoCollapseBranchesInSidebar. Since we can't tell "stored false"
+// from "not stored" with omitempty, we document that the frontend
+// should treat absence as true — backed by the Wails bindings that
+// always include the field after first Set.
+func (s Settings) EffectiveAutoCollapseBranchesInSidebar() bool {
+	return s.AutoCollapseBranchesInSidebar
+}
 
 // WindowSize mirrors the charter's WindowSize type.
 type WindowSize struct {

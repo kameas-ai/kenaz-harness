@@ -1336,6 +1336,14 @@ func (b *Bindings) Branches_SetAdvisorDismissed(sessionID string, dismissed bool
 	return b.api.Branches().SetAdvisorDismissed(b.ctx(), sessionID, dismissed)
 }
 
+// Branches_ListWithBranchTree returns a flat list of sessions with parent
+// pointers for all branches in a project. The frontend builds the visual
+// tree by grouping on parentSessionId. BranchDepth is pre-computed.
+// (branching-ux-polish-01KQ8TD7 WP02/WP03)
+func (b *Bindings) Branches_ListWithBranchTree(projectID string) ([]branchesview.SessionWithBranchPointer, error) {
+	return b.api.Branches().ListWithBranchTree(b.ctx(), projectID)
+}
+
 // ── workflows (mission workflows-01KQ8TDG, v0.3.0 beta) ───────────────
 
 func (b *Bindings) Workflows_List() ([]workflowsview.Summary, error) {

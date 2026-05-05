@@ -24,6 +24,7 @@ import ChatInput from '@/components/chat/ChatInput.vue';
 import ResolvedContextPanel from '@/views/sessions/ResolvedContextPanel.vue';
 import ConfirmToolModal from '@/components/chat/ConfirmToolModal.vue';
 import BranchSidebar from '@/components/chat/BranchSidebar.vue';
+import BranchBreadcrumb from '@/components/chat/BranchBreadcrumb.vue';
 import CreateBranchModal from '@/components/chat/CreateBranchModal.vue';
 import MergeSuggestionToast from '@/components/chat/MergeSuggestionToast.vue';
 import CostThresholdToast from '@/components/chat/CostThresholdToast.vue';
@@ -282,6 +283,36 @@ const sessionSubtitle = computed(() => {
 const showSessionBreadcrumb = computed(
   () => surfaceState.value !== 'loaded',
 );
+
+// ── Branch breadcrumb (branching-ux-polish-01KQ8TD7 WP04) ───────────────────
+// Displayed just below CanvasHead when the active session is a branch.
+
+/** Whether the current session is a branch (has a parent). */
+const isBranchSession = computed(
+  () => !!session.session.value?.parentSessionId,
+);
+
+/** The parent session ID (empty string for root sessions). */
+const breadcrumbParentSessionId = computed(
+  () => session.session.value?.parentSessionId ?? '',
+);
+
+/** Parent session's display name — looked up in the rail's session list. */
+const breadcrumbParentTitle = computed(() => {
+  const parentId = breadcrumbParentSessionId.value;
+  if (!parentId) return '';
+  const parent = sessionList.value.find((s) => s.id === parentId);
+  if (parent) return parent.name;
+  // Parent may have been deleted — use branchTitle snapshot if available.
+  return session.session.value?.branchTitle ?? 'Deleted session';
+});
+
+/** Whether the parent session no longer exists in the session list. */
+const breadcrumbParentDeleted = computed(() => {
+  const parentId = breadcrumbParentSessionId.value;
+  if (!parentId) return false;
+  return !sessionList.value.some((s) => s.id === parentId);
+});
 
 const isStreaming = computed(
   () => session.streamSubscriptionId.value !== null,
@@ -596,6 +627,32 @@ function onBranchOpen(childSessionId: string) {
   void router.push(`/sessions/${childSessionId}`);
 }
 
+// ── "Branch from this turn" handler (branching-ux-polish-01KQ8TD7 WP05) ─────
+const branchFromTurnError = ref<string | null>(null);
+const branchFromTurnLoading = ref(false);
+
+async function onBranchFromTurn(message: { id?: string }) {
+  const parentSessionId = sessionId.value;
+  const parentMessageId = message.id;
+  if (!parentSessionId || !parentMessageId) return;
+  if (branchFromTurnLoading.value) return;
+  branchFromTurnLoading.value = true;
+  branchFromTurnError.value = null;
+  try {
+    const branch = await client.branches.createExplicit({
+      parentSessionId,
+      parentMessageId,
+    });
+    if (branch.childSessionId) {
+      void router.push(`/sessions/${branch.childSessionId}`);
+    }
+  } catch (err) {
+    branchFromTurnError.value = err instanceof Error ? err.message : String(err);
+  } finally {
+    branchFromTurnLoading.value = false;
+  }
+}
+
 const hasAnyProvider = computed(() => providers.value.length > 0);
 
 // Long-term-memory opt-in. Off by default (privacy posture); read once
@@ -871,6 +928,13 @@ function formatSize(bytes: number): string {
         :section="showSessionBreadcrumb ? 'SESSIONS' : undefined"
         :title="sessionTitle"
         :subtitle="sessionSubtitle"
+      />
+      <!-- Branch breadcrumb (branching-ux-polish-01KQ8TD7 WP04) -->
+      <BranchBreadcrumb
+        v-if="isBranchSession"
+        :parent-session-id="breadcrumbParentSessionId"
+        :parent-title="breadcrumbParentTitle"
+        :parent-deleted="breadcrumbParentDeleted"
       />
     </div>
 
@@ -1164,6 +1228,7 @@ function formatSize(bytes: number): string {
             @remember="onRemember"
             @save-artifact="onSaveArtifactFromMessage"
             @open-artifact="openArtifactPreview"
+            @branch-from-turn="onBranchFromTurn"
           />
           <BranchSidebar
             v-if="hasSession"

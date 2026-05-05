@@ -85,7 +85,10 @@ func (a *API) ListBranches(ctx context.Context, parentSessionID string) ([]Branc
 	return out, nil
 }
 
-// CreateBranch allocates a new fork.
+// CreateBranch allocates a new fork. When opts.ParentMessageID is set,
+// it delegates to CreateBranchAtMessage (explicit fork path) and copies
+// messages [0..ParentMessageID] into the child session. Otherwise it
+// falls back to the legacy CreateBranch path.
 func (a *API) CreateBranch(ctx context.Context, opts CreateBranchOptions) (Branch, error) {
 	if a == nil || a.cfg.Conversations == nil {
 		return Branch{}, ErrManagerUnavailable
@@ -94,8 +97,31 @@ func (a *API) CreateBranch(ctx context.Context, opts CreateBranchOptions) (Branc
 		return Branch{}, ErrInvalidArg
 	}
 
-	// Pick a (provider, model) up-front. The recommender favors the
-	// parent's provider when one is configured at the recommended tier.
+	// Explicit-fork path: use CreateBranchAtMessage when ParentMessageID is set.
+	if opts.ParentMessageID != "" {
+		br, _, err := a.cfg.Conversations.CreateBranchAtMessage(ctx, conversation.ForkAtMessageOptions{
+			ParentSessionID: opts.ParentSessionID,
+			ParentMessageID: opts.ParentMessageID,
+			Title:           opts.Title,
+			ChildName:       opts.ChildName,
+		})
+		if err != nil {
+			return Branch{}, err
+		}
+		// Emit KindBranchCreated audit event for explicit path.
+		_ = audit.Emit(ctx, a.cfg.Audit, audit.KindBranchCreated,
+			audit.BranchCreatedPayload{
+				ParentSessionID: opts.ParentSessionID,
+				ParentMessageID: opts.ParentMessageID,
+				BranchSessionID: br.ChildSessionID,
+				CreationPath:    "explicit",
+			}, a.now())
+		return toWire(br), nil
+	}
+
+	// Legacy path: pick a (provider, model) up-front. The recommender
+	// favors the parent's provider when one is configured at the
+	// recommended tier.
 	parentProvider, parentModel := a.parentModel(ctx, opts.ParentSessionID)
 	pref := agentgraph.ForkPreference(strings.TrimSpace(strings.ToLower(opts.ModelPreference)))
 	if pref == "" {
@@ -168,6 +194,77 @@ func (a *API) CreateBranch(ctx context.Context, opts CreateBranchOptions) (Branc
 	}
 
 	return toWire(br), nil
+}
+
+// ListWithBranchTree returns a flat list of sessions with parent pointers
+// for branches under a project. Sessions are returned oldest-first.
+// BranchDepth is pre-computed by iterative ancestor walks (capped at 32).
+// (branching-ux-polish-01KQ8TD7 WP02)
+func (a *API) ListWithBranchTree(ctx context.Context, projectID string) ([]SessionWithBranchPointer, error) {
+	if a == nil || a.cfg.Conversations == nil {
+		return nil, ErrManagerUnavailable
+	}
+	if projectID == "" {
+		return nil, ErrInvalidArg
+	}
+	if a.cfg.Sessions == nil {
+		return nil, ErrManagerUnavailable
+	}
+
+	sessions, err := a.cfg.Sessions.ListByProject(ctx, projectID)
+	if err != nil {
+		return nil, fmt.Errorf("branches: list sessions for project: %w", err)
+	}
+
+	// Build a map of childSessionID → branch for quick lookup.
+	childToBranch := map[string]conversation.Branch{}
+	for _, sess := range sessions {
+		branches, err := a.cfg.Conversations.ListByParent(ctx, sess.ID)
+		if err != nil {
+			return nil, fmt.Errorf("branches: list branches for session: %w", err)
+		}
+		for _, br := range branches {
+			childToBranch[br.ChildSessionID] = br
+		}
+	}
+
+	// Build parent-set for depth computation.
+	parentOf := map[string]string{} // sessionID → parentSessionID
+	for childID, br := range childToBranch {
+		parentOf[childID] = br.ParentSessionID
+	}
+
+	computeDepth := func(sessionID string) int {
+		depth := 0
+		cur := sessionID
+		for depth <= 32 {
+			parent, ok := parentOf[cur]
+			if !ok {
+				break
+			}
+			depth++
+			cur = parent
+		}
+		return depth
+	}
+
+	out := make([]SessionWithBranchPointer, 0, len(sessions))
+	for _, sess := range sessions {
+		ptr := SessionWithBranchPointer{
+			SessionID:   sess.ID,
+			SessionName: sess.Name,
+			CreatedAt:   sess.CreatedAt.UTC().Format(time.RFC3339Nano),
+			BranchDepth: computeDepth(sess.ID),
+		}
+		if br, ok := childToBranch[sess.ID]; ok {
+			ptr.ParentSessionID = br.ParentSessionID
+			ptr.ParentMessageID = br.ParentMessageID
+			ptr.BranchTitle = br.BranchTitle
+			ptr.ParentSessionTitle = br.ParentSessionTitle
+		}
+		out = append(out, ptr)
+	}
+	return out, nil
 }
 
 // GetBranchStatus returns the latest lifecycle state + child run snapshot.

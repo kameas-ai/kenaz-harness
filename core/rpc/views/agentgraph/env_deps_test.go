@@ -6,7 +6,9 @@ import (
 	"testing"
 
 	coreag "github.com/sigil-tech/kaneaz-harness/core/agentgraph"
+	"github.com/sigil-tech/kaneaz-harness/core/conversation"
 	graphview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/agentgraph"
+	"github.com/sigil-tech/kaneaz-harness/core/session"
 	corebash "github.com/sigil-tech/kaneaz-harness/core/tools/bash"
 )
 
@@ -102,6 +104,51 @@ func TestEnvDeps_BranchSeamNilFallback(t *testing.T) {
 	}
 	if err := adapter.MarkMerged(context.Background(), "br"); !errors.Is(err, coreag.ErrNoBranchSeam) {
 		t.Errorf("MarkMerged err = %v want ErrNoBranchSeam", err)
+	}
+}
+
+// TestEnvDeps_BranchSeamAdapter_CreationPath verifies that the implicit
+// edit-and-resend fork path (via BranchSeamAdapter.Fork) persists
+// CreationPath="edit_resend" on the branch row.
+// (branching-ux-polish-01KQ8TD7 WP07 — agentgraph integration extension)
+func TestEnvDeps_BranchSeamAdapter_CreationPath(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	// Wire in-memory stores — same approach as the conversation unit tests.
+	sessStore := session.NewMemoryStore()
+	sessMgr := session.NewManager(sessStore)
+	brStore := conversation.NewMemoryStore()
+	brMgr := conversation.NewManager(brStore, sessMgr)
+
+	// Create a parent session.
+	parent, err := sessMgr.Create(ctx, "parent")
+	if err != nil {
+		t.Fatalf("create parent: %v", err)
+	}
+
+	adapter := graphview.NewBranchSeamAdapter(brMgr, sessMgr)
+	handle, err := adapter.Fork(ctx, coreag.ForkRequest{
+		ParentSessionID: parent.ID,
+		Title:           "fork-test",
+	})
+	if err != nil {
+		t.Fatalf("Fork: %v", err)
+	}
+	if handle.BranchID == "" {
+		t.Fatal("handle.BranchID is empty")
+	}
+
+	// Look up the branch row and verify CreationPath.
+	branches, err := brMgr.ListByParent(ctx, parent.ID)
+	if err != nil {
+		t.Fatalf("ListByParent: %v", err)
+	}
+	if len(branches) != 1 {
+		t.Fatalf("branches count = %d, want 1", len(branches))
+	}
+	if branches[0].CreationPath != "edit_resend" {
+		t.Errorf("CreationPath = %q, want edit_resend", branches[0].CreationPath)
 	}
 }
 

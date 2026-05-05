@@ -272,8 +272,10 @@ func (s *sqlStore) Create(ctx context.Context, b Branch) error {
                 (id, parent_session_id, child_session_id, kind, status,
                  model_id, provider_id, title, task_hint,
                  created_at, updated_at, merged_at, abandoned_at,
-                 subagent_branch, recommendation_id, advisor_signals)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 subagent_branch, recommendation_id, advisor_signals,
+                 parent_message_id, branch_title, creation_path,
+                 parent_session_title)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `,
 			b.ID, b.ParentSessionID, b.ChildSessionID,
 			string(b.Kind), string(b.Status),
@@ -281,6 +283,8 @@ func (s *sqlStore) Create(ctx context.Context, b Branch) error {
 			b.CreatedAt.UnixNano(), b.UpdatedAt.UnixNano(),
 			merged, abandoned,
 			subagentInt, b.RecommendationID, advisorSignals,
+			b.ParentMessageID, b.BranchTitle, b.CreationPath,
+			b.ParentSessionTitle,
 		)
 		return err
 	})
@@ -292,7 +296,11 @@ const sqlSelectBranch = `
            created_at, updated_at, merged_at, abandoned_at,
            COALESCE(subagent_branch, 0),
            COALESCE(recommendation_id, ''),
-           COALESCE(advisor_signals, '[]')
+           COALESCE(advisor_signals, '[]'),
+           COALESCE(parent_message_id, ''),
+           COALESCE(branch_title, ''),
+           COALESCE(creation_path, 'unknown'),
+           COALESCE(parent_session_title, '')
     FROM branches
 `
 
@@ -457,6 +465,8 @@ func scanBranch(sc interface{ Scan(dest ...any) error }) (Branch, error) {
 		&b.ModelID, &b.ProviderID, &b.Title, &b.TaskHint,
 		&createdAt, &updatedAt, &merged, &abandoned,
 		&subagentInt, &b.RecommendationID, &advisorSignalsJ,
+		&b.ParentMessageID, &b.BranchTitle, &b.CreationPath,
+		&b.ParentSessionTitle,
 	); err != nil {
 		return Branch{}, err
 	}
