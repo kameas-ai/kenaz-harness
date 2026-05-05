@@ -726,6 +726,14 @@ export interface Settings {
   contextWindowOverrides?: Record<string, number>;
 
   /**
+   * per-message-token-meter-01KR3PQR — when true, each assistant bubble
+   * shows a small token-cost chip (prompt → completion = total · $cost).
+   * Default false (OFF) — hides the chip to keep the chat uncluttered.
+   * Toggle via Settings → Display → "Show per-message token meter".
+   */
+  showPerMessageTokenMeter?: boolean;
+
+  /**
    * Branching UX dials — branching-ux-polish-01KQ8TD7 WP06.
    *
    * autoCollapseBranchesInSidebar: when true (default), every parent
@@ -923,6 +931,18 @@ export interface Message {
    * surface: the bubble shows "Connection lost — partial reply
    * preserved." plus a Resume button when streamingRecoverable. */
   streamingError?: string;
+
+  /**
+   * Per-message token usage (per-message-token-meter-01KR3PQR). Present
+   * only on assistant rows for which the token-cost-telemetry pipeline
+   * captured usage data. Absent on user / system / tool rows and on rows
+   * that pre-date the telemetry migration.
+   */
+  promptTokens?: number;
+  completionTokens?: number;
+  costUsd?: number;
+  /** "provider" | "derived" | "mixed" | "unknown". Empty when absent. */
+  messageCostSource?: string;
 }
 
 /**

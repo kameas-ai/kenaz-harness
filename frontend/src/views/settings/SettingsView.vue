@@ -207,6 +207,9 @@ function onContextWindowOverrideInput(kind: string, evt: Event) {
 // WP05: auto-title toggle
 const autoTitleEnabled = ref(true);
 
+// per-message-token-meter-01KR3PQR
+const showPerMessageTokenMeter = ref(false);
+
 async function loadAutoTitleEnabled() {
   try {
     autoTitleEnabled.value = await client.settings.getAutoTitleEnabled();
@@ -223,6 +226,27 @@ async function toggleAutoTitleEnabled() {
     await client.settings.setAutoTitleEnabled(next);
   } catch {
     autoTitleEnabled.value = !next;
+  }
+}
+
+// per-message-token-meter-01KR3PQR
+
+async function loadShowPerMessageTokenMeter() {
+  try {
+    showPerMessageTokenMeter.value =
+      await client.settings.getShowPerMessageTokenMeter();
+  } catch {
+    showPerMessageTokenMeter.value = false;
+  }
+}
+
+async function toggleShowPerMessageTokenMeter() {
+  const next = !showPerMessageTokenMeter.value;
+  showPerMessageTokenMeter.value = next;
+  try {
+    await client.settings.setShowPerMessageTokenMeter(next);
+  } catch {
+    showPerMessageTokenMeter.value = !next;
   }
 }
 
@@ -277,6 +301,7 @@ async function refresh() {
   }
   await loadGlobalAttachments();
   await loadAutoTitleEnabled();
+  await loadShowPerMessageTokenMeter();
 }
 
 function setCompactionTier(t: CompactionAggressiveness) {
@@ -703,6 +728,28 @@ onMounted(() => {
           When on, the harness asks the model to generate a short title for
           each new session after the first exchange. You can override or
           clear it at any time.
+        </p>
+      </section>
+
+      <!-- Display settings (per-message-token-meter-01KR3PQR) -->
+      <section data-testid="display-section">
+        <h2 class="font-ui text-[11px] uppercase tracking-[0.18em] text-ink-subtle">
+          Display
+        </h2>
+        <label class="mt-2 flex items-center gap-3 font-ui text-[12px] text-ink">
+          <input
+            type="checkbox"
+            class="accent-accent"
+            :checked="showPerMessageTokenMeter"
+            data-testid="show-per-message-token-meter-toggle"
+            @change="toggleShowPerMessageTokenMeter"
+          />
+          Show per-message token meter
+        </label>
+        <p class="mt-1 text-[11px] text-ink-muted">
+          When on, each assistant message shows a small token-cost chip
+          (prompt → completion = total tokens · cost in USD). Click the chip
+          for a full breakdown. Default: off.
         </p>
       </section>
 

@@ -868,6 +868,35 @@ func (b *Bindings) Settings_SetMCPAutoRestart(enabled bool) error {
 	return b.api.Settings().SetMCPAutoRestart(b.ctx(), enabled)
 }
 
+// Settings_GetShowPerMessageTokenMeter returns whether the per-message
+// token meter chip is enabled (default false — chip hidden by default to
+// keep the chat uncluttered). (per-message-token-meter-01KR3PQR)
+func (b *Bindings) Settings_GetShowPerMessageTokenMeter() (bool, error) {
+	if b.storeFn == nil {
+		return false, nil
+	}
+	s, err := b.storeFn().LoadAll()
+	if err != nil {
+		return false, err
+	}
+	return s.ShowPerMessageTokenMeter, nil
+}
+
+// Settings_SetShowPerMessageTokenMeter persists the per-message token
+// meter chip toggle. Changes take effect immediately on the next render
+// without restarting the harness.
+func (b *Bindings) Settings_SetShowPerMessageTokenMeter(enabled bool) error {
+	if b.storeFn == nil {
+		return nil
+	}
+	s, err := b.storeFn().LoadAll()
+	if err != nil {
+		return err
+	}
+	s.ShowPerMessageTokenMeter = enabled
+	return b.storeFn().SaveAll(s)
+}
+
 // ── memory ─────────────────────────────────────────────────────────────
 
 func (b *Bindings) Memory_ListChunks(filter memoryview.ListFilter) ([]memoryview.Chunk, error) {
