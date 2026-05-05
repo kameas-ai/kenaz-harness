@@ -931,6 +931,12 @@ type SettingsAPI interface {
 	// optional model override.  Empty strings reset to auto-pick /
 	// per-Kind-default behaviour.
 	SetEmbedderConfig(ctx context.Context, profileID, modelOverride string) error
+	// GetArtifactPreview returns the runtime artifact-preview feature config:
+	//   - enabled: false when HARNESS_ARTIFACT_BINARY_PREVIEW=false (default true).
+	//   - maxBytes: resolved from HARNESS_ARTIFACT_PREVIEW_MAX_BYTES (default 5 MiB).
+	//   - timeoutMs: preview abort timeout in milliseconds (default 2000).
+	// (artifact-preview-binary-rendering-01KQ8TD5 WP07)
+	GetArtifactPreview(ctx context.Context) (enabled bool, maxBytes int64, timeoutMs int64, err error)
 }
 
 // ShortcutsStore is the persistence interface for keyboard shortcut
