@@ -338,6 +338,9 @@ interface WailsBindingsLike {
   Settings_SetShortcuts(m: Record<string, string>): Promise<void>;
   Settings_GetAutoTitleEnabled(): Promise<boolean>;
   Settings_SetAutoTitleEnabled(enabled: boolean): Promise<void>;
+  // per-message-token-meter-01KR3PQR
+  Settings_GetShowPerMessageTokenMeter(): Promise<boolean>;
+  Settings_SetShowPerMessageTokenMeter(enabled: boolean): Promise<void>;
 
   Memory_ListChunks(filter: MemoryListFilter): Promise<MemoryChunk[]>;
   Memory_RememberMessage(
@@ -1303,6 +1306,15 @@ export interface SettingsClient {
   getMCPAutoRestart(): Promise<boolean>;
   /** Persist the MCP auto-restart dial. */
   setMCPAutoRestart(enabled: boolean): Promise<void>;
+
+  // ── per-message-token-meter-01KR3PQR ─────────────────────────────────
+  /**
+   * Returns whether the per-message token meter chip is shown.
+   * Default false (chip hidden — keeps chat uncluttered).
+   */
+  getShowPerMessageTokenMeter(): Promise<boolean>;
+  /** Persist the per-message token meter visibility toggle. */
+  setShowPerMessageTokenMeter(enabled: boolean): Promise<void>;
 }
 
 /**
@@ -2093,6 +2105,10 @@ export function createHarnessClient(): HarnessClient {
       setAutonomy: (layer) => b().Settings_SetAutonomy(layer),
       getMCPAutoRestart: () => b().Settings_GetMCPAutoRestart(),
       setMCPAutoRestart: (enabled) => b().Settings_SetMCPAutoRestart(enabled),
+      getShowPerMessageTokenMeter: () =>
+        b().Settings_GetShowPerMessageTokenMeter(),
+      setShowPerMessageTokenMeter: (enabled) =>
+        b().Settings_SetShowPerMessageTokenMeter(enabled),
     },
     permissions: {
       listGrants: (family) =>
@@ -2587,6 +2603,8 @@ export function createFakeHarnessClient(
       setAutonomy: noop,
       getMCPAutoRestart: async () => true,
       setMCPAutoRestart: noop,
+      getShowPerMessageTokenMeter: async () => false,
+      setShowPerMessageTokenMeter: noop,
     },
     permissions: {
       listGrants: async () => [],

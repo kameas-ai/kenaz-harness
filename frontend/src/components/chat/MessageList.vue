@@ -75,6 +75,12 @@ const props = defineProps<{
    * (the locked default in plan §2.9) when undefined.
    */
   archiveDays?: number;
+  /**
+   * When true, each completed assistant bubble shows a TokenMeterChip.
+   * Driven by the global settings.showPerMessageTokenMeter toggle.
+   * (per-message-token-meter-01KR3PQR)
+   */
+  showTokenMeter?: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -266,6 +272,11 @@ defineExpose({ scrollToBottom });
           :summary-folded-count="summaryFoldCounts.get(m.id) ?? 0"
           :is-archived="isArchivedRow(m)"
           :archived-from-summary-id="m.compactedIntoId ?? ''"
+          :show-token-meter="showTokenMeter === true"
+          :prompt-tokens="m.promptTokens"
+          :completion-tokens="m.completionTokens"
+          :cost-usd="m.costUsd"
+          :message-cost-source="m.messageCostSource"
           @remember="(scope) => emit('remember', m, scope)"
           @save-artifact="() => emit('save-artifact', m)"
           @open-artifact="(a) => emit('open-artifact', a)"

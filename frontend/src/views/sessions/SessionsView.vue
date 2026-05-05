@@ -661,6 +661,10 @@ const hasAnyProvider = computed(() => providers.value.length > 0);
 const memoryEnabled = ref(false);
 const lastRememberError = ref<string | null>(null);
 
+// per-message-token-meter-01KR3PQR: loaded alongside compaction settings
+// so the chip visibility is reactive to settings changes.
+const showPerMessageTokenMeter = ref(false);
+
 // Soft-archive retention window — drives the swept-count placeholder
 // copy in MessageList. Falls back to the locked default 90 (plan §2.9)
 // when settings have not been loaded or the call fails.
@@ -713,6 +717,8 @@ async function refreshCompactionSettings() {
     if (s.contextWindowOverrides && typeof s.contextWindowOverrides === 'object') {
       contextWindowOverrides.value = s.contextWindowOverrides;
     }
+    // per-message-token-meter-01KR3PQR
+    showPerMessageTokenMeter.value = s.showPerMessageTokenMeter === true;
   } catch {
     // Soft-fail: leave the locked default in place.
   }
@@ -1225,6 +1231,7 @@ function formatSize(bytes: number): string {
             :artifacts-by-message="artifactsByMessage"
             :swept-count="session.sweptCount.value"
             :archive-days="compactionArchiveDays"
+            :show-token-meter="showPerMessageTokenMeter"
             @remember="onRemember"
             @save-artifact="onSaveArtifactFromMessage"
             @open-artifact="openArtifactPreview"
