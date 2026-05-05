@@ -65,6 +65,20 @@ function mountWith(opts: MountOpts = {}) {
         collapsed: 0,
         pinned: 0,
       }),
+      healthSnapshot: async () => ({
+        counts: {
+          total: 0,
+          raw: 0,
+          narrative: 0,
+          longTermPromoted: 0,
+          embedded: 0,
+          unembedded: 0,
+        },
+        activity: { captured: 0, pruned: 0, promoted: 0 },
+        embedder: { kind: 'noop', model: '', dimensions: 0 },
+        capturedAt: '',
+      }),
+      testEmbedder: async () => 0,
     },
     sessions: {
       list: async () => [],

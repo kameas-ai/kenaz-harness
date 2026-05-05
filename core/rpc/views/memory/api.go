@@ -86,6 +86,54 @@ type PruneVerdict struct {
 type PrunePreview struct {
 	Verdicts []PruneVerdict `json:"verdicts"`
 	Stats    PruneStats     `json:"stats"`
+	// Rows is the subset of Verdicts whose Action is "drop" or "collapse",
+	// enriched with a human-readable snippet. The UI renders this in the
+	// confirmation modal (§2.5). Populated alongside Verdicts.
+	Rows []PruneRow `json:"rows"`
+}
+
+// PruneRow is one row in the §2.5 prune-preview confirmation modal.
+// It is a projection of the corresponding PruneVerdict plus the
+// short content snippet the user can review before confirming.
+type PruneRow struct {
+	ID      string `json:"id"`
+	Snippet string `json:"snippet"`
+	Reason  string `json:"reason"`
+	Action  string `json:"action"` // "drop" | "collapse"
+}
+
+// HealthCounts holds the per-kind breakdown surfaced in the §2.4 health
+// panel. All values come from indexed passes (no full-table scan).
+type HealthCounts struct {
+	Total            int `json:"total"`
+	Raw              int `json:"raw"`              // ScopeKind=="session"
+	Narrative        int `json:"narrative"`        // reserved; always 0 until narrative-layer ships
+	LongTermPromoted int `json:"longTermPromoted"` // ScopeKind=="global" | "long_term"
+	Embedded         int `json:"embedded"`         // len(Embedding) > 0
+	Unembedded       int `json:"unembedded"`       // len(Embedding) == 0
+}
+
+// HealthActivity summarises the last-7-day window shown in the §2.4 panel.
+type HealthActivity struct {
+	Captured int `json:"captured"` // chunks created in the last 7d
+	Pruned   int `json:"pruned"`   // always 0 (no audit journal yet)
+	Promoted int `json:"promoted"` // chunks promoted to global in the last 7d
+}
+
+// HealthEmbedder surfaces static embedder properties (no network call).
+type HealthEmbedder struct {
+	Kind       string `json:"kind"`
+	Model      string `json:"model"`
+	Dimensions int    `json:"dimensions"`
+}
+
+// HealthSnapshot is the wire shape returned by Memory_HealthSnapshot.
+// All counts come from a single O(n) pass over the in-RAM store.
+type HealthSnapshot struct {
+	Counts     HealthCounts   `json:"counts"`
+	Activity   HealthActivity `json:"activity"`
+	Embedder   HealthEmbedder `json:"embedder"`
+	CapturedAt string         `json:"capturedAt"` // RFC3339 UTC
 }
 
 // MemoryAPI is the view-scoped accessor exposed via HarnessAPI.
@@ -124,4 +172,14 @@ type MemoryAPI interface {
 	// RunPruneNow applies the prune sweep immediately and returns the
 	// resulting stats. Bypasses the scheduler's cadence.
 	RunPruneNow(ctx context.Context, scope string) (PruneStats, error)
+	// HealthSnapshot returns an at-a-glance health snapshot for the §2.4
+	// memory health dashboard. All counts are computed from indexed
+	// passes (no full-table scan). The embedder argument is threaded
+	// through the impl so the UI can display provider/model/dimensions
+	// without a separate round-trip.
+	HealthSnapshot(ctx context.Context) (HealthSnapshot, error)
+	// TestEmbedder probes the wired embedder against the fixed string
+	// "hello world" and returns the resulting vector dimensions (or an
+	// error). Used by the [Test embedder] button in the §2.4 panel.
+	TestEmbedder(ctx context.Context) (int, error)
 }

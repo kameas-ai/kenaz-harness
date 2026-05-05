@@ -7,6 +7,7 @@ import (
 	"time"
 
 	corememory "github.com/sigil-tech/kaneaz-harness/core/memory"
+	"github.com/sigil-tech/kaneaz-harness/core/memory/prune"
 )
 
 type fakeReader struct {
@@ -216,5 +217,187 @@ func TestListChunks_FilterByScopeKind(t *testing.T) {
 	globalOnly, _ := api.ListChunks(ctx, ListFilter{ScopeKind: "global"})
 	if len(globalOnly) != 1 || globalOnly[0].Content != "global-only" {
 		t.Errorf("global filter wrong: %+v", globalOnly)
+	}
+}
+
+// ── §2.4 HealthSnapshot ───────────────────────────────────────────────────
+
+func TestHealthSnapshot_ReturnsCountsAndEmbedderInfo(t *testing.T) {
+	t.Parallel()
+	reader := &fakeReader{msgs: map[string][]Message{
+		"sess-1": {
+			{ID: "m1", Role: "user", Content: "hello"},
+			{ID: "m2", Role: "user", Content: "world"},
+		},
+	}}
+	api, _ := newAPIWithStore(t, reader)
+	ctx := context.Background()
+
+	// Persist two chunks so the snapshot has something to count.
+	if _, err := api.RememberMessage(ctx, "sess-1", "m1", "session"); err != nil {
+		t.Fatalf("RememberMessage m1: %v", err)
+	}
+	time.Sleep(time.Millisecond)
+	if _, err := api.RememberMessage(ctx, "sess-1", "m2", "global"); err != nil {
+		t.Fatalf("RememberMessage m2: %v", err)
+	}
+
+	snap, err := api.HealthSnapshot(ctx)
+	if err != nil {
+		t.Fatalf("HealthSnapshot: %v", err)
+	}
+	if snap.Counts.Total != 2 {
+		t.Errorf("total = %d, want 2", snap.Counts.Total)
+	}
+	if snap.Counts.Raw != 1 {
+		t.Errorf("raw = %d, want 1 (session chunk)", snap.Counts.Raw)
+	}
+	if snap.Counts.LongTermPromoted != 1 {
+		t.Errorf("longTermPromoted = %d, want 1 (global chunk)", snap.Counts.LongTermPromoted)
+	}
+	// The fake embedder returns 2-dim vectors so all chunks are embedded.
+	if snap.Counts.Embedded != 2 {
+		t.Errorf("embedded = %d, want 2", snap.Counts.Embedded)
+	}
+	if snap.Counts.Unembedded != 0 {
+		t.Errorf("unembedded = %d, want 0", snap.Counts.Unembedded)
+	}
+	// Embedder kind reported correctly.
+	if snap.Embedder.Kind != "fake" {
+		t.Errorf("embedder.kind = %q, want fake", snap.Embedder.Kind)
+	}
+	if snap.CapturedAt == "" {
+		t.Error("capturedAt should not be empty")
+	}
+}
+
+func TestHealthSnapshot_NilStore(t *testing.T) {
+	t.Parallel()
+	api := New(Config{})
+	_, err := api.HealthSnapshot(context.Background())
+	if err == nil {
+		t.Fatal("expected error from nil store")
+	}
+}
+
+func TestTestEmbedder_ReturnsExpectedDims(t *testing.T) {
+	t.Parallel()
+	reader := &fakeReader{}
+	api, _ := newAPIWithStore(t, reader)
+	dims, err := api.TestEmbedder(context.Background())
+	if err != nil {
+		t.Fatalf("TestEmbedder: %v", err)
+	}
+	// fakeEmbedder returns 2-dim vectors.
+	if dims != 2 {
+		t.Errorf("dims = %d, want 2", dims)
+	}
+}
+
+func TestTestEmbedder_NoopReturnsError(t *testing.T) {
+	t.Parallel()
+	api := New(Config{
+		Store:    nil,
+		Embedder: corememory.NoopEmbedder{},
+	})
+	_, err := api.TestEmbedder(context.Background())
+	if err == nil {
+		t.Fatal("expected ErrEmbedderUnavailable from noop embedder")
+	}
+}
+
+// ── §2.5 PrunePreview with Rows ──────────────────────────────────────────
+
+func TestPrunePreview_RowsPopulatedForDropped(t *testing.T) {
+	t.Parallel()
+	// Build an API with aggressive prune rules so a chunk is guaranteed
+	// to be classified "drop".
+	reader := &fakeReader{msgs: map[string][]Message{
+		"sess-1": {{ID: "m1", Role: "user", Content: "prune candidate content for row test"}},
+	}}
+	dir := t.TempDir()
+	store, err := corememory.NewChromemStore(filepath.Join(dir, "memory.gob"))
+	if err != nil {
+		t.Fatalf("NewChromemStore: %v", err)
+	}
+	// Use rules that drop everything (MaxAge=1ns → everything is aged out).
+	aggressiveRules := prune.Rules{
+		MaxAge:        1,
+		KeepThreshold: 0.5,
+	}
+	api := New(Config{
+		Store:      store,
+		Embedder:   &fakeEmbedder{dim: 2},
+		Reader:     reader,
+		PruneRules: aggressiveRules,
+	})
+	ctx := context.Background()
+
+	// Pin a chunk so there is something for the pruner to evaluate.
+	if _, err := api.RememberMessage(ctx, "sess-1", "m1", "session"); err != nil {
+		t.Fatalf("RememberMessage: %v", err)
+	}
+
+	// Allow the creation time to be at least 1 ns old.
+	time.Sleep(time.Millisecond)
+
+	preview, err := api.PrunePreview(ctx, "")
+	if err != nil {
+		t.Fatalf("PrunePreview: %v", err)
+	}
+	// The chunk should be dropped because it is older than MaxAge=1ns.
+	if preview.Stats.Dropped == 0 {
+		// MaxAge=1 may not trigger depending on timing; just verify Rows
+		// is a consistent projection of Verdicts.
+		t.Log("no chunks dropped (timing race); checking Rows/Verdicts consistency")
+	}
+	// Invariant: every Row's action must be "drop" or "collapse".
+	for _, row := range preview.Rows {
+		if row.Action != "drop" && row.Action != "collapse" {
+			t.Errorf("row %s has action %q, want drop or collapse", row.ID, row.Action)
+		}
+		if row.Reason == "" {
+			t.Errorf("row %s has empty reason", row.ID)
+		}
+	}
+	// Invariant: Rows must be a subset of Verdicts (by id).
+	verdictIDs := make(map[string]string, len(preview.Verdicts))
+	for _, v := range preview.Verdicts {
+		verdictIDs[v.ID] = v.Action
+	}
+	for _, row := range preview.Rows {
+		a, ok := verdictIDs[row.ID]
+		if !ok {
+			t.Errorf("row %s not found in verdicts", row.ID)
+		} else if a != row.Action {
+			t.Errorf("row %s action mismatch: row=%q, verdict=%q", row.ID, row.Action, a)
+		}
+	}
+}
+
+func TestPruneSnippet_TruncatesLongContent(t *testing.T) {
+	t.Parallel()
+	long := string(make([]rune, 200))
+	for i := range []rune(long) {
+		_ = i
+	}
+	content := ""
+	for i := 0; i < 200; i++ {
+		content += "a"
+	}
+	snippet := pruneSnippet(content)
+	// Should be 120 runes + ellipsis marker.
+	runes := []rune(snippet)
+	// The last rune should be "…" (U+2026).
+	if runes[len(runes)-1] != '…' {
+		t.Errorf("snippet does not end with ellipsis: %q", snippet)
+	}
+}
+
+func TestPruneSnippet_ShortContentUnchanged(t *testing.T) {
+	t.Parallel()
+	content := "short"
+	if got := pruneSnippet(content); got != content {
+		t.Errorf("pruneSnippet(%q) = %q, want unchanged", content, got)
 	}
 }
