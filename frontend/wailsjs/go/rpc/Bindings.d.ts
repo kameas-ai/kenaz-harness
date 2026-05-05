@@ -395,6 +395,14 @@ export function Settings_GetConfirmEach():Promise<boolean>;
 
 export function Settings_GetFSRequestAccessEnabled():Promise<boolean>;
 
+export function Settings_GetFSReadEnabled():Promise<boolean>;
+
+export function Settings_SetFSReadEnabled(arg1:boolean):Promise<void>;
+
+export function Settings_GetFSWriteEnabled():Promise<boolean>;
+
+export function Settings_SetFSWriteEnabled(arg1:boolean):Promise<void>;
+
 export function Settings_GetMCPAutoRestart():Promise<boolean>;
 
 export function Settings_GetMaxAgentTurns():Promise<number>;

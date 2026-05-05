@@ -630,6 +630,45 @@ func (b *Bindings) Settings_SetFSRequestAccessEnabled(enabled bool) error {
 	return b.storeFn().SaveFSRequestAccessEnabled(enabled)
 }
 
+// Settings_GetFSReadEnabled exposes the read-family builtin filesystem
+// tool opt-in (kaneaz__read_file, kaneaz__list_dir, kaneaz__glob,
+// kaneaz__grep, kaneaz__list_open_worklist). Default false — tools are
+// off until the user enables them in Settings → Tools.
+func (b *Bindings) Settings_GetFSReadEnabled() (bool, error) {
+	if b.storeFn == nil {
+		return false, nil
+	}
+	return b.storeFn().LoadFSReadEnabled()
+}
+
+// Settings_SetFSReadEnabled persists the read-family filesystem tool
+// opt-in. Changes take effect on the next model turn without restarting.
+func (b *Bindings) Settings_SetFSReadEnabled(enabled bool) error {
+	if b.storeFn == nil {
+		return nil
+	}
+	return b.storeFn().SaveFSReadEnabled(enabled)
+}
+
+// Settings_GetFSWriteEnabled exposes the write-family builtin filesystem
+// tool opt-in (kaneaz__write_file, kaneaz__edit_file). Default false —
+// tools are off until the user enables them in Settings → Tools.
+func (b *Bindings) Settings_GetFSWriteEnabled() (bool, error) {
+	if b.storeFn == nil {
+		return false, nil
+	}
+	return b.storeFn().LoadFSWriteEnabled()
+}
+
+// Settings_SetFSWriteEnabled persists the write-family filesystem tool
+// opt-in. Changes take effect on the next model turn without restarting.
+func (b *Bindings) Settings_SetFSWriteEnabled(enabled bool) error {
+	if b.storeFn == nil {
+		return nil
+	}
+	return b.storeFn().SaveFSWriteEnabled(enabled)
+}
+
 // Settings_GetMaxAgentTurns exposes the chat-graph LoopNode iteration
 // cap (default DefaultMaxAgentTurns = 25). The chassis (chat runner)
 // reads the effective value on every chat run start so the dial takes
