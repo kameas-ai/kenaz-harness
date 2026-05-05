@@ -44,6 +44,19 @@ type Store interface {
 	// this with the attachments source's count to decide on-disk file
 	// liveness.
 	RefcountFor(ctx context.Context, contentHash string) (int, error)
+
+	// WriteVersion appends a new revision to artifact_versions for the
+	// given artifactID. The version number is auto-selected as
+	// max(version)+1 for the artifact (starting at 1). Returns the
+	// inserted ArtifactVersion. ErrArtifactNotFound when artifactID has
+	// no matching artifacts row. ErrVersionConflict on a rare concurrent
+	// insert race (caller may retry).
+	WriteVersion(ctx context.Context, v ArtifactVersion) (ArtifactVersion, error)
+
+	// ListVersions returns all version rows for an artifact, ordered by
+	// version ASC. Returns an empty slice (not ErrArtifactNotFound) when
+	// the artifact exists but has no version rows yet.
+	ListVersions(ctx context.Context, artifactID string) ([]ArtifactVersion, error)
 }
 
 // SessionProjectReader is the narrow read surface artifacts uses to
