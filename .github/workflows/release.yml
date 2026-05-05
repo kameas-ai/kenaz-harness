@@ -267,6 +267,25 @@ jobs:
       # The Trusted Signing step below uses `files-folder-filter: exe` which
       # picks up ALL .exe files in build/bin, so the installer gets signed
       # without any extra configuration.
+      # GitHub-hosted windows-latest runners do NOT pre-install NSIS. v0.5.1
+      # release.yml run silently emitted "Warning: Cannot create installer:
+      # makensis not found" and produced no .exe; the next step's hard-error
+      # path-check then failed the job. Install NSIS via chocolatey here so
+      # `wails build -nsis` actually has makensis on PATH.
+      - name: install NSIS toolchain (windows-amd64 only)
+        if: runner.os == 'Windows' && matrix.wails_platform == 'windows/amd64'
+        shell: pwsh
+        run: |
+          choco install nsis --no-progress -y
+          $nsisPath = "C:\Program Files (x86)\NSIS"
+          if (Test-Path "$nsisPath\makensis.exe") {
+            Add-Content $env:GITHUB_PATH $nsisPath
+            & "$nsisPath\makensis.exe" /VERSION
+          } else {
+            Write-Error "makensis.exe not found at expected $nsisPath after choco install"
+            exit 1
+          }
+
       - name: wails build (nsis installer, windows-amd64 only)
         if: runner.os == 'Windows' && matrix.wails_platform == 'windows/amd64'
         shell: bash
