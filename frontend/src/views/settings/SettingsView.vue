@@ -302,6 +302,43 @@ async function testEmbedder() {
   }
 }
 
+// Onboarding (harness-self-mcp-onboarding-01KQ8TDU WP08)
+// "Reconfigure with assistant" triggers a fresh kind=onboarding session.
+const onboardingReconfiguring = ref(false);
+const onboardingError = ref<string | null>(null);
+const onboardingHarnessSelfMCPDisabled = ref(false);
+
+async function loadOnboardingState() {
+  try {
+    const state = await client.onboarding.state();
+    onboardingHarnessSelfMCPDisabled.value = state.harnessSelfMCPDisabled;
+  } catch {
+    // API not wired in this build — silently skip.
+  }
+}
+
+async function reconfigureWithAssistant() {
+  onboardingReconfiguring.value = true;
+  onboardingError.value = null;
+  try {
+    // Pick the "chat" starter as default for reconfiguration; the user
+    // can change provider/tools from within the onboarding session.
+    const resp = await client.onboarding.restartPhase2({ starterId: 'chat' });
+    if (resp.sessionId) {
+      // Navigate to the new onboarding session.
+      // Delay import to avoid making this file depend on vue-router at the
+      // module level (consistent with other views that lazy-navigate).
+      const { useRouter } = await import('vue-router');
+      const router = useRouter();
+      await router.push(`/sessions/${resp.sessionId}`);
+    }
+  } catch (e: unknown) {
+    onboardingError.value = e instanceof Error ? e.message : String(e);
+  } finally {
+    onboardingReconfiguring.value = false;
+  }
+}
+
 // per-message-token-meter-01KR3PQR
 
 async function loadShowPerMessageTokenMeter() {
@@ -376,6 +413,7 @@ async function refresh() {
   await loadAutoTitleEnabled();
   await loadEmbedderConfig();
   await loadShowPerMessageTokenMeter();
+  await loadOnboardingState();
 }
 
 function setCompactionTier(t: CompactionAggressiveness) {
@@ -1394,6 +1432,37 @@ onMounted(() => {
         >
           No global context yet. Pick a file from the library to attach.
         </p>
+      </section>
+
+      <!-- Onboarding (harness-self-mcp-onboarding-01KQ8TDU WP08) -->
+      <section
+        v-if="!onboardingHarnessSelfMCPDisabled"
+        data-testid="onboarding-section"
+      >
+        <h2 class="font-ui text-[11px] uppercase tracking-[0.18em] text-ink-subtle">
+          Onboarding
+        </h2>
+        <p class="mt-1 font-ui text-[11px] text-ink-muted">
+          Reopen the configuration assistant to change providers, install MCP
+          servers, or update Cedar policies with guided help.
+        </p>
+        <div
+          v-if="onboardingError"
+          class="mt-2 rounded-sm border border-signal-danger bg-surface-1 px-3 py-2 font-ui text-[11px] text-signal-danger"
+          role="alert"
+          data-testid="onboarding-error"
+        >
+          {{ onboardingError }}
+        </div>
+        <button
+          type="button"
+          :disabled="onboardingReconfiguring"
+          class="mt-3 rounded-sm border border-accent bg-surface-1 px-3 py-2 font-ui text-[12px] text-accent hover:bg-accent-glow disabled:opacity-50"
+          data-testid="reconfigure-with-assistant"
+          @click="reconfigureWithAssistant"
+        >
+          {{ onboardingReconfiguring ? 'Opening session…' : 'Reconfigure with assistant' }}
+        </button>
       </section>
 
       <!-- Keyboard shortcuts (keyboard-shortcuts-settings-01KQ8TDR) -->
