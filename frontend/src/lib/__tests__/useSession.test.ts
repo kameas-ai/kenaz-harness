@@ -2,10 +2,11 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { defineComponent, h, ref, nextTick } from 'vue';
 import { mount } from '@vue/test-utils';
 import { useSession } from '@/lib/useSession';
+import { useSessions } from '@/lib/useHarnessAPI';
 import { provideFakeClient } from '@/lib/harnessClientContext';
 import type { HarnessClient } from '@/lib/harnessClient';
 import { setConnectionState } from '@/lib/useConnectionState';
-import type { Message } from '@/lib/types';
+import type { Message, Session } from '@/lib/types';
 
 interface FakeRuntime {
   EventsOn: (topic: string, cb: (payload: unknown) => void) => () => void;
@@ -452,5 +453,192 @@ describe('useSession (chat-ui)', () => {
     await vi.advanceTimersByTimeAsync(31_000);
     expect(session.streamingTimedOut.value).toBe(true);
     w.unmount();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// useSessions — broker-driven real-time refresh (v0.5.3 fix)
+// ---------------------------------------------------------------------------
+
+function makeSession(overrides: Partial<Session>): Session {
+  return {
+    id: 's-1',
+    name: 'My Session',
+    createdAt: '2026-01-01T00:00:00Z',
+    updatedAt: '2026-01-01T00:00:00Z',
+    systemPrompt: '',
+    contextKind: 'system',
+    autoTitled: false,
+    ...overrides,
+  };
+}
+
+/** Minimal stub that satisfies all SessionsClient members. Override individual
+ * methods by spreading in the overrides param. Used by the useSessions tests
+ * to avoid repeating all 15+ members in every test case. */
+function makeSessionsStub(
+  overrides: Partial<HarnessClient['sessions']>,
+): HarnessClient['sessions'] {
+  const stub: HarnessClient['sessions'] = {
+    list: async () => [],
+    get: async (id) => makeSession({ id }),
+    create: async () => makeSession({}),
+    rename: async () => undefined,
+    delete: async () => undefined,
+    reorder: async () => undefined,
+    startStream: async () => '',
+    stopStream: async () => undefined,
+    listMessages: async () => [],
+    listMessagesActive: async () => ({ messages: [], sweptCount: 0 }),
+    listMessagesAll: async () => ({ messages: [], sweptCount: 0 }),
+    appendMessage: async (id, role, content) => makeMessage({ id: 'x', sessionId: id, role, content }),
+    sendMessageWithBlocks: async () => makeMessage({}),
+    saveDraft: async () => undefined,
+    loadDraft: async () => '',
+    setSystemPrompt: async () => undefined,
+    moveToProject: async () => undefined,
+    resumeMessage: async () => ({ subscriptionId: '', originalMessageId: '' }),
+    getUsage: async () => ({ promptTokens: 0, completionTokens: 0, totalTokens: 0, costUsd: 0, costSource: 'unknown', messageCount: 0, pricingDataDate: '' }),
+    saveAsArtifact: async () => ({ id: '', sessionId: '', title: '', mimeType: '', byteSize: 0, source: 'user_pin' as const, sourceRef: { messageId: '' }, scopeKind: 'session' as const, createdAt: '', contentHash: '' }),
+    suggestTitle: async () => '',
+    clearTitle: async () => undefined,
+    getAutonomy: async () => ({ level: null, overrides: {} }),
+    setAutonomy: async () => undefined,
+    resolveAutonomy: async () => ({
+      resolved: { maxIterations: 0, askOnAmbiguity: '', autoApproveFamilies: [], tokenCeilingPerTurn: 0, recapStyle: '', continueOnError: '', destructiveActionPosture: '', sourceTrace: {}, tier: '' },
+      global: { level: null, overrides: {} },
+      project: { level: null, overrides: {} },
+      session: { level: null, overrides: {} },
+    }),
+  };
+  return { ...stub, ...overrides };
+}
+
+describe('useSessions — broker-driven refresh', () => {
+  let rt: FakeRuntime;
+
+  beforeEach(() => {
+    rt = installFakeRuntime();
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    uninstallRuntime();
+    vi.useRealTimers();
+  });
+
+  function mountWithSessions(seed: Partial<HarnessClient>) {
+    let sessions: ReturnType<typeof useSessions> | null = null;
+    const Comp = defineComponent({
+      setup() {
+        sessions = useSessions();
+        return () => h('div');
+      },
+    });
+    const w = mount(Comp, {
+      global: {
+        plugins: [
+          {
+            install(app) {
+              provideFakeClient(app, seed);
+            },
+          },
+        ],
+      },
+    });
+    return {
+      w,
+      get sessions() {
+        if (!sessions) throw new Error('no sessions');
+        return sessions;
+      },
+    };
+  }
+
+  it('external-rename event arrives → debounced refresh() runs → list updates', async () => {
+    const initial = [makeSession({ id: 's-1', name: 'Old Name' })];
+    const renamed = [makeSession({ id: 's-1', name: 'New Name' })];
+    let listCallCount = 0;
+    const { w, sessions } = mountWithSessions({
+      sessions: makeSessionsStub({
+        list: async () => {
+          listCallCount += 1;
+          return listCallCount === 1 ? initial : renamed;
+        },
+      }),
+    });
+
+    // Trigger the initial load via the LeftRail pattern.
+    await sessions.refresh();
+    expect(sessions.list.value[0].name).toBe('Old Name');
+    expect(listCallCount).toBe(1);
+
+    // Simulate the backend emitting session.list_changed (e.g. from auto-title).
+    rt.emit('session.list_changed', { reason: 'renamed', sessionId: 's-1', timestamp: Date.now() });
+
+    // Before debounce fires, the list should not have changed yet.
+    expect(sessions.list.value[0].name).toBe('Old Name');
+
+    // Advance past the 150 ms debounce.
+    await vi.advanceTimersByTimeAsync(160);
+    await nextTick();
+
+    expect(sessions.list.value[0].name).toBe('New Name');
+    expect(listCallCount).toBe(2);
+    w.unmount();
+  });
+
+  it('burst of events collapses to a single refresh after the debounce window', async () => {
+    let listCallCount = 0;
+    const { w, sessions } = mountWithSessions({
+      sessions: makeSessionsStub({
+        list: async () => {
+          listCallCount += 1;
+          return [makeSession({ id: `s-${listCallCount}`, name: `Call ${listCallCount}` })];
+        },
+      }),
+    });
+
+    // Initial load.
+    await sessions.refresh();
+    const afterInitial = listCallCount;
+
+    // Emit three events in rapid succession — all within the debounce window.
+    rt.emit('session.list_changed', { reason: 'created', timestamp: Date.now() });
+    rt.emit('session.list_changed', { reason: 'title_set', timestamp: Date.now() });
+    rt.emit('session.list_changed', { reason: 'renamed', timestamp: Date.now() });
+
+    // Advance past the debounce window.
+    await vi.advanceTimersByTimeAsync(200);
+    await nextTick();
+
+    // Only one additional refresh should have fired for the three events.
+    expect(listCallCount).toBe(afterInitial + 1);
+    w.unmount();
+  });
+
+  it('unsubscribes and cancels pending debounce on unmount', async () => {
+    let listCallCount = 0;
+    const { w, sessions } = mountWithSessions({
+      sessions: makeSessionsStub({
+        list: async () => {
+          listCallCount += 1;
+          return [];
+        },
+      }),
+    });
+
+    await sessions.refresh();
+    const afterInitial = listCallCount;
+
+    // Emit event, then unmount before the debounce fires.
+    rt.emit('session.list_changed', { reason: 'deleted', timestamp: Date.now() });
+    w.unmount();
+
+    // Advance past the debounce window — no additional refresh should fire.
+    await vi.advanceTimersByTimeAsync(300);
+    await nextTick();
+
+    expect(listCallCount).toBe(afterInitial);
   });
 });

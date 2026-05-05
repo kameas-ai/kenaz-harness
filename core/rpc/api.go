@@ -806,6 +806,13 @@ func New(c *core.Core) *API {
 		a.sessionsAPI = sessions.WithTitleGeneratorOpt(a.sessionsAPI, gen)
 		logging.L().Info("sessions.titlegenerator.wired")
 	}
+	// Wire the broker into the sessions API so every session-list mutation
+	// (create, rename, delete, move, title-set, title-cleared) emits
+	// TopicSessionListChanged. The LeftRail's useSessions() composable
+	// subscribes and debounces a refresh() call on receipt (v0.5.3 fix).
+	if a.broker != nil {
+		a.sessionsAPI = sessions.WithBrokerOpt(a.sessionsAPI, a.broker)
+	}
 	if c != nil && a.stdioPool != nil {
 		c.SetMCP(a.stdioPool)
 		// Persisted-recipes bootstrap — Core.Start invokes this once
@@ -878,6 +885,9 @@ func New(c *core.Core) *API {
 		Conversations: a.convMgr,
 		Sessions:      sessionManagerOrNil(c),
 		Recommender:   newBranchRecommender(),
+		// Broker enables LeftRail real-time updates on branch creation
+		// (branch creates a new child session row): v0.5.3 fix.
+		Broker: a.broker,
 	})
 
 	// Agent-graph view surface — graph manager already built above so

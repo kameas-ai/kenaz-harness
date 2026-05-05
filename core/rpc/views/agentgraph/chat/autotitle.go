@@ -46,6 +46,13 @@ type AutoTitleGenerator interface {
 	GenerateTitle(ctx context.Context, transcript autotitle.Transcript) (string, error)
 }
 
+// AutoTitleListBroker is the narrow publish surface the auto-title trigger
+// needs to emit TopicSessionListChanged after a successful title write.
+// Production binds this to *rpc.StreamBroker; tests inject a recording fake.
+type AutoTitleListBroker interface {
+	Publish(topic string, payload any)
+}
+
 // AutoTitleDeps bundles every collaborator the chat-runner auto-title
 // trigger requires. All fields are required when AutoTitleDeps is non-nil.
 type AutoTitleDeps struct {
@@ -58,6 +65,10 @@ type AutoTitleDeps struct {
 	// EffectiveEnabled returns true when the feature flag is on.
 	// Defaults to an always-true stub; WP03 will wire the real flag.
 	EffectiveEnabled func() bool
+	// Broker is the optional event publisher for TopicSessionListChanged.
+	// When non-nil, a successful auto-title write emits a "title_set"
+	// event so the LeftRail refreshes without polling (v0.5.3 fix).
+	Broker AutoTitleListBroker
 }
 
 // autoTitleEnabled reports whether the feature flag allows auto-titling.
@@ -250,6 +261,24 @@ func (r *ChatRunner) fireAutoTitle(sessionID, profileID, modelOverride string) {
 			"duration_ms": durationMS,
 		})
 	}
+	// Notify the frontend so the LeftRail updates without polling.
+	if deps.Broker != nil {
+		deps.Broker.Publish("session.list_changed", autoTitleListChangedPayload{
+			Reason:    "title_set",
+			SessionID: sessionID,
+			Timestamp: time.Now().UnixMilli(),
+		})
+	}
+}
+
+// autoTitleListChangedPayload is the local mirror of
+// rpc.SessionListChangedPayload. Duplicated here to avoid the import
+// cycle rpc → sessions/autotitle → rpc. JSON field names are identical
+// so the frontend deserialises them the same way.
+type autoTitleListChangedPayload struct {
+	Reason    string `json:"reason"`
+	SessionID string `json:"sessionId,omitempty"`
+	Timestamp int64  `json:"timestamp"`
 }
 
 // hasAssistantMessageInSession reports whether the session messages contain
