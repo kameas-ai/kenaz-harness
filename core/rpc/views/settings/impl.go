@@ -732,6 +732,82 @@ func (s *FileStore) SaveMCPAutoRestart(enabled bool) error {
 	return s.saveLocked(got)
 }
 
+// ── Builtin filesystem tool FileStore accessors (builtin-filesystem-tools-01KR3N4P) ──
+
+// LoadFSReadEnabled returns the read-family filesystem tool opt-in.
+// Default false (tools off until the user enables them). Errors return
+// the safe default (false) so the tools remain disabled when the
+// settings file is unreadable.
+func (s *FileStore) LoadFSReadEnabled() (bool, error) {
+	got, err := s.LoadAll()
+	if err != nil {
+		return got.FSReadEnabled(), err
+	}
+	return got.FSReadEnabled(), nil
+}
+
+// SaveFSReadEnabled persists the read-family filesystem tool opt-in.
+// Persists as the inverted FSReadDisabled bit.
+func (s *FileStore) SaveFSReadEnabled(enabled bool) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	got, err := s.loadLocked()
+	if err != nil {
+		return err
+	}
+	got.FSReadDisabled = !enabled
+	return s.saveLocked(got)
+}
+
+// LoadFSWriteEnabled returns the write-family filesystem tool opt-in.
+// Default false (tools off). Errors return the safe default (false).
+func (s *FileStore) LoadFSWriteEnabled() (bool, error) {
+	got, err := s.LoadAll()
+	if err != nil {
+		return got.FSWriteEnabled(), err
+	}
+	return got.FSWriteEnabled(), nil
+}
+
+// SaveFSWriteEnabled persists the write-family filesystem tool opt-in.
+// Persists as the inverted FSWriteDisabled bit.
+func (s *FileStore) SaveFSWriteEnabled(enabled bool) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	got, err := s.loadLocked()
+	if err != nil {
+		return err
+	}
+	got.FSWriteDisabled = !enabled
+	return s.saveLocked(got)
+}
+
+// LoadEditFileArtifactSyncEnabled returns the per-user opt-in for the
+// edit-file artifact sync pipeline. Default true (enabled, matching
+// the zero-value of EditFileArtifactSyncDisabled). Errors return the
+// safe default (true) so the feature stays on through a settings glitch.
+func (s *FileStore) LoadEditFileArtifactSyncEnabled() (bool, error) {
+	got, err := s.LoadAll()
+	if err != nil {
+		return got.EditFileArtifactSyncEnabled(), err
+	}
+	return got.EditFileArtifactSyncEnabled(), nil
+}
+
+// SaveEditFileArtifactSyncEnabled persists the per-user opt-in for the
+// edit-file artifact sync pipeline. Persists as the inverted
+// EditFileArtifactSyncDisabled bit.
+func (s *FileStore) SaveEditFileArtifactSyncEnabled(enabled bool) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	got, err := s.loadLocked()
+	if err != nil {
+		return err
+	}
+	got.EditFileArtifactSyncDisabled = !enabled
+	return s.saveLocked(got)
+}
+
 // encodeAutonomyField marshals a Layer to the json.RawMessage stored
 // on Settings.Autonomy. The empty Layer encodes as nil so it omits via
 // `omitempty` on disk.
@@ -1283,6 +1359,47 @@ func (m *memoryStore) SaveMCPAutoRestart(enabled bool) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.data.MCPAutoRestartDisabled = !enabled
+	return nil
+}
+
+// ── Builtin filesystem tool memoryStore accessors (builtin-filesystem-tools-01KR3N4P) ──
+
+func (m *memoryStore) LoadFSReadEnabled() (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.data.FSReadEnabled(), nil
+}
+
+func (m *memoryStore) SaveFSReadEnabled(enabled bool) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.data.FSReadDisabled = !enabled
+	return nil
+}
+
+func (m *memoryStore) LoadFSWriteEnabled() (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.data.FSWriteEnabled(), nil
+}
+
+func (m *memoryStore) SaveFSWriteEnabled(enabled bool) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.data.FSWriteDisabled = !enabled
+	return nil
+}
+
+func (m *memoryStore) LoadEditFileArtifactSyncEnabled() (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.data.EditFileArtifactSyncEnabled(), nil
+}
+
+func (m *memoryStore) SaveEditFileArtifactSyncEnabled(enabled bool) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.data.EditFileArtifactSyncDisabled = !enabled
 	return nil
 }
 

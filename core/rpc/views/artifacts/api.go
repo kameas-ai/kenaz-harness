@@ -34,6 +34,11 @@ type ArtifactSourceRef struct {
 	ToolCallID     string `json:"toolCallId,omitempty"`
 	CodeBlockIndex int    `json:"codeBlockIndex,omitempty"`
 	Filename       string `json:"filename,omitempty"`
+	// AbsolutePath is the on-disk path when the artifact originated from
+	// a kaneaz__edit_file / kaneaz__write_file call
+	// (edit-file-artifact-sync-01KQ8TD5 WP01). Enables "Show in Finder"
+	// affordances in the Artifacts tab.
+	AbsolutePath string `json:"absolutePath,omitempty"`
 }
 
 // ArtifactFilter narrows the List query.

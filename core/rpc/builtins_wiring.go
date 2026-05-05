@@ -17,11 +17,20 @@ import (
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/settings"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/tools"
 	corebash "github.com/sigil-tech/kaneaz-harness/core/tools/bash"
+	corefs "github.com/sigil-tech/kaneaz-harness/core/tools/fs"
+	corefsbuiltins "github.com/sigil-tech/kaneaz-harness/core/tools/fsbuiltins"
 	corefsrequest "github.com/sigil-tech/kaneaz-harness/core/tools/fsrequest"
 	coresaveartifact "github.com/sigil-tech/kaneaz-harness/core/tools/saveartifact"
 	corewebsearch "github.com/sigil-tech/kaneaz-harness/core/tools/websearch"
 	"github.com/sigil-tech/kaneaz-harness/core/toolloop"
 )
+
+// GlobalFSReadSet is the process-global ReadSet shared across all sessions.
+// The set tracks which file paths have been read in a given session so the
+// edit_file tool can enforce the read-before-edit contract (ErrEditWithoutRead).
+// Constructed once at startup; all fs builtin tools bind against this instance.
+// (builtin-filesystem-tools-01KR3N4P WP04)
+var GlobalFSReadSet = corefsbuiltins.NewReadSet()
 
 // registerBuiltinTools installs the in-binary tools into the registry.
 // The Settings store gates dispatch via the EnabledFilter; the
@@ -150,6 +159,86 @@ func saveArtifactEnabledLookup(store settings.SettingsStore) func() bool {
 	}
 }
 
+// registerFSBuiltinTools installs the read and write family of builtin
+// filesystem tools into the registry. Each tool is gated behind the
+// per-family settings dial (LoadFSReadEnabled / LoadFSWriteEnabled) so
+// the Tools panel toggles take effect on the next chat turn without a
+// process restart.
+//
+// nil registry is a no-op so the test harness path stays clean. nil
+// cedarEngine falls back to AllowAll (same pattern as websearch).
+// nil store falls back to "disabled" (correct default-off posture for
+// filesystem write access).
+//
+// (builtin-filesystem-tools-01KR3N4P WP02–WP06)
+func registerFSBuiltinTools(
+	registry *toolloop.BuiltinRegistry,
+	cedarEngine *cedar.Engine,
+	store settings.SettingsStore,
+) {
+	if registry == nil {
+		return
+	}
+
+	// Gate: construct a *corefs.Gate with the existing Cedar engine.
+	// When cedarEngine is nil we pass cedar.AllowAll{} explicitly so the
+	// gate's GateOptions.Engine field is a non-nil interface and the Gate
+	// doesn't need to special-case a nil *Engine pointer vs a nil interface.
+	var fsGateEngine cedar.Gate = cedar.AllowAll{}
+	if cedarEngine != nil {
+		fsGateEngine = cedarEngine
+	}
+	gate := corefs.NewGate(corefs.GateOptions{
+		Engine: fsGateEngine,
+	})
+
+	// Per-family enabled closures. Soft-fail to false on transient store
+	// errors so filesystem tools stay off rather than on by default.
+	fsReadEnabled := func() bool {
+		if store == nil {
+			return false
+		}
+		v, err := store.LoadFSReadEnabled()
+		if err != nil {
+			logging.L().Warn("rpc.builtins.fs_read_enabled.read_failed", "err", err.Error())
+			return false
+		}
+		return v
+	}
+	fsWriteEnabled := func() bool {
+		if store == nil {
+			return false
+		}
+		v, err := store.LoadFSWriteEnabled()
+		if err != nil {
+			logging.L().Warn("rpc.builtins.fs_write_enabled.read_failed", "err", err.Error())
+			return false
+		}
+		return v
+	}
+
+	opts := corefsbuiltins.Options{
+		Gate:         gate,
+		ReadSet:      GlobalFSReadSet,
+		ReadEnabled:  fsReadEnabled,
+		WriteEnabled: fsWriteEnabled,
+	}
+
+	fsTools := []toolloop.BuiltinTool{
+		corefsbuiltins.NewReadFileTool(opts),
+		corefsbuiltins.NewListDirTool(opts),
+		corefsbuiltins.NewGlobTool(opts),
+		corefsbuiltins.NewGrepTool(opts),
+		corefsbuiltins.NewWriteFileTool(opts),
+		corefsbuiltins.NewEditFileTool(opts),
+		corefsbuiltins.NewListOpenWorklistTool(opts),
+	}
+	for _, tool := range fsTools {
+		registry.Register(tool)
+		logging.L().Info("rpc.builtins.register", "tool", tool.Name())
+	}
+}
+
 // constructWebSearch builds a websearch.Tool with the package's
 // default aggregator/fetcher/extractor wiring. Returns nil if any
 // component fails to construct (e.g. malformed proxy URL); the
@@ -239,6 +328,35 @@ func builtinEnabledPredicate(s *settings.API) func(string) bool {
 					"tool", name, "err", err.Error())
 				// Default-on: soft-fail to enabled so the tool works on first launch.
 				return true
+			}
+			logging.L().Info("rpc.builtins.predicate", "tool", name, "enabled", v)
+			return v
+
+		// ── Builtin filesystem tools (builtin-filesystem-tools-01KR3N4P) ──
+		// Read-family tools: default OFF until the user opts in from the Tools panel.
+		case corefsbuiltins.NameReadFile,
+			corefsbuiltins.NameListDir,
+			corefsbuiltins.NameGlob,
+			corefsbuiltins.NameGrep,
+			corefsbuiltins.NameListOpenWorklist:
+			v, err := store.LoadFSReadEnabled()
+			if err != nil {
+				logging.L().Warn("rpc.builtins.predicate.read_failed",
+					"tool", name, "err", err.Error())
+				// Default-off: soft-fail to disabled so disk access stays off.
+				return false
+			}
+			logging.L().Info("rpc.builtins.predicate", "tool", name, "enabled", v)
+			return v
+
+		// Write-family tools: default OFF until the user opts in from the Tools panel.
+		case corefsbuiltins.NameWriteFile, corefsbuiltins.NameEditFile:
+			v, err := store.LoadFSWriteEnabled()
+			if err != nil {
+				logging.L().Warn("rpc.builtins.predicate.read_failed",
+					"tool", name, "err", err.Error())
+				// Default-off: soft-fail to disabled.
+				return false
 			}
 			logging.L().Info("rpc.builtins.predicate", "tool", name, "enabled", v)
 			return v

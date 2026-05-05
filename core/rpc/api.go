@@ -621,7 +621,29 @@ func New(c *core.Core) *API {
 			return cfg
 		}
 		artifactSinkConcrete = artifactsview.NewSinkConcrete(a.artifactsMgr, cfgFn, nil)
-		artifactSink = artifactSinkConcrete
+		// edit-file-artifact-sync-01KQ8TD5 WP05: wrap the concrete sink
+		// with the edit-file sync pipeline. The wrapper intercepts
+		// kaneaz__edit_file post-tool calls when HARNESS_EDIT_FILE_ARTIFACT_SYNC=on
+		// and the per-user settings dial is enabled, then captures a
+		// post-edit snapshot of the file as an artifact with AbsolutePath set
+		// in the SourceRef. The CoalesceBuffer deduplicates edits to the same
+		// file within one turn.
+		editSyncBuf := artifactsview.NewCoalesceBuffer()
+		var editFileSyncEnabled artifactsview.EditFileArtifactSyncEnabled
+		if settingsStore != nil {
+			editFileSyncEnabled = func() bool {
+				v, err := settingsStore.LoadEditFileArtifactSyncEnabled()
+				if err != nil {
+					return true // default-on: soft-fail to enabled
+				}
+				return v
+			}
+		}
+		if swe := artifactsview.NewSinkWithEditSync(artifactSinkConcrete, editSyncBuf, editFileSyncEnabled); swe != nil {
+			artifactSink = swe
+		} else {
+			artifactSink = artifactSinkConcrete
+		}
 	}
 
 	// Bash output cache — shared between the bash built-in tool (writes
@@ -1883,6 +1905,11 @@ func newLLMStack(
 		bashCedarEngine = buildCedarEngineOrNil(dataDir)
 	}
 	registerBuiltinTools(c, builtinRegistry, bashStore, artifactsMgr, settingsStore, bashCedarEngine, promptRegistry)
+	// builtin-filesystem-tools-01KR3N4P: register the read/write family of
+	// in-process filesystem tools. Gated behind per-family settings dials
+	// (FSReadEnabled / FSWriteEnabled) so the Tools panel toggles take effect
+	// on the next chat turn. Uses the same Cedar engine as the bash tool.
+	registerFSBuiltinTools(builtinRegistry, bashCedarEngine, settingsStore)
 	builtinFilter := toolloop.NewEnabledFilter(builtinRegistry, builtinEnabledPredicate(settingsImpl))
 	wrappedPool := toolloop.NewBuiltinPool(&mcpPoolAdapter{inner: mcpPool}, builtinFilter)
 	var attResolver llm.AttachmentsResolver
