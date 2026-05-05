@@ -43,6 +43,7 @@ import (
 	updateview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/update"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/workflow"
 	workflowsview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/workflows"
+	storageview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/storage"
 	"github.com/sigil-tech/kaneaz-harness/core/logging"
 	"github.com/sigil-tech/kaneaz-harness/core/mcp/stdio"
 )
@@ -628,45 +629,6 @@ func (b *Bindings) Settings_SetFSRequestAccessEnabled(enabled bool) error {
 		return nil
 	}
 	return b.storeFn().SaveFSRequestAccessEnabled(enabled)
-}
-
-// Settings_GetFSReadEnabled exposes the read-family builtin filesystem
-// tool opt-in (kaneaz__read_file, kaneaz__list_dir, kaneaz__glob,
-// kaneaz__grep, kaneaz__list_open_worklist). Default false — tools are
-// off until the user enables them in Settings → Tools.
-func (b *Bindings) Settings_GetFSReadEnabled() (bool, error) {
-	if b.storeFn == nil {
-		return false, nil
-	}
-	return b.storeFn().LoadFSReadEnabled()
-}
-
-// Settings_SetFSReadEnabled persists the read-family filesystem tool
-// opt-in. Changes take effect on the next model turn without restarting.
-func (b *Bindings) Settings_SetFSReadEnabled(enabled bool) error {
-	if b.storeFn == nil {
-		return nil
-	}
-	return b.storeFn().SaveFSReadEnabled(enabled)
-}
-
-// Settings_GetFSWriteEnabled exposes the write-family builtin filesystem
-// tool opt-in (kaneaz__write_file, kaneaz__edit_file). Default false —
-// tools are off until the user enables them in Settings → Tools.
-func (b *Bindings) Settings_GetFSWriteEnabled() (bool, error) {
-	if b.storeFn == nil {
-		return false, nil
-	}
-	return b.storeFn().LoadFSWriteEnabled()
-}
-
-// Settings_SetFSWriteEnabled persists the write-family filesystem tool
-// opt-in. Changes take effect on the next model turn without restarting.
-func (b *Bindings) Settings_SetFSWriteEnabled(enabled bool) error {
-	if b.storeFn == nil {
-		return nil
-	}
-	return b.storeFn().SaveFSWriteEnabled(enabled)
 }
 
 // Settings_GetMaxAgentTurns exposes the chat-graph LoopNode iteration
@@ -1531,4 +1493,22 @@ func (b *Bindings) Sessions_SetAutonomy(sessionID string, layer autonomy.Layer) 
 // Sessions_ResolveAutonomy folds global → project → session layers.
 func (b *Bindings) Sessions_ResolveAutonomy(sessionID string) (sessions.ResolvedAutonomy, error) {
 	return b.api.Sessions().ResolveAutonomy(b.ctx(), sessionID)
+}
+
+// ── storage health (v0.5.1 migration-doctor) ───────────────────────────
+
+// Storage_GetMigrationDriftReport reads the harness_migrations ledger and
+// the registered migration set, compares them, and returns every
+// discrepancy. Never modifies the database. Wired to the Settings → Health
+// panel's MigrationDriftPanel.vue component.
+func (b *Bindings) Storage_GetMigrationDriftReport() (storageview.DriftReport, error) {
+	return b.api.Storage().GetMigrationDriftReport(b.ctx())
+}
+
+// Storage_ApplyDriftFix repairs an id_mismatch drift entry for the given
+// version. It backs up data.db, then UPDATEs the ledger row's id to the
+// expected value. Returns an error for ledger_only / code_only entries
+// (those require manual intervention).
+func (b *Bindings) Storage_ApplyDriftFix(version int) error {
+	return b.api.Storage().ApplyDriftFix(b.ctx(), version)
 }

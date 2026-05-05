@@ -156,6 +156,15 @@ func (a *registryAdapter) Pending() ([]storage.Migration, error) {
 	return out, nil
 }
 
+func (a *registryAdapter) All() []storage.Migration {
+	migs := a.reg.All()
+	out := make([]storage.Migration, 0, len(migs))
+	for _, m := range migs {
+		out = append(out, fromMigrationsMig(m))
+	}
+	return out
+}
+
 func (a *registryAdapter) Apply(ctx context.Context) error {
 	return a.reg.Apply(ctx)
 }

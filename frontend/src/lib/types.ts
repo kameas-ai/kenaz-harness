@@ -2443,6 +2443,40 @@ export const AUTONOMY_TIER_DESCRIPTIONS: Record<AutonomyTier, string> = {
     'Unbounded iterations. Never asks. All canonical tool families auto-approve. Cedar deny remains the floor.',
 };
 
+// ── Migration drift doctor (v0.5.1 migration-doctor) ───────────────────
+
+/**
+ * DriftEntry — one discrepancy between the harness_migrations ledger and
+ * the registered migration set. Mirrors core/rpc/views/storage.DriftEntry.
+ */
+export interface DriftEntry {
+  /** Migration version number. */
+  version: number;
+  /** ID currently stored in the ledger for this version. Empty for code_only. */
+  ledgerId: string;
+  /** ID the registered migration declares. Empty for ledger_only. */
+  expectedId: string;
+  /**
+   * "id_mismatch" — both ledger and registry present; IDs differ (automatable fix).
+   * "ledger_only" — applied ledger row with no registered migration.
+   * "code_only"   — registered migration not yet applied (normal pending state).
+   */
+  kind: 'id_mismatch' | 'ledger_only' | 'code_only';
+  /** "error" | "warning" | "info" */
+  severity: 'error' | 'warning' | 'info';
+  /** Human-readable recommended action. */
+  suggestion: string;
+}
+
+/**
+ * DriftReport — result of GetMigrationDriftReport.
+ * Mirrors core/rpc/views/storage.DriftReport.
+ */
+export interface DriftReport {
+  /** All detected discrepancies, sorted by version ascending. */
+  drifts: DriftEntry[];
+}
+
 /** Stable knob ordering for advanced override panels. */
 export const AUTONOMY_KNOB_ORDER: readonly AutonomyKnob[] = [
   'maxIterations',
