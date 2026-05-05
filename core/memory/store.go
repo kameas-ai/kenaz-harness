@@ -219,7 +219,14 @@ func (s *chromemStore) Add(ctx context.Context, chunk Chunk) error {
 		}
 	}
 	s.chunks = append(s.chunks, chunk)
-	return s.saveLocked()
+	if err := s.saveLocked(); err != nil {
+		return err
+	}
+	// Increment the capture-rate counter ONLY on a net-new write (not on
+	// an ID-collision update above). The tracker is process-scoped; no
+	// migration, no persistence.
+	GlobalCaptureTracker().RecordWrite(s.now().UTC())
+	return nil
 }
 
 func (s *chromemStore) Delete(_ context.Context, id string) error {

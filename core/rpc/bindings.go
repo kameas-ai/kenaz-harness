@@ -989,6 +989,12 @@ func (b *Bindings) Memory_TestEmbedder() (int, error) {
 	return b.api.Memory().TestEmbedder(b.ctx())
 }
 
+// Memory_CaptureRate returns a snapshot of the live memory capture
+// velocity and embedder health for the §2.7 LegendBar pill.
+func (b *Bindings) Memory_CaptureRate() (memoryview.CaptureRateSnapshot, error) {
+	return b.api.Memory().CaptureRate(b.ctx())
+}
+
 // ── dials (Bundle E WP17) ──────────────────────────────────────────────
 
 func (b *Bindings) Dials_Get(key dialsview.ScopeKey) (dialsview.DialConfig, error) {

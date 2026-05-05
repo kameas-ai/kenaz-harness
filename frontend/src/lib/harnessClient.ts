@@ -53,6 +53,7 @@ import type {
   MemoryPruneStats,
   MemoryPrunePreview,
   MemoryHealthSnapshot,
+  MemoryCaptureRateSnapshot,
   DialConfig,
   DialDelta,
   DialEffectiveDials,
@@ -379,6 +380,7 @@ interface WailsBindingsLike {
   Memory_RunPruneNow(scope: string): Promise<MemoryPruneStats>;
   Memory_HealthSnapshot(): Promise<MemoryHealthSnapshot>;
   Memory_TestEmbedder(): Promise<number>;
+  Memory_CaptureRate(): Promise<MemoryCaptureRateSnapshot>;
 
   Dials_Get(key: DialScopeKey): Promise<DialConfig>;
   Dials_Set(key: DialScopeKey, cfg: DialConfig): Promise<void>;
@@ -1442,6 +1444,8 @@ export interface MemoryClient {
   healthSnapshot(): Promise<MemoryHealthSnapshot>;
   /** Probe the wired embedder against "hello world"; returns vector dims. */
   testEmbedder(): Promise<number>;
+  /** Return the §2.7 LegendBar capture-rate snapshot. */
+  captureRate(): Promise<MemoryCaptureRateSnapshot>;
 }
 
 /**
@@ -2176,6 +2180,7 @@ export function createHarnessClient(): HarnessClient {
       runPruneNow: (scope) => b().Memory_RunPruneNow(scope),
       healthSnapshot: () => b().Memory_HealthSnapshot(),
       testEmbedder: () => b().Memory_TestEmbedder(),
+      captureRate: () => b().Memory_CaptureRate(),
     },
     dials: {
       get: (key) => b().Dials_Get(key),
@@ -2710,6 +2715,12 @@ export function createFakeHarnessClient(
         capturedAt: new Date().toISOString(),
       }),
       testEmbedder: async () => 0,
+      captureRate: async () => ({
+        chunksPerMinute: 0,
+        embedderHealth: 'ok' as const,
+        lastErrorAt: null,
+        recentErrorCount: 0,
+      }),
     },
     dials: {
       get: async () => ({}),

@@ -182,4 +182,16 @@ type MemoryAPI interface {
 	// "hello world" and returns the resulting vector dimensions (or an
 	// error). Used by the [Test embedder] button in the §2.4 panel.
 	TestEmbedder(ctx context.Context) (int, error)
+	// CaptureRate returns a snapshot of the current memory capture
+	// velocity and embedder health for the §2.7 LegendBar pill.
+	CaptureRate(ctx context.Context) (CaptureRateSnapshot, error)
+}
+
+// CaptureRateSnapshot is the wire shape returned by Memory_CaptureRate
+// (§2.7 — LegendBar capture-rate widget).
+type CaptureRateSnapshot struct {
+	ChunksPerMinute  float64    `json:"chunksPerMinute"`  // writes in the last 60s
+	EmbedderHealth   string     `json:"embedderHealth"`   // "ok" | "slow" | "error"
+	LastErrorAt      *time.Time `json:"lastErrorAt"`      // nil when no recent error
+	RecentErrorCount int        `json:"recentErrorCount"` // errors in the last 5 min
 }

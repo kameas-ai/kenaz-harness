@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import LiveRateIndicator from '@/components/ui/LiveRateIndicator.vue';
 import StatusPill from './StatusPill.vue';
+import MemoryCaptureRatePill from './MemoryCaptureRatePill.vue';
 import { useShellStatus } from '@/lib/useHarnessAPI';
 
 /**
@@ -25,6 +26,7 @@ const status = useShellStatus();
           unit="e/s"
         />
       </slot>
+      <MemoryCaptureRatePill />
     </div>
     <StatusPill />
   </div>
