@@ -136,6 +136,19 @@ type Message struct {
 	// continues. Empty on every original assistant row; non-empty only
 	// on the continuation row written by Sessions_ResumeMessage.
 	ContinuationOf string `json:"continuationOf,omitempty"`
+
+	// Per-message token usage (per-message-token-meter-01KR3PQR).
+	// Present only on assistant rows for which the token-cost-telemetry
+	// pipeline captured usage (session_messages columns: prompt_tokens,
+	// completion_tokens, cost_usd, cost_source). Absent on user / system
+	// / tool rows and on rows that pre-date the migration.
+	PromptTokens     *int     `json:"promptTokens,omitempty"`
+	CompletionTokens *int     `json:"completionTokens,omitempty"`
+	CostUSD          *float64 `json:"costUsd,omitempty"`
+	// MessageCostSource mirrors the token-cost-telemetry taxonomy:
+	// "provider" | "derived" | "mixed" | "unknown". Empty on rows
+	// with no usage data.
+	MessageCostSource string `json:"messageCostSource,omitempty"`
 }
 
 // ResumeMessageResult is the wire shape returned by Sessions_ResumeMessage.

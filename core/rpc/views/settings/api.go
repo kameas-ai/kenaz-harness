@@ -352,6 +352,15 @@ type Settings struct {
 	// The Settings → Memory text input surfaces this with the per-Kind
 	// default as a placeholder so the user knows what they're overriding.
 	EmbedderModelOverride string `json:"embedderModelOverride,omitempty"`
+
+	// ShowPerMessageTokenMeter controls the per-message token-cost chip
+	// (per-message-token-meter-01KR3PQR). Default false (OFF) — the chip
+	// is hidden to keep the chat uncluttered. When true, every completed
+	// assistant bubble shows a small "1.2k → 240 = 1.4k tok · $0.012"
+	// chip that expands to a breakdown popover on click. Stored as a plain
+	// bool (not inverted) because the desired default is OFF, matching the
+	// zero-value of bool.
+	ShowPerMessageTokenMeter bool `json:"showPerMessageTokenMeter,omitempty"`
 }
 
 // ProviderProfileRef is the wire shape that identifies a provider+model

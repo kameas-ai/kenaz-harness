@@ -350,6 +350,9 @@ interface WailsBindingsLike {
   Settings_GetEmbedderConfig(): Promise<EmbedderConfigResult>;
   /** Persists the embedder provider selection and optional model override. */
   Settings_SetEmbedderConfig(profileID: string, modelOverride: string): Promise<void>;
+  // per-message-token-meter-01KR3PQR
+  Settings_GetShowPerMessageTokenMeter(): Promise<boolean>;
+  Settings_SetShowPerMessageTokenMeter(enabled: boolean): Promise<void>;
 
   Memory_ListChunks(filter: MemoryListFilter): Promise<MemoryChunk[]>;
   Memory_RememberMessage(
@@ -1321,6 +1324,15 @@ export interface SettingsClient {
    *  Pass empty strings to reset to auto-pick / per-Kind-default behaviour.
    */
   setEmbedderConfig(profileID: string, modelOverride: string): Promise<void>;
+
+  // ── per-message-token-meter-01KR3PQR ─────────────────────────────────
+  /**
+   * Returns whether the per-message token meter chip is shown.
+   * Default false (chip hidden — keeps chat uncluttered).
+   */
+  getShowPerMessageTokenMeter(): Promise<boolean>;
+  /** Persist the per-message token meter visibility toggle. */
+  setShowPerMessageTokenMeter(enabled: boolean): Promise<void>;
 }
 
 /**
@@ -2114,6 +2126,10 @@ export function createHarnessClient(): HarnessClient {
       getEmbedderConfig: () => b().Settings_GetEmbedderConfig(),
       setEmbedderConfig: (profileID, modelOverride) =>
         b().Settings_SetEmbedderConfig(profileID, modelOverride),
+      getShowPerMessageTokenMeter: () =>
+        b().Settings_GetShowPerMessageTokenMeter(),
+      setShowPerMessageTokenMeter: (enabled) =>
+        b().Settings_SetShowPerMessageTokenMeter(enabled),
     },
     permissions: {
       listGrants: (family) =>
@@ -2610,6 +2626,8 @@ export function createFakeHarnessClient(
       setMCPAutoRestart: noop,
       getEmbedderConfig: async () => ({ profileId: '', modelOverride: '' }),
       setEmbedderConfig: noop,
+      getShowPerMessageTokenMeter: async () => false,
+      setShowPerMessageTokenMeter: noop,
     },
     permissions: {
       listGrants: async () => [],
