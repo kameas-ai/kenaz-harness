@@ -32,6 +32,7 @@ import PinMenu from './PinMenu.vue';
 import ImageBlock from './ImageBlock.vue';
 import DocumentChip from './DocumentChip.vue';
 import ArtifactChip from './ArtifactChip.vue';
+import TokenMeterChip from './TokenMeterChip.vue';
 import type {
   Artifact,
   ContentBlock,
@@ -126,6 +127,28 @@ const props = defineProps<{
    * server-side row materializes via ListMessages refresh.
    */
   streamingError?: string;
+
+  // ── per-message-token-meter-01KR3PQR ────────────────────────────────
+
+  /**
+   * When true, shows the TokenMeterChip next to the role label on
+   * completed assistant bubbles. Driven by the global
+   * settings.showPerMessageTokenMeter toggle; the parent passes the
+   * flag so the bubble doesn't need to subscribe to settings itself.
+   * No chip is ever shown while streaming — wait for the turn to land.
+   */
+  showTokenMeter?: boolean;
+  /**
+   * Per-message prompt token count (from session_messages.prompt_tokens).
+   * Absent on rows that pre-date the telemetry migration or on non-assistant turns.
+   */
+  promptTokens?: number;
+  /** Per-message completion token count (from session_messages.completion_tokens). */
+  completionTokens?: number;
+  /** Per-message cost in USD (from session_messages.cost_usd). */
+  costUsd?: number;
+  /** Cost source: "provider" | "derived" | "mixed" | "unknown". */
+  messageCostSource?: string;
 }>();
 
 const emit = defineEmits<{
@@ -409,6 +432,17 @@ function onResumeClick() {
       >
         <span>{{ roleLabel }}</span>
         <span v-if="isAssistant && streaming" class="ml-2">live</span>
+        <!-- Token-meter chip (per-message-token-meter-01KR3PQR).
+             Show only on completed (non-streaming) assistant turns when the
+             toggle is on and the row carries telemetry data. -->
+        <TokenMeterChip
+          v-if="isAssistant && !streaming && showTokenMeter"
+          :prompt-tokens="promptTokens"
+          :completion-tokens="completionTokens"
+          :cost-usd="costUsd"
+          :cost-source="messageCostSource"
+          class="ml-2 normal-case tracking-normal"
+        />
         <span
           v-if="flashConfirm"
           class="ml-auto mr-2 text-accent"

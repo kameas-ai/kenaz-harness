@@ -82,7 +82,7 @@ func (a *MemoryStoreAdapter) Write(ctx context.Context, w coreag.MemoryWrite) (s
 		// Without an embedding we can't write. Return a friendly error
 		// so the kernel surfaces it instead of letting a missing-key
 		// runtime error leak through.
-		return "", false, errors.New("memory: embedder unavailable; configure an OpenAI provider in Settings")
+		return "", false, errors.New("memory: embedder unavailable — Memory features need an embedder. Configure an OpenAI, OpenRouter, custom OpenAI-compatible, or local llama-server provider in Settings → Models.")
 	}
 	if err := a.store.Add(ctx, chunk); err != nil {
 		if errors.Is(err, corememory.ErrDuplicate) {

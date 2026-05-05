@@ -480,6 +480,11 @@ func messageToView(m session.Message) Message {
 	out.StreamingFailureKind = m.StreamingFailureKind
 	out.StreamingRecoverable = m.StreamingRecoverable
 	out.ContinuationOf = m.ContinuationOf
+	// Per-message usage (per-message-token-meter-01KR3PQR).
+	out.PromptTokens = m.PromptTokens
+	out.CompletionTokens = m.CompletionTokens
+	out.CostUSD = m.CostUSD
+	out.MessageCostSource = m.MessageCostSource
 	return out
 }
 

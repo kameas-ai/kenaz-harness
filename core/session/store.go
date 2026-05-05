@@ -1243,7 +1243,8 @@ func (s *sqlStore) listMessages(ctx context.Context, sessionID string, activeOnl
 	query := `
         SELECT id, session_id, sequence, role, content, tool_calls, created_at, content_json,
                compacted_into_id, compacted_at, archived_at,
-               streaming_failed_at, streaming_failure_kind, streaming_recoverable, continuation_of
+               streaming_failed_at, streaming_failure_kind, streaming_recoverable, continuation_of,
+               prompt_tokens, completion_tokens, cost_usd, cost_source
         FROM session_messages
         WHERE session_id = ?
     `
@@ -1271,11 +1272,16 @@ func (s *sqlStore) listMessages(ctx context.Context, sessionID string, activeOnl
 			streamingFailureKind sql.NullString
 			streamingRecoverable sql.NullInt64
 			continuationOf       sql.NullString
+			promptTokens         sql.NullInt64
+			completionTokens     sql.NullInt64
+			costUSD              sql.NullFloat64
+			costSource           sql.NullString
 		)
 		if err := rows.Scan(&m.ID, &m.SessionID, &m.Sequence, &roleStr,
 			&m.Content, &toolCalls, &createdAt, &contentJSON,
 			&compactedIntoID, &compactedAt, &archivedAt,
-			&streamingFailedAt, &streamingFailureKind, &streamingRecoverable, &continuationOf); err != nil {
+			&streamingFailedAt, &streamingFailureKind, &streamingRecoverable, &continuationOf,
+			&promptTokens, &completionTokens, &costUSD, &costSource); err != nil {
 			return nil, err
 		}
 		m.Role = Role(roleStr)
@@ -1318,6 +1324,22 @@ func (s *sqlStore) listMessages(ctx context.Context, sessionID string, activeOnl
 		}
 		if continuationOf.Valid {
 			m.ContinuationOf = continuationOf.String
+		}
+		// Per-message usage (per-message-token-meter-01KR3PQR).
+		if promptTokens.Valid {
+			v := int(promptTokens.Int64)
+			m.PromptTokens = &v
+		}
+		if completionTokens.Valid {
+			v := int(completionTokens.Int64)
+			m.CompletionTokens = &v
+		}
+		if costUSD.Valid {
+			v := costUSD.Float64
+			m.CostUSD = &v
+		}
+		if costSource.Valid {
+			m.MessageCostSource = costSource.String
 		}
 		out = append(out, m)
 	}

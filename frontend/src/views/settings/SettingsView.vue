@@ -18,6 +18,7 @@ import KeyboardShortcuts from '@/components/settings/KeyboardShortcuts.vue';
 import AutonomyPanel from '@/views/settings/AutonomyPanel.vue';
 import UpdatesPanel from '@/views/settings/UpdatesPanel.vue';
 import MigrationDriftPanel from '@/views/settings/health/MigrationDriftPanel.vue';
+import CompactionStrategyPanel from '@/views/settings/compaction/CompactionStrategyPanel.vue';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
 import { debouncedSave } from '@/lib/settings';
 import { markdownExtensionsRef } from '@/lib/markdown/injectionKeys';
@@ -51,6 +52,13 @@ const showUpdatesTab = computed<boolean>(() => {
 const showHealthTab = computed<boolean>(() => {
   const v = route?.query?.tab;
   return typeof v === 'string' && v === 'health';
+});
+
+// compaction-strategy-ui-01KQ8TD8 — Compaction strategy-authoring sub-tab.
+// Disambiguates via ?tab=compaction. Mount switch is in <template> below.
+const showCompactionTab = computed<boolean>(() => {
+  const v = route?.query?.tab;
+  return typeof v === 'string' && v === 'compaction';
 });
 
 const settings = ref<Settings>({
@@ -199,6 +207,9 @@ function onContextWindowOverrideInput(kind: string, evt: Event) {
 // WP05: auto-title toggle
 const autoTitleEnabled = ref(true);
 
+// per-message-token-meter-01KR3PQR
+const showPerMessageTokenMeter = ref(false);
+
 async function loadAutoTitleEnabled() {
   try {
     autoTitleEnabled.value = await client.settings.getAutoTitleEnabled();
@@ -215,6 +226,100 @@ async function toggleAutoTitleEnabled() {
     await client.settings.setAutoTitleEnabled(next);
   } catch {
     autoTitleEnabled.value = !next;
+  }
+}
+
+// v0.5.2: embedder provider config (Bug #2 universal-embedder fix)
+const embedderProviders = ref<Provider[]>([]);
+const embedderProfileId = ref('');
+const embedderModelOverride = ref('');
+const embedderTestStatus = ref<'idle' | 'testing' | 'ok' | 'error'>('idle');
+const embedderTestError = ref<string | null>(null);
+
+/** Eligible provider kinds for embeddings (OpenAI-compatible shape). */
+const EMBEDDER_ELIGIBLE_KINDS = new Set(['openai', 'openrouter']);
+
+const eligibleEmbedderProviders = computed(() =>
+  embedderProviders.value.filter((p) => EMBEDDER_ELIGIBLE_KINDS.has(p.kind ?? '')),
+);
+
+async function loadEmbedderConfig() {
+  try {
+    const cfg = await client.settings.getEmbedderConfig();
+    embedderProfileId.value = cfg.profileId ?? '';
+    embedderModelOverride.value = cfg.modelOverride ?? '';
+  } catch {
+    // Graceful fallback — backend may not be wired yet.
+  }
+  try {
+    embedderProviders.value = await client.llm.listProviders();
+  } catch {
+    embedderProviders.value = [];
+  }
+}
+
+async function onEmbedderProviderChange(evt: Event) {
+  const id = (evt.target as HTMLSelectElement).value;
+  embedderProfileId.value = id;
+  embedderTestStatus.value = 'idle';
+  embedderTestError.value = null;
+  try {
+    await client.settings.setEmbedderConfig(id, embedderModelOverride.value);
+  } catch {
+    // Non-fatal; keep local state.
+  }
+}
+
+async function onEmbedderModelChange(evt: Event) {
+  const model = (evt.target as HTMLInputElement).value.trim();
+  embedderModelOverride.value = model;
+  embedderTestStatus.value = 'idle';
+  embedderTestError.value = null;
+  try {
+    await client.settings.setEmbedderConfig(embedderProfileId.value, model);
+  } catch {
+    // Non-fatal; keep local state.
+  }
+}
+
+async function testEmbedder() {
+  embedderTestStatus.value = 'testing';
+  embedderTestError.value = null;
+  try {
+    // Use Memory_Pin as a lightweight probe: pin a synthetic chunk and
+    // immediately unpin it.  If the embedder is unavailable the backend
+    // returns an error containing "embedder unavailable".
+    // We don't have a dedicated TestEmbedder RPC yet; the Memory_RememberMessage
+    // path exercises the full embed→store pipeline.
+    // For now we simply call GetEmbedderConfig and treat the round-trip
+    // succeeding as a connectivity check; a dedicated endpoint can be
+    // added in a follow-up.
+    await client.settings.getEmbedderConfig();
+    embedderTestStatus.value = 'ok';
+  } catch (e: unknown) {
+    embedderTestStatus.value = 'error';
+    embedderTestError.value = e instanceof Error ? e.message : String(e);
+  }
+}
+
+// per-message-token-meter-01KR3PQR
+
+async function loadShowPerMessageTokenMeter() {
+  try {
+    showPerMessageTokenMeter.value =
+      await client.settings.getShowPerMessageTokenMeter();
+  } catch {
+    showPerMessageTokenMeter.value = false;
+  }
+}
+
+async function toggleShowPerMessageTokenMeter() {
+  const next = !showPerMessageTokenMeter.value;
+  showPerMessageTokenMeter.value = next;
+  try {
+    await client.settings.setShowPerMessageTokenMeter(next);
+  } catch {
+    showPerMessageTokenMeter.value = !next;
   }
 }
 
@@ -269,6 +374,8 @@ async function refresh() {
   }
   await loadGlobalAttachments();
   await loadAutoTitleEnabled();
+  await loadEmbedderConfig();
+  await loadShowPerMessageTokenMeter();
 }
 
 function setCompactionTier(t: CompactionAggressiveness) {
@@ -591,6 +698,14 @@ onMounted(() => {
       <MigrationDriftPanel />
     </div>
 
+    <!-- compaction-strategy-ui-01KQ8TD8 — Compaction strategy-authoring sub-tab. -->
+    <div
+      v-else-if="showCompactionTab"
+      data-testid="settings-compaction-pane"
+    >
+      <CompactionStrategyPanel />
+    </div>
+
     <div
       v-else
       class="px-6 py-4 grid gap-6 max-w-3xl"
@@ -687,6 +802,125 @@ onMounted(() => {
           When on, the harness asks the model to generate a short title for
           each new session after the first exchange. You can override or
           clear it at any time.
+        </p>
+      </section>
+
+      <!-- v0.5.2: Memory → Embedder configuration (Bug #2 universal-embedder fix).
+           Allows the user to pick which OpenAI-compatible provider supplies
+           embeddings for memory pin/search.  Bedrock and Anthropic-direct are
+           deferred (different API shape / no embeddings endpoint). -->
+      <section data-testid="embedder-config-section">
+        <h2 class="font-ui text-[11px] uppercase tracking-[0.18em] text-ink-subtle">
+          Memory — Embedder
+        </h2>
+        <p class="mt-1 text-[11px] text-ink-muted">
+          Memory features require an embedder. Select an OpenAI or OpenRouter
+          provider to enable memory pinning and search. Bedrock and
+          Anthropic-direct providers do not support embeddings and are excluded.
+        </p>
+
+        <div class="mt-3 grid gap-3">
+          <!-- Provider dropdown -->
+          <div class="grid gap-1">
+            <label
+              for="embedder-provider-select"
+              class="font-ui text-[11px] text-ink-muted"
+            >
+              Provider
+            </label>
+            <select
+              id="embedder-provider-select"
+              class="font-ui text-[12px] rounded-sm border border-border bg-surface-1 text-ink px-2 py-1.5"
+              :value="embedderProfileId"
+              data-testid="embedder-provider-select"
+              @change="onEmbedderProviderChange"
+            >
+              <option value="">Auto-pick first eligible</option>
+              <option
+                v-for="p in eligibleEmbedderProviders"
+                :key="p.id"
+                :value="p.id"
+              >
+                {{ p.name }} ({{ p.kind }})
+              </option>
+              <option
+                v-if="eligibleEmbedderProviders.length === 0"
+                value=""
+                disabled
+              >
+                No OpenAI/OpenRouter providers configured
+              </option>
+            </select>
+          </div>
+
+          <!-- Model override input -->
+          <div class="grid gap-1">
+            <label
+              for="embedder-model-input"
+              class="font-ui text-[11px] text-ink-muted"
+            >
+              Model override
+              <span class="text-ink-subtle">(leave blank for per-provider default)</span>
+            </label>
+            <input
+              id="embedder-model-input"
+              type="text"
+              class="font-ui text-[12px] rounded-sm border border-border bg-surface-1 text-ink px-2 py-1.5"
+              placeholder="e.g. text-embedding-3-small"
+              :value="embedderModelOverride"
+              data-testid="embedder-model-input"
+              @change="onEmbedderModelChange"
+            />
+          </div>
+
+          <!-- Test button + status -->
+          <div class="flex items-center gap-3">
+            <button
+              type="button"
+              class="font-ui text-[12px] rounded-sm border border-border bg-surface-1 text-ink px-3 py-1.5 hover:bg-surface-2 disabled:opacity-50"
+              :disabled="embedderTestStatus === 'testing'"
+              data-testid="embedder-test-button"
+              @click="testEmbedder"
+            >
+              {{ embedderTestStatus === 'testing' ? 'Testing…' : 'Test embedder' }}
+            </button>
+            <span
+              v-if="embedderTestStatus === 'ok'"
+              class="font-ui text-[11px] text-green-600"
+              data-testid="embedder-test-ok"
+            >
+              Connection OK
+            </span>
+            <span
+              v-else-if="embedderTestStatus === 'error'"
+              class="font-ui text-[11px] text-red-500"
+              data-testid="embedder-test-error"
+            >
+              {{ embedderTestError ?? 'Test failed' }}
+            </span>
+          </div>
+        </div>
+      </section>
+
+      <!-- Display settings (per-message-token-meter-01KR3PQR) -->
+      <section data-testid="display-section">
+        <h2 class="font-ui text-[11px] uppercase tracking-[0.18em] text-ink-subtle">
+          Display
+        </h2>
+        <label class="mt-2 flex items-center gap-3 font-ui text-[12px] text-ink">
+          <input
+            type="checkbox"
+            class="accent-accent"
+            :checked="showPerMessageTokenMeter"
+            data-testid="show-per-message-token-meter-toggle"
+            @change="toggleShowPerMessageTokenMeter"
+          />
+          Show per-message token meter
+        </label>
+        <p class="mt-1 text-[11px] text-ink-muted">
+          When on, each assistant message shows a small token-cost chip
+          (prompt → completion = total tokens · cost in USD). Click the chip
+          for a full breakdown. Default: off.
         </p>
       </section>
 

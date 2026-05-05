@@ -177,4 +177,16 @@ type Message struct {
 	// the continuation row written by Sessions_ResumeMessage so the
 	// frontend can grey out the original and stitch the bubbles together.
 	ContinuationOf string
+
+	// Per-message token usage (per-message-token-meter-01KR3PQR).
+	// Populated by the token-cost-telemetry migration (session_messages
+	// columns: prompt_tokens, completion_tokens, cost_usd, cost_source).
+	// NULL on rows that pre-date the migration or had no usage captured.
+	PromptTokens     *int
+	CompletionTokens *int
+	CostUSD          *float64
+	// CostSource mirrors the token-cost-telemetry taxonomy:
+	// "provider" | "derived" | "mixed" | "unknown". Empty on rows
+	// with no usage data.
+	MessageCostSource string
 }
