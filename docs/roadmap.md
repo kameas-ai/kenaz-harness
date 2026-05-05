@@ -108,28 +108,52 @@ Direct adapters (Azure-OpenAI, Vertex/Gemini, local runtimes, custom OpenAI-comp
 
 ---
 
-## v0.10.0 — 1.0 readiness
+## v0.10.0 — Maturity hardening (early 1.0 prep)
 
-**Theme**: Cut the rough edges that block calling this 1.0. No new feature work — just hardening, audits, polish.
+**Theme**: Start the run-up to GA. Audit + accessibility + docs come in early so v0.11.0 + v0.12.0 can polish on top of a known-good baseline.
 
 | Mission | Why now | Effort |
 |---|---|---|
 | `accessibility-audit-01KQ8TDA` | WCAG 2.1 AA compliance sweep. Required for any enterprise rollout | L |
-| Security audit pass | External pen-test against the released bundle | M |
 | Documentation completeness pass | User-facing docs site, API reference, getting-started flows | M |
 | Cross-platform burn-in | Windows + Linux + macOS soak across the v0.5.0 → v0.9.0 surface area | M |
+
+---
+
+## v0.11.0 — Security + bug-bash
+
+**Theme**: External pen-test, fix-everything-found, prep the codebase for the fleet integration to land cleanly.
+
+| Mission | Why now | Effort |
+|---|---|---|
+| External security audit | Pen-test against the v0.10.0 bundle; fix everything findings raise | L |
+| Findings backlog | Burn through every issue raised during v0.10.0 a11y + cross-platform soak | M |
 | Final spec triage | Move every active spec to either shipped or explicitly-deferred-post-1.0 | S |
+
+---
+
+## v0.12.0 — Fleet integration (cloud layer)
+
+**Theme**: Cap pre-1.0 with the cloud-tier story. The harness stays open source; fleet is the closed-source cloud layer that powers Pro / Team / Enterprise. OSS builds trust, fleet adds value.
+
+| Mission | Why now | Effort |
+|---|---|---|
+| `fleet-integration-01KX5R8D` | Single `core/fleet` package, device-code OAuth + credstore-backed token, additive cloud features (share workflow / pack / bundle, team catalog, settings sync, OTel-to-fleet, audit archival, team Cedar policy distribution), explicit "what we send" disclosure, `HARNESS_FLEET_DISABLED=1` kill switch, fork-recipe documented | XL |
+
+**Goal**: a v0.12.0 user can keep the harness fully local OR sign in to a fleet account and unlock team-collaboration features. Forking the harness and reimplementing fleet is supported by the architecture and documented as a first-class path.
 
 ---
 
 ## v1.0.0 — General Availability
 
 No new feature missions; v1.0.0 is the first version where:
-- All v0.5.0–v0.10.0 missions have shipped and burned in for ≥30 days
+- All v0.5.0–v0.12.0 missions have shipped and burned in for ≥30 days
 - v0.10.0 accessibility audit clean
-- v0.10.0 external security review clean
-- Public documentation complete (`docs/missions/` + user-facing docs site)
+- v0.11.0 external security review clean
+- v0.12.0 fleet integration burned in across at least one paying team
+- Public documentation complete (`docs/missions/` + user-facing docs site + `docs/fleet-integration.md`)
 - Auto-update path proven through ≥3 consecutive minor bumps without regression
+- Fleet "fork recipe" verified — a clean fork without `core/fleet` builds + runs as a pure-local product
 
 ---
 
