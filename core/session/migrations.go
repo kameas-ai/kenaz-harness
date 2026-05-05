@@ -109,6 +109,9 @@ const sqlInitSchema = `
 // (parent_message_id, branch_title, creation_path, parent_session_title)
 // needed by the branching-ux-polish-01KQ8TD7 WP01 breadcrumb + sidebar
 // (spec §3 / plan §1).
+// 0324 lands the artifact_versions append-only history table that backs
+// the kaneaz__update_artifact builtin tool
+// (update-artifact-tool-01KQ8TD4 — see migrations_artifact_versions.go).
 func Migrations() []migrations.Migration {
 	return []migrations.Migration{
 		{
@@ -164,6 +167,7 @@ func Migrations() []migrations.Migration {
 		migration0321(),
 		migration0322(),
 		migration0323(),
+		migration0324(),
 	}
 }
 

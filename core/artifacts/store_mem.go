@@ -14,6 +14,7 @@ import (
 type memStore struct {
 	mu         sync.RWMutex
 	rows       map[string]Artifact
+	versions   []ArtifactVersion
 	now        func() time.Time
 	idGen      func() (string, error)
 	sessReader SessionProjectReader
@@ -186,4 +187,42 @@ func (s *memStore) RefcountFor(_ context.Context, contentHash string) (int, erro
 		}
 	}
 	return n, nil
+}
+
+func (s *memStore) WriteVersion(_ context.Context, v ArtifactVersion) (ArtifactVersion, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.rows[v.ArtifactID]; !ok {
+		return ArtifactVersion{}, ErrArtifactNotFound
+	}
+	// Find the next version number (max + 1, starting at 1).
+	max := 0
+	for _, existing := range s.versions {
+		if existing.ArtifactID == v.ArtifactID && existing.Version > max {
+			max = existing.Version
+		}
+	}
+	v.Version = max + 1
+	v.ID = int64(len(s.versions) + 1)
+	if v.CreatedAt.IsZero() {
+		v.CreatedAt = s.now()
+	}
+	s.versions = append(s.versions, v)
+	return v, nil
+}
+
+func (s *memStore) ListVersions(_ context.Context, artifactID string) ([]ArtifactVersion, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	var out []ArtifactVersion
+	for _, v := range s.versions {
+		if v.ArtifactID == artifactID {
+			out = append(out, v)
+		}
+	}
+	// Sort by version ASC.
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].Version < out[j].Version
+	})
+	return out, nil
 }

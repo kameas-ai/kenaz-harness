@@ -80,6 +80,39 @@ type ArtifactSourceRef struct {
 	AbsolutePath string `json:"absolute_path,omitempty"`
 }
 
+// ArtifactVersion is one entry in the append-only revision history for
+// an artifact. Written by kaneaz__update_artifact; the parent Artifact
+// row is never mutated. The actual bytes live in the shared CAS at
+// <DataDir>/media/<ContentHash> — same location as the original capture.
+//
+// Version starts at 1 for the first update. The (ArtifactID, Version)
+// pair is unique.
+type ArtifactVersion struct {
+	// ID is the auto-incrementing row id.
+	ID int64
+	// ArtifactID is the parent artifact this version belongs to.
+	ArtifactID string
+	// Version is the monotonically increasing revision number scoped per
+	// artifact (first update = 1).
+	Version int
+	// ContentHash is the hex sha256 of the updated bytes; matches the
+	// file name under <DataDir>/media/.
+	ContentHash string
+	// ByteSize is the on-disk size in bytes of this revision.
+	ByteSize int64
+	// MimeType is the MIME type of this revision. May differ from the
+	// parent artifact's MimeType if the content type changed.
+	MimeType string
+	// Summary is an optional editor-supplied description of the change
+	// (e.g. "fixed off-by-one in line 42"). Nil when not provided.
+	Summary *string
+	// Path is the optional updated canonical path for file-source
+	// artifacts. Nil means "same path as the parent's AbsolutePath".
+	Path *string
+	// CreatedAt is the wall-clock at insert time (UTC).
+	CreatedAt time.Time
+}
+
 // ArtifactFilter narrows the List query. Empty fields match every row.
 type ArtifactFilter struct {
 	// SessionID restricts the result set to artifacts produced under
@@ -126,4 +159,9 @@ var (
 	// outside {session, project}, or when a session→project promote
 	// targets a session that has no project.
 	ErrUnsupportedScope = errors.New("artifacts: unsupported scope")
+
+	// ErrVersionConflict is returned when WriteVersion detects that the
+	// (artifact_id, version) pair already exists in artifact_versions.
+	// Callers should retry with the next version number.
+	ErrVersionConflict = errors.New("artifacts: version conflict")
 )
