@@ -756,6 +756,22 @@ export interface Settings {
    * are replaced by a "+N more depths" affordance.
    */
   maxVisibleBranchDepth?: number;
+
+  // ── Long-session nudge dials (v0.5.6 memory-trust-signals) ──────────
+
+  /**
+   * longSessionNudgeTurns — number of user-assistant turn pairs (half
+   * the total message count) after which the inline long-session nudge
+   * banner appears. Default 30. Zero == use default.
+   */
+  longSessionNudgeTurns?: number;
+
+  /**
+   * longSessionNudgeTokens — cumulative prompt-token threshold after
+   * which the nudge banner appears regardless of turn count.
+   * Default 50000. Zero == use default.
+   */
+  longSessionNudgeTokens?: number;
 }
 
 /**

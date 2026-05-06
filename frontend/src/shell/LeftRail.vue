@@ -7,7 +7,6 @@ import {
   Archive,
   Plus,
   MessageSquare,
-  Search,
   Wrench,
   FileText,
   Settings,
@@ -22,6 +21,7 @@ import {
 } from './icons';
 import { useSessions, useProjects, useHarnessClient } from '@/lib/useHarnessAPI';
 import NewSessionDialog from './NewSessionDialog.vue';
+import MemoryBadge from './MemoryBadge.vue';
 import WorkflowRunsSection from '@/components/workflows/WorkflowRunsSection.vue';
 import type { Project, Session } from '@/lib/types';
 import '@/styles/sessions.css';
@@ -523,17 +523,20 @@ async function onProjectDrop(evt: DragEvent, projectId: string) {
 
 <template>
   <div class="flex flex-col h-full" @click="closeProjectMenu">
-    <!-- new-session affordance -->
-    <div class="px-2 pt-3 pb-2">
+    <!-- new-session affordance + memory badge -->
+    <div class="px-2 pt-3 pb-2 flex items-center gap-1">
       <button
         type="button"
-        class="flex items-center gap-2 px-3 py-2 rounded-sm w-full text-left text-sm font-ui text-accent border border-accent-hairline hover:bg-accent-glow transition-fast ease-kenaz disabled:opacity-50"
+        class="flex items-center gap-2 px-3 py-2 rounded-sm flex-1 text-left text-sm font-ui text-accent border border-accent-hairline hover:bg-accent-glow transition-fast ease-kenaz disabled:opacity-50"
         aria-label="New session"
         @click="newSession(activeProjectId || undefined)"
       >
         <Plus :size="14" />
         <span class="hidden two-col:inline">New session</span>
       </button>
+      <!-- Memory trust badge (v0.5.6) — shows memory chunk count for the
+           active project (or all chunks when no project is selected). -->
+      <MemoryBadge :project-id="activeProjectId || undefined" />
     </div>
     <NewSessionDialog
       :open="newSessionDialogOpen"
@@ -1020,7 +1023,6 @@ async function onProjectDrop(evt: DragEvent, projectId: string) {
     <nav class="px-2 py-2 border-t border-border-muted" aria-label="Surfaces">
       <ul class="space-y-1">
         <li><RailEntry :icon="MessageSquare" label="Sessions" to="/sessions" /></li>
-        <li><RailEntry :icon="Search" label="Search" to="/search" /></li>
         <li><RailEntry :icon="Wrench" label="Tools" to="/tools" /></li>
         <li><RailEntry :icon="GitBranch" label="Workflows" to="/workflows" /></li>
         <li><RailEntry :icon="FileText" label="Contexts" to="/contexts" /></li>

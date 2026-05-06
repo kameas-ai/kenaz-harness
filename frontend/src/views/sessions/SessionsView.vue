@@ -35,9 +35,11 @@ import ToolPermissionModal from '@/components/permissions/ToolPermissionModal.vu
 import MigrationToast from '@/components/permissions/MigrationToast.vue';
 import ArtifactPreview from '@/views/artifacts/ArtifactPreview.vue';
 import CostCell from '@/components/chat/CostCell.vue';
+import LongSessionNudge from '@/components/chat/LongSessionNudge.vue';
 import { useArtifacts, useHarnessClient, useSessions } from '@/lib/useHarnessAPI';
 import { useSession } from '@/lib/useSession';
 import { useEventStream } from '@/lib/useEventStream';
+import { useLongSessionNudge } from '@/lib/useLongSessionNudge';
 import type {
   Artifact,
   ArtifactScope,
@@ -923,6 +925,61 @@ function formatSize(bytes: number): string {
   const mb = kb / 1024;
   return mb < 10 ? `${mb.toFixed(1)} MB` : `${Math.round(mb)} MB`;
 }
+
+// ── Long-session nudge (v0.5.6 memory-trust-signals) ──────────────────────
+//
+// The nudge banner fires when the session crosses either threshold:
+//   - 30 user-assistant turn pairs (60 total messages), OR
+//   - 50,000 cumulative prompt tokens
+// Both thresholds are configurable via Settings → Display.
+//
+// Per-session dismiss: the user can click "Dismiss for this session" and
+// the banner won't re-appear until the next session (no persistence needed).
+//
+// Reset the composable when the session changes so crossing thresholds in
+// a previous session doesn't immediately re-trigger the banner.
+
+const _nudgeMessageCount = computed(() => visibleMessages.value.length);
+const _nudgePromptTokens = computed(() => session.lastUsage.value?.promptTokens ?? 0);
+
+const longSessionNudge = useLongSessionNudge({
+  messageCount: _nudgeMessageCount,
+  promptTokens: _nudgePromptTokens,
+});
+
+// Reset dismiss state when navigating to a different session.
+watch(sessionId, () => {
+  longSessionNudge.dismiss(); // dismiss carries across sessions; re-set by the
+  // composable's internal ref which resets on re-instantiation. Because
+  // SessionsView is kept alive across navigation, we re-create by recreating
+  // the dismissed ref indirectly. Use a stable "last dismissed session" ref
+  // to achieve per-session semantics without full re-mount.
+});
+
+// Per-session dismiss: track which session the user dismissed so that
+// navigating to a new session shows the banner fresh.
+const nudgeDismissedForSessionId = ref<string>('');
+
+const nudgeVisible = computed<boolean>(() => {
+  if (!hasSession.value) return false;
+  if (activeTab.value !== 'chat') return false;
+  if (nudgeDismissedForSessionId.value === sessionId.value) return false;
+  return longSessionNudge.nudgeVisible.value;
+});
+
+function onNudgeDismiss() {
+  nudgeDismissedForSessionId.value = sessionId.value;
+}
+
+async function onNudgeBranch() {
+  // Open the CreateBranchModal — same flow as the header "Branch" button.
+  openCreateBranchModal();
+}
+
+async function onNudgeNewSession() {
+  // Open NewSessionDialog in the same project.
+  newSessionDialogOpen.value = true;
+}
 </script>
 
 <template>
@@ -1448,6 +1505,16 @@ function formatSize(bytes: number): string {
             </span>
           </div>
         </div>
+        <!-- Long-session nudge banner (v0.5.6 memory-trust-signals).
+             Appears once per session when message/token thresholds are crossed.
+             Dismissed per-session via nudgeDismissedForSessionId. -->
+        <LongSessionNudge
+          v-if="nudgeVisible"
+          data-testid="long-session-nudge-banner"
+          @branch="onNudgeBranch"
+          @new-session="onNudgeNewSession"
+          @dismiss="onNudgeDismiss"
+        />
         <ChatInput
           v-model="session.draft.value"
           :streaming="isStreaming"

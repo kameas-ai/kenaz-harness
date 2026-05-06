@@ -201,8 +201,23 @@ func validateCompactionFields(in Settings) error {
 		return ErrInvalidMonthlyCostNotifyUSD
 	}
 
+	if in.LongSessionNudgeTurns < 0 {
+		return ErrInvalidLongSessionNudgeTurns
+	}
+	if in.LongSessionNudgeTokens < 0 {
+		return ErrInvalidLongSessionNudgeTokens
+	}
+
 	return nil
 }
+
+// ErrInvalidLongSessionNudgeTurns is returned when the turn-count threshold
+// is negative. Zero is valid (resolves to DefaultLongSessionNudgeTurns).
+var ErrInvalidLongSessionNudgeTurns = errors.New("settings: invalid longSessionNudgeTurns — must be >= 0")
+
+// ErrInvalidLongSessionNudgeTokens is returned when the token-count threshold
+// is negative. Zero is valid (resolves to DefaultLongSessionNudgeTokens).
+var ErrInvalidLongSessionNudgeTokens = errors.New("settings: invalid longSessionNudgeTokens — must be >= 0")
 
 // MaxShortcutEntries is the upper bound on the number of per-shortcut
 // overrides the backend accepts in a single Settings write (plan §2.7 R4).
