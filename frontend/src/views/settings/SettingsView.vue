@@ -31,6 +31,7 @@ import type {
   CompactionAggressiveness,
   CompactionTierExplain,
   MarkdownExtensions,
+  MemoryEmbedderEligibility,
   Provider,
   Settings,
   Theme,
@@ -236,6 +237,43 @@ const embedderModelOverride = ref('');
 const embedderTestStatus = ref<'idle' | 'testing' | 'ok' | 'error'>('idle');
 const embedderTestError = ref<string | null>(null);
 
+// v0.5.5: embedder eligibility — drives the "no memory provider" banner.
+const embedderEligibility = ref<MemoryEmbedderEligibility>({
+  hasEligible: true, // optimistic default; hides banner until first load
+  allProfiles: 0,
+  eligibleProfiles: 0,
+  skippedKinds: [],
+});
+
+async function loadEmbedderEligibility() {
+  try {
+    embedderEligibility.value = await client.memory.embedderEligibility();
+  } catch {
+    // Non-fatal: keep the optimistic default (banner stays hidden).
+  }
+}
+
+/** Human-readable label for a skipped provider kind. */
+function skippedKindLabel(kind: string): string {
+  switch (kind) {
+    case 'anthropic':
+      return 'Anthropic — no embeddings API';
+    case 'bedrock':
+      return 'AWS Bedrock — Titan adapter not yet supported';
+    default:
+      return kind;
+  }
+}
+
+/** Navigate to the Providers page, optionally pre-filling the add-provider
+ *  drawer with a specific kind (e.g. "openrouter"). */
+async function goToProviders(addKind?: string) {
+  const { useRouter } = await import('vue-router');
+  const router = useRouter();
+  const query = addKind ? { add: addKind } : {};
+  await router.push({ path: '/providers', query });
+}
+
 /** Eligible provider kinds for embeddings (OpenAI-compatible shape). */
 const EMBEDDER_ELIGIBLE_KINDS = new Set(['openai', 'openrouter']);
 
@@ -412,6 +450,7 @@ async function refresh() {
   await loadGlobalAttachments();
   await loadAutoTitleEnabled();
   await loadEmbedderConfig();
+  await loadEmbedderEligibility();
   await loadShowPerMessageTokenMeter();
   await loadOnboardingState();
 }
@@ -856,6 +895,60 @@ onMounted(() => {
           provider to enable memory pinning and search. Bedrock and
           Anthropic-direct providers do not support embeddings and are excluded.
         </p>
+
+        <!-- v0.5.5: no-eligible-embedder-provider banner.
+             Shown when every configured profile is a non-embedding kind
+             (e.g. Anthropic-only setup). Hidden once at least one eligible
+             profile exists. -->
+        <div
+          v-if="!embedderEligibility.hasEligible"
+          class="mt-3 rounded-md border border-signal-warn bg-surface-1 px-3 py-3"
+          role="alert"
+          aria-live="polite"
+          data-testid="no-embedder-provider-banner"
+        >
+          <p class="font-ui text-[12px] font-semibold text-signal-warn">
+            No memory provider configured
+          </p>
+          <p class="mt-1 font-ui text-[11px] text-ink-muted">
+            Memory features (pin, semantic search, retrieval) need an embedding
+            provider. Your current providers don't support embeddings:
+          </p>
+          <ul
+            v-if="embedderEligibility.skippedKinds.length > 0"
+            class="mt-1 list-disc list-inside font-ui text-[11px] text-ink-muted"
+            data-testid="no-embedder-skipped-kinds"
+          >
+            <li
+              v-for="kind in embedderEligibility.skippedKinds"
+              :key="kind"
+            >
+              {{ skippedKindLabel(kind) }}
+            </li>
+          </ul>
+          <p class="mt-2 font-ui text-[11px] text-ink-muted">
+            OpenRouter gives you cheap models for chat AND embeddings in one
+            API key.
+          </p>
+          <div class="mt-3 flex flex-wrap gap-2">
+            <button
+              type="button"
+              class="font-ui text-[12px] rounded-sm border border-accent bg-surface-1 text-accent px-3 py-1.5 hover:bg-surface-2"
+              data-testid="no-embedder-add-openrouter"
+              @click="goToProviders('openrouter')"
+            >
+              Add OpenRouter provider
+            </button>
+            <button
+              type="button"
+              class="font-ui text-[12px] rounded-sm border border-border bg-surface-1 text-ink-muted px-3 py-1.5 hover:bg-surface-2"
+              data-testid="no-embedder-see-all-providers"
+              @click="goToProviders()"
+            >
+              See all options
+            </button>
+          </div>
+        </div>
 
         <div class="mt-3 grid gap-3">
           <!-- Provider dropdown -->
