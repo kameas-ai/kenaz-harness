@@ -30,6 +30,7 @@ import (
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/mcp"
 	memoryview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/memory"
 	nodesview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/nodes"
+	onboardingview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/onboarding"
 	permissionsview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/permissions"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/policy"
 	projectsview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/projects"
@@ -989,6 +990,12 @@ func (b *Bindings) Memory_TestEmbedder() (int, error) {
 	return b.api.Memory().TestEmbedder(b.ctx())
 }
 
+// Memory_CaptureRate returns a snapshot of the live memory capture
+// velocity and embedder health for the §2.7 LegendBar pill.
+func (b *Bindings) Memory_CaptureRate() (memoryview.CaptureRateSnapshot, error) {
+	return b.api.Memory().CaptureRate(b.ctx())
+}
+
 // ── dials (Bundle E WP17) ──────────────────────────────────────────────
 
 func (b *Bindings) Dials_Get(key dialsview.ScopeKey) (dialsview.DialConfig, error) {
@@ -1598,4 +1605,48 @@ func (b *Bindings) Storage_GetMigrationDriftReport() (storageview.DriftReport, e
 // (those require manual intervention).
 func (b *Bindings) Storage_ApplyDriftFix(version int) error {
 	return b.api.Storage().ApplyDriftFix(b.ctx(), version)
+}
+
+// ── onboarding (harness-self-mcp-onboarding-01KQ8TDU WP08) ───────────────
+
+// Onboarding_State returns the boot-time OnboardingState the frontend reads
+// to decide whether to mount the dialog (firstRun) or show the
+// "Reconfigure with assistant" entry in Settings.
+func (b *Bindings) Onboarding_State() (onboardingview.OnboardingState, error) {
+	return b.api.Onboarding().State(b.ctx())
+}
+
+// Onboarding_Begin returns the initial FSM card without consuming an event.
+// The OnboardingDialog calls this when it mounts so the welcome screen
+// renders immediately.
+func (b *Bindings) Onboarding_Begin() (onboardingview.StepResponse, error) {
+	return b.api.Onboarding().Begin(b.ctx())
+}
+
+// Onboarding_Step advances the Phase-1 FSM by one event (e.g. pick-provider,
+// enter-api-key, test-connection). Returns the next Card descriptor.
+func (b *Bindings) Onboarding_Step(req onboardingview.StepRequest) (onboardingview.StepResponse, error) {
+	return b.api.Onboarding().Step(b.ctx(), req)
+}
+
+// Onboarding_Dismiss marks onboarding as completed so the dialog will not
+// auto-show again. Idempotent.
+func (b *Bindings) Onboarding_Dismiss() error {
+	return b.api.Onboarding().Dismiss(b.ctx())
+}
+
+// Onboarding_RestartPhase2 spawns a kind=onboarding session with the
+// harness-self MCP enabled and the chosen starter's system prompt. Called
+// when the user picks a starter from the dialog OR clicks "Reconfigure with
+// assistant" in Settings. Returns the new session id.
+func (b *Bindings) Onboarding_RestartPhase2(req onboardingview.RestartPhase2Request) (onboardingview.RestartPhase2Response, error) {
+	return b.api.Onboarding().RestartPhase2(b.ctx(), req)
+}
+
+// Onboarding_ListStarters returns the curated starter prompts (title,
+// description, recommended provider/model/recipes). The dialog renders
+// these as cards; the system-prompt body is withheld and resolved
+// server-side when RestartPhase2 fires.
+func (b *Bindings) Onboarding_ListStarters() ([]onboardingview.StarterSummary, error) {
+	return b.api.Onboarding().ListStarters(b.ctx())
 }

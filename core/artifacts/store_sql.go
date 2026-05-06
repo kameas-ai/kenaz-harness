@@ -283,6 +283,100 @@ func (s *sqlStore) Refcount(ctx context.Context, contentHash string) (int, error
 	return s.RefcountFor(ctx, contentHash)
 }
 
+func (s *sqlStore) WriteVersion(ctx context.Context, v ArtifactVersion) (ArtifactVersion, error) {
+	// Verify the parent artifact exists.
+	if _, err := s.Get(ctx, v.ArtifactID); err != nil {
+		return ArtifactVersion{}, err
+	}
+	if v.CreatedAt.IsZero() {
+		v.CreatedAt = s.now()
+	}
+	// Determine the next version number inside the write transaction to
+	// avoid races: SELECT MAX(version)+1 and INSERT atomically.
+	if err := s.db.WriteTx(ctx, func(tx storage.WriteTx) error {
+		row := tx.QueryRow(ctx,
+			"SELECT COALESCE(MAX(version), 0) FROM artifact_versions WHERE artifact_id = ?",
+			v.ArtifactID)
+		var maxVer int
+		if err := row.Scan(&maxVer); err != nil {
+			return fmt.Errorf("artifacts: WriteVersion: scan max version: %w", err)
+		}
+		v.Version = maxVer + 1
+		res, err := tx.Exec(ctx, `
+            INSERT INTO artifact_versions
+                (artifact_id, version, content_hash, byte_size, mime_type, summary, path, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        `,
+			v.ArtifactID, v.Version, v.ContentHash, v.ByteSize,
+			v.MimeType, v.Summary, v.Path,
+			v.CreatedAt.UnixNano(),
+		)
+		if err != nil {
+			if strings.Contains(err.Error(), "UNIQUE constraint failed") {
+				return ErrVersionConflict
+			}
+			return fmt.Errorf("artifacts: WriteVersion: insert: %w", err)
+		}
+		id, err := res.LastInsertID()
+		if err != nil {
+			return fmt.Errorf("artifacts: WriteVersion: last insert id: %w", err)
+		}
+		v.ID = id
+		return nil
+	}); err != nil {
+		return ArtifactVersion{}, err
+	}
+	return v, nil
+}
+
+func (s *sqlStore) ListVersions(ctx context.Context, artifactID string) ([]ArtifactVersion, error) {
+	rows, err := s.db.Reader().Query(ctx, `
+        SELECT id, artifact_id, version, content_hash, byte_size, mime_type,
+               summary, path, created_at
+        FROM artifact_versions
+        WHERE artifact_id = ?
+        ORDER BY version ASC
+    `, artifactID)
+	if err != nil {
+		return nil, fmt.Errorf("artifacts: ListVersions: query: %w", err)
+	}
+	defer rows.Close()
+	var out []ArtifactVersion
+	for rows.Next() {
+		v, err := scanArtifactVersion(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, v)
+	}
+	return out, rows.Err()
+}
+
+func scanArtifactVersion(sc interface{ Scan(dest ...any) error }) (ArtifactVersion, error) {
+	var (
+		v           ArtifactVersion
+		summary     sql.NullString
+		path        sql.NullString
+		createdAtNs int64
+	)
+	if err := sc.Scan(
+		&v.ID, &v.ArtifactID, &v.Version, &v.ContentHash, &v.ByteSize,
+		&v.MimeType, &summary, &path, &createdAtNs,
+	); err != nil {
+		return ArtifactVersion{}, fmt.Errorf("artifacts: scan version: %w", err)
+	}
+	if summary.Valid {
+		s := summary.String
+		v.Summary = &s
+	}
+	if path.Valid {
+		p := path.String
+		v.Path = &p
+	}
+	v.CreatedAt = time.Unix(0, createdAtNs).UTC()
+	return v, nil
+}
+
 // ArtifactsRefcountSource exposes a Store as a RefcountSource for the
 // attachments.MediaStore composite refcount. WP02 wires this via
 // `media.RegisterRefcountSource(artifacts.ArtifactsRefcountSource{Store: store})`

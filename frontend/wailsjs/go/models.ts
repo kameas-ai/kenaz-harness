@@ -2923,6 +2923,200 @@ export namespace nodes {
 
 }
 
+export namespace onboarding {
+	
+	export class Action {
+	    id: string;
+	    label: string;
+	    primary?: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new Action(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.label = source["label"];
+	        this.primary = source["primary"];
+	    }
+	}
+	export class Field {
+	    id: string;
+	    label: string;
+	    placeholder?: string;
+	    secret?: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new Field(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.label = source["label"];
+	        this.placeholder = source["placeholder"];
+	        this.secret = source["secret"];
+	    }
+	}
+	export class Card {
+	    title: string;
+	    body?: string;
+	    actions?: Action[];
+	    fields?: Field[];
+	    error_message?: string;
+	    provider_hint?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new Card(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.title = source["title"];
+	        this.body = source["body"];
+	        this.actions = this.convertValues(source["actions"], Action);
+	        this.fields = this.convertValues(source["fields"], Field);
+	        this.error_message = source["error_message"];
+	        this.provider_hint = source["provider_hint"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	
+	export class OnboardingState {
+	    firstRun: boolean;
+	    completed: boolean;
+	    phase?: string;
+	    currentState?: string;
+	    harnessSelfMCPDisabled: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new OnboardingState(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.firstRun = source["firstRun"];
+	        this.completed = source["completed"];
+	        this.phase = source["phase"];
+	        this.currentState = source["currentState"];
+	        this.harnessSelfMCPDisabled = source["harnessSelfMCPDisabled"];
+	    }
+	}
+	export class RestartPhase2Request {
+	    starterId: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new RestartPhase2Request(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.starterId = source["starterId"];
+	    }
+	}
+	export class RestartPhase2Response {
+	    sessionId: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new RestartPhase2Response(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.sessionId = source["sessionId"];
+	    }
+	}
+	export class StarterSummary {
+	    id: string;
+	    title: string;
+	    description: string;
+	    recommendedProvider?: string;
+	    recommendedModel?: string;
+	    recommendedRecipes?: string[];
+	
+	    static createFrom(source: any = {}) {
+	        return new StarterSummary(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.title = source["title"];
+	        this.description = source["description"];
+	        this.recommendedProvider = source["recommendedProvider"];
+	        this.recommendedModel = source["recommendedModel"];
+	        this.recommendedRecipes = source["recommendedRecipes"];
+	    }
+	}
+	export class StepRequest {
+	    state: string;
+	    event: string;
+	    payload?: Record<string, string>;
+	
+	    static createFrom(source: any = {}) {
+	        return new StepRequest(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.state = source["state"];
+	        this.event = source["event"];
+	        this.payload = source["payload"];
+	    }
+	}
+	export class StepResponse {
+	    state: string;
+	    card: Card;
+	
+	    static createFrom(source: any = {}) {
+	        return new StepResponse(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.state = source["state"];
+	        this.card = this.convertValues(source["card"], Card);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+
+}
+
 export namespace permissions {
 	
 	export class Grant {

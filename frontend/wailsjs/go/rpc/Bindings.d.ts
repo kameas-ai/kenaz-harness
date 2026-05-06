@@ -19,6 +19,7 @@ import {llm} from '../models';
 import {mcp} from '../models';
 import {memory} from '../models';
 import {nodes} from '../models';
+import {onboarding} from '../models';
 import {permissions} from '../models';
 import {policy} from '../models';
 import {projects} from '../models';
@@ -289,6 +290,18 @@ export function Nodes_Get(arg1:string):Promise<nodes.NodeManifestDetail>;
 export function Nodes_ListUserOverrides():Promise<Array<nodes.UserOverrideInfo>>;
 
 export function Nodes_ReloadOverrides():Promise<nodes.ReloadResult>;
+
+export function Onboarding_Begin():Promise<onboarding.StepResponse>;
+
+export function Onboarding_Dismiss():Promise<void>;
+
+export function Onboarding_ListStarters():Promise<Array<onboarding.StarterSummary>>;
+
+export function Onboarding_RestartPhase2(arg1:onboarding.RestartPhase2Request):Promise<onboarding.RestartPhase2Response>;
+
+export function Onboarding_State():Promise<onboarding.OnboardingState>;
+
+export function Onboarding_Step(arg1:onboarding.StepRequest):Promise<onboarding.StepResponse>;
 
 export function Permissions_ListGrants(arg1:string):Promise<Array<permissions.Grant>>;
 

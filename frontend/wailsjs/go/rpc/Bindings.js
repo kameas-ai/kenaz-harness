@@ -510,6 +510,30 @@ export function Nodes_ReloadOverrides() {
   return window['go']['rpc']['Bindings']['Nodes_ReloadOverrides']();
 }
 
+export function Onboarding_Begin() {
+  return window['go']['rpc']['Bindings']['Onboarding_Begin']();
+}
+
+export function Onboarding_Dismiss() {
+  return window['go']['rpc']['Bindings']['Onboarding_Dismiss']();
+}
+
+export function Onboarding_ListStarters() {
+  return window['go']['rpc']['Bindings']['Onboarding_ListStarters']();
+}
+
+export function Onboarding_RestartPhase2(arg1) {
+  return window['go']['rpc']['Bindings']['Onboarding_RestartPhase2'](arg1);
+}
+
+export function Onboarding_State() {
+  return window['go']['rpc']['Bindings']['Onboarding_State']();
+}
+
+export function Onboarding_Step(arg1) {
+  return window['go']['rpc']['Bindings']['Onboarding_Step'](arg1);
+}
+
 export function Permissions_ListGrants(arg1) {
   return window['go']['rpc']['Bindings']['Permissions_ListGrants'](arg1);
 }

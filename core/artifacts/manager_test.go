@@ -247,6 +247,70 @@ func TestManager_Capture_NoCandidates_ShortCircuits(t *testing.T) {
 	}
 }
 
+// TestManager_WriteVersion_RoundTrip verifies the Manager.WriteVersion
+// path: bytes go into the MediaStore CAS and a version row comes back
+// with the correct content_hash + byte_size.
+func TestManager_WriteVersion_RoundTrip(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	media := attachments.NewMemoryMediaStore(dir)
+	store := artifacts.NewMemoryStore()
+	mgr := artifacts.NewManager(store, media)
+
+	// Capture a parent artifact first.
+	captured, err := mgr.Capture(context.Background(), []artifacts.CaptureCandidate{{
+		Title:     "notes.md",
+		MimeType:  "text/markdown",
+		Bytes:     []byte("# original"),
+		Source:    artifacts.SourceToolOutput,
+		SourceRef: artifacts.ArtifactSourceRef{MessageID: "m1"},
+	}}, "sess-1")
+	if err != nil || len(captured) != 1 {
+		t.Fatalf("Capture: %v (len=%d)", err, len(captured))
+	}
+	parent := captured[0]
+
+	summary := "revised introduction"
+	ver, err := mgr.WriteVersion(context.Background(), parent.ID,
+		[]byte("# revised"), "", &summary, nil)
+	if err != nil {
+		t.Fatalf("WriteVersion: %v", err)
+	}
+	if ver.Version != 1 {
+		t.Errorf("Version = %d, want 1", ver.Version)
+	}
+	if ver.ArtifactID != parent.ID {
+		t.Errorf("ArtifactID = %q, want %q", ver.ArtifactID, parent.ID)
+	}
+	if ver.ContentHash == "" {
+		t.Errorf("ContentHash empty")
+	}
+	if ver.ByteSize != int64(len("# revised")) {
+		t.Errorf("ByteSize = %d, want %d", ver.ByteSize, len("# revised"))
+	}
+	if ver.MimeType != "text/markdown" {
+		t.Errorf("MimeType = %q, want text/markdown (inherited from parent)", ver.MimeType)
+	}
+	if ver.Summary == nil || *ver.Summary != summary {
+		t.Errorf("Summary = %v, want %q", ver.Summary, summary)
+	}
+}
+
+// TestManager_WriteVersion_NotFound verifies that updating a
+// non-existent artifact returns ErrArtifactNotFound.
+func TestManager_WriteVersion_NotFound(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	media := attachments.NewMemoryMediaStore(dir)
+	store := artifacts.NewMemoryStore()
+	mgr := artifacts.NewManager(store, media)
+
+	_, err := mgr.WriteVersion(context.Background(), "ghost", []byte("hi"), "", nil, nil)
+	if !errors.Is(err, artifacts.ErrArtifactNotFound) {
+		t.Errorf("got %v, want ErrArtifactNotFound", err)
+	}
+}
+
 // TestManager_SetCaptureConfig roundtrips the live config.
 func TestManager_SetCaptureConfig(t *testing.T) {
 	t.Parallel()

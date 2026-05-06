@@ -562,4 +562,228 @@ func TestArtifactsRefcountSource_Refcount(t *testing.T) {
 	}
 }
 
+// TestSQLStore_WriteVersion_RoundTrip verifies that WriteVersion inserts
+// a row into artifact_versions and that ListVersions reads it back with
+// the correct fields.
+func TestSQLStore_WriteVersion_RoundTrip(t *testing.T) {
+	t.Parallel()
+	db := openTestDB(t)
+	seedSession(t, db, "s1", nil)
+	store := artifacts.NewSQLStore(db)
+	ctx := context.Background()
+
+	// Insert a parent artifact to satisfy the FK.
+	parent, err := store.Insert(ctx, artifacts.Artifact{
+		SessionID:   "s1",
+		Title:       "report.md",
+		MimeType:    "text/markdown",
+		ContentHash: "hash1",
+		ByteSize:    100,
+		Source:      artifacts.SourceToolOutput,
+		SourceRef:   artifacts.ArtifactSourceRef{MessageID: "m1"},
+	})
+	if err != nil {
+		t.Fatalf("Insert parent: %v", err)
+	}
+
+	summary := "fixed typo in introduction"
+	path := "/Users/alice/reports/report.md"
+	v, err := store.WriteVersion(ctx, artifacts.ArtifactVersion{
+		ArtifactID:  parent.ID,
+		ContentHash: "hash2",
+		ByteSize:    120,
+		MimeType:    "text/markdown",
+		Summary:     &summary,
+		Path:        &path,
+	})
+	if err != nil {
+		t.Fatalf("WriteVersion: %v", err)
+	}
+	if v.Version != 1 {
+		t.Errorf("version = %d, want 1 (first write)", v.Version)
+	}
+	if v.ArtifactID != parent.ID {
+		t.Errorf("artifact_id = %q, want %q", v.ArtifactID, parent.ID)
+	}
+	if v.ContentHash != "hash2" {
+		t.Errorf("content_hash = %q, want hash2", v.ContentHash)
+	}
+	if v.ByteSize != 120 {
+		t.Errorf("byte_size = %d, want 120", v.ByteSize)
+	}
+	if v.Summary == nil || *v.Summary != summary {
+		t.Errorf("summary = %v, want %q", v.Summary, summary)
+	}
+	if v.Path == nil || *v.Path != path {
+		t.Errorf("path = %v, want %q", v.Path, path)
+	}
+	if v.CreatedAt.IsZero() {
+		t.Errorf("created_at is zero")
+	}
+
+	// ListVersions should return exactly the one row.
+	listed, err := store.ListVersions(ctx, parent.ID)
+	if err != nil {
+		t.Fatalf("ListVersions: %v", err)
+	}
+	if len(listed) != 1 {
+		t.Fatalf("ListVersions len = %d, want 1", len(listed))
+	}
+	if listed[0].Version != 1 {
+		t.Errorf("listed version = %d, want 1", listed[0].Version)
+	}
+	if listed[0].ContentHash != "hash2" {
+		t.Errorf("listed content_hash = %q", listed[0].ContentHash)
+	}
+}
+
+// TestSQLStore_WriteVersion_MonotonicIncrement verifies the version
+// counter increments correctly across multiple WriteVersion calls.
+func TestSQLStore_WriteVersion_MonotonicIncrement(t *testing.T) {
+	t.Parallel()
+	db := openTestDB(t)
+	seedSession(t, db, "s1", nil)
+	store := artifacts.NewSQLStore(db)
+	ctx := context.Background()
+
+	parent, _ := store.Insert(ctx, artifacts.Artifact{
+		SessionID:   "s1",
+		MimeType:    "text/plain",
+		ContentHash: "h0",
+		Source:      artifacts.SourceUserPin,
+		SourceRef:   artifacts.ArtifactSourceRef{MessageID: "m"},
+	})
+
+	for i := 0; i < 3; i++ {
+		v, err := store.WriteVersion(ctx, artifacts.ArtifactVersion{
+			ArtifactID:  parent.ID,
+			ContentHash: "rev" + string(rune('a'+i)),
+			ByteSize:    int64(i + 1),
+			MimeType:    "text/plain",
+		})
+		if err != nil {
+			t.Fatalf("WriteVersion[%d]: %v", i, err)
+		}
+		if v.Version != i+1 {
+			t.Errorf("WriteVersion[%d].Version = %d, want %d", i, v.Version, i+1)
+		}
+	}
+
+	listed, err := store.ListVersions(ctx, parent.ID)
+	if err != nil {
+		t.Fatalf("ListVersions: %v", err)
+	}
+	if len(listed) != 3 {
+		t.Fatalf("ListVersions len = %d, want 3", len(listed))
+	}
+	for i, ver := range listed {
+		if ver.Version != i+1 {
+			t.Errorf("listed[%d].Version = %d, want %d", i, ver.Version, i+1)
+		}
+	}
+}
+
+// TestSQLStore_WriteVersion_NotFound verifies ErrArtifactNotFound on a
+// missing parent artifact.
+func TestSQLStore_WriteVersion_NotFound(t *testing.T) {
+	t.Parallel()
+	db := openTestDB(t)
+	store := artifacts.NewSQLStore(db)
+	ctx := context.Background()
+
+	_, err := store.WriteVersion(ctx, artifacts.ArtifactVersion{
+		ArtifactID:  "ghost",
+		ContentHash: "h",
+		MimeType:    "text/plain",
+	})
+	if !errors.Is(err, artifacts.ErrArtifactNotFound) {
+		t.Errorf("WriteVersion(ghost) = %v, want ErrArtifactNotFound", err)
+	}
+}
+
+// TestSQLStore_WriteVersion_NullableFields verifies that nil summary and
+// path round-trip correctly.
+func TestSQLStore_WriteVersion_NullableFields(t *testing.T) {
+	t.Parallel()
+	db := openTestDB(t)
+	seedSession(t, db, "s1", nil)
+	store := artifacts.NewSQLStore(db)
+	ctx := context.Background()
+
+	parent, _ := store.Insert(ctx, artifacts.Artifact{
+		SessionID:   "s1",
+		MimeType:    "text/plain",
+		ContentHash: "h0",
+		Source:      artifacts.SourceToolOutput,
+		SourceRef:   artifacts.ArtifactSourceRef{MessageID: "m"},
+	})
+
+	v, err := store.WriteVersion(ctx, artifacts.ArtifactVersion{
+		ArtifactID:  parent.ID,
+		ContentHash: "h1",
+		ByteSize:    5,
+		MimeType:    "text/plain",
+		// Summary and Path intentionally nil.
+	})
+	if err != nil {
+		t.Fatalf("WriteVersion: %v", err)
+	}
+	if v.Summary != nil {
+		t.Errorf("summary = %v, want nil", v.Summary)
+	}
+	if v.Path != nil {
+		t.Errorf("path = %v, want nil", v.Path)
+	}
+
+	listed, _ := store.ListVersions(ctx, parent.ID)
+	if len(listed) != 1 {
+		t.Fatalf("len = %d", len(listed))
+	}
+	if listed[0].Summary != nil || listed[0].Path != nil {
+		t.Errorf("nullable fields not nil after round-trip: summary=%v path=%v",
+			listed[0].Summary, listed[0].Path)
+	}
+}
+
+// TestSQLStore_WriteVersion_CascadeDelete verifies that deleting the
+// parent artifact cascades to artifact_versions rows.
+func TestSQLStore_WriteVersion_CascadeDelete(t *testing.T) {
+	t.Parallel()
+	db := openTestDB(t)
+	seedSession(t, db, "s1", nil)
+	store := artifacts.NewSQLStore(db)
+	ctx := context.Background()
+
+	parent, _ := store.Insert(ctx, artifacts.Artifact{
+		SessionID:   "s1",
+		MimeType:    "text/plain",
+		ContentHash: "h0",
+		Source:      artifacts.SourceCodeBlock,
+		SourceRef:   artifacts.ArtifactSourceRef{MessageID: "m"},
+	})
+	_, _ = store.WriteVersion(ctx, artifacts.ArtifactVersion{
+		ArtifactID:  parent.ID,
+		ContentHash: "h1",
+		MimeType:    "text/plain",
+	})
+
+	listed, _ := store.ListVersions(ctx, parent.ID)
+	if len(listed) != 1 {
+		t.Fatalf("setup: ListVersions len = %d", len(listed))
+	}
+
+	if _, err := store.Delete(ctx, parent.ID); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+
+	// After parent deletion, ListVersions should return empty (FK CASCADE).
+	listed, err := store.ListVersions(ctx, parent.ID)
+	if err != nil {
+		t.Fatalf("ListVersions after delete: %v", err)
+	}
+	if len(listed) != 0 {
+		t.Errorf("ListVersions after parent delete = %d rows, want 0 (cascade)", len(listed))
+	}
+}
+
 func strPtr(s string) *string { return &s }

@@ -73,6 +73,12 @@ const (
 	ActionWorkflowRun    = "workflow.run"
 	ActionWorkflowSave   = "workflow.save"
 	ActionWorkflowDelete = "workflow.delete"
+
+	// ActionArtifactUpdate gates the kaneaz__update_artifact builtin
+	// (update-artifact-tool-01KQ8TD4). Default-allow under FSWriteEnabled;
+	// gated by the same FSWriteDisabled toggle as the write-family fs
+	// builtins. The resource UID is Artifact::"<artifact-id>".
+	ActionArtifactUpdate = "artifact.update"
 )
 
 // Entity-type names mirror spec §4.10's recommended mapping:

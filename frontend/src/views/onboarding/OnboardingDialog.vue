@@ -2,7 +2,7 @@
 /**
  * OnboardingDialog — top-level dialog mounted on app boot when the
  * onboarding API reports FirstRun = true. Mission
- * harness-self-mcp-onboarding-01KQ8TDU WP08.
+ * harness-self-mcp-onboarding-01KQ8TDU WP08 (tail polish, v0.5.4).
  *
  * Phase 1 (deterministic FSM): the user picks a provider kind, enters
  * an API key, and runs a connection test via the backend FSM
@@ -15,31 +15,11 @@
  * "research" / "data" / "just chat"). RestartPhase2 spawns a new
  * kind=onboarding session and the frontend navigates to it; the
  * harness-self MCP server's tools take over from there.
- *
- * Status: WP08 ships the dialog scaffold + starter picker shell. Wiring
- * to the backend OnboardingAPI binding lands once the Wails bindings
- * codegen pass picks up the new view (TODO(v0.3.x)).
  */
 
-import { computed, ref } from 'vue';
-
-interface OnboardingCard {
-  title: string;
-  body?: string;
-  actions?: Array<{ id: string; label: string; primary?: boolean }>;
-  fields?: Array<{ id: string; label: string; placeholder?: string; secret?: boolean }>;
-  error_message?: string;
-  provider_hint?: string;
-}
-
-interface StarterSummary {
-  id: string;
-  title: string;
-  description: string;
-  recommendedProvider?: string;
-  recommendedModel?: string;
-  recommendedRecipes?: string[];
-}
+import { onMounted, ref } from 'vue';
+import { useHarnessClient } from '@/lib/harnessClientContext';
+import type { OnboardingCard, StarterSummary } from '@/lib/harnessClient';
 
 const props = defineProps<{
   open: boolean;
@@ -50,34 +30,51 @@ const emit = defineEmits<{
   (e: 'navigate-to-session', sessionId: string): void;
 }>();
 
+const client = useHarnessClient();
+
 const phase = ref<'phase1' | 'starter-pick'>('phase1');
 const card = ref<OnboardingCard | null>(null);
+const currentState = ref<string>('welcome');
 const fieldValues = ref<Record<string, string>>({});
 const starters = ref<StarterSummary[]>([]);
 const submitting = ref(false);
+const errorMsg = ref<string | null>(null);
 
-// TODO(v0.3.x): replace these stubs with calls into the OnboardingAPI
-// binding once the Wails codegen picks up core/rpc/views/onboarding.
 async function refreshCard() {
-  // Until the binding is wired, render a static placeholder so the
-  // dialog mounts without crashing during dev.
-  card.value = {
-    title: 'Welcome to Kaneaz',
-    body: 'The onboarding flow lives at this dialog. Wails bindings for OnboardingAPI land in v0.3.x.',
-    actions: [
-      { id: 'next', label: 'Get started', primary: true },
-      { id: 'dismiss', label: 'Skip onboarding' },
-    ],
-  };
+  errorMsg.value = null;
+  try {
+    const resp = await client.onboarding.begin();
+    currentState.value = resp.state;
+    card.value = resp.card;
+  } catch {
+    // Graceful degradation: show a static welcome card if the API is not yet wired.
+    card.value = {
+      title: 'Welcome to Kaneaz',
+      body: 'Let\'s get you set up.',
+      actions: [
+        { id: 'next', label: 'Get started', primary: true },
+        { id: 'dismiss', label: 'Skip onboarding' },
+      ],
+    };
+  }
 }
 
-function onAction(id: string) {
-  if (id === 'dismiss') {
-    emit('close');
-    return;
-  }
-  if (id === 'next') {
-    phase.value = 'starter-pick';
+async function loadStarters() {
+  try {
+    const list = await client.onboarding.listStarters();
+    if (list.length > 0) {
+      starters.value = list;
+    } else {
+      // Fallback embedded starters if backend returns empty.
+      starters.value = [
+        { id: 'code', title: 'Set me up for code work', description: 'Anthropic Claude + filesystem + git MCP.' },
+        { id: 'writing', title: 'Set me up for writing', description: 'Claude + filesystem + brave-search.' },
+        { id: 'research', title: 'Set me up for research', description: 'Claude + brave-search + fetch + arxiv.' },
+        { id: 'data', title: 'Set me up for data analysis', description: 'Claude + python-runtime.' },
+        { id: 'chat', title: 'Just chat', description: 'Skip the assisted setup.' },
+      ];
+    }
+  } catch {
     starters.value = [
       { id: 'code', title: 'Set me up for code work', description: 'Anthropic Claude + filesystem + git MCP.' },
       { id: 'writing', title: 'Set me up for writing', description: 'Claude + filesystem + brave-search.' },
@@ -88,25 +85,73 @@ function onAction(id: string) {
   }
 }
 
-function onPickStarter(s: StarterSummary) {
-  // TODO(v0.3.x): call OnboardingAPI.RestartPhase2({starterId: s.id}).
-  if (s.id === 'chat') {
+async function onAction(id: string) {
+  if (id === 'dismiss') {
+    try { await client.onboarding.dismiss(); } catch { /* best-effort */ }
     emit('close');
     return;
   }
-  emit('navigate-to-session', `pending-${s.id}`);
-  emit('close');
+  if (id === 'next') {
+    await loadStarters();
+    phase.value = 'starter-pick';
+    return;
+  }
+  // Generic FSM event — send to backend.
+  submitting.value = true;
+  errorMsg.value = null;
+  try {
+    const resp = await client.onboarding.step({
+      state: currentState.value,
+      event: id,
+      payload: { ...fieldValues.value },
+    });
+    currentState.value = resp.state;
+    card.value = resp.card;
+    if (resp.card?.error_message) {
+      errorMsg.value = resp.card.error_message;
+    }
+    // If FSM landed on done, show starter picker.
+    if (resp.state === 'done') {
+      await loadStarters();
+      phase.value = 'starter-pick';
+    }
+  } catch (e: unknown) {
+    errorMsg.value = e instanceof Error ? e.message : String(e);
+  } finally {
+    submitting.value = false;
+  }
 }
 
-const visible = computed(() => props.open);
-
-if (visible.value) {
-  void refreshCard();
+async function onPickStarter(s: StarterSummary) {
+  if (s.id === 'chat') {
+    try { await client.onboarding.dismiss(); } catch { /* best-effort */ }
+    emit('close');
+    return;
+  }
+  submitting.value = true;
+  errorMsg.value = null;
+  try {
+    const resp = await client.onboarding.restartPhase2({ starterId: s.id });
+    if (resp.sessionId) {
+      emit('navigate-to-session', resp.sessionId);
+    }
+    emit('close');
+  } catch (e: unknown) {
+    errorMsg.value = e instanceof Error ? e.message : String(e);
+  } finally {
+    submitting.value = false;
+  }
 }
+
+onMounted(() => {
+  if (props.open) {
+    void refreshCard();
+  }
+});
 </script>
 
 <template>
-  <div v-if="visible" class="onboarding-overlay" role="dialog" aria-modal="true">
+  <div v-if="open" class="onboarding-overlay" role="dialog" aria-modal="true">
     <div class="onboarding-dialog">
       <header class="dialog-head">
         <h2 v-if="card">{{ card.title }}</h2>
@@ -115,7 +160,7 @@ if (visible.value) {
       <section class="dialog-body">
         <template v-if="phase === 'phase1' && card">
           <p v-if="card.body">{{ card.body }}</p>
-          <p v-if="card.error_message" class="dialog-error">{{ card.error_message }}</p>
+          <p v-if="errorMsg" class="dialog-error">{{ errorMsg }}</p>
           <div v-if="card.fields && card.fields.length" class="dialog-fields">
             <label v-for="f in card.fields" :key="f.id" class="dialog-field">
               <span class="field-label">{{ f.label }}</span>
@@ -141,9 +186,10 @@ if (visible.value) {
 
         <template v-else-if="phase === 'starter-pick'">
           <p>Pick a starter — the onboarding agent will configure the harness for that workflow.</p>
+          <p v-if="errorMsg" class="dialog-error">{{ errorMsg }}</p>
           <ul class="starter-list">
             <li v-for="s in starters" :key="s.id">
-              <button class="starter-card" @click="onPickStarter(s)">
+              <button class="starter-card" :disabled="submitting" @click="onPickStarter(s)">
                 <strong>{{ s.title }}</strong>
                 <span>{{ s.description }}</span>
               </button>

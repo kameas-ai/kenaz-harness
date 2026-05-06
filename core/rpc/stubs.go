@@ -195,6 +195,9 @@ func (s *stubMemory) HealthSnapshot(_ context.Context) (memoryview.HealthSnapsho
 func (s *stubMemory) TestEmbedder(_ context.Context) (int, error) {
 	return 0, errNotWired
 }
+func (s *stubMemory) CaptureRate(_ context.Context) (memoryview.CaptureRateSnapshot, error) {
+	return memoryview.CaptureRateSnapshot{EmbedderHealth: "ok"}, nil
+}
 
 // ── dials ──────────────────────────────────────────────────────────────
 

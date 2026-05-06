@@ -21,6 +21,7 @@ import (
 	corefsbuiltins "github.com/sigil-tech/kaneaz-harness/core/tools/fsbuiltins"
 	corefsrequest "github.com/sigil-tech/kaneaz-harness/core/tools/fsrequest"
 	coresaveartifact "github.com/sigil-tech/kaneaz-harness/core/tools/saveartifact"
+	coreupdateartifact "github.com/sigil-tech/kaneaz-harness/core/tools/updateartifact"
 	corewebsearch "github.com/sigil-tech/kaneaz-harness/core/tools/websearch"
 	"github.com/sigil-tech/kaneaz-harness/core/toolloop"
 )
@@ -120,6 +121,40 @@ func registerBuiltinTools(
 	} else {
 		logging.L().Info("rpc.builtins.save_artifact_skipped",
 			"reason", "no artifacts manager wired")
+	}
+
+	// update_artifact: writes a new version row for an existing artifact.
+	// Gated behind the same FSWriteEnabled toggle as the write-family fs
+	// builtins — updating content is a write operation. Only registered
+	// when an artifacts manager is wired (same nil-guard as save_artifact).
+	if artifactsMgr != nil {
+		updateArtifactTool := coreupdateartifact.New(coreupdateartifact.Options{
+			Updater: artifactsMgr,
+			Enabled: fsWriteEnabledLookup(store),
+		})
+		registry.Register(updateArtifactTool)
+		logging.L().Info("rpc.builtins.register", "tool", updateArtifactTool.Name())
+	} else {
+		logging.L().Info("rpc.builtins.update_artifact_skipped",
+			"reason", "no artifacts manager wired")
+	}
+}
+
+// fsWriteEnabledLookup returns a closure the update_artifact tool
+// consults inside Call to honour the live FSWrite Settings dial. nil
+// store collapses to "disabled" — correct default-off posture for any
+// write tool. This mirrors the RegisterFSBuiltinTools gate.
+func fsWriteEnabledLookup(store settings.SettingsStore) func() bool {
+	if store == nil {
+		return func() bool { return false }
+	}
+	return func() bool {
+		v, err := store.LoadFSWriteEnabled()
+		if err != nil {
+			logging.L().Warn("rpc.builtins.update_artifact_lookup.read_failed", "err", err.Error())
+			return false
+		}
+		return v
 	}
 }
 
@@ -350,7 +385,9 @@ func builtinEnabledPredicate(s *settings.API) func(string) bool {
 			return v
 
 		// Write-family tools: default OFF until the user opts in from the Tools panel.
-		case corefsbuiltins.NameWriteFile, corefsbuiltins.NameEditFile:
+		// update_artifact is gated by the same FSWriteEnabled toggle.
+		case corefsbuiltins.NameWriteFile, corefsbuiltins.NameEditFile,
+			coreupdateartifact.ToolName:
 			v, err := store.LoadFSWriteEnabled()
 			if err != nil {
 				logging.L().Warn("rpc.builtins.predicate.read_failed",

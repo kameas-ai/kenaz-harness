@@ -143,6 +143,43 @@ func (m *Manager) SetCaptureConfig(cfg CaptureConfig) {
 	m.mu.Unlock()
 }
 
+// WriteVersion writes a new content revision for an existing artifact.
+// The bytes are pushed into the MediaStore (CAS-dedup'd) and a new row
+// is appended to artifact_versions. The parent Artifact row is never
+// mutated; the caller reads the updated ArtifactVersion for the new
+// content_hash + byte_size.
+//
+// summary and path are optional; pass nil to omit them.
+//
+// Returns ErrArtifactNotFound if artifactID has no matching row.
+func (m *Manager) WriteVersion(ctx context.Context, artifactID string, bytes []byte, mimeType string, summary, path *string) (ArtifactVersion, error) {
+	if artifactID == "" {
+		return ArtifactVersion{}, errors.New("artifacts: empty artifactID")
+	}
+	// Resolve the parent artifact to inherit its MimeType when the caller
+	// doesn't supply one.
+	parent, err := m.store.Get(ctx, artifactID)
+	if err != nil {
+		return ArtifactVersion{}, err
+	}
+	if mimeType == "" {
+		mimeType = parent.MimeType
+	}
+	mediaArt, err := m.media.Put(ctx, bytes, mimeType, parent.Title)
+	if err != nil {
+		return ArtifactVersion{}, fmt.Errorf("artifacts: WriteVersion: media put: %w", err)
+	}
+	v := ArtifactVersion{
+		ArtifactID:  artifactID,
+		ContentHash: mediaArt.ContentHash,
+		ByteSize:    mediaArt.ByteSize,
+		MimeType:    mimeType,
+		Summary:     summary,
+		Path:        path,
+	}
+	return m.store.WriteVersion(ctx, v)
+}
+
 // Capture materializes a slice of candidates into artifacts. For each
 // candidate the bytes are written to the MediaStore (CAS-dedup'd by
 // content_hash) and an artifacts row is inserted pointing at the
