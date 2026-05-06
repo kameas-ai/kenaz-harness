@@ -858,6 +858,7 @@ func New(c *core.Core) *API {
 		Store:    memStore,
 		Embedder: embedder,
 		Reader:   newMemoryMessageReader(c),
+		Profiles: &personalProfileLister{store: personalForLLM},
 	})
 	if hookRegistry != nil {
 		a.hooksAPI = hooksview.New(hooksview.Config{
@@ -2981,7 +2982,8 @@ func newEmbedderFromProfiles(profiles []corellm.ProviderProfile, profileIDOverri
 				m = model
 			}
 			return corememory.NewOpenAIEmbedder(resolver,
-				corememory.WithOpenAIModel(m))
+				corememory.WithOpenAIModel(m),
+				corememory.WithOpenAISourceKind(p.Kind))
 
 		case "openrouter":
 			m := defaultModel
@@ -2990,7 +2992,8 @@ func newEmbedderFromProfiles(profiles []corellm.ProviderProfile, profileIDOverri
 			}
 			return corememory.NewOpenAIEmbedder(resolver,
 				corememory.WithOpenAIEndpoint("https://openrouter.ai/api/v1/embeddings"),
-				corememory.WithOpenAIModel(m))
+				corememory.WithOpenAIModel(m),
+				corememory.WithOpenAISourceKind(p.Kind))
 
 		case "custom_openai_compatible":
 			// The profile's Endpoint is the base URL of the
@@ -3013,7 +3016,8 @@ func newEmbedderFromProfiles(profiles []corellm.ProviderProfile, profileIDOverri
 			}
 			return corememory.NewOpenAIEmbedder(resolver,
 				corememory.WithOpenAIEndpoint(endpoint),
-				corememory.WithOpenAIModel(m))
+				corememory.WithOpenAIModel(m),
+				corememory.WithOpenAISourceKind(p.Kind))
 
 		case "azure":
 			// Azure OpenAI embeddings require a deployment ID and API
@@ -3037,7 +3041,8 @@ func newEmbedderFromProfiles(profiles []corellm.ProviderProfile, profileIDOverri
 			}
 			return corememory.NewOpenAIEmbedder(resolver,
 				corememory.WithOpenAIEndpoint(endpoint),
-				corememory.WithOpenAIModel(m))
+				corememory.WithOpenAIModel(m),
+				corememory.WithOpenAISourceKind(p.Kind))
 
 		default:
 			// anthropic, bedrock, and any unknown kind are not eligible.
@@ -3065,6 +3070,36 @@ func newEmbedderFromProfiles(profiles []corellm.ProviderProfile, profileIDOverri
 		}
 	}
 	return corememory.NoopEmbedder{}
+}
+
+// personalProfileLister adapts personal.Store to the memoryview.ProfileLister
+// interface so the MemoryAPI can inspect configured provider profiles for the
+// EmbedderEligibility surface without importing personal directly.
+type personalProfileLister struct {
+	store personal.Store
+}
+
+func (l *personalProfileLister) ListProfiles() []corememory.ProfileEligibilityInput {
+	if l == nil || l.store == nil {
+		return nil
+	}
+	profiles, err := l.store.List()
+	if err != nil {
+		return nil
+	}
+	out := make([]corememory.ProfileEligibilityInput, 0, len(profiles))
+	for _, p := range profiles {
+		defaults := p.Defaults
+		deploymentID, _ := defaults["deployment_id"].(string)
+		apiVersion, _ := defaults["api_version"].(string)
+		resource, _ := defaults["resource_name"].(string)
+		out = append(out, corememory.ProfileEligibilityInput{
+			Kind:          p.Kind,
+			Endpoint:      p.Endpoint,
+			AzureComplete: deploymentID != "" && apiVersion != "" && resource != "",
+		})
+	}
+	return out
 }
 
 // newCorpusManager wires the corpora subsystem against the chassis's

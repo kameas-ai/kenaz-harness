@@ -26,13 +26,20 @@ const (
 // secrets backend; tests pass a fake.
 type KeyResolver func(ctx context.Context) ([]byte, error)
 
-// OpenAIEmbedder is an Embedder backed by OpenAI's /v1/embeddings.
+// OpenAIEmbedder is an Embedder backed by an OpenAI-compatible
+// /v1/embeddings endpoint. Several provider Kinds reuse this type
+// (openai, openrouter, custom_openai_compatible, azure) by overriding
+// the endpoint via WithOpenAIEndpoint. Kind() reports the SOURCE
+// provider Kind set via WithOpenAISourceKind so the health UI shows
+// the actual upstream the user configured rather than the literal
+// implementation type.
 type OpenAIEmbedder struct {
 	httpc       *http.Client
 	endpoint    string
 	model       string
 	dims        int
 	resolveKey  KeyResolver
+	sourceKind  string
 }
 
 // OpenAIOption configures an OpenAIEmbedder.
@@ -65,6 +72,20 @@ func WithOpenAIModel(m string) OpenAIOption {
 	}
 }
 
+// WithOpenAISourceKind sets the provider Kind that originated this
+// embedder (e.g. "openrouter", "azure", "custom_openai_compatible").
+// Reported via Kind() so the health dashboard surfaces the actual
+// upstream the user picked, not the literal "openai" implementation.
+// Empty string falls back to "openai" for backwards compatibility
+// with callers that don't set it.
+func WithOpenAISourceKind(k string) OpenAIOption {
+	return func(e *OpenAIEmbedder) {
+		if k != "" {
+			e.sourceKind = k
+		}
+	}
+}
+
 // NewOpenAIEmbedder constructs an OpenAI embedder. resolveKey is
 // required; pass NoopEmbedder when no provider is configured.
 func NewOpenAIEmbedder(resolveKey KeyResolver, opts ...OpenAIOption) *OpenAIEmbedder {
@@ -81,7 +102,17 @@ func NewOpenAIEmbedder(resolveKey KeyResolver, opts ...OpenAIOption) *OpenAIEmbe
 	return e
 }
 
-func (e *OpenAIEmbedder) Kind() string    { return "openai" }
+// Kind returns the SOURCE provider Kind (the upstream the user
+// configured: "openai", "openrouter", "azure", "custom_openai_compatible").
+// Falls back to "openai" when no source was set, matching pre-v0.5.5
+// behaviour for callers that build embedders directly without going
+// through newEmbedderFromProfiles.
+func (e *OpenAIEmbedder) Kind() string {
+	if e.sourceKind != "" {
+		return e.sourceKind
+	}
+	return "openai"
+}
 func (e *OpenAIEmbedder) Dimensions() int { return e.dims }
 
 type embeddingsRequest struct {

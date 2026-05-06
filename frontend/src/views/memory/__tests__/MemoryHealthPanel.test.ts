@@ -67,6 +67,12 @@ function mountWith(opts: MountOpts = {}) {
       }),
       healthSnapshot,
       testEmbedder,
+      captureRate: async () => ({
+        chunksPerMinute: 0,
+        embedderHealth: 'ok',
+        lastErrorAt: null,
+        recentErrorCount: 0,
+      }),
     },
   });
   const wrapper = mount(MemoryHealthPanel, {
@@ -206,5 +212,50 @@ describe('MemoryHealthPanel (§2.4)', () => {
     await flushPromises();
     const btn = wrapper.find('[data-testid="memory-health-reembed"]');
     expect(btn.attributes('disabled')).toBeDefined();
+  });
+
+  // ── v0.5.x audit: auto-refresh 30s timer ─────────────────────────────
+
+  it('auto-refreshes after 30 s via setInterval (v0.5.x audit)', async () => {
+    vi.useFakeTimers();
+    try {
+      const { wrapper, healthSnapshot } = mountWith();
+      await flushPromises();
+      // Called once on mount.
+      expect(healthSnapshot).toHaveBeenCalledTimes(1);
+
+      // Advance 30 s — the interval should fire.
+      vi.advanceTimersByTime(30_000);
+      await flushPromises();
+      expect(healthSnapshot).toHaveBeenCalledTimes(2);
+
+      // Advance another 30 s — fires again.
+      vi.advanceTimersByTime(30_000);
+      await flushPromises();
+      expect(healthSnapshot).toHaveBeenCalledTimes(3);
+
+      wrapper.unmount();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('stops auto-refreshing after unmount (no timer leak)', async () => {
+    vi.useFakeTimers();
+    try {
+      const { wrapper, healthSnapshot } = mountWith();
+      await flushPromises();
+      expect(healthSnapshot).toHaveBeenCalledTimes(1);
+
+      wrapper.unmount();
+      healthSnapshot.mockClear();
+
+      // Advance 60 s after unmount — no additional calls should fire.
+      vi.advanceTimersByTime(60_000);
+      await flushPromises();
+      expect(healthSnapshot).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

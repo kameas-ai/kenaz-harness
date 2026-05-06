@@ -198,6 +198,9 @@ func (s *stubMemory) TestEmbedder(_ context.Context) (int, error) {
 func (s *stubMemory) CaptureRate(_ context.Context) (memoryview.CaptureRateSnapshot, error) {
 	return memoryview.CaptureRateSnapshot{EmbedderHealth: "ok"}, nil
 }
+func (s *stubMemory) EmbedderEligibility(_ context.Context) (memoryview.EmbedderEligibility, error) {
+	return memoryview.EmbedderEligibility{}, nil
+}
 
 // ── dials ──────────────────────────────────────────────────────────────
 

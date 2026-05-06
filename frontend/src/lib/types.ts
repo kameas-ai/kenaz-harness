@@ -1218,6 +1218,29 @@ export interface MemoryCaptureRateSnapshot {
 }
 
 /**
+ * MemoryEmbedderEligibility — response from Memory_EmbedderEligibility.
+ *
+ * Summarises which provider profiles are capable of supplying embeddings.
+ * The Settings → Memory banner uses this to surface a contextual warning when
+ * the user has only Anthropic-direct or Bedrock profiles (no embeddings API).
+ *
+ * Mirrors core/memory.EmbedderEligibility.
+ */
+export interface MemoryEmbedderEligibility {
+  /** true when at least one configured profile can supply embeddings. */
+  hasEligible: boolean;
+  /** Total number of profiles that were examined. */
+  allProfiles: number;
+  /** Count of profiles that are eligible for embeddings. */
+  eligibleProfiles: number;
+  /**
+   * Unique provider kinds that are present but cannot supply embeddings by
+   * design (e.g. "anthropic", "bedrock"). Rendered per-provider in the banner.
+   */
+  skippedKinds: string[];
+}
+
+/**
  * DialScope — the cascading-config layer keys.
  */
 export type DialScope =

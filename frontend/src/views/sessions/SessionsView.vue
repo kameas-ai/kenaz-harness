@@ -1111,8 +1111,25 @@ function formatSize(bytes: number): string {
           v-if="lastRememberError"
           class="mx-4 my-2 rounded-md border border-signal-warn bg-surface-1 px-3 py-2 font-ui text-[12px] text-signal-warn"
           role="alert"
+          data-testid="remember-error-toast"
         >
-          Could not remember message: {{ lastRememberError }}
+          <template v-if="lastRememberError.includes('embedder unavailable')">
+            <p class="font-semibold">Memory needs an embedder.</p>
+            <p class="mt-0.5 text-ink-muted">
+              Add a memory-capable provider to enable pin/search/retrieval.
+            </p>
+            <button
+              type="button"
+              class="mt-2 font-ui text-[11px] rounded-sm border border-signal-warn px-2 py-1 hover:bg-surface-2"
+              data-testid="remember-error-open-memory-settings"
+              @click="router.push('/settings')"
+            >
+              Open Memory settings
+            </button>
+          </template>
+          <template v-else>
+            Could not remember message: {{ lastRememberError }}
+          </template>
         </div>
         <div
           class="px-4 pt-2 flex items-center gap-1 border-b border-border-muted"
