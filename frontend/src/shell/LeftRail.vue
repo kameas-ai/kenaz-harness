@@ -7,7 +7,6 @@ import {
   Archive,
   Plus,
   MessageSquare,
-  Search,
   Wrench,
   FileText,
   Settings,
@@ -1020,7 +1019,6 @@ async function onProjectDrop(evt: DragEvent, projectId: string) {
     <nav class="px-2 py-2 border-t border-border-muted" aria-label="Surfaces">
       <ul class="space-y-1">
         <li><RailEntry :icon="MessageSquare" label="Sessions" to="/sessions" /></li>
-        <li><RailEntry :icon="Search" label="Search" to="/search" /></li>
         <li><RailEntry :icon="Wrench" label="Tools" to="/tools" /></li>
         <li><RailEntry :icon="GitBranch" label="Workflows" to="/workflows" /></li>
         <li><RailEntry :icon="FileText" label="Contexts" to="/contexts" /></li>
