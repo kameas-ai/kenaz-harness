@@ -19,6 +19,7 @@ import AutonomyPanel from '@/views/settings/AutonomyPanel.vue';
 import UpdatesPanel from '@/views/settings/UpdatesPanel.vue';
 import MigrationDriftPanel from '@/views/settings/health/MigrationDriftPanel.vue';
 import CompactionStrategyPanel from '@/views/settings/compaction/CompactionStrategyPanel.vue';
+import LongSessionNudgeSettings from '@/components/settings/LongSessionNudgeSettings.vue';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
 import { debouncedSave } from '@/lib/settings';
 import { markdownExtensionsRef } from '@/lib/markdown/injectionKeys';
@@ -1053,6 +1054,11 @@ onMounted(() => {
           (prompt → completion = total tokens · cost in USD). Click the chip
           for a full breakdown. Default: off.
         </p>
+
+        <!-- Long-session nudge thresholds (v0.5.6 memory-trust-signals) -->
+        <div class="mt-6">
+          <LongSessionNudgeSettings />
+        </div>
       </section>
 
       <AutonomyPanel />

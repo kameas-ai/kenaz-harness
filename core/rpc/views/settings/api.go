@@ -361,6 +361,22 @@ type Settings struct {
 	// bool (not inverted) because the desired default is OFF, matching the
 	// zero-value of bool.
 	ShowPerMessageTokenMeter bool `json:"showPerMessageTokenMeter,omitempty"`
+
+	// ── Long-session nudge dials (v0.5.6 memory-trust-signals) ──────────
+	//
+	// LongSessionNudgeTurns is the number of user-assistant turn pairs
+	// (i.e. half of total message count) after which the inline nudge
+	// banner appears. Default 30 (60 messages). Zero falls back to the
+	// default via EffectiveLongSessionNudgeTurns. Negative values are
+	// rejected at Save.
+	LongSessionNudgeTurns int `json:"longSessionNudgeTurns,omitempty"`
+
+	// LongSessionNudgeTokens is the cumulative prompt-token threshold
+	// after which the nudge banner appears regardless of turn count.
+	// Default 50000. Zero falls back to the default via
+	// EffectiveLongSessionNudgeTokens. Negative values are rejected at
+	// Save.
+	LongSessionNudgeTokens int `json:"longSessionNudgeTokens,omitempty"`
 }
 
 // ProviderProfileRef is the wire shape that identifies a provider+model
@@ -937,6 +953,35 @@ type SettingsAPI interface {
 	//   - timeoutMs: preview abort timeout in milliseconds (default 2000).
 	// (artifact-preview-binary-rendering-01KQ8TD5 WP07)
 	GetArtifactPreview(ctx context.Context) (enabled bool, maxBytes int64, timeoutMs int64, err error)
+}
+
+// ── Long-session nudge constants + accessors (v0.5.6) ───────────────────────
+
+// DefaultLongSessionNudgeTurns is the spec-locked default number of
+// user-assistant turn pairs (half the message count) after which the
+// long-session nudge banner fires.
+const DefaultLongSessionNudgeTurns = 30
+
+// DefaultLongSessionNudgeTokens is the spec-locked cumulative prompt-token
+// threshold after which the nudge banner fires regardless of turn count.
+const DefaultLongSessionNudgeTokens = 50000
+
+// EffectiveLongSessionNudgeTurns returns the user-tuned threshold or the
+// spec default (DefaultLongSessionNudgeTurns) when zero.
+func (s Settings) EffectiveLongSessionNudgeTurns() int {
+	if s.LongSessionNudgeTurns <= 0 {
+		return DefaultLongSessionNudgeTurns
+	}
+	return s.LongSessionNudgeTurns
+}
+
+// EffectiveLongSessionNudgeTokens returns the user-tuned threshold or the
+// spec default (DefaultLongSessionNudgeTokens) when zero.
+func (s Settings) EffectiveLongSessionNudgeTokens() int {
+	if s.LongSessionNudgeTokens <= 0 {
+		return DefaultLongSessionNudgeTokens
+	}
+	return s.LongSessionNudgeTokens
 }
 
 // ShortcutsStore is the persistence interface for keyboard shortcut
