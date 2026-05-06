@@ -106,4 +106,95 @@ describe('MemoryCaptureRatePill (§2.7)', () => {
     await flushPromises();
     expect(router.currentRoute.value.path).toBe('/memory');
   });
+
+  // ── v0.5.x audit: 5 s poll timer ─────────────────────────────────────
+
+  it('polls captureRate again after 5 s (v0.5.x audit)', async () => {
+    const captureRateMock = vi.fn().mockResolvedValue({
+      chunksPerMinute: 3,
+      embedderHealth: 'ok',
+      lastErrorAt: null,
+      recentErrorCount: 0,
+    });
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [otherRoute, memRoute],
+    });
+    await router.push('/');
+    await router.isReady();
+
+    const w = mount(MemoryCaptureRatePill, {
+      global: {
+        plugins: [
+          router,
+          {
+            install(app) {
+              provideFakeClient(app, {
+                memory: {
+                  captureRate: captureRateMock,
+                } as any,
+              });
+            },
+          },
+        ],
+      },
+    });
+
+    // Initial poll on mount.
+    await flushPromises();
+    expect(captureRateMock).toHaveBeenCalledTimes(1);
+
+    // Advance 5 s → second poll.
+    vi.advanceTimersByTime(5000);
+    await flushPromises();
+    expect(captureRateMock).toHaveBeenCalledTimes(2);
+
+    // Advance another 5 s → third poll.
+    vi.advanceTimersByTime(5000);
+    await flushPromises();
+    expect(captureRateMock).toHaveBeenCalledTimes(3);
+
+    w.unmount();
+  });
+
+  it('stops polling after unmount (no timer leak)', async () => {
+    const captureRateMock = vi.fn().mockResolvedValue({
+      chunksPerMinute: 1,
+      embedderHealth: 'ok',
+      lastErrorAt: null,
+      recentErrorCount: 0,
+    });
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [otherRoute, memRoute],
+    });
+    await router.push('/');
+    await router.isReady();
+
+    const w = mount(MemoryCaptureRatePill, {
+      global: {
+        plugins: [
+          router,
+          {
+            install(app) {
+              provideFakeClient(app, {
+                memory: {
+                  captureRate: captureRateMock,
+                } as any,
+              });
+            },
+          },
+        ],
+      },
+    });
+
+    await flushPromises();
+    w.unmount();
+    captureRateMock.mockClear();
+
+    // Advance 30 s after unmount — no additional polls.
+    vi.advanceTimersByTime(30_000);
+    await flushPromises();
+    expect(captureRateMock).not.toHaveBeenCalled();
+  });
 });
