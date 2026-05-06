@@ -56,6 +56,16 @@ type JournalSource interface {
 	JournalSnapshot() []JournalEntry
 }
 
+// ProfileLister is the optional capability the impl uses to inspect
+// configured provider profiles for the EmbedderEligibility surface. The
+// rpc layer wires the personal.Store; tests pass a fake or nil (nil
+// returns an empty profile list, which yields HasEligible=false).
+type ProfileLister interface {
+	// ListProfiles returns the full list of provider profiles and their
+	// kind/endpoint/azure metadata needed to compute eligibility.
+	ListProfiles() []corememory.ProfileEligibilityInput
+}
+
 // API is the concrete MemoryAPI.
 type API struct {
 	store    corememory.Store
@@ -63,6 +73,7 @@ type API struct {
 	reader   MessageReader
 	rules    prune.Rules
 	journal  JournalSource
+	profiles ProfileLister
 
 	mu     sync.Mutex
 	stats  []PruneStats
@@ -76,12 +87,18 @@ type API struct {
 // optional. When PruneRules is the zero value the prune surface uses
 // prune.DefaultRules(). When Journal is nil, JournalTail returns an
 // empty slice.
+//
+// Profiles is optional. When set, EmbedderEligibility inspects the
+// profile list to surface which provider kinds are present but cannot
+// supply embeddings. When nil, EmbedderEligibility returns all-zero
+// (HasEligible=false, AllProfiles=0) — the frontend renders the banner.
 type Config struct {
 	Store      corememory.Store
 	Embedder   corememory.Embedder
 	Reader     MessageReader
 	PruneRules prune.Rules
 	Journal    JournalSource
+	Profiles   ProfileLister
 }
 
 // New constructs a MemoryAPI.
@@ -100,6 +117,7 @@ func New(cfg Config) *API {
 		reader:   cfg.Reader,
 		rules:    rules,
 		journal:  cfg.Journal,
+		profiles: cfg.Profiles,
 	}
 }
 
@@ -567,6 +585,28 @@ func toViewChunk(c corememory.Chunk) Chunk {
 		LastAccessed:  c.LastAccessed,
 		Source:        c.Source,
 	}
+}
+
+// EmbedderEligibility inspects the configured provider profiles and returns
+// eligibility metadata without constructing an Embedder. The implementation
+// delegates to core/memory.CheckEligibility so the selection logic is
+// tested independently of the rpc layer.
+//
+// When no ProfileLister is wired (nil), the result has HasEligible=false and
+// AllProfiles=0, which causes the frontend to display the "no memory provider"
+// banner — a safe default for test environments and minimal deployments.
+func (a *API) EmbedderEligibility(_ context.Context) (EmbedderEligibility, error) {
+	var inputs []corememory.ProfileEligibilityInput
+	if a != nil && a.profiles != nil {
+		inputs = a.profiles.ListProfiles()
+	}
+	result := corememory.CheckEligibility(inputs)
+	return EmbedderEligibility{
+		HasEligible:      result.HasEligible,
+		AllProfiles:      result.AllProfiles,
+		EligibleProfiles: result.EligibleProfiles,
+		SkippedKinds:     result.SkippedKinds,
+	}, nil
 }
 
 // Compile-time witness.

@@ -996,6 +996,14 @@ func (b *Bindings) Memory_CaptureRate() (memoryview.CaptureRateSnapshot, error) 
 	return b.api.Memory().CaptureRate(b.ctx())
 }
 
+// Memory_EmbedderEligibility inspects the configured provider profiles and
+// returns eligibility metadata without constructing an Embedder. The
+// frontend's Settings → Memory banner calls this on mount to determine
+// whether to surface the "no memory provider" affordance.
+func (b *Bindings) Memory_EmbedderEligibility() (memoryview.EmbedderEligibility, error) {
+	return b.api.Memory().EmbedderEligibility(b.ctx())
+}
+
 // ── dials (Bundle E WP17) ──────────────────────────────────────────────
 
 func (b *Bindings) Dials_Get(key dialsview.ScopeKey) (dialsview.DialConfig, error) {

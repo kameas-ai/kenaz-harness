@@ -3,7 +3,7 @@ import { mount, flushPromises } from '@vue/test-utils';
 import SettingsView from '@/views/settings/SettingsView.vue';
 import { createFakeHarnessClient } from '@/lib/harnessClient';
 import { HarnessClientKey } from '@/lib/harnessClientContext';
-import type { Attachment, Settings, Theme } from '@/lib/types';
+import type { Attachment, MemoryEmbedderEligibility, Settings, Theme } from '@/lib/types';
 
 function provide(
   overrides: Partial<Settings> = {},
@@ -212,5 +212,100 @@ describe('SettingsView (FR-001b numbered-section header)', () => {
     await w.find('[data-testid="auto-title-toggle"]').trigger('change');
     await flushPromises();
     expect(setAutoTitleEnabled).toHaveBeenCalledWith(false);
+  });
+});
+
+// ── v0.5.5: no-eligible-embedder-provider banner ──────────────────────────
+
+describe('SettingsView — no-eligible-embedder-provider banner', () => {
+  /**
+   * Build a client with a custom embedderEligibility implementation and
+   * all other minimal stubs satisfied.
+   */
+  function buildClient(eligibility: MemoryEmbedderEligibility) {
+    const { client: base } = provide();
+    return {
+      ...base,
+      memory: {
+        ...base.memory,
+        embedderEligibility: vi.fn().mockResolvedValue(eligibility),
+      },
+    };
+  }
+
+  it('hides the banner when eligibility.hasEligible is true', async () => {
+    const client = buildClient({
+      hasEligible: true,
+      allProfiles: 1,
+      eligibleProfiles: 1,
+      skippedKinds: [],
+    });
+    const w = mount(SettingsView, {
+      global: { provide: { [HarnessClientKey as symbol]: client } },
+    });
+    await flushPromises();
+    expect(w.find('[data-testid="no-embedder-provider-banner"]').exists()).toBe(false);
+  });
+
+  it('shows the banner when eligibility.hasEligible is false', async () => {
+    const client = buildClient({
+      hasEligible: false,
+      allProfiles: 1,
+      eligibleProfiles: 0,
+      skippedKinds: ['anthropic'],
+    });
+    const w = mount(SettingsView, {
+      global: { provide: { [HarnessClientKey as symbol]: client } },
+    });
+    await flushPromises();
+    const banner = w.find('[data-testid="no-embedder-provider-banner"]');
+    expect(banner.exists()).toBe(true);
+    expect(banner.text()).toContain('No memory provider configured');
+  });
+
+  it('renders skipped kinds in the banner', async () => {
+    const client = buildClient({
+      hasEligible: false,
+      allProfiles: 2,
+      eligibleProfiles: 0,
+      skippedKinds: ['anthropic', 'bedrock'],
+    });
+    const w = mount(SettingsView, {
+      global: { provide: { [HarnessClientKey as symbol]: client } },
+    });
+    await flushPromises();
+    const list = w.find('[data-testid="no-embedder-skipped-kinds"]');
+    expect(list.exists()).toBe(true);
+    expect(list.text()).toContain('Anthropic');
+    expect(list.text()).toContain('Bedrock');
+  });
+
+  it('renders the "Add OpenRouter provider" button when no eligible provider', async () => {
+    const client = buildClient({
+      hasEligible: false,
+      allProfiles: 1,
+      eligibleProfiles: 0,
+      skippedKinds: ['anthropic'],
+    });
+    const w = mount(SettingsView, {
+      global: { provide: { [HarnessClientKey as symbol]: client } },
+    });
+    await flushPromises();
+    expect(
+      w.find('[data-testid="no-embedder-add-openrouter"]').exists(),
+    ).toBe(true);
+    expect(
+      w.find('[data-testid="no-embedder-see-all-providers"]').exists(),
+    ).toBe(true);
+  });
+
+  it('does not show banner when no profiles exist (allProfiles=0, hasEligible=true default)', async () => {
+    // The fake client returns hasEligible=true by default — no banner shown.
+    const { client } = provide();
+    const w = mount(SettingsView, {
+      global: { provide: { [HarnessClientKey as symbol]: client } },
+    });
+    await flushPromises();
+    expect(w.find('[data-testid="no-embedder-provider-banner"]').exists()).toBe(false);
   });
 });

@@ -136,6 +136,24 @@ type HealthSnapshot struct {
 	CapturedAt string         `json:"capturedAt"` // RFC3339 UTC
 }
 
+// EmbedderEligibility is the wire shape returned by EmbedderEligibility().
+// It summarises which provider profiles are capable of supplying embeddings
+// so the frontend can surface a contextual "no memory provider" banner when
+// the user has only Anthropic-direct or Bedrock profiles configured.
+type EmbedderEligibility struct {
+	// HasEligible is true when at least one configured profile can supply
+	// embeddings (openai / openrouter / custom_openai_compatible / azure).
+	HasEligible bool `json:"hasEligible"`
+	// AllProfiles is the total number of profiles that were examined.
+	AllProfiles int `json:"allProfiles"`
+	// EligibleProfiles is the count of profiles that are eligible.
+	EligibleProfiles int `json:"eligibleProfiles"`
+	// SkippedKinds holds the unique provider kinds that are present but
+	// cannot supply embeddings by design (e.g. "anthropic", "bedrock").
+	// The frontend renders a per-provider explanation in the banner.
+	SkippedKinds []string `json:"skippedKinds"`
+}
+
 // MemoryAPI is the view-scoped accessor exposed via HarnessAPI.
 //
 // The hooks-driven architecture handles automatic persistence (via the
@@ -185,6 +203,11 @@ type MemoryAPI interface {
 	// CaptureRate returns a snapshot of the current memory capture
 	// velocity and embedder health for the §2.7 LegendBar pill.
 	CaptureRate(ctx context.Context) (CaptureRateSnapshot, error)
+	// EmbedderEligibility inspects the configured provider profiles and
+	// returns eligibility metadata — READ ONLY, no embedder is constructed.
+	// Used by the Settings → Memory banner to tell users when none of their
+	// profiles support embeddings (e.g. Anthropic-only setup).
+	EmbedderEligibility(ctx context.Context) (EmbedderEligibility, error)
 }
 
 // CaptureRateSnapshot is the wire shape returned by Memory_CaptureRate

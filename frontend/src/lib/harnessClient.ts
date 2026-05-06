@@ -54,6 +54,7 @@ import type {
   MemoryPrunePreview,
   MemoryHealthSnapshot,
   MemoryCaptureRateSnapshot,
+  MemoryEmbedderEligibility,
   DialConfig,
   DialDelta,
   DialEffectiveDials,
@@ -381,6 +382,7 @@ interface WailsBindingsLike {
   Memory_HealthSnapshot(): Promise<MemoryHealthSnapshot>;
   Memory_TestEmbedder(): Promise<number>;
   Memory_CaptureRate(): Promise<MemoryCaptureRateSnapshot>;
+  Memory_EmbedderEligibility(): Promise<MemoryEmbedderEligibility>;
 
   Dials_Get(key: DialScopeKey): Promise<DialConfig>;
   Dials_Set(key: DialScopeKey, cfg: DialConfig): Promise<void>;
@@ -1454,6 +1456,12 @@ export interface MemoryClient {
   testEmbedder(): Promise<number>;
   /** Return the §2.7 LegendBar capture-rate snapshot. */
   captureRate(): Promise<MemoryCaptureRateSnapshot>;
+  /**
+   * Inspect configured provider profiles for embedder eligibility — no
+   * Embedder is constructed. The Settings → Memory banner calls this on mount
+   * to determine whether to surface the "no memory provider" affordance.
+   */
+  embedderEligibility(): Promise<MemoryEmbedderEligibility>;
 }
 
 /**
@@ -2272,6 +2280,7 @@ export function createHarnessClient(): HarnessClient {
       healthSnapshot: () => b().Memory_HealthSnapshot(),
       testEmbedder: () => b().Memory_TestEmbedder(),
       captureRate: () => b().Memory_CaptureRate(),
+      embedderEligibility: () => b().Memory_EmbedderEligibility(),
     },
     dials: {
       get: (key) => b().Dials_Get(key),
@@ -2819,6 +2828,12 @@ export function createFakeHarnessClient(
         embedderHealth: 'ok' as const,
         lastErrorAt: null,
         recentErrorCount: 0,
+      }),
+      embedderEligibility: async () => ({
+        hasEligible: true,
+        allProfiles: 0,
+        eligibleProfiles: 0,
+        skippedKinds: [],
       }),
     },
     dials: {
