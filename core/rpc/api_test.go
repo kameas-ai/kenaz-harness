@@ -264,8 +264,8 @@ func TestNewEmbedderFromProfiles_OpenRouter(t *testing.T) {
 	if emb.Kind() == "noop" {
 		t.Fatal("got NoopEmbedder; openrouter profile was not picked up by newEmbedderFromProfiles (pre-fix bug)")
 	}
-	if got := emb.Kind(); got != "openai" {
-		t.Errorf("embedder Kind = %q, want %q (OpenAIEmbedder backs all compat providers)", got, "openai")
+	if got := emb.Kind(); got != "openrouter" {
+		t.Errorf("embedder Kind = %q, want %q (source-profile Kind reported, not implementation type)", got, "openrouter")
 	}
 
 	// Layer 2: endpoint routing.  We spin up a test HTTP server and

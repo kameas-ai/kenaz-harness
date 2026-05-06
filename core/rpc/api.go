@@ -2981,7 +2981,8 @@ func newEmbedderFromProfiles(profiles []corellm.ProviderProfile, profileIDOverri
 				m = model
 			}
 			return corememory.NewOpenAIEmbedder(resolver,
-				corememory.WithOpenAIModel(m))
+				corememory.WithOpenAIModel(m),
+				corememory.WithOpenAISourceKind(p.Kind))
 
 		case "openrouter":
 			m := defaultModel
@@ -2990,7 +2991,8 @@ func newEmbedderFromProfiles(profiles []corellm.ProviderProfile, profileIDOverri
 			}
 			return corememory.NewOpenAIEmbedder(resolver,
 				corememory.WithOpenAIEndpoint("https://openrouter.ai/api/v1/embeddings"),
-				corememory.WithOpenAIModel(m))
+				corememory.WithOpenAIModel(m),
+				corememory.WithOpenAISourceKind(p.Kind))
 
 		case "custom_openai_compatible":
 			// The profile's Endpoint is the base URL of the
@@ -3013,7 +3015,8 @@ func newEmbedderFromProfiles(profiles []corellm.ProviderProfile, profileIDOverri
 			}
 			return corememory.NewOpenAIEmbedder(resolver,
 				corememory.WithOpenAIEndpoint(endpoint),
-				corememory.WithOpenAIModel(m))
+				corememory.WithOpenAIModel(m),
+				corememory.WithOpenAISourceKind(p.Kind))
 
 		case "azure":
 			// Azure OpenAI embeddings require a deployment ID and API
@@ -3037,7 +3040,8 @@ func newEmbedderFromProfiles(profiles []corellm.ProviderProfile, profileIDOverri
 			}
 			return corememory.NewOpenAIEmbedder(resolver,
 				corememory.WithOpenAIEndpoint(endpoint),
-				corememory.WithOpenAIModel(m))
+				corememory.WithOpenAIModel(m),
+				corememory.WithOpenAISourceKind(p.Kind))
 
 		default:
 			// anthropic, bedrock, and any unknown kind are not eligible.
