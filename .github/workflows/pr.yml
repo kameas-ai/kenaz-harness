@@ -112,6 +112,13 @@ jobs:
           touch frontend/dist/.gitkeep
 
       - name: go test
+        env:
+          # Self-hosted ARM runners ship gcc + glibc-devel via userdata,
+          # but `actions/setup-go@v5` sometimes auto-disables CGO when
+          # it doesn't detect a compiler at the version-cache path. The
+          # `-race` flag requires CGO; pin it on explicitly so the
+          # detector can't flip it back to 0.
+          CGO_ENABLED: "1"
         run: go test ./core/... -race -count=1 -short
 
   test-frontend:
