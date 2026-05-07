@@ -758,19 +758,19 @@ jobs:
           gh release upload "${{ steps.create.outputs.tag }}" manifest.json --clobber
 
   publish-s3:
-    name: Publish artifacts to docs CDN (S3)
+    name: Publish artifacts to downloads CDN (S3)
     needs: [derive-version, release]
     runs-on: ubuntu-latest
     # The kenaz-harness repo is private and GitHub release assets on
     # private repos require auth — public docs visitors get 404 hitting
     # github.com/.../releases/download/. Mirror to the same S3 bucket
-    # docs.kameas.ai serves from so binaries are reachable at
-    # https://docs.kameas.ai/downloads/<file>. Same OIDC chain the
+    # downloads.kameas.ai serves from so binaries are reachable at
+    # https://downloads.kameas.ai/kenaz-harness/<file>. Same OIDC chain the
     # kenaz-docs deploy uses.
     permissions:
       id-token: write
       contents: read
-    environment: shared-services
+    environment: prod
     steps:
       - uses: actions/checkout@v4
 
@@ -791,8 +791,8 @@ jobs:
           tag = os.environ['TAG']
           version = os.environ['VERSION']
           # Public CDN base — the docs site's CloudFront distribution
-          # serves /downloads/<tag>/<file> from s3://kameas-ai-docs-site.
-          base = f"https://docs.kameas.ai/downloads/{tag}"
+          # serves /kenaz-harness/<tag>/<file> from s3://kameas-ai-prod-releases-use2.
+          base = f"https://downloads.kameas.ai/kenaz-harness/{tag}"
           dist = pathlib.Path('dist-flat')
           # Build installer URL lookups keyed by platform string.
           # darwin: .dmg  |  windows-amd64: NSIS -setup.exe  |  linux-amd64: .AppImage
@@ -855,17 +855,17 @@ jobs:
               'tag': tag,
               'commit': os.environ.get('GITHUB_SHA', ''),
               'released_at': os.environ.get('GITHUB_RUN_STARTED_AT', ''),
-              'release_url': f"https://docs.kameas.ai/download/",
+              'release_url': f"https://downloads.kameas.ai/",
               'assets': assets,
           }
           pathlib.Path('dist-flat/manifest.json').write_text(json.dumps(manifest, indent=2))
           print(json.dumps(manifest, indent=2))
           PY
 
-      - name: Configure AWS credentials (gh-deploy-shared-services)
+      - name: Configure AWS credentials (gh-deploy-prod)
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: arn:aws:iam::764395350337:role/gh-deploy-shared-services
+          role-to-assume: arn:aws:iam::764395350337:role/gh-deploy-prod
           aws-region: us-east-2
 
       - name: Chain-assume AppDeployRole
@@ -873,7 +873,7 @@ jobs:
         run: |
           set -euo pipefail
           CREDS=$(aws sts assume-role \
-            --role-arn arn:aws:iam::575638747659:role/AppDeployRole \
+            --role-arn arn:aws:iam::777000838085:role/AppDeployRole \
             --role-session-name gh-publish-kenaz-harness \
             --query 'Credentials' --output json)
 
@@ -894,7 +894,7 @@ jobs:
           # Per-tag prefix so old releases stay reachable for users
           # who have a stale /download/ tab open. Long cache (1h) on
           # binaries since filenames are version-stamped.
-          aws s3 sync dist-flat/ "s3://kameas-ai-docs-site/downloads/${TAG}/" \
+          aws s3 sync dist-flat/ "s3://kameas-ai-prod-releases-use2/kenaz-harness/${TAG}/" \
             --exclude 'manifest.json' \
             --cache-control 'public, max-age=3600' \
             --metadata-directive REPLACE \
@@ -905,15 +905,15 @@ jobs:
           TAG: ${{ needs.release.outputs.release_tag }}
         run: |
           set -euo pipefail
-          # The download page fetches /downloads/manifest.json at runtime.
+          # The download page fetches /kenaz-harness/manifest.json at runtime.
           # Short cache so a fresh release shows up within minutes.
-          aws s3 cp dist-flat/manifest.json s3://kameas-ai-docs-site/downloads/manifest.json \
+          aws s3 cp dist-flat/manifest.json s3://kameas-ai-prod-releases-use2/kenaz-harness/manifest.json \
             --cache-control 'public, max-age=120, must-revalidate' \
             --content-type 'application/json' \
             --metadata-directive REPLACE \
             --no-progress
           # Also pin a copy under the per-tag prefix for forensic lookup.
-          aws s3 cp dist-flat/manifest.json "s3://kameas-ai-docs-site/downloads/${TAG}/manifest.json" \
+          aws s3 cp dist-flat/manifest.json "s3://kameas-ai-prod-releases-use2/kenaz-harness/${TAG}/manifest.json" \
             --cache-control 'public, max-age=3600' \
             --content-type 'application/json' \
             --metadata-directive REPLACE \
@@ -926,11 +926,11 @@ jobs:
           IS_RELEASE: ${{ needs.derive-version.outputs.is_release }}
         run: |
           set -euo pipefail
-          # Maintain s3://.../downloads/index.json — a sorted list of
+          # Maintain s3://.../kenaz-harness/index.json — a sorted list of
           # every version that's been published. The download page
           # fetches this lazily when the user opens the version picker.
           # Read-modify-write pattern; a missing index seeds an empty list.
-          INDEX_S3=s3://kameas-ai-docs-site/downloads/index.json
+          INDEX_S3=s3://kameas-ai-prod-releases-use2/kenaz-harness/index.json
           if aws s3 cp "$INDEX_S3" /tmp/index.json --no-progress 2>/dev/null; then
             echo "fetched existing index"
           else
@@ -952,13 +952,13 @@ jobs:
               'version': os.environ['VERSION'],
               'released_at': os.environ['NOW'],
               'is_release': os.environ.get('IS_RELEASE', 'false') == 'true',
-              'manifest_url': f"https://docs.kameas.ai/downloads/{tag}/manifest.json",
+              'manifest_url': f"https://downloads.kameas.ai/kenaz-harness/{tag}/manifest.json",
           })
           # Newest first by released_at, with 'main' (rolling) pinned to
           # the top so the picker shows it at the front.
           versions.sort(key=lambda v: (0 if v.get('tag') == 'main' else 1, v.get('released_at', '')), reverse=True)
           # Cap at 50 entries — very old builds drop off the picker but
-          # their /downloads/<tag>/ assets remain in S3 for direct linking.
+          # their /kenaz-harness/<tag>/ assets remain in S3 for direct linking.
           versions = versions[:50]
           print(json.dumps({'updated_at': os.environ['NOW'], 'versions': versions}, indent=2))
           PY
@@ -973,7 +973,7 @@ jobs:
         run: |
           set -euo pipefail
           INV=$(aws cloudfront create-invalidation \
-            --distribution-id E266IHHD1ZE4J0 \
-            --paths '/downloads/manifest.json' '/downloads/index.json' '/downloads/*' \
+            --distribution-id ENWB9Y4KGTPFD \
+            --paths '/kenaz-harness/manifest.json' '/kenaz-harness/index.json' '/kenaz-harness/*' \
             --query 'Invalidation.Id' --output text)
           echo "Invalidation: $INV"
