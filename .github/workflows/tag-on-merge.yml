@@ -31,7 +31,7 @@ concurrency:
 jobs:
   bump-and-release:
     name: Bump version + cut release
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, ARM64, ci-fast]
     permissions:
       contents: write     # tag + release
       actions: write      # workflow_dispatch
