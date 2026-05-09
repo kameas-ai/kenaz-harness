@@ -21,7 +21,7 @@ env:
 jobs:
   lint-go:
     name: Go lint + vet + codegen drift
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, ARM64, ci-medium]
     steps:
       - uses: actions/checkout@v4
 
@@ -94,7 +94,7 @@ jobs:
 
   test-go:
     name: Go tests (-race -short)
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, ARM64, ci-medium]
     steps:
       - uses: actions/checkout@v4
 

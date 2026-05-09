@@ -33,7 +33,7 @@ env:
 jobs:
   derive-version:
     name: Derive version
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, ARM64, ci-fast]
     outputs:
       version: ${{ steps.set.outputs.version }}
     steps:
@@ -622,7 +622,7 @@ jobs:
   release:
     name: Publish GitHub Release
     needs: [derive-version, build]
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, ARM64, ci-fast]
     outputs:
       release_tag: ${{ steps.create.outputs.tag }}
       release_url: ${{ steps.create.outputs.url }}
@@ -760,7 +760,7 @@ jobs:
   publish-s3:
     name: Publish artifacts to downloads CDN (S3)
     needs: [derive-version, release]
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, ARM64, ci-medium]
     # The kenaz-harness repo is private and GitHub release assets on
     # private repos require auth — public docs visitors get 404 hitting
     # github.com/.../releases/download/. Mirror to the same S3 bucket
