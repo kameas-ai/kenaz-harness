@@ -1,21 +1,73 @@
 name: Release
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Trigger → environment mapping
+# ─────────────────────────────────────────────────────────────────────────────
+#
+#   Trigger                                 Target env   Notes
+#   ─────────────────────────────────────── ──────────── ────────────────────────
+#   push to main (any non-tag commit)       dev          Rolling "latest" build.
+#                                                        Published to
+#                                                        s3://kameas-ai-dev-releases-use2
+#                                                        and served from
+#                                                        dev-downloads.kameas.ai.
+#
+#   tag  v*-rc*  (e.g. v1.2.0-rc1)         stage        Release-candidate build.
+#                                                        Published to
+#                                                        s3://kameas-ai-stage-releases-use2
+#                                                        and served from
+#                                                        stage-downloads.kameas.ai.
+#
+#   tag  v*  (no -rc, e.g. v1.2.0)         prod         Stable release.
+#   OR   release event (release-please)                  Published to
+#   OR   workflow_dispatch with version=                 s3://kameas-ai-prod-releases-use2
+#                                                        and served from
+#                                                        downloads.kameas.ai.
+#                                                        ← unchanged from prior behavior
+#
+# DEPENDENCY: the dev and stage paths depend on a sibling PR in kameas-ai/kameas-infra
+# (kameas-ai/kameas-infra#74) that creates:
+#   - s3://kameas-ai-dev-releases-use2 + IAM role gh-deploy-dev
+#   - s3://kameas-ai-stage-releases-use2 + IAM role gh-deploy-stage
+#   - CloudFront aliases dev-downloads.kameas.ai / stage-downloads.kameas.ai
+# Until that PR lands, only the prod path will succeed. The dev/stage paths
+# will fail at the "Configure AWS credentials" step with an AssumeRole error —
+# this is expected and will self-heal once the infra PR merges.
+#
+# Existing prod path: a tag push of v1.2.3 produces the exact same outputs in
+# the exact same S3 prefix (s3://kameas-ai-prod-releases-use2/kenaz-harness/<tag>/)
+# as before this refactor.
+#
+# UPSTREAM-ONLY: kenaz-harness is the upstream publisher in the composition
+# chain. It publishes artifacts; it does NOT pull from any upstream repo.
+# Downstream consumers (e.g. kenaz-sandbox) will pick up the published
+# manifest at their own build time. No "upstream switch" is needed here.
+# ─────────────────────────────────────────────────────────────────────────────
+
 on:
-  # release-please owns version bumps; this workflow only runs against
-  # real semver tags. Three entry points:
-  #   1. release-please dispatches it via `gh workflow run release.yml --ref vX.Y.Z`
-  #      after merging a release PR (the primary path).
-  #   2. A human creates a Release in the GitHub UI (manual path; rare).
-  #   3. workflow_dispatch with an explicit version (escape hatch / re-run).
-  # No more `push: branches: [main]` — non-versioning merges (chore/docs/ci/etc.)
-  # do not produce binaries; PR-time `build-smoke` covers build-health verification.
+  # ── prod: stable tags (release-please primary path) ──────────────────────
+  # release-please dispatches via `gh workflow run release.yml --ref vX.Y.Z`
+  # after merging a release PR (the primary path).
+  # A human creating a Release in the GitHub UI also lands here (rare).
   workflow_dispatch:
     inputs:
       version:
-        description: 'Tag to build (e.g. v0.1.0). Required.'
+        description: 'Tag to build (e.g. v0.1.0). Required for prod dispatch.'
         required: true
   release:
     types: [published]
+
+  # ── dev: every merge to main ──────────────────────────────────────────────
+  # Non-versioning commits (chore/docs/ci/etc.) produce a rolling dev build.
+  # PR-time `build-smoke` covers build-health; this is for dev download parity.
+  push:
+    branches:
+      - main
+    tags:
+      # ── stage: release-candidate tags (v*-rc*) ───────────────────────────
+      - 'v*-rc*'
+      # ── prod: stable version tags (v*, no -rc) ───────────────────────────
+      - 'v[0-9]*.[0-9]*.[0-9]*'
 
 permissions:
   contents: write
@@ -31,31 +83,128 @@ env:
   NODE_VERSION: '20'
 
 jobs:
+  # ────────────────────────────────────────────────────────────────────────────
+  # resolve-env: maps the trigger to environment-specific publish parameters.
+  # All env-specific values (bucket, IAM role, CloudFront distribution ID,
+  # GitHub Environment name, public CDN base URL) are set here as outputs so
+  # the single parameterized publish-s3 job consumes them — no duplication.
+  # ────────────────────────────────────────────────────────────────────────────
+  resolve-env:
+    name: Resolve target environment
+    runs-on: ubuntu-latest
+    outputs:
+      target_env:      ${{ steps.pick.outputs.target_env }}
+      bucket:          ${{ steps.pick.outputs.bucket }}
+      role_arn:        ${{ steps.pick.outputs.role_arn }}
+      cf_dist_id:      ${{ steps.pick.outputs.cf_dist_id }}
+      cdn_base:        ${{ steps.pick.outputs.cdn_base }}
+      github_env:      ${{ steps.pick.outputs.github_env }}
+    steps:
+      - id: pick
+        shell: bash
+        run: |
+          set -euo pipefail
+          REF="${{ github.ref }}"
+          EVENT="${{ github.event_name }}"
+
+          # Determine target environment from the trigger:
+          #   1. release event OR workflow_dispatch          → prod
+          #   2. tag push matching v*-rc*                    → stage
+          #   3. tag push matching v* (no -rc)               → prod
+          #   4. push to main (branch, not tag)              → dev
+          if [[ "$EVENT" == "release" || "$EVENT" == "workflow_dispatch" ]]; then
+            TARGET="prod"
+          elif [[ "$REF" == refs/tags/v*-rc* ]]; then
+            TARGET="stage"
+          elif [[ "$REF" == refs/tags/v* ]]; then
+            TARGET="prod"
+          else
+            # main branch push
+            TARGET="dev"
+          fi
+
+          case "$TARGET" in
+            dev)
+              BUCKET="kameas-ai-dev-releases-use2"
+              ROLE_ARN="arn:aws:iam::764395350337:role/gh-deploy-dev"
+              CF_DIST_ID="E1PRT6QD4VW589"
+              CDN_BASE="https://dev-downloads.kameas.ai"
+              GITHUB_ENV_NAME="dev"
+              ;;
+            stage)
+              BUCKET="kameas-ai-stage-releases-use2"
+              ROLE_ARN="arn:aws:iam::764395350337:role/gh-deploy-stage"
+              CF_DIST_ID="E1N8AI5X4GRPWU"
+              CDN_BASE="https://stage-downloads.kameas.ai"
+              GITHUB_ENV_NAME="stage"
+              ;;
+            prod)
+              BUCKET="kameas-ai-prod-releases-use2"
+              ROLE_ARN="arn:aws:iam::764395350337:role/gh-deploy-prod"
+              CF_DIST_ID="ENWB9Y4KGTPFD"
+              CDN_BASE="https://downloads.kameas.ai"
+              GITHUB_ENV_NAME="prod"
+              ;;
+            *)
+              echo "::error::Unknown target env: $TARGET"
+              exit 1
+              ;;
+          esac
+
+          echo "target_env=$TARGET"       >> "$GITHUB_OUTPUT"
+          echo "bucket=$BUCKET"           >> "$GITHUB_OUTPUT"
+          echo "role_arn=$ROLE_ARN"       >> "$GITHUB_OUTPUT"
+          echo "cf_dist_id=$CF_DIST_ID"   >> "$GITHUB_OUTPUT"
+          echo "cdn_base=$CDN_BASE"       >> "$GITHUB_OUTPUT"
+          echo "github_env=$GITHUB_ENV_NAME" >> "$GITHUB_OUTPUT"
+          echo "Resolved: trigger=$EVENT ref=$REF → env=$TARGET bucket=$BUCKET"
+
+  # ────────────────────────────────────────────────────────────────────────────
+  # derive-version: resolves the semver string for this run.
+  # ────────────────────────────────────────────────────────────────────────────
   derive-version:
     name: Derive version
     runs-on: [self-hosted, Linux, ARM64, ci-fast]
+    needs: [resolve-env]
     outputs:
       version: ${{ steps.set.outputs.version }}
     steps:
       - uses: actions/checkout@v4
       - id: set
+        shell: bash
         run: |
           set -euo pipefail
+          TARGET_ENV="${{ needs.resolve-env.outputs.target_env }}"
+
           if [ "${{ github.event_name }}" = "release" ]; then
             VERSION="${{ github.event.release.tag_name }}"
           elif [ -n "${{ github.event.inputs.version }}" ]; then
             VERSION="${{ github.event.inputs.version }}"
+          elif [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            # tag push (stage rc or prod stable)
+            VERSION="${{ github.ref_name }}"
           else
-            echo "::error::release.yml expects either a release event or a workflow_dispatch with version=vX.Y.Z"
-            exit 1
+            # dev: main branch push — use rolling label based on short SHA
+            SHORT_SHA="${{ github.sha }}"
+            SHORT_SHA="${SHORT_SHA:0:7}"
+            VERSION="v0.0.0-dev.${SHORT_SHA}"
           fi
-          if ! [[ "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.-]+)?$ ]]; then
-            echo "::error::version '$VERSION' is not a valid SemVer tag (vX.Y.Z[-pre])"
-            exit 1
+
+          # Full semver validation is only enforced on stage/prod.
+          # dev rolling builds use a relaxed pre-release form.
+          if [ "$TARGET_ENV" != "dev" ]; then
+            if ! [[ "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.-]+)?$ ]]; then
+              echo "::error::version '$VERSION' is not a valid SemVer tag (vX.Y.Z[-pre])"
+              exit 1
+            fi
           fi
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
-          echo "Resolved version: ${VERSION}"
+          echo "Resolved version: ${VERSION} (env: ${TARGET_ENV})"
 
+  # ────────────────────────────────────────────────────────────────────────────
+  # build: unchanged from before — cross-compiles all 6 platform targets,
+  # signs macOS + Windows artifacts, and uploads to GitHub Actions artifacts.
+  # ────────────────────────────────────────────────────────────────────────────
   build:
     name: Build ${{ matrix.label }}
     needs: [derive-version]
@@ -619,9 +768,16 @@ jobs:
           retention-days: 30
           if-no-files-found: error
 
+  # ────────────────────────────────────────────────────────────────────────────
+  # release: publishes the GitHub Release (assets + asset manifest).
+  # Only runs for prod-destined triggers — dev/stage don't create GH Releases.
+  # ────────────────────────────────────────────────────────────────────────────
   release:
     name: Publish GitHub Release
-    needs: [derive-version, build]
+    needs: [resolve-env, derive-version, build]
+    # Only create/update a GitHub Release for prod-bound triggers.
+    # dev (main push) and stage (rc tag) publish to S3 only.
+    if: needs.resolve-env.outputs.target_env == 'prod'
     runs-on: [self-hosted, Linux, ARM64, ci-fast]
     outputs:
       release_tag: ${{ steps.create.outputs.tag }}
@@ -757,20 +913,44 @@ jobs:
           # can fetch it without needing a token.
           gh release upload "${{ steps.create.outputs.tag }}" manifest.json --clobber
 
+  # ────────────────────────────────────────────────────────────────────────────
+  # publish-s3: single parameterized job — publishes artifacts to the S3
+  # bucket and CloudFront distribution that correspond to the resolved
+  # environment (dev / stage / prod). All env-specific values come from
+  # the resolve-env job outputs; nothing is hard-coded here.
+  #
+  # Prod path is identical to the pre-refactor behavior:
+  #   bucket:  kameas-ai-prod-releases-use2
+  #   role:    arn:aws:iam::764395350337:role/gh-deploy-prod
+  #   cf_dist: ENWB9Y4KGTPFD
+  #   prefix:  kenaz-harness/<tag>/
+  #
+  # DEPENDENCY: dev and stage paths depend on kameas-ai/kameas-infra#74
+  # creating the dev/stage buckets, IAM roles, and CloudFront aliases.
+  # Until that PR lands, only prod will succeed; dev/stage will fail at
+  # the "Configure AWS credentials" step — that is expected and transient.
+  # ────────────────────────────────────────────────────────────────────────────
   publish-s3:
-    name: Publish artifacts to downloads CDN (S3)
-    needs: [derive-version, release]
+    name: Publish artifacts to downloads CDN (${{ needs.resolve-env.outputs.target_env }})
+    needs: [resolve-env, derive-version, build, release]
+    # `release` is skipped for dev/stage; treat skipped as success so
+    # publish-s3 still runs for those environments.
+    if: |
+      always() &&
+      needs.build.result == 'success' &&
+      (needs.release.result == 'success' || needs.release.result == 'skipped')
     runs-on: [self-hosted, Linux, ARM64, ci-medium]
     # The kenaz-harness repo is private and GitHub release assets on
     # private repos require auth — public docs visitors get 404 hitting
-    # github.com/.../releases/download/. Mirror to the same S3 bucket
-    # downloads.kameas.ai serves from so binaries are reachable at
-    # https://downloads.kameas.ai/kenaz-harness/<file>. Same OIDC chain the
-    # kenaz-docs deploy uses.
+    # github.com/.../releases/download/. Mirror to the per-env S3 bucket
+    # so binaries are reachable at the env's CDN base URL. Same OIDC chain
+    # the kenaz-docs deploy uses.
     permissions:
       id-token: write
       contents: read
-    environment: prod
+    # GitHub Environment reference: gates on required reviewers for prod,
+    # allows dev/stage to deploy without approval.
+    environment: ${{ needs.resolve-env.outputs.github_env }}
     steps:
       - uses: actions/checkout@v4
 
@@ -781,39 +961,43 @@ jobs:
           pattern: kaneaz-harness-*
           merge-multiple: true
 
-      - name: rewrite manifest with docs.kameas.ai URLs
+      - name: rewrite manifest with CDN URLs
         env:
-          VERSION: ${{ needs.derive-version.outputs.version }}
-          TAG:     ${{ needs.release.outputs.release_tag }}
+          VERSION:  ${{ needs.derive-version.outputs.version }}
+          TAG:      ${{ needs.derive-version.outputs.version }}
+          CDN_BASE: ${{ needs.resolve-env.outputs.cdn_base }}
+          TARGET_ENV: ${{ needs.resolve-env.outputs.target_env }}
+          RELEASE_TAG: ${{ needs.release.outputs.release_tag }}
         run: |
           python3 - <<'PY'
           import json, os, pathlib, re
-          tag = os.environ['TAG']
+          # For prod, use the release tag from the release job output;
+          # for dev/stage there is no GH Release so fall back to VERSION.
+          release_tag = os.environ.get('RELEASE_TAG') or os.environ['TAG']
+          tag = release_tag if release_tag else os.environ['TAG']
           version = os.environ['VERSION']
-          # Public CDN base — the docs site's CloudFront distribution
-          # serves /kenaz-harness/<tag>/<file> from s3://kameas-ai-prod-releases-use2.
-          base = f"https://downloads.kameas.ai/kenaz-harness/{tag}"
+          cdn_base = os.environ['CDN_BASE']
+          target_env = os.environ['TARGET_ENV']
+          # Public CDN base — the env's CloudFront distribution
+          # serves /kenaz-harness/<tag>/<file> from the env bucket.
+          base = f"{cdn_base}/kenaz-harness/{tag}"
           dist = pathlib.Path('dist-flat')
           # Build installer URL lookups keyed by platform string.
-          # darwin: .dmg  |  windows-amd64: NSIS -setup.exe  |  linux-amd64: .AppImage
           installer_urls: dict = {}
           installer_filenames: set = set()
           for f in sorted(dist.iterdir()):
-              # macOS .dmg
               dm = re.match(r'kaneaz-harness-.+?-(darwin)-(amd64|arm64)\.dmg$', f.name)
               if dm:
                   os_label, arch = dm.groups()
                   installer_urls[f"{os_label}-{arch}"] = f"{base}/{f.name}"
                   installer_filenames.add(f.name)
                   continue
-              # Windows NSIS installer
               wn = re.match(r'kaneaz-harness-.+?-(windows)-(amd64)-setup\.exe$', f.name)
               if wn:
                   os_label, arch = wn.groups()
                   installer_urls[f"{os_label}-{arch}"] = f"{base}/{f.name}"
                   installer_filenames.add(f.name)
                   continue
-              # Linux AppImage
               ai = re.match(r'kaneaz-harness-.+?-(linux)-(amd64)\.AppImage$', f.name)
               if ai:
                   os_label, arch = ai.groups()
@@ -841,11 +1025,6 @@ jobs:
                   'ext': ext,
                   'size_bytes': f.stat().st_size,
               }
-              # Wire installer_url for platforms with a dedicated installer (CDN path):
-              #   darwin-{amd64,arm64} → .dmg
-              #   windows-amd64        → NSIS setup .exe
-              #   linux-amd64          → .AppImage
-              # windows-arm64 and linux-arm64 have no installer in this release.
               installer = installer_urls.get(f"{os_label}-{arch}")
               if installer:
                   entry['installer_url'] = installer
@@ -853,19 +1032,20 @@ jobs:
           manifest = {
               'version': version,
               'tag': tag,
+              'env': target_env,
               'commit': os.environ.get('GITHUB_SHA', ''),
               'released_at': os.environ.get('GITHUB_RUN_STARTED_AT', ''),
-              'release_url': f"https://downloads.kameas.ai/",
+              'release_url': f"{cdn_base}/",
               'assets': assets,
           }
           pathlib.Path('dist-flat/manifest.json').write_text(json.dumps(manifest, indent=2))
           print(json.dumps(manifest, indent=2))
           PY
 
-      - name: Configure AWS credentials (gh-deploy-prod)
+      - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: arn:aws:iam::764395350337:role/gh-deploy-prod
+          role-to-assume: ${{ needs.resolve-env.outputs.role_arn }}
           aws-region: us-east-2
 
       - name: Chain-assume AppDeployRole
@@ -888,13 +1068,14 @@ jobs:
 
       - name: Upload binaries + sha256 to per-tag prefix
         env:
-          TAG: ${{ needs.release.outputs.release_tag }}
+          TAG:    ${{ needs.derive-version.outputs.version }}
+          BUCKET: ${{ needs.resolve-env.outputs.bucket }}
         run: |
           set -euo pipefail
           # Per-tag prefix so old releases stay reachable for users
           # who have a stale /download/ tab open. Long cache (1h) on
           # binaries since filenames are version-stamped.
-          aws s3 sync dist-flat/ "s3://kameas-ai-prod-releases-use2/kenaz-harness/${TAG}/" \
+          aws s3 sync dist-flat/ "s3://${BUCKET}/kenaz-harness/${TAG}/" \
             --exclude 'manifest.json' \
             --cache-control 'public, max-age=3600' \
             --metadata-directive REPLACE \
@@ -902,18 +1083,19 @@ jobs:
 
       - name: Upload manifest at canonical path (short cache)
         env:
-          TAG: ${{ needs.release.outputs.release_tag }}
+          TAG:    ${{ needs.derive-version.outputs.version }}
+          BUCKET: ${{ needs.resolve-env.outputs.bucket }}
         run: |
           set -euo pipefail
           # The download page fetches /kenaz-harness/manifest.json at runtime.
           # Short cache so a fresh release shows up within minutes.
-          aws s3 cp dist-flat/manifest.json s3://kameas-ai-prod-releases-use2/kenaz-harness/manifest.json \
+          aws s3 cp dist-flat/manifest.json "s3://${BUCKET}/kenaz-harness/manifest.json" \
             --cache-control 'public, max-age=120, must-revalidate' \
             --content-type 'application/json' \
             --metadata-directive REPLACE \
             --no-progress
           # Also pin a copy under the per-tag prefix for forensic lookup.
-          aws s3 cp dist-flat/manifest.json "s3://kameas-ai-prod-releases-use2/kenaz-harness/${TAG}/manifest.json" \
+          aws s3 cp dist-flat/manifest.json "s3://${BUCKET}/kenaz-harness/${TAG}/manifest.json" \
             --cache-control 'public, max-age=3600' \
             --content-type 'application/json' \
             --metadata-directive REPLACE \
@@ -921,16 +1103,19 @@ jobs:
 
       - name: Update versions index
         env:
-          TAG: ${{ needs.release.outputs.release_tag }}
-          VERSION: ${{ needs.derive-version.outputs.version }}
-          IS_RELEASE: ${{ needs.derive-version.outputs.is_release }}
+          TAG:        ${{ needs.derive-version.outputs.version }}
+          VERSION:    ${{ needs.derive-version.outputs.version }}
+          BUCKET:     ${{ needs.resolve-env.outputs.bucket }}
+          CDN_BASE:   ${{ needs.resolve-env.outputs.cdn_base }}
+          TARGET_ENV: ${{ needs.resolve-env.outputs.target_env }}
         run: |
           set -euo pipefail
           # Maintain s3://.../kenaz-harness/index.json — a sorted list of
-          # every version that's been published. The download page
-          # fetches this lazily when the user opens the version picker.
-          # Read-modify-write pattern; a missing index seeds an empty list.
-          INDEX_S3=s3://kameas-ai-prod-releases-use2/kenaz-harness/index.json
+          # every version that's been published to this environment. The
+          # download page fetches this lazily when the user opens the
+          # version picker. Read-modify-write pattern; missing index seeds
+          # an empty list.
+          INDEX_S3="s3://${BUCKET}/kenaz-harness/index.json"
           if aws s3 cp "$INDEX_S3" /tmp/index.json --no-progress 2>/dev/null; then
             echo "fetched existing index"
           else
@@ -943,6 +1128,8 @@ jobs:
           idx = json.loads(pathlib.Path('/tmp/index.json').read_text() or '{}')
           versions = idx.get('versions') or []
           tag = os.environ['TAG']
+          cdn_base = os.environ['CDN_BASE']
+          target_env = os.environ['TARGET_ENV']
           # Drop any prior entry for the same tag (rolling 'main' replaces
           # itself; tagged releases shouldn't republish but if they do the
           # latest wins).
@@ -950,13 +1137,13 @@ jobs:
           versions.append({
               'tag': tag,
               'version': os.environ['VERSION'],
+              'env': target_env,
               'released_at': os.environ['NOW'],
-              'is_release': os.environ.get('IS_RELEASE', 'false') == 'true',
-              'manifest_url': f"https://downloads.kameas.ai/kenaz-harness/{tag}/manifest.json",
+              'manifest_url': f"{cdn_base}/kenaz-harness/{tag}/manifest.json",
           })
-          # Newest first by released_at, with 'main' (rolling) pinned to
-          # the top so the picker shows it at the front.
-          versions.sort(key=lambda v: (0 if v.get('tag') == 'main' else 1, v.get('released_at', '')), reverse=True)
+          # Newest first by released_at, with rolling dev builds pinned to
+          # the top so the picker shows them at the front.
+          versions.sort(key=lambda v: (0 if v.get('env') == 'dev' else 1, v.get('released_at', '')), reverse=True)
           # Cap at 50 entries — very old builds drop off the picker but
           # their /kenaz-harness/<tag>/ assets remain in S3 for direct linking.
           versions = versions[:50]
@@ -970,10 +1157,12 @@ jobs:
             --no-progress
 
       - name: Invalidate CloudFront
+        env:
+          CF_DIST_ID: ${{ needs.resolve-env.outputs.cf_dist_id }}
         run: |
           set -euo pipefail
           INV=$(aws cloudfront create-invalidation \
-            --distribution-id ENWB9Y4KGTPFD \
+            --distribution-id "${CF_DIST_ID}" \
             --paths '/kenaz-harness/manifest.json' '/kenaz-harness/index.json' '/kenaz-harness/*' \
             --query 'Invalidation.Id' --output text)
           echo "Invalidation: $INV"
