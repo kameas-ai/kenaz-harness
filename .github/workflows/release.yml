@@ -127,14 +127,14 @@ jobs:
             dev)
               BUCKET="kameas-ai-dev-releases-use2"
               ROLE_ARN="arn:aws:iam::764395350337:role/gh-deploy-dev"
-              CF_DIST_ID="DEV_CF_DIST_PLACEHOLDER"
+              CF_DIST_ID="E1PRT6QD4VW589"
               CDN_BASE="https://dev-downloads.kameas.ai"
               GITHUB_ENV_NAME="dev"
               ;;
             stage)
               BUCKET="kameas-ai-stage-releases-use2"
               ROLE_ARN="arn:aws:iam::764395350337:role/gh-deploy-stage"
-              CF_DIST_ID="STAGE_CF_DIST_PLACEHOLDER"
+              CF_DIST_ID="E1N8AI5X4GRPWU"
               CDN_BASE="https://stage-downloads.kameas.ai"
               GITHUB_ENV_NAME="stage"
               ;;
