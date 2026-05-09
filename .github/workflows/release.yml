@@ -10,13 +10,13 @@ name: Release
 #                                                        Published to
 #                                                        s3://kameas-ai-dev-releases-use2
 #                                                        and served from
-#                                                        dev-downloads.kameas.ai.
+#                                                        dev.downloads.kameas.ai.
 #
 #   tag  v*-rc*  (e.g. v1.2.0-rc1)         stage        Release-candidate build.
 #                                                        Published to
 #                                                        s3://kameas-ai-stage-releases-use2
 #                                                        and served from
-#                                                        stage-downloads.kameas.ai.
+#                                                        stage.downloads.kameas.ai.
 #
 #   tag  v*  (no -rc, e.g. v1.2.0)         prod         Stable release.
 #   OR   release event (release-please)                  Published to
@@ -29,7 +29,7 @@ name: Release
 # (kameas-ai/kameas-infra#74) that creates:
 #   - s3://kameas-ai-dev-releases-use2 + IAM role gh-deploy-dev
 #   - s3://kameas-ai-stage-releases-use2 + IAM role gh-deploy-stage
-#   - CloudFront aliases dev-downloads.kameas.ai / stage-downloads.kameas.ai
+#   - CloudFront aliases dev.downloads.kameas.ai / stage.downloads.kameas.ai
 # Until that PR lands, only the prod path will succeed. The dev/stage paths
 # will fail at the "Configure AWS credentials" step with an AssumeRole error —
 # this is expected and will self-heal once the infra PR merges.
@@ -130,7 +130,7 @@ jobs:
               ROLE_ARN="arn:aws:iam::764395350337:role/gh-deploy-dev"
               APPDEPLOY_ROLE_ARN="arn:aws:iam::950858584742:role/AppDeployRole"
               CF_DIST_ID="E1PRT6QD4VW589"
-              CDN_BASE="https://dev-downloads.kameas.ai"
+              CDN_BASE="https://dev.downloads.kameas.ai"
               GITHUB_ENV_NAME="dev"
               ;;
             stage)
@@ -138,7 +138,7 @@ jobs:
               ROLE_ARN="arn:aws:iam::764395350337:role/gh-deploy-stage"
               APPDEPLOY_ROLE_ARN="arn:aws:iam::543432151057:role/AppDeployRole"
               CF_DIST_ID="E1N8AI5X4GRPWU"
-              CDN_BASE="https://stage-downloads.kameas.ai"
+              CDN_BASE="https://stage.downloads.kameas.ai"
               GITHUB_ENV_NAME="stage"
               ;;
             prod)
