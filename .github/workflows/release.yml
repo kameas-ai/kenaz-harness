@@ -93,12 +93,13 @@ jobs:
     name: Resolve target environment
     runs-on: ubuntu-latest
     outputs:
-      target_env:      ${{ steps.pick.outputs.target_env }}
-      bucket:          ${{ steps.pick.outputs.bucket }}
-      role_arn:        ${{ steps.pick.outputs.role_arn }}
-      cf_dist_id:      ${{ steps.pick.outputs.cf_dist_id }}
-      cdn_base:        ${{ steps.pick.outputs.cdn_base }}
-      github_env:      ${{ steps.pick.outputs.github_env }}
+      target_env:         ${{ steps.pick.outputs.target_env }}
+      bucket:             ${{ steps.pick.outputs.bucket }}
+      role_arn:           ${{ steps.pick.outputs.role_arn }}
+      appdeploy_role_arn: ${{ steps.pick.outputs.appdeploy_role_arn }}
+      cf_dist_id:         ${{ steps.pick.outputs.cf_dist_id }}
+      cdn_base:           ${{ steps.pick.outputs.cdn_base }}
+      github_env:         ${{ steps.pick.outputs.github_env }}
     steps:
       - id: pick
         shell: bash
@@ -127,6 +128,7 @@ jobs:
             dev)
               BUCKET="kameas-ai-dev-releases-use2"
               ROLE_ARN="arn:aws:iam::764395350337:role/gh-deploy-dev"
+              APPDEPLOY_ROLE_ARN="arn:aws:iam::950858584742:role/AppDeployRole"
               CF_DIST_ID="E1PRT6QD4VW589"
               CDN_BASE="https://dev-downloads.kameas.ai"
               GITHUB_ENV_NAME="dev"
@@ -134,6 +136,7 @@ jobs:
             stage)
               BUCKET="kameas-ai-stage-releases-use2"
               ROLE_ARN="arn:aws:iam::764395350337:role/gh-deploy-stage"
+              APPDEPLOY_ROLE_ARN="arn:aws:iam::543432151057:role/AppDeployRole"
               CF_DIST_ID="E1N8AI5X4GRPWU"
               CDN_BASE="https://stage-downloads.kameas.ai"
               GITHUB_ENV_NAME="stage"
@@ -141,6 +144,7 @@ jobs:
             prod)
               BUCKET="kameas-ai-prod-releases-use2"
               ROLE_ARN="arn:aws:iam::764395350337:role/gh-deploy-prod"
+              APPDEPLOY_ROLE_ARN="arn:aws:iam::777000838085:role/AppDeployRole"
               CF_DIST_ID="ENWB9Y4KGTPFD"
               CDN_BASE="https://downloads.kameas.ai"
               GITHUB_ENV_NAME="prod"
@@ -151,12 +155,13 @@ jobs:
               ;;
           esac
 
-          echo "target_env=$TARGET"       >> "$GITHUB_OUTPUT"
-          echo "bucket=$BUCKET"           >> "$GITHUB_OUTPUT"
-          echo "role_arn=$ROLE_ARN"       >> "$GITHUB_OUTPUT"
-          echo "cf_dist_id=$CF_DIST_ID"   >> "$GITHUB_OUTPUT"
-          echo "cdn_base=$CDN_BASE"       >> "$GITHUB_OUTPUT"
-          echo "github_env=$GITHUB_ENV_NAME" >> "$GITHUB_OUTPUT"
+          echo "target_env=$TARGET"               >> "$GITHUB_OUTPUT"
+          echo "bucket=$BUCKET"                   >> "$GITHUB_OUTPUT"
+          echo "role_arn=$ROLE_ARN"               >> "$GITHUB_OUTPUT"
+          echo "appdeploy_role_arn=$APPDEPLOY_ROLE_ARN" >> "$GITHUB_OUTPUT"
+          echo "cf_dist_id=$CF_DIST_ID"           >> "$GITHUB_OUTPUT"
+          echo "cdn_base=$CDN_BASE"               >> "$GITHUB_OUTPUT"
+          echo "github_env=$GITHUB_ENV_NAME"      >> "$GITHUB_OUTPUT"
           echo "Resolved: trigger=$EVENT ref=$REF → env=$TARGET bucket=$BUCKET"
 
   # ────────────────────────────────────────────────────────────────────────────
@@ -1053,7 +1058,7 @@ jobs:
         run: |
           set -euo pipefail
           CREDS=$(aws sts assume-role \
-            --role-arn arn:aws:iam::777000838085:role/AppDeployRole \
+            --role-arn ${{ needs.resolve-env.outputs.appdeploy_role_arn }} \
             --role-session-name gh-publish-kenaz-harness \
             --query 'Credentials' --output json)
 
