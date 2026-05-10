@@ -634,7 +634,7 @@ func TestPickAssetFor(t *testing.T) {
 }
 
 func TestDefaultStagedName(t *testing.T) {
-	if got := defaultStagedName("darwin/arm64", "v0.4.0"); got != "Kenaz-v0.4.0.app.new" {
+	if got := defaultStagedName("darwin/arm64", "v0.4.0"); got != "kenaz-harness-v0.4.0.app.new" {
 		t.Errorf("darwin name = %q", got)
 	}
 	if got := defaultStagedName("windows/amd64", "v0.4.0"); got != "kenaz-harness-v0.4.0.exe.new" {

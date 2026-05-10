@@ -389,7 +389,7 @@ func defaultStagedName(platform, version string) string {
 	}
 	switch {
 	case len(platform) >= 6 && platform[:6] == "darwin":
-		return "Kenaz-" + version + ".app.new"
+		return "kenaz-harness-" + version + ".app.new"
 	case len(platform) >= 7 && platform[:7] == "windows":
 		return "kenaz-harness-" + version + ".exe.new"
 	default:

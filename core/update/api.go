@@ -66,7 +66,7 @@ type DownloadProgress struct {
 // Service.ApplyAndRestart unchanged.
 type StagedUpdate struct {
 	// Path is the absolute path to the staged binary on disk. On
-	// macOS this points at the "<DataDir>/update/staging/Kenaz.app.new"
+	// macOS this points at the "<DataDir>/update/staging/kenaz-harness.app.new"
 	// bundle directory; on Linux/Windows at the staged executable.
 	Path string `json:"path"`
 	// TargetVersion is the version the staged artifact represents.
