@@ -362,9 +362,9 @@ jobs:
 
           APPDIR="build/bin/Kenaz_Harness.AppDir"
           mkdir -p "$APPDIR/usr/bin"
-          # wails build outputs to build/bin/Kenaz on Linux
-          # (productName="Kenaz Harness", outputfilename="Kenaz" in wails.json).
-          cp "build/bin/Kenaz" "$APPDIR/usr/bin/kenaz-harness"
+          # wails build outputs to build/bin/kenaz-harness on Linux
+          # (productName="Kenaz Harness", outputfilename="kenaz-harness" in wails.json).
+          cp "build/bin/kenaz-harness" "$APPDIR/usr/bin/kenaz-harness"
           cp build/appicon.png "$APPDIR/Kenaz_Harness.png"
           cp build/appicon.png "$APPDIR/.DirIcon"
 
@@ -698,7 +698,7 @@ jobs:
           set -euo pipefail
           VERSION="${{ needs.derive-version.outputs.version }}"
           LABEL="${{ matrix.label }}"
-          STAGE="kaneaz-harness-${VERSION}-${LABEL}"
+          STAGE="kenaz-harness-${VERSION}-${LABEL}"
           mkdir -p dist
           # On macOS, pull the .dmg out before renaming build/bin (the auto-update
           # .zip and the human-install .dmg are separate release assets).
@@ -711,8 +711,8 @@ jobs:
           if [ "${{ runner.os }}" = "Linux" ] && [ "${{ matrix.wails_platform }}" = "linux/amd64" ]; then
             APPIMAGE="build/bin/Kenaz-Harness-${VERSION}-linux-amd64.AppImage"
             if [ -f "$APPIMAGE" ]; then
-              cp "$APPIMAGE" "dist/kaneaz-harness-${VERSION}-linux-amd64.AppImage"
-              echo "Copied AppImage → dist/kaneaz-harness-${VERSION}-linux-amd64.AppImage"
+              cp "$APPIMAGE" "dist/kenaz-harness-${VERSION}-linux-amd64.AppImage"
+              echo "Copied AppImage → dist/kenaz-harness-${VERSION}-linux-amd64.AppImage"
             else
               echo "::warning::AppImage not found at $APPIMAGE — skipping"
             fi
@@ -731,7 +731,7 @@ jobs:
         run: |
           $version = "${{ needs.derive-version.outputs.version }}"
           $label   = "${{ matrix.label }}"
-          $stage   = "kaneaz-harness-$version-$label"
+          $stage   = "kenaz-harness-$version-$label"
           New-Item -ItemType Directory -Force -Path dist | Out-Null
           # For windows-amd64, copy the NSIS installer to dist/ as a separate
           # release asset before moving build/bin (the .zip auto-update payload
@@ -739,8 +739,8 @@ jobs:
           if ("${{ matrix.wails_platform }}" -eq "windows/amd64") {
             $installer = "build/bin/Kenaz-Harness-Setup-$version-windows-amd64.exe"
             if (Test-Path $installer) {
-              Copy-Item $installer "dist/kaneaz-harness-$version-windows-amd64-setup.exe"
-              Write-Output "Copied NSIS installer → dist/kaneaz-harness-$version-windows-amd64-setup.exe"
+              Copy-Item $installer "dist/kenaz-harness-$version-windows-amd64-setup.exe"
+              Write-Output "Copied NSIS installer → dist/kenaz-harness-$version-windows-amd64-setup.exe"
             } else {
               Write-Warning "NSIS installer not found at $installer — listing build/bin:"
               Get-ChildItem "build/bin"
@@ -768,7 +768,7 @@ jobs:
       - name: upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: kaneaz-harness-${{ matrix.label }}
+          name: kenaz-harness-${{ matrix.label }}
           path: dist/
           retention-days: 30
           if-no-files-found: error
@@ -795,7 +795,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: dist-flat
-          pattern: kaneaz-harness-*
+          pattern: kenaz-harness-*
           merge-multiple: true
 
       - name: list artifacts
@@ -857,7 +857,7 @@ jobs:
           import json, os, pathlib, re
           tag = os.environ['TAG']
           version = os.environ['VERSION']
-          repo = os.environ.get('GITHUB_REPOSITORY', 'kameas-ai/kaneaz-harness')
+          repo = os.environ.get('GITHUB_REPOSITORY', 'kameas-ai/kenaz-harness')
           base = f"https://github.com/{repo}/releases/download/{tag}"
           dist = pathlib.Path('dist-flat')
           # Build installer URL lookups keyed by platform string.
@@ -867,22 +867,22 @@ jobs:
           # so they don't also appear as top-level auto-update entries).
           installer_filenames: set = set()
           for f in sorted(dist.iterdir()):
-              # macOS .dmg — pattern: kaneaz-harness-<version>-darwin-<arch>.dmg
-              dm = re.match(r'kaneaz-harness-.+?-(darwin)-(amd64|arm64)\.dmg$', f.name)
+              # macOS .dmg — pattern: kenaz-harness-<version>-darwin-<arch>.dmg
+              dm = re.match(r'kenaz-harness-.+?-(darwin)-(amd64|arm64)\.dmg$', f.name)
               if dm:
                   os_label, arch = dm.groups()
                   installer_urls[f"{os_label}-{arch}"] = f"{base}/{f.name}"
                   installer_filenames.add(f.name)
                   continue
-              # Windows NSIS installer — pattern: kaneaz-harness-<version>-windows-amd64-setup.exe
-              wn = re.match(r'kaneaz-harness-.+?-(windows)-(amd64)-setup\.exe$', f.name)
+              # Windows NSIS installer — pattern: kenaz-harness-<version>-windows-amd64-setup.exe
+              wn = re.match(r'kenaz-harness-.+?-(windows)-(amd64)-setup\.exe$', f.name)
               if wn:
                   os_label, arch = wn.groups()
                   installer_urls[f"{os_label}-{arch}"] = f"{base}/{f.name}"
                   installer_filenames.add(f.name)
                   continue
-              # Linux AppImage — pattern: kaneaz-harness-<version>-linux-amd64.AppImage
-              ai = re.match(r'kaneaz-harness-.+?-(linux)-(amd64)\.AppImage$', f.name)
+              # Linux AppImage — pattern: kenaz-harness-<version>-linux-amd64.AppImage
+              ai = re.match(r'kenaz-harness-.+?-(linux)-(amd64)\.AppImage$', f.name)
               if ai:
                   os_label, arch = ai.groups()
                   installer_urls[f"{os_label}-{arch}"] = f"{base}/{f.name}"
@@ -895,8 +895,8 @@ jobs:
               sha = ''
               if sha_path.exists():
                   sha = sha_path.read_text().split()[0]
-              # Parse label from filename: kaneaz-harness-<version>-<label>.<ext>
-              m = re.match(r'kaneaz-harness-.+?-(linux|darwin|windows)-(amd64|arm64)\.(.+)$', f.name)
+              # Parse label from filename: kenaz-harness-<version>-<label>.<ext>
+              m = re.match(r'kenaz-harness-.+?-(linux|darwin|windows)-(amd64|arm64)\.(.+)$', f.name)
               if not m:
                   continue
               os_label, arch, ext = m.groups()
@@ -982,7 +982,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: dist-flat
-          pattern: kaneaz-harness-*
+          pattern: kenaz-harness-*
           merge-multiple: true
 
       - name: rewrite manifest with CDN URLs
@@ -1010,19 +1010,19 @@ jobs:
           installer_urls: dict = {}
           installer_filenames: set = set()
           for f in sorted(dist.iterdir()):
-              dm = re.match(r'kaneaz-harness-.+?-(darwin)-(amd64|arm64)\.dmg$', f.name)
+              dm = re.match(r'kenaz-harness-.+?-(darwin)-(amd64|arm64)\.dmg$', f.name)
               if dm:
                   os_label, arch = dm.groups()
                   installer_urls[f"{os_label}-{arch}"] = f"{base}/{f.name}"
                   installer_filenames.add(f.name)
                   continue
-              wn = re.match(r'kaneaz-harness-.+?-(windows)-(amd64)-setup\.exe$', f.name)
+              wn = re.match(r'kenaz-harness-.+?-(windows)-(amd64)-setup\.exe$', f.name)
               if wn:
                   os_label, arch = wn.groups()
                   installer_urls[f"{os_label}-{arch}"] = f"{base}/{f.name}"
                   installer_filenames.add(f.name)
                   continue
-              ai = re.match(r'kaneaz-harness-.+?-(linux)-(amd64)\.AppImage$', f.name)
+              ai = re.match(r'kenaz-harness-.+?-(linux)-(amd64)\.AppImage$', f.name)
               if ai:
                   os_label, arch = ai.groups()
                   installer_urls[f"{os_label}-{arch}"] = f"{base}/{f.name}"
@@ -1035,7 +1035,7 @@ jobs:
               sha = ''
               if sha_path.exists():
                   sha = sha_path.read_text().split()[0]
-              m = re.match(r'kaneaz-harness-.+?-(linux|darwin|windows)-(amd64|arm64)\.(.+)$', f.name)
+              m = re.match(r'kenaz-harness-.+?-(linux|darwin|windows)-(amd64|arm64)\.(.+)$', f.name)
               if not m:
                   continue
               os_label, arch, ext = m.groups()
