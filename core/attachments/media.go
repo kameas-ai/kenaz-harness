@@ -1,6 +1,7 @@
 package attachments
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -8,13 +9,23 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"image"
+	// Register JPEG, PNG, GIF decoders for image.DecodeConfig.
+	_ "image/gif"
+	_ "image/jpeg"
+	_ "image/png"
 	"io"
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
+	"github.com/ledongthuc/pdf"
+	"golang.org/x/image/webp"
+
+	llm "github.com/sigil-tech/kaneaz-harness/core/llm"
 	"github.com/sigil-tech/kaneaz-harness/core/storage"
 )
 
@@ -22,6 +33,12 @@ import (
 // under <DataDir>/media/<content-hash>. Multiple MediaArtifact rows may
 // share a ContentHash (CAS dedup): each upload mints a fresh ID + row,
 // but at most one file lives on disk per hash.
+//
+// NOTE: Do NOT capture user-attached media into the artifact pipeline
+// automatically. MediaStore already provides dedup + persistence; the
+// artifact panel is for model-emitted artifacts. Users can manually save
+// an attachment as an artifact via the existing "Save as artifact"
+// affordance. (Decision recorded in plan.md §8, multimodal-io-01KQ8TDF.)
 type MediaArtifact struct {
 	// ID is a 26-char Crockford-base32 ULID minted at Put time.
 	ID string
@@ -36,6 +53,16 @@ type MediaArtifact struct {
 	OriginalName string
 	// CreatedAt is the wall-clock at insert time (UTC).
 	CreatedAt time.Time
+
+	// ImageWidth and ImageHeight are the pixel dimensions extracted on Put
+	// for image/* MIME types. Both are zero when not applicable or when
+	// extraction fails (non-fatal; best-effort). Populated by
+	// multimodal-io-01KQ8TDF WP06.
+	ImageWidth  int
+	ImageHeight int
+	// PageCount is the number of pages extracted for application/pdf
+	// attachments. Zero means unknown or not a PDF. Populated by WP06.
+	PageCount int
 }
 
 // MediaFilter narrows the List query. Empty fields match every row.
@@ -215,6 +242,15 @@ func (s *sqlMediaStore) RegisterRefcountSource(rs RefcountSource) {
 }
 
 // Put materializes a fresh MediaArtifact, dedup'd on disk by sha256.
+//
+// For image/* MIME types, Put also extracts pixel dimensions (best-effort;
+// zero on failure). For application/pdf, Put extracts the page count
+// (best-effort; encrypted PDFs return ErrAttachmentEncrypted).
+// These metadata fields are populated on the returned MediaArtifact but
+// are NOT persisted to the DB in this version — the DB schema migration
+// (adding image_width/image_height/page_count columns) is tracked as a
+// follow-up. Callers should read them from the returned value and attach
+// them to ContentBlock.Source.ImageDimensions for the gate (WP06).
 func (s *sqlMediaStore) Put(ctx context.Context, b []byte, mediaType, originalName string) (MediaArtifact, error) {
 	if s.maxBytes > 0 && int64(len(b)) > s.maxBytes {
 		return MediaArtifact{}, fmt.Errorf("%w: %d > %d", ErrOversize, len(b), s.maxBytes)
@@ -242,6 +278,25 @@ func (s *sqlMediaStore) Put(ctx context.Context, b []byte, mediaType, originalNa
 		OriginalName: originalName,
 		CreatedAt:    now,
 	}
+
+	// Best-effort metadata extraction (WP06).
+	if strings.HasPrefix(mediaType, "image/") {
+		w, h, _ := extractImageDimensions(b, mediaType)
+		row.ImageWidth = w
+		row.ImageHeight = h
+	} else if mediaType == "application/pdf" {
+		pages, pdfErr := extractPDFPageCount(b)
+		if pdfErr != nil {
+			var encErr *llm.ErrAttachmentEncrypted
+			if errors.As(pdfErr, &encErr) {
+				return MediaArtifact{}, pdfErr
+			}
+			// Non-fatal: page count stays 0 on other parse failures.
+		} else {
+			row.PageCount = pages
+		}
+	}
+
 	if err := s.db.WriteTx(ctx, func(tx storage.WriteTx) error {
 		_, err := tx.Exec(ctx, `
             INSERT INTO media_artifacts
@@ -254,6 +309,62 @@ func (s *sqlMediaStore) Put(ctx context.Context, b []byte, mediaType, originalNa
 		return MediaArtifact{}, err
 	}
 	return row, nil
+}
+
+// ── metadata extraction helpers (WP06) ───────────────────────────────────
+
+// extractImageDimensions decodes the image header of b (whose IANA mime type
+// is mt) and returns the pixel dimensions. Returns (0, 0, err) on failure;
+// callers treat zero dimensions as "unknown" and skip the pixel-cap check.
+func extractImageDimensions(b []byte, mt string) (width, height int, _ error) {
+	var cfg image.Config
+	var err error
+	if mt == "image/webp" {
+		cfg, err = webp.DecodeConfig(bytes.NewReader(b))
+	} else {
+		// image.DecodeConfig auto-dispatches for jpeg/png/gif via the
+		// side-effect imports at the top of this file.
+		cfg, _, err = image.DecodeConfig(bytes.NewReader(b))
+	}
+	if err != nil {
+		return 0, 0, err
+	}
+	return cfg.Width, cfg.Height, nil
+}
+
+// extractPDFPageCount parses b as a PDF and returns the number of pages.
+// Returns (0, *llm.ErrAttachmentEncrypted) for password-protected PDFs.
+// Input is capped at 50 MiB by the sqlMediaStore.maxBytes guard in Put;
+// passing an uncapped reader here is safe because the caller already checked.
+//
+// NOTE: ledongthuc/pdf can panic on malformed or encrypted PDFs during internal
+// object resolution. We recover from any such panic and treat it as a non-fatal
+// parse error so Put can succeed with PageCount=0. A panic that matches the
+// "encrypt" / "password" keywords is still surfaced as ErrAttachmentEncrypted.
+func extractPDFPageCount(b []byte) (pages int, rerr error) {
+	defer func() {
+		if p := recover(); p != nil {
+			msg := strings.ToLower(fmt.Sprintf("%v", p))
+			if strings.Contains(msg, "encrypt") || strings.Contains(msg, "password") {
+				rerr = &llm.ErrAttachmentEncrypted{}
+			} else {
+				rerr = fmt.Errorf("attachments/media: pdf parse panic: %v", p)
+			}
+			pages = 0
+		}
+	}()
+
+	r, err := pdf.NewReader(bytes.NewReader(b), int64(len(b)))
+	if err != nil {
+		// ledongthuc/pdf returns a string error for encrypted PDFs;
+		// check by message since the library doesn't export a sentinel.
+		msg := strings.ToLower(err.Error())
+		if strings.Contains(msg, "encrypt") || strings.Contains(msg, "password") {
+			return 0, &llm.ErrAttachmentEncrypted{}
+		}
+		return 0, err
+	}
+	return r.NumPage(), nil
 }
 
 // Get returns metadata + bytes by id.
