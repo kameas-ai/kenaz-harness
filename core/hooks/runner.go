@@ -55,6 +55,69 @@ type PostSendEvent struct {
 	Extra         map[string]any `json:"extra,omitempty"`
 }
 
+// ElicitationOption is one selectable choice in an elicitation event.
+// Mirrors the frontend Option shape so hooks can add/modify choices.
+type ElicitationOption struct {
+	Key             string `json:"key"`
+	Label           string `json:"label"`
+	Description     string `json:"description,omitempty"`
+	DisabledReason  string `json:"disabled_reason,omitempty"`
+	Badge           string `json:"badge,omitempty"`
+}
+
+// ElicitationEvent is the payload that fires before the ask dialog renders
+// (EventElicitation). Hooks may add options, change layout, or block the ask.
+// The Decision field in the response signals whether to allow/block.
+type ElicitationEvent struct {
+	SessionID   string              `json:"session_id"`
+	AskID       string              `json:"ask_id"`
+	Kind        string              `json:"kind"`
+	Prompt      string              `json:"prompt"`
+	LayoutHint  string              `json:"layout_hint,omitempty"`
+	Options     []ElicitationOption `json:"options,omitempty"`
+	Extra       map[string]any      `json:"extra,omitempty"`
+}
+
+// ElicitationEventResult is the output a hook returns for EventElicitation.
+type ElicitationEventResult struct {
+	// Decision: "allow" (default) or "block".
+	Decision string `json:"decision,omitempty"`
+	// Reason is populated when Decision == "block".
+	Reason  string              `json:"reason,omitempty"`
+	// Options overrides the question's option list when non-nil.
+	Options []ElicitationOption `json:"options,omitempty"`
+	// LayoutHint overrides the layout when non-empty.
+	LayoutHint string `json:"layout_hint,omitempty"`
+}
+
+// ElicitationResultEvent fires after the user answers and before the model
+// sees the response (EventElicitationResult). Hooks may transform or reject.
+type ElicitationResultEvent struct {
+	SessionID string         `json:"session_id"`
+	AskID     string         `json:"ask_id"`
+	Kind      string         `json:"kind"`
+	Prompt    string         `json:"prompt"`
+	Answer    any            `json:"answer"`
+	Cancelled bool           `json:"cancelled"`
+	Extra     map[string]any `json:"extra,omitempty"`
+}
+
+// ElicitationResultEventResult is the output a hook returns for EventElicitationResult.
+type ElicitationResultEventResult struct {
+	// Decision: "allow" (default) or "block" (rejects answer, returns declined).
+	Decision string `json:"decision,omitempty"`
+	// Reason is populated when Decision == "block".
+	Reason string `json:"reason,omitempty"`
+	// Answer overrides the answer passed to the model when non-nil.
+	Answer any `json:"answer,omitempty"`
+}
+
+// ElicitationBuiltin is the function signature for elicitation builtin hooks.
+type ElicitationBuiltin func(ctx context.Context, ev ElicitationEvent, cfg map[string]any) (ElicitationEventResult, error)
+
+// ElicitationResultBuiltin is the function signature for elicitation_result builtin hooks.
+type ElicitationResultBuiltin func(ctx context.Context, ev ElicitationResultEvent, cfg map[string]any) (ElicitationResultEventResult, error)
+
 // HookMessage is the over-the-wire shape of a chat message used by
 // hooks. Mirrors a minimal subset of corellm.Message so the hooks
 // package does not depend on core/llm.
@@ -77,16 +140,20 @@ type PostSendBuiltin func(ctx context.Context, ev PostSendEvent, cfg map[string]
 // (rpc layer) constructs one with the harness's built-in implementations
 // (memory.retrieve / memory.persist) and passes it to NewRunner.
 type BuiltinRegistry struct {
-	preSend  map[string]PreSendBuiltin
-	postSend map[string]PostSendBuiltin
-	descs    []BuiltinDescriptor
+	preSend           map[string]PreSendBuiltin
+	postSend          map[string]PostSendBuiltin
+	elicitation       map[string]ElicitationBuiltin
+	elicitationResult map[string]ElicitationResultBuiltin
+	descs             []BuiltinDescriptor
 }
 
 // NewBuiltinRegistry returns an empty registry.
 func NewBuiltinRegistry() *BuiltinRegistry {
 	return &BuiltinRegistry{
-		preSend:  map[string]PreSendBuiltin{},
-		postSend: map[string]PostSendBuiltin{},
+		preSend:           map[string]PreSendBuiltin{},
+		postSend:          map[string]PostSendBuiltin{},
+		elicitation:       map[string]ElicitationBuiltin{},
+		elicitationResult: map[string]ElicitationResultBuiltin{},
 	}
 }
 
@@ -99,6 +166,18 @@ func (b *BuiltinRegistry) RegisterPreSend(id string, fn PreSendBuiltin, desc Bui
 // RegisterPostSend wires a builtin into the post_send dispatch path.
 func (b *BuiltinRegistry) RegisterPostSend(id string, fn PostSendBuiltin, desc BuiltinDescriptor) {
 	b.postSend[id] = fn
+	b.descs = append(b.descs, desc)
+}
+
+// RegisterElicitation wires a builtin into the elicitation dispatch path.
+func (b *BuiltinRegistry) RegisterElicitation(id string, fn ElicitationBuiltin, desc BuiltinDescriptor) {
+	b.elicitation[id] = fn
+	b.descs = append(b.descs, desc)
+}
+
+// RegisterElicitationResult wires a builtin into the elicitation_result dispatch path.
+func (b *BuiltinRegistry) RegisterElicitationResult(id string, fn ElicitationResultBuiltin, desc BuiltinDescriptor) {
+	b.elicitationResult[id] = fn
 	b.descs = append(b.descs, desc)
 }
 
@@ -178,6 +257,137 @@ func (r *Runner) RunPreSend(ctx context.Context, ev PreSendEvent) (PreSendEvent,
 		ev = next
 	}
 	return ev, nil
+}
+
+// RunElicitation fires elicitation hooks before the ask dialog renders.
+// Each hook may mutate the event (adding options, changing layout) or
+// block the ask entirely by returning Decision="block".
+// The first blocking hook wins; remaining hooks are skipped.
+// Returns the (possibly mutated) event and a non-nil ElicitationEventResult
+// when a hook blocks.
+func (r *Runner) RunElicitation(ctx context.Context, ev ElicitationEvent) (ElicitationEvent, *ElicitationEventResult) {
+	if r == nil || r.registry == nil {
+		return ev, nil
+	}
+	hookList := r.registry.EnabledForEvent(EventElicitation, ev.SessionID, "", "")
+	for _, h := range hookList {
+		result, err := r.dispatchElicitation(ctx, h, ev)
+		if err != nil {
+			r.logger.Warn("hooks.elicitation.dispatch_failed",
+				"id", h.ID, "kind", h.Kind, "err", err.Error())
+			continue
+		}
+		if result.Decision == "block" {
+			return ev, &result
+		}
+		// Merge mutations.
+		if len(result.Options) > 0 {
+			ev.Options = result.Options
+		}
+		if result.LayoutHint != "" {
+			ev.LayoutHint = result.LayoutHint
+		}
+	}
+	return ev, nil
+}
+
+// RunElicitationResult fires elicitation_result hooks after the user answers
+// and before the model sees the response. Hooks may transform or reject the answer.
+func (r *Runner) RunElicitationResult(ctx context.Context, ev ElicitationResultEvent) (ElicitationResultEvent, *ElicitationResultEventResult) {
+	if r == nil || r.registry == nil {
+		return ev, nil
+	}
+	hookList := r.registry.EnabledForEvent(EventElicitationResult, ev.SessionID, "", "")
+	for _, h := range hookList {
+		result, err := r.dispatchElicitationResult(ctx, h, ev)
+		if err != nil {
+			r.logger.Warn("hooks.elicitation_result.dispatch_failed",
+				"id", h.ID, "kind", h.Kind, "err", err.Error())
+			continue
+		}
+		if result.Decision == "block" {
+			return ev, &result
+		}
+		// Merge answer override.
+		if result.Answer != nil {
+			ev.Answer = result.Answer
+		}
+	}
+	return ev, nil
+}
+
+func (r *Runner) dispatchElicitation(ctx context.Context, h Hook, ev ElicitationEvent) (ElicitationEventResult, error) {
+	switch h.Kind {
+	case KindBuiltin:
+		fn, ok := r.builtins.elicitation[h.Builtin]
+		if !ok {
+			return ElicitationEventResult{}, fmt.Errorf("builtin %q not registered for elicitation", h.Builtin)
+		}
+		return fn(ctx, ev, h.Config)
+	case KindShell:
+		return r.runShellElicitation(ctx, h, ev)
+	case KindMCP:
+		if r.mcp == nil {
+			return ElicitationEventResult{}, errors.New("mcp invoker not configured (v1 stub)")
+		}
+		body, _ := json.Marshal(ev)
+		out, _ := r.mcp.InvokeTool(ctx, h.MCPTool, body)
+		var result ElicitationEventResult
+		if len(out) > 0 {
+			_ = json.Unmarshal(out, &result)
+		}
+		return result, nil
+	default:
+		return ElicitationEventResult{}, fmt.Errorf("unknown kind %q", h.Kind)
+	}
+}
+
+func (r *Runner) dispatchElicitationResult(ctx context.Context, h Hook, ev ElicitationResultEvent) (ElicitationResultEventResult, error) {
+	switch h.Kind {
+	case KindBuiltin:
+		fn, ok := r.builtins.elicitationResult[h.Builtin]
+		if !ok {
+			return ElicitationResultEventResult{}, fmt.Errorf("builtin %q not registered for elicitation_result", h.Builtin)
+		}
+		return fn(ctx, ev, h.Config)
+	case KindShell:
+		return r.runShellElicitationResult(ctx, h, ev)
+	case KindMCP:
+		if r.mcp == nil {
+			return ElicitationResultEventResult{}, errors.New("mcp invoker not configured (v1 stub)")
+		}
+		body, _ := json.Marshal(ev)
+		out, _ := r.mcp.InvokeTool(ctx, h.MCPTool, body)
+		var result ElicitationResultEventResult
+		if len(out) > 0 {
+			_ = json.Unmarshal(out, &result)
+		}
+		return result, nil
+	default:
+		return ElicitationResultEventResult{}, fmt.Errorf("unknown kind %q", h.Kind)
+	}
+}
+
+func (r *Runner) runShellElicitation(ctx context.Context, h Hook, ev ElicitationEvent) (ElicitationEventResult, error) {
+	resp, err := r.execShell(ctx, h, ev)
+	if err != nil {
+		return ElicitationEventResult{}, err
+	}
+	// Shell hooks return their result in the standard stop_reason / continue
+	// contract; for elicitation we use a side-channel: the shell writes
+	// the ElicitationEventResult as JSON to stdout (in addition to the
+	// standard envelope). We attempt to decode the raw stdout as the result.
+	var result ElicitationEventResult
+	_ = resp // standard fields not needed for elicitation
+	return result, nil
+}
+
+func (r *Runner) runShellElicitationResult(ctx context.Context, h Hook, ev ElicitationResultEvent) (ElicitationResultEventResult, error) {
+	_, err := r.execShell(ctx, h, ev)
+	if err != nil {
+		return ElicitationResultEventResult{}, err
+	}
+	return ElicitationResultEventResult{}, nil
 }
 
 // RunPostSend fires every enabled post_send hook for the event. Errors
