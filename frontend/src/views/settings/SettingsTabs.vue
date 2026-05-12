@@ -56,6 +56,9 @@ const tabs: ReadonlyArray<Tab> = [
   // workflow-extensions-01KW2D3Y WP02 — Workflows settings tab.
   // Disambiguates via ?tab=workflows. See SettingsView.vue for the mount switch.
   { to: '/settings?tab=workflows', label: 'Workflows', query: 'workflows' },
+  // scheduled-chat-runs-01KX5R8B WP05 — Scheduled Chats settings tab.
+  // Disambiguates via ?tab=scheduledchats. See SettingsView.vue for the mount switch.
+  { to: '/settings?tab=scheduledchats', label: 'Scheduled Chats', query: 'scheduledchats' },
   { to: '/providers', label: 'Providers' },
   { to: '/bundles', label: 'Bundles' },
   { to: '/permissions/bash', label: 'Permissions', matchPrefix: '/permissions' },
