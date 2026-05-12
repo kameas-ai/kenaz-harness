@@ -128,6 +128,30 @@ jobs:
             echo "- $LAST → **$NEXT**"
           } >> "$GITHUB_STEP_SUMMARY"
 
+      # Workaround: self-hosted ARM64 ci-fast runner image lacks the gh CLI,
+      # which the `generate release notes` and `tag + release` steps below
+      # both rely on. Install on demand. Once kameas-infra bakes gh into the
+      # runner AMI, this step can be deleted (mirrors release.yml:807).
+      - name: install gh CLI if missing
+        if: steps.ver.outputs.bump != 'none'
+        run: |
+          set -euo pipefail
+          if command -v gh >/dev/null 2>&1; then
+            echo "gh already installed: $(gh --version | head -n1)"
+            exit 0
+          fi
+          GH_VERSION="2.62.0"
+          ARCH="$(uname -m)"
+          case "$ARCH" in
+            x86_64) ARCH=amd64 ;;
+            aarch64|arm64) ARCH=arm64 ;;
+            *) echo "::error::unsupported arch: $ARCH"; exit 1 ;;
+          esac
+          curl -fsSL "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_${ARCH}.tar.gz" -o /tmp/gh.tgz
+          tar -xzf /tmp/gh.tgz -C /tmp
+          sudo install -m 755 "/tmp/gh_${GH_VERSION}_linux_${ARCH}/bin/gh" /usr/local/bin/gh
+          gh --version | head -n1
+
       - name: generate release notes
         if: steps.ver.outputs.bump != 'none'
         env:
