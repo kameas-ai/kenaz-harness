@@ -444,6 +444,8 @@ export function Settings_GetMaxAgentTurns():Promise<number>;
 
 export function Settings_GetMemory():Promise<boolean>;
 
+export function Settings_GetMultimodalInput():Promise<boolean>;
+
 export function Settings_GetMonthlyCostNotifyUSD():Promise<number>;
 
 export function Settings_GetPermissionCacheDangerousOps():Promise<boolean>;
@@ -487,6 +489,8 @@ export function Settings_SetMCPAutoRestart(arg1:boolean):Promise<void>;
 export function Settings_SetMaxAgentTurns(arg1:number):Promise<void>;
 
 export function Settings_SetMemory(arg1:boolean):Promise<void>;
+
+export function Settings_SetMultimodalInput(arg1:boolean):Promise<void>;
 
 export function Settings_SetMonthlyCostNotifyUSD(arg1:number):Promise<void>;
 

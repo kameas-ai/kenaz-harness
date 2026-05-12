@@ -1013,6 +1013,41 @@ func (b *Bindings) Settings_SetShowPerMessageTokenMeter(enabled bool) error {
 	return b.storeFn().SaveAll(s)
 }
 
+// ── WP08 — multimodal input feature flag ──────────────────────────────
+
+// Settings_GetMultimodalInput returns whether the multimodal input feature
+// (image + PDF attachments) is enabled. Default true on a fresh install.
+// When false, ChatInput.vue hides the paperclip button and drop overlay.
+// Note: the HARNESS_MULTIMODAL_IN env flag can independently disable this.
+// (multimodal-io-01KQ8TDF WP08 / FR-022 / FR-023)
+func (b *Bindings) Settings_GetMultimodalInput() (bool, error) {
+	if b.storeFn == nil {
+		return true, nil
+	}
+	s, err := b.storeFn().LoadAll()
+	if err != nil {
+		return true, err
+	}
+	return s.MultimodalInputEnabled(), nil
+}
+
+// Settings_SetMultimodalInput persists the multimodal input feature flag.
+// When false, ChatInput.vue hides the paperclip button, the drop overlay,
+// and the paste handler becomes a no-op for image/PDF clipboard items.
+// (multimodal-io-01KQ8TDF WP08 / FR-023 / FR-024)
+func (b *Bindings) Settings_SetMultimodalInput(enabled bool) error {
+	if b.storeFn == nil {
+		return nil
+	}
+	s, err := b.storeFn().LoadAll()
+	if err != nil {
+		return err
+	}
+	// Inverted storage: Disabled = !enabled.
+	s.MultimodalInputDisabled = !enabled
+	return b.storeFn().SaveAll(s)
+}
+
 // ── memory ─────────────────────────────────────────────────────────────
 
 func (b *Bindings) Memory_ListChunks(filter memoryview.ListFilter) ([]memoryview.Chunk, error) {

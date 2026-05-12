@@ -814,6 +814,10 @@ export function Settings_GetMemory() {
   return window['go']['rpc']['Bindings']['Settings_GetMemory']();
 }
 
+export function Settings_GetMultimodalInput() {
+  return window['go']['rpc']['Bindings']['Settings_GetMultimodalInput']();
+}
+
 export function Settings_GetMonthlyCostNotifyUSD() {
   return window['go']['rpc']['Bindings']['Settings_GetMonthlyCostNotifyUSD']();
 }
@@ -900,6 +904,10 @@ export function Settings_SetMaxAgentTurns(arg1) {
 
 export function Settings_SetMemory(arg1) {
   return window['go']['rpc']['Bindings']['Settings_SetMemory'](arg1);
+}
+
+export function Settings_SetMultimodalInput(arg1) {
+  return window['go']['rpc']['Bindings']['Settings_SetMultimodalInput'](arg1);
 }
 
 export function Settings_SetMonthlyCostNotifyUSD(arg1) {

@@ -379,6 +379,9 @@ interface WailsBindingsLike {
   // per-message-token-meter-01KR3PQR
   Settings_GetShowPerMessageTokenMeter(): Promise<boolean>;
   Settings_SetShowPerMessageTokenMeter(enabled: boolean): Promise<void>;
+  // multimodal-io-01KQ8TDF WP08 / FR-022 / FR-023
+  Settings_GetMultimodalInput(): Promise<boolean>;
+  Settings_SetMultimodalInput(enabled: boolean): Promise<void>;
   // artifact-preview-binary-rendering-01KQ8TD5 WP07
   Settings_GetArtifactPreview(): Promise<{ enabled: boolean; maxBytes: number; timeoutMs: number }>;
 
@@ -1444,6 +1447,21 @@ export interface SettingsClient {
   /** Persist the per-message token meter visibility toggle. */
   setShowPerMessageTokenMeter(enabled: boolean): Promise<void>;
 
+  // ── multimodal-io-01KQ8TDF WP08 / FR-022 / FR-023 ────────────────────
+  /**
+   * Returns whether the multimodal input feature (image + PDF attachments)
+   * is enabled. Default true on a fresh install. When false, ChatInput hides
+   * the paperclip button and drop overlay. The HARNESS_MULTIMODAL_IN env flag
+   * can independently force-disable this.
+   */
+  getMultimodalInput(): Promise<boolean>;
+  /**
+   * Persists the multimodal input feature toggle. When false, ChatInput hides
+   * the paperclip, the drop overlay becomes a no-op, and image/PDF clipboard
+   * items are ignored on paste.
+   */
+  setMultimodalInput(enabled: boolean): Promise<void>;
+
   // ── artifact-preview-binary-rendering-01KQ8TD5 WP07 ─────────────────
   /**
    * Returns the runtime artifact-preview feature config:
@@ -2445,6 +2463,8 @@ export function createHarnessClient(): HarnessClient {
         b().Settings_GetShowPerMessageTokenMeter(),
       setShowPerMessageTokenMeter: (enabled) =>
         b().Settings_SetShowPerMessageTokenMeter(enabled),
+      getMultimodalInput: () => b().Settings_GetMultimodalInput(),
+      setMultimodalInput: (enabled) => b().Settings_SetMultimodalInput(enabled),
       getArtifactPreview: () => b().Settings_GetArtifactPreview(),
     },
     permissions: {
@@ -2995,6 +3015,8 @@ export function createFakeHarnessClient(
       setEmbedderConfig: noop,
       getShowPerMessageTokenMeter: async () => false,
       setShowPerMessageTokenMeter: noop,
+      getMultimodalInput: async () => true,
+      setMultimodalInput: noop,
       getArtifactPreview: async () => ({
         // Default false in tests so that existing ArtifactPreview.test.ts
         // cases run through the legacy text-only branch unmodified

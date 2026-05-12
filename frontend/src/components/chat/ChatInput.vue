@@ -308,6 +308,22 @@ const costLabel = computed(() => {
   return `$${usd.toFixed(4)}`;
 });
 
+// ── FR-024: multimodal input feature flag ────────────────────────────
+// Default true — assumes enabled until the settings RPC returns. On false,
+// the paperclip button and drop overlay are hidden and drag-drop is disabled.
+// (multimodal-io-01KQ8TDF WP08 / FR-022 / FR-023 / FR-024)
+const multimodalEnabled = ref(true);
+
+// Fetch the multimodal toggle on mount. Best-effort: if the RPC fails we
+// keep the default (true) so the attachment surface stays available.
+onMounted(async () => {
+  try {
+    multimodalEnabled.value = await client.settings.getMultimodalInput();
+  } catch {
+    // Non-fatal: keep default (true = enabled).
+  }
+});
+
 // Per-file size caps — descriptor-driven when providerKind + modelId are
 // supplied; fall back to the conservative hard-coded defaults otherwise.
 // (multimodal-io-01KQ8TDF WP04 / FR-018)
@@ -619,13 +635,15 @@ const isOverDrop = ref(false);
 useDropZone(dropZoneRef, {
   onDrop: async (files) => {
     isOverDrop.value = false;
-    if (!files) return;
+    // FR-024: when multimodal input is disabled, drop handler is a no-op.
+    if (!files || !multimodalEnabled.value) return;
     for (const f of files) {
       await onFileChosen(f);
     }
   },
   onEnter: () => {
-    isOverDrop.value = true;
+    // Only show the drop-highlight when multimodal is enabled (FR-024).
+    if (multimodalEnabled.value) isOverDrop.value = true;
   },
   onLeave: () => {
     isOverDrop.value = false;
@@ -1165,7 +1183,9 @@ const acceptedTypes =
         @input="onInput"
         @keydown="onKeydown"
       ></textarea>
+      <!-- Paperclip + file-input hidden when multimodal input is disabled (FR-024). -->
       <button
+        v-if="multimodalEnabled"
         type="button"
         class="absolute right-2 top-2 text-ink-dim hover:text-accent"
         :aria-label="'Attach file'"
@@ -1176,6 +1196,7 @@ const acceptedTypes =
         <Paperclip class="w-4 h-4" />
       </button>
       <input
+        v-if="multimodalEnabled"
         ref="fileInput"
         type="file"
         multiple

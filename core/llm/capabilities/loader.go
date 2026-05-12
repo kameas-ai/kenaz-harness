@@ -7,6 +7,7 @@ import (
 	"embed"
 	"fmt"
 	"io/fs"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -212,8 +213,16 @@ func (c *Catalog) AttachmentLimits(provider, model string) AttachmentDescriptor 
 	for _, m := range spec.Models {
 		if matchGlob(m.Match, model) {
 			applyAttachmentEntry(&out, &m)
-			return out
+			break
 		}
+	}
+	// FR-022: when HARNESS_MULTIMODAL_IN=off, force both input flags to
+	// false regardless of per-provider YAML values. The gate (CheckAttachments)
+	// and the frontend (ChatInput) both read these fields; setting them
+	// to false here is the single source of truth for the env override.
+	if !MultimodalInEnabled() {
+		out.ImageInput = false
+		out.DocumentInput = false
 	}
 	return out
 }
@@ -323,6 +332,17 @@ func applyDefaults(desc *llm.CapabilityDescriptor, defaults map[string]any) {
 			}
 		}
 	}
+}
+
+// MultimodalInEnabled reports whether the HARNESS_MULTIMODAL_IN env flag
+// permits image and document input. Default on: the env var must be
+// explicitly set to "off" (case-insensitive) to disable multimodal input.
+// When disabled, AttachmentLimits forces ImageInput=false and
+// DocumentInput=false regardless of the per-model YAML descriptors.
+// (multimodal-io-01KQ8TDF WP08 / FR-022)
+func MultimodalInEnabled() bool {
+	v := strings.ToLower(strings.TrimSpace(os.Getenv("HARNESS_MULTIMODAL_IN")))
+	return v != "off"
 }
 
 // matchGlob is a tiny prefix/suffix glob, sufficient for the connector's
