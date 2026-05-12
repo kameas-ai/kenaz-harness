@@ -168,6 +168,7 @@ func Migrations() []migrations.Migration {
 		migration0322(),
 		migration0323(),
 		migration0324(),
+		migration0325(),
 	}
 }
 
