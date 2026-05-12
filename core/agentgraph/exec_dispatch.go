@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"golang.org/x/sync/errgroup"
+
+	"github.com/sigil-tech/kaneaz-harness/core/toolloop"
 )
 
 // toolDispatchExecutor implements ExecToolDispatch (mission
@@ -136,7 +138,10 @@ func (toolDispatchExecutor) Execute(ctx context.Context, env *Env, node *Node, i
 		tr, callErr := env.Tools.Call(ctx, ToolCall{Name: oc.call.Name, Args: oc.args})
 		duration := time.Since(startedAt)
 
-		if env.Counters != nil {
+		// Gate: passive tools (e.g. kaneaz__sleep) must not consume an
+		// iteration slot (FR-010). toolloop.ShouldCountIteration returns
+		// false for any tool registered as tool.passive in Cedar.
+		if env.Counters != nil && toolloop.ShouldCountIteration(oc.call.Name) {
 			env.Counters.AddTool()
 		}
 

@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+
+	"github.com/sigil-tech/kaneaz-harness/core/toolloop"
 )
 
 // This file holds the compute-primitive executors (FR-029 .. FR-039):
@@ -300,7 +302,10 @@ func (toolExecutor) Execute(ctx context.Context, env *Env, node *Node, inputs Po
 	}
 
 	tr, err := env.Tools.Call(ctx, ToolCall{Name: a.Name, Args: args})
-	if env.Counters != nil {
+	// Gate: passive tools (e.g. kaneaz__sleep) must not consume an
+	// iteration slot (FR-010). toolloop.ShouldCountIteration returns
+	// false for any tool registered as tool.passive in Cedar.
+	if env.Counters != nil && toolloop.ShouldCountIteration(a.Name) {
 		env.Counters.AddTool()
 	}
 	if err != nil {
