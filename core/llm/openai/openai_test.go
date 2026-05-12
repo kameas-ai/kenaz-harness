@@ -709,3 +709,94 @@ func TestAdapter_Stream_ToolCallsParsed(t *testing.T) {
 		t.Fatalf("finish reason = %q", resp.FinishReason)
 	}
 }
+
+// ── Structured-output tests (structured-output-and-grammar-01KX5R8A WP03b) ──
+
+// TestApplyResponseFormat_JSONObject verifies that Mode="json" sets
+// response_format.type = "json_object" in the wire body.
+func TestApplyResponseFormat_JSONObject(t *testing.T) {
+	a := New()
+	req := llm.GenerationRequest{
+		ResponseFormat: &llm.ResponseFormat{Mode: "json"},
+	}
+	body := map[string]any{}
+	if err := a.ApplyResponseFormat(&req, body); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	rf, ok := body["response_format"].(map[string]any)
+	if !ok {
+		t.Fatalf("response_format missing or wrong type: %+v", body)
+	}
+	if rf["type"] != "json_object" {
+		t.Fatalf("response_format.type = %v, want json_object", rf["type"])
+	}
+}
+
+// TestApplyResponseFormat_JSONSchema_Native verifies that Mode="json_schema"
+// sets response_format.type = "json_schema" with strict: true.
+func TestApplyResponseFormat_JSONSchema_Native(t *testing.T) {
+	a := New()
+	schema := json.RawMessage(`{"type":"object","properties":{"name":{"type":"string"}},"required":["name"]}`)
+	req := llm.GenerationRequest{
+		ResponseFormat: &llm.ResponseFormat{Mode: "json_schema", Schema: schema},
+	}
+	body := map[string]any{}
+	if err := a.ApplyResponseFormat(&req, body); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	rf, ok := body["response_format"].(map[string]any)
+	if !ok {
+		t.Fatalf("response_format missing or wrong type: %+v", body)
+	}
+	if rf["type"] != "json_schema" {
+		t.Fatalf("response_format.type = %v, want json_schema", rf["type"])
+	}
+	jsBlock, ok := rf["json_schema"].(map[string]any)
+	if !ok {
+		t.Fatalf("json_schema block missing: %+v", rf)
+	}
+	if jsBlock["strict"] != true {
+		t.Fatalf("strict = %v, want true", jsBlock["strict"])
+	}
+	if jsBlock["name"] != "response" {
+		t.Fatalf("name = %v, want response", jsBlock["name"])
+	}
+	// additionalProperties: false must be injected
+	schemaMap, ok := jsBlock["schema"].(map[string]any)
+	if !ok {
+		t.Fatalf("schema not a map: %+v", jsBlock["schema"])
+	}
+	if schemaMap["additionalProperties"] != false {
+		t.Fatalf("additionalProperties not injected: %+v", schemaMap)
+	}
+}
+
+// TestApplyResponseFormat_Grammar_Unsupported verifies that Mode="grammar"
+// returns ErrUnsupportedFormat for the OpenAI adapter.
+func TestApplyResponseFormat_Grammar_Unsupported(t *testing.T) {
+	a := New()
+	req := llm.GenerationRequest{
+		ResponseFormat: &llm.ResponseFormat{Mode: "grammar", Grammar: []byte("root ::= [a-z]+")},
+	}
+	body := map[string]any{}
+	err := a.ApplyResponseFormat(&req, body)
+	if err == nil {
+		t.Fatal("expected ErrUnsupportedFormat, got nil")
+	}
+	if !llm.IsUnsupportedFormat(err) {
+		t.Fatalf("expected ErrUnsupportedFormat, got %T: %v", err, err)
+	}
+}
+
+// TestApplyResponseFormat_Nil_NoOp verifies that nil ResponseFormat is a no-op.
+func TestApplyResponseFormat_Nil_NoOp(t *testing.T) {
+	a := New()
+	req := llm.GenerationRequest{}
+	body := map[string]any{"model": "gpt-4o"}
+	if err := a.ApplyResponseFormat(&req, body); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if _, ok := body["response_format"]; ok {
+		t.Fatal("response_format should not be set for nil ResponseFormat")
+	}
+}

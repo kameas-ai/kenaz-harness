@@ -202,6 +202,73 @@ func (a *Adapter) Capabilities(model string) llm.CapabilityDescriptor {
 // Compile-time assertion: *Adapter satisfies llm.ProviderAdapter.
 var _ llm.ProviderAdapter = (*Adapter)(nil)
 
+// Compile-time assertion: *Adapter satisfies llm.StructuredOutputAdapter.
+var _ llm.StructuredOutputAdapter = (*Adapter)(nil)
+
+// ApplyResponseFormat implements llm.StructuredOutputAdapter. It translates
+// req.ResponseFormat into the Anthropic Messages API wire shape:
+//
+//   - Mode="json"        → appends JSON-only instruction to system prompt.
+//   - Mode="json_schema" → injects a synthetic tool "_structured_output"
+//     whose input_schema is the caller-supplied JSON schema, and forces
+//     tool_choice: {type: "tool", name: "_structured_output"}. This is
+//     Anthropic's recommended workaround for structured-output without a
+//     native response_format field.
+//   - Mode="grammar"     → ErrUnsupportedFormat (cloud provider, no GBNF).
+//
+// The synthetic tool name "_structured_output" is chosen to be unlikely
+// to collide with real tool names; real tools remain in the catalog.
+// (structured-output-and-grammar-01KX5R8A WP03a)
+func (a *Adapter) ApplyResponseFormat(req *llm.GenerationRequest, wireBody map[string]any) error {
+	if req == nil || req.ResponseFormat == nil {
+		return nil
+	}
+	rf := req.ResponseFormat
+	switch rf.Mode {
+	case "json":
+		// Append a JSON-only instruction to the system string.
+		const jsonInstruction = "\n\nRespond with valid JSON only. Do not include any text before or after the JSON."
+		if sys, ok := wireBody["system"].(string); ok {
+			wireBody["system"] = sys + jsonInstruction
+		} else {
+			wireBody["system"] = strings.TrimPrefix(jsonInstruction, "\n\n")
+		}
+	case "json_schema":
+		// Parse the schema; default to open object schema if nil.
+		var schema any = map[string]any{"type": "object"}
+		if len(rf.Schema) > 0 {
+			if err := json.Unmarshal(rf.Schema, &schema); err != nil {
+				return fmt.Errorf("anthropic: response_format schema parse: %w", err)
+			}
+		}
+		// Inject synthetic tool.
+		syntheticTool := map[string]any{
+			"name":         "_structured_output",
+			"description":  "Return your response as a JSON object matching the required schema.",
+			"input_schema": schema,
+		}
+		// Append to existing tools (if any).
+		var tools []any
+		if existing, ok := wireBody["tools"].([]map[string]any); ok {
+			for _, t := range existing {
+				tools = append(tools, t)
+			}
+		}
+		tools = append(tools, syntheticTool)
+		wireBody["tools"] = tools
+		// Force tool_choice to the synthetic tool.
+		wireBody["tool_choice"] = map[string]any{
+			"type": "tool",
+			"name": "_structured_output",
+		}
+	case "grammar":
+		return &llm.ErrUnsupportedFormat{Provider: Kind, Model: "", Mode: rf.Mode}
+	default:
+		// Unknown mode — treat as no-op.
+	}
+	return nil
+}
+
 // Stream opens an SSE connection to the Messages API and returns a
 // llm.Stream that pumps StreamEvent values to the caller.
 //
@@ -470,6 +537,14 @@ func buildRequestBody(req llm.GenerationRequest, prof llm.ProviderProfile) ([]by
 			tools = append(tools, entry)
 		}
 		out["tools"] = tools
+	}
+
+	// Apply ResponseFormat if set (structured-output-and-grammar-01KX5R8A WP03a).
+	if req.ResponseFormat != nil {
+		a := &Adapter{}
+		if err := a.ApplyResponseFormat(&req, out); err != nil {
+			return nil, err
+		}
 	}
 
 	return json.Marshal(out)

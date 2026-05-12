@@ -2,6 +2,7 @@ package openrouter
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -581,5 +582,63 @@ func TestAdapter_Stream_WithImageBlock(t *testing.T) {
 	}
 	if !strings.Contains(body, "data:image/png;base64,") {
 		t.Errorf("expected data URL in request body; got: %s", body)
+	}
+}
+
+// ── Structured-output tests (structured-output-and-grammar-01KX5R8A WP03c) ──
+
+// TestApplyResponseFormat_JSONObject verifies that Mode="json" sets
+// response_format.type = "json_object" in the wire body.
+func TestApplyResponseFormat_JSONObject(t *testing.T) {
+	a := New()
+	req := llm.GenerationRequest{
+		ResponseFormat: &llm.ResponseFormat{Mode: "json"},
+	}
+	body := map[string]any{}
+	if err := a.ApplyResponseFormat(&req, body); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	rf, ok := body["response_format"].(map[string]any)
+	if !ok {
+		t.Fatalf("response_format missing: %+v", body)
+	}
+	if rf["type"] != "json_object" {
+		t.Fatalf("response_format.type = %v, want json_object", rf["type"])
+	}
+}
+
+// TestApplyResponseFormat_JSONSchema verifies that Mode="json_schema"
+// sets response_format.type = "json_schema" with strict: true.
+func TestApplyResponseFormat_JSONSchema(t *testing.T) {
+	a := New()
+	schema := json.RawMessage(`{"type":"object","properties":{"name":{"type":"string"}}}`)
+	req := llm.GenerationRequest{
+		ResponseFormat: &llm.ResponseFormat{Mode: "json_schema", Schema: schema},
+	}
+	body := map[string]any{}
+	if err := a.ApplyResponseFormat(&req, body); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	rf, ok := body["response_format"].(map[string]any)
+	if !ok || rf["type"] != "json_schema" {
+		t.Fatalf("response_format = %+v, want type=json_schema", body)
+	}
+	js := rf["json_schema"].(map[string]any)
+	if js["strict"] != true {
+		t.Fatalf("strict = %v, want true", js["strict"])
+	}
+}
+
+// TestApplyResponseFormat_Grammar_Unsupported verifies grammar mode returns
+// ErrUnsupportedFormat for OpenRouter.
+func TestApplyResponseFormat_Grammar_Unsupported(t *testing.T) {
+	a := New()
+	req := llm.GenerationRequest{
+		ResponseFormat: &llm.ResponseFormat{Mode: "grammar"},
+	}
+	body := map[string]any{}
+	err := a.ApplyResponseFormat(&req, body)
+	if !llm.IsUnsupportedFormat(err) {
+		t.Fatalf("expected ErrUnsupportedFormat, got %T: %v", err, err)
 	}
 }

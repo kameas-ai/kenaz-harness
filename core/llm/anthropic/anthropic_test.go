@@ -804,3 +804,83 @@ func TestAdapter_ListModels_HTTPError(t *testing.T) {
 		t.Fatal("expected error on 401")
 	}
 }
+
+// ── Structured-output tests (structured-output-and-grammar-01KX5R8A WP03a) ──
+
+// TestApplyResponseFormat_JSONSchema_InjectsTool verifies that Mode="json_schema"
+// injects the synthetic "_structured_output" tool and forces tool_choice.
+func TestApplyResponseFormat_JSONSchema_InjectsTool(t *testing.T) {
+	a := New()
+	schema := json.RawMessage(`{"type":"object","properties":{"name":{"type":"string"}},"required":["name"]}`)
+	req := llm.GenerationRequest{
+		ResponseFormat: &llm.ResponseFormat{Mode: "json_schema", Schema: schema},
+	}
+	body := map[string]any{}
+	if err := a.ApplyResponseFormat(&req, body); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	tools, ok := body["tools"].([]any)
+	if !ok || len(tools) == 0 {
+		t.Fatalf("tools missing or wrong type: %+v", body)
+	}
+	lastTool := tools[len(tools)-1].(map[string]any)
+	if lastTool["name"] != "_structured_output" {
+		t.Fatalf("synthetic tool name = %v, want _structured_output", lastTool["name"])
+	}
+	tc, ok := body["tool_choice"].(map[string]any)
+	if !ok {
+		t.Fatalf("tool_choice missing: %+v", body)
+	}
+	if tc["type"] != "tool" || tc["name"] != "_structured_output" {
+		t.Fatalf("tool_choice = %+v, want type=tool name=_structured_output", tc)
+	}
+}
+
+// TestApplyResponseFormat_Grammar_ReturnsUnsupported verifies that grammar mode
+// returns ErrUnsupportedFormat for the Anthropic adapter.
+func TestApplyResponseFormat_Grammar_ReturnsUnsupported(t *testing.T) {
+	a := New()
+	req := llm.GenerationRequest{
+		ResponseFormat: &llm.ResponseFormat{Mode: "grammar", Grammar: []byte("root ::= [a-z]+")},
+	}
+	body := map[string]any{}
+	err := a.ApplyResponseFormat(&req, body)
+	if err == nil {
+		t.Fatal("expected ErrUnsupportedFormat, got nil")
+	}
+	if !llm.IsUnsupportedFormat(err) {
+		t.Fatalf("expected ErrUnsupportedFormat, got %T: %v", err, err)
+	}
+}
+
+// TestApplyResponseFormat_JSONMode_AppendsSysPrompt verifies that Mode="json"
+// appends a JSON instruction to the system string.
+func TestApplyResponseFormat_JSONMode_AppendsSysPrompt(t *testing.T) {
+	a := New()
+	req := llm.GenerationRequest{
+		ResponseFormat: &llm.ResponseFormat{Mode: "json"},
+	}
+	body := map[string]any{"system": "Be helpful."}
+	if err := a.ApplyResponseFormat(&req, body); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	sys, ok := body["system"].(string)
+	if !ok {
+		t.Fatalf("system missing: %+v", body)
+	}
+	if !contains(sys, "JSON") {
+		t.Fatalf("system does not contain JSON instruction: %q", sys)
+	}
+}
+
+func contains(s, sub string) bool {
+	return len(sub) == 0 || (len(s) >= len(sub) && indexOf(s, sub) >= 0)
+}
+func indexOf(s, sub string) int {
+	for i := 0; i+len(sub) <= len(s); i++ {
+		if s[i:i+len(sub)] == sub {
+			return i
+		}
+	}
+	return -1
+}
