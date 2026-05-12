@@ -77,6 +77,10 @@ import type {
   ArtifactWithBytes,
   SlashCommandInfo,
   SlashExecuteResult,
+  UserCommand,
+  UserCommandSummary,
+  SlashRunResult,
+  FeatureFlagInfo,
   Corpus,
   CorpusFile,
   CorpusChunk,
@@ -440,6 +444,20 @@ interface WailsBindingsLike {
   ): Promise<SlashExecuteResult>;
   Slash_List(): Promise<SlashCommandInfo[]>;
 
+  // ── user-defined slash commands (user-slash-commands-01KQ8TD9) ──
+  Slashcmd_List(projectID: string): Promise<UserCommandSummary[]>;
+  Slashcmd_Get(name: string, projectID: string): Promise<UserCommand>;
+  Slashcmd_Save(cmd: UserCommand): Promise<void>;
+  Slashcmd_Delete(name: string, projectID: string): Promise<void>;
+  Slashcmd_Run(
+    name: string,
+    args: Record<string, string>,
+    sessionID: string,
+    projectID: string,
+    cwd: string,
+    selection: string,
+  ): Promise<SlashRunResult>;
+
   Corpus_ListCorpora(scope: string): Promise<Corpus[]>;
   Corpus_CreateCorpus(req: CorpusCreateRequest): Promise<Corpus>;
   Corpus_GetCorpus(corpusID: string): Promise<Corpus>;
@@ -566,7 +584,11 @@ interface WailsBindingsLike {
     cancelled: boolean,
   ): Promise<void>;
   Elicit_ListPending(): Promise<import('./types').ElicitRequest[]>;
+
+  // ── feature flags (user-slash-commands-01KQ8TD9 WP09) ───────────────
+  Config_GetFlags(): Promise<FeatureFlagInfo[]>;
 }
+
 
 /**
  * AttachmentAddMediaInput — wire shape Attachments_AddMedia accepts.
@@ -1675,6 +1697,25 @@ export interface SlashClient {
 }
 
 /**
+ * SlashcmdClient — user-defined slash command CRUD + dispatch
+ * (mission user-slash-commands-01KQ8TD9).
+ */
+export interface SlashcmdClient {
+  list(projectID: string): Promise<UserCommandSummary[]>;
+  get(name: string, projectID: string): Promise<UserCommand>;
+  save(cmd: UserCommand): Promise<void>;
+  delete(name: string, projectID: string): Promise<void>;
+  run(
+    name: string,
+    args: Record<string, string>,
+    sessionID: string,
+    projectID: string,
+    cwd: string,
+    selection: string,
+  ): Promise<SlashRunResult>;
+}
+
+/**
  * CorpusClient — bulk-ingest knowledge corpora (mission
  * agent-kernel-graph; Bundle C WP10/WP11). Backs the Knowledge view's
  * three surfaces:
@@ -2012,6 +2053,15 @@ export interface ElicitClient {
   listPending(): Promise<import('./types').ElicitRequest[]>;
 }
 
+/**
+ * ConfigClient — feature flag reads.
+ * (user-slash-commands-01KQ8TD9 WP09)
+ */
+export interface ConfigClient {
+  /** Returns all known feature flags and their current enabled state. */
+  getFlags(): Promise<FeatureFlagInfo[]>;
+}
+
 export interface HarnessClient {
   shellStatus(): Promise<ShellStatus>;
   appInfo(): Promise<AppInfo>;
@@ -2044,6 +2094,7 @@ export interface HarnessClient {
   shell: ShellClient;
   bash: BashClient;
   slash: SlashClient;
+  slashcmd: SlashcmdClient;
   artifacts: ArtifactsClient;
   corpus: CorpusClient;
   graph: GraphClient;
@@ -2057,6 +2108,8 @@ export interface HarnessClient {
   onboarding: OnboardingClient;
   /** Elicitation surface for the ask-user-question dialog (WP04). */
   elicit: ElicitClient;
+  /** Config / feature-flag client (slash-commands WP09). */
+  config: ConfigClient;
 }
 
 // ── runtime client ─────────────────────────────────────────────────────
@@ -2406,6 +2459,14 @@ export function createHarnessClient(): HarnessClient {
       list: () => b().Slash_List(),
       execute: (sessionID, raw) => b().Slash_Execute(sessionID, raw),
     },
+    slashcmd: {
+      list: (projectID) => b().Slashcmd_List(projectID),
+      get: (name, projectID) => b().Slashcmd_Get(name, projectID),
+      save: (cmd) => b().Slashcmd_Save(cmd),
+      delete: (name, projectID) => b().Slashcmd_Delete(name, projectID),
+      run: (name, args, sessionID, projectID, cwd, selection) =>
+        b().Slashcmd_Run(name, args, sessionID, projectID, cwd, selection),
+    },
     corpus: {
       listCorpora: (scope) => b().Corpus_ListCorpora(scope),
       createCorpus: (req) => b().Corpus_CreateCorpus(req),
@@ -2494,6 +2555,9 @@ export function createHarnessClient(): HarnessClient {
       submitAnswer: (requestID, answerJSON, cancelled) =>
         b().Elicit_SubmitAnswer(requestID, answerJSON, cancelled),
       listPending: () => b().Elicit_ListPending(),
+    },
+    config: {
+      getFlags: () => b().Config_GetFlags(),
     },
   };
 }
@@ -2832,8 +2896,14 @@ export function createFakeHarnessClient(
       setPermissionsMigrationToastShown: noop,
       getCedarStrictCredentialMode: async () => false,
       setCedarStrictCredentialMode: noop,
+      getFSReadEnabled: async () => false,
+      setFSReadEnabled: noop,
+      getFSWriteEnabled: async () => false,
+      setFSWriteEnabled: noop,
       getFSRequestAccessEnabled: async () => true,
       setFSRequestAccessEnabled: noop,
+      getTodoEnabled: async () => false,
+      setTodoEnabled: noop,
       getAutonomy: async () => ({ level: null, overrides: {} }),
       setAutonomy: noop,
       getMCPAutoRestart: async () => true,
@@ -3297,6 +3367,39 @@ export function createFakeHarnessClient(
     elicit: {
       submitAnswer: noop,
       listPending: async () => [],
+    },
+    config: {
+      getFlags: async () => [
+        {
+          name: 'user-slash-commands',
+          enabled: true,
+          description: 'User-defined / commands (text expansions, tool dispatch, prompt templates).',
+          envVar: 'HARNESS_USER_SLASHCMD',
+        },
+      ],
+    },
+    slashcmd: {
+      list: async (_projectID: string) => [],
+      get: async (name: string, _projectID: string) => ({
+        name,
+        scope: 'global' as const,
+        kind: 'text' as const,
+        description: '',
+        modelInvokable: false,
+      }),
+      save: noop,
+      delete: noop,
+      run: async (
+        _name: string,
+        _args: Record<string, string>,
+        _sessionID: string,
+        _projectID: string,
+        _cwd: string,
+        _selection: string,
+      ) => ({
+        kind: 'info' as const,
+        text: '',
+      }),
     },
   };
 

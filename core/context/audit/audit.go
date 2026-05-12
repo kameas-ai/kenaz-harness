@@ -139,6 +139,14 @@ const (
 	//   "explicit"    — user chose "Branch from this turn" in the menu.
 	//   "edit_resend" — implicit fork from the edit-and-resend flow.
 	KindBranchCreated Kind = "branch.created"
+
+	// KindSlashCommandRun fires when a user-defined slash command is
+	// dispatched via Dispatch.Run (user-slash-commands-01KQ8TD9 WP08).
+	// Payload: SlashCommandRunPayload.
+	//
+	// Privacy invariant: rendered args summary is limited to arg names
+	// and kind labels — no resolved values that may carry secrets.
+	KindSlashCommandRun Kind = "slashcmd.run"
 )
 
 // Event is the wire shape passed to the event log. The concrete event-log
@@ -502,6 +510,27 @@ type BranchCreatedPayload struct {
 	BranchSessionID string `json:"branch_session_id"`
 	// CreationPath is "explicit" | "edit_resend".
 	CreationPath string `json:"creation_path"`
+}
+
+// SlashCommandRunPayload carries signalling for KindSlashCommandRun
+// (user-slash-commands-01KQ8TD9 WP08). Emitted once per Dispatch.Run
+// call (success or failure).
+//
+// Privacy invariant: ArgNames lists only the argument names provided by
+// the caller, NEVER their resolved values (which may contain secrets,
+// file paths, or user-authored text). The rendered template body, tool
+// outputs, and session messages are never included.
+type SlashCommandRunPayload struct {
+	Name           string   `json:"name"`
+	Scope          string   `json:"scope"`           // "global" | "project"
+	Kind           string   `json:"kind"`            // "text" | "tool" | "prompt"
+	ModelInvokable bool     `json:"model_invokable"` // true if the command is AI-invokable
+	ArgNames       []string `json:"arg_names"`       // names of args supplied (not values)
+	DispatchedTool string   `json:"dispatched_tool,omitempty"` // tool name for kind=tool
+	SessionID      string   `json:"session_id"`
+	ProjectID      string   `json:"project_id,omitempty"`
+	Success        bool     `json:"success"`
+	ErrorClass     string   `json:"error_class,omitempty"` // classified error label, not raw msg
 }
 
 // Emit is a small convenience wrapper for callers that have a payload
