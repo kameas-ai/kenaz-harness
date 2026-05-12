@@ -28,6 +28,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"sync"
 	"time"
 
@@ -73,6 +74,60 @@ type ElicitRequest struct {
 
 	// Preview is the optional side-by-side preview spec.
 	Preview *askuserquestion.PreviewSpec `json:"preview,omitempty"`
+
+	// WP05: multi-question wizard fields.
+	// Questions carries the full batch when len > 0. If populated, the
+	// frontend renders a wizard and the single-question fields above are
+	// ignored.
+	Questions []WizardQuestion `json:"questions,omitempty"`
+	// Mode is "blocking" (default) or "deferred".
+	Mode string `json:"mode,omitempty"`
+}
+
+// WizardQuestion is one question in a multi-step wizard batch.
+// All fields mirror ElicitRequest for the single-question path so the
+// frontend can render each step with the same sub-components.
+//
+// DependsOn enables conditional follow-up questions: the question only
+// renders when its dependency condition is satisfied.
+type WizardQuestion struct {
+	// ID uniquely identifies the question within the batch.  Returned
+	// as the key in WizardAnswer.Answers.
+	ID       string `json:"id"`
+	Question string `json:"question"`
+	Kind     string `json:"kind"`
+
+	Options     []askuserquestion.QuestionOption `json:"options,omitempty"`
+	Placeholder string                           `json:"placeholder,omitempty"`
+	Min         *float64                         `json:"min,omitempty"`
+	Max         *float64                         `json:"max,omitempty"`
+	Step        *float64                         `json:"step,omitempty"`
+
+	// DependsOn makes this question conditional on a prior answer.
+	// The question is shown only when the named question has been answered
+	// and the condition is satisfied.
+	DependsOn *WizardDependsOn `json:"depends_on,omitempty"`
+}
+
+// WizardDependsOn declares a dependency on a prior question's answer.
+type WizardDependsOn struct {
+	// QuestionID is the id of the question this one depends on.
+	QuestionID string `json:"question_id"`
+	// Condition is "answered" (any non-null answer) or
+	// {"equals": <value>} or {"includes": <value>}.
+	Condition json.RawMessage `json:"condition"`
+}
+
+// WizardAnswer is the wire shape returned when a wizard (multi-question batch)
+// completes. Each question id maps to the user's answer JSON.
+type WizardAnswer struct {
+	// Answers maps question_id → answer value (kind-dependent JSON type).
+	Answers map[string]json.RawMessage `json:"answers"`
+	// AnsweredSoFar is populated when Dismissed is true: the partial set
+	// of answers before the user cancelled.
+	AnsweredSoFar map[string]json.RawMessage `json:"answered_so_far,omitempty"`
+	// Dismissed is true when the user cancelled the wizard mid-flow.
+	Dismissed bool `json:"dismissed"`
 }
 
 // ElicitResponse is the wire shape returned by SubmitAskAnswer and
@@ -93,12 +148,28 @@ type pendingEntry struct {
 	ch chan ElicitResponse
 }
 
+// wizardEntry tracks state for a multi-question wizard in flight.
+type wizardEntry struct {
+	// questions is the full ordered list for this wizard batch.
+	questions []WizardQuestion
+	// answers accumulates answers as each step completes.
+	answers map[string]json.RawMessage
+	// ch is resolved with the final WizardAnswer JSON when complete or dismissed.
+	ch chan ElicitResponse
+}
+
 // ElicitAPI is the view-scoped accessor the Bindings layer consumes.
 type ElicitAPI interface {
 	// SubmitAnswer resolves a pending elicitation. requestID was emitted
 	// on TopicElicitPending; answerJSON is the user's answer (or null
 	// when cancelled is true).
 	SubmitAnswer(ctx context.Context, requestID string, answerJSON json.RawMessage, cancelled bool) error
+
+	// SubmitWizardStep records one step answer for a multi-question wizard.
+	// When all visible questions have been answered (or dismissed is true),
+	// it resolves the pending OpenDialog channel with a WizardAnswer.
+	// questionID identifies which question in the batch was answered.
+	SubmitWizardStep(ctx context.Context, requestID string, questionID string, answerJSON json.RawMessage, dismissed bool) error
 
 	// ListPending returns in-flight request IDs so the frontend can
 	// reconcile its queue on reconnect / hot reload.
@@ -121,6 +192,8 @@ var ErrUnknownRequest = errors.New("elicit: unknown or already-resolved request 
 type API struct {
 	mu      sync.Mutex
 	pending map[string]pendingEntry
+	// wizards tracks multi-question wizard sessions (WP05).
+	wizards map[string]*wizardEntry
 
 	// emitter pushes ElicitRequest payloads to the frontend.
 	emitter Emitter
@@ -141,6 +214,7 @@ type Config struct {
 func New(cfg Config) *API {
 	return &API{
 		pending: make(map[string]pendingEntry),
+		wizards: make(map[string]*wizardEntry),
 		emitter: cfg.Emitter,
 	}
 }
@@ -238,6 +312,187 @@ func (a *API) SubmitAnswer(_ context.Context, requestID string, answerJSON json.
 	default:
 	}
 	return nil
+}
+
+// SubmitWizardStep records one question's answer for a multi-step wizard.
+// When all visible questions are answered, it resolves the pending OpenDialog
+// channel. When dismissed is true, it resolves immediately with the partial
+// set of answers so the model receives answered_so_far.
+//
+// The count of "visible" questions is the number of questions in the batch
+// that either have no DependsOn or whose dependency condition is satisfied by
+// the answers collected so far. This is evaluated conservatively: a question
+// with an unsatisfied condition is excluded from the completion check.
+func (a *API) SubmitWizardStep(_ context.Context, requestID string, questionID string, answerJSON json.RawMessage, dismissed bool) error {
+	a.mu.Lock()
+	w, ok := a.wizards[requestID]
+	if !ok {
+		a.mu.Unlock()
+		return ErrUnknownRequest
+	}
+
+	if len(answerJSON) == 0 {
+		answerJSON = json.RawMessage("null")
+	}
+
+	if dismissed {
+		// Return partial answers so model receives answered_so_far.
+		partial := make(map[string]json.RawMessage, len(w.answers))
+		for k, v := range w.answers {
+			partial[k] = v
+		}
+		delete(a.wizards, requestID)
+		ch := w.ch
+		a.mu.Unlock()
+
+		wa := WizardAnswer{Dismissed: true, AnsweredSoFar: partial}
+		encoded, _ := json.Marshal(wa)
+		select {
+		case ch <- ElicitResponse{RequestID: requestID, Answer: encoded}:
+		default:
+		}
+		return nil
+	}
+
+	// Record this answer.
+	w.answers[questionID] = answerJSON
+
+	// Check if all visible questions have been answered.
+	allAnswered := allVisibleAnswered(w.questions, w.answers)
+
+	if allAnswered {
+		answers := make(map[string]json.RawMessage, len(w.answers))
+		for k, v := range w.answers {
+			answers[k] = v
+		}
+		delete(a.wizards, requestID)
+		ch := w.ch
+		a.mu.Unlock()
+
+		wa := WizardAnswer{Answers: answers}
+		encoded, _ := json.Marshal(wa)
+		select {
+		case ch <- ElicitResponse{RequestID: requestID, Answer: encoded}:
+		default:
+		}
+		return nil
+	}
+
+	a.mu.Unlock()
+	return nil
+}
+
+// allVisibleAnswered returns true when every question that should be visible
+// (no dependency, or dependency satisfied) has been answered.
+func allVisibleAnswered(questions []WizardQuestion, answers map[string]json.RawMessage) bool {
+	for _, q := range questions {
+		if q.DependsOn != nil {
+			// Check if the dependency is satisfied.
+			priorAnswer, prior := answers[q.DependsOn.QuestionID]
+			if !prior {
+				// Dependency question not yet answered — this question is not
+				// yet visible, skip it.
+				continue
+			}
+			if !dependencyConditionMet(q.DependsOn.Condition, priorAnswer) {
+				// Condition not met — question is hidden, skip it.
+				continue
+			}
+		}
+		// Question is visible — must be answered.
+		if _, ok := answers[q.ID]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
+// dependencyConditionMet evaluates a WizardDependsOn.Condition against the
+// given prior answer JSON. Supports three forms:
+//
+//	"answered"              — any non-null answer satisfies the condition.
+//	{"equals": <value>}     — answer must JSON-equal the value.
+//	{"includes": <value>}   — answer (array) must contain the value.
+func dependencyConditionMet(condition json.RawMessage, priorAnswer json.RawMessage) bool {
+	if len(condition) == 0 {
+		// Treat no condition as "answered".
+		return string(priorAnswer) != "null" && len(priorAnswer) > 0
+	}
+	// Check for string literal "answered".
+	var s string
+	if json.Unmarshal(condition, &s) == nil && s == "answered" {
+		return string(priorAnswer) != "null" && len(priorAnswer) > 0
+	}
+	// Check for {"equals": <value>}.
+	var eq struct {
+		Equals json.RawMessage `json:"equals"`
+	}
+	if json.Unmarshal(condition, &eq) == nil && len(eq.Equals) > 0 {
+		return string(eq.Equals) == string(priorAnswer)
+	}
+	// Check for {"includes": <value>}.
+	var inc struct {
+		Includes json.RawMessage `json:"includes"`
+	}
+	if json.Unmarshal(condition, &inc) == nil && len(inc.Includes) > 0 {
+		var arr []json.RawMessage
+		if json.Unmarshal(priorAnswer, &arr) == nil {
+			target := string(inc.Includes)
+			for _, item := range arr {
+				if string(item) == target {
+					return true
+				}
+			}
+		}
+		return false
+	}
+	return false
+}
+
+// OpenWizard registers a multi-question wizard session and emits the full
+// batch to the frontend via TopicElicitPending. It blocks until all
+// visible questions are answered or the wizard is dismissed.
+//
+// This is called by the tool layer when the model submits more than one
+// question in a batch.
+func (a *API) OpenWizard(ctx context.Context, req ElicitRequest) (WizardAnswer, error) {
+	const dialogTimeout = 10 * time.Minute
+
+	reqID := newRequestID()
+	req.RequestID = reqID
+	ch := make(chan ElicitResponse, 1)
+
+	entry := &wizardEntry{
+		questions: req.Questions,
+		answers:   make(map[string]json.RawMessage),
+		ch:        ch,
+	}
+
+	a.mu.Lock()
+	a.wizards[reqID] = entry
+	wailsCtx := a.wailsCtx
+	a.mu.Unlock()
+
+	if a.emitter != nil && wailsCtx != nil {
+		a.emitter.Emit(wailsCtx, TopicElicitPending, req)
+	}
+
+	timeoutCtx, cancel := context.WithTimeout(ctx, dialogTimeout)
+	defer cancel()
+
+	select {
+	case resp := <-ch:
+		var wa WizardAnswer
+		if err := json.Unmarshal(resp.Answer, &wa); err != nil {
+			return WizardAnswer{}, fmt.Errorf("elicit: decode wizard answer: %w", err)
+		}
+		return wa, nil
+	case <-timeoutCtx.Done():
+		a.mu.Lock()
+		delete(a.wizards, reqID)
+		a.mu.Unlock()
+		return WizardAnswer{}, timeoutCtx.Err()
+	}
 }
 
 // ListPending returns the current in-flight requests. The frontend uses

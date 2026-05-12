@@ -338,6 +338,18 @@ export function Graph_Validate(arg1) {
   return window['go']['rpc']['Bindings']['Graph_Validate'](arg1);
 }
 
+export function Elicit_ListPending() {
+  return window['go']['rpc']['Bindings']['Elicit_ListPending']();
+}
+
+export function Elicit_SubmitAnswer(arg1, arg2, arg3) {
+  return window['go']['rpc']['Bindings']['Elicit_SubmitAnswer'](arg1, arg2, arg3);
+}
+
+export function Elicit_SubmitWizardStep(arg1, arg2, arg3, arg4) {
+  return window['go']['rpc']['Bindings']['Elicit_SubmitWizardStep'](arg1, arg2, arg3, arg4);
+}
+
 export function Hooks_Add(arg1) {
   return window['go']['rpc']['Bindings']['Hooks_Add'](arg1);
 }

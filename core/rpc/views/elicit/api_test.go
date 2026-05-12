@@ -180,3 +180,175 @@ func TestOpenDialog_ContextCancellation(t *testing.T) {
 		t.Fatal("OpenDialog did not return after context cancellation")
 	}
 }
+
+// ── WP05: multi-question wizard tests ──────────────────────────────────────
+
+func TestSubmitWizardStep_TwoSteps_Complete(t *testing.T) {
+	em := &fakeEmitter{}
+	api := elicit.New(elicit.Config{Emitter: em})
+	api.SetContext(context.Background())
+
+	questions := []elicit.WizardQuestion{
+		{ID: "q1", Question: "First?", Kind: "radio"},
+		{ID: "q2", Question: "Second?", Kind: "text"},
+	}
+	req := elicit.ElicitRequest{Questions: questions}
+
+	var wa elicit.WizardAnswer
+	var wizErr error
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		wa, wizErr = api.OpenWizard(context.Background(), req)
+	}()
+
+	// Wait for the wizard to register (emitter should have fired).
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) && len(em.emitted) == 0 {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if len(em.emitted) == 0 {
+		t.Fatal("emitter did not receive any event")
+	}
+
+	emittedReq := em.emitted[0].payload.(elicit.ElicitRequest)
+	reqID := emittedReq.RequestID
+	if reqID == "" {
+		t.Fatal("emitted request has empty request_id")
+	}
+
+	// Submit step 1.
+	if err := api.SubmitWizardStep(context.Background(), reqID, "q1", json.RawMessage(`"optA"`), false); err != nil {
+		t.Fatalf("SubmitWizardStep q1: %v", err)
+	}
+	// Not done yet — q2 still pending.
+	select {
+	case <-done:
+		t.Fatal("wizard resolved after only q1")
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	// Submit step 2 — should complete.
+	if err := api.SubmitWizardStep(context.Background(), reqID, "q2", json.RawMessage(`"hello"`), false); err != nil {
+		t.Fatalf("SubmitWizardStep q2: %v", err)
+	}
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("wizard did not resolve after both questions answered")
+	}
+
+	if wizErr != nil {
+		t.Fatalf("OpenWizard error: %v", wizErr)
+	}
+	if wa.Dismissed {
+		t.Errorf("wizard should not be dismissed")
+	}
+	if string(wa.Answers["q1"]) != `"optA"` {
+		t.Errorf("q1 answer = %s, want optA", wa.Answers["q1"])
+	}
+	if string(wa.Answers["q2"]) != `"hello"` {
+		t.Errorf("q2 answer = %s, want hello", wa.Answers["q2"])
+	}
+}
+
+func TestSubmitWizardStep_Dismissed_ReturnsPartial(t *testing.T) {
+	em := &fakeEmitter{}
+	api := elicit.New(elicit.Config{Emitter: em})
+	api.SetContext(context.Background())
+
+	questions := []elicit.WizardQuestion{
+		{ID: "q1", Question: "First?", Kind: "text"},
+		{ID: "q2", Question: "Second?", Kind: "text"},
+	}
+	req := elicit.ElicitRequest{Questions: questions}
+
+	var wa elicit.WizardAnswer
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		wa, _ = api.OpenWizard(context.Background(), req)
+	}()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) && len(em.emitted) == 0 {
+		time.Sleep(5 * time.Millisecond)
+	}
+	emittedReq := em.emitted[0].payload.(elicit.ElicitRequest)
+	reqID := emittedReq.RequestID
+
+	_ = api.SubmitWizardStep(context.Background(), reqID, "q1", json.RawMessage(`"partial"`), false)
+	_ = api.SubmitWizardStep(context.Background(), reqID, "", nil, true) // dismiss
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("wizard did not resolve on dismissal")
+	}
+
+	if !wa.Dismissed {
+		t.Errorf("wizard should be dismissed")
+	}
+	if string(wa.AnsweredSoFar["q1"]) != `"partial"` {
+		t.Errorf("answered_so_far[q1] = %s, want partial", wa.AnsweredSoFar["q1"])
+	}
+}
+
+func TestSubmitWizardStep_ConditionalQuestion_Skipped(t *testing.T) {
+	em := &fakeEmitter{}
+	api := elicit.New(elicit.Config{Emitter: em})
+	api.SetContext(context.Background())
+
+	questions := []elicit.WizardQuestion{
+		{ID: "q1", Question: "First?", Kind: "radio"},
+		{
+			ID:       "q2",
+			Question: "Second? (only when q1=yes)",
+			Kind:     "text",
+			DependsOn: &elicit.WizardDependsOn{
+				QuestionID: "q1",
+				Condition:  json.RawMessage(`{"equals":"yes"}`),
+			},
+		},
+	}
+	req := elicit.ElicitRequest{Questions: questions}
+
+	var wa elicit.WizardAnswer
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		wa, _ = api.OpenWizard(context.Background(), req)
+	}()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) && len(em.emitted) == 0 {
+		time.Sleep(5 * time.Millisecond)
+	}
+	emittedReq := em.emitted[0].payload.(elicit.ElicitRequest)
+	reqID := emittedReq.RequestID
+
+	// Answer q1 with "no" — q2 condition (equals "yes") is NOT met, so q2 is hidden.
+	// Answering q1 should complete the wizard immediately.
+	_ = api.SubmitWizardStep(context.Background(), reqID, "q1", json.RawMessage(`"no"`), false)
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("wizard should complete when only visible question is answered")
+	}
+
+	if wa.Dismissed {
+		t.Errorf("wizard should not be dismissed")
+	}
+	if _, ok := wa.Answers["q2"]; ok {
+		t.Errorf("q2 should not be in answers (condition not met)")
+	}
+}
+
+func TestSubmitWizardStep_UnknownRequest_Error(t *testing.T) {
+	api := elicit.New(elicit.Config{})
+	err := api.SubmitWizardStep(context.Background(), "no-such-id", "q1", nil, false)
+	if err != elicit.ErrUnknownRequest {
+		t.Errorf("expected ErrUnknownRequest, got %v", err)
+	}
+}

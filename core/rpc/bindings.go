@@ -1672,6 +1672,18 @@ func (b *Bindings) Elicit_SubmitAnswer(requestID string, answerJSON json.RawMess
 	return b.api.Elicit().SubmitAnswer(b.ctx(), requestID, answerJSON, cancelled)
 }
 
+// Elicit_SubmitWizardStep records one question's answer in a multi-step wizard
+// (WP05). requestID identifies the in-flight OpenWizard call; questionID is
+// the id of the question being answered; answerJSON is the user's answer;
+// dismissed is true when the user cancels the wizard mid-flow.
+//
+// The wizard resolves automatically when all visible questions are answered.
+// When dismissed, the partial set of answers is returned to the model as
+// answered_so_far in the WizardAnswer.
+func (b *Bindings) Elicit_SubmitWizardStep(requestID string, questionID string, answerJSON json.RawMessage, dismissed bool) error {
+	return b.api.Elicit().SubmitWizardStep(b.ctx(), requestID, questionID, answerJSON, dismissed)
+}
+
 // Elicit_ListPending returns in-flight elicitation request IDs so the
 // frontend can reconcile its dialog queue on reconnect / hot reload.
 func (b *Bindings) Elicit_ListPending() ([]elicitview.ElicitRequest, error) {

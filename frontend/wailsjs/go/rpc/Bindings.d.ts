@@ -14,6 +14,7 @@ import {contexts} from '../models';
 import {corpus} from '../models';
 import {dials} from '../models';
 import {agentgraph} from '../models';
+import {elicit} from '../models';
 import {hooks} from '../models';
 import {llm} from '../models';
 import {mcp} from '../models';
@@ -204,6 +205,12 @@ export function Graph_SaveGraph(arg1:agentgraph.GraphSpec):Promise<void>;
 export function Graph_StartRun(arg1:agentgraph.StartRunRequest):Promise<agentgraph.StartRunResponse>;
 
 export function Graph_Validate(arg1:string):Promise<agentgraph.ValidationResult>;
+
+export function Elicit_ListPending():Promise<Array<elicit.ElicitRequest>>;
+
+export function Elicit_SubmitAnswer(arg1:string,arg2:any,arg3:boolean):Promise<void>;
+
+export function Elicit_SubmitWizardStep(arg1:string,arg2:string,arg3:any,arg4:boolean):Promise<void>;
 
 export function Hooks_Add(arg1:hooks.Hook):Promise<hooks.Hook>;
 

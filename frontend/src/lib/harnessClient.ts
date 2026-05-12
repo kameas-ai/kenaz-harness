@@ -1970,6 +1970,14 @@ export interface ElicitClient {
   submitAnswer(requestID: string, answerJSON: string | null, cancelled: boolean): Promise<void>;
 
   /**
+   * Submit one step of a multi-question wizard (WP05).
+   * requestID identifies the OpenWizard call; questionID is the id of the
+   * question being answered; answerJSON is the JSON-encoded answer value;
+   * dismissed is true when the user cancels the wizard mid-flow.
+   */
+  submitWizardStep(requestID: string, questionID: string, answerJSON: string | null, dismissed: boolean): Promise<void>;
+
+  /**
    * List in-flight elicitation requests. Used for reconnect reconciliation.
    */
   listPending(): Promise<import('./types').ElicitRequest[]>;
@@ -2450,6 +2458,8 @@ export function createHarnessClient(): HarnessClient {
     elicit: {
       submitAnswer: (requestID, answerJSON, cancelled) =>
         b().Elicit_SubmitAnswer(requestID, answerJSON, cancelled),
+      submitWizardStep: (requestID, questionID, answerJSON, dismissed) =>
+        b().Elicit_SubmitWizardStep(requestID, questionID, answerJSON, dismissed),
       listPending: () => b().Elicit_ListPending(),
     },
   };
@@ -3253,6 +3263,7 @@ export function createFakeHarnessClient(
     },
     elicit: {
       submitAnswer: noop,
+      submitWizardStep: noop,
       listPending: async () => [],
     },
   };
