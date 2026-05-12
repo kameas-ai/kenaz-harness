@@ -632,6 +632,65 @@ func (b *Bindings) Settings_SetFSRequestAccessEnabled(enabled bool) error {
 	return b.storeFn().SaveFSRequestAccessEnabled(enabled)
 }
 
+// ── Builtin filesystem tool dials (builtin-filesystem-tools-01KR3N4P) ────
+//
+// Settings_GetFSReadEnabled exposes the read-family builtin filesystem
+// tool opt-in (default false — tools off until the user enables them from
+// the Tools panel). The toolloop's EnabledFilter consults this on every
+// Run boundary so a toggle takes effect on the next chat turn.
+func (b *Bindings) Settings_GetFSReadEnabled() (bool, error) {
+	if b.storeFn == nil {
+		return false, nil
+	}
+	return b.storeFn().LoadFSReadEnabled()
+}
+
+// Settings_SetFSReadEnabled persists the read-family filesystem tool opt-in.
+func (b *Bindings) Settings_SetFSReadEnabled(enabled bool) error {
+	if b.storeFn == nil {
+		return nil
+	}
+	return b.storeFn().SaveFSReadEnabled(enabled)
+}
+
+// Settings_GetFSWriteEnabled exposes the write-family builtin filesystem
+// tool opt-in (default false — write tools off until the user enables them).
+func (b *Bindings) Settings_GetFSWriteEnabled() (bool, error) {
+	if b.storeFn == nil {
+		return false, nil
+	}
+	return b.storeFn().LoadFSWriteEnabled()
+}
+
+// Settings_SetFSWriteEnabled persists the write-family filesystem tool opt-in.
+func (b *Bindings) Settings_SetFSWriteEnabled(enabled bool) error {
+	if b.storeFn == nil {
+		return nil
+	}
+	return b.storeFn().SaveFSWriteEnabled(enabled)
+}
+
+// ── Todo tool dial (builtin-tools-search-and-elicitation-01KZNP3D WP07) ──
+
+// Settings_GetTodoEnabled exposes the kaneaz__todo_write builtin opt-in
+// (default false — tool off until the user enables it from the Tools panel).
+// The toolloop's EnabledFilter consults this on every Run boundary so a
+// toggle takes effect on the next chat turn.
+func (b *Bindings) Settings_GetTodoEnabled() (bool, error) {
+	if b.storeFn == nil {
+		return false, nil
+	}
+	return b.storeFn().LoadTodoEnabled()
+}
+
+// Settings_SetTodoEnabled persists the kaneaz__todo_write opt-in flag.
+func (b *Bindings) Settings_SetTodoEnabled(enabled bool) error {
+	if b.storeFn == nil {
+		return nil
+	}
+	return b.storeFn().SaveTodoEnabled(enabled)
+}
+
 // Settings_GetMaxAgentTurns exposes the chat-graph LoopNode iteration
 // cap (default DefaultMaxAgentTurns = 25). The chassis (chat runner)
 // reads the effective value on every chat run start so the dial takes
