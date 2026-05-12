@@ -201,6 +201,15 @@ func (s *stubMemory) CaptureRate(_ context.Context) (memoryview.CaptureRateSnaps
 func (s *stubMemory) EmbedderEligibility(_ context.Context) (memoryview.EmbedderEligibility, error) {
 	return memoryview.EmbedderEligibility{}, nil
 }
+func (s *stubMemory) MarkImportant(_ context.Context, _ string, _ bool) error { return nil }
+func (s *stubMemory) NarrativeFailedCount(_ context.Context) (int, error)     { return 0, nil }
+func (s *stubMemory) NarrativeFailedList(_ context.Context) ([]memoryview.NarrativeJobStatus, error) {
+	return []memoryview.NarrativeJobStatus{}, nil
+}
+func (s *stubMemory) RetryFailedNarrative(_ context.Context, _ string) error { return nil }
+func (s *stubMemory) NarrativeMetricsForChunk(_ context.Context, _ string) (memoryview.NarrativeMetrics, error) {
+	return memoryview.NarrativeMetrics{}, nil
+}
 
 // ── dials ──────────────────────────────────────────────────────────────
 

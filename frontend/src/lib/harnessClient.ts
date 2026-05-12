@@ -129,6 +129,8 @@ import type {
   PermissionMode,
   SessionUsage,
   DriftReport,
+  NarrativeJobStatus,
+  NarrativeMetrics,
 } from './types';
 
 /**
@@ -401,6 +403,11 @@ interface WailsBindingsLike {
   Memory_TestEmbedder(): Promise<number>;
   Memory_CaptureRate(): Promise<MemoryCaptureRateSnapshot>;
   Memory_EmbedderEligibility(): Promise<MemoryEmbedderEligibility>;
+  Memory_MarkImportant(chunkID: string, pinned: boolean): Promise<void>;
+  Memory_NarrativeFailedCount(): Promise<number>;
+  Memory_NarrativeFailedList(): Promise<NarrativeJobStatus[]>;
+  Memory_RetryFailedNarrative(jobID: string): Promise<void>;
+  Memory_NarrativeMetricsForChunk(chunkID: string): Promise<NarrativeMetrics>;
 
   Dials_Get(key: DialScopeKey): Promise<DialConfig>;
   Dials_Set(key: DialScopeKey, cfg: DialConfig): Promise<void>;
@@ -1537,6 +1544,20 @@ export interface MemoryClient {
    * to determine whether to surface the "no memory provider" affordance.
    */
   embedderEligibility(): Promise<MemoryEmbedderEligibility>;
+  /**
+   * Toggle the "user pin" (Mark as important) flag on a chunk. Pins
+   * increment the user_pins promotion counter, raising its score.
+   * (memory-narrative-layer-01KQ8TD1 WP07).
+   */
+  markImportant(chunkID: string, pinned: boolean): Promise<void>;
+  /** Count narrative synthesis jobs that have exhausted all retries. */
+  narrativeFailedCount(): Promise<number>;
+  /** List narrative synthesis jobs that have exhausted all retries. */
+  narrativeFailedList(): Promise<NarrativeJobStatus[]>;
+  /** Reset a failed narrative job so the Promoter will retry it. */
+  retryFailedNarrative(jobID: string): Promise<void>;
+  /** Return the retrieval/citation/pin counters and score for a chunk. */
+  narrativeMetricsForChunk(chunkID: string): Promise<NarrativeMetrics>;
 }
 
 /**
@@ -2455,6 +2476,11 @@ export function createHarnessClient(): HarnessClient {
       testEmbedder: () => b().Memory_TestEmbedder(),
       captureRate: () => b().Memory_CaptureRate(),
       embedderEligibility: () => b().Memory_EmbedderEligibility(),
+      markImportant: (chunkID, pinned) => b().Memory_MarkImportant(chunkID, pinned),
+      narrativeFailedCount: () => b().Memory_NarrativeFailedCount(),
+      narrativeFailedList: () => b().Memory_NarrativeFailedList(),
+      retryFailedNarrative: (jobID) => b().Memory_RetryFailedNarrative(jobID),
+      narrativeMetricsForChunk: (chunkID) => b().Memory_NarrativeMetricsForChunk(chunkID),
     },
     dials: {
       get: (key) => b().Dials_Get(key),
@@ -3038,6 +3064,17 @@ export function createFakeHarnessClient(
         allProfiles: 0,
         eligibleProfiles: 0,
         skippedKinds: [],
+      }),
+      markImportant: noop,
+      narrativeFailedCount: async () => 0,
+      narrativeFailedList: async () => [],
+      retryFailedNarrative: noop,
+      narrativeMetricsForChunk: async () => ({
+        chunkId: '',
+        retrievals: 0,
+        citations: 0,
+        userPins: 0,
+        score: 0,
       }),
     },
     dials: {

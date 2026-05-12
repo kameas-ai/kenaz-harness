@@ -2448,11 +2448,15 @@ export namespace memory {
 	    // Go type: time
 	    lastAccessed?: any;
 	    source?: string;
-	
+	    // Narrative layer fields (memory-narrative-layer-01KQ8TD1 WP01/WP07).
+	    kind?: string;
+	    retrievalWeight?: number;
+	    turnId?: string;
+
 	    static createFrom(source: any = {}) {
 	        return new Chunk(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.id = source["id"];
@@ -2472,8 +2476,11 @@ export namespace memory {
 	        this.recallCount = source["recallCount"];
 	        this.lastAccessed = this.convertValues(source["lastAccessed"], null);
 	        this.source = source["source"];
+	        this.kind = source["kind"];
+	        this.retrievalWeight = source["retrievalWeight"];
+	        this.turnId = source["turnId"];
 	    }
-	
+
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -2764,6 +2771,80 @@ export namespace memory {
 	}
 	
 	
+
+	// NarrativeJobStatus — wire shape for a failed narrative synthesis job
+	// (memory-narrative-layer-01KQ8TD1 WP07).
+	export class NarrativeJobStatus {
+	    id: string;
+	    turnId: string;
+	    sessionId: string;
+	    attempt: number;
+	    lastError: string;
+	    // Go type: time
+	    createdAt: any;
+
+	    static createFrom(source: any = {}) {
+	        return new NarrativeJobStatus(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.turnId = source["turnId"];
+	        this.sessionId = source["sessionId"];
+	        this.attempt = source["attempt"];
+	        this.lastError = source["lastError"];
+	        this.createdAt = this.convertValues(source["createdAt"], null);
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) { return a; }
+		    if (a.slice && a.map) { return (a as any[]).map(elem => this.convertValues(elem, classs)); }
+		    else if ("object" === typeof a) {
+		        if (asMap) { for (const key of Object.keys(a)) { a[key] = new classs(a[key]); } return a; }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	// NarrativeMetrics — promotion-score counters for one chunk
+	// (memory-narrative-layer-01KQ8TD1 WP07).
+	export class NarrativeMetrics {
+	    chunkId: string;
+	    retrievals: number;
+	    citations: number;
+	    userPins: number;
+	    score: number;
+	    // Go type: time
+	    lastRetrievedAt?: any;
+	    // Go type: time
+	    lastCitedAt?: any;
+
+	    static createFrom(source: any = {}) {
+	        return new NarrativeMetrics(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.chunkId = source["chunkId"];
+	        this.retrievals = source["retrievals"];
+	        this.citations = source["citations"];
+	        this.userPins = source["userPins"];
+	        this.score = source["score"];
+	        this.lastRetrievedAt = this.convertValues(source["lastRetrievedAt"], null);
+	        this.lastCitedAt = this.convertValues(source["lastCitedAt"], null);
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) { return a; }
+		    if (a.slice && a.map) { return (a as any[]).map(elem => this.convertValues(elem, classs)); }
+		    else if ("object" === typeof a) {
+		        if (asMap) { for (const key of Object.keys(a)) { a[key] = new classs(a[key]); } return a; }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 
 }
 

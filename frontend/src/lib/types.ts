@@ -1097,6 +1097,12 @@ export interface MemoryChunk {
   lastAccessed?: string;
   /** Bundle E WP16 — originating hook boundary ("post-llm" etc.). */
   source?: string;
+  /** Narrative layer — chunk kind: "raw" | "narrative_extractive" | "narrative_synthesised" etc. */
+  kind?: string;
+  /** Narrative layer — retrieval weight (default 1.0 for raw, 1.5 for narrative). */
+  retrievalWeight?: number;
+  /** Narrative layer — originating turn ID. */
+  turnId?: string;
 }
 
 /**
@@ -1254,6 +1260,34 @@ export interface MemoryEmbedderEligibility {
    * design (e.g. "anthropic", "bedrock"). Rendered per-provider in the banner.
    */
   skippedKinds: string[];
+}
+
+/**
+ * NarrativeJobStatus — wire shape for a failed narrative synthesis job.
+ * Surfaces in the Memory view "N narratives unrecoverable" banner
+ * (memory-narrative-layer-01KQ8TD1 WP07).
+ */
+export interface NarrativeJobStatus {
+  id: string;
+  turnId: string;
+  sessionId: string;
+  attempt: number;
+  lastError: string;
+  createdAt: string; // RFC3339
+}
+
+/**
+ * NarrativeMetrics — retrieval/citation/pin counters and computed
+ * promotion score for one chunk (memory-narrative-layer-01KQ8TD1 WP07).
+ */
+export interface NarrativeMetrics {
+  chunkId: string;
+  retrievals: number;
+  citations: number;
+  userPins: number;
+  score: number;
+  lastRetrievedAt?: string; // RFC3339
+  lastCitedAt?: string; // RFC3339
 }
 
 /**
