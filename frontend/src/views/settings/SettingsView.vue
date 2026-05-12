@@ -23,6 +23,7 @@ import SlashCommandsView from '@/views/settings/SlashCommandsView.vue';
 import FeatureFlagsView from '@/views/settings/FeatureFlagsView.vue';
 import HooksSettingsView from '@/views/settings/HooksSettingsView.vue';
 import WorkflowsSettingsPanel from '@/views/settings/WorkflowsSettingsPanel.vue';
+import ScheduledChatsPanel from '@/views/settings/scheduledchat/ScheduledChatsPanel.vue';
 import LongSessionNudgeSettings from '@/components/settings/LongSessionNudgeSettings.vue';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
 import { debouncedSave } from '@/lib/settings';
@@ -93,6 +94,13 @@ const showHooksTab = computed<boolean>(() => {
 const showWorkflowsTab = computed<boolean>(() => {
   const v = route?.query?.tab;
   return typeof v === 'string' && v === 'workflows';
+});
+
+// scheduled-chat-runs-01KX5R8B WP05 — Scheduled Chats sub-tab.
+// Disambiguates via ?tab=scheduledchats. Mount switch is in <template> below.
+const showScheduledChatsTab = computed<boolean>(() => {
+  const v = route?.query?.tab;
+  return typeof v === 'string' && v === 'scheduledchats';
 });
 
 const settings = ref<Settings>({
@@ -882,6 +890,15 @@ onMounted(() => {
       data-testid="settings-workflows-pane"
     >
       <WorkflowsSettingsPanel />
+    </div>
+
+    <!-- scheduled-chat-runs-01KX5R8B WP05 — Scheduled Chats sub-tab. -->
+    <div
+      v-else-if="showScheduledChatsTab"
+      class="px-6 py-4"
+      data-testid="settings-scheduledchats-pane"
+    >
+      <ScheduledChatsPanel />
     </div>
 
     <div
