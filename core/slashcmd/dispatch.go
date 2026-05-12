@@ -114,6 +114,16 @@ func (d *Dispatch) Run(
 		}
 	}()
 
+	// Feature flag gate: built-in commands bypass this path entirely (they
+	// go through Registry.Execute, not Dispatch.Run). If the flag is off,
+	// reject user command dispatch while leaving built-ins functional.
+	if !UserSlashcmdEnabled() {
+		return RunResult{
+			Kind: ResultKindError,
+			Text: ErrFeatureDisabled.Error(),
+		}, ErrFeatureDisabled
+	}
+
 	var err error
 	cmd, err = d.store.LoadUserOne(ctx, name, sc.ProjectID)
 	if err != nil {

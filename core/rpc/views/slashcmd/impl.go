@@ -114,9 +114,13 @@ func (a *API) UserGet(ctx context.Context, name, projectID string) (UserCommandW
 }
 
 // UserSave creates or updates a user command.
+// Returns an error when HARNESS_USER_SLASHCMD=false (WP09 flag gate).
 func (a *API) UserSave(ctx context.Context, wire UserCommandWire) error {
 	if a.store == nil {
 		return fmt.Errorf("slashcmd view: user command store not wired")
+	}
+	if !coreslashcmd.UserSlashcmdEnabled() {
+		return coreslashcmd.ErrFeatureDisabled
 	}
 	cmd := wireToCoreCmd(wire)
 	return a.store.SaveUser(ctx, cmd)

@@ -2698,3 +2698,18 @@ export const AUTONOMY_KNOB_LABELS: Record<AutonomyKnob, string> = {
   continueOnError: 'On tool error',
   destructiveActionPosture: 'Destructive actions',
 };
+
+// ── feature flags (user-slash-commands-01KQ8TD9 WP09) ────────────────
+
+/**
+ * FeatureFlagInfo — one entry returned by Config_GetFlags.
+ * Flags are read-only at runtime; they are controlled via environment
+ * variables listed in the envVar field.
+ */
+export interface FeatureFlagInfo {
+  name: string;
+  enabled: boolean;
+  description: string;
+  /** Environment variable that controls this flag (e.g. HARNESS_USER_SLASHCMD). */
+  envVar: string;
+}

@@ -80,6 +80,7 @@ import type {
   UserCommand,
   UserCommandSummary,
   SlashRunResult,
+  FeatureFlagInfo,
   Corpus,
   CorpusFile,
   CorpusChunk,
@@ -567,7 +568,11 @@ interface WailsBindingsLike {
   Onboarding_Dismiss(): Promise<void>;
   Onboarding_RestartPhase2(req: OnboardingRestartPhase2Request): Promise<OnboardingRestartPhase2Response>;
   Onboarding_ListStarters(): Promise<StarterSummary[]>;
+
+  // ── feature flags (user-slash-commands-01KQ8TD9 WP09) ───────────────
+  Config_GetFlags(): Promise<FeatureFlagInfo[]>;
 }
+
 
 /**
  * AttachmentAddMediaInput — wire shape Attachments_AddMedia accepts.
@@ -1981,6 +1986,15 @@ export interface OnboardingClient {
   listStarters(): Promise<StarterSummary[]>;
 }
 
+/**
+ * ConfigClient — feature flag reads.
+ * (user-slash-commands-01KQ8TD9 WP09)
+ */
+export interface ConfigClient {
+  /** Returns all known feature flags and their current enabled state. */
+  getFlags(): Promise<FeatureFlagInfo[]>;
+}
+
 export interface HarnessClient {
   shellStatus(): Promise<ShellStatus>;
   appInfo(): Promise<AppInfo>;
@@ -2025,6 +2039,7 @@ export interface HarnessClient {
   search: SearchClient;
   storage: StorageClient;
   onboarding: OnboardingClient;
+  config: ConfigClient;
 }
 
 // ── runtime client ─────────────────────────────────────────────────────
@@ -2459,6 +2474,9 @@ export function createHarnessClient(): HarnessClient {
       dismiss: () => b().Onboarding_Dismiss(),
       restartPhase2: (req) => b().Onboarding_RestartPhase2(req),
       listStarters: () => b().Onboarding_ListStarters(),
+    },
+    config: {
+      getFlags: () => b().Config_GetFlags(),
     },
   };
 }
@@ -3258,6 +3276,16 @@ export function createFakeHarnessClient(
       dismiss: noop,
       restartPhase2: async () => ({ sessionId: '' }),
       listStarters: async () => [],
+    },
+    config: {
+      getFlags: async () => [
+        {
+          name: 'user-slash-commands',
+          enabled: true,
+          description: 'User-defined / commands (text expansions, tool dispatch, prompt templates).',
+          envVar: 'HARNESS_USER_SLASHCMD',
+        },
+      ],
     },
     slashcmd: {
       list: async (_projectID: string) => [],

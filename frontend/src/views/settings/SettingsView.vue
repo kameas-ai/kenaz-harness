@@ -20,6 +20,7 @@ import UpdatesPanel from '@/views/settings/UpdatesPanel.vue';
 import MigrationDriftPanel from '@/views/settings/health/MigrationDriftPanel.vue';
 import CompactionStrategyPanel from '@/views/settings/compaction/CompactionStrategyPanel.vue';
 import SlashCommandsView from '@/views/settings/SlashCommandsView.vue';
+import FeatureFlagsView from '@/views/settings/FeatureFlagsView.vue';
 import LongSessionNudgeSettings from '@/components/settings/LongSessionNudgeSettings.vue';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
 import { debouncedSave } from '@/lib/settings';
@@ -69,6 +70,13 @@ const showCompactionTab = computed<boolean>(() => {
 const showSlashCmdsTab = computed<boolean>(() => {
   const v = route?.query?.tab;
   return typeof v === 'string' && v === 'slashcmds';
+});
+
+// user-slash-commands-01KQ8TD9 WP09 — Feature Flags sub-tab.
+// Disambiguates via ?tab=flags. Mount switch is in <template> below.
+const showFlagsTab = computed<boolean>(() => {
+  const v = route?.query?.tab;
+  return typeof v === 'string' && v === 'flags';
 });
 
 const settings = ref<Settings>({
@@ -798,6 +806,14 @@ onMounted(() => {
       data-testid="settings-slashcmds-pane"
     >
       <SlashCommandsView />
+    </div>
+
+    <!-- user-slash-commands-01KQ8TD9 WP09 — Feature Flags sub-tab. -->
+    <div
+      v-else-if="showFlagsTab"
+      data-testid="settings-flags-pane"
+    >
+      <FeatureFlagsView />
     </div>
 
     <div

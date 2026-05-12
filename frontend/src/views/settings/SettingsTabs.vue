@@ -47,6 +47,9 @@ const tabs: ReadonlyArray<Tab> = [
   // user-slash-commands-01KQ8TD9 WP07 — Slash Commands tab.
   // Disambiguates via ?tab=slashcmds. See SettingsView.vue for the mount switch.
   { to: '/settings?tab=slashcmds', label: 'Slash Commands', query: 'slashcmds' },
+  // user-slash-commands-01KQ8TD9 WP09 — Feature Flags tab.
+  // Disambiguates via ?tab=flags. See SettingsView.vue for the mount switch.
+  { to: '/settings?tab=flags', label: 'Flags', query: 'flags' },
   { to: '/providers', label: 'Providers' },
   { to: '/hooks', label: 'Hooks' },
   { to: '/bundles', label: 'Bundles' },

@@ -39,6 +39,7 @@ import (
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/settings"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/shell"
 	slashview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/slashcmd"
+	coreslashcmd "github.com/sigil-tech/kaneaz-harness/core/slashcmd"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/tools"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/trust"
 	updateview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/update"
@@ -1339,6 +1340,30 @@ func (b *Bindings) Slashcmd_Delete(name, projectID string) error {
 
 func (b *Bindings) Slashcmd_Run(name string, args map[string]string, sessionID, projectID, cwd, selection string) (slashview.RunResultWire, error) {
 	return b.api.Slash().UserRun(b.ctx(), name, args, sessionID, projectID, cwd, selection)
+}
+
+// ── feature flags (user-slash-commands-01KQ8TD9 WP09) ────────────────
+
+// FeatureFlagInfo carries a single feature-flag name + enabled state
+// for the frontend FeatureFlagsView.
+type FeatureFlagInfo struct {
+	Name        string `json:"name"`
+	Enabled     bool   `json:"enabled"`
+	Description string `json:"description"`
+	EnvVar      string `json:"envVar"`
+}
+
+// Config_GetFlags returns the current state of all known feature flags.
+// This RPC is read-only; flags are controlled via environment variables.
+func (b *Bindings) Config_GetFlags() ([]FeatureFlagInfo, error) {
+	return []FeatureFlagInfo{
+		{
+			Name:        "user-slash-commands",
+			Enabled:     coreslashcmd.UserSlashcmdEnabled(),
+			Description: "User-defined / commands (text expansions, tool dispatch, prompt templates).",
+			EnvVar:      "HARNESS_USER_SLASHCMD",
+		},
+	}, nil
 }
 
 // ── corpora (agent-kernel-graph; Bundle C WP10/WP11) ──────────────────
