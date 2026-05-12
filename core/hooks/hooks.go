@@ -321,7 +321,9 @@ func (r *Registry) load() error {
 	if err := json.Unmarshal(data, &got); err != nil {
 		return fmt.Errorf("hooks: parse: %w", err)
 	}
-	r.hooks = got
+	// Run the migration pass to fill defaults + validate against the v2
+	// event surface. This is in-memory only; the file is not rewritten.
+	r.hooks = MigrateHooks(got, nil)
 	return nil
 }
 

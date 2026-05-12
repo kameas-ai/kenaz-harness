@@ -14,6 +14,27 @@ type Document struct {
 	LLM         LLMConfig           `json:"llm"`
 	MCP         map[string]bool     `json:"mcp"`
 	UI          map[string]any      `json:"ui,omitempty"`
+	// FeatureFlags holds runtime toggles. The harness reads each flag at
+	// startup and on config reload. Unknown flags are silently ignored.
+	FeatureFlags map[string]bool `json:"feature_flags,omitempty"`
+}
+
+// FlagHooksV2Enabled is the feature flag that enables v2 lifecycle hooks
+// (hooks-event-surface-expansion-01KZNP3A). Default: true.
+// Set to false to revert to v1 chat-pipeline hooks only.
+const FlagHooksV2Enabled = "hooks_v2_enabled"
+
+// IsHooksV2Enabled returns the value of hooks_v2_enabled, defaulting to true
+// when the flag is absent (or the Document is nil).
+func IsHooksV2Enabled(doc *Document) bool {
+	if doc == nil || doc.FeatureFlags == nil {
+		return true // default on
+	}
+	val, ok := doc.FeatureFlags[FlagHooksV2Enabled]
+	if !ok {
+		return true // default on
+	}
+	return val
 }
 
 type LLMConfig struct {
