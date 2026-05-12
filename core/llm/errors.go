@@ -156,6 +156,32 @@ func (e *ErrCancelled) Error() string {
 	return "llm: cancelled: " + e.Reason
 }
 
+// ErrProviderAuthFailed is the registry-level decoration of *ErrAuth with
+// the profile/provider context needed to drive the key-rotation toast
+// (provider-keychain-rotation-01KQ8TD9 WP01). It wraps the raw *ErrAuth so
+// errors.As works for both types in the same chain:
+//
+//	var authFailed *ErrProviderAuthFailed
+//	var authBare   *ErrAuth
+//	errors.As(err, &authFailed) // true — registry context
+//	errors.As(err, &authBare)   // true — via Unwrap
+type ErrProviderAuthFailed struct {
+	Provider  string   // adapter kind: "anthropic" | "openai" | …
+	ProfileID string   // the profile that was about to be dispatched
+	ModelID   string   // the resolved model (post-override)
+	Reason    string   // human-readable copy from the wrapped ErrAuth.Message
+	Cause     *ErrAuth // original adapter-level error; reachable via Unwrap
+}
+
+func (e *ErrProviderAuthFailed) Error() string {
+	return fmt.Sprintf("llm: provider auth failed (provider=%s profile=%s model=%s): %s",
+		e.Provider, e.ProfileID, e.ModelID, e.Reason)
+}
+
+// Unwrap exposes the underlying *ErrAuth so errors.As(err, &ErrAuth{})
+// traverses through ErrProviderAuthFailed.
+func (e *ErrProviderAuthFailed) Unwrap() error { return e.Cause }
+
 // IsTransient reports whether err should be retried by the middleware.
 //
 // The classification is by error type (errors.As against ErrTransient)

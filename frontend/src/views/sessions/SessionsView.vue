@@ -29,6 +29,8 @@ import BranchBreadcrumb from '@/components/chat/BranchBreadcrumb.vue';
 import CreateBranchModal from '@/components/chat/CreateBranchModal.vue';
 import MergeSuggestionToast from '@/components/chat/MergeSuggestionToast.vue';
 import CostThresholdToast from '@/components/chat/CostThresholdToast.vue';
+import AuthFailureToast from '@/components/chat/AuthFailureToast.vue';
+import RetryAfterRotateToast from '@/components/chat/RetryAfterRotateToast.vue';
 import BashPermissionModal from '@/components/permissions/BashPermissionModal.vue';
 import FilesystemPermissionModal from '@/components/permissions/FilesystemPermissionModal.vue';
 import CredentialPermissionModal from '@/components/permissions/CredentialPermissionModal.vue';
@@ -742,6 +744,10 @@ const compactionArchiveDays = ref<number>(90);
 // contextDenominator falls back to the catalog-derived value.
 const contextWindowOverrides = ref<Settings['contextWindowOverrides']>({});
 
+// provider-keychain-rotation-01KQ8TD9 WP05 — auto-resume on key rotation.
+// Default true on a fresh install.
+const autoResumeOnKeyRotation = ref(true);
+
 // Compaction overhead surface (mission compaction-strategy-ui-01KQ8TDI
 // WP08 / plan §2.11). The backend tags every compaction-driven LLM
 // call with cost.kind = "compaction" and accumulates a running total
@@ -786,6 +792,12 @@ async function refreshCompactionSettings() {
     showPerMessageTokenMeter.value = s.showPerMessageTokenMeter === true;
   } catch {
     // Soft-fail: leave the locked default in place.
+  }
+  // provider-keychain-rotation-01KQ8TD9 WP05
+  try {
+    autoResumeOnKeyRotation.value = await client.settings.getAutoResumeOnKeyRotation();
+  } catch {
+    autoResumeOnKeyRotation.value = true;
   }
 }
 
@@ -1627,6 +1639,9 @@ async function onNudgeNewSession() {
     />
     <MergeSuggestionToast />
     <CostThresholdToast />
+    <!-- provider-keychain-rotation-01KQ8TD9 WP05 — auth failure + post-rotation toasts -->
+    <AuthFailureToast :auto-resume-enabled="autoResumeOnKeyRotation" />
+    <RetryAfterRotateToast />
     <!-- WP08 — universal permission modals (one per family) -->
     <BashPermissionModal />
     <FilesystemPermissionModal />

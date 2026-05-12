@@ -535,6 +535,24 @@ type ModelLister interface {
 	ListModels(ctx context.Context, cred []byte) ([]ModelInfo, error)
 }
 
+// KeyTester is the opt-in capability for validating that a credential is
+// accepted by the provider without modifying any stored state. Adapters
+// MUST implement a 5-second context-bounded call to a low-cost endpoint
+// (typically the /models endpoint reused from ModelLister).
+//
+// Returns nil if and only if the provider accepted the credential and returned
+// a non-empty model list. On failure returns a typed error (*ErrAuth,
+// *ErrTransient, or *ErrInvalidRequest) from the existing adapter taxonomy.
+//
+// The rotation pipeline in views/llm.API uses this interface before writing
+// the new credential to the keychain (provider-keychain-rotation-01KQ8TD9 WP02).
+type KeyTester interface {
+	// TestKey verifies cred is accepted by the provider.
+	// Implementations MUST apply a 5-second deadline internally.
+	// Empty cred → *ErrAuth{Status:0, Message:"<provider>: empty credential"}.
+	TestKey(ctx context.Context, cred []byte) error
+}
+
 // PreflightResult reports the outcome of one credential-resolution
 // attempt at startup (FR-019).
 type PreflightResult struct {

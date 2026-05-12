@@ -296,6 +296,23 @@ func (b *Bindings) LLM_GetAttachmentLimits(provider, model string) (llm.Attachme
 	return b.api.LLMConnector().GetAttachmentLimits(b.ctx(), provider, model)
 }
 
+// LLM_TestAndRotateKey validates plaintextApiKey against the provider's
+// /models endpoint and, on success, writes it to the keychain and emits
+// a KindProviderKeyRotated audit event. source should be "inline-toast"
+// or "manual". The plaintext is consumed and zeroed before returning.
+// (provider-keychain-rotation-01KQ8TD9 WP04)
+func (b *Bindings) LLM_TestAndRotateKey(profileID, plaintextApiKey, source string) (llm.RotationResult, error) {
+	return b.api.LLMConnector().TestAndRotateKey(b.ctx(), profileID, plaintextApiKey, source)
+}
+
+// LLM_ResumeAfterKeyRotation drives a fresh kernel run for the paused
+// chat turn identified by resumeToken (the profileID returned by
+// TestAndRotateKey). Safe to call when no paused turn exists.
+// (provider-keychain-rotation-01KQ8TD9 WP04)
+func (b *Bindings) LLM_ResumeAfterKeyRotation(resumeToken string) error {
+	return b.api.LLMConnector().ResumeAfterKeyRotation(b.ctx(), resumeToken)
+}
+
 // ── mcp ────────────────────────────────────────────────────────────────
 
 func (b *Bindings) MCP_ListServers() ([]mcp.Server, error) {
@@ -1045,6 +1062,40 @@ func (b *Bindings) Settings_SetMultimodalInput(enabled bool) error {
 	}
 	// Inverted storage: Disabled = !enabled.
 	s.MultimodalInputDisabled = !enabled
+	return b.storeFn().SaveAll(s)
+}
+
+// ── key-rotation settings (provider-keychain-rotation-01KQ8TD9 WP07) ──
+
+// Settings_GetAutoResumeOnKeyRotation returns whether the harness should
+// automatically redrive the paused chat turn after the user rotates an API
+// key. Default true on a fresh install (zero-value Disabled → enabled).
+// Hidden in the Settings UI when AppInfo.keychainRotationEnabled = false.
+// (provider-keychain-rotation-01KQ8TD9 WP07)
+func (b *Bindings) Settings_GetAutoResumeOnKeyRotation() (bool, error) {
+	if b.storeFn == nil {
+		return true, nil
+	}
+	s, err := b.storeFn().LoadAll()
+	if err != nil {
+		return true, err
+	}
+	return s.EffectiveAutoResumeOnKeyRotation(), nil
+}
+
+// Settings_SetAutoResumeOnKeyRotation persists the auto-resume-on-key-rotation
+// dial. When false, TestAndRotateKey returns an empty AutoResumeToken and
+// the user must manually resend the failed turn.
+// (provider-keychain-rotation-01KQ8TD9 WP07)
+func (b *Bindings) Settings_SetAutoResumeOnKeyRotation(enabled bool) error {
+	if b.storeFn == nil {
+		return nil
+	}
+	s, err := b.storeFn().LoadAll()
+	if err != nil {
+		return err
+	}
+	s.AutoResumeOnKeyRotationDisabled = !enabled
 	return b.storeFn().SaveAll(s)
 }
 

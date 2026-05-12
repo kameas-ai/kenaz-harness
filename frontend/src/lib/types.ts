@@ -520,6 +520,14 @@ export interface AppInfo {
    * available (cedar-policy-editor-ui-01KQ8TD6 WP01).
    */
   policyEditorEnabled?: boolean;
+  /**
+   * keychainRotationEnabled is true when HARNESS_KEYCHAIN_ROTATION is not
+   * set to "off", "0", or "false". The frontend uses this to hide the
+   * "Auto-resume after rotating an API key" Settings toggle and the
+   * AuthFailureToast rotate button when the feature is disabled.
+   * (provider-keychain-rotation-01KQ8TD9 WP07)
+   */
+  keychainRotationEnabled?: boolean;
 }
 
 export interface WindowSize {
@@ -1048,6 +1056,47 @@ export interface AttachmentLimitsView {
   imageInputMimeTypes?: string[];
   /** MIME types accepted for documents; empty = accept all. */
   documentInputMimeTypes?: string[];
+}
+
+/**
+ * RotationResult — outcome of LLM_TestAndRotateKey.
+ * Mirrors core/rpc/views/llm.RotationResult.
+ * (provider-keychain-rotation-01KQ8TD9 WP04)
+ */
+export interface RotationResult {
+  success: boolean;
+  message?: string;
+  latency_ms: number;
+  tested_at: string; // ISO-8601 timestamp
+  /** Non-empty when a paused chat turn exists for this profile. */
+  auto_resume_token?: string;
+}
+
+/**
+ * AuthFailedPayload — payload of the `provider:auth-failed` broker event.
+ * Emitted by the chat runner when an adapter returns *ErrProviderAuthFailed.
+ * (provider-keychain-rotation-01KQ8TD9 WP05)
+ */
+export interface AuthFailedPayload {
+  sub_id: string;
+  session_id: string;
+  profile_id: string;
+  provider: string;
+  model: string;
+  reason: string;
+}
+
+/**
+ * RetryAfterRotationFailedPayload — payload of the
+ * `provider:retry-after-rotation-failed` broker event. Emitted when a
+ * resumed (post-rotation) turn errors for non-auth reasons.
+ * (provider-keychain-rotation-01KQ8TD9 WP05)
+ */
+export interface RetryAfterRotationFailedPayload {
+  sub_id: string;
+  session_id: string;
+  profile_id: string;
+  error_message: string;
 }
 
 /**

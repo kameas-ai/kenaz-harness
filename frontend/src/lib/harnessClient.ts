@@ -136,6 +136,7 @@ import type {
   NarrativeJobStatus,
   NarrativeMetrics,
   AttachmentLimitsView,
+  RotationResult,
 } from './types';
 
 /**
@@ -260,6 +261,12 @@ interface WailsBindingsLike {
     provider: string,
     model: string,
   ): Promise<AttachmentLimitsView>;
+  LLM_TestAndRotateKey(
+    profileID: string,
+    plaintextApiKey: string,
+    source: string,
+  ): Promise<RotationResult>;
+  LLM_ResumeAfterKeyRotation(resumeToken: string): Promise<void>;
 
   MCP_ListServers(): Promise<MCPServer[]>;
   MCP_StartStream(id: string): Promise<string>;
@@ -388,6 +395,9 @@ interface WailsBindingsLike {
   // multimodal-io-01KQ8TDF WP08 / FR-022 / FR-023
   Settings_GetMultimodalInput(): Promise<boolean>;
   Settings_SetMultimodalInput(enabled: boolean): Promise<void>;
+  // provider-keychain-rotation-01KQ8TD9 WP07
+  Settings_GetAutoResumeOnKeyRotation(): Promise<boolean>;
+  Settings_SetAutoResumeOnKeyRotation(enabled: boolean): Promise<void>;
   // artifact-preview-binary-rendering-01KQ8TD5 WP07
   Settings_GetArtifactPreview(): Promise<{ enabled: boolean; maxBytes: number; timeoutMs: number }>;
 
@@ -1113,6 +1123,26 @@ export interface LLMConnectorClient {
     provider: string,
     model: string,
   ): Promise<AttachmentLimitsView>;
+  /**
+   * testAndRotateKey — validates plaintextApiKey against the provider's
+   * /models endpoint and, on success, overwrites the keychain entry and
+   * emits a KindProviderKeyRotated audit event. The plaintext is consumed
+   * and zeroed server-side before returning.
+   * source should be "inline-toast" or "manual".
+   * (provider-keychain-rotation-01KQ8TD9 WP04)
+   */
+  testAndRotateKey(
+    profileID: string,
+    plaintextApiKey: string,
+    source: string,
+  ): Promise<RotationResult>;
+  /**
+   * resumeAfterKeyRotation — drives a fresh kernel run for the paused
+   * chat turn identified by resumeToken (the profileID from RotationResult).
+   * No-op when no paused turn exists.
+   * (provider-keychain-rotation-01KQ8TD9 WP04)
+   */
+  resumeAfterKeyRotation(resumeToken: string): Promise<void>;
 }
 
 export interface MCPClient {
@@ -1482,6 +1512,20 @@ export interface SettingsClient {
    * items are ignored on paste.
    */
   setMultimodalInput(enabled: boolean): Promise<void>;
+
+  // ── provider-keychain-rotation-01KQ8TD9 WP07 ─────────────────────────
+  /**
+   * Returns whether the harness should automatically redrive the paused turn
+   * after the user rotates an API key. Default true. Hidden when
+   * appInfo.keychainRotationEnabled === false.
+   */
+  getAutoResumeOnKeyRotation(): Promise<boolean>;
+  /**
+   * Persists the auto-resume-after-key-rotation toggle. When false,
+   * TestAndRotateKey returns an empty AutoResumeToken and the user must
+   * manually resend the failed turn.
+   */
+  setAutoResumeOnKeyRotation(enabled: boolean): Promise<void>;
 
   // ── artifact-preview-binary-rendering-01KQ8TD5 WP07 ─────────────────
   /**
@@ -2381,6 +2425,10 @@ export function createHarnessClient(): HarnessClient {
         b().LLM_ResolveConfirm(requestID, decision),
       getAttachmentLimits: (provider, model) =>
         b().LLM_GetAttachmentLimits(provider, model),
+      testAndRotateKey: (profileID, plaintextApiKey, source) =>
+        b().LLM_TestAndRotateKey(profileID, plaintextApiKey, source),
+      resumeAfterKeyRotation: (resumeToken) =>
+        b().LLM_ResumeAfterKeyRotation(resumeToken),
     },
     mcp: {
       listServers: () => b().MCP_ListServers(),
@@ -2520,6 +2568,10 @@ export function createHarnessClient(): HarnessClient {
         b().Settings_SetShowPerMessageTokenMeter(enabled),
       getMultimodalInput: () => b().Settings_GetMultimodalInput(),
       setMultimodalInput: (enabled) => b().Settings_SetMultimodalInput(enabled),
+      getAutoResumeOnKeyRotation: () =>
+        b().Settings_GetAutoResumeOnKeyRotation(),
+      setAutoResumeOnKeyRotation: (enabled) =>
+        b().Settings_SetAutoResumeOnKeyRotation(enabled),
       getArtifactPreview: () => b().Settings_GetArtifactPreview(),
     },
     permissions: {
@@ -2897,6 +2949,12 @@ export function createFakeHarnessClient(
         maxImagePixels: 0,
         maxDocumentPages: 0,
       }),
+      testAndRotateKey: async (_profileID, _key, _source) => ({
+        success: true,
+        latency_ms: 1,
+        tested_at: new Date().toISOString(),
+      }),
+      resumeAfterKeyRotation: noop,
     },
     mcp: {
       listServers: async () => [],
@@ -3087,6 +3145,8 @@ export function createFakeHarnessClient(
       setShowPerMessageTokenMeter: noop,
       getMultimodalInput: async () => true,
       setMultimodalInput: noop,
+      getAutoResumeOnKeyRotation: async () => true,
+      setAutoResumeOnKeyRotation: noop,
       getArtifactPreview: async () => ({
         // Default false in tests so that existing ArtifactPreview.test.ts
         // cases run through the legacy text-only branch unmodified

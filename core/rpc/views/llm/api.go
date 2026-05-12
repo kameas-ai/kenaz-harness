@@ -2,7 +2,10 @@
 // concrete implementation is wired by the llm-connector mission.
 package llm
 
-import "context"
+import (
+	"context"
+	"time"
+)
 
 // Redacted is the display-safe credential view carried over the RPC
 // boundary (credential-store-01KQ8TDD WP05). It mirrors
@@ -124,6 +127,19 @@ type AttachmentLimitsView struct {
 	DocumentInputMimeTypes  []string `json:"documentInputMimeTypes,omitempty"`
 }
 
+// RotationResult is the structured outcome of TestAndRotateKey.
+// (provider-keychain-rotation-01KQ8TD9 WP04)
+type RotationResult struct {
+	Success         bool      `json:"success"`
+	Message         string    `json:"message,omitempty"`
+	LatencyMS       int       `json:"latency_ms"`
+	TestedAt        time.Time `json:"tested_at"`
+	// AutoResumeToken is the sub_id of the paused chat turn, populated
+	// when the test passed AND a paused turn exists for this profile.
+	// Empty when no paused turn exists or when auto-resume is disabled.
+	AutoResumeToken string `json:"auto_resume_token,omitempty"`
+}
+
 // LLMConnectorAPI is the view-scoped accessor for provider metadata and
 // streams. Implementations MUST be safe for concurrent use.
 //
@@ -193,4 +209,22 @@ type LLMConnectorAPI interface {
 	// the model ID string. Returns a zero-value descriptor (everything
 	// disabled) when the provider or model is unknown.
 	GetAttachmentLimits(ctx context.Context, provider, model string) (AttachmentLimitsView, error)
+
+	// TestAndRotateKey validates plaintextApiKey against the provider's
+	// /models endpoint and, on success, overwrites the stored keychain
+	// entry and emits a KindProviderKeyRotated audit event.
+	//
+	// source should be "inline-toast" when invoked from the auth-failure
+	// toast or "manual" when invoked from a future explicit rotate button.
+	//
+	// The plaintext key is consumed and zeroed before this method returns —
+	// the caller must not retain a reference to it after the call.
+	// (provider-keychain-rotation-01KQ8TD9 WP04)
+	TestAndRotateKey(ctx context.Context, profileID, plaintextApiKey, source string) (RotationResult, error)
+
+	// ResumeAfterKeyRotation drives a fresh kernel run for the paused
+	// chat turn identified by resumeToken (the sub_id from the RotationResult).
+	// It is a no-op when the token does not match an active paused turn.
+	// (provider-keychain-rotation-01KQ8TD9 WP04)
+	ResumeAfterKeyRotation(ctx context.Context, resumeToken string) error
 }

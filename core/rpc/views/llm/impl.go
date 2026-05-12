@@ -21,6 +21,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"runtime"
 	"sync"
 	"time"
@@ -279,6 +280,35 @@ type HookRunner interface {
 type ChatRunner interface {
 	StartStream(ctx context.Context, profileID, sessionID, modelOverride, userMessage string) (string, error)
 	StopStream(ctx context.Context, subID string) error
+	// HasPausedSubFor reports whether a paused turn exists for the given
+	// profileID and returns its sub_id token.
+	// (provider-keychain-rotation-01KQ8TD9 WP04)
+	HasPausedSubFor(profileID string) (token string, ok bool)
+	// RedriveLastTurn re-issues a kernel run for the paused turn
+	// identified by profileID without re-appending the user message.
+	// (provider-keychain-rotation-01KQ8TD9 WP04)
+	RedriveLastTurn(ctx context.Context, profileID string) (newSubID string, err error)
+}
+
+// CredentialInvalidator is the secrets-cache seam the rotation pipeline
+// calls after a successful keychain write to evict any cached credential
+// so the next registry.Stream call resolves fresh bytes.
+//
+// The concrete *credref.Resolver does NOT expose Invalidate; the secrets
+// backend (core/secrets.Resolver) does — the rpc wiring passes a thin
+// adapter over secrets.Resolver.Invalidate.
+// (provider-keychain-rotation-01KQ8TD9 WP04)
+type CredentialInvalidator interface {
+	// InvalidateCred evicts the cached credential for (kind, locator).
+	InvalidateCred(kind, locator string)
+}
+
+// AuditEmitter is the narrow audit surface the rotation pipeline uses.
+// The rpc wiring passes a concrete *audit.Emitter (or equivalent) that
+// implements this via audit.Emit.
+// (provider-keychain-rotation-01KQ8TD9 WP04)
+type AuditEmitter interface {
+	EmitRotated(ctx context.Context, provider, profileID, source string, rotatedAt time.Time) error
 }
 
 // API is the concrete LLMConnectorAPI implementation.
@@ -314,6 +344,15 @@ type API struct {
 	// and keeps WP00 chat-only behaviour for tests that don't wire an
 	// MCP pool.
 	tools corellm.ToolDiscoverer
+
+	// credInvalidator, when non-nil, is called after a successful keychain
+	// write to evict any cached credential bytes so the next resolve picks
+	// up the freshly written key (provider-keychain-rotation-01KQ8TD9 WP04).
+	credInvalidator CredentialInvalidator
+
+	// auditRotation, when non-nil, is called to emit KindProviderKeyRotated
+	// after a successful rotation (provider-keychain-rotation-01KQ8TD9 WP04).
+	auditRotation AuditEmitter
 
 	mu             sync.Mutex
 	subs           map[string]*subscription
@@ -395,6 +434,16 @@ type Config struct {
 	// nil = ModelInfos fields default to 0 (unknown) — frontend falls
 	// back to MODEL_CONTEXT_FALLBACK.
 	CapCatalog CapCatalog
+	// CredInvalidator, when non-nil, is called after TestAndRotateKey
+	// successfully writes the new key to evict the cached credential.
+	// nil → cache entry lives until the TTL fires (next resolve will use
+	// the new key regardless — the keychain write is canonical).
+	// (provider-keychain-rotation-01KQ8TD9 WP04)
+	CredInvalidator CredentialInvalidator
+	// AuditRotation, when non-nil, emits KindProviderKeyRotated on
+	// successful rotation. nil → audit is silently skipped.
+	// (provider-keychain-rotation-01KQ8TD9 WP04)
+	AuditRotation AuditEmitter
 }
 
 // New constructs a concrete API.
@@ -404,23 +453,25 @@ func New(cfg Config) *API {
 		sink = nopSink{}
 	}
 	return &API{
-		reg:         cfg.Registry,
-		sink:        sink,
-		store:       cfg.Store,
-		bundles:     cfg.Bundles,
-		keychain:    cfg.Keychain,
-		prober:      cfg.Prober,
-		history:     cfg.History,
-		historyW:    cfg.HistoryWriter,
-		hooks:       cfg.Hooks,
-		attachments: cfg.Attachments,
-		chatRunner:  cfg.ChatRunner,
-		tools:       cfg.Tools,
-		artifacts:   cfg.Artifacts,
-		credPeeker:  cfg.CredPeeker,
-		capCatalog:  cfg.CapCatalog,
-		subs:        map[string]*subscription{},
-		validated:   map[string]bool{},
+		reg:             cfg.Registry,
+		sink:            sink,
+		store:           cfg.Store,
+		bundles:         cfg.Bundles,
+		keychain:        cfg.Keychain,
+		prober:          cfg.Prober,
+		history:         cfg.History,
+		historyW:        cfg.HistoryWriter,
+		hooks:           cfg.Hooks,
+		attachments:     cfg.Attachments,
+		chatRunner:      cfg.ChatRunner,
+		tools:           cfg.Tools,
+		artifacts:       cfg.Artifacts,
+		credPeeker:      cfg.CredPeeker,
+		capCatalog:      cfg.CapCatalog,
+		credInvalidator: cfg.CredInvalidator,
+		auditRotation:   cfg.AuditRotation,
+		subs:            map[string]*subscription{},
+		validated:       map[string]bool{},
 	}
 }
 
@@ -1265,4 +1316,171 @@ func (a *API) GetAttachmentLimits(_ context.Context, provider, model string) (At
 		ImageInputMimeTypes:     r.ImageInputMimeTypes,
 		DocumentInputMimeTypes:  r.DocumentInputMimeTypes,
 	}, nil
+}
+
+// TestAndRotateKey validates plaintextApiKey against the provider's /models
+// endpoint and — on success — overwrites the stored keychain entry, evicts
+// the cached credential, and emits a KindProviderKeyRotated audit event.
+//
+// Pipeline (provider-keychain-rotation-01KQ8TD9 WP04 plan §3):
+//  1. Resolve the profile and validate it is keychain-backed.
+//  2. Resolve the adapter via AdapterLookup.
+//  3. Cast to corellm.KeyTester; surface friendly message if unsupported.
+//  4. TestKey — 5-second deadline enforced inside the adapter.
+//  5. Only on pass: KeychainWriter.Write, then zero the buffer.
+//  6. Only on pass: CredentialInvalidator.InvalidateCred.
+//  7. Only on pass: AuditEmitter.EmitRotated.
+//  8. Only on pass: look up paused chat sub; mint AutoResumeToken if found.
+func (a *API) TestAndRotateKey(ctx context.Context, profileID, plaintextApiKey, source string) (RotationResult, error) {
+	// Zero the plaintext on return regardless of outcome.
+	buf := []byte(plaintextApiKey)
+	plaintextApiKey = ""
+	defer func() {
+		runtime.KeepAlive(buf)
+		zeroBytes(buf)
+	}()
+
+	t0 := time.Now()
+
+	// Feature-flag guard: if the HARNESS_KEYCHAIN_ROTATION env var is off,
+	// refuse the call so the bindings layer can surface a helpful message.
+	if !keychainRotationFeatureEnabled() {
+		return RotationResult{
+			Success:   false,
+			Message:   "key rotation is disabled; set HARNESS_KEYCHAIN_ROTATION=on to enable",
+			LatencyMS: int(time.Since(t0).Milliseconds()),
+			TestedAt:  t0,
+		}, nil
+	}
+
+	// 1. Profile lookup + keychain-kind gate.
+	profile, err := a.lookupProfile(profileID)
+	if err != nil {
+		return RotationResult{}, err
+	}
+	if profile.Cred.Kind != "keychain" {
+		if profile.Kind == "bedrock" {
+			return RotationResult{
+				Success:  false,
+				Message:  "this Bedrock profile uses AWS credentials — rotate via `aws configure` and try again",
+				TestedAt: t0,
+			}, nil
+		}
+		return RotationResult{
+			Success:  false,
+			Message:  fmt.Sprintf("profile %q uses cred kind %q; only keychain credentials are rotatable via this UI", profileID, profile.Cred.Kind),
+			TestedAt: t0,
+		}, nil
+	}
+
+	// 2. Adapter lookup.
+	lookup, ok := a.reg.(AdapterLookup)
+	if !ok || lookup == nil {
+		return RotationResult{Success: false, Message: "no adapter registry available", TestedAt: t0}, nil
+	}
+	adapter := lookup.Adapter(profile.Kind)
+	if adapter == nil {
+		return RotationResult{Success: false, Message: fmt.Sprintf("no adapter registered for kind %q", profile.Kind), TestedAt: t0}, nil
+	}
+
+	// 3. KeyTester capability check.
+	tester, hasTester := adapter.(corellm.KeyTester)
+	if !hasTester {
+		return RotationResult{
+			Success:   false,
+			Message:   "test unavailable for this provider — please verify the key in the provider console",
+			LatencyMS: int(time.Since(t0).Milliseconds()),
+			TestedAt:  t0,
+		}, nil
+	}
+
+	// 4. Test the new key.
+	testErr := tester.TestKey(ctx, buf)
+	latencyMS := int(time.Since(t0).Milliseconds())
+	if testErr != nil {
+		return RotationResult{
+			Success:   false,
+			Message:   "provider rejected the new key — try again",
+			LatencyMS: latencyMS,
+			TestedAt:  t0,
+		}, nil
+	}
+
+	// 5. Write the new key to the keychain.
+	if a.keychain == nil {
+		return RotationResult{}, errors.New("llm: TestAndRotateKey: no keychain writer configured")
+	}
+	if err := a.keychain.Write(ctx, profile.Cred.Locator, buf); err != nil {
+		return RotationResult{}, fmt.Errorf("llm: TestAndRotateKey: keychain write %q: %w", profile.Cred.Locator, err)
+	}
+	// Buffer is zeroed by defer; no further access after this point.
+
+	// 6. Invalidate the cached credential so the next Stream call resolves fresh.
+	if a.credInvalidator != nil {
+		a.credInvalidator.InvalidateCred(profile.Cred.Kind, profile.Cred.Locator)
+	}
+
+	rotatedAt := time.Now()
+
+	// 7. Audit emission.
+	if a.auditRotation != nil {
+		src := source
+		if src == "" {
+			src = "inline-toast"
+		}
+		_ = a.auditRotation.EmitRotated(ctx, profile.Kind, profileID, src, rotatedAt)
+	}
+
+	// 8. Auto-resume token: look up any paused chat sub for this profile.
+	autoResumeToken := ""
+	if a.chatRunner != nil {
+		if token, ok := a.chatRunner.HasPausedSubFor(profileID); ok {
+			autoResumeToken = token
+		}
+	}
+
+	return RotationResult{
+		Success:         true,
+		LatencyMS:       latencyMS,
+		TestedAt:        t0,
+		AutoResumeToken: autoResumeToken,
+	}, nil
+}
+
+// keychainRotationFeatureEnabled reads HARNESS_KEYCHAIN_ROTATION at call time.
+// Mirrors the chat-runner helper but lives here so the LLM view does not
+// import the chat package (DIRECTIVE_001).
+func keychainRotationFeatureEnabled() bool {
+	v := os.Getenv("HARNESS_KEYCHAIN_ROTATION")
+	switch v {
+	case "off", "0", "false":
+		return false
+	default:
+		return true
+	}
+}
+
+// ResumeAfterKeyRotation drives a fresh kernel run for the paused chat
+// turn associated with the given profileID (the resumeToken is the
+// profile_id from the RotationResult — the sub_id was just a hint for
+// the frontend to correlate the toast with the subscription).
+//
+// If no paused turn exists, returns nil (no-op). This keeps the wire
+// shape safe to call without a pre-flight check on the frontend.
+// (provider-keychain-rotation-01KQ8TD9 WP04)
+func (a *API) ResumeAfterKeyRotation(ctx context.Context, resumeToken string) error {
+	if a.chatRunner == nil {
+		return nil
+	}
+	// resumeToken is the profileID; RedriveLastTurn looks up the paused
+	// turn by profileID and removes it from the table atomically.
+	_, err := a.chatRunner.RedriveLastTurn(ctx, resumeToken)
+	if err != nil {
+		// A miss is a no-op rather than an error — the user may have
+		// already dismissed the toast and manually resubmitted.
+		logging.L().Warn("chat.redrive_last_turn.miss",
+			"profile_id", resumeToken, "err", err.Error())
+		return nil
+	}
+	return nil
 }

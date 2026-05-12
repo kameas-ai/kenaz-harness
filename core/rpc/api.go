@@ -219,6 +219,12 @@ type AppInfo struct {
 	// Controls whether the /policy route registers and write-path RPCs are
 	// available (cedar-policy-editor-ui-01KQ8TD6 WP01).
 	PolicyEditorEnabled bool `json:"policyEditorEnabled"`
+	// KeychainRotationEnabled is true when the HARNESS_KEYCHAIN_ROTATION env
+	// var is not set to "off", "0", or "false". The frontend uses this to
+	// hide the "Auto-resume after rotating an API key" Settings toggle and
+	// the AuthFailureToast rotate button when the feature is disabled.
+	// (provider-keychain-rotation-01KQ8TD9 WP07)
+	KeychainRotationEnabled bool `json:"keychainRotationEnabled"`
 }
 
 // WindowSize mirrors the charter shape.
@@ -289,6 +295,10 @@ type API struct {
 	// Read once at boot; cached here so AppInfo can report it without
 	// an os.Getenv on every call (cedar-policy-editor-ui-01KQ8TD6 WP01).
 	policyEditorEnabled bool
+	// keychainRotationEnabled mirrors the HARNESS_KEYCHAIN_ROTATION env flag.
+	// Read once at boot; cached here so AppInfo can report it without
+	// an os.Getenv on every call (provider-keychain-rotation-01KQ8TD9 WP07).
+	keychainRotationEnabled bool
 
 	// cedarProposeResolver is the in-process resolver for pending
 	// cedar:propose-pending requests (WP07 of
@@ -1118,6 +1128,17 @@ func New(c *core.Core) *API {
 		policyEditorEnabled := editorEnv != "0" && editorEnv != "false"
 		a.policyEditorEnabled = policyEditorEnabled
 		a.cedarPolicyAPI = cedarpolicyview.NewAPIWithOptions(cedarEng, cedarDataDir, nil, policyEditorEnabled)
+
+		// Read HARNESS_KEYCHAIN_ROTATION once at boot. Default = on ("").
+		// Set to "off", "0", or "false" to disable the rotation UI.
+		// (provider-keychain-rotation-01KQ8TD9 WP07)
+		kcrEnv := os.Getenv("HARNESS_KEYCHAIN_ROTATION")
+		switch kcrEnv {
+		case "off", "0", "false":
+			a.keychainRotationEnabled = false
+		default:
+			a.keychainRotationEnabled = true
+		}
 
 		// Permissions view — uses the process-singleton prompt registry
 		// constructed at api.New() time (right after the broker) so the
@@ -3859,17 +3880,20 @@ func buildLabel(c *core.Core) string {
 // core.BuildVersion(); GoVersion and Platform come from runtime.
 func (a *API) AppInfo(_ context.Context) (AppInfo, error) {
 	policyEditorEnabled := true
+	keychainRotationEnabled := true
 	if a != nil {
 		policyEditorEnabled = a.policyEditorEnabled
+		keychainRotationEnabled = a.keychainRotationEnabled
 	}
 	return AppInfo{
-		Build:               buildLabel(a.core),
-		Commit:              "unknown",
-		BuildTime:           "",
-		GoVersion:           runtime.Version(),
-		Platform:            runtime.GOOS + "/" + runtime.GOARCH,
-		WindowSize:          WindowSize{Width: 1280, Height: 800},
-		PolicyEditorEnabled: policyEditorEnabled,
+		Build:                   buildLabel(a.core),
+		Commit:                  "unknown",
+		BuildTime:               "",
+		GoVersion:               runtime.Version(),
+		Platform:                runtime.GOOS + "/" + runtime.GOARCH,
+		WindowSize:              WindowSize{Width: 1280, Height: 800},
+		PolicyEditorEnabled:     policyEditorEnabled,
+		KeychainRotationEnabled: keychainRotationEnabled,
 	}, nil
 }
 
