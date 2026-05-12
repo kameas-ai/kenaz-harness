@@ -28,7 +28,11 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: ${{ env.GO_VERSION }}
-          cache: true
+          # cache: false on self-hosted ARM64 runners — they persist
+          # /home/go/pkg/mod/ across jobs, so the action's tar-restore
+          # collides with existing files ("Cannot open: File exists").
+          # Modules carry over naturally; no caching needed.
+          cache: false
 
       - name: go mod download
         run: go mod download
@@ -101,7 +105,11 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: ${{ env.GO_VERSION }}
-          cache: true
+          # cache: false on self-hosted ARM64 runners — they persist
+          # /home/go/pkg/mod/ across jobs, so the action's tar-restore
+          # collides with existing files ("Cannot open: File exists").
+          # Modules carry over naturally; no caching needed.
+          cache: false
 
       - name: go mod download
         run: go mod download

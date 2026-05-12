@@ -38,17 +38,47 @@ The leading `feat:` (no scope) gives the right minor bump; the `vX.Y.Z` in the s
 | Workflow | Trigger | Purpose |
 |---|---|---|
 | `pr-title.yml` | PR open/edit | Conventional Commits gate (single source of truth for the bump computation) |
-| `pr.yml` | PR push | Go lint+vet+codegen drift, Go tests `-race -short`, Frontend tests + typecheck, Smoke build (linux/amd64) |
+| `pr.yml` | PR push | Go lint+vet+codegen drift, Go tests `-race -short`, Frontend tests + typecheck |
 | `tag-on-merge.yml` | push to `main` | Reads the squash-commit subject, computes next tag, pushes the tag, creates the GitHub Release, dispatches `release.yml` for binary builds |
 | `release.yml` | tag push or `workflow_dispatch` | Cross-platform signed builds (macOS .dmg + Windows NSIS + Linux AppImage), publish to env-specific S3 (dev/stage/prod chosen by trigger) |
 
-### Self-hosted runner gotcha
+### Runner pool policy
 
-The `ci-fast` self-hosted ARM64 runners **do not have `gh` CLI pre-installed**. Any workflow step that uses `gh` must include an "install gh CLI if missing" step that direct-downloads the binary (see `.github/workflows/release.yml:807` for the canonical block). Missing this is why PR #109/#111 + the v0.8.0 `tag-on-merge` GitHub Release step failed silently while the tag itself still got pushed.
+**Org policy (kameas-ai): Linux CI runs on the `kameas-ci-*` self-hosted ARM64 pool. GitHub-hosted runners (`ubuntu-latest`, `macos-latest`, `windows-latest`) are reserved for cross-platform release builds in `release.yml` where native compilation requires the target OS** (i.e. Apple + Microsoft). PR-time CI must never use GitHub-hosted runners — the org billing cap will block jobs from provisioning, and Linux jobs have a self-hosted alternative.
 
-### Burned tags
+Current runner usage:
+
+- `pr-title.yml` → `ci-fast` (self-hosted)
+- `pr.yml` (all jobs: lint-go, test-go, test-frontend) → `ci-medium` (self-hosted)
+- `tag-on-merge.yml` → `ci-fast` (self-hosted)
+- `release.yml` → `ci-fast`/`ci-medium` for coordinators; `macos-latest` for darwin; `windows-latest` for windows. The linux-amd64 and linux-arm64 release builds **still use `ubuntu-latest` / `ubuntu-24.04-arm`** as documented drift — no self-hosted Linux image with the Wails toolchain (libgtk-3-dev + libwebkit2gtk-4.1-dev) exists yet. Tracked.
+
+### Self-hosted runner caveats
+
+The kameas-ci-medium / ci-fast image **is not Debian-family**:
+- **No `apt-get`.** Workflows cannot install Linux system deps at job time. The v0.8.0 smoke build job (Wails build with GTK deps) was dropped in v0.9.0 for this reason — cross-platform builds happen in `release.yml` against tags.
+- **No pre-installed `gh` CLI on `ci-fast`.** Workflow steps using `gh` (release notes, release creation) must include an install-on-demand block — see `.github/workflows/release.yml:807` for the canonical pattern. Missing this is why PR #109/#111 + the v0.8.0 `tag-on-merge` GitHub Release step failed silently while the tag itself still got pushed.
+- **GOPATH persists across jobs.** `actions/setup-go@v5` with `cache: true` will fail with `tar: Cannot open: File exists` because the action tries to extract its module cache on top of an existing one. **Always set `cache: false` on `setup-go@v5`** for self-hosted jobs — Go modules carry over naturally, no caching needed.
+- **CGO autodetection is fragile.** `setup-go@v5` sometimes flips `CGO_ENABLED=0` when it doesn't find a compiler at the version-cache path. The runner ships gcc + glibc-devel but the action misses them. For `-race` tests (which require CGO), set `CGO_ENABLED: "1"` explicitly in the step env. See the `test-go` job for the canonical pattern.
+
+### Branch ruleset gotcha
+
+Repo ruleset `15871858` ("main: PR-only with required CI") enforces required status checks **by exact job name**. Renaming or removing a CI job (e.g. `Smoke build (linux/amd64)` in v0.9.0) leaves the ruleset waiting on a check that will never come — every subsequent PR merge blocks indefinitely.
+
+When renaming or removing a required CI job, update the ruleset in parallel:
+
+```bash
+rtk proxy gh api /repos/kameas-ai/kenaz-harness/rulesets/15871858 --jq '.rules' > /tmp/rules.json
+# edit /tmp/rules.json — drop / rename required_status_checks entries to match
+rtk proxy gh api -X PUT /repos/kameas-ai/kenaz-harness/rulesets/15871858 \
+  --input <(echo '{"rules": '$(cat /tmp/rules.json)'}')
+```
+
+### Burned tags + roadmap-vs-tag drift
 
 Version numbers consumed by infra/release-pipeline iterations are *real tags* on the remote and cannot be reclaimed for feature work. v0.6.0 and v0.7.0–v0.7.5 were burned by release-pipeline migration commits in May 2026. `docs/roadmap.md` has a "Note on burned version numbers" preamble that records the shift; always check git tags + the roadmap before slotting a planned minor.
+
+`docs/roadmap.md` slot labels (e.g. "v0.8.5 — UX maturity") are **planning artifacts, not version contracts**. The next tag is whatever `tag-on-merge.yml` bumps from the latest tag using the PR's Conventional Commits prefix. Example: v0.8.5-themed UX work landed as **`v0.9.0`** because v0.8.4 + `feat:` = v0.9.0. Accept the drift; don't contort PR titles to hit a planning label. When the user references a roadmap slot, translate to the current tag context before acting.
 
 ---
 
