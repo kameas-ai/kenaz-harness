@@ -30,7 +30,6 @@ import (
 	llm "github.com/sigil-tech/kaneaz-harness/core/llm"
 	"github.com/sigil-tech/kaneaz-harness/core/llm/capabilities"
 	"github.com/sigil-tech/kaneaz-harness/core/llm/httpx"
-	"github.com/sigil-tech/kaneaz-harness/core/logging"
 )
 
 // Kind is the canonical provider kind for the OpenAI adapter. It must
@@ -396,19 +395,17 @@ func flattenText(parts []llm.ContentBlock) string {
 
 // buildOpenAIContent emits the JSON value to put under a message's
 // `content` field. Pure-text messages stay as a single string (the
-// classic Chat Completions shape); messages that carry image / document
-// blocks switch to the array-of-parts shape per
+// classic Chat Completions shape); messages that carry image blocks
+// switch to the array-of-parts shape per
 // https://platform.openai.com/docs/guides/vision.
 //
-// Document blocks are NOT serialized in WP01 — Chat Completions does
-// not accept inline PDFs (the Files API is a separate endpoint). WP03
-// adds a capability gate that rejects document inputs against an
-// OpenAI profile before they reach this builder; for now we drop the
-// block with a warn log so the request still goes through the text
-// portion of the message instead of failing the whole turn.
-//
-// TODO(WP03): replace the silent drop with an UnsupportedModalityError
-// returned from buildRequest validation.
+// Document blocks (PDF) are NOT serialized — Chat Completions does not
+// accept inline PDFs. The capabilities gate (CheckAttachments) rejects
+// PDF blocks pre-flight for OpenAI profiles (document_input: false in
+// openai.yaml), so document blocks should never reach this builder.
+// If one arrives anyway (e.g. a caller bypassing the registry), it is
+// dropped silently so the text portion of the message still goes through
+// (multimodal-io-01KQ8TDF FR-012).
 func buildOpenAIContent(parts []llm.ContentBlock) any {
 	if hasMultimodal(parts) {
 		out := make([]map[string]any, 0, len(parts))
@@ -428,9 +425,11 @@ func buildOpenAIContent(parts []llm.ContentBlock) any {
 					"image_url": map[string]any{"url": dataURL(p.Source)},
 				})
 			case "document":
-				logging.L().Warn("openai.serialize.document_dropped",
-					"media_type", mediaTypeOf(p.Source),
-					"reason", "openai_chat_completions_does_not_accept_inline_documents")
+				// Gate-rejected pre-flight; defensive drop here so the text
+				// portion of the turn is not lost if a caller bypasses the registry.
+				// The openai.yaml has document_input: false, so the gate
+				// (CheckAttachments) returns ErrAttachmentMimeUnsupported before
+				// this function is ever called in production.
 				continue
 			default:
 				if p.Text != "" {
