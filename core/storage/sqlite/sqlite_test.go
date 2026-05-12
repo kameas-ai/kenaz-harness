@@ -141,7 +141,9 @@ func TestOpen_RegistersSessionMigrations(t *testing.T) {
 	// workflows-agentic-01KW2D3X WP02; 0322 (last_usage_json) lands with
 	// backend-context-window-length-01KQ8TD3 WP02; 0323 (branch display-meta
 	// columns) lands with branching-ux-polish-01KQ8TD7 WP01.
-	want := []int{300, 301, 302, 303, 304, 305, 306, 307, 308, 309, 310, 311, 312, 313, 314, 315, 316, 317, 318, 319, 320, 321, 322, 323, 324}
+	// 0324 (artifact_versions); 0325 (scheduled_chat_runs + indexes) lands
+	// with scheduled-chat-runs-01KX5R8B WP01.
+	want := []int{300, 301, 302, 303, 304, 305, 306, 307, 308, 309, 310, 311, 312, 313, 314, 315, 316, 317, 318, 319, 320, 321, 322, 323, 324, 325}
 	if len(versions) != len(want) {
 		t.Fatalf("session migrations applied = %v, want %v", versions, want)
 	}
@@ -187,9 +189,10 @@ func TestOpen_ApplyIdempotent(t *testing.T) {
 	// 1 workflows (0319) + 1 workflow_runs_cache (0320) +
 	// 1 workflow_schedules (0321) + 1 last_usage_json (0322) +
 	// 1 branch-display-meta (0323) + 1 artifact_versions (0324) +
-	// 1 slash_commands_user (1000) = 28.
-	if count != 28 {
-		t.Errorf("ledger count = %d, want 28", count)
+	// 1 scheduled_chat_runs (0325, scheduled-chat-runs-01KX5R8B) +
+	// 1 slash_commands_user (1000) = 29.
+	if count != 29 {
+		t.Errorf("ledger count = %d, want 29", count)
 	}
 }
 

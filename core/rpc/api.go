@@ -87,12 +87,14 @@ import (
 	scheduledchatview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/scheduledchat"
 	storageview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/storage"
 	elicitview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/elicit"
+	secretsview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/secrets"
 	"github.com/sigil-tech/kaneaz-harness/core/autonomy"
 	"github.com/sigil-tech/kaneaz-harness/core/secrets"
 	coreslashcmd "github.com/sigil-tech/kaneaz-harness/core/slashcmd"
 	corebash "github.com/sigil-tech/kaneaz-harness/core/tools/bash"
 	coreskill "github.com/sigil-tech/kaneaz-harness/core/tools/skill"
 	secretsref "github.com/sigil-tech/kaneaz-harness/core/secrets/ref"
+	credstoreRefs "github.com/sigil-tech/kaneaz-harness/core/credstore/refs"
 	"github.com/sigil-tech/kaneaz-harness/core/session"
 	"github.com/sigil-tech/kaneaz-harness/core/storage"
 	"github.com/sigil-tech/kaneaz-harness/core/toolloop"
@@ -199,6 +201,13 @@ type HarnessAPI interface {
 	// Settings → Scheduled Chats panel creates and manages prompt-template
 	// jobs fired by the existing core/scheduler cron engine.
 	ScheduledChat() scheduledchatview.ScheduledChatAPI
+
+	// Secrets exposes the model-accessible secrets RPC surface (mission
+	// model-secret-references-01KW7M5A WP10). The frontend's
+	// ModelAccessibleSecretsPanel reads SecretRows, exposes new secrets
+	// via ExposeSecret, and revokes them via RevokeSecret. No plaintext
+	// is ever returned to the frontend.
+	Secrets() secretsview.SecretsAPI
 }
 
 // ShellStatus drives the Toolbar status pills + LegendBar live-rate
@@ -395,6 +404,16 @@ type API struct {
 	// ask-user-question-interactive-01KZNP3G WP04). Constructed in New
 	// and wired with a concrete Delegate into the askuserquestion tool.
 	elicitAPI *elicitview.API
+
+	// secretsAPI is the model-accessible secrets RPC surface (mission
+	// model-secret-references-01KW7M5A WP10). Backed by exposureIdx.
+	secretsAPI secretsview.SecretsAPI
+	// exposureIdx is the process-singleton ExposureIndex used by the
+	// list_secrets and web_fetch built-in tools. Constructed once in
+	// New() so every component that needs to read or write the exposure
+	// set (builtins, secrets view, future slash commands) sees the same
+	// instance.
+	exposureIdx *secrets.ExposureIndex
 
 	// wfScheduler is the cron-backed workflow scheduler
 	// (workflows-agentic-01KW2D3X WP02). Started on SetContext; stopped
@@ -739,6 +758,14 @@ func New(c *core.Core) *API {
 		}()
 	}
 
+	// model-secret-references-01KW7M5A WP10: construct the process-singleton
+	// ExposureIndex. All secrets exposed via /secret add or the Settings
+	// Secrets panel are stored here. The list_secrets and web_fetch built-in
+	// tools, the refs.Resolver, and the secrets view all share this instance.
+	a.exposureIdx = secrets.NewExposureIndex()
+	a.secretsAPI = secretsview.NewAPI(a.exposureIdx)
+	logging.L().Info("rpc.boot.exposure_index_created")
+
 	hooksRunner, hookRegistry, hookBuiltins := newHooksStack(c, retriever, memStore, embedder)
 	// Register skill-catalog pre_send hook so the model sees the
 	// model-invokable commands at send time (model-invoked-skills-catalog-01KZNP3E WP03).
@@ -822,7 +849,7 @@ func New(c *core.Core) *API {
 	a.corpusMgr = newCorpusManager(c, embedder)
 	a.graphMgr = newGraphManagerWithDeps(c, a.convMgr, a.corpusMgr, memStore, embedder, a_bashStore)
 
-	stack := newLLMStack(c, a.broker, personalForLLM, hooksRunner, attMgr, confirmEachEnabled, artifactSink, artifactSinkConcrete, settingsImpl, a_bashStore, artMgr, a.graphMgr, a.promptRegistry, usageMgr, a.elicitAPI, slashDispatch)
+	stack := newLLMStack(c, a.broker, personalForLLM, hooksRunner, attMgr, confirmEachEnabled, artifactSink, artifactSinkConcrete, settingsImpl, a_bashStore, artMgr, a.graphMgr, a.promptRegistry, usageMgr, a.elicitAPI, slashDispatch, a.exposureIdx)
 	a.llmAPI = stack.api
 	a.stdioPool = stack.pool
 	a.builtins = stack.builtins
@@ -1068,7 +1095,7 @@ func New(c *core.Core) *API {
 	// the view degrades to the registry-only API which returns "not wired"
 	// for user commands.
 	{
-		slashRegistry := newSlashRegistry(c, a.llmAPI, memStore, embedder, a.branchesAPI, a.workflowsAPI)
+		slashRegistry := newSlashRegistry(c, a.llmAPI, memStore, embedder, a.branchesAPI, a.workflowsAPI, a.exposureIdx)
 		if slashStore != nil && slashDispatch != nil {
 			a.slashAPI = slashview.NewWithStore(slashRegistry, slashStore, slashDispatch)
 			logging.L().Info("rpc.slashcmd.user_wired",
@@ -1274,7 +1301,7 @@ func New(c *core.Core) *API {
 // workflows API (used by /wf).
 // Returns nil when registry construction fails; the view degrades
 // to a friendly error response on every Execute.
-func newSlashRegistry(c *core.Core, llmAPI llm.LLMConnectorAPI, memStore corememory.Store, embedder corememory.Embedder, branchesAPI branchesview.BranchesAPI, workflowsAPI workflowsview.WorkflowsAPI) *coreslashcmd.Registry {
+func newSlashRegistry(c *core.Core, llmAPI llm.LLMConnectorAPI, memStore corememory.Store, embedder corememory.Embedder, branchesAPI branchesview.BranchesAPI, workflowsAPI workflowsview.WorkflowsAPI, exposureIdx *secrets.ExposureIndex) *coreslashcmd.Registry {
 	deps := coreslashcmd.Deps{}
 	if c != nil && c.SessionManager() != nil {
 		deps.Sessions = &slashSessionAppender{mgr: c.SessionManager()}
@@ -1290,6 +1317,9 @@ func newSlashRegistry(c *core.Core, llmAPI llm.LLMConnectorAPI, memStore coremem
 	}
 	if workflowsAPI != nil {
 		deps.Workflows = &slashWorkflowsGateway{inner: workflowsAPI}
+	}
+	if exposureIdx != nil {
+		deps.Secrets = &slashSecretExposer{idx: exposureIdx}
 	}
 	registry, err := coreslashcmd.NewRegistry(deps)
 	if err != nil {
@@ -1602,6 +1632,43 @@ func (g *slashWorkflowsGateway) Run(ctx context.Context, id string, inputs map[s
 	}
 	close(ch)
 	return ch, nil
+}
+
+// slashSecretExposer adapts *secrets.ExposureIndex onto the narrow
+// SecretExposer contract /secret consumes.
+// (model-secret-references-01KW7M5A WP11)
+type slashSecretExposer struct {
+	idx *secrets.ExposureIndex
+}
+
+func (s *slashSecretExposer) Expose(_ context.Context, locator, description, kind string, plaintext []byte) error {
+	if s == nil || s.idx == nil {
+		return errors.New("slashcmd: secrets subsystem not wired")
+	}
+	entry := secrets.ExposedEntry{
+		Locator:     locator,
+		Description: description,
+		Scope:       secrets.ScopeSession,
+		KindHint:    secrets.KindHint(kind),
+	}
+	s.idx.Add(entry, plaintext)
+	// Zero the caller's buffer too.
+	for i := range plaintext {
+		plaintext[i] = 0
+	}
+	return nil
+}
+
+func (s *slashSecretExposer) ListLocators(_ context.Context) ([]string, error) {
+	if s == nil || s.idx == nil {
+		return nil, nil
+	}
+	entries := s.idx.List(context.Background(), "")
+	out := make([]string, 0, len(entries))
+	for _, e := range entries {
+		out = append(out, e.Locator)
+	}
+	return out, nil
 }
 
 // newSessionsAPI returns the real Manager-backed SessionsAPI when c
@@ -2093,6 +2160,7 @@ func newLLMStack(
 	usageMgr usage.Manager,
 	elicitAPI *elicitview.API,
 	slashDispatch *coreslashcmd.Dispatch,
+	exposureIdx *secrets.ExposureIndex,
 ) llmStack {
 	// Share ONE secrets backend between the credref resolver (which
 	// reads keys when streaming) and the keychain writer (which stages
@@ -2205,7 +2273,13 @@ func newLLMStack(
 	if dataDir != "" {
 		bashCedarEngine = buildCedarEngineOrNil(dataDir)
 	}
-	registerBuiltinTools(c, builtinRegistry, bashStore, artifactsMgr, settingsStore, bashCedarEngine, promptRegistry, elicitAPI, slashDispatch)
+	// A default resolution budget of DefaultBudget (50) per locator per session.
+	// A nil exposureIdx safely skips list_secrets registration.
+	var secretsBudget *credstoreRefs.Budget
+	if exposureIdx != nil {
+		secretsBudget = credstoreRefs.NewBudget(credstoreRefs.DefaultBudget)
+	}
+	registerBuiltinTools(c, builtinRegistry, bashStore, artifactsMgr, settingsStore, bashCedarEngine, promptRegistry, elicitAPI, slashDispatch, exposureIdx, secretsBudget)
 	// builtin-filesystem-tools-01KR3N4P: register the read/write family of
 	// in-process filesystem tools. Gated behind per-family settings dials
 	// (FSReadEnabled / FSWriteEnabled) so the Tools panel toggles take effect
@@ -4037,6 +4111,16 @@ func (a *API) ScheduledChat() scheduledchatview.ScheduledChatAPI {
 		return scheduledchatview.New(scheduledchatview.Config{})
 	}
 	return a.scheduledChatAPI
+}
+
+// Secrets returns the model-accessible secrets RPC surface (mission
+// model-secret-references-01KW7M5A WP10). When not yet wired, returns
+// a stub backed by an empty ExposureIndex.
+func (a *API) Secrets() secretsview.SecretsAPI {
+	if a.secretsAPI == nil {
+		return secretsview.NewAPI(secrets.NewExposureIndex())
+	}
+	return a.secretsAPI
 }
 
 // SetCedarProposeResolver wires a resolver at runtime. Called by the

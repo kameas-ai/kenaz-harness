@@ -14,6 +14,7 @@ import (
 	"time"
 
 	cedargo "github.com/cedar-policy/cedar-go"
+	"github.com/sigil-tech/kaneaz-harness/core/credstore/refs"
 	"github.com/sigil-tech/kaneaz-harness/core/policy/cedar"
 )
 
@@ -280,27 +281,56 @@ func (t *Tool) Call(ctx context.Context, argsJSON json.RawMessage) (json.RawMess
 		"timeout_seconds", int(timeout/time.Second),
 	)
 
+	// ── @secret: reference substitution (WP08) ──────────────────────────
+	// Substitute references in the command string. The resolver is wired
+	// via context by the chat runner (via refs.WithResolver). When nil
+	// (test paths, no resolver wired) the command passes through unchanged.
+	commandLine := args.Command
+	resolver := refs.ResolverFromContext(ctx)
+	if resolver != nil && refs.HasReference(commandLine) {
+		rctx := cedar.ResolveContext{ToolName: Name}
+		sub, _, subErr := resolver.Substitute(ctx, commandLine, rctx)
+		if subErr != nil {
+			return marshalResult(callResult{
+				Stderr:   "secret resolution failed: " + subErr.Error(),
+				ExitCode: -1,
+			})
+		}
+		commandLine = sub
+		// ZeroBuffer is not applicable here since commandLine is a Go string;
+		// the internal buffer was already zeroed by refs.Substitute.
+	}
+
 	res, runErr := Run(ctx, RunOpts{
-		CommandLine:    args.Command,
+		CommandLine:    commandLine,
 		Cwd:            cwd,
 		Timeout:        timeout,
 		MaxOutputBytes: DefaultMaxOutputBytes,
 	})
 	exitCode := res.ExitCode
-	stderr := string(res.Stderr)
+	rawStderr := string(res.Stderr)
 	if runErr != nil {
 		// Run already populated the partial buffers and exit -1.
 		// Append the error reason so the model can read it.
-		if stderr != "" && !strings.HasSuffix(stderr, "\n") {
-			stderr += "\n"
+		if rawStderr != "" && !strings.HasSuffix(rawStderr, "\n") {
+			rawStderr += "\n"
 		}
-		stderr += runErr.Error()
+		rawStderr += runErr.Error()
 		if exitCode == 0 {
 			exitCode = -1
 		}
 		t.logf("bash.run_error", "err", runErr.Error())
 	}
-	stdout := string(res.Stdout)
+	// Sanitize stdout and stderr to redact any resolved plaintext (WP08).
+	sanitizer := refs.SanitizerFromContext(ctx)
+	stdoutBytes := res.Stdout
+	stderrBytes := []byte(rawStderr)
+	if sanitizer != nil {
+		stdoutBytes = sanitizer.Sanitize(stdoutBytes)
+		stderrBytes = sanitizer.Sanitize(stderrBytes)
+	}
+	stdout := string(stdoutBytes)
+	stderr := string(stderrBytes)
 	runID := ""
 	if t.store != nil {
 		runID = t.allocRunID()

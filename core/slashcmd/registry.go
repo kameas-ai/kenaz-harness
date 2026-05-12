@@ -16,6 +16,10 @@ type Deps struct {
 	Memory    MemoryGateway
 	Branches  BranchGateway
 	Workflows WorkflowsGateway
+	// Secrets is the model-accessible secrets gateway used by /secret.
+	// Nil means /secret returns a friendly "not wired" error.
+	// (model-secret-references-01KW7M5A WP11)
+	Secrets SecretExposer
 }
 
 // Registry is the dispatch table. Construct with NewRegistry(deps);
@@ -134,6 +138,7 @@ func (r *Registry) Execute(ctx context.Context, sessionID, raw string) (Result, 
 		Memory:    r.deps.Memory,
 		Branches:  r.deps.Branches,
 		Workflows: r.deps.Workflows,
+		Secrets:   r.deps.Secrets,
 		Registry:  r,
 	}
 	return cmd.Run(ctx, env, args)
@@ -175,5 +180,7 @@ func defaultCommands() []Command {
 		forgetCommand{},
 		branchCommand{},
 		wfCommand{},
+		// model-secret-references-01KW7M5A WP11 — /secret subcommand.
+		secretCommand{},
 	}
 }

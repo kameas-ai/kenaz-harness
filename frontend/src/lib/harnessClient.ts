@@ -646,6 +646,14 @@ interface WailsBindingsLike {
 
   // ── feature flags (user-slash-commands-01KQ8TD9 WP09) ───────────────
   Config_GetFlags(): Promise<FeatureFlagInfo[]>;
+
+  // ── Model-Accessible Secrets (model-secret-references-01KW7M5A WP10) ─
+  /** Returns all currently exposed secrets. No plaintext in the result. */
+  Secrets_List(): Promise<import('./types').ModelSecretRow[]>;
+  /** Exposes a new secret under the given locator. Plaintext is zeroed server-side. */
+  Secrets_Expose(req: import('./types').ModelSecretExposeRequest): Promise<void>;
+  /** Removes a secret from the exposure index. */
+  Secrets_Revoke(locator: string): Promise<void>;
 }
 
 
@@ -2282,6 +2290,23 @@ export interface ConfigClient {
   getFlags(): Promise<FeatureFlagInfo[]>;
 }
 
+/**
+ * SecretsClient — model-accessible secrets panel surface.
+ * Mission: model-secret-references-01KW7M5A WP10.
+ *
+ * No plaintext is ever returned to the frontend. The `ref` field in
+ * ModelSecretRow is the @secret:<locator> token the model writes in
+ * tool arguments (web_fetch headers, bash commands, etc.).
+ */
+export interface SecretsClient {
+  /** List all secrets currently exposed to the model. */
+  list(): Promise<import('./types').ModelSecretRow[]>;
+  /** Expose a new secret. Plaintext is zeroed server-side immediately. */
+  expose(req: import('./types').ModelSecretExposeRequest): Promise<void>;
+  /** Revoke an exposed secret by locator. */
+  revoke(locator: string): Promise<void>;
+}
+
 export interface HarnessClient {
   shellStatus(): Promise<ShellStatus>;
   appInfo(): Promise<AppInfo>;
@@ -2330,6 +2355,8 @@ export interface HarnessClient {
   elicit: ElicitClient;
   /** Config / feature-flag client (slash-commands WP09). */
   config: ConfigClient;
+  /** Model-accessible secrets panel client (model-secret-references-01KW7M5A WP10). */
+  secrets: SecretsClient;
 }
 
 // ── runtime client ─────────────────────────────────────────────────────
@@ -2819,6 +2846,11 @@ export function createHarnessClient(): HarnessClient {
     },
     config: {
       getFlags: () => b().Config_GetFlags(),
+    },
+    secrets: {
+      list: () => b().Secrets_List(),
+      expose: (req) => b().Secrets_Expose(req),
+      revoke: (locator) => b().Secrets_Revoke(locator),
     },
   };
 }
@@ -3734,6 +3766,11 @@ export function createFakeHarnessClient(
           envVar: 'HARNESS_USER_SLASHCMD',
         },
       ],
+    },
+    secrets: {
+      list: async () => [],
+      expose: noop,
+      revoke: noop,
     },
     slashcmd: {
       list: async (_projectID: string) => [],

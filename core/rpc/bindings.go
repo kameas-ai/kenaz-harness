@@ -49,6 +49,7 @@ import (
 	scheduledchatview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/scheduledchat"
 	storageview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/storage"
 	elicitview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/elicit"
+	secretsview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/secrets"
 	"github.com/sigil-tech/kaneaz-harness/core/logging"
 	"github.com/sigil-tech/kaneaz-harness/core/mcp/stdio"
 )
@@ -2094,4 +2095,26 @@ func (b *Bindings) Elicit_AnswerDeferred(askID string, answer any) (string, erro
 // frontend can reconcile its dialog queue on reconnect / hot reload.
 func (b *Bindings) Elicit_ListPending() ([]elicitview.ElicitRequest, error) {
 	return b.api.Elicit().ListPending(b.ctx())
+}
+
+// ── secrets (model-secret-references-01KW7M5A, WP10) ─────────────────
+
+// Secrets_List returns all currently exposed secrets for the session.
+// Plaintext is never included in the result (FR-005a). The Ref field
+// contains the @secret:<locator> token the model writes in tool args.
+func (b *Bindings) Secrets_List() ([]secretsview.SecretRow, error) {
+	return b.api.Secrets().ListSecrets(b.ctx())
+}
+
+// Secrets_Expose adds a new secret to the model-accessible exposure
+// index. The plaintext in req is zeroed server-side before this method
+// returns; it never re-enters the conversation context.
+func (b *Bindings) Secrets_Expose(req secretsview.ExposeRequest) error {
+	return b.api.Secrets().ExposeSecret(b.ctx(), req)
+}
+
+// Secrets_Revoke removes a secret from the exposure index by locator.
+// Returns an error when the locator is not currently exposed.
+func (b *Bindings) Secrets_Revoke(locator string) error {
+	return b.api.Secrets().RevokeSecret(b.ctx(), locator)
 }

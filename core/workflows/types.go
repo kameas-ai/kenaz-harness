@@ -201,6 +201,20 @@ type Step struct {
 	Separator string `yaml:"separator,omitempty" json:"separator,omitempty"`
 }
 
+// WorkflowSecretRef declares one @secret: locator that a workflow needs
+// at runtime. The Locator is checked against the live ExposureIndex when
+// the run starts; the run fails fast if the locator is not exposed.
+//
+// No plaintext is stored here — this is a manifest entry only.
+// (model-secret-references-01KW7M5A WP12)
+type WorkflowSecretRef struct {
+	// Locator is the bare locator (e.g. "user:github-pat"), without
+	// the leading @secret: prefix.
+	Locator string `yaml:"locator" json:"locator"`
+	// Description is a human-readable hint shown in validation errors.
+	Description string `yaml:"description,omitempty" json:"description,omitempty"`
+}
+
 // Workflow is the in-memory representation of one workflow YAML file.
 type Workflow struct {
 	ID            string  `yaml:"id" json:"id"`
@@ -218,6 +232,23 @@ type Workflow struct {
 	// with Schedule. Defaults to UTC when empty.
 	Timezone string `yaml:"timezone,omitempty" json:"timezone,omitempty"`
 	Inputs        []Input `yaml:"inputs,omitempty" json:"inputs,omitempty"`
+	// Secrets declares the set of @secret: locators this workflow needs
+	// at runtime. Each entry names a locator from the session-scoped
+	// ExposureIndex; when the workflow engine starts a run it asserts
+	// all declared locators are exposed and fails fast if any are missing,
+	// so the model never reaches a step that would fail mid-run due to a
+	// missing credential.
+	//
+	// The entries do NOT carry plaintext — they are merely a manifest
+	// that the run validator checks against the live ExposureIndex.
+	//
+	// Example YAML:
+	//   secrets:
+	//     - locator: user:github-pat
+	//       description: "GitHub Personal Access Token"
+	//
+	// (model-secret-references-01KW7M5A WP12)
+	Secrets       []WorkflowSecretRef `yaml:"secrets,omitempty" json:"secrets,omitempty"`
 	Steps         []Step  `yaml:"steps" json:"steps"`
 
 	// Storage-layer metadata. Populated by Store.Load / Store.Save so

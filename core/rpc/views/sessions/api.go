@@ -92,6 +92,10 @@ type ToolCall struct {
 	Name        string `json:"name"`
 	ArgsSummary string `json:"argsSummary"`
 	Latency     string `json:"latency,omitempty"`
+	// UsedSecrets is true when the dispatch resolved at least one
+	// @secret: reference. Never carries plaintext — provenance only
+	// (model-secret-references-01KW7M5A WP14).
+	UsedSecrets bool `json:"usedSecrets,omitempty"`
 }
 
 // Message is a single chat-message entry. NEVER carries credential fields.

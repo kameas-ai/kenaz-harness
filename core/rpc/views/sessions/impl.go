@@ -515,6 +515,7 @@ func messageToView(m session.Message) Message {
 				ID:          tc.ID,
 				Name:        tc.Name,
 				ArgsSummary: "",
+				UsedSecrets: tc.UsedSecrets,
 			})
 		}
 	}

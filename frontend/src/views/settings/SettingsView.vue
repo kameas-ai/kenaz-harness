@@ -24,6 +24,7 @@ import FeatureFlagsView from '@/views/settings/FeatureFlagsView.vue';
 import HooksSettingsView from '@/views/settings/HooksSettingsView.vue';
 import WorkflowsSettingsPanel from '@/views/settings/WorkflowsSettingsPanel.vue';
 import ScheduledChatsPanel from '@/views/settings/scheduledchat/ScheduledChatsPanel.vue';
+import ModelAccessibleSecretsPanel from '@/views/settings/ModelAccessibleSecretsPanel.vue';
 import LongSessionNudgeSettings from '@/components/settings/LongSessionNudgeSettings.vue';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
 import { debouncedSave } from '@/lib/settings';
@@ -101,6 +102,13 @@ const showWorkflowsTab = computed<boolean>(() => {
 const showScheduledChatsTab = computed<boolean>(() => {
   const v = route?.query?.tab;
   return typeof v === 'string' && v === 'scheduledchats';
+});
+
+// model-secret-references-01KW7M5A WP10 — Model Secrets sub-tab.
+// Disambiguates via ?tab=secrets. Mount switch is in <template> below.
+const showSecretsTab = computed<boolean>(() => {
+  const v = route?.query?.tab;
+  return typeof v === 'string' && v === 'secrets';
 });
 
 const settings = ref<Settings>({
@@ -899,6 +907,15 @@ onMounted(() => {
       data-testid="settings-scheduledchats-pane"
     >
       <ScheduledChatsPanel />
+    </div>
+
+    <!-- model-secret-references-01KW7M5A WP10 — Model Secrets sub-tab. -->
+    <div
+      v-else-if="showSecretsTab"
+      class="px-6 py-4 max-w-3xl"
+      data-testid="settings-secrets-pane"
+    >
+      <ModelAccessibleSecretsPanel />
     </div>
 
     <div

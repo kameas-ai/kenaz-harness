@@ -147,6 +147,10 @@ type Env struct {
 	// Workflows is the workflow gateway used by /wf.
 	// Nil means /wf returns a friendly "workflows not wired" error.
 	Workflows WorkflowsGateway
+	// Secrets is the model-accessible secrets gateway used by /secret.
+	// Nil means /secret returns a friendly "secrets not wired" error.
+	// (model-secret-references-01KW7M5A WP11)
+	Secrets SecretExposer
 	// Registry references the owning Registry so meta-commands like
 	// /help can enumerate their siblings without a back-reference
 	// the registry would have to inject post-construction. Always
@@ -326,6 +330,24 @@ type WorkflowProgressEvent struct {
 // IsZero reports whether the model row is unpopulated.
 func (m BranchModel) IsZero() bool {
 	return m.ProviderID == "" && m.ModelID == ""
+}
+
+// SecretExposer is the narrow contract /secret consumes.
+// The rpc layer adapts the concrete SecretsAPI onto this shape so
+// the slashcmd package never imports the rpc/views/secrets package.
+//
+// Expose adds a secret to the model-accessible ExposureIndex. The
+// plaintext slice is zeroed by the implementation immediately after
+// being stored (FR-003 / WP11).
+//
+// List returns all currently exposed locators (no plaintext) so
+// `/secret list` can render the model-facing ref tokens.
+type SecretExposer interface {
+	// Expose stores a secret under the given locator. The plaintext slice
+	// is zeroed before this method returns.
+	Expose(ctx context.Context, locator, description, kind string, plaintext []byte) error
+	// ListLocators returns the set of currently exposed locators.
+	ListLocators(ctx context.Context) ([]string, error)
 }
 
 // AuthorisedModels returns the union of DefaultModel + Models with

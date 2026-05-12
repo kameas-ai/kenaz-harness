@@ -59,6 +59,9 @@ const tabs: ReadonlyArray<Tab> = [
   // scheduled-chat-runs-01KX5R8B WP05 — Scheduled Chats settings tab.
   // Disambiguates via ?tab=scheduledchats. See SettingsView.vue for the mount switch.
   { to: '/settings?tab=scheduledchats', label: 'Scheduled Chats', query: 'scheduledchats' },
+  // model-secret-references-01KW7M5A WP10 — Model Secrets settings tab.
+  // Disambiguates via ?tab=secrets. See SettingsView.vue for the mount switch.
+  { to: '/settings?tab=secrets', label: 'Secrets', query: 'secrets' },
   { to: '/providers', label: 'Providers' },
   { to: '/bundles', label: 'Bundles' },
   { to: '/permissions/bash', label: 'Permissions', matchPrefix: '/permissions' },

@@ -386,6 +386,37 @@ export interface SecretReference {
   createdAt: string;
 }
 
+/**
+ * ModelSecretRow — one entry in the model-accessible secrets panel.
+ * Mirrors core/rpc/views/secrets.SecretRow. No plaintext is included
+ * (FR-005a). The ref field is the @secret:<locator> token the model
+ * writes in tool arguments.
+ *
+ * IMPORTANT: DO NOT add a `value`, `secret`, `password`, `apiKey`,
+ * or `token` field — the privacy-CI lint rule flags them.
+ * (model-secret-references-01KW7M5A WP10)
+ */
+export interface ModelSecretRow {
+  ref: string;
+  locator: string;
+  description: string;
+  kind: string;
+  scope: string;
+  exposedAt: string;
+}
+
+/**
+ * ModelSecretExposeRequest — wire shape for Secrets_Expose.
+ * The plaintext field is zeroed server-side immediately after being
+ * handed to the ExposureIndex. It never enters the conversation context.
+ */
+export interface ModelSecretExposeRequest {
+  locator: string;
+  description: string;
+  kind: string;
+  plaintext: string;
+}
+
 export interface ContextEntry {
   id: string;
   kind: string;
@@ -882,6 +913,13 @@ export interface ToolCall {
   argsSummary: string;
   /** Optional latency display, e.g. `"412ms"`. */
   latency?: string;
+  /**
+   * True when the dispatch resolved at least one @secret: reference token
+   * in the tool arguments. Never carries plaintext — provenance only
+   * (model-secret-references-01KW7M5A WP14). Drives the lock icon in the
+   * chat UI.
+   */
+  usedSecrets?: boolean;
 }
 
 export interface Message {
