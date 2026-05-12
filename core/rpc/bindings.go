@@ -1186,6 +1186,9 @@ func (b *Bindings) Hooks_InstallStarterMemory() error {
 func (b *Bindings) Hooks_RemoveStarterMemory() error {
 	return b.api.Hooks().RemoveStarterMemoryHooks(b.ctx())
 }
+func (b *Bindings) Hooks_DryRun(hookID string, syntheticPayload string) (hooksview.DryRunResult, error) {
+	return b.api.Hooks().DryRun(b.ctx(), hookID, syntheticPayload)
+}
 
 // ── tools (MCP recipes) ────────────────────────────────────────────────
 

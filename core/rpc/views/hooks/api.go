@@ -65,4 +65,12 @@ type HooksAPI interface {
 	// RemoveStarterMemoryHooks removes the starter memory hooks. Pairs
 	// with the settings toggle going off.
 	RemoveStarterMemoryHooks(ctx context.Context) error
+
+	// DryRun fires the hook identified by hookID against a synthetic JSON
+	// payload (the string-encoded payload the user typed in the drawer).
+	// It returns the per-hook HookOutput and a MergedOutput so the
+	// HookDryRunDrawer can show the resolved decision without touching real
+	// data. Shell hooks are actually executed; builtin/mcp hooks return a
+	// descriptive stub.
+	DryRun(ctx context.Context, hookID string, syntheticPayload string) (DryRunResult, error)
 }
