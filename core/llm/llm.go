@@ -186,16 +186,46 @@ type ContentBlock struct {
 	ToolData   json.RawMessage `json:"tool_data,omitempty"`
 }
 
+// ImageDimensions carries the pixel dimensions of an image attachment.
+// Populated by core/attachments on ingest and by the frontend before
+// calling Attachments_AddMedia. The capability gate uses these values
+// to enforce per-provider MaxImagePixels caps (multimodal-io-01KQ8TDF FR-001).
+type ImageDimensions struct {
+	Width  int `json:"width"`
+	Height int `json:"height"`
+}
+
+// Pixels returns the total pixel count (Width × Height). Returns 0
+// when either dimension is zero.
+func (d *ImageDimensions) Pixels() int64 {
+	if d == nil || d.Width <= 0 || d.Height <= 0 {
+		return 0
+	}
+	return int64(d.Width) * int64(d.Height)
+}
+
 // MediaSource carries the bytes (or future URI reference) for an image
 // or document content block. Kind discriminates the storage form;
 // "base64" is the canonical inline shape and "uri" is reserved for a
 // future remote-fetch path.
+//
+// SizeBytes and ImageDimensions are populated by core/attachments on
+// ingest (multimodal-io-01KQ8TDF FR-001). The capability gate reads
+// them to enforce per-provider byte and pixel caps without re-decoding
+// the base64 payload.
 type MediaSource struct {
-	Kind         string `json:"kind"`
-	MediaType    string `json:"media_type"`
-	Data         string `json:"data,omitempty"`
-	URI          string `json:"uri,omitempty"`
-	OriginalName string `json:"original_name,omitempty"`
+	Kind         string           `json:"kind"`
+	MediaType    string           `json:"media_type"`
+	Data         string           `json:"data,omitempty"`
+	URI          string           `json:"uri,omitempty"`
+	OriginalName string           `json:"original_name,omitempty"`
+	// SizeBytes is the decoded byte size of the attachment. Populated by
+	// core/attachments.Put and by the frontend before Attachments_AddMedia.
+	// Zero means unknown (skip byte-cap check in the gate).
+	SizeBytes        int64            `json:"size_bytes,omitempty"`
+	// ImageDimensions carries width × height in pixels for image blocks.
+	// Nil means unknown. The gate skips the pixel-cap check when nil.
+	ImageDimensions  *ImageDimensions `json:"image_dimensions,omitempty"`
 }
 
 // ToolUse is a model-emitted tool call (FR-006).

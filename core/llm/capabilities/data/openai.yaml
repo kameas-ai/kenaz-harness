@@ -9,6 +9,18 @@ defaults:
   reasoning: false
   cancellation: true
   usage_reporting: true
+  # Attachment limits (multimodal-io-01KQ8TDF FR-006)
+  # Note: OpenAI Chat Completions does NOT accept PDF documents inline.
+  # The Responses API does; that is a future follow-up mission.
+  image_input: false
+  document_input: false
+  max_image_bytes: 20971520          # 20 MiB (OpenAI documented limit)
+  max_document_bytes: 0
+  max_image_count_per_message: 50
+  max_image_pixels: 0
+  max_document_pages: 0
+  image_input_mime_types: [image/png, image/jpeg, image/gif, image/webp]
+  document_input_mime_types: []
 models:
   - match: "gpt-4o*"
     streaming: true
@@ -22,6 +34,10 @@ models:
     usage_reporting: true
     context_window: 128000
     max_output_tokens: 16384
+    image_input: true
+    document_input: false
+    max_image_bytes: 20971520
+    max_image_count_per_message: 50
   - match: "gpt-4-turbo*"
     streaming: true
     tool_calling: true
@@ -34,6 +50,10 @@ models:
     usage_reporting: true
     context_window: 128000
     max_output_tokens: 4096
+    image_input: true
+    document_input: false
+    max_image_bytes: 20971520
+    max_image_count_per_message: 50
   - match: "gpt-4-vision*"
     streaming: true
     tool_calling: true
@@ -46,6 +66,10 @@ models:
     usage_reporting: true
     context_window: 128000
     max_output_tokens: 4096
+    image_input: true
+    document_input: false
+    max_image_bytes: 20971520
+    max_image_count_per_message: 50
   - match: "o1*"
     streaming: true
     tool_calling: true
@@ -58,6 +82,10 @@ models:
     usage_reporting: true
     context_window: 200000
     max_output_tokens: 100000
+    image_input: true
+    document_input: false
+    max_image_bytes: 20971520
+    max_image_count_per_message: 50
   - match: "gpt-3.5-turbo*"
     streaming: true
     tool_calling: true
@@ -70,6 +98,8 @@ models:
     usage_reporting: true
     context_window: 16385
     max_output_tokens: 4096
+    image_input: false
+    document_input: false
   - match: "gpt-4*"
     streaming: true
     tool_calling: true
@@ -82,3 +112,5 @@ models:
     usage_reporting: true
     context_window: 8192
     max_output_tokens: 8192
+    image_input: false
+    document_input: false

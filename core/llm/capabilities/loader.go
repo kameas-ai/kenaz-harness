@@ -21,10 +21,13 @@ var dataFS embed.FS
 // providerSpec is the on-disk schema (capabilities/data/<provider>.yaml).
 type providerSpec struct {
 	Provider string         `yaml:"provider"`
-	Defaults map[string]bool `yaml:"defaults"`
+	Defaults map[string]any `yaml:"defaults"`
 	Models   []modelEntry   `yaml:"models"`
 }
 
+// modelEntry is one per-model override row in a provider YAML.
+// Boolean fields mirror the capability constants; integer/slice fields
+// carry attachment limits (multimodal-io-01KQ8TDF FR-005).
 type modelEntry struct {
 	Match          string `yaml:"match"`
 	Streaming      bool   `yaml:"streaming"`
@@ -43,6 +46,32 @@ type modelEntry struct {
 	// ModelInfo for the frontend context-window indicator
 	// (backend-context-window-length-01KQ8TD3 WP01).
 	MaxOutputTokens int `yaml:"max_output_tokens"`
+
+	// Attachment limits (multimodal-io-01KQ8TDF FR-005).
+	// 0 / nil / empty means "use provider default".
+	ImageInput              bool     `yaml:"image_input"`
+	DocumentInput           bool     `yaml:"document_input"`
+	MaxImageBytes           int64    `yaml:"max_image_bytes"`
+	MaxDocumentBytes        int64    `yaml:"max_document_bytes"`
+	MaxImageCountPerMessage int      `yaml:"max_image_count_per_message"`
+	MaxImagePixels          int64    `yaml:"max_image_pixels"`
+	MaxDocumentPages        int      `yaml:"max_document_pages"`
+	ImageInputMimeTypes     []string `yaml:"image_input_mime_types"`
+	DocumentInputMimeTypes  []string `yaml:"document_input_mime_types"`
+}
+
+// AttachmentDescriptor carries the resolved per-provider attachment limits
+// returned by Catalog.AttachmentLimits. Zero values mean "unknown/unbounded".
+type AttachmentDescriptor struct {
+	ImageInput              bool
+	DocumentInput           bool
+	MaxImageBytes           int64
+	MaxDocumentBytes        int64
+	MaxImageCountPerMessage int
+	MaxImagePixels          int64
+	MaxDocumentPages        int
+	ImageInputMimeTypes     []string
+	DocumentInputMimeTypes  []string
 }
 
 // Catalog holds the loaded per-provider data and answers per-(provider,
@@ -162,8 +191,121 @@ func (c *Catalog) MaxOutputTokens(provider, model string) int {
 	return 0
 }
 
-func applyDefaults(desc *llm.CapabilityDescriptor, defaults map[string]bool) {
-	keymap := map[string]llm.Capability{
+// AttachmentLimits returns the resolved attachment capability descriptor for
+// (provider, model). The descriptor drives the capability gate
+// (CheckAttachments) and the frontend's per-model tray caps.
+// Zero values mean "unknown/unbounded" — callers should treat them as
+// "skip this check" rather than "allow unlimited" for safety (multimodal-io-01KQ8TDF FR-007).
+func (c *Catalog) AttachmentLimits(provider, model string) AttachmentDescriptor {
+	// Default to restrictive: no image, no document.
+	out := AttachmentDescriptor{
+		ImageInputMimeTypes:    []string{"image/png", "image/jpeg", "image/gif", "image/webp"},
+		DocumentInputMimeTypes: []string{"application/pdf"},
+	}
+	spec, ok := c.specs[provider]
+	if !ok {
+		return out
+	}
+	// Apply provider-level defaults from the YAML defaults map.
+	applyAttachmentDefaults(&out, spec.Defaults)
+	// Apply the first model glob that matches.
+	for _, m := range spec.Models {
+		if matchGlob(m.Match, model) {
+			applyAttachmentEntry(&out, &m)
+			return out
+		}
+	}
+	return out
+}
+
+// applyAttachmentDefaults reads attachment keys from the raw defaults map
+// (which is map[string]any because it mixes bool and numeric values).
+func applyAttachmentDefaults(out *AttachmentDescriptor, defaults map[string]any) {
+	if v, ok := defaults["image_input"].(bool); ok {
+		out.ImageInput = v
+	}
+	if v, ok := defaults["document_input"].(bool); ok {
+		out.DocumentInput = v
+	}
+	if v, ok := intFromAny(defaults["max_image_bytes"]); ok {
+		out.MaxImageBytes = v
+	}
+	if v, ok := intFromAny(defaults["max_document_bytes"]); ok {
+		out.MaxDocumentBytes = v
+	}
+	if v, ok := intFromAny(defaults["max_image_count_per_message"]); ok {
+		out.MaxImageCountPerMessage = int(v)
+	}
+	if v, ok := intFromAny(defaults["max_image_pixels"]); ok {
+		out.MaxImagePixels = v
+	}
+	if v, ok := intFromAny(defaults["max_document_pages"]); ok {
+		out.MaxDocumentPages = int(v)
+	}
+	if v, ok := defaults["image_input_mime_types"].([]any); ok {
+		out.ImageInputMimeTypes = anySliceToStrings(v)
+	}
+	if v, ok := defaults["document_input_mime_types"].([]any); ok {
+		out.DocumentInputMimeTypes = anySliceToStrings(v)
+	}
+}
+
+// applyAttachmentEntry overlays a modelEntry's attachment fields onto out.
+// Only non-zero fields win so that a partially-specified model row doesn't
+// accidentally zero out a provider default.
+func applyAttachmentEntry(out *AttachmentDescriptor, m *modelEntry) {
+	// Boolean fields: always apply (false is a valid intentional value in a model row).
+	out.ImageInput = m.ImageInput
+	out.DocumentInput = m.DocumentInput
+	if m.MaxImageBytes > 0 {
+		out.MaxImageBytes = m.MaxImageBytes
+	}
+	if m.MaxDocumentBytes > 0 {
+		out.MaxDocumentBytes = m.MaxDocumentBytes
+	}
+	if m.MaxImageCountPerMessage > 0 {
+		out.MaxImageCountPerMessage = m.MaxImageCountPerMessage
+	}
+	if m.MaxImagePixels > 0 {
+		out.MaxImagePixels = m.MaxImagePixels
+	}
+	if m.MaxDocumentPages > 0 {
+		out.MaxDocumentPages = m.MaxDocumentPages
+	}
+	if len(m.ImageInputMimeTypes) > 0 {
+		out.ImageInputMimeTypes = m.ImageInputMimeTypes
+	}
+	if len(m.DocumentInputMimeTypes) > 0 {
+		out.DocumentInputMimeTypes = m.DocumentInputMimeTypes
+	}
+}
+
+// intFromAny coerces YAML integer values (int / int64 / float64) to int64.
+func intFromAny(v any) (int64, bool) {
+	switch n := v.(type) {
+	case int:
+		return int64(n), true
+	case int64:
+		return n, true
+	case float64:
+		return int64(n), true
+	}
+	return 0, false
+}
+
+// anySliceToStrings converts []any (YAML sequence) to []string.
+func anySliceToStrings(in []any) []string {
+	out := make([]string, 0, len(in))
+	for _, v := range in {
+		if s, ok := v.(string); ok {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+func applyDefaults(desc *llm.CapabilityDescriptor, defaults map[string]any) {
+	boolKeymap := map[string]llm.Capability{
 		"streaming":       llm.CapStreaming,
 		"tool_calling":    llm.CapToolCalling,
 		"vision":          llm.CapVision,
@@ -175,8 +317,10 @@ func applyDefaults(desc *llm.CapabilityDescriptor, defaults map[string]bool) {
 		"usage_reporting": llm.CapUsageReporting,
 	}
 	for k, v := range defaults {
-		if cap, ok := keymap[k]; ok {
-			desc.Supported[cap] = v
+		if b, ok := v.(bool); ok {
+			if cap, ok := boolKeymap[k]; ok {
+				desc.Supported[cap] = b
+			}
 		}
 	}
 }

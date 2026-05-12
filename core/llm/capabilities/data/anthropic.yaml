@@ -9,6 +9,16 @@ defaults:
   reasoning: true
   cancellation: true
   usage_reporting: true
+  # Attachment limits (multimodal-io-01KQ8TDF FR-006)
+  image_input: true
+  document_input: false
+  max_image_bytes: 5242880          # 5 MiB (Anthropic documented limit)
+  max_document_bytes: 33554432      # 32 MiB
+  max_image_count_per_message: 20
+  max_image_pixels: 0               # 0 = unbounded (Anthropic recommends ≤1568px long-edge but doesn't hard-block)
+  max_document_pages: 0             # 0 = unbounded default; overridden per-model below
+  image_input_mime_types: [image/png, image/jpeg, image/gif, image/webp]
+  document_input_mime_types: [application/pdf]
 models:
   - match: "claude-sonnet-*"
     streaming: true
@@ -22,6 +32,12 @@ models:
     usage_reporting: true
     context_window: 200000
     max_output_tokens: 64000
+    image_input: true
+    document_input: true
+    max_image_bytes: 5242880
+    max_document_bytes: 33554432
+    max_image_count_per_message: 100
+    max_document_pages: 100
   - match: "claude-opus-*"
     streaming: true
     tool_calling: true
@@ -34,6 +50,12 @@ models:
     usage_reporting: true
     context_window: 200000
     max_output_tokens: 32000
+    image_input: true
+    document_input: true
+    max_image_bytes: 5242880
+    max_document_bytes: 33554432
+    max_image_count_per_message: 100
+    max_document_pages: 100
   - match: "claude-haiku-*"
     streaming: true
     tool_calling: true
@@ -46,6 +68,10 @@ models:
     usage_reporting: true
     context_window: 200000
     max_output_tokens: 16000
+    image_input: true
+    document_input: false
+    max_image_bytes: 5242880
+    max_image_count_per_message: 20
   - match: "claude-3-5-sonnet*"
     streaming: true
     tool_calling: true
@@ -58,6 +84,12 @@ models:
     usage_reporting: true
     context_window: 200000
     max_output_tokens: 8192
+    image_input: true
+    document_input: true
+    max_image_bytes: 5242880
+    max_document_bytes: 33554432
+    max_image_count_per_message: 100
+    max_document_pages: 100
   - match: "claude-3-5-haiku*"
     streaming: true
     tool_calling: true
@@ -70,6 +102,10 @@ models:
     usage_reporting: true
     context_window: 200000
     max_output_tokens: 8192
+    image_input: true
+    document_input: false
+    max_image_bytes: 5242880
+    max_image_count_per_message: 20
   - match: "claude-3-haiku*"
     streaming: true
     tool_calling: true
@@ -82,6 +118,10 @@ models:
     usage_reporting: true
     context_window: 200000
     max_output_tokens: 4096
+    image_input: true
+    document_input: false
+    max_image_bytes: 5242880
+    max_image_count_per_message: 20
   - match: "claude-3-sonnet*"
     streaming: true
     tool_calling: true
@@ -94,6 +134,10 @@ models:
     usage_reporting: true
     context_window: 200000
     max_output_tokens: 4096
+    image_input: true
+    document_input: false
+    max_image_bytes: 5242880
+    max_image_count_per_message: 20
   - match: "claude-3-opus*"
     streaming: true
     tool_calling: true
@@ -106,3 +150,7 @@ models:
     usage_reporting: true
     context_window: 200000
     max_output_tokens: 4096
+    image_input: true
+    document_input: false
+    max_image_bytes: 5242880
+    max_image_count_per_message: 20
