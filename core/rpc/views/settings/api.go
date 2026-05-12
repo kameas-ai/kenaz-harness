@@ -436,6 +436,16 @@ type Settings struct {
 	// Note: the HARNESS_MULTIMODAL_IN env flag can force-disable this
 	// regardless of the stored value (see capabilities loader).
 	MultimodalInputDisabled bool `json:"multimodalInputDisabled,omitempty"`
+
+	// ── Key-rotation dial (provider-keychain-rotation-01KQ8TD9 WP07) ─────
+	//
+	// AutoResumeOnKeyRotationDisabled is the inverted persisted bit for the
+	// "auto-resume the failed turn after rotating an API key" feature. Zero
+	// value = feature ENABLED — matching the spec default ("default true").
+	// The frontend reads the effective value via EffectiveAutoResumeOnKeyRotation()
+	// and hides the dial toggle when HARNESS_KEYCHAIN_ROTATION=off
+	// (signalled by AppInfo.keychainRotationEnabled = false).
+	AutoResumeOnKeyRotationDisabled bool `json:"autoResumeOnKeyRotationDisabled,omitempty"`
 }
 
 // ProviderProfileRef is the wire shape that identifies a provider+model
@@ -1006,6 +1016,17 @@ type SettingsStore interface {
 	// narrative layer opt-out dial (WP12). Default true after Phase 2.
 	LoadMemoryNarrativeEnabled() (bool, error)
 	SaveMemoryNarrativeEnabled(enabled bool) error
+
+	// ── Key-rotation dial (provider-keychain-rotation-01KQ8TD9 WP07) ────────
+
+	// LoadAutoResumeOnKeyRotation / SaveAutoResumeOnKeyRotation expose the
+	// "auto-resume the paused turn after rotating an API key" dial. Default
+	// true on a fresh install (zero-value AutoResumeOnKeyRotationDisabled →
+	// feature enabled). The LLM RPC's TestAndRotateKey reads this on each
+	// rotation to decide whether to return an AutoResumeToken. The frontend
+	// toggle in Settings → Models hides when keychainRotationEnabled = false.
+	LoadAutoResumeOnKeyRotation() (bool, error)
+	SaveAutoResumeOnKeyRotation(enabled bool) error
 }
 
 // SettingsAPI is the view-scoped accessor exposed via HarnessAPI.
@@ -1149,6 +1170,17 @@ func (s Settings) EffectiveNarrativePreludeTopN() int {
 // of the stored value — see the capabilities loader.
 // (multimodal-io-01KQ8TDF WP08 / FR-023)
 func (s Settings) MultimodalInputEnabled() bool { return !s.MultimodalInputDisabled }
+
+// EffectiveAutoResumeOnKeyRotation reports whether the harness should
+// automatically redrive the paused turn after the user rotates an API key.
+// Default true on a fresh install (zero-value AutoResumeOnKeyRotationDisabled
+// = false → feature enabled), matching the spec "default true" contract.
+// The feature is additionally gated by the HARNESS_KEYCHAIN_ROTATION env
+// flag — callers should also check keychainRotationFeatureEnabled().
+// (provider-keychain-rotation-01KQ8TD9 WP07)
+func (s Settings) EffectiveAutoResumeOnKeyRotation() bool {
+	return !s.AutoResumeOnKeyRotationDisabled
+}
 
 // ShortcutsStore is the persistence interface for keyboard shortcut
 // overrides. LoadShortcuts / SaveShortcuts are thin field-level accessors

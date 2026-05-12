@@ -749,6 +749,64 @@ func TestEffectiveUpdate_DefaultsOnEmpty(t *testing.T) {
 	}
 }
 
+// ── provider-keychain-rotation-01KQ8TD9 WP07 ────────────────────────────────
+
+// TestEffectiveAutoResumeOnKeyRotation_DefaultTrue verifies that a zero-value
+// Settings returns true so fresh installs behave as "auto-resume ON".
+func TestEffectiveAutoResumeOnKeyRotation_DefaultTrue(t *testing.T) {
+	var s Settings
+	if !s.EffectiveAutoResumeOnKeyRotation() {
+		t.Errorf("EffectiveAutoResumeOnKeyRotation = false on zero Settings, want true")
+	}
+}
+
+// TestFileStore_AutoResumeOnKeyRotation_RoundTrip verifies that
+// LoadAutoResumeOnKeyRotation / SaveAutoResumeOnKeyRotation faithfully
+// persist the inverted Disabled bit and read back the correct effective value.
+func TestFileStore_AutoResumeOnKeyRotation_RoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	store, err := NewFileStore(dir)
+	if err != nil {
+		t.Fatalf("NewFileStore: %v", err)
+	}
+
+	// Default on empty file: should be true.
+	got, err := store.LoadAutoResumeOnKeyRotation()
+	if err != nil {
+		t.Fatalf("LoadAutoResumeOnKeyRotation (initial): %v", err)
+	}
+	if !got {
+		t.Errorf("LoadAutoResumeOnKeyRotation = false on fresh file, want true")
+	}
+
+	// Disable the feature.
+	if err := store.SaveAutoResumeOnKeyRotation(false); err != nil {
+		t.Fatalf("SaveAutoResumeOnKeyRotation(false): %v", err)
+	}
+	got, err = store.LoadAutoResumeOnKeyRotation()
+	if err != nil {
+		t.Fatalf("LoadAutoResumeOnKeyRotation after Save(false): %v", err)
+	}
+	if got {
+		t.Errorf("LoadAutoResumeOnKeyRotation = true after Save(false), want false")
+	}
+
+	// Verify the inverted bit is persisted correctly in the JSON.
+	all, _ := store.LoadAll()
+	if !all.AutoResumeOnKeyRotationDisabled {
+		t.Errorf("Settings.AutoResumeOnKeyRotationDisabled = false after Save(false), want true")
+	}
+
+	// Re-enable the feature.
+	if err := store.SaveAutoResumeOnKeyRotation(true); err != nil {
+		t.Fatalf("SaveAutoResumeOnKeyRotation(true): %v", err)
+	}
+	got, _ = store.LoadAutoResumeOnKeyRotation()
+	if !got {
+		t.Errorf("LoadAutoResumeOnKeyRotation = false after Save(true), want true")
+	}
+}
+
 func TestAPI_StoreAccessor(t *testing.T) {
 	api := NewAPI(nil)
 	store := api.Store()

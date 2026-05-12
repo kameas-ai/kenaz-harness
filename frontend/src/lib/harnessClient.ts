@@ -395,6 +395,9 @@ interface WailsBindingsLike {
   // multimodal-io-01KQ8TDF WP08 / FR-022 / FR-023
   Settings_GetMultimodalInput(): Promise<boolean>;
   Settings_SetMultimodalInput(enabled: boolean): Promise<void>;
+  // provider-keychain-rotation-01KQ8TD9 WP07
+  Settings_GetAutoResumeOnKeyRotation(): Promise<boolean>;
+  Settings_SetAutoResumeOnKeyRotation(enabled: boolean): Promise<void>;
   // artifact-preview-binary-rendering-01KQ8TD5 WP07
   Settings_GetArtifactPreview(): Promise<{ enabled: boolean; maxBytes: number; timeoutMs: number }>;
 
@@ -1510,6 +1513,20 @@ export interface SettingsClient {
    */
   setMultimodalInput(enabled: boolean): Promise<void>;
 
+  // ── provider-keychain-rotation-01KQ8TD9 WP07 ─────────────────────────
+  /**
+   * Returns whether the harness should automatically redrive the paused turn
+   * after the user rotates an API key. Default true. Hidden when
+   * appInfo.keychainRotationEnabled === false.
+   */
+  getAutoResumeOnKeyRotation(): Promise<boolean>;
+  /**
+   * Persists the auto-resume-after-key-rotation toggle. When false,
+   * TestAndRotateKey returns an empty AutoResumeToken and the user must
+   * manually resend the failed turn.
+   */
+  setAutoResumeOnKeyRotation(enabled: boolean): Promise<void>;
+
   // ── artifact-preview-binary-rendering-01KQ8TD5 WP07 ─────────────────
   /**
    * Returns the runtime artifact-preview feature config:
@@ -2551,6 +2568,10 @@ export function createHarnessClient(): HarnessClient {
         b().Settings_SetShowPerMessageTokenMeter(enabled),
       getMultimodalInput: () => b().Settings_GetMultimodalInput(),
       setMultimodalInput: (enabled) => b().Settings_SetMultimodalInput(enabled),
+      getAutoResumeOnKeyRotation: () =>
+        b().Settings_GetAutoResumeOnKeyRotation(),
+      setAutoResumeOnKeyRotation: (enabled) =>
+        b().Settings_SetAutoResumeOnKeyRotation(enabled),
       getArtifactPreview: () => b().Settings_GetArtifactPreview(),
     },
     permissions: {
@@ -3124,6 +3145,8 @@ export function createFakeHarnessClient(
       setShowPerMessageTokenMeter: noop,
       getMultimodalInput: async () => true,
       setMultimodalInput: noop,
+      getAutoResumeOnKeyRotation: async () => true,
+      setAutoResumeOnKeyRotation: noop,
       getArtifactPreview: async () => ({
         // Default false in tests so that existing ArtifactPreview.test.ts
         // cases run through the legacy text-only branch unmodified

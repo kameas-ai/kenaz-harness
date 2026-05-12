@@ -520,6 +520,14 @@ export interface AppInfo {
    * available (cedar-policy-editor-ui-01KQ8TD6 WP01).
    */
   policyEditorEnabled?: boolean;
+  /**
+   * keychainRotationEnabled is true when HARNESS_KEYCHAIN_ROTATION is not
+   * set to "off", "0", or "false". The frontend uses this to hide the
+   * "Auto-resume after rotating an API key" Settings toggle and the
+   * AuthFailureToast rotate button when the feature is disabled.
+   * (provider-keychain-rotation-01KQ8TD9 WP07)
+   */
+  keychainRotationEnabled?: boolean;
 }
 
 export interface WindowSize {

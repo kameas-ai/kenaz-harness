@@ -1065,6 +1065,40 @@ func (b *Bindings) Settings_SetMultimodalInput(enabled bool) error {
 	return b.storeFn().SaveAll(s)
 }
 
+// ── key-rotation settings (provider-keychain-rotation-01KQ8TD9 WP07) ──
+
+// Settings_GetAutoResumeOnKeyRotation returns whether the harness should
+// automatically redrive the paused chat turn after the user rotates an API
+// key. Default true on a fresh install (zero-value Disabled → enabled).
+// Hidden in the Settings UI when AppInfo.keychainRotationEnabled = false.
+// (provider-keychain-rotation-01KQ8TD9 WP07)
+func (b *Bindings) Settings_GetAutoResumeOnKeyRotation() (bool, error) {
+	if b.storeFn == nil {
+		return true, nil
+	}
+	s, err := b.storeFn().LoadAll()
+	if err != nil {
+		return true, err
+	}
+	return s.EffectiveAutoResumeOnKeyRotation(), nil
+}
+
+// Settings_SetAutoResumeOnKeyRotation persists the auto-resume-on-key-rotation
+// dial. When false, TestAndRotateKey returns an empty AutoResumeToken and
+// the user must manually resend the failed turn.
+// (provider-keychain-rotation-01KQ8TD9 WP07)
+func (b *Bindings) Settings_SetAutoResumeOnKeyRotation(enabled bool) error {
+	if b.storeFn == nil {
+		return nil
+	}
+	s, err := b.storeFn().LoadAll()
+	if err != nil {
+		return err
+	}
+	s.AutoResumeOnKeyRotationDisabled = !enabled
+	return b.storeFn().SaveAll(s)
+}
+
 // ── memory ─────────────────────────────────────────────────────────────
 
 func (b *Bindings) Memory_ListChunks(filter memoryview.ListFilter) ([]memoryview.Chunk, error) {
