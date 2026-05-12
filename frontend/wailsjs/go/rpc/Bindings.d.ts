@@ -294,6 +294,16 @@ export function Memory_RunPruneNow(arg1:string):Promise<memory.PruneStats>;
 
 export function Memory_TestEmbedder():Promise<number>;
 
+export function Memory_MarkImportant(arg1:string,arg2:boolean):Promise<void>;
+
+export function Memory_NarrativeFailedCount():Promise<number>;
+
+export function Memory_NarrativeFailedList():Promise<Array<memory.NarrativeJobStatus>>;
+
+export function Memory_RetryFailedNarrative(arg1:string):Promise<void>;
+
+export function Memory_NarrativeMetricsForChunk(arg1:string):Promise<memory.NarrativeMetrics>;
+
 export function Nodes_Catalog():Promise<Array<nodes.NodeManifestSummary>>;
 
 export function Nodes_Doctor():Promise<nodes.DoctorReport>;

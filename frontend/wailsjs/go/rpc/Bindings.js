@@ -514,6 +514,26 @@ export function Memory_TestEmbedder() {
   return window['go']['rpc']['Bindings']['Memory_TestEmbedder']();
 }
 
+export function Memory_MarkImportant(arg1, arg2) {
+  return window['go']['rpc']['Bindings']['Memory_MarkImportant'](arg1, arg2);
+}
+
+export function Memory_NarrativeFailedCount() {
+  return window['go']['rpc']['Bindings']['Memory_NarrativeFailedCount']();
+}
+
+export function Memory_NarrativeFailedList() {
+  return window['go']['rpc']['Bindings']['Memory_NarrativeFailedList']();
+}
+
+export function Memory_RetryFailedNarrative(arg1) {
+  return window['go']['rpc']['Bindings']['Memory_RetryFailedNarrative'](arg1);
+}
+
+export function Memory_NarrativeMetricsForChunk(arg1) {
+  return window['go']['rpc']['Bindings']['Memory_NarrativeMetricsForChunk'](arg1);
+}
+
 export function Nodes_Catalog() {
   return window['go']['rpc']['Bindings']['Nodes_Catalog']();
 }

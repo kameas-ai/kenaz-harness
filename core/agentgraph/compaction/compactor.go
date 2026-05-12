@@ -63,6 +63,7 @@ const (
 // AllStrategies enumerates the supported strategies.
 func AllStrategies() []Strategy {
 	return []Strategy{
+		StrategyNarrativeFirst, // memory-narrative-layer-01KQ8TD1 WP10
 		StrategySummary,
 		StrategyDropOldest,
 		StrategySemanticCluster,

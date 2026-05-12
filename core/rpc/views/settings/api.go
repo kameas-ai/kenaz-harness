@@ -387,6 +387,42 @@ type Settings struct {
 	// EffectiveLongSessionNudgeTokens. Negative values are rejected at
 	// Save.
 	LongSessionNudgeTokens int `json:"longSessionNudgeTokens,omitempty"`
+
+	// ── Memory narrative layer dials (memory-narrative-layer-01KQ8TD1) ──
+
+	// MemoryNarrativeEnabled is the user opt-out for the narrative layer
+	// (WP12). When false no narratives are produced and the compactor's
+	// narrative_first strategy is bypassed. Default true after Phase 2
+	// rollout; the feature is additionally gated by
+	// HARNESS_MEMORY_NARRATIVE_LAYER env var which defaults false in Phase 1.
+	MemoryNarrativeEnabled bool `json:"memoryNarrativeEnabled,omitempty"`
+
+	// SummarizerProfileID is the provider profile used for per-turn LLM
+	// synthesis (WP04). Empty (default) means "auto-select cheapest":
+	// Haiku-4.5 if available, otherwise first OpenRouter free-tier profile.
+	// Invalid ID → typed error in narrative_jobs_pending.last_error.
+	SummarizerProfileID string `json:"summarizerProfileId,omitempty"`
+
+	// NarrativePromotionWeights are the per-signal weights used for
+	// long-term promotion score (WP06). JSON map with keys "retrieval",
+	// "citation", "pin". Defaults: {retrieval:1, citation:3, pin:10}.
+	NarrativePromotionWeights string `json:"narrativePromotionWeights,omitempty"`
+
+	// NarrativePromotionThreshold is the score floor for long-term
+	// promotion (WP06). Default 10.
+	NarrativePromotionThreshold int `json:"narrativePromotionThreshold,omitempty"`
+
+	// NarrativeRetrievalWeight is the score multiplier for narrative
+	// chunks during similarity search (WP01). Default 1.5.
+	NarrativeRetrievalWeight float64 `json:"narrativeRetrievalWeight,omitempty"`
+
+	// NarrativePromoterParallelism is the number of synthesis workers
+	// (WP03). Default 2.
+	NarrativePromoterParallelism int `json:"narrativePromoterParallelism,omitempty"`
+
+	// NarrativePreludeTopN is the number of long-term chunks loaded
+	// into the system prompt at session start (WP09). Default 5.
+	NarrativePreludeTopN int `json:"narrativePreludeTopN,omitempty"`
 }
 
 // ProviderProfileRef is the wire shape that identifies a provider+model
@@ -944,6 +980,19 @@ type SettingsStore interface {
 	// optional model override.  Either or both may be the empty string to
 	// reset to the auto-pick / per-Kind-default behaviour.
 	SaveEmbedderConfig(profileID, modelOverride string) error
+
+	// ── Memory narrative layer dial accessors (memory-narrative-layer-01KQ8TD1) ──
+
+	// LoadSummarizerProfileID / SaveSummarizerProfileID expose the
+	// per-turn LLM synthesis model selection (WP04). Empty means
+	// "auto-select cheapest".
+	LoadSummarizerProfileID() (string, error)
+	SaveSummarizerProfileID(profileID string) error
+
+	// LoadMemoryNarrativeEnabled / SaveMemoryNarrativeEnabled expose the
+	// narrative layer opt-out dial (WP12). Default true after Phase 2.
+	LoadMemoryNarrativeEnabled() (bool, error)
+	SaveMemoryNarrativeEnabled(enabled bool) error
 }
 
 // SettingsAPI is the view-scoped accessor exposed via HarnessAPI.
@@ -977,6 +1026,22 @@ type SettingsAPI interface {
 	//   - timeoutMs: preview abort timeout in milliseconds (default 2000).
 	// (artifact-preview-binary-rendering-01KQ8TD5 WP07)
 	GetArtifactPreview(ctx context.Context) (enabled bool, maxBytes int64, timeoutMs int64, err error)
+
+	// ── Memory narrative layer settings (memory-narrative-layer-01KQ8TD1) ──
+
+	// GetSummarizerProfileID returns the configured summariser provider
+	// profile ID. Empty string means "auto-select cheapest" (WP04).
+	GetSummarizerProfileID(ctx context.Context) (string, error)
+	// SetSummarizerProfileID persists the summariser profile ID. An
+	// empty string resets to auto-select.
+	SetSummarizerProfileID(ctx context.Context, profileID string) error
+
+	// GetMemoryNarrativeEnabled returns whether the narrative layer is
+	// enabled in Settings (additional env-var gate applies). Default
+	// true after Phase 2 rollout (WP12).
+	GetMemoryNarrativeEnabled(ctx context.Context) (bool, error)
+	// SetMemoryNarrativeEnabled persists the narrative-layer opt-out dial.
+	SetMemoryNarrativeEnabled(ctx context.Context, enabled bool) error
 }
 
 // ── Long-session nudge constants + accessors (v0.5.6) ───────────────────────
@@ -1006,6 +1071,60 @@ func (s Settings) EffectiveLongSessionNudgeTokens() int {
 		return DefaultLongSessionNudgeTokens
 	}
 	return s.LongSessionNudgeTokens
+}
+
+// ── Memory narrative layer constants + accessors (memory-narrative-layer-01KQ8TD1) ──
+
+// DefaultNarrativeRetrievalWeight is the retrieval-score multiplier
+// for narrative chunks when NarrativeRetrievalWeight is zero.
+const DefaultNarrativeRetrievalWeight = 1.5
+
+// DefaultNarrativePromotionThreshold is the score floor for long-term
+// promotion when NarrativePromotionThreshold is zero.
+const DefaultNarrativePromotionThreshold = 10
+
+// DefaultNarrativePromoterParallelism is the default worker count for
+// the Promoter when NarrativePromoterParallelism is zero.
+const DefaultNarrativePromoterParallelism = 2
+
+// DefaultNarrativePreludeTopN is the default number of long-term chunks
+// loaded into the system prompt at session start.
+const DefaultNarrativePreludeTopN = 5
+
+// EffectiveNarrativeRetrievalWeight returns the user-tuned multiplier or
+// the spec default when zero.
+func (s Settings) EffectiveNarrativeRetrievalWeight() float64 {
+	if s.NarrativeRetrievalWeight <= 0 {
+		return DefaultNarrativeRetrievalWeight
+	}
+	return s.NarrativeRetrievalWeight
+}
+
+// EffectiveNarrativePromotionThreshold returns the user-tuned threshold or
+// the spec default when zero.
+func (s Settings) EffectiveNarrativePromotionThreshold() int {
+	if s.NarrativePromotionThreshold <= 0 {
+		return DefaultNarrativePromotionThreshold
+	}
+	return s.NarrativePromotionThreshold
+}
+
+// EffectiveNarrativePromoterParallelism returns the worker count or the
+// spec default when zero.
+func (s Settings) EffectiveNarrativePromoterParallelism() int {
+	if s.NarrativePromoterParallelism <= 0 {
+		return DefaultNarrativePromoterParallelism
+	}
+	return s.NarrativePromoterParallelism
+}
+
+// EffectiveNarrativePreludeTopN returns the prelude size or the spec
+// default when zero.
+func (s Settings) EffectiveNarrativePreludeTopN() int {
+	if s.NarrativePreludeTopN <= 0 {
+		return DefaultNarrativePreludeTopN
+	}
+	return s.NarrativePreludeTopN
 }
 
 // ShortcutsStore is the persistence interface for keyboard shortcut

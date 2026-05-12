@@ -1066,6 +1066,37 @@ func (b *Bindings) Memory_EmbedderEligibility() (memoryview.EmbedderEligibility,
 	return b.api.Memory().EmbedderEligibility(b.ctx())
 }
 
+// Memory_MarkImportant sets the user-pin counter for a chunk, making it
+// a candidate for long-term scope promotion (memory-narrative-layer WP07).
+func (b *Bindings) Memory_MarkImportant(chunkID string, pinned bool) error {
+	return b.api.Memory().MarkImportant(b.ctx(), chunkID, pinned)
+}
+
+// Memory_NarrativeFailedCount returns the number of narrative synthesis
+// jobs that have exhausted all retry attempts (memory-narrative-layer WP07).
+func (b *Bindings) Memory_NarrativeFailedCount() (int, error) {
+	return b.api.Memory().NarrativeFailedCount(b.ctx())
+}
+
+// Memory_NarrativeFailedList returns the narrative synthesis jobs that
+// have exhausted all retry attempts (memory-narrative-layer WP07).
+func (b *Bindings) Memory_NarrativeFailedList() ([]memoryview.NarrativeJobStatus, error) {
+	return b.api.Memory().NarrativeFailedList(b.ctx())
+}
+
+// Memory_RetryFailedNarrative resets a failed narrative job so the
+// Promoter worker will retry it (memory-narrative-layer WP07).
+func (b *Bindings) Memory_RetryFailedNarrative(jobID string) error {
+	return b.api.Memory().RetryFailedNarrative(b.ctx(), jobID)
+}
+
+// Memory_NarrativeMetricsForChunk returns the retrieval/citation/pin
+// counters and computed promotion score for a single chunk
+// (memory-narrative-layer WP07).
+func (b *Bindings) Memory_NarrativeMetricsForChunk(chunkID string) (memoryview.NarrativeMetrics, error) {
+	return b.api.Memory().NarrativeMetricsForChunk(b.ctx(), chunkID)
+}
+
 // ── dials (Bundle E WP17) ──────────────────────────────────────────────
 
 func (b *Bindings) Dials_Get(key dialsview.ScopeKey) (dialsview.DialConfig, error) {
