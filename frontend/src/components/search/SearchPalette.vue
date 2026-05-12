@@ -8,8 +8,10 @@ import { useSearchPalette } from '@/lib/useSearchPalette';
 /**
  * SearchPalette — floating ⌘K search overlay.
  *
- * v0.5.6: wired to Search_Sessions (full-text message search).
- * v0.7.0+: will expand to cross-entity results when unified-search-01KX5R8C ships.
+ * v0.5.6: wired to Search_Sessions (full-text message search only).
+ * v0.10.0: upgraded to Search_Unified (messages + artifacts + memory + corpus + audit).
+ *          Each hit row shows a corpus source badge.
+ *          Filter chips above the results list let the user toggle corpora.
  *
  * Opens via:
  *   - ⌘K / Ctrl+K global shortcut (registered in Shell.vue)
@@ -33,6 +35,64 @@ const hits = ref<SearchHit[]>([]);
 const loading = ref(false);
 const highlightedIndex = ref(-1);
 const resultListEl = ref<HTMLElement | null>(null);
+
+// ── corpus filter chips ────────────────────────────────────────────────
+/** All corpus identifiers available for filtering. */
+const ALL_CORPORA = ['messages', 'artifacts', 'memory', 'corpus', 'audit'] as const;
+type CorpusId = (typeof ALL_CORPORA)[number];
+
+/** Human-readable label for each corpus. */
+const CORPUS_LABEL: Record<CorpusId, string> = {
+  messages: 'Messages',
+  artifacts: 'Artifacts',
+  memory: 'Memory',
+  corpus: 'Corpus',
+  audit: 'Audit',
+};
+
+/**
+ * activeCorpora is the set of corpus ids the user wants to see.
+ * An empty set means "all" (no filter chips active). Toggling a chip
+ * adds/removes the id; when all chips are active we clear the set so
+ * the RPC call omits the filter entirely.
+ */
+const activeCorpora = ref<Set<CorpusId>>(new Set());
+
+function toggleCorpus(c: CorpusId) {
+  const next = new Set(activeCorpora.value);
+  if (next.has(c)) {
+    next.delete(c);
+  } else {
+    next.add(c);
+  }
+  // If all corpora are selected, treat it as "no filter".
+  if (next.size === ALL_CORPORA.length) {
+    activeCorpora.value = new Set();
+  } else {
+    activeCorpora.value = next;
+  }
+  if (query.value.trim()) runSearch();
+}
+
+function corpusFilterArg(): string[] | undefined {
+  return activeCorpora.value.size > 0 ? [...activeCorpora.value] : undefined;
+}
+
+/** Badge colour class per corpus (Tailwind). */
+function corpusBadgeClass(corpus: string): string {
+  switch (corpus) {
+    case 'messages':  return 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300';
+    case 'artifacts': return 'bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300';
+    case 'memory':    return 'bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-300';
+    case 'corpus':    return 'bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300';
+    case 'audit':     return 'bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300';
+    default:          return 'bg-surface-1 text-ink-subtle';
+  }
+}
+
+function corpusLabel(corpus: string): string {
+  return CORPUS_LABEL[corpus as CorpusId] ?? corpus;
+}
 
 // ── debounced search ───────────────────────────────────────────────────
 let debounceTimer: ReturnType<typeof setTimeout> | null = null;
@@ -58,7 +118,8 @@ async function runSearch() {
   }
   loading.value = true;
   try {
-    hits.value = await client.search.sessions(q, {});
+    const corpora = corpusFilterArg();
+    hits.value = await client.search.unified(q, corpora ? { corpora } : {});
     highlightedIndex.value = hits.value.length > 0 ? 0 : -1;
   } catch {
     hits.value = [];
@@ -75,6 +136,7 @@ watch(
       query.value = '';
       hits.value = [];
       highlightedIndex.value = -1;
+      activeCorpora.value = new Set();
       void nextTick(() => inputEl.value?.focus());
     }
   },
@@ -148,7 +210,15 @@ function openHighlighted() {
 
 function openHit(hit: SearchHit) {
   close();
-  void router.push(`/sessions/${hit.sessionId}#${hit.messageId}`);
+  // Non-message corpora may not have a session context; fall back to the
+  // session route when sessionId is populated, otherwise navigate to the
+  // corpus-specific route if available.
+  if (hit.sessionId) {
+    const hash = hit.messageId ? `#${hit.messageId}` : '';
+    void router.push(`/sessions/${hit.sessionId}${hash}`);
+  }
+  // Artifacts, memory, corpus, audit hits without a session — no navigation
+  // for now; the palette simply closes.
 }
 
 // ── snippet rendering (no v-html) ──────────────────────────────────────
@@ -271,6 +341,33 @@ onBeforeUnmount(() => {
         </kbd>
       </div>
 
+      <!-- Corpus filter chips (shown when results are present or a query is active) -->
+      <div
+        v-if="query.trim()"
+        class="px-3 py-1.5 border-b border-border-muted flex flex-wrap gap-1.5"
+        role="group"
+        aria-label="Filter by corpus"
+        data-testid="search-palette-corpus-filters"
+      >
+        <button
+          v-for="c in ALL_CORPORA"
+          :key="c"
+          type="button"
+          class="px-2 py-0.5 rounded-full text-[11px] font-medium border transition-opacity"
+          :class="[
+            corpusBadgeClass(c),
+            activeCorpora.size === 0 || activeCorpora.has(c)
+              ? 'opacity-100 border-transparent'
+              : 'opacity-40 border-transparent',
+          ]"
+          :aria-pressed="activeCorpora.has(c)"
+          :data-testid="`search-corpus-chip-${c}`"
+          @click="toggleCorpus(c)"
+        >
+          {{ CORPUS_LABEL[c] }}
+        </button>
+      </div>
+
       <!-- Results list -->
       <ul
         id="search-palette-results"
@@ -280,20 +377,11 @@ onBeforeUnmount(() => {
         class="overflow-y-auto flex-1"
         data-testid="search-palette-results"
       >
-        <!-- Section header (v0.7.0: will expand to more entity kinds) -->
-        <li
-          v-if="hasResults"
-          class="px-4 pt-2 pb-1 text-[10px] uppercase tracking-[0.18em] text-ink-subtle font-ui"
-          role="presentation"
-        >
-          Messages
-        </li>
-
         <!-- Hit rows -->
         <li
           v-for="(hit, idx) in hits"
           :id="`search-palette-hit-${idx}`"
-          :key="hit.messageId"
+          :key="hit.entityId ?? hit.messageId ?? idx"
           role="option"
           :aria-selected="idx === highlightedIndex"
           :tabindex="0"
@@ -307,13 +395,23 @@ onBeforeUnmount(() => {
           @keydown="onResultKeydown($event, idx)"
           @mouseenter="highlightedIndex = idx"
         >
-          <!-- Session name + timestamp -->
+          <!-- Corpus source badge + session name + timestamp -->
           <div class="flex items-center gap-2 text-xs text-ink-subtle">
-            <span class="font-medium text-ink truncate max-w-[200px]">
+            <!-- Corpus source badge -->
+            <span
+              v-if="hit.corpus"
+              class="px-1.5 py-0.5 rounded text-[10px] font-semibold shrink-0"
+              :class="corpusBadgeClass(hit.corpus)"
+              :data-testid="`search-palette-corpus-badge-${idx}`"
+            >
+              {{ corpusLabel(hit.corpus) }}
+            </span>
+            <span v-if="hit.sessionName" class="font-medium text-ink truncate max-w-[180px]">
               {{ hit.sessionName }}
             </span>
             <span
-              class="px-1 py-0.5 rounded bg-surface-1 border border-border-muted capitalize"
+              v-if="hit.role"
+              class="px-1 py-0.5 rounded bg-surface-1 border border-border-muted capitalize shrink-0"
             >
               {{ hit.role }}
             </span>
@@ -341,7 +439,7 @@ onBeforeUnmount(() => {
           class="px-4 py-8 text-center text-sm text-ink-subtle"
           data-testid="search-palette-placeholder"
         >
-          Type to search across all sessions
+          Type to search across messages, artifacts, memory, corpus, and audit
         </li>
       </ul>
 
