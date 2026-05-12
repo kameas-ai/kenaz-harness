@@ -27,6 +27,8 @@ import (
 
 	coremcp "github.com/sigil-tech/kaneaz-harness/core/mcp"
 	"github.com/sigil-tech/kaneaz-harness/core/mcp/transport"
+	"github.com/sigil-tech/kaneaz-harness/core/credstore/refs"
+	"github.com/sigil-tech/kaneaz-harness/core/policy/cedar"
 )
 
 // Default deadlines used by the lifecycle code paths. These are
@@ -600,7 +602,23 @@ func (s *ServerInstance) Tools() []coremcp.Tool {
 // CallTool issues tools/call and returns the raw result envelope
 // (already unwrapped from the JSON-RPC response). ctx cancellation
 // sends notifications/cancelled and returns ctx.Err().
+//
+// Before serialising the request, any @secret: references in the args
+// JSON are substituted via refs.ResolverFromContext (WP09). When no
+// resolver is wired in ctx the args pass through unchanged.
 func (s *ServerInstance) CallTool(ctx context.Context, tool string, args json.RawMessage) (json.RawMessage, error) {
+	// ── @secret: reference substitution (WP09) ──────────────────────────
+	// Walk the args JSON string values and substitute any @secret: tokens.
+	// We operate on the raw JSON text; the substitution is string-level.
+	resolver := refs.ResolverFromContext(ctx)
+	if resolver != nil && refs.HasReference(string(args)) {
+		rctx := cedar.ResolveContext{ToolName: "mcp:" + tool}
+		sub, _, err := resolver.Substitute(ctx, string(args), rctx)
+		if err != nil {
+			return nil, fmt.Errorf("mcp.CallTool: secret resolution failed for tool %q: %w", tool, err)
+		}
+		args = json.RawMessage(sub)
+	}
 	return s.CallToolWithProgress(ctx, tool, args, "")
 }
 
