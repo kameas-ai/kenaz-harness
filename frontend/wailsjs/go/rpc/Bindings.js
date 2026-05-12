@@ -918,6 +918,10 @@ export function Shell_PathComplete(arg1) {
   return window['go']['rpc']['Bindings']['Shell_PathComplete'](arg1);
 }
 
+export function Shell_PickFile(arg1, arg2, arg3) {
+  return window['go']['rpc']['Bindings']['Shell_PickFile'](arg1, arg2, arg3);
+}
+
 export function Shell_ReadFile(arg1) {
   return window['go']['rpc']['Bindings']['Shell_ReadFile'](arg1);
 }

@@ -496,6 +496,8 @@ export function Shell_OpenInOSBrowser(arg1:string):Promise<void>;
 
 export function Shell_PathComplete(arg1:string):Promise<Array<string>>;
 
+export function Shell_PickFile(arg1:string,arg2:string,arg3:Array<string>):Promise<string>;
+
 export function Shell_ReadFile(arg1:string):Promise<rpc.ShellReadFileResult>;
 
 export function Slash_Execute(arg1:string,arg2:string):Promise<slashcmd.ExecuteResult>;

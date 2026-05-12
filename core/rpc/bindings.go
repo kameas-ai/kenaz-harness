@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"strings"
 
 	wruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 	"github.com/sigil-tech/kaneaz-harness/core/autonomy"
@@ -1304,10 +1305,50 @@ func (b *Bindings) Shell_ReadFile(path string) (ShellReadFileResult, error) {
 	}, nil
 }
 
+// Shell_PickFile opens the OS-native file-picker dialog and returns the
+// absolute path of the file the user selected. Returns the empty string
+// when the user cancels (Wails surfaces cancel as a no-error empty result).
+//
+// Parameters:
+//   - title:      dialog window title; defaults to "Choose a file" if empty.
+//   - defaultDir: starting directory hint; pass "" to let the OS decide.
+//   - filters:    optional MIME / extension hints passed to the OS picker.
+//     Each entry is "Display Name|*.ext1;*.ext2" (Wails format). Pass nil
+//     for no filtering.
+//
+// Used by the AskUserQuestion dialog's "file" kind so the user can select a
+// file path graphically (WP10) rather than typing the path manually.
+func (b *Bindings) Shell_PickFile(title, defaultDir string, filters []string) (string, error) {
+	if title == "" {
+		title = "Choose a file"
+	}
+	var wailsFilters []wruntime.FileFilter
+	for _, f := range filters {
+		// Each filter string is "Display Name|*.ext1;*.ext2"
+		pipe := strings.Index(f, "|")
+		if pipe < 0 {
+			wailsFilters = append(wailsFilters, wruntime.FileFilter{
+				DisplayName: f,
+				Pattern:     f,
+			})
+		} else {
+			wailsFilters = append(wailsFilters, wruntime.FileFilter{
+				DisplayName: f[:pipe],
+				Pattern:     f[pipe+1:],
+			})
+		}
+	}
+	return wruntime.OpenFileDialog(b.ctx(), wruntime.OpenDialogOptions{
+		Title:            title,
+		DefaultDirectory: defaultDir,
+		Filters:          wailsFilters,
+	})
+}
+
 // shellAPIType keeps the shell import alive — Wails-bound methods
 // only return primitive errors here, so we anchor the import to the
 // view-API interface so a future binding addition with a typed
-// argument doesn't have to re-wire the import.
+// argument doesn't have to re-wire the input.
 type shellAPIType = shell.ShellAPI
 
 // ── slash commands ────────────────────────────────────────────────────
