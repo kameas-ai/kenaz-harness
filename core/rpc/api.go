@@ -1082,8 +1082,10 @@ func New(c *core.Core) *API {
 	// ask-user-question-interactive-01KZNP3G WP04). The elicitAPI is
 	// constructed unconditionally so the tool's Delegate is always
 	// available; it just emits no events when wailsCtx is nil (test path).
+	// WailsEmitter is the same authorised EventsEmit wrapper used by the
+	// stream broker — the CI check allows it in this file.
 	a.elicitAPI = elicitview.New(elicitview.Config{
-		// Emitter is wired in SetContext after the Wails context arrives.
+		Emitter: WailsEmitter{},
 	})
 
 	a.bindings = NewBindings(a)
