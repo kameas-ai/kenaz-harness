@@ -40,6 +40,17 @@ type modelEntry struct {
 	Reasoning      bool   `yaml:"reasoning"`
 	Cancellation   bool   `yaml:"cancellation"`
 	UsageReporting bool   `yaml:"usage_reporting"`
+	// StructuredOutput is true when the model/provider supports native
+	// JSON-schema-constrained output (response_format or tool-call workaround
+	// with validated extraction). (structured-output-and-grammar-01KX5R8A FR-002)
+	StructuredOutput bool `yaml:"structured_output"`
+	// Grammar is true when the model/runtime supports token-level GBNF
+	// grammar constraints. True only for local runtimes (llama.cpp / Ollama).
+	// (structured-output-and-grammar-01KX5R8A FR-002)
+	Grammar bool `yaml:"grammar"`
+	// RegexGrammar is true when the model/runtime supports regex-shorthand
+	// grammar constraints. (structured-output-and-grammar-01KX5R8A FR-002)
+	RegexGrammar bool `yaml:"regex_grammar"`
 	// ContextWindow is the model's max context length in tokens (0 = unknown).
 	ContextWindow int `yaml:"context_window"`
 	// MaxOutputTokens is the provider's hard cap on completion tokens per
@@ -151,6 +162,10 @@ func (c *Catalog) Describe(provider, model string) llm.CapabilityDescriptor {
 			desc.Supported[llm.CapReasoning] = m.Reasoning
 			desc.Supported[llm.CapCancellation] = m.Cancellation
 			desc.Supported[llm.CapUsageReporting] = m.UsageReporting
+			// Structured-output capability flags (structured-output-and-grammar-01KX5R8A FR-002).
+			desc.Supported[llm.CapStructuredOutput] = m.StructuredOutput
+			desc.Supported[llm.CapGrammar] = m.Grammar
+			desc.Supported[llm.CapRegexGrammar] = m.RegexGrammar
 			return desc
 		}
 	}
@@ -315,15 +330,19 @@ func anySliceToStrings(in []any) []string {
 
 func applyDefaults(desc *llm.CapabilityDescriptor, defaults map[string]any) {
 	boolKeymap := map[string]llm.Capability{
-		"streaming":       llm.CapStreaming,
-		"tool_calling":    llm.CapToolCalling,
-		"vision":          llm.CapVision,
-		"documents":       llm.CapDocuments,
-		"json_mode":       llm.CapJSONMode,
-		"prompt_caching":  llm.CapPromptCaching,
-		"reasoning":       llm.CapReasoning,
-		"cancellation":    llm.CapCancellation,
-		"usage_reporting": llm.CapUsageReporting,
+		"streaming":        llm.CapStreaming,
+		"tool_calling":     llm.CapToolCalling,
+		"vision":           llm.CapVision,
+		"documents":        llm.CapDocuments,
+		"json_mode":        llm.CapJSONMode,
+		"prompt_caching":   llm.CapPromptCaching,
+		"reasoning":        llm.CapReasoning,
+		"cancellation":     llm.CapCancellation,
+		"usage_reporting":  llm.CapUsageReporting,
+		// Structured-output capability keys (structured-output-and-grammar-01KX5R8A FR-002).
+		"structured_output": llm.CapStructuredOutput,
+		"grammar":           llm.CapGrammar,
+		"regex_grammar":     llm.CapRegexGrammar,
 	}
 	for k, v := range defaults {
 		if b, ok := v.(bool); ok {
