@@ -338,9 +338,17 @@ interface WailsBindingsLike {
   // WP05 credential-gate strictness dial
   Settings_GetCedarStrictCredentialMode(): Promise<boolean>;
   Settings_SetCedarStrictCredentialMode(enabled: boolean): Promise<void>;
+  // builtin filesystem tool dials (builtin-filesystem-tools-01KR3N4P)
+  Settings_GetFSReadEnabled(): Promise<boolean>;
+  Settings_SetFSReadEnabled(enabled: boolean): Promise<void>;
+  Settings_GetFSWriteEnabled(): Promise<boolean>;
+  Settings_SetFSWriteEnabled(enabled: boolean): Promise<void>;
   // runtime filesystem-access request built-in toggle
   Settings_GetFSRequestAccessEnabled(): Promise<boolean>;
   Settings_SetFSRequestAccessEnabled(enabled: boolean): Promise<void>;
+  // todo_write tool dial (builtin-tools-search-and-elicitation-01KZNP3D)
+  Settings_GetTodoEnabled(): Promise<boolean>;
+  Settings_SetTodoEnabled(enabled: boolean): Promise<void>;
   /** Returns the full keyboard shortcut overrides map. */
   Settings_GetShortcuts(): Promise<Record<string, string>>;
   /** Persist a single shortcut override. Empty binding clears the override. */
@@ -1310,6 +1318,25 @@ export interface SettingsClient {
    * harness.
    */
   setCedarStrictCredentialMode(enabled: boolean): Promise<void>;
+  // ── Builtin filesystem tool dials (builtin-filesystem-tools-01KR3N4P) ──
+
+  /**
+   * Read the read-family builtin filesystem tools opt-in
+   * (kaneaz__read_file, kaneaz__list_dir, kaneaz__glob, kaneaz__grep,
+   * kaneaz__list_open_worklist). Default false.
+   * Surfaced as a toggle row in the Tools panel.
+   */
+  getFSReadEnabled(): Promise<boolean>;
+  /** Persist the read-family filesystem tools opt-in flag. */
+  setFSReadEnabled(enabled: boolean): Promise<void>;
+  /**
+   * Read the write-family builtin filesystem tools opt-in
+   * (kaneaz__write_file, kaneaz__edit_file). Default false.
+   * Surfaced as a toggle row in the Tools panel.
+   */
+  getFSWriteEnabled(): Promise<boolean>;
+  /** Persist the write-family filesystem tools opt-in flag. */
+  setFSWriteEnabled(enabled: boolean): Promise<void>;
   /**
    * Return whether the runtime filesystem-access-request built-in
    * (`kaneaz__request_filesystem_access`) is enabled. Default: true.
@@ -1320,6 +1347,16 @@ export interface SettingsClient {
    * Changes take effect on the next model turn without restarting.
    */
   setFSRequestAccessEnabled(enabled: boolean): Promise<void>;
+
+  // ── Todo tool dial (builtin-tools-search-and-elicitation-01KZNP3D WP07) ──
+
+  /**
+   * Read the kaneaz__todo_write builtin opt-in (default false — tool off
+   * until the user enables it from the Tools panel).
+   */
+  getTodoEnabled(): Promise<boolean>;
+  /** Persist the kaneaz__todo_write builtin opt-in flag. */
+  setTodoEnabled(enabled: boolean): Promise<void>;
 
   // ── autonomy-dial-01KR3M2A WP03 ─────────────────────────────────────
   /** Read the persisted global autonomy.Layer. */
@@ -2236,10 +2273,16 @@ export function createHarnessClient(): HarnessClient {
         b().Settings_GetCedarStrictCredentialMode(),
       setCedarStrictCredentialMode: (enabled) =>
         b().Settings_SetCedarStrictCredentialMode(enabled),
+      getFSReadEnabled: () => b().Settings_GetFSReadEnabled(),
+      setFSReadEnabled: (enabled) => b().Settings_SetFSReadEnabled(enabled),
+      getFSWriteEnabled: () => b().Settings_GetFSWriteEnabled(),
+      setFSWriteEnabled: (enabled) => b().Settings_SetFSWriteEnabled(enabled),
       getFSRequestAccessEnabled: () =>
         b().Settings_GetFSRequestAccessEnabled(),
       setFSRequestAccessEnabled: (enabled) =>
         b().Settings_SetFSRequestAccessEnabled(enabled),
+      getTodoEnabled: () => b().Settings_GetTodoEnabled(),
+      setTodoEnabled: (enabled) => b().Settings_SetTodoEnabled(enabled),
       getAutonomy: () => b().Settings_GetAutonomy(),
       setAutonomy: (layer) => b().Settings_SetAutonomy(layer),
       getMCPAutoRestart: () => b().Settings_GetMCPAutoRestart(),

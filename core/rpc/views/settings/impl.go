@@ -797,6 +797,33 @@ func (s *FileStore) SaveFSWriteEnabled(enabled bool) error {
 	return s.saveLocked(got)
 }
 
+// ── Todo tool FileStore accessors (builtin-tools-search-and-elicitation-01KZNP3D) ──
+
+// LoadTodoEnabled returns the kaneaz__todo_write opt-in.
+// Default false (tool off until the user enables it). Errors return the
+// safe default (false) so the tool remains disabled when the settings
+// file is unreadable.
+func (s *FileStore) LoadTodoEnabled() (bool, error) {
+	got, err := s.LoadAll()
+	if err != nil {
+		return got.TodoEnabled(), err
+	}
+	return got.TodoEnabled(), nil
+}
+
+// SaveTodoEnabled persists the kaneaz__todo_write opt-in.
+// Persists as the inverted TodoDisabled bit.
+func (s *FileStore) SaveTodoEnabled(enabled bool) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	got, err := s.loadLocked()
+	if err != nil {
+		return err
+	}
+	got.TodoDisabled = !enabled
+	return s.saveLocked(got)
+}
+
 // LoadEditFileArtifactSyncEnabled returns the per-user opt-in for the
 // edit-file artifact sync pipeline. Default true (enabled, matching
 // the zero-value of EditFileArtifactSyncDisabled). Errors return the
@@ -1505,6 +1532,21 @@ func (m *memoryStore) SaveEditFileArtifactSyncEnabled(enabled bool) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.data.EditFileArtifactSyncDisabled = !enabled
+	return nil
+}
+
+// ── Todo tool memoryStore accessors (builtin-tools-search-and-elicitation-01KZNP3D) ──
+
+func (m *memoryStore) LoadTodoEnabled() (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.data.TodoEnabled(), nil
+}
+
+func (m *memoryStore) SaveTodoEnabled(enabled bool) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.data.TodoDisabled = !enabled
 	return nil
 }
 

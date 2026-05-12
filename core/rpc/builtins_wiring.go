@@ -21,6 +21,7 @@ import (
 	corefsbuiltins "github.com/sigil-tech/kaneaz-harness/core/tools/fsbuiltins"
 	corefsrequest "github.com/sigil-tech/kaneaz-harness/core/tools/fsrequest"
 	coresaveartifact "github.com/sigil-tech/kaneaz-harness/core/tools/saveartifact"
+	coretodo "github.com/sigil-tech/kaneaz-harness/core/tools/todo"
 	coreupdateartifact "github.com/sigil-tech/kaneaz-harness/core/tools/updateartifact"
 	corewebsearch "github.com/sigil-tech/kaneaz-harness/core/tools/websearch"
 	"github.com/sigil-tech/kaneaz-harness/core/toolloop"
@@ -32,6 +33,13 @@ import (
 // Constructed once at startup; all fs builtin tools bind against this instance.
 // (builtin-filesystem-tools-01KR3N4P WP04)
 var GlobalFSReadSet = corefsbuiltins.NewReadSet()
+
+// GlobalTodoStore is the process-global per-session todo list store shared
+// across all sessions. The store holds the structured task list the model
+// writes via kaneaz__todo_write. Session data is evicted when the session
+// ends (Drop call from the lifecycle manager).
+// (builtin-tools-search-and-elicitation-01KZNP3D WP05)
+var GlobalTodoStore = coretodo.NewStore()
 
 // registerBuiltinTools installs the in-binary tools into the registry.
 // The Settings store gates dispatch via the EnabledFilter; the
@@ -138,6 +146,17 @@ func registerBuiltinTools(
 		logging.L().Info("rpc.builtins.update_artifact_skipped",
 			"reason", "no artifacts manager wired")
 	}
+
+	// todo_write: session-scoped structured task list. Gated behind the
+	// TodoEnabled toggle (default OFF — user opts in from Tools panel).
+	// Uses the process-global GlobalTodoStore keyed by session ID.
+	// (builtin-tools-search-and-elicitation-01KZNP3D WP05)
+	todoTool := coretodo.New(coretodo.Options{
+		Store:   GlobalTodoStore,
+		Enabled: todoEnabledLookup(store),
+	})
+	registry.Register(todoTool)
+	logging.L().Info("rpc.builtins.register", "tool", todoTool.Name())
 }
 
 // fsWriteEnabledLookup returns a closure the update_artifact tool
@@ -152,6 +171,24 @@ func fsWriteEnabledLookup(store settings.SettingsStore) func() bool {
 		v, err := store.LoadFSWriteEnabled()
 		if err != nil {
 			logging.L().Warn("rpc.builtins.update_artifact_lookup.read_failed", "err", err.Error())
+			return false
+		}
+		return v
+	}
+}
+
+// todoEnabledLookup returns a closure the todo_write tool consults inside
+// Call to honour the live Todo Settings dial. nil store collapses to
+// "disabled" — correct default-off posture. Mirrors the FS write lookup.
+// (builtin-tools-search-and-elicitation-01KZNP3D WP05)
+func todoEnabledLookup(store settings.SettingsStore) func() bool {
+	if store == nil {
+		return func() bool { return false }
+	}
+	return func() bool {
+		v, err := store.LoadTodoEnabled()
+		if err != nil {
+			logging.L().Warn("rpc.builtins.todo_enabled_lookup.read_failed", "err", err.Error())
 			return false
 		}
 		return v
@@ -389,6 +426,19 @@ func builtinEnabledPredicate(s *settings.API) func(string) bool {
 		case corefsbuiltins.NameWriteFile, corefsbuiltins.NameEditFile,
 			coreupdateartifact.ToolName:
 			v, err := store.LoadFSWriteEnabled()
+			if err != nil {
+				logging.L().Warn("rpc.builtins.predicate.read_failed",
+					"tool", name, "err", err.Error())
+				// Default-off: soft-fail to disabled.
+				return false
+			}
+			logging.L().Info("rpc.builtins.predicate", "tool", name, "enabled", v)
+			return v
+
+		// ── Todo tool (builtin-tools-search-and-elicitation-01KZNP3D) ──
+		// Default OFF until the user opts in from the Tools panel.
+		case coretodo.ToolName:
+			v, err := store.LoadTodoEnabled()
 			if err != nil {
 				logging.L().Warn("rpc.builtins.predicate.read_failed",
 					"tool", name, "err", err.Error())

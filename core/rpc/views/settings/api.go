@@ -294,6 +294,16 @@ type Settings struct {
 	// accessor; never read directly.
 	FSWriteDisabled bool `json:"fsWriteDisabled,omitempty"`
 
+	// TodoDisabled is the inverted persisted bit for the
+	// kaneaz__todo_write builtin tool
+	// (builtin-tools-search-and-elicitation-01KZNP3D WP05/WP07).
+	// Default OFF (zero-value Disabled → tool disabled) — the user opts
+	// in from the Tools panel. Read via the TodoEnabled() accessor;
+	// never read directly. Stored as the Disabled bit so a fresh install
+	// starts with the todo tool off (opt-in, same as FSReadDisabled /
+	// FSWriteDisabled above).
+	TodoDisabled bool `json:"todoDisabled,omitempty"`
+
 	// EditFileArtifactSyncDisabled is the per-user opt-out bit for the
 	// edit-file artifact sync feature (edit-file-artifact-sync-01KQ8TD5
 	// WP04). Default ON (zero-value Disabled → feature enabled when the
@@ -680,6 +690,12 @@ func (s Settings) FSReadEnabled() bool { return !s.FSReadDisabled }
 // (builtin-filesystem-tools-01KR3N4P)
 func (s Settings) FSWriteEnabled() bool { return !s.FSWriteDisabled }
 
+// TodoEnabled reports whether the kaneaz__todo_write builtin tool is
+// enabled. Default false on a fresh install (zero-value Disabled →
+// tool off). The user opts in from the Tools panel.
+// (builtin-tools-search-and-elicitation-01KZNP3D WP07)
+func (s Settings) TodoEnabled() bool { return !s.TodoDisabled }
+
 // EditFileArtifactSyncEnabled reports whether the edit-file artifact
 // sync feature is enabled for this user. Default true on a fresh install
 // (zero-value Disabled → feature enabled). The env-var gate
@@ -899,6 +915,14 @@ type SettingsStore interface {
 	// filesystem tool opt-in. Default false (tools off).
 	LoadFSWriteEnabled() (bool, error)
 	SaveFSWriteEnabled(enabled bool) error
+
+	// LoadTodoEnabled / SaveTodoEnabled expose the kaneaz__todo_write
+	// builtin tool opt-in. Default false (tool off until the user enables
+	// it from the Tools panel). The toolloop's EnabledFilter consults this
+	// on every Run boundary so a toggle takes effect on the next chat turn.
+	// (builtin-tools-search-and-elicitation-01KZNP3D WP07)
+	LoadTodoEnabled() (bool, error)
+	SaveTodoEnabled(enabled bool) error
 
 	// LoadEditFileArtifactSyncEnabled / SaveEditFileArtifactSyncEnabled
 	// expose the per-user opt-in for the edit-file artifact sync
