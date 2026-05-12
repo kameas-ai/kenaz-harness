@@ -2270,11 +2270,11 @@ export namespace llm {
 	    success: boolean;
 	    latency_ms: number;
 	    message: string;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new TestResult(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.success = source["success"];
@@ -2282,7 +2282,39 @@ export namespace llm {
 	        this.message = source["message"];
 	    }
 	}
-	
+
+	// AttachmentLimitsView — per-provider attachment capability limits returned
+	// by LLM_GetAttachmentLimits. Mirrors core/rpc/views/llm.AttachmentLimitsView.
+	// Zero values mean "unknown/unbounded". (multimodal-io-01KQ8TDF WP04)
+	export class AttachmentLimitsView {
+	    imageInput: boolean;
+	    documentInput: boolean;
+	    maxImageBytes: number;
+	    maxDocumentBytes: number;
+	    maxImageCountPerMessage: number;
+	    maxImagePixels: number;
+	    maxDocumentPages: number;
+	    imageInputMimeTypes?: string[];
+	    documentInputMimeTypes?: string[];
+
+	    static createFrom(source: any = {}) {
+	        return new AttachmentLimitsView(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.imageInput = source["imageInput"] ?? false;
+	        this.documentInput = source["documentInput"] ?? false;
+	        this.maxImageBytes = source["maxImageBytes"] ?? 0;
+	        this.maxDocumentBytes = source["maxDocumentBytes"] ?? 0;
+	        this.maxImageCountPerMessage = source["maxImageCountPerMessage"] ?? 0;
+	        this.maxImagePixels = source["maxImagePixels"] ?? 0;
+	        this.maxDocumentPages = source["maxDocumentPages"] ?? 0;
+	        this.imageInputMimeTypes = source["imageInputMimeTypes"];
+	        this.documentInputMimeTypes = source["documentInputMimeTypes"];
+	    }
+	}
+
 
 }
 

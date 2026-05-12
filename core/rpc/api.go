@@ -2195,7 +2195,7 @@ func newLLMStack(
 	chatRunner := buildChatRunner(broker, reg, wrappedPool, perms, historyAdapter, settingsImpl, graphMgr, toolDiscoverer, artifactSinkConcrete, compactionDeps, usageMgr, sessionMgrForUsage)
 	var capCatalog llm.CapCatalog
 	if cat, err := llmcap.LoadDefault(); err == nil {
-		capCatalog = cat
+		capCatalog = &capCatalogAdapter{cat: cat}
 	}
 	api := llm.New(llm.Config{
 		Registry:      reg,
@@ -4357,4 +4357,35 @@ func buildAgentGraphEventLog(c *core.Core) coreag.EventLog {
 		return nil
 	}
 	return coreag.NewSQLEventLog(rawDB)
+}
+
+// capCatalogAdapter wraps *llmcap.Catalog to satisfy the llm.CapCatalog
+// interface, translating the capabilities-package AttachmentDescriptor
+// return type to the view-layer AttachmentLimitsResult.
+// (multimodal-io-01KQ8TDF WP04)
+type capCatalogAdapter struct {
+	cat *llmcap.Catalog
+}
+
+func (a *capCatalogAdapter) ContextWindow(provider, model string) int {
+	return a.cat.ContextWindow(provider, model)
+}
+
+func (a *capCatalogAdapter) MaxOutputTokens(provider, model string) int {
+	return a.cat.MaxOutputTokens(provider, model)
+}
+
+func (a *capCatalogAdapter) AttachmentLimits(provider, model string) llm.AttachmentLimitsResult {
+	d := a.cat.AttachmentLimits(provider, model)
+	return llm.AttachmentLimitsResult{
+		ImageInput:              d.ImageInput,
+		DocumentInput:           d.DocumentInput,
+		MaxImageBytes:           d.MaxImageBytes,
+		MaxDocumentBytes:        d.MaxDocumentBytes,
+		MaxImageCountPerMessage: d.MaxImageCountPerMessage,
+		MaxImagePixels:          d.MaxImagePixels,
+		MaxDocumentPages:        d.MaxDocumentPages,
+		ImageInputMimeTypes:     d.ImageInputMimeTypes,
+		DocumentInputMimeTypes:  d.DocumentInputMimeTypes,
+	}
 }

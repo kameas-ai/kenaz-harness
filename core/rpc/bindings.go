@@ -288,6 +288,14 @@ func (b *Bindings) LLM_UpdateProviderCredential(profileID, plaintext string) err
 	return b.api.LLMConnector().UpdateProviderCredential(b.ctx(), profileID, plaintext)
 }
 
+// LLM_GetAttachmentLimits returns the resolved per-provider attachment
+// capability limits for the given provider kind + model. The frontend uses
+// these to replace hard-coded byte caps in the attachment tray
+// (multimodal-io-01KQ8TDF WP04 / FR-007).
+func (b *Bindings) LLM_GetAttachmentLimits(provider, model string) (llm.AttachmentLimitsView, error) {
+	return b.api.LLMConnector().GetAttachmentLimits(b.ctx(), provider, model)
+}
+
 // ── mcp ────────────────────────────────────────────────────────────────
 
 func (b *Bindings) MCP_ListServers() ([]mcp.Server, error) {

@@ -25,7 +25,7 @@
  * #3: image previews use URL.createObjectURL, revoked on remove + send.
  */
 
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref, watch, watchEffect } from 'vue';
 import { Paperclip, X, FileText } from 'lucide-vue-next';
 import { useDropZone } from '@vueuse/core';
 import { useHarnessClient } from '@/lib/harnessClientContext';
@@ -35,6 +35,7 @@ import type {
   SlashCommandInfo,
   BranchSuggestion,
   BranchAdvisorDismissScope,
+  AttachmentLimitsView,
 } from '@/lib/types';
 import SlashAutocomplete from '@/components/chat/SlashAutocomplete.vue';
 import BranchSuggestionBanner from '@/components/chat/BranchSuggestionBanner.vue';
@@ -66,6 +67,14 @@ const props = defineProps<{
    * without erasing the typed text or staged attachments.
    */
   errorBanner?: string | null;
+  /**
+   * Provider kind (e.g. "anthropic", "openai") used to fetch descriptor-
+   * driven attachment caps on mount + profile change.
+   * (multimodal-io-01KQ8TDF WP04 / FR-018)
+   */
+  providerKind?: string;
+  /** Active model id used together with providerKind to fetch limits. */
+  modelId?: string;
 }>();
 
 const emit = defineEmits<{
@@ -299,11 +308,44 @@ const costLabel = computed(() => {
   return `$${usd.toFixed(4)}`;
 });
 
-// Per-file size caps (FR-011: 20 MiB image/PDF, 1 MiB text).
-const IMAGE_PDF_CAP = 20 * 1024 * 1024;
-const TEXT_CAP = 1 * 1024 * 1024;
-// Hard total cap across all staged attachments (FR-011: 30 MiB).
-const TOTAL_CAP = 30 * 1024 * 1024;
+// Per-file size caps — descriptor-driven when providerKind + modelId are
+// supplied; fall back to the conservative hard-coded defaults otherwise.
+// (multimodal-io-01KQ8TDF WP04 / FR-018)
+const DEFAULT_IMAGE_PDF_CAP = 20 * 1024 * 1024; // 20 MiB
+const TEXT_CAP = 1 * 1024 * 1024; // 1 MiB
+const DEFAULT_TOTAL_CAP = 30 * 1024 * 1024; // 30 MiB
+
+// Resolved attachment limits fetched from the backend on mount + profile change.
+const attachmentLimits = ref<AttachmentLimitsView | null>(null);
+
+// Derived caps — use descriptor value when non-zero, else the default.
+const IMAGE_PDF_CAP = computed(() => {
+  const lim = attachmentLimits.value;
+  if (!lim) return DEFAULT_IMAGE_PDF_CAP;
+  // Use the smaller of image/document caps when both are set.
+  const imgCap = lim.maxImageBytes > 0 ? lim.maxImageBytes : DEFAULT_IMAGE_PDF_CAP;
+  const docCap = lim.maxDocumentBytes > 0 ? lim.maxDocumentBytes : DEFAULT_IMAGE_PDF_CAP;
+  return Math.min(imgCap, docCap);
+});
+const TOTAL_CAP = computed(() => {
+  // No per-total-cap in descriptor — keep a rolling 30 MiB default or
+  // 2× the single-file cap to allow a few attachments.
+  const single = IMAGE_PDF_CAP.value;
+  return Math.max(DEFAULT_TOTAL_CAP, single * 2);
+});
+
+// Fetch attachment limits whenever the provider/model changes.
+watchEffect(async () => {
+  const kind = props.providerKind;
+  const model = props.modelId;
+  if (!kind || !model) return;
+  try {
+    attachmentLimits.value = await client.llm.getAttachmentLimits(kind, model);
+  } catch {
+    // Non-fatal: fall back to defaults on RPC error.
+    attachmentLimits.value = null;
+  }
+});
 
 const ALLOWED_IMAGE_MIMES = new Set([
   'image/png',
@@ -414,13 +456,15 @@ async function ingestImageOrPDF(
   file: File,
   mediaType: string,
 ): Promise<void> {
-  if (file.size > IMAGE_PDF_CAP) {
-    localError.value = `${file.name}: file too large (max 20 MiB)`;
+  if (file.size > IMAGE_PDF_CAP.value) {
+    const capMiB = Math.round(IMAGE_PDF_CAP.value / (1024 * 1024));
+    localError.value = `${file.name}: file too large (max ${capMiB} MiB)`;
     return;
   }
   const base64 = await readFileAsBase64(file);
-  if (totalStagedBytes() + file.size > TOTAL_CAP) {
-    localError.value = 'Total staged attachments exceed 30 MiB; remove one first.';
+  if (totalStagedBytes() + file.size > TOTAL_CAP.value) {
+    const totalMiB = Math.round(TOTAL_CAP.value / (1024 * 1024));
+    localError.value = `Total staged attachments exceed ${totalMiB} MiB; remove one first.`;
     return;
   }
   const sid = props.sessionId ?? '';
@@ -470,8 +514,9 @@ async function ingestText(file: File, _mediaType: string): Promise<void> {
       'Binary files are only supported as images or PDFs.';
     return;
   }
-  if (totalStagedBytes() + content.length > TOTAL_CAP) {
-    localError.value = 'Total staged attachments exceed 30 MiB; remove one first.';
+  if (totalStagedBytes() + content.length > TOTAL_CAP.value) {
+    const totalMiB = Math.round(TOTAL_CAP.value / (1024 * 1024));
+    localError.value = `Total staged attachments exceed ${totalMiB} MiB; remove one first.`;
     return;
   }
   const sha = await sha256Hex(content);
@@ -665,8 +710,9 @@ async function commitAtPath(path: string): Promise<void> {
     const filename = path.split('/').pop() ?? path;
     if (res.mediaType === 'application/pdf' || res.mediaType.startsWith('image/')) {
       // We already have base64; bypass the FileReader round-trip.
-      if (totalStagedBytes() > TOTAL_CAP) {
-        localError.value = 'Total staged attachments exceed 30 MiB; remove one first.';
+      if (totalStagedBytes() > TOTAL_CAP.value) {
+        const totalMiB = Math.round(TOTAL_CAP.value / (1024 * 1024));
+        localError.value = `Total staged attachments exceed ${totalMiB} MiB; remove one first.`;
         return;
       }
       const sid = props.sessionId ?? '';

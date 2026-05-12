@@ -108,7 +108,8 @@ type BundleSource interface {
 }
 
 // CapCatalog is the capability-lookup seam used to populate ModelInfos
-// (contextWindow, maxOutputTokens) on Provider at ListProviders time.
+// (contextWindow, maxOutputTokens) on Provider at ListProviders time and
+// to resolve per-provider attachment limits (multimodal-io-01KQ8TDF WP04).
 // The concrete *capabilities.Catalog satisfies it; tests may inject a
 // fake. nil → ModelInfos fields default to 0 (unknown).
 type CapCatalog interface {
@@ -119,6 +120,25 @@ type CapCatalog interface {
 	// (provider, model). Returns 0 when the model is unknown
 	// (backend-context-window-length-01KQ8TD3 WP01).
 	MaxOutputTokens(provider, model string) int
+	// AttachmentLimits returns the resolved attachment capability descriptor
+	// for (provider, model). Returns a zero-value descriptor when unknown.
+	// (multimodal-io-01KQ8TDF WP04 / FR-007)
+	AttachmentLimits(provider, model string) AttachmentLimitsResult
+}
+
+// AttachmentLimitsResult mirrors capabilities.AttachmentDescriptor across
+// the CapCatalog seam without creating a hard import dependency on
+// core/llm/capabilities from the view layer.
+type AttachmentLimitsResult struct {
+	ImageInput              bool
+	DocumentInput           bool
+	MaxImageBytes           int64
+	MaxDocumentBytes        int64
+	MaxImageCountPerMessage int
+	MaxImagePixels          int64
+	MaxDocumentPages        int
+	ImageInputMimeTypes     []string
+	DocumentInputMimeTypes  []string
 }
 
 // CredPeeker resolves a credential reference to a display-safe Redacted
@@ -1222,4 +1242,27 @@ func zeroBytes(b []byte) {
 	for i := range b {
 		b[i] = 0
 	}
+}
+
+// GetAttachmentLimits returns the resolved attachment capability descriptor
+// for the given provider kind + model. Returns a zero-value descriptor
+// (everything false/0) when no catalog is wired or the provider/model is
+// unknown — the frontend treats zero as "no attachments supported".
+// (multimodal-io-01KQ8TDF WP04 / FR-007)
+func (a *API) GetAttachmentLimits(_ context.Context, provider, model string) (AttachmentLimitsView, error) {
+	if a.capCatalog == nil {
+		return AttachmentLimitsView{}, nil
+	}
+	r := a.capCatalog.AttachmentLimits(provider, model)
+	return AttachmentLimitsView{
+		ImageInput:              r.ImageInput,
+		DocumentInput:           r.DocumentInput,
+		MaxImageBytes:           r.MaxImageBytes,
+		MaxDocumentBytes:        r.MaxDocumentBytes,
+		MaxImageCountPerMessage: r.MaxImageCountPerMessage,
+		MaxImagePixels:          r.MaxImagePixels,
+		MaxDocumentPages:        r.MaxDocumentPages,
+		ImageInputMimeTypes:     r.ImageInputMimeTypes,
+		DocumentInputMimeTypes:  r.DocumentInputMimeTypes,
+	}, nil
 }

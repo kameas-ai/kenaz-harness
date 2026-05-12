@@ -993,9 +993,19 @@ export interface ResumeMessageResult {
 }
 
 /**
+ * ImageDimensions — pixel dimensions of an image attachment.
+ * Mirrors core/llm.ImageDimensions. (multimodal-io-01KQ8TDF WP04 / FR-003)
+ */
+export interface ImageDimensions {
+  width: number;
+  height: number;
+}
+
+/**
  * MediaSource — base64 / URI source of an image or document content
  * block. Mirrors core/llm.MediaSource. The Wails JSON wire shape keeps
  * the Go-side snake_case JSON tags verbatim.
+ * SizeBytes and ImageDimensions are additive fields from WP04 (FR-003).
  */
 export interface MediaSource {
   kind: string;
@@ -1003,6 +1013,35 @@ export interface MediaSource {
   data?: string;
   uri?: string;
   original_name?: string;
+  /** Byte size of the source data (populated by the backend on Put). */
+  size_bytes?: number;
+  /** Pixel dimensions for image/* attachments; absent when unknown. */
+  image_dimensions?: ImageDimensions;
+}
+
+/**
+ * AttachmentLimitsView — per-provider attachment capability limits returned
+ * by client.llm.getAttachmentLimits(). Mirrors
+ * core/rpc/views/llm.AttachmentLimitsView. Zero values mean "unknown/unbounded".
+ * (multimodal-io-01KQ8TDF WP04 / FR-007)
+ */
+export interface AttachmentLimitsView {
+  imageInput: boolean;
+  documentInput: boolean;
+  /** Max bytes per image attachment; 0 = unbounded. */
+  maxImageBytes: number;
+  /** Max bytes per document attachment; 0 = unbounded. */
+  maxDocumentBytes: number;
+  /** Max image blocks per message; 0 = unbounded. */
+  maxImageCountPerMessage: number;
+  /** Max pixel count (W×H) per image; 0 = unbounded. */
+  maxImagePixels: number;
+  /** Max pages per PDF; 0 = unbounded. */
+  maxDocumentPages: number;
+  /** MIME types accepted for images; empty = accept all. */
+  imageInputMimeTypes?: string[];
+  /** MIME types accepted for documents; empty = accept all. */
+  documentInputMimeTypes?: string[];
 }
 
 /**

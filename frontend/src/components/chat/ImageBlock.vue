@@ -29,6 +29,13 @@ const dataURL = computed(() => {
 
 const filename = computed(() => props.source.original_name ?? '');
 
+/** Tooltip showing pixel dimensions, e.g. "1920×1080 px" */
+const dimensionTooltip = computed(() => {
+  const dims = props.source.image_dimensions;
+  if (!dims || !dims.width || !dims.height) return '';
+  return `${dims.width}×${dims.height} px`;
+});
+
 function openLightbox() {
   lightboxOpen.value = true;
 }
@@ -43,6 +50,7 @@ function closeLightbox() {
       type="button"
       class="block rounded-md border border-border-muted overflow-hidden hover:border-accent transition-fast"
       :aria-label="filename ? `Open image preview: ${filename}` : 'Open image preview'"
+      :title="dimensionTooltip || undefined"
       data-testid="image-block-thumbnail"
       @click="openLightbox"
     >
@@ -52,6 +60,11 @@ function closeLightbox() {
         class="block max-w-[240px] max-h-[240px] object-contain bg-surface-2"
       />
     </button>
+    <span
+      v-if="dimensionTooltip"
+      class="block text-[10px] text-ink-dim text-center mt-0.5"
+      data-testid="image-block-dims"
+    >{{ dimensionTooltip }}</span>
     <ImageLightbox
       :open="lightboxOpen"
       :src="dataURL"

@@ -108,6 +108,22 @@ type ModelInfo struct {
 	MaxOutputTokens int `json:"maxOutputTokens,omitempty"`
 }
 
+// AttachmentLimitsView is the wire-safe view of capabilities.AttachmentDescriptor
+// returned by GetAttachmentLimits. Zero values mean "unknown/unbounded".
+// All byte caps are in bytes; pixel caps are in pixels (W×H).
+// (multimodal-io-01KQ8TDF WP04 / FR-007)
+type AttachmentLimitsView struct {
+	ImageInput              bool     `json:"imageInput"`
+	DocumentInput           bool     `json:"documentInput"`
+	MaxImageBytes           int64    `json:"maxImageBytes,omitempty"`
+	MaxDocumentBytes        int64    `json:"maxDocumentBytes,omitempty"`
+	MaxImageCountPerMessage int      `json:"maxImageCountPerMessage,omitempty"`
+	MaxImagePixels          int64    `json:"maxImagePixels,omitempty"`
+	MaxDocumentPages        int      `json:"maxDocumentPages,omitempty"`
+	ImageInputMimeTypes     []string `json:"imageInputMimeTypes,omitempty"`
+	DocumentInputMimeTypes  []string `json:"documentInputMimeTypes,omitempty"`
+}
+
 // LLMConnectorAPI is the view-scoped accessor for provider metadata and
 // streams. Implementations MUST be safe for concurrent use.
 //
@@ -168,4 +184,13 @@ type LLMConnectorAPI interface {
 	// when the user has entered a new value (credential-store-01KQ8TDD
 	// WP05 / FR-007).
 	UpdateProviderCredential(ctx context.Context, profileID, plaintext string) error
+
+	// GetAttachmentLimits returns the resolved per-provider attachment
+	// capability descriptor for the given provider kind + model. The
+	// frontend uses this to replace hard-coded byte caps with
+	// descriptor-driven values (multimodal-io-01KQ8TDF WP04 / FR-007).
+	// provider is the profile.Kind (e.g. "anthropic", "openai"); model is
+	// the model ID string. Returns a zero-value descriptor (everything
+	// disabled) when the provider or model is unknown.
+	GetAttachmentLimits(ctx context.Context, provider, model string) (AttachmentLimitsView, error)
 }

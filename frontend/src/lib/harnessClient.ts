@@ -129,6 +129,7 @@ import type {
   PermissionMode,
   SessionUsage,
   DriftReport,
+  AttachmentLimitsView,
 } from './types';
 
 /**
@@ -249,6 +250,10 @@ interface WailsBindingsLike {
   LLM_TestProvider(id: string): Promise<TestResult>;
   LLM_ListModels(kind: string, plaintextApiKey: string): Promise<ModelInfo[]>;
   LLM_ResolveConfirm(requestID: string, decision: string): Promise<void>;
+  LLM_GetAttachmentLimits(
+    provider: string,
+    model: string,
+  ): Promise<AttachmentLimitsView>;
 
   MCP_ListServers(): Promise<MCPServer[]>;
   MCP_StartStream(id: string): Promise<string>;
@@ -1072,6 +1077,18 @@ export interface LLMConnectorClient {
    * and dispatches / blocks accordingly.
    */
   resolveConfirm(requestID: string, decision: ConfirmDecision): Promise<void>;
+
+  /**
+   * getAttachmentLimits returns the descriptor-driven per-provider attachment
+   * capability limits for (provider, model). The chat composer uses these to
+   * replace hard-coded byte/count caps with values from the capability YAML.
+   * Returns a zero descriptor (imageInput=false, documentInput=false) when the
+   * provider or model is unknown. (multimodal-io-01KQ8TDF WP04 / FR-007)
+   */
+  getAttachmentLimits(
+    provider: string,
+    model: string,
+  ): Promise<AttachmentLimitsView>;
 }
 
 export interface MCPClient {
@@ -1127,6 +1144,7 @@ export type {
   MCPTranslationReport,
   MCPImportWrotePath,
   MCPTestResult,
+  AttachmentLimitsView,
 };
 
 export interface A2AClient {
@@ -2288,6 +2306,8 @@ export function createHarnessClient(): HarnessClient {
         b().LLM_ListModels(kind, plaintextApiKey),
       resolveConfirm: (requestID, decision) =>
         b().LLM_ResolveConfirm(requestID, decision),
+      getAttachmentLimits: (provider, model) =>
+        b().LLM_GetAttachmentLimits(provider, model),
     },
     mcp: {
       listServers: () => b().MCP_ListServers(),
@@ -2778,6 +2798,15 @@ export function createFakeHarnessClient(
       }),
       listModels: async () => [],
       resolveConfirm: noop,
+      getAttachmentLimits: async () => ({
+        imageInput: false,
+        documentInput: false,
+        maxImageBytes: 0,
+        maxDocumentBytes: 0,
+        maxImageCountPerMessage: 0,
+        maxImagePixels: 0,
+        maxDocumentPages: 0,
+      }),
     },
     mcp: {
       listServers: async () => [],

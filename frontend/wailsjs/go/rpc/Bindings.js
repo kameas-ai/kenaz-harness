@@ -434,6 +434,10 @@ export function LLM_UpdateProviderCredential(arg1, arg2) {
   return window['go']['rpc']['Bindings']['LLM_UpdateProviderCredential'](arg1, arg2);
 }
 
+export function LLM_GetAttachmentLimits(arg1, arg2) {
+  return window['go']['rpc']['Bindings']['LLM_GetAttachmentLimits'](arg1, arg2);
+}
+
 export function LoadRoute() {
   return window['go']['rpc']['Bindings']['LoadRoute']();
 }

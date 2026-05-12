@@ -1603,6 +1603,8 @@ async function onNudgeNewSession() {
           :estimate="{ tokens: 0, usd: 0 }"
           :session-id="sessionId"
           :error-banner="session.error.value"
+          :provider-kind="activeProvider?.kind ?? ''"
+          :model-id="activeModelId"
           @send="onSend"
           @send-blocks="onSendBlocks"
           @cancel="onCancel"

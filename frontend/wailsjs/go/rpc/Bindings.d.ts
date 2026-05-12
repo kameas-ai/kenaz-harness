@@ -254,6 +254,8 @@ export function LLM_UpdateProvider(arg1:llm.AddProviderInput):Promise<void>;
 
 export function LLM_UpdateProviderCredential(arg1:string,arg2:string):Promise<void>;
 
+export function LLM_GetAttachmentLimits(arg1:string,arg2:string):Promise<llm.AttachmentLimitsView>;
+
 export function LoadRoute():Promise<string>;
 
 export function LoadTheme():Promise<string>;
