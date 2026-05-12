@@ -1073,6 +1073,33 @@ export interface RotationResult {
 }
 
 /**
+ * AuthFailedPayload — payload of the `provider:auth-failed` broker event.
+ * Emitted by the chat runner when an adapter returns *ErrProviderAuthFailed.
+ * (provider-keychain-rotation-01KQ8TD9 WP05)
+ */
+export interface AuthFailedPayload {
+  sub_id: string;
+  session_id: string;
+  profile_id: string;
+  provider: string;
+  model: string;
+  reason: string;
+}
+
+/**
+ * RetryAfterRotationFailedPayload — payload of the
+ * `provider:retry-after-rotation-failed` broker event. Emitted when a
+ * resumed (post-rotation) turn errors for non-auth reasons.
+ * (provider-keychain-rotation-01KQ8TD9 WP05)
+ */
+export interface RetryAfterRotationFailedPayload {
+  sub_id: string;
+  session_id: string;
+  profile_id: string;
+  error_message: string;
+}
+
+/**
  * ContentBlock — one polymorphic fragment of a multimodal message.
  * Mirrors core/llm.ContentBlock. The wire shape uses the Go-side
  * snake_case JSON tags (`tool_use`, `tool_result`).
