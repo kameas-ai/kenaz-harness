@@ -31,7 +31,12 @@ type Hook struct {
 	Builtin string         `json:"builtin,omitempty"`
 	Command string         `json:"command,omitempty"`
 	MCPTool string         `json:"mcpTool,omitempty"`
-	Config  map[string]any `json:"config,omitempty"`
+	// TimeoutMs is the per-hook execution timeout in milliseconds.
+	// Mirrors core/hooks.Hook.TimeoutMs (json `timeout_ms`); the wire
+	// surface exposes it directly rather than tunnelling through Config
+	// so the editor form can bind to a typed field.
+	TimeoutMs int            `json:"timeoutMs,omitempty"`
+	Config    map[string]any `json:"config,omitempty"`
 }
 
 // HookInput is the payload for Add / Update.

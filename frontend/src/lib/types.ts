@@ -1370,6 +1370,10 @@ export interface HookMatch {
 
 /**
  * Hook — one configured lifecycle hook. Mirrors core/hooks.Hook.
+ *
+ * `timeoutMs` is the typed per-hook execution timeout (ms). It mirrors
+ * the Go-side `Hook.TimeoutMs` (`timeout_ms`) field and supersedes the
+ * `config.timeout_ms` workaround the HookEditor used in v0.8.0.
  */
 export interface Hook {
   id: string;
@@ -1381,6 +1385,7 @@ export interface Hook {
   builtin?: string;
   command?: string;
   mcpTool?: string;
+  timeoutMs?: number;
   config?: Record<string, unknown>;
 }
 
