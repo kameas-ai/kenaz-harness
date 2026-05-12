@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"strings"
 
 	wruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 	"github.com/sigil-tech/kaneaz-harness/core/autonomy"
@@ -39,12 +40,14 @@ import (
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/settings"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/shell"
 	slashview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/slashcmd"
+	coreslashcmd "github.com/sigil-tech/kaneaz-harness/core/slashcmd"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/tools"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/trust"
 	updateview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/update"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/workflow"
 	workflowsview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/workflows"
 	storageview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/storage"
+	elicitview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/elicit"
 	"github.com/sigil-tech/kaneaz-harness/core/logging"
 	"github.com/sigil-tech/kaneaz-harness/core/mcp/stdio"
 )
@@ -632,6 +635,65 @@ func (b *Bindings) Settings_SetFSRequestAccessEnabled(enabled bool) error {
 	return b.storeFn().SaveFSRequestAccessEnabled(enabled)
 }
 
+// ── Builtin filesystem tool dials (builtin-filesystem-tools-01KR3N4P) ────
+//
+// Settings_GetFSReadEnabled exposes the read-family builtin filesystem
+// tool opt-in (default false — tools off until the user enables them from
+// the Tools panel). The toolloop's EnabledFilter consults this on every
+// Run boundary so a toggle takes effect on the next chat turn.
+func (b *Bindings) Settings_GetFSReadEnabled() (bool, error) {
+	if b.storeFn == nil {
+		return false, nil
+	}
+	return b.storeFn().LoadFSReadEnabled()
+}
+
+// Settings_SetFSReadEnabled persists the read-family filesystem tool opt-in.
+func (b *Bindings) Settings_SetFSReadEnabled(enabled bool) error {
+	if b.storeFn == nil {
+		return nil
+	}
+	return b.storeFn().SaveFSReadEnabled(enabled)
+}
+
+// Settings_GetFSWriteEnabled exposes the write-family builtin filesystem
+// tool opt-in (default false — write tools off until the user enables them).
+func (b *Bindings) Settings_GetFSWriteEnabled() (bool, error) {
+	if b.storeFn == nil {
+		return false, nil
+	}
+	return b.storeFn().LoadFSWriteEnabled()
+}
+
+// Settings_SetFSWriteEnabled persists the write-family filesystem tool opt-in.
+func (b *Bindings) Settings_SetFSWriteEnabled(enabled bool) error {
+	if b.storeFn == nil {
+		return nil
+	}
+	return b.storeFn().SaveFSWriteEnabled(enabled)
+}
+
+// ── Todo tool dial (builtin-tools-search-and-elicitation-01KZNP3D WP07) ──
+
+// Settings_GetTodoEnabled exposes the kaneaz__todo_write builtin opt-in
+// (default false — tool off until the user enables it from the Tools panel).
+// The toolloop's EnabledFilter consults this on every Run boundary so a
+// toggle takes effect on the next chat turn.
+func (b *Bindings) Settings_GetTodoEnabled() (bool, error) {
+	if b.storeFn == nil {
+		return false, nil
+	}
+	return b.storeFn().LoadTodoEnabled()
+}
+
+// Settings_SetTodoEnabled persists the kaneaz__todo_write opt-in flag.
+func (b *Bindings) Settings_SetTodoEnabled(enabled bool) error {
+	if b.storeFn == nil {
+		return nil
+	}
+	return b.storeFn().SaveTodoEnabled(enabled)
+}
+
 // Settings_GetMaxAgentTurns exposes the chat-graph LoopNode iteration
 // cap (default DefaultMaxAgentTurns = 25). The chassis (chat runner)
 // reads the effective value on every chat run start so the dial takes
@@ -1125,6 +1187,9 @@ func (b *Bindings) Hooks_InstallStarterMemory() error {
 func (b *Bindings) Hooks_RemoveStarterMemory() error {
 	return b.api.Hooks().RemoveStarterMemoryHooks(b.ctx())
 }
+func (b *Bindings) Hooks_DryRun(hookID string, syntheticPayload string) (hooksview.DryRunResult, error) {
+	return b.api.Hooks().DryRun(b.ctx(), hookID, syntheticPayload)
+}
 
 // ── tools (MCP recipes) ────────────────────────────────────────────────
 
@@ -1303,10 +1368,50 @@ func (b *Bindings) Shell_ReadFile(path string) (ShellReadFileResult, error) {
 	}, nil
 }
 
+// Shell_PickFile opens the OS-native file-picker dialog and returns the
+// absolute path of the file the user selected. Returns the empty string
+// when the user cancels (Wails surfaces cancel as a no-error empty result).
+//
+// Parameters:
+//   - title:      dialog window title; defaults to "Choose a file" if empty.
+//   - defaultDir: starting directory hint; pass "" to let the OS decide.
+//   - filters:    optional MIME / extension hints passed to the OS picker.
+//     Each entry is "Display Name|*.ext1;*.ext2" (Wails format). Pass nil
+//     for no filtering.
+//
+// Used by the AskUserQuestion dialog's "file" kind so the user can select a
+// file path graphically (WP10) rather than typing the path manually.
+func (b *Bindings) Shell_PickFile(title, defaultDir string, filters []string) (string, error) {
+	if title == "" {
+		title = "Choose a file"
+	}
+	var wailsFilters []wruntime.FileFilter
+	for _, f := range filters {
+		// Each filter string is "Display Name|*.ext1;*.ext2"
+		pipe := strings.Index(f, "|")
+		if pipe < 0 {
+			wailsFilters = append(wailsFilters, wruntime.FileFilter{
+				DisplayName: f,
+				Pattern:     f,
+			})
+		} else {
+			wailsFilters = append(wailsFilters, wruntime.FileFilter{
+				DisplayName: f[:pipe],
+				Pattern:     f[pipe+1:],
+			})
+		}
+	}
+	return wruntime.OpenFileDialog(b.ctx(), wruntime.OpenDialogOptions{
+		Title:            title,
+		DefaultDirectory: defaultDir,
+		Filters:          wailsFilters,
+	})
+}
+
 // shellAPIType keeps the shell import alive — Wails-bound methods
 // only return primitive errors here, so we anchor the import to the
 // view-API interface so a future binding addition with a typed
-// argument doesn't have to re-wire the import.
+// argument doesn't have to re-wire the input.
 type shellAPIType = shell.ShellAPI
 
 // ── slash commands ────────────────────────────────────────────────────
@@ -1317,6 +1422,52 @@ func (b *Bindings) Slash_Execute(sessionID, raw string) (slashview.ExecuteResult
 
 func (b *Bindings) Slash_List() ([]slashview.CommandInfo, error) {
 	return b.api.Slash().List(b.ctx())
+}
+
+// ── user command RPCs ─────────────────────────────────────────────────
+
+func (b *Bindings) Slashcmd_List(projectID string) ([]slashview.UserCommandSummaryWire, error) {
+	return b.api.Slash().UserList(b.ctx(), projectID)
+}
+
+func (b *Bindings) Slashcmd_Get(name, projectID string) (slashview.UserCommandWire, error) {
+	return b.api.Slash().UserGet(b.ctx(), name, projectID)
+}
+
+func (b *Bindings) Slashcmd_Save(cmd slashview.UserCommandWire) error {
+	return b.api.Slash().UserSave(b.ctx(), cmd)
+}
+
+func (b *Bindings) Slashcmd_Delete(name, projectID string) error {
+	return b.api.Slash().UserDelete(b.ctx(), name, projectID)
+}
+
+func (b *Bindings) Slashcmd_Run(name string, args map[string]string, sessionID, projectID, cwd, selection string) (slashview.RunResultWire, error) {
+	return b.api.Slash().UserRun(b.ctx(), name, args, sessionID, projectID, cwd, selection)
+}
+
+// ── feature flags (user-slash-commands-01KQ8TD9 WP09) ────────────────
+
+// FeatureFlagInfo carries a single feature-flag name + enabled state
+// for the frontend FeatureFlagsView.
+type FeatureFlagInfo struct {
+	Name        string `json:"name"`
+	Enabled     bool   `json:"enabled"`
+	Description string `json:"description"`
+	EnvVar      string `json:"envVar"`
+}
+
+// Config_GetFlags returns the current state of all known feature flags.
+// This RPC is read-only; flags are controlled via environment variables.
+func (b *Bindings) Config_GetFlags() ([]FeatureFlagInfo, error) {
+	return []FeatureFlagInfo{
+		{
+			Name:        "user-slash-commands",
+			Enabled:     coreslashcmd.UserSlashcmdEnabled(),
+			Description: "User-defined / commands (text expansions, tool dispatch, prompt templates).",
+			EnvVar:      "HARNESS_USER_SLASHCMD",
+		},
+	}, nil
 }
 
 // ── corpora (agent-kernel-graph; Bundle C WP10/WP11) ──────────────────
@@ -1657,4 +1808,48 @@ func (b *Bindings) Onboarding_RestartPhase2(req onboardingview.RestartPhase2Requ
 // server-side when RestartPhase2 fires.
 func (b *Bindings) Onboarding_ListStarters() ([]onboardingview.StarterSummary, error) {
 	return b.api.Onboarding().ListStarters(b.ctx())
+}
+
+// ── elicit (ask-user-question-interactive-01KZNP3G, WP04) ─────────────
+
+// Elicit_SubmitAnswer resolves a pending ask-user-question elicitation.
+// requestID was emitted on the "elicit:pending" broker topic when the
+// model called kaneaz__ask_user_question; answerJSON is the user's answer
+// (a JSON-encoded value matching the question kind), or null when
+// cancelled is true. The blocking OpenDialog call on the Go side returns
+// after this method resolves the pending channel.
+func (b *Bindings) Elicit_SubmitAnswer(requestID string, answerJSON json.RawMessage, cancelled bool) error {
+	return b.api.Elicit().SubmitAnswer(b.ctx(), requestID, answerJSON, cancelled)
+}
+
+// Elicit_SubmitWizardStep records one question's answer in a multi-step wizard
+// (WP05). requestID identifies the in-flight OpenWizard call; questionID is
+// the id of the question being answered; answerJSON is the user's answer;
+// dismissed is true when the user cancels the wizard mid-flow.
+//
+// The wizard resolves automatically when all visible questions are answered.
+// When dismissed, the partial set of answers is returned to the model as
+// answered_so_far in the WizardAnswer.
+func (b *Bindings) Elicit_SubmitWizardStep(requestID string, questionID string, answerJSON json.RawMessage, dismissed bool) error {
+	return b.api.Elicit().SubmitWizardStep(b.ctx(), requestID, questionID, answerJSON, dismissed)
+}
+
+// Elicit_RegisterDeferred registers a deferred ask for a session and returns
+// immediately with DeferredResult{Deferred:true, AskID:…} (WP06).
+// The model can use AskID to retrieve the answer later via
+// __ask_get_result(ask_id). A chat-header pill appears for the user.
+func (b *Bindings) Elicit_RegisterDeferred(sessionID string, req elicitview.ElicitRequest) (elicitview.DeferredResult, error) {
+	return b.api.Elicit().RegisterDeferred(b.ctx(), sessionID, req)
+}
+
+// Elicit_AnswerDeferred records the user's answer for a deferred ask (WP06).
+// Returns the system_reminder text to inject into the next LLM turn.
+func (b *Bindings) Elicit_AnswerDeferred(askID string, answer any) (string, error) {
+	return b.api.Elicit().AnswerDeferred(b.ctx(), askID, answer)
+}
+
+// Elicit_ListPending returns in-flight elicitation request IDs so the
+// frontend can reconcile its dialog queue on reconnect / hot reload.
+func (b *Bindings) Elicit_ListPending() ([]elicitview.ElicitRequest, error) {
+	return b.api.Elicit().ListPending(b.ctx())
 }

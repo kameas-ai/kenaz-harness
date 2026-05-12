@@ -79,6 +79,85 @@ const (
 	// gated by the same FSWriteDisabled toggle as the write-family fs
 	// builtins. The resource UID is Artifact::"<artifact-id>".
 	ActionArtifactUpdate = "artifact.update"
+
+	// ── Builtin search-and-elicitation action families ──────────────────
+	// Introduced by mission builtin-tools-search-and-elicitation-01KZNP3D
+	// and extended by ask-user-question-interactive-01KZNP3G. All families
+	// follow the dotted "<domain>.<operation>" naming convention
+	// established by the workflow and artifact action families above.
+	// Downstream skills-catalog + future elicitation missions MUST follow
+	// the same convention when adding new action families.
+
+	// ActionToolReadGlob gates kaneaz__glob (glob-match across a directory
+	// tree). Resource UID: Filesystem::"<base-dir>". Default-allow when
+	// FSReadEnabled is true; gated by the same FSReadDisabled toggle.
+	ActionToolReadGlob = "tool.read.glob"
+
+	// ActionToolReadGrep gates kaneaz__grep (in-process regex search).
+	// Resource UID: Filesystem::"<search-path>". Default-allow when
+	// FSReadEnabled is true; gated by the same FSReadDisabled toggle.
+	ActionToolReadGrep = "tool.read.grep"
+
+	// ActionToolTodoWrite gates kaneaz__todo_write (structured task list
+	// write). Resource UID: TodoList::"session" (session-scoped list).
+	// Default-allow when TodoEnabled is true; gated by TodoDisabled toggle.
+	// The action intentionally lives in the "tool.todo" family rather than
+	// "tool.write" so policy authors can grant todo access independently of
+	// the broader filesystem write surface.
+	ActionToolTodoWrite = "tool.todo.write"
+
+	// ActionToolTodoRead gates future kaneaz__todo_read (reserved — not yet
+	// implemented). Declared here so Cedar policy snippets written against
+	// the action family validate without schema changes when the read tool
+	// ships. Resource UID: TodoList::"session".
+	ActionToolTodoRead = "tool.todo.read"
+
+	// ActionElicitAsk gates kaneaz__ask_user_question (synchronous
+	// single-question elicitation: model calls tool → backend opens
+	// dialog → user answers → result returns to model). Introduced by
+	// ask-user-question-interactive-01KZNP3G WP01. Resource UID:
+	// Elicitation::"<kind>" where kind is one of the seven question kinds
+	// (radio, checkbox, text, number, slider, date, file).
+	ActionElicitAsk = "tool.elicit.ask"
+
+	// ActionPassive is the Cedar action family for passive (no-side-effect)
+	// builtin tools. Introduced by mission
+	// builtin-tools-search-and-elicitation-01KZNP3D (WP04).
+	//
+	// Currently only kaneaz__sleep uses this action. Passive tools are
+	// default-allow and are never gated by a Settings toggle because they
+	// have no observable side effects and must remain available for
+	// __monitor watch patterns.
+	//
+	// The resource UID convention is Tool::"kaneaz__<tool_name>" — the same
+	// shape as ActionUseTool, but evaluated under the tool.passive action
+	// ID so policy authors can write targeted rules for passive tools
+	// without affecting the broader use_tool gate.
+	ActionPassive = "tool.passive"
+
+	// ── Skill-invocation action family ────────────────────────────────────
+	// Introduced by mission model-invoked-skills-catalog-01KZNP3E.
+	// The "tool.skill" family follows the established "<domain>.<operation>"
+	// naming convention. Resource UIDs take the form Skill::"<command-name>"
+	// so policy authors can permit or forbid individual skills independently
+	// of the broader tool surface.
+	//
+	//   ActionToolSkillInvoke — gates kaneaz__skill calls (model invokes a
+	//     user-defined slash command marked model_invokable=true).
+	//     Resource UID: Skill::"<command-name>".
+	ActionToolSkillInvoke = "tool.skill.invoke"
+
+	// ActionElicitTemplatePrefix is the Cedar action prefix for template-based
+	// elicitation (ask-user-question-interactive-01KZNP3G WP07).  The full
+	// action ID is built as ActionElicitTemplatePrefix + <template-id>
+	// (e.g. "tool.elicit.template.confirm-deploy").  Policy authors can
+	// therefore deny individual templates while leaving the general ask open.
+	ActionElicitTemplatePrefix = "tool.elicit.template."
+
+	// ActionElicitDeferred gates async / deferred-mode elicitation
+	// (ask-user-question-interactive-01KZNP3G WP06).  Non-interactive
+	// sub-agents receive declined:true,reason:"non_interactive" regardless.
+	ActionElicitDeferred = "tool.elicit.ask_deferred"
 )
 
 // Entity-type names mirror spec §4.10's recommended mapping:
@@ -122,6 +201,25 @@ const (
 	// definitions. Introduced by mission workflows-01KQ8TDG (WP11).
 	// Resource UIDs take the shape Workflow::"<workflow-id>".
 	EntityTypeWorkflow = "Workflow"
+
+	// EntityTypeTodoList is the Cedar entity type for the session-scoped
+	// todo list. Introduced by mission
+	// builtin-tools-search-and-elicitation-01KZNP3D (WP05).
+	// Resource UIDs take the shape TodoList::"session".
+	EntityTypeTodoList = "TodoList"
+
+	// EntityTypeElicitation is the Cedar entity type for the
+	// ask-user-question elicitation surface (mission
+	// ask-user-question-interactive-01KZNP3G WP01). Resource UIDs take
+	// the shape Elicitation::"<kind>" where kind is one of the seven
+	// question kinds: radio, checkbox, text, number, slider, date, file.
+	EntityTypeElicitation = "Elicitation"
+
+	// EntityTypeSkill is the Cedar entity type for model-invokable user
+	// skills. Introduced by mission model-invoked-skills-catalog-01KZNP3E.
+	// Resource UIDs take the shape Skill::"<command-name>" where command-name
+	// is the bare slash command token (e.g. "summarize", "daily-standup").
+	EntityTypeSkill = "Skill"
 
 	// PrincipalLocal is the canonical EntityUID id for the single
 	// local user. The harness is single-user / privacy-first
@@ -366,4 +464,60 @@ func MCPRecipeUID(id string) cedar.EntityUID {
 		safeID = invalidUIDID
 	}
 	return cedar.NewEntityUID(EntityTypeMCPRecipe, cedar.String(safeID))
+}
+
+// TodoListUID builds a Cedar EntityUID for the TodoList family introduced
+// by mission builtin-tools-search-and-elicitation-01KZNP3D (WP05). scope
+// is the list's scope discriminator — "session" for the current session's
+// list (the only scope in v1). Malformed scopes (empty / control characters
+// / leading "..") are replaced with "invalid" so the resulting UID
+// type-matches in `resource is TodoList` clauses but never satisfies any
+// real permit.
+func TodoListUID(scope string) cedar.EntityUID {
+	safeScope := scope
+	if !validateFamilyID(scope) {
+		safeScope = invalidUIDID
+	}
+	return cedar.NewEntityUID(EntityTypeTodoList, cedar.String(safeScope))
+}
+
+// ElicitationUID builds a Cedar EntityUID for the Elicitation family
+// introduced by mission ask-user-question-interactive-01KZNP3G (WP01).
+// kind is one of the seven question kinds (radio, checkbox, text, number,
+// slider, date, file). Malformed kinds (empty / control characters /
+// leading "..") are replaced with the literal "invalid" so the resulting
+// UID type-matches in `resource is Elicitation` clauses but never
+// satisfies any real permit — a typo therefore never silently authorises.
+func ElicitationUID(kind string) cedar.EntityUID {
+	safeID := kind
+	if !validateFamilyID(kind) {
+		safeID = invalidUIDID
+	}
+	return cedar.NewEntityUID(EntityTypeElicitation, cedar.String(safeID))
+}
+
+// SkillUID builds a Cedar EntityUID for the Skill family introduced by
+// mission model-invoked-skills-catalog-01KZNP3E. name is the bare command
+// name (the token after the slash, e.g. "summarize", "daily-standup").
+// Malformed names (empty / control characters / leading "..") are replaced
+// with the literal "invalid" so the resulting UID type-matches in
+// `resource is Skill` clauses but never satisfies any real permit — a typo
+// therefore never silently authorises a skill invocation.
+func SkillUID(name string) cedar.EntityUID {
+	safeID := name
+	if !validateFamilyID(name) {
+		safeID = invalidUIDID
+	}
+	return cedar.NewEntityUID(EntityTypeSkill, cedar.String(safeID))
+}
+
+// ElicitTemplateActionID returns the Cedar action ID for a named template
+// (ask-user-question-interactive-01KZNP3G WP07). The full action ID is
+// ActionElicitTemplatePrefix + templateName. Malformed names are replaced with
+// "invalid" so the resulting action ID never satisfies a real permit.
+func ElicitTemplateActionID(templateName string) string {
+	if !validateFamilyID(templateName) {
+		return ActionElicitTemplatePrefix + invalidUIDID
+	}
+	return ActionElicitTemplatePrefix + templateName
 }

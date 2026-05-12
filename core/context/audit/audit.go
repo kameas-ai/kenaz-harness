@@ -139,6 +139,31 @@ const (
 	//   "explicit"    — user chose "Branch from this turn" in the menu.
 	//   "edit_resend" — implicit fork from the edit-and-resend flow.
 	KindBranchCreated Kind = "branch.created"
+
+	// KindSlashCommandRun fires when a user-defined slash command is
+	// dispatched via Dispatch.Run (user-slash-commands-01KQ8TD9 WP08).
+	// Payload: SlashCommandRunPayload.
+	//
+	// Privacy invariant: rendered args summary is limited to arg names
+	// and kind labels — no resolved values that may carry secrets.
+	KindSlashCommandRun Kind = "slashcmd.run"
+
+	// Elicitation-family audit kinds (ask-user-question-interactive-01KZNP3G WP09).
+	//
+	// Privacy invariant: these payloads MUST NOT carry question text,
+	// option labels, option descriptions, answer values, or any preview
+	// content — only ids, kinds, timing, and classification metadata.
+	// The audit log is not the right place for user input (DIRECTIVE_001).
+	//
+	// KindElicitationRequest fires when the model invokes
+	// kaneaz__ask_user_question and the ask is registered in the registry.
+	// Payload: ElicitationRequestPayload.
+	KindElicitationRequest Kind = "elicitation.request"
+
+	// KindElicitationResult fires when the elicitation completes: the user
+	// answered, cancelled, the ask was declined (non-interactive), or it
+	// timed out. Payload: ElicitationResultPayload.
+	KindElicitationResult Kind = "elicitation.result"
 )
 
 // Event is the wire shape passed to the event log. The concrete event-log
@@ -502,6 +527,73 @@ type BranchCreatedPayload struct {
 	BranchSessionID string `json:"branch_session_id"`
 	// CreationPath is "explicit" | "edit_resend".
 	CreationPath string `json:"creation_path"`
+}
+
+// SlashCommandRunPayload carries signalling for KindSlashCommandRun
+// (user-slash-commands-01KQ8TD9 WP08). Emitted once per Dispatch.Run
+// call (success or failure).
+//
+// Privacy invariant: ArgNames lists only the argument names provided by
+// the caller, NEVER their resolved values (which may contain secrets,
+// file paths, or user-authored text). The rendered template body, tool
+// outputs, and session messages are never included.
+type SlashCommandRunPayload struct {
+	Name           string   `json:"name"`
+	Scope          string   `json:"scope"`           // "global" | "project"
+	Kind           string   `json:"kind"`            // "text" | "tool" | "prompt"
+	ModelInvokable bool     `json:"model_invokable"` // true if the command is AI-invokable
+	ArgNames       []string `json:"arg_names"`       // names of args supplied (not values)
+	DispatchedTool string   `json:"dispatched_tool,omitempty"` // tool name for kind=tool
+	SessionID      string   `json:"session_id"`
+	ProjectID      string   `json:"project_id,omitempty"`
+	Success        bool     `json:"success"`
+	ErrorClass     string   `json:"error_class,omitempty"` // classified error label, not raw msg
+}
+
+// ElicitationRequestPayload carries signalling for KindElicitationRequest
+// (ask-user-question-interactive-01KZNP3G WP09).
+//
+// Privacy invariant: question text, option labels/descriptions, preview
+// content, and any user-supplied data are NEVER included — only the ask
+// id, session, kind, mode, and question count.
+type ElicitationRequestPayload struct {
+	// AskID is the registry-assigned identifier for this elicitation.
+	AskID string `json:"ask_id"`
+	// SessionID is the session that invoked the ask.
+	SessionID string `json:"session_id"`
+	// Kind is the question kind (radio, checkbox, text, number, slider, date, file).
+	Kind string `json:"kind"`
+	// Mode is "blocking" or "deferred".
+	Mode string `json:"mode"`
+	// QuestionCount is the number of questions in the batch (1–4).
+	QuestionCount int `json:"question_count"`
+	// HasPreviews indicates whether any question carries a preview pane.
+	HasPreviews bool `json:"has_previews"`
+	// TemplateID is the template name when invoked via template, empty otherwise.
+	TemplateID string `json:"template_id,omitempty"`
+}
+
+// ElicitationResultPayload carries signalling for KindElicitationResult
+// (ask-user-question-interactive-01KZNP3G WP09).
+//
+// Privacy invariant: answer values, question text, and option content
+// are NEVER included — only the ask id, outcome classification, and timing.
+type ElicitationResultPayload struct {
+	// AskID matches the originating ElicitationRequestPayload.
+	AskID string `json:"ask_id"`
+	// SessionID is the session that owned this ask.
+	SessionID string `json:"session_id"`
+	// Outcome is "answered" | "cancelled" | "declined" | "timed_out".
+	Outcome string `json:"outcome"`
+	// DeclineReason is populated when Outcome=="declined":
+	// "non_interactive" | "cedar_denied" | "too_many_pending" | "hook_blocked" | "expired".
+	DeclineReason string `json:"decline_reason,omitempty"`
+	// TimeToAnswerMs is the wall-clock latency from ask registration to
+	// result receipt. Zero when Outcome is "declined" synchronously.
+	TimeToAnswerMs int64 `json:"time_to_answer_ms"`
+	// Deferred is true when mode was "deferred" and the answer arrived
+	// asynchronously (potentially in a later session turn).
+	Deferred bool `json:"deferred"`
 }
 
 // Emit is a small convenience wrapper for callers that have a payload

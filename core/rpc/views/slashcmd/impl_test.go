@@ -2,11 +2,14 @@ package slashcmd_test
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
 	slashview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/slashcmd"
 	coreslashcmd "github.com/sigil-tech/kaneaz-harness/core/slashcmd"
+	"github.com/sigil-tech/kaneaz-harness/core/storage"
+	storagesqlite "github.com/sigil-tech/kaneaz-harness/core/storage/sqlite"
 )
 
 type fakeAppender struct{ called int }
@@ -132,5 +135,142 @@ func TestAPI_Execute_NilRegistryDegradesGracefully(t *testing.T) {
 	}
 	if len(cmds) != 0 {
 		t.Errorf("len(cmds) = %d, want 0 on nil registry", len(cmds))
+	}
+}
+
+// ── user command RPC tests ────────────────────────────────────────────
+
+func openUserRPCDB(t *testing.T) (storage.DB, string) {
+	t.Helper()
+	dir := t.TempDir()
+	cfg := storage.Config{
+		DataDir:          dir,
+		EncryptionStatus: storage.EncryptionStatusDisabledWithDiskEncryption,
+	}
+	db, err := storagesqlite.Open(cfg)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close(context.Background()) })
+	return db, dir
+}
+
+func newViewWithStore(t *testing.T) *slashview.API {
+	t.Helper()
+	reg, err := coreslashcmd.NewRegistry(coreslashcmd.Deps{})
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
+	db, dir := openUserRPCDB(t)
+	store := coreslashcmd.NewStore(db, dir)
+	dispatch := coreslashcmd.NewDispatch(store, nil)
+	return slashview.NewWithStore(reg, store, dispatch)
+}
+
+func TestAPIUserSaveList(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	api := newViewWithStore(t)
+
+	err := api.UserSave(ctx, slashview.UserCommandWire{
+		Name:        "standup",
+		Scope:       "global",
+		Kind:        "text",
+		Description: "Daily standup",
+		Body:        "What did I do?",
+	})
+	if err != nil {
+		t.Fatalf("UserSave: %v", err)
+	}
+
+	list, err := api.UserList(ctx, "")
+	if err != nil {
+		t.Fatalf("UserList: %v", err)
+	}
+	if len(list) != 1 {
+		t.Fatalf("UserList len = %d, want 1", len(list))
+	}
+	if list[0].Name != "standup" {
+		t.Errorf("Name = %q, want %q", list[0].Name, "standup")
+	}
+}
+
+func TestAPIUserGet(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	api := newViewWithStore(t)
+
+	if err := api.UserSave(ctx, slashview.UserCommandWire{
+		Name:        "lint",
+		Scope:       "global",
+		Kind:        "text",
+		Description: "Run lint",
+		Body:        "golangci-lint run ./...",
+	}); err != nil {
+		t.Fatalf("UserSave: %v", err)
+	}
+
+	got, err := api.UserGet(ctx, "lint", "")
+	if err != nil {
+		t.Fatalf("UserGet: %v", err)
+	}
+	if got.Body != "golangci-lint run ./..." {
+		t.Errorf("Body = %q", got.Body)
+	}
+}
+
+func TestAPIUserDelete(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	api := newViewWithStore(t)
+
+	if err := api.UserSave(ctx, slashview.UserCommandWire{
+		Name:        "foo",
+		Scope:       "global",
+		Kind:        "text",
+		Description: "test",
+		Body:        "body",
+	}); err != nil {
+		t.Fatalf("UserSave: %v", err)
+	}
+	if err := api.UserDelete(ctx, "foo", ""); err != nil {
+		t.Fatalf("UserDelete: %v", err)
+	}
+	_, err := api.UserGet(ctx, "foo", "")
+	if !errors.Is(err, coreslashcmd.ErrCommandNotFound) {
+		t.Errorf("after delete UserGet = %v, want ErrCommandNotFound", err)
+	}
+}
+
+func TestAPIUserRun_Text(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	api := newViewWithStore(t)
+
+	if err := api.UserSave(ctx, slashview.UserCommandWire{
+		Name:        "greet",
+		Scope:       "global",
+		Kind:        "text",
+		Description: "Greeting",
+		Body:        "Hello!",
+	}); err != nil {
+		t.Fatalf("UserSave: %v", err)
+	}
+
+	result, err := api.UserRun(ctx, "greet", nil, "s1", "", "", "")
+	if err != nil {
+		t.Fatalf("UserRun: %v", err)
+	}
+	if result.Text != "Hello!" {
+		t.Errorf("Text = %q, want %q", result.Text, "Hello!")
+	}
+}
+
+func TestAPIUserSave_NilStore(t *testing.T) {
+	t.Parallel()
+	api := slashview.New(nil)
+	err := api.UserSave(context.Background(), slashview.UserCommandWire{})
+	if err == nil {
+		t.Error("expected error from nil store")
 	}
 }

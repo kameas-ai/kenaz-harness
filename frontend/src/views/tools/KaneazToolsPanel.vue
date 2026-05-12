@@ -207,6 +207,38 @@ async function toggleFSWrite(event: Event) {
   }
 }
 
+// ── Todo write built-in (builtin-tools-search-and-elicitation-01KZNP3D WP07) ──
+// Default OFF — todo_write modifies session state; the user opts in.
+const todoEnabled = ref(false);
+const todoError = ref<string | null>(null);
+const todoBusy = ref(false);
+
+async function refreshTodo() {
+  try {
+    todoEnabled.value = await client.settings.getTodoEnabled();
+  } catch {
+    todoEnabled.value = false;
+  }
+}
+
+async function toggleTodo(event: Event) {
+  if (todoBusy.value) return;
+  const next = (event.target as HTMLInputElement).checked;
+  todoBusy.value = true;
+  todoError.value = null;
+  const previous = todoEnabled.value;
+  todoEnabled.value = next;
+  try {
+    await client.settings.setTodoEnabled(next);
+  } catch (e) {
+    todoEnabled.value = previous;
+    todoError.value =
+      e instanceof Error ? e.message : 'Failed to toggle todo_write.';
+  } finally {
+    todoBusy.value = false;
+  }
+}
+
 // ── Save artifact built-in (core/tools/saveartifact) ───────────────────
 // Default ON: saving deliverables is a low-risk primitive that should
 // work on first launch. Reads default to true on backend errors so a
@@ -248,6 +280,7 @@ onMounted(() => {
   void refreshFSRead();
   void refreshFSWrite();
   void refreshSaveArtifact();
+  void refreshTodo();
 });
 
 // ── Recipes (WP06) ─────────────────────────────────────────────────────
@@ -852,6 +885,52 @@ watch(
             :disabled="fsWriteBusy"
             data-testid="fs-write-toggle"
             @change="toggleFSWrite"
+          />
+        </label>
+      </div>
+
+      <!-- Todo write tool row (builtin-tools-search-and-elicitation-01KZNP3D WP07) -->
+      <div
+        class="px-4 py-3 grid gap-3 items-start"
+        style="grid-template-columns: 1fr auto"
+        data-testid="todo-tool-row"
+      >
+        <div>
+          <div class="flex items-center gap-2 font-ui text-[13px] text-ink">
+            <span>Task list</span>
+            <span
+              v-if="todoEnabled"
+              class="text-[10px] uppercase tracking-[0.16em] text-signal-ok"
+            >
+              on
+            </span>
+          </div>
+          <p class="mt-1 text-[11px] text-ink-muted max-w-prose">
+            Enables the <code class="font-mono">kaneaz__todo_write</code> builtin.
+            The model maintains a session-scoped structured task list — items have
+            status (pending, in_progress, done, cancelled) and priority. The list
+            is written atomically on each call and visible in the chat via the
+            task-list chip. Default OFF.
+          </p>
+          <div
+            v-if="todoError"
+            class="mt-2 text-[11px] text-signal-danger"
+            role="alert"
+          >
+            {{ todoError }}
+          </div>
+        </div>
+        <label
+          class="inline-flex items-center cursor-pointer select-none"
+          :class="todoBusy ? 'opacity-60 cursor-wait' : ''"
+        >
+          <input
+            type="checkbox"
+            class="accent-accent w-4 h-4"
+            :checked="todoEnabled"
+            :disabled="todoBusy"
+            data-testid="todo-toggle"
+            @change="toggleTodo"
           />
         </label>
       </div>

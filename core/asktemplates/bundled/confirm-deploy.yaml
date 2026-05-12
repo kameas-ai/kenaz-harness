@@ -1,0 +1,21 @@
+id: confirm-deploy
+description: >
+  Confirm deployment to a target environment.
+  Wired to the tool.elicit.template.confirm-deploy Cedar action so
+  per-template policy can restrict it to admin-tier sessions.
+vars:
+  - name: environment
+    type: string
+    required: true
+    description: Target environment name (e.g. "prod", "staging")
+  - name: commits
+    type: int
+    required: false
+    description: Number of commits being deployed (shown in prompt)
+questions:
+  - id: confirm
+    kind: confirm
+    prompt: "Deploy to {{.environment}} — confirm?"
+    destructive: false
+    affirmative: "Deploy"
+    negative: "Cancel"

@@ -42,6 +42,7 @@ const (
 	NodeKindRetry          NodeKind = "retry"
 	NodeKindReview         NodeKind = "review"
 	NodeKindSessionWrite   NodeKind = "session_write"
+	NodeKindSleep          NodeKind = "sleep"
 	NodeKindTool           NodeKind = "tool"
 	NodeKindToolDispatch   NodeKind = "tool_dispatch"
 	NodeKindTraceWrite     NodeKind = "trace_write"
@@ -79,6 +80,7 @@ func AllNodeKinds() []NodeKind {
 		NodeKindRetry,
 		NodeKindReview,
 		NodeKindSessionWrite,
+		NodeKindSleep,
 		NodeKindTool,
 		NodeKindToolDispatch,
 		NodeKindTraceWrite,
@@ -144,6 +146,8 @@ func defaultAttrsFor(kind NodeKind) NodeAttrs {
 		return ReviewAttrs{}
 	case NodeKindSessionWrite:
 		return SessionWriteAttrs{}
+	case NodeKindSleep:
+		return SleepAttrs{}
 	case NodeKindTool:
 		return ToolAttrs{}
 	case NodeKindToolDispatch:
@@ -324,6 +328,12 @@ func defaultPortsFor(kind NodeKind) (inputs, outputs []Port) {
 			}, []Port{
 				{Name: "message_id", Type: PortType("any")},
 				{Name: "appended", Type: PortType("any")},
+			}
+	case NodeKindSleep:
+		return []Port{
+				{Name: "args", Type: PortType("any")},
+			}, []Port{
+				{Name: "result", Type: PortType("any")},
 			}
 	case NodeKindTool:
 		return []Port{
@@ -534,6 +544,12 @@ func decodeAttrs(kind NodeKind, raw map[string]any, nodeID string) (NodeAttrs, e
 		return v, nil
 	case NodeKindSessionWrite:
 		var v SessionWriteAttrs
+		if err := json.Unmarshal(buf, &v); err != nil {
+			return nil, fmt.Errorf("agentgraph: node %q: decode attrs for kind %q: %w", nodeID, kind, err)
+		}
+		return v, nil
+	case NodeKindSleep:
+		var v SleepAttrs
 		if err := json.Unmarshal(buf, &v); err != nil {
 			return nil, fmt.Errorf("agentgraph: node %q: decode attrs for kind %q: %w", nodeID, kind, err)
 		}

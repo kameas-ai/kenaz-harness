@@ -44,8 +44,16 @@ const tabs: ReadonlyArray<Tab> = [
   // compaction-strategy-ui-01KQ8TD8 — Compaction strategy-authoring tab.
   // Disambiguates via ?tab=compaction. See SettingsView.vue for the mount switch.
   { to: '/settings?tab=compaction', label: 'Compaction', query: 'compaction' },
+  // user-slash-commands-01KQ8TD9 WP07 — Slash Commands tab.
+  // Disambiguates via ?tab=slashcmds. See SettingsView.vue for the mount switch.
+  { to: '/settings?tab=slashcmds', label: 'Slash Commands', query: 'slashcmds' },
+  // user-slash-commands-01KQ8TD9 WP09 — Feature Flags tab.
+  // Disambiguates via ?tab=flags. See SettingsView.vue for the mount switch.
+  { to: '/settings?tab=flags', label: 'Flags', query: 'flags' },
+  // hooks-event-surface-expansion-01KZNP3A WP07d — Hooks settings tab.
+  // Disambiguates via ?tab=hooks. See SettingsView.vue for the mount switch.
+  { to: '/settings?tab=hooks', label: 'Hooks', query: 'hooks' },
   { to: '/providers', label: 'Providers' },
-  { to: '/hooks', label: 'Hooks' },
   { to: '/bundles', label: 'Bundles' },
   { to: '/permissions/bash', label: 'Permissions', matchPrefix: '/permissions' },
 ];

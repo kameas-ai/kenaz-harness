@@ -1395,6 +1395,51 @@ export interface BuiltinDescriptor {
   defaultConfig?: Record<string, unknown>;
 }
 
+/**
+ * HookOutput — the discriminated-union result a single hook returns.
+ * Mirrors core/hooks.HookOutput (plan §2 / FR-002).
+ */
+export interface HookOutput {
+  decision?: 'approve' | 'block' | string;
+  reason?: string;
+  additionalContext?: string;
+  updatedInput?: unknown;
+  updatedMCPOutput?: unknown;
+  permissionDecision?: 'allow' | 'deny' | string;
+  permissionDecisionReason?: string;
+  watchPaths?: string[];
+  async?: boolean;
+  asyncTimeoutMs?: number;
+}
+
+/**
+ * MergedOutput — the folded result after MergeOutputs runs over N HookOutputs.
+ * Mirrors core/hooks.MergedOutput.
+ */
+export interface MergedOutput {
+  blocked: boolean;
+  blockReason?: string;
+  additionalContext?: string;
+  updatedInput?: unknown;
+  updatedMCPOutput?: unknown;
+  permissionDenied: boolean;
+  permissionAllowed: boolean;
+  permissionReason?: string;
+  watchPaths?: string[];
+}
+
+/**
+ * DryRunResult — the wire shape returned by Hooks_DryRun.
+ */
+export interface DryRunResult {
+  output: HookOutput;
+  merged: MergedOutput;
+  stdout?: string;
+  stderr?: string;
+  exitCode: number;
+  latencyMs: number;
+}
+
 // ── MCP recipes (shipped catalog) ─────────────────────────────────────
 //
 // Mirrors the Wails wire shape from `core/rpc/views/tools/api.go`:
@@ -1640,12 +1685,84 @@ export interface RecipeListing {
  * autocomplete dropdown the chat composer renders when the input
  * starts with a `/`. ComingSoon flags v1 stubs (memorize, recall,
  * forget, branch); the dropdown renders them with a
- * "(coming soon)" tag.
+ * "(coming soon)" tag. isUser flags user-defined commands so the
+ * autocomplete renders a "user" chip.
  */
 export interface SlashCommandInfo {
   name: string;
   description: string;
   comingSoon: boolean;
+  isUser?: boolean;
+}
+
+// ── user-defined slash commands (user-slash-commands-01KQ8TD9) ───────
+
+export type UserCommandScope = 'global' | 'project';
+export type UserCommandKind = 'text' | 'tool' | 'prompt';
+export type UserCommandInputKind =
+  | 'text'
+  | 'enum'
+  | 'number'
+  | 'file'
+  | 'artifact_ref'
+  | 'project_ref';
+
+export interface UserCommandInput {
+  name: string;
+  kind: UserCommandInputKind;
+  required: boolean;
+  enumValues?: string[];
+  default?: string;
+  hint?: string;
+}
+
+/**
+ * UserCommandSummary — lightweight wire shape returned by Slashcmd_List.
+ */
+export interface UserCommandSummary {
+  name: string;
+  scope: UserCommandScope;
+  projectId?: string;
+  kind: UserCommandKind;
+  description: string;
+  modelInvokable: boolean;
+  icon?: string;
+  hiddenFromPanel?: boolean;
+  updatedAt?: number;
+}
+
+/**
+ * UserCommand — full detail shape returned by Slashcmd_Get.
+ */
+export interface UserCommand {
+  name: string;
+  scope: UserCommandScope;
+  projectId?: string;
+  kind: UserCommandKind;
+  description: string;
+  whenToUse?: string;
+  doesNotHandle?: string;
+  modelInvokable: boolean;
+  icon?: string;
+  hiddenFromPanel?: boolean;
+  body?: string;
+  tool?: string;
+  toolArgsTemplate?: string;
+  inputs?: UserCommandInput[];
+  payloadPath?: string;
+  createdAt?: number;
+  updatedAt?: number;
+}
+
+/**
+ * RunResult — wire shape returned by Slashcmd_Run.
+ */
+export interface SlashRunResult {
+  kind: SlashResultKind;
+  text: string;
+  renderedArgs?: string[];
+  toolName?: string;
+  metadata?: Record<string, unknown>;
 }
 
 /**
@@ -2626,3 +2743,116 @@ export const AUTONOMY_KNOB_LABELS: Record<AutonomyKnob, string> = {
   continueOnError: 'On tool error',
   destructiveActionPosture: 'Destructive actions',
 };
+
+// ── Elicitation (ask-user-question-interactive-01KZNP3G WP02/WP04) ────
+
+/**
+ * QuestionKind is the closed enum of supported question input types.
+ * Mirrors askuserquestion.QuestionKind on the Go side.
+ */
+export type QuestionKind =
+  | 'radio'
+  | 'checkbox'
+  | 'text'
+  | 'number'
+  | 'slider'
+  | 'date'
+  | 'file';
+
+/**
+ * PreviewKind is the closed enum of preview renderer types.
+ * Mirrors the spec's 8 preview content types.
+ */
+export type PreviewKind =
+  | 'markdown'
+  | 'code'
+  | 'image'
+  | 'diff'
+  | 'table'
+  | 'html'
+  | 'vue-component'
+  | 'plain';
+
+/** QuestionOption is one selectable item for radio / checkbox kinds. */
+export interface QuestionOption {
+  value: string;
+  label: string;
+}
+
+/** ElicitPreview is the optional side-by-side preview spec. */
+export interface ElicitPreview {
+  kind: PreviewKind;
+  content: string;
+  language?: string;
+}
+
+/**
+ * ElicitRequest is the payload emitted on the "elicit:pending" broker
+ * topic. Mirrors elicitview.ElicitRequest on the Go side.
+ */
+export interface ElicitRequest {
+  request_id: string;
+  question: string;
+  kind: QuestionKind;
+  options?: QuestionOption[];
+  placeholder?: string;
+  min?: number;
+  max?: number;
+  step?: number;
+  default_value?: unknown;
+  preview?: ElicitPreview;
+  /** WP05: multi-question wizard batch. When present, the single-question fields above are ignored. */
+  questions?: WizardQuestion[];
+  /** WP06: "blocking" (default) or "deferred". */
+  mode?: 'blocking' | 'deferred';
+}
+
+/**
+ * WizardQuestion is one question in a multi-step wizard batch (WP05).
+ * Mirrors elicitview.WizardQuestion on the Go side.
+ */
+export interface WizardQuestion {
+  id: string;
+  question: string;
+  kind: QuestionKind;
+  options?: QuestionOption[];
+  placeholder?: string;
+  min?: number;
+  max?: number;
+  step?: number;
+  depends_on?: WizardDependsOn;
+}
+
+/**
+ * WizardDependsOn makes a question conditional on a prior answer (WP05).
+ */
+export interface WizardDependsOn {
+  question_id: string;
+  /** "answered" | {"equals": value} | {"includes": value} */
+  condition: unknown;
+}
+
+/**
+ * WizardAnswer is the result shape when a multi-question wizard completes (WP05).
+ * Mirrors elicitview.WizardAnswer on the Go side.
+ */
+export interface WizardAnswer {
+  answers: Record<string, unknown>;
+  answered_so_far?: Record<string, unknown>;
+  dismissed: boolean;
+}
+
+// ── feature flags (user-slash-commands-01KQ8TD9 WP09) ────────────────
+
+/**
+ * FeatureFlagInfo — one entry returned by Config_GetFlags.
+ * Flags are read-only at runtime; they are controlled via environment
+ * variables listed in the envVar field.
+ */
+export interface FeatureFlagInfo {
+  name: string;
+  enabled: boolean;
+  description: string;
+  /** Environment variable that controls this flag (e.g. HARNESS_USER_SLASHCMD). */
+  envVar: string;
+}

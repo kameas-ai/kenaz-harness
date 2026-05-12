@@ -85,10 +85,12 @@ import (
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/workflow"
 	workflowsview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/workflows"
 	storageview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/storage"
+	elicitview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/elicit"
 	"github.com/sigil-tech/kaneaz-harness/core/autonomy"
 	"github.com/sigil-tech/kaneaz-harness/core/secrets"
 	coreslashcmd "github.com/sigil-tech/kaneaz-harness/core/slashcmd"
 	corebash "github.com/sigil-tech/kaneaz-harness/core/tools/bash"
+	coreskill "github.com/sigil-tech/kaneaz-harness/core/tools/skill"
 	secretsref "github.com/sigil-tech/kaneaz-harness/core/secrets/ref"
 	"github.com/sigil-tech/kaneaz-harness/core/session"
 	"github.com/sigil-tech/kaneaz-harness/core/storage"
@@ -182,6 +184,13 @@ type HarnessAPI interface {
 	// OnboardingState on boot, dismiss the dialog, and restart Phase 2
 	// via "Reconfigure with assistant".
 	Onboarding() onboardingview.OnboardingAPI
+
+	// Elicit exposes the ask-user-question RPC surface (mission
+	// ask-user-question-interactive-01KZNP3G WP04). The frontend's
+	// AskUserQuestion dialog submits answers via Elicit_SubmitAnswer;
+	// the kaneaz__ask_user_question tool blocks on OpenDialog until
+	// the answer arrives.
+	Elicit() elicitview.ElicitAPI
 }
 
 // ShellStatus drives the Toolbar status pills + LegendBar live-rate
@@ -351,6 +360,11 @@ type API struct {
 	// fixture compiles.
 	onboardingAPI onboardingview.OnboardingAPI
 
+	// elicitAPI is the ask-user-question RPC surface (mission
+	// ask-user-question-interactive-01KZNP3G WP04). Constructed in New
+	// and wired with a concrete Delegate into the askuserquestion tool.
+	elicitAPI *elicitview.API
+
 	// wfScheduler is the cron-backed workflow scheduler
 	// (workflows-agentic-01KW2D3X WP02). Started on SetContext; stopped
 	// on Shutdown. nil when the workflows feature is disabled or when the
@@ -380,6 +394,12 @@ func (a *API) SetContext(ctx context.Context) {
 	}
 	if a.shellImpl != nil {
 		a.shellImpl.SetContext(ctx)
+	}
+	// Elicitation RPC bridge: thread the Wails context so OpenDialog can
+	// emit events on TopicElicitPending via the broker. Without a valid
+	// Wails context, EventsEmit would crash ("invalid context passed").
+	if a.elicitAPI != nil {
+		a.elicitAPI.SetContext(ctx)
 	}
 	// Start the workflow cron scheduler (workflows-agentic-01KW2D3X WP02).
 	// SetContext is called with the Wails-supplied app context, which is
@@ -662,7 +682,36 @@ func New(c *core.Core) *API {
 		return v
 	}
 	retriever := corememory.NewRetriever(memStore, embedder, memoryEnabled, 0.7)
+
+	// model-invoked-skills-catalog-01KZNP3E + user-slash-commands-01KQ8TD9:
+	// user command Store + Dispatch are constructed early so they can be
+	// passed to both newHooksStack (skill catalog hook) and newLLMStack
+	// (__skill tool registration). Gated by HARNESS_USER_SLASHCMD
+	// (default on, slash-commands WP09).
+	var slashStore *coreslashcmd.Store
+	var slashDispatch *coreslashcmd.Dispatch
+	if c != nil && c.Storage() != nil && c.DataDir() != "" && coreslashcmd.UserSlashcmdEnabled() {
+		slashStore = coreslashcmd.NewStore(c.Storage(), c.DataDir())
+		slashDispatch = coreslashcmd.NewDispatch(slashStore, nil)
+
+		// Install bundled skill templates on first launch (idempotent).
+		// Best-effort: a failure here never prevents the chassis from booting.
+		go func() {
+			if err := coreskill.InstallBundledSkills(context.Background(), slashStore); err != nil {
+				logging.L().Warn("slashcmd.bundled_skills.install_failed", "err", err.Error())
+			}
+		}()
+	}
+
 	hooksRunner, hookRegistry, hookBuiltins := newHooksStack(c, retriever, memStore, embedder)
+	// Register skill-catalog pre_send hook so the model sees the
+	// model-invokable commands at send time (model-invoked-skills-catalog-01KZNP3E WP03).
+	if hookBuiltins != nil && slashStore != nil {
+		hooks.RegisterSkillCatalogBuiltin(hookBuiltins, hooks.SkillCatalogDeps{
+			Store: slashStore,
+		})
+	}
+
 	confirmEachEnabled := func() bool {
 		if settingsImpl == nil || settingsImpl.Store() == nil {
 			return true
@@ -737,7 +786,7 @@ func New(c *core.Core) *API {
 	a.corpusMgr = newCorpusManager(c, embedder)
 	a.graphMgr = newGraphManagerWithDeps(c, a.convMgr, a.corpusMgr, memStore, embedder, a_bashStore)
 
-	stack := newLLMStack(c, a.broker, personalForLLM, hooksRunner, attMgr, confirmEachEnabled, artifactSink, artifactSinkConcrete, settingsImpl, a_bashStore, artMgr, a.graphMgr, a.promptRegistry, usageMgr)
+	stack := newLLMStack(c, a.broker, personalForLLM, hooksRunner, attMgr, confirmEachEnabled, artifactSink, artifactSinkConcrete, settingsImpl, a_bashStore, artMgr, a.graphMgr, a.promptRegistry, usageMgr, a.elicitAPI, slashDispatch)
 	a.llmAPI = stack.api
 	a.stdioPool = stack.pool
 	a.builtins = stack.builtins
@@ -974,9 +1023,23 @@ func New(c *core.Core) *API {
 	// construction failure soft-fails to a nil-registry surface; the
 	// chassis still boots and Execute returns a friendly "not wired"
 	// error per command.
+	//
+	// slashStore + slashDispatch are constructed earlier (before newHooksStack)
+	// so the skill-catalog builtin hook is already registered on hookBuiltins.
+	// When either is nil (test-chassis path or HARNESS_USER_SLASHCMD=false),
+	// the view degrades to the registry-only API which returns "not wired"
+	// for user commands.
 	{
 		slashRegistry := newSlashRegistry(c, a.llmAPI, memStore, embedder, a.branchesAPI, a.workflowsAPI)
-		a.slashAPI = slashview.New(slashRegistry)
+		if slashStore != nil && slashDispatch != nil {
+			a.slashAPI = slashview.NewWithStore(slashRegistry, slashStore, slashDispatch)
+			logging.L().Info("rpc.slashcmd.user_wired",
+				"data_dir", c.DataDir())
+		} else {
+			a.slashAPI = slashview.New(slashRegistry)
+			logging.L().Info("rpc.slashcmd.user_skipped",
+				"reason", "no core / no storage / disabled by flag")
+		}
 	}
 
 	// Auto-update subsystem (mission auto-update, v0.4.0 WP03).
@@ -1058,6 +1121,16 @@ func New(c *core.Core) *API {
 			// the wiring step below that calls setPermissionsConfigTrimmer.
 		})
 	}
+
+	// Elicitation view + ask_user_question tool bridge (mission
+	// ask-user-question-interactive-01KZNP3G WP04). The elicitAPI is
+	// constructed unconditionally so the tool's Delegate is always
+	// available; it just emits no events when wailsCtx is nil (test path).
+	// WailsEmitter is the same authorised EventsEmit wrapper used by the
+	// stream broker — the CI check allows it in this file.
+	a.elicitAPI = elicitview.New(elicitview.Config{
+		Emitter: WailsEmitter{},
+	})
 
 	a.bindings = NewBindings(a)
 	if a.settingsImpl != nil {
@@ -1948,6 +2021,8 @@ func newLLMStack(
 	graphMgr *graphview.Manager,
 	promptRegistry *cedar.Registry,
 	usageMgr usage.Manager,
+	elicitAPI *elicitview.API,
+	slashDispatch *coreslashcmd.Dispatch,
 ) llmStack {
 	// Share ONE secrets backend between the credref resolver (which
 	// reads keys when streaming) and the keychain writer (which stages
@@ -2060,7 +2135,7 @@ func newLLMStack(
 	if dataDir != "" {
 		bashCedarEngine = buildCedarEngineOrNil(dataDir)
 	}
-	registerBuiltinTools(c, builtinRegistry, bashStore, artifactsMgr, settingsStore, bashCedarEngine, promptRegistry)
+	registerBuiltinTools(c, builtinRegistry, bashStore, artifactsMgr, settingsStore, bashCedarEngine, promptRegistry, elicitAPI, slashDispatch)
 	// builtin-filesystem-tools-01KR3N4P: register the read/write family of
 	// in-process filesystem tools. Gated behind per-family settings dials
 	// (FSReadEnabled / FSWriteEnabled) so the Tools panel toggles take effect
@@ -3864,6 +3939,17 @@ func (a *API) Onboarding() onboardingview.OnboardingAPI {
 		return onboardingview.New(onboardingview.Config{})
 	}
 	return a.onboardingAPI
+}
+
+// Elicit returns the ask-user-question RPC surface. If elicitAPI has not
+// been wired (test harness path with New(nil)) a zero-config stub is
+// returned that surfaces ErrUnknownRequest on SubmitAnswer and empty
+// slices on ListPending.
+func (a *API) Elicit() elicitview.ElicitAPI {
+	if a.elicitAPI == nil {
+		return elicitview.New(elicitview.Config{})
+	}
+	return a.elicitAPI
 }
 
 // SetCedarProposeResolver wires a resolver at runtime. Called by the

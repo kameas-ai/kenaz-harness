@@ -186,9 +186,10 @@ func TestOpen_ApplyIdempotent(t *testing.T) {
 	// 1 streaming-resume (0317) + 1 sessions.kind (0318) +
 	// 1 workflows (0319) + 1 workflow_runs_cache (0320) +
 	// 1 workflow_schedules (0321) + 1 last_usage_json (0322) +
-	// 1 branch-display-meta (0323) + 1 artifact_versions (0324) = 27.
-	if count != 27 {
-		t.Errorf("ledger count = %d, want 27", count)
+	// 1 branch-display-meta (0323) + 1 artifact_versions (0324) +
+	// 1 slash_commands_user (1000) = 28.
+	if count != 28 {
+		t.Errorf("ledger count = %d, want 28", count)
 	}
 }
 

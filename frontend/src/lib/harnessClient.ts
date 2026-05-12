@@ -62,6 +62,7 @@ import type {
   DialScopeKey,
   Hook,
   BuiltinDescriptor,
+  DryRunResult,
   ConfirmDecision,
   Recipe,
   RecipeCategory,
@@ -77,6 +78,10 @@ import type {
   ArtifactWithBytes,
   SlashCommandInfo,
   SlashExecuteResult,
+  UserCommand,
+  UserCommandSummary,
+  SlashRunResult,
+  FeatureFlagInfo,
   Corpus,
   CorpusFile,
   CorpusChunk,
@@ -338,9 +343,17 @@ interface WailsBindingsLike {
   // WP05 credential-gate strictness dial
   Settings_GetCedarStrictCredentialMode(): Promise<boolean>;
   Settings_SetCedarStrictCredentialMode(enabled: boolean): Promise<void>;
+  // builtin filesystem tool dials (builtin-filesystem-tools-01KR3N4P)
+  Settings_GetFSReadEnabled(): Promise<boolean>;
+  Settings_SetFSReadEnabled(enabled: boolean): Promise<void>;
+  Settings_GetFSWriteEnabled(): Promise<boolean>;
+  Settings_SetFSWriteEnabled(enabled: boolean): Promise<void>;
   // runtime filesystem-access request built-in toggle
   Settings_GetFSRequestAccessEnabled(): Promise<boolean>;
   Settings_SetFSRequestAccessEnabled(enabled: boolean): Promise<void>;
+  // todo_write tool dial (builtin-tools-search-and-elicitation-01KZNP3D)
+  Settings_GetTodoEnabled(): Promise<boolean>;
+  Settings_SetTodoEnabled(enabled: boolean): Promise<void>;
   /** Returns the full keyboard shortcut overrides map. */
   Settings_GetShortcuts(): Promise<Record<string, string>>;
   /** Persist a single shortcut override. Empty binding clears the override. */
@@ -402,6 +415,7 @@ interface WailsBindingsLike {
   Hooks_AvailableBuiltins(): Promise<BuiltinDescriptor[]>;
   Hooks_InstallStarterMemory(): Promise<void>;
   Hooks_RemoveStarterMemory(): Promise<void>;
+  Hooks_DryRun(hookID: string, syntheticPayload: string): Promise<DryRunResult>;
 
   Tools_ListRecipes(): Promise<WireRecipeListing[]>;
   Tools_InstallRecipe(
@@ -424,6 +438,7 @@ interface WailsBindingsLike {
 
   Shell_OpenInOSBrowser(path: string): Promise<void>;
   Shell_PathComplete(partial: string): Promise<string[]>;
+  Shell_PickFile(title: string, defaultDir: string, filters: string[]): Promise<string>;
   Shell_ReadFile(path: string): Promise<ShellReadFileResult>;
 
   Slash_Execute(
@@ -431,6 +446,20 @@ interface WailsBindingsLike {
     raw: string,
   ): Promise<SlashExecuteResult>;
   Slash_List(): Promise<SlashCommandInfo[]>;
+
+  // ── user-defined slash commands (user-slash-commands-01KQ8TD9) ──
+  Slashcmd_List(projectID: string): Promise<UserCommandSummary[]>;
+  Slashcmd_Get(name: string, projectID: string): Promise<UserCommand>;
+  Slashcmd_Save(cmd: UserCommand): Promise<void>;
+  Slashcmd_Delete(name: string, projectID: string): Promise<void>;
+  Slashcmd_Run(
+    name: string,
+    args: Record<string, string>,
+    sessionID: string,
+    projectID: string,
+    cwd: string,
+    selection: string,
+  ): Promise<SlashRunResult>;
 
   Corpus_ListCorpora(scope: string): Promise<Corpus[]>;
   Corpus_CreateCorpus(req: CorpusCreateRequest): Promise<Corpus>;
@@ -550,7 +579,19 @@ interface WailsBindingsLike {
   Onboarding_Dismiss(): Promise<void>;
   Onboarding_RestartPhase2(req: OnboardingRestartPhase2Request): Promise<OnboardingRestartPhase2Response>;
   Onboarding_ListStarters(): Promise<StarterSummary[]>;
+
+  // ── Elicitation (ask-user-question-interactive-01KZNP3G WP04) ──
+  Elicit_SubmitAnswer(
+    requestID: string,
+    answerJSON: string | null,
+    cancelled: boolean,
+  ): Promise<void>;
+  Elicit_ListPending(): Promise<import('./types').ElicitRequest[]>;
+
+  // ── feature flags (user-slash-commands-01KQ8TD9 WP09) ───────────────
+  Config_GetFlags(): Promise<FeatureFlagInfo[]>;
 }
+
 
 /**
  * AttachmentAddMediaInput — wire shape Attachments_AddMedia accepts.
@@ -1310,6 +1351,25 @@ export interface SettingsClient {
    * harness.
    */
   setCedarStrictCredentialMode(enabled: boolean): Promise<void>;
+  // ── Builtin filesystem tool dials (builtin-filesystem-tools-01KR3N4P) ──
+
+  /**
+   * Read the read-family builtin filesystem tools opt-in
+   * (kaneaz__read_file, kaneaz__list_dir, kaneaz__glob, kaneaz__grep,
+   * kaneaz__list_open_worklist). Default false.
+   * Surfaced as a toggle row in the Tools panel.
+   */
+  getFSReadEnabled(): Promise<boolean>;
+  /** Persist the read-family filesystem tools opt-in flag. */
+  setFSReadEnabled(enabled: boolean): Promise<void>;
+  /**
+   * Read the write-family builtin filesystem tools opt-in
+   * (kaneaz__write_file, kaneaz__edit_file). Default false.
+   * Surfaced as a toggle row in the Tools panel.
+   */
+  getFSWriteEnabled(): Promise<boolean>;
+  /** Persist the write-family filesystem tools opt-in flag. */
+  setFSWriteEnabled(enabled: boolean): Promise<void>;
   /**
    * Return whether the runtime filesystem-access-request built-in
    * (`kaneaz__request_filesystem_access`) is enabled. Default: true.
@@ -1320,6 +1380,16 @@ export interface SettingsClient {
    * Changes take effect on the next model turn without restarting.
    */
   setFSRequestAccessEnabled(enabled: boolean): Promise<void>;
+
+  // ── Todo tool dial (builtin-tools-search-and-elicitation-01KZNP3D WP07) ──
+
+  /**
+   * Read the kaneaz__todo_write builtin opt-in (default false — tool off
+   * until the user enables it from the Tools panel).
+   */
+  getTodoEnabled(): Promise<boolean>;
+  /** Persist the kaneaz__todo_write builtin opt-in flag. */
+  setTodoEnabled(enabled: boolean): Promise<void>;
 
   // ── autonomy-dial-01KR3M2A WP03 ─────────────────────────────────────
   /** Read the persisted global autonomy.Layer. */
@@ -1487,6 +1557,8 @@ export interface DialsClient {
  * pre_send / post_send lifecycle. Memory.retrieve / memory.persist
  * are the v1 preinstalled builtins; the surface ships extension
  * points for `shell` and `mcp` hooks the user configures.
+ *
+ * hooks-event-surface-expansion-01KZNP3A WP07b.
  */
 export interface HooksClient {
   list(): Promise<Hook[]>;
@@ -1499,6 +1571,12 @@ export interface HooksClient {
   installStarterMemory(): Promise<void>;
   /** Remove the two preinstalled memory hooks (idempotent). */
   removeStarterMemory(): Promise<void>;
+  /**
+   * Fire the hook against a synthetic JSON payload string and return the
+   * per-hook HookOutput + MergedOutput for the DryRunDrawer.
+   * Shell hooks are actually executed; builtin/mcp hooks return a stub.
+   */
+  dryRun(hookID: string, syntheticPayload: string): Promise<DryRunResult>;
 }
 
 /**
@@ -1591,6 +1669,17 @@ export interface ShellClient {
   openInOSBrowser(path: string): Promise<void>;
   pathComplete(partial: string): Promise<string[]>;
   readFile(path: string): Promise<ShellReadFileResult>;
+  /**
+   * pickFile opens the OS-native file-picker dialog and returns the absolute
+   * path of the chosen file, or an empty string if the user cancels.
+   * Used by the AskUserQuestion dialog's "file" kind (WP10).
+   *
+   * @param title      Dialog title; defaults to "Choose a file" when empty.
+   * @param defaultDir Starting directory hint; pass "" to let the OS decide.
+   * @param filters    Optional display+pattern filter pairs in the form
+   *                   "Display Name|*.ext1;*.ext2". Pass [] for no filtering.
+   */
+  pickFile(title: string, defaultDir: string, filters: string[]): Promise<string>;
 }
 
 /**
@@ -1627,6 +1716,25 @@ export interface BashClient {
 export interface SlashClient {
   list(): Promise<SlashCommandInfo[]>;
   execute(sessionID: string, raw: string): Promise<SlashExecuteResult>;
+}
+
+/**
+ * SlashcmdClient — user-defined slash command CRUD + dispatch
+ * (mission user-slash-commands-01KQ8TD9).
+ */
+export interface SlashcmdClient {
+  list(projectID: string): Promise<UserCommandSummary[]>;
+  get(name: string, projectID: string): Promise<UserCommand>;
+  save(cmd: UserCommand): Promise<void>;
+  delete(name: string, projectID: string): Promise<void>;
+  run(
+    name: string,
+    args: Record<string, string>,
+    sessionID: string,
+    projectID: string,
+    cwd: string,
+    selection: string,
+  ): Promise<SlashRunResult>;
 }
 
 /**
@@ -1945,6 +2053,56 @@ export interface OnboardingClient {
   listStarters(): Promise<StarterSummary[]>;
 }
 
+/**
+ * ElicitClient — view-scoped surface for the ask-user-question dialog.
+ * Mission: ask-user-question-interactive-01KZNP3G WP04.
+ *
+ * The frontend subscribes to "elicit:pending" events via useEventStream;
+ * when the user submits or cancels, it calls submitAnswer which unblocks
+ * the model-side kaneaz__ask_user_question tool call.
+ */
+export interface ElicitClient {
+  /**
+   * Submit the user's answer (or a cancellation) for a pending elicitation.
+   * requestID was received on the "elicit:pending" event topic.
+   * answerJSON is a JSON-encoded answer value, or null when cancelled=true.
+   */
+  submitAnswer(requestID: string, answerJSON: string | null, cancelled: boolean): Promise<void>;
+
+  /**
+   * Submit one step of a multi-question wizard (WP05).
+   * requestID identifies the OpenWizard call; questionID is the id of the
+   * question being answered; answerJSON is the JSON-encoded answer value;
+   * dismissed is true when the user cancels the wizard mid-flow.
+   */
+  submitWizardStep(requestID: string, questionID: string, answerJSON: string | null, dismissed: boolean): Promise<void>;
+
+  /**
+   * Register a deferred ask (WP06). Returns immediately with AskID so the
+   * model can continue. The user sees a pill in the chat header.
+   */
+  registerDeferred(sessionID: string, req: import('./types').ElicitRequest): Promise<{ deferred: boolean; ask_id: string }>;
+
+  /**
+   * Answer a deferred ask (WP06). Returns the system_reminder text to inject.
+   */
+  answerDeferred(askID: string, answer: unknown): Promise<string>;
+
+  /**
+   * List in-flight elicitation requests. Used for reconnect reconciliation.
+   */
+  listPending(): Promise<import('./types').ElicitRequest[]>;
+}
+
+/**
+ * ConfigClient — feature flag reads.
+ * (user-slash-commands-01KQ8TD9 WP09)
+ */
+export interface ConfigClient {
+  /** Returns all known feature flags and their current enabled state. */
+  getFlags(): Promise<FeatureFlagInfo[]>;
+}
+
 export interface HarnessClient {
   shellStatus(): Promise<ShellStatus>;
   appInfo(): Promise<AppInfo>;
@@ -1977,6 +2135,7 @@ export interface HarnessClient {
   shell: ShellClient;
   bash: BashClient;
   slash: SlashClient;
+  slashcmd: SlashcmdClient;
   artifacts: ArtifactsClient;
   corpus: CorpusClient;
   graph: GraphClient;
@@ -1988,6 +2147,10 @@ export interface HarnessClient {
   search: SearchClient;
   storage: StorageClient;
   onboarding: OnboardingClient;
+  /** Elicitation surface for the ask-user-question dialog (WP04). */
+  elicit: ElicitClient;
+  /** Config / feature-flag client (slash-commands WP09). */
+  config: ConfigClient;
 }
 
 // ── runtime client ─────────────────────────────────────────────────────
@@ -2236,10 +2399,16 @@ export function createHarnessClient(): HarnessClient {
         b().Settings_GetCedarStrictCredentialMode(),
       setCedarStrictCredentialMode: (enabled) =>
         b().Settings_SetCedarStrictCredentialMode(enabled),
+      getFSReadEnabled: () => b().Settings_GetFSReadEnabled(),
+      setFSReadEnabled: (enabled) => b().Settings_SetFSReadEnabled(enabled),
+      getFSWriteEnabled: () => b().Settings_GetFSWriteEnabled(),
+      setFSWriteEnabled: (enabled) => b().Settings_SetFSWriteEnabled(enabled),
       getFSRequestAccessEnabled: () =>
         b().Settings_GetFSRequestAccessEnabled(),
       setFSRequestAccessEnabled: (enabled) =>
         b().Settings_SetFSRequestAccessEnabled(enabled),
+      getTodoEnabled: () => b().Settings_GetTodoEnabled(),
+      setTodoEnabled: (enabled) => b().Settings_SetTodoEnabled(enabled),
       getAutonomy: () => b().Settings_GetAutonomy(),
       setAutonomy: (layer) => b().Settings_SetAutonomy(layer),
       getMCPAutoRestart: () => b().Settings_GetMCPAutoRestart(),
@@ -2299,6 +2468,7 @@ export function createHarnessClient(): HarnessClient {
       availableBuiltins: () => b().Hooks_AvailableBuiltins(),
       installStarterMemory: () => b().Hooks_InstallStarterMemory(),
       removeStarterMemory: () => b().Hooks_RemoveStarterMemory(),
+      dryRun: (hookID, syntheticPayload) => b().Hooks_DryRun(hookID, syntheticPayload),
     },
     tools: {
       recipes: {
@@ -2323,6 +2493,7 @@ export function createHarnessClient(): HarnessClient {
       openInOSBrowser: (path) => b().Shell_OpenInOSBrowser(path),
       pathComplete: (partial) => b().Shell_PathComplete(partial),
       readFile: (path) => b().Shell_ReadFile(path),
+      pickFile: (title, defaultDir, filters) => b().Shell_PickFile(title, defaultDir, filters),
     },
     bash: {
       exec: (sessionID, command) => b().Bash_Exec(sessionID, command),
@@ -2330,6 +2501,14 @@ export function createHarnessClient(): HarnessClient {
     slash: {
       list: () => b().Slash_List(),
       execute: (sessionID, raw) => b().Slash_Execute(sessionID, raw),
+    },
+    slashcmd: {
+      list: (projectID) => b().Slashcmd_List(projectID),
+      get: (name, projectID) => b().Slashcmd_Get(name, projectID),
+      save: (cmd) => b().Slashcmd_Save(cmd),
+      delete: (name, projectID) => b().Slashcmd_Delete(name, projectID),
+      run: (name, args, sessionID, projectID, cwd, selection) =>
+        b().Slashcmd_Run(name, args, sessionID, projectID, cwd, selection),
     },
     corpus: {
       listCorpora: (scope) => b().Corpus_ListCorpora(scope),
@@ -2414,6 +2593,20 @@ export function createHarnessClient(): HarnessClient {
       dismiss: () => b().Onboarding_Dismiss(),
       restartPhase2: (req) => b().Onboarding_RestartPhase2(req),
       listStarters: () => b().Onboarding_ListStarters(),
+    },
+    elicit: {
+      submitAnswer: (requestID, answerJSON, cancelled) =>
+        b().Elicit_SubmitAnswer(requestID, answerJSON, cancelled),
+      submitWizardStep: (requestID, questionID, answerJSON, dismissed) =>
+        b().Elicit_SubmitWizardStep(requestID, questionID, answerJSON, dismissed),
+      registerDeferred: (sessionID, req) =>
+        b().Elicit_RegisterDeferred(sessionID, req),
+      answerDeferred: (askID, answer) =>
+        b().Elicit_AnswerDeferred(askID, answer),
+      listPending: () => b().Elicit_ListPending(),
+    },
+    config: {
+      getFlags: () => b().Config_GetFlags(),
     },
   };
 }
@@ -2752,8 +2945,14 @@ export function createFakeHarnessClient(
       setPermissionsMigrationToastShown: noop,
       getCedarStrictCredentialMode: async () => false,
       setCedarStrictCredentialMode: noop,
+      getFSReadEnabled: async () => false,
+      setFSReadEnabled: noop,
+      getFSWriteEnabled: async () => false,
+      setFSWriteEnabled: noop,
       getFSRequestAccessEnabled: async () => true,
       setFSRequestAccessEnabled: noop,
+      getTodoEnabled: async () => false,
+      setTodoEnabled: noop,
       getAutonomy: async () => ({ level: null, overrides: {} }),
       setAutonomy: noop,
       getMCPAutoRestart: async () => true,
@@ -2860,8 +3059,8 @@ export function createFakeHarnessClient(
       get: async (id) => ({
         id,
         name: id,
-        event: 'pre_send',
-        kind: 'builtin',
+        event: 'pre_send' as const,
+        kind: 'builtin' as const,
         enabled: false,
         match: {},
       }),
@@ -2871,6 +3070,18 @@ export function createFakeHarnessClient(
       availableBuiltins: async () => [],
       installStarterMemory: noop,
       removeStarterMemory: noop,
+      dryRun: async (_hookID: string, _payload: string): Promise<DryRunResult> => ({
+        output: { decision: 'approve', reason: 'stub dry-run' },
+        merged: {
+          blocked: false,
+          permissionDenied: false,
+          permissionAllowed: false,
+        },
+        stdout: '',
+        stderr: '',
+        exitCode: 0,
+        latencyMs: 0,
+      }),
     },
     tools: {
       recipes: {
@@ -2912,6 +3123,7 @@ export function createFakeHarnessClient(
       openInOSBrowser: noop,
       pathComplete: async () => [],
       readFile: async () => ({ dataBase64: '', mediaType: '' }),
+      pickFile: async () => '',
     },
     bash: {
       exec: async () => ({ stdout: '', stderr: '', exitCode: 0, truncated: false }),
@@ -3213,6 +3425,46 @@ export function createFakeHarnessClient(
       dismiss: noop,
       restartPhase2: async () => ({ sessionId: '' }),
       listStarters: async () => [],
+    },
+    elicit: {
+      submitAnswer: noop,
+      submitWizardStep: noop,
+      registerDeferred: async () => ({ deferred: true, ask_id: '' }),
+      answerDeferred: async () => '',
+      listPending: async () => [],
+    },
+    config: {
+      getFlags: async () => [
+        {
+          name: 'user-slash-commands',
+          enabled: true,
+          description: 'User-defined / commands (text expansions, tool dispatch, prompt templates).',
+          envVar: 'HARNESS_USER_SLASHCMD',
+        },
+      ],
+    },
+    slashcmd: {
+      list: async (_projectID: string) => [],
+      get: async (name: string, _projectID: string) => ({
+        name,
+        scope: 'global' as const,
+        kind: 'text' as const,
+        description: '',
+        modelInvokable: false,
+      }),
+      save: noop,
+      delete: noop,
+      run: async (
+        _name: string,
+        _args: Record<string, string>,
+        _sessionID: string,
+        _projectID: string,
+        _cwd: string,
+        _selection: string,
+      ) => ({
+        kind: 'info' as const,
+        text: '',
+      }),
     },
   };
 

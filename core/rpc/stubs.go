@@ -239,6 +239,9 @@ func (s *stubHooks) AvailableBuiltins(_ context.Context) ([]hooksview.BuiltinDes
 }
 func (s *stubHooks) InstallStarterMemoryHooks(_ context.Context) error { return nil }
 func (s *stubHooks) RemoveStarterMemoryHooks(_ context.Context) error  { return nil }
+func (s *stubHooks) DryRun(_ context.Context, _ string, _ string) (hooksview.DryRunResult, error) {
+	return hooksview.DryRunResult{}, errNotWired
+}
 
 // ── projects ───────────────────────────────────────────────────────────
 

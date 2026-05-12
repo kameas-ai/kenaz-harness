@@ -1,0 +1,11 @@
+id: pick-file
+description: Ask the user to select a file from the filesystem.
+vars:
+  - name: prompt
+    type: string
+    required: false
+    description: Question text (defaults to "Select a file")
+questions:
+  - id: file
+    kind: file
+    prompt: "Select a file"

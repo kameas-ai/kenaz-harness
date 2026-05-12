@@ -14,16 +14,22 @@ import (
 	coreart "github.com/sigil-tech/kaneaz-harness/core/artifacts"
 	"github.com/sigil-tech/kaneaz-harness/core/logging"
 	"github.com/sigil-tech/kaneaz-harness/core/policy/cedar"
+	elicitview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/elicit"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/settings"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/tools"
+	coreslashcmd "github.com/sigil-tech/kaneaz-harness/core/slashcmd"
+	"github.com/sigil-tech/kaneaz-harness/core/toolloop"
 	corebash "github.com/sigil-tech/kaneaz-harness/core/tools/bash"
 	corefs "github.com/sigil-tech/kaneaz-harness/core/tools/fs"
 	corefsbuiltins "github.com/sigil-tech/kaneaz-harness/core/tools/fsbuiltins"
 	corefsrequest "github.com/sigil-tech/kaneaz-harness/core/tools/fsrequest"
 	coresaveartifact "github.com/sigil-tech/kaneaz-harness/core/tools/saveartifact"
+	coreskilltool "github.com/sigil-tech/kaneaz-harness/core/tools/skill"
+	coresleep "github.com/sigil-tech/kaneaz-harness/core/tools/sleep"
+	coretodo "github.com/sigil-tech/kaneaz-harness/core/tools/todo"
 	coreupdateartifact "github.com/sigil-tech/kaneaz-harness/core/tools/updateartifact"
 	corewebsearch "github.com/sigil-tech/kaneaz-harness/core/tools/websearch"
-	"github.com/sigil-tech/kaneaz-harness/core/toolloop"
+	coreaskuser "github.com/sigil-tech/kaneaz-harness/core/tools/askuserquestion"
 )
 
 // GlobalFSReadSet is the process-global ReadSet shared across all sessions.
@@ -32,6 +38,13 @@ import (
 // Constructed once at startup; all fs builtin tools bind against this instance.
 // (builtin-filesystem-tools-01KR3N4P WP04)
 var GlobalFSReadSet = corefsbuiltins.NewReadSet()
+
+// GlobalTodoStore is the process-global per-session todo list store shared
+// across all sessions. The store holds the structured task list the model
+// writes via kaneaz__todo_write. Session data is evicted when the session
+// ends (Drop call from the lifecycle manager).
+// (builtin-tools-search-and-elicitation-01KZNP3D WP05)
+var GlobalTodoStore = coretodo.NewStore()
 
 // registerBuiltinTools installs the in-binary tools into the registry.
 // The Settings store gates dispatch via the EnabledFilter; the
@@ -58,6 +71,8 @@ func registerBuiltinTools(
 	store settings.SettingsStore,
 	cedarEngine *cedar.Engine,
 	promptRegistry *cedar.Registry,
+	elicitAPI *elicitview.API,
+	slashDispatch *coreslashcmd.Dispatch,
 ) {
 	if registry == nil {
 		return
@@ -101,6 +116,13 @@ func registerBuiltinTools(
 		"cedar_gate", cedarEngine != nil,
 	)
 
+	// sleep: passive no-side-effect tool; always registered (default-allow,
+	// tool.passive Cedar action). Never gated by a Settings toggle.
+	// Satisfies FR-009 .. FR-011 (builtin-tools-search-and-elicitation-01KZNP3D WP04).
+	sleepTool := coresleep.New()
+	registry.Register(sleepTool)
+	logging.L().Info("rpc.builtins.register", "tool", sleepTool.Name())
+
 	// save_artifact: pipes (title, content) into the artifact CAS
 	// pipeline. Only registered when the chassis wired an artifacts
 	// manager (production); the test harness path with nil manager
@@ -138,6 +160,53 @@ func registerBuiltinTools(
 		logging.L().Info("rpc.builtins.update_artifact_skipped",
 			"reason", "no artifacts manager wired")
 	}
+
+	// todo_write: session-scoped structured task list. Gated behind the
+	// TodoEnabled toggle (default OFF — user opts in from Tools panel).
+	// Uses the process-global GlobalTodoStore keyed by session ID.
+	// (builtin-tools-search-and-elicitation-01KZNP3D WP05)
+	todoTool := coretodo.New(coretodo.Options{
+		Store:   GlobalTodoStore,
+		Enabled: todoEnabledLookup(store),
+	})
+	registry.Register(todoTool)
+	logging.L().Info("rpc.builtins.register", "tool", todoTool.Name())
+
+	// ask_user_question: interactive elicitation tool (mission
+	// ask-user-question-interactive-01KZNP3G, WP01/WP04).
+	//
+	// The tool is default-on (asking the user a question is low-risk).
+	// The Delegate is nil until WP04 wires the elicit RPC bridge; the
+	// tool returns errKindNotWired gracefully in that case.
+	//
+	// elicitAPI is nil only in test-fixture paths (New(nil) + no elicitAPI
+	// constructed). In production the API.New() path always constructs it.
+	var askDelegate coreaskuser.Delegate
+	if elicitAPI != nil {
+		askDelegate = elicitAPI
+	}
+	askTool := coreaskuser.New(coreaskuser.Options{
+		Delegate: askDelegate,
+	})
+	registry.Register(askTool)
+	logging.L().Info("rpc.builtins.register",
+		"tool", askTool.Name(),
+		"delegate_wired", askDelegate != nil,
+	)
+
+	// kaneaz__skill: model-invoked skill dispatcher (model-invoked-skills-catalog-01KZNP3E WP02).
+	// Default-on: invoking a user-authored skill is low-risk and expected behaviour.
+	// The tool is nil-safe: when slashDispatch is nil (test harness path, no
+	// real Core) it returns a friendly "not configured" error rather than
+	// panicking — so we always register it.
+	skillTool := coreskilltool.New(coreskilltool.Options{
+		Dispatch: slashDispatch,
+	})
+	registry.Register(skillTool)
+	logging.L().Info("rpc.builtins.register",
+		"tool", skillTool.Name(),
+		"dispatch_wired", slashDispatch != nil,
+	)
 }
 
 // fsWriteEnabledLookup returns a closure the update_artifact tool
@@ -152,6 +221,24 @@ func fsWriteEnabledLookup(store settings.SettingsStore) func() bool {
 		v, err := store.LoadFSWriteEnabled()
 		if err != nil {
 			logging.L().Warn("rpc.builtins.update_artifact_lookup.read_failed", "err", err.Error())
+			return false
+		}
+		return v
+	}
+}
+
+// todoEnabledLookup returns a closure the todo_write tool consults inside
+// Call to honour the live Todo Settings dial. nil store collapses to
+// "disabled" — correct default-off posture. Mirrors the FS write lookup.
+// (builtin-tools-search-and-elicitation-01KZNP3D WP05)
+func todoEnabledLookup(store settings.SettingsStore) func() bool {
+	if store == nil {
+		return func() bool { return false }
+	}
+	return func() bool {
+		v, err := store.LoadTodoEnabled()
+		if err != nil {
+			logging.L().Warn("rpc.builtins.todo_enabled_lookup.read_failed", "err", err.Error())
 			return false
 		}
 		return v
@@ -397,6 +484,34 @@ func builtinEnabledPredicate(s *settings.API) func(string) bool {
 			}
 			logging.L().Info("rpc.builtins.predicate", "tool", name, "enabled", v)
 			return v
+
+		// ── Todo tool (builtin-tools-search-and-elicitation-01KZNP3D) ──
+		// Default OFF until the user opts in from the Tools panel.
+		case coretodo.ToolName:
+			v, err := store.LoadTodoEnabled()
+			if err != nil {
+				logging.L().Warn("rpc.builtins.predicate.read_failed",
+					"tool", name, "err", err.Error())
+				// Default-off: soft-fail to disabled.
+				return false
+			}
+			logging.L().Info("rpc.builtins.predicate", "tool", name, "enabled", v)
+			return v
+
+		// ── Passive tools (builtin-tools-search-and-elicitation-01KZNP3D WP04) ──
+		// Sleep is always-on: it has no side effects and must remain available
+		// for __monitor watch patterns regardless of Settings dials.
+		case coresleep.ToolName:
+			logging.L().Info("rpc.builtins.predicate", "tool", name, "enabled", true)
+			return true
+
+		// ── Skill tool (model-invoked-skills-catalog-01KZNP3E) ──
+		// Default ON: invoking a user-authored skill is expected behaviour.
+		// The tool is registered unconditionally; the dispatch layer enforces
+		// model_invokable=true at resolution time so only eligible commands run.
+		case coreskilltool.ToolName:
+			logging.L().Info("rpc.builtins.predicate", "tool", name, "enabled", true)
+			return true
 		}
 		return true
 	}

@@ -338,12 +338,36 @@ export function Graph_Validate(arg1) {
   return window['go']['rpc']['Bindings']['Graph_Validate'](arg1);
 }
 
+export function Elicit_AnswerDeferred(arg1, arg2) {
+  return window['go']['rpc']['Bindings']['Elicit_AnswerDeferred'](arg1, arg2);
+}
+
+export function Elicit_ListPending() {
+  return window['go']['rpc']['Bindings']['Elicit_ListPending']();
+}
+
+export function Elicit_RegisterDeferred(arg1, arg2) {
+  return window['go']['rpc']['Bindings']['Elicit_RegisterDeferred'](arg1, arg2);
+}
+
+export function Elicit_SubmitAnswer(arg1, arg2, arg3) {
+  return window['go']['rpc']['Bindings']['Elicit_SubmitAnswer'](arg1, arg2, arg3);
+}
+
+export function Elicit_SubmitWizardStep(arg1, arg2, arg3, arg4) {
+  return window['go']['rpc']['Bindings']['Elicit_SubmitWizardStep'](arg1, arg2, arg3, arg4);
+}
+
 export function Hooks_Add(arg1) {
   return window['go']['rpc']['Bindings']['Hooks_Add'](arg1);
 }
 
 export function Hooks_AvailableBuiltins() {
   return window['go']['rpc']['Bindings']['Hooks_AvailableBuiltins']();
+}
+
+export function Hooks_DryRun(arg1, arg2) {
+  return window['go']['rpc']['Bindings']['Hooks_DryRun'](arg1, arg2);
 }
 
 export function Hooks_Get(arg1) {
@@ -758,8 +782,20 @@ export function Settings_GetEmbedderConfig() {
   return window['go']['rpc']['Bindings']['Settings_GetEmbedderConfig']();
 }
 
+export function Settings_GetFSReadEnabled() {
+  return window['go']['rpc']['Bindings']['Settings_GetFSReadEnabled']();
+}
+
+export function Settings_GetFSWriteEnabled() {
+  return window['go']['rpc']['Bindings']['Settings_GetFSWriteEnabled']();
+}
+
 export function Settings_GetFSRequestAccessEnabled() {
   return window['go']['rpc']['Bindings']['Settings_GetFSRequestAccessEnabled']();
+}
+
+export function Settings_GetTodoEnabled() {
+  return window['go']['rpc']['Bindings']['Settings_GetTodoEnabled']();
 }
 
 export function Settings_GetMCPAutoRestart() {
@@ -834,8 +870,20 @@ export function Settings_SetEmbedderConfig(arg1, arg2) {
   return window['go']['rpc']['Bindings']['Settings_SetEmbedderConfig'](arg1, arg2);
 }
 
+export function Settings_SetFSReadEnabled(arg1) {
+  return window['go']['rpc']['Bindings']['Settings_SetFSReadEnabled'](arg1);
+}
+
+export function Settings_SetFSWriteEnabled(arg1) {
+  return window['go']['rpc']['Bindings']['Settings_SetFSWriteEnabled'](arg1);
+}
+
 export function Settings_SetFSRequestAccessEnabled(arg1) {
   return window['go']['rpc']['Bindings']['Settings_SetFSRequestAccessEnabled'](arg1);
+}
+
+export function Settings_SetTodoEnabled(arg1) {
+  return window['go']['rpc']['Bindings']['Settings_SetTodoEnabled'](arg1);
 }
 
 export function Settings_SetMCPAutoRestart(arg1) {
@@ -896,6 +944,10 @@ export function Shell_OpenInOSBrowser(arg1) {
 
 export function Shell_PathComplete(arg1) {
   return window['go']['rpc']['Bindings']['Shell_PathComplete'](arg1);
+}
+
+export function Shell_PickFile(arg1, arg2, arg3) {
+  return window['go']['rpc']['Bindings']['Shell_PickFile'](arg1, arg2, arg3);
 }
 
 export function Shell_ReadFile(arg1) {

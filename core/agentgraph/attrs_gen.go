@@ -1349,6 +1349,59 @@ func (a SessionWriteAttrs) Validate() error {
 	return nil
 }
 
+// SleepAttrs is the typed payload for `kind: sleep`.
+//
+// Yield for N seconds without consuming a KnobMaxIterations slot (FR-010). Used inside __monitor watch patterns where the model must wait between polls.
+type SleepAttrs struct {
+
+	// MaxTokens: Upper bound on generated tokens; 0 = provider default.
+	MaxTokens int `json:"max_tokens,omitempty" yaml:"max_tokens,omitempty"`
+
+	// Model: Provider-specific model name.
+	Model string `json:"model,omitempty" yaml:"model,omitempty"`
+
+	// Name: Always kaneaz__sleep.
+	Name string `json:"name,omitempty" yaml:"name,omitempty"`
+
+	// Provider: LLM provider identifier (e.g. anthropic, bedrock).
+	Provider string `json:"provider,omitempty" yaml:"provider,omitempty"`
+
+	// Seconds: Duration to sleep. Clamped to [1, 600].
+	Seconds int `json:"seconds,omitempty" yaml:"seconds,omitempty"`
+
+	// SystemPrompt: Optional system prompt prepended to the conversation.
+	SystemPrompt string `json:"system_prompt,omitempty" yaml:"system_prompt,omitempty"`
+
+	// Temperature: Sampling temperature.
+	Temperature float64 `json:"temperature,omitempty" yaml:"temperature,omitempty"`
+
+	// ToolAllowlist: Tool IDs this node may call. Empty = allow-all per policy.
+	ToolAllowlist []string `json:"tool_allowlist,omitempty" yaml:"tool_allowlist,omitempty"`
+}
+
+func (SleepAttrs) nodeAttrsMarker() {}
+
+// Validate enforces the manifest's declared constraints for `kind: sleep`.
+// Generated from the resolved manifest's attrs map; per-rule errors
+// follow the validator's manifest-attribution format
+// (`sleep.attrs.<attr>.<rule>: ...`) so callers can grep for the
+// constraint that fired.
+func (a SleepAttrs) Validate() error {
+	if a.MaxTokens != 0 && float64(a.MaxTokens) < 0 {
+		return fmt.Errorf("max_tokens.min: got %d, want >= %v", a.MaxTokens, 0)
+	}
+	if a.Name == "" {
+		return fmt.Errorf("name: name is required (manifest constraint)")
+	}
+	if a.Temperature < 0 {
+		return fmt.Errorf("temperature.min: got %v, want >= %v", a.Temperature, 0)
+	}
+	if a.Temperature > 2 {
+		return fmt.Errorf("temperature.max: got %v, want <= %v", a.Temperature, 2)
+	}
+	return nil
+}
+
 // ToolAttrs is the typed payload for `kind: tool`.
 //
 // Invokes a registered tool (FR-032). The on-the-wire kind name is unchanged from v0.

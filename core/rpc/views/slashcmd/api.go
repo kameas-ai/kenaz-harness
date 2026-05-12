@@ -8,7 +8,11 @@
 // frontend's harnessClient.ts adapter.
 package slashcmd
 
-import "context"
+import (
+	"context"
+
+	coreslashcmd "github.com/sigil-tech/kaneaz-harness/core/slashcmd"
+)
 
 // CommandInfo is the wire shape returned by List for the autocomplete
 // dropdown. ComingSoon flags stub commands (the ones whose real
@@ -18,6 +22,9 @@ type CommandInfo struct {
 	Name        string `json:"name"`
 	Description string `json:"description"`
 	ComingSoon  bool   `json:"comingSoon"`
+	// IsUser, when true, marks this as a user-defined command
+	// (as opposed to a built-in). The frontend renders a "user" chip.
+	IsUser bool `json:"isUser,omitempty"`
 }
 
 // ExecuteResult is the wire shape returned by Execute. Text is the
@@ -29,6 +36,50 @@ type ExecuteResult struct {
 	Text     string         `json:"text"`
 	Kind     string         `json:"kind"`
 	Metadata map[string]any `json:"metadata,omitempty"`
+}
+
+// UserCommandWire is the full wire shape for a user-defined command.
+// Mirrors coreslashcmd.UserCommand with JSON tags for the Wails boundary.
+type UserCommandWire struct {
+	Name             string                          `json:"name"`
+	Scope            string                          `json:"scope"`
+	ProjectID        string                          `json:"projectId,omitempty"`
+	Kind             string                          `json:"kind"`
+	Description      string                          `json:"description"`
+	WhenToUse        string                          `json:"whenToUse,omitempty"`
+	DoesNotHandle    string                          `json:"doesNotHandle,omitempty"`
+	ModelInvokable   bool                            `json:"modelInvokable"`
+	Icon             string                          `json:"icon,omitempty"`
+	HiddenFromPanel  bool                            `json:"hiddenFromPanel,omitempty"`
+	Body             string                          `json:"body,omitempty"`
+	Tool             string                          `json:"tool,omitempty"`
+	ToolArgsTemplate string                          `json:"toolArgsTemplate,omitempty"`
+	Inputs           []coreslashcmd.UserCommandInput `json:"inputs,omitempty"`
+	PayloadPath      string                          `json:"payloadPath,omitempty"`
+	CreatedAt        int64                           `json:"createdAt,omitempty"`
+	UpdatedAt        int64                           `json:"updatedAt,omitempty"`
+}
+
+// UserCommandSummaryWire is the lightweight wire shape returned by
+// Slashcmd_List.
+type UserCommandSummaryWire struct {
+	Name           string `json:"name"`
+	Scope          string `json:"scope"`
+	ProjectID      string `json:"projectId,omitempty"`
+	Kind           string `json:"kind"`
+	Description    string `json:"description"`
+	ModelInvokable bool   `json:"modelInvokable"`
+	Icon           string `json:"icon,omitempty"`
+	UpdatedAt      int64  `json:"updatedAt,omitempty"`
+}
+
+// RunResultWire is the wire shape returned by Slashcmd_Run.
+type RunResultWire struct {
+	Kind         string         `json:"kind"`
+	Text         string         `json:"text"`
+	RenderedArgs []string       `json:"renderedArgs,omitempty"`
+	ToolName     string         `json:"toolName,omitempty"`
+	Metadata     map[string]any `json:"metadata,omitempty"`
 }
 
 // SlashAPI is the view-scoped surface backing the chat composer's
@@ -43,4 +94,20 @@ type SlashAPI interface {
 	// Hidden commands are filtered out; ComingSoon commands stay
 	// in the list (so /help and the autocomplete advertise them).
 	List(ctx context.Context) ([]CommandInfo, error)
+
+	// ── user command CRUD ─────────────────────────────────────────
+
+	// Slashcmd_List returns all user commands visible to the given
+	// project (global + project-scoped).
+	UserList(ctx context.Context, projectID string) ([]UserCommandSummaryWire, error)
+	// UserGet returns the full detail of a single user command.
+	UserGet(ctx context.Context, name, projectID string) (UserCommandWire, error)
+	// UserSave creates or updates a user command (both surfaces).
+	UserSave(ctx context.Context, cmd UserCommandWire) error
+	// UserDelete removes a user command by name + projectID.
+	UserDelete(ctx context.Context, name, projectID string) error
+	// UserRun dispatches a user command by name with the given args.
+	// This is the human-invoked entry point; the __skill builtin tool
+	// calls Dispatch.Run directly.
+	UserRun(ctx context.Context, name string, args map[string]string, sessionID, projectID, cwd, selection string) (RunResultWire, error)
 }

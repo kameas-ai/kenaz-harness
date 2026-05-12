@@ -69,6 +69,13 @@ function pick(name: string) {
         {{ cmd.description }}
       </span>
       <span
+        v-if="cmd.isUser"
+        class="font-ui text-[10px] uppercase tracking-[0.18em] text-accent-dim border border-accent-dim rounded px-1"
+        data-testid="slash-user-chip"
+      >
+        user
+      </span>
+      <span
         v-if="cmd.comingSoon"
         class="font-ui text-[10px] uppercase tracking-[0.18em] text-signal-warn"
         data-testid="slash-coming-soon-tag"

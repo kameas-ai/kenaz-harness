@@ -1,0 +1,29 @@
+id: clarify-scope
+description: >
+  Multi-question batch to clarify the scope of an ambiguous task.
+  Asks for a brief description and which areas to include.
+vars:
+  - name: task
+    type: string
+    required: false
+    description: Short label for the task being scoped
+questions:
+  - id: description
+    kind: text
+    prompt: "{{if .task}}Describe what you mean by '{{.task}}'{{else}}Describe the task in more detail{{end}}"
+    multiline: true
+    required: false
+  - id: areas
+    kind: checkbox
+    prompt: Which areas should be in scope?
+    options:
+      - value: backend
+        label: Backend / server
+      - value: frontend
+        label: Frontend / UI
+      - value: tests
+        label: Tests
+      - value: docs
+        label: Documentation
+      - value: infra
+        label: Infrastructure / CI

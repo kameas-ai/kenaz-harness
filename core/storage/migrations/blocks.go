@@ -30,6 +30,10 @@ var CanonicalBlocks = map[string]VersionBlock{
 	"shared-context-distribution": {Min: 700, Max: 799},
 	"memory-rag":                  {Min: 800, Max: 899},
 	"app-layer":                   {Min: 900, Max: 999},
+	// user-slash-commands-01KQ8TD9: 1000-1099.
+	// model-invoked-skills-catalog-01KZNP3E may add a column-add migration
+	// in this same block (version 1001+) to extend slash_commands_user.
+	"user-slash-commands": {Min: 1000, Max: 1099},
 }
 
 // LookupBlock returns the reserved block for the given owning-mission
