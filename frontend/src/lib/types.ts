@@ -905,6 +905,13 @@ export interface ToolCall {
   argsSummary: string;
   /** Optional latency display, e.g. `"412ms"`. */
   latency?: string;
+  /**
+   * True when the dispatch resolved at least one @secret: reference token
+   * in the tool arguments. Never carries plaintext — provenance only
+   * (model-secret-references-01KW7M5A WP14). Drives the lock icon in the
+   * chat UI.
+   */
+  usedSecrets?: boolean;
 }
 
 export interface Message {

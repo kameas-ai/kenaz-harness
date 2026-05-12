@@ -113,6 +113,10 @@ type ToolCall struct {
 	Name      string         `json:"name"`
 	Arguments map[string]any `json:"arguments,omitempty"`
 	Result    string         `json:"result,omitempty"`
+	// UsedSecrets is true when the dispatch resolved at least one
+	// @secret: reference token in the tool arguments. Never carries
+	// plaintext — provenance only (model-secret-references-01KW7M5A WP14).
+	UsedSecrets bool `json:"usedSecrets,omitempty"`
 }
 
 // Message is one row in session_messages. Sequence is monotonically
