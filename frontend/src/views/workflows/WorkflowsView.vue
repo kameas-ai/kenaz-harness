@@ -22,6 +22,7 @@ import WorkflowEditor from './WorkflowEditor.vue';
 import SimpleTemplateEditor from './SimpleTemplateEditor.vue';
 import CatalogView from './CatalogView.vue';
 import CatalogPreviewDrawer from './CatalogPreviewDrawer.vue';
+import ScheduledInbox from './ScheduledInbox.vue';
 import {
   createWorkflowsClient,
   type WorkflowsClient,
@@ -302,9 +303,9 @@ onMounted(loadCatalog);
         />
       </template>
 
-      <!-- Runs tab stub -->
+      <!-- Runs tab (WP03 — scheduled inbox) -->
       <template v-else-if="activeTab === 'Runs'">
-        <p class="font-ui text-sm text-ink-muted">Run history coming soon.</p>
+        <ScheduledInbox :client="client" />
       </template>
 
       <!-- Library tab (existing content) -->
