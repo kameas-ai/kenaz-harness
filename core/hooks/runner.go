@@ -28,6 +28,7 @@ import (
 	"log/slog"
 	"os/exec"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -73,21 +74,36 @@ type PreSendBuiltin func(ctx context.Context, ev PreSendEvent, cfg map[string]an
 // to the caller.
 type PostSendBuiltin func(ctx context.Context, ev PostSendEvent, cfg map[string]any) error
 
+// GenericFireBuiltin is the function signature for v2 generic builtin
+// hooks. Implementations receive the event name and payload and return
+// a HookOutput. Used by Fire / FireAsync for all non-chat-pipeline events.
+type GenericFireBuiltin func(ctx context.Context, event string, payload any, cfg map[string]any) (HookOutput, error)
+
 // BuiltinRegistry is the map of available builtin hooks. The embedder
 // (rpc layer) constructs one with the harness's built-in implementations
 // (memory.retrieve / memory.persist) and passes it to NewRunner.
 type BuiltinRegistry struct {
-	preSend  map[string]PreSendBuiltin
-	postSend map[string]PostSendBuiltin
-	descs    []BuiltinDescriptor
+	preSend     map[string]PreSendBuiltin
+	postSend    map[string]PostSendBuiltin
+	genericFire map[string]GenericFireBuiltin
+	descs       []BuiltinDescriptor
 }
 
 // NewBuiltinRegistry returns an empty registry.
 func NewBuiltinRegistry() *BuiltinRegistry {
 	return &BuiltinRegistry{
-		preSend:  map[string]PreSendBuiltin{},
-		postSend: map[string]PostSendBuiltin{},
+		preSend:     map[string]PreSendBuiltin{},
+		postSend:    map[string]PostSendBuiltin{},
+		genericFire: map[string]GenericFireBuiltin{},
 	}
+}
+
+// RegisterGenericFire wires a v2 builtin into the Fire / FireAsync
+// dispatch path. The builtin receives the event name so a single
+// function can handle multiple events.
+func (b *BuiltinRegistry) RegisterGenericFire(id string, fn GenericFireBuiltin, desc BuiltinDescriptor) {
+	b.genericFire[id] = fn
+	b.descs = append(b.descs, desc)
 }
 
 // RegisterPreSend wires a builtin into the pre_send dispatch path.
@@ -118,18 +134,22 @@ type MCPInvoker interface {
 
 // Runner dispatches hooks at lifecycle events.
 type Runner struct {
-	registry *Registry
-	builtins *BuiltinRegistry
-	logger   *slog.Logger
-	mcp      MCPInvoker
+	registry      *Registry
+	builtins      *BuiltinRegistry
+	logger        *slog.Logger
+	mcp           MCPInvoker
+	asyncPoolSize int
+	poolMu        sync.Mutex
+	pool          *asyncPool
 }
 
 // Config bundles the runner's dependencies.
 type Config struct {
-	Registry *Registry
-	Builtins *BuiltinRegistry
-	Logger   *slog.Logger
-	MCP      MCPInvoker // optional — nil means kind=mcp hooks are skipped with a warning
+	Registry      *Registry
+	Builtins      *BuiltinRegistry
+	Logger        *slog.Logger
+	MCP           MCPInvoker // optional — nil means kind=mcp hooks are skipped with a warning
+	AsyncPoolSize int        // default 8 when 0
 }
 
 // NewRunner constructs a Runner.
@@ -140,11 +160,16 @@ func NewRunner(cfg Config) *Runner {
 	if cfg.Logger == nil {
 		cfg.Logger = slog.Default()
 	}
+	size := cfg.AsyncPoolSize
+	if size <= 0 {
+		size = defaultPoolSize
+	}
 	return &Runner{
-		registry: cfg.Registry,
-		builtins: cfg.Builtins,
-		logger:   cfg.Logger,
-		mcp:      cfg.MCP,
+		registry:      cfg.Registry,
+		builtins:      cfg.Builtins,
+		logger:        cfg.Logger,
+		mcp:           cfg.MCP,
+		asyncPoolSize: size,
 	}
 }
 
