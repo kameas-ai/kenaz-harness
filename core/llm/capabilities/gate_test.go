@@ -7,6 +7,8 @@ import (
 	llm "github.com/sigil-tech/kaneaz-harness/core/llm"
 )
 
+// ── MultimodalInEnabled env-flag tests (multimodal-io-01KQ8TDF WP07) ────────
+
 func mustCatalog(t *testing.T) *Catalog {
 	t.Helper()
 	c, err := LoadDefault()
@@ -343,5 +345,66 @@ func TestCheckAttachments_NoAttachments(t *testing.T) {
 	}
 	if err := g.CheckAttachments(req, prof); err != nil {
 		t.Fatalf("plain text request must pass: %v", err)
+	}
+}
+
+// ── HARNESS_MULTIMODAL_IN env-flag tests (multimodal-io-01KQ8TDF WP08) ──────
+
+// TestMultimodalInEnabled_DefaultOn verifies that MultimodalInEnabled returns
+// true when the env var is unset (the "default on" semantics of FR-022).
+func TestMultimodalInEnabled_DefaultOn(t *testing.T) {
+	t.Setenv("HARNESS_MULTIMODAL_IN", "")
+	if !MultimodalInEnabled() {
+		t.Error("expected MultimodalInEnabled()=true when env var is empty")
+	}
+}
+
+// TestMultimodalInEnabled_OffWhenExplicit verifies that setting
+// HARNESS_MULTIMODAL_IN=off disables the flag (FR-022).
+func TestMultimodalInEnabled_OffWhenExplicit(t *testing.T) {
+	t.Setenv("HARNESS_MULTIMODAL_IN", "off")
+	if MultimodalInEnabled() {
+		t.Error("expected MultimodalInEnabled()=false when HARNESS_MULTIMODAL_IN=off")
+	}
+}
+
+// TestMultimodalInEnabled_CaseInsensitive verifies that "OFF" and " off " are
+// also treated as disabled (defensive robustness).
+func TestMultimodalInEnabled_CaseInsensitive(t *testing.T) {
+	for _, v := range []string{"OFF", "Off", " off ", " OFF "} {
+		t.Run(v, func(t *testing.T) {
+			t.Setenv("HARNESS_MULTIMODAL_IN", v)
+			if MultimodalInEnabled() {
+				t.Errorf("expected false for HARNESS_MULTIMODAL_IN=%q", v)
+			}
+		})
+	}
+}
+
+// TestAttachmentLimits_EnvFlagForceDisable verifies that when
+// HARNESS_MULTIMODAL_IN=off, AttachmentLimits forces ImageInput=false and
+// DocumentInput=false regardless of per-model YAML (FR-022).
+func TestAttachmentLimits_EnvFlagForceDisable(t *testing.T) {
+	t.Setenv("HARNESS_MULTIMODAL_IN", "off")
+	c := mustCatalog(t)
+	// Anthropic Sonnet normally has ImageInput=true and DocumentInput=true.
+	desc := c.AttachmentLimits("anthropic", "claude-sonnet-4-7")
+	if desc.ImageInput {
+		t.Error("expected ImageInput=false when HARNESS_MULTIMODAL_IN=off")
+	}
+	if desc.DocumentInput {
+		t.Error("expected DocumentInput=false when HARNESS_MULTIMODAL_IN=off")
+	}
+}
+
+// TestAttachmentLimits_EnvFlagOnPreservesDescriptor verifies that when
+// HARNESS_MULTIMODAL_IN is unset, the YAML values are preserved (FR-022).
+func TestAttachmentLimits_EnvFlagOnPreservesDescriptor(t *testing.T) {
+	t.Setenv("HARNESS_MULTIMODAL_IN", "")
+	c := mustCatalog(t)
+	// Anthropic Sonnet should have ImageInput=true per the YAML.
+	desc := c.AttachmentLimits("anthropic", "claude-sonnet-4-7")
+	if !desc.ImageInput {
+		t.Error("expected ImageInput=true for anthropic sonnet when HARNESS_MULTIMODAL_IN is unset")
 	}
 }
