@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/sigil-tech/kaneaz-harness/core/context/audit"
 )
 
 // RunResult is the output of a user command execution. The Kind field
@@ -52,7 +54,8 @@ type SessionContext struct {
 	ProjectID string
 	CWD       string
 	Selection string
-	Date      string // ISO-8601 YYYY-MM-DD; zero → today
+	Date      string            // ISO-8601 YYYY-MM-DD; zero → today
+	UserArgs  map[string]string // populated internally for audit; callers pass args to Run
 }
 
 // Dispatch is the central dispatch point for user command execution.
@@ -62,12 +65,22 @@ type SessionContext struct {
 type Dispatch struct {
 	store    *Store
 	tools    ToolDispatcher // may be nil (kind:tool commands return an error)
+	auditor  audit.Emitter  // may be nil (no-op)
 }
 
 // NewDispatch constructs a Dispatch. tools may be nil if tool dispatch
 // is not needed (e.g. in tests that only test kind:text / kind:prompt).
 func NewDispatch(store *Store, tools ToolDispatcher) *Dispatch {
 	return &Dispatch{store: store, tools: tools}
+}
+
+// WithAuditEmitter injects an audit.Emitter into the Dispatch.
+// Nil is a no-op. The emitter is called synchronously from Run; the
+// credstore pattern of async drain is not needed here because the audit
+// emit is itself non-blocking at the emitter level.
+func (d *Dispatch) WithAuditEmitter(em audit.Emitter) *Dispatch {
+	d.auditor = em
+	return d
 }
 
 // Run resolves the named command, substitutes template variables, and
@@ -86,8 +99,23 @@ func (d *Dispatch) Run(
 	name string,
 	args map[string]string,
 	sc SessionContext,
-) (RunResult, error) {
-	cmd, err := d.store.LoadUserOne(ctx, name, sc.ProjectID)
+) (res RunResult, rerr error) {
+	// Audit emission deferred so it fires on every return path — success
+	// or failure — and always has the final result and error available.
+	// The cmd variable is captured by pointer so the closure sees the
+	// resolved command even when loading succeeds after the defer is set.
+	var cmd UserCommand
+	defer func() {
+		if d.auditor != nil && cmd.Name != "" {
+			// Augment sc with user args for arg-name extraction.
+			auditSC := sc
+			auditSC.UserArgs = args
+			EmitRun(ctx, d.auditor, cmd, res, rerr, auditSC)
+		}
+	}()
+
+	var err error
+	cmd, err = d.store.LoadUserOne(ctx, name, sc.ProjectID)
 	if err != nil {
 		if errors.Is(err, ErrCommandNotFound) {
 			return RunResult{
