@@ -137,6 +137,9 @@ import type {
   NarrativeMetrics,
   AttachmentLimitsView,
   RotationResult,
+  ScoredChunk,
+  RetrievalReport,
+  ChunkProvenance,
 } from './types';
 
 /**
@@ -430,6 +433,11 @@ interface WailsBindingsLike {
   Memory_NarrativeFailedList(): Promise<NarrativeJobStatus[]>;
   Memory_RetryFailedNarrative(jobID: string): Promise<void>;
   Memory_NarrativeMetricsForChunk(chunkID: string): Promise<NarrativeMetrics>;
+  // Capstone (memory-inspection-ui-01KX5R8E).
+  Memory_LastRetrieval(sessionID: string): Promise<RetrievalReport>;
+  Memory_EmbeddingProbe(query: string, limit: number): Promise<ScoredChunk[]>;
+  Memory_ResummarizeChunk(chunkID: string): Promise<MemoryChunk>;
+  Memory_GetChunkProvenance(chunkID: string): Promise<ChunkProvenance>;
 
   Dials_Get(key: DialScopeKey): Promise<DialConfig>;
   Dials_Set(key: DialScopeKey, cfg: DialConfig): Promise<void>;
@@ -1656,6 +1664,15 @@ export interface MemoryClient {
   retryFailedNarrative(jobID: string): Promise<void>;
   /** Return the retrieval/citation/pin counters and score for a chunk. */
   narrativeMetricsForChunk(chunkID: string): Promise<NarrativeMetrics>;
+  // ── Capstone (memory-inspection-ui-01KX5R8E) ─────────────────────────
+  /** Return the most recent retrieval report for a session (§2.1 inspector, FR-001). */
+  lastRetrieval(sessionID: string): Promise<RetrievalReport>;
+  /** Embed query and return ranked ScoredChunks (§2.2 embedding probe, FR-003). */
+  embeddingProbe(query: string, limit?: number): Promise<ScoredChunk[]>;
+  /** Re-run narrative synthesis on a chunk (§2.3, FR-004). */
+  resummarizeChunk(chunkID: string): Promise<MemoryChunk>;
+  /** Return the full audit chain for a chunk (§2.6 provenance drawer, FR-007). */
+  getChunkProvenance(chunkID: string): Promise<ChunkProvenance>;
 }
 
 /**
@@ -2629,6 +2646,10 @@ export function createHarnessClient(): HarnessClient {
       narrativeFailedList: () => b().Memory_NarrativeFailedList(),
       retryFailedNarrative: (jobID) => b().Memory_RetryFailedNarrative(jobID),
       narrativeMetricsForChunk: (chunkID) => b().Memory_NarrativeMetricsForChunk(chunkID),
+      lastRetrieval: (sessionID) => b().Memory_LastRetrieval(sessionID),
+      embeddingProbe: (query, limit = 10) => b().Memory_EmbeddingProbe(query, limit),
+      resummarizeChunk: (chunkID) => b().Memory_ResummarizeChunk(chunkID),
+      getChunkProvenance: (chunkID) => b().Memory_GetChunkProvenance(chunkID),
     },
     dials: {
       get: (key) => b().Dials_Get(key),
@@ -3254,6 +3275,31 @@ export function createFakeHarnessClient(
         citations: 0,
         userPins: 0,
         score: 0,
+      }),
+      lastRetrieval: async (sessionID: string) => ({
+        sessionId: sessionID,
+        query: '',
+        results: [],
+        threshold: 0.5,
+        at: new Date().toISOString(),
+      }),
+      embeddingProbe: async () => [],
+      resummarizeChunk: async () => ({
+        id: '',
+        scopeKind: 'session',
+        scopeId: '',
+        content: '',
+        contentHash: '',
+        createdAt: new Date().toISOString(),
+      }),
+      getChunkProvenance: async (chunkID: string) => ({
+        chunkId: chunkID,
+        scopePath: 'session',
+        pinned: false,
+        retrievalCount: 0,
+        citationCount: 0,
+        promotionScore: 0,
+        createdAt: new Date().toISOString(),
       }),
     },
     dials: {

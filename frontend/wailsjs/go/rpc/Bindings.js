@@ -538,6 +538,22 @@ export function Memory_NarrativeMetricsForChunk(arg1) {
   return window['go']['rpc']['Bindings']['Memory_NarrativeMetricsForChunk'](arg1);
 }
 
+export function Memory_LastRetrieval(arg1) {
+  return window['go']['rpc']['Bindings']['Memory_LastRetrieval'](arg1);
+}
+
+export function Memory_EmbeddingProbe(arg1, arg2) {
+  return window['go']['rpc']['Bindings']['Memory_EmbeddingProbe'](arg1, arg2);
+}
+
+export function Memory_ResummarizeChunk(arg1) {
+  return window['go']['rpc']['Bindings']['Memory_ResummarizeChunk'](arg1);
+}
+
+export function Memory_GetChunkProvenance(arg1) {
+  return window['go']['rpc']['Bindings']['Memory_GetChunkProvenance'](arg1);
+}
+
 export function Nodes_Catalog() {
   return window['go']['rpc']['Bindings']['Nodes_Catalog']();
 }

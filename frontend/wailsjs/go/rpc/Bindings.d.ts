@@ -306,6 +306,14 @@ export function Memory_RetryFailedNarrative(arg1:string):Promise<void>;
 
 export function Memory_NarrativeMetricsForChunk(arg1:string):Promise<memory.NarrativeMetrics>;
 
+export function Memory_LastRetrieval(arg1:string):Promise<memory.RetrievalReport>;
+
+export function Memory_EmbeddingProbe(arg1:string,arg2:number):Promise<Array<memory.ScoredChunk>>;
+
+export function Memory_ResummarizeChunk(arg1:string):Promise<memory.Chunk>;
+
+export function Memory_GetChunkProvenance(arg1:string):Promise<memory.ChunkProvenance>;
+
 export function Nodes_Catalog():Promise<Array<nodes.NodeManifestSummary>>;
 
 export function Nodes_Doctor():Promise<nodes.DoctorReport>;

@@ -8,6 +8,7 @@ package memory
 import (
 	"context"
 	"fmt"
+	"time"
 )
 
 // Retriever is the surface buildMessages calls to inject relevant
@@ -18,6 +19,10 @@ type Retriever struct {
 	embedder  Embedder
 	enabledFn func() bool
 	threshold float32
+	// sessionID is optionally set so the retriever can push records to
+	// GlobalRetrievalHistory (memory-inspection-ui-01KX5R8E WP02).
+	// Empty string disables history recording (e.g. in tests).
+	sessionID string
 }
 
 // NewRetriever constructs a Retriever. enabledFn is the
@@ -34,6 +39,19 @@ func NewRetriever(store Store, embedder Embedder, enabledFn func() bool, thresho
 		enabledFn: enabledFn,
 		threshold: threshold,
 	}
+}
+
+// WithSessionID returns a copy of the Retriever that records retrieval
+// decisions into GlobalRetrievalHistory under the given session ID.
+// The production path calls this when wiring the kernel per-session;
+// the bare constructor omits it for backwards compatibility.
+func (r *Retriever) WithSessionID(sessionID string) *Retriever {
+	if r == nil {
+		return nil
+	}
+	out := *r
+	out.sessionID = sessionID
+	return &out
 }
 
 // Snippet is the shape returned to callers — a content string + score.
@@ -87,13 +105,33 @@ func (r *Retriever) retrieve(ctx context.Context, query string, k int, scopes []
 		return nil, err
 	}
 	out := make([]Snippet, 0, len(results))
+	// Build retrieval record for the inspector (WP02).
+	var histResults []RetrievalResult
 	for _, res := range results {
-		if res.Similarity < r.threshold {
-			continue
-		}
-		out = append(out, Snippet{
+		injected := res.Similarity >= r.threshold
+		histResults = append(histResults, RetrievalResult{
+			ChunkID:    res.Chunk.ID,
 			Content:    res.Chunk.Content,
+			Kind:       res.Chunk.Kind,
+			Pinned:     res.Chunk.Pinned,
 			Similarity: res.Similarity,
+			Injected:   injected,
+		})
+		if injected {
+			out = append(out, Snippet{
+				Content:    res.Chunk.Content,
+				Similarity: res.Similarity,
+			})
+		}
+	}
+	// Push to global history when a session is bound.
+	if r.sessionID != "" {
+		GlobalRetrievalHistory().Push(RetrievalRecord{
+			SessionID: r.sessionID,
+			Query:     query,
+			Results:   histResults,
+			Threshold: r.threshold,
+			At:        time.Now().UTC(),
 		})
 	}
 	return out, nil
