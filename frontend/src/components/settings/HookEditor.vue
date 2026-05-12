@@ -227,21 +227,21 @@ function handleDryRun(): void {
         />
       </label>
 
-      <!-- Per-hook timeout -->
+      <!-- Per-hook timeout (typed wire field as of v0.8.x). -->
       <label class="grid gap-1">
         <span class="font-ui text-[11px] uppercase tracking-[0.16em] text-ink-subtle">
           Timeout (ms)
           <span class="normal-case text-[10px] text-ink-subtle ml-1">0 = default (5 000 ms sync)</span>
         </span>
         <input
-          :value="draft.config?.timeout_ms ?? 0"
+          :value="draft.timeoutMs ?? 0"
           type="number"
           min="0"
           class="text-sm px-2 py-1.5 rounded-sm border border-border bg-surface-1 text-ink focus:outline-none focus:border-accent w-32"
           data-testid="hook-editor-timeout"
           @input="(e) => {
             const v = parseInt((e.target as HTMLInputElement).value, 10);
-            draft.config = { ...draft.config, timeout_ms: isNaN(v) ? 0 : v };
+            draft.timeoutMs = isNaN(v) ? 0 : v;
           }"
         />
       </label>

@@ -160,11 +160,41 @@ func hookToWire(h corehooks.Hook) Hook {
 			Kinds:      h.Match.Kinds,
 			Models:     h.Match.Models,
 		},
-		Builtin: h.Builtin,
-		Command: h.Command,
-		MCPTool: h.MCPTool,
-		Config:  h.Config,
+		Builtin:   h.Builtin,
+		Command:   h.Command,
+		MCPTool:   h.MCPTool,
+		TimeoutMs: effectiveWireTimeoutMs(h),
+		Config:    h.Config,
 	}
+}
+
+// effectiveWireTimeoutMs surfaces the per-hook timeout to the wire shape,
+// preferring the typed Hook.TimeoutMs field but falling back to a legacy
+// config.timeout_ms entry that the v0.8.0 HookEditor wrote before the
+// typed wire field existed. Once an old hook is opened+saved in the
+// post-v0.8.x editor, the typed field wins; the Config entry becomes
+// inert leftover that any subsequent migration can clean up.
+func effectiveWireTimeoutMs(h corehooks.Hook) int {
+	if h.TimeoutMs > 0 {
+		return h.TimeoutMs
+	}
+	if h.Config == nil {
+		return 0
+	}
+	v, ok := h.Config["timeout_ms"]
+	if !ok {
+		return 0
+	}
+	// JSON-decoded numbers arrive as float64; YAML/SQLite may give int.
+	switch n := v.(type) {
+	case float64:
+		return int(n)
+	case int:
+		return n
+	case int64:
+		return int(n)
+	}
+	return 0
 }
 
 func wireToHook(in Hook) corehooks.Hook {
@@ -179,10 +209,11 @@ func wireToHook(in Hook) corehooks.Hook {
 			Kinds:      in.Match.Kinds,
 			Models:     in.Match.Models,
 		},
-		Builtin: in.Builtin,
-		Command: in.Command,
-		MCPTool: in.MCPTool,
-		Config:  in.Config,
+		Builtin:   in.Builtin,
+		Command:   in.Command,
+		MCPTool:   in.MCPTool,
+		TimeoutMs: in.TimeoutMs,
+		Config:    in.Config,
 	}
 }
 
