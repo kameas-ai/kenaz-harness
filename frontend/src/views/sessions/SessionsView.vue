@@ -21,6 +21,7 @@ import NewSessionDialog from '@/shell/NewSessionDialog.vue';
 import MessageList from '@/components/chat/MessageList.vue';
 import SessionHeader from '@/components/chat/SessionHeader.vue';
 import ChatInput from '@/components/chat/ChatInput.vue';
+import SlashArgFill from '@/components/chat/SlashArgFill.vue';
 import ResolvedContextPanel from '@/views/sessions/ResolvedContextPanel.vue';
 import ConfirmToolModal from '@/components/chat/ConfirmToolModal.vue';
 import BranchSidebar from '@/components/chat/BranchSidebar.vue';
@@ -50,6 +51,7 @@ import type {
   SessionUsage,
   Settings,
   SlashExecuteResult,
+  UserCommand,
 } from '@/lib/types';
 import { flattenChoices, inferFamily } from '@/lib/modelFamily';
 
@@ -520,11 +522,72 @@ function appendSlashResult(sid: string, kind: string, text: string) {
   };
 }
 
+// ── SlashArgFill state (WP06) ────────────────────────────────────────
+//
+// When the user picks a user-defined slash command that declares one or
+// more inputs, we intercept the slashCommand event, look up the full
+// command shape (which carries the inputs array), and surface the
+// SlashArgFill panel above the composer instead of immediately dispatching.
+// Once all args are resolved the panel emits `submit(args)` and we call
+// `client.slashcmd.run`.
+
+interface PendingArgFill {
+  command: UserCommand;
+  /** The original raw text the user typed (e.g. "/deploy"); kept for
+   * display but not used in the run call — args come from the panel. */
+  raw: string;
+}
+
+const pendingArgFill = ref<PendingArgFill | null>(null);
+
+function dismissArgFill() {
+  pendingArgFill.value = null;
+}
+
+async function onArgFillSubmit(args: Record<string, string>) {
+  const fill = pendingArgFill.value;
+  pendingArgFill.value = null;
+  if (!fill) return;
+  const sid = sessionId.value;
+  if (!sid) return;
+  let result;
+  try {
+    result = await client.slashcmd.run(fill.command.name, args, sid, fill.command.projectId ?? '', '', '');
+  } catch (err) {
+    appendSlashResult(sid, 'error', err instanceof Error ? err.message : String(err));
+    return;
+  }
+  appendSlashResult(sid, result.kind, result.text);
+}
+
 async function onSlashCommand(raw: string) {
   const sid = sessionId.value;
   if (!sid) {
     return;
   }
+
+  // ── User-command arg-fill intercept (WP06) ───────────────────────────
+  // Parse the command name from the raw string (first token after `/`).
+  // If it resolves to a user-defined command with declared inputs, open
+  // the SlashArgFill panel rather than dispatching immediately.
+  const trimmedRaw = raw.trim();
+  if (trimmedRaw.startsWith('/')) {
+    const token = trimmedRaw.slice(1).split(/\s+/)[0] ?? '';
+    if (token) {
+      let userCmd: UserCommand | null = null;
+      try {
+        userCmd = await client.slashcmd.get(token, '');
+      } catch {
+        // not a user command — fall through to built-in dispatch
+      }
+      if (userCmd && userCmd.inputs && userCmd.inputs.length > 0) {
+        pendingArgFill.value = { command: userCmd, raw };
+        return;
+      }
+    }
+  }
+
+  // ── Built-in / no-input dispatch ─────────────────────────────────────
   let result: SlashExecuteResult;
   try {
     result = await client.slash.execute(sid, raw);
@@ -548,7 +611,7 @@ async function onSlashCommand(raw: string) {
 
   // /clear — the backend appended a system divider; refresh the
   // message list so the divider shows up in the transcript.
-  if (raw.trim().startsWith('/clear')) {
+  if (trimmedRaw.startsWith('/clear')) {
     void refreshActiveMessages();
   }
 }
@@ -1514,6 +1577,19 @@ async function onNudgeNewSession() {
           @branch="onNudgeBranch"
           @new-session="onNudgeNewSession"
           @dismiss="onNudgeDismiss"
+        />
+        <!-- SlashArgFill panel (WP06): shown when the user picks a
+             user-defined slash command that declares input args.
+             Rendered above the composer so the arg-fill panel and the
+             input are both visible. The panel owns its own submit/cancel
+             buttons; the composer stays visible for context. -->
+        <SlashArgFill
+          v-if="pendingArgFill"
+          :command="pendingArgFill.command"
+          class="mx-4 mb-2"
+          data-testid="session-slash-arg-fill"
+          @submit="onArgFillSubmit"
+          @cancel="dismissArgFill"
         />
         <ChatInput
           v-model="session.draft.value"
