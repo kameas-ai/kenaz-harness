@@ -183,6 +183,16 @@ type Env struct {
 	// Hooks fires greedy memory-write hooks at kernel boundaries.
 	Hooks *HookManager
 
+	// LifecycleHooks fires v2 lifecycle hooks (pre_tool_use, post_tool_use,
+	// etc.) via core/hooks.Runner. Nil disables v2 lifecycle hooks; the
+	// existing memory-write hooks still fire through Hooks.
+	LifecycleHooks LifecycleHookRunner
+
+	// PendingContext receives additional system-context injected by hooks
+	// (e.g. additional_context from pre_tool_use). Nil drops the context
+	// (it is still logged but not forwarded to the next LLM turn).
+	PendingContext PendingContextAppender
+
 	// Compactor is the optional compaction pipeline (Bundle D). The
 	// kernel calls it at LLMNode pre-call and ToolNode post-call
 	// firing sites when the relevant threshold is crossed. Nil

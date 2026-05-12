@@ -91,6 +91,7 @@ type Manager struct {
 	audit Audit
 	now   func() time.Time
 	idGen IDGen
+	hooks SessionHookRunner // optional; nil disables v2 lifecycle hooks
 
 	posMu sync.Mutex // serialize position assignment on Create
 }
@@ -122,6 +123,16 @@ func WithIDGen(gen IDGen) ManagerOption {
 	return func(m *Manager) {
 		if gen != nil {
 			m.idGen = gen
+		}
+	}
+}
+
+// WithSessionHookRunner wires a v2 lifecycle hook runner. When set the
+// manager fires session_start and setup events after session creation.
+func WithSessionHookRunner(h SessionHookRunner) ManagerOption {
+	return func(m *Manager) {
+		if h != nil {
+			m.hooks = h
 		}
 	}
 }
@@ -228,12 +239,47 @@ func (m *Manager) createInternal(ctx context.Context, name string, projectID *st
 		"position":   rec.Position,
 		"kind":       rec.Kind,
 	})
+
+	// v2 lifecycle hook: session_start. Fire after the audit event so the
+	// session is visible in the store before hooks run. Errors are non-fatal:
+	// the session was created successfully; a broken hook runner must not
+	// block session creation.
+	if m.hooks != nil {
+		projectID := ""
+		if rec.ProjectID != nil {
+			projectID = *rec.ProjectID
+		}
+		_, _ = m.hooks.FireSessionStart(ctx, SessionStartRequest{
+			SessionID: rec.ID,
+			ProjectID: projectID,
+		})
+	}
+
 	return rec, nil
 }
 
 // Get returns one session by id.
 func (m *Manager) Get(ctx context.Context, id string) (Record, error) {
 	return m.store.Get(ctx, id)
+}
+
+// FireSetup fires the setup lifecycle hook for the given session.
+// This is a no-op when no hook runner is configured. Callers invoke
+// this once, just before the first LLM turn of the session.
+func (m *Manager) FireSetup(ctx context.Context, sessionID, projectID, cwd string) (SessionHookResult, error) {
+	if m == nil || m.hooks == nil {
+		return SessionHookResult{}, nil
+	}
+	return m.hooks.FireSetup(ctx, sessionID, projectID, cwd)
+}
+
+// FireCwdChanged fires the cwd_changed lifecycle hook. Callers invoke
+// this when the working directory of a session changes.
+func (m *Manager) FireCwdChanged(ctx context.Context, sessionID, oldCWD, newCWD string) (SessionHookResult, error) {
+	if m == nil || m.hooks == nil {
+		return SessionHookResult{}, nil
+	}
+	return m.hooks.FireCwdChanged(ctx, sessionID, oldCWD, newCWD)
 }
 
 // List returns every non-archived session in display order.

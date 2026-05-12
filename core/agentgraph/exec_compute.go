@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 )
 
@@ -247,11 +248,7 @@ func (toolExecutor) Execute(ctx context.Context, env *Env, node *Node, inputs Po
 		"args": args,
 	})
 
-	// Pre-tool hook (WP06 chat-migration). Mirrors toolloop's
-	// PreToolUse extension point. The greedy-memory journal records
-	// the boundary; mutation (arg redaction, deny-by-hook) is
-	// out-of-scope for the kernel HookManager and remains in the
-	// toolloop HookRunner until the chassis-side cutover lands.
+	// Greedy memory hook: pre-tool (WP06 chat-migration).
 	if env.Hooks != nil {
 		hookBatch := env.Hooks.Fire(ctx, HookPreTool, "session",
 			"pre-tool — "+a.Name, summarizeArgs(args), node.ID)
@@ -262,11 +259,56 @@ func (toolExecutor) Execute(ctx context.Context, env *Env, node *Node, inputs Po
 		}
 	}
 
+	// v2 lifecycle hooks: pre_tool_use (WP03, hooks-event-surface-expansion).
+	// These may block the dispatch, rewrite args, or inject additional context.
+	argsJSON, _ := json.Marshal(args)
+	if env.LifecycleHooks != nil {
+		merged, err := env.LifecycleHooks.FirePreToolUse(ctx, env.SessionID, a.Name, argsJSON, "", "")
+		if err != nil {
+			slog.Default().Warn("hooks.pre_tool_use.fire_failed",
+				"tool", a.Name, "err", err.Error())
+		} else {
+			if merged.Blocked {
+				// Hook denied — short-circuit; return a tool error result.
+				_ = res.Events.AppendKind(env.RunID, node.ID, EventHookDenied, map[string]any{
+					"tool":   a.Name,
+					"reason": merged.BlockReason,
+				})
+				res.Outputs["result"] = ToolResult{
+					Content: "hook_denied: " + merged.BlockReason,
+					IsError: true,
+				}
+				return res, nil
+			}
+			// Apply updated_input: rewrite args if the hook provided new input.
+			if len(merged.UpdatedInput) > 0 {
+				_ = res.Events.AppendKind(env.RunID, node.ID, EventHookInputRewrite, map[string]any{
+					"tool":     a.Name,
+					"original": string(argsJSON),
+					"rewritten": string(merged.UpdatedInput),
+				})
+				var rewrittenArgs map[string]any
+				if jerr := json.Unmarshal(merged.UpdatedInput, &rewrittenArgs); jerr == nil {
+					args = rewrittenArgs
+				}
+			}
+			// Inject additional_context for next LLM turn.
+			if merged.AdditionalContext != "" && env.PendingContext != nil {
+				_ = env.PendingContext.AppendSystemContext(ctx, env.SessionID, merged.AdditionalContext)
+			}
+		}
+	}
+
 	tr, err := env.Tools.Call(ctx, ToolCall{Name: a.Name, Args: args})
 	if env.Counters != nil {
 		env.Counters.AddTool()
 	}
 	if err != nil {
+		// v2 lifecycle hook: post_tool_use_failure.
+		if env.LifecycleHooks != nil {
+			_, _ = env.LifecycleHooks.FirePostToolUse(ctx, env.SessionID, a.Name, argsJSON, nil,
+				true, err.Error(), "", "")
+		}
 		_ = res.Events.AppendKind(env.RunID, node.ID, EventNodeError, map[string]any{
 			"err":  err.Error(),
 			"tool": a.Name,
@@ -318,6 +360,32 @@ func (toolExecutor) Execute(ctx context.Context, env *Env, node *Node, inputs Po
 		"is_error": tr.IsError,
 		"bytes":    len(tr.Content),
 	})
+
+	// v2 lifecycle hook: post_tool_use.
+	if env.LifecycleHooks != nil {
+		outJSON, _ := json.Marshal(map[string]any{
+			"content":  tr.Content,
+			"is_error": tr.IsError,
+		})
+		merged, herr := env.LifecycleHooks.FirePostToolUse(ctx, env.SessionID, a.Name, argsJSON, outJSON,
+			false, "", "", "")
+		if herr != nil {
+			slog.Default().Warn("hooks.post_tool_use.fire_failed",
+				"tool", a.Name, "err", herr.Error())
+		} else {
+			// Apply updated_mcp_tool_output (MCP tools only, but we apply
+			// unconditionally — non-MCP tools just never set it).
+			if len(merged.UpdatedMCPOutput) > 0 {
+				var updatedContent string
+				if jerr := json.Unmarshal(merged.UpdatedMCPOutput, &updatedContent); jerr == nil {
+					tr.Content = updatedContent
+				}
+			}
+			if merged.AdditionalContext != "" && env.PendingContext != nil {
+				_ = env.PendingContext.AppendSystemContext(ctx, env.SessionID, merged.AdditionalContext)
+			}
+		}
+	}
 
 	// Greedy memory hook: post-tool.
 	if env.Hooks != nil && tr.Content != "" {

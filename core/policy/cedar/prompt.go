@@ -280,6 +280,10 @@ type pendingEntry struct {
 type Registry struct {
 	dispatcher PromptDispatcher
 
+	// permHooks fires v2 lifecycle hooks (permission_request /
+	// permission_denied). nil disables lifecycle hooks.
+	permHooks PermissionHookRunner
+
 	// posture controls how interactive prompts are handled based on the
 	// session's resolved autonomy tier (WP05). PostureDefault is the
 	// baseline; PostureAutoAllow short-circuits every RequestInteractive
@@ -461,6 +465,28 @@ func (r *Registry) RequestInteractive(
 			return existing, nil
 		}
 		r.mu.RUnlock()
+	}
+
+	// v2 lifecycle hook: permission_request (WP06).
+	// Fire before raising the modal. A hook allow short-circuits the prompt;
+	// a hook deny short-circuits with a deny result. Cedar deny is the floor
+	// and is enforced at the call site (callers only reach here on
+	// NotApplicable), so hooks cannot widen what Cedar explicitly denies.
+	if r.permHooks != nil {
+		resource := surface.resourceKey()
+		actionKind := string(fam)
+		hookAllow, hookDeny, hookReason := r.permHooks.FirePermissionRequest(
+			ctx, surface.SessionID, actionKind, resource, "")
+		if hookDeny {
+			return Resolution{Decision: DecisionDeny, Reason: "hook_deny: " + hookReason}, nil
+		}
+		if hookAllow {
+			// Seed the transient-grants cache so a subsequent query sees Allow.
+			r.mu.Lock()
+			r.transient[key] = Resolution{Decision: DecisionAllowOnce, Reason: "hook_allow: " + hookReason}
+			r.mu.Unlock()
+			return Resolution{Decision: DecisionAllowOnce, Reason: "hook_allow: " + hookReason}, nil
+		}
 	}
 
 	// Try to enqueue. Overflow auto-denies without touching the

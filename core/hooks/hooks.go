@@ -27,14 +27,126 @@ import (
 	"time"
 )
 
+
 // Event names. Kept as exported strings so JSON config files can name
 // them without a Go enum decoder.
+//
+// v1 chat-pipeline events (all four remain supported):
 const (
-	EventPreSend                  = "pre_send"
-	EventPostSend                 = "post_send"
-	EventPreSaveSession           = "pre_save_session"
+	EventPreSend                   = "pre_send"
+	EventPostSend                  = "post_send"
+	EventPreSaveSession            = "pre_save_session"
 	EventPostAssistantTurnComplete = "post_assistant_turn_complete"
 )
+
+// v2 lifecycle events (hooks-event-surface-expansion-01KZNP3A).
+const (
+	// Tool-loop events
+	EventPreToolUse         = "pre_tool_use"
+	EventPostToolUse        = "post_tool_use"
+	EventPostToolUseFailure = "post_tool_use_failure"
+
+	// User-interaction events
+	EventUserPromptSubmit = "user_prompt_submit"
+
+	// Session lifecycle events
+	EventSessionStart = "session_start"
+	EventSetup        = "setup"
+
+	// Sub-agent events
+	EventSubagentStart = "subagent_start"
+
+	// File-system events
+	EventCwdChanged  = "cwd_changed"
+	EventFileChanged = "file_changed"
+
+	// Permission events
+	EventPermissionRequest = "permission_request"
+	EventPermissionDenied  = "permission_denied"
+
+	// Notification / task events
+	EventNotification          = "notification"
+	EventBackgroundTaskComplete = "background_task_complete"
+	EventWorktreeCreate         = "worktree_create"
+)
+
+// AllEvents is the ordered union of v1 + v2 events. It is used by
+// Validate to accept any known event name.
+var AllEvents = []string{
+	EventPreSend,
+	EventPostSend,
+	EventPreSaveSession,
+	EventPostAssistantTurnComplete,
+	EventPreToolUse,
+	EventPostToolUse,
+	EventPostToolUseFailure,
+	EventUserPromptSubmit,
+	EventSessionStart,
+	EventSetup,
+	EventSubagentStart,
+	EventCwdChanged,
+	EventFileChanged,
+	EventPermissionRequest,
+	EventPermissionDenied,
+	EventNotification,
+	EventBackgroundTaskComplete,
+	EventWorktreeCreate,
+}
+
+// HookOutput is the discriminated-union result a hook returns.
+// Shell hooks encode this as JSON on stdout; builtin hooks return a Go
+// struct; MCP hooks encode the tool result as this shape.
+//
+// Variants are composable: a single HookOutput may carry an
+// UpdatedInput and an AdditionalContext simultaneously.
+//
+// Decision semantics:
+//   - "approve" — hook is satisfied; pass through to next gate.
+//   - "block"   — short-circuit dispatch; surface Reason to the caller.
+//
+// PermissionDecision semantics (permission_request / permission_denied):
+//   - "allow" — hook pre-approves; skip interactive prompt.
+//   - "deny"  — hook rejects; short-circuit (Cedar may still override).
+//
+// Async: when true the hook was dispatched via the worker pool; its
+// output is never merged into the sync pipeline (logged only).
+type HookOutput struct {
+	// Decision is "approve" or "block". Empty means no opinion.
+	Decision string `json:"decision,omitempty"`
+	// Reason explains the decision; surfaced in audit log + UI.
+	Reason string `json:"reason,omitempty"`
+
+	// AdditionalContext is injected as a system message into the next
+	// LLM turn when returned from pre_tool_use or user_prompt_submit.
+	// Multiple AdditionalContexts from peer hooks are joined with "\n\n".
+	AdditionalContext string `json:"additional_context,omitempty"`
+
+	// UpdatedInput carries the rewritten tool-call arguments (pre_tool_use
+	// only). Must be a valid JSON object. The audit log records both the
+	// original and the rewritten input.
+	UpdatedInput json.RawMessage `json:"updated_input,omitempty"`
+
+	// UpdatedMCPOutput replaces the MCP tool result (post_tool_use only,
+	// kind=mcp). Allows hooks to sanitize or transform raw tool output.
+	UpdatedMCPOutput json.RawMessage `json:"updated_mcp_tool_output,omitempty"`
+
+	// PermissionDecision is "allow" or "deny" (permission_request events).
+	PermissionDecision string `json:"permission_decision,omitempty"`
+	// PermissionDecisionReason explains the permission decision.
+	PermissionDecisionReason string `json:"permission_decision_reason,omitempty"`
+
+	// WatchPaths is a list of absolute paths the harness should add to
+	// the fsnotify watcher for the current session. Returned from
+	// session_start or cwd_changed hooks.
+	WatchPaths []string `json:"watch_paths,omitempty"`
+
+	// Async, when true, means the hook was executed asynchronously via
+	// the worker pool. Its other fields are logged but not merged into
+	// the sync pipeline.
+	Async bool `json:"async,omitempty"`
+	// AsyncTimeoutMs overrides the default async timeout (60 000 ms).
+	AsyncTimeoutMs int `json:"async_timeout_ms,omitempty"`
+}
 
 // Hook kinds.
 const (
@@ -62,6 +174,11 @@ type Hook struct {
 	Command string         `json:"command,omitempty"`
 	MCPTool string         `json:"mcp_tool,omitempty"`
 	Config  map[string]any `json:"config,omitempty"`
+
+	// TimeoutMs is the per-hook execution timeout in milliseconds.
+	// 0 uses the kind default: sync hooks default to 5 000 ms;
+	// async hooks default to 60 000 ms.
+	TimeoutMs int `json:"timeout_ms,omitempty"`
 }
 
 // HookMatch is the optional filter that gates a hook on session id,
@@ -114,9 +231,7 @@ func (h Hook) Validate() error {
 	if h.Name == "" {
 		return errors.New("hooks: name required")
 	}
-	switch h.Event {
-	case EventPreSend, EventPostSend, EventPreSaveSession, EventPostAssistantTurnComplete:
-	default:
+	if !isKnownEvent(h.Event) {
 		return fmt.Errorf("hooks: unknown event %q", h.Event)
 	}
 	switch h.Kind {
@@ -136,6 +251,31 @@ func (h Hook) Validate() error {
 		return fmt.Errorf("hooks: unknown kind %q", h.Kind)
 	}
 	return nil
+}
+
+// isKnownEvent returns true for any registered event name.
+func isKnownEvent(event string) bool {
+	for _, e := range AllEvents {
+		if e == event {
+			return true
+		}
+	}
+	return false
+}
+
+// DefaultSyncTimeoutMs is the default timeout for synchronous hooks.
+const DefaultSyncTimeoutMs = 5_000
+
+// DefaultAsyncTimeoutMs is the default timeout for async hooks.
+const DefaultAsyncTimeoutMs = 60_000
+
+// EffectiveTimeoutMs returns the hook's configured timeout or the
+// appropriate default for its kind.
+func (h Hook) EffectiveTimeoutMs() int {
+	if h.TimeoutMs > 0 {
+		return h.TimeoutMs
+	}
+	return DefaultSyncTimeoutMs
 }
 
 // Registry holds the ordered hook list and persists changes to
@@ -181,7 +321,9 @@ func (r *Registry) load() error {
 	if err := json.Unmarshal(data, &got); err != nil {
 		return fmt.Errorf("hooks: parse: %w", err)
 	}
-	r.hooks = got
+	// Run the migration pass to fill defaults + validate against the v2
+	// event surface. This is in-memory only; the file is not rewritten.
+	r.hooks = MigrateHooks(got, nil)
 	return nil
 }
 
