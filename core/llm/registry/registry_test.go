@@ -394,3 +394,69 @@ func TestRegistry_MergePersonalProfilesValidatesBatch(t *testing.T) {
 		t.Fatalf("expected registry to be unchanged after invalid merge")
 	}
 }
+
+// authFailAdapter returns *ErrAuth on every Stream call.
+type authFailAdapter struct {
+	kind   string
+	status int
+	msg    string
+}
+
+func (a *authFailAdapter) Kind() string { return a.kind }
+func (a *authFailAdapter) Capabilities(_ string) llm.CapabilityDescriptor {
+	return llm.CapabilityDescriptor{Provider: a.kind}
+}
+func (a *authFailAdapter) Stream(_ context.Context, _ llm.GenerationRequest, _ llm.ProviderProfile, _ []byte) (llm.Stream, error) {
+	return nil, &llm.ErrAuth{Status: a.status, Message: a.msg}
+}
+
+// TestRegistry_AuthFailureDecoratedAsErrProviderAuthFailed asserts WP01:
+//   - An adapter returning *ErrAuth causes Stream to return an error
+//     matchable by errors.As(err, &*ErrProviderAuthFailed) AND by
+//     errors.As(err, &*ErrAuth) via the Unwrap chain.
+//   - ErrProviderAuthFailed.Reason is populated from the wrapped ErrAuth.Message.
+func TestRegistry_AuthFailureDecoratedAsErrProviderAuthFailed(t *testing.T) {
+	const key = "TEST_REG_AUTH_FAIL_KEY"
+	os.Setenv(key, "dummy")
+	defer os.Unsetenv(key)
+
+	r, _ := newReg(t)
+	r.resolver = credref.New(secrets.NewMemoryBackend())
+	r.RegisterAdapter(&authFailAdapter{kind: "anthropic", status: 401, msg: "invalid api_key"})
+	prof := llm.ProviderProfile{
+		ID: "auth-fail", Kind: "anthropic", Model: "claude-sonnet-4-7",
+		Cred: llm.CredentialReference{Kind: "env", Locator: key},
+	}
+	if err := r.LoadProfiles([]llm.ProviderProfile{prof}); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := r.Stream(context.Background(), llm.GenerationRequest{ProfileID: "auth-fail"})
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+
+	// Primary assertion: registry-level decorated type.
+	var authFailed *llm.ErrProviderAuthFailed
+	if !errors.As(err, &authFailed) {
+		t.Fatalf("expected *ErrProviderAuthFailed in chain, got %T: %v", err, err)
+	}
+	if authFailed.Provider != "anthropic" {
+		t.Errorf("Provider = %q, want %q", authFailed.Provider, "anthropic")
+	}
+	if authFailed.ProfileID != "auth-fail" {
+		t.Errorf("ProfileID = %q, want %q", authFailed.ProfileID, "auth-fail")
+	}
+	if authFailed.Reason != "invalid api_key" {
+		t.Errorf("Reason = %q, want %q", authFailed.Reason, "invalid api_key")
+	}
+
+	// Secondary assertion: raw *ErrAuth still reachable via Unwrap.
+	var authBare *llm.ErrAuth
+	if !errors.As(err, &authBare) {
+		t.Fatalf("expected *ErrAuth via Unwrap chain, got %T: %v", err, err)
+	}
+	if authBare.Status != 401 {
+		t.Errorf("ErrAuth.Status = %d, want 401", authBare.Status)
+	}
+}

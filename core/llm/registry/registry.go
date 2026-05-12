@@ -378,6 +378,26 @@ func (r *Registry) Stream(ctx context.Context, req llm.GenerationRequest) (llm.S
 	if err != nil {
 		// Zeroize the adapter's credential copy on failure path.
 		zero(credBytes)
+		// provider-keychain-rotation-01KQ8TD9 WP01: when the adapter returns
+		// *ErrAuth, decorate it with the registry-level (provider, profileID,
+		// modelID) context so the chat runner can populate the rotation toast
+		// without knowing which profile is bound to the session.
+		//
+		// ErrCredentialResolution is NOT decorated here — that signals a
+		// missing/wiped keychain entry, which requires re-onboarding rather
+		// than key rotation.
+		var authErr *llm.ErrAuth
+		if errors.As(err, &authErr) {
+			decorated := &llm.ErrProviderAuthFailed{
+				Provider:  prof.Kind,
+				ProfileID: prof.ID,
+				ModelID:   prof.Model,
+				Reason:    authErr.Message,
+				Cause:     authErr,
+			}
+			_ = emitter.Error(ctx, req, prof, decorated)
+			return nil, decorated
+		}
 		_ = emitter.Error(ctx, req, prof, err)
 		return nil, err
 	}
