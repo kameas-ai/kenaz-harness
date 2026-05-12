@@ -758,8 +758,20 @@ export function Settings_GetEmbedderConfig() {
   return window['go']['rpc']['Bindings']['Settings_GetEmbedderConfig']();
 }
 
+export function Settings_GetFSReadEnabled() {
+  return window['go']['rpc']['Bindings']['Settings_GetFSReadEnabled']();
+}
+
+export function Settings_GetFSWriteEnabled() {
+  return window['go']['rpc']['Bindings']['Settings_GetFSWriteEnabled']();
+}
+
 export function Settings_GetFSRequestAccessEnabled() {
   return window['go']['rpc']['Bindings']['Settings_GetFSRequestAccessEnabled']();
+}
+
+export function Settings_GetTodoEnabled() {
+  return window['go']['rpc']['Bindings']['Settings_GetTodoEnabled']();
 }
 
 export function Settings_GetMCPAutoRestart() {
@@ -834,8 +846,20 @@ export function Settings_SetEmbedderConfig(arg1, arg2) {
   return window['go']['rpc']['Bindings']['Settings_SetEmbedderConfig'](arg1, arg2);
 }
 
+export function Settings_SetFSReadEnabled(arg1) {
+  return window['go']['rpc']['Bindings']['Settings_SetFSReadEnabled'](arg1);
+}
+
+export function Settings_SetFSWriteEnabled(arg1) {
+  return window['go']['rpc']['Bindings']['Settings_SetFSWriteEnabled'](arg1);
+}
+
 export function Settings_SetFSRequestAccessEnabled(arg1) {
   return window['go']['rpc']['Bindings']['Settings_SetFSRequestAccessEnabled'](arg1);
+}
+
+export function Settings_SetTodoEnabled(arg1) {
+  return window['go']['rpc']['Bindings']['Settings_SetTodoEnabled'](arg1);
 }
 
 export function Settings_SetMCPAutoRestart(arg1) {
