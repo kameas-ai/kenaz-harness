@@ -119,6 +119,21 @@ const (
 	// Elicitation::"<kind>" where kind is one of the seven question kinds
 	// (radio, checkbox, text, number, slider, date, file).
 	ActionElicitAsk = "tool.elicit.ask"
+
+	// ActionPassive is the Cedar action family for passive (no-side-effect)
+	// builtin tools. Introduced by mission
+	// builtin-tools-search-and-elicitation-01KZNP3D (WP04).
+	//
+	// Currently only kaneaz__sleep uses this action. Passive tools are
+	// default-allow and are never gated by a Settings toggle because they
+	// have no observable side effects and must remain available for
+	// __monitor watch patterns.
+	//
+	// The resource UID convention is Tool::"kaneaz__<tool_name>" — the same
+	// shape as ActionUseTool, but evaluated under the tool.passive action
+	// ID so policy authors can write targeted rules for passive tools
+	// without affecting the broader use_tool gate.
+	ActionPassive = "tool.passive"
 )
 
 // Entity-type names mirror spec §4.10's recommended mapping:

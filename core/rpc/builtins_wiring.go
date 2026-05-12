@@ -22,6 +22,7 @@ import (
 	corefsbuiltins "github.com/sigil-tech/kaneaz-harness/core/tools/fsbuiltins"
 	corefsrequest "github.com/sigil-tech/kaneaz-harness/core/tools/fsrequest"
 	coresaveartifact "github.com/sigil-tech/kaneaz-harness/core/tools/saveartifact"
+	coresleep "github.com/sigil-tech/kaneaz-harness/core/tools/sleep"
 	coretodo "github.com/sigil-tech/kaneaz-harness/core/tools/todo"
 	coreupdateartifact "github.com/sigil-tech/kaneaz-harness/core/tools/updateartifact"
 	corewebsearch "github.com/sigil-tech/kaneaz-harness/core/tools/websearch"
@@ -111,6 +112,13 @@ func registerBuiltinTools(
 		"sandbox", sandboxRoot,
 		"cedar_gate", cedarEngine != nil,
 	)
+
+	// sleep: passive no-side-effect tool; always registered (default-allow,
+	// tool.passive Cedar action). Never gated by a Settings toggle.
+	// Satisfies FR-009 .. FR-011 (builtin-tools-search-and-elicitation-01KZNP3D WP04).
+	sleepTool := coresleep.New()
+	registry.Register(sleepTool)
+	logging.L().Info("rpc.builtins.register", "tool", sleepTool.Name())
 
 	// save_artifact: pipes (title, content) into the artifact CAS
 	// pipeline. Only registered when the chassis wired an artifacts
@@ -472,6 +480,13 @@ func builtinEnabledPredicate(s *settings.API) func(string) bool {
 			}
 			logging.L().Info("rpc.builtins.predicate", "tool", name, "enabled", v)
 			return v
+
+		// ── Passive tools (builtin-tools-search-and-elicitation-01KZNP3D WP04) ──
+		// Sleep is always-on: it has no side effects and must remain available
+		// for __monitor watch patterns regardless of Settings dials.
+		case coresleep.ToolName:
+			logging.L().Info("rpc.builtins.predicate", "tool", name, "enabled", true)
+			return true
 		}
 		return true
 	}
