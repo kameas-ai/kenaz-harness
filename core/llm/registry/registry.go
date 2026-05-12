@@ -315,6 +315,12 @@ func (r *Registry) Stream(ctx context.Context, req llm.GenerationRequest) (llm.S
 		}
 		return nil, err
 	}
+	// 2b. Attachment pre-flight gate (multimodal-io-01KQ8TDF FR-010).
+	// Validates byte caps, MIME types, image counts, and audio rejection
+	// for every image/document ContentBlock in the request.
+	if err := gate.CheckAttachments(req, prof); err != nil {
+		return nil, err
+	}
 
 	// 3. PolicyGuard.
 	if perr := policy.Allow(ctx, req, prof); perr != nil {

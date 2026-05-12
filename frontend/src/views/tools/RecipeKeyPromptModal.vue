@@ -32,6 +32,8 @@
 import { computed, nextTick, ref, watch } from 'vue';
 import type { Recipe, RecipeStatus, ConfigOption } from '@/lib/types';
 import DirectoryPicker from './DirectoryPicker.vue';
+import { useHarnessClient } from '@/lib/useHarnessAPI';
+import { push as pushToast } from '@/composables/useToastQueue';
 
 const props = withDefaults(
   defineProps<{
@@ -64,6 +66,13 @@ const emit = defineEmits<{
   (e: 'close'): void;
   (e: 'installed', status: RecipeStatus): void;
 }>();
+
+const client = useHarnessClient();
+
+// ── recommended-policy install state ─────────────────────────────────
+/** null → not yet attempted; true → installed (button shows "Installed"); false → available/can install */
+const policyInstalled = ref<boolean | null>(null);
+const policyInstalling = ref(false);
 
 const envValues = ref<Record<string, string>>({});
 const configValues = ref<Record<string, unknown>>({});
@@ -138,12 +147,36 @@ function cloneDefault(value: unknown, opt: ConfigOption): unknown {
   return typeof value === 'string' ? value : '';
 }
 
+async function installRecommendedPolicy() {
+  const template = props.recipe.recommendedPolicyTemplate;
+  if (!template || policyInstalling.value) return;
+  policyInstalling.value = true;
+  try {
+    await client.cedarPolicy.installTemplate(template, template);
+    policyInstalled.value = true;
+    pushToast(`Policy installed: ${template}`);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    if (msg.toLowerCase().includes('already exists') || msg.toLowerCase().includes('already installed')) {
+      pushToast('Policy already installed');
+      policyInstalled.value = true;
+    } else {
+      pushToast(`Install failed: ${msg}`);
+    }
+  } finally {
+    policyInstalling.value = false;
+  }
+}
+
 watch(
   () => props.open,
   (isOpen) => {
     if (isOpen) {
       resetForm();
       warningAck.value = false;
+      // Re-arm the policy-install button each time the modal opens so
+      // the user can install after a delete without having to close/reopen.
+      policyInstalled.value = null;
       void nextTick(() => {
         const first = inputsContainer.value?.querySelector(
           'input[type="password"], input[type="text"]:not([data-testid^="dirpicker-edit"])',
@@ -380,6 +413,38 @@ function onKeydown(event: KeyboardEvent) {
           {{ recipe.description }}
         </p>
 
+        <!-- Recommended policy install (cedar-policy-editor-ui-01KQ8TD6 WP03) -->
+        <!-- Shown when the recipe ships with a recommended Cedar policy template,
+             independent of the hazard-warning section so non-hazard recipes
+             (e.g. filesystem with access_tier=sandbox) also surface the button. -->
+        <div
+          v-if="recipe.recommendedPolicyTemplate"
+          class="flex items-center gap-2 flex-wrap rounded-sm border border-border-muted bg-surface-1 px-3 py-2"
+          data-testid="recipe-modal-policy-pointer"
+        >
+          <span class="text-[11px] text-ink-muted">
+            Recommended Cedar policy:
+            <code class="font-mono text-[11px] text-ink">{{ recipe.recommendedPolicyTemplate }}</code>
+          </span>
+          <button
+            v-if="policyInstalled !== true"
+            type="button"
+            class="rounded-sm border border-accent-hairline bg-surface-0 px-2 py-0.5 text-[11px] text-accent hover:bg-accent-glow disabled:opacity-50 disabled:cursor-not-allowed"
+            :disabled="policyInstalling"
+            data-testid="recipe-modal-install-policy-btn"
+            @click="installRecommendedPolicy"
+          >
+            {{ policyInstalling ? 'Installing…' : 'Install recommended policy' }}
+          </button>
+          <span
+            v-else
+            class="text-[11px] text-signal-ok"
+            data-testid="recipe-modal-policy-installed-badge"
+          >
+            Installed
+          </span>
+        </div>
+
         <!-- Hazard banner (recipes carrying a `warning` string) -->
         <section
           v-if="hasWarning"
@@ -401,17 +466,6 @@ function onKeydown(event: KeyboardEvent) {
           >
             {{ recipe.warning }}
           </p>
-          <div
-            v-if="recipe.recommendedPolicyTemplate"
-            class="text-[11px] text-ink-muted"
-            data-testid="recipe-modal-policy-pointer"
-          >
-            Recommended Cedar policy:
-            <code class="font-mono text-[11px] text-ink">{{ recipe.recommendedPolicyTemplate }}</code>
-            — copy this file from the harness install into
-            <code class="font-mono text-[11px] text-ink">&lt;DataDir&gt;/policy/</code>
-            before enabling.
-          </div>
           <label
             class="inline-flex items-start gap-2 cursor-pointer select-none mt-1"
             data-testid="recipe-modal-warning-ack-label"

@@ -20,6 +20,7 @@ import (
 	"time"
 
 	corememory "github.com/sigil-tech/kaneaz-harness/core/memory"
+	"github.com/sigil-tech/kaneaz-harness/core/memory/narrative"
 	"github.com/sigil-tech/kaneaz-harness/core/memory/prune"
 )
 
@@ -74,6 +75,10 @@ type API struct {
 	rules    prune.Rules
 	journal  JournalSource
 	profiles ProfileLister
+	// Narrative layer (memory-narrative-layer-01KQ8TD1 WP07). Both are
+	// optional; when nil the narrative API methods return a stub/no-op.
+	narrativeMetrics narrative.MetricsStore
+	narrativeJobs    narrative.JobQueue
 
 	mu     sync.Mutex
 	stats  []PruneStats
@@ -92,13 +97,19 @@ type API struct {
 // profile list to surface which provider kinds are present but cannot
 // supply embeddings. When nil, EmbedderEligibility returns all-zero
 // (HasEligible=false, AllProfiles=0) — the frontend renders the banner.
+//
+// NarrativeMetrics and NarrativeJobs are narrative-layer additions
+// (memory-narrative-layer-01KQ8TD1 WP07). Both are optional; when nil
+// the narrative API methods return stub/no-op results.
 type Config struct {
-	Store      corememory.Store
-	Embedder   corememory.Embedder
-	Reader     MessageReader
-	PruneRules prune.Rules
-	Journal    JournalSource
-	Profiles   ProfileLister
+	Store            corememory.Store
+	Embedder         corememory.Embedder
+	Reader           MessageReader
+	PruneRules       prune.Rules
+	Journal          JournalSource
+	Profiles         ProfileLister
+	NarrativeMetrics narrative.MetricsStore
+	NarrativeJobs    narrative.JobQueue
 }
 
 // New constructs a MemoryAPI.
@@ -112,12 +123,14 @@ func New(cfg Config) *API {
 		rules = prune.DefaultRules()
 	}
 	return &API{
-		store:    cfg.Store,
-		embedder: cfg.Embedder,
-		reader:   cfg.Reader,
-		rules:    rules,
-		journal:  cfg.Journal,
-		profiles: cfg.Profiles,
+		store:            cfg.Store,
+		embedder:         cfg.Embedder,
+		reader:           cfg.Reader,
+		rules:            rules,
+		journal:          cfg.Journal,
+		profiles:         cfg.Profiles,
+		narrativeMetrics: cfg.NarrativeMetrics,
+		narrativeJobs:    cfg.NarrativeJobs,
 	}
 }
 
@@ -567,23 +580,26 @@ func newChunkID() (string, error) {
 
 func toViewChunk(c corememory.Chunk) Chunk {
 	return Chunk{
-		ID:            c.ID,
-		SessionID:     c.SessionID,
-		ProjectID:     c.ProjectID,
-		ScopeKind:     c.ScopeKind,
-		ScopeID:       c.ScopeID,
-		SourceTurn:    c.SourceTurn,
-		Content:       c.Content,
-		ContentHash:   c.ContentHash,
-		ToolName:      c.ToolName,
-		FilesRead:     c.FilesRead,
-		FilesModified: c.FilesModified,
-		Title:         c.Title,
-		CreatedAt:     c.CreatedAt,
-		Pinned:        c.Pinned,
-		RecallCount:   c.RecallCount,
-		LastAccessed:  c.LastAccessed,
-		Source:        c.Source,
+		ID:              c.ID,
+		SessionID:       c.SessionID,
+		ProjectID:       c.ProjectID,
+		ScopeKind:       c.ScopeKind,
+		ScopeID:         c.ScopeID,
+		SourceTurn:      c.SourceTurn,
+		Content:         c.Content,
+		ContentHash:     c.ContentHash,
+		ToolName:        c.ToolName,
+		FilesRead:       c.FilesRead,
+		FilesModified:   c.FilesModified,
+		Title:           c.Title,
+		CreatedAt:       c.CreatedAt,
+		Pinned:          c.Pinned,
+		RecallCount:     c.RecallCount,
+		LastAccessed:    c.LastAccessed,
+		Source:          c.Source,
+		Kind:            c.Kind,
+		RetrievalWeight: c.RetrievalWeight,
+		TurnID:          c.TurnID,
 	}
 }
 
@@ -606,6 +622,84 @@ func (a *API) EmbedderEligibility(_ context.Context) (EmbedderEligibility, error
 		AllProfiles:      result.AllProfiles,
 		EligibleProfiles: result.EligibleProfiles,
 		SkippedKinds:     result.SkippedKinds,
+	}, nil
+}
+
+// ── Narrative layer methods (memory-narrative-layer-01KQ8TD1 WP07) ──────────
+
+// MarkImportant increments or clears the user_pins signal for chunkID.
+// This is NOT a "pin to chat top" affordance; UX label reads "Mark important"
+// (FR-008b). When the narrative metrics store is not wired, returns nil
+// (graceful degradation).
+func (a *API) MarkImportant(ctx context.Context, chunkID string, important bool) error {
+	if a.narrativeMetrics == nil {
+		return nil
+	}
+	return a.narrativeMetrics.SetUserPins(ctx, chunkID, important)
+}
+
+// NarrativeFailedCount returns the count of synthesis jobs with status=failed.
+// Returns 0 when the job queue is not wired.
+func (a *API) NarrativeFailedCount(ctx context.Context) (int, error) {
+	if a.narrativeJobs == nil {
+		return 0, nil
+	}
+	return a.narrativeJobs.CountFailed(ctx)
+}
+
+// NarrativeFailedList returns all failed synthesis jobs for the manual-retry
+// list view. Returns empty slice when the job queue is not wired.
+func (a *API) NarrativeFailedList(ctx context.Context) ([]NarrativeJobStatus, error) {
+	if a.narrativeJobs == nil {
+		return nil, nil
+	}
+	jobs, err := a.narrativeJobs.ListFailed(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]NarrativeJobStatus, len(jobs))
+	for i, j := range jobs {
+		out[i] = NarrativeJobStatus{
+			ID:        j.ID,
+			TurnID:    j.TurnID,
+			SessionID: j.SessionID,
+			Attempt:   j.Attempt,
+			LastError: j.LastError,
+			CreatedAt: j.CreatedAt,
+		}
+	}
+	return out, nil
+}
+
+// RetryFailedNarrative resets a failed job so the Promoter picks it up on
+// the next scan (attempt=0, retry_at=now). Returns an error when the job is
+// not found or the queue is not wired.
+func (a *API) RetryFailedNarrative(ctx context.Context, jobID string) error {
+	if a.narrativeJobs == nil {
+		return errors.New("memory: narrative job queue not available")
+	}
+	return a.narrativeJobs.ResetForRetry(ctx, jobID)
+}
+
+// NarrativeMetricsForChunk returns promotion-score counters for chunkID.
+// Returns zero-value metrics when the metrics store is not wired.
+func (a *API) NarrativeMetricsForChunk(ctx context.Context, chunkID string) (NarrativeMetrics, error) {
+	if a.narrativeMetrics == nil {
+		return NarrativeMetrics{ChunkID: chunkID}, nil
+	}
+	m, err := a.narrativeMetrics.Get(ctx, chunkID)
+	if err != nil {
+		return NarrativeMetrics{ChunkID: chunkID}, err
+	}
+	w := narrative.DefaultPromotionWeights()
+	return NarrativeMetrics{
+		ChunkID:         m.ChunkID,
+		Retrievals:      m.Retrievals,
+		Citations:       m.Citations,
+		UserPins:        m.UserPins,
+		Score:           m.Score(w),
+		LastRetrievedAt: m.LastRetrievedAt,
+		LastCitedAt:     m.LastCitedAt,
 	}, nil
 }
 

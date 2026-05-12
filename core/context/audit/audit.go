@@ -164,6 +164,24 @@ const (
 	// answered, cancelled, the ask was declined (non-interactive), or it
 	// timed out. Payload: ElicitationResultPayload.
 	KindElicitationResult Kind = "elicitation.result"
+
+	// Cedar policy editor audit kinds (cedar-policy-editor-ui-01KQ8TD6 WP01).
+	//
+	// Privacy invariant: these payloads MUST NOT carry the policy source body
+	// (which may contain information about the user's data-access patterns).
+	// Only metadata — name, byte count, parse status — crosses the audit boundary.
+
+	// KindPolicyFileSaved fires when SavePolicy writes a new or updated policy
+	// file to disk. Payload: PolicyFileSavedPayload.
+	KindPolicyFileSaved Kind = "policy.file_saved"
+
+	// KindPolicyFileDeleted fires when DeletePolicy removes a user policy file.
+	// Payload: PolicyFileDeletedPayload.
+	KindPolicyFileDeleted Kind = "policy.file_deleted"
+
+	// KindPolicyTemplateInstalled fires when InstallTemplate copies a shipped
+	// Cedar template to the user's policy directory. Payload: PolicyTemplateInstalledPayload.
+	KindPolicyTemplateInstalled Kind = "policy.template_installed"
 )
 
 // Event is the wire shape passed to the event log. The concrete event-log
@@ -594,6 +612,40 @@ type ElicitationResultPayload struct {
 	// Deferred is true when mode was "deferred" and the answer arrived
 	// asynchronously (potentially in a later session turn).
 	Deferred bool `json:"deferred"`
+}
+
+// PolicyFileSavedPayload carries signalling for KindPolicyFileSaved
+// (cedar-policy-editor-ui-01KQ8TD6 WP01).
+//
+// Privacy invariant: Source body is NEVER included — only the filename,
+// size in bytes, and whether the parse succeeded.
+type PolicyFileSavedPayload struct {
+	// Name is the policy filename (e.g. "my-policy.cedar").
+	Name string `json:"name"`
+	// Bytes is the file size written to disk.
+	Bytes int `json:"bytes"`
+	// ParseOK is true when the source parsed cleanly before write.
+	ParseOK bool `json:"parse_ok"`
+}
+
+// PolicyFileDeletedPayload carries signalling for KindPolicyFileDeleted.
+// Only the filename is recorded — no content.
+type PolicyFileDeletedPayload struct {
+	// Name is the policy filename that was deleted.
+	Name string `json:"name"`
+}
+
+// PolicyTemplateInstalledPayload carries signalling for KindPolicyTemplateInstalled.
+// Records the template name, destination filename, and byte count.
+// No source body is recorded.
+type PolicyTemplateInstalledPayload struct {
+	// Template is the shipped template filename that was copied
+	// (e.g. "filesystem-full-recommended.cedar").
+	Template string `json:"template"`
+	// Dest is the destination filename in the user's policy directory.
+	Dest string `json:"dest"`
+	// Bytes is the number of bytes written.
+	Bytes int `json:"bytes"`
 }
 
 // Emit is a small convenience wrapper for callers that have a payload

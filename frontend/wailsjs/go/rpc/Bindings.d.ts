@@ -254,6 +254,8 @@ export function LLM_UpdateProvider(arg1:llm.AddProviderInput):Promise<void>;
 
 export function LLM_UpdateProviderCredential(arg1:string,arg2:string):Promise<void>;
 
+export function LLM_GetAttachmentLimits(arg1:string,arg2:string):Promise<llm.AttachmentLimitsView>;
+
 export function LoadRoute():Promise<string>;
 
 export function LoadTheme():Promise<string>;
@@ -293,6 +295,16 @@ export function Memory_RememberMessage(arg1:string,arg2:string,arg3:string):Prom
 export function Memory_RunPruneNow(arg1:string):Promise<memory.PruneStats>;
 
 export function Memory_TestEmbedder():Promise<number>;
+
+export function Memory_MarkImportant(arg1:string,arg2:boolean):Promise<void>;
+
+export function Memory_NarrativeFailedCount():Promise<number>;
+
+export function Memory_NarrativeFailedList():Promise<Array<memory.NarrativeJobStatus>>;
+
+export function Memory_RetryFailedNarrative(arg1:string):Promise<void>;
+
+export function Memory_NarrativeMetricsForChunk(arg1:string):Promise<memory.NarrativeMetrics>;
 
 export function Nodes_Catalog():Promise<Array<nodes.NodeManifestSummary>>;
 
@@ -442,6 +454,8 @@ export function Settings_GetMaxAgentTurns():Promise<number>;
 
 export function Settings_GetMemory():Promise<boolean>;
 
+export function Settings_GetMultimodalInput():Promise<boolean>;
+
 export function Settings_GetMonthlyCostNotifyUSD():Promise<number>;
 
 export function Settings_GetPermissionCacheDangerousOps():Promise<boolean>;
@@ -485,6 +499,8 @@ export function Settings_SetMCPAutoRestart(arg1:boolean):Promise<void>;
 export function Settings_SetMaxAgentTurns(arg1:number):Promise<void>;
 
 export function Settings_SetMemory(arg1:boolean):Promise<void>;
+
+export function Settings_SetMultimodalInput(arg1:boolean):Promise<void>;
 
 export function Settings_SetMonthlyCostNotifyUSD(arg1:number):Promise<void>;
 

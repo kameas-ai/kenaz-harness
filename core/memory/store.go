@@ -141,6 +141,11 @@ func (s *chromemStore) load() error {
 // zero LastAccessed; default it to CreatedAt so the staleness signal
 // treats them as "as old as their creation" rather than "infinitely
 // stale" (which would prune everything on first sweep).
+//
+// Narrative-layer addendum (memory-narrative-layer-01KQ8TD1 WP01):
+// Kind and RetrievalWeight were added without a gob schema migration.
+// Empty Kind defaults to "raw"; zero RetrievalWeight defaults to 1.0
+// so legacy chunks are transparent to the narrative-weighted retriever.
 func backfillChunkDefaults(c *Chunk) {
 	if c.ScopeKind == "" {
 		c.ScopeKind = ScopeKindSession
@@ -153,6 +158,13 @@ func backfillChunkDefaults(c *Chunk) {
 	}
 	if c.LastAccessed.IsZero() {
 		c.LastAccessed = c.CreatedAt
+	}
+	// Narrative-layer backfill (WP01).
+	if c.Kind == "" {
+		c.Kind = "raw"
+	}
+	if c.RetrievalWeight == 0 {
+		c.RetrievalWeight = 1.0
 	}
 }
 
@@ -320,7 +332,7 @@ func (s *chromemStore) PromoteScope(_ context.Context, oldID, newID, newScopeKin
 		return errors.New("memory: promote: ids required")
 	}
 	switch newScopeKind {
-	case ScopeKindGlobal, ScopeKindProject, ScopeKindSession:
+	case ScopeKindGlobal, ScopeKindProject, ScopeKindSession, ScopeKindLongTerm:
 	default:
 		return fmt.Errorf("memory: promote: invalid scope kind %q", newScopeKind)
 	}

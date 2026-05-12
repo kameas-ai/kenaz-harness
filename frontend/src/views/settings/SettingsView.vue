@@ -22,6 +22,7 @@ import CompactionStrategyPanel from '@/views/settings/compaction/CompactionStrat
 import SlashCommandsView from '@/views/settings/SlashCommandsView.vue';
 import FeatureFlagsView from '@/views/settings/FeatureFlagsView.vue';
 import HooksSettingsView from '@/views/settings/HooksSettingsView.vue';
+import WorkflowsSettingsPanel from '@/views/settings/WorkflowsSettingsPanel.vue';
 import LongSessionNudgeSettings from '@/components/settings/LongSessionNudgeSettings.vue';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
 import { debouncedSave } from '@/lib/settings';
@@ -87,6 +88,13 @@ const showHooksTab = computed<boolean>(() => {
   return typeof v === 'string' && v === 'hooks';
 });
 
+// workflow-extensions-01KW2D3Y WP02 — Workflows sub-tab.
+// Disambiguates via ?tab=workflows. Mount switch is in <template> below.
+const showWorkflowsTab = computed<boolean>(() => {
+  const v = route?.query?.tab;
+  return typeof v === 'string' && v === 'workflows';
+});
+
 const settings = ref<Settings>({
   schemaVersion: 1,
   lastRoute: '/sessions',
@@ -99,6 +107,8 @@ const settings = ref<Settings>({
 const appInfo = ref<AppInfo | null>(null);
 const restoreOnLaunch = ref(true);
 const confirmEachEnabled = ref(true);
+// multimodal-io-01KQ8TDF WP08 / FR-023
+const multimodalInputEnabled = ref(true);
 
 /* ── Compaction (mission compaction-strategy-ui-01KQ8TDI §2.9) ─────── */
 
@@ -435,6 +445,11 @@ async function refresh() {
     confirmEachEnabled.value = true;
   }
   try {
+    multimodalInputEnabled.value = await client.settings.getMultimodalInput();
+  } catch {
+    multimodalInputEnabled.value = true;
+  }
+  try {
     appInfo.value = await client.appInfo();
   } catch {
     appInfo.value = null;
@@ -657,6 +672,17 @@ async function toggleConfirmEach() {
   }
 }
 
+// multimodal-io-01KQ8TDF WP08 / FR-023 — user-side multimodal toggle.
+async function toggleMultimodalInput() {
+  multimodalInputEnabled.value = !multimodalInputEnabled.value;
+  try {
+    await client.settings.setMultimodalInput(multimodalInputEnabled.value);
+  } catch {
+    // Revert visually if the write failed.
+    multimodalInputEnabled.value = !multimodalInputEnabled.value;
+  }
+}
+
 // cross-session-search WP07 — searchEnabled toggle. Inverts the
 // persisted SearchDisabled bit so the on-the-wire shape matches the
 // "default ON / opt-out" contract documented in core/rpc/views/settings.
@@ -830,6 +856,14 @@ onMounted(() => {
       data-testid="settings-hooks-pane"
     >
       <HooksSettingsView />
+    </div>
+
+    <!-- workflow-extensions-01KW2D3Y WP02 — Workflows sub-tab. -->
+    <div
+      v-else-if="showWorkflowsTab"
+      data-testid="settings-workflows-pane"
+    >
+      <WorkflowsSettingsPanel />
     </div>
 
     <div
@@ -1153,6 +1187,30 @@ onMounted(() => {
         <p class="mt-1 text-[11px] text-ink-muted">
           When off, tools whose policy resolves to <span class="font-mono">confirm_each</span>
           dispatch automatically (equivalent to <span class="font-mono">auto_allow</span>).
+          Default: ON.
+        </p>
+      </section>
+
+      <!-- multimodal-io-01KQ8TDF WP08 / FR-023 — multimodal input toggle. -->
+      <section data-testid="multimodal-input-section">
+        <h2 class="font-ui text-[11px] uppercase tracking-[0.18em] text-ink-subtle">
+          Attachments
+        </h2>
+        <label class="mt-2 flex items-center gap-3 font-ui text-[12px] text-ink">
+          <input
+            type="checkbox"
+            class="accent-accent"
+            :checked="multimodalInputEnabled"
+            data-testid="multimodal-input-toggle"
+            @change="toggleMultimodalInput"
+          />
+          Enable image and PDF attachments
+        </label>
+        <p class="mt-1 text-[11px] text-ink-muted">
+          When off, the paperclip button and drag-and-drop overlay are hidden and
+          clipboard image/PDF pastes are ignored. The
+          <span class="font-mono">HARNESS_MULTIMODAL_IN</span> env flag
+          provides a system-level override regardless of this toggle.
           Default: ON.
         </p>
       </section>

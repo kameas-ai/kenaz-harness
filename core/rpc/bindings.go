@@ -288,6 +288,14 @@ func (b *Bindings) LLM_UpdateProviderCredential(profileID, plaintext string) err
 	return b.api.LLMConnector().UpdateProviderCredential(b.ctx(), profileID, plaintext)
 }
 
+// LLM_GetAttachmentLimits returns the resolved per-provider attachment
+// capability limits for the given provider kind + model. The frontend uses
+// these to replace hard-coded byte caps in the attachment tray
+// (multimodal-io-01KQ8TDF WP04 / FR-007).
+func (b *Bindings) LLM_GetAttachmentLimits(provider, model string) (llm.AttachmentLimitsView, error) {
+	return b.api.LLMConnector().GetAttachmentLimits(b.ctx(), provider, model)
+}
+
 // ── mcp ────────────────────────────────────────────────────────────────
 
 func (b *Bindings) MCP_ListServers() ([]mcp.Server, error) {
@@ -1005,6 +1013,41 @@ func (b *Bindings) Settings_SetShowPerMessageTokenMeter(enabled bool) error {
 	return b.storeFn().SaveAll(s)
 }
 
+// ── WP08 — multimodal input feature flag ──────────────────────────────
+
+// Settings_GetMultimodalInput returns whether the multimodal input feature
+// (image + PDF attachments) is enabled. Default true on a fresh install.
+// When false, ChatInput.vue hides the paperclip button and drop overlay.
+// Note: the HARNESS_MULTIMODAL_IN env flag can independently disable this.
+// (multimodal-io-01KQ8TDF WP08 / FR-022 / FR-023)
+func (b *Bindings) Settings_GetMultimodalInput() (bool, error) {
+	if b.storeFn == nil {
+		return true, nil
+	}
+	s, err := b.storeFn().LoadAll()
+	if err != nil {
+		return true, err
+	}
+	return s.MultimodalInputEnabled(), nil
+}
+
+// Settings_SetMultimodalInput persists the multimodal input feature flag.
+// When false, ChatInput.vue hides the paperclip button, the drop overlay,
+// and the paste handler becomes a no-op for image/PDF clipboard items.
+// (multimodal-io-01KQ8TDF WP08 / FR-023 / FR-024)
+func (b *Bindings) Settings_SetMultimodalInput(enabled bool) error {
+	if b.storeFn == nil {
+		return nil
+	}
+	s, err := b.storeFn().LoadAll()
+	if err != nil {
+		return err
+	}
+	// Inverted storage: Disabled = !enabled.
+	s.MultimodalInputDisabled = !enabled
+	return b.storeFn().SaveAll(s)
+}
+
 // ── memory ─────────────────────────────────────────────────────────────
 
 func (b *Bindings) Memory_ListChunks(filter memoryview.ListFilter) ([]memoryview.Chunk, error) {
@@ -1064,6 +1107,37 @@ func (b *Bindings) Memory_CaptureRate() (memoryview.CaptureRateSnapshot, error) 
 // whether to surface the "no memory provider" affordance.
 func (b *Bindings) Memory_EmbedderEligibility() (memoryview.EmbedderEligibility, error) {
 	return b.api.Memory().EmbedderEligibility(b.ctx())
+}
+
+// Memory_MarkImportant sets the user-pin counter for a chunk, making it
+// a candidate for long-term scope promotion (memory-narrative-layer WP07).
+func (b *Bindings) Memory_MarkImportant(chunkID string, pinned bool) error {
+	return b.api.Memory().MarkImportant(b.ctx(), chunkID, pinned)
+}
+
+// Memory_NarrativeFailedCount returns the number of narrative synthesis
+// jobs that have exhausted all retry attempts (memory-narrative-layer WP07).
+func (b *Bindings) Memory_NarrativeFailedCount() (int, error) {
+	return b.api.Memory().NarrativeFailedCount(b.ctx())
+}
+
+// Memory_NarrativeFailedList returns the narrative synthesis jobs that
+// have exhausted all retry attempts (memory-narrative-layer WP07).
+func (b *Bindings) Memory_NarrativeFailedList() ([]memoryview.NarrativeJobStatus, error) {
+	return b.api.Memory().NarrativeFailedList(b.ctx())
+}
+
+// Memory_RetryFailedNarrative resets a failed narrative job so the
+// Promoter worker will retry it (memory-narrative-layer WP07).
+func (b *Bindings) Memory_RetryFailedNarrative(jobID string) error {
+	return b.api.Memory().RetryFailedNarrative(b.ctx(), jobID)
+}
+
+// Memory_NarrativeMetricsForChunk returns the retrieval/citation/pin
+// counters and computed promotion score for a single chunk
+// (memory-narrative-layer WP07).
+func (b *Bindings) Memory_NarrativeMetricsForChunk(chunkID string) (memoryview.NarrativeMetrics, error) {
+	return b.api.Memory().NarrativeMetricsForChunk(b.ctx(), chunkID)
 }
 
 // ── dials (Bundle E WP17) ──────────────────────────────────────────────
@@ -1631,6 +1705,22 @@ func (b *Bindings) Workflows_RunNow(workflowID string) (workflowsview.RunSummary
 	return b.api.Workflows().RunNow(b.ctx(), workflowID)
 }
 
+// ── workflow scheduled-inbox (workflow-extensions-01KW2D3Y WP01) ──────
+
+func (b *Bindings) Workflows_ScheduleRunHistory(workflowID string, limit int) ([]workflowsview.RunSummary, error) {
+	return b.api.Workflows().ScheduleRunHistory(b.ctx(), workflowID, limit)
+}
+func (b *Bindings) Workflows_ScheduleNextFire(workflowID string) (string, error) {
+	t, err := b.api.Workflows().ScheduleNextFire(b.ctx(), workflowID)
+	if err != nil || t.IsZero() {
+		return "", err
+	}
+	return t.UTC().Format("2006-01-02T15:04:05Z"), nil
+}
+func (b *Bindings) Workflows_CancelRun(runID string) error {
+	return b.api.Workflows().CancelRun(b.ctx(), runID)
+}
+
 // ── update (mission auto-update, v0.4.0 WP03) ─────────────────────────
 //
 // TODO: regenerate via `wails generate module` once the WP04 + WP05 UI
@@ -1696,6 +1786,41 @@ func (b *Bindings) CedarPolicy_RevokeSnippet(name string) error {
 // requestID came in on the "cedar:propose-pending" broker topic.
 func (b *Bindings) CedarPolicy_ResolvePropose(requestID string, decision string) error {
 	return b.api.CedarProposeResolve(requestID, decision)
+}
+
+// ── cedarpolicy editor (cedar-policy-editor-ui-01KQ8TD6 WP01) ────────────
+
+// CedarPolicy_Get reads the source of a single policy file.
+// For embedded defaults, reads from the embedded FS and returns ReadOnly=true.
+// For on-disk user policies, reads from <DataDir>/policy/<name>.
+func (b *Bindings) CedarPolicy_Get(name string) (cedarpolicyview.PolicyFileDetail, error) {
+	return b.api.CedarPolicy().GetPolicy(b.ctx(), name)
+}
+
+// CedarPolicy_Save validates source via the Cedar parser and, on success,
+// atomically writes it to <DataDir>/policy/<name>. Returns ParseResult with
+// diagnostics; never writes when parse fails.
+func (b *Bindings) CedarPolicy_Save(name string, source string) (cedarpolicyview.ParseResult, error) {
+	return b.api.CedarPolicy().SavePolicy(b.ctx(), name, source)
+}
+
+// CedarPolicy_Delete removes <DataDir>/policy/<name>. Fails for protected
+// embedded defaults.
+func (b *Bindings) CedarPolicy_Delete(name string) error {
+	return b.api.CedarPolicy().DeletePolicy(b.ctx(), name)
+}
+
+// CedarPolicy_Validate parses source without touching disk. Used by the
+// editor's debounced live-validation indicator.
+func (b *Bindings) CedarPolicy_Validate(source string) (cedarpolicyview.ParseResult, error) {
+	return b.api.CedarPolicy().ValidatePolicy(b.ctx(), source)
+}
+
+// CedarPolicy_InstallTemplate copies a shipped Cedar template from the
+// embedded policies/ directory to <DataDir>/policy/<destName>.
+// Returns an error when the destination already exists.
+func (b *Bindings) CedarPolicy_InstallTemplate(templateName string, destName string) (cedarpolicyview.PolicyFileDetail, error) {
+	return b.api.CedarPolicy().InstallTemplate(b.ctx(), templateName, destName)
 }
 
 // ── search (cross-session-search mission) ─────────────────────────────

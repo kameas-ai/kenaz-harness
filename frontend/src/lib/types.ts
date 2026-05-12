@@ -514,6 +514,12 @@ export interface AppInfo {
   goVersion: string;
   platform: string;
   windowSize: WindowSize;
+  /**
+   * policyEditorEnabled is true when HARNESS_POLICY_EDITOR_UI != "0".
+   * Controls whether the /policy route registers and write-path RPCs are
+   * available (cedar-policy-editor-ui-01KQ8TD6 WP01).
+   */
+  policyEditorEnabled?: boolean;
 }
 
 export interface WindowSize {
@@ -993,9 +999,19 @@ export interface ResumeMessageResult {
 }
 
 /**
+ * ImageDimensions — pixel dimensions of an image attachment.
+ * Mirrors core/llm.ImageDimensions. (multimodal-io-01KQ8TDF WP04 / FR-003)
+ */
+export interface ImageDimensions {
+  width: number;
+  height: number;
+}
+
+/**
  * MediaSource — base64 / URI source of an image or document content
  * block. Mirrors core/llm.MediaSource. The Wails JSON wire shape keeps
  * the Go-side snake_case JSON tags verbatim.
+ * SizeBytes and ImageDimensions are additive fields from WP04 (FR-003).
  */
 export interface MediaSource {
   kind: string;
@@ -1003,6 +1019,35 @@ export interface MediaSource {
   data?: string;
   uri?: string;
   original_name?: string;
+  /** Byte size of the source data (populated by the backend on Put). */
+  size_bytes?: number;
+  /** Pixel dimensions for image/* attachments; absent when unknown. */
+  image_dimensions?: ImageDimensions;
+}
+
+/**
+ * AttachmentLimitsView — per-provider attachment capability limits returned
+ * by client.llm.getAttachmentLimits(). Mirrors
+ * core/rpc/views/llm.AttachmentLimitsView. Zero values mean "unknown/unbounded".
+ * (multimodal-io-01KQ8TDF WP04 / FR-007)
+ */
+export interface AttachmentLimitsView {
+  imageInput: boolean;
+  documentInput: boolean;
+  /** Max bytes per image attachment; 0 = unbounded. */
+  maxImageBytes: number;
+  /** Max bytes per document attachment; 0 = unbounded. */
+  maxDocumentBytes: number;
+  /** Max image blocks per message; 0 = unbounded. */
+  maxImageCountPerMessage: number;
+  /** Max pixel count (W×H) per image; 0 = unbounded. */
+  maxImagePixels: number;
+  /** Max pages per PDF; 0 = unbounded. */
+  maxDocumentPages: number;
+  /** MIME types accepted for images; empty = accept all. */
+  imageInputMimeTypes?: string[];
+  /** MIME types accepted for documents; empty = accept all. */
+  documentInputMimeTypes?: string[];
 }
 
 /**
@@ -1097,6 +1142,12 @@ export interface MemoryChunk {
   lastAccessed?: string;
   /** Bundle E WP16 — originating hook boundary ("post-llm" etc.). */
   source?: string;
+  /** Narrative layer — chunk kind: "raw" | "narrative_extractive" | "narrative_synthesised" etc. */
+  kind?: string;
+  /** Narrative layer — retrieval weight (default 1.0 for raw, 1.5 for narrative). */
+  retrievalWeight?: number;
+  /** Narrative layer — originating turn ID. */
+  turnId?: string;
 }
 
 /**
@@ -1254,6 +1305,34 @@ export interface MemoryEmbedderEligibility {
    * design (e.g. "anthropic", "bedrock"). Rendered per-provider in the banner.
    */
   skippedKinds: string[];
+}
+
+/**
+ * NarrativeJobStatus — wire shape for a failed narrative synthesis job.
+ * Surfaces in the Memory view "N narratives unrecoverable" banner
+ * (memory-narrative-layer-01KQ8TD1 WP07).
+ */
+export interface NarrativeJobStatus {
+  id: string;
+  turnId: string;
+  sessionId: string;
+  attempt: number;
+  lastError: string;
+  createdAt: string; // RFC3339
+}
+
+/**
+ * NarrativeMetrics — retrieval/citation/pin counters and computed
+ * promotion score for one chunk (memory-narrative-layer-01KQ8TD1 WP07).
+ */
+export interface NarrativeMetrics {
+  chunkId: string;
+  retrievals: number;
+  citations: number;
+  userPins: number;
+  score: number;
+  lastRetrievedAt?: string; // RFC3339
+  lastCitedAt?: string; // RFC3339
 }
 
 /**
@@ -2860,4 +2939,77 @@ export interface FeatureFlagInfo {
   description: string;
   /** Environment variable that controls this flag (e.g. HARNESS_USER_SLASHCMD). */
   envVar: string;
+}
+
+// ── Cedar policy types (cedar-policy-editor-ui-01KQ8TD6 WP02) ─────────────
+
+/**
+ * PolicyFile is the light-weight per-file parse-status record returned by
+ * ListPolicies. Source is not included (use GetPolicy to read source).
+ */
+export interface PolicyFile {
+  name: string;
+  path?: string;
+  bytes?: number;
+  embedded?: boolean;
+  parse_ok: boolean;
+  parse_err?: string;
+}
+
+/**
+ * PolicyDecision mirrors cedar.Decision through the RPC boundary.
+ * Used by the audit panel in the policy view.
+ */
+export interface PolicyDecision {
+  outcome: 'allow' | 'deny' | 'not_applicable' | 'unknown';
+  action: string;
+  principal: string;
+  resource: string;
+  matched_policy?: string;
+  reason?: string;
+  evaluated_at: string;
+}
+
+// ── Cedar policy editor types (cedar-policy-editor-ui-01KQ8TD6 WP02) ─────
+
+/**
+ * ParseError carries a single Cedar parse diagnostic with line and column.
+ * Line and Column are 1-based; zero means "not available".
+ */
+export interface ParseError {
+  line: number;
+  column: number;
+  message: string;
+}
+
+/**
+ * ParseResult is the outcome of a SavePolicy or ValidatePolicy call.
+ * ok is true when the source parsed cleanly; errors is non-empty only when ok is false.
+ */
+export interface ParseResult {
+  ok: boolean;
+  errors?: ParseError[];
+}
+
+/**
+ * PolicyFileDetail extends PolicyFile with the raw source text.
+ * Returned by GetPolicy; ListPolicies never includes source.
+ */
+export interface PolicyFileDetail {
+  /** Policy filename (e.g. "my-policy.cedar"). */
+  name: string;
+  /** Absolute path on disk; empty for embedded defaults. */
+  path?: string;
+  /** File size in bytes. */
+  bytes: number;
+  /** true for embedded defaults bundled with the harness binary. */
+  embedded?: boolean;
+  /** true when the Cedar source parsed without errors. */
+  parse_ok: boolean;
+  /** Parse error message; empty when parse_ok is true. */
+  parse_err?: string;
+  /** The raw Cedar source text. */
+  source: string;
+  /** true for embedded defaults that cannot be edited or deleted via the UI. */
+  read_only: boolean;
 }

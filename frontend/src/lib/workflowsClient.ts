@@ -118,6 +118,31 @@ export interface WorkflowsCatalogClient {
   install(id: string): Promise<WorkflowsCatalogInstallResult>;
 }
 
+// --- WP02 schedule types (workflows-agentic-01KW2D3X) ---
+
+export interface WorkflowsScheduleSetInput {
+  workflowId: string;
+  cron: string;
+  timezone?: string;
+}
+
+export interface WorkflowsScheduleEntry {
+  workflowId: string;
+  cron: string;
+  timezone?: string;
+  enabled: boolean;
+}
+
+export interface WorkflowsRunSummary {
+  runId: string;
+  workflowId: string;
+  status: string; // completed | failed | running
+  startedAt: string; // ISO
+  endedAt?: string; // ISO
+  error?: string;
+  scheduled: boolean;
+}
+
 export interface WorkflowsClient {
   list(): Promise<WorkflowsSummary[]>;
   get(id: string): Promise<WorkflowsWorkflow>;
@@ -128,6 +153,18 @@ export interface WorkflowsClient {
   remove(id: string): Promise<void>;
   /** WP03: catalog sub-client. */
   catalog: WorkflowsCatalogClient;
+
+  // ── Scheduler methods (workflows-agentic-01KW2D3X WP02) ─────────────
+  scheduleSet(input: WorkflowsScheduleSetInput): Promise<void>;
+  scheduleClear(workflowId: string): Promise<void>;
+  scheduleList(): Promise<WorkflowsScheduleEntry[]>;
+  runNow(workflowId: string): Promise<WorkflowsRunSummary>;
+
+  // ── Scheduled-inbox methods (workflow-extensions-01KW2D3Y WP01) ─────
+  scheduleRunHistory(workflowId: string, limit: number): Promise<WorkflowsRunSummary[]>;
+  /** Returns ISO timestamp string or empty string if no schedule. */
+  scheduleNextFire(workflowId: string): Promise<string>;
+  cancelRun(runId: string): Promise<void>;
 }
 
 interface BridgeShape {
@@ -142,18 +179,21 @@ interface BridgeShape {
   Workflows_Catalog_List: () => Promise<WorkflowsCatalogEntry[]>;
   Workflows_Catalog_Get: (id: string) => Promise<WorkflowsCatalogPreview>;
   Workflows_Catalog_Install: (id: string) => Promise<WorkflowsCatalogInstallResult>;
-}
-
-declare global {
-  interface Window {
-    go?: { rpc?: { Bindings?: BridgeShape } };
-  }
+  // Scheduler (workflows-agentic-01KW2D3X WP02)
+  Workflows_ScheduleSet: (input: WorkflowsScheduleSetInput) => Promise<void>;
+  Workflows_ScheduleClear: (workflowId: string) => Promise<void>;
+  Workflows_ScheduleList: () => Promise<WorkflowsScheduleEntry[]>;
+  Workflows_RunNow: (workflowId: string) => Promise<WorkflowsRunSummary>;
+  // Scheduled-inbox (workflow-extensions-01KW2D3Y WP01)
+  Workflows_ScheduleRunHistory: (workflowId: string, limit: number) => Promise<WorkflowsRunSummary[]>;
+  Workflows_ScheduleNextFire: (workflowId: string) => Promise<string>;
+  Workflows_CancelRun: (runId: string) => Promise<void>;
 }
 
 function bridge(): BridgeShape {
   const b =
-    typeof window !== 'undefined' && window.go?.rpc?.Bindings
-      ? (window.go.rpc.Bindings as BridgeShape)
+    typeof window !== 'undefined' && (window as unknown as { go?: { rpc?: { Bindings?: unknown } } }).go?.rpc?.Bindings
+      ? ((window as unknown as { go: { rpc: { Bindings: BridgeShape } } }).go.rpc.Bindings)
       : undefined;
   if (!b) {
     throw new Error(
@@ -175,6 +215,14 @@ export function createWorkflowsClient(): WorkflowsClient {
       get: (id) => bridge().Workflows_Catalog_Get(id),
       install: (id) => bridge().Workflows_Catalog_Install(id),
     },
+    scheduleSet: (input) => bridge().Workflows_ScheduleSet(input),
+    scheduleClear: (workflowId) => bridge().Workflows_ScheduleClear(workflowId),
+    scheduleList: () => bridge().Workflows_ScheduleList(),
+    runNow: (workflowId) => bridge().Workflows_RunNow(workflowId),
+    scheduleRunHistory: (workflowId, limit) =>
+      bridge().Workflows_ScheduleRunHistory(workflowId, limit),
+    scheduleNextFire: (workflowId) => bridge().Workflows_ScheduleNextFire(workflowId),
+    cancelRun: (runId) => bridge().Workflows_CancelRun(runId),
   };
 }
 
@@ -246,5 +294,23 @@ export function createFakeWorkflowsClient(
             scheduled: false,
           })),
     },
+    // Scheduler stubs
+    scheduleSet: seed.scheduleSet ?? (() => Promise.resolve()),
+    scheduleClear: seed.scheduleClear ?? (() => Promise.resolve()),
+    scheduleList: seed.scheduleList ?? (() => Promise.resolve([])),
+    runNow:
+      seed.runNow ??
+      ((workflowId) =>
+        Promise.resolve({
+          runId: 'run-now-stub',
+          workflowId,
+          status: 'completed',
+          startedAt: new Date().toISOString(),
+          scheduled: false,
+        })),
+    // Scheduled-inbox stubs
+    scheduleRunHistory: seed.scheduleRunHistory ?? (() => Promise.resolve([])),
+    scheduleNextFire: seed.scheduleNextFire ?? (() => Promise.resolve('')),
+    cancelRun: seed.cancelRun ?? (() => Promise.resolve()),
   };
 }

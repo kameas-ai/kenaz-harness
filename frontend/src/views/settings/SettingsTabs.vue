@@ -53,9 +53,14 @@ const tabs: ReadonlyArray<Tab> = [
   // hooks-event-surface-expansion-01KZNP3A WP07d — Hooks settings tab.
   // Disambiguates via ?tab=hooks. See SettingsView.vue for the mount switch.
   { to: '/settings?tab=hooks', label: 'Hooks', query: 'hooks' },
+  // workflow-extensions-01KW2D3Y WP02 — Workflows settings tab.
+  // Disambiguates via ?tab=workflows. See SettingsView.vue for the mount switch.
+  { to: '/settings?tab=workflows', label: 'Workflows', query: 'workflows' },
   { to: '/providers', label: 'Providers' },
   { to: '/bundles', label: 'Bundles' },
   { to: '/permissions/bash', label: 'Permissions', matchPrefix: '/permissions' },
+  // cedar-policy-editor-ui-01KQ8TD6 WP02 — Policy editor tab.
+  { to: '/policy', label: 'Policy', matchPrefix: '/policy' },
 ];
 
 const activePath = computed(() => route?.path ?? '');

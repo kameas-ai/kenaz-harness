@@ -222,6 +222,24 @@ type WorkflowsAPI interface {
 	// when no scheduler is wired.
 	RunNow(ctx context.Context, workflowID string) (RunSummary, error)
 
+	// --- Scheduled-inbox methods (workflow-extensions-01KW2D3Y WP01) ---
+
+	// ScheduleRunHistory returns up to limit recent run summaries for
+	// workflowID in reverse-chronological order. Returns
+	// ErrSchedulerUnavailable when no scheduler is wired.
+	ScheduleRunHistory(ctx context.Context, workflowID string, limit int) ([]RunSummary, error)
+
+	// ScheduleNextFire returns the next scheduled fire time for
+	// workflowID as a UTC time.Time. A zero Time is returned when no
+	// cron schedule is registered for the workflow. Returns
+	// ErrSchedulerUnavailable when no scheduler is wired.
+	ScheduleNextFire(ctx context.Context, workflowID string) (time.Time, error)
+
+	// CancelRun signals cancellation of an in-flight run identified by
+	// runID. Returns ErrEngineUnavailable when no engine is wired and
+	// corewf.ErrRunNotFound when the run ID is unknown on this engine.
+	CancelRun(ctx context.Context, runID string) error
+
 	// --- Catalog methods (workflows-agentic-01KW2D3X WP03) ---
 
 	// Catalog_List returns every Entry the workflow catalog exposes,

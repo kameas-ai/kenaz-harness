@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/sigil-tech/kaneaz-harness/core/context/audit"
 	"github.com/sigil-tech/kaneaz-harness/core/policy/cedar"
@@ -504,6 +505,57 @@ func (a *API) RunNow(ctx context.Context, workflowID string) (RunSummary, error)
 		Err:        internal.Err,
 		Scheduled:  internal.Scheduled,
 	}, nil
+}
+
+// --- Scheduled-inbox methods (workflow-extensions-01KW2D3Y WP01) ---
+
+// ScheduleRunHistory implements WorkflowsAPI.
+func (a *API) ScheduleRunHistory(ctx context.Context, workflowID string, limit int) ([]RunSummary, error) {
+	if a == nil || a.cfg.Disabled {
+		return nil, ErrFeatureDisabled
+	}
+	if a.scheduler == nil {
+		return nil, ErrSchedulerUnavailable
+	}
+	internal, err := a.scheduler.History(ctx, workflowID, limit)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]RunSummary, 0, len(internal))
+	for _, s := range internal {
+		out = append(out, RunSummary{
+			RunID:      s.RunID,
+			WorkflowID: s.WorkflowID,
+			Status:     s.Status,
+			StartedAt:  s.StartedAt,
+			EndedAt:    s.EndedAt,
+			Err:        s.Err,
+			Scheduled:  s.Scheduled,
+		})
+	}
+	return out, nil
+}
+
+// ScheduleNextFire implements WorkflowsAPI.
+func (a *API) ScheduleNextFire(ctx context.Context, workflowID string) (time.Time, error) {
+	if a == nil || a.cfg.Disabled {
+		return time.Time{}, ErrFeatureDisabled
+	}
+	if a.scheduler == nil {
+		return time.Time{}, ErrSchedulerUnavailable
+	}
+	return a.scheduler.NextFire(ctx, workflowID)
+}
+
+// CancelRun implements WorkflowsAPI.
+func (a *API) CancelRun(_ context.Context, runID string) error {
+	if a == nil || a.cfg.Disabled {
+		return ErrFeatureDisabled
+	}
+	if a.cfg.Engine == nil {
+		return ErrEngineUnavailable
+	}
+	return a.cfg.Engine.Cancel(runID)
 }
 
 // --- Catalog methods (workflows-agentic-01KW2D3X WP03) ---

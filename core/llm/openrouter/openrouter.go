@@ -576,9 +576,14 @@ func buildRequestBody(req llm.GenerationRequest, prof llm.ProviderProfile) ([]by
 			continue
 		}
 
+		// For non-tool messages, use the array-of-parts content shape when
+		// the message contains image blocks (OpenRouter proxies image_url to
+		// the underlying vision model). Document blocks are not serialized
+		// (document_input: false in the default YAML; the gate rejects them
+		// pre-flight for providers that don't support PDFs).
 		msgs = append(msgs, map[string]any{
 			"role":    role,
-			"content": flattenContent(m.Content),
+			"content": buildOpenRouterContent(m.Content),
 		})
 	}
 	out["messages"] = msgs
@@ -624,6 +629,63 @@ func buildRequestBody(req llm.GenerationRequest, prof llm.ProviderProfile) ([]by
 	}
 
 	return json.Marshal(out)
+}
+
+// buildOpenRouterContent serializes a slice of ContentBlocks into the
+// OpenAI-compatible content shape that OpenRouter accepts.
+//
+//   - Pure-text messages return a single string (classic shape; lighter payload).
+//   - Messages with one or more image blocks return []map[string]any with
+//     {type:"text"} and {type:"image_url", image_url:{url:"data:..."}} parts
+//     (multimodal-io-01KQ8TDF FR-013).
+//   - Document blocks are silently dropped: the capability gate rejects PDF
+//     attachments for OpenRouter models pre-flight (document_input: false in
+//     the YAML), so this path is reached only for model rows that override to
+//     document_input: true, in which case the underlying Claude adapter on the
+//     OpenRouter side handles the PDF. For now drop to text-only for safety.
+func buildOpenRouterContent(parts []llm.ContentBlock) any {
+	hasImage := false
+	for _, p := range parts {
+		if p.Type == "image" {
+			hasImage = true
+			break
+		}
+	}
+	if !hasImage {
+		return flattenContent(parts)
+	}
+	out := make([]map[string]any, 0, len(parts))
+	for _, p := range parts {
+		switch p.Type {
+		case "", "text":
+			if p.Text == "" {
+				continue
+			}
+			out = append(out, map[string]any{"type": "text", "text": p.Text})
+		case "image":
+			if p.Source == nil {
+				continue
+			}
+			out = append(out, map[string]any{
+				"type":      "image_url",
+				"image_url": map[string]any{"url": openRouterDataURL(p.Source)},
+			})
+		// document: intentionally dropped (gate-rejected pre-flight; see above).
+		}
+	}
+	if len(out) == 0 {
+		return ""
+	}
+	return out
+}
+
+// openRouterDataURL composes a data: URL from a base64 MediaSource for the
+// OpenRouter image_url content part (mirrors openai.dataURL).
+func openRouterDataURL(src *llm.MediaSource) string {
+	if src.URI != "" && src.Kind == "uri" {
+		return src.URI
+	}
+	return "data:" + src.MediaType + ";base64," + src.Data
 }
 
 // flattenContent concatenates the text fragments of a content slice

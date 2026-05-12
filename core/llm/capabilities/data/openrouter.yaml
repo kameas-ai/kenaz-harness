@@ -9,3 +9,96 @@ defaults:
   reasoning: false
   cancellation: true
   usage_reporting: true
+  # Attachment limits (multimodal-io-01KQ8TDF FR-006)
+  # OpenRouter proxies to the underlying provider via OpenAI-shape requests.
+  # image_url base64 data URLs work for vision-capable models.
+  # PDFs are rejected by default; per-model overrides can flip document_input
+  # for Claude-via-OpenRouter when that path is verified.
+  image_input: false
+  document_input: false
+  max_image_bytes: 20971520          # mirrors OpenAI default
+  max_document_bytes: 0
+  max_image_count_per_message: 20
+  max_image_pixels: 0
+  max_document_pages: 0
+  image_input_mime_types: [image/png, image/jpeg, image/gif, image/webp]
+  document_input_mime_types: []
+models:
+  # Claude-via-OpenRouter: vision + documents pass through to Anthropic
+  - match: "anthropic/claude-sonnet*"
+    streaming: true
+    tool_calling: true
+    vision: true
+    documents: true
+    json_mode: true
+    prompt_caching: false
+    reasoning: false
+    cancellation: true
+    usage_reporting: true
+    image_input: true
+    document_input: true
+    max_image_bytes: 5242880
+    max_document_bytes: 33554432
+    max_image_count_per_message: 100
+    max_document_pages: 100
+  - match: "anthropic/claude-opus*"
+    streaming: true
+    tool_calling: true
+    vision: true
+    documents: true
+    json_mode: true
+    prompt_caching: false
+    reasoning: false
+    cancellation: true
+    usage_reporting: true
+    image_input: true
+    document_input: true
+    max_image_bytes: 5242880
+    max_document_bytes: 33554432
+    max_image_count_per_message: 100
+    max_document_pages: 100
+  - match: "anthropic/claude-3-5-sonnet*"
+    streaming: true
+    tool_calling: true
+    vision: true
+    documents: true
+    json_mode: true
+    prompt_caching: false
+    reasoning: false
+    cancellation: true
+    usage_reporting: true
+    image_input: true
+    document_input: true
+    max_image_bytes: 5242880
+    max_document_bytes: 33554432
+    max_image_count_per_message: 100
+    max_document_pages: 100
+  - match: "anthropic/claude*"
+    streaming: true
+    tool_calling: true
+    vision: true
+    documents: false
+    json_mode: true
+    prompt_caching: false
+    reasoning: false
+    cancellation: true
+    usage_reporting: true
+    image_input: true
+    document_input: false
+    max_image_bytes: 5242880
+    max_image_count_per_message: 20
+  # GPT-4o-via-OpenRouter: vision, no documents
+  - match: "openai/gpt-4o*"
+    streaming: true
+    tool_calling: true
+    vision: true
+    documents: false
+    json_mode: true
+    prompt_caching: false
+    reasoning: false
+    cancellation: true
+    usage_reporting: true
+    image_input: true
+    document_input: false
+    max_image_bytes: 20971520
+    max_image_count_per_message: 50

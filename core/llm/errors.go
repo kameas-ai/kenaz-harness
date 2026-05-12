@@ -169,3 +169,115 @@ func IsTransient(err error) bool {
 	var t *ErrTransient
 	return errors.As(err, &t)
 }
+
+// ── Attachment pre-flight errors (multimodal-io-01KQ8TDF FR-002) ─────────
+//
+// These errors are returned by capabilities.Gate.CheckAttachments before any
+// wire call. Each carries enough context for the frontend's errors.ts
+// friendly() to render a provider-specific, user-actionable message.
+
+// ErrAttachmentTooLarge is returned when an attachment exceeds the
+// per-provider byte cap (MaxImageBytes / MaxDocumentBytes).
+type ErrAttachmentTooLarge struct {
+	Provider string
+	Mime     string
+	Given    int64 // actual byte size
+	Cap      int64 // provider limit
+}
+
+func (e *ErrAttachmentTooLarge) Error() string {
+	return fmt.Sprintf("llm: attachment too large for %s (mime=%s given=%d cap=%d)",
+		e.Provider, e.Mime, e.Given, e.Cap)
+}
+
+func (e *ErrAttachmentTooLarge) Friendly() string {
+	givenMiB := float64(e.Given) / (1024 * 1024)
+	capMiB := float64(e.Cap) / (1024 * 1024)
+	return fmt.Sprintf("Attachment is too large (%.1f MiB). Provider %q accepts at most %.0f MiB per attachment.",
+		givenMiB, e.Provider, capMiB)
+}
+
+// ErrAttachmentMimeUnsupported is returned when the attachment MIME type
+// is not in the provider's allowed list. For OpenAI Chat Completions this
+// is how PDF inputs are rejected (document_input: false in the YAML).
+type ErrAttachmentMimeUnsupported struct {
+	Provider string
+	Mime     string
+}
+
+func (e *ErrAttachmentMimeUnsupported) Error() string {
+	return fmt.Sprintf("llm: attachment MIME type %q not supported by %s", e.Mime, e.Provider)
+}
+
+func (e *ErrAttachmentMimeUnsupported) Friendly() string {
+	if e.Mime == "application/pdf" {
+		return fmt.Sprintf(
+			"Provider %q does not accept PDF attachments via this API. "+
+				"Switch to Anthropic, Bedrock-Claude, or convert the PDF pages to images.",
+			e.Provider)
+	}
+	return fmt.Sprintf("Provider %q does not support attachment type %q.", e.Provider, e.Mime)
+}
+
+// ErrAttachmentCountExceeded is returned when the number of image blocks
+// in a single message exceeds MaxImageCountPerMessage.
+type ErrAttachmentCountExceeded struct {
+	Provider string
+	Given    int
+	Cap      int
+}
+
+func (e *ErrAttachmentCountExceeded) Error() string {
+	return fmt.Sprintf("llm: too many image attachments for %s (given=%d cap=%d)",
+		e.Provider, e.Given, e.Cap)
+}
+
+func (e *ErrAttachmentCountExceeded) Friendly() string {
+	return fmt.Sprintf("Too many images in one message (you have %d; provider %q allows at most %d).",
+		e.Given, e.Provider, e.Cap)
+}
+
+// ErrAttachmentDimensionExceeded is returned when an image's pixel count
+// exceeds MaxImagePixels for the provider.
+type ErrAttachmentDimensionExceeded struct {
+	Provider string
+	Given    int64 // actual pixel count (W*H)
+	Cap      int64 // provider limit
+}
+
+func (e *ErrAttachmentDimensionExceeded) Error() string {
+	return fmt.Sprintf("llm: image pixels exceed limit for %s (given=%d cap=%d)",
+		e.Provider, e.Given, e.Cap)
+}
+
+func (e *ErrAttachmentDimensionExceeded) Friendly() string {
+	return fmt.Sprintf("Image is too large (%.1f MP). Provider %q accepts at most %.1f MP. Resize the image before attaching.",
+		float64(e.Given)/1_000_000, e.Provider, float64(e.Cap)/1_000_000)
+}
+
+// ErrAttachmentEncrypted is returned when a PDF is password-protected and
+// cannot be parsed for page-count validation.
+type ErrAttachmentEncrypted struct{}
+
+func (e *ErrAttachmentEncrypted) Error() string {
+	return "llm: PDF attachment is password-protected"
+}
+
+func (e *ErrAttachmentEncrypted) Friendly() string {
+	return "PDF is password-protected. Remove the password and re-attach."
+}
+
+// ErrAttachmentAudioUnsupported is returned unconditionally for any audio
+// MIME type (audio/*) on all providers. Audio input is deferred to a future
+// mission (multimodal-io-01KQ8TDF locked decision Q19.2).
+type ErrAttachmentAudioUnsupported struct {
+	Mime string
+}
+
+func (e *ErrAttachmentAudioUnsupported) Error() string {
+	return fmt.Sprintf("llm: audio attachment type %q is not supported", e.Mime)
+}
+
+func (e *ErrAttachmentAudioUnsupported) Friendly() string {
+	return "Audio input is not yet supported. Audio is planned for a future mission."
+}

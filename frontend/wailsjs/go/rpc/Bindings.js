@@ -434,6 +434,10 @@ export function LLM_UpdateProviderCredential(arg1, arg2) {
   return window['go']['rpc']['Bindings']['LLM_UpdateProviderCredential'](arg1, arg2);
 }
 
+export function LLM_GetAttachmentLimits(arg1, arg2) {
+  return window['go']['rpc']['Bindings']['LLM_GetAttachmentLimits'](arg1, arg2);
+}
+
 export function LoadRoute() {
   return window['go']['rpc']['Bindings']['LoadRoute']();
 }
@@ -512,6 +516,26 @@ export function Memory_RunPruneNow(arg1) {
 
 export function Memory_TestEmbedder() {
   return window['go']['rpc']['Bindings']['Memory_TestEmbedder']();
+}
+
+export function Memory_MarkImportant(arg1, arg2) {
+  return window['go']['rpc']['Bindings']['Memory_MarkImportant'](arg1, arg2);
+}
+
+export function Memory_NarrativeFailedCount() {
+  return window['go']['rpc']['Bindings']['Memory_NarrativeFailedCount']();
+}
+
+export function Memory_NarrativeFailedList() {
+  return window['go']['rpc']['Bindings']['Memory_NarrativeFailedList']();
+}
+
+export function Memory_RetryFailedNarrative(arg1) {
+  return window['go']['rpc']['Bindings']['Memory_RetryFailedNarrative'](arg1);
+}
+
+export function Memory_NarrativeMetricsForChunk(arg1) {
+  return window['go']['rpc']['Bindings']['Memory_NarrativeMetricsForChunk'](arg1);
 }
 
 export function Nodes_Catalog() {
@@ -810,6 +834,10 @@ export function Settings_GetMemory() {
   return window['go']['rpc']['Bindings']['Settings_GetMemory']();
 }
 
+export function Settings_GetMultimodalInput() {
+  return window['go']['rpc']['Bindings']['Settings_GetMultimodalInput']();
+}
+
 export function Settings_GetMonthlyCostNotifyUSD() {
   return window['go']['rpc']['Bindings']['Settings_GetMonthlyCostNotifyUSD']();
 }
@@ -896,6 +924,10 @@ export function Settings_SetMaxAgentTurns(arg1) {
 
 export function Settings_SetMemory(arg1) {
   return window['go']['rpc']['Bindings']['Settings_SetMemory'](arg1);
+}
+
+export function Settings_SetMultimodalInput(arg1) {
+  return window['go']['rpc']['Bindings']['Settings_SetMultimodalInput'](arg1);
 }
 
 export function Settings_SetMonthlyCostNotifyUSD(arg1) {

@@ -129,6 +129,13 @@ import type {
   PermissionMode,
   SessionUsage,
   DriftReport,
+  PolicyFileDetail,
+  ParseResult,
+  PolicyFile,
+  PolicyDecision,
+  NarrativeJobStatus,
+  NarrativeMetrics,
+  AttachmentLimitsView,
 } from './types';
 
 /**
@@ -249,6 +256,10 @@ interface WailsBindingsLike {
   LLM_TestProvider(id: string): Promise<TestResult>;
   LLM_ListModels(kind: string, plaintextApiKey: string): Promise<ModelInfo[]>;
   LLM_ResolveConfirm(requestID: string, decision: string): Promise<void>;
+  LLM_GetAttachmentLimits(
+    provider: string,
+    model: string,
+  ): Promise<AttachmentLimitsView>;
 
   MCP_ListServers(): Promise<MCPServer[]>;
   MCP_StartStream(id: string): Promise<string>;
@@ -374,6 +385,9 @@ interface WailsBindingsLike {
   // per-message-token-meter-01KR3PQR
   Settings_GetShowPerMessageTokenMeter(): Promise<boolean>;
   Settings_SetShowPerMessageTokenMeter(enabled: boolean): Promise<void>;
+  // multimodal-io-01KQ8TDF WP08 / FR-022 / FR-023
+  Settings_GetMultimodalInput(): Promise<boolean>;
+  Settings_SetMultimodalInput(enabled: boolean): Promise<void>;
   // artifact-preview-binary-rendering-01KQ8TD5 WP07
   Settings_GetArtifactPreview(): Promise<{ enabled: boolean; maxBytes: number; timeoutMs: number }>;
 
@@ -401,6 +415,11 @@ interface WailsBindingsLike {
   Memory_TestEmbedder(): Promise<number>;
   Memory_CaptureRate(): Promise<MemoryCaptureRateSnapshot>;
   Memory_EmbedderEligibility(): Promise<MemoryEmbedderEligibility>;
+  Memory_MarkImportant(chunkID: string, pinned: boolean): Promise<void>;
+  Memory_NarrativeFailedCount(): Promise<number>;
+  Memory_NarrativeFailedList(): Promise<NarrativeJobStatus[]>;
+  Memory_RetryFailedNarrative(jobID: string): Promise<void>;
+  Memory_NarrativeMetricsForChunk(chunkID: string): Promise<NarrativeMetrics>;
 
   Dials_Get(key: DialScopeKey): Promise<DialConfig>;
   Dials_Set(key: DialScopeKey, cfg: DialConfig): Promise<void>;
@@ -523,11 +542,21 @@ interface WailsBindingsLike {
   Nodes_ListUserOverrides(): Promise<NodeUserOverrideInfo[]>;
   Nodes_Doctor(): Promise<NodeDoctorReport>;
 
+  // Cedar policy panel (WP14).
+  CedarPolicy_ListPolicies(): Promise<PolicyFile[]>;
+  CedarPolicy_ReloadPolicies(): Promise<void>;
+  CedarPolicy_RecentDecisions(limit: number): Promise<PolicyDecision[]>;
   // Cedar policy snippet writer/revoker (WP09).
   CedarPolicy_WriteSnippet(name: string, body: string): Promise<void>;
   CedarPolicy_RevokeSnippet(name: string): Promise<void>;
   // Cedar propose modal resolution (harness-self-mcp-onboarding WP07).
   CedarPolicy_ResolvePropose(requestID: string, decision: string): Promise<void>;
+  // Cedar policy editor (cedar-policy-editor-ui-01KQ8TD6 WP01).
+  CedarPolicy_Get(name: string): Promise<PolicyFileDetail>;
+  CedarPolicy_Save(name: string, source: string): Promise<ParseResult>;
+  CedarPolicy_Delete(name: string): Promise<void>;
+  CedarPolicy_Validate(source: string): Promise<ParseResult>;
+  CedarPolicy_InstallTemplate(templateName: string, destName: string): Promise<PolicyFileDetail>;
 
   // Branches view (agent-kernel-graph; Bundle B WP07/08).
   Branches_List(parentSessionID: string): Promise<Branch[]>;
@@ -1072,6 +1101,18 @@ export interface LLMConnectorClient {
    * and dispatches / blocks accordingly.
    */
   resolveConfirm(requestID: string, decision: ConfirmDecision): Promise<void>;
+
+  /**
+   * getAttachmentLimits returns the descriptor-driven per-provider attachment
+   * capability limits for (provider, model). The chat composer uses these to
+   * replace hard-coded byte/count caps with values from the capability YAML.
+   * Returns a zero descriptor (imageInput=false, documentInput=false) when the
+   * provider or model is unknown. (multimodal-io-01KQ8TDF WP04 / FR-007)
+   */
+  getAttachmentLimits(
+    provider: string,
+    model: string,
+  ): Promise<AttachmentLimitsView>;
 }
 
 export interface MCPClient {
@@ -1127,6 +1168,7 @@ export type {
   MCPTranslationReport,
   MCPImportWrotePath,
   MCPTestResult,
+  AttachmentLimitsView,
 };
 
 export interface A2AClient {
@@ -1426,6 +1468,21 @@ export interface SettingsClient {
   /** Persist the per-message token meter visibility toggle. */
   setShowPerMessageTokenMeter(enabled: boolean): Promise<void>;
 
+  // ── multimodal-io-01KQ8TDF WP08 / FR-022 / FR-023 ────────────────────
+  /**
+   * Returns whether the multimodal input feature (image + PDF attachments)
+   * is enabled. Default true on a fresh install. When false, ChatInput hides
+   * the paperclip button and drop overlay. The HARNESS_MULTIMODAL_IN env flag
+   * can independently force-disable this.
+   */
+  getMultimodalInput(): Promise<boolean>;
+  /**
+   * Persists the multimodal input feature toggle. When false, ChatInput hides
+   * the paperclip, the drop overlay becomes a no-op, and image/PDF clipboard
+   * items are ignored on paste.
+   */
+  setMultimodalInput(enabled: boolean): Promise<void>;
+
   // ── artifact-preview-binary-rendering-01KQ8TD5 WP07 ─────────────────
   /**
    * Returns the runtime artifact-preview feature config:
@@ -1537,6 +1594,20 @@ export interface MemoryClient {
    * to determine whether to surface the "no memory provider" affordance.
    */
   embedderEligibility(): Promise<MemoryEmbedderEligibility>;
+  /**
+   * Toggle the "user pin" (Mark as important) flag on a chunk. Pins
+   * increment the user_pins promotion counter, raising its score.
+   * (memory-narrative-layer-01KQ8TD1 WP07).
+   */
+  markImportant(chunkID: string, pinned: boolean): Promise<void>;
+  /** Count narrative synthesis jobs that have exhausted all retries. */
+  narrativeFailedCount(): Promise<number>;
+  /** List narrative synthesis jobs that have exhausted all retries. */
+  narrativeFailedList(): Promise<NarrativeJobStatus[]>;
+  /** Reset a failed narrative job so the Promoter will retry it. */
+  retryFailedNarrative(jobID: string): Promise<void>;
+  /** Return the retrieval/citation/pin counters and score for a chunk. */
+  narrativeMetricsForChunk(chunkID: string): Promise<NarrativeMetrics>;
 }
 
 /**
@@ -1911,13 +1982,33 @@ export interface BranchesClient {
 /**
  * CedarPolicyClient — view-scoped surface for writing and revoking
  * Cedar policy snippets on disk (mission cedar-credential-policy-01KQ8TDE,
- * WP09).
+ * WP09) plus the full policy editor surface (cedar-policy-editor-ui-01KQ8TD6 WP02).
  */
 export interface CedarPolicyClient {
+  // ── Panel / list methods (WP14) ───────────────────────────────────
+  /** List all loaded policy files (no source). */
+  listPolicies(): Promise<PolicyFile[]>;
+  /** Re-walk <DataDir>/policy/ and rebuild the active bundle. */
+  reloadPolicies(): Promise<void>;
+  /** Return up to limit recent gate decisions, newest first. */
+  recentDecisions(limit: number): Promise<PolicyDecision[]>;
+
   writeSnippet(name: string, body: string): Promise<void>;
   revokeSnippet(name: string): Promise<void>;
   /** Deliver user decision for a pending cedar-propose-pending modal. */
   resolvePropose(requestID: string, decision: string): Promise<void>;
+
+  // ── Editor methods (cedar-policy-editor-ui-01KQ8TD6) ──────────────
+  /** Read a policy file's source. Embedded defaults are read-only. */
+  getPolicy(name: string): Promise<PolicyFileDetail>;
+  /** Validate source and atomically write if parse succeeds. */
+  savePolicy(name: string, source: string): Promise<ParseResult>;
+  /** Delete a user-authored policy file. Fails for embedded defaults. */
+  deletePolicy(name: string): Promise<void>;
+  /** Parse-only: validate source without touching disk. */
+  validatePolicy(source: string): Promise<ParseResult>;
+  /** Copy a shipped template to <DataDir>/policy/<destName>. */
+  installTemplate(templateName: string, destName: string): Promise<PolicyFileDetail>;
 }
 
 // ── Search types (cross-session-search mission) ───────────────────────
@@ -2288,6 +2379,8 @@ export function createHarnessClient(): HarnessClient {
         b().LLM_ListModels(kind, plaintextApiKey),
       resolveConfirm: (requestID, decision) =>
         b().LLM_ResolveConfirm(requestID, decision),
+      getAttachmentLimits: (provider, model) =>
+        b().LLM_GetAttachmentLimits(provider, model),
     },
     mcp: {
       listServers: () => b().MCP_ListServers(),
@@ -2425,6 +2518,8 @@ export function createHarnessClient(): HarnessClient {
         b().Settings_GetShowPerMessageTokenMeter(),
       setShowPerMessageTokenMeter: (enabled) =>
         b().Settings_SetShowPerMessageTokenMeter(enabled),
+      getMultimodalInput: () => b().Settings_GetMultimodalInput(),
+      setMultimodalInput: (enabled) => b().Settings_SetMultimodalInput(enabled),
       getArtifactPreview: () => b().Settings_GetArtifactPreview(),
     },
     permissions: {
@@ -2455,6 +2550,11 @@ export function createHarnessClient(): HarnessClient {
       testEmbedder: () => b().Memory_TestEmbedder(),
       captureRate: () => b().Memory_CaptureRate(),
       embedderEligibility: () => b().Memory_EmbedderEligibility(),
+      markImportant: (chunkID, pinned) => b().Memory_MarkImportant(chunkID, pinned),
+      narrativeFailedCount: () => b().Memory_NarrativeFailedCount(),
+      narrativeFailedList: () => b().Memory_NarrativeFailedList(),
+      retryFailedNarrative: (jobID) => b().Memory_RetryFailedNarrative(jobID),
+      narrativeMetricsForChunk: (chunkID) => b().Memory_NarrativeMetricsForChunk(chunkID),
     },
     dials: {
       get: (key) => b().Dials_Get(key),
@@ -2579,9 +2679,19 @@ export function createHarnessClient(): HarnessClient {
       doctor: () => b().Nodes_Doctor(),
     },
     cedarPolicy: {
+      // cedar panel (WP14)
+      listPolicies: () => b().CedarPolicy_ListPolicies(),
+      reloadPolicies: () => b().CedarPolicy_ReloadPolicies(),
+      recentDecisions: (limit) => b().CedarPolicy_RecentDecisions(limit),
       writeSnippet: (name, body) => b().CedarPolicy_WriteSnippet(name, body),
       revokeSnippet: (name) => b().CedarPolicy_RevokeSnippet(name),
       resolvePropose: (requestID, decision) => b().CedarPolicy_ResolvePropose(requestID, decision),
+      // cedar-policy-editor-ui-01KQ8TD6 WP02 editor methods
+      getPolicy: (name) => b().CedarPolicy_Get(name),
+      savePolicy: (name, source) => b().CedarPolicy_Save(name, source),
+      deletePolicy: (name) => b().CedarPolicy_Delete(name),
+      validatePolicy: (source) => b().CedarPolicy_Validate(source),
+      installTemplate: (templateName, destName) => b().CedarPolicy_InstallTemplate(templateName, destName),
     },
     search: {
       sessions: (query, filters) =>
@@ -2778,6 +2888,15 @@ export function createFakeHarnessClient(
       }),
       listModels: async () => [],
       resolveConfirm: noop,
+      getAttachmentLimits: async () => ({
+        imageInput: false,
+        documentInput: false,
+        maxImageBytes: 0,
+        maxDocumentBytes: 0,
+        maxImageCountPerMessage: 0,
+        maxImagePixels: 0,
+        maxDocumentPages: 0,
+      }),
     },
     mcp: {
       listServers: async () => [],
@@ -2966,6 +3085,8 @@ export function createFakeHarnessClient(
       setEmbedderConfig: noop,
       getShowPerMessageTokenMeter: async () => false,
       setShowPerMessageTokenMeter: noop,
+      getMultimodalInput: async () => true,
+      setMultimodalInput: noop,
       getArtifactPreview: async () => ({
         // Default false in tests so that existing ArtifactPreview.test.ts
         // cases run through the legacy text-only branch unmodified
@@ -3038,6 +3159,17 @@ export function createFakeHarnessClient(
         allProfiles: 0,
         eligibleProfiles: 0,
         skippedKinds: [],
+      }),
+      markImportant: noop,
+      narrativeFailedCount: async () => 0,
+      narrativeFailedList: async () => [],
+      retryFailedNarrative: noop,
+      narrativeMetricsForChunk: async () => ({
+        chunkId: '',
+        retrievals: 0,
+        citations: 0,
+        userPins: 0,
+        score: 0,
       }),
     },
     dials: {
@@ -3402,9 +3534,33 @@ export function createFakeHarnessClient(
       }),
     },
     cedarPolicy: {
+      // cedar panel stubs (WP14)
+      listPolicies: async (): Promise<PolicyFile[]> => [],
+      reloadPolicies: noop,
+      recentDecisions: async (): Promise<PolicyDecision[]> => [],
       writeSnippet: noop,
       revokeSnippet: noop,
       resolvePropose: noop,
+      // cedar-policy-editor-ui-01KQ8TD6 WP02 editor stubs
+      getPolicy: async (name: string): Promise<PolicyFileDetail> => ({
+        name,
+        bytes: 0,
+        embedded: false,
+        parse_ok: true,
+        source: '',
+        read_only: false,
+      }),
+      savePolicy: async (): Promise<ParseResult> => ({ ok: true }),
+      deletePolicy: noop,
+      validatePolicy: async (): Promise<ParseResult> => ({ ok: true }),
+      installTemplate: async (_templateName: string, destName: string): Promise<PolicyFileDetail> => ({
+        name: destName,
+        bytes: 0,
+        embedded: false,
+        parse_ok: true,
+        source: '',
+        read_only: false,
+      }),
     },
     search: {
       sessions: async () => [],

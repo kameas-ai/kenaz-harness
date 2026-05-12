@@ -23,6 +23,14 @@
  * v0.5.3 cherry-picks (memory-inspection-ui-01KX5R8E):
  *   §2.4 — "Health" tab with MemoryHealthPanel.
  *   §2.5 — PrunePreviewModal shown before "Prune now" confirms.
+ *
+ * memory-narrative-layer-01KQ8TD1 additions (WP07):
+ *   - Per-chunk Kind badge (raw / narrative_extractive / narrative_synthesised)
+ *     so the user can see at a glance what type of memory each chunk is.
+ *   - "Mark important" button calls markImportant() to raise the chunk's
+ *     promotion score (userPins counter).
+ *   - "N narratives unrecoverable" banner when narrativeFailedCount > 0,
+ *     with a per-job "Retry" action and a "Retry all" affordance.
  */
 import { computed, onMounted, ref } from 'vue';
 import { useRoute } from 'vue-router';
@@ -33,6 +41,7 @@ import type {
   MemoryListFilter,
   MemoryPrunePreview,
   MemoryScopeKind,
+  NarrativeJobStatus,
 } from '@/lib/types';
 import MemoryHealthPanel from './MemoryHealthPanel.vue';
 import PrunePreviewModal from './PrunePreviewModal.vue';
@@ -277,6 +286,98 @@ function preview(content: string): string {
   return content.slice(0, 200) + '…';
 }
 
+// ── Narrative layer (memory-narrative-layer-01KQ8TD1 WP07) ──────────────
+
+// Failed narrative jobs banner.
+const narrativeFailedCount = ref(0);
+const narrativeFailedJobs = ref<NarrativeJobStatus[]>([]);
+const narrativeBannerOpen = ref(false);
+const narrativeRetrying = ref<string | null>(null); // jobID being retried
+
+async function refreshNarrativeFailed() {
+  try {
+    narrativeFailedCount.value = await client.memory.narrativeFailedCount();
+    if (narrativeBannerOpen.value && narrativeFailedCount.value > 0) {
+      narrativeFailedJobs.value = await client.memory.narrativeFailedList();
+    } else if (narrativeFailedCount.value === 0) {
+      narrativeBannerOpen.value = false;
+      narrativeFailedJobs.value = [];
+    }
+  } catch {
+    // Best-effort: the narrative subsystem may not be wired yet.
+  }
+}
+
+async function openNarrativeBanner() {
+  narrativeBannerOpen.value = true;
+  try {
+    narrativeFailedJobs.value = await client.memory.narrativeFailedList();
+  } catch {
+    narrativeFailedJobs.value = [];
+  }
+}
+
+async function retryNarrativeJob(jobID: string) {
+  narrativeRetrying.value = jobID;
+  try {
+    await client.memory.retryFailedNarrative(jobID);
+    await refreshNarrativeFailed();
+    if (narrativeBannerOpen.value) {
+      narrativeFailedJobs.value = await client.memory.narrativeFailedList();
+    }
+  } catch (err) {
+    error.value = err instanceof Error ? err.message : String(err);
+  } finally {
+    narrativeRetrying.value = null;
+  }
+}
+
+async function retryAllNarrativeJobs() {
+  for (const job of narrativeFailedJobs.value) {
+    await retryNarrativeJob(job.id);
+  }
+}
+
+// "Mark important" — increments the user_pins promotion counter.
+const markingImportant = ref<string | null>(null); // chunkID being marked
+
+async function toggleMarkImportant(chunk: MemoryChunk) {
+  if (markingImportant.value === chunk.id) return;
+  markingImportant.value = chunk.id;
+  try {
+    // "Mark important" is a toggle: currently pinned → unpin; else pin.
+    // We reuse the narrative userPins path, not the prune-pin path.
+    // The chunk doesn't carry a "narrativeImportant" field in the UI yet,
+    // so we always set pinned=true on first click. A future iteration can
+    // expose a toggle state.
+    await client.memory.markImportant(chunk.id, true);
+  } catch (err) {
+    error.value = err instanceof Error ? err.message : String(err);
+  } finally {
+    markingImportant.value = null;
+  }
+}
+
+// Kind badge helpers.
+function kindLabel(kind: string | undefined): string {
+  switch (kind) {
+    case 'narrative_synthesised': return 'narrative';
+    case 'narrative_extractive': return 'extractive';
+    case 'narrative_extractive_fallback': return 'fallback';
+    case 'raw':
+    default: return 'raw';
+  }
+}
+
+function kindClass(kind: string | undefined): string {
+  switch (kind) {
+    case 'narrative_synthesised': return 'text-accent border-accent';
+    case 'narrative_extractive': return 'text-signal-success border-signal-success';
+    case 'narrative_extractive_fallback': return 'text-signal-warning border-signal-warning';
+    default: return 'text-ink-dim border-border-muted';
+  }
+}
+
 function shortLabel(chunk: MemoryChunk): string {
   if (chunk.title && chunk.title.length > 0) return chunk.title;
   const first = chunk.content.replace(/\s+/g, ' ').trim();
@@ -309,6 +410,7 @@ onMounted(() => {
     activeFilter.value = qk;
   }
   void refresh();
+  void refreshNarrativeFailed();
 });
 
 defineExpose({ refresh });
@@ -406,6 +508,63 @@ defineExpose({ refresh });
         </span>
       </div>
 
+      <!-- Narrative layer: "N narratives unrecoverable" banner (WP07) -->
+      <div
+        v-if="narrativeFailedCount > 0"
+        class="mb-3 rounded-md border border-signal-warning bg-surface-1 px-3 py-2 font-ui text-[12px]"
+        role="alert"
+        data-testid="memory-narrative-failed-banner"
+      >
+        <div class="flex items-center justify-between gap-2">
+          <span class="text-signal-warning">
+            {{ narrativeFailedCount }} narrative{{ narrativeFailedCount === 1 ? '' : 's' }} unrecoverable — synthesis exhausted all retries.
+          </span>
+          <div class="flex gap-2">
+            <button
+              type="button"
+              class="px-2 py-0.5 rounded-sm border border-signal-warning text-[10px] uppercase tracking-[0.18em] text-signal-warning hover:bg-surface-2"
+              data-testid="memory-narrative-banner-toggle"
+              @click="openNarrativeBanner"
+            >
+              Show jobs
+            </button>
+            <button
+              type="button"
+              class="px-2 py-0.5 rounded-sm border border-signal-warning text-[10px] uppercase tracking-[0.18em] text-signal-warning hover:bg-surface-2"
+              data-testid="memory-narrative-retry-all"
+              @click="retryAllNarrativeJobs"
+            >
+              Retry all
+            </button>
+          </div>
+        </div>
+        <!-- Expanded job list -->
+        <ul
+          v-if="narrativeBannerOpen && narrativeFailedJobs.length > 0"
+          class="mt-2 space-y-1"
+          data-testid="memory-narrative-failed-list"
+        >
+          <li
+            v-for="job in narrativeFailedJobs"
+            :key="job.id"
+            class="flex items-center justify-between gap-2 rounded-sm bg-surface-2 px-2 py-1"
+          >
+            <span class="font-mono text-[10px] text-ink-dim truncate max-w-[16rem]" :title="job.lastError">
+              turn {{ job.turnId }} — {{ job.lastError || 'unknown error' }}
+            </span>
+            <button
+              type="button"
+              :disabled="narrativeRetrying === job.id"
+              class="px-2 py-0.5 rounded-sm border border-border-muted text-[10px] uppercase tracking-[0.18em] text-ink-dim hover:bg-surface-2 disabled:opacity-50"
+              :data-testid="`memory-narrative-retry-${job.id}`"
+              @click="retryNarrativeJob(job.id)"
+            >
+              {{ narrativeRetrying === job.id ? 'Retrying…' : 'Retry' }}
+            </button>
+          </li>
+        </ul>
+      </div>
+
       <div
         v-if="error"
         class="mb-3 rounded-md border border-signal-danger bg-surface-1 px-3 py-2 font-ui text-[12px] text-signal-danger"
@@ -446,6 +605,15 @@ defineExpose({ refresh });
             >
               <span aria-hidden="true">{{ scopeGlyph(chunk.scopeKind) }}</span>
               {{ scopeLabel(chunk.scopeKind) }}
+            </span>
+            <!-- Narrative kind badge (WP07) -->
+            <span
+              v-if="chunk.kind"
+              class="font-ui text-[10px] uppercase tracking-[0.18em] px-1.5 py-0.5 rounded-sm border"
+              :class="kindClass(chunk.kind)"
+              :data-testid="`memory-kind-badge-${chunk.id}`"
+            >
+              {{ kindLabel(chunk.kind) }}
             </span>
             <span class="font-mono text-[10px] uppercase tracking-[0.18em] text-ink-subtle">
               {{ formatTimestamp(chunk.createdAt) }}
@@ -502,6 +670,17 @@ defineExpose({ refresh });
                 @click="togglePin(chunk)"
               >
                 {{ chunk.pinned ? 'Unpin' : 'Pin' }}
+              </button>
+              <!-- Mark important (narrative promotion pin) (WP07) -->
+              <button
+                type="button"
+                :disabled="markingImportant === chunk.id"
+                class="px-2 py-1 rounded-sm border border-border-muted text-[10px] uppercase tracking-[0.18em] text-ink-dim hover:text-accent hover:bg-surface-2 disabled:opacity-50"
+                :data-testid="`memory-mark-important-${chunk.id}`"
+                :title="'Boost this memory\'s promotion score'"
+                @click="toggleMarkImportant(chunk)"
+              >
+                {{ markingImportant === chunk.id ? '…' : 'Important' }}
               </button>
               <button
                 type="button"
