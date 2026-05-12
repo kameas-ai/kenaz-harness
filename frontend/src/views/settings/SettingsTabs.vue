@@ -56,6 +56,9 @@ const tabs: ReadonlyArray<Tab> = [
   // workflow-extensions-01KW2D3Y WP02 — Workflows settings tab.
   // Disambiguates via ?tab=workflows. See SettingsView.vue for the mount switch.
   { to: '/settings?tab=workflows', label: 'Workflows', query: 'workflows' },
+  // model-secret-references-01KW7M5A WP10 — Model Secrets settings tab.
+  // Disambiguates via ?tab=secrets. See SettingsView.vue for the mount switch.
+  { to: '/settings?tab=secrets', label: 'Secrets', query: 'secrets' },
   { to: '/providers', label: 'Providers' },
   { to: '/bundles', label: 'Bundles' },
   { to: '/permissions/bash', label: 'Permissions', matchPrefix: '/permissions' },
