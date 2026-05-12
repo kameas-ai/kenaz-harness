@@ -1,0 +1,24 @@
+schema_version: "1"
+id: sleep
+extends: compute
+display_name: Sleep
+description: "Yield for N seconds without consuming a KnobMaxIterations slot (FR-010). Used inside __monitor watch patterns where the model must wait between polls."
+executor: agentgraph.ExecBuiltinTool
+ports:
+  inputs:
+    - { name: args, type: any }
+  outputs:
+    - { name: result, type: any }
+attrs:
+  name:
+    type: string
+    required: true
+    description: "Always kaneaz__sleep."
+    default: kaneaz__sleep
+  seconds:
+    type: integer
+    description: "Duration to sleep. Clamped to [1, 600]."
+    default: 5
+cedar_action: tool.passive
+budget: none
+budget_consumes: []
