@@ -625,6 +625,56 @@ func GateWorkflowDelete(ctx context.Context, g Gate, workflowID string) (Decisio
 	return d, enforce(d)
 }
 
+// GateScheduledChatCreate is the gate-hook helper for scheduled chat run
+// create and update operations (mission scheduled-chat-runs-01KX5R8B, WP03).
+// Returns nil on Allow / NotApplicable; *PolicyDeniedError on Deny.
+// Default-allow when g is nil.
+func GateScheduledChatCreate(ctx context.Context, g Gate, id string) (Decision, error) {
+	if g == nil {
+		return Decision{
+			Outcome:  Allow,
+			Action:   ActionScheduledRunCreate,
+			Resource: ScheduledChatRunUID(id).String(),
+			Reason:   "no engine wired (default-allow)",
+		}, nil
+	}
+	d := g.Evaluate(ctx, UserUID(), ActionScheduledRunCreate, ScheduledChatRunUID(id), nil)
+	return d, enforce(d)
+}
+
+// GateScheduledChatDelete is the gate-hook helper for scheduled chat run
+// delete operations. Returns nil on Allow / NotApplicable; *PolicyDeniedError
+// on Deny. Default-allow when g is nil.
+func GateScheduledChatDelete(ctx context.Context, g Gate, id string) (Decision, error) {
+	if g == nil {
+		return Decision{
+			Outcome:  Allow,
+			Action:   ActionScheduledRunDelete,
+			Resource: ScheduledChatRunUID(id).String(),
+			Reason:   "no engine wired (default-allow)",
+		}, nil
+	}
+	d := g.Evaluate(ctx, UserUID(), ActionScheduledRunDelete, ScheduledChatRunUID(id), nil)
+	return d, enforce(d)
+}
+
+// GateScheduledChatExecute is the gate-hook helper for scheduled chat run
+// dispatch (both cron-triggered and RunNow paths). Returns nil on
+// Allow / NotApplicable; *PolicyDeniedError on Deny. Default-allow when
+// g is nil.
+func GateScheduledChatExecute(ctx context.Context, g Gate, id string) (Decision, error) {
+	if g == nil {
+		return Decision{
+			Outcome:  Allow,
+			Action:   ActionScheduledRunExecute,
+			Resource: ScheduledChatRunUID(id).String(),
+			Reason:   "no engine wired (default-allow)",
+		}, nil
+	}
+	d := g.Evaluate(ctx, UserUID(), ActionScheduledRunExecute, ScheduledChatRunUID(id), nil)
+	return d, enforce(d)
+}
+
 // enforce maps a Decision to a Go error. Allow + NotApplicable both
 // return nil (default-allow stance); Deny returns *PolicyDeniedError.
 func enforce(d Decision) error {
@@ -636,4 +686,69 @@ func enforce(d Decision) error {
 	default:
 		return nil
 	}
+}
+
+// ResolveContext carries the per-resolution context attributes that
+// EvaluateSecretReferenceResolve injects into the Cedar evaluation.
+// Callers populate only the fields that are known at the call site;
+// zero values degrade gracefully.
+type ResolveContext struct {
+	// ToolName is the name of the tool invoking the resolution
+	// (e.g. "web_fetch", "bash", "mcp:<server>").
+	ToolName string
+	// DestinationHost is the outbound request host when known
+	// (e.g. "api.example.com"). Empty for bash invocations.
+	DestinationHost string
+	// IsStreaming is true when the containing session is currently
+	// streaming response tokens.
+	IsStreaming bool
+	// Budget is the remaining per-session-per-locator resolution budget.
+	// Zero means unlimited (no budget enforcement active).
+	Budget int64
+	// AgentKind is "trusted" or "untrusted". Untrusted (un-audited MCP
+	// servers) are default-denied for any resolution.
+	AgentKind string
+}
+
+// EvaluateSecretReferenceResolve runs the Cedar engine against the
+// SecretReference family for the given locator and returns the raw
+// Decision. The function is the gate-hook entry point for the
+// model-secret-references mission (WP02).
+//
+// The default policy ships in
+// core/policy/cedar/policies/secret_reference.cedar and evaluates:
+//   - permit when locator is in the session's exposed_secrets set (the
+//     caller's responsibility to express via rctx).
+//   - forbid when agent_kind == "untrusted".
+//   - forbid when budget == 0 (caller must set 0 to signal exhaustion).
+//
+// g may be nil — returns a Decision with Outcome=Allow and reason "no
+// engine wired (default-allow)" so the test harness and pre-boot paths
+// behave safely.
+func EvaluateSecretReferenceResolve(
+	ctx context.Context,
+	g Gate,
+	locator string,
+	rctx ResolveContext,
+) Decision {
+	if g == nil {
+		return Decision{
+			Outcome:  Allow,
+			Action:   ActionSecretReferenceResolve,
+			Resource: SecretReferenceUID(locator).String(),
+			Reason:   "no engine wired (default-allow)",
+		}
+	}
+	agentKind := rctx.AgentKind
+	if agentKind == "" {
+		agentKind = "trusted"
+	}
+	attrs := map[cedar.String]cedar.Value{
+		cedar.String(CtxKeySecretToolName):        cedar.String(rctx.ToolName),
+		cedar.String(CtxKeySecretDestinationHost): cedar.String(rctx.DestinationHost),
+		cedar.String(CtxKeySecretIsStreaming):      cedar.Boolean(rctx.IsStreaming),
+		cedar.String(CtxKeySecretBudget):           cedar.Long(rctx.Budget),
+		cedar.String(CtxKeySecretAgentKind):        cedar.String(agentKind),
+	}
+	return g.Evaluate(ctx, UserUID(), ActionSecretReferenceResolve, SecretReferenceUID(locator), attrs)
 }

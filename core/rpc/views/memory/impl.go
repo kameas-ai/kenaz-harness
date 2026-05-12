@@ -16,6 +16,8 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -80,8 +82,16 @@ type API struct {
 	narrativeMetrics narrative.MetricsStore
 	narrativeJobs    narrative.JobQueue
 
-	mu     sync.Mutex
-	stats  []PruneStats
+	mu    sync.Mutex
+	stats []PruneStats
+
+	// Capstone (memory-inspection-ui-01KX5R8E).
+	// resummaryMu guards resummaryAt; separate from mu to avoid holding
+	// the prune-stats lock during extractive summary computation.
+	resummaryMu sync.Mutex
+	// resummaryAt tracks when each chunkID was last re-summarised so we
+	// can enforce the 1-per-60s rate limit (WP04).
+	resummaryAt map[string]time.Time
 }
 
 // Config bundles dependencies for New. Embedder + Reader are required
@@ -101,6 +111,10 @@ type API struct {
 // NarrativeMetrics and NarrativeJobs are narrative-layer additions
 // (memory-narrative-layer-01KQ8TD1 WP07). Both are optional; when nil
 // the narrative API methods return stub/no-op results.
+//
+// NarrativeJobs is also used by ResummarizeChunk (capstone WP04) to
+// re-enqueue narrative chunks. When nil, ResummarizeChunk falls through
+// to the extractive fallback for all chunks.
 type Config struct {
 	Store            corememory.Store
 	Embedder         corememory.Embedder
@@ -131,6 +145,7 @@ func New(cfg Config) *API {
 		profiles:         cfg.Profiles,
 		narrativeMetrics: cfg.NarrativeMetrics,
 		narrativeJobs:    cfg.NarrativeJobs,
+		resummaryAt:      make(map[string]time.Time),
 	}
 }
 
@@ -701,6 +716,259 @@ func (a *API) NarrativeMetricsForChunk(ctx context.Context, chunkID string) (Nar
 		LastRetrievedAt: m.LastRetrievedAt,
 		LastCitedAt:     m.LastCitedAt,
 	}, nil
+}
+
+// ── Capstone methods (memory-inspection-ui-01KX5R8E) ──────────────────────────
+
+// ErrResummarizeRateLimited is returned by ResummarizeChunk when the same
+// chunk was re-summarised within the last 60 seconds.
+var ErrResummarizeRateLimited = errors.New("memory: re-summarize rate limit: wait 60s between calls per chunk")
+
+// ErrChunkNotFound is returned by GetChunkProvenance when the chunk ID
+// does not exist in the store.
+var ErrChunkNotFound = errors.New("memory: chunk not found")
+
+// LastRetrieval returns the most recent retrieval report for the given
+// session from the process-scoped GlobalRetrievalHistory ring buffer.
+// Returns an empty report (no error) when no retrieval has occurred
+// for that session in the current process lifetime.
+func (a *API) LastRetrieval(_ context.Context, sessionID string) (RetrievalReport, error) {
+	rec, ok := corememory.GlobalRetrievalHistory().Last(sessionID)
+	if !ok {
+		return RetrievalReport{SessionID: sessionID}, nil
+	}
+	out := RetrievalReport{
+		SessionID: rec.SessionID,
+		Query:     rec.Query,
+		Threshold: rec.Threshold,
+		At:        rec.At,
+		Results:   make([]ScoredChunk, 0, len(rec.Results)),
+	}
+	for _, r := range rec.Results {
+		// Build a minimal Chunk for the wire shape — content is present;
+		// other fields default to zero/empty since the history only stores
+		// what the retriever had at call time.
+		c := Chunk{
+			ID:      r.ChunkID,
+			Content: r.Content,
+			Kind:    r.Kind,
+			Pinned:  r.Pinned,
+		}
+		out.Results = append(out.Results, ScoredChunk{
+			Chunk:      c,
+			Similarity: r.Similarity,
+			Injected:   r.Injected,
+		})
+	}
+	return out, nil
+}
+
+// EmbeddingProbe embeds query against the wired embedder and returns up
+// to limit scored chunks ranked by cosine similarity descending.
+// limit is capped at 50. Returns ErrEmbedderUnavailable when no real
+// embedder is wired.
+func (a *API) EmbeddingProbe(ctx context.Context, query string, limit int) ([]ScoredChunk, error) {
+	if a == nil || a.store == nil {
+		return nil, ErrStoreUnavailable
+	}
+	if a.embedder == nil {
+		return nil, ErrEmbedderUnavailable
+	}
+	if _, ok := a.embedder.(corememory.NoopEmbedder); ok {
+		return nil, ErrEmbedderUnavailable
+	}
+	if query == "" {
+		return nil, nil
+	}
+	const maxLimit = 50
+	if limit <= 0 {
+		limit = 10
+	}
+	if limit > maxLimit {
+		limit = maxLimit
+	}
+	vecs, err := a.embedder.Embed(ctx, []string{query})
+	if err != nil {
+		return nil, fmt.Errorf("memory: embed probe query: %w", err)
+	}
+	if len(vecs) == 0 || len(vecs[0]) == 0 {
+		return nil, errors.New("memory: embedder returned no vectors")
+	}
+	results, err := a.store.Query(ctx, vecs[0], limit)
+	if err != nil {
+		return nil, err
+	}
+	sort.Slice(results, func(i, j int) bool {
+		return results[i].Similarity > results[j].Similarity
+	})
+	out := make([]ScoredChunk, 0, len(results))
+	for _, r := range results {
+		out = append(out, ScoredChunk{
+			Chunk:      toViewChunk(r.Chunk),
+			Similarity: r.Similarity,
+		})
+	}
+	return out, nil
+}
+
+// ResummarizeChunk re-runs narrative synthesis on a single chunk.
+//
+// Rate limit: at most one call per chunkID per 60 seconds.
+//
+// For chunks with TurnID set (narrative chunks): re-enqueues to the
+// Promoter's job queue (async) and returns the current Chunk unchanged.
+// The Promoter will update the chunk content asynchronously.
+//
+// For raw/legacy chunks (TurnID empty): runs ExtractiveBuilder
+// inline and replaces the chunk in the store. Returns the updated Chunk.
+func (a *API) ResummarizeChunk(ctx context.Context, chunkID string) (Chunk, error) {
+	if a == nil || a.store == nil {
+		return Chunk{}, ErrStoreUnavailable
+	}
+
+	// Rate-limit check.
+	a.resummaryMu.Lock()
+	last, seen := a.resummaryAt[chunkID]
+	if seen && time.Since(last) < 60*time.Second {
+		a.resummaryMu.Unlock()
+		return Chunk{}, ErrResummarizeRateLimited
+	}
+	a.resummaryAt[chunkID] = time.Now().UTC()
+	a.resummaryMu.Unlock()
+
+	// Load the chunk.
+	chunks, err := a.store.List(ctx)
+	if err != nil {
+		return Chunk{}, err
+	}
+	var found *corememory.Chunk
+	for i := range chunks {
+		if chunks[i].ID == chunkID {
+			found = &chunks[i]
+			break
+		}
+	}
+	if found == nil {
+		return Chunk{}, ErrChunkNotFound
+	}
+
+	// Narrative chunk with TurnID: re-enqueue to Promoter if available.
+	if found.TurnID != "" && a.narrativeJobs != nil {
+		job := narrative.Job{
+			ID:        "resummary-" + found.TurnID,
+			TurnID:    found.TurnID,
+			SessionID: found.SessionID,
+			RetryAt:   time.Now().UTC(),
+		}
+		_ = a.narrativeJobs.Enqueue(ctx, job) // enqueue is best-effort
+		return toViewChunk(*found), nil
+	}
+
+	// Raw/legacy chunk: run extractive fallback inline.
+	eb := narrative.NewExtractiveBuilder()
+	fallback := eb.BuildTurnFallback(found.Content, "", nil)
+	newContent := fallback.String()
+
+	// Replace the chunk atomically (Delete + Add).
+	newID, err := newChunkID()
+	if err != nil {
+		return Chunk{}, err
+	}
+	updated := *found
+	updated.ID = newID
+	updated.Content = newContent
+	updated.ContentHash = corememory.HashContent(newContent)
+	updated.Kind = "narrative_extractive_fallback"
+
+	// Re-embed the new content if an embedder is available.
+	if a.embedder != nil {
+		if _, ok := a.embedder.(corememory.NoopEmbedder); !ok {
+			vecs, embedErr := a.embedder.Embed(ctx, []string{newContent})
+			if embedErr == nil && len(vecs) > 0 {
+				updated.Embedding = vecs[0]
+			}
+		}
+	}
+
+	if err := a.store.Delete(ctx, chunkID); err != nil {
+		return Chunk{}, fmt.Errorf("memory: delete old chunk: %w", err)
+	}
+	if err := a.store.Add(ctx, updated); err != nil {
+		return Chunk{}, fmt.Errorf("memory: add summarised chunk: %w", err)
+	}
+	return toViewChunk(updated), nil
+}
+
+// GetChunkProvenance returns the full audit chain for a chunk.
+// Aggregates data from the store + narrative metrics + embedder info.
+// No new SQL tables are required.
+func (a *API) GetChunkProvenance(ctx context.Context, chunkID string) (ChunkProvenance, error) {
+	if a == nil || a.store == nil {
+		return ChunkProvenance{}, ErrStoreUnavailable
+	}
+	chunks, err := a.store.List(ctx)
+	if err != nil {
+		return ChunkProvenance{}, err
+	}
+	var found *corememory.Chunk
+	for i := range chunks {
+		if chunks[i].ID == chunkID {
+			found = &chunks[i]
+			break
+		}
+	}
+	if found == nil {
+		return ChunkProvenance{}, ErrChunkNotFound
+	}
+
+	prov := ChunkProvenance{
+		ChunkID:        found.ID,
+		SourceTurn:     found.SourceTurn,
+		HookBoundary:   found.Source,
+		Kind:           found.Kind,
+		ScopePath:      buildScopePath(found.ScopeKind),
+		Pinned:         found.Pinned,
+		RetrievalCount: found.RecallCount,
+		CreatedAt:      found.CreatedAt,
+	}
+
+	// Embedder metadata (read from the wired instance — no network call).
+	if a.embedder != nil {
+		if _, ok := a.embedder.(corememory.NoopEmbedder); !ok {
+			prov.EmbedderKind = a.embedder.Kind()
+			prov.EmbedDimensions = a.embedder.Dimensions()
+		}
+	}
+
+	// Narrative metrics (optional — zero-value safe).
+	if a.narrativeMetrics != nil {
+		m, merr := a.narrativeMetrics.Get(ctx, chunkID)
+		if merr == nil {
+			prov.CitationCount = m.Citations
+			w := narrative.DefaultPromotionWeights()
+			prov.PromotionScore = m.Score(w)
+		}
+	}
+
+	return prov, nil
+}
+
+// buildScopePath converts a ScopeKind constant to a human-readable path
+// string for the provenance drawer. The path shows the progression from
+// narrowest to widest scope that a chunk could be promoted through.
+func buildScopePath(scopeKind string) string {
+	switch scopeKind {
+	case corememory.ScopeKindSession:
+		return "session"
+	case corememory.ScopeKindProject:
+		return strings.Join([]string{"session", "project"}, " → ")
+	case corememory.ScopeKindGlobal:
+		return strings.Join([]string{"session", "project", "global"}, " → ")
+	case corememory.ScopeKindLongTerm:
+		return strings.Join([]string{"session", "project", "global", "long_term"}, " → ")
+	default:
+		return scopeKind
+	}
 }
 
 // Compile-time witness.

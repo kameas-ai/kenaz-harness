@@ -1,0 +1,10 @@
+{
+  "created_at": "2026-05-12T00:00:00.000000+00:00",
+  "friendly_name": "structured output and grammar",
+  "mission_id": "01KX5R8A000000000000000000",
+  "mission_number": null,
+  "mission_slug": "structured-output-and-grammar-01KX5R8A",
+  "mission_type": "software-dev",
+  "slug": "structured-output-and-grammar-01KX5R8A",
+  "target_branch": "release/v0.10.0"
+}

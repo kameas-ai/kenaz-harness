@@ -747,6 +747,31 @@ func (s *FileStore) SaveMCPAutoRestart(enabled bool) error {
 	return s.saveLocked(got)
 }
 
+// ── Key-rotation FileStore accessors (provider-keychain-rotation-01KQ8TD9 WP07) ──
+
+// LoadAutoResumeOnKeyRotation returns whether the harness should automatically
+// redrive the paused turn after a key rotation. Default true (feature enabled).
+func (s *FileStore) LoadAutoResumeOnKeyRotation() (bool, error) {
+	got, err := s.LoadAll()
+	if err != nil {
+		return got.EffectiveAutoResumeOnKeyRotation(), err
+	}
+	return got.EffectiveAutoResumeOnKeyRotation(), nil
+}
+
+// SaveAutoResumeOnKeyRotation persists the auto-resume-on-key-rotation dial.
+// Stored as the inverted AutoResumeOnKeyRotationDisabled bit.
+func (s *FileStore) SaveAutoResumeOnKeyRotation(enabled bool) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	got, err := s.loadLocked()
+	if err != nil {
+		return err
+	}
+	got.AutoResumeOnKeyRotationDisabled = !enabled
+	return s.saveLocked(got)
+}
+
 // ── Builtin filesystem tool FileStore accessors (builtin-filesystem-tools-01KR3N4P) ──
 
 // LoadFSReadEnabled returns the read-family filesystem tool opt-in.
@@ -1558,6 +1583,21 @@ func (m *memoryStore) SaveMCPAutoRestart(enabled bool) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.data.MCPAutoRestartDisabled = !enabled
+	return nil
+}
+
+// ── Key-rotation memoryStore accessors (provider-keychain-rotation-01KQ8TD9 WP07) ──
+
+func (m *memoryStore) LoadAutoResumeOnKeyRotation() (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.data.EffectiveAutoResumeOnKeyRotation(), nil
+}
+
+func (m *memoryStore) SaveAutoResumeOnKeyRotation(enabled bool) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.data.AutoResumeOnKeyRotationDisabled = !enabled
 	return nil
 }
 

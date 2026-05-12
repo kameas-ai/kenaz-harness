@@ -23,6 +23,8 @@ import SlashCommandsView from '@/views/settings/SlashCommandsView.vue';
 import FeatureFlagsView from '@/views/settings/FeatureFlagsView.vue';
 import HooksSettingsView from '@/views/settings/HooksSettingsView.vue';
 import WorkflowsSettingsPanel from '@/views/settings/WorkflowsSettingsPanel.vue';
+import ScheduledChatsPanel from '@/views/settings/scheduledchat/ScheduledChatsPanel.vue';
+import ModelAccessibleSecretsPanel from '@/views/settings/ModelAccessibleSecretsPanel.vue';
 import LongSessionNudgeSettings from '@/components/settings/LongSessionNudgeSettings.vue';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
 import { debouncedSave } from '@/lib/settings';
@@ -95,6 +97,20 @@ const showWorkflowsTab = computed<boolean>(() => {
   return typeof v === 'string' && v === 'workflows';
 });
 
+// scheduled-chat-runs-01KX5R8B WP05 — Scheduled Chats sub-tab.
+// Disambiguates via ?tab=scheduledchats. Mount switch is in <template> below.
+const showScheduledChatsTab = computed<boolean>(() => {
+  const v = route?.query?.tab;
+  return typeof v === 'string' && v === 'scheduledchats';
+});
+
+// model-secret-references-01KW7M5A WP10 — Model Secrets sub-tab.
+// Disambiguates via ?tab=secrets. Mount switch is in <template> below.
+const showSecretsTab = computed<boolean>(() => {
+  const v = route?.query?.tab;
+  return typeof v === 'string' && v === 'secrets';
+});
+
 const settings = ref<Settings>({
   schemaVersion: 1,
   lastRoute: '/sessions',
@@ -109,6 +125,8 @@ const restoreOnLaunch = ref(true);
 const confirmEachEnabled = ref(true);
 // multimodal-io-01KQ8TDF WP08 / FR-023
 const multimodalInputEnabled = ref(true);
+// provider-keychain-rotation-01KQ8TD9 WP07
+const autoResumeOnKeyRotation = ref(true);
 
 /* ── Compaction (mission compaction-strategy-ui-01KQ8TDI §2.9) ─────── */
 
@@ -450,6 +468,11 @@ async function refresh() {
     multimodalInputEnabled.value = true;
   }
   try {
+    autoResumeOnKeyRotation.value = await client.settings.getAutoResumeOnKeyRotation();
+  } catch {
+    autoResumeOnKeyRotation.value = true;
+  }
+  try {
     appInfo.value = await client.appInfo();
   } catch {
     appInfo.value = null;
@@ -683,6 +706,17 @@ async function toggleMultimodalInput() {
   }
 }
 
+// provider-keychain-rotation-01KQ8TD9 WP07 — auto-resume on key rotation.
+async function toggleAutoResumeOnKeyRotation() {
+  autoResumeOnKeyRotation.value = !autoResumeOnKeyRotation.value;
+  try {
+    await client.settings.setAutoResumeOnKeyRotation(autoResumeOnKeyRotation.value);
+  } catch {
+    // Revert visually if the write failed.
+    autoResumeOnKeyRotation.value = !autoResumeOnKeyRotation.value;
+  }
+}
+
 // cross-session-search WP07 — searchEnabled toggle. Inverts the
 // persisted SearchDisabled bit so the on-the-wire shape matches the
 // "default ON / opt-out" contract documented in core/rpc/views/settings.
@@ -864,6 +898,24 @@ onMounted(() => {
       data-testid="settings-workflows-pane"
     >
       <WorkflowsSettingsPanel />
+    </div>
+
+    <!-- scheduled-chat-runs-01KX5R8B WP05 — Scheduled Chats sub-tab. -->
+    <div
+      v-else-if="showScheduledChatsTab"
+      class="px-6 py-4"
+      data-testid="settings-scheduledchats-pane"
+    >
+      <ScheduledChatsPanel />
+    </div>
+
+    <!-- model-secret-references-01KW7M5A WP10 — Model Secrets sub-tab. -->
+    <div
+      v-else-if="showSecretsTab"
+      class="px-6 py-4 max-w-3xl"
+      data-testid="settings-secrets-pane"
+    >
+      <ModelAccessibleSecretsPanel />
     </div>
 
     <div
@@ -1212,6 +1264,32 @@ onMounted(() => {
           <span class="font-mono">HARNESS_MULTIMODAL_IN</span> env flag
           provides a system-level override regardless of this toggle.
           Default: ON.
+        </p>
+      </section>
+
+      <!-- provider-keychain-rotation-01KQ8TD9 WP07 — auto-resume on key rotation -->
+      <section
+        v-if="appInfo?.keychainRotationEnabled !== false"
+        data-testid="auto-resume-key-rotation-section"
+      >
+        <h2 class="font-ui text-[11px] uppercase tracking-[0.18em] text-ink-subtle">
+          API Key Rotation
+        </h2>
+        <label class="mt-2 flex items-center gap-3 font-ui text-[12px] text-ink">
+          <input
+            type="checkbox"
+            class="accent-accent"
+            :checked="autoResumeOnKeyRotation"
+            data-testid="auto-resume-key-rotation-toggle"
+            @change="toggleAutoResumeOnKeyRotation"
+          />
+          Auto-resume after rotating an API key
+        </label>
+        <p class="mt-1 text-[11px] text-ink-muted">
+          When a chat turn fails with an authentication error, the harness pauses
+          and lets you rotate the API key. With this on, the failed turn is
+          automatically redriven after a successful rotation. When off, you must
+          manually resend the turn. Default: ON.
         </p>
       </section>
 

@@ -56,6 +56,26 @@ func Validate(w Workflow) error {
 		}
 	}
 
+	// Secrets block validation (model-secret-references-01KW7M5A WP12).
+	// Each entry must have a non-empty, whitespace-free locator and must
+	// not start with @secret: (the prefix is added by the resolver).
+	seenLocators := make(map[string]bool, len(w.Secrets))
+	for _, s := range w.Secrets {
+		if strings.TrimSpace(s.Locator) == "" {
+			return fmt.Errorf("workflows: secrets entry has empty locator")
+		}
+		if strings.ContainsAny(s.Locator, " \t\n\r") {
+			return fmt.Errorf("workflows: secrets locator %q must not contain whitespace", s.Locator)
+		}
+		if strings.HasPrefix(s.Locator, "@secret:") {
+			return fmt.Errorf("workflows: secrets locator %q must not start with @secret: (use bare locator, e.g. user:my-key)", s.Locator)
+		}
+		if seenLocators[s.Locator] {
+			return fmt.Errorf("workflows: duplicate secrets locator %q", s.Locator)
+		}
+		seenLocators[s.Locator] = true
+	}
+
 	// Inputs map.
 	inputSet := make(map[string]bool, len(w.Inputs))
 	for _, in := range w.Inputs {

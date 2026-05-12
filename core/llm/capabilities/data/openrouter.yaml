@@ -9,6 +9,12 @@ defaults:
   reasoning: false
   cancellation: true
   usage_reporting: true
+  # Structured-output capability defaults (structured-output-and-grammar-01KX5R8A FR-002).
+  # OpenRouter passes through provider-native structured output. Default false;
+  # known models with reliable structured output are enabled per-model below.
+  structured_output: false
+  grammar: false
+  regex_grammar: false
   # Attachment limits (multimodal-io-01KQ8TDF FR-006)
   # OpenRouter proxies to the underlying provider via OpenAI-shape requests.
   # image_url base64 data URLs work for vision-capable models.
@@ -35,6 +41,9 @@ models:
     reasoning: false
     cancellation: true
     usage_reporting: true
+    structured_output: true
+    grammar: false
+    regex_grammar: false
     image_input: true
     document_input: true
     max_image_bytes: 5242880
@@ -51,6 +60,9 @@ models:
     reasoning: false
     cancellation: true
     usage_reporting: true
+    structured_output: true
+    grammar: false
+    regex_grammar: false
     image_input: true
     document_input: true
     max_image_bytes: 5242880
@@ -87,7 +99,7 @@ models:
     document_input: false
     max_image_bytes: 5242880
     max_image_count_per_message: 20
-  # GPT-4o-via-OpenRouter: vision, no documents
+  # GPT-4o-via-OpenRouter: vision, no documents, native structured output
   - match: "openai/gpt-4o*"
     streaming: true
     tool_calling: true
@@ -98,6 +110,9 @@ models:
     reasoning: false
     cancellation: true
     usage_reporting: true
+    structured_output: true
+    grammar: false
+    regex_grammar: false
     image_input: true
     document_input: false
     max_image_bytes: 20971520

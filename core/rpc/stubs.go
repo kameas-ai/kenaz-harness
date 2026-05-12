@@ -58,6 +58,10 @@ func (s *stubLLM) UpdateProviderCredential(_ context.Context, _, _ string) error
 func (s *stubLLM) GetAttachmentLimits(_ context.Context, _, _ string) (llm.AttachmentLimitsView, error) {
 	return llm.AttachmentLimitsView{}, nil
 }
+func (s *stubLLM) TestAndRotateKey(_ context.Context, _, _, _ string) (llm.RotationResult, error) {
+	return llm.RotationResult{}, errNotWired
+}
+func (s *stubLLM) ResumeAfterKeyRotation(_ context.Context, _ string) error { return errNotWired }
 
 // ── a2a ────────────────────────────────────────────────────────────────
 
@@ -212,6 +216,21 @@ func (s *stubMemory) NarrativeFailedList(_ context.Context) ([]memoryview.Narrat
 func (s *stubMemory) RetryFailedNarrative(_ context.Context, _ string) error { return nil }
 func (s *stubMemory) NarrativeMetricsForChunk(_ context.Context, _ string) (memoryview.NarrativeMetrics, error) {
 	return memoryview.NarrativeMetrics{}, nil
+}
+
+// ── memory capstone stubs (memory-inspection-ui-01KX5R8E) ─────────────
+
+func (s *stubMemory) LastRetrieval(_ context.Context, sessionID string) (memoryview.RetrievalReport, error) {
+	return memoryview.RetrievalReport{SessionID: sessionID}, nil
+}
+func (s *stubMemory) EmbeddingProbe(_ context.Context, _ string, _ int) ([]memoryview.ScoredChunk, error) {
+	return []memoryview.ScoredChunk{}, nil
+}
+func (s *stubMemory) ResummarizeChunk(_ context.Context, _ string) (memoryview.Chunk, error) {
+	return memoryview.Chunk{}, errNotWired
+}
+func (s *stubMemory) GetChunkProvenance(_ context.Context, _ string) (memoryview.ChunkProvenance, error) {
+	return memoryview.ChunkProvenance{}, errNotWired
 }
 
 // ── dials ──────────────────────────────────────────────────────────────

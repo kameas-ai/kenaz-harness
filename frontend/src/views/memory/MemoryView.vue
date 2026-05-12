@@ -42,15 +42,19 @@ import type {
   MemoryPrunePreview,
   MemoryScopeKind,
   NarrativeJobStatus,
+  RetrievalReport,
+  ScoredChunk,
 } from '@/lib/types';
 import MemoryHealthPanel from './MemoryHealthPanel.vue';
 import PrunePreviewModal from './PrunePreviewModal.vue';
+import ProvenanceDrawer from './ProvenanceDrawer.vue';
+import type { ChunkProvenance } from '@/lib/types';
 
 const client = useHarnessClient();
 const route = useRoute();
 
-// §2.4 — top-level tab: "Chunks" (existing) vs. "Health" (new).
-type MainTab = 'chunks' | 'health';
+// §2.4 — top-level tab: "Chunks" | "Health" | "Retrieval inspector"
+type MainTab = 'chunks' | 'health' | 'retrieval';
 const activeMainTab = ref<MainTab>('chunks');
 
 type FilterPill = 'all' | MemoryScopeKind;
@@ -358,6 +362,33 @@ async function toggleMarkImportant(chunk: MemoryChunk) {
   }
 }
 
+// ── Provenance Drawer (memory-inspection-ui-01KX5R8E WP08) ──────────────
+
+const provenanceDrawerOpen = ref(false);
+const provenanceChunk = ref<ChunkProvenance | null>(null);
+const provenanceLoading = ref(false);
+const provenanceError = ref<string | null>(null);
+
+async function openProvenance(chunkID: string) {
+  provenanceDrawerOpen.value = true;
+  provenanceLoading.value = true;
+  provenanceError.value = null;
+  provenanceChunk.value = null;
+  try {
+    provenanceChunk.value = await client.memory.getChunkProvenance(chunkID);
+  } catch (err) {
+    provenanceError.value = err instanceof Error ? err.message : String(err);
+  } finally {
+    provenanceLoading.value = false;
+  }
+}
+
+function closeProvenance() {
+  provenanceDrawerOpen.value = false;
+  provenanceChunk.value = null;
+  provenanceError.value = null;
+}
+
 // Kind badge helpers.
 function kindLabel(kind: string | undefined): string {
   switch (kind) {
@@ -402,6 +433,51 @@ function formatTimestamp(iso: string): string {
   return d.toLocaleString();
 }
 
+// ── Capstone: Retrieval Inspector + Embedding Probe (memory-inspection-ui-01KX5R8E WP07) ──
+
+// Active-session retrieval inspector (§2.1).
+const retrievalReport = ref<RetrievalReport | null>(null);
+const retrievalLoading = ref(false);
+const retrievalError = ref<string | null>(null);
+const retrievalSessionID = ref('');
+
+async function loadRetrieval() {
+  retrievalLoading.value = true;
+  retrievalError.value = null;
+  try {
+    const sid = retrievalSessionID.value.trim();
+    retrievalReport.value = await client.memory.lastRetrieval(sid);
+  } catch (err) {
+    retrievalError.value = err instanceof Error ? err.message : String(err);
+  } finally {
+    retrievalLoading.value = false;
+  }
+}
+
+// Embedding probe (§2.2).
+const probeQuery = ref('');
+const probeResults = ref<ScoredChunk[]>([]);
+const probeLoading = ref(false);
+const probeError = ref<string | null>(null);
+
+async function runProbe() {
+  if (!probeQuery.value.trim()) return;
+  probeLoading.value = true;
+  probeError.value = null;
+  probeResults.value = [];
+  try {
+    probeResults.value = await client.memory.embeddingProbe(probeQuery.value, 10);
+  } catch (err) {
+    probeError.value = err instanceof Error ? err.message : String(err);
+  } finally {
+    probeLoading.value = false;
+  }
+}
+
+function formatSimilarity(v: number): string {
+  return v.toFixed(2);
+}
+
 onMounted(() => {
   // Honour ?scopeKind=… query so deep-links from the project landing
   // page land on the right pill (WP07 T002).
@@ -425,7 +501,7 @@ defineExpose({ refresh });
       subtitle="Every snippet you have asked the harness to remember. These are pulled into future conversations across all sessions."
     />
 
-    <!-- §2.4 — Main tab bar: Chunks / Health -->
+    <!-- §2.4 — Main tab bar: Chunks / Health / Retrieval -->
     <div
       class="flex border-b border-border-muted px-6"
       role="tablist"
@@ -433,7 +509,11 @@ defineExpose({ refresh });
       data-testid="memory-main-tabs"
     >
       <button
-        v-for="tab in [{ id: 'chunks', label: 'Chunks' }, { id: 'health', label: 'Health' }]"
+        v-for="tab in [
+          { id: 'chunks', label: 'Chunks' },
+          { id: 'health', label: 'Health' },
+          { id: 'retrieval', label: 'Retrieval inspector' },
+        ]"
         :key="tab.id"
         type="button"
         role="tab"
@@ -456,6 +536,214 @@ defineExpose({ refresh });
       v-if="activeMainTab === 'health'"
       data-testid="memory-health-tab-panel"
     />
+
+    <!-- §2.1 + §2.2 — Retrieval inspector tab panel (capstone) -->
+    <div
+      v-if="activeMainTab === 'retrieval'"
+      class="px-6 py-4 max-w-4xl"
+      data-testid="memory-retrieval-tab-panel"
+    >
+      <!-- Last retrieval section -->
+      <section class="mb-6">
+        <h2 class="font-ui text-[11px] uppercase tracking-[0.18em] text-ink-subtle mb-2">
+          Last turn retrieval
+        </h2>
+        <div class="mb-3 flex items-center gap-2">
+          <input
+            v-model="retrievalSessionID"
+            type="text"
+            placeholder="Session ID (leave empty for active session)"
+            class="flex-1 rounded-sm border border-border-muted bg-surface-0 px-3 py-1.5 font-mono text-[12px] text-ink placeholder:text-ink-dim focus:border-accent focus:outline-none"
+            data-testid="memory-retrieval-session-input"
+            @keyup.enter="loadRetrieval"
+          />
+          <button
+            type="button"
+            class="px-3 py-1.5 rounded-sm border border-border-muted font-ui text-[11px] uppercase tracking-[0.18em] text-ink-dim hover:bg-surface-2 disabled:opacity-50"
+            :disabled="retrievalLoading"
+            data-testid="memory-retrieval-load"
+            @click="loadRetrieval"
+          >
+            {{ retrievalLoading ? 'Loading…' : 'Load' }}
+          </button>
+        </div>
+        <div
+          v-if="retrievalError"
+          class="mb-2 rounded-sm border border-signal-danger px-3 py-2 font-ui text-[12px] text-signal-danger"
+          role="alert"
+          data-testid="memory-retrieval-error"
+        >
+          {{ retrievalError }}
+        </div>
+        <!-- Empty state -->
+        <div
+          v-if="!retrievalLoading && retrievalReport !== null && !retrievalReport.query"
+          class="rounded-md border border-border-muted bg-surface-1 px-4 py-6 text-center"
+          data-testid="memory-retrieval-empty"
+        >
+          <p class="font-ui text-sm text-ink-dim">
+            No retrievals recorded for this session yet. Memory retrieval data is
+            captured after the first prompt is sent.
+          </p>
+        </div>
+        <!-- Retrieval report -->
+        <div
+          v-else-if="retrievalReport && retrievalReport.query"
+          data-testid="memory-retrieval-report"
+        >
+          <div class="mb-2 font-ui text-[12px]">
+            <span class="text-ink-dim">Query: </span>
+            <span class="font-mono text-ink" data-testid="memory-retrieval-query">{{ retrievalReport.query }}</span>
+          </div>
+          <!-- Injected chunks -->
+          <div class="mb-3">
+            <p class="font-ui text-[10px] uppercase tracking-[0.18em] text-signal-success mb-1">
+              Injected into context
+            </p>
+            <ul class="space-y-1" data-testid="memory-retrieval-injected">
+              <li
+                v-for="r in retrievalReport.results.filter(r => r.injected)"
+                :key="r.chunk.id"
+                class="rounded-sm border-l-2 border-signal-success bg-surface-1 px-3 py-2"
+                :data-testid="`memory-retrieval-injected-${r.chunk.id}`"
+              >
+                <div class="flex items-baseline gap-2 mb-1">
+                  <span class="font-mono text-[11px] font-bold text-signal-success">
+                    {{ formatSimilarity(r.similarity) }}
+                  </span>
+                  <span
+                    v-if="r.chunk.kind"
+                    class="font-ui text-[10px] uppercase tracking-[0.18em] text-ink-dim"
+                  >
+                    {{ r.chunk.kind }}
+                  </span>
+                  <span
+                    v-if="r.chunk.pinned"
+                    class="font-ui text-[10px] uppercase tracking-[0.18em] text-accent"
+                    title="Pinned"
+                  >★ pinned</span>
+                </div>
+                <p class="font-ui text-[12px] text-ink line-clamp-2">
+                  {{ r.chunk.content }}
+                </p>
+              </li>
+              <li
+                v-if="retrievalReport.results.filter(r => r.injected).length === 0"
+                class="font-ui text-[12px] text-ink-dim"
+              >
+                No chunks were injected.
+              </li>
+            </ul>
+          </div>
+          <!-- Below-threshold chunks -->
+          <div>
+            <p class="font-ui text-[10px] uppercase tracking-[0.18em] text-ink-dim mb-1">
+              Below threshold (not injected, threshold {{ formatSimilarity(retrievalReport.threshold) }})
+            </p>
+            <ul class="space-y-1" data-testid="memory-retrieval-below">
+              <li
+                v-for="r in retrievalReport.results.filter(r => !r.injected)"
+                :key="r.chunk.id"
+                class="rounded-sm border-l-2 border-border-muted bg-surface-1 px-3 py-2 opacity-70"
+                :data-testid="`memory-retrieval-below-${r.chunk.id}`"
+              >
+                <div class="flex items-baseline gap-2 mb-1">
+                  <span class="font-mono text-[11px] text-ink-dim">
+                    {{ formatSimilarity(r.similarity) }}
+                  </span>
+                  <span
+                    v-if="r.chunk.kind"
+                    class="font-ui text-[10px] uppercase tracking-[0.18em] text-ink-dim"
+                  >
+                    {{ r.chunk.kind }}
+                  </span>
+                </div>
+                <p class="font-ui text-[12px] text-ink-dim line-clamp-1">
+                  {{ r.chunk.content }}
+                </p>
+              </li>
+              <li
+                v-if="retrievalReport.results.filter(r => !r.injected).length === 0"
+                class="font-ui text-[12px] text-ink-dim"
+              >
+                All candidates were above the threshold.
+              </li>
+            </ul>
+          </div>
+        </div>
+      </section>
+
+      <!-- Embedding probe section (§2.2) -->
+      <section>
+        <h2 class="font-ui text-[11px] uppercase tracking-[0.18em] text-ink-subtle mb-2">
+          Embedding probe
+        </h2>
+        <p class="font-ui text-[12px] text-ink-dim mb-3">
+          Enter any text to see which memory chunks it would retrieve, ranked by cosine similarity. Useful for debugging "why didn't the model recall X?"
+        </p>
+        <div class="mb-3 flex items-center gap-2">
+          <input
+            v-model="probeQuery"
+            type="text"
+            placeholder="Enter probe query…"
+            class="flex-1 rounded-sm border border-border-muted bg-surface-0 px-3 py-1.5 font-mono text-[12px] text-ink placeholder:text-ink-dim focus:border-accent focus:outline-none"
+            data-testid="memory-probe-input"
+            @keyup.enter="runProbe"
+          />
+          <button
+            type="button"
+            class="px-3 py-1.5 rounded-sm border border-accent font-ui text-[11px] uppercase tracking-[0.18em] text-accent hover:bg-surface-2 disabled:opacity-50"
+            :disabled="probeLoading || !probeQuery.trim()"
+            data-testid="memory-probe-run"
+            @click="runProbe"
+          >
+            {{ probeLoading ? 'Probing…' : 'Probe' }}
+          </button>
+        </div>
+        <div
+          v-if="probeError"
+          class="mb-2 rounded-sm border border-signal-danger px-3 py-2 font-ui text-[12px] text-signal-danger"
+          role="alert"
+          data-testid="memory-probe-error"
+        >
+          {{ probeError }}
+        </div>
+        <ul
+          v-if="probeResults.length > 0"
+          class="space-y-1"
+          data-testid="memory-probe-results"
+        >
+          <li
+            v-for="r in probeResults"
+            :key="r.chunk.id"
+            class="rounded-sm border border-border-muted bg-surface-1 px-3 py-2"
+            :data-testid="`memory-probe-result-${r.chunk.id}`"
+          >
+            <div class="flex items-baseline gap-2 mb-1">
+              <span class="font-mono text-[11px] font-bold text-accent">
+                {{ formatSimilarity(r.similarity) }}
+              </span>
+              <span
+                v-if="r.chunk.kind"
+                class="font-ui text-[10px] uppercase tracking-[0.18em] text-ink-dim"
+              >
+                {{ r.chunk.kind }}
+              </span>
+            </div>
+            <p class="font-ui text-[12px] text-ink line-clamp-2">
+              {{ r.chunk.content }}
+            </p>
+          </li>
+        </ul>
+        <div
+          v-else-if="!probeLoading && probeQuery.trim() && probeResults.length === 0"
+          class="font-ui text-[12px] text-ink-dim"
+          data-testid="memory-probe-no-results"
+        >
+          No matching chunks found. Try a different query or check that embeddings are configured.
+        </div>
+      </section>
+    </div><!-- end retrieval tab panel -->
 
     <div v-if="activeMainTab === 'chunks'" class="px-6 py-4 max-w-4xl">
       <!-- Scope filter pills (WP06 T005) -->
@@ -682,6 +970,16 @@ defineExpose({ refresh });
               >
                 {{ markingImportant === chunk.id ? '…' : 'Important' }}
               </button>
+              <!-- Provenance (WP08) -->
+              <button
+                type="button"
+                class="px-2 py-1 rounded-sm border border-border-muted text-[10px] uppercase tracking-[0.18em] text-ink-dim hover:text-accent hover:bg-surface-2"
+                :data-testid="`memory-provenance-${chunk.id}`"
+                :title="'View full audit chain for this chunk'"
+                @click="openProvenance(chunk.id)"
+              >
+                Provenance
+              </button>
               <button
                 type="button"
                 class="px-2 py-1 rounded-sm border border-border-muted text-[10px] uppercase tracking-[0.18em] text-ink-dim hover:text-signal-danger hover:bg-surface-2"
@@ -768,5 +1066,14 @@ defineExpose({ refresh });
         </div>
       </div>
     </div>
+
+    <!-- §2.6 — Provenance drawer (WP08) -->
+    <ProvenanceDrawer
+      v-if="provenanceDrawerOpen && (provenanceChunk || provenanceLoading || provenanceError)"
+      :provenance="provenanceChunk ?? { chunkId: '', scopePath: '', pinned: false, retrievalCount: 0, citationCount: 0, promotionScore: 0, createdAt: '' }"
+      :loading="provenanceLoading"
+      :error="provenanceError"
+      @close="closeProvenance"
+    />
   </div>
 </template>

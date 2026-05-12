@@ -84,14 +84,17 @@ import (
 	updateview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/update"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/workflow"
 	workflowsview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/workflows"
+	scheduledchatview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/scheduledchat"
 	storageview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/storage"
 	elicitview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/elicit"
+	secretsview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/secrets"
 	"github.com/sigil-tech/kaneaz-harness/core/autonomy"
 	"github.com/sigil-tech/kaneaz-harness/core/secrets"
 	coreslashcmd "github.com/sigil-tech/kaneaz-harness/core/slashcmd"
 	corebash "github.com/sigil-tech/kaneaz-harness/core/tools/bash"
 	coreskill "github.com/sigil-tech/kaneaz-harness/core/tools/skill"
 	secretsref "github.com/sigil-tech/kaneaz-harness/core/secrets/ref"
+	credstoreRefs "github.com/sigil-tech/kaneaz-harness/core/credstore/refs"
 	"github.com/sigil-tech/kaneaz-harness/core/session"
 	"github.com/sigil-tech/kaneaz-harness/core/storage"
 	"github.com/sigil-tech/kaneaz-harness/core/toolloop"
@@ -99,6 +102,7 @@ import (
 	corewf "github.com/sigil-tech/kaneaz-harness/core/workflows"
 	wfcatalogpkg "github.com/sigil-tech/kaneaz-harness/core/workflows/catalog"
 	wfsched "github.com/sigil-tech/kaneaz-harness/core/workflows/scheduler"
+	schedulerPkg "github.com/sigil-tech/kaneaz-harness/core/scheduler"
 	"github.com/zalando/go-keyring"
 )
 
@@ -191,6 +195,19 @@ type HarnessAPI interface {
 	// the kaneaz__ask_user_question tool blocks on OpenDialog until
 	// the answer arrives.
 	Elicit() elicitview.ElicitAPI
+
+	// ScheduledChat exposes the scheduled-chat-runs CRUD + dispatch surface
+	// (mission scheduled-chat-runs-01KX5R8B, v0.10.0). The frontend's
+	// Settings → Scheduled Chats panel creates and manages prompt-template
+	// jobs fired by the existing core/scheduler cron engine.
+	ScheduledChat() scheduledchatview.ScheduledChatAPI
+
+	// Secrets exposes the model-accessible secrets RPC surface (mission
+	// model-secret-references-01KW7M5A WP10). The frontend's
+	// ModelAccessibleSecretsPanel reads SecretRows, exposes new secrets
+	// via ExposeSecret, and revokes them via RevokeSecret. No plaintext
+	// is ever returned to the frontend.
+	Secrets() secretsview.SecretsAPI
 }
 
 // ShellStatus drives the Toolbar status pills + LegendBar live-rate
@@ -219,6 +236,12 @@ type AppInfo struct {
 	// Controls whether the /policy route registers and write-path RPCs are
 	// available (cedar-policy-editor-ui-01KQ8TD6 WP01).
 	PolicyEditorEnabled bool `json:"policyEditorEnabled"`
+	// KeychainRotationEnabled is true when the HARNESS_KEYCHAIN_ROTATION env
+	// var is not set to "off", "0", or "false". The frontend uses this to
+	// hide the "Auto-resume after rotating an API key" Settings toggle and
+	// the AuthFailureToast rotate button when the feature is disabled.
+	// (provider-keychain-rotation-01KQ8TD9 WP07)
+	KeychainRotationEnabled bool `json:"keychainRotationEnabled"`
 }
 
 // WindowSize mirrors the charter shape.
@@ -289,6 +312,10 @@ type API struct {
 	// Read once at boot; cached here so AppInfo can report it without
 	// an os.Getenv on every call (cedar-policy-editor-ui-01KQ8TD6 WP01).
 	policyEditorEnabled bool
+	// keychainRotationEnabled mirrors the HARNESS_KEYCHAIN_ROTATION env flag.
+	// Read once at boot; cached here so AppInfo can report it without
+	// an os.Getenv on every call (provider-keychain-rotation-01KQ8TD9 WP07).
+	keychainRotationEnabled bool
 
 	// cedarProposeResolver is the in-process resolver for pending
 	// cedar:propose-pending requests (WP07 of
@@ -312,6 +339,11 @@ type API struct {
 	dialsAPI        dialsview.DialsAPI
 	searchAPI       searchview.SearchAPI
 	storageAPI      storageview.StorageAPI
+	// memStoreRef is the long-term memory store held for the search adapter
+	// (unified-search-01KX5R8C WP03). The main memory path (memoryAPI) is
+	// already wired; this ref lets the search lazy-init access it without
+	// re-opening the gob file.
+	memStoreRef corememory.Store
 
 	// Node manifest catalog (mission agent-kernel-graph-node-catalog;
 	// WP07). The manager owns the resolved catalog + user-override
@@ -373,11 +405,26 @@ type API struct {
 	// and wired with a concrete Delegate into the askuserquestion tool.
 	elicitAPI *elicitview.API
 
+	// secretsAPI is the model-accessible secrets RPC surface (mission
+	// model-secret-references-01KW7M5A WP10). Backed by exposureIdx.
+	secretsAPI secretsview.SecretsAPI
+	// exposureIdx is the process-singleton ExposureIndex used by the
+	// list_secrets and web_fetch built-in tools. Constructed once in
+	// New() so every component that needs to read or write the exposure
+	// set (builtins, secrets view, future slash commands) sees the same
+	// instance.
+	exposureIdx *secrets.ExposureIndex
+
 	// wfScheduler is the cron-backed workflow scheduler
 	// (workflows-agentic-01KW2D3X WP02). Started on SetContext; stopped
 	// on Shutdown. nil when the workflows feature is disabled or when the
 	// chassis has no DB.
 	wfScheduler *wfsched.CronScheduler
+
+	// scheduledChatAPI is the scheduled-chat-runs RPC surface
+	// (mission scheduled-chat-runs-01KX5R8B, WP04). Wired in New when
+	// a real Core with a DB is available; nil DB path returns ErrStoreUnavailable.
+	scheduledChatAPI scheduledchatview.ScheduledChatAPI
 }
 
 // Builtins returns the in-binary tool registry. Used by the chat-input
@@ -711,6 +758,14 @@ func New(c *core.Core) *API {
 		}()
 	}
 
+	// model-secret-references-01KW7M5A WP10: construct the process-singleton
+	// ExposureIndex. All secrets exposed via /secret add or the Settings
+	// Secrets panel are stored here. The list_secrets and web_fetch built-in
+	// tools, the refs.Resolver, and the secrets view all share this instance.
+	a.exposureIdx = secrets.NewExposureIndex()
+	a.secretsAPI = secretsview.NewAPI(a.exposureIdx)
+	logging.L().Info("rpc.boot.exposure_index_created")
+
 	hooksRunner, hookRegistry, hookBuiltins := newHooksStack(c, retriever, memStore, embedder)
 	// Register skill-catalog pre_send hook so the model sees the
 	// model-invokable commands at send time (model-invoked-skills-catalog-01KZNP3E WP03).
@@ -794,7 +849,7 @@ func New(c *core.Core) *API {
 	a.corpusMgr = newCorpusManager(c, embedder)
 	a.graphMgr = newGraphManagerWithDeps(c, a.convMgr, a.corpusMgr, memStore, embedder, a_bashStore)
 
-	stack := newLLMStack(c, a.broker, personalForLLM, hooksRunner, attMgr, confirmEachEnabled, artifactSink, artifactSinkConcrete, settingsImpl, a_bashStore, artMgr, a.graphMgr, a.promptRegistry, usageMgr, a.elicitAPI, slashDispatch)
+	stack := newLLMStack(c, a.broker, personalForLLM, hooksRunner, attMgr, confirmEachEnabled, artifactSink, artifactSinkConcrete, settingsImpl, a_bashStore, artMgr, a.graphMgr, a.promptRegistry, usageMgr, a.elicitAPI, slashDispatch, a.exposureIdx)
 	a.llmAPI = stack.api
 	a.stdioPool = stack.pool
 	a.builtins = stack.builtins
@@ -917,6 +972,8 @@ func New(c *core.Core) *API {
 		Reader:   newMemoryMessageReader(c),
 		Profiles: &personalProfileLister{store: personalForLLM},
 	})
+	// Keep a ref for the search adapter (unified-search-01KX5R8C WP03).
+	a.memStoreRef = memStore
 	if hookRegistry != nil {
 		a.hooksAPI = hooksview.New(hooksview.Config{
 			Registry: hookRegistry,
@@ -1038,7 +1095,7 @@ func New(c *core.Core) *API {
 	// the view degrades to the registry-only API which returns "not wired"
 	// for user commands.
 	{
-		slashRegistry := newSlashRegistry(c, a.llmAPI, memStore, embedder, a.branchesAPI, a.workflowsAPI)
+		slashRegistry := newSlashRegistry(c, a.llmAPI, memStore, embedder, a.branchesAPI, a.workflowsAPI, a.exposureIdx)
 		if slashStore != nil && slashDispatch != nil {
 			a.slashAPI = slashview.NewWithStore(slashRegistry, slashStore, slashDispatch)
 			logging.L().Info("rpc.slashcmd.user_wired",
@@ -1119,6 +1176,17 @@ func New(c *core.Core) *API {
 		a.policyEditorEnabled = policyEditorEnabled
 		a.cedarPolicyAPI = cedarpolicyview.NewAPIWithOptions(cedarEng, cedarDataDir, nil, policyEditorEnabled)
 
+		// Read HARNESS_KEYCHAIN_ROTATION once at boot. Default = on ("").
+		// Set to "off", "0", or "false" to disable the rotation UI.
+		// (provider-keychain-rotation-01KQ8TD9 WP07)
+		kcrEnv := os.Getenv("HARNESS_KEYCHAIN_ROTATION")
+		switch kcrEnv {
+		case "off", "0", "false":
+			a.keychainRotationEnabled = false
+		default:
+			a.keychainRotationEnabled = true
+		}
+
 		// Permissions view — uses the process-singleton prompt registry
 		// constructed at api.New() time (right after the broker) so the
 		// gate sites (bash, fs, cred, tool) and the permissions view
@@ -1144,6 +1212,22 @@ func New(c *core.Core) *API {
 	a.elicitAPI = elicitview.New(elicitview.Config{
 		Emitter: WailsEmitter{},
 	})
+
+	// Scheduled-chat-runs view (mission scheduled-chat-runs-01KX5R8B, WP04).
+	// Wired with the SQLiteChatStore when a real DB is available; test
+	// chassis path (c == nil or no storage) silently leaves the store nil
+	// which causes the accessor to return a graceful-empty surface.
+	{
+		var chatStore schedulerPkg.ScheduledChatStore
+		if c != nil {
+			if db := c.Storage(); db != nil {
+				chatStore = schedulerPkg.NewSQLiteChatStore(db)
+			}
+		}
+		a.scheduledChatAPI = scheduledchatview.New(scheduledchatview.Config{
+			Store: chatStore,
+		})
+	}
 
 	a.bindings = NewBindings(a)
 	if a.settingsImpl != nil {
@@ -1217,7 +1301,7 @@ func New(c *core.Core) *API {
 // workflows API (used by /wf).
 // Returns nil when registry construction fails; the view degrades
 // to a friendly error response on every Execute.
-func newSlashRegistry(c *core.Core, llmAPI llm.LLMConnectorAPI, memStore corememory.Store, embedder corememory.Embedder, branchesAPI branchesview.BranchesAPI, workflowsAPI workflowsview.WorkflowsAPI) *coreslashcmd.Registry {
+func newSlashRegistry(c *core.Core, llmAPI llm.LLMConnectorAPI, memStore corememory.Store, embedder corememory.Embedder, branchesAPI branchesview.BranchesAPI, workflowsAPI workflowsview.WorkflowsAPI, exposureIdx *secrets.ExposureIndex) *coreslashcmd.Registry {
 	deps := coreslashcmd.Deps{}
 	if c != nil && c.SessionManager() != nil {
 		deps.Sessions = &slashSessionAppender{mgr: c.SessionManager()}
@@ -1233,6 +1317,9 @@ func newSlashRegistry(c *core.Core, llmAPI llm.LLMConnectorAPI, memStore coremem
 	}
 	if workflowsAPI != nil {
 		deps.Workflows = &slashWorkflowsGateway{inner: workflowsAPI}
+	}
+	if exposureIdx != nil {
+		deps.Secrets = &slashSecretExposer{idx: exposureIdx}
 	}
 	registry, err := coreslashcmd.NewRegistry(deps)
 	if err != nil {
@@ -1545,6 +1632,43 @@ func (g *slashWorkflowsGateway) Run(ctx context.Context, id string, inputs map[s
 	}
 	close(ch)
 	return ch, nil
+}
+
+// slashSecretExposer adapts *secrets.ExposureIndex onto the narrow
+// SecretExposer contract /secret consumes.
+// (model-secret-references-01KW7M5A WP11)
+type slashSecretExposer struct {
+	idx *secrets.ExposureIndex
+}
+
+func (s *slashSecretExposer) Expose(_ context.Context, locator, description, kind string, plaintext []byte) error {
+	if s == nil || s.idx == nil {
+		return errors.New("slashcmd: secrets subsystem not wired")
+	}
+	entry := secrets.ExposedEntry{
+		Locator:     locator,
+		Description: description,
+		Scope:       secrets.ScopeSession,
+		KindHint:    secrets.KindHint(kind),
+	}
+	s.idx.Add(entry, plaintext)
+	// Zero the caller's buffer too.
+	for i := range plaintext {
+		plaintext[i] = 0
+	}
+	return nil
+}
+
+func (s *slashSecretExposer) ListLocators(_ context.Context) ([]string, error) {
+	if s == nil || s.idx == nil {
+		return nil, nil
+	}
+	entries := s.idx.List(context.Background(), "")
+	out := make([]string, 0, len(entries))
+	for _, e := range entries {
+		out = append(out, e.Locator)
+	}
+	return out, nil
 }
 
 // newSessionsAPI returns the real Manager-backed SessionsAPI when c
@@ -2036,6 +2160,7 @@ func newLLMStack(
 	usageMgr usage.Manager,
 	elicitAPI *elicitview.API,
 	slashDispatch *coreslashcmd.Dispatch,
+	exposureIdx *secrets.ExposureIndex,
 ) llmStack {
 	// Share ONE secrets backend between the credref resolver (which
 	// reads keys when streaming) and the keychain writer (which stages
@@ -2148,7 +2273,13 @@ func newLLMStack(
 	if dataDir != "" {
 		bashCedarEngine = buildCedarEngineOrNil(dataDir)
 	}
-	registerBuiltinTools(c, builtinRegistry, bashStore, artifactsMgr, settingsStore, bashCedarEngine, promptRegistry, elicitAPI, slashDispatch)
+	// A default resolution budget of DefaultBudget (50) per locator per session.
+	// A nil exposureIdx safely skips list_secrets registration.
+	var secretsBudget *credstoreRefs.Budget
+	if exposureIdx != nil {
+		secretsBudget = credstoreRefs.NewBudget(credstoreRefs.DefaultBudget)
+	}
+	registerBuiltinTools(c, builtinRegistry, bashStore, artifactsMgr, settingsStore, bashCedarEngine, promptRegistry, elicitAPI, slashDispatch, exposureIdx, secretsBudget)
 	// builtin-filesystem-tools-01KR3N4P: register the read/write family of
 	// in-process filesystem tools. Gated behind per-family settings dials
 	// (FSReadEnabled / FSWriteEnabled) so the Tools panel toggles take effect
@@ -3859,17 +3990,20 @@ func buildLabel(c *core.Core) string {
 // core.BuildVersion(); GoVersion and Platform come from runtime.
 func (a *API) AppInfo(_ context.Context) (AppInfo, error) {
 	policyEditorEnabled := true
+	keychainRotationEnabled := true
 	if a != nil {
 		policyEditorEnabled = a.policyEditorEnabled
+		keychainRotationEnabled = a.keychainRotationEnabled
 	}
 	return AppInfo{
-		Build:               buildLabel(a.core),
-		Commit:              "unknown",
-		BuildTime:           "",
-		GoVersion:           runtime.Version(),
-		Platform:            runtime.GOOS + "/" + runtime.GOARCH,
-		WindowSize:          WindowSize{Width: 1280, Height: 800},
-		PolicyEditorEnabled: policyEditorEnabled,
+		Build:                   buildLabel(a.core),
+		Commit:                  "unknown",
+		BuildTime:               "",
+		GoVersion:               runtime.Version(),
+		Platform:                runtime.GOOS + "/" + runtime.GOARCH,
+		WindowSize:              WindowSize{Width: 1280, Height: 800},
+		PolicyEditorEnabled:     policyEditorEnabled,
+		KeychainRotationEnabled: keychainRotationEnabled,
 	}, nil
 }
 
@@ -3968,6 +4102,25 @@ func (a *API) Elicit() elicitview.ElicitAPI {
 		return elicitview.New(elicitview.Config{})
 	}
 	return a.elicitAPI
+}
+
+// ScheduledChat implements HarnessAPI. Returns a graceful-empty surface
+// (ErrStoreUnavailable on mutating methods) when the DB is not wired.
+func (a *API) ScheduledChat() scheduledchatview.ScheduledChatAPI {
+	if a.scheduledChatAPI == nil {
+		return scheduledchatview.New(scheduledchatview.Config{})
+	}
+	return a.scheduledChatAPI
+}
+
+// Secrets returns the model-accessible secrets RPC surface (mission
+// model-secret-references-01KW7M5A WP10). When not yet wired, returns
+// a stub backed by an empty ExposureIndex.
+func (a *API) Secrets() secretsview.SecretsAPI {
+	if a.secretsAPI == nil {
+		return secretsview.NewAPI(secrets.NewExposureIndex())
+	}
+	return a.secretsAPI
 }
 
 // SetCedarProposeResolver wires a resolver at runtime. Called by the
@@ -4109,21 +4262,33 @@ func (a *API) SetCompactionAPI(c compactionview.CompactionAPI) {
 }
 
 // Search returns the full-text search view (cross-session-search
-// mission). Uses the raw *sql.DB handle from the storage backend to
-// query the messages_fts FTS5 virtual table directly.
+// mission + unified-search-01KX5R8C WP03). Uses the raw *sql.DB handle
+// from the storage backend to query the messages_fts FTS5 virtual table
+// and wires per-corpus adapters for the unified fan-out.
 func (a *API) Search() searchview.SearchAPI {
 	if a.searchAPI != nil {
 		return a.searchAPI
 	}
-	// Wire lazily on first call using the structural SQL() interface
-	// (same dance as buildJournalWriter at the bottom of this file).
+	// Wire lazily on first call using the structural SQL() interface.
 	if a.core != nil {
 		store := a.core.Storage()
 		if store != nil {
 			type sqlHandle interface{ SQL() *sql.DB }
 			if h, ok := store.(sqlHandle); ok {
 				if rawDB := h.SQL(); rawDB != nil {
-					a.searchAPI = searchview.NewManagerAPI(rawDB)
+					cfg := searchview.Config{}
+					// Artifacts + corpus name adapters share the raw DB.
+					cfg.ArtifactsDB = rawDB
+					cfg.CorpusDB = rawDB
+					// Memory adapter — nil when HARNESS_MEMORY is off.
+					if a.memStoreRef != nil {
+						cfg.MemoryStore = &memoryStoreListAdapter{store: a.memStoreRef}
+					}
+					// Audit adapter — always available when the ring buffer is live.
+					if a.auditImpl != nil {
+						cfg.AuditLister = &auditRingAdapter{api: a.auditImpl}
+					}
+					a.searchAPI = searchview.NewManagerAPIWithConfig(rawDB, cfg)
 					return a.searchAPI
 				}
 			}
@@ -4131,6 +4296,53 @@ func (a *API) Search() searchview.SearchAPI {
 	}
 	// Fallback: return a nil-safe stub that returns empty results.
 	return &stubSearch{}
+}
+
+// memoryStoreListAdapter adapts corememory.Store to searchview.MemoryLister.
+type memoryStoreListAdapter struct {
+	store corememory.Store
+}
+
+func (m *memoryStoreListAdapter) List(ctx context.Context) ([]searchview.MemoryChunk, error) {
+	chunks, err := m.store.List(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]searchview.MemoryChunk, len(chunks))
+	for i, c := range chunks {
+		out[i] = searchview.MemoryChunk{
+			ID:        c.ID,
+			SessionID: c.SessionID,
+			ProjectID: c.ProjectID,
+			Content:   c.Content,
+			CreatedAt: c.CreatedAt,
+		}
+	}
+	return out, nil
+}
+
+// auditRingAdapter adapts audit.API to searchview.AuditLister.
+type auditRingAdapter struct {
+	api *audit.API
+}
+
+func (ar *auditRingAdapter) ListEntriesForSearch(ctx context.Context, limit int) ([]searchview.AuditEntry, error) {
+	filter := audit.Filter{Limit: limit}
+	entries, err := ar.api.ListEntries(ctx, filter)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]searchview.AuditEntry, len(entries))
+	for i, e := range entries {
+		out[i] = searchview.AuditEntry{
+			ID:        e.ID,
+			Timestamp: e.Timestamp,
+			Category:  e.Category,
+			Subject:   e.Subject,
+			Trailing:  e.Trailing,
+		}
+	}
+	return out, nil
 }
 
 // Update returns the auto-update view (mission auto-update, v0.4.0 WP03).
@@ -4159,6 +4371,10 @@ func (a *API) Storage() storageview.StorageAPI {
 type stubSearch struct{}
 
 func (s *stubSearch) Search(_ context.Context, _ string, _ searchview.SearchFilters) ([]searchview.SearchHit, error) {
+	return nil, nil
+}
+
+func (s *stubSearch) UnifiedSearch(_ context.Context, _ string, _ searchview.SearchFilters) ([]searchview.SearchHit, error) {
 	return nil, nil
 }
 

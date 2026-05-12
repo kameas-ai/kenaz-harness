@@ -46,8 +46,10 @@ import (
 	updateview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/update"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/workflow"
 	workflowsview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/workflows"
+	scheduledchatview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/scheduledchat"
 	storageview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/storage"
 	elicitview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/elicit"
+	secretsview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/secrets"
 	"github.com/sigil-tech/kaneaz-harness/core/logging"
 	"github.com/sigil-tech/kaneaz-harness/core/mcp/stdio"
 )
@@ -294,6 +296,23 @@ func (b *Bindings) LLM_UpdateProviderCredential(profileID, plaintext string) err
 // (multimodal-io-01KQ8TDF WP04 / FR-007).
 func (b *Bindings) LLM_GetAttachmentLimits(provider, model string) (llm.AttachmentLimitsView, error) {
 	return b.api.LLMConnector().GetAttachmentLimits(b.ctx(), provider, model)
+}
+
+// LLM_TestAndRotateKey validates plaintextApiKey against the provider's
+// /models endpoint and, on success, writes it to the keychain and emits
+// a KindProviderKeyRotated audit event. source should be "inline-toast"
+// or "manual". The plaintext is consumed and zeroed before returning.
+// (provider-keychain-rotation-01KQ8TD9 WP04)
+func (b *Bindings) LLM_TestAndRotateKey(profileID, plaintextApiKey, source string) (llm.RotationResult, error) {
+	return b.api.LLMConnector().TestAndRotateKey(b.ctx(), profileID, plaintextApiKey, source)
+}
+
+// LLM_ResumeAfterKeyRotation drives a fresh kernel run for the paused
+// chat turn identified by resumeToken (the profileID returned by
+// TestAndRotateKey). Safe to call when no paused turn exists.
+// (provider-keychain-rotation-01KQ8TD9 WP04)
+func (b *Bindings) LLM_ResumeAfterKeyRotation(resumeToken string) error {
+	return b.api.LLMConnector().ResumeAfterKeyRotation(b.ctx(), resumeToken)
 }
 
 // ── mcp ────────────────────────────────────────────────────────────────
@@ -1048,6 +1067,40 @@ func (b *Bindings) Settings_SetMultimodalInput(enabled bool) error {
 	return b.storeFn().SaveAll(s)
 }
 
+// ── key-rotation settings (provider-keychain-rotation-01KQ8TD9 WP07) ──
+
+// Settings_GetAutoResumeOnKeyRotation returns whether the harness should
+// automatically redrive the paused chat turn after the user rotates an API
+// key. Default true on a fresh install (zero-value Disabled → enabled).
+// Hidden in the Settings UI when AppInfo.keychainRotationEnabled = false.
+// (provider-keychain-rotation-01KQ8TD9 WP07)
+func (b *Bindings) Settings_GetAutoResumeOnKeyRotation() (bool, error) {
+	if b.storeFn == nil {
+		return true, nil
+	}
+	s, err := b.storeFn().LoadAll()
+	if err != nil {
+		return true, err
+	}
+	return s.EffectiveAutoResumeOnKeyRotation(), nil
+}
+
+// Settings_SetAutoResumeOnKeyRotation persists the auto-resume-on-key-rotation
+// dial. When false, TestAndRotateKey returns an empty AutoResumeToken and
+// the user must manually resend the failed turn.
+// (provider-keychain-rotation-01KQ8TD9 WP07)
+func (b *Bindings) Settings_SetAutoResumeOnKeyRotation(enabled bool) error {
+	if b.storeFn == nil {
+		return nil
+	}
+	s, err := b.storeFn().LoadAll()
+	if err != nil {
+		return err
+	}
+	s.AutoResumeOnKeyRotationDisabled = !enabled
+	return b.storeFn().SaveAll(s)
+}
+
 // ── memory ─────────────────────────────────────────────────────────────
 
 func (b *Bindings) Memory_ListChunks(filter memoryview.ListFilter) ([]memoryview.Chunk, error) {
@@ -1138,6 +1191,33 @@ func (b *Bindings) Memory_RetryFailedNarrative(jobID string) error {
 // (memory-narrative-layer WP07).
 func (b *Bindings) Memory_NarrativeMetricsForChunk(chunkID string) (memoryview.NarrativeMetrics, error) {
 	return b.api.Memory().NarrativeMetricsForChunk(b.ctx(), chunkID)
+}
+
+// ── Memory capstone (memory-inspection-ui-01KX5R8E) ───────────────────
+
+// Memory_LastRetrieval returns the most recent retrieval report for the
+// given session (§2.1 active-session retrieval inspector, FR-001).
+func (b *Bindings) Memory_LastRetrieval(sessionID string) (memoryview.RetrievalReport, error) {
+	return b.api.Memory().LastRetrieval(b.ctx(), sessionID)
+}
+
+// Memory_EmbeddingProbe embeds the given query and returns up to limit
+// scored chunks ranked by cosine similarity (§2.2 embedding inspector,
+// FR-003). limit is capped at 50 server-side.
+func (b *Bindings) Memory_EmbeddingProbe(query string, limit int) ([]memoryview.ScoredChunk, error) {
+	return b.api.Memory().EmbeddingProbe(b.ctx(), query, limit)
+}
+
+// Memory_ResummarizeChunk re-runs narrative synthesis on the chunk with
+// the given ID (§2.3, FR-004). Rate-limited to one call per chunk per 60s.
+func (b *Bindings) Memory_ResummarizeChunk(chunkID string) (memoryview.Chunk, error) {
+	return b.api.Memory().ResummarizeChunk(b.ctx(), chunkID)
+}
+
+// Memory_GetChunkProvenance returns the full audit chain for a chunk
+// (§2.6 provenance drawer, FR-007).
+func (b *Bindings) Memory_GetChunkProvenance(chunkID string) (memoryview.ChunkProvenance, error) {
+	return b.api.Memory().GetChunkProvenance(b.ctx(), chunkID)
 }
 
 // ── dials (Bundle E WP17) ──────────────────────────────────────────────
@@ -1721,6 +1801,33 @@ func (b *Bindings) Workflows_CancelRun(runID string) error {
 	return b.api.Workflows().CancelRun(b.ctx(), runID)
 }
 
+// ── scheduled chat runs (scheduled-chat-runs-01KX5R8B, WP04) ──────────
+
+func (b *Bindings) ScheduledChat_Create(in scheduledchatview.CreateInput) (scheduledchatview.ChatRunEntry, error) {
+	return b.api.ScheduledChat().Create(b.ctx(), in)
+}
+func (b *Bindings) ScheduledChat_Update(in scheduledchatview.UpdateInput) (scheduledchatview.ChatRunEntry, error) {
+	return b.api.ScheduledChat().Update(b.ctx(), in)
+}
+func (b *Bindings) ScheduledChat_Delete(id string) error {
+	return b.api.ScheduledChat().Delete(b.ctx(), id)
+}
+func (b *Bindings) ScheduledChat_List() ([]scheduledchatview.ChatRunEntry, error) {
+	return b.api.ScheduledChat().List(b.ctx())
+}
+func (b *Bindings) ScheduledChat_Get(id string) (scheduledchatview.ChatRunEntry, error) {
+	return b.api.ScheduledChat().Get(b.ctx(), id)
+}
+func (b *Bindings) ScheduledChat_RunNow(id string) (scheduledchatview.RunSummary, error) {
+	return b.api.ScheduledChat().RunNow(b.ctx(), id)
+}
+func (b *Bindings) ScheduledChat_History(id string, limit int) ([]scheduledchatview.RunSummary, error) {
+	return b.api.ScheduledChat().History(b.ctx(), id, limit)
+}
+func (b *Bindings) ScheduledChat_SetEnabled(id string, enabled bool) error {
+	return b.api.ScheduledChat().SetEnabled(b.ctx(), id, enabled)
+}
+
 // ── update (mission auto-update, v0.4.0 WP03) ─────────────────────────
 //
 // TODO: regenerate via `wails generate module` once the WP04 + WP05 UI
@@ -1832,6 +1939,17 @@ func (b *Bindings) CedarPolicy_InstallTemplate(templateName string, destName str
 // optional; zero values mean "no filter".
 func (b *Bindings) Search_Sessions(query string, filters searchview.SearchFilters) ([]searchview.SearchHit, error) {
 	return b.api.Search().Search(b.ctx(), query, filters)
+}
+
+// Search_Unified fans out across all five corpora (messages, artifacts,
+// memory, corpus, audit) in parallel and returns a merged, scored result
+// list. filters.Corpora narrows which corpora are queried; an empty slice
+// enables all sources.
+//
+// query is sanitised server-side; empty/whitespace-only returns an empty
+// result without error. The raw query never appears in audit emission.
+func (b *Bindings) Search_Unified(query string, filters searchview.SearchFilters) ([]searchview.SearchHit, error) {
+	return b.api.Search().UnifiedSearch(b.ctx(), query, filters)
 }
 
 // ── autonomy (autonomy-dial-01KR3M2A WP03) ────────────────────────────
@@ -1977,4 +2095,26 @@ func (b *Bindings) Elicit_AnswerDeferred(askID string, answer any) (string, erro
 // frontend can reconcile its dialog queue on reconnect / hot reload.
 func (b *Bindings) Elicit_ListPending() ([]elicitview.ElicitRequest, error) {
 	return b.api.Elicit().ListPending(b.ctx())
+}
+
+// ── secrets (model-secret-references-01KW7M5A, WP10) ─────────────────
+
+// Secrets_List returns all currently exposed secrets for the session.
+// Plaintext is never included in the result (FR-005a). The Ref field
+// contains the @secret:<locator> token the model writes in tool args.
+func (b *Bindings) Secrets_List() ([]secretsview.SecretRow, error) {
+	return b.api.Secrets().ListSecrets(b.ctx())
+}
+
+// Secrets_Expose adds a new secret to the model-accessible exposure
+// index. The plaintext in req is zeroed server-side before this method
+// returns; it never re-enters the conversation context.
+func (b *Bindings) Secrets_Expose(req secretsview.ExposeRequest) error {
+	return b.api.Secrets().ExposeSecret(b.ctx(), req)
+}
+
+// Secrets_Revoke removes a secret from the exposure index by locator.
+// Returns an error when the locator is not currently exposed.
+func (b *Bindings) Secrets_Revoke(locator string) error {
+	return b.api.Secrets().RevokeSecret(b.ctx(), locator)
 }

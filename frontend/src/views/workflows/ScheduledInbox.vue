@@ -7,6 +7,9 @@
  * Shows one accordion row per scheduled workflow; each row lists up to 20
  * recent runs with status badges, duration, and per-run re-run / cancel
  * affordances.  Auto-refreshes every 30 seconds while mounted.
+ *
+ * scheduled-chat-runs-01KX5R8B WP06: extended with a "Chat Runs" accordion
+ * section below workflow rows; requires the optional `chatClient` prop.
  */
 import { ref, onMounted, onUnmounted, computed } from 'vue';
 import type {
@@ -14,9 +17,16 @@ import type {
   WorkflowsScheduleEntry,
   WorkflowsRunSummary,
 } from '@/lib/workflowsClient';
+import type {
+  ScheduledChatClient,
+  ScheduledChatEntry,
+  ScheduledChatRunSummary,
+} from '@/lib/scheduledChatClient';
 
 const props = defineProps<{
   client: WorkflowsClient;
+  /** Optional — when provided the Chat Runs section is rendered. */
+  chatClient?: ScheduledChatClient;
 }>();
 
 // ── state ─────────────────────────────────────────────────────────────────
@@ -151,14 +161,99 @@ async function cancelRun(runId: string) {
   }
 }
 
+// ── chat runs section (scheduled-chat-runs-01KX5R8B WP06) ────────────────
+
+interface ChatRunRow {
+  entry: ScheduledChatEntry;
+  history: ScheduledChatRunSummary[];
+  expanded: boolean;
+  loadingHistory: boolean;
+  loadError: string | null;
+}
+
+const chatRows = ref<ChatRunRow[]>([]);
+const chatLoading = ref(false);
+const chatLoadError = ref<string | null>(null);
+const hasChatRows = computed(() => chatRows.value.length > 0);
+
+async function loadChatInbox() {
+  if (!props.chatClient) return;
+  chatLoading.value = true;
+  chatLoadError.value = null;
+  try {
+    const entries = await props.chatClient.list();
+    const existing = new Map<string, ChatRunRow>(
+      chatRows.value.map((r) => [r.entry.id, r]),
+    );
+    chatRows.value = entries.map((entry) => {
+      const prev = existing.get(entry.id);
+      return {
+        entry,
+        history: prev?.history ?? [],
+        expanded: prev?.expanded ?? false,
+        loadingHistory: false,
+        loadError: null,
+      };
+    });
+    // Re-fetch history for already-expanded rows
+    for (const row of chatRows.value) {
+      if (row.expanded) void fetchChatHistory(row);
+    }
+  } catch (err) {
+    chatLoadError.value = err instanceof Error ? err.message : String(err);
+  } finally {
+    chatLoading.value = false;
+  }
+}
+
+async function fetchChatHistory(row: ChatRunRow) {
+  if (!props.chatClient) return;
+  row.loadingHistory = true;
+  row.loadError = null;
+  try {
+    row.history = await props.chatClient.history(row.entry.id, 20);
+  } catch (err) {
+    row.loadError = err instanceof Error ? err.message : String(err);
+  } finally {
+    row.loadingHistory = false;
+  }
+}
+
+async function toggleChatExpand(row: ChatRunRow) {
+  row.expanded = !row.expanded;
+  if (row.expanded && row.history.length === 0) {
+    await fetchChatHistory(row);
+  }
+}
+
+async function chatRunNow(id: string) {
+  if (!props.chatClient) return;
+  actionError.value = null;
+  try {
+    await props.chatClient.runNow(id);
+    await loadChatInbox();
+  } catch (err) {
+    actionError.value = err instanceof Error ? err.message : String(err);
+  }
+}
+
+function chatHistoryStatusClass(status: string): string {
+  if (status === 'completed') return 'text-emerald-400';
+  if (status === 'running') return 'text-amber-400';
+  if (status === 'failed') return 'text-red-400';
+  return 'text-ink-muted';
+}
+
 // ── auto-refresh ──────────────────────────────────────────────────────────
 
 let refreshTimer: ReturnType<typeof setInterval> | undefined;
 
 onMounted(() => {
   void loadInbox();
+  void loadChatInbox();
   refreshTimer = setInterval(() => {
     void loadInbox();
+    void loadChatInbox();
   }, 30_000);
 });
 
@@ -203,14 +298,6 @@ onUnmounted(() => {
 
     <!-- Per-workflow accordion rows -->
     <div v-else class="space-y-2" data-testid="scheduled-inbox-list">
-      <!-- Action error banner (re-run / cancel) -->
-      <div
-        v-if="actionError"
-        class="rounded-sm border border-red-700 bg-red-950 px-3 py-2 font-ui text-sm text-red-200"
-        data-testid="scheduled-inbox-action-error"
-      >
-        {{ actionError }}
-      </div>
 
       <div
         v-for="row in rows"
@@ -363,5 +450,187 @@ onUnmounted(() => {
         </div>
       </div>
     </div>
+
+    <!-- Action error banner (re-run / cancel — shared by workflow and chat rows) -->
+    <div
+      v-if="actionError"
+      class="mt-3 rounded-sm border border-red-700 bg-red-950 px-3 py-2 font-ui text-sm text-red-200"
+      data-testid="scheduled-inbox-action-error"
+    >
+      {{ actionError }}
+    </div>
+
+    <!-- scheduled-chat-runs-01KX5R8B WP06 — Chat Runs section -->
+    <template v-if="chatClient">
+      <div class="mt-6" data-testid="chat-runs-section">
+        <h3
+          class="font-ui text-[11px] uppercase tracking-[0.18em] text-ink-subtle mb-3"
+          data-testid="chat-runs-heading"
+        >
+          Chat Runs
+        </h3>
+
+        <!-- Chat loading -->
+        <div
+          v-if="chatLoading && !hasChatRows"
+          class="font-ui text-sm text-ink-muted py-2"
+          data-testid="chat-runs-loading"
+        >
+          Loading chat runs…
+        </div>
+
+        <!-- Chat load error -->
+        <div
+          v-else-if="chatLoadError"
+          class="rounded-sm border border-red-700 bg-red-950 p-4 font-ui text-sm text-red-200"
+          data-testid="chat-runs-load-error"
+        >
+          {{ chatLoadError }}
+        </div>
+
+        <!-- Chat empty state -->
+        <div
+          v-else-if="!hasChatRows"
+          class="rounded-sm border border-border-muted bg-surface-1 p-6 max-w-2xl"
+          data-testid="chat-runs-empty"
+        >
+          <p class="font-ui text-sm text-ink mb-1">No scheduled chat runs.</p>
+          <p class="font-ui text-sm text-ink-muted">
+            Open Settings → Scheduled Chats to create a cron-fired prompt.
+          </p>
+        </div>
+
+        <!-- Chat run accordion rows -->
+        <div v-else class="space-y-2" data-testid="chat-runs-list">
+          <div
+            v-for="row in chatRows"
+            :key="row.entry.id"
+            class="rounded-sm border border-border-muted bg-surface-1"
+            :data-testid="`chat-run-row-${row.entry.id}`"
+          >
+            <!-- Accordion header -->
+            <div
+              class="flex items-center justify-between px-4 py-3 cursor-pointer select-none"
+              :data-testid="`chat-run-header-${row.entry.id}`"
+              @click="toggleChatExpand(row)"
+            >
+              <div class="space-y-0.5">
+                <div class="flex items-center gap-2">
+                  <span class="font-ui text-sm font-medium text-ink">
+                    {{ row.entry.name || row.entry.id }}
+                  </span>
+                  <span
+                    v-if="!row.entry.enabled"
+                    class="rounded px-1.5 py-0.5 font-ui text-xs bg-surface-2 text-ink-muted"
+                  >
+                    disabled
+                  </span>
+                </div>
+                <div class="flex items-center gap-3">
+                  <span class="font-mono text-xs text-ink-muted">{{ row.entry.cron }}</span>
+                  <span v-if="row.entry.timezone" class="font-mono text-xs text-ink-muted">
+                    {{ row.entry.timezone }}
+                  </span>
+                  <span class="font-ui text-xs text-ink-muted">→ {{ row.entry.outputSink }}</span>
+                </div>
+              </div>
+
+              <div class="flex items-center gap-2">
+                <button
+                  type="button"
+                  class="rounded-sm border border-border-muted bg-surface-2 px-2.5 py-1 font-ui text-xs text-ink hover:bg-surface-1"
+                  :data-testid="`chat-run-now-${row.entry.id}`"
+                  @click.stop="chatRunNow(row.entry.id)"
+                >
+                  Run now
+                </button>
+                <span
+                  class="font-ui text-xs text-ink-muted transition-transform"
+                  :class="row.expanded ? 'rotate-180' : ''"
+                  :data-testid="`chat-run-chevron-${row.entry.id}`"
+                >
+                  ▾
+                </span>
+              </div>
+            </div>
+
+            <!-- History panel (expanded) -->
+            <div
+              v-if="row.expanded"
+              class="border-t border-border-muted px-4 py-3"
+              :data-testid="`chat-run-history-${row.entry.id}`"
+            >
+              <div
+                v-if="row.loadingHistory"
+                class="font-ui text-xs text-ink-muted py-2"
+                :data-testid="`chat-run-history-loading-${row.entry.id}`"
+              >
+                Loading history…
+              </div>
+
+              <div
+                v-else-if="row.loadError"
+                class="font-ui text-xs text-red-300 py-2"
+                :data-testid="`chat-run-history-error-${row.entry.id}`"
+              >
+                {{ row.loadError }}
+              </div>
+
+              <div
+                v-else-if="row.history.length === 0"
+                class="font-ui text-xs text-ink-muted py-2"
+                :data-testid="`chat-run-history-empty-${row.entry.id}`"
+              >
+                No runs yet.
+              </div>
+
+              <ol v-else class="space-y-1">
+                <li
+                  v-for="hist in row.history"
+                  :key="hist.id"
+                  class="flex items-start justify-between rounded-sm px-2 py-1.5 bg-surface-2"
+                  :data-testid="`chat-run-hist-row-${hist.id}`"
+                >
+                  <div class="space-y-0.5 min-w-0">
+                    <div class="flex items-center gap-2">
+                      <span
+                        class="font-ui text-xs"
+                        :class="chatHistoryStatusClass(hist.status)"
+                        :data-testid="`chat-run-hist-status-${hist.id}`"
+                      >
+                        {{ hist.status }}
+                      </span>
+                      <span class="font-mono text-xs text-ink-muted truncate">
+                        {{ hist.id }}
+                      </span>
+                    </div>
+                    <div class="font-ui text-xs text-ink-muted">
+                      {{ fmtTime(hist.startedAt) }}
+                      <span v-if="hist.endedAt" class="ml-1">
+                        ({{ fmtDuration(hist.startedAt, hist.endedAt) }})
+                      </span>
+                    </div>
+                    <div
+                      v-if="hist.error"
+                      class="font-ui text-xs text-red-300 truncate"
+                      :data-testid="`chat-run-hist-error-${hist.id}`"
+                    >
+                      {{ hist.error }}
+                    </div>
+                    <div
+                      v-if="hist.outputSnippet"
+                      class="font-ui text-xs text-ink-muted truncate"
+                      :data-testid="`chat-run-hist-snippet-${hist.id}`"
+                    >
+                      {{ hist.outputSnippet }}
+                    </div>
+                  </div>
+                </li>
+              </ol>
+            </div>
+          </div>
+        </div>
+      </div>
+    </template>
   </div>
 </template>

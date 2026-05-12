@@ -32,13 +32,22 @@ import {
   type WorkflowsSaveOutput,
   type WorkflowsCatalogEntry,
 } from '@/lib/workflowsClient';
+import {
+  createScheduledChatClient,
+  type ScheduledChatClient,
+} from '@/lib/scheduledChatClient';
 
 const props = defineProps<{
   /** Test seam: tests inject a fake client; production constructs one. */
   client?: WorkflowsClient;
+  /** Test seam: optional chat client for the Runs tab Chat Runs section. */
+  chatClient?: ScheduledChatClient;
 }>();
 
 const client: WorkflowsClient = props.client ?? createWorkflowsClient();
+// scheduled-chat-runs-01KX5R8B WP06 — production creates a real client;
+// tests can inject a fake via the chatClient prop.
+const chatClient: ScheduledChatClient = props.chatClient ?? createScheduledChatClient();
 
 const catalog = ref<WorkflowsSummary[]>([]);
 const loading = ref(false);
@@ -303,9 +312,9 @@ onMounted(loadCatalog);
         />
       </template>
 
-      <!-- Runs tab (WP03 — scheduled inbox) -->
+      <!-- Runs tab (WP03 — scheduled inbox; WP06 extends with chatClient) -->
       <template v-else-if="activeTab === 'Runs'">
-        <ScheduledInbox :client="client" />
+        <ScheduledInbox :client="client" :chat-client="chatClient" />
       </template>
 
       <!-- Library tab (existing content) -->

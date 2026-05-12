@@ -24,6 +24,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
@@ -35,6 +36,7 @@ import (
 	"github.com/sigil-tech/kaneaz-harness/core/llm"
 	"github.com/sigil-tech/kaneaz-harness/core/llm/capabilities"
 	"github.com/sigil-tech/kaneaz-harness/core/llm/httpx"
+	"github.com/sigil-tech/kaneaz-harness/core/llm/structured"
 )
 
 // imageFormatFromMediaType maps an IANA mime-type to the Bedrock
@@ -151,6 +153,10 @@ func New(opts ...Option) *Adapter {
 	return a
 }
 
+// Compile-time assertion: Adapter satisfies the optional StructuredOutputAdapter
+// interface (structured-output-and-grammar-01KX5R8A WP03).
+var _ llm.StructuredOutputAdapter = (*Adapter)(nil)
+
 // Kind returns the canonical provider kind.
 func (a *Adapter) Kind() string { return Kind }
 
@@ -167,6 +173,125 @@ func (a *Adapter) Capabilities(model string) llm.CapabilityDescriptor {
 			llm.CapToolCalling:    true,
 			llm.CapUsageReporting: true,
 		},
+	}
+}
+
+// ApplyResponseFormat implements llm.StructuredOutputAdapter for the Bedrock
+// adapter. Unlike the OpenAI/Anthropic adapters this method does NOT mutate
+// wireBody (Bedrock uses typed SDK structs, not a raw map). The real work
+// happens in applyResponseFormatToConverseInput which is called from Stream().
+//
+// wireBody is accepted to satisfy the interface but is always ignored.
+// (structured-output-and-grammar-01KX5R8A WP03d)
+func (a *Adapter) ApplyResponseFormat(req *llm.GenerationRequest, wireBody map[string]any) error {
+	if req == nil || req.ResponseFormat == nil {
+		return nil
+	}
+	switch req.ResponseFormat.Mode {
+	case "json":
+		// json mode is handled by appending a system prompt in Stream(). No-op here.
+		return nil
+	case "json_schema":
+		// Validation only: ensure the schema is well-formed JSON before the wire
+		// call. Actual injection is done in applyResponseFormatToConverseInput.
+		if len(req.ResponseFormat.Schema) > 0 {
+			if !json.Valid(req.ResponseFormat.Schema) {
+				return &llm.ErrInvalidRequest{Message: "bedrock: response_format.schema is not valid JSON"}
+			}
+		}
+		return nil
+	case "grammar":
+		// GBNF grammar constraints require token-level support not available in
+		// the Bedrock Converse API. Cloud providers always return ErrUnsupportedFormat.
+		return &llm.ErrUnsupportedFormat{
+			Provider: Kind,
+			Mode:     "grammar",
+		}
+	default:
+		return nil
+	}
+}
+
+// applyResponseFormatToConverseInput mutates in to carry structured-output
+// instructions derived from req.ResponseFormat. Called from Stream() after
+// the message conversion step. For Bedrock, the two approaches are:
+//
+//   - Mode="json"       → append a system text block instructing JSON-only output
+//   - Mode="json_schema" → inject a synthetic tool ("_structured_output") carrying
+//     the caller's schema as the tool's input_schema; set forced tool_choice so
+//     the model MUST call the tool and return structured JSON (mirrors the
+//     Anthropic tool-call workaround but via Converse ToolConfiguration).
+//
+// Grammar mode returns ErrUnsupportedFormat — callers should gate on CapGrammar
+// before reaching here.
+func applyResponseFormatToConverseInput(in *bedrockruntime.ConverseStreamInput, rf *llm.ResponseFormat) error {
+	if rf == nil {
+		return nil
+	}
+	switch rf.Mode {
+	case "json":
+		// Append system instruction for plain JSON output.
+		in.System = append(in.System, &types.SystemContentBlockMemberText{
+			Value: "Respond with valid JSON only. Do not include any explanation, markdown fences, or prose — output raw JSON.",
+		})
+		return nil
+
+	case "json_schema":
+		// Build an injected schema. InjectAdditionalProperties prevents unknown
+		// keys from slipping past later validation.
+		schema := rf.Schema
+		if len(schema) == 0 {
+			schema = json.RawMessage(`{"type":"object"}`)
+		}
+		injected, err := structured.InjectAdditionalProperties(schema)
+		if err != nil {
+			return &llm.ErrInvalidRequest{Message: "bedrock: inject additionalProperties: " + err.Error()}
+		}
+
+		// Unmarshal to any so the document marshaler reproduces it faithfully.
+		var schemaAny any
+		if err := json.Unmarshal(injected, &schemaAny); err != nil {
+			return &llm.ErrInvalidRequest{Message: "bedrock: response_format schema unmarshal: " + err.Error()}
+		}
+
+		syntheticTool := &types.ToolMemberToolSpec{
+			Value: types.ToolSpecification{
+				Name:        aws.String("_structured_output"),
+				Description: aws.String("Return a JSON object that matches the required schema. Always call this tool."),
+				InputSchema: &types.ToolInputSchemaMemberJson{
+					Value: document.NewLazyDocument(schemaAny),
+				},
+			},
+		}
+
+		// Force the model to call our synthetic tool. Converse uses ToolChoice
+		// (a union type); ToolChoiceMemberTool pins to a specific tool name.
+		forcedChoice := &types.ToolChoiceMemberTool{
+			Value: types.SpecificToolChoice{
+				Name: aws.String("_structured_output"),
+			},
+		}
+
+		// If there's an existing ToolConfig (caller-supplied tools), merge our
+		// synthetic tool in and override the tool choice. If not, build fresh.
+		if in.ToolConfig != nil {
+			in.ToolConfig.Tools = append([]types.Tool{syntheticTool}, in.ToolConfig.Tools...)
+			in.ToolConfig.ToolChoice = forcedChoice
+		} else {
+			in.ToolConfig = &types.ToolConfiguration{
+				Tools:      []types.Tool{syntheticTool},
+				ToolChoice: forcedChoice,
+			}
+		}
+		return nil
+
+	case "grammar":
+		return &llm.ErrUnsupportedFormat{
+			Provider: Kind,
+			Mode:     "grammar",
+		}
+	default:
+		return nil
 	}
 }
 
@@ -242,6 +367,16 @@ func (a *Adapter) Stream(ctx context.Context, req llm.GenerationRequest, prof ll
 			return nil, &llm.ErrInvalidRequest{Message: err.Error()}
 		}
 		in.ToolConfig = toolCfg
+	}
+
+	// Structured-output injection (structured-output-and-grammar-01KX5R8A WP03d).
+	// applyResponseFormatToConverseInput modifies in.System and/or in.ToolConfig
+	// in place. It must run after the caller-supplied ToolConfig (if any) is set
+	// so the synthetic _structured_output tool can be prepended safely.
+	if req.ResponseFormat != nil {
+		if err := applyResponseFormatToConverseInput(in, req.ResponseFormat); err != nil {
+			return nil, err
+		}
 	}
 
 	out, err := client.ConverseStream(ctx, in)
@@ -353,6 +488,41 @@ func (a *Adapter) ListModels(ctx context.Context, cred []byte) ([]llm.ModelInfo,
 	}
 	return out, nil
 }
+
+// TestKey implements llm.KeyTester for the bearer-token credential path only.
+// Bedrock has two auth shapes: (a) AWS profile name — rotated via
+// ~/.aws/credentials outside the key-rotation UI, and (b) bearer token — a
+// keychain-backed credential this method validates via ListModels.
+//
+// If cred does not look like a bearer token, TestKey returns *ErrInvalidRequest
+// with a helpful message so the rotation UI can surface "use aws configure."
+// The rejection happens before any wire call (step 1 in plan §3).
+//
+// provider-keychain-rotation-01KQ8TD9 WP02.
+func (a *Adapter) TestKey(ctx context.Context, cred []byte) error {
+	if len(cred) == 0 {
+		return &llm.ErrAuth{Status: 0, Message: "bedrock: empty credential"}
+	}
+	if !looksLikeBearerToken(string(cred)) {
+		return &llm.ErrInvalidRequest{
+			Status:  0,
+			Message: "bedrock: TestKey requires a bearer token; AWS profile rotation is not supported via this UI — rotate via `aws configure` instead",
+		}
+	}
+	tctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	models, err := a.ListModels(tctx, cred)
+	if err != nil {
+		return err
+	}
+	if len(models) == 0 {
+		return &llm.ErrInvalidRequest{Status: 200, Message: "bedrock: key accepted but returned empty model list"}
+	}
+	return nil
+}
+
+// Compile-time assertion: Adapter implements llm.KeyTester.
+var _ llm.KeyTester = (*Adapter)(nil)
 
 // looksLikeBearerToken returns true when cred looks like a long-lived
 // Bedrock API key rather than an AWS profile name. AWS-issued bearer

@@ -156,6 +156,32 @@ func (e *ErrCancelled) Error() string {
 	return "llm: cancelled: " + e.Reason
 }
 
+// ErrProviderAuthFailed is the registry-level decoration of *ErrAuth with
+// the profile/provider context needed to drive the key-rotation toast
+// (provider-keychain-rotation-01KQ8TD9 WP01). It wraps the raw *ErrAuth so
+// errors.As works for both types in the same chain:
+//
+//	var authFailed *ErrProviderAuthFailed
+//	var authBare   *ErrAuth
+//	errors.As(err, &authFailed) // true — registry context
+//	errors.As(err, &authBare)   // true — via Unwrap
+type ErrProviderAuthFailed struct {
+	Provider  string   // adapter kind: "anthropic" | "openai" | …
+	ProfileID string   // the profile that was about to be dispatched
+	ModelID   string   // the resolved model (post-override)
+	Reason    string   // human-readable copy from the wrapped ErrAuth.Message
+	Cause     *ErrAuth // original adapter-level error; reachable via Unwrap
+}
+
+func (e *ErrProviderAuthFailed) Error() string {
+	return fmt.Sprintf("llm: provider auth failed (provider=%s profile=%s model=%s): %s",
+		e.Provider, e.ProfileID, e.ModelID, e.Reason)
+}
+
+// Unwrap exposes the underlying *ErrAuth so errors.As(err, &ErrAuth{})
+// traverses through ErrProviderAuthFailed.
+func (e *ErrProviderAuthFailed) Unwrap() error { return e.Cause }
+
 // IsTransient reports whether err should be retried by the middleware.
 //
 // The classification is by error type (errors.As against ErrTransient)
@@ -253,6 +279,47 @@ func (e *ErrAttachmentDimensionExceeded) Error() string {
 func (e *ErrAttachmentDimensionExceeded) Friendly() string {
 	return fmt.Sprintf("Image is too large (%.1f MP). Provider %q accepts at most %.1f MP. Resize the image before attaching.",
 		float64(e.Given)/1_000_000, e.Provider, float64(e.Cap)/1_000_000)
+}
+
+// ErrUnsupportedFormat is returned when the caller requests a ResponseFormat
+// mode that the (provider, model) does not support AND no fallback is possible.
+// Specifically: Mode="grammar" when CapGrammar is false — grammar cannot be
+// emulated via prompt engineering (structured-output-and-grammar-01KX5R8A FR-005).
+type ErrUnsupportedFormat struct {
+	Provider string
+	Model    string
+	Mode     string
+}
+
+func (e *ErrUnsupportedFormat) Error() string {
+	return fmt.Sprintf("llm: response format %q not supported by provider %q model %q",
+		e.Mode, e.Provider, e.Model)
+}
+
+// IsUnsupportedFormat reports whether err is or wraps ErrUnsupportedFormat.
+func IsUnsupportedFormat(err error) bool {
+	if err == nil {
+		return false
+	}
+	var t *ErrUnsupportedFormat
+	return errors.As(err, &t)
+}
+
+// ErrResponseValidationFailed is returned when the model's output failed
+// schema validation after all retries (structured-output-and-grammar-01KX5R8A FR-006).
+// The caller may inspect SchemaError for the validation message and Raw for
+// the first 500 characters of the invalid response for debugging.
+type ErrResponseValidationFailed struct {
+	Mode        string // "json" | "json_schema" | "grammar"
+	SchemaError string // human-readable validation error
+	Raw         string // first 500 chars of the invalid response (for debugging)
+}
+
+func (e *ErrResponseValidationFailed) Error() string {
+	if e.SchemaError != "" {
+		return fmt.Sprintf("llm: response validation failed (mode=%s): %s", e.Mode, e.SchemaError)
+	}
+	return fmt.Sprintf("llm: response validation failed (mode=%s)", e.Mode)
 }
 
 // ErrAttachmentEncrypted is returned when a PDF is password-protected and

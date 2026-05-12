@@ -27,6 +27,25 @@ import (
 const envCompactionVar = "HARNESS_COMPACTION"
 const envCompactionDisabled = "off"
 
+// envKeychainRotationVar / envKeychainRotationOff control the key-rotation
+// feature flag (provider-keychain-rotation-01KQ8TD9 WP03). When the env var
+// is set to "off", "0", or "false", the chat runner skips the auth-failure
+// interception path entirely and falls through to the existing backend-error
+// close — preserving byte-identical behaviour with today's unpatched path.
+const envKeychainRotationVar = "HARNESS_KEYCHAIN_ROTATION"
+
+// keychainRotationEnabled reads the feature flag once per call. "off",
+// "0", and "false" disable; anything else (including absence) enables.
+func keychainRotationEnabled() bool {
+	v := os.Getenv(envKeychainRotationVar)
+	switch v {
+	case "off", "0", "false":
+		return false
+	default:
+		return true
+	}
+}
+
 // compactionDisabledByEnv reports whether HARNESS_COMPACTION=off is
 // set. The chat-runner pre-send hook reads this on every send so a
 // mid-day toggle takes effect on the next user turn without a chassis
@@ -284,6 +303,31 @@ type PermVerdict struct {
 	Reason string
 }
 
+// pausedTurn stores the state captured when a chat run is interrupted by
+// *llm.ErrProviderAuthFailed so it can be redriven after a key rotation.
+// (provider-keychain-rotation-01KQ8TD9 WP03)
+type pausedTurn struct {
+	subID         string
+	sessionID     string
+	profileID     string
+	modelOverride string
+	pausedAt      time.Time
+}
+
+// AuthFailedPayload is the broker payload emitted on the
+// "provider:auth-failed" topic when a chat run is interrupted by a
+// credential rejection. The frontend toast subscribes to this topic to
+// show the inline rotate affordance.
+// (provider-keychain-rotation-01KQ8TD9 WP03)
+type AuthFailedPayload struct {
+	SubID     string `json:"sub_id"`
+	SessionID string `json:"session_id"`
+	ProfileID string `json:"profile_id"`
+	Provider  string `json:"provider"`
+	Model     string `json:"model"`
+	Reason    string `json:"reason"`
+}
+
 // ChatRunner is the kernel-driven entry point that replaces
 // core/toolloop as the chassis chat path. One runner per process; the
 // chassis constructs it inside the LLM view's wiring and passes it to
@@ -295,9 +339,10 @@ type PermVerdict struct {
 type ChatRunner struct {
 	cfg Config
 
-	mu     sync.Mutex
-	subs   map[string]*chatSub
-	nextID uint64
+	mu         sync.Mutex
+	subs       map[string]*chatSub
+	pausedSubs map[string]*pausedTurn // keyed by profileID; last-write-wins
+	nextID     uint64
 }
 
 // chatSub is the per-StartStream bookkeeping entry.
@@ -335,8 +380,9 @@ func New(cfg Config) (*ChatRunner, error) {
 		cfg.MaxTurns = func() int { return 25 }
 	}
 	return &ChatRunner{
-		cfg:  cfg,
-		subs: map[string]*chatSub{},
+		cfg:        cfg,
+		subs:       map[string]*chatSub{},
+		pausedSubs: map[string]*pausedTurn{},
 	}, nil
 }
 
@@ -516,6 +562,47 @@ func (r *ChatRunner) StopStream(_ context.Context, subID string) error {
 	return nil
 }
 
+// HasPausedSubFor reports whether a paused turn exists for the given profileID.
+// When ok is true, token is the sub_id originally assigned to the paused turn.
+// Used by the LLM view's TestAndRotateKey to decide whether to mint an
+// auto-resume token (provider-keychain-rotation-01KQ8TD9 WP03).
+func (r *ChatRunner) HasPausedSubFor(profileID string) (token string, ok bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	pt, ok := r.pausedSubs[profileID]
+	if !ok {
+		return "", false
+	}
+	return pt.subID, true
+}
+
+// RedriveLastTurn re-issues a StartStream for the captured (profileID,
+// sessionID, modelOverride) of a paused turn WITHOUT appending a new user
+// message — the user turn is already in session history courtesy of the
+// original StartStream. This is the auto-resume seam called by the LLM
+// view after a successful TestAndRotateKey.
+//
+// Returns the new sub_id on success. The paused entry is removed from
+// pausedSubs regardless of the outcome so a failed redrive does not block
+// a subsequent manual resend.
+//
+// provider-keychain-rotation-01KQ8TD9 WP03.
+func (r *ChatRunner) RedriveLastTurn(ctx context.Context, profileID string) (newSubID string, err error) {
+	r.mu.Lock()
+	pt, ok := r.pausedSubs[profileID]
+	if ok {
+		delete(r.pausedSubs, profileID)
+	}
+	r.mu.Unlock()
+	if !ok {
+		return "", fmt.Errorf("chat: no paused turn for profile %q", profileID)
+	}
+	// StartStream with empty userMessage skips the HistoryWriter.AppendMessage
+	// call so the user turn is not double-appended (the HistoryWriter guard
+	// in StartStream checks `userMessage != ""`).
+	return r.StartStream(ctx, pt.profileID, pt.sessionID, pt.modelOverride, "")
+}
+
 // driveRun runs the kernel and emits the terminal close payload. We
 // unconditionally fire EmitClosed once the run exits so the chat
 // surface always sees a close signal — the bridge's Close() is
@@ -534,6 +621,56 @@ func (r *ChatRunner) driveRun(ctx context.Context, sub *chatSub, env *coreag.Env
 	message := ""
 	finishReason := ""
 	runTerminatedClean := false // true when kernel finished without error (or ErrPaused)
+
+	// provider-keychain-rotation-01KQ8TD9 WP03: auth-failure interception.
+	// When the kernel run exits with *ErrProviderAuthFailed AND the key-rotation
+	// feature flag is on, we pause the chat surface in "needs_key_rotation" state
+	// rather than emitting a backend-error close. The broker topic drives the
+	// frontend toast; the paused turn is stored so RedriveLastTurn can resume it
+	// after a successful key rotation.
+	var authFailed *corellm.ErrProviderAuthFailed
+	if errors.As(err, &authFailed) && keychainRotationEnabled() {
+		pt := &pausedTurn{
+			subID:         sub.id,
+			sessionID:     sub.sessionID,
+			profileID:     authFailed.ProfileID,
+			modelOverride: sub.modelOverride,
+			pausedAt:      time.Now(),
+		}
+		r.mu.Lock()
+		r.pausedSubs[authFailed.ProfileID] = pt
+		r.mu.Unlock()
+
+		// Emit the synthetic "paused for auth" chunk so the frontend's chat
+		// bubble marks the turn as incomplete.
+		sub.bridge.Emit(coreag.StreamEvent{
+			Kind:   coreag.StreamEventError,
+			ErrMsg: "auth failure — paused for key rotation",
+		})
+
+		// Broadcast the auth-failure topic so the toast component can mount.
+		r.cfg.Broker.Emit("provider:auth-failed", AuthFailedPayload{
+			SubID:     sub.id,
+			SessionID: sub.sessionID,
+			ProfileID: authFailed.ProfileID,
+			Provider:  authFailed.Provider,
+			Model:     authFailed.ModelID,
+			Reason:    authFailed.Reason,
+		})
+
+		// Do NOT call EmitClosed — the stream stays open from the frontend's
+		// perspective until RedriveLastTurn completes or the user dismisses.
+		if !sub.finished.CompareAndSwap(false, true) {
+			return
+		}
+		log.Info("chat.run.auth_failure_paused",
+			"sub_id", sub.id,
+			"session_id", sub.sessionID,
+			"profile_id", authFailed.ProfileID,
+		)
+		return
+	}
+
 	switch {
 	case err == nil:
 		reason = "completed"

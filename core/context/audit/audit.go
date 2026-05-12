@@ -182,6 +182,24 @@ const (
 	// KindPolicyTemplateInstalled fires when InstallTemplate copies a shipped
 	// Cedar template to the user's policy directory. Payload: PolicyTemplateInstalledPayload.
 	KindPolicyTemplateInstalled Kind = "policy.template_installed"
+
+	// KindLLMStructuredResponse fires once per structured-output call regardless
+	// of validation outcome (structured-output-and-grammar-01KX5R8A FR-010).
+	//
+	// Privacy invariant: this payload MUST NOT carry the schema bytes, the
+	// grammar bytes, or any portion of the model response body. Only the
+	// schema SHA-256 hash (schema_hash), provider/model metadata, and
+	// classification fields cross the audit boundary.
+	KindLLMStructuredResponse Kind = "llm.structured.response"
+
+	// KindProviderKeyRotated fires when a provider API key is successfully
+	// rotated via TestAndRotateKey. The payload is ProviderKeyRotatedPayload.
+	//
+	// Privacy invariant: the payload MUST NOT carry key material, key length,
+	// or key prefix. Only the four fields enumerated in ProviderKeyRotatedPayload
+	// are permitted.
+	// (provider-keychain-rotation-01KQ8TD9 WP04)
+	KindProviderKeyRotated Kind = "provider.key_rotated"
 )
 
 // Event is the wire shape passed to the event log. The concrete event-log
@@ -646,6 +664,48 @@ type PolicyTemplateInstalledPayload struct {
 	Dest string `json:"dest"`
 	// Bytes is the number of bytes written.
 	Bytes int `json:"bytes"`
+}
+
+// LLMStructuredResponsePayload carries signalling for KindLLMStructuredResponse
+// (structured-output-and-grammar-01KX5R8A FR-010).
+//
+// Privacy invariant: schema bytes, grammar bytes, and any portion of the model
+// response body MUST NOT appear in this struct. schema_hash is a SHA-256 hex
+// digest of the schema bytes (empty string for grammar/json mode where no schema
+// was supplied). The raw response and schema are never included.
+type LLMStructuredResponsePayload struct {
+	// Provider is the adapter kind (e.g. "anthropic", "openai", "openrouter", "bedrock").
+	Provider string `json:"provider"`
+	// Model is the model identifier used for the call.
+	Model string `json:"model"`
+	// FormatMode is the ResponseFormat.Mode value ("json" | "json_schema" | "grammar").
+	FormatMode string `json:"format_mode"`
+	// SchemaHash is the SHA-256 hex digest of the JSON schema bytes (Mode="json_schema").
+	// Empty for Mode="json" and Mode="grammar" where no schema was supplied.
+	SchemaHash string `json:"schema_hash,omitempty"`
+	// ValidationOutcome classifies the result:
+	//   "passed"       — first attempt validated successfully.
+	//   "retry_passed" — first attempt failed, retry succeeded.
+	//   "failed"       — all attempts failed validation.
+	//   "skipped"      — Mode="json" or Mode="grammar" (no schema to validate).
+	ValidationOutcome string `json:"validation_outcome"`
+	// Attempts is the number of LLM calls made (1 = no retry, 2 = one retry fired).
+	Attempts int `json:"attempts"`
+	// InputTokens and OutputTokens are from the terminal Usage record.
+	InputTokens  int `json:"input_tokens"`
+	OutputTokens int `json:"output_tokens"`
+}
+
+// ProviderKeyRotatedPayload carries the signalling for KindProviderKeyRotated.
+//
+// Privacy invariant: EXACTLY these four fields and no others. No key
+// material, key length, key prefix, or redacted key view may appear.
+// (provider-keychain-rotation-01KQ8TD9 WP04)
+type ProviderKeyRotatedPayload struct {
+	Provider  string    `json:"provider"`   // adapter kind ("anthropic", "openai", …)
+	ProfileID string    `json:"profile_id"` // the profile whose key was rotated
+	RotatedAt time.Time `json:"rotated_at"` // wall clock at rotation success
+	Source    string    `json:"source"`     // "manual" | "inline-toast"
 }
 
 // Emit is a small convenience wrapper for callers that have a payload

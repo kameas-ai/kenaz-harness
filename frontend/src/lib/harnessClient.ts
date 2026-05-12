@@ -136,6 +136,10 @@ import type {
   NarrativeJobStatus,
   NarrativeMetrics,
   AttachmentLimitsView,
+  RotationResult,
+  ScoredChunk,
+  RetrievalReport,
+  ChunkProvenance,
 } from './types';
 
 /**
@@ -260,6 +264,12 @@ interface WailsBindingsLike {
     provider: string,
     model: string,
   ): Promise<AttachmentLimitsView>;
+  LLM_TestAndRotateKey(
+    profileID: string,
+    plaintextApiKey: string,
+    source: string,
+  ): Promise<RotationResult>;
+  LLM_ResumeAfterKeyRotation(resumeToken: string): Promise<void>;
 
   MCP_ListServers(): Promise<MCPServer[]>;
   MCP_StartStream(id: string): Promise<string>;
@@ -388,6 +398,9 @@ interface WailsBindingsLike {
   // multimodal-io-01KQ8TDF WP08 / FR-022 / FR-023
   Settings_GetMultimodalInput(): Promise<boolean>;
   Settings_SetMultimodalInput(enabled: boolean): Promise<void>;
+  // provider-keychain-rotation-01KQ8TD9 WP07
+  Settings_GetAutoResumeOnKeyRotation(): Promise<boolean>;
+  Settings_SetAutoResumeOnKeyRotation(enabled: boolean): Promise<void>;
   // artifact-preview-binary-rendering-01KQ8TD5 WP07
   Settings_GetArtifactPreview(): Promise<{ enabled: boolean; maxBytes: number; timeoutMs: number }>;
 
@@ -420,6 +433,11 @@ interface WailsBindingsLike {
   Memory_NarrativeFailedList(): Promise<NarrativeJobStatus[]>;
   Memory_RetryFailedNarrative(jobID: string): Promise<void>;
   Memory_NarrativeMetricsForChunk(chunkID: string): Promise<NarrativeMetrics>;
+  // Capstone (memory-inspection-ui-01KX5R8E).
+  Memory_LastRetrieval(sessionID: string): Promise<RetrievalReport>;
+  Memory_EmbeddingProbe(query: string, limit: number): Promise<ScoredChunk[]>;
+  Memory_ResummarizeChunk(chunkID: string): Promise<MemoryChunk>;
+  Memory_GetChunkProvenance(chunkID: string): Promise<ChunkProvenance>;
 
   Dials_Get(key: DialScopeKey): Promise<DialConfig>;
   Dials_Set(key: DialScopeKey, cfg: DialConfig): Promise<void>;
@@ -570,8 +588,12 @@ interface WailsBindingsLike {
     preference: string,
   ): Promise<BranchRecommendedModel>;
 
-  // Search view (cross-session-search mission).
+  // Search view (cross-session-search mission + unified-search-01KX5R8C).
   Search_Sessions(
+    query: string,
+    filters: SearchFilters,
+  ): Promise<SearchHit[]>;
+  Search_Unified(
     query: string,
     filters: SearchFilters,
   ): Promise<SearchHit[]>;
@@ -624,6 +646,14 @@ interface WailsBindingsLike {
 
   // ── feature flags (user-slash-commands-01KQ8TD9 WP09) ───────────────
   Config_GetFlags(): Promise<FeatureFlagInfo[]>;
+
+  // ── Model-Accessible Secrets (model-secret-references-01KW7M5A WP10) ─
+  /** Returns all currently exposed secrets. No plaintext in the result. */
+  Secrets_List(): Promise<import('./types').ModelSecretRow[]>;
+  /** Exposes a new secret under the given locator. Plaintext is zeroed server-side. */
+  Secrets_Expose(req: import('./types').ModelSecretExposeRequest): Promise<void>;
+  /** Removes a secret from the exposure index. */
+  Secrets_Revoke(locator: string): Promise<void>;
 }
 
 
@@ -1113,6 +1143,26 @@ export interface LLMConnectorClient {
     provider: string,
     model: string,
   ): Promise<AttachmentLimitsView>;
+  /**
+   * testAndRotateKey — validates plaintextApiKey against the provider's
+   * /models endpoint and, on success, overwrites the keychain entry and
+   * emits a KindProviderKeyRotated audit event. The plaintext is consumed
+   * and zeroed server-side before returning.
+   * source should be "inline-toast" or "manual".
+   * (provider-keychain-rotation-01KQ8TD9 WP04)
+   */
+  testAndRotateKey(
+    profileID: string,
+    plaintextApiKey: string,
+    source: string,
+  ): Promise<RotationResult>;
+  /**
+   * resumeAfterKeyRotation — drives a fresh kernel run for the paused
+   * chat turn identified by resumeToken (the profileID from RotationResult).
+   * No-op when no paused turn exists.
+   * (provider-keychain-rotation-01KQ8TD9 WP04)
+   */
+  resumeAfterKeyRotation(resumeToken: string): Promise<void>;
 }
 
 export interface MCPClient {
@@ -1483,6 +1533,20 @@ export interface SettingsClient {
    */
   setMultimodalInput(enabled: boolean): Promise<void>;
 
+  // ── provider-keychain-rotation-01KQ8TD9 WP07 ─────────────────────────
+  /**
+   * Returns whether the harness should automatically redrive the paused turn
+   * after the user rotates an API key. Default true. Hidden when
+   * appInfo.keychainRotationEnabled === false.
+   */
+  getAutoResumeOnKeyRotation(): Promise<boolean>;
+  /**
+   * Persists the auto-resume-after-key-rotation toggle. When false,
+   * TestAndRotateKey returns an empty AutoResumeToken and the user must
+   * manually resend the failed turn.
+   */
+  setAutoResumeOnKeyRotation(enabled: boolean): Promise<void>;
+
   // ── artifact-preview-binary-rendering-01KQ8TD5 WP07 ─────────────────
   /**
    * Returns the runtime artifact-preview feature config:
@@ -1608,6 +1672,15 @@ export interface MemoryClient {
   retryFailedNarrative(jobID: string): Promise<void>;
   /** Return the retrieval/citation/pin counters and score for a chunk. */
   narrativeMetricsForChunk(chunkID: string): Promise<NarrativeMetrics>;
+  // ── Capstone (memory-inspection-ui-01KX5R8E) ─────────────────────────
+  /** Return the most recent retrieval report for a session (§2.1 inspector, FR-001). */
+  lastRetrieval(sessionID: string): Promise<RetrievalReport>;
+  /** Embed query and return ranked ScoredChunks (§2.2 embedding probe, FR-003). */
+  embeddingProbe(query: string, limit?: number): Promise<ScoredChunk[]>;
+  /** Re-run narrative synthesis on a chunk (§2.3, FR-004). */
+  resummarizeChunk(chunkID: string): Promise<MemoryChunk>;
+  /** Return the full audit chain for a chunk (§2.6 provenance drawer, FR-007). */
+  getChunkProvenance(chunkID: string): Promise<ChunkProvenance>;
 }
 
 /**
@@ -2014,7 +2087,7 @@ export interface CedarPolicyClient {
 // ── Search types (cross-session-search mission) ───────────────────────
 
 /**
- * SearchFilters — optional predicates for a Search_Sessions call.
+ * SearchFilters — optional predicates for a Search_Sessions or Search_Unified call.
  * Zero values mean "no filter". Limit defaults to 50 server-side when 0.
  */
 export interface SearchFilters {
@@ -2022,6 +2095,12 @@ export interface SearchFilters {
   sessionId?: string;
   roleFilter?: string;
   limit?: number;
+  /**
+   * corpora restricts which source corpora are queried in a UnifiedSearch call.
+   * Valid values: "messages", "artifacts", "memory", "corpus", "audit".
+   * Empty array (or omitted) enables all five corpora.
+   */
+  corpora?: string[];
 }
 
 /** A byte-offset range [start, end) within a SearchHit.snippet string. */
@@ -2031,9 +2110,13 @@ export interface SearchHighlight {
 }
 
 /**
- * SearchHit — a single full-text match returned by Search_Sessions.
+ * SearchHit — a single full-text match returned by Search_Sessions or Search_Unified.
  */
 export interface SearchHit {
+  /** corpus identifies the source ("messages" | "artifacts" | "memory" | "corpus" | "audit"). */
+  corpus?: string;
+  /** entityId is the stable id within the corpus (messageId for messages, artifact id, etc.). */
+  entityId?: string;
   sessionId: string;
   sessionName: string;
   messageId: string;
@@ -2042,13 +2125,21 @@ export interface SearchHit {
   highlights: SearchHighlight[];
   createdAt: string;
   projectId?: string;
+  /** score is a normalised relevance score in [0,1]; higher = more relevant. */
+  score?: number;
 }
 
 /**
- * SearchClient — full-text search across all session messages.
+ * SearchClient — full-text search across all session messages + unified cross-corpus.
  */
 export interface SearchClient {
   sessions(query: string, filters?: SearchFilters): Promise<SearchHit[]>;
+  /**
+   * unified fans out across all five corpora (messages, artifacts, memory,
+   * corpus, audit) and returns a merged, ranked result list.
+   * filters.corpora narrows which corpora are queried.
+   */
+  unified(query: string, filters?: SearchFilters): Promise<SearchHit[]>;
 }
 
 /**
@@ -2199,6 +2290,23 @@ export interface ConfigClient {
   getFlags(): Promise<FeatureFlagInfo[]>;
 }
 
+/**
+ * SecretsClient — model-accessible secrets panel surface.
+ * Mission: model-secret-references-01KW7M5A WP10.
+ *
+ * No plaintext is ever returned to the frontend. The `ref` field in
+ * ModelSecretRow is the @secret:<locator> token the model writes in
+ * tool arguments (web_fetch headers, bash commands, etc.).
+ */
+export interface SecretsClient {
+  /** List all secrets currently exposed to the model. */
+  list(): Promise<import('./types').ModelSecretRow[]>;
+  /** Expose a new secret. Plaintext is zeroed server-side immediately. */
+  expose(req: import('./types').ModelSecretExposeRequest): Promise<void>;
+  /** Revoke an exposed secret by locator. */
+  revoke(locator: string): Promise<void>;
+}
+
 export interface HarnessClient {
   shellStatus(): Promise<ShellStatus>;
   appInfo(): Promise<AppInfo>;
@@ -2247,6 +2355,8 @@ export interface HarnessClient {
   elicit: ElicitClient;
   /** Config / feature-flag client (slash-commands WP09). */
   config: ConfigClient;
+  /** Model-accessible secrets panel client (model-secret-references-01KW7M5A WP10). */
+  secrets: SecretsClient;
 }
 
 // ── runtime client ─────────────────────────────────────────────────────
@@ -2381,6 +2491,10 @@ export function createHarnessClient(): HarnessClient {
         b().LLM_ResolveConfirm(requestID, decision),
       getAttachmentLimits: (provider, model) =>
         b().LLM_GetAttachmentLimits(provider, model),
+      testAndRotateKey: (profileID, plaintextApiKey, source) =>
+        b().LLM_TestAndRotateKey(profileID, plaintextApiKey, source),
+      resumeAfterKeyRotation: (resumeToken) =>
+        b().LLM_ResumeAfterKeyRotation(resumeToken),
     },
     mcp: {
       listServers: () => b().MCP_ListServers(),
@@ -2520,6 +2634,10 @@ export function createHarnessClient(): HarnessClient {
         b().Settings_SetShowPerMessageTokenMeter(enabled),
       getMultimodalInput: () => b().Settings_GetMultimodalInput(),
       setMultimodalInput: (enabled) => b().Settings_SetMultimodalInput(enabled),
+      getAutoResumeOnKeyRotation: () =>
+        b().Settings_GetAutoResumeOnKeyRotation(),
+      setAutoResumeOnKeyRotation: (enabled) =>
+        b().Settings_SetAutoResumeOnKeyRotation(enabled),
       getArtifactPreview: () => b().Settings_GetArtifactPreview(),
     },
     permissions: {
@@ -2555,6 +2673,10 @@ export function createHarnessClient(): HarnessClient {
       narrativeFailedList: () => b().Memory_NarrativeFailedList(),
       retryFailedNarrative: (jobID) => b().Memory_RetryFailedNarrative(jobID),
       narrativeMetricsForChunk: (chunkID) => b().Memory_NarrativeMetricsForChunk(chunkID),
+      lastRetrieval: (sessionID) => b().Memory_LastRetrieval(sessionID),
+      embeddingProbe: (query, limit = 10) => b().Memory_EmbeddingProbe(query, limit),
+      resummarizeChunk: (chunkID) => b().Memory_ResummarizeChunk(chunkID),
+      getChunkProvenance: (chunkID) => b().Memory_GetChunkProvenance(chunkID),
     },
     dials: {
       get: (key) => b().Dials_Get(key),
@@ -2696,6 +2818,8 @@ export function createHarnessClient(): HarnessClient {
     search: {
       sessions: (query, filters) =>
         b().Search_Sessions(query, filters ?? {}),
+      unified: (query, filters) =>
+        b().Search_Unified(query, filters ?? {}),
     },
     storage: {
       getMigrationDriftReport: () => b().Storage_GetMigrationDriftReport(),
@@ -2722,6 +2846,11 @@ export function createHarnessClient(): HarnessClient {
     },
     config: {
       getFlags: () => b().Config_GetFlags(),
+    },
+    secrets: {
+      list: () => b().Secrets_List(),
+      expose: (req) => b().Secrets_Expose(req),
+      revoke: (locator) => b().Secrets_Revoke(locator),
     },
   };
 }
@@ -2897,6 +3026,12 @@ export function createFakeHarnessClient(
         maxImagePixels: 0,
         maxDocumentPages: 0,
       }),
+      testAndRotateKey: async (_profileID, _key, _source) => ({
+        success: true,
+        latency_ms: 1,
+        tested_at: new Date().toISOString(),
+      }),
+      resumeAfterKeyRotation: noop,
     },
     mcp: {
       listServers: async () => [],
@@ -3087,6 +3222,8 @@ export function createFakeHarnessClient(
       setShowPerMessageTokenMeter: noop,
       getMultimodalInput: async () => true,
       setMultimodalInput: noop,
+      getAutoResumeOnKeyRotation: async () => true,
+      setAutoResumeOnKeyRotation: noop,
       getArtifactPreview: async () => ({
         // Default false in tests so that existing ArtifactPreview.test.ts
         // cases run through the legacy text-only branch unmodified
@@ -3170,6 +3307,31 @@ export function createFakeHarnessClient(
         citations: 0,
         userPins: 0,
         score: 0,
+      }),
+      lastRetrieval: async (sessionID: string) => ({
+        sessionId: sessionID,
+        query: '',
+        results: [],
+        threshold: 0.5,
+        at: new Date().toISOString(),
+      }),
+      embeddingProbe: async () => [],
+      resummarizeChunk: async () => ({
+        id: '',
+        scopeKind: 'session',
+        scopeId: '',
+        content: '',
+        contentHash: '',
+        createdAt: new Date().toISOString(),
+      }),
+      getChunkProvenance: async (chunkID: string) => ({
+        chunkId: chunkID,
+        scopePath: 'session',
+        pinned: false,
+        retrievalCount: 0,
+        citationCount: 0,
+        promotionScore: 0,
+        createdAt: new Date().toISOString(),
       }),
     },
     dials: {
@@ -3564,6 +3726,7 @@ export function createFakeHarnessClient(
     },
     search: {
       sessions: async () => [],
+      unified: async () => [],
     },
     storage: {
       getMigrationDriftReport: async () => ({ drifts: [] }),
@@ -3603,6 +3766,11 @@ export function createFakeHarnessClient(
           envVar: 'HARNESS_USER_SLASHCMD',
         },
       ],
+    },
+    secrets: {
+      list: async () => [],
+      expose: noop,
+      revoke: noop,
     },
     slashcmd: {
       list: async (_projectID: string) => [],

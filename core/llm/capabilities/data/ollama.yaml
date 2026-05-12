@@ -9,6 +9,14 @@ defaults:
   reasoning: false
   cancellation: true
   usage_reporting: true
+  # Structured-output capability defaults (structured-output-and-grammar-01KX5R8A FR-002).
+  # Ollama (llama.cpp backend) supports GBNF grammar constraints natively.
+  # structured_output=false here because the full json_schema adapter path
+  # is deferred to local-model-runtimes-01KQ8VMZ; grammar=true stubs the
+  # capability so the gate knows it's supported in principle.
+  structured_output: false
+  grammar: true
+  regex_grammar: false
   # Attachment limits (multimodal-io-01KQ8TDF FR-006)
   image_input: false
   document_input: false
@@ -30,6 +38,8 @@ models:
     reasoning: false
     cancellation: true
     usage_reporting: true
+    grammar: true
+    regex_grammar: false
     image_input: false
     document_input: false
   # Vision-capable Ollama models (llava, bakllava, etc.)
@@ -43,6 +53,8 @@ models:
     reasoning: false
     cancellation: true
     usage_reporting: true
+    grammar: true
+    regex_grammar: false
     image_input: true
     document_input: false
     max_image_bytes: 10485760
@@ -57,6 +69,8 @@ models:
     reasoning: false
     cancellation: true
     usage_reporting: true
+    grammar: true
+    regex_grammar: false
     image_input: true
     document_input: false
     max_image_bytes: 10485760

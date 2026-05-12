@@ -386,6 +386,37 @@ export interface SecretReference {
   createdAt: string;
 }
 
+/**
+ * ModelSecretRow — one entry in the model-accessible secrets panel.
+ * Mirrors core/rpc/views/secrets.SecretRow. No plaintext is included
+ * (FR-005a). The ref field is the @secret:<locator> token the model
+ * writes in tool arguments.
+ *
+ * IMPORTANT: DO NOT add a `value`, `secret`, `password`, `apiKey`,
+ * or `token` field — the privacy-CI lint rule flags them.
+ * (model-secret-references-01KW7M5A WP10)
+ */
+export interface ModelSecretRow {
+  ref: string;
+  locator: string;
+  description: string;
+  kind: string;
+  scope: string;
+  exposedAt: string;
+}
+
+/**
+ * ModelSecretExposeRequest — wire shape for Secrets_Expose.
+ * The plaintext field is zeroed server-side immediately after being
+ * handed to the ExposureIndex. It never enters the conversation context.
+ */
+export interface ModelSecretExposeRequest {
+  locator: string;
+  description: string;
+  kind: string;
+  plaintext: string;
+}
+
 export interface ContextEntry {
   id: string;
   kind: string;
@@ -520,6 +551,14 @@ export interface AppInfo {
    * available (cedar-policy-editor-ui-01KQ8TD6 WP01).
    */
   policyEditorEnabled?: boolean;
+  /**
+   * keychainRotationEnabled is true when HARNESS_KEYCHAIN_ROTATION is not
+   * set to "off", "0", or "false". The frontend uses this to hide the
+   * "Auto-resume after rotating an API key" Settings toggle and the
+   * AuthFailureToast rotate button when the feature is disabled.
+   * (provider-keychain-rotation-01KQ8TD9 WP07)
+   */
+  keychainRotationEnabled?: boolean;
 }
 
 export interface WindowSize {
@@ -874,6 +913,13 @@ export interface ToolCall {
   argsSummary: string;
   /** Optional latency display, e.g. `"412ms"`. */
   latency?: string;
+  /**
+   * True when the dispatch resolved at least one @secret: reference token
+   * in the tool arguments. Never carries plaintext — provenance only
+   * (model-secret-references-01KW7M5A WP14). Drives the lock icon in the
+   * chat UI.
+   */
+  usedSecrets?: boolean;
 }
 
 export interface Message {
@@ -1048,6 +1094,47 @@ export interface AttachmentLimitsView {
   imageInputMimeTypes?: string[];
   /** MIME types accepted for documents; empty = accept all. */
   documentInputMimeTypes?: string[];
+}
+
+/**
+ * RotationResult — outcome of LLM_TestAndRotateKey.
+ * Mirrors core/rpc/views/llm.RotationResult.
+ * (provider-keychain-rotation-01KQ8TD9 WP04)
+ */
+export interface RotationResult {
+  success: boolean;
+  message?: string;
+  latency_ms: number;
+  tested_at: string; // ISO-8601 timestamp
+  /** Non-empty when a paused chat turn exists for this profile. */
+  auto_resume_token?: string;
+}
+
+/**
+ * AuthFailedPayload — payload of the `provider:auth-failed` broker event.
+ * Emitted by the chat runner when an adapter returns *ErrProviderAuthFailed.
+ * (provider-keychain-rotation-01KQ8TD9 WP05)
+ */
+export interface AuthFailedPayload {
+  sub_id: string;
+  session_id: string;
+  profile_id: string;
+  provider: string;
+  model: string;
+  reason: string;
+}
+
+/**
+ * RetryAfterRotationFailedPayload — payload of the
+ * `provider:retry-after-rotation-failed` broker event. Emitted when a
+ * resumed (post-rotation) turn errors for non-auth reasons.
+ * (provider-keychain-rotation-01KQ8TD9 WP05)
+ */
+export interface RetryAfterRotationFailedPayload {
+  sub_id: string;
+  session_id: string;
+  profile_id: string;
+  error_message: string;
 }
 
 /**
@@ -1333,6 +1420,48 @@ export interface NarrativeMetrics {
   score: number;
   lastRetrievedAt?: string; // RFC3339
   lastCitedAt?: string; // RFC3339
+}
+
+/**
+ * ScoredChunk — one chunk ranked by cosine similarity against a query
+ * (memory-inspection-ui-01KX5R8E §2.1/§2.2).
+ */
+export interface ScoredChunk {
+  chunk: MemoryChunk;
+  similarity: number;
+  /** true when similarity >= the retriever's configured threshold (was injected). */
+  injected: boolean;
+}
+
+/**
+ * RetrievalReport — the most recent retrieval call for a session
+ * (memory-inspection-ui-01KX5R8E §2.1, FR-001).
+ */
+export interface RetrievalReport {
+  sessionId: string;
+  query: string;
+  results: ScoredChunk[];
+  threshold: number;
+  at: string; // RFC3339
+}
+
+/**
+ * ChunkProvenance — full audit chain for one chunk
+ * (memory-inspection-ui-01KX5R8E §2.6, FR-007).
+ */
+export interface ChunkProvenance {
+  chunkId: string;
+  sourceTurn?: string;
+  hookBoundary?: string;
+  kind?: string;
+  scopePath: string;
+  pinned: boolean;
+  retrievalCount: number;
+  citationCount: number;
+  promotionScore: number;
+  embedderKind?: string;
+  embedDimensions?: number;
+  createdAt: string; // RFC3339
 }
 
 /**

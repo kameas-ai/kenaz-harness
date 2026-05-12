@@ -246,6 +246,15 @@ func (l *Library) Get(path string) (string, error) {
 	return string(b), nil
 }
 
+// ErrSecretReferenceInContent is returned by Save when the content
+// contains an @secret: reference token. Context pack files must not
+// embed @secret: tokens because they would be passed verbatim into
+// conversation context where refs.Substitute would inject plaintext —
+// use the /secret add flow or Settings → Secrets to expose secrets.
+//
+// (model-secret-references-01KW7M5A WP13)
+var ErrSecretReferenceInContent = errors.New("contexts: content contains @secret: reference; use the Secrets panel or /secret add to expose secrets — do not embed references in context files")
+
 // Save writes content to path, creating any missing parent
 // directories. The path's extension must be in the allowed set and
 // content must be ≤ 1 MiB. Existing files are overwritten atomically
@@ -263,6 +272,12 @@ func (l *Library) Save(path, content string) error {
 	}
 	if int64(len(content)) > MaxFileBytes {
 		return fmt.Errorf("%w: %d bytes", ErrFileTooLarge, len(content))
+	}
+	// Reject content containing @secret: reference tokens. Embedding
+	// references in context pack files allows uncontrolled plaintext
+	// injection into conversation context (WP13 guard).
+	if strings.Contains(content, "@secret:") {
+		return ErrSecretReferenceInContent
 	}
 	abs := filepath.Join(l.root, rel)
 	if err := l.assertWithinRoot(abs); err != nil {

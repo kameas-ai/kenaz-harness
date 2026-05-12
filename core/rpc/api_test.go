@@ -38,9 +38,12 @@ import (
 	updateview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/update"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/workflow"
 	workflowsview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/workflows"
+	scheduledchatview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/scheduledchat"
 	storageview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/storage"
 	onboardingview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/onboarding"
 	elicitview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/elicit"
+	secretsview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/secrets"
+	coresecrets "github.com/sigil-tech/kaneaz-harness/core/secrets"
 )
 
 // fakeHarnessAPI is a compile-time witness that the HarnessAPI interface
@@ -127,6 +130,13 @@ func (f *fakeHarnessAPI) Elicit() elicitview.ElicitAPI {
 		return f.elicitAPI
 	}
 	return elicitview.New(elicitview.Config{})
+}
+func (f *fakeHarnessAPI) ScheduledChat() scheduledchatview.ScheduledChatAPI {
+	return scheduledchatview.New(scheduledchatview.Config{})
+}
+
+func (f *fakeHarnessAPI) Secrets() secretsview.SecretsAPI {
+	return secretsview.NewAPI(coresecrets.NewExposureIndex())
 }
 
 // Compile-time interface witness (plan §4.2).

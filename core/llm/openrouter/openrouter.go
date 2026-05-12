@@ -34,6 +34,7 @@ import (
 
 	llm "github.com/sigil-tech/kaneaz-harness/core/llm"
 	"github.com/sigil-tech/kaneaz-harness/core/llm/httpx"
+	"github.com/sigil-tech/kaneaz-harness/core/llm/structured"
 	"github.com/sigil-tech/kaneaz-harness/core/logging"
 )
 
@@ -152,12 +153,56 @@ func (a *Adapter) Capabilities(model string) llm.CapabilityDescriptor {
 	}
 }
 
-// Compile-time assertions: *Adapter satisfies llm.ProviderAdapter and
-// llm.ModelLister.
+// Compile-time assertions: *Adapter satisfies llm.ProviderAdapter,
+// llm.ModelLister, and llm.StructuredOutputAdapter.
 var (
-	_ llm.ProviderAdapter = (*Adapter)(nil)
-	_ llm.ModelLister     = (*Adapter)(nil)
+	_ llm.ProviderAdapter       = (*Adapter)(nil)
+	_ llm.ModelLister           = (*Adapter)(nil)
+	_ llm.StructuredOutputAdapter = (*Adapter)(nil)
 )
+
+// ApplyResponseFormat implements llm.StructuredOutputAdapter. OpenRouter
+// speaks the OpenAI Chat Completions wire shape, so the same response_format
+// encoding applies. Grammar mode is unsupported (cloud provider).
+//
+// (structured-output-and-grammar-01KX5R8A WP03c)
+func (a *Adapter) ApplyResponseFormat(req *llm.GenerationRequest, wireBody map[string]any) error {
+	if req == nil || req.ResponseFormat == nil {
+		return nil
+	}
+	rf := req.ResponseFormat
+	switch rf.Mode {
+	case "json":
+		wireBody["response_format"] = map[string]any{"type": "json_object"}
+	case "json_schema":
+		schema := rf.Schema
+		if len(schema) > 0 {
+			injected, err := structured.InjectAdditionalProperties(schema)
+			if err == nil {
+				schema = injected
+			}
+		}
+		var schemaVal any
+		if len(schema) > 0 {
+			if err := json.Unmarshal(schema, &schemaVal); err != nil {
+				return fmt.Errorf("openrouter: response_format schema parse: %w", err)
+			}
+		}
+		wireBody["response_format"] = map[string]any{
+			"type": "json_schema",
+			"json_schema": map[string]any{
+				"name":   "response",
+				"schema": schemaVal,
+				"strict": true,
+			},
+		}
+	case "grammar":
+		return &llm.ErrUnsupportedFormat{Provider: Kind, Model: "", Mode: rf.Mode}
+	default:
+		// Unknown mode — treat as no-op.
+	}
+	return nil
+}
 
 // Stream opens an SSE connection to the chat-completions endpoint and
 // returns a llm.Stream that pumps StreamEvent values to the caller.
@@ -299,6 +344,29 @@ func (a *Adapter) ListModels(ctx context.Context, cred []byte) ([]llm.ModelInfo,
 	})
 	return out, nil
 }
+
+// TestKey implements llm.KeyTester. Verifies cred by calling ListModels with
+// a 5-second deadline; returns nil iff the response contains ≥1 model.
+//
+// provider-keychain-rotation-01KQ8TD9 WP02.
+func (a *Adapter) TestKey(ctx context.Context, cred []byte) error {
+	if len(cred) == 0 {
+		return &llm.ErrAuth{Status: 0, Message: "openrouter: empty credential"}
+	}
+	tctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	models, err := a.ListModels(tctx, cred)
+	if err != nil {
+		return err
+	}
+	if len(models) == 0 {
+		return &llm.ErrInvalidRequest{Status: 200, Message: "openrouter: key accepted but returned empty model list"}
+	}
+	return nil
+}
+
+// Compile-time assertion: Adapter implements llm.KeyTester.
+var _ llm.KeyTester = (*Adapter)(nil)
 
 // LookupModelInfo returns the cached llm.ModelInfo for the given model
 // ID and reports whether the entry was present. ListProviders consults
@@ -625,6 +693,14 @@ func buildRequestBody(req llm.GenerationRequest, prof llm.ProviderProfile) ([]by
 			out[key] = v
 		} else if v, ok := prof.Defaults[key]; ok {
 			out[key] = v
+		}
+	}
+
+	// Apply ResponseFormat if set (structured-output-and-grammar-01KX5R8A WP03c).
+	if req.ResponseFormat != nil {
+		a := &Adapter{}
+		if err := a.ApplyResponseFormat(&req, out); err != nil {
+			return nil, err
 		}
 	}
 

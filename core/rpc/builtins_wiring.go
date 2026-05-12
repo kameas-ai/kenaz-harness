@@ -30,6 +30,10 @@ import (
 	coreupdateartifact "github.com/sigil-tech/kaneaz-harness/core/tools/updateartifact"
 	corewebsearch "github.com/sigil-tech/kaneaz-harness/core/tools/websearch"
 	coreaskuser "github.com/sigil-tech/kaneaz-harness/core/tools/askuserquestion"
+	corelistsecrets "github.com/sigil-tech/kaneaz-harness/core/tools/listsecrets"
+	corewebfetch "github.com/sigil-tech/kaneaz-harness/core/tools/webfetch"
+	coresecrets "github.com/sigil-tech/kaneaz-harness/core/secrets"
+	"github.com/sigil-tech/kaneaz-harness/core/credstore/refs"
 )
 
 // GlobalFSReadSet is the process-global ReadSet shared across all sessions.
@@ -73,6 +77,8 @@ func registerBuiltinTools(
 	promptRegistry *cedar.Registry,
 	elicitAPI *elicitview.API,
 	slashDispatch *coreslashcmd.Dispatch,
+	exposureIdx *coresecrets.ExposureIndex,
+	budget *refs.Budget,
 ) {
 	if registry == nil {
 		return
@@ -207,6 +213,32 @@ func registerBuiltinTools(
 		"tool", skillTool.Name(),
 		"dispatch_wired", slashDispatch != nil,
 	)
+
+	// kaneaz__list_secrets: lists secrets exposed to the model (model-secret-references-01KW7M5A WP06/WP10).
+	// Always registered when an ExposureIndex is wired; nil index is a
+	// no-op so the test harness path (nil exposureIdx) stays clean.
+	if exposureIdx != nil {
+		listSecretsTool := corelistsecrets.New(corelistsecrets.Options{
+			Index:  exposureIdx,
+			Budget: budget,
+		})
+		registry.Register(listSecretsTool)
+		logging.L().Info("rpc.builtins.register",
+			"tool", listSecretsTool.Name(),
+			"budget_wired", budget != nil,
+		)
+	} else {
+		logging.L().Info("rpc.builtins.list_secrets_skipped",
+			"reason", "no exposure index wired")
+	}
+
+	// kaneaz__web_fetch: makes authenticated HTTP requests on behalf of
+	// the model (model-secret-references-01KW7M5A WP07). Always registered;
+	// the tool resolves @secret: references at request time via the
+	// per-context Resolver so no plaintext enters the conversation context.
+	webFetchTool := corewebfetch.New(corewebfetch.Options{})
+	registry.Register(webFetchTool)
+	logging.L().Info("rpc.builtins.register", "tool", webFetchTool.Name())
 }
 
 // fsWriteEnabledLookup returns a closure the update_artifact tool

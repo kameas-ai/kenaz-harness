@@ -158,6 +158,43 @@ const (
 	// (ask-user-question-interactive-01KZNP3G WP06).  Non-interactive
 	// sub-agents receive declined:true,reason:"non_interactive" regardless.
 	ActionElicitDeferred = "tool.elicit.ask_deferred"
+
+	// ── Scheduled chat-run action family ─────────────────────────────────
+	// Introduced by mission scheduled-chat-runs-01KX5R8B (WP03).
+	//
+	// These three actions gate the three RPC-level operations on scheduled
+	// chat runs. The "tool.scheduled_run" family follows the established
+	// "<domain>.<operation>" naming convention used by
+	// workflow.run / workflow.save / workflow.delete.
+	//
+	//   ActionScheduledRunCreate  — gates Create + Update RPCs.
+	//     Resource UID: ScheduledChatRun::"<run-id>" (new) or
+	//                   ScheduledChatRun::"*" (blanket).
+	//   ActionScheduledRunDelete  — gates Delete.
+	//   ActionScheduledRunExecute — gates background dispatch (both
+	//     cron-triggered and RunNow paths). Policy authors can deny
+	//     scheduled execution entirely without affecting CRUD.
+	ActionScheduledRunCreate  = "tool.scheduled_run.create"
+	ActionScheduledRunDelete  = "tool.scheduled_run.delete"
+	ActionScheduledRunExecute = "tool.scheduled_run.execute"
+
+	// ── Model-side secret reference action family ──────────────────────────
+	// Introduced by mission model-secret-references-01KW7M5A.
+	// Both actions follow the established "<domain>.<operation>" naming
+	// convention.
+	//
+	//   ActionSecretReferenceResolve — gates every call to refs.Resolve that
+	//     substitutes an @secret:<locator> token in a tool argument. Resource
+	//     UID: SecretReference::"<locator>". Default-deny outside the session's
+	//     exposed_secrets set; forbid for untrusted agent_kind; forbid when the
+	//     per-session resolution budget is exhausted.
+	//
+	//   ActionToolListSecrets — gates the kaneaz__list_secrets builtin tool.
+	//     Resource UID: Tool::"builtin__list_secrets". Default-allow so the
+	//     model can discover what references it may use; admins can disable
+	//     per-session with an explicit forbid rule.
+	ActionSecretReferenceResolve = "secret_reference.resolve"
+	ActionToolListSecrets        = "tool.list_secrets"
 )
 
 // Entity-type names mirror spec §4.10's recommended mapping:
@@ -220,6 +257,18 @@ const (
 	// Resource UIDs take the shape Skill::"<command-name>" where command-name
 	// is the bare slash command token (e.g. "summarize", "daily-standup").
 	EntityTypeSkill = "Skill"
+
+	// EntityTypeScheduledChatRun is the Cedar entity type for scheduled
+	// chat runs. Introduced by mission scheduled-chat-runs-01KX5R8B (WP03).
+	// Resource UIDs take the shape ScheduledChatRun::"<run-id>".
+	EntityTypeScheduledChatRun = "ScheduledChatRun"
+
+	// EntityTypeSecretReference is the Cedar entity type for model-side
+	// secret references. Introduced by mission
+	// model-secret-references-01KW7M5A (WP02).
+	// Resource UIDs take the shape SecretReference::"<locator>" where locator
+	// is the keychain locator (e.g. "user:example-api-token").
+	EntityTypeSecretReference = "SecretReference"
 
 	// PrincipalLocal is the canonical EntityUID id for the single
 	// local user. The harness is single-user / privacy-first
@@ -520,4 +569,32 @@ func ElicitTemplateActionID(templateName string) string {
 		return ActionElicitTemplatePrefix + invalidUIDID
 	}
 	return ActionElicitTemplatePrefix + templateName
+}
+
+// ScheduledChatRunUID builds a Cedar EntityUID for the ScheduledChatRun
+// family introduced by mission scheduled-chat-runs-01KX5R8B (WP03).
+// id is the scheduled_chat_runs.id primary key. Malformed ids are replaced
+// with "invalid" so the resulting UID never satisfies a real permit.
+func ScheduledChatRunUID(id string) cedar.EntityUID {
+	safeID := id
+	if !validateFamilyID(id) {
+		safeID = invalidUIDID
+	}
+	return cedar.NewEntityUID(EntityTypeScheduledChatRun, cedar.String(safeID))
+}
+
+// SecretReferenceUID builds a Cedar EntityUID for the SecretReference family
+// introduced by mission model-secret-references-01KW7M5A (WP02). locator is
+// the keychain locator string (e.g. "user:example-api-token",
+// "provider:bedrock-prod"). The locator must not be empty and must not
+// contain control characters; malformed values are replaced with the literal
+// "invalid" so the resulting UID type-matches in `resource is SecretReference`
+// clauses but never satisfies any real permit — a typo therefore never
+// silently authorises a resolution.
+func SecretReferenceUID(locator string) cedar.EntityUID {
+	safeID := locator
+	if !validateFamilyID(locator) {
+		safeID = invalidUIDID
+	}
+	return cedar.NewEntityUID(EntityTypeSecretReference, cedar.String(safeID))
 }

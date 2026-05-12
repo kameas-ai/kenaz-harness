@@ -26,7 +26,7 @@
  */
 
 import { computed, ref } from 'vue';
-import { Archive, Layers } from 'lucide-vue-next';
+import { Archive, Layers, Lock } from 'lucide-vue-next';
 import MarkdownBlock from './MarkdownBlock.vue';
 import PinMenu from './PinMenu.vue';
 import ImageBlock from './ImageBlock.vue';
@@ -570,8 +570,17 @@ function onResumeClick() {
           class="font-mono text-[12px] grid items-baseline gap-3"
           style="grid-template-columns: 14ch 1fr auto"
         >
-          <span class="uppercase tracking-[0.12em] text-[11px] text-accent">
+          <span class="uppercase tracking-[0.12em] text-[11px] text-accent flex items-center gap-1">
             tool · {{ tc.name }}
+            <!-- Lock icon: visible when the tool call resolved a @secret: ref
+                 (model-secret-references-01KW7M5A WP14). No tooltip text
+                 carries secret identity — icon only. -->
+            <Lock
+              v-if="tc.usedSecrets"
+              class="h-3 w-3 shrink-0"
+              aria-label="Used secret reference"
+              data-testid="tool-call-secret-lock"
+            />
           </span>
           <span class="text-ink truncate">{{ tc.argsSummary }}</span>
           <span v-if="tc.latency" class="text-ink-subtle text-right">
