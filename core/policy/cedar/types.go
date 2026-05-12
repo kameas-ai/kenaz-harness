@@ -146,6 +146,18 @@ const (
 	//     user-defined slash command marked model_invokable=true).
 	//     Resource UID: Skill::"<command-name>".
 	ActionToolSkillInvoke = "tool.skill.invoke"
+
+	// ActionElicitTemplatePrefix is the Cedar action prefix for template-based
+	// elicitation (ask-user-question-interactive-01KZNP3G WP07).  The full
+	// action ID is built as ActionElicitTemplatePrefix + <template-id>
+	// (e.g. "tool.elicit.template.confirm-deploy").  Policy authors can
+	// therefore deny individual templates while leaving the general ask open.
+	ActionElicitTemplatePrefix = "tool.elicit.template."
+
+	// ActionElicitDeferred gates async / deferred-mode elicitation
+	// (ask-user-question-interactive-01KZNP3G WP06).  Non-interactive
+	// sub-agents receive declined:true,reason:"non_interactive" regardless.
+	ActionElicitDeferred = "tool.elicit.ask_deferred"
 )
 
 // Entity-type names mirror spec §4.10's recommended mapping:
@@ -497,4 +509,15 @@ func SkillUID(name string) cedar.EntityUID {
 		safeID = invalidUIDID
 	}
 	return cedar.NewEntityUID(EntityTypeSkill, cedar.String(safeID))
+}
+
+// ElicitTemplateActionID returns the Cedar action ID for a named template
+// (ask-user-question-interactive-01KZNP3G WP07). The full action ID is
+// ActionElicitTemplatePrefix + templateName. Malformed names are replaced with
+// "invalid" so the resulting action ID never satisfies a real permit.
+func ElicitTemplateActionID(templateName string) string {
+	if !validateFamilyID(templateName) {
+		return ActionElicitTemplatePrefix + invalidUIDID
+	}
+	return ActionElicitTemplatePrefix + templateName
 }

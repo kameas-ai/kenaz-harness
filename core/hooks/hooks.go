@@ -37,6 +37,14 @@ const (
 	EventPostSend                  = "post_send"
 	EventPreSaveSession            = "pre_save_session"
 	EventPostAssistantTurnComplete = "post_assistant_turn_complete"
+
+	// Elicitation-family events (ask-user-question-interactive-01KZNP3G WP08).
+	// EventElicitation fires before the ask dialog renders; hooks may add
+	// options, swap preview content, change layout, or block the ask.
+	// EventElicitationResult fires after the user answers and before the
+	// model sees the answer; hooks may transform or reject the answer.
+	EventElicitation       = "elicitation"
+	EventElicitationResult = "elicitation_result"
 )
 
 // v2 lifecycle events (hooks-event-surface-expansion-01KZNP3A).
@@ -91,6 +99,8 @@ var AllEvents = []string{
 	EventNotification,
 	EventBackgroundTaskComplete,
 	EventWorktreeCreate,
+	EventElicitation,
+	EventElicitationResult,
 }
 
 // HookOutput is the discriminated-union result a hook returns.

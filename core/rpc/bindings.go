@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"strings"
 
 	wruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 	"github.com/sigil-tech/kaneaz-harness/core/autonomy"
@@ -1367,10 +1368,50 @@ func (b *Bindings) Shell_ReadFile(path string) (ShellReadFileResult, error) {
 	}, nil
 }
 
+// Shell_PickFile opens the OS-native file-picker dialog and returns the
+// absolute path of the file the user selected. Returns the empty string
+// when the user cancels (Wails surfaces cancel as a no-error empty result).
+//
+// Parameters:
+//   - title:      dialog window title; defaults to "Choose a file" if empty.
+//   - defaultDir: starting directory hint; pass "" to let the OS decide.
+//   - filters:    optional MIME / extension hints passed to the OS picker.
+//     Each entry is "Display Name|*.ext1;*.ext2" (Wails format). Pass nil
+//     for no filtering.
+//
+// Used by the AskUserQuestion dialog's "file" kind so the user can select a
+// file path graphically (WP10) rather than typing the path manually.
+func (b *Bindings) Shell_PickFile(title, defaultDir string, filters []string) (string, error) {
+	if title == "" {
+		title = "Choose a file"
+	}
+	var wailsFilters []wruntime.FileFilter
+	for _, f := range filters {
+		// Each filter string is "Display Name|*.ext1;*.ext2"
+		pipe := strings.Index(f, "|")
+		if pipe < 0 {
+			wailsFilters = append(wailsFilters, wruntime.FileFilter{
+				DisplayName: f,
+				Pattern:     f,
+			})
+		} else {
+			wailsFilters = append(wailsFilters, wruntime.FileFilter{
+				DisplayName: f[:pipe],
+				Pattern:     f[pipe+1:],
+			})
+		}
+	}
+	return wruntime.OpenFileDialog(b.ctx(), wruntime.OpenDialogOptions{
+		Title:            title,
+		DefaultDirectory: defaultDir,
+		Filters:          wailsFilters,
+	})
+}
+
 // shellAPIType keeps the shell import alive — Wails-bound methods
 // only return primitive errors here, so we anchor the import to the
 // view-API interface so a future binding addition with a typed
-// argument doesn't have to re-wire the import.
+// argument doesn't have to re-wire the input.
 type shellAPIType = shell.ShellAPI
 
 // ── slash commands ────────────────────────────────────────────────────
@@ -1779,6 +1820,32 @@ func (b *Bindings) Onboarding_ListStarters() ([]onboardingview.StarterSummary, e
 // after this method resolves the pending channel.
 func (b *Bindings) Elicit_SubmitAnswer(requestID string, answerJSON json.RawMessage, cancelled bool) error {
 	return b.api.Elicit().SubmitAnswer(b.ctx(), requestID, answerJSON, cancelled)
+}
+
+// Elicit_SubmitWizardStep records one question's answer in a multi-step wizard
+// (WP05). requestID identifies the in-flight OpenWizard call; questionID is
+// the id of the question being answered; answerJSON is the user's answer;
+// dismissed is true when the user cancels the wizard mid-flow.
+//
+// The wizard resolves automatically when all visible questions are answered.
+// When dismissed, the partial set of answers is returned to the model as
+// answered_so_far in the WizardAnswer.
+func (b *Bindings) Elicit_SubmitWizardStep(requestID string, questionID string, answerJSON json.RawMessage, dismissed bool) error {
+	return b.api.Elicit().SubmitWizardStep(b.ctx(), requestID, questionID, answerJSON, dismissed)
+}
+
+// Elicit_RegisterDeferred registers a deferred ask for a session and returns
+// immediately with DeferredResult{Deferred:true, AskID:…} (WP06).
+// The model can use AskID to retrieve the answer later via
+// __ask_get_result(ask_id). A chat-header pill appears for the user.
+func (b *Bindings) Elicit_RegisterDeferred(sessionID string, req elicitview.ElicitRequest) (elicitview.DeferredResult, error) {
+	return b.api.Elicit().RegisterDeferred(b.ctx(), sessionID, req)
+}
+
+// Elicit_AnswerDeferred records the user's answer for a deferred ask (WP06).
+// Returns the system_reminder text to inject into the next LLM turn.
+func (b *Bindings) Elicit_AnswerDeferred(askID string, answer any) (string, error) {
+	return b.api.Elicit().AnswerDeferred(b.ctx(), askID, answer)
 }
 
 // Elicit_ListPending returns in-flight elicitation request IDs so the

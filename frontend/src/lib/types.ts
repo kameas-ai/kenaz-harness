@@ -2801,6 +2801,45 @@ export interface ElicitRequest {
   step?: number;
   default_value?: unknown;
   preview?: ElicitPreview;
+  /** WP05: multi-question wizard batch. When present, the single-question fields above are ignored. */
+  questions?: WizardQuestion[];
+  /** WP06: "blocking" (default) or "deferred". */
+  mode?: 'blocking' | 'deferred';
+}
+
+/**
+ * WizardQuestion is one question in a multi-step wizard batch (WP05).
+ * Mirrors elicitview.WizardQuestion on the Go side.
+ */
+export interface WizardQuestion {
+  id: string;
+  question: string;
+  kind: QuestionKind;
+  options?: QuestionOption[];
+  placeholder?: string;
+  min?: number;
+  max?: number;
+  step?: number;
+  depends_on?: WizardDependsOn;
+}
+
+/**
+ * WizardDependsOn makes a question conditional on a prior answer (WP05).
+ */
+export interface WizardDependsOn {
+  question_id: string;
+  /** "answered" | {"equals": value} | {"includes": value} */
+  condition: unknown;
+}
+
+/**
+ * WizardAnswer is the result shape when a multi-question wizard completes (WP05).
+ * Mirrors elicitview.WizardAnswer on the Go side.
+ */
+export interface WizardAnswer {
+  answers: Record<string, unknown>;
+  answered_so_far?: Record<string, unknown>;
+  dismissed: boolean;
 }
 
 // ── feature flags (user-slash-commands-01KQ8TD9 WP09) ────────────────

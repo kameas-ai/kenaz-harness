@@ -329,3 +329,148 @@ func commandAvailable(name string) bool {
 	cmd := commandContext(context.Background(), "command -v "+name)
 	return cmd.Run() == nil
 }
+
+// ── WP08: Elicitation / ElicitationResult hook events ───────────────
+
+func TestRunner_RunElicitation_AllowDefault(t *testing.T) {
+	t.Parallel()
+	reg, _ := NewRegistry("")
+	runner := NewRunner(Config{Registry: reg})
+	ev := ElicitationEvent{
+		SessionID: "sess-1",
+		AskID:     "ask-1",
+		Kind:      "radio",
+		Prompt:    "Pick one",
+	}
+	out, blocked := runner.RunElicitation(t.Context(), ev)
+	if blocked != nil {
+		t.Fatalf("unexpected block: %+v", blocked)
+	}
+	if out.AskID != "ask-1" {
+		t.Errorf("AskID = %q, want ask-1", out.AskID)
+	}
+}
+
+func TestRunner_RunElicitation_BuiltinAddsOption(t *testing.T) {
+	t.Parallel()
+	builtins := NewBuiltinRegistry()
+	builtins.RegisterElicitation("add-opt", func(_ context.Context, ev ElicitationEvent, _ map[string]any) (ElicitationEventResult, error) {
+		extra := ElicitationOption{Key: "extra", Label: "Extra Option"}
+		return ElicitationEventResult{
+			Options: append(ev.Options, extra),
+		}, nil
+	}, BuiltinDescriptor{ID: "add-opt", Name: "add-opt", Events: []string{EventElicitation}})
+
+	reg, _ := NewRegistry("")
+	_ = reg.Add(Hook{
+		ID: "h-add", Name: "add", Event: EventElicitation,
+		Kind: KindBuiltin, Enabled: true, Builtin: "add-opt",
+	})
+
+	runner := NewRunner(Config{Registry: reg, Builtins: builtins})
+	ev := ElicitationEvent{
+		SessionID: "sess-2",
+		AskID:     "ask-2",
+		Kind:      "radio",
+		Prompt:    "Pick",
+		Options: []ElicitationOption{{Key: "a", Label: "A"}},
+	}
+	out, blocked := runner.RunElicitation(t.Context(), ev)
+	if blocked != nil {
+		t.Fatalf("unexpected block: %+v", blocked)
+	}
+	if len(out.Options) != 2 {
+		t.Fatalf("options len = %d, want 2", len(out.Options))
+	}
+	if out.Options[1].Key != "extra" {
+		t.Errorf("extra option key = %q, want extra", out.Options[1].Key)
+	}
+}
+
+func TestRunner_RunElicitation_BuiltinBlocks(t *testing.T) {
+	t.Parallel()
+	builtins := NewBuiltinRegistry()
+	builtins.RegisterElicitation("block-all", func(_ context.Context, _ ElicitationEvent, _ map[string]any) (ElicitationEventResult, error) {
+		return ElicitationEventResult{Decision: "block", Reason: "policy_denied"}, nil
+	}, BuiltinDescriptor{ID: "block-all", Name: "block-all", Events: []string{EventElicitation}})
+
+	reg, _ := NewRegistry("")
+	_ = reg.Add(Hook{
+		ID: "h-block", Name: "block", Event: EventElicitation,
+		Kind: KindBuiltin, Enabled: true, Builtin: "block-all",
+	})
+
+	runner := NewRunner(Config{Registry: reg, Builtins: builtins})
+	ev := ElicitationEvent{SessionID: "s", AskID: "a", Kind: "radio", Prompt: "P"}
+	_, blocked := runner.RunElicitation(t.Context(), ev)
+	if blocked == nil {
+		t.Fatal("expected block result, got nil")
+	}
+	if blocked.Reason != "policy_denied" {
+		t.Errorf("reason = %q, want policy_denied", blocked.Reason)
+	}
+}
+
+func TestRunner_RunElicitationResult_TransformAnswer(t *testing.T) {
+	t.Parallel()
+	builtins := NewBuiltinRegistry()
+	builtins.RegisterElicitationResult("sanitize", func(_ context.Context, ev ElicitationResultEvent, _ map[string]any) (ElicitationResultEventResult, error) {
+		return ElicitationResultEventResult{Answer: "sanitized"}, nil
+	}, BuiltinDescriptor{ID: "sanitize", Name: "sanitize", Events: []string{EventElicitationResult}})
+
+	reg, _ := NewRegistry("")
+	_ = reg.Add(Hook{
+		ID: "h-san", Name: "san", Event: EventElicitationResult,
+		Kind: KindBuiltin, Enabled: true, Builtin: "sanitize",
+	})
+
+	runner := NewRunner(Config{Registry: reg, Builtins: builtins})
+	ev := ElicitationResultEvent{
+		SessionID: "s", AskID: "a", Kind: "text", Prompt: "P",
+		Answer: "raw user input",
+	}
+	out, blocked := runner.RunElicitationResult(t.Context(), ev)
+	if blocked != nil {
+		t.Fatalf("unexpected block: %+v", blocked)
+	}
+	if out.Answer != "sanitized" {
+		t.Errorf("answer = %v, want sanitized", out.Answer)
+	}
+}
+
+func TestRunner_RunElicitationResult_BlockRejectsAnswer(t *testing.T) {
+	t.Parallel()
+	builtins := NewBuiltinRegistry()
+	builtins.RegisterElicitationResult("reject", func(_ context.Context, _ ElicitationResultEvent, _ map[string]any) (ElicitationResultEventResult, error) {
+		return ElicitationResultEventResult{Decision: "block", Reason: "answer_rejected"}, nil
+	}, BuiltinDescriptor{ID: "reject", Name: "reject", Events: []string{EventElicitationResult}})
+
+	reg, _ := NewRegistry("")
+	_ = reg.Add(Hook{
+		ID: "h-rej", Name: "rej", Event: EventElicitationResult,
+		Kind: KindBuiltin, Enabled: true, Builtin: "reject",
+	})
+
+	runner := NewRunner(Config{Registry: reg, Builtins: builtins})
+	ev := ElicitationResultEvent{SessionID: "s", AskID: "a", Kind: "text", Prompt: "P", Answer: "bad"}
+	_, blocked := runner.RunElicitationResult(t.Context(), ev)
+	if blocked == nil {
+		t.Fatal("expected block, got nil")
+	}
+	if blocked.Reason != "answer_rejected" {
+		t.Errorf("reason = %q, want answer_rejected", blocked.Reason)
+	}
+}
+
+func TestHook_Validate_ElicitationEvents(t *testing.T) {
+	t.Parallel()
+	for _, event := range []string{EventElicitation, EventElicitationResult} {
+		h := Hook{
+			ID: "hk-" + event, Name: event, Event: event,
+			Kind: KindShell, Enabled: true, Command: "echo ok",
+		}
+		if err := h.Validate(); err != nil {
+			t.Errorf("Validate(%q): %v", event, err)
+		}
+	}
+}

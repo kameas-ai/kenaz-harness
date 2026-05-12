@@ -1,21 +1,29 @@
 <script setup lang="ts">
 /**
- * FileQuestion — file picker for question kind="file".
+ * FileQuestion — file picker for question kind="file" (WP10).
  *
- * In the Wails context uses Tools_PickDirectory (nearest available
- * OS-picker binding) via client.tools.pickDirectory. Falls back to a
- * native <input type="file"> in test/browser environments where the
- * Wails runtime is unavailable.
+ * Uses Shell_PickFile (client.shell.pickFile) to open the OS-native
+ * file-selection dialog. The binding is available in the Wails runtime;
+ * in test/browser environments the mock returns an empty string, which
+ * is treated as a cancellation.
+ *
+ * Props:
+ *   - filters: optional Wails FileFilter strings in the form
+ *              "Display Name|*.ext1;*.ext2". Forwarded verbatim to the
+ *              Wails OpenFileDialog call.
  *
  * Emits update:modelValue with the selected path string or null.
- *
- * NOTE: A dedicated Shell_PickFile binding is planned for a follow-up
- * WP. Until then pickDirectory covers the common case; consumers that
- * need a specific single-file picker should mount the dialog from a
- * custom host component that wires its own Wails dialog call.
  */
 import { ref } from 'vue';
 import { useHarnessClient } from '@/lib/harnessClientContext';
+
+const props = withDefaults(
+  defineProps<{
+    /** Optional file-extension filters, e.g. ["Images|*.png;*.jpg"]. */
+    filters?: string[];
+  }>(),
+  { filters: () => [] },
+);
 
 const client = useHarnessClient();
 
@@ -31,9 +39,7 @@ async function openPicker() {
   picking.value = true;
   pickError.value = null;
   try {
-    // Use the directory picker as the nearest available OS-file-dialog.
-    // A dedicated file-picker binding lands in a follow-up WP.
-    const path = await client.tools.pickDirectory('Select file');
+    const path = await client.shell.pickFile('Choose a file', '', props.filters);
     selectedPath.value = path || null;
     emit('update:modelValue', selectedPath.value);
   } catch (err) {

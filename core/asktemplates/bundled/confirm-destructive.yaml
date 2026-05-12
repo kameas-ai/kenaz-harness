@@ -1,0 +1,20 @@
+id: confirm-destructive
+description: >
+  Ask the user to confirm a destructive action before proceeding.
+  The action label and optional details are substitutable.
+vars:
+  - name: action
+    type: string
+    required: true
+    description: Short label for the destructive action (e.g. "Delete all data")
+  - name: details
+    type: string
+    required: false
+    description: Optional longer description shown in the question text
+questions:
+  - id: confirm
+    kind: confirm
+    prompt: "{{.action}} — are you sure you want to proceed?"
+    destructive: true
+    affirmative: "Yes, proceed"
+    negative: "Cancel"

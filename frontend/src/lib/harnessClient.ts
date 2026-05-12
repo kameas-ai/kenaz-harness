@@ -438,6 +438,7 @@ interface WailsBindingsLike {
 
   Shell_OpenInOSBrowser(path: string): Promise<void>;
   Shell_PathComplete(partial: string): Promise<string[]>;
+  Shell_PickFile(title: string, defaultDir: string, filters: string[]): Promise<string>;
   Shell_ReadFile(path: string): Promise<ShellReadFileResult>;
 
   Slash_Execute(
@@ -1668,6 +1669,17 @@ export interface ShellClient {
   openInOSBrowser(path: string): Promise<void>;
   pathComplete(partial: string): Promise<string[]>;
   readFile(path: string): Promise<ShellReadFileResult>;
+  /**
+   * pickFile opens the OS-native file-picker dialog and returns the absolute
+   * path of the chosen file, or an empty string if the user cancels.
+   * Used by the AskUserQuestion dialog's "file" kind (WP10).
+   *
+   * @param title      Dialog title; defaults to "Choose a file" when empty.
+   * @param defaultDir Starting directory hint; pass "" to let the OS decide.
+   * @param filters    Optional display+pattern filter pairs in the form
+   *                   "Display Name|*.ext1;*.ext2". Pass [] for no filtering.
+   */
+  pickFile(title: string, defaultDir: string, filters: string[]): Promise<string>;
 }
 
 /**
@@ -2056,6 +2068,25 @@ export interface ElicitClient {
    * answerJSON is a JSON-encoded answer value, or null when cancelled=true.
    */
   submitAnswer(requestID: string, answerJSON: string | null, cancelled: boolean): Promise<void>;
+
+  /**
+   * Submit one step of a multi-question wizard (WP05).
+   * requestID identifies the OpenWizard call; questionID is the id of the
+   * question being answered; answerJSON is the JSON-encoded answer value;
+   * dismissed is true when the user cancels the wizard mid-flow.
+   */
+  submitWizardStep(requestID: string, questionID: string, answerJSON: string | null, dismissed: boolean): Promise<void>;
+
+  /**
+   * Register a deferred ask (WP06). Returns immediately with AskID so the
+   * model can continue. The user sees a pill in the chat header.
+   */
+  registerDeferred(sessionID: string, req: import('./types').ElicitRequest): Promise<{ deferred: boolean; ask_id: string }>;
+
+  /**
+   * Answer a deferred ask (WP06). Returns the system_reminder text to inject.
+   */
+  answerDeferred(askID: string, answer: unknown): Promise<string>;
 
   /**
    * List in-flight elicitation requests. Used for reconnect reconciliation.
@@ -2462,6 +2493,7 @@ export function createHarnessClient(): HarnessClient {
       openInOSBrowser: (path) => b().Shell_OpenInOSBrowser(path),
       pathComplete: (partial) => b().Shell_PathComplete(partial),
       readFile: (path) => b().Shell_ReadFile(path),
+      pickFile: (title, defaultDir, filters) => b().Shell_PickFile(title, defaultDir, filters),
     },
     bash: {
       exec: (sessionID, command) => b().Bash_Exec(sessionID, command),
@@ -2565,6 +2597,12 @@ export function createHarnessClient(): HarnessClient {
     elicit: {
       submitAnswer: (requestID, answerJSON, cancelled) =>
         b().Elicit_SubmitAnswer(requestID, answerJSON, cancelled),
+      submitWizardStep: (requestID, questionID, answerJSON, dismissed) =>
+        b().Elicit_SubmitWizardStep(requestID, questionID, answerJSON, dismissed),
+      registerDeferred: (sessionID, req) =>
+        b().Elicit_RegisterDeferred(sessionID, req),
+      answerDeferred: (askID, answer) =>
+        b().Elicit_AnswerDeferred(askID, answer),
       listPending: () => b().Elicit_ListPending(),
     },
     config: {
@@ -3085,6 +3123,7 @@ export function createFakeHarnessClient(
       openInOSBrowser: noop,
       pathComplete: async () => [],
       readFile: async () => ({ dataBase64: '', mediaType: '' }),
+      pickFile: async () => '',
     },
     bash: {
       exec: async () => ({ stdout: '', stderr: '', exitCode: 0, truncated: false }),
@@ -3389,6 +3428,9 @@ export function createFakeHarnessClient(
     },
     elicit: {
       submitAnswer: noop,
+      submitWizardStep: noop,
+      registerDeferred: async () => ({ deferred: true, ask_id: '' }),
+      answerDeferred: async () => '',
       listPending: async () => [],
     },
     config: {
