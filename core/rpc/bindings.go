@@ -46,6 +46,7 @@ import (
 	updateview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/update"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/workflow"
 	workflowsview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/workflows"
+	scheduledchatview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/scheduledchat"
 	storageview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/storage"
 	elicitview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/elicit"
 	"github.com/sigil-tech/kaneaz-harness/core/logging"
@@ -1719,6 +1720,33 @@ func (b *Bindings) Workflows_ScheduleNextFire(workflowID string) (string, error)
 }
 func (b *Bindings) Workflows_CancelRun(runID string) error {
 	return b.api.Workflows().CancelRun(b.ctx(), runID)
+}
+
+// ── scheduled chat runs (scheduled-chat-runs-01KX5R8B, WP04) ──────────
+
+func (b *Bindings) ScheduledChat_Create(in scheduledchatview.CreateInput) (scheduledchatview.ChatRunEntry, error) {
+	return b.api.ScheduledChat().Create(b.ctx(), in)
+}
+func (b *Bindings) ScheduledChat_Update(in scheduledchatview.UpdateInput) (scheduledchatview.ChatRunEntry, error) {
+	return b.api.ScheduledChat().Update(b.ctx(), in)
+}
+func (b *Bindings) ScheduledChat_Delete(id string) error {
+	return b.api.ScheduledChat().Delete(b.ctx(), id)
+}
+func (b *Bindings) ScheduledChat_List() ([]scheduledchatview.ChatRunEntry, error) {
+	return b.api.ScheduledChat().List(b.ctx())
+}
+func (b *Bindings) ScheduledChat_Get(id string) (scheduledchatview.ChatRunEntry, error) {
+	return b.api.ScheduledChat().Get(b.ctx(), id)
+}
+func (b *Bindings) ScheduledChat_RunNow(id string) (scheduledchatview.RunSummary, error) {
+	return b.api.ScheduledChat().RunNow(b.ctx(), id)
+}
+func (b *Bindings) ScheduledChat_History(id string, limit int) ([]scheduledchatview.RunSummary, error) {
+	return b.api.ScheduledChat().History(b.ctx(), id, limit)
+}
+func (b *Bindings) ScheduledChat_SetEnabled(id string, enabled bool) error {
+	return b.api.ScheduledChat().SetEnabled(b.ctx(), id, enabled)
 }
 
 // ── update (mission auto-update, v0.4.0 WP03) ─────────────────────────

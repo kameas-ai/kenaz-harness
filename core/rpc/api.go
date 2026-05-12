@@ -84,6 +84,7 @@ import (
 	updateview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/update"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/workflow"
 	workflowsview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/workflows"
+	scheduledchatview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/scheduledchat"
 	storageview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/storage"
 	elicitview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/elicit"
 	"github.com/sigil-tech/kaneaz-harness/core/autonomy"
@@ -99,6 +100,7 @@ import (
 	corewf "github.com/sigil-tech/kaneaz-harness/core/workflows"
 	wfcatalogpkg "github.com/sigil-tech/kaneaz-harness/core/workflows/catalog"
 	wfsched "github.com/sigil-tech/kaneaz-harness/core/workflows/scheduler"
+	schedulerPkg "github.com/sigil-tech/kaneaz-harness/core/scheduler"
 	"github.com/zalando/go-keyring"
 )
 
@@ -191,6 +193,12 @@ type HarnessAPI interface {
 	// the kaneaz__ask_user_question tool blocks on OpenDialog until
 	// the answer arrives.
 	Elicit() elicitview.ElicitAPI
+
+	// ScheduledChat exposes the scheduled-chat-runs CRUD + dispatch surface
+	// (mission scheduled-chat-runs-01KX5R8B, v0.10.0). The frontend's
+	// Settings → Scheduled Chats panel creates and manages prompt-template
+	// jobs fired by the existing core/scheduler cron engine.
+	ScheduledChat() scheduledchatview.ScheduledChatAPI
 }
 
 // ShellStatus drives the Toolbar status pills + LegendBar live-rate
@@ -378,6 +386,11 @@ type API struct {
 	// on Shutdown. nil when the workflows feature is disabled or when the
 	// chassis has no DB.
 	wfScheduler *wfsched.CronScheduler
+
+	// scheduledChatAPI is the scheduled-chat-runs RPC surface
+	// (mission scheduled-chat-runs-01KX5R8B, WP04). Wired in New when
+	// a real Core with a DB is available; nil DB path returns ErrStoreUnavailable.
+	scheduledChatAPI scheduledchatview.ScheduledChatAPI
 }
 
 // Builtins returns the in-binary tool registry. Used by the chat-input
@@ -1144,6 +1157,22 @@ func New(c *core.Core) *API {
 	a.elicitAPI = elicitview.New(elicitview.Config{
 		Emitter: WailsEmitter{},
 	})
+
+	// Scheduled-chat-runs view (mission scheduled-chat-runs-01KX5R8B, WP04).
+	// Wired with the SQLiteChatStore when a real DB is available; test
+	// chassis path (c == nil or no storage) silently leaves the store nil
+	// which causes the accessor to return a graceful-empty surface.
+	{
+		var chatStore schedulerPkg.ScheduledChatStore
+		if c != nil {
+			if db := c.Storage(); db != nil {
+				chatStore = schedulerPkg.NewSQLiteChatStore(db)
+			}
+		}
+		a.scheduledChatAPI = scheduledchatview.New(scheduledchatview.Config{
+			Store: chatStore,
+		})
+	}
 
 	a.bindings = NewBindings(a)
 	if a.settingsImpl != nil {
@@ -3968,6 +3997,15 @@ func (a *API) Elicit() elicitview.ElicitAPI {
 		return elicitview.New(elicitview.Config{})
 	}
 	return a.elicitAPI
+}
+
+// ScheduledChat implements HarnessAPI. Returns a graceful-empty surface
+// (ErrStoreUnavailable on mutating methods) when the DB is not wired.
+func (a *API) ScheduledChat() scheduledchatview.ScheduledChatAPI {
+	if a.scheduledChatAPI == nil {
+		return scheduledchatview.New(scheduledchatview.Config{})
+	}
+	return a.scheduledChatAPI
 }
 
 // SetCedarProposeResolver wires a resolver at runtime. Called by the

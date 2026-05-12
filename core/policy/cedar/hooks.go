@@ -625,6 +625,56 @@ func GateWorkflowDelete(ctx context.Context, g Gate, workflowID string) (Decisio
 	return d, enforce(d)
 }
 
+// GateScheduledChatCreate is the gate-hook helper for scheduled chat run
+// create and update operations (mission scheduled-chat-runs-01KX5R8B, WP03).
+// Returns nil on Allow / NotApplicable; *PolicyDeniedError on Deny.
+// Default-allow when g is nil.
+func GateScheduledChatCreate(ctx context.Context, g Gate, id string) (Decision, error) {
+	if g == nil {
+		return Decision{
+			Outcome:  Allow,
+			Action:   ActionScheduledRunCreate,
+			Resource: ScheduledChatRunUID(id).String(),
+			Reason:   "no engine wired (default-allow)",
+		}, nil
+	}
+	d := g.Evaluate(ctx, UserUID(), ActionScheduledRunCreate, ScheduledChatRunUID(id), nil)
+	return d, enforce(d)
+}
+
+// GateScheduledChatDelete is the gate-hook helper for scheduled chat run
+// delete operations. Returns nil on Allow / NotApplicable; *PolicyDeniedError
+// on Deny. Default-allow when g is nil.
+func GateScheduledChatDelete(ctx context.Context, g Gate, id string) (Decision, error) {
+	if g == nil {
+		return Decision{
+			Outcome:  Allow,
+			Action:   ActionScheduledRunDelete,
+			Resource: ScheduledChatRunUID(id).String(),
+			Reason:   "no engine wired (default-allow)",
+		}, nil
+	}
+	d := g.Evaluate(ctx, UserUID(), ActionScheduledRunDelete, ScheduledChatRunUID(id), nil)
+	return d, enforce(d)
+}
+
+// GateScheduledChatExecute is the gate-hook helper for scheduled chat run
+// dispatch (both cron-triggered and RunNow paths). Returns nil on
+// Allow / NotApplicable; *PolicyDeniedError on Deny. Default-allow when
+// g is nil.
+func GateScheduledChatExecute(ctx context.Context, g Gate, id string) (Decision, error) {
+	if g == nil {
+		return Decision{
+			Outcome:  Allow,
+			Action:   ActionScheduledRunExecute,
+			Resource: ScheduledChatRunUID(id).String(),
+			Reason:   "no engine wired (default-allow)",
+		}, nil
+	}
+	d := g.Evaluate(ctx, UserUID(), ActionScheduledRunExecute, ScheduledChatRunUID(id), nil)
+	return d, enforce(d)
+}
+
 // enforce maps a Decision to a Go error. Allow + NotApplicable both
 // return nil (default-allow stance); Deny returns *PolicyDeniedError.
 func enforce(d Decision) error {
