@@ -79,6 +79,37 @@ const (
 	// gated by the same FSWriteDisabled toggle as the write-family fs
 	// builtins. The resource UID is Artifact::"<artifact-id>".
 	ActionArtifactUpdate = "artifact.update"
+
+	// ── Builtin search-and-elicitation action families ──────────────────
+	// Introduced by mission builtin-tools-search-and-elicitation-01KZNP3D.
+	// All three families follow the dotted "<domain>.<operation>" naming
+	// convention established by the workflow and artifact action families
+	// above. Downstream skills-catalog + ask-user-question missions MUST
+	// follow the same convention when adding new action families.
+
+	// ActionToolReadGlob gates kaneaz__glob (glob-match across a directory
+	// tree). Resource UID: Filesystem::"<base-dir>". Default-allow when
+	// FSReadEnabled is true; gated by the same FSReadDisabled toggle.
+	ActionToolReadGlob = "tool.read.glob"
+
+	// ActionToolReadGrep gates kaneaz__grep (in-process regex search).
+	// Resource UID: Filesystem::"<search-path>". Default-allow when
+	// FSReadEnabled is true; gated by the same FSReadDisabled toggle.
+	ActionToolReadGrep = "tool.read.grep"
+
+	// ActionToolTodoWrite gates kaneaz__todo_write (structured task list
+	// write). Resource UID: TodoList::"session" (session-scoped list).
+	// Default-allow when TodoEnabled is true; gated by TodoDisabled toggle.
+	// The action intentionally lives in the "tool.todo" family rather than
+	// "tool.write" so policy authors can grant todo access independently of
+	// the broader filesystem write surface.
+	ActionToolTodoWrite = "tool.todo.write"
+
+	// ActionToolTodoRead gates future kaneaz__todo_read (reserved — not yet
+	// implemented). Declared here so Cedar policy snippets written against
+	// the action family validate without schema changes when the read tool
+	// ships. Resource UID: TodoList::"session".
+	ActionToolTodoRead = "tool.todo.read"
 )
 
 // Entity-type names mirror spec §4.10's recommended mapping:
@@ -122,6 +153,12 @@ const (
 	// definitions. Introduced by mission workflows-01KQ8TDG (WP11).
 	// Resource UIDs take the shape Workflow::"<workflow-id>".
 	EntityTypeWorkflow = "Workflow"
+
+	// EntityTypeTodoList is the Cedar entity type for the session-scoped
+	// todo list. Introduced by mission
+	// builtin-tools-search-and-elicitation-01KZNP3D (WP05).
+	// Resource UIDs take the shape TodoList::"session".
+	EntityTypeTodoList = "TodoList"
 
 	// PrincipalLocal is the canonical EntityUID id for the single
 	// local user. The harness is single-user / privacy-first
@@ -366,4 +403,19 @@ func MCPRecipeUID(id string) cedar.EntityUID {
 		safeID = invalidUIDID
 	}
 	return cedar.NewEntityUID(EntityTypeMCPRecipe, cedar.String(safeID))
+}
+
+// TodoListUID builds a Cedar EntityUID for the TodoList family introduced
+// by mission builtin-tools-search-and-elicitation-01KZNP3D (WP05). scope
+// is the list's scope discriminator — "session" for the current session's
+// list (the only scope in v1). Malformed scopes (empty / control characters
+// / leading "..") are replaced with "invalid" so the resulting UID
+// type-matches in `resource is TodoList` clauses but never satisfies any
+// real permit.
+func TodoListUID(scope string) cedar.EntityUID {
+	safeScope := scope
+	if !validateFamilyID(scope) {
+		safeScope = invalidUIDID
+	}
+	return cedar.NewEntityUID(EntityTypeTodoList, cedar.String(safeScope))
 }
