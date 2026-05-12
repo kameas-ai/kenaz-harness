@@ -79,6 +79,18 @@ const (
 	// gated by the same FSWriteDisabled toggle as the write-family fs
 	// builtins. The resource UID is Artifact::"<artifact-id>".
 	ActionArtifactUpdate = "artifact.update"
+
+	// Elicitation-family action UIDs introduced by mission
+	// ask-user-question-interactive-01KZNP3G (WP01). They gate the
+	// kaneaz__ask_user_question builtin and (future) async deferred
+	// variant. Resource UIDs take the shape Elicitation::"<kind>" where
+	// kind is one of the seven question kinds (radio, checkbox, text,
+	// number, slider, date, file).
+	//
+	//   ActionElicitAsk — gates synchronous single-question elicitation
+	//     (model calls tool → backend opens dialog → user answers →
+	//      result returns to model).
+	ActionElicitAsk = "tool.elicit.ask"
 )
 
 // Entity-type names mirror spec §4.10's recommended mapping:
@@ -122,6 +134,13 @@ const (
 	// definitions. Introduced by mission workflows-01KQ8TDG (WP11).
 	// Resource UIDs take the shape Workflow::"<workflow-id>".
 	EntityTypeWorkflow = "Workflow"
+
+	// EntityTypeElicitation is the Cedar entity type for the
+	// ask-user-question elicitation surface (mission
+	// ask-user-question-interactive-01KZNP3G WP01). Resource UIDs take
+	// the shape Elicitation::"<kind>" where kind is one of the seven
+	// question kinds: radio, checkbox, text, number, slider, date, file.
+	EntityTypeElicitation = "Elicitation"
 
 	// PrincipalLocal is the canonical EntityUID id for the single
 	// local user. The harness is single-user / privacy-first
@@ -366,4 +385,19 @@ func MCPRecipeUID(id string) cedar.EntityUID {
 		safeID = invalidUIDID
 	}
 	return cedar.NewEntityUID(EntityTypeMCPRecipe, cedar.String(safeID))
+}
+
+// ElicitationUID builds a Cedar EntityUID for the Elicitation family
+// introduced by mission ask-user-question-interactive-01KZNP3G (WP01).
+// kind is one of the seven question kinds (radio, checkbox, text, number,
+// slider, date, file). Malformed kinds (empty / control characters /
+// leading "..") are replaced with the literal "invalid" so the resulting
+// UID type-matches in `resource is Elicitation` clauses but never
+// satisfies any real permit — a typo therefore never silently authorises.
+func ElicitationUID(kind string) cedar.EntityUID {
+	safeID := kind
+	if !validateFamilyID(kind) {
+		safeID = invalidUIDID
+	}
+	return cedar.NewEntityUID(EntityTypeElicitation, cedar.String(safeID))
 }
