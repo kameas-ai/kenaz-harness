@@ -50,8 +50,10 @@ const tabs: ReadonlyArray<Tab> = [
   // user-slash-commands-01KQ8TD9 WP09 — Feature Flags tab.
   // Disambiguates via ?tab=flags. See SettingsView.vue for the mount switch.
   { to: '/settings?tab=flags', label: 'Flags', query: 'flags' },
+  // hooks-event-surface-expansion-01KZNP3A WP07d — Hooks settings tab.
+  // Disambiguates via ?tab=hooks. See SettingsView.vue for the mount switch.
+  { to: '/settings?tab=hooks', label: 'Hooks', query: 'hooks' },
   { to: '/providers', label: 'Providers' },
-  { to: '/hooks', label: 'Hooks' },
   { to: '/bundles', label: 'Bundles' },
   { to: '/permissions/bash', label: 'Permissions', matchPrefix: '/permissions' },
 ];

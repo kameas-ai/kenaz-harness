@@ -209,6 +209,8 @@ export function Hooks_Add(arg1:hooks.Hook):Promise<hooks.Hook>;
 
 export function Hooks_AvailableBuiltins():Promise<Array<hooks.BuiltinDescriptor>>;
 
+export function Hooks_DryRun(arg1:string,arg2:string):Promise<hooks.DryRunResult>;
+
 export function Hooks_Get(arg1:string):Promise<hooks.Hook>;
 
 export function Hooks_InstallStarterMemory():Promise<void>;

@@ -21,6 +21,7 @@ import MigrationDriftPanel from '@/views/settings/health/MigrationDriftPanel.vue
 import CompactionStrategyPanel from '@/views/settings/compaction/CompactionStrategyPanel.vue';
 import SlashCommandsView from '@/views/settings/SlashCommandsView.vue';
 import FeatureFlagsView from '@/views/settings/FeatureFlagsView.vue';
+import HooksSettingsView from '@/views/settings/HooksSettingsView.vue';
 import LongSessionNudgeSettings from '@/components/settings/LongSessionNudgeSettings.vue';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
 import { debouncedSave } from '@/lib/settings';
@@ -77,6 +78,13 @@ const showSlashCmdsTab = computed<boolean>(() => {
 const showFlagsTab = computed<boolean>(() => {
   const v = route?.query?.tab;
   return typeof v === 'string' && v === 'flags';
+});
+
+// hooks-event-surface-expansion-01KZNP3A WP07d — Hooks sub-tab.
+// Disambiguates via ?tab=hooks. Mount switch is in <template> below.
+const showHooksTab = computed<boolean>(() => {
+  const v = route?.query?.tab;
+  return typeof v === 'string' && v === 'hooks';
 });
 
 const settings = ref<Settings>({
@@ -814,6 +822,14 @@ onMounted(() => {
       data-testid="settings-flags-pane"
     >
       <FeatureFlagsView />
+    </div>
+
+    <!-- hooks-event-surface-expansion-01KZNP3A WP07d — Hooks sub-tab. -->
+    <div
+      v-else-if="showHooksTab"
+      data-testid="settings-hooks-pane"
+    >
+      <HooksSettingsView />
     </div>
 
     <div

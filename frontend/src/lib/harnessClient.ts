@@ -62,6 +62,7 @@ import type {
   DialScopeKey,
   Hook,
   BuiltinDescriptor,
+  DryRunResult,
   ConfirmDecision,
   Recipe,
   RecipeCategory,
@@ -414,6 +415,7 @@ interface WailsBindingsLike {
   Hooks_AvailableBuiltins(): Promise<BuiltinDescriptor[]>;
   Hooks_InstallStarterMemory(): Promise<void>;
   Hooks_RemoveStarterMemory(): Promise<void>;
+  Hooks_DryRun(hookID: string, syntheticPayload: string): Promise<DryRunResult>;
 
   Tools_ListRecipes(): Promise<WireRecipeListing[]>;
   Tools_InstallRecipe(
@@ -1554,6 +1556,8 @@ export interface DialsClient {
  * pre_send / post_send lifecycle. Memory.retrieve / memory.persist
  * are the v1 preinstalled builtins; the surface ships extension
  * points for `shell` and `mcp` hooks the user configures.
+ *
+ * hooks-event-surface-expansion-01KZNP3A WP07b.
  */
 export interface HooksClient {
   list(): Promise<Hook[]>;
@@ -1566,6 +1570,12 @@ export interface HooksClient {
   installStarterMemory(): Promise<void>;
   /** Remove the two preinstalled memory hooks (idempotent). */
   removeStarterMemory(): Promise<void>;
+  /**
+   * Fire the hook against a synthetic JSON payload string and return the
+   * per-hook HookOutput + MergedOutput for the DryRunDrawer.
+   * Shell hooks are actually executed; builtin/mcp hooks return a stub.
+   */
+  dryRun(hookID: string, syntheticPayload: string): Promise<DryRunResult>;
 }
 
 /**
@@ -2427,6 +2437,7 @@ export function createHarnessClient(): HarnessClient {
       availableBuiltins: () => b().Hooks_AvailableBuiltins(),
       installStarterMemory: () => b().Hooks_InstallStarterMemory(),
       removeStarterMemory: () => b().Hooks_RemoveStarterMemory(),
+      dryRun: (hookID, syntheticPayload) => b().Hooks_DryRun(hookID, syntheticPayload),
     },
     tools: {
       recipes: {
@@ -3010,8 +3021,8 @@ export function createFakeHarnessClient(
       get: async (id) => ({
         id,
         name: id,
-        event: 'pre_send',
-        kind: 'builtin',
+        event: 'pre_send' as const,
+        kind: 'builtin' as const,
         enabled: false,
         match: {},
       }),
@@ -3021,6 +3032,18 @@ export function createFakeHarnessClient(
       availableBuiltins: async () => [],
       installStarterMemory: noop,
       removeStarterMemory: noop,
+      dryRun: async (_hookID: string, _payload: string): Promise<DryRunResult> => ({
+        output: { decision: 'approve', reason: 'stub dry-run' },
+        merged: {
+          blocked: false,
+          permissionDenied: false,
+          permissionAllowed: false,
+        },
+        stdout: '',
+        stderr: '',
+        exitCode: 0,
+        latencyMs: 0,
+      }),
     },
     tools: {
       recipes: {

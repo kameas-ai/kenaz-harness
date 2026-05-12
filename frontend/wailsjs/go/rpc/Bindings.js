@@ -346,6 +346,10 @@ export function Hooks_AvailableBuiltins() {
   return window['go']['rpc']['Bindings']['Hooks_AvailableBuiltins']();
 }
 
+export function Hooks_DryRun(arg1, arg2) {
+  return window['go']['rpc']['Bindings']['Hooks_DryRun'](arg1, arg2);
+}
+
 export function Hooks_Get(arg1) {
   return window['go']['rpc']['Bindings']['Hooks_Get'](arg1);
 }
