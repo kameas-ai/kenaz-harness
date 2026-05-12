@@ -580,8 +580,12 @@ interface WailsBindingsLike {
     preference: string,
   ): Promise<BranchRecommendedModel>;
 
-  // Search view (cross-session-search mission).
+  // Search view (cross-session-search mission + unified-search-01KX5R8C).
   Search_Sessions(
+    query: string,
+    filters: SearchFilters,
+  ): Promise<SearchHit[]>;
+  Search_Unified(
     query: string,
     filters: SearchFilters,
   ): Promise<SearchHit[]>;
@@ -2058,7 +2062,7 @@ export interface CedarPolicyClient {
 // ── Search types (cross-session-search mission) ───────────────────────
 
 /**
- * SearchFilters — optional predicates for a Search_Sessions call.
+ * SearchFilters — optional predicates for a Search_Sessions or Search_Unified call.
  * Zero values mean "no filter". Limit defaults to 50 server-side when 0.
  */
 export interface SearchFilters {
@@ -2066,6 +2070,12 @@ export interface SearchFilters {
   sessionId?: string;
   roleFilter?: string;
   limit?: number;
+  /**
+   * corpora restricts which source corpora are queried in a UnifiedSearch call.
+   * Valid values: "messages", "artifacts", "memory", "corpus", "audit".
+   * Empty array (or omitted) enables all five corpora.
+   */
+  corpora?: string[];
 }
 
 /** A byte-offset range [start, end) within a SearchHit.snippet string. */
@@ -2075,9 +2085,13 @@ export interface SearchHighlight {
 }
 
 /**
- * SearchHit — a single full-text match returned by Search_Sessions.
+ * SearchHit — a single full-text match returned by Search_Sessions or Search_Unified.
  */
 export interface SearchHit {
+  /** corpus identifies the source ("messages" | "artifacts" | "memory" | "corpus" | "audit"). */
+  corpus?: string;
+  /** entityId is the stable id within the corpus (messageId for messages, artifact id, etc.). */
+  entityId?: string;
   sessionId: string;
   sessionName: string;
   messageId: string;
@@ -2086,13 +2100,21 @@ export interface SearchHit {
   highlights: SearchHighlight[];
   createdAt: string;
   projectId?: string;
+  /** score is a normalised relevance score in [0,1]; higher = more relevant. */
+  score?: number;
 }
 
 /**
- * SearchClient — full-text search across all session messages.
+ * SearchClient — full-text search across all session messages + unified cross-corpus.
  */
 export interface SearchClient {
   sessions(query: string, filters?: SearchFilters): Promise<SearchHit[]>;
+  /**
+   * unified fans out across all five corpora (messages, artifacts, memory,
+   * corpus, audit) and returns a merged, ranked result list.
+   * filters.corpora narrows which corpora are queried.
+   */
+  unified(query: string, filters?: SearchFilters): Promise<SearchHit[]>;
 }
 
 /**
@@ -2748,6 +2770,8 @@ export function createHarnessClient(): HarnessClient {
     search: {
       sessions: (query, filters) =>
         b().Search_Sessions(query, filters ?? {}),
+      unified: (query, filters) =>
+        b().Search_Unified(query, filters ?? {}),
     },
     storage: {
       getMigrationDriftReport: () => b().Storage_GetMigrationDriftReport(),
@@ -3624,6 +3648,7 @@ export function createFakeHarnessClient(
     },
     search: {
       sessions: async () => [],
+      unified: async () => [],
     },
     storage: {
       getMigrationDriftReport: async () => ({ drifts: [] }),

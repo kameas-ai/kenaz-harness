@@ -38,6 +38,8 @@ async function flushDebounce() {
 
 function makeHit(over: Partial<SearchHit> = {}): SearchHit {
   return {
+    corpus: 'messages',
+    entityId: 'msg-001',
     messageId: 'msg-001',
     sessionId: 'sess-abc',
     sessionName: 'My session',
@@ -47,6 +49,20 @@ function makeHit(over: Partial<SearchHit> = {}): SearchHit {
     createdAt: new Date(Date.now() - 60_000).toISOString(),
     projectId: '',
     ...over,
+  };
+}
+
+/**
+ * makeSearchSeed — builds a Partial<HarnessClient> whose search.unified()
+ * returns the supplied hits. Since SearchPalette now calls unified(), all
+ * tests that exercise results must use this helper.
+ */
+function makeSearchSeed(hits: SearchHit[]): Partial<HarnessClient> {
+  return {
+    search: {
+      sessions: async () => [],
+      unified: async () => hits,
+    },
   };
 }
 
@@ -183,9 +199,7 @@ describe('SearchPalette', () => {
   });
 
   it('shows empty-state when query returns zero results', async () => {
-    const { wrapper } = await mountPalette({
-      search: { sessions: async () => [] },
-    });
+    const { wrapper } = await mountPalette(makeSearchSeed([]));
     useSearchPalette().open();
     await nextTick();
 
@@ -201,9 +215,7 @@ describe('SearchPalette', () => {
 
   it('renders query results', async () => {
     const hit = makeHit({ snippet: 'hello world snippet', sessionName: 'Alpha session' });
-    const { wrapper } = await mountPalette({
-      search: { sessions: async () => [hit] },
-    });
+    const { wrapper } = await mountPalette(makeSearchSeed([hit]));
     useSearchPalette().open();
     await nextTick();
 
@@ -220,9 +232,7 @@ describe('SearchPalette', () => {
 
   it('navigates to the session/message when a result is clicked', async () => {
     const hit = makeHit({ sessionId: 'sess-xyz', messageId: 'msg-99' });
-    const { wrapper, router } = await mountPalette({
-      search: { sessions: async () => [hit] },
-    });
+    const { wrapper, router } = await mountPalette(makeSearchSeed([hit]));
     useSearchPalette().open();
     await nextTick();
 
@@ -243,9 +253,7 @@ describe('SearchPalette', () => {
 
   it('clears query and results when re-opened after closing', async () => {
     const hit = makeHit();
-    const { wrapper } = await mountPalette({
-      search: { sessions: async () => [hit] },
-    });
+    const { wrapper } = await mountPalette(makeSearchSeed([hit]));
 
     // Open, search, close.
     useSearchPalette().open();
@@ -269,9 +277,7 @@ describe('SearchPalette', () => {
 
   it('navigates with Enter key on highlighted result', async () => {
     const hit = makeHit({ sessionId: 'sess-enter', messageId: 'msg-enter' });
-    const { wrapper, router } = await mountPalette({
-      search: { sessions: async () => [hit] },
-    });
+    const { wrapper, router } = await mountPalette(makeSearchSeed([hit]));
     useSearchPalette().open();
     await nextTick();
 
@@ -284,6 +290,60 @@ describe('SearchPalette', () => {
     await flushPromises();
 
     expect(router.currentRoute.value.path).toBe('/sessions/sess-enter');
+    wrapper.unmount();
+  });
+
+  it('renders corpus source badges on hits (unified-search-01KX5R8C WP04)', async () => {
+    const hits = [
+      makeHit({ corpus: 'messages', snippet: 'rust message hit' }),
+      makeHit({ corpus: 'artifacts', entityId: 'art-1', sessionId: '', messageId: '', snippet: 'schema.sql (text/plain)' }),
+      makeHit({ corpus: 'memory', entityId: 'mem-1', sessionId: '', messageId: '', snippet: 'memory chunk content' }),
+    ];
+    const { wrapper } = await mountPalette(makeSearchSeed(hits));
+    useSearchPalette().open();
+    await nextTick();
+
+    const input = wrapper.find('[data-testid="search-palette-input"]');
+    await input.setValue('rust');
+    await flushDebounce();
+
+    // Each hit row should have a corpus badge with the right label.
+    const badge0 = wrapper.find('[data-testid="search-palette-corpus-badge-0"]');
+    expect(badge0.exists()).toBe(true);
+    expect(badge0.text()).toBe('Messages');
+
+    const badge1 = wrapper.find('[data-testid="search-palette-corpus-badge-1"]');
+    expect(badge1.exists()).toBe(true);
+    expect(badge1.text()).toBe('Artifacts');
+
+    const badge2 = wrapper.find('[data-testid="search-palette-corpus-badge-2"]');
+    expect(badge2.exists()).toBe(true);
+    expect(badge2.text()).toBe('Memory');
+
+    wrapper.unmount();
+  });
+
+  it('renders corpus filter chips when a query is active (unified-search-01KX5R8C WP04)', async () => {
+    const { wrapper } = await mountPalette(makeSearchSeed([]));
+    useSearchPalette().open();
+    await nextTick();
+
+    // No query → no chips
+    expect(wrapper.find('[data-testid="search-palette-corpus-filters"]').exists()).toBe(false);
+
+    const input = wrapper.find('[data-testid="search-palette-input"]');
+    await input.setValue('test');
+    await nextTick();
+
+    // After typing, chips should appear.
+    const filters = wrapper.find('[data-testid="search-palette-corpus-filters"]');
+    expect(filters.exists()).toBe(true);
+
+    // All five corpus chips should be present.
+    for (const c of ['messages', 'artifacts', 'memory', 'corpus', 'audit']) {
+      expect(wrapper.find(`[data-testid="search-corpus-chip-${c}"]`).exists()).toBe(true);
+    }
+
     wrapper.unmount();
   });
 });

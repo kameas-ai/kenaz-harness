@@ -1913,6 +1913,17 @@ func (b *Bindings) Search_Sessions(query string, filters searchview.SearchFilter
 	return b.api.Search().Search(b.ctx(), query, filters)
 }
 
+// Search_Unified fans out across all five corpora (messages, artifacts,
+// memory, corpus, audit) in parallel and returns a merged, scored result
+// list. filters.Corpora narrows which corpora are queried; an empty slice
+// enables all sources.
+//
+// query is sanitised server-side; empty/whitespace-only returns an empty
+// result without error. The raw query never appears in audit emission.
+func (b *Bindings) Search_Unified(query string, filters searchview.SearchFilters) ([]searchview.SearchHit, error) {
+	return b.api.Search().UnifiedSearch(b.ctx(), query, filters)
+}
+
 // ── autonomy (autonomy-dial-01KR3M2A WP03) ────────────────────────────
 
 // Settings_GetAutonomy returns the persisted global autonomy.Layer.

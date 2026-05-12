@@ -330,6 +330,11 @@ type API struct {
 	dialsAPI        dialsview.DialsAPI
 	searchAPI       searchview.SearchAPI
 	storageAPI      storageview.StorageAPI
+	// memStoreRef is the long-term memory store held for the search adapter
+	// (unified-search-01KX5R8C WP03). The main memory path (memoryAPI) is
+	// already wired; this ref lets the search lazy-init access it without
+	// re-opening the gob file.
+	memStoreRef corememory.Store
 
 	// Node manifest catalog (mission agent-kernel-graph-node-catalog;
 	// WP07). The manager owns the resolved catalog + user-override
@@ -940,6 +945,8 @@ func New(c *core.Core) *API {
 		Reader:   newMemoryMessageReader(c),
 		Profiles: &personalProfileLister{store: personalForLLM},
 	})
+	// Keep a ref for the search adapter (unified-search-01KX5R8C WP03).
+	a.memStoreRef = memStore
 	if hookRegistry != nil {
 		a.hooksAPI = hooksview.New(hooksview.Config{
 			Registry: hookRegistry,
@@ -4171,21 +4178,33 @@ func (a *API) SetCompactionAPI(c compactionview.CompactionAPI) {
 }
 
 // Search returns the full-text search view (cross-session-search
-// mission). Uses the raw *sql.DB handle from the storage backend to
-// query the messages_fts FTS5 virtual table directly.
+// mission + unified-search-01KX5R8C WP03). Uses the raw *sql.DB handle
+// from the storage backend to query the messages_fts FTS5 virtual table
+// and wires per-corpus adapters for the unified fan-out.
 func (a *API) Search() searchview.SearchAPI {
 	if a.searchAPI != nil {
 		return a.searchAPI
 	}
-	// Wire lazily on first call using the structural SQL() interface
-	// (same dance as buildJournalWriter at the bottom of this file).
+	// Wire lazily on first call using the structural SQL() interface.
 	if a.core != nil {
 		store := a.core.Storage()
 		if store != nil {
 			type sqlHandle interface{ SQL() *sql.DB }
 			if h, ok := store.(sqlHandle); ok {
 				if rawDB := h.SQL(); rawDB != nil {
-					a.searchAPI = searchview.NewManagerAPI(rawDB)
+					cfg := searchview.Config{}
+					// Artifacts + corpus name adapters share the raw DB.
+					cfg.ArtifactsDB = rawDB
+					cfg.CorpusDB = rawDB
+					// Memory adapter — nil when HARNESS_MEMORY is off.
+					if a.memStoreRef != nil {
+						cfg.MemoryStore = &memoryStoreListAdapter{store: a.memStoreRef}
+					}
+					// Audit adapter — always available when the ring buffer is live.
+					if a.auditImpl != nil {
+						cfg.AuditLister = &auditRingAdapter{api: a.auditImpl}
+					}
+					a.searchAPI = searchview.NewManagerAPIWithConfig(rawDB, cfg)
 					return a.searchAPI
 				}
 			}
@@ -4193,6 +4212,53 @@ func (a *API) Search() searchview.SearchAPI {
 	}
 	// Fallback: return a nil-safe stub that returns empty results.
 	return &stubSearch{}
+}
+
+// memoryStoreListAdapter adapts corememory.Store to searchview.MemoryLister.
+type memoryStoreListAdapter struct {
+	store corememory.Store
+}
+
+func (m *memoryStoreListAdapter) List(ctx context.Context) ([]searchview.MemoryChunk, error) {
+	chunks, err := m.store.List(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]searchview.MemoryChunk, len(chunks))
+	for i, c := range chunks {
+		out[i] = searchview.MemoryChunk{
+			ID:        c.ID,
+			SessionID: c.SessionID,
+			ProjectID: c.ProjectID,
+			Content:   c.Content,
+			CreatedAt: c.CreatedAt,
+		}
+	}
+	return out, nil
+}
+
+// auditRingAdapter adapts audit.API to searchview.AuditLister.
+type auditRingAdapter struct {
+	api *audit.API
+}
+
+func (ar *auditRingAdapter) ListEntriesForSearch(ctx context.Context, limit int) ([]searchview.AuditEntry, error) {
+	filter := audit.Filter{Limit: limit}
+	entries, err := ar.api.ListEntries(ctx, filter)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]searchview.AuditEntry, len(entries))
+	for i, e := range entries {
+		out[i] = searchview.AuditEntry{
+			ID:        e.ID,
+			Timestamp: e.Timestamp,
+			Category:  e.Category,
+			Subject:   e.Subject,
+			Trailing:  e.Trailing,
+		}
+	}
+	return out, nil
 }
 
 // Update returns the auto-update view (mission auto-update, v0.4.0 WP03).
@@ -4221,6 +4287,10 @@ func (a *API) Storage() storageview.StorageAPI {
 type stubSearch struct{}
 
 func (s *stubSearch) Search(_ context.Context, _ string, _ searchview.SearchFilters) ([]searchview.SearchHit, error) {
+	return nil, nil
+}
+
+func (s *stubSearch) UnifiedSearch(_ context.Context, _ string, _ searchview.SearchFilters) ([]searchview.SearchHit, error) {
 	return nil, nil
 }
 

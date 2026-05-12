@@ -29,10 +29,23 @@ type SearchFilters struct {
 	RoleFilter string `json:"roleFilter,omitempty"`
 	// Limit is the max number of hits; defaults to 50 when 0.
 	Limit int `json:"limit,omitempty"`
+	// Corpora lists the source corpora to include in a UnifiedSearch call.
+	// Valid values: "messages", "artifacts", "memory", "corpus", "audit".
+	// Empty slice = all corpora enabled (the default).
+	Corpora []string `json:"corpora,omitempty"`
 }
 
-// SearchHit is a single full-text match returned by Search.
+// SearchHit is a single full-text match returned by Search or UnifiedSearch.
 type SearchHit struct {
+	// Corpus identifies the source corpus this hit came from.
+	// One of: "messages", "artifacts", "memory", "corpus", "audit".
+	// For backward-compat, the messages-only Search() method leaves this
+	// field empty; UnifiedSearch always populates it.
+	Corpus string `json:"corpus,omitempty"`
+	// EntityID is the stable identifier within the corpus (MessageID for
+	// messages, Artifact.ID for artifacts, Chunk.ID for memory, etc.).
+	// Used for deduplication across parallel adapter fan-out.
+	EntityID    string `json:"entityId,omitempty"`
 	SessionID   string `json:"sessionId"`
 	SessionName string `json:"sessionName"`
 	MessageID   string `json:"messageId"`
@@ -43,6 +56,10 @@ type SearchHit struct {
 	Highlights []Highlight `json:"highlights"`
 	CreatedAt  string      `json:"createdAt"`
 	ProjectID  string      `json:"projectId,omitempty"`
+	// Score is a normalised relevance score in [0,1]. Higher = more
+	// relevant. Messages are scored via BM25 rank position; other corpora
+	// use a position-derived score.
+	Score float32 `json:"score,omitempty"`
 }
 
 // Highlight is a byte-offset range within Snippet where the query matched.
@@ -52,10 +69,32 @@ type Highlight struct {
 	End   int `json:"end"`
 }
 
+// CorpusMessages is the corpus identifier for session message hits.
+const CorpusMessages = "messages"
+
+// CorpusArtifacts is the corpus identifier for artifact hits.
+const CorpusArtifacts = "artifacts"
+
+// CorpusMemory is the corpus identifier for long-term memory chunk hits.
+const CorpusMemory = "memory"
+
+// CorpusCorpus is the corpus identifier for ingested document corpus hits.
+const CorpusCorpus = "corpus"
+
+// CorpusAudit is the corpus identifier for audit event log hits.
+const CorpusAudit = "audit"
+
 // SearchAPI is the view-scoped interface for full-text search.
 // Implementations MUST be safe for concurrent use.
 type SearchAPI interface {
 	// Search executes a full-text query against the messages_fts table.
 	// An empty / whitespace-only query returns an empty slice without error.
 	Search(ctx context.Context, query string, filters SearchFilters) ([]SearchHit, error)
+
+	// UnifiedSearch fans out across all configured corpora (messages,
+	// artifacts, memory, corpus, audit) in parallel and returns a merged,
+	// ranked result list. filters.Corpora narrows which corpora are queried;
+	// an empty slice enables all corpora. An empty / whitespace-only query
+	// returns an empty slice without error.
+	UnifiedSearch(ctx context.Context, query string, filters SearchFilters) ([]SearchHit, error)
 }
