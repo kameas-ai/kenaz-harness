@@ -135,12 +135,15 @@ func (s *Store) LoadUser(ctx context.Context, projectID string) ([]UserCommand, 
 					cmd = refreshed
 				}
 			} else {
-				// Parse body without refreshing.
+				// Parse body + tool fields without refreshing.
 				data, readErr := os.ReadFile(fullPath)
 				if readErr == nil {
 					parsed, parseErr := ParseMarkdown(data)
 					if parseErr == nil {
 						cmd.Body = parsed.Body
+						cmd.Tool = parsed.Tool
+						cmd.ToolArgsTemplate = parsed.ToolArgsTemplate
+						cmd.Inputs = parsed.Inputs
 					}
 				}
 			}
@@ -189,13 +192,19 @@ func (s *Store) LoadUserOne(ctx context.Context, name, projectID string) (UserCo
 	cmd.ModelInvokable = modelInvokable != 0
 	cmd.HiddenFromPanel = hiddenFromPanel != 0
 
-	// Load body from disk.
+	// Load body + tool fields from disk (tool/tool_args_template/inputs
+	// are only stored in the markdown frontmatter, not in the DB row).
 	fullPath := filepath.Join(s.dataDir, cmd.PayloadPath)
 	data, readErr := os.ReadFile(fullPath)
 	if readErr == nil {
 		parsed, parseErr := ParseMarkdown(data)
 		if parseErr == nil {
 			cmd.Body = parsed.Body
+			cmd.Tool = parsed.Tool
+			cmd.ToolArgsTemplate = parsed.ToolArgsTemplate
+			cmd.Inputs = parsed.Inputs
+			cmd.WhenToUse = parsed.WhenToUse
+			cmd.DoesNotHandle = parsed.DoesNotHandle
 		}
 	}
 	return cmd, nil
