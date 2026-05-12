@@ -77,6 +77,9 @@ import type {
   ArtifactWithBytes,
   SlashCommandInfo,
   SlashExecuteResult,
+  UserCommand,
+  UserCommandSummary,
+  SlashRunResult,
   Corpus,
   CorpusFile,
   CorpusChunk,
@@ -431,6 +434,20 @@ interface WailsBindingsLike {
     raw: string,
   ): Promise<SlashExecuteResult>;
   Slash_List(): Promise<SlashCommandInfo[]>;
+
+  // ── user-defined slash commands (user-slash-commands-01KQ8TD9) ──
+  Slashcmd_List(projectID: string): Promise<UserCommandSummary[]>;
+  Slashcmd_Get(name: string, projectID: string): Promise<UserCommand>;
+  Slashcmd_Save(cmd: UserCommand): Promise<void>;
+  Slashcmd_Delete(name: string, projectID: string): Promise<void>;
+  Slashcmd_Run(
+    name: string,
+    args: Record<string, string>,
+    sessionID: string,
+    projectID: string,
+    cwd: string,
+    selection: string,
+  ): Promise<SlashRunResult>;
 
   Corpus_ListCorpora(scope: string): Promise<Corpus[]>;
   Corpus_CreateCorpus(req: CorpusCreateRequest): Promise<Corpus>;
@@ -1630,6 +1647,25 @@ export interface SlashClient {
 }
 
 /**
+ * SlashcmdClient — user-defined slash command CRUD + dispatch
+ * (mission user-slash-commands-01KQ8TD9).
+ */
+export interface SlashcmdClient {
+  list(projectID: string): Promise<UserCommandSummary[]>;
+  get(name: string, projectID: string): Promise<UserCommand>;
+  save(cmd: UserCommand): Promise<void>;
+  delete(name: string, projectID: string): Promise<void>;
+  run(
+    name: string,
+    args: Record<string, string>,
+    sessionID: string,
+    projectID: string,
+    cwd: string,
+    selection: string,
+  ): Promise<SlashRunResult>;
+}
+
+/**
  * CorpusClient — bulk-ingest knowledge corpora (mission
  * agent-kernel-graph; Bundle C WP10/WP11). Backs the Knowledge view's
  * three surfaces:
@@ -1977,6 +2013,7 @@ export interface HarnessClient {
   shell: ShellClient;
   bash: BashClient;
   slash: SlashClient;
+  slashcmd: SlashcmdClient;
   artifacts: ArtifactsClient;
   corpus: CorpusClient;
   graph: GraphClient;
@@ -2330,6 +2367,14 @@ export function createHarnessClient(): HarnessClient {
     slash: {
       list: () => b().Slash_List(),
       execute: (sessionID, raw) => b().Slash_Execute(sessionID, raw),
+    },
+    slashcmd: {
+      list: (projectID) => b().Slashcmd_List(projectID),
+      get: (name, projectID) => b().Slashcmd_Get(name, projectID),
+      save: (cmd) => b().Slashcmd_Save(cmd),
+      delete: (name, projectID) => b().Slashcmd_Delete(name, projectID),
+      run: (name, args, sessionID, projectID, cwd, selection) =>
+        b().Slashcmd_Run(name, args, sessionID, projectID, cwd, selection),
     },
     corpus: {
       listCorpora: (scope) => b().Corpus_ListCorpora(scope),

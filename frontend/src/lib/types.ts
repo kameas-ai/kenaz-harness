@@ -1640,12 +1640,84 @@ export interface RecipeListing {
  * autocomplete dropdown the chat composer renders when the input
  * starts with a `/`. ComingSoon flags v1 stubs (memorize, recall,
  * forget, branch); the dropdown renders them with a
- * "(coming soon)" tag.
+ * "(coming soon)" tag. isUser flags user-defined commands so the
+ * autocomplete renders a "user" chip.
  */
 export interface SlashCommandInfo {
   name: string;
   description: string;
   comingSoon: boolean;
+  isUser?: boolean;
+}
+
+// ── user-defined slash commands (user-slash-commands-01KQ8TD9) ───────
+
+export type UserCommandScope = 'global' | 'project';
+export type UserCommandKind = 'text' | 'tool' | 'prompt';
+export type UserCommandInputKind =
+  | 'text'
+  | 'enum'
+  | 'number'
+  | 'file'
+  | 'artifact_ref'
+  | 'project_ref';
+
+export interface UserCommandInput {
+  name: string;
+  kind: UserCommandInputKind;
+  required: boolean;
+  enumValues?: string[];
+  default?: string;
+  hint?: string;
+}
+
+/**
+ * UserCommandSummary — lightweight wire shape returned by Slashcmd_List.
+ */
+export interface UserCommandSummary {
+  name: string;
+  scope: UserCommandScope;
+  projectId?: string;
+  kind: UserCommandKind;
+  description: string;
+  modelInvokable: boolean;
+  icon?: string;
+  hiddenFromPanel?: boolean;
+  updatedAt?: number;
+}
+
+/**
+ * UserCommand — full detail shape returned by Slashcmd_Get.
+ */
+export interface UserCommand {
+  name: string;
+  scope: UserCommandScope;
+  projectId?: string;
+  kind: UserCommandKind;
+  description: string;
+  whenToUse?: string;
+  doesNotHandle?: string;
+  modelInvokable: boolean;
+  icon?: string;
+  hiddenFromPanel?: boolean;
+  body?: string;
+  tool?: string;
+  toolArgsTemplate?: string;
+  inputs?: UserCommandInput[];
+  payloadPath?: string;
+  createdAt?: number;
+  updatedAt?: number;
+}
+
+/**
+ * RunResult — wire shape returned by Slashcmd_Run.
+ */
+export interface SlashRunResult {
+  kind: SlashResultKind;
+  text: string;
+  renderedArgs?: string[];
+  toolName?: string;
+  metadata?: Record<string, unknown>;
 }
 
 /**
