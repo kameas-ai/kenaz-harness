@@ -101,6 +101,9 @@ func (s *fakeScheduler) List(_ context.Context) ([]wfsched.ScheduleEntry, error)
 	return nil, nil
 }
 
+func (s *fakeScheduler) NextFire(_ context.Context, _ string) (time.Time, error) {
+	return time.Time{}, nil
+}
 func (s *fakeScheduler) Start()           {}
 func (s *fakeScheduler) Stop()            {}
 func (s *fakeScheduler) Tick(_ time.Time) {}

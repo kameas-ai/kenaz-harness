@@ -6,11 +6,16 @@
  *   3. Run button invokes client.run with the seeded inputs and
  *      renders the per-step transcript
  *   4. load failure surfaces an error banner
+ *   5. Runs tab mounts ScheduledInbox (WP03)
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { mount, flushPromises } from '@vue/test-utils';
 import WorkflowsView from '../WorkflowsView.vue';
+
+// ScheduledInbox is NOT stubbed here — the real component mounts fine with
+// the fake client's default scheduleList() → [] stub.  We just verify the
+// inbox root element appears when the Runs tab is active.
 import {
   createFakeWorkflowsClient,
   type WorkflowsClient,
@@ -258,5 +263,22 @@ describe('WorkflowsView', () => {
     expect(wrapper.find('[data-testid="workflows-run-error"]').text()).toContain(
       'shell step failed',
     );
+  });
+
+  it('shows the ScheduledInbox component when the Runs tab is active (WP03)', async () => {
+    const wrapper = mount(WorkflowsView, {
+      props: { client: fakeClient() },
+    });
+    await flushPromises();
+
+    // Switch to Runs tab
+    await wrapper.find('[data-testid="workflows-tab-runs"]').trigger('click');
+    await flushPromises();
+
+    // ScheduledInbox root element is rendered (scheduleList returns [] so
+    // the empty state within ScheduledInbox shows up under the root testid)
+    expect(wrapper.find('[data-testid="scheduled-inbox"]').exists()).toBe(true);
+    // Library tab content should be hidden
+    expect(wrapper.find('[data-testid="workflows-catalog"]').exists()).toBe(false);
   });
 });

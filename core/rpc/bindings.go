@@ -1631,6 +1631,22 @@ func (b *Bindings) Workflows_RunNow(workflowID string) (workflowsview.RunSummary
 	return b.api.Workflows().RunNow(b.ctx(), workflowID)
 }
 
+// ── workflow scheduled-inbox (workflow-extensions-01KW2D3Y WP01) ──────
+
+func (b *Bindings) Workflows_ScheduleRunHistory(workflowID string, limit int) ([]workflowsview.RunSummary, error) {
+	return b.api.Workflows().ScheduleRunHistory(b.ctx(), workflowID, limit)
+}
+func (b *Bindings) Workflows_ScheduleNextFire(workflowID string) (string, error) {
+	t, err := b.api.Workflows().ScheduleNextFire(b.ctx(), workflowID)
+	if err != nil || t.IsZero() {
+		return "", err
+	}
+	return t.UTC().Format("2006-01-02T15:04:05Z"), nil
+}
+func (b *Bindings) Workflows_CancelRun(runID string) error {
+	return b.api.Workflows().CancelRun(b.ctx(), runID)
+}
+
 // ── update (mission auto-update, v0.4.0 WP03) ─────────────────────────
 //
 // TODO: regenerate via `wails generate module` once the WP04 + WP05 UI

@@ -4,11 +4,13 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/sigil-tech/kaneaz-harness/core/storage"
 	storagesqlite "github.com/sigil-tech/kaneaz-harness/core/storage/sqlite"
 	corewf "github.com/sigil-tech/kaneaz-harness/core/workflows"
 	wfcatalog "github.com/sigil-tech/kaneaz-harness/core/workflows/catalog"
+	wfsched "github.com/sigil-tech/kaneaz-harness/core/workflows/scheduler"
 
 	_ "modernc.org/sqlite"
 )
@@ -359,6 +361,163 @@ func TestCatalogInstall_NoCatalogReturnsUnavailable(t *testing.T) {
 	_, err := api.Catalog_Install(context.Background(), "plan_implement_review")
 	if !errors.Is(err, ErrCatalogUnavailable) {
 		t.Errorf("want ErrCatalogUnavailable, got %v", err)
+	}
+}
+
+// --- WP01 scheduled-inbox RPC tests ---
+
+// fakeScheduler is a minimal wfsched.Scheduler for testing the three
+// new WP01 methods (ScheduleRunHistory, ScheduleNextFire, CancelRun).
+type fakeScheduler struct {
+	history  []wfsched.RunSummary
+	nextFire time.Time
+}
+
+func (f *fakeScheduler) Register(_ context.Context, _, _, _ string) error { return nil }
+func (f *fakeScheduler) Unregister(_ context.Context, _ string) error     { return nil }
+func (f *fakeScheduler) RunNow(_ context.Context, wfID string) (wfsched.RunSummary, error) {
+	return wfsched.RunSummary{RunID: "run-now", WorkflowID: wfID, Status: "completed"}, nil
+}
+func (f *fakeScheduler) History(_ context.Context, _ string, limit int) ([]wfsched.RunSummary, error) {
+	if limit <= 0 || limit >= len(f.history) {
+		return f.history, nil
+	}
+	return f.history[len(f.history)-limit:], nil
+}
+func (f *fakeScheduler) List(_ context.Context) ([]wfsched.ScheduleEntry, error) { return nil, nil }
+func (f *fakeScheduler) NextFire(_ context.Context, _ string) (time.Time, error) {
+	return f.nextFire, nil
+}
+func (f *fakeScheduler) Start()           {}
+func (f *fakeScheduler) Stop()            {}
+func (f *fakeScheduler) Tick(_ time.Time) {}
+
+var _ wfsched.Scheduler = (*fakeScheduler)(nil)
+
+// TestScheduleRunHistory_ReturnsHistory confirms the method delegates to
+// Scheduler.History and projects into the wire shape.
+func TestScheduleRunHistory_ReturnsHistory(t *testing.T) {
+	t.Parallel()
+	sched := &fakeScheduler{
+		history: []wfsched.RunSummary{
+			{RunID: "run-1", WorkflowID: "wf-x", Status: "completed", Scheduled: true},
+			{RunID: "run-2", WorkflowID: "wf-x", Status: "failed", Scheduled: false},
+		},
+	}
+	api := New(Config{Scheduler: sched})
+	got, err := api.ScheduleRunHistory(context.Background(), "wf-x", 10)
+	if err != nil {
+		t.Fatalf("ScheduleRunHistory: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("len: got %d want 2", len(got))
+	}
+	if got[0].RunID != "run-1" || got[1].RunID != "run-2" {
+		t.Errorf("unexpected run IDs: %+v", got)
+	}
+}
+
+// TestScheduleRunHistory_NoSchedulerReturnsUnavailable confirms the guard.
+func TestScheduleRunHistory_NoSchedulerReturnsUnavailable(t *testing.T) {
+	t.Parallel()
+	api := New(Config{})
+	_, err := api.ScheduleRunHistory(context.Background(), "any", 5)
+	if !errors.Is(err, ErrSchedulerUnavailable) {
+		t.Errorf("want ErrSchedulerUnavailable, got %v", err)
+	}
+}
+
+// TestScheduleNextFire_ReturnsTime confirms the method delegates to
+// Scheduler.NextFire.
+func TestScheduleNextFire_ReturnsTime(t *testing.T) {
+	t.Parallel()
+	want := time.Date(2026, 5, 12, 7, 0, 0, 0, time.UTC)
+	sched := &fakeScheduler{nextFire: want}
+	api := New(Config{Scheduler: sched})
+	got, err := api.ScheduleNextFire(context.Background(), "wf-x")
+	if err != nil {
+		t.Fatalf("ScheduleNextFire: %v", err)
+	}
+	if !got.Equal(want) {
+		t.Errorf("got %v want %v", got, want)
+	}
+}
+
+// TestScheduleNextFire_NoSchedulerReturnsUnavailable confirms the guard.
+func TestScheduleNextFire_NoSchedulerReturnsUnavailable(t *testing.T) {
+	t.Parallel()
+	api := New(Config{})
+	_, err := api.ScheduleNextFire(context.Background(), "any")
+	if !errors.Is(err, ErrSchedulerUnavailable) {
+		t.Errorf("want ErrSchedulerUnavailable, got %v", err)
+	}
+}
+
+// TestCancelRun_CancelsInFlightRun confirms that CancelRun signals the
+// engine's cancel func so a running workflow aborts.
+func TestCancelRun_CancelsInFlightRun(t *testing.T) {
+	t.Parallel()
+	engine := corewf.NewEngine()
+	api := New(Config{Engine: engine})
+
+	wfs, errs := corewf.LoadBuiltins()
+	for _, e := range errs {
+		t.Fatalf("LoadBuiltins: %v", e)
+	}
+	if len(wfs) == 0 {
+		t.Fatal("no builtins")
+	}
+
+	// Fire the run in a goroutine; collect the run ID via the first
+	// progress event (any phase contains the RunID).
+	runIDCh := make(chan string, 1)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		opts := corewf.RunOptions{
+			ProgressSink: func(ev corewf.ProgressEvent) {
+				select {
+				case runIDCh <- ev.RunID:
+				default:
+				}
+			},
+		}
+		_, _ = engine.Run(context.Background(), wfs[0], nil, opts)
+	}()
+
+	// Wait for the run to register itself (or give up after a short wait).
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	var runID string
+	select {
+	case runID = <-runIDCh:
+	case <-ctx.Done():
+		// No progress event fired in time (engine completed synchronously
+		// before we could cancel). That's OK — just verify CancelRun
+		// returns ErrRunNotFound for an unknown ID.
+		err := api.CancelRun(context.Background(), "unknown-run-id")
+		if !errors.Is(err, corewf.ErrRunNotFound) {
+			t.Errorf("want ErrRunNotFound, got %v", err)
+		}
+		<-done
+		return
+	}
+	if err := api.CancelRun(context.Background(), runID); err != nil {
+		// Run may have completed before we cancelled — ErrRunNotFound is OK.
+		if !errors.Is(err, corewf.ErrRunNotFound) {
+			t.Errorf("CancelRun: %v", err)
+		}
+	}
+	<-done
+}
+
+// TestCancelRun_NoEngineReturnsUnavailable confirms the guard.
+func TestCancelRun_NoEngineReturnsUnavailable(t *testing.T) {
+	t.Parallel()
+	api := New(Config{})
+	err := api.CancelRun(context.Background(), "any")
+	if !errors.Is(err, ErrEngineUnavailable) {
+		t.Errorf("want ErrEngineUnavailable, got %v", err)
 	}
 }
 

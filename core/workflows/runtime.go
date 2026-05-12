@@ -75,6 +75,26 @@ type Engine struct {
 	// keys the cache; the workflow's RerunPolicy controls how a hit
 	// is handled (see ResolveRerun).
 	Cache Cache
+	// activeCancels maps runID → context.CancelFunc for all in-flight
+	// runs on this engine instance. Populated at Run entry; cleared on
+	// run completion. Used by Cancel.
+	activeCancels sync.Map // map[string]context.CancelFunc
+}
+
+// Cancel signals cancellation of an in-flight run identified by runID.
+// Returns ErrRunNotFound when no in-flight run with that ID is registered
+// on this engine instance (already completed, never started, or from a
+// prior process lifecycle).
+func (e *Engine) Cancel(runID string) error {
+	v, ok := e.activeCancels.Load(runID)
+	if !ok {
+		return fmt.Errorf("%w: %s", ErrRunNotFound, runID)
+	}
+	cancel, _ := v.(context.CancelFunc)
+	if cancel != nil {
+		cancel()
+	}
+	return nil
 }
 
 // NewEngine returns an Engine wired with the package-default runners.
@@ -171,6 +191,16 @@ func (e *Engine) Run(ctx context.Context, wf Workflow, inputs map[string]TypedVa
 		StartedAt:  e.now(),
 		Steps:      make([]StepResult, 0, len(wf.Steps)),
 	}
+	// Register this run in the active-cancel registry so Cancel() can
+	// signal it. Wrap the caller's ctx so Cancel produces a proper child
+	// cancellation rather than invalidating the caller's root context.
+	runCtx, runCancel := context.WithCancel(ctx)
+	e.activeCancels.Store(rc.RunID, runCancel)
+	defer func() {
+		runCancel() // always clean up the child cancel
+		e.activeCancels.Delete(rc.RunID)
+	}()
+	ctx = runCtx
 	emit := func(ev ProgressEvent) {
 		if opts.ProgressSink == nil {
 			return
