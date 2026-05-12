@@ -257,6 +257,29 @@ type MemoryAPI interface {
 	// chunkID. Returns zero-value metrics when no signals have been
 	// recorded.
 	NarrativeMetricsForChunk(ctx context.Context, chunkID string) (NarrativeMetrics, error)
+
+	// ── Capstone (memory-inspection-ui-01KX5R8E) ───────────────────────
+
+	// LastRetrieval returns the most recent retrieval report for the
+	// given session. Returns an empty report (no error) when no
+	// retrieval has occurred for that session in the current process
+	// lifetime.
+	LastRetrieval(ctx context.Context, sessionID string) (RetrievalReport, error)
+	// EmbeddingProbe embeds query and returns up to limit scored chunks
+	// ranked by cosine similarity. limit is capped at 50 server-side.
+	// Returns ErrEmbedderUnavailable when no embedder is wired.
+	EmbeddingProbe(ctx context.Context, query string, limit int) ([]ScoredChunk, error)
+	// ResummarizeChunk re-runs narrative synthesis on a single chunk.
+	// For narrative chunks with TurnID: re-enqueues to the Promoter
+	// (async; returns current Chunk immediately). For raw/legacy chunks:
+	// runs extractive fallback inline and returns the updated Chunk.
+	// Returns ErrResummarizeRateLimited when called within 60s of a
+	// previous call for the same chunk.
+	ResummarizeChunk(ctx context.Context, chunkID string) (Chunk, error)
+	// GetChunkProvenance returns the full audit chain for a chunk:
+	// source turn, hook boundary, retrieval counts, citation counts,
+	// promotion score, scope path, embedding metadata.
+	GetChunkProvenance(ctx context.Context, chunkID string) (ChunkProvenance, error)
 }
 
 // CaptureRateSnapshot is the wire shape returned by Memory_CaptureRate
@@ -266,4 +289,43 @@ type CaptureRateSnapshot struct {
 	EmbedderHealth   string     `json:"embedderHealth"`   // "ok" | "slow" | "error"
 	LastErrorAt      *time.Time `json:"lastErrorAt"`      // nil when no recent error
 	RecentErrorCount int        `json:"recentErrorCount"` // errors in the last 5 min
+}
+
+// ── Capstone types (memory-inspection-ui-01KX5R8E) ───────────────────────────
+
+// ScoredChunk pairs a Chunk with its cosine similarity score against
+// a query. Used by EmbeddingProbe and LastRetrieval.
+type ScoredChunk struct {
+	Chunk      Chunk   `json:"chunk"`
+	Similarity float32 `json:"similarity"`
+	// Injected is true when similarity >= the retriever's configured
+	// threshold (i.e. the chunk was included in the LLM context).
+	Injected bool `json:"injected"`
+}
+
+// RetrievalReport is the wire shape returned by Memory_LastRetrieval.
+// It represents the most recent retrieval call for a session.
+type RetrievalReport struct {
+	SessionID string        `json:"sessionId"`
+	Query     string        `json:"query"`
+	Results   []ScoredChunk `json:"results"`
+	Threshold float32       `json:"threshold"`
+	At        time.Time     `json:"at"`
+}
+
+// ChunkProvenance is the full audit chain for one chunk, returned by
+// Memory_GetChunkProvenance (§2.6).
+type ChunkProvenance struct {
+	ChunkID        string    `json:"chunkId"`
+	SourceTurn     string    `json:"sourceTurn,omitempty"`
+	HookBoundary   string    `json:"hookBoundary,omitempty"` // e.g. "post-llm"
+	Kind           string    `json:"kind,omitempty"`
+	ScopePath      string    `json:"scopePath"`    // e.g. "session → project"
+	Pinned         bool      `json:"pinned"`
+	RetrievalCount int       `json:"retrievalCount"` // RecallCount from store
+	CitationCount  int64     `json:"citationCount"`  // from NarrativeMetrics
+	PromotionScore float64   `json:"promotionScore"` // from NarrativeMetrics
+	EmbedderKind   string    `json:"embedderKind,omitempty"`
+	EmbedDimensions int      `json:"embedDimensions,omitempty"`
+	CreatedAt      time.Time `json:"createdAt"`
 }
