@@ -3,6 +3,7 @@ package elicit_test
 import (
 	"context"
 	"encoding/json"
+	"sync"
 	"testing"
 	"time"
 
@@ -10,8 +11,12 @@ import (
 	"github.com/sigil-tech/kaneaz-harness/core/tools/askuserquestion"
 )
 
-// fakeEmitter records Emit calls for assertions.
+// fakeEmitter records Emit calls for assertions. The API's OpenDialog /
+// OpenWizard helpers block on a goroutine that calls Emit; the test
+// goroutine reads emitted records concurrently. Guard the slice with a
+// mutex so the race detector stays quiet.
 type fakeEmitter struct {
+	mu      sync.Mutex
 	emitted []emitRecord
 }
 
@@ -21,7 +26,20 @@ type emitRecord struct {
 }
 
 func (f *fakeEmitter) Emit(_ context.Context, topic string, payload any) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.emitted = append(f.emitted, emitRecord{topic: topic, payload: payload})
+}
+
+// snapshot returns a copy of the recorded emit history for assertion-side
+// reads. All test-goroutine reads of em.snapshot() MUST go through snapshot
+// to keep the race detector quiet.
+func (f *fakeEmitter) snapshot() []emitRecord {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]emitRecord, len(f.emitted))
+	copy(out, f.emitted)
+	return out
 }
 
 func TestSubmitAnswer_ResolvesOpenDialog(t *testing.T) {
@@ -50,16 +68,16 @@ func TestSubmitAnswer_ResolvesOpenDialog(t *testing.T) {
 	time.Sleep(10 * time.Millisecond)
 
 	// Verify the event was emitted.
-	if len(em.emitted) != 1 {
-		t.Fatalf("expected 1 emit, got %d", len(em.emitted))
+	if len(em.snapshot()) != 1 {
+		t.Fatalf("expected 1 emit, got %d", len(em.snapshot()))
 	}
-	if em.emitted[0].topic != elicit.TopicElicitPending {
-		t.Errorf("expected topic=%q, got %q", elicit.TopicElicitPending, em.emitted[0].topic)
+	if em.snapshot()[0].topic != elicit.TopicElicitPending {
+		t.Errorf("expected topic=%q, got %q", elicit.TopicElicitPending, em.snapshot()[0].topic)
 	}
 
-	req, ok := em.emitted[0].payload.(elicit.ElicitRequest)
+	req, ok := em.snapshot()[0].payload.(elicit.ElicitRequest)
 	if !ok {
-		t.Fatalf("payload is not ElicitRequest: %T", em.emitted[0].payload)
+		t.Fatalf("payload is not ElicitRequest: %T", em.snapshot()[0].payload)
 	}
 	if req.Question != "Pick one" {
 		t.Errorf("unexpected question: %q", req.Question)
@@ -111,10 +129,10 @@ func TestSubmitAnswer_CancelledFlow(t *testing.T) {
 
 	time.Sleep(10 * time.Millisecond)
 
-	if len(em.emitted) == 0 {
+	if len(em.snapshot()) == 0 {
 		t.Fatal("no emit recorded")
 	}
-	req := em.emitted[0].payload.(elicit.ElicitRequest)
+	req := em.snapshot()[0].payload.(elicit.ElicitRequest)
 
 	// Cancel.
 	if err := api.SubmitAnswer(context.Background(), req.RequestID, nil, true); err != nil {
@@ -204,14 +222,14 @@ func TestSubmitWizardStep_TwoSteps_Complete(t *testing.T) {
 
 	// Wait for the wizard to register (emitter should have fired).
 	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) && len(em.emitted) == 0 {
+	for time.Now().Before(deadline) && len(em.snapshot()) == 0 {
 		time.Sleep(5 * time.Millisecond)
 	}
-	if len(em.emitted) == 0 {
+	if len(em.snapshot()) == 0 {
 		t.Fatal("emitter did not receive any event")
 	}
 
-	emittedReq := em.emitted[0].payload.(elicit.ElicitRequest)
+	emittedReq := em.snapshot()[0].payload.(elicit.ElicitRequest)
 	reqID := emittedReq.RequestID
 	if reqID == "" {
 		t.Fatal("emitted request has empty request_id")
@@ -271,10 +289,10 @@ func TestSubmitWizardStep_Dismissed_ReturnsPartial(t *testing.T) {
 	}()
 
 	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) && len(em.emitted) == 0 {
+	for time.Now().Before(deadline) && len(em.snapshot()) == 0 {
 		time.Sleep(5 * time.Millisecond)
 	}
-	emittedReq := em.emitted[0].payload.(elicit.ElicitRequest)
+	emittedReq := em.snapshot()[0].payload.(elicit.ElicitRequest)
 	reqID := emittedReq.RequestID
 
 	_ = api.SubmitWizardStep(context.Background(), reqID, "q1", json.RawMessage(`"partial"`), false)
@@ -321,10 +339,10 @@ func TestSubmitWizardStep_ConditionalQuestion_Skipped(t *testing.T) {
 	}()
 
 	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) && len(em.emitted) == 0 {
+	for time.Now().Before(deadline) && len(em.snapshot()) == 0 {
 		time.Sleep(5 * time.Millisecond)
 	}
-	emittedReq := em.emitted[0].payload.(elicit.ElicitRequest)
+	emittedReq := em.snapshot()[0].payload.(elicit.ElicitRequest)
 	reqID := emittedReq.RequestID
 
 	// Answer q1 with "no" — q2 condition (equals "yes") is NOT met, so q2 is hidden.
@@ -375,7 +393,7 @@ func TestRegisterDeferred_ImmediateReturn(t *testing.T) {
 	if result.AskID == "" {
 		t.Error("result.AskID should not be empty")
 	}
-	if len(em.emitted) == 0 {
+	if len(em.snapshot()) == 0 {
 		t.Error("should have emitted a deferred event")
 	}
 }
@@ -397,7 +415,7 @@ func TestAnswerDeferred_ReturnsSystemReminder(t *testing.T) {
 	}
 	// Check that a DeferredAnswered event was emitted.
 	var found bool
-	for _, e := range em.emitted {
+	for _, e := range em.snapshot() {
 		if e.topic == elicit.TopicElicitDeferredAnswered {
 			found = true
 		}

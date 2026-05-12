@@ -16,7 +16,7 @@ attrs:
     description: "Always kaneaz__sleep."
     default: kaneaz__sleep
   seconds:
-    type: integer
+    type: int
     description: "Duration to sleep. Clamped to [1, 600]."
     default: 5
 cedar_action: tool.passive
