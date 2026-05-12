@@ -32,6 +32,33 @@ type Chunk struct {
 	RecallCount  int       `json:"recallCount,omitempty"`
 	LastAccessed time.Time `json:"lastAccessed,omitempty"`
 	Source       string    `json:"source,omitempty"`
+	// Narrative layer fields (memory-narrative-layer-01KQ8TD1 WP01).
+	Kind            string  `json:"kind,omitempty"`
+	RetrievalWeight float32 `json:"retrievalWeight,omitempty"`
+	TurnID          string  `json:"turnId,omitempty"`
+}
+
+// NarrativeJobStatus is the wire shape for a failed narrative synthesis job
+// (WP07). Surfaces in the Memory view "N narratives unrecoverable" list.
+type NarrativeJobStatus struct {
+	ID        string    `json:"id"`
+	TurnID    string    `json:"turnId"`
+	SessionID string    `json:"sessionId"`
+	Attempt   int       `json:"attempt"`
+	LastError string    `json:"lastError"`
+	CreatedAt time.Time `json:"createdAt"`
+}
+
+// NarrativeMetrics surfaces the promotion-score counters for one chunk
+// (WP07). Shown in the per-chunk score column in the Memory view.
+type NarrativeMetrics struct {
+	ChunkID         string    `json:"chunkId"`
+	Retrievals      int64     `json:"retrievals"`
+	Citations       int64     `json:"citations"`
+	UserPins        int64     `json:"userPins"`
+	Score           float64   `json:"score"`
+	LastRetrievedAt time.Time `json:"lastRetrievedAt,omitempty"`
+	LastCitedAt     time.Time `json:"lastCitedAt,omitempty"`
 }
 
 // ListFilter narrows the chunks returned by ListChunks. Each non-empty
@@ -208,6 +235,28 @@ type MemoryAPI interface {
 	// Used by the Settings → Memory banner to tell users when none of their
 	// profiles support embeddings (e.g. Anthropic-only setup).
 	EmbedderEligibility(ctx context.Context) (EmbedderEligibility, error)
+
+	// ── Narrative layer (memory-narrative-layer-01KQ8TD1) ──────────────
+
+	// MarkImportant increments (important=true) or clears (false) the
+	// user_pins signal for chunkID, contributing to the long-term
+	// promotion score. This is NOT a "pin to chat top" affordance;
+	// the UX label reads "Mark important" (FR-008b).
+	MarkImportant(ctx context.Context, chunkID string, important bool) error
+	// NarrativeFailedCount returns the count of synthesis jobs with
+	// status=failed. Used by the "N narratives unrecoverable" banner.
+	NarrativeFailedCount(ctx context.Context) (int, error)
+	// NarrativeFailedList returns all failed synthesis jobs for the
+	// manual-retry list view.
+	NarrativeFailedList(ctx context.Context) ([]NarrativeJobStatus, error)
+	// RetryFailedNarrative resets the job with the given ID so the
+	// Promoter picks it up on the next scan. Caller should pass the
+	// job's ID (not TurnID).
+	RetryFailedNarrative(ctx context.Context, jobID string) error
+	// NarrativeMetricsForChunk returns the promotion-score counters for
+	// chunkID. Returns zero-value metrics when no signals have been
+	// recorded.
+	NarrativeMetricsForChunk(ctx context.Context, chunkID string) (NarrativeMetrics, error)
 }
 
 // CaptureRateSnapshot is the wire shape returned by Memory_CaptureRate
