@@ -352,3 +352,72 @@ func TestSubmitWizardStep_UnknownRequest_Error(t *testing.T) {
 		t.Errorf("expected ErrUnknownRequest, got %v", err)
 	}
 }
+
+// ── WP06: deferred mode tests ───────────────────────────────────────────────
+
+func TestRegisterDeferred_ImmediateReturn(t *testing.T) {
+	em := &fakeEmitter{}
+	api := elicit.New(elicit.Config{Emitter: em})
+	api.SetContext(context.Background())
+
+	req := elicit.ElicitRequest{
+		Question: "Deploy now?",
+		Kind:     "radio",
+		Mode:     "deferred",
+	}
+	result, err := api.RegisterDeferred(context.Background(), "sess-1", req)
+	if err != nil {
+		t.Fatalf("RegisterDeferred: %v", err)
+	}
+	if !result.Deferred {
+		t.Error("result.Deferred should be true")
+	}
+	if result.AskID == "" {
+		t.Error("result.AskID should not be empty")
+	}
+	if len(em.emitted) == 0 {
+		t.Error("should have emitted a deferred event")
+	}
+}
+
+func TestAnswerDeferred_ReturnsSystemReminder(t *testing.T) {
+	em := &fakeEmitter{}
+	api := elicit.New(elicit.Config{Emitter: em})
+	api.SetContext(context.Background())
+
+	req := elicit.ElicitRequest{Question: "Q?", Kind: "text"}
+	dr, _ := api.RegisterDeferred(context.Background(), "sess-1", req)
+
+	reminder, err := api.AnswerDeferred(context.Background(), dr.AskID, "my answer")
+	if err != nil {
+		t.Fatalf("AnswerDeferred: %v", err)
+	}
+	if reminder == "" {
+		t.Error("system reminder text should not be empty")
+	}
+	// Check that a DeferredAnswered event was emitted.
+	var found bool
+	for _, e := range em.emitted {
+		if e.topic == elicit.TopicElicitDeferredAnswered {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("should have emitted TopicElicitDeferredAnswered")
+	}
+}
+
+func TestRegisterDeferred_TooManyPending(t *testing.T) {
+	api := elicit.New(elicit.Config{})
+	req := elicit.ElicitRequest{Question: "Q?", Kind: "text"}
+	for i := 0; i < 5; i++ {
+		if _, err := api.RegisterDeferred(context.Background(), "sess-1", req); err != nil {
+			t.Fatalf("Register %d: %v", i, err)
+		}
+	}
+	// 6th should fail.
+	_, err := api.RegisterDeferred(context.Background(), "sess-1", req)
+	if err == nil {
+		t.Error("expected error for too many pending, got nil")
+	}
+}

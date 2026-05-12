@@ -1684,6 +1684,20 @@ func (b *Bindings) Elicit_SubmitWizardStep(requestID string, questionID string, 
 	return b.api.Elicit().SubmitWizardStep(b.ctx(), requestID, questionID, answerJSON, dismissed)
 }
 
+// Elicit_RegisterDeferred registers a deferred ask for a session and returns
+// immediately with DeferredResult{Deferred:true, AskID:…} (WP06).
+// The model can use AskID to retrieve the answer later via
+// __ask_get_result(ask_id). A chat-header pill appears for the user.
+func (b *Bindings) Elicit_RegisterDeferred(sessionID string, req elicitview.ElicitRequest) (elicitview.DeferredResult, error) {
+	return b.api.Elicit().RegisterDeferred(b.ctx(), sessionID, req)
+}
+
+// Elicit_AnswerDeferred records the user's answer for a deferred ask (WP06).
+// Returns the system_reminder text to inject into the next LLM turn.
+func (b *Bindings) Elicit_AnswerDeferred(askID string, answer any) (string, error) {
+	return b.api.Elicit().AnswerDeferred(b.ctx(), askID, answer)
+}
+
 // Elicit_ListPending returns in-flight elicitation request IDs so the
 // frontend can reconcile its dialog queue on reconnect / hot reload.
 func (b *Bindings) Elicit_ListPending() ([]elicitview.ElicitRequest, error) {

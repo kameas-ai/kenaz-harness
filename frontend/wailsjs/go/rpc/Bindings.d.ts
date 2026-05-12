@@ -206,7 +206,11 @@ export function Graph_StartRun(arg1:agentgraph.StartRunRequest):Promise<agentgra
 
 export function Graph_Validate(arg1:string):Promise<agentgraph.ValidationResult>;
 
+export function Elicit_AnswerDeferred(arg1:string,arg2:any):Promise<string>;
+
 export function Elicit_ListPending():Promise<Array<elicit.ElicitRequest>>;
+
+export function Elicit_RegisterDeferred(arg1:string,arg2:elicit.ElicitRequest):Promise<elicit.DeferredResult>;
 
 export function Elicit_SubmitAnswer(arg1:string,arg2:any,arg3:boolean):Promise<void>;
 

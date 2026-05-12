@@ -338,8 +338,16 @@ export function Graph_Validate(arg1) {
   return window['go']['rpc']['Bindings']['Graph_Validate'](arg1);
 }
 
+export function Elicit_AnswerDeferred(arg1, arg2) {
+  return window['go']['rpc']['Bindings']['Elicit_AnswerDeferred'](arg1, arg2);
+}
+
 export function Elicit_ListPending() {
   return window['go']['rpc']['Bindings']['Elicit_ListPending']();
+}
+
+export function Elicit_RegisterDeferred(arg1, arg2) {
+  return window['go']['rpc']['Bindings']['Elicit_RegisterDeferred'](arg1, arg2);
 }
 
 export function Elicit_SubmitAnswer(arg1, arg2, arg3) {

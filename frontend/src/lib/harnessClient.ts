@@ -1978,6 +1978,17 @@ export interface ElicitClient {
   submitWizardStep(requestID: string, questionID: string, answerJSON: string | null, dismissed: boolean): Promise<void>;
 
   /**
+   * Register a deferred ask (WP06). Returns immediately with AskID so the
+   * model can continue. The user sees a pill in the chat header.
+   */
+  registerDeferred(sessionID: string, req: import('./types').ElicitRequest): Promise<{ deferred: boolean; ask_id: string }>;
+
+  /**
+   * Answer a deferred ask (WP06). Returns the system_reminder text to inject.
+   */
+  answerDeferred(askID: string, answer: unknown): Promise<string>;
+
+  /**
    * List in-flight elicitation requests. Used for reconnect reconciliation.
    */
   listPending(): Promise<import('./types').ElicitRequest[]>;
@@ -2460,6 +2471,10 @@ export function createHarnessClient(): HarnessClient {
         b().Elicit_SubmitAnswer(requestID, answerJSON, cancelled),
       submitWizardStep: (requestID, questionID, answerJSON, dismissed) =>
         b().Elicit_SubmitWizardStep(requestID, questionID, answerJSON, dismissed),
+      registerDeferred: (sessionID, req) =>
+        b().Elicit_RegisterDeferred(sessionID, req),
+      answerDeferred: (askID, answer) =>
+        b().Elicit_AnswerDeferred(askID, answer),
       listPending: () => b().Elicit_ListPending(),
     },
   };
@@ -3264,6 +3279,8 @@ export function createFakeHarnessClient(
     elicit: {
       submitAnswer: noop,
       submitWizardStep: noop,
+      registerDeferred: async () => ({ deferred: true, ask_id: '' }),
+      answerDeferred: async () => '',
       listPending: async () => [],
     },
   };

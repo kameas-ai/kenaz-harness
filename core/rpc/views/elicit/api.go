@@ -30,10 +30,16 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
+	"github.com/sigil-tech/kaneaz-harness/core/asks"
 	"github.com/sigil-tech/kaneaz-harness/core/tools/askuserquestion"
 )
+
+// requestIDSeq is a per-process monotonic counter used in newRequestID
+// to ensure uniqueness even when calls happen within the same nanosecond.
+var requestIDSeq uint64
 
 // TopicElicitPending is the Wails event-broker topic the backend emits
 // when a new elicitation request is ready for the frontend to render.
@@ -42,6 +48,19 @@ import (
 //
 // Payload: ElicitRequest (serialised as JSON).
 const TopicElicitPending = "elicit:pending"
+
+// TopicElicitDeferred is the Wails event-broker topic emitted when a
+// deferred ask is registered (WP06). The frontend's DeferredAskPill
+// subscribes to this topic to show the chat-header pill.
+//
+// Payload: ElicitRequest (serialised as JSON, includes Mode:"deferred").
+const TopicElicitDeferred = "elicit:deferred"
+
+// TopicElicitDeferredAnswered is emitted when a deferred ask is answered
+// (WP06). The frontend removes the pill and queues the system_reminder.
+//
+// Payload: DeferredAnsweredPayload.
+const TopicElicitDeferredAnswered = "elicit:deferred:answered"
 
 // ElicitRequest is the payload emitted on TopicElicitPending and the
 // wire shape passed to OpenAskDialog. It carries the full question spec
@@ -118,6 +137,23 @@ type WizardDependsOn struct {
 	Condition json.RawMessage `json:"condition"`
 }
 
+// DeferredAnsweredPayload is the event payload for TopicElicitDeferredAnswered.
+// The frontend uses this to remove the pill and surface a system_reminder.
+type DeferredAnsweredPayload struct {
+	AskID string `json:"ask_id"`
+	// SystemReminder is the text the frontend should inject into the next
+	// LLM turn (spec FR-025).
+	SystemReminder string `json:"system_reminder"`
+}
+
+// DeferredResult is the immediate result returned to the model when the tool
+// is called in deferred mode. The model uses AskID to retrieve the structured
+// answer later via __ask_get_result(ask_id).
+type DeferredResult struct {
+	Deferred bool   `json:"deferred"`
+	AskID    string `json:"ask_id"`
+}
+
 // WizardAnswer is the wire shape returned when a wizard (multi-question batch)
 // completes. Each question id maps to the user's answer JSON.
 type WizardAnswer struct {
@@ -174,6 +210,19 @@ type ElicitAPI interface {
 	// ListPending returns in-flight request IDs so the frontend can
 	// reconcile its queue on reconnect / hot reload.
 	ListPending(ctx context.Context) ([]ElicitRequest, error)
+
+	// RegisterDeferred registers a deferred ask and emits TopicElicitDeferred.
+	// Returns a DeferredResult{Deferred:true, AskID:…} for the model.
+	// Returns error when the session has too many concurrent pending asks.
+	RegisterDeferred(ctx context.Context, sessionID string, req ElicitRequest) (DeferredResult, error)
+
+	// AnswerDeferred records the user's answer for a pending deferred ask,
+	// emits TopicElicitDeferredAnswered, and returns the system_reminder text
+	// to be injected into the next LLM turn.
+	AnswerDeferred(ctx context.Context, askID string, answer any) (string, error)
+
+	// ListDeferred returns pending deferred asks for a session.
+	ListDeferred(ctx context.Context, sessionID string) ([]asks.DeferredAsk, error)
 }
 
 // Emitter is the narrow interface for pushing events to the frontend.
@@ -194,6 +243,8 @@ type API struct {
 	pending map[string]pendingEntry
 	// wizards tracks multi-question wizard sessions (WP05).
 	wizards map[string]*wizardEntry
+	// deferred is the deferred-ask registry (WP06).
+	deferred *asks.DeferredRegistry
 
 	// emitter pushes ElicitRequest payloads to the frontend.
 	emitter Emitter
@@ -205,7 +256,9 @@ type API struct {
 
 // Config holds construction parameters.
 type Config struct {
-	Emitter  Emitter
+	Emitter         Emitter
+	// DeferredExpiry sets the TTL for deferred asks. Zero = default (24 h).
+	DeferredExpiry  time.Duration
 }
 
 // New constructs an API. Emitter may be nil (tests where no frontend is
@@ -213,9 +266,10 @@ type Config struct {
 // works if the test calls it directly.
 func New(cfg Config) *API {
 	return &API{
-		pending: make(map[string]pendingEntry),
-		wizards: make(map[string]*wizardEntry),
-		emitter: cfg.Emitter,
+		pending:  make(map[string]pendingEntry),
+		wizards:  make(map[string]*wizardEntry),
+		deferred: asks.NewDeferredRegistry(cfg.DeferredExpiry),
+		emitter:  cfg.Emitter,
 	}
 }
 
@@ -495,6 +549,55 @@ func (a *API) OpenWizard(ctx context.Context, req ElicitRequest) (WizardAnswer, 
 	}
 }
 
+// RegisterDeferred implements ElicitAPI. It registers a new deferred ask
+// in the DeferredRegistry and emits TopicElicitDeferred to notify the
+// frontend chat header. Returns immediately with DeferredResult.
+func (a *API) RegisterDeferred(ctx context.Context, sessionID string, req ElicitRequest) (DeferredResult, error) {
+	askID := newRequestID()
+	req.RequestID = askID
+	req.Mode = "deferred"
+
+	if err := a.deferred.Register(sessionID, askID); err != nil {
+		return DeferredResult{}, err
+	}
+
+	a.mu.Lock()
+	wailsCtx := a.wailsCtx
+	a.mu.Unlock()
+
+	if a.emitter != nil && wailsCtx != nil {
+		a.emitter.Emit(wailsCtx, TopicElicitDeferred, req)
+	}
+
+	return DeferredResult{Deferred: true, AskID: askID}, nil
+}
+
+// AnswerDeferred records the user's answer for a pending deferred ask.
+// Emits TopicElicitDeferredAnswered and returns the system_reminder text.
+func (a *API) AnswerDeferred(ctx context.Context, askID string, answer any) (string, error) {
+	if err := a.deferred.Answer(askID, answer); err != nil {
+		return "", err
+	}
+	reminder := asks.SystemReminderText(askID, answer)
+
+	a.mu.Lock()
+	wailsCtx := a.wailsCtx
+	a.mu.Unlock()
+
+	if a.emitter != nil && wailsCtx != nil {
+		a.emitter.Emit(wailsCtx, TopicElicitDeferredAnswered, DeferredAnsweredPayload{
+			AskID:          askID,
+			SystemReminder: reminder,
+		})
+	}
+	return reminder, nil
+}
+
+// ListDeferred returns pending deferred asks for a session.
+func (a *API) ListDeferred(_ context.Context, sessionID string) ([]asks.DeferredAsk, error) {
+	return a.deferred.ListPending(sessionID), nil
+}
+
 // ListPending returns the current in-flight requests. The frontend uses
 // this on reconnect to re-render any dialog it missed.
 func (a *API) ListPending(_ context.Context) ([]ElicitRequest, error) {
@@ -513,10 +616,12 @@ func (a *API) ListPending(_ context.Context) ([]ElicitRequest, error) {
 // within the process lifetime (nanosecond precision + per-process counter
 // is sufficient; this is not a security boundary).
 func newRequestID() string {
+	seq := atomic.AddUint64(&requestIDSeq, 1)
+	t := uint64(time.Now().UnixNano())
+	combined := t ^ (seq << 32)
 	b := make([]byte, 8)
-	t := time.Now().UnixNano()
 	for i := range b {
-		b[i] = byte(t >> (i * 8))
+		b[i] = byte(combined >> (i * 8))
 	}
 	return "elicit-" + hexEncode(b)
 }
