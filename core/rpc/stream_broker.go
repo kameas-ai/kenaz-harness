@@ -51,6 +51,22 @@ const (
 	// without polling, solving the stale-LeftRail bug (v0.5.3).
 	// Payload shape: SessionListChangedPayload.
 	TopicSessionListChanged = "session.list_changed"
+
+	// TopicElicitPending is the broker topic the elicitation view emits
+	// when the kaneaz__ask_user_question tool calls OpenDialog (mission
+	// ask-user-question-interactive-01KZNP3G WP04). The frontend's
+	// AskUserQuestion component subscribes here via useEventStream and
+	// renders the dialog when a payload arrives.
+	//
+	// Payload shape: elicitview.ElicitRequest. Re-exported here alongside
+	// the other canonical topic constants so the frontend's useEventStream
+	// call site can import the string from a single source of truth.
+	//
+	// NOTE: The constant value must match elicitview.TopicElicitPending.
+	// Both are "elicit:pending"; the rpc/stream_broker.go constant is the
+	// process-visible export; the view-local one is kept for package
+	// isolation in tests.
+	TopicElicitPending = "elicit:pending"
 )
 
 // SessionUsagePayload is the typed payload emitted on

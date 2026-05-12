@@ -45,6 +45,7 @@ import (
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/workflow"
 	workflowsview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/workflows"
 	storageview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/storage"
+	elicitview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/elicit"
 	"github.com/sigil-tech/kaneaz-harness/core/logging"
 	"github.com/sigil-tech/kaneaz-harness/core/mcp/stdio"
 )
@@ -1716,4 +1717,22 @@ func (b *Bindings) Onboarding_RestartPhase2(req onboardingview.RestartPhase2Requ
 // server-side when RestartPhase2 fires.
 func (b *Bindings) Onboarding_ListStarters() ([]onboardingview.StarterSummary, error) {
 	return b.api.Onboarding().ListStarters(b.ctx())
+}
+
+// ── elicit (ask-user-question-interactive-01KZNP3G, WP04) ─────────────
+
+// Elicit_SubmitAnswer resolves a pending ask-user-question elicitation.
+// requestID was emitted on the "elicit:pending" broker topic when the
+// model called kaneaz__ask_user_question; answerJSON is the user's answer
+// (a JSON-encoded value matching the question kind), or null when
+// cancelled is true. The blocking OpenDialog call on the Go side returns
+// after this method resolves the pending channel.
+func (b *Bindings) Elicit_SubmitAnswer(requestID string, answerJSON json.RawMessage, cancelled bool) error {
+	return b.api.Elicit().SubmitAnswer(b.ctx(), requestID, answerJSON, cancelled)
+}
+
+// Elicit_ListPending returns in-flight elicitation request IDs so the
+// frontend can reconcile its dialog queue on reconnect / hot reload.
+func (b *Bindings) Elicit_ListPending() ([]elicitview.ElicitRequest, error) {
+	return b.api.Elicit().ListPending(b.ctx())
 }

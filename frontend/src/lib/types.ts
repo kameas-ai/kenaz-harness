@@ -2626,3 +2626,62 @@ export const AUTONOMY_KNOB_LABELS: Record<AutonomyKnob, string> = {
   continueOnError: 'On tool error',
   destructiveActionPosture: 'Destructive actions',
 };
+
+// ── Elicitation (ask-user-question-interactive-01KZNP3G WP02/WP04) ────
+
+/**
+ * QuestionKind is the closed enum of supported question input types.
+ * Mirrors askuserquestion.QuestionKind on the Go side.
+ */
+export type QuestionKind =
+  | 'radio'
+  | 'checkbox'
+  | 'text'
+  | 'number'
+  | 'slider'
+  | 'date'
+  | 'file';
+
+/**
+ * PreviewKind is the closed enum of preview renderer types.
+ * Mirrors the spec's 8 preview content types.
+ */
+export type PreviewKind =
+  | 'markdown'
+  | 'code'
+  | 'image'
+  | 'diff'
+  | 'table'
+  | 'html'
+  | 'vue-component'
+  | 'plain';
+
+/** QuestionOption is one selectable item for radio / checkbox kinds. */
+export interface QuestionOption {
+  value: string;
+  label: string;
+}
+
+/** ElicitPreview is the optional side-by-side preview spec. */
+export interface ElicitPreview {
+  kind: PreviewKind;
+  content: string;
+  language?: string;
+}
+
+/**
+ * ElicitRequest is the payload emitted on the "elicit:pending" broker
+ * topic. Mirrors elicitview.ElicitRequest on the Go side.
+ */
+export interface ElicitRequest {
+  request_id: string;
+  question: string;
+  kind: QuestionKind;
+  options?: QuestionOption[];
+  placeholder?: string;
+  min?: number;
+  max?: number;
+  step?: number;
+  default_value?: unknown;
+  preview?: ElicitPreview;
+}

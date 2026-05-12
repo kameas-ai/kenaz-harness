@@ -558,6 +558,14 @@ interface WailsBindingsLike {
   Onboarding_Dismiss(): Promise<void>;
   Onboarding_RestartPhase2(req: OnboardingRestartPhase2Request): Promise<OnboardingRestartPhase2Response>;
   Onboarding_ListStarters(): Promise<StarterSummary[]>;
+
+  // ── Elicitation (ask-user-question-interactive-01KZNP3G WP04) ──
+  Elicit_SubmitAnswer(
+    requestID: string,
+    answerJSON: string | null,
+    cancelled: boolean,
+  ): Promise<void>;
+  Elicit_ListPending(): Promise<import('./types').ElicitRequest[]>;
 }
 
 /**
@@ -1982,6 +1990,28 @@ export interface OnboardingClient {
   listStarters(): Promise<StarterSummary[]>;
 }
 
+/**
+ * ElicitClient — view-scoped surface for the ask-user-question dialog.
+ * Mission: ask-user-question-interactive-01KZNP3G WP04.
+ *
+ * The frontend subscribes to "elicit:pending" events via useEventStream;
+ * when the user submits or cancels, it calls submitAnswer which unblocks
+ * the model-side kaneaz__ask_user_question tool call.
+ */
+export interface ElicitClient {
+  /**
+   * Submit the user's answer (or a cancellation) for a pending elicitation.
+   * requestID was received on the "elicit:pending" event topic.
+   * answerJSON is a JSON-encoded answer value, or null when cancelled=true.
+   */
+  submitAnswer(requestID: string, answerJSON: string | null, cancelled: boolean): Promise<void>;
+
+  /**
+   * List in-flight elicitation requests. Used for reconnect reconciliation.
+   */
+  listPending(): Promise<import('./types').ElicitRequest[]>;
+}
+
 export interface HarnessClient {
   shellStatus(): Promise<ShellStatus>;
   appInfo(): Promise<AppInfo>;
@@ -2025,6 +2055,8 @@ export interface HarnessClient {
   search: SearchClient;
   storage: StorageClient;
   onboarding: OnboardingClient;
+  /** Elicitation surface for the ask-user-question dialog (WP04). */
+  elicit: ElicitClient;
 }
 
 // ── runtime client ─────────────────────────────────────────────────────
@@ -2457,6 +2489,11 @@ export function createHarnessClient(): HarnessClient {
       dismiss: () => b().Onboarding_Dismiss(),
       restartPhase2: (req) => b().Onboarding_RestartPhase2(req),
       listStarters: () => b().Onboarding_ListStarters(),
+    },
+    elicit: {
+      submitAnswer: (requestID, answerJSON, cancelled) =>
+        b().Elicit_SubmitAnswer(requestID, answerJSON, cancelled),
+      listPending: () => b().Elicit_ListPending(),
     },
   };
 }
@@ -3256,6 +3293,10 @@ export function createFakeHarnessClient(
       dismiss: noop,
       restartPhase2: async () => ({ sessionId: '' }),
       listStarters: async () => [],
+    },
+    elicit: {
+      submitAnswer: noop,
+      listPending: async () => [],
     },
   };
 

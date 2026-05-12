@@ -14,6 +14,7 @@ import (
 	coreart "github.com/sigil-tech/kaneaz-harness/core/artifacts"
 	"github.com/sigil-tech/kaneaz-harness/core/logging"
 	"github.com/sigil-tech/kaneaz-harness/core/policy/cedar"
+	elicitview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/elicit"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/settings"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/tools"
 	corebash "github.com/sigil-tech/kaneaz-harness/core/tools/bash"
@@ -24,6 +25,7 @@ import (
 	coretodo "github.com/sigil-tech/kaneaz-harness/core/tools/todo"
 	coreupdateartifact "github.com/sigil-tech/kaneaz-harness/core/tools/updateartifact"
 	corewebsearch "github.com/sigil-tech/kaneaz-harness/core/tools/websearch"
+	coreaskuser "github.com/sigil-tech/kaneaz-harness/core/tools/askuserquestion"
 	"github.com/sigil-tech/kaneaz-harness/core/toolloop"
 )
 
@@ -66,6 +68,7 @@ func registerBuiltinTools(
 	store settings.SettingsStore,
 	cedarEngine *cedar.Engine,
 	promptRegistry *cedar.Registry,
+	elicitAPI *elicitview.API,
 ) {
 	if registry == nil {
 		return
@@ -157,6 +160,28 @@ func registerBuiltinTools(
 	})
 	registry.Register(todoTool)
 	logging.L().Info("rpc.builtins.register", "tool", todoTool.Name())
+
+	// ask_user_question: interactive elicitation tool (mission
+	// ask-user-question-interactive-01KZNP3G, WP01/WP04).
+	//
+	// The tool is default-on (asking the user a question is low-risk).
+	// The Delegate is nil until WP04 wires the elicit RPC bridge; the
+	// tool returns errKindNotWired gracefully in that case.
+	//
+	// elicitAPI is nil only in test-fixture paths (New(nil) + no elicitAPI
+	// constructed). In production the API.New() path always constructs it.
+	var askDelegate coreaskuser.Delegate
+	if elicitAPI != nil {
+		askDelegate = elicitAPI
+	}
+	askTool := coreaskuser.New(coreaskuser.Options{
+		Delegate: askDelegate,
+	})
+	registry.Register(askTool)
+	logging.L().Info("rpc.builtins.register",
+		"tool", askTool.Name(),
+		"delegate_wired", askDelegate != nil,
+	)
 }
 
 // fsWriteEnabledLookup returns a closure the update_artifact tool

@@ -85,6 +85,7 @@ import (
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/workflow"
 	workflowsview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/workflows"
 	storageview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/storage"
+	elicitview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/elicit"
 	"github.com/sigil-tech/kaneaz-harness/core/autonomy"
 	"github.com/sigil-tech/kaneaz-harness/core/secrets"
 	coreslashcmd "github.com/sigil-tech/kaneaz-harness/core/slashcmd"
@@ -182,6 +183,13 @@ type HarnessAPI interface {
 	// OnboardingState on boot, dismiss the dialog, and restart Phase 2
 	// via "Reconfigure with assistant".
 	Onboarding() onboardingview.OnboardingAPI
+
+	// Elicit exposes the ask-user-question RPC surface (mission
+	// ask-user-question-interactive-01KZNP3G WP04). The frontend's
+	// AskUserQuestion dialog submits answers via Elicit_SubmitAnswer;
+	// the kaneaz__ask_user_question tool blocks on OpenDialog until
+	// the answer arrives.
+	Elicit() elicitview.ElicitAPI
 }
 
 // ShellStatus drives the Toolbar status pills + LegendBar live-rate
@@ -351,6 +359,11 @@ type API struct {
 	// fixture compiles.
 	onboardingAPI onboardingview.OnboardingAPI
 
+	// elicitAPI is the ask-user-question RPC surface (mission
+	// ask-user-question-interactive-01KZNP3G WP04). Constructed in New
+	// and wired with a concrete Delegate into the askuserquestion tool.
+	elicitAPI *elicitview.API
+
 	// wfScheduler is the cron-backed workflow scheduler
 	// (workflows-agentic-01KW2D3X WP02). Started on SetContext; stopped
 	// on Shutdown. nil when the workflows feature is disabled or when the
@@ -380,6 +393,12 @@ func (a *API) SetContext(ctx context.Context) {
 	}
 	if a.shellImpl != nil {
 		a.shellImpl.SetContext(ctx)
+	}
+	// Elicitation RPC bridge: thread the Wails context so OpenDialog can
+	// emit events on TopicElicitPending via the broker. Without a valid
+	// Wails context, EventsEmit would crash ("invalid context passed").
+	if a.elicitAPI != nil {
+		a.elicitAPI.SetContext(ctx)
 	}
 	// Start the workflow cron scheduler (workflows-agentic-01KW2D3X WP02).
 	// SetContext is called with the Wails-supplied app context, which is
@@ -737,7 +756,7 @@ func New(c *core.Core) *API {
 	a.corpusMgr = newCorpusManager(c, embedder)
 	a.graphMgr = newGraphManagerWithDeps(c, a.convMgr, a.corpusMgr, memStore, embedder, a_bashStore)
 
-	stack := newLLMStack(c, a.broker, personalForLLM, hooksRunner, attMgr, confirmEachEnabled, artifactSink, artifactSinkConcrete, settingsImpl, a_bashStore, artMgr, a.graphMgr, a.promptRegistry, usageMgr)
+	stack := newLLMStack(c, a.broker, personalForLLM, hooksRunner, attMgr, confirmEachEnabled, artifactSink, artifactSinkConcrete, settingsImpl, a_bashStore, artMgr, a.graphMgr, a.promptRegistry, usageMgr, a.elicitAPI)
 	a.llmAPI = stack.api
 	a.stdioPool = stack.pool
 	a.builtins = stack.builtins
@@ -1058,6 +1077,16 @@ func New(c *core.Core) *API {
 			// the wiring step below that calls setPermissionsConfigTrimmer.
 		})
 	}
+
+	// Elicitation view + ask_user_question tool bridge (mission
+	// ask-user-question-interactive-01KZNP3G WP04). The elicitAPI is
+	// constructed unconditionally so the tool's Delegate is always
+	// available; it just emits no events when wailsCtx is nil (test path).
+	// WailsEmitter is the same authorised EventsEmit wrapper used by the
+	// stream broker — the CI check allows it in this file.
+	a.elicitAPI = elicitview.New(elicitview.Config{
+		Emitter: WailsEmitter{},
+	})
 
 	a.bindings = NewBindings(a)
 	if a.settingsImpl != nil {
@@ -1948,6 +1977,7 @@ func newLLMStack(
 	graphMgr *graphview.Manager,
 	promptRegistry *cedar.Registry,
 	usageMgr usage.Manager,
+	elicitAPI *elicitview.API,
 ) llmStack {
 	// Share ONE secrets backend between the credref resolver (which
 	// reads keys when streaming) and the keychain writer (which stages
@@ -2060,7 +2090,7 @@ func newLLMStack(
 	if dataDir != "" {
 		bashCedarEngine = buildCedarEngineOrNil(dataDir)
 	}
-	registerBuiltinTools(c, builtinRegistry, bashStore, artifactsMgr, settingsStore, bashCedarEngine, promptRegistry)
+	registerBuiltinTools(c, builtinRegistry, bashStore, artifactsMgr, settingsStore, bashCedarEngine, promptRegistry, elicitAPI)
 	// builtin-filesystem-tools-01KR3N4P: register the read/write family of
 	// in-process filesystem tools. Gated behind per-family settings dials
 	// (FSReadEnabled / FSWriteEnabled) so the Tools panel toggles take effect
@@ -3864,6 +3894,17 @@ func (a *API) Onboarding() onboardingview.OnboardingAPI {
 		return onboardingview.New(onboardingview.Config{})
 	}
 	return a.onboardingAPI
+}
+
+// Elicit returns the ask-user-question RPC surface. If elicitAPI has not
+// been wired (test harness path with New(nil)) a zero-config stub is
+// returned that surfaces ErrUnknownRequest on SubmitAnswer and empty
+// slices on ListPending.
+func (a *API) Elicit() elicitview.ElicitAPI {
+	if a.elicitAPI == nil {
+		return elicitview.New(elicitview.Config{})
+	}
+	return a.elicitAPI
 }
 
 // SetCedarProposeResolver wires a resolver at runtime. Called by the

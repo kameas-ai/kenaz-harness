@@ -81,11 +81,12 @@ const (
 	ActionArtifactUpdate = "artifact.update"
 
 	// ── Builtin search-and-elicitation action families ──────────────────
-	// Introduced by mission builtin-tools-search-and-elicitation-01KZNP3D.
-	// All three families follow the dotted "<domain>.<operation>" naming
-	// convention established by the workflow and artifact action families
-	// above. Downstream skills-catalog + ask-user-question missions MUST
-	// follow the same convention when adding new action families.
+	// Introduced by mission builtin-tools-search-and-elicitation-01KZNP3D
+	// and extended by ask-user-question-interactive-01KZNP3G. All families
+	// follow the dotted "<domain>.<operation>" naming convention
+	// established by the workflow and artifact action families above.
+	// Downstream skills-catalog + future elicitation missions MUST follow
+	// the same convention when adding new action families.
 
 	// ActionToolReadGlob gates kaneaz__glob (glob-match across a directory
 	// tree). Resource UID: Filesystem::"<base-dir>". Default-allow when
@@ -110,6 +111,14 @@ const (
 	// the action family validate without schema changes when the read tool
 	// ships. Resource UID: TodoList::"session".
 	ActionToolTodoRead = "tool.todo.read"
+
+	// ActionElicitAsk gates kaneaz__ask_user_question (synchronous
+	// single-question elicitation: model calls tool → backend opens
+	// dialog → user answers → result returns to model). Introduced by
+	// ask-user-question-interactive-01KZNP3G WP01. Resource UID:
+	// Elicitation::"<kind>" where kind is one of the seven question kinds
+	// (radio, checkbox, text, number, slider, date, file).
+	ActionElicitAsk = "tool.elicit.ask"
 )
 
 // Entity-type names mirror spec §4.10's recommended mapping:
@@ -159,6 +168,13 @@ const (
 	// builtin-tools-search-and-elicitation-01KZNP3D (WP05).
 	// Resource UIDs take the shape TodoList::"session".
 	EntityTypeTodoList = "TodoList"
+
+	// EntityTypeElicitation is the Cedar entity type for the
+	// ask-user-question elicitation surface (mission
+	// ask-user-question-interactive-01KZNP3G WP01). Resource UIDs take
+	// the shape Elicitation::"<kind>" where kind is one of the seven
+	// question kinds: radio, checkbox, text, number, slider, date, file.
+	EntityTypeElicitation = "Elicitation"
 
 	// PrincipalLocal is the canonical EntityUID id for the single
 	// local user. The harness is single-user / privacy-first
@@ -418,4 +434,19 @@ func TodoListUID(scope string) cedar.EntityUID {
 		safeScope = invalidUIDID
 	}
 	return cedar.NewEntityUID(EntityTypeTodoList, cedar.String(safeScope))
+}
+
+// ElicitationUID builds a Cedar EntityUID for the Elicitation family
+// introduced by mission ask-user-question-interactive-01KZNP3G (WP01).
+// kind is one of the seven question kinds (radio, checkbox, text, number,
+// slider, date, file). Malformed kinds (empty / control characters /
+// leading "..") are replaced with the literal "invalid" so the resulting
+// UID type-matches in `resource is Elicitation` clauses but never
+// satisfies any real permit — a typo therefore never silently authorises.
+func ElicitationUID(kind string) cedar.EntityUID {
+	safeID := kind
+	if !validateFamilyID(kind) {
+		safeID = invalidUIDID
+	}
+	return cedar.NewEntityUID(EntityTypeElicitation, cedar.String(safeID))
 }
