@@ -1319,6 +1319,28 @@ func (b *Bindings) Slash_List() ([]slashview.CommandInfo, error) {
 	return b.api.Slash().List(b.ctx())
 }
 
+// ── user command RPCs ─────────────────────────────────────────────────
+
+func (b *Bindings) Slashcmd_List(projectID string) ([]slashview.UserCommandSummaryWire, error) {
+	return b.api.Slash().UserList(b.ctx(), projectID)
+}
+
+func (b *Bindings) Slashcmd_Get(name, projectID string) (slashview.UserCommandWire, error) {
+	return b.api.Slash().UserGet(b.ctx(), name, projectID)
+}
+
+func (b *Bindings) Slashcmd_Save(cmd slashview.UserCommandWire) error {
+	return b.api.Slash().UserSave(b.ctx(), cmd)
+}
+
+func (b *Bindings) Slashcmd_Delete(name, projectID string) error {
+	return b.api.Slash().UserDelete(b.ctx(), name, projectID)
+}
+
+func (b *Bindings) Slashcmd_Run(name string, args map[string]string, sessionID, projectID, cwd, selection string) (slashview.RunResultWire, error) {
+	return b.api.Slash().UserRun(b.ctx(), name, args, sessionID, projectID, cwd, selection)
+}
+
 // ── corpora (agent-kernel-graph; Bundle C WP10/WP11) ──────────────────
 
 func (b *Bindings) Corpus_ListCorpora(scope string) ([]corpusview.Corpus, error) {
