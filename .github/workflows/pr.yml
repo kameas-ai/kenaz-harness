@@ -172,86 +172,13 @@ jobs:
           fi
         continue-on-error: true
 
-  build-smoke:
-    name: Smoke build (linux/arm64)
-    # Native ARM64 smoke on the self-hosted pool; the real cross-platform
-    # signed builds (linux/amd64, darwin, windows) happen in release.yml
-    # against tagged versions. This step exists only as a "does it
-    # compile + run wails doctor" gate, so ARM64 is sufficient signal.
-    runs-on: [self-hosted, Linux, ARM64, ci-medium]
-    needs: [lint-go, test-go, test-frontend]
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-go@v5
-        with:
-          go-version: ${{ env.GO_VERSION }}
-          # cache: false on self-hosted ARM64 runners — they persist
-          # /home/go/pkg/mod/ across jobs, so the action's tar-restore
-          # collides with existing files ("Cannot open: File exists").
-          # Modules carry over naturally; no caching needed.
-          cache: false
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: 'npm'
-          cache-dependency-path: frontend/package-lock.json
-
-      - name: install wails system deps
-        # The kameas-ci-medium runner image already has these installed;
-        # this step is a no-op safety net for fresh runners.
-        run: |
-          if command -v dpkg >/dev/null && \
-             dpkg -s libgtk-3-dev libwebkit2gtk-4.1-dev pkg-config >/dev/null 2>&1; then
-            echo "wails system deps already present"
-          else
-            sudo apt-get update
-            sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev pkg-config
-          fi
-
-      - name: install wails CLI
-        run: go install github.com/wailsapp/wails/v2/cmd/wails@latest
-
-      - name: frontend deps
-        working-directory: frontend
-        run: npm ci
-
-      - name: wails doctor
-        run: wails doctor || true
-
-      # Stamp the smoke binary with a traceable SemVer-2.0 label so a
-      # downloaded artifact identifies its origin (PR # + commit) at
-      # runtime via `Version`. Matches the release pipeline's "v0.0.0-…"
-      # placeholder convention; release-please tags supersede this on
-      # merge. Build-metadata segment (+sha) is ignored for precedence
-      # but preserved in display.
-      - name: derive smoke build version
-        id: ver
-        shell: bash
-        run: |
-          set -euo pipefail
-          SHORT=$(git rev-parse --short=8 HEAD)
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
-            VERSION="v0.0.0-pr.${{ github.event.number }}+${SHORT}"
-          else
-            VERSION="v0.0.0-main+${SHORT}"
-          fi
-          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
-          echo "Resolved smoke version: ${VERSION}"
-
-      - name: wails build (skipbindings, no-package)
-        # Native build on the ARM64 self-hosted runner. The real cross-
-        # platform release matrix (darwin, windows, linux/amd64, linux/arm64)
-        # is produced by release.yml against signed tags.
-        run: |
-          wails build -nopackage -skipbindings -tags webkit2_41 \
-            -platform linux/arm64 \
-            -ldflags "-X main.Version=${{ steps.ver.outputs.version }}"
-
-      - name: artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: linux-arm64-smoke
-          path: build/bin/
-          retention-days: 7
+  # NOTE: the previous `build-smoke` job (Wails build of main.go on
+  # ubuntu-latest with GTK/WebKit apt deps) was removed in v0.8.5. The
+  # kameas-ai self-hosted runner pool is not Debian-family (no apt) and
+  # cross-platform release builds already happen in release.yml against
+  # tagged versions on the proper OS runners (macos-latest,
+  # windows-latest, and a future self-hosted Linux amd64). PR-time CI
+  # is now: pr-title (semantic) + lint-go + test-go (-race) +
+  # test-frontend (vitest + typecheck). Re-add a smoke build only if
+  # we get a self-hosted runner image with the Linux Wails toolchain
+  # pre-installed.
