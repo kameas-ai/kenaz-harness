@@ -44,7 +44,8 @@ func openSlashTestDB(t *testing.T) (storage.DB, string) {
 // Privacy invariant (NFR-007): verbose-attrs flag may gate raw values,
 // but default attrs must be free of user-authored content.
 func TestSlashcmdSpan_NoRenderedBodyInAttrs(t *testing.T) {
-	t.Parallel()
+	// NOT t.Parallel() — this test mutates the global OTel TracerProvider,
+	// which would race with other tests that use otel.GetTracerProvider().
 
 	// Wire an in-memory span recorder as the global TracerProvider.
 	recorder := tracetest.NewSpanRecorder()
