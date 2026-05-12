@@ -9,6 +9,12 @@ defaults:
   reasoning: false
   cancellation: true
   usage_reporting: true
+  # Structured-output capability defaults (structured-output-and-grammar-01KX5R8A FR-002).
+  # OpenAI supports native response_format json_schema for gpt-4o+ models.
+  # Grammar/GBNF is not supported by cloud providers.
+  structured_output: false
+  grammar: false
+  regex_grammar: false
   # Attachment limits (multimodal-io-01KQ8TDF FR-006)
   # Note: OpenAI Chat Completions does NOT accept PDF documents inline.
   # The Responses API does; that is a future follow-up mission.
@@ -32,6 +38,9 @@ models:
     reasoning: false
     cancellation: true
     usage_reporting: true
+    structured_output: true
+    grammar: false
+    regex_grammar: false
     context_window: 128000
     max_output_tokens: 16384
     image_input: true

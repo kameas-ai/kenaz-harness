@@ -101,6 +101,137 @@ func TestRequestedCapabilities_Detection(t *testing.T) {
 	}
 }
 
+// TestAllCapabilities_IncludesStructuredOutputCaps verifies the three new
+// capability constants are present in the canonical ordered list
+// (structured-output-and-grammar-01KX5R8A WP01).
+func TestAllCapabilities_IncludesStructuredOutputCaps(t *testing.T) {
+	all := AllCapabilities()
+	want := map[Capability]bool{
+		CapStructuredOutput: false,
+		CapGrammar:          false,
+		CapRegexGrammar:     false,
+	}
+	for _, c := range all {
+		if _, ok := want[c]; ok {
+			want[c] = true
+		}
+	}
+	for cap, found := range want {
+		if !found {
+			t.Errorf("AllCapabilities() missing %q", cap)
+		}
+	}
+}
+
+// TestRequestedCapabilities_StructuredOutput verifies that ResponseFormat
+// modes emit the correct capability constants
+// (structured-output-and-grammar-01KX5R8A WP01 acceptance).
+func TestRequestedCapabilities_StructuredOutput(t *testing.T) {
+	cases := []struct {
+		name    string
+		req     GenerationRequest
+		wantCap Capability
+		wantIn  bool
+	}{
+		{
+			name:    "json_schema emits CapStructuredOutput",
+			req:     GenerationRequest{ResponseFormat: &ResponseFormat{Mode: "json_schema"}},
+			wantCap: CapStructuredOutput,
+			wantIn:  true,
+		},
+		{
+			name:    "json_schema does NOT emit CapGrammar",
+			req:     GenerationRequest{ResponseFormat: &ResponseFormat{Mode: "json_schema"}},
+			wantCap: CapGrammar,
+			wantIn:  false,
+		},
+		{
+			name:    "grammar emits CapGrammar",
+			req:     GenerationRequest{ResponseFormat: &ResponseFormat{Mode: "grammar"}},
+			wantCap: CapGrammar,
+			wantIn:  true,
+		},
+		{
+			name:    "grammar does NOT emit CapStructuredOutput",
+			req:     GenerationRequest{ResponseFormat: &ResponseFormat{Mode: "grammar"}},
+			wantCap: CapStructuredOutput,
+			wantIn:  false,
+		},
+		{
+			name:    "json mode emits neither CapStructuredOutput nor CapGrammar",
+			req:     GenerationRequest{ResponseFormat: &ResponseFormat{Mode: "json"}},
+			wantCap: CapStructuredOutput,
+			wantIn:  false,
+		},
+		{
+			name:    "nil ResponseFormat emits neither",
+			req:     GenerationRequest{},
+			wantCap: CapStructuredOutput,
+			wantIn:  false,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			caps := tc.req.RequestedCapabilities()
+			found := false
+			for _, c := range caps {
+				if c == tc.wantCap {
+					found = true
+					break
+				}
+			}
+			if found != tc.wantIn {
+				t.Fatalf("wantCap=%q in caps: got %v, want %v; caps=%v", tc.wantCap, found, tc.wantIn, caps)
+			}
+		})
+	}
+}
+
+// TestIsUnsupportedFormat verifies the IsUnsupportedFormat helper
+// (structured-output-and-grammar-01KX5R8A WP04).
+func TestIsUnsupportedFormat_Classification(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"nil", nil, false},
+		{"unsupported_format", &ErrUnsupportedFormat{Provider: "anthropic", Model: "claude-haiku", Mode: "grammar"}, true},
+		{"other_error", &ErrAuth{Status: 401}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := IsUnsupportedFormat(tc.err); got != tc.want {
+				t.Fatalf("IsUnsupportedFormat(%v) = %v want %v", tc.err, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestErrUnsupportedFormat_Message verifies the error message contains
+// provider, model, and mode (structured-output-and-grammar-01KX5R8A WP04).
+func TestErrUnsupportedFormat_Message(t *testing.T) {
+	e := &ErrUnsupportedFormat{Provider: "openai", Model: "gpt-4o", Mode: "grammar"}
+	msg := e.Error()
+	for _, want := range []string{"openai", "gpt-4o", "grammar"} {
+		if !contains(msg, want) {
+			t.Errorf("ErrUnsupportedFormat.Error() missing %q: %s", want, msg)
+		}
+	}
+}
+
+// TestErrResponseValidationFailed_Message verifies the error message contains
+// mode and schema error (structured-output-and-grammar-01KX5R8A WP04).
+func TestErrResponseValidationFailed_Message(t *testing.T) {
+	e := &ErrResponseValidationFailed{Mode: "json_schema", SchemaError: "missing required field 'name'"}
+	msg := e.Error()
+	for _, want := range []string{"json_schema", "missing required field"} {
+		if !contains(msg, want) {
+			t.Errorf("ErrResponseValidationFailed.Error() missing %q: %s", want, msg)
+		}
+	}
+}
+
 func TestDefaultRetryPolicy_Defaults(t *testing.T) {
 	p := DefaultRetryPolicy()
 	if p.MaxAttempts != 3 || p.BaseMS != 250 || p.MaxMS != 5000 || p.Jitter != "full" {

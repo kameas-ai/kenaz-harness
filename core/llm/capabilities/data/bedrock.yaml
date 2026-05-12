@@ -9,6 +9,11 @@ defaults:
   reasoning: false
   cancellation: true
   usage_reporting: true
+  # Structured-output capability defaults (structured-output-and-grammar-01KX5R8A FR-002).
+  # Bedrock uses tool-config workaround for Claude-family models. Grammar not supported.
+  structured_output: false
+  grammar: false
+  regex_grammar: false
   # Attachment limits (multimodal-io-01KQ8TDF FR-006)
   image_input: false
   document_input: false
@@ -30,6 +35,9 @@ models:
     reasoning: false
     cancellation: true
     usage_reporting: true
+    structured_output: true
+    grammar: false
+    regex_grammar: false
     context_window: 200000
     max_output_tokens: 8192
     image_input: true

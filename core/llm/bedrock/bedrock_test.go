@@ -13,6 +13,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime/types"
 	"github.com/sigil-tech/kaneaz-harness/core/llm"
 )
@@ -596,5 +597,199 @@ func TestBuildToolConfig(t *testing.T) {
 	_ = json.Unmarshal(rawSecond, &gotSecond)
 	if gotSecond["type"] != "object" {
 		t.Fatalf("tools[1] schema fallback failed: %+v", gotSecond)
+	}
+}
+
+// ── ApplyResponseFormat tests (structured-output-and-grammar-01KX5R8A WP03d) ──
+
+// TestApplyResponseFormat_Nil_NoOp verifies that nil ResponseFormat is a no-op.
+func TestApplyResponseFormat_Nil_NoOp(t *testing.T) {
+	a := New()
+	req := &llm.GenerationRequest{}
+	if err := a.ApplyResponseFormat(req, nil); err != nil {
+		t.Fatalf("nil req.ResponseFormat should not error: %v", err)
+	}
+}
+
+// TestApplyResponseFormat_JSONMode_NoWireBodyChange verifies that Mode="json"
+// succeeds (the actual system-prompt injection happens in
+// applyResponseFormatToConverseInput, not in ApplyResponseFormat).
+func TestApplyResponseFormat_JSONMode_NoWireBodyChange(t *testing.T) {
+	a := New()
+	req := &llm.GenerationRequest{
+		ResponseFormat: &llm.ResponseFormat{Mode: "json"},
+	}
+	wireBody := map[string]any{}
+	if err := a.ApplyResponseFormat(req, wireBody); err != nil {
+		t.Fatalf("json mode should not error: %v", err)
+	}
+}
+
+// TestApplyResponseFormat_JSONSchema_ValidSchema verifies that Mode="json_schema"
+// succeeds when a valid JSON schema is provided.
+func TestApplyResponseFormat_JSONSchema_ValidSchema(t *testing.T) {
+	a := New()
+	schema := json.RawMessage(`{"type":"object","properties":{"name":{"type":"string"}},"required":["name"]}`)
+	req := &llm.GenerationRequest{
+		ResponseFormat: &llm.ResponseFormat{Mode: "json_schema", Schema: schema},
+	}
+	wireBody := map[string]any{}
+	if err := a.ApplyResponseFormat(req, wireBody); err != nil {
+		t.Fatalf("json_schema mode should not error: %v", err)
+	}
+}
+
+// TestApplyResponseFormat_Grammar_Unsupported verifies Mode="grammar" returns
+// ErrUnsupportedFormat for Bedrock.
+func TestApplyResponseFormat_Grammar_Unsupported(t *testing.T) {
+	a := New()
+	req := &llm.GenerationRequest{
+		ResponseFormat: &llm.ResponseFormat{Mode: "grammar", Grammar: []byte(`root ::= [a-z]+`)},
+	}
+	wireBody := map[string]any{}
+	err := a.ApplyResponseFormat(req, wireBody)
+	if err == nil {
+		t.Fatal("expected ErrUnsupportedFormat, got nil")
+	}
+	if !llm.IsUnsupportedFormat(err) {
+		t.Fatalf("expected ErrUnsupportedFormat, got %T: %v", err, err)
+	}
+}
+
+// TestApplyResponseFormatToConverseInput_JSON verifies that Mode="json" appends
+// a system text block to the ConverseStreamInput.
+func TestApplyResponseFormatToConverseInput_JSON(t *testing.T) {
+	in := &bedrockruntime.ConverseStreamInput{}
+	rf := &llm.ResponseFormat{Mode: "json"}
+	if err := applyResponseFormatToConverseInput(in, rf); err != nil {
+		t.Fatalf("json mode: %v", err)
+	}
+	if len(in.System) == 0 {
+		t.Fatal("expected system block to be appended")
+	}
+	block, ok := in.System[0].(*types.SystemContentBlockMemberText)
+	if !ok {
+		t.Fatalf("expected *types.SystemContentBlockMemberText, got %T", in.System[0])
+	}
+	if !strings.Contains(block.Value, "valid JSON") {
+		t.Fatalf("system text does not contain 'valid JSON': %q", block.Value)
+	}
+}
+
+// TestApplyResponseFormatToConverseInput_JSONSchema injects a synthetic tool
+// and forced tool choice when Mode="json_schema".
+func TestApplyResponseFormatToConverseInput_JSONSchema(t *testing.T) {
+	in := &bedrockruntime.ConverseStreamInput{}
+	schema := json.RawMessage(`{"type":"object","properties":{"id":{"type":"integer"}}}`)
+	rf := &llm.ResponseFormat{Mode: "json_schema", Schema: schema}
+	if err := applyResponseFormatToConverseInput(in, rf); err != nil {
+		t.Fatalf("json_schema mode: %v", err)
+	}
+	if in.ToolConfig == nil {
+		t.Fatal("expected ToolConfig to be set")
+	}
+	if len(in.ToolConfig.Tools) != 1 {
+		t.Fatalf("expected 1 tool, got %d", len(in.ToolConfig.Tools))
+	}
+	tool, ok := in.ToolConfig.Tools[0].(*types.ToolMemberToolSpec)
+	if !ok {
+		t.Fatalf("expected *types.ToolMemberToolSpec, got %T", in.ToolConfig.Tools[0])
+	}
+	if tool.Value.Name == nil || *tool.Value.Name != "_structured_output" {
+		t.Fatalf("expected tool name '_structured_output', got %v", tool.Value.Name)
+	}
+	if in.ToolConfig.ToolChoice == nil {
+		t.Fatal("expected ToolChoice to be set")
+	}
+	tc, ok := in.ToolConfig.ToolChoice.(*types.ToolChoiceMemberTool)
+	if !ok {
+		t.Fatalf("expected *types.ToolChoiceMemberTool, got %T", in.ToolConfig.ToolChoice)
+	}
+	if tc.Value.Name == nil || *tc.Value.Name != "_structured_output" {
+		t.Fatalf("expected toolchoice name '_structured_output', got %v", tc.Value.Name)
+	}
+}
+
+// TestApplyResponseFormatToConverseInput_Grammar_Unsupported verifies that
+// Mode="grammar" returns ErrUnsupportedFormat from the typed-SDK helper.
+func TestApplyResponseFormatToConverseInput_Grammar_Unsupported(t *testing.T) {
+	in := &bedrockruntime.ConverseStreamInput{}
+	rf := &llm.ResponseFormat{Mode: "grammar"}
+	err := applyResponseFormatToConverseInput(in, rf)
+	if err == nil {
+		t.Fatal("expected ErrUnsupportedFormat, got nil")
+	}
+	if !llm.IsUnsupportedFormat(err) {
+		t.Fatalf("expected ErrUnsupportedFormat, got %T: %v", err, err)
+	}
+}
+
+// TestApplyResponseFormatToConverseBodyJSON_JSON verifies the bearer/REST path
+// appends a system block for Mode="json".
+func TestApplyResponseFormatToConverseBodyJSON_JSON(t *testing.T) {
+	body := map[string]any{}
+	rf := &llm.ResponseFormat{Mode: "json"}
+	if err := applyResponseFormatToConverseBodyJSON(body, rf); err != nil {
+		t.Fatalf("json mode: %v", err)
+	}
+	sys, ok := body["system"]
+	if !ok {
+		t.Fatal("expected 'system' key in body")
+	}
+	blocks, ok := sys.([]map[string]any)
+	if !ok || len(blocks) == 0 {
+		t.Fatalf("expected []map[string]any system, got %T %v", sys, sys)
+	}
+	text, _ := blocks[0]["text"].(string)
+	if !strings.Contains(text, "valid JSON") {
+		t.Fatalf("system text does not contain 'valid JSON': %q", text)
+	}
+}
+
+// TestApplyResponseFormatToConverseBodyJSON_JSONSchema injects toolConfig for
+// Mode="json_schema" on the bearer/REST path.
+func TestApplyResponseFormatToConverseBodyJSON_JSONSchema(t *testing.T) {
+	body := map[string]any{}
+	schema := json.RawMessage(`{"type":"object","properties":{"score":{"type":"number"}}}`)
+	rf := &llm.ResponseFormat{Mode: "json_schema", Schema: schema}
+	if err := applyResponseFormatToConverseBodyJSON(body, rf); err != nil {
+		t.Fatalf("json_schema mode: %v", err)
+	}
+	tc, ok := body["toolConfig"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected toolConfig map, got %T", body["toolConfig"])
+	}
+	tools, ok := tc["tools"].([]map[string]any)
+	if !ok || len(tools) == 0 {
+		t.Fatalf("expected tools slice, got %T %v", tc["tools"], tc["tools"])
+	}
+	toolSpec, _ := tools[0]["toolSpec"].(map[string]any)
+	if toolSpec == nil {
+		t.Fatal("expected toolSpec in first tool")
+	}
+	if toolSpec["name"] != "_structured_output" {
+		t.Fatalf("expected tool name '_structured_output', got %v", toolSpec["name"])
+	}
+	choice, _ := tc["toolChoice"].(map[string]any)
+	if choice == nil {
+		t.Fatal("expected toolChoice map")
+	}
+	toolChoice, _ := choice["tool"].(map[string]any)
+	if toolChoice == nil || toolChoice["name"] != "_structured_output" {
+		t.Fatalf("expected toolChoice.tool.name='_structured_output', got %v", toolChoice)
+	}
+}
+
+// TestApplyResponseFormatToConverseBodyJSON_Grammar_Unsupported verifies
+// ErrUnsupportedFormat for grammar mode on the bearer/REST path.
+func TestApplyResponseFormatToConverseBodyJSON_Grammar_Unsupported(t *testing.T) {
+	body := map[string]any{}
+	rf := &llm.ResponseFormat{Mode: "grammar"}
+	err := applyResponseFormatToConverseBodyJSON(body, rf)
+	if err == nil {
+		t.Fatal("expected ErrUnsupportedFormat, got nil")
+	}
+	if !llm.IsUnsupportedFormat(err) {
+		t.Fatalf("expected ErrUnsupportedFormat, got %T: %v", err, err)
 	}
 }

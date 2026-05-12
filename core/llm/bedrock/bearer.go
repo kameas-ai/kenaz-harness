@@ -27,6 +27,7 @@ import (
 	"sync"
 
 	"github.com/sigil-tech/kaneaz-harness/core/llm"
+	"github.com/sigil-tech/kaneaz-harness/core/llm/structured"
 )
 
 // streamWithBearer opens a Converse-style stream against the Bedrock
@@ -58,6 +59,15 @@ func (a *Adapter) streamWithBearer(ctx context.Context, req llm.GenerationReques
 		}
 		body["toolConfig"] = toolCfg
 	}
+
+	// Structured-output injection for the bearer/REST path
+	// (structured-output-and-grammar-01KX5R8A WP03d).
+	if req.ResponseFormat != nil {
+		if err := applyResponseFormatToConverseBodyJSON(body, req.ResponseFormat); err != nil {
+			return nil, err
+		}
+	}
+
 	bodyBytes, err := json.Marshal(body)
 	if err != nil {
 		return nil, fmt.Errorf("bedrock: marshal body: %w", err)
@@ -962,4 +972,77 @@ func parseEventStreamHeaders(buf []byte) (map[string]string, error) {
 		}
 	}
 	return headers, nil
+}
+
+// applyResponseFormatToConverseBodyJSON injects structured-output instructions
+// into the raw JSON body map used by the bearer/REST path. Mirrors
+// applyResponseFormatToConverseInput for the SDK path.
+//
+//   - Mode="json"       → append a system text block
+//   - Mode="json_schema" → prepend a synthetic _structured_output tool + forced toolChoice
+//   - Mode="grammar"    → ErrUnsupportedFormat (no Bedrock REST support)
+//
+// (structured-output-and-grammar-01KX5R8A WP03d)
+func applyResponseFormatToConverseBodyJSON(body map[string]any, rf *llm.ResponseFormat) error {
+	if rf == nil {
+		return nil
+	}
+	switch rf.Mode {
+	case "json":
+		// Append a system text block for JSON-only output.
+		sys, _ := body["system"].([]map[string]any)
+		sys = append(sys, map[string]any{
+			"text": "Respond with valid JSON only. Do not include any explanation, markdown fences, or prose — output raw JSON.",
+		})
+		body["system"] = sys
+		return nil
+
+	case "json_schema":
+		schema := rf.Schema
+		if len(schema) == 0 {
+			schema = json.RawMessage(`{"type":"object"}`)
+		}
+		injected, err := structured.InjectAdditionalProperties(schema)
+		if err != nil {
+			return &llm.ErrInvalidRequest{Message: "bedrock: inject additionalProperties: " + err.Error()}
+		}
+		var schemaAny any
+		if err := json.Unmarshal(injected, &schemaAny); err != nil {
+			return &llm.ErrInvalidRequest{Message: "bedrock: response_format schema unmarshal: " + err.Error()}
+		}
+
+		syntheticTool := map[string]any{
+			"toolSpec": map[string]any{
+				"name":        "_structured_output",
+				"description": "Return a JSON object that matches the required schema. Always call this tool.",
+				"inputSchema": map[string]any{"json": schemaAny},
+			},
+		}
+		forcedChoice := map[string]any{
+			"tool": map[string]any{"name": "_structured_output"},
+		}
+
+		// Merge with or replace existing toolConfig.
+		if existing, ok := body["toolConfig"].(map[string]any); ok {
+			existingTools, _ := existing["tools"].([]map[string]any)
+			// Prepend synthetic tool so it's first.
+			merged := append([]map[string]any{syntheticTool}, existingTools...)
+			existing["tools"] = merged
+			existing["toolChoice"] = forcedChoice
+		} else {
+			body["toolConfig"] = map[string]any{
+				"tools":      []map[string]any{syntheticTool},
+				"toolChoice": forcedChoice,
+			}
+		}
+		return nil
+
+	case "grammar":
+		return &llm.ErrUnsupportedFormat{
+			Provider: Kind,
+			Mode:     "grammar",
+		}
+	default:
+		return nil
+	}
 }

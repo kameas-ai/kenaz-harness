@@ -136,6 +136,63 @@ func TestCatalog_ContextWindow(t *testing.T) {
 	}
 }
 
+// TestCatalog_StructuredOutputFlags verifies the structured-output capability
+// flags are correctly loaded from the embedded YAML data
+// (structured-output-and-grammar-01KX5R8A WP05 acceptance).
+func TestCatalog_StructuredOutputFlags(t *testing.T) {
+	t.Parallel()
+	c := mustCatalog(t)
+
+	// Models that must report CapStructuredOutput=true.
+	trueExpected := []struct{ provider, model string }{
+		{"openai", "gpt-4o"},
+		{"openai", "gpt-4o-mini"},
+		{"anthropic", "claude-sonnet-4-5"},
+		{"anthropic", "claude-opus-4-1"},
+		{"bedrock", "anthropic.claude-3-5-sonnet-20240620-v1:0"},
+		{"openrouter", "anthropic/claude-sonnet-4-5"},
+		{"openrouter", "openai/gpt-4o"},
+	}
+	for _, tc := range trueExpected {
+		d := c.Describe(tc.provider, tc.model)
+		if !d.Has(llm.CapStructuredOutput) {
+			t.Errorf("%s/%s: expected CapStructuredOutput=true, got %+v", tc.provider, tc.model, d.Supported)
+		}
+	}
+
+	// claude-haiku should NOT have structured_output (not reliable enough for tool-call workaround).
+	if d := c.Describe("anthropic", "claude-haiku-3-5"); d.Has(llm.CapStructuredOutput) {
+		t.Errorf("anthropic/claude-haiku-3-5: expected CapStructuredOutput=false")
+	}
+}
+
+// TestCatalog_GrammarFlags verifies grammar capability flags
+// (structured-output-and-grammar-01KX5R8A WP05 acceptance).
+func TestCatalog_GrammarFlags(t *testing.T) {
+	t.Parallel()
+	c := mustCatalog(t)
+
+	// Cloud providers must NOT report CapGrammar.
+	cloudCases := []struct{ provider, model string }{
+		{"anthropic", "claude-sonnet-4-5"},
+		{"openai", "gpt-4o"},
+		{"openrouter", "anthropic/claude-sonnet-4-5"},
+		{"bedrock", "anthropic.claude-3-5-sonnet-20240620-v1:0"},
+	}
+	for _, tc := range cloudCases {
+		d := c.Describe(tc.provider, tc.model)
+		if d.Has(llm.CapGrammar) {
+			t.Errorf("%s/%s: expected CapGrammar=false for cloud provider", tc.provider, tc.model)
+		}
+	}
+
+	// Ollama must report CapGrammar=true (GBNF is the local path).
+	ollamaDesc := c.Describe("ollama", "llama3.2")
+	if !ollamaDesc.Has(llm.CapGrammar) {
+		t.Errorf("ollama/llama3.2: expected CapGrammar=true, got %+v", ollamaDesc.Supported)
+	}
+}
+
 // TestCapabilityDescriptor_JSONRoundTrip pins the descriptor JSON
 // shape end-to-end including the new documents capability.
 func TestCapabilityDescriptor_JSONRoundTrip(t *testing.T) {

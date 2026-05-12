@@ -9,6 +9,12 @@ defaults:
   reasoning: true
   cancellation: true
   usage_reporting: true
+  # Structured-output capability defaults (structured-output-and-grammar-01KX5R8A FR-002).
+  # Anthropic uses the tool-call workaround for json_schema mode; cloud providers
+  # do not support GBNF grammar constraints.
+  structured_output: false
+  grammar: false
+  regex_grammar: false
   # Attachment limits (multimodal-io-01KQ8TDF FR-006)
   image_input: true
   document_input: false
@@ -30,6 +36,9 @@ models:
     reasoning: true
     cancellation: true
     usage_reporting: true
+    structured_output: true
+    grammar: false
+    regex_grammar: false
     context_window: 200000
     max_output_tokens: 64000
     image_input: true
@@ -48,6 +57,9 @@ models:
     reasoning: true
     cancellation: true
     usage_reporting: true
+    structured_output: true
+    grammar: false
+    regex_grammar: false
     context_window: 200000
     max_output_tokens: 32000
     image_input: true
