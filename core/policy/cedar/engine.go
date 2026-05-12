@@ -480,6 +480,24 @@ const (
 	// ("onboarding" | "chat") so the harness_write_* default policies can
 	// gate by session kind without needing a separate mechanism.
 	CtxKeySessionKind = "session_kind"
+
+	// SecretReference family (model-secret-references-01KW7M5A WP02).
+	// These context keys are injected by refs.Resolver at every
+	// EvaluateSecretReferenceResolve call so Cedar policies can express
+	// per-tool, per-host, and per-mode access control.
+	//
+	//   CtxKeySecretToolName        — name of the tool calling Resolve.
+	//   CtxKeySecretDestinationHost — outbound request host (web_fetch /
+	//                                 MCP); empty for bash.
+	//   CtxKeySecretIsStreaming     — true when the session is streaming.
+	//   CtxKeySecretBudget          — remaining resolution budget for the
+	//                                 session+locator pair (int64 string).
+	//   CtxKeySecretAgentKind       — "trusted" | "untrusted" agent kind.
+	CtxKeySecretToolName        = "tool_name"    // shared with Tool family
+	CtxKeySecretDestinationHost = "destination_host"
+	CtxKeySecretIsStreaming     = "is_streaming"
+	CtxKeySecretBudget          = "budget"
+	CtxKeySecretAgentKind       = "agent_kind"
 )
 
 // populateFamilyContext fills in context-attribute defaults for the
