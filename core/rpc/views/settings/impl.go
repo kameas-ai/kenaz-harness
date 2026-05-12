@@ -877,6 +877,51 @@ func (s *FileStore) SaveEmbedderConfig(profileID, modelOverride string) error {
 	return s.saveLocked(got)
 }
 
+// ── Memory narrative layer FileStore accessors (memory-narrative-layer-01KQ8TD1) ──
+
+// LoadSummarizerProfileID returns the configured summariser profile ID.
+// Empty means "auto-select cheapest". Safe-defaults on read error.
+func (s *FileStore) LoadSummarizerProfileID() (string, error) {
+	got, err := s.LoadAll()
+	if err != nil {
+		return "", err
+	}
+	return got.SummarizerProfileID, nil
+}
+
+// SaveSummarizerProfileID persists the summariser profile ID.
+func (s *FileStore) SaveSummarizerProfileID(profileID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	got, err := s.loadLocked()
+	if err != nil {
+		return err
+	}
+	got.SummarizerProfileID = profileID
+	return s.saveLocked(got)
+}
+
+// LoadMemoryNarrativeEnabled returns the narrative-layer opt-in.
+func (s *FileStore) LoadMemoryNarrativeEnabled() (bool, error) {
+	got, err := s.LoadAll()
+	if err != nil {
+		return true, err // safe default: enabled
+	}
+	return got.MemoryNarrativeEnabled, nil
+}
+
+// SaveMemoryNarrativeEnabled persists the narrative-layer opt-in.
+func (s *FileStore) SaveMemoryNarrativeEnabled(enabled bool) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	got, err := s.loadLocked()
+	if err != nil {
+		return err
+	}
+	got.MemoryNarrativeEnabled = enabled
+	return s.saveLocked(got)
+}
+
 // encodeAutonomyField marshals a Layer to the json.RawMessage stored
 // on Settings.Autonomy. The empty Layer encodes as nil so it omits via
 // `omitempty` on disk.
@@ -1222,6 +1267,28 @@ func (a *API) SetEmbedderConfig(_ context.Context, profileID, modelOverride stri
 	return a.store.SaveEmbedderConfig(profileID, modelOverride)
 }
 
+// ── Memory narrative layer API methods (memory-narrative-layer-01KQ8TD1) ──
+
+// GetSummarizerProfileID returns the configured summariser profile ID.
+func (a *API) GetSummarizerProfileID(_ context.Context) (string, error) {
+	return a.store.LoadSummarizerProfileID()
+}
+
+// SetSummarizerProfileID persists the summariser profile ID.
+func (a *API) SetSummarizerProfileID(_ context.Context, profileID string) error {
+	return a.store.SaveSummarizerProfileID(profileID)
+}
+
+// GetMemoryNarrativeEnabled returns the narrative-layer opt-in.
+func (a *API) GetMemoryNarrativeEnabled(_ context.Context) (bool, error) {
+	return a.store.LoadMemoryNarrativeEnabled()
+}
+
+// SetMemoryNarrativeEnabled persists the narrative-layer opt-in.
+func (a *API) SetMemoryNarrativeEnabled(_ context.Context, enabled bool) error {
+	return a.store.SaveMemoryNarrativeEnabled(enabled)
+}
+
 // memoryStore is the test-only in-memory SettingsStore.
 type memoryStore struct {
 	mu   sync.Mutex
@@ -1561,6 +1628,34 @@ func (m *memoryStore) SaveEmbedderConfig(profileID, modelOverride string) error 
 	defer m.mu.Unlock()
 	m.data.EmbedderProviderProfileID = profileID
 	m.data.EmbedderModelOverride = modelOverride
+	return nil
+}
+
+// ── Memory narrative layer memoryStore accessors (memory-narrative-layer-01KQ8TD1) ──
+
+func (m *memoryStore) LoadSummarizerProfileID() (string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.data.SummarizerProfileID, nil
+}
+
+func (m *memoryStore) SaveSummarizerProfileID(profileID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.data.SummarizerProfileID = profileID
+	return nil
+}
+
+func (m *memoryStore) LoadMemoryNarrativeEnabled() (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.data.MemoryNarrativeEnabled, nil
+}
+
+func (m *memoryStore) SaveMemoryNarrativeEnabled(enabled bool) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.data.MemoryNarrativeEnabled = enabled
 	return nil
 }
 
