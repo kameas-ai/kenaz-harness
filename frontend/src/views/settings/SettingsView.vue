@@ -22,6 +22,7 @@ import CompactionStrategyPanel from '@/views/settings/compaction/CompactionStrat
 import SlashCommandsView from '@/views/settings/SlashCommandsView.vue';
 import FeatureFlagsView from '@/views/settings/FeatureFlagsView.vue';
 import HooksSettingsView from '@/views/settings/HooksSettingsView.vue';
+import WorkflowsSettingsPanel from '@/views/settings/WorkflowsSettingsPanel.vue';
 import LongSessionNudgeSettings from '@/components/settings/LongSessionNudgeSettings.vue';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
 import { debouncedSave } from '@/lib/settings';
@@ -85,6 +86,13 @@ const showFlagsTab = computed<boolean>(() => {
 const showHooksTab = computed<boolean>(() => {
   const v = route?.query?.tab;
   return typeof v === 'string' && v === 'hooks';
+});
+
+// workflow-extensions-01KW2D3Y WP02 — Workflows sub-tab.
+// Disambiguates via ?tab=workflows. Mount switch is in <template> below.
+const showWorkflowsTab = computed<boolean>(() => {
+  const v = route?.query?.tab;
+  return typeof v === 'string' && v === 'workflows';
 });
 
 const settings = ref<Settings>({
@@ -830,6 +838,14 @@ onMounted(() => {
       data-testid="settings-hooks-pane"
     >
       <HooksSettingsView />
+    </div>
+
+    <!-- workflow-extensions-01KW2D3Y WP02 — Workflows sub-tab. -->
+    <div
+      v-else-if="showWorkflowsTab"
+      data-testid="settings-workflows-pane"
+    >
+      <WorkflowsSettingsPanel />
     </div>
 
     <div
