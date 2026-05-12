@@ -234,6 +234,24 @@ func (s *CronScheduler) Stop() {
 	s.started = false
 }
 
+// NextFire implements Scheduler. Returns the next time the cron engine
+// will fire for workflowID. Returns a zero Time when no schedule is
+// registered for workflowID.
+func (s *CronScheduler) NextFire(_ context.Context, workflowID string) (time.Time, error) {
+	s.mu.RLock()
+	st, ok := s.schedules[workflowID]
+	if !ok {
+		s.mu.RUnlock()
+		return time.Time{}, nil
+	}
+	entryID := st.entry
+	s.mu.RUnlock()
+	// cron.Cron.Entry returns a zero-value Entry (with a zero Next) when
+	// the id is not found, which is the right sentinel here.
+	entry := s.c.Entry(entryID)
+	return entry.Next, nil
+}
+
 // Tick is a no-op on the real implementation. The test fake overrides it.
 func (s *CronScheduler) Tick(_ time.Time) {}
 

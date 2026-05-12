@@ -442,6 +442,10 @@ var (
 	ErrInvalidID        = errors.New("workflows: invalid id")
 	ErrUnknownReference = errors.New("workflows: unknown reference")
 	ErrCancelled        = errors.New("workflows: run cancelled")
+	// ErrRunNotFound is returned by Engine.Cancel when the run ID is
+	// not registered in the active-runs registry (already completed or
+	// never started on this engine instance).
+	ErrRunNotFound = errors.New("workflows: run not found")
 	ErrWorkflowNotFound = errors.New("workflows: workflow not found")
 	// ErrWorkflowCycle is returned by the loader when it detects a
 	// cycle in the inputs_from dependency graph. The error message

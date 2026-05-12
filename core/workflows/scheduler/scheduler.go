@@ -84,6 +84,10 @@ type Scheduler interface {
 	// Stop halts cron dispatch. In-flight runs are not interrupted.
 	Stop()
 
+	// NextFire returns the next scheduled fire time for workflowID.
+	// Returns a zero Time when no schedule is registered for workflowID.
+	NextFire(ctx context.Context, workflowID string) (time.Time, error)
+
 	// Tick drives the test clock to now. No-op on the real
 	// implementation (which uses the system clock internally through
 	// robfig/cron).
