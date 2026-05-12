@@ -993,9 +993,25 @@ func New(c *core.Core) *API {
 	// construction failure soft-fails to a nil-registry surface; the
 	// chassis still boots and Execute returns a friendly "not wired"
 	// error per command.
+	//
+	// User-defined slash commands (mission user-slash-commands-01KQ8TD9)
+	// require a Store (DB + dataDir-backed) and a Dispatch. Wired only
+	// when a real Core is available; the test-chassis path falls back to
+	// the registry-only API which returns "not wired" for user commands.
+	// Gated by HARNESS_USER_SLASHCMD (default on, WP09).
 	{
 		slashRegistry := newSlashRegistry(c, a.llmAPI, memStore, embedder, a.branchesAPI, a.workflowsAPI)
-		a.slashAPI = slashview.New(slashRegistry)
+		if c != nil && c.Storage() != nil && c.DataDir() != "" && coreslashcmd.UserSlashcmdEnabled() {
+			slashStore := coreslashcmd.NewStore(c.Storage(), c.DataDir())
+			slashDispatch := coreslashcmd.NewDispatch(slashStore, nil)
+			a.slashAPI = slashview.NewWithStore(slashRegistry, slashStore, slashDispatch)
+			logging.L().Info("rpc.slashcmd.user_wired",
+				"data_dir", c.DataDir())
+		} else {
+			a.slashAPI = slashview.New(slashRegistry)
+			logging.L().Info("rpc.slashcmd.user_skipped",
+				"reason", "no core / no storage / disabled by flag")
+		}
 	}
 
 	// Auto-update subsystem (mission auto-update, v0.4.0 WP03).
