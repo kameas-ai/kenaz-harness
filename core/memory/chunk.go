@@ -18,6 +18,12 @@ const (
 	ScopeKindGlobal  = "global"
 	ScopeKindProject = "project"
 	ScopeKindSession = "session"
+	// ScopeKindLongTerm is the long-term scope tier added by the narrative
+	// layer (memory-narrative-layer-01KQ8TD1 WP09). Chunks promoted to
+	// long_term resist the prune sweep and are loaded into the system-prompt
+	// prelude at session start. One-way promotion: demotion requires an
+	// explicit pruner verdict, not a score drop.
+	ScopeKindLongTerm = "long_term"
 )
 
 // Chunk is one stored memory: an opt-in snippet the user explicitly
@@ -28,6 +34,12 @@ const (
 // the "fresh chunk" values when an old gob is read back (Pinned=false,
 // RecallCount=0, LastAccessed=CreatedAt) so existing on-disk stores
 // keep working without a migration.
+//
+// Narrative-layer addendum (memory-narrative-layer-01KQ8TD1 WP01): Kind
+// and RetrievalWeight were added without a gob schema migration. Existing
+// on-disk stores read back with empty Kind and zero RetrievalWeight;
+// backfillChunkDefaults in store.go sets them to "raw" and 1.0 so the
+// retriever's score multiplier is transparent for legacy chunks.
 type Chunk struct {
 	ID            string    `json:"id"`
 	SessionID     string    `json:"session_id,omitempty"`
@@ -57,6 +69,21 @@ type Chunk struct {
 	// Source records the originating hook boundary ("post-llm" etc.)
 	// so the inspector can show users why a chunk was captured.
 	Source string `json:"source,omitempty"`
+	// Kind classifies the chunk in the narrative layer
+	// (memory-narrative-layer-01KQ8TD1 WP01). One of: "raw",
+	// "narrative_extractive", "narrative_synthesised",
+	// "narrative_extractive_fallback". Empty values are backfilled to
+	// "raw" on load so legacy gobs are transparent.
+	Kind string `json:"kind,omitempty"`
+	// RetrievalWeight is the score multiplier applied during similarity
+	// search (WP01). Default 1.0 (no boost). Narrative chunks default
+	// to 1.5 (set by the narrative layer at write time). Zero values
+	// are backfilled to 1.0 on load.
+	RetrievalWeight float32 `json:"retrieval_weight,omitempty"`
+	// TurnID links this chunk to a specific agent turn for narrative
+	// keying. Used by the Promoter to correlate synthesised narratives
+	// with their extractive fallbacks. Empty for raw chunks.
+	TurnID string `json:"turn_id,omitempty"`
 }
 
 // Result pairs a Chunk with its similarity score against a query
