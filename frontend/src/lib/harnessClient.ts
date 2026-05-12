@@ -636,13 +636,26 @@ interface WailsBindingsLike {
   Onboarding_RestartPhase2(req: OnboardingRestartPhase2Request): Promise<OnboardingRestartPhase2Response>;
   Onboarding_ListStarters(): Promise<StarterSummary[]>;
 
-  // ── Elicitation (ask-user-question-interactive-01KZNP3G WP04) ──
+  // ── Elicitation (ask-user-question-interactive-01KZNP3G WP04-WP06) ──
   Elicit_SubmitAnswer(
     requestID: string,
     answerJSON: string | null,
     cancelled: boolean,
   ): Promise<void>;
   Elicit_ListPending(): Promise<import('./types').ElicitRequest[]>;
+  // WP05 multi-step wizard sequencing.
+  Elicit_SubmitWizardStep(
+    requestID: string,
+    questionID: string,
+    answerJSON: string,
+    dismissed: boolean,
+  ): Promise<void>;
+  // WP06 async / deferred mode.
+  Elicit_RegisterDeferred(
+    sessionID: string,
+    req: import('./types').ElicitRequest,
+  ): Promise<import('./types').DeferredResult>;
+  Elicit_AnswerDeferred(askID: string, answer: unknown): Promise<string>;
 
   // ── feature flags (user-slash-commands-01KQ8TD9 WP09) ───────────────
   Config_GetFlags(): Promise<FeatureFlagInfo[]>;
@@ -1555,6 +1568,10 @@ export interface SettingsClient {
    *   - timeoutMs: preview abort timeout (default 2000 ms)
    */
   getArtifactPreview(): Promise<{ enabled: boolean; maxBytes: number; timeoutMs: number }>;
+  /** Read the auto-title opt-in flag (default true). */
+  getAutoTitleEnabled(): Promise<boolean>;
+  /** Persist the auto-title opt-in flag. */
+  setAutoTitleEnabled(enabled: boolean): Promise<void>;
 }
 
 /**
@@ -1602,10 +1619,6 @@ export interface PermissionsClient {
    * reset-all and batch-save flows.
    */
   setShortcuts(m: Record<string, string>): Promise<void>;
-  /** Read the auto-title opt-in flag (default true). */
-  getAutoTitleEnabled(): Promise<boolean>;
-  /** Persist the auto-title opt-in flag. */
-  setAutoTitleEnabled(enabled: boolean): Promise<void>;
 }
 
 /**
@@ -2639,6 +2652,8 @@ export function createHarnessClient(): HarnessClient {
       setAutoResumeOnKeyRotation: (enabled) =>
         b().Settings_SetAutoResumeOnKeyRotation(enabled),
       getArtifactPreview: () => b().Settings_GetArtifactPreview(),
+      getAutoTitleEnabled: () => b().Settings_GetAutoTitleEnabled(),
+      setAutoTitleEnabled: (enabled) => b().Settings_SetAutoTitleEnabled(enabled),
     },
     permissions: {
       listGrants: (family) =>
@@ -2649,8 +2664,6 @@ export function createHarnessClient(): HarnessClient {
       getShortcuts: () => b().Settings_GetShortcuts(),
       setShortcut: (id, binding) => b().Settings_SetShortcut(id, binding),
       setShortcuts: (m) => b().Settings_SetShortcuts(m),
-      getAutoTitleEnabled: () => b().Settings_GetAutoTitleEnabled(),
-      setAutoTitleEnabled: (enabled) => b().Settings_SetAutoTitleEnabled(enabled),
     },
     memory: {
       listChunks: (filter) => b().Memory_ListChunks(filter ?? {}),
@@ -3234,6 +3247,8 @@ export function createFakeHarnessClient(
         maxBytes: 5 * 1024 * 1024,
         timeoutMs: 2000,
       }),
+      getAutoTitleEnabled: async () => true,
+      setAutoTitleEnabled: noop,
     },
     permissions: {
       listGrants: async () => [],
@@ -3242,8 +3257,6 @@ export function createFakeHarnessClient(
       getShortcuts: async () => ({}),
       setShortcut: noop,
       setShortcuts: noop,
-      getAutoTitleEnabled: async () => true,
-      setAutoTitleEnabled: noop,
     },
     memory: {
       listChunks: async () => [],

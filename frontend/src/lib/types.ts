@@ -3021,6 +3021,16 @@ export interface ElicitRequest {
 }
 
 /**
+ * DeferredResult is the immediate value returned to the model when the
+ * ask-user-question tool is called in deferred mode (WP06). Mirrors
+ * elicitview.DeferredResult on the Go side.
+ */
+export interface DeferredResult {
+  deferred: boolean;
+  ask_id: string;
+}
+
+/**
  * WizardQuestion is one question in a multi-step wizard batch (WP05).
  * Mirrors elicitview.WizardQuestion on the Go side.
  */
