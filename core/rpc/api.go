@@ -1065,7 +1065,7 @@ func New(c *core.Core) *API {
 	// the view degrades to the registry-only API which returns "not wired"
 	// for user commands.
 	{
-		slashRegistry := newSlashRegistry(c, a.llmAPI, memStore, embedder, a.branchesAPI, a.workflowsAPI)
+		slashRegistry := newSlashRegistry(c, a.llmAPI, memStore, embedder, a.branchesAPI, a.workflowsAPI, a.exposureIdx)
 		if slashStore != nil && slashDispatch != nil {
 			a.slashAPI = slashview.NewWithStore(slashRegistry, slashStore, slashDispatch)
 			logging.L().Info("rpc.slashcmd.user_wired",
@@ -1244,7 +1244,7 @@ func New(c *core.Core) *API {
 // workflows API (used by /wf).
 // Returns nil when registry construction fails; the view degrades
 // to a friendly error response on every Execute.
-func newSlashRegistry(c *core.Core, llmAPI llm.LLMConnectorAPI, memStore corememory.Store, embedder corememory.Embedder, branchesAPI branchesview.BranchesAPI, workflowsAPI workflowsview.WorkflowsAPI) *coreslashcmd.Registry {
+func newSlashRegistry(c *core.Core, llmAPI llm.LLMConnectorAPI, memStore corememory.Store, embedder corememory.Embedder, branchesAPI branchesview.BranchesAPI, workflowsAPI workflowsview.WorkflowsAPI, exposureIdx *secrets.ExposureIndex) *coreslashcmd.Registry {
 	deps := coreslashcmd.Deps{}
 	if c != nil && c.SessionManager() != nil {
 		deps.Sessions = &slashSessionAppender{mgr: c.SessionManager()}
@@ -1260,6 +1260,9 @@ func newSlashRegistry(c *core.Core, llmAPI llm.LLMConnectorAPI, memStore coremem
 	}
 	if workflowsAPI != nil {
 		deps.Workflows = &slashWorkflowsGateway{inner: workflowsAPI}
+	}
+	if exposureIdx != nil {
+		deps.Secrets = &slashSecretExposer{idx: exposureIdx}
 	}
 	registry, err := coreslashcmd.NewRegistry(deps)
 	if err != nil {
@@ -1572,6 +1575,43 @@ func (g *slashWorkflowsGateway) Run(ctx context.Context, id string, inputs map[s
 	}
 	close(ch)
 	return ch, nil
+}
+
+// slashSecretExposer adapts *secrets.ExposureIndex onto the narrow
+// SecretExposer contract /secret consumes.
+// (model-secret-references-01KW7M5A WP11)
+type slashSecretExposer struct {
+	idx *secrets.ExposureIndex
+}
+
+func (s *slashSecretExposer) Expose(_ context.Context, locator, description, kind string, plaintext []byte) error {
+	if s == nil || s.idx == nil {
+		return errors.New("slashcmd: secrets subsystem not wired")
+	}
+	entry := secrets.ExposedEntry{
+		Locator:     locator,
+		Description: description,
+		Scope:       secrets.ScopeSession,
+		KindHint:    secrets.KindHint(kind),
+	}
+	s.idx.Add(entry, plaintext)
+	// Zero the caller's buffer too.
+	for i := range plaintext {
+		plaintext[i] = 0
+	}
+	return nil
+}
+
+func (s *slashSecretExposer) ListLocators(_ context.Context) ([]string, error) {
+	if s == nil || s.idx == nil {
+		return nil, nil
+	}
+	entries := s.idx.List(context.Background(), "")
+	out := make([]string, 0, len(entries))
+	for _, e := range entries {
+		out = append(out, e.Locator)
+	}
+	return out, nil
 }
 
 // newSessionsAPI returns the real Manager-backed SessionsAPI when c
