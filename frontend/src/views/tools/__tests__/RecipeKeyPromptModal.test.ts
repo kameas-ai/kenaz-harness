@@ -1,8 +1,9 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { mount, flushPromises } from '@vue/test-utils';
 import RecipeKeyPromptModal from '@/views/tools/RecipeKeyPromptModal.vue';
 import type { ConfigOption, Recipe, RecipeStatus } from '@/lib/types';
 import { provideFakeClient } from '@/lib/harnessClientContext';
+import { _resetToastQueue, useToastQueue } from '@/composables/useToastQueue';
 
 const withFakeClient = {
   global: {
@@ -388,6 +389,199 @@ describe('RecipeKeyPromptModal', () => {
     const args = (install.mock.calls as unknown as unknown[][])[0];
     expect(args[2]).toEqual({
       allowed_directories: ['/Users/me/code', '/tmp/scratch'],
+    });
+  });
+
+  // ── WP03: Install recommended policy button ──────────────────────
+
+  describe('recommended policy install button (WP03)', () => {
+    beforeEach(() => {
+      _resetToastQueue();
+    });
+
+    it('shows install button when recommendedPolicyTemplate is set', async () => {
+      const recipe = fsRecipe({ recommendedPolicyTemplate: 'filesystem-full-recommended.cedar' });
+      const install = vi.fn(async () => okStatus(recipe.id));
+      const w = mount(RecipeKeyPromptModal, {
+        ...withFakeClient,
+        props: { open: true, recipe, install },
+      });
+      await flushPromises();
+      expect(w.find('[data-testid=recipe-modal-install-policy-btn]').exists()).toBe(true);
+    });
+
+    it('does not show install button when recommendedPolicyTemplate is absent', async () => {
+      const recipe = fsRecipe();
+      const install = vi.fn(async () => okStatus(recipe.id));
+      const w = mount(RecipeKeyPromptModal, {
+        ...withFakeClient,
+        props: { open: true, recipe, install },
+      });
+      await flushPromises();
+      expect(w.find('[data-testid=recipe-modal-install-policy-btn]').exists()).toBe(false);
+    });
+
+    it('calls installTemplate and shows success toast on click', async () => {
+      const templateName = 'filesystem-full-recommended.cedar';
+      const recipe = fsRecipe({ recommendedPolicyTemplate: templateName });
+      const install = vi.fn(async () => okStatus(recipe.id));
+
+      // Provide a fake client with a recording installTemplate.
+      const installTemplateMock = vi.fn().mockResolvedValue({
+        name: templateName,
+        bytes: 42,
+        embedded: false,
+        parse_ok: true,
+        source: '',
+        read_only: false,
+      });
+
+      const w = mount(RecipeKeyPromptModal, {
+        global: {
+          plugins: [
+            {
+              install(app: import('vue').App) {
+                provideFakeClient(app, {
+                  cedarPolicy: {
+                    listPolicies: vi.fn().mockResolvedValue([]),
+                    reloadPolicies: vi.fn().mockResolvedValue(undefined),
+                    recentDecisions: vi.fn().mockResolvedValue([]),
+                    writeSnippet: vi.fn().mockResolvedValue(undefined),
+                    revokeSnippet: vi.fn().mockResolvedValue(undefined),
+                    resolvePropose: vi.fn().mockResolvedValue(undefined),
+                    getPolicy: vi.fn().mockResolvedValue({ name: templateName, bytes: 0, embedded: false, parse_ok: true, source: '', read_only: false }),
+                    savePolicy: vi.fn().mockResolvedValue({ ok: true }),
+                    deletePolicy: vi.fn().mockResolvedValue(undefined),
+                    validatePolicy: vi.fn().mockResolvedValue({ ok: true }),
+                    installTemplate: installTemplateMock,
+                  },
+                });
+              },
+            },
+          ],
+        },
+        props: { open: true, recipe, install },
+      });
+      await flushPromises();
+
+      await w.find('[data-testid=recipe-modal-install-policy-btn]').trigger('click');
+      await flushPromises();
+
+      expect(installTemplateMock).toHaveBeenCalledWith(templateName, templateName);
+
+      // Button replaced by "Installed" badge.
+      expect(w.find('[data-testid=recipe-modal-install-policy-btn]').exists()).toBe(false);
+      expect(w.find('[data-testid=recipe-modal-policy-installed-badge]').exists()).toBe(true);
+
+      // Toast pushed.
+      const { toasts } = useToastQueue();
+      expect(toasts.some((t) => t.message.includes(templateName))).toBe(true);
+    });
+
+    it('shows "already installed" toast and marks installed when policy already exists', async () => {
+      const templateName = 'filesystem-full-recommended.cedar';
+      const recipe = fsRecipe({ recommendedPolicyTemplate: templateName });
+      const install = vi.fn(async () => okStatus(recipe.id));
+
+      const installTemplateMock = vi.fn().mockRejectedValue(
+        new Error('cedarpolicy: policy file already exists'),
+      );
+
+      const w = mount(RecipeKeyPromptModal, {
+        global: {
+          plugins: [
+            {
+              install(app: import('vue').App) {
+                provideFakeClient(app, {
+                  cedarPolicy: {
+                    listPolicies: vi.fn().mockResolvedValue([]),
+                    reloadPolicies: vi.fn().mockResolvedValue(undefined),
+                    recentDecisions: vi.fn().mockResolvedValue([]),
+                    writeSnippet: vi.fn().mockResolvedValue(undefined),
+                    revokeSnippet: vi.fn().mockResolvedValue(undefined),
+                    resolvePropose: vi.fn().mockResolvedValue(undefined),
+                    getPolicy: vi.fn().mockResolvedValue({ name: templateName, bytes: 0, embedded: false, parse_ok: true, source: '', read_only: false }),
+                    savePolicy: vi.fn().mockResolvedValue({ ok: true }),
+                    deletePolicy: vi.fn().mockResolvedValue(undefined),
+                    validatePolicy: vi.fn().mockResolvedValue({ ok: true }),
+                    installTemplate: installTemplateMock,
+                  },
+                });
+              },
+            },
+          ],
+        },
+        props: { open: true, recipe, install },
+      });
+      await flushPromises();
+
+      await w.find('[data-testid=recipe-modal-install-policy-btn]').trigger('click');
+      await flushPromises();
+
+      // "Already installed" toast.
+      const { toasts } = useToastQueue();
+      expect(toasts.some((t) => t.message.toLowerCase().includes('already installed'))).toBe(true);
+
+      // Button transitions to installed badge even on "already exists".
+      expect(w.find('[data-testid=recipe-modal-policy-installed-badge]').exists()).toBe(true);
+    });
+
+    it('button rearms on next open (supports re-install after delete)', async () => {
+      const templateName = 'filesystem-full-recommended.cedar';
+      const recipe = fsRecipe({ recommendedPolicyTemplate: templateName });
+      const install = vi.fn(async () => okStatus(recipe.id));
+
+      const installTemplateMock = vi.fn().mockResolvedValue({
+        name: templateName,
+        bytes: 42,
+        embedded: false,
+        parse_ok: true,
+        source: '',
+        read_only: false,
+      });
+
+      const w = mount(RecipeKeyPromptModal, {
+        global: {
+          plugins: [
+            {
+              install(app: import('vue').App) {
+                provideFakeClient(app, {
+                  cedarPolicy: {
+                    listPolicies: vi.fn().mockResolvedValue([]),
+                    reloadPolicies: vi.fn().mockResolvedValue(undefined),
+                    recentDecisions: vi.fn().mockResolvedValue([]),
+                    writeSnippet: vi.fn().mockResolvedValue(undefined),
+                    revokeSnippet: vi.fn().mockResolvedValue(undefined),
+                    resolvePropose: vi.fn().mockResolvedValue(undefined),
+                    getPolicy: vi.fn().mockResolvedValue({ name: templateName, bytes: 0, embedded: false, parse_ok: true, source: '', read_only: false }),
+                    savePolicy: vi.fn().mockResolvedValue({ ok: true }),
+                    deletePolicy: vi.fn().mockResolvedValue(undefined),
+                    validatePolicy: vi.fn().mockResolvedValue({ ok: true }),
+                    installTemplate: installTemplateMock,
+                  },
+                });
+              },
+            },
+          ],
+        },
+        props: { open: true, recipe, install },
+      });
+      await flushPromises();
+
+      // First open: install.
+      await w.find('[data-testid=recipe-modal-install-policy-btn]').trigger('click');
+      await flushPromises();
+      expect(w.find('[data-testid=recipe-modal-policy-installed-badge]').exists()).toBe(true);
+
+      // Simulate close then reopen (simulating "user deleted via /policy, reopens modal").
+      await w.setProps({ open: false });
+      await flushPromises();
+      await w.setProps({ open: true });
+      await flushPromises();
+
+      // Button should be re-armed.
+      expect(w.find('[data-testid=recipe-modal-install-policy-btn]').exists()).toBe(true);
+      expect(w.find('[data-testid=recipe-modal-policy-installed-badge]').exists()).toBe(false);
     });
   });
 });
