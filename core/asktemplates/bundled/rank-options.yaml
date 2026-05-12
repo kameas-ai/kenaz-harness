@@ -1,0 +1,11 @@
+id: rank-options
+description: Ask the user to rank a list of options by preference.
+vars:
+  - name: prompt
+    type: string
+    required: true
+    description: Question prompt text
+questions:
+  - id: ranking
+    kind: radio
+    prompt: "{{.prompt}}"
