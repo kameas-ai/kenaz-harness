@@ -57,6 +57,24 @@ func (f *fakeCedarPolicy) RevokePolicySnippet(_ context.Context, filename string
 	return nil
 }
 
+// ── Editor stubs (cedar-policy-editor-ui-01KQ8TD6 WP01) ──────────────
+// These satisfy the expanded CedarPolicyAPI interface; the tools tests
+// do not exercise these paths so the stubs are intentionally minimal.
+
+func (f *fakeCedarPolicy) GetPolicy(_ context.Context, name string) (cedarpolicy.PolicyFileDetail, error) {
+	return cedarpolicy.PolicyFileDetail{}, nil
+}
+func (f *fakeCedarPolicy) SavePolicy(_ context.Context, _ string, _ string) (cedarpolicy.ParseResult, error) {
+	return cedarpolicy.ParseResult{OK: true}, nil
+}
+func (f *fakeCedarPolicy) DeletePolicy(_ context.Context, _ string) error { return nil }
+func (f *fakeCedarPolicy) ValidatePolicy(_ context.Context, _ string) (cedarpolicy.ParseResult, error) {
+	return cedarpolicy.ParseResult{OK: true}, nil
+}
+func (f *fakeCedarPolicy) InstallTemplate(_ context.Context, _, _ string) (cedarpolicy.PolicyFileDetail, error) {
+	return cedarpolicy.PolicyFileDetail{}, nil
+}
+
 func (f *fakeCedarPolicy) written() map[string]string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
