@@ -1395,6 +1395,51 @@ export interface BuiltinDescriptor {
   defaultConfig?: Record<string, unknown>;
 }
 
+/**
+ * HookOutput — the discriminated-union result a single hook returns.
+ * Mirrors core/hooks.HookOutput (plan §2 / FR-002).
+ */
+export interface HookOutput {
+  decision?: 'approve' | 'block' | string;
+  reason?: string;
+  additionalContext?: string;
+  updatedInput?: unknown;
+  updatedMCPOutput?: unknown;
+  permissionDecision?: 'allow' | 'deny' | string;
+  permissionDecisionReason?: string;
+  watchPaths?: string[];
+  async?: boolean;
+  asyncTimeoutMs?: number;
+}
+
+/**
+ * MergedOutput — the folded result after MergeOutputs runs over N HookOutputs.
+ * Mirrors core/hooks.MergedOutput.
+ */
+export interface MergedOutput {
+  blocked: boolean;
+  blockReason?: string;
+  additionalContext?: string;
+  updatedInput?: unknown;
+  updatedMCPOutput?: unknown;
+  permissionDenied: boolean;
+  permissionAllowed: boolean;
+  permissionReason?: string;
+  watchPaths?: string[];
+}
+
+/**
+ * DryRunResult — the wire shape returned by Hooks_DryRun.
+ */
+export interface DryRunResult {
+  output: HookOutput;
+  merged: MergedOutput;
+  stdout?: string;
+  stderr?: string;
+  exitCode: number;
+  latencyMs: number;
+}
+
 // ── MCP recipes (shipped catalog) ─────────────────────────────────────
 //
 // Mirrors the Wails wire shape from `core/rpc/views/tools/api.go`:
