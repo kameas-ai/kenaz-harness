@@ -458,6 +458,72 @@ func containsSubstring(haystack, needle string) bool {
 	return false
 }
 
+// TestRecommendedPolicyTemplateRoundTrip verifies that the
+// recommended_policy_template field survives JSON marshal → unmarshal
+// exactly (cedar-policy-editor-ui-01KQ8TD6 WP03).
+func TestRecommendedPolicyTemplateRoundTrip(t *testing.T) {
+	const blob = `{
+		"id": "fs",
+		"display_name": "Filesystem",
+		"description": "",
+		"category": "filesystem",
+		"command": ["npx", "-y", "server-fs"],
+		"env_keys": [],
+		"capabilities": {"tools": true, "resources": false, "prompts": false, "sampling": false},
+		"docs_url": "",
+		"init_timeout_ms": 5000,
+		"ping_period_ms": 30000,
+		"sampling_policy": {"allowed": false, "default": false},
+		"recommended_policy_template": "filesystem-full-recommended.cedar"
+	}`
+	var r recipes.Recipe
+	if err := json.Unmarshal([]byte(blob), &r); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if r.RecommendedPolicyTemplate != "filesystem-full-recommended.cedar" {
+		t.Errorf("RecommendedPolicyTemplate = %q, want %q", r.RecommendedPolicyTemplate, "filesystem-full-recommended.cedar")
+	}
+
+	// Re-marshal and confirm the key appears.
+	out, err := json.Marshal(r)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	var r2 recipes.Recipe
+	if err := json.Unmarshal(out, &r2); err != nil {
+		t.Fatalf("Unmarshal round-trip: %v", err)
+	}
+	if r2.RecommendedPolicyTemplate != "filesystem-full-recommended.cedar" {
+		t.Errorf("round-trip RecommendedPolicyTemplate = %q", r2.RecommendedPolicyTemplate)
+	}
+
+	// A recipe with no RecommendedPolicyTemplate must NOT emit the key
+	// in JSON (omitempty).
+	empty := recipes.Recipe{ID: "x", Command: []string{"x"}}
+	outEmpty, err := json.Marshal(empty)
+	if err != nil {
+		t.Fatalf("Marshal empty: %v", err)
+	}
+	if containsSubstring(string(outEmpty), "recommended_policy_template") {
+		t.Errorf("empty RecommendedPolicyTemplate should be omitted, got: %s", outEmpty)
+	}
+}
+
+// TestFilesystemEntryHasRecommendedPolicyTemplate verifies that the shipped
+// filesystem recipe carries the recommended Cedar policy template name.
+// (cedar-policy-editor-ui-01KQ8TD6 WP03)
+func TestFilesystemEntryHasRecommendedPolicyTemplate(t *testing.T) {
+	cat := recipes.Shipped()
+	r, ok := cat.Get("filesystem")
+	if !ok {
+		t.Fatal("filesystem not in shipped catalog")
+	}
+	const want = "filesystem-full-recommended.cedar"
+	if r.RecommendedPolicyTemplate != want {
+		t.Errorf("RecommendedPolicyTemplate = %q, want %q", r.RecommendedPolicyTemplate, want)
+	}
+}
+
 func TestSentinelErrorsDistinct(t *testing.T) {
 	// Defensive: a refactor that collapses the sentinels into one
 	// would silently flip behaviour for downstream errors.Is checks.

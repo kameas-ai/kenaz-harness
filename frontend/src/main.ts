@@ -112,6 +112,13 @@ const router = createRouter({
       name: 'search',
       component: () => import('@/views/sessions/SessionsView.vue'),
     },
+    {
+      // cedar-policy-editor-ui-01KQ8TD6 WP02 — Policy editor.
+      // The view self-disables when AppInfo.policyEditorEnabled === false.
+      path: '/policy',
+      name: 'policy',
+      component: () => import('@/views/policy/PolicyView.vue'),
+    },
   ],
 });
 

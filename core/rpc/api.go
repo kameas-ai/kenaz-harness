@@ -215,6 +215,10 @@ type AppInfo struct {
 	GoVersion  string     `json:"goVersion"`
 	Platform   string     `json:"platform"`
 	WindowSize WindowSize `json:"windowSize"`
+	// PolicyEditorEnabled is true when HARNESS_POLICY_EDITOR_UI != "0".
+	// Controls whether the /policy route registers and write-path RPCs are
+	// available (cedar-policy-editor-ui-01KQ8TD6 WP01).
+	PolicyEditorEnabled bool `json:"policyEditorEnabled"`
 }
 
 // WindowSize mirrors the charter shape.
@@ -281,6 +285,10 @@ type API struct {
 	// when a real *cedar.Engine is available; nil falls back to the
 	// cedarpolicy.NewAPI(nil) graceful-empty surface.
 	cedarPolicyAPI  cedarpolicyview.CedarPolicyAPI
+	// policyEditorEnabled mirrors the HARNESS_POLICY_EDITOR_UI env flag.
+	// Read once at boot; cached here so AppInfo can report it without
+	// an os.Getenv on every call (cedar-policy-editor-ui-01KQ8TD6 WP01).
+	policyEditorEnabled bool
 
 	// cedarProposeResolver is the in-process resolver for pending
 	// cedar:propose-pending requests (WP07 of
@@ -1104,7 +1112,12 @@ func New(c *core.Core) *API {
 				cedarEng = e2
 			}
 		}
-		a.cedarPolicyAPI = cedarpolicyview.NewAPIWithDataDir(cedarEng, cedarDataDir)
+		// Read HARNESS_POLICY_EDITOR_UI once at boot. Default = on ("").
+		// Set to "0" or "false" to disable editor write paths.
+		editorEnv := os.Getenv("HARNESS_POLICY_EDITOR_UI")
+		policyEditorEnabled := editorEnv != "0" && editorEnv != "false"
+		a.policyEditorEnabled = policyEditorEnabled
+		a.cedarPolicyAPI = cedarpolicyview.NewAPIWithOptions(cedarEng, cedarDataDir, nil, policyEditorEnabled)
 
 		// Permissions view — uses the process-singleton prompt registry
 		// constructed at api.New() time (right after the broker) so the
@@ -3845,13 +3858,18 @@ func buildLabel(c *core.Core) string {
 // AppInfo returns build metadata. Build comes from main.Version via
 // core.BuildVersion(); GoVersion and Platform come from runtime.
 func (a *API) AppInfo(_ context.Context) (AppInfo, error) {
+	policyEditorEnabled := true
+	if a != nil {
+		policyEditorEnabled = a.policyEditorEnabled
+	}
 	return AppInfo{
-		Build:      buildLabel(a.core),
-		Commit:     "unknown",
-		BuildTime:  "",
-		GoVersion:  runtime.Version(),
-		Platform:   runtime.GOOS + "/" + runtime.GOARCH,
-		WindowSize: WindowSize{Width: 1280, Height: 800},
+		Build:               buildLabel(a.core),
+		Commit:              "unknown",
+		BuildTime:           "",
+		GoVersion:           runtime.Version(),
+		Platform:            runtime.GOOS + "/" + runtime.GOARCH,
+		WindowSize:          WindowSize{Width: 1280, Height: 800},
+		PolicyEditorEnabled: policyEditorEnabled,
 	}, nil
 }
 

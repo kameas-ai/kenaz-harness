@@ -32,7 +32,8 @@
       "docs_url": "https://github.com/modelcontextprotocol/servers-archived/tree/main/src/filesystem",
       "init_timeout_ms": 5000,
       "ping_period_ms": 30000,
-      "sampling_policy": { "allowed": false, "default": false }
+      "sampling_policy": { "allowed": false, "default": false },
+      "recommended_policy_template": "filesystem-full-recommended.cedar"
     }
   ]
 }

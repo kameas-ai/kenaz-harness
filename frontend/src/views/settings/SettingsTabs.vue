@@ -59,6 +59,8 @@ const tabs: ReadonlyArray<Tab> = [
   { to: '/providers', label: 'Providers' },
   { to: '/bundles', label: 'Bundles' },
   { to: '/permissions/bash', label: 'Permissions', matchPrefix: '/permissions' },
+  // cedar-policy-editor-ui-01KQ8TD6 WP02 — Policy editor tab.
+  { to: '/policy', label: 'Policy', matchPrefix: '/policy' },
 ];
 
 const activePath = computed(() => route?.path ?? '');

@@ -514,6 +514,12 @@ export interface AppInfo {
   goVersion: string;
   platform: string;
   windowSize: WindowSize;
+  /**
+   * policyEditorEnabled is true when HARNESS_POLICY_EDITOR_UI != "0".
+   * Controls whether the /policy route registers and write-path RPCs are
+   * available (cedar-policy-editor-ui-01KQ8TD6 WP01).
+   */
+  policyEditorEnabled?: boolean;
 }
 
 export interface WindowSize {
@@ -2860,4 +2866,77 @@ export interface FeatureFlagInfo {
   description: string;
   /** Environment variable that controls this flag (e.g. HARNESS_USER_SLASHCMD). */
   envVar: string;
+}
+
+// ── Cedar policy types (cedar-policy-editor-ui-01KQ8TD6 WP02) ─────────────
+
+/**
+ * PolicyFile is the light-weight per-file parse-status record returned by
+ * ListPolicies. Source is not included (use GetPolicy to read source).
+ */
+export interface PolicyFile {
+  name: string;
+  path?: string;
+  bytes?: number;
+  embedded?: boolean;
+  parse_ok: boolean;
+  parse_err?: string;
+}
+
+/**
+ * PolicyDecision mirrors cedar.Decision through the RPC boundary.
+ * Used by the audit panel in the policy view.
+ */
+export interface PolicyDecision {
+  outcome: 'allow' | 'deny' | 'not_applicable' | 'unknown';
+  action: string;
+  principal: string;
+  resource: string;
+  matched_policy?: string;
+  reason?: string;
+  evaluated_at: string;
+}
+
+// ── Cedar policy editor types (cedar-policy-editor-ui-01KQ8TD6 WP02) ─────
+
+/**
+ * ParseError carries a single Cedar parse diagnostic with line and column.
+ * Line and Column are 1-based; zero means "not available".
+ */
+export interface ParseError {
+  line: number;
+  column: number;
+  message: string;
+}
+
+/**
+ * ParseResult is the outcome of a SavePolicy or ValidatePolicy call.
+ * ok is true when the source parsed cleanly; errors is non-empty only when ok is false.
+ */
+export interface ParseResult {
+  ok: boolean;
+  errors?: ParseError[];
+}
+
+/**
+ * PolicyFileDetail extends PolicyFile with the raw source text.
+ * Returned by GetPolicy; ListPolicies never includes source.
+ */
+export interface PolicyFileDetail {
+  /** Policy filename (e.g. "my-policy.cedar"). */
+  name: string;
+  /** Absolute path on disk; empty for embedded defaults. */
+  path?: string;
+  /** File size in bytes. */
+  bytes: number;
+  /** true for embedded defaults bundled with the harness binary. */
+  embedded?: boolean;
+  /** true when the Cedar source parsed without errors. */
+  parse_ok: boolean;
+  /** Parse error message; empty when parse_ok is true. */
+  parse_err?: string;
+  /** The raw Cedar source text. */
+  source: string;
+  /** true for embedded defaults that cannot be edited or deleted via the UI. */
+  read_only: boolean;
 }

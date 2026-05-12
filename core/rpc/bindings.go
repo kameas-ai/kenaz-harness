@@ -1714,6 +1714,41 @@ func (b *Bindings) CedarPolicy_ResolvePropose(requestID string, decision string)
 	return b.api.CedarProposeResolve(requestID, decision)
 }
 
+// ── cedarpolicy editor (cedar-policy-editor-ui-01KQ8TD6 WP01) ────────────
+
+// CedarPolicy_Get reads the source of a single policy file.
+// For embedded defaults, reads from the embedded FS and returns ReadOnly=true.
+// For on-disk user policies, reads from <DataDir>/policy/<name>.
+func (b *Bindings) CedarPolicy_Get(name string) (cedarpolicyview.PolicyFileDetail, error) {
+	return b.api.CedarPolicy().GetPolicy(b.ctx(), name)
+}
+
+// CedarPolicy_Save validates source via the Cedar parser and, on success,
+// atomically writes it to <DataDir>/policy/<name>. Returns ParseResult with
+// diagnostics; never writes when parse fails.
+func (b *Bindings) CedarPolicy_Save(name string, source string) (cedarpolicyview.ParseResult, error) {
+	return b.api.CedarPolicy().SavePolicy(b.ctx(), name, source)
+}
+
+// CedarPolicy_Delete removes <DataDir>/policy/<name>. Fails for protected
+// embedded defaults.
+func (b *Bindings) CedarPolicy_Delete(name string) error {
+	return b.api.CedarPolicy().DeletePolicy(b.ctx(), name)
+}
+
+// CedarPolicy_Validate parses source without touching disk. Used by the
+// editor's debounced live-validation indicator.
+func (b *Bindings) CedarPolicy_Validate(source string) (cedarpolicyview.ParseResult, error) {
+	return b.api.CedarPolicy().ValidatePolicy(b.ctx(), source)
+}
+
+// CedarPolicy_InstallTemplate copies a shipped Cedar template from the
+// embedded policies/ directory to <DataDir>/policy/<destName>.
+// Returns an error when the destination already exists.
+func (b *Bindings) CedarPolicy_InstallTemplate(templateName string, destName string) (cedarpolicyview.PolicyFileDetail, error) {
+	return b.api.CedarPolicy().InstallTemplate(b.ctx(), templateName, destName)
+}
+
 // ── search (cross-session-search mission) ─────────────────────────────
 
 // Search_Sessions executes a full-text search across all session
