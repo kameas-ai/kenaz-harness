@@ -123,7 +123,10 @@ jobs:
 
   test-frontend:
     name: Frontend tests + typecheck
-    runs-on: ubuntu-latest
+    # ubuntu-latest hosted runners are reserved for Apple / Microsoft
+    # platform builds (kameas-ai org policy). Linux CI runs on the
+    # kameas-ci-* self-hosted pool to keep us off the Actions billing cap.
+    runs-on: [self-hosted, Linux, ARM64, ci-medium]
     defaults:
       run:
         working-directory: frontend
@@ -170,8 +173,12 @@ jobs:
         continue-on-error: true
 
   build-smoke:
-    name: Smoke build (linux/amd64)
-    runs-on: ubuntu-latest
+    name: Smoke build (linux/arm64)
+    # Native ARM64 smoke on the self-hosted pool; the real cross-platform
+    # signed builds (linux/amd64, darwin, windows) happen in release.yml
+    # against tagged versions. This step exists only as a "does it
+    # compile + run wails doctor" gate, so ARM64 is sufficient signal.
+    runs-on: [self-hosted, Linux, ARM64, ci-medium]
     needs: [lint-go, test-go, test-frontend]
     steps:
       - uses: actions/checkout@v4
@@ -224,14 +231,17 @@ jobs:
           echo "Resolved smoke version: ${VERSION}"
 
       - name: wails build (skipbindings, no-package)
+        # Native build on the ARM64 self-hosted runner. The real cross-
+        # platform release matrix (darwin, windows, linux/amd64, linux/arm64)
+        # is produced by release.yml against signed tags.
         run: |
           wails build -nopackage -skipbindings -tags webkit2_41 \
-            -platform linux/amd64 \
+            -platform linux/arm64 \
             -ldflags "-X main.Version=${{ steps.ver.outputs.version }}"
 
       - name: artifact
         uses: actions/upload-artifact@v4
         with:
-          name: linux-amd64-smoke
+          name: linux-arm64-smoke
           path: build/bin/
           retention-days: 7
