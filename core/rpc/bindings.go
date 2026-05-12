@@ -1140,6 +1140,33 @@ func (b *Bindings) Memory_NarrativeMetricsForChunk(chunkID string) (memoryview.N
 	return b.api.Memory().NarrativeMetricsForChunk(b.ctx(), chunkID)
 }
 
+// ── Memory capstone (memory-inspection-ui-01KX5R8E) ───────────────────
+
+// Memory_LastRetrieval returns the most recent retrieval report for the
+// given session (§2.1 active-session retrieval inspector, FR-001).
+func (b *Bindings) Memory_LastRetrieval(sessionID string) (memoryview.RetrievalReport, error) {
+	return b.api.Memory().LastRetrieval(b.ctx(), sessionID)
+}
+
+// Memory_EmbeddingProbe embeds the given query and returns up to limit
+// scored chunks ranked by cosine similarity (§2.2 embedding inspector,
+// FR-003). limit is capped at 50 server-side.
+func (b *Bindings) Memory_EmbeddingProbe(query string, limit int) ([]memoryview.ScoredChunk, error) {
+	return b.api.Memory().EmbeddingProbe(b.ctx(), query, limit)
+}
+
+// Memory_ResummarizeChunk re-runs narrative synthesis on the chunk with
+// the given ID (§2.3, FR-004). Rate-limited to one call per chunk per 60s.
+func (b *Bindings) Memory_ResummarizeChunk(chunkID string) (memoryview.Chunk, error) {
+	return b.api.Memory().ResummarizeChunk(b.ctx(), chunkID)
+}
+
+// Memory_GetChunkProvenance returns the full audit chain for a chunk
+// (§2.6 provenance drawer, FR-007).
+func (b *Bindings) Memory_GetChunkProvenance(chunkID string) (memoryview.ChunkProvenance, error) {
+	return b.api.Memory().GetChunkProvenance(b.ctx(), chunkID)
+}
+
 // ── dials (Bundle E WP17) ──────────────────────────────────────────────
 
 func (b *Bindings) Dials_Get(key dialsview.ScopeKey) (dialsview.DialConfig, error) {

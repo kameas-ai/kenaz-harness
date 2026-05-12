@@ -1336,6 +1336,48 @@ export interface NarrativeMetrics {
 }
 
 /**
+ * ScoredChunk — one chunk ranked by cosine similarity against a query
+ * (memory-inspection-ui-01KX5R8E §2.1/§2.2).
+ */
+export interface ScoredChunk {
+  chunk: MemoryChunk;
+  similarity: number;
+  /** true when similarity >= the retriever's configured threshold (was injected). */
+  injected: boolean;
+}
+
+/**
+ * RetrievalReport — the most recent retrieval call for a session
+ * (memory-inspection-ui-01KX5R8E §2.1, FR-001).
+ */
+export interface RetrievalReport {
+  sessionId: string;
+  query: string;
+  results: ScoredChunk[];
+  threshold: number;
+  at: string; // RFC3339
+}
+
+/**
+ * ChunkProvenance — full audit chain for one chunk
+ * (memory-inspection-ui-01KX5R8E §2.6, FR-007).
+ */
+export interface ChunkProvenance {
+  chunkId: string;
+  sourceTurn?: string;
+  hookBoundary?: string;
+  kind?: string;
+  scopePath: string;
+  pinned: boolean;
+  retrievalCount: number;
+  citationCount: number;
+  promotionScore: number;
+  embedderKind?: string;
+  embedDimensions?: number;
+  createdAt: string; // RFC3339
+}
+
+/**
  * DialScope — the cascading-config layer keys.
  */
 export type DialScope =

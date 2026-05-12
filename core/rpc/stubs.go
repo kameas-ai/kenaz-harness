@@ -214,6 +214,21 @@ func (s *stubMemory) NarrativeMetricsForChunk(_ context.Context, _ string) (memo
 	return memoryview.NarrativeMetrics{}, nil
 }
 
+// ── memory capstone stubs (memory-inspection-ui-01KX5R8E) ─────────────
+
+func (s *stubMemory) LastRetrieval(_ context.Context, sessionID string) (memoryview.RetrievalReport, error) {
+	return memoryview.RetrievalReport{SessionID: sessionID}, nil
+}
+func (s *stubMemory) EmbeddingProbe(_ context.Context, _ string, _ int) ([]memoryview.ScoredChunk, error) {
+	return []memoryview.ScoredChunk{}, nil
+}
+func (s *stubMemory) ResummarizeChunk(_ context.Context, _ string) (memoryview.Chunk, error) {
+	return memoryview.Chunk{}, errNotWired
+}
+func (s *stubMemory) GetChunkProvenance(_ context.Context, _ string) (memoryview.ChunkProvenance, error) {
+	return memoryview.ChunkProvenance{}, errNotWired
+}
+
 // ── dials ──────────────────────────────────────────────────────────────
 
 type stubDials struct{}

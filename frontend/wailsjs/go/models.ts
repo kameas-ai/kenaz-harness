@@ -2878,6 +2878,114 @@ export namespace memory {
 		}
 	}
 
+	// ScoredChunk pairs a Chunk with its similarity score (memory-inspection-ui-01KX5R8E WP02/WP03).
+	export class ScoredChunk {
+	    chunk: Chunk;
+	    similarity: number;
+	    injected: boolean;
+
+	    static createFrom(source: any = {}) {
+	        return new ScoredChunk(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.chunk = this.convertValues(source["chunk"], Chunk);
+	        this.similarity = source["similarity"];
+	        this.injected = source["injected"];
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) { return a; }
+		    if (a.slice && a.map) { return (a as any[]).map(elem => this.convertValues(elem, classs)); }
+		    else if ("object" === typeof a) {
+		        if (asMap) { for (const key of Object.keys(a)) { a[key] = new classs(a[key]); } return a; }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+
+	// RetrievalReport is the §2.1 active-session retrieval inspector wire type.
+	export class RetrievalReport {
+	    sessionId: string;
+	    query: string;
+	    results: ScoredChunk[];
+	    threshold: number;
+	    // Go type: time
+	    at: any;
+
+	    static createFrom(source: any = {}) {
+	        return new RetrievalReport(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.sessionId = source["sessionId"];
+	        this.query = source["query"];
+	        this.results = this.convertValues(source["results"], ScoredChunk);
+	        this.threshold = source["threshold"];
+	        this.at = this.convertValues(source["at"], null);
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) { return a; }
+		    if (a.slice && a.map) { return (a as any[]).map(elem => this.convertValues(elem, classs)); }
+		    else if ("object" === typeof a) {
+		        if (asMap) { for (const key of Object.keys(a)) { a[key] = new classs(a[key]); } return a; }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+
+	// ChunkProvenance is the §2.6 provenance drawer wire type.
+	export class ChunkProvenance {
+	    chunkId: string;
+	    sourceTurn?: string;
+	    hookBoundary?: string;
+	    kind?: string;
+	    scopePath: string;
+	    pinned: boolean;
+	    retrievalCount: number;
+	    citationCount: number;
+	    promotionScore: number;
+	    embedderKind?: string;
+	    embedDimensions?: number;
+	    // Go type: time
+	    createdAt: any;
+
+	    static createFrom(source: any = {}) {
+	        return new ChunkProvenance(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.chunkId = source["chunkId"];
+	        this.sourceTurn = source["sourceTurn"];
+	        this.hookBoundary = source["hookBoundary"];
+	        this.kind = source["kind"];
+	        this.scopePath = source["scopePath"];
+	        this.pinned = source["pinned"];
+	        this.retrievalCount = source["retrievalCount"];
+	        this.citationCount = source["citationCount"];
+	        this.promotionScore = source["promotionScore"];
+	        this.embedderKind = source["embedderKind"];
+	        this.embedDimensions = source["embedDimensions"];
+	        this.createdAt = this.convertValues(source["createdAt"], null);
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) { return a; }
+		    if (a.slice && a.map) { return (a as any[]).map(elem => this.convertValues(elem, classs)); }
+		    else if ("object" === typeof a) {
+		        if (asMap) { for (const key of Object.keys(a)) { a[key] = new classs(a[key]); } return a; }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+
 }
 
 export namespace nodes {
