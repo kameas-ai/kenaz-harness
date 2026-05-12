@@ -711,6 +711,21 @@ func (branchExecutor) Execute(ctx context.Context, env *Env, node *Node, inputs 
 		ParentMessageIDs: append([]string(nil), a.MessageSubset...),
 	}
 
+	// v2 lifecycle hook: subagent_start (WP04, hooks-event-surface-expansion).
+	// Fire before Fork so hooks can inspect / block the spawn before it commits.
+	// The BranchID is not yet known; use an empty string.
+	if env.LifecycleHooks != nil {
+		saMerged, saErr := env.LifecycleHooks.FirePreToolUse(ctx, env.SessionID, "branch.fork",
+			nil, "", "")
+		if saErr == nil && saMerged.Blocked {
+			_ = res.Events.AppendKind(env.RunID, node.ID, EventHookDenied, map[string]any{
+				"reason": saMerged.BlockReason,
+				"at":     "subagent_start",
+			})
+			return res, fmt.Errorf("branch: node %q: blocked by subagent_start hook: %s", node.ID, saMerged.BlockReason)
+		}
+	}
+
 	handle, err := env.Branch.Fork(ctx, req)
 	if err != nil {
 		_ = res.Events.AppendKind(env.RunID, node.ID, EventNodeError, map[string]any{
