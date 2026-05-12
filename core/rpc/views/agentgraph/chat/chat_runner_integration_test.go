@@ -953,3 +953,231 @@ func TestChatRunnerIntegration_AutoTitle_ManualReTrigger(t *testing.T) {
 		t.Errorf("audit emissions = %d, want 2 (one per run)", len(got))
 	}
 }
+
+// ── WP06 (provider-keychain-rotation-01KQ8TD9) ──────────────────────────────
+//
+// The three scenarios below pin the auth-failure interception path against
+// the real chat_default.yaml:
+//
+//  1. authFailureThenRedrive — first Generate returns *ErrProviderAuthFailed;
+//     broker emits "provider:auth-failed" (NOT "llm:stream-closed");
+//     HasPausedSubFor returns true; RedriveLastTurn completes the second run.
+//
+//  2. featureFlagOff — same error but HARNESS_KEYCHAIN_ROTATION=off;
+//     asserts the stream closes with reason=backend-error (old behaviour).
+//
+//  3. redriveDedupe — RedriveLastTurn called twice; second call returns an
+//     error (no paused turn) but does NOT panic or corrupt runner state.
+
+// waitForAuthFailed polls the broker for a "provider:auth-failed" payload up
+// to 2s; returns the payload (or fails the test).
+func waitForAuthFailed(t *testing.T, broker *recordingBroker) AuthFailedPayload {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		for _, e := range broker.snapshot() {
+			if e.topic == "provider:auth-failed" {
+				return e.payload.(AuthFailedPayload)
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("did not see provider:auth-failed within 2s; events = %+v", broker.snapshot())
+	return AuthFailedPayload{}
+}
+
+// hasStreamClosed returns true iff the broker saw an llm:stream-closed event.
+func hasStreamClosed(broker *recordingBroker) bool {
+	for _, e := range broker.snapshot() {
+		if e.topic == "llm:stream-closed" {
+			return true
+		}
+	}
+	return false
+}
+
+// TestChatRunnerIntegration_KeyRotation_AuthFailureThenRedrive:
+//  1. LLM returns *ErrProviderAuthFailed on the first Generate call.
+//  2. ChatRunner pauses: broker emits "provider:auth-failed"; no
+//     "llm:stream-closed" yet; HasPausedSubFor returns true.
+//  3. RedriveLastTurn is called (simulating the rotation flow); the second
+//     LLM response completes successfully.
+//  4. "llm:stream-closed" is finally emitted with a non-error reason.
+func TestChatRunnerIntegration_KeyRotation_AuthFailureThenRedrive(t *testing.T) {
+	// t.Setenv must be called before t.Parallel per Go testing rules.
+	t.Setenv(envKeychainRotationVar, "on")
+
+	llm := &stubLLM{}
+	// First Generate: return *ErrProviderAuthFailed.
+	authErr := &corellm.ErrProviderAuthFailed{
+		Provider:  "anthropic",
+		ProfileID: "prof-1",
+		ModelID:   "claude-3-5-haiku",
+		Reason:    "invalid api key",
+		Cause:     &corellm.ErrAuth{Status: 401, Message: "invalid api key"},
+	}
+	llm.push(stubLLMResponse{err: authErr})
+	// Second Generate: successful text response.
+	llm.push(stubLLMResponse{
+		stream: []coreag.StreamEvent{
+			{Kind: coreag.StreamEventText, Text: "hello after rotation"},
+		},
+		resp: coreag.LLMResponse{
+			Content:      "hello after rotation",
+			FinishReason: "stop",
+		},
+	})
+
+	runner, broker, writer := buildIntegrationRunner(t, llm, newStubTools(), 25, []coreag.Message{
+		{Role: "user", Content: "hello"},
+	})
+
+	_, err := runner.StartStream(context.Background(), "prof-1", "session-1", "", "hello")
+	if err != nil {
+		t.Fatalf("StartStream: %v", err)
+	}
+
+	// Step 2: verify auth-failure broker event.
+	payload := waitForAuthFailed(t, broker)
+	if payload.ProfileID != "prof-1" {
+		t.Errorf("AuthFailedPayload.ProfileID = %q, want prof-1", payload.ProfileID)
+	}
+	if payload.Provider != "anthropic" {
+		t.Errorf("AuthFailedPayload.Provider = %q, want anthropic", payload.Provider)
+	}
+	// llm:stream-closed must NOT have been emitted at this point.
+	if hasStreamClosed(broker) {
+		t.Errorf("llm:stream-closed was emitted before redrive; broker = %+v", broker.snapshot())
+	}
+
+	// HasPausedSubFor returns the sub_id (chat-N) assigned to the original run.
+	token, ok := runner.HasPausedSubFor("prof-1")
+	if !ok {
+		t.Fatalf("HasPausedSubFor(prof-1) = false, want true after auth failure")
+	}
+	if token == "" {
+		t.Errorf("HasPausedSubFor token is empty, want a non-empty sub_id")
+	}
+
+	// Step 3: redrive (simulates caller invoking ResumeAfterKeyRotation
+	// after a successful TestAndRotateKey rotation).
+	newSubID, err := runner.RedriveLastTurn(context.Background(), "prof-1")
+	if err != nil {
+		t.Fatalf("RedriveLastTurn: %v", err)
+	}
+	if newSubID == "" {
+		t.Errorf("RedriveLastTurn returned empty subID")
+	}
+
+	// Step 4: the redrive should complete and emit llm:stream-closed.
+	closed := waitForClosed(t, broker)
+	if closed.Reason == "backend-error" {
+		t.Errorf("post-redrive Reason = backend-error, want non-error; msg=%q", closed.Message)
+	}
+
+	// Writer should have the assistant message from the second run.
+	writer.mu.Lock()
+	defer writer.mu.Unlock()
+	if len(writer.calls) < 1 {
+		t.Fatalf("writer has no calls; expected at least assistant message from redrive")
+	}
+	assistantCall := writer.calls[len(writer.calls)-1]
+	if assistantCall.role != "assistant" {
+		t.Errorf("last writer call role = %q, want assistant", assistantCall.role)
+	}
+	if !strings.Contains(assistantCall.content, "hello after rotation") {
+		t.Errorf("assistant content = %q, want to contain 'hello after rotation'", assistantCall.content)
+	}
+}
+
+// TestChatRunnerIntegration_KeyRotation_FeatureFlagOff: when
+// HARNESS_KEYCHAIN_ROTATION=off, *ErrProviderAuthFailed is treated as a
+// regular backend error — "llm:stream-closed" with reason=backend-error is
+// emitted immediately and no paused turn is stored.
+func TestChatRunnerIntegration_KeyRotation_FeatureFlagOff(t *testing.T) {
+	t.Setenv(envKeychainRotationVar, "off")
+
+	llm := &stubLLM{}
+	authErr := &corellm.ErrProviderAuthFailed{
+		Provider:  "openai",
+		ProfileID: "prof-2",
+		ModelID:   "gpt-4o",
+		Reason:    "invalid api key",
+		Cause:     &corellm.ErrAuth{Status: 401, Message: "invalid api key"},
+	}
+	llm.push(stubLLMResponse{err: authErr})
+
+	runner, broker, _ := buildIntegrationRunner(t, llm, newStubTools(), 25, []coreag.Message{
+		{Role: "user", Content: "hello flag-off"},
+	})
+
+	_, err := runner.StartStream(context.Background(), "prof-2", "session-2", "", "hello flag-off")
+	if err != nil {
+		t.Fatalf("StartStream: %v", err)
+	}
+
+	// With flag off: auth failure surfaces as regular backend-error close.
+	closed := waitForClosed(t, broker)
+	if closed.Reason != "backend-error" {
+		t.Errorf("Reason = %q, want backend-error when flag is off; msg=%q", closed.Reason, closed.Message)
+	}
+
+	// No paused turn stored.
+	if _, ok := runner.HasPausedSubFor("prof-2"); ok {
+		t.Errorf("HasPausedSubFor(prof-2) = true with flag off, want false")
+	}
+
+	// No "provider:auth-failed" broker event.
+	for _, e := range broker.snapshot() {
+		if e.topic == "provider:auth-failed" {
+			t.Errorf("unexpected provider:auth-failed event with flag off: %+v", e)
+		}
+	}
+}
+
+// TestChatRunnerIntegration_KeyRotation_RedriveDedupe: once a paused turn is
+// consumed by RedriveLastTurn, a second call returns an error and leaves the
+// runner in a consistent state.
+func TestChatRunnerIntegration_KeyRotation_RedriveDedupe(t *testing.T) {
+	t.Setenv(envKeychainRotationVar, "on")
+
+	llm := &stubLLM{}
+	authErr := &corellm.ErrProviderAuthFailed{
+		Provider:  "openrouter",
+		ProfileID: "prof-3",
+		ModelID:   "mistral",
+		Reason:    "invalid api key",
+		Cause:     &corellm.ErrAuth{Status: 401, Message: "invalid api key"},
+	}
+	llm.push(stubLLMResponse{err: authErr})
+	// Second run: successful (consumed by first redrive).
+	llm.push(stubLLMResponse{
+		stream: []coreag.StreamEvent{
+			{Kind: coreag.StreamEventText, Text: "done"},
+		},
+		resp: coreag.LLMResponse{Content: "done", FinishReason: "stop"},
+	})
+
+	runner, broker, _ := buildIntegrationRunner(t, llm, newStubTools(), 25, []coreag.Message{
+		{Role: "user", Content: "dedupe test"},
+	})
+
+	_, err := runner.StartStream(context.Background(), "prof-3", "session-3", "", "dedupe test")
+	if err != nil {
+		t.Fatalf("StartStream: %v", err)
+	}
+	waitForAuthFailed(t, broker)
+
+	// First redrive: should succeed.
+	_, err = runner.RedriveLastTurn(context.Background(), "prof-3")
+	if err != nil {
+		t.Fatalf("first RedriveLastTurn: %v", err)
+	}
+	waitForClosed(t, broker)
+
+	// Second redrive: paused turn was consumed; should return error but not panic.
+	_, err = runner.RedriveLastTurn(context.Background(), "prof-3")
+	if err == nil {
+		t.Errorf("second RedriveLastTurn: expected error (no paused turn), got nil")
+	}
+}
