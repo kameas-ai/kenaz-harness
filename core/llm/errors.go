@@ -255,6 +255,47 @@ func (e *ErrAttachmentDimensionExceeded) Friendly() string {
 		float64(e.Given)/1_000_000, e.Provider, float64(e.Cap)/1_000_000)
 }
 
+// ErrUnsupportedFormat is returned when the caller requests a ResponseFormat
+// mode that the (provider, model) does not support AND no fallback is possible.
+// Specifically: Mode="grammar" when CapGrammar is false — grammar cannot be
+// emulated via prompt engineering (structured-output-and-grammar-01KX5R8A FR-005).
+type ErrUnsupportedFormat struct {
+	Provider string
+	Model    string
+	Mode     string
+}
+
+func (e *ErrUnsupportedFormat) Error() string {
+	return fmt.Sprintf("llm: response format %q not supported by provider %q model %q",
+		e.Mode, e.Provider, e.Model)
+}
+
+// IsUnsupportedFormat reports whether err is or wraps ErrUnsupportedFormat.
+func IsUnsupportedFormat(err error) bool {
+	if err == nil {
+		return false
+	}
+	var t *ErrUnsupportedFormat
+	return errors.As(err, &t)
+}
+
+// ErrResponseValidationFailed is returned when the model's output failed
+// schema validation after all retries (structured-output-and-grammar-01KX5R8A FR-006).
+// The caller may inspect SchemaError for the validation message and Raw for
+// the first 500 characters of the invalid response for debugging.
+type ErrResponseValidationFailed struct {
+	Mode        string // "json" | "json_schema" | "grammar"
+	SchemaError string // human-readable validation error
+	Raw         string // first 500 chars of the invalid response (for debugging)
+}
+
+func (e *ErrResponseValidationFailed) Error() string {
+	if e.SchemaError != "" {
+		return fmt.Sprintf("llm: response validation failed (mode=%s): %s", e.Mode, e.SchemaError)
+	}
+	return fmt.Sprintf("llm: response validation failed (mode=%s)", e.Mode)
+}
+
 // ErrAttachmentEncrypted is returned when a PDF is password-protected and
 // cannot be parsed for page-count validation.
 type ErrAttachmentEncrypted struct{}

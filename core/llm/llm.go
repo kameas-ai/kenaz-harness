@@ -16,15 +16,28 @@ import (
 type Capability string
 
 const (
-	CapStreaming      Capability = "streaming"
-	CapToolCalling    Capability = "tool_calling"
-	CapVision         Capability = "vision"
-	CapDocuments      Capability = "documents"
-	CapJSONMode       Capability = "json_mode"
-	CapPromptCaching  Capability = "prompt_caching"
-	CapReasoning      Capability = "reasoning"
-	CapCancellation   Capability = "cancellation"
-	CapUsageReporting Capability = "usage_reporting"
+	CapStreaming        Capability = "streaming"
+	CapToolCalling      Capability = "tool_calling"
+	CapVision           Capability = "vision"
+	CapDocuments        Capability = "documents"
+	CapJSONMode         Capability = "json_mode"
+	CapPromptCaching    Capability = "prompt_caching"
+	CapReasoning        Capability = "reasoning"
+	CapCancellation     Capability = "cancellation"
+	CapUsageReporting   Capability = "usage_reporting"
+	// CapStructuredOutput reports that the model/provider natively supports
+	// JSON-schema-constrained output (response_format or tool-call workaround
+	// with validated extraction). When false, Mode="json_schema" falls back
+	// to json_mode + post-hoc validation. (structured-output-and-grammar-01KX5R8A FR-002)
+	CapStructuredOutput Capability = "structured_output"
+	// CapGrammar reports that the model/runtime supports token-level GBNF
+	// grammar constraints. Cloud providers return false; local runtimes
+	// (llama.cpp via Ollama) return true. Mode="grammar" returns
+	// ErrUnsupportedFormat when this is false. (structured-output-and-grammar-01KX5R8A FR-005)
+	CapGrammar          Capability = "grammar"
+	// CapRegexGrammar reports that the model/runtime supports regex-shorthand
+	// grammar constraints (subset of full GBNF). (structured-output-and-grammar-01KX5R8A FR-002)
+	CapRegexGrammar     Capability = "regex_grammar"
 )
 
 // AllCapabilities is the canonical ordered list (used for tests / docs).
@@ -32,6 +45,7 @@ func AllCapabilities() []Capability {
 	return []Capability{
 		CapStreaming, CapToolCalling, CapVision, CapDocuments, CapJSONMode,
 		CapPromptCaching, CapReasoning, CapCancellation, CapUsageReporting,
+		CapStructuredOutput, CapGrammar, CapRegexGrammar,
 	}
 }
 
@@ -262,6 +276,55 @@ type Attachment struct {
 	AltText  string `json:"alt_text,omitempty"`
 }
 
+// ResponseFormat constrains the model's output. Three modes:
+//
+//   - nil             — free-form text (today's behavior, FR-001)
+//   - Mode="json"     — guarantee parseable JSON, no schema
+//   - Mode="json_schema" — guarantee parseable JSON conforming to Schema
+//   - Mode="grammar"  — token-level GBNF grammar constraint (local runtimes only)
+//
+// The adapter chooses the strongest backing it supports via the cascade
+// documented in spec §2.1:
+//
+//   Mode=json_schema + CapStructuredOutput  → native schema pass-through
+//   Mode=json_schema + CapJSONMode only     → JSON mode + post-hoc validate
+//   Mode=json_schema + neither              → prompt-engineering + post-hoc validate
+//   Mode=grammar     + CapGrammar           → native grammar
+//   Mode=grammar     + !CapGrammar          → ErrUnsupportedFormat (no emulation)
+//
+// Callers never reason about the cascade; they receive either a valid
+// response or a typed error (structured-output-and-grammar-01KX5R8A §2.1).
+type ResponseFormat struct {
+	// Mode is one of "json" | "json_schema" | "grammar".
+	Mode string `json:"mode"`
+	// Schema is the JSON Schema bytes. Populated when Mode == "json_schema".
+	// The schema is validated by the adapter before the wire call. Nil is
+	// treated as an open schema (any JSON object is valid).
+	Schema json.RawMessage `json:"schema,omitempty"`
+	// Grammar is the GBNF grammar bytes. Populated when Mode == "grammar".
+	// Only honoured when the (provider, model) advertises CapGrammar.
+	Grammar []byte `json:"grammar,omitempty"`
+	// StrictValidation, when true, fails the call immediately with
+	// ErrResponseValidationFailed if the response doesn't match the schema.
+	// When false (default), validation failure triggers ONE auto-retry with a
+	// corrective tail-prompt; second failure returns ErrResponseValidationFailed
+	// with the raw response. Env var HARNESS_RESPONSE_FORMAT_NO_RETRY=1 suppresses
+	// retries globally.
+	StrictValidation bool `json:"strict_validation,omitempty"`
+}
+
+// StructuredOutputAdapter is the optional interface adapters implement when
+// they support ResponseFormat natively. Adapters that do not implement this
+// interface fall through to the prompt-engineering + post-hoc validation path.
+//
+// ApplyResponseFormat mutates wireBody in place to add provider-specific
+// structured-output fields. It must return ErrUnsupportedFormat when the
+// requested mode cannot be served (e.g. grammar on a cloud provider).
+// (structured-output-and-grammar-01KX5R8A §2.4)
+type StructuredOutputAdapter interface {
+	ApplyResponseFormat(req *GenerationRequest, wireBody map[string]any) error
+}
+
 // JSONModeSpec opts into structured-output mode (FR-008).
 type JSONModeSpec struct {
 	Enabled bool            `json:"enabled"`
@@ -290,17 +353,21 @@ type GenerationRequest struct {
 	// When set and present in profile.AvailableModels(), the registry
 	// substitutes prof.Model = req.Model before dispatching to the
 	// adapter. Empty means "use the profile default."
-	Model         string         `json:"model,omitempty"`
-	System        string         `json:"system,omitempty"`
-	Messages      []Message      `json:"messages"`
-	Tools         []ToolSpec     `json:"tools,omitempty"`
-	Attachments   []Attachment   `json:"attachments,omitempty"`
-	JSONMode      *JSONModeSpec  `json:"json_mode,omitempty"`
-	Caching       *CachingSpec   `json:"caching,omitempty"`
-	Reasoning     *ReasoningSpec `json:"reasoning,omitempty"`
-	Params        map[string]any `json:"params,omitempty"`
-	RetryOverride *RetryPolicy   `json:"retry_override,omitempty"`
-	SessionID     string         `json:"session_id,omitempty"`
+	Model         string          `json:"model,omitempty"`
+	System        string          `json:"system,omitempty"`
+	Messages      []Message       `json:"messages"`
+	Tools         []ToolSpec      `json:"tools,omitempty"`
+	Attachments   []Attachment    `json:"attachments,omitempty"`
+	JSONMode      *JSONModeSpec   `json:"json_mode,omitempty"`
+	Caching       *CachingSpec    `json:"caching,omitempty"`
+	Reasoning     *ReasoningSpec  `json:"reasoning,omitempty"`
+	// ResponseFormat constrains the model's output to a JSON schema or GBNF
+	// grammar. Nil means free-form text (today's behavior unchanged).
+	// (structured-output-and-grammar-01KX5R8A FR-001)
+	ResponseFormat *ResponseFormat `json:"response_format,omitempty"`
+	Params         map[string]any  `json:"params,omitempty"`
+	RetryOverride  *RetryPolicy    `json:"retry_override,omitempty"`
+	SessionID      string          `json:"session_id,omitempty"`
 }
 
 // RequestedCapabilities returns the set of capabilities this request
@@ -322,6 +389,19 @@ func (r GenerationRequest) RequestedCapabilities() []Capability {
 	}
 	if r.Reasoning != nil && r.Reasoning.Enabled {
 		caps = append(caps, CapReasoning)
+	}
+	// ResponseFormat capability gating (structured-output-and-grammar-01KX5R8A FR-002).
+	// Mode="json_schema" requests CapStructuredOutput so the gate can
+	// distinguish native support from the JSON-mode fallback path.
+	// Mode="grammar" requests CapGrammar so the gate returns ErrUnsupportedFormat
+	// for cloud providers that cannot emulate token-level constraints.
+	if r.ResponseFormat != nil {
+		switch r.ResponseFormat.Mode {
+		case "json_schema":
+			caps = append(caps, CapStructuredOutput)
+		case "grammar":
+			caps = append(caps, CapGrammar)
+		}
 	}
 	return caps
 }
