@@ -134,6 +134,18 @@ const (
 	// ID so policy authors can write targeted rules for passive tools
 	// without affecting the broader use_tool gate.
 	ActionPassive = "tool.passive"
+
+	// ── Skill-invocation action family ────────────────────────────────────
+	// Introduced by mission model-invoked-skills-catalog-01KZNP3E.
+	// The "tool.skill" family follows the established "<domain>.<operation>"
+	// naming convention. Resource UIDs take the form Skill::"<command-name>"
+	// so policy authors can permit or forbid individual skills independently
+	// of the broader tool surface.
+	//
+	//   ActionToolSkillInvoke — gates kaneaz__skill calls (model invokes a
+	//     user-defined slash command marked model_invokable=true).
+	//     Resource UID: Skill::"<command-name>".
+	ActionToolSkillInvoke = "tool.skill.invoke"
 )
 
 // Entity-type names mirror spec §4.10's recommended mapping:
@@ -190,6 +202,12 @@ const (
 	// the shape Elicitation::"<kind>" where kind is one of the seven
 	// question kinds: radio, checkbox, text, number, slider, date, file.
 	EntityTypeElicitation = "Elicitation"
+
+	// EntityTypeSkill is the Cedar entity type for model-invokable user
+	// skills. Introduced by mission model-invoked-skills-catalog-01KZNP3E.
+	// Resource UIDs take the shape Skill::"<command-name>" where command-name
+	// is the bare slash command token (e.g. "summarize", "daily-standup").
+	EntityTypeSkill = "Skill"
 
 	// PrincipalLocal is the canonical EntityUID id for the single
 	// local user. The harness is single-user / privacy-first
@@ -464,4 +482,19 @@ func ElicitationUID(kind string) cedar.EntityUID {
 		safeID = invalidUIDID
 	}
 	return cedar.NewEntityUID(EntityTypeElicitation, cedar.String(safeID))
+}
+
+// SkillUID builds a Cedar EntityUID for the Skill family introduced by
+// mission model-invoked-skills-catalog-01KZNP3E. name is the bare command
+// name (the token after the slash, e.g. "summarize", "daily-standup").
+// Malformed names (empty / control characters / leading "..") are replaced
+// with the literal "invalid" so the resulting UID type-matches in
+// `resource is Skill` clauses but never satisfies any real permit — a typo
+// therefore never silently authorises a skill invocation.
+func SkillUID(name string) cedar.EntityUID {
+	safeID := name
+	if !validateFamilyID(name) {
+		safeID = invalidUIDID
+	}
+	return cedar.NewEntityUID(EntityTypeSkill, cedar.String(safeID))
 }

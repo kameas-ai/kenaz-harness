@@ -17,17 +17,19 @@ import (
 	elicitview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/elicit"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/settings"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/tools"
+	coreslashcmd "github.com/sigil-tech/kaneaz-harness/core/slashcmd"
+	"github.com/sigil-tech/kaneaz-harness/core/toolloop"
 	corebash "github.com/sigil-tech/kaneaz-harness/core/tools/bash"
 	corefs "github.com/sigil-tech/kaneaz-harness/core/tools/fs"
 	corefsbuiltins "github.com/sigil-tech/kaneaz-harness/core/tools/fsbuiltins"
 	corefsrequest "github.com/sigil-tech/kaneaz-harness/core/tools/fsrequest"
 	coresaveartifact "github.com/sigil-tech/kaneaz-harness/core/tools/saveartifact"
+	coreskilltool "github.com/sigil-tech/kaneaz-harness/core/tools/skill"
 	coresleep "github.com/sigil-tech/kaneaz-harness/core/tools/sleep"
 	coretodo "github.com/sigil-tech/kaneaz-harness/core/tools/todo"
 	coreupdateartifact "github.com/sigil-tech/kaneaz-harness/core/tools/updateartifact"
 	corewebsearch "github.com/sigil-tech/kaneaz-harness/core/tools/websearch"
 	coreaskuser "github.com/sigil-tech/kaneaz-harness/core/tools/askuserquestion"
-	"github.com/sigil-tech/kaneaz-harness/core/toolloop"
 )
 
 // GlobalFSReadSet is the process-global ReadSet shared across all sessions.
@@ -70,6 +72,7 @@ func registerBuiltinTools(
 	cedarEngine *cedar.Engine,
 	promptRegistry *cedar.Registry,
 	elicitAPI *elicitview.API,
+	slashDispatch *coreslashcmd.Dispatch,
 ) {
 	if registry == nil {
 		return
@@ -189,6 +192,20 @@ func registerBuiltinTools(
 	logging.L().Info("rpc.builtins.register",
 		"tool", askTool.Name(),
 		"delegate_wired", askDelegate != nil,
+	)
+
+	// kaneaz__skill: model-invoked skill dispatcher (model-invoked-skills-catalog-01KZNP3E WP02).
+	// Default-on: invoking a user-authored skill is low-risk and expected behaviour.
+	// The tool is nil-safe: when slashDispatch is nil (test harness path, no
+	// real Core) it returns a friendly "not configured" error rather than
+	// panicking — so we always register it.
+	skillTool := coreskilltool.New(coreskilltool.Options{
+		Dispatch: slashDispatch,
+	})
+	registry.Register(skillTool)
+	logging.L().Info("rpc.builtins.register",
+		"tool", skillTool.Name(),
+		"dispatch_wired", slashDispatch != nil,
 	)
 }
 
@@ -485,6 +502,14 @@ func builtinEnabledPredicate(s *settings.API) func(string) bool {
 		// Sleep is always-on: it has no side effects and must remain available
 		// for __monitor watch patterns regardless of Settings dials.
 		case coresleep.ToolName:
+			logging.L().Info("rpc.builtins.predicate", "tool", name, "enabled", true)
+			return true
+
+		// ── Skill tool (model-invoked-skills-catalog-01KZNP3E) ──
+		// Default ON: invoking a user-authored skill is expected behaviour.
+		// The tool is registered unconditionally; the dispatch layer enforces
+		// model_invokable=true at resolution time so only eligible commands run.
+		case coreskilltool.ToolName:
 			logging.L().Info("rpc.builtins.predicate", "tool", name, "enabled", true)
 			return true
 		}

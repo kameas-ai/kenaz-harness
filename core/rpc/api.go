@@ -90,6 +90,7 @@ import (
 	"github.com/sigil-tech/kaneaz-harness/core/secrets"
 	coreslashcmd "github.com/sigil-tech/kaneaz-harness/core/slashcmd"
 	corebash "github.com/sigil-tech/kaneaz-harness/core/tools/bash"
+	coreskill "github.com/sigil-tech/kaneaz-harness/core/tools/skill"
 	secretsref "github.com/sigil-tech/kaneaz-harness/core/secrets/ref"
 	"github.com/sigil-tech/kaneaz-harness/core/session"
 	"github.com/sigil-tech/kaneaz-harness/core/storage"
@@ -681,7 +682,36 @@ func New(c *core.Core) *API {
 		return v
 	}
 	retriever := corememory.NewRetriever(memStore, embedder, memoryEnabled, 0.7)
+
+	// model-invoked-skills-catalog-01KZNP3E + user-slash-commands-01KQ8TD9:
+	// user command Store + Dispatch are constructed early so they can be
+	// passed to both newHooksStack (skill catalog hook) and newLLMStack
+	// (__skill tool registration). Gated by HARNESS_USER_SLASHCMD
+	// (default on, slash-commands WP09).
+	var slashStore *coreslashcmd.Store
+	var slashDispatch *coreslashcmd.Dispatch
+	if c != nil && c.Storage() != nil && c.DataDir() != "" && coreslashcmd.UserSlashcmdEnabled() {
+		slashStore = coreslashcmd.NewStore(c.Storage(), c.DataDir())
+		slashDispatch = coreslashcmd.NewDispatch(slashStore, nil)
+
+		// Install bundled skill templates on first launch (idempotent).
+		// Best-effort: a failure here never prevents the chassis from booting.
+		go func() {
+			if err := coreskill.InstallBundledSkills(context.Background(), slashStore); err != nil {
+				logging.L().Warn("slashcmd.bundled_skills.install_failed", "err", err.Error())
+			}
+		}()
+	}
+
 	hooksRunner, hookRegistry, hookBuiltins := newHooksStack(c, retriever, memStore, embedder)
+	// Register skill-catalog pre_send hook so the model sees the
+	// model-invokable commands at send time (model-invoked-skills-catalog-01KZNP3E WP03).
+	if hookBuiltins != nil && slashStore != nil {
+		hooks.RegisterSkillCatalogBuiltin(hookBuiltins, hooks.SkillCatalogDeps{
+			Store: slashStore,
+		})
+	}
+
 	confirmEachEnabled := func() bool {
 		if settingsImpl == nil || settingsImpl.Store() == nil {
 			return true
@@ -756,7 +786,7 @@ func New(c *core.Core) *API {
 	a.corpusMgr = newCorpusManager(c, embedder)
 	a.graphMgr = newGraphManagerWithDeps(c, a.convMgr, a.corpusMgr, memStore, embedder, a_bashStore)
 
-	stack := newLLMStack(c, a.broker, personalForLLM, hooksRunner, attMgr, confirmEachEnabled, artifactSink, artifactSinkConcrete, settingsImpl, a_bashStore, artMgr, a.graphMgr, a.promptRegistry, usageMgr, a.elicitAPI)
+	stack := newLLMStack(c, a.broker, personalForLLM, hooksRunner, attMgr, confirmEachEnabled, artifactSink, artifactSinkConcrete, settingsImpl, a_bashStore, artMgr, a.graphMgr, a.promptRegistry, usageMgr, a.elicitAPI, slashDispatch)
 	a.llmAPI = stack.api
 	a.stdioPool = stack.pool
 	a.builtins = stack.builtins
@@ -994,16 +1024,14 @@ func New(c *core.Core) *API {
 	// chassis still boots and Execute returns a friendly "not wired"
 	// error per command.
 	//
-	// User-defined slash commands (mission user-slash-commands-01KQ8TD9)
-	// require a Store (DB + dataDir-backed) and a Dispatch. Wired only
-	// when a real Core is available; the test-chassis path falls back to
-	// the registry-only API which returns "not wired" for user commands.
-	// Gated by HARNESS_USER_SLASHCMD (default on, WP09).
+	// slashStore + slashDispatch are constructed earlier (before newHooksStack)
+	// so the skill-catalog builtin hook is already registered on hookBuiltins.
+	// When either is nil (test-chassis path or HARNESS_USER_SLASHCMD=false),
+	// the view degrades to the registry-only API which returns "not wired"
+	// for user commands.
 	{
 		slashRegistry := newSlashRegistry(c, a.llmAPI, memStore, embedder, a.branchesAPI, a.workflowsAPI)
-		if c != nil && c.Storage() != nil && c.DataDir() != "" && coreslashcmd.UserSlashcmdEnabled() {
-			slashStore := coreslashcmd.NewStore(c.Storage(), c.DataDir())
-			slashDispatch := coreslashcmd.NewDispatch(slashStore, nil)
+		if slashStore != nil && slashDispatch != nil {
 			a.slashAPI = slashview.NewWithStore(slashRegistry, slashStore, slashDispatch)
 			logging.L().Info("rpc.slashcmd.user_wired",
 				"data_dir", c.DataDir())
@@ -1994,6 +2022,7 @@ func newLLMStack(
 	promptRegistry *cedar.Registry,
 	usageMgr usage.Manager,
 	elicitAPI *elicitview.API,
+	slashDispatch *coreslashcmd.Dispatch,
 ) llmStack {
 	// Share ONE secrets backend between the credref resolver (which
 	// reads keys when streaming) and the keychain writer (which stages
@@ -2106,7 +2135,7 @@ func newLLMStack(
 	if dataDir != "" {
 		bashCedarEngine = buildCedarEngineOrNil(dataDir)
 	}
-	registerBuiltinTools(c, builtinRegistry, bashStore, artifactsMgr, settingsStore, bashCedarEngine, promptRegistry, elicitAPI)
+	registerBuiltinTools(c, builtinRegistry, bashStore, artifactsMgr, settingsStore, bashCedarEngine, promptRegistry, elicitAPI, slashDispatch)
 	// builtin-filesystem-tools-01KR3N4P: register the read/write family of
 	// in-process filesystem tools. Gated behind per-family settings dials
 	// (FSReadEnabled / FSWriteEnabled) so the Tools panel toggles take effect
