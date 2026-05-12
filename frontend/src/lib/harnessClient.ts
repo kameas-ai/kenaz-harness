@@ -354,6 +354,11 @@ interface WailsBindingsLike {
   // todo_write tool dial (builtin-tools-search-and-elicitation-01KZNP3D)
   Settings_GetTodoEnabled(): Promise<boolean>;
   Settings_SetTodoEnabled(enabled: boolean): Promise<void>;
+  // MCP auto-restart dial. Wails-binding pair existed on the Go side
+  // (core/rpc/bindings.go) and in wailsjs/go/rpc/Bindings.{d.ts,js} but
+  // was never declared on this interface — type-safety hole until v0.8.x.
+  Settings_GetMCPAutoRestart(): Promise<boolean>;
+  Settings_SetMCPAutoRestart(enabled: boolean): Promise<void>;
   /** Returns the full keyboard shortcut overrides map. */
   Settings_GetShortcuts(): Promise<Record<string, string>>;
   /** Persist a single shortcut override. Empty binding clears the override. */
