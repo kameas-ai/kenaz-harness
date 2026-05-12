@@ -182,6 +182,15 @@ const (
 	// KindPolicyTemplateInstalled fires when InstallTemplate copies a shipped
 	// Cedar template to the user's policy directory. Payload: PolicyTemplateInstalledPayload.
 	KindPolicyTemplateInstalled Kind = "policy.template_installed"
+
+	// KindProviderKeyRotated fires when a provider API key is successfully
+	// rotated via TestAndRotateKey. The payload is ProviderKeyRotatedPayload.
+	//
+	// Privacy invariant: the payload MUST NOT carry key material, key length,
+	// or key prefix. Only the four fields enumerated in ProviderKeyRotatedPayload
+	// are permitted.
+	// (provider-keychain-rotation-01KQ8TD9 WP04)
+	KindProviderKeyRotated Kind = "provider.key_rotated"
 )
 
 // Event is the wire shape passed to the event log. The concrete event-log
@@ -646,6 +655,18 @@ type PolicyTemplateInstalledPayload struct {
 	Dest string `json:"dest"`
 	// Bytes is the number of bytes written.
 	Bytes int `json:"bytes"`
+}
+
+// ProviderKeyRotatedPayload carries the signalling for KindProviderKeyRotated.
+//
+// Privacy invariant: EXACTLY these four fields and no others. No key
+// material, key length, key prefix, or redacted key view may appear.
+// (provider-keychain-rotation-01KQ8TD9 WP04)
+type ProviderKeyRotatedPayload struct {
+	Provider  string    `json:"provider"`   // adapter kind ("anthropic", "openai", …)
+	ProfileID string    `json:"profile_id"` // the profile whose key was rotated
+	RotatedAt time.Time `json:"rotated_at"` // wall clock at rotation success
+	Source    string    `json:"source"`     // "manual" | "inline-toast"
 }
 
 // Emit is a small convenience wrapper for callers that have a payload

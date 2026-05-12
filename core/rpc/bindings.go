@@ -296,6 +296,23 @@ func (b *Bindings) LLM_GetAttachmentLimits(provider, model string) (llm.Attachme
 	return b.api.LLMConnector().GetAttachmentLimits(b.ctx(), provider, model)
 }
 
+// LLM_TestAndRotateKey validates plaintextApiKey against the provider's
+// /models endpoint and, on success, writes it to the keychain and emits
+// a KindProviderKeyRotated audit event. source should be "inline-toast"
+// or "manual". The plaintext is consumed and zeroed before returning.
+// (provider-keychain-rotation-01KQ8TD9 WP04)
+func (b *Bindings) LLM_TestAndRotateKey(profileID, plaintextApiKey, source string) (llm.RotationResult, error) {
+	return b.api.LLMConnector().TestAndRotateKey(b.ctx(), profileID, plaintextApiKey, source)
+}
+
+// LLM_ResumeAfterKeyRotation drives a fresh kernel run for the paused
+// chat turn identified by resumeToken (the profileID returned by
+// TestAndRotateKey). Safe to call when no paused turn exists.
+// (provider-keychain-rotation-01KQ8TD9 WP04)
+func (b *Bindings) LLM_ResumeAfterKeyRotation(resumeToken string) error {
+	return b.api.LLMConnector().ResumeAfterKeyRotation(b.ctx(), resumeToken)
+}
+
 // ── mcp ────────────────────────────────────────────────────────────────
 
 func (b *Bindings) MCP_ListServers() ([]mcp.Server, error) {

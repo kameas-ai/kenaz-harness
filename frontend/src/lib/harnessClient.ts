@@ -136,6 +136,7 @@ import type {
   NarrativeJobStatus,
   NarrativeMetrics,
   AttachmentLimitsView,
+  RotationResult,
 } from './types';
 
 /**
@@ -260,6 +261,12 @@ interface WailsBindingsLike {
     provider: string,
     model: string,
   ): Promise<AttachmentLimitsView>;
+  LLM_TestAndRotateKey(
+    profileID: string,
+    plaintextApiKey: string,
+    source: string,
+  ): Promise<RotationResult>;
+  LLM_ResumeAfterKeyRotation(resumeToken: string): Promise<void>;
 
   MCP_ListServers(): Promise<MCPServer[]>;
   MCP_StartStream(id: string): Promise<string>;
@@ -1113,6 +1120,26 @@ export interface LLMConnectorClient {
     provider: string,
     model: string,
   ): Promise<AttachmentLimitsView>;
+  /**
+   * testAndRotateKey — validates plaintextApiKey against the provider's
+   * /models endpoint and, on success, overwrites the keychain entry and
+   * emits a KindProviderKeyRotated audit event. The plaintext is consumed
+   * and zeroed server-side before returning.
+   * source should be "inline-toast" or "manual".
+   * (provider-keychain-rotation-01KQ8TD9 WP04)
+   */
+  testAndRotateKey(
+    profileID: string,
+    plaintextApiKey: string,
+    source: string,
+  ): Promise<RotationResult>;
+  /**
+   * resumeAfterKeyRotation — drives a fresh kernel run for the paused
+   * chat turn identified by resumeToken (the profileID from RotationResult).
+   * No-op when no paused turn exists.
+   * (provider-keychain-rotation-01KQ8TD9 WP04)
+   */
+  resumeAfterKeyRotation(resumeToken: string): Promise<void>;
 }
 
 export interface MCPClient {
@@ -2381,6 +2408,10 @@ export function createHarnessClient(): HarnessClient {
         b().LLM_ResolveConfirm(requestID, decision),
       getAttachmentLimits: (provider, model) =>
         b().LLM_GetAttachmentLimits(provider, model),
+      testAndRotateKey: (profileID, plaintextApiKey, source) =>
+        b().LLM_TestAndRotateKey(profileID, plaintextApiKey, source),
+      resumeAfterKeyRotation: (resumeToken) =>
+        b().LLM_ResumeAfterKeyRotation(resumeToken),
     },
     mcp: {
       listServers: () => b().MCP_ListServers(),
@@ -2897,6 +2928,12 @@ export function createFakeHarnessClient(
         maxImagePixels: 0,
         maxDocumentPages: 0,
       }),
+      testAndRotateKey: async (_profileID, _key, _source) => ({
+        success: true,
+        latency_ms: 1,
+        tested_at: new Date().toISOString(),
+      }),
+      resumeAfterKeyRotation: noop,
     },
     mcp: {
       listServers: async () => [],

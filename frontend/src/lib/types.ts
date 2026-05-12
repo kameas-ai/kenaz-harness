@@ -1051,6 +1051,20 @@ export interface AttachmentLimitsView {
 }
 
 /**
+ * RotationResult — outcome of LLM_TestAndRotateKey.
+ * Mirrors core/rpc/views/llm.RotationResult.
+ * (provider-keychain-rotation-01KQ8TD9 WP04)
+ */
+export interface RotationResult {
+  success: boolean;
+  message?: string;
+  latency_ms: number;
+  tested_at: string; // ISO-8601 timestamp
+  /** Non-empty when a paused chat turn exists for this profile. */
+  auto_resume_token?: string;
+}
+
+/**
  * ContentBlock — one polymorphic fragment of a multimodal message.
  * Mirrors core/llm.ContentBlock. The wire shape uses the Go-side
  * snake_case JSON tags (`tool_use`, `tool_result`).

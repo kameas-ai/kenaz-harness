@@ -58,6 +58,10 @@ func (s *stubLLM) UpdateProviderCredential(_ context.Context, _, _ string) error
 func (s *stubLLM) GetAttachmentLimits(_ context.Context, _, _ string) (llm.AttachmentLimitsView, error) {
 	return llm.AttachmentLimitsView{}, nil
 }
+func (s *stubLLM) TestAndRotateKey(_ context.Context, _, _, _ string) (llm.RotationResult, error) {
+	return llm.RotationResult{}, errNotWired
+}
+func (s *stubLLM) ResumeAfterKeyRotation(_ context.Context, _ string) error { return errNotWired }
 
 // ── a2a ────────────────────────────────────────────────────────────────
 
