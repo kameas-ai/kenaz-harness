@@ -93,6 +93,15 @@ const (
 	// Severity: "warning" when any id_mismatch or ledger_only entries exist;
 	// "info" when only code_only (pending) entries are present.
 	KindMigrationDriftDetected Kind = "storage.migration.drift-detected"
+
+	// KindSecretReferenceResolved is emitted by refs.Resolver on every
+	// resolution attempt — successful or not — for a model-side @secret:
+	// reference (model-secret-references-01KW7M5A WP03). The payload
+	// carries only metadata (session, agent, tool, locator, destination
+	// host, Cedar decision id, outcome, run id). No plaintext, no
+	// resolved-bytes hash, and no fingerprint are ever included in the
+	// payload.
+	KindSecretReferenceResolved Kind = "secret_reference.resolved"
 )
 
 var builtIn = []Kind{
@@ -114,6 +123,8 @@ var builtIn = []Kind{
 	KindHarnessSelfPolicyWritten, KindHarnessSelfPolicyRejected,
 	// Migration drift detector (v0.5.1 migration-doctor).
 	KindMigrationDriftDetected,
+	// Model-side secret reference audit (model-secret-references-01KW7M5A WP03).
+	KindSecretReferenceResolved,
 }
 
 var (
