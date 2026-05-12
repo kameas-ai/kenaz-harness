@@ -44,6 +44,9 @@ const tabs: ReadonlyArray<Tab> = [
   // compaction-strategy-ui-01KQ8TD8 — Compaction strategy-authoring tab.
   // Disambiguates via ?tab=compaction. See SettingsView.vue for the mount switch.
   { to: '/settings?tab=compaction', label: 'Compaction', query: 'compaction' },
+  // user-slash-commands-01KQ8TD9 WP07 — Slash Commands tab.
+  // Disambiguates via ?tab=slashcmds. See SettingsView.vue for the mount switch.
+  { to: '/settings?tab=slashcmds', label: 'Slash Commands', query: 'slashcmds' },
   { to: '/providers', label: 'Providers' },
   { to: '/hooks', label: 'Hooks' },
   { to: '/bundles', label: 'Bundles' },

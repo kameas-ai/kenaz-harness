@@ -3259,6 +3259,29 @@ export function createFakeHarnessClient(
       restartPhase2: async () => ({ sessionId: '' }),
       listStarters: async () => [],
     },
+    slashcmd: {
+      list: async (_projectID: string) => [],
+      get: async (name: string, _projectID: string) => ({
+        name,
+        scope: 'global' as const,
+        kind: 'text' as const,
+        description: '',
+        modelInvokable: false,
+      }),
+      save: noop,
+      delete: noop,
+      run: async (
+        _name: string,
+        _args: Record<string, string>,
+        _sessionID: string,
+        _projectID: string,
+        _cwd: string,
+        _selection: string,
+      ) => ({
+        kind: 'info' as const,
+        text: '',
+      }),
+    },
   };
 
   return { ...defaults, ...seed };
