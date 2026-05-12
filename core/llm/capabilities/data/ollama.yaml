@@ -9,6 +9,16 @@ defaults:
   reasoning: false
   cancellation: true
   usage_reporting: true
+  # Attachment limits (multimodal-io-01KQ8TDF FR-006)
+  image_input: false
+  document_input: false
+  max_image_bytes: 10485760          # 10 MiB (conservative local default)
+  max_document_bytes: 0
+  max_image_count_per_message: 10
+  max_image_pixels: 0
+  max_document_pages: 0
+  image_input_mime_types: [image/png, image/jpeg, image/gif, image/webp]
+  document_input_mime_types: []
 models:
   - match: "llama3.*"
     streaming: true
@@ -20,3 +30,34 @@ models:
     reasoning: false
     cancellation: true
     usage_reporting: true
+    image_input: false
+    document_input: false
+  # Vision-capable Ollama models (llava, bakllava, etc.)
+  - match: "llava*"
+    streaming: true
+    tool_calling: false
+    vision: true
+    documents: false
+    json_mode: false
+    prompt_caching: false
+    reasoning: false
+    cancellation: true
+    usage_reporting: true
+    image_input: true
+    document_input: false
+    max_image_bytes: 10485760
+    max_image_count_per_message: 10
+  - match: "bakllava*"
+    streaming: true
+    tool_calling: false
+    vision: true
+    documents: false
+    json_mode: false
+    prompt_caching: false
+    reasoning: false
+    cancellation: true
+    usage_reporting: true
+    image_input: true
+    document_input: false
+    max_image_bytes: 10485760
+    max_image_count_per_message: 10

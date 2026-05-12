@@ -423,6 +423,19 @@ type Settings struct {
 	// NarrativePreludeTopN is the number of long-term chunks loaded
 	// into the system prompt at session start (WP09). Default 5.
 	NarrativePreludeTopN int `json:"narrativePreludeTopN,omitempty"`
+
+	// ── Multimodal input dial (multimodal-io-01KQ8TDF WP08 / FR-023) ─────
+	//
+	// MultimodalInputDisabled is the inverted persisted bit for the
+	// multimodal input (image / PDF attachments) feature.
+	// Default ON (zero-value Disabled = false → feature enabled) — new
+	// installs can drag-and-drop images without any setup. The frontend
+	// reads the effective value via the multimodalInputEnabled Bindings
+	// (Settings_GetMultimodalInput / Settings_SetMultimodalInput) and
+	// hides the paperclip button + drop overlay when false.
+	// Note: the HARNESS_MULTIMODAL_IN env flag can force-disable this
+	// regardless of the stored value (see capabilities loader).
+	MultimodalInputDisabled bool `json:"multimodalInputDisabled,omitempty"`
 }
 
 // ProviderProfileRef is the wire shape that identifies a provider+model
@@ -1126,6 +1139,16 @@ func (s Settings) EffectiveNarrativePreludeTopN() int {
 	}
 	return s.NarrativePreludeTopN
 }
+
+// MultimodalInputEnabled reports whether the multimodal input feature
+// (image + PDF attachments) is enabled for this user. Default true on a
+// fresh install (zero-value MultimodalInputDisabled = false → feature on).
+// When false, ChatInput.vue hides the paperclip button and drop overlay,
+// and the paste handler ignores image/PDF clipboard items.
+// The HARNESS_MULTIMODAL_IN env flag can force-disable this independently
+// of the stored value — see the capabilities loader.
+// (multimodal-io-01KQ8TDF WP08 / FR-023)
+func (s Settings) MultimodalInputEnabled() bool { return !s.MultimodalInputDisabled }
 
 // ShortcutsStore is the persistence interface for keyboard shortcut
 // overrides. LoadShortcuts / SaveShortcuts are thin field-level accessors

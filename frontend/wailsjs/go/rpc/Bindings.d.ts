@@ -254,6 +254,8 @@ export function LLM_UpdateProvider(arg1:llm.AddProviderInput):Promise<void>;
 
 export function LLM_UpdateProviderCredential(arg1:string,arg2:string):Promise<void>;
 
+export function LLM_GetAttachmentLimits(arg1:string,arg2:string):Promise<llm.AttachmentLimitsView>;
+
 export function LoadRoute():Promise<string>;
 
 export function LoadTheme():Promise<string>;
@@ -452,6 +454,8 @@ export function Settings_GetMaxAgentTurns():Promise<number>;
 
 export function Settings_GetMemory():Promise<boolean>;
 
+export function Settings_GetMultimodalInput():Promise<boolean>;
+
 export function Settings_GetMonthlyCostNotifyUSD():Promise<number>;
 
 export function Settings_GetPermissionCacheDangerousOps():Promise<boolean>;
@@ -495,6 +499,8 @@ export function Settings_SetMCPAutoRestart(arg1:boolean):Promise<void>;
 export function Settings_SetMaxAgentTurns(arg1:number):Promise<void>;
 
 export function Settings_SetMemory(arg1:boolean):Promise<void>;
+
+export function Settings_SetMultimodalInput(arg1:boolean):Promise<void>;
 
 export function Settings_SetMonthlyCostNotifyUSD(arg1:number):Promise<void>;
 

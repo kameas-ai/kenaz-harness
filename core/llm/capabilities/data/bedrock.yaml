@@ -9,6 +9,16 @@ defaults:
   reasoning: false
   cancellation: true
   usage_reporting: true
+  # Attachment limits (multimodal-io-01KQ8TDF FR-006)
+  image_input: false
+  document_input: false
+  max_image_bytes: 3932160           # 3.75 MiB (Bedrock Converse image limit)
+  max_document_bytes: 4718592        # 4.5 MiB (Bedrock document limit)
+  max_image_count_per_message: 20
+  max_image_pixels: 0
+  max_document_pages: 0
+  image_input_mime_types: [image/png, image/jpeg, image/gif, image/webp]
+  document_input_mime_types: [application/pdf]
 models:
   - match: "anthropic.claude-3-5-sonnet*"
     streaming: true
@@ -22,6 +32,12 @@ models:
     usage_reporting: true
     context_window: 200000
     max_output_tokens: 8192
+    image_input: true
+    document_input: true
+    max_image_bytes: 3932160
+    max_document_bytes: 4718592
+    max_image_count_per_message: 20
+    max_document_pages: 100
   - match: "anthropic.claude-3-5-haiku*"
     streaming: true
     tool_calling: true
@@ -34,6 +50,10 @@ models:
     usage_reporting: true
     context_window: 200000
     max_output_tokens: 8192
+    image_input: true
+    document_input: false
+    max_image_bytes: 3932160
+    max_image_count_per_message: 20
   - match: "anthropic.claude-sonnet-*"
     streaming: true
     tool_calling: true
@@ -46,6 +66,12 @@ models:
     usage_reporting: true
     context_window: 200000
     max_output_tokens: 64000
+    image_input: true
+    document_input: true
+    max_image_bytes: 3932160
+    max_document_bytes: 4718592
+    max_image_count_per_message: 20
+    max_document_pages: 100
   - match: "anthropic.claude-opus-*"
     streaming: true
     tool_calling: true
@@ -58,6 +84,12 @@ models:
     usage_reporting: true
     context_window: 200000
     max_output_tokens: 32000
+    image_input: true
+    document_input: true
+    max_image_bytes: 3932160
+    max_document_bytes: 4718592
+    max_image_count_per_message: 20
+    max_document_pages: 100
   - match: "anthropic.claude-3-*"
     streaming: true
     tool_calling: true
@@ -70,6 +102,10 @@ models:
     usage_reporting: true
     context_window: 200000
     max_output_tokens: 4096
+    image_input: true
+    document_input: false
+    max_image_bytes: 3932160
+    max_image_count_per_message: 20
   - match: "amazon.nova-lite-*"
     streaming: true
     tool_calling: true
@@ -82,6 +118,11 @@ models:
     usage_reporting: true
     context_window: 300000
     max_output_tokens: 5120
+    image_input: true
+    document_input: true
+    max_image_bytes: 3932160
+    max_document_bytes: 4718592
+    max_image_count_per_message: 20
   - match: "amazon.nova-pro-*"
     streaming: true
     tool_calling: true
@@ -94,6 +135,11 @@ models:
     usage_reporting: true
     context_window: 300000
     max_output_tokens: 5120
+    image_input: true
+    document_input: true
+    max_image_bytes: 3932160
+    max_document_bytes: 4718592
+    max_image_count_per_message: 20
   - match: "meta.llama3-*"
     streaming: true
     tool_calling: true
@@ -106,6 +152,8 @@ models:
     usage_reporting: true
     context_window: 128000
     max_output_tokens: 8192
+    image_input: false
+    document_input: false
   - match: "*llama3-1-405*"
     streaming: true
     tool_calling: true
@@ -118,6 +166,8 @@ models:
     usage_reporting: true
     context_window: 128000
     max_output_tokens: 8192
+    image_input: false
+    document_input: false
   - match: "*llama3-1-8*"
     streaming: true
     tool_calling: true
@@ -130,6 +180,8 @@ models:
     usage_reporting: true
     context_window: 128000
     max_output_tokens: 8192
+    image_input: false
+    document_input: false
   - match: "*llama3-1-70*"
     streaming: true
     tool_calling: true
@@ -142,6 +194,8 @@ models:
     usage_reporting: true
     context_window: 128000
     max_output_tokens: 8192
+    image_input: false
+    document_input: false
   - match: "anthropic.claude-*"
     streaming: true
     tool_calling: true
@@ -154,3 +208,7 @@ models:
     usage_reporting: true
     context_window: 200000
     max_output_tokens: 4096
+    image_input: true
+    document_input: false
+    max_image_bytes: 3932160
+    max_image_count_per_message: 20

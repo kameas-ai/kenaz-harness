@@ -55,6 +55,9 @@ func (s *stubLLM) ResolveConfirm(_ context.Context, _, _ string) error { return 
 func (s *stubLLM) UpdateProviderCredential(_ context.Context, _, _ string) error {
 	return errNotWired
 }
+func (s *stubLLM) GetAttachmentLimits(_ context.Context, _, _ string) (llm.AttachmentLimitsView, error) {
+	return llm.AttachmentLimitsView{}, nil
+}
 
 // ── a2a ────────────────────────────────────────────────────────────────
 

@@ -135,6 +135,7 @@ import type {
   PolicyDecision,
   NarrativeJobStatus,
   NarrativeMetrics,
+  AttachmentLimitsView,
 } from './types';
 
 /**
@@ -255,6 +256,10 @@ interface WailsBindingsLike {
   LLM_TestProvider(id: string): Promise<TestResult>;
   LLM_ListModels(kind: string, plaintextApiKey: string): Promise<ModelInfo[]>;
   LLM_ResolveConfirm(requestID: string, decision: string): Promise<void>;
+  LLM_GetAttachmentLimits(
+    provider: string,
+    model: string,
+  ): Promise<AttachmentLimitsView>;
 
   MCP_ListServers(): Promise<MCPServer[]>;
   MCP_StartStream(id: string): Promise<string>;
@@ -380,6 +385,9 @@ interface WailsBindingsLike {
   // per-message-token-meter-01KR3PQR
   Settings_GetShowPerMessageTokenMeter(): Promise<boolean>;
   Settings_SetShowPerMessageTokenMeter(enabled: boolean): Promise<void>;
+  // multimodal-io-01KQ8TDF WP08 / FR-022 / FR-023
+  Settings_GetMultimodalInput(): Promise<boolean>;
+  Settings_SetMultimodalInput(enabled: boolean): Promise<void>;
   // artifact-preview-binary-rendering-01KQ8TD5 WP07
   Settings_GetArtifactPreview(): Promise<{ enabled: boolean; maxBytes: number; timeoutMs: number }>;
 
@@ -1093,6 +1101,18 @@ export interface LLMConnectorClient {
    * and dispatches / blocks accordingly.
    */
   resolveConfirm(requestID: string, decision: ConfirmDecision): Promise<void>;
+
+  /**
+   * getAttachmentLimits returns the descriptor-driven per-provider attachment
+   * capability limits for (provider, model). The chat composer uses these to
+   * replace hard-coded byte/count caps with values from the capability YAML.
+   * Returns a zero descriptor (imageInput=false, documentInput=false) when the
+   * provider or model is unknown. (multimodal-io-01KQ8TDF WP04 / FR-007)
+   */
+  getAttachmentLimits(
+    provider: string,
+    model: string,
+  ): Promise<AttachmentLimitsView>;
 }
 
 export interface MCPClient {
@@ -1148,6 +1168,7 @@ export type {
   MCPTranslationReport,
   MCPImportWrotePath,
   MCPTestResult,
+  AttachmentLimitsView,
 };
 
 export interface A2AClient {
@@ -1446,6 +1467,21 @@ export interface SettingsClient {
   getShowPerMessageTokenMeter(): Promise<boolean>;
   /** Persist the per-message token meter visibility toggle. */
   setShowPerMessageTokenMeter(enabled: boolean): Promise<void>;
+
+  // ── multimodal-io-01KQ8TDF WP08 / FR-022 / FR-023 ────────────────────
+  /**
+   * Returns whether the multimodal input feature (image + PDF attachments)
+   * is enabled. Default true on a fresh install. When false, ChatInput hides
+   * the paperclip button and drop overlay. The HARNESS_MULTIMODAL_IN env flag
+   * can independently force-disable this.
+   */
+  getMultimodalInput(): Promise<boolean>;
+  /**
+   * Persists the multimodal input feature toggle. When false, ChatInput hides
+   * the paperclip, the drop overlay becomes a no-op, and image/PDF clipboard
+   * items are ignored on paste.
+   */
+  setMultimodalInput(enabled: boolean): Promise<void>;
 
   // ── artifact-preview-binary-rendering-01KQ8TD5 WP07 ─────────────────
   /**
@@ -2343,6 +2379,8 @@ export function createHarnessClient(): HarnessClient {
         b().LLM_ListModels(kind, plaintextApiKey),
       resolveConfirm: (requestID, decision) =>
         b().LLM_ResolveConfirm(requestID, decision),
+      getAttachmentLimits: (provider, model) =>
+        b().LLM_GetAttachmentLimits(provider, model),
     },
     mcp: {
       listServers: () => b().MCP_ListServers(),
@@ -2480,6 +2518,8 @@ export function createHarnessClient(): HarnessClient {
         b().Settings_GetShowPerMessageTokenMeter(),
       setShowPerMessageTokenMeter: (enabled) =>
         b().Settings_SetShowPerMessageTokenMeter(enabled),
+      getMultimodalInput: () => b().Settings_GetMultimodalInput(),
+      setMultimodalInput: (enabled) => b().Settings_SetMultimodalInput(enabled),
       getArtifactPreview: () => b().Settings_GetArtifactPreview(),
     },
     permissions: {
@@ -2848,6 +2888,15 @@ export function createFakeHarnessClient(
       }),
       listModels: async () => [],
       resolveConfirm: noop,
+      getAttachmentLimits: async () => ({
+        imageInput: false,
+        documentInput: false,
+        maxImageBytes: 0,
+        maxDocumentBytes: 0,
+        maxImageCountPerMessage: 0,
+        maxImagePixels: 0,
+        maxDocumentPages: 0,
+      }),
     },
     mcp: {
       listServers: async () => [],
@@ -3036,6 +3085,8 @@ export function createFakeHarnessClient(
       setEmbedderConfig: noop,
       getShowPerMessageTokenMeter: async () => false,
       setShowPerMessageTokenMeter: noop,
+      getMultimodalInput: async () => true,
+      setMultimodalInput: noop,
       getArtifactPreview: async () => ({
         // Default false in tests so that existing ArtifactPreview.test.ts
         // cases run through the legacy text-only branch unmodified

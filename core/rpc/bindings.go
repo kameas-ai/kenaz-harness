@@ -288,6 +288,14 @@ func (b *Bindings) LLM_UpdateProviderCredential(profileID, plaintext string) err
 	return b.api.LLMConnector().UpdateProviderCredential(b.ctx(), profileID, plaintext)
 }
 
+// LLM_GetAttachmentLimits returns the resolved per-provider attachment
+// capability limits for the given provider kind + model. The frontend uses
+// these to replace hard-coded byte caps in the attachment tray
+// (multimodal-io-01KQ8TDF WP04 / FR-007).
+func (b *Bindings) LLM_GetAttachmentLimits(provider, model string) (llm.AttachmentLimitsView, error) {
+	return b.api.LLMConnector().GetAttachmentLimits(b.ctx(), provider, model)
+}
+
 // ── mcp ────────────────────────────────────────────────────────────────
 
 func (b *Bindings) MCP_ListServers() ([]mcp.Server, error) {
@@ -1002,6 +1010,41 @@ func (b *Bindings) Settings_SetShowPerMessageTokenMeter(enabled bool) error {
 		return err
 	}
 	s.ShowPerMessageTokenMeter = enabled
+	return b.storeFn().SaveAll(s)
+}
+
+// ── WP08 — multimodal input feature flag ──────────────────────────────
+
+// Settings_GetMultimodalInput returns whether the multimodal input feature
+// (image + PDF attachments) is enabled. Default true on a fresh install.
+// When false, ChatInput.vue hides the paperclip button and drop overlay.
+// Note: the HARNESS_MULTIMODAL_IN env flag can independently disable this.
+// (multimodal-io-01KQ8TDF WP08 / FR-022 / FR-023)
+func (b *Bindings) Settings_GetMultimodalInput() (bool, error) {
+	if b.storeFn == nil {
+		return true, nil
+	}
+	s, err := b.storeFn().LoadAll()
+	if err != nil {
+		return true, err
+	}
+	return s.MultimodalInputEnabled(), nil
+}
+
+// Settings_SetMultimodalInput persists the multimodal input feature flag.
+// When false, ChatInput.vue hides the paperclip button, the drop overlay,
+// and the paste handler becomes a no-op for image/PDF clipboard items.
+// (multimodal-io-01KQ8TDF WP08 / FR-023 / FR-024)
+func (b *Bindings) Settings_SetMultimodalInput(enabled bool) error {
+	if b.storeFn == nil {
+		return nil
+	}
+	s, err := b.storeFn().LoadAll()
+	if err != nil {
+		return err
+	}
+	// Inverted storage: Disabled = !enabled.
+	s.MultimodalInputDisabled = !enabled
 	return b.storeFn().SaveAll(s)
 }
 

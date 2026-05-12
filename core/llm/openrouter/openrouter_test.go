@@ -450,3 +450,136 @@ func TestAdapter_Capabilities(t *testing.T) {
 		t.Fatal("expected usage_reporting")
 	}
 }
+
+// ── multimodal-io-01KQ8TDF WP03: image serialization tests ───────────────
+
+// TestBuildOpenRouterContent_ImageBlock verifies that an image ContentBlock
+// is serialized to the OpenAI image_url content-array shape.
+func TestBuildOpenRouterContent_ImageBlock(t *testing.T) {
+	parts := []llm.ContentBlock{
+		{Type: "text", Text: "describe this"},
+		{
+			Type: "image",
+			Source: &llm.MediaSource{
+				Kind:      "base64",
+				MediaType: "image/png",
+				Data:      "aGVsbG8=",
+			},
+		},
+	}
+	result := buildOpenRouterContent(parts)
+	arr, ok := result.([]map[string]any)
+	if !ok {
+		t.Fatalf("expected []map[string]any, got %T: %v", result, result)
+	}
+	if len(arr) != 2 {
+		t.Fatalf("expected 2 parts, got %d", len(arr))
+	}
+	if arr[0]["type"] != "text" {
+		t.Errorf("part[0]: expected type=text, got %v", arr[0]["type"])
+	}
+	if arr[1]["type"] != "image_url" {
+		t.Errorf("part[1]: expected type=image_url, got %v", arr[1]["type"])
+	}
+	iu, _ := arr[1]["image_url"].(map[string]any)
+	if iu == nil {
+		t.Fatal("part[1].image_url is nil")
+	}
+	want := "data:image/png;base64,aGVsbG8="
+	if got := iu["url"]; got != want {
+		t.Errorf("image_url.url = %q, want %q", got, want)
+	}
+}
+
+// TestBuildOpenRouterContent_TextOnly verifies pure-text returns a string.
+func TestBuildOpenRouterContent_TextOnly(t *testing.T) {
+	parts := []llm.ContentBlock{
+		{Type: "text", Text: "hello"},
+	}
+	result := buildOpenRouterContent(parts)
+	if s, ok := result.(string); !ok || s != "hello" {
+		t.Fatalf("expected string \"hello\", got %T %v", result, result)
+	}
+}
+
+// TestBuildOpenRouterContent_DocumentDropped verifies that a document block
+// in the array is dropped (gate-rejected pre-flight in production, but
+// defensive drop here).
+func TestBuildOpenRouterContent_DocumentDropped(t *testing.T) {
+	parts := []llm.ContentBlock{
+		{Type: "text", Text: "some text"},
+		{
+			Type: "document",
+			Source: &llm.MediaSource{
+				Kind:      "base64",
+				MediaType: "application/pdf",
+				Data:      "cGRm",
+			},
+		},
+	}
+	result := buildOpenRouterContent(parts)
+	// No image block → flattenContent path: plain string.
+	s, ok := result.(string)
+	if !ok {
+		t.Fatalf("expected string, got %T: %v", result, result)
+	}
+	if s != "some text" {
+		t.Errorf("expected \"some text\", got %q", s)
+	}
+}
+
+// TestAdapter_Stream_WithImageBlock verifies that the adapter serializes an
+// image block into the image_url content-array when the request is streamed.
+func TestAdapter_Stream_WithImageBlock(t *testing.T) {
+	srv := newFakeServer(t, func(w http.ResponseWriter, r *http.Request, _ int) {
+		writeSSEFrames(w, []string{
+			`data: {"id":"1","choices":[{"delta":{"content":"ok"}}]}`,
+			`data: {"id":"1","choices":[{"delta":{},"finish_reason":"stop"}]}`,
+			`data: [DONE]`,
+		})
+	})
+	a := newAdapter(srv)
+	req := llm.GenerationRequest{
+		Messages: []llm.Message{
+			{
+				Role: llm.RoleUser,
+				Content: []llm.ContentBlock{
+					{Type: "text", Text: "what is this"},
+					{
+						Type: "image",
+						Source: &llm.MediaSource{
+							Kind:      "base64",
+							MediaType: "image/png",
+							Data:      "aGVsbG8=",
+						},
+					},
+				},
+			},
+		},
+	}
+	prof := llm.ProviderProfile{
+		ID:    "p",
+		Kind:  Kind,
+		Model: "openai/gpt-4o",
+		Cred:  llm.CredentialReference{Kind: "env", Locator: "OPENROUTER_KEY"},
+	}
+	stream, err := a.Stream(context.Background(), req, prof, []byte("key"))
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	_, _, serr := drain(t, stream)
+	if serr != nil {
+		t.Fatalf("drain: %v", serr)
+	}
+	// Verify the image_url payload made it into the request body via the
+	// fakeServer's lastBody capture.
+	srv.mu.Lock()
+	body := string(srv.lastBody)
+	srv.mu.Unlock()
+	if !strings.Contains(body, "image_url") {
+		t.Errorf("expected image_url in request body; got: %s", body)
+	}
+	if !strings.Contains(body, "data:image/png;base64,") {
+		t.Errorf("expected data URL in request body; got: %s", body)
+	}
+}

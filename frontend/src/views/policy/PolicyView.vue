@@ -564,13 +564,13 @@ watch(editorSource, (val) => {
   padding: 0.5rem 1rem;
   font-size: 0.8125rem;
   z-index: 9999;
-  box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+  box-shadow: 0 2px 8px var(--modal-shadow);
 }
 
 .policy-view__dialog-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(0,0,0,0.4);
+  background: var(--modal-overlay);
   z-index: 1000;
   display: flex;
   align-items: center;
@@ -705,11 +705,11 @@ watch(editorSource, (val) => {
 }
 
 .policy-view__ok {
-  color: var(--ok, #22c55e);
+  color: var(--ok);
 }
 
 .policy-view__err {
-  color: var(--danger, #ef4444);
+  color: var(--danger);
   font-weight: 600;
   font-size: 0.75rem;
 }
@@ -726,8 +726,8 @@ watch(editorSource, (val) => {
 }
 
 .policy-view__tag--readonly {
-  color: var(--warn, #f59e0b);
-  border-color: var(--warn, #f59e0b);
+  color: var(--warn);
+  border-color: var(--warn);
 }
 
 .policy-view__empty {
@@ -772,13 +772,13 @@ watch(editorSource, (val) => {
 
 .policy-view__parse-ok {
   font-size: 0.75rem;
-  color: var(--ok, #22c55e);
+  color: var(--ok);
   font-weight: 600;
 }
 
 .policy-view__parse-err {
   font-size: 0.75rem;
-  color: var(--danger, #ef4444);
+  color: var(--danger);
   font-weight: 600;
 }
 
@@ -789,15 +789,15 @@ watch(editorSource, (val) => {
 }
 
 .policy-view__banner--error {
-  background: color-mix(in srgb, var(--danger, #ef4444) 10%, transparent);
-  color: var(--danger, #ef4444);
-  border-bottom: 1px solid color-mix(in srgb, var(--danger, #ef4444) 20%, transparent);
+  background: color-mix(in srgb, var(--danger) 10%, transparent);
+  color: var(--danger);
+  border-bottom: 1px solid color-mix(in srgb, var(--danger) 20%, transparent);
 }
 
 .policy-view__banner--parse {
-  background: color-mix(in srgb, var(--warn, #f59e0b) 10%, transparent);
+  background: color-mix(in srgb, var(--warn) 10%, transparent);
   color: var(--warn-ink, var(--ink));
-  border-bottom: 1px solid color-mix(in srgb, var(--warn, #f59e0b) 20%, transparent);
+  border-bottom: 1px solid color-mix(in srgb, var(--warn) 20%, transparent);
 }
 
 .policy-view__parse-error-row {
@@ -813,7 +813,7 @@ watch(editorSource, (val) => {
 }
 
 .policy-view__err-msg {
-  color: var(--danger, #ef4444);
+  color: var(--danger);
   font-size: 0.75rem;
 }
 
@@ -878,7 +878,7 @@ watch(editorSource, (val) => {
 }
 
 .policy-view__editor--error {
-  border-top: 2px solid var(--danger, #ef4444);
+  border-top: 2px solid var(--danger);
 }
 
 .policy-view__editor-empty {
@@ -921,7 +921,7 @@ watch(editorSource, (val) => {
 
 .policy-view__btn--primary {
   background: var(--accent);
-  color: var(--accent-ink, #fff);
+  color: var(--accent-ink);
   border-color: var(--accent);
 }
 
@@ -930,11 +930,11 @@ watch(editorSource, (val) => {
 }
 
 .policy-view__btn--danger {
-  color: var(--danger, #ef4444);
-  border-color: var(--danger, #ef4444);
+  color: var(--danger);
+  border-color: var(--danger);
 }
 
 .policy-view__btn--danger:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--danger, #ef4444) 10%, transparent);
+  background: color-mix(in srgb, var(--danger) 10%, transparent);
 }
 </style>
