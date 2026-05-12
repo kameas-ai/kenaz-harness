@@ -24,6 +24,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
@@ -353,6 +354,41 @@ func (a *Adapter) ListModels(ctx context.Context, cred []byte) ([]llm.ModelInfo,
 	}
 	return out, nil
 }
+
+// TestKey implements llm.KeyTester for the bearer-token credential path only.
+// Bedrock has two auth shapes: (a) AWS profile name — rotated via
+// ~/.aws/credentials outside the key-rotation UI, and (b) bearer token — a
+// keychain-backed credential this method validates via ListModels.
+//
+// If cred does not look like a bearer token, TestKey returns *ErrInvalidRequest
+// with a helpful message so the rotation UI can surface "use aws configure."
+// The rejection happens before any wire call (step 1 in plan §3).
+//
+// provider-keychain-rotation-01KQ8TD9 WP02.
+func (a *Adapter) TestKey(ctx context.Context, cred []byte) error {
+	if len(cred) == 0 {
+		return &llm.ErrAuth{Status: 0, Message: "bedrock: empty credential"}
+	}
+	if !looksLikeBearerToken(string(cred)) {
+		return &llm.ErrInvalidRequest{
+			Status:  0,
+			Message: "bedrock: TestKey requires a bearer token; AWS profile rotation is not supported via this UI — rotate via `aws configure` instead",
+		}
+	}
+	tctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	models, err := a.ListModels(tctx, cred)
+	if err != nil {
+		return err
+	}
+	if len(models) == 0 {
+		return &llm.ErrInvalidRequest{Status: 200, Message: "bedrock: key accepted but returned empty model list"}
+	}
+	return nil
+}
+
+// Compile-time assertion: Adapter implements llm.KeyTester.
+var _ llm.KeyTester = (*Adapter)(nil)
 
 // looksLikeBearerToken returns true when cred looks like a long-lived
 // Bedrock API key rather than an AWS profile name. AWS-issued bearer

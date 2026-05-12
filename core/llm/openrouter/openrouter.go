@@ -300,6 +300,29 @@ func (a *Adapter) ListModels(ctx context.Context, cred []byte) ([]llm.ModelInfo,
 	return out, nil
 }
 
+// TestKey implements llm.KeyTester. Verifies cred by calling ListModels with
+// a 5-second deadline; returns nil iff the response contains ≥1 model.
+//
+// provider-keychain-rotation-01KQ8TD9 WP02.
+func (a *Adapter) TestKey(ctx context.Context, cred []byte) error {
+	if len(cred) == 0 {
+		return &llm.ErrAuth{Status: 0, Message: "openrouter: empty credential"}
+	}
+	tctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	models, err := a.ListModels(tctx, cred)
+	if err != nil {
+		return err
+	}
+	if len(models) == 0 {
+		return &llm.ErrInvalidRequest{Status: 200, Message: "openrouter: key accepted but returned empty model list"}
+	}
+	return nil
+}
+
+// Compile-time assertion: Adapter implements llm.KeyTester.
+var _ llm.KeyTester = (*Adapter)(nil)
+
 // LookupModelInfo returns the cached llm.ModelInfo for the given model
 // ID and reports whether the entry was present. ListProviders consults
 // this method via the ModelInfoLookup capability interface to surface

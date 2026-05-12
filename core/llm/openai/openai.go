@@ -26,6 +26,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	llm "github.com/sigil-tech/kaneaz-harness/core/llm"
 	"github.com/sigil-tech/kaneaz-harness/core/llm/capabilities"
@@ -791,6 +792,29 @@ func (a *Adapter) ListModels(ctx context.Context, cred []byte) ([]llm.ModelInfo,
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
 	return out, nil
 }
+
+// TestKey implements llm.KeyTester. Verifies cred by calling ListModels with
+// a 5-second deadline; returns nil iff the response contains ≥1 model.
+//
+// provider-keychain-rotation-01KQ8TD9 WP02.
+func (a *Adapter) TestKey(ctx context.Context, cred []byte) error {
+	if len(cred) == 0 {
+		return &llm.ErrAuth{Status: 0, Message: "openai: empty credential"}
+	}
+	tctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	models, err := a.ListModels(tctx, cred)
+	if err != nil {
+		return err
+	}
+	if len(models) == 0 {
+		return &llm.ErrInvalidRequest{Status: 200, Message: "openai: key accepted but returned empty model list"}
+	}
+	return nil
+}
+
+// Compile-time assertion: Adapter implements llm.KeyTester.
+var _ llm.KeyTester = (*Adapter)(nil)
 
 // modelsResponse mirrors the JSON shape OpenAI returns from /v1/models.
 type modelsResponse struct {
