@@ -17,6 +17,7 @@ import (
 
 	"github.com/sigil-tech/kaneaz-harness/core/logging"
 	"github.com/sigil-tech/kaneaz-harness/core/session"
+	"github.com/sigil-tech/kaneaz-harness/core/slashcmd"
 	"github.com/sigil-tech/kaneaz-harness/core/storage"
 	storagedb "github.com/sigil-tech/kaneaz-harness/core/storage/db"
 	"github.com/sigil-tech/kaneaz-harness/core/storage/internal/lockfile"
@@ -111,6 +112,10 @@ func Open(cfg storage.Config) (storage.DB, error) {
 	if err := session.RegisterMigrations(registry); err != nil {
 		db.closeOnError()
 		return nil, fmt.Errorf("storage: register session migrations: %w", err)
+	}
+	if err := slashcmd.RegisterMigrations(registry); err != nil {
+		db.closeOnError()
+		return nil, fmt.Errorf("storage: register slashcmd migrations: %w", err)
 	}
 	db.registry = registry
 

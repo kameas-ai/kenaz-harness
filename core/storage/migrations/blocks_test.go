@@ -39,6 +39,7 @@ func TestCanonicalBlocks_Coverage(t *testing.T) {
 		"storage", "event-log", "secrets-keychain", "sessions", "scheduler",
 		"mcp", "a2a", "signed-cards-trust", "bundle",
 		"shared-context-distribution", "memory-rag", "app-layer",
+		"user-slash-commands",
 	}
 	for _, m := range missions {
 		if _, ok := LookupBlock(m); !ok {
