@@ -1,0 +1,10 @@
+{
+  "created_at": "2026-05-12T22:00:00.000000+00:00",
+  "friendly_name": "session export",
+  "mission_id": "01NDFSEX05ABCDEFGHIJKLMNOP",
+  "mission_number": null,
+  "mission_slug": "session-export-01NDFSEX05",
+  "mission_type": "software-dev",
+  "slug": "session-export-01NDFSEX05",
+  "target_branch": "main"
+}
