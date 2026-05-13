@@ -25,6 +25,7 @@ import HooksSettingsView from '@/views/settings/HooksSettingsView.vue';
 import WorkflowsSettingsPanel from '@/views/settings/WorkflowsSettingsPanel.vue';
 import ScheduledChatsPanel from '@/views/settings/scheduledchat/ScheduledChatsPanel.vue';
 import ModelAccessibleSecretsPanel from '@/views/settings/ModelAccessibleSecretsPanel.vue';
+import TasksPanel from '@/views/settings/TasksPanel.vue';
 import LongSessionNudgeSettings from '@/components/settings/LongSessionNudgeSettings.vue';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
 import { debouncedSave } from '@/lib/settings';
@@ -109,6 +110,13 @@ const showScheduledChatsTab = computed<boolean>(() => {
 const showSecretsTab = computed<boolean>(() => {
   const v = route?.query?.tab;
   return typeof v === 'string' && v === 'secrets';
+});
+
+// background-task-monitor-01KZNP3C WP05 — Tasks sub-tab.
+// Disambiguates via ?tab=tasks. Mount switch is in <template> below.
+const showTasksTab = computed<boolean>(() => {
+  const v = route?.query?.tab;
+  return typeof v === 'string' && v === 'tasks';
 });
 
 const settings = ref<Settings>({
@@ -916,6 +924,15 @@ onMounted(() => {
       data-testid="settings-secrets-pane"
     >
       <ModelAccessibleSecretsPanel />
+    </div>
+
+    <!-- background-task-monitor-01KZNP3C WP05 — Tasks sub-tab. -->
+    <div
+      v-else-if="showTasksTab"
+      class="px-6 py-4"
+      data-testid="settings-tasks-pane"
+    >
+      <TasksPanel />
     </div>
 
     <div
