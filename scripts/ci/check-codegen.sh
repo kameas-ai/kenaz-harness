@@ -36,6 +36,11 @@ fi
 # We narrow the diff to the generated files so unrelated working-tree
 # changes do not pollute the gate. Also flag untracked _gen.go files
 # (they would be invisible to a plain `git diff`).
+#
+# The three generated files that must stay in sync:
+#   - core/agentgraph/attrs_gen.go   (per-kind *Attrs structs)
+#   - core/agentgraph/wire_gen.go    (NodeKind* constants, decoders)
+#   - core/agentgraph/ports_gen.go   (typed port structs + accessors)
 GENERATED_PATTERN='core/agentgraph/*_gen.go'
 UNTRACKED_GEN=$(git ls-files --others --exclude-standard -- ${GENERATED_PATTERN})
 if [[ -n "${UNTRACKED_GEN}" ]]; then
@@ -57,6 +62,11 @@ would produce now. This usually means:
      without re-running 'go generate ./...'.
   2. The generator template at core/agentgraph/nodes/cmd/gen/ was
      updated without committing the regenerated output.
+
+The gate covers three generated files:
+  - core/agentgraph/attrs_gen.go  (per-kind *Attrs structs)
+  - core/agentgraph/wire_gen.go   (NodeKind* constants, decoders)
+  - core/agentgraph/ports_gen.go  (typed port structs + accessors)
 
 Fix: run 'go generate ./core/agentgraph/...' locally and commit the
 diff above as part of the same change that touched the manifest /
