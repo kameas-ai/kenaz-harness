@@ -65,6 +65,15 @@ useEventStream<AuthFailedPayload>('provider:auth-failed', (payload) => {
   queue.value = [...queue.value, { payload }];
 });
 
+// Auth-resume seam: when the backend's RedriveLastTurn succeeds we get
+// a provider:auth-resumed broker event. Drop any queued auth-failure
+// entry for that profileID so a stale toast doesn't outlive the live
+// turn it referred to.
+useEventStream<{ profile_id: string }>('provider:auth-resumed', (payload) => {
+  if (!payload?.profile_id) return;
+  queue.value = queue.value.filter((q) => q.payload.profile_id !== payload.profile_id);
+});
+
 const head = computed<QueueEntry | null>(() => queue.value[0] ?? null);
 
 function popHead() {

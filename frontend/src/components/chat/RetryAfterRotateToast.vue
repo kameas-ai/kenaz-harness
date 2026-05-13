@@ -40,6 +40,14 @@ useEventStream<RetryAfterRotationFailedPayload>(
   },
 );
 
+// Auth-resume seam: provider:auth-resumed indicates the paused turn was
+// successfully re-driven. Anything queued for the same profileID from a
+// prior failed attempt is now stale; drop it.
+useEventStream<{ profile_id: string }>('provider:auth-resumed', (payload) => {
+  if (!payload?.profile_id) return;
+  queue.value = queue.value.filter((q) => q.profile_id !== payload.profile_id);
+});
+
 const head = computed<RetryAfterRotationFailedPayload | null>(
   () => queue.value[0] ?? null,
 );

@@ -328,6 +328,18 @@ type AuthFailedPayload struct {
 	Reason    string `json:"reason"`
 }
 
+// AuthResumedPayload is the broker payload emitted on the
+// "provider:auth-resumed" topic after a successful key rotation when
+// RedriveLastTurn has re-driven the paused turn. Subscribers (chat
+// surface useSession; AuthFailureToast / RetryAfterRotateToast queues)
+// use this signal to clear any stale auth-failure UI state so the user
+// is not left looking at a "paused for key rotation" banner over a
+// turn that is once again live.
+type AuthResumedPayload struct {
+	ProfileID string `json:"profile_id"`
+	NewSubID  string `json:"new_sub_id"`
+}
+
 // ChatRunner is the kernel-driven entry point that replaces
 // core/toolloop as the chassis chat path. One runner per process; the
 // chassis constructs it inside the LLM view's wiring and passes it to
@@ -600,7 +612,22 @@ func (r *ChatRunner) RedriveLastTurn(ctx context.Context, profileID string) (new
 	// StartStream with empty userMessage skips the HistoryWriter.AppendMessage
 	// call so the user turn is not double-appended (the HistoryWriter guard
 	// in StartStream checks `userMessage != ""`).
-	return r.StartStream(ctx, pt.profileID, pt.sessionID, pt.modelOverride, "")
+	newSubID, err = r.StartStream(ctx, pt.profileID, pt.sessionID, pt.modelOverride, "")
+	if err != nil {
+		return "", err
+	}
+	// Notify subscribers (chat surface, toast queues) that the paused turn
+	// has been resumed so any stale auth-failure UI state is cleared. The
+	// AuthFailureToast and RetryAfterRotateToast both subscribe to this
+	// topic and pop their head entry on receipt; useSession clears its
+	// streamingError when the profile matches.
+	if r.cfg.Broker != nil {
+		r.cfg.Broker.Emit("provider:auth-resumed", AuthResumedPayload{
+			ProfileID: pt.profileID,
+			NewSubID:  newSubID,
+		})
+	}
+	return newSubID, nil
 }
 
 // driveRun runs the kernel and emits the terminal close payload. We

@@ -232,6 +232,20 @@ func (b *Bindings) Sessions_ClearTitle(id string) error {
 	return b.api.Sessions().ClearTitle(b.ctx(), id)
 }
 
+// Sessions_StartCapture begins recording an eval capture for sessionID.
+// The capture file is written to <DataDir>/eval-captures/<sessionID>.jsonl.
+// Idempotent: repeated calls for an active session are no-ops.
+// (eval-harness-replay)
+func (b *Bindings) Sessions_StartCapture(sessionID string) error {
+	return b.api.Sessions_StartCapture(b.ctx(), sessionID)
+}
+
+// Sessions_StopCapture finalizes and closes the eval capture for sessionID.
+// No-op when no active capture exists. (eval-harness-replay)
+func (b *Bindings) Sessions_StopCapture(sessionID string) error {
+	return b.api.Sessions_StopCapture(b.ctx(), sessionID)
+}
+
 // ── llm ────────────────────────────────────────────────────────────────
 
 func (b *Bindings) LLM_ListProviders() ([]llm.Provider, error) {

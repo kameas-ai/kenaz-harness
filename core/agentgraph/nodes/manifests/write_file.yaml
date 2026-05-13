@@ -1,4 +1,5 @@
 schema_version: "1"
+manifest_version: "1.0.0"
 id: write_file
 extends: write
 display_name: Write File

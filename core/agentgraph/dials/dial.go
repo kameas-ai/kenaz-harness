@@ -56,6 +56,13 @@ type DialConfig struct {
 	// MemoryPruneInterval is the prune-sweep cadence (Bundle E
 	// WP15). Defaults to 24h.
 	MemoryPruneInterval *time.Duration `json:"memoryPruneInterval,omitempty"`
+	// ManifestDriftMode controls how the runtime responds when a graph
+	// node's manifest fingerprint differs from the fingerprint at author
+	// time. Values:
+	//   "warn"  — emit a manifest_drift warning event and continue (default).
+	//   "block" — refuse to run the graph and return an error.
+	// Empty string ⇒ unset (inherits from lower layer; global default is "warn").
+	ManifestDriftMode *string `json:"manifestDriftMode,omitempty"`
 }
 
 // IntPtr / DurPtr / Float64Ptr / StringPtr / BoolPtr — pointer-of-

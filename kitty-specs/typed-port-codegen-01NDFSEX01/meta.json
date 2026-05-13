@@ -1,0 +1,10 @@
+{
+  "created_at": "2026-05-12T22:00:00.000000+00:00",
+  "friendly_name": "typed port codegen",
+  "mission_id": "01NDFSEX01ABCDEFGHIJKLMNOP",
+  "mission_number": null,
+  "mission_slug": "typed-port-codegen-01NDFSEX01",
+  "mission_type": "software-dev",
+  "slug": "typed-port-codegen-01NDFSEX01",
+  "target_branch": "main"
+}

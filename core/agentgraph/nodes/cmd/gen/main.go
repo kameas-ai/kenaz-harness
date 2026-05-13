@@ -24,6 +24,8 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"go/format"
@@ -99,14 +101,30 @@ func run(cfg genConfig) error {
 	if err != nil {
 		return fmt.Errorf("render wire: %w", err)
 	}
+	portsBytes, err := renderPorts(cfg.pkgName, kinds)
+	if err != nil {
+		return fmt.Errorf("render ports: %w", err)
+	}
+	manifestVersionsBytes, err := renderManifestVersions(cfg.pkgName, kinds)
+	if err != nil {
+		return fmt.Errorf("render manifest_versions: %w", err)
+	}
 
 	attrsPath := filepath.Join(cfg.outDir, "attrs_gen.go")
 	wirePath := filepath.Join(cfg.outDir, "wire_gen.go")
+	portsPath := filepath.Join(cfg.outDir, "ports_gen.go")
+	manifestVersionsPath := filepath.Join(cfg.outDir, "manifest_versions_gen.go")
 	if err := writeFile(attrsPath, attrsBytes); err != nil {
 		return fmt.Errorf("write %s: %w", attrsPath, err)
 	}
 	if err := writeFile(wirePath, wireBytes); err != nil {
 		return fmt.Errorf("write %s: %w", wirePath, err)
+	}
+	if err := writeFile(portsPath, portsBytes); err != nil {
+		return fmt.Errorf("write %s: %w", portsPath, err)
+	}
+	if err := writeFile(manifestVersionsPath, manifestVersionsBytes); err != nil {
+		return fmt.Errorf("write %s: %w", manifestVersionsPath, err)
 	}
 	return nil
 }
@@ -193,6 +211,21 @@ type portField struct {
 	Required bool
 }
 
+// typedPortField is one resolved port annotated with a Go type literal,
+// used for generating the <Kind>Inputs / <Kind>Outputs structs and
+// their Read/Write accessors in ports_gen.go.
+type typedPortField struct {
+	Name        string // snake_case port name (the PortValues key)
+	GoName      string // PascalCase Go field name
+	GoType      string // Go type literal (e.g. "[]Message", "any", "string")
+	PortType    string // raw manifest type token (e.g. "messages", "any")
+	Required    bool
+	Description string
+	// NeedsMessagesImport is true when GoType contains "Message"; used
+	// by the template to determine whether a type cast helper is needed.
+	NeedsMessagesType bool
+}
+
 // kindData is one callable kind, ready for template emission.
 type kindData struct {
 	ID         string // canonical ID (e.g., "history_read")
@@ -205,6 +238,12 @@ type kindData struct {
 	Fields     []attrField
 	Inputs     []portField
 	Outputs    []portField
+	// TypedInputs / TypedOutputs are used by ports_gen.go.
+	TypedInputs  []typedPortField
+	TypedOutputs []typedPortField
+	// ManifestVersion / Fingerprint are used by manifest_versions_gen.go.
+	ManifestVersion string // from manifest_version field (e.g. "1.0.0")
+	Fingerprint     string // sha256 of behavior-affecting subset
 }
 
 // fileData is the top-level template input.
@@ -248,6 +287,22 @@ func renderWire(pkg string, kinds []*nodes.ResolvedManifest) ([]byte, error) {
 	return formatGo(sb.String())
 }
 
+func renderPorts(pkg string, kinds []*nodes.ResolvedManifest) ([]byte, error) {
+	data, err := buildFileData(pkg, kinds)
+	if err != nil {
+		return nil, err
+	}
+	tmpl, err := template.New("ports").Funcs(tmplFuncs).Parse(portsTemplate)
+	if err != nil {
+		return nil, err
+	}
+	var sb strings.Builder
+	if err := tmpl.Execute(&sb, data); err != nil {
+		return nil, err
+	}
+	return formatGo(sb.String())
+}
+
 func buildFileData(pkg string, kinds []*nodes.ResolvedManifest) (fileData, error) {
 	out := fileData{
 		Package: pkg,
@@ -276,20 +331,35 @@ func buildKindData(rm *nodes.ResolvedManifest) (kindData, error) {
 	if kindName == "" || isAncestorName(kindName, rm.Chain) {
 		kindName = id
 	}
+	// Compute the behavior fingerprint at code-gen time so it's baked
+	// into the generated constant and the CI check can compare it against
+	// the previous commit without running the full binary.
+	fp, err := computeGenFingerprint(rm)
+	if err != nil {
+		return kindData{}, fmt.Errorf("fingerprint: %w", err)
+	}
+	manifestVersion := rm.Manifest.ManifestVersion
+	if manifestVersion == "" {
+		manifestVersion = "1.0.0"
+	}
 	kd := kindData{
-		ID:         id,
-		GoName:     goName,
-		StructName: goName + "Attrs",
-		ConstName:  "NodeKind" + goName,
-		KindName:   kindName,
-		Aliases:    append([]string(nil), rm.Manifest.Aliases...),
-		Doc:        rm.Manifest.Description,
+		ID:              id,
+		GoName:          goName,
+		StructName:      goName + "Attrs",
+		ConstName:       "NodeKind" + goName,
+		KindName:        kindName,
+		Aliases:         append([]string(nil), rm.Manifest.Aliases...),
+		Doc:             rm.Manifest.Description,
+		ManifestVersion: manifestVersion,
+		Fingerprint:     fp,
 	}
 	for _, p := range rm.Manifest.Ports.Inputs {
 		kd.Inputs = append(kd.Inputs, portField{Name: p.Name, Type: p.Type, Required: p.Required})
+		kd.TypedInputs = append(kd.TypedInputs, buildTypedPortField(p))
 	}
 	for _, p := range rm.Manifest.Ports.Outputs {
 		kd.Outputs = append(kd.Outputs, portField{Name: p.Name, Type: p.Type, Required: p.Required})
+		kd.TypedOutputs = append(kd.TypedOutputs, buildTypedPortField(p))
 	}
 
 	// Sort attr names for deterministic emission (FR-009).
@@ -371,6 +441,43 @@ func buildAttrField(name string, spec nodes.AttrSpec) (attrField, error) {
 		f.IsString = true
 	}
 	return f, nil
+}
+
+// buildTypedPortField converts a PortSpec into a typedPortField for use
+// in the ports_gen.go template.
+func buildTypedPortField(p nodes.PortSpec) typedPortField {
+	goType, needsMsg := portGoType(p.Type)
+	return typedPortField{
+		Name:              p.Name,
+		GoName:            pascalCase(p.Name),
+		GoType:            goType,
+		PortType:          p.Type,
+		Required:          p.Required,
+		Description:       p.Description,
+		NeedsMessagesType: needsMsg,
+	}
+}
+
+// portGoType maps a manifest port type token to a Go type literal. The
+// second return value is true when the type requires the Message type
+// from the same package (so the template can track imports / type-cast
+// helpers). The wire format is always map[string]any; this is purely a
+// Go-side ergonomic layer.
+func portGoType(portType string) (goType string, needsMessages bool) {
+	switch portType {
+	case "messages":
+		return "[]Message", true
+	case "text", "branch_id":
+		return "string", false
+	case "bool":
+		return "bool", false
+	case "number":
+		return "float64", false
+	default:
+		// any, json, attachment, memory_chunk, corpus_hits, tool_result,
+		// trace, and unknown future types all stay as any.
+		return "any", false
+	}
 }
 
 // goTypeFor maps an AttrType to the Go type literal we emit on the
@@ -458,6 +565,105 @@ func pascalCase(s string) string {
 		}
 	}
 	return b.String()
+}
+
+func renderManifestVersions(pkg string, kinds []*nodes.ResolvedManifest) ([]byte, error) {
+	data, err := buildFileData(pkg, kinds)
+	if err != nil {
+		return nil, err
+	}
+	tmpl, err := template.New("manifest_versions").Funcs(tmplFuncs).Parse(manifestVersionsTemplate)
+	if err != nil {
+		return nil, err
+	}
+	var sb strings.Builder
+	if err := tmpl.Execute(&sb, data); err != nil {
+		return nil, err
+	}
+	return formatGo(sb.String())
+}
+
+// genFingerprintInput mirrors the shape in manifest_fingerprint.go but
+// lives here so the gen tool does not import the parent agentgraph package.
+type genFingerprintInput struct {
+	Kind    string             `json:"kind"`
+	Budget  string             `json:"budget"`
+	Inputs  []genFingerprintPort `json:"inputs"`
+	Outputs []genFingerprintPort `json:"outputs"`
+	Attrs   []genFingerprintAttr `json:"attrs"`
+}
+
+type genFingerprintPort struct {
+	Name     string `json:"name"`
+	Type     string `json:"type"`
+	Required bool   `json:"required,omitempty"`
+}
+
+type genFingerprintAttr struct {
+	Name    string `json:"name"`
+	Type    string `json:"type"`
+	Default any    `json:"default,omitempty"`
+}
+
+// computeGenFingerprint mirrors ComputeManifestFingerprint from the
+// parent agentgraph package. Duplicated here so the gen tool can run
+// without importing the parent (which would create a cycle).
+func computeGenFingerprint(rm *nodes.ResolvedManifest) (string, error) {
+	m := &rm.Manifest
+	kind := m.KindName
+	if kind == "" {
+		kind = m.ID
+	}
+
+	inPorts := sortedGenPorts(m.Ports.Inputs)
+	outPorts := sortedGenPorts(m.Ports.Outputs)
+
+	attrNames := make([]string, 0, len(m.Attrs))
+	for name := range m.Attrs {
+		attrNames = append(attrNames, name)
+	}
+	sort.Strings(attrNames)
+
+	attrs := make([]genFingerprintAttr, 0, len(attrNames))
+	for _, name := range attrNames {
+		spec := m.Attrs[name]
+		var dflt any
+		if spec.Default != nil {
+			dflt = spec.Default
+		} else if m.Defaults != nil {
+			if v, ok := m.Defaults[name]; ok {
+				dflt = v
+			}
+		}
+		attrs = append(attrs, genFingerprintAttr{
+			Name:    name,
+			Type:    string(spec.Type),
+			Default: dflt,
+		})
+	}
+
+	inp := genFingerprintInput{
+		Kind:    kind,
+		Budget:  string(m.Budget),
+		Inputs:  inPorts,
+		Outputs: outPorts,
+		Attrs:   attrs,
+	}
+	data, err := json.Marshal(inp)
+	if err != nil {
+		return "", fmt.Errorf("computeGenFingerprint: marshal: %w", err)
+	}
+	sum := sha256.Sum256(data)
+	return fmt.Sprintf("%x", sum[:]), nil
+}
+
+func sortedGenPorts(specs []nodes.PortSpec) []genFingerprintPort {
+	out := make([]genFingerprintPort, len(specs))
+	for i, p := range specs {
+		out[i] = genFingerprintPort{Name: p.Name, Type: p.Type, Required: p.Required}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out
 }
 
 // formatGo runs the rendered template through go/format. Output is

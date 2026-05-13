@@ -1,4 +1,5 @@
 schema_version: "1"
+manifest_version: "1.0.0"
 id: subagent_dispatch
 extends: compute
 display_name: Subagent Dispatch
