@@ -666,6 +666,12 @@ interface WailsBindingsLike {
   Secrets_Expose(req: import('./types').ModelSecretExposeRequest): Promise<void>;
   /** Removes a secret from the exposure index. */
   Secrets_Revoke(locator: string): Promise<void>;
+
+  // ── Sub-agent profiles (branch-subagent-interactive-01KZNP3B WP01) ─────
+  Agents_ListProfiles(): Promise<import('./types').AgentProfileSummary[]>;
+  Agents_LoadProfile(id: string): Promise<import('./types').AgentProfile>;
+  Agents_SaveProfile(profile: import('./types').AgentProfile): Promise<void>;
+  Agents_DeleteProfile(id: string): Promise<void>;
 }
 
 
@@ -2319,6 +2325,19 @@ export interface SecretsClient {
   revoke(locator: string): Promise<void>;
 }
 
+// ── agents client (branch-subagent-interactive-01KZNP3B WP01) ────────────
+
+export interface AgentsClient {
+  /** List all profiles (bundled + user-authored) as summary entries. */
+  listProfiles(): Promise<import('./types').AgentProfileSummary[]>;
+  /** Load the full profile by id. */
+  loadProfile(id: string): Promise<import('./types').AgentProfile>;
+  /** Create or update a user-authored profile. Rejects for bundled ids. */
+  saveProfile(profile: import('./types').AgentProfile): Promise<void>;
+  /** Delete a user-authored profile. Rejects for bundled ids or unknown ids. */
+  deleteProfile(id: string): Promise<void>;
+}
+
 export interface HarnessClient {
   shellStatus(): Promise<ShellStatus>;
   appInfo(): Promise<AppInfo>;
@@ -2369,6 +2388,8 @@ export interface HarnessClient {
   config: ConfigClient;
   /** Model-accessible secrets panel client (model-secret-references-01KW7M5A WP10). */
   secrets: SecretsClient;
+  /** Sub-agent profile registry (branch-subagent-interactive-01KZNP3B WP01). */
+  agents: AgentsClient;
 }
 
 // ── runtime client ─────────────────────────────────────────────────────
@@ -2863,6 +2884,12 @@ export function createHarnessClient(): HarnessClient {
       list: () => b().Secrets_List(),
       expose: (req) => b().Secrets_Expose(req),
       revoke: (locator) => b().Secrets_Revoke(locator),
+    },
+    agents: {
+      listProfiles: () => b().Agents_ListProfiles(),
+      loadProfile: (id) => b().Agents_LoadProfile(id),
+      saveProfile: (profile) => b().Agents_SaveProfile(profile),
+      deleteProfile: (id) => b().Agents_DeleteProfile(id),
     },
   };
 }
@@ -3806,6 +3833,19 @@ export function createFakeHarnessClient(
         kind: 'info' as const,
         text: '',
       }),
+    },
+    agents: {
+      listProfiles: async () => [],
+      loadProfile: async (id: string): Promise<import('./types').AgentProfile> => ({
+        id,
+        name: id,
+        description: '',
+        autonomyTier: 'default' as const,
+        mergePolicy: 'auto' as const,
+        bundled: false,
+      }),
+      saveProfile: noop,
+      deleteProfile: noop,
     },
   };
 
