@@ -268,6 +268,13 @@ type Manifest struct {
 	// loader records it alongside the catalog entry and exposes it for
 	// trace/log surfaces.
 	Version string `yaml:"version,omitempty" json:"version,omitempty"`
+
+	// ManifestVersion is the semver-formatted version of this manifest's
+	// behavior contract. Bumped whenever a behavior-affecting field changes
+	// (ports, attrs, budget). Used by the manifest-versioning-01NDFSEX02
+	// drift detector to identify graph nodes authored against a stale
+	// manifest. Initial value for all shipped manifests is "1.0.0".
+	ManifestVersion string `yaml:"manifest_version,omitempty" json:"manifest_version,omitempty"`
 }
 
 // IsArchetype reports whether the manifest declares the abstract layer.

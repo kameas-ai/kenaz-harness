@@ -194,7 +194,7 @@ func TestIdempotent(t *testing.T) {
 		t.Fatalf("second run: %v", err)
 	}
 
-	for _, name := range []string{"attrs_gen.go", "wire_gen.go", "ports_gen.go"} {
+	for _, name := range []string{"attrs_gen.go", "wire_gen.go", "ports_gen.go", "manifest_versions_gen.go"} {
 		a := mustRead(t, filepath.Join(dir1, name))
 		b := mustRead(t, filepath.Join(dir2, name))
 		if !bytes.Equal(a, b) {
@@ -217,9 +217,10 @@ func TestIdempotentSameDir(t *testing.T) {
 		t.Fatalf("first run: %v", err)
 	}
 	first := map[string][]byte{
-		"attrs_gen.go": mustRead(t, filepath.Join(dir, "attrs_gen.go")),
-		"wire_gen.go":  mustRead(t, filepath.Join(dir, "wire_gen.go")),
-		"ports_gen.go": mustRead(t, filepath.Join(dir, "ports_gen.go")),
+		"attrs_gen.go":             mustRead(t, filepath.Join(dir, "attrs_gen.go")),
+		"wire_gen.go":              mustRead(t, filepath.Join(dir, "wire_gen.go")),
+		"ports_gen.go":             mustRead(t, filepath.Join(dir, "ports_gen.go")),
+		"manifest_versions_gen.go": mustRead(t, filepath.Join(dir, "manifest_versions_gen.go")),
 	}
 	if err := run(cfg); err != nil {
 		t.Fatalf("second run: %v", err)
@@ -245,7 +246,7 @@ func TestGoldenFiles(t *testing.T) {
 		t.Fatalf("run: %v", err)
 	}
 
-	for _, name := range []string{"attrs_gen.go", "wire_gen.go", "ports_gen.go"} {
+	for _, name := range []string{"attrs_gen.go", "wire_gen.go", "ports_gen.go", "manifest_versions_gen.go"} {
 		got := mustRead(t, filepath.Join(cfg.outDir, name))
 		goldenPath := filepath.Join(goldenDir, name)
 		if *updateGolden {
