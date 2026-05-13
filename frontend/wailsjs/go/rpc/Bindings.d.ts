@@ -488,7 +488,11 @@ export function Sessions_SetAutonomy(arg1:string,arg2:autonomy.Layer):Promise<vo
 
 export function Sessions_SetSystemPrompt(arg1:string,arg2:string,arg3:string):Promise<void>;
 
+export function Sessions_StartCapture(arg1:string):Promise<void>;
+
 export function Sessions_StartStream(arg1:string):Promise<string>;
+
+export function Sessions_StopCapture(arg1:string):Promise<void>;
 
 export function Sessions_StopStream(arg1:string):Promise<void>;
 

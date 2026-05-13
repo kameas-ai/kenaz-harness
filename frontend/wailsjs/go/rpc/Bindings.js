@@ -890,8 +890,16 @@ export function Sessions_SetSystemPrompt(arg1, arg2, arg3) {
   return window['go']['rpc']['Bindings']['Sessions_SetSystemPrompt'](arg1, arg2, arg3);
 }
 
+export function Sessions_StartCapture(arg1) {
+  return window['go']['rpc']['Bindings']['Sessions_StartCapture'](arg1);
+}
+
 export function Sessions_StartStream(arg1) {
   return window['go']['rpc']['Bindings']['Sessions_StartStream'](arg1);
+}
+
+export function Sessions_StopCapture(arg1) {
+  return window['go']['rpc']['Bindings']['Sessions_StopCapture'](arg1);
 }
 
 export function Sessions_StopStream(arg1) {
