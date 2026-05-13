@@ -193,6 +193,43 @@ func TestCatalog_GrammarFlags(t *testing.T) {
 	}
 }
 
+// TestCatalog_ImageOutputFlags verifies CapImageOutput is correctly loaded
+// for image-generation models and explicitly false for text models.
+// (multimodal-io-extended-01KQ8TD2 WP05)
+func TestCatalog_ImageOutputFlags(t *testing.T) {
+	t.Parallel()
+	c := mustCatalog(t)
+
+	// Image-generation models must report CapImageOutput=true.
+	imageModels := []struct{ provider, model string }{
+		{"openai", "dall-e-3"},
+		{"openai", "gpt-image-1"},
+		{"bedrock", "amazon.titan-image-generator-v1"},
+		{"bedrock", "stability.stable-diffusion-xl-v1"},
+	}
+	for _, tc := range imageModels {
+		d := c.Describe(tc.provider, tc.model)
+		if !d.Has(llm.CapImageOutput) {
+			t.Errorf("%s/%s: expected CapImageOutput=true, got %+v", tc.provider, tc.model, d.Supported)
+		}
+	}
+
+	// Text/chat models must NOT report CapImageOutput.
+	textModels := []struct{ provider, model string }{
+		{"anthropic", "claude-sonnet-4-5"},
+		{"openai", "gpt-4o"},
+		{"bedrock", "anthropic.claude-sonnet-4-5-v1:0"},
+		{"ollama", "llama3.2"},
+		{"openrouter", "openai/gpt-4o"},
+	}
+	for _, tc := range textModels {
+		d := c.Describe(tc.provider, tc.model)
+		if d.Has(llm.CapImageOutput) {
+			t.Errorf("%s/%s: expected CapImageOutput=false, got %+v", tc.provider, tc.model, d.Supported)
+		}
+	}
+}
+
 // TestCapabilityDescriptor_JSONRoundTrip pins the descriptor JSON
 // shape end-to-end including the new documents capability.
 func TestCapabilityDescriptor_JSONRoundTrip(t *testing.T) {

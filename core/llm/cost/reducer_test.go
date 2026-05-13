@@ -149,3 +149,93 @@ func TestKindCompaction_StillPinsValue(t *testing.T) {
 		t.Errorf("KindCompaction = %q, want \"compaction\"", KindCompaction)
 	}
 }
+
+// ── WP05 image-cost tests (multimodal-io-extended-01KQ8TD2) ──────────────────
+
+// TestDeriveImage_DallE3_HD_1024x1024 verifies that DALL-E 3 hd 1024x1024
+// with 2 images generated → ImageCost = 0.16 (2 × $0.08).
+func TestDeriveImage_DallE3_HD_1024x1024(t *testing.T) {
+	tab, err := LoadDefault()
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := New(tab)
+	usage := llm.Usage{ImagesGenerated: 2}
+	cost := r.DeriveImage(usage, "openai", "dall-e-3", "hd", "1024x1024")
+	if cost.Indeterminate {
+		t.Fatal("expected determinate cost for dall-e-3 hd/1024x1024")
+	}
+	want := 0.16
+	if math.Abs(cost.Total-want) > 1e-9 {
+		t.Fatalf("Total = %v want %v", cost.Total, want)
+	}
+	if math.Abs(cost.ImageCost-want) > 1e-9 {
+		t.Fatalf("ImageCost = %v want %v", cost.ImageCost, want)
+	}
+}
+
+// TestDeriveImage_DallE3_Standard verifies standard quality falls back
+// to the quality-only key.
+func TestDeriveImage_DallE3_Standard(t *testing.T) {
+	tab, err := LoadDefault()
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := New(tab)
+	// quality="standard", size="" → quality-only key "standard" = $0.040
+	cost := r.DeriveImage(llm.Usage{ImagesGenerated: 1}, "openai", "dall-e-3", "standard", "")
+	if cost.Indeterminate {
+		t.Fatal("expected determinate cost for dall-e-3 standard quality")
+	}
+	want := 0.040
+	if math.Abs(cost.Total-want) > 1e-9 {
+		t.Fatalf("Total = %v want %v", cost.Total, want)
+	}
+}
+
+// TestDeriveImage_UnknownQualitySizeIsIndeterminate verifies that an
+// unrecognized quality+size combo yields Indeterminate=true.
+func TestDeriveImage_UnknownQualitySizeIsIndeterminate(t *testing.T) {
+	tab, err := LoadDefault()
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := New(tab)
+	// "ultra" quality is not in the table.
+	cost := r.DeriveImage(llm.Usage{ImagesGenerated: 1}, "openai", "dall-e-3", "ultra", "4096x4096")
+	if !cost.Indeterminate {
+		t.Fatalf("expected indeterminate for unknown quality/size, got %+v", cost)
+	}
+}
+
+// TestDeriveImage_ZeroImagesIsZeroCost verifies that ImagesGenerated=0
+// returns a zero cost (not indeterminate).
+func TestDeriveImage_ZeroImagesIsZeroCost(t *testing.T) {
+	tab, err := LoadDefault()
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := New(tab)
+	cost := r.DeriveImage(llm.Usage{ImagesGenerated: 0}, "openai", "dall-e-3", "hd", "1024x1024")
+	if cost.Indeterminate {
+		t.Fatal("zero images should not be indeterminate")
+	}
+	if cost.Total != 0 {
+		t.Fatalf("zero images should have zero cost, got %v", cost.Total)
+	}
+}
+
+// TestDeriveImage_NoTokenPricingModelIsIndeterminate verifies that a
+// token-only model (no per_image_usd) yields Indeterminate for image derive.
+func TestDeriveImage_NoTokenPricingModelIsIndeterminate(t *testing.T) {
+	tab, err := LoadDefault()
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := New(tab)
+	// gpt-4o is a token-pricing model; it has no per_image_usd entry.
+	cost := r.DeriveImage(llm.Usage{ImagesGenerated: 1}, "openai", "gpt-4o", "", "")
+	if !cost.Indeterminate {
+		t.Fatalf("expected indeterminate for token-only model, got %+v", cost)
+	}
+}

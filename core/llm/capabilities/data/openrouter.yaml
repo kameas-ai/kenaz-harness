@@ -15,6 +15,9 @@ defaults:
   structured_output: false
   grammar: false
   regex_grammar: false
+  # Image output capability (multimodal-io-extended-01KQ8TD2 WP05).
+  # OpenRouter does not proxy image generation endpoints.
+  image_output: false
   # Attachment limits (multimodal-io-01KQ8TDF FR-006)
   # OpenRouter proxies to the underlying provider via OpenAI-shape requests.
   # image_url base64 data URLs work for vision-capable models.

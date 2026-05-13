@@ -15,6 +15,9 @@ defaults:
   structured_output: false
   grammar: false
   regex_grammar: false
+  # Image output capability default (multimodal-io-extended-01KQ8TD2 WP05).
+  # False by default; only image-generation models (dall-e-3, gpt-image-1) set true.
+  image_output: false
   # Attachment limits (multimodal-io-01KQ8TDF FR-006)
   # Note: OpenAI Chat Completions does NOT accept PDF documents inline.
   # The Responses API does; that is a future follow-up mission.
@@ -121,5 +124,40 @@ models:
     usage_reporting: true
     context_window: 8192
     max_output_tokens: 8192
+    image_input: false
+    document_input: false
+  # Image generation models (multimodal-io-extended-01KQ8TD2 WP05)
+  # These do not support streaming, tool-calling, JSON mode, or text-chat caps;
+  # they only accept a prompt and return image bytes.
+  - match: "dall-e-3"
+    streaming: false
+    tool_calling: false
+    vision: false
+    documents: false
+    json_mode: false
+    prompt_caching: false
+    reasoning: false
+    cancellation: false
+    usage_reporting: true
+    structured_output: false
+    grammar: false
+    regex_grammar: false
+    image_output: true
+    image_input: false
+    document_input: false
+  - match: "gpt-image-1"
+    streaming: false
+    tool_calling: false
+    vision: false
+    documents: false
+    json_mode: false
+    prompt_caching: false
+    reasoning: false
+    cancellation: false
+    usage_reporting: true
+    structured_output: false
+    grammar: false
+    regex_grammar: false
+    image_output: true
     image_input: false
     document_input: false

@@ -17,6 +17,9 @@ defaults:
   structured_output: false
   grammar: true
   regex_grammar: false
+  # Image output capability (multimodal-io-extended-01KQ8TD2 WP05).
+  # Ollama does not support image generation output.
+  image_output: false
   # Attachment limits (multimodal-io-01KQ8TDF FR-006)
   image_input: false
   document_input: false
