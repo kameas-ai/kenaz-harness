@@ -133,4 +133,11 @@ type CedarPolicyAPI interface {
 	// Triggers Engine.Reload and emits a policy.template_installed audit event
 	// on success.
 	InstallTemplate(ctx context.Context, templateName string, destName string) (PolicyFileDetail, error)
+
+	// ListPlanModeActions returns the canonical set of Cedar action strings
+	// that are denied while the session's plan_mode posture is active.
+	// These are rendered in the Cedar editor UI's plan-mode reference panel
+	// so policy authors know which actions the plan_mode gate blocks.
+	// (plan-mode-posture-01KZNP3F WP08)
+	ListPlanModeActions(ctx context.Context) ([]string, error)
 }

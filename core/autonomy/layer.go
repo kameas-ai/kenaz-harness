@@ -13,13 +13,21 @@ import (
 //     does not explicitly override."
 //   - Overrides holds knob-specific values that win over Level at the same
 //     layer.
+//   - PostureMode, when non-nil, short-circuits the normal knob resolution:
+//     Resolve returns the fixed preset for the named posture mode (e.g.
+//     "plan_mode") regardless of Level and Overrides on any layer.
+//   - PrePlanLayer is an opaque JSON snapshot of the layer state captured
+//     when __enter_plan_mode was called, used to restore the prior posture
+//     on __exit_plan_mode approval or discard.
 //
 // The wire shape is stable: an empty Overrides map serialises as `{}`, not
 // omitted. A nil Level serialises as JSON null. This means the parser can
 // always treat the field as present.
 type Layer struct {
-	Level     *Tier
-	Overrides map[Knob]any
+	Level        *Tier
+	Overrides    map[Knob]any
+	PostureMode  *string
+	PrePlanLayer []byte
 }
 
 // DefaultLayer returns Level=&TierDefault with an empty (non-nil) overrides
@@ -33,16 +41,19 @@ func DefaultLayer() Layer {
 }
 
 // IsZero reports whether the layer contributes nothing to resolution: nil
-// Level and no overrides.
+// Level, no overrides, no posture mode, and no pre-plan snapshot.
 func (l Layer) IsZero() bool {
-	return l.Level == nil && len(l.Overrides) == 0
+	return l.Level == nil && len(l.Overrides) == 0 && l.PostureMode == nil && l.PrePlanLayer == nil
 }
 
 // jsonLayer is the on-the-wire shape: level is a tier name string or null,
-// overrides is always present (possibly empty).
+// overrides is always present (possibly empty), posture_mode and
+// pre_plan_layer are omitted when nil/empty so the common path is compact.
 type jsonLayer struct {
-	Level     *string         `json:"level"`
-	Overrides json.RawMessage `json:"overrides"`
+	Level        *string         `json:"level"`
+	Overrides    json.RawMessage `json:"overrides"`
+	PostureMode  *string         `json:"posture_mode,omitempty"`
+	PrePlanLayer []byte          `json:"pre_plan_layer,omitempty"`
 }
 
 // MarshalJSON emits the canonical wire shape. Empty overrides serialise as
@@ -58,6 +69,8 @@ func (l Layer) MarshalJSON() ([]byte, error) {
 		return nil, err
 	}
 	out.Overrides = overridesJSON
+	out.PostureMode = l.PostureMode
+	out.PrePlanLayer = l.PrePlanLayer
 	return json.Marshal(out)
 }
 
@@ -83,6 +96,8 @@ func (l *Layer) UnmarshalJSON(data []byte) error {
 		}
 		out.Overrides = ov
 	}
+	out.PostureMode = raw.PostureMode
+	out.PrePlanLayer = raw.PrePlanLayer
 	*l = out
 	return nil
 }

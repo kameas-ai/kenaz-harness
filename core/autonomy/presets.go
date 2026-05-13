@@ -1,5 +1,30 @@
 package autonomy
 
+// PostureModePlanMode is the sixth named posture — a session-scoped mode
+// the model enters before non-trivial implementations. While active, every
+// write-class Cedar action is denied. The posture is exited only via the
+// __exit_plan_mode builtin which presents a plan for user approval.
+//
+// PostureMode is deliberately distinct from Tier: it short-circuits the
+// entire knob-resolution pipeline (Overrides + Level) and locks the session
+// to a fixed read-only preset.
+const PostureModePlanMode = "plan_mode"
+
+// planModePreset is the locked knob preset applied when
+// Layer.PostureMode == PostureModePlanMode. The values are deliberately
+// conservative: tight iteration budget, always-ask, no auto-approve of any
+// family, halt on error, verbose recap so the model narrates its exploration
+// clearly.
+var planModePreset = map[Knob]any{
+	KnobMaxIterations:            50,
+	KnobAskOnAmbiguity:           AskAlways,
+	KnobAutoApproveFamilies:      NewFamilySet(), // empty — no write family
+	KnobTokenCeilingPerTurn:      131_072,        // same as Default
+	KnobRecapStyle:               RecapFull,
+	KnobContinueOnError:          ErrorStop,
+	KnobDestructiveActionPosture: DestructiveConfirm,
+}
+
 // presetTable is the canonical mapping from Tier to the seven knob values, as
 // specified in the §Tier preset table of plan.md. Values are typed as the
 // concrete knob types (int, AskMode, FamilySet, RecapMode, ErrorMode,
@@ -78,4 +103,22 @@ func clonePresetValue(v any) any {
 		return fs.Clone()
 	}
 	return v
+}
+
+// PresetForPostureMode returns a defensive copy of the knob preset for a
+// named posture mode. Currently only PostureModePlanMode ("plan_mode") is
+// supported; other values return nil.
+func PresetForPostureMode(mode string) map[Knob]any {
+	var src map[Knob]any
+	switch mode {
+	case PostureModePlanMode:
+		src = planModePreset
+	default:
+		return nil
+	}
+	out := make(map[Knob]any, len(src))
+	for k, v := range src {
+		out[k] = clonePresetValue(v)
+	}
+	return out
 }

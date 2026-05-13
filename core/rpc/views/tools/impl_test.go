@@ -75,6 +75,10 @@ func (f *fakeCedarPolicy) InstallTemplate(_ context.Context, _, _ string) (cedar
 	return cedarpolicy.PolicyFileDetail{}, nil
 }
 
+func (f *fakeCedarPolicy) ListPlanModeActions(_ context.Context) ([]string, error) {
+	return nil, nil
+}
+
 func (f *fakeCedarPolicy) written() map[string]string {
 	f.mu.Lock()
 	defer f.mu.Unlock()

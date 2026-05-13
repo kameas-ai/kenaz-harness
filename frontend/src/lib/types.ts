@@ -2837,6 +2837,8 @@ export type AutonomyKnob =
 export interface AutonomyLayer {
   level: AutonomyTier | null;
   overrides: Partial<Record<AutonomyKnob, unknown>>;
+  /** Active named posture mode (e.g. "plan_mode"), or absent when none. */
+  postureMode?: string | null;
 }
 
 /** Default empty Layer used as the "inherit from upstream" placeholder. */

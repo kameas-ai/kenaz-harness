@@ -8,11 +8,18 @@ const (
 	SourceProject     Source = "project"
 	SourceGlobal      Source = "global"
 	SourceTierDefault Source = "tier-default"
+	// SourcePostureMode indicates the knob value was locked by a named
+	// posture mode (e.g. "plan_mode") that short-circuits normal resolution.
+	SourcePostureMode Source = "posture-mode"
 )
 
 // ResolvedKnobs is the per-turn output of Resolve: every knob has a concrete
 // value plus a SourceTrace stamping which layer (or the tier-default fallback)
 // the value came from.
+//
+// When PostureMode is non-empty it records the active named posture mode
+// (e.g. PostureModePlanMode). The toolloop and Cedar wiring consult this
+// field to apply posture-level enforcement orthogonal to the knob values.
 type ResolvedKnobs struct {
 	MaxIterations            int
 	AskOnAmbiguity           AskMode
@@ -22,6 +29,8 @@ type ResolvedKnobs struct {
 	ContinueOnError          ErrorMode
 	DestructiveActionPosture DestructivePosture
 	SourceTrace              map[Knob]Source
+	// PostureMode is the active named posture mode, or "" when none.
+	PostureMode string
 }
 
 // allKnobs is the canonical iteration order for resolution. Stable so the
@@ -60,7 +69,39 @@ var allKnobs = []Knob{
 // plan.md and the mission's own expected test assertions only work under the
 // two-pass interpretation. Resolved in favor of the §Key invariant + the
 // expected assertion (TokenCeiling=1M from global).
+//
+// PostureMode short-circuit: when any layer's PostureMode is non-nil,
+// the named posture's locked preset is returned and all knob-level
+// resolution is skipped. Session PostureMode wins over project/global.
 func Resolve(global, project, session Layer) ResolvedKnobs {
+	// Check PostureMode in session → project → global order. The first
+	// non-nil PostureMode wins and short-circuits knob resolution.
+	activePosture := ""
+	if session.PostureMode != nil {
+		activePosture = *session.PostureMode
+	} else if project.PostureMode != nil {
+		activePosture = *project.PostureMode
+	} else if global.PostureMode != nil {
+		activePosture = *global.PostureMode
+	}
+
+	if activePosture != "" {
+		preset := PresetForPostureMode(activePosture)
+		if preset != nil {
+			out := ResolvedKnobs{
+				SourceTrace: make(map[Knob]Source, len(allKnobs)),
+				PostureMode: activePosture,
+			}
+			for _, k := range allKnobs {
+				assignKnob(&out, k, clonePresetValue(preset[k]))
+				out.SourceTrace[k] = SourcePostureMode
+			}
+			return out
+		}
+		// Unknown posture mode — fall through to normal resolution so
+		// an unrecognized value never silently locks the session.
+	}
+
 	out := ResolvedKnobs{
 		SourceTrace: make(map[Knob]Source, len(allKnobs)),
 	}
