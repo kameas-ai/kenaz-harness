@@ -1,0 +1,551 @@
+# coverage_registry.yaml — wire-shape test coverage matrix
+#
+# Schema: docs/coverage-registry-schema.md
+# Completeness enforced by: core/llm/wirecheck/registry_completeness_test.go
+#
+# Every (struct, field, adapter) triple must have either:
+#   tests: [<FuncName>, ...]      — at least one real test function
+#   unsupported: "<reason>"       — explicit reason the adapter omits this field
+#
+# WP01 seeds every entry as unsupported: (suite green from day 0).
+# WP02 flips entries to real tests: as the per-adapter sweep is implemented.
+#
+# Friction is the feature: adding a field to GenerationRequest/Response/StreamEvent
+# without updating this file fails TestRegistryCompleteness with a clear message.
+#
+version: 1
+entries:
+
+  # ============================================================
+  # GenerationRequest fields
+  # ============================================================
+
+  # ProfileID — internal routing key; never sent on the wire
+  - struct: GenerationRequest
+    field: ProfileID
+    adapter: anthropic
+    unsupported: "internal routing key — never sent on the wire"
+  - struct: GenerationRequest
+    field: ProfileID
+    adapter: openai
+    unsupported: "internal routing key — never sent on the wire"
+  - struct: GenerationRequest
+    field: ProfileID
+    adapter: openrouter
+    unsupported: "internal routing key — never sent on the wire"
+  - struct: GenerationRequest
+    field: ProfileID
+    adapter: bedrock
+    unsupported: "internal routing key — never sent on the wire"
+
+  # Model — per-request model override; WP02 will add real tests
+  - struct: GenerationRequest
+    field: Model
+    adapter: anthropic
+    unsupported: "WP01 placeholder — WP02 adds TestAnthropicAdapter_ModelOverride_ModelSerialized"
+  - struct: GenerationRequest
+    field: Model
+    adapter: openai
+    unsupported: "WP01 placeholder — WP02 adds TestOpenAIAdapter_ModelOverride_ModelSerialized"
+  - struct: GenerationRequest
+    field: Model
+    adapter: openrouter
+    unsupported: "WP01 placeholder — WP02 adds TestOpenRouterAdapter_ModelOverride_ModelSerialized"
+  - struct: GenerationRequest
+    field: Model
+    adapter: bedrock
+    unsupported: "WP01 placeholder — WP02 adds TestBedrockAdapter_ModelOverride_ModelSerialized"
+
+  # System — top-level system prompt
+  - struct: GenerationRequest
+    field: System
+    adapter: anthropic
+    unsupported: "WP01 placeholder — WP02 adds TestAnthropicAdapter_SystemPrompt_SystemSerialized"
+  - struct: GenerationRequest
+    field: System
+    adapter: openai
+    unsupported: "WP01 placeholder — WP02 adds TestOpenAIAdapter_SystemPrompt_SystemSerialized"
+  - struct: GenerationRequest
+    field: System
+    adapter: openrouter
+    unsupported: "WP01 placeholder — WP02 adds TestOpenRouterAdapter_SystemPrompt_SystemSerialized"
+  - struct: GenerationRequest
+    field: System
+    adapter: bedrock
+    unsupported: "WP01 placeholder — WP02 adds TestBedrockAdapter_SystemPrompt_SystemSerialized"
+
+  # Messages — conversation history
+  - struct: GenerationRequest
+    field: Messages
+    adapter: anthropic
+    unsupported: "WP01 placeholder — WP02 adds TestAnthropicAdapter_History_MessagesSerialized"
+  - struct: GenerationRequest
+    field: Messages
+    adapter: openai
+    unsupported: "WP01 placeholder — WP02 adds TestOpenAIAdapter_History_MessagesSerialized"
+  - struct: GenerationRequest
+    field: Messages
+    adapter: openrouter
+    unsupported: "WP01 placeholder — WP02 adds TestOpenRouterAdapter_History_MessagesSerialized"
+  - struct: GenerationRequest
+    field: Messages
+    adapter: bedrock
+    unsupported: "WP01 placeholder — WP02 adds TestBedrockAdapter_History_MessagesSerialized"
+
+  # Tools — tool specs
+  - struct: GenerationRequest
+    field: Tools
+    adapter: anthropic
+    unsupported: "WP01 placeholder — WP02 adds TestAnthropicAdapter_Tools_ToolsSerialized"
+  - struct: GenerationRequest
+    field: Tools
+    adapter: openai
+    unsupported: "WP01 placeholder — WP02 adds TestOpenAIAdapter_Tools_ToolsSerialized"
+  - struct: GenerationRequest
+    field: Tools
+    adapter: openrouter
+    unsupported: "WP01 placeholder — WP02 adds TestOpenRouterAdapter_Tools_ToolsSerialized"
+  - struct: GenerationRequest
+    field: Tools
+    adapter: bedrock
+    unsupported: "WP01 placeholder — WP02 adds TestBedrockAdapter_Tools_ToolsSerialized"
+
+  # Attachments — multimodal inputs
+  - struct: GenerationRequest
+    field: Attachments
+    adapter: anthropic
+    unsupported: "WP01 placeholder — WP02 adds TestAnthropicAdapter_Attachments_AttachmentsSerialized"
+  - struct: GenerationRequest
+    field: Attachments
+    adapter: openai
+    unsupported: "WP01 placeholder — WP02 adds TestOpenAIAdapter_Attachments_AttachmentsSerialized"
+  - struct: GenerationRequest
+    field: Attachments
+    adapter: openrouter
+    unsupported: "WP01 placeholder — WP02 adds TestOpenRouterAdapter_Attachments_AttachmentsSerialized"
+  - struct: GenerationRequest
+    field: Attachments
+    adapter: bedrock
+    unsupported: "WP01 placeholder — WP02 adds TestBedrockAdapter_Attachments_AttachmentsSerialized"
+
+  # JSONMode — legacy JSON-mode flag
+  - struct: GenerationRequest
+    field: JSONMode
+    adapter: anthropic
+    unsupported: "WP01 placeholder — WP02 adds TestAnthropicAdapter_JSONMode_JSONModeSerialized"
+  - struct: GenerationRequest
+    field: JSONMode
+    adapter: openai
+    unsupported: "WP01 placeholder — WP02 adds TestOpenAIAdapter_JSONMode_JSONModeSerialized"
+  - struct: GenerationRequest
+    field: JSONMode
+    adapter: openrouter
+    unsupported: "WP01 placeholder — WP02 adds TestOpenRouterAdapter_JSONMode_JSONModeSerialized"
+  - struct: GenerationRequest
+    field: JSONMode
+    adapter: bedrock
+    unsupported: "WP01 placeholder — WP02 adds TestBedrockAdapter_JSONMode_JSONModeSerialized"
+
+  # Caching — prompt-caching breakpoints
+  - struct: GenerationRequest
+    field: Caching
+    adapter: anthropic
+    unsupported: "WP01 placeholder — WP02 adds TestAnthropicAdapter_Caching_CachingSerialized"
+  - struct: GenerationRequest
+    field: Caching
+    adapter: openai
+    unsupported: "OpenAI does not expose prompt-caching breakpoints via API"
+  - struct: GenerationRequest
+    field: Caching
+    adapter: openrouter
+    unsupported: "OpenRouter passes through to upstream model; breakpoints not supported at this layer"
+  - struct: GenerationRequest
+    field: Caching
+    adapter: bedrock
+    unsupported: "Bedrock does not support prompt-caching breakpoints via the SDK input shape"
+
+  # Reasoning — extended thinking / reasoning tokens
+  - struct: GenerationRequest
+    field: Reasoning
+    adapter: anthropic
+    unsupported: "WP01 placeholder — WP02 adds TestAnthropicAdapter_Reasoning_ReasoningSerialized"
+  - struct: GenerationRequest
+    field: Reasoning
+    adapter: openai
+    unsupported: "OpenAI reasoning is model-native; no explicit reasoning flag on the wire"
+  - struct: GenerationRequest
+    field: Reasoning
+    adapter: openrouter
+    unsupported: "OpenRouter passes through; reasoning not wired at adapter layer"
+  - struct: GenerationRequest
+    field: Reasoning
+    adapter: bedrock
+    unsupported: "Bedrock does not expose a top-level reasoning flag in the SDK input shape"
+
+  # ResponseFormat — structured output / grammar constraints
+  - struct: GenerationRequest
+    field: ResponseFormat
+    adapter: anthropic
+    unsupported: "WP01 placeholder — WP02 adds TestAnthropicAdapter_ResponseFormat_ResponseFormatSerialized"
+  - struct: GenerationRequest
+    field: ResponseFormat
+    adapter: openai
+    unsupported: "WP01 placeholder — WP02 adds TestOpenAIAdapter_ResponseFormat_ResponseFormatSerialized"
+  - struct: GenerationRequest
+    field: ResponseFormat
+    adapter: openrouter
+    unsupported: "WP01 placeholder — WP02 adds TestOpenRouterAdapter_ResponseFormat_ResponseFormatSerialized"
+  - struct: GenerationRequest
+    field: ResponseFormat
+    adapter: bedrock
+    unsupported: "Bedrock response format is model-native; not wired at generic adapter layer"
+
+  # Params — provider-specific knobs (temperature, top_p, max_tokens, etc.)
+  - struct: GenerationRequest
+    field: Params
+    adapter: anthropic
+    unsupported: "WP01 placeholder — WP02 adds TestAnthropicAdapter_Params_ParamsSerialized"
+  - struct: GenerationRequest
+    field: Params
+    adapter: openai
+    unsupported: "WP01 placeholder — WP02 adds TestOpenAIAdapter_Params_ParamsSerialized"
+  - struct: GenerationRequest
+    field: Params
+    adapter: openrouter
+    unsupported: "WP01 placeholder — WP02 adds TestOpenRouterAdapter_Params_ParamsSerialized"
+  - struct: GenerationRequest
+    field: Params
+    adapter: bedrock
+    unsupported: "WP01 placeholder — WP02 adds TestBedrockAdapter_Params_ParamsSerialized"
+
+  # RetryOverride — consumed by registry middleware, not adapters
+  - struct: GenerationRequest
+    field: RetryOverride
+    adapter: anthropic
+    unsupported: "consumed by registry retry middleware before reaching the adapter"
+  - struct: GenerationRequest
+    field: RetryOverride
+    adapter: openai
+    unsupported: "consumed by registry retry middleware before reaching the adapter"
+  - struct: GenerationRequest
+    field: RetryOverride
+    adapter: openrouter
+    unsupported: "consumed by registry retry middleware before reaching the adapter"
+  - struct: GenerationRequest
+    field: RetryOverride
+    adapter: bedrock
+    unsupported: "consumed by registry retry middleware before reaching the adapter"
+
+  # SessionID — internal session tracking; never sent on the wire
+  - struct: GenerationRequest
+    field: SessionID
+    adapter: anthropic
+    unsupported: "internal session tracking — never sent on the wire"
+  - struct: GenerationRequest
+    field: SessionID
+    adapter: openai
+    unsupported: "internal session tracking — never sent on the wire"
+  - struct: GenerationRequest
+    field: SessionID
+    adapter: openrouter
+    unsupported: "internal session tracking — never sent on the wire"
+  - struct: GenerationRequest
+    field: SessionID
+    adapter: bedrock
+    unsupported: "internal session tracking — never sent on the wire"
+
+  # ============================================================
+  # Response fields
+  # ============================================================
+
+  # Content — response content blocks
+  - struct: Response
+    field: Content
+    adapter: anthropic
+    unsupported: "WP01 placeholder — WP02 adds TestAnthropicAdapter_ChatDefault_ResponseParsed"
+  - struct: Response
+    field: Content
+    adapter: openai
+    unsupported: "WP01 placeholder — WP02 adds TestOpenAIAdapter_ChatDefault_ResponseParsed"
+  - struct: Response
+    field: Content
+    adapter: openrouter
+    unsupported: "WP01 placeholder — WP02 adds TestOpenRouterAdapter_ChatDefault_ResponseParsed"
+  - struct: Response
+    field: Content
+    adapter: bedrock
+    unsupported: "WP01 placeholder — WP02 adds TestBedrockAdapter_ChatDefault_ResponseParsed"
+
+  # ToolCalls — assembled tool invocations
+  - struct: Response
+    field: ToolCalls
+    adapter: anthropic
+    unsupported: "WP01 placeholder — WP02 adds TestAnthropicAdapter_ToolCall_ToolCallsParsed"
+  - struct: Response
+    field: ToolCalls
+    adapter: openai
+    unsupported: "WP01 placeholder — WP02 adds TestOpenAIAdapter_ToolCall_ToolCallsParsed"
+  - struct: Response
+    field: ToolCalls
+    adapter: openrouter
+    unsupported: "WP01 placeholder — WP02 adds TestOpenRouterAdapter_ToolCall_ToolCallsParsed"
+  - struct: Response
+    field: ToolCalls
+    adapter: bedrock
+    unsupported: "WP01 placeholder — WP02 adds TestBedrockAdapter_ToolCall_ToolCallsParsed"
+
+  # Reasoning — reasoning / thinking blocks
+  - struct: Response
+    field: Reasoning
+    adapter: anthropic
+    unsupported: "WP01 placeholder — WP02 adds TestAnthropicAdapter_Reasoning_ReasoningParsed"
+  - struct: Response
+    field: Reasoning
+    adapter: openai
+    unsupported: "OpenAI reasoning is streaming-only chain-of-thought; no structured reasoning blocks in Response"
+  - struct: Response
+    field: Reasoning
+    adapter: openrouter
+    unsupported: "OpenRouter passes through upstream; no structured reasoning blocks surfaced at adapter layer"
+  - struct: Response
+    field: Reasoning
+    adapter: bedrock
+    unsupported: "Bedrock does not return structured reasoning blocks in the generic SDK shape"
+
+  # FinishReason
+  - struct: Response
+    field: FinishReason
+    adapter: anthropic
+    unsupported: "WP01 placeholder — WP02 adds TestAnthropicAdapter_ChatDefault_ResponseParsed"
+  - struct: Response
+    field: FinishReason
+    adapter: openai
+    unsupported: "WP01 placeholder — WP02 adds TestOpenAIAdapter_ChatDefault_ResponseParsed"
+  - struct: Response
+    field: FinishReason
+    adapter: openrouter
+    unsupported: "WP01 placeholder — WP02 adds TestOpenRouterAdapter_ChatDefault_ResponseParsed"
+  - struct: Response
+    field: FinishReason
+    adapter: bedrock
+    unsupported: "WP01 placeholder — WP02 adds TestBedrockAdapter_ChatDefault_ResponseParsed"
+
+  # Usage — token accounting
+  - struct: Response
+    field: Usage
+    adapter: anthropic
+    unsupported: "WP01 placeholder — WP02 adds TestAnthropicAdapter_ChatDefault_ResponseParsed"
+  - struct: Response
+    field: Usage
+    adapter: openai
+    unsupported: "WP01 placeholder — WP02 adds TestOpenAIAdapter_ChatDefault_ResponseParsed"
+  - struct: Response
+    field: Usage
+    adapter: openrouter
+    unsupported: "WP01 placeholder — WP02 adds TestOpenRouterAdapter_ChatDefault_ResponseParsed"
+  - struct: Response
+    field: Usage
+    adapter: bedrock
+    unsupported: "WP01 placeholder — WP02 adds TestBedrockAdapter_ChatDefault_ResponseParsed"
+
+  # Cost — populated by registry CostReducer middleware, not adapters
+  - struct: Response
+    field: Cost
+    adapter: anthropic
+    unsupported: "populated by registry CostReducer middleware after adapter returns; not set by the adapter"
+  - struct: Response
+    field: Cost
+    adapter: openai
+    unsupported: "populated by registry CostReducer middleware after adapter returns; not set by the adapter"
+  - struct: Response
+    field: Cost
+    adapter: openrouter
+    unsupported: "populated by registry CostReducer middleware after adapter returns; not set by the adapter"
+  - struct: Response
+    field: Cost
+    adapter: bedrock
+    unsupported: "populated by registry CostReducer middleware after adapter returns; not set by the adapter"
+
+  # Attempts — set by registry retry middleware
+  - struct: Response
+    field: Attempts
+    adapter: anthropic
+    unsupported: "set by registry retry middleware; individual adapters always return Attempts=0"
+  - struct: Response
+    field: Attempts
+    adapter: openai
+    unsupported: "set by registry retry middleware; individual adapters always return Attempts=0"
+  - struct: Response
+    field: Attempts
+    adapter: openrouter
+    unsupported: "set by registry retry middleware; individual adapters always return Attempts=0"
+  - struct: Response
+    field: Attempts
+    adapter: bedrock
+    unsupported: "set by registry retry middleware; individual adapters always return Attempts=0"
+
+  # SnapshotID — eval system field; never returned by adapters
+  - struct: Response
+    field: SnapshotID
+    adapter: anthropic
+    unsupported: "eval system field; never returned by the adapter"
+  - struct: Response
+    field: SnapshotID
+    adapter: openai
+    unsupported: "eval system field; never returned by the adapter"
+  - struct: Response
+    field: SnapshotID
+    adapter: openrouter
+    unsupported: "eval system field; never returned by the adapter"
+  - struct: Response
+    field: SnapshotID
+    adapter: bedrock
+    unsupported: "eval system field; never returned by the adapter"
+
+  # ============================================================
+  # StreamEvent fields
+  # ============================================================
+
+  # Kind — event discriminator; always present
+  - struct: StreamEvent
+    field: Kind
+    adapter: anthropic
+    unsupported: "WP01 placeholder — WP02 adds TestAnthropicAdapter_ChatDefault_ResponseParsed"
+  - struct: StreamEvent
+    field: Kind
+    adapter: openai
+    unsupported: "WP01 placeholder — WP02 adds TestOpenAIAdapter_ChatDefault_ResponseParsed"
+  - struct: StreamEvent
+    field: Kind
+    adapter: openrouter
+    unsupported: "WP01 placeholder — WP02 adds TestOpenRouterAdapter_ChatDefault_ResponseParsed"
+  - struct: StreamEvent
+    field: Kind
+    adapter: bedrock
+    unsupported: "WP01 placeholder — WP02 adds TestBedrockAdapter_ChatDefault_ResponseParsed"
+
+  # Text — text delta on kind=text events
+  - struct: StreamEvent
+    field: Text
+    adapter: anthropic
+    unsupported: "WP01 placeholder — WP02 adds TestAnthropicAdapter_ChatDefault_ResponseParsed"
+  - struct: StreamEvent
+    field: Text
+    adapter: openai
+    unsupported: "WP01 placeholder — WP02 adds TestOpenAIAdapter_ChatDefault_ResponseParsed"
+  - struct: StreamEvent
+    field: Text
+    adapter: openrouter
+    unsupported: "WP01 placeholder — WP02 adds TestOpenRouterAdapter_ChatDefault_ResponseParsed"
+  - struct: StreamEvent
+    field: Text
+    adapter: bedrock
+    unsupported: "WP01 placeholder — WP02 adds TestBedrockAdapter_ChatDefault_ResponseParsed"
+
+  # Tool — accumulated tool_use record on kind=tool events
+  - struct: StreamEvent
+    field: Tool
+    adapter: anthropic
+    unsupported: "WP01 placeholder — WP02 adds TestAnthropicAdapter_StreamedToolCalls_ToolCallsParsed"
+  - struct: StreamEvent
+    field: Tool
+    adapter: openai
+    unsupported: "WP01 placeholder — WP02 adds TestOpenAIAdapter_StreamedToolCalls_ToolCallsParsed"
+  - struct: StreamEvent
+    field: Tool
+    adapter: openrouter
+    unsupported: "WP01 placeholder — WP02 adds TestOpenRouterAdapter_StreamedToolCalls_ToolCallsParsed"
+  - struct: StreamEvent
+    field: Tool
+    adapter: bedrock
+    unsupported: "WP01 placeholder — WP02 adds TestBedrockAdapter_StreamedToolCalls_ToolCallsParsed"
+
+  # Reasoning — reasoning frame on kind=reasoning events
+  - struct: StreamEvent
+    field: Reasoning
+    adapter: anthropic
+    unsupported: "WP01 placeholder — WP02 adds TestAnthropicAdapter_Reasoning_ReasoningParsed"
+  - struct: StreamEvent
+    field: Reasoning
+    adapter: openai
+    unsupported: "OpenAI does not emit a structured reasoning event; chain-of-thought arrives as text deltas"
+  - struct: StreamEvent
+    field: Reasoning
+    adapter: openrouter
+    unsupported: "OpenRouter passes through upstream SSE; no structured reasoning event shape at this layer"
+  - struct: StreamEvent
+    field: Reasoning
+    adapter: bedrock
+    unsupported: "Bedrock does not emit structured reasoning events via the generic runtime SDK"
+
+  # Usage — token snapshot on kind=usage events
+  - struct: StreamEvent
+    field: Usage
+    adapter: anthropic
+    unsupported: "WP01 placeholder — WP02 adds TestAnthropicAdapter_ChatDefault_ResponseParsed"
+  - struct: StreamEvent
+    field: Usage
+    adapter: openai
+    unsupported: "WP01 placeholder — WP02 adds TestOpenAIAdapter_ChatDefault_ResponseParsed"
+  - struct: StreamEvent
+    field: Usage
+    adapter: openrouter
+    unsupported: "WP01 placeholder — WP02 adds TestOpenRouterAdapter_ChatDefault_ResponseParsed"
+  - struct: StreamEvent
+    field: Usage
+    adapter: bedrock
+    unsupported: "WP01 placeholder — WP02 adds TestBedrockAdapter_ChatDefault_ResponseParsed"
+
+  # Finish — finish reason string on kind=finish events
+  - struct: StreamEvent
+    field: Finish
+    adapter: anthropic
+    unsupported: "WP01 placeholder — WP02 adds TestAnthropicAdapter_ChatDefault_ResponseParsed"
+  - struct: StreamEvent
+    field: Finish
+    adapter: openai
+    unsupported: "WP01 placeholder — WP02 adds TestOpenAIAdapter_ChatDefault_ResponseParsed"
+  - struct: StreamEvent
+    field: Finish
+    adapter: openrouter
+    unsupported: "WP01 placeholder — WP02 adds TestOpenRouterAdapter_ChatDefault_ResponseParsed"
+  - struct: StreamEvent
+    field: Finish
+    adapter: bedrock
+    unsupported: "WP01 placeholder — WP02 adds TestBedrockAdapter_ChatDefault_ResponseParsed"
+
+  # Err — error message on kind=error events
+  - struct: StreamEvent
+    field: Err
+    adapter: anthropic
+    unsupported: "WP01 placeholder — WP02 adds TestAnthropicAdapter_ChatDefault_ResponseParsed"
+  - struct: StreamEvent
+    field: Err
+    adapter: openai
+    unsupported: "WP01 placeholder — WP02 adds TestOpenAIAdapter_ChatDefault_ResponseParsed"
+  - struct: StreamEvent
+    field: Err
+    adapter: openrouter
+    unsupported: "WP01 placeholder — WP02 adds TestOpenRouterAdapter_ChatDefault_ResponseParsed"
+  - struct: StreamEvent
+    field: Err
+    adapter: bedrock
+    unsupported: "WP01 placeholder — WP02 adds TestBedrockAdapter_ChatDefault_ResponseParsed"
+
+  # Raw — opaque raw SSE frame bytes; optional pass-through; not emitted by production pump
+  - struct: StreamEvent
+    field: Raw
+    adapter: anthropic
+    unsupported: "raw pass-through field; not emitted by production pump"
+  - struct: StreamEvent
+    field: Raw
+    adapter: openai
+    unsupported: "raw pass-through field; not emitted by production pump"
+  - struct: StreamEvent
+    field: Raw
+    adapter: openrouter
+    unsupported: "raw pass-through field; not emitted by production pump"
+  - struct: StreamEvent
+    field: Raw
+    adapter: bedrock
+    unsupported: "raw pass-through field; not emitted by production pump"
