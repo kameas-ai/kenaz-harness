@@ -873,6 +873,96 @@ func TestApplyResponseFormat_JSONMode_AppendsSysPrompt(t *testing.T) {
 	}
 }
 
+// ── WP04 synthetic tool normalization tests (multimodal-io-extended-01KQ8TD2) ─
+
+// TestSyntheticToolNormalization_JSONSchema verifies that when the model
+// responds with the _structured_output tool_use block (due to json_schema mode),
+// Final().Content[0].Type == "text" and the text is the raw JSON input.
+func TestSyntheticToolNormalization_JSONSchema(t *testing.T) {
+	// Simulate the model responding with the synthetic _structured_output tool.
+	fs := newFakeServer(t, func(w http.ResponseWriter, r *http.Request, _ int) {
+		writeSSE(w, []sseFrame{
+			{event: "message_start", data: `{"type":"message_start","message":{"id":"x","usage":{"input_tokens":10,"output_tokens":0}}}`},
+			{event: "content_block_start", data: `{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"tool_so","name":"_structured_output","input":{}}}`},
+			{event: "content_block_delta", data: `{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"name\":\"Alice\""}}`},
+			{event: "content_block_delta", data: `{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"}"}}`},
+			{event: "content_block_stop", data: `{"type":"content_block_stop","index":0}`},
+			{event: "message_delta", data: `{"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"input_tokens":10,"output_tokens":5}}`},
+			{event: "message_stop", data: `{"type":"message_stop"}`},
+		})
+	})
+	a := newAdapter(fs)
+	req, prof := stdReq()
+	req.ResponseFormat = &llm.ResponseFormat{
+		Mode:   "json_schema",
+		Schema: json.RawMessage(`{"type":"object","properties":{"name":{"type":"string"}},"required":["name"]}`),
+	}
+	stream, err := a.Stream(context.Background(), req, prof, []byte("k"))
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	for range stream.Events() {
+	}
+	resp, ferr := stream.Final()
+	if ferr != nil {
+		t.Fatalf("Final: %v", ferr)
+	}
+	// Acceptance: Final().Content[0].Type == "text" with valid JSON.
+	if len(resp.Content) != 1 {
+		t.Fatalf("content blocks = %d, want 1", len(resp.Content))
+	}
+	if resp.Content[0].Type != "text" {
+		t.Fatalf("content[0].Type = %q, want \"text\"", resp.Content[0].Type)
+	}
+	if !json.Valid([]byte(resp.Content[0].Text)) {
+		t.Fatalf("content[0].Text is not valid JSON: %q", resp.Content[0].Text)
+	}
+	// Synthetic tool must NOT appear in ToolCalls.
+	for _, tc := range resp.ToolCalls {
+		if tc.Name == "_structured_output" {
+			t.Fatalf("_structured_output tool leaked into ToolCalls: %+v", tc)
+		}
+	}
+}
+
+// TestSyntheticToolNormalization_JSONMode verifies the same normalization
+// applies when the request uses JSONModeSpec.Schema (WP03/WP04 path).
+func TestSyntheticToolNormalization_JSONMode(t *testing.T) {
+	fs := newFakeServer(t, func(w http.ResponseWriter, r *http.Request, _ int) {
+		writeSSE(w, []sseFrame{
+			{event: "message_start", data: `{"type":"message_start","message":{"id":"x","usage":{"input_tokens":8,"output_tokens":0}}}`},
+			{event: "content_block_start", data: `{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"t1","name":"_my_schema","input":{}}}`},
+			{event: "content_block_delta", data: `{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"count\":3}"}}`},
+			{event: "content_block_stop", data: `{"type":"content_block_stop","index":0}`},
+			{event: "message_delta", data: `{"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"input_tokens":8,"output_tokens":3}}`},
+			{event: "message_stop", data: `{"type":"message_stop"}`},
+		})
+	})
+	a := newAdapter(fs)
+	req, prof := stdReq()
+	req.JSONMode = &llm.JSONModeSpec{
+		Enabled: true,
+		Schema:  json.RawMessage(`{"type":"object","properties":{"count":{"type":"integer"}}}`),
+		Name:    "my_schema",
+	}
+	stream, err := a.Stream(context.Background(), req, prof, []byte("k"))
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	for range stream.Events() {
+	}
+	resp, ferr := stream.Final()
+	if ferr != nil {
+		t.Fatalf("Final: %v", ferr)
+	}
+	if len(resp.Content) != 1 || resp.Content[0].Type != "text" {
+		t.Fatalf("expected text content, got: %+v", resp.Content)
+	}
+	if !json.Valid([]byte(resp.Content[0].Text)) {
+		t.Fatalf("not valid JSON: %q", resp.Content[0].Text)
+	}
+}
+
 // ── WP03 JSONMode wire-shape tests (multimodal-io-extended-01KQ8TD2) ─────────
 
 // TestJSONModeAnthropic_NoSchema_AppendsSysPrompt verifies that JSONModeSpec

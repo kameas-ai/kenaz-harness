@@ -448,14 +448,34 @@ func (a *Adapter) Stream(ctx context.Context, req llm.GenerationRequest, prof ll
 		return nil, classifyBedrockError(err)
 	}
 
+	// Determine the synthetic tool name for WP04 normalization.
+	syntheticName := bedrockSyntheticToolName(req)
+
 	stream := &converseStream{
-		ctx:    ctx,
-		out:    out,
-		events: make(chan llm.StreamEvent, 64),
-		done:   make(chan struct{}),
+		ctx:               ctx,
+		out:               out,
+		events:            make(chan llm.StreamEvent, 64),
+		done:              make(chan struct{}),
+		syntheticToolName: syntheticName,
 	}
 	go stream.pump()
 	return stream, nil
+}
+
+// bedrockSyntheticToolName derives the synthetic tool name injected for a
+// structured-output request. Returns "" when no synthetic tool was injected.
+// (multimodal-io-extended-01KQ8TD2 WP04)
+func bedrockSyntheticToolName(req llm.GenerationRequest) string {
+	if req.ResponseFormat != nil && req.ResponseFormat.Mode == "json_schema" {
+		return "_structured_output"
+	}
+	if req.JSONMode != nil && req.JSONMode.Enabled && len(req.JSONMode.Schema) > 0 {
+		if req.JSONMode.Name != "" {
+			return "_" + req.JSONMode.Name
+		}
+		return "_structured_output"
+	}
+	return ""
 }
 
 // ListModels implements llm.ModelLister.
@@ -785,6 +805,13 @@ type converseStream struct {
 	// frames; the model streams the tool's input JSON in fragments
 	// keyed by ContentBlockIndex.
 	toolPartial map[int32]*toolUseAccum
+
+	// syntheticToolName is the name of the structured-output synthetic tool
+	// injected by applyResponseFormatToConverseInput or applyJSONModeToConverseInput.
+	// On ContentBlockStop, tool_use blocks whose Name matches this value are
+	// normalized: their Input JSON becomes a text ContentBlock instead.
+	// (multimodal-io-extended-01KQ8TD2 WP04)
+	syntheticToolName string
 }
 
 type toolUseAccum struct {
@@ -853,8 +880,21 @@ func (s *converseStream) pump() {
 					Name:  accum.name,
 					Input: json.RawMessage(input),
 				}
-				s.finalResp.ToolCalls = append(s.finalResp.ToolCalls, tool)
-				s.events <- llm.StreamEvent{Kind: llm.StreamTool, Tool: &tool}
+				// Normalize synthetic structured-output tool (WP04): when the
+				// tool name matches the injected synthetic tool, unwrap its Input
+				// JSON as a text ContentBlock instead of a tool call.
+				if s.syntheticToolName != "" && accum.name == s.syntheticToolName {
+					// Emit a text StreamEvent so consumers see valid JSON text.
+					s.events <- llm.StreamEvent{Kind: llm.StreamText, Text: input}
+					// Build a text content block in the final response.
+					s.finalResp.Content = append(s.finalResp.Content, llm.ContentBlock{
+						Type: "text",
+						Text: input,
+					})
+				} else {
+					s.finalResp.ToolCalls = append(s.finalResp.ToolCalls, tool)
+					s.events <- llm.StreamEvent{Kind: llm.StreamTool, Tool: &tool}
+				}
 			}
 		case *types.ConverseStreamOutputMemberMessageStop:
 			finish := string(v.Value.StopReason)

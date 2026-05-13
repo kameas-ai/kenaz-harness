@@ -371,11 +371,26 @@ func (a *Adapter) Stream(ctx context.Context, req llm.GenerationRequest, prof ll
 		return nil, classifyStatus(resp.StatusCode, bodySnippet)
 	}
 
+	// Determine the synthetic tool name for response normalization (WP04).
+	// When the request uses JSONMode or ResponseFormat json_schema, the
+	// response will contain a tool_use block that should be unwrapped to text.
+	syntheticName := ""
+	if req.ResponseFormat != nil && req.ResponseFormat.Mode == "json_schema" {
+		syntheticName = "_structured_output"
+	} else if req.JSONMode != nil && req.JSONMode.Enabled && len(req.JSONMode.Schema) > 0 {
+		if req.JSONMode.Name != "" {
+			syntheticName = "_" + req.JSONMode.Name
+		} else {
+			syntheticName = "_structured_output"
+		}
+	}
+
 	s := &stream{
-		resp:   resp,
-		cancel: cancel,
-		events: make(chan llm.StreamEvent, 16),
-		done:   make(chan struct{}),
+		resp:              resp,
+		cancel:            cancel,
+		events:            make(chan llm.StreamEvent, 16),
+		done:              make(chan struct{}),
+		syntheticToolName: syntheticName,
 	}
 	go s.pump()
 	return s, nil
@@ -811,6 +826,14 @@ type stream struct {
 	toolPartial map[int]*toolPartialState
 	usage       llm.Usage
 	finishStop  string
+
+	// syntheticToolName is set when the request injected a synthetic
+	// structured-output tool (via JSONMode or ResponseFormat json_schema).
+	// During Final() assembly, tool_use events whose Name matches this
+	// value are normalized: their Input JSON is emitted as a text
+	// ContentBlock instead of a ToolUse call, hiding the implementation
+	// detail from callers. (multimodal-io-extended-01KQ8TD2 WP04)
+	syntheticToolName string
 }
 
 type toolPartialState struct {
@@ -859,9 +882,24 @@ func (s *stream) pump() {
 		// Build final Response from accumulators.
 		s.mu.Lock()
 		if s.finalErr == nil && !s.cancelled {
+			// Build the content blocks and separate real tool calls from
+			// the synthetic structured-output tool (WP04 normalization).
+			content := []llm.ContentBlock{{Type: "text", Text: s.textBuf.String()}}
+			var realToolCalls []llm.ToolUse
+			for _, tc := range s.toolCalls {
+				if s.syntheticToolName != "" && tc.Name == s.syntheticToolName {
+					// Normalize: extract the tool input JSON as a text block.
+					// The Input bytes are already valid JSON (assembled from
+					// input_json_delta fragments). Emit them as the text content
+					// so callers see a normal text response with the structured output.
+					content = []llm.ContentBlock{{Type: "text", Text: string(tc.Input)}}
+				} else {
+					realToolCalls = append(realToolCalls, tc)
+				}
+			}
 			s.final = llm.Response{
-				Content:      []llm.ContentBlock{{Type: "text", Text: s.textBuf.String()}},
-				ToolCalls:    s.toolCalls,
+				Content:      content,
+				ToolCalls:    realToolCalls,
 				FinishReason: s.finishStop,
 				Usage:        s.usage,
 			}
