@@ -220,21 +220,24 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # NOTE: linux-amd64 still uses ubuntu-latest (GitHub-hosted). The
-          # kameas-ai org policy reserves GitHub-hosted runners for Apple /
-          # Microsoft builds; this is documented drift until a self-hosted
-          # Linux amd64 runner is provisioned with the Wails Linux
-          # toolchain (libgtk-3-dev + libwebkit2gtk-4.1-dev) baked into the
-          # AMI. linux-arm64 moved to the self-hosted ci-medium pool — the
-          # runner image is expected to carry the Wails toolchain; if the
-          # first release-arm64 build fails for missing GTK, bake the
-          # toolchain into the AMI rather than reverting this change.
+          # NOTE: both Linux release builds use GitHub-hosted runners,
+          # which is drift from the kameas-ai org policy reserving
+          # GitHub-hosted runners for Apple / Microsoft builds. The
+          # blocker is the runner AMI: the kameas-ci-medium image is not
+          # Debian-family (no apt-get), so the `install wails system
+          # deps (linux)` step — which apt-installs libgtk-3-dev +
+          # libwebkit2gtk-4.1-dev — fails immediately. The v0.11.0
+          # release attempt confirmed this on a real run. The proper
+          # fix is to bake the Wails Linux toolchain into the
+          # kameas-ci-medium AMI (or stand up a Debian/Ubuntu self-
+          # hosted Linux pool) and then move this matrix back. Tracked
+          # as v0.12.x infra.
           - os: ubuntu-latest
             label: linux-amd64
             wails_platform: linux/amd64
             artifact_glob: 'build/bin/*'
             archive_ext: tar.gz
-          - os: [self-hosted, Linux, ARM64, ci-medium]
+          - os: ubuntu-24.04-arm
             label: linux-arm64
             wails_platform: linux/arm64
             artifact_glob: 'build/bin/*'
