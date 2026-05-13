@@ -146,12 +146,30 @@ type NotificationEvent struct {
 }
 
 // BackgroundTaskCompleteEvent fires when a background task finishes.
+// This is the authoritative wire shape for the background_task_complete event
+// (background-task-monitor-01KZNP3C WP04). Other v0.11.0 missions that register
+// hooks on this event consume ExitCode, DurationMs, StdoutTail, and StderrTail.
 type BackgroundTaskCompleteEvent struct {
+	// SessionID is the owning session (may be empty for orphaned tasks).
 	SessionID string `json:"session_id"`
-	TaskID    string `json:"task_id"`
-	TaskKind  string `json:"task_kind"`
-	Success   bool   `json:"success"`
-	Error     string `json:"error,omitempty"`
+	// TaskID identifies the completed task (matches tasks.Task.ID).
+	TaskID string `json:"task_id"`
+	// TaskKind is the task kind: "bash" | "subagent" | "wails".
+	TaskKind string `json:"task_kind"`
+	// ExitCode is the OS exit status. 0 for clean completion; non-zero for failure.
+	ExitCode int `json:"exit_code"`
+	// DurationMs is the wall-clock duration from task start to end.
+	DurationMs int64 `json:"duration_ms"`
+	// StdoutTail is the last ≤8 KiB of the task's stdout stream.
+	StdoutTail string `json:"stdout_tail,omitempty"`
+	// StderrTail is the last ≤8 KiB of the task's stderr stream.
+	StderrTail string `json:"stderr_tail,omitempty"`
+	// Success is true when ExitCode == 0. Convenience alias retained for
+	// hooks written against the pre-WP04 shape.
+	Success bool `json:"success"`
+	// Error is the string form of the non-zero exit (empty on success).
+	// Retained for backward compatibility with hooks written before WP04.
+	Error string `json:"error,omitempty"`
 }
 
 // WorktreeCreateEvent fires when a new git worktree is created.

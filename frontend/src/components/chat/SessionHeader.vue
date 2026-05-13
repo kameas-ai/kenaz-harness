@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /**
- * SessionHeader — WP05 suggest-title affordance.
+ * SessionHeader — WP05 suggest-title affordance + plan-mode badge.
  *
  * Renders the session name and a "Suggest new title" button.
  * When the session already has a user-set title (name is non-empty and
@@ -8,11 +8,19 @@
  * before calling Sessions_SuggestTitle. Auto-titled sessions get
  * re-titled immediately without a modal (the title was machine-chosen,
  * so there's nothing to protect).
+ *
+ * The PLAN MODE badge (plan-mode-posture-01KZNP3F WP06) is shown
+ * whenever the session is in plan_mode. Initial state is seeded from
+ * the session's resolved autonomy (so reopened plan_mode sessions show
+ * the badge immediately); live updates arrive via the plan_mode_changed
+ * event handled by usePlanMode.
  */
-import { ref } from 'vue';
+import { ref, onMounted } from 'vue';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
 import type { Session } from '@/lib/types';
 import AutonomyChip from '@/components/chat/AutonomyChip.vue';
+import PlanModeBadge from '@/components/chat/PlanModeBadge.vue';
+import { usePlanMode } from '@/lib/planmode';
 
 const props = defineProps<{
   session: Session;
@@ -23,6 +31,22 @@ const emit = defineEmits<{
 }>();
 
 const client = useHarnessClient();
+
+// ── Plan-mode badge state ─────────────────────────────────────────────
+const { isActive: planModeActive, pendingPlanId, setActive: setPlanModeActive } = usePlanMode(props.session.id);
+
+// Seed initial plan-mode state from the session's autonomy profile so
+// reopened plan_mode sessions show the badge immediately on mount.
+onMounted(async () => {
+  try {
+    const resolved = await client.sessions.resolveAutonomy(props.session.id);
+    if (resolved?.session?.postureMode === 'plan_mode') {
+      setPlanModeActive(true);
+    }
+  } catch {
+    // Non-critical: badge defaults to hidden; live events correct it.
+  }
+});
 
 const suggesting = ref(false);
 const confirmOpen = ref(false);
@@ -69,6 +93,11 @@ function cancelConfirm() {
     <span class="flex-1 truncate text-sm font-medium text-ink">
       {{ session.name || session.id }}
     </span>
+
+    <PlanModeBadge
+      :is-active="planModeActive"
+      :pending-plan-id="pendingPlanId"
+    />
 
     <AutonomyChip :session-id="session.id" />
 

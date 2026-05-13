@@ -1402,6 +1402,77 @@ func (a SleepAttrs) Validate() error {
 	return nil
 }
 
+// SubagentDispatchAttrs is the typed payload for `kind: subagent_dispatch`.
+//
+// Spawns a sub-agent branch from the named profile (branch-subagent-interactive-01KZNP3B). The model calls __subagent_dispatch with a profile id and prompt; the kernel forks the parent session into a child branch configured by the profile.
+type SubagentDispatchAttrs struct {
+
+	// Description: Optional human-readable label shown in the BranchSidebar.
+	Description string `json:"description,omitempty" yaml:"description,omitempty"`
+
+	// Isolation: Isolation level: session (default) or worktree (deferred — requires worktree mission).
+	Isolation string `json:"isolation,omitempty" yaml:"isolation,omitempty"`
+
+	// MaxTokens: Upper bound on generated tokens; 0 = provider default.
+	MaxTokens int `json:"max_tokens,omitempty" yaml:"max_tokens,omitempty"`
+
+	// Model: Provider-specific model name.
+	Model string `json:"model,omitempty" yaml:"model,omitempty"`
+
+	// Name: Always kaneaz__subagent_dispatch.
+	Name string `json:"name,omitempty" yaml:"name,omitempty"`
+
+	// Profile: ID of the sub-agent profile to use (e.g. explore, code-reviewer).
+	Profile string `json:"profile,omitempty" yaml:"profile,omitempty"`
+
+	// Prompt: Task prompt sent to the spawned worker as its first user message.
+	Prompt string `json:"prompt,omitempty" yaml:"prompt,omitempty"`
+
+	// Provider: LLM provider identifier (e.g. anthropic, bedrock).
+	Provider string `json:"provider,omitempty" yaml:"provider,omitempty"`
+
+	// RunInBackground: When true (default), the parent continues while the worker runs. When false, the parent blocks until the merge summary is ready.
+	RunInBackground bool `json:"run_in_background,omitempty" yaml:"run_in_background,omitempty"`
+
+	// SystemPrompt: Optional system prompt prepended to the conversation.
+	SystemPrompt string `json:"system_prompt,omitempty" yaml:"system_prompt,omitempty"`
+
+	// Temperature: Sampling temperature.
+	Temperature float64 `json:"temperature,omitempty" yaml:"temperature,omitempty"`
+
+	// ToolAllowlist: Tool IDs this node may call. Empty = allow-all per policy.
+	ToolAllowlist []string `json:"tool_allowlist,omitempty" yaml:"tool_allowlist,omitempty"`
+}
+
+func (SubagentDispatchAttrs) nodeAttrsMarker() {}
+
+// Validate enforces the manifest's declared constraints for `kind: subagent_dispatch`.
+// Generated from the resolved manifest's attrs map; per-rule errors
+// follow the validator's manifest-attribution format
+// (`subagent_dispatch.attrs.<attr>.<rule>: ...`) so callers can grep for the
+// constraint that fired.
+func (a SubagentDispatchAttrs) Validate() error {
+	if a.MaxTokens != 0 && float64(a.MaxTokens) < 0 {
+		return fmt.Errorf("max_tokens.min: got %d, want >= %v", a.MaxTokens, 0)
+	}
+	if a.Name == "" {
+		return fmt.Errorf("name: name is required (manifest constraint)")
+	}
+	if a.Profile == "" {
+		return fmt.Errorf("profile: profile is required (manifest constraint)")
+	}
+	if a.Prompt == "" {
+		return fmt.Errorf("prompt: prompt is required (manifest constraint)")
+	}
+	if a.Temperature < 0 {
+		return fmt.Errorf("temperature.min: got %v, want >= %v", a.Temperature, 0)
+	}
+	if a.Temperature > 2 {
+		return fmt.Errorf("temperature.max: got %v, want <= %v", a.Temperature, 2)
+	}
+	return nil
+}
+
 // ToolAttrs is the typed payload for `kind: tool`.
 //
 // Invokes a registered tool (FR-032). The on-the-wire kind name is unchanged from v0.

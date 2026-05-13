@@ -1,0 +1,39 @@
+schema_version: "1"
+id: subagent_dispatch
+extends: compute
+display_name: Subagent Dispatch
+description: "Spawns a sub-agent branch from the named profile (branch-subagent-interactive-01KZNP3B). The model calls __subagent_dispatch with a profile id and prompt; the kernel forks the parent session into a child branch configured by the profile."
+executor: agentgraph.ExecBuiltinTool
+ports:
+  inputs:
+    - { name: args, type: any }
+  outputs:
+    - { name: result, type: any }
+attrs:
+  name:
+    type: string
+    required: true
+    description: "Always kaneaz__subagent_dispatch."
+    default: kaneaz__subagent_dispatch
+  profile:
+    type: string
+    required: true
+    description: "ID of the sub-agent profile to use (e.g. explore, code-reviewer)."
+  prompt:
+    type: string
+    required: true
+    description: "Task prompt sent to the spawned worker as its first user message."
+  run_in_background:
+    type: bool
+    description: "When true (default), the parent continues while the worker runs. When false, the parent blocks until the merge summary is ready."
+    default: true
+  isolation:
+    type: string
+    description: "Isolation level: session (default) or worktree (deferred — requires worktree mission)."
+    default: session
+  description:
+    type: string
+    description: "Optional human-readable label shown in the BranchSidebar."
+cedar_action: tool.subagent.dispatch
+budget: tool
+budget_consumes: [args]

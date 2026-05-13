@@ -12,6 +12,7 @@ import (
 	artifactsview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/artifacts"
 	attachmentsview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/attachments"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/audit"
+	agentsview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/agents"
 	branchesview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/branches"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/bundle"
 	cedarpolicyview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/cedarpolicy"
@@ -44,6 +45,7 @@ import (
 	elicitview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/elicit"
 	secretsview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/secrets"
 	coresecrets "github.com/sigil-tech/kaneaz-harness/core/secrets"
+	planmodeview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/planmode"
 )
 
 // fakeHarnessAPI is a compile-time witness that the HarnessAPI interface
@@ -137,6 +139,19 @@ func (f *fakeHarnessAPI) ScheduledChat() scheduledchatview.ScheduledChatAPI {
 
 func (f *fakeHarnessAPI) Secrets() secretsview.SecretsAPI {
 	return secretsview.NewAPI(coresecrets.NewExposureIndex())
+}
+
+func (f *fakeHarnessAPI) Agents() *agentsview.API {
+	return agentsview.New("")
+}
+func (f *fakeHarnessAPI) Planmode_Approve(_ context.Context, _ planmodeview.ApproveRequest) (planmodeview.ApproveResponse, error) {
+	return planmodeview.ApproveResponse{}, nil
+}
+func (f *fakeHarnessAPI) Planmode_Discard(_ context.Context, _ planmodeview.DiscardRequest) (planmodeview.DiscardResponse, error) {
+	return planmodeview.DiscardResponse{}, nil
+}
+func (f *fakeHarnessAPI) Planmode_Edit(_ context.Context, _ planmodeview.EditRequest) (planmodeview.EditResponse, error) {
+	return planmodeview.EditResponse{}, nil
 }
 
 // Compile-time interface witness (plan §4.2).

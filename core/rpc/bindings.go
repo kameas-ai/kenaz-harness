@@ -17,6 +17,7 @@ import (
 	artifactsview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/artifacts"
 	attachmentsview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/attachments"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/audit"
+	agentsview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/agents"
 	branchesview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/branches"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/bundle"
 	cedarpolicyview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/cedarpolicy"
@@ -50,6 +51,7 @@ import (
 	storageview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/storage"
 	elicitview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/elicit"
 	secretsview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/secrets"
+	planmodeview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/planmode"
 	"github.com/sigil-tech/kaneaz-harness/core/logging"
 	"github.com/sigil-tech/kaneaz-harness/core/mcp/stdio"
 )
@@ -1930,6 +1932,14 @@ func (b *Bindings) CedarPolicy_InstallTemplate(templateName string, destName str
 	return b.api.CedarPolicy().InstallTemplate(b.ctx(), templateName, destName)
 }
 
+// CedarPolicy_ListPlanModeActions returns the canonical Cedar action
+// strings denied while plan_mode posture is active. Used by the Cedar
+// editor UI's plan-mode reference panel.
+// (plan-mode-posture-01KZNP3F WP08)
+func (b *Bindings) CedarPolicy_ListPlanModeActions() ([]string, error) {
+	return b.api.CedarPolicy().ListPlanModeActions(b.ctx())
+}
+
 // ── search (cross-session-search mission) ─────────────────────────────
 
 // Search_Sessions executes a full-text search across all session
@@ -2117,4 +2127,53 @@ func (b *Bindings) Secrets_Expose(req secretsview.ExposeRequest) error {
 // Returns an error when the locator is not currently exposed.
 func (b *Bindings) Secrets_Revoke(locator string) error {
 	return b.api.Secrets().RevokeSecret(b.ctx(), locator)
+}
+
+// ── agents (branch-subagent-interactive-01KZNP3B, WP01) ──────────────────
+
+// Agents_ListProfiles returns summary entries for all known sub-agent profiles
+// (bundled + user-authored). The Settings → Agents panel calls this to
+// populate the profile list.
+func (b *Bindings) Agents_ListProfiles() ([]agentsview.ProfileSummaryWire, error) {
+	return b.api.Agents().ListProfiles(b.ctx())
+}
+
+// Agents_LoadProfile returns the full profile for the given id. The profile
+// editor calls this to populate its form fields.
+func (b *Bindings) Agents_LoadProfile(id string) (agentsview.ProfileWire, error) {
+	return b.api.Agents().LoadProfile(b.ctx(), id)
+}
+
+// Agents_SaveProfile creates or updates a user-authored profile. The profile
+// editor calls this on Submit. Returns an error for bundled ids (the user
+// must duplicate the profile first).
+func (b *Bindings) Agents_SaveProfile(profile agentsview.ProfileWire) error {
+	return b.api.Agents().SaveProfile(b.ctx(), profile)
+}
+
+// Agents_DeleteProfile removes a user-authored profile by id. Returns an
+// error for bundled ids or ids that do not exist.
+func (b *Bindings) Agents_DeleteProfile(id string) error {
+	return b.api.Agents().DeleteProfile(b.ctx(), id)
+}
+
+// ── Plan-mode approval bindings (plan-mode-posture-01KZNP3F WP05) ────────
+
+// Planmode_Approve clears the session's plan_mode posture and signals
+// approval to the toolloop. Called from PlanApprovalModal "Approve & continue".
+func (b *Bindings) Planmode_Approve(req planmodeview.ApproveRequest) (planmodeview.ApproveResponse, error) {
+	return b.api.Planmode_Approve(b.ctx(), req)
+}
+
+// Planmode_Discard clears the session's plan_mode posture without approving
+// the plan. The plan artifact is retained. Called from PlanApprovalModal "Discard".
+func (b *Bindings) Planmode_Discard(req planmodeview.DiscardRequest) (planmodeview.DiscardResponse, error) {
+	return b.api.Planmode_Discard(b.ctx(), req)
+}
+
+// Planmode_Edit updates the plan artifact with edited content and then
+// approves. Called from PlanApprovalModal "Save & approve" in the inline
+// editor view.
+func (b *Bindings) Planmode_Edit(req planmodeview.EditRequest) (planmodeview.EditResponse, error) {
+	return b.api.Planmode_Edit(b.ctx(), req)
 }

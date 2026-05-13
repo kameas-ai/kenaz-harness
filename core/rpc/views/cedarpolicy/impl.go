@@ -386,6 +386,16 @@ func (a *API) InstallTemplate(ctx context.Context, templateName string, destName
 	}, nil
 }
 
+// ListPlanModeActions returns the canonical Cedar action strings denied
+// during plan_mode. Used by the Cedar editor UI's plan-mode reference
+// panel so policy authors can see which actions the posture gate blocks.
+// (plan-mode-posture-01KZNP3F WP08)
+func (a *API) ListPlanModeActions(_ context.Context) ([]string, error) {
+	out := make([]string, len(cedar.PlanModeDeniedActions))
+	copy(out, cedar.PlanModeDeniedActions)
+	return out, nil
+}
+
 // parseSource attempts to parse Cedar source using cedar-go.
 // Returns ParseResult with OK=true on success, or OK=false with
 // best-effort line/column diagnostics on failure.

@@ -2837,6 +2837,8 @@ export type AutonomyKnob =
 export interface AutonomyLayer {
   level: AutonomyTier | null;
   overrides: Partial<Record<AutonomyKnob, unknown>>;
+  /** Active named posture mode (e.g. "plan_mode"), or absent when none. */
+  postureMode?: string | null;
 }
 
 /** Default empty Layer used as the "inherit from upstream" placeholder. */
@@ -3151,4 +3153,123 @@ export interface PolicyFileDetail {
   source: string;
   /** true for embedded defaults that cannot be edited or deleted via the UI. */
   read_only: boolean;
+}
+
+// ── Background task types (background-task-monitor-01KZNP3C WP05) ──────────
+
+/** Status values for a background task. Mirrors core/tasks status constants. */
+export type TaskStatus =
+  | 'pending'
+  | 'running'
+  | 'completed'
+  | 'failed'
+  | 'cancelled'
+  | 'crashed';
+
+/** Kind values for a background task. */
+export type TaskKind = 'bash' | 'subagent' | 'wails';
+
+/**
+ * TaskRow is the wire-safe representation of one background task.
+ * Mirrors core/rpc/views/tasks.TaskRow.
+ */
+export interface TaskRow {
+  id: string;
+  kind: TaskKind | string;
+  ownerSessionId: string;
+  cmd: string;
+  description: string;
+  status: TaskStatus;
+  exitCode: number;
+  startedAt: string;   // ISO 8601
+  endedAt?: string;    // ISO 8601; absent for running tasks
+  ageMs: number;
+}
+
+/**
+ * LineRow is one output line returned by Tasks_Tail.
+ * Mirrors core/rpc/views/tasks.LineRow.
+ */
+export interface LineRow {
+  stream: 'stdout' | 'stderr';
+  text: string;
+  offset: number;
+  at: string; // ISO 8601
+}
+
+// ── branch-subagent-interactive-01KZNP3B WP01 wire types ──────────────────
+
+/**
+ * SubagentMergePolicy controls how a completed sub-agent worker delivers
+ * its output back to the parent session.
+ *   auto    — merge summary on completion (no user confirmation).
+ *   confirm — present a merge card to the user before injecting summary.
+ *   manual  — parent must call __subagent_merge(branch_id) explicitly.
+ */
+export type SubagentMergePolicy = 'auto' | 'confirm' | 'manual';
+
+/**
+ * AgentProfileSummary — lightweight entry in the Settings → Agents list.
+ * Mirrors core/rpc/views/agents.ProfileSummaryWire.
+ */
+export interface AgentProfileSummary {
+  id: string;
+  name: string;
+  description: string;
+  model?: string;
+  mergePolicy: SubagentMergePolicy;
+  /** True for profiles shipped with the binary (read-only). */
+  bundled: boolean;
+}
+
+/**
+ * AgentProfile — full profile wire shape for the profile editor.
+ * Mirrors core/rpc/views/agents.ProfileWire.
+ */
+export interface AgentProfile {
+  id: string;
+  name: string;
+  description: string;
+  whenToUse?: string;
+  model?: string;
+  autonomyTier: AutonomyTier;
+  allowedTools?: string[];
+  deniedTools?: string[];
+  budgetTokens?: number;
+  budgetTimeS?: number;
+  systemPromptOverride?: string;
+  mergePolicy: SubagentMergePolicy;
+  bundled: boolean;
+}
+
+/**
+ * SubagentStatus tracks a running sub-agent branch's lifecycle.
+ */
+export type SubagentStatus =
+  | 'running'
+  | 'awaiting-merge'
+  | 'paused'
+  | 'complete'
+  | 'error'
+  | 'aborted';
+
+/**
+ * SubagentBranch extends Branch with sub-agent-specific metadata.
+ * Populated on branches that were spawned by __subagent_dispatch.
+ */
+export interface SubagentBranch extends Branch {
+  /** Always true for sub-agent branches. */
+  isSubagent: true;
+  /** The profile id that drove the spawn. */
+  profileId: string;
+  /** Current lifecycle status. */
+  subagentStatus: SubagentStatus;
+  /** Token count consumed so far. */
+  tokensUsed?: number;
+  /** Budget token limit from the profile. */
+  budgetTokens?: number;
+  /** Elapsed seconds since spawn. */
+  elapsedS?: number;
+  /** Budget time limit in seconds from the profile. */
+  budgetTimeS?: number;
 }

@@ -58,6 +58,7 @@ import (
 	artifactsview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/artifacts"
 	attachmentsview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/attachments"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/audit"
+	agentsview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/agents"
 	branchesview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/branches"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/bundle"
 	cedarpolicyview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/cedarpolicy"
@@ -88,11 +89,13 @@ import (
 	storageview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/storage"
 	elicitview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/elicit"
 	secretsview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/secrets"
+	planmodeview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/planmode"
 	"github.com/sigil-tech/kaneaz-harness/core/autonomy"
 	"github.com/sigil-tech/kaneaz-harness/core/secrets"
 	coreslashcmd "github.com/sigil-tech/kaneaz-harness/core/slashcmd"
 	corebash "github.com/sigil-tech/kaneaz-harness/core/tools/bash"
 	coreskill "github.com/sigil-tech/kaneaz-harness/core/tools/skill"
+	coreplanmode "github.com/sigil-tech/kaneaz-harness/core/tools/planmode"
 	secretsref "github.com/sigil-tech/kaneaz-harness/core/secrets/ref"
 	credstoreRefs "github.com/sigil-tech/kaneaz-harness/core/credstore/refs"
 	"github.com/sigil-tech/kaneaz-harness/core/session"
@@ -208,6 +211,29 @@ type HarnessAPI interface {
 	// via ExposeSecret, and revokes them via RevokeSecret. No plaintext
 	// is ever returned to the frontend.
 	Secrets() secretsview.SecretsAPI
+
+	// Agents exposes the sub-agent profile registry RPC surface (mission
+	// branch-subagent-interactive-01KZNP3B WP01). The Settings → Agents
+	// panel lists, edits, and duplicates bundled + user-authored profiles.
+	Agents() *agentsview.API
+
+	// Planmode_Approve clears the plan_mode posture and allows the model
+	// to continue with write-capable tools. Called by the frontend's
+	// PlanApprovalModal when the user clicks "Approve & continue".
+	// (plan-mode-posture-01KZNP3F WP05)
+	Planmode_Approve(ctx context.Context, req planmodeview.ApproveRequest) (planmodeview.ApproveResponse, error)
+
+	// Planmode_Discard clears the plan_mode posture and returns the model
+	// to normal execution without approving its plan. The plan artifact
+	// is retained for history. Called by the frontend's PlanApprovalModal.
+	// (plan-mode-posture-01KZNP3F WP05)
+	Planmode_Discard(ctx context.Context, req planmodeview.DiscardRequest) (planmodeview.DiscardResponse, error)
+
+	// Planmode_Edit updates the plan artifact with edited markdown and
+	// then approves. Called by the frontend's PlanApprovalModal inline
+	// editor when the user clicks "Save & approve".
+	// (plan-mode-posture-01KZNP3F WP05)
+	Planmode_Edit(ctx context.Context, req planmodeview.EditRequest) (planmodeview.EditResponse, error)
 }
 
 // ShellStatus drives the Toolbar status pills + LegendBar live-rate
@@ -425,6 +451,17 @@ type API struct {
 	// (mission scheduled-chat-runs-01KX5R8B, WP04). Wired in New when
 	// a real Core with a DB is available; nil DB path returns ErrStoreUnavailable.
 	scheduledChatAPI scheduledchatview.ScheduledChatAPI
+
+	// agentsAPI is the sub-agent profile registry RPC surface
+	// (branch-subagent-interactive-01KZNP3B WP01). Backed by core/agents
+	// loaded from <DataDir>/agents/*.yaml + bundled profiles.
+	agentsAPI *agentsview.API
+
+	// planmodeAPI is the plan-mode approval RPC surface (mission
+	// plan-mode-posture-01KZNP3F WP05). Exposes Approve, Discard, and
+	// Edit to the frontend's PlanApprovalModal. Wired in New when a real
+	// sessionsAPI + sessionsAPI is available; nil on the test harness path.
+	planmodeAPI *planmodeview.API
 }
 
 // Builtins returns the in-binary tool registry. Used by the chat-input
@@ -849,7 +886,7 @@ func New(c *core.Core) *API {
 	a.corpusMgr = newCorpusManager(c, embedder)
 	a.graphMgr = newGraphManagerWithDeps(c, a.convMgr, a.corpusMgr, memStore, embedder, a_bashStore)
 
-	stack := newLLMStack(c, a.broker, personalForLLM, hooksRunner, attMgr, confirmEachEnabled, artifactSink, artifactSinkConcrete, settingsImpl, a_bashStore, artMgr, a.graphMgr, a.promptRegistry, usageMgr, a.elicitAPI, slashDispatch, a.exposureIdx)
+	stack := newLLMStack(c, a.broker, personalForLLM, hooksRunner, attMgr, confirmEachEnabled, artifactSink, artifactSinkConcrete, settingsImpl, a_bashStore, artMgr, a.graphMgr, a.promptRegistry, usageMgr, a.elicitAPI, slashDispatch, a.exposureIdx, a.sessionsAPI)
 	a.llmAPI = stack.api
 	a.stdioPool = stack.pool
 	a.builtins = stack.builtins
@@ -1227,6 +1264,32 @@ func New(c *core.Core) *API {
 		a.scheduledChatAPI = scheduledchatview.New(scheduledchatview.Config{
 			Store: chatStore,
 		})
+	}
+
+	// Sub-agent profile registry (branch-subagent-interactive-01KZNP3B WP01).
+	// Wire with DataDir when available; falls back to bundled-only when nil Core.
+	{
+		dataDir := ""
+		if c != nil {
+			dataDir = c.DataDir()
+		}
+		a.agentsAPI = agentsview.New(dataDir)
+		logging.L().Info("rpc.agents.wired", "data_dir", dataDir)
+	}
+
+	// Plan-mode approval view (plan-mode-posture-01KZNP3F WP05). Wired
+	// whenever a real sessionsAPI is available. The EventEmitter bridges
+	// to the StreamBroker so plan_mode_changed events reach the frontend
+	// via the same authorised Publish path as all other broker events.
+	// The updater is nil-tolerant (Edit works but skips artifact mutation
+	// when no artifacts manager is wired — test-chassis path).
+	if a.sessionsAPI != nil {
+		var planEmitter planmodeview.EventEmitter = &brokerPlanEmitter{broker: a.broker}
+		var planUpdater planmodeview.ArtifactUpdater
+		if a.artifactsMgr != nil {
+			planUpdater = a.artifactsMgr
+		}
+		a.planmodeAPI = planmodeview.NewAPI(a.sessionsAPI, planEmitter, planUpdater)
 	}
 
 	a.bindings = NewBindings(a)
@@ -2161,6 +2224,7 @@ func newLLMStack(
 	elicitAPI *elicitview.API,
 	slashDispatch *coreslashcmd.Dispatch,
 	exposureIdx *secrets.ExposureIndex,
+	postureManager coreplanmode.SessionPostureManager,
 ) llmStack {
 	// Share ONE secrets backend between the credref resolver (which
 	// reads keys when streaming) and the keychain writer (which stages
@@ -2279,7 +2343,7 @@ func newLLMStack(
 	if exposureIdx != nil {
 		secretsBudget = credstoreRefs.NewBudget(credstoreRefs.DefaultBudget)
 	}
-	registerBuiltinTools(c, builtinRegistry, bashStore, artifactsMgr, settingsStore, bashCedarEngine, promptRegistry, elicitAPI, slashDispatch, exposureIdx, secretsBudget)
+	registerBuiltinTools(c, builtinRegistry, bashStore, artifactsMgr, settingsStore, bashCedarEngine, promptRegistry, elicitAPI, slashDispatch, exposureIdx, secretsBudget, postureManager)
 	// builtin-filesystem-tools-01KR3N4P: register the read/write family of
 	// in-process filesystem tools. Gated behind per-family settings dials
 	// (FSReadEnabled / FSWriteEnabled) so the Tools panel toggles take effect
@@ -4123,6 +4187,33 @@ func (a *API) Secrets() secretsview.SecretsAPI {
 	return a.secretsAPI
 }
 
+// Planmode_Approve clears plan_mode and approves the pending plan.
+// (plan-mode-posture-01KZNP3F WP05)
+func (a *API) Planmode_Approve(ctx context.Context, req planmodeview.ApproveRequest) (planmodeview.ApproveResponse, error) {
+	if a.planmodeAPI == nil {
+		return planmodeview.ApproveResponse{}, fmt.Errorf("planmode: not configured")
+	}
+	return a.planmodeAPI.Approve(ctx, req)
+}
+
+// Planmode_Discard clears plan_mode and discards the pending plan.
+// (plan-mode-posture-01KZNP3F WP05)
+func (a *API) Planmode_Discard(ctx context.Context, req planmodeview.DiscardRequest) (planmodeview.DiscardResponse, error) {
+	if a.planmodeAPI == nil {
+		return planmodeview.DiscardResponse{}, fmt.Errorf("planmode: not configured")
+	}
+	return a.planmodeAPI.Discard(ctx, req)
+}
+
+// Planmode_Edit updates the plan artifact with edited content and approves.
+// (plan-mode-posture-01KZNP3F WP05)
+func (a *API) Planmode_Edit(ctx context.Context, req planmodeview.EditRequest) (planmodeview.EditResponse, error) {
+	if a.planmodeAPI == nil {
+		return planmodeview.EditResponse{}, fmt.Errorf("planmode: not configured")
+	}
+	return a.planmodeAPI.Edit(ctx, req)
+}
+
 // SetCedarProposeResolver wires a resolver at runtime. Called by the
 // onboarding flow when it creates a CedarProposerImpl (WP07).
 func (a *API) SetCedarProposeResolver(r CedarProposeResolver) {
@@ -4622,4 +4713,61 @@ func (a *capCatalogAdapter) AttachmentLimits(provider, model string) llm.Attachm
 		ImageInputMimeTypes:     d.ImageInputMimeTypes,
 		DocumentInputMimeTypes:  d.DocumentInputMimeTypes,
 	}
+}
+
+// ── Sub-agent profile registry RPCs (branch-subagent-interactive-01KZNP3B WP01) ──
+
+// Agents returns the sub-agent profile registry RPC surface. When not yet
+// wired (test harness path with New(nil)), returns an empty-DataDir API.
+func (a *API) Agents() *agentsview.API {
+	if a.agentsAPI == nil {
+		return agentsview.New("")
+	}
+	return a.agentsAPI
+}
+
+// Agents_ListProfiles returns summary entries for all known profiles
+// (bundled + user-authored). Wails-bound.
+func (a *API) Agents_ListProfiles(ctx context.Context) ([]agentsview.ProfileSummaryWire, error) {
+	return a.Agents().ListProfiles(ctx)
+}
+
+// Agents_LoadProfile returns the full profile for the given id. Wails-bound.
+func (a *API) Agents_LoadProfile(ctx context.Context, id string) (agentsview.ProfileWire, error) {
+	return a.Agents().LoadProfile(ctx, id)
+}
+
+// Agents_SaveProfile creates or updates a user-authored profile. Wails-bound.
+func (a *API) Agents_SaveProfile(ctx context.Context, profile agentsview.ProfileWire) error {
+	return a.Agents().SaveProfile(ctx, profile)
+}
+
+// Agents_DeleteProfile removes a user-authored profile by id. Wails-bound.
+func (a *API) Agents_DeleteProfile(ctx context.Context, id string) error {
+	return a.Agents().DeleteProfile(ctx, id)
+}
+
+// brokerPlanEmitter adapts a *StreamBroker to the planmodeview.EventEmitter
+// interface. The broker's Publish method broadcasts to all subscribers
+// on the given topic; the planmode events are published as-is on the
+// event name so the frontend's usePlanMode composable receives them via
+// the Wails runtime.EventsOn subscription.
+//
+// The topic is the event name directly (e.g. "plan_mode_changed") rather
+// than a session-namespaced topic, because the frontend subscribes by
+// the bare event name and filters on payload.session_id. This is
+// consistent with how elicit/ask events are published.
+type brokerPlanEmitter struct {
+	broker *StreamBroker
+}
+
+// Emit publishes the payload on the event name. sessionID is embedded in
+// the payload by the planmodeview.API.emitChanged helper; this adapter
+// does not re-embed it.
+func (e *brokerPlanEmitter) Emit(_ context.Context, _ string, event string, payload map[string]any) error {
+	if e.broker == nil {
+		return nil
+	}
+	e.broker.Publish(event, payload)
+	return nil
 }

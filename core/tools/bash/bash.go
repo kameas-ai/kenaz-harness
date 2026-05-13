@@ -89,7 +89,9 @@ const inputSchema = `{
   "properties": {
     "command": {"type": "string"},
     "working_dir": {"type": "string", "description": "Optional cwd for this invocation. Defaults to the harness agent-workspace; you can also pass any absolute path the user's account can reach."},
-    "timeout_seconds": {"type": "integer", "default": 30, "maximum": 300}
+    "timeout_seconds": {"type": "integer", "default": 30, "maximum": 300},
+    "run_in_background": {"type": "boolean", "default": false, "description": "When true, spawn the command asynchronously and return immediately with a task_id. Use __monitor to observe output or wait for completion."},
+    "description": {"type": "string", "description": "Human-readable label for the background task (shown in the Tasks panel). Only used when run_in_background=true."}
   },
   "required": ["command"]
 }`
@@ -122,6 +124,12 @@ const (
 // files to be persisted even for commands classified as dangerous-tier.
 // Default false: AllowAlways on dangerous commands is demoted to
 // AllowOnce with an audit annotation.
+//
+// TaskRegistry is the optional background task registry. When non-nil,
+// run_in_background:true spawns the command asynchronously, registers
+// it in the registry, and returns immediately with a task_id.
+// SessionIDFromCtx is the optional function that extracts the session ID
+// from a context (used to populate Task.OwnerSessionID).
 type Options struct {
 	SandboxRoot                string
 	Allowlist                  []string
@@ -132,7 +140,31 @@ type Options struct {
 	PromptRegistry             *cedar.Registry
 	DataDir                    string
 	PermissionCacheDangerousOps bool
+	// BackgroundSpawn is called when run_in_background:true to register
+	// the newly-spawned process in the task registry. nil means
+	// background mode silently falls back to synchronous execution.
+	BackgroundSpawn BackgroundSpawnFunc
+	// BackgroundEnd is called when the background process exits.
+	// nil is safe; the task will eventually be orphaned (the registry
+	// marks it crashed on next boot).
+	BackgroundEnd BackgroundEndFunc
+	// SessionIDFromCtx extracts the owning session ID from a context.
+	// nil means the task is registered without an owner.
+	SessionIDFromCtx func(ctx context.Context) string
 }
+
+// BackgroundSpawnFunc is the function the bash tool calls to register a
+// newly-spawned background process in the task registry. The function
+// receives the owning sessionID, the command string, description, and the
+// OS PID (after the process is confirmed alive). It returns the task ID.
+//
+// Defined as a function type (not an interface) to avoid the circular
+// import between core/tools/bash and core/tasks.
+type BackgroundSpawnFunc func(ctx context.Context, sessionID, cmd, description string, pid int) (taskID string, err error)
+
+// BackgroundEndFunc is the function the bash tool calls when the background
+// process exits, to mark the task terminal.
+type BackgroundEndFunc func(ctx context.Context, taskID string, exitCode int)
 
 // Tool implements the kaneaz__bash built-in tool. It is safe for
 // concurrent use; all state is read-only after construction and the
@@ -147,6 +179,9 @@ type Tool struct {
 	promptRegistry             *cedar.Registry
 	dataDir                    string
 	permissionCacheDangerousOps bool
+	backgroundSpawn            BackgroundSpawnFunc
+	backgroundEnd              BackgroundEndFunc
+	sessionIDFromCtx           func(ctx context.Context) string
 }
 
 // New constructs a Tool with the given options. SandboxRoot must be
@@ -166,6 +201,9 @@ func New(opts Options) *Tool {
 		promptRegistry:             opts.PromptRegistry,
 		dataDir:                    opts.DataDir,
 		permissionCacheDangerousOps: opts.PermissionCacheDangerousOps,
+		backgroundSpawn:            opts.BackgroundSpawn,
+		backgroundEnd:              opts.BackgroundEnd,
+		sessionIDFromCtx:           opts.SessionIDFromCtx,
 	}
 }
 
@@ -187,9 +225,11 @@ func (t *Tool) InputSchema() json.RawMessage {
 // "explicitly zero" (treated the same as omitted; FR-010 says default
 // 30, max 300, but a zero or negative value is equally meaningless).
 type callArgs struct {
-	Command        string `json:"command"`
-	WorkingDir     string `json:"working_dir,omitempty"`
-	TimeoutSeconds *int   `json:"timeout_seconds,omitempty"`
+	Command          string `json:"command"`
+	WorkingDir       string `json:"working_dir,omitempty"`
+	TimeoutSeconds   *int   `json:"timeout_seconds,omitempty"`
+	RunInBackground  bool   `json:"run_in_background,omitempty"`
+	Description      string `json:"description,omitempty"`
 }
 
 // callResult mirrors the tool's documented JSON return shape
@@ -204,6 +244,13 @@ type callResult struct {
 	ExitCode  int    `json:"exit_code"`
 	Truncated bool   `json:"truncated"`
 	RunID     string `json:"run_id,omitempty"`
+}
+
+// backgroundResult is the JSON return shape when run_in_background=true.
+// The model uses task_id with __monitor to observe output.
+type backgroundResult struct {
+	TaskID string `json:"task_id"`
+	Status string `json:"status"` // always "running"
 }
 
 // Call dispatches a single tool invocation. Errors that originate
@@ -299,6 +346,15 @@ func (t *Tool) Call(ctx context.Context, argsJSON json.RawMessage) (json.RawMess
 		commandLine = sub
 		// ZeroBuffer is not applicable here since commandLine is a Go string;
 		// the internal buffer was already zeroed by refs.Substitute.
+	}
+
+	// ── Background mode (run_in_background:true) ────────────────────────
+	// The Cedar gate has already run synchronously above — background mode
+	// does NOT bypass the policy gate. We spawn the process, confirm it
+	// is alive within 100 ms, register it in the task registry, and return
+	// immediately with {task_id, status:"running"}.
+	if args.RunInBackground && t.backgroundSpawn != nil {
+		return t.spawnBackground(ctx, commandLine, cwd, timeout, args.Description)
 	}
 
 	res, runErr := Run(ctx, RunOpts{
