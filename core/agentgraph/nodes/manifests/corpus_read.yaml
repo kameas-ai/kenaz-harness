@@ -1,4 +1,5 @@
 schema_version: "1"
+manifest_version: "1.0.0"
 id: corpus_read
 extends: read
 display_name: Corpus Read

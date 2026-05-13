@@ -1,4 +1,5 @@
 schema_version: "1"
+manifest_version: "1.0.0"
 id: session_write
 extends: state
 display_name: Session Write
