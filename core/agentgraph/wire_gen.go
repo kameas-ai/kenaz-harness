@@ -16,38 +16,39 @@ import (
 // Generated NodeKind constants. The on-the-wire string values come
 // straight from the manifest's `kind_name` (defaults to `id`).
 const (
-	NodeKindActivity       NodeKind = "activity"
-	NodeKindApproval       NodeKind = "approval"
-	NodeKindArtifact       NodeKind = "artifact"
-	NodeKindAsk            NodeKind = "ask"
-	NodeKindAttachment     NodeKind = "attachment"
-	NodeKindBranch         NodeKind = "branch"
-	NodeKindCheckpoint     NodeKind = "checkpoint"
-	NodeKindCompact        NodeKind = "compact"
-	NodeKindCorpusRead     NodeKind = "corpus_read"
-	NodeKindCorpusWrite    NodeKind = "corpus_write"
-	NodeKindDecision       NodeKind = "decision"
-	NodeKindEscalate       NodeKind = "escalate"
-	NodeKindHistoryRead    NodeKind = "history_read"
-	NodeKindJoin           NodeKind = "join"
-	NodeKindLoop           NodeKind = "loop"
-	NodeKindMemory         NodeKind = "memory"
-	NodeKindMerge          NodeKind = "merge"
-	NodeKindModel          NodeKind = "model"
-	NodeKindParallel       NodeKind = "parallel"
-	NodeKindPlanner        NodeKind = "planner"
-	NodeKindReadBashOutput NodeKind = "read_bash_output"
-	NodeKindReadFile       NodeKind = "read_file"
-	NodeKindReflect        NodeKind = "reflect"
-	NodeKindRetry          NodeKind = "retry"
-	NodeKindReview         NodeKind = "review"
-	NodeKindSessionWrite   NodeKind = "session_write"
-	NodeKindSleep          NodeKind = "sleep"
-	NodeKindTool           NodeKind = "tool"
-	NodeKindToolDispatch   NodeKind = "tool_dispatch"
-	NodeKindTraceWrite     NodeKind = "trace_write"
-	NodeKindTransform      NodeKind = "transform"
-	NodeKindWriteFile      NodeKind = "write_file"
+	NodeKindActivity         NodeKind = "activity"
+	NodeKindApproval         NodeKind = "approval"
+	NodeKindArtifact         NodeKind = "artifact"
+	NodeKindAsk              NodeKind = "ask"
+	NodeKindAttachment       NodeKind = "attachment"
+	NodeKindBranch           NodeKind = "branch"
+	NodeKindCheckpoint       NodeKind = "checkpoint"
+	NodeKindCompact          NodeKind = "compact"
+	NodeKindCorpusRead       NodeKind = "corpus_read"
+	NodeKindCorpusWrite      NodeKind = "corpus_write"
+	NodeKindDecision         NodeKind = "decision"
+	NodeKindEscalate         NodeKind = "escalate"
+	NodeKindHistoryRead      NodeKind = "history_read"
+	NodeKindJoin             NodeKind = "join"
+	NodeKindLoop             NodeKind = "loop"
+	NodeKindMemory           NodeKind = "memory"
+	NodeKindMerge            NodeKind = "merge"
+	NodeKindModel            NodeKind = "model"
+	NodeKindParallel         NodeKind = "parallel"
+	NodeKindPlanner          NodeKind = "planner"
+	NodeKindReadBashOutput   NodeKind = "read_bash_output"
+	NodeKindReadFile         NodeKind = "read_file"
+	NodeKindReflect          NodeKind = "reflect"
+	NodeKindRetry            NodeKind = "retry"
+	NodeKindReview           NodeKind = "review"
+	NodeKindSessionWrite     NodeKind = "session_write"
+	NodeKindSleep            NodeKind = "sleep"
+	NodeKindSubagentDispatch NodeKind = "subagent_dispatch"
+	NodeKindTool             NodeKind = "tool"
+	NodeKindToolDispatch     NodeKind = "tool_dispatch"
+	NodeKindTraceWrite       NodeKind = "trace_write"
+	NodeKindTransform        NodeKind = "transform"
+	NodeKindWriteFile        NodeKind = "write_file"
 )
 
 // AllNodeKinds returns every callable kind in canonical (sorted-ID)
@@ -81,6 +82,7 @@ func AllNodeKinds() []NodeKind {
 		NodeKindReview,
 		NodeKindSessionWrite,
 		NodeKindSleep,
+		NodeKindSubagentDispatch,
 		NodeKindTool,
 		NodeKindToolDispatch,
 		NodeKindTraceWrite,
@@ -148,6 +150,8 @@ func defaultAttrsFor(kind NodeKind) NodeAttrs {
 		return SessionWriteAttrs{}
 	case NodeKindSleep:
 		return SleepAttrs{}
+	case NodeKindSubagentDispatch:
+		return SubagentDispatchAttrs{}
 	case NodeKindTool:
 		return ToolAttrs{}
 	case NodeKindToolDispatch:
@@ -330,6 +334,12 @@ func defaultPortsFor(kind NodeKind) (inputs, outputs []Port) {
 				{Name: "appended", Type: PortType("any")},
 			}
 	case NodeKindSleep:
+		return []Port{
+				{Name: "args", Type: PortType("any")},
+			}, []Port{
+				{Name: "result", Type: PortType("any")},
+			}
+	case NodeKindSubagentDispatch:
 		return []Port{
 				{Name: "args", Type: PortType("any")},
 			}, []Port{
@@ -550,6 +560,12 @@ func decodeAttrs(kind NodeKind, raw map[string]any, nodeID string) (NodeAttrs, e
 		return v, nil
 	case NodeKindSleep:
 		var v SleepAttrs
+		if err := json.Unmarshal(buf, &v); err != nil {
+			return nil, fmt.Errorf("agentgraph: node %q: decode attrs for kind %q: %w", nodeID, kind, err)
+		}
+		return v, nil
+	case NodeKindSubagentDispatch:
+		var v SubagentDispatchAttrs
 		if err := json.Unmarshal(buf, &v); err != nil {
 			return nil, fmt.Errorf("agentgraph: node %q: decode attrs for kind %q: %w", nodeID, kind, err)
 		}

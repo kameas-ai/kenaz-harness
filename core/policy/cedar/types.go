@@ -178,6 +178,22 @@ const (
 	ActionScheduledRunDelete  = "tool.scheduled_run.delete"
 	ActionScheduledRunExecute = "tool.scheduled_run.execute"
 
+	// ── Sub-agent dispatch action family ─────────────────────────────────────
+	// Introduced by mission branch-subagent-interactive-01KZNP3B (WP03).
+	// The "tool.subagent" family follows the established "<domain>.<operation>"
+	// naming convention.
+	//
+	//   ActionToolSubagentDispatch — gates kaneaz__subagent_dispatch calls.
+	//     Resource UID: SubagentProfile::"<profile-id>". Policy authors can
+	//     forbid specific profiles (e.g. the implementer profile in a
+	//     read-only session) while leaving others open.
+	//
+	//   ActionToolSubagentMerge — gates explicit __subagent_merge(branch_id)
+	//     calls (MergePolicyManual path). Default-allow; admins can deny
+	//     to prevent the parent from absorbing a worker's output.
+	ActionToolSubagentDispatch = "tool.subagent.dispatch"
+	ActionToolSubagentMerge    = "tool.subagent.merge"
+
 	// ── Model-side secret reference action family ──────────────────────────
 	// Introduced by mission model-secret-references-01KW7M5A.
 	// Both actions follow the established "<domain>.<operation>" naming

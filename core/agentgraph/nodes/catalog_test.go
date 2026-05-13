@@ -41,13 +41,13 @@ func TestCatalogGetListArchetypes(t *testing.T) {
 		}
 	}
 
-	// Kinds() returns the 32 callable kinds shipped after the
-	// builtin-tools-search-and-elicitation-01KZNP3D WP04 mission added
-	// the `sleep` node (was 31 before).
+	// Kinds() returns the 33 callable kinds shipped after the
+	// branch-subagent-interactive-01KZNP3B WP03 mission added
+	// the `subagent_dispatch` node (was 32 before).
 	kinds := cat.Kinds()
-	const wantCallable = 32
+	const wantCallable = 33
 	if len(kinds) != wantCallable {
-		t.Errorf("expected %d kinds (WP04+WP05+session_write+tool_dispatch+sleep), got %d", wantCallable, len(kinds))
+		t.Errorf("expected %d kinds (WP04+WP05+session_write+tool_dispatch+sleep+subagent_dispatch), got %d", wantCallable, len(kinds))
 	}
 
 	// IsCallable returns false for archetypes and unknown IDs.
@@ -61,11 +61,12 @@ func TestCatalogGetListArchetypes(t *testing.T) {
 	}
 
 	// ListByCategory returns archetypes + every kind whose category
-	// matches. WP04: 1 archetype + 12 callable compute kinds = 13
+	// matches. WP04: 1 archetype + 13 callable compute kinds = 14
 	// (10 from WP04 + tool_dispatch from tool-dispatch-node mission +
-	// sleep from builtin-tools-search-and-elicitation-01KZNP3D WP04).
-	if got := cat.ListByCategory(nodes.CategoryCompute); len(got) != 13 {
-		t.Errorf("ListByCategory(compute): got %d, want 13 (1 archetype + 12 kinds)", len(got))
+	// sleep from builtin-tools-search-and-elicitation-01KZNP3D WP04 +
+	// subagent_dispatch from branch-subagent-interactive-01KZNP3B WP03).
+	if got := cat.ListByCategory(nodes.CategoryCompute); len(got) != 14 {
+		t.Errorf("ListByCategory(compute): got %d, want 14 (1 archetype + 13 kinds)", len(got))
 	}
 	// state archetype + read/write/marker archetypes + 12 callable state
 	// kinds (8 from WP04 + read_file/read_bash_output/write_file from
