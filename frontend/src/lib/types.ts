@@ -3152,3 +3152,45 @@ export interface PolicyFileDetail {
   /** true for embedded defaults that cannot be edited or deleted via the UI. */
   read_only: boolean;
 }
+
+// ── Background task types (background-task-monitor-01KZNP3C WP05) ──────────
+
+/** Status values for a background task. Mirrors core/tasks status constants. */
+export type TaskStatus =
+  | 'pending'
+  | 'running'
+  | 'completed'
+  | 'failed'
+  | 'cancelled'
+  | 'crashed';
+
+/** Kind values for a background task. */
+export type TaskKind = 'bash' | 'subagent' | 'wails';
+
+/**
+ * TaskRow is the wire-safe representation of one background task.
+ * Mirrors core/rpc/views/tasks.TaskRow.
+ */
+export interface TaskRow {
+  id: string;
+  kind: TaskKind | string;
+  ownerSessionId: string;
+  cmd: string;
+  description: string;
+  status: TaskStatus;
+  exitCode: number;
+  startedAt: string;   // ISO 8601
+  endedAt?: string;    // ISO 8601; absent for running tasks
+  ageMs: number;
+}
+
+/**
+ * LineRow is one output line returned by Tasks_Tail.
+ * Mirrors core/rpc/views/tasks.LineRow.
+ */
+export interface LineRow {
+  stream: 'stdout' | 'stderr';
+  text: string;
+  offset: number;
+  at: string; // ISO 8601
+}
