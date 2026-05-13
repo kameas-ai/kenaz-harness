@@ -1,0 +1,31 @@
+id: summarizer
+name: Summarizer
+description: Fast single-turn summarizer that condenses text, threads, or documents into a concise digest.
+when_to_use: |
+  Use when the parent session needs a compact, well-structured summary of
+  a long document, conversation thread, or research output. The summarizer
+  is a single-turn worker: it reads its input prompt and returns a summary
+  immediately without any tool calls.
+model: anthropic/claude-haiku-4-5
+autonomy_tier: strict
+allowed_tools:
+  - kaneaz__ask_user_question
+denied_tools:
+  - kaneaz__read_file
+  - kaneaz__list_dir
+  - kaneaz__glob
+  - kaneaz__grep
+  - kaneaz__write_file
+  - kaneaz__edit_file
+  - kaneaz__bash
+  - kaneaz__websearch
+budget_tokens: 20000
+budget_time_s: 60
+system_prompt_override: |
+  You are a concise summarizer. Read the content provided in the user
+  message and return a structured digest. Use this format:
+  - **TL;DR**: one sentence.
+  - **Key points**: 3–7 bullet points.
+  - **Action items** (if any): bulleted list.
+  Do not ask clarifying questions. Summarise what you were given.
+merge_policy: auto

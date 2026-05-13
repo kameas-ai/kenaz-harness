@@ -58,6 +58,7 @@ import (
 	artifactsview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/artifacts"
 	attachmentsview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/attachments"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/audit"
+	agentsview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/agents"
 	branchesview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/branches"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/bundle"
 	cedarpolicyview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/cedarpolicy"
@@ -208,6 +209,11 @@ type HarnessAPI interface {
 	// via ExposeSecret, and revokes them via RevokeSecret. No plaintext
 	// is ever returned to the frontend.
 	Secrets() secretsview.SecretsAPI
+
+	// Agents exposes the sub-agent profile registry RPC surface (mission
+	// branch-subagent-interactive-01KZNP3B WP01). The Settings → Agents
+	// panel lists, edits, and duplicates bundled + user-authored profiles.
+	Agents() *agentsview.API
 }
 
 // ShellStatus drives the Toolbar status pills + LegendBar live-rate
@@ -425,6 +431,11 @@ type API struct {
 	// (mission scheduled-chat-runs-01KX5R8B, WP04). Wired in New when
 	// a real Core with a DB is available; nil DB path returns ErrStoreUnavailable.
 	scheduledChatAPI scheduledchatview.ScheduledChatAPI
+
+	// agentsAPI is the sub-agent profile registry RPC surface
+	// (branch-subagent-interactive-01KZNP3B WP01). Backed by core/agents
+	// loaded from <DataDir>/agents/*.yaml + bundled profiles.
+	agentsAPI *agentsview.API
 }
 
 // Builtins returns the in-binary tool registry. Used by the chat-input
@@ -1227,6 +1238,17 @@ func New(c *core.Core) *API {
 		a.scheduledChatAPI = scheduledchatview.New(scheduledchatview.Config{
 			Store: chatStore,
 		})
+	}
+
+	// Sub-agent profile registry (branch-subagent-interactive-01KZNP3B WP01).
+	// Wire with DataDir when available; falls back to bundled-only when nil Core.
+	{
+		dataDir := ""
+		if c != nil {
+			dataDir = c.DataDir()
+		}
+		a.agentsAPI = agentsview.New(dataDir)
+		logging.L().Info("rpc.agents.wired", "data_dir", dataDir)
 	}
 
 	a.bindings = NewBindings(a)
@@ -4622,4 +4644,36 @@ func (a *capCatalogAdapter) AttachmentLimits(provider, model string) llm.Attachm
 		ImageInputMimeTypes:     d.ImageInputMimeTypes,
 		DocumentInputMimeTypes:  d.DocumentInputMimeTypes,
 	}
+}
+
+// ── Sub-agent profile registry RPCs (branch-subagent-interactive-01KZNP3B WP01) ──
+
+// Agents returns the sub-agent profile registry RPC surface. When not yet
+// wired (test harness path with New(nil)), returns an empty-DataDir API.
+func (a *API) Agents() *agentsview.API {
+	if a.agentsAPI == nil {
+		return agentsview.New("")
+	}
+	return a.agentsAPI
+}
+
+// Agents_ListProfiles returns summary entries for all known profiles
+// (bundled + user-authored). Wails-bound.
+func (a *API) Agents_ListProfiles(ctx context.Context) ([]agentsview.ProfileSummaryWire, error) {
+	return a.Agents().ListProfiles(ctx)
+}
+
+// Agents_LoadProfile returns the full profile for the given id. Wails-bound.
+func (a *API) Agents_LoadProfile(ctx context.Context, id string) (agentsview.ProfileWire, error) {
+	return a.Agents().LoadProfile(ctx, id)
+}
+
+// Agents_SaveProfile creates or updates a user-authored profile. Wails-bound.
+func (a *API) Agents_SaveProfile(ctx context.Context, profile agentsview.ProfileWire) error {
+	return a.Agents().SaveProfile(ctx, profile)
+}
+
+// Agents_DeleteProfile removes a user-authored profile by id. Wails-bound.
+func (a *API) Agents_DeleteProfile(ctx context.Context, id string) error {
+	return a.Agents().DeleteProfile(ctx, id)
 }

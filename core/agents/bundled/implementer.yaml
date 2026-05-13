@@ -1,0 +1,31 @@
+id: implementer
+name: Implementer
+description: Full-capability implementation worker with bounded token and time budget for focused coding tasks.
+when_to_use: |
+  Use when the parent session needs to implement a well-scoped coding task:
+  adding a function, fixing a bug, writing tests, or refactoring a module.
+  The implementer has read and write filesystem access plus bash. Give it a
+  precise task description and let it work autonomously within its budget.
+model: anthropic/claude-sonnet-4-5
+autonomy_tier: default
+allowed_tools:
+  - kaneaz__read_file
+  - kaneaz__list_dir
+  - kaneaz__glob
+  - kaneaz__grep
+  - kaneaz__write_file
+  - kaneaz__edit_file
+  - kaneaz__bash
+  - kaneaz__websearch
+  - kaneaz__web_fetch
+  - kaneaz__ask_user_question
+denied_tools: []
+budget_tokens: 150000
+budget_time_s: 900
+system_prompt_override: |
+  You are a focused implementation worker. Implement the requested task
+  carefully and incrementally. Run tests when available. Keep changes
+  minimal and targeted — do not refactor unrelated code. When done,
+  conclude with "## Done" followed by a brief summary of what was changed
+  and any caveats the parent session should know.
+merge_policy: confirm

@@ -3194,3 +3194,80 @@ export interface LineRow {
   offset: number;
   at: string; // ISO 8601
 }
+
+// ── branch-subagent-interactive-01KZNP3B WP01 wire types ──────────────────
+
+/**
+ * SubagentMergePolicy controls how a completed sub-agent worker delivers
+ * its output back to the parent session.
+ *   auto    — merge summary on completion (no user confirmation).
+ *   confirm — present a merge card to the user before injecting summary.
+ *   manual  — parent must call __subagent_merge(branch_id) explicitly.
+ */
+export type SubagentMergePolicy = 'auto' | 'confirm' | 'manual';
+
+/**
+ * AgentProfileSummary — lightweight entry in the Settings → Agents list.
+ * Mirrors core/rpc/views/agents.ProfileSummaryWire.
+ */
+export interface AgentProfileSummary {
+  id: string;
+  name: string;
+  description: string;
+  model?: string;
+  mergePolicy: SubagentMergePolicy;
+  /** True for profiles shipped with the binary (read-only). */
+  bundled: boolean;
+}
+
+/**
+ * AgentProfile — full profile wire shape for the profile editor.
+ * Mirrors core/rpc/views/agents.ProfileWire.
+ */
+export interface AgentProfile {
+  id: string;
+  name: string;
+  description: string;
+  whenToUse?: string;
+  model?: string;
+  autonomyTier: AutonomyTier;
+  allowedTools?: string[];
+  deniedTools?: string[];
+  budgetTokens?: number;
+  budgetTimeS?: number;
+  systemPromptOverride?: string;
+  mergePolicy: SubagentMergePolicy;
+  bundled: boolean;
+}
+
+/**
+ * SubagentStatus tracks a running sub-agent branch's lifecycle.
+ */
+export type SubagentStatus =
+  | 'running'
+  | 'awaiting-merge'
+  | 'paused'
+  | 'complete'
+  | 'error'
+  | 'aborted';
+
+/**
+ * SubagentBranch extends Branch with sub-agent-specific metadata.
+ * Populated on branches that were spawned by __subagent_dispatch.
+ */
+export interface SubagentBranch extends Branch {
+  /** Always true for sub-agent branches. */
+  isSubagent: true;
+  /** The profile id that drove the spawn. */
+  profileId: string;
+  /** Current lifecycle status. */
+  subagentStatus: SubagentStatus;
+  /** Token count consumed so far. */
+  tokensUsed?: number;
+  /** Budget token limit from the profile. */
+  budgetTokens?: number;
+  /** Elapsed seconds since spawn. */
+  elapsedS?: number;
+  /** Budget time limit in seconds from the profile. */
+  budgetTimeS?: number;
+}

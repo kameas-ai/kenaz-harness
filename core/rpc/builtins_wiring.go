@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 
 	"github.com/sigil-tech/kaneaz-harness/core"
+	coresubagent "github.com/sigil-tech/kaneaz-harness/core/tools/subagentdispatch"
 	coreart "github.com/sigil-tech/kaneaz-harness/core/artifacts"
 	"github.com/sigil-tech/kaneaz-harness/core/logging"
 	"github.com/sigil-tech/kaneaz-harness/core/policy/cedar"
@@ -239,6 +240,25 @@ func registerBuiltinTools(
 	webFetchTool := corewebfetch.New(corewebfetch.Options{})
 	registry.Register(webFetchTool)
 	logging.L().Info("rpc.builtins.register", "tool", webFetchTool.Name())
+
+	// kaneaz__subagent_dispatch: model-callable sub-agent spawner
+	// (branch-subagent-interactive-01KZNP3B WP03). Always registered.
+	// The BranchSeam is nil until WP07 wires the live seam; the tool
+	// returns a clean "seam_not_configured" error in that case so model
+	// self-correction is straightforward.
+	{
+		var dataDir string
+		if c != nil {
+			dataDir = c.DataDir()
+		}
+		subagentTool := coresubagent.New(coresubagent.Options{
+			DataDir: dataDir,
+			Seam:    nil, // wired by branch session manager in WP07
+			Tasks:   nil, // wired by background-task-monitor in WP06
+		})
+		registry.Register(subagentTool)
+		logging.L().Info("rpc.builtins.register", "tool", subagentTool.Name())
+	}
 }
 
 // fsWriteEnabledLookup returns a closure the update_artifact tool
@@ -542,6 +562,13 @@ func builtinEnabledPredicate(s *settings.API) func(string) bool {
 		// The tool is registered unconditionally; the dispatch layer enforces
 		// model_invokable=true at resolution time so only eligible commands run.
 		case coreskilltool.ToolName:
+			logging.L().Info("rpc.builtins.predicate", "tool", name, "enabled", true)
+			return true
+
+		// ── Subagent dispatch tool (branch-subagent-interactive-01KZNP3B) ──
+		// Default ON: the model dispatching sub-agents is the primary use case.
+		// The tool degrades gracefully when the BranchSeam is not yet wired.
+		case coresubagent.ToolName:
 			logging.L().Info("rpc.builtins.predicate", "tool", name, "enabled", true)
 			return true
 		}
