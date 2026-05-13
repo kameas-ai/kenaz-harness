@@ -14,6 +14,22 @@ export function A2A_StopStream(arg1) {
   return window['go']['rpc']['Bindings']['A2A_StopStream'](arg1);
 }
 
+export function Agents_DeleteProfile(arg1) {
+  return window['go']['rpc']['Bindings']['Agents_DeleteProfile'](arg1);
+}
+
+export function Agents_ListProfiles() {
+  return window['go']['rpc']['Bindings']['Agents_ListProfiles']();
+}
+
+export function Agents_LoadProfile(arg1) {
+  return window['go']['rpc']['Bindings']['Agents_LoadProfile'](arg1);
+}
+
+export function Agents_SaveProfile(arg1) {
+  return window['go']['rpc']['Bindings']['Agents_SaveProfile'](arg1);
+}
+
 export function AppInfo() {
   return window['go']['rpc']['Bindings']['AppInfo']();
 }
@@ -142,6 +158,22 @@ export function Bundle_Remove(arg1) {
   return window['go']['rpc']['Bindings']['Bundle_Remove'](arg1);
 }
 
+export function CedarPolicy_Delete(arg1) {
+  return window['go']['rpc']['Bindings']['CedarPolicy_Delete'](arg1);
+}
+
+export function CedarPolicy_Get(arg1) {
+  return window['go']['rpc']['Bindings']['CedarPolicy_Get'](arg1);
+}
+
+export function CedarPolicy_InstallTemplate(arg1, arg2) {
+  return window['go']['rpc']['Bindings']['CedarPolicy_InstallTemplate'](arg1, arg2);
+}
+
+export function CedarPolicy_ListPlanModeActions() {
+  return window['go']['rpc']['Bindings']['CedarPolicy_ListPlanModeActions']();
+}
+
 export function CedarPolicy_ListPolicies() {
   return window['go']['rpc']['Bindings']['CedarPolicy_ListPolicies']();
 }
@@ -160,6 +192,14 @@ export function CedarPolicy_ResolvePropose(arg1, arg2) {
 
 export function CedarPolicy_RevokeSnippet(arg1) {
   return window['go']['rpc']['Bindings']['CedarPolicy_RevokeSnippet'](arg1);
+}
+
+export function CedarPolicy_Save(arg1, arg2) {
+  return window['go']['rpc']['Bindings']['CedarPolicy_Save'](arg1, arg2);
+}
+
+export function CedarPolicy_Validate(arg1) {
+  return window['go']['rpc']['Bindings']['CedarPolicy_Validate'](arg1);
 }
 
 export function CedarPolicy_WriteSnippet(arg1, arg2) {
@@ -188,6 +228,10 @@ export function Compaction_SetConfig(arg1, arg2, arg3) {
 
 export function Compaction_TriggerManual(arg1, arg2) {
   return window['go']['rpc']['Bindings']['Compaction_TriggerManual'](arg1, arg2);
+}
+
+export function Config_GetFlags() {
+  return window['go']['rpc']['Bindings']['Config_GetFlags']();
 }
 
 export function Context_List() {
@@ -298,6 +342,26 @@ export function Dials_Set(arg1, arg2) {
   return window['go']['rpc']['Bindings']['Dials_Set'](arg1, arg2);
 }
 
+export function Elicit_AnswerDeferred(arg1, arg2) {
+  return window['go']['rpc']['Bindings']['Elicit_AnswerDeferred'](arg1, arg2);
+}
+
+export function Elicit_ListPending() {
+  return window['go']['rpc']['Bindings']['Elicit_ListPending']();
+}
+
+export function Elicit_RegisterDeferred(arg1, arg2) {
+  return window['go']['rpc']['Bindings']['Elicit_RegisterDeferred'](arg1, arg2);
+}
+
+export function Elicit_SubmitAnswer(arg1, arg2, arg3) {
+  return window['go']['rpc']['Bindings']['Elicit_SubmitAnswer'](arg1, arg2, arg3);
+}
+
+export function Elicit_SubmitWizardStep(arg1, arg2, arg3, arg4) {
+  return window['go']['rpc']['Bindings']['Elicit_SubmitWizardStep'](arg1, arg2, arg3, arg4);
+}
+
 export function Graph_CancelRun(arg1) {
   return window['go']['rpc']['Bindings']['Graph_CancelRun'](arg1);
 }
@@ -336,26 +400,6 @@ export function Graph_StartRun(arg1) {
 
 export function Graph_Validate(arg1) {
   return window['go']['rpc']['Bindings']['Graph_Validate'](arg1);
-}
-
-export function Elicit_AnswerDeferred(arg1, arg2) {
-  return window['go']['rpc']['Bindings']['Elicit_AnswerDeferred'](arg1, arg2);
-}
-
-export function Elicit_ListPending() {
-  return window['go']['rpc']['Bindings']['Elicit_ListPending']();
-}
-
-export function Elicit_RegisterDeferred(arg1, arg2) {
-  return window['go']['rpc']['Bindings']['Elicit_RegisterDeferred'](arg1, arg2);
-}
-
-export function Elicit_SubmitAnswer(arg1, arg2, arg3) {
-  return window['go']['rpc']['Bindings']['Elicit_SubmitAnswer'](arg1, arg2, arg3);
-}
-
-export function Elicit_SubmitWizardStep(arg1, arg2, arg3, arg4) {
-  return window['go']['rpc']['Bindings']['Elicit_SubmitWizardStep'](arg1, arg2, arg3, arg4);
 }
 
 export function Hooks_Add(arg1) {
@@ -398,6 +442,10 @@ export function LLM_AddProvider(arg1) {
   return window['go']['rpc']['Bindings']['LLM_AddProvider'](arg1);
 }
 
+export function LLM_GetAttachmentLimits(arg1, arg2) {
+  return window['go']['rpc']['Bindings']['LLM_GetAttachmentLimits'](arg1, arg2);
+}
+
 export function LLM_ListModels(arg1, arg2) {
   return window['go']['rpc']['Bindings']['LLM_ListModels'](arg1, arg2);
 }
@@ -414,12 +462,20 @@ export function LLM_ResolveConfirm(arg1, arg2) {
   return window['go']['rpc']['Bindings']['LLM_ResolveConfirm'](arg1, arg2);
 }
 
+export function LLM_ResumeAfterKeyRotation(arg1) {
+  return window['go']['rpc']['Bindings']['LLM_ResumeAfterKeyRotation'](arg1);
+}
+
 export function LLM_StartStream(arg1, arg2, arg3) {
   return window['go']['rpc']['Bindings']['LLM_StartStream'](arg1, arg2, arg3);
 }
 
 export function LLM_StopStream(arg1) {
   return window['go']['rpc']['Bindings']['LLM_StopStream'](arg1);
+}
+
+export function LLM_TestAndRotateKey(arg1, arg2, arg3) {
+  return window['go']['rpc']['Bindings']['LLM_TestAndRotateKey'](arg1, arg2, arg3);
 }
 
 export function LLM_TestProvider(arg1) {
@@ -432,10 +488,6 @@ export function LLM_UpdateProvider(arg1) {
 
 export function LLM_UpdateProviderCredential(arg1, arg2) {
   return window['go']['rpc']['Bindings']['LLM_UpdateProviderCredential'](arg1, arg2);
-}
-
-export function LLM_GetAttachmentLimits(arg1, arg2) {
-  return window['go']['rpc']['Bindings']['LLM_GetAttachmentLimits'](arg1, arg2);
 }
 
 export function LoadRoute() {
@@ -478,8 +530,24 @@ export function MCP_TestRecipe(arg1, arg2, arg3) {
   return window['go']['rpc']['Bindings']['MCP_TestRecipe'](arg1, arg2, arg3);
 }
 
+export function Memory_CaptureRate() {
+  return window['go']['rpc']['Bindings']['Memory_CaptureRate']();
+}
+
+export function Memory_EmbedderEligibility() {
+  return window['go']['rpc']['Bindings']['Memory_EmbedderEligibility']();
+}
+
+export function Memory_EmbeddingProbe(arg1, arg2) {
+  return window['go']['rpc']['Bindings']['Memory_EmbeddingProbe'](arg1, arg2);
+}
+
 export function Memory_Forget(arg1) {
   return window['go']['rpc']['Bindings']['Memory_Forget'](arg1);
+}
+
+export function Memory_GetChunkProvenance(arg1) {
+  return window['go']['rpc']['Bindings']['Memory_GetChunkProvenance'](arg1);
 }
 
 export function Memory_HealthSnapshot() {
@@ -490,8 +558,28 @@ export function Memory_JournalTail(arg1, arg2, arg3) {
   return window['go']['rpc']['Bindings']['Memory_JournalTail'](arg1, arg2, arg3);
 }
 
+export function Memory_LastRetrieval(arg1) {
+  return window['go']['rpc']['Bindings']['Memory_LastRetrieval'](arg1);
+}
+
 export function Memory_ListChunks(arg1) {
   return window['go']['rpc']['Bindings']['Memory_ListChunks'](arg1);
+}
+
+export function Memory_MarkImportant(arg1, arg2) {
+  return window['go']['rpc']['Bindings']['Memory_MarkImportant'](arg1, arg2);
+}
+
+export function Memory_NarrativeFailedCount() {
+  return window['go']['rpc']['Bindings']['Memory_NarrativeFailedCount']();
+}
+
+export function Memory_NarrativeFailedList() {
+  return window['go']['rpc']['Bindings']['Memory_NarrativeFailedList']();
+}
+
+export function Memory_NarrativeMetricsForChunk(arg1) {
+  return window['go']['rpc']['Bindings']['Memory_NarrativeMetricsForChunk'](arg1);
 }
 
 export function Memory_Pin(arg1, arg2) {
@@ -510,48 +598,20 @@ export function Memory_RememberMessage(arg1, arg2, arg3) {
   return window['go']['rpc']['Bindings']['Memory_RememberMessage'](arg1, arg2, arg3);
 }
 
-export function Memory_RunPruneNow(arg1) {
-  return window['go']['rpc']['Bindings']['Memory_RunPruneNow'](arg1);
-}
-
-export function Memory_TestEmbedder() {
-  return window['go']['rpc']['Bindings']['Memory_TestEmbedder']();
-}
-
-export function Memory_MarkImportant(arg1, arg2) {
-  return window['go']['rpc']['Bindings']['Memory_MarkImportant'](arg1, arg2);
-}
-
-export function Memory_NarrativeFailedCount() {
-  return window['go']['rpc']['Bindings']['Memory_NarrativeFailedCount']();
-}
-
-export function Memory_NarrativeFailedList() {
-  return window['go']['rpc']['Bindings']['Memory_NarrativeFailedList']();
+export function Memory_ResummarizeChunk(arg1) {
+  return window['go']['rpc']['Bindings']['Memory_ResummarizeChunk'](arg1);
 }
 
 export function Memory_RetryFailedNarrative(arg1) {
   return window['go']['rpc']['Bindings']['Memory_RetryFailedNarrative'](arg1);
 }
 
-export function Memory_NarrativeMetricsForChunk(arg1) {
-  return window['go']['rpc']['Bindings']['Memory_NarrativeMetricsForChunk'](arg1);
+export function Memory_RunPruneNow(arg1) {
+  return window['go']['rpc']['Bindings']['Memory_RunPruneNow'](arg1);
 }
 
-export function Memory_LastRetrieval(arg1) {
-  return window['go']['rpc']['Bindings']['Memory_LastRetrieval'](arg1);
-}
-
-export function Memory_EmbeddingProbe(arg1, arg2) {
-  return window['go']['rpc']['Bindings']['Memory_EmbeddingProbe'](arg1, arg2);
-}
-
-export function Memory_ResummarizeChunk(arg1) {
-  return window['go']['rpc']['Bindings']['Memory_ResummarizeChunk'](arg1);
-}
-
-export function Memory_GetChunkProvenance(arg1) {
-  return window['go']['rpc']['Bindings']['Memory_GetChunkProvenance'](arg1);
+export function Memory_TestEmbedder() {
+  return window['go']['rpc']['Bindings']['Memory_TestEmbedder']();
 }
 
 export function Nodes_Catalog() {
@@ -612,6 +672,18 @@ export function Permissions_Resolve(arg1, arg2) {
 
 export function Permissions_RevokeGrant(arg1) {
   return window['go']['rpc']['Bindings']['Permissions_RevokeGrant'](arg1);
+}
+
+export function Planmode_Approve(arg1) {
+  return window['go']['rpc']['Bindings']['Planmode_Approve'](arg1);
+}
+
+export function Planmode_Discard(arg1) {
+  return window['go']['rpc']['Bindings']['Planmode_Discard'](arg1);
+}
+
+export function Planmode_Edit(arg1) {
+  return window['go']['rpc']['Bindings']['Planmode_Edit'](arg1);
 }
 
 export function Policy_Explain(arg1) {
@@ -678,8 +750,56 @@ export function SaveTheme(arg1) {
   return window['go']['rpc']['Bindings']['SaveTheme'](arg1);
 }
 
+export function ScheduledChat_Create(arg1) {
+  return window['go']['rpc']['Bindings']['ScheduledChat_Create'](arg1);
+}
+
+export function ScheduledChat_Delete(arg1) {
+  return window['go']['rpc']['Bindings']['ScheduledChat_Delete'](arg1);
+}
+
+export function ScheduledChat_Get(arg1) {
+  return window['go']['rpc']['Bindings']['ScheduledChat_Get'](arg1);
+}
+
+export function ScheduledChat_History(arg1, arg2) {
+  return window['go']['rpc']['Bindings']['ScheduledChat_History'](arg1, arg2);
+}
+
+export function ScheduledChat_List() {
+  return window['go']['rpc']['Bindings']['ScheduledChat_List']();
+}
+
+export function ScheduledChat_RunNow(arg1) {
+  return window['go']['rpc']['Bindings']['ScheduledChat_RunNow'](arg1);
+}
+
+export function ScheduledChat_SetEnabled(arg1, arg2) {
+  return window['go']['rpc']['Bindings']['ScheduledChat_SetEnabled'](arg1, arg2);
+}
+
+export function ScheduledChat_Update(arg1) {
+  return window['go']['rpc']['Bindings']['ScheduledChat_Update'](arg1);
+}
+
 export function Search_Sessions(arg1, arg2) {
   return window['go']['rpc']['Bindings']['Search_Sessions'](arg1, arg2);
+}
+
+export function Search_Unified(arg1, arg2) {
+  return window['go']['rpc']['Bindings']['Search_Unified'](arg1, arg2);
+}
+
+export function Secrets_Expose(arg1) {
+  return window['go']['rpc']['Bindings']['Secrets_Expose'](arg1);
+}
+
+export function Secrets_List() {
+  return window['go']['rpc']['Bindings']['Secrets_List']();
+}
+
+export function Secrets_Revoke(arg1) {
+  return window['go']['rpc']['Bindings']['Secrets_Revoke'](arg1);
 }
 
 export function Sessions_AppendMessage(arg1, arg2, arg3) {
@@ -798,6 +918,10 @@ export function Settings_GetArtifactPreview() {
   return window['go']['rpc']['Bindings']['Settings_GetArtifactPreview']();
 }
 
+export function Settings_GetAutoResumeOnKeyRotation() {
+  return window['go']['rpc']['Bindings']['Settings_GetAutoResumeOnKeyRotation']();
+}
+
 export function Settings_GetAutonomy() {
   return window['go']['rpc']['Bindings']['Settings_GetAutonomy']();
 }
@@ -826,16 +950,12 @@ export function Settings_GetFSReadEnabled() {
   return window['go']['rpc']['Bindings']['Settings_GetFSReadEnabled']();
 }
 
-export function Settings_GetFSWriteEnabled() {
-  return window['go']['rpc']['Bindings']['Settings_GetFSWriteEnabled']();
-}
-
 export function Settings_GetFSRequestAccessEnabled() {
   return window['go']['rpc']['Bindings']['Settings_GetFSRequestAccessEnabled']();
 }
 
-export function Settings_GetTodoEnabled() {
-  return window['go']['rpc']['Bindings']['Settings_GetTodoEnabled']();
+export function Settings_GetFSWriteEnabled() {
+  return window['go']['rpc']['Bindings']['Settings_GetFSWriteEnabled']();
 }
 
 export function Settings_GetMCPAutoRestart() {
@@ -850,12 +970,12 @@ export function Settings_GetMemory() {
   return window['go']['rpc']['Bindings']['Settings_GetMemory']();
 }
 
-export function Settings_GetMultimodalInput() {
-  return window['go']['rpc']['Bindings']['Settings_GetMultimodalInput']();
-}
-
 export function Settings_GetMonthlyCostNotifyUSD() {
   return window['go']['rpc']['Bindings']['Settings_GetMonthlyCostNotifyUSD']();
+}
+
+export function Settings_GetMultimodalInput() {
+  return window['go']['rpc']['Bindings']['Settings_GetMultimodalInput']();
 }
 
 export function Settings_GetPermissionCacheDangerousOps() {
@@ -882,12 +1002,20 @@ export function Settings_GetShowPerMessageTokenMeter() {
   return window['go']['rpc']['Bindings']['Settings_GetShowPerMessageTokenMeter']();
 }
 
+export function Settings_GetTodoEnabled() {
+  return window['go']['rpc']['Bindings']['Settings_GetTodoEnabled']();
+}
+
 export function Settings_GetWebSearch() {
   return window['go']['rpc']['Bindings']['Settings_GetWebSearch']();
 }
 
 export function Settings_Set(arg1) {
   return window['go']['rpc']['Bindings']['Settings_Set'](arg1);
+}
+
+export function Settings_SetAutoResumeOnKeyRotation(arg1) {
+  return window['go']['rpc']['Bindings']['Settings_SetAutoResumeOnKeyRotation'](arg1);
 }
 
 export function Settings_SetAutonomy(arg1) {
@@ -918,16 +1046,12 @@ export function Settings_SetFSReadEnabled(arg1) {
   return window['go']['rpc']['Bindings']['Settings_SetFSReadEnabled'](arg1);
 }
 
-export function Settings_SetFSWriteEnabled(arg1) {
-  return window['go']['rpc']['Bindings']['Settings_SetFSWriteEnabled'](arg1);
-}
-
 export function Settings_SetFSRequestAccessEnabled(arg1) {
   return window['go']['rpc']['Bindings']['Settings_SetFSRequestAccessEnabled'](arg1);
 }
 
-export function Settings_SetTodoEnabled(arg1) {
-  return window['go']['rpc']['Bindings']['Settings_SetTodoEnabled'](arg1);
+export function Settings_SetFSWriteEnabled(arg1) {
+  return window['go']['rpc']['Bindings']['Settings_SetFSWriteEnabled'](arg1);
 }
 
 export function Settings_SetMCPAutoRestart(arg1) {
@@ -942,12 +1066,12 @@ export function Settings_SetMemory(arg1) {
   return window['go']['rpc']['Bindings']['Settings_SetMemory'](arg1);
 }
 
-export function Settings_SetMultimodalInput(arg1) {
-  return window['go']['rpc']['Bindings']['Settings_SetMultimodalInput'](arg1);
-}
-
 export function Settings_SetMonthlyCostNotifyUSD(arg1) {
   return window['go']['rpc']['Bindings']['Settings_SetMonthlyCostNotifyUSD'](arg1);
+}
+
+export function Settings_SetMultimodalInput(arg1) {
+  return window['go']['rpc']['Bindings']['Settings_SetMultimodalInput'](arg1);
 }
 
 export function Settings_SetPermissionCacheDangerousOps(arg1) {
@@ -976,6 +1100,10 @@ export function Settings_SetShortcuts(arg1) {
 
 export function Settings_SetShowPerMessageTokenMeter(arg1) {
   return window['go']['rpc']['Bindings']['Settings_SetShowPerMessageTokenMeter'](arg1);
+}
+
+export function Settings_SetTodoEnabled(arg1) {
+  return window['go']['rpc']['Bindings']['Settings_SetTodoEnabled'](arg1);
 }
 
 export function Settings_SetWebSearch(arg1) {
@@ -1008,6 +1136,26 @@ export function Slash_Execute(arg1, arg2) {
 
 export function Slash_List() {
   return window['go']['rpc']['Bindings']['Slash_List']();
+}
+
+export function Slashcmd_Delete(arg1, arg2) {
+  return window['go']['rpc']['Bindings']['Slashcmd_Delete'](arg1, arg2);
+}
+
+export function Slashcmd_Get(arg1, arg2) {
+  return window['go']['rpc']['Bindings']['Slashcmd_Get'](arg1, arg2);
+}
+
+export function Slashcmd_List(arg1) {
+  return window['go']['rpc']['Bindings']['Slashcmd_List'](arg1);
+}
+
+export function Slashcmd_Run(arg1, arg2, arg3, arg4, arg5, arg6) {
+  return window['go']['rpc']['Bindings']['Slashcmd_Run'](arg1, arg2, arg3, arg4, arg5, arg6);
+}
+
+export function Slashcmd_Save(arg1) {
+  return window['go']['rpc']['Bindings']['Slashcmd_Save'](arg1);
 }
 
 export function Storage_ApplyDriftFix(arg1) {
@@ -1098,6 +1246,10 @@ export function Workflow_StopStream(arg1) {
   return window['go']['rpc']['Bindings']['Workflow_StopStream'](arg1);
 }
 
+export function Workflows_CancelRun(arg1) {
+  return window['go']['rpc']['Bindings']['Workflows_CancelRun'](arg1);
+}
+
 export function Workflows_Delete(arg1) {
   return window['go']['rpc']['Bindings']['Workflows_Delete'](arg1);
 }
@@ -1128,6 +1280,14 @@ export function Workflows_ScheduleClear(arg1) {
 
 export function Workflows_ScheduleList() {
   return window['go']['rpc']['Bindings']['Workflows_ScheduleList']();
+}
+
+export function Workflows_ScheduleNextFire(arg1) {
+  return window['go']['rpc']['Bindings']['Workflows_ScheduleNextFire'](arg1);
+}
+
+export function Workflows_ScheduleRunHistory(arg1, arg2) {
+  return window['go']['rpc']['Bindings']['Workflows_ScheduleRunHistory'](arg1, arg2);
 }
 
 export function Workflows_ScheduleSet(arg1) {
