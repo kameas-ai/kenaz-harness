@@ -153,6 +153,8 @@ func (f *fakeHarnessAPI) Planmode_Discard(_ context.Context, _ planmodeview.Disc
 func (f *fakeHarnessAPI) Planmode_Edit(_ context.Context, _ planmodeview.EditRequest) (planmodeview.EditResponse, error) {
 	return planmodeview.EditResponse{}, nil
 }
+func (f *fakeHarnessAPI) Sessions_StartCapture(_ context.Context, _ string) error { return nil }
+func (f *fakeHarnessAPI) Sessions_StopCapture(_ context.Context, _ string) error  { return nil }
 
 // Compile-time interface witness (plan §4.2).
 var _ HarnessAPI = (*fakeHarnessAPI)(nil)

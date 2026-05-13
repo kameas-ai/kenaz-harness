@@ -98,6 +98,7 @@ import (
 	coreplanmode "github.com/sigil-tech/kaneaz-harness/core/tools/planmode"
 	secretsref "github.com/sigil-tech/kaneaz-harness/core/secrets/ref"
 	credstoreRefs "github.com/sigil-tech/kaneaz-harness/core/credstore/refs"
+	"github.com/sigil-tech/kaneaz-harness/core/eval"
 	"github.com/sigil-tech/kaneaz-harness/core/session"
 	"github.com/sigil-tech/kaneaz-harness/core/storage"
 	"github.com/sigil-tech/kaneaz-harness/core/toolloop"
@@ -234,6 +235,16 @@ type HarnessAPI interface {
 	// editor when the user clicks "Save & approve".
 	// (plan-mode-posture-01KZNP3F WP05)
 	Planmode_Edit(ctx context.Context, req planmodeview.EditRequest) (planmodeview.EditResponse, error)
+
+	// Sessions_StartCapture begins recording an eval capture for the
+	// given sessionID. Idempotent: calling on an already-active session
+	// is a no-op. The capture file is written to
+	// <DataDir>/eval-captures/<sessionID>.jsonl. (eval-harness-replay)
+	Sessions_StartCapture(ctx context.Context, sessionID string) error
+
+	// Sessions_StopCapture finalizes and closes the eval capture for
+	// sessionID. No-op when no active capture exists. (eval-harness-replay)
+	Sessions_StopCapture(ctx context.Context, sessionID string) error
 }
 
 // ShellStatus drives the Toolbar status pills + LegendBar live-rate
@@ -462,6 +473,12 @@ type API struct {
 	// Edit to the frontend's PlanApprovalModal. Wired in New when a real
 	// sessionsAPI + sessionsAPI is available; nil on the test harness path.
 	planmodeAPI *planmodeview.API
+
+	// evalRecorder is the per-session eval-capture writer (eval-harness-replay).
+	// Wired in New when a real Core with a DataDir is available; nil on the
+	// test-chassis path, in which case Sessions_StartCapture / StopCapture
+	// return ErrEvalNotConfigured.
+	evalRecorder *eval.Recorder
 }
 
 // Builtins returns the in-binary tool registry. Used by the chat-input
@@ -574,6 +591,35 @@ func (a *API) Shutdown() {
 	if a.wfScheduler != nil {
 		a.wfScheduler.Stop()
 	}
+	// Flush any active eval captures so partial files get a KindCaptureStop
+	// record even on clean shutdown.
+	if a.evalRecorder != nil {
+		a.evalRecorder.StopAll()
+	}
+}
+
+// ErrEvalNotConfigured is returned by Sessions_StartCapture /
+// Sessions_StopCapture when the eval recorder was not wired at boot
+// (e.g. test-chassis path where c == nil or DataDir is empty).
+var ErrEvalNotConfigured = errors.New("rpc: eval capture not configured (no DataDir)")
+
+// Sessions_StartCapture implements HarnessAPI. Begins recording the eval
+// capture for sessionID to <DataDir>/eval-captures/<sessionID>.jsonl.
+// Idempotent: repeated calls for the same session are no-ops.
+func (a *API) Sessions_StartCapture(ctx context.Context, sessionID string) error {
+	if a.evalRecorder == nil {
+		return ErrEvalNotConfigured
+	}
+	return a.evalRecorder.StartCapture(ctx, sessionID)
+}
+
+// Sessions_StopCapture implements HarnessAPI. Finalizes and closes the eval
+// capture for sessionID. No-op when no active capture exists for the session.
+func (a *API) Sessions_StopCapture(ctx context.Context, sessionID string) error {
+	if a.evalRecorder == nil {
+		return ErrEvalNotConfigured
+	}
+	return a.evalRecorder.StopCapture(ctx, sessionID)
 }
 
 // New constructs a HarnessAPI implementation. Sub-interfaces start as
@@ -1290,6 +1336,17 @@ func New(c *core.Core) *API {
 			planUpdater = a.artifactsMgr
 		}
 		a.planmodeAPI = planmodeview.NewAPI(a.sessionsAPI, planEmitter, planUpdater)
+	}
+
+	// Eval-capture recorder (eval-harness-replay). Wired when we have a
+	// real DataDir; the test-chassis path (c == nil) leaves it nil and
+	// Sessions_StartCapture returns ErrEvalNotConfigured.
+	if c != nil && c.DataDir() != "" {
+		a.evalRecorder = eval.NewRecorder(
+			filepath.Join(c.DataDir(), "eval-captures"),
+			c.BuildVersion(),
+		)
+		logging.L().Info("eval.recorder.wired", "data_dir", c.DataDir())
 	}
 
 	a.bindings = NewBindings(a)
