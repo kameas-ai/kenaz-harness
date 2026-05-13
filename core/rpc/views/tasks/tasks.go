@@ -115,6 +115,41 @@ func (a *API) Tasks_Abort(ctx context.Context, id string) error {
 	return a.reg.Abort(ctx, id)
 }
 
+// Tasks_AbortBySession aborts all running tasks owned by the given session.
+// Called by the session-close dialog when the user chooses "Kill tasks".
+// Best-effort: errors are accumulated but do not prevent aborting other tasks.
+func (a *API) Tasks_AbortBySession(ctx context.Context, sessionID string) error {
+	if a.reg == nil {
+		return nil
+	}
+	tasks := a.reg.List()
+	var lastErr error
+	for _, t := range tasks {
+		if t.OwnerSessionID == sessionID && t.Status == "running" {
+			if err := a.reg.Abort(ctx, t.ID); err != nil {
+				lastErr = err
+			}
+		}
+	}
+	return lastErr
+}
+
+// Tasks_ListBySession returns tasks owned by the given session.
+// Called by the session-close dialog to populate the running-task list.
+func (a *API) Tasks_ListBySession(_ context.Context, sessionID string) ([]TaskRow, error) {
+	if a.reg == nil {
+		return nil, nil
+	}
+	tasks := a.reg.List()
+	var rows []TaskRow
+	for _, t := range tasks {
+		if t.OwnerSessionID == sessionID {
+			rows = append(rows, toRow(t))
+		}
+	}
+	return rows, nil
+}
+
 func toRow(t coretasks.Task) TaskRow {
 	row := TaskRow{
 		ID:             t.ID,
