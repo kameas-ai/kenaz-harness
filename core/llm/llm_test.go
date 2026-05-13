@@ -377,6 +377,147 @@ func TestMessage_RoundTripsContentBlocksWithMediaSource(t *testing.T) {
 	}
 }
 
+// ── WP01 tests (multimodal-io-extended-01KQ8TD2) ──────────────────────────────
+
+// TestGeneratedImageBlock_RoundTrip verifies that a ContentBlock with
+// Type="generated_image" and ArtifactID round-trips byte-identical through
+// JSON marshal/unmarshal. This pins the wire shape so adapters and the
+// frontend can rely on the JSON key names.
+func TestGeneratedImageBlock_RoundTrip(t *testing.T) {
+	in := ContentBlock{Type: "generated_image", ArtifactID: "01HX1234567890ABCDEF"}
+	b, err := json.Marshal(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out ContentBlock
+	if err := json.Unmarshal(b, &out); err != nil {
+		t.Fatal(err)
+	}
+	if out.Type != "generated_image" {
+		t.Fatalf("Type = %q want %q", out.Type, "generated_image")
+	}
+	if out.ArtifactID != "01HX1234567890ABCDEF" {
+		t.Fatalf("ArtifactID = %q want %q", out.ArtifactID, "01HX1234567890ABCDEF")
+	}
+	// Verify omitempty — re-marshal and check JSON bytes for absence of empty fields.
+	b2, err := json.Marshal(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(b) != string(b2) {
+		t.Fatalf("second marshal not byte-identical: %q vs %q", b, b2)
+	}
+}
+
+// TestJSONModeSpec_NewFields_RoundTrip verifies the extended JSONModeSpec with
+// Strict and Name fields round-trips through JSON.
+func TestJSONModeSpec_NewFields_RoundTrip(t *testing.T) {
+	in := JSONModeSpec{
+		Enabled: true,
+		Schema:  json.RawMessage(`{"type":"object"}`),
+		Strict:  true,
+		Name:    "my_schema",
+	}
+	b, err := json.Marshal(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out JSONModeSpec
+	if err := json.Unmarshal(b, &out); err != nil {
+		t.Fatal(err)
+	}
+	if !out.Enabled || !out.Strict || out.Name != "my_schema" {
+		t.Fatalf("round-trip mismatch: %+v", out)
+	}
+}
+
+// TestCapImageOutput_InAllCapabilities verifies CapImageOutput is present in
+// the canonical ordered list.
+func TestCapImageOutput_InAllCapabilities(t *testing.T) {
+	all := AllCapabilities()
+	for _, c := range all {
+		if c == CapImageOutput {
+			return
+		}
+	}
+	t.Fatal("AllCapabilities() missing CapImageOutput")
+}
+
+// TestRequestedCapabilities_ImageOutput verifies that a request with
+// ImageOutput set emits CapImageOutput.
+func TestRequestedCapabilities_ImageOutput(t *testing.T) {
+	req := GenerationRequest{ImageOutput: &ImageOutputSpec{N: 1}}
+	caps := req.RequestedCapabilities()
+	found := false
+	for _, c := range caps {
+		if c == CapImageOutput {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("RequestedCapabilities() missing CapImageOutput: %v", caps)
+	}
+}
+
+// TestUsage_ImagesGenerated_RoundTrip verifies the new ImagesGenerated field
+// round-trips correctly.
+func TestUsage_ImagesGenerated_RoundTrip(t *testing.T) {
+	u := Usage{InputTokens: 10, OutputTokens: 5, ImagesGenerated: 2}
+	b, err := json.Marshal(u)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out Usage
+	if err := json.Unmarshal(b, &out); err != nil {
+		t.Fatal(err)
+	}
+	if out.ImagesGenerated != 2 {
+		t.Fatalf("ImagesGenerated = %d want 2", out.ImagesGenerated)
+	}
+}
+
+// TestCost_ImageCost_RoundTrip verifies the new ImageCost field round-trips.
+func TestCost_ImageCost_RoundTrip(t *testing.T) {
+	c := Cost{Currency: "USD", Total: 0.08, ImageCost: 0.08}
+	b, err := json.Marshal(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out Cost
+	if err := json.Unmarshal(b, &out); err != nil {
+		t.Fatal(err)
+	}
+	if out.ImageCost != 0.08 {
+		t.Fatalf("ImageCost = %v want 0.08", out.ImageCost)
+	}
+}
+
+// TestNewErrors_WP01 verifies the four new error types are non-nil and carry
+// their fields in the message string.
+func TestNewErrors_WP01(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want string
+	}{
+		{"ErrJSONModeInvalid", &ErrJSONModeInvalid{Reason: "schema absent"}, "schema absent"},
+		{"ErrUnsupportedJSONShape", &ErrUnsupportedJSONShape{Provider: "ollama", Model: "llama3", Reason: "no schema support"}, "ollama"},
+		{"ErrGeneratedImageTooLarge", &ErrGeneratedImageTooLarge{Given: 1000, Cap: 500}, "1000"},
+		{"ErrFeatureDisabled", &ErrFeatureDisabled{Feature: "multimodal_out", EnvVar: "HARNESS_MULTIMODAL_OUT"}, "HARNESS_MULTIMODAL_OUT"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.err == nil {
+				t.Fatal("error is nil")
+			}
+			if !contains(tc.err.Error(), tc.want) {
+				t.Fatalf("error message %q missing %q", tc.err.Error(), tc.want)
+			}
+		})
+	}
+}
+
 func contains(s, sub string) bool {
 	return len(sub) == 0 || (len(s) >= len(sub) && indexOf(s, sub) >= 0)
 }
