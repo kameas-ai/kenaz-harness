@@ -34,6 +34,7 @@ import (
 	corewebfetch "github.com/sigil-tech/kaneaz-harness/core/tools/webfetch"
 	coresecrets "github.com/sigil-tech/kaneaz-harness/core/secrets"
 	"github.com/sigil-tech/kaneaz-harness/core/credstore/refs"
+	coreplanmode "github.com/sigil-tech/kaneaz-harness/core/tools/planmode"
 )
 
 // GlobalFSReadSet is the process-global ReadSet shared across all sessions.
@@ -79,6 +80,7 @@ func registerBuiltinTools(
 	slashDispatch *coreslashcmd.Dispatch,
 	exposureIdx *coresecrets.ExposureIndex,
 	budget *refs.Budget,
+	posture coreplanmode.SessionPostureManager,
 ) {
 	if registry == nil {
 		return
@@ -239,6 +241,35 @@ func registerBuiltinTools(
 	webFetchTool := corewebfetch.New(corewebfetch.Options{})
 	registry.Register(webFetchTool)
 	logging.L().Info("rpc.builtins.register", "tool", webFetchTool.Name())
+
+	// kaneaz__enter_plan_mode / kaneaz__exit_plan_mode: plan-mode posture
+	// tools (plan-mode-posture-01KZNP3F WP03/WP04). Both require a
+	// SessionPostureManager to read and mutate the session's autonomy layer.
+	// ExitTool additionally requires an ArtifactCapturer to persist the
+	// plan artifact. Both are always registered when a posture manager is
+	// wired; nil posture silently skips registration (test harness path).
+	if posture != nil {
+		enterTool := coreplanmode.NewEnterTool(coreplanmode.EnterOptions{
+			Posture: posture,
+		})
+		registry.Register(enterTool)
+		logging.L().Info("rpc.builtins.register", "tool", enterTool.Name())
+
+		if artifactsMgr != nil {
+			exitTool := coreplanmode.NewExitTool(coreplanmode.ExitOptions{
+				Posture:   posture,
+				Artifacts: artifactsMgr,
+			})
+			registry.Register(exitTool)
+			logging.L().Info("rpc.builtins.register", "tool", exitTool.Name())
+		} else {
+			logging.L().Info("rpc.builtins.exit_plan_mode_skipped",
+				"reason", "no artifacts manager wired")
+		}
+	} else {
+		logging.L().Info("rpc.builtins.plan_mode_tools_skipped",
+			"reason", "no posture manager wired")
+	}
 }
 
 // fsWriteEnabledLookup returns a closure the update_artifact tool
@@ -542,6 +573,14 @@ func builtinEnabledPredicate(s *settings.API) func(string) bool {
 		// The tool is registered unconditionally; the dispatch layer enforces
 		// model_invokable=true at resolution time so only eligible commands run.
 		case coreskilltool.ToolName:
+			logging.L().Info("rpc.builtins.predicate", "tool", name, "enabled", true)
+			return true
+
+		// ── Plan-mode tools (plan-mode-posture-01KZNP3F) ──
+		// Always-on: these are posture-management tools with no dangerous
+		// side-effects on their own. The Cedar gate enforces write restrictions
+		// while plan_mode is active; the tools themselves are always enabled.
+		case coreplanmode.EnterToolName, coreplanmode.ExitToolName:
 			logging.L().Info("rpc.builtins.predicate", "tool", name, "enabled", true)
 			return true
 		}
