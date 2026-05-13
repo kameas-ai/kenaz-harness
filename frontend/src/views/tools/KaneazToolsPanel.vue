@@ -341,21 +341,6 @@ function categoryIcon(category: RecipeCategory) {
   }
 }
 
-function stateColor(state: RecipeState): string {
-  switch (state) {
-    case 'running':
-      return 'text-signal-ok';
-    case 'starting':
-    case 'restarting':
-      return 'text-signal-warn';
-    case 'failed':
-      return 'text-signal-danger';
-    case 'stopped':
-    default:
-      return 'text-ink-dim';
-  }
-}
-
 function setRowError(id: string, msg: string | null) {
   rowError.value = { ...rowError.value, [id]: msg };
 }

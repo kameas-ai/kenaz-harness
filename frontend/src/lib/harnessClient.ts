@@ -58,7 +58,6 @@ import type {
   DialConfig,
   DialDelta,
   DialEffectiveDials,
-  DialScope,
   DialScopeKey,
   Hook,
   BuiltinDescriptor,
