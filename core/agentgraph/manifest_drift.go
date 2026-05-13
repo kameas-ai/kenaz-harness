@@ -20,6 +20,8 @@
 // Mission: manifest-versioning-01NDFSEX02, WP04.
 package agentgraph
 
+import "sync"
+
 // NodeProvenance carries the manifest contract recorded when a node was
 // authored. Loaded from agent_graph_node_provenance via the caller.
 type NodeProvenance struct {
@@ -87,26 +89,23 @@ func liveManifestFingerprints() map[string]string {
 // liveManifestVersions returns a map from kind → live manifest version
 // from the generated constants.
 //
-// We build this lazily from the generated per-kind constants rather than
-// adding a registry to manifest_versions_gen.go (which would require the
-// template to emit non-constant code). The AllNodeKinds() helper gives
-// us every kind; we match by kind string to the generated constant table
-// via a lookup map populated at first call.
-var liveManifestVersionMap map[string]string
+// We build this lazily from allGeneratedManifestVersions (emitted by the
+// codegen into manifest_versions_gen.go). The once ensures the map is
+// built exactly once and is safe for concurrent reads thereafter.
+var (
+	liveManifestVersionMap     map[string]string
+	liveManifestVersionMapOnce sync.Once
+)
 
 func getLiveManifestVersionMap() map[string]string {
-	if liveManifestVersionMap != nil {
-		return liveManifestVersionMap
-	}
-	// Build from the generated constant table embedded in
-	// manifest_versions_gen.go. We use allManifestVersions() which is
-	// generated below.
-	m := make(map[string]string, len(allGeneratedManifestVersions))
-	for kind, version := range allGeneratedManifestVersions {
-		m[kind] = version
-	}
-	liveManifestVersionMap = m
-	return m
+	liveManifestVersionMapOnce.Do(func() {
+		m := make(map[string]string, len(allGeneratedManifestVersions))
+		for kind, version := range allGeneratedManifestVersions {
+			m[kind] = version
+		}
+		liveManifestVersionMap = m
+	})
+	return liveManifestVersionMap
 }
 
 // CheckManifestDrift returns one ManifestDriftWarning per node in g

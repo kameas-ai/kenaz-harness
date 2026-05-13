@@ -196,6 +196,10 @@ func mergeOverlay(merged *Manifest, prov Provenance, child *Manifest, layerID st
 		merged.Version = child.Version
 		prov["version"] = layerID
 	}
+	if child.ManifestVersion != "" {
+		merged.ManifestVersion = child.ManifestVersion
+		prov["manifest_version"] = layerID
+	}
 	// Ports: whole-list replace per FR-004.
 	if len(child.Ports.Inputs) > 0 {
 		merged.Ports.Inputs = clonePorts(child.Ports.Inputs)
