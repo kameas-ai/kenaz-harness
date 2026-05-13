@@ -1,0 +1,5 @@
+# Seam fanout fixture for kind=merge
+# Merge nodes are flow-control primitives; no external seam calls.
+kind: merge
+seams: []
+notes: "merge node combines values from parallel branches; no external seam calls"

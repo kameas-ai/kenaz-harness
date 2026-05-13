@@ -1,0 +1,7 @@
+# Seam fanout fixture for kind=write_file
+# PolicyGate.CheckFileWrite is called before writing the file.
+kind: write_file
+seams:
+  - seam: PolicyGate.CheckFileWrite
+    required: true
+notes: "write_file calls PolicyGate.CheckFileWrite before opening the path for writing"

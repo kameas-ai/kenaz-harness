@@ -1,0 +1,7 @@
+# Seam fanout fixture for kind=corpus_write
+# CorpusBackend.Enqueue is called with the configured corpus ID and source path.
+kind: corpus_write
+seams:
+  - seam: CorpusBackend.Enqueue
+    required: true
+notes: "corpus_write calls CorpusBackend.Enqueue; ErrNoCorpus when backend is nil"

@@ -1,0 +1,7 @@
+# Seam fanout fixture for kind=decision
+# LLMProvider.Generate is called to evaluate the decision prompt.
+kind: decision
+seams:
+  - seam: LLMProvider.Generate
+    required: true
+notes: "decision node calls LLMProvider.Generate with the configured prompt; result determines branch taken"

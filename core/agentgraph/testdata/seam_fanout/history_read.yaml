@@ -1,0 +1,12 @@
+# Seam fanout fixture for kind=history_read
+# HistoryReader.History is called with the configured sessionID and n.
+# This is the seam at the centre of commit 495fb13 (executor ignored history).
+kind: history_read
+seams:
+  - seam: HistoryReader.History
+    required: true
+notes: |
+  history_read calls HistoryReader.History with the session_id and window attrs.
+  The 495fb13 bug: executor called history but did not pass messages forward —
+  RequireHistoryReadCalledWith verifies the seam is called; output port assertions
+  verify the messages land in the successor's input.

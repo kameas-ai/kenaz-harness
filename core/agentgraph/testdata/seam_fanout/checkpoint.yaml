@@ -1,0 +1,5 @@
+# Seam fanout fixture for kind=checkpoint
+# Checkpoint nodes are state-management primitives; no external seam calls.
+kind: checkpoint
+seams: []
+notes: "checkpoint node snapshots run-state to the event log; no external seam calls"

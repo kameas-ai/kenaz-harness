@@ -1,0 +1,14 @@
+# Seam fanout fixture for kind=model
+# LLMProvider.Generate is the primary seam called by the model executor.
+# HistoryReader.History is also called when session_id is set (pre-call read).
+kind: model
+seams:
+  - seam: LLMProvider.Generate
+    required: true
+  - seam: HistoryReader.History
+    required: false
+notes: |
+  model node calls LLMProvider.Generate with the assembled LLMRequest.
+  When session_id is configured, HistoryReader.History is called first to
+  populate the message history (the 495fb13 seam: executor did call history
+  but dropped the messages — WP04 asserts messages flow through).

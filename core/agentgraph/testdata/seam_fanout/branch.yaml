@@ -1,0 +1,5 @@
+# Seam fanout fixture for kind=branch
+# Branch nodes are flow-control primitives; no external seam calls.
+kind: branch
+seams: []
+notes: "branch node evaluates a condition against run-state ports; no external seam calls"

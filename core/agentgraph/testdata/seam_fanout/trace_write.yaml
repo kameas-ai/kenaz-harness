@@ -1,0 +1,7 @@
+# Seam fanout fixture for kind=trace_write
+# TraceSink.Span is called to record the trace event.
+kind: trace_write
+seams:
+  - seam: TraceSink.Span
+    required: true
+notes: "trace_write calls TraceSink.Span with the configured span name and attributes"

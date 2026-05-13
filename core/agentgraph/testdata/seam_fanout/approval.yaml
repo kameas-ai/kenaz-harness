@@ -1,0 +1,7 @@
+# Seam fanout fixture for kind=approval
+# No seam calls on first fire (returns ErrPaused); AskBus on resumed fire.
+kind: approval
+seams:
+  - seam: AskBus.Pending
+    required: false
+notes: "approval node parks the run on first fire (ErrPaused); no seam calls beyond state"

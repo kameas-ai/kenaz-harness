@@ -1,0 +1,5 @@
+# Seam fanout fixture for kind=parallel
+# Parallel nodes spawn branches; no external seam calls on the parallel node itself.
+kind: parallel
+seams: []
+notes: "parallel node fans out to branches; no external seam calls; branches call their own seams"
