@@ -62,6 +62,9 @@ const tabs: ReadonlyArray<Tab> = [
   // model-secret-references-01KW7M5A WP10 — Model Secrets settings tab.
   // Disambiguates via ?tab=secrets. See SettingsView.vue for the mount switch.
   { to: '/settings?tab=secrets', label: 'Secrets', query: 'secrets' },
+  // background-task-monitor-01KZNP3C WP05 — Background Tasks tab.
+  // Disambiguates via ?tab=tasks. See SettingsView.vue for the mount switch.
+  { to: '/settings?tab=tasks', label: 'Tasks', query: 'tasks' },
   { to: '/providers', label: 'Providers' },
   { to: '/bundles', label: 'Bundles' },
   { to: '/permissions/bash', label: 'Permissions', matchPrefix: '/permissions' },

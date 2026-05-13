@@ -195,6 +195,17 @@ const (
 	//     per-session with an explicit forbid rule.
 	ActionSecretReferenceResolve = "secret_reference.resolve"
 	ActionToolListSecrets        = "tool.list_secrets"
+
+	// ── Background task monitor action family ─────────────────────────────
+	// Introduced by mission background-task-monitor-01KZNP3C (WP03).
+	//
+	//   ActionToolTasksMonitor  — gates kaneaz__monitor (drain + watch mode).
+	//     Resource UID: Task::"<task-id>". Default-allow (passive read-only);
+	//     can be restricted per-session with an explicit forbid rule.
+	//   ActionToolTasksCancel   — gates Tasks_Abort RPC + Abort from the Tasks
+	//     panel. Resource UID: Task::"<task-id>".
+	ActionToolTasksMonitor = "tool.tasks.monitor"
+	ActionToolTasksCancel  = "tool.tasks.cancel"
 )
 
 // Entity-type names mirror spec §4.10's recommended mapping:
