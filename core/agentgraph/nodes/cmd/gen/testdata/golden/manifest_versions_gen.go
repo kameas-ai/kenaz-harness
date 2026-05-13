@@ -36,3 +36,11 @@ const (
 	// subset of `kind: model` at the time of last codegen.
 	ModelManifestFingerprint = "3513a0b4fa76ad9fdbf6c07289381951d7b712ec75f6a7902bd945d23ae5fb5f"
 )
+
+// allGeneratedManifestVersions maps the on-the-wire kind string to the
+// manifest version baked in at codegen time. Used by CheckManifestDrift
+// to look up the live version without a switch statement.
+var allGeneratedManifestVersions = map[string]string{
+	"decision": DecisionManifestVersion,
+	"model":    ModelManifestVersion,
+}

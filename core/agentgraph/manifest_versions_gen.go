@@ -315,3 +315,42 @@ const (
 	// subset of `kind: write_file` at the time of last codegen.
 	WriteFileManifestFingerprint = "e030b2fc61b4d92966b7d1c142412e7663fc54445a0770da48c3f2ee2399971f"
 )
+
+// allGeneratedManifestVersions maps the on-the-wire kind string to the
+// manifest version baked in at codegen time. Used by CheckManifestDrift
+// to look up the live version without a switch statement.
+var allGeneratedManifestVersions = map[string]string{
+	"activity":          ActivityManifestVersion,
+	"approval":          ApprovalManifestVersion,
+	"artifact":          ArtifactManifestVersion,
+	"ask":               AskManifestVersion,
+	"attachment":        AttachmentManifestVersion,
+	"branch":            BranchManifestVersion,
+	"checkpoint":        CheckpointManifestVersion,
+	"compact":           CompactManifestVersion,
+	"corpus_read":       CorpusReadManifestVersion,
+	"corpus_write":      CorpusWriteManifestVersion,
+	"decision":          DecisionManifestVersion,
+	"escalate":          EscalateManifestVersion,
+	"history_read":      HistoryReadManifestVersion,
+	"join":              JoinManifestVersion,
+	"loop":              LoopManifestVersion,
+	"memory":            MemoryManifestVersion,
+	"merge":             MergeManifestVersion,
+	"model":             ModelManifestVersion,
+	"parallel":          ParallelManifestVersion,
+	"planner":           PlannerManifestVersion,
+	"read_bash_output":  ReadBashOutputManifestVersion,
+	"read_file":         ReadFileManifestVersion,
+	"reflect":           ReflectManifestVersion,
+	"retry":             RetryManifestVersion,
+	"review":            ReviewManifestVersion,
+	"session_write":     SessionWriteManifestVersion,
+	"sleep":             SleepManifestVersion,
+	"subagent_dispatch": SubagentDispatchManifestVersion,
+	"tool":              ToolManifestVersion,
+	"tool_dispatch":     ToolDispatchManifestVersion,
+	"trace_write":       TraceWriteManifestVersion,
+	"transform":         TransformManifestVersion,
+	"write_file":        WriteFileManifestVersion,
+}

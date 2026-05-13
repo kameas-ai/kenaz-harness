@@ -65,11 +65,23 @@ const (
 {{end}}
 )
 
+// allGeneratedManifestVersions maps the on-the-wire kind string to the
+// manifest version baked in at codegen time. Used by CheckManifestDrift
+// to look up the live version without a switch statement.
+var allGeneratedManifestVersions = map[string]string{
+{{- range .Kinds}}
+	{{goString .KindName}}: {{.GoName}}ManifestVersion,
+{{- end}}
+}
+
 {{- else}}
 
 // No callable kinds in the catalog yet. Once WP04 lands the kind
 // manifests, this file will declare per-kind ManifestVersion and
 // ManifestFingerprint constants.
+
+// allGeneratedManifestVersions is empty until kinds are added.
+var allGeneratedManifestVersions = map[string]string{}
 
 {{- end}}
 `
