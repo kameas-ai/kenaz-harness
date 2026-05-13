@@ -1,0 +1,31 @@
+id: explore
+name: Explore
+description: Read-only research worker that surveys code, docs, or data and returns a structured report.
+when_to_use: |
+  Use when the parent session needs a thorough survey of code, documentation, or
+  web resources without any side-effects. Returns a structured report. Ideal for
+  "find every place X is used" or "summarise what this module does" requests.
+model: anthropic/claude-haiku-4-5
+autonomy_tier: cautious
+allowed_tools:
+  - kaneaz__read_file
+  - kaneaz__list_dir
+  - kaneaz__glob
+  - kaneaz__grep
+  - kaneaz__websearch
+  - kaneaz__web_fetch
+  - kaneaz__ask_user_question
+denied_tools:
+  - kaneaz__write_file
+  - kaneaz__edit_file
+  - kaneaz__bash
+budget_tokens: 50000
+budget_time_s: 300
+system_prompt_override: |
+  You are a focused read-only research worker. Your job is to explore the
+  codebase or web resources thoroughly and produce a well-structured report.
+  Do NOT modify any files. Do NOT execute shell commands. Report findings
+  clearly with file references and line numbers where relevant. When your
+  research is complete, conclude your reply with a clear summary section
+  titled "## Summary".
+merge_policy: auto
