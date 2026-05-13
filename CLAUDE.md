@@ -33,6 +33,25 @@ feat: v0.8.0 — extensibility foundation (hooks, slash commands, …)
 
 The leading `feat:` (no scope) gives the right minor bump; the `vX.Y.Z` in the subject is human framing.
 
+### Prefix convention for the patch lane
+
+`fix\|perf\|revert\|deps` all produce patch bumps per the table above, but in practice **default to `fix:`** for everyday patch-lane work. The other patch prefixes are special-purpose:
+
+- `fix:` — bug fixes, type-safety holes, dead-control wiring, broken UX (the everyday case). **Use this unless one of the below clearly applies.**
+- `perf:` — performance-only changes with no behaviour change. Rare.
+- `revert:` — reverting a specific prior commit. Use the `git revert` default subject.
+- `deps:` — dependency bumps only (Go modules, npm). The change must be purely the dep version + any minimal call-site adjustments.
+
+Examples from the v0.10.x patch lane:
+
+| Right | Wrong |
+|---|---|
+| `fix(frontend): declare Settings_{Get,Set}MCPAutoRestart on WailsBindingsLike` | `chore(frontend): add missing binding declarations` (no-bump; the gap is a real type-safety hole) |
+| `fix(workflows): align local schedule type with WorkflowsScheduleEntry` | `refactor(workflows): use canonical type` (no-bump; the cast was failing tsc) |
+| `chore(frontend): drop unused imports + vars surfaced by vue-tsc` | `fix(frontend): drop dead code` (`chore:` is correct here — no semantic change, no version bump needed) |
+
+The decision boundary: **if the working tree had observable wrong behaviour or a type-safety hole that hid a runtime risk, prefix `fix:` and let SemVer bump the patch.** If the change is pure cleanup with no observable difference (formatting, unused imports, comment rewording), use `chore:` / `docs:` / `style:` / `refactor:` so the patch lane stays signal-rich.
+
 ### Workflows that run on each PR / merge
 
 | Workflow | Trigger | Purpose |
