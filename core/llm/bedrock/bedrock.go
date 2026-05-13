@@ -295,6 +295,61 @@ func applyResponseFormatToConverseInput(in *bedrockruntime.ConverseStreamInput, 
 	}
 }
 
+// applyJSONModeToConverseInput translates a JSONModeSpec into the Bedrock
+// Converse wire shape. Mirrors applyResponseFormatToConverseInput:
+//
+//   - Schema absent  → append JSON-only instruction to system
+//   - Schema present → inject synthetic tool + forced tool_choice
+//
+// (multimodal-io-extended-01KQ8TD2 WP03)
+func applyJSONModeToConverseInput(in *bedrockruntime.ConverseStreamInput, jm *llm.JSONModeSpec) error {
+	if jm == nil || !jm.Enabled {
+		return nil
+	}
+	if len(jm.Schema) == 0 {
+		in.System = append(in.System, &types.SystemContentBlockMemberText{
+			Value: "Respond with valid JSON only. Do not include any explanation, markdown fences, or prose — output raw JSON.",
+		})
+		return nil
+	}
+	// Schema present: use synthetic tool injection (same as json_schema path).
+	schema := jm.Schema
+	injected, err := structured.InjectAdditionalProperties(schema)
+	if err != nil {
+		return &llm.ErrInvalidRequest{Message: "bedrock: json_mode inject additionalProperties: " + err.Error()}
+	}
+	var schemaAny any
+	if err := json.Unmarshal(injected, &schemaAny); err != nil {
+		return &llm.ErrInvalidRequest{Message: "bedrock: json_mode schema unmarshal: " + err.Error()}
+	}
+	toolName := "_structured_output"
+	if jm.Name != "" {
+		toolName = "_" + jm.Name
+	}
+	syntheticTool := &types.ToolMemberToolSpec{
+		Value: types.ToolSpecification{
+			Name:        aws.String(toolName),
+			Description: aws.String("Return a JSON object that matches the required schema. Always call this tool."),
+			InputSchema: &types.ToolInputSchemaMemberJson{
+				Value: document.NewLazyDocument(schemaAny),
+			},
+		},
+	}
+	forcedChoice := &types.ToolChoiceMemberTool{
+		Value: types.SpecificToolChoice{Name: aws.String(toolName)},
+	}
+	if in.ToolConfig != nil {
+		in.ToolConfig.Tools = append([]types.Tool{syntheticTool}, in.ToolConfig.Tools...)
+		in.ToolConfig.ToolChoice = forcedChoice
+	} else {
+		in.ToolConfig = &types.ToolConfiguration{
+			Tools:      []types.Tool{syntheticTool},
+			ToolChoice: forcedChoice,
+		}
+	}
+	return nil
+}
+
 // resolveAWSConfig loads the AWS SDK config for the given profile
 // name + region. cred is the profile name as bytes (per credref's
 // RefAWSProfile resolution).
@@ -375,6 +430,15 @@ func (a *Adapter) Stream(ctx context.Context, req llm.GenerationRequest, prof ll
 	// so the synthetic _structured_output tool can be prepended safely.
 	if req.ResponseFormat != nil {
 		if err := applyResponseFormatToConverseInput(in, req.ResponseFormat); err != nil {
+			return nil, err
+		}
+	}
+
+	// JSONMode injection (multimodal-io-extended-01KQ8TD2 WP03).
+	// When only JSONMode (not ResponseFormat) is set, translate it to the
+	// Converse wire shape via the same path as ResponseFormat.
+	if req.JSONMode != nil && req.JSONMode.Enabled && req.ResponseFormat == nil {
+		if err := applyJSONModeToConverseInput(in, req.JSONMode); err != nil {
 			return nil, err
 		}
 	}

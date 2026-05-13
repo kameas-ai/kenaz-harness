@@ -873,6 +873,70 @@ func TestApplyResponseFormat_JSONMode_AppendsSysPrompt(t *testing.T) {
 	}
 }
 
+// ── WP03 JSONMode wire-shape tests (multimodal-io-extended-01KQ8TD2) ─────────
+
+// TestJSONModeAnthropic_NoSchema_AppendsSysPrompt verifies that JSONModeSpec
+// without a schema appends a JSON instruction to the system string.
+func TestJSONModeAnthropic_NoSchema_AppendsSysPrompt(t *testing.T) {
+	body := map[string]any{"system": "Be concise."}
+	jm := &llm.JSONModeSpec{Enabled: true}
+	if err := applyJSONModeAnthropic(jm, body); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	sys, ok := body["system"].(string)
+	if !ok {
+		t.Fatalf("system missing: %+v", body)
+	}
+	if !contains(sys, "JSON") {
+		t.Fatalf("system does not contain JSON instruction: %q", sys)
+	}
+}
+
+// TestJSONModeAnthropic_WithSchema_InjectsTool verifies that JSONModeSpec
+// with a schema injects a synthetic tool and forces tool_choice.
+func TestJSONModeAnthropic_WithSchema_InjectsTool(t *testing.T) {
+	body := map[string]any{}
+	schema := json.RawMessage(`{"type":"object","properties":{"result":{"type":"string"}},"required":["result"]}`)
+	jm := &llm.JSONModeSpec{Enabled: true, Schema: schema, Name: "my_result"}
+	if err := applyJSONModeAnthropic(jm, body); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	tools, ok := body["tools"].([]any)
+	if !ok || len(tools) == 0 {
+		t.Fatalf("tools not injected: %+v", body)
+	}
+	toolMap, ok := tools[0].(map[string]any)
+	if !ok {
+		t.Fatalf("tool not a map: %+v", tools[0])
+	}
+	if toolMap["name"] != "_my_result" {
+		t.Fatalf("tool name = %v want _my_result", toolMap["name"])
+	}
+	tc, ok := body["tool_choice"].(map[string]any)
+	if !ok {
+		t.Fatalf("tool_choice missing: %+v", body)
+	}
+	if tc["name"] != "_my_result" {
+		t.Fatalf("tool_choice.name = %v want _my_result", tc["name"])
+	}
+}
+
+// TestJSONModeAnthropic_DefaultToolName verifies that Name="" uses
+// "_structured_output" as the tool name.
+func TestJSONModeAnthropic_DefaultToolName(t *testing.T) {
+	body := map[string]any{}
+	schema := json.RawMessage(`{"type":"object"}`)
+	jm := &llm.JSONModeSpec{Enabled: true, Schema: schema}
+	if err := applyJSONModeAnthropic(jm, body); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	tools := body["tools"].([]any)
+	toolMap := tools[0].(map[string]any)
+	if toolMap["name"] != "_structured_output" {
+		t.Fatalf("default tool name = %v want _structured_output", toolMap["name"])
+	}
+}
+
 func contains(s, sub string) bool {
 	return len(sub) == 0 || (len(s) >= len(sub) && indexOf(s, sub) >= 0)
 }
