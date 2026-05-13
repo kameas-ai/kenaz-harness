@@ -343,6 +343,36 @@ export function useSession(id: Ref<string>): UseSessionResult {
     }
   });
 
+  // Auth-resume seam (provider-keychain-rotation-01KQ8TD9 follow-up):
+  // RedriveLastTurn on the backend re-issues StartStream with a fresh
+  // sub_id but the auth-pause path leaves the frontend with the OLD
+  // sub_id still in streamSubscriptionId AND a "paused for key rotation"
+  // streamingError committed onto the last bubble. Without this handler,
+  // events from the resumed stream get filtered out by the stream-chunk
+  // sub_id guard and the chat surface stays wedged with a stale banner.
+  useEventStream<{ profile_id: string; new_sub_id: string }>(
+    'provider:auth-resumed',
+    (payload) => {
+      if (!payload?.new_sub_id) return;
+      streamSubscriptionId.value = payload.new_sub_id;
+      streamingTimedOut.value = false;
+      // Clear the synthetic "auth failure — paused for key rotation"
+      // streamingError off the most-recent message if that's what set it.
+      const last = messages.value[messages.value.length - 1];
+      if (
+        last &&
+        typeof last.streamingError === 'string' &&
+        last.streamingError.includes('auth failure')
+      ) {
+        const cleaned: Message = { ...last, streamingError: undefined };
+        messages.value = [...messages.value.slice(0, -1), cleaned];
+      }
+      if (typeof error.value === 'string' && error.value.includes('auth failure')) {
+        error.value = null;
+      }
+    },
+  );
+
   async function send(content: string, profileID: string, modelOverride?: string) {
     const sid = id.value;
     if (!sid) return;
