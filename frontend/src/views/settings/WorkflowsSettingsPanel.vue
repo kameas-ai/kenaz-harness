@@ -17,6 +17,7 @@ import {
   type WorkflowsSummary,
   type WorkflowsWorkflow,
   type WorkflowsSaveOutput,
+  type WorkflowsScheduleEntry,
 } from '@/lib/workflowsClient';
 
 const props = defineProps<{
@@ -47,15 +48,13 @@ async function loadCatalog() {
 onMounted(loadCatalog);
 
 // ── schedule state (per workflow) ──────────────────────────────────────
+//
+// Use the canonical WorkflowsScheduleEntry from workflowsClient so the
+// timezone-optional contract matches the wire shape (the local copy
+// previously declared timezone:string required, which tsc rejected as
+// incompatible with the client's optional return type).
 
-interface ScheduleInfo {
-  workflowId: string;
-  cron: string;
-  timezone: string;
-  enabled: boolean;
-}
-
-const schedules = ref<ScheduleInfo[]>([]);
+const schedules = ref<WorkflowsScheduleEntry[]>([]);
 
 async function loadSchedules() {
   try {
@@ -68,7 +67,7 @@ async function loadSchedules() {
 
 onMounted(loadSchedules);
 
-function scheduleFor(workflowId: string): ScheduleInfo | undefined {
+function scheduleFor(workflowId: string): WorkflowsScheduleEntry | undefined {
   return schedules.value.find((s) => s.workflowId === workflowId);
 }
 
