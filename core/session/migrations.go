@@ -112,6 +112,10 @@ const sqlInitSchema = `
 // 0324 lands the artifact_versions append-only history table that backs
 // the kaneaz__update_artifact builtin tool
 // (update-artifact-tool-01KQ8TD4 — see migrations_artifact_versions.go).
+// 0326 lands the agent_graph_node_provenance table that records
+// {kind, manifest_version_at_author, fingerprint_at_author} per graph node,
+// enabling the manifest-drift detector on graph load
+// (manifest-versioning-01NDFSEX02 WP03 — see migrations_manifest_provenance.go).
 func Migrations() []migrations.Migration {
 	return []migrations.Migration{
 		{
@@ -169,6 +173,7 @@ func Migrations() []migrations.Migration {
 		migration0323(),
 		migration0324(),
 		migration0325(),
+		migration0326(),
 	}
 }
 
