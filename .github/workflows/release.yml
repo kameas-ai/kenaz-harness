@@ -220,22 +220,21 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # NOTE: Linux release builds still use GitHub-hosted runners,
-          # which is drift from the kameas-ai org policy ("GitHub runners
-          # only for Apple / Microsoft builds"). Migration blockers:
-          #   1. No self-hosted Linux amd64 runner exists yet.
-          #   2. The kameas-ci-medium (ARM64) image lacks the Wails Linux
-          #      toolchain (libgtk-3-dev, libwebkit2gtk-4.1-dev). Cross-
-          #      compiling Wails CGO from ARM64 → amd64 is impractical.
-          # Tracked in the v0.8.x patch backlog; close once a self-hosted
-          # Linux runner image with the Wails toolchain pre-installed is
-          # provisioned.
+          # NOTE: linux-amd64 still uses ubuntu-latest (GitHub-hosted). The
+          # kameas-ai org policy reserves GitHub-hosted runners for Apple /
+          # Microsoft builds; this is documented drift until a self-hosted
+          # Linux amd64 runner is provisioned with the Wails Linux
+          # toolchain (libgtk-3-dev + libwebkit2gtk-4.1-dev) baked into the
+          # AMI. linux-arm64 moved to the self-hosted ci-medium pool — the
+          # runner image is expected to carry the Wails toolchain; if the
+          # first release-arm64 build fails for missing GTK, bake the
+          # toolchain into the AMI rather than reverting this change.
           - os: ubuntu-latest
             label: linux-amd64
             wails_platform: linux/amd64
             artifact_glob: 'build/bin/*'
             archive_ext: tar.gz
-          - os: ubuntu-24.04-arm
+          - os: [self-hosted, Linux, ARM64, ci-medium]
             label: linux-arm64
             wails_platform: linux/arm64
             artifact_glob: 'build/bin/*'
