@@ -88,15 +88,6 @@ const layerScopeIdLabel = computed(() => {
   }
 });
 
-const triggerScope = computed(() => {
-  // Manual trigger always uses the layer/scope-id pair as a hint;
-  // prop-supplied sessionId is the canonical session.
-  return {
-    projectId: layer.value === 'project' ? scopeId.value : undefined,
-    sessionId: props.sessionId,
-  };
-});
-
 async function refresh() {
   loading.value = true;
   error.value = null;

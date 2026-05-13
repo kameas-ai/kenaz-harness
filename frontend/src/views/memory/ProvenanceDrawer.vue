@@ -14,7 +14,7 @@
 import { onMounted, onUnmounted } from 'vue';
 import type { ChunkProvenance } from '@/lib/types';
 
-const props = defineProps<{
+defineProps<{
   provenance: ChunkProvenance;
   loading?: boolean;
   error?: string | null;

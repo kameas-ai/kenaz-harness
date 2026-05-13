@@ -205,11 +205,6 @@ const sessionsByParent = computed<Map<string, Session[]>>(() => {
   return map;
 });
 
-/** Sessions that are top-level (no parentSessionId). */
-function rootSessionsFor(projectId: string): Session[] {
-  return sessionsFor(projectId).filter((s) => !s.parentSessionId);
-}
-
 function childSessionsOf(parentId: string): Session[] {
   return sessionsByParent.value.get(parentId) ?? [];
 }

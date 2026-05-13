@@ -764,7 +764,6 @@ const autoResumeOnKeyRotation = ref(true);
 // stay at zero and the row is hidden by compactionOverheadVisible.
 const compactionOverheadUSD = ref<number>(0);
 const compactionOverheadTotalUSD = ref<number>(0);
-const compactionOverheadCurrency = ref<string>('USD');
 const compactionOverheadVisible = computed(
   () => compactionOverheadUSD.value > 0,
 );

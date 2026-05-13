@@ -150,8 +150,11 @@ const activeTab = ref<Tab>('Library');
 // WP03: catalog selection for the preview drawer.
 const catalogSelectedEntry = ref<WorkflowsCatalogEntry | null>(null);
 
-function onCatalogInstalled(workflowId: string) {
+function onCatalogInstalled(_workflowId: string) {
   // Refresh the library list so the newly installed workflow shows up.
+  // _workflowId currently unused — kept on the signature for the
+  // event-shape contract so a future "scroll to / highlight newly-
+  // installed row" behaviour doesn't have to change the emit shape.
   void loadCatalog();
   catalogSelectedEntry.value = null;
 }
