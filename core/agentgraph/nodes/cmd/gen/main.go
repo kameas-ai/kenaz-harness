@@ -99,14 +99,22 @@ func run(cfg genConfig) error {
 	if err != nil {
 		return fmt.Errorf("render wire: %w", err)
 	}
+	portsBytes, err := renderPorts(cfg.pkgName, kinds)
+	if err != nil {
+		return fmt.Errorf("render ports: %w", err)
+	}
 
 	attrsPath := filepath.Join(cfg.outDir, "attrs_gen.go")
 	wirePath := filepath.Join(cfg.outDir, "wire_gen.go")
+	portsPath := filepath.Join(cfg.outDir, "ports_gen.go")
 	if err := writeFile(attrsPath, attrsBytes); err != nil {
 		return fmt.Errorf("write %s: %w", attrsPath, err)
 	}
 	if err := writeFile(wirePath, wireBytes); err != nil {
 		return fmt.Errorf("write %s: %w", wirePath, err)
+	}
+	if err := writeFile(portsPath, portsBytes); err != nil {
+		return fmt.Errorf("write %s: %w", portsPath, err)
 	}
 	return nil
 }
@@ -193,6 +201,21 @@ type portField struct {
 	Required bool
 }
 
+// typedPortField is one resolved port annotated with a Go type literal,
+// used for generating the <Kind>Inputs / <Kind>Outputs structs and
+// their Read/Write accessors in ports_gen.go.
+type typedPortField struct {
+	Name        string // snake_case port name (the PortValues key)
+	GoName      string // PascalCase Go field name
+	GoType      string // Go type literal (e.g. "[]Message", "any", "string")
+	PortType    string // raw manifest type token (e.g. "messages", "any")
+	Required    bool
+	Description string
+	// NeedsMessagesImport is true when GoType contains "Message"; used
+	// by the template to determine whether a type cast helper is needed.
+	NeedsMessagesType bool
+}
+
 // kindData is one callable kind, ready for template emission.
 type kindData struct {
 	ID         string // canonical ID (e.g., "history_read")
@@ -205,6 +228,9 @@ type kindData struct {
 	Fields     []attrField
 	Inputs     []portField
 	Outputs    []portField
+	// TypedInputs / TypedOutputs are used by ports_gen.go.
+	TypedInputs  []typedPortField
+	TypedOutputs []typedPortField
 }
 
 // fileData is the top-level template input.
@@ -238,6 +264,22 @@ func renderWire(pkg string, kinds []*nodes.ResolvedManifest) ([]byte, error) {
 		return nil, err
 	}
 	tmpl, err := template.New("wire").Funcs(tmplFuncs).Parse(wireTemplate)
+	if err != nil {
+		return nil, err
+	}
+	var sb strings.Builder
+	if err := tmpl.Execute(&sb, data); err != nil {
+		return nil, err
+	}
+	return formatGo(sb.String())
+}
+
+func renderPorts(pkg string, kinds []*nodes.ResolvedManifest) ([]byte, error) {
+	data, err := buildFileData(pkg, kinds)
+	if err != nil {
+		return nil, err
+	}
+	tmpl, err := template.New("ports").Funcs(tmplFuncs).Parse(portsTemplate)
 	if err != nil {
 		return nil, err
 	}
@@ -287,9 +329,11 @@ func buildKindData(rm *nodes.ResolvedManifest) (kindData, error) {
 	}
 	for _, p := range rm.Manifest.Ports.Inputs {
 		kd.Inputs = append(kd.Inputs, portField{Name: p.Name, Type: p.Type, Required: p.Required})
+		kd.TypedInputs = append(kd.TypedInputs, buildTypedPortField(p))
 	}
 	for _, p := range rm.Manifest.Ports.Outputs {
 		kd.Outputs = append(kd.Outputs, portField{Name: p.Name, Type: p.Type, Required: p.Required})
+		kd.TypedOutputs = append(kd.TypedOutputs, buildTypedPortField(p))
 	}
 
 	// Sort attr names for deterministic emission (FR-009).
@@ -371,6 +415,43 @@ func buildAttrField(name string, spec nodes.AttrSpec) (attrField, error) {
 		f.IsString = true
 	}
 	return f, nil
+}
+
+// buildTypedPortField converts a PortSpec into a typedPortField for use
+// in the ports_gen.go template.
+func buildTypedPortField(p nodes.PortSpec) typedPortField {
+	goType, needsMsg := portGoType(p.Type)
+	return typedPortField{
+		Name:              p.Name,
+		GoName:            pascalCase(p.Name),
+		GoType:            goType,
+		PortType:          p.Type,
+		Required:          p.Required,
+		Description:       p.Description,
+		NeedsMessagesType: needsMsg,
+	}
+}
+
+// portGoType maps a manifest port type token to a Go type literal. The
+// second return value is true when the type requires the Message type
+// from the same package (so the template can track imports / type-cast
+// helpers). The wire format is always map[string]any; this is purely a
+// Go-side ergonomic layer.
+func portGoType(portType string) (goType string, needsMessages bool) {
+	switch portType {
+	case "messages":
+		return "[]Message", true
+	case "text", "branch_id":
+		return "string", false
+	case "bool":
+		return "bool", false
+	case "number":
+		return "float64", false
+	default:
+		// any, json, attachment, memory_chunk, corpus_hits, tool_result,
+		// trace, and unknown future types all stay as any.
+		return "any", false
+	}
 }
 
 // goTypeFor maps an AttrType to the Go type literal we emit on the

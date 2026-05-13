@@ -74,6 +74,13 @@ budget: none
 	if !strings.Contains(string(wire), "No callable kinds in the catalog yet") {
 		t.Errorf("wire_gen.go missing empty-catalog sentinel; got:\n%s", string(wire))
 	}
+	ports := mustRead(t, filepath.Join(cfg.outDir, "ports_gen.go"))
+	if !strings.HasPrefix(string(ports), generatedHeader) {
+		t.Errorf("ports_gen.go missing canonical header")
+	}
+	if !strings.Contains(string(ports), "No callable kinds in the catalog yet") {
+		t.Errorf("ports_gen.go missing empty-catalog sentinel; got:\n%s", string(ports))
+	}
 }
 
 // TestArchetypeSkipped verifies that archetype manifests in the
@@ -93,6 +100,7 @@ func TestArchetypeSkipped(t *testing.T) {
 	}
 
 	attrs := string(mustRead(t, filepath.Join(cfg.outDir, "attrs_gen.go")))
+	ports := string(mustRead(t, filepath.Join(cfg.outDir, "ports_gen.go")))
 
 	// Affirmative: kind structs present.
 	if !strings.Contains(attrs, "type ModelAttrs struct") {
@@ -107,6 +115,21 @@ func TestArchetypeSkipped(t *testing.T) {
 	}
 	if strings.Contains(attrs, "type ControlAttrs struct") {
 		t.Errorf("archetype 'control' leaked into generated attrs as ControlAttrs")
+	}
+
+	// ports_gen.go: typed port structs present for kind manifests.
+	if !strings.Contains(ports, "type ModelInputs struct") {
+		t.Errorf("ModelInputs missing from generated ports")
+	}
+	if !strings.Contains(ports, "type ModelOutputs struct") {
+		t.Errorf("ModelOutputs missing from generated ports")
+	}
+	if !strings.Contains(ports, "func ReadModelInputs") {
+		t.Errorf("ReadModelInputs accessor missing from generated ports")
+	}
+	// Archetype port structs must NOT appear.
+	if strings.Contains(ports, "type ComputeInputs struct") {
+		t.Errorf("archetype 'compute' leaked into generated ports as ComputeInputs")
 	}
 }
 
@@ -171,7 +194,7 @@ func TestIdempotent(t *testing.T) {
 		t.Fatalf("second run: %v", err)
 	}
 
-	for _, name := range []string{"attrs_gen.go", "wire_gen.go"} {
+	for _, name := range []string{"attrs_gen.go", "wire_gen.go", "ports_gen.go"} {
 		a := mustRead(t, filepath.Join(dir1, name))
 		b := mustRead(t, filepath.Join(dir2, name))
 		if !bytes.Equal(a, b) {
@@ -196,6 +219,7 @@ func TestIdempotentSameDir(t *testing.T) {
 	first := map[string][]byte{
 		"attrs_gen.go": mustRead(t, filepath.Join(dir, "attrs_gen.go")),
 		"wire_gen.go":  mustRead(t, filepath.Join(dir, "wire_gen.go")),
+		"ports_gen.go": mustRead(t, filepath.Join(dir, "ports_gen.go")),
 	}
 	if err := run(cfg); err != nil {
 		t.Fatalf("second run: %v", err)
@@ -221,7 +245,7 @@ func TestGoldenFiles(t *testing.T) {
 		t.Fatalf("run: %v", err)
 	}
 
-	for _, name := range []string{"attrs_gen.go", "wire_gen.go"} {
+	for _, name := range []string{"attrs_gen.go", "wire_gen.go", "ports_gen.go"} {
 		got := mustRead(t, filepath.Join(cfg.outDir, name))
 		goldenPath := filepath.Join(goldenDir, name)
 		if *updateGolden {
@@ -296,8 +320,9 @@ func TestPascalCase(t *testing.T) {
 
 // TestGeneratedFilesParse round-trips the generator output through
 // go/format. format.Source is already invoked inside renderAttrs /
-// renderWire; this test verifies the output is valid by re-parsing it
-// (parser invokes the lexer+parser, which is stricter than format).
+// renderWire / renderPorts; this test verifies the output is valid by
+// re-parsing it (parser invokes the lexer+parser, which is stricter
+// than format).
 func TestGeneratedFilesParse(t *testing.T) {
 	t.Parallel()
 	cfg := genConfig{
@@ -308,7 +333,7 @@ func TestGeneratedFilesParse(t *testing.T) {
 	if err := run(cfg); err != nil {
 		t.Fatalf("run: %v", err)
 	}
-	for _, name := range []string{"attrs_gen.go", "wire_gen.go"} {
+	for _, name := range []string{"attrs_gen.go", "wire_gen.go", "ports_gen.go"} {
 		path := filepath.Join(cfg.outDir, name)
 		raw := mustRead(t, path)
 		// format.Source on already-formatted bytes is a no-op when
