@@ -120,6 +120,10 @@ const sqlInitSchema = `
 // 'model_output' for model-generated images captured by the WP02
 // auto-capture pipeline (multimodal-io-extended-01KQ8TD2 WP02 —
 // see migrations_source_model_output.go).
+// 0328 adds image_width / image_height / page_count columns to the
+// media_artifacts table so the metadata that Put() already extracts
+// in-memory survives a Get/List round-trip (multimodal-io-01KQ8TDF
+// FR-017 — see migrations_media_artifact_meta.go).
 func Migrations() []migrations.Migration {
 	return []migrations.Migration{
 		{
@@ -179,6 +183,7 @@ func Migrations() []migrations.Migration {
 		migration0325(),
 		migration0326(),
 		migration0327(),
+		migration0328(),
 	}
 }
 

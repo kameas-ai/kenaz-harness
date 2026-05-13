@@ -147,7 +147,9 @@ func TestOpen_RegistersSessionMigrations(t *testing.T) {
 	// manifest-versioning-01NDFSEX02 WP03.
 	// 0327 (source_model_output) lands with
 	// multimodal-io-extended-01KQ8TD2 WP02.
-	want := []int{300, 301, 302, 303, 304, 305, 306, 307, 308, 309, 310, 311, 312, 313, 314, 315, 316, 317, 318, 319, 320, 321, 322, 323, 324, 325, 326, 327}
+	// 0328 (media_artifact_meta: image_width/image_height/page_count columns)
+	// lands with multimodal-io-01KQ8TDF FR-017.
+	want := []int{300, 301, 302, 303, 304, 305, 306, 307, 308, 309, 310, 311, 312, 313, 314, 315, 316, 317, 318, 319, 320, 321, 322, 323, 324, 325, 326, 327, 328}
 	if len(versions) != len(want) {
 		t.Fatalf("session migrations applied = %v, want %v", versions, want)
 	}
@@ -196,9 +198,10 @@ func TestOpen_ApplyIdempotent(t *testing.T) {
 	// 1 scheduled_chat_runs (0325, scheduled-chat-runs-01KX5R8B) +
 	// 1 agent_graph_node_provenance (0326, manifest-versioning-01NDFSEX02) +
 	// 1 source_model_output (0327, multimodal-io-extended-01KQ8TD2) +
-	// 1 slash_commands_user (1000) = 31.
-	if count != 31 {
-		t.Errorf("ledger count = %d, want 31", count)
+	// 1 media_artifact_meta (0328, multimodal-io-01KQ8TDF FR-017) +
+	// 1 slash_commands_user (1000) = 32.
+	if count != 32 {
+		t.Errorf("ledger count = %d, want 32", count)
 	}
 }
 
