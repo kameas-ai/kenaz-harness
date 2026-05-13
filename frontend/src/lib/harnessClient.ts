@@ -646,7 +646,7 @@ interface WailsBindingsLike {
   Elicit_SubmitWizardStep(
     requestID: string,
     questionID: string,
-    answerJSON: string,
+    answerJSON: string | null,
     dismissed: boolean,
   ): Promise<void>;
   // WP06 async / deferred mode.

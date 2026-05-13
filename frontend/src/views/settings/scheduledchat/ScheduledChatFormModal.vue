@@ -182,9 +182,9 @@ async function handleSubmit() {
             data-testid="sc-prompt-input"
           ></textarea>
           <p class="mt-1 font-ui text-xs text-ink-muted">
-            Variables: <code class="font-mono">{{date}}</code>,
-            <code class="font-mono">{{time}}</code>,
-            <code class="font-mono">{{cron_expr}}</code>
+            Variables: <code v-pre class="font-mono">{{date}}</code>,
+            <code v-pre class="font-mono">{{time}}</code>,
+            <code v-pre class="font-mono">{{cron_expr}}</code>
           </p>
         </div>
 
