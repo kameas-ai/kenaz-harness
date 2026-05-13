@@ -12,6 +12,7 @@ import (
 	artifactsview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/artifacts"
 	attachmentsview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/attachments"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/audit"
+	agentsview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/agents"
 	branchesview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/branches"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/bundle"
 	cedarpolicyview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/cedarpolicy"
@@ -137,6 +138,10 @@ func (f *fakeHarnessAPI) ScheduledChat() scheduledchatview.ScheduledChatAPI {
 
 func (f *fakeHarnessAPI) Secrets() secretsview.SecretsAPI {
 	return secretsview.NewAPI(coresecrets.NewExposureIndex())
+}
+
+func (f *fakeHarnessAPI) Agents() *agentsview.API {
+	return agentsview.New("")
 }
 
 // Compile-time interface witness (plan §4.2).

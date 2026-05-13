@@ -17,6 +17,7 @@ import (
 	artifactsview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/artifacts"
 	attachmentsview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/attachments"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/audit"
+	agentsview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/agents"
 	branchesview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/branches"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/bundle"
 	cedarpolicyview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/cedarpolicy"
@@ -2117,4 +2118,32 @@ func (b *Bindings) Secrets_Expose(req secretsview.ExposeRequest) error {
 // Returns an error when the locator is not currently exposed.
 func (b *Bindings) Secrets_Revoke(locator string) error {
 	return b.api.Secrets().RevokeSecret(b.ctx(), locator)
+}
+
+// ── agents (branch-subagent-interactive-01KZNP3B, WP01) ──────────────────
+
+// Agents_ListProfiles returns summary entries for all known sub-agent profiles
+// (bundled + user-authored). The Settings → Agents panel calls this to
+// populate the profile list.
+func (b *Bindings) Agents_ListProfiles() ([]agentsview.ProfileSummaryWire, error) {
+	return b.api.Agents().ListProfiles(b.ctx())
+}
+
+// Agents_LoadProfile returns the full profile for the given id. The profile
+// editor calls this to populate its form fields.
+func (b *Bindings) Agents_LoadProfile(id string) (agentsview.ProfileWire, error) {
+	return b.api.Agents().LoadProfile(b.ctx(), id)
+}
+
+// Agents_SaveProfile creates or updates a user-authored profile. The profile
+// editor calls this on Submit. Returns an error for bundled ids (the user
+// must duplicate the profile first).
+func (b *Bindings) Agents_SaveProfile(profile agentsview.ProfileWire) error {
+	return b.api.Agents().SaveProfile(b.ctx(), profile)
+}
+
+// Agents_DeleteProfile removes a user-authored profile by id. Returns an
+// error for bundled ids or ids that do not exist.
+func (b *Bindings) Agents_DeleteProfile(id string) error {
+	return b.api.Agents().DeleteProfile(b.ctx(), id)
 }
