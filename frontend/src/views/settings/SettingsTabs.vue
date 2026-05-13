@@ -6,6 +6,10 @@
  * BundlesView so users land in a coherent "settings" surface no matter
  * which route they enter through. Routes stay individually addressable
  * for deep-linking (legacy /providers, /hooks, /bundles).
+ *
+ * Layout: tabs are grouped into categories and rendered in a wrapping
+ * flex strip so the nav reflows to multiple rows at narrow widths
+ * instead of forcing a horizontal scroll.
  */
 import { computed } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
@@ -32,44 +36,54 @@ interface Tab {
   query?: string;
 }
 
-const tabs: ReadonlyArray<Tab> = [
-  { to: '/settings', label: 'General' },
-  // auto-update-v0.4.0 WP05 — Updates tab. Shares /settings with the
-  // General tab and disambiguates via ?tab=updates so we don't have to
-  // touch the router. See SettingsView.vue for the mount switch.
-  { to: '/settings?tab=updates', label: 'Updates', query: 'updates' },
-  // v0.5.1 migration-doctor — Health tab. Disambiguates via ?tab=health.
-  // See SettingsView.vue for the mount switch.
-  { to: '/settings?tab=health', label: 'Health', query: 'health' },
-  // compaction-strategy-ui-01KQ8TD8 — Compaction strategy-authoring tab.
-  // Disambiguates via ?tab=compaction. See SettingsView.vue for the mount switch.
-  { to: '/settings?tab=compaction', label: 'Compaction', query: 'compaction' },
-  // user-slash-commands-01KQ8TD9 WP07 — Slash Commands tab.
-  // Disambiguates via ?tab=slashcmds. See SettingsView.vue for the mount switch.
-  { to: '/settings?tab=slashcmds', label: 'Slash Commands', query: 'slashcmds' },
-  // user-slash-commands-01KQ8TD9 WP09 — Feature Flags tab.
-  // Disambiguates via ?tab=flags. See SettingsView.vue for the mount switch.
-  { to: '/settings?tab=flags', label: 'Flags', query: 'flags' },
-  // hooks-event-surface-expansion-01KZNP3A WP07d — Hooks settings tab.
-  // Disambiguates via ?tab=hooks. See SettingsView.vue for the mount switch.
-  { to: '/settings?tab=hooks', label: 'Hooks', query: 'hooks' },
-  // workflow-extensions-01KW2D3Y WP02 — Workflows settings tab.
-  // Disambiguates via ?tab=workflows. See SettingsView.vue for the mount switch.
-  { to: '/settings?tab=workflows', label: 'Workflows', query: 'workflows' },
-  // scheduled-chat-runs-01KX5R8B WP05 — Scheduled Chats settings tab.
-  // Disambiguates via ?tab=scheduledchats. See SettingsView.vue for the mount switch.
-  { to: '/settings?tab=scheduledchats', label: 'Scheduled Chats', query: 'scheduledchats' },
-  // model-secret-references-01KW7M5A WP10 — Model Secrets settings tab.
-  // Disambiguates via ?tab=secrets. See SettingsView.vue for the mount switch.
-  { to: '/settings?tab=secrets', label: 'Secrets', query: 'secrets' },
-  // background-task-monitor-01KZNP3C WP05 — Background Tasks tab.
-  // Disambiguates via ?tab=tasks. See SettingsView.vue for the mount switch.
-  { to: '/settings?tab=tasks', label: 'Tasks', query: 'tasks' },
-  { to: '/providers', label: 'Providers' },
-  { to: '/bundles', label: 'Bundles' },
-  { to: '/permissions/bash', label: 'Permissions', matchPrefix: '/permissions' },
-  // cedar-policy-editor-ui-01KQ8TD6 WP02 — Policy editor tab.
-  { to: '/policy', label: 'Policy', matchPrefix: '/policy' },
+interface TabGroup {
+  label: string;
+  tabs: ReadonlyArray<Tab>;
+}
+
+// Groups are visual only — they keep related tabs adjacent so the strip
+// reads as a structured nav instead of a long undifferentiated row.
+const groups: ReadonlyArray<TabGroup> = [
+  {
+    label: 'App',
+    tabs: [
+      { to: '/settings', label: 'General' },
+      { to: '/settings?tab=updates', label: 'Updates', query: 'updates' },
+      { to: '/settings?tab=flags', label: 'Flags', query: 'flags' },
+      { to: '/settings?tab=health', label: 'Health', query: 'health' },
+    ],
+  },
+  {
+    label: 'Authoring',
+    tabs: [
+      { to: '/settings?tab=compaction', label: 'Compaction', query: 'compaction' },
+      { to: '/settings?tab=slashcmds', label: 'Slash Commands', query: 'slashcmds' },
+      { to: '/settings?tab=workflows', label: 'Workflows', query: 'workflows' },
+      { to: '/settings?tab=hooks', label: 'Hooks', query: 'hooks' },
+    ],
+  },
+  {
+    label: 'Runtime',
+    tabs: [
+      { to: '/settings?tab=tasks', label: 'Tasks', query: 'tasks' },
+      { to: '/settings?tab=scheduledchats', label: 'Scheduled Chats', query: 'scheduledchats' },
+    ],
+  },
+  {
+    label: 'Integrations',
+    tabs: [
+      { to: '/providers', label: 'Providers' },
+      { to: '/bundles', label: 'Bundles' },
+      { to: '/settings?tab=secrets', label: 'Secrets', query: 'secrets' },
+    ],
+  },
+  {
+    label: 'Security',
+    tabs: [
+      { to: '/permissions/bash', label: 'Permissions', matchPrefix: '/permissions' },
+      { to: '/policy', label: 'Policy', matchPrefix: '/policy' },
+    ],
+  },
 ];
 
 const activePath = computed(() => route?.path ?? '');
@@ -104,9 +118,17 @@ function goto(to: string) {
     aria-label="Settings sections"
     data-testid="settings-tabs"
   >
-    <ul class="flex gap-1">
-      <li v-for="t in tabs" :key="t.to">
+    <ul class="flex flex-wrap items-end gap-x-4 gap-y-1">
+      <li
+        v-for="(group, gIdx) in groups"
+        :key="group.label"
+        class="flex flex-wrap items-end gap-1"
+        :class="gIdx > 0 ? 'border-l border-border-muted pl-4' : ''"
+        :aria-label="group.label"
+      >
         <button
+          v-for="t in group.tabs"
+          :key="t.to"
           type="button"
           class="px-3 py-1.5 -mb-px font-ui text-[12px] uppercase tracking-[0.16em] border-b-2 transition-colors"
           :class="
