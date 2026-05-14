@@ -1,0 +1,7 @@
+# Seam fanout fixture for kind=corpus_read
+# CorpusBackend.Search is called with the configured corpus IDs and query.
+kind: corpus_read
+seams:
+  - seam: CorpusBackend.Search
+    required: true
+notes: "corpus_read calls CorpusBackend.Search; ErrNoCorpus when backend is nil"

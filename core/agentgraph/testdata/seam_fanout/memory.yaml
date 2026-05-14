@@ -1,0 +1,8 @@
+# Seam fanout fixture for kind=memory
+# MemoryStore.Write is called to persist the configured content.
+# Optional MemoryStore.Read is called when mode=read.
+kind: memory
+seams:
+  - seam: MemoryStore.Write
+    required: true
+notes: "memory node calls MemoryStore.Write with scope/content from attrs; ErrNoMemory when store is nil"

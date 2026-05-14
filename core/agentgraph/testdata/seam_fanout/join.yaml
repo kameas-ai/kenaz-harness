@@ -1,0 +1,5 @@
+# Seam fanout fixture for kind=join
+# Join nodes are flow-control primitives that wait for parallel branches; no external seam calls.
+kind: join
+seams: []
+notes: "join node waits for all incoming branches; no external seam calls"

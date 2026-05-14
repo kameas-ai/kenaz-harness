@@ -1,0 +1,7 @@
+# Seam fanout fixture for kind=compact
+# Compactor.Compact is called at CompactionSiteManual.
+kind: compact
+seams:
+  - seam: Compactor.Compact
+    required: true
+notes: "compact node calls Compactor.Compact with site=manual; ErrNotImplemented when compactor is nil"

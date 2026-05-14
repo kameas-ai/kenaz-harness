@@ -1,0 +1,5 @@
+# Seam fanout fixture for kind=retry
+# Retry nodes are flow-control primitives that re-fire a sub-graph; no external seam calls.
+kind: retry
+seams: []
+notes: "retry node re-enqueues the failed sub-graph; no external seam calls on the retry node itself"

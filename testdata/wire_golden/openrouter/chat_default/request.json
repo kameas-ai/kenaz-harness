@@ -1,0 +1,13 @@
+{
+  "messages": [
+    {
+      "content": "Say hello",
+      "role": "user"
+    }
+  ],
+  "model": "anthropic/claude-3.5-sonnet",
+  "stream": true,
+  "usage": {
+    "include": true
+  }
+}

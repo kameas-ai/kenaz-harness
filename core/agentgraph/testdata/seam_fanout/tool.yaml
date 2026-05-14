@@ -1,0 +1,8 @@
+# Seam fanout fixture for kind=tool
+# ToolRegistry.Call is called with the configured tool name and args.
+# PolicyGate.CheckStateRead may be called before tool dispatch.
+kind: tool
+seams:
+  - seam: ToolRegistry.Call
+    required: true
+notes: "tool node calls ToolRegistry.Call with tool_name and args from input ports; ErrNoTools when registry is nil"

@@ -1,0 +1,7 @@
+# Seam fanout fixture for kind=attachment
+# AttachmentResolver.Resolve is called with the configured attachment ID.
+kind: attachment
+seams:
+  - seam: AttachmentResolver.Resolve
+    required: true
+notes: "attachment node calls AttachmentResolver.Resolve with the configured attachment_id"

@@ -129,6 +129,34 @@ jobs:
           CGO_ENABLED: "1"
         run: go test ./core/... -race -count=1 -short
 
+  wire-golden-locked:
+    name: Wire golden tests (locked tier)
+    # Locked-tier wire-shape regression gate (integration-test-harness-01KQ8TD1 WP05).
+    # Runs all *_WireGolden tests across the LLM adapter + chat view packages.
+    # No network keys required — each test drives a real adapter against an
+    # httptest.Server that replays recorded fixture responses.
+    runs-on: [self-hosted, Linux, ARM64, ci-medium]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: false
+
+      - name: go mod download
+        run: go mod download
+
+      - name: ensure frontend/dist exists for embed
+        run: |
+          mkdir -p frontend/dist
+          touch frontend/dist/.gitkeep
+
+      - name: wire golden tests
+        env:
+          CGO_ENABLED: "1"
+        run: go test ./core/llm/... ./core/rpc/views/agentgraph/chat/... -run WireGolden -count=1 -short -race
+
   test-frontend:
     name: Frontend tests + typecheck
     # ubuntu-latest hosted runners are reserved for Apple / Microsoft

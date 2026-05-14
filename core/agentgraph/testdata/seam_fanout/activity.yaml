@@ -1,0 +1,7 @@
+# Seam fanout fixture for kind=activity
+# ActivityCatalog.Resolve is called to look up the sub-graph.
+kind: activity
+seams:
+  - seam: ActivityCatalog.Resolve
+    required: true
+notes: "activity executor calls ActivityCatalog.Resolve with the configured activityID and version; ErrNotImplemented when catalog is nil"
