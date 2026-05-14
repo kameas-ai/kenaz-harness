@@ -400,14 +400,18 @@ type GenerationRequest struct {
 	// When set and present in profile.AvailableModels(), the registry
 	// substitutes prof.Model = req.Model before dispatching to the
 	// adapter. Empty means "use the profile default."
-	Model         string           `json:"model,omitempty"`
-	System        string           `json:"system,omitempty"`
-	Messages      []Message        `json:"messages"`
-	Tools         []ToolSpec       `json:"tools,omitempty"`
-	Attachments   []Attachment     `json:"attachments,omitempty"`
-	JSONMode      *JSONModeSpec    `json:"json_mode,omitempty"`
-	Caching       *CachingSpec     `json:"caching,omitempty"`
-	Reasoning     *ReasoningSpec   `json:"reasoning,omitempty"`
+	Model    string     `json:"model,omitempty"`
+	System   string     `json:"system,omitempty"`
+	Messages []Message  `json:"messages"`
+	Tools    []ToolSpec `json:"tools,omitempty"`
+	// Deprecated: use Message.Content blocks (ContentBlock with Type "image"
+	// or "document") instead. The legacy Attachment slice is still honoured by
+	// RequestedCapabilities and the registry's capability gate so existing
+	// callers remain valid. (multimodal-io-01KQ8TDF FR-004)
+	Attachments []Attachment   `json:"attachments,omitempty"`
+	JSONMode    *JSONModeSpec  `json:"json_mode,omitempty"`
+	Caching     *CachingSpec   `json:"caching,omitempty"`
+	Reasoning   *ReasoningSpec `json:"reasoning,omitempty"`
 	// ResponseFormat constrains the model's output to a JSON schema or GBNF
 	// grammar. Nil means free-form text (today's behavior unchanged).
 	// (structured-output-and-grammar-01KX5R8A FR-001)

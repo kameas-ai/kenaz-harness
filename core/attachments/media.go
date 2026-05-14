@@ -246,11 +246,9 @@ func (s *sqlMediaStore) RegisterRefcountSource(rs RefcountSource) {
 // For image/* MIME types, Put also extracts pixel dimensions (best-effort;
 // zero on failure). For application/pdf, Put extracts the page count
 // (best-effort; encrypted PDFs return ErrAttachmentEncrypted).
-// These metadata fields are populated on the returned MediaArtifact but
-// are NOT persisted to the DB in this version — the DB schema migration
-// (adding image_width/image_height/page_count columns) is tracked as a
-// follow-up. Callers should read them from the returned value and attach
-// them to ContentBlock.Source.ImageDimensions for the gate (WP06).
+// All metadata fields are persisted to the DB (migration 0327 adds the
+// image_width/image_height/page_count columns to media_artifacts).
+// (multimodal-io-01KQ8TDF FR-015, FR-016, FR-017)
 func (s *sqlMediaStore) Put(ctx context.Context, b []byte, mediaType, originalName string) (MediaArtifact, error) {
 	if s.maxBytes > 0 && int64(len(b)) > s.maxBytes {
 		return MediaArtifact{}, fmt.Errorf("%w: %d > %d", ErrOversize, len(b), s.maxBytes)
@@ -300,10 +298,12 @@ func (s *sqlMediaStore) Put(ctx context.Context, b []byte, mediaType, originalNa
 	if err := s.db.WriteTx(ctx, func(tx storage.WriteTx) error {
 		_, err := tx.Exec(ctx, `
             INSERT INTO media_artifacts
-                (id, content_hash, media_type, byte_size, original_name, created_at)
-            VALUES (?, ?, ?, ?, ?, ?)
+                (id, content_hash, media_type, byte_size, original_name, created_at,
+                 image_width, image_height, page_count)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         `, row.ID, row.ContentHash, row.MediaType, row.ByteSize,
-			row.OriginalName, row.CreatedAt.UnixNano())
+			row.OriginalName, row.CreatedAt.UnixNano(),
+			row.ImageWidth, row.ImageHeight, row.PageCount)
 		return err
 	}); err != nil {
 		return MediaArtifact{}, err
@@ -423,7 +423,8 @@ func (s *sqlMediaStore) Delete(ctx context.Context, id string) error {
 }
 
 const sqlSelectMedia = `
-    SELECT id, content_hash, media_type, byte_size, original_name, created_at
+    SELECT id, content_hash, media_type, byte_size, original_name, created_at,
+           image_width, image_height, page_count
     FROM media_artifacts
 `
 
@@ -627,6 +628,7 @@ func (s *sqlMediaStore) lockForHash(hashHex string) *sync.Mutex {
 }
 
 // scanMedia hydrates a MediaArtifact from a row scanner.
+// Column order must match sqlSelectMedia.
 func scanMedia(sc interface{ Scan(dest ...any) error }) (MediaArtifact, error) {
 	var (
 		a         MediaArtifact
@@ -635,6 +637,7 @@ func scanMedia(sc interface{ Scan(dest ...any) error }) (MediaArtifact, error) {
 	if err := sc.Scan(
 		&a.ID, &a.ContentHash, &a.MediaType, &a.ByteSize,
 		&a.OriginalName, &createdAt,
+		&a.ImageWidth, &a.ImageHeight, &a.PageCount,
 	); err != nil {
 		return MediaArtifact{}, err
 	}

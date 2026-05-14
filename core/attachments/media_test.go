@@ -675,3 +675,67 @@ func TestMediaStore_OnDeleteSetNull_FromArtifacts(t *testing.T) {
 		t.Errorf("MediaID = %v, want nil after media row deletion", got.MediaID)
 	}
 }
+
+// TestMediaStore_Get_PreservesMetaDimensions verifies that image_width,
+// image_height, and page_count survive a Get round-trip through the DB.
+// This exercises migration 0327 (multimodal-io-01KQ8TDF FR-017).
+func TestMediaStore_Get_PreservesMetaDimensions(t *testing.T) {
+	t.Parallel()
+	db, dir := openMediaTest(t)
+	store := attachments.NewSQLMediaStore(db, dir)
+	ctx := context.Background()
+
+	png := minimalPNG(200, 100)
+	put, err := store.Put(ctx, png, "image/png", "img.png")
+	if err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	if put.ImageWidth != 200 || put.ImageHeight != 100 {
+		t.Fatalf("Put dims = (%d, %d), want (200, 100)", put.ImageWidth, put.ImageHeight)
+	}
+
+	// Round-trip via Get — verifies the columns are persisted and read back.
+	got, _, err := store.Get(ctx, put.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.ImageWidth != 200 {
+		t.Errorf("Get ImageWidth = %d, want 200", got.ImageWidth)
+	}
+	if got.ImageHeight != 100 {
+		t.Errorf("Get ImageHeight = %d, want 100", got.ImageHeight)
+	}
+	if got.PageCount != 0 {
+		t.Errorf("Get PageCount = %d, want 0 for PNG", got.PageCount)
+	}
+}
+
+// TestMediaStore_Get_PreservesPageCount verifies that page_count survives
+// a Get round-trip for a PDF. This exercises migration 0327
+// (multimodal-io-01KQ8TDF FR-017).
+func TestMediaStore_Get_PreservesPageCount(t *testing.T) {
+	t.Parallel()
+	db, dir := openMediaTest(t)
+	store := attachments.NewSQLMediaStore(db, dir)
+	ctx := context.Background()
+
+	pdfBytes := minimalPDF()
+	put, err := store.Put(ctx, pdfBytes, "application/pdf", "doc.pdf")
+	if err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	if put.PageCount != 1 {
+		t.Fatalf("Put PageCount = %d, want 1", put.PageCount)
+	}
+
+	got, _, err := store.Get(ctx, put.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.PageCount != 1 {
+		t.Errorf("Get PageCount = %d, want 1", got.PageCount)
+	}
+	if got.ImageWidth != 0 || got.ImageHeight != 0 {
+		t.Errorf("Get dims = (%d, %d), want (0, 0) for PDF", got.ImageWidth, got.ImageHeight)
+	}
+}
