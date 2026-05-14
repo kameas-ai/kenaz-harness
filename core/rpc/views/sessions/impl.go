@@ -12,9 +12,12 @@ import (
 
 	coreart "github.com/sigil-tech/kaneaz-harness/core/artifacts"
 	"github.com/sigil-tech/kaneaz-harness/core/attachments"
+	"github.com/sigil-tech/kaneaz-harness/core/context/audit"
 	"github.com/sigil-tech/kaneaz-harness/core/llm/pricing"
+	"github.com/sigil-tech/kaneaz-harness/core/policy/cedar"
 	"github.com/sigil-tech/kaneaz-harness/core/session"
 	autotitle "github.com/sigil-tech/kaneaz-harness/core/sessions/autotitle"
+	"github.com/sigil-tech/kaneaz-harness/core/sessions/export"
 	"github.com/sigil-tech/kaneaz-harness/core/usage"
 )
 
@@ -110,6 +113,19 @@ type managerAPI struct {
 	// TopicSessionListChanged so the LeftRail updates in real-time
 	// without polling (v0.5.3 fix).
 	broker SessionListBroker
+
+	// export-session plumbing (session-export-01NDFSEX05 WP02).
+
+	// cedarGate is the Cedar policy engine consulted before Export.
+	// nil disables the gate (test paths, boot failures).
+	cedarGate cedar.Gate
+	// filePicker is the port that opens the OS-native file-save dialog
+	// and returns the path the user chose (or "" on cancel). Production
+	// wiring supplies a Wails-backed adapter; tests inject a recording
+	// fake.
+	filePicker FilePicker
+	// auditEmitter is the audit event sink. nil silently drops events.
+	auditEmitter audit.Emitter
 }
 
 // TitleGenerator is the surface SuggestTitle needs. Matches
@@ -870,4 +886,133 @@ func (a *managerAPI) ResumeMessage(ctx context.Context, sessionID, messageID str
 		SubscriptionID:    subID,
 		OriginalMessageID: messageID,
 	}, nil
+}
+
+// ── Session export (session-export-01NDFSEX05 WP02) ─────────────────────────
+
+// FilePicker is the port that opens the OS-native file-save dialog. It
+// is thin so the sessions package never imports Wails runtime directly.
+// Production wiring (bindings layer) supplies a real SaveFileDialog
+// adapter; tests inject a recording fake.
+type FilePicker interface {
+	// PickSavePath opens the save dialog with a suggested default filename
+	// and returns the absolute path the user chose. Returns ("", nil)
+	// when the user cancels — callers must treat empty-path-without-error
+	// as a no-op (user cancelled).
+	PickSavePath(ctx context.Context, title, defaultFilename string) (string, error)
+}
+
+// ErrExportCancelled is returned by Export when the user dismisses the
+// file-picker dialog without choosing a path.
+var ErrExportCancelled = errors.New("rpc/sessions: export cancelled by user")
+
+// ErrExportNotConfigured is returned by Export when no FilePicker has
+// been wired into the API (boot failure or test harness without the port).
+var ErrExportNotConfigured = errors.New("rpc/sessions: export file picker not configured")
+
+// WithExportOpts wires the export dependencies (Cedar gate, file picker,
+// audit emitter) into a SessionsAPI. The impl checks for the concrete type
+// so only managerAPI instances are affected; other implementations are
+// returned unchanged. nil values for any field are accepted and leave
+// that field at its zero value (useful when wiring gate+emitter at boot
+// and picker at call time via WithExportPicker).
+func WithExportOpts(api SessionsAPI, gate cedar.Gate, picker FilePicker, em audit.Emitter) SessionsAPI {
+	if m, ok := api.(*managerAPI); ok {
+		m.cedarGate = gate
+		m.filePicker = picker
+		m.auditEmitter = em
+	}
+	return api
+}
+
+// WithExportPicker wires the OS-native file-save dialog port into a
+// SessionsAPI without disturbing the Cedar gate or audit emitter that were
+// wired at boot time by WithExportOpts. Called per-invocation from the
+// bindings layer because the Wails runtime context is only valid after
+// SetContext has run (guaranteed by the Wails OnStartup lifecycle).
+func WithExportPicker(api SessionsAPI, picker FilePicker) SessionsAPI {
+	if m, ok := api.(*managerAPI); ok {
+		m.filePicker = picker
+	}
+	return api
+}
+
+// Export implements SessionsAPI (session-export-01NDFSEX05 FR-001).
+//
+// Steps:
+//  1. Cedar gate (ActionExportSession). Deny → return Cedar error; no file; no audit.
+//  2. Load Session + []Message via the manager.
+//  3. export.Render (applies RedactValue internally via the renderer).
+//  4. Open file-picker dialog. Cancel → return ErrExportCancelled.
+//  5. Write bytes; for Markdown materialise the sibling -artifacts/ dir.
+//  6. Emit audit.KindSessionExport with basename only (not full path).
+//  7. Return ExportResult.
+func (a *managerAPI) Export(ctx context.Context, sessionID, format string) (ExportResult, error) {
+	// 1. Cedar gate.
+	if err := cedar.CheckExportSession(ctx, a.cedarGate, sessionID, format); err != nil {
+		return ExportResult{}, fmt.Errorf("rpc/sessions: export denied by policy: %w", err)
+	}
+
+	// 2. Load session record and messages.
+	rec, err := a.mgr.Get(ctx, sessionID)
+	if err != nil {
+		return ExportResult{}, fmt.Errorf("rpc/sessions: export: load session: %w", err)
+	}
+	msgs, err := a.mgr.ListMessages(ctx, sessionID)
+	if err != nil {
+		return ExportResult{}, fmt.Errorf("rpc/sessions: export: load messages: %w", err)
+	}
+
+	// 3. Render (redaction happens inside export.Render via redactMessages).
+	exportFmt := export.Format(format)
+	now := time.Now()
+	rendered, sidecars, err := export.Render(exportFmt, rec, msgs, now)
+	if err != nil {
+		return ExportResult{}, fmt.Errorf("rpc/sessions: export: render: %w", err)
+	}
+
+	// 4. File picker.
+	if a.filePicker == nil {
+		return ExportResult{}, ErrExportNotConfigured
+	}
+	defaultName := export.DefaultFilename(rec.Name, exportFmt, now)
+	dest, err := a.filePicker.PickSavePath(ctx, "Export session", defaultName)
+	if err != nil {
+		return ExportResult{}, fmt.Errorf("rpc/sessions: export: pick save path: %w", err)
+	}
+	if dest == "" {
+		return ExportResult{}, ErrExportCancelled
+	}
+
+	// 5. Write main file.
+	if werr := os.WriteFile(dest, rendered, 0o644); werr != nil {
+		return ExportResult{}, fmt.Errorf("rpc/sessions: export: write file: %w", werr)
+	}
+
+	// Materialise sidecar artifacts alongside the main file.
+	if len(sidecars) > 0 {
+		baseDir := filepath.Dir(dest)
+		for _, sc := range sidecars {
+			scPath := filepath.Join(baseDir, sc.RelPath)
+			if mkdirErr := os.MkdirAll(filepath.Dir(scPath), 0o755); mkdirErr != nil {
+				// Non-fatal: log and continue.
+				_ = mkdirErr
+				continue
+			}
+			_ = os.WriteFile(scPath, sc.Bytes, 0o644)
+		}
+	}
+
+	byteCount := int64(len(rendered))
+
+	// 6. Audit.
+	_ = audit.Emit(ctx, a.auditEmitter, audit.KindSessionExport, audit.SessionExportPayload{
+		SessionID:      sessionID,
+		Format:         format,
+		OutputBasename: filepath.Base(dest),
+		ByteCount:      byteCount,
+	}, now)
+
+	// 7. Return.
+	return ExportResult{Path: dest, ByteCount: byteCount}, nil
 }

@@ -494,6 +494,8 @@ export function Sessions_StopStream(arg1:string):Promise<void>;
 
 export function Sessions_SuggestTitle(arg1:string):Promise<string>;
 
+export function Sessions_Export(arg1:string,arg2:string):Promise<sessions.ExportResult>;
+
 export function SetContext(arg1:context.Context):Promise<void>;
 
 export function SetSettingsStore(arg1:settings.SettingsStore):Promise<void>;

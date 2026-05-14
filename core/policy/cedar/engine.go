@@ -65,6 +65,14 @@ var defaultToolPolicySource []byte
 //go:embed policies/default_workflows_policy.cedar
 var defaultWorkflowsPolicySource []byte
 
+// defaultSessionExportPolicySource is the embedded Session-family default
+// for mission session-export-01NDFSEX05 (WP01). Posture: permit the local
+// user to export any session; operators can layer a forbid rule to disable
+// export in shared / kiosk environments.
+//
+//go:embed policies/default_session_export_policy.cedar
+var defaultSessionExportPolicySource []byte
+
 // DefaultPolicyName is the synthetic filename used when reporting the
 // embedded policy to the frontend.
 const DefaultPolicyName = "default_policy.cedar"
@@ -77,11 +85,12 @@ const DefaultPolicyName = "default_policy.cedar"
 // the same file (the user's accumulated `.cedar` files in
 // `<DataDir>/policy/` compose with the embedded set).
 const (
-	DefaultCredentialPolicyName = "default_credential_policy.cedar"
-	DefaultBashPolicyName       = "default_bash_policy.cedar"
-	DefaultFilesystemPolicyName = "default_filesystem_policy.cedar"
-	DefaultToolPolicyName       = "default_tool_policy.cedar"
-	DefaultWorkflowsPolicyName  = "default_workflows_policy.cedar"
+	DefaultCredentialPolicyName    = "default_credential_policy.cedar"
+	DefaultBashPolicyName          = "default_bash_policy.cedar"
+	DefaultFilesystemPolicyName    = "default_filesystem_policy.cedar"
+	DefaultToolPolicyName          = "default_tool_policy.cedar"
+	DefaultWorkflowsPolicyName     = "default_workflows_policy.cedar"
+	DefaultSessionExportPolicyName = "default_session_export_policy.cedar"
 )
 
 // PolicyDir is the directory under DataDir where user-authored
@@ -234,6 +243,7 @@ func (e *Engine) Reload(ctx context.Context) error {
 			{DefaultFilesystemPolicyName, defaultFilesystemPolicySource},
 			{DefaultToolPolicyName, defaultToolPolicySource},
 			{DefaultWorkflowsPolicyName, defaultWorkflowsPolicySource},
+			{DefaultSessionExportPolicyName, defaultSessionExportPolicySource},
 		}
 		for _, em := range embedded {
 			sources = append(sources, policySource{

@@ -1065,6 +1065,19 @@ export interface ResumeMessageResult {
 }
 
 /**
+ * ExportResult — wire shape returned by Sessions_Export.
+ * Mirrors core/rpc/views/sessions.ExportResult (session-export-01NDFSEX05 WP02).
+ *
+ * path is the absolute path of the file written by the OS-native save dialog.
+ * byteCount is the number of bytes written (main file only; sidecar
+ * artifacts are excluded from the count).
+ */
+export interface ExportResult {
+  path: string;
+  byteCount: number;
+}
+
+/**
  * ImageDimensions — pixel dimensions of an image attachment.
  * Mirrors core/llm.ImageDimensions. (multimodal-io-01KQ8TDF WP04 / FR-003)
  */

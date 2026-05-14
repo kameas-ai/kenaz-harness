@@ -275,3 +275,51 @@ func TestEmit_RoundTripCompactedOriginalsDeletedPayload(t *testing.T) {
 		t.Errorf("NewestArchivedAt = %v, want %v", got.NewestArchivedAt, payload.NewestArchivedAt)
 	}
 }
+
+// TestEmit_RoundTripSessionExportPayload is the WP01 golden round-trip test
+// for the session-export audit payload. Asserts: correct Kind, stable JSON
+// serialisation, no data loss across unmarshal, and that OutputBasename does
+// NOT carry a directory component (privacy invariant: basename only).
+func TestEmit_RoundTripSessionExportPayload(t *testing.T) {
+	em := &recordingEmitter{}
+	now := time.Date(2026, 5, 14, 9, 0, 0, 0, time.UTC)
+	payload := SessionExportPayload{
+		SessionID:      "sess-export-1",
+		Format:         "markdown",
+		OutputBasename: "my-session-2026-05-14.md",
+		ByteCount:      12345,
+	}
+	if err := Emit(context.Background(), em, KindSessionExport, payload, now); err != nil {
+		t.Fatalf("Emit: %v", err)
+	}
+	if len(em.events) != 1 {
+		t.Fatalf("emitted %d events, want 1", len(em.events))
+	}
+	e := em.events[0]
+	if e.Kind != KindSessionExport {
+		t.Errorf("Kind = %q, want %q", e.Kind, KindSessionExport)
+	}
+	if !e.TS.Equal(now) {
+		t.Errorf("TS = %v, want %v", e.TS, now)
+	}
+	var got SessionExportPayload
+	if err := json.Unmarshal(e.Payload, &got); err != nil {
+		t.Fatalf("payload unmarshal: %v", err)
+	}
+	if got != payload {
+		t.Errorf("payload round-trip mismatch: got %+v, want %+v", got, payload)
+	}
+	// Privacy invariant: OutputBasename must not contain a path separator.
+	for _, sep := range []byte{'/', '\\'} {
+		for i := range got.OutputBasename {
+			if got.OutputBasename[i] == sep {
+				t.Errorf("OutputBasename %q contains path separator %q (privacy invariant: basename only)", got.OutputBasename, sep)
+			}
+		}
+	}
+	// Golden JSON shape check — field order matches struct tag order.
+	wantJSON := `{"session_id":"sess-export-1","format":"markdown","output_basename":"my-session-2026-05-14.md","byte_count":12345}`
+	if string(e.Payload) != wantJSON {
+		t.Errorf("golden JSON mismatch:\n got  %s\n want %s", e.Payload, wantJSON)
+	}
+}
