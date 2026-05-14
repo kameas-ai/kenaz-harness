@@ -675,6 +675,29 @@ func GateScheduledChatExecute(ctx context.Context, g Gate, id string) (Decision,
 	return d, enforce(d)
 }
 
+// CheckExportSession is the gate-hook helper for the Sessions_Export RPC
+// (session-export-01NDFSEX05 WP01). Returns nil on Allow / NotApplicable;
+// *PolicyDeniedError on Deny. Default-allow when g is nil.
+//
+// sessionID is the session's primary-key string (used as the resource UID);
+// format is "markdown" or "json" (passed as a context attribute so policy
+// authors can write format-specific rules in the future).
+func CheckExportSession(ctx context.Context, g Gate, sessionID, format string) error {
+	if g == nil {
+		return nil
+	}
+	d := g.Evaluate(
+		ctx,
+		UserUID(),
+		ActionExportSession,
+		SessionUID(sessionID),
+		map[cedar.String]cedar.Value{
+			cedar.String("format"): cedar.String(format),
+		},
+	)
+	return enforce(d)
+}
+
 // enforce maps a Decision to a Go error. Allow + NotApplicable both
 // return nil (default-allow stance); Deny returns *PolicyDeniedError.
 func enforce(d Decision) error {

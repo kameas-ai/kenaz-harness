@@ -200,6 +200,15 @@ const (
 	// are permitted.
 	// (provider-keychain-rotation-01KQ8TD9 WP04)
 	KindProviderKeyRotated Kind = "provider.key_rotated"
+
+	// KindSessionExport fires on every successful Sessions_Export call
+	// (session-export-01NDFSEX05 WP01). The payload is SessionExportPayload.
+	//
+	// Privacy invariant: the output file path (which is user-chosen and
+	// therefore a personal-data path) is NEVER recorded — only the basename
+	// (filename without directory) is included. Message content, credential
+	// bytes, and user-authored text are NEVER included.
+	KindSessionExport Kind = "session.export"
 )
 
 // Event is the wire shape passed to the event log. The concrete event-log
@@ -706,6 +715,24 @@ type ProviderKeyRotatedPayload struct {
 	ProfileID string    `json:"profile_id"` // the profile whose key was rotated
 	RotatedAt time.Time `json:"rotated_at"` // wall clock at rotation success
 	Source    string    `json:"source"`     // "manual" | "inline-toast"
+}
+
+// SessionExportPayload carries the signalling for KindSessionExport
+// (session-export-01NDFSEX05 WP01). Emitted on every successful export call.
+//
+// Privacy invariant:
+//   - OutputBasename is the filename only (filepath.Base), NEVER the full path.
+//   - Message content, credential bytes, and prompt/response text are NEVER
+//     included (DIRECTIVE_001). The audit log is not a transcript copy.
+type SessionExportPayload struct {
+	// SessionID is the exported session's primary key.
+	SessionID string `json:"session_id"`
+	// Format is "markdown" or "json".
+	Format string `json:"format"`
+	// OutputBasename is filepath.Base(outputPath) — the filename only, no dir.
+	OutputBasename string `json:"output_basename"`
+	// ByteCount is the number of bytes written to the main export file.
+	ByteCount int64 `json:"byte_count"`
 }
 
 // Emit is a small convenience wrapper for callers that have a payload
