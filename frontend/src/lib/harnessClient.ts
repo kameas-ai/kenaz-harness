@@ -3842,6 +3842,12 @@ export function createFakeHarnessClient(
           description: 'User-defined / commands (text expansions, tool dispatch, prompt templates).',
           envVar: 'HARNESS_USER_SLASHCMD',
         },
+        {
+          name: 'multimodal-out',
+          enabled: true,
+          description: 'Model-generated image output pipeline (DALL-E 3, gpt-image-1, Titan Image).',
+          envVar: 'HARNESS_MULTIMODAL_OUT',
+        },
       ],
     },
     secrets: {

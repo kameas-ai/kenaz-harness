@@ -42,6 +42,7 @@ import (
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/shell"
 	slashview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/slashcmd"
 	coreslashcmd "github.com/sigil-tech/kaneaz-harness/core/slashcmd"
+	llmcap "github.com/sigil-tech/kaneaz-harness/core/llm/capabilities"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/tools"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/trust"
 	updateview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/update"
@@ -1704,6 +1705,12 @@ func (b *Bindings) Config_GetFlags() ([]FeatureFlagInfo, error) {
 			Enabled:     coreslashcmd.UserSlashcmdEnabled(),
 			Description: "User-defined / commands (text expansions, tool dispatch, prompt templates).",
 			EnvVar:      "HARNESS_USER_SLASHCMD",
+		},
+		{
+			Name:        "multimodal-out",
+			Enabled:     llmcap.MultimodalOutEnabled(),
+			Description: "Model-generated image output pipeline (DALL-E 3, gpt-image-1, Titan Image). When off, StreamGeneratedImage events are silently discarded regardless of the auto-capture dial.",
+			EnvVar:      "HARNESS_MULTIMODAL_OUT",
 		},
 	}, nil
 }

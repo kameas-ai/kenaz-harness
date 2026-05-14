@@ -57,6 +57,16 @@ func compactionDisabledByEnv() bool {
 	return os.Getenv(envCompactionVar) == envCompactionDisabled
 }
 
+// multimodalOutDisabledByEnv reports whether HARNESS_MULTIMODAL_OUT=off is
+// set. When true, the generated-image capture pipeline is bypassed: the
+// capturer is nil-gated so StreamGeneratedImage events are silently
+// discarded regardless of the Settings.AutoCaptureGeneratedImages dial.
+// (multimodal-io-extended-01KQ8TD2 WP08)
+func multimodalOutDisabledByEnv() bool {
+	v := os.Getenv("HARNESS_MULTIMODAL_OUT")
+	return v == "off" || v == "0" || v == "false"
+}
+
 // chatAskNodeID is the AskNode id the chassis chat graph (chat_default)
 // uses to gate per-turn user input. The runner pre-seeds the AskBus
 // answer for this node id on every StartStream so the graph's first
@@ -482,7 +492,11 @@ func (r *ChatRunner) StartStream(ctx context.Context, profileID, sessionID, mode
 	} else {
 		logging.L().Warn("chat.tool_discovery.no_discoverer", "session_id", sessionID)
 	}
-	llmAdapter := NewLLMProviderAdapter(r.cfg.Registry, profileID, modelOverride, toolCatalog, r.cfg.GeneratedImageCapturer).
+	imageCapturer := r.cfg.GeneratedImageCapturer
+	if multimodalOutDisabledByEnv() {
+		imageCapturer = nil
+	}
+	llmAdapter := NewLLMProviderAdapter(r.cfg.Registry, profileID, modelOverride, toolCatalog, imageCapturer).
 		WithSessionID(sessionID)
 	toolAdapter := newKernelToolAdapter(r.cfg.Pool, r.cfg.Perms, sessionID)
 	if r.cfg.AutonomyKnobs != nil {

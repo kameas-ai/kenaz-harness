@@ -133,6 +133,9 @@ const restoreOnLaunch = ref(true);
 const confirmEachEnabled = ref(true);
 // multimodal-io-01KQ8TDF WP08 / FR-023
 const multimodalInputEnabled = ref(true);
+// multimodal-io-extended-01KQ8TD2 WP08 — env flag gate (HARNESS_MULTIMODAL_OUT).
+// Default true so the section is visible until Config_GetFlags resolves.
+const multimodalOutEnabled = ref(true);
 // multimodal-io-extended-01KQ8TD2 WP06 — generated image capture dials
 const autoCaptureGeneratedImages = ref(true);
 /** Raw bytes value as a string for the <input type="number"> binding. */
@@ -505,6 +508,14 @@ async function refresh() {
     appInfo.value = await client.appInfo();
   } catch {
     appInfo.value = null;
+  }
+  // multimodal-io-extended-01KQ8TD2 WP08 — load HARNESS_MULTIMODAL_OUT gate.
+  try {
+    const flags = await client.config.getFlags();
+    const outFlag = flags.find((f) => f.name === 'multimodal-out');
+    if (outFlag) multimodalOutEnabled.value = outFlag.enabled;
+  } catch {
+    // Non-fatal: keep default (true = enabled).
   }
   // Hydrate the markdown extensions ref so it round-trips through this view.
   if (settings.value.markdownExtensions) {
@@ -1339,8 +1350,9 @@ onMounted(() => {
         </p>
       </section>
 
-      <!-- multimodal-io-extended-01KQ8TD2 WP06 — generated image capture dials. -->
-      <section data-testid="generated-image-capture-section">
+      <!-- multimodal-io-extended-01KQ8TD2 WP06/WP08 — generated image capture dials.
+           Section hidden when HARNESS_MULTIMODAL_OUT=off (WP08 env gate). -->
+      <section v-if="multimodalOutEnabled" data-testid="generated-image-capture-section">
         <h2 class="font-ui text-[11px] uppercase tracking-[0.18em] text-ink-subtle">
           Generated Image Capture
         </h2>

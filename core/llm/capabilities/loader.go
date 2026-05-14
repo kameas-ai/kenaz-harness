@@ -372,6 +372,17 @@ func MultimodalInEnabled() bool {
 	return v != "off"
 }
 
+// MultimodalOutEnabled reports whether the HARNESS_MULTIMODAL_OUT env flag
+// permits the model-generated image output pipeline. Default on: the env var
+// must be explicitly set to "off" (case-insensitive) to disable. When
+// disabled, the auto-capture pipeline skips all StreamGeneratedImage events
+// regardless of the Settings.AutoCaptureGeneratedImages dial.
+// (multimodal-io-extended-01KQ8TD2 WP08)
+func MultimodalOutEnabled() bool {
+	v := strings.ToLower(strings.TrimSpace(os.Getenv("HARNESS_MULTIMODAL_OUT")))
+	return v != "off"
+}
+
 // matchGlob is a tiny prefix/suffix glob, sufficient for the connector's
 // match expressions of shape "claude-sonnet-*" / "anthropic.claude-*".
 // Only "*" is recognized as a wildcard, and only as a trailing or

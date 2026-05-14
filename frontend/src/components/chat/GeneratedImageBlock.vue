@@ -44,7 +44,24 @@ const bytesBase64 = ref<string | null>(null);
 const loadError = ref<string | null>(null);
 const lightboxOpen = ref(false);
 
+// ── multimodal-out feature flag ─────────────────────────────────────────
+// Default true — assumes enabled until Config_GetFlags returns. When false,
+// the component renders nothing (HARNESS_MULTIMODAL_OUT=off kill switch).
+// (multimodal-io-extended-01KQ8TD2 WP08)
+const multimodalOutEnabled = ref(true);
+
 onMounted(async () => {
+  // Load the HARNESS_MULTIMODAL_OUT gate first; if the flag is off, skip
+  // the image fetch entirely so we don't hit the artifact store at all.
+  try {
+    const flags = await client.config.getFlags();
+    const outFlag = flags.find((f) => f.name === 'multimodal-out');
+    if (outFlag) multimodalOutEnabled.value = outFlag.enabled;
+  } catch {
+    // Non-fatal: keep default (true = enabled).
+  }
+  if (!multimodalOutEnabled.value) return;
+
   try {
     const result = await getArtifactBytes(client, props.artifact.id);
     // `result.bytes` is a base64 string from Wails (Go []byte → JSON base64).
@@ -87,7 +104,8 @@ function closeLightbox() {
 </script>
 
 <template>
-  <span class="inline-block mr-2 mb-2 align-top">
+  <!-- Hidden when HARNESS_MULTIMODAL_OUT=off (multimodal-io-extended-01KQ8TD2 WP08). -->
+  <span v-if="multimodalOutEnabled" class="inline-block mr-2 mb-2 align-top">
     <!-- Loading skeleton -->
     <span
       v-if="isLoading"
