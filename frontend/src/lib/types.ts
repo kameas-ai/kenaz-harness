@@ -1160,10 +1160,17 @@ export interface RetryAfterRotationFailedPayload {
 /**
  * ContentBlock — one polymorphic fragment of a multimodal message.
  * Mirrors core/llm.ContentBlock. The wire shape uses the Go-side
- * snake_case JSON tags (`tool_use`, `tool_result`).
+ * snake_case JSON tags (`tool_use`, `tool_result`, `tool_data`,
+ * `artifact_id`).
+ *
+ * `generated_image` variant carries either an artifact_id (post-WP02
+ * auto-capture; bytes resolved via harness-artifact://<id>) OR an
+ * inline `source` with raw bytes (pre-capture path). Renderer prefers
+ * artifact_id when both are present. (multimodal-io-extended-01KQ8TD2
+ * WP01)
  */
 export interface ContentBlock {
-  type: 'text' | 'image' | 'document' | 'tool_use' | 'tool_result';
+  type: 'text' | 'image' | 'document' | 'generated_image' | 'tool_use' | 'tool_result';
   text?: string;
   source?: MediaSource;
   tool_use?: {
@@ -1176,6 +1183,13 @@ export interface ContentBlock {
     content?: unknown;
     is_error?: boolean;
   };
+  /** Raw tool-shape payload kept opaque on the frontend (mirrors
+   * core/llm.ContentBlock.ToolData json.RawMessage). */
+  tool_data?: unknown;
+  /** Set when type==="generated_image" and the auto-capture pipeline
+   * has materialized the bytes into an artifact row. Empty for inline
+   * (pre-capture) generated images. */
+  artifact_id?: string;
 }
 
 /**
