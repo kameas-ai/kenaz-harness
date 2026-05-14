@@ -154,7 +154,11 @@ entries:
   - struct: GenerationRequest
     field: ImageOutput
     adapter: anthropic
-    unsupported: "Anthropic models do not generate images natively (capabilities/data/anthropic.yaml sets image_output: false); gate rejects ImageOutput requests pre-flight."
+    # Gate rejection contract — Anthropic models do not generate images
+    # natively (anthropic.yaml: image_output: false on every model).
+    # The adapter therefore never receives a request with ImageOutput
+    # set; the load-bearing assertion lives in the capability gate.
+    tests: [TestAnthropicAdapter_ImageOutput_RejectedByGate]
   - struct: GenerationRequest
     field: ImageOutput
     adapter: openai
