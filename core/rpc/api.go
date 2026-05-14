@@ -1027,6 +1027,18 @@ func New(c *core.Core) *API {
 	if a.broker != nil {
 		a.sessionsAPI = sessions.WithBrokerOpt(a.sessionsAPI, a.broker)
 	}
+	// Wire export dependencies (Cedar gate) at boot time so the Cedar
+	// check is ready before the first Export call. The FilePicker is
+	// intentionally left nil here; it is wired per-invocation in the
+	// bindings layer via sessions.WithExportPicker because it captures
+	// the Wails runtime context. The audit emitter is nil for now —
+	// core/context/audit.Emitter is not yet bridged to the ring-buffer
+	// path in the rpc layer (consistent with workflows, cedarpolicy,
+	// branches which also pass nil today); tracked for follow-up
+	// (session-export-01NDFSEX05 WP02).
+	if c != nil {
+		a.sessionsAPI = sessions.WithExportOpts(a.sessionsAPI, buildCedarGate(c.DataDir()), nil, nil)
+	}
 	if c != nil && a.stdioPool != nil {
 		c.SetMCP(a.stdioPool)
 		// Persisted-recipes bootstrap — Core.Start invokes this once

@@ -52,6 +52,30 @@ const suggesting = ref(false);
 const confirmOpen = ref(false);
 const lastError = ref<string | null>(null);
 
+// ── Export affordance (session-export-01NDFSEX05 WP03) ───────────────
+const exporting = ref(false);
+
+async function onExportClick() {
+  if (exporting.value) return;
+  // Simple format selection via native confirm: OK → Markdown, Cancel → JSON.
+  const wantMarkdown = window.confirm(
+    'Export session — click OK for Markdown (.md) or Cancel for JSON (.json).',
+  );
+  const format = wantMarkdown ? 'markdown' : 'json';
+  exporting.value = true;
+  lastError.value = null;
+  try {
+    await client.sessions.export(props.session.id, format as 'markdown' | 'json');
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (!msg.includes('cancelled')) {
+      lastError.value = `Export failed: ${msg}`;
+    }
+  } finally {
+    exporting.value = false;
+  }
+}
+
 /** True when the session has a user-set title that needs confirmation before overwriting. */
 function needsConfirm(): boolean {
   return Boolean(props.session.name) && !props.session.autoTitled;
@@ -100,6 +124,16 @@ function cancelConfirm() {
     />
 
     <AutonomyChip :session-id="session.id" />
+
+    <button
+      type="button"
+      data-testid="export-session-btn"
+      class="shrink-0 text-xs px-2 py-1 rounded text-ink-muted hover:text-ink hover:bg-surface-2 transition-colors"
+      :disabled="exporting"
+      @click="onExportClick"
+    >
+      Export…
+    </button>
 
     <button
       type="button"

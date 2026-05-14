@@ -326,4 +326,29 @@ type SessionsAPI interface {
 	// folding global → project → session layers. Returns the resolved
 	// knobs plus the three input layers so panels can render badges.
 	ResolveAutonomy(ctx context.Context, id string) (ResolvedAutonomy, error)
+
+	// Export serialises a session transcript to the local filesystem.
+	// format is "markdown" or "json". The file-picker dialog is opened
+	// via the FilePicker port; the default filename is derived from the
+	// session title and today's date. The caller receives the path chosen
+	// by the user and the number of bytes written.
+	//
+	// Cedar gate: Action::"session.export" is checked before any work is
+	// done; Cedar Deny returns an error and NO file is written and NO
+	// audit event is emitted.
+	//
+	// Audit: on success emits KindSessionExport with the output basename
+	// (NOT the full path — privacy invariant).
+	//
+	// session-export-01NDFSEX05 WP02.
+	Export(ctx context.Context, sessionID, format string) (ExportResult, error)
+}
+
+// ExportResult is the wire shape returned by Sessions_Export.
+type ExportResult struct {
+	// Path is the absolute path chosen by the user via the file-picker.
+	// Empty when the user cancelled.
+	Path string `json:"path"`
+	// ByteCount is the number of bytes written to the main export file.
+	ByteCount int64 `json:"byteCount"`
 }

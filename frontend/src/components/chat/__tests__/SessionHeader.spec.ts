@@ -15,8 +15,10 @@ const baseSession: Session = {
 function mountHeader(
   session: Session,
   suggestTitle?: () => Promise<string>,
+  exportSession?: () => Promise<{ path: string; byteCount: number }>,
 ) {
   const suggestMock = suggestTitle ?? vi.fn().mockResolvedValue('New auto title');
+  const exportMock = exportSession ?? vi.fn().mockResolvedValue({ path: '/tmp/out.md', byteCount: 42 });
   // Build the full fake client first, then patch the two session methods
   // we care about so the rest remain the default stubs.
   const base = createFakeHarnessClient();
@@ -26,13 +28,14 @@ function mountHeader(
       ...base.sessions,
       suggestTitle: suggestMock,
       clearTitle: async (_id: string) => undefined as void,
+      export: exportMock,
     },
   };
   const w = mount(SessionHeader, {
     props: { session },
     global: { provide: { [HarnessClientKey as symbol]: client } },
   });
-  return { w, suggestMock };
+  return { w, suggestMock, exportMock };
 }
 
 describe('SessionHeader (WP05 suggest-title affordance)', () => {
@@ -126,5 +129,46 @@ describe('SessionHeader (WP05 suggest-title affordance)', () => {
     resolveTitle('done');
     await flushPromises();
     expect(btn.attributes('disabled')).toBeUndefined();
+  });
+});
+
+describe('SessionHeader — export affordance (session-export-01NDFSEX05 WP03)', () => {
+  it('renders the Export… button', async () => {
+    const { w } = mountHeader(baseSession);
+    await flushPromises();
+    expect(w.find('[data-testid="export-session-btn"]').exists()).toBe(true);
+    expect(w.text()).toContain('Export…');
+  });
+
+  it('calls sessions.export with markdown when window.confirm returns true', async () => {
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    const { w, exportMock } = mountHeader(baseSession);
+    await flushPromises();
+    await w.find('[data-testid="export-session-btn"]').trigger('click');
+    await flushPromises();
+    expect(exportMock).toHaveBeenCalledWith('ses-1', 'markdown');
+    vi.restoreAllMocks();
+  });
+
+  it('calls sessions.export with json when window.confirm returns false', async () => {
+    vi.spyOn(window, 'confirm').mockReturnValue(false);
+    const { w, exportMock } = mountHeader(baseSession);
+    await flushPromises();
+    await w.find('[data-testid="export-session-btn"]').trigger('click');
+    await flushPromises();
+    expect(exportMock).toHaveBeenCalledWith('ses-1', 'json');
+    vi.restoreAllMocks();
+  });
+
+  it('silently ignores a cancelled export (no error shown)', async () => {
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    const cancelledExport = vi.fn().mockRejectedValue(new Error('export cancelled by user'));
+    const { w } = mountHeader(baseSession, undefined, cancelledExport);
+    await flushPromises();
+    await w.find('[data-testid="export-session-btn"]').trigger('click');
+    await flushPromises();
+    // No error text should appear for a cancel.
+    expect(w.find('[data-testid="export-session-btn"]').attributes('disabled')).toBeUndefined();
+    vi.restoreAllMocks();
   });
 });

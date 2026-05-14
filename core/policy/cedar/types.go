@@ -222,6 +222,12 @@ const (
 	//     panel. Resource UID: Task::"<task-id>".
 	ActionToolTasksMonitor = "tool.tasks.monitor"
 	ActionToolTasksCancel  = "tool.tasks.cancel"
+
+	// ActionExportSession gates the Sessions_Export RPC (session-export
+	// mission). Local-only, user-initiated: exports a session transcript
+	// to Markdown or JSON on the user's local disk. Default-allow for the
+	// local user. Resource UID: Session::"<session-id>".
+	ActionExportSession = "session.export"
 )
 
 // Entity-type names mirror spec §4.10's recommended mapping:
@@ -296,6 +302,11 @@ const (
 	// Resource UIDs take the shape SecretReference::"<locator>" where locator
 	// is the keychain locator (e.g. "user:example-api-token").
 	EntityTypeSecretReference = "SecretReference"
+
+	// EntityTypeSession is the Cedar entity type for chat sessions.
+	// Introduced by mission session-export-01NDFSEX05 (WP01).
+	// Resource UIDs take the shape Session::"<session-id>".
+	EntityTypeSession = "Session"
 
 	// PrincipalLocal is the canonical EntityUID id for the single
 	// local user. The harness is single-user / privacy-first
@@ -624,4 +635,17 @@ func SecretReferenceUID(locator string) cedar.EntityUID {
 		safeID = invalidUIDID
 	}
 	return cedar.NewEntityUID(EntityTypeSecretReference, cedar.String(safeID))
+}
+
+// SessionUID builds a Cedar EntityUID for the Session family introduced by
+// mission session-export-01NDFSEX05 (WP01). id is the session's primary-key
+// identifier. Malformed ids (empty / control characters / leading "..") are
+// replaced with the literal "invalid" so the resulting UID type-matches in
+// `resource is Session` clauses but never satisfies any real permit.
+func SessionUID(id string) cedar.EntityUID {
+	safeID := id
+	if !validateFamilyID(id) {
+		safeID = invalidUIDID
+	}
+	return cedar.NewEntityUID(EntityTypeSession, cedar.String(safeID))
 }

@@ -18,6 +18,7 @@ import {
   ChevronDown,
   ChevronRight,
   Folder,
+  Download,
 } from './icons';
 import { useSessions, useProjects, useHarnessClient } from '@/lib/useHarnessAPI';
 import NewSessionDialog from './NewSessionDialog.vue';
@@ -316,6 +317,31 @@ async function deleteSession(id: string, event: Event) {
     await refreshSessions();
   } finally {
     deletingId.value = null;
+  }
+}
+
+// session-export-01NDFSEX05 WP03 — per-session export affordance.
+// Opens the OS-native save dialog; user picks format via a simple prompt.
+async function exportSession(id: string, name: string, event: Event) {
+  event.preventDefault();
+  event.stopPropagation();
+  if (!id) return;
+  // Pick format: a native confirm() keeps the component dependency surface zero.
+  // "OK" → Markdown, "Cancel" → JSON (clearly labelled).
+  const wantMarkdown = window.confirm(
+    `Export session "${name || id}" — click OK for Markdown (.md) or Cancel for JSON (.json).`,
+  );
+  const format = wantMarkdown ? 'markdown' : 'json';
+  lastError.value = null;
+  try {
+    await client.sessions.export(id, format as 'markdown' | 'json');
+  } catch (err) {
+    // ErrExportCancelled (user closed the OS dialog) is not an error from
+    // the user's perspective — silently ignore it.
+    const msg = err instanceof Error ? err.message : String(err);
+    if (!msg.includes('cancelled')) {
+      lastError.value = `Export failed: ${msg}`;
+    }
   }
 }
 
@@ -720,6 +746,15 @@ async function onProjectDrop(evt: DragEvent, projectId: string) {
                 </button>
                 <button
                   type="button"
+                  class="shrink-0 p-2 rounded-sm text-ink-dim hover:text-ink hover:bg-surface-3"
+                  :aria-label="`Export session ${session.name}`"
+                  :data-testid="`export-session-${session.id}`"
+                  @click="exportSession(session.id, session.name, $event)"
+                >
+                  <Download :size="13" />
+                </button>
+                <button
+                  type="button"
                   class="shrink-0 p-2 rounded-sm text-ink-dim hover:text-signal-danger hover:bg-surface-3"
                   :aria-label="`Delete session ${session.name}`"
                   :disabled="deletingId === session.id"
@@ -785,6 +820,15 @@ async function onProjectDrop(evt: DragEvent, projectId: string) {
                 </button>
                 <button
                   type="button"
+                  class="p-2 rounded-sm text-ink-dim hover:text-ink hover:bg-surface-3"
+                  :aria-label="`Export session ${session.name}`"
+                  :data-testid="`export-session-${session.id}`"
+                  @click.stop="exportSession(session.id, session.name, $event)"
+                >
+                  <Download :size="13" />
+                </button>
+                <button
+                  type="button"
                   class="p-2 rounded-sm text-ink-dim hover:text-signal-danger hover:bg-surface-3"
                   :aria-label="`Delete session ${session.name}`"
                   :disabled="deletingId === session.id"
@@ -823,6 +867,15 @@ async function onProjectDrop(evt: DragEvent, projectId: string) {
                     @click.stop="startRename(child.id, child.name, $event)"
                   >
                     <Pencil :size="13" />
+                  </button>
+                  <button
+                    type="button"
+                    class="p-2 rounded-sm text-ink-dim hover:text-ink hover:bg-surface-3"
+                    :aria-label="`Export session ${child.name}`"
+                    :data-testid="`export-session-${child.id}`"
+                    @click.stop="exportSession(child.id, child.name, $event)"
+                  >
+                    <Download :size="13" />
                   </button>
                   <button
                     type="button"
@@ -895,6 +948,15 @@ async function onProjectDrop(evt: DragEvent, projectId: string) {
                 @click="startRename(session.id, session.name, $event)"
               >
                 <Pencil :size="13" />
+              </button>
+              <button
+                type="button"
+                class="shrink-0 p-2 rounded-sm text-ink-dim hover:text-ink hover:bg-surface-3"
+                :aria-label="`Export session ${session.name}`"
+                :data-testid="`export-session-${session.id}`"
+                @click="exportSession(session.id, session.name, $event)"
+              >
+                <Download :size="13" />
               </button>
               <button
                 type="button"

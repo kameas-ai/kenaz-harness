@@ -902,6 +902,10 @@ export function Sessions_SuggestTitle(arg1) {
   return window['go']['rpc']['Bindings']['Sessions_SuggestTitle'](arg1);
 }
 
+export function Sessions_Export(arg1, arg2) {
+  return window['go']['rpc']['Bindings']['Sessions_Export'](arg1, arg2);
+}
+
 export function SetContext(arg1) {
   return window['go']['rpc']['Bindings']['SetContext'](arg1);
 }
