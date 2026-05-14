@@ -1,0 +1,9 @@
+data: {"id":"wire-golden-id-1","object":"chat.completion.chunk","created":0,"model":"anthropic/claude-3.5-sonnet","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}],"usage":null}
+
+data: {"id":"wire-golden-id-1","object":"chat.completion.chunk","created":0,"model":"anthropic/claude-3.5-sonnet","choices":[{"index":0,"delta":{"content":"Hello"},"finish_reason":null}],"usage":null}
+
+data: {"id":"wire-golden-id-1","object":"chat.completion.chunk","created":0,"model":"anthropic/claude-3.5-sonnet","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":null}
+
+data: {"id":"wire-golden-id-1","object":"chat.completion.chunk","created":0,"model":"anthropic/claude-3.5-sonnet","choices":[],"usage":{"prompt_tokens":10,"completion_tokens":2,"total_tokens":12}}
+
+data: [DONE]

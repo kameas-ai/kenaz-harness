@@ -76,12 +76,22 @@ type FieldExpectation struct {
 	WantNumber *float64
 
 	// WantArrayLen asserts the resolved array value has exactly this
-	// length. -1 means "don't check length".
-	WantArrayLen int
+	// length. Only checked when WantArrayLenSet is true. Use the
+	// ArrayLen helper to set both fields together.
+	WantArrayLen    int
+	WantArrayLenSet bool
 
 	// Label is an optional human-readable description surfaced in
 	// failure messages. When empty, Pointer is used as the label.
 	Label string
+}
+
+// ArrayLen returns a copy of e with WantArrayLen set to n and
+// WantArrayLenSet set to true. Implies WantPresent.
+func (e FieldExpectation) ArrayLen(n int) FieldExpectation {
+	e.WantArrayLen = n
+	e.WantArrayLenSet = true
+	return e
 }
 
 // label returns the display label for the expectation.
@@ -127,7 +137,8 @@ func assertField(t *testing.T, root any, want FieldExpectation) {
 		return
 	}
 
-	if want.WantPresent || want.WantString != "" || want.WantBool != nil || want.WantNumber != nil || want.WantArrayLen > 0 {
+	needsPresent := want.WantPresent || want.WantString != "" || want.WantBool != nil || want.WantNumber != nil || want.WantArrayLenSet
+	if needsPresent {
 		if !ok || got == nil {
 			t.Errorf("wirecheck[%s]: expected present, got absent/null", want.label())
 			return
@@ -170,7 +181,7 @@ func assertField(t *testing.T, root any, want FieldExpectation) {
 		return
 	}
 
-	if want.WantArrayLen >= 0 {
+	if want.WantArrayLenSet {
 		arr, ok2 := got.([]any)
 		if !ok2 {
 			t.Errorf("wirecheck[%s]: expected array of len %d, got %T(%v)", want.label(), want.WantArrayLen, got, got)

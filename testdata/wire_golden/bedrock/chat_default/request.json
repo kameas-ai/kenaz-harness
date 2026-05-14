@@ -1,0 +1,12 @@
+{
+  "messages": [
+    {
+      "content": [
+        {
+          "text": "Say hello"
+        }
+      ],
+      "role": "user"
+    }
+  ]
+}
