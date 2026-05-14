@@ -431,7 +431,7 @@ func scanArtifact(sc interface{ Scan(dest ...any) error }) (Artifact, error) {
 
 func validSource(s string) bool {
 	switch s {
-	case SourceCodeBlock, SourceToolOutput, SourceUserPin:
+	case SourceCodeBlock, SourceToolOutput, SourceUserPin, SourceModelOutput:
 		return true
 	}
 	return false
