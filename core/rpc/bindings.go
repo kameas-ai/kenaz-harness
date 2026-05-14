@@ -1083,6 +1083,74 @@ func (b *Bindings) Settings_SetMultimodalInput(enabled bool) error {
 	return b.storeFn().SaveAll(s)
 }
 
+// ── Multimodal output capture dials (multimodal-io-extended-01KQ8TD2 WP06) ──
+
+// Settings_GetAutoCaptureGeneratedImages returns whether model-generated images
+// are automatically captured into the artifact store. Default true on a fresh
+// install (zero-value AutoCaptureGeneratedImagesDisabled → enabled).
+// (multimodal-io-extended-01KQ8TD2 WP06)
+func (b *Bindings) Settings_GetAutoCaptureGeneratedImages() (bool, error) {
+	if b.storeFn == nil {
+		return true, nil
+	}
+	s, err := b.storeFn().LoadAll()
+	if err != nil {
+		return true, err
+	}
+	return s.AutoCaptureGeneratedImages(), nil
+}
+
+// Settings_SetAutoCaptureGeneratedImages persists the auto-capture flag.
+// When false, model-generated images are streamed to the UI but not written
+// to the artifact store.
+// (multimodal-io-extended-01KQ8TD2 WP06)
+func (b *Bindings) Settings_SetAutoCaptureGeneratedImages(enabled bool) error {
+	if b.storeFn == nil {
+		return nil
+	}
+	s, err := b.storeFn().LoadAll()
+	if err != nil {
+		return err
+	}
+	// Inverted storage: Disabled = !enabled.
+	s.AutoCaptureGeneratedImagesDisabled = !enabled
+	return b.storeFn().SaveAll(s)
+}
+
+// Settings_GetMaxGeneratedImageBytes returns the per-image byte cap for the
+// auto-capture pipeline. Returns the effective value (default 20 MiB when the
+// persisted value is zero or negative).
+// (multimodal-io-extended-01KQ8TD2 WP06)
+func (b *Bindings) Settings_GetMaxGeneratedImageBytes() (int64, error) {
+	if b.storeFn == nil {
+		return settings.DefaultMaxGeneratedImageBytes, nil
+	}
+	s, err := b.storeFn().LoadAll()
+	if err != nil {
+		return settings.DefaultMaxGeneratedImageBytes, err
+	}
+	return s.EffectiveMaxGeneratedImageBytes(), nil
+}
+
+// Settings_SetMaxGeneratedImageBytes persists the per-image byte cap. Zero
+// resets to the spec default (DefaultMaxGeneratedImageBytes = 20 MiB).
+// Negative values are clamped to zero before save.
+// (multimodal-io-extended-01KQ8TD2 WP06)
+func (b *Bindings) Settings_SetMaxGeneratedImageBytes(bytes int64) error {
+	if b.storeFn == nil {
+		return nil
+	}
+	s, err := b.storeFn().LoadAll()
+	if err != nil {
+		return err
+	}
+	if bytes < 0 {
+		bytes = 0
+	}
+	s.MaxGeneratedImageBytes = bytes
+	return b.storeFn().SaveAll(s)
+}
+
 // ── key-rotation settings (provider-keychain-rotation-01KQ8TD9 WP07) ──
 
 // Settings_GetAutoResumeOnKeyRotation returns whether the harness should

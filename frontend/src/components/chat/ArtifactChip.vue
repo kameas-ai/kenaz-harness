@@ -17,7 +17,7 @@
  */
 
 import { computed } from 'vue';
-import { Code, Pin, Wrench } from '@/shell/icons';
+import { Code, Image, Pin, Wrench } from '@/shell/icons';
 import type { Artifact } from '@/lib/types';
 
 const props = defineProps<{
@@ -34,6 +34,8 @@ const sourceIcon = computed(() => {
       return Code;
     case 'tool_output':
       return Wrench;
+    case 'model_output':
+      return Image;
     case 'user_pin':
     default:
       return Pin;

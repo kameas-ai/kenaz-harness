@@ -32,6 +32,7 @@ import PinMenu from './PinMenu.vue';
 import ImageBlock from './ImageBlock.vue';
 import DocumentChip from './DocumentChip.vue';
 import ArtifactChip from './ArtifactChip.vue';
+import GeneratedImageBlock from './GeneratedImageBlock.vue';
 import TokenMeterChip from './TokenMeterChip.vue';
 import type {
   Artifact,
@@ -377,6 +378,20 @@ const roleLabel = computed(() => props.role.toUpperCase());
 const blocks = computed<readonly ContentBlock[]>(() => props.contentBlocks ?? []);
 const hasBlocks = computed(() => blocks.value.length > 0);
 
+/**
+ * Subset of artifacts that are model-generated images — rendered inline as
+ * GeneratedImageBlock thumbnails above the standard ArtifactChip row.
+ * (multimodal-io-extended-01KQ8TD2 WP06)
+ */
+const generatedImageArtifacts = computed<readonly Artifact[]>(() => {
+  if (!props.artifacts) return [];
+  return props.artifacts.filter(
+    (a) =>
+      a.source === 'model_output' &&
+      (a.mimeType.startsWith('image/') || a.mimeType === ''),
+  );
+});
+
 function isLastBlock(idx: number): boolean {
   return idx === blocks.value.length - 1;
 }
@@ -631,6 +646,22 @@ function onResumeClick() {
         data-testid="message-streaming-error"
       >
         Connection lost — message may be incomplete.
+      </div>
+
+      <!-- model_output generated-image inline previews
+           (multimodal-io-extended-01KQ8TD2 WP06). Rendered above the chip
+           row so the full thumbnail is visible without opening a modal. -->
+      <div
+        v-if="generatedImageArtifacts.length > 0"
+        class="mt-2 flex flex-wrap"
+        data-testid="message-generated-images-row"
+      >
+        <GeneratedImageBlock
+          v-for="a in generatedImageArtifacts"
+          :key="a.id"
+          :artifact="a"
+          @open-artifact="onArtifactChipOpen"
+        />
       </div>
 
       <div

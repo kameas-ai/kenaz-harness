@@ -974,6 +974,22 @@ export function Settings_GetMonthlyCostNotifyUSD() {
   return window['go']['rpc']['Bindings']['Settings_GetMonthlyCostNotifyUSD']();
 }
 
+export function Settings_GetAutoCaptureGeneratedImages() {
+  return window['go']['rpc']['Bindings']['Settings_GetAutoCaptureGeneratedImages']();
+}
+
+export function Settings_SetAutoCaptureGeneratedImages(arg1) {
+  return window['go']['rpc']['Bindings']['Settings_SetAutoCaptureGeneratedImages'](arg1);
+}
+
+export function Settings_GetMaxGeneratedImageBytes() {
+  return window['go']['rpc']['Bindings']['Settings_GetMaxGeneratedImageBytes']();
+}
+
+export function Settings_SetMaxGeneratedImageBytes(arg1) {
+  return window['go']['rpc']['Bindings']['Settings_SetMaxGeneratedImageBytes'](arg1);
+}
+
 export function Settings_GetMultimodalInput() {
   return window['go']['rpc']['Bindings']['Settings_GetMultimodalInput']();
 }
