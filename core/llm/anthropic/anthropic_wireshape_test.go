@@ -204,16 +204,19 @@ func TestAnthropicAdapter_Attachments_AttachmentsSerialized(t *testing.T) {
 
 // ── JSONMode ──────────────────────────────────────────────────────────────────
 
-// TestAnthropicAdapter_JSONMode_JSONModeSerialized verifies that JSONMode
-// does not corrupt the wire body (it is handled at the registry layer,
-// not by the adapter directly).
+// TestAnthropicAdapter_JSONMode_JSONModeSerialized verifies the
+// JSONMode wire shape for the Schema=nil (free-form JSON) path. The
+// multimodal-io-extended-01KQ8TD2 WP04 shim augments the system prompt
+// with a JSON-only instruction when Schema is nil (it would inject a
+// synthetic tool instead when Schema is non-nil). The original system
+// prompt is preserved as a prefix; messages + model remain untouched.
 func TestAnthropicAdapter_JSONMode_JSONModeSerialized(t *testing.T) {
 	req := minReq()
 	req.System = "You are helpful."
 	req.JSONMode = &llm.JSONModeSpec{Enabled: true}
 	body := serialise(t, req, stdProf("claude-sonnet-4-5"))
 	wirecheck.AssertSerialized(t, body, []wirecheck.FieldExpectation{
-		{Pointer: "/system", WantString: "You are helpful.", Label: "system prompt preserved"},
+		{Pointer: "/system", WantString: "You are helpful.\n\nRespond with valid JSON only. Do not include any text before or after the JSON.", Label: "system prompt augmented for free-form JSON mode"},
 		{Pointer: "/messages", WantPresent: true},
 		{Pointer: "/model", WantPresent: true},
 	})
