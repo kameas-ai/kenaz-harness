@@ -348,3 +348,53 @@ func (e *ErrAttachmentAudioUnsupported) Error() string {
 func (e *ErrAttachmentAudioUnsupported) Friendly() string {
 	return "Audio input is not yet supported. Audio is planned for a future mission."
 }
+
+// ── Multimodal output errors (multimodal-io-extended-01KQ8TD2 WP01) ──────────
+
+// ErrJSONModeInvalid is returned when a JSONModeSpec is structurally invalid
+// (e.g. Schema present but Enabled=false, or Schema is not valid JSON).
+type ErrJSONModeInvalid struct {
+	Reason string
+}
+
+func (e *ErrJSONModeInvalid) Error() string {
+	return "llm: invalid json_mode spec: " + e.Reason
+}
+
+// ErrUnsupportedJSONShape is returned when a caller supplies a JSON schema
+// that the target provider/model cannot represent (e.g. Ollama with a
+// JSON schema on a grammar-only model, or a schema with unsupported keywords).
+type ErrUnsupportedJSONShape struct {
+	Provider string
+	Model    string
+	Reason   string
+}
+
+func (e *ErrUnsupportedJSONShape) Error() string {
+	return fmt.Sprintf("llm: json schema not supported by %s/%s: %s",
+		e.Provider, e.Model, e.Reason)
+}
+
+// ErrGeneratedImageTooLarge is returned when a model-generated image's byte
+// size exceeds the MaxGeneratedImageBytes cap configured in settings. The
+// image is NOT captured; the LLM node emits a warn log and drops the image.
+type ErrGeneratedImageTooLarge struct {
+	Given int64 // actual byte size
+	Cap   int64 // configured cap
+}
+
+func (e *ErrGeneratedImageTooLarge) Error() string {
+	return fmt.Sprintf("llm: generated image too large (given=%d cap=%d)", e.Given, e.Cap)
+}
+
+// ErrFeatureDisabled is returned when a request opts into a feature that
+// has been disabled via a HARNESS_* environment flag (e.g.
+// HARNESS_MULTIMODAL_OUT=off). Non-transient — never retried.
+type ErrFeatureDisabled struct {
+	Feature string // e.g. "multimodal_out"
+	EnvVar  string // e.g. "HARNESS_MULTIMODAL_OUT"
+}
+
+func (e *ErrFeatureDisabled) Error() string {
+	return fmt.Sprintf("llm: feature %q disabled (set %s=on to enable)", e.Feature, e.EnvVar)
+}

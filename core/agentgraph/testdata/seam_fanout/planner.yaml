@@ -1,0 +1,7 @@
+# Seam fanout fixture for kind=planner
+# LLMProvider.Generate is called to synthesise a plan.
+kind: planner
+seams:
+  - seam: LLMProvider.Generate
+    required: true
+notes: "planner node calls LLMProvider.Generate to synthesise a step-by-step plan"

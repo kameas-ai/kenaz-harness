@@ -1,0 +1,7 @@
+# Seam fanout fixture for kind=reflect
+# LLMProvider.Generate is called to produce the reflection.
+kind: reflect
+seams:
+  - seam: LLMProvider.Generate
+    required: true
+notes: "reflect node calls LLMProvider.Generate with a self-evaluation prompt"

@@ -1,0 +1,7 @@
+# Seam fanout fixture for kind=subagent_dispatch
+# Subagent dispatch coordinates with the AskBus for pause/resume; ActivityCatalog for graph lookup.
+kind: subagent_dispatch
+seams:
+  - seam: ActivityCatalog.Resolve
+    required: false
+notes: "subagent_dispatch spawns a child kernel run; ActivityCatalog.Resolve if activityID is set; ErrNotImplemented otherwise"

@@ -873,6 +873,160 @@ func TestApplyResponseFormat_JSONMode_AppendsSysPrompt(t *testing.T) {
 	}
 }
 
+// ── WP04 synthetic tool normalization tests (multimodal-io-extended-01KQ8TD2) ─
+
+// TestSyntheticToolNormalization_JSONSchema verifies that when the model
+// responds with the _structured_output tool_use block (due to json_schema mode),
+// Final().Content[0].Type == "text" and the text is the raw JSON input.
+func TestSyntheticToolNormalization_JSONSchema(t *testing.T) {
+	// Simulate the model responding with the synthetic _structured_output tool.
+	fs := newFakeServer(t, func(w http.ResponseWriter, r *http.Request, _ int) {
+		writeSSE(w, []sseFrame{
+			{event: "message_start", data: `{"type":"message_start","message":{"id":"x","usage":{"input_tokens":10,"output_tokens":0}}}`},
+			{event: "content_block_start", data: `{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"tool_so","name":"_structured_output","input":{}}}`},
+			{event: "content_block_delta", data: `{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"name\":\"Alice\""}}`},
+			{event: "content_block_delta", data: `{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"}"}}`},
+			{event: "content_block_stop", data: `{"type":"content_block_stop","index":0}`},
+			{event: "message_delta", data: `{"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"input_tokens":10,"output_tokens":5}}`},
+			{event: "message_stop", data: `{"type":"message_stop"}`},
+		})
+	})
+	a := newAdapter(fs)
+	req, prof := stdReq()
+	req.ResponseFormat = &llm.ResponseFormat{
+		Mode:   "json_schema",
+		Schema: json.RawMessage(`{"type":"object","properties":{"name":{"type":"string"}},"required":["name"]}`),
+	}
+	stream, err := a.Stream(context.Background(), req, prof, []byte("k"))
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	for range stream.Events() {
+	}
+	resp, ferr := stream.Final()
+	if ferr != nil {
+		t.Fatalf("Final: %v", ferr)
+	}
+	// Acceptance: Final().Content[0].Type == "text" with valid JSON.
+	if len(resp.Content) != 1 {
+		t.Fatalf("content blocks = %d, want 1", len(resp.Content))
+	}
+	if resp.Content[0].Type != "text" {
+		t.Fatalf("content[0].Type = %q, want \"text\"", resp.Content[0].Type)
+	}
+	if !json.Valid([]byte(resp.Content[0].Text)) {
+		t.Fatalf("content[0].Text is not valid JSON: %q", resp.Content[0].Text)
+	}
+	// Synthetic tool must NOT appear in ToolCalls.
+	for _, tc := range resp.ToolCalls {
+		if tc.Name == "_structured_output" {
+			t.Fatalf("_structured_output tool leaked into ToolCalls: %+v", tc)
+		}
+	}
+}
+
+// TestSyntheticToolNormalization_JSONMode verifies the same normalization
+// applies when the request uses JSONModeSpec.Schema (WP03/WP04 path).
+func TestSyntheticToolNormalization_JSONMode(t *testing.T) {
+	fs := newFakeServer(t, func(w http.ResponseWriter, r *http.Request, _ int) {
+		writeSSE(w, []sseFrame{
+			{event: "message_start", data: `{"type":"message_start","message":{"id":"x","usage":{"input_tokens":8,"output_tokens":0}}}`},
+			{event: "content_block_start", data: `{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"t1","name":"_my_schema","input":{}}}`},
+			{event: "content_block_delta", data: `{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"count\":3}"}}`},
+			{event: "content_block_stop", data: `{"type":"content_block_stop","index":0}`},
+			{event: "message_delta", data: `{"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"input_tokens":8,"output_tokens":3}}`},
+			{event: "message_stop", data: `{"type":"message_stop"}`},
+		})
+	})
+	a := newAdapter(fs)
+	req, prof := stdReq()
+	req.JSONMode = &llm.JSONModeSpec{
+		Enabled: true,
+		Schema:  json.RawMessage(`{"type":"object","properties":{"count":{"type":"integer"}}}`),
+		Name:    "my_schema",
+	}
+	stream, err := a.Stream(context.Background(), req, prof, []byte("k"))
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	for range stream.Events() {
+	}
+	resp, ferr := stream.Final()
+	if ferr != nil {
+		t.Fatalf("Final: %v", ferr)
+	}
+	if len(resp.Content) != 1 || resp.Content[0].Type != "text" {
+		t.Fatalf("expected text content, got: %+v", resp.Content)
+	}
+	if !json.Valid([]byte(resp.Content[0].Text)) {
+		t.Fatalf("not valid JSON: %q", resp.Content[0].Text)
+	}
+}
+
+// ── WP03 JSONMode wire-shape tests (multimodal-io-extended-01KQ8TD2) ─────────
+
+// TestJSONModeAnthropic_NoSchema_AppendsSysPrompt verifies that JSONModeSpec
+// without a schema appends a JSON instruction to the system string.
+func TestJSONModeAnthropic_NoSchema_AppendsSysPrompt(t *testing.T) {
+	body := map[string]any{"system": "Be concise."}
+	jm := &llm.JSONModeSpec{Enabled: true}
+	if err := applyJSONModeAnthropic(jm, body); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	sys, ok := body["system"].(string)
+	if !ok {
+		t.Fatalf("system missing: %+v", body)
+	}
+	if !contains(sys, "JSON") {
+		t.Fatalf("system does not contain JSON instruction: %q", sys)
+	}
+}
+
+// TestJSONModeAnthropic_WithSchema_InjectsTool verifies that JSONModeSpec
+// with a schema injects a synthetic tool and forces tool_choice.
+func TestJSONModeAnthropic_WithSchema_InjectsTool(t *testing.T) {
+	body := map[string]any{}
+	schema := json.RawMessage(`{"type":"object","properties":{"result":{"type":"string"}},"required":["result"]}`)
+	jm := &llm.JSONModeSpec{Enabled: true, Schema: schema, Name: "my_result"}
+	if err := applyJSONModeAnthropic(jm, body); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	tools, ok := body["tools"].([]any)
+	if !ok || len(tools) == 0 {
+		t.Fatalf("tools not injected: %+v", body)
+	}
+	toolMap, ok := tools[0].(map[string]any)
+	if !ok {
+		t.Fatalf("tool not a map: %+v", tools[0])
+	}
+	if toolMap["name"] != "_my_result" {
+		t.Fatalf("tool name = %v want _my_result", toolMap["name"])
+	}
+	tc, ok := body["tool_choice"].(map[string]any)
+	if !ok {
+		t.Fatalf("tool_choice missing: %+v", body)
+	}
+	if tc["name"] != "_my_result" {
+		t.Fatalf("tool_choice.name = %v want _my_result", tc["name"])
+	}
+}
+
+// TestJSONModeAnthropic_DefaultToolName verifies that Name="" uses
+// "_structured_output" as the tool name.
+func TestJSONModeAnthropic_DefaultToolName(t *testing.T) {
+	body := map[string]any{}
+	schema := json.RawMessage(`{"type":"object"}`)
+	jm := &llm.JSONModeSpec{Enabled: true, Schema: schema}
+	if err := applyJSONModeAnthropic(jm, body); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	tools := body["tools"].([]any)
+	toolMap := tools[0].(map[string]any)
+	if toolMap["name"] != "_structured_output" {
+		t.Fatalf("default tool name = %v want _structured_output", toolMap["name"])
+	}
+}
+
 func contains(s, sub string) bool {
 	return len(sub) == 0 || (len(s) >= len(sub) && indexOf(s, sub) >= 0)
 }

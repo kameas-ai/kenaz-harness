@@ -1,0 +1,5 @@
+# Seam fanout fixture for kind=sleep
+# Sleep nodes pause execution for a duration; no external seam calls.
+kind: sleep
+seams: []
+notes: "sleep node sleeps for the configured duration_ms; no external seam calls"

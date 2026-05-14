@@ -1,0 +1,595 @@
+# coverage_registry.yaml — wire-shape test coverage matrix
+#
+# Schema: docs/coverage-registry-schema.md
+# Completeness enforced by: core/llm/wirecheck/registry_completeness_test.go
+#
+# Every (struct, field, adapter) triple must have either:
+#   tests: [<FuncName>, ...]      — at least one real test function
+#   unsupported: "<reason>"       — explicit reason the adapter omits this field
+#
+# WP02 replaced all WP01 placeholder rows with real test function references.
+#
+# Friction is the feature: adding a field to GenerationRequest/Response/StreamEvent
+# without updating this file fails TestRegistryCompleteness with a clear message.
+#
+version: 1
+entries:
+
+  # ============================================================
+  # GenerationRequest fields
+  # ============================================================
+
+  # ProfileID — internal routing key; never sent on the wire
+  - struct: GenerationRequest
+    field: ProfileID
+    adapter: anthropic
+    unsupported: "internal routing key — never sent on the wire"
+  - struct: GenerationRequest
+    field: ProfileID
+    adapter: openai
+    unsupported: "internal routing key — never sent on the wire"
+  - struct: GenerationRequest
+    field: ProfileID
+    adapter: openrouter
+    unsupported: "internal routing key — never sent on the wire"
+  - struct: GenerationRequest
+    field: ProfileID
+    adapter: bedrock
+    unsupported: "internal routing key — never sent on the wire"
+
+  # Model — per-request model override; verified via URL path or request body
+  - struct: GenerationRequest
+    field: Model
+    adapter: anthropic
+    tests: [TestAnthropicAdapter_ModelOverride_ModelSerialized]
+  - struct: GenerationRequest
+    field: Model
+    adapter: openai
+    tests: [TestOpenAIAdapter_ModelOverride_ModelSerialized]
+  - struct: GenerationRequest
+    field: Model
+    adapter: openrouter
+    tests: [TestOpenRouterAdapter_ModelOverride_ModelSerialized]
+  - struct: GenerationRequest
+    field: Model
+    adapter: bedrock
+    tests: [TestBedrockAdapter_ModelOverride_ModelSerialized]
+
+  # System — top-level system prompt
+  - struct: GenerationRequest
+    field: System
+    adapter: anthropic
+    tests: [TestAnthropicAdapter_SystemPrompt_SystemSerialized]
+  - struct: GenerationRequest
+    field: System
+    adapter: openai
+    tests: [TestOpenAIAdapter_SystemPrompt_SystemSerialized]
+  - struct: GenerationRequest
+    field: System
+    adapter: openrouter
+    tests: [TestOpenRouterAdapter_SystemPrompt_SystemSerialized]
+  - struct: GenerationRequest
+    field: System
+    adapter: bedrock
+    tests: [TestBedrockAdapter_SystemPrompt_SystemSerialized]
+
+  # Messages — conversation history
+  - struct: GenerationRequest
+    field: Messages
+    adapter: anthropic
+    tests: [TestAnthropicAdapter_History_MessagesSerialized]
+  - struct: GenerationRequest
+    field: Messages
+    adapter: openai
+    tests: [TestOpenAIAdapter_History_MessagesSerialized]
+  - struct: GenerationRequest
+    field: Messages
+    adapter: openrouter
+    tests: [TestOpenRouterAdapter_History_MessagesSerialized]
+  - struct: GenerationRequest
+    field: Messages
+    adapter: bedrock
+    tests: [TestBedrockAdapter_History_MessagesSerialized]
+
+  # Tools — tool specs
+  - struct: GenerationRequest
+    field: Tools
+    adapter: anthropic
+    tests: [TestAnthropicAdapter_Tools_ToolsSerialized]
+  - struct: GenerationRequest
+    field: Tools
+    adapter: openai
+    tests: [TestOpenAIAdapter_Tools_ToolsSerialized]
+  - struct: GenerationRequest
+    field: Tools
+    adapter: openrouter
+    tests: [TestOpenRouterAdapter_Tools_ToolsSerialized]
+  - struct: GenerationRequest
+    field: Tools
+    adapter: bedrock
+    tests: [TestBedrockAdapter_Tools_ToolsSerialized]
+
+  # Attachments — multimodal inputs
+  - struct: GenerationRequest
+    field: Attachments
+    adapter: anthropic
+    tests: [TestAnthropicAdapter_Attachments_AttachmentsSerialized]
+  - struct: GenerationRequest
+    field: Attachments
+    adapter: openai
+    tests: [TestOpenAIAdapter_Attachments_AttachmentsSerialized]
+  - struct: GenerationRequest
+    field: Attachments
+    adapter: openrouter
+    tests: [TestOpenRouterAdapter_Attachments_AttachmentsSerialized]
+  - struct: GenerationRequest
+    field: Attachments
+    adapter: bedrock
+    tests: [TestBedrockAdapter_Attachments_AttachmentsSerialized]
+
+  # JSONMode — legacy JSON-mode flag
+  - struct: GenerationRequest
+    field: JSONMode
+    adapter: anthropic
+    tests: [TestAnthropicAdapter_JSONMode_JSONModeSerialized]
+  - struct: GenerationRequest
+    field: JSONMode
+    adapter: openai
+    tests: [TestOpenAIAdapter_JSONMode_JSONModeSerialized]
+  - struct: GenerationRequest
+    field: JSONMode
+    adapter: openrouter
+    tests: [TestOpenRouterAdapter_JSONMode_JSONModeSerialized]
+  - struct: GenerationRequest
+    field: JSONMode
+    adapter: bedrock
+    tests: [TestBedrockAdapter_JSONMode_JSONModeSerialized]
+
+  # ImageOutput — request-side opt-in for image generation
+  # (multimodal-io-extended-01KQ8TD2). Per-adapter wire-shape coverage
+  # is deferred — adapter-level support depends on provider-specific
+  # endpoints (DALL-E 3, Titan Image, Stable Diffusion). End-to-end
+  # capture pipeline behavior is covered by integration tests in
+  # core/llm/multimodal_out_integration_test.go.
+  - struct: GenerationRequest
+    field: ImageOutput
+    adapter: anthropic
+    unsupported: "Anthropic models do not generate images natively (capabilities/data/anthropic.yaml sets image_output: false); gate rejects ImageOutput requests pre-flight."
+  - struct: GenerationRequest
+    field: ImageOutput
+    adapter: openai
+    unsupported: "Per-adapter wire-shape test pending. Image-gen routes through dedicated endpoint (DALL-E 3 / gpt-image-1); chat-completion translator currently capability-gates. Integration coverage: core/llm/multimodal_out_integration_test.go."
+  - struct: GenerationRequest
+    field: ImageOutput
+    adapter: openrouter
+    unsupported: "Per-adapter wire-shape test pending. OpenRouter passthrough surface for image-gen models; integration coverage: core/llm/multimodal_out_integration_test.go."
+  - struct: GenerationRequest
+    field: ImageOutput
+    adapter: bedrock
+    unsupported: "Per-adapter wire-shape test pending. Image-gen routes through dedicated bedrock-runtime invoke (Titan Image, Stable Diffusion); chat-completion translator currently capability-gates. Integration coverage: core/llm/multimodal_out_integration_test.go."
+
+  # Caching — prompt-caching breakpoints
+  - struct: GenerationRequest
+    field: Caching
+    adapter: anthropic
+    tests: [TestAnthropicAdapter_Caching_CachingSerialized]
+  - struct: GenerationRequest
+    field: Caching
+    adapter: openai
+    unsupported: "OpenAI does not expose prompt-caching breakpoints via API"
+  - struct: GenerationRequest
+    field: Caching
+    adapter: openrouter
+    unsupported: "OpenRouter passes through to upstream model; breakpoints not supported at this layer"
+  - struct: GenerationRequest
+    field: Caching
+    adapter: bedrock
+    unsupported: "Bedrock does not support prompt-caching breakpoints via the SDK input shape"
+
+  # Reasoning — extended thinking / reasoning tokens
+  - struct: GenerationRequest
+    field: Reasoning
+    adapter: anthropic
+    tests: [TestAnthropicAdapter_Reasoning_ReasoningSerialized]
+  - struct: GenerationRequest
+    field: Reasoning
+    adapter: openai
+    unsupported: "OpenAI reasoning is model-native; no explicit reasoning flag on the wire"
+  - struct: GenerationRequest
+    field: Reasoning
+    adapter: openrouter
+    unsupported: "OpenRouter passes through; reasoning not wired at adapter layer"
+  - struct: GenerationRequest
+    field: Reasoning
+    adapter: bedrock
+    unsupported: "Bedrock does not expose a top-level reasoning flag in the SDK input shape"
+
+  # ResponseFormat — structured output / grammar constraints
+  - struct: GenerationRequest
+    field: ResponseFormat
+    adapter: anthropic
+    tests: [TestAnthropicAdapter_ResponseFormat_ResponseFormatSerialized]
+  - struct: GenerationRequest
+    field: ResponseFormat
+    adapter: openai
+    tests: [TestOpenAIAdapter_ResponseFormat_ResponseFormatSerialized]
+  - struct: GenerationRequest
+    field: ResponseFormat
+    adapter: openrouter
+    tests: [TestOpenRouterAdapter_ResponseFormat_ResponseFormatSerialized]
+  - struct: GenerationRequest
+    field: ResponseFormat
+    adapter: bedrock
+    unsupported: "Bedrock response format is model-native; not wired at generic adapter layer"
+
+  # Params — provider-specific knobs (temperature, top_p, max_tokens, etc.)
+  - struct: GenerationRequest
+    field: Params
+    adapter: anthropic
+    tests: [TestAnthropicAdapter_Params_ParamsSerialized]
+  - struct: GenerationRequest
+    field: Params
+    adapter: openai
+    tests: [TestOpenAIAdapter_Params_ParamsSerialized]
+  - struct: GenerationRequest
+    field: Params
+    adapter: openrouter
+    tests: [TestOpenRouterAdapter_Params_ParamsSerialized]
+  - struct: GenerationRequest
+    field: Params
+    adapter: bedrock
+    tests: [TestBedrockAdapter_Params_ParamsSerialized]
+
+  # RetryOverride — consumed by registry middleware, not adapters
+  - struct: GenerationRequest
+    field: RetryOverride
+    adapter: anthropic
+    unsupported: "consumed by registry retry middleware before reaching the adapter"
+  - struct: GenerationRequest
+    field: RetryOverride
+    adapter: openai
+    unsupported: "consumed by registry retry middleware before reaching the adapter"
+  - struct: GenerationRequest
+    field: RetryOverride
+    adapter: openrouter
+    unsupported: "consumed by registry retry middleware before reaching the adapter"
+  - struct: GenerationRequest
+    field: RetryOverride
+    adapter: bedrock
+    unsupported: "consumed by registry retry middleware before reaching the adapter"
+
+  # SessionID — internal session tracking; never sent on the wire
+  - struct: GenerationRequest
+    field: SessionID
+    adapter: anthropic
+    unsupported: "internal session tracking — never sent on the wire"
+  - struct: GenerationRequest
+    field: SessionID
+    adapter: openai
+    unsupported: "internal session tracking — never sent on the wire"
+  - struct: GenerationRequest
+    field: SessionID
+    adapter: openrouter
+    unsupported: "internal session tracking — never sent on the wire"
+  - struct: GenerationRequest
+    field: SessionID
+    adapter: bedrock
+    unsupported: "internal session tracking — never sent on the wire"
+
+  # ============================================================
+  # Response fields
+  # ============================================================
+
+  # Content — response content blocks
+  - struct: Response
+    field: Content
+    adapter: anthropic
+    tests: [TestAnthropicAdapter_ChatDefault_ResponseParsed]
+  - struct: Response
+    field: Content
+    adapter: openai
+    tests: [TestOpenAIAdapter_ChatDefault_ResponseParsed]
+  - struct: Response
+    field: Content
+    adapter: openrouter
+    tests: [TestOpenRouterAdapter_ChatDefault_ResponseParsed]
+  - struct: Response
+    field: Content
+    adapter: bedrock
+    tests: [TestBedrockAdapter_ChatDefault_ResponseParsed]
+
+  # ToolCalls — assembled tool invocations
+  - struct: Response
+    field: ToolCalls
+    adapter: anthropic
+    tests: [TestAnthropicAdapter_ToolCall_ToolCallsParsed]
+  - struct: Response
+    field: ToolCalls
+    adapter: openai
+    tests: [TestOpenAIAdapter_StreamedToolCalls_ToolCallsParsed]
+  - struct: Response
+    field: ToolCalls
+    adapter: openrouter
+    tests: [TestOpenRouterAdapter_StreamedToolCalls_ToolCallsParsed]
+  - struct: Response
+    field: ToolCalls
+    adapter: bedrock
+    tests: [TestBedrockAdapter_ToolCall_ToolCallsParsed]
+
+  # Reasoning — reasoning / thinking blocks
+  - struct: Response
+    field: Reasoning
+    adapter: anthropic
+    tests: [TestAnthropicAdapter_Reasoning_ReasoningParsed]
+  - struct: Response
+    field: Reasoning
+    adapter: openai
+    unsupported: "OpenAI reasoning is streaming-only chain-of-thought; no structured reasoning blocks in Response"
+  - struct: Response
+    field: Reasoning
+    adapter: openrouter
+    unsupported: "OpenRouter passes through upstream; no structured reasoning blocks surfaced at adapter layer"
+  - struct: Response
+    field: Reasoning
+    adapter: bedrock
+    unsupported: "Bedrock does not return structured reasoning blocks in the generic SDK shape"
+
+  # FinishReason
+  - struct: Response
+    field: FinishReason
+    adapter: anthropic
+    tests: [TestAnthropicAdapter_ChatDefault_ResponseParsed]
+  - struct: Response
+    field: FinishReason
+    adapter: openai
+    tests: [TestOpenAIAdapter_ChatDefault_ResponseParsed]
+  - struct: Response
+    field: FinishReason
+    adapter: openrouter
+    tests: [TestOpenRouterAdapter_ChatDefault_ResponseParsed]
+  - struct: Response
+    field: FinishReason
+    adapter: bedrock
+    tests: [TestBedrockAdapter_ChatDefault_ResponseParsed]
+
+  # Usage — token accounting
+  - struct: Response
+    field: Usage
+    adapter: anthropic
+    tests: [TestAnthropicAdapter_Usage_UsageParsed]
+  - struct: Response
+    field: Usage
+    adapter: openai
+    tests: [TestOpenAIAdapter_ChatDefault_ResponseParsed]
+  - struct: Response
+    field: Usage
+    adapter: openrouter
+    tests: [TestOpenRouterAdapter_ChatDefault_ResponseParsed]
+  - struct: Response
+    field: Usage
+    adapter: bedrock
+    tests: [TestBedrockAdapter_Usage_UsageParsed]
+
+  # Cost — populated by registry CostReducer middleware, not adapters
+  - struct: Response
+    field: Cost
+    adapter: anthropic
+    unsupported: "populated by registry CostReducer middleware after adapter returns; not set by the adapter"
+  - struct: Response
+    field: Cost
+    adapter: openai
+    unsupported: "populated by registry CostReducer middleware after adapter returns; not set by the adapter"
+  - struct: Response
+    field: Cost
+    adapter: openrouter
+    unsupported: "populated by registry CostReducer middleware after adapter returns; not set by the adapter"
+  - struct: Response
+    field: Cost
+    adapter: bedrock
+    unsupported: "populated by registry CostReducer middleware after adapter returns; not set by the adapter"
+
+  # Attempts — set by registry retry middleware
+  - struct: Response
+    field: Attempts
+    adapter: anthropic
+    unsupported: "set by registry retry middleware; individual adapters always return Attempts=0"
+  - struct: Response
+    field: Attempts
+    adapter: openai
+    unsupported: "set by registry retry middleware; individual adapters always return Attempts=0"
+  - struct: Response
+    field: Attempts
+    adapter: openrouter
+    unsupported: "set by registry retry middleware; individual adapters always return Attempts=0"
+  - struct: Response
+    field: Attempts
+    adapter: bedrock
+    unsupported: "set by registry retry middleware; individual adapters always return Attempts=0"
+
+  # SnapshotID — eval system field; never returned by adapters
+  - struct: Response
+    field: SnapshotID
+    adapter: anthropic
+    unsupported: "eval system field; never returned by the adapter"
+  - struct: Response
+    field: SnapshotID
+    adapter: openai
+    unsupported: "eval system field; never returned by the adapter"
+  - struct: Response
+    field: SnapshotID
+    adapter: openrouter
+    unsupported: "eval system field; never returned by the adapter"
+  - struct: Response
+    field: SnapshotID
+    adapter: bedrock
+    unsupported: "eval system field; never returned by the adapter"
+
+  # ============================================================
+  # StreamEvent fields
+  # ============================================================
+
+  # Kind — event discriminator; always present
+  - struct: StreamEvent
+    field: Kind
+    adapter: anthropic
+    tests: [TestAnthropicAdapter_ChatDefault_ResponseParsed]
+  - struct: StreamEvent
+    field: Kind
+    adapter: openai
+    tests: [TestOpenAIAdapter_ChatDefault_ResponseParsed]
+  - struct: StreamEvent
+    field: Kind
+    adapter: openrouter
+    tests: [TestOpenRouterAdapter_ChatDefault_ResponseParsed]
+  - struct: StreamEvent
+    field: Kind
+    adapter: bedrock
+    tests: [TestBedrockAdapter_ChatDefault_ResponseParsed]
+
+  # Text — text delta on kind=text events
+  - struct: StreamEvent
+    field: Text
+    adapter: anthropic
+    tests: [TestAnthropicAdapter_ChatDefault_ResponseParsed]
+  - struct: StreamEvent
+    field: Text
+    adapter: openai
+    tests: [TestOpenAIAdapter_ChatDefault_ResponseParsed]
+  - struct: StreamEvent
+    field: Text
+    adapter: openrouter
+    tests: [TestOpenRouterAdapter_ChatDefault_ResponseParsed]
+  - struct: StreamEvent
+    field: Text
+    adapter: bedrock
+    tests: [TestBedrockAdapter_ChatDefault_ResponseParsed]
+
+  # Tool — accumulated tool_use record on kind=tool events
+  - struct: StreamEvent
+    field: Tool
+    adapter: anthropic
+    tests: [TestAnthropicAdapter_StreamedToolCalls_ToolCallsParsed]
+  - struct: StreamEvent
+    field: Tool
+    adapter: openai
+    tests: [TestOpenAIAdapter_StreamedToolCalls_ToolCallsParsed]
+  - struct: StreamEvent
+    field: Tool
+    adapter: openrouter
+    tests: [TestOpenRouterAdapter_StreamedToolCalls_ToolCallsParsed]
+  - struct: StreamEvent
+    field: Tool
+    adapter: bedrock
+    tests: [TestBedrockAdapter_StreamedToolCalls_ToolCallsParsed]
+
+  # Reasoning — reasoning frame on kind=reasoning events
+  - struct: StreamEvent
+    field: Reasoning
+    adapter: anthropic
+    tests: [TestAnthropicAdapter_Reasoning_ReasoningParsed]
+  - struct: StreamEvent
+    field: Reasoning
+    adapter: openai
+    unsupported: "OpenAI does not emit a structured reasoning event; chain-of-thought arrives as text deltas"
+  - struct: StreamEvent
+    field: Reasoning
+    adapter: openrouter
+    unsupported: "OpenRouter passes through upstream SSE; no structured reasoning event shape at this layer"
+  - struct: StreamEvent
+    field: Reasoning
+    adapter: bedrock
+    unsupported: "Bedrock does not emit structured reasoning events via the generic runtime SDK"
+
+  # Usage — token snapshot on kind=usage events
+  - struct: StreamEvent
+    field: Usage
+    adapter: anthropic
+    tests: [TestAnthropicAdapter_Usage_UsageParsed]
+  - struct: StreamEvent
+    field: Usage
+    adapter: openai
+    tests: [TestOpenAIAdapter_ChatDefault_ResponseParsed]
+  - struct: StreamEvent
+    field: Usage
+    adapter: openrouter
+    tests: [TestOpenRouterAdapter_ChatDefault_ResponseParsed]
+  - struct: StreamEvent
+    field: Usage
+    adapter: bedrock
+    tests: [TestBedrockAdapter_Usage_UsageParsed]
+
+  # Finish — finish reason string on kind=finish events
+  - struct: StreamEvent
+    field: Finish
+    adapter: anthropic
+    tests: [TestAnthropicAdapter_ChatDefault_ResponseParsed]
+  - struct: StreamEvent
+    field: Finish
+    adapter: openai
+    tests: [TestOpenAIAdapter_ChatDefault_ResponseParsed]
+  - struct: StreamEvent
+    field: Finish
+    adapter: openrouter
+    tests: [TestOpenRouterAdapter_ChatDefault_ResponseParsed]
+  - struct: StreamEvent
+    field: Finish
+    adapter: bedrock
+    tests: [TestBedrockAdapter_ChatDefault_ResponseParsed]
+
+  # Err — error message on kind=error events
+  - struct: StreamEvent
+    field: Err
+    adapter: anthropic
+    tests: [TestAnthropicAdapter_ErrorEvent_ErrParsed]
+  - struct: StreamEvent
+    field: Err
+    adapter: openai
+    tests: [TestOpenAIAdapter_ChatDefault_ResponseParsed]
+  - struct: StreamEvent
+    field: Err
+    adapter: openrouter
+    tests: [TestOpenRouterAdapter_ChatDefault_ResponseParsed]
+  - struct: StreamEvent
+    field: Err
+    adapter: bedrock
+    tests: [TestBedrockAdapter_Err_ErrParsed]
+
+  # Raw — opaque raw SSE frame bytes; optional pass-through; not emitted by production pump
+  - struct: StreamEvent
+    field: Raw
+    adapter: anthropic
+    unsupported: "raw pass-through field; not emitted by production pump"
+  - struct: StreamEvent
+    field: Raw
+    adapter: openai
+    unsupported: "raw pass-through field; not emitted by production pump"
+  - struct: StreamEvent
+    field: Raw
+    adapter: openrouter
+    unsupported: "raw pass-through field; not emitted by production pump"
+  - struct: StreamEvent
+    field: Raw
+    adapter: bedrock
+    unsupported: "raw pass-through field; not emitted by production pump"
+
+  # GeneratedImage — payload for StreamGeneratedImage events
+  # (multimodal-io-extended-01KQ8TD2). Per-adapter wire-shape coverage
+  # is deferred for the same reasons noted in ImageOutput above. The
+  # capture pipeline behaviour is exercised end-to-end in
+  # core/llm/multimodal_out_integration_test.go (TestOnGeneratedImage_*).
+  - struct: StreamEvent
+    field: GeneratedImage
+    adapter: anthropic
+    unsupported: "Anthropic models do not produce generated_image stream events (capabilities/data/anthropic.yaml sets image_output: false)."
+  - struct: StreamEvent
+    field: GeneratedImage
+    adapter: openai
+    unsupported: "Per-adapter parse test pending. Image-gen responses arrive through dedicated endpoint, not chat-completion SSE. Integration coverage: TestOnGeneratedImage_InlineBytes_DALLEE3 + TestOnGeneratedImage_URLFetch_DALLEE3 in core/llm/multimodal_out_integration_test.go."
+  - struct: StreamEvent
+    field: GeneratedImage
+    adapter: openrouter
+    unsupported: "Per-adapter parse test pending. OpenRouter passthrough for image-gen models; integration coverage: core/llm/multimodal_out_integration_test.go."
+  - struct: StreamEvent
+    field: GeneratedImage
+    adapter: bedrock
+    unsupported: "Per-adapter parse test pending. Image-gen routes through bedrock-runtime invoke (Titan Image multi-image, Stable Diffusion). Integration coverage: TestOnGeneratedImage_TitanImage_MultiImage in core/llm/multimodal_out_integration_test.go."

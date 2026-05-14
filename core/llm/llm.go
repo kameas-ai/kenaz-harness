@@ -38,6 +38,12 @@ const (
 	// CapRegexGrammar reports that the model/runtime supports regex-shorthand
 	// grammar constraints (subset of full GBNF). (structured-output-and-grammar-01KX5R8A FR-002)
 	CapRegexGrammar     Capability = "regex_grammar"
+	// CapImageOutput reports that the model/provider supports generating
+	// images as output (e.g. DALL-E 3, gpt-image-1, Titan Image).
+	// Requests that populate GenerationRequest.ImageOutput or are routed to
+	// an image-generation endpoint require this capability.
+	// (multimodal-io-extended-01KQ8TD2 WP01)
+	CapImageOutput      Capability = "image_output"
 )
 
 // AllCapabilities is the canonical ordered list (used for tests / docs).
@@ -45,7 +51,7 @@ func AllCapabilities() []Capability {
 	return []Capability{
 		CapStreaming, CapToolCalling, CapVision, CapDocuments, CapJSONMode,
 		CapPromptCaching, CapReasoning, CapCancellation, CapUsageReporting,
-		CapStructuredOutput, CapGrammar, CapRegexGrammar,
+		CapStructuredOutput, CapGrammar, CapRegexGrammar, CapImageOutput,
 	}
 }
 
@@ -186,11 +192,15 @@ func (m Message) Text() string {
 // image / document media reference, or a tool call / result. The Type
 // field selects which sibling field is populated:
 //
-//   - "text"        → Text
-//   - "image"       → Source (MediaType image/png|jpeg|gif|webp)
-//   - "document"    → Source (MediaType application/pdf|csv|html|txt|md)
-//   - "tool_use"    → ToolUse
-//   - "tool_result" → ToolResult OR ToolData (legacy raw-bytes shape)
+//   - "text"            → Text
+//   - "image"           → Source (MediaType image/png|jpeg|gif|webp)
+//   - "document"        → Source (MediaType application/pdf|csv|html|txt|md)
+//   - "tool_use"        → ToolUse
+//   - "tool_result"     → ToolResult OR ToolData (legacy raw-bytes shape)
+//   - "generated_image" → ArtifactID (captured model-generated image;
+//                         bytes resolved via harness-artifact://<ArtifactID>)
+//
+// (multimodal-io-extended-01KQ8TD2 WP01)
 type ContentBlock struct {
 	Type       string          `json:"type"`
 	Text       string          `json:"text,omitempty"`
@@ -198,6 +208,11 @@ type ContentBlock struct {
 	ToolUse    *ToolUse        `json:"tool_use,omitempty"`
 	ToolResult *ToolResult     `json:"tool_result,omitempty"`
 	ToolData   json.RawMessage `json:"tool_data,omitempty"`
+	// ArtifactID is set when Type=="generated_image". It holds the ULID of
+	// the captured artifact row; the frontend resolves bytes via
+	// harness-artifact://<ArtifactID>. Empty when the image has not yet
+	// been captured (inline Source.Data path before WP02 auto-capture runs).
+	ArtifactID string `json:"artifact_id,omitempty"`
 }
 
 // ImageDimensions carries the pixel dimensions of an image attachment.
@@ -326,9 +341,23 @@ type StructuredOutputAdapter interface {
 }
 
 // JSONModeSpec opts into structured-output mode (FR-008).
+//
+// The Strict and Name fields extend the base shape for WP03 per-adapter
+// translation (multimodal-io-extended-01KQ8TD2 WP01 / WP03):
+//   - Strict=true   → propagates "strict: true" to OpenAI's json_schema
+//                     response_format (additionalProperties: false injected).
+//   - Name          → names the schema object in providers that require one
+//                     (OpenAI json_schema.name). Falls back to "response" when empty.
 type JSONModeSpec struct {
 	Enabled bool            `json:"enabled"`
 	Schema  json.RawMessage `json:"schema,omitempty"`
+	// Strict, when true, enables strict schema validation mode on providers
+	// that support it (OpenAI strict JSON schema). Ignored on providers without
+	// strict-mode support. (multimodal-io-extended-01KQ8TD2 WP01)
+	Strict bool   `json:"strict,omitempty"`
+	// Name is the schema name forwarded to providers that require one.
+	// Defaults to "response" when empty. (multimodal-io-extended-01KQ8TD2 WP01)
+	Name   string `json:"name,omitempty"`
 }
 
 // CachingSpec is an opt-in marker for prompt-caching (FR-009).
@@ -346,6 +375,24 @@ type ReasoningSpec struct {
 	IncludeRawFrames bool `json:"include_raw_frames,omitempty"`
 }
 
+// ImageOutputSpec opts a request into image generation mode.
+// When non-nil, the request targets an image-generation model/endpoint
+// (e.g. DALL-E 3, gpt-image-1, Amazon Titan Image). The capability gate
+// requires CapImageOutput. (multimodal-io-extended-01KQ8TD2 WP01)
+type ImageOutputSpec struct {
+	// N is the number of images to generate. Defaults to 1 when zero.
+	N       int    `json:"n,omitempty"`
+	// Size is the image dimensions as a provider-specific string
+	// (e.g. "1024x1024", "1792x1024"). Empty means provider default.
+	Size    string `json:"size,omitempty"`
+	// Quality is the image quality level (e.g. "standard", "hd" for DALL-E 3;
+	// "standard", "premium" for gpt-image-1). Empty means provider default.
+	Quality string `json:"quality,omitempty"`
+	// Style is a provider-specific style hint (e.g. "vivid", "natural" for
+	// DALL-E 3). Empty means provider default.
+	Style   string `json:"style,omitempty"`
+}
+
 // GenerationRequest is the provider-agnostic invocation shape (FR-004).
 type GenerationRequest struct {
 	ProfileID string `json:"profile_id"`
@@ -353,21 +400,26 @@ type GenerationRequest struct {
 	// When set and present in profile.AvailableModels(), the registry
 	// substitutes prof.Model = req.Model before dispatching to the
 	// adapter. Empty means "use the profile default."
-	Model         string          `json:"model,omitempty"`
-	System        string          `json:"system,omitempty"`
-	Messages      []Message       `json:"messages"`
-	Tools         []ToolSpec      `json:"tools,omitempty"`
-	Attachments   []Attachment    `json:"attachments,omitempty"`
-	JSONMode      *JSONModeSpec   `json:"json_mode,omitempty"`
-	Caching       *CachingSpec    `json:"caching,omitempty"`
-	Reasoning     *ReasoningSpec  `json:"reasoning,omitempty"`
+	Model         string           `json:"model,omitempty"`
+	System        string           `json:"system,omitempty"`
+	Messages      []Message        `json:"messages"`
+	Tools         []ToolSpec       `json:"tools,omitempty"`
+	Attachments   []Attachment     `json:"attachments,omitempty"`
+	JSONMode      *JSONModeSpec    `json:"json_mode,omitempty"`
+	Caching       *CachingSpec     `json:"caching,omitempty"`
+	Reasoning     *ReasoningSpec   `json:"reasoning,omitempty"`
 	// ResponseFormat constrains the model's output to a JSON schema or GBNF
 	// grammar. Nil means free-form text (today's behavior unchanged).
 	// (structured-output-and-grammar-01KX5R8A FR-001)
-	ResponseFormat *ResponseFormat `json:"response_format,omitempty"`
-	Params         map[string]any  `json:"params,omitempty"`
-	RetryOverride  *RetryPolicy    `json:"retry_override,omitempty"`
-	SessionID      string          `json:"session_id,omitempty"`
+	ResponseFormat *ResponseFormat  `json:"response_format,omitempty"`
+	// ImageOutput opts the request into image-generation mode. Non-nil
+	// triggers CapImageOutput capability gating. The adapter routes to the
+	// image-generation endpoint rather than the chat-completions endpoint.
+	// (multimodal-io-extended-01KQ8TD2 WP01)
+	ImageOutput    *ImageOutputSpec `json:"image_output,omitempty"`
+	Params         map[string]any   `json:"params,omitempty"`
+	RetryOverride  *RetryPolicy     `json:"retry_override,omitempty"`
+	SessionID      string           `json:"session_id,omitempty"`
 }
 
 // RequestedCapabilities returns the set of capabilities this request
@@ -403,6 +455,10 @@ func (r GenerationRequest) RequestedCapabilities() []Capability {
 			caps = append(caps, CapGrammar)
 		}
 	}
+	// Image output capability gating (multimodal-io-extended-01KQ8TD2 WP01).
+	if r.ImageOutput != nil {
+		caps = append(caps, CapImageOutput)
+	}
 	return caps
 }
 
@@ -410,24 +466,56 @@ func (r GenerationRequest) RequestedCapabilities() []Capability {
 type StreamEventKind string
 
 const (
-	StreamText      StreamEventKind = "text"
-	StreamTool      StreamEventKind = "tool"
-	StreamReasoning StreamEventKind = "reasoning"
-	StreamUsage     StreamEventKind = "usage"
-	StreamFinish    StreamEventKind = "finish"
-	StreamError     StreamEventKind = "error"
+	StreamText           StreamEventKind = "text"
+	StreamTool           StreamEventKind = "tool"
+	StreamReasoning      StreamEventKind = "reasoning"
+	StreamUsage          StreamEventKind = "usage"
+	StreamFinish         StreamEventKind = "finish"
+	StreamError          StreamEventKind = "error"
+	// StreamGeneratedImage is emitted by image-generation adapters when the
+	// model produces an image output. The event carries a GeneratedImagePayload
+	// with the raw bytes (or a URL for providers that return a URL instead of
+	// inline bytes). The llmnode auto-capture pipeline (WP02) captures the
+	// bytes into the artifact store and rewrites the block's ArtifactID.
+	// (multimodal-io-extended-01KQ8TD2 WP01)
+	StreamGeneratedImage StreamEventKind = "generated_image"
 )
+
+// GeneratedImagePayload carries the payload for a StreamGeneratedImage event.
+// Exactly one of Data or URL is non-empty; adapters that return inline base64
+// populate Data; adapters that return a temporary URL (e.g. DALL-E 3 default)
+// populate URL. (multimodal-io-extended-01KQ8TD2 WP01)
+type GeneratedImagePayload struct {
+	// Data holds the raw image bytes when the provider returns inline content
+	// (e.g. b64_json format for DALL-E 3 / gpt-image-1).
+	Data []byte `json:"data,omitempty"`
+	// URL holds the temporary CDN URL when the provider returns a URL
+	// instead of inline bytes (e.g. DALL-E 3 url format). The auto-capture
+	// pipeline fetches and stores it within AutoCaptureGeneratedImages.
+	URL string `json:"url,omitempty"`
+	// MimeType is the IANA MIME type of the image (e.g. "image/png").
+	// Derived from the provider's format hint or the fetched Content-Type.
+	MimeType string `json:"mime_type,omitempty"`
+	// RevisedPrompt is the provider-rewritten prompt (DALL-E 3 returns this).
+	// Empty for providers that don't revise the prompt.
+	RevisedPrompt string `json:"revised_prompt,omitempty"`
+	// Index is the 0-based position within a multi-image response (n>1 requests).
+	Index int `json:"index,omitempty"`
+}
 
 // StreamEvent is one delta delivered through a Stream.
 type StreamEvent struct {
-	Kind      StreamEventKind  `json:"kind"`
-	Text      string           `json:"text,omitempty"`
-	Tool      *ToolUse         `json:"tool,omitempty"`
-	Reasoning *ReasoningBlock  `json:"reasoning,omitempty"`
-	Usage     *Usage           `json:"usage,omitempty"`
-	Finish    string           `json:"finish,omitempty"`
-	Err       string           `json:"err,omitempty"`
-	Raw       json.RawMessage  `json:"raw,omitempty"`
+	Kind           StreamEventKind        `json:"kind"`
+	Text           string                 `json:"text,omitempty"`
+	Tool           *ToolUse               `json:"tool,omitempty"`
+	Reasoning      *ReasoningBlock        `json:"reasoning,omitempty"`
+	Usage          *Usage                 `json:"usage,omitempty"`
+	Finish         string                 `json:"finish,omitempty"`
+	Err            string                 `json:"err,omitempty"`
+	Raw            json.RawMessage        `json:"raw,omitempty"`
+	// GeneratedImage is set when Kind==StreamGeneratedImage.
+	// (multimodal-io-extended-01KQ8TD2 WP01)
+	GeneratedImage *GeneratedImagePayload `json:"generated_image,omitempty"`
 }
 
 // Stream is the streaming response surface (FR-004 / FR-012).
@@ -470,6 +558,10 @@ type Usage struct {
 	CachedInputRead   int `json:"cached_input_read,omitempty"`
 	CachedInputWrite  int `json:"cached_input_write,omitempty"`
 	ReasoningTokens   int `json:"reasoning_tokens,omitempty"`
+	// ImagesGenerated is the count of images produced in the response.
+	// Non-zero for image-generation requests (DALL-E 3, gpt-image-1, Titan Image).
+	// (multimodal-io-extended-01KQ8TD2 WP01)
+	ImagesGenerated   int `json:"images_generated,omitempty"`
 }
 
 // Cost is the derived currency cost for a Usage snapshot (FR-011).
@@ -480,6 +572,10 @@ type Cost struct {
 	OutputCost    float64 `json:"output_cost,omitempty"`
 	CachedCost    float64 `json:"cached_cost,omitempty"`
 	ReasoningCost float64 `json:"reasoning_cost,omitempty"`
+	// ImageCost is the dollar cost for images generated in this request.
+	// Non-zero only when ImagesGenerated > 0 and a pricing entry was found
+	// for the image model. (multimodal-io-extended-01KQ8TD2 WP01)
+	ImageCost     float64 `json:"image_cost,omitempty"`
 	// Indeterminate signals that no price-table entry matched the
 	// (kind, model) pair — the request still completes (US3 Acceptance 1).
 	Indeterminate bool   `json:"indeterminate,omitempty"`

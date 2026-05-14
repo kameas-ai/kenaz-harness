@@ -1,0 +1,10 @@
+# Seam fanout fixture for kind=read_bash_output
+# BashOutputStore.Get is called with the configured run_id.
+# PolicyGate.CheckStateRead is called before the read.
+kind: read_bash_output
+seams:
+  - seam: BashOutputStore.Get
+    required: true
+  - seam: PolicyGate.CheckStateRead
+    required: false
+notes: "read_bash_output calls BashOutputStore.Get with run_id; PolicyGate.CheckStateRead gates access"

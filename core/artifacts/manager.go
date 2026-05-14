@@ -58,16 +58,31 @@ type CaptureConfig struct {
 	// AutoCaptureToolOutputs gates the tool-output detector. False
 	// disables the post-tool-use capture path; user pins still work.
 	AutoCaptureToolOutputs bool
+	// AutoCaptureGeneratedImages gates the model-output image-capture
+	// pipeline. When true, every StreamGeneratedImage event emitted by
+	// the LLM adapter is fetched (when URL-only) and stored as an
+	// artifact with Source==SourceModelOutput. Default true.
+	// (multimodal-io-extended-01KQ8TD2 WP02)
+	AutoCaptureGeneratedImages bool
+	// MaxGeneratedImageBytes is the per-image byte cap for auto-capture.
+	// Images whose raw byte size exceeds this cap are discarded and a
+	// warning is logged; a zero value disables the cap entirely.
+	// Default 20 MiB (20 * 1024 * 1024).
+	// (multimodal-io-extended-01KQ8TD2 WP02)
+	MaxGeneratedImageBytes int64
 }
 
 // DefaultCaptureConfig returns the spec's tuned defaults: capture on,
-// 10 lines OR 200 bytes for code blocks, capture on for tool outputs.
+// 10 lines OR 200 bytes for code blocks, capture on for tool outputs,
+// capture on for model-generated images with a 20 MiB per-image cap.
 func DefaultCaptureConfig() CaptureConfig {
 	return CaptureConfig{
-		AutoCaptureCodeBlocks:  true,
-		CodeBlockMinLines:      10,
-		CodeBlockMinBytes:      200,
-		AutoCaptureToolOutputs: true,
+		AutoCaptureCodeBlocks:      true,
+		CodeBlockMinLines:          10,
+		CodeBlockMinBytes:          200,
+		AutoCaptureToolOutputs:     true,
+		AutoCaptureGeneratedImages: true,
+		MaxGeneratedImageBytes:     20 * 1024 * 1024, // 20 MiB
 	}
 }
 

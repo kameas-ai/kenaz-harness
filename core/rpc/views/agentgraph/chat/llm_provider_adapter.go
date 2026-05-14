@@ -11,6 +11,7 @@ import (
 	coreag "github.com/sigil-tech/kaneaz-harness/core/agentgraph"
 	corellm "github.com/sigil-tech/kaneaz-harness/core/llm"
 	"github.com/sigil-tech/kaneaz-harness/core/llm/retry"
+	artview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/artifacts"
 )
 
 // LLMProviderAdapter satisfies the agentgraph.LLMProvider seam by
@@ -40,6 +41,10 @@ type LLMProviderAdapter struct {
 	// surface's model picker. Empty means "use the profile's default
 	// model".
 	modelOverride string
+	// sessionID is the active chat session, retained for the generated-
+	// image auto-capture path so OnGeneratedImage can record the session
+	// provenance without re-plumbing it through every Generate call.
+	sessionID string
 	// tools is the tool catalog produced by the chassis-side tool
 	// discoverer; the kernel's LLMRequest.Tools slice is just a string
 	// allowlist, but the registry needs the full ToolSpec shape.
@@ -52,18 +57,62 @@ type LLMProviderAdapter struct {
 	// sequential (one Generate completes before session_write fires, and
 	// session_write fires before the next Generate could start).
 	lastResp corellm.Response
+
+	// capturer is the optional generated-image auto-capture pipeline
+	// (multimodal-io-extended-01KQ8TD2 WP02). When non-nil, each
+	// StreamGeneratedImage event in the drain loop is forwarded to
+	// capturer.OnGeneratedImage so the image lands in the artifact store
+	// with Source=="model_output". nil disables capture — the event is
+	// still forwarded to the kernel StreamSink for frontend rendering.
+	capturer artview.GeneratedImageCapturer
+
+	// pendingImagesMu guards pendingImages.
+	pendingImagesMu sync.Mutex
+	// pendingImages accumulates GeneratedImagePayload values received
+	// during a Generate call. The HookPostLLM callback drains this slice
+	// (via DrainPendingImages) after session_write has persisted the
+	// assistant message and produced a stable messageID.
+	// (multimodal-io-extended-01KQ8TD2 WP02)
+	pendingImages []artview.GeneratedImagePayload
 }
 
 // NewLLMProviderAdapter constructs an adapter pinned to a specific
-// (profileID, modelOverride, toolCatalog) tuple. One adapter per chat
-// run; the runner constructs it inside StartStream.
-func NewLLMProviderAdapter(reg corellm.Registry, profileID, modelOverride string, tools []corellm.ToolSpec) *LLMProviderAdapter {
+// (profileID, sessionID, modelOverride, toolCatalog, capturer) tuple.
+// One adapter per chat run; the runner constructs it inside
+// StartStream. capturer may be nil to disable image auto-capture.
+func NewLLMProviderAdapter(reg corellm.Registry, profileID, modelOverride string, tools []corellm.ToolSpec, capturer artview.GeneratedImageCapturer) *LLMProviderAdapter {
 	return &LLMProviderAdapter{
 		reg:           reg,
 		profileID:     profileID,
 		modelOverride: modelOverride,
 		tools:         tools,
+		capturer:      capturer,
 	}
+}
+
+// WithSessionID pins the session id onto the adapter so the
+// generated-image capture path can record provenance without
+// re-plumbing sessionID through every Generate call. Called by the
+// chat runner immediately after construction.
+func (a *LLMProviderAdapter) WithSessionID(sessionID string) *LLMProviderAdapter {
+	a.sessionID = sessionID
+	return a
+}
+
+// DrainPendingImages returns and clears the buffered GeneratedImagePayload
+// values accumulated during the most recent Generate call. The HookPostLLM
+// callback invokes this after session_write has produced a stable messageID
+// so captured artifacts carry the correct provenance.
+// (multimodal-io-extended-01KQ8TD2 WP02)
+func (a *LLMProviderAdapter) DrainPendingImages() []artview.GeneratedImagePayload {
+	if a == nil {
+		return nil
+	}
+	a.pendingImagesMu.Lock()
+	defer a.pendingImagesMu.Unlock()
+	out := a.pendingImages
+	a.pendingImages = nil
+	return out
 }
 
 // LastResponse returns the most recently produced llm.Response. Called
@@ -188,8 +237,26 @@ func (a *LLMProviderAdapter) Generate(ctx context.Context, req coreag.LLMRequest
 	// pinned onto ctx via withStreamSink). When no sink is wired we
 	// still drain the events channel so the upstream goroutine doesn't
 	// block — only the per-token fan-out goes silent.
+	//
+	// WP02 (multimodal-io-extended-01KQ8TD2): buffer StreamGeneratedImage
+	// events so the HookPostLLM callback can capture them after
+	// session_write has produced a stable messageID. Images are not
+	// captured inline here — the messageID isn't available until the
+	// session_write node fires after Generate returns.
 	sink, _ := coreag.StreamSinkFromContext(ctx)
 	for ev := range stream.Events() {
+		if ev.Kind == corellm.StreamGeneratedImage && ev.GeneratedImage != nil && a.capturer != nil {
+			gi := ev.GeneratedImage
+			a.pendingImagesMu.Lock()
+			a.pendingImages = append(a.pendingImages, artview.GeneratedImagePayload{
+				Data:          gi.Data,
+				URL:           gi.URL,
+				MimeType:      gi.MimeType,
+				RevisedPrompt: gi.RevisedPrompt,
+				Index:         gi.Index,
+			})
+			a.pendingImagesMu.Unlock()
+		}
 		if sink == nil {
 			continue
 		}

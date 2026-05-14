@@ -1,0 +1,7 @@
+# Seam fanout fixture for kind=tool_dispatch
+# ToolRegistry.Call is invoked for each tool call in the incoming tool_calls port.
+kind: tool_dispatch
+seams:
+  - seam: ToolRegistry.Call
+    required: true
+notes: "tool_dispatch iterates the tool_calls input port and calls ToolRegistry.Call for each"

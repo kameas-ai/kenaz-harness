@@ -1,0 +1,5 @@
+# Seam fanout fixture for kind=escalate
+# Escalate nodes signal a policy or cost-budget breach; no external seam calls.
+kind: escalate
+seams: []
+notes: "escalate node surfaces a run-halt signal; no external seam calls beyond the event log"

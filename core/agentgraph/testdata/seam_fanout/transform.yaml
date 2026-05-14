@@ -1,0 +1,5 @@
+# Seam fanout fixture for kind=transform
+# Transform nodes execute a named pure function from TransformRegistry; no external seam calls.
+kind: transform
+seams: []
+notes: "transform node runs a named pure transform from TransformRegistry; no I/O seam calls"

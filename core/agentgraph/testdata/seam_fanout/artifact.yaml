@@ -1,0 +1,5 @@
+# Seam fanout fixture for kind=artifact
+# Artifact nodes are state-management primitives; no external seam calls.
+kind: artifact
+seams: []
+notes: "artifact node reads/writes run-state; no external seam calls"

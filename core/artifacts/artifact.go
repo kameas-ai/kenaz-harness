@@ -78,6 +78,17 @@ type ArtifactSourceRef struct {
 	// sources. When set, the Artifacts tab can render a "Show in Finder /
 	// Open in editor" affordance pointing at the live file on disk.
 	AbsolutePath string `json:"absolute_path,omitempty"`
+	// ImageIndex is the 0-based index of the generated image within the
+	// model response. Set for Source=="model_output" when the model
+	// returned multiple images in a single response (e.g. DALL-E 3
+	// n>1). Zero for the first (or only) image.
+	// (multimodal-io-extended-01KQ8TD2 WP02)
+	ImageIndex int `json:"image_index,omitempty"`
+	// RevisedPrompt carries the model-edited prompt returned by some
+	// image-generation providers (e.g. DALL-E 3 prompt revision). Empty
+	// when the model did not revise the prompt.
+	// (multimodal-io-extended-01KQ8TD2 WP02)
+	RevisedPrompt string `json:"revised_prompt,omitempty"`
 }
 
 // ArtifactVersion is one entry in the append-only revision history for
@@ -132,11 +143,19 @@ type ArtifactFilter struct {
 }
 
 // Source enum values for Artifact.Source. Validated at the SQL CHECK
-// boundary in migration 0303.
+// boundary in migration 0303 (extended to include model_output by
+// migration 0327 — multimodal-io-extended-01KQ8TD2 WP02).
 const (
-	SourceCodeBlock  = "code_block"
-	SourceToolOutput = "tool_output"
-	SourceUserPin    = "user_pin"
+	SourceCodeBlock    = "code_block"
+	SourceToolOutput   = "tool_output"
+	SourceUserPin      = "user_pin"
+	// SourceModelOutput is set when the artifact originates from a
+	// model-generated image (e.g. DALL-E 3, gpt-image-1, Titan Image).
+	// The SourceRef.ImageIndex field records the 0-based image position
+	// within the response; the SourceRef.MessageID ties the artifact to
+	// the assistant message that requested the image.
+	// (multimodal-io-extended-01KQ8TD2 WP02)
+	SourceModelOutput  = "model_output"
 )
 
 // ScopeKind enum values for Artifact.ScopeKind. Validated at the SQL

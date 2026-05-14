@@ -885,6 +885,11 @@ func New(c *core.Core) *API {
 					cfg.AutoCaptureToolOutputs = loaded.AutoCaptureToolOutputs()
 					cfg.CodeBlockMinLines = loaded.EffectiveCodeBlockMinLines()
 					cfg.CodeBlockMinBytes = loaded.EffectiveCodeBlockMinBytes()
+					// multimodal-io-extended-01KQ8TD2 WP02: image-capture dials.
+					// Settings fields added below in this file; default ON (zero-value
+					// of bool = false, and we invert via the Disabled bit pattern).
+					cfg.AutoCaptureGeneratedImages = loaded.AutoCaptureGeneratedImages()
+					cfg.MaxGeneratedImageBytes = loaded.EffectiveMaxGeneratedImageBytes()
 				}
 			}
 			return cfg
@@ -2850,9 +2855,13 @@ func buildChatRunner(
 		MaxTurns:         maxTurns,
 		EnvDefaults:      envDefaults,
 		ToolDiscoverer:   chatToolDiscovererAdapter{inner: tools},
-		Compaction:       compactionDeps,
-		PartialPersister: partialPersister,
-		UsageHook:        usageHookFn,
+		Compaction:             compactionDeps,
+		PartialPersister:       partialPersister,
+		UsageHook:              usageHookFn,
+		// multimodal-io-extended-01KQ8TD2 WP02: wire the concrete artifact
+		// sink as the generated-image capturer so StreamGeneratedImage
+		// events land in the artifact store with Source=="model_output".
+		GeneratedImageCapturer: artifactSinkConcrete,
 	})
 	if err != nil {
 		logging.L().Error("chat.runner.construct_failed", "err", err.Error())

@@ -1,0 +1,5 @@
+# Seam fanout fixture for kind=loop
+# Loop nodes are flow-control primitives; no external seam calls on the loop node itself.
+kind: loop
+seams: []
+notes: "loop node increments an iteration counter and evaluates a stop condition; no external seam calls"

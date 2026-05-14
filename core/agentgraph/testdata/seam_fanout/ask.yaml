@@ -1,0 +1,10 @@
+# Seam fanout fixture for kind=ask
+# First fire: AskBus.Pending + ErrPaused.
+# Second fire: AskBus.LookupAnswer returns the user's answer.
+kind: ask
+seams:
+  - seam: AskBus.Pending
+    required: true
+  - seam: AskBus.LookupAnswer
+    required: true
+notes: "ask node calls Pending on first fire (parks run) and LookupAnswer on resume"

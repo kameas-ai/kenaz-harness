@@ -14,6 +14,9 @@ defaults:
   structured_output: false
   grammar: false
   regex_grammar: false
+  # Image output capability default (multimodal-io-extended-01KQ8TD2 WP05).
+  # False by default; only image-generation model prefixes set true.
+  image_output: false
   # Attachment limits (multimodal-io-01KQ8TDF FR-006)
   image_input: false
   document_input: false
@@ -220,3 +223,37 @@ models:
     document_input: false
     max_image_bytes: 3932160
     max_image_count_per_message: 20
+  # Amazon Titan Image and Stability AI image generation models
+  # (multimodal-io-extended-01KQ8TD2 WP05)
+  - match: "amazon.titan-image-*"
+    streaming: false
+    tool_calling: false
+    vision: false
+    documents: false
+    json_mode: false
+    prompt_caching: false
+    reasoning: false
+    cancellation: false
+    usage_reporting: true
+    structured_output: false
+    grammar: false
+    regex_grammar: false
+    image_output: true
+    image_input: false
+    document_input: false
+  - match: "stability.stable-diffusion-*"
+    streaming: false
+    tool_calling: false
+    vision: false
+    documents: false
+    json_mode: false
+    prompt_caching: false
+    reasoning: false
+    cancellation: false
+    usage_reporting: true
+    structured_output: false
+    grammar: false
+    regex_grammar: false
+    image_output: true
+    image_input: false
+    document_input: false

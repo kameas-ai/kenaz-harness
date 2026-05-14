@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"sync"
 	"sync/atomic"
@@ -14,6 +15,7 @@ import (
 	corellm "github.com/sigil-tech/kaneaz-harness/core/llm"
 	"github.com/sigil-tech/kaneaz-harness/core/llm/tokenizer"
 	"github.com/sigil-tech/kaneaz-harness/core/logging"
+	artview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/artifacts"
 )
 
 // envCompactionDisabled is the env-var sentinel value the harness
@@ -53,6 +55,16 @@ func keychainRotationEnabled() bool {
 // the hook").
 func compactionDisabledByEnv() bool {
 	return os.Getenv(envCompactionVar) == envCompactionDisabled
+}
+
+// multimodalOutDisabledByEnv reports whether HARNESS_MULTIMODAL_OUT=off is
+// set. When true, the generated-image capture pipeline is bypassed: the
+// capturer is nil-gated so StreamGeneratedImage events are silently
+// discarded regardless of the Settings.AutoCaptureGeneratedImages dial.
+// (multimodal-io-extended-01KQ8TD2 WP08)
+func multimodalOutDisabledByEnv() bool {
+	v := os.Getenv("HARNESS_MULTIMODAL_OUT")
+	return v == "off" || v == "0" || v == "false"
 }
 
 // chatAskNodeID is the AskNode id the chassis chat graph (chat_default)
@@ -165,6 +177,16 @@ type Config struct {
 	// (v0.3.0 baseline behaviour). Production wiring threads this from
 	// the session's resolved autonomy knobs at StartStream time.
 	AutonomyKnobs AutonomyKnobsProvider
+
+	// GeneratedImageCapturer is the optional auto-capture pipeline for
+	// model-generated images (multimodal-io-extended-01KQ8TD2 WP02).
+	// When non-nil, the LLMProviderAdapter calls OnGeneratedImage for
+	// every StreamGeneratedImage event received during the event drain
+	// loop so captured images land in the artifact store with
+	// Source=="model_output". nil disables image auto-capture entirely
+	// (no error returned; the stream event is still forwarded to the
+	// kernel sink for frontend rendering).
+	GeneratedImageCapturer artview.GeneratedImageCapturer
 }
 
 // PartialPersister is the resume-flow persistence seam. Invoked by
@@ -470,7 +492,12 @@ func (r *ChatRunner) StartStream(ctx context.Context, profileID, sessionID, mode
 	} else {
 		logging.L().Warn("chat.tool_discovery.no_discoverer", "session_id", sessionID)
 	}
-	llmAdapter := NewLLMProviderAdapter(r.cfg.Registry, profileID, modelOverride, toolCatalog)
+	imageCapturer := r.cfg.GeneratedImageCapturer
+	if multimodalOutDisabledByEnv() {
+		imageCapturer = nil
+	}
+	llmAdapter := NewLLMProviderAdapter(r.cfg.Registry, profileID, modelOverride, toolCatalog, imageCapturer).
+		WithSessionID(sessionID)
 	toolAdapter := newKernelToolAdapter(r.cfg.Pool, r.cfg.Perms, sessionID)
 	if r.cfg.AutonomyKnobs != nil {
 		toolAdapter.withAutonomy(r.cfg.AutonomyKnobs)
@@ -528,19 +555,41 @@ func (r *ChatRunner) StartStream(ctx context.Context, profileID, sessionID, mode
 	// provider kind and model id from the adapter so the usage hook can
 	// populate UsageTurn.ProviderKind / UsageTurn.ModelID for full
 	// token-cost-telemetry alignment.
-	if r.cfg.UsageHook != nil {
+	if r.cfg.UsageHook != nil || r.cfg.GeneratedImageCapturer != nil {
 		if env.Hooks == nil {
 			env.Hooks = coreag.NewHookManager(env.Memory, env.SessionID, env.ProjectID)
 		}
-		usageHook := r.cfg.UsageHook
 		capturedAdapter := llmAdapter
 		capturedSessionID := sessionID
-		env.Hooks.RegisterPostHook(coreag.HookPostLLM, func(ctx context.Context, sID, messageID, _ string) {
-			resp := capturedAdapter.LastResponse()
-			providerKind := capturedAdapter.ProviderKind()
-			modelID := capturedAdapter.ActiveModelID()
-			usageHook(ctx, capturedSessionID, messageID, providerKind, modelID, resp)
-		})
+		if r.cfg.UsageHook != nil {
+			usageHook := r.cfg.UsageHook
+			env.Hooks.RegisterPostHook(coreag.HookPostLLM, func(ctx context.Context, sID, messageID, _ string) {
+				resp := capturedAdapter.LastResponse()
+				providerKind := capturedAdapter.ProviderKind()
+				modelID := capturedAdapter.ActiveModelID()
+				usageHook(ctx, capturedSessionID, messageID, providerKind, modelID, resp)
+			})
+		}
+		// WP02 (multimodal-io-extended-01KQ8TD2): drain buffered generated
+		// images into the artifact store now that session_write has produced
+		// a stable messageID. Non-fatal: a capture error is logged and
+		// dropped so the chat turn is not aborted by an artifact-write
+		// failure.
+		if r.cfg.GeneratedImageCapturer != nil {
+			imageCapturer := r.cfg.GeneratedImageCapturer
+			env.Hooks.RegisterPostHook(coreag.HookPostLLM, func(ctx context.Context, sID, messageID, _ string) {
+				imgs := capturedAdapter.DrainPendingImages()
+				for _, img := range imgs {
+					if err := imageCapturer.OnGeneratedImage(ctx, capturedSessionID, messageID, img); err != nil {
+						slog.Default().Warn("chat.generated_image.capture_failed",
+							"session_id", capturedSessionID,
+							"message_id", messageID,
+							"index", img.Index,
+							"err", err.Error())
+					}
+				}
+			})
+		}
 	}
 
 	sub := &chatSub{
