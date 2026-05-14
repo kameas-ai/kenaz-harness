@@ -233,6 +233,47 @@ func (b *Bindings) Sessions_ClearTitle(id string) error {
 	return b.api.Sessions().ClearTitle(b.ctx(), id)
 }
 
+// Sessions_Export exports the session identified by sessionID to the
+// local filesystem. format is "markdown" or "json". A native file-save
+// dialog is opened via the Wails runtime so the user can choose the
+// destination path; the suggested default filename is derived from the
+// session title and today's date.
+//
+// Cedar gate: Action::"session.export" is checked before any work is
+// done. On Cedar Deny the call returns an error, no file is written,
+// and no audit event is emitted.
+//
+// Returns ExportResult{Path, ByteCount} on success. Returns an error
+// when the user cancels the file-picker (ErrExportCancelled) or when
+// Cedar denies the export.
+//
+// session-export-01NDFSEX05 WP02.
+func (b *Bindings) Sessions_Export(sessionID, format string) (sessions.ExportResult, error) {
+	// Wire the Wails-backed FilePicker before delegating. The Cedar gate
+	// and audit emitter were already wired at boot time in API.Start() via
+	// WithExportOpts; WithExportPicker sets only the picker so those fields
+	// are not disturbed. The picker is created inline because it captures
+	// b.ctx() which requires the Wails runtime context to be live (it is,
+	// since OnStartup runs before any Wails-bound method is called).
+	sessions.WithExportPicker(b.api.Sessions(), &wailsFilePickerAdapter{b: b})
+	return b.api.Sessions().Export(b.ctx(), sessionID, format)
+}
+
+// wailsFilePickerAdapter adapts the Wails runtime's SaveFileDialog to
+// the sessions.FilePicker interface. Created inline by Sessions_Export
+// so the Bindings type doesn't accumulate permanent state.
+type wailsFilePickerAdapter struct{ b *Bindings }
+
+func (w *wailsFilePickerAdapter) PickSavePath(_ context.Context, title, defaultFilename string) (string, error) {
+	if title == "" {
+		title = "Export session"
+	}
+	return wruntime.SaveFileDialog(w.b.ctx(), wruntime.SaveDialogOptions{
+		Title:           title,
+		DefaultFilename: defaultFilename,
+	})
+}
+
 // Sessions_StartCapture begins recording an eval capture for sessionID.
 // The capture file is written to <DataDir>/eval-captures/<sessionID>.jsonl.
 // Idempotent: repeated calls for an active session are no-ops.
