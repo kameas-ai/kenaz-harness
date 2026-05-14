@@ -4829,17 +4829,31 @@ export namespace sessions {
 	        this.promoteArtifactsToProject = source["promoteArtifactsToProject"];
 	    }
 	}
+	export class ExportResult {
+	    path: string;
+	    byteCount: number;
+
+	    static createFrom(source: any = {}) {
+	        return new ExportResult(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.path = source["path"];
+	        this.byteCount = source["byteCount"];
+	    }
+	}
 	export class ToolCall {
 	    id: string;
 	    name: string;
 	    argsSummary: string;
 	    latency?: string;
 	    usedSecrets?: boolean;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new ToolCall(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.id = source["id"];

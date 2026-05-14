@@ -139,6 +139,7 @@ import type {
   ScoredChunk,
   RetrievalReport,
   ChunkProvenance,
+  ExportResult,
 } from './types';
 
 /**
@@ -217,6 +218,8 @@ interface WailsBindingsLike {
   ): Promise<Artifact>;
   Sessions_SuggestTitle(id: string): Promise<string>;
   Sessions_ClearTitle(id: string): Promise<void>;
+  /** Export a session to the local filesystem (session-export-01NDFSEX05 WP02). */
+  Sessions_Export(sessionId: string, format: string): Promise<ExportResult>;
 
   Artifacts_List(filter: ArtifactFilter): Promise<Artifact[]>;
   Artifacts_Get(id: string): Promise<WireArtifactWithBytes>;
@@ -1046,6 +1049,20 @@ export interface SessionsClient {
    * + per-session panel.
    */
   resolveAutonomy(id: string): Promise<ResolvedAutonomy>;
+
+  // ── session-export-01NDFSEX05 WP03 ──────────────────────────────────
+  /**
+   * Export the session to a user-chosen local file via the OS-native
+   * save dialog. format is "markdown" or "json".
+   *
+   * Returns ExportResult{path, byteCount} on success.
+   * Rejects with ErrExportCancelled when the user dismisses the dialog.
+   * Rejects with a Cedar denial error when the policy gate refuses.
+   */
+  export(
+    sessionId: string,
+    format: 'markdown' | 'json',
+  ): Promise<ExportResult>;
 }
 
 /**
@@ -2503,6 +2520,7 @@ export function createHarnessClient(): HarnessClient {
       getAutonomy: (id) => b().Sessions_GetAutonomy(id),
       setAutonomy: (id, layer) => b().Sessions_SetAutonomy(id, layer),
       resolveAutonomy: (id) => b().Sessions_ResolveAutonomy(id),
+      export: (sessionId, format) => b().Sessions_Export(sessionId, format),
     },
     artifacts: {
       list: (filter) => b().Artifacts_List(filter ?? {}),
@@ -3050,6 +3068,7 @@ export function createFakeHarnessClient(
         project: { level: null, overrides: {} },
         session: { level: null, overrides: {} },
       }),
+      export: async (_sessionId, _format) => ({ path: '/fake/export.md', byteCount: 0 }),
     },
     projects: {
       list: async () => [],
