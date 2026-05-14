@@ -704,7 +704,46 @@ func buildRequestBody(req llm.GenerationRequest, prof llm.ProviderProfile) ([]by
 		}
 	}
 
+	// Apply JSONMode if set (multimodal-io-extended-01KQ8TD2 WP03).
+	// OpenRouter passes response_format through to the underlying provider.
+	if req.JSONMode != nil && req.JSONMode.Enabled && req.ResponseFormat == nil {
+		if err := applyJSONModeOpenRouter(req.JSONMode, out); err != nil {
+			return nil, err
+		}
+	}
+
 	return json.Marshal(out)
+}
+
+// applyJSONModeOpenRouter translates JSONModeSpec for OpenRouter.
+// OpenRouter passes response_format through to the downstream provider;
+// Schema present → json_schema; absent → json_object.
+// (multimodal-io-extended-01KQ8TD2 WP03)
+func applyJSONModeOpenRouter(jm *llm.JSONModeSpec, wireBody map[string]any) error {
+	if jm == nil || !jm.Enabled {
+		return nil
+	}
+	if len(jm.Schema) == 0 {
+		wireBody["response_format"] = map[string]any{"type": "json_object"}
+		return nil
+	}
+	var schemaVal any
+	if err := json.Unmarshal(jm.Schema, &schemaVal); err != nil {
+		return fmt.Errorf("openrouter: json_mode schema parse: %w", err)
+	}
+	name := jm.Name
+	if name == "" {
+		name = "response"
+	}
+	wireBody["response_format"] = map[string]any{
+		"type": "json_schema",
+		"json_schema": map[string]any{
+			"name":   name,
+			"schema": schemaVal,
+			"strict": jm.Strict,
+		},
+	}
+	return nil
 }
 
 // buildOpenRouterContent serializes a slice of ContentBlocks into the

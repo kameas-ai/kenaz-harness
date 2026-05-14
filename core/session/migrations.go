@@ -116,6 +116,10 @@ const sqlInitSchema = `
 // {kind, manifest_version_at_author, fingerprint_at_author} per graph node,
 // enabling the manifest-drift detector on graph load
 // (manifest-versioning-01NDFSEX02 WP03 — see migrations_manifest_provenance.go).
+// 0327 extends the artifacts.source CHECK constraint to include
+// 'model_output' for model-generated images captured by the WP02
+// auto-capture pipeline (multimodal-io-extended-01KQ8TD2 WP02 —
+// see migrations_source_model_output.go).
 func Migrations() []migrations.Migration {
 	return []migrations.Migration{
 		{
@@ -174,6 +178,7 @@ func Migrations() []migrations.Migration {
 		migration0324(),
 		migration0325(),
 		migration0326(),
+		migration0327(),
 	}
 }
 

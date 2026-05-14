@@ -15,6 +15,9 @@ defaults:
   structured_output: false
   grammar: false
   regex_grammar: false
+  # Image output capability (multimodal-io-extended-01KQ8TD2 WP05).
+  # Anthropic does not offer an image-generation API.
+  image_output: false
   # Attachment limits (multimodal-io-01KQ8TDF FR-006)
   image_input: true
   document_input: false

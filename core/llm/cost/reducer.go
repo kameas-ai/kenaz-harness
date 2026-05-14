@@ -65,6 +65,12 @@ type Entry struct {
 	Kind             string             `yaml:"kind"`
 	Model            string             `yaml:"model"`
 	PerMillionTokens map[string]float64 `yaml:"per_million_tokens"`
+	// PerImageUSD holds per-image pricing keyed by "<quality>/<size>" strings
+	// (e.g. "standard/1024x1024", "hd/1024x1024"). An empty key "" is the
+	// fallback when quality or size are not specified. When the key does not
+	// match, Derive sets Indeterminate=true for the image cost component.
+	// (multimodal-io-extended-01KQ8TD2 WP05)
+	PerImageUSD map[string]float64 `yaml:"per_image_usd,omitempty"`
 }
 
 // LoadDefault returns the embedded starter table.
@@ -147,6 +153,48 @@ func (r *Reducer) Derive(usage llm.Usage, kind, model string) llm.Cost {
 		CachedCost:    cachedCost,
 		ReasoningCost: reasoningCost,
 		Source:        "starter",
+	}
+}
+
+// DeriveImage computes the cost for image generation usage under (kind, model).
+// It looks up per_image_usd keyed by "<quality>/<size>" (e.g. "hd/1024x1024").
+// Falls back to the "" key when quality or size are empty. Returns
+// Indeterminate=true when no pricing entry matches the quality/size combination.
+// (multimodal-io-extended-01KQ8TD2 WP05)
+func (r *Reducer) DeriveImage(usage llm.Usage, kind, model, quality, size string) llm.Cost {
+	if r == nil || r.tab == nil {
+		return llm.Cost{Indeterminate: true}
+	}
+	if usage.ImagesGenerated == 0 {
+		return llm.Cost{Currency: r.tab.Currency, Total: 0, Source: "starter"}
+	}
+	entry, ok := r.lookup(kind, model)
+	if !ok {
+		return llm.Cost{Indeterminate: true, Currency: r.tab.Currency}
+	}
+	if len(entry.PerImageUSD) == 0 {
+		return llm.Cost{Indeterminate: true, Currency: r.tab.Currency}
+	}
+	// Try exact quality/size key first.
+	key := quality + "/" + size
+	pricePerImage, found := entry.PerImageUSD[key]
+	if !found && quality != "" {
+		// Try quality-only key (no size qualifier).
+		pricePerImage, found = entry.PerImageUSD[quality]
+	}
+	if !found && quality == "" && size == "" {
+		// Try "" fallback only when neither quality nor size is specified.
+		pricePerImage, found = entry.PerImageUSD[""]
+	}
+	if !found {
+		return llm.Cost{Indeterminate: true, Currency: r.tab.Currency}
+	}
+	imageCost := pricePerImage * float64(usage.ImagesGenerated)
+	return llm.Cost{
+		Currency:  r.tab.Currency,
+		Total:     imageCost,
+		ImageCost: imageCost,
+		Source:    "starter",
 	}
 }
 

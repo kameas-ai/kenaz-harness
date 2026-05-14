@@ -113,3 +113,36 @@ type ArtifactSink interface {
 // OnAssistantMessage invocation so a mid-session settings toggle takes
 // effect on the next message without a process restart.
 type CaptureConfigReader func() coreart.CaptureConfig
+
+// GeneratedImageCapturer is the narrow surface the LLM provider adapter
+// uses to capture model-generated images into the artifact store.
+// The chat runner wires a concrete implementation into the adapter at
+// StartStream time; tests substitute a fake.
+// (multimodal-io-extended-01KQ8TD2 WP02)
+type GeneratedImageCapturer interface {
+	// OnGeneratedImage captures one model-generated image as a
+	// SourceModelOutput artifact. sessionID is the active chat session;
+	// messageID is the assistant message that requested the image;
+	// payload carries the raw bytes (or a URL to fetch), the MIME type,
+	// and the 0-based image index. Returns nil on success.
+	OnGeneratedImage(ctx context.Context, sessionID, messageID string, payload GeneratedImagePayload) error
+}
+
+// GeneratedImagePayload carries one model-generated image to the
+// capture pipeline. Mirrors core/llm.GeneratedImagePayload without
+// importing the llm package (import-direction hygiene).
+type GeneratedImagePayload struct {
+	// Data is the raw image bytes. When non-nil, it is stored directly.
+	// When nil and URL is non-empty, the pipeline fetches the URL.
+	Data []byte
+	// URL is a signed provider URL returned when Data is empty.
+	// The pipeline fetches it with a bounded timeout.
+	URL string
+	// MimeType is the IANA MIME type of the image (e.g. "image/png").
+	MimeType string
+	// RevisedPrompt is the model-edited prompt returned by some
+	// providers (e.g. DALL-E 3). Empty when not revised.
+	RevisedPrompt string
+	// Index is the 0-based image position within the response.
+	Index int
+}

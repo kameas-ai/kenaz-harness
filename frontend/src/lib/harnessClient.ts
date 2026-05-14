@@ -397,6 +397,11 @@ interface WailsBindingsLike {
   // multimodal-io-01KQ8TDF WP08 / FR-022 / FR-023
   Settings_GetMultimodalInput(): Promise<boolean>;
   Settings_SetMultimodalInput(enabled: boolean): Promise<void>;
+  // multimodal-io-extended-01KQ8TD2 WP06 — generated image capture dials
+  Settings_GetAutoCaptureGeneratedImages(): Promise<boolean>;
+  Settings_SetAutoCaptureGeneratedImages(enabled: boolean): Promise<void>;
+  Settings_GetMaxGeneratedImageBytes(): Promise<number>;
+  Settings_SetMaxGeneratedImageBytes(bytes: number): Promise<void>;
   // provider-keychain-rotation-01KQ8TD9 WP07
   Settings_GetAutoResumeOnKeyRotation(): Promise<boolean>;
   Settings_SetAutoResumeOnKeyRotation(enabled: boolean): Promise<void>;
@@ -1551,6 +1556,28 @@ export interface SettingsClient {
    */
   setMultimodalInput(enabled: boolean): Promise<void>;
 
+  // ── multimodal-io-extended-01KQ8TD2 WP06 — generated image capture dials ──
+  /**
+   * Returns whether model-generated images are automatically captured into
+   * the artifact store. Default true (zero-value disabled → enabled).
+   */
+  getAutoCaptureGeneratedImages(): Promise<boolean>;
+  /**
+   * Persists the auto-capture toggle. When false, generated images are
+   * streamed to the UI but not written to the artifact store.
+   */
+  setAutoCaptureGeneratedImages(enabled: boolean): Promise<void>;
+  /**
+   * Returns the effective per-image byte cap for the auto-capture pipeline.
+   * Returns the server default (20 MiB) when the persisted value is zero.
+   */
+  getMaxGeneratedImageBytes(): Promise<number>;
+  /**
+   * Persists the per-image byte cap in bytes. Zero resets to the server
+   * default (20 MiB). Negative values are clamped to zero server-side.
+   */
+  setMaxGeneratedImageBytes(bytes: number): Promise<void>;
+
   // ── provider-keychain-rotation-01KQ8TD9 WP07 ─────────────────────────
   /**
    * Returns whether the harness should automatically redrive the paused turn
@@ -2667,6 +2694,13 @@ export function createHarnessClient(): HarnessClient {
         b().Settings_SetShowPerMessageTokenMeter(enabled),
       getMultimodalInput: () => b().Settings_GetMultimodalInput(),
       setMultimodalInput: (enabled) => b().Settings_SetMultimodalInput(enabled),
+      getAutoCaptureGeneratedImages: () =>
+        b().Settings_GetAutoCaptureGeneratedImages(),
+      setAutoCaptureGeneratedImages: (enabled) =>
+        b().Settings_SetAutoCaptureGeneratedImages(enabled),
+      getMaxGeneratedImageBytes: () => b().Settings_GetMaxGeneratedImageBytes(),
+      setMaxGeneratedImageBytes: (bytes) =>
+        b().Settings_SetMaxGeneratedImageBytes(bytes),
       getAutoResumeOnKeyRotation: () =>
         b().Settings_GetAutoResumeOnKeyRotation(),
       setAutoResumeOnKeyRotation: (enabled) =>
@@ -3261,6 +3295,10 @@ export function createFakeHarnessClient(
       setShowPerMessageTokenMeter: noop,
       getMultimodalInput: async () => true,
       setMultimodalInput: noop,
+      getAutoCaptureGeneratedImages: async () => true,
+      setAutoCaptureGeneratedImages: noop,
+      getMaxGeneratedImageBytes: async () => 20 * 1024 * 1024,
+      setMaxGeneratedImageBytes: noop,
       getAutoResumeOnKeyRotation: async () => true,
       setAutoResumeOnKeyRotation: noop,
       getArtifactPreview: async () => ({
@@ -3803,6 +3841,12 @@ export function createFakeHarnessClient(
           enabled: true,
           description: 'User-defined / commands (text expansions, tool dispatch, prompt templates).',
           envVar: 'HARNESS_USER_SLASHCMD',
+        },
+        {
+          name: 'multimodal-out',
+          enabled: true,
+          description: 'Model-generated image output pipeline (DALL-E 3, gpt-image-1, Titan Image).',
+          envVar: 'HARNESS_MULTIMODAL_OUT',
         },
       ],
     },

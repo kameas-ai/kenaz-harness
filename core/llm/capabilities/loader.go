@@ -51,6 +51,10 @@ type modelEntry struct {
 	// RegexGrammar is true when the model/runtime supports regex-shorthand
 	// grammar constraints. (structured-output-and-grammar-01KX5R8A FR-002)
 	RegexGrammar bool `yaml:"regex_grammar"`
+	// ImageOutput is true when the model/provider supports generating images
+	// as output (e.g. DALL-E 3, gpt-image-1, Amazon Titan Image).
+	// (multimodal-io-extended-01KQ8TD2 WP05)
+	ImageOutput bool `yaml:"image_output"`
 	// ContextWindow is the model's max context length in tokens (0 = unknown).
 	ContextWindow int `yaml:"context_window"`
 	// MaxOutputTokens is the provider's hard cap on completion tokens per
@@ -166,6 +170,8 @@ func (c *Catalog) Describe(provider, model string) llm.CapabilityDescriptor {
 			desc.Supported[llm.CapStructuredOutput] = m.StructuredOutput
 			desc.Supported[llm.CapGrammar] = m.Grammar
 			desc.Supported[llm.CapRegexGrammar] = m.RegexGrammar
+			// Image output capability flag (multimodal-io-extended-01KQ8TD2 WP05).
+			desc.Supported[llm.CapImageOutput] = m.ImageOutput
 			return desc
 		}
 	}
@@ -343,6 +349,8 @@ func applyDefaults(desc *llm.CapabilityDescriptor, defaults map[string]any) {
 		"structured_output": llm.CapStructuredOutput,
 		"grammar":           llm.CapGrammar,
 		"regex_grammar":     llm.CapRegexGrammar,
+		// Image output capability key (multimodal-io-extended-01KQ8TD2 WP05).
+		"image_output": llm.CapImageOutput,
 	}
 	for k, v := range defaults {
 		if b, ok := v.(bool); ok {
@@ -361,6 +369,17 @@ func applyDefaults(desc *llm.CapabilityDescriptor, defaults map[string]any) {
 // (multimodal-io-01KQ8TDF WP08 / FR-022)
 func MultimodalInEnabled() bool {
 	v := strings.ToLower(strings.TrimSpace(os.Getenv("HARNESS_MULTIMODAL_IN")))
+	return v != "off"
+}
+
+// MultimodalOutEnabled reports whether the HARNESS_MULTIMODAL_OUT env flag
+// permits the model-generated image output pipeline. Default on: the env var
+// must be explicitly set to "off" (case-insensitive) to disable. When
+// disabled, the auto-capture pipeline skips all StreamGeneratedImage events
+// regardless of the Settings.AutoCaptureGeneratedImages dial.
+// (multimodal-io-extended-01KQ8TD2 WP08)
+func MultimodalOutEnabled() bool {
+	v := strings.ToLower(strings.TrimSpace(os.Getenv("HARNESS_MULTIMODAL_OUT")))
 	return v != "off"
 }
 

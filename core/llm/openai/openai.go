@@ -208,6 +208,47 @@ func (a *Adapter) ApplyResponseFormat(req *llm.GenerationRequest, wireBody map[s
 	return nil
 }
 
+// applyJSONMode translates a JSONModeSpec into the OpenAI wire shape.
+// Called from buildRequestBody when req.JSONMode is set and req.ResponseFormat
+// is nil (ResponseFormat takes precedence when both are present).
+//
+//   - Schema present → response_format: {type: "json_schema", json_schema: {name, schema, strict}}
+//   - Schema absent  → response_format: {type: "json_object"}
+//
+// (multimodal-io-extended-01KQ8TD2 WP03)
+func applyJSONMode(jm *llm.JSONModeSpec, wireBody map[string]any) error {
+	if jm == nil || !jm.Enabled {
+		return nil
+	}
+	if len(jm.Schema) == 0 {
+		wireBody["response_format"] = map[string]any{"type": "json_object"}
+		return nil
+	}
+	// Schema present: use json_schema shape.
+	schema := jm.Schema
+	injected, err := structured.InjectAdditionalProperties(schema)
+	if err == nil {
+		schema = injected
+	}
+	var schemaVal any
+	if err := json.Unmarshal(schema, &schemaVal); err != nil {
+		return fmt.Errorf("openai: json_mode schema parse: %w", err)
+	}
+	name := jm.Name
+	if name == "" {
+		name = "response"
+	}
+	wireBody["response_format"] = map[string]any{
+		"type": "json_schema",
+		"json_schema": map[string]any{
+			"name":   name,
+			"schema": schemaVal,
+			"strict": jm.Strict,
+		},
+	}
+	return nil
+}
+
 // Stream opens an SSE connection to the Chat Completions API and
 // returns a llm.Stream that pumps StreamEvent values to the caller.
 //
@@ -368,6 +409,15 @@ func buildRequestBody(req llm.GenerationRequest, prof llm.ProviderProfile) ([]by
 		// endpoint) is not used by ApplyResponseFormat.
 		a := &Adapter{}
 		if err := a.ApplyResponseFormat(&req, out); err != nil {
+			return nil, err
+		}
+	}
+
+	// Apply JSONMode if set (multimodal-io-extended-01KQ8TD2 WP03).
+	// JSONMode predates ResponseFormat; when both are set ResponseFormat wins
+	// (it's already applied above). When only JSONMode is set, translate it.
+	if req.JSONMode != nil && req.JSONMode.Enabled && req.ResponseFormat == nil {
+		if err := applyJSONMode(req.JSONMode, out); err != nil {
 			return nil, err
 		}
 	}

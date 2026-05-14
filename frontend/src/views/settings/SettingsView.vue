@@ -133,6 +133,18 @@ const restoreOnLaunch = ref(true);
 const confirmEachEnabled = ref(true);
 // multimodal-io-01KQ8TDF WP08 / FR-023
 const multimodalInputEnabled = ref(true);
+// multimodal-io-extended-01KQ8TD2 WP08 — env flag gate (HARNESS_MULTIMODAL_OUT).
+// Default true so the section is visible until Config_GetFlags resolves.
+const multimodalOutEnabled = ref(true);
+// multimodal-io-extended-01KQ8TD2 WP06 — generated image capture dials
+const autoCaptureGeneratedImages = ref(true);
+/** Raw bytes value as a string for the <input type="number"> binding. */
+const maxGeneratedImageMiB = ref<number>(20);
+const maxGeneratedImageMiBError = ref<string | null>(null);
+/** Server default in MiB (mirrors DefaultMaxGeneratedImageBytes = 20 MiB). */
+const DEFAULT_MAX_GENERATED_IMAGE_MIB = 20;
+/** Upper bound: 100 MiB per image. */
+const MAX_GENERATED_IMAGE_CAP_MIB = 100;
 // provider-keychain-rotation-01KQ8TD9 WP07
 const autoResumeOnKeyRotation = ref(true);
 
@@ -476,6 +488,18 @@ async function refresh() {
     multimodalInputEnabled.value = true;
   }
   try {
+    autoCaptureGeneratedImages.value =
+      await client.settings.getAutoCaptureGeneratedImages();
+  } catch {
+    autoCaptureGeneratedImages.value = true;
+  }
+  try {
+    const bytes = await client.settings.getMaxGeneratedImageBytes();
+    maxGeneratedImageMiB.value = Math.round(bytes / (1024 * 1024)) || DEFAULT_MAX_GENERATED_IMAGE_MIB;
+  } catch {
+    maxGeneratedImageMiB.value = DEFAULT_MAX_GENERATED_IMAGE_MIB;
+  }
+  try {
     autoResumeOnKeyRotation.value = await client.settings.getAutoResumeOnKeyRotation();
   } catch {
     autoResumeOnKeyRotation.value = true;
@@ -484,6 +508,14 @@ async function refresh() {
     appInfo.value = await client.appInfo();
   } catch {
     appInfo.value = null;
+  }
+  // multimodal-io-extended-01KQ8TD2 WP08 — load HARNESS_MULTIMODAL_OUT gate.
+  try {
+    const flags = await client.config.getFlags();
+    const outFlag = flags.find((f) => f.name === 'multimodal-out');
+    if (outFlag) multimodalOutEnabled.value = outFlag.enabled;
+  } catch {
+    // Non-fatal: keep default (true = enabled).
   }
   // Hydrate the markdown extensions ref so it round-trips through this view.
   if (settings.value.markdownExtensions) {
@@ -711,6 +743,40 @@ async function toggleMultimodalInput() {
   } catch {
     // Revert visually if the write failed.
     multimodalInputEnabled.value = !multimodalInputEnabled.value;
+  }
+}
+
+// multimodal-io-extended-01KQ8TD2 WP06 — generated image capture dials.
+async function toggleAutoCaptureGeneratedImages() {
+  autoCaptureGeneratedImages.value = !autoCaptureGeneratedImages.value;
+  try {
+    await client.settings.setAutoCaptureGeneratedImages(
+      autoCaptureGeneratedImages.value,
+    );
+  } catch {
+    // Revert visually if the write failed.
+    autoCaptureGeneratedImages.value = !autoCaptureGeneratedImages.value;
+  }
+}
+
+async function onMaxGeneratedImageMiBInput(evt: Event) {
+  const raw = (evt.target as HTMLInputElement).value;
+  const n = raw === '' ? 0 : Number.parseFloat(raw);
+  if (Number.isNaN(n) || n < 1) {
+    maxGeneratedImageMiBError.value = `Must be at least 1 MiB.`;
+    return;
+  }
+  if (n > MAX_GENERATED_IMAGE_CAP_MIB) {
+    maxGeneratedImageMiBError.value = `Maximum is ${MAX_GENERATED_IMAGE_CAP_MIB} MiB.`;
+    return;
+  }
+  maxGeneratedImageMiBError.value = null;
+  maxGeneratedImageMiB.value = n;
+  const bytes = Math.round(n * 1024 * 1024);
+  try {
+    await client.settings.setMaxGeneratedImageBytes(bytes);
+  } catch {
+    // Non-fatal — keep local state; will retry on next input.
   }
 }
 
@@ -1281,6 +1347,54 @@ onMounted(() => {
           <span class="font-mono">HARNESS_MULTIMODAL_IN</span> env flag
           provides a system-level override regardless of this toggle.
           Default: ON.
+        </p>
+      </section>
+
+      <!-- multimodal-io-extended-01KQ8TD2 WP06/WP08 — generated image capture dials.
+           Section hidden when HARNESS_MULTIMODAL_OUT=off (WP08 env gate). -->
+      <section v-if="multimodalOutEnabled" data-testid="generated-image-capture-section">
+        <h2 class="font-ui text-[11px] uppercase tracking-[0.18em] text-ink-subtle">
+          Generated Image Capture
+        </h2>
+        <label class="mt-2 flex items-center gap-3 font-ui text-[12px] text-ink">
+          <input
+            type="checkbox"
+            class="accent-accent"
+            :checked="autoCaptureGeneratedImages"
+            data-testid="auto-capture-generated-images-toggle"
+            @change="toggleAutoCaptureGeneratedImages"
+          />
+          Auto-capture model-generated images as artifacts
+        </label>
+        <p class="mt-1 text-[11px] text-ink-muted">
+          When on, images returned by generation APIs (DALL-E&nbsp;3, gpt-image-1,
+          Titan Image) are automatically saved to the artifact store so you can
+          revisit, promote, or export them later. Default: ON.
+        </p>
+
+        <label class="mt-3 flex items-center gap-3 font-ui text-[12px] text-ink">
+          <span class="shrink-0">Per-image byte cap (MiB)</span>
+          <input
+            type="number"
+            min="1"
+            :max="MAX_GENERATED_IMAGE_CAP_MIB"
+            step="1"
+            class="w-24 rounded-sm border border-border-muted bg-surface-2 px-2 py-0.5 font-mono text-[12px] text-ink focus:border-accent focus:outline-none"
+            :value="maxGeneratedImageMiB"
+            data-testid="max-generated-image-mib-input"
+            @change="onMaxGeneratedImageMiBInput"
+          />
+        </label>
+        <p
+          v-if="maxGeneratedImageMiBError"
+          class="mt-0.5 text-[11px] text-red-400"
+          data-testid="max-generated-image-mib-error"
+        >
+          {{ maxGeneratedImageMiBError }}
+        </p>
+        <p class="mt-1 text-[11px] text-ink-muted">
+          Images larger than this cap are skipped during auto-capture.
+          Default: {{ DEFAULT_MAX_GENERATED_IMAGE_MIB }} MiB.
         </p>
       </section>
 

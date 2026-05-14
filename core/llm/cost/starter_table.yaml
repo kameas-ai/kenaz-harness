@@ -42,3 +42,30 @@ entries:
     per_million_tokens:
       input: 0.00
       output: 0.00
+  # Image generation pricing (multimodal-io-extended-01KQ8TD2 WP05)
+  # DALL-E 3 pricing: standard $0.040/image, hd $0.080/image for 1024x1024
+  # hd prices: 1024×1024=$0.080, 1024×1792=$0.120, 1792×1024=$0.120
+  - kind: openai
+    model: "dall-e-3"
+    per_image_usd:
+      "standard/1024x1024": 0.040
+      "standard/1024x1792": 0.080
+      "standard/1792x1024": 0.080
+      "hd/1024x1024": 0.080
+      "hd/1024x1792": 0.120
+      "hd/1792x1024": 0.120
+      "standard": 0.040
+      "hd": 0.080
+      "": 0.040
+  # gpt-image-1 pricing (estimated, subject to change)
+  - kind: openai
+    model: "gpt-image-1"
+    per_image_usd:
+      "standard/1024x1024": 0.040
+      "hd/1024x1024": 0.080
+      "": 0.040
+  # Amazon Titan Image pricing (approximate)
+  - kind: bedrock
+    model: "amazon.titan-image-*"
+    per_image_usd:
+      "": 0.008

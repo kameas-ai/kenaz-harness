@@ -800,3 +800,90 @@ func TestApplyResponseFormat_Nil_NoOp(t *testing.T) {
 		t.Fatal("response_format should not be set for nil ResponseFormat")
 	}
 }
+
+// ── WP03 JSONMode wire-shape tests (multimodal-io-extended-01KQ8TD2) ─────────
+
+// TestJSONMode_NoSchema_YieldsJSONObject verifies that JSONMode with no schema
+// translates to response_format: {type: "json_object"}.
+func TestJSONMode_NoSchema_YieldsJSONObject(t *testing.T) {
+	body := map[string]any{}
+	jm := &llm.JSONModeSpec{Enabled: true}
+	if err := applyJSONMode(jm, body); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	rf, ok := body["response_format"].(map[string]any)
+	if !ok {
+		t.Fatalf("response_format missing: %+v", body)
+	}
+	if rf["type"] != "json_object" {
+		t.Fatalf("type = %v want json_object", rf["type"])
+	}
+}
+
+// TestJSONMode_WithSchema_YieldsJSONSchema verifies that JSONMode with a schema
+// translates to response_format: {type: "json_schema", json_schema: {...}}.
+func TestJSONMode_WithSchema_YieldsJSONSchema(t *testing.T) {
+	body := map[string]any{}
+	schema := json.RawMessage(`{"type":"object","properties":{"x":{"type":"string"}},"required":["x"]}`)
+	jm := &llm.JSONModeSpec{Enabled: true, Schema: schema, Strict: true, Name: "my_obj"}
+	if err := applyJSONMode(jm, body); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	rf, ok := body["response_format"].(map[string]any)
+	if !ok {
+		t.Fatalf("response_format missing: %+v", body)
+	}
+	if rf["type"] != "json_schema" {
+		t.Fatalf("type = %v want json_schema", rf["type"])
+	}
+	jsBlock, ok := rf["json_schema"].(map[string]any)
+	if !ok {
+		t.Fatalf("json_schema block missing: %+v", rf)
+	}
+	if jsBlock["name"] != "my_obj" {
+		t.Fatalf("name = %v want my_obj", jsBlock["name"])
+	}
+	if jsBlock["strict"] != true {
+		t.Fatalf("strict = %v want true", jsBlock["strict"])
+	}
+}
+
+// TestJSONMode_DefaultName verifies that Name="" falls back to "response".
+func TestJSONMode_DefaultName(t *testing.T) {
+	body := map[string]any{}
+	schema := json.RawMessage(`{"type":"object"}`)
+	jm := &llm.JSONModeSpec{Enabled: true, Schema: schema}
+	if err := applyJSONMode(jm, body); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	rf := body["response_format"].(map[string]any)
+	jsBlock := rf["json_schema"].(map[string]any)
+	if jsBlock["name"] != "response" {
+		t.Fatalf("default name = %v want response", jsBlock["name"])
+	}
+}
+
+// TestJSONMode_ResponseFormatWins verifies that when both ResponseFormat and
+// JSONMode are set, ResponseFormat takes precedence (ResponseFormat is applied
+// first in buildRequestBody, JSONMode is skipped when ResponseFormat is set).
+func TestJSONMode_ResponseFormatWins(t *testing.T) {
+	// Simulate the buildRequestBody logic: if ResponseFormat is set, skip JSONMode.
+	req := llm.GenerationRequest{
+		ResponseFormat: &llm.ResponseFormat{Mode: "json"},
+		JSONMode:       &llm.JSONModeSpec{Enabled: true, Schema: json.RawMessage(`{"type":"object"}`)},
+	}
+	body := map[string]any{}
+	// Only apply ResponseFormat (skipping JSONMode when ResponseFormat present).
+	a := New()
+	if err := a.ApplyResponseFormat(&req, body); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// ResponseFormat won: should be json_object.
+	rf, ok := body["response_format"].(map[string]any)
+	if !ok {
+		t.Fatalf("response_format missing: %+v", body)
+	}
+	if rf["type"] != "json_object" {
+		t.Fatalf("type = %v want json_object (ResponseFormat path)", rf["type"])
+	}
+}

@@ -530,6 +530,14 @@ export function Settings_GetMemory():Promise<boolean>;
 
 export function Settings_GetMonthlyCostNotifyUSD():Promise<number>;
 
+export function Settings_GetAutoCaptureGeneratedImages():Promise<boolean>;
+
+export function Settings_SetAutoCaptureGeneratedImages(arg1:boolean):Promise<void>;
+
+export function Settings_GetMaxGeneratedImageBytes():Promise<number>;
+
+export function Settings_SetMaxGeneratedImageBytes(arg1:number):Promise<void>;
+
 export function Settings_GetMultimodalInput():Promise<boolean>;
 
 export function Settings_GetPermissionCacheDangerousOps():Promise<boolean>;

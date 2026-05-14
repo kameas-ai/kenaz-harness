@@ -3,8 +3,11 @@ package artifacts
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"io"
 	"log/slog"
 	"mime"
+	"net/http"
 	"path"
 	"path/filepath"
 	"strings"
@@ -12,6 +15,12 @@ import (
 
 	coreart "github.com/sigil-tech/kaneaz-harness/core/artifacts"
 )
+
+// generatedImageFetchTimeout is the bounded HTTP GET deadline applied
+// when the image payload carries a URL instead of raw bytes. 30 seconds
+// is generous enough for large images over a slow connection and tight
+// enough to avoid stalling a chat turn indefinitely.
+const generatedImageFetchTimeout = 30 * time.Second
 
 // CaptureManager is the slice of *coreart.Manager the sink consumes.
 // We accept an interface (not the concrete pointer) so tests can
@@ -168,6 +177,134 @@ func (s *sink) OnPostToolMessage(ctx context.Context, sessionID, toolName, toolA
 				)
 			}
 		}
+	}
+}
+
+// OnGeneratedImage captures one model-generated image as a
+// SourceModelOutput artifact. If the payload contains only a URL (Data
+// is nil), the method fetches the bytes with a bounded timeout. Images
+// that exceed the MaxGeneratedImageBytes cap in the live CaptureConfig
+// are silently discarded with a warning log. Implements
+// GeneratedImageCapturer. (multimodal-io-extended-01KQ8TD2 WP02)
+func (s *sink) OnGeneratedImage(ctx context.Context, sessionID, messageID string, p GeneratedImagePayload) error {
+	if s == nil || s.mgr == nil {
+		return nil
+	}
+	cfg := s.cfg()
+	if !cfg.AutoCaptureGeneratedImages {
+		return nil
+	}
+
+	data := p.Data
+	if len(data) == 0 && p.URL != "" {
+		// Fetch the image with a bounded timeout so a slow provider URL
+		// doesn't stall the chat turn indefinitely.
+		fetchCtx, cancel := context.WithTimeout(ctx, generatedImageFetchTimeout)
+		defer cancel()
+		req, err := http.NewRequestWithContext(fetchCtx, http.MethodGet, p.URL, nil)
+		if err != nil {
+			s.log.Warn("artifacts.generated_image.fetch_req_failed",
+				"session_id", sessionID, "message_id", messageID,
+				"index", p.Index, "err", err.Error())
+			return nil // non-fatal: skip capture, don't abort the turn
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			s.log.Warn("artifacts.generated_image.fetch_failed",
+				"session_id", sessionID, "message_id", messageID,
+				"index", p.Index, "err", err.Error())
+			return nil
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			s.log.Warn("artifacts.generated_image.fetch_bad_status",
+				"session_id", sessionID, "message_id", messageID,
+				"index", p.Index, "status", resp.StatusCode)
+			return nil
+		}
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			s.log.Warn("artifacts.generated_image.fetch_read_failed",
+				"session_id", sessionID, "message_id", messageID,
+				"index", p.Index, "err", err.Error())
+			return nil
+		}
+		data = body
+	}
+
+	if len(data) == 0 {
+		s.log.Warn("artifacts.generated_image.no_data",
+			"session_id", sessionID, "message_id", messageID,
+			"index", p.Index)
+		return nil
+	}
+
+	// Enforce the per-image byte cap when configured.
+	if cfg.MaxGeneratedImageBytes > 0 && int64(len(data)) > cfg.MaxGeneratedImageBytes {
+		s.log.Warn("artifacts.generated_image.too_large",
+			"session_id", sessionID, "message_id", messageID,
+			"index", p.Index,
+			"byte_size", len(data),
+			"cap", cfg.MaxGeneratedImageBytes)
+		return nil
+	}
+
+	mimeType := p.MimeType
+	if mimeType == "" {
+		mimeType = "image/png" // reasonable default for image-generation APIs
+	}
+	title := fmt.Sprintf("generated-image-%d.png", p.Index)
+	if ext := extensionForMIME(mimeType); ext != "" {
+		title = fmt.Sprintf("generated-image-%d%s", p.Index, ext)
+	}
+
+	candidate := coreart.CaptureCandidate{
+		Title:    title,
+		MimeType: mimeType,
+		Bytes:    data,
+		Source:   coreart.SourceModelOutput,
+		SourceRef: coreart.ArtifactSourceRef{
+			MessageID:     messageID,
+			ImageIndex:    p.Index,
+			RevisedPrompt: p.RevisedPrompt,
+		},
+	}
+
+	captured, err := s.mgr.Capture(ctx, []coreart.CaptureCandidate{candidate}, sessionID)
+	if err != nil {
+		return fmt.Errorf("artifacts.generated_image.capture: %w", err)
+	}
+	if len(captured) > 0 {
+		s.log.Info("artifacts.generated_image.captured",
+			"session_id", sessionID,
+			"message_id", messageID,
+			"index", p.Index,
+			"artifact_id", captured[0].ID,
+			"byte_size", len(data),
+		)
+	}
+	return nil
+}
+
+// extensionForMIME returns a canonical file extension for common image
+// MIME types. Returns "" for unknown types so the caller can fall back
+// to a generic name.
+func extensionForMIME(mimeType string) string {
+	// Strip parameters (e.g. "image/png; charset=utf-8").
+	if i := strings.Index(mimeType, ";"); i > 0 {
+		mimeType = strings.TrimSpace(mimeType[:i])
+	}
+	switch strings.ToLower(mimeType) {
+	case "image/png":
+		return ".png"
+	case "image/jpeg", "image/jpg":
+		return ".jpg"
+	case "image/webp":
+		return ".webp"
+	case "image/gif":
+		return ".gif"
+	default:
+		return ""
 	}
 }
 
