@@ -279,6 +279,11 @@ type AppInfo struct {
 	// the AuthFailureToast rotate button when the feature is disabled.
 	// (provider-keychain-rotation-01KQ8TD9 WP07)
 	KeychainRotationEnabled bool `json:"keychainRotationEnabled"`
+	// CustomOpenAIEnabled is true when HARNESS_CUSTOM_OPENAI is not "0".
+	// The frontend uses this to hide the "Custom OpenAI-compatible" kind
+	// in the provider-add form when the feature is disabled.
+	// (custom-openai-compatible-endpoint-01KQ8VN0 WP08)
+	CustomOpenAIEnabled bool `json:"customOpenAIEnabled"`
 }
 
 // WindowSize mirrors the charter shape.
@@ -353,6 +358,9 @@ type API struct {
 	// Read once at boot; cached here so AppInfo can report it without
 	// an os.Getenv on every call (provider-keychain-rotation-01KQ8TD9 WP07).
 	keychainRotationEnabled bool
+	// customOpenAIEnabled mirrors the HARNESS_CUSTOM_OPENAI env flag.
+	// Read once at boot (custom-openai-compatible-endpoint-01KQ8VN0 WP08).
+	customOpenAIEnabled bool
 
 	// cedarProposeResolver is the in-process resolver for pending
 	// cedar:propose-pending requests (WP07 of
@@ -1286,6 +1294,12 @@ func New(c *core.Core) *API {
 		default:
 			a.keychainRotationEnabled = true
 		}
+
+		// Read HARNESS_CUSTOM_OPENAI once at boot. Default = on ("").
+		// Set to "0" to disable the custom endpoint adapter + UI.
+		// (custom-openai-compatible-endpoint-01KQ8VN0 WP08)
+		customOpenAIEnv := os.Getenv("HARNESS_CUSTOM_OPENAI")
+		a.customOpenAIEnabled = customOpenAIEnv != "0"
 
 		// Permissions view — uses the process-singleton prompt registry
 		// constructed at api.New() time (right after the broker) so the
@@ -4133,9 +4147,11 @@ func buildLabel(c *core.Core) string {
 func (a *API) AppInfo(_ context.Context) (AppInfo, error) {
 	policyEditorEnabled := true
 	keychainRotationEnabled := true
+	customOpenAIEnabled := true
 	if a != nil {
 		policyEditorEnabled = a.policyEditorEnabled
 		keychainRotationEnabled = a.keychainRotationEnabled
+		customOpenAIEnabled = a.customOpenAIEnabled
 	}
 	return AppInfo{
 		Build:                   buildLabel(a.core),
@@ -4146,6 +4162,7 @@ func (a *API) AppInfo(_ context.Context) (AppInfo, error) {
 		WindowSize:              WindowSize{Width: 1280, Height: 800},
 		PolicyEditorEnabled:     policyEditorEnabled,
 		KeychainRotationEnabled: keychainRotationEnabled,
+		CustomOpenAIEnabled:     customOpenAIEnabled,
 	}, nil
 }
 

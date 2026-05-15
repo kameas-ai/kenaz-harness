@@ -17,9 +17,10 @@
  * local form state immediately on submit.
  */
 
-import { computed, reactive, ref, watch } from 'vue';
+import { computed, onMounted, reactive, ref, watch } from 'vue';
 import type {
   AddProviderInput,
+  AppInfo,
   ModelInfo,
   ProviderKind,
   CustomAuthScheme,
@@ -56,7 +57,17 @@ const emit = defineEmits<{
 const client = useHarnessClient();
 const isEditing = computed(() => !!props.editing);
 
-const KINDS: { id: ProviderKind; label: string }[] = [
+const appInfo = ref<AppInfo | null>(null);
+
+onMounted(async () => {
+  try {
+    appInfo.value = await client.appInfo();
+  } catch {
+    appInfo.value = null;
+  }
+});
+
+const ALL_KINDS: { id: ProviderKind; label: string }[] = [
   { id: 'anthropic', label: 'Anthropic' },
   { id: 'openai', label: 'OpenAI' },
   { id: 'openrouter', label: 'OpenRouter' },
@@ -64,6 +75,15 @@ const KINDS: { id: ProviderKind; label: string }[] = [
   { id: 'ollama', label: 'Ollama (local)' },
   { id: 'custom-openai', label: 'Custom OpenAI-compatible' },
 ];
+
+// Exclude custom-openai when the feature flag is explicitly disabled.
+// The flag defaults to enabled (undefined or true both mean "show it").
+const KINDS = computed(() =>
+  ALL_KINDS.filter(
+    (k) =>
+      k.id !== 'custom-openai' || appInfo.value?.customOpenAIEnabled !== false,
+  ),
+);
 
 // AWS Bedrock regions where Bedrock is generally available. Source:
 // https://docs.aws.amazon.com/bedrock/latest/userguide/bedrock-regions.html
