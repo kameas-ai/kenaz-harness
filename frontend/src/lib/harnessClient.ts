@@ -702,6 +702,19 @@ interface WailsBindingsLike {
   Agents_LoadProfile(id: string): Promise<import('./types').AgentProfile>;
   Agents_SaveProfile(profile: import('./types').AgentProfile): Promise<void>;
   Agents_DeleteProfile(id: string): Promise<void>;
+
+  // ── Crash reporting (sentry-error-monitoring-01KX5R8G WP05) ─────────────
+  Sentry_GetLastFive(): Promise<
+    Array<{
+      ID: string;
+      CapturedAt: string;
+      Kind: string;
+      Summary: string;
+      SentryEventID: string;
+    }>
+  >;
+  Sentry_GenerateLocalReport(): Promise<{ Path: string; ByteCount: number }>;
+  Sentry_TestDSN(dsn: string): Promise<{ OK: boolean; Error: string }>;
 }
 
 
@@ -2494,6 +2507,25 @@ export interface AgentsClient {
   deleteProfile(id: string): Promise<void>;
 }
 
+// ── sentry client (sentry-error-monitoring-01KX5R8G WP05) ────────────────
+
+export interface SentryClient {
+  /** Returns the most-recent ≤5 cached crash events. */
+  getLastFive(): Promise<
+    Array<{
+      id: string;
+      capturedAt: string;
+      kind: string;
+      summary: string;
+      sentryEventId?: string;
+    }>
+  >;
+  /** Generates a redacted local crash report JSON file. Returns path + byteCount. */
+  generateLocalReport(): Promise<{ path: string; byteCount: number }>;
+  /** Tests a Sentry DSN by parsing + HEAD to ingestion URL. Returns ok + optional error. */
+  testDsn(dsn: string): Promise<{ ok: boolean; error?: string }>;
+}
+
 export interface HarnessClient {
   shellStatus(): Promise<ShellStatus>;
   appInfo(): Promise<AppInfo>;
@@ -2546,6 +2578,8 @@ export interface HarnessClient {
   secrets: SecretsClient;
   /** Sub-agent profile registry (branch-subagent-interactive-01KZNP3B WP01). */
   agents: AgentsClient;
+  /** Crash-reporting surface (sentry-error-monitoring-01KX5R8G WP05). */
+  sentry: SentryClient;
 }
 
 // ── runtime client ─────────────────────────────────────────────────────
@@ -3067,6 +3101,28 @@ export function createHarnessClient(): HarnessClient {
       loadProfile: (id) => b().Agents_LoadProfile(id),
       saveProfile: (profile) => b().Agents_SaveProfile(profile),
       deleteProfile: (id) => b().Agents_DeleteProfile(id),
+    },
+    sentry: {
+      getLastFive: () =>
+        b()
+          .Sentry_GetLastFive()
+          .then((entries) =>
+            entries.map((e) => ({
+              id: e.ID,
+              capturedAt: e.CapturedAt,
+              kind: e.Kind,
+              summary: e.Summary,
+              sentryEventId: e.SentryEventID || undefined,
+            })),
+          ),
+      generateLocalReport: () =>
+        b()
+          .Sentry_GenerateLocalReport()
+          .then((r) => ({ path: r.Path, byteCount: r.ByteCount })),
+      testDsn: (dsn) =>
+        b()
+          .Sentry_TestDSN(dsn)
+          .then((r) => ({ ok: r.OK, error: r.Error || undefined })),
     },
   };
 }
@@ -4064,6 +4120,11 @@ export function createFakeHarnessClient(
       }),
       saveProfile: noop,
       deleteProfile: noop,
+    },
+    sentry: {
+      getLastFive: async () => [],
+      generateLocalReport: async () => ({ path: '', byteCount: 0 }),
+      testDsn: async (_dsn: string) => ({ ok: false, error: 'not available in test mode' }),
     },
   };
 

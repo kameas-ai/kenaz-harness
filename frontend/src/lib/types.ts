@@ -912,6 +912,24 @@ export interface Settings {
    * Mirrors core/rpc/views/settings.Settings.MaxGeneratedImageBytes.
    */
   maxGeneratedImageBytes?: number;
+
+  // ── Crash reporting dials (sentry-error-monitoring-01KX5R8G) ───────────
+  /**
+   * crashReportingTier: "off" | "anonymous" | "identified".
+   * Default "off" (zero value). Controls whether and how crash reports are
+   * sent to the configured Sentry DSN.
+   */
+  crashReportingTier?: string;
+  /**
+   * sentryDsn: The Sentry Data Source Name. When empty, crash reporting
+   * is inoperative even if crashReportingTier is non-"off".
+   */
+  sentryDsn?: string;
+  /**
+   * hasSeenCrashReportingOnboarding: set to true after the user dismisses
+   * the first-launch onboarding modal. Controls whether the modal mounts.
+   */
+  hasSeenCrashReportingOnboarding?: boolean;
 }
 
 /**
