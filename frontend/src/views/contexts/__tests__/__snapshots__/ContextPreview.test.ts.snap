@@ -5,7 +5,7 @@ exports[`ContextPreview > matches the edit-mode snapshot 1`] = `
   <header class="px-4 py-2 border-b border-border-muted bg-surface-1 flex items-baseline gap-2"><span class="font-ui text-[10px] uppercase tracking-[0.18em] text-ink-subtle">Edit</span><span class="font-mono text-[12px] text-ink truncate flex-1">notes/welcome.md</span><span class="font-ui text-[10px] text-ink-dim shrink-0" data-testid="context-preview-tokens"> ~2 tokens </span>
     <!--v-if-->
   </header>
-  <div class="flex-1 overflow-auto flex flex-col min-h-0"><textarea spellcheck="false" class="flex-1 w-full px-6 py-4 font-mono text-[12px] leading-relaxed text-ink bg-surface-0 border-0 outline-none resize-none whitespace-pre-wrap" data-testid="context-preview-editor"></textarea>
+  <div class="flex-1 overflow-auto flex flex-col min-h-0"><textarea spellcheck="false" aria-label="Context file content" class="flex-1 w-full px-6 py-4 font-mono text-[12px] leading-relaxed text-ink bg-surface-0 border-0 outline-none resize-none whitespace-pre-wrap" data-testid="context-preview-editor"></textarea>
     <div class="border-t border-border-muted bg-surface-1 px-4 py-2 flex items-center gap-3"><span class="font-ui text-[10px] text-ink-dim" data-testid="context-preview-bytes">5 bytes </span><span class="flex-1"></span><button type="button" class="font-ui text-[11px] text-ink-dim hover:text-ink transition-fast" data-testid="context-preview-cancel"> Cancel </button><button type="button" class="font-ui text-[11px] text-accent hover:text-accent-muted transition-fast disabled:opacity-50" data-testid="context-preview-save">Save</button></div>
   </div>
 </section>"
