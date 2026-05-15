@@ -698,3 +698,74 @@ func TestIntegration_CredentialFamily_AllFourFamiliesEndToEnd(t *testing.T) {
 		})
 	}
 }
+
+// TestIntegration_LLMFallback_DefaultAllow verifies that the bundled
+// default_llm_fallback_policy.cedar permits the local user to hop to any
+// FallbackChain resource. This is the happy-path side of
+// model-fallback-routing-01NDFSEX04 WP03 + WP06.
+func TestIntegration_LLMFallback_DefaultAllow(t *testing.T) {
+	t.Parallel()
+
+	e, err := cedar.NewEngine(cedar.Options{
+		LoadFromDisk:    false,
+		IncludeEmbedded: true, // loads all bundled .cedar policies
+	})
+	if err != nil {
+		t.Fatalf("NewEngine: %v", err)
+	}
+
+	// The bundled default_llm_fallback_policy.cedar should allow any chain.
+	for _, chainID := range []string{
+		"anthropic-with-openrouter-fallback",
+		"openai-with-anthropic-fallback",
+		"my-custom-chain",
+	} {
+		if gotErr := cedar.CheckLLMFallback(context.Background(), e, chainID); gotErr != nil {
+			t.Errorf("CheckLLMFallback(%q) = %v; want nil (default-allow)", chainID, gotErr)
+		}
+	}
+}
+
+// TestIntegration_LLMFallback_ExplicitDeny verifies that a forbid policy
+// on Action::"llm.fallback" causes CheckLLMFallback to return
+// *PolicyDeniedError (fail-closed behaviour).
+// model-fallback-routing-01NDFSEX04 WP03 + WP06.
+func TestIntegration_LLMFallback_ExplicitDeny(t *testing.T) {
+	t.Parallel()
+
+	// Start with embedded policies (which include the default-allow).
+	e, err := cedar.NewEngine(cedar.Options{
+		LoadFromDisk:    false,
+		IncludeEmbedded: true,
+	})
+	if err != nil {
+		t.Fatalf("NewEngine: %v", err)
+	}
+
+	// Override with a forbid that blocks a specific chain.
+	denyPolicy := `
+forbid (
+    principal == User::"local",
+    action == Action::"llm.fallback",
+    resource == FallbackChain::"blocked-chain"
+);
+`
+	if err := e.SetPolicyText("user_deny_fallback.cedar", []byte(denyPolicy)); err != nil {
+		t.Fatalf("SetPolicyText: %v", err)
+	}
+
+	// The blocked chain must be denied.
+	gotErr := cedar.CheckLLMFallback(context.Background(), e, "blocked-chain")
+	if gotErr == nil {
+		t.Fatal("CheckLLMFallback(blocked-chain) = nil; want PolicyDeniedError")
+	}
+	var pde *cedar.PolicyDeniedError
+	if !errors.As(gotErr, &pde) {
+		t.Errorf("err type = %T; want *cedar.PolicyDeniedError", gotErr)
+	}
+
+	// Other chains must remain allowed.
+	if otherErr := cedar.CheckLLMFallback(context.Background(), e, "allowed-chain"); otherErr != nil {
+		t.Errorf("CheckLLMFallback(allowed-chain) = %v; want nil", otherErr)
+	}
+}
