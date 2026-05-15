@@ -408,3 +408,45 @@ func TestAttachmentLimits_EnvFlagOnPreservesDescriptor(t *testing.T) {
 		t.Error("expected ImageInput=true for anthropic sonnet when HARNESS_MULTIMODAL_IN is unset")
 	}
 }
+
+// ── Gemini reasoning gate tests (google-vertex-gemini-adapter-01KQ8VMY WP05) ──
+
+// TestGeminiReasoningGate_2_5_Allowed verifies that gemini-2.5-pro passes
+// the capability gate for reasoning.
+func TestGeminiReasoningGate_2_5_Allowed(t *testing.T) {
+	t.Parallel()
+	c := mustCatalog(t)
+	gate := NewGate(c)
+	req := llm.GenerationRequest{
+		ProfileID: "test",
+		Messages:  []llm.Message{llm.NewTextMessage(llm.RoleUser, "think step by step")},
+		Reasoning: &llm.ReasoningSpec{Enabled: true, BudgetTokens: 4000},
+	}
+	prof := llm.ProviderProfile{Kind: "gemini", Model: "gemini-2.5-pro-preview-04-09"}
+	_, err := gate.Check(req, prof)
+	if err != nil {
+		t.Errorf("gemini-2.5-pro + reasoning: expected nil error, got %v", err)
+	}
+}
+
+// TestGeminiReasoningGate_2_0_Rejected verifies that gemini-2.0-flash
+// is rejected by the capability gate when reasoning is requested.
+func TestGeminiReasoningGate_2_0_Rejected(t *testing.T) {
+	t.Parallel()
+	c := mustCatalog(t)
+	gate := NewGate(c)
+	req := llm.GenerationRequest{
+		ProfileID: "test",
+		Messages:  []llm.Message{llm.NewTextMessage(llm.RoleUser, "think step by step")},
+		Reasoning: &llm.ReasoningSpec{Enabled: true, BudgetTokens: 4000},
+	}
+	prof := llm.ProviderProfile{Kind: "gemini", Model: "gemini-2.0-flash"}
+	_, err := gate.Check(req, prof)
+	if err == nil {
+		t.Error("gemini-2.0-flash + reasoning: expected capability-unsupported error, got nil")
+	}
+	var capErr *llm.ErrCapabilityUnsupported
+	if !errors.As(err, &capErr) {
+		t.Errorf("want *ErrCapabilityUnsupported, got %T: %v", err, err)
+	}
+}
