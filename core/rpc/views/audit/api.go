@@ -55,6 +55,8 @@ type AuditAPI interface {
 	SaveQuery(ctx context.Context, q eventlog.SavedQuery) error
 	// DeleteQuery removes a saved query by ID.
 	DeleteQuery(ctx context.Context, id string) error
+	// Export writes an audit export file and returns the absolute path.
+	Export(ctx context.Context, opts eventlog.ExportOptions) (string, error)
 	StartStream(ctx context.Context, filter Filter) (subscriptionID string, err error)
 	StopStream(ctx context.Context, subscriptionID string) error
 }

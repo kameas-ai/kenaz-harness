@@ -16,7 +16,7 @@ import CanvasHead from '@/shell/CanvasHead.vue';
 import EventStreamRow from '@/components/ui/EventStreamRow.vue';
 import { useHarnessClient, useEventLogStream } from '@/lib/useHarnessAPI';
 import { CATEGORIES, type Category } from '@/lib/categories';
-import type { AuditEntry, AuditFilter, AuditFilterQuery, SavedAuditQuery } from '@/lib/types';
+import type { AuditEntry, AuditFilter, AuditFilterQuery, SavedAuditQuery, AuditExportOptions } from '@/lib/types';
 
 const client = useHarnessClient();
 
@@ -58,6 +58,10 @@ const loading = ref(false);
 
 // Selection state (for WP08 bulk-purge; pre-wired here).
 const selectedIDs = ref<Set<string>>(new Set());
+
+// Export state.
+const exportFormat = ref<'csv' | 'jsonl' | 'pdf'>('jsonl');
+const exportToast = ref<string>('');
 
 async function refresh() {
   loading.value = true;
@@ -122,6 +126,21 @@ async function verifyVisible() {
   } catch {
     verifyResult.value = { ok: false, checked: 0 };
   }
+}
+
+async function exportAudit() {
+  exportToast.value = 'Exporting…';
+  const opts: AuditExportOptions = {
+    filter: richFilter.value,
+    format: exportFormat.value,
+  };
+  try {
+    const path = await client.audit.export(opts);
+    exportToast.value = `Exported to ${path}`;
+  } catch (e) {
+    exportToast.value = `Export failed: ${String(e)}`;
+  }
+  setTimeout(() => { exportToast.value = ''; }, 5000);
 }
 
 function clearFilters() {
@@ -312,6 +331,23 @@ onBeforeUnmount(() => {
         >
           Verify chain
         </button>
+        <!-- Export controls -->
+        <select
+          v-model="exportFormat"
+          class="bg-surface-2 text-ink rounded-sm border border-border px-2 py-1 text-[11px]"
+          aria-label="Export format"
+        >
+          <option value="jsonl">JSONL</option>
+          <option value="csv">CSV</option>
+          <option value="pdf">PDF</option>
+        </select>
+        <button
+          type="button"
+          class="px-2 py-1 text-[11px] font-ui rounded-sm border border-border text-ink-muted hover:text-ink"
+          @click="exportAudit"
+        >
+          Export
+        </button>
         <button
           type="button"
           class="px-2 py-1 text-[11px] font-ui rounded-sm border border-border text-ink-muted hover:text-ink"
@@ -352,6 +388,15 @@ onBeforeUnmount(() => {
             @click="deleteSavedQuery(sq.id)"
           >×</button>
         </span>
+      </div>
+
+      <!-- Export toast -->
+      <div
+        v-if="exportToast"
+        class="mt-1 text-[11px] font-ui text-ink-muted"
+        data-testid="export-toast"
+      >
+        {{ exportToast }}
       </div>
 
       <!-- Verify chain result pill -->

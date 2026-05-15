@@ -45,6 +45,7 @@ type API struct {
 	subs         map[string]chan any // subscription id -> typed channel
 	broker       Subscriber
 	savedQueries map[string]eventlog.SavedQuery // id -> query
+	backend      eventlog.Backend               // optional; used by Export
 }
 
 // Option configures NewAPI.
@@ -64,6 +65,13 @@ func WithMaxBuffer(n int) Option {
 // no-op) — useful for tests that don't exercise the broker path.
 func WithSubscriber(s Subscriber) Option {
 	return func(a *API) { a.broker = s }
+}
+
+// WithBackend injects an event-log Backend for operations that need
+// direct store access (e.g. Export). Optional — Export returns an
+// error if no backend is configured.
+func WithBackend(b eventlog.Backend) Option {
+	return func(a *API) { a.backend = b }
 }
 
 // NewAPI constructs the audit view-scoped API.
@@ -245,6 +253,20 @@ func (a *API) DeleteQuery(_ context.Context, id string) error {
 	defer a.mu.Unlock()
 	delete(a.savedQueries, id)
 	return nil
+}
+
+// Export writes an audit export file and returns its absolute path.
+// Requires a Backend to be configured via WithBackend; returns an error
+// otherwise. The export runs against the backend directly so it can
+// span more than the in-memory ring buffer.
+func (a *API) Export(ctx context.Context, opts eventlog.ExportOptions) (string, error) {
+	a.mu.RLock()
+	backend := a.backend
+	a.mu.RUnlock()
+	if backend == nil {
+		return "", fmt.Errorf("audit: Export requires a backend; use WithBackend option")
+	}
+	return eventlog.Export(ctx, backend, opts)
 }
 
 // ListEntries returns the buffered entries matching filter, newest

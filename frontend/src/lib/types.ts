@@ -631,6 +631,21 @@ export interface SavedAuditQuery {
   user_id?: string;
 }
 
+/**
+ * AuditExportOptions — wire shape for Audit_Export.
+ * Mirrors core/event/log.ExportOptions.
+ */
+export interface AuditExportOptions {
+  /** Root data directory; harness fills this in server-side. */
+  data_dir?: string;
+  filter: AuditFilterQuery;
+  /** "csv" | "jsonl" | "pdf" */
+  format: string;
+  harness_version?: string;
+  git_sha?: string;
+  chain_status?: string;
+}
+
 export interface ShellStatus {
   activeProvider: string;
   trustTier: string;

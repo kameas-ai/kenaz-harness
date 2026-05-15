@@ -41,6 +41,7 @@ import type {
   VerifyChainResult,
   AuditFilterQuery,
   SavedAuditQuery,
+  AuditExportOptions,
   ShellStatus,
   AppInfo,
   Settings,
@@ -364,6 +365,7 @@ interface WailsBindingsLike {
   Audit_ListSavedQueries(): Promise<SavedAuditQuery[]>;
   Audit_SaveQuery(q: SavedAuditQuery): Promise<void>;
   Audit_DeleteQuery(id: string): Promise<void>;
+  Audit_Export(opts: AuditExportOptions): Promise<string>;
   Audit_StartStream(filter: AuditFilter): Promise<string>;
   Audit_StopStream(id: string): Promise<void>;
 
@@ -1499,6 +1501,8 @@ export interface AuditClient {
   listSavedQueries(): Promise<SavedAuditQuery[]>;
   saveQuery(q: SavedAuditQuery): Promise<void>;
   deleteQuery(id: string): Promise<void>;
+  /** Export audit entries to a file. Returns the absolute file path. */
+  export(opts: AuditExportOptions): Promise<string>;
   startStream(filter: AuditFilter): Promise<string>;
   stopStream(id: string): Promise<void>;
 }
@@ -2788,6 +2792,7 @@ export function createHarnessClient(): HarnessClient {
       listSavedQueries: () => b().Audit_ListSavedQueries(),
       saveQuery: (q) => b().Audit_SaveQuery(q),
       deleteQuery: (id) => b().Audit_DeleteQuery(id),
+      export: (opts) => b().Audit_Export(opts),
       startStream: (filter) => b().Audit_StartStream(filter),
       stopStream: (id) => b().Audit_StopStream(id),
     },
@@ -3431,6 +3436,7 @@ export function createFakeHarnessClient(
       listSavedQueries: async () => [],
       saveQuery: noop,
       deleteQuery: noop,
+      export: async () => '/tmp/audit-export.csv',
       startStream: async () => 'fake-sub',
       stopStream: noop,
     },
