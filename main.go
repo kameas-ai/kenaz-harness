@@ -125,18 +125,28 @@ func main() {
 	}
 }
 
-// initSentryFromSettings reads the crash-reporting settings and calls
-// coresentry.Init. Errors are logged but never fatal — Sentry is optional
-// infrastructure and must never block startup.
+// initSentryFromSettings reads the crash-reporting settings, calls
+// coresentry.Init, and (when tier != Off) installs the SlogHandler bridge.
+// Errors are logged but never fatal — Sentry is optional infrastructure and
+// must never block startup.
+// wire-up point 1+2 for sentry (sentry-error-monitoring-01KX5R8G WP02/WP03).
 func initSentryFromSettings(api *rpc.Bindings) {
 	s, err := api.Settings_Get()
 	if err != nil {
 		logging.L().Warn("sentry.settings.read_error", "err", err.Error())
 		return
 	}
-	tier := coresentry.ResolveTier(s.CrashReportingTier, false /* fleet login not checked here */)
-	if err := coresentry.Init(tier, s.SentryDSN, Version, ""); err != nil {
-		logging.L().Warn("sentry.init.error", "err", err.Error())
+	tier := coresentry.ResolveTier(s.CrashReportingTier, false /* fleet login state TBD */)
+	if initErr := coresentry.Init(tier, s.SentryDSN, Version, ""); initErr != nil {
+		logging.L().Warn("sentry.init.error", "err", initErr.Error())
+	}
+	// wire-up point 2: chain the SlogHandler when tier != Off so ERROR-level
+	// slog lines are captured as redacted breadcrumbs.
+	if tier != coresentry.TierOff {
+		current := logging.FileHandler()
+		if current != nil {
+			logging.Replace(&coresentry.SlogHandler{Inner: current})
+		}
 	}
 }
 

@@ -35,8 +35,11 @@ func init() {
 		{`sk-proj-[A-Za-z0-9_-]{20,}`, `[REDACTED:openai-key]`},
 		// Generic OpenAI keys (sk-... not already matched by sk-ant or sk-proj)
 		{`sk-[A-Za-z0-9]{20,}`, `[REDACTED:openai-key]`},
-		// Bearer tokens
+		// Bearer tokens: "Bearer <token>" form in headers/args.
 		{`(?i)bearer\s+[A-Za-z0-9._~+/=-]{20,}`, `[REDACTED:bearer-token]`},
+		// Bare JWTs: three base64url segments separated by dots (eyJ... header).
+		// The eyJ prefix is the base64url encoding of '{"', highly characteristic.
+		{`eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*`, `[REDACTED:jwt-token]`},
 		// AWS access key IDs (AKIA..., ASIA..., AROA...)
 		{`(?:AKIA|ASIA|AROA|AGPA|AIPA|ANPA|ANVA|APKA)[A-Z0-9]{16}`, `[REDACTED:aws-key-id]`},
 		// AWS secret access keys (40-char base64url, often following "aws_secret" etc.)
