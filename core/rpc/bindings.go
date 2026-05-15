@@ -54,6 +54,7 @@ import (
 	elicitview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/elicit"
 	secretsview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/secrets"
 	planmodeview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/planmode"
+	sentryview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/sentry"
 	"github.com/sigil-tech/kaneaz-harness/core/logging"
 	"github.com/sigil-tech/kaneaz-harness/core/mcp/stdio"
 )
@@ -2426,4 +2427,27 @@ func (b *Bindings) Planmode_Discard(req planmodeview.DiscardRequest) (planmodevi
 // editor view.
 func (b *Bindings) Planmode_Edit(req planmodeview.EditRequest) (planmodeview.EditResponse, error) {
 	return b.api.Planmode_Edit(b.ctx(), req)
+}
+
+// ── Sentry crash-reporting bindings (sentry-error-monitoring-01KX5R8G WP05)
+
+// Sentry_GetLastFive returns the most-recent 5 (or fewer) captured events
+// from the on-disk Last-5 cache. Oldest first.
+func (b *Bindings) Sentry_GetLastFive() ([]sentryview.CachedEntry, error) {
+	return b.api.Sentry().GetLastFive(b.ctx())
+}
+
+// Sentry_GenerateLocalReport builds a redacted JSON crash report at
+// <DataDir>/crash-reports/YYYY-MM-DD-HHMMSS.json. Returns the path and
+// byte count. Suitable for users who have tier=Off but want to capture
+// a snapshot for manual support triage.
+func (b *Bindings) Sentry_GenerateLocalReport() (sentryview.LocalReportResult, error) {
+	return b.api.Sentry().GenerateLocalReport(b.ctx())
+}
+
+// Sentry_TestDSN parses a Sentry DSN string and issues a HEAD request to
+// the ingestion endpoint to verify reachability. Returns OK:true when the
+// server responds 2xx/4xx (i.e. is reachable and accepts the project).
+func (b *Bindings) Sentry_TestDSN(dsn string) (sentryview.TestDSNResult, error) {
+	return b.api.Sentry().TestDSN(b.ctx(), dsn)
 }

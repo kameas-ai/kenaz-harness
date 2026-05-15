@@ -46,6 +46,7 @@ import (
 	secretsview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/secrets"
 	coresecrets "github.com/sigil-tech/kaneaz-harness/core/secrets"
 	planmodeview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/planmode"
+	sentryview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/sentry"
 )
 
 // fakeHarnessAPI is a compile-time witness that the HarnessAPI interface
@@ -143,6 +144,10 @@ func (f *fakeHarnessAPI) Secrets() secretsview.SecretsAPI {
 
 func (f *fakeHarnessAPI) Agents() *agentsview.API {
 	return agentsview.New("")
+}
+
+func (f *fakeHarnessAPI) Sentry() sentryview.SentryAPI {
+	return &sentryview.Impl{DataDir: ""}
 }
 func (f *fakeHarnessAPI) Planmode_Approve(_ context.Context, _ planmodeview.ApproveRequest) (planmodeview.ApproveResponse, error) {
 	return planmodeview.ApproveResponse{}, nil

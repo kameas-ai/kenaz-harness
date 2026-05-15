@@ -98,6 +98,7 @@ import (
 	coreplanmode "github.com/sigil-tech/kaneaz-harness/core/tools/planmode"
 	secretsref "github.com/sigil-tech/kaneaz-harness/core/secrets/ref"
 	credstoreRefs "github.com/sigil-tech/kaneaz-harness/core/credstore/refs"
+	sentryview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/sentry"
 	"github.com/sigil-tech/kaneaz-harness/core/eval"
 	"github.com/sigil-tech/kaneaz-harness/core/session"
 	"github.com/sigil-tech/kaneaz-harness/core/storage"
@@ -245,6 +246,11 @@ type HarnessAPI interface {
 	// Sessions_StopCapture finalizes and closes the eval capture for
 	// sessionID. No-op when no active capture exists. (eval-harness-replay)
 	Sessions_StopCapture(ctx context.Context, sessionID string) error
+
+	// Sentry exposes the crash-reporting RPC surface (mission
+	// sentry-error-monitoring-01KX5R8G WP05). Provides GetLastFive,
+	// GenerateLocalReport, and TestDSN for the Settings → Privacy panel.
+	Sentry() sentryview.SentryAPI
 }
 
 // ShellStatus drives the Toolbar status pills + LegendBar live-rate
@@ -487,6 +493,10 @@ type API struct {
 	// test-chassis path, in which case Sessions_StartCapture / StopCapture
 	// return ErrEvalNotConfigured.
 	evalRecorder *eval.Recorder
+
+	// sentryAPI is the crash-reporting RPC surface (sentry-error-monitoring-
+	// 01KX5R8G WP05). Provides GetLastFive, GenerateLocalReport, TestDSN.
+	sentryAPI sentryview.SentryAPI
 }
 
 // Builtins returns the in-binary tool registry. Used by the chat-input
@@ -1378,6 +1388,13 @@ func New(c *core.Core) *API {
 			c.BuildVersion(),
 		)
 		logging.L().Info("eval.recorder.wired", "data_dir", c.DataDir())
+	}
+
+	// Wire Sentry view (sentry-error-monitoring-01KX5R8G WP05).
+	if c != nil && c.DataDir() != "" {
+		a.sentryAPI = &sentryview.Impl{DataDir: c.DataDir()}
+	} else {
+		a.sentryAPI = &sentryview.Impl{DataDir: ""}
 	}
 
 	a.bindings = NewBindings(a)
@@ -4841,6 +4858,10 @@ func (a *API) Agents_SaveProfile(ctx context.Context, profile agentsview.Profile
 func (a *API) Agents_DeleteProfile(ctx context.Context, id string) error {
 	return a.Agents().DeleteProfile(ctx, id)
 }
+
+// Sentry implements HarnessAPI. Returns the crash-reporting RPC surface.
+// (sentry-error-monitoring-01KX5R8G WP05)
+func (a *API) Sentry() sentryview.SentryAPI { return a.sentryAPI }
 
 // brokerPlanEmitter adapts a *StreamBroker to the planmodeview.EventEmitter
 // interface. The broker's Publish method broadcasts to all subscribers

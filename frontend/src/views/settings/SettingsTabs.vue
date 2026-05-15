@@ -85,6 +85,16 @@ const groups: ReadonlyArray<TabGroup> = [
       { to: '/policy', label: 'Policy', matchPrefix: '/policy' },
     ],
   },
+  {
+    label: 'Privacy',
+    tabs: [
+      {
+        to: '/settings?tab=crash-reporting',
+        label: 'Crash Reporting',
+        query: 'crash-reporting',
+      },
+    ],
+  },
 ];
 
 const activePath = computed(() => route?.path ?? '');
