@@ -407,6 +407,17 @@ function openProjectMenu(p: Project, event: MouseEvent) {
   projectMenu.value = { id: p.id, x: event.clientX, y: event.clientY };
 }
 
+/**
+ * Opens the project context menu positioned relative to a trigger element.
+ * Used by the ⋯ keyboard-accessible icon button (WP04 D-01 fix).
+ */
+function openProjectMenuFromElement(p: Project, el: EventTarget | null) {
+  const rect = (el instanceof HTMLElement ? el : null)?.getBoundingClientRect?.();
+  const x = rect ? rect.left : 0;
+  const y = rect ? rect.bottom : 0;
+  projectMenu.value = { id: p.id, x, y };
+}
+
 function closeProjectMenu() {
   projectMenu.value = null;
 }
@@ -661,6 +672,18 @@ async function onProjectDrop(evt: DragEvent, projectId: string) {
                 <Folder :size="13" />
                 <span class="truncate flex-1 hidden two-col:inline">{{ project.name }}</span>
                 <span class="text-[10px] text-ink-dim">{{ sessionsFor(project.id).length }}</span>
+              </button>
+              <!-- D-01 fix (WP04): keyboard-accessible ⋯ options button -->
+              <button
+                type="button"
+                class="shrink-0 p-1.5 rounded-sm text-ink-dim hover:text-ink hover:bg-surface-3 focus:outline-none focus:ring-1 focus:ring-accent"
+                :aria-label="`Project options for ${project.name}`"
+                aria-haspopup="menu"
+                :aria-expanded="projectMenu?.id === project.id ? 'true' : 'false'"
+                :data-testid="`project-options-${project.id}`"
+                @click.stop="openProjectMenuFromElement(project, $event.currentTarget)"
+              >
+                ⋯
               </button>
               <button
                 type="button"
@@ -996,18 +1019,22 @@ async function onProjectDrop(evt: DragEvent, projectId: string) {
       </div>
     </nav>
 
-    <!-- project context menu -->
+    <!-- project context menu (D-01 WP04: role=menu for keyboard accessibility) -->
     <div
       v-if="projectMenu"
+      role="menu"
+      :aria-label="`Options for project`"
       class="fixed z-50 rounded-sm border border-border-muted bg-surface-0 shadow-lg py-1"
       :style="{ left: projectMenu.x + 'px', top: projectMenu.y + 'px' }"
       data-testid="project-menu"
       @click.stop
+      @keydown.escape.stop="closeProjectMenu"
     >
       <button
         v-for="p in projectList.filter((x) => x.id === projectMenu?.id)"
         :key="p.id"
         type="button"
+        role="menuitem"
         class="block w-full px-3 py-1.5 text-left font-ui text-xs text-ink hover:bg-surface-2"
         :data-testid="`project-menu-rename-${p.id}`"
         @click="startProjectRename(p)"
@@ -1018,6 +1045,7 @@ async function onProjectDrop(evt: DragEvent, projectId: string) {
         v-for="p in projectList.filter((x) => x.id === projectMenu?.id)"
         :key="p.id + '-del'"
         type="button"
+        role="menuitem"
         class="block w-full px-3 py-1.5 text-left font-ui text-xs text-signal-danger hover:bg-surface-2"
         :data-testid="`project-menu-delete-${p.id}`"
         @click="startProjectDelete(p)"

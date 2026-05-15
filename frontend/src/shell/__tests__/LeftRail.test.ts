@@ -610,6 +610,127 @@ describe('LeftRail (WP05 auto-title rail distinction)', () => {
     expect(w.find('[data-testid="auto-titled-name-plain-s"]').exists()).toBe(false);
   });
 
+  // ── WP04 (a11y-backlog-cleanup-01NDFSEX07) — ⋯ icon-button keyboard affordance ──
+
+  it('renders ⋯ project-options button for each project (WP04)', async () => {
+    const projects: Project[] = [
+      {
+        id: 'pw4',
+        name: 'WP04 Project',
+        description: '',
+        createdAt: '',
+        updatedAt: '',
+      },
+    ];
+    const { w } = await mountRail({
+      sessions: {
+        list: async () => [],
+        get: async (id) => ({ id, name: id, createdAt: '', updatedAt: '' }),
+        create: async (name) => ({ id: 's', name, createdAt: '', updatedAt: '' }),
+        rename: async () => undefined,
+        delete: async () => undefined,
+        reorder: async () => undefined,
+        startStream: async () => 'sub',
+        stopStream: async () => undefined,
+        listMessages: async () => [],
+        appendMessage: async (id, role, content) => ({
+          id: 'm',
+          sessionId: id,
+          role,
+          content,
+          createdAt: '',
+        }),
+        saveDraft: async () => undefined,
+        loadDraft: async () => '',
+        setSystemPrompt: async () => undefined,
+        moveToProject: async () => undefined,
+      },
+      projects: {
+        list: async () => projects,
+        get: async () => projects[0]!,
+        create: async (name) => ({
+          id: 'np',
+          name,
+          description: '',
+          createdAt: '',
+          updatedAt: '',
+        }),
+        rename: async () => undefined,
+        updateDescription: async () => undefined,
+        remove: async () => undefined,
+        addSession: async () => undefined,
+        removeSession: async () => undefined,
+        listSessions: async () => [],
+      },
+    });
+    const optionsBtn = w.find('[data-testid="project-options-pw4"]');
+    expect(optionsBtn.exists()).toBe(true);
+    expect(optionsBtn.attributes('aria-label')).toBe('Project options for WP04 Project');
+    expect(optionsBtn.attributes('aria-haspopup')).toBe('menu');
+  });
+
+  it('⋯ button opens project menu on click (WP04)', async () => {
+    const projects: Project[] = [
+      {
+        id: 'pw4b',
+        name: 'WP04 Click',
+        description: '',
+        createdAt: '',
+        updatedAt: '',
+      },
+    ];
+    const { w } = await mountRail({
+      sessions: {
+        list: async () => [],
+        get: async (id) => ({ id, name: id, createdAt: '', updatedAt: '' }),
+        create: async (name) => ({ id: 's', name, createdAt: '', updatedAt: '' }),
+        rename: async () => undefined,
+        delete: async () => undefined,
+        reorder: async () => undefined,
+        startStream: async () => 'sub',
+        stopStream: async () => undefined,
+        listMessages: async () => [],
+        appendMessage: async (id, role, content) => ({
+          id: 'm',
+          sessionId: id,
+          role,
+          content,
+          createdAt: '',
+        }),
+        saveDraft: async () => undefined,
+        loadDraft: async () => '',
+        setSystemPrompt: async () => undefined,
+        moveToProject: async () => undefined,
+      },
+      projects: {
+        list: async () => projects,
+        get: async () => projects[0]!,
+        create: async (name) => ({
+          id: 'np',
+          name,
+          description: '',
+          createdAt: '',
+          updatedAt: '',
+        }),
+        rename: async () => undefined,
+        updateDescription: async () => undefined,
+        remove: async () => undefined,
+        addSession: async () => undefined,
+        removeSession: async () => undefined,
+        listSessions: async () => [],
+      },
+    });
+    // Menu hidden before click
+    expect(w.find('[data-testid="project-menu"]').exists()).toBe(false);
+    // Click the ⋯ button
+    await w.find('[data-testid="project-options-pw4b"]').trigger('click');
+    await nextTick();
+    // Menu appears
+    expect(w.find('[data-testid="project-menu"]').exists()).toBe(true);
+    expect(w.find('[data-testid="project-menu-rename-pw4b"]').exists()).toBe(true);
+    expect(w.find('[data-testid="project-menu-delete-pw4b"]').exists()).toBe(true);
+  });
+
   it('empty rename submission calls clearTitle rather than renameSession', async () => {
     const clearTitleMock = vi.fn().mockResolvedValue(undefined);
     const renameMock = vi.fn().mockResolvedValue(undefined);
