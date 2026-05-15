@@ -1,0 +1,78 @@
+# Custom OpenAI-compatible endpoint templates.
+#
+# Schema is intentionally additive: additional top-level keys in each entry
+# are ignored by older code, allowing local-runtimes and future missions to
+# extend entries without breaking existing consumers.
+#
+# Fields:
+#   id          - stable slug used in ProviderProfile.TemplateID
+#   name        - human-readable display name
+#   base_url    - default base URL (no trailing /); Resolve trims trailing /
+#   auth_scheme - one of: bearer | api-key-header | custom | none
+#   auth_header - header name for api-key-header scheme (optional; default: X-API-Key)
+#   glob        - host glob pattern for Resolve (path.Match semantics)
+#   notes       - optional free-text notes shown in the UI
+
+templates:
+  - id: vllm
+    name: vLLM
+    base_url: "http://localhost:8000/v1"
+    auth_scheme: none
+    glob: "localhost"
+    notes: "Local vLLM server; no auth required by default."
+
+  - id: together
+    name: Together AI
+    base_url: "https://api.together.xyz/v1"
+    auth_scheme: bearer
+    glob: "api.together.xyz"
+    notes: "Together AI hosted inference; bearer token in Authorization header."
+
+  - id: groq
+    name: Groq
+    base_url: "https://api.groq.com/openai/v1"
+    auth_scheme: bearer
+    glob: "api.groq.com"
+    notes: "Groq fast inference; streaming_usage not supported (post-stream parse fallback)."
+
+  - id: fireworks
+    name: Fireworks AI
+    base_url: "https://api.fireworks.ai/inference/v1"
+    auth_scheme: bearer
+    glob: "api.fireworks.ai"
+    notes: "Fireworks AI hosted inference."
+
+  - id: anyscale
+    name: Anyscale Endpoints
+    base_url: "https://api.endpoints.anyscale.com/v1"
+    auth_scheme: bearer
+    glob: "api.endpoints.anyscale.com"
+    notes: "Anyscale Endpoints for open-source models."
+
+  - id: deepseek
+    name: DeepSeek
+    base_url: "https://api.deepseek.com/v1"
+    auth_scheme: bearer
+    glob: "api.deepseek.com"
+    notes: "DeepSeek API."
+
+  - id: mistral
+    name: Mistral AI
+    base_url: "https://api.mistral.ai/v1"
+    auth_scheme: bearer
+    glob: "api.mistral.ai"
+    notes: "Mistral AI inference API."
+
+  - id: llamacpp
+    name: llama.cpp (llama-server)
+    base_url: "http://localhost:8080/v1"
+    auth_scheme: none
+    glob: "localhost"
+    notes: "Local llama.cpp llama-server; no auth by default."
+
+  - id: litellm
+    name: LiteLLM Proxy
+    base_url: "http://localhost:4000/v1"
+    auth_scheme: bearer
+    glob: "localhost"
+    notes: "LiteLLM proxy; token required when master_key is configured."
