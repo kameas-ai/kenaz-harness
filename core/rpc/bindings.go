@@ -43,6 +43,7 @@ import (
 	slashview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/slashcmd"
 	coreslashcmd "github.com/sigil-tech/kaneaz-harness/core/slashcmd"
 	llmcap "github.com/sigil-tech/kaneaz-harness/core/llm/capabilities"
+	"github.com/sigil-tech/kaneaz-harness/core/llm/gemini"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/tools"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/trust"
 	updateview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/update"
@@ -1752,6 +1753,12 @@ func (b *Bindings) Config_GetFlags() ([]FeatureFlagInfo, error) {
 			Enabled:     llmcap.MultimodalOutEnabled(),
 			Description: "Model-generated image output pipeline (DALL-E 3, gpt-image-1, Titan Image). When off, StreamGeneratedImage events are silently discarded regardless of the auto-capture dial.",
 			EnvVar:      "HARNESS_MULTIMODAL_OUT",
+		},
+		{
+			Name:        "google-gemini",
+			Enabled:     gemini.IsEnabled(),
+			Description: "Google Gemini adapter (AI Studio API key and Vertex AI service-account / ADC auth). Supports gemini-2.5-pro/flash with streaming, tool calling, vision, and reasoning.",
+			EnvVar:      gemini.EnvFlag,
 		},
 	}, nil
 }
