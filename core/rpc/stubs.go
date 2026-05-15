@@ -65,6 +65,15 @@ func (s *stubLLM) ResumeAfterKeyRotation(_ context.Context, _ string) error { re
 func (s *stubLLM) TestProviderKey(_ context.Context, _, _, _ string) (llm.TestProviderKeyResult, error) {
 	return llm.TestProviderKeyResult{}, errNotWired
 }
+func (s *stubLLM) ListDetectedLocalRuntimes(_ context.Context) ([]llm.LocalRuntimeInfo, error) {
+	return nil, errNotWired
+}
+func (s *stubLLM) AutoConfigureLocalRuntime(_ context.Context, _ string) (llm.LocalRuntimeConfigResult, error) {
+	return llm.LocalRuntimeConfigResult{}, errNotWired
+}
+func (s *stubLLM) RescanLocalRuntimes(_ context.Context) ([]llm.LocalRuntimeInfo, error) {
+	return nil, errNotWired
+}
 
 // ── a2a ────────────────────────────────────────────────────────────────
 

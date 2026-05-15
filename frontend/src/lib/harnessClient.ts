@@ -140,6 +140,8 @@ import type {
   RetrievalReport,
   ChunkProvenance,
   ExportResult,
+  LocalRuntimeInfo,
+  LocalRuntimeConfigResult,
 } from './types';
 
 /**
@@ -272,6 +274,11 @@ interface WailsBindingsLike {
     source: string,
   ): Promise<RotationResult>;
   LLM_ResumeAfterKeyRotation(resumeToken: string): Promise<void>;
+  LLM_ListDetectedLocalRuntimes(): Promise<LocalRuntimeInfo[]>;
+  LLM_AutoConfigureLocalRuntime(kind: string): Promise<LocalRuntimeConfigResult>;
+  LLM_RescanLocalRuntimes(): Promise<LocalRuntimeInfo[]>;
+  Settings_GetLocalRuntimeRAMOverrideGB(): Promise<number>;
+  Settings_SetLocalRuntimeRAMOverrideGB(gb: number): Promise<void>;
 
   MCP_ListServers(): Promise<MCPServer[]>;
   MCP_StartStream(id: string): Promise<string>;
@@ -1215,6 +1222,29 @@ export interface LLMConnectorClient {
     host: string,
     plaintextKey: string,
   ): Promise<import('./types').TestProviderKeyResult>;
+
+  /**
+   * listDetectedLocalRuntimes — returns the detection snapshot for all
+   * supported local runtimes (Ollama, llama-server, LM Studio, Jan, GPT4All).
+   * Cached for 5 min. Returns [] when HARNESS_LOCAL_RUNTIMES=0.
+   * (local-model-runtimes-01KQ8VMZ WP04)
+   */
+  listDetectedLocalRuntimes(): Promise<LocalRuntimeInfo[]>;
+
+  /**
+   * autoConfigureLocalRuntime — detects models from the running runtime
+   * and persists a personal provider profile with kind="custom-openai".
+   * Throws when the runtime is not running or the feature flag is off.
+   * (local-model-runtimes-01KQ8VMZ WP04)
+   */
+  autoConfigureLocalRuntime(kind: string): Promise<LocalRuntimeConfigResult>;
+
+  /**
+   * rescanLocalRuntimes — invalidates the detection cache and triggers a
+   * fresh scan. Returns the refreshed snapshot.
+   * (local-model-runtimes-01KQ8VMZ WP04)
+   */
+  rescanLocalRuntimes(): Promise<LocalRuntimeInfo[]>;
 }
 
 export interface MCPClient {
@@ -2587,6 +2617,10 @@ export function createHarnessClient(): HarnessClient {
         b().LLM_ResumeAfterKeyRotation(resumeToken),
       testProviderKey: (kind, host, plaintextKey) =>
         b().LLM_TestProviderKey(kind, host, plaintextKey),
+      listDetectedLocalRuntimes: () => b().LLM_ListDetectedLocalRuntimes(),
+      autoConfigureLocalRuntime: (kind) =>
+        b().LLM_AutoConfigureLocalRuntime(kind),
+      rescanLocalRuntimes: () => b().LLM_RescanLocalRuntimes(),
     },
     mcp: {
       listServers: () => b().MCP_ListServers(),
@@ -3143,6 +3177,13 @@ export function createFakeHarnessClient(
         model_count: 0,
         message: 'fake: not wired',
       }),
+      listDetectedLocalRuntimes: async () => [],
+      autoConfigureLocalRuntime: async (_kind) => ({
+        providerId: 'fake-local',
+        name: 'Fake Local',
+        models: [],
+      }),
+      rescanLocalRuntimes: async () => [],
     },
     mcp: {
       listServers: async () => [],

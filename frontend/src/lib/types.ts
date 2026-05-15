@@ -3457,3 +3457,45 @@ export interface SubagentBranch extends Branch {
   /** Budget time limit in seconds from the profile. */
   budgetTimeS?: number;
 }
+
+// ── Local runtime types (local-model-runtimes-01KQ8VMZ WP04/WP05/WP06) ──
+
+/**
+ * LocalRuntimeModel — a model offered by a locally-running LLM runtime.
+ * Mirrors core/rpc/views/llm.LocalRuntimeModel.
+ */
+export interface LocalRuntimeModel {
+  id: string;
+  displayName: string;
+  /** File size in bytes (0 when unknown). */
+  sizeBytes?: number;
+  /** Quantization label e.g. "Q4_K_M", "F16". Empty when unknown. */
+  quantLevel?: string;
+  /** Parameter count in billions (0 when unknown). */
+  paramCount?: number;
+}
+
+/**
+ * LocalRuntimeInfo — detection snapshot for one supported local runtime.
+ * Mirrors core/rpc/views/llm.LocalRuntimeInfo.
+ */
+export interface LocalRuntimeInfo {
+  kind: string;
+  name: string;
+  running: boolean;
+  installed: boolean;
+  defaultBaseURL: string;
+  port: number;
+  /** Models loaded in the runtime (populated after metadata fetch). */
+  models?: LocalRuntimeModel[];
+}
+
+/**
+ * LocalRuntimeConfigResult — result of AutoConfigureLocalRuntime.
+ * Mirrors core/rpc/views/llm.LocalRuntimeConfigResult.
+ */
+export interface LocalRuntimeConfigResult {
+  providerId: string;
+  name: string;
+  models: LocalRuntimeModel[];
+}

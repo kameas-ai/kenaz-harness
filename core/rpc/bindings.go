@@ -2275,6 +2275,65 @@ func (b *Bindings) Secrets_Revoke(locator string) error {
 	return b.api.Secrets().RevokeSecret(b.ctx(), locator)
 }
 
+// ── local runtime settings (local-model-runtimes-01KQ8VMZ WP07) ─────────
+
+// Settings_GetLocalRuntimeRAMOverrideGB returns the user-supplied RAM
+// override in GiB (0 = use detected system RAM).
+// (local-model-runtimes-01KQ8VMZ WP07)
+func (b *Bindings) Settings_GetLocalRuntimeRAMOverrideGB() (float64, error) {
+	if b.storeFn == nil {
+		return 0, nil
+	}
+	s, err := b.storeFn().LoadAll()
+	if err != nil {
+		return 0, err
+	}
+	return s.LocalRuntimeRAMOverrideGB, nil
+}
+
+// Settings_SetLocalRuntimeRAMOverrideGB persists the RAM override. Zero
+// disables the override (falls back to detected). Negative values are
+// clamped to zero before save.
+// (local-model-runtimes-01KQ8VMZ WP07)
+func (b *Bindings) Settings_SetLocalRuntimeRAMOverrideGB(gb float64) error {
+	if b.storeFn == nil {
+		return nil
+	}
+	s, err := b.storeFn().LoadAll()
+	if err != nil {
+		return err
+	}
+	if gb < 0 {
+		gb = 0
+	}
+	s.LocalRuntimeRAMOverrideGB = gb
+	return b.storeFn().SaveAll(s)
+}
+
+// LLM_ListDetectedLocalRuntimes returns the current local runtime detection
+// snapshot (cached for 5 min). Returns an empty slice when the feature flag
+// is off (HARNESS_LOCAL_RUNTIMES=0).
+// (local-model-runtimes-01KQ8VMZ WP04)
+func (b *Bindings) LLM_ListDetectedLocalRuntimes() ([]llm.LocalRuntimeInfo, error) {
+	return b.api.LLMConnector().ListDetectedLocalRuntimes(b.ctx())
+}
+
+// LLM_AutoConfigureLocalRuntime detects the running runtime for the given
+// kind and persists a personal provider profile using the custom-openai
+// adapter. Returns an error when the runtime is not running or the feature
+// flag is off.
+// (local-model-runtimes-01KQ8VMZ WP04)
+func (b *Bindings) LLM_AutoConfigureLocalRuntime(kind string) (llm.LocalRuntimeConfigResult, error) {
+	return b.api.LLMConnector().AutoConfigureLocalRuntime(b.ctx(), kind)
+}
+
+// LLM_RescanLocalRuntimes invalidates the detection cache and triggers a
+// fresh scan. Returns the fresh snapshot.
+// (local-model-runtimes-01KQ8VMZ WP04)
+func (b *Bindings) LLM_RescanLocalRuntimes() ([]llm.LocalRuntimeInfo, error) {
+	return b.api.LLMConnector().RescanLocalRuntimes(b.ctx())
+}
+
 // ── agents (branch-subagent-interactive-01KZNP3B, WP01) ──────────────────
 
 // Agents_ListProfiles returns summary entries for all known sub-agent profiles
