@@ -20,6 +20,7 @@
 
 import { computed, ref } from 'vue';
 import type { ReasoningConfig, ReasoningStyle } from '@/lib/types';
+import SessionTunePanel from '@/views/sessions/SessionTunePanel.vue';
 
 const props = defineProps<{
   /**
@@ -30,13 +31,27 @@ const props = defineProps<{
    */
   reasoningStyle: ReasoningStyle;
   /**
-   * The current reasoning configuration set via /effort. May be undefined
-   * when the user has not issued /effort yet for this session.
+   * The current reasoning configuration set via /effort or the tune panel.
+   * May be undefined when the user has not set it yet for this session.
    */
   config?: ReasoningConfig;
+  /**
+   * Session ID passed through to SessionTunePanel.
+   */
+  sessionId?: string;
+}>();
+
+const emit = defineEmits<{
+  /** Emitted when the user saves a new config via SessionTunePanel. */
+  'config-change': [config: ReasoningConfig | null];
 }>();
 
 const open = ref(false);
+
+function onTunePanelChange(newConfig: ReasoningConfig | null) {
+  emit('config-change', newConfig);
+  open.value = false;
+}
 
 /** True when the chip should be shown. */
 const visible = computed(() => props.reasoningStyle !== 'none');
@@ -111,14 +126,14 @@ function toggle() {
       {{ label }}
     </button>
 
-    <!-- Popover: inform user how to set effort via /effort command -->
+    <!-- Popover: SessionTunePanel for editing session-level knobs -->
     <div
       v-if="open"
-      class="absolute right-0 top-full z-40 mt-2 w-72 max-w-[90vw] rounded-md border border-border bg-surface-1 p-4 shadow-lg"
-      role="tooltip"
+      class="absolute right-0 top-full z-40 mt-2 w-80 max-w-[90vw] rounded-md border border-border bg-surface-1 p-4 shadow-lg"
+      role="dialog"
       data-testid="reasoning-control-popover"
     >
-      <div class="mb-2 flex items-center justify-between">
+      <div class="mb-3 flex items-center justify-between">
         <h3 class="font-ui text-[11px] uppercase tracking-[0.18em] text-ink-subtle">
           Reasoning effort
         </h3>
@@ -132,26 +147,13 @@ function toggle() {
         </button>
       </div>
 
-      <p class="text-xs text-ink-muted mb-2">
-        <template v-if="reasoningStyle === 'effort_string'">
-          Set reasoning effort with
-          <code class="font-mono bg-surface-2 rounded px-1">/effort low|medium|high|minimal</code>.
-        </template>
-        <template v-else-if="reasoningStyle === 'token_budget'">
-          Set reasoning token budget with
-          <code class="font-mono bg-surface-2 rounded px-1">/effort &lt;tokens&gt;</code>,
-          e.g. <code class="font-mono bg-surface-2 rounded px-1">/effort 16000</code>.
-        </template>
-        <template v-else>
-          Set reasoning effort with <code class="font-mono bg-surface-2 rounded px-1">/effort</code>.
-          Use a level (low|medium|high|minimal) or a token budget (integer).
-        </template>
-      </p>
-
-      <div v-if="isSet" class="mt-1 text-xs text-ink-subtle">
-        Current:
-        <span class="font-medium text-accent">{{ label }}</span>
-      </div>
+      <!-- Embed the tune panel inside the popover -->
+      <SessionTunePanel
+        :session-id="sessionId ?? ''"
+        :reasoning-style="reasoningStyle"
+        :knobs="config"
+        @change="onTunePanelChange"
+      />
       <div v-else class="mt-1 text-xs text-ink-subtle">
         No reasoning effort set for this session yet.
       </div>

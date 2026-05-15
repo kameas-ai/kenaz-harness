@@ -1450,6 +1450,8 @@ async function onNudgeNewSession() {
           <ReasoningControl
             :reasoning-style="activeReasoningStyle"
             :config="activeReasoningConfig"
+            :session-id="sessionId"
+            @config-change="(cfg) => { activeReasoningConfig = cfg ?? undefined }"
           />
         </div>
         <div
