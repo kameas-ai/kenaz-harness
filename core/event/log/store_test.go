@@ -120,10 +120,17 @@ func TestStoreCtor(t *testing.T) {
 
 func TestMigrationsList(t *testing.T) {
 	got := Migrations()
-	if len(got) != 4 {
-		t.Fatalf("expected 4 migrations, got %d", len(got))
+	if len(got) != 6 {
+		t.Fatalf("expected 6 migrations, got %d", len(got))
 	}
-	wantIDs := []string{"0001_events", "0002_event_chain_heads", "0003_redaction_rules", "0004_retention_config"}
+	wantIDs := []string{
+		"0001_events",
+		"0002_event_chain_heads",
+		"0003_redaction_rules",
+		"0004_retention_config",
+		"0005_schema_version",
+		"0006_saved_audit_queries",
+	}
 	for i, m := range got {
 		if m.ID != wantIDs[i] {
 			t.Fatalf("migration[%d] = %q want %q", i, m.ID, wantIDs[i])
