@@ -19,6 +19,7 @@ import { useHarnessClient } from '@/lib/harnessClientContext';
 import type { AddProviderInput, Provider, TestResult } from '@/lib/types';
 import AddProviderForm from './AddProviderForm.vue';
 import ProviderRow from './ProviderRow.vue';
+import LocalRuntimesSection from './LocalRuntimesSection.vue';
 
 const client = useHarnessClient();
 
@@ -176,6 +177,9 @@ const inlineTestClass = computed(() =>
     <SettingsTabs />
 
     <div class="px-6 py-4">
+      <!-- Local runtimes detection cards (absent when feature flag off) -->
+      <LocalRuntimesSection :on-provider-added="refresh" />
+
       <div
         v-if="errorMessage"
         class="mb-3 rounded-sm border border-signal-danger bg-surface-1 px-3 py-2 text-sm text-signal-danger"
