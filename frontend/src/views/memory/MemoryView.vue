@@ -552,6 +552,7 @@ defineExpose({ refresh });
           <input
             v-model="retrievalSessionID"
             type="text"
+            aria-label="Session ID for retrieval"
             placeholder="Session ID (leave empty for active session)"
             class="flex-1 rounded-sm border border-border-muted bg-surface-0 px-3 py-1.5 font-mono text-[12px] text-ink placeholder:text-ink-dim focus:border-accent focus:outline-none"
             data-testid="memory-retrieval-session-input"
@@ -685,6 +686,7 @@ defineExpose({ refresh });
           <input
             v-model="probeQuery"
             type="text"
+            aria-label="Memory probe query"
             placeholder="Enter probe query…"
             class="flex-1 rounded-sm border border-border-muted bg-surface-0 px-3 py-1.5 font-mono text-[12px] text-ink placeholder:text-ink-dim focus:border-accent focus:outline-none"
             data-testid="memory-probe-input"

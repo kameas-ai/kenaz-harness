@@ -119,6 +119,7 @@ defineExpose({ refresh });
         <input
           v-model="filterText"
           type="search"
+          aria-label="Filter hook journal entries"
           placeholder="Filter by boundary, source, hash…"
           class="ml-auto px-2 py-1 rounded-sm border border-border-muted bg-surface-1 font-ui text-[12px] text-ink placeholder:text-ink-subtle"
           data-testid="hook-journal-filter"

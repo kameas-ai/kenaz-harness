@@ -53,10 +53,13 @@ function pick(name: string) {
     data-testid="slash-suggestions"
     role="listbox"
     aria-label="Slash command suggestions"
+    :aria-activedescendant="activeIndex >= 0 ? `slash-opt-${activeIndex}` : undefined"
   >
     <li
       v-for="(cmd, i) in filtered"
       :key="cmd.name"
+      :id="`slash-opt-${i}`"
+      tabindex="-1"
       class="px-3 py-1.5 cursor-pointer flex items-baseline gap-2"
       :class="i === activeIndex ? 'bg-surface-2 text-accent' : 'text-ink hover:bg-surface-2'"
       :data-testid="`slash-option-${i}`"

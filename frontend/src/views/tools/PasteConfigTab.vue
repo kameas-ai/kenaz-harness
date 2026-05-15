@@ -272,6 +272,7 @@ async function doImport() {
             <input
               v-if="entry.status === 'kept' || entry.status === 'collision_warning'"
               type="checkbox"
+              :aria-label="`Select entry ${entry.id}`"
               class="accent-accent w-3.5 h-3.5"
               :checked="selectedIds.has(entry.id)"
               :data-testid="`paste-entry-check-${entry.id}`"
