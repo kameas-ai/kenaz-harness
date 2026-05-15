@@ -386,3 +386,19 @@ func (m *MemoryBackend) DeleteForTest(eventID string) error {
 	delete(m.rows, eventID)
 	return nil
 }
+
+// DeleteRows removes rows by event_id. Implements SweepableBackend.
+// This method bypasses the append-only invariant intentionally — it is
+// the authorised path for retention sweeps and bulk purges which have
+// already archived the rows.
+func (m *MemoryBackend) DeleteRows(ctx context.Context, eventIDs []string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, id := range eventIDs {
+		delete(m.rows, id)
+	}
+	return nil
+}

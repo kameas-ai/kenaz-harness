@@ -83,6 +83,8 @@ const groups: ReadonlyArray<TabGroup> = [
     tabs: [
       { to: '/permissions/bash', label: 'Permissions', matchPrefix: '/permissions' },
       { to: '/policy', label: 'Policy', matchPrefix: '/policy' },
+      // audit-log-enhancement-01KX5R8F WP07
+      { to: '/settings?tab=audit', label: 'Audit', query: 'audit' },
     ],
   },
 ];

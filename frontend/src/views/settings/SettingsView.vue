@@ -27,6 +27,7 @@ import ScheduledChatsPanel from '@/views/settings/scheduledchat/ScheduledChatsPa
 import ModelAccessibleSecretsPanel from '@/views/settings/ModelAccessibleSecretsPanel.vue';
 import TasksPanel from '@/views/settings/TasksPanel.vue';
 import LLMRoutingPanel from '@/views/settings/LLMRoutingPanel.vue';
+import AuditSettingsPanel from '@/views/settings/AuditSettingsPanel.vue';
 import LongSessionNudgeSettings from '@/components/settings/LongSessionNudgeSettings.vue';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
 import { debouncedSave } from '@/lib/settings';
@@ -125,6 +126,13 @@ const showTasksTab = computed<boolean>(() => {
 const showLLMRoutingTab = computed<boolean>(() => {
   const v = route?.query?.tab;
   return typeof v === 'string' && v === 'llm-routing';
+});
+
+// audit-log-enhancement-01KX5R8F WP07 — Audit retention sub-tab.
+// Disambiguates via ?tab=audit. Mount switch is in <template> below.
+const showAuditTab = computed<boolean>(() => {
+  const v = route?.query?.tab;
+  return typeof v === 'string' && v === 'audit';
 });
 
 const settings = ref<Settings>({
@@ -1015,6 +1023,15 @@ onMounted(() => {
       data-testid="settings-llm-routing-pane"
     >
       <LLMRoutingPanel />
+    </div>
+
+    <!-- audit-log-enhancement-01KX5R8F WP07 — Audit retention sub-tab. -->
+    <div
+      v-else-if="showAuditTab"
+      class="px-6 py-4 max-w-3xl"
+      data-testid="settings-audit-pane"
+    >
+      <AuditSettingsPanel />
     </div>
 
     <div

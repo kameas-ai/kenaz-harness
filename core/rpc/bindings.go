@@ -1301,6 +1301,15 @@ func (b *Bindings) Settings_SetAutoResumeOnKeyRotation(enabled bool) error {
 	return b.storeFn().SaveAll(s)
 }
 
+// ── audit settings (audit-log-enhancement-01KX5R8F WP07) ────────────────────
+
+func (b *Bindings) Settings_GetAuditSettings() (settings.AuditSettings, error) {
+	return b.api.Settings().GetAuditSettings(b.ctx())
+}
+func (b *Bindings) Settings_SetAuditSettings(s settings.AuditSettings) error {
+	return b.api.Settings().SetAuditSettings(b.ctx(), s)
+}
+
 // ── memory ─────────────────────────────────────────────────────────────
 
 func (b *Bindings) Memory_ListChunks(filter memoryview.ListFilter) ([]memoryview.Chunk, error) {

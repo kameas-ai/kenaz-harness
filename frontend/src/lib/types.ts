@@ -632,6 +632,17 @@ export interface SavedAuditQuery {
 }
 
 /**
+ * AuditSettings — wire shape for Settings_GetAuditSettings / SetAuditSettings.
+ * Mirrors core/rpc/views/settings.AuditSettings.
+ */
+export interface AuditSettings {
+  /** "keep_forever" | "delete_after_window" | "archive_after_window" */
+  strategy: string;
+  /** Retention window in days. Only used for non-keep_forever strategies. */
+  window_days: number;
+}
+
+/**
  * AuditExportOptions — wire shape for Audit_Export.
  * Mirrors core/event/log.ExportOptions.
  */

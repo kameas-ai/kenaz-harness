@@ -1,0 +1,129 @@
+package log
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+)
+
+// buildAgedRows inserts n rows into a MemoryBackend, all older than window.
+// Returns the backend and the inserted rows.
+func buildAgedRows(t *testing.T, n int, prefix string, age time.Duration) *MemoryBackend {
+	t.Helper()
+	b := NewMemoryBackend()
+	ctx := context.Background()
+	cutoff := time.Now().Add(-age)
+	for i := 0; i < n; i++ {
+		r := Row{
+			EventID:   fmt.Sprintf("%s%020d", prefix, i),
+			SessionID: fmt.Sprintf("%s-sess", prefix),
+			EmitterID: "test/retention",
+			Kind:      "test.retain",
+			// Place all rows before the cutoff.
+			EmittedAt: cutoff.Add(-time.Duration(n-i) * time.Second),
+			Payload:   []byte(fmt.Sprintf(`{"seq":%d}`, i)),
+			PrevHash:  [32]byte{},
+		}
+		_ = b.AppendRow(ctx, r, [32]byte{})
+	}
+	return b
+}
+
+func TestRetentionSweep_KeepForever_NoOp(t *testing.T) {
+	b := buildAgedRows(t, 5, "01RK", 48*time.Hour)
+	res, err := RetentionSweep(context.Background(), b, t.TempDir(), RetentionKeepForever, 24*time.Hour)
+	if err != nil {
+		t.Fatalf("RetentionSweep keep_forever: %v", err)
+	}
+	if res.Purged != 0 {
+		t.Errorf("keep_forever should purge 0 rows, got %d", res.Purged)
+	}
+	// Rows should still be present.
+	rows, _ := b.SelectByTimeRange(context.Background(), time.Time{}, time.Time{}, "", 0, false)
+	if len(rows) != 5 {
+		t.Errorf("keep_forever should leave 5 rows, got %d", len(rows))
+	}
+}
+
+func TestRetentionSweep_DeleteAfterWindow(t *testing.T) {
+	b := buildAgedRows(t, 5, "01RD", 48*time.Hour)
+	res, err := RetentionSweep(context.Background(), b, t.TempDir(), RetentionDeleteAfterWindow, 24*time.Hour)
+	if err != nil {
+		t.Fatalf("RetentionSweep delete_after_window: %v", err)
+	}
+	if res.Purged != 5 {
+		t.Errorf("expected 5 rows purged, got %d", res.Purged)
+	}
+	rows, _ := b.SelectByTimeRange(context.Background(), time.Time{}, time.Time{}, "", 0, false)
+	if len(rows) != 0 {
+		t.Errorf("expected 0 rows after delete, got %d", len(rows))
+	}
+}
+
+func TestRetentionSweep_ArchiveAfterWindow_WritesJSONL(t *testing.T) {
+	b := buildAgedRows(t, 3, "01RA", 48*time.Hour)
+	dir := t.TempDir()
+	res, err := RetentionSweep(context.Background(), b, dir, RetentionArchiveAfterWindow, 24*time.Hour)
+	if err != nil {
+		t.Fatalf("RetentionSweep archive_after_window: %v", err)
+	}
+	if res.Archived != 3 {
+		t.Errorf("expected 3 archived, got %d", res.Archived)
+	}
+	if res.Purged != 3 {
+		t.Errorf("expected 3 purged, got %d", res.Purged)
+	}
+	if res.ArchivePath == "" {
+		t.Fatal("expected non-empty ArchivePath")
+	}
+	// Verify JSONL file exists and has 3 lines.
+	data, err := os.ReadFile(res.ArchivePath)
+	if err != nil {
+		t.Fatalf("ReadFile archive: %v", err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+	if len(lines) != 3 {
+		t.Errorf("expected 3 JSONL lines, got %d", len(lines))
+	}
+}
+
+func TestRetentionSweep_ArchivePath_InAuditArchiveDir(t *testing.T) {
+	b := buildAgedRows(t, 1, "01RP", 48*time.Hour)
+	dir := t.TempDir()
+	res, err := RetentionSweep(context.Background(), b, dir, RetentionArchiveAfterWindow, 24*time.Hour)
+	if err != nil {
+		t.Fatalf("RetentionSweep: %v", err)
+	}
+	expectedDir := filepath.Join(dir, "audit-archive")
+	if filepath.Dir(res.ArchivePath) != expectedDir {
+		t.Errorf("archive path %q not in audit-archive dir %q", res.ArchivePath, expectedDir)
+	}
+}
+
+func TestRetentionSweep_NoOldRows_DoesNothing(t *testing.T) {
+	b := NewMemoryBackend()
+	ctx := context.Background()
+	// Insert a "new" row (won't be old enough).
+	r := Row{
+		EventID:   "01RN000000000000000000000001",
+		SessionID: "sess-new",
+		EmitterID: "test/retention",
+		Kind:      "test.retain",
+		EmittedAt: time.Now(), // fresh
+		Payload:   []byte(`{}`),
+		PrevHash:  [32]byte{},
+	}
+	_ = b.AppendRow(ctx, r, [32]byte{})
+
+	res, err := RetentionSweep(ctx, b, t.TempDir(), RetentionDeleteAfterWindow, 24*time.Hour)
+	if err != nil {
+		t.Fatalf("RetentionSweep no-old: %v", err)
+	}
+	if res.Purged != 0 {
+		t.Errorf("expected 0 purged for fresh row, got %d", res.Purged)
+	}
+}

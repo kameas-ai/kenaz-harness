@@ -712,6 +712,10 @@ interface WailsBindingsLike {
   Agents_LoadProfile(id: string): Promise<import('./types').AgentProfile>;
   Agents_SaveProfile(profile: import('./types').AgentProfile): Promise<void>;
   Agents_DeleteProfile(id: string): Promise<void>;
+
+  // ── audit-log-enhancement-01KX5R8F WP07 — retention settings ──────────
+  Settings_GetAuditSettings(): Promise<import('./types').AuditSettings>;
+  Settings_SetAuditSettings(s: import('./types').AuditSettings): Promise<void>;
 }
 
 
@@ -1750,6 +1754,12 @@ export interface SettingsClient {
   getAutoTitleEnabled(): Promise<boolean>;
   /** Persist the auto-title opt-in flag. */
   setAutoTitleEnabled(enabled: boolean): Promise<void>;
+
+  // ── audit-log-enhancement-01KX5R8F WP07 — retention settings ──────────
+  /** Read the audit-log retention strategy and window. */
+  getAuditSettings(): Promise<import('./types').AuditSettings>;
+  /** Persist the audit-log retention strategy and window. */
+  setAuditSettings(s: import('./types').AuditSettings): Promise<void>;
 }
 
 /**
@@ -2874,6 +2884,9 @@ export function createHarnessClient(): HarnessClient {
       getArtifactPreview: () => b().Settings_GetArtifactPreview(),
       getAutoTitleEnabled: () => b().Settings_GetAutoTitleEnabled(),
       setAutoTitleEnabled: (enabled) => b().Settings_SetAutoTitleEnabled(enabled),
+      // audit-log-enhancement-01KX5R8F WP07
+      getAuditSettings: () => b().Settings_GetAuditSettings(),
+      setAuditSettings: (s) => b().Settings_SetAuditSettings(s),
     },
     permissions: {
       listGrants: (family) =>
@@ -3516,6 +3529,9 @@ export function createFakeHarnessClient(
       }),
       getAutoTitleEnabled: async () => true,
       setAutoTitleEnabled: noop,
+      // audit-log-enhancement-01KX5R8F WP07
+      getAuditSettings: async () => ({ strategy: 'keep_forever', windowDays: 90 }),
+      setAuditSettings: noop,
     },
     permissions: {
       listGrants: async () => [],
