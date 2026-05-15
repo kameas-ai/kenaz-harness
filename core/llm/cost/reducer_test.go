@@ -39,6 +39,28 @@ func TestReducer_AnthropicSonnetCost(t *testing.T) {
 	}
 }
 
+// TestReducer_AzureOpenAI_Gpt4o asserts that azure-openai gpt-4o usage
+// derives the same dollar cost as equivalent OpenAI usage.
+// (azure-openai-adapter-01KQ8VMZ WP06)
+func TestReducer_AzureOpenAI_Gpt4o(t *testing.T) {
+	tab, err := LoadDefault()
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := New(tab)
+	usage := llm.Usage{InputTokens: 1_000_000, OutputTokens: 1_000_000}
+
+	azureCost := r.Derive(usage, "azure-openai", "gpt-4o")
+	openaiCost := r.Derive(usage, "openai", "gpt-4o")
+
+	if azureCost.Indeterminate {
+		t.Fatal("azure-openai gpt-4o cost is indeterminate — check starter_table.yaml")
+	}
+	if math.Abs(azureCost.Total-openaiCost.Total) > 1e-6 {
+		t.Errorf("azure-openai cost %v != openai cost %v for same usage", azureCost.Total, openaiCost.Total)
+	}
+}
+
 func TestReducer_UnknownModelIsIndeterminate(t *testing.T) {
 	tab, err := LoadDefault()
 	if err != nil {
