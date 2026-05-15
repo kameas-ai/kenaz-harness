@@ -126,6 +126,19 @@ type ProviderProfile struct {
 	CapabilityHints map[Capability]bool `json:"capability_hints,omitempty" yaml:"capabilities,omitempty"`
 	Defaults        map[string]any      `json:"defaults,omitempty" yaml:"defaults,omitempty"`
 	Retry           *RetryPolicy        `json:"retry,omitempty"  yaml:"retry,omitempty"`
+	// TemplateID is the optional custom-openai template slug
+	// (e.g. "groq", "vllm"). Set by the UI when the user picks a template
+	// during AddProvider. Ignored for non-custom-openai kinds.
+	// (custom-openai-compatible-endpoint-01KQ8VN0 WP02)
+	TemplateID string `json:"template_id,omitempty" yaml:"template_id,omitempty"`
+	// AuthScheme overrides the template's default auth scheme for
+	// custom-openai profiles. One of: bearer | api-key-header | custom | none.
+	// (custom-openai-compatible-endpoint-01KQ8VN0 WP02)
+	AuthScheme string `json:"auth_scheme,omitempty" yaml:"auth_scheme,omitempty"`
+	// LastProbedAt is the Unix timestamp (seconds) of the most recent
+	// successful capability probe. Zero means never probed.
+	// (custom-openai-compatible-endpoint-01KQ8VN0 WP02)
+	LastProbedAt int64 `json:"last_probed_at,omitempty" yaml:"last_probed_at,omitempty"`
 }
 
 // AvailableModels returns the resolved model list. Falls back to
