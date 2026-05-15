@@ -16,11 +16,13 @@ package audit
 import (
 	"context"
 	"encoding/hex"
+	"fmt"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/sigil-tech/kaneaz-harness/core/event"
+	eventlog "github.com/sigil-tech/kaneaz-harness/core/event/log"
 )
 
 // Subscriber is the broker contract used by API.StartStream. Decoupled
@@ -37,11 +39,12 @@ type Subscriber interface {
 //
 // Safe for concurrent use.
 type API struct {
-	mu        sync.RWMutex
-	entries   []Entry          // newest-last; bounded by maxBuffer.
-	maxBuffer int              // cap for the in-memory ring.
-	subs      map[string]chan any // subscription id -> typed channel
-	broker    Subscriber
+	mu           sync.RWMutex
+	entries      []Entry            // newest-last; bounded by maxBuffer.
+	maxBuffer    int                // cap for the in-memory ring.
+	subs         map[string]chan any // subscription id -> typed channel
+	broker       Subscriber
+	savedQueries map[string]eventlog.SavedQuery // id -> query
 }
 
 // Option configures NewAPI.
@@ -66,9 +69,10 @@ func WithSubscriber(s Subscriber) Option {
 // NewAPI constructs the audit view-scoped API.
 func NewAPI(opts ...Option) *API {
 	a := &API{
-		entries:   make([]Entry, 0, 128),
-		maxBuffer: 1024,
-		subs:      make(map[string]chan any),
+		entries:      make([]Entry, 0, 128),
+		maxBuffer:    1024,
+		subs:         make(map[string]chan any),
+		savedQueries: make(map[string]eventlog.SavedQuery),
 	}
 	for _, opt := range opts {
 		opt(a)
@@ -160,6 +164,87 @@ func categoryForKind(k event.Kind) string {
 		return "KEYSTROKE"
 	}
 	return "STORAGE"
+}
+
+// Filter applies a rich FilterQuery to the in-memory ring buffer and
+// returns matching entries. The full SQL implementation will delegate
+// to eventlog.FilterQuery.ApplyToMemoryBackend once the libSQL adapter
+// lands; until then we filter the entry ring directly.
+func (a *API) Filter(_ context.Context, q eventlog.FilterQuery) ([]Entry, error) {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+
+	limit := q.Limit
+	if limit <= 0 {
+		limit = 1000
+	}
+
+	out := make([]Entry, 0, len(a.entries))
+	for i := len(a.entries) - 1; i >= 0; i-- {
+		e := a.entries[i]
+		// Verbose filter.
+		if !q.Verbose && strings.HasPrefix(e.Subject, "verbose.") {
+			continue
+		}
+		// Kind filter via Subject (Entry.Subject == kind string).
+		if len(q.Kinds) > 0 {
+			matched := false
+			for _, k := range q.Kinds {
+				if e.Subject == k {
+					matched = true
+					break
+				}
+			}
+			if !matched {
+				continue
+			}
+		}
+		// Free-text filter on Subject.
+		if q.FreeText != "" {
+			if !strings.Contains(strings.ToLower(e.Subject), strings.ToLower(q.FreeText)) {
+				continue
+			}
+		}
+		out = append(out, e)
+		if len(out) >= limit {
+			break
+		}
+	}
+	return out, nil
+}
+
+// ListSavedQueries returns all persisted saved queries (in-memory store).
+func (a *API) ListSavedQueries(_ context.Context) ([]eventlog.SavedQuery, error) {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	out := make([]eventlog.SavedQuery, 0, len(a.savedQueries))
+	for _, q := range a.savedQueries {
+		out = append(out, q)
+	}
+	return out, nil
+}
+
+// SaveQuery persists a named query. If a query with the same ID already
+// exists it is overwritten.
+func (a *API) SaveQuery(_ context.Context, q eventlog.SavedQuery) error {
+	if q.ID == "" {
+		return fmt.Errorf("audit: SaveQuery requires non-empty ID")
+	}
+	if q.Name == "" {
+		return fmt.Errorf("audit: SaveQuery requires non-empty Name")
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.savedQueries[q.ID] = q
+	return nil
+}
+
+// DeleteQuery removes a saved query by ID. No-op if the ID is unknown.
+func (a *API) DeleteQuery(_ context.Context, id string) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	delete(a.savedQueries, id)
+	return nil
 }
 
 // ListEntries returns the buffered entries matching filter, newest

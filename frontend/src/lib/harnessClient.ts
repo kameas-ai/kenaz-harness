@@ -39,6 +39,8 @@ import type {
   AuditEntry,
   AuditFilter,
   VerifyChainResult,
+  AuditFilterQuery,
+  SavedAuditQuery,
   ShellStatus,
   AppInfo,
   Settings,
@@ -358,6 +360,10 @@ interface WailsBindingsLike {
   Audit_ListEntries(filter: AuditFilter): Promise<AuditEntry[]>;
   Audit_VerifyEntry(id: string): Promise<boolean>;
   Audit_VerifyChain(fromID: string, toID: string): Promise<VerifyChainResult>;
+  Audit_Filter(query: AuditFilterQuery): Promise<AuditEntry[]>;
+  Audit_ListSavedQueries(): Promise<SavedAuditQuery[]>;
+  Audit_SaveQuery(q: SavedAuditQuery): Promise<void>;
+  Audit_DeleteQuery(id: string): Promise<void>;
   Audit_StartStream(filter: AuditFilter): Promise<string>;
   Audit_StopStream(id: string): Promise<void>;
 
@@ -1489,6 +1495,10 @@ export interface AuditClient {
   listEntries(filter: AuditFilter): Promise<AuditEntry[]>;
   verifyEntry(id: string): Promise<boolean>;
   verifyChain(fromID: string, toID: string): Promise<VerifyChainResult>;
+  filter(query: AuditFilterQuery): Promise<AuditEntry[]>;
+  listSavedQueries(): Promise<SavedAuditQuery[]>;
+  saveQuery(q: SavedAuditQuery): Promise<void>;
+  deleteQuery(id: string): Promise<void>;
   startStream(filter: AuditFilter): Promise<string>;
   stopStream(id: string): Promise<void>;
 }
@@ -2774,6 +2784,10 @@ export function createHarnessClient(): HarnessClient {
       listEntries: (filter) => b().Audit_ListEntries(filter),
       verifyEntry: (id) => b().Audit_VerifyEntry(id),
       verifyChain: (fromID, toID) => b().Audit_VerifyChain(fromID, toID),
+      filter: (query) => b().Audit_Filter(query),
+      listSavedQueries: () => b().Audit_ListSavedQueries(),
+      saveQuery: (q) => b().Audit_SaveQuery(q),
+      deleteQuery: (id) => b().Audit_DeleteQuery(id),
       startStream: (filter) => b().Audit_StartStream(filter),
       stopStream: (id) => b().Audit_StopStream(id),
     },
@@ -3413,6 +3427,10 @@ export function createFakeHarnessClient(
       listEntries: async () => [],
       verifyEntry: async () => true,
       verifyChain: async () => ({ verified: true, rows_checked: 0 }),
+      filter: async () => [],
+      listSavedQueries: async () => [],
+      saveQuery: noop,
+      deleteQuery: noop,
       startStream: async () => 'fake-sub',
       stopStream: noop,
     },

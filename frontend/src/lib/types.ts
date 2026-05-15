@@ -602,6 +602,35 @@ export interface VerifyChainResult {
   broken_at_id?: string;
 }
 
+/**
+ * AuditFilterQuery — rich structured filter for audit log queries.
+ * Mirrors core/event/log.FilterQuery.
+ */
+export interface AuditFilterQuery {
+  since?: string;
+  until?: string;
+  actor_ids?: string[];
+  kinds?: string[];
+  resources?: string[];
+  outcomes?: string[];
+  free_text?: string;
+  verbose?: boolean;
+  limit?: number;
+  offset?: number;
+}
+
+/**
+ * SavedAuditQuery — a persisted named audit filter query.
+ * Mirrors core/event/log.SavedQuery.
+ */
+export interface SavedAuditQuery {
+  id: string;
+  name: string;
+  query: AuditFilterQuery;
+  created_at: string;
+  user_id?: string;
+}
+
 export interface ShellStatus {
   activeProvider: string;
   trustTier: string;

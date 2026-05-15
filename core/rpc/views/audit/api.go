@@ -2,7 +2,11 @@
 // the audit-log viewer (downstream mission). Backed by event-log Reader.
 package audit
 
-import "context"
+import (
+	"context"
+
+	eventlog "github.com/sigil-tech/kaneaz-harness/core/event/log"
+)
 
 // Entry is a redacted audit log entry. Redaction is applied server-side
 // by the event-log mission's pipeline (privacy CI invariant #2 forbids
@@ -43,6 +47,14 @@ type AuditAPI interface {
 	// [fromID, toID] and returns whether the chain is intact.
 	// Empty fromID / toID means "from first / to last".
 	VerifyChain(ctx context.Context, fromID, toID string) (VerifyChainResult, error)
+	// Filter applies a rich structured filter and returns matching entries.
+	Filter(ctx context.Context, query eventlog.FilterQuery) ([]Entry, error)
+	// ListSavedQueries returns all saved queries for the calling user.
+	ListSavedQueries(ctx context.Context) ([]eventlog.SavedQuery, error)
+	// SaveQuery persists a named query.
+	SaveQuery(ctx context.Context, q eventlog.SavedQuery) error
+	// DeleteQuery removes a saved query by ID.
+	DeleteQuery(ctx context.Context, id string) error
 	StartStream(ctx context.Context, filter Filter) (subscriptionID string, err error)
 	StopStream(ctx context.Context, subscriptionID string) error
 }
