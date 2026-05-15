@@ -20,6 +20,7 @@
 import { computed, reactive, ref, watch } from 'vue';
 import type {
   AddProviderInput,
+  GeminiEndpointKind,
   ModelInfo,
   ProviderKind,
 } from '@/lib/types';
@@ -58,6 +59,7 @@ const KINDS: { id: ProviderKind; label: string }[] = [
   { id: 'openrouter', label: 'OpenRouter' },
   { id: 'bedrock', label: 'AWS Bedrock' },
   { id: 'ollama', label: 'Ollama (local)' },
+  { id: 'gemini', label: 'Google Gemini' },
 ];
 
 // AWS Bedrock regions where Bedrock is generally available. Source:
@@ -84,6 +86,7 @@ const BEDROCK_REGIONS: { id: string; label: string }[] = [
 ];
 
 type BedrockAuth = 'api_key' | 'aws_profile';
+type GeminiVertexAuth = 'adc' | 'service_account_paste' | 'service_account_path';
 
 interface FormState {
   kind: ProviderKind;
@@ -99,6 +102,12 @@ interface FormState {
   // (bedrock, ollama). One id per line OR comma-separated.
   manualModelIds: string;
   customId: string;
+  // Gemini-specific fields
+  geminiEndpointKind: GeminiEndpointKind;
+  geminiVertexAuth: GeminiVertexAuth;
+  geminiProject: string;
+  geminiRegion: string;
+  geminiSAPath: string;
 }
 
 const form = reactive<FormState>({
@@ -110,6 +119,11 @@ const form = reactive<FormState>({
   selectedModelIds: [],
   manualModelIds: '',
   customId: '',
+  geminiEndpointKind: 'ai_studio',
+  geminiVertexAuth: 'adc',
+  geminiProject: '',
+  geminiRegion: 'us-central1',
+  geminiSAPath: '',
 });
 
 // Pre-fill from props.editing when in edit mode. Runs once at setup.
@@ -146,17 +160,29 @@ const requiresApiKey = computed(
     form.kind === 'anthropic' ||
     form.kind === 'openai' ||
     form.kind === 'openrouter' ||
-    (form.kind === 'bedrock' && form.bedrockAuth === 'api_key'),
+    (form.kind === 'bedrock' && form.bedrockAuth === 'api_key') ||
+    (form.kind === 'gemini' && form.geminiEndpointKind === 'ai_studio'),
 );
 const requiresAwsProfile = computed(
   () => form.kind === 'bedrock' && form.bedrockAuth === 'aws_profile',
 );
+// Gemini AI Studio probes via Connect (listModels uses API key).
+// Gemini Vertex skips probe — no /models endpoint on the Vertex path.
+const isGemini = computed(() => form.kind === 'gemini');
+const isGeminiAIStudio = computed(() => isGemini.value && form.geminiEndpointKind === 'ai_studio');
+const isGeminiVertex = computed(() => isGemini.value && form.geminiEndpointKind === 'vertex');
+const geminiVertexUsesADC = computed(() => isGeminiVertex.value && form.geminiVertexAuth === 'adc');
+const geminiVertexUsesSAPaste = computed(() => isGeminiVertex.value && form.geminiVertexAuth === 'service_account_paste');
+const geminiVertexUsesSAPath = computed(() => isGeminiVertex.value && form.geminiVertexAuth === 'service_account_path');
+
 // Bedrock has no /models endpoint that mirrors the Connect flow we
 // use for Anthropic, and the user already knows the model id from the
 // AWS console. Skip the probe and go straight to manual entry. Edit
 // mode also skips the probe — the user already has a working profile
 // and we don't want to force a Connect just to tweak the model id.
-const skipsProbe = computed(() => form.kind === 'bedrock' || isEditing.value);
+const skipsProbe = computed(
+  () => form.kind === 'bedrock' || isGeminiVertex.value || isEditing.value,
+);
 
 // Auto-derived ID from kind + model. Hidden behind a "Customize" toggle
 // so most users never have to think about it.
@@ -259,6 +285,15 @@ const validation = computed(() => {
     errors.awsProfile = 'AWS profile name is required.';
   if (requiresRegion.value && !form.region.trim())
     errors.region = 'Region is required for Bedrock.';
+  // Gemini Vertex validation
+  if (isGeminiVertex.value && !form.geminiProject.trim())
+    errors.geminiProject = 'Google Cloud project ID is required for Vertex.';
+  if (isGeminiVertex.value && !form.geminiRegion.trim())
+    errors.geminiRegion = 'Region is required for Vertex.';
+  if (geminiVertexUsesSAPaste.value && !isEditing.value && !form.apiKey.trim())
+    errors.apiKey = 'Service account JSON is required.';
+  if (geminiVertexUsesSAPath.value && !form.geminiSAPath.trim())
+    errors.geminiSAPath = 'Service account file path is required.';
   if (effectiveModelIds.value.length === 0)
     errors.model = skipsProbe.value
       ? 'At least one model id is required.'
@@ -278,9 +313,19 @@ function onSubmit(): void {
   // Edit mode preserves the original id so the existing personal-store
   // row + keychain entry locator stay aligned.
   const id = isEditing.value && props.editing ? props.editing.id : effectiveId.value;
-  const cred = requiresAwsProfile.value
-    ? { kind: 'aws_profile' as const, locator: form.awsProfile.trim() }
-    : { kind: 'keychain' as const, locator: `kaneaz-harness/${id}` };
+
+  // Determine credential shape.
+  let cred: AddProviderInput['cred'];
+  if (requiresAwsProfile.value) {
+    cred = { kind: 'aws_profile' as const, locator: form.awsProfile.trim() };
+  } else if (geminiVertexUsesSAPath.value) {
+    cred = { kind: 'file' as const, locator: form.geminiSAPath.trim() };
+  } else if (geminiVertexUsesADC.value) {
+    cred = { kind: 'env' as const, locator: 'GOOGLE_APPLICATION_CREDENTIALS' };
+  } else {
+    cred = { kind: 'keychain' as const, locator: `kaneaz-harness/${id}` };
+  }
+
   const input: AddProviderInput = {
     id,
     name: effectiveModelName.value,
@@ -290,6 +335,13 @@ function onSubmit(): void {
     cred,
   };
   if (requiresRegion.value) input.region = form.region.trim();
+  if (isGemini.value) {
+    input.geminiEndpointKind = form.geminiEndpointKind;
+    if (isGeminiVertex.value) {
+      input.project = form.geminiProject.trim();
+      input.region = form.geminiRegion.trim();
+    }
+  }
   if (cred.kind === 'keychain' && form.apiKey.trim()) {
     input.plaintextApiKey = form.apiKey;
   }
@@ -376,6 +428,104 @@ defineExpose({ form, validation, isValid });
       </p>
     </div>
 
+    <!-- Gemini-only: endpoint kind radio -->
+    <div v-if="isGemini" :data-testid="'add-provider-gemini-endpoint'">
+      <span class="block text-[11px] uppercase tracking-[0.18em] text-ink-subtle">
+        Endpoint
+      </span>
+      <div class="mt-1 flex gap-1 rounded-sm border border-border-muted bg-surface-1 p-0.5">
+        <button
+          type="button"
+          class="flex-1 px-2 py-1 rounded-sm text-xs font-ui transition-fast"
+          :class="form.geminiEndpointKind === 'ai_studio' ? 'bg-surface-2 text-ink ring-1 ring-accent-hairline' : 'text-ink-muted hover:text-ink'"
+          :data-testid="'add-provider-gemini-ai-studio'"
+          @click="form.geminiEndpointKind = 'ai_studio'"
+        >
+          AI Studio
+        </button>
+        <button
+          type="button"
+          class="flex-1 px-2 py-1 rounded-sm text-xs font-ui transition-fast"
+          :class="form.geminiEndpointKind === 'vertex' ? 'bg-surface-2 text-ink ring-1 ring-accent-hairline' : 'text-ink-muted hover:text-ink'"
+          :data-testid="'add-provider-gemini-vertex'"
+          @click="form.geminiEndpointKind = 'vertex'"
+        >
+          Vertex AI
+        </button>
+      </div>
+    </div>
+
+    <!-- Gemini Vertex: project + region + auth -->
+    <div v-if="isGeminiVertex" class="space-y-3" :data-testid="'add-provider-gemini-vertex-fields'">
+      <!-- Project ID -->
+      <div>
+        <label class="block text-[11px] uppercase tracking-[0.18em] text-ink-subtle">
+          GCP Project ID
+        </label>
+        <input
+          v-model="form.geminiProject"
+          type="text"
+          class="mt-1 w-full rounded-sm border border-border-muted bg-surface-1 px-2.5 py-1.5 text-sm text-ink focus:border-accent focus:outline-none"
+          placeholder="my-gcp-project"
+          :data-testid="'add-provider-gemini-project'"
+        />
+        <p v-if="validation.geminiProject" class="mt-1 text-xs text-signal-danger">
+          {{ validation.geminiProject }}
+        </p>
+      </div>
+      <!-- Region -->
+      <div>
+        <label class="block text-[11px] uppercase tracking-[0.18em] text-ink-subtle">
+          Region
+        </label>
+        <input
+          v-model="form.geminiRegion"
+          type="text"
+          class="mt-1 w-full rounded-sm border border-border-muted bg-surface-1 px-2.5 py-1.5 text-sm text-ink focus:border-accent focus:outline-none"
+          placeholder="us-central1"
+          :data-testid="'add-provider-gemini-region'"
+        />
+      </div>
+      <!-- Auth method -->
+      <div>
+        <span class="block text-[11px] uppercase tracking-[0.18em] text-ink-subtle">
+          Auth method
+        </span>
+        <div class="mt-1 flex gap-1 rounded-sm border border-border-muted bg-surface-1 p-0.5">
+          <button type="button" class="flex-1 px-2 py-1 rounded-sm text-xs font-ui transition-fast"
+            :class="form.geminiVertexAuth === 'adc' ? 'bg-surface-2 text-ink ring-1 ring-accent-hairline' : 'text-ink-muted hover:text-ink'"
+            :data-testid="'add-provider-gemini-adc'"
+            @click="form.geminiVertexAuth = 'adc'">ADC</button>
+          <button type="button" class="flex-1 px-2 py-1 rounded-sm text-xs font-ui transition-fast"
+            :class="form.geminiVertexAuth === 'service_account_paste' ? 'bg-surface-2 text-ink ring-1 ring-accent-hairline' : 'text-ink-muted hover:text-ink'"
+            :data-testid="'add-provider-gemini-sa-paste'"
+            @click="form.geminiVertexAuth = 'service_account_paste'">Service account (paste)</button>
+          <button type="button" class="flex-1 px-2 py-1 rounded-sm text-xs font-ui transition-fast"
+            :class="form.geminiVertexAuth === 'service_account_path' ? 'bg-surface-2 text-ink ring-1 ring-accent-hairline' : 'text-ink-muted hover:text-ink'"
+            :data-testid="'add-provider-gemini-sa-path'"
+            @click="form.geminiVertexAuth = 'service_account_path'">Service account (path)</button>
+        </div>
+        <p v-if="geminiVertexUsesADC" class="mt-1 text-[11px] text-ink-dim" :data-testid="'add-provider-gemini-adc-hint'">
+          Application Default Credentials will be used. Run <code>gcloud auth application-default login</code> first.
+        </p>
+        <div v-if="geminiVertexUsesSAPath" class="mt-2">
+          <label class="block text-[11px] uppercase tracking-[0.18em] text-ink-subtle">
+            Service account JSON path
+          </label>
+          <input
+            v-model="form.geminiSAPath"
+            type="text"
+            class="mt-1 w-full rounded-sm border border-border-muted bg-surface-1 px-2.5 py-1.5 text-sm font-mono text-ink focus:border-accent focus:outline-none"
+            placeholder="/path/to/service-account.json"
+            :data-testid="'add-provider-gemini-sa-path-input'"
+          />
+          <p v-if="validation.geminiSAPath" class="mt-1 text-xs text-signal-danger">
+            {{ validation.geminiSAPath }}
+          </p>
+        </div>
+      </div>
+    </div>
+
     <!-- Step 2a: API key + Connect (most providers + bedrock-API-key mode) -->
     <div v-if="requiresApiKey">
       <label
@@ -401,7 +551,11 @@ defineExpose({ form, validation, isValid });
                   ? 'ABSK… (Bedrock API key)'
                   : form.kind === 'openai'
                     ? 'sk-…'
-                    : 'paste key'
+                    : form.kind === 'gemini' && geminiVertexUsesSAPaste
+                      ? '{ "type": "service_account", … }'
+                      : form.kind === 'gemini'
+                        ? 'AIza… (Google AI Studio key)'
+                        : 'paste key'
           "
         />
         <Button
