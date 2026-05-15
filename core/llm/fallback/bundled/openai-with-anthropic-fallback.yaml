@@ -1,0 +1,13 @@
+id: openai-with-anthropic-fallback
+name: OpenAI → Anthropic fallback
+description: >
+  When OpenAI is rate-limited (429) or experiencing a 5xx outage,
+  reroute the same turn to Anthropic Claude. Useful for sessions
+  that must remain available during OpenAI incidents.
+entries:
+  - provider_id: anthropic
+    model: claude-sonnet-4-5
+    triggers:
+      - error_5xx
+      - error_429
+    max_attempts: 1
