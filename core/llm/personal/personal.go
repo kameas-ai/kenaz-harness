@@ -207,14 +207,24 @@ func (s *FileStore) Get(id string) (llm.ProviderProfile, error) {
 //   - file        path on disk to a credential file
 //
 // Plaintext credentials are rejected via ErrPlaintextCredential.
+//
+// Exception: custom-openai profiles with auth_scheme:none may carry an
+// empty keychain locator — no credential is required when the endpoint
+// does not authenticate. (custom-openai-compatible-endpoint-01KQ8VN0 WP02)
 func (s *FileStore) Add(p llm.ProviderProfile) error {
-	if err := llm.ValidateProfile(p); err != nil {
-		return err
+	if !isCustomOpenAINoneAuth(p) {
+		if err := llm.ValidateProfile(p); err != nil {
+			return err
+		}
 	}
 	switch p.Cred.Kind {
 	case "keychain", "aws_profile", "env", "file":
 		// indirect references — accepted
 	default:
+		// custom-openai with auth_scheme:none is allowed with empty cred.
+		if isCustomOpenAINoneAuth(p) {
+			break
+		}
 		return fmt.Errorf("%w: kind=%q", ErrPlaintextCredential, p.Cred.Kind)
 	}
 	s.mu.Lock()
@@ -235,12 +245,17 @@ func (s *FileStore) Add(p llm.ProviderProfile) error {
 // Update implements Store. Validates the new profile, then replaces
 // the row with matching ID in place. Cred-kind validation matches Add.
 func (s *FileStore) Update(p llm.ProviderProfile) error {
-	if err := llm.ValidateProfile(p); err != nil {
-		return err
+	if !isCustomOpenAINoneAuth(p) {
+		if err := llm.ValidateProfile(p); err != nil {
+			return err
+		}
 	}
 	switch p.Cred.Kind {
 	case "keychain", "aws_profile", "env", "file":
 	default:
+		if isCustomOpenAINoneAuth(p) {
+			break
+		}
 		return fmt.Errorf("%w: kind=%q", ErrPlaintextCredential, p.Cred.Kind)
 	}
 	s.mu.Lock()
@@ -283,6 +298,24 @@ func (s *FileStore) Remove(id string) error {
 	}
 	shape.Providers = append(shape.Providers[:idx], shape.Providers[idx+1:]...)
 	return s.writeLocked(shape)
+}
+
+// isCustomOpenAINoneAuth reports whether the profile is a custom-openai
+// profile with auth_scheme:none. Such profiles are exempt from the
+// credential-kind and locator validation rules because no key is required.
+// (custom-openai-compatible-endpoint-01KQ8VN0 WP02)
+func isCustomOpenAINoneAuth(p llm.ProviderProfile) bool {
+	if p.Kind != "custom-openai" {
+		return false
+	}
+	// Check Defaults map and top-level AuthScheme field.
+	if p.AuthScheme == "none" {
+		return true
+	}
+	if s, ok := p.Defaults["auth_scheme"].(string); ok && s == "none" {
+		return true
+	}
+	return false
 }
 
 // Compile-time interface witness.

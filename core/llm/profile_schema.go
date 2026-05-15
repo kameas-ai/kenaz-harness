@@ -24,6 +24,9 @@ func ValidateProfile(p ProviderProfile) error {
 	if err := validateCredRef(p.ID, p.Cred); err != nil {
 		return err
 	}
+	if p.Kind == "custom-openai" && strings.TrimSpace(p.Endpoint) == "" {
+		return fmt.Errorf("llm: profile %q: custom-openai kind requires non-empty endpoint", p.ID)
+	}
 	if p.Kind == "bedrock" && strings.TrimSpace(p.Region) == "" {
 		// Plan R7 / spec edge case: bedrock + missing region must be
 		// caught before any AWS call.

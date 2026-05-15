@@ -124,6 +124,12 @@ const sqlInitSchema = `
 // media_artifacts table so the metadata that Put() already extracts
 // in-memory survives a Get/List round-trip (multimodal-io-01KQ8TDF
 // FR-017 — see migrations_media_artifact_meta.go).
+// 0329–0330 are reserved for the provider-implementation-uniformity
+// foundation (parallel agent — not yet merged).
+// 0331 adds the custom_endpoint_capabilities table that persists probed
+// capability matrices for custom OpenAI-compatible endpoints
+// (custom-openai-compatible-endpoint-01KQ8VN0 WP03 — see
+// migrations_custom_endpoint.go).
 func Migrations() []migrations.Migration {
 	return []migrations.Migration{
 		{
@@ -186,6 +192,7 @@ func Migrations() []migrations.Migration {
 		migration0328(),
 		migration0329(),
 		migration0330(),
+		migration0331(),
 	}
 }
 
