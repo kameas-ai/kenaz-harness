@@ -12,6 +12,13 @@
  */
 
 import { computed, onMounted, ref } from 'vue';
+import {
+  DialogRoot,
+  DialogPortal,
+  DialogContent,
+  DialogTitle,
+  VisuallyHidden,
+} from 'radix-vue';
 import CanvasHead from '@/shell/CanvasHead.vue';
 import SettingsTabs from '@/views/settings/SettingsTabs.vue';
 import Button from '@/components/ui/Button.vue';
@@ -235,48 +242,53 @@ const inlineTestClass = computed(() =>
       </table>
     </div>
 
-    <!-- Right-anchored drawer for the add form -->
-    <div
-      v-if="drawerOpen"
-      class="fixed inset-0 z-50 flex"
-      role="dialog"
-      aria-modal="true"
-      aria-label="Add provider"
+    <!-- Right-anchored drawer for the add form (Radix-Vue Dialog for focus trap + restore-focus) -->
+    <DialogRoot
+      :open="drawerOpen"
+      modal
+      @update:open="(v) => { if (!v) closeDrawer(); }"
     >
-      <div
-        class="flex-1 bg-modal-overlay"
-        :data-testid="'drawer-scrim'"
-        @click="closeDrawer"
-      />
-      <div
-        class="w-[420px] max-w-full overflow-y-auto border-l border-border-muted bg-surface-0 shadow-lg"
-        :data-testid="'add-provider-drawer'"
-      >
-        <header
-          class="flex items-center justify-between border-b border-border-muted px-6 py-4"
-        >
-          <div>
-            <div
-              class="text-[11px] uppercase tracking-[0.18em] text-ink-subtle"
-            >
-              {{ editingProvider ? 'EDIT PROVIDER' : 'ADD PROVIDER' }}
-            </div>
-            <h2 class="mt-1 font-ui text-lg font-semibold text-ink">
-              {{
-                editingProvider
-                  ? `Edit ${editingProvider.name || editingProvider.id}`
-                  : 'New personal provider'
-              }}
-            </h2>
-          </div>
-          <Button variant="ghost" @click="closeDrawer">Close</Button>
-        </header>
-        <AddProviderForm
-          :editing="editingForForm"
-          @submit="onAddSubmit"
-          @cancel="closeDrawer"
+      <DialogPortal>
+        <!-- Scrim overlay -->
+        <div
+          class="fixed inset-0 z-50 bg-modal-overlay"
+          :data-testid="'drawer-scrim'"
+          @click="closeDrawer"
         />
-      </div>
-    </div>
+        <DialogContent
+          class="fixed inset-y-0 right-0 z-50 w-[420px] max-w-full overflow-y-auto border-l border-border-muted bg-surface-0 shadow-lg flex flex-col"
+          :data-testid="'add-provider-drawer'"
+          :aria-label="editingProvider ? `Edit provider ${editingProvider.name || editingProvider.id}` : 'Add provider'"
+        >
+          <VisuallyHidden>
+            <DialogTitle>{{ editingProvider ? `Edit ${editingProvider.name || editingProvider.id}` : 'New personal provider' }}</DialogTitle>
+          </VisuallyHidden>
+          <header
+            class="flex items-center justify-between border-b border-border-muted px-6 py-4"
+          >
+            <div>
+              <div
+                class="text-[11px] uppercase tracking-[0.18em] text-ink-subtle"
+              >
+                {{ editingProvider ? 'EDIT PROVIDER' : 'ADD PROVIDER' }}
+              </div>
+              <h2 class="mt-1 font-ui text-lg font-semibold text-ink">
+                {{
+                  editingProvider
+                    ? `Edit ${editingProvider.name || editingProvider.id}`
+                    : 'New personal provider'
+                }}
+              </h2>
+            </div>
+            <Button variant="ghost" @click="closeDrawer">Close</Button>
+          </header>
+          <AddProviderForm
+            :editing="editingForForm"
+            @submit="onAddSubmit"
+            @cancel="closeDrawer"
+          />
+        </DialogContent>
+      </DialogPortal>
+    </DialogRoot>
   </div>
 </template>

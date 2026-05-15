@@ -44,6 +44,14 @@ import {
   shallowRef,
   watch,
 } from 'vue';
+import {
+  DialogRoot,
+  DialogPortal,
+  DialogOverlay,
+  DialogContent,
+  DialogTitle,
+  VisuallyHidden,
+} from 'radix-vue';
 import { Download, X } from '@/shell/icons';
 import StreamingText from '@/components/chat/StreamingText.vue';
 import { useHarnessClient } from '@/lib/harnessClientContext';
@@ -294,12 +302,18 @@ function onOverlayClick() {
   close();
 }
 
+/** Legacy keydown handler kept for non-Radix fallback paths. */
 function onKeydown(ev: KeyboardEvent) {
   if (!props.open) return;
   if (ev.key === 'Escape') {
     ev.preventDefault();
     close();
   }
+}
+
+/** Called by Radix DialogRoot when open state changes (e.g. Esc key). */
+function onDialogOpenChange(value: boolean) {
+  if (!value) close();
 }
 
 watch(
@@ -414,19 +428,31 @@ async function confirmDelete() {
 </script>
 
 <template>
-  <div
-    v-if="open && artifact"
-    class="fixed inset-0 z-50 flex items-center justify-center"
-    role="dialog"
-    aria-modal="true"
-    :aria-label="`Preview ${artifact.title}`"
-    data-testid="artifact-preview"
-    @keydown="onKeydown"
+  <DialogRoot
+    :open="open && !!artifact"
+    @update:open="onDialogOpenChange"
   >
-    <div class="absolute inset-0 bg-modal-overlay" @click="onOverlayClick" />
-    <div
-      class="relative z-10 w-[760px] max-w-[92vw] max-h-[88vh] overflow-hidden flex flex-col rounded-md border border-border-muted bg-surface-0 shadow-lg"
-    >
+    <DialogPortal>
+      <DialogOverlay
+        class="fixed inset-0 z-50 bg-modal-overlay"
+        data-testid="artifact-preview-overlay"
+        @click="onOverlayClick"
+      />
+      <DialogContent
+        class="fixed inset-0 z-50 flex items-center justify-center"
+        :aria-label="`Preview ${artifact?.title ?? ''}`"
+        data-testid="artifact-preview"
+        @keydown="onKeydown"
+        @interact-outside="onOverlayClick"
+      >
+        <!-- VisuallyHidden title satisfies DialogContent's required title for screen readers -->
+        <VisuallyHidden>
+          <DialogTitle>{{ artifact?.title ?? 'Artifact preview' }}</DialogTitle>
+        </VisuallyHidden>
+        <div
+          v-if="artifact"
+          class="relative z-10 w-[760px] max-w-[92vw] max-h-[88vh] overflow-hidden flex flex-col rounded-md border border-border-muted bg-surface-0 shadow-lg"
+        >
       <header
         class="flex items-center justify-between border-b border-border-muted px-5 py-3"
       >
@@ -722,6 +748,8 @@ async function confirmDelete() {
           </button>
         </div>
       </footer>
-    </div>
-  </div>
+        </div>
+      </DialogContent>
+    </DialogPortal>
+  </DialogRoot>
 </template>
