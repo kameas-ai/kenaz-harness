@@ -6,6 +6,7 @@ import './styles/global.css';
 
 import { installHarnessClient } from '@/lib/harnessClientContext';
 import { createHarnessClient } from '@/lib/harnessClient';
+import type { SentryTier } from '@/sentry';
 
 // Placeholder routes — primary surfaces (sessions/tools/bundles/providers/audit/settings)
 // land in downstream missions consuming this chassis.
@@ -124,5 +125,31 @@ const router = createRouter({
 
 const app = createApp(App);
 app.use(router);
-installHarnessClient(app, createHarnessClient());
+
+const client = createHarnessClient();
+installHarnessClient(app, client);
+
+// wire-up point 4 for sentry: fetch crash-reporting tier from appInfo and
+// lazily initialise @sentry/vue only when tier != 'off'.
+// (sentry-error-monitoring-01KX5R8G WP04)
+void (async () => {
+  try {
+    const info = await client.appInfo();
+    const settings = await client.settings.get();
+    const tier = (settings.crashReportingTier ?? 'off') as SentryTier;
+    if (tier !== 'off' && settings.sentryDsn) {
+      const { initSentry } = await import('@/sentry');
+      await initSentry({
+        tier,
+        dsn: settings.sentryDsn,
+        release: info.build ?? undefined,
+        gitsha: info.commit ?? undefined,
+        app,
+      });
+    }
+  } catch {
+    // Sentry init failure must never block app mount.
+  }
+})();
+
 app.mount('#app');
