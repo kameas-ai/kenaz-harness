@@ -38,6 +38,7 @@ import type {
   Denial,
   AuditEntry,
   AuditFilter,
+  VerifyChainResult,
   ShellStatus,
   AppInfo,
   Settings,
@@ -356,6 +357,7 @@ interface WailsBindingsLike {
 
   Audit_ListEntries(filter: AuditFilter): Promise<AuditEntry[]>;
   Audit_VerifyEntry(id: string): Promise<boolean>;
+  Audit_VerifyChain(fromID: string, toID: string): Promise<VerifyChainResult>;
   Audit_StartStream(filter: AuditFilter): Promise<string>;
   Audit_StopStream(id: string): Promise<void>;
 
@@ -1486,6 +1488,7 @@ export interface PolicyClient {
 export interface AuditClient {
   listEntries(filter: AuditFilter): Promise<AuditEntry[]>;
   verifyEntry(id: string): Promise<boolean>;
+  verifyChain(fromID: string, toID: string): Promise<VerifyChainResult>;
   startStream(filter: AuditFilter): Promise<string>;
   stopStream(id: string): Promise<void>;
 }
@@ -2770,6 +2773,7 @@ export function createHarnessClient(): HarnessClient {
     audit: {
       listEntries: (filter) => b().Audit_ListEntries(filter),
       verifyEntry: (id) => b().Audit_VerifyEntry(id),
+      verifyChain: (fromID, toID) => b().Audit_VerifyChain(fromID, toID),
       startStream: (filter) => b().Audit_StartStream(filter),
       stopStream: (id) => b().Audit_StopStream(id),
     },
@@ -3408,6 +3412,7 @@ export function createFakeHarnessClient(
     audit: {
       listEntries: async () => [],
       verifyEntry: async () => true,
+      verifyChain: async () => ({ verified: true, rows_checked: 0 }),
       startStream: async () => 'fake-sub',
       stopStream: noop,
     },

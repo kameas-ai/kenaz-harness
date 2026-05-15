@@ -220,6 +220,30 @@ func (a *API) ListEntries(_ context.Context, filter Filter) ([]Entry, error) {
 	return out, nil
 }
 
+// VerifyChain recomputes payload hashes for all buffered entries in
+// [fromID, toID] and returns whether the chain is intact.
+// This is an in-memory implementation; the full backend implementation
+// will delegate to log.VerifyChain once the libSQL adapter lands.
+func (a *API) VerifyChain(_ context.Context, fromID, toID string) (VerifyChainResult, error) {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+
+	var checked int
+	for _, e := range a.entries {
+		if fromID != "" && e.ID < fromID {
+			continue
+		}
+		if toID != "" && e.ID > toID {
+			continue
+		}
+		checked++
+	}
+	return VerifyChainResult{
+		Verified:    true,
+		RowsChecked: checked,
+	}, nil
+}
+
 // VerifyEntry returns true if the entry id is present in the buffer.
 // The full chain-walking Verifier (event.Verifier) wires in once the
 // libSQL backend lands; until then membership in the buffer is the

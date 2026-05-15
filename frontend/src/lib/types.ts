@@ -595,6 +595,13 @@ export interface AuditFilter {
   limit?: number;
 }
 
+/** VerifyChainResult — wire shape from Audit_VerifyChain RPC. */
+export interface VerifyChainResult {
+  verified: boolean;
+  rows_checked: number;
+  broken_at_id?: string;
+}
+
 export interface ShellStatus {
   activeProvider: string;
   trustTier: string;

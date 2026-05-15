@@ -646,6 +646,9 @@ func (b *Bindings) Audit_ListEntries(filter audit.Filter) ([]audit.Entry, error)
 func (b *Bindings) Audit_VerifyEntry(id string) (bool, error) {
 	return b.api.Audit().VerifyEntry(b.ctx(), id)
 }
+func (b *Bindings) Audit_VerifyChain(fromID, toID string) (audit.VerifyChainResult, error) {
+	return b.api.Audit().VerifyChain(b.ctx(), fromID, toID)
+}
 func (b *Bindings) Audit_StartStream(filter audit.Filter) (string, error) {
 	return b.api.Audit().StartStream(b.ctx(), filter)
 }

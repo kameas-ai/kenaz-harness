@@ -23,10 +23,26 @@ type Filter struct {
 	Limit      int      `json:"limit,omitempty"`
 }
 
+// VerifyChainResult is the wire shape returned by VerifyChain.
+type VerifyChainResult struct {
+	// Verified is true when every row's payload_hash matched the
+	// recomputed digest.
+	Verified bool `json:"verified"`
+	// RowsChecked is the number of rows examined.
+	RowsChecked int `json:"rows_checked"`
+	// BrokenAtID is the event_id of the first mismatch.
+	// Empty when Verified is true.
+	BrokenAtID string `json:"broken_at_id,omitempty"`
+}
+
 // AuditAPI is the view-scoped accessor for the append-only audit log.
 type AuditAPI interface {
 	ListEntries(ctx context.Context, filter Filter) ([]Entry, error)
 	VerifyEntry(ctx context.Context, id string) (bool, error)
+	// VerifyChain recomputes the payload hash for every event in
+	// [fromID, toID] and returns whether the chain is intact.
+	// Empty fromID / toID means "from first / to last".
+	VerifyChain(ctx context.Context, fromID, toID string) (VerifyChainResult, error)
 	StartStream(ctx context.Context, filter Filter) (subscriptionID string, err error)
 	StopStream(ctx context.Context, subscriptionID string) error
 }

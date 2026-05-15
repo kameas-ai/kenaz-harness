@@ -30,7 +30,7 @@ const filter = computed<AuditFilter>(() => ({
 
 // Reactive seed of historical entries; live entries arrive via the stream.
 const seeded = ref<readonly AuditEntry[]>([]);
-const verifyResult = ref<null | { ok: boolean; checked: number }>(null);
+const verifyResult = ref<null | { ok: boolean; checked: number; brokenAt?: string }>(null);
 const loading = ref(false);
 
 async function refresh() {
@@ -79,18 +79,23 @@ function onTogglePause() {
 }
 
 async function verifyVisible() {
-  let ok = true;
-  let checked = 0;
-  for (const e of entries.value.slice(0, 100)) {
-    try {
-      const v = await client.audit.verifyEntry(e.id);
-      if (!v) ok = false;
-    } catch {
-      ok = false;
-    }
-    checked++;
+  const visible = entries.value;
+  if (visible.length === 0) {
+    verifyResult.value = { ok: true, checked: 0 };
+    return;
   }
-  verifyResult.value = { ok, checked };
+  const fromID = visible[visible.length - 1].id;
+  const toID = visible[0].id;
+  try {
+    const res = await client.audit.verifyChain(fromID, toID);
+    verifyResult.value = {
+      ok: res.verified,
+      checked: res.rows_checked,
+      brokenAt: res.broken_at_id,
+    };
+  } catch {
+    verifyResult.value = { ok: false, checked: 0 };
+  }
 }
 
 function categoryFor(e: AuditEntry): Category {
@@ -166,7 +171,7 @@ onBeforeUnmount(() => {
         :class="verifyResult.ok ? 'text-signal-ok' : 'text-signal-danger'"
       >
         Verified {{ verifyResult.checked }} entr{{ verifyResult.checked === 1 ? 'y' : 'ies' }} —
-        {{ verifyResult.ok ? 'chain intact' : 'tamper detected' }}
+        {{ verifyResult.ok ? 'chain intact' : `tamper detected${verifyResult.brokenAt ? ' at ' + verifyResult.brokenAt : ''}` }}
       </div>
     </div>
 
