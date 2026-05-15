@@ -154,7 +154,7 @@ function toggle() {
         :knobs="config"
         @change="onTunePanelChange"
       />
-      <div v-else class="mt-1 text-xs text-ink-subtle">
+      <div v-if="!isSet" class="mt-1 text-xs text-ink-subtle">
         No reasoning effort set for this session yet.
       </div>
     </div>
