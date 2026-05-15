@@ -126,6 +126,15 @@ type ProviderProfile struct {
 	CapabilityHints map[Capability]bool `json:"capability_hints,omitempty" yaml:"capabilities,omitempty"`
 	Defaults        map[string]any      `json:"defaults,omitempty" yaml:"defaults,omitempty"`
 	Retry           *RetryPolicy        `json:"retry,omitempty"  yaml:"retry,omitempty"`
+
+	// GeminiEndpointKind selects the Google Gemini endpoint variant:
+	// "ai_studio" (default, API-key auth) or "vertex" (OAuth/ADC auth).
+	// Only valid when Kind=="gemini". Other kinds ignore this field.
+	GeminiEndpointKind string `json:"gemini_endpoint_kind,omitempty" yaml:"gemini_endpoint_kind,omitempty"`
+
+	// Project is the Google Cloud project ID for Vertex AI endpoints.
+	// Required when GeminiEndpointKind=="vertex". Ignored for AI Studio.
+	Project string `json:"project,omitempty" yaml:"project,omitempty"`
 }
 
 // AvailableModels returns the resolved model list. Falls back to

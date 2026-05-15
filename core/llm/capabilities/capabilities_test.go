@@ -265,6 +265,47 @@ func TestAzureOpenAI_o1_SupportsReasoning(t *testing.T) {
 	}
 }
 
+// ── Gemini capability tests (google-vertex-gemini-adapter-01KQ8VMY WP07) ─────
+
+// TestCatalog_GeminiLoads verifies that gemini.yaml is embedded and loaded.
+func TestCatalog_GeminiLoads(t *testing.T) {
+	t.Parallel()
+	c := mustCatalog(t)
+	// Any gemini model should have a non-empty descriptor (vision at minimum).
+	d := c.Describe("gemini", "gemini-2.5-flash")
+	if !d.Has(llm.CapVision) {
+		t.Errorf("gemini/gemini-2.5-flash: expected Vision=true, got %+v", d.Supported)
+	}
+	if !d.Has(llm.CapStreaming) {
+		t.Errorf("gemini/gemini-2.5-flash: expected Streaming=true")
+	}
+}
+
+// TestCatalog_GeminiReasoning verifies the reasoning capability split
+// between 2.5 (true) and 2.0 (false) families.
+func TestCatalog_GeminiReasoning(t *testing.T) {
+	t.Parallel()
+	c := mustCatalog(t)
+
+	// gemini-2.5-pro must advertise CapReasoning=true.
+	d25pro := c.Describe("gemini", "gemini-2.5-pro-preview-04-09")
+	if !d25pro.Has(llm.CapReasoning) {
+		t.Errorf("gemini-2.5-pro: expected CapReasoning=true, got %+v", d25pro.Supported)
+	}
+
+	// gemini-2.5-flash must also advertise CapReasoning=true.
+	d25flash := c.Describe("gemini", "gemini-2.5-flash")
+	if !d25flash.Has(llm.CapReasoning) {
+		t.Errorf("gemini-2.5-flash: expected CapReasoning=true, got %+v", d25flash.Supported)
+	}
+
+	// gemini-2.0-flash must NOT advertise CapReasoning.
+	d20flash := c.Describe("gemini", "gemini-2.0-flash")
+	if d20flash.Has(llm.CapReasoning) {
+		t.Errorf("gemini-2.0-flash: expected CapReasoning=false, got %+v", d20flash.Supported)
+	}
+}
+
 // TestCapabilityDescriptor_JSONRoundTrip pins the descriptor JSON
 // shape end-to-end including the new documents capability.
 func TestCapabilityDescriptor_JSONRoundTrip(t *testing.T) {

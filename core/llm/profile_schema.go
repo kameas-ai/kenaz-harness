@@ -29,6 +29,15 @@ func ValidateProfile(p ProviderProfile) error {
 		// caught before any AWS call.
 		return fmt.Errorf("llm: profile %q: bedrock kind requires non-empty region", p.ID)
 	}
+	// Gemini Vertex endpoint requires project + region.
+	if p.Kind == "gemini" && p.GeminiEndpointKind == "vertex" {
+		if strings.TrimSpace(p.Project) == "" {
+			return fmt.Errorf("llm: profile %q: gemini vertex endpoint requires non-empty project", p.ID)
+		}
+		if strings.TrimSpace(p.Region) == "" {
+			return fmt.Errorf("llm: profile %q: gemini vertex endpoint requires non-empty region", p.ID)
+		}
+	}
 	if p.Retry != nil {
 		if p.Retry.MaxAttempts < 1 {
 			return fmt.Errorf("llm: profile %q: retry.max_attempts must be >= 1", p.ID)

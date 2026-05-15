@@ -155,7 +155,26 @@ export type ProviderKind =
   | 'openrouter'
   | 'bedrock'
   | 'ollama'
-  | 'azure-openai';
+  | 'azure-openai'
+  | 'gemini';
+
+/**
+ * GeminiEndpointKind selects which Google endpoint to target.
+ * - 'ai_studio': Google AI Studio (API-key auth) — the default.
+ * - 'vertex': Google Cloud Vertex AI (service-account or ADC auth).
+ */
+export type GeminiEndpointKind = 'ai_studio' | 'vertex';
+
+/**
+ * GeminiAuthStatus carries the auth token status for a Gemini Vertex row.
+ * Returned by LLM_AuthStatus(profileID).
+ */
+export interface GeminiAuthStatus {
+  mode: 'api_key' | 'service_account' | 'adc';
+  /** ISO-8601 expiry for OAuth modes; empty for API-key mode. */
+  expiresAt?: string;
+  source: string;
+}
 
 export interface AddProviderInput {
   id: string;
@@ -174,6 +193,17 @@ export interface AddProviderInput {
    * before zeroing. Never stored in providers.json.
    */
   plaintextApiKey?: string;
+  /**
+   * Gemini-specific: which endpoint variant to target.
+   * 'ai_studio' (default) or 'vertex'.
+   * Only set when kind === 'gemini'.
+   */
+  geminiEndpointKind?: GeminiEndpointKind;
+  /**
+   * Google Cloud project ID for Vertex AI endpoints.
+   * Only set when geminiEndpointKind === 'vertex'.
+   */
+  project?: string;
 }
 
 export interface TestResult {
