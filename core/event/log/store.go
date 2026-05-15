@@ -25,6 +25,9 @@ type Row struct {
 	PayloadHash      [32]byte
 	PrevHash         [32]byte
 	RedactionSummary string
+	// SchemaVersion is the payload schema version stored with the row.
+	// 0 means the field was not populated (legacy row); treated as 1.
+	SchemaVersion int
 }
 
 // Backend abstracts the storage-foundations connection. The real
