@@ -19,6 +19,7 @@ import (
 
 	llm "github.com/sigil-tech/kaneaz-harness/core/llm"
 	"github.com/sigil-tech/kaneaz-harness/core/llm/anthropic"
+	"github.com/sigil-tech/kaneaz-harness/core/llm/azure"
 	"github.com/sigil-tech/kaneaz-harness/core/llm/bedrock"
 	"github.com/sigil-tech/kaneaz-harness/core/llm/capabilities"
 	"github.com/sigil-tech/kaneaz-harness/core/llm/credref"
@@ -103,6 +104,10 @@ func New(opts Options) (*Registry, error) {
 	r.adapters[bedrock.Kind] = bedrock.New()
 	r.adapters[openai.Kind] = openai.New()
 	r.adapters[openrouter.Kind] = openrouter.New()
+	// Azure OpenAI adapter (feature-flagged: HARNESS_AZURE_OPENAI=0 to disable).
+	if azure.AzureOpenAIEnabled() {
+		r.adapters[azure.Kind] = azure.New()
+	}
 	return r, nil
 }
 
