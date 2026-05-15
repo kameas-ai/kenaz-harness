@@ -196,6 +196,7 @@ defineExpose({ filterText });
         v-model="filterText"
         type="text"
         placeholder="Filter kinds…"
+        aria-label="Filter node types"
         class="w-full rounded-sm border border-border-muted bg-surface-0 px-2 py-1 font-ui text-[12px] text-ink placeholder:text-ink-dim"
         data-testid="palette-filter"
       />

@@ -206,11 +206,11 @@ const inlineTestClass = computed(() =>
           <tr
             class="border-b border-border-muted text-[11px] uppercase tracking-[0.18em] text-ink-subtle"
           >
-            <th class="px-4 py-2 font-ui font-medium">Name</th>
-            <th class="px-4 py-2 font-ui font-medium">Source</th>
-            <th class="px-4 py-2 font-ui font-medium">Model</th>
-            <th class="px-4 py-2 font-ui font-medium">Status</th>
-            <th class="px-4 py-2 font-ui font-medium text-right">Actions</th>
+            <th scope="col" class="px-4 py-2 font-ui font-medium">Name</th>
+            <th scope="col" class="px-4 py-2 font-ui font-medium">Source</th>
+            <th scope="col" class="px-4 py-2 font-ui font-medium">Model</th>
+            <th scope="col" class="px-4 py-2 font-ui font-medium">Status</th>
+            <th scope="col" class="px-4 py-2 font-ui font-medium text-right">Actions</th>
           </tr>
         </thead>
         <tbody>
