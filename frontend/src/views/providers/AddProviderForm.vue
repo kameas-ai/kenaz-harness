@@ -58,6 +58,7 @@ const KINDS: { id: ProviderKind; label: string }[] = [
   { id: 'openrouter', label: 'OpenRouter' },
   { id: 'bedrock', label: 'AWS Bedrock' },
   { id: 'ollama', label: 'Ollama (local)' },
+  { id: 'azure-openai', label: 'Azure OpenAI' },
 ];
 
 // AWS Bedrock regions where Bedrock is generally available. Source:
@@ -91,6 +92,9 @@ interface FormState {
   awsProfile: string;
   bedrockAuth: BedrockAuth;
   region: string;
+  // Azure OpenAI resource hostname (e.g. myresource.openai.azure.com).
+  // Stored in profile.Region for azure-openai kind.
+  azureHost: string;
   // Set of model ids the user has ticked from the probe-populated
   // dropdown. The first id (in declared order from the probe) is the
   // default sent on the wire.
@@ -107,6 +111,7 @@ const form = reactive<FormState>({
   awsProfile: 'default',
   bedrockAuth: 'api_key',
   region: 'us-east-1',
+  azureHost: '',
   selectedModelIds: [],
   manualModelIds: '',
   customId: '',
@@ -127,6 +132,10 @@ if (props.editing) {
       form.awsProfile = props.editing.credLocator || 'default';
     }
   }
+  if (props.editing.kind === 'azure-openai') {
+    // For azure-openai, the resource host is stored in profile.Region.
+    form.azureHost = props.editing.region || '';
+  }
 }
 
 const submitting = ref(false);
@@ -141,11 +150,13 @@ const probed = ref(false);
 const fallbackToManual = ref(false);
 
 const requiresRegion = computed(() => form.kind === 'bedrock');
+const requiresAzureHost = computed(() => form.kind === 'azure-openai');
 const requiresApiKey = computed(
   () =>
     form.kind === 'anthropic' ||
     form.kind === 'openai' ||
     form.kind === 'openrouter' ||
+    form.kind === 'azure-openai' ||
     (form.kind === 'bedrock' && form.bedrockAuth === 'api_key'),
 );
 const requiresAwsProfile = computed(
@@ -156,7 +167,11 @@ const requiresAwsProfile = computed(
 // AWS console. Skip the probe and go straight to manual entry. Edit
 // mode also skips the probe — the user already has a working profile
 // and we don't want to force a Connect just to tweak the model id.
-const skipsProbe = computed(() => form.kind === 'bedrock' || isEditing.value);
+// Azure OpenAI's deployments are operator-configured, not discoverable
+// via a simple /models list, so it also falls back to manual entry.
+const skipsProbe = computed(
+  () => form.kind === 'bedrock' || form.kind === 'azure-openai' || isEditing.value,
+);
 
 // Auto-derived ID from kind + model. Hidden behind a "Customize" toggle
 // so most users never have to think about it.
@@ -259,6 +274,8 @@ const validation = computed(() => {
     errors.awsProfile = 'AWS profile name is required.';
   if (requiresRegion.value && !form.region.trim())
     errors.region = 'Region is required for Bedrock.';
+  if (requiresAzureHost.value && !form.azureHost.trim())
+    errors.azureHost = 'Resource hostname is required for Azure OpenAI.';
   if (effectiveModelIds.value.length === 0)
     errors.model = skipsProbe.value
       ? 'At least one model id is required.'
@@ -290,6 +307,8 @@ function onSubmit(): void {
     cred,
   };
   if (requiresRegion.value) input.region = form.region.trim();
+  // For azure-openai, the resource hostname is stored as profile.Region.
+  if (requiresAzureHost.value) input.region = form.azureHost.trim();
   if (cred.kind === 'keychain' && form.apiKey.trim()) {
     input.plaintextApiKey = form.apiKey;
   }
@@ -376,6 +395,31 @@ defineExpose({ form, validation, isValid });
       </p>
     </div>
 
+    <!-- Azure OpenAI: resource hostname field -->
+    <div v-if="requiresAzureHost">
+      <label
+        for="prov-azure-host"
+        class="block text-[11px] uppercase tracking-[0.18em] text-ink-subtle"
+      >
+        Resource Hostname
+      </label>
+      <input
+        id="prov-azure-host"
+        v-model="form.azureHost"
+        class="mt-1 w-full rounded-sm border border-border-muted bg-surface-1 px-2.5 py-1.5 text-sm font-mono text-ink focus:border-accent focus:outline-none"
+        autocomplete="off"
+        :data-testid="'add-provider-azure-host'"
+        placeholder="myresource.openai.azure.com"
+      />
+      <p v-if="validation.azureHost" class="mt-1 text-xs text-signal-danger">
+        {{ validation.azureHost }}
+      </p>
+      <p class="mt-1 text-[11px] text-ink-dim">
+        The hostname of your Azure OpenAI resource (without "https://"). Found in
+        the Azure portal under your resource's "Keys and Endpoint" page.
+      </p>
+    </div>
+
     <!-- Step 2a: API key + Connect (most providers + bedrock-API-key mode) -->
     <div v-if="requiresApiKey">
       <label
@@ -395,8 +439,10 @@ defineExpose({ form, validation, isValid });
           :placeholder="
             isEditing
               ? 'leave blank to keep current key'
-              : form.kind === 'anthropic'
-                ? 'sk-ant-…'
+              : form.kind === 'azure-openai'
+                ? 'paste Azure OpenAI api-key'
+                : form.kind === 'anthropic'
+                  ? 'sk-ant-…'
                 : form.kind === 'bedrock'
                   ? 'ABSK… (Bedrock API key)'
                   : form.kind === 'openai'

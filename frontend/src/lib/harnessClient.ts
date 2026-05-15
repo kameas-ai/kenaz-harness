@@ -1203,6 +1203,18 @@ export interface LLMConnectorClient {
    * (provider-keychain-rotation-01KQ8TD9 WP04)
    */
   resumeAfterKeyRotation(resumeToken: string): Promise<void>;
+  /**
+   * testProviderKey — validates a plaintext API key against the given provider
+   * kind and resource host without writing to the keychain. Used by the
+   * AddProvider form to show connection status before the user clicks Submit.
+   * The plaintext key is consumed and zeroed server-side before returning.
+   * (azure-openai-adapter-01KQ8VMZ WP03)
+   */
+  testProviderKey(
+    kind: string,
+    host: string,
+    plaintextKey: string,
+  ): Promise<import('./types').TestProviderKeyResult>;
 }
 
 export interface MCPClient {
@@ -2573,6 +2585,8 @@ export function createHarnessClient(): HarnessClient {
         b().LLM_TestAndRotateKey(profileID, plaintextApiKey, source),
       resumeAfterKeyRotation: (resumeToken) =>
         b().LLM_ResumeAfterKeyRotation(resumeToken),
+      testProviderKey: (kind, host, plaintextKey) =>
+        b().LLM_TestProviderKey(kind, host, plaintextKey),
     },
     mcp: {
       listServers: () => b().MCP_ListServers(),
@@ -3124,6 +3138,11 @@ export function createFakeHarnessClient(
         tested_at: new Date().toISOString(),
       }),
       resumeAfterKeyRotation: noop,
+      testProviderKey: async (_kind, _host, _key) => ({
+        ok: false,
+        model_count: 0,
+        message: 'fake: not wired',
+      }),
     },
     mcp: {
       listServers: async () => [],
