@@ -398,3 +398,23 @@ type ErrFeatureDisabled struct {
 func (e *ErrFeatureDisabled) Error() string {
 	return fmt.Sprintf("llm: feature %q disabled (set %s=on to enable)", e.Feature, e.EnvVar)
 }
+
+// ErrCustomEndpointMissingCapability is returned when a request targets
+// a custom OpenAI-compatible endpoint and the probed capability matrix
+// indicates the required capability is not supported. This error is
+// returned before any wire call.
+//
+// (custom-openai-compatible-endpoint-01KQ8VN0 WP05)
+type ErrCustomEndpointMissingCapability struct {
+	// Endpoint is the base URL of the custom endpoint.
+	Endpoint string
+	// Capability is the missing capability name (e.g. "tool_calling").
+	Capability string
+	// ProfileID is the ProviderProfile.ID of the failing profile.
+	ProfileID string
+}
+
+func (e *ErrCustomEndpointMissingCapability) Error() string {
+	return fmt.Sprintf("llm: custom endpoint %q does not support %q (probed capability matrix)",
+		e.Endpoint, e.Capability)
+}

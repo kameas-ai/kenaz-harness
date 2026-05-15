@@ -747,6 +747,20 @@ func (r *ChatRunner) driveRun(ctx context.Context, sub *chatSub, env *coreag.Env
 		return
 	}
 
+	// custom-openai-compatible-endpoint-01KQ8VN0 WP05: capability gate
+	// interception. When a custom endpoint's probed matrix blocks a request,
+	// emit the provider:capability-missing broker topic before the stream-closed
+	// payload so the frontend can render a targeted hint instead of a generic
+	// backend-error toast.
+	var capMissing *corellm.ErrCustomEndpointMissingCapability
+	if errors.As(err, &capMissing) {
+		r.cfg.Broker.Emit("provider:capability-missing", map[string]any{
+			"capability": capMissing.Capability,
+			"endpoint":   capMissing.Endpoint,
+			"profile_id": capMissing.ProfileID,
+		})
+	}
+
 	switch {
 	case err == nil:
 		reason = "completed"
@@ -762,6 +776,9 @@ func (r *ChatRunner) driveRun(ctx context.Context, sub *chatSub, env *coreag.Env
 	case errors.Is(err, coreag.ErrBudgetExceeded):
 		reason = "backend-error"
 		message = "agent reached the per-run budget cap"
+	case err != nil && capMissing != nil:
+		reason = "custom_endpoint_missing_capability"
+		message = err.Error()
 	case errors.Is(err, context.Canceled):
 		reason = "stop-called"
 	default:

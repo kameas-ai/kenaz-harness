@@ -154,7 +154,44 @@ export type ProviderKind =
   | 'openai'
   | 'openrouter'
   | 'bedrock'
-  | 'ollama';
+  | 'ollama'
+  /** Custom OpenAI-compatible endpoint (custom-openai-compatible-endpoint-01KQ8VN0) */
+  | 'custom-openai';
+
+/** Auth scheme for custom-openai endpoints. */
+export type CustomAuthScheme = 'bearer' | 'api-key-header' | 'custom' | 'none';
+
+/** Summary of a custom endpoint template from the template registry (WP01). */
+export interface CustomTemplateSummary {
+  id: string;
+  name: string;
+  base_url: string;
+  auth_scheme: CustomAuthScheme;
+}
+
+/** Probed capability matrix for a custom endpoint. */
+export interface CustomCapabilityMatrix {
+  endpoint: string;
+  probed_at: number;
+  streaming: 'true' | 'false' | 'unknown';
+  tool_calling: 'true' | 'false' | 'unknown';
+  streaming_usage: 'true' | 'false' | 'unknown';
+}
+
+/** Input for the ProbeCustomEndpoint RPC. */
+export interface CustomProbeRequest {
+  base_url: string;
+  model: string;
+  auth_scheme: CustomAuthScheme;
+  auth_header?: string;
+  plaintext_api_key?: string;
+}
+
+/** Result of the ProbeCustomEndpoint RPC. */
+export interface CustomProbeResult {
+  matrix: CustomCapabilityMatrix;
+  error?: string;
+}
 
 export interface AddProviderInput {
   id: string;
@@ -1155,6 +1192,18 @@ export interface AuthFailedPayload {
   provider: string;
   model: string;
   reason: string;
+}
+
+/**
+ * CapabilityMissingPayload — payload of the `provider:capability-missing`
+ * broker event. Emitted by the chat runner when a custom OpenAI-compatible
+ * endpoint's probed capability matrix blocks a request before any wire call.
+ * (custom-openai-compatible-endpoint-01KQ8VN0 WP05)
+ */
+export interface CapabilityMissingPayload {
+  capability: string;
+  endpoint: string;
+  profile_id: string;
 }
 
 /**
