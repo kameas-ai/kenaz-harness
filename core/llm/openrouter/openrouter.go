@@ -27,6 +27,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"sort"
 	"strings"
 	"sync"
@@ -34,6 +35,7 @@ import (
 
 	llm "github.com/sigil-tech/kaneaz-harness/core/llm"
 	"github.com/sigil-tech/kaneaz-harness/core/llm/httpx"
+	"github.com/sigil-tech/kaneaz-harness/core/llm/openaiwire"
 	"github.com/sigil-tech/kaneaz-harness/core/llm/structured"
 	"github.com/sigil-tech/kaneaz-harness/core/logging"
 )
@@ -96,11 +98,18 @@ func WithAppTitle(s string) Option {
 
 // Adapter implements llm.ProviderAdapter and llm.ModelLister against
 // the OpenRouter API.
+// Adapter is the OpenRouter ProviderAdapter implementation.
+//
+// WP04: Adapter now embeds openaiwire.Base for shared body building (WP04).
+// The kill-switch HARNESS_LLM_USE_OPENAIWIRE (default "true") selects
+// between the openaiwire path and the legacy local builder.
 type Adapter struct {
 	httpc    *http.Client
 	endpoint string
 	referer  string
 	appTitle string
+	// base holds the openaiwire.Base for shared body building (WP04).
+	base     openaiwire.Base
 
 	// modelCache caches the live /api/v1/models response so ListProviders
 	// (and any other caller that needs per-model context_window) can read
@@ -124,6 +133,7 @@ func New(opts ...Option) *Adapter {
 		endpoint:       defaultEndpoint,
 		referer:        defaultReferer,
 		appTitle:       defaultAppTitle,
+		base:           openaiwire.NewBase(defaultEndpoint),
 		modelCacheTTL:  1 * time.Hour,
 		refreshBackoff: 5 * time.Minute,
 	}
@@ -494,11 +504,44 @@ func classifyStatus(status int, body []byte) error {
 //	  "usage": {"include": true}
 //	}
 //
-// Connector ContentBlocks are flattened into a single string per message
-// (text concatenation). Non-text parts are dropped — OpenRouter's
-// router accepts richer content arrays per upstream model, but the v1
-// adapter targets the universal text path.
+// useOpenAIWire reports whether the openaiwire body builder is active.
+// HARNESS_LLM_USE_OPENAIWIRE=false falls back to the pre-WP04 local
+// builder for kill-switch testing. Default is true.
+func useOpenAIWire() bool {
+	v := os.Getenv("HARNESS_LLM_USE_OPENAIWIRE")
+	return v == "" || v == "true" || v == "1"
+}
+
+// buildRequestBody constructs the JSON body for the OpenRouter Chat
+// Completions API. When HARNESS_LLM_USE_OPENAIWIRE is true (default),
+// it delegates to openaiwire.BuildRequestBody for standard fields and
+// then applies OpenRouter-specific overrides (model ID, ranking headers,
+// OpenRouter usage field). Falls back to the pre-WP04 legacy builder when
+// the kill-switch is off.
 func buildRequestBody(req llm.GenerationRequest, prof llm.ProviderProfile) ([]byte, error) {
+	if useOpenAIWire() {
+		model := prof.Model
+		if req.Model != "" {
+			model = req.Model
+		}
+		body, err := openaiwire.BuildRequestBody(req, model, prof.Defaults)
+		if err != nil {
+			return nil, err
+		}
+		// OpenRouter uses "usage" instead of "stream_options.include_usage".
+		delete(body, "stream_options")
+		body["usage"] = map[string]any{"include": true}
+		return json.Marshal(body)
+	}
+	return buildRequestBodyLegacy(req, prof)
+}
+
+// buildRequestBodyLegacy is the pre-WP04 local builder kept for kill-switch
+// fallback (HARNESS_LLM_USE_OPENAIWIRE=false). Connector ContentBlocks are
+// flattened into a single string per message (text concatenation). Non-text
+// parts are dropped — OpenRouter's router accepts richer content arrays per
+// upstream model, but the v1 adapter targets the universal text path.
+func buildRequestBodyLegacy(req llm.GenerationRequest, prof llm.ProviderProfile) ([]byte, error) {
 	out := map[string]any{
 		"model":  prof.Model,
 		"stream": true,

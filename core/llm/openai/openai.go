@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"sort"
 	"strings"
 	"sync"
@@ -31,6 +32,7 @@ import (
 	llm "github.com/sigil-tech/kaneaz-harness/core/llm"
 	"github.com/sigil-tech/kaneaz-harness/core/llm/capabilities"
 	"github.com/sigil-tech/kaneaz-harness/core/llm/httpx"
+	"github.com/sigil-tech/kaneaz-harness/core/llm/openaiwire"
 	"github.com/sigil-tech/kaneaz-harness/core/llm/structured"
 )
 
@@ -84,10 +86,16 @@ func WithCatalog(cat *capabilities.Catalog) Option {
 }
 
 // Adapter is the OpenAI ProviderAdapter implementation.
+//
+// WP04: Adapter now embeds openaiwire.Base for shared body building and
+// SSE parsing. The kill-switch HARNESS_LLM_USE_OPENAIWIRE (default "true")
+// selects between the new openaiwire path and the legacy local builders.
 type Adapter struct {
 	httpc    *http.Client
 	endpoint string
 	cat      *capabilities.Catalog
+	// base holds the openaiwire.Base for shared body building (WP04).
+	base     openaiwire.Base
 }
 
 // New constructs an Adapter. Failures are limited to the embedded
@@ -98,6 +106,7 @@ func New(opts ...Option) *Adapter {
 	a := &Adapter{
 		httpc:    &http.Client{Transport: httpx.DefaultTransport()}, // no Timeout — context drives lifetime
 		endpoint: defaultChatEndpoint,
+		base:     openaiwire.NewBase(defaultChatEndpoint),
 	}
 	if cat, err := capabilities.LoadDefault(); err == nil {
 		a.cat = cat
@@ -331,13 +340,36 @@ func classifyStatus(status int, body []byte) error {
 	return llm.ClassifyStatus(status, body)
 }
 
+// useOpenAIWire reports whether the openaiwire body builder is active.
+// HARNESS_LLM_USE_OPENAIWIRE=false falls back to the pre-WP04 local
+// builder for kill-switch testing. Default is true.
+func useOpenAIWire() bool {
+	v := os.Getenv("HARNESS_LLM_USE_OPENAIWIRE")
+	return v == "" || v == "true" || v == "1"
+}
+
 // buildRequestBody constructs the JSON body for the Chat Completions
-// API. The connector's polymorphic ContentBlocks are flattened into
-// OpenAI's simpler {role, content: "string"} message shape — multi-
-// part messages join their text parts with newline separators. Vision
-// inputs are out of scope for the v1 adapter (the CapabilityGate
-// rejects requests that opt into them on this provider).
+// API. When HARNESS_LLM_USE_OPENAIWIRE is true (default), it delegates
+// to the shared openaiwire.BuildRequestBody. Otherwise falls back to
+// the pre-WP04 local builder for kill-switch testing.
 func buildRequestBody(req llm.GenerationRequest, prof llm.ProviderProfile) ([]byte, error) {
+	if useOpenAIWire() {
+		model := prof.Model
+		if req.Model != "" {
+			model = req.Model
+		}
+		body, err := openaiwire.BuildRequestBody(req, model, prof.Defaults)
+		if err != nil {
+			return nil, err
+		}
+		return json.Marshal(body)
+	}
+	return buildRequestBodyLegacy(req, prof)
+}
+
+// buildRequestBodyLegacy is the pre-WP04 local builder kept for kill-switch
+// fallback (HARNESS_LLM_USE_OPENAIWIRE=false).
+func buildRequestBodyLegacy(req llm.GenerationRequest, prof llm.ProviderProfile) ([]byte, error) {
 	out := map[string]any{
 		"model":          prof.Model,
 		"stream":         true,
