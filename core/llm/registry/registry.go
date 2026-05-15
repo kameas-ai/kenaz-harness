@@ -23,6 +23,7 @@ import (
 	"github.com/sigil-tech/kaneaz-harness/core/llm/capabilities"
 	"github.com/sigil-tech/kaneaz-harness/core/llm/credref"
 	"github.com/sigil-tech/kaneaz-harness/core/llm/events"
+	"github.com/sigil-tech/kaneaz-harness/core/llm/gemini"
 	"github.com/sigil-tech/kaneaz-harness/core/llm/openai"
 	"github.com/sigil-tech/kaneaz-harness/core/llm/openrouter"
 	"github.com/sigil-tech/kaneaz-harness/core/llm/retry"
@@ -103,6 +104,12 @@ func New(opts Options) (*Registry, error) {
 	r.adapters[bedrock.Kind] = bedrock.New()
 	r.adapters[openai.Kind] = openai.New()
 	r.adapters[openrouter.Kind] = openrouter.New()
+	// Google Gemini adapter — gated by HARNESS_GOOGLE_GEMINI env flag
+	// (default: enabled). The flag allows operators to exclude Gemini
+	// from the picker without recompiling.
+	if gemini.IsEnabled() {
+		r.adapters[gemini.Kind] = gemini.New()
+	}
 	return r, nil
 }
 
