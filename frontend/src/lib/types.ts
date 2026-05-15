@@ -1106,6 +1106,16 @@ export interface Message {
   costUsd?: number;
   /** "provider" | "derived" | "mixed" | "unknown". Empty when absent. */
   messageCostSource?: string;
+
+  /**
+   * model-fallback-routing-01NDFSEX04 WP04. When the fallback runner
+   * rerouted this turn to a different provider, these fields carry the
+   * actual (provider, model) used. Empty / undefined when the primary
+   * provider was used (no fallback occurred). In-memory only — not
+   * persisted to SQL.
+   */
+  actualProvider?: string;
+  actualModel?: string;
 }
 
 /**
@@ -3505,4 +3515,74 @@ export interface LocalRuntimeConfigResult {
   providerId: string;
   name: string;
   models: LocalRuntimeModel[];
+}
+
+// ── model-fallback-routing-01NDFSEX04 ────────────────────────────────────
+
+/**
+ * TriggerCondition enumerates the error classes that cause the runner
+ * to advance to the next entry in a fallback chain.
+ * Mirrors core/llm/fallback.TriggerCondition.
+ */
+export type TriggerCondition =
+  | 'error_5xx'
+  | 'error_429'
+  | 'error_auth_failed'
+  | 'error_context_overflow'
+  | 'error_safety_block'
+  | 'error_any';
+
+/**
+ * FallbackChainEntry is one hop in a fallback chain.
+ * Mirrors core/rpc/views/llm.FallbackChainEntryView.
+ */
+export interface FallbackChainEntry {
+  providerID: string;
+  model?: string;
+  triggers: TriggerCondition[];
+  maxAttempts: number;
+  paramOverrides: Record<string, unknown>;
+}
+
+/**
+ * FallbackChain is the full chain definition returned by LoadChain.
+ * Mirrors core/rpc/views/llm.FallbackChainView.
+ */
+export interface FallbackChain {
+  id: string;
+  name: string;
+  description?: string;
+  entries: FallbackChainEntry[];
+  /** True when this chain comes from the embedded bundle, not user storage. */
+  bundled?: boolean;
+}
+
+/**
+ * FallbackChainSummary is the lightweight list entry returned by ListFallbackChains.
+ * Mirrors core/rpc/views/llm.FallbackChainSummary.
+ */
+export interface FallbackChainSummary {
+  id: string;
+  name: string;
+  description?: string;
+  entryCount: number;
+  /** True when this chain comes from the embedded bundle, not user storage. */
+  bundled: boolean;
+}
+
+/**
+ * FallbackAttemptedPayload is the broker event payload emitted on
+ * 'llm:fallback-attempted' when the runner hops to a fallback provider.
+ * Mirrors the FallbackAttemptedEvent struct in core/llm/fallback/runner.go.
+ */
+export interface FallbackAttemptedPayload {
+  session_id: string;
+  chain_id: string;
+  from_profile: string;
+  from_model: string;
+  to_profile: string;
+  to_model: string;
+  reason: string;
+  attempt: number;
+  trigger: string;
 }

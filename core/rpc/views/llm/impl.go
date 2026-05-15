@@ -28,6 +28,7 @@ import (
 
 	corellm "github.com/sigil-tech/kaneaz-harness/core/llm"
 	"github.com/sigil-tech/kaneaz-harness/core/llm/custom"
+	"github.com/sigil-tech/kaneaz-harness/core/llm/fallback"
 	"github.com/sigil-tech/kaneaz-harness/core/llm/personal"
 	"github.com/sigil-tech/kaneaz-harness/core/logging"
 )
@@ -377,6 +378,12 @@ type API struct {
 	// (custom-openai-compatible-endpoint-01KQ8VN0 WP06)
 	customAdapter CustomAdapterAPI
 
+	// fallbackStore, when non-nil, backs the ListFallbackChains/LoadChain/
+	// SaveChain/DeleteChain RPC methods. nil causes them to return an
+	// empty list / ErrFallbackChainNotFound / no-op respectively.
+	// (model-fallback-routing-01NDFSEX04 WP04)
+	fallbackStore *fallback.FSStore
+
 	mu             sync.Mutex
 	subs           map[string]*subscription
 	nextID         uint64
@@ -472,6 +479,13 @@ type Config struct {
 	// nil when HARNESS_CUSTOM_OPENAI=0 (those methods return ErrFeatureDisabled).
 	// (custom-openai-compatible-endpoint-01KQ8VN0 WP06)
 	CustomAdapter CustomAdapterAPI
+
+	// FallbackStore, when non-nil, backs the four fallback-chain CRUD RPCs.
+	// nil causes ListFallbackChains to return only bundled chains, Load to
+	// return ErrFallbackChainNotFound for non-bundled ids, Save to fail, and
+	// Delete to be a no-op.
+	// (model-fallback-routing-01NDFSEX04 WP04)
+	FallbackStore *fallback.FSStore
 }
 
 // New constructs a concrete API.
@@ -501,6 +515,7 @@ func New(cfg Config) *API {
 		customAdapter:   cfg.CustomAdapter,
 		subs:            map[string]*subscription{},
 		validated:       map[string]bool{},
+		fallbackStore:   cfg.FallbackStore,
 	}
 }
 
@@ -1688,4 +1703,154 @@ func (a *API) ProbeCustomEndpoint(ctx context.Context, in ProbeCustomEndpointInp
 		out.ErrMessage = result.Err.Error()
 	}
 	return out, nil
+}
+
+// ── Fallback chain CRUD (model-fallback-routing-01NDFSEX04 WP04) ─────────────
+
+// ListFallbackChains returns all known chains. User-managed chains from
+// FSStore take precedence; bundled chains with the same ID are suppressed.
+func (a *API) ListFallbackChains(ctx context.Context) ([]FallbackChainSummary, error) {
+	bundled, err := fallback.LoadBundled()
+	if err != nil {
+		return nil, fmt.Errorf("llm: load bundled chains: %w", err)
+	}
+
+	// Build a set of user-managed chain IDs so bundled duplicates are skipped.
+	userManaged := map[string]*fallback.Chain{}
+	if a.fallbackStore != nil {
+		stored, storeErr := a.fallbackStore.List(ctx)
+		if storeErr != nil {
+			return nil, fmt.Errorf("llm: list stored chains: %w", storeErr)
+		}
+		for _, c := range stored {
+			userManaged[c.ID] = c
+		}
+	}
+
+	var summaries []FallbackChainSummary
+	// User-managed first.
+	for _, c := range userManaged {
+		summaries = append(summaries, FallbackChainSummary{
+			ID:          c.ID,
+			Name:        c.Name,
+			Description: c.Description,
+			EntryCount:  len(c.Entries),
+			Bundled:     false,
+		})
+	}
+	// Bundled chains not overridden by user-managed.
+	for _, c := range bundled {
+		if _, overridden := userManaged[c.ID]; overridden {
+			continue
+		}
+		summaries = append(summaries, FallbackChainSummary{
+			ID:          c.ID,
+			Name:        c.Name,
+			Description: c.Description,
+			EntryCount:  len(c.Entries),
+			Bundled:     true,
+		})
+	}
+	return summaries, nil
+}
+
+// LoadChain returns the full FallbackChainView for the given id.
+func (a *API) LoadChain(ctx context.Context, id string) (FallbackChainView, error) {
+	// Try FSStore first (user-managed wins over bundled).
+	if a.fallbackStore != nil {
+		c, err := a.fallbackStore.Get(ctx, id)
+		if err != nil {
+			return FallbackChainView{}, fmt.Errorf("llm: load chain %q from store: %w", id, err)
+		}
+		if c != nil {
+			return chainToView(c), nil
+		}
+	}
+	// Fall through to bundled.
+	bundled, err := fallback.LoadBundled()
+	if err != nil {
+		return FallbackChainView{}, fmt.Errorf("llm: load bundled chains: %w", err)
+	}
+	for _, c := range bundled {
+		if c.ID == id {
+			return chainToView(c), nil
+		}
+	}
+	return FallbackChainView{}, ErrFallbackChainNotFound
+}
+
+// SaveChain validates and persists the chain.
+func (a *API) SaveChain(ctx context.Context, view FallbackChainView) error {
+	if a.fallbackStore == nil {
+		return errors.New("llm: fallback store not configured")
+	}
+	c := viewToChain(view)
+	return a.fallbackStore.Save(ctx, c)
+}
+
+// DeleteChain removes the chain with the given id from FSStore. Idempotent.
+// Bundled-only chains (not in FSStore) return ErrFallbackChainReadOnly.
+func (a *API) DeleteChain(ctx context.Context, id string) error {
+	if a.fallbackStore == nil {
+		return ErrFallbackChainReadOnly
+	}
+	// Check if this id exists in FSStore before trying to delete it.
+	c, err := a.fallbackStore.Get(ctx, id)
+	if err != nil {
+		return fmt.Errorf("llm: delete chain %q lookup: %w", id, err)
+	}
+	if c == nil {
+		// Not in FSStore — either bundled-only or nonexistent. Either way
+		// it is read-only from the caller's perspective.
+		return nil // idempotent: unknown id is not an error
+	}
+	return a.fallbackStore.Delete(ctx, id)
+}
+
+// chainToView translates a domain Chain to the wire FallbackChainView.
+func chainToView(c *fallback.Chain) FallbackChainView {
+	entries := make([]FallbackChainEntryView, len(c.Entries))
+	for i, e := range c.Entries {
+		triggers := make([]string, len(e.Triggers))
+		for j, t := range e.Triggers {
+			triggers[j] = string(t)
+		}
+		entries[i] = FallbackChainEntryView{
+			ProviderID:     e.ProviderID,
+			Model:          e.Model,
+			ParamOverrides: e.ParamOverrides,
+			Triggers:       triggers,
+			MaxAttempts:    e.MaxAttempts,
+		}
+	}
+	return FallbackChainView{
+		ID:          c.ID,
+		Name:        c.Name,
+		Description: c.Description,
+		Entries:     entries,
+	}
+}
+
+// viewToChain translates a wire FallbackChainView to a domain Chain.
+func viewToChain(v FallbackChainView) *fallback.Chain {
+	entries := make([]fallback.ChainEntry, len(v.Entries))
+	for i, e := range v.Entries {
+		triggers := make([]fallback.TriggerCondition, len(e.Triggers))
+		for j, t := range e.Triggers {
+			triggers[j] = fallback.TriggerCondition(t)
+		}
+		entries[i] = fallback.ChainEntry{
+			ProviderID:     e.ProviderID,
+			Model:          e.Model,
+			ParamOverrides: e.ParamOverrides,
+			Triggers:       triggers,
+			MaxAttempts:    e.MaxAttempts,
+		}
+	}
+	return &fallback.Chain{
+		ID:          v.ID,
+		Name:        v.Name,
+		Description: v.Description,
+		Entries:     entries,
+	}
 }

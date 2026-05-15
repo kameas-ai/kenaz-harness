@@ -33,6 +33,7 @@ import MergeSuggestionToast from '@/components/chat/MergeSuggestionToast.vue';
 import CostThresholdToast from '@/components/chat/CostThresholdToast.vue';
 import AuthFailureToast from '@/components/chat/AuthFailureToast.vue';
 import RetryAfterRotateToast from '@/components/chat/RetryAfterRotateToast.vue';
+import FallbackActivePill from '@/components/chat/FallbackActivePill.vue';
 import BashPermissionModal from '@/components/permissions/BashPermissionModal.vue';
 import FilesystemPermissionModal from '@/components/permissions/FilesystemPermissionModal.vue';
 import CredentialPermissionModal from '@/components/permissions/CredentialPermissionModal.vue';
@@ -1740,6 +1741,8 @@ async function onNudgeNewSession() {
     <!-- provider-keychain-rotation-01KQ8TD9 WP05 — auth failure + post-rotation toasts -->
     <AuthFailureToast :auto-resume-enabled="autoResumeOnKeyRotation" />
     <RetryAfterRotateToast />
+    <!-- model-fallback-routing-01NDFSEX04 WP05 — fallback-active indicator pill -->
+    <FallbackActivePill />
     <!-- WP08 — universal permission modals (one per family) -->
     <BashPermissionModal />
     <FilesystemPermissionModal />

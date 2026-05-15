@@ -1,0 +1,13 @@
+id: anthropic-with-openrouter-fallback
+name: Anthropic → OpenRouter fallback
+description: >
+  When Anthropic is rate-limited (429) or overloaded (5xx/529),
+  reroute the same turn to OpenRouter using the gpt-4o alias.
+  Useful for high-traffic sessions that hit Anthropic's concurrency limits.
+entries:
+  - provider_id: openrouter
+    model: openai/gpt-4o
+    triggers:
+      - error_5xx
+      - error_429
+    max_attempts: 1

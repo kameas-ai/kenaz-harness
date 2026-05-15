@@ -75,6 +75,7 @@ const groups: ReadonlyArray<TabGroup> = [
       { to: '/providers', label: 'Providers' },
       { to: '/bundles', label: 'Bundles' },
       { to: '/settings?tab=secrets', label: 'Secrets', query: 'secrets' },
+      { to: '/settings?tab=llm-routing', label: 'LLM Routing', query: 'llm-routing' },
     ],
   },
   {

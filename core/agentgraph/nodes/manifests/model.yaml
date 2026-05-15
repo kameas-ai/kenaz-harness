@@ -22,5 +22,8 @@ attrs:
   stream_to_chat:
     type: bool
     description: "When true, stream tokens directly to the active chat surface."
+  fallback_chain_id:
+    type: string
+    description: "Optional fallback chain ID to use when this node's primary model call fails (model-fallback-routing-01NDFSEX04). Overrides session and app-level defaults."
 budget: llm
 budget_consumes: [tokens, llm_calls, cost_usd]

@@ -406,6 +406,28 @@ func (b *Bindings) LLM_ProbeCustomEndpoint(in llm.ProbeCustomEndpointInput) (llm
 	return b.api.LLMConnector().ProbeCustomEndpoint(b.ctx(), in)
 }
 
+// ── Fallback chain CRUD (model-fallback-routing-01NDFSEX04 WP04) ─────────────
+
+// LLM_ListFallbackChains returns all known fallback chain summaries.
+func (b *Bindings) LLM_ListFallbackChains() ([]llm.FallbackChainSummary, error) {
+	return b.api.LLMConnector().ListFallbackChains(b.ctx())
+}
+
+// LLM_LoadChain returns the full chain definition for the given id.
+func (b *Bindings) LLM_LoadChain(id string) (llm.FallbackChainView, error) {
+	return b.api.LLMConnector().LoadChain(b.ctx(), id)
+}
+
+// LLM_SaveChain persists a chain (create or overwrite).
+func (b *Bindings) LLM_SaveChain(chain llm.FallbackChainView) error {
+	return b.api.LLMConnector().SaveChain(b.ctx(), chain)
+}
+
+// LLM_DeleteChain removes the chain with the given id from FSStore.
+func (b *Bindings) LLM_DeleteChain(id string) error {
+	return b.api.LLMConnector().DeleteChain(b.ctx(), id)
+}
+
 // ── mcp ────────────────────────────────────────────────────────────────
 
 func (b *Bindings) MCP_ListServers() ([]mcp.Server, error) {
