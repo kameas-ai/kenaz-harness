@@ -1,0 +1,20 @@
+{
+  "models": [
+    {
+      "name": "publishers/google/models/gemini-2.5-pro-preview-04-09",
+      "displayName": "Gemini 2.5 Pro Preview",
+      "description": "Google Gemini 2.5 Pro with extended reasoning capabilities",
+      "inputTokenLimit": 1048576,
+      "outputTokenLimit": 65536,
+      "supportedGenerationMethods": ["generateContent", "streamGenerateContent"]
+    },
+    {
+      "name": "publishers/google/models/gemini-2.0-flash",
+      "displayName": "Gemini 2.0 Flash",
+      "description": "Fast and efficient Gemini model",
+      "inputTokenLimit": 1048576,
+      "outputTokenLimit": 8192,
+      "supportedGenerationMethods": ["generateContent", "streamGenerateContent"]
+    }
+  ]
+}

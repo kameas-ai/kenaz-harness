@@ -182,5 +182,7 @@ func defaultCommands() []Command {
 		wfCommand{},
 		// model-secret-references-01KW7M5A WP11 — /secret subcommand.
 		secretCommand{},
+		// provider-implementation-uniformity-01KQ8V4F WP07 — /effort.
+		effortCommand{},
 	}
 }

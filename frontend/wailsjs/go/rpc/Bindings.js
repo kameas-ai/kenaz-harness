@@ -482,6 +482,10 @@ export function LLM_TestProvider(arg1) {
   return window['go']['rpc']['Bindings']['LLM_TestProvider'](arg1);
 }
 
+export function LLM_TestProviderKey(arg1, arg2, arg3) {
+  return window['go']['rpc']['Bindings']['LLM_TestProviderKey'](arg1, arg2, arg3);
+}
+
 export function LLM_UpdateProvider(arg1) {
   return window['go']['rpc']['Bindings']['LLM_UpdateProvider'](arg1);
 }

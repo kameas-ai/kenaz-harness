@@ -140,6 +140,12 @@ import type {
   RetrievalReport,
   ChunkProvenance,
   ExportResult,
+  LocalRuntimeInfo,
+  LocalRuntimeConfigResult,
+  CustomTemplateSummary,
+  CustomCapabilityMatrix,
+  CustomProbeRequest,
+  CustomProbeResult,
 } from './types';
 
 /**
@@ -272,6 +278,14 @@ interface WailsBindingsLike {
     source: string,
   ): Promise<RotationResult>;
   LLM_ResumeAfterKeyRotation(resumeToken: string): Promise<void>;
+  LLM_ListDetectedLocalRuntimes(): Promise<LocalRuntimeInfo[]>;
+  LLM_AutoConfigureLocalRuntime(kind: string): Promise<LocalRuntimeConfigResult>;
+  LLM_RescanLocalRuntimes(): Promise<LocalRuntimeInfo[]>;
+  Settings_GetLocalRuntimeRAMOverrideGB(): Promise<number>;
+  Settings_SetLocalRuntimeRAMOverrideGB(gb: number): Promise<void>;
+  LLM_ListCustomTemplates(): Promise<CustomTemplateSummary[]>;
+  LLM_RecognizeTemplate(rawURL: string): Promise<{ matched: boolean; template?: CustomTemplateSummary }>;
+  LLM_ProbeCustomEndpoint(in_: CustomProbeRequest): Promise<CustomProbeResult>;
 
   MCP_ListServers(): Promise<MCPServer[]>;
   MCP_StartStream(id: string): Promise<string>;
@@ -1203,6 +1217,67 @@ export interface LLMConnectorClient {
    * (provider-keychain-rotation-01KQ8TD9 WP04)
    */
   resumeAfterKeyRotation(resumeToken: string): Promise<void>;
+  /**
+   * testProviderKey — validates a plaintext API key against the given provider
+   * kind and resource host without writing to the keychain. Used by the
+   * AddProvider form to show connection status before the user clicks Submit.
+   * The plaintext key is consumed and zeroed server-side before returning.
+   * (azure-openai-adapter-01KQ8VMZ WP03)
+   */
+  testProviderKey(
+    kind: string,
+    host: string,
+    plaintextKey: string,
+  ): Promise<import('./types').ProviderKeyTestResult>;
+
+  /**
+   * listDetectedLocalRuntimes — returns the detection snapshot for all
+   * supported local runtimes (Ollama, llama-server, LM Studio, Jan, GPT4All).
+   * Cached for 5 min. Returns [] when HARNESS_LOCAL_RUNTIMES=0.
+   * (local-model-runtimes-01KQ8VMZ WP04)
+   */
+  listDetectedLocalRuntimes(): Promise<LocalRuntimeInfo[]>;
+
+  /**
+   * autoConfigureLocalRuntime — detects models from the running runtime
+   * and persists a personal provider profile with kind="custom-openai".
+   * Throws when the runtime is not running or the feature flag is off.
+   * (local-model-runtimes-01KQ8VMZ WP04)
+   */
+  autoConfigureLocalRuntime(kind: string): Promise<LocalRuntimeConfigResult>;
+
+  /**
+   * rescanLocalRuntimes — invalidates the detection cache and triggers a
+   * fresh scan. Returns the refreshed snapshot.
+   * (local-model-runtimes-01KQ8VMZ WP04)
+   */
+  rescanLocalRuntimes(): Promise<LocalRuntimeInfo[]>;
+
+  /**
+   * listCustomTemplates returns the built-in template summaries from the
+   * custom-openai adapter's embedded registry. Returns an empty array when
+   * the feature is disabled (HARNESS_CUSTOM_OPENAI=0).
+   * (custom-openai-compatible-endpoint-01KQ8VN0 WP06)
+   */
+  listCustomTemplates(): Promise<CustomTemplateSummary[]>;
+
+  /**
+   * recognizeTemplate looks up the best-matching template for the supplied
+   * base URL via glob matching. Returns { matched: false } when no template
+   * matches.
+   * (custom-openai-compatible-endpoint-01KQ8VN0 WP06)
+   */
+  recognizeTemplate(
+    rawURL: string,
+  ): Promise<{ matched: boolean; template?: CustomTemplateSummary }>;
+
+  /**
+   * probeCustomEndpoint runs the three-step capability probe against a
+   * custom OpenAI-compatible endpoint. The plaintext API key is consumed
+   * and zeroed server-side.
+   * (custom-openai-compatible-endpoint-01KQ8VN0 WP06)
+   */
+  probeCustomEndpoint(in_: CustomProbeRequest): Promise<CustomProbeResult>;
 }
 
 export interface MCPClient {
@@ -2573,6 +2648,15 @@ export function createHarnessClient(): HarnessClient {
         b().LLM_TestAndRotateKey(profileID, plaintextApiKey, source),
       resumeAfterKeyRotation: (resumeToken) =>
         b().LLM_ResumeAfterKeyRotation(resumeToken),
+      testProviderKey: (kind, host, plaintextKey) =>
+        b().LLM_TestProviderKey(kind, host, plaintextKey),
+      listDetectedLocalRuntimes: () => b().LLM_ListDetectedLocalRuntimes(),
+      autoConfigureLocalRuntime: (kind) =>
+        b().LLM_AutoConfigureLocalRuntime(kind),
+      rescanLocalRuntimes: () => b().LLM_RescanLocalRuntimes(),
+      listCustomTemplates: () => b().LLM_ListCustomTemplates(),
+      recognizeTemplate: (rawURL) => b().LLM_RecognizeTemplate(rawURL),
+      probeCustomEndpoint: (in_) => b().LLM_ProbeCustomEndpoint(in_),
     },
     mcp: {
       listServers: () => b().MCP_ListServers(),
@@ -3124,6 +3208,30 @@ export function createFakeHarnessClient(
         tested_at: new Date().toISOString(),
       }),
       resumeAfterKeyRotation: noop,
+      testProviderKey: async (_kind, _host, _key) => ({
+        ok: false,
+        model_count: 0,
+        message: 'fake: not wired',
+      }),
+      listDetectedLocalRuntimes: async () => [],
+      autoConfigureLocalRuntime: async (_kind) => ({
+        providerId: 'fake-local',
+        name: 'Fake Local',
+        models: [],
+      }),
+      rescanLocalRuntimes: async () => [],
+      listCustomTemplates: async () => [],
+      recognizeTemplate: async () => ({ matched: false }),
+      probeCustomEndpoint: async () => ({
+        matrix: {
+          endpoint: '',
+          probed_at: 0,
+          streaming: 'unknown' as const,
+          tool_calling: 'unknown' as const,
+          streaming_usage: 'unknown' as const,
+        },
+        error: undefined,
+      }),
     },
     mcp: {
       listServers: async () => [],

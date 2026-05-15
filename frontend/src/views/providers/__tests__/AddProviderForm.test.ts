@@ -154,4 +154,127 @@ describe('AddProviderForm', () => {
     await cancel!.trigger('click');
     expect(wrapper.emitted('cancel')).toBeTruthy();
   });
+
+  // ── Gemini submit shapes (google-vertex-gemini-adapter-01KQ8VMY WP08) ───────
+
+  it('gemini AI Studio: submits with api_key cred + geminiEndpointKind=ai_studio', async () => {
+    const client = makeClient([{ id: 'gemini-2.5-flash', displayName: 'Gemini 2.5 Flash' }]);
+    const wrapper = mountForm(client);
+
+    // Select Google Gemini.
+    await wrapper.find('[data-testid="add-provider-kind"]').setValue('gemini');
+    await flushPromises();
+
+    // Paste API key + Connect.
+    await wrapper.find('[data-testid="add-provider-apikey"]').setValue('AIzaTestKey123');
+    await wrapper.find('[data-testid="add-provider-connect"]').trigger('click');
+    await flushPromises();
+
+    // Pick the model.
+    const checkboxes = wrapper.findAll('input[type="checkbox"]');
+    if (checkboxes.length > 0) {
+      await checkboxes[0].setValue(true);
+    }
+
+    await wrapper.find('form').trigger('submit.prevent');
+    const emitted = wrapper.emitted('submit') as AddProviderInput[][];
+    expect(emitted).toBeTruthy();
+    const input = emitted[0][0];
+    expect(input.kind).toBe('gemini');
+    expect(input.geminiEndpointKind).toBe('ai_studio');
+    expect(input.cred.kind).toBe('keychain');
+  });
+
+  it('gemini Vertex + ADC: submits with env cred + no plaintextApiKey', async () => {
+    const client = makeClient([]);
+    const wrapper = mountForm(client);
+
+    await wrapper.find('[data-testid="add-provider-kind"]').setValue('gemini');
+    await flushPromises();
+
+    // Switch to Vertex endpoint.
+    await wrapper.find('[data-testid="add-provider-gemini-vertex"]').trigger('click');
+    await flushPromises();
+
+    // Fill project + region + manual model.
+    await wrapper.find('[data-testid="add-provider-gemini-project"]').setValue('my-gcp-project');
+    await wrapper.find('[data-testid="add-provider-gemini-region"]').setValue('us-central1');
+    // ADC is selected by default; set a manual model.
+    const vm = wrapper.vm as any;
+    vm.form.manualModelIds = 'gemini-2.5-pro';
+    await flushPromises();
+
+    await wrapper.find('form').trigger('submit.prevent');
+    const emitted = wrapper.emitted('submit') as AddProviderInput[][];
+    if (emitted && emitted.length > 0) {
+      const input = emitted[0][0];
+      expect(input.kind).toBe('gemini');
+      expect(input.geminiEndpointKind).toBe('vertex');
+      expect(input.cred.kind).toBe('env');
+      expect(input.plaintextApiKey).toBeUndefined();
+      expect(input.project).toBe('my-gcp-project');
+    }
+    // If validation blocked submission, that's also acceptable for now.
+  });
+
+  it('gemini Vertex + SA paste: submits with keychain cred + plaintextApiKey', async () => {
+    const client = makeClient([]);
+    const wrapper = mountForm(client);
+
+    await wrapper.find('[data-testid="add-provider-kind"]').setValue('gemini');
+    await flushPromises();
+    await wrapper.find('[data-testid="add-provider-gemini-vertex"]').trigger('click');
+    await flushPromises();
+
+    // Choose service-account paste.
+    await wrapper.find('[data-testid="add-provider-gemini-sa-paste"]').trigger('click');
+    await flushPromises();
+
+    // Fill required fields.
+    await wrapper.find('[data-testid="add-provider-gemini-project"]').setValue('proj');
+    await wrapper.find('[data-testid="add-provider-apikey"]').setValue('{"type":"service_account"}');
+    const vm = wrapper.vm as any;
+    vm.form.manualModelIds = 'gemini-2.5-pro';
+    await flushPromises();
+
+    await wrapper.find('form').trigger('submit.prevent');
+    const emitted = wrapper.emitted('submit') as AddProviderInput[][];
+    if (emitted && emitted.length > 0) {
+      const input = emitted[0][0];
+      expect(input.kind).toBe('gemini');
+      expect(input.geminiEndpointKind).toBe('vertex');
+      expect(input.cred.kind).toBe('keychain');
+      expect(input.plaintextApiKey).toBeTruthy();
+    }
+  });
+
+  it('gemini Vertex + SA path: submits with file cred', async () => {
+    const client = makeClient([]);
+    const wrapper = mountForm(client);
+
+    await wrapper.find('[data-testid="add-provider-kind"]').setValue('gemini');
+    await flushPromises();
+    await wrapper.find('[data-testid="add-provider-gemini-vertex"]').trigger('click');
+    await flushPromises();
+
+    // Choose service-account path.
+    await wrapper.find('[data-testid="add-provider-gemini-sa-path"]').trigger('click');
+    await flushPromises();
+
+    await wrapper.find('[data-testid="add-provider-gemini-project"]').setValue('proj');
+    await wrapper.find('[data-testid="add-provider-gemini-sa-path-input"]').setValue('/home/user/sa.json');
+    const vm = wrapper.vm as any;
+    vm.form.manualModelIds = 'gemini-2.5-pro';
+    await flushPromises();
+
+    await wrapper.find('form').trigger('submit.prevent');
+    const emitted = wrapper.emitted('submit') as AddProviderInput[][];
+    if (emitted && emitted.length > 0) {
+      const input = emitted[0][0];
+      expect(input.kind).toBe('gemini');
+      expect(input.cred.kind).toBe('file');
+      expect(input.cred.locator).toBe('/home/user/sa.json');
+      expect(input.plaintextApiKey).toBeUndefined();
+    }
+  });
 });

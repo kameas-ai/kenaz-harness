@@ -398,3 +398,54 @@ type ErrFeatureDisabled struct {
 func (e *ErrFeatureDisabled) Error() string {
 	return fmt.Sprintf("llm: feature %q disabled (set %s=on to enable)", e.Feature, e.EnvVar)
 }
+
+// ErrUnsupportedFeature is returned when a request opts into a feature
+// or knob that the (provider, model) does not support AND no fallback
+// is applicable (FR-010 of provider-implementation-uniformity-01KQ8V4F).
+//
+// The Hint field carries a user-visible explanation of what the caller
+// can do instead (e.g. "switch to a model that supports seed" or
+// "use AnthropicThinkingBudget instead of OpenAIEffort on Claude").
+//
+// The frontend surfaces this via the ComposerError toast (WP08).
+type ErrUnsupportedFeature struct {
+	ModelID string // e.g. "gpt-3.5-turbo"
+	Feature string // e.g. "seed", "json_schema", "reasoning.openai_effort"
+	Hint    string // optional user-visible recovery hint
+}
+
+func (e *ErrUnsupportedFeature) Error() string {
+	if e.Hint != "" {
+		return fmt.Sprintf("llm: feature %q not supported by model %q: %s", e.Feature, e.ModelID, e.Hint)
+	}
+	return fmt.Sprintf("llm: feature %q not supported by model %q", e.Feature, e.ModelID)
+}
+
+// IsUnsupportedFeature reports whether err is or wraps ErrUnsupportedFeature.
+func IsUnsupportedFeature(err error) bool {
+	if err == nil {
+		return false
+	}
+	var t *ErrUnsupportedFeature
+	return errors.As(err, &t)
+}
+
+// ErrCustomEndpointMissingCapability is returned when a request targets
+// a custom OpenAI-compatible endpoint and the probed capability matrix
+// indicates the required capability is not supported. This error is
+// returned before any wire call.
+//
+// (custom-openai-compatible-endpoint-01KQ8VN0 WP05)
+type ErrCustomEndpointMissingCapability struct {
+	// Endpoint is the base URL of the custom endpoint.
+	Endpoint string
+	// Capability is the missing capability name (e.g. "tool_calling").
+	Capability string
+	// ProfileID is the ProviderProfile.ID of the failing profile.
+	ProfileID string
+}
+
+func (e *ErrCustomEndpointMissingCapability) Error() string {
+	return fmt.Sprintf("llm: custom endpoint %q does not support %q (probed capability matrix)",
+		e.Endpoint, e.Capability)
+}

@@ -154,7 +154,64 @@ export type ProviderKind =
   | 'openai'
   | 'openrouter'
   | 'bedrock'
-  | 'ollama';
+  | 'ollama'
+  | 'azure-openai'
+  | 'gemini'
+  /** Custom OpenAI-compatible endpoint (custom-openai-compatible-endpoint-01KQ8VN0) */
+  | 'custom-openai';
+
+/**
+ * GeminiEndpointKind selects which Google endpoint to target.
+ * - 'ai_studio': Google AI Studio (API-key auth) — the default.
+ * - 'vertex': Google Cloud Vertex AI (service-account or ADC auth).
+ */
+export type GeminiEndpointKind = 'ai_studio' | 'vertex';
+
+/**
+ * GeminiAuthStatus carries the auth token status for a Gemini Vertex row.
+ * Returned by LLM_AuthStatus(profileID).
+ */
+export interface GeminiAuthStatus {
+  mode: 'api_key' | 'service_account' | 'adc';
+  /** ISO-8601 expiry for OAuth modes; empty for API-key mode. */
+  expiresAt?: string;
+  source: string;
+}
+
+/** Auth scheme for custom-openai endpoints. */
+export type CustomAuthScheme = 'bearer' | 'api-key-header' | 'custom' | 'none';
+
+/** Summary of a custom endpoint template from the template registry (WP01). */
+export interface CustomTemplateSummary {
+  id: string;
+  name: string;
+  base_url: string;
+  auth_scheme: CustomAuthScheme;
+}
+
+/** Probed capability matrix for a custom endpoint. */
+export interface CustomCapabilityMatrix {
+  endpoint: string;
+  probed_at: number;
+  streaming: 'true' | 'false' | 'unknown';
+  tool_calling: 'true' | 'false' | 'unknown';
+  streaming_usage: 'true' | 'false' | 'unknown';
+}
+
+/** Input for the ProbeCustomEndpoint RPC. */
+export interface CustomProbeRequest {
+  base_url: string;
+  model: string;
+  auth_scheme: CustomAuthScheme;
+  auth_header?: string;
+  plaintext_api_key?: string;
+}
+
+/** Result of the ProbeCustomEndpoint RPC. */
+export interface CustomProbeResult {
+  matrix: CustomCapabilityMatrix;
+  error?: string;
+}
 
 export interface AddProviderInput {
   id: string;
@@ -173,6 +230,17 @@ export interface AddProviderInput {
    * before zeroing. Never stored in providers.json.
    */
   plaintextApiKey?: string;
+  /**
+   * Gemini-specific: which endpoint variant to target.
+   * 'ai_studio' (default) or 'vertex'.
+   * Only set when kind === 'gemini'.
+   */
+  geminiEndpointKind?: GeminiEndpointKind;
+  /**
+   * Google Cloud project ID for Vertex AI endpoints.
+   * Only set when geminiEndpointKind === 'vertex'.
+   */
+  project?: string;
 }
 
 export interface TestResult {
@@ -559,6 +627,13 @@ export interface AppInfo {
    * (provider-keychain-rotation-01KQ8TD9 WP07)
    */
   keychainRotationEnabled?: boolean;
+  /**
+   * customOpenAIEnabled is true when HARNESS_CUSTOM_OPENAI is not "0".
+   * The frontend uses this to hide the "Custom OpenAI-compatible" kind in
+   * the provider-add form when the feature is disabled.
+   * (custom-openai-compatible-endpoint-01KQ8VN0 WP08)
+   */
+  customOpenAIEnabled?: boolean;
 }
 
 export interface WindowSize {
@@ -1144,6 +1219,18 @@ export interface RotationResult {
 }
 
 /**
+ * ProviderKeyTestResult — outcome of LLM_TestProviderKey.
+ * Mirrors core/rpc/views/llm.ProviderKeyTestResult.
+ * (azure-openai-adapter-01KQ8VMZ WP03)
+ */
+export interface ProviderKeyTestResult {
+  ok: boolean;
+  model_count: number;
+  deprecation_warning?: string;
+  message?: string;
+}
+
+/**
  * AuthFailedPayload — payload of the `provider:auth-failed` broker event.
  * Emitted by the chat runner when an adapter returns *ErrProviderAuthFailed.
  * (provider-keychain-rotation-01KQ8TD9 WP05)
@@ -1155,6 +1242,18 @@ export interface AuthFailedPayload {
   provider: string;
   model: string;
   reason: string;
+}
+
+/**
+ * CapabilityMissingPayload — payload of the `provider:capability-missing`
+ * broker event. Emitted by the chat runner when a custom OpenAI-compatible
+ * endpoint's probed capability matrix blocks a request before any wire call.
+ * (custom-openai-compatible-endpoint-01KQ8VN0 WP05)
+ */
+export interface CapabilityMissingPayload {
+  capability: string;
+  endpoint: string;
+  profile_id: string;
 }
 
 /**
@@ -2059,6 +2158,34 @@ export interface SlashExecuteResult {
   kind: SlashResultKind;
   metadata?: Record<string, unknown>;
 }
+
+// ── reasoning knob (provider-implementation-uniformity-01KQ8V4F WP07) ──
+
+/**
+ * ReasoningConfig — the wire shape returned in SlashExecuteResult.metadata
+ * under the `reasoningKnob` key after a successful /effort command.
+ * Mirrors the Go llm.ReasoningConfig struct.
+ *
+ * Exactly one field is set:
+ *   - openAIEffort:              "low" | "medium" | "high" | "minimal"
+ *   - anthropicThinkingBudget:   integer token budget > 0
+ */
+export interface ReasoningConfig {
+  openAIEffort?: string;
+  anthropicThinkingBudget?: number;
+}
+
+/**
+ * ReasoningStyle — discriminates how the active model expresses its
+ * reasoning-effort knob. Used by ReasoningControl.vue to switch the
+ * display mode. Mirrors the Go llm.ReasoningStyle enum values.
+ *
+ * - "none"         — model has no reasoning knob (control is hidden)
+ * - "effort_string"— OpenAI o-series: low/medium/high/minimal
+ * - "token_budget" — Anthropic: integer token budget
+ * - "both"         — model accepts either form
+ */
+export type ReasoningStyle = 'none' | 'effort_string' | 'token_budget' | 'both';
 
 // ── corpora (agent-kernel-graph; Bundle C WP10/WP11) ─────────────────
 
@@ -3336,4 +3463,46 @@ export interface SubagentBranch extends Branch {
   elapsedS?: number;
   /** Budget time limit in seconds from the profile. */
   budgetTimeS?: number;
+}
+
+// ── Local runtime types (local-model-runtimes-01KQ8VMZ WP04/WP05/WP06) ──
+
+/**
+ * LocalRuntimeModel — a model offered by a locally-running LLM runtime.
+ * Mirrors core/rpc/views/llm.LocalRuntimeModel.
+ */
+export interface LocalRuntimeModel {
+  id: string;
+  displayName: string;
+  /** File size in bytes (0 when unknown). */
+  sizeBytes?: number;
+  /** Quantization label e.g. "Q4_K_M", "F16". Empty when unknown. */
+  quantLevel?: string;
+  /** Parameter count in billions (0 when unknown). */
+  paramCount?: number;
+}
+
+/**
+ * LocalRuntimeInfo — detection snapshot for one supported local runtime.
+ * Mirrors core/rpc/views/llm.LocalRuntimeInfo.
+ */
+export interface LocalRuntimeInfo {
+  kind: string;
+  name: string;
+  running: boolean;
+  installed: boolean;
+  defaultBaseURL: string;
+  port: number;
+  /** Models loaded in the runtime (populated after metadata fetch). */
+  models?: LocalRuntimeModel[];
+}
+
+/**
+ * LocalRuntimeConfigResult — result of AutoConfigureLocalRuntime.
+ * Mirrors core/rpc/views/llm.LocalRuntimeConfigResult.
+ */
+export interface LocalRuntimeConfigResult {
+  providerId: string;
+  name: string;
+  models: LocalRuntimeModel[];
 }

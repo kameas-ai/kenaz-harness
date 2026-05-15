@@ -43,6 +43,7 @@ import (
 	slashview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/slashcmd"
 	coreslashcmd "github.com/sigil-tech/kaneaz-harness/core/slashcmd"
 	llmcap "github.com/sigil-tech/kaneaz-harness/core/llm/capabilities"
+	"github.com/sigil-tech/kaneaz-harness/core/llm/gemini"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/tools"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/trust"
 	updateview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/update"
@@ -371,6 +372,38 @@ func (b *Bindings) LLM_TestAndRotateKey(profileID, plaintextApiKey, source strin
 // (provider-keychain-rotation-01KQ8TD9 WP04)
 func (b *Bindings) LLM_ResumeAfterKeyRotation(resumeToken string) error {
 	return b.api.LLMConnector().ResumeAfterKeyRotation(b.ctx(), resumeToken)
+}
+
+// LLM_TestProviderKey validates a plaintext API key against the given provider
+// kind and resource host without writing to the keychain. Used by the
+// AddProvider form to show connection status before the user clicks Submit.
+// The plaintext key is consumed and zeroed before returning.
+// (azure-openai-adapter-01KQ8VMZ WP03)
+func (b *Bindings) LLM_TestProviderKey(kind, host, plaintextKey string) (llm.ProviderKeyTestResult, error) {
+	return b.api.LLMConnector().TestProviderKey(b.ctx(), kind, host, plaintextKey)
+}
+
+// LLM_ListCustomTemplates returns the built-in custom endpoint template
+// summaries from the adapter's embedded registry. Returns an empty slice
+// when the adapter is not registered (HARNESS_CUSTOM_OPENAI=0).
+// (custom-openai-compatible-endpoint-01KQ8VN0 WP06)
+func (b *Bindings) LLM_ListCustomTemplates() ([]llm.CustomTemplateSummary, error) {
+	return b.api.LLMConnector().ListCustomTemplates(b.ctx())
+}
+
+// LLM_RecognizeTemplate looks up the best-matching template for rawURL
+// via glob matching. Returns {matched:false} when no template matches.
+// (custom-openai-compatible-endpoint-01KQ8VN0 WP06)
+func (b *Bindings) LLM_RecognizeTemplate(rawURL string) (llm.RecognizeTemplateResult, error) {
+	return b.api.LLMConnector().RecognizeTemplate(b.ctx(), rawURL)
+}
+
+// LLM_ProbeCustomEndpoint runs the three-step capability probe against a
+// custom OpenAI-compatible endpoint. The plaintext API key is consumed and
+// zeroed server-side before returning.
+// (custom-openai-compatible-endpoint-01KQ8VN0 WP06)
+func (b *Bindings) LLM_ProbeCustomEndpoint(in llm.ProbeCustomEndpointInput) (llm.ProbeCustomEndpointResult, error) {
+	return b.api.LLMConnector().ProbeCustomEndpoint(b.ctx(), in)
 }
 
 // ── mcp ────────────────────────────────────────────────────────────────
@@ -1753,6 +1786,12 @@ func (b *Bindings) Config_GetFlags() ([]FeatureFlagInfo, error) {
 			Description: "Model-generated image output pipeline (DALL-E 3, gpt-image-1, Titan Image). When off, StreamGeneratedImage events are silently discarded regardless of the auto-capture dial.",
 			EnvVar:      "HARNESS_MULTIMODAL_OUT",
 		},
+		{
+			Name:        "google-gemini",
+			Enabled:     gemini.IsEnabled(),
+			Description: "Google Gemini adapter (AI Studio API key and Vertex AI service-account / ADC auth). Supports gemini-2.5-pro/flash with streaming, tool calling, vision, and reasoning.",
+			EnvVar:      gemini.EnvFlag,
+		},
 	}, nil
 }
 
@@ -2257,6 +2296,65 @@ func (b *Bindings) Secrets_Expose(req secretsview.ExposeRequest) error {
 // Returns an error when the locator is not currently exposed.
 func (b *Bindings) Secrets_Revoke(locator string) error {
 	return b.api.Secrets().RevokeSecret(b.ctx(), locator)
+}
+
+// ── local runtime settings (local-model-runtimes-01KQ8VMZ WP07) ─────────
+
+// Settings_GetLocalRuntimeRAMOverrideGB returns the user-supplied RAM
+// override in GiB (0 = use detected system RAM).
+// (local-model-runtimes-01KQ8VMZ WP07)
+func (b *Bindings) Settings_GetLocalRuntimeRAMOverrideGB() (float64, error) {
+	if b.storeFn == nil {
+		return 0, nil
+	}
+	s, err := b.storeFn().LoadAll()
+	if err != nil {
+		return 0, err
+	}
+	return s.LocalRuntimeRAMOverrideGB, nil
+}
+
+// Settings_SetLocalRuntimeRAMOverrideGB persists the RAM override. Zero
+// disables the override (falls back to detected). Negative values are
+// clamped to zero before save.
+// (local-model-runtimes-01KQ8VMZ WP07)
+func (b *Bindings) Settings_SetLocalRuntimeRAMOverrideGB(gb float64) error {
+	if b.storeFn == nil {
+		return nil
+	}
+	s, err := b.storeFn().LoadAll()
+	if err != nil {
+		return err
+	}
+	if gb < 0 {
+		gb = 0
+	}
+	s.LocalRuntimeRAMOverrideGB = gb
+	return b.storeFn().SaveAll(s)
+}
+
+// LLM_ListDetectedLocalRuntimes returns the current local runtime detection
+// snapshot (cached for 5 min). Returns an empty slice when the feature flag
+// is off (HARNESS_LOCAL_RUNTIMES=0).
+// (local-model-runtimes-01KQ8VMZ WP04)
+func (b *Bindings) LLM_ListDetectedLocalRuntimes() ([]llm.LocalRuntimeInfo, error) {
+	return b.api.LLMConnector().ListDetectedLocalRuntimes(b.ctx())
+}
+
+// LLM_AutoConfigureLocalRuntime detects the running runtime for the given
+// kind and persists a personal provider profile using the custom-openai
+// adapter. Returns an error when the runtime is not running or the feature
+// flag is off.
+// (local-model-runtimes-01KQ8VMZ WP04)
+func (b *Bindings) LLM_AutoConfigureLocalRuntime(kind string) (llm.LocalRuntimeConfigResult, error) {
+	return b.api.LLMConnector().AutoConfigureLocalRuntime(b.ctx(), kind)
+}
+
+// LLM_RescanLocalRuntimes invalidates the detection cache and triggers a
+// fresh scan. Returns the fresh snapshot.
+// (local-model-runtimes-01KQ8VMZ WP04)
+func (b *Bindings) LLM_RescanLocalRuntimes() ([]llm.LocalRuntimeInfo, error) {
+	return b.api.LLMConnector().RescanLocalRuntimes(b.ctx())
 }
 
 // ── agents (branch-subagent-interactive-01KZNP3B, WP01) ──────────────────

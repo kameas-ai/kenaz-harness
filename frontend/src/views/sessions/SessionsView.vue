@@ -21,6 +21,8 @@ import NewSessionDialog from '@/shell/NewSessionDialog.vue';
 import MessageList from '@/components/chat/MessageList.vue';
 import SessionHeader from '@/components/chat/SessionHeader.vue';
 import ChatInput from '@/components/chat/ChatInput.vue';
+import ComposerError from '@/components/chat/ComposerError.vue';
+import ReasoningControl from '@/components/chat/ReasoningControl.vue';
 import SlashArgFill from '@/components/chat/SlashArgFill.vue';
 import ResolvedContextPanel from '@/views/sessions/ResolvedContextPanel.vue';
 import ConfirmToolModal from '@/components/chat/ConfirmToolModal.vue';
@@ -50,12 +52,15 @@ import type {
   MemoryScopeKind,
   Message,
   Provider,
+  ReasoningConfig,
+  ReasoningStyle,
   SessionUsage,
   Settings,
   SlashExecuteResult,
   UserCommand,
 } from '@/lib/types';
 import { flattenChoices, inferFamily } from '@/lib/modelFamily';
+import { parseUnsupportedFeatureError } from '@/lib/errors';
 
 const route = useRoute();
 const router = useRouter();
@@ -151,6 +156,35 @@ const SUPPORTED_KINDS = new Set([
 const activeProviderId = ref<string>('');
 const activeModelId = ref<string>('');
 
+// ── Reasoning effort state (provider-implementation-uniformity-01KQ8V4F WP07) ──
+// Set via the /effort slash command; the ReasoningControl chip reads it.
+// Both fields are retained so switching providers mid-session and back
+// restores the previously-set value for that provider's style.
+const activeReasoningConfig = ref<ReasoningConfig | undefined>(undefined);
+
+// ── ComposerError state (provider-implementation-uniformity-01KQ8V4F WP08) ──
+// Holds an ErrUnsupportedFeature string when the last stream failed due to
+// a knob-policy rejection. Cleared on dismiss or on next successful send.
+// We watch session.error separately so we can distinguish knob errors from
+// other stream errors (auth failures, transient errors, etc.).
+const composerErrorText = ref<string | null>(null);
+
+watch(
+  () => session.error.value,
+  (err) => {
+    if (!err) return;
+    // Only surface ErrUnsupportedFeature in the ComposerError banner;
+    // other errors continue to render via MessageList's error-message prop.
+    if (parseUnsupportedFeatureError(err)) {
+      composerErrorText.value = err;
+    }
+  },
+);
+
+function onComposerErrorDismiss() {
+  composerErrorText.value = null;
+}
+
 const activeProvider = computed<Provider | null>(() => {
   if (providers.value.length === 0) return null;
   // Prefer a provider whose kind has a working stream adapter.
@@ -182,6 +216,30 @@ const activeFamily = computed<string>(() => {
 // All (provider, model) tuples available across all configured
 // providers, with their inferred family. Drives the switcher pill.
 const allChoices = computed(() => flattenChoices(providers.value));
+
+// ── Reasoning style (provider-implementation-uniformity-01KQ8V4F WP07) ──
+// Derived from the active provider kind + model ID. No round-trip needed;
+// the capability YAML rules are: Anthropic sonnet-* / opus-* → token_budget;
+// OpenAI o-series → effort_string.
+const activeReasoningStyle = computed<ReasoningStyle>(() => {
+  const p = activeProvider.value;
+  if (!p) return 'none';
+  const kind = p.kind ?? '';
+  const model = activeModelId.value.toLowerCase();
+  if (kind === 'anthropic' || kind === 'bedrock') {
+    // claude-sonnet-* and claude-opus-* (with and without anthropic. prefix)
+    if (/claude[-.]sonnet/.test(model) || /claude[-.]opus/.test(model)) {
+      return 'token_budget';
+    }
+  }
+  if (kind === 'openai' || kind === 'openrouter') {
+    // o1, o3, o4, o1-mini, o3-mini, etc.
+    if (/^(openai\/)?o\d/.test(model) || /\/(o\d)/.test(model)) {
+      return 'effort_string';
+    }
+  }
+  return 'none';
+});
 
 // Same family as the active session — these are click-able. Other
 // families render disabled with a tooltip.
@@ -609,6 +667,26 @@ async function onSlashCommand(raw: string) {
   const providerId = result.metadata?.['providerId'];
   if (typeof modelId === 'string' && typeof providerId === 'string' && modelId !== '' && providerId !== '') {
     pickModel(providerId, modelId);
+  }
+
+  // /effort — apply the reasoning knob to local state so ReasoningControl
+  // reflects the new setting immediately without a round-trip.
+  // (provider-implementation-uniformity-01KQ8V4F WP07)
+  if (result.metadata?.['reasoningKnob']) {
+    const knob = result.metadata['reasoningKnob'] as Record<string, unknown>;
+    const newConfig: ReasoningConfig = {};
+    if (typeof knob['openAIEffort'] === 'string' && knob['openAIEffort']) {
+      newConfig.openAIEffort = knob['openAIEffort'];
+    }
+    if (typeof knob['anthropicThinkingBudget'] === 'number' && knob['anthropicThinkingBudget'] > 0) {
+      newConfig.anthropicThinkingBudget = knob['anthropicThinkingBudget'];
+    }
+    // Merge: keep the non-active style's stored value so a provider switch
+    // and switch-back restores the previous setting for that provider.
+    activeReasoningConfig.value = {
+      ...activeReasoningConfig.value,
+      ...newConfig,
+    };
   }
 
   // /clear — the backend appended a system divider; refresh the
@@ -1363,6 +1441,19 @@ async function onNudgeNewSession() {
           :session="session.session.value"
           @title-changed="session.refresh()"
         />
+        <!-- Reasoning-effort chip: shown when the active model has a reasoning
+             knob (provider-implementation-uniformity-01KQ8V4F WP07). -->
+        <div
+          v-if="session.session.value && activeTab === 'chat' && activeReasoningStyle !== 'none'"
+          class="flex justify-end px-4 py-1 border-b border-hairline"
+        >
+          <ReasoningControl
+            :reasoning-style="activeReasoningStyle"
+            :config="activeReasoningConfig"
+            :session-id="sessionId"
+            @config-change="(cfg) => { activeReasoningConfig = cfg ?? undefined }"
+          />
+        </div>
         <div
           v-if="activeTab === 'chat'"
           class="flex-1 min-h-0 grid grid-cols-[minmax(0,1fr)_auto]"
@@ -1601,6 +1692,14 @@ async function onNudgeNewSession() {
           data-testid="session-slash-arg-fill"
           @submit="onArgFillSubmit"
           @cancel="dismissArgFill"
+        />
+        <!-- ComposerError: surfaced when a knob-policy rejection (ErrUnsupportedFeature)
+             stops the last message (provider-implementation-uniformity-01KQ8V4F WP08). -->
+        <ComposerError
+          v-if="composerErrorText"
+          :error="composerErrorText"
+          class="mx-3 mb-2"
+          @dismiss="onComposerErrorDismiss"
         />
         <ChatInput
           v-model="session.draft.value"

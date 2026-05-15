@@ -19,10 +19,13 @@ import (
 
 	llm "github.com/sigil-tech/kaneaz-harness/core/llm"
 	"github.com/sigil-tech/kaneaz-harness/core/llm/anthropic"
+	"github.com/sigil-tech/kaneaz-harness/core/llm/azure"
 	"github.com/sigil-tech/kaneaz-harness/core/llm/bedrock"
 	"github.com/sigil-tech/kaneaz-harness/core/llm/capabilities"
 	"github.com/sigil-tech/kaneaz-harness/core/llm/credref"
+	"github.com/sigil-tech/kaneaz-harness/core/llm/custom"
 	"github.com/sigil-tech/kaneaz-harness/core/llm/events"
+	"github.com/sigil-tech/kaneaz-harness/core/llm/gemini"
 	"github.com/sigil-tech/kaneaz-harness/core/llm/openai"
 	"github.com/sigil-tech/kaneaz-harness/core/llm/openrouter"
 	"github.com/sigil-tech/kaneaz-harness/core/llm/retry"
@@ -103,6 +106,22 @@ func New(opts Options) (*Registry, error) {
 	r.adapters[bedrock.Kind] = bedrock.New()
 	r.adapters[openai.Kind] = openai.New()
 	r.adapters[openrouter.Kind] = openrouter.New()
+	// Azure OpenAI adapter (feature-flagged: HARNESS_AZURE_OPENAI=0 to disable).
+	if azure.AzureOpenAIEnabled() {
+		r.adapters[azure.Kind] = azure.New()
+	}
+	// Google Gemini adapter — gated by HARNESS_GOOGLE_GEMINI env flag
+	// (default: enabled). The flag allows operators to exclude Gemini
+	// from the picker without recompiling.
+	if gemini.IsEnabled() {
+		r.adapters[gemini.Kind] = gemini.New()
+	}
+	// custom-openai adapter: opt-out via HARNESS_CUSTOM_OPENAI=0.
+	// New() returns nil when the env flag is 0; skip registration in that case.
+	// (custom-openai-compatible-endpoint-01KQ8VN0 WP02)
+	if ca := custom.New(); ca != nil {
+		r.adapters[custom.Kind] = ca
+	}
 	return r, nil
 }
 

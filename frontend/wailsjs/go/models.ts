@@ -2691,11 +2691,11 @@ export namespace llm {
 	    success: boolean;
 	    latency_ms: number;
 	    message: string;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new TestResult(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.success = source["success"];
@@ -2703,7 +2703,26 @@ export namespace llm {
 	        this.message = source["message"];
 	    }
 	}
-	
+
+	export class ProviderKeyTestResult {
+	    ok: boolean;
+	    model_count: number;
+	    deprecation_warning: string;
+	    message: string;
+
+	    static createFrom(source: any = {}) {
+	        return new ProviderKeyTestResult(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.ok = source["ok"];
+	        this.model_count = source["model_count"];
+	        this.deprecation_warning = source["deprecation_warning"];
+	        this.message = source["message"];
+	    }
+	}
+
 
 }
 

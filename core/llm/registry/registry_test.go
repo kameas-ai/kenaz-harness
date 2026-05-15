@@ -460,3 +460,48 @@ func TestRegistry_AuthFailureDecoratedAsErrProviderAuthFailed(t *testing.T) {
 		t.Errorf("ErrAuth.Status = %d, want 401", authBare.Status)
 	}
 }
+
+// TestRegistry_GeminiRegisteredWhenFlagOn verifies gemini adapter is registered
+// when HARNESS_GOOGLE_GEMINI is unset (default) or "on".
+func TestRegistry_GeminiRegisteredWhenFlagOn(t *testing.T) {
+	// Clear any existing flag value for this test.
+	old := os.Getenv("HARNESS_GOOGLE_GEMINI")
+	_ = os.Unsetenv("HARNESS_GOOGLE_GEMINI")
+	defer func() {
+		if old != "" {
+			_ = os.Setenv("HARNESS_GOOGLE_GEMINI", old)
+		}
+	}()
+
+	r, err := New(Options{})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	a := r.Adapter("gemini")
+	if a == nil {
+		t.Error("expected gemini adapter to be registered when HARNESS_GOOGLE_GEMINI is unset")
+	}
+}
+
+// TestRegistry_GeminiNotRegisteredWhenFlagOff verifies gemini adapter is absent
+// when HARNESS_GOOGLE_GEMINI=off.
+func TestRegistry_GeminiNotRegisteredWhenFlagOff(t *testing.T) {
+	old := os.Getenv("HARNESS_GOOGLE_GEMINI")
+	_ = os.Setenv("HARNESS_GOOGLE_GEMINI", "off")
+	defer func() {
+		if old != "" {
+			_ = os.Setenv("HARNESS_GOOGLE_GEMINI", old)
+		} else {
+			_ = os.Unsetenv("HARNESS_GOOGLE_GEMINI")
+		}
+	}()
+
+	r, err := New(Options{})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	a := r.Adapter("gemini")
+	if a != nil {
+		t.Error("expected gemini adapter NOT to be registered when HARNESS_GOOGLE_GEMINI=off")
+	}
+}

@@ -1,0 +1,164 @@
+provider: gemini
+defaults:
+  streaming: true
+  tool_calling: true
+  vision: true
+  documents: false
+  json_mode: true
+  prompt_caching: false
+  reasoning: false
+  cancellation: true
+  usage_reporting: true
+  # Cloud providers do not support GBNF grammar constraints.
+  structured_output: false
+  grammar: false
+  regex_grammar: false
+  # Gemini does not offer an image-generation API via this adapter.
+  image_output: false
+  # Attachment limits for inline image input via inlineData parts.
+  # Gemini accepts PNG, JPEG, WebP, HEIC/HEIF. GIF is rejected.
+  image_input: true
+  document_input: false
+  max_image_bytes: 20971520          # 20 MiB (Gemini documented limit)
+  max_document_bytes: 0
+  max_image_count_per_message: 16
+  max_image_pixels: 0               # 0 = unbounded
+  max_document_pages: 0
+  image_input_mime_types: [image/png, image/jpeg, image/webp, image/heic, image/heif]
+  document_input_mime_types: []
+models:
+  # Gemini 2.5 Pro — supports reasoning (extended thinking)
+  - match: "gemini-2.5-pro*"
+    streaming: true
+    tool_calling: true
+    vision: true
+    documents: false
+    json_mode: true
+    prompt_caching: false
+    reasoning: true
+    cancellation: true
+    usage_reporting: true
+    structured_output: false
+    grammar: false
+    regex_grammar: false
+    context_window: 1048576
+    max_output_tokens: 65536
+    image_input: true
+    document_input: false
+    max_image_bytes: 20971520
+    max_image_count_per_message: 16
+
+  # Gemini 2.5 Flash — supports reasoning
+  - match: "gemini-2.5-flash*"
+    streaming: true
+    tool_calling: true
+    vision: true
+    documents: false
+    json_mode: true
+    prompt_caching: false
+    reasoning: true
+    cancellation: true
+    usage_reporting: true
+    structured_output: false
+    grammar: false
+    regex_grammar: false
+    context_window: 1048576
+    max_output_tokens: 65536
+    image_input: true
+    document_input: false
+    max_image_bytes: 20971520
+    max_image_count_per_message: 16
+
+  # Gemini 2.0 Flash — no reasoning
+  - match: "gemini-2.0-flash*"
+    streaming: true
+    tool_calling: true
+    vision: true
+    documents: false
+    json_mode: true
+    prompt_caching: false
+    reasoning: false
+    cancellation: true
+    usage_reporting: true
+    structured_output: false
+    grammar: false
+    regex_grammar: false
+    context_window: 1048576
+    max_output_tokens: 8192
+    image_input: true
+    document_input: false
+    max_image_bytes: 20971520
+    max_image_count_per_message: 16
+
+  # Gemini 2.0 Pro — no reasoning
+  - match: "gemini-2.0-pro*"
+    streaming: true
+    tool_calling: true
+    vision: true
+    documents: false
+    json_mode: true
+    prompt_caching: false
+    reasoning: false
+    cancellation: true
+    usage_reporting: true
+    structured_output: false
+    grammar: false
+    regex_grammar: false
+    context_window: 1048576
+    max_output_tokens: 8192
+    image_input: true
+    document_input: false
+    max_image_bytes: 20971520
+    max_image_count_per_message: 16
+
+  # Gemini 1.5 Pro
+  - match: "gemini-1.5-pro*"
+    streaming: true
+    tool_calling: true
+    vision: true
+    documents: false
+    json_mode: true
+    prompt_caching: false
+    reasoning: false
+    cancellation: true
+    usage_reporting: true
+    context_window: 2097152
+    max_output_tokens: 8192
+    image_input: true
+    document_input: false
+    max_image_bytes: 20971520
+    max_image_count_per_message: 16
+
+  # Gemini 1.5 Flash
+  - match: "gemini-1.5-flash*"
+    streaming: true
+    tool_calling: true
+    vision: true
+    documents: false
+    json_mode: true
+    prompt_caching: false
+    reasoning: false
+    cancellation: true
+    usage_reporting: true
+    context_window: 1048576
+    max_output_tokens: 8192
+    image_input: true
+    document_input: false
+    max_image_bytes: 20971520
+    max_image_count_per_message: 16
+
+  # Gemini 1.0 Pro (legacy)
+  - match: "gemini-1.0-pro*"
+    streaming: true
+    tool_calling: true
+    vision: false
+    documents: false
+    json_mode: true
+    prompt_caching: false
+    reasoning: false
+    cancellation: true
+    usage_reporting: true
+    context_window: 32768
+    max_output_tokens: 8192
+    image_input: false
+    document_input: false

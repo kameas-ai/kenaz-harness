@@ -69,3 +69,60 @@ entries:
     model: "amazon.titan-image-*"
     per_image_usd:
       "": 0.008
+  # Azure OpenAI pricing mirrors OpenAI pricing (same underlying models).
+  # (azure-openai-adapter-01KQ8VMZ WP06)
+  - kind: azure-openai
+    model: gpt-4o*
+    per_million_tokens:
+      input: 2.50
+      output: 10.00
+  - kind: azure-openai
+    model: o1*
+    per_million_tokens:
+      input: 15.00
+      output: 60.00
+      reasoning: 60.00
+  - kind: azure-openai
+    model: gpt-4*
+    per_million_tokens:
+      input: 30.00
+      output: 60.00
+  # Google Gemini pricing (May 2026 — subject to change)
+  # https://ai.google.dev/pricing
+  - kind: gemini
+    model: "gemini-2.5-pro*"
+    per_million_tokens:
+      input: 1.25
+      output: 10.00
+      reasoning: 3.50
+  - kind: gemini
+    model: "gemini-2.5-flash*"
+    per_million_tokens:
+      input: 0.15
+      output: 0.60
+      reasoning: 3.50
+  - kind: gemini
+    model: "gemini-2.0-flash*"
+    per_million_tokens:
+      input: 0.10
+      output: 0.40
+  - kind: gemini
+    model: "gemini-2.0-pro*"
+    per_million_tokens:
+      input: 0.15
+      output: 0.60
+  - kind: gemini
+    model: "gemini-1.5-pro*"
+    per_million_tokens:
+      input: 1.25
+      output: 5.00
+  - kind: gemini
+    model: "gemini-1.5-flash*"
+    per_million_tokens:
+      input: 0.075
+      output: 0.30
+  - kind: gemini
+    model: "*"
+    per_million_tokens:
+      input: 0.15
+      output: 0.60

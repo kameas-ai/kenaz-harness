@@ -94,6 +94,19 @@ const (
 	// "info" when only code_only (pending) entries are present.
 	KindMigrationDriftDetected Kind = "storage.migration.drift-detected"
 
+	// KindKnobUnsupported is emitted when a RequestKnobs field is rejected
+	// by the KnobPolicy because the target model does not support it AND
+	// no silent fallback applies (provider-implementation-uniformity-01KQ8V4F WP08).
+	// Payload: {session_id, provider, model_id, feature, hint}.
+	KindKnobUnsupported Kind = "llm.knob.unsupported"
+
+	// KindKnobDropped is emitted when a RequestKnobs field is silently
+	// removed by the KnobPolicy because the target model does not support it
+	// but the request can proceed without it
+	// (provider-implementation-uniformity-01KQ8V4F WP08).
+	// Payload: {session_id, provider, model_id, knob, reason}.
+	KindKnobDropped Kind = "llm.knob.dropped"
+
 	// KindSecretReferenceResolved is emitted by refs.Resolver on every
 	// resolution attempt — successful or not — for a model-side @secret:
 	// reference (model-secret-references-01KW7M5A WP03). The payload
@@ -125,6 +138,8 @@ var builtIn = []Kind{
 	KindMigrationDriftDetected,
 	// Model-side secret reference audit (model-secret-references-01KW7M5A WP03).
 	KindSecretReferenceResolved,
+	// Knob policy audit (provider-implementation-uniformity-01KQ8V4F WP08).
+	KindKnobUnsupported, KindKnobDropped,
 }
 
 var (

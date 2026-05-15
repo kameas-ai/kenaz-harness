@@ -24,10 +24,22 @@ func ValidateProfile(p ProviderProfile) error {
 	if err := validateCredRef(p.ID, p.Cred); err != nil {
 		return err
 	}
+	if p.Kind == "custom-openai" && strings.TrimSpace(p.Endpoint) == "" {
+		return fmt.Errorf("llm: profile %q: custom-openai kind requires non-empty endpoint", p.ID)
+	}
 	if p.Kind == "bedrock" && strings.TrimSpace(p.Region) == "" {
 		// Plan R7 / spec edge case: bedrock + missing region must be
 		// caught before any AWS call.
 		return fmt.Errorf("llm: profile %q: bedrock kind requires non-empty region", p.ID)
+	}
+	// Gemini Vertex endpoint requires project + region.
+	if p.Kind == "gemini" && p.GeminiEndpointKind == "vertex" {
+		if strings.TrimSpace(p.Project) == "" {
+			return fmt.Errorf("llm: profile %q: gemini vertex endpoint requires non-empty project", p.ID)
+		}
+		if strings.TrimSpace(p.Region) == "" {
+			return fmt.Errorf("llm: profile %q: gemini vertex endpoint requires non-empty region", p.ID)
+		}
 	}
 	if p.Retry != nil {
 		if p.Retry.MaxAttempts < 1 {

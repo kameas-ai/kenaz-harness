@@ -1,0 +1,25 @@
+version: 1
+# Azure OpenAI deployment registry.
+#
+# Each entry maps a (host, model_id) pair to the concrete Azure deployment
+# name and the api-version string to use in the chat completions URL.
+#
+# host      — the Azure OpenAI resource hostname WITHOUT the scheme.
+#             Example: myresource.openai.azure.com
+# model_id  — the canonical OpenAI model identifier used in GenerationRequest.Model
+#             (e.g. "gpt-4o", "o1"). Must match the profile's model string.
+# deployment — the Azure deployment name you created in Azure AI Studio.
+# api_version — the date-versioned Azure OpenAI api-version string.
+#               Use "2024-10-21" for GA models; "2025-01-01-preview" for o1/o3 preview.
+#
+# Example (uncomment and fill in real values):
+# deployments:
+#   - host: myresource.openai.azure.com
+#     model_id: gpt-4o
+#     deployment: prod-gpt-4o-eastus
+#     api_version: "2024-10-21"
+#   - host: myresource.openai.azure.com
+#     model_id: o1
+#     deployment: prod-o1-eastus
+#     api_version: "2025-01-01-preview"
+deployments: []

@@ -126,6 +126,29 @@ type ProviderProfile struct {
 	CapabilityHints map[Capability]bool `json:"capability_hints,omitempty" yaml:"capabilities,omitempty"`
 	Defaults        map[string]any      `json:"defaults,omitempty" yaml:"defaults,omitempty"`
 	Retry           *RetryPolicy        `json:"retry,omitempty"  yaml:"retry,omitempty"`
+
+	// GeminiEndpointKind selects the Google Gemini endpoint variant:
+	// "ai_studio" (default, API-key auth) or "vertex" (OAuth/ADC auth).
+	// Only valid when Kind=="gemini". Other kinds ignore this field.
+	GeminiEndpointKind string `json:"gemini_endpoint_kind,omitempty" yaml:"gemini_endpoint_kind,omitempty"`
+
+	// Project is the Google Cloud project ID for Vertex AI endpoints.
+	// Required when GeminiEndpointKind=="vertex". Ignored for AI Studio.
+	Project string `json:"project,omitempty" yaml:"project,omitempty"`
+
+	// TemplateID is the optional custom-openai template slug
+	// (e.g. "groq", "vllm"). Set by the UI when the user picks a template
+	// during AddProvider. Ignored for non-custom-openai kinds.
+	// (custom-openai-compatible-endpoint-01KQ8VN0 WP02)
+	TemplateID string `json:"template_id,omitempty" yaml:"template_id,omitempty"`
+	// AuthScheme overrides the template's default auth scheme for
+	// custom-openai profiles. One of: bearer | api-key-header | custom | none.
+	// (custom-openai-compatible-endpoint-01KQ8VN0 WP02)
+	AuthScheme string `json:"auth_scheme,omitempty" yaml:"auth_scheme,omitempty"`
+	// LastProbedAt is the Unix timestamp (seconds) of the most recent
+	// successful capability probe. Zero means never probed.
+	// (custom-openai-compatible-endpoint-01KQ8VN0 WP02)
+	LastProbedAt int64 `json:"last_probed_at,omitempty" yaml:"last_probed_at,omitempty"`
 }
 
 // AvailableModels returns the resolved model list. Falls back to
@@ -424,6 +447,17 @@ type GenerationRequest struct {
 	Params         map[string]any   `json:"params,omitempty"`
 	RetryOverride  *RetryPolicy     `json:"retry_override,omitempty"`
 	SessionID      string           `json:"session_id,omitempty"`
+	// Knobs carries typed per-request fine-tuning overrides (FR-017 of
+	// provider-implementation-uniformity-01KQ8V4F). Nil means "inherit
+	// from session / global / profile defaults." Individual sub-fields
+	// are merged with the per-adapter defaults at build-request time.
+	//
+	// The wirecheck:"-" tag excludes this field from the
+	// registry_completeness_test because Knobs is a composite that
+	// serialises as flattened sub-fields on the wire — each sub-field
+	// carries its own adapter-level coverage entry when they are tracked
+	// in coverage_registry.yaml (WP08).
+	Knobs          *RequestKnobs    `json:"knobs,omitempty" wirecheck:"-"`
 }
 
 // RequestedCapabilities returns the set of capabilities this request

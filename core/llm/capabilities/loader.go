@@ -63,6 +63,33 @@ type modelEntry struct {
 	// (backend-context-window-length-01KQ8TD3 WP01).
 	MaxOutputTokens int `yaml:"max_output_tokens"`
 
+	// ── Extended knob capabilities (provider-implementation-uniformity-01KQ8V4F WP06) ──
+
+	// ParallelToolCalls is true when the model/provider supports issuing
+	// multiple tool calls in a single response (OpenAI parallel_tool_calls).
+	ParallelToolCalls bool `yaml:"parallel_tool_calls"`
+	// Seed is true when the provider accepts the seed parameter for
+	// deterministic outputs (OpenAI, OpenRouter; not Anthropic/Bedrock).
+	Seed bool `yaml:"seed"`
+	// Logprobs is true when the provider supports log-probability output.
+	Logprobs bool `yaml:"logprobs"`
+	// TopK is true when the provider supports the top_k sampling parameter
+	// (Anthropic, Bedrock; not OpenAI).
+	TopK bool `yaml:"top_k"`
+	// TopP is true when the provider supports the top_p sampling parameter.
+	TopP bool `yaml:"top_p"`
+	// FrequencyPenalty is true when the provider supports frequency_penalty.
+	FrequencyPenalty bool `yaml:"frequency_penalty"`
+	// PresencePenalty is true when the provider supports presence_penalty.
+	PresencePenalty bool `yaml:"presence_penalty"`
+	// Batch is true when the provider supports asynchronous batch inference.
+	Batch bool `yaml:"batch"`
+	// ResponseFormat is true when the adapter honours the ResponseFormat field.
+	ResponseFormat bool `yaml:"response_format"`
+	// ReasoningStyle is the reasoning effort configuration style:
+	// "" | "none" | "effort_string" | "token_budget" | "both".
+	ReasoningStyle string `yaml:"reasoning_style"`
+
 	// Attachment limits (multimodal-io-01KQ8TDF FR-005).
 	// 0 / nil / empty means "use provider default".
 	ImageInput              bool     `yaml:"image_input"`
@@ -178,6 +205,127 @@ func (c *Catalog) Describe(provider, model string) llm.CapabilityDescriptor {
 	// Unknown model under a known provider: keep defaults but mark.
 	desc.Notes[llm.CapStreaming] = "unknown_model_default"
 	return desc
+}
+
+// parseReasoningStyle converts the YAML reasoning_style string to
+// llm.ReasoningStyle. Unknown/empty values map to ReasoningNone.
+func parseReasoningStyle(s string) llm.ReasoningStyle {
+	switch s {
+	case "effort_string":
+		return llm.ReasoningEffortString
+	case "token_budget":
+		return llm.ReasoningTokenBudget
+	case "both":
+		return llm.ReasoningBoth
+	default:
+		return llm.ReasoningNone
+	}
+}
+
+// DescribeRich returns the richer ProviderCapabilities record for
+// (provider, model) (FR-001 + FR-020 of
+// provider-implementation-uniformity-01KQ8V4F WP06).
+//
+// The returned record is built from the curated YAML data and is
+// the synchronous floor returned by adapters when the cache misses.
+// A lazy /models merge may add flags ADDITIVELY on top (false-flag in
+// /models does NOT downgrade a curated true).
+func (c *Catalog) DescribeRich(provider, model string) llm.ProviderCapabilities {
+	caps := llm.ProviderCapabilities{
+		Provider: provider,
+		Model:    model,
+	}
+	spec, ok := c.specs[provider]
+	if !ok {
+		// Unknown provider: streaming-only safe baseline.
+		caps.Streaming = true
+		caps.UsageReporting = true
+		caps.Notes = map[string]string{"streaming": "unknown_provider_default"}
+		return caps
+	}
+
+	// Apply defaults from the YAML defaults map.
+	applyRichDefaults(&caps, spec.Defaults)
+
+	// Apply the first model glob that matches.
+	for _, m := range spec.Models {
+		if matchGlob(m.Match, model) {
+			applyRichEntry(&caps, &m)
+			return caps
+		}
+	}
+
+	// Unknown model under a known provider: keep defaults but mark.
+	if caps.Notes == nil {
+		caps.Notes = map[string]string{}
+	}
+	caps.Notes["streaming"] = "unknown_model_default"
+	return caps
+}
+
+// applyRichDefaults reads boolean capability defaults from the YAML
+// defaults map (mixed bool/numeric map[string]any) into a
+// ProviderCapabilities.
+func applyRichDefaults(caps *llm.ProviderCapabilities, defaults map[string]any) {
+	boolField := func(key string) bool {
+		v, _ := defaults[key].(bool)
+		return v
+	}
+	caps.Streaming = boolField("streaming")
+	caps.ToolCalling = boolField("tool_calling")
+	caps.Vision = boolField("vision")
+	caps.Documents = boolField("documents")
+	caps.JSONMode = boolField("json_mode")
+	caps.PromptCaching = boolField("prompt_caching")
+	caps.Reasoning = boolField("reasoning")
+	caps.Cancellation = boolField("cancellation")
+	caps.UsageReporting = boolField("usage_reporting")
+	caps.StructuredOutput = boolField("structured_output")
+	caps.Grammar = boolField("grammar")
+	caps.RegexGrammar = boolField("regex_grammar")
+	caps.ImageOutput = boolField("image_output")
+	caps.ParallelToolCalls = boolField("parallel_tool_calls")
+	caps.Seed = boolField("seed")
+	caps.Logprobs = boolField("logprobs")
+	caps.TopK = boolField("top_k")
+	caps.TopP = boolField("top_p")
+	caps.FrequencyPenalty = boolField("frequency_penalty")
+	caps.PresencePenalty = boolField("presence_penalty")
+	caps.Batch = boolField("batch")
+	caps.ResponseFormat = boolField("response_format")
+	if s, ok := defaults["reasoning_style"].(string); ok {
+		caps.Reasoning_ = parseReasoningStyle(s)
+	}
+}
+
+// applyRichEntry copies all capability flags from a modelEntry into a
+// ProviderCapabilities.
+func applyRichEntry(caps *llm.ProviderCapabilities, m *modelEntry) {
+	caps.Streaming = m.Streaming
+	caps.ToolCalling = m.ToolCalling
+	caps.Vision = m.Vision
+	caps.Documents = m.Documents
+	caps.JSONMode = m.JSONMode
+	caps.PromptCaching = m.PromptCaching
+	caps.Reasoning = m.Reasoning
+	caps.Cancellation = m.Cancellation
+	caps.UsageReporting = m.UsageReporting
+	caps.StructuredOutput = m.StructuredOutput
+	caps.Grammar = m.Grammar
+	caps.RegexGrammar = m.RegexGrammar
+	caps.ImageOutput = m.ImageOutput
+	caps.ContextWindow = m.ContextWindow
+	caps.MaxOutputTokens = m.MaxOutputTokens
+	caps.ParallelToolCalls = m.ParallelToolCalls
+	caps.Seed = m.Seed
+	caps.Logprobs = m.Logprobs
+	caps.TopK = m.TopK
+	caps.TopP = m.TopP
+	caps.FrequencyPenalty = m.FrequencyPenalty
+	caps.PresencePenalty = m.PresencePenalty
+	caps.Batch = m.Batch
+	caps.ResponseFormat = m.ResponseFormat
+	caps.Reasoning_ = parseReasoningStyle(m.ReasoningStyle)
 }
 
 // ContextWindow returns the curated max context length in tokens for

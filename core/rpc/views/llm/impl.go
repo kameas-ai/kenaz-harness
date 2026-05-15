@@ -27,6 +27,7 @@ import (
 	"time"
 
 	corellm "github.com/sigil-tech/kaneaz-harness/core/llm"
+	"github.com/sigil-tech/kaneaz-harness/core/llm/custom"
 	"github.com/sigil-tech/kaneaz-harness/core/llm/personal"
 	"github.com/sigil-tech/kaneaz-harness/core/logging"
 )
@@ -311,6 +312,21 @@ type AuditEmitter interface {
 	EmitRotated(ctx context.Context, provider, profileID, source string, rotatedAt time.Time) error
 }
 
+// CustomAdapterAPI is the narrow custom-openai adapter surface the WP06 RPC
+// methods use. The concrete *custom.Adapter satisfies it; tests can inject
+// a fake. nil means the feature is disabled (HARNESS_CUSTOM_OPENAI=0).
+// (custom-openai-compatible-endpoint-01KQ8VN0 WP06)
+type CustomAdapterAPI interface {
+	// Templates returns the embedded template registry.
+	Templates() *custom.Registry
+	// ListModelsForEndpoint enumerates models available at baseURL.
+	ListModelsForEndpoint(ctx context.Context, baseURL string, scheme custom.AuthScheme, authHeader string, cred []byte) ([]corellm.ModelInfo, error)
+}
+
+// ErrFeatureDisabled is returned by ProbeCustomEndpoint and the other WP06
+// methods when the custom-openai adapter is not registered (HARNESS_CUSTOM_OPENAI=0).
+var ErrFeatureDisabled = errors.New("llm: custom-openai adapter is not registered (HARNESS_CUSTOM_OPENAI=0)")
+
 // API is the concrete LLMConnectorAPI implementation.
 type API struct {
 	reg      Registry
@@ -353,6 +369,13 @@ type API struct {
 	// auditRotation, when non-nil, is called to emit KindProviderKeyRotated
 	// after a successful rotation (provider-keychain-rotation-01KQ8TD9 WP04).
 	auditRotation AuditEmitter
+
+	// customAdapter, when non-nil, is the registered custom-openai adapter.
+	// The three WP06 RPC methods (ListCustomTemplates, RecognizeTemplate,
+	// ProbeCustomEndpoint) forward through this seam so the view package does
+	// not import core/llm/custom directly.
+	// (custom-openai-compatible-endpoint-01KQ8VN0 WP06)
+	customAdapter CustomAdapterAPI
 
 	mu             sync.Mutex
 	subs           map[string]*subscription
@@ -444,6 +467,11 @@ type Config struct {
 	// successful rotation. nil → audit is silently skipped.
 	// (provider-keychain-rotation-01KQ8TD9 WP04)
 	AuditRotation AuditEmitter
+	// CustomAdapter, when non-nil, backs the ListCustomTemplates,
+	// RecognizeTemplate, and ProbeCustomEndpoint RPC methods.
+	// nil when HARNESS_CUSTOM_OPENAI=0 (those methods return ErrFeatureDisabled).
+	// (custom-openai-compatible-endpoint-01KQ8VN0 WP06)
+	CustomAdapter CustomAdapterAPI
 }
 
 // New constructs a concrete API.
@@ -470,6 +498,7 @@ func New(cfg Config) *API {
 		capCatalog:      cfg.CapCatalog,
 		credInvalidator: cfg.CredInvalidator,
 		auditRotation:   cfg.AuditRotation,
+		customAdapter:   cfg.CustomAdapter,
 		subs:            map[string]*subscription{},
 		validated:       map[string]bool{},
 	}
@@ -1447,6 +1476,81 @@ func (a *API) TestAndRotateKey(ctx context.Context, profileID, plaintextApiKey, 
 	}, nil
 }
 
+// TestProviderKey validates a plaintext API key against the given provider
+// kind and resource host without writing anything to the keychain.
+// (azure-openai-adapter-01KQ8VMZ WP03)
+func (a *API) TestProviderKey(ctx context.Context, kind, host, plaintextKey string) (ProviderKeyTestResult, error) {
+	// Zero the key before returning in all paths.
+	buf := []byte(plaintextKey)
+	defer func() {
+		for i := range buf {
+			buf[i] = 0
+		}
+	}()
+
+	if len(buf) == 0 {
+		return ProviderKeyTestResult{OK: false, Message: "API key is required"}, nil
+	}
+
+	adapter := a.lookupAdapter(kind)
+	if adapter == nil {
+		return ProviderKeyTestResult{
+			OK:      false,
+			Message: "no adapter registered for provider kind " + kind,
+		}, nil
+	}
+
+	switch kind {
+	case "azure-openai":
+		// AzureKeyTester is the interface the azure adapter satisfies for TestKey.
+		type azureKeyTester interface {
+			TestKey(ctx context.Context, host string, cred []byte) (interface{ GetOK() bool; GetModelCount() int; GetDeprecationWarning() string }, error)
+		}
+		// Use a duck-typed call via the adapter's concrete method.
+		// Since we can't import the azure package here (import cycle), we
+		// use the AdapterLookup to get the adapter and call via reflection-free
+		// method discovery through a local interface.
+		type azureTester interface {
+			TestKey(ctx context.Context, host string, cred []byte) (azureTestKeyResult, error)
+		}
+		if tester, ok := adapter.(azureTester); ok {
+			res, err := tester.TestKey(ctx, host, buf)
+			if err != nil {
+				return ProviderKeyTestResult{OK: false, Message: err.Error()}, nil
+			}
+			return ProviderKeyTestResult{
+				OK:                 res.OK,
+				ModelCount:         res.ModelCount,
+				DeprecationWarning: res.DeprecationWarning,
+			}, nil
+		}
+		return ProviderKeyTestResult{OK: false, Message: "azure-openai adapter does not support TestKey"}, nil
+	default:
+		// Other provider kinds are stubs — parallel agents will fill them in.
+		return ProviderKeyTestResult{
+			OK:      false,
+			Message: "TestProviderKey not supported for provider kind " + kind,
+		}, nil
+	}
+}
+
+// azureTestKeyResult mirrors azure.TestKeyResult so the impl can call
+// TestKey without importing the azure package (DIRECTIVE_001).
+type azureTestKeyResult struct {
+	OK                 bool
+	ModelCount         int
+	DeprecationWarning string
+}
+
+// lookupAdapter returns the registered adapter for the given kind, or nil.
+func (a *API) lookupAdapter(kind string) corellm.ProviderAdapter {
+	lookup, ok := a.reg.(AdapterLookup)
+	if !ok {
+		return nil
+	}
+	return lookup.Adapter(kind)
+}
+
 // keychainRotationFeatureEnabled reads HARNESS_KEYCHAIN_ROTATION at call time.
 // Mirrors the chat-runner helper but lives here so the LLM view does not
 // import the chat package (DIRECTIVE_001).
@@ -1483,4 +1587,105 @@ func (a *API) ResumeAfterKeyRotation(ctx context.Context, resumeToken string) er
 		return nil
 	}
 	return nil
+}
+
+// ListCustomTemplates returns the built-in template summaries from the
+// custom-openai adapter. Returns an empty slice when the adapter is not
+// registered (HARNESS_CUSTOM_OPENAI=0).
+// (custom-openai-compatible-endpoint-01KQ8VN0 WP06)
+func (a *API) ListCustomTemplates(_ context.Context) ([]CustomTemplateSummary, error) {
+	if a.customAdapter == nil {
+		return []CustomTemplateSummary{}, nil
+	}
+	reg := a.customAdapter.Templates()
+	if reg == nil {
+		return []CustomTemplateSummary{}, nil
+	}
+	all := reg.All()
+	out := make([]CustomTemplateSummary, 0, len(all))
+	for _, t := range all {
+		s := custom.Summarize(t)
+		out = append(out, CustomTemplateSummary{
+			ID:         s.ID,
+			Name:       s.Name,
+			BaseURL:    s.BaseURL,
+			AuthScheme: string(s.AuthScheme),
+		})
+	}
+	return out, nil
+}
+
+// RecognizeTemplate looks up the best-matching template for rawURL using
+// glob resolution (no explicit id hint). Returns an empty result when no
+// template matches.
+// (custom-openai-compatible-endpoint-01KQ8VN0 WP06)
+func (a *API) RecognizeTemplate(_ context.Context, rawURL string) (RecognizeTemplateResult, error) {
+	if a.customAdapter == nil {
+		return RecognizeTemplateResult{}, nil
+	}
+	reg := a.customAdapter.Templates()
+	if reg == nil {
+		return RecognizeTemplateResult{}, nil
+	}
+	t := reg.Resolve(rawURL, "")
+	if t == nil {
+		return RecognizeTemplateResult{Matched: false}, nil
+	}
+	s := custom.Summarize(*t)
+	return RecognizeTemplateResult{
+		Matched: true,
+		Template: CustomTemplateSummary{
+			ID:         s.ID,
+			Name:       s.Name,
+			BaseURL:    s.BaseURL,
+			AuthScheme: string(s.AuthScheme),
+		},
+	}, nil
+}
+
+// ProbeCustomEndpoint runs the three-step capability probe against a custom
+// OpenAI-compatible endpoint. The plaintext API key (if any) is consumed
+// and zeroed before this method returns.
+// (custom-openai-compatible-endpoint-01KQ8VN0 WP06)
+func (a *API) ProbeCustomEndpoint(ctx context.Context, in ProbeCustomEndpointInput) (ProbeCustomEndpointResult, error) {
+	if a.customAdapter == nil {
+		return ProbeCustomEndpointResult{}, ErrFeatureDisabled
+	}
+
+	// Consume and zero the plaintext key.
+	var cred []byte
+	if in.PlaintextAPIKey != "" {
+		cred = []byte(in.PlaintextAPIKey)
+		in.PlaintextAPIKey = ""
+		defer func() {
+			runtime.KeepAlive(cred)
+			for i := range cred {
+				cred[i] = 0
+			}
+		}()
+	}
+
+	scheme := custom.AuthScheme(in.AuthScheme)
+	prober := custom.NewProber(nil) // uses http.DefaultClient
+	result := prober.Probe(ctx, custom.ProbeRequest{
+		BaseURL:    in.BaseURL,
+		Model:      in.Model,
+		AuthScheme: scheme,
+		AuthHeader: in.AuthHeader,
+		Cred:       cred,
+	})
+
+	out := ProbeCustomEndpointResult{
+		Matrix: CustomCapabilityMatrix{
+			Endpoint:       result.Matrix.Endpoint,
+			ProbedAt:       result.Matrix.ProbedAt,
+			Streaming:      string(result.Matrix.Streaming),
+			ToolCalling:    string(result.Matrix.ToolCalling),
+			StreamingUsage: string(result.Matrix.StreamingUsage),
+		},
+	}
+	if result.Err != nil {
+		out.ErrMessage = result.Err.Error()
+	}
+	return out, nil
 }

@@ -143,6 +143,60 @@ export function friendlyAttachmentError(err: unknown): string | null {
   return parseAttachmentError(err)?.friendly ?? null;
 }
 
+// ── ErrUnsupportedFeature (provider-implementation-uniformity-01KQ8V4F WP08) ─
+
+/**
+ * ParsedUnsupportedFeatureError carries the structured fields from a
+ * Go ErrUnsupportedFeature — "llm: feature %q not supported by model %q: %s".
+ */
+export interface ParsedUnsupportedFeatureError {
+  /** The model ID that does not support the feature. */
+  modelId: string;
+  /** The feature identifier, e.g. "reasoning.openai_effort". */
+  feature: string;
+  /** Optional hint for the user, e.g. "use /effort 16000 instead". */
+  hint: string;
+  /** Raw error string from the backend. */
+  raw: string;
+}
+
+/**
+ * parseUnsupportedFeatureError inspects a raw error string and extracts
+ * the structured fields when it matches ErrUnsupportedFeature.
+ *
+ * Matches: "llm: feature %q not supported by model %q[: hint]"
+ * Returns null for unrelated errors.
+ */
+export function parseUnsupportedFeatureError(
+  err: unknown,
+): ParsedUnsupportedFeatureError | null {
+  const raw = toErrorString(err);
+  if (!raw) return null;
+  // Prefix: 'llm: feature "X" not supported by model "Y"'
+  if (!raw.startsWith('llm: feature ')) return null;
+  const featureMatch = raw.match(/^llm: feature "([^"]+)" not supported by model "([^"]+)"(?:: (.+))?$/);
+  if (!featureMatch) return null;
+  return {
+    feature: featureMatch[1] ?? '',
+    modelId: featureMatch[2] ?? '',
+    hint: featureMatch[3] ?? '',
+    raw,
+  };
+}
+
+/**
+ * friendlyUnsupportedFeatureError returns a user-facing string for any
+ * ErrUnsupportedFeature error, or null for unrelated errors.
+ */
+export function friendlyUnsupportedFeatureError(err: unknown): string | null {
+  const parsed = parseUnsupportedFeatureError(err);
+  if (!parsed) return null;
+  if (parsed.hint) {
+    return `${parsed.hint}`;
+  }
+  return `Feature "${parsed.feature}" is not supported by model "${parsed.modelId}".`;
+}
+
 // ── helpers ──────────────────────────────────────────────────────────────
 
 function toErrorString(err: unknown): string {

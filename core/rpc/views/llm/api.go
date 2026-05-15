@@ -140,6 +140,38 @@ type RotationResult struct {
 	AutoResumeToken string `json:"auto_resume_token,omitempty"`
 }
 
+// LocalRuntimeInfo is the wire-safe view of a detected local runtime.
+// (local-model-runtimes-01KQ8VMZ WP04)
+type LocalRuntimeInfo struct {
+	Kind           string             `json:"kind"`
+	Name           string             `json:"name"`
+	Running        bool               `json:"running"`
+	Installed      bool               `json:"installed"`
+	DefaultBaseURL string             `json:"defaultBaseURL"`
+	Port           int                `json:"port"`
+	Models         []LocalRuntimeModel `json:"models,omitempty"`
+}
+
+// LocalRuntimeModel is a model offered by a local runtime.
+// (local-model-runtimes-01KQ8VMZ WP04)
+type LocalRuntimeModel struct {
+	ID          string  `json:"id"`
+	DisplayName string  `json:"displayName"`
+	SizeBytes   int64   `json:"sizeBytes,omitempty"`
+	QuantLevel  string  `json:"quantLevel,omitempty"`
+	ParamCount  float64 `json:"paramCount,omitempty"`
+}
+
+// LocalRuntimeConfigResult is returned by AutoConfigureLocalRuntime on
+// success. It carries the newly-created provider profile ID and the
+// resolved model list.
+// (local-model-runtimes-01KQ8VMZ WP04)
+type LocalRuntimeConfigResult struct {
+	ProviderID string             `json:"providerId"`
+	Name       string             `json:"name"`
+	Models     []LocalRuntimeModel `json:"models"`
+}
+
 // LLMConnectorAPI is the view-scoped accessor for provider metadata and
 // streams. Implementations MUST be safe for concurrent use.
 //
@@ -227,4 +259,119 @@ type LLMConnectorAPI interface {
 	// It is a no-op when the token does not match an active paused turn.
 	// (provider-keychain-rotation-01KQ8TD9 WP04)
 	ResumeAfterKeyRotation(ctx context.Context, resumeToken string) error
+
+	// TestProviderKey validates a plaintext API key against the given provider
+	// kind and resource host. Unlike TestAndRotateKey, this does NOT write the
+	// key to the keychain — it is a read-only probe used by the AddProvider form
+	// to display connection status before the user clicks Submit.
+	//
+	// kind       — the provider kind string ("azure-openai"; others are stubs for now).
+	// host       — the provider-specific resource host (Azure: resource hostname,
+	//              e.g. "myresource.openai.azure.com"; other kinds: ignored).
+	// plaintextKey — the API key to test. Zeroed before this method returns.
+	//
+	// (azure-openai-adapter-01KQ8VMZ WP03)
+	TestProviderKey(ctx context.Context, kind, host, plaintextKey string) (ProviderKeyTestResult, error)
+
+	// ListDetectedLocalRuntimes returns the current detection snapshot for
+	// all supported local runtimes (Ollama, llama-server, LM Studio, Jan,
+	// GPT4All). The result is cached for 5 minutes; use RescanLocalRuntimes
+	// to invalidate.
+	// Returns an empty slice when HARNESS_LOCAL_RUNTIMES=0.
+	// (local-model-runtimes-01KQ8VMZ WP04)
+	ListDetectedLocalRuntimes(ctx context.Context) ([]LocalRuntimeInfo, error)
+
+	// AutoConfigureLocalRuntime detects models from the running runtime
+	// identified by kind (e.g. "ollama") and persists a personal provider
+	// profile with Kind="custom-openai". Returns ErrRuntimeNotRunning when
+	// the port is unreachable and ErrFeatureDisabled when the flag is off.
+	// (local-model-runtimes-01KQ8VMZ WP04)
+	AutoConfigureLocalRuntime(ctx context.Context, kind string) (LocalRuntimeConfigResult, error)
+
+	// RescanLocalRuntimes invalidates the detection cache and triggers a
+	// fresh DetectAll scan. Returns the refreshed snapshot.
+	// (local-model-runtimes-01KQ8VMZ WP04)
+	RescanLocalRuntimes(ctx context.Context) ([]LocalRuntimeInfo, error)
+
+	// ListCustomTemplates returns the built-in template summaries from the
+	// custom-openai adapter's embedded registry. Returns an empty slice (not
+	// an error) when the custom-openai adapter is not registered (feature-flag
+	// off or env-gate skipped registration).
+	// (custom-openai-compatible-endpoint-01KQ8VN0 WP06)
+	ListCustomTemplates(ctx context.Context) ([]CustomTemplateSummary, error)
+
+	// RecognizeTemplate looks up the best-matching template for the supplied
+	// base URL. Uses the same resolution order as the adapter (explicit id →
+	// glob → nil). Returns an empty result (no match) without error when the
+	// URL does not match any template.
+	// (custom-openai-compatible-endpoint-01KQ8VN0 WP06)
+	RecognizeTemplate(ctx context.Context, rawURL string) (RecognizeTemplateResult, error)
+
+	// ProbeCustomEndpoint runs the three-step capability probe against a custom
+	// OpenAI-compatible endpoint and returns the resulting capability matrix.
+	// The plaintext credential (if any) is consumed and zeroed before this
+	// method returns — callers must not retain a reference to it.
+	// Returns ErrFeatureDisabled when HARNESS_CUSTOM_OPENAI=0.
+	// (custom-openai-compatible-endpoint-01KQ8VN0 WP06)
+	ProbeCustomEndpoint(ctx context.Context, in ProbeCustomEndpointInput) (ProbeCustomEndpointResult, error)
+}
+
+// ProviderKeyTestResult is the structured outcome of TestProviderKey.
+// (azure-openai-adapter-01KQ8VMZ WP03)
+type ProviderKeyTestResult struct {
+	OK                 bool   `json:"ok"`
+	ModelCount         int    `json:"model_count"`
+	DeprecationWarning string `json:"deprecation_warning,omitempty"`
+	Message            string `json:"message,omitempty"`
+}
+
+// CustomTemplateSummary is the abbreviated template shape returned by
+// ListCustomTemplates. It omits internal-only fields (glob, notes).
+// (custom-openai-compatible-endpoint-01KQ8VN0 WP06)
+type CustomTemplateSummary struct {
+	ID         string `json:"id"`
+	Name       string `json:"name"`
+	BaseURL    string `json:"base_url"`
+	AuthScheme string `json:"auth_scheme"`
+}
+
+// RecognizeTemplateResult is the outcome of RecognizeTemplate.
+// Matched is false when no template glob matches rawURL.
+// (custom-openai-compatible-endpoint-01KQ8VN0 WP06)
+type RecognizeTemplateResult struct {
+	Matched  bool                  `json:"matched"`
+	Template CustomTemplateSummary `json:"template,omitempty"`
+}
+
+// ProbeCustomEndpointInput is the payload accepted by ProbeCustomEndpoint.
+// (custom-openai-compatible-endpoint-01KQ8VN0 WP06)
+type ProbeCustomEndpointInput struct {
+	// BaseURL is the endpoint root URL (e.g. "https://api.groq.com/openai/v1").
+	BaseURL string `json:"base_url"`
+	// Model is used for probe requests. Falls back to "gpt-3.5-turbo" when empty.
+	Model string `json:"model,omitempty"`
+	// AuthScheme is one of "bearer", "api-key-header", "custom", "none".
+	AuthScheme string `json:"auth_scheme"`
+	// AuthHeader is the header name for api-key-header/custom schemes.
+	AuthHeader string `json:"auth_header,omitempty"`
+	// PlaintextAPIKey is the raw credential. Consumed and zeroed server-side.
+	PlaintextAPIKey string `json:"plaintextApiKey,omitempty"`
+}
+
+// CustomCapabilityMatrix is the wire shape of the probed capability matrix.
+// (custom-openai-compatible-endpoint-01KQ8VN0 WP06)
+type CustomCapabilityMatrix struct {
+	Endpoint       string `json:"endpoint"`
+	ProbedAt       int64  `json:"probed_at"`
+	Streaming      string `json:"streaming"`       // "true" | "false" | "unknown"
+	ToolCalling    string `json:"tool_calling"`    // "true" | "false" | "unknown"
+	StreamingUsage string `json:"streaming_usage"` // "true" | "false" | "unknown"
+}
+
+// ProbeCustomEndpointResult is the outcome of ProbeCustomEndpoint.
+// (custom-openai-compatible-endpoint-01KQ8VN0 WP06)
+type ProbeCustomEndpointResult struct {
+	Matrix CustomCapabilityMatrix `json:"matrix"`
+	// ErrMessage is non-empty when the probe failed entirely (e.g. auth failure).
+	ErrMessage string `json:"err_message,omitempty"`
 }
