@@ -154,7 +154,8 @@ export type ProviderKind =
   | 'openai'
   | 'openrouter'
   | 'bedrock'
-  | 'ollama';
+  | 'ollama'
+  | 'azure-openai';
 
 export interface AddProviderInput {
   id: string;
@@ -1141,6 +1142,18 @@ export interface RotationResult {
   tested_at: string; // ISO-8601 timestamp
   /** Non-empty when a paused chat turn exists for this profile. */
   auto_resume_token?: string;
+}
+
+/**
+ * TestProviderKeyResult — outcome of LLM_TestProviderKey.
+ * Mirrors core/rpc/views/llm.TestProviderKeyResult.
+ * (azure-openai-adapter-01KQ8VMZ WP03)
+ */
+export interface TestProviderKeyResult {
+  ok: boolean;
+  model_count: number;
+  deprecation_warning?: string;
+  message?: string;
 }
 
 /**

@@ -69,3 +69,21 @@ entries:
     model: "amazon.titan-image-*"
     per_image_usd:
       "": 0.008
+  # Azure OpenAI pricing mirrors OpenAI pricing (same underlying models).
+  # (azure-openai-adapter-01KQ8VMZ WP06)
+  - kind: azure-openai
+    model: gpt-4o*
+    per_million_tokens:
+      input: 2.50
+      output: 10.00
+  - kind: azure-openai
+    model: o1*
+    per_million_tokens:
+      input: 15.00
+      output: 60.00
+      reasoning: 60.00
+  - kind: azure-openai
+    model: gpt-4*
+    per_million_tokens:
+      input: 30.00
+      output: 60.00

@@ -373,6 +373,15 @@ func (b *Bindings) LLM_ResumeAfterKeyRotation(resumeToken string) error {
 	return b.api.LLMConnector().ResumeAfterKeyRotation(b.ctx(), resumeToken)
 }
 
+// LLM_TestProviderKey validates a plaintext API key against the given provider
+// kind and resource host without writing to the keychain. Used by the
+// AddProvider form to show connection status before the user clicks Submit.
+// The plaintext key is consumed and zeroed before returning.
+// (azure-openai-adapter-01KQ8VMZ WP03)
+func (b *Bindings) LLM_TestProviderKey(kind, host, plaintextKey string) (llm.TestProviderKeyResult, error) {
+	return b.api.LLMConnector().TestProviderKey(b.ctx(), kind, host, plaintextKey)
+}
+
 // ── mcp ────────────────────────────────────────────────────────────────
 
 func (b *Bindings) MCP_ListServers() ([]mcp.Server, error) {

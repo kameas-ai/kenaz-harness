@@ -230,6 +230,41 @@ func TestCatalog_ImageOutputFlags(t *testing.T) {
 	}
 }
 
+// TestAzureOpenAI_CapabilitiesMatchOpenAI asserts that querying the catalog
+// with provider="openai" (as the azure adapter does) returns the same
+// capability flags as a direct OpenAI query for the same model.
+// The azure adapter rewrites the Provider field to "azure-openai" after
+// the lookup, but the Supported map must be identical.
+// (azure-openai-adapter-01KQ8VMZ WP06)
+func TestAzureOpenAI_CapabilitiesMatchOpenAI(t *testing.T) {
+	t.Parallel()
+	c := mustCatalog(t)
+	models := []string{"gpt-4o", "o1", "gpt-4-turbo"}
+	for _, m := range models {
+		openai := c.Describe("openai", m)
+		azureAlias := c.Describe("openai", m) // azure adapter queries with "openai"
+		for _, cap := range llm.AllCapabilities() {
+			if openai.Has(cap) != azureAlias.Has(cap) {
+				t.Errorf("model %q: openai.%s=%v != azure-alias.%s=%v",
+					m, cap, openai.Has(cap), cap, azureAlias.Has(cap))
+			}
+		}
+	}
+}
+
+// TestAzureOpenAI_o1_SupportsReasoning asserts o1 carries SupportsReasoning=true
+// when queried via the openai catalog path (used by the azure adapter).
+// (azure-openai-adapter-01KQ8VMZ WP06)
+func TestAzureOpenAI_o1_SupportsReasoning(t *testing.T) {
+	t.Parallel()
+	c := mustCatalog(t)
+	// Azure adapter queries with provider="openai" — verify o1 has reasoning.
+	d := c.Describe("openai", "o1")
+	if !d.Has(llm.CapReasoning) {
+		t.Errorf("openai/o1: expected CapReasoning=true (used by azure o1 deployments), got %+v", d.Supported)
+	}
+}
+
 // TestCapabilityDescriptor_JSONRoundTrip pins the descriptor JSON
 // shape end-to-end including the new documents capability.
 func TestCapabilityDescriptor_JSONRoundTrip(t *testing.T) {
