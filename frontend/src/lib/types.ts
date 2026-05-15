@@ -595,6 +595,68 @@ export interface AuditFilter {
   limit?: number;
 }
 
+/** VerifyChainResult — wire shape from Audit_VerifyChain RPC. */
+export interface VerifyChainResult {
+  verified: boolean;
+  rows_checked: number;
+  broken_at_id?: string;
+}
+
+/**
+ * AuditFilterQuery — rich structured filter for audit log queries.
+ * Mirrors core/event/log.FilterQuery.
+ */
+export interface AuditFilterQuery {
+  since?: string;
+  until?: string;
+  actor_ids?: string[];
+  kinds?: string[];
+  resources?: string[];
+  outcomes?: string[];
+  free_text?: string;
+  verbose?: boolean;
+  limit?: number;
+  offset?: number;
+}
+
+/**
+ * SavedAuditQuery — a persisted named audit filter query.
+ * Mirrors core/event/log.SavedQuery.
+ */
+export interface SavedAuditQuery {
+  id: string;
+  name: string;
+  query: AuditFilterQuery;
+  created_at: string;
+  user_id?: string;
+}
+
+/**
+ * AuditSettings — wire shape for Settings_GetAuditSettings / SetAuditSettings.
+ * Mirrors core/rpc/views/settings.AuditSettings.
+ */
+export interface AuditSettings {
+  /** "keep_forever" | "delete_after_window" | "archive_after_window" */
+  strategy: string;
+  /** Retention window in days. Only used for non-keep_forever strategies. */
+  window_days: number;
+}
+
+/**
+ * AuditExportOptions — wire shape for Audit_Export.
+ * Mirrors core/event/log.ExportOptions.
+ */
+export interface AuditExportOptions {
+  /** Root data directory; harness fills this in server-side. */
+  data_dir?: string;
+  filter: AuditFilterQuery;
+  /** "csv" | "jsonl" | "pdf" */
+  format: string;
+  harness_version?: string;
+  git_sha?: string;
+  chain_status?: string;
+}
+
 export interface ShellStatus {
   activeProvider: string;
   trustTier: string;

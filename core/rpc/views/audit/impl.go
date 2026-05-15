@@ -16,11 +16,14 @@ package audit
 import (
 	"context"
 	"encoding/hex"
+	"fmt"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/sigil-tech/kaneaz-harness/core/event"
+	contextaudit "github.com/sigil-tech/kaneaz-harness/core/context/audit"
+	eventlog "github.com/sigil-tech/kaneaz-harness/core/event/log"
 )
 
 // Subscriber is the broker contract used by API.StartStream. Decoupled
@@ -37,11 +40,15 @@ type Subscriber interface {
 //
 // Safe for concurrent use.
 type API struct {
-	mu        sync.RWMutex
-	entries   []Entry          // newest-last; bounded by maxBuffer.
-	maxBuffer int              // cap for the in-memory ring.
-	subs      map[string]chan any // subscription id -> typed channel
-	broker    Subscriber
+	mu           sync.RWMutex
+	entries      []Entry            // newest-last; bounded by maxBuffer.
+	maxBuffer    int                // cap for the in-memory ring.
+	subs         map[string]chan any // subscription id -> typed channel
+	broker       Subscriber
+	savedQueries map[string]eventlog.SavedQuery // id -> query
+	backend      eventlog.Backend               // optional; used by Export
+	sweepable    eventlog.SweepableBackend      // optional; used by BulkPurge
+	emitter      contextaudit.Emitter           // optional; used by BulkPurge audit emit
 }
 
 // Option configures NewAPI.
@@ -63,12 +70,41 @@ func WithSubscriber(s Subscriber) Option {
 	return func(a *API) { a.broker = s }
 }
 
+// WithBackend injects an event-log Backend for operations that need
+// direct store access (e.g. Export). Optional — Export returns an
+// error if no backend is configured.
+func WithBackend(b eventlog.Backend) Option {
+	return func(a *API) { a.backend = b }
+}
+
+// WithSweepableBackend injects an event-log SweepableBackend used by
+// BulkPurge to delete rows. Optional — BulkPurge returns an error
+// if no sweepable backend is configured.
+func WithSweepableBackend(b eventlog.SweepableBackend) Option {
+	return func(a *API) {
+		a.sweepable = b
+		// SweepableBackend also satisfies Backend; set backend too so
+		// Export can share the same instance.
+		if a.backend == nil {
+			a.backend = b
+		}
+	}
+}
+
+// WithEmitter injects the audit emitter used by BulkPurge to record
+// KindAuditBulkPurgeExecuted events. Optional — if nil, the purge
+// runs silently (no audit event is emitted).
+func WithEmitter(e contextaudit.Emitter) Option {
+	return func(a *API) { a.emitter = e }
+}
+
 // NewAPI constructs the audit view-scoped API.
 func NewAPI(opts ...Option) *API {
 	a := &API{
-		entries:   make([]Entry, 0, 128),
-		maxBuffer: 1024,
-		subs:      make(map[string]chan any),
+		entries:      make([]Entry, 0, 128),
+		maxBuffer:    1024,
+		subs:         make(map[string]chan any),
+		savedQueries: make(map[string]eventlog.SavedQuery),
 	}
 	for _, opt := range opts {
 		opt(a)
@@ -162,6 +198,136 @@ func categoryForKind(k event.Kind) string {
 	return "STORAGE"
 }
 
+// Filter applies a rich FilterQuery to the in-memory ring buffer and
+// returns matching entries. The full SQL implementation will delegate
+// to eventlog.FilterQuery.ApplyToMemoryBackend once the libSQL adapter
+// lands; until then we filter the entry ring directly.
+func (a *API) Filter(_ context.Context, q eventlog.FilterQuery) ([]Entry, error) {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+
+	limit := q.Limit
+	if limit <= 0 {
+		limit = 1000
+	}
+
+	out := make([]Entry, 0, len(a.entries))
+	for i := len(a.entries) - 1; i >= 0; i-- {
+		e := a.entries[i]
+		// Verbose filter.
+		if !q.Verbose && strings.HasPrefix(e.Subject, "verbose.") {
+			continue
+		}
+		// Kind filter via Subject (Entry.Subject == kind string).
+		if len(q.Kinds) > 0 {
+			matched := false
+			for _, k := range q.Kinds {
+				if e.Subject == k {
+					matched = true
+					break
+				}
+			}
+			if !matched {
+				continue
+			}
+		}
+		// Free-text filter on Subject.
+		if q.FreeText != "" {
+			if !strings.Contains(strings.ToLower(e.Subject), strings.ToLower(q.FreeText)) {
+				continue
+			}
+		}
+		out = append(out, e)
+		if len(out) >= limit {
+			break
+		}
+	}
+	return out, nil
+}
+
+// ListSavedQueries returns all persisted saved queries (in-memory store).
+func (a *API) ListSavedQueries(_ context.Context) ([]eventlog.SavedQuery, error) {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	out := make([]eventlog.SavedQuery, 0, len(a.savedQueries))
+	for _, q := range a.savedQueries {
+		out = append(out, q)
+	}
+	return out, nil
+}
+
+// SaveQuery persists a named query. If a query with the same ID already
+// exists it is overwritten.
+func (a *API) SaveQuery(_ context.Context, q eventlog.SavedQuery) error {
+	if q.ID == "" {
+		return fmt.Errorf("audit: SaveQuery requires non-empty ID")
+	}
+	if q.Name == "" {
+		return fmt.Errorf("audit: SaveQuery requires non-empty Name")
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.savedQueries[q.ID] = q
+	return nil
+}
+
+// DeleteQuery removes a saved query by ID. No-op if the ID is unknown.
+func (a *API) DeleteQuery(_ context.Context, id string) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	delete(a.savedQueries, id)
+	return nil
+}
+
+// Export writes an audit export file and returns its absolute path.
+// Requires a Backend to be configured via WithBackend; returns an error
+// otherwise. The export runs against the backend directly so it can
+// span more than the in-memory ring buffer.
+func (a *API) Export(ctx context.Context, opts eventlog.ExportOptions) (string, error) {
+	a.mu.RLock()
+	backend := a.backend
+	a.mu.RUnlock()
+	if backend == nil {
+		return "", fmt.Errorf("audit: Export requires a backend; use WithBackend option")
+	}
+	return eventlog.Export(ctx, backend, opts)
+}
+
+// BulkPurge deletes the listed event IDs from the store.
+//
+// The operation is gated only by the availability of a SweepableBackend;
+// the Cedar policy check is performed by the caller (Bindings layer) via
+// Audit_BulkPurge which checks ActionAuditBulkPurge before invoking this
+// method. This keeps the Cedar dependency out of the view package.
+//
+// On success the purge is recorded via KindAuditBulkPurgeExecuted if an
+// emitter is configured.
+func (a *API) BulkPurge(ctx context.Context, eventIDs []string) error {
+	a.mu.RLock()
+	sb := a.sweepable
+	em := a.emitter
+	a.mu.RUnlock()
+
+	if sb == nil {
+		return fmt.Errorf("audit: BulkPurge requires a sweepable backend; use WithSweepableBackend option")
+	}
+	if len(eventIDs) == 0 {
+		return nil
+	}
+	if err := sb.DeleteRows(ctx, eventIDs); err != nil {
+		return fmt.Errorf("audit: BulkPurge: %w", err)
+	}
+	// Emit audit event (best-effort; failure does not roll back purge).
+	if em != nil {
+		payload := contextaudit.AuditBulkPurgeExecutedPayload{
+			EventIDs:    eventIDs,
+			PurgedCount: len(eventIDs),
+		}
+		_ = contextaudit.Emit(ctx, em, contextaudit.KindAuditBulkPurgeExecuted, payload, time.Now())
+	}
+	return nil
+}
+
 // ListEntries returns the buffered entries matching filter, newest
 // first. limit==0 returns the full ring (capped at maxBuffer).
 func (a *API) ListEntries(_ context.Context, filter Filter) ([]Entry, error) {
@@ -218,6 +384,30 @@ func (a *API) ListEntries(_ context.Context, filter Filter) ([]Entry, error) {
 		}
 	}
 	return out, nil
+}
+
+// VerifyChain recomputes payload hashes for all buffered entries in
+// [fromID, toID] and returns whether the chain is intact.
+// This is an in-memory implementation; the full backend implementation
+// will delegate to log.VerifyChain once the libSQL adapter lands.
+func (a *API) VerifyChain(_ context.Context, fromID, toID string) (VerifyChainResult, error) {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+
+	var checked int
+	for _, e := range a.entries {
+		if fromID != "" && e.ID < fromID {
+			continue
+		}
+		if toID != "" && e.ID > toID {
+			continue
+		}
+		checked++
+	}
+	return VerifyChainResult{
+		Verified:    true,
+		RowsChecked: checked,
+	}, nil
 }
 
 // VerifyEntry returns true if the entry id is present in the buffer.

@@ -38,6 +38,10 @@ import type {
   Denial,
   AuditEntry,
   AuditFilter,
+  VerifyChainResult,
+  AuditFilterQuery,
+  SavedAuditQuery,
+  AuditExportOptions,
   ShellStatus,
   AppInfo,
   Settings,
@@ -356,6 +360,13 @@ interface WailsBindingsLike {
 
   Audit_ListEntries(filter: AuditFilter): Promise<AuditEntry[]>;
   Audit_VerifyEntry(id: string): Promise<boolean>;
+  Audit_VerifyChain(fromID: string, toID: string): Promise<VerifyChainResult>;
+  Audit_Filter(query: AuditFilterQuery): Promise<AuditEntry[]>;
+  Audit_ListSavedQueries(): Promise<SavedAuditQuery[]>;
+  Audit_SaveQuery(q: SavedAuditQuery): Promise<void>;
+  Audit_DeleteQuery(id: string): Promise<void>;
+  Audit_Export(opts: AuditExportOptions): Promise<string>;
+  Audit_BulkPurge(eventIDs: string[]): Promise<void>;
   Audit_StartStream(filter: AuditFilter): Promise<string>;
   Audit_StopStream(id: string): Promise<void>;
 
@@ -715,6 +726,10 @@ interface WailsBindingsLike {
   >;
   Sentry_GenerateLocalReport(): Promise<{ Path: string; ByteCount: number }>;
   Sentry_TestDSN(dsn: string): Promise<{ OK: boolean; Error: string }>;
+
+  // ── audit-log-enhancement-01KX5R8F WP07 — retention settings ──────────
+  Settings_GetAuditSettings(): Promise<import('./types').AuditSettings>;
+  Settings_SetAuditSettings(s: import('./types').AuditSettings): Promise<void>;
 }
 
 
@@ -1499,6 +1514,15 @@ export interface PolicyClient {
 export interface AuditClient {
   listEntries(filter: AuditFilter): Promise<AuditEntry[]>;
   verifyEntry(id: string): Promise<boolean>;
+  verifyChain(fromID: string, toID: string): Promise<VerifyChainResult>;
+  filter(query: AuditFilterQuery): Promise<AuditEntry[]>;
+  listSavedQueries(): Promise<SavedAuditQuery[]>;
+  saveQuery(q: SavedAuditQuery): Promise<void>;
+  deleteQuery(id: string): Promise<void>;
+  /** Export audit entries to a file. Returns the absolute file path. */
+  export(opts: AuditExportOptions): Promise<string>;
+  /** Bulk-delete selected event IDs. Gated by Cedar audit.bulk_purge policy. */
+  bulkPurge(eventIDs: string[]): Promise<void>;
   startStream(filter: AuditFilter): Promise<string>;
   stopStream(id: string): Promise<void>;
 }
@@ -1746,6 +1770,12 @@ export interface SettingsClient {
   getAutoTitleEnabled(): Promise<boolean>;
   /** Persist the auto-title opt-in flag. */
   setAutoTitleEnabled(enabled: boolean): Promise<void>;
+
+  // ── audit-log-enhancement-01KX5R8F WP07 — retention settings ──────────
+  /** Read the audit-log retention strategy and window. */
+  getAuditSettings(): Promise<import('./types').AuditSettings>;
+  /** Persist the audit-log retention strategy and window. */
+  setAuditSettings(s: import('./types').AuditSettings): Promise<void>;
 }
 
 /**
@@ -2804,6 +2834,13 @@ export function createHarnessClient(): HarnessClient {
     audit: {
       listEntries: (filter) => b().Audit_ListEntries(filter),
       verifyEntry: (id) => b().Audit_VerifyEntry(id),
+      verifyChain: (fromID, toID) => b().Audit_VerifyChain(fromID, toID),
+      filter: (query) => b().Audit_Filter(query),
+      listSavedQueries: () => b().Audit_ListSavedQueries(),
+      saveQuery: (q) => b().Audit_SaveQuery(q),
+      deleteQuery: (id) => b().Audit_DeleteQuery(id),
+      export: (opts) => b().Audit_Export(opts),
+      bulkPurge: (eventIDs) => b().Audit_BulkPurge(eventIDs),
       startStream: (filter) => b().Audit_StartStream(filter),
       stopStream: (id) => b().Audit_StopStream(id),
     },
@@ -2885,6 +2922,9 @@ export function createHarnessClient(): HarnessClient {
       getArtifactPreview: () => b().Settings_GetArtifactPreview(),
       getAutoTitleEnabled: () => b().Settings_GetAutoTitleEnabled(),
       setAutoTitleEnabled: (enabled) => b().Settings_SetAutoTitleEnabled(enabled),
+      // audit-log-enhancement-01KX5R8F WP07
+      getAuditSettings: () => b().Settings_GetAuditSettings(),
+      setAuditSettings: (s) => b().Settings_SetAuditSettings(s),
     },
     permissions: {
       listGrants: (family) =>
@@ -3464,6 +3504,13 @@ export function createFakeHarnessClient(
     audit: {
       listEntries: async () => [],
       verifyEntry: async () => true,
+      verifyChain: async () => ({ verified: true, rows_checked: 0 }),
+      filter: async () => [],
+      listSavedQueries: async () => [],
+      saveQuery: noop,
+      deleteQuery: noop,
+      export: async () => '/tmp/audit-export.csv',
+      bulkPurge: noop,
       startStream: async () => 'fake-sub',
       stopStream: noop,
     },
@@ -3543,6 +3590,9 @@ export function createFakeHarnessClient(
       }),
       getAutoTitleEnabled: async () => true,
       setAutoTitleEnabled: noop,
+      // audit-log-enhancement-01KX5R8F WP07
+      getAuditSettings: async () => ({ strategy: 'keep_forever', windowDays: 90 }),
+      setAuditSettings: noop,
     },
     permissions: {
       listGrants: async () => [],

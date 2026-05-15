@@ -1131,6 +1131,24 @@ type SettingsAPI interface {
 	GetMemoryNarrativeEnabled(ctx context.Context) (bool, error)
 	// SetMemoryNarrativeEnabled persists the narrative-layer opt-out dial.
 	SetMemoryNarrativeEnabled(ctx context.Context, enabled bool) error
+
+	// ── Audit log settings (audit-log-enhancement-01KX5R8F WP07) ─────────────
+
+	// GetAuditSettings returns the current audit log retention configuration.
+	GetAuditSettings(ctx context.Context) (AuditSettings, error)
+	// SetAuditSettings persists the audit log retention configuration.
+	SetAuditSettings(ctx context.Context, s AuditSettings) error
+}
+
+// AuditSettings holds the operator-configurable audit log retention policy.
+// Default: keep_forever, so no data is ever silently dropped on first run.
+type AuditSettings struct {
+	// Strategy is the retention strategy.
+	// One of: "keep_forever", "delete_after_window", "archive_after_window".
+	Strategy string `json:"strategy,omitempty"`
+	// WindowDays is the retention window in days. Only meaningful when
+	// Strategy is not keep_forever.
+	WindowDays int `json:"window_days,omitempty"`
 }
 
 // ── Long-session nudge constants + accessors (v0.5.6) ───────────────────────

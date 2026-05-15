@@ -237,6 +237,14 @@ const (
 	// redacted summary produced by the sentry redactor.
 	// (sentry-error-monitoring-01KX5R8G WP02)
 	KindPanicRecovered Kind = "process.panic_recovered"
+
+	// KindAuditBulkPurgeExecuted fires when Audit_BulkPurge successfully
+	// deletes a batch of events from the store (audit-log-enhancement
+	// -01KX5R8F WP08). Payload: AuditBulkPurgeExecutedPayload.
+	//
+	// Privacy invariant: the payload carries only the event ID list and
+	// the purge count — no payload bytes from the deleted events.
+	KindAuditBulkPurgeExecuted Kind = "audit.bulk_purge_executed"
 )
 
 // Event is the wire shape passed to the event log. The concrete event-log
@@ -809,6 +817,18 @@ type PanicRecoveredPayload struct {
 	// Summary is a redacted one-line description of the panic (produced by
 	// sentry.RedactString — never the raw panic value).
 	Summary string `json:"summary"`
+}
+
+// AuditBulkPurgeExecutedPayload carries the signalling for
+// KindAuditBulkPurgeExecuted (audit-log-enhancement-01KX5R8F WP08).
+//
+// Privacy invariant: the EventIDs are the bare ULID strings of the
+// purged rows; no payload bytes from the deleted events are included.
+type AuditBulkPurgeExecutedPayload struct {
+	// EventIDs is the list of purged event_id values.
+	EventIDs []string `json:"event_ids"`
+	// PurgedCount is len(EventIDs); redundant for fast aggregation.
+	PurgedCount int `json:"purged_count"`
 }
 
 // Emit is a small convenience wrapper for callers that have a payload

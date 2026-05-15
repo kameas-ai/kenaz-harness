@@ -25,6 +25,9 @@ type Row struct {
 	PayloadHash      [32]byte
 	PrevHash         [32]byte
 	RedactionSummary string
+	// SchemaVersion is the payload schema version stored with the row.
+	// 0 means the field was not populated (legacy row); treated as 1.
+	SchemaVersion int
 }
 
 // Backend abstracts the storage-foundations connection. The real
@@ -381,5 +384,21 @@ func (m *MemoryBackend) DeleteForTest(eventID string) error {
 		return ErrNotFound
 	}
 	delete(m.rows, eventID)
+	return nil
+}
+
+// DeleteRows removes rows by event_id. Implements SweepableBackend.
+// This method bypasses the append-only invariant intentionally — it is
+// the authorised path for retention sweeps and bulk purges which have
+// already archived the rows.
+func (m *MemoryBackend) DeleteRows(ctx context.Context, eventIDs []string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, id := range eventIDs {
+		delete(m.rows, id)
+	}
 	return nil
 }

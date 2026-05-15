@@ -17,6 +17,7 @@ import (
 	artifactsview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/artifacts"
 	attachmentsview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/attachments"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/audit"
+	eventlog "github.com/sigil-tech/kaneaz-harness/core/event/log"
 	agentsview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/agents"
 	branchesview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/branches"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/bundle"
@@ -646,6 +647,27 @@ func (b *Bindings) Audit_ListEntries(filter audit.Filter) ([]audit.Entry, error)
 }
 func (b *Bindings) Audit_VerifyEntry(id string) (bool, error) {
 	return b.api.Audit().VerifyEntry(b.ctx(), id)
+}
+func (b *Bindings) Audit_VerifyChain(fromID, toID string) (audit.VerifyChainResult, error) {
+	return b.api.Audit().VerifyChain(b.ctx(), fromID, toID)
+}
+func (b *Bindings) Audit_Filter(query eventlog.FilterQuery) ([]audit.Entry, error) {
+	return b.api.Audit().Filter(b.ctx(), query)
+}
+func (b *Bindings) Audit_ListSavedQueries() ([]eventlog.SavedQuery, error) {
+	return b.api.Audit().ListSavedQueries(b.ctx())
+}
+func (b *Bindings) Audit_SaveQuery(q eventlog.SavedQuery) error {
+	return b.api.Audit().SaveQuery(b.ctx(), q)
+}
+func (b *Bindings) Audit_DeleteQuery(id string) error {
+	return b.api.Audit().DeleteQuery(b.ctx(), id)
+}
+func (b *Bindings) Audit_Export(opts eventlog.ExportOptions) (string, error) {
+	return b.api.Audit().Export(b.ctx(), opts)
+}
+func (b *Bindings) Audit_BulkPurge(eventIDs []string) error {
+	return b.api.Audit().BulkPurge(b.ctx(), eventIDs)
 }
 func (b *Bindings) Audit_StartStream(filter audit.Filter) (string, error) {
 	return b.api.Audit().StartStream(b.ctx(), filter)
@@ -1281,6 +1303,15 @@ func (b *Bindings) Settings_SetAutoResumeOnKeyRotation(enabled bool) error {
 	}
 	s.AutoResumeOnKeyRotationDisabled = !enabled
 	return b.storeFn().SaveAll(s)
+}
+
+// ── audit settings (audit-log-enhancement-01KX5R8F WP07) ────────────────────
+
+func (b *Bindings) Settings_GetAuditSettings() (settings.AuditSettings, error) {
+	return b.api.Settings().GetAuditSettings(b.ctx())
+}
+func (b *Bindings) Settings_SetAuditSettings(s settings.AuditSettings) error {
+	return b.api.Settings().SetAuditSettings(b.ctx(), s)
 }
 
 // ── memory ─────────────────────────────────────────────────────────────

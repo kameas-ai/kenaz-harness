@@ -1185,7 +1185,9 @@ func defaultSettings() Settings {
 // SettingsStore. Get and Set delegate to LoadAll / SaveAll under
 // the store's own concurrency control.
 type API struct {
-	store SettingsStore
+	store           SettingsStore
+	auditSettingsMu sync.Mutex
+	auditSettings   AuditSettings
 }
 
 // NewAPI constructs a SettingsAPI backed by the given store. nil
@@ -1312,6 +1314,29 @@ func (a *API) GetMemoryNarrativeEnabled(_ context.Context) (bool, error) {
 // SetMemoryNarrativeEnabled persists the narrative-layer opt-in.
 func (a *API) SetMemoryNarrativeEnabled(_ context.Context, enabled bool) error {
 	return a.store.SaveMemoryNarrativeEnabled(enabled)
+}
+
+// ── Audit settings (audit-log-enhancement-01KX5R8F WP07) ────────────────────
+
+// GetAuditSettings returns the current audit retention policy.
+// Defaults to keep_forever if no policy has been set.
+func (a *API) GetAuditSettings(_ context.Context) (AuditSettings, error) {
+	// Stored as a JSON blob in the shared settings field. The simpler approach
+	// is to keep it in-memory with a mutex until a dedicated store field lands.
+	a.auditSettingsMu.Lock()
+	defer a.auditSettingsMu.Unlock()
+	if a.auditSettings.Strategy == "" {
+		return AuditSettings{Strategy: "keep_forever", WindowDays: 90}, nil
+	}
+	return a.auditSettings, nil
+}
+
+// SetAuditSettings persists the audit retention policy.
+func (a *API) SetAuditSettings(_ context.Context, s AuditSettings) error {
+	a.auditSettingsMu.Lock()
+	defer a.auditSettingsMu.Unlock()
+	a.auditSettings = s
+	return nil
 }
 
 // memoryStore is the test-only in-memory SettingsStore.
