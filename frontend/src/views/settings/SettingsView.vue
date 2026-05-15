@@ -26,6 +26,7 @@ import WorkflowsSettingsPanel from '@/views/settings/WorkflowsSettingsPanel.vue'
 import ScheduledChatsPanel from '@/views/settings/scheduledchat/ScheduledChatsPanel.vue';
 import ModelAccessibleSecretsPanel from '@/views/settings/ModelAccessibleSecretsPanel.vue';
 import TasksPanel from '@/views/settings/TasksPanel.vue';
+import LLMRoutingPanel from '@/views/settings/LLMRoutingPanel.vue';
 import LongSessionNudgeSettings from '@/components/settings/LongSessionNudgeSettings.vue';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
 import { debouncedSave } from '@/lib/settings';
@@ -117,6 +118,13 @@ const showSecretsTab = computed<boolean>(() => {
 const showTasksTab = computed<boolean>(() => {
   const v = route?.query?.tab;
   return typeof v === 'string' && v === 'tasks';
+});
+
+// model-fallback-routing-01NDFSEX04 WP05 — LLM Routing sub-tab.
+// Disambiguates via ?tab=llm-routing. Mount switch is in <template> below.
+const showLLMRoutingTab = computed<boolean>(() => {
+  const v = route?.query?.tab;
+  return typeof v === 'string' && v === 'llm-routing';
 });
 
 const settings = ref<Settings>({
@@ -999,6 +1007,14 @@ onMounted(() => {
       data-testid="settings-tasks-pane"
     >
       <TasksPanel />
+    </div>
+
+    <!-- model-fallback-routing-01NDFSEX04 WP05 — LLM Routing sub-tab. -->
+    <div
+      v-else-if="showLLMRoutingTab"
+      data-testid="settings-llm-routing-pane"
+    >
+      <LLMRoutingPanel />
     </div>
 
     <div

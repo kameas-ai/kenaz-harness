@@ -146,6 +146,8 @@ import type {
   CustomCapabilityMatrix,
   CustomProbeRequest,
   CustomProbeResult,
+  FallbackChain,
+  FallbackChainSummary,
 } from './types';
 
 /**
@@ -286,6 +288,12 @@ interface WailsBindingsLike {
   LLM_ListCustomTemplates(): Promise<CustomTemplateSummary[]>;
   LLM_RecognizeTemplate(rawURL: string): Promise<{ matched: boolean; template?: CustomTemplateSummary }>;
   LLM_ProbeCustomEndpoint(in_: CustomProbeRequest): Promise<CustomProbeResult>;
+
+  // model-fallback-routing-01NDFSEX04
+  LLM_ListFallbackChains(): Promise<FallbackChainSummary[]>;
+  LLM_LoadChain(id: string): Promise<FallbackChain>;
+  LLM_SaveChain(chain: FallbackChain): Promise<void>;
+  LLM_DeleteChain(id: string): Promise<void>;
 
   MCP_ListServers(): Promise<MCPServer[]>;
   MCP_StartStream(id: string): Promise<string>;
@@ -1278,6 +1286,35 @@ export interface LLMConnectorClient {
    * (custom-openai-compatible-endpoint-01KQ8VN0 WP06)
    */
   probeCustomEndpoint(in_: CustomProbeRequest): Promise<CustomProbeResult>;
+
+  // ── model-fallback-routing-01NDFSEX04 ──────────────────────────────────
+
+  /**
+   * listFallbackChains returns all known fallback chain summaries —
+   * bundled defaults merged with user-managed chains (user wins on ID
+   * collision).
+   */
+  listFallbackChains(): Promise<FallbackChainSummary[]>;
+
+  /**
+   * loadChain returns the full chain definition for the given id.
+   * Throws ErrFallbackChainNotFound when the id is unknown.
+   */
+  loadChain(id: string): Promise<FallbackChain>;
+
+  /**
+   * saveChain persists a chain (create or overwrite). Throws when
+   * maxAttempts exceeds the whole-chain ceiling (5) or the chain is
+   * bundled (read-only).
+   */
+  saveChain(chain: FallbackChain): Promise<void>;
+
+  /**
+   * deleteChain removes the chain from user storage. Idempotent —
+   * calling it on a non-existent chain is a no-op. Throws when the
+   * chain is bundled (read-only).
+   */
+  deleteChain(id: string): Promise<void>;
 }
 
 export interface MCPClient {
@@ -2657,6 +2694,10 @@ export function createHarnessClient(): HarnessClient {
       listCustomTemplates: () => b().LLM_ListCustomTemplates(),
       recognizeTemplate: (rawURL) => b().LLM_RecognizeTemplate(rawURL),
       probeCustomEndpoint: (in_) => b().LLM_ProbeCustomEndpoint(in_),
+      listFallbackChains: () => b().LLM_ListFallbackChains(),
+      loadChain: (id) => b().LLM_LoadChain(id),
+      saveChain: (chain) => b().LLM_SaveChain(chain),
+      deleteChain: (id) => b().LLM_DeleteChain(id),
     },
     mcp: {
       listServers: () => b().MCP_ListServers(),
@@ -3232,6 +3273,12 @@ export function createFakeHarnessClient(
         },
         error: undefined,
       }),
+      listFallbackChains: async () => [],
+      loadChain: async (_id) => {
+        throw new Error('fake: chain not found');
+      },
+      saveChain: noop,
+      deleteChain: noop,
     },
     mcp: {
       listServers: async () => [],
