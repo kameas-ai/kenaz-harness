@@ -1107,7 +1107,6 @@ const acceptedTypes =
     ref="dropZoneRef"
     class="border-t border-border-muted bg-surface-1 px-4 py-3 relative"
     :class="isOverDrop ? 'ring-2 ring-accent' : ''"
-    role="group"
     aria-label="Compose message"
     data-testid="chat-input-form"
     @submit.prevent="send"
@@ -1202,6 +1201,7 @@ const acceptedTypes =
         multiple
         :accept="acceptedTypes"
         class="hidden"
+        aria-label="Attach files"
         data-testid="chat-input-file"
         @change="onFileInputChange"
       />

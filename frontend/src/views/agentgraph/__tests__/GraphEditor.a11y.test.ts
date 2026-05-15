@@ -36,9 +36,6 @@ const axeOptions = {
     'color-contrast': { enabled: false },
     // region — component tree mounts without Shell landmark wrapper in tests.
     region: { enabled: false },
-    // label — the YAML textarea in GraphEditor lacks an explicit <label>.
-    // WP04 fix: add aria-label="Graph YAML" or a visible <label> element.
-    label: { enabled: false },
   },
 };
 

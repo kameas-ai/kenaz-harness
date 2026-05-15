@@ -23,14 +23,6 @@ const axeOptions = {
     'color-contrast': { enabled: false },
     // region — component tree mounts without Shell landmark wrapper in tests.
     region: { enabled: false },
-    // button-name — toggle switches (<button role="switch">) lack visible text
-    // labels in the current implementation. WP04 fix: add aria-label to each
-    // toggle button (e.g. "Auto-collapse branches", "Delete branches with parent").
-    'button-name': { enabled: false },
-    // label — number inputs (nudge-turns-input, nudge-tokens-input) and the
-    // range slider (max-branch-depth-slider) lack explicit <label> associations.
-    // WP04 fix: add htmlFor/id pairs or aria-labelledby to each form element.
-    label: { enabled: false },
   },
 };
 

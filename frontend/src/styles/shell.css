@@ -4,6 +4,35 @@
  * shape mirrors plan §2.1: Titlebar / [LeftRail | main].
  */
 
+/*
+ * Skip-to-content link — visually hidden until focused via keyboard.
+ * Provides WCAG 2.4.1 "Bypass Blocks" compliance for keyboard users.
+ * Teleports to the top of the visual stack on :focus-visible so the link
+ * is clearly visible when needed.
+ */
+.skip-to-content {
+  position: fixed;
+  top: -9999px;
+  left: 1rem;
+  z-index: 10000;
+  padding: 0.5rem 1rem;
+  background: var(--surface-3);
+  color: var(--accent);
+  border: 1px solid var(--accent-hairline);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-ui);
+  font-size: 14px;
+  text-decoration: none;
+  transition: top var(--motion-fast);
+}
+
+.skip-to-content:focus-visible {
+  top: 1rem;
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+
 .shell-grid {
   display: grid;
   grid-template-rows: auto 1fr;

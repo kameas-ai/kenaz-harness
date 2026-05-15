@@ -401,18 +401,12 @@ describe('ChatInput (chat-ui)', () => {
     //     needs_manual_verification: check contrast in a real browser.
     //   region — component mounted in isolation, not inside a Shell landmark.
     //     In production it lives inside <main class="shell-main">.
-    //   aria-allowed-role — <form role="group"> is invalid; WP04 fix:
-    //     remove the redundant role (form is already a landmark element).
-    //   label — <input type="file" class="hidden"> needs aria-label;
-    //     WP04 fix: add aria-label="Attach files" to the hidden file input.
     const w = mountInput();
     await flushPromises();
     const results = await axe(w.element, {
       rules: {
         'color-contrast': { enabled: false },
         region: { enabled: false },
-        'aria-allowed-role': { enabled: false },
-        label: { enabled: false },
       },
     });
     // @ts-expect-error — toHaveNoViolations is added via test-setup.ts extend

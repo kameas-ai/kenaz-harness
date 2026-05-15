@@ -525,6 +525,7 @@ defineExpose({ load, validate, save, parseNodes, appendStubNode });
             v-model="yaml"
             :readonly="readOnly"
             spellcheck="false"
+            aria-label="Graph YAML definition"
             class="h-[480px] w-full rounded-md border border-border-muted bg-surface-0 px-3 py-2 font-mono text-[12px] text-ink"
             data-testid="editor-yaml"
             @dragover="onYamlDragOver"
