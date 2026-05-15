@@ -31,8 +31,8 @@ type LocalReportResult struct {
 	ByteCount int64 `json:"byteCount"`
 }
 
-// TestDSNResult carries the outcome of a DSN connectivity check.
-type TestDSNResult struct {
+// DSNTestResult carries the outcome of a DSN connectivity check.
+type DSNTestResult struct {
 	// OK is true when the DSN parsed correctly and the ingestion endpoint
 	// responded with HTTP 200.
 	OK bool `json:"ok"`
@@ -53,5 +53,5 @@ type SentryAPI interface {
 
 	// TestDSN parses the given DSN string and issues a HEAD request to
 	// the ingestion URL. Returns OK:true when the server responds 2xx.
-	TestDSN(ctx context.Context, dsn string) (TestDSNResult, error)
+	TestDSN(ctx context.Context, dsn string) (DSNTestResult, error)
 }

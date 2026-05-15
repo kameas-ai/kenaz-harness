@@ -113,7 +113,13 @@ func main() {
 			}
 			// Initialise Sentry after core.Start so the settings store is
 			// ready. wire-up point 1 for sentry (sentry-error-monitoring-01KX5R8G WP02).
-			initSentryFromSettings(api)
+			// api.Bindings() returns []any{<*Bindings>}; assert back to the concrete
+			// type so initSentryFromSettings can call Settings_Get on it.
+			if bs := api.Bindings(); len(bs) > 0 {
+				if b, ok := bs[0].(*rpc.Bindings); ok {
+					initSentryFromSettings(b)
+				}
+			}
 		},
 		OnShutdown: func(ctx context.Context) {
 			_ = c.Shutdown(ctx)

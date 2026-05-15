@@ -41,7 +41,7 @@ func (s *Impl) GenerateLocalReport(ctx context.Context) (LocalReportResult, erro
 }
 
 // TestDSN validates and pings a Sentry DSN.
-func (s *Impl) TestDSN(_ context.Context, dsn string) (TestDSNResult, error) {
+func (s *Impl) TestDSN(_ context.Context, dsn string) (DSNTestResult, error) {
 	ok, errMsg := coresentry.TestDSN(dsn)
-	return TestDSNResult{OK: ok, Error: errMsg}, nil
+	return DSNTestResult{OK: ok, Error: errMsg}, nil
 }

@@ -2479,6 +2479,6 @@ func (b *Bindings) Sentry_GenerateLocalReport() (sentryview.LocalReportResult, e
 // Sentry_TestDSN parses a Sentry DSN string and issues a HEAD request to
 // the ingestion endpoint to verify reachability. Returns OK:true when the
 // server responds 2xx/4xx (i.e. is reachable and accepts the project).
-func (b *Bindings) Sentry_TestDSN(dsn string) (sentryview.TestDSNResult, error) {
+func (b *Bindings) Sentry_TestDSN(dsn string) (sentryview.DSNTestResult, error) {
 	return b.api.Sentry().TestDSN(b.ctx(), dsn)
 }
