@@ -14,8 +14,10 @@ import (
 // target runtime's port is not reachable.
 var ErrRuntimeNotRunning = errors.New("llm: local runtime is not running")
 
-// ErrFeatureDisabled is returned when HARNESS_LOCAL_RUNTIMES=0.
-var ErrFeatureDisabled = errors.New("llm: local runtime feature is disabled")
+// ErrLocalRuntimeDisabled is returned when HARNESS_LOCAL_RUNTIMES=0.
+// Distinct from custom-openai's ErrFeatureDisabled since the two features
+// have independent env-flag gates.
+var ErrLocalRuntimeDisabled = errors.New("llm: local runtime feature is disabled")
 
 // ErrRuntimeUnknown is returned when the supplied kind is not one of the
 // supported runtime kinds.
@@ -40,7 +42,7 @@ func (a *API) ListDetectedLocalRuntimes(ctx context.Context) ([]LocalRuntimeInfo
 // profile is persisted but the registry may not resolve it.
 func (a *API) AutoConfigureLocalRuntime(ctx context.Context, kind string) (LocalRuntimeConfigResult, error) {
 	if !localruntime.Enabled() {
-		return LocalRuntimeConfigResult{}, ErrFeatureDisabled
+		return LocalRuntimeConfigResult{}, ErrLocalRuntimeDisabled
 	}
 
 	rtKind := localruntime.RuntimeKind(kind)

@@ -627,6 +627,13 @@ export interface AppInfo {
    * (provider-keychain-rotation-01KQ8TD9 WP07)
    */
   keychainRotationEnabled?: boolean;
+  /**
+   * customOpenAIEnabled is true when HARNESS_CUSTOM_OPENAI is not "0".
+   * The frontend uses this to hide the "Custom OpenAI-compatible" kind in
+   * the provider-add form when the feature is disabled.
+   * (custom-openai-compatible-endpoint-01KQ8VN0 WP08)
+   */
+  customOpenAIEnabled?: boolean;
 }
 
 export interface WindowSize {

@@ -101,15 +101,15 @@ func TestAutoConfigureLocalRuntime_RuntimeNotRunning(t *testing.T) {
 	}
 }
 
-// TestAutoConfigureLocalRuntime_FeatureDisabled verifies ErrFeatureDisabled
+// TestAutoConfigureLocalRuntime_FeatureDisabled verifies ErrLocalRuntimeDisabled
 // is returned when HARNESS_LOCAL_RUNTIMES=0.
 func TestAutoConfigureLocalRuntime_FeatureDisabled(t *testing.T) {
 	t.Setenv("HARNESS_LOCAL_RUNTIMES", "0")
 	api := buildTestAPI()
 
 	_, err := api.AutoConfigureLocalRuntime(context.Background(), "ollama")
-	if err != ErrFeatureDisabled {
-		t.Errorf("expected ErrFeatureDisabled; got %v", err)
+	if err != ErrLocalRuntimeDisabled {
+		t.Errorf("expected ErrLocalRuntimeDisabled; got %v", err)
 	}
 }
 

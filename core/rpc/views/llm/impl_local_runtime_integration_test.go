@@ -41,14 +41,14 @@ func TestImplIntegration_ListDetected_FeatureOff(t *testing.T) {
 	}
 }
 
-// TestImplIntegration_AutoConfigure_FeatureOff returns ErrFeatureDisabled.
+// TestImplIntegration_AutoConfigure_FeatureOff returns ErrLocalRuntimeDisabled.
 func TestImplIntegration_AutoConfigure_FeatureOff(t *testing.T) {
 	t.Setenv("HARNESS_LOCAL_RUNTIMES", "0")
 	api := buildIntegrationAPI()
 
 	_, err := api.AutoConfigureLocalRuntime(context.Background(), "ollama")
-	if err != llmview.ErrFeatureDisabled {
-		t.Errorf("expected ErrFeatureDisabled; got %v", err)
+	if err != llmview.ErrLocalRuntimeDisabled {
+		t.Errorf("expected ErrLocalRuntimeDisabled; got %v", err)
 	}
 }
 

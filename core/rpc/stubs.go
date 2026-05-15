@@ -74,6 +74,15 @@ func (s *stubLLM) AutoConfigureLocalRuntime(_ context.Context, _ string) (llm.Lo
 func (s *stubLLM) RescanLocalRuntimes(_ context.Context) ([]llm.LocalRuntimeInfo, error) {
 	return nil, errNotWired
 }
+func (s *stubLLM) ListCustomTemplates(_ context.Context) ([]llm.CustomTemplateSummary, error) {
+	return []llm.CustomTemplateSummary{}, nil
+}
+func (s *stubLLM) RecognizeTemplate(_ context.Context, _ string) (llm.RecognizeTemplateResult, error) {
+	return llm.RecognizeTemplateResult{}, nil
+}
+func (s *stubLLM) ProbeCustomEndpoint(_ context.Context, _ llm.ProbeCustomEndpointInput) (llm.ProbeCustomEndpointResult, error) {
+	return llm.ProbeCustomEndpointResult{}, errNotWired
+}
 
 // ── a2a ────────────────────────────────────────────────────────────────
 

@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	corellm "github.com/sigil-tech/kaneaz-harness/core/llm"
+	"github.com/sigil-tech/kaneaz-harness/core/llm/custom"
 )
 
 // recordingSink captures every Emit call for assertion.
@@ -452,6 +453,128 @@ func TestGetAttachmentLimits_DelegatesToCatalog(t *testing.T) {
 }
 
 // TestGetAttachmentLimits_DisabledByEnvFlag verifies that when
+// ── WP06: custom-openai RPC methods ──────────────────────────────────────
+
+// fakeCustomAdapter satisfies CustomAdapterAPI for tests.
+type fakeCustomAdapter struct {
+	// templates returns the fake template registry; may be nil.
+	reg *customRegistryFake
+}
+
+type customRegistryFake struct {
+	all []customTemplateFake
+}
+
+type customTemplateFake struct {
+	id, name, baseURL, authScheme string
+}
+
+// We can't use custom.Registry directly in test without importing the package
+// (which would be fine), but let's use the real package to keep it simple.
+// Instead, we'll pass a nil customAdapter and test the "not wired" path.
+
+func TestListCustomTemplates_NotWired(t *testing.T) {
+	t.Parallel()
+	api := New(Config{})
+	got, err := api.ListCustomTemplates(context.Background())
+	if err != nil {
+		t.Fatalf("ListCustomTemplates: %v", err)
+	}
+	if len(got) != 0 {
+		t.Errorf("expected empty list when adapter not wired, got %d", len(got))
+	}
+}
+
+func TestRecognizeTemplate_NotWired(t *testing.T) {
+	t.Parallel()
+	api := New(Config{})
+	got, err := api.RecognizeTemplate(context.Background(), "https://api.together.xyz/v1")
+	if err != nil {
+		t.Fatalf("RecognizeTemplate: %v", err)
+	}
+	if got.Matched {
+		t.Error("expected Matched=false when adapter not wired")
+	}
+}
+
+func TestProbeCustomEndpoint_NotWired(t *testing.T) {
+	t.Parallel()
+	api := New(Config{})
+	_, err := api.ProbeCustomEndpoint(context.Background(), ProbeCustomEndpointInput{
+		BaseURL:    "https://api.together.xyz/v1",
+		AuthScheme: "bearer",
+	})
+	if err == nil {
+		t.Fatal("expected ErrFeatureDisabled when adapter not wired")
+	}
+	if !errors.Is(err, ErrFeatureDisabled) {
+		t.Errorf("got %v, want ErrFeatureDisabled", err)
+	}
+}
+
+func TestListCustomTemplates_WithRealAdapter(t *testing.T) {
+	t.Parallel()
+	// Wire the real custom adapter so we exercise the full ListCustomTemplates path.
+	adapter := custom.New()
+	if adapter == nil {
+		// HARNESS_CUSTOM_OPENAI=0 in this env; skip.
+		t.Skip("custom adapter not registered in this env")
+	}
+	api := New(Config{CustomAdapter: adapter})
+	got, err := api.ListCustomTemplates(context.Background())
+	if err != nil {
+		t.Fatalf("ListCustomTemplates: %v", err)
+	}
+	// The embedded registry ships 9 templates.
+	if len(got) != 9 {
+		t.Errorf("len(templates) = %d, want 9", len(got))
+	}
+	// Verify at least one well-known template is present.
+	found := false
+	for _, tmpl := range got {
+		if tmpl.ID == "groq" {
+			found = true
+			if tmpl.AuthScheme != "bearer" {
+				t.Errorf("groq auth_scheme = %q, want bearer", tmpl.AuthScheme)
+			}
+			break
+		}
+	}
+	if !found {
+		t.Error("groq template not found in ListCustomTemplates result")
+	}
+}
+
+func TestRecognizeTemplate_WithRealAdapter(t *testing.T) {
+	t.Parallel()
+	adapter := custom.New()
+	if adapter == nil {
+		t.Skip("custom adapter not registered in this env")
+	}
+	api := New(Config{CustomAdapter: adapter})
+
+	// api.together.xyz should resolve to the "together" template.
+	got, err := api.RecognizeTemplate(context.Background(), "https://api.together.xyz/v1")
+	if err != nil {
+		t.Fatalf("RecognizeTemplate: %v", err)
+	}
+	if !got.Matched {
+		t.Fatal("expected Matched=true for api.together.xyz")
+	}
+	if got.Template.ID != "together" {
+		t.Errorf("template.id = %q, want together", got.Template.ID)
+	}
+
+	// An unknown host should return Matched=false.
+	got2, err := api.RecognizeTemplate(context.Background(), "https://myunknownhost.example.com/v1")
+	if err != nil {
+		t.Fatalf("RecognizeTemplate unknown: %v", err)
+	}
+	if got2.Matched {
+		t.Error("expected Matched=false for unknown host")
+	}
+}
+
 // HARNESS_MULTIMODAL_IN=off the catalog returns ImageInput=false and
 // DocumentInput=false (the env flag is applied at the catalog layer).
 // This is an end-to-end path test: real Catalog → AttachmentLimits env override.

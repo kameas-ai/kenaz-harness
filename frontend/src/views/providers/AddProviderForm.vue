@@ -17,14 +17,19 @@
  * local form state immediately on submit.
  */
 
-import { computed, reactive, ref, watch } from 'vue';
+import { computed, onMounted, reactive, ref, watch } from 'vue';
 import type {
   AddProviderInput,
   GeminiEndpointKind,
+  AppInfo,
   ModelInfo,
   ProviderKind,
+  CustomAuthScheme,
+  CustomCapabilityMatrix,
 } from '@/lib/types';
 import Button from '@/components/ui/Button.vue';
+import CustomEndpointFields from './CustomEndpointFields.vue';
+import type { CustomEndpointValue } from './CustomEndpointFields.vue';
 import { useHarnessClient } from '@/lib/harnessClientContext';
 
 const props = defineProps<{
@@ -53,7 +58,17 @@ const emit = defineEmits<{
 const client = useHarnessClient();
 const isEditing = computed(() => !!props.editing);
 
-const KINDS: { id: ProviderKind; label: string }[] = [
+const appInfo = ref<AppInfo | null>(null);
+
+onMounted(async () => {
+  try {
+    appInfo.value = await client.appInfo();
+  } catch {
+    appInfo.value = null;
+  }
+});
+
+const ALL_KINDS: { id: ProviderKind; label: string }[] = [
   { id: 'anthropic', label: 'Anthropic' },
   { id: 'openai', label: 'OpenAI' },
   { id: 'openrouter', label: 'OpenRouter' },
@@ -61,7 +76,17 @@ const KINDS: { id: ProviderKind; label: string }[] = [
   { id: 'ollama', label: 'Ollama (local)' },
   { id: 'azure-openai', label: 'Azure OpenAI' },
   { id: 'gemini', label: 'Google Gemini' },
+  { id: 'custom-openai', label: 'Custom OpenAI-compatible' },
 ];
+
+// Exclude custom-openai when the feature flag is explicitly disabled.
+// The flag defaults to enabled (undefined or true both mean "show it").
+const KINDS = computed(() =>
+  ALL_KINDS.filter(
+    (k) =>
+      k.id !== 'custom-openai' || appInfo.value?.customOpenAIEnabled !== false,
+  ),
+);
 
 // AWS Bedrock regions where Bedrock is generally available. Source:
 // https://docs.aws.amazon.com/bedrock/latest/userguide/bedrock-regions.html
@@ -112,6 +137,8 @@ interface FormState {
   geminiProject: string;
   geminiRegion: string;
   geminiSAPath: string;
+  // custom-openai specific fields (WP06)
+  customEndpoint: CustomEndpointValue;
 }
 
 const form = reactive<FormState>({
@@ -129,6 +156,14 @@ const form = reactive<FormState>({
   geminiProject: '',
   geminiRegion: 'us-central1',
   geminiSAPath: '',
+  customEndpoint: {
+    baseURL: '',
+    model: '',
+    authScheme: 'bearer',
+    authHeader: '',
+    apiKey: '',
+    templateID: '',
+  },
 });
 
 // Pre-fill from props.editing when in edit mode. Runs once at setup.
@@ -150,6 +185,10 @@ if (props.editing) {
     // For azure-openai, the resource host is stored in profile.Region.
     form.azureHost = props.editing.region || '';
   }
+  // custom-openai edit mode: the editing prop does not carry the
+  // endpoint/auth fields directly (they live in the profile), so
+  // the CustomEndpointFields component handles its own pre-fill
+  // via the `initial` prop below.
 }
 
 const submitting = ref(false);
@@ -162,6 +201,8 @@ const probed = ref(false);
 // True when probe ran and returned an empty list — UI falls back to
 // manual model id entry for this kind.
 const fallbackToManual = ref(false);
+// custom-openai: last probed matrix (WP06)
+const customProbeMatrix = ref<CustomCapabilityMatrix | null>(null);
 
 const requiresRegion = computed(() => form.kind === 'bedrock');
 const requiresAzureHost = computed(() => form.kind === 'azure-openai');
@@ -187,6 +228,8 @@ const geminiVertexUsesADC = computed(() => isGeminiVertex.value && form.geminiVe
 const geminiVertexUsesSAPaste = computed(() => isGeminiVertex.value && form.geminiVertexAuth === 'service_account_paste');
 const geminiVertexUsesSAPath = computed(() => isGeminiVertex.value && form.geminiVertexAuth === 'service_account_path');
 
+// custom-openai uses its own CustomEndpointFields sub-component
+const isCustomOpenAI = computed(() => form.kind === 'custom-openai');
 // Bedrock has no /models endpoint that mirrors the Connect flow we
 // use for Anthropic, and the user already knows the model id from the
 // AWS console. Skip the probe and go straight to manual entry. Edit
@@ -195,10 +238,12 @@ const geminiVertexUsesSAPath = computed(() => isGeminiVertex.value && form.gemin
 // Azure OpenAI's deployments are operator-configured, not discoverable
 // via a simple /models list, so it also falls back to manual entry.
 // Gemini Vertex skips probe — no /models endpoint on the Vertex path.
+// custom-openai also skips this probe path (it has its own probe in CustomEndpointFields).
 const skipsProbe = computed(
   () =>
     form.kind === 'bedrock' ||
     form.kind === 'azure-openai' ||
+    form.kind === 'custom-openai' ||
     isGeminiVertex.value ||
     isEditing.value,
 );
@@ -207,6 +252,18 @@ const skipsProbe = computed(
 // so most users never have to think about it.
 const customizeId = ref(false);
 const derivedId = computed(() => {
+  // custom-openai: derive from template id + model
+  if (form.kind === 'custom-openai') {
+    const tmpl = form.customEndpoint.templateID;
+    const model = form.customEndpoint.model.trim();
+    if (tmpl && model) {
+      return `custom-${tmpl}-${model}`.toLowerCase().replace(/[^a-z0-9-_]/g, '-');
+    }
+    if (model) {
+      return `custom-${model}`.toLowerCase().replace(/[^a-z0-9-_]/g, '-');
+    }
+    return 'custom-openai';
+  }
   // For multi-model rows, the auto-derived id uses the kind + count
   // (e.g. "anthropic-3-models") rather than naming any one model so
   // the row id is stable when the user adjusts the model set later.
@@ -229,6 +286,11 @@ const effectiveId = computed(() =>
 // is the primary (= profile.Model on the backend); the rest live in
 // profile.Models for the chat-surface switcher to pick.
 const effectiveModelIds = computed<string[]>(() => {
+  // custom-openai: single model from the endpoint fields
+  if (form.kind === 'custom-openai') {
+    const m = form.customEndpoint.model.trim();
+    return m ? [m] : [];
+  }
   if (fallbackToManual.value) {
     return form.manualModelIds
       .split(/[\n,]/)
@@ -245,6 +307,9 @@ const selectedModel = computed<ModelInfo | undefined>(() =>
   models.value.find((m) => m.id === primaryModelId.value),
 );
 const effectiveModelName = computed(() => {
+  if (form.kind === 'custom-openai') {
+    return form.customEndpoint.model.trim() || '';
+  }
   if (selectedModel.value?.displayName) return selectedModel.value.displayName;
   return primaryModelId.value;
 });
@@ -321,6 +386,38 @@ const validation = computed(() => {
       : probed.value
         ? 'Pick at least one model.'
         : 'Connect first to load available models.';
+
+  if (form.kind === 'custom-openai') {
+    if (!form.customEndpoint.baseURL.trim())
+      errors.baseURL = 'Base URL is required.';
+    if (!form.customEndpoint.model.trim())
+      errors.model = 'Model ID is required.';
+    if (
+      !isEditing.value &&
+      form.customEndpoint.authScheme !== 'none' &&
+      !form.customEndpoint.apiKey.trim()
+    )
+      errors.apiKey = 'API key is required for this auth scheme.';
+  } else {
+    // In edit mode the API key is optional — empty means "keep the
+    // existing keychain entry."
+    if (
+      requiresApiKey.value &&
+      !isEditing.value &&
+      !form.apiKey.trim()
+    )
+      errors.apiKey = 'API key is required.';
+    if (requiresAwsProfile.value && !form.awsProfile.trim())
+      errors.awsProfile = 'AWS profile name is required.';
+    if (requiresRegion.value && !form.region.trim())
+      errors.region = 'Region is required for Bedrock.';
+    if (effectiveModelIds.value.length === 0)
+      errors.model = skipsProbe.value
+        ? 'At least one model id is required.'
+        : probed.value
+          ? 'Pick at least one model.'
+          : 'Connect first to load available models.';
+  }
   if (customizeId.value && !form.customId.trim())
     errors.customId = 'Custom ID is required when "Customize ID" is on.';
   return errors;
@@ -336,6 +433,10 @@ function onSubmit(): void {
   const id = isEditing.value && props.editing ? props.editing.id : effectiveId.value;
 
   // Determine credential shape.
+  // custom-openai no-auth endpoints get a kind="keychain" cred with an empty
+  // locator that the personal store ignores (auth_scheme:none path).
+  const isNoneAuth =
+    form.kind === 'custom-openai' && form.customEndpoint.authScheme === 'none';
   let cred: AddProviderInput['cred'];
   if (requiresAwsProfile.value) {
     cred = { kind: 'aws_profile' as const, locator: form.awsProfile.trim() };
@@ -343,13 +444,15 @@ function onSubmit(): void {
     cred = { kind: 'file' as const, locator: form.geminiSAPath.trim() };
   } else if (geminiVertexUsesADC.value) {
     cred = { kind: 'env' as const, locator: 'GOOGLE_APPLICATION_CREDENTIALS' };
+  } else if (isNoneAuth) {
+    cred = { kind: 'keychain' as const, locator: '' };
   } else {
     cred = { kind: 'keychain' as const, locator: `kaneaz-harness/${id}` };
   }
 
   const input: AddProviderInput = {
     id,
-    name: effectiveModelName.value,
+    name: effectiveModelName.value || id,
     kind: form.kind,
     model: primaryModelId.value,
     models: effectiveModelIds.value,
@@ -365,8 +468,13 @@ function onSubmit(): void {
       input.region = form.geminiRegion.trim();
     }
   }
-  if (cred.kind === 'keychain' && form.apiKey.trim()) {
+  if (cred.kind === 'keychain' && cred.locator && form.apiKey.trim()) {
     input.plaintextApiKey = form.apiKey;
+  }
+  // custom-openai: forward the plaintext API key when auth requires one
+  if (form.kind === 'custom-openai' && !isNoneAuth && form.customEndpoint.apiKey) {
+    input.plaintextApiKey = form.customEndpoint.apiKey;
+    form.customEndpoint.apiKey = '';
   }
   // Drop our local copy of the plaintext immediately so we don't
   // accidentally retain it across re-renders.
@@ -379,7 +487,7 @@ function onCancel(): void {
   emit('cancel');
 }
 
-defineExpose({ form, validation, isValid });
+defineExpose({ form, validation, isValid, customProbeMatrix });
 </script>
 
 <template>
@@ -408,6 +516,29 @@ defineExpose({ form, validation, isValid });
         </option>
       </select>
     </div>
+
+    <!-- custom-openai: delegate to CustomEndpointFields sub-component -->
+    <CustomEndpointFields
+      v-if="isCustomOpenAI"
+      :editing="isEditing"
+      :data-testid="'custom-endpoint-fields'"
+      @update:value="(v) => { form.customEndpoint = v; }"
+      @probed="(m) => { customProbeMatrix = m; }"
+    />
+
+    <!-- Validation errors for custom-openai -->
+    <p
+      v-if="isCustomOpenAI && validation.baseURL"
+      class="text-xs text-signal-danger"
+    >
+      {{ validation.baseURL }}
+    </p>
+    <p
+      v-if="isCustomOpenAI && (validation.model || validation.apiKey)"
+      class="text-xs text-signal-danger"
+    >
+      {{ validation.model || validation.apiKey }}
+    </p>
 
     <!-- Bedrock-only: auth method toggle -->
     <div v-if="form.kind === 'bedrock'">
@@ -575,7 +706,8 @@ defineExpose({ form, validation, isValid });
     </div>
 
     <!-- Step 2a: API key + Connect (most providers + bedrock-API-key mode) -->
-    <div v-if="requiresApiKey">
+    <!-- Hidden for custom-openai — handled by CustomEndpointFields -->
+    <div v-if="requiresApiKey && !isCustomOpenAI">
       <label
         for="prov-apikey"
         class="block text-[11px] uppercase tracking-[0.18em] text-ink-subtle"
@@ -634,7 +766,7 @@ defineExpose({ form, validation, isValid });
     </div>
 
     <!-- Step 2b: AWS profile (bedrock) -->
-    <div v-if="requiresAwsProfile">
+    <div v-if="requiresAwsProfile && !isCustomOpenAI">
       <label
         for="prov-aws-profile"
         class="block text-[11px] uppercase tracking-[0.18em] text-ink-subtle"
@@ -685,7 +817,8 @@ defineExpose({ form, validation, isValid });
     </div>
 
     <!-- Step 4: Model picker — populated by Connect -->
-    <div v-if="probed && !fallbackToManual">
+    <!-- Hidden for custom-openai — model is entered in CustomEndpointFields -->
+    <div v-if="probed && !fallbackToManual && !isCustomOpenAI">
       <div class="flex items-center justify-between">
         <span class="block text-[11px] uppercase tracking-[0.18em] text-ink-subtle">
           Models ({{ form.selectedModelIds.length }} selected)
@@ -733,7 +866,8 @@ defineExpose({ form, validation, isValid });
     <!-- Manual model entry — for kinds with no /models endpoint
          (bedrock today) and as a fallback when probing returns empty.
          Multi-line: one model id per line. -->
-    <div v-if="fallbackToManual">
+    <!-- Hidden for custom-openai — model field is in CustomEndpointFields -->
+    <div v-if="fallbackToManual && !isCustomOpenAI">
       <label
         for="prov-model-manual"
         class="block text-[11px] uppercase tracking-[0.18em] text-ink-subtle"
