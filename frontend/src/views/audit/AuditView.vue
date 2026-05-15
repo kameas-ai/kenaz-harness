@@ -14,6 +14,7 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import CanvasHead from '@/shell/CanvasHead.vue';
 import EventStreamRow from '@/components/ui/EventStreamRow.vue';
+import AuditEventDrawer from './AuditEventDrawer.vue';
 import { useHarnessClient, useEventLogStream } from '@/lib/useHarnessAPI';
 import { CATEGORIES, type Category } from '@/lib/categories';
 import type { AuditEntry, AuditFilter, AuditFilterQuery, SavedAuditQuery, AuditExportOptions } from '@/lib/types';
@@ -58,6 +59,9 @@ const loading = ref(false);
 
 // Selection state (for WP08 bulk-purge; pre-wired here).
 const selectedIDs = ref<Set<string>>(new Set());
+
+// Drawer state.
+const drawerEntry = ref<AuditEntry | null>(null);
 
 // Export state.
 const exportFormat = ref<'csv' | 'jsonl' | 'pdf'>('jsonl');
@@ -214,6 +218,10 @@ function toggleSelect(id: string) {
     next.add(id);
   }
   selectedIDs.value = next;
+}
+
+function openDrawer(e: AuditEntry) {
+  drawerEntry.value = e;
 }
 
 function categoryFor(e: AuditEntry): Category {
@@ -434,8 +442,16 @@ onBeforeUnmount(() => {
         :category="categoryFor(e)"
         :subject="e.subject"
         :trailing="e.trailing"
-        @click="toggleSelect(e.id)"
+        @click="openDrawer(e)"
       />
     </div>
+
+    <!-- Per-event drawer -->
+    <AuditEventDrawer
+      :entry="drawerEntry"
+      :entries="entries"
+      @close="drawerEntry = null"
+      @select="drawerEntry = $event"
+    />
   </div>
 </template>

@@ -10,6 +10,12 @@ function provide(seedEntries: AuditEntry[] = []) {
     audit: {
       listEntries: async () => seedEntries,
       verifyEntry: async () => true,
+      verifyChain: async () => ({ verified: true, rows_checked: 0 }),
+      filter: async () => [],
+      listSavedQueries: async () => [],
+      saveQuery: async () => undefined,
+      deleteQuery: async () => undefined,
+      export: async () => '/tmp/test.csv',
       startStream: async () => 'fake-audit-sub',
       stopStream: async () => undefined,
     },
