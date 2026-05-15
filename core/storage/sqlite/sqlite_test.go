@@ -149,7 +149,9 @@ func TestOpen_RegistersSessionMigrations(t *testing.T) {
 	// multimodal-io-extended-01KQ8TD2 WP02.
 	// 0328 (media_artifact_meta: image_width/image_height/page_count columns)
 	// lands with multimodal-io-01KQ8TDF FR-017.
-	want := []int{300, 301, 302, 303, 304, 305, 306, 307, 308, 309, 310, 311, 312, 313, 314, 315, 316, 317, 318, 319, 320, 321, 322, 323, 324, 325, 326, 327, 328}
+	// 0331 (custom_endpoint_capabilities) lands with
+	// custom-openai-compatible-endpoint-01KQ8VN0 WP03.
+	want := []int{300, 301, 302, 303, 304, 305, 306, 307, 308, 309, 310, 311, 312, 313, 314, 315, 316, 317, 318, 319, 320, 321, 322, 323, 324, 325, 326, 327, 328, 331}
 	if len(versions) != len(want) {
 		t.Fatalf("session migrations applied = %v, want %v", versions, want)
 	}
@@ -199,9 +201,10 @@ func TestOpen_ApplyIdempotent(t *testing.T) {
 	// 1 agent_graph_node_provenance (0326, manifest-versioning-01NDFSEX02) +
 	// 1 source_model_output (0327, multimodal-io-extended-01KQ8TD2) +
 	// 1 media_artifact_meta (0328, multimodal-io-01KQ8TDF FR-017) +
-	// 1 slash_commands_user (1000) = 32.
-	if count != 32 {
-		t.Errorf("ledger count = %d, want 32", count)
+	// 1 custom_endpoint_capabilities (0331, custom-openai-compatible-endpoint) +
+	// 1 slash_commands_user (1000) = 33.
+	if count != 33 {
+		t.Errorf("ledger count = %d, want 33", count)
 	}
 }
 
