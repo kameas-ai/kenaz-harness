@@ -400,9 +400,9 @@ func TestAdapter_RefreshModelsAsync_DedupesAndBacksOff(t *testing.T) {
 	defer srv.Close()
 	a := New(WithEndpoint(srv.URL + "/chat/completions"))
 
-	a.RefreshModelsAsync(nil)
-	a.RefreshModelsAsync(nil) // dedupe — in flight
-	a.RefreshModelsAsync(nil) // dedupe — in flight
+	a.RefreshModelsAsync()
+	a.RefreshModelsAsync() // dedupe — in flight
+	a.RefreshModelsAsync() // dedupe — in flight
 
 	// Wait for the in-flight to finish.
 	deadline := time.Now().Add(2 * time.Second)
