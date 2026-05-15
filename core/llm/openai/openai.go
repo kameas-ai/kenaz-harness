@@ -324,60 +324,11 @@ func (a *Adapter) Stream(ctx context.Context, req llm.GenerationRequest, prof ll
 	return s, nil
 }
 
-// classifyStatus maps an HTTP error response to the connector taxonomy.
-//
-// OpenAI returns errors as JSON envelopes:
-//
-//	{"error": {"message": "...", "type": "...", "code": "..."}}
-//
-// The classification is by HTTP status, not by error type field —
-// only status guarantees retryability semantics. The body is included
-// in the typed error message verbatim (capped) for debugging.
+// classifyStatus delegates to the canonical top-level
+// llm.ClassifyStatus (WP01 of provider-implementation-uniformity-01KQ8V4F).
+// Kept as a thin package-local alias; removed entirely in WP10.
 func classifyStatus(status int, body []byte) error {
-	msg := extractErrorMessage(body)
-	if msg == "" {
-		msg = http.StatusText(status)
-	}
-	switch {
-	case status == 401 || status == 403:
-		return &llm.ErrAuth{Status: status, Message: msg}
-	case status == 429:
-		return &llm.ErrTransient{Status: status, Message: msg}
-	case status >= 500 && status < 600:
-		return &llm.ErrTransient{Status: status, Message: msg}
-	case status == 408 || status == 425:
-		return &llm.ErrTransient{Status: status, Message: msg}
-	default:
-		// 400 / 404 / 422 and friends: non-retryable client errors.
-		return &llm.ErrInvalidRequest{Status: status, Message: msg}
-	}
-}
-
-// extractErrorMessage best-effort parses an OpenAI error envelope.
-func extractErrorMessage(body []byte) string {
-	if len(body) == 0 {
-		return ""
-	}
-	var env struct {
-		Error struct {
-			Message string `json:"message"`
-			Type    string `json:"type"`
-			Code    string `json:"code"`
-		} `json:"error"`
-	}
-	if err := json.Unmarshal(body, &env); err == nil {
-		if env.Error.Message != "" {
-			if env.Error.Type != "" {
-				return env.Error.Type + ": " + env.Error.Message
-			}
-			return env.Error.Message
-		}
-	}
-	s := strings.TrimSpace(string(body))
-	if len(s) > 200 {
-		s = s[:200] + "…"
-	}
-	return s
+	return llm.ClassifyStatus(status, body)
 }
 
 // buildRequestBody constructs the JSON body for the Chat Completions

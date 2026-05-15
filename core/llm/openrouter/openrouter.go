@@ -477,62 +477,11 @@ func modelsURL(chatURL string) string {
 	return strings.TrimRight(chatURL, "/") + "/models"
 }
 
-// classifyStatus maps an HTTP error response to the connector taxonomy.
-//
-//   - 401 / 403       → ErrAuth          (non-retryable)
-//   - 400 / 404 / 422 → ErrInvalidRequest (non-retryable)
-//   - 429             → ErrTransient
-//   - 5xx             → ErrTransient
-//   - everything else → ErrInvalidRequest (defensive default)
+// classifyStatus delegates to the canonical top-level
+// llm.ClassifyStatus (WP01 of provider-implementation-uniformity-01KQ8V4F).
+// Kept as a thin package-local alias; removed entirely in WP10.
 func classifyStatus(status int, body []byte) error {
-	msg := extractErrorMessage(body)
-	if msg == "" {
-		msg = http.StatusText(status)
-	}
-	switch {
-	case status == 401 || status == 403:
-		return &llm.ErrAuth{Status: status, Message: msg}
-	case status == 429:
-		return &llm.ErrTransient{Status: 429, Message: msg}
-	case status >= 500 && status < 600:
-		return &llm.ErrTransient{Status: status, Message: msg}
-	case status == 400 || status == 404 || status == 422:
-		return &llm.ErrInvalidRequest{Status: status, Message: msg}
-	default:
-		return &llm.ErrInvalidRequest{Status: status, Message: msg}
-	}
-}
-
-// extractErrorMessage best-effort parses an OpenRouter / OpenAI-style
-// error envelope. The OpenAI shape is {"error":{"message":"...","type":"...","code":"..."}}.
-func extractErrorMessage(body []byte) string {
-	if len(body) == 0 {
-		return ""
-	}
-	var env struct {
-		Error struct {
-			Message string `json:"message"`
-			Type    string `json:"type"`
-			Code    any    `json:"code"`
-		} `json:"error"`
-		Message string `json:"message"`
-	}
-	if err := json.Unmarshal(body, &env); err == nil {
-		if env.Error.Message != "" {
-			if env.Error.Type != "" {
-				return env.Error.Type + ": " + env.Error.Message
-			}
-			return env.Error.Message
-		}
-		if env.Message != "" {
-			return env.Message
-		}
-	}
-	s := strings.TrimSpace(string(body))
-	if len(s) > 200 {
-		s = s[:200] + "…"
-	}
-	return s
+	return llm.ClassifyStatus(status, body)
 }
 
 // buildRequestBody constructs the JSON body for the chat-completions

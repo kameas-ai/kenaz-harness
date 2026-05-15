@@ -396,66 +396,12 @@ func (a *Adapter) Stream(ctx context.Context, req llm.GenerationRequest, prof ll
 	return s, nil
 }
 
-// classifyStatus maps an HTTP error response to the connector taxonomy.
-//
-// The Messages API returns:
-//
-//   - 401 → invalid api_key (auth — non-retryable)
-//   - 403 → permission_denied / forbidden (auth — non-retryable)
-//   - 400 → invalid_request_error (non-retryable, includes content
-//     policy refusals reported as 400 with type=invalid_request_error)
-//   - 408/425/429 → transient
-//   - 5xx → transient
-//
-// Bodies follow:
-//
-//	{"type":"error","error":{"type":"...","message":"..."}}
+// classifyStatus delegates to the canonical top-level
+// llm.ClassifyStatus (WP01 of provider-implementation-uniformity-01KQ8V4F).
+// Kept as a thin package-local alias so call sites don't need updating;
+// removed entirely in WP10.
 func classifyStatus(status int, body []byte) error {
-	msg := extractErrorMessage(body)
-	if msg == "" {
-		msg = http.StatusText(status)
-	}
-	switch {
-	case status == 401 || status == 403:
-		return &llm.ErrAuth{Status: status, Message: msg}
-	case status == 408 || status == 425 || status == 429:
-		return &llm.ErrTransient{Status: status, Message: msg}
-	case status >= 500 && status < 600:
-		return &llm.ErrTransient{Status: status, Message: msg}
-	default:
-		// 400 (invalid_request_error including content-policy refusals),
-		// 404, 422, etc. — all non-retryable.
-		return &llm.ErrInvalidRequest{Status: status, Message: msg}
-	}
-}
-
-// extractErrorMessage best-effort parses an Anthropic error envelope.
-func extractErrorMessage(body []byte) string {
-	if len(body) == 0 {
-		return ""
-	}
-	var env struct {
-		Type  string `json:"type"`
-		Error struct {
-			Type    string `json:"type"`
-			Message string `json:"message"`
-		} `json:"error"`
-	}
-	if err := json.Unmarshal(body, &env); err == nil {
-		if env.Error.Message != "" {
-			if env.Error.Type != "" {
-				return env.Error.Type + ": " + env.Error.Message
-			}
-			return env.Error.Message
-		}
-	}
-	// Fall back to a trimmed snippet, never the full body, to keep
-	// audit payloads predictable.
-	s := strings.TrimSpace(string(body))
-	if len(s) > 200 {
-		s = s[:200] + "…"
-	}
-	return s
+	return llm.ClassifyStatus(status, body)
 }
 
 // buildRequestBody constructs the JSON body for the Messages API.
