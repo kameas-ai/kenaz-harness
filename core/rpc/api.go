@@ -2540,9 +2540,9 @@ func newLLMStack(
 		if ad == nil {
 			continue
 		}
-		if rf, ok := ad.(interface{ RefreshModelsAsync(cred []byte) }); ok {
+		if rf, ok := ad.(interface{ RefreshModelsAsync() }); ok {
 			logging.L().Info("llm.boot.warmup_models", "kind", kind)
-			rf.RefreshModelsAsync(nil)
+			rf.RefreshModelsAsync()
 		}
 	}
 	return llmStack{
