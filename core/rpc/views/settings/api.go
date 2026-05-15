@@ -465,6 +465,14 @@ type Settings struct {
 	// EffectiveMaxGeneratedImageBytes() accessor.
 	// (multimodal-io-extended-01KQ8TD2 WP02)
 	MaxGeneratedImageBytes int64 `json:"maxGeneratedImageBytes,omitempty"`
+
+	// LocalRuntimeRAMOverrideGB is a user-supplied override for the RAM
+	// quantity (in gibibytes) available for local model loading. When zero,
+	// the harness uses the detected SystemRAMBytes. Accepts decimals (e.g.
+	// 12.5 for 12.5 GiB). Values < 0 are rejected at Save. Read via the
+	// EffectiveLocalRuntimeRAMBytes(detected int64) helper.
+	// (local-model-runtimes-01KQ8VMZ WP07)
+	LocalRuntimeRAMOverrideGB float64 `json:"localRuntimeRAMOverrideGB,omitempty"`
 }
 
 // ProviderProfileRef is the wire shape that identifies a provider+model
@@ -1205,6 +1213,21 @@ func (s Settings) EffectiveMaxGeneratedImageBytes() int64 {
 		return DefaultMaxGeneratedImageBytes
 	}
 	return s.MaxGeneratedImageBytes
+}
+
+// EffectiveLocalRuntimeRAMBytes returns the RAM quantity available for
+// local model loading in bytes. When LocalRuntimeRAMOverrideGB > 0, the
+// override is used (converted from GiB to bytes); otherwise `detected`
+// (from core/system/resources.EffectiveRAMBytes()) is returned.
+//
+// This helper is called by the model-fit filter (WP06) and by the
+// frontend settings panel (WP07) to present a consistent effective value.
+// (local-model-runtimes-01KQ8VMZ WP07)
+func (s Settings) EffectiveLocalRuntimeRAMBytes(detected int64) int64 {
+	if s.LocalRuntimeRAMOverrideGB > 0 {
+		return int64(s.LocalRuntimeRAMOverrideGB * float64(1<<30))
+	}
+	return detected
 }
 
 // MultimodalInputEnabled reports whether the multimodal input feature
