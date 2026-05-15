@@ -239,3 +239,31 @@ func TestDeriveImage_NoTokenPricingModelIsIndeterminate(t *testing.T) {
 		t.Fatalf("expected indeterminate for token-only model, got %+v", cost)
 	}
 }
+
+// ── Gemini cost tests (google-vertex-gemini-adapter-01KQ8VMY WP07) ────────────
+
+// TestReducer_GeminiFlashCost pins the cost derivation for
+// gemini-2.5-flash with 100 input tokens and 50 output tokens.
+func TestReducer_GeminiFlashCost(t *testing.T) {
+	tab, err := LoadDefault()
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := New(tab)
+	// gemini-2.5-flash: $0.15/M input, $0.60/M output
+	usage := llm.Usage{InputTokens: 100, OutputTokens: 50}
+	cost := r.Derive(usage, "gemini", "gemini-2.5-flash")
+	if cost.Indeterminate {
+		t.Fatal("expected determinate cost for gemini-2.5-flash")
+	}
+	// 100 / 1e6 * 0.15 + 50 / 1e6 * 0.60
+	wantInput := 100.0 / 1e6 * 0.15
+	wantOutput := 50.0 / 1e6 * 0.60
+	want := wantInput + wantOutput
+	if math.Abs(cost.Total-want) > 1e-9 {
+		t.Fatalf("Total = %v want %v", cost.Total, want)
+	}
+	if cost.Currency != "USD" {
+		t.Fatalf("currency=%s", cost.Currency)
+	}
+}
