@@ -86,6 +86,10 @@ const renamingProjectId = ref<string | null>(null);
 const renameProjectDraft = ref('');
 const projectMenu = ref<{ id: string; x: number; y: number } | null>(null);
 const deleteModal = ref<{ project: Project; cascade: boolean } | null>(null);
+
+// WP05 (a11y-backlog-cleanup-01NDFSEX07) — keyboard "Move to project" sub-menu
+// Tracks which session's move-menu is open (session id + trigger position).
+const moveMenu = ref<{ sessionId: string; x: number; y: number } | null>(null);
 const collapsed = ref<Set<string>>(new Set());
 let focusedProjectRenameId: string | null = null;
 function setProjectRenameRef(el: Element | null) {
@@ -416,6 +420,34 @@ function openProjectMenuFromElement(p: Project, el: EventTarget | null) {
   const x = rect ? rect.left : 0;
   const y = rect ? rect.bottom : 0;
   projectMenu.value = { id: p.id, x, y };
+}
+
+// ── WP05 — session "Move to project" keyboard affordance ─────────────────────
+
+function openMoveMenu(sessionId: string, el: EventTarget | null) {
+  moveMenu.value = null;
+  const rect = (el instanceof HTMLElement ? el : null)?.getBoundingClientRect?.();
+  const x = rect ? rect.left : 0;
+  const y = rect ? rect.bottom : 0;
+  moveMenu.value = { sessionId, x, y };
+}
+
+function closeMoveMenu() {
+  moveMenu.value = null;
+}
+
+async function moveSessionViaMenu(sessionId: string, targetProjectId: string) {
+  closeMoveMenu();
+  const current = sessionList.value.find((s) => s.id === sessionId);
+  const currentPid = current?.projectId ?? '';
+  const targetPid = targetProjectId === '__loose__' ? '' : targetProjectId;
+  if (currentPid === targetPid) return;
+  try {
+    await moveSessionToProject(sessionId, targetPid);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    lastError.value = `Move session failed: ${msg}`;
+  }
 }
 
 function closeProjectMenu() {
@@ -776,6 +808,19 @@ async function onProjectDrop(evt: DragEvent, projectId: string) {
                 >
                   <Download :size="13" />
                 </button>
+                <!-- WP05 (D-02): keyboard move-to-project affordance -->
+                <button
+                  v-if="projectList.length > 0"
+                  type="button"
+                  class="shrink-0 p-2 rounded-sm text-ink-dim hover:text-accent hover:bg-surface-3"
+                  :aria-label="`Move session ${session.name} to project`"
+                  aria-haspopup="menu"
+                  :aria-expanded="moveMenu?.sessionId === session.id ? 'true' : 'false'"
+                  :data-testid="`move-session-${session.id}`"
+                  @click.stop="openMoveMenu(session.id, $event.currentTarget)"
+                >
+                  ↗
+                </button>
                 <button
                   type="button"
                   class="shrink-0 p-2 rounded-sm text-ink-dim hover:text-signal-danger hover:bg-surface-3"
@@ -981,6 +1026,19 @@ async function onProjectDrop(evt: DragEvent, projectId: string) {
               >
                 <Download :size="13" />
               </button>
+              <!-- WP05 (D-02): keyboard move-to-project affordance (loose sessions) -->
+              <button
+                v-if="projectList.length > 0"
+                type="button"
+                class="shrink-0 p-2 rounded-sm text-ink-dim hover:text-accent hover:bg-surface-3"
+                :aria-label="`Move session ${session.name} to project`"
+                aria-haspopup="menu"
+                :aria-expanded="moveMenu?.sessionId === session.id ? 'true' : 'false'"
+                :data-testid="`move-session-${session.id}`"
+                @click.stop="openMoveMenu(session.id, $event.currentTarget)"
+              >
+                ↗
+              </button>
               <button
                 type="button"
                 class="shrink-0 p-2 rounded-sm text-ink-dim hover:text-signal-danger hover:bg-surface-3"
@@ -1051,6 +1109,44 @@ async function onProjectDrop(evt: DragEvent, projectId: string) {
         @click="startProjectDelete(p)"
       >
         Delete
+      </button>
+    </div>
+
+    <!-- WP05 (D-02): session move-to-project sub-menu -->
+    <div
+      v-if="moveMenu"
+      role="menu"
+      aria-label="Move session to project"
+      class="fixed z-50 rounded-sm border border-border-muted bg-surface-0 shadow-lg py-1 min-w-[160px]"
+      :style="{ left: moveMenu.x + 'px', top: moveMenu.y + 'px' }"
+      data-testid="move-session-menu"
+      @click.stop
+      @keydown.escape.stop="closeMoveMenu"
+    >
+      <div class="px-3 py-1 font-ui text-[10px] uppercase tracking-[0.18em] text-ink-subtle">
+        Move to…
+      </div>
+      <button
+        v-for="p in projectList.filter((x) => x.id !== sessionList.find((s) => s.id === moveMenu?.sessionId)?.projectId)"
+        :key="p.id"
+        type="button"
+        role="menuitem"
+        class="block w-full px-3 py-1.5 text-left font-ui text-xs text-ink hover:bg-surface-2"
+        :data-testid="`move-session-to-${p.id}`"
+        @click="moveSessionViaMenu(moveMenu!.sessionId, p.id)"
+      >
+        {{ p.name }}
+      </button>
+      <!-- Move to global (loose) — only if the session is currently in a project -->
+      <button
+        v-if="sessionList.find((s) => s.id === moveMenu?.sessionId)?.projectId"
+        type="button"
+        role="menuitem"
+        class="block w-full px-3 py-1.5 text-left font-ui text-xs text-ink hover:bg-surface-2"
+        data-testid="move-session-to-global"
+        @click="moveSessionViaMenu(moveMenu!.sessionId, '__loose__')"
+      >
+        Global (no project)
       </button>
     </div>
 
