@@ -17,7 +17,7 @@ defineProps<{
 </script>
 
 <template>
-  <span class="streaming-text" role="text">
+  <span class="streaming-text">
     <MarkdownBlock :text="text" :streaming="streaming" />
     <span
       v-if="streaming"
@@ -35,6 +35,14 @@ defineProps<{
 @keyframes streaming-caret-blink {
   to {
     visibility: hidden;
+  }
+}
+
+/* Respect prefers-reduced-motion — swap blink for a static visible caret. */
+@media (prefers-reduced-motion: reduce) {
+  .streaming-caret {
+    animation: none;
+    visibility: visible;
   }
 }
 </style>

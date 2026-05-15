@@ -17,6 +17,7 @@ import (
 	artifactsview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/artifacts"
 	attachmentsview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/attachments"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/audit"
+	eventlog "github.com/sigil-tech/kaneaz-harness/core/event/log"
 	agentsview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/agents"
 	branchesview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/branches"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/bundle"
@@ -54,6 +55,7 @@ import (
 	elicitview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/elicit"
 	secretsview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/secrets"
 	planmodeview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/planmode"
+	sentryview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/sentry"
 	"github.com/sigil-tech/kaneaz-harness/core/logging"
 	"github.com/sigil-tech/kaneaz-harness/core/mcp/stdio"
 )
@@ -645,6 +647,27 @@ func (b *Bindings) Audit_ListEntries(filter audit.Filter) ([]audit.Entry, error)
 }
 func (b *Bindings) Audit_VerifyEntry(id string) (bool, error) {
 	return b.api.Audit().VerifyEntry(b.ctx(), id)
+}
+func (b *Bindings) Audit_VerifyChain(fromID, toID string) (audit.VerifyChainResult, error) {
+	return b.api.Audit().VerifyChain(b.ctx(), fromID, toID)
+}
+func (b *Bindings) Audit_Filter(query eventlog.FilterQuery) ([]audit.Entry, error) {
+	return b.api.Audit().Filter(b.ctx(), query)
+}
+func (b *Bindings) Audit_ListSavedQueries() ([]eventlog.SavedQuery, error) {
+	return b.api.Audit().ListSavedQueries(b.ctx())
+}
+func (b *Bindings) Audit_SaveQuery(q eventlog.SavedQuery) error {
+	return b.api.Audit().SaveQuery(b.ctx(), q)
+}
+func (b *Bindings) Audit_DeleteQuery(id string) error {
+	return b.api.Audit().DeleteQuery(b.ctx(), id)
+}
+func (b *Bindings) Audit_Export(opts eventlog.ExportOptions) (string, error) {
+	return b.api.Audit().Export(b.ctx(), opts)
+}
+func (b *Bindings) Audit_BulkPurge(eventIDs []string) error {
+	return b.api.Audit().BulkPurge(b.ctx(), eventIDs)
 }
 func (b *Bindings) Audit_StartStream(filter audit.Filter) (string, error) {
 	return b.api.Audit().StartStream(b.ctx(), filter)
@@ -1280,6 +1303,15 @@ func (b *Bindings) Settings_SetAutoResumeOnKeyRotation(enabled bool) error {
 	}
 	s.AutoResumeOnKeyRotationDisabled = !enabled
 	return b.storeFn().SaveAll(s)
+}
+
+// ── audit settings (audit-log-enhancement-01KX5R8F WP07) ────────────────────
+
+func (b *Bindings) Settings_GetAuditSettings() (settings.AuditSettings, error) {
+	return b.api.Settings().GetAuditSettings(b.ctx())
+}
+func (b *Bindings) Settings_SetAuditSettings(s settings.AuditSettings) error {
+	return b.api.Settings().SetAuditSettings(b.ctx(), s)
 }
 
 // ── memory ─────────────────────────────────────────────────────────────
@@ -2426,4 +2458,27 @@ func (b *Bindings) Planmode_Discard(req planmodeview.DiscardRequest) (planmodevi
 // editor view.
 func (b *Bindings) Planmode_Edit(req planmodeview.EditRequest) (planmodeview.EditResponse, error) {
 	return b.api.Planmode_Edit(b.ctx(), req)
+}
+
+// ── Sentry crash-reporting bindings (sentry-error-monitoring-01KX5R8G WP05)
+
+// Sentry_GetLastFive returns the most-recent 5 (or fewer) captured events
+// from the on-disk Last-5 cache. Oldest first.
+func (b *Bindings) Sentry_GetLastFive() ([]sentryview.CachedEntry, error) {
+	return b.api.Sentry().GetLastFive(b.ctx())
+}
+
+// Sentry_GenerateLocalReport builds a redacted JSON crash report at
+// <DataDir>/crash-reports/YYYY-MM-DD-HHMMSS.json. Returns the path and
+// byte count. Suitable for users who have tier=Off but want to capture
+// a snapshot for manual support triage.
+func (b *Bindings) Sentry_GenerateLocalReport() (sentryview.LocalReportResult, error) {
+	return b.api.Sentry().GenerateLocalReport(b.ctx())
+}
+
+// Sentry_TestDSN parses a Sentry DSN string and issues a HEAD request to
+// the ingestion endpoint to verify reachability. Returns OK:true when the
+// server responds 2xx/4xx (i.e. is reachable and accepts the project).
+func (b *Bindings) Sentry_TestDSN(dsn string) (sentryview.DSNTestResult, error) {
+	return b.api.Sentry().TestDSN(b.ctx(), dsn)
 }

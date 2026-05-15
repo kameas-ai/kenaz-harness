@@ -27,6 +27,7 @@ import ScheduledChatsPanel from '@/views/settings/scheduledchat/ScheduledChatsPa
 import ModelAccessibleSecretsPanel from '@/views/settings/ModelAccessibleSecretsPanel.vue';
 import TasksPanel from '@/views/settings/TasksPanel.vue';
 import LLMRoutingPanel from '@/views/settings/LLMRoutingPanel.vue';
+import AuditSettingsPanel from '@/views/settings/AuditSettingsPanel.vue';
 import LongSessionNudgeSettings from '@/components/settings/LongSessionNudgeSettings.vue';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
 import { debouncedSave } from '@/lib/settings';
@@ -125,6 +126,13 @@ const showTasksTab = computed<boolean>(() => {
 const showLLMRoutingTab = computed<boolean>(() => {
   const v = route?.query?.tab;
   return typeof v === 'string' && v === 'llm-routing';
+});
+
+// audit-log-enhancement-01KX5R8F WP07 — Audit retention sub-tab.
+// Disambiguates via ?tab=audit. Mount switch is in <template> below.
+const showAuditTab = computed<boolean>(() => {
+  const v = route?.query?.tab;
+  return typeof v === 'string' && v === 'audit';
 });
 
 const settings = ref<Settings>({
@@ -1017,6 +1025,15 @@ onMounted(() => {
       <LLMRoutingPanel />
     </div>
 
+    <!-- audit-log-enhancement-01KX5R8F WP07 — Audit retention sub-tab. -->
+    <div
+      v-else-if="showAuditTab"
+      class="px-6 py-4 max-w-3xl"
+      data-testid="settings-audit-pane"
+    >
+      <AuditSettingsPanel />
+    </div>
+
     <div
       v-else
       class="px-6 py-4 grid gap-6 max-w-3xl"
@@ -1739,6 +1756,7 @@ onMounted(() => {
             type="button"
             role="switch"
             :aria-checked="autoCollapseBranches"
+            aria-label="Auto-collapse branches"
             class="relative mt-0.5 h-5 w-9 flex-shrink-0 rounded-full border transition-colors"
             :class="autoCollapseBranches
               ? 'border-accent bg-accent'
@@ -1765,6 +1783,7 @@ onMounted(() => {
             type="button"
             role="switch"
             :aria-checked="deleteBranchesWithParent"
+            aria-label="Delete branches with parent session"
             class="relative mt-0.5 h-5 w-9 flex-shrink-0 rounded-full border transition-colors"
             :class="deleteBranchesWithParent
               ? 'border-accent bg-accent'
@@ -1794,6 +1813,7 @@ onMounted(() => {
             max="32"
             step="1"
             :value="maxVisibleBranchDepth"
+            aria-label="Maximum visible branch depth"
             class="mt-2 w-full accent-accent"
             data-testid="max-branch-depth-slider"
             @change="setMaxVisibleBranchDepth(+($event.target as HTMLInputElement).value)"

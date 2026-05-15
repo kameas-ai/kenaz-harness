@@ -38,6 +38,10 @@ import type {
   Denial,
   AuditEntry,
   AuditFilter,
+  VerifyChainResult,
+  AuditFilterQuery,
+  SavedAuditQuery,
+  AuditExportOptions,
   ShellStatus,
   AppInfo,
   Settings,
@@ -356,6 +360,13 @@ interface WailsBindingsLike {
 
   Audit_ListEntries(filter: AuditFilter): Promise<AuditEntry[]>;
   Audit_VerifyEntry(id: string): Promise<boolean>;
+  Audit_VerifyChain(fromID: string, toID: string): Promise<VerifyChainResult>;
+  Audit_Filter(query: AuditFilterQuery): Promise<AuditEntry[]>;
+  Audit_ListSavedQueries(): Promise<SavedAuditQuery[]>;
+  Audit_SaveQuery(q: SavedAuditQuery): Promise<void>;
+  Audit_DeleteQuery(id: string): Promise<void>;
+  Audit_Export(opts: AuditExportOptions): Promise<string>;
+  Audit_BulkPurge(eventIDs: string[]): Promise<void>;
   Audit_StartStream(filter: AuditFilter): Promise<string>;
   Audit_StopStream(id: string): Promise<void>;
 
@@ -702,6 +713,23 @@ interface WailsBindingsLike {
   Agents_LoadProfile(id: string): Promise<import('./types').AgentProfile>;
   Agents_SaveProfile(profile: import('./types').AgentProfile): Promise<void>;
   Agents_DeleteProfile(id: string): Promise<void>;
+
+  // ── Crash reporting (sentry-error-monitoring-01KX5R8G WP05) ─────────────
+  Sentry_GetLastFive(): Promise<
+    Array<{
+      ID: string;
+      CapturedAt: string;
+      Kind: string;
+      Summary: string;
+      SentryEventID: string;
+    }>
+  >;
+  Sentry_GenerateLocalReport(): Promise<{ Path: string; ByteCount: number }>;
+  Sentry_TestDSN(dsn: string): Promise<{ OK: boolean; Error: string }>;
+
+  // ── audit-log-enhancement-01KX5R8F WP07 — retention settings ──────────
+  Settings_GetAuditSettings(): Promise<import('./types').AuditSettings>;
+  Settings_SetAuditSettings(s: import('./types').AuditSettings): Promise<void>;
 }
 
 
@@ -1486,6 +1514,15 @@ export interface PolicyClient {
 export interface AuditClient {
   listEntries(filter: AuditFilter): Promise<AuditEntry[]>;
   verifyEntry(id: string): Promise<boolean>;
+  verifyChain(fromID: string, toID: string): Promise<VerifyChainResult>;
+  filter(query: AuditFilterQuery): Promise<AuditEntry[]>;
+  listSavedQueries(): Promise<SavedAuditQuery[]>;
+  saveQuery(q: SavedAuditQuery): Promise<void>;
+  deleteQuery(id: string): Promise<void>;
+  /** Export audit entries to a file. Returns the absolute file path. */
+  export(opts: AuditExportOptions): Promise<string>;
+  /** Bulk-delete selected event IDs. Gated by Cedar audit.bulk_purge policy. */
+  bulkPurge(eventIDs: string[]): Promise<void>;
   startStream(filter: AuditFilter): Promise<string>;
   stopStream(id: string): Promise<void>;
 }
@@ -1733,6 +1770,12 @@ export interface SettingsClient {
   getAutoTitleEnabled(): Promise<boolean>;
   /** Persist the auto-title opt-in flag. */
   setAutoTitleEnabled(enabled: boolean): Promise<void>;
+
+  // ── audit-log-enhancement-01KX5R8F WP07 — retention settings ──────────
+  /** Read the audit-log retention strategy and window. */
+  getAuditSettings(): Promise<import('./types').AuditSettings>;
+  /** Persist the audit-log retention strategy and window. */
+  setAuditSettings(s: import('./types').AuditSettings): Promise<void>;
 }
 
 /**
@@ -2494,6 +2537,25 @@ export interface AgentsClient {
   deleteProfile(id: string): Promise<void>;
 }
 
+// ── sentry client (sentry-error-monitoring-01KX5R8G WP05) ────────────────
+
+export interface SentryClient {
+  /** Returns the most-recent ≤5 cached crash events. */
+  getLastFive(): Promise<
+    Array<{
+      id: string;
+      capturedAt: string;
+      kind: string;
+      summary: string;
+      sentryEventId?: string;
+    }>
+  >;
+  /** Generates a redacted local crash report JSON file. Returns path + byteCount. */
+  generateLocalReport(): Promise<{ path: string; byteCount: number }>;
+  /** Tests a Sentry DSN by parsing + HEAD to ingestion URL. Returns ok + optional error. */
+  testDsn(dsn: string): Promise<{ ok: boolean; error?: string }>;
+}
+
 export interface HarnessClient {
   shellStatus(): Promise<ShellStatus>;
   appInfo(): Promise<AppInfo>;
@@ -2546,6 +2608,8 @@ export interface HarnessClient {
   secrets: SecretsClient;
   /** Sub-agent profile registry (branch-subagent-interactive-01KZNP3B WP01). */
   agents: AgentsClient;
+  /** Crash-reporting surface (sentry-error-monitoring-01KX5R8G WP05). */
+  sentry: SentryClient;
 }
 
 // ── runtime client ─────────────────────────────────────────────────────
@@ -2770,6 +2834,13 @@ export function createHarnessClient(): HarnessClient {
     audit: {
       listEntries: (filter) => b().Audit_ListEntries(filter),
       verifyEntry: (id) => b().Audit_VerifyEntry(id),
+      verifyChain: (fromID, toID) => b().Audit_VerifyChain(fromID, toID),
+      filter: (query) => b().Audit_Filter(query),
+      listSavedQueries: () => b().Audit_ListSavedQueries(),
+      saveQuery: (q) => b().Audit_SaveQuery(q),
+      deleteQuery: (id) => b().Audit_DeleteQuery(id),
+      export: (opts) => b().Audit_Export(opts),
+      bulkPurge: (eventIDs) => b().Audit_BulkPurge(eventIDs),
       startStream: (filter) => b().Audit_StartStream(filter),
       stopStream: (id) => b().Audit_StopStream(id),
     },
@@ -2851,6 +2922,9 @@ export function createHarnessClient(): HarnessClient {
       getArtifactPreview: () => b().Settings_GetArtifactPreview(),
       getAutoTitleEnabled: () => b().Settings_GetAutoTitleEnabled(),
       setAutoTitleEnabled: (enabled) => b().Settings_SetAutoTitleEnabled(enabled),
+      // audit-log-enhancement-01KX5R8F WP07
+      getAuditSettings: () => b().Settings_GetAuditSettings(),
+      setAuditSettings: (s) => b().Settings_SetAuditSettings(s),
     },
     permissions: {
       listGrants: (family) =>
@@ -3067,6 +3141,28 @@ export function createHarnessClient(): HarnessClient {
       loadProfile: (id) => b().Agents_LoadProfile(id),
       saveProfile: (profile) => b().Agents_SaveProfile(profile),
       deleteProfile: (id) => b().Agents_DeleteProfile(id),
+    },
+    sentry: {
+      getLastFive: () =>
+        b()
+          .Sentry_GetLastFive()
+          .then((entries) =>
+            entries.map((e) => ({
+              id: e.ID,
+              capturedAt: e.CapturedAt,
+              kind: e.Kind,
+              summary: e.Summary,
+              sentryEventId: e.SentryEventID || undefined,
+            })),
+          ),
+      generateLocalReport: () =>
+        b()
+          .Sentry_GenerateLocalReport()
+          .then((r) => ({ path: r.Path, byteCount: r.ByteCount })),
+      testDsn: (dsn) =>
+        b()
+          .Sentry_TestDSN(dsn)
+          .then((r) => ({ ok: r.OK, error: r.Error || undefined })),
     },
   };
 }
@@ -3408,6 +3504,13 @@ export function createFakeHarnessClient(
     audit: {
       listEntries: async () => [],
       verifyEntry: async () => true,
+      verifyChain: async () => ({ verified: true, rows_checked: 0 }),
+      filter: async () => [],
+      listSavedQueries: async () => [],
+      saveQuery: noop,
+      deleteQuery: noop,
+      export: async () => '/tmp/audit-export.csv',
+      bulkPurge: noop,
       startStream: async () => 'fake-sub',
       stopStream: noop,
     },
@@ -3487,6 +3590,9 @@ export function createFakeHarnessClient(
       }),
       getAutoTitleEnabled: async () => true,
       setAutoTitleEnabled: noop,
+      // audit-log-enhancement-01KX5R8F WP07
+      getAuditSettings: async () => ({ strategy: 'keep_forever', windowDays: 90 }),
+      setAuditSettings: noop,
     },
     permissions: {
       listGrants: async () => [],
@@ -4064,6 +4170,11 @@ export function createFakeHarnessClient(
       }),
       saveProfile: noop,
       deleteProfile: noop,
+    },
+    sentry: {
+      getLastFive: async () => [],
+      generateLocalReport: async () => ({ path: '', byteCount: 0 }),
+      testDsn: async (_dsn: string) => ({ ok: false, error: 'not available in test mode' }),
     },
   };
 

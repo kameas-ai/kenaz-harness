@@ -2,7 +2,8 @@
 import LiveRateIndicator from '@/components/ui/LiveRateIndicator.vue';
 import StatusPill from './StatusPill.vue';
 import MemoryCaptureRatePill from './MemoryCaptureRatePill.vue';
-import { useShellStatus } from '@/lib/useHarnessAPI';
+import { useShellStatus, useHarnessClient } from '@/lib/useHarnessAPI';
+import { ref, onMounted } from 'vue';
 
 /**
  * LegendBar — bottom rail. The Kenaz-inherited category dots
@@ -13,6 +14,21 @@ import { useShellStatus } from '@/lib/useHarnessAPI';
  * dots here.
  */
 const status = useShellStatus();
+
+// ── crash-reporting tier indicator (sentry-error-monitoring-01KX5R8G WP05) ──
+// Show a discreet pill when crash reporting is active (tier != off), so the
+// user always has a visible reminder without opening Settings → Privacy.
+const client = useHarnessClient();
+const crashTier = ref<string>('off');
+
+onMounted(async () => {
+  try {
+    const s = await client.settings.get();
+    crashTier.value = s.crashReportingTier ?? 'off';
+  } catch {
+    // ignore — pill is cosmetic
+  }
+});
 </script>
 
 <template>
@@ -27,6 +43,13 @@ const status = useShellStatus();
         />
       </slot>
       <MemoryCaptureRatePill />
+      <!-- Crash-reporting tier indicator — cosmetic reminder when active -->
+      <span
+        v-if="crashTier !== 'off'"
+        class="text-[10px] text-ink-muted px-1.5 py-0.5 rounded border border-border-muted"
+        :title="`Crash reporting: ${crashTier}`"
+        data-testid="crash-reporting-pill"
+      >reporting: {{ crashTier }}</span>
     </div>
     <StatusPill />
   </div>

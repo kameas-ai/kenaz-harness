@@ -238,6 +238,15 @@ const (
 	// Default-allow for the local user; operators can deny specific chains
 	// or all chains with an explicit forbid rule.
 	ActionLLMFallback = "llm.fallback"
+
+	// ActionAuditBulkPurge gates the Audit_BulkPurge RPC
+	// (audit-log-enhancement-01KX5R8F WP08). Allows bulk deletion of
+	// audit events from the append-only store.
+	//
+	// Resource UID: AuditLog::"events".
+	// Default-forbid — destructive irreversible operation; operators
+	// must explicitly permit with a Cedar policy snippet.
+	ActionAuditBulkPurge = "audit.bulk_purge"
 )
 
 // Entity-type names mirror spec §4.10's recommended mapping:
@@ -322,6 +331,11 @@ const (
 	// chains. Introduced by mission model-fallback-routing-01NDFSEX04 (WP03).
 	// Resource UIDs take the shape FallbackChain::"<chain-id>".
 	EntityTypeFallbackChain = "FallbackChain"
+
+	// EntityTypeAuditLog is the Cedar entity type for the audit log store.
+	// Introduced by mission audit-log-enhancement-01KX5R8F (WP08).
+	// Resource UIDs take the shape AuditLog::"events" (currently a singleton).
+	EntityTypeAuditLog = "AuditLog"
 
 	// PrincipalLocal is the canonical EntityUID id for the single
 	// local user. The harness is single-user / privacy-first

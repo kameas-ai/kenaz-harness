@@ -16,6 +16,7 @@ import (
 	"github.com/sigil-tech/kaneaz-harness/core"
 	"github.com/sigil-tech/kaneaz-harness/core/logging"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc"
+	coresentry "github.com/sigil-tech/kaneaz-harness/core/sentry"
 	"github.com/sigil-tech/kaneaz-harness/core/update/bootswap"
 )
 
@@ -32,6 +33,11 @@ var assets embed.FS
 var Version = "dev"
 
 func main() {
+	// Wrap main with the Sentry panic handler so any unrecovered panic in
+	// the main goroutine is captured + flushed before re-panicking.
+	// wire-up point 1 for sentry (sentry-error-monitoring-01KX5R8G WP02).
+	defer coresentry.RecoverMain()
+
 	// Eager-open the file logger so the first lines of the boot
 	// sequence (data-dir setup, core.New) land in ~/.kenaz/harness.log.
 	logging.L().Info("harness.boot", "pid", os.Getpid(), "version", Version)
@@ -105,6 +111,15 @@ func main() {
 			if err := c.Start(ctx); err != nil {
 				log.Printf("core start: %v", err)
 			}
+			// Initialise Sentry after core.Start so the settings store is
+			// ready. wire-up point 1 for sentry (sentry-error-monitoring-01KX5R8G WP02).
+			// api.Bindings() returns []any{<*Bindings>}; assert back to the concrete
+			// type so initSentryFromSettings can call Settings_Get on it.
+			if bs := api.Bindings(); len(bs) > 0 {
+				if b, ok := bs[0].(*rpc.Bindings); ok {
+					initSentryFromSettings(b)
+				}
+			}
 		},
 		OnShutdown: func(ctx context.Context) {
 			_ = c.Shutdown(ctx)
@@ -113,6 +128,31 @@ func main() {
 	})
 	if err != nil {
 		log.Fatalf("wails run: %v", err)
+	}
+}
+
+// initSentryFromSettings reads the crash-reporting settings, calls
+// coresentry.Init, and (when tier != Off) installs the SlogHandler bridge.
+// Errors are logged but never fatal — Sentry is optional infrastructure and
+// must never block startup.
+// wire-up point 1+2 for sentry (sentry-error-monitoring-01KX5R8G WP02/WP03).
+func initSentryFromSettings(api *rpc.Bindings) {
+	s, err := api.Settings_Get()
+	if err != nil {
+		logging.L().Warn("sentry.settings.read_error", "err", err.Error())
+		return
+	}
+	tier := coresentry.ResolveTier(s.CrashReportingTier, false /* fleet login state TBD */)
+	if initErr := coresentry.Init(tier, s.SentryDSN, Version, ""); initErr != nil {
+		logging.L().Warn("sentry.init.error", "err", initErr.Error())
+	}
+	// wire-up point 2: chain the SlogHandler when tier != Off so ERROR-level
+	// slog lines are captured as redacted breadcrumbs.
+	if tier != coresentry.TierOff {
+		current := logging.FileHandler()
+		if current != nil {
+			logging.Replace(&coresentry.SlogHandler{Inner: current})
+		}
 	}
 }
 

@@ -473,6 +473,34 @@ type Settings struct {
 	// EffectiveLocalRuntimeRAMBytes(detected int64) helper.
 	// (local-model-runtimes-01KQ8VMZ WP07)
 	LocalRuntimeRAMOverrideGB float64 `json:"localRuntimeRAMOverrideGB,omitempty"`
+
+	// ── Crash reporting dials (sentry-error-monitoring-01KX5R8G) ─────────
+
+	// CrashReportingTier controls whether and how crash reports are sent.
+	// One of: "off" (default, zero-value = off), "anonymous", "identified".
+	// "off"        — nothing is sent; local crash reports can still be
+	//                generated via Settings → Privacy → Crash Reporting.
+	// "anonymous"  — structured exception data + redacted breadcrumbs are
+	//                transmitted with no user identifier.
+	// "identified" — same as anonymous but the user's fleet identity is
+	//                attached as a Sentry user tag. Requires fleet login;
+	//                auto-downgrades to "anonymous" on logout.
+	// (sentry-error-monitoring-01KX5R8G WP02)
+	CrashReportingTier string `json:"crashReportingTier,omitempty"`
+
+	// SentryDSN is the Sentry Data Source Name supplied by the operator
+	// or advanced user. When empty, crash reporting is inoperative even if
+	// CrashReportingTier is non-"off". Self-hosted Sentry / Glitchtip DSNs
+	// are accepted as long as they parse as https://<key>@<host>/<project>.
+	// (sentry-error-monitoring-01KX5R8G WP02)
+	SentryDSN string `json:"sentryDsn,omitempty"`
+
+	// HasSeenCrashReportingOnboarding records whether the first-launch
+	// one-time crash-reporting onboarding modal has been shown. When false
+	// (default) the frontend shows the modal on first paint and sets this
+	// to true after the user dismisses it.
+	// (sentry-error-monitoring-01KX5R8G WP05)
+	HasSeenCrashReportingOnboarding bool `json:"hasSeenCrashReportingOnboarding,omitempty"`
 }
 
 // ProviderProfileRef is the wire shape that identifies a provider+model
@@ -1103,6 +1131,24 @@ type SettingsAPI interface {
 	GetMemoryNarrativeEnabled(ctx context.Context) (bool, error)
 	// SetMemoryNarrativeEnabled persists the narrative-layer opt-out dial.
 	SetMemoryNarrativeEnabled(ctx context.Context, enabled bool) error
+
+	// ── Audit log settings (audit-log-enhancement-01KX5R8F WP07) ─────────────
+
+	// GetAuditSettings returns the current audit log retention configuration.
+	GetAuditSettings(ctx context.Context) (AuditSettings, error)
+	// SetAuditSettings persists the audit log retention configuration.
+	SetAuditSettings(ctx context.Context, s AuditSettings) error
+}
+
+// AuditSettings holds the operator-configurable audit log retention policy.
+// Default: keep_forever, so no data is ever silently dropped on first run.
+type AuditSettings struct {
+	// Strategy is the retention strategy.
+	// One of: "keep_forever", "delete_after_window", "archive_after_window".
+	Strategy string `json:"strategy,omitempty"`
+	// WindowDays is the retention window in days. Only meaningful when
+	// Strategy is not keep_forever.
+	WindowDays int `json:"window_days,omitempty"`
 }
 
 // ── Long-session nudge constants + accessors (v0.5.6) ───────────────────────
