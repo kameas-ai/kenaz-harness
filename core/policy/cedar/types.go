@@ -228,6 +228,16 @@ const (
 	// to Markdown or JSON on the user's local disk. Default-allow for the
 	// local user. Resource UID: Session::"<session-id>".
 	ActionExportSession = "session.export"
+
+	// ActionLLMFallback gates every per-turn fallback chain hop
+	// (model-fallback-routing-01NDFSEX04 WP03). The connector's retry
+	// loop calls CheckLLMFallback before issuing each hop; a Cedar deny
+	// causes the loop to surface the primary error unchanged (fail-closed).
+	//
+	// Resource UID: FallbackChain::"<chain-id>".
+	// Default-allow for the local user; operators can deny specific chains
+	// or all chains with an explicit forbid rule.
+	ActionLLMFallback = "llm.fallback"
 )
 
 // Entity-type names mirror spec §4.10's recommended mapping:
@@ -307,6 +317,11 @@ const (
 	// Introduced by mission session-export-01NDFSEX05 (WP01).
 	// Resource UIDs take the shape Session::"<session-id>".
 	EntityTypeSession = "Session"
+
+	// EntityTypeFallbackChain is the Cedar entity type for LLM fallback
+	// chains. Introduced by mission model-fallback-routing-01NDFSEX04 (WP03).
+	// Resource UIDs take the shape FallbackChain::"<chain-id>".
+	EntityTypeFallbackChain = "FallbackChain"
 
 	// PrincipalLocal is the canonical EntityUID id for the single
 	// local user. The harness is single-user / privacy-first
@@ -648,4 +663,18 @@ func SessionUID(id string) cedar.EntityUID {
 		safeID = invalidUIDID
 	}
 	return cedar.NewEntityUID(EntityTypeSession, cedar.String(safeID))
+}
+
+// FallbackChainUID builds a Cedar EntityUID for the FallbackChain family
+// introduced by mission model-fallback-routing-01NDFSEX04 (WP03). id is the
+// chain's canonical slug identifier (e.g. "anthropic-with-openrouter-fallback").
+// Malformed ids (empty / control characters / leading "..") are replaced with
+// the literal "invalid" so the resulting UID type-matches in
+// `resource is FallbackChain` clauses but never satisfies any real permit.
+func FallbackChainUID(id string) cedar.EntityUID {
+	safeID := id
+	if !validateFamilyID(id) {
+		safeID = invalidUIDID
+	}
+	return cedar.NewEntityUID(EntityTypeFallbackChain, cedar.String(safeID))
 }
