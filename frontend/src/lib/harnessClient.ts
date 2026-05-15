@@ -1228,7 +1228,7 @@ export interface LLMConnectorClient {
     kind: string,
     host: string,
     plaintextKey: string,
-  ): Promise<import('./types').TestProviderKeyResult>;
+  ): Promise<import('./types').ProviderKeyTestResult>;
 
   /**
    * listDetectedLocalRuntimes — returns the detection snapshot for all

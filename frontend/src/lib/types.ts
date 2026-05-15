@@ -1219,11 +1219,11 @@ export interface RotationResult {
 }
 
 /**
- * TestProviderKeyResult — outcome of LLM_TestProviderKey.
- * Mirrors core/rpc/views/llm.TestProviderKeyResult.
+ * ProviderKeyTestResult — outcome of LLM_TestProviderKey.
+ * Mirrors core/rpc/views/llm.ProviderKeyTestResult.
  * (azure-openai-adapter-01KQ8VMZ WP03)
  */
-export interface TestProviderKeyResult {
+export interface ProviderKeyTestResult {
   ok: boolean;
   model_count: number;
   deprecation_warning?: string;

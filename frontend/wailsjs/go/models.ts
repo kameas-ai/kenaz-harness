@@ -2704,14 +2704,14 @@ export namespace llm {
 	    }
 	}
 
-	export class TestProviderKeyResult {
+	export class ProviderKeyTestResult {
 	    ok: boolean;
 	    model_count: number;
 	    deprecation_warning: string;
 	    message: string;
 
 	    static createFrom(source: any = {}) {
-	        return new TestProviderKeyResult(source);
+	        return new ProviderKeyTestResult(source);
 	    }
 
 	    constructor(source: any = {}) {

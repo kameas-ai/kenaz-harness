@@ -271,7 +271,7 @@ type LLMConnectorAPI interface {
 	// plaintextKey — the API key to test. Zeroed before this method returns.
 	//
 	// (azure-openai-adapter-01KQ8VMZ WP03)
-	TestProviderKey(ctx context.Context, kind, host, plaintextKey string) (TestProviderKeyResult, error)
+	TestProviderKey(ctx context.Context, kind, host, plaintextKey string) (ProviderKeyTestResult, error)
 
 	// ListDetectedLocalRuntimes returns the current detection snapshot for
 	// all supported local runtimes (Ollama, llama-server, LM Studio, Jan,
@@ -316,9 +316,9 @@ type LLMConnectorAPI interface {
 	ProbeCustomEndpoint(ctx context.Context, in ProbeCustomEndpointInput) (ProbeCustomEndpointResult, error)
 }
 
-// TestProviderKeyResult is the structured outcome of TestProviderKey.
+// ProviderKeyTestResult is the structured outcome of TestProviderKey.
 // (azure-openai-adapter-01KQ8VMZ WP03)
-type TestProviderKeyResult struct {
+type ProviderKeyTestResult struct {
 	OK                 bool   `json:"ok"`
 	ModelCount         int    `json:"model_count"`
 	DeprecationWarning string `json:"deprecation_warning,omitempty"`

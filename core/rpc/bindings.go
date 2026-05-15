@@ -379,7 +379,7 @@ func (b *Bindings) LLM_ResumeAfterKeyRotation(resumeToken string) error {
 // AddProvider form to show connection status before the user clicks Submit.
 // The plaintext key is consumed and zeroed before returning.
 // (azure-openai-adapter-01KQ8VMZ WP03)
-func (b *Bindings) LLM_TestProviderKey(kind, host, plaintextKey string) (llm.TestProviderKeyResult, error) {
+func (b *Bindings) LLM_TestProviderKey(kind, host, plaintextKey string) (llm.ProviderKeyTestResult, error) {
 	return b.api.LLMConnector().TestProviderKey(b.ctx(), kind, host, plaintextKey)
 }
 

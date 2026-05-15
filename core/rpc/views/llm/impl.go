@@ -1479,7 +1479,7 @@ func (a *API) TestAndRotateKey(ctx context.Context, profileID, plaintextApiKey, 
 // TestProviderKey validates a plaintext API key against the given provider
 // kind and resource host without writing anything to the keychain.
 // (azure-openai-adapter-01KQ8VMZ WP03)
-func (a *API) TestProviderKey(ctx context.Context, kind, host, plaintextKey string) (TestProviderKeyResult, error) {
+func (a *API) TestProviderKey(ctx context.Context, kind, host, plaintextKey string) (ProviderKeyTestResult, error) {
 	// Zero the key before returning in all paths.
 	buf := []byte(plaintextKey)
 	defer func() {
@@ -1489,12 +1489,12 @@ func (a *API) TestProviderKey(ctx context.Context, kind, host, plaintextKey stri
 	}()
 
 	if len(buf) == 0 {
-		return TestProviderKeyResult{OK: false, Message: "API key is required"}, nil
+		return ProviderKeyTestResult{OK: false, Message: "API key is required"}, nil
 	}
 
 	adapter := a.lookupAdapter(kind)
 	if adapter == nil {
-		return TestProviderKeyResult{
+		return ProviderKeyTestResult{
 			OK:      false,
 			Message: "no adapter registered for provider kind " + kind,
 		}, nil
@@ -1516,18 +1516,18 @@ func (a *API) TestProviderKey(ctx context.Context, kind, host, plaintextKey stri
 		if tester, ok := adapter.(azureTester); ok {
 			res, err := tester.TestKey(ctx, host, buf)
 			if err != nil {
-				return TestProviderKeyResult{OK: false, Message: err.Error()}, nil
+				return ProviderKeyTestResult{OK: false, Message: err.Error()}, nil
 			}
-			return TestProviderKeyResult{
+			return ProviderKeyTestResult{
 				OK:                 res.OK,
 				ModelCount:         res.ModelCount,
 				DeprecationWarning: res.DeprecationWarning,
 			}, nil
 		}
-		return TestProviderKeyResult{OK: false, Message: "azure-openai adapter does not support TestKey"}, nil
+		return ProviderKeyTestResult{OK: false, Message: "azure-openai adapter does not support TestKey"}, nil
 	default:
 		// Other provider kinds are stubs — parallel agents will fill them in.
-		return TestProviderKeyResult{
+		return ProviderKeyTestResult{
 			OK:      false,
 			Message: "TestProviderKey not supported for provider kind " + kind,
 		}, nil
