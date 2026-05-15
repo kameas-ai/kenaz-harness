@@ -1,0 +1,101 @@
+# occurrence_map.yaml — bulk-edit guardrail for WP01 lift
+#
+# Records every call site that was migrated or is pending migration
+# from per-adapter copies to the canonical top-level implementations:
+#   - llm.ClassifyStatus (from classifyStatus in anthropic/openai/openrouter)
+#   - llm.ExtractEmbeddedToolCalls (from extractEmbeddedToolCalls in bedrock)
+#   - llm.NewSyntheticStream (from syntheticStream in bedrock)
+#
+# change_mode values:
+#   migrate   — call site was updated to use the top-level form
+#   alias     — call site uses a thin local alias (to be removed in WP10)
+#   delete    — the original definition was removed from this file
+#   pending   — not yet migrated (WP10 target)
+#
+version: 1
+occurrences:
+
+  # ── classifyStatus ─────────────────────────────────────────────────────
+
+  - file: core/llm/anthropic/anthropic.go
+    symbol: classifyStatus
+    kind: definition
+    change_mode: alias
+    note: "Replaced local definition with thin alias to llm.ClassifyStatus (WP01)"
+
+  - file: core/llm/anthropic/anthropic.go
+    symbol: classifyStatus
+    line: 371
+    kind: call
+    change_mode: migrate
+    note: "Now resolves via alias → llm.ClassifyStatus"
+
+  - file: core/llm/openai/openai.go
+    symbol: classifyStatus
+    kind: definition
+    change_mode: alias
+    note: "Replaced local definition with thin alias to llm.ClassifyStatus (WP01)"
+
+  - file: core/llm/openai/openai.go
+    symbol: classifyStatus
+    line: 314
+    kind: call
+    change_mode: migrate
+    note: "Now resolves via alias → llm.ClassifyStatus"
+
+  - file: core/llm/openai/openai.go
+    symbol: classifyStatus
+    line: 883
+    kind: call
+    change_mode: migrate
+    note: "Now resolves via alias → llm.ClassifyStatus"
+
+  - file: core/llm/openrouter/openrouter.go
+    symbol: classifyStatus
+    kind: definition
+    change_mode: alias
+    note: "Replaced local definition with thin alias to llm.ClassifyStatus (WP01)"
+
+  - file: core/llm/openrouter/openrouter.go
+    symbol: classifyStatus
+    line: 262
+    kind: call
+    change_mode: migrate
+    note: "Now resolves via alias → llm.ClassifyStatus"
+
+  - file: core/llm/openrouter/openrouter.go
+    symbol: classifyStatus
+    line: 311
+    kind: call
+    change_mode: migrate
+    note: "Now resolves via alias → llm.ClassifyStatus"
+
+  # ── extractEmbeddedToolCalls ────────────────────────────────────────────
+
+  - file: core/llm/bedrock/bearer.go
+    symbol: extractEmbeddedToolCalls
+    kind: definition
+    change_mode: pending
+    note: "Original kept in bedrock/bearer.go; WP10 deletes local copy and wires to llm.ExtractEmbeddedToolCalls"
+
+  - file: core/llm/bedrock/bearer.go
+    symbol: extractEmbeddedToolCalls
+    line: 212
+    kind: call
+    change_mode: pending
+    note: "Will be updated to llm.ExtractEmbeddedToolCalls in WP10"
+
+  # ── syntheticStream ─────────────────────────────────────────────────────
+
+  - file: core/llm/bedrock/bearer.go
+    symbol: syntheticStream
+    kind: definition
+    change_mode: pending
+    note: "Original struct kept in bedrock/bearer.go; WP10 rewires to llm.NewSyntheticStream"
+
+  - file: core/llm/bedrock/bearer.go
+    symbol: syntheticStream
+    line: 159
+    kind: construction
+    change_mode: pending
+    note: "Will be updated to llm.NewSyntheticStream(...) in WP10"

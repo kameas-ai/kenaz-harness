@@ -18,6 +18,17 @@ defaults:
   # Image output capability default (multimodal-io-extended-01KQ8TD2 WP05).
   # False by default; only image-generation models (dall-e-3, gpt-image-1) set true.
   image_output: false
+  # Extended knob capabilities (provider-implementation-uniformity-01KQ8V4F WP06).
+  parallel_tool_calls: true
+  seed: true
+  logprobs: true
+  top_k: false
+  top_p: true
+  frequency_penalty: true
+  presence_penalty: true
+  batch: false
+  response_format: true
+  reasoning_style: ""
   # Attachment limits (multimodal-io-01KQ8TDF FR-006)
   # Note: OpenAI Chat Completions does NOT accept PDF documents inline.
   # The Responses API does; that is a future follow-up mission.
@@ -90,6 +101,7 @@ models:
     json_mode: true
     prompt_caching: false
     reasoning: true
+    reasoning_style: "effort_string"
     cancellation: true
     usage_reporting: true
     context_window: 200000

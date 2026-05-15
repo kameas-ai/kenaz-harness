@@ -24,7 +24,6 @@ import (
 	"io"
 	"net/http"
 	"strings"
-	"sync"
 
 	"github.com/sigil-tech/kaneaz-harness/core/llm"
 	"github.com/sigil-tech/kaneaz-harness/core/llm/structured"
@@ -156,13 +155,7 @@ func (a *Adapter) converseNonStreamingFallback(ctx context.Context, req llm.Gene
 		return nil, fmt.Errorf("bedrock: parse non-streaming response: %w", err)
 	}
 
-	syn := &syntheticStream{
-		events:       make(chan llm.StreamEvent, 4),
-		final:        final,
-		finishReason: finishReason,
-	}
-	go syn.emit()
-	return syn, nil
+	return llm.NewSyntheticStream(final, finishReason), nil
 }
 
 // parseConverseNonStreamingResponse decodes the /converse REST
@@ -209,7 +202,7 @@ func parseConverseNonStreamingResponse(body []byte) (llm.Response, string, error
 			// provider-implementation-uniformity mission's FR-016
 			// (capability-aware shaping picks the right model surface
 			// up front).
-			extracted, residual := extractEmbeddedToolCalls(b.Text)
+			extracted, residual := llm.ExtractEmbeddedToolCalls(b.Text)
 			toolCalls = append(toolCalls, extracted...)
 			if strings.TrimSpace(residual) != "" {
 				blocks = append(blocks, llm.ContentBlock{Type: "text", Text: residual})
@@ -236,177 +229,6 @@ func parseConverseNonStreamingResponse(body []byte) (llm.Response, string, error
 		}
 	}
 	return resp, env.StopReason, nil
-}
-
-// extractEmbeddedToolCalls scans assistant text for JSON-shaped tool
-// call envelopes that Llama-family models on Bedrock emit instead of
-// using the structured toolUse channel. Returns the extracted calls
-// and the residual text with the envelopes removed. Pattern:
-//
-//	{"type": "function", "name": "<tool>", "parameters": {...}}
-//
-// also tolerates `arguments` instead of `parameters` (OpenAI-shape
-// leakage), and the same envelope wrapped in a ```json fence.
-//
-// Conservative parser: only treats top-level objects with the exact
-// `{type:"function", name, parameters|arguments}` shape as tool
-// envelopes. Plain JSON in the assistant's response (a model showing
-// the user a JSON example) stays as text.
-func extractEmbeddedToolCalls(text string) (calls []llm.ToolUse, residual string) {
-	if text == "" || !strings.Contains(text, `"type"`) || !strings.Contains(text, `"function"`) {
-		return nil, text
-	}
-	var residualBuf strings.Builder
-	i := 0
-	for i < len(text) {
-		// Look for the next `{` that might start an envelope.
-		open := strings.IndexByte(text[i:], '{')
-		if open < 0 {
-			residualBuf.WriteString(text[i:])
-			break
-		}
-		open += i
-		residualBuf.WriteString(text[i:open])
-		// Find the matching close brace, respecting nested objects + strings.
-		end := matchObjectEnd(text, open)
-		if end < 0 {
-			residualBuf.WriteString(text[open:])
-			break
-		}
-		candidate := text[open : end+1]
-		if call, ok := parseToolEnvelope(candidate); ok {
-			calls = append(calls, call)
-			i = end + 1
-			continue
-		}
-		// Not a tool envelope — keep the brace + advance one char.
-		residualBuf.WriteByte(text[open])
-		i = open + 1
-	}
-	return calls, residualBuf.String()
-}
-
-// matchObjectEnd returns the index of the `}` that closes the `{` at
-// position open. Returns -1 if the object is unterminated.
-func matchObjectEnd(s string, open int) int {
-	depth := 0
-	inStr := false
-	esc := false
-	for i := open; i < len(s); i++ {
-		c := s[i]
-		if inStr {
-			if esc {
-				esc = false
-				continue
-			}
-			if c == '\\' {
-				esc = true
-				continue
-			}
-			if c == '"' {
-				inStr = false
-			}
-			continue
-		}
-		switch c {
-		case '"':
-			inStr = true
-		case '{':
-			depth++
-		case '}':
-			depth--
-			if depth == 0 {
-				return i
-			}
-		}
-	}
-	return -1
-}
-
-// parseToolEnvelope decodes a candidate JSON object as a tool-call
-// envelope. Returns the extracted ToolUse and ok=true on match;
-// (zero, false) otherwise. Accepts both `parameters` (Llama default)
-// and `arguments` (OpenAI-shape leakage).
-func parseToolEnvelope(candidate string) (llm.ToolUse, bool) {
-	var env struct {
-		Type       string          `json:"type"`
-		Name       string          `json:"name"`
-		ID         string          `json:"id,omitempty"`
-		Parameters json.RawMessage `json:"parameters,omitempty"`
-		Arguments  json.RawMessage `json:"arguments,omitempty"`
-	}
-	if err := json.Unmarshal([]byte(candidate), &env); err != nil {
-		return llm.ToolUse{}, false
-	}
-	if env.Type != "function" || env.Name == "" {
-		return llm.ToolUse{}, false
-	}
-	input := env.Parameters
-	if len(input) == 0 {
-		input = env.Arguments
-	}
-	if len(input) == 0 {
-		input = json.RawMessage(`{}`)
-	}
-	id := env.ID
-	if id == "" {
-		// Synthesise a deterministic id so the kernel's tool_dispatch
-		// can pair this with a result message; using the call's
-		// content hash keeps it stable across replays.
-		id = "synthetic_" + simpleHash(env.Name+string(input))
-	}
-	return llm.ToolUse{ID: id, Name: env.Name, Input: input}, true
-}
-
-// simpleHash returns a short hex digest suitable for synthetic ids.
-// Not cryptographic — just stable + collision-resistant for the
-// per-turn tool-call set.
-func simpleHash(s string) string {
-	h := crc32.ChecksumIEEE([]byte(s))
-	return fmt.Sprintf("%08x", h)
-}
-
-// syntheticStream wraps a fully-resolved Response in the llm.Stream
-// surface so the kernel-side stream pump can consume it without
-// caring whether the upstream actually streamed.
-type syntheticStream struct {
-	events       chan llm.StreamEvent
-	final        llm.Response
-	finishReason string
-	mu           sync.Mutex
-	cancelled    bool
-}
-
-func (s *syntheticStream) Events() <-chan llm.StreamEvent { return s.events }
-func (s *syntheticStream) Cancel() error {
-	s.mu.Lock()
-	s.cancelled = true
-	s.mu.Unlock()
-	return nil
-}
-func (s *syntheticStream) Final() (llm.Response, error) {
-	if s.cancelled {
-		return llm.Response{}, &llm.ErrCancelled{Reason: "cancelled"}
-	}
-	return s.final, nil
-}
-func (s *syntheticStream) emit() {
-	defer close(s.events)
-	// One text event with the entire content; one finish event.
-	var fullText strings.Builder
-	for _, blk := range s.final.Content {
-		if blk.Type == "text" {
-			fullText.WriteString(blk.Text)
-		}
-	}
-	if fullText.Len() > 0 {
-		s.events <- llm.StreamEvent{Kind: llm.StreamText, Text: fullText.String()}
-	}
-	finishKind := s.finishReason
-	if finishKind == "" {
-		finishKind = "stop"
-	}
-	s.events <- llm.StreamEvent{Kind: llm.StreamFinish, Finish: finishKind}
 }
 
 // bearerClient returns the HTTP client used for bearer-auth Bedrock
