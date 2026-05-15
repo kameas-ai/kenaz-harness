@@ -72,7 +72,7 @@ func TestRegistry_DefaultsRegistered(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}
-	want := []string{"branch", "clear", "forget", "help", "memorize", "model", "recall", "secret", "wf"}
+	want := []string{"branch", "clear", "effort", "forget", "help", "memorize", "model", "recall", "secret", "wf"}
 	got := r.List()
 	if len(got) != len(want) {
 		t.Fatalf("List len = %d, want %d (got=%v)", len(got), len(want), names(got))

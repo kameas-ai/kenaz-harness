@@ -2060,6 +2060,34 @@ export interface SlashExecuteResult {
   metadata?: Record<string, unknown>;
 }
 
+// ── reasoning knob (provider-implementation-uniformity-01KQ8V4F WP07) ──
+
+/**
+ * ReasoningConfig — the wire shape returned in SlashExecuteResult.metadata
+ * under the `reasoningKnob` key after a successful /effort command.
+ * Mirrors the Go llm.ReasoningConfig struct.
+ *
+ * Exactly one field is set:
+ *   - openAIEffort:              "low" | "medium" | "high" | "minimal"
+ *   - anthropicThinkingBudget:   integer token budget > 0
+ */
+export interface ReasoningConfig {
+  openAIEffort?: string;
+  anthropicThinkingBudget?: number;
+}
+
+/**
+ * ReasoningStyle — discriminates how the active model expresses its
+ * reasoning-effort knob. Used by ReasoningControl.vue to switch the
+ * display mode. Mirrors the Go llm.ReasoningStyle enum values.
+ *
+ * - "none"         — model has no reasoning knob (control is hidden)
+ * - "effort_string"— OpenAI o-series: low/medium/high/minimal
+ * - "token_budget" — Anthropic: integer token budget
+ * - "both"         — model accepts either form
+ */
+export type ReasoningStyle = 'none' | 'effort_string' | 'token_budget' | 'both';
+
 // ── corpora (agent-kernel-graph; Bundle C WP10/WP11) ─────────────────
 
 /**
