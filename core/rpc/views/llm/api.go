@@ -4,6 +4,7 @@ package llm
 
 import (
 	"context"
+	"errors"
 	"time"
 )
 
@@ -314,6 +315,30 @@ type LLMConnectorAPI interface {
 	// Returns ErrFeatureDisabled when HARNESS_CUSTOM_OPENAI=0.
 	// (custom-openai-compatible-endpoint-01KQ8VN0 WP06)
 	ProbeCustomEndpoint(ctx context.Context, in ProbeCustomEndpointInput) (ProbeCustomEndpointResult, error)
+
+	// ── Fallback chain CRUD (model-fallback-routing-01NDFSEX04 WP04) ───────
+
+	// ListFallbackChains returns all persisted fallback chains. The response
+	// includes both user-managed chains from FSStore and the bundled defaults
+	// that have not been overridden. Bundled chains that have been overridden
+	// by a user-saved chain with the same ID are only returned once (the
+	// user-managed version wins).
+	ListFallbackChains(ctx context.Context) ([]FallbackChainSummary, error)
+
+	// LoadChain returns the full chain definition for the given id. Returns
+	// ErrFallbackChainNotFound when no chain with that id exists.
+	LoadChain(ctx context.Context, id string) (FallbackChainView, error)
+
+	// SaveChain persists a chain. Creates a new YAML file when the id is new;
+	// overwrites when the id already exists. Validates before writing;
+	// returns a typed validation error on structural failures (e.g. MaxAttempts
+	// exceeds the ceiling, unknown TriggerCondition, empty id/name).
+	SaveChain(ctx context.Context, chain FallbackChainView) error
+
+	// DeleteChain removes the chain with the given id from FSStore. Idempotent:
+	// returns nil when the id does not exist. Bundled (read-only) chains cannot
+	// be deleted; attempting to delete one returns ErrFallbackChainReadOnly.
+	DeleteChain(ctx context.Context, id string) error
 }
 
 // ProviderKeyTestResult is the structured outcome of TestProviderKey.
@@ -374,4 +399,44 @@ type ProbeCustomEndpointResult struct {
 	Matrix CustomCapabilityMatrix `json:"matrix"`
 	// ErrMessage is non-empty when the probe failed entirely (e.g. auth failure).
 	ErrMessage string `json:"err_message,omitempty"`
+}
+
+// ── Fallback chain view types (model-fallback-routing-01NDFSEX04 WP04) ────────
+
+// ErrFallbackChainNotFound is returned by LoadChain when no chain with the
+// given id exists in either the FSStore or the bundled defaults.
+var ErrFallbackChainNotFound = errors.New("llm: fallback chain not found")
+
+// ErrFallbackChainReadOnly is returned by DeleteChain when the caller
+// attempts to delete a bundled (read-only) chain that has not been
+// overridden by a user-managed copy in FSStore.
+var ErrFallbackChainReadOnly = errors.New("llm: bundled fallback chains are read-only; save a copy first if you want to modify")
+
+// FallbackChainSummary is the abbreviated chain shape returned by
+// ListFallbackChains. It omits the full entries for list-view efficiency.
+type FallbackChainSummary struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+	EntryCount  int    `json:"entry_count"`
+	// Bundled is true when this chain comes from the binary bundle and has
+	// not been overridden by a user-managed copy.
+	Bundled bool `json:"bundled"`
+}
+
+// FallbackChainEntryView is the wire shape for one ChainEntry.
+type FallbackChainEntryView struct {
+	ProviderID     string            `json:"provider_id"`
+	Model          string            `json:"model,omitempty"`
+	ParamOverrides map[string]any    `json:"param_overrides,omitempty"`
+	Triggers       []string          `json:"triggers"`
+	MaxAttempts    int               `json:"max_attempts,omitempty"`
+}
+
+// FallbackChainView is the full chain wire shape exchanged with the frontend.
+type FallbackChainView struct {
+	ID          string                   `json:"id"`
+	Name        string                   `json:"name"`
+	Description string                   `json:"description,omitempty"`
+	Entries     []FallbackChainEntryView `json:"entries"`
 }

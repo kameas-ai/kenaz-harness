@@ -83,6 +83,14 @@ func (s *stubLLM) RecognizeTemplate(_ context.Context, _ string) (llm.RecognizeT
 func (s *stubLLM) ProbeCustomEndpoint(_ context.Context, _ llm.ProbeCustomEndpointInput) (llm.ProbeCustomEndpointResult, error) {
 	return llm.ProbeCustomEndpointResult{}, errNotWired
 }
+func (s *stubLLM) ListFallbackChains(_ context.Context) ([]llm.FallbackChainSummary, error) {
+	return nil, errNotWired
+}
+func (s *stubLLM) LoadChain(_ context.Context, _ string) (llm.FallbackChainView, error) {
+	return llm.FallbackChainView{}, errNotWired
+}
+func (s *stubLLM) SaveChain(_ context.Context, _ llm.FallbackChainView) error { return errNotWired }
+func (s *stubLLM) DeleteChain(_ context.Context, _ string) error               { return errNotWired }
 
 // ── a2a ────────────────────────────────────────────────────────────────
 

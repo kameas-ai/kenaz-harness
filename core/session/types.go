@@ -193,4 +193,14 @@ type Message struct {
 	// "provider" | "derived" | "mixed" | "unknown". Empty on rows
 	// with no usage data.
 	MessageCostSource string
+
+	// ActualProvider is the provider that ultimately served this turn. When
+	// empty, the primary (ProfileID-bound) provider was used. When non-empty,
+	// a fallback chain hop re-routed the turn to this provider
+	// (model-fallback-routing-01NDFSEX04 WP04). Stored in memory; not
+	// persisted to SQL (no schema migration needed for v0.15.x).
+	ActualProvider string
+	// ActualModel is the model that ultimately served this turn. When empty,
+	// the primary model from the provider profile was used.
+	ActualModel string
 }
