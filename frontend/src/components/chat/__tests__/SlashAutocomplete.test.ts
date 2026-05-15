@@ -101,4 +101,35 @@ describe('SlashAutocomplete', () => {
     const opts = w.findAll('[data-testid^="slash-option-"]');
     expect(opts).toHaveLength(COMMANDS.length);
   });
+
+  // ── WP03 (a11y-backlog-cleanup-01NDFSEX07) — listbox semantics + aria-activedescendant ──
+
+  it('each option has an id matching its index (WP03)', () => {
+    const w = mountAutocomplete({ query: '' });
+    const opts = w.findAll('[role="option"]');
+    opts.forEach((opt, i) => {
+      expect(opt.attributes('id')).toBe(`slash-opt-${i}`);
+    });
+  });
+
+  it('each option has tabindex="-1" for keyboard reachability (WP03)', () => {
+    const w = mountAutocomplete({ query: '' });
+    const opts = w.findAll('[role="option"]');
+    opts.forEach((opt) => {
+      expect(opt.attributes('tabindex')).toBe('-1');
+    });
+  });
+
+  it('listbox aria-activedescendant points to the active option id (WP03)', () => {
+    const w = mountAutocomplete({ query: '', activeIndex: 3 });
+    const listbox = w.find('[role="listbox"]');
+    expect(listbox.attributes('aria-activedescendant')).toBe('slash-opt-3');
+  });
+
+  it('listbox aria-activedescendant is undefined when activeIndex is -1 (WP03)', () => {
+    const w = mountAutocomplete({ query: '', activeIndex: -1 });
+    const listbox = w.find('[role="listbox"]');
+    // When activeIndex is -1, aria-activedescendant should not be present
+    expect(listbox.attributes('aria-activedescendant')).toBeUndefined();
+  });
 });
