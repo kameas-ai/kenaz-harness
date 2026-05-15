@@ -424,6 +424,17 @@ type GenerationRequest struct {
 	Params         map[string]any   `json:"params,omitempty"`
 	RetryOverride  *RetryPolicy     `json:"retry_override,omitempty"`
 	SessionID      string           `json:"session_id,omitempty"`
+	// Knobs carries typed per-request fine-tuning overrides (FR-017 of
+	// provider-implementation-uniformity-01KQ8V4F). Nil means "inherit
+	// from session / global / profile defaults." Individual sub-fields
+	// are merged with the per-adapter defaults at build-request time.
+	//
+	// The wirecheck:"-" tag excludes this field from the
+	// registry_completeness_test because Knobs is a composite that
+	// serialises as flattened sub-fields on the wire — each sub-field
+	// carries its own adapter-level coverage entry when they are tracked
+	// in coverage_registry.yaml (WP08).
+	Knobs          *RequestKnobs    `json:"knobs,omitempty" wirecheck:"-"`
 }
 
 // RequestedCapabilities returns the set of capabilities this request
