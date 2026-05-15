@@ -1,0 +1,2 @@
+data: {"candidates":[{"content":{"role":"model","parts":[{"text":"I see a red circle on a white background."}]},"finishReason":"STOP","index":0}],"usageMetadata":{"promptTokenCount":265,"candidatesTokenCount":10,"totalTokenCount":275}}
+
