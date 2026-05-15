@@ -140,6 +140,38 @@ type RotationResult struct {
 	AutoResumeToken string `json:"auto_resume_token,omitempty"`
 }
 
+// LocalRuntimeInfo is the wire-safe view of a detected local runtime.
+// (local-model-runtimes-01KQ8VMZ WP04)
+type LocalRuntimeInfo struct {
+	Kind           string             `json:"kind"`
+	Name           string             `json:"name"`
+	Running        bool               `json:"running"`
+	Installed      bool               `json:"installed"`
+	DefaultBaseURL string             `json:"defaultBaseURL"`
+	Port           int                `json:"port"`
+	Models         []LocalRuntimeModel `json:"models,omitempty"`
+}
+
+// LocalRuntimeModel is a model offered by a local runtime.
+// (local-model-runtimes-01KQ8VMZ WP04)
+type LocalRuntimeModel struct {
+	ID          string  `json:"id"`
+	DisplayName string  `json:"displayName"`
+	SizeBytes   int64   `json:"sizeBytes,omitempty"`
+	QuantLevel  string  `json:"quantLevel,omitempty"`
+	ParamCount  float64 `json:"paramCount,omitempty"`
+}
+
+// LocalRuntimeConfigResult is returned by AutoConfigureLocalRuntime on
+// success. It carries the newly-created provider profile ID and the
+// resolved model list.
+// (local-model-runtimes-01KQ8VMZ WP04)
+type LocalRuntimeConfigResult struct {
+	ProviderID string             `json:"providerId"`
+	Name       string             `json:"name"`
+	Models     []LocalRuntimeModel `json:"models"`
+}
+
 // LLMConnectorAPI is the view-scoped accessor for provider metadata and
 // streams. Implementations MUST be safe for concurrent use.
 //
@@ -227,4 +259,24 @@ type LLMConnectorAPI interface {
 	// It is a no-op when the token does not match an active paused turn.
 	// (provider-keychain-rotation-01KQ8TD9 WP04)
 	ResumeAfterKeyRotation(ctx context.Context, resumeToken string) error
+
+	// ListDetectedLocalRuntimes returns the current detection snapshot for
+	// all supported local runtimes (Ollama, llama-server, LM Studio, Jan,
+	// GPT4All). The result is cached for 5 minutes; use RescanLocalRuntimes
+	// to invalidate.
+	// Returns an empty slice when HARNESS_LOCAL_RUNTIMES=0.
+	// (local-model-runtimes-01KQ8VMZ WP04)
+	ListDetectedLocalRuntimes(ctx context.Context) ([]LocalRuntimeInfo, error)
+
+	// AutoConfigureLocalRuntime detects models from the running runtime
+	// identified by kind (e.g. "ollama") and persists a personal provider
+	// profile with Kind="custom-openai". Returns ErrRuntimeNotRunning when
+	// the port is unreachable and ErrFeatureDisabled when the flag is off.
+	// (local-model-runtimes-01KQ8VMZ WP04)
+	AutoConfigureLocalRuntime(ctx context.Context, kind string) (LocalRuntimeConfigResult, error)
+
+	// RescanLocalRuntimes invalidates the detection cache and triggers a
+	// fresh DetectAll scan. Returns the refreshed snapshot.
+	// (local-model-runtimes-01KQ8VMZ WP04)
+	RescanLocalRuntimes(ctx context.Context) ([]LocalRuntimeInfo, error)
 }
