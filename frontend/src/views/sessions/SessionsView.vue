@@ -21,6 +21,7 @@ import NewSessionDialog from '@/shell/NewSessionDialog.vue';
 import MessageList from '@/components/chat/MessageList.vue';
 import SessionHeader from '@/components/chat/SessionHeader.vue';
 import ChatInput from '@/components/chat/ChatInput.vue';
+import ComposerError from '@/components/chat/ComposerError.vue';
 import ReasoningControl from '@/components/chat/ReasoningControl.vue';
 import SlashArgFill from '@/components/chat/SlashArgFill.vue';
 import ResolvedContextPanel from '@/views/sessions/ResolvedContextPanel.vue';
@@ -59,6 +60,7 @@ import type {
   UserCommand,
 } from '@/lib/types';
 import { flattenChoices, inferFamily } from '@/lib/modelFamily';
+import { parseUnsupportedFeatureError } from '@/lib/errors';
 
 const route = useRoute();
 const router = useRouter();
@@ -159,6 +161,29 @@ const activeModelId = ref<string>('');
 // Both fields are retained so switching providers mid-session and back
 // restores the previously-set value for that provider's style.
 const activeReasoningConfig = ref<ReasoningConfig | undefined>(undefined);
+
+// ── ComposerError state (provider-implementation-uniformity-01KQ8V4F WP08) ──
+// Holds an ErrUnsupportedFeature string when the last stream failed due to
+// a knob-policy rejection. Cleared on dismiss or on next successful send.
+// We watch session.error separately so we can distinguish knob errors from
+// other stream errors (auth failures, transient errors, etc.).
+const composerErrorText = ref<string | null>(null);
+
+watch(
+  () => session.error.value,
+  (err) => {
+    if (!err) return;
+    // Only surface ErrUnsupportedFeature in the ComposerError banner;
+    // other errors continue to render via MessageList's error-message prop.
+    if (parseUnsupportedFeatureError(err)) {
+      composerErrorText.value = err;
+    }
+  },
+);
+
+function onComposerErrorDismiss() {
+  composerErrorText.value = null;
+}
 
 const activeProvider = computed<Provider | null>(() => {
   if (providers.value.length === 0) return null;
@@ -1665,6 +1690,14 @@ async function onNudgeNewSession() {
           data-testid="session-slash-arg-fill"
           @submit="onArgFillSubmit"
           @cancel="dismissArgFill"
+        />
+        <!-- ComposerError: surfaced when a knob-policy rejection (ErrUnsupportedFeature)
+             stops the last message (provider-implementation-uniformity-01KQ8V4F WP08). -->
+        <ComposerError
+          v-if="composerErrorText"
+          :error="composerErrorText"
+          class="mx-3 mb-2"
+          @dismiss="onComposerErrorDismiss"
         />
         <ChatInput
           v-model="session.draft.value"
