@@ -226,6 +226,14 @@ const (
 	//
 	// Privacy invariant: same as KindFallbackAttempted.
 	KindFallbackBlockedByPolicy Kind = "adapter.fallback_blocked_by_policy"
+
+	// KindAuditBulkPurgeExecuted fires when Audit_BulkPurge successfully
+	// deletes a batch of events from the store (audit-log-enhancement
+	// -01KX5R8F WP08). Payload: AuditBulkPurgeExecutedPayload.
+	//
+	// Privacy invariant: the payload carries only the event ID list and
+	// the purge count — no payload bytes from the deleted events.
+	KindAuditBulkPurgeExecuted Kind = "audit.bulk_purge_executed"
 )
 
 // Event is the wire shape passed to the event log. The concrete event-log
@@ -784,6 +792,18 @@ type FallbackBlockedByPolicyPayload struct {
 	ChainID string `json:"chain_id"`
 	// Reason is the Cedar denial reason string.
 	Reason string `json:"reason"`
+}
+
+// AuditBulkPurgeExecutedPayload carries the signalling for
+// KindAuditBulkPurgeExecuted (audit-log-enhancement-01KX5R8F WP08).
+//
+// Privacy invariant: the EventIDs are the bare ULID strings of the
+// purged rows; no payload bytes from the deleted events are included.
+type AuditBulkPurgeExecutedPayload struct {
+	// EventIDs is the list of purged event_id values.
+	EventIDs []string `json:"event_ids"`
+	// PurgedCount is len(EventIDs); redundant for fast aggregation.
+	PurgedCount int `json:"purged_count"`
 }
 
 // Emit is a small convenience wrapper for callers that have a payload

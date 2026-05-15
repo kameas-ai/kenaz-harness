@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/sigil-tech/kaneaz-harness/core/event"
+	contextaudit "github.com/sigil-tech/kaneaz-harness/core/context/audit"
 	eventlog "github.com/sigil-tech/kaneaz-harness/core/event/log"
 )
 
@@ -46,6 +47,8 @@ type API struct {
 	broker       Subscriber
 	savedQueries map[string]eventlog.SavedQuery // id -> query
 	backend      eventlog.Backend               // optional; used by Export
+	sweepable    eventlog.SweepableBackend      // optional; used by BulkPurge
+	emitter      contextaudit.Emitter           // optional; used by BulkPurge audit emit
 }
 
 // Option configures NewAPI.
@@ -72,6 +75,27 @@ func WithSubscriber(s Subscriber) Option {
 // error if no backend is configured.
 func WithBackend(b eventlog.Backend) Option {
 	return func(a *API) { a.backend = b }
+}
+
+// WithSweepableBackend injects an event-log SweepableBackend used by
+// BulkPurge to delete rows. Optional — BulkPurge returns an error
+// if no sweepable backend is configured.
+func WithSweepableBackend(b eventlog.SweepableBackend) Option {
+	return func(a *API) {
+		a.sweepable = b
+		// SweepableBackend also satisfies Backend; set backend too so
+		// Export can share the same instance.
+		if a.backend == nil {
+			a.backend = b
+		}
+	}
+}
+
+// WithEmitter injects the audit emitter used by BulkPurge to record
+// KindAuditBulkPurgeExecuted events. Optional — if nil, the purge
+// runs silently (no audit event is emitted).
+func WithEmitter(e contextaudit.Emitter) Option {
+	return func(a *API) { a.emitter = e }
 }
 
 // NewAPI constructs the audit view-scoped API.
@@ -267,6 +291,41 @@ func (a *API) Export(ctx context.Context, opts eventlog.ExportOptions) (string, 
 		return "", fmt.Errorf("audit: Export requires a backend; use WithBackend option")
 	}
 	return eventlog.Export(ctx, backend, opts)
+}
+
+// BulkPurge deletes the listed event IDs from the store.
+//
+// The operation is gated only by the availability of a SweepableBackend;
+// the Cedar policy check is performed by the caller (Bindings layer) via
+// Audit_BulkPurge which checks ActionAuditBulkPurge before invoking this
+// method. This keeps the Cedar dependency out of the view package.
+//
+// On success the purge is recorded via KindAuditBulkPurgeExecuted if an
+// emitter is configured.
+func (a *API) BulkPurge(ctx context.Context, eventIDs []string) error {
+	a.mu.RLock()
+	sb := a.sweepable
+	em := a.emitter
+	a.mu.RUnlock()
+
+	if sb == nil {
+		return fmt.Errorf("audit: BulkPurge requires a sweepable backend; use WithSweepableBackend option")
+	}
+	if len(eventIDs) == 0 {
+		return nil
+	}
+	if err := sb.DeleteRows(ctx, eventIDs); err != nil {
+		return fmt.Errorf("audit: BulkPurge: %w", err)
+	}
+	// Emit audit event (best-effort; failure does not roll back purge).
+	if em != nil {
+		payload := contextaudit.AuditBulkPurgeExecutedPayload{
+			EventIDs:    eventIDs,
+			PurgedCount: len(eventIDs),
+		}
+		_ = contextaudit.Emit(ctx, em, contextaudit.KindAuditBulkPurgeExecuted, payload, time.Now())
+	}
+	return nil
 }
 
 // ListEntries returns the buffered entries matching filter, newest

@@ -366,6 +366,7 @@ interface WailsBindingsLike {
   Audit_SaveQuery(q: SavedAuditQuery): Promise<void>;
   Audit_DeleteQuery(id: string): Promise<void>;
   Audit_Export(opts: AuditExportOptions): Promise<string>;
+  Audit_BulkPurge(eventIDs: string[]): Promise<void>;
   Audit_StartStream(filter: AuditFilter): Promise<string>;
   Audit_StopStream(id: string): Promise<void>;
 
@@ -1507,6 +1508,8 @@ export interface AuditClient {
   deleteQuery(id: string): Promise<void>;
   /** Export audit entries to a file. Returns the absolute file path. */
   export(opts: AuditExportOptions): Promise<string>;
+  /** Bulk-delete selected event IDs. Gated by Cedar audit.bulk_purge policy. */
+  bulkPurge(eventIDs: string[]): Promise<void>;
   startStream(filter: AuditFilter): Promise<string>;
   stopStream(id: string): Promise<void>;
 }
@@ -2803,6 +2806,7 @@ export function createHarnessClient(): HarnessClient {
       saveQuery: (q) => b().Audit_SaveQuery(q),
       deleteQuery: (id) => b().Audit_DeleteQuery(id),
       export: (opts) => b().Audit_Export(opts),
+      bulkPurge: (eventIDs) => b().Audit_BulkPurge(eventIDs),
       startStream: (filter) => b().Audit_StartStream(filter),
       stopStream: (id) => b().Audit_StopStream(id),
     },
@@ -3450,6 +3454,7 @@ export function createFakeHarnessClient(
       saveQuery: noop,
       deleteQuery: noop,
       export: async () => '/tmp/audit-export.csv',
+      bulkPurge: noop,
       startStream: async () => 'fake-sub',
       stopStream: noop,
     },

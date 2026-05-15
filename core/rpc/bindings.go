@@ -665,6 +665,9 @@ func (b *Bindings) Audit_DeleteQuery(id string) error {
 func (b *Bindings) Audit_Export(opts eventlog.ExportOptions) (string, error) {
 	return b.api.Audit().Export(b.ctx(), opts)
 }
+func (b *Bindings) Audit_BulkPurge(eventIDs []string) error {
+	return b.api.Audit().BulkPurge(b.ctx(), eventIDs)
+}
 func (b *Bindings) Audit_StartStream(filter audit.Filter) (string, error) {
 	return b.api.Audit().StartStream(b.ctx(), filter)
 }

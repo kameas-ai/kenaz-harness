@@ -57,6 +57,11 @@ type AuditAPI interface {
 	DeleteQuery(ctx context.Context, id string) error
 	// Export writes an audit export file and returns the absolute path.
 	Export(ctx context.Context, opts eventlog.ExportOptions) (string, error)
+	// BulkPurge deletes the listed event IDs from the store after a Cedar
+	// gate check. The operation is gated by ActionAuditBulkPurge; a Cedar
+	// deny returns an error and leaves the store unchanged. On success the
+	// purge is recorded via KindAuditBulkPurgeExecuted.
+	BulkPurge(ctx context.Context, eventIDs []string) error
 	StartStream(ctx context.Context, filter Filter) (subscriptionID string, err error)
 	StopStream(ctx context.Context, subscriptionID string) error
 }

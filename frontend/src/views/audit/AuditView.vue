@@ -231,6 +231,39 @@ function categoryFor(e: AuditEntry): Category {
     : 'STORAGE';
 }
 
+// ── Bulk purge (WP08) ─────────────────────────────────────────────────────
+const showPurgeModal = ref(false);
+const purging = ref(false);
+const purgeError = ref<string>('');
+
+function requestPurge() {
+  if (selectedIDs.value.size === 0) return;
+  purgeError.value = '';
+  showPurgeModal.value = true;
+}
+
+function cancelPurge() {
+  showPurgeModal.value = false;
+}
+
+async function confirmPurge() {
+  purging.value = true;
+  purgeError.value = '';
+  try {
+    const ids = Array.from(selectedIDs.value);
+    await client.audit.bulkPurge(ids);
+    // Remove purged entries from local state.
+    selectedIDs.value = new Set();
+    showPurgeModal.value = false;
+    // Refresh to reflect the deletion.
+    await refresh();
+  } catch (e) {
+    purgeError.value = e instanceof Error ? e.message : String(e);
+  } finally {
+    purging.value = false;
+  }
+}
+
 onMounted(() => {
   void loadSavedQueries();
 });
@@ -363,6 +396,16 @@ onBeforeUnmount(() => {
         >
           Clear
         </button>
+        <!-- Bulk purge (WP08) — visible when rows are selected -->
+        <button
+          v-if="selectedIDs.size > 0"
+          type="button"
+          class="px-2 py-1 text-[11px] font-ui rounded-sm border border-signal-danger text-signal-danger hover:bg-signal-danger hover:text-white transition-colors"
+          data-testid="audit-purge-selected"
+          @click="requestPurge"
+        >
+          Purge {{ selectedIDs.size }} selected
+        </button>
       </div>
 
       <!-- Save query row -->
@@ -435,16 +478,80 @@ onBeforeUnmount(() => {
       >
         No audit entries match the current filter.
       </div>
-      <EventStreamRow
+      <div
         v-for="e in entries"
         :key="e.id"
-        :timestamp="e.timestamp"
-        :category="categoryFor(e)"
-        :subject="e.subject"
-        :trailing="e.trailing"
-        @click="openDrawer(e)"
-      />
+        class="flex items-center"
+        :class="selectedIDs.has(e.id) ? 'bg-surface-2' : ''"
+        data-testid="audit-row"
+      >
+        <label class="flex items-center px-2 shrink-0 cursor-pointer" :aria-label="`Select event ${e.id}`">
+          <input
+            type="checkbox"
+            class="accent-accent"
+            :checked="selectedIDs.has(e.id)"
+            @change="toggleSelect(e.id)"
+          />
+        </label>
+        <div class="flex-1 min-w-0" @click="openDrawer(e)">
+          <EventStreamRow
+            :timestamp="e.timestamp"
+            :category="categoryFor(e)"
+            :subject="e.subject"
+            :trailing="e.trailing"
+          />
+        </div>
+      </div>
     </div>
+
+    <!-- Bulk purge confirmation modal (WP08) -->
+    <Teleport to="body">
+      <div
+        v-if="showPurgeModal"
+        class="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="purge-modal-title"
+        data-testid="audit-purge-modal"
+      >
+        <div class="bg-surface-1 rounded border border-border shadow-xl p-6 max-w-sm w-full mx-4">
+          <h2 id="purge-modal-title" class="font-ui text-[13px] font-semibold text-ink mb-2">
+            Confirm bulk purge
+          </h2>
+          <p class="font-ui text-[12px] text-ink-muted mb-4">
+            Permanently delete {{ selectedIDs.size }} audit event{{ selectedIDs.size === 1 ? '' : 's' }}?
+            This operation is <strong class="text-signal-danger">irreversible</strong>.
+          </p>
+          <div
+            v-if="purgeError"
+            role="alert"
+            class="mb-3 rounded-sm border border-signal-danger bg-surface-1 px-3 py-2 font-ui text-[12px] text-signal-danger"
+            data-testid="purge-modal-error"
+          >
+            {{ purgeError }}
+          </div>
+          <div class="flex gap-2 justify-end">
+            <button
+              type="button"
+              class="px-3 py-1.5 font-ui text-[12px] rounded-sm border border-border text-ink-muted hover:text-ink"
+              data-testid="purge-modal-cancel"
+              @click="cancelPurge"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              :disabled="purging"
+              class="px-3 py-1.5 font-ui text-[12px] rounded-sm border border-signal-danger bg-signal-danger text-white hover:opacity-90 disabled:opacity-50 transition-opacity"
+              data-testid="purge-modal-confirm"
+              @click="confirmPurge"
+            >
+              {{ purging ? 'Purging…' : 'Delete permanently' }}
+            </button>
+          </div>
+        </div>
+      </div>
+    </Teleport>
 
     <!-- Per-event drawer -->
     <AuditEventDrawer

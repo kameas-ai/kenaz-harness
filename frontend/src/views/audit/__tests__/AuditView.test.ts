@@ -16,6 +16,7 @@ function provide(seedEntries: AuditEntry[] = []) {
       saveQuery: async () => undefined,
       deleteQuery: async () => undefined,
       export: async () => '/tmp/test.csv',
+      bulkPurge: async () => undefined,
       startStream: async () => 'fake-audit-sub',
       stopStream: async () => undefined,
     },
