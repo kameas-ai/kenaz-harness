@@ -1739,6 +1739,7 @@ onMounted(() => {
             type="button"
             role="switch"
             :aria-checked="autoCollapseBranches"
+            aria-label="Auto-collapse branches"
             class="relative mt-0.5 h-5 w-9 flex-shrink-0 rounded-full border transition-colors"
             :class="autoCollapseBranches
               ? 'border-accent bg-accent'
@@ -1765,6 +1766,7 @@ onMounted(() => {
             type="button"
             role="switch"
             :aria-checked="deleteBranchesWithParent"
+            aria-label="Delete branches with parent session"
             class="relative mt-0.5 h-5 w-9 flex-shrink-0 rounded-full border transition-colors"
             :class="deleteBranchesWithParent
               ? 'border-accent bg-accent'
@@ -1794,6 +1796,7 @@ onMounted(() => {
             max="32"
             step="1"
             :value="maxVisibleBranchDepth"
+            aria-label="Maximum visible branch depth"
             class="mt-2 w-full accent-accent"
             data-testid="max-branch-depth-slider"
             @change="setMaxVisibleBranchDepth(+($event.target as HTMLInputElement).value)"

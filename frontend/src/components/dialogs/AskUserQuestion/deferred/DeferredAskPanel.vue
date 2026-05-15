@@ -65,13 +65,14 @@ function dismiss() {
     </div>
 
     <!-- Question -->
-    <p class="mt-2 font-ui text-sm text-ink" data-testid="deferred-panel-question">
+    <p id="deferred-panel-question-label" class="mt-2 font-ui text-sm text-ink" data-testid="deferred-panel-question">
       {{ head.question }}
     </p>
 
     <!-- Simple text answer for deferred (full kind support via AskUserQuestionDialog) -->
     <textarea
       v-model="answer as string"
+      aria-labelledby="deferred-panel-question-label"
       class="mt-3 w-full rounded-sm border border-border-muted bg-surface-2 p-2 font-ui text-sm text-ink focus:outline-none focus:ring-1 focus:ring-accent"
       rows="3"
       placeholder="Your answer…"

@@ -469,7 +469,7 @@ async function undoSave(): Promise<void> {
 </script>
 
 <template>
-  <span ref="root" class="markdown-block" role="text" @click="onDelegatedClick">
+  <span ref="root" class="markdown-block" @click="onDelegatedClick">
     <!-- Rendered markdown body with injected code-block-wrap containers -->
     <span class="md-body" v-html="html"></span>
 

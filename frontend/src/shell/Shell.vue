@@ -98,6 +98,14 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
+  <!-- Skip-to-content link: visible on keyboard focus, hidden otherwise.
+       Allows keyboard-only users to bypass the nav rail and jump to the
+       main content area (WCAG 2.4.1 Bypass Blocks). -->
+  <a
+    href="#shell-canvas"
+    class="skip-to-content"
+  >Skip to content</a>
+
   <div class="shell-grid bg-surface-0 text-ink font-ui">
     <header class="shell-titlebar border-b border-border-muted bg-surface-1">
       <Titlebar />
@@ -115,7 +123,7 @@ onBeforeUnmount(() => {
         <Toolbar />
       </div>
 
-      <div class="shell-canvas" role="region" aria-label="Active surface">
+      <div id="shell-canvas" class="shell-canvas" role="region" aria-label="Active surface">
         <ConnectionLostBanner v-if="isLost" />
         <div
           v-if="isStarting"

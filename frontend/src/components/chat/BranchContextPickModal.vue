@@ -169,6 +169,7 @@ const toolGrantLabels: Record<SubagentToolGrantMode, string> = {
             <input
               v-model="providerId"
               type="text"
+              aria-label="Branch provider id (e.g. anthropic)"
               class="w-1/2 rounded-md border border-accent-hairline bg-surface-0 px-2 py-1 font-ui text-sm text-ink"
               placeholder="Provider id (e.g. anthropic)"
               data-testid="branch-pick-provider"
@@ -176,6 +177,7 @@ const toolGrantLabels: Record<SubagentToolGrantMode, string> = {
             <input
               v-model="modelId"
               type="text"
+              aria-label="Branch model id (e.g. claude-haiku-4)"
               class="w-1/2 rounded-md border border-accent-hairline bg-surface-0 px-2 py-1 font-ui text-sm text-ink"
               placeholder="Model id (e.g. claude-haiku-4)"
               data-testid="branch-pick-model"

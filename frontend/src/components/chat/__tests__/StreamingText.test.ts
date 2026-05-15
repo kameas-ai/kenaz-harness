@@ -36,10 +36,13 @@ describe('StreamingText (chat-ui)', () => {
     expect(w.text()).toContain('abc');
   });
 
-  it('exposes a text role for screen readers', () => {
+  it('does not expose an invalid ARIA role (a11y: role="text" removed)', () => {
+    // role="text" was a proposed ARIA 1.1 role that was removed before
+    // finalization. axe-core flags it as invalid. The outer span now relies
+    // on its implicit <span> semantics, which is correct for inline content.
     const w = mount(StreamingText, {
       props: { text: 'x', streaming: false },
     });
-    expect(w.attributes('role')).toBe('text');
+    expect(w.attributes('role')).toBeUndefined();
   });
 });

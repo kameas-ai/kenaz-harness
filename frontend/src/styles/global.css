@@ -58,6 +58,35 @@ body {
 }
 
 /*
+ * Global focus-visible default. Tailwind resets :focus outline to none by
+ * default; this reinstates a consistent brass-tinted ring for keyboard
+ * navigation across all interactive elements. Components may override with
+ * a tighter or looser ring but must never suppress focus-visible entirely.
+ */
+*:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+/*
+ * prefers-reduced-motion global baseline.
+ * Any component-scoped animation/transition can be overridden here.
+ * Components with streaming animations (StreamingText.vue) have their own
+ * @media (prefers-reduced-motion: reduce) block alongside the @keyframes.
+ */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/*
  * search-focus-pulse — a 3-second one-shot highlight pulse applied to
  * a message bubble when the SearchModal navigates to /sessions/<id>#<msgId>.
  * (cross-session-search WP05). Uses the accent-a token so the highlight

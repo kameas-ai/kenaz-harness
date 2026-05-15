@@ -3,6 +3,7 @@ import { mount, flushPromises } from '@vue/test-utils';
 import ChatInput from '@/components/chat/ChatInput.vue';
 import { provideFakeClient } from '@/lib/harnessClientContext';
 import type { HarnessClient } from '@/lib/harnessClient';
+import { axe } from 'vitest-axe';
 
 function mountInput(
   props: Record<string, unknown> = {},
@@ -391,5 +392,24 @@ describe('ChatInput (chat-ui)', () => {
     expect(w.find('[data-testid="chat-input-error"]').text()).toMatch(
       /deny-list/i,
     );
+  });
+
+  // ── axe-core accessibility assertion ──────────────────────────────────
+  it('has no axe-core violations in idle state (a11y)', async () => {
+    // Disabled axe rules with rationale:
+    //   color-contrast — happy-dom returns 0/0 ratio (no CSS layout).
+    //     needs_manual_verification: check contrast in a real browser.
+    //   region — component mounted in isolation, not inside a Shell landmark.
+    //     In production it lives inside <main class="shell-main">.
+    const w = mountInput();
+    await flushPromises();
+    const results = await axe(w.element, {
+      rules: {
+        'color-contrast': { enabled: false },
+        region: { enabled: false },
+      },
+    });
+    // @ts-expect-error — toHaveNoViolations is added via test-setup.ts extend
+    expect(results).toHaveNoViolations();
   });
 });
