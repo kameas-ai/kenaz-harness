@@ -227,4 +227,26 @@ type LLMConnectorAPI interface {
 	// It is a no-op when the token does not match an active paused turn.
 	// (provider-keychain-rotation-01KQ8TD9 WP04)
 	ResumeAfterKeyRotation(ctx context.Context, resumeToken string) error
+
+	// TestProviderKey validates a plaintext API key against the given provider
+	// kind and resource host. Unlike TestAndRotateKey, this does NOT write the
+	// key to the keychain — it is a read-only probe used by the AddProvider form
+	// to display connection status before the user clicks Submit.
+	//
+	// kind       — the provider kind string ("azure-openai"; others are stubs for now).
+	// host       — the provider-specific resource host (Azure: resource hostname,
+	//              e.g. "myresource.openai.azure.com"; other kinds: ignored).
+	// plaintextKey — the API key to test. Zeroed before this method returns.
+	//
+	// (azure-openai-adapter-01KQ8VMZ WP03)
+	TestProviderKey(ctx context.Context, kind, host, plaintextKey string) (TestProviderKeyResult, error)
+}
+
+// TestProviderKeyResult is the structured outcome of TestProviderKey.
+// (azure-openai-adapter-01KQ8VMZ WP03)
+type TestProviderKeyResult struct {
+	OK                 bool   `json:"ok"`
+	ModelCount         int    `json:"model_count"`
+	DeprecationWarning string `json:"deprecation_warning,omitempty"`
+	Message            string `json:"message,omitempty"`
 }

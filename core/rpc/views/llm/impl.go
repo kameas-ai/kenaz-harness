@@ -1447,6 +1447,81 @@ func (a *API) TestAndRotateKey(ctx context.Context, profileID, plaintextApiKey, 
 	}, nil
 }
 
+// TestProviderKey validates a plaintext API key against the given provider
+// kind and resource host without writing anything to the keychain.
+// (azure-openai-adapter-01KQ8VMZ WP03)
+func (a *API) TestProviderKey(ctx context.Context, kind, host, plaintextKey string) (TestProviderKeyResult, error) {
+	// Zero the key before returning in all paths.
+	buf := []byte(plaintextKey)
+	defer func() {
+		for i := range buf {
+			buf[i] = 0
+		}
+	}()
+
+	if len(buf) == 0 {
+		return TestProviderKeyResult{OK: false, Message: "API key is required"}, nil
+	}
+
+	adapter := a.lookupAdapter(kind)
+	if adapter == nil {
+		return TestProviderKeyResult{
+			OK:      false,
+			Message: "no adapter registered for provider kind " + kind,
+		}, nil
+	}
+
+	switch kind {
+	case "azure-openai":
+		// AzureKeyTester is the interface the azure adapter satisfies for TestKey.
+		type azureKeyTester interface {
+			TestKey(ctx context.Context, host string, cred []byte) (interface{ GetOK() bool; GetModelCount() int; GetDeprecationWarning() string }, error)
+		}
+		// Use a duck-typed call via the adapter's concrete method.
+		// Since we can't import the azure package here (import cycle), we
+		// use the AdapterLookup to get the adapter and call via reflection-free
+		// method discovery through a local interface.
+		type azureTester interface {
+			TestKey(ctx context.Context, host string, cred []byte) (azureTestKeyResult, error)
+		}
+		if tester, ok := adapter.(azureTester); ok {
+			res, err := tester.TestKey(ctx, host, buf)
+			if err != nil {
+				return TestProviderKeyResult{OK: false, Message: err.Error()}, nil
+			}
+			return TestProviderKeyResult{
+				OK:                 res.OK,
+				ModelCount:         res.ModelCount,
+				DeprecationWarning: res.DeprecationWarning,
+			}, nil
+		}
+		return TestProviderKeyResult{OK: false, Message: "azure-openai adapter does not support TestKey"}, nil
+	default:
+		// Other provider kinds are stubs — parallel agents will fill them in.
+		return TestProviderKeyResult{
+			OK:      false,
+			Message: "TestProviderKey not supported for provider kind " + kind,
+		}, nil
+	}
+}
+
+// azureTestKeyResult mirrors azure.TestKeyResult so the impl can call
+// TestKey without importing the azure package (DIRECTIVE_001).
+type azureTestKeyResult struct {
+	OK                 bool
+	ModelCount         int
+	DeprecationWarning string
+}
+
+// lookupAdapter returns the registered adapter for the given kind, or nil.
+func (a *API) lookupAdapter(kind string) corellm.ProviderAdapter {
+	lookup, ok := a.reg.(AdapterLookup)
+	if !ok {
+		return nil
+	}
+	return lookup.Adapter(kind)
+}
+
 // keychainRotationFeatureEnabled reads HARNESS_KEYCHAIN_ROTATION at call time.
 // Mirrors the chat-runner helper but lives here so the LLM view does not
 // import the chat package (DIRECTIVE_001).

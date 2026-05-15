@@ -62,6 +62,9 @@ func (s *stubLLM) TestAndRotateKey(_ context.Context, _, _, _ string) (llm.Rotat
 	return llm.RotationResult{}, errNotWired
 }
 func (s *stubLLM) ResumeAfterKeyRotation(_ context.Context, _ string) error { return errNotWired }
+func (s *stubLLM) TestProviderKey(_ context.Context, _, _, _ string) (llm.TestProviderKeyResult, error) {
+	return llm.TestProviderKeyResult{}, errNotWired
+}
 
 // ── a2a ────────────────────────────────────────────────────────────────
 

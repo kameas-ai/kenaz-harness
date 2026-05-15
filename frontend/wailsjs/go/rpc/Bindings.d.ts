@@ -284,6 +284,8 @@ export function LLM_TestAndRotateKey(arg1:string,arg2:string,arg3:string):Promis
 
 export function LLM_TestProvider(arg1:string):Promise<llm.TestResult>;
 
+export function LLM_TestProviderKey(arg1:string,arg2:string,arg3:string):Promise<llm.TestProviderKeyResult>;
+
 export function LLM_UpdateProvider(arg1:llm.AddProviderInput):Promise<void>;
 
 export function LLM_UpdateProviderCredential(arg1:string,arg2:string):Promise<void>;
