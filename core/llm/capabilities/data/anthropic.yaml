@@ -18,6 +18,17 @@ defaults:
   # Image output capability (multimodal-io-extended-01KQ8TD2 WP05).
   # Anthropic does not offer an image-generation API.
   image_output: false
+  # Extended knob capabilities (provider-implementation-uniformity-01KQ8V4F WP06).
+  parallel_tool_calls: false
+  seed: false
+  logprobs: false
+  top_k: true
+  top_p: true
+  frequency_penalty: false
+  presence_penalty: false
+  batch: false
+  response_format: true
+  reasoning_style: ""
   # Attachment limits (multimodal-io-01KQ8TDF FR-006)
   image_input: true
   document_input: false
@@ -37,6 +48,7 @@ models:
     json_mode: true
     prompt_caching: true
     reasoning: true
+    reasoning_style: "token_budget"
     cancellation: true
     usage_reporting: true
     structured_output: true
@@ -58,6 +70,7 @@ models:
     json_mode: true
     prompt_caching: true
     reasoning: true
+    reasoning_style: "token_budget"
     cancellation: true
     usage_reporting: true
     structured_output: true

@@ -18,6 +18,18 @@ defaults:
   # Image output capability (multimodal-io-extended-01KQ8TD2 WP05).
   # OpenRouter does not proxy image generation endpoints.
   image_output: false
+  # Extended knob capabilities (provider-implementation-uniformity-01KQ8V4F WP06).
+  # OpenRouter accepts OpenAI-style knobs for most routed models.
+  parallel_tool_calls: true
+  seed: true
+  logprobs: false
+  top_k: false
+  top_p: true
+  frequency_penalty: true
+  presence_penalty: true
+  batch: false
+  response_format: true
+  reasoning_style: ""
   # Attachment limits (multimodal-io-01KQ8TDF FR-006)
   # OpenRouter proxies to the underlying provider via OpenAI-shape requests.
   # image_url base64 data URLs work for vision-capable models.

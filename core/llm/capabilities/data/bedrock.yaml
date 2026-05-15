@@ -17,6 +17,17 @@ defaults:
   # Image output capability default (multimodal-io-extended-01KQ8TD2 WP05).
   # False by default; only image-generation model prefixes set true.
   image_output: false
+  # Extended knob capabilities (provider-implementation-uniformity-01KQ8V4F WP06).
+  parallel_tool_calls: false
+  seed: false
+  logprobs: false
+  top_k: true
+  top_p: true
+  frequency_penalty: false
+  presence_penalty: false
+  batch: false
+  response_format: false
+  reasoning_style: ""
   # Attachment limits (multimodal-io-01KQ8TDF FR-006)
   image_input: false
   document_input: false
