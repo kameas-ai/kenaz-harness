@@ -227,4 +227,77 @@ type LLMConnectorAPI interface {
 	// It is a no-op when the token does not match an active paused turn.
 	// (provider-keychain-rotation-01KQ8TD9 WP04)
 	ResumeAfterKeyRotation(ctx context.Context, resumeToken string) error
+
+	// ListCustomTemplates returns the built-in template summaries from the
+	// custom-openai adapter's embedded registry. Returns an empty slice (not
+	// an error) when the custom-openai adapter is not registered (feature-flag
+	// off or env-gate skipped registration).
+	// (custom-openai-compatible-endpoint-01KQ8VN0 WP06)
+	ListCustomTemplates(ctx context.Context) ([]CustomTemplateSummary, error)
+
+	// RecognizeTemplate looks up the best-matching template for the supplied
+	// base URL. Uses the same resolution order as the adapter (explicit id →
+	// glob → nil). Returns an empty result (no match) without error when the
+	// URL does not match any template.
+	// (custom-openai-compatible-endpoint-01KQ8VN0 WP06)
+	RecognizeTemplate(ctx context.Context, rawURL string) (RecognizeTemplateResult, error)
+
+	// ProbeCustomEndpoint runs the three-step capability probe against a custom
+	// OpenAI-compatible endpoint and returns the resulting capability matrix.
+	// The plaintext credential (if any) is consumed and zeroed before this
+	// method returns — callers must not retain a reference to it.
+	// Returns ErrFeatureDisabled when HARNESS_CUSTOM_OPENAI=0.
+	// (custom-openai-compatible-endpoint-01KQ8VN0 WP06)
+	ProbeCustomEndpoint(ctx context.Context, in ProbeCustomEndpointInput) (ProbeCustomEndpointResult, error)
+}
+
+// CustomTemplateSummary is the abbreviated template shape returned by
+// ListCustomTemplates. It omits internal-only fields (glob, notes).
+// (custom-openai-compatible-endpoint-01KQ8VN0 WP06)
+type CustomTemplateSummary struct {
+	ID         string `json:"id"`
+	Name       string `json:"name"`
+	BaseURL    string `json:"base_url"`
+	AuthScheme string `json:"auth_scheme"`
+}
+
+// RecognizeTemplateResult is the outcome of RecognizeTemplate.
+// Matched is false when no template glob matches rawURL.
+// (custom-openai-compatible-endpoint-01KQ8VN0 WP06)
+type RecognizeTemplateResult struct {
+	Matched  bool                  `json:"matched"`
+	Template CustomTemplateSummary `json:"template,omitempty"`
+}
+
+// ProbeCustomEndpointInput is the payload accepted by ProbeCustomEndpoint.
+// (custom-openai-compatible-endpoint-01KQ8VN0 WP06)
+type ProbeCustomEndpointInput struct {
+	// BaseURL is the endpoint root URL (e.g. "https://api.groq.com/openai/v1").
+	BaseURL string `json:"base_url"`
+	// Model is used for probe requests. Falls back to "gpt-3.5-turbo" when empty.
+	Model string `json:"model,omitempty"`
+	// AuthScheme is one of "bearer", "api-key-header", "custom", "none".
+	AuthScheme string `json:"auth_scheme"`
+	// AuthHeader is the header name for api-key-header/custom schemes.
+	AuthHeader string `json:"auth_header,omitempty"`
+	// PlaintextAPIKey is the raw credential. Consumed and zeroed server-side.
+	PlaintextAPIKey string `json:"plaintextApiKey,omitempty"`
+}
+
+// CustomCapabilityMatrix is the wire shape of the probed capability matrix.
+// (custom-openai-compatible-endpoint-01KQ8VN0 WP06)
+type CustomCapabilityMatrix struct {
+	Endpoint       string `json:"endpoint"`
+	ProbedAt       int64  `json:"probed_at"`
+	Streaming      string `json:"streaming"`       // "true" | "false" | "unknown"
+	ToolCalling    string `json:"tool_calling"`    // "true" | "false" | "unknown"
+	StreamingUsage string `json:"streaming_usage"` // "true" | "false" | "unknown"
+}
+
+// ProbeCustomEndpointResult is the outcome of ProbeCustomEndpoint.
+// (custom-openai-compatible-endpoint-01KQ8VN0 WP06)
+type ProbeCustomEndpointResult struct {
+	Matrix CustomCapabilityMatrix `json:"matrix"`
+	// ErrMessage is non-empty when the probe failed entirely (e.g. auth failure).
+	ErrMessage string `json:"err_message,omitempty"`
 }

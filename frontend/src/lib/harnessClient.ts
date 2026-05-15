@@ -140,6 +140,10 @@ import type {
   RetrievalReport,
   ChunkProvenance,
   ExportResult,
+  CustomTemplateSummary,
+  CustomCapabilityMatrix,
+  CustomProbeRequest,
+  CustomProbeResult,
 } from './types';
 
 /**
@@ -272,6 +276,9 @@ interface WailsBindingsLike {
     source: string,
   ): Promise<RotationResult>;
   LLM_ResumeAfterKeyRotation(resumeToken: string): Promise<void>;
+  LLM_ListCustomTemplates(): Promise<CustomTemplateSummary[]>;
+  LLM_RecognizeTemplate(rawURL: string): Promise<{ matched: boolean; template?: CustomTemplateSummary }>;
+  LLM_ProbeCustomEndpoint(in_: CustomProbeRequest): Promise<CustomProbeResult>;
 
   MCP_ListServers(): Promise<MCPServer[]>;
   MCP_StartStream(id: string): Promise<string>;
@@ -1203,6 +1210,32 @@ export interface LLMConnectorClient {
    * (provider-keychain-rotation-01KQ8TD9 WP04)
    */
   resumeAfterKeyRotation(resumeToken: string): Promise<void>;
+
+  /**
+   * listCustomTemplates returns the built-in template summaries from the
+   * custom-openai adapter's embedded registry. Returns an empty array when
+   * the feature is disabled (HARNESS_CUSTOM_OPENAI=0).
+   * (custom-openai-compatible-endpoint-01KQ8VN0 WP06)
+   */
+  listCustomTemplates(): Promise<CustomTemplateSummary[]>;
+
+  /**
+   * recognizeTemplate looks up the best-matching template for the supplied
+   * base URL via glob matching. Returns { matched: false } when no template
+   * matches.
+   * (custom-openai-compatible-endpoint-01KQ8VN0 WP06)
+   */
+  recognizeTemplate(
+    rawURL: string,
+  ): Promise<{ matched: boolean; template?: CustomTemplateSummary }>;
+
+  /**
+   * probeCustomEndpoint runs the three-step capability probe against a
+   * custom OpenAI-compatible endpoint. The plaintext API key is consumed
+   * and zeroed server-side.
+   * (custom-openai-compatible-endpoint-01KQ8VN0 WP06)
+   */
+  probeCustomEndpoint(in_: CustomProbeRequest): Promise<CustomProbeResult>;
 }
 
 export interface MCPClient {
@@ -2573,6 +2606,9 @@ export function createHarnessClient(): HarnessClient {
         b().LLM_TestAndRotateKey(profileID, plaintextApiKey, source),
       resumeAfterKeyRotation: (resumeToken) =>
         b().LLM_ResumeAfterKeyRotation(resumeToken),
+      listCustomTemplates: () => b().LLM_ListCustomTemplates(),
+      recognizeTemplate: (rawURL) => b().LLM_RecognizeTemplate(rawURL),
+      probeCustomEndpoint: (in_) => b().LLM_ProbeCustomEndpoint(in_),
     },
     mcp: {
       listServers: () => b().MCP_ListServers(),
@@ -3124,6 +3160,18 @@ export function createFakeHarnessClient(
         tested_at: new Date().toISOString(),
       }),
       resumeAfterKeyRotation: noop,
+      listCustomTemplates: async () => [],
+      recognizeTemplate: async () => ({ matched: false }),
+      probeCustomEndpoint: async () => ({
+        matrix: {
+          endpoint: '',
+          probed_at: 0,
+          streaming: 'unknown' as const,
+          tool_calling: 'unknown' as const,
+          streaming_usage: 'unknown' as const,
+        },
+        error: undefined,
+      }),
     },
     mcp: {
       listServers: async () => [],

@@ -62,6 +62,15 @@ func (s *stubLLM) TestAndRotateKey(_ context.Context, _, _, _ string) (llm.Rotat
 	return llm.RotationResult{}, errNotWired
 }
 func (s *stubLLM) ResumeAfterKeyRotation(_ context.Context, _ string) error { return errNotWired }
+func (s *stubLLM) ListCustomTemplates(_ context.Context) ([]llm.CustomTemplateSummary, error) {
+	return []llm.CustomTemplateSummary{}, nil
+}
+func (s *stubLLM) RecognizeTemplate(_ context.Context, _ string) (llm.RecognizeTemplateResult, error) {
+	return llm.RecognizeTemplateResult{}, nil
+}
+func (s *stubLLM) ProbeCustomEndpoint(_ context.Context, _ llm.ProbeCustomEndpointInput) (llm.ProbeCustomEndpointResult, error) {
+	return llm.ProbeCustomEndpointResult{}, errNotWired
+}
 
 // ── a2a ────────────────────────────────────────────────────────────────
 

@@ -373,6 +373,29 @@ func (b *Bindings) LLM_ResumeAfterKeyRotation(resumeToken string) error {
 	return b.api.LLMConnector().ResumeAfterKeyRotation(b.ctx(), resumeToken)
 }
 
+// LLM_ListCustomTemplates returns the built-in custom endpoint template
+// summaries from the adapter's embedded registry. Returns an empty slice
+// when the adapter is not registered (HARNESS_CUSTOM_OPENAI=0).
+// (custom-openai-compatible-endpoint-01KQ8VN0 WP06)
+func (b *Bindings) LLM_ListCustomTemplates() ([]llm.CustomTemplateSummary, error) {
+	return b.api.LLMConnector().ListCustomTemplates(b.ctx())
+}
+
+// LLM_RecognizeTemplate looks up the best-matching template for rawURL
+// via glob matching. Returns {matched:false} when no template matches.
+// (custom-openai-compatible-endpoint-01KQ8VN0 WP06)
+func (b *Bindings) LLM_RecognizeTemplate(rawURL string) (llm.RecognizeTemplateResult, error) {
+	return b.api.LLMConnector().RecognizeTemplate(b.ctx(), rawURL)
+}
+
+// LLM_ProbeCustomEndpoint runs the three-step capability probe against a
+// custom OpenAI-compatible endpoint. The plaintext API key is consumed and
+// zeroed server-side before returning.
+// (custom-openai-compatible-endpoint-01KQ8VN0 WP06)
+func (b *Bindings) LLM_ProbeCustomEndpoint(in llm.ProbeCustomEndpointInput) (llm.ProbeCustomEndpointResult, error) {
+	return b.api.LLMConnector().ProbeCustomEndpoint(b.ctx(), in)
+}
+
 // ── mcp ────────────────────────────────────────────────────────────────
 
 func (b *Bindings) MCP_ListServers() ([]mcp.Server, error) {
