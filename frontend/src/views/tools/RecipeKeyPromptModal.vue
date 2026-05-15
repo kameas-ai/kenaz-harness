@@ -578,12 +578,14 @@ function onKeydown(event: KeyboardEvent) {
               type="text"
               spellcheck="false"
               autocomplete="off"
+              :aria-label="`${opt.display || opt.name} value`"
               class="w-full rounded-sm border border-border-muted bg-surface-1 px-2.5 py-1.5 font-mono text-sm text-ink focus:border-accent focus:outline-none"
               :data-testid="`recipe-config-string-${opt.name}`"
             />
             <select
               v-else-if="opt.kind === 'enum'"
               v-model="configValues[opt.name] as string"
+              :aria-label="`${opt.display || opt.name} option`"
               class="w-full rounded-sm border border-border-muted bg-surface-1 px-2.5 py-1.5 font-mono text-sm text-ink focus:border-accent focus:outline-none"
               :data-testid="`recipe-config-enum-${opt.name}`"
             >

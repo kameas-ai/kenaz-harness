@@ -13,9 +13,12 @@ const props = withDefaults(
     max: number;
     step: number;
     defaultValue?: unknown;
+    /** Accessible label for the input (threaded from parent question text). WP07 D-10. */
+    ariaLabel?: string;
   }>(),
   {
     defaultValue: undefined,
+    ariaLabel: 'Slider',
   },
 );
 
@@ -58,6 +61,7 @@ function onInput(e: Event) {
       :min="min"
       :max="max"
       :step="step"
+      :aria-label="ariaLabel"
       class="w-full accent-accent"
       data-testid="slider-question-input"
       @input="onInput"

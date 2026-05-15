@@ -10,9 +10,12 @@ import { ref, onMounted } from 'vue';
 const props = withDefaults(
   defineProps<{
     defaultValue?: unknown;
+    /** Accessible label for the input (threaded from parent question text). WP07 D-10. */
+    ariaLabel?: string;
   }>(),
   {
     defaultValue: undefined,
+    ariaLabel: 'Date',
   },
 );
 
@@ -40,6 +43,7 @@ function onInput(e: Event) {
     <input
       type="date"
       :value="value"
+      :aria-label="ariaLabel"
       class="w-full rounded-md border border-border-muted bg-surface-2 px-3 py-2 font-ui text-[13px] text-ink focus:border-accent focus:outline-none"
       data-testid="date-question-input"
       @input="onInput"

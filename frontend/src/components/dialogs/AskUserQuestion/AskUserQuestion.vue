@@ -247,6 +247,7 @@ defineExpose({ queue, submit, cancel, answer });
             v-else-if="head.kind === 'text'"
             :placeholder="head.placeholder"
             :default-value="head.default_value"
+            :aria-label="head.question"
             @update:model-value="(v) => (answer = v)"
             @submit="submit"
           />
@@ -256,6 +257,7 @@ defineExpose({ queue, submit, cancel, answer });
             :max="head.max"
             :step="head.step"
             :default-value="head.default_value"
+            :aria-label="head.question"
             @update:model-value="(v) => (answer = v)"
           />
           <SliderQuestion
@@ -264,11 +266,13 @@ defineExpose({ queue, submit, cancel, answer });
             :max="head.max ?? 100"
             :step="head.step ?? 1"
             :default-value="head.default_value"
+            :aria-label="head.question"
             @update:model-value="(v) => (answer = v)"
           />
           <DateQuestion
             v-else-if="head.kind === 'date'"
             :default-value="head.default_value"
+            :aria-label="head.question"
             @update:model-value="(v) => (answer = v)"
           />
           <FileQuestion

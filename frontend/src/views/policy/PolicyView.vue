@@ -390,6 +390,7 @@ watch(editorSource, (val) => {
             <input
               v-model="newPolicyName"
               type="text"
+              aria-label="New policy file name"
               class="policy-view__name-input"
               placeholder="my-policy.cedar"
               data-testid="policy-new-name"

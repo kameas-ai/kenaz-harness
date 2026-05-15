@@ -176,6 +176,7 @@ defineExpose({ startEdit, cancelEdit, commitSave });
           ref="textareaRef"
           v-model="draft"
           spellcheck="false"
+          aria-label="Context file content"
           class="flex-1 w-full px-6 py-4 font-mono text-[12px] leading-relaxed text-ink bg-surface-0 border-0 outline-none resize-none whitespace-pre-wrap"
           data-testid="context-preview-editor"
           @keydown="onKeydown"

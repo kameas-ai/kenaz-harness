@@ -664,6 +664,7 @@ watch(
             class="accent-accent w-4 h-4"
             :checked="webSearchEnabled"
             :disabled="webSearchBusy"
+            aria-label="Enable web search tool"
             data-testid="websearch-toggle"
             @change="toggleWebSearch"
           />
@@ -712,6 +713,7 @@ watch(
             class="accent-accent w-4 h-4"
             :checked="bashEnabled"
             :disabled="bashBusy"
+            aria-label="Enable bash tool"
             data-testid="bash-toggle"
             @change="toggleBash"
           />
@@ -759,6 +761,7 @@ watch(
             class="accent-accent w-4 h-4"
             :checked="saveArtifactEnabled"
             :disabled="saveArtifactBusy"
+            aria-label="Enable save artifact tool"
             data-testid="saveartifact-toggle"
             @change="toggleSaveArtifact"
           />
@@ -812,6 +815,7 @@ watch(
             class="accent-accent w-4 h-4"
             :checked="fsReadEnabled"
             :disabled="fsReadBusy"
+            aria-label="Enable filesystem read tool"
             data-testid="fs-read-toggle"
             @change="toggleFSRead"
           />
@@ -868,6 +872,7 @@ watch(
             class="accent-accent w-4 h-4"
             :checked="fsWriteEnabled"
             :disabled="fsWriteBusy"
+            aria-label="Enable filesystem write tool"
             data-testid="fs-write-toggle"
             @change="toggleFSWrite"
           />
@@ -914,6 +919,7 @@ watch(
             class="accent-accent w-4 h-4"
             :checked="todoEnabled"
             :disabled="todoBusy"
+            aria-label="Enable todo tool"
             data-testid="todo-toggle"
             @change="toggleTodo"
           />
@@ -970,6 +976,7 @@ watch(
             class="accent-accent w-4 h-4"
             :checked="memoryEnabled"
             :disabled="memoryBusy"
+            aria-label="Enable memory tool"
             data-testid="memory-toggle"
             @change="toggleMemory"
           />
@@ -1267,6 +1274,7 @@ watch(
               class="accent-accent w-4 h-4"
               :checked="listing.enabled"
               :disabled="busyById[listing.recipe.id]"
+              :aria-label="`Enable ${listing.recipe.displayName || listing.recipe.id}`"
               :data-testid="`recipe-toggle-${listing.recipe.id}`"
               @change="onToggle(listing, $event)"
             />

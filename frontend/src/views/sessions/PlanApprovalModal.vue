@@ -161,6 +161,7 @@ function cancelEdit() {
         <textarea
           v-if="editMode"
           v-model="editedText"
+          aria-label="Edit plan content"
           class="h-full min-h-[16rem] w-full resize-none rounded border border-border-muted bg-surface-2 p-3 font-mono text-sm text-ink focus:outline-none focus:ring-1 focus:ring-accent"
           data-testid="plan-approval-modal-editor"
           :disabled="submitting"
