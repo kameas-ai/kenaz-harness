@@ -124,7 +124,7 @@ const (
 
 	// EscalateManifestFingerprint is the sha256 of the behavior-affecting
 	// subset of `kind: escalate` at the time of last codegen.
-	EscalateManifestFingerprint = "41b82f7cfd5de3b96acd65df8304399b667c9a659d07e018db2959ebc36f5b2f"
+	EscalateManifestFingerprint = "6c641de5adcafd4bf2a4cfee067a96b2e1a2293de7157aaf4972cffad6add9c8"
 
 	// HistoryReadManifestVersion is the behavior-contract semver for `kind: history_read`.
 	// Bump this in the manifest's `manifest_version:` field when any
@@ -178,7 +178,7 @@ const (
 
 	// ModelManifestFingerprint is the sha256 of the behavior-affecting
 	// subset of `kind: model` at the time of last codegen.
-	ModelManifestFingerprint = "2c3cef5098db27804720baac79b5e49713e39c9b93c13415b48fa0e92eb7e002"
+	ModelManifestFingerprint = "bf29804d11bfe833d5dde332ccd8c72ad7adcb31d43c5e00a394f9a0c4569fad"
 
 	// ParallelManifestVersion is the behavior-contract semver for `kind: parallel`.
 	// Bump this in the manifest's `manifest_version:` field when any

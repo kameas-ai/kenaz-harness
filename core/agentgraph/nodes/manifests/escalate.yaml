@@ -27,5 +27,8 @@ attrs:
   one_escalation_only:
     type: bool
     description: "When true, escalation is one-shot per run."
+  fallback_chain_id:
+    type: string
+    description: "Optional fallback chain ID to use when the escalated model call fails (model-fallback-routing-01NDFSEX04). Overrides session and app-level defaults."
 budget: llm
 budget_consumes: [tokens, llm_calls, cost_usd]

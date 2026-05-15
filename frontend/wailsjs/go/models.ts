@@ -2723,6 +2723,89 @@ export namespace llm {
 	    }
 	}
 
+	// model-fallback-routing-01NDFSEX04
+
+	export class FallbackChainEntryView {
+	    providerID: string;
+	    model?: string;
+	    triggers: string[];
+	    maxAttempts: number;
+	    paramOverrides: {[key: string]: any};
+
+	    static createFrom(source: any = {}) {
+	        return new FallbackChainEntryView(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.providerID = source["providerID"];
+	        this.model = source["model"];
+	        this.triggers = source["triggers"];
+	        this.maxAttempts = source["maxAttempts"];
+	        this.paramOverrides = source["paramOverrides"];
+	    }
+	}
+
+	export class FallbackChainView {
+	    id: string;
+	    name: string;
+	    description?: string;
+	    entries: FallbackChainEntryView[];
+	    bundled?: boolean;
+
+	    static createFrom(source: any = {}) {
+	        return new FallbackChainView(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.name = source["name"];
+	        this.description = source["description"];
+	        this.entries = this.convertValues(source["entries"], FallbackChainEntryView);
+	        this.bundled = source["bundled"];
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+
+	export class FallbackChainSummary {
+	    id: string;
+	    name: string;
+	    description?: string;
+	    entryCount: number;
+	    bundled: boolean;
+
+	    static createFrom(source: any = {}) {
+	        return new FallbackChainSummary(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.name = source["name"];
+	        this.description = source["description"];
+	        this.entryCount = source["entryCount"];
+	        this.bundled = source["bundled"];
+	    }
+	}
+
 
 }
 

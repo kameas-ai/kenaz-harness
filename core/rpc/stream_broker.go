@@ -67,6 +67,16 @@ const (
 	// process-visible export; the view-local one is kept for package
 	// isolation in tests.
 	TopicElicitPending = "elicit:pending"
+
+	// TopicLLMFallbackAttempted is the broker topic emitted each time the
+	// connector retry loop re-issues a turn against a fallback chain entry
+	// (model-fallback-routing-01NDFSEX04 WP02). The frontend's
+	// FallbackActivePill subscribes here to show the in-flight fallback
+	// indicator until the stream-closed event arrives.
+	//
+	// Payload shape: fallback.FallbackAttemptedEvent (from core/llm/fallback).
+	// The payload MUST NOT carry prompt or response bytes.
+	TopicLLMFallbackAttempted = "llm:fallback-attempted"
 )
 
 // SessionUsagePayload is the typed payload emitted on

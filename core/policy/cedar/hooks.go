@@ -698,6 +698,28 @@ func CheckExportSession(ctx context.Context, g Gate, sessionID, format string) e
 	return enforce(d)
 }
 
+// CheckLLMFallback is the gate-hook helper for per-turn LLM fallback chain
+// hops (model-fallback-routing-01NDFSEX04 WP03). The connector's retry
+// loop calls this before issuing each hop. Returns nil on Allow /
+// NotApplicable; *PolicyDeniedError on Deny (fail-closed: the connector
+// then surfaces the primary error unchanged).
+//
+// chainID is the chain's slug identifier (e.g.
+// "anthropic-with-openrouter-fallback"). Default-allow when g is nil.
+func CheckLLMFallback(ctx context.Context, g Gate, chainID string) error {
+	if g == nil {
+		return nil
+	}
+	d := g.Evaluate(
+		ctx,
+		UserUID(),
+		ActionLLMFallback,
+		FallbackChainUID(chainID),
+		nil,
+	)
+	return enforce(d)
+}
+
 // enforce maps a Decision to a Go error. Allow + NotApplicable both
 // return nil (default-allow stance); Deny returns *PolicyDeniedError.
 func enforce(d Decision) error {

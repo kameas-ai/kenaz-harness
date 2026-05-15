@@ -494,6 +494,22 @@ export function LLM_UpdateProviderCredential(arg1, arg2) {
   return window['go']['rpc']['Bindings']['LLM_UpdateProviderCredential'](arg1, arg2);
 }
 
+export function LLM_ListFallbackChains() {
+  return window['go']['rpc']['Bindings']['LLM_ListFallbackChains']();
+}
+
+export function LLM_LoadChain(arg1) {
+  return window['go']['rpc']['Bindings']['LLM_LoadChain'](arg1);
+}
+
+export function LLM_SaveChain(arg1) {
+  return window['go']['rpc']['Bindings']['LLM_SaveChain'](arg1);
+}
+
+export function LLM_DeleteChain(arg1) {
+  return window['go']['rpc']['Bindings']['LLM_DeleteChain'](arg1);
+}
+
 export function LoadRoute() {
   return window['go']['rpc']['Bindings']['LoadRoute']();
 }

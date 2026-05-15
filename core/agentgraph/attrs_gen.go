@@ -550,6 +550,9 @@ type EscalateAttrs struct {
 	// ConfidenceFloor: Floor below which escalation fires.
 	ConfidenceFloor float64 `json:"confidence_floor,omitempty" yaml:"confidence_floor,omitempty"`
 
+	// FallbackChainId: Optional fallback chain ID to use when the escalated model call fails (model-fallback-routing-01NDFSEX04). Overrides session and app-level defaults.
+	FallbackChainId string `json:"fallback_chain_id,omitempty" yaml:"fallback_chain_id,omitempty"`
+
 	// MaxTokens: Upper bound on generated tokens; 0 = provider default.
 	MaxTokens int `json:"max_tokens,omitempty" yaml:"max_tokens,omitempty"`
 
@@ -858,6 +861,9 @@ func (a MergeAttrs) Validate() error {
 //
 // LLM-powered reasoning/generation node (FR-030).
 type ModelAttrs struct {
+
+	// FallbackChainId: Optional fallback chain ID to use when this node's primary model call fails (model-fallback-routing-01NDFSEX04). Overrides session and app-level defaults.
+	FallbackChainId string `json:"fallback_chain_id,omitempty" yaml:"fallback_chain_id,omitempty"`
 
 	// JsonSchema: Optional JSON schema constraint for structured output.
 	JsonSchema map[string]any `json:"json_schema,omitempty" yaml:"json_schema,omitempty"`

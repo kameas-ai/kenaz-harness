@@ -209,6 +209,23 @@ const (
 	// (filename without directory) is included. Message content, credential
 	// bytes, and user-authored text are NEVER included.
 	KindSessionExport Kind = "session.export"
+
+	// ── Model fallback routing audit kinds (model-fallback-routing-01NDFSEX04) ──
+
+	// KindFallbackAttempted fires each time the connector retry loop
+	// re-issues a turn against a fallback chain entry. Emitted before the
+	// hop is dispatched so the record lands even when the hop also fails.
+	//
+	// Privacy invariant: the payload MUST NOT carry prompt bytes, response
+	// bytes, or credential material — only ids, reason, and attempt count.
+	KindFallbackAttempted Kind = "adapter.fallback_attempted"
+
+	// KindFallbackBlockedByPolicy fires when Cedar denies the
+	// llm_fallback action for the active chain. The connector then
+	// returns the primary error unchanged (fail-closed).
+	//
+	// Privacy invariant: same as KindFallbackAttempted.
+	KindFallbackBlockedByPolicy Kind = "adapter.fallback_blocked_by_policy"
 )
 
 // Event is the wire shape passed to the event log. The concrete event-log
@@ -733,6 +750,40 @@ type SessionExportPayload struct {
 	OutputBasename string `json:"output_basename"`
 	// ByteCount is the number of bytes written to the main export file.
 	ByteCount int64 `json:"byte_count"`
+}
+
+// FallbackAttemptedPayload carries the signalling for KindFallbackAttempted
+// (model-fallback-routing-01NDFSEX04 WP02/WP03).
+//
+// Privacy invariant: MUST NOT carry prompt bytes, response content, or
+// credential material. Only ids, routing metadata, and attempt count.
+type FallbackAttemptedPayload struct {
+	// SessionID is the session the turn belongs to.
+	SessionID string `json:"session_id,omitempty"`
+	// From is the (profileID, model) of the failed primary call.
+	FromProfile string `json:"from_profile"`
+	FromModel   string `json:"from_model"`
+	// To is the (profileID, model) the hop resolves to.
+	ToProfile string `json:"to_profile"`
+	ToModel   string `json:"to_model"`
+	// Reason is the TriggerCondition string that matched
+	// (e.g. "error_5xx", "error_429").
+	Reason string `json:"reason"`
+	// Attempt is the 1-based hop index within the chain walk.
+	Attempt int `json:"attempt"`
+}
+
+// FallbackBlockedByPolicyPayload carries the signalling for
+// KindFallbackBlockedByPolicy (model-fallback-routing-01NDFSEX04 WP03).
+//
+// Privacy invariant: same as FallbackAttemptedPayload.
+type FallbackBlockedByPolicyPayload struct {
+	// SessionID is the session the turn belongs to.
+	SessionID string `json:"session_id,omitempty"`
+	// ChainID is the chain whose access Cedar denied.
+	ChainID string `json:"chain_id"`
+	// Reason is the Cedar denial reason string.
+	Reason string `json:"reason"`
 }
 
 // Emit is a small convenience wrapper for callers that have a payload

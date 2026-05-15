@@ -290,6 +290,14 @@ export function LLM_UpdateProvider(arg1:llm.AddProviderInput):Promise<void>;
 
 export function LLM_UpdateProviderCredential(arg1:string,arg2:string):Promise<void>;
 
+export function LLM_ListFallbackChains():Promise<Array<llm.FallbackChainSummary>>;
+
+export function LLM_LoadChain(arg1:string):Promise<llm.FallbackChainView>;
+
+export function LLM_SaveChain(arg1:llm.FallbackChainView):Promise<void>;
+
+export function LLM_DeleteChain(arg1:string):Promise<void>;
+
 export function LoadRoute():Promise<string>;
 
 export function LoadTheme():Promise<string>;
