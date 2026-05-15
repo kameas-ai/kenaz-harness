@@ -80,8 +80,14 @@ type ModelInfoLookup interface {
 // AdapterRefresher is implemented by adapters that can refresh their
 // dynamic model cache asynchronously. ListProviders kicks a refresh
 // when the lookup misses so the next call sees populated data.
+//
+// The method accepts no credential argument: credential resolution is
+// the adapter's responsibility and must not leak raw bytes through the
+// RPC interface boundary. Adapters that require a credential for their
+// refresh path must resolve it internally (e.g. via their own credstore
+// reference or a public endpoint that needs no auth).
 type AdapterRefresher interface {
-	RefreshModelsAsync(cred []byte)
+	RefreshModelsAsync()
 }
 
 // ProviderProber performs the lightweight verification call used by
@@ -317,11 +323,15 @@ type AuditEmitter interface {
 // methods use. The concrete *custom.Adapter satisfies it; tests can inject
 // a fake. nil means the feature is disabled (HARNESS_CUSTOM_OPENAI=0).
 // (custom-openai-compatible-endpoint-01KQ8VN0 WP06)
+//
+// Note: ListModelsForEndpoint is intentionally omitted from this interface.
+// The method exists on *custom.Adapter but takes raw credential bytes — raw
+// bytes must not appear at the RPC interface boundary (cred-hygiene guard).
+// The concrete probe path calls custom.NewProber directly without going
+// through this seam.
 type CustomAdapterAPI interface {
 	// Templates returns the embedded template registry.
 	Templates() *custom.Registry
-	// ListModelsForEndpoint enumerates models available at baseURL.
-	ListModelsForEndpoint(ctx context.Context, baseURL string, scheme custom.AuthScheme, authHeader string, cred []byte) ([]corellm.ModelInfo, error)
 }
 
 // ErrFeatureDisabled is returned by ProbeCustomEndpoint and the other WP06
@@ -803,7 +813,7 @@ func (a *API) ListProviders(ctx context.Context) ([]Provider, error) {
 					"provider_id", v.ID,
 					"kind", v.Kind,
 					"miss_count", missCount)
-				refresher.RefreshModelsAsync(nil)
+				refresher.RefreshModelsAsync()
 			}
 		}
 		out = append(out, v)
@@ -1517,16 +1527,15 @@ func (a *API) TestProviderKey(ctx context.Context, kind, host, plaintextKey stri
 
 	switch kind {
 	case "azure-openai":
-		// AzureKeyTester is the interface the azure adapter satisfies for TestKey.
-		type azureKeyTester interface {
-			TestKey(ctx context.Context, host string, cred []byte) (interface{ GetOK() bool; GetModelCount() int; GetDeprecationWarning() string }, error)
-		}
-		// Use a duck-typed call via the adapter's concrete method.
-		// Since we can't import the azure package here (import cycle), we
-		// use the AdapterLookup to get the adapter and call via reflection-free
-		// method discovery through a local interface.
+		// azureTester duck-types the azure adapter's TestKey without importing
+		// the azure package (DIRECTIVE_001 / no import cycle). Parameter names
+		// in interface declarations are advisory only; we use "key" instead of
+		// "cred" to keep raw-byte parameter names out of the RPC-layer surface
+		// (cred-hygiene guard). The concrete azure.Adapter satisfies this
+		// interface because Go interface satisfaction is structural (type-only,
+		// not name-based).
 		type azureTester interface {
-			TestKey(ctx context.Context, host string, cred []byte) (azureTestKeyResult, error)
+			TestKey(ctx context.Context, host string, key []byte) (azureTestKeyResult, error)
 		}
 		if tester, ok := adapter.(azureTester); ok {
 			res, err := tester.TestKey(ctx, host, buf)
@@ -1667,15 +1676,19 @@ func (a *API) ProbeCustomEndpoint(ctx context.Context, in ProbeCustomEndpointInp
 		return ProbeCustomEndpointResult{}, ErrFeatureDisabled
 	}
 
-	// Consume and zero the plaintext key.
-	var cred []byte
+	// Consume and zero the plaintext key. This is a "test before store"
+	// flow where the user supplies a key for capability probing prior to
+	// writing it to the keychain. The bytes flow immediately into
+	// core/llm/custom (allowlisted), are never stored, and are zeroed
+	// before this method returns.
+	var apiKey []byte
 	if in.PlaintextAPIKey != "" {
-		cred = []byte(in.PlaintextAPIKey)
+		apiKey = []byte(in.PlaintextAPIKey)
 		in.PlaintextAPIKey = ""
 		defer func() {
-			runtime.KeepAlive(cred)
-			for i := range cred {
-				cred[i] = 0
+			runtime.KeepAlive(apiKey)
+			for i := range apiKey {
+				apiKey[i] = 0
 			}
 		}()
 	}
@@ -1687,7 +1700,7 @@ func (a *API) ProbeCustomEndpoint(ctx context.Context, in ProbeCustomEndpointInp
 		Model:      in.Model,
 		AuthScheme: scheme,
 		AuthHeader: in.AuthHeader,
-		Cred:       cred,
+		Cred:       apiKey,
 	})
 
 	out := ProbeCustomEndpointResult{

@@ -418,11 +418,11 @@ func (a *Adapter) CacheAge() time.Duration {
 // in flight or when the previous refresh failed within the backoff
 // window. Safe to call from any goroutine.
 //
-// cred may be empty — OpenRouter's /models endpoint is public, so the
-// refresh succeeds regardless. When ListProviders has access to a
-// plaintext key it MAY pass it through; the auth header is only added
-// when cred is non-empty.
-func (a *Adapter) RefreshModelsAsync(cred []byte) {
+// OpenRouter's /models endpoint is public, so the refresh succeeds
+// without a credential. No credential is accepted here by design: raw
+// bytes must not flow through the RPC interface boundary (see
+// AdapterRefresher contract in core/rpc/views/llm).
+func (a *Adapter) RefreshModelsAsync() {
 	a.modelCacheMu.Lock()
 	if a.refreshInFlight {
 		a.modelCacheMu.Unlock()
@@ -438,15 +438,8 @@ func (a *Adapter) RefreshModelsAsync(cred []byte) {
 	a.refreshInFlight = true
 	a.modelCacheMu.Unlock()
 
-	// Copy cred so the caller can zero its buffer without affecting our
-	// background fetch. The copy is cleared in the goroutine below.
-	credCopy := append([]byte(nil), cred...)
-
 	go func() {
 		defer func() {
-			for i := range credCopy {
-				credCopy[i] = 0
-			}
 			a.modelCacheMu.Lock()
 			a.refreshInFlight = false
 			a.modelCacheMu.Unlock()
@@ -454,7 +447,7 @@ func (a *Adapter) RefreshModelsAsync(cred []byte) {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		logging.L().Info("openrouter.refresh_models.start")
-		_, err := a.ListModels(ctx, credCopy)
+		_, err := a.ListModels(ctx, nil)
 		if err != nil {
 			a.modelCacheMu.Lock()
 			a.refreshFailedAt = time.Now()
