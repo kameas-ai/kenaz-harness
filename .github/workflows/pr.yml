@@ -92,6 +92,19 @@ jobs:
       - name: no-user-content-in-slog guard
         run: bash scripts/ci/check-no-user-content-in-slog.sh
 
+      - name: no-fleet-imports guard
+        # Enforces OSS-first contract: only core/rpc/views/settings/ is
+        # permitted to import core/fleet/. Passes when core/fleet/ is
+        # absent (fork case). — fleet-auth-foundation-01NDFSEX08 WP07
+        run: bash scripts/ci/check-no-fleet-imports.sh
+
+      - name: oss-first guard
+        # Verifies non-fleet packages + frontend tests pass with
+        # HARNESS_FLEET_DISABLED=1. — fleet-auth-foundation-01NDFSEX08 WP07
+        # Frontend step is skipped in worktrees where node_modules are absent
+        # (it runs fully in test-frontend which does npm ci first).
+        run: bash scripts/ci/check-oss-first.sh
+
       # csp guard runs in test-frontend after `npm run build` produces
       # the real frontend/dist/index.html — there's no point checking
       # the CSP of a stub.
