@@ -2,6 +2,8 @@
 
 Operational doctrine for AI agents working in this repository. Read this before doing release work, planning missions, or running parallel agents. Code conventions live in `CONTRIBUTING.md`; this file is about *workflow*.
 
+> **Workbench pivot (2026-05-16):** `kenaz-harness` gains an in-VM service mode (new entrypoint at `cmd/harness-vm/`, PIVOT_PLAN Phase 8) — same `core/` graph kernel, exposed over vsock to the host `kenaz` orchestrator. The host harness app continues to exist; the in-VM mode is additive. Canonical plan: [workspace `PIVOT_PLAN.md`](../PIVOT_PLAN.md). Architectural rationale: [ADR-workbench-host-rendered-pivot](../.specify/decisions/ADR-workbench-host-rendered-pivot.md).
+
 ---
 
 ## Release flow
