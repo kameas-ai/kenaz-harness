@@ -1170,6 +1170,14 @@ export function Settings_FleetProfile() {
   return window['go']['rpc']['Bindings']['Settings_FleetProfile']();
 }
 
+export function Settings_FleetCapabilities() {
+  return window['go']['rpc']['Bindings']['Settings_FleetCapabilities']();
+}
+
+export function Settings_FleetRefreshCapabilities() {
+  return window['go']['rpc']['Bindings']['Settings_FleetRefreshCapabilities']();
+}
+
 export function ShellStatus() {
   return window['go']['rpc']['Bindings']['ShellStatus']();
 }

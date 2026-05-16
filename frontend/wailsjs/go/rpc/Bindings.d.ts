@@ -628,6 +628,10 @@ export function Settings_FleetRefreshIdentity():Promise<settings.FleetIdentity>;
 
 export function Settings_FleetProfile():Promise<settings.FleetProfileInfo>;
 
+export function Settings_FleetCapabilities():Promise<settings.CapabilitiesView>;
+
+export function Settings_FleetRefreshCapabilities():Promise<settings.CapabilitiesView>;
+
 export function ShellStatus():Promise<rpc.ShellStatus>;
 
 export function Shell_OpenInOSBrowser(arg1:string):Promise<void>;

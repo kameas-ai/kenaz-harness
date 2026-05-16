@@ -5,21 +5,23 @@ import (
 	"os"
 	"runtime"
 	"sync"
+	"time"
 
 	"github.com/sigil-tech/kaneaz-harness/core/fleet"
 )
 
-// fleetState holds the fleet client and dataDir for the Settings API.
+// fleetState holds the fleet client, dataDir, and capability poller.
 // It is attached to API after construction via SetFleetClient.
 type fleetState struct {
 	mu      sync.RWMutex
 	client  *fleet.Client
 	dataDir string
+	poller  *fleet.CapabilityPoller
 }
 
-// SetFleetClient wires a fleet.Client into the API. Called from rpc.New()
-// during chassis boot. When not called, fleet methods return
-// fleet.ErrFleetDisabled.
+// SetFleetClient wires a fleet.Client into the API and starts the capability
+// poller. Called from rpc.New() during chassis boot. When not called, fleet
+// methods return fleet.ErrFleetDisabled.
 func (a *API) SetFleetClient(c *fleet.Client, dataDir string) {
 	if a.fleet == nil {
 		a.fleet = &fleetState{}
@@ -28,6 +30,13 @@ func (a *API) SetFleetClient(c *fleet.Client, dataDir string) {
 	defer a.fleet.mu.Unlock()
 	a.fleet.client = c
 	a.fleet.dataDir = dataDir
+	// Start the capability poller lazily. When c is a nop client the poller
+	// will degrade gracefully on every Refresh call.
+	if a.fleet.poller == nil {
+		p := fleet.NewCapabilityPoller(c, dataDir)
+		a.fleet.poller = p
+		p.Start(context.Background())
+	}
 }
 
 func (a *API) fleetClient() *fleet.Client {
@@ -46,6 +55,15 @@ func (a *API) fleetDataDir() string {
 	a.fleet.mu.RLock()
 	defer a.fleet.mu.RUnlock()
 	return a.fleet.dataDir
+}
+
+func (a *API) fleetPoller() *fleet.CapabilityPoller {
+	if a.fleet == nil {
+		return nil
+	}
+	a.fleet.mu.RLock()
+	defer a.fleet.mu.RUnlock()
+	return a.fleet.poller
 }
 
 // FleetSignIn kicks off the PKCE loopback OAuth flow. On success it
@@ -146,4 +164,46 @@ func fleetIdentityToView(id fleet.Identity) FleetIdentity {
 		copy(fi.Roles, id.Roles)
 	}
 	return fi
+}
+
+// FleetCapabilities returns the in-memory capability snapshot from the poller.
+// When the poller is not running (fleet disabled / not wired) it returns an
+// empty CapabilitiesView with source "default-deny".
+func (a *API) FleetCapabilities(_ context.Context) (CapabilitiesView, error) {
+	p := a.fleetPoller()
+	if p == nil {
+		return capabilitiesToView(fleet.DefaultDenyCapabilities()), nil
+	}
+	return capabilitiesToView(p.Current()), nil
+}
+
+// FleetRefreshCapabilities forces an immediate capability fetch from fleet.
+// On success the in-memory snapshot and disk cache are updated. On error
+// the last-known snapshot is returned alongside the error.
+func (a *API) FleetRefreshCapabilities(ctx context.Context) (CapabilitiesView, error) {
+	p := a.fleetPoller()
+	if p == nil {
+		return capabilitiesToView(fleet.DefaultDenyCapabilities()), fleet.ErrFleetDisabled
+	}
+	caps, err := p.Refresh(ctx)
+	return capabilitiesToView(caps), err
+}
+
+// capabilitiesToView converts a fleet.Capabilities snapshot to the wire-safe
+// CapabilitiesView, flattening the Capability typed keys to plain strings.
+func capabilitiesToView(c fleet.Capabilities) CapabilitiesView {
+	enabled := make(map[string]bool, len(c.Enabled))
+	for k, v := range c.Enabled {
+		enabled[string(k)] = v
+	}
+	fetchedAt := ""
+	if !c.FetchedAt.IsZero() {
+		fetchedAt = c.FetchedAt.UTC().Format(time.RFC3339)
+	}
+	return CapabilitiesView{
+		Tier:      c.Tier,
+		Enabled:   enabled,
+		FetchedAt: fetchedAt,
+		Source:    c.Source,
+	}
 }

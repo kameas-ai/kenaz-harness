@@ -1343,6 +1343,20 @@ func (b *Bindings) Settings_FleetProfile() (settings.FleetProfileInfo, error) {
 	return b.api.Settings().FleetProfile(b.ctx())
 }
 
+// ── fleet capabilities (fleet-capability-surface-01NDFSEX09 WP11) ───────────
+
+// Settings_FleetCapabilities returns the in-memory capability snapshot.
+// Returns an empty CapabilitiesView when signed out or fleet is disabled.
+func (b *Bindings) Settings_FleetCapabilities() (settings.CapabilitiesView, error) {
+	return b.api.Settings().FleetCapabilities(b.ctx())
+}
+
+// Settings_FleetRefreshCapabilities forces an immediate capability fetch from
+// the fleet server. Returns the updated snapshot on success.
+func (b *Bindings) Settings_FleetRefreshCapabilities() (settings.CapabilitiesView, error) {
+	return b.api.Settings().FleetRefreshCapabilities(b.ctx())
+}
+
 // ── memory ─────────────────────────────────────────────────────────────
 
 func (b *Bindings) Memory_ListChunks(filter memoryview.ListFilter) ([]memoryview.Chunk, error) {

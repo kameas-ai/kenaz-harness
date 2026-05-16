@@ -5394,6 +5394,27 @@ export namespace settings {
 	    }
 	}
 
+	// CapabilitiesView is the wire projection of fleet.Capabilities.
+	// (fleet-capability-surface-01NDFSEX09 WP11)
+	export class CapabilitiesView {
+	    tier: string;
+	    enabled: Record<string, boolean>;
+	    fetchedAt: string;
+	    source: string;
+
+	    static createFrom(source: any = {}) {
+	        return new CapabilitiesView(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.tier = source["tier"] ?? '';
+	        this.enabled = source["enabled"] ?? {};
+	        this.fetchedAt = source["fetchedAt"] ?? '';
+	        this.source = source["source"] ?? '';
+	    }
+	}
+
 }
 
 export namespace slashcmd {

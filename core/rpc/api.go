@@ -290,6 +290,15 @@ type AppInfo struct {
 	// in the provider-add form when the feature is disabled.
 	// (custom-openai-compatible-endpoint-01KQ8VN0 WP08)
 	CustomOpenAIEnabled bool `json:"customOpenAIEnabled"`
+	// Capabilities is the current fleet capability gate state, keyed by the
+	// snake_case wire keys (e.g. "hosted_inference"). Empty map when the user
+	// is signed out or fleet is disabled. Populated from the capability poller
+	// so the frontend does not need a separate RPC call on first load.
+	// (fleet-capability-surface-01NDFSEX09 WP11)
+	Capabilities map[string]bool `json:"capabilities,omitempty"`
+	// Tier is the user's current fleet subscription tier (e.g. "pro", "team",
+	// "enterprise"). Empty string when signed out or fleet is disabled.
+	Tier string `json:"tier,omitempty"`
 }
 
 // WindowSize mirrors the charter shape.
@@ -4170,7 +4179,7 @@ func buildLabel(c *core.Core) string {
 
 // AppInfo returns build metadata. Build comes from main.Version via
 // core.BuildVersion(); GoVersion and Platform come from runtime.
-func (a *API) AppInfo(_ context.Context) (AppInfo, error) {
+func (a *API) AppInfo(ctx context.Context) (AppInfo, error) {
 	policyEditorEnabled := true
 	keychainRotationEnabled := true
 	customOpenAIEnabled := true
@@ -4179,7 +4188,7 @@ func (a *API) AppInfo(_ context.Context) (AppInfo, error) {
 		keychainRotationEnabled = a.keychainRotationEnabled
 		customOpenAIEnabled = a.customOpenAIEnabled
 	}
-	return AppInfo{
+	info := AppInfo{
 		Build:                   buildLabel(a.core),
 		Commit:                  "unknown",
 		BuildTime:               "",
@@ -4189,7 +4198,16 @@ func (a *API) AppInfo(_ context.Context) (AppInfo, error) {
 		PolicyEditorEnabled:     policyEditorEnabled,
 		KeychainRotationEnabled: keychainRotationEnabled,
 		CustomOpenAIEnabled:     customOpenAIEnabled,
-	}, nil
+	}
+	// Attach fleet capability state when the Settings view has a poller wired.
+	// This avoids a separate frontend RPC call on first load.
+	if a != nil {
+		if capView, err := a.settingsAPI.FleetCapabilities(ctx); err == nil && capView.Source != "default-deny" {
+			info.Capabilities = capView.Enabled
+			info.Tier = capView.Tier
+		}
+	}
+	return info, nil
 }
 
 // brokerPublisher adapts *StreamBroker to the workflowsview.ProgressPublisher

@@ -1161,6 +1161,26 @@ type SettingsAPI interface {
 	// FleetProfile returns the active env profile for UI rendering.
 	// Does NOT expose ClientID, APIAudience, or any secret fields.
 	FleetProfile(ctx context.Context) (FleetProfileInfo, error)
+
+	// ── Fleet capabilities (fleet-capability-surface-01NDFSEX09 WP11) ───────
+
+	// FleetCapabilities returns the in-memory capability snapshot.
+	// Returns an empty CapabilitiesView when signed out or fleet is disabled.
+	FleetCapabilities(ctx context.Context) (CapabilitiesView, error)
+
+	// FleetRefreshCapabilities forces an immediate fetch from the fleet
+	// capabilities endpoint and returns the updated snapshot.
+	FleetRefreshCapabilities(ctx context.Context) (CapabilitiesView, error)
+}
+
+// CapabilitiesView is the wire-safe projection of fleet.Capabilities.
+// Capability keys are plain strings in the frontend; the Capability type
+// is Go-internal.
+type CapabilitiesView struct {
+	Tier      string          `json:"tier"`
+	Enabled   map[string]bool `json:"enabled"`
+	FetchedAt string          `json:"fetchedAt"`
+	Source    string          `json:"source"`
 }
 
 // FleetIdentity is the view-layer projection of fleet.Identity. It is safe
