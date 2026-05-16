@@ -28,6 +28,7 @@ import ModelAccessibleSecretsPanel from '@/views/settings/ModelAccessibleSecrets
 import TasksPanel from '@/views/settings/TasksPanel.vue';
 import LLMRoutingPanel from '@/views/settings/LLMRoutingPanel.vue';
 import AuditSettingsPanel from '@/views/settings/AuditSettingsPanel.vue';
+import AccountPanel from '@/views/settings/AccountPanel.vue';
 import LongSessionNudgeSettings from '@/components/settings/LongSessionNudgeSettings.vue';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
 import { debouncedSave } from '@/lib/settings';
@@ -133,6 +134,13 @@ const showLLMRoutingTab = computed<boolean>(() => {
 const showAuditTab = computed<boolean>(() => {
   const v = route?.query?.tab;
   return typeof v === 'string' && v === 'audit';
+});
+
+// fleet-auth-foundation-01NDFSEX08 WP06 — Account (fleet identity) sub-tab.
+// Disambiguates via ?tab=account. Mount switch is in <template> below.
+const showAccountTab = computed<boolean>(() => {
+  const v = route?.query?.tab;
+  return typeof v === 'string' && v === 'account';
 });
 
 const settings = ref<Settings>({
@@ -1032,6 +1040,15 @@ onMounted(() => {
       data-testid="settings-audit-pane"
     >
       <AuditSettingsPanel />
+    </div>
+
+    <!-- fleet-auth-foundation-01NDFSEX08 WP06 — Account (fleet identity) sub-tab. -->
+    <div
+      v-else-if="showAccountTab"
+      class="px-6 py-4 max-w-3xl"
+      data-testid="settings-account-pane"
+    >
+      <AccountPanel />
     </div>
 
     <div
