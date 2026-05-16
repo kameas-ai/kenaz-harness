@@ -211,6 +211,7 @@ watch(
           ref="editingInput"
           v-model="editingValue"
           type="text"
+          :aria-label="`Edit directory path ${i + 1}`"
           class="min-w-[12rem] bg-transparent font-mono text-[11px] text-ink focus:outline-none"
           spellcheck="false"
           autocomplete="off"
@@ -261,6 +262,8 @@ watch(
     <input
       ref="fileInput"
       type="file"
+      aria-label="Select directory"
+      aria-hidden="true"
       class="hidden"
       webkitdirectory
       directory

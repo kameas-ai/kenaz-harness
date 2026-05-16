@@ -15,5 +15,25 @@
 //   axe(el, { rules: { 'color-contrast': { enabled: false } } })
 import { expect } from 'vitest';
 import * as matchers from 'vitest-axe/matchers';
+import { config } from '@vue/test-utils';
+import { defineComponent, h } from 'vue';
 
 expect.extend(matchers);
+
+// ── Radix-Vue DialogPortal stub ──────────────────────────────────────────────
+// The a11y-backlog-cleanup-01NDFSEX07 WP02 migration wrapped ArtifactPreview
+// and the ProvidersView drawer in <DialogRoot><DialogPortal>. DialogPortal
+// teleports content to document.body so wrapper.find() can't reach it from
+// the test wrapper. Stub it as a transparent passthrough during tests —
+// the production teleport behavior is preserved at build time.
+const DialogPortalStub = defineComponent({
+  name: 'DialogPortalStub',
+  setup(_, { slots }) {
+    return () => h('div', { 'data-testid': 'dialog-portal-stub' }, slots.default?.());
+  },
+});
+
+config.global.stubs = {
+  ...(config.global.stubs as Record<string, unknown> | undefined),
+  DialogPortal: DialogPortalStub,
+};

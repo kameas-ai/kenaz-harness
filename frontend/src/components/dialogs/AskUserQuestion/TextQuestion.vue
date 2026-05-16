@@ -12,10 +12,13 @@ const props = withDefaults(
   defineProps<{
     placeholder?: string;
     defaultValue?: unknown;
+    /** Accessible label for the textarea (threaded from parent question text). WP07 D-10. */
+    ariaLabel?: string;
   }>(),
   {
     placeholder: '',
     defaultValue: undefined,
+    ariaLabel: 'Text answer',
   },
 );
 
@@ -52,6 +55,7 @@ function onKeydown(e: KeyboardEvent) {
     <textarea
       :value="value"
       :placeholder="placeholder || 'Type your answer…'"
+      :aria-label="ariaLabel"
       rows="4"
       class="w-full resize-y rounded-md border border-border-muted bg-surface-2 px-3 py-2 font-ui text-[13px] text-ink placeholder:text-ink-subtle focus:border-accent focus:outline-none"
       data-testid="text-question-input"

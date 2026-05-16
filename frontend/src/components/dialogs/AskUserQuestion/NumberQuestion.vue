@@ -13,12 +13,15 @@ const props = withDefaults(
     max?: number | null;
     step?: number | null;
     defaultValue?: unknown;
+    /** Accessible label for the input (threaded from parent question text). WP07 D-10. */
+    ariaLabel?: string;
   }>(),
   {
     min: null,
     max: null,
     step: null,
     defaultValue: undefined,
+    ariaLabel: 'Number',
   },
 );
 
@@ -51,6 +54,7 @@ function onInput(e: Event) {
       :min="min ?? undefined"
       :max="max ?? undefined"
       :step="step ?? undefined"
+      :aria-label="ariaLabel"
       class="w-full rounded-md border border-border-muted bg-surface-2 px-3 py-2 font-ui text-[13px] text-ink placeholder:text-ink-subtle focus:border-accent focus:outline-none"
       placeholder="Enter a number…"
       data-testid="number-question-input"

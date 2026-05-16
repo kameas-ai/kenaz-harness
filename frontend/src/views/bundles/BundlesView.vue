@@ -222,6 +222,7 @@ onMounted(() => {
         <input
           v-model="installPath"
           type="text"
+          aria-label="Bundle installation path"
           placeholder="/absolute/path/to/bundle"
           class="flex-1 px-2 py-1 font-mono text-[12px] bg-surface-1 text-ink border border-border-muted rounded"
           :disabled="installBusy"

@@ -76,6 +76,7 @@ onMounted(load);
       <input
         v-model="query"
         type="search"
+        aria-label="Search catalog"
         placeholder="Search catalog…"
         class="flex-1 rounded-sm border border-border-muted bg-surface-2 px-3 py-1.5 font-ui text-sm text-ink placeholder:text-ink-muted focus:outline-none focus:ring-1 focus:ring-accent"
         data-testid="catalog-search"

@@ -336,6 +336,7 @@ defineExpose({ refresh });
                   type="text"
                   class="w-32 rounded-sm border border-border bg-surface-2 px-1.5 py-0.5 font-mono text-[11px] text-ink"
                   :value="knobDisplay(k)"
+                  :aria-label="`${k} autonomy setting`"
                   :placeholder="
                     sessionLayer.overrides[k] === undefined ? '(inherit)' : ''
                   "

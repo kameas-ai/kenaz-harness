@@ -177,6 +177,7 @@ function handleRemove(id: string): void {
                 <input
                   type="checkbox"
                   :checked="h.enabled"
+                  :aria-label="`Enable hook ${h.id}`"
                   :data-testid="`hook-toggle-${h.id}`"
                   @change="emit('toggle', h)"
                 />

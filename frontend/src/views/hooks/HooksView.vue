@@ -262,6 +262,7 @@ const kinds: HookKind[] = ['builtin', 'shell', 'mcp'];
                 <input
                   type="checkbox"
                   :checked="h.enabled"
+                  :aria-label="`Enable hook ${h.id}`"
                   :data-testid="`hook-toggle-${h.id}`"
                   @click.stop
                   @change="toggleEnabled(h)"
