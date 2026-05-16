@@ -76,4 +76,39 @@ EOF
   exit 1
 fi
 
+# ---- Fleet capability-keys.ts parity gate ----
+# Running go generate ./core/fleet/... regenerates frontend/src/lib/capability-keys.ts
+# from the canonical AllCapabilities() slice. If a Go Capability constant is
+# added without re-running the generator the committed TS file drifts.
+echo "check-codegen: running 'go generate ./core/fleet/...' from ${REPO_ROOT}"
+if ! go generate ./core/fleet/...; then
+  echo "check-codegen: go generate ./core/fleet/... FAILED" >&2
+  exit 2
+fi
+
+FLEET_TS_PATTERN='frontend/src/lib/capability-keys.ts'
+UNTRACKED_FLEET=$(git ls-files --others --exclude-standard -- ${FLEET_TS_PATTERN})
+if [[ -n "${UNTRACKED_FLEET}" ]]; then
+  echo "check-codegen: UNTRACKED generated file detected:" >&2
+  echo "${UNTRACKED_FLEET}" >&2
+  echo "Run 'git add' and commit the generated capability-keys.ts." >&2
+  exit 1
+fi
+# shellcheck disable=SC2086
+if ! git diff --exit-code -- ${FLEET_TS_PATTERN}; then
+  cat >&2 <<EOF
+
+check-codegen: CAPABILITY-KEYS DRIFT DETECTED.
+
+The committed frontend/src/lib/capability-keys.ts does not match what
+'go generate ./core/fleet/...' produces now. This usually means a Go
+Capability constant was added or renamed without regenerating the TS file.
+
+Fix: run 'go generate ./core/fleet/...' locally and commit the diff above
+alongside the Go change.
+
+EOF
+  exit 1
+fi
+
 echo "check-codegen: OK — generated files match"
