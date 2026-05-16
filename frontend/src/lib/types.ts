@@ -696,6 +696,19 @@ export interface AppInfo {
    * (custom-openai-compatible-endpoint-01KQ8VN0 WP08)
    */
   customOpenAIEnabled?: boolean;
+  /**
+   * capabilities is the fleet capability gate state keyed by the snake_case
+   * wire key (e.g. "hosted_inference"). Undefined or empty when the user is
+   * signed out or fleet is disabled.
+   * (fleet-capability-surface-01NDFSEX09 WP11)
+   */
+  capabilities?: Record<string, boolean>;
+  /**
+   * tier is the user's current fleet subscription tier.
+   * One of "pro" | "team" | "enterprise" | "". Empty when signed out.
+   * (fleet-capability-surface-01NDFSEX09 WP11)
+   */
+  tier?: 'pro' | 'team' | 'enterprise' | '';
 }
 
 export interface WindowSize {
@@ -3695,4 +3708,19 @@ export interface FleetProfileInfo {
   badgeColor: string;
   fleetBaseUrl: string;
   configured: boolean;
+}
+
+/**
+ * CapabilitiesView — wire projection of the fleet capability snapshot.
+ * Mirrors core/rpc/views/settings.CapabilitiesView.
+ * (fleet-capability-surface-01NDFSEX09 WP11)
+ */
+export interface CapabilitiesView {
+  tier: string;
+  /** Map of snake_case capability key → enabled boolean. */
+  enabled: Record<string, boolean>;
+  /** RFC3339 timestamp of the last fetch, empty when never fetched. */
+  fetchedAt: string;
+  /** "fleet" | "cache" | "default-deny" */
+  source: string;
 }

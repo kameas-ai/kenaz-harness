@@ -154,6 +154,7 @@ import type {
   FallbackChainSummary,
   FleetIdentity,
   FleetProfileInfo,
+  CapabilitiesView,
 } from './types';
 
 /**
@@ -451,6 +452,9 @@ interface WailsBindingsLike {
   Settings_FleetSignedIn(): Promise<boolean>;
   Settings_FleetRefreshIdentity(): Promise<FleetIdentity>;
   Settings_FleetProfile(): Promise<FleetProfileInfo>;
+  // fleet-capability-surface-01NDFSEX09 WP11
+  Settings_FleetCapabilities(): Promise<CapabilitiesView>;
+  Settings_FleetRefreshCapabilities(): Promise<CapabilitiesView>;
 
   Memory_ListChunks(filter: MemoryListFilter): Promise<MemoryChunk[]>;
   Memory_RememberMessage(
@@ -1803,6 +1807,12 @@ export interface SettingsClient {
    * expose ClientID, APIAudience, or any secret fields.
    */
   fleetProfile(): Promise<FleetProfileInfo>;
+
+  // ── fleet-capability-surface-01NDFSEX09 WP11 ────────────────────────────
+  /** Return the in-memory fleet capability snapshot. */
+  fleetCapabilities(): Promise<CapabilitiesView>;
+  /** Force a fresh fetch of capabilities from the fleet server. */
+  fleetRefreshCapabilities(): Promise<CapabilitiesView>;
 }
 
 /**
@@ -2958,6 +2968,9 @@ export function createHarnessClient(): HarnessClient {
       fleetSignedIn: () => b().Settings_FleetSignedIn(),
       fleetRefreshIdentity: () => b().Settings_FleetRefreshIdentity(),
       fleetProfile: () => b().Settings_FleetProfile(),
+      // fleet-capability-surface-01NDFSEX09 WP11
+      fleetCapabilities: () => b().Settings_FleetCapabilities(),
+      fleetRefreshCapabilities: () => b().Settings_FleetRefreshCapabilities(),
     },
     permissions: {
       listGrants: (family) =>
@@ -3637,6 +3650,13 @@ export function createFakeHarnessClient(
       }),
       fleetProfile: async () => ({
         name: 'prod', badgeColor: '', fleetBaseUrl: '', configured: false,
+      }),
+      // fleet-capability-surface-01NDFSEX09 WP11
+      fleetCapabilities: async () => ({
+        tier: '', enabled: {}, fetchedAt: '', source: 'default-deny',
+      }),
+      fleetRefreshCapabilities: async () => ({
+        tier: '', enabled: {}, fetchedAt: '', source: 'default-deny',
       }),
     },
     permissions: {
