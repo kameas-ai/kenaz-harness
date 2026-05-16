@@ -39,6 +39,12 @@ func identityFilePath(dataDir string) string {
 	return filepath.Join(dataDir, "fleet", "identity.json")
 }
 
+// IdentityFilePath returns the exported cache file path for the identity.
+// Used by callers that need to delete the file during sign-out.
+func IdentityFilePath(dataDir string) string {
+	return identityFilePath(dataDir)
+}
+
 // LoadIdentity reads the cached identity from disk. Returns an error when
 // the file does not exist or cannot be parsed.
 func LoadIdentity(dataDir string) (Identity, error) {

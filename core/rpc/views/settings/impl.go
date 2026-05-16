@@ -1188,6 +1188,9 @@ type API struct {
 	store           SettingsStore
 	auditSettingsMu sync.Mutex
 	auditSettings   AuditSettings
+	// fleet holds the optional fleet client and data dir. Populated via
+	// SetFleetClient during chassis boot; nil when fleet is not wired.
+	fleet *fleetState
 }
 
 // NewAPI constructs a SettingsAPI backed by the given store. nil

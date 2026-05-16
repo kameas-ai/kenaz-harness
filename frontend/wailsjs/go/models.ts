@@ -5347,11 +5347,57 @@ export namespace settings {
 		    return a;
 		}
 	}
+	export class FleetIdentity {
+	    userId: string;
+	    orgId: string;
+	    teamId: string;
+	    email?: string;
+	    displayName?: string;
+	    tier?: string;
+	    orgName?: string;
+	    teamName?: string;
+	    roles?: string[];
+
+	    static createFrom(source: any = {}) {
+	        return new FleetIdentity(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.userId = source["userId"];
+	        this.orgId = source["orgId"];
+	        this.teamId = source["teamId"];
+	        this.email = source["email"];
+	        this.displayName = source["displayName"];
+	        this.tier = source["tier"];
+	        this.orgName = source["orgName"];
+	        this.teamName = source["teamName"];
+	        this.roles = source["roles"];
+	    }
+	}
+	export class FleetProfileInfo {
+	    name: string;
+	    badgeColor: string;
+	    fleetBaseUrl: string;
+	    configured: boolean;
+
+	    static createFrom(source: any = {}) {
+	        return new FleetProfileInfo(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.badgeColor = source["badgeColor"];
+	        this.fleetBaseUrl = source["fleetBaseUrl"];
+	        this.configured = source["configured"];
+	    }
+	}
 
 }
 
 export namespace slashcmd {
-	
+
 	export class CommandInfo {
 	    name: string;
 	    description: string;
