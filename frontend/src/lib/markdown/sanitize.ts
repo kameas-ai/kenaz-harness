@@ -27,6 +27,14 @@ const BASE_CONFIG: DomPurifyConfig = {
     'data-lang',
     'data-source-b64',
   ],
+  // F-005 (v0.17.0 security audit): block inline style attributes on all
+  // sanitized HTML. DOMPurify's default allowlist includes `style` on
+  // standard elements (<span>, <p>, …); leaving it allowed lets LLM-
+  // controlled CSS inject phishing overlays / exfil via background-image.
+  // FORBID_ATTR overrides ADD_ATTR so SVG profiles that add `style` back
+  // (mermaid output) are also blocked here — accept the trade-off; the
+  // safe rendering path is class names from tokens.css, not inline CSS.
+  FORBID_ATTR: ['style'],
 };
 
 /**

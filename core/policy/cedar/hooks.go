@@ -698,6 +698,37 @@ func CheckExportSession(ctx context.Context, g Gate, sessionID, format string) e
 	return enforce(d)
 }
 
+// CheckAuditBulkPurge is the gate-hook helper for the Audit_BulkPurge RPC
+// (F-001 security fix). This must be called BEFORE the delete loop in
+// the BulkPurge implementation. On Deny the caller must return the
+// PolicyDeniedError to the RPC caller without executing any deletions and
+// emit KindAuditBulkPurgeBlockedByPolicy.
+//
+// The resource UID is AuditLog::"events" (singleton). Default-allow when
+// g is nil (pre-boot / test posture). NotApplicable is treated as Deny
+// because bulk purge is default-forbid per spec — only an explicit Cedar
+// permit should allow it.
+func CheckAuditBulkPurge(ctx context.Context, g Gate) error {
+	if g == nil {
+		return nil
+	}
+	d := g.Evaluate(
+		ctx,
+		UserUID(),
+		ActionAuditBulkPurge,
+		AuditLogUID("events"),
+		nil,
+	)
+	// Fail-closed: NotApplicable → Deny because ActionAuditBulkPurge is
+	// default-forbid per spec. Only an explicit Cedar permit should allow it.
+	switch d.Outcome {
+	case Allow:
+		return nil
+	default:
+		return &PolicyDeniedError{Decision: d}
+	}
+}
+
 // CheckLLMFallback is the gate-hook helper for per-turn LLM fallback chain
 // hops (model-fallback-routing-01NDFSEX04 WP03). The connector's retry
 // loop calls this before issuing each hop. Returns nil on Allow /

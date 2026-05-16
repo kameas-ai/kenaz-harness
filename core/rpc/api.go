@@ -743,7 +743,16 @@ func New(c *core.Core) *API {
 		}),
 	))
 
-	a.auditImpl = audit.NewAPI(audit.WithSubscriber(a.broker))
+	// Wire the Cedar gate for BulkPurge (F-001 security fix). The gate is
+	// built from the same DataDir as every other Cedar gate in the chassis.
+	// When DataDir is empty (e.g. test mode) buildCedarGate returns AllowAll
+	// which is overridden by CheckAuditBulkPurge's fail-closed NotApplicable
+	// handling — a nil gate passed to WithGate means "ungated" (test posture).
+	var auditGate cedar.Gate
+	if c != nil && c.DataDir() != "" {
+		auditGate = buildCedarGate(c.DataDir())
+	}
+	a.auditImpl = audit.NewAPI(audit.WithSubscriber(a.broker), audit.WithGate(auditGate))
 	a.auditAPI = a.auditImpl
 	a.mcpAPI = mcp.NewAPI(mcp.WithSubscriber(a.broker))
 	// MCP boot-time directory creation (mission mcp-server-install-01KQ8TDP,

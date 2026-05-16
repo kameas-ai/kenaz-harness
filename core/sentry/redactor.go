@@ -35,6 +35,12 @@ func init() {
 		{`sk-proj-[A-Za-z0-9_-]{20,}`, `[REDACTED:openai-key]`},
 		// Generic OpenAI keys (sk-... not already matched by sk-ant or sk-proj)
 		{`sk-[A-Za-z0-9]{20,}`, `[REDACTED:openai-key]`},
+		// Gemini / Google AI Studio API keys (F-004): 39-char keys starting
+		// with "AIzaSy" followed by 33 alphanumeric + hyphen + underscore chars.
+		{`AIzaSy[A-Za-z0-9_-]{33}`, `[REDACTED:apikey]`},
+		// Azure OpenAI api-key header values (F-004): the "api-key:" context
+		// followed by a 32-char lowercase hex string.
+		{`(?i)api-key[:\s]+[0-9a-f]{32}`, `[REDACTED:apikey]`},
 		// Bearer tokens: "Bearer <token>" form in headers/args.
 		{`(?i)bearer\s+[A-Za-z0-9._~+/=-]{20,}`, `[REDACTED:bearer-token]`},
 		// Bare JWTs: three base64url segments separated by dots (eyJ... header).
@@ -44,6 +50,9 @@ func init() {
 		{`(?:AKIA|ASIA|AROA|AGPA|AIPA|ANPA|ANVA|APKA)[A-Z0-9]{16}`, `[REDACTED:aws-key-id]`},
 		// AWS secret access keys (40-char base64url, often following "aws_secret" etc.)
 		{`(?i)(?:aws_secret_access_key|aws_secret)[=:\s]+[A-Za-z0-9+/]{40}`, `[REDACTED:aws-secret-key]`},
+		// Sentry DSN tokens (F-004): the 32-char lowercase hex public key embedded
+		// in the DSN URL: https://<32-char-hex>@<host>/<project_id>.
+		{`https://[0-9a-f]{32}@[A-Za-z0-9._-]+/[0-9]+`, `[REDACTED:sentry-dsn]`},
 		// Email addresses
 		{`[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}`, `[REDACTED:contact]`},
 		// Phone numbers (E.164 and common US formats)
