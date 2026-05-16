@@ -3666,3 +3666,33 @@ export interface FallbackAttemptedPayload {
   attempt: number;
   trigger: string;
 }
+
+/**
+ * FleetIdentity — the harness user's fleet identity.
+ * Mirrors core/rpc/views/settings.FleetIdentity.
+ * Tier, email, and displayName may be empty on early fleet versions.
+ */
+export interface FleetIdentity {
+  userId: string;
+  orgId: string;
+  teamId: string;
+  email?: string;
+  displayName?: string;
+  tier?: string;
+  orgName?: string;
+  teamName?: string;
+  roles?: string[];
+}
+
+/**
+ * FleetProfileInfo — safe projection of the active env profile for UI
+ * rendering. Does NOT expose ClientID, APIAudience, or any secret fields.
+ * Mirrors core/rpc/views/settings.FleetProfileInfo.
+ */
+export interface FleetProfileInfo {
+  name: string;
+  /** "yellow" for dev, "blue" for stage, "red" for local, "" for prod. */
+  badgeColor: string;
+  fleetBaseUrl: string;
+  configured: boolean;
+}
