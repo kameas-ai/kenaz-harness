@@ -123,7 +123,7 @@ func TestAcceptance_WebFetch_SecretSubstituteAndSanitize(t *testing.T) {
 	budget := refs.NewBudget(refs.DefaultBudget)
 	ctx, _, _ := buildResolverCtx(context.Background(), idx, budget, em)
 
-	tool := webfetch.New(webfetch.Options{HTTPClient: srv.Client()})
+	tool := webfetch.New(webfetch.Options{HTTPClient: srv.Client(), SkipBlockList: true})
 
 	argsJSON, _ := json.Marshal(map[string]any{
 		"url":    srv.URL + "/test",

@@ -120,6 +120,45 @@ func TestTruncateLong(t *testing.T) {
 	}
 }
 
+// ── F-004: Gemini, Azure, Sentry DSN patterns ─────────────────────────────────
+
+func TestRedactString_GeminiKey(t *testing.T) {
+	// 39-char Gemini / Google AI Studio key: "AIzaSy" (6) + 33 alphanum chars.
+	// Total length: 6 + 33 = 39 chars.
+	input := "key=AIzaSyABCDEFGHIJKLMNOPQRSTUVWXYZ0123456"
+	got := sentry.RedactString(input)
+	if strings.Contains(got, "AIzaSy") {
+		t.Errorf("Gemini key not redacted: %q", got)
+	}
+	if !strings.Contains(got, "[REDACTED:apikey]") {
+		t.Errorf("expected [REDACTED:apikey] marker, got: %q", got)
+	}
+}
+
+func TestRedactString_AzureAPIKey(t *testing.T) {
+	// Azure OpenAI api-key: header key followed by 32-char hex value.
+	input := "api-key: abcdef1234567890abcdef1234567890"
+	got := sentry.RedactString(input)
+	if strings.Contains(got, "abcdef1234567890") {
+		t.Errorf("Azure api-key not redacted: %q", got)
+	}
+	if !strings.Contains(got, "[REDACTED:apikey]") {
+		t.Errorf("expected [REDACTED:apikey] marker, got: %q", got)
+	}
+}
+
+func TestRedactString_SentryDSN(t *testing.T) {
+	// Sentry DSN: https://<32-hex-chars>@sentry.io/<project_id>.
+	input := "dsn=https://abcdef1234567890abcdef1234567890@o123456.ingest.sentry.io/789"
+	got := sentry.RedactString(input)
+	if strings.Contains(got, "abcdef1234567890abcdef1234567890") {
+		t.Errorf("Sentry DSN public key not redacted: %q", got)
+	}
+	if !strings.Contains(got, "[REDACTED:sentry-dsn]") {
+		t.Errorf("expected [REDACTED:sentry-dsn] marker, got: %q", got)
+	}
+}
+
 func TestRedactMap_DropsPrivate(t *testing.T) {
 	m := map[string]any{
 		"private.key": "secret-value",

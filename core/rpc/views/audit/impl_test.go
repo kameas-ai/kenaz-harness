@@ -6,7 +6,11 @@ import (
 	"testing"
 	"time"
 
+	cedarraw "github.com/cedar-policy/cedar-go"
 	"github.com/sigil-tech/kaneaz-harness/core/event"
+	contextaudit "github.com/sigil-tech/kaneaz-harness/core/context/audit"
+	policycedar "github.com/sigil-tech/kaneaz-harness/core/policy/cedar"
+	eventlog "github.com/sigil-tech/kaneaz-harness/core/event/log"
 )
 
 // recordingSubscriber captures every Subscribe / Unsubscribe call so the
@@ -195,5 +199,156 @@ func TestStartStream_NoBroker_NoOp(t *testing.T) {
 	}
 	if err := api.StopStream(context.Background(), "any-id"); err != nil {
 		t.Errorf("StopStream without broker should not error, got %v", err)
+	}
+}
+
+// ── F-001 Cedar gate tests ────────────────────────────────────────────────────
+
+// fakeGate is a Cedar Gate stub for audit tests. Returns a fixed Outcome.
+type fakeGate struct {
+	outcome policycedar.Outcome
+	reason  string
+}
+
+func (g *fakeGate) Evaluate(
+	_ context.Context,
+	_ cedarraw.EntityUID,
+	_ string,
+	_ cedarraw.EntityUID,
+	_ map[cedarraw.String]cedarraw.Value,
+) policycedar.Decision {
+	return policycedar.Decision{
+		Outcome: g.outcome,
+		Reason:  g.reason,
+	}
+}
+
+// fakeEmitter records contextaudit.Event emissions in a thread-safe ring.
+type fakeEmitter struct {
+	mu     sync.Mutex
+	events []contextaudit.Event
+}
+
+func (f *fakeEmitter) Emit(_ context.Context, e contextaudit.Event) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.events = append(f.events, e)
+	return nil
+}
+
+func (f *fakeEmitter) snapshot() []contextaudit.Event {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]contextaudit.Event, len(f.events))
+	copy(out, f.events)
+	return out
+}
+
+// TestBulkPurge_CedarDeny_NoRowsDeleted verifies that when Cedar denies
+// ActionAuditBulkPurge:
+//   - BulkPurge returns an error without deleting any rows.
+//   - A KindAuditBulkPurgeBlockedByPolicy event is emitted.
+func TestBulkPurge_CedarDeny_NoRowsDeleted(t *testing.T) {
+	mem := eventlog.NewMemoryBackend()
+	em := &fakeEmitter{}
+	gate := &fakeGate{outcome: policycedar.Deny, reason: "policy forbids bulk purge"}
+
+	api := NewAPI(
+		WithSweepableBackend(mem),
+		WithEmitter(em),
+		WithGate(gate),
+	)
+
+	// Pre-populate the API ring buffer with an entry.
+	api.Push(Entry{
+		ID:        "evt-001",
+		Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+		Category:  "LLM",
+		Subject:   "llm.request.started",
+	})
+
+	err := api.BulkPurge(context.Background(), []string{"evt-001"})
+	if err == nil {
+		t.Fatal("expected BulkPurge to return an error on Cedar Deny, got nil")
+	}
+
+	// Ring buffer should still contain the entry — no rows were deleted.
+	entries, listErr := api.ListEntries(context.Background(), Filter{})
+	if listErr != nil {
+		t.Fatalf("ListEntries: %v", listErr)
+	}
+	if len(entries) != 1 {
+		t.Errorf("expected 1 entry after Cedar-denied BulkPurge, got %d", len(entries))
+	}
+
+	// A KindAuditBulkPurgeBlockedByPolicy event must have been emitted.
+	evs := em.snapshot()
+	var foundBlocked bool
+	for _, ev := range evs {
+		if ev.Kind == contextaudit.KindAuditBulkPurgeBlockedByPolicy {
+			foundBlocked = true
+		}
+	}
+	if !foundBlocked {
+		t.Errorf("expected KindAuditBulkPurgeBlockedByPolicy to be emitted, got %v", evs)
+	}
+}
+
+// TestBulkPurge_CedarNotApplicable_FailClosed verifies that NotApplicable
+// is treated as Deny for the default-forbid ActionAuditBulkPurge action.
+func TestBulkPurge_CedarNotApplicable_FailClosed(t *testing.T) {
+	mem := eventlog.NewMemoryBackend()
+	gate := &fakeGate{outcome: policycedar.NotApplicable, reason: "no matching policy"}
+
+	api := NewAPI(
+		WithSweepableBackend(mem),
+		WithGate(gate),
+	)
+
+	err := api.BulkPurge(context.Background(), []string{"evt-missing"})
+	if err == nil {
+		t.Fatal("expected BulkPurge to fail-closed on NotApplicable, got nil")
+	}
+}
+
+// TestBulkPurge_CedarAllow_DeletesRows verifies that when Cedar explicitly
+// allows the action, BulkPurge proceeds and emits KindAuditBulkPurgeExecuted.
+func TestBulkPurge_CedarAllow_DeletesRows(t *testing.T) {
+	mem := eventlog.NewMemoryBackend()
+	em := &fakeEmitter{}
+	gate := &fakeGate{outcome: policycedar.Allow}
+
+	api := NewAPI(
+		WithSweepableBackend(mem),
+		WithEmitter(em),
+		WithGate(gate),
+	)
+
+	err := api.BulkPurge(context.Background(), []string{"evt-x", "evt-y"})
+	if err != nil {
+		t.Fatalf("BulkPurge on Allow should succeed, got %v", err)
+	}
+
+	// KindAuditBulkPurgeExecuted must have been emitted.
+	evs := em.snapshot()
+	var foundExecuted bool
+	for _, ev := range evs {
+		if ev.Kind == contextaudit.KindAuditBulkPurgeExecuted {
+			foundExecuted = true
+		}
+	}
+	if !foundExecuted {
+		t.Errorf("expected KindAuditBulkPurgeExecuted to be emitted, got %v", evs)
+	}
+}
+
+// TestBulkPurge_NilGate_AllowsWithoutCheck verifies that a nil gate (test /
+// pre-boot posture) allows BulkPurge without consulting Cedar.
+func TestBulkPurge_NilGate_AllowsWithoutCheck(t *testing.T) {
+	mem := eventlog.NewMemoryBackend()
+	api := NewAPI(WithSweepableBackend(mem)) // no gate injected
+
+	if err := api.BulkPurge(context.Background(), []string{"evt-z"}); err != nil {
+		t.Fatalf("nil-gate BulkPurge should succeed, got %v", err)
 	}
 }
