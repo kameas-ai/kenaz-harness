@@ -17,7 +17,7 @@ The original `fleet-integration-01KX5R8D` mission is one XL spec covering auth +
 
 The seams below mirror the **dependency order**: auth + capabilities first; each subsequent mission gates behind those two; cloud features (share/sync) ship as the fleet repo's API surface comes online.
 
-## The 7 sub-missions
+## The 8 sub-missions
 
 ```
               fleet-auth-foundation        (v0.18.0 critical path)
@@ -25,17 +25,18 @@ The seams below mirror the **dependency order**: auth + capabilities first; each
                        ▼
             fleet-capability-surface       (v0.18.0 critical path)
                        │
-       ┌──────────────┬┴───────────┬──────────────┬──────────────┐
-       ▼              ▼            ▼              ▼              ▼
-  config-pull   otel-archival   emergency-     audit-           share-and-
-  (v0.19.0)     (v0.19.0)       lockdown       archival         sync
-                                (v0.19.0)      (v0.20.0)        (v0.20.0)
+       ┌──────────────┬┴───────────┬──────────────┬──────────────┬──────────────┐
+       ▼              ▼            ▼              ▼              ▼              ▼
+  config-pull   otel-archival   emergency-     audit-         share-and-     context-
+  (v0.19.0)     (v0.19.0)       lockdown       archival       sync           sync
+                                (v0.19.0)      (v0.20.0)      (v0.20.0)      (v0.21.0)
 ```
 
 Each fans out independently after the foundation lands. Suggested release slotting:
 - **v0.18.0** = `fleet-auth-foundation` + `fleet-capability-surface`. Smallest viable fleet integration — a logged-in user can read the capability matrix and the harness gates features against it. No actual cloud-side functionality yet.
 - **v0.19.0** = `fleet-config-pull` + `fleet-otel-archival` + `fleet-emergency-lockdown`. Pull-config (OPA bundle distribution), one outbound telemetry path, one inbound lockdown path. These are operationally critical and depend only on auth + capabilities.
-- **v0.20.0** = `fleet-audit-archival` + `fleet-share-and-sync`. The highest-value Team-tier features — they depend on the fleet repo's catalog + immudb APIs being live.
+- **v0.20.0** = `fleet-audit-archival` + `fleet-share-and-sync`. The highest-value Team-tier features — they depend on the fleet repo's catalog + immudb APIs being live. Share-and-sync covers workflow/pack/bundle catalog, settings sync (provider profiles, model prefs, MCP recipes, installed MCP server registry, UI theme), and team Cedar policy distribution.
+- **v0.21.0** = `fleet-context-sync`. Conversation/session and project-context sync with E2E AEAD encryption + team handoff. Encryption-heavy and privacy-sensitive; deliberately isolated from the smaller-payload settings sync so the threat model + recovery UX get focused review.
 
 If the fleet repo lags on a particular API, the corresponding harness mission slips to the next minor without blocking the others.
 
@@ -118,17 +119,34 @@ Key surfaces:
 
 Acceptance: 10k local audit rows archive cleanly with chain verification, fleet outage doesn't lose rows (they queue locally), retention sweep deletes only post-archive rows.
 
-### G. `fleet-share-and-sync-01NDFSEX14` (v0.20.0, **L**, ~18h)
+### G. `fleet-share-and-sync-01NDFSEX14` (v0.20.0, **L**, ~19h)
 
-The highest-value Team-tier cloud features. Workflow catalog, context pack registry, bundle registry, settings sync, team Cedar policy distribution.
+The highest-value Team-tier cloud features. Workflow catalog, context pack registry, bundle registry, settings sync (including installed-MCP server registry), team Cedar policy distribution.
+
+Sync categories explicitly include the **installed MCP server registry** (the set of MCPs a user has installed + their non-secret per-server config), distinct from MCP recipes (the templates). Credstore bytes for MCP secrets are never synced; recipients are prompted to provide their own.
 
 Key surfaces:
 - `core/fleet/catalog.go` — `PublishWorkflow(scope, workflow)`, `ListWorkflows(scope)`, `InstallWorkflow(id)`; same shape for packs + bundles
-- `core/fleet/settings_sync.go` — push selected settings (autonomy preset, model preferences, display dials) to fleet; fetch on first login on a new device; per-key conflict policy
-- `core/fleet/cedar_team_policy.go` — pull signed team Cedar bundle, merge with local rules under a `priority: team > user` order, surface conflicts in Cedar editor UI
-- Frontend surfaces: catalog tabs in Settings → Workflows / Contexts / Bundles; sync indicator in Settings → Account; team-policy badge in Cedar editor
+- `core/fleet/sync.go` + `sync_mcp.go` — push selected settings (provider profiles metadata, model prefs, MCP recipes, **installed MCP server registry**, UI theme) to fleet; fetch on first login on a new device; per-category LWW with collection dedupe
+- `core/fleet/policy_publish.go` — admin "Publish to team" flow on Cedar rules; redistributes via existing config-pull pipeline
+- Frontend surfaces: Marketplace view; SyncPanel with secret-prompt banner for incoming MCPs; team-policy badge + Publish button in Cedar editor
 
-Acceptance: a workflow published from device A appears in device B's catalog tab; installing it materializes the local YAML; settings sync keeps autonomy preset consistent; team Cedar policy merge takes precedence over user policy.
+Acceptance: a workflow published from device A appears in device B's catalog tab; installing it materializes the local YAML; installed-MCP sync re-installs servers on a second device (with secret-prompt for ones requiring credentials); team Cedar policy merge takes precedence over user policy.
+
+### H. `fleet-context-sync-01NDFSEX15` (v0.21.0, **L**, ~24h)
+
+Conversation/session and project-context sync across the same user's devices, plus team handoff. Append-only event-stream pattern with end-to-end AEAD encryption (per-user key from credstore seed; fleet stores ciphertext only).
+
+Why split from share-and-sync: size (sessions can be hundreds of MB), sensitivity (chat content is the most private surface), conflict model (append-only events, not LWW key-value), and resumability semantics make this a distinct beast.
+
+Key surfaces:
+- `core/fleet/context_crypto.go` — per-user seed in credstore, HKDF key derivation, XChaCha20-Poly1305 AEAD, recovery-code mint+verify
+- `core/fleet/context_sync.go` — event-stream primitive: chunked backfill, debounced stream, replay with `since=<seq>`
+- `core/fleet/session_sync.go` + `project_sync.go` — per-session and per-project opt-in toggles; bridge harness session/project events to the encrypted stream
+- `core/fleet/team_handoff.go` — Team+ tier: re-encrypt for recipient + route via fleet's KX/identity service + recipient inbox
+- Frontend: session header sync toggle, "Synced to fleet" badge, share-with-teammate dialog, "Shared with you" inbox, recovery-code generation/apply flow, per-artifact-class opt-in panel on projects
+
+Acceptance: chat session on device A resumes mid-conversation on device B (with recovery code); shared session lands in teammate's inbox; project metadata + agent memory + text notes follow user across devices; fleet operator never sees plaintext.
 
 ## Things deliberately deferred
 
@@ -141,8 +159,9 @@ Acceptance: a workflow published from device A appears in device B's catalog tab
 The roadmap's "Next + 4 Fleet integration" row gets split:
 - **v0.18.0** — fleet-auth-foundation + fleet-capability-surface (~M-sized minor; the smallest useful fleet-integration footprint)
 - **v0.19.0** — fleet-config-pull + fleet-otel-archival + fleet-emergency-lockdown (3 missions; ~36h combined)
-- **v0.20.0** — fleet-audit-archival + fleet-share-and-sync (2 missions; ~34h combined)
-- **v1.0.0** — GA after the 3 fleet minors burn in
+- **v0.20.0** — fleet-audit-archival + fleet-share-and-sync (2 missions; ~32h combined)
+- **v0.21.0** — fleet-context-sync (1 mission; ~24h; encryption-heavy)
+- **v1.0.0** — GA after the 4 fleet minors burn in
 
 The original `fleet-integration-01KX5R8D` spec stays as a cross-reference document but its "single mission" framing is superseded by this breakdown.
 
