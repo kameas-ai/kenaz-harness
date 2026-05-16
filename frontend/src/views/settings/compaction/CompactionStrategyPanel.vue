@@ -187,6 +187,12 @@ async function loadOverrideConfig() {
   }
 }
 
+function selectOverrideScope(s: OverrideScope) {
+  overrideScope.value = s;
+  overrideScopeId.value = '';
+  overrideConfig.value = { sites: {} };
+}
+
 function updateOverrideSiteConfig(site: CompactionSite, patch: Partial<CompactionSiteConfig>) {
   const sitesCopy = { ...(overrideConfig.value.sites ?? {}) };
   const current = sitesCopy[site] ?? emptySite();
@@ -755,7 +761,7 @@ defineExpose({ refresh, saveGlobalConfig });
       </p>
 
       <div class="mt-3 flex flex-wrap items-end gap-3">
-        <label class="flex flex-col font-ui text-[12px] text-ink-muted">
+        <div class="flex flex-col font-ui text-[12px] text-ink-muted">
           Scope
           <div
             class="mt-1 inline-flex rounded-sm border border-border-muted"
@@ -773,12 +779,12 @@ defineExpose({ refresh, saveGlobalConfig });
                 ? 'bg-surface-3 text-ink'
                 : 'bg-surface-1 text-ink-muted hover:text-ink'"
               :data-testid="`csp-override-scope-${s}`"
-              @click="overrideScope = s; overrideScopeId = ''; overrideConfig = { sites: {} }"
+              @click="selectOverrideScope(s)"
             >
               {{ s }}
             </button>
           </div>
-        </label>
+        </div>
 
         <label class="flex flex-col font-ui text-[12px] text-ink-muted">
           {{ overrideScopeIdLabel }}
