@@ -245,6 +245,15 @@ const (
 	// Privacy invariant: the payload carries only the event ID list and
 	// the purge count — no payload bytes from the deleted events.
 	KindAuditBulkPurgeExecuted Kind = "audit.bulk_purge_executed"
+
+	// KindAuditBulkPurgeBlockedByPolicy fires when the Cedar engine denies
+	// ActionAuditBulkPurge for the active principal (F-001 security fix).
+	// Payload: AuditBulkPurgeBlockedByPolicyPayload.
+	//
+	// Privacy invariant: the payload MUST NOT carry the event_ids list
+	// (which reveals what the caller was trying to delete). Only the
+	// denial reason and the attempt count are recorded.
+	KindAuditBulkPurgeBlockedByPolicy Kind = "audit.bulk_purge_blocked_by_policy"
 )
 
 // Event is the wire shape passed to the event log. The concrete event-log
@@ -829,6 +838,19 @@ type AuditBulkPurgeExecutedPayload struct {
 	EventIDs []string `json:"event_ids"`
 	// PurgedCount is len(EventIDs); redundant for fast aggregation.
 	PurgedCount int `json:"purged_count"`
+}
+
+// AuditBulkPurgeBlockedByPolicyPayload carries the signalling for
+// KindAuditBulkPurgeBlockedByPolicy (F-001 security fix).
+//
+// Privacy invariant: the event_ids list is NOT included — it reveals
+// what the caller was attempting to delete. Only the denial reason and
+// the count of ids in the attempted purge are recorded.
+type AuditBulkPurgeBlockedByPolicyPayload struct {
+	// AttemptCount is the number of event IDs in the blocked purge request.
+	AttemptCount int `json:"attempt_count"`
+	// Reason is the Cedar denial reason string (safe to log).
+	Reason string `json:"reason"`
 }
 
 // Emit is a small convenience wrapper for callers that have a payload

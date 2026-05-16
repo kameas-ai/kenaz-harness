@@ -24,6 +24,7 @@ import (
 	"github.com/sigil-tech/kaneaz-harness/core/event"
 	contextaudit "github.com/sigil-tech/kaneaz-harness/core/context/audit"
 	eventlog "github.com/sigil-tech/kaneaz-harness/core/event/log"
+	"github.com/sigil-tech/kaneaz-harness/core/policy/cedar"
 )
 
 // Subscriber is the broker contract used by API.StartStream. Decoupled
@@ -49,6 +50,7 @@ type API struct {
 	backend      eventlog.Backend               // optional; used by Export
 	sweepable    eventlog.SweepableBackend      // optional; used by BulkPurge
 	emitter      contextaudit.Emitter           // optional; used by BulkPurge audit emit
+	gate         cedar.Gate                     // optional; gates BulkPurge via ActionAuditBulkPurge
 }
 
 // Option configures NewAPI.
@@ -96,6 +98,16 @@ func WithSweepableBackend(b eventlog.SweepableBackend) Option {
 // runs silently (no audit event is emitted).
 func WithEmitter(e contextaudit.Emitter) Option {
 	return func(a *API) { a.emitter = e }
+}
+
+// WithGate injects the Cedar policy gate used by BulkPurge to enforce
+// ActionAuditBulkPurge (F-001 security fix). When nil, BulkPurge is
+// ungated (pre-boot / test posture — use in production only when a real
+// gate is wired). The gate is consulted BEFORE the delete loop; on Deny
+// (including NotApplicable, which is fail-closed for this action) BulkPurge
+// returns a *PolicyDeniedError and emits KindAuditBulkPurgeBlockedByPolicy.
+func WithGate(g cedar.Gate) Option {
+	return func(a *API) { a.gate = g }
 }
 
 // NewAPI constructs the audit view-scoped API.
@@ -295,10 +307,11 @@ func (a *API) Export(ctx context.Context, opts eventlog.ExportOptions) (string, 
 
 // BulkPurge deletes the listed event IDs from the store.
 //
-// The operation is gated only by the availability of a SweepableBackend;
-// the Cedar policy check is performed by the caller (Bindings layer) via
-// Audit_BulkPurge which checks ActionAuditBulkPurge before invoking this
-// method. This keeps the Cedar dependency out of the view package.
+// The Cedar policy gate (ActionAuditBulkPurge) is checked FIRST via the
+// gate injected by WithGate. On Deny (including NotApplicable, which is
+// fail-closed for this destructive action) BulkPurge returns a
+// *PolicyDeniedError and emits KindAuditBulkPurgeBlockedByPolicy without
+// touching the store.
 //
 // On success the purge is recorded via KindAuditBulkPurgeExecuted if an
 // emitter is configured.
@@ -306,7 +319,25 @@ func (a *API) BulkPurge(ctx context.Context, eventIDs []string) error {
 	a.mu.RLock()
 	sb := a.sweepable
 	em := a.emitter
+	g := a.gate
 	a.mu.RUnlock()
+
+	// ── Cedar gate check (F-001) ────────────────────────────────────────
+	if err := cedar.CheckAuditBulkPurge(ctx, g); err != nil {
+		// Emit a blocked-by-policy audit event (best-effort).
+		if em != nil {
+			var reason string
+			if len(err.Error()) > 0 {
+				reason = err.Error()
+			}
+			payload := contextaudit.AuditBulkPurgeBlockedByPolicyPayload{
+				AttemptCount: len(eventIDs),
+				Reason:       reason,
+			}
+			_ = contextaudit.Emit(ctx, em, contextaudit.KindAuditBulkPurgeBlockedByPolicy, payload, time.Now())
+		}
+		return err
+	}
 
 	if sb == nil {
 		return fmt.Errorf("audit: BulkPurge requires a sweepable backend; use WithSweepableBackend option")
