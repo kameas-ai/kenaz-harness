@@ -8,15 +8,27 @@ import (
 	"time"
 
 	"github.com/sigil-tech/kaneaz-harness/core/fleet"
+	"github.com/sigil-tech/kaneaz-harness/core/llm"
+	"github.com/sigil-tech/kaneaz-harness/core/llm/fleet_hosted"
 )
 
-// fleetState holds the fleet client, dataDir, and capability poller.
+// AdapterRegistrar is the minimal interface from the LLM registry that the
+// fleet wiring code needs. Using an interface avoids a hard import of
+// core/llm/registry from this package.
+type AdapterRegistrar interface {
+	RegisterAdapter(a llm.ProviderAdapter)
+}
+
+// fleetState holds the fleet client, dataDir, capability poller, and the
+// fleet_hosted LLM adapter (when CapHostedInference is enabled).
 // It is attached to API after construction via SetFleetClient.
 type fleetState struct {
-	mu      sync.RWMutex
-	client  *fleet.Client
-	dataDir string
-	poller  *fleet.CapabilityPoller
+	mu            sync.RWMutex
+	client        *fleet.Client
+	dataDir       string
+	poller        *fleet.CapabilityPoller
+	llmRegistrar  AdapterRegistrar
+	fleetAdapter  *fleet_hosted.Adapter
 }
 
 // SetFleetClient wires a fleet.Client into the API and starts the capability
@@ -36,6 +48,59 @@ func (a *API) SetFleetClient(c *fleet.Client, dataDir string) {
 		p := fleet.NewCapabilityPoller(c, dataDir)
 		a.fleet.poller = p
 		p.Start(context.Background())
+	}
+	// Wire the fleet_hosted LLM adapter when we have a profile URL.
+	// The adapter gates itself at resolve time via the EnabledFunc so
+	// tier changes propagate within one poll interval without restart.
+	if c != nil && c.Profile().FleetBaseURL != "" {
+		a.wireFleetHostedAdapter(c)
+	}
+}
+
+// wireFleetHostedAdapter creates the fleet_hosted LLM adapter and registers
+// it in the LLM registry (if one has been set via SetLLMRegistrar).
+// Called under a.fleet.mu.Lock() from SetFleetClient.
+func (a *API) wireFleetHostedAdapter(c *fleet.Client) {
+	profile := c.Profile()
+	if profile.FleetBaseURL == "" {
+		return
+	}
+	poller := a.fleet.poller // already set above
+	bearer := func() (string, error) {
+		ts, err := fleet.LoadTokens()
+		if err != nil {
+			return "", err
+		}
+		return ts.AccessToken, nil
+	}
+	enabled := func() bool {
+		if poller == nil {
+			return false
+		}
+		cur := poller.Current()
+		return cur.Has(fleet.CapHostedInference)
+	}
+	adapter := fleet_hosted.New(profile.FleetBaseURL, bearer, enabled)
+	a.fleet.fleetAdapter = adapter
+	if a.fleet.llmRegistrar != nil {
+		a.fleet.llmRegistrar.RegisterAdapter(adapter)
+	}
+}
+
+// SetLLMRegistrar wires the LLM adapter registry into the fleet state so
+// that the fleet_hosted adapter can be registered when SetFleetClient is
+// called. Must be called before SetFleetClient to take effect; otherwise
+// the adapter is registered lazily on the next SetFleetClient call.
+func (a *API) SetLLMRegistrar(r AdapterRegistrar) {
+	if a.fleet == nil {
+		a.fleet = &fleetState{}
+	}
+	a.fleet.mu.Lock()
+	defer a.fleet.mu.Unlock()
+	a.fleet.llmRegistrar = r
+	// If SetFleetClient was called first, register any pending adapter.
+	if a.fleet.fleetAdapter != nil {
+		r.RegisterAdapter(a.fleet.fleetAdapter)
 	}
 }
 

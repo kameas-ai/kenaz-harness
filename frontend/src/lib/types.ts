@@ -158,7 +158,9 @@ export type ProviderKind =
   | 'azure-openai'
   | 'gemini'
   /** Custom OpenAI-compatible endpoint (custom-openai-compatible-endpoint-01KQ8VN0) */
-  | 'custom-openai';
+  | 'custom-openai'
+  /** Fleet-hosted inference — only available when signedIn && capability('hosted_inference') (fleet-capability-surface-01NDFSEX09) */
+  | 'fleet-hosted';
 
 /**
  * GeminiEndpointKind selects which Google endpoint to target.

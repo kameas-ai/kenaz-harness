@@ -144,13 +144,42 @@ func (r *Registry) RegisterAdapter(a llm.ProviderAdapter) {
 	r.adapters[a.Kind()] = a
 }
 
+// UnregisterAdapter removes the adapter for the given kind. No-op when
+// the kind is not registered.
+func (r *Registry) UnregisterAdapter(kind string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	delete(r.adapters, kind)
+}
+
+// ConditionalAdapter is an optional interface that adapters can implement
+// to signal conditional availability. The registry checks Enabled() at
+// resolve time so that tier/capability changes propagate without restart.
+type ConditionalAdapter interface {
+	llm.ProviderAdapter
+	// Enabled reports whether this adapter should currently be served.
+	// When false, Adapter(kind) returns nil as if unregistered.
+	Enabled() bool
+}
+
 // Adapter returns the adapter registered for kind. Returns nil if no
-// adapter has been registered. Used by the rpc layer to drive the
-// AddProvider model-picker via the optional ModelLister capability.
+// adapter has been registered, or if the adapter implements ConditionalAdapter
+// and Enabled() returns false (capability-gated adapters can gate themselves
+// at resolve time so tier changes propagate without restart).
 func (r *Registry) Adapter(kind string) llm.ProviderAdapter {
 	r.mu.RLock()
-	defer r.mu.RUnlock()
-	return r.adapters[kind]
+	a := r.adapters[kind]
+	r.mu.RUnlock()
+	if a == nil {
+		return nil
+	}
+	// Check conditional availability. If the adapter implements
+	// ConditionalAdapter and reports disabled, return nil so the caller
+	// behaves as if the kind were not registered.
+	if ca, ok := a.(ConditionalAdapter); ok && !ca.Enabled() {
+		return nil
+	}
+	return a
 }
 
 // MergePersonalProfiles installs personal (user-scoped) profiles after
