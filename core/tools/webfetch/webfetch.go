@@ -19,7 +19,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -73,25 +75,71 @@ const inputSchema = `{
 
 // Options configures the Tool.
 type Options struct {
-	// HTTPClient is used for requests. When nil, http.DefaultClient is used.
+	// HTTPClient is used for requests. When nil, a hardened client with
+	// redirect validation is created. Tests should inject a controlled
+	// httptest-backed client.
 	HTTPClient *http.Client
 	// Enabled is consulted before each call; returns false → tool declines.
 	Enabled func() bool
+	// Gate is the Cedar policy gate used to check network requests before
+	// dispatch. When nil, no Cedar check is performed (pre-boot / test posture).
+	Gate cedar.Gate
+	// SkipBlockList disables the IP block-list check for the initial URL.
+	// FOR TESTING ONLY — never set this in production paths. Useful when
+	// injecting an httptest client whose server binds to 127.0.0.1.
+	SkipBlockList bool
 }
 
 // Tool is the web_fetch builtin.
 type Tool struct {
-	client  *http.Client
-	enabled func() bool
+	client        *http.Client
+	enabled       func() bool
+	gate          cedar.Gate
+	skipBlockList bool // true when a custom HTTPClient was injected (test mode)
 }
 
 // New constructs a web_fetch Tool.
 func New(opts Options) *Tool {
 	client := opts.HTTPClient
 	if client == nil {
-		client = http.DefaultClient
+		client = newHardenedClient(opts.Gate)
 	}
-	return &Tool{client: client, enabled: opts.Enabled}
+	return &Tool{
+		client:        client,
+		enabled:       opts.Enabled,
+		gate:          opts.Gate,
+		skipBlockList: opts.SkipBlockList,
+	}
+}
+
+// newHardenedClient returns an *http.Client whose CheckRedirect callback
+// re-validates each redirect target against the IP block list and the Cedar
+// network gate. This prevents a server from redirecting the tool to a
+// protected address (e.g. 169.254.169.254) even if the initial URL passed
+// the gate.
+func newHardenedClient(g cedar.Gate) *http.Client {
+	return &http.Client{
+		Timeout: time.Duration(DefaultTimeoutMs) * time.Millisecond,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if req == nil {
+				return nil
+			}
+			host := req.URL.Hostname()
+			if err := blockListCheck(host); err != nil {
+				return err
+			}
+			if g != nil {
+				if err := cedar.CheckNetwork(req.Context(), g, host); err != nil {
+					return fmt.Errorf("web_fetch: redirect blocked by Cedar policy: %w", err)
+				}
+			}
+			// Standard redirect limit: allow up to 10 redirects.
+			if len(via) >= 10 {
+				return http.ErrUseLastResponse
+			}
+			return nil
+		},
+	}
 }
 
 // Name implements BuiltinTool.
@@ -140,10 +188,32 @@ func (t *Tool) Call(ctx context.Context, argsJSON json.RawMessage) (json.RawMess
 		timeoutMs = DefaultTimeoutMs
 	}
 
+	// ── Defense-in-depth: IP block list (F-002) ──────────────────────────
+	// Resolve the target host and reject RFC-1918 / loopback / link-local /
+	// IMDS ranges unconditionally — before Cedar, before secret resolution.
+	// The block list is skipped when a custom HTTPClient is injected (test
+	// mode) so httptest servers on 127.0.0.1 remain reachable in tests.
+	parsedURL, urlParseErr := url.Parse(args.URL)
+	if urlParseErr != nil {
+		return errorResult("invalid url: " + urlParseErr.Error()), nil
+	}
+	targetHost := parsedURL.Hostname()
+	if !t.skipBlockList {
+		if err := blockListCheck(targetHost); err != nil {
+			return errorResult(err.Error()), nil
+		}
+	}
+
+	// ── Cedar network gate (F-002) ────────────────────────────────────────
+	if err := cedar.CheckNetwork(ctx, t.gate, targetHost); err != nil {
+		return errorResult("web_fetch blocked by Cedar network policy: " + err.Error()), nil
+	}
+
 	// Retrieve the resolver from ctx (may be nil in test or non-tool paths).
 	resolver := refs.ResolverFromContext(ctx)
 	rctx := cedar.ResolveContext{
-		ToolName: ToolName,
+		ToolName:        ToolName,
+		DestinationHost: targetHost,
 	}
 
 	// ── Substitute @secret: references ──────────────────────────────────
@@ -151,8 +221,6 @@ func (t *Tool) Call(ctx context.Context, argsJSON json.RawMessage) (json.RawMess
 	resolvedURL := args.URL
 	var urlDecisions []cedar.Decision
 	if resolver != nil && refs.HasReference(args.URL) {
-		// Extract the destination host for Cedar context BEFORE substitution.
-		rctx.DestinationHost = hostFromURL(args.URL)
 		var urlDecs []cedar.Decision
 		var err error
 		resolvedURL, urlDecs, err = resolver.Substitute(ctx, args.URL, rctx)
@@ -160,8 +228,6 @@ func (t *Tool) Call(ctx context.Context, argsJSON json.RawMessage) (json.RawMess
 			return errorResult("secret resolution failed in URL: " + err.Error()), nil
 		}
 		urlDecisions = append(urlDecisions, urlDecs...)
-	} else {
-		rctx.DestinationHost = hostFromURL(args.URL)
 	}
 	defer func() {
 		_ = urlDecisions // hold reference
@@ -226,11 +292,10 @@ func (t *Tool) Call(ctx context.Context, argsJSON json.RawMessage) (json.RawMess
 		bodyBytes = sanitizer.Sanitize(bodyBytes)
 	}
 
-	// Build response headers (omit sensitive ones).
+	// Build response headers (F-006: expanded blocklist for token-bearing headers).
 	respHeaders := make(map[string]string)
 	for k := range resp.Header {
-		lk := strings.ToLower(k)
-		if lk == "authorization" || lk == "set-cookie" || lk == "cookie" {
+		if isSensitiveResponseHeader(k) {
 			continue
 		}
 		respHeaders[k] = resp.Header.Get(k)
@@ -248,28 +313,107 @@ func (t *Tool) Call(ctx context.Context, argsJSON json.RawMessage) (json.RawMess
 	return raw, nil
 }
 
-func hostFromURL(rawURL string) string {
-	// Simple host extraction without importing net/url to keep the package lean.
-	// Handles http:// and https:// schemes.
-	stripped := rawURL
-	if strings.HasPrefix(stripped, "https://") {
-		stripped = stripped[len("https://"):]
-	} else if strings.HasPrefix(stripped, "http://") {
-		stripped = stripped[len("http://"):]
+// ── F-002: IP block list ──────────────────────────────────────────────────────
+
+// blockedIPNets is the list of IP ranges that are always blocked regardless
+// of Cedar policy. Covers loopback, RFC-1918, link-local (incl. IMDS), and
+// unique-local IPv6.
+var blockedIPNets []*net.IPNet
+
+func init() {
+	cidrs := []string{
+		"127.0.0.0/8",     // IPv4 loopback
+		"::1/128",         // IPv6 loopback
+		"10.0.0.0/8",      // RFC 1918
+		"172.16.0.0/12",   // RFC 1918
+		"192.168.0.0/16",  // RFC 1918
+		"169.254.0.0/16",  // IPv4 link-local (incl. AWS/Azure IMDS)
+		"fd00::/8",        // IPv6 unique local
+		"fe80::/10",       // IPv6 link-local
 	}
-	// Strip path.
-	if idx := strings.IndexByte(stripped, '/'); idx != -1 {
-		stripped = stripped[:idx]
+	for _, cidr := range cidrs {
+		_, ipNet, err := net.ParseCIDR(cidr)
+		if err == nil {
+			blockedIPNets = append(blockedIPNets, ipNet)
+		}
 	}
-	// Strip query.
-	if idx := strings.IndexByte(stripped, '?'); idx != -1 {
-		stripped = stripped[:idx]
+}
+
+// blockListCheck resolves host to its IP addresses and returns an error if any
+// resolved address falls within a blocked range. The check runs unconditionally
+// before Cedar — it is defense-in-depth against SSRF.
+func blockListCheck(host string) error {
+	if host == "" {
+		return nil
 	}
-	// Strip port.
-	if idx := strings.LastIndexByte(stripped, ':'); idx != -1 {
-		stripped = stripped[:idx]
+	// Strip brackets from IPv6 literals (e.g. [::1]).
+	host = strings.TrimPrefix(host, "[")
+	host = strings.TrimSuffix(host, "]")
+
+	// Fast path: host is already an IP literal.
+	if ip := net.ParseIP(host); ip != nil {
+		return checkIP(ip)
 	}
-	return strings.ToLower(stripped)
+	// Slow path: resolve hostname.
+	addrs, err := net.LookupHost(host)
+	if err != nil {
+		// If resolution fails, allow the request to proceed (the HTTP client
+		// will fail with its own error). We don't want to block on DNS failures.
+		return nil
+	}
+	for _, addr := range addrs {
+		if ip := net.ParseIP(addr); ip != nil {
+			if err := checkIP(ip); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// checkIP returns an error if ip falls in a blocked range.
+func checkIP(ip net.IP) error {
+	for _, blocked := range blockedIPNets {
+		if blocked.Contains(ip) {
+			return fmt.Errorf("web_fetch: request to private/reserved address %s is blocked (SSRF protection)", ip)
+		}
+	}
+	return nil
+}
+
+// ── F-006: response-header blocklist ─────────────────────────────────────────
+
+// sensitiveHeaderExact is a set of header names (canonical form) to always
+// drop from the tool response.
+var sensitiveHeaderExact = map[string]struct{}{
+	"Authorization":      {},
+	"Set-Cookie":         {},
+	"Cookie":             {},
+	"X-Api-Key":          {},
+	"X-Auth-Token":       {},
+	"Proxy-Authorization": {},
+	"Www-Authenticate":   {},
+	"Proxy-Authenticate": {},
+}
+
+// sensitiveHeaderSubstrings contains substrings that, if present in a header
+// name (case-insensitive), cause the header to be dropped.
+var sensitiveHeaderSubstrings = []string{"token", "secret", "key", "auth"}
+
+// isSensitiveResponseHeader reports whether the named header should be
+// stripped from the tool result. Canonical Go http.Header keys are already
+// title-cased.
+func isSensitiveResponseHeader(name string) bool {
+	if _, ok := sensitiveHeaderExact[http.CanonicalHeaderKey(name)]; ok {
+		return true
+	}
+	lower := strings.ToLower(name)
+	for _, sub := range sensitiveHeaderSubstrings {
+		if strings.Contains(lower, sub) {
+			return true
+		}
+	}
+	return false
 }
 
 func errorResult(msg string) json.RawMessage {
