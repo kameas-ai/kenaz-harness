@@ -618,6 +618,20 @@ export function Settings_SetTodoEnabled(arg1:boolean):Promise<void>;
 
 export function Settings_SetWebSearch(arg1:boolean):Promise<void>;
 
+export function Settings_FleetSignIn():Promise<settings.FleetIdentity>;
+
+export function Settings_FleetSignOut():Promise<void>;
+
+export function Settings_FleetSignedIn():Promise<boolean>;
+
+export function Settings_FleetRefreshIdentity():Promise<settings.FleetIdentity>;
+
+export function Settings_FleetProfile():Promise<settings.FleetProfileInfo>;
+
+export function Settings_FleetCapabilities():Promise<settings.CapabilitiesView>;
+
+export function Settings_FleetRefreshCapabilities():Promise<settings.CapabilitiesView>;
+
 export function ShellStatus():Promise<rpc.ShellStatus>;
 
 export function Shell_OpenInOSBrowser(arg1:string):Promise<void>;

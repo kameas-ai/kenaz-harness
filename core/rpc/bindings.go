@@ -1314,6 +1314,49 @@ func (b *Bindings) Settings_SetAuditSettings(s settings.AuditSettings) error {
 	return b.api.Settings().SetAuditSettings(b.ctx(), s)
 }
 
+// ── fleet auth (fleet-auth-foundation-01NDFSEX08 WP05) ──────────────────────
+
+// Settings_FleetSignIn kicks off the PKCE loopback auth flow. Opens the
+// system browser, waits for callback, exchanges code, enrolls with fleet.
+func (b *Bindings) Settings_FleetSignIn() (settings.FleetIdentity, error) {
+	return b.api.Settings().FleetSignIn(b.ctx())
+}
+
+// Settings_FleetSignOut clears tokens and identity cache.
+func (b *Bindings) Settings_FleetSignOut() error {
+	return b.api.Settings().FleetSignOut(b.ctx())
+}
+
+// Settings_FleetSignedIn reports whether valid tokens exist.
+func (b *Bindings) Settings_FleetSignedIn() (bool, error) {
+	return b.api.Settings().FleetSignedIn(b.ctx())
+}
+
+// Settings_FleetRefreshIdentity re-enrolls with fleet and updates the cache.
+func (b *Bindings) Settings_FleetRefreshIdentity() (settings.FleetIdentity, error) {
+	return b.api.Settings().FleetRefreshIdentity(b.ctx())
+}
+
+// Settings_FleetProfile returns the active env profile info for UI rendering.
+// Does not expose ClientID, APIAudience, or any secret fields.
+func (b *Bindings) Settings_FleetProfile() (settings.FleetProfileInfo, error) {
+	return b.api.Settings().FleetProfile(b.ctx())
+}
+
+// ── fleet capabilities (fleet-capability-surface-01NDFSEX09 WP11) ───────────
+
+// Settings_FleetCapabilities returns the in-memory capability snapshot.
+// Returns an empty CapabilitiesView when signed out or fleet is disabled.
+func (b *Bindings) Settings_FleetCapabilities() (settings.CapabilitiesView, error) {
+	return b.api.Settings().FleetCapabilities(b.ctx())
+}
+
+// Settings_FleetRefreshCapabilities forces an immediate capability fetch from
+// the fleet server. Returns the updated snapshot on success.
+func (b *Bindings) Settings_FleetRefreshCapabilities() (settings.CapabilitiesView, error) {
+	return b.api.Settings().FleetRefreshCapabilities(b.ctx())
+}
+
 // ── memory ─────────────────────────────────────────────────────────────
 
 func (b *Bindings) Memory_ListChunks(filter memoryview.ListFilter) ([]memoryview.Chunk, error) {

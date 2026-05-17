@@ -31,6 +31,7 @@ import Button from '@/components/ui/Button.vue';
 import CustomEndpointFields from './CustomEndpointFields.vue';
 import type { CustomEndpointValue } from './CustomEndpointFields.vue';
 import { useHarnessClient } from '@/lib/harnessClientContext';
+import { signedIn, capability } from '@/lib/featureFlags';
 
 const props = defineProps<{
   /**
@@ -81,12 +82,20 @@ const ALL_KINDS: { id: ProviderKind; label: string }[] = [
 
 // Exclude custom-openai when the feature flag is explicitly disabled.
 // The flag defaults to enabled (undefined or true both mean "show it").
-const KINDS = computed(() =>
-  ALL_KINDS.filter(
+// fleet-hosted is only shown when the user is signed in AND the
+// hosted_inference capability is enabled for their tier.
+// OSS-first contract: never render a disabled button — only add when enabled.
+const KINDS = computed(() => {
+  const base = ALL_KINDS.filter(
     (k) =>
       k.id !== 'custom-openai' || appInfo.value?.customOpenAIEnabled !== false,
-  ),
-);
+  );
+  // fleet-capability-surface-01NDFSEX09 WP13: fleet-hosted inference
+  if (signedIn.value && capability('hosted_inference')) {
+    return [...base, { id: 'fleet-hosted' as ProviderKind, label: 'Fleet hosted inference' }];
+  }
+  return base;
+});
 
 // AWS Bedrock regions where Bedrock is generally available. Source:
 // https://docs.aws.amazon.com/bedrock/latest/userguide/bedrock-regions.html

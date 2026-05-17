@@ -1138,6 +1138,72 @@ type SettingsAPI interface {
 	GetAuditSettings(ctx context.Context) (AuditSettings, error)
 	// SetAuditSettings persists the audit log retention configuration.
 	SetAuditSettings(ctx context.Context, s AuditSettings) error
+
+	// ── Fleet auth (fleet-auth-foundation-01NDFSEX08 WP05) ───────────────────
+
+	// FleetSignIn kicks off the PKCE authorization code flow. It opens the
+	// system browser and waits for the callback. On success it calls enroll
+	// and returns the user's Identity. Returns fleet.ErrFleetDisabled when
+	// HARNESS_FLEET_DISABLED=1.
+	FleetSignIn(ctx context.Context) (FleetIdentity, error)
+
+	// FleetSignOut clears persisted tokens and the identity cache.
+	// Returns fleet.ErrFleetDisabled when the kill switch is active.
+	FleetSignOut(ctx context.Context) error
+
+	// FleetSignedIn reports whether the user has a valid cached Identity.
+	FleetSignedIn(ctx context.Context) (bool, error)
+
+	// FleetRefreshIdentity re-calls the fleet enroll endpoint and updates
+	// the cached identity. Returns fleet.ErrNotSignedIn if not signed in.
+	FleetRefreshIdentity(ctx context.Context) (FleetIdentity, error)
+
+	// FleetProfile returns the active env profile for UI rendering.
+	// Does NOT expose ClientID, APIAudience, or any secret fields.
+	FleetProfile(ctx context.Context) (FleetProfileInfo, error)
+
+	// ── Fleet capabilities (fleet-capability-surface-01NDFSEX09 WP11) ───────
+
+	// FleetCapabilities returns the in-memory capability snapshot.
+	// Returns an empty CapabilitiesView when signed out or fleet is disabled.
+	FleetCapabilities(ctx context.Context) (CapabilitiesView, error)
+
+	// FleetRefreshCapabilities forces an immediate fetch from the fleet
+	// capabilities endpoint and returns the updated snapshot.
+	FleetRefreshCapabilities(ctx context.Context) (CapabilitiesView, error)
+}
+
+// CapabilitiesView is the wire-safe projection of fleet.Capabilities.
+// Capability keys are plain strings in the frontend; the Capability type
+// is Go-internal.
+type CapabilitiesView struct {
+	Tier      string          `json:"tier"`
+	Enabled   map[string]bool `json:"enabled"`
+	FetchedAt string          `json:"fetchedAt"`
+	Source    string          `json:"source"`
+}
+
+// FleetIdentity is the view-layer projection of fleet.Identity. It is safe
+// to serialize to the frontend and contains no secrets.
+type FleetIdentity struct {
+	UserID      string   `json:"userId"`
+	OrgID       string   `json:"orgId"`
+	TeamID      string   `json:"teamId"`
+	Email       string   `json:"email,omitempty"`
+	DisplayName string   `json:"displayName,omitempty"`
+	Tier        string   `json:"tier,omitempty"`
+	OrgName     string   `json:"orgName,omitempty"`
+	TeamName    string   `json:"teamName,omitempty"`
+	Roles       []string `json:"roles,omitempty"`
+}
+
+// FleetProfileInfo is the safe projection of fleet.EnvProfile for UI
+// rendering. Does NOT include ClientID, APIAudience, or any secret fields.
+type FleetProfileInfo struct {
+	Name         string `json:"name"`
+	BadgeColor   string `json:"badgeColor"`
+	FleetBaseURL string `json:"fleetBaseUrl"`
+	Configured   bool   `json:"configured"`
 }
 
 // AuditSettings holds the operator-configurable audit log retention policy.
