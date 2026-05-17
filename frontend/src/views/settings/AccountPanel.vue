@@ -78,10 +78,31 @@ const tierLabel = computed(() => {
 async function signIn() {
   loading.value = true;
   error.value = '';
+  // Pre-flight: if the build hasn't populated the env profile's client_id,
+  // explain why sign-in is unavailable instead of trying and failing with
+  // an opaque message. The fleet client returns ErrProfileNotConfigured in
+  // this case, but surfacing it ahead of time keeps the button responsive
+  // and the explanation actionable.
+  if (profile.value && !profile.value.configured) {
+    error.value =
+      `Sign-in is not available for the "${profile.value.name}" build profile — ` +
+      `it is missing the Zitadel client ID. ` +
+      `This is a build-pipeline gap (the release.yml step that reads sigil-infra ` +
+      `TF outputs and injects them as ldflags has not landed yet).`;
+    loading.value = false;
+    return;
+  }
   try {
     identity.value = await client.settings.fleetSignIn();
   } catch (e: any) {
-    error.value = e?.message ?? 'Sign-in failed. Please try again.';
+    const raw = e?.message ?? String(e ?? '');
+    if (raw.includes('env profile not populated')) {
+      error.value =
+        'Sign-in is not available: build profile is missing the Zitadel client ID. ' +
+        'Run a build with the LLE TF outputs injected, or set KENAZ_HARNESS_ENV=local.';
+    } else {
+      error.value = raw || 'Sign-in failed. Please try again.';
+    }
     identity.value = false;
   } finally {
     loading.value = false;

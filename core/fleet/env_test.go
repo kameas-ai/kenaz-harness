@@ -8,76 +8,63 @@ func TestResolveProfile_Matrix(t *testing.T) {
 	tests := []struct {
 		name       string
 		envName    string
-		envIssuer  string
-		envClient  string
-		envAud     string
-		envBase    string
 		wantName   string
 		wantColor  string
+		wantIssuer string
+		wantFleet  string
 	}{
 		{
-			name:      "unset → prod",
-			envName:   "",
-			wantName:  EnvProd,
-			wantColor: "",
+			name:       "unset → prod",
+			envName:    "",
+			wantName:   EnvProd,
+			wantColor:  "",
+			wantIssuer: prodIssuer,
+			wantFleet:  prodFleetURL,
 		},
 		{
-			name:      "prod → prod",
-			envName:   "prod",
-			wantName:  EnvProd,
-			wantColor: "",
+			name:       "prod → prod",
+			envName:    "prod",
+			wantName:   EnvProd,
+			wantColor:  "",
+			wantIssuer: prodIssuer,
+			wantFleet:  prodFleetURL,
 		},
 		{
-			name:      "dev → dev",
-			envName:   "dev",
-			wantName:  EnvDev,
-			wantColor: "yellow",
+			name:       "dev → dev",
+			envName:    "dev",
+			wantName:   EnvDev,
+			wantColor:  "yellow",
+			wantIssuer: devIssuer,
+			wantFleet:  devFleetURL,
 		},
 		{
-			name:      "stage → stage",
-			envName:   "stage",
-			wantName:  EnvStage,
-			wantColor: "blue",
+			name:       "stage → stage",
+			envName:    "stage",
+			wantName:   EnvStage,
+			wantColor:  "blue",
+			wantIssuer: stageIssuer,
+			wantFleet:  stageFleetURL,
 		},
 		{
-			name:       "local with overrides",
+			name:       "local → local",
 			envName:    "local",
-			envIssuer:  "http://custom-issuer:8080",
-			envClient:  "my-client-id",
-			envAud:     "my-audience",
-			envBase:    "http://custom-fleet:9000",
 			wantName:   EnvLocal,
 			wantColor:  "red",
+			wantIssuer: localIssuer,
+			wantFleet:  localFleetURL,
 		},
 		{
-			name:      "local without overrides → defaults",
-			envName:   "local",
-			wantName:  EnvLocal,
-			wantColor: "red",
-		},
-		{
-			name:      "banana (unrecognized) → prod",
-			envName:   "banana",
-			wantName:  EnvProd,
-			wantColor: "",
+			name:       "banana (unrecognized) → prod",
+			envName:    "banana",
+			wantName:   EnvProd,
+			wantColor:  "",
+			wantIssuer: prodIssuer,
+			wantFleet:  prodFleetURL,
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Setenv("KENAZ_HARNESS_ENV", tt.envName)
-			if tt.envIssuer != "" {
-				t.Setenv("HARNESS_FLEET_ISSUER", tt.envIssuer)
-			}
-			if tt.envClient != "" {
-				t.Setenv("HARNESS_FLEET_CLIENT_ID", tt.envClient)
-			}
-			if tt.envAud != "" {
-				t.Setenv("HARNESS_FLEET_AUDIENCE", tt.envAud)
-			}
-			if tt.envBase != "" {
-				t.Setenv("HARNESS_FLEET_BASE_URL", tt.envBase)
-			}
-
 			p := ResolveProfile()
 			if p.Name != tt.wantName {
 				t.Errorf("Name = %q, want %q", p.Name, tt.wantName)
@@ -85,13 +72,12 @@ func TestResolveProfile_Matrix(t *testing.T) {
 			if p.BadgeColor() != tt.wantColor {
 				t.Errorf("BadgeColor = %q, want %q", p.BadgeColor(), tt.wantColor)
 			}
-			if tt.envIssuer != "" && p.ZitadelIssuer != tt.envIssuer {
-				t.Errorf("ZitadelIssuer = %q, want %q", p.ZitadelIssuer, tt.envIssuer)
+			if p.ZitadelIssuer != tt.wantIssuer {
+				t.Errorf("ZitadelIssuer = %q, want %q", p.ZitadelIssuer, tt.wantIssuer)
 			}
-			if tt.envBase != "" && p.FleetBaseURL != tt.envBase {
-				t.Errorf("FleetBaseURL = %q, want %q", p.FleetBaseURL, tt.envBase)
+			if p.FleetBaseURL != tt.wantFleet {
+				t.Errorf("FleetBaseURL = %q, want %q", p.FleetBaseURL, tt.wantFleet)
 			}
-			// Scopes must always be set.
 			if len(p.OIDCScopes) == 0 {
 				t.Error("OIDCScopes is empty")
 			}
@@ -99,18 +85,20 @@ func TestResolveProfile_Matrix(t *testing.T) {
 	}
 }
 
-func TestResolveProfile_LocalDefaults(t *testing.T) {
+// TestResolveProfile_NoPerFieldOverrides verifies that the per-field env
+// vars (HARNESS_FLEET_ISSUER, etc.) are NOT honored — the simplified
+// single-env-var design means KENAZ_HARNESS_ENV is the only knob.
+func TestResolveProfile_NoPerFieldOverrides(t *testing.T) {
 	t.Setenv("KENAZ_HARNESS_ENV", "local")
-	// Clear overrides.
-	t.Setenv("HARNESS_FLEET_ISSUER", "")
-	t.Setenv("HARNESS_FLEET_BASE_URL", "")
-
+	t.Setenv("HARNESS_FLEET_ISSUER", "http://should-be-ignored")
+	t.Setenv("HARNESS_FLEET_CLIENT_ID", "should-be-ignored")
+	t.Setenv("HARNESS_FLEET_BASE_URL", "http://should-be-ignored")
 	p := ResolveProfile()
-	if p.FleetBaseURL != "http://localhost:8090" {
-		t.Errorf("default FleetBaseURL = %q, want http://localhost:8090", p.FleetBaseURL)
+	if p.ZitadelIssuer != localIssuer {
+		t.Errorf("ZitadelIssuer = %q, want %q (per-field override should not be honored)", p.ZitadelIssuer, localIssuer)
 	}
-	if p.ZitadelIssuer != "http://localhost:8080" {
-		t.Errorf("default ZitadelIssuer = %q, want http://localhost:8080", p.ZitadelIssuer)
+	if p.FleetBaseURL != localFleetURL {
+		t.Errorf("FleetBaseURL = %q, want %q (per-field override should not be honored)", p.FleetBaseURL, localFleetURL)
 	}
 }
 

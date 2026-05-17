@@ -10,6 +10,8 @@ import (
 	"github.com/sigil-tech/kaneaz-harness/core/fleet"
 	"github.com/sigil-tech/kaneaz-harness/core/llm"
 	"github.com/sigil-tech/kaneaz-harness/core/llm/fleet_hosted"
+	"github.com/sigil-tech/kaneaz-harness/core/mcp/recipes"
+	cedarpolicy "github.com/sigil-tech/kaneaz-harness/core/policy/cedar"
 )
 
 // AdapterRegistrar is the minimal interface from the LLM registry that the
@@ -19,21 +21,33 @@ type AdapterRegistrar interface {
 	RegisterAdapter(a llm.ProviderAdapter)
 }
 
-// fleetState holds the fleet client, dataDir, capability poller, and the
-// fleet_hosted LLM adapter (when CapHostedInference is enabled).
+// fleetState holds the fleet client, dataDir, capability poller, config
+// poller, the fleet_hosted LLM adapter (when CapHostedInference is enabled),
+// and the emergency-lockdown watcher (fleet-emergency-lockdown-01NDFSEX12).
 // It is attached to API after construction via SetFleetClient.
 type fleetState struct {
-	mu            sync.RWMutex
-	client        *fleet.Client
-	dataDir       string
-	poller        *fleet.CapabilityPoller
-	llmRegistrar  AdapterRegistrar
-	fleetAdapter  *fleet_hosted.Adapter
+	mu              sync.RWMutex
+	client          *fleet.Client
+	dataDir         string
+	poller          *fleet.CapabilityPoller
+	configPoller    *fleet.ConfigPoller
+	llmRegistrar    AdapterRegistrar
+	fleetAdapter    *fleet_hosted.Adapter
+	lockdownWatcher *fleet.Watcher
+	lockdownBroker  fleet.BrokerSink
+
+	// cedarEngine is the Cedar policy engine wired at SetCedarEngine time.
+	// Used by the composite ConfigApplier to apply team policy bundles.
+	cedarEngine *cedarpolicy.Engine
+
+	// fleetModelPrefs is the last-received fleet model preferences.
+	// Protected by mu.
+	fleetModelPrefs *fleet.BundleModelPrefs
 }
 
 // SetFleetClient wires a fleet.Client into the API and starts the capability
-// poller. Called from rpc.New() during chassis boot. When not called, fleet
-// methods return fleet.ErrFleetDisabled.
+// and config pollers. Called from rpc.New() during chassis boot. When not
+// called, fleet methods return fleet.ErrFleetDisabled.
 func (a *API) SetFleetClient(c *fleet.Client, dataDir string) {
 	if a.fleet == nil {
 		a.fleet = &fleetState{}
@@ -49,12 +63,58 @@ func (a *API) SetFleetClient(c *fleet.Client, dataDir string) {
 		a.fleet.poller = p
 		p.Start(context.Background())
 	}
+	// Start the config poller lazily.
+	if a.fleet.configPoller == nil {
+		applier := &compositeConfigApplier{state: a.fleet}
+		cp := fleet.NewConfigPoller(c, dataDir, applier)
+		a.fleet.configPoller = cp
+		cp.Start(context.Background())
+	}
 	// Wire the fleet_hosted LLM adapter when we have a profile URL.
 	// The adapter gates itself at resolve time via the EnabledFunc so
 	// tier changes propagate within one poll interval without restart.
 	if c != nil && c.Profile().FleetBaseURL != "" {
 		a.wireFleetHostedAdapter(c)
 	}
+	// Start the emergency-lockdown watcher. The watcher self-gates on
+	// CapEmergencyLockdown so it exits immediately when the capability
+	// is absent (fleet-emergency-lockdown-01NDFSEX12 WP02).
+	if a.fleet.lockdownWatcher == nil && c != nil {
+		w := fleet.NewWatcher(c, a.fleet.poller, a.fleet.lockdownBroker)
+		a.fleet.lockdownWatcher = w
+		w.Start(context.Background())
+	}
+}
+
+// SetLockdownBroker wires the event broker into the fleet state so the
+// lockdown Watcher can publish fleet:lockdown:changed events to the frontend.
+// Must be called before SetFleetClient to take effect on first start; if called
+// after, the watcher uses the broker on its next reconnect cycle.
+// (fleet-emergency-lockdown-01NDFSEX12 WP02)
+func (a *API) SetLockdownBroker(sink fleet.BrokerSink) {
+	if a.fleet == nil {
+		a.fleet = &fleetState{}
+	}
+	a.fleet.mu.Lock()
+	defer a.fleet.mu.Unlock()
+	a.fleet.lockdownBroker = sink
+	// If the watcher is already running, update its broker reference.
+	if a.fleet.lockdownWatcher != nil {
+		a.fleet.lockdownWatcher.SetBroker(sink)
+	}
+}
+
+// SetCedarEngine wires the Cedar policy engine into the fleet state so that
+// the config poller can apply fleet-distributed policy bundles.
+// Must be called before SetFleetClient to take effect; if called after,
+// the engine is stored and will be used by subsequent bundle applies.
+func (a *API) SetCedarEngine(engine *cedarpolicy.Engine) {
+	if a.fleet == nil {
+		a.fleet = &fleetState{}
+	}
+	a.fleet.mu.Lock()
+	defer a.fleet.mu.Unlock()
+	a.fleet.cedarEngine = engine
 }
 
 // wireFleetHostedAdapter creates the fleet_hosted LLM adapter and registers
@@ -113,6 +173,14 @@ func (a *API) fleetClient() *fleet.Client {
 	return a.fleet.client
 }
 
+// FleetClientForBootstrap returns the fleet client for use in one-shot
+// bootstrap operations (e.g. BootstrapLockdownStatus). Returns nil when
+// fleet is not configured or the client is a nop.
+// (fleet-emergency-lockdown-01NDFSEX12 WP02)
+func (a *API) FleetClientForBootstrap() *fleet.Client {
+	return a.fleetClient()
+}
+
 func (a *API) fleetDataDir() string {
 	if a.fleet == nil {
 		return ""
@@ -139,6 +207,13 @@ func (a *API) FleetSignIn(ctx context.Context) (FleetIdentity, error) {
 		return FleetIdentity{}, fleet.ErrFleetDisabled
 	}
 	profile := fleet.ResolveProfile()
+	// Pre-flight: refuse early when the profile is missing the build-time
+	// client_id (a clear typed error beats opening the browser to a broken
+	// authorization URL). DeviceCodeFlow would otherwise fail with an opaque
+	// HTTP/parse error after the user has already clicked through.
+	if !profile.Configured() {
+		return FleetIdentity{}, fleet.ErrProfileNotConfigured
+	}
 	ts, err := fleet.DeviceCodeFlow(ctx, profile)
 	if err != nil {
 		return FleetIdentity{}, err
@@ -271,4 +346,116 @@ func capabilitiesToView(c fleet.Capabilities) CapabilitiesView {
 		FetchedAt: fetchedAt,
 		Source:    c.Source,
 	}
+}
+
+// fleetConfigPoller returns the config poller, or nil when fleet is not wired.
+func (a *API) fleetConfigPoller() *fleet.ConfigPoller {
+	if a.fleet == nil {
+		return nil
+	}
+	a.fleet.mu.RLock()
+	defer a.fleet.mu.RUnlock()
+	return a.fleet.configPoller
+}
+
+// FleetConfigPullStatus returns the current config-pull poller state.
+// Returns a zero-value view when fleet is disabled or the poller is not yet wired.
+func (a *API) FleetConfigPullStatus(_ context.Context) (FleetConfigPullStatusView, error) {
+	p := a.fleetConfigPoller()
+	if p == nil {
+		return FleetConfigPullStatusView{Source: "default-deny"}, nil
+	}
+	st := p.Status()
+	return FleetConfigPullStatusView{
+		LastAppliedID:  st.LastAppliedID,
+		LastAppliedAt:  st.LastAppliedAt,
+		LastError:      st.LastError,
+		Source:         st.Source,
+		BundleChecksum: st.BundleChecksum,
+	}, nil
+}
+
+// ── compositeConfigApplier ───────────────────────────────────────────────────
+
+// compositeConfigApplier implements fleet.ConfigApplier. It fans out each
+// section of the bundle to the appropriate sub-system:
+//   - cedar_delta   → cedarpolicy.Engine.SetTeamBundle
+//   - mcp_allowlist → recipes.ApplyFleetAllowlist
+//   - model_prefs   → stored in fleetState.fleetModelPrefs
+//   - weight_urls   → fleet.SetWeightURLs
+type compositeConfigApplier struct {
+	state *fleetState
+}
+
+func (a *compositeConfigApplier) ApplyBundle(ctx context.Context, b *fleet.Bundle) error {
+	var errs []error
+
+	// Cedar delta.
+	if len(b.CedarDelta) > 0 {
+		a.state.mu.RLock()
+		engine := a.state.cedarEngine
+		a.state.mu.RUnlock()
+		if engine != nil {
+			if err := fleet.ApplyCedarDelta(ctx, engine, b.CedarDelta); err != nil {
+				errs = append(errs, err)
+			}
+		}
+	}
+
+	// MCP allow-list.
+	if b.MCPAllowlist != nil {
+		recipes.ApplyFleetAllowlist(b.MCPAllowlist)
+	}
+
+	// Model prefs.
+	if b.ModelPrefs != nil {
+		a.state.mu.Lock()
+		a.state.fleetModelPrefs = b.ModelPrefs
+		a.state.mu.Unlock()
+	}
+
+	// Weight URLs.
+	if len(b.KameasMLWeightURLs) > 0 {
+		a.state.mu.RLock()
+		dataDir := a.state.dataDir
+		a.state.mu.RUnlock()
+		fleet.SetWeightURLs(dataDir, b.KameasMLWeightURLs)
+	}
+
+	if len(errs) > 0 {
+		return errs[0] // return first error; others are logged by the poller
+	}
+	return nil
+}
+
+// FleetModelPrefs returns the current fleet-managed model preferences, or nil
+// when no bundle has been applied.
+func (a *API) FleetModelPrefs() *fleet.BundleModelPrefs {
+	if a.fleet == nil {
+		return nil
+	}
+	a.fleet.mu.RLock()
+	defer a.fleet.mu.RUnlock()
+	return a.fleet.fleetModelPrefs
+}
+
+// LockdownStatusView is the wire shape returned by FleetLockdownStatus.
+// The frontend's LockdownBanner uses this to render the reason text and
+// the session composer uses Active to disable the chat input.
+// (fleet-emergency-lockdown-01NDFSEX12 WP02)
+type LockdownStatusView struct {
+	// Active is true when a fleet-issued emergency lockdown is in effect.
+	Active bool `json:"active"`
+	// Reason is the admin-supplied reason string. Empty when Active is false
+	// or when the watcher has not received a reason from the fleet server.
+	Reason string `json:"reason,omitempty"`
+}
+
+// FleetLockdownStatus returns the current emergency lockdown state.
+// This RPC is called by the frontend on mount (banner boot) and after
+// receiving a fleet:lockdown:changed broker event.
+// (fleet-emergency-lockdown-01NDFSEX12 WP02)
+func (a *API) FleetLockdownStatus(_ context.Context) (LockdownStatusView, error) {
+	active := fleet.LockdownActive()
+	return LockdownStatusView{Active: active}, nil
 }

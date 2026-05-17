@@ -3726,3 +3726,33 @@ export interface CapabilitiesView {
   /** "fleet" | "cache" | "default-deny" */
   source: string;
 }
+
+/**
+ * FleetConfigPullStatusView — wire projection of the config-pull poller state.
+ * Mirrors core/rpc/views/settings.FleetConfigPullStatusView.
+ * (fleet-config-pull-01NDFSEX10 WP02)
+ */
+export interface FleetConfigPullStatusView {
+  /** bundle_id of the last successfully applied bundle, or 0. */
+  lastAppliedId: number;
+  /** RFC3339 timestamp of the last apply, or empty string. */
+  lastAppliedAt: string;
+  /** Most recent error string, or empty when healthy. */
+  lastError: string;
+  /** "fleet" | "cache" | "default-deny" */
+  source: string;
+  /** Hex SHA-256 of the last-seen bundle body (for 304 Not Modified gating). */
+  bundleChecksum: string;
+}
+
+/**
+ * LockdownStatusView — current emergency lockdown state.
+ * Mirrors core/rpc/views/settings.LockdownStatusView.
+ * (fleet-emergency-lockdown-01NDFSEX12 WP02)
+ */
+export interface LockdownStatusView {
+  /** true when a fleet-issued emergency lockdown is in effect. */
+  active: boolean;
+  /** Admin-supplied reason text; empty when not active or no reason given. */
+  reason: string;
+}

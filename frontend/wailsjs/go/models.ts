@@ -593,6 +593,22 @@ export namespace audit {
 	        this.limit = source["limit"];
 	    }
 	}
+	export class VerifyChainResult {
+	    verified: boolean;
+	    rows_checked: number;
+	    broken_at_id?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new VerifyChainResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.verified = source["verified"];
+	        this.rows_checked = source["rows_checked"];
+	        this.broken_at_id = source["broken_at_id"];
+	    }
+	}
 
 }
 
@@ -2523,6 +2539,7 @@ export namespace llm {
 	    tool_use?: ToolUse;
 	    tool_result?: ToolResult;
 	    tool_data?: number[];
+	    artifact_id?: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new ContentBlock(source);
@@ -2536,6 +2553,219 @@ export namespace llm {
 	        this.tool_use = this.convertValues(source["tool_use"], ToolUse);
 	        this.tool_result = this.convertValues(source["tool_result"], ToolResult);
 	        this.tool_data = source["tool_data"];
+	        this.artifact_id = source["artifact_id"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	
+	export class CustomCapabilityMatrix {
+	    endpoint: string;
+	    probed_at: number;
+	    streaming: string;
+	    tool_calling: string;
+	    streaming_usage: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new CustomCapabilityMatrix(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.endpoint = source["endpoint"];
+	        this.probed_at = source["probed_at"];
+	        this.streaming = source["streaming"];
+	        this.tool_calling = source["tool_calling"];
+	        this.streaming_usage = source["streaming_usage"];
+	    }
+	}
+	export class CustomTemplateSummary {
+	    id: string;
+	    name: string;
+	    base_url: string;
+	    auth_scheme: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new CustomTemplateSummary(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.name = source["name"];
+	        this.base_url = source["base_url"];
+	        this.auth_scheme = source["auth_scheme"];
+	    }
+	}
+	export class FallbackChainEntryView {
+	    provider_id: string;
+	    model?: string;
+	    param_overrides?: Record<string, any>;
+	    triggers: string[];
+	    max_attempts?: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new FallbackChainEntryView(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.provider_id = source["provider_id"];
+	        this.model = source["model"];
+	        this.param_overrides = source["param_overrides"];
+	        this.triggers = source["triggers"];
+	        this.max_attempts = source["max_attempts"];
+	    }
+	}
+	export class FallbackChainSummary {
+	    id: string;
+	    name: string;
+	    description?: string;
+	    entry_count: number;
+	    bundled: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new FallbackChainSummary(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.name = source["name"];
+	        this.description = source["description"];
+	        this.entry_count = source["entry_count"];
+	        this.bundled = source["bundled"];
+	    }
+	}
+	export class FallbackChainView {
+	    id: string;
+	    name: string;
+	    description?: string;
+	    entries: FallbackChainEntryView[];
+	
+	    static createFrom(source: any = {}) {
+	        return new FallbackChainView(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.name = source["name"];
+	        this.description = source["description"];
+	        this.entries = this.convertValues(source["entries"], FallbackChainEntryView);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	
+	export class LocalRuntimeModel {
+	    id: string;
+	    displayName: string;
+	    sizeBytes?: number;
+	    quantLevel?: string;
+	    paramCount?: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new LocalRuntimeModel(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.displayName = source["displayName"];
+	        this.sizeBytes = source["sizeBytes"];
+	        this.quantLevel = source["quantLevel"];
+	        this.paramCount = source["paramCount"];
+	    }
+	}
+	export class LocalRuntimeConfigResult {
+	    providerId: string;
+	    name: string;
+	    models: LocalRuntimeModel[];
+	
+	    static createFrom(source: any = {}) {
+	        return new LocalRuntimeConfigResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.providerId = source["providerId"];
+	        this.name = source["name"];
+	        this.models = this.convertValues(source["models"], LocalRuntimeModel);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class LocalRuntimeInfo {
+	    kind: string;
+	    name: string;
+	    running: boolean;
+	    installed: boolean;
+	    defaultBaseURL: string;
+	    port: number;
+	    models?: LocalRuntimeModel[];
+	
+	    static createFrom(source: any = {}) {
+	        return new LocalRuntimeInfo(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.kind = source["kind"];
+	        this.name = source["name"];
+	        this.running = source["running"];
+	        this.installed = source["installed"];
+	        this.defaultBaseURL = source["defaultBaseURL"];
+	        this.port = source["port"];
+	        this.models = this.convertValues(source["models"], LocalRuntimeModel);
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -2558,7 +2788,6 @@ export namespace llm {
 	}
 	
 	
-	
 	export class ModelInfo {
 	    id: string;
 	    displayName: string;
@@ -2578,6 +2807,58 @@ export namespace llm {
 	        this.contextWindow = source["contextWindow"];
 	        this.maxOutputTokens = source["maxOutputTokens"];
 	    }
+	}
+	export class ProbeCustomEndpointInput {
+	    base_url: string;
+	    model?: string;
+	    auth_scheme: string;
+	    auth_header?: string;
+	    plaintextApiKey?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ProbeCustomEndpointInput(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.base_url = source["base_url"];
+	        this.model = source["model"];
+	        this.auth_scheme = source["auth_scheme"];
+	        this.auth_header = source["auth_header"];
+	        this.plaintextApiKey = source["plaintextApiKey"];
+	    }
+	}
+	export class ProbeCustomEndpointResult {
+	    matrix: CustomCapabilityMatrix;
+	    err_message?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ProbeCustomEndpointResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.matrix = this.convertValues(source["matrix"], CustomCapabilityMatrix);
+	        this.err_message = source["err_message"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
 	}
 	export class Redacted {
 	    display: string;
@@ -2647,6 +2928,56 @@ export namespace llm {
 		    return a;
 		}
 	}
+	export class ProviderKeyTestResult {
+	    ok: boolean;
+	    model_count: number;
+	    deprecation_warning?: string;
+	    message?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ProviderKeyTestResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.ok = source["ok"];
+	        this.model_count = source["model_count"];
+	        this.deprecation_warning = source["deprecation_warning"];
+	        this.message = source["message"];
+	    }
+	}
+	export class RecognizeTemplateResult {
+	    matched: boolean;
+	    template?: CustomTemplateSummary;
+	
+	    static createFrom(source: any = {}) {
+	        return new RecognizeTemplateResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.matched = source["matched"];
+	        this.template = this.convertValues(source["template"], CustomTemplateSummary);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	
 	export class RotationResult {
 	    success: boolean;
@@ -2691,11 +3022,11 @@ export namespace llm {
 	    success: boolean;
 	    latency_ms: number;
 	    message: string;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new TestResult(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.success = source["success"];
@@ -2703,69 +3034,44 @@ export namespace llm {
 	        this.message = source["message"];
 	    }
 	}
+	
 
-	export class ProviderKeyTestResult {
-	    ok: boolean;
-	    model_count: number;
-	    deprecation_warning: string;
-	    message: string;
+}
 
+export namespace log {
+	
+	export class FilterQuery {
+	    // Go type: time
+	    since?: any;
+	    // Go type: time
+	    until?: any;
+	    actor_ids?: string[];
+	    kinds?: string[];
+	    resources?: string[];
+	    outcomes?: string[];
+	    free_text?: string;
+	    verbose?: boolean;
+	    limit?: number;
+	    offset?: number;
+	
 	    static createFrom(source: any = {}) {
-	        return new ProviderKeyTestResult(source);
+	        return new FilterQuery(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.ok = source["ok"];
-	        this.model_count = source["model_count"];
-	        this.deprecation_warning = source["deprecation_warning"];
-	        this.message = source["message"];
+	        this.since = this.convertValues(source["since"], null);
+	        this.until = this.convertValues(source["until"], null);
+	        this.actor_ids = source["actor_ids"];
+	        this.kinds = source["kinds"];
+	        this.resources = source["resources"];
+	        this.outcomes = source["outcomes"];
+	        this.free_text = source["free_text"];
+	        this.verbose = source["verbose"];
+	        this.limit = source["limit"];
+	        this.offset = source["offset"];
 	    }
-	}
-
-	// model-fallback-routing-01NDFSEX04
-
-	export class FallbackChainEntryView {
-	    providerID: string;
-	    model?: string;
-	    triggers: string[];
-	    maxAttempts: number;
-	    paramOverrides: {[key: string]: any};
-
-	    static createFrom(source: any = {}) {
-	        return new FallbackChainEntryView(source);
-	    }
-
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.providerID = source["providerID"];
-	        this.model = source["model"];
-	        this.triggers = source["triggers"];
-	        this.maxAttempts = source["maxAttempts"];
-	        this.paramOverrides = source["paramOverrides"];
-	    }
-	}
-
-	export class FallbackChainView {
-	    id: string;
-	    name: string;
-	    description?: string;
-	    entries: FallbackChainEntryView[];
-	    bundled?: boolean;
-
-	    static createFrom(source: any = {}) {
-	        return new FallbackChainView(source);
-	    }
-
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.id = source["id"];
-	        this.name = source["name"];
-	        this.description = source["description"];
-	        this.entries = this.convertValues(source["entries"], FallbackChainEntryView);
-	        this.bundled = source["bundled"];
-	    }
-
+	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -2784,28 +3090,86 @@ export namespace llm {
 		    return a;
 		}
 	}
-
-	export class FallbackChainSummary {
+	export class ExportOptions {
+	    DataDir: string;
+	    Filter: FilterQuery;
+	    Format: string;
+	    HarnessVersion: string;
+	    GitSHA: string;
+	    ChainStatus: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ExportOptions(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.DataDir = source["DataDir"];
+	        this.Filter = this.convertValues(source["Filter"], FilterQuery);
+	        this.Format = source["Format"];
+	        this.HarnessVersion = source["HarnessVersion"];
+	        this.GitSHA = source["GitSHA"];
+	        this.ChainStatus = source["ChainStatus"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	
+	export class SavedQuery {
 	    id: string;
 	    name: string;
-	    description?: string;
-	    entryCount: number;
-	    bundled: boolean;
-
+	    query: FilterQuery;
+	    // Go type: time
+	    created_at: any;
+	    user_id?: string;
+	
 	    static createFrom(source: any = {}) {
-	        return new FallbackChainSummary(source);
+	        return new SavedQuery(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.id = source["id"];
 	        this.name = source["name"];
-	        this.description = source["description"];
-	        this.entryCount = source["entryCount"];
-	        this.bundled = source["bundled"];
+	        this.query = this.convertValues(source["query"], FilterQuery);
+	        this.created_at = this.convertValues(source["created_at"], null);
+	        this.user_id = source["user_id"];
 	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
 	}
-
 
 }
 
@@ -4459,6 +4823,9 @@ export namespace rpc {
 	    windowSize: WindowSize;
 	    policyEditorEnabled: boolean;
 	    keychainRotationEnabled: boolean;
+	    customOpenAIEnabled: boolean;
+	    capabilities?: Record<string, boolean>;
+	    tier?: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new AppInfo(source);
@@ -4474,6 +4841,9 @@ export namespace rpc {
 	        this.windowSize = this.convertValues(source["windowSize"], WindowSize);
 	        this.policyEditorEnabled = source["policyEditorEnabled"];
 	        this.keychainRotationEnabled = source["keychainRotationEnabled"];
+	        this.customOpenAIEnabled = source["customOpenAIEnabled"];
+	        this.capabilities = source["capabilities"];
+	        this.tier = source["tier"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -4887,6 +5257,78 @@ export namespace secrets {
 
 }
 
+export namespace sentry {
+	
+	export class CachedEntry {
+	    id: string;
+	    // Go type: time
+	    capturedAt: any;
+	    kind: string;
+	    summary: string;
+	    sentryEventId?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new CachedEntry(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.capturedAt = this.convertValues(source["capturedAt"], null);
+	        this.kind = source["kind"];
+	        this.summary = source["summary"];
+	        this.sentryEventId = source["sentryEventId"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class DSNTestResult {
+	    ok: boolean;
+	    error?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new DSNTestResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.ok = source["ok"];
+	        this.error = source["error"];
+	    }
+	}
+	export class LocalReportResult {
+	    path: string;
+	    byteCount: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new LocalReportResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.path = source["path"];
+	        this.byteCount = source["byteCount"];
+	    }
+	}
+
+}
+
 export namespace sessions {
 	
 	export class AutonomyKnobValues {
@@ -4934,11 +5376,11 @@ export namespace sessions {
 	export class ExportResult {
 	    path: string;
 	    byteCount: number;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new ExportResult(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.path = source["path"];
@@ -4951,11 +5393,11 @@ export namespace sessions {
 	    argsSummary: string;
 	    latency?: string;
 	    usedSecrets?: boolean;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new ToolCall(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.id = source["id"];
@@ -5163,6 +5605,118 @@ export namespace sessions {
 
 export namespace settings {
 	
+	export class AuditSettings {
+	    strategy?: string;
+	    window_days?: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new AuditSettings(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.strategy = source["strategy"];
+	        this.window_days = source["window_days"];
+	    }
+	}
+	export class CapabilitiesView {
+	    tier: string;
+	    enabled: Record<string, boolean>;
+	    fetchedAt: string;
+	    source: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new CapabilitiesView(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.tier = source["tier"];
+	        this.enabled = source["enabled"];
+	        this.fetchedAt = source["fetchedAt"];
+	        this.source = source["source"];
+	    }
+	}
+	export class FleetConfigPullStatusView {
+	    lastAppliedId: number;
+	    lastAppliedAt: string;
+	    lastError: string;
+	    source: string;
+	    bundleChecksum: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new FleetConfigPullStatusView(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.lastAppliedId = source["lastAppliedId"];
+	        this.lastAppliedAt = source["lastAppliedAt"];
+	        this.lastError = source["lastError"];
+	        this.source = source["source"];
+	        this.bundleChecksum = source["bundleChecksum"];
+	    }
+	}
+	export class FleetIdentity {
+	    userId: string;
+	    orgId: string;
+	    teamId: string;
+	    email?: string;
+	    displayName?: string;
+	    tier?: string;
+	    orgName?: string;
+	    teamName?: string;
+	    roles?: string[];
+	
+	    static createFrom(source: any = {}) {
+	        return new FleetIdentity(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.userId = source["userId"];
+	        this.orgId = source["orgId"];
+	        this.teamId = source["teamId"];
+	        this.email = source["email"];
+	        this.displayName = source["displayName"];
+	        this.tier = source["tier"];
+	        this.orgName = source["orgName"];
+	        this.teamName = source["teamName"];
+	        this.roles = source["roles"];
+	    }
+	}
+	export class FleetProfileInfo {
+	    name: string;
+	    badgeColor: string;
+	    fleetBaseUrl: string;
+	    configured: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new FleetProfileInfo(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.badgeColor = source["badgeColor"];
+	        this.fleetBaseUrl = source["fleetBaseUrl"];
+	        this.configured = source["configured"];
+	    }
+	}
+	export class LockdownStatusView {
+	    active: boolean;
+	    reason?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new LockdownStatusView(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.active = source["active"];
+	        this.reason = source["reason"];
+	    }
+	}
 	export class ProviderProfileRef {
 	    providerId?: string;
 	    modelId?: string;
@@ -5256,6 +5810,12 @@ export namespace settings {
 	    narrativePreludeTopN?: number;
 	    multimodalInputDisabled?: boolean;
 	    autoResumeOnKeyRotationDisabled?: boolean;
+	    autoCaptureGeneratedImagesDisabled?: boolean;
+	    maxGeneratedImageBytes?: number;
+	    localRuntimeRAMOverrideGB?: number;
+	    crashReportingTier?: string;
+	    sentryDsn?: string;
+	    hasSeenCrashReportingOnboarding?: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new Settings(source);
@@ -5327,6 +5887,12 @@ export namespace settings {
 	        this.narrativePreludeTopN = source["narrativePreludeTopN"];
 	        this.multimodalInputDisabled = source["multimodalInputDisabled"];
 	        this.autoResumeOnKeyRotationDisabled = source["autoResumeOnKeyRotationDisabled"];
+	        this.autoCaptureGeneratedImagesDisabled = source["autoCaptureGeneratedImagesDisabled"];
+	        this.maxGeneratedImageBytes = source["maxGeneratedImageBytes"];
+	        this.localRuntimeRAMOverrideGB = source["localRuntimeRAMOverrideGB"];
+	        this.crashReportingTier = source["crashReportingTier"];
+	        this.sentryDsn = source["sentryDsn"];
+	        this.hasSeenCrashReportingOnboarding = source["hasSeenCrashReportingOnboarding"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -5347,78 +5913,11 @@ export namespace settings {
 		    return a;
 		}
 	}
-	export class FleetIdentity {
-	    userId: string;
-	    orgId: string;
-	    teamId: string;
-	    email?: string;
-	    displayName?: string;
-	    tier?: string;
-	    orgName?: string;
-	    teamName?: string;
-	    roles?: string[];
-
-	    static createFrom(source: any = {}) {
-	        return new FleetIdentity(source);
-	    }
-
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.userId = source["userId"];
-	        this.orgId = source["orgId"];
-	        this.teamId = source["teamId"];
-	        this.email = source["email"];
-	        this.displayName = source["displayName"];
-	        this.tier = source["tier"];
-	        this.orgName = source["orgName"];
-	        this.teamName = source["teamName"];
-	        this.roles = source["roles"];
-	    }
-	}
-	export class FleetProfileInfo {
-	    name: string;
-	    badgeColor: string;
-	    fleetBaseUrl: string;
-	    configured: boolean;
-
-	    static createFrom(source: any = {}) {
-	        return new FleetProfileInfo(source);
-	    }
-
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.name = source["name"];
-	        this.badgeColor = source["badgeColor"];
-	        this.fleetBaseUrl = source["fleetBaseUrl"];
-	        this.configured = source["configured"];
-	    }
-	}
-
-	// CapabilitiesView is the wire projection of fleet.Capabilities.
-	// (fleet-capability-surface-01NDFSEX09 WP11)
-	export class CapabilitiesView {
-	    tier: string;
-	    enabled: Record<string, boolean>;
-	    fetchedAt: string;
-	    source: string;
-
-	    static createFrom(source: any = {}) {
-	        return new CapabilitiesView(source);
-	    }
-
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.tier = source["tier"] ?? '';
-	        this.enabled = source["enabled"] ?? {};
-	        this.fetchedAt = source["fetchedAt"] ?? '';
-	        this.source = source["source"] ?? '';
-	    }
-	}
 
 }
 
 export namespace slashcmd {
-
+	
 	export class CommandInfo {
 	    name: string;
 	    description: string;

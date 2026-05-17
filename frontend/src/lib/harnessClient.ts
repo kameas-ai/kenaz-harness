@@ -155,6 +155,8 @@ import type {
   FleetIdentity,
   FleetProfileInfo,
   CapabilitiesView,
+  FleetConfigPullStatusView,
+  LockdownStatusView,
 } from './types';
 
 /**
@@ -455,6 +457,10 @@ interface WailsBindingsLike {
   // fleet-capability-surface-01NDFSEX09 WP11
   Settings_FleetCapabilities(): Promise<CapabilitiesView>;
   Settings_FleetRefreshCapabilities(): Promise<CapabilitiesView>;
+  // fleet-config-pull-01NDFSEX10 WP02
+  Settings_FleetConfigPullStatus(): Promise<FleetConfigPullStatusView>;
+  // fleet-emergency-lockdown-01NDFSEX12 WP02
+  Settings_FleetLockdownStatus(): Promise<LockdownStatusView>;
 
   Memory_ListChunks(filter: MemoryListFilter): Promise<MemoryChunk[]>;
   Memory_RememberMessage(
@@ -738,6 +744,12 @@ interface WailsBindingsLike {
   >;
   Sentry_GenerateLocalReport(): Promise<{ Path: string; ByteCount: number }>;
   Sentry_TestDSN(dsn: string): Promise<{ OK: boolean; Error: string }>;
+
+  // ── Fleet telemetry consent (fleet-otel-archival-01NDFSEX11 WP06) ────────
+  /** Returns the current fleet telemetry consent level: "none" | "aggregate" | "full". */
+  Fleet_GetTelemetryConsent(): Promise<string>;
+  /** Persists a new fleet telemetry consent level. Returns an error if the org tier is insufficient. */
+  Fleet_SetTelemetryConsent(level: string): Promise<void>;
 
   // ── audit-log-enhancement-01KX5R8F WP07 — retention settings ──────────
   Settings_GetAuditSettings(): Promise<import('./types').AuditSettings>;
@@ -1813,6 +1825,16 @@ export interface SettingsClient {
   fleetCapabilities(): Promise<CapabilitiesView>;
   /** Force a fresh fetch of capabilities from the fleet server. */
   fleetRefreshCapabilities(): Promise<CapabilitiesView>;
+
+  // ── fleet-config-pull-01NDFSEX10 WP02 ───────────────────────────────────
+  /**
+   * Return the current config-pull poller state: last applied bundle_id,
+   * last applied timestamp, last error (if any), and source.
+   */
+  fleetConfigPullStatus(): Promise<FleetConfigPullStatusView>;
+  // ── fleet-emergency-lockdown-01NDFSEX12 WP02 ────────────────────────────
+  /** Return the current fleet emergency lockdown state. */
+  fleetLockdownStatus(): Promise<LockdownStatusView>;
 }
 
 /**
@@ -2593,6 +2615,15 @@ export interface SentryClient {
   testDsn(dsn: string): Promise<{ ok: boolean; error?: string }>;
 }
 
+// ── fleet telemetry client (fleet-otel-archival-01NDFSEX11 WP06) ─────────
+
+export interface FleetClient {
+  /** Returns the current fleet telemetry consent level. */
+  getTelemetryConsent(): Promise<'none' | 'aggregate' | 'full'>;
+  /** Persists a new consent level. Rejects when the org tier is insufficient. */
+  setTelemetryConsent(level: 'none' | 'aggregate' | 'full'): Promise<void>;
+}
+
 export interface HarnessClient {
   shellStatus(): Promise<ShellStatus>;
   appInfo(): Promise<AppInfo>;
@@ -2647,6 +2678,8 @@ export interface HarnessClient {
   agents: AgentsClient;
   /** Crash-reporting surface (sentry-error-monitoring-01KX5R8G WP05). */
   sentry: SentryClient;
+  /** Fleet telemetry consent surface (fleet-otel-archival-01NDFSEX11 WP06). */
+  fleet: FleetClient;
 }
 
 // ── runtime client ─────────────────────────────────────────────────────
@@ -2971,6 +3004,10 @@ export function createHarnessClient(): HarnessClient {
       // fleet-capability-surface-01NDFSEX09 WP11
       fleetCapabilities: () => b().Settings_FleetCapabilities(),
       fleetRefreshCapabilities: () => b().Settings_FleetRefreshCapabilities(),
+      // fleet-config-pull-01NDFSEX10 WP02
+      fleetConfigPullStatus: () => b().Settings_FleetConfigPullStatus(),
+      // fleet-emergency-lockdown-01NDFSEX12 WP02
+      fleetLockdownStatus: () => b().Settings_FleetLockdownStatus(),
     },
     permissions: {
       listGrants: (family) =>
@@ -3209,6 +3246,14 @@ export function createHarnessClient(): HarnessClient {
         b()
           .Sentry_TestDSN(dsn)
           .then((r) => ({ ok: r.OK, error: r.Error || undefined })),
+    },
+    // ── fleet telemetry (fleet-otel-archival-01NDFSEX11 WP06) ──────────────
+    fleet: {
+      getTelemetryConsent: () =>
+        b()
+          .Fleet_GetTelemetryConsent()
+          .then((level) => (level as 'none' | 'aggregate' | 'full') ?? 'none'),
+      setTelemetryConsent: (level) => b().Fleet_SetTelemetryConsent(level),
     },
   };
 }
@@ -3658,6 +3703,12 @@ export function createFakeHarnessClient(
       fleetRefreshCapabilities: async () => ({
         tier: '', enabled: {}, fetchedAt: '', source: 'default-deny',
       }),
+      // fleet-config-pull-01NDFSEX10 WP02
+      fleetConfigPullStatus: async () => ({
+        lastAppliedId: 0, lastAppliedAt: '', lastError: '', source: 'default-deny', bundleChecksum: '',
+      }),
+      // fleet-emergency-lockdown-01NDFSEX12 WP02
+      fleetLockdownStatus: async () => ({ active: false, reason: '' }),
     },
     permissions: {
       listGrants: async () => [],
@@ -4240,6 +4291,10 @@ export function createFakeHarnessClient(
       getLastFive: async () => [],
       generateLocalReport: async () => ({ path: '', byteCount: 0 }),
       testDsn: async (_dsn: string) => ({ ok: false, error: 'not available in test mode' }),
+    },
+    fleet: {
+      getTelemetryConsent: async () => 'none' as const,
+      setTelemetryConsent: noop,
     },
   };
 

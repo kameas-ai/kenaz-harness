@@ -18,7 +18,8 @@ type EnvProfile struct {
 }
 
 // Configured reports whether this profile has all required fields populated.
-// Returns false when the build pipeline has not injected ldflag values.
+// Returns false when client_id has not been injected (e.g. before the build
+// pipeline plumbs the sigil-infra TF output).
 func (p EnvProfile) Configured() bool {
 	return p.ZitadelIssuer != "" && p.NativeClientID != "" && p.FleetBaseURL != ""
 }
@@ -49,7 +50,7 @@ const (
 
 // DefaultOIDCScopes is the standard OIDC scope set requested during sign-in.
 // offline_access is required for refresh tokens; the zitadel roles scope is
-// required for role assertion.
+// required for role assertion (enabled on the kameas-native Zitadel app).
 var DefaultOIDCScopes = []string{
 	"openid",
 	"profile",
@@ -58,66 +59,96 @@ var DefaultOIDCScopes = []string{
 	"offline_access",
 }
 
-// ldflag-populated variables. These are empty strings in development builds
-// and are injected at release time via go build -ldflags "-X ...".
-// nolint:unused — populated via ldflags at build time.
+// Per-environment constants. Issuers and fleet base URLs are non-secret
+// public values; client IDs and audiences are also public-by-design
+// (kameas-native is a PKCE-only NATIVE OIDC app — see sigil-infra
+// aws/terraform/modules/zitadel-kameas-apps/outputs.tf) but are injected
+// at release time via -ldflags -X so different release lines (dev/stage
+// signed binaries vs prod signed binaries) can pin different orgs.
+//
+// Defined as package-level vars so ldflags can override.
+// lleNativeClientID and lleAPIAudience are the Zitadel `kameas-native` and
+// `kameas-api` client IDs in the LLE realm. They are PUBLIC values per
+// sigil-infra aws/terraform/modules/zitadel-kameas-apps/outputs.tf
+// ("Client IDs are public values by design: ... native apps embed
+// kameas_native_client_id ..."). Local, dev, and stage all share these
+// because LLE serves both dev and stage fleet deployments per
+// kenaz-fleet/deploy/helm/values-lle.yaml.
+//
+// Drop in the actual TF output values (terragrunt run-all output -raw
+// kameas_native_client_id from aws/terraform/live/shared-services/
+// zitadel-lle-apps in sigil-infra) once SSO creds are available; until
+// then sign-in against LLE returns ErrProfileNotConfigured (fails soft —
+// the OSS-first contract guarantees the harness still runs without it).
 var (
-	devIssuer, devNativeClientID, devAPIAudience, devFleetBaseURL         string
-	stageIssuer, stageNativeClientID, stageAPIAudience, stageFleetBaseURL string
-	prodIssuer, prodNativeClientID, prodAPIAudience, prodFleetBaseURL     string
+	lleNativeClientID = "" // -ldflags -X kameas-harness/core/fleet.lleNativeClientID=<sigil-infra TF output>
+	lleAPIAudience    = "" // -ldflags -X kameas-harness/core/fleet.lleAPIAudience=<sigil-infra TF output>
+)
+
+var (
+	// Local: LLE Zitadel + localhost fleet.
+	localIssuer   = "https://lle-hkig0f.us1.zitadel.cloud"
+	localFleetURL = "http://localhost:8090"
+
+	// Dev: LLE Zitadel + dev fleet deployment.
+	devIssuer   = "https://lle-hkig0f.us1.zitadel.cloud"
+	devFleetURL = "https://dev.fleet.kameas.ai"
+
+	// Stage: LLE Zitadel + stage fleet deployment.
+	stageIssuer   = "https://lle-hkig0f.us1.zitadel.cloud"
+	stageFleetURL = "https://stage.fleet.kameas.ai"
+
+	// Prod: dedicated prod Zitadel (separate instance from LLE per
+	// sigil-infra docs/architecture.md). Empty until the prod stack
+	// ships. With KENAZ_HARNESS_ENV=prod (or unset) before provisioning,
+	// Configured() returns false and sign-in returns ErrProfileNotConfigured.
+	prodIssuer         = "" // -ldflags
+	prodNativeClientID = "" // -ldflags
+	prodAPIAudience    = "" // -ldflags
+	prodFleetURL       = "" // -ldflags (likely "https://fleet.kameas.ai")
 )
 
 // ResolveProfile reads KENAZ_HARNESS_ENV and returns the corresponding
-// EnvProfile. The selection logic is:
+// fully-configured EnvProfile.
 //
-//   - "prod" or unset/empty → prod profile (ldflag-populated fields)
-//   - "dev"                  → dev profile (ldflag-populated fields)
-//   - "stage"                → stage profile (ldflag-populated fields)
-//   - "local"                → reads HARNESS_FLEET_{ISSUER,CLIENT_ID,AUDIENCE,BASE_URL}
-//     from the environment; unset values default to localhost defaults
-//   - anything else          → prod profile with a warning to stderr
+//   - unset / empty / "prod" → prod (the safe default)
+//   - "dev"                  → LLE Zitadel + dev fleet
+//   - "stage"                → LLE Zitadel + stage fleet
+//   - "local"                → LLE Zitadel + localhost:8090 fleet
+//   - any other value        → logs warning + falls back to prod
 //
-// When a profile's key fields are empty (build pipeline has not injected
-// ldflag values), Configured() returns false and any Client method that
-// requires network access returns ErrProfileNotConfigured.
+// No per-field override env vars are read — the single KENAZ_HARNESS_ENV
+// variable selects the entire profile. (Previously HARNESS_FLEET_{ISSUER,
+// CLIENT_ID,AUDIENCE,BASE_URL} could override individual fields; that
+// layer was removed when each profile became self-configured.)
 func ResolveProfile() EnvProfile {
 	env := strings.TrimSpace(strings.ToLower(os.Getenv("KENAZ_HARNESS_ENV")))
 	switch env {
+	case EnvLocal:
+		return EnvProfile{
+			Name:           EnvLocal,
+			ZitadelIssuer:  localIssuer,
+			NativeClientID: lleNativeClientID,
+			APIAudience:    lleAPIAudience,
+			FleetBaseURL:   localFleetURL,
+			OIDCScopes:     DefaultOIDCScopes,
+		}
 	case EnvDev:
 		return EnvProfile{
 			Name:           EnvDev,
 			ZitadelIssuer:  devIssuer,
-			NativeClientID: devNativeClientID,
-			APIAudience:    devAPIAudience,
-			FleetBaseURL:   devFleetBaseURL,
+			NativeClientID: lleNativeClientID,
+			APIAudience:    lleAPIAudience,
+			FleetBaseURL:   devFleetURL,
 			OIDCScopes:     DefaultOIDCScopes,
 		}
 	case EnvStage:
 		return EnvProfile{
 			Name:           EnvStage,
 			ZitadelIssuer:  stageIssuer,
-			NativeClientID: stageNativeClientID,
-			APIAudience:    stageAPIAudience,
-			FleetBaseURL:   stageFleetBaseURL,
-			OIDCScopes:     DefaultOIDCScopes,
-		}
-	case EnvLocal:
-		issuer := os.Getenv("HARNESS_FLEET_ISSUER")
-		clientID := os.Getenv("HARNESS_FLEET_CLIENT_ID")
-		audience := os.Getenv("HARNESS_FLEET_AUDIENCE")
-		baseURL := os.Getenv("HARNESS_FLEET_BASE_URL")
-		if issuer == "" {
-			issuer = "http://localhost:8080" // LLE Zitadel default
-		}
-		if baseURL == "" {
-			baseURL = "http://localhost:8090"
-		}
-		return EnvProfile{
-			Name:           EnvLocal,
-			ZitadelIssuer:  issuer,
-			NativeClientID: clientID,
-			APIAudience:    audience,
-			FleetBaseURL:   baseURL,
+			NativeClientID: lleNativeClientID,
+			APIAudience:    lleAPIAudience,
+			FleetBaseURL:   stageFleetURL,
 			OIDCScopes:     DefaultOIDCScopes,
 		}
 	case EnvProd, "":
@@ -126,7 +157,7 @@ func ResolveProfile() EnvProfile {
 			ZitadelIssuer:  prodIssuer,
 			NativeClientID: prodNativeClientID,
 			APIAudience:    prodAPIAudience,
-			FleetBaseURL:   prodFleetBaseURL,
+			FleetBaseURL:   prodFleetURL,
 			OIDCScopes:     DefaultOIDCScopes,
 		}
 	default:
@@ -136,7 +167,7 @@ func ResolveProfile() EnvProfile {
 			ZitadelIssuer:  prodIssuer,
 			NativeClientID: prodNativeClientID,
 			APIAudience:    prodAPIAudience,
-			FleetBaseURL:   prodFleetBaseURL,
+			FleetBaseURL:   prodFleetURL,
 			OIDCScopes:     DefaultOIDCScopes,
 		}
 	}

@@ -82,8 +82,32 @@ export function Attachments_Reorder(arg1, arg2, arg3) {
   return window['go']['rpc']['Bindings']['Attachments_Reorder'](arg1, arg2, arg3);
 }
 
+export function Audit_BulkPurge(arg1) {
+  return window['go']['rpc']['Bindings']['Audit_BulkPurge'](arg1);
+}
+
+export function Audit_DeleteQuery(arg1) {
+  return window['go']['rpc']['Bindings']['Audit_DeleteQuery'](arg1);
+}
+
+export function Audit_Export(arg1) {
+  return window['go']['rpc']['Bindings']['Audit_Export'](arg1);
+}
+
+export function Audit_Filter(arg1) {
+  return window['go']['rpc']['Bindings']['Audit_Filter'](arg1);
+}
+
 export function Audit_ListEntries(arg1) {
   return window['go']['rpc']['Bindings']['Audit_ListEntries'](arg1);
+}
+
+export function Audit_ListSavedQueries() {
+  return window['go']['rpc']['Bindings']['Audit_ListSavedQueries']();
+}
+
+export function Audit_SaveQuery(arg1) {
+  return window['go']['rpc']['Bindings']['Audit_SaveQuery'](arg1);
 }
 
 export function Audit_StartStream(arg1) {
@@ -92,6 +116,10 @@ export function Audit_StartStream(arg1) {
 
 export function Audit_StopStream(arg1) {
   return window['go']['rpc']['Bindings']['Audit_StopStream'](arg1);
+}
+
+export function Audit_VerifyChain(arg1, arg2) {
+  return window['go']['rpc']['Bindings']['Audit_VerifyChain'](arg1, arg2);
 }
 
 export function Audit_VerifyEntry(arg1) {
@@ -362,6 +390,14 @@ export function Elicit_SubmitWizardStep(arg1, arg2, arg3, arg4) {
   return window['go']['rpc']['Bindings']['Elicit_SubmitWizardStep'](arg1, arg2, arg3, arg4);
 }
 
+export function Fleet_GetTelemetryConsent() {
+  return window['go']['rpc']['Bindings']['Fleet_GetTelemetryConsent']();
+}
+
+export function Fleet_SetTelemetryConsent(arg1) {
+  return window['go']['rpc']['Bindings']['Fleet_SetTelemetryConsent'](arg1);
+}
+
 export function Graph_CancelRun(arg1) {
   return window['go']['rpc']['Bindings']['Graph_CancelRun'](arg1);
 }
@@ -442,8 +478,28 @@ export function LLM_AddProvider(arg1) {
   return window['go']['rpc']['Bindings']['LLM_AddProvider'](arg1);
 }
 
+export function LLM_AutoConfigureLocalRuntime(arg1) {
+  return window['go']['rpc']['Bindings']['LLM_AutoConfigureLocalRuntime'](arg1);
+}
+
+export function LLM_DeleteChain(arg1) {
+  return window['go']['rpc']['Bindings']['LLM_DeleteChain'](arg1);
+}
+
 export function LLM_GetAttachmentLimits(arg1, arg2) {
   return window['go']['rpc']['Bindings']['LLM_GetAttachmentLimits'](arg1, arg2);
+}
+
+export function LLM_ListCustomTemplates() {
+  return window['go']['rpc']['Bindings']['LLM_ListCustomTemplates']();
+}
+
+export function LLM_ListDetectedLocalRuntimes() {
+  return window['go']['rpc']['Bindings']['LLM_ListDetectedLocalRuntimes']();
+}
+
+export function LLM_ListFallbackChains() {
+  return window['go']['rpc']['Bindings']['LLM_ListFallbackChains']();
 }
 
 export function LLM_ListModels(arg1, arg2) {
@@ -454,8 +510,24 @@ export function LLM_ListProviders() {
   return window['go']['rpc']['Bindings']['LLM_ListProviders']();
 }
 
+export function LLM_LoadChain(arg1) {
+  return window['go']['rpc']['Bindings']['LLM_LoadChain'](arg1);
+}
+
+export function LLM_ProbeCustomEndpoint(arg1) {
+  return window['go']['rpc']['Bindings']['LLM_ProbeCustomEndpoint'](arg1);
+}
+
+export function LLM_RecognizeTemplate(arg1) {
+  return window['go']['rpc']['Bindings']['LLM_RecognizeTemplate'](arg1);
+}
+
 export function LLM_RemoveProvider(arg1) {
   return window['go']['rpc']['Bindings']['LLM_RemoveProvider'](arg1);
+}
+
+export function LLM_RescanLocalRuntimes() {
+  return window['go']['rpc']['Bindings']['LLM_RescanLocalRuntimes']();
 }
 
 export function LLM_ResolveConfirm(arg1, arg2) {
@@ -464,6 +536,10 @@ export function LLM_ResolveConfirm(arg1, arg2) {
 
 export function LLM_ResumeAfterKeyRotation(arg1) {
   return window['go']['rpc']['Bindings']['LLM_ResumeAfterKeyRotation'](arg1);
+}
+
+export function LLM_SaveChain(arg1) {
+  return window['go']['rpc']['Bindings']['LLM_SaveChain'](arg1);
 }
 
 export function LLM_StartStream(arg1, arg2, arg3) {
@@ -492,22 +568,6 @@ export function LLM_UpdateProvider(arg1) {
 
 export function LLM_UpdateProviderCredential(arg1, arg2) {
   return window['go']['rpc']['Bindings']['LLM_UpdateProviderCredential'](arg1, arg2);
-}
-
-export function LLM_ListFallbackChains() {
-  return window['go']['rpc']['Bindings']['LLM_ListFallbackChains']();
-}
-
-export function LLM_LoadChain(arg1) {
-  return window['go']['rpc']['Bindings']['LLM_LoadChain'](arg1);
-}
-
-export function LLM_SaveChain(arg1) {
-  return window['go']['rpc']['Bindings']['LLM_SaveChain'](arg1);
-}
-
-export function LLM_DeleteChain(arg1) {
-  return window['go']['rpc']['Bindings']['LLM_DeleteChain'](arg1);
 }
 
 export function LoadRoute() {
@@ -822,6 +882,18 @@ export function Secrets_Revoke(arg1) {
   return window['go']['rpc']['Bindings']['Secrets_Revoke'](arg1);
 }
 
+export function Sentry_GenerateLocalReport() {
+  return window['go']['rpc']['Bindings']['Sentry_GenerateLocalReport']();
+}
+
+export function Sentry_GetLastFive() {
+  return window['go']['rpc']['Bindings']['Sentry_GetLastFive']();
+}
+
+export function Sentry_TestDSN(arg1) {
+  return window['go']['rpc']['Bindings']['Sentry_TestDSN'](arg1);
+}
+
 export function Sessions_AppendMessage(arg1, arg2, arg3) {
   return window['go']['rpc']['Bindings']['Sessions_AppendMessage'](arg1, arg2, arg3);
 }
@@ -840,6 +912,10 @@ export function Sessions_Delete(arg1) {
 
 export function Sessions_DeleteWithOptions(arg1, arg2) {
   return window['go']['rpc']['Bindings']['Sessions_DeleteWithOptions'](arg1, arg2);
+}
+
+export function Sessions_Export(arg1, arg2) {
+  return window['go']['rpc']['Bindings']['Sessions_Export'](arg1, arg2);
 }
 
 export function Sessions_Get(arg1) {
@@ -910,8 +986,16 @@ export function Sessions_SetSystemPrompt(arg1, arg2, arg3) {
   return window['go']['rpc']['Bindings']['Sessions_SetSystemPrompt'](arg1, arg2, arg3);
 }
 
+export function Sessions_StartCapture(arg1) {
+  return window['go']['rpc']['Bindings']['Sessions_StartCapture'](arg1);
+}
+
 export function Sessions_StartStream(arg1) {
   return window['go']['rpc']['Bindings']['Sessions_StartStream'](arg1);
+}
+
+export function Sessions_StopCapture(arg1) {
+  return window['go']['rpc']['Bindings']['Sessions_StopCapture'](arg1);
 }
 
 export function Sessions_StopStream(arg1) {
@@ -922,10 +1006,6 @@ export function Sessions_SuggestTitle(arg1) {
   return window['go']['rpc']['Bindings']['Sessions_SuggestTitle'](arg1);
 }
 
-export function Sessions_Export(arg1, arg2) {
-  return window['go']['rpc']['Bindings']['Sessions_Export'](arg1, arg2);
-}
-
 export function SetContext(arg1) {
   return window['go']['rpc']['Bindings']['SetContext'](arg1);
 }
@@ -934,12 +1014,56 @@ export function SetSettingsStore(arg1) {
   return window['go']['rpc']['Bindings']['SetSettingsStore'](arg1);
 }
 
+export function Settings_FleetCapabilities() {
+  return window['go']['rpc']['Bindings']['Settings_FleetCapabilities']();
+}
+
+export function Settings_FleetConfigPullStatus() {
+  return window['go']['rpc']['Bindings']['Settings_FleetConfigPullStatus']();
+}
+
+export function Settings_FleetLockdownStatus() {
+  return window['go']['rpc']['Bindings']['Settings_FleetLockdownStatus']();
+}
+
+export function Settings_FleetProfile() {
+  return window['go']['rpc']['Bindings']['Settings_FleetProfile']();
+}
+
+export function Settings_FleetRefreshCapabilities() {
+  return window['go']['rpc']['Bindings']['Settings_FleetRefreshCapabilities']();
+}
+
+export function Settings_FleetRefreshIdentity() {
+  return window['go']['rpc']['Bindings']['Settings_FleetRefreshIdentity']();
+}
+
+export function Settings_FleetSignIn() {
+  return window['go']['rpc']['Bindings']['Settings_FleetSignIn']();
+}
+
+export function Settings_FleetSignOut() {
+  return window['go']['rpc']['Bindings']['Settings_FleetSignOut']();
+}
+
+export function Settings_FleetSignedIn() {
+  return window['go']['rpc']['Bindings']['Settings_FleetSignedIn']();
+}
+
 export function Settings_Get() {
   return window['go']['rpc']['Bindings']['Settings_Get']();
 }
 
 export function Settings_GetArtifactPreview() {
   return window['go']['rpc']['Bindings']['Settings_GetArtifactPreview']();
+}
+
+export function Settings_GetAuditSettings() {
+  return window['go']['rpc']['Bindings']['Settings_GetAuditSettings']();
+}
+
+export function Settings_GetAutoCaptureGeneratedImages() {
+  return window['go']['rpc']['Bindings']['Settings_GetAutoCaptureGeneratedImages']();
 }
 
 export function Settings_GetAutoResumeOnKeyRotation() {
@@ -982,6 +1106,10 @@ export function Settings_GetFSWriteEnabled() {
   return window['go']['rpc']['Bindings']['Settings_GetFSWriteEnabled']();
 }
 
+export function Settings_GetLocalRuntimeRAMOverrideGB() {
+  return window['go']['rpc']['Bindings']['Settings_GetLocalRuntimeRAMOverrideGB']();
+}
+
 export function Settings_GetMCPAutoRestart() {
   return window['go']['rpc']['Bindings']['Settings_GetMCPAutoRestart']();
 }
@@ -990,28 +1118,16 @@ export function Settings_GetMaxAgentTurns() {
   return window['go']['rpc']['Bindings']['Settings_GetMaxAgentTurns']();
 }
 
+export function Settings_GetMaxGeneratedImageBytes() {
+  return window['go']['rpc']['Bindings']['Settings_GetMaxGeneratedImageBytes']();
+}
+
 export function Settings_GetMemory() {
   return window['go']['rpc']['Bindings']['Settings_GetMemory']();
 }
 
 export function Settings_GetMonthlyCostNotifyUSD() {
   return window['go']['rpc']['Bindings']['Settings_GetMonthlyCostNotifyUSD']();
-}
-
-export function Settings_GetAutoCaptureGeneratedImages() {
-  return window['go']['rpc']['Bindings']['Settings_GetAutoCaptureGeneratedImages']();
-}
-
-export function Settings_SetAutoCaptureGeneratedImages(arg1) {
-  return window['go']['rpc']['Bindings']['Settings_SetAutoCaptureGeneratedImages'](arg1);
-}
-
-export function Settings_GetMaxGeneratedImageBytes() {
-  return window['go']['rpc']['Bindings']['Settings_GetMaxGeneratedImageBytes']();
-}
-
-export function Settings_SetMaxGeneratedImageBytes(arg1) {
-  return window['go']['rpc']['Bindings']['Settings_SetMaxGeneratedImageBytes'](arg1);
 }
 
 export function Settings_GetMultimodalInput() {
@@ -1054,6 +1170,14 @@ export function Settings_Set(arg1) {
   return window['go']['rpc']['Bindings']['Settings_Set'](arg1);
 }
 
+export function Settings_SetAuditSettings(arg1) {
+  return window['go']['rpc']['Bindings']['Settings_SetAuditSettings'](arg1);
+}
+
+export function Settings_SetAutoCaptureGeneratedImages(arg1) {
+  return window['go']['rpc']['Bindings']['Settings_SetAutoCaptureGeneratedImages'](arg1);
+}
+
 export function Settings_SetAutoResumeOnKeyRotation(arg1) {
   return window['go']['rpc']['Bindings']['Settings_SetAutoResumeOnKeyRotation'](arg1);
 }
@@ -1094,12 +1218,20 @@ export function Settings_SetFSWriteEnabled(arg1) {
   return window['go']['rpc']['Bindings']['Settings_SetFSWriteEnabled'](arg1);
 }
 
+export function Settings_SetLocalRuntimeRAMOverrideGB(arg1) {
+  return window['go']['rpc']['Bindings']['Settings_SetLocalRuntimeRAMOverrideGB'](arg1);
+}
+
 export function Settings_SetMCPAutoRestart(arg1) {
   return window['go']['rpc']['Bindings']['Settings_SetMCPAutoRestart'](arg1);
 }
 
 export function Settings_SetMaxAgentTurns(arg1) {
   return window['go']['rpc']['Bindings']['Settings_SetMaxAgentTurns'](arg1);
+}
+
+export function Settings_SetMaxGeneratedImageBytes(arg1) {
+  return window['go']['rpc']['Bindings']['Settings_SetMaxGeneratedImageBytes'](arg1);
 }
 
 export function Settings_SetMemory(arg1) {
@@ -1148,34 +1280,6 @@ export function Settings_SetTodoEnabled(arg1) {
 
 export function Settings_SetWebSearch(arg1) {
   return window['go']['rpc']['Bindings']['Settings_SetWebSearch'](arg1);
-}
-
-export function Settings_FleetSignIn() {
-  return window['go']['rpc']['Bindings']['Settings_FleetSignIn']();
-}
-
-export function Settings_FleetSignOut() {
-  return window['go']['rpc']['Bindings']['Settings_FleetSignOut']();
-}
-
-export function Settings_FleetSignedIn() {
-  return window['go']['rpc']['Bindings']['Settings_FleetSignedIn']();
-}
-
-export function Settings_FleetRefreshIdentity() {
-  return window['go']['rpc']['Bindings']['Settings_FleetRefreshIdentity']();
-}
-
-export function Settings_FleetProfile() {
-  return window['go']['rpc']['Bindings']['Settings_FleetProfile']();
-}
-
-export function Settings_FleetCapabilities() {
-  return window['go']['rpc']['Bindings']['Settings_FleetCapabilities']();
-}
-
-export function Settings_FleetRefreshCapabilities() {
-  return window['go']['rpc']['Bindings']['Settings_FleetRefreshCapabilities']();
 }
 
 export function ShellStatus() {
