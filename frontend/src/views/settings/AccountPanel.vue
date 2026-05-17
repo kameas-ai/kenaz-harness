@@ -237,7 +237,7 @@ async function refreshIdentity() {
 
 .panel-explainer {
   font-size: 0.875rem;
-  color: var(--color-text-muted, #888);
+  color: var(--ink-muted);
   margin-bottom: 1rem;
 }
 
@@ -247,8 +247,8 @@ async function refreshIdentity() {
 }
 
 .disabled-banner {
-  background: var(--color-surface-warn, #2a2000);
-  border: 1px solid var(--color-border-warn, #a06000);
+  background: var(--surface-2);
+  border: 1px solid var(--warn);
 }
 
 .banner-title {
@@ -258,7 +258,7 @@ async function refreshIdentity() {
 
 .banner-body {
   font-size: 0.875rem;
-  color: var(--color-text-muted, #ccc);
+  color: var(--ink-muted);
   margin: 0;
 }
 
@@ -272,23 +272,23 @@ async function refreshIdentity() {
 }
 
 .env-badge--yellow {
-  background: #7a5800;
-  color: #ffdf80;
+  background: var(--warn);
+  color: var(--surface-0);
 }
 
 .env-badge--blue {
-  background: #003a7a;
-  color: #80c0ff;
+  background: var(--info);
+  color: var(--surface-0);
 }
 
 .env-badge--red {
-  background: #5a0000;
-  color: #ff8080;
+  background: var(--danger);
+  color: var(--surface-0);
 }
 
 .identity-card {
-  background: var(--color-surface-subtle, #1a1a1a);
-  border: 1px solid var(--color-border, #333);
+  background: var(--surface-1);
+  border: 1px solid var(--border);
   border-radius: 0.5rem;
   padding: 1rem;
   margin-bottom: 1rem;
@@ -307,7 +307,7 @@ async function refreshIdentity() {
 
 .identity-label {
   font-size: 0.75rem;
-  color: var(--color-text-muted, #888);
+  color: var(--ink-muted);
   min-width: 90px;
 }
 
@@ -321,8 +321,8 @@ async function refreshIdentity() {
   padding: 0.1rem 0.4rem;
   border-radius: 0.2rem;
   text-transform: capitalize;
-  background: var(--color-surface-accent, #1e3a5f);
-  color: var(--color-text-accent, #80b4ff);
+  background: var(--accent-dim);
+  color: var(--accent);
 }
 
 .panel-actions {
@@ -346,23 +346,23 @@ async function refreshIdentity() {
 }
 
 .btn-primary {
-  background: var(--color-accent, #2563eb);
-  color: #fff;
+  background: var(--accent);
+  color: var(--surface-0);
 }
 
 .btn-secondary {
-  background: var(--color-surface-elevated, #2a2a2a);
-  color: var(--color-text, #eee);
+  background: var(--surface-3);
+  color: var(--ink);
 }
 
 .btn-danger {
-  background: var(--color-danger, #7f1d1d);
-  color: #fff;
+  background: var(--danger);
+  color: var(--surface-0);
 }
 
 .error-msg {
   font-size: 0.8125rem;
-  color: var(--color-danger-text, #f87171);
+  color: var(--danger);
   margin-top: 0.5rem;
 }
 </style>
