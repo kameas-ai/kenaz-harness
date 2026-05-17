@@ -25,8 +25,17 @@ if [ ! -d "core/fleet" ]; then
 fi
 
 # Allowlisted packages that ARE permitted to import core/fleet/.
+# - core/rpc                       — chassis wiring: NewAPI binds the
+#                                    fleet.Client into Settings + middleware
+#                                    + the dedicated fleet view at startup.
+# - core/rpc/views/settings        — original boundary (auth + capability + config-pull RPCs).
+# - core/rpc/views/fleet           — dedicated fleet view (fleet-otel-archival WP07).
+# - core/rpc/middleware            — lockdown middleware (fleet-emergency-lockdown WP04).
 ALLOWLIST=(
+  "${MODULE}/core/rpc"
   "${MODULE}/core/rpc/views/settings"
+  "${MODULE}/core/rpc/views/fleet"
+  "${MODULE}/core/rpc/middleware"
 )
 
 # Build the list of all non-fleet packages in the repo.

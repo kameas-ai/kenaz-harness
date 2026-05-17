@@ -58,6 +58,7 @@ import (
 	sentryview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/sentry"
 	"github.com/sigil-tech/kaneaz-harness/core/logging"
 	"github.com/sigil-tech/kaneaz-harness/core/mcp/stdio"
+	"github.com/sigil-tech/kaneaz-harness/core/rpc/middleware"
 )
 
 // Bindings is the Wails-reflected JS-callable surface. Every method has a
@@ -200,6 +201,10 @@ func (b *Bindings) Sessions_AppendMessage(id, role, content string) (sessions.Me
 	return b.api.Sessions().AppendMessage(b.ctx(), id, role, content)
 }
 func (b *Bindings) Sessions_SendMessageWithBlocks(id string, contentBlocks []sessions.ContentBlock) (sessions.Message, error) {
+	// fleet-emergency-lockdown-01NDFSEX12 WP04: freeze chat dispatch during lockdown.
+	if err := middleware.CheckLockdown(); err != nil {
+		return sessions.Message{}, err
+	}
 	return b.api.Sessions().SendMessageWithBlocks(b.ctx(), id, contentBlocks)
 }
 func (b *Bindings) Sessions_SaveDraft(id, draft string) error {
@@ -297,6 +302,10 @@ func (b *Bindings) LLM_ListProviders() ([]llm.Provider, error) {
 	return b.api.LLMConnector().ListProviders(b.ctx())
 }
 func (b *Bindings) LLM_StartStream(profileID, sessionID, modelOverride string) (string, error) {
+	// fleet-emergency-lockdown-01NDFSEX12 WP04: freeze LLM dispatch during lockdown.
+	if err := middleware.CheckLockdown(); err != nil {
+		return "", err
+	}
 	return b.api.LLMConnector().StartStream(b.ctx(), profileID, sessionID, modelOverride)
 }
 func (b *Bindings) LLM_StopStream(subID string) error {
@@ -1357,6 +1366,21 @@ func (b *Bindings) Settings_FleetRefreshCapabilities() (settings.CapabilitiesVie
 	return b.api.Settings().FleetRefreshCapabilities(b.ctx())
 }
 
+// Settings_FleetConfigPullStatus returns the current config-pull poller state:
+// last applied bundle_id, last applied timestamp, last error, source, and
+// the checksum of the last-seen bundle (for 304 Not Modified gating).
+// (fleet-config-pull-01NDFSEX10 WP02)
+func (b *Bindings) Settings_FleetConfigPullStatus() (settings.FleetConfigPullStatusView, error) {
+	return b.api.Settings().FleetConfigPullStatus(b.ctx())
+}
+
+// Settings_FleetLockdownStatus returns the current emergency lockdown state.
+// Called by the frontend LockdownBanner on mount and after receiving a
+// fleet:lockdown:changed event. (fleet-emergency-lockdown-01NDFSEX12 WP02)
+func (b *Bindings) Settings_FleetLockdownStatus() (settings.LockdownStatusView, error) {
+	return b.api.Settings().FleetLockdownStatus(b.ctx())
+}
+
 // ── memory ─────────────────────────────────────────────────────────────
 
 func (b *Bindings) Memory_ListChunks(filter memoryview.ListFilter) ([]memoryview.Chunk, error) {
@@ -1940,6 +1964,10 @@ func (b *Bindings) Graph_Validate(yaml string) (graphview.ValidationResult, erro
 	return b.api.Graph().Validate(b.ctx(), yaml)
 }
 func (b *Bindings) Graph_StartRun(req graphview.StartRunRequest) (graphview.StartRunResponse, error) {
+	// fleet-emergency-lockdown-01NDFSEX12 WP04: freeze graph execution during lockdown.
+	if err := middleware.CheckLockdown(); err != nil {
+		return graphview.StartRunResponse{}, err
+	}
 	return b.api.Graph().StartRun(b.ctx(), req)
 }
 func (b *Bindings) Graph_GetRunStatus(runID string) (graphview.RunStatus, error) {
@@ -1949,6 +1977,10 @@ func (b *Bindings) Graph_GetRunTrace(runID string, since int64) ([]graphview.Run
 	return b.api.Graph().GetRunTrace(b.ctx(), runID, since)
 }
 func (b *Bindings) Graph_Resume(runID, askResponse string) error {
+	// fleet-emergency-lockdown-01NDFSEX12 WP04: freeze graph resume during lockdown.
+	if err := middleware.CheckLockdown(); err != nil {
+		return err
+	}
 	return b.api.Graph().Resume(b.ctx(), runID, askResponse)
 }
 func (b *Bindings) Graph_CancelRun(runID string) error {
@@ -2029,6 +2061,10 @@ func (b *Bindings) Workflows_Get(id string) (workflowsview.Workflow, error) {
 	return b.api.Workflows().Get(b.ctx(), id)
 }
 func (b *Bindings) Workflows_Run(id string, inputs map[string]string) (workflowsview.RunResult, error) {
+	// fleet-emergency-lockdown-01NDFSEX12 WP04: freeze workflow execution during lockdown.
+	if err := middleware.CheckLockdown(); err != nil {
+		return workflowsview.RunResult{}, err
+	}
 	return b.api.Workflows().Run(b.ctx(), id, inputs)
 }
 func (b *Bindings) Workflows_Save(in workflowsview.SaveInput) (workflowsview.SaveOutput, error) {
@@ -2050,6 +2086,10 @@ func (b *Bindings) Workflows_ScheduleList() ([]workflowsview.ScheduleEntry, erro
 	return b.api.Workflows().ScheduleList(b.ctx())
 }
 func (b *Bindings) Workflows_RunNow(workflowID string) (workflowsview.RunSummary, error) {
+	// fleet-emergency-lockdown-01NDFSEX12 WP04: freeze workflow execution during lockdown.
+	if err := middleware.CheckLockdown(); err != nil {
+		return workflowsview.RunSummary{}, err
+	}
 	return b.api.Workflows().RunNow(b.ctx(), workflowID)
 }
 
@@ -2524,4 +2564,19 @@ func (b *Bindings) Sentry_GenerateLocalReport() (sentryview.LocalReportResult, e
 // server responds 2xx/4xx (i.e. is reachable and accepts the project).
 func (b *Bindings) Sentry_TestDSN(dsn string) (sentryview.DSNTestResult, error) {
 	return b.api.Sentry().TestDSN(b.ctx(), dsn)
+}
+
+// ── Fleet telemetry consent bindings (fleet-otel-archival-01NDFSEX11 WP07)
+
+// Fleet_GetTelemetryConsent returns the device's effective telemetry consent
+// level: "none" (default), "aggregate", or "full".
+func (b *Bindings) Fleet_GetTelemetryConsent() (string, error) {
+	return b.api.Fleet().GetTelemetryConsent(b.ctx())
+}
+
+// Fleet_SetTelemetryConsent persists the given consent level. Returns an error
+// when the org tier is insufficient (aggregate requires Pro+, full requires
+// Team+).
+func (b *Bindings) Fleet_SetTelemetryConsent(level string) error {
+	return b.api.Fleet().SetTelemetryConsent(b.ctx(), level)
 }

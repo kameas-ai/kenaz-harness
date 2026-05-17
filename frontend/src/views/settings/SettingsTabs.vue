@@ -48,6 +48,8 @@ const groups: ReadonlyArray<TabGroup> = [
     label: 'App',
     tabs: [
       { to: '/settings', label: 'General' },
+      // fleet-auth-foundation-01NDFSEX08 WP06 — Account (fleet identity) sub-tab.
+      { to: '/settings?tab=account', label: 'Account', query: 'account' },
       { to: '/settings?tab=updates', label: 'Updates', query: 'updates' },
       { to: '/settings?tab=flags', label: 'Flags', query: 'flags' },
       { to: '/settings?tab=health', label: 'Health', query: 'health' },

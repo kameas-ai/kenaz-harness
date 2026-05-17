@@ -1171,6 +1171,18 @@ type SettingsAPI interface {
 	// FleetRefreshCapabilities forces an immediate fetch from the fleet
 	// capabilities endpoint and returns the updated snapshot.
 	FleetRefreshCapabilities(ctx context.Context) (CapabilitiesView, error)
+
+	// ── Fleet config-pull (fleet-config-pull-01NDFSEX10 WP02/WP06) ──────────
+
+	// FleetConfigPullStatus returns the current config-pull poller state:
+	// last applied bundle_id, last applied timestamp, last error (if any),
+	// and source ("fleet" | "cache" | "default-deny").
+	FleetConfigPullStatus(ctx context.Context) (FleetConfigPullStatusView, error)
+
+	// FleetLockdownStatus returns the current emergency lockdown state.
+	// Safe to call from any goroutine; reads the process-global atomic flag.
+	// (fleet-emergency-lockdown-01NDFSEX12 WP02)
+	FleetLockdownStatus(ctx context.Context) (LockdownStatusView, error)
 }
 
 // CapabilitiesView is the wire-safe projection of fleet.Capabilities.
@@ -1204,6 +1216,23 @@ type FleetProfileInfo struct {
 	BadgeColor   string `json:"badgeColor"`
 	FleetBaseURL string `json:"fleetBaseUrl"`
 	Configured   bool   `json:"configured"`
+}
+
+// FleetConfigPullStatusView is the wire-safe projection of fleet.ConfigPollStatus.
+// Mirrors fleet.ConfigPollStatus; field names are camelCase for the frontend.
+type FleetConfigPullStatusView struct {
+	// LastAppliedID is the bundle_id of the last successfully applied bundle, or
+	// 0 if no bundle has been applied since the harness started.
+	LastAppliedID int64 `json:"lastAppliedId"`
+	// LastAppliedAt is the RFC3339 timestamp of the last apply, or empty string.
+	LastAppliedAt string `json:"lastAppliedAt"`
+	// LastError is the most recent error string, or empty when healthy.
+	LastError string `json:"lastError"`
+	// Source is "fleet", "cache", or "default-deny".
+	Source string `json:"source"`
+	// BundleChecksum is the hex SHA-256 of the last-seen bundle body (used for
+	// 304 Not Modified gating).
+	BundleChecksum string `json:"bundleChecksum"`
 }
 
 // AuditSettings holds the operator-configurable audit log retention policy.

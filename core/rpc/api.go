@@ -25,6 +25,8 @@ import (
 
 	"github.com/sigil-tech/kaneaz-harness/core"
 	coreag "github.com/sigil-tech/kaneaz-harness/core/agentgraph"
+	contextaudit "github.com/sigil-tech/kaneaz-harness/core/context/audit"
+	"github.com/sigil-tech/kaneaz-harness/core/fleet"
 	corenodes "github.com/sigil-tech/kaneaz-harness/core/agentgraph/nodes"
 	coreatt "github.com/sigil-tech/kaneaz-harness/core/attachments"
 	corecompaction "github.com/sigil-tech/kaneaz-harness/core/compaction"
@@ -99,6 +101,8 @@ import (
 	secretsref "github.com/sigil-tech/kaneaz-harness/core/secrets/ref"
 	credstoreRefs "github.com/sigil-tech/kaneaz-harness/core/credstore/refs"
 	sentryview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/sentry"
+	fleetview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/fleet"
+	corefleet "github.com/sigil-tech/kaneaz-harness/core/fleet"
 	"github.com/sigil-tech/kaneaz-harness/core/eval"
 	"github.com/sigil-tech/kaneaz-harness/core/session"
 	"github.com/sigil-tech/kaneaz-harness/core/storage"
@@ -251,6 +255,11 @@ type HarnessAPI interface {
 	// sentry-error-monitoring-01KX5R8G WP05). Provides GetLastFive,
 	// GenerateLocalReport, and TestDSN for the Settings → Privacy panel.
 	Sentry() sentryview.SentryAPI
+
+	// Fleet exposes the fleet telemetry consent RPC surface (mission
+	// fleet-otel-archival-01NDFSEX11 WP07). Provides GetTelemetryConsent
+	// and SetTelemetryConsent for the Settings → Privacy panel.
+	Fleet() fleetview.FleetAPI
 }
 
 // ShellStatus drives the Toolbar status pills + LegendBar live-rate
@@ -506,6 +515,10 @@ type API struct {
 	// sentryAPI is the crash-reporting RPC surface (sentry-error-monitoring-
 	// 01KX5R8G WP05). Provides GetLastFive, GenerateLocalReport, TestDSN.
 	sentryAPI sentryview.SentryAPI
+
+	// fleetAPI is the fleet telemetry consent RPC surface
+	// (fleet-otel-archival-01NDFSEX11 WP07).
+	fleetAPI fleetview.FleetAPI
 }
 
 // Builtins returns the in-binary tool registry. Used by the chat-input
@@ -543,6 +556,25 @@ func (a *API) SetContext(ctx context.Context) {
 	if a.wfScheduler != nil {
 		a.wfScheduler.Start()
 	}
+
+	// Bootstrap lockdown state before any user-facing surface mounts so
+	// the harness boots into locked state when fleet says so. Runs in a
+	// goroutine so the SetContext critical path is never delayed by a
+	// network round-trip. The Watcher's long-poll loop catches any state
+	// that changes after boot. (fleet-emergency-lockdown-01NDFSEX12 WP02)
+	if a.settingsImpl != nil {
+		go func() {
+			c := a.settingsImpl.FleetClientForBootstrap()
+			if c != nil {
+				fleet.BootstrapLockdownStatus(ctx, c)
+			}
+		}()
+	}
+
+	// Audit the bypass env var on every process start so operators can
+	// detect runs that skipped the lockdown gate. Runs inline (fast: just
+	// an os.Getenv + a ring-buffer Push). (fleet-emergency-lockdown-01NDFSEX12 WP03)
+	fleet.AuditLockdownBypass(ctx, lockdownAuditEmitter{impl: a.auditImpl})
 
 	// Boot-time migration drift detection (v0.5.1 migration-doctor).
 	// Run in a goroutine so the SetContext critical path (which must
@@ -808,6 +840,15 @@ func New(c *core.Core) *API {
 	settingsImpl := settings.NewAPI(settingsStore)
 	a.settingsAPI = settingsImpl
 	a.settingsImpl = settingsImpl
+
+	// Wire the lockdown broker so fleet:lockdown:changed events reach the
+	// frontend banner. Must be called after both a.broker and a.settingsImpl
+	// are assigned. SetLockdownBroker is idempotent; if SetFleetClient was
+	// already called (rare in tests) it updates the running Watcher's sink.
+	// (fleet-emergency-lockdown-01NDFSEX12 WP02)
+	if a.broker != nil {
+		settingsImpl.SetLockdownBroker(chatBrokerAdapter{broker: a.broker})
+	}
 
 	// Threshold scheduler wiring (token-cost-telemetry-01KQ8TD7 WP06).
 	// Built once; reads the dial fresh on every Manager.Add tail via
@@ -1413,6 +1454,22 @@ func New(c *core.Core) *API {
 		a.sentryAPI = &sentryview.Impl{DataDir: c.DataDir()}
 	} else {
 		a.sentryAPI = &sentryview.Impl{DataDir: ""}
+	}
+
+	// Wire Fleet telemetry consent view (fleet-otel-archival-01NDFSEX11 WP07).
+	if c != nil && c.DataDir() != "" {
+		tc, err := corefleet.NewTelemetryConsent(c.DataDir(), corefleet.StaticTierReader{})
+		if err != nil {
+			logging.L().Warn("fleet.consent.init.failed", "err", err)
+			tc, _ = corefleet.NewTelemetryConsent(os.TempDir(), corefleet.StaticTierReader{})
+		}
+		a.fleetAPI = &fleetview.Impl{Consent: tc}
+	} else {
+		// Test-chassis path: create a consent with a temp dir so the
+		// RPC surface is non-nil (callers get "none" and SetLevel is a no-op
+		// at tier=free, which is correct for the test chassis).
+		tc, _ := corefleet.NewTelemetryConsent(os.TempDir(), corefleet.StaticTierReader{})
+		a.fleetAPI = &fleetview.Impl{Consent: tc}
 	}
 
 	a.bindings = NewBindings(a)
@@ -4551,6 +4608,29 @@ func (m *memoryStoreListAdapter) List(ctx context.Context) ([]searchview.MemoryC
 	return out, nil
 }
 
+// lockdownAuditEmitter implements contextaudit.Emitter by forwarding to
+// the rpc/views/audit.API ring buffer via Push. Used exclusively by
+// fleet.AuditLockdownBypass so the bypass event reaches the in-process
+// audit ring without a separate goroutine or wiring path.
+// (fleet-emergency-lockdown-01NDFSEX12 WP03)
+type lockdownAuditEmitter struct {
+	impl *audit.API
+}
+
+func (e lockdownAuditEmitter) Emit(_ context.Context, ev contextaudit.Event) error {
+	if e.impl == nil {
+		return nil
+	}
+	e.impl.Push(audit.Entry{
+		ID:        fmt.Sprintf("fleet-lockdown-%d", ev.TS.UnixNano()),
+		Timestamp: ev.TS.UTC().Format(time.RFC3339Nano),
+		Category:  "FLEET",
+		Subject:   string(ev.Kind),
+		Trailing:  fmt.Sprintf("payload_bytes=%d", len(ev.Payload)),
+	})
+	return nil
+}
+
 // auditRingAdapter adapts audit.API to searchview.AuditLister.
 type auditRingAdapter struct {
 	api *audit.API
@@ -4889,6 +4969,10 @@ func (a *API) Agents_DeleteProfile(ctx context.Context, id string) error {
 // Sentry implements HarnessAPI. Returns the crash-reporting RPC surface.
 // (sentry-error-monitoring-01KX5R8G WP05)
 func (a *API) Sentry() sentryview.SentryAPI { return a.sentryAPI }
+
+// Fleet implements HarnessAPI. Returns the fleet telemetry consent RPC surface.
+// (fleet-otel-archival-01NDFSEX11 WP07)
+func (a *API) Fleet() fleetview.FleetAPI { return a.fleetAPI }
 
 // brokerPlanEmitter adapts a *StreamBroker to the planmodeview.EventEmitter
 // interface. The broker's Publish method broadcasts to all subscribers
