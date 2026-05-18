@@ -44,3 +44,4 @@ docs/roadmap.md
 
 # Test runner output caches
 .vite/
+harness-vm
