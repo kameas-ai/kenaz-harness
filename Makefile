@@ -9,7 +9,7 @@
 GO  := go
 BIN := ./bin
 
-.PHONY: build-harness-vm build-harness-vm-linux-arm64 help-phase1
+.PHONY: build-harness-vm build-harness-vm-linux-arm64 help-phase1 test-browser-tool
 
 ## ---------- Phase 1: headless image targets --------------------------------
 
@@ -33,3 +33,12 @@ help-phase1:
 	@echo "kenaz-harness Phase 1 targets:"
 	@echo "  build-harness-vm              Build in-VM harness stub (current arch)"
 	@echo "  build-harness-vm-linux-arm64  Cross-compile for Linux/arm64 (Tart)"
+
+## ---------- Phase 10: browser tool targets --------------------------------
+
+## test-browser-tool: run unit tests for the kaneaz__browser CDP tool.
+## Tests use a minimal httptest CDP fake (no real chromium required).
+## Runs with -race to catch any concurrency issues in the session serializer.
+test-browser-tool:
+	$(GO) test -count=1 -race ./core/tools/browser/...
+	@echo "test-browser-tool: passed"
