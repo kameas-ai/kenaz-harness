@@ -9,6 +9,7 @@ package rpc
 
 import (
 	"path/filepath"
+	"time"
 
 	"github.com/sigil-tech/kaneaz-harness/core"
 	coresubagent "github.com/sigil-tech/kaneaz-harness/core/tools/subagentdispatch"
@@ -32,6 +33,7 @@ import (
 	corewebsearch "github.com/sigil-tech/kaneaz-harness/core/tools/websearch"
 	coreaskuser "github.com/sigil-tech/kaneaz-harness/core/tools/askuserquestion"
 	corelistsecrets "github.com/sigil-tech/kaneaz-harness/core/tools/listsecrets"
+	corebrowser "github.com/sigil-tech/kaneaz-harness/core/tools/browser"
 	corewebfetch "github.com/sigil-tech/kaneaz-harness/core/tools/webfetch"
 	coresecrets "github.com/sigil-tech/kaneaz-harness/core/secrets"
 	"github.com/sigil-tech/kaneaz-harness/core/credstore/refs"
@@ -242,6 +244,19 @@ func registerBuiltinTools(
 	webFetchTool := corewebfetch.New(corewebfetch.Options{})
 	registry.Register(webFetchTool)
 	logging.L().Info("rpc.builtins.register", "tool", webFetchTool.Name())
+
+	// Phase 10 — chromium-headless browser tool
+	// kaneaz__browser: drives headless Chromium over CDP (Chrome DevTools Protocol)
+	// for agent-mediated browsing. Both chromium and the harness run inside the same
+	// VM; the harness reaches chromium over localhost:9222 — no vsock needed.
+	// The CDPEndpoint default "ws://localhost:9222" is the in-VM address. Override
+	// via KANEAZ_CDP_ENDPOINT for tests or alternative deployments.
+	browserTool := corebrowser.New(corebrowser.Options{
+		CDPEndpoint: "ws://localhost:9222", // in-VM localhost; configurable via env for tests
+		DialTimeout: 10 * time.Second,
+	})
+	registry.Register(browserTool)
+	logging.L().Info("rpc.builtins.register", "tool", browserTool.Name())
 
 	// kaneaz__subagent_dispatch: model-callable sub-agent spawner
 	// (branch-subagent-interactive-01KZNP3B WP03). Always registered.
@@ -608,6 +623,14 @@ func builtinEnabledPredicate(s *settings.API) func(string) bool {
 		// side-effects on their own. The Cedar gate enforces write restrictions
 		// while plan_mode is active; the tools themselves are always enabled.
 		case coreplanmode.EnterToolName, coreplanmode.ExitToolName:
+			logging.L().Info("rpc.builtins.predicate", "tool", name, "enabled", true)
+			return true
+
+		// ── Phase 10: browser tool ──
+		// Always-on: the browser tool is the agent's primary interface to
+		// headless Chromium. Disabling it would make chromium-headless workbenches
+		// non-functional. Gate is the Phase 7-impl nftables egress allowlist.
+		case corebrowser.ToolName:
 			logging.L().Info("rpc.builtins.predicate", "tool", name, "enabled", true)
 			return true
 		}
