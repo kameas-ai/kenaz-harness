@@ -61,6 +61,13 @@ jobs:
         with:
           go-version: ${{ inputs.go-version || '1.22' }}
 
+      - name: Download Go modules
+        if: steps.detect.outputs.go == 'true'
+        # `go list -m all` enumerates the build list without forcing the
+        # modules' source trees onto disk. Our license-file scan needs the
+        # actual directories, so explicitly populate the module cache here.
+        run: go mod download
+
       - name: Generate Go attributions
         if: steps.detect.outputs.go == 'true'
         run: |
@@ -165,6 +172,11 @@ jobs:
           path: |
             NOTICES
             .oss-attributions/
+          # The intermediate dir starts with a dot; upload-artifact@v4
+          # excludes hidden files by default. Opt in so reviewers can
+          # inspect go.modules.jsonl, go.md, and node.raw.json after a
+          # run without re-triggering the workflow.
+          include-hidden-files: true
           if-no-files-found: ignore
           retention-days: 30
 
