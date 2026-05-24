@@ -63,28 +63,9 @@ LICENSE_FILENAMES = (
 )
 
 
-def find_license_file(modcache: Path, module_path: str, version: str) -> str | None:
-    """Locate a LICENSE file inside the module's cache directory. Returns the
-    filename (not full path) if found, otherwise None.
-
-    The Go module cache stores modules at
-        <modcache>/<module-path>@<version>/
-
-    where dots in the import path are preserved and the path is
-    case-encoded (uppercase letters become "!<lowercase>"; go env
-    GOMODCACHE handles this for us when reading). For our purposes we just
-    need to scan the directory for a license-ish filename.
-    """
-    if not module_path or not version:
-        return None
-
-    # Apply Go's module path case-encoding: uppercase letters → "!" + lowercase.
-    # This matches what the module cache uses on disk.
-    encoded_path = "".join(
-        f"!{c.lower()}" if c.isupper() else c for c in module_path
-    )
-
-    mod_dir = modcache / f"{encoded_path}@{version}"
+def find_license_file(mod_dir: Path) -> str | None:
+    """Locate a LICENSE file inside an unpacked module directory. Returns
+    the filename (not full path) if found, otherwise None."""
     if not mod_dir.is_dir():
         return None
 
@@ -181,9 +162,32 @@ def main(argv: list[str]) -> int:
             if rpath and rpath != path:
                 replace_note = f" (replaced by `{rpath}@{rversion}`)"
 
-        license_file = find_license_file(args.modcache, path, version)
+        # Prefer the authoritative directory from `go list -m -json`
+        # (the `Dir` field). If it's absent, the module wasn't unpacked
+        # to the cache (e.g., a download failed or the module is a
+        # placeholder); fall back to reconstructing the path with Go's
+        # module-cache encoding rules (uppercase letters → "!<lower>"
+        # for both path and version).
+        dir_field = obj.get("Dir")
+        if dir_field:
+            mod_dir = Path(dir_field)
+        else:
+            encoded_path = "".join(
+                f"!{c.lower()}" if c.isupper() else c for c in path
+            )
+            encoded_version = "".join(
+                f"!{c.lower()}" if c.isupper() else c for c in version
+            )
+            mod_dir = args.modcache / f"{encoded_path}@{encoded_version}"
+
+        license_file = find_license_file(mod_dir)
         if license_file:
             license_note = f"License file: `{license_file}`."
+        elif not dir_field:
+            license_note = (
+                "License file: (module not unpacked to cache &mdash; "
+                "verify build environment ran `go mod download all`)."
+            )
         else:
             license_note = "License file: (not located &mdash; review before release)."
 

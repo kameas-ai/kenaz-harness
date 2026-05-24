@@ -65,8 +65,14 @@ jobs:
         if: steps.detect.outputs.go == 'true'
         # `go list -m all` enumerates the build list without forcing the
         # modules' source trees onto disk. Our license-file scan needs the
-        # actual directories, so explicitly populate the module cache here.
-        run: go mod download
+        # actual directories, so explicitly populate the module cache.
+        #
+        # IMPORTANT: pass the literal "all" pattern, not no-args. With no
+        # arguments, `go mod download` only fetches direct dependencies
+        # listed in go.mod's `require` block. With `all`, it fetches every
+        # module in the build list — direct, indirect, and test-only —
+        # which is what the license enumeration needs.
+        run: go mod download all
 
       - name: Generate Go attributions
         if: steps.detect.outputs.go == 'true'
