@@ -30,9 +30,14 @@ fleet deploy workflows). One App, two repo secrets per adopting repo:
    gh secret set KAMEAS_OSS_BOT_APP_ID -R kameas-ai/<this-repo>
    # paste the numeric App ID, Enter, Ctrl-D
 
-   gh secret set KAMEAS_OSS_BOT_APP_PRIVATE_KEY -R kameas-ai/<this-repo> \
-     --body-file path/to/kameas-ai-oss-bot.private-key.pem
+   cat path/to/kameas-ai-oss-bot.private-key.pem \
+     | gh secret set KAMEAS_OSS_BOT_APP_PRIVATE_KEY -R kameas-ai/<this-repo>
    ```
+
+   (`gh secret set` reads from stdin when no `-b` / `--body` flag is
+   given. The `--body-file` flag is documented in some places but is
+   not actually implemented in the current `gh` CLI; piping from `cat`
+   or from `aws secretsmanager get-secret-value` is the working idiom.)
 
    Both values are also stored in AWS Secrets Manager (us-east-2) under
    `kameas-ai/oss-bot/github-app-id` and
