@@ -9,11 +9,18 @@
 # kameas-ai/.github → workflow-templates/cla.yml. To roll a template update
 # across repos, open a PR against each adopting repo with the updated file.
 #
-# Required secrets:
-#   PERSONAL_ACCESS_TOKEN — a fine-grained Personal Access Token scoped to
-#     the kameas-ai/cla-signatures repository with Contents: read+write.
-#     The bot uses this to append signatures to signatures/v1/cla.json
-#     in that repo. The token MUST NOT have write access to any other repo.
+# Authentication: minted at runtime from the `kameas-ai-oss-bot` GitHub
+# App via actions/create-github-app-token@v1. The App must be installed
+# on this repo AND on kameas-ai/cla-signatures with Contents: R+W,
+# Pull requests: R+W, Issues: R+W. Tokens last 1 hour and auto-expire.
+#
+# Required repo secrets:
+#   KAMEAS_OSS_BOT_APP_ID          — numeric App ID (visible at the App's
+#                                    org-settings page).
+#   KAMEAS_OSS_BOT_APP_PRIVATE_KEY — the .pem private key for the App.
+#
+# Both mirror to AWS Secrets Manager under
+#   kameas-ai/oss-bot/github-app-{id,private-key} (us-east-2).
 
 name: CLA
 
@@ -33,12 +40,34 @@ jobs:
   cla:
     runs-on: ubuntu-latest
     steps:
+      - name: Mint installation token from kameas-ai-oss-bot App
+        if: (github.event.comment.body == 'recheck' || github.event.comment.body == 'I have read the CLA Document and I hereby sign the CLA') || github.event_name == 'pull_request_target'
+        id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.KAMEAS_OSS_BOT_APP_ID }}
+          private-key: ${{ secrets.KAMEAS_OSS_BOT_APP_PRIVATE_KEY }}
+          owner: kameas-ai
+          # Both repos the CLA workflow needs access to: the current repo
+          # (to comment + label PRs) and the shared signatures store
+          # (to append signatures). The workflow context's repo name is
+          # injected at runtime; cla-signatures is hard-coded since it's
+          # the single shared store for the whole org.
+          repositories: |
+            ${{ github.event.repository.name }}
+            cla-signatures
+
       - name: CLA check
         if: (github.event.comment.body == 'recheck' || github.event.comment.body == 'I have read the CLA Document and I hereby sign the CLA') || github.event_name == 'pull_request_target'
         uses: contributor-assistant/github-action@v2.6.1
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PERSONAL_ACCESS_TOKEN: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
+          # GITHUB_TOKEN is the App-minted token for the current repo;
+          # PERSONAL_ACCESS_TOKEN is the App-minted token for the
+          # signatures repo. The contributor-assistant action splits its
+          # API calls between the two by env-var name (legacy naming —
+          # it's not actually a PAT in our case).
+          GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
+          PERSONAL_ACCESS_TOKEN: ${{ steps.app-token.outputs.token }}
         with:
           path-to-signatures: 'signatures/v1/cla.json'
           path-to-document: 'https://kameas.ai/cla.html'

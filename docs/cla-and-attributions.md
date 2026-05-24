@@ -15,16 +15,48 @@ Actions "New workflow" UI under the "By Kameas AI" section.
 
 ## One-time setup for this repo
 
-1. **Create a fine-grained Personal Access Token** that has write access
-   only to `kameas-ai/cla-signatures`. Settings → Developer settings →
-   Personal access tokens → Fine-grained → Generate new:
-   - Repository access: only `kameas-ai/cla-signatures`
-   - Permissions: Contents: `Read and write`
-   - Expiration: 1 year (set a calendar reminder to rotate)
-2. **Add it to this repo's secrets** as `PERSONAL_ACCESS_TOKEN`
-   (Settings → Secrets and variables → Actions → New repository secret).
-3. The `oss-attributions` workflow needs no additional secrets — it uses
-   the default `GITHUB_TOKEN` to open its PR.
+Both workflows authenticate via the **`kameas-ai-oss-bot` GitHub App**
+(the same kind of org-installed App used by `kameas-ai-deploy` for the
+fleet deploy workflows). One App, two repo secrets per adopting repo:
+
+1. **Confirm the App is installed on this repo.** Visit
+   <https://github.com/organizations/kameas-ai/settings/installations>,
+   click `kameas-ai-oss-bot` → **Configure**, and tick this repo (plus
+   `cla-signatures` for the CLA workflow's cross-repo writes).
+
+2. **Add the two repo secrets:**
+
+   ```bash
+   gh secret set KAMEAS_OSS_BOT_APP_ID -R kameas-ai/<this-repo>
+   # paste the numeric App ID, Enter, Ctrl-D
+
+   gh secret set KAMEAS_OSS_BOT_APP_PRIVATE_KEY -R kameas-ai/<this-repo> \
+     --body-file path/to/kameas-ai-oss-bot.private-key.pem
+   ```
+
+   Both values are also stored in AWS Secrets Manager (us-east-2) under
+   `kameas-ai/oss-bot/github-app-id` and
+   `kameas-ai/oss-bot/github-app-private-key` as the authoritative
+   copies. If you need to re-bootstrap a repo's secrets:
+
+   ```bash
+   aws secretsmanager get-secret-value --region us-east-2 \
+     --secret-id kameas-ai/oss-bot/github-app-id \
+     --query SecretString --output text \
+     | gh secret set KAMEAS_OSS_BOT_APP_ID -R kameas-ai/<this-repo>
+
+   aws secretsmanager get-secret-value --region us-east-2 \
+     --secret-id kameas-ai/oss-bot/github-app-private-key \
+     --query SecretString --output text \
+     | gh secret set KAMEAS_OSS_BOT_APP_PRIVATE_KEY -R kameas-ai/<this-repo>
+   ```
+
+3. **No PAT required.** Earlier versions of these workflows used a
+   `PERSONAL_ACCESS_TOKEN` repo secret; that secret can be removed once
+   the App-based workflows have run successfully at least once. App
+   installation tokens are minted at workflow runtime via
+   `actions/create-github-app-token@v1`, expire in 1 hour, and never
+   exist as a long-lived secret.
 
 ## Day-to-day behavior
 

@@ -186,12 +186,30 @@ jobs:
           if-no-files-found: ignore
           retention-days: 30
 
+      - name: Mint installation token from kameas-ai-oss-bot App
+        if: steps.combine.outputs.changed == 'true'
+        id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.KAMEAS_OSS_BOT_APP_ID }}
+          private-key: ${{ secrets.KAMEAS_OSS_BOT_APP_PRIVATE_KEY }}
+          owner: kameas-ai
+          # Scope to this repo only — attribution PRs are intra-repo.
+          repositories: ${{ github.event.repository.name }}
+
       - name: Open PR if NOTICES changed
         id: open_pr
         if: steps.combine.outputs.changed == 'true'
         continue-on-error: true
         uses: peter-evans/create-pull-request@v6
         with:
+          # Pass the App-minted token so the push triggers sibling
+          # workflows (CI, CLA). The default GITHUB_TOKEN, by GitHub
+          # design, does not trigger downstream workflow runs when it
+          # opens a PR — that's the loop-prevention safeguard. The App
+          # token is treated as a third-party identity for trigger
+          # purposes, so its pushes do trigger workflows.
+          token: ${{ steps.app-token.outputs.token }}
           branch: chore/oss-attributions-${{ github.run_id }}
           commit-message: |
             chore(notices): regenerate OSS attributions
@@ -221,6 +239,8 @@ jobs:
         if: steps.combine.outputs.changed == 'true' && steps.open_pr.outcome == 'failure'
         run: |
           echo "::warning::NOTICES changed but the PR could not be opened automatically."
-          echo "::warning::This usually means GitHub Actions is not permitted to create or approve pull requests in this repository."
-          echo "::warning::Enable it under Settings -> Actions -> General -> Workflow permissions -> 'Allow GitHub Actions to create and approve pull requests', then re-run."
-          echo "::warning::The regenerated NOTICES is available as a workflow artifact ('oss-attributions-${{ github.run_id }}') on this run's summary page."
+          echo "::warning::Likely causes:"
+          echo "::warning::  1. The kameas-ai-oss-bot App is not installed on this repository, or its install scope does not include this repo. Fix: https://github.com/organizations/kameas-ai/settings/installations -> kameas-ai-oss-bot -> Configure -> add this repo."
+          echo "::warning::  2. The KAMEAS_OSS_BOT_APP_ID or KAMEAS_OSS_BOT_APP_PRIVATE_KEY secret is missing or invalid on this repository."
+          echo "::warning::  3. The App's repository permissions do not include Contents: R+W and Pull requests: R+W."
+          echo "::warning::The regenerated NOTICES is still available as a workflow artifact ('oss-attributions-${{ github.run_id }}') on this run's summary page; a maintainer can open the PR manually from the pushed branch."
