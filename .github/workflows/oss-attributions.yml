@@ -157,8 +157,21 @@ jobs:
             echo "changed=false" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Upload attribution artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: oss-attributions-${{ github.run_id }}
+          path: |
+            NOTICES
+            .oss-attributions/
+          if-no-files-found: ignore
+          retention-days: 30
+
       - name: Open PR if NOTICES changed
+        id: open_pr
         if: steps.combine.outputs.changed == 'true'
+        continue-on-error: true
         uses: peter-evans/create-pull-request@v6
         with:
           branch: chore/oss-attributions-${{ github.run_id }}
@@ -185,3 +198,11 @@ jobs:
           labels: |
             oss-attributions
             chore
+
+      - name: Note that PR-create was blocked
+        if: steps.combine.outputs.changed == 'true' && steps.open_pr.outcome == 'failure'
+        run: |
+          echo "::warning::NOTICES changed but the PR could not be opened automatically."
+          echo "::warning::This usually means GitHub Actions is not permitted to create or approve pull requests in this repository."
+          echo "::warning::Enable it under Settings -> Actions -> General -> Workflow permissions -> 'Allow GitHub Actions to create and approve pull requests', then re-run."
+          echo "::warning::The regenerated NOTICES is available as a workflow artifact ('oss-attributions-${{ github.run_id }}') on this run's summary page."
