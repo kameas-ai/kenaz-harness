@@ -61,21 +61,45 @@ jobs:
         with:
           go-version: ${{ inputs.go-version || '1.22' }}
 
-      - name: Install go-licenses
+      - name: Download Go modules
         if: steps.detect.outputs.go == 'true'
-        run: go install github.com/google/go-licenses@latest
+        # `go list -m all` enumerates the build list without forcing the
+        # modules' source trees onto disk. Our license-file scan needs the
+        # actual directories, so explicitly populate the module cache.
+        #
+        # IMPORTANT: pass the literal "all" pattern, not no-args. With no
+        # arguments, `go mod download` only fetches direct dependencies
+        # listed in go.mod's `require` block. With `all`, it fetches every
+        # module in the build list — direct, indirect, and test-only —
+        # which is what the license enumeration needs.
+        run: go mod download all
 
       - name: Generate Go attributions
         if: steps.detect.outputs.go == 'true'
         run: |
+          set -e
           mkdir -p .oss-attributions
-          go-licenses report ./... \
-            --template scripts/oss/go-template.tpl \
-            > .oss-attributions/go.md 2> .oss-attributions/go.errors.log || {
-              echo "go-licenses failed; see go.errors.log";
-              cat .oss-attributions/go.errors.log;
-              exit 1;
-            }
+
+          # Enumerate every module the build pulls in. `go list -m -json all`
+          # produces a stream of JSON objects (NOT an array — newline-delimited
+          # in JSONL-ish form, but pretty-printed across lines).
+          go list -m -json all > .oss-attributions/go.modules.jsonl
+
+          # Format as markdown. We deliberately do NOT use go-licenses here
+          # because:
+          #   1. Its built-in license classifier fails on modules whose LICENSE
+          #      file is present but not recognized by its regex set (e.g.,
+          #      modernc.org/mathutil).
+          #   2. Newer Go toolchains expose the standard library to license
+          #      tooling as "non-module packages," which go-licenses treats as
+          #      a fatal error.
+          # For attribution compliance we need the module name, version, and
+          # source URL — license-type classification is a nice-to-have.
+          GOMODCACHE="$(go env GOMODCACHE)"
+          python3 scripts/oss/format-go-notices.py \
+            --modules .oss-attributions/go.modules.jsonl \
+            --modcache "$GOMODCACHE" \
+            > .oss-attributions/go.md
 
       - name: Set up Node
         if: steps.detect.outputs.node == 'true'
@@ -146,8 +170,26 @@ jobs:
             echo "changed=false" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Upload attribution artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: oss-attributions-${{ github.run_id }}
+          path: |
+            NOTICES
+            .oss-attributions/
+          # The intermediate dir starts with a dot; upload-artifact@v4
+          # excludes hidden files by default. Opt in so reviewers can
+          # inspect go.modules.jsonl, go.md, and node.raw.json after a
+          # run without re-triggering the workflow.
+          include-hidden-files: true
+          if-no-files-found: ignore
+          retention-days: 30
+
       - name: Open PR if NOTICES changed
+        id: open_pr
         if: steps.combine.outputs.changed == 'true'
+        continue-on-error: true
         uses: peter-evans/create-pull-request@v6
         with:
           branch: chore/oss-attributions-${{ github.run_id }}
@@ -174,3 +216,11 @@ jobs:
           labels: |
             oss-attributions
             chore
+
+      - name: Note that PR-create was blocked
+        if: steps.combine.outputs.changed == 'true' && steps.open_pr.outcome == 'failure'
+        run: |
+          echo "::warning::NOTICES changed but the PR could not be opened automatically."
+          echo "::warning::This usually means GitHub Actions is not permitted to create or approve pull requests in this repository."
+          echo "::warning::Enable it under Settings -> Actions -> General -> Workflow permissions -> 'Allow GitHub Actions to create and approve pull requests', then re-run."
+          echo "::warning::The regenerated NOTICES is available as a workflow artifact ('oss-attributions-${{ github.run_id }}') on this run's summary page."
