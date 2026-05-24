@@ -61,21 +61,32 @@ jobs:
         with:
           go-version: ${{ inputs.go-version || '1.22' }}
 
-      - name: Install go-licenses
-        if: steps.detect.outputs.go == 'true'
-        run: go install github.com/google/go-licenses@latest
-
       - name: Generate Go attributions
         if: steps.detect.outputs.go == 'true'
         run: |
+          set -e
           mkdir -p .oss-attributions
-          go-licenses report ./... \
-            --template scripts/oss/go-template.tpl \
-            > .oss-attributions/go.md 2> .oss-attributions/go.errors.log || {
-              echo "go-licenses failed; see go.errors.log";
-              cat .oss-attributions/go.errors.log;
-              exit 1;
-            }
+
+          # Enumerate every module the build pulls in. `go list -m -json all`
+          # produces a stream of JSON objects (NOT an array — newline-delimited
+          # in JSONL-ish form, but pretty-printed across lines).
+          go list -m -json all > .oss-attributions/go.modules.jsonl
+
+          # Format as markdown. We deliberately do NOT use go-licenses here
+          # because:
+          #   1. Its built-in license classifier fails on modules whose LICENSE
+          #      file is present but not recognized by its regex set (e.g.,
+          #      modernc.org/mathutil).
+          #   2. Newer Go toolchains expose the standard library to license
+          #      tooling as "non-module packages," which go-licenses treats as
+          #      a fatal error.
+          # For attribution compliance we need the module name, version, and
+          # source URL — license-type classification is a nice-to-have.
+          GOMODCACHE="$(go env GOMODCACHE)"
+          python3 scripts/oss/format-go-notices.py \
+            --modules .oss-attributions/go.modules.jsonl \
+            --modcache "$GOMODCACHE" \
+            > .oss-attributions/go.md
 
       - name: Set up Node
         if: steps.detect.outputs.node == 'true'
