@@ -72,7 +72,7 @@ jobs:
           path-to-signatures: 'signatures/v1/cla.json'
           path-to-document: 'https://kameas.ai/cla.html'
           branch: 'main'
-          allowlist: 'dependabot[bot],renovate[bot],github-actions[bot],alecfeeman'
+          allowlist: 'dependabot[bot],renovate[bot],github-actions[bot],claude,alecfeeman'
           remote-organization-name: 'kameas-ai'
           remote-repository-name: 'cla-signatures'
           custom-notsigned-prflag: 'cla-not-signed'
