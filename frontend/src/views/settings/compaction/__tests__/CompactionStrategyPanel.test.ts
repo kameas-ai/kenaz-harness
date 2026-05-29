@@ -257,8 +257,10 @@ describe('CompactionStrategyPanel', () => {
 
     // Switch to session scope and enter an ID.
     await wrapper.find('[data-testid="csp-override-scope-session"]').trigger('click');
+    await flushPromises(); // flush Vue reactivity after scope change
     const input = wrapper.find('[data-testid="csp-override-scope-id"]');
     await input.setValue('sess-123');
+    await flushPromises(); // flush watcher + any async loadOverrideConfig triggered by setValue
 
     await wrapper.find('[data-testid="csp-override-load"]').trigger('click');
     await flushPromises();

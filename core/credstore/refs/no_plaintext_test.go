@@ -177,7 +177,7 @@ func TestNoPlaintext_WebFetchResult(t *testing.T) {
 	ctx := refs.WithResolver(context.Background(), r)
 	ctx = refs.WithTurnSanitizer(ctx, san)
 
-	tool := webfetch.New(webfetch.Options{HTTPClient: srv.Client()})
+	tool := webfetch.New(webfetch.Options{HTTPClient: srv.Client(), SkipBlockList: true})
 	argsJSON, _ := json.Marshal(map[string]any{
 		"url":    srv.URL + "/probe",
 		"method": "GET",

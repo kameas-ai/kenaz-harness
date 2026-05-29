@@ -5,6 +5,7 @@ import {agents} from '../models';
 import {rpc} from '../models';
 import {artifacts} from '../models';
 import {attachments} from '../models';
+import {log} from '../models';
 import {audit} from '../models';
 import {branches} from '../models';
 import {bundle} from '../models';
@@ -32,6 +33,7 @@ import {autonomy} from '../models';
 import {scheduledchat} from '../models';
 import {search} from '../models';
 import {secrets} from '../models';
+import {sentry} from '../models';
 import {sessions} from '../models';
 import {context} from '../models';
 import {settings} from '../models';
@@ -84,11 +86,25 @@ export function Attachments_Remove(arg1:string):Promise<void>;
 
 export function Attachments_Reorder(arg1:string,arg2:string,arg3:Array<string>):Promise<void>;
 
+export function Audit_BulkPurge(arg1:Array<string>):Promise<void>;
+
+export function Audit_DeleteQuery(arg1:string):Promise<void>;
+
+export function Audit_Export(arg1:log.ExportOptions):Promise<string>;
+
+export function Audit_Filter(arg1:log.FilterQuery):Promise<Array<audit.Entry>>;
+
 export function Audit_ListEntries(arg1:audit.Filter):Promise<Array<audit.Entry>>;
+
+export function Audit_ListSavedQueries():Promise<Array<log.SavedQuery>>;
+
+export function Audit_SaveQuery(arg1:log.SavedQuery):Promise<void>;
 
 export function Audit_StartStream(arg1:audit.Filter):Promise<string>;
 
 export function Audit_StopStream(arg1:string):Promise<void>;
+
+export function Audit_VerifyChain(arg1:string,arg2:string):Promise<audit.VerifyChainResult>;
 
 export function Audit_VerifyEntry(arg1:string):Promise<boolean>;
 
@@ -224,6 +240,10 @@ export function Elicit_SubmitAnswer(arg1:string,arg2:json.RawMessage,arg3:boolea
 
 export function Elicit_SubmitWizardStep(arg1:string,arg2:string,arg3:json.RawMessage,arg4:boolean):Promise<void>;
 
+export function Fleet_GetTelemetryConsent():Promise<string>;
+
+export function Fleet_SetTelemetryConsent(arg1:string):Promise<void>;
+
 export function Graph_CancelRun(arg1:string):Promise<void>;
 
 export function Graph_DeleteGraph(arg1:string):Promise<void>;
@@ -264,17 +284,37 @@ export function Hooks_Update(arg1:hooks.Hook):Promise<void>;
 
 export function LLM_AddProvider(arg1:llm.AddProviderInput):Promise<void>;
 
+export function LLM_AutoConfigureLocalRuntime(arg1:string):Promise<llm.LocalRuntimeConfigResult>;
+
+export function LLM_DeleteChain(arg1:string):Promise<void>;
+
 export function LLM_GetAttachmentLimits(arg1:string,arg2:string):Promise<llm.AttachmentLimitsView>;
+
+export function LLM_ListCustomTemplates():Promise<Array<llm.CustomTemplateSummary>>;
+
+export function LLM_ListDetectedLocalRuntimes():Promise<Array<llm.LocalRuntimeInfo>>;
+
+export function LLM_ListFallbackChains():Promise<Array<llm.FallbackChainSummary>>;
 
 export function LLM_ListModels(arg1:string,arg2:string):Promise<Array<llm.ModelInfo>>;
 
 export function LLM_ListProviders():Promise<Array<llm.Provider>>;
 
+export function LLM_LoadChain(arg1:string):Promise<llm.FallbackChainView>;
+
+export function LLM_ProbeCustomEndpoint(arg1:llm.ProbeCustomEndpointInput):Promise<llm.ProbeCustomEndpointResult>;
+
+export function LLM_RecognizeTemplate(arg1:string):Promise<llm.RecognizeTemplateResult>;
+
 export function LLM_RemoveProvider(arg1:string):Promise<void>;
+
+export function LLM_RescanLocalRuntimes():Promise<Array<llm.LocalRuntimeInfo>>;
 
 export function LLM_ResolveConfirm(arg1:string,arg2:string):Promise<void>;
 
 export function LLM_ResumeAfterKeyRotation(arg1:string):Promise<void>;
+
+export function LLM_SaveChain(arg1:llm.FallbackChainView):Promise<void>;
 
 export function LLM_StartStream(arg1:string,arg2:string,arg3:string):Promise<string>;
 
@@ -289,14 +329,6 @@ export function LLM_TestProviderKey(arg1:string,arg2:string,arg3:string):Promise
 export function LLM_UpdateProvider(arg1:llm.AddProviderInput):Promise<void>;
 
 export function LLM_UpdateProviderCredential(arg1:string,arg2:string):Promise<void>;
-
-export function LLM_ListFallbackChains():Promise<Array<llm.FallbackChainSummary>>;
-
-export function LLM_LoadChain(arg1:string):Promise<llm.FallbackChainView>;
-
-export function LLM_SaveChain(arg1:llm.FallbackChainView):Promise<void>;
-
-export function LLM_DeleteChain(arg1:string):Promise<void>;
 
 export function LoadRoute():Promise<string>;
 
@@ -454,6 +486,12 @@ export function Secrets_List():Promise<Array<secrets.SecretRow>>;
 
 export function Secrets_Revoke(arg1:string):Promise<void>;
 
+export function Sentry_GenerateLocalReport():Promise<sentry.LocalReportResult>;
+
+export function Sentry_GetLastFive():Promise<Array<sentry.CachedEntry>>;
+
+export function Sentry_TestDSN(arg1:string):Promise<sentry.DSNTestResult>;
+
 export function Sessions_AppendMessage(arg1:string,arg2:string,arg3:string):Promise<sessions.Message>;
 
 export function Sessions_ClearTitle(arg1:string):Promise<void>;
@@ -463,6 +501,8 @@ export function Sessions_Create(arg1:string):Promise<sessions.Session>;
 export function Sessions_Delete(arg1:string):Promise<void>;
 
 export function Sessions_DeleteWithOptions(arg1:string,arg2:sessions.DeleteOptions):Promise<void>;
+
+export function Sessions_Export(arg1:string,arg2:string):Promise<sessions.ExportResult>;
 
 export function Sessions_Get(arg1:string):Promise<sessions.Session>;
 
@@ -498,21 +538,45 @@ export function Sessions_SetAutonomy(arg1:string,arg2:autonomy.Layer):Promise<vo
 
 export function Sessions_SetSystemPrompt(arg1:string,arg2:string,arg3:string):Promise<void>;
 
+export function Sessions_StartCapture(arg1:string):Promise<void>;
+
 export function Sessions_StartStream(arg1:string):Promise<string>;
+
+export function Sessions_StopCapture(arg1:string):Promise<void>;
 
 export function Sessions_StopStream(arg1:string):Promise<void>;
 
 export function Sessions_SuggestTitle(arg1:string):Promise<string>;
 
-export function Sessions_Export(arg1:string,arg2:string):Promise<sessions.ExportResult>;
-
 export function SetContext(arg1:context.Context):Promise<void>;
 
 export function SetSettingsStore(arg1:settings.SettingsStore):Promise<void>;
 
+export function Settings_FleetCapabilities():Promise<settings.CapabilitiesView>;
+
+export function Settings_FleetConfigPullStatus():Promise<settings.FleetConfigPullStatusView>;
+
+export function Settings_FleetLockdownStatus():Promise<settings.LockdownStatusView>;
+
+export function Settings_FleetProfile():Promise<settings.FleetProfileInfo>;
+
+export function Settings_FleetRefreshCapabilities():Promise<settings.CapabilitiesView>;
+
+export function Settings_FleetRefreshIdentity():Promise<settings.FleetIdentity>;
+
+export function Settings_FleetSignIn():Promise<settings.FleetIdentity>;
+
+export function Settings_FleetSignOut():Promise<void>;
+
+export function Settings_FleetSignedIn():Promise<boolean>;
+
 export function Settings_Get():Promise<settings.Settings>;
 
 export function Settings_GetArtifactPreview():Promise<rpc.ArtifactPreviewConfig>;
+
+export function Settings_GetAuditSettings():Promise<settings.AuditSettings>;
+
+export function Settings_GetAutoCaptureGeneratedImages():Promise<boolean>;
 
 export function Settings_GetAutoResumeOnKeyRotation():Promise<boolean>;
 
@@ -534,21 +598,17 @@ export function Settings_GetFSRequestAccessEnabled():Promise<boolean>;
 
 export function Settings_GetFSWriteEnabled():Promise<boolean>;
 
+export function Settings_GetLocalRuntimeRAMOverrideGB():Promise<number>;
+
 export function Settings_GetMCPAutoRestart():Promise<boolean>;
 
 export function Settings_GetMaxAgentTurns():Promise<number>;
 
+export function Settings_GetMaxGeneratedImageBytes():Promise<number>;
+
 export function Settings_GetMemory():Promise<boolean>;
 
 export function Settings_GetMonthlyCostNotifyUSD():Promise<number>;
-
-export function Settings_GetAutoCaptureGeneratedImages():Promise<boolean>;
-
-export function Settings_SetAutoCaptureGeneratedImages(arg1:boolean):Promise<void>;
-
-export function Settings_GetMaxGeneratedImageBytes():Promise<number>;
-
-export function Settings_SetMaxGeneratedImageBytes(arg1:number):Promise<void>;
 
 export function Settings_GetMultimodalInput():Promise<boolean>;
 
@@ -570,6 +630,10 @@ export function Settings_GetWebSearch():Promise<boolean>;
 
 export function Settings_Set(arg1:settings.Settings):Promise<void>;
 
+export function Settings_SetAuditSettings(arg1:settings.AuditSettings):Promise<void>;
+
+export function Settings_SetAutoCaptureGeneratedImages(arg1:boolean):Promise<void>;
+
 export function Settings_SetAutoResumeOnKeyRotation(arg1:boolean):Promise<void>;
 
 export function Settings_SetAutonomy(arg1:autonomy.Layer):Promise<void>;
@@ -590,9 +654,13 @@ export function Settings_SetFSRequestAccessEnabled(arg1:boolean):Promise<void>;
 
 export function Settings_SetFSWriteEnabled(arg1:boolean):Promise<void>;
 
+export function Settings_SetLocalRuntimeRAMOverrideGB(arg1:number):Promise<void>;
+
 export function Settings_SetMCPAutoRestart(arg1:boolean):Promise<void>;
 
 export function Settings_SetMaxAgentTurns(arg1:number):Promise<void>;
+
+export function Settings_SetMaxGeneratedImageBytes(arg1:number):Promise<void>;
 
 export function Settings_SetMemory(arg1:boolean):Promise<void>;
 

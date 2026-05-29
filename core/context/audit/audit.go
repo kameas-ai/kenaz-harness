@@ -245,6 +245,68 @@ const (
 	// Privacy invariant: the payload carries only the event ID list and
 	// the purge count — no payload bytes from the deleted events.
 	KindAuditBulkPurgeExecuted Kind = "audit.bulk_purge_executed"
+
+	// KindAuditBulkPurgeBlockedByPolicy fires when the Cedar engine denies
+	// ActionAuditBulkPurge for the active principal (F-001 security fix).
+	// Payload: AuditBulkPurgeBlockedByPolicyPayload.
+	//
+	// Privacy invariant: the payload MUST NOT carry the event_ids list
+	// (which reveals what the caller was trying to delete). Only the
+	// denial reason and the attempt count are recorded.
+	KindAuditBulkPurgeBlockedByPolicy Kind = "audit.bulk_purge_blocked_by_policy"
+
+	// ── Fleet config-pull audit kinds (fleet-config-pull-01NDFSEX10 WP05) ──
+
+	// KindFleetConfigApplied fires after a fleet config bundle has been fully
+	// verified and all sections applied successfully.
+	//
+	// Privacy invariant: the payload MUST NOT carry the bundle contents
+	// (cedar rules, weight URLs, model IDs). Only the bundle_id, issued_at,
+	// and section names that were present are recorded.
+	KindFleetConfigApplied Kind = "fleet.config.applied"
+
+	// KindFleetConfigSignatureRejected fires when Verify() returns an error
+	// for an incoming bundle (ErrInvalidSignature or ErrBundleIDNonMonotonic).
+	// The previous applied bundle is kept; no config is updated.
+	//
+	// Privacy invariant: no bundle contents are recorded — only bundle_id
+	// and the error classification.
+	KindFleetConfigSignatureRejected Kind = "fleet.config.signature_rejected"
+
+	// KindFleetConfigPartialFailure fires when the bundle passes signature
+	// verification but one or more section apply calls return an error.
+	// The bundle is still ACKed and the bundle_id advances.
+	//
+	// Privacy invariant: same as KindFleetConfigApplied — no bundle contents.
+	KindFleetConfigPartialFailure Kind = "fleet.config.partial_failure"
+
+	// ── Fleet OTel archival audit (fleet-otel-archival-01NDFSEX11 WP07) ──
+
+	// KindFleetTelemetrySent fires once per successful flush to the fleet
+	// endpoint (fleet-otel-archival-01NDFSEX11 WP07). The payload carries
+	// only non-PII rollup counts for the batch.
+	//
+	// Privacy invariant: the payload MUST NOT carry span names, attribute
+	// values, log record bodies, metric label values, or the device key
+	// fingerprint. Only the batch ULID and the per-signal counts are
+	// permitted.
+	KindFleetTelemetrySent Kind = "fleet.telemetry_sent"
+
+	// ── Fleet emergency lockdown audit kinds
+	// (fleet-emergency-lockdown-01NDFSEX12 WP03).
+
+	// KindFleetLockdownReceived fires when the lockdown Watcher transitions
+	// to locked state. Payload: FleetLockdownReceivedPayload.
+	KindFleetLockdownReceived Kind = "fleet.lockdown_received"
+
+	// KindFleetLockdownCleared fires when the lockdown Watcher transitions
+	// from locked to unlocked state. No payload fields beyond the kind.
+	KindFleetLockdownCleared Kind = "fleet.lockdown_cleared"
+
+	// KindFleetLockdownBypassUsed fires once per process start when the
+	// HARNESS_FLEET_LOCKDOWN_BYPASS=1 env var is set, regardless of whether
+	// a lockdown is currently in effect. Payload: FleetLockdownBypassPayload.
+	KindFleetLockdownBypassUsed Kind = "fleet.lockdown_bypass_used"
 )
 
 // Event is the wire shape passed to the event log. The concrete event-log
@@ -829,6 +891,101 @@ type AuditBulkPurgeExecutedPayload struct {
 	EventIDs []string `json:"event_ids"`
 	// PurgedCount is len(EventIDs); redundant for fast aggregation.
 	PurgedCount int `json:"purged_count"`
+}
+
+// AuditBulkPurgeBlockedByPolicyPayload carries the signalling for
+// KindAuditBulkPurgeBlockedByPolicy (F-001 security fix).
+//
+// Privacy invariant: the event_ids list is NOT included — it reveals
+// what the caller was attempting to delete. Only the denial reason and
+// the count of ids in the attempted purge are recorded.
+type AuditBulkPurgeBlockedByPolicyPayload struct {
+	// AttemptCount is the number of event IDs in the blocked purge request.
+	AttemptCount int `json:"attempt_count"`
+	// Reason is the Cedar denial reason string (safe to log).
+	Reason string `json:"reason"`
+}
+
+// ── Fleet config-pull payload types (fleet-config-pull-01NDFSEX10 WP05) ────
+
+// FleetConfigAppliedPayload is the audit payload for KindFleetConfigApplied.
+//
+// Privacy invariant: no bundle contents (cedar rules, weight URLs, model IDs)
+// are recorded — only the bundle_id, issuance time, and which sections were
+// present in the bundle.
+type FleetConfigAppliedPayload struct {
+	// BundleID is the bundle_id of the applied bundle.
+	BundleID int64 `json:"bundle_id"`
+	// IssuedAt is the server-side issuance time of the applied bundle.
+	IssuedAt time.Time `json:"issued_at"`
+	// Sections is the list of non-empty sections that were present:
+	// "cedar_delta", "mcp_allowlist", "model_prefs", "kameas_ml_weight_urls".
+	Sections []string `json:"sections"`
+}
+
+// FleetConfigSignatureRejectedPayload is the audit payload for
+// KindFleetConfigSignatureRejected. Records what was received but rejected.
+//
+// Privacy invariant: no bundle contents are included.
+type FleetConfigSignatureRejectedPayload struct {
+	// BundleID is the bundle_id of the rejected bundle.
+	BundleID int64 `json:"bundle_id"`
+	// ErrorKind is the typed rejection reason:
+	// "invalid_signature", "non_monotonic_id", "key_not_configured".
+	ErrorKind string `json:"error_kind"`
+}
+
+// FleetConfigPartialFailurePayload is the audit payload for
+// KindFleetConfigPartialFailure. The bundle was verified and applied but
+// at least one section apply returned an error.
+//
+// Privacy invariant: no bundle contents are included.
+type FleetConfigPartialFailurePayload struct {
+	// BundleID is the bundle_id of the partially-applied bundle.
+	BundleID int64 `json:"bundle_id"`
+	// FailedSections lists the section names that returned errors.
+	FailedSections []string `json:"failed_sections"`
+}
+
+// FleetTelemetrySentPayload carries the non-PII rollup for
+// KindFleetTelemetrySent (fleet-otel-archival-01NDFSEX11 WP07).
+//
+// Privacy invariant: no span names, attribute values, log record bodies,
+// metric label values, or key fingerprints are included — only the batch
+// ULID and per-signal item counts.
+type FleetTelemetrySentPayload struct {
+	// BatchID is the ULID that was set in the POST body's batch_id field.
+	BatchID string `json:"batch_id"`
+	// SpanCount is the number of spans included in the batch.
+	SpanCount int `json:"span_count"`
+	// MetricCount is the number of metric data-points included in the batch.
+	MetricCount int `json:"metric_count"`
+	// LogCount is the number of log records included in the batch (0 for
+	// aggregate consent which omits log records entirely).
+	LogCount int `json:"log_count"`
+}
+
+// ─── Fleet emergency lockdown payloads (fleet-emergency-lockdown-01NDFSEX12) ───
+
+// FleetLockdownReceivedPayload carries the signalling for
+// KindFleetLockdownReceived. Reason is the admin-supplied reason string
+// from the fleet server (may be empty). No user-input or session data
+// is included.
+type FleetLockdownReceivedPayload struct {
+	// Reason is the admin-supplied reason from the fleet lockdown event.
+	// Empty when the server did not include a reason.
+	Reason string `json:"reason,omitempty"`
+}
+
+// FleetLockdownBypassPayload carries the signalling for
+// KindFleetLockdownBypassUsed. ProcessID allows correlating bypass
+// events across restart cycles. No user-input or session data is
+// included.
+type FleetLockdownBypassPayload struct {
+	// EnvVar is the name of the bypass environment variable that was set.
+	// Always "HARNESS_FLEET_LOCKDOWN_BYPASS" for now; field exists so
+	// future bypass mechanisms are distinguishable in the audit log.
+	EnvVar string `json:"env_var"`
 }
 
 // Emit is a small convenience wrapper for callers that have a payload

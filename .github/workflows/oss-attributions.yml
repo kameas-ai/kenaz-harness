@@ -1,0 +1,246 @@
+# Kameas OSS attributions
+#
+# Regenerates NOTICES (the third-party attribution file) for the repo.
+# Detects Go and Node.js dependencies; runs only the detectors that find
+# a manifest. If NOTICES has changed, opens a PR with the update.
+#
+# Triggers:
+#   - On release (when a GitHub release is published)
+#   - On any tag push matching v*
+#   - Manually via "Run workflow"
+#
+# Adopted from kameas-ai/.github → workflow-templates/oss-attributions.yml.
+
+name: OSS attributions
+
+on:
+  release:
+    types: [published]
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      go-version:
+        description: "Go version to use for go-licenses"
+        required: false
+        default: '1.22'
+      node-version:
+        description: "Node version to use for license-checker"
+        required: false
+        default: '20'
+      frontend-dir:
+        description: "Directory containing the Node.js package.json"
+        required: false
+        default: 'frontend'
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  regenerate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Detect manifests
+        id: detect
+        run: |
+          go="false"
+          node="false"
+          if [ -f go.mod ]; then go="true"; fi
+          if [ -f "${{ inputs.frontend-dir || 'frontend' }}/package.json" ] || [ -f package.json ]; then node="true"; fi
+          echo "go=$go" >> "$GITHUB_OUTPUT"
+          echo "node=$node" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Go
+        if: steps.detect.outputs.go == 'true'
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ inputs.go-version || '1.22' }}
+
+      - name: Download Go modules
+        if: steps.detect.outputs.go == 'true'
+        # `go list -m all` enumerates the build list without forcing the
+        # modules' source trees onto disk. Our license-file scan needs the
+        # actual directories, so explicitly populate the module cache.
+        #
+        # IMPORTANT: pass the literal "all" pattern, not no-args. With no
+        # arguments, `go mod download` only fetches direct dependencies
+        # listed in go.mod's `require` block. With `all`, it fetches every
+        # module in the build list — direct, indirect, and test-only —
+        # which is what the license enumeration needs.
+        run: go mod download all
+
+      - name: Generate Go attributions
+        if: steps.detect.outputs.go == 'true'
+        run: |
+          set -e
+          mkdir -p .oss-attributions
+
+          # Enumerate every module the build pulls in. `go list -m -json all`
+          # produces a stream of JSON objects (NOT an array — newline-delimited
+          # in JSONL-ish form, but pretty-printed across lines).
+          go list -m -json all > .oss-attributions/go.modules.jsonl
+
+          # Format as markdown. We deliberately do NOT use go-licenses here
+          # because:
+          #   1. Its built-in license classifier fails on modules whose LICENSE
+          #      file is present but not recognized by its regex set (e.g.,
+          #      modernc.org/mathutil).
+          #   2. Newer Go toolchains expose the standard library to license
+          #      tooling as "non-module packages," which go-licenses treats as
+          #      a fatal error.
+          # For attribution compliance we need the module name, version, and
+          # source URL — license-type classification is a nice-to-have.
+          GOMODCACHE="$(go env GOMODCACHE)"
+          python3 scripts/oss/format-go-notices.py \
+            --modules .oss-attributions/go.modules.jsonl \
+            --modcache "$GOMODCACHE" \
+            > .oss-attributions/go.md
+
+      - name: Set up Node
+        if: steps.detect.outputs.node == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node-version || '20' }}
+
+      - name: Install license-checker
+        if: steps.detect.outputs.node == 'true'
+        run: npm install -g license-checker
+
+      - name: Generate Node attributions
+        if: steps.detect.outputs.node == 'true'
+        run: |
+          mkdir -p .oss-attributions
+          fe="${{ inputs.frontend-dir || 'frontend' }}"
+          dir="."
+          if [ -f "$fe/package.json" ]; then dir="$fe"; fi
+          (cd "$dir" && npm ci --omit=dev --no-audit --no-fund) || (cd "$dir" && npm install --omit=dev --no-audit --no-fund)
+          (cd "$dir" && license-checker --production --json) > .oss-attributions/node.raw.json
+
+      - name: Combine into NOTICES
+        id: combine
+        run: |
+          set -e
+          : > NOTICES.new
+          cat <<'HEADER' >> NOTICES.new
+          # NOTICES
+
+          This product includes the third-party open-source components listed below.
+          Each component is the property of its respective copyright holder and is
+          incorporated under the license shown.
+
+          ---
+
+          HEADER
+
+          if [ -s .oss-attributions/go.md ]; then
+            echo "## Go modules" >> NOTICES.new
+            echo "" >> NOTICES.new
+            cat .oss-attributions/go.md >> NOTICES.new
+            echo "" >> NOTICES.new
+          fi
+
+          if [ -s .oss-attributions/node.raw.json ]; then
+            echo "## Node.js packages" >> NOTICES.new
+            echo "" >> NOTICES.new
+            python3 scripts/oss/format-node-notices.py .oss-attributions/node.raw.json >> NOTICES.new || {
+              echo "format-node-notices.py failed; falling back to raw JSON listing";
+              echo '```json' >> NOTICES.new
+              cat .oss-attributions/node.raw.json >> NOTICES.new
+              echo '```' >> NOTICES.new
+            }
+          fi
+
+          # Preserve any manually-curated trailing sections from the existing NOTICES
+          # (everything below an "## Asset bundles" marker, if present).
+          if [ -f NOTICES ] && grep -q '^## Asset bundles' NOTICES; then
+            echo "" >> NOTICES.new
+            awk '/^## Asset bundles/{flag=1} flag' NOTICES >> NOTICES.new
+          fi
+
+          if ! diff -q NOTICES NOTICES.new > /dev/null 2>&1; then
+            mv NOTICES.new NOTICES
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          else
+            rm NOTICES.new
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Upload attribution artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: oss-attributions-${{ github.run_id }}
+          path: |
+            NOTICES
+            .oss-attributions/
+          # The intermediate dir starts with a dot; upload-artifact@v4
+          # excludes hidden files by default. Opt in so reviewers can
+          # inspect go.modules.jsonl, go.md, and node.raw.json after a
+          # run without re-triggering the workflow.
+          include-hidden-files: true
+          if-no-files-found: ignore
+          retention-days: 30
+
+      - name: Mint installation token from kameas-ai-oss-bot App
+        if: steps.combine.outputs.changed == 'true'
+        id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.KAMEAS_OSS_BOT_APP_ID }}
+          private-key: ${{ secrets.KAMEAS_OSS_BOT_APP_PRIVATE_KEY }}
+          owner: kameas-ai
+          # Scope to this repo only — attribution PRs are intra-repo.
+          repositories: ${{ github.event.repository.name }}
+
+      - name: Open PR if NOTICES changed
+        id: open_pr
+        if: steps.combine.outputs.changed == 'true'
+        continue-on-error: true
+        uses: peter-evans/create-pull-request@v6
+        with:
+          # Pass the App-minted token so the push triggers sibling
+          # workflows (CI, CLA). The default GITHUB_TOKEN, by GitHub
+          # design, does not trigger downstream workflow runs when it
+          # opens a PR — that's the loop-prevention safeguard. The App
+          # token is treated as a third-party identity for trigger
+          # purposes, so its pushes do trigger workflows.
+          token: ${{ steps.app-token.outputs.token }}
+          branch: chore/oss-attributions-${{ github.run_id }}
+          commit-message: |
+            chore(notices): regenerate OSS attributions
+
+            Triggered by ${{ github.event_name }} (${{ github.ref }}).
+            Detected manifests: go=${{ steps.detect.outputs.go }}, node=${{ steps.detect.outputs.node }}.
+          title: "chore(notices): regenerate OSS attributions"
+          body: |
+            Auto-generated by `.github/workflows/oss-attributions.yml`.
+
+            **Triggered by:** `${{ github.event_name }}` on `${{ github.ref }}`.
+            **Detectors that ran:** Go=`${{ steps.detect.outputs.go }}`, Node=`${{ steps.detect.outputs.node }}`.
+
+            Review the `NOTICES` diff. If a new dependency carries a license that
+            requires more than attribution (LGPL, MPL, EPL — source-disclosure
+            obligations), flag it before merging and route to `legal@kameas.ai`.
+
+            Closing this PR without merging means the next release ships with stale
+            attributions and may violate the attribution clauses of one or more
+            upstream licenses (e.g., Apache 2.0 §4(d)).
+          delete-branch: true
+          labels: |
+            oss-attributions
+            chore
+
+      - name: Note that PR-create was blocked
+        if: steps.combine.outputs.changed == 'true' && steps.open_pr.outcome == 'failure'
+        run: |
+          echo "::warning::NOTICES changed but the PR could not be opened automatically."
+          echo "::warning::Likely causes:"
+          echo "::warning::  1. The kameas-ai-oss-bot App is not installed on this repository, or its install scope does not include this repo. Fix: https://github.com/organizations/kameas-ai/settings/installations -> kameas-ai-oss-bot -> Configure -> add this repo."
+          echo "::warning::  2. The KAMEAS_OSS_BOT_APP_ID or KAMEAS_OSS_BOT_APP_PRIVATE_KEY secret is missing or invalid on this repository."
+          echo "::warning::  3. The App's repository permissions do not include Contents: R+W and Pull requests: R+W."
+          echo "::warning::The regenerated NOTICES is still available as a workflow artifact ('oss-attributions-${{ github.run_id }}') on this run's summary page; a maintainer can open the PR manually from the pushed branch."

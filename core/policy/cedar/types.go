@@ -692,3 +692,15 @@ func FallbackChainUID(id string) cedar.EntityUID {
 	}
 	return cedar.NewEntityUID(EntityTypeFallbackChain, cedar.String(safeID))
 }
+
+// AuditLogUID builds a Cedar EntityUID for the AuditLog family introduced
+// by mission audit-log-enhancement-01KX5R8F (WP08). The audit log is a
+// singleton; the canonical id is "events". Callers should pass "events"
+// or a specific log segment id; malformed ids are replaced with "invalid".
+func AuditLogUID(id string) cedar.EntityUID {
+	safeID := id
+	if !validateFamilyID(id) {
+		safeID = invalidUIDID
+	}
+	return cedar.NewEntityUID(EntityTypeAuditLog, cedar.String(safeID))
+}

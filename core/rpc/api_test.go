@@ -2,6 +2,7 @@ package rpc
 
 import (
 	"context"
+	"os"
 	"strings"
 	"testing"
 
@@ -47,6 +48,8 @@ import (
 	coresecrets "github.com/sigil-tech/kaneaz-harness/core/secrets"
 	planmodeview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/planmode"
 	sentryview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/sentry"
+	fleetview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/fleet"
+	corefleet "github.com/sigil-tech/kaneaz-harness/core/fleet"
 )
 
 // fakeHarnessAPI is a compile-time witness that the HarnessAPI interface
@@ -148,6 +151,10 @@ func (f *fakeHarnessAPI) Agents() *agentsview.API {
 
 func (f *fakeHarnessAPI) Sentry() sentryview.SentryAPI {
 	return &sentryview.Impl{DataDir: ""}
+}
+func (f *fakeHarnessAPI) Fleet() fleetview.FleetAPI {
+	tc, _ := corefleet.NewTelemetryConsent(os.TempDir(), corefleet.StaticTierReader{})
+	return &fleetview.Impl{Consent: tc}
 }
 func (f *fakeHarnessAPI) Planmode_Approve(_ context.Context, _ planmodeview.ApproveRequest) (planmodeview.ApproveResponse, error) {
 	return planmodeview.ApproveResponse{}, nil

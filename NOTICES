@@ -1,28 +1,413 @@
 # NOTICES
 
-This product bundles third-party assets under their respective licenses.
+This product includes the third-party open-source components listed below.
+Each component is the property of its respective copyright holder and is
+incorporated under the license shown.
 
-## Geist + Geist Mono fonts
+---
 
-Copyright 2024 The Geist Project Authors
-(https://github.com/vercel/geist-font)
+## Go modules
 
-Licensed under the SIL Open Font License, Version 1.1. License text at
-`frontend/src/assets/fonts/OFL.txt`.
+- **atomicgo.dev/cursor@v0.2.0** &mdash; source: <https://atomicgo.dev/cursor>. License file: `LICENSE`.
+- **atomicgo.dev/keyboard@v0.2.9** &mdash; source: <https://atomicgo.dev/keyboard>. License file: `LICENSE`.
+- **atomicgo.dev/schedule@v0.1.0** &mdash; source: <https://atomicgo.dev/schedule>. License file: `LICENSE`.
+- **cel.dev/expr@v0.25.1** &mdash; source: <https://cel.dev/expr>. License file: `LICENSE`.
+- **cloud.google.com/go/compute/metadata@v0.9.0** &mdash; source: <https://cloud.google.com/go/compute/metadata>. License file: `LICENSE`.
+- **dario.cat/mergo@v1.0.0** &mdash; source: <https://dario.cat/mergo>. License file: `LICENSE`.
+- **git.sr.ht/~jackmordaunt/go-toast/v2@v2.0.3** &mdash; source: <https://git.sr.ht/~jackmordaunt/go-toast/v2>. License file: `LICENSE`.
+- **github.com/GoogleCloudPlatform/opentelemetry-operations-go/detectors/gcp@v1.31.0** &mdash; source: <https://github.com/GoogleCloudPlatform/opentelemetry-operations-go/detectors/gcp>. License file: `LICENSE`.
+- **github.com/Masterminds/semver@v1.5.0** &mdash; source: <https://github.com/Masterminds/semver>. License file: `LICENSE.txt`.
+- **github.com/Microsoft/go-winio@v0.6.1** &mdash; source: <https://github.com/Microsoft/go-winio>. License file: `LICENSE`.
+- **github.com/ProtonMail/go-crypto@v1.1.5** &mdash; source: <https://github.com/ProtonMail/go-crypto>. License file: `LICENSE`.
+- **github.com/PuerkitoBio/goquery@v1.12.0** &mdash; source: <https://github.com/PuerkitoBio/goquery>. License file: `LICENSE`.
+- **github.com/acarl005/stripansi@v0.0.0-20180116102854-5a71ef0e047d** &mdash; source: <https://github.com/acarl005/stripansi>. License file: `LICENSE`.
+- **github.com/alecthomas/chroma/v2@v2.14.0** &mdash; source: <https://github.com/alecthomas/chroma/v2>. License file: `COPYING`.
+- **github.com/andybalholm/cascadia@v1.3.3** &mdash; source: <https://github.com/andybalholm/cascadia>. License file: `LICENSE`.
+- **github.com/antihax/optional@v1.0.0** &mdash; source: <https://github.com/antihax/optional>. License file: `LICENSE`.
+- **github.com/araddon/dateparse@v0.0.0-20210429162001-6b43995a97de** &mdash; source: <https://github.com/araddon/dateparse>. License file: `LICENSE`.
+- **github.com/aws/aws-sdk-go-v2@v1.41.6** &mdash; source: <https://github.com/aws/aws-sdk-go-v2>. License file: `LICENSE.txt`.
+- **github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream@v1.7.9** &mdash; source: <https://github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream>. License file: `LICENSE.txt`.
+- **github.com/aws/aws-sdk-go-v2/config@v1.32.16** &mdash; source: <https://github.com/aws/aws-sdk-go-v2/config>. License file: `LICENSE.txt`.
+- **github.com/aws/aws-sdk-go-v2/credentials@v1.19.15** &mdash; source: <https://github.com/aws/aws-sdk-go-v2/credentials>. License file: `LICENSE.txt`.
+- **github.com/aws/aws-sdk-go-v2/feature/ec2/imds@v1.18.22** &mdash; source: <https://github.com/aws/aws-sdk-go-v2/feature/ec2/imds>. License file: `LICENSE.txt`.
+- **github.com/aws/aws-sdk-go-v2/internal/configsources@v1.4.22** &mdash; source: <https://github.com/aws/aws-sdk-go-v2/internal/configsources>. License file: `LICENSE.txt`.
+- **github.com/aws/aws-sdk-go-v2/internal/endpoints/v2@v2.7.22** &mdash; source: <https://github.com/aws/aws-sdk-go-v2/internal/endpoints/v2>. License file: `LICENSE.txt`.
+- **github.com/aws/aws-sdk-go-v2/internal/v4a@v1.4.23** &mdash; source: <https://github.com/aws/aws-sdk-go-v2/internal/v4a>. License file: `LICENSE.txt`.
+- **github.com/aws/aws-sdk-go-v2/service/bedrock@v1.59.1** &mdash; source: <https://github.com/aws/aws-sdk-go-v2/service/bedrock>. License file: `LICENSE.txt`.
+- **github.com/aws/aws-sdk-go-v2/service/bedrockruntime@v1.50.5** &mdash; source: <https://github.com/aws/aws-sdk-go-v2/service/bedrockruntime>. License file: `LICENSE.txt`.
+- **github.com/aws/aws-sdk-go-v2/service/internal/accept-encoding@v1.13.8** &mdash; source: <https://github.com/aws/aws-sdk-go-v2/service/internal/accept-encoding>. License file: `LICENSE.txt`.
+- **github.com/aws/aws-sdk-go-v2/service/internal/presigned-url@v1.13.22** &mdash; source: <https://github.com/aws/aws-sdk-go-v2/service/internal/presigned-url>. License file: `LICENSE.txt`.
+- **github.com/aws/aws-sdk-go-v2/service/signin@v1.0.10** &mdash; source: <https://github.com/aws/aws-sdk-go-v2/service/signin>. License file: `LICENSE.txt`.
+- **github.com/aws/aws-sdk-go-v2/service/sso@v1.30.16** &mdash; source: <https://github.com/aws/aws-sdk-go-v2/service/sso>. License file: `LICENSE.txt`.
+- **github.com/aws/aws-sdk-go-v2/service/ssooidc@v1.35.20** &mdash; source: <https://github.com/aws/aws-sdk-go-v2/service/ssooidc>. License file: `LICENSE.txt`.
+- **github.com/aws/aws-sdk-go-v2/service/sts@v1.42.0** &mdash; source: <https://github.com/aws/aws-sdk-go-v2/service/sts>. License file: `LICENSE.txt`.
+- **github.com/aws/smithy-go@v1.25.0** &mdash; source: <https://github.com/aws/smithy-go>. License file: `LICENSE`.
+- **github.com/aymanbagabas/go-osc52/v2@v2.0.1** &mdash; source: <https://github.com/aymanbagabas/go-osc52/v2>. License file: `LICENSE`.
+- **github.com/aymerick/douceur@v0.2.0** &mdash; source: <https://github.com/aymerick/douceur>. License file: `LICENSE`.
+- **github.com/bep/debounce@v1.2.1** &mdash; source: <https://github.com/bep/debounce>. License file: `LICENSE`.
+- **github.com/bitfield/script@v0.24.0** &mdash; source: <https://github.com/bitfield/script>. License file: `LICENSE`.
+- **github.com/cedar-policy/cedar-go@v1.6.0** &mdash; source: <https://github.com/cedar-policy/cedar-go>. License file: `LICENSE`.
+- **github.com/cenkalti/backoff/v5@v5.0.3** &mdash; source: <https://github.com/cenkalti/backoff/v5>. License file: `LICENSE`.
+- **github.com/cespare/xxhash/v2@v2.3.0** &mdash; source: <https://github.com/cespare/xxhash/v2>. License file: `LICENSE.txt`.
+- **github.com/charmbracelet/glamour@v0.8.0** &mdash; source: <https://github.com/charmbracelet/glamour>. License file: `LICENSE`.
+- **github.com/charmbracelet/lipgloss@v0.12.1** &mdash; source: <https://github.com/charmbracelet/lipgloss>. License file: `LICENSE`.
+- **github.com/charmbracelet/x/ansi@v0.1.4** &mdash; source: <https://github.com/charmbracelet/x/ansi>. License file: `LICENSE`.
+- **github.com/cloudflare/circl@v1.3.7** &mdash; source: <https://github.com/cloudflare/circl>. License file: `LICENSE`.
+- **github.com/cncf/xds/go@v0.0.0-20251210132809-ee656c7534f5** &mdash; source: <https://github.com/cncf/xds/go>. License file: `LICENSE`.
+- **github.com/containerd/console@v1.0.3** &mdash; source: <https://github.com/containerd/console>. License file: `LICENSE`.
+- **github.com/cyphar/filepath-securejoin@v0.3.6** &mdash; source: <https://github.com/cyphar/filepath-securejoin>. License file: `LICENSE`.
+- **github.com/danieljoos/wincred@v1.2.3** &mdash; source: <https://github.com/danieljoos/wincred>. License file: `LICENSE`.
+- **github.com/davecgh/go-spew@v1.1.1** &mdash; source: <https://github.com/davecgh/go-spew>. License file: `LICENSE`.
+- **github.com/dlclark/regexp2@v1.11.0** &mdash; source: <https://github.com/dlclark/regexp2>. License file: `LICENSE`.
+- **github.com/dustin/go-humanize@v1.0.1** &mdash; source: <https://github.com/dustin/go-humanize>. License file: `LICENSE`.
+- **github.com/emirpasic/gods@v1.18.1** &mdash; source: <https://github.com/emirpasic/gods>. License file: `LICENSE`.
+- **github.com/envoyproxy/go-control-plane@v0.14.0** &mdash; source: <https://github.com/envoyproxy/go-control-plane>. License file: `LICENSE`.
+- **github.com/envoyproxy/go-control-plane/envoy@v1.36.0** &mdash; source: <https://github.com/envoyproxy/go-control-plane/envoy>. License file: `LICENSE`.
+- **github.com/envoyproxy/go-control-plane/ratelimit@v0.1.0** &mdash; source: <https://github.com/envoyproxy/go-control-plane/ratelimit>. License file: `LICENSE`.
+- **github.com/envoyproxy/protoc-gen-validate@v1.3.0** &mdash; source: <https://github.com/envoyproxy/protoc-gen-validate>. License file: `LICENSE`.
+- **github.com/flytam/filenamify@v1.2.0** &mdash; source: <https://github.com/flytam/filenamify>. License file: `LICENSE`.
+- **github.com/fsnotify/fsnotify@v1.9.0** &mdash; source: <https://github.com/fsnotify/fsnotify>. License file: `LICENSE`.
+- **github.com/getsentry/sentry-go@v0.46.2** &mdash; source: <https://github.com/getsentry/sentry-go>. License file: `LICENSE`.
+- **github.com/go-errors/errors@v1.4.2** &mdash; source: <https://github.com/go-errors/errors>. License file: `LICENSE.MIT`.
+- **github.com/go-git/gcfg@v1.5.1-0.20230307220236-3a3c6141e376** &mdash; source: <https://github.com/go-git/gcfg>. License file: `LICENSE`.
+- **github.com/go-git/go-billy/v5@v5.6.2** &mdash; source: <https://github.com/go-git/go-billy/v5>. License file: `LICENSE`.
+- **github.com/go-git/go-git/v5@v5.13.2** &mdash; source: <https://github.com/go-git/go-git/v5>. License file: `LICENSE`.
+- **github.com/go-jose/go-jose/v4@v4.1.3** &mdash; source: <https://github.com/go-jose/go-jose/v4>. License file: `LICENSE`.
+- **github.com/go-logr/logr@v1.4.3** &mdash; source: <https://github.com/go-logr/logr>. License file: `LICENSE`.
+- **github.com/go-logr/stdr@v1.2.2** &mdash; source: <https://github.com/go-logr/stdr>. License file: `LICENSE`.
+- **github.com/go-ole/go-ole@v1.3.0** &mdash; source: <https://github.com/go-ole/go-ole>. License file: `LICENSE`.
+- **github.com/go-shiori/dom@v0.0.0-20230515143342-73569d674e1c** &mdash; source: <https://github.com/go-shiori/dom>. License file: `LICENSE`.
+- **github.com/go-shiori/go-readability@v0.0.0-20251205110129-5db1dc9836f0** &mdash; source: <https://github.com/go-shiori/go-readability>. License file: `LICENSE`.
+- **github.com/godbus/dbus/v5@v5.2.2** &mdash; source: <https://github.com/godbus/dbus/v5>. License file: `LICENSE`.
+- **github.com/gogs/chardet@v0.0.0-20211120154057-b7413eaefb8f** &mdash; source: <https://github.com/gogs/chardet>. License file: `LICENSE`.
+- **github.com/golang/glog@v1.2.5** &mdash; source: <https://github.com/golang/glog>. License file: `LICENSE`.
+- **github.com/golang/groupcache@v0.0.0-20210331224755-41bb18bfe9da** &mdash; source: <https://github.com/golang/groupcache>. License file: `LICENSE`.
+- **github.com/golang/protobuf@v1.5.4** &mdash; source: <https://github.com/golang/protobuf>. License file: `LICENSE`.
+- **github.com/google/go-cmp@v0.7.0** &mdash; source: <https://github.com/google/go-cmp>. License file: `LICENSE`.
+- **github.com/google/pprof@v0.0.0-20250317173921-a4b03ec1a45e** &mdash; source: <https://github.com/google/pprof>. License file: `LICENSE`.
+- **github.com/google/shlex@v0.0.0-20191202100458-e7afc7fbc510** &mdash; source: <https://github.com/google/shlex>. License file: `COPYING`.
+- **github.com/google/uuid@v1.6.0** &mdash; source: <https://github.com/google/uuid>. License file: `LICENSE`.
+- **github.com/gookit/color@v1.5.4** &mdash; source: <https://github.com/gookit/color>. License file: `LICENSE`.
+- **github.com/gorilla/css@v1.0.1** &mdash; source: <https://github.com/gorilla/css>. License file: `LICENSE`.
+- **github.com/gorilla/websocket@v1.5.3** &mdash; source: <https://github.com/gorilla/websocket>. License file: `LICENSE`.
+- **github.com/grpc-ecosystem/grpc-gateway/v2@v2.28.0** &mdash; source: <https://github.com/grpc-ecosystem/grpc-gateway/v2>. License file: `LICENSE`.
+- **github.com/hashicorp/golang-lru/v2@v2.0.7** &mdash; source: <https://github.com/hashicorp/golang-lru/v2>. License file: `LICENSE`.
+- **github.com/inconshreveable/mousetrap@v1.1.0** &mdash; source: <https://github.com/inconshreveable/mousetrap>. License file: `LICENSE`.
+- **github.com/itchyny/gojq@v0.12.13** &mdash; source: <https://github.com/itchyny/gojq>. License file: `LICENSE`.
+- **github.com/itchyny/timefmt-go@v0.1.5** &mdash; source: <https://github.com/itchyny/timefmt-go>. License file: `LICENSE`.
+- **github.com/jackmordaunt/icns@v1.0.0** &mdash; source: <https://github.com/jackmordaunt/icns>. License file: `LICENSE`.
+- **github.com/jaypipes/ghw@v0.21.3** &mdash; source: <https://github.com/jaypipes/ghw>. License file: `COPYING`.
+- **github.com/jaypipes/pcidb@v1.1.1** &mdash; source: <https://github.com/jaypipes/pcidb>. License file: `LICENSE`.
+- **github.com/jbenet/go-context@v0.0.0-20150711004518-d14ea06fba99** &mdash; source: <https://github.com/jbenet/go-context>. License file: `LICENSE`.
+- **github.com/jchv/go-winloader@v0.0.0-20210711035445-715c2860da7e** &mdash; source: <https://github.com/jchv/go-winloader>. License file: `LICENSE.md`.
+- **github.com/jung-kurt/gofpdf/v2@v2.17.3** &mdash; source: <https://github.com/jung-kurt/gofpdf/v2>. License file: `LICENSE`.
+- **github.com/kevinburke/ssh_config@v1.2.0** &mdash; source: <https://github.com/kevinburke/ssh_config>. License file: `LICENSE`.
+- **github.com/kr/pretty@v0.3.1** &mdash; source: <https://github.com/kr/pretty>. License file: `License`.
+- **github.com/kr/text@v0.2.0** &mdash; source: <https://github.com/kr/text>. License file: `License`.
+- **github.com/labstack/echo/v4@v4.13.3** &mdash; source: <https://github.com/labstack/echo/v4>. License file: `LICENSE`.
+- **github.com/labstack/gommon@v0.4.2** &mdash; source: <https://github.com/labstack/gommon>. License file: `LICENSE`.
+- **github.com/leaanthony/clir@v1.3.0** &mdash; source: <https://github.com/leaanthony/clir>. License file: `LICENSE`.
+- **github.com/leaanthony/debme@v1.2.1** &mdash; source: <https://github.com/leaanthony/debme>. License file: `LICENSE`.
+- **github.com/leaanthony/go-ansi-parser@v1.6.1** &mdash; source: <https://github.com/leaanthony/go-ansi-parser>. License file: `LICENSE`.
+- **github.com/leaanthony/gosod@v1.0.4** &mdash; source: <https://github.com/leaanthony/gosod>. License file: `LICENSE`.
+- **github.com/leaanthony/slicer@v1.6.0** &mdash; source: <https://github.com/leaanthony/slicer>. License file: `LICENSE`.
+- **github.com/leaanthony/u@v1.1.1** &mdash; source: <https://github.com/leaanthony/u>. License file: `LICENSE`.
+- **github.com/leaanthony/winicon@v1.0.0** &mdash; source: <https://github.com/leaanthony/winicon>. License file: `LICENSE`.
+- **github.com/ledongthuc/pdf@v0.0.0-20250511090121-5959a4027728** &mdash; source: <https://github.com/ledongthuc/pdf>. License file: `LICENSE`.
+- **github.com/lithammer/fuzzysearch@v1.1.8** &mdash; source: <https://github.com/lithammer/fuzzysearch>. License file: `LICENSE`.
+- **github.com/lucasb-eyer/go-colorful@v1.2.0** &mdash; source: <https://github.com/lucasb-eyer/go-colorful>. License file: `LICENSE`.
+- **github.com/lufia/plan9stats@v0.0.0-20211012122336-39d0f177ccd0** &mdash; source: <https://github.com/lufia/plan9stats>. License file: `LICENSE`.
+- **github.com/matryer/is@v1.4.1** &mdash; source: <https://github.com/matryer/is>. License file: `LICENSE`.
+- **github.com/mattn/go-colorable@v0.1.13** &mdash; source: <https://github.com/mattn/go-colorable>. License file: `LICENSE`.
+- **github.com/mattn/go-isatty@v0.0.20** &mdash; source: <https://github.com/mattn/go-isatty>. License file: `LICENSE`.
+- **github.com/mattn/go-runewidth@v0.0.16** &mdash; source: <https://github.com/mattn/go-runewidth>. License file: `LICENSE`.
+- **github.com/microcosm-cc/bluemonday@v1.0.27** &mdash; source: <https://github.com/microcosm-cc/bluemonday>. License file: `LICENSE.md`.
+- **github.com/muesli/reflow@v0.3.0** &mdash; source: <https://github.com/muesli/reflow>. License file: `LICENSE`.
+- **github.com/muesli/termenv@v0.15.3-0.20240618155329-98d742f6907a** &mdash; source: <https://github.com/muesli/termenv>. License file: `LICENSE`.
+- **github.com/ncruces/go-strftime@v1.0.0** &mdash; source: <https://github.com/ncruces/go-strftime>. License file: `LICENSE`.
+- **github.com/nfnt/resize@v0.0.0-20180221191011-83c6a9932646** &mdash; source: <https://github.com/nfnt/resize>. License file: `LICENSE`.
+- **github.com/niemeyer/pretty@v0.0.0-20200227124842-a10e7caefd8e** &mdash; source: <https://github.com/niemeyer/pretty>. License file: `License`.
+- **github.com/pingcap/errors@v0.11.4** &mdash; source: <https://github.com/pingcap/errors>. License file: `LICENSE`.
+- **github.com/pjbgf/sha1cd@v0.3.2** &mdash; source: <https://github.com/pjbgf/sha1cd>. License file: `LICENSE`.
+- **github.com/pkg/browser@v0.0.0-20240102092130-5ac0b6a4141c** &mdash; source: <https://github.com/pkg/browser>. License file: `LICENSE`.
+- **github.com/pkg/errors@v0.9.1** &mdash; source: <https://github.com/pkg/errors>. License file: `LICENSE`.
+- **github.com/planetscale/vtprotobuf@v0.6.1-0.20240319094008-0393e58bdf10** &mdash; source: <https://github.com/planetscale/vtprotobuf>. License file: `LICENSE`.
+- **github.com/pmezard/go-difflib@v1.0.0** &mdash; source: <https://github.com/pmezard/go-difflib>. License file: `LICENSE`.
+- **github.com/power-devops/perfstat@v0.0.0-20210106213030-5aafc221ea8c** &mdash; source: <https://github.com/power-devops/perfstat>. License file: `LICENSE`.
+- **github.com/pterm/pterm@v0.12.80** &mdash; source: <https://github.com/pterm/pterm>. License file: `LICENSE`.
+- **github.com/remyoudompheng/bigfft@v0.0.0-20230129092748-24d4a6f8daec** &mdash; source: <https://github.com/remyoudompheng/bigfft>. License file: `LICENSE`.
+- **github.com/rivo/uniseg@v0.4.7** &mdash; source: <https://github.com/rivo/uniseg>. License file: `LICENSE.txt`.
+- **github.com/robfig/cron/v3@v3.0.1** &mdash; source: <https://github.com/robfig/cron/v3>. License file: `LICENSE`.
+- **github.com/rogpeppe/fastuuid@v1.2.0** &mdash; source: <https://github.com/rogpeppe/fastuuid>. License file: `LICENSE`.
+- **github.com/rogpeppe/go-internal@v1.14.1** &mdash; source: <https://github.com/rogpeppe/go-internal>. License file: `LICENSE`.
+- **github.com/sabhiram/go-gitignore@v0.0.0-20210923224102-525f6e181f06** &mdash; source: <https://github.com/sabhiram/go-gitignore>. License file: `LICENSE`.
+- **github.com/samber/lo@v1.49.1** &mdash; source: <https://github.com/samber/lo>. License file: `LICENSE`.
+- **github.com/scylladb/termtables@v0.0.0-20191203121021-c4c0b6d42ff4** &mdash; source: <https://github.com/scylladb/termtables>. License file: `LICENSE`.
+- **github.com/sergi/go-diff@v1.3.2-0.20230802210424-5b0b94c5c0d3** &mdash; source: <https://github.com/sergi/go-diff>. License file: `LICENSE`.
+- **github.com/shirou/gopsutil/v3@v3.24.5** &mdash; source: <https://github.com/shirou/gopsutil/v3>. License file: `LICENSE`.
+- **github.com/shoenig/go-m1cpu@v0.1.6** &mdash; source: <https://github.com/shoenig/go-m1cpu>. License file: `LICENSE`.
+- **github.com/skeema/knownhosts@v1.3.0** &mdash; source: <https://github.com/skeema/knownhosts>. License file: `LICENSE`.
+- **github.com/spf13/cobra@v1.8.1** &mdash; source: <https://github.com/spf13/cobra>. License file: `LICENSE.txt`.
+- **github.com/spf13/pflag@v1.0.6** &mdash; source: <https://github.com/spf13/pflag>. License file: `LICENSE`.
+- **github.com/spiffe/go-spiffe/v2@v2.6.0** &mdash; source: <https://github.com/spiffe/go-spiffe/v2>. License file: `LICENSE`.
+- **github.com/stretchr/objx@v0.5.2** &mdash; source: <https://github.com/stretchr/objx>. License file: `LICENSE`.
+- **github.com/stretchr/testify@v1.11.1** &mdash; source: <https://github.com/stretchr/testify>. License file: `LICENSE`.
+- **github.com/tc-hib/winres@v0.3.1** &mdash; source: <https://github.com/tc-hib/winres>. License file: `LICENSE`.
+- **github.com/tidwall/gjson@v1.14.2** &mdash; source: <https://github.com/tidwall/gjson>. License file: `LICENSE`.
+- **github.com/tidwall/match@v1.1.1** &mdash; source: <https://github.com/tidwall/match>. License file: `LICENSE`.
+- **github.com/tidwall/pretty@v1.2.0** &mdash; source: <https://github.com/tidwall/pretty>. License file: `LICENSE`.
+- **github.com/tidwall/sjson@v1.2.5** &mdash; source: <https://github.com/tidwall/sjson>. License file: `LICENSE`.
+- **github.com/tklauser/go-sysconf@v0.3.12** &mdash; source: <https://github.com/tklauser/go-sysconf>. License file: `LICENSE`.
+- **github.com/tklauser/numcpus@v0.6.1** &mdash; source: <https://github.com/tklauser/numcpus>. License file: `LICENSE`.
+- **github.com/tkrajina/go-reflector@v0.5.8** &mdash; source: <https://github.com/tkrajina/go-reflector>. License file: `LICENSE.txt`.
+- **github.com/valyala/bytebufferpool@v1.0.0** &mdash; source: <https://github.com/valyala/bytebufferpool>. License file: `LICENSE`.
+- **github.com/valyala/fasttemplate@v1.2.2** &mdash; source: <https://github.com/valyala/fasttemplate>. License file: `LICENSE`.
+- **github.com/wailsapp/go-webview2@v1.0.22** &mdash; source: <https://github.com/wailsapp/go-webview2>. License file: `LICENSE`.
+- **github.com/wailsapp/mimetype@v1.4.1** &mdash; source: <https://github.com/wailsapp/mimetype>. License file: `LICENSE`.
+- **github.com/wailsapp/wails/v2@v2.12.0** &mdash; source: <https://github.com/wailsapp/wails/v2>. License file: `LICENSE`.
+- **github.com/wzshiming/ctc@v1.2.3** &mdash; source: <https://github.com/wzshiming/ctc>. License file: `LICENSE`.
+- **github.com/wzshiming/winseq@v0.0.0-20200112104235-db357dc107ae** &mdash; source: <https://github.com/wzshiming/winseq>. License file: `LICENSE`.
+- **github.com/xanzy/ssh-agent@v0.3.3** &mdash; source: <https://github.com/xanzy/ssh-agent>. License file: `LICENSE`.
+- **github.com/xo/terminfo@v0.0.0-20220910002029-abceb7e1c41e** &mdash; source: <https://github.com/xo/terminfo>. License file: `LICENSE`.
+- **github.com/yuin/goldmark@v1.7.4** &mdash; source: <https://github.com/yuin/goldmark>. License file: `LICENSE`.
+- **github.com/yuin/goldmark-emoji@v1.0.3** &mdash; source: <https://github.com/yuin/goldmark-emoji>. License file: `LICENSE`.
+- **github.com/yusufpapurcu/wmi@v1.2.4** &mdash; source: <https://github.com/yusufpapurcu/wmi>. License file: `LICENSE`.
+- **github.com/zalando/go-keyring@v0.2.8** &mdash; source: <https://github.com/zalando/go-keyring>. License file: `LICENSE`.
+- **go.opentelemetry.io/auto/sdk@v1.2.1** &mdash; source: <https://go.opentelemetry.io/auto/sdk>. License file: `LICENSE`.
+- **go.opentelemetry.io/contrib/detectors/gcp@v1.39.0** &mdash; source: <https://go.opentelemetry.io/contrib/detectors/gcp>. License file: `LICENSE`.
+- **go.opentelemetry.io/otel@v1.43.0** &mdash; source: <https://go.opentelemetry.io/otel>. License file: `LICENSE`.
+- **go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploghttp@v0.19.0** &mdash; source: <https://go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploghttp>. License file: `LICENSE`.
+- **go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetrichttp@v1.43.0** &mdash; source: <https://go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetrichttp>. License file: `LICENSE`.
+- **go.opentelemetry.io/otel/exporters/otlp/otlptrace@v1.43.0** &mdash; source: <https://go.opentelemetry.io/otel/exporters/otlp/otlptrace>. License file: `LICENSE`.
+- **go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp@v1.43.0** &mdash; source: <https://go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp>. License file: `LICENSE`.
+- **go.opentelemetry.io/otel/log@v0.19.0** &mdash; source: <https://go.opentelemetry.io/otel/log>. License file: `LICENSE`.
+- **go.opentelemetry.io/otel/metric@v1.43.0** &mdash; source: <https://go.opentelemetry.io/otel/metric>. License file: `LICENSE`.
+- **go.opentelemetry.io/otel/sdk@v1.43.0** &mdash; source: <https://go.opentelemetry.io/otel/sdk>. License file: `LICENSE`.
+- **go.opentelemetry.io/otel/sdk/log@v0.19.0** &mdash; source: <https://go.opentelemetry.io/otel/sdk/log>. License file: `LICENSE`.
+- **go.opentelemetry.io/otel/sdk/log/logtest@v0.19.0** &mdash; source: <https://go.opentelemetry.io/otel/sdk/log/logtest>. License file: `LICENSE`.
+- **go.opentelemetry.io/otel/sdk/metric@v1.43.0** &mdash; source: <https://go.opentelemetry.io/otel/sdk/metric>. License file: `LICENSE`.
+- **go.opentelemetry.io/otel/trace@v1.43.0** &mdash; source: <https://go.opentelemetry.io/otel/trace>. License file: `LICENSE`.
+- **go.opentelemetry.io/proto/otlp@v1.10.0** &mdash; source: <https://go.opentelemetry.io/proto/otlp>. License file: `LICENSE`.
+- **go.uber.org/goleak@v1.3.0** &mdash; source: <https://go.uber.org/goleak>. License file: `LICENSE`.
+- **go.yaml.in/yaml/v3@v3.0.4** &mdash; source: <https://go.yaml.in/yaml/v3>. License file: `LICENSE`.
+- **golang.org/x/crypto@v0.51.0** &mdash; source: <https://golang.org/x/crypto>. License file: `LICENSE`.
+- **golang.org/x/exp@v0.0.0-20220921023135-46d9e7742f1e** &mdash; source: <https://golang.org/x/exp>. License file: `LICENSE`.
+- **golang.org/x/image@v0.40.0** &mdash; source: <https://golang.org/x/image>. License file: `LICENSE`.
+- **golang.org/x/mod@v0.35.0** &mdash; source: <https://golang.org/x/mod>. License file: `LICENSE`.
+- **golang.org/x/net@v0.54.0** &mdash; source: <https://golang.org/x/net>. License file: `LICENSE`.
+- **golang.org/x/oauth2@v0.35.0** &mdash; source: <https://golang.org/x/oauth2>. License file: `LICENSE`.
+- **golang.org/x/sync@v0.20.0** &mdash; source: <https://golang.org/x/sync>. License file: `LICENSE`.
+- **golang.org/x/sys@v0.44.0** &mdash; source: <https://golang.org/x/sys>. License file: `LICENSE`.
+- **golang.org/x/telemetry@v0.0.0-20260409153401-be6f6cb8b1fa** &mdash; source: <https://golang.org/x/telemetry>. License file: `LICENSE`.
+- **golang.org/x/term@v0.43.0** &mdash; source: <https://golang.org/x/term>. License file: `LICENSE`.
+- **golang.org/x/text@v0.37.0** &mdash; source: <https://golang.org/x/text>. License file: `LICENSE`.
+- **golang.org/x/time@v0.8.0** &mdash; source: <https://golang.org/x/time>. License file: `LICENSE`.
+- **golang.org/x/tools@v0.44.0** &mdash; source: <https://golang.org/x/tools>. License file: `LICENSE`.
+- **golang.org/x/xerrors@v0.0.0-20191204190536-9bdfabe68543** &mdash; source: <https://golang.org/x/xerrors>. License file: `LICENSE`.
+- **gonum.org/v1/gonum@v0.17.0** &mdash; source: <https://gonum.org/v1/gonum>. License file: `LICENSE`.
+- **google.golang.org/genproto/googleapis/api@v0.0.0-20260401024825-9d38bb4040a9** &mdash; source: <https://google.golang.org/genproto/googleapis/api>. License file: `LICENSE`.
+- **google.golang.org/genproto/googleapis/rpc@v0.0.0-20260401024825-9d38bb4040a9** &mdash; source: <https://google.golang.org/genproto/googleapis/rpc>. License file: `LICENSE`.
+- **google.golang.org/grpc@v1.80.0** &mdash; source: <https://google.golang.org/grpc>. License file: `LICENSE`.
+- **google.golang.org/protobuf@v1.36.11** &mdash; source: <https://google.golang.org/protobuf>. License file: `LICENSE`.
+- **gopkg.in/check.v1@v1.0.0-20201130134442-10cb98267c6c** &mdash; source: <https://gopkg.in/check.v1>. License file: `LICENSE`.
+- **gopkg.in/warnings.v0@v0.1.2** &mdash; source: <https://gopkg.in/warnings.v0>. License file: `LICENSE`.
+- **gopkg.in/yaml.v3@v3.0.1** &mdash; source: <https://gopkg.in/yaml.v3>. License file: `LICENSE`.
+- **howett.net/plist@v1.0.2-0.20250314012144-ee69052608d9** &mdash; source: <https://howett.net/plist>. License file: `LICENSE`.
+- **modernc.org/cc/v4@v4.27.3** &mdash; source: <https://modernc.org/cc/v4>. License file: `LICENSE`.
+- **modernc.org/ccgo/v4@v4.32.4** &mdash; source: <https://modernc.org/ccgo/v4>. License file: `LICENSE`.
+- **modernc.org/fileutil@v1.4.0** &mdash; source: <https://modernc.org/fileutil>. License file: `LICENSE`.
+- **modernc.org/gc/v2@v2.6.5** &mdash; source: <https://modernc.org/gc/v2>. License file: `LICENSE`.
+- **modernc.org/gc/v3@v3.1.2** &mdash; source: <https://modernc.org/gc/v3>. License file: `LICENSE`.
+- **modernc.org/goabi0@v0.2.0** &mdash; source: <https://modernc.org/goabi0>. License file: `LICENSE`.
+- **modernc.org/libc@v1.72.0** &mdash; source: <https://modernc.org/libc>. License file: `LICENSE`.
+- **modernc.org/mathutil@v1.7.1** &mdash; source: <https://modernc.org/mathutil>. License file: `LICENSE`.
+- **modernc.org/memory@v1.11.0** &mdash; source: <https://modernc.org/memory>. License file: `LICENSE`.
+- **modernc.org/opt@v0.1.4** &mdash; source: <https://modernc.org/opt>. License file: `LICENSE`.
+- **modernc.org/sortutil@v1.2.1** &mdash; source: <https://modernc.org/sortutil>. License file: `LICENSE`.
+- **modernc.org/sqlite@v1.50.0** &mdash; source: <https://modernc.org/sqlite>. License file: `LICENSE`.
+- **modernc.org/strutil@v1.2.1** &mdash; source: <https://modernc.org/strutil>. License file: `LICENSE`.
+- **modernc.org/token@v1.1.0** &mdash; source: <https://modernc.org/token>. License file: `LICENSE`.
+- **mvdan.cc/sh/v3@v3.7.0** &mdash; source: <https://mvdan.cc/sh/v3>. License file: `LICENSE`.
 
-Files: `Geist-Regular.woff2`, `Geist-Medium.woff2`, `Geist-SemiBold.woff2`,
-`GeistMono-Regular.woff2`, `GeistMono-Medium.woff2`. Self-hosted under
-`frontend/src/assets/fonts/`. CSP `font-src 'self'` (plan §4.3 invariant
-#1) forbids any external font request.
+## Node.js packages
 
-## Kenaz design tokens
-
-Vendored verbatim from the Kenaz frontend (`frontend/src/styles/tokens.css`)
-per plan §1, §4.1, §5.1, and constraint C-008. Refresh procedure documented
-in `frontend/src/styles/REFRESH.md`.
-
-## shadcn-vue primitives
-
-Primitives under `frontend/src/components/ui/` are copied from shadcn-vue
-(MIT) and owned outright by the harness team per FR-004 / C-002. The
-upstream library is a *source*, not a runtime dependency.
+- **@antfu/install-pkg@1.1.0** — MIT. Repository: <https://github.com/antfu/install-pkg>
+- **@babel/helper-string-parser@7.27.1** — MIT. Repository: <https://github.com/babel/babel>
+- **@babel/helper-validator-identifier@7.28.5** — MIT. Repository: <https://github.com/babel/babel>
+- **@babel/parser@7.29.2** — MIT. Repository: <https://github.com/babel/babel>
+- **@babel/types@7.29.0** — MIT. Repository: <https://github.com/babel/babel>
+- **@braintree/sanitize-url@7.1.2** — MIT. Repository: <https://github.com/braintree/sanitize-url>
+- **@chevrotain/types@11.1.2** — Apache-2.0. Repository: <https://github.com/Chevrotain/chevrotain>
+- **@floating-ui/core@1.7.5** — MIT. Repository: <https://github.com/floating-ui/floating-ui>
+- **@floating-ui/dom@1.7.6** — MIT. Repository: <https://github.com/floating-ui/floating-ui>
+- **@floating-ui/utils@0.2.11** — MIT. Repository: <https://github.com/floating-ui/floating-ui>
+- **@floating-ui/vue@1.1.11** — MIT. Repository: <https://github.com/floating-ui/floating-ui>
+- **@iconify/types@2.0.0** — MIT. Repository: <https://github.com/iconify/iconify>
+- **@iconify/utils@3.1.1** — MIT. Repository: <https://github.com/iconify/iconify>
+- **@internationalized/date@3.12.1** — Apache-2.0. Repository: <https://github.com/adobe/react-spectrum/tree/main/packages/@internationalized/date>
+- **@internationalized/number@3.6.6** — Apache-2.0. Repository: <https://github.com/adobe/react-spectrum>
+- **@jridgewell/sourcemap-codec@1.5.5** — MIT. Repository: <https://github.com/jridgewell/sourcemaps>
+- **@mermaid-js/parser@1.1.1** — MIT. Repository: <https://github.com/mermaid-js/mermaid>
+- **@napi-rs/canvas-linux-x64-gnu@0.1.100** — MIT. Repository: <https://github.com/Brooooooklyn/canvas>
+- **@napi-rs/canvas@0.1.100** — MIT. Repository: <https://github.com/Brooooooklyn/canvas>
+- **@sentry-internal/browser-utils@10.53.1** — MIT. Repository: <https://github.com/getsentry/sentry-javascript>
+- **@sentry-internal/feedback@10.53.1** — MIT. Repository: <https://github.com/getsentry/sentry-javascript>
+- **@sentry-internal/replay-canvas@10.53.1** — MIT. Repository: <https://github.com/getsentry/sentry-javascript>
+- **@sentry-internal/replay@10.53.1** — MIT. Repository: <https://github.com/getsentry/sentry-javascript>
+- **@sentry/browser@10.53.1** — MIT. Repository: <https://github.com/getsentry/sentry-javascript>
+- **@sentry/core@10.53.1** — MIT. Repository: <https://github.com/getsentry/sentry-javascript>
+- **@sentry/vue@10.53.1** — MIT. Repository: <https://github.com/getsentry/sentry-javascript>
+- **@swc/helpers@0.5.21** — Apache-2.0. Repository: <https://github.com/swc-project/swc>
+- **@tanstack/virtual-core@3.14.0** — MIT. Repository: <https://github.com/TanStack/virtual>
+- **@tanstack/vue-virtual@3.13.24** — MIT. Repository: <https://github.com/TanStack/virtual>
+- **@types/d3-array@3.2.2** — MIT. Repository: <https://github.com/DefinitelyTyped/DefinitelyTyped>
+- **@types/d3-axis@3.0.6** — MIT. Repository: <https://github.com/DefinitelyTyped/DefinitelyTyped>
+- **@types/d3-brush@3.0.6** — MIT. Repository: <https://github.com/DefinitelyTyped/DefinitelyTyped>
+- **@types/d3-chord@3.0.6** — MIT. Repository: <https://github.com/DefinitelyTyped/DefinitelyTyped>
+- **@types/d3-color@3.1.3** — MIT. Repository: <https://github.com/DefinitelyTyped/DefinitelyTyped>
+- **@types/d3-contour@3.0.6** — MIT. Repository: <https://github.com/DefinitelyTyped/DefinitelyTyped>
+- **@types/d3-delaunay@6.0.4** — MIT. Repository: <https://github.com/DefinitelyTyped/DefinitelyTyped>
+- **@types/d3-dispatch@3.0.7** — MIT. Repository: <https://github.com/DefinitelyTyped/DefinitelyTyped>
+- **@types/d3-drag@3.0.7** — MIT. Repository: <https://github.com/DefinitelyTyped/DefinitelyTyped>
+- **@types/d3-dsv@3.0.7** — MIT. Repository: <https://github.com/DefinitelyTyped/DefinitelyTyped>
+- **@types/d3-ease@3.0.2** — MIT. Repository: <https://github.com/DefinitelyTyped/DefinitelyTyped>
+- **@types/d3-fetch@3.0.7** — MIT. Repository: <https://github.com/DefinitelyTyped/DefinitelyTyped>
+- **@types/d3-force@3.0.10** — MIT. Repository: <https://github.com/DefinitelyTyped/DefinitelyTyped>
+- **@types/d3-format@3.0.4** — MIT. Repository: <https://github.com/DefinitelyTyped/DefinitelyTyped>
+- **@types/d3-geo@3.1.0** — MIT. Repository: <https://github.com/DefinitelyTyped/DefinitelyTyped>
+- **@types/d3-hierarchy@3.1.7** — MIT. Repository: <https://github.com/DefinitelyTyped/DefinitelyTyped>
+- **@types/d3-interpolate@3.0.4** — MIT. Repository: <https://github.com/DefinitelyTyped/DefinitelyTyped>
+- **@types/d3-path@3.1.1** — MIT. Repository: <https://github.com/DefinitelyTyped/DefinitelyTyped>
+- **@types/d3-polygon@3.0.2** — MIT. Repository: <https://github.com/DefinitelyTyped/DefinitelyTyped>
+- **@types/d3-quadtree@3.0.6** — MIT. Repository: <https://github.com/DefinitelyTyped/DefinitelyTyped>
+- **@types/d3-random@3.0.3** — MIT. Repository: <https://github.com/DefinitelyTyped/DefinitelyTyped>
+- **@types/d3-scale-chromatic@3.1.0** — MIT. Repository: <https://github.com/DefinitelyTyped/DefinitelyTyped>
+- **@types/d3-scale@4.0.9** — MIT. Repository: <https://github.com/DefinitelyTyped/DefinitelyTyped>
+- **@types/d3-selection@3.0.11** — MIT. Repository: <https://github.com/DefinitelyTyped/DefinitelyTyped>
+- **@types/d3-shape@3.1.8** — MIT. Repository: <https://github.com/DefinitelyTyped/DefinitelyTyped>
+- **@types/d3-time-format@4.0.3** — MIT. Repository: <https://github.com/DefinitelyTyped/DefinitelyTyped>
+- **@types/d3-time@3.0.4** — MIT. Repository: <https://github.com/DefinitelyTyped/DefinitelyTyped>
+- **@types/d3-timer@3.0.2** — MIT. Repository: <https://github.com/DefinitelyTyped/DefinitelyTyped>
+- **@types/d3-transition@3.0.9** — MIT. Repository: <https://github.com/DefinitelyTyped/DefinitelyTyped>
+- **@types/d3-zoom@3.0.8** — MIT. Repository: <https://github.com/DefinitelyTyped/DefinitelyTyped>
+- **@types/d3@7.4.3** — MIT. Repository: <https://github.com/DefinitelyTyped/DefinitelyTyped>
+- **@types/dompurify@3.0.5** — MIT. Repository: <https://github.com/DefinitelyTyped/DefinitelyTyped>
+- **@types/geojson@7946.0.16** — MIT. Repository: <https://github.com/DefinitelyTyped/DefinitelyTyped>
+- **@types/trusted-types@2.0.7** — MIT. Repository: <https://github.com/DefinitelyTyped/DefinitelyTyped>
+- **@types/web-bluetooth@0.0.20** — MIT. Repository: <https://github.com/DefinitelyTyped/DefinitelyTyped>
+- **@types/web-bluetooth@0.0.21** — MIT. Repository: <https://github.com/DefinitelyTyped/DefinitelyTyped>
+- **@upsetjs/venn.js@2.0.0** — MIT. Repository: <https://github.com/upsetjs/venn.js>
+- **@vue/compiler-core@3.5.33** — MIT. Repository: <https://github.com/vuejs/core>
+- **@vue/compiler-dom@3.5.33** — MIT. Repository: <https://github.com/vuejs/core>
+- **@vue/compiler-sfc@3.5.33** — MIT. Repository: <https://github.com/vuejs/core>
+- **@vue/compiler-ssr@3.5.33** — MIT. Repository: <https://github.com/vuejs/core>
+- **@vue/devtools-api@6.6.4** — MIT. Repository: <https://github.com/vuejs/vue-devtools>
+- **@vue/reactivity@3.5.33** — MIT. Repository: <https://github.com/vuejs/core>
+- **@vue/runtime-core@3.5.33** — MIT. Repository: <https://github.com/vuejs/core>
+- **@vue/runtime-dom@3.5.33** — MIT. Repository: <https://github.com/vuejs/core>
+- **@vue/server-renderer@3.5.33** — MIT. Repository: <https://github.com/vuejs/core>
+- **@vue/shared@3.5.33** — MIT. Repository: <https://github.com/vuejs/core>
+- **@vueuse/core@10.11.1** — MIT. Repository: <https://github.com/vueuse/vueuse>
+- **@vueuse/core@12.8.2** — MIT. Repository: <https://github.com/vueuse/vueuse>
+- **@vueuse/metadata@10.11.1** — MIT. Repository: <https://github.com/vueuse/vueuse>
+- **@vueuse/metadata@12.8.2** — MIT. Repository: <https://github.com/vueuse/vueuse>
+- **@vueuse/shared@10.11.1** — MIT. Repository: <https://github.com/vueuse/vueuse>
+- **@vueuse/shared@12.8.2** — MIT. Repository: <https://github.com/vueuse/vueuse>
+- **acorn@8.16.0** — MIT. Repository: <https://github.com/acornjs/acorn>
+- **aria-hidden@1.2.6** — MIT. Repository: <https://github.com/theKashey/aria-hidden>
+- **commander@7.2.0** — MIT. Repository: <https://github.com/tj/commander.js>
+- **commander@8.3.0** — MIT. Repository: <https://github.com/tj/commander.js>
+- **confbox@0.1.8** — MIT. Repository: <https://github.com/unjs/confbox>
+- **cose-base@1.0.3** — MIT. Repository: <https://github.com/iVis-at-Bilkent/cose-base>
+- **cose-base@2.2.0** — MIT. Repository: <https://github.com/iVis-at-Bilkent/cose-base>
+- **csstype@3.2.3** — MIT. Repository: <https://github.com/frenic/csstype>
+- **cytoscape-cose-bilkent@4.1.0** — MIT. Repository: <https://github.com/cytoscape/cytoscape.js-cose-bilkent>
+- **cytoscape-fcose@2.2.0** — MIT. Repository: <https://github.com/iVis-at-Bilkent/cytoscape.js-fcose>
+- **cytoscape@3.33.3** — MIT. Repository: <https://github.com/cytoscape/cytoscape.js>
+- **d3-array@2.12.1** — BSD-3-Clause. Repository: <https://github.com/d3/d3-array>
+- **d3-array@3.2.4** — ISC. Repository: <https://github.com/d3/d3-array>
+- **d3-axis@3.0.0** — ISC. Repository: <https://github.com/d3/d3-axis>
+- **d3-brush@3.0.0** — ISC. Repository: <https://github.com/d3/d3-brush>
+- **d3-chord@3.0.1** — ISC. Repository: <https://github.com/d3/d3-chord>
+- **d3-color@3.1.0** — ISC. Repository: <https://github.com/d3/d3-color>
+- **d3-contour@4.0.2** — ISC. Repository: <https://github.com/d3/d3-contour>
+- **d3-delaunay@6.0.4** — ISC. Repository: <https://github.com/d3/d3-delaunay>
+- **d3-dispatch@3.0.1** — ISC. Repository: <https://github.com/d3/d3-dispatch>
+- **d3-drag@3.0.0** — ISC. Repository: <https://github.com/d3/d3-drag>
+- **d3-dsv@3.0.1** — ISC. Repository: <https://github.com/d3/d3-dsv>
+- **d3-ease@3.0.1** — BSD-3-Clause. Repository: <https://github.com/d3/d3-ease>
+- **d3-fetch@3.0.1** — ISC. Repository: <https://github.com/d3/d3-fetch>
+- **d3-force@3.0.0** — ISC. Repository: <https://github.com/d3/d3-force>
+- **d3-format@3.1.2** — ISC. Repository: <https://github.com/d3/d3-format>
+- **d3-geo@3.1.1** — ISC. Repository: <https://github.com/d3/d3-geo>
+- **d3-hierarchy@3.1.2** — ISC. Repository: <https://github.com/d3/d3-hierarchy>
+- **d3-interpolate@3.0.1** — ISC. Repository: <https://github.com/d3/d3-interpolate>
+- **d3-path@1.0.9** — BSD-3-Clause. Repository: <https://github.com/d3/d3-path>
+- **d3-path@3.1.0** — ISC. Repository: <https://github.com/d3/d3-path>
+- **d3-polygon@3.0.1** — ISC. Repository: <https://github.com/d3/d3-polygon>
+- **d3-quadtree@3.0.1** — ISC. Repository: <https://github.com/d3/d3-quadtree>
+- **d3-random@3.0.1** — ISC. Repository: <https://github.com/d3/d3-random>
+- **d3-sankey@0.12.3** — BSD-3-Clause. Repository: <https://github.com/d3/d3-sankey>
+- **d3-scale-chromatic@3.1.0** — ISC. Repository: <https://github.com/d3/d3-scale-chromatic>
+- **d3-scale@4.0.2** — ISC. Repository: <https://github.com/d3/d3-scale>
+- **d3-selection@3.0.0** — ISC. Repository: <https://github.com/d3/d3-selection>
+- **d3-shape@1.3.7** — BSD-3-Clause. Repository: <https://github.com/d3/d3-shape>
+- **d3-shape@3.2.0** — ISC. Repository: <https://github.com/d3/d3-shape>
+- **d3-time-format@4.1.0** — ISC. Repository: <https://github.com/d3/d3-time-format>
+- **d3-time@3.1.0** — ISC. Repository: <https://github.com/d3/d3-time>
+- **d3-timer@3.0.1** — ISC. Repository: <https://github.com/d3/d3-timer>
+- **d3-transition@3.0.1** — ISC. Repository: <https://github.com/d3/d3-transition>
+- **d3-zoom@3.0.0** — ISC. Repository: <https://github.com/d3/d3-zoom>
+- **d3@7.9.0** — ISC. Repository: <https://github.com/d3/d3>
+- **dagre-d3-es@7.0.14** — MIT. Repository: <https://github.com/tbo47/dagre-es>
+- **dayjs@1.11.20** — MIT. Repository: <https://github.com/iamkun/dayjs>
+- **defu@6.1.7** — MIT. Repository: <https://github.com/unjs/defu>
+- **delaunator@5.1.0** — ISC. Repository: <https://github.com/mapbox/delaunator>
+- **dompurify@3.4.1** — (MPL-2.0 OR Apache-2.0). Repository: <https://github.com/cure53/DOMPurify>
+- **entities@7.0.1** — BSD-2-Clause. Repository: <https://github.com/fb55/entities>
+- **es-toolkit@1.46.1** — MIT. Repository: <https://github.com/toss/es-toolkit>
+- **estree-walker@2.0.2** — MIT. Repository: <https://github.com/Rich-Harris/estree-walker>
+- **fast-deep-equal@3.1.3** — MIT. Repository: <https://github.com/epoberezkin/fast-deep-equal>
+- **hachure-fill@0.5.2** — MIT. Repository: <https://github.com/pshihn/hachure-fill>
+- **iconv-lite@0.6.3** — MIT. Repository: <https://github.com/ashtuchkin/iconv-lite>
+- **internmap@1.0.1** — ISC. Repository: <https://github.com/mbostock/internmap>
+- **internmap@2.0.3** — ISC. Repository: <https://github.com/mbostock/internmap>
+- **kaneaz-harness-frontend@0.0.0** — UNLICENSED.
+- **katex@0.16.45** — MIT. Repository: <https://github.com/KaTeX/KaTeX>
+- **khroma@2.1.0** — MIT*. Repository: <https://github.com/fabiospampinato/khroma>
+- **layout-base@1.0.2** — MIT. Repository: <https://github.com/iVis-at-Bilkent/layout-base>
+- **layout-base@2.0.1** — MIT. Repository: <https://github.com/iVis-at-Bilkent/layout-base>
+- **lodash-es@4.18.1** — MIT. Repository: <https://github.com/lodash/lodash>
+- **lucide-vue-next@0.468.0** — ISC. Repository: <https://github.com/lucide-icons/lucide>
+- **magic-string@0.30.21** — MIT. Repository: <https://github.com/Rich-Harris/magic-string>
+- **marked@16.4.2** — MIT. Repository: <https://github.com/markedjs/marked>
+- **marked@18.0.2** — MIT. Repository: <https://github.com/markedjs/marked>
+- **mermaid@11.15.0** — MIT. Repository: <https://github.com/mermaid-js/mermaid>
+- **mlly@1.8.2** — MIT. Repository: <https://github.com/unjs/mlly>
+- **nanoid@3.3.11** — MIT. Repository: <https://github.com/ai/nanoid>
+- **nanoid@5.1.9** — MIT. Repository: <https://github.com/ai/nanoid>
+- **package-manager-detector@1.6.0** — MIT. Repository: <https://github.com/antfu-collective/package-manager-detector>
+- **path-data-parser@0.1.0** — MIT. Repository: <https://github.com/pshihn/path-data-parser>
+- **pathe@2.0.3** — MIT. Repository: <https://github.com/unjs/pathe>
+- **pdfjs-dist@5.7.284** — Apache-2.0. Repository: <https://github.com/mozilla/pdf.js>
+- **picocolors@1.1.1** — ISC. Repository: <https://github.com/alexeyraspopov/picocolors>
+- **pkg-types@1.3.1** — MIT. Repository: <https://github.com/unjs/pkg-types>
+- **points-on-curve@0.2.0** — MIT. Repository: <https://github.com/pshihn/bezier-points>
+- **points-on-path@0.2.1** — MIT. Repository: <https://github.com/pshihn/points-on-path>
+- **postcss@8.5.10** — MIT. Repository: <https://github.com/postcss/postcss>
+- **radix-vue@1.9.17** — MIT. Repository: <https://github.com/unovue/radix-vue>
+- **robust-predicates@3.0.3** — Unlicense. Repository: <https://github.com/mourner/robust-predicates>
+- **roughjs@4.6.6** — MIT. Repository: <https://github.com/pshihn/rough>
+- **rw@1.3.3** — BSD-3-Clause. Repository: <https://github.com/mbostock/rw>
+- **safer-buffer@2.1.2** — MIT. Repository: <https://github.com/ChALkeR/safer-buffer>
+- **source-map-js@1.2.1** — BSD-3-Clause. Repository: <https://github.com/7rulnik/source-map-js>
+- **stylis@4.4.0** — MIT. Repository: <https://github.com/thysultan/stylis.js>
+- **tinyexec@1.1.2** — MIT. Repository: <https://github.com/tinylibs/tinyexec>
+- **ts-dedent@2.2.0** — MIT. Repository: <https://github.com/tamino-martinius/node-ts-dedent>
+- **tslib@2.8.1** — 0BSD. Repository: <https://github.com/Microsoft/tslib>
+- **typescript@5.9.3** — Apache-2.0. Repository: <https://github.com/microsoft/TypeScript>
+- **ufo@1.6.4** — MIT. Repository: <https://github.com/unjs/ufo>
+- **uuid@11.1.1** — MIT. Repository: <https://github.com/uuidjs/uuid>
+- **vue-demi@0.14.10** — MIT. Repository: <https://github.com/antfu/vue-demi>
+- **vue-router@4.6.4** — MIT. Repository: <https://github.com/vuejs/router>
+- **vue@3.5.33** — MIT. Repository: <https://github.com/vuejs/core>

@@ -279,7 +279,7 @@ const html = computed(() => {
   const m = buildMarkedWithCodeHeaders();
   const raw = m.parse(props.source, { async: false }) as string;
   return DOMPurify.sanitize(raw, {
-    ADD_ATTR: ['target', 'rel', 'data-block-idx', 'aria-hidden', 'focusable', 'style'],
+    ADD_ATTR: ['target', 'rel', 'data-block-idx', 'aria-hidden', 'focusable'],
     // Allow KaTeX spans and math wrappers. KaTeX output uses span.katex,
     // span.katex-display, and many sub-spans — DOMPurify allows <span> by
     // default; the katex-* class names pass through without extra config

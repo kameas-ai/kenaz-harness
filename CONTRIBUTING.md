@@ -1,4 +1,4 @@
-# Contributing to Kaneaz Harness
+# Contributing to Kenaz Harness
 
 Thanks for your interest in contributing.
 
@@ -28,8 +28,8 @@ Requires:
 - [Wails CLI](https://wails.io/docs/gettingstarted/installation): `go install github.com/wailsapp/wails/v2/cmd/wails@latest`
 
 ```bash
-git clone https://github.com/kameas-ai/kaneaz-harness.git
-cd kaneaz-harness
+git clone https://github.com/kameas-ai/kenaz-harness.git
+cd kenaz-harness
 
 # Live development
 wails dev
@@ -122,8 +122,38 @@ bash scripts/ci/check-no-cred-bytes-in-rpc.sh
 - [ ] No new third-party SDKs in `core/` (or carve-out documented in `docs/adr/`)
 - [ ] No imports that violate DIRECTIVE-001
 - [ ] `bash scripts/ci/check-no-cred-bytes-in-rpc.sh` exits 0 (credential hygiene)
+- [ ] CLA signed (CLA-checking bot will prompt on first PR)
 
-## License
+## Contributor License Agreement
 
-By contributing, you agree your contributions will be licensed under the
-project's [Apache 2.0 license](LICENSE).
+Before your first pull request can be merged, you must sign the
+[Kameas Contributor License Agreement](https://kameas.ai/cla.html).
+The CLA-checking bot will post a one-time signing link on your first PR;
+click it, sign in with your GitHub account, and accept. After that, all
+your future contributions to any Kameas open-source repository are
+covered &mdash; you only sign once across the whole org.
+
+If you are contributing on behalf of an employer or any other legal
+entity, your employer should execute the Corporate CLA (Part B of the
+linked CLA document) and notify <legal@kameas.ai> of the list of
+authorized contributors. Until that's done, you can still sign as an
+individual (Part A) provided you have the necessary rights from your
+employer to do so &mdash; the CLA includes the standard representations.
+
+By contributing, you also agree that your contributions are licensed
+under the project's [Apache 2.0 license](LICENSE) for distribution in
+this repository, and that Kameas AI, Inc. may relicense them as
+described in the CLA (so the open-core commercial offering can
+incorporate community work).
+
+Questions about the CLA: <legal@kameas.ai>.
+
+## Third-party attributions
+
+If you add a new Go or Node dependency, you don't need to update `NOTICES`
+by hand &mdash; the `oss-attributions` workflow regenerates it on each
+release and opens a PR with the diff. If your PR adds a dependency, please
+flag it in the PR description so reviewers can think about license
+compatibility (in particular, avoid LGPL / MPL / EPL dependencies without
+checking with maintainers first, since those add source-disclosure
+obligations).

