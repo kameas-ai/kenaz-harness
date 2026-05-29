@@ -197,3 +197,4 @@ Apache 2.0 — see [LICENSE](LICENSE).
 
 Third-party assets (Geist fonts, Kenaz design tokens, shadcn-vue primitives)
 are credited in [NOTICES](NOTICES).
+
