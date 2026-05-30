@@ -1,8 +1,9 @@
-# Vue 3 + Vite
+# Frontend
 
-This template should help get you started developing with Vue 3 in Vite. The template uses Vue 3 `<script setup>` SFCs,
-check out the [script setup docs](https://v3.vuejs.org/api/sfc-script-setup.html#sfc-script-setup) to learn more.
+The Kenaz Harness frontend: a Vue 3 + Vite single-page app served through the
+Wails desktop shell.
 
-## Recommended IDE Setup
-
-- [VS Code](https://code.visualstudio.com/) + [Volar](https://marketplace.visualstudio.com/items?itemName=Vue.volar)
+This directory is built and bundled as part of the desktop app — you normally
+don't run it standalone. For the full stack, build instructions, and how the
+frontend connects to the Go backend over Wails bindings, see the
+[root README](../README.md).

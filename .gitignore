@@ -50,3 +50,12 @@ docs/roadmap.md
 # workflow artifact, not committed to the repo).
 .oss-attributions/
 NOTICES.new
+
+# Internal-only docs — never ship from this public repo.
+docs/*-internal.md
+
+# Agent-worktree scratch (Claire); never committed.
+.claire/
+
+# macOS finder junk
+.DS_Store

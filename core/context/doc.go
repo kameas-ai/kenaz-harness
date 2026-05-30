@@ -6,15 +6,14 @@
 // The package is organised into focused sub-packages per
 // DIRECTIVE_001 (architectural integrity):
 //
-//   - pack/      on-disk pack format parser + validator (YAML+Markdown)
-//   - merge/     three-tier merge engine + override registry
-//   - scope/     workflow / agent / role access scoping
-//   - snapshot/  content-addressable resolution snapshot
-//   - inject/    session-time injection hook
-//   - audit/     event-log emission shapes (consumes core/event)
-//   - replay/    snapshot reconstruction from event-log entries
-//   - policy/    conflict / size / fail-closed policy substrate
-//   - cache/     local pack cache + offline operation
+//   - audit/      event-log emission shapes (consumes core/event)
+//   - bundlekind/ context-pack artifact-kind handler for the bundle resolver
+//   - merge/      three-tier merge engine + override registry
+//   - pack/       on-disk pack format parser + validator (YAML+Markdown)
+//   - policy/     conflict / size / fail-closed policy substrate
+//   - scope/      workflow / agent / role access scoping
+//   - snapshot/   content-addressable resolution snapshot
+//   - verify/     provenance-verification facade over the trust API
 //
 // External integrations (bundle resolver, trust verifier, event log,
 // secrets keychain, storage) are reached only through their public
