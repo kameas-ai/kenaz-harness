@@ -23,7 +23,7 @@ Thanks for your interest in contributing.
 ## Development setup
 
 Requires:
-- Go 1.22+
+- Go 1.25+
 - Node 20+
 - [Wails CLI](https://wails.io/docs/gettingstarted/installation): `go install github.com/wailsapp/wails/v2/cmd/wails@latest`
 

@@ -59,7 +59,9 @@ on:
 
   # ── dev: every merge to main ──────────────────────────────────────────────
   # Non-versioning commits (chore/docs/ci/etc.) produce a rolling dev build.
-  # PR-time `build-smoke` covers build-health; this is for dev download parity.
+  # (The PR-time `build-smoke` job was removed; release builds now cover
+  # cross-platform build-health on tagged versions. This is for dev download
+  # parity.)
   push:
     branches:
       - main
