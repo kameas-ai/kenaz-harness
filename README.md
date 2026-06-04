@@ -1,4 +1,4 @@
-<h1 align="center">Kaneaz Harness</h1>
+<h1 align="center">Kenaz Harness</h1>
 
 <p align="center">
   <strong>Local-first desktop AI agent harness with explicit graph topology.</strong><br />
@@ -6,14 +6,14 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/kameas-ai/kaneaz-harness/discussions">Discussions</a> ·
+  <a href="https://github.com/kameas-ai/kenaz-harness/discussions">Discussions</a> ·
   <a href="docs/agent-kernel-graph-node-catalog.md">Node Catalog</a> ·
   <a href="CONTRIBUTING.md">Contributing</a>
 </p>
 
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache_2.0-blue.svg" alt="License: Apache 2.0" /></a>
-  <img src="https://img.shields.io/badge/Go-1.22+-00ADD8.svg" alt="Go 1.22+" />
+  <img src="https://img.shields.io/badge/Go-1.25+-00ADD8.svg" alt="Go 1.25+" />
   <img src="https://img.shields.io/badge/Wails-v2-FF0000.svg" alt="Wails v2" />
   <img src="https://img.shields.io/badge/Vue-3-4FC08D.svg" alt="Vue 3" />
   <img src="https://img.shields.io/badge/Privacy-Local_first-22C55E.svg" alt="Privacy: Local-first" />
@@ -21,7 +21,7 @@
 
 ---
 
-Kaneaz Harness is a desktop application for running multi-provider AI agents on
+Kenaz Harness is a desktop application for running multi-provider AI agents on
 your own machine. It speaks to Anthropic, OpenAI, OpenRouter, and AWS Bedrock,
 manages long-running tool-using conversations, and gives you an explicit graph
 kernel — not an opaque loop — to compose how those agents think.
@@ -115,15 +115,15 @@ carve-out documented in [`docs/adr/`](docs/adr/)).
 
 ## Build from source
 
-Requires Go 1.22+, Node 20+, and the Wails CLI.
+Requires Go 1.25+, Node 20+, and the Wails CLI.
 
 ```bash
 # Wails CLI
 go install github.com/wailsapp/wails/v2/cmd/wails@latest
 
 # Clone + run
-git clone https://github.com/kameas-ai/kaneaz-harness.git
-cd kaneaz-harness
+git clone https://github.com/kameas-ai/kenaz-harness.git
+cd kenaz-harness
 wails dev          # live-reload dev mode
 # or
 wails build        # produces a redistributable binary in build/bin/
@@ -157,7 +157,7 @@ The deep docs live under [`docs/`](docs/):
 
 | Layer | Tech |
 |---|---|
-| Backend | Go 1.22+, stdlib + `gopkg.in/yaml.v3`, `modernc.org/sqlite` (CGo-free) |
+| Backend | Go 1.25+, stdlib + `gopkg.in/yaml.v3`, `modernc.org/sqlite` (CGo-free) |
 | Frontend | Vue 3, Vite, Vitest, TypeScript 5 |
 | Desktop shell | Wails v2 |
 | Storage | SQLite WAL (single `data.db`) + filesystem CAS for media + per-corpus gob vector store |
@@ -182,8 +182,8 @@ The deep docs live under [`docs/`](docs/):
 
 ## Contributing
 
-Kaneaz Harness is early. The best way to engage is
-[Discussions](https://github.com/kameas-ai/kaneaz-harness/discussions) — ask
+Kenaz Harness is early. The best way to engage is
+[Discussions](https://github.com/kameas-ai/kenaz-harness/discussions) — ask
 questions, share ideas, or propose features.
 
 For code contributions, see [CONTRIBUTING.md](CONTRIBUTING.md). The short
