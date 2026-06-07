@@ -44,7 +44,13 @@ docs/roadmap.md
 
 # Test runner output caches
 .vite/
-harness-vm
+# Built in-VM harness binary (artifact of `go build -o ... ./cmd/harness-vm`).
+# Scope to the binary names only — a bare `harness-vm` pattern also matches the
+# cmd/harness-vm/ source directory and silently hides its .go files from git.
+/harness-vm
+/kenaz-harness-vm
+cmd/harness-vm/harness-vm
+cmd/harness-vm/kenaz-harness-vm
 
 # OSS attribution workflow scratch dir (intermediate files —
 # go.modules.jsonl, go.md, node.raw.json — get uploaded as a

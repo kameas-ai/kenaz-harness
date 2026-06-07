@@ -16,11 +16,17 @@ import (
 
 // startTestServer spins up a harness-vm listener on a random port and
 // returns a closer and the address. token may be "" to disable auth checking.
-func startTestServer(t *testing.T, token string) (net.Listener, string) {
+// An optional ledger emitter may be supplied to exercise ledger emission;
+// when omitted, connections run with ledger emission disabled (nil).
+func startTestServer(t *testing.T, token string, ledger ...*ledgerEmitter) (net.Listener, string) {
 	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("startTestServer: listen: %v", err)
+	}
+	var le *ledgerEmitter
+	if len(ledger) > 0 {
+		le = ledger[0]
 	}
 	log := newTestLogger()
 	go func() {
@@ -29,7 +35,7 @@ func startTestServer(t *testing.T, token string) (net.Listener, string) {
 			if err != nil {
 				return
 			}
-			go handleConn(log, conn, token)
+			go handleConn(log, conn, token, le)
 		}
 	}()
 	return ln, ln.Addr().String()

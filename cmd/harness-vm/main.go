@@ -64,6 +64,22 @@ func main() {
 		Level: slog.LevelInfo,
 	}))
 
+	// Ledger emitter: when SIGIL_INGEST_SOCKET names the in-VM reporter
+	// ingest endpoint, task lifecycle (start/tool_call/complete) is pushed
+	// there for the host audit timeline (criterion #5 / finding #11). When
+	// unset, emission is a no-op and the task surface runs unchanged.
+	ledger := newLedgerEmitter(
+		os.Getenv(ledgerSocketEnv),
+		"", // default network ("unix")
+		os.Getenv("SIGIL_WORKBENCH_ID"),
+		log,
+	)
+	if ledger.enabled() {
+		log.Info("kenaz-harness-vm: ledger emission enabled", "ingest_socket", ledger.addr)
+	} else {
+		log.Info("kenaz-harness-vm: ledger emission disabled (SIGIL_INGEST_SOCKET unset)")
+	}
+
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		log.Error("kenaz-harness-vm: listen failed", "addr", addr, "err", err)
@@ -85,7 +101,7 @@ func main() {
 			log.Info("kenaz-harness-vm: accept loop exiting", "reason", err)
 			return
 		}
-		go handleConn(log, conn, token)
+		go handleConn(log, conn, token, ledger)
 	}
 }
 
@@ -114,7 +130,7 @@ func (w *connWriter) send(m msg) error {
 
 // handleConn manages the full lifecycle of one client connection:
 // auth handshake, then a loop dispatching task messages.
-func handleConn(log *slog.Logger, conn net.Conn, token string) {
+func handleConn(log *slog.Logger, conn net.Conn, token string, ledger *ledgerEmitter) {
 	defer conn.Close()
 
 	w := &connWriter{conn: conn}
@@ -198,7 +214,7 @@ func handleConn(log *slog.Logger, conn net.Conn, token string) {
 			cancelFn = cancel
 
 			// Spawn the task runner. It writes via w and clears busy when done.
-			go runTask(log, w, &busy, cancel, ctx, taskID, prompt)
+			go runTask(log, w, &busy, cancel, ctx, taskID, prompt, ledger)
 
 		case "task.cancel":
 			if busy.Load() == 0 {
@@ -237,15 +253,21 @@ func runTask(
 	ctx context.Context,
 	taskID string,
 	prompt string,
+	ledger *ledgerEmitter,
 ) {
 	defer cancel() // release the cancel func's resources
 
 	log.Info("kenaz-harness-vm: task starting", "task_id", taskID)
+	// Ledger: task.start (length only — never the prompt text). criterion #5.
+	ledger.emitTaskStart(taskID, len(prompt))
 
 	// Simulate streaming: emit a few task.running chunks with pauses
-	// so that a cancel mid-stream is observable in tests.
+	// so that a cancel mid-stream is observable in tests. Each chunk stands
+	// in for a tool invocation in the eventual graph kernel; we record a
+	// tool_call ledger event per chunk so the audit timeline shows the
+	// task's internal steps, not just its boundaries.
 	chunks := []string{"thinking... ", "working... ", "done."}
-	for _, chunk := range chunks {
+	for i, chunk := range chunks {
 		select {
 		case <-ctx.Done():
 			// Cancelled mid-stream. Clear busy then emit task.cancelled (Bug 1 + 3 fix).
@@ -255,6 +277,7 @@ func runTask(
 				"kind":    "task.cancelled",
 				"task_id": taskID,
 			})
+			ledger.emitTaskCancelled(taskID) // terminal ledger event
 			return
 		case <-time.After(20 * time.Millisecond):
 			if err := w.send(msg{
@@ -266,6 +289,9 @@ func runTask(
 				busy.Store(0)
 				return
 			}
+			// Ledger: one tool_call per step. The tool name is structural
+			// (step index), never tool arguments or output.
+			ledger.emitToolCall(taskID, fmt.Sprintf("step-%d", i))
 		}
 	}
 
@@ -278,6 +304,7 @@ func runTask(
 			"kind":    "task.cancelled",
 			"task_id": taskID,
 		})
+		ledger.emitTaskCancelled(taskID) // terminal ledger event
 		return
 	default:
 	}
@@ -290,6 +317,7 @@ func runTask(
 		"kind":    "task.complete",
 		"task_id": taskID,
 	})
+	ledger.emitTaskComplete(taskID) // terminal ledger event
 }
 
 // truncate returns s truncated to n runes with "..." suffix when truncation occurred.

@@ -98,6 +98,56 @@ the JSON schema shape will be preserved.
 
 ---
 
+## Ledger emission (criterion #5 / M1 finding #11)
+
+In addition to the per-connection RPC stream above (which is consumed by the
+host orchestrator), the in-VM harness pushes **task lifecycle records to the
+reporter ingest endpoint** so the host audit ledger (`reporter_events`) shows
+agent activity attributed to the correct workbench.
+
+This is a *side channel*, independent of the RPC connection: the RPC stream is
+for the live UI; the ledger records are for the durable audit timeline.
+
+- **Endpoint:** the Unix socket named by `SIGIL_INGEST_SOCKET` (the in-VM
+  sigil reporter's terminal-ingest socket). When the env var is unset, ledger
+  emission is disabled and the task surface runs unchanged (dev / no-reporter
+  path).
+- **Encoding:** NDJSON, one record per connection. Each `emit` dials, writes
+  one line, and closes — fire-and-forget with bounded dial/write deadlines so a
+  slow or absent reporter never stalls a task.
+- **Record shape** (matches `sigil internal/event.Event` so the reporter's
+  `TerminalSource` ingests it without translation):
+
+  ```json
+  {
+    "kind": "ai",
+    "source": "harness",
+    "payload": {
+      "phase": "task.start",            // task.start | tool_call | task.complete | task.cancelled
+      "task_id": "<id>",
+      "workbench_id": "<id>",           // from SIGIL_WORKBENCH_ID
+      "tool": "<name>",                 // tool_call only
+      "prompt_len": 42                  // task.start only — length, NOT the prompt text
+    },
+    "timestamp": "2026-06-07T12:00:00Z"
+  }
+  ```
+
+- **Lifecycle emitted per task:** one `task.start`, zero-or-more `tool_call`,
+  and exactly one terminal record (`task.complete` or `task.cancelled`).
+- **Privacy:** records carry only structural metadata. Prompt text, tool
+  arguments, and task output are NEVER written to the ledger. `task.start`
+  carries `prompt_len` (a count), never `prompt`.
+
+**Deferred (downstream hops, not in this repo):** the in-VM
+`sigild-vm-reporter` must register a terminal-ingest source listening on
+`SIGIL_INGEST_SOCKET` (sigil finding #1), and the host `kenaz` ingest must
+accept and persist the reporter's spooled events. Until those land, the harness
+emits to the socket but no `reporter_events` row appears — that end-to-end close
+is a human-witnessed operator smoke.
+
+---
+
 ## Smoke Probe (Phase 1)
 
 The smoke script (`kenaz-workbench/scripts/smoke-macos.sh --image=headless`)
