@@ -14,7 +14,7 @@ import (
 	"fmt"
 	"io/fs"
 
-	coreslashcmd "github.com/sigil-tech/kaneaz-harness/core/slashcmd"
+	coreslashcmd "github.com/kameas-ai/kenaz-harness/core/slashcmd"
 )
 
 // SkillStore is the narrow write surface the loader needs. *coreslashcmd.Store

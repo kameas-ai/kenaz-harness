@@ -15,7 +15,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime/types"
-	"github.com/sigil-tech/kaneaz-harness/core/llm"
+	"github.com/kameas-ai/kenaz-harness/core/llm"
 )
 
 // fakeServer captures the most recent HTTP request body / headers so

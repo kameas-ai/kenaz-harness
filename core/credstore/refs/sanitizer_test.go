@@ -6,7 +6,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/sigil-tech/kaneaz-harness/core/credstore/refs"
+	"github.com/kameas-ai/kenaz-harness/core/credstore/refs"
 )
 
 func TestSanitizer_SingleFingerprint(t *testing.T) {

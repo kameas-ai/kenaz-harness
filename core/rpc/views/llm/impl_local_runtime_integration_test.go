@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/sigil-tech/kaneaz-harness/core/llm/localruntime"
-	llmview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/llm"
+	"github.com/kameas-ai/kenaz-harness/core/llm/localruntime"
+	llmview "github.com/kameas-ai/kenaz-harness/core/rpc/views/llm"
 )
 
 // buildIntegrationAPI creates a minimal *llmview.API for integration testing.

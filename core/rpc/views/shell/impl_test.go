@@ -9,7 +9,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/tools"
+	"github.com/kameas-ai/kenaz-harness/core/rpc/views/tools"
 )
 
 // recordingOpener is a test Opener that captures every URL the API

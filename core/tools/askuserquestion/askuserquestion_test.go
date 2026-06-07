@@ -6,7 +6,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/sigil-tech/kaneaz-harness/core/tools/askuserquestion"
+	"github.com/kameas-ai/kenaz-harness/core/tools/askuserquestion"
 )
 
 // fakeDelegate implements Delegate for tests.

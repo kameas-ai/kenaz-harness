@@ -11,9 +11,9 @@ import (
 	"runtime"
 	"sync"
 
-	"github.com/sigil-tech/kaneaz-harness/core/trust"
-	"github.com/sigil-tech/kaneaz-harness/core/trust/backends"
-	"github.com/sigil-tech/kaneaz-harness/core/trust/internal/fingerprint"
+	"github.com/kameas-ai/kenaz-harness/core/trust"
+	"github.com/kameas-ai/kenaz-harness/core/trust/backends"
+	"github.com/kameas-ai/kenaz-harness/core/trust/internal/fingerprint"
 )
 
 // Backend is the test-only in-memory [backends.SigningBackend].

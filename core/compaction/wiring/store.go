@@ -16,8 +16,8 @@ import (
 	"context"
 	"time"
 
-	"github.com/sigil-tech/kaneaz-harness/core/compaction"
-	"github.com/sigil-tech/kaneaz-harness/core/session"
+	"github.com/kameas-ai/kenaz-harness/core/compaction"
+	"github.com/kameas-ai/kenaz-harness/core/session"
 )
 
 // MessageStore adapts the session.Store onto the compaction.MessageStore

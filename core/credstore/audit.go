@@ -16,8 +16,8 @@ import (
 	"context"
 	"time"
 
-	"github.com/sigil-tech/kaneaz-harness/core/context/audit"
-	"github.com/sigil-tech/kaneaz-harness/core/secrets"
+	"github.com/kameas-ai/kenaz-harness/core/context/audit"
+	"github.com/kameas-ai/kenaz-harness/core/secrets"
 )
 
 const auditChanCap = 256

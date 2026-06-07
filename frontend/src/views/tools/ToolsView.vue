@@ -95,7 +95,7 @@ onMounted(() => {
         layer so capability advertisements stay enforceable.
       </p>
       <a
-        href="https://github.com/sigil-tech/kaneaz-harness/blob/main/docs/mcp.md"
+        href="https://github.com/kameas-ai/kenaz-harness/blob/main/docs/mcp.md"
         class="mt-3 inline-block text-accent hover:text-accent-muted"
         target="_blank"
         rel="noopener"

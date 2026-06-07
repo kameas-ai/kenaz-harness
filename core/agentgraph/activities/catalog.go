@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"sync"
 
-	agentgraph "github.com/sigil-tech/kaneaz-harness/core/agentgraph"
+	agentgraph "github.com/kameas-ai/kenaz-harness/core/agentgraph"
 )
 
 // ErrNotFound is returned by Resolve / Get when the (id, version) tuple

@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sigil-tech/kaneaz-harness/core/context/audit"
+	"github.com/kameas-ai/kenaz-harness/core/context/audit"
 )
 
 // engine_test.go drives the threshold-mode engine through fakes for

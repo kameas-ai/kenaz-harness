@@ -13,8 +13,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sigil-tech/kaneaz-harness/core/credstore"
-	"github.com/sigil-tech/kaneaz-harness/core/policy/cedar"
+	"github.com/kameas-ai/kenaz-harness/core/credstore"
+	"github.com/kameas-ai/kenaz-harness/core/policy/cedar"
 )
 
 // makeGrantEngineForCredstore constructs a *cedar.Engine backed by a TempDir

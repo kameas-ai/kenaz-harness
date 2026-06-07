@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	llm "github.com/sigil-tech/kaneaz-harness/core/llm"
-	"github.com/sigil-tech/kaneaz-harness/core/llm/capabilities"
+	llm "github.com/kameas-ai/kenaz-harness/core/llm"
+	"github.com/kameas-ai/kenaz-harness/core/llm/capabilities"
 )
 
 func TestMemoryCache_GetPut(t *testing.T) {

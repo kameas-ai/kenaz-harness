@@ -3,7 +3,7 @@ package session
 import (
 	"context"
 
-	"github.com/sigil-tech/kaneaz-harness/core/storage/migrations"
+	"github.com/kameas-ai/kenaz-harness/core/storage/migrations"
 )
 
 // migrationIDKind lands the kind column the harness-self-mcp-onboarding

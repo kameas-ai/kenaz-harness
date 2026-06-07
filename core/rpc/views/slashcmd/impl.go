@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	coreslashcmd "github.com/sigil-tech/kaneaz-harness/core/slashcmd"
+	coreslashcmd "github.com/kameas-ai/kenaz-harness/core/slashcmd"
 )
 
 // API is the concrete SlashAPI implementation. It delegates to the

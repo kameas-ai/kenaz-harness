@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sigil-tech/kaneaz-harness/core/compaction"
+	"github.com/kameas-ai/kenaz-harness/core/compaction"
 )
 
 // settingsEqual compares two Settings values with map-aware semantics.

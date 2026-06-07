@@ -36,7 +36,7 @@ import (
 	"sync"
 	"time"
 
-	coreart "github.com/sigil-tech/kaneaz-harness/core/artifacts"
+	coreart "github.com/kameas-ai/kenaz-harness/core/artifacts"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"

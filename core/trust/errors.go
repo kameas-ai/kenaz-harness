@@ -4,7 +4,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/sigil-tech/kaneaz-harness/core/trust/internal/algo"
+	"github.com/kameas-ai/kenaz-harness/core/trust/internal/algo"
 )
 
 // RejectionCode is the stable taxonomy of verification rejection reasons

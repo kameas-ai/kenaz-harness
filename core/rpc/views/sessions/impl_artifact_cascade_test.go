@@ -7,12 +7,12 @@ import (
 	"path/filepath"
 	"testing"
 
-	coreart "github.com/sigil-tech/kaneaz-harness/core/artifacts"
-	"github.com/sigil-tech/kaneaz-harness/core/attachments"
-	"github.com/sigil-tech/kaneaz-harness/core/projects"
-	"github.com/sigil-tech/kaneaz-harness/core/session"
-	"github.com/sigil-tech/kaneaz-harness/core/storage"
-	storagesqlite "github.com/sigil-tech/kaneaz-harness/core/storage/sqlite"
+	coreart "github.com/kameas-ai/kenaz-harness/core/artifacts"
+	"github.com/kameas-ai/kenaz-harness/core/attachments"
+	"github.com/kameas-ai/kenaz-harness/core/projects"
+	"github.com/kameas-ai/kenaz-harness/core/session"
+	"github.com/kameas-ai/kenaz-harness/core/storage"
+	storagesqlite "github.com/kameas-ai/kenaz-harness/core/storage/sqlite"
 )
 
 // newCascadeFixture wires the full session + artifact cascade stack

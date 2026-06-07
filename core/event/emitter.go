@@ -8,9 +8,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/sigil-tech/kaneaz-harness/core/event/chain"
-	"github.com/sigil-tech/kaneaz-harness/core/event/log"
-	"github.com/sigil-tech/kaneaz-harness/core/event/redact"
+	"github.com/kameas-ai/kenaz-harness/core/event/chain"
+	"github.com/kameas-ai/kenaz-harness/core/event/log"
+	"github.com/kameas-ai/kenaz-harness/core/event/redact"
 )
 
 // emitter is the concrete implementation of the Emitter interface.

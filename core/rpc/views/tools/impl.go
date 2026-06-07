@@ -12,12 +12,12 @@ import (
 	"time"
 	"unicode"
 
-	coremcp "github.com/sigil-tech/kaneaz-harness/core/mcp"
-	"github.com/sigil-tech/kaneaz-harness/core/mcp/recipes"
-	"github.com/sigil-tech/kaneaz-harness/core/mcp/stdio"
-	"github.com/sigil-tech/kaneaz-harness/core/policy/cedar"
-	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/cedarpolicy"
-	"github.com/sigil-tech/kaneaz-harness/core/secrets"
+	coremcp "github.com/kameas-ai/kenaz-harness/core/mcp"
+	"github.com/kameas-ai/kenaz-harness/core/mcp/recipes"
+	"github.com/kameas-ai/kenaz-harness/core/mcp/stdio"
+	"github.com/kameas-ai/kenaz-harness/core/policy/cedar"
+	"github.com/kameas-ai/kenaz-harness/core/rpc/views/cedarpolicy"
+	"github.com/kameas-ai/kenaz-harness/core/secrets"
 )
 
 // AuditEmitter is the narrow seam the tools view calls when emitting

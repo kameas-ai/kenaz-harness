@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	graphview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/agentgraph"
+	graphview "github.com/kameas-ai/kenaz-harness/core/rpc/views/agentgraph"
 )
 
 func newTestAPI(t *testing.T) (*graphview.Impl, *graphview.Manager, string) {

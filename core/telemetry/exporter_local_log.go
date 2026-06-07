@@ -9,7 +9,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/sigil-tech/kaneaz-harness/core/storage"
+	"github.com/kameas-ai/kenaz-harness/core/storage"
 	"go.opentelemetry.io/otel/log"
 	sdklog "go.opentelemetry.io/otel/sdk/log"
 )

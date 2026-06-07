@@ -23,8 +23,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/sigil-tech/kaneaz-harness/core/credstore/refs"
-	"github.com/sigil-tech/kaneaz-harness/core/policy/cedar"
+	"github.com/kameas-ai/kenaz-harness/core/credstore/refs"
+	"github.com/kameas-ai/kenaz-harness/core/policy/cedar"
 )
 
 const (

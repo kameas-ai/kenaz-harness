@@ -9,8 +9,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/sigil-tech/kaneaz-harness/core/policy/cedar"
-	"github.com/sigil-tech/kaneaz-harness/core/scheduler"
+	"github.com/kameas-ai/kenaz-harness/core/policy/cedar"
+	"github.com/kameas-ai/kenaz-harness/core/scheduler"
 )
 
 // ErrStoreUnavailable is returned when no ScheduledChatStore is wired.

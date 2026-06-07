@@ -22,9 +22,9 @@ import (
 	"sync"
 	"time"
 
-	llm "github.com/sigil-tech/kaneaz-harness/core/llm"
-	"github.com/sigil-tech/kaneaz-harness/core/llm/capabilities"
-	"github.com/sigil-tech/kaneaz-harness/core/llm/httpx"
+	llm "github.com/kameas-ai/kenaz-harness/core/llm"
+	"github.com/kameas-ai/kenaz-harness/core/llm/capabilities"
+	"github.com/kameas-ai/kenaz-harness/core/llm/httpx"
 )
 
 // Kind is the canonical provider kind for all custom OpenAI-compatible

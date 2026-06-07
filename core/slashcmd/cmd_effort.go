@@ -6,7 +6,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/sigil-tech/kaneaz-harness/core/llm"
+	"github.com/kameas-ai/kenaz-harness/core/llm"
 )
 
 // MetaKeyReasoningKnob is the metadata key the frontend reads to apply

@@ -9,7 +9,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/sigil-tech/kaneaz-harness/core/memory"
+	"github.com/kameas-ai/kenaz-harness/core/memory"
 )
 
 type fakeRetriever struct {

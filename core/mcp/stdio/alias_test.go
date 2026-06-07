@@ -4,8 +4,8 @@ import (
 	"context"
 	"testing"
 
-	legacy "github.com/sigil-tech/kaneaz-harness/core/mcp/stdio"
-	"github.com/sigil-tech/kaneaz-harness/core/mcp/transport/stdio"
+	legacy "github.com/kameas-ai/kenaz-harness/core/mcp/stdio"
+	"github.com/kameas-ai/kenaz-harness/core/mcp/transport/stdio"
 )
 
 // TestAlias_PoolTypesEquivalent asserts the legacy import path

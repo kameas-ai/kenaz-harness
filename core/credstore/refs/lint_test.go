@@ -5,7 +5,7 @@ import (
 	"runtime"
 	"testing"
 
-	"github.com/sigil-tech/kaneaz-harness/core/credstore/refs"
+	"github.com/kameas-ai/kenaz-harness/core/credstore/refs"
 )
 
 // TestLintNoLiteralSecretReference asserts that no non-test Go file in

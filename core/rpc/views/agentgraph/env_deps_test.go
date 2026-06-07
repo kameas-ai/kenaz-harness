@@ -5,11 +5,11 @@ import (
 	"errors"
 	"testing"
 
-	coreag "github.com/sigil-tech/kaneaz-harness/core/agentgraph"
-	"github.com/sigil-tech/kaneaz-harness/core/conversation"
-	graphview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/agentgraph"
-	"github.com/sigil-tech/kaneaz-harness/core/session"
-	corebash "github.com/sigil-tech/kaneaz-harness/core/tools/bash"
+	coreag "github.com/kameas-ai/kenaz-harness/core/agentgraph"
+	"github.com/kameas-ai/kenaz-harness/core/conversation"
+	graphview "github.com/kameas-ai/kenaz-harness/core/rpc/views/agentgraph"
+	"github.com/kameas-ai/kenaz-harness/core/session"
+	corebash "github.com/kameas-ai/kenaz-harness/core/tools/bash"
 )
 
 // TestEnvDeps_BashOutputStoreWiring exercises the bash store + adapter

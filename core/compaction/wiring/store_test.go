@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sigil-tech/kaneaz-harness/core/compaction"
-	"github.com/sigil-tech/kaneaz-harness/core/session"
+	"github.com/kameas-ai/kenaz-harness/core/compaction"
+	"github.com/kameas-ai/kenaz-harness/core/session"
 )
 
 // TestMessageStore_RoundTripsCompactionShape pins the value-shape

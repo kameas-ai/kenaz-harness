@@ -6,8 +6,8 @@ import (
 	"sync"
 	"testing"
 
-	corellm "github.com/sigil-tech/kaneaz-harness/core/llm"
-	"github.com/sigil-tech/kaneaz-harness/core/llm/custom"
+	corellm "github.com/kameas-ai/kenaz-harness/core/llm"
+	"github.com/kameas-ai/kenaz-harness/core/llm/custom"
 )
 
 // recordingSink captures every Emit call for assertion.

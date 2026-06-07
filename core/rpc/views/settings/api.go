@@ -8,8 +8,8 @@ import (
 	"encoding/json"
 	"time"
 
-	"github.com/sigil-tech/kaneaz-harness/core/autonomy"
-	"github.com/sigil-tech/kaneaz-harness/core/compaction"
+	"github.com/kameas-ai/kenaz-harness/core/autonomy"
+	"github.com/kameas-ai/kenaz-harness/core/compaction"
 )
 
 // Settings is the persisted UI state shape (plan §5.5). schemaVersion

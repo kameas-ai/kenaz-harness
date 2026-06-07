@@ -5,10 +5,10 @@ import (
 	"sync"
 	"testing"
 
-	coreart "github.com/sigil-tech/kaneaz-harness/core/artifacts"
-	"github.com/sigil-tech/kaneaz-harness/core/autonomy"
-	"github.com/sigil-tech/kaneaz-harness/core/tools/planmode"
-	planmodeview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/planmode"
+	coreart "github.com/kameas-ai/kenaz-harness/core/artifacts"
+	"github.com/kameas-ai/kenaz-harness/core/autonomy"
+	"github.com/kameas-ai/kenaz-harness/core/tools/planmode"
+	planmodeview "github.com/kameas-ai/kenaz-harness/core/rpc/views/planmode"
 )
 
 // ─── fakes ─────────────────────────────────────────────────────────────────

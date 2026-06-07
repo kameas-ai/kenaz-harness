@@ -4,7 +4,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/sigil-tech/kaneaz-harness/core/workflows/web"
+	"github.com/kameas-ai/kenaz-harness/core/workflows/web"
 )
 
 const sampleHTML = `<!DOCTYPE html>

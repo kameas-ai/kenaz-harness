@@ -25,8 +25,8 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/sigil-tech/kaneaz-harness/core/llm"
-	"github.com/sigil-tech/kaneaz-harness/core/llm/structured"
+	"github.com/kameas-ai/kenaz-harness/core/llm"
+	"github.com/kameas-ai/kenaz-harness/core/llm/structured"
 )
 
 // streamWithBearer opens a Converse-style stream against the Bedrock

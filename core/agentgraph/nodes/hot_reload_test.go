@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sigil-tech/kaneaz-harness/core/agentgraph/nodes"
+	"github.com/kameas-ai/kenaz-harness/core/agentgraph/nodes"
 )
 
 // TestWatcherTickDetectsAddedFile drops a YAML file under a fresh

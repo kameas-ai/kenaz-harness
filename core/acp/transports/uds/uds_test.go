@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sigil-tech/kaneaz-harness/core/acp"
+	"github.com/kameas-ai/kenaz-harness/core/acp"
 )
 
 // Use a short socket path because the kernel limits sun_path to ~104

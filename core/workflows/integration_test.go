@@ -22,12 +22,12 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/sigil-tech/kaneaz-harness/core/context/audit"
-	cedarpkg "github.com/sigil-tech/kaneaz-harness/core/policy/cedar"
-	"github.com/sigil-tech/kaneaz-harness/core/storage"
-	storagesqlite "github.com/sigil-tech/kaneaz-harness/core/storage/sqlite"
-	"github.com/sigil-tech/kaneaz-harness/core/workflows"
-	rpcworkflows "github.com/sigil-tech/kaneaz-harness/core/rpc/views/workflows"
+	"github.com/kameas-ai/kenaz-harness/core/context/audit"
+	cedarpkg "github.com/kameas-ai/kenaz-harness/core/policy/cedar"
+	"github.com/kameas-ai/kenaz-harness/core/storage"
+	storagesqlite "github.com/kameas-ai/kenaz-harness/core/storage/sqlite"
+	"github.com/kameas-ai/kenaz-harness/core/workflows"
+	rpcworkflows "github.com/kameas-ai/kenaz-harness/core/rpc/views/workflows"
 
 	_ "modernc.org/sqlite"
 )

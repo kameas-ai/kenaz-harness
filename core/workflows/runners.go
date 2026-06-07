@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/sigil-tech/kaneaz-harness/core/workflows/web"
+	"github.com/kameas-ai/kenaz-harness/core/workflows/web"
 )
 
 // runnerRegistry is mutated only by RegisterStepRunner at init time.

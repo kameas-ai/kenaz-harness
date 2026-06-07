@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/sigil-tech/kaneaz-harness/core/llm/localruntime"
+	"github.com/kameas-ai/kenaz-harness/core/llm/localruntime"
 )
 
 // ErrRuntimeNotRunning is returned by AutoConfigureLocalRuntime when the

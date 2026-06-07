@@ -3,7 +3,7 @@ package openaiwire
 import (
 	"strings"
 
-	"github.com/sigil-tech/kaneaz-harness/core/llm"
+	"github.com/kameas-ai/kenaz-harness/core/llm"
 )
 
 // BuildFinalResponse assembles an llm.Response from the accumulators

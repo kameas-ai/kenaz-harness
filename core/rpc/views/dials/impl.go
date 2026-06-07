@@ -15,7 +15,7 @@ import (
 	"sync"
 	"time"
 
-	coredials "github.com/sigil-tech/kaneaz-harness/core/agentgraph/dials"
+	coredials "github.com/kameas-ai/kenaz-harness/core/agentgraph/dials"
 )
 
 // ErrNoPause is returned by BumpAndResume when the run is not

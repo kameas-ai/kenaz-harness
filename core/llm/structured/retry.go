@@ -6,7 +6,7 @@ import (
 	"os"
 	"strings"
 
-	llm "github.com/sigil-tech/kaneaz-harness/core/llm"
+	llm "github.com/kameas-ai/kenaz-harness/core/llm"
 )
 
 // WithRetry calls call() and validates the response against schema.

@@ -6,7 +6,7 @@ import (
 	"errors"
 	"fmt"
 
-	corellm "github.com/sigil-tech/kaneaz-harness/core/llm"
+	corellm "github.com/kameas-ai/kenaz-harness/core/llm"
 )
 
 // llmSamplingHandler bridges server-initiated sampling/createMessage

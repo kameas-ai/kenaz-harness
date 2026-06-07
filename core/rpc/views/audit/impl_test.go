@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sigil-tech/kaneaz-harness/core/event"
+	"github.com/kameas-ai/kenaz-harness/core/event"
 )
 
 // recordingSubscriber captures every Subscribe / Unsubscribe call so the

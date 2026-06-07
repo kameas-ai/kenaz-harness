@@ -14,8 +14,8 @@ import (
 	"testing"
 	"time"
 
-	bundle "github.com/sigil-tech/kaneaz-harness/core/bundle"
-	"github.com/sigil-tech/kaneaz-harness/core/bundle/cache"
+	bundle "github.com/kameas-ai/kenaz-harness/core/bundle"
+	"github.com/kameas-ai/kenaz-harness/core/bundle/cache"
 )
 
 func mkCAS(t *testing.T) cache.CAS {

@@ -4,7 +4,7 @@ package mcp
 import (
 	"context"
 
-	coremcp "github.com/sigil-tech/kaneaz-harness/core/mcp"
+	coremcp "github.com/kameas-ai/kenaz-harness/core/mcp"
 )
 
 // Server is reference-only metadata about a configured MCP server.

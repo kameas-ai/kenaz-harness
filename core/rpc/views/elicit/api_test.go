@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/elicit"
-	"github.com/sigil-tech/kaneaz-harness/core/tools/askuserquestion"
+	"github.com/kameas-ai/kenaz-harness/core/rpc/views/elicit"
+	"github.com/kameas-ai/kenaz-harness/core/tools/askuserquestion"
 )
 
 // fakeEmitter records Emit calls for assertions. The API's OpenDialog /

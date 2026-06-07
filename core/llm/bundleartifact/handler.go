@@ -16,7 +16,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	llm "github.com/sigil-tech/kaneaz-harness/core/llm"
+	llm "github.com/kameas-ai/kenaz-harness/core/llm"
 )
 
 // Kind is the artifact kind label registered with the bundle resolver.

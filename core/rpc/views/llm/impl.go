@@ -26,11 +26,11 @@ import (
 	"sync"
 	"time"
 
-	corellm "github.com/sigil-tech/kaneaz-harness/core/llm"
-	"github.com/sigil-tech/kaneaz-harness/core/llm/custom"
-	"github.com/sigil-tech/kaneaz-harness/core/llm/fallback"
-	"github.com/sigil-tech/kaneaz-harness/core/llm/personal"
-	"github.com/sigil-tech/kaneaz-harness/core/logging"
+	corellm "github.com/kameas-ai/kenaz-harness/core/llm"
+	"github.com/kameas-ai/kenaz-harness/core/llm/custom"
+	"github.com/kameas-ai/kenaz-harness/core/llm/fallback"
+	"github.com/kameas-ai/kenaz-harness/core/llm/personal"
+	"github.com/kameas-ai/kenaz-harness/core/logging"
 )
 
 // StreamSink is the minimal contract the concrete LLMConnectorAPI uses

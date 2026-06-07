@@ -22,8 +22,8 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/sigil-tech/kaneaz-harness/core/autonomy"
-	"github.com/sigil-tech/kaneaz-harness/core/compaction"
+	"github.com/kameas-ai/kenaz-harness/core/autonomy"
+	"github.com/kameas-ai/kenaz-harness/core/compaction"
 )
 
 // FileStore is a SettingsStore backed by a single JSON file. Safe for

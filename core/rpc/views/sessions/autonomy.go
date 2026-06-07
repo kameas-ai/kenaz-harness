@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 
-	"github.com/sigil-tech/kaneaz-harness/core/autonomy"
+	"github.com/kameas-ai/kenaz-harness/core/autonomy"
 )
 
 // AutonomyContextProvider resolves the global + project layers needed

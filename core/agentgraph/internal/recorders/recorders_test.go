@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/sigil-tech/kaneaz-harness/core/agentgraph"
-	"github.com/sigil-tech/kaneaz-harness/core/agentgraph/internal/recorders"
+	"github.com/kameas-ai/kenaz-harness/core/agentgraph"
+	"github.com/kameas-ai/kenaz-harness/core/agentgraph/internal/recorders"
 )
 
 // ── LLMProvider ───────────────────────────────────────────────────────────────

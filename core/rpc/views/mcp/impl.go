@@ -15,9 +15,9 @@ import (
 	"sort"
 	"sync"
 
-	coremcp "github.com/sigil-tech/kaneaz-harness/core/mcp"
-	"github.com/sigil-tech/kaneaz-harness/core/mcp/recipes"
-	"github.com/sigil-tech/kaneaz-harness/core/mcp/stdio"
+	coremcp "github.com/kameas-ai/kenaz-harness/core/mcp"
+	"github.com/kameas-ai/kenaz-harness/core/mcp/recipes"
+	"github.com/kameas-ai/kenaz-harness/core/mcp/stdio"
 )
 
 // Subscriber is the broker contract used by API.StartStream. Mirrors

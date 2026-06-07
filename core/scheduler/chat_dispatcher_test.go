@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sigil-tech/kaneaz-harness/core/scheduler"
+	"github.com/kameas-ai/kenaz-harness/core/scheduler"
 )
 
 func TestRenderPromptTemplate(t *testing.T) {

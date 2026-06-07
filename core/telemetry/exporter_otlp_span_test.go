@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sigil-tech/kaneaz-harness/core/telemetry"
+	"github.com/kameas-ai/kenaz-harness/core/telemetry"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/trace"
 )

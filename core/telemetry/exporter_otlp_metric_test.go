@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sigil-tech/kaneaz-harness/core/telemetry"
+	"github.com/kameas-ai/kenaz-harness/core/telemetry"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 )
 

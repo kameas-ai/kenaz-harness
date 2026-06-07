@@ -50,11 +50,11 @@ func TestInSecretsTree(t *testing.T) {
 		path string
 		want bool
 	}{
-		{"github.com/sigil-tech/kaneaz-harness/core/secrets", true},
-		{"github.com/sigil-tech/kaneaz-harness/core/secrets/ref", true},
+		{"github.com/kameas-ai/kenaz-harness/core/secrets", true},
+		{"github.com/kameas-ai/kenaz-harness/core/secrets/ref", true},
 		{"core/secrets", true},
 		{"core/secrets/lint", true},
-		{"github.com/sigil-tech/kaneaz-harness/core/event", false},
+		{"github.com/kameas-ai/kenaz-harness/core/event", false},
 		{"otherpkg", false},
 	}
 	for _, c := range cases {

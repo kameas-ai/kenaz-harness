@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/sigil-tech/kaneaz-harness/core/llm/localruntime"
+	"github.com/kameas-ai/kenaz-harness/core/llm/localruntime"
 )
 
 // fakeOllamaServer starts a minimal Ollama API stub that handles /api/tags.

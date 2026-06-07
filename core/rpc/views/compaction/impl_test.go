@@ -5,9 +5,9 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/sigil-tech/kaneaz-harness/core/agentgraph"
-	corecompaction "github.com/sigil-tech/kaneaz-harness/core/agentgraph/compaction"
-	view "github.com/sigil-tech/kaneaz-harness/core/rpc/views/compaction"
+	"github.com/kameas-ai/kenaz-harness/core/agentgraph"
+	corecompaction "github.com/kameas-ai/kenaz-harness/core/agentgraph/compaction"
+	view "github.com/kameas-ai/kenaz-harness/core/rpc/views/compaction"
 )
 
 func newAPI(t *testing.T) *view.API {

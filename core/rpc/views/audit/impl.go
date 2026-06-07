@@ -21,9 +21,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/sigil-tech/kaneaz-harness/core/event"
-	contextaudit "github.com/sigil-tech/kaneaz-harness/core/context/audit"
-	eventlog "github.com/sigil-tech/kaneaz-harness/core/event/log"
+	"github.com/kameas-ai/kenaz-harness/core/event"
+	contextaudit "github.com/kameas-ai/kenaz-harness/core/context/audit"
+	eventlog "github.com/kameas-ai/kenaz-harness/core/event/log"
 )
 
 // Subscriber is the broker contract used by API.StartStream. Decoupled

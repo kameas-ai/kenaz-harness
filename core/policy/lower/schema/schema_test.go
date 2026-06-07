@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/sigil-tech/kaneaz-harness/core/policy"
-	"github.com/sigil-tech/kaneaz-harness/core/policy/lower/schema"
+	"github.com/kameas-ai/kenaz-harness/core/policy"
+	"github.com/kameas-ai/kenaz-harness/core/policy/lower/schema"
 )
 
 const goldenYAML = `api_version: kaneaz.policy/v1

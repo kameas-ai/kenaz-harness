@@ -6,9 +6,9 @@ import (
 	"errors"
 	"fmt"
 
-	coreag "github.com/sigil-tech/kaneaz-harness/core/agentgraph"
-	"github.com/sigil-tech/kaneaz-harness/core/autonomy"
-	"github.com/sigil-tech/kaneaz-harness/core/toolloop"
+	coreag "github.com/kameas-ai/kenaz-harness/core/agentgraph"
+	"github.com/kameas-ai/kenaz-harness/core/autonomy"
+	"github.com/kameas-ai/kenaz-harness/core/toolloop"
 )
 
 // AutonomyKnobsProvider is the narrow surface the kernel tool adapter

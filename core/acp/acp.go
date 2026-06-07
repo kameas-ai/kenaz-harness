@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"time"
 
-	"github.com/sigil-tech/kaneaz-harness/core/secrets"
+	"github.com/kameas-ai/kenaz-harness/core/secrets"
 )
 
 // ProtocolVersion is the A2A protocol revision the harness implements.

@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/sigil-tech/kaneaz-harness/core/rpc"
+	"github.com/kameas-ai/kenaz-harness/core/rpc"
 )
 
 // TestCSPMiddlewareSetsStrictHeaders covers privacy CI invariant #1

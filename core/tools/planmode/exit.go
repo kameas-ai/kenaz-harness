@@ -8,9 +8,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/sigil-tech/kaneaz-harness/core/autonomy"
-	coreart "github.com/sigil-tech/kaneaz-harness/core/artifacts"
-	"github.com/sigil-tech/kaneaz-harness/core/toolloop"
+	"github.com/kameas-ai/kenaz-harness/core/autonomy"
+	coreart "github.com/kameas-ai/kenaz-harness/core/artifacts"
+	"github.com/kameas-ai/kenaz-harness/core/toolloop"
 )
 
 const (

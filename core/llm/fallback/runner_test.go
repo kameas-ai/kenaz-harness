@@ -6,7 +6,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/sigil-tech/kaneaz-harness/core/llm"
+	"github.com/kameas-ai/kenaz-harness/core/llm"
 )
 
 // fakeStreamer simulates an ordered sequence of (stream, error) pairs.

@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	llm "github.com/sigil-tech/kaneaz-harness/core/llm"
+	llm "github.com/kameas-ai/kenaz-harness/core/llm"
 )
 
 //go:embed testdata/models_response.json

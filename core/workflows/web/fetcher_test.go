@@ -7,7 +7,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/sigil-tech/kaneaz-harness/core/workflows/web"
+	"github.com/kameas-ai/kenaz-harness/core/workflows/web"
 )
 
 // ---------------------------------------------------------------------------

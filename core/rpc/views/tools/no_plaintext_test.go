@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/sigil-tech/kaneaz-harness/core/mcp/recipes"
-	"github.com/sigil-tech/kaneaz-harness/core/secrets"
+	"github.com/kameas-ai/kenaz-harness/core/mcp/recipes"
+	"github.com/kameas-ai/kenaz-harness/core/secrets"
 )
 
 // TestInstallRecipe_NoPlaintextOnDisk asserts NFR-006 (no plaintext

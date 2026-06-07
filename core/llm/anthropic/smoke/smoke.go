@@ -17,11 +17,11 @@ import (
 	"strings"
 	"time"
 
-	corellm "github.com/sigil-tech/kaneaz-harness/core/llm"
-	"github.com/sigil-tech/kaneaz-harness/core/llm/anthropic"
-	"github.com/sigil-tech/kaneaz-harness/core/llm/credref"
-	llmregistry "github.com/sigil-tech/kaneaz-harness/core/llm/registry"
-	"github.com/sigil-tech/kaneaz-harness/core/secrets"
+	corellm "github.com/kameas-ai/kenaz-harness/core/llm"
+	"github.com/kameas-ai/kenaz-harness/core/llm/anthropic"
+	"github.com/kameas-ai/kenaz-harness/core/llm/credref"
+	llmregistry "github.com/kameas-ai/kenaz-harness/core/llm/registry"
+	"github.com/kameas-ai/kenaz-harness/core/secrets"
 )
 
 // Config configures a one-shot live-API check. All fields are optional

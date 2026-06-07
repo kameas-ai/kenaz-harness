@@ -5,7 +5,7 @@ import (
 	"sync"
 	"time"
 
-	llm "github.com/sigil-tech/kaneaz-harness/core/llm"
+	llm "github.com/kameas-ai/kenaz-harness/core/llm"
 )
 
 // RefreshFunc is the callback invoked by the Refresher to re-fetch

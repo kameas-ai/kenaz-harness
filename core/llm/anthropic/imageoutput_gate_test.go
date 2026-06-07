@@ -21,8 +21,8 @@ import (
 	"errors"
 	"testing"
 
-	llm "github.com/sigil-tech/kaneaz-harness/core/llm"
-	"github.com/sigil-tech/kaneaz-harness/core/llm/capabilities"
+	llm "github.com/kameas-ai/kenaz-harness/core/llm"
+	"github.com/kameas-ai/kenaz-harness/core/llm/capabilities"
 )
 
 // TestAnthropicAdapter_ImageOutput_RejectedByGate verifies that a

@@ -6,8 +6,8 @@ import (
 	"os"
 	"testing"
 
-	llm "github.com/sigil-tech/kaneaz-harness/core/llm"
-	"github.com/sigil-tech/kaneaz-harness/core/secrets"
+	llm "github.com/kameas-ai/kenaz-harness/core/llm"
+	"github.com/kameas-ai/kenaz-harness/core/secrets"
 )
 
 func TestResolve_EnvHappyPath(t *testing.T) {

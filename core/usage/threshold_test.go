@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sigil-tech/kaneaz-harness/core/usage"
+	"github.com/kameas-ai/kenaz-harness/core/usage"
 )
 
 // recordingPublisher captures every event the checker publishes.

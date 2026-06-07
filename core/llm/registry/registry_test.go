@@ -8,10 +8,10 @@ import (
 	"testing"
 	"time"
 
-	llm "github.com/sigil-tech/kaneaz-harness/core/llm"
-	"github.com/sigil-tech/kaneaz-harness/core/llm/credref"
-	"github.com/sigil-tech/kaneaz-harness/core/llm/events"
-	"github.com/sigil-tech/kaneaz-harness/core/secrets"
+	llm "github.com/kameas-ai/kenaz-harness/core/llm"
+	"github.com/kameas-ai/kenaz-harness/core/llm/credref"
+	"github.com/kameas-ai/kenaz-harness/core/llm/events"
+	"github.com/kameas-ai/kenaz-harness/core/secrets"
 )
 
 // fakeAdapter records inputs and emits a deterministic response.

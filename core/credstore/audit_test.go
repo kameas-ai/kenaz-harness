@@ -17,8 +17,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sigil-tech/kaneaz-harness/core/context/audit"
-	"github.com/sigil-tech/kaneaz-harness/core/credstore"
+	"github.com/kameas-ai/kenaz-harness/core/context/audit"
+	"github.com/kameas-ai/kenaz-harness/core/credstore"
 )
 
 // fakeAuditEmitter records every Emit call.

@@ -4,7 +4,7 @@ import (
 	"context"
 	"strings"
 
-	"github.com/sigil-tech/kaneaz-harness/core/storage/migrations"
+	"github.com/kameas-ai/kenaz-harness/core/storage/migrations"
 )
 
 // MigrationOwner is the canonical owning-mission name for the

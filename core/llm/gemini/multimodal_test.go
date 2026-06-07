@@ -4,7 +4,7 @@ import (
 	"errors"
 	"testing"
 
-	llm "github.com/sigil-tech/kaneaz-harness/core/llm"
+	llm "github.com/kameas-ai/kenaz-harness/core/llm"
 )
 
 // TestEncodeImagePart_PNG verifies PNG encodes to inlineData correctly.

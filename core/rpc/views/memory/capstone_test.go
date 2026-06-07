@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	corememory "github.com/sigil-tech/kaneaz-harness/core/memory"
+	corememory "github.com/kameas-ai/kenaz-harness/core/memory"
 )
 
 // seedChunk adds a chunk with the given content/session to the store and

@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sigil-tech/kaneaz-harness/core/context/audit"
-	"github.com/sigil-tech/kaneaz-harness/core/sentry"
+	"github.com/kameas-ai/kenaz-harness/core/context/audit"
+	"github.com/kameas-ai/kenaz-harness/core/sentry"
 )
 
 // fakeEmitter records audit events in a race-safe manner.

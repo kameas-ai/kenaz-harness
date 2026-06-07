@@ -5,7 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 
-	corellm "github.com/sigil-tech/kaneaz-harness/core/llm"
+	corellm "github.com/kameas-ai/kenaz-harness/core/llm"
 )
 
 // FingerprintRequest computes a stable SHA-256 fingerprint of the

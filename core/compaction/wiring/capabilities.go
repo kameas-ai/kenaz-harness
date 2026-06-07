@@ -4,7 +4,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/sigil-tech/kaneaz-harness/core/compaction"
+	"github.com/kameas-ai/kenaz-harness/core/compaction"
 )
 
 // CapabilityLookup maps (providerID, modelID) → MaxContextTokens budget.

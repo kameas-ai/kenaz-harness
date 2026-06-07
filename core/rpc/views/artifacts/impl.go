@@ -8,8 +8,8 @@ import (
 	"path/filepath"
 	"time"
 
-	coreart "github.com/sigil-tech/kaneaz-harness/core/artifacts"
-	"github.com/sigil-tech/kaneaz-harness/core/attachments"
+	coreart "github.com/kameas-ai/kenaz-harness/core/artifacts"
+	"github.com/kameas-ai/kenaz-harness/core/attachments"
 )
 
 // ErrInvalidRange is returned when SaveFromMessage receives a

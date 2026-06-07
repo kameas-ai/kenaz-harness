@@ -7,7 +7,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/sigil-tech/kaneaz-harness/core/agentgraph/nodes"
+	"github.com/kameas-ai/kenaz-harness/core/agentgraph/nodes"
 )
 
 // This file implements the manifest-driven half of the validator

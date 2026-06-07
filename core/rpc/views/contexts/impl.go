@@ -8,7 +8,7 @@ import (
 	"context"
 	"errors"
 
-	corecontexts "github.com/sigil-tech/kaneaz-harness/core/contexts"
+	corecontexts "github.com/kameas-ai/kenaz-harness/core/contexts"
 )
 
 // Library is the slim interface this view needs. core/contexts.Library

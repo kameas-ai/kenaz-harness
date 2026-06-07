@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"time"
 
-	coreatt "github.com/sigil-tech/kaneaz-harness/core/attachments"
+	coreatt "github.com/kameas-ai/kenaz-harness/core/attachments"
 )
 
 // MaxMediaBytes is the per-upload cap enforced by AddMedia. The

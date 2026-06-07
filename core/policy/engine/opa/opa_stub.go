@@ -7,7 +7,7 @@ import (
 	"context"
 	"errors"
 
-	"github.com/sigil-tech/kaneaz-harness/core/policy/engine"
+	"github.com/kameas-ai/kenaz-harness/core/policy/engine"
 )
 
 // ErrOPADisabled is returned by the stub backend when the build tag

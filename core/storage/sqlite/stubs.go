@@ -3,7 +3,7 @@ package sqlite
 import (
 	"context"
 
-	"github.com/sigil-tech/kaneaz-harness/core/storage"
+	"github.com/kameas-ai/kenaz-harness/core/storage"
 )
 
 // notImplementedVector is the v1 stub for storage.VectorStore. Vector

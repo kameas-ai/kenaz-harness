@@ -6,10 +6,10 @@ import (
 	"fmt"
 	"sync/atomic"
 
-	"github.com/sigil-tech/kaneaz-harness/core/compaction"
-	corellm "github.com/sigil-tech/kaneaz-harness/core/llm"
-	"github.com/sigil-tech/kaneaz-harness/core/llm/cost"
-	"github.com/sigil-tech/kaneaz-harness/core/logging"
+	"github.com/kameas-ai/kenaz-harness/core/compaction"
+	corellm "github.com/kameas-ai/kenaz-harness/core/llm"
+	"github.com/kameas-ai/kenaz-harness/core/llm/cost"
+	"github.com/kameas-ai/kenaz-harness/core/logging"
 )
 
 // LLMCaller adapts the chat-runner's corellm.Registry onto the

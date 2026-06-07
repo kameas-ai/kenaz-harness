@@ -3,7 +3,7 @@
 // helpers, status snapshots, and the Connection interface that the
 // per-transport implementations (stdio, http, sse) plug into.
 //
-// The legacy import path `github.com/sigil-tech/kaneaz-harness/core/mcp/stdio`
+// The legacy import path `github.com/kameas-ai/kenaz-harness/core/mcp/stdio`
 // remains as a one-release alias re-exporting the symbols defined
 // here and in `transport/stdio`, so existing callers continue to
 // compile during the WP01..WP04 transport refactor.

@@ -5,7 +5,7 @@ import (
 	"errors"
 	"runtime"
 
-	"github.com/sigil-tech/kaneaz-harness/core/policy/cedar"
+	"github.com/kameas-ai/kenaz-harness/core/policy/cedar"
 )
 
 // Use resolves the credential behind h and passes the raw bytes to op.

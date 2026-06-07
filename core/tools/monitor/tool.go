@@ -24,7 +24,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/sigil-tech/kaneaz-harness/core/tasks"
+	"github.com/kameas-ai/kenaz-harness/core/tasks"
 )
 
 const (

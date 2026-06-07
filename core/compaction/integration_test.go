@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/sigil-tech/kaneaz-harness/core/context/audit"
+	"github.com/kameas-ai/kenaz-harness/core/context/audit"
 )
 
 // integration_test.go drives the compaction engine end-to-end through

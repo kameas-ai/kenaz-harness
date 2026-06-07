@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/sigil-tech/kaneaz-harness/core/mcp/transport"
+	"github.com/kameas-ai/kenaz-harness/core/mcp/transport"
 )
 
 // ReconnectPool wraps a ConnectionFactory and re-establishes the SSE

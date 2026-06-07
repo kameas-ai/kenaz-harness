@@ -8,9 +8,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/sigil-tech/kaneaz-harness/core/credstore/refs"
-	"github.com/sigil-tech/kaneaz-harness/core/secrets"
-	"github.com/sigil-tech/kaneaz-harness/core/tools/webfetch"
+	"github.com/kameas-ai/kenaz-harness/core/credstore/refs"
+	"github.com/kameas-ai/kenaz-harness/core/secrets"
+	"github.com/kameas-ai/kenaz-harness/core/tools/webfetch"
 )
 
 // setupResolver creates an ExposureIndex with the given secrets and
