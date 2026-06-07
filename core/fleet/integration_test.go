@@ -19,9 +19,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sigil-tech/kaneaz-harness/core/fleet"
-	"github.com/sigil-tech/kaneaz-harness/core/llm/fleet_hosted"
-	"github.com/sigil-tech/kaneaz-harness/core/llm/registry"
+	"github.com/kameas-ai/kenaz-harness/core/fleet"
+	"github.com/kameas-ai/kenaz-harness/core/llm/fleet_hosted"
+	"github.com/kameas-ai/kenaz-harness/core/llm/registry"
 )
 
 // fakeFleetServer is a minimal httptest fleet server that serves the

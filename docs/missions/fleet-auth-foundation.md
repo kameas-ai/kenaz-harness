@@ -99,7 +99,7 @@ early-return guard that skips fleet when `Disabled()` is true.
 
 **`core/rpc/api.go`** — remove the `*fleet.Client` field on `API`, its
 initialisation in `New()`, and the `fleet.Disabled()` guard. Remove the
-`import "github.com/sigil-tech/kaneaz-harness/core/fleet"` line.
+`import "github.com/kameas-ai/kenaz-harness/core/fleet"` line.
 
 **`core/rpc/views/settings/api.go`** — remove the five `Fleet*` method
 signatures from `SettingsAPI` interface and the `FleetIdentity` /

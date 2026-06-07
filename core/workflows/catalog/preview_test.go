@@ -3,8 +3,8 @@ package catalog_test
 import (
 	"testing"
 
-	"github.com/sigil-tech/kaneaz-harness/core/workflows/catalog"
-	corewf "github.com/sigil-tech/kaneaz-harness/core/workflows"
+	"github.com/kameas-ai/kenaz-harness/core/workflows/catalog"
+	corewf "github.com/kameas-ai/kenaz-harness/core/workflows"
 )
 
 // TestProjectEntry_NetworkGrantForWebFetch confirms that a workflow

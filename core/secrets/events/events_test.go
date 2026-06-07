@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/sigil-tech/kaneaz-harness/core/secrets/events"
-	"github.com/sigil-tech/kaneaz-harness/core/secrets/ref"
+	"github.com/kameas-ai/kenaz-harness/core/secrets/events"
+	"github.com/kameas-ai/kenaz-harness/core/secrets/ref"
 )
 
 func TestAllKinds_Closed(t *testing.T) {

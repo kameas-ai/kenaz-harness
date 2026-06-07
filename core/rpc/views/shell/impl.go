@@ -12,7 +12,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/tools"
+	"github.com/kameas-ai/kenaz-harness/core/rpc/views/tools"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 

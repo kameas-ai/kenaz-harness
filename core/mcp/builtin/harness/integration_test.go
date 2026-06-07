@@ -23,10 +23,10 @@ import (
 	"sync"
 	"testing"
 
-	harness "github.com/sigil-tech/kaneaz-harness/core/mcp/builtin/harness"
-	"github.com/sigil-tech/kaneaz-harness/core/event/kind"
-	"github.com/sigil-tech/kaneaz-harness/core/mcp/transport"
-	"github.com/sigil-tech/kaneaz-harness/core/onboarding"
+	harness "github.com/kameas-ai/kenaz-harness/core/mcp/builtin/harness"
+	"github.com/kameas-ai/kenaz-harness/core/event/kind"
+	"github.com/kameas-ai/kenaz-harness/core/mcp/transport"
+	"github.com/kameas-ai/kenaz-harness/core/onboarding"
 )
 
 // ── Recording audit sink ─────────────────────────────────────────────────────

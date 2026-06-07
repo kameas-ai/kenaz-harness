@@ -7,10 +7,10 @@ import (
 	"time"
 
 	cedarraw "github.com/cedar-policy/cedar-go"
-	"github.com/sigil-tech/kaneaz-harness/core/event"
-	contextaudit "github.com/sigil-tech/kaneaz-harness/core/context/audit"
-	policycedar "github.com/sigil-tech/kaneaz-harness/core/policy/cedar"
-	eventlog "github.com/sigil-tech/kaneaz-harness/core/event/log"
+	"github.com/kameas-ai/kenaz-harness/core/event"
+	contextaudit "github.com/kameas-ai/kenaz-harness/core/context/audit"
+	policycedar "github.com/kameas-ai/kenaz-harness/core/policy/cedar"
+	eventlog "github.com/kameas-ai/kenaz-harness/core/event/log"
 )
 
 // recordingSubscriber captures every Subscribe / Unsubscribe call so the

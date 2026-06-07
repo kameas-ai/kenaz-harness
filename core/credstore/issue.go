@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/sigil-tech/kaneaz-harness/core/secrets"
+	"github.com/kameas-ai/kenaz-harness/core/secrets"
 )
 
 // Issue registers ref in the store and returns a single-use Handle.

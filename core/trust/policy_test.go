@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sigil-tech/kaneaz-harness/core/trust"
+	"github.com/kameas-ai/kenaz-harness/core/trust"
 )
 
 // TestDefaultAlgorithmPolicyEd25519Only — Open Question 2 default.

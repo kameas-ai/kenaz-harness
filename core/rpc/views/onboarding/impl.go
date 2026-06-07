@@ -13,8 +13,8 @@ import (
 	"fmt"
 	"sync"
 
-	harnessmcp "github.com/sigil-tech/kaneaz-harness/core/mcp/builtin/harness"
-	coreonboarding "github.com/sigil-tech/kaneaz-harness/core/onboarding"
+	harnessmcp "github.com/kameas-ai/kenaz-harness/core/mcp/builtin/harness"
+	coreonboarding "github.com/kameas-ai/kenaz-harness/core/onboarding"
 )
 
 // FirstRunChecker reports whether the harness is in its zero-config

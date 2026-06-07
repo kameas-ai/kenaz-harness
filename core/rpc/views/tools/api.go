@@ -13,8 +13,8 @@ package tools
 import (
 	"context"
 
-	"github.com/sigil-tech/kaneaz-harness/core/mcp/recipes"
-	"github.com/sigil-tech/kaneaz-harness/core/mcp/stdio"
+	"github.com/kameas-ai/kenaz-harness/core/mcp/recipes"
+	"github.com/kameas-ai/kenaz-harness/core/mcp/stdio"
 )
 
 // RecipeListing is the per-recipe row returned from ListRecipes. The

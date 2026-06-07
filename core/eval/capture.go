@@ -22,7 +22,7 @@ import (
 	"sync"
 	"time"
 
-	corellm "github.com/sigil-tech/kaneaz-harness/core/llm"
+	corellm "github.com/kameas-ai/kenaz-harness/core/llm"
 )
 
 // EntryKind identifies the payload type of a CaptureEntry.

@@ -24,10 +24,10 @@ import (
 	"testing"
 	"time"
 
-	searchview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/search"
-	"github.com/sigil-tech/kaneaz-harness/core/session"
-	"github.com/sigil-tech/kaneaz-harness/core/storage"
-	storagesqlite "github.com/sigil-tech/kaneaz-harness/core/storage/sqlite"
+	searchview "github.com/kameas-ai/kenaz-harness/core/rpc/views/search"
+	"github.com/kameas-ai/kenaz-harness/core/session"
+	"github.com/kameas-ai/kenaz-harness/core/storage"
+	storagesqlite "github.com/kameas-ai/kenaz-harness/core/storage/sqlite"
 )
 
 // openTestDB opens a real on-disk storage.DB rooted at a tmpdir so the

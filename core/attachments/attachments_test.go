@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sigil-tech/kaneaz-harness/core/attachments"
+	"github.com/kameas-ai/kenaz-harness/core/attachments"
 )
 
 func newManager(t *testing.T) *attachments.Manager {

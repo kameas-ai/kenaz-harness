@@ -3,7 +3,7 @@ package session
 import (
 	"context"
 
-	"github.com/sigil-tech/kaneaz-harness/core/storage/migrations"
+	"github.com/kameas-ai/kenaz-harness/core/storage/migrations"
 )
 
 // migrationIDAgentGraphEvents lands the agent_graph_events table — the

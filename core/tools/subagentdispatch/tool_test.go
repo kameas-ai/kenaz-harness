@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sigil-tech/kaneaz-harness/core/agentgraph"
-	"github.com/sigil-tech/kaneaz-harness/core/tools/subagentdispatch"
+	"github.com/kameas-ai/kenaz-harness/core/agentgraph"
+	"github.com/kameas-ai/kenaz-harness/core/tools/subagentdispatch"
 )
 
 // TestInputSchema verifies the input schema is valid JSON.

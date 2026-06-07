@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/sigil-tech/kaneaz-harness/core/onboarding"
+	"github.com/kameas-ai/kenaz-harness/core/onboarding"
 )
 
 // mockTester is a configurable LLMTester for unit tests.

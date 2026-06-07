@@ -21,9 +21,9 @@ import (
 	"sync"
 	"time"
 
-	corememory "github.com/sigil-tech/kaneaz-harness/core/memory"
-	"github.com/sigil-tech/kaneaz-harness/core/memory/narrative"
-	"github.com/sigil-tech/kaneaz-harness/core/memory/prune"
+	corememory "github.com/kameas-ai/kenaz-harness/core/memory"
+	"github.com/kameas-ai/kenaz-harness/core/memory/narrative"
+	"github.com/kameas-ai/kenaz-harness/core/memory/prune"
 )
 
 // MessageReader is the slice of session.Manager the impl needs to

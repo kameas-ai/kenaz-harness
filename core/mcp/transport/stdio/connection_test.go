@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sigil-tech/kaneaz-harness/core/mcp/transport"
+	"github.com/kameas-ai/kenaz-harness/core/mcp/transport"
 )
 
 // TestConnection_OpenSendRecvCycle drives a Connection through a

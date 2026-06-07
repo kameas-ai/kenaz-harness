@@ -127,7 +127,7 @@ onMounted(() => {
         bundle resolver against a kaneaz.toml manifest.
       </p>
       <a
-        href="https://github.com/sigil-tech/kaneaz-harness/blob/main/docs/bundles.md"
+        href="https://github.com/kameas-ai/kenaz-harness/blob/main/docs/bundles.md"
         class="mt-3 inline-block text-accent hover:text-accent-muted"
         target="_blank"
         rel="noopener"

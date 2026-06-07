@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/sigil-tech/kaneaz-harness/core/mcp/transport"
+	"github.com/kameas-ai/kenaz-harness/core/mcp/transport"
 )
 
 // TestServer_InitializeRoundTrip verifies the in-process transport

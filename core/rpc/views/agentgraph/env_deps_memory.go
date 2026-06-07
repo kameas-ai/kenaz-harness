@@ -8,8 +8,8 @@ import (
 	"fmt"
 	"time"
 
-	coreag "github.com/sigil-tech/kaneaz-harness/core/agentgraph"
-	corememory "github.com/sigil-tech/kaneaz-harness/core/memory"
+	coreag "github.com/kameas-ai/kenaz-harness/core/agentgraph"
+	corememory "github.com/kameas-ai/kenaz-harness/core/memory"
 )
 
 // MemoryStoreAdapter wraps core/memory.Store + an embedder onto the

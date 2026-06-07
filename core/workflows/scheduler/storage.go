@@ -10,7 +10,7 @@ import (
 	"errors"
 	"time"
 
-	"github.com/sigil-tech/kaneaz-harness/core/storage"
+	"github.com/kameas-ai/kenaz-harness/core/storage"
 )
 
 // ErrScheduleNotFound is returned when a requested schedule does not

@@ -13,7 +13,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/sigil-tech/kaneaz-harness/core/credstore/refs"
+	"github.com/kameas-ai/kenaz-harness/core/credstore/refs"
 )
 
 // ErrLocatorNotExposed is returned by ExposureIndex.Use when the locator

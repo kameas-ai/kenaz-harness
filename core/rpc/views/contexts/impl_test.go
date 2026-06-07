@@ -5,8 +5,8 @@ import (
 	"errors"
 	"testing"
 
-	corecontexts "github.com/sigil-tech/kaneaz-harness/core/contexts"
-	contextsview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/contexts"
+	corecontexts "github.com/kameas-ai/kenaz-harness/core/contexts"
+	contextsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/contexts"
 )
 
 func newAPI(t *testing.T) *contextsview.API {

@@ -7,7 +7,7 @@
 package mcp
 
 import (
-	"github.com/sigil-tech/kaneaz-harness/core/mcp/transport"
+	"github.com/kameas-ai/kenaz-harness/core/mcp/transport"
 )
 
 // TestResult carries the outcome of a one-shot Test Connection run.

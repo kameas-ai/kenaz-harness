@@ -8,8 +8,8 @@ import (
 	"strings"
 	"sync"
 
-	coremcp "github.com/sigil-tech/kaneaz-harness/core/mcp"
-	"github.com/sigil-tech/kaneaz-harness/core/mcp/transport"
+	coremcp "github.com/kameas-ai/kenaz-harness/core/mcp"
+	"github.com/kameas-ai/kenaz-harness/core/mcp/transport"
 	"golang.org/x/sync/errgroup"
 )
 

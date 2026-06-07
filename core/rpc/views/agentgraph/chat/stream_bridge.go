@@ -3,8 +3,8 @@ package chat
 import (
 	"sync"
 
-	coreag "github.com/sigil-tech/kaneaz-harness/core/agentgraph"
-	corellm "github.com/sigil-tech/kaneaz-harness/core/llm"
+	coreag "github.com/kameas-ai/kenaz-harness/core/agentgraph"
+	corellm "github.com/kameas-ai/kenaz-harness/core/llm"
 )
 
 // Broker is the narrow surface the StreamBridge fans events onto. It

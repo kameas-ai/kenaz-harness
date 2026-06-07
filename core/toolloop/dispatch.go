@@ -40,7 +40,7 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/sigil-tech/kaneaz-harness/core/policy/cedar"
+	"github.com/kameas-ai/kenaz-harness/core/policy/cedar"
 )
 
 // GrantKind enumerates the outcomes a PromptRegistry can return after

@@ -10,15 +10,15 @@ import (
 	"path/filepath"
 	"time"
 
-	coreart "github.com/sigil-tech/kaneaz-harness/core/artifacts"
-	"github.com/sigil-tech/kaneaz-harness/core/attachments"
-	"github.com/sigil-tech/kaneaz-harness/core/context/audit"
-	"github.com/sigil-tech/kaneaz-harness/core/llm/pricing"
-	"github.com/sigil-tech/kaneaz-harness/core/policy/cedar"
-	"github.com/sigil-tech/kaneaz-harness/core/session"
-	autotitle "github.com/sigil-tech/kaneaz-harness/core/sessions/autotitle"
-	"github.com/sigil-tech/kaneaz-harness/core/sessions/export"
-	"github.com/sigil-tech/kaneaz-harness/core/usage"
+	coreart "github.com/kameas-ai/kenaz-harness/core/artifacts"
+	"github.com/kameas-ai/kenaz-harness/core/attachments"
+	"github.com/kameas-ai/kenaz-harness/core/context/audit"
+	"github.com/kameas-ai/kenaz-harness/core/llm/pricing"
+	"github.com/kameas-ai/kenaz-harness/core/policy/cedar"
+	"github.com/kameas-ai/kenaz-harness/core/session"
+	autotitle "github.com/kameas-ai/kenaz-harness/core/sessions/autotitle"
+	"github.com/kameas-ai/kenaz-harness/core/sessions/export"
+	"github.com/kameas-ai/kenaz-harness/core/usage"
 )
 
 // SessionListBroker is the narrow publish surface the sessions view needs

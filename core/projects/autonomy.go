@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/sigil-tech/kaneaz-harness/core/autonomy"
+	"github.com/kameas-ai/kenaz-harness/core/autonomy"
 )
 
 // autonomy.go — helpers shared between memstore and sqlstore for the

@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/sigil-tech/kaneaz-harness/core/event/internal/idgen"
+	"github.com/kameas-ai/kenaz-harness/core/event/internal/idgen"
 )
 
 // NewULID returns a fresh process-monotonic ULID.

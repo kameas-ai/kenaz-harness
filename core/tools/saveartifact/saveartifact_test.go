@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	coreart "github.com/sigil-tech/kaneaz-harness/core/artifacts"
-	"github.com/sigil-tech/kaneaz-harness/core/toolloop"
+	coreart "github.com/kameas-ai/kenaz-harness/core/artifacts"
+	"github.com/kameas-ai/kenaz-harness/core/toolloop"
 )
 
 // recordingManager captures calls to Capture so tests assert the wire

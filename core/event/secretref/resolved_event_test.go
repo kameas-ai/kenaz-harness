@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sigil-tech/kaneaz-harness/core/event/kind"
+	"github.com/kameas-ai/kenaz-harness/core/event/kind"
 )
 
 func TestResolvedEvent_JSONRoundTrip(t *testing.T) {

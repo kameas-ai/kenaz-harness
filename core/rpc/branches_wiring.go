@@ -1,10 +1,10 @@
 package rpc
 
 import (
-	"github.com/sigil-tech/kaneaz-harness/core"
-	"github.com/sigil-tech/kaneaz-harness/core/agentgraph"
-	coreconv "github.com/sigil-tech/kaneaz-harness/core/conversation"
-	"github.com/sigil-tech/kaneaz-harness/core/session"
+	"github.com/kameas-ai/kenaz-harness/core"
+	"github.com/kameas-ai/kenaz-harness/core/agentgraph"
+	coreconv "github.com/kameas-ai/kenaz-harness/core/conversation"
+	"github.com/kameas-ai/kenaz-harness/core/session"
 )
 
 // newConversationManager constructs the conversation.Manager backing

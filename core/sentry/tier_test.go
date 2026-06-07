@@ -3,7 +3,7 @@ package sentry_test
 import (
 	"testing"
 
-	"github.com/sigil-tech/kaneaz-harness/core/sentry"
+	"github.com/kameas-ai/kenaz-harness/core/sentry"
 )
 
 func TestResolveTier(t *testing.T) {

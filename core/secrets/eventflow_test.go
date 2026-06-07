@@ -4,11 +4,11 @@ import (
 	"context"
 	"testing"
 
-	"github.com/sigil-tech/kaneaz-harness/core/secrets"
-	"github.com/sigil-tech/kaneaz-harness/core/secrets/cache"
-	"github.com/sigil-tech/kaneaz-harness/core/secrets/events"
-	"github.com/sigil-tech/kaneaz-harness/core/secrets/ref"
-	"github.com/sigil-tech/kaneaz-harness/core/secrets/registry"
+	"github.com/kameas-ai/kenaz-harness/core/secrets"
+	"github.com/kameas-ai/kenaz-harness/core/secrets/cache"
+	"github.com/kameas-ai/kenaz-harness/core/secrets/events"
+	"github.com/kameas-ai/kenaz-harness/core/secrets/ref"
+	"github.com/kameas-ai/kenaz-harness/core/secrets/registry"
 )
 
 // captureLogger is a deterministic EventLogger that records every

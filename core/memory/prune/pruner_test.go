@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sigil-tech/kaneaz-harness/core/memory"
+	"github.com/kameas-ai/kenaz-harness/core/memory"
 )
 
 // fixedClock returns a clock that always returns t.

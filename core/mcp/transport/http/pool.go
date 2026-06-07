@@ -9,8 +9,8 @@ import (
 	"sync"
 	"sync/atomic"
 
-	coremcp "github.com/sigil-tech/kaneaz-harness/core/mcp"
-	"github.com/sigil-tech/kaneaz-harness/core/mcp/transport"
+	coremcp "github.com/kameas-ai/kenaz-harness/core/mcp"
+	"github.com/kameas-ai/kenaz-harness/core/mcp/transport"
 )
 
 // PoolOptions is an alias onto the cross-transport options struct so

@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/sigil-tech/kaneaz-harness/core/agentgraph"
+	"github.com/kameas-ai/kenaz-harness/core/agentgraph"
 )
 
 // StrategyNarrativeFirst is the narrative-layer compaction strategy

@@ -4,9 +4,9 @@ import (
 	"testing"
 	"time"
 
-	pack "github.com/sigil-tech/kaneaz-harness/core/context/pack"
-	"github.com/sigil-tech/kaneaz-harness/core/context/merge"
-	"github.com/sigil-tech/kaneaz-harness/core/context/verify"
+	pack "github.com/kameas-ai/kenaz-harness/core/context/pack"
+	"github.com/kameas-ai/kenaz-harness/core/context/merge"
+	"github.com/kameas-ai/kenaz-harness/core/context/verify"
 )
 
 func mkResult() *merge.Result {

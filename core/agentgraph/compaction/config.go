@@ -9,7 +9,7 @@ import (
 	"sort"
 	"sync"
 
-	"github.com/sigil-tech/kaneaz-harness/core/agentgraph"
+	"github.com/kameas-ai/kenaz-harness/core/agentgraph"
 )
 
 // Layer enumerates the cascading layers in canonical order. The

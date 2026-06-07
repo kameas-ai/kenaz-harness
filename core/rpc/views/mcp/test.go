@@ -17,9 +17,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	coremcp "github.com/sigil-tech/kaneaz-harness/core/mcp"
-	mcptransport "github.com/sigil-tech/kaneaz-harness/core/mcp/transport"
-	"github.com/sigil-tech/kaneaz-harness/core/mcp/transport/stdio"
+	coremcp "github.com/kameas-ai/kenaz-harness/core/mcp"
+	mcptransport "github.com/kameas-ai/kenaz-harness/core/mcp/transport"
+	"github.com/kameas-ai/kenaz-harness/core/mcp/transport/stdio"
 )
 
 // DefaultTestTimeout is the per-call timeout used when no deadline

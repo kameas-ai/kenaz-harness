@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sigil-tech/kaneaz-harness/core/sentry"
+	"github.com/kameas-ai/kenaz-harness/core/sentry"
 )
 
 func TestRingBuffer_BasicFIFO(t *testing.T) {

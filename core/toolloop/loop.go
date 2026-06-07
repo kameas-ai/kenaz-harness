@@ -42,7 +42,7 @@ package toolloop
 import (
 	"sync/atomic"
 
-	"github.com/sigil-tech/kaneaz-harness/core/tools/sleep"
+	"github.com/kameas-ai/kenaz-harness/core/tools/sleep"
 )
 
 // passiveToolNames is the set of builtin tool names whose Cedar action is

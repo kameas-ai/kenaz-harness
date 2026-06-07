@@ -17,7 +17,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/sigil-tech/kaneaz-harness/core/tools/sleep"
+	"github.com/kameas-ai/kenaz-harness/core/tools/sleep"
 )
 
 // iterGateStubTools wraps stubTools (defined in exec_compute_test.go) with

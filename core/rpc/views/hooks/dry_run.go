@@ -19,7 +19,7 @@ import (
 	"os/exec"
 	"time"
 
-	corehooks "github.com/sigil-tech/kaneaz-harness/core/hooks"
+	corehooks "github.com/kameas-ai/kenaz-harness/core/hooks"
 )
 
 // HookOutput is the wire shape of core/hooks.HookOutput. JSON tags are

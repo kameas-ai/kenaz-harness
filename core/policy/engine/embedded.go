@@ -5,7 +5,7 @@ import (
 	"sort"
 	"sync"
 
-	"github.com/sigil-tech/kaneaz-harness/core/policy"
+	"github.com/kameas-ai/kenaz-harness/core/policy"
 )
 
 // EmbeddedBackend is a backend-interface implementation that does not

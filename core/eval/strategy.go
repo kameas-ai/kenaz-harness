@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	corecompaction "github.com/sigil-tech/kaneaz-harness/core/compaction"
+	corecompaction "github.com/kameas-ai/kenaz-harness/core/compaction"
 )
 
 // StrategyOverride is a parsed key=value strategy dial override.

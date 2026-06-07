@@ -19,7 +19,7 @@ import (
 	"path/filepath"
 	"time"
 
-	pack "github.com/sigil-tech/kaneaz-harness/core/context/pack"
+	pack "github.com/kameas-ai/kenaz-harness/core/context/pack"
 )
 
 // TrustErrorCode mirrors the typed error taxonomy declared by mission

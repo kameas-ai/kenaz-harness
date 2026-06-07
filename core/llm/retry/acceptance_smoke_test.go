@@ -30,8 +30,8 @@ import (
 	"testing"
 	"time"
 
-	llm "github.com/sigil-tech/kaneaz-harness/core/llm"
-	"github.com/sigil-tech/kaneaz-harness/core/llm/httpx"
+	llm "github.com/kameas-ai/kenaz-harness/core/llm"
+	"github.com/kameas-ai/kenaz-harness/core/llm/httpx"
 )
 
 // wp03Available reports whether the Layer 3 resume surface is wired into

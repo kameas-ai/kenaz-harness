@@ -29,7 +29,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/sigil-tech/kaneaz-harness/core/context/audit"
+	"github.com/kameas-ai/kenaz-harness/core/context/audit"
 )
 
 // defaultSweepPageLimit is the page size for the batched DELETE. 5000

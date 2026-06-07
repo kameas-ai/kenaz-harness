@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sigil-tech/kaneaz-harness/core/mcp/stdio"
-	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/mcp"
+	"github.com/kameas-ai/kenaz-harness/core/mcp/stdio"
+	"github.com/kameas-ai/kenaz-harness/core/rpc/views/mcp"
 )
 
 // fakeHealthPool is a test double that satisfies mcp.HealthPool.

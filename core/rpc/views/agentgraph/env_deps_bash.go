@@ -3,8 +3,8 @@ package agentgraph
 import (
 	"context"
 
-	coreag "github.com/sigil-tech/kaneaz-harness/core/agentgraph"
-	corebash "github.com/sigil-tech/kaneaz-harness/core/tools/bash"
+	coreag "github.com/kameas-ai/kenaz-harness/core/agentgraph"
+	corebash "github.com/kameas-ai/kenaz-harness/core/tools/bash"
 )
 
 // BashOutputStoreAdapter wraps core/tools/bash.Store onto the

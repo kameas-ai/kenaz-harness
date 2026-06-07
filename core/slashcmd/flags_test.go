@@ -5,9 +5,9 @@ import (
 	"errors"
 	"testing"
 
-	coreslashcmd "github.com/sigil-tech/kaneaz-harness/core/slashcmd"
-	"github.com/sigil-tech/kaneaz-harness/core/storage"
-	storagesqlite "github.com/sigil-tech/kaneaz-harness/core/storage/sqlite"
+	coreslashcmd "github.com/kameas-ai/kenaz-harness/core/slashcmd"
+	"github.com/kameas-ai/kenaz-harness/core/storage"
+	storagesqlite "github.com/kameas-ai/kenaz-harness/core/storage/sqlite"
 )
 
 func openFlagsTestDB(t *testing.T) (storage.DB, string) {

@@ -8,10 +8,10 @@ import (
 	"runtime/debug"
 	"testing"
 
-	"github.com/sigil-tech/kaneaz-harness/core/credstore"
-	"github.com/sigil-tech/kaneaz-harness/core/secrets"
-	"github.com/sigil-tech/kaneaz-harness/core/secrets/ref"
-	"github.com/sigil-tech/kaneaz-harness/core/secrets/secret"
+	"github.com/kameas-ai/kenaz-harness/core/credstore"
+	"github.com/kameas-ai/kenaz-harness/core/secrets"
+	"github.com/kameas-ai/kenaz-harness/core/secrets/ref"
+	"github.com/kameas-ai/kenaz-harness/core/secrets/secret"
 )
 
 // sentinel is the 32-byte high-entropy pattern pumped through Use.

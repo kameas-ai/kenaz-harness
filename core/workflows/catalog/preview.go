@@ -3,7 +3,7 @@ package catalog
 import (
 	"fmt"
 
-	corewf "github.com/sigil-tech/kaneaz-harness/core/workflows"
+	corewf "github.com/kameas-ai/kenaz-harness/core/workflows"
 )
 
 // cedarGrantForKind maps step kinds to the Cedar action grant names that

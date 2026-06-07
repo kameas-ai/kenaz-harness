@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"fmt"
 
-	bundle "github.com/sigil-tech/kaneaz-harness/core/bundle"
+	bundle "github.com/kameas-ai/kenaz-harness/core/bundle"
 	"gopkg.in/yaml.v3"
 )
 

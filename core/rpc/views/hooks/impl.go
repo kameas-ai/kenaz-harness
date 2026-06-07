@@ -10,7 +10,7 @@ import (
 	"errors"
 	"fmt"
 
-	corehooks "github.com/sigil-tech/kaneaz-harness/core/hooks"
+	corehooks "github.com/kameas-ai/kenaz-harness/core/hooks"
 )
 
 // Registry is the surface the impl uses. Mirrors core/hooks.Registry's

@@ -21,7 +21,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/sigil-tech/kaneaz-harness/core/policy"
+	"github.com/kameas-ai/kenaz-harness/core/policy"
 )
 
 // Backend is the engine-internal contract every policy backend

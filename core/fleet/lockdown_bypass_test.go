@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/sigil-tech/kaneaz-harness/core/context/audit"
+	"github.com/kameas-ai/kenaz-harness/core/context/audit"
 )
 
 // fakeAuditEmitter is a minimal audit.Emitter for bypass tests.

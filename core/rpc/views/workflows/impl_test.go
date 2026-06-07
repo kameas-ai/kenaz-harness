@@ -6,11 +6,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sigil-tech/kaneaz-harness/core/storage"
-	storagesqlite "github.com/sigil-tech/kaneaz-harness/core/storage/sqlite"
-	corewf "github.com/sigil-tech/kaneaz-harness/core/workflows"
-	wfcatalog "github.com/sigil-tech/kaneaz-harness/core/workflows/catalog"
-	wfsched "github.com/sigil-tech/kaneaz-harness/core/workflows/scheduler"
+	"github.com/kameas-ai/kenaz-harness/core/storage"
+	storagesqlite "github.com/kameas-ai/kenaz-harness/core/storage/sqlite"
+	corewf "github.com/kameas-ai/kenaz-harness/core/workflows"
+	wfcatalog "github.com/kameas-ai/kenaz-harness/core/workflows/catalog"
+	wfsched "github.com/kameas-ai/kenaz-harness/core/workflows/scheduler"
 
 	_ "modernc.org/sqlite"
 )

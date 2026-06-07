@@ -3,7 +3,7 @@ package recipes_test
 import (
 	"testing"
 
-	"github.com/sigil-tech/kaneaz-harness/core/mcp/recipes"
+	"github.com/kameas-ai/kenaz-harness/core/mcp/recipes"
 )
 
 // stubRecipe is a minimal valid Recipe for merge tests. Validate() is

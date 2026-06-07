@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	corememory "github.com/sigil-tech/kaneaz-harness/core/memory"
-	"github.com/sigil-tech/kaneaz-harness/core/memory/prune"
+	corememory "github.com/kameas-ai/kenaz-harness/core/memory"
+	"github.com/kameas-ai/kenaz-harness/core/memory/prune"
 )
 
 type fakeReader struct {

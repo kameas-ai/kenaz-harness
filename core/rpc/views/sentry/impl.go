@@ -3,7 +3,7 @@ package sentry
 import (
 	"context"
 
-	coresentry "github.com/sigil-tech/kaneaz-harness/core/sentry"
+	coresentry "github.com/kameas-ai/kenaz-harness/core/sentry"
 )
 
 // Impl implements SentryAPI backed by core/sentry helpers.

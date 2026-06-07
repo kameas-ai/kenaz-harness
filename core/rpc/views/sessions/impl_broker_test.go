@@ -18,8 +18,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/sigil-tech/kaneaz-harness/core/session"
-	autotitle "github.com/sigil-tech/kaneaz-harness/core/sessions/autotitle"
+	"github.com/kameas-ai/kenaz-harness/core/session"
+	autotitle "github.com/kameas-ai/kenaz-harness/core/sessions/autotitle"
 )
 
 // recordingBroker captures every Publish call for assertion.

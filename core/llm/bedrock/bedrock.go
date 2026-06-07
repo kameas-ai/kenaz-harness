@@ -33,10 +33,10 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime/document"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime/types"
-	"github.com/sigil-tech/kaneaz-harness/core/llm"
-	"github.com/sigil-tech/kaneaz-harness/core/llm/capabilities"
-	"github.com/sigil-tech/kaneaz-harness/core/llm/httpx"
-	"github.com/sigil-tech/kaneaz-harness/core/llm/structured"
+	"github.com/kameas-ai/kenaz-harness/core/llm"
+	"github.com/kameas-ai/kenaz-harness/core/llm/capabilities"
+	"github.com/kameas-ai/kenaz-harness/core/llm/httpx"
+	"github.com/kameas-ai/kenaz-harness/core/llm/structured"
 )
 
 // imageFormatFromMediaType maps an IANA mime-type to the Bedrock

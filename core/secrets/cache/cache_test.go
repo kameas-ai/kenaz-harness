@@ -6,10 +6,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sigil-tech/kaneaz-harness/core/secrets/cache"
-	"github.com/sigil-tech/kaneaz-harness/core/secrets/ref"
-	"github.com/sigil-tech/kaneaz-harness/core/secrets/registry"
-	"github.com/sigil-tech/kaneaz-harness/core/secrets/secret"
+	"github.com/kameas-ai/kenaz-harness/core/secrets/cache"
+	"github.com/kameas-ai/kenaz-harness/core/secrets/ref"
+	"github.com/kameas-ai/kenaz-harness/core/secrets/registry"
+	"github.com/kameas-ai/kenaz-harness/core/secrets/secret"
 )
 
 // fakeClock is a deterministic clock for TTL tests.

@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sigil-tech/kaneaz-harness/core/tools/bash"
+	"github.com/kameas-ai/kenaz-harness/core/tools/bash"
 )
 
 // ── test doubles ──────────────────────────────────────────────────────────

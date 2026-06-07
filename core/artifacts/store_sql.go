@@ -11,7 +11,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/sigil-tech/kaneaz-harness/core/storage"
+	"github.com/kameas-ai/kenaz-harness/core/storage"
 )
 
 // sqlStore persists artifacts through a storage.DB-shaped connection.

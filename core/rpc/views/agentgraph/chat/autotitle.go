@@ -15,9 +15,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/sigil-tech/kaneaz-harness/core/logging"
-	"github.com/sigil-tech/kaneaz-harness/core/session"
-	autotitle "github.com/sigil-tech/kaneaz-harness/core/sessions/autotitle"
+	"github.com/kameas-ai/kenaz-harness/core/logging"
+	"github.com/kameas-ai/kenaz-harness/core/session"
+	autotitle "github.com/kameas-ai/kenaz-harness/core/sessions/autotitle"
 )
 
 // AutoTitleManager is the narrowed session.Manager surface the auto-title

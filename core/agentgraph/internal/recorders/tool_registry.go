@@ -6,7 +6,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/sigil-tech/kaneaz-harness/core/agentgraph"
+	"github.com/kameas-ai/kenaz-harness/core/agentgraph"
 )
 
 // ToolCall records one call to ToolRegistry.Call.

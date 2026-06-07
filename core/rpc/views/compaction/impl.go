@@ -6,9 +6,9 @@ import (
 	"context"
 	"errors"
 
-	"github.com/sigil-tech/kaneaz-harness/core/agentgraph"
-	corecompaction "github.com/sigil-tech/kaneaz-harness/core/agentgraph/compaction"
-	sessioncompaction "github.com/sigil-tech/kaneaz-harness/core/compaction"
+	"github.com/kameas-ai/kenaz-harness/core/agentgraph"
+	corecompaction "github.com/kameas-ai/kenaz-harness/core/agentgraph/compaction"
+	sessioncompaction "github.com/kameas-ai/kenaz-harness/core/compaction"
 )
 
 // API is the concrete CompactionAPI.

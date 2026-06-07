@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sigil-tech/kaneaz-harness/core/tasks"
+	"github.com/kameas-ai/kenaz-harness/core/tasks"
 )
 
 // fakeStore is a nil-database SQLStore for unit tests.

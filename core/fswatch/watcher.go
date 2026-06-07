@@ -25,7 +25,7 @@ import (
 	"time"
 
 	"github.com/fsnotify/fsnotify"
-	"github.com/sigil-tech/kaneaz-harness/core/hooks"
+	"github.com/kameas-ai/kenaz-harness/core/hooks"
 )
 
 const (
