@@ -15,8 +15,8 @@
  * the badge immediately); live updates arrive via the plan_mode_changed
  * event handled by usePlanMode.
  */
-import { ref, onMounted } from 'vue';
-import { useHarnessClient } from '@/lib/useHarnessAPI';
+import { ref, nextTick, onMounted } from 'vue';
+import { useHarnessClient, useProjects } from '@/lib/useHarnessAPI';
 import type { Session } from '@/lib/types';
 import AutonomyChip from '@/components/chat/AutonomyChip.vue';
 import PlanModeBadge from '@/components/chat/PlanModeBadge.vue';
@@ -31,6 +31,73 @@ const emit = defineEmits<{
 }>();
 
 const client = useHarnessClient();
+
+// ── Rename (session-actions-relocation) ──────────────────────────────
+// Rename moved out of the left-rail rows: clicking the title here turns
+// it into an inline editor. Empty submission clears the title so the
+// session falls back to auto-titling (mirrors the rail's old behavior).
+const renaming = ref(false);
+const renameDraft = ref('');
+
+function startRename() {
+  renameDraft.value = props.session.name ?? '';
+  renaming.value = true;
+}
+
+function setRenameInputRef(el: unknown) {
+  if (el instanceof HTMLInputElement) {
+    el.focus();
+    el.select();
+  }
+}
+
+async function commitRename() {
+  if (!renaming.value) return;
+  const next = renameDraft.value.trim();
+  renaming.value = false;
+  lastError.value = null;
+  try {
+    if (!next) {
+      await client.sessions.clearTitle(props.session.id);
+    } else {
+      if (next === props.session.name) return;
+      await client.sessions.rename(props.session.id, next);
+    }
+    emit('title-changed');
+  } catch (err) {
+    lastError.value = err instanceof Error ? err.message : String(err);
+  }
+}
+
+function cancelRename() {
+  renaming.value = false;
+  renameDraft.value = '';
+}
+
+// ── Move to project (session-actions-relocation) ─────────────────────
+const { list: projectList, refresh: refreshProjects } = useProjects();
+const moveMenuOpen = ref(false);
+
+async function toggleMoveMenu() {
+  moveMenuOpen.value = !moveMenuOpen.value;
+  if (moveMenuOpen.value) {
+    await refreshProjects();
+    await nextTick();
+  }
+}
+
+async function moveTo(projectId: string) {
+  moveMenuOpen.value = false;
+  const targetPid = projectId === '__loose__' ? '' : projectId;
+  if ((props.session.projectId ?? '') === targetPid) return;
+  lastError.value = null;
+  try {
+    await client.sessions.moveToProject(props.session.id, targetPid);
+    emit('title-changed');
+  } catch (err) {
+    lastError.value = err instanceof Error ? err.message : String(err);
+  }
+}
 
 // ── Plan-mode badge state ─────────────────────────────────────────────
 const { isActive: planModeActive, pendingPlanId, setActive: setPlanModeActive } = usePlanMode(props.session.id);
@@ -114,9 +181,26 @@ function cancelConfirm() {
     data-testid="session-header"
     class="flex items-center gap-2 px-4 py-2 border-b border-hairline"
   >
-    <span class="flex-1 truncate text-sm font-medium text-ink">
+    <input
+      v-if="renaming"
+      :ref="setRenameInputRef"
+      v-model="renameDraft"
+      class="flex-1 min-w-0 px-2 py-1 rounded-sm border border-accent bg-surface-2 text-sm font-ui text-ink focus:outline-none"
+      :data-testid="`rename-session-input-${session.id}`"
+      @keydown.enter="commitRename"
+      @keydown.escape="cancelRename"
+      @blur="commitRename"
+    />
+    <button
+      v-else
+      type="button"
+      class="flex-1 min-w-0 truncate text-left text-sm font-medium text-ink hover:text-accent transition-colors"
+      title="Rename session"
+      data-testid="rename-session-title"
+      @click="startRename"
+    >
       {{ session.name || session.id }}
-    </span>
+    </button>
 
     <PlanModeBadge
       :is-active="planModeActive"
@@ -134,6 +218,67 @@ function cancelConfirm() {
     >
       Export…
     </button>
+
+    <!-- Move-to-project (relocated from the left-rail rows) -->
+    <div class="relative shrink-0">
+      <button
+        type="button"
+        data-testid="move-session-btn"
+        class="text-xs px-2 py-1 rounded text-ink-muted hover:text-ink hover:bg-surface-2 transition-colors"
+        aria-haspopup="menu"
+        :aria-expanded="moveMenuOpen ? 'true' : 'false'"
+        @click="toggleMoveMenu"
+      >
+        Move…
+      </button>
+      <!-- click-away backdrop -->
+      <button
+        v-if="moveMenuOpen"
+        type="button"
+        class="fixed inset-0 z-40 cursor-default"
+        aria-hidden="true"
+        tabindex="-1"
+        @click="moveMenuOpen = false"
+      />
+      <div
+        v-if="moveMenuOpen"
+        role="menu"
+        aria-label="Move session to project"
+        data-testid="move-session-menu"
+        class="absolute right-0 top-full mt-1 z-50 rounded-sm border border-border-muted bg-surface-0 shadow-lg py-1 min-w-[160px]"
+      >
+        <div class="px-3 py-1 font-ui text-[10px] uppercase tracking-[0.18em] text-ink-subtle">
+          Move to…
+        </div>
+        <button
+          v-for="p in projectList.filter((x) => x.id !== (session.projectId ?? ''))"
+          :key="p.id"
+          type="button"
+          role="menuitem"
+          class="block w-full px-3 py-1.5 text-left font-ui text-xs text-ink hover:bg-surface-2"
+          :data-testid="`move-session-to-${p.id}`"
+          @click="moveTo(p.id)"
+        >
+          {{ p.name }}
+        </button>
+        <button
+          v-if="session.projectId"
+          type="button"
+          role="menuitem"
+          class="block w-full px-3 py-1.5 text-left font-ui text-xs text-ink hover:bg-surface-2"
+          data-testid="move-session-to-global"
+          @click="moveTo('__loose__')"
+        >
+          Global (no project)
+        </button>
+        <div
+          v-if="!session.projectId && projectList.filter((x) => x.id !== (session.projectId ?? '')).length === 0"
+          class="px-3 py-1.5 font-ui text-xs text-ink-subtle"
+        >
+          No other projects
+        </div>
+      </div>
+    </div>
 
     <button
       type="button"

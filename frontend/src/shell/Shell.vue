@@ -42,6 +42,78 @@ const cheatSheetOpen = ref(false);
 const shortcutOverrides = ref<Record<string, string>>({});
 const searchPalette = useSearchPalette();
 
+// ── Resizable left rail ───────────────────────────────────────────────
+// Width is user-dragged and persisted to localStorage (pure UI chrome, no
+// backend setting). The grid reads it via the --rail-width custom property;
+// below the 960px breakpoint shell.css forces the 56px collapsed rail and
+// the handle is hidden.
+const RAIL_MIN = 200;
+const RAIL_MAX = 480;
+const RAIL_DEFAULT = 240;
+const RAIL_STORAGE_KEY = 'kenaz.railWidth';
+
+function clampRail(px: number): number {
+  if (!Number.isFinite(px)) return RAIL_DEFAULT;
+  return Math.min(RAIL_MAX, Math.max(RAIL_MIN, Math.round(px)));
+}
+
+const railWidth = ref(RAIL_DEFAULT);
+const railResizing = ref(false);
+
+function loadRailWidth() {
+  if (typeof window === 'undefined') return;
+  const raw = window.localStorage?.getItem(RAIL_STORAGE_KEY);
+  if (raw) railWidth.value = clampRail(Number(raw));
+}
+
+function onRailHandlePointerDown(e: PointerEvent) {
+  railResizing.value = true;
+  (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
+  e.preventDefault();
+}
+
+function onRailHandlePointerMove(e: PointerEvent) {
+  if (!railResizing.value) return;
+  // The rail's left edge is at viewport x=0, so clientX is the width.
+  railWidth.value = clampRail(e.clientX);
+}
+
+function onRailHandlePointerUp(e: PointerEvent) {
+  if (!railResizing.value) return;
+  railResizing.value = false;
+  (e.target as HTMLElement).releasePointerCapture?.(e.pointerId);
+  try {
+    window.localStorage?.setItem(RAIL_STORAGE_KEY, String(railWidth.value));
+  } catch {
+    // best-effort; non-persisted width is still applied for the session
+  }
+}
+
+function resetRailWidth() {
+  railWidth.value = RAIL_DEFAULT;
+  try {
+    window.localStorage?.setItem(RAIL_STORAGE_KEY, String(RAIL_DEFAULT));
+  } catch {
+    /* ignore */
+  }
+}
+
+function onRailHandleKeydown(e: KeyboardEvent) {
+  if (e.key === 'ArrowLeft') {
+    railWidth.value = clampRail(railWidth.value - 16);
+  } else if (e.key === 'ArrowRight') {
+    railWidth.value = clampRail(railWidth.value + 16);
+  } else {
+    return;
+  }
+  e.preventDefault();
+  try {
+    window.localStorage?.setItem(RAIL_STORAGE_KEY, String(railWidth.value));
+  } catch {
+    /* ignore */
+  }
+}
+
 function onGlobalKeydown(e: KeyboardEvent) {
   const target = e.target as HTMLElement | null;
   const tag = target?.tagName?.toUpperCase();
@@ -80,6 +152,7 @@ function onGlobalKeydown(e: KeyboardEvent) {
 }
 
 onMounted(async () => {
+  loadRailWidth();
   if (typeof window !== 'undefined') {
     window.addEventListener('keydown', onGlobalKeydown);
   }
@@ -107,7 +180,10 @@ onBeforeUnmount(() => {
     class="skip-to-content"
   >Skip to content</a>
 
-  <div class="shell-grid bg-surface-0 text-ink font-ui">
+  <div
+    class="shell-grid bg-surface-0 text-ink font-ui"
+    :style="{ '--rail-width': railWidth + 'px' }"
+  >
     <header class="shell-titlebar border-b border-border-muted bg-surface-1">
       <Titlebar />
     </header>
@@ -117,6 +193,25 @@ onBeforeUnmount(() => {
       aria-label="Primary navigation"
     >
       <LeftRail />
+      <!-- Drag handle to resize the rail. Hidden below the 960px breakpoint
+           where the rail collapses to a fixed icon strip. -->
+      <div
+        class="hidden two-col:block absolute top-0 right-0 z-20 h-full w-1.5 -mr-0.5 cursor-col-resize hover:bg-accent-hairline"
+        :class="railResizing ? 'bg-accent-hairline' : ''"
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="Resize sidebar"
+        :aria-valuenow="railWidth"
+        :aria-valuemin="RAIL_MIN"
+        :aria-valuemax="RAIL_MAX"
+        tabindex="0"
+        data-testid="rail-resize-handle"
+        @pointerdown="onRailHandlePointerDown"
+        @pointermove="onRailHandlePointerMove"
+        @pointerup="onRailHandlePointerUp"
+        @dblclick="resetRailWidth"
+        @keydown="onRailHandleKeydown"
+      />
     </aside>
 
     <main class="shell-main bg-surface-0">

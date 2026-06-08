@@ -172,3 +172,99 @@ describe('SessionHeader — export affordance (session-export-01NDFSEX05 WP03)',
     vi.restoreAllMocks();
   });
 });
+
+describe('SessionHeader — rename affordance (relocated from left rail)', () => {
+  function mountRename(
+    session: Session,
+    rename = vi.fn().mockResolvedValue(undefined),
+    clearTitle = vi.fn().mockResolvedValue(undefined),
+  ) {
+    const base = createFakeHarnessClient();
+    const client = {
+      ...base,
+      sessions: { ...base.sessions, rename, clearTitle },
+    };
+    const w = mount(SessionHeader, {
+      props: { session },
+      global: { provide: { [HarnessClientKey as symbol]: client } },
+    });
+    return { w, rename, clearTitle };
+  }
+
+  it('clicking the title opens an inline rename input', async () => {
+    const { w } = mountRename(baseSession);
+    await flushPromises();
+    const title = w.find('[data-testid="rename-session-title"]');
+    expect(title.exists()).toBe(true);
+    await title.trigger('click');
+    expect(w.find('[data-testid="rename-session-input-ses-1"]').exists()).toBe(true);
+  });
+
+  it('committing a new title calls sessions.rename and emits title-changed', async () => {
+    const { w, rename } = mountRename(baseSession);
+    await flushPromises();
+    await w.find('[data-testid="rename-session-title"]').trigger('click');
+    const input = w.find<HTMLInputElement>('[data-testid="rename-session-input-ses-1"]');
+    await input.setValue('Renamed here');
+    await input.trigger('keydown.enter');
+    await flushPromises();
+    expect(rename).toHaveBeenCalledWith('ses-1', 'Renamed here');
+    expect(w.emitted('title-changed')).toBeTruthy();
+  });
+
+  it('empty submission clears the title instead of renaming', async () => {
+    const { w, rename, clearTitle } = mountRename(baseSession);
+    await flushPromises();
+    await w.find('[data-testid="rename-session-title"]').trigger('click');
+    const input = w.find<HTMLInputElement>('[data-testid="rename-session-input-ses-1"]');
+    await input.setValue('   ');
+    await input.trigger('keydown.enter');
+    await flushPromises();
+    expect(clearTitle).toHaveBeenCalledWith('ses-1');
+    expect(rename).not.toHaveBeenCalled();
+  });
+});
+
+describe('SessionHeader — move-to-project affordance (relocated from left rail)', () => {
+  const projects = [
+    { id: 'p-a', name: 'Project A', description: '', createdAt: '', updatedAt: '' },
+    { id: 'p-b', name: 'Project B', description: '', createdAt: '', updatedAt: '' },
+  ];
+  function mountMove(session: Session, moveToProject = vi.fn().mockResolvedValue(undefined)) {
+    const base = createFakeHarnessClient();
+    const client = {
+      ...base,
+      sessions: { ...base.sessions, moveToProject },
+      projects: { ...base.projects, list: async () => projects },
+    };
+    const w = mount(SessionHeader, {
+      props: { session },
+      global: { provide: { [HarnessClientKey as symbol]: client } },
+    });
+    return { w, moveToProject };
+  }
+
+  it('renders the Move… button', async () => {
+    const { w } = mountMove(baseSession);
+    await flushPromises();
+    expect(w.find('[data-testid="move-session-btn"]').exists()).toBe(true);
+  });
+
+  it('opens the menu (excluding the current project) and moves on click', async () => {
+    const session: Session = { ...baseSession, projectId: 'p-a' };
+    const { w, moveToProject } = mountMove(session);
+    await flushPromises();
+    expect(w.find('[data-testid="move-session-menu"]').exists()).toBe(false);
+    await w.find('[data-testid="move-session-btn"]').trigger('click');
+    await flushPromises();
+    expect(w.find('[data-testid="move-session-menu"]').exists()).toBe(true);
+    // Current project (p-a) excluded; p-b offered; Global offered (in a project).
+    expect(w.find('[data-testid="move-session-to-p-b"]').exists()).toBe(true);
+    expect(w.find('[data-testid="move-session-to-p-a"]').exists()).toBe(false);
+    expect(w.find('[data-testid="move-session-to-global"]').exists()).toBe(true);
+    await w.find('[data-testid="move-session-to-p-b"]').trigger('click');
+    await flushPromises();
+    expect(moveToProject).toHaveBeenCalledWith('ses-1', 'p-b');
+    expect(w.find('[data-testid="move-session-menu"]').exists()).toBe(false);
+  });
+});

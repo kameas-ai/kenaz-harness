@@ -12,15 +12,13 @@ import {
   Settings,
   Brain,
   GitBranch,
-  Pencil,
   Trash2,
   X,
   ChevronDown,
   ChevronRight,
   Folder,
-  Download,
 } from './icons';
-import { useSessions, useProjects, useHarnessClient } from '@/lib/useHarnessAPI';
+import { useSessions, useProjects } from '@/lib/useHarnessAPI';
 import NewSessionDialog from './NewSessionDialog.vue';
 import MemoryBadge from './MemoryBadge.vue';
 import WorkflowRunsSection from '@/components/workflows/WorkflowRunsSection.vue';
@@ -39,7 +37,6 @@ import '@/styles/sessions.css';
 const {
   list: sessionList,
   refresh: refreshSessions,
-  rename: renameSession,
   remove: removeSession,
   moveToProject: moveSessionToProject,
 } = useSessions();
@@ -50,13 +47,10 @@ const {
   rename: renameProject,
   remove: removeProject,
 } = useProjects();
-const client = useHarnessClient();
 
 const newSessionDialogOpen = ref(false);
 const newSessionProjectId = ref<string | undefined>(undefined);
 const deletingId = ref<string | null>(null);
-const renamingId = ref<string | null>(null);
-const renameDraft = ref('');
 
 // WP07 — drag-and-drop session-to-project membership. The dragged
 // session id is captured at dragstart; project headers + the Loose
@@ -64,17 +58,6 @@ const renameDraft = ref('');
 // `dropTargetId` so the user gets a visual hint during the drag.
 const draggedSessionId = ref<string | null>(null);
 const dropTargetId = ref<string | null>(null); // project id or '__loose__'
-let focusedRenameId: string | null = null;
-function setRenameInputRef(el: Element | null) {
-  if (!(el instanceof HTMLInputElement)) {
-    focusedRenameId = null;
-    return;
-  }
-  if (focusedRenameId === renamingId.value) return;
-  focusedRenameId = renamingId.value;
-  el.focus();
-  el.select();
-}
 const lastError = ref<string | null>(null);
 const route = useRoute();
 const router = useRouter();
@@ -87,9 +70,6 @@ const renameProjectDraft = ref('');
 const projectMenu = ref<{ id: string; x: number; y: number } | null>(null);
 const deleteModal = ref<{ project: Project; cascade: boolean } | null>(null);
 
-// WP05 (a11y-backlog-cleanup-01NDFSEX07) — keyboard "Move to project" sub-menu
-// Tracks which session's move-menu is open (session id + trigger position).
-const moveMenu = ref<{ sessionId: string; x: number; y: number } | null>(null);
 const collapsed = ref<Set<string>>(new Set());
 let focusedProjectRenameId: string | null = null;
 function setProjectRenameRef(el: Element | null) {
@@ -249,58 +229,13 @@ async function onNewSessionDialogClose() {
 }
 
 function openSession(id: string) {
-  if (!id || deletingId.value === id || renamingId.value === id) return;
+  if (!id || deletingId.value === id) return;
   void router.push(`/sessions/${id}`);
 }
 
 function openProjectPage(id: string) {
   if (!id) return;
   void router.push(`/projects/${id}`);
-}
-
-function startRename(id: string, currentName: string, event: Event) {
-  event.preventDefault();
-  event.stopPropagation();
-  if (renamingId.value || deletingId.value) return;
-  renamingId.value = id;
-  renameDraft.value = currentName;
-}
-
-function cancelRename() {
-  renamingId.value = null;
-  renameDraft.value = '';
-  focusedRenameId = null;
-}
-
-async function commitRename(id: string) {
-  const next = renameDraft.value.trim();
-  if (!next) {
-    // Empty submission — clear any user-set title so the auto-title
-    // engine can take over (WP05 clear-title flow).
-    try {
-      await client.sessions.clearTitle(id);
-      await refreshSessions();
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      lastError.value = `Clear title failed: ${msg}`;
-    } finally {
-      cancelRename();
-    }
-    return;
-  }
-  const current = sessionList.value.find((s) => s.id === id);
-  if (current && current.name === next) {
-    cancelRename();
-    return;
-  }
-  try {
-    await renameSession(id, next);
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    lastError.value = `Rename failed: ${msg}`;
-  } finally {
-    cancelRename();
-  }
 }
 
 async function deleteSession(id: string, event: Event) {
@@ -321,31 +256,6 @@ async function deleteSession(id: string, event: Event) {
     await refreshSessions();
   } finally {
     deletingId.value = null;
-  }
-}
-
-// session-export-01NDFSEX05 WP03 — per-session export affordance.
-// Opens the OS-native save dialog; user picks format via a simple prompt.
-async function exportSession(id: string, name: string, event: Event) {
-  event.preventDefault();
-  event.stopPropagation();
-  if (!id) return;
-  // Pick format: a native confirm() keeps the component dependency surface zero.
-  // "OK" → Markdown, "Cancel" → JSON (clearly labelled).
-  const wantMarkdown = window.confirm(
-    `Export session "${name || id}" — click OK for Markdown (.md) or Cancel for JSON (.json).`,
-  );
-  const format = wantMarkdown ? 'markdown' : 'json';
-  lastError.value = null;
-  try {
-    await client.sessions.export(id, format as 'markdown' | 'json');
-  } catch (err) {
-    // ErrExportCancelled (user closed the OS dialog) is not an error from
-    // the user's perspective — silently ignore it.
-    const msg = err instanceof Error ? err.message : String(err);
-    if (!msg.includes('cancelled')) {
-      lastError.value = `Export failed: ${msg}`;
-    }
   }
 }
 
@@ -420,34 +330,6 @@ function openProjectMenuFromElement(p: Project, el: EventTarget | null) {
   const x = rect ? rect.left : 0;
   const y = rect ? rect.bottom : 0;
   projectMenu.value = { id: p.id, x, y };
-}
-
-// ── WP05 — session "Move to project" keyboard affordance ─────────────────────
-
-function openMoveMenu(sessionId: string, el: EventTarget | null) {
-  moveMenu.value = null;
-  const rect = (el instanceof HTMLElement ? el : null)?.getBoundingClientRect?.();
-  const x = rect ? rect.left : 0;
-  const y = rect ? rect.bottom : 0;
-  moveMenu.value = { sessionId, x, y };
-}
-
-function closeMoveMenu() {
-  moveMenu.value = null;
-}
-
-async function moveSessionViaMenu(sessionId: string, targetProjectId: string) {
-  closeMoveMenu();
-  const current = sessionList.value.find((s) => s.id === sessionId);
-  const currentPid = current?.projectId ?? '';
-  const targetPid = targetProjectId === '__loose__' ? '' : targetProjectId;
-  if (currentPid === targetPid) return;
-  try {
-    await moveSessionToProject(sessionId, targetPid);
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    lastError.value = `Move session failed: ${msg}`;
-  }
 }
 
 function closeProjectMenu() {
@@ -747,83 +629,44 @@ async function onProjectDrop(evt: DragEvent, projectId: string) {
             <li
               v-for="session in sessionsFor(project.id)"
               :key="session.id"
-              class="flex items-stretch gap-1"
-              :draggable="renamingId !== session.id"
+              class="group flex items-stretch gap-1"
+              :draggable="true"
               :data-testid="`session-row-${session.id}`"
               @dragstart="onSessionDragStart($event, session.id)"
               @dragend="onSessionDragEnd"
             >
-              <template v-if="renamingId === session.id">
-                <input
-                  :ref="setRenameInputRef"
-                  v-model="renameDraft"
-                  class="flex-1 min-w-0 px-3 py-2 rounded-sm border border-accent bg-surface-2 text-sm font-ui text-ink focus:outline-none"
-                  :data-testid="`rename-session-input-${session.id}`"
-                  @keydown.enter="commitRename(session.id)"
-                  @keydown.escape="cancelRename"
-                  @blur="commitRename(session.id)"
+              <button
+                type="button"
+                class="flex-1 min-w-0 flex items-center gap-2 px-3 py-2 rounded-sm text-left text-sm font-ui transition-fast ease-kenaz"
+                :class="
+                  activeSessionId === session.id
+                    ? 'text-ink bg-surface-2 ring-1 ring-accent-hairline'
+                    : 'text-ink-muted hover:text-ink hover:bg-surface-2'
+                "
+                :title="session.name || session.id"
+                :aria-current="activeSessionId === session.id ? 'page' : undefined"
+                :data-testid="`open-session-${session.id}`"
+                @click="openSession(session.id)"
+              >
+                <MessageSquare
+                  :size="14"
+                  :class="activeSessionId === session.id ? 'text-accent' : ''"
                 />
-              </template>
-              <template v-else>
-                <button
-                  type="button"
-                  class="flex-1 min-w-0 flex items-center gap-2 px-3 py-2 rounded-sm text-left text-sm font-ui transition-fast ease-kenaz"
-                  :class="
-                    activeSessionId === session.id
-                      ? 'text-ink bg-surface-2 ring-1 ring-accent-hairline'
-                      : 'text-ink-muted hover:text-ink hover:bg-surface-2'
-                  "
-                  :title="session.autoTitled ? 'Auto-generated title — click to edit' : (session.name || session.id)"
-                  :aria-current="activeSessionId === session.id ? 'page' : undefined"
-                  :data-testid="`open-session-${session.id}`"
-                  @click="openSession(session.id)"
+                <span
+                  class="truncate hidden two-col:inline"
+                  :class="session.autoTitled ? 'session-row__name--auto' : ''"
+                  :data-testid="session.autoTitled ? `auto-titled-name-${session.id}` : undefined"
                 >
-                  <MessageSquare
-                    :size="14"
-                    :class="activeSessionId === session.id ? 'text-accent' : ''"
-                  />
-                  <span
-                    class="truncate hidden two-col:inline"
-                    :class="session.autoTitled ? 'session-row__name--auto' : ''"
-                    :data-testid="session.autoTitled ? `auto-titled-name-${session.id}` : undefined"
-                  >
-                    {{ session.name }}
-                  </span>
-                </button>
+                  {{ session.name }}
+                </span>
+              </button>
+              <!-- Delete is the only inline action; rename/export/move live in
+                   the chat-pane header. Hidden at rest so the name owns the
+                   row; revealed on hover or keyboard focus. -->
+              <div class="shrink-0 hidden group-hover:flex group-focus-within:flex items-center">
                 <button
                   type="button"
-                  class="shrink-0 p-2 rounded-sm text-ink-dim hover:text-ink hover:bg-surface-3"
-                  :aria-label="`Rename session ${session.name}`"
-                  :data-testid="`rename-session-${session.id}`"
-                  @click="startRename(session.id, session.name, $event)"
-                >
-                  <Pencil :size="13" />
-                </button>
-                <button
-                  type="button"
-                  class="shrink-0 p-2 rounded-sm text-ink-dim hover:text-ink hover:bg-surface-3"
-                  :aria-label="`Export session ${session.name}`"
-                  :data-testid="`export-session-${session.id}`"
-                  @click="exportSession(session.id, session.name, $event)"
-                >
-                  <Download :size="13" />
-                </button>
-                <!-- WP05 (D-02): keyboard move-to-project affordance -->
-                <button
-                  v-if="projectList.length > 0"
-                  type="button"
-                  class="shrink-0 p-2 rounded-sm text-ink-dim hover:text-accent hover:bg-surface-3"
-                  :aria-label="`Move session ${session.name} to project`"
-                  aria-haspopup="menu"
-                  :aria-expanded="moveMenu?.sessionId === session.id ? 'true' : 'false'"
-                  :data-testid="`move-session-${session.id}`"
-                  @click.stop="openMoveMenu(session.id, $event.currentTarget)"
-                >
-                  ↗
-                </button>
-                <button
-                  type="button"
-                  class="shrink-0 p-2 rounded-sm text-ink-dim hover:text-signal-danger hover:bg-surface-3"
+                  class="p-2 rounded-sm text-ink-dim hover:text-signal-danger hover:bg-surface-3"
                   :aria-label="`Delete session ${session.name}`"
                   :disabled="deletingId === session.id"
                   :data-testid="`delete-session-${session.id}`"
@@ -831,7 +674,7 @@ async function onProjectDrop(evt: DragEvent, projectId: string) {
                 >
                   <X :size="14" />
                 </button>
-              </template>
+              </div>
             </li>
           </ul>
         </li>
@@ -864,37 +707,14 @@ async function onProjectDrop(evt: DragEvent, projectId: string) {
               :has-children="hasChildren(session.id)"
               :is-collapsed="isBranchCollapsed(session.id)"
               :is-active="activeSessionId === session.id"
-              :is-renaming="renamingId === session.id"
               :max-depth="maxBranchDepth"
-              :rename-draft="renameDraft"
               :draggable="true"
               @open="openSession"
               @toggle-collapse="toggleBranchCollapsed"
-              @commit-rename="commitRename"
-              @cancel-rename="cancelRename"
-              @update:rename-draft="renameDraft = $event"
               @dragstart="onTreeSessionDragStart"
               @dragend="onSessionDragEnd"
             >
               <template #actions>
-                <button
-                  type="button"
-                  class="p-2 rounded-sm text-ink-dim hover:text-ink hover:bg-surface-3"
-                  :aria-label="`Rename session ${session.name}`"
-                  :data-testid="`rename-session-${session.id}`"
-                  @click.stop="startRename(session.id, session.name, $event)"
-                >
-                  <Pencil :size="13" />
-                </button>
-                <button
-                  type="button"
-                  class="p-2 rounded-sm text-ink-dim hover:text-ink hover:bg-surface-3"
-                  :aria-label="`Export session ${session.name}`"
-                  :data-testid="`export-session-${session.id}`"
-                  @click.stop="exportSession(session.id, session.name, $event)"
-                >
-                  <Download :size="13" />
-                </button>
                 <button
                   type="button"
                   class="p-2 rounded-sm text-ink-dim hover:text-signal-danger hover:bg-surface-3"
@@ -917,34 +737,11 @@ async function onProjectDrop(evt: DragEvent, projectId: string) {
                 :has-children="hasChildren(child.id)"
                 :is-collapsed="isBranchCollapsed(child.id)"
                 :is-active="activeSessionId === child.id"
-                :is-renaming="renamingId === child.id"
                 :max-depth="maxBranchDepth"
-                :rename-draft="renameDraft"
                 @open="openSession"
                 @toggle-collapse="toggleBranchCollapsed"
-                @commit-rename="commitRename"
-                @cancel-rename="cancelRename"
-                @update:rename-draft="renameDraft = $event"
               >
                 <template #actions>
-                  <button
-                    type="button"
-                    class="p-2 rounded-sm text-ink-dim hover:text-ink hover:bg-surface-3"
-                    :aria-label="`Rename session ${child.name}`"
-                    :data-testid="`rename-session-${child.id}`"
-                    @click.stop="startRename(child.id, child.name, $event)"
-                  >
-                    <Pencil :size="13" />
-                  </button>
-                  <button
-                    type="button"
-                    class="p-2 rounded-sm text-ink-dim hover:text-ink hover:bg-surface-3"
-                    :aria-label="`Export session ${child.name}`"
-                    :data-testid="`export-session-${child.id}`"
-                    @click.stop="exportSession(child.id, child.name, $event)"
-                  >
-                    <Download :size="13" />
-                  </button>
                   <button
                     type="button"
                     class="p-2 rounded-sm text-ink-dim hover:text-signal-danger hover:bg-surface-3"
@@ -965,83 +762,43 @@ async function onProjectDrop(evt: DragEvent, projectId: string) {
           <li
             v-for="session in looseSessions"
             :key="session.id"
-            class="flex items-stretch gap-1"
-            :draggable="renamingId !== session.id"
+            class="group flex items-stretch gap-1"
+            :draggable="true"
             :data-testid="`session-row-${session.id}`"
             @dragstart="onSessionDragStart($event, session.id)"
             @dragend="onSessionDragEnd"
           >
-            <template v-if="renamingId === session.id">
-              <input
-                :ref="setRenameInputRef"
-                v-model="renameDraft"
-                class="flex-1 min-w-0 px-3 py-2 rounded-sm border border-accent bg-surface-2 text-sm font-ui text-ink focus:outline-none"
-                :data-testid="`rename-session-input-${session.id}`"
-                @keydown.enter="commitRename(session.id)"
-                @keydown.escape="cancelRename"
-                @blur="commitRename(session.id)"
+            <button
+              type="button"
+              class="flex-1 min-w-0 flex items-center gap-2 px-3 py-2 rounded-sm text-left text-sm font-ui transition-fast ease-kenaz"
+              :class="
+                activeSessionId === session.id
+                  ? 'text-ink bg-surface-2 ring-1 ring-accent-hairline'
+                  : 'text-ink-muted hover:text-ink hover:bg-surface-2'
+              "
+              :title="session.name || session.id"
+              :aria-current="activeSessionId === session.id ? 'page' : undefined"
+              :data-testid="`open-session-${session.id}`"
+              @click="openSession(session.id)"
+            >
+              <MessageSquare
+                :size="14"
+                :class="activeSessionId === session.id ? 'text-accent' : ''"
               />
-            </template>
-            <template v-else>
-              <button
-                type="button"
-                class="flex-1 min-w-0 flex items-center gap-2 px-3 py-2 rounded-sm text-left text-sm font-ui transition-fast ease-kenaz"
-                :class="
-                  activeSessionId === session.id
-                    ? 'text-ink bg-surface-2 ring-1 ring-accent-hairline'
-                    : 'text-ink-muted hover:text-ink hover:bg-surface-2'
-                "
-                :title="session.autoTitled ? 'Auto-generated title — click to edit' : (session.name || session.id)"
-                :aria-current="activeSessionId === session.id ? 'page' : undefined"
-                :data-testid="`open-session-${session.id}`"
-                @click="openSession(session.id)"
+              <span
+                class="truncate hidden two-col:inline"
+                :class="session.autoTitled ? 'session-row__name--auto' : ''"
+                :data-testid="session.autoTitled ? `auto-titled-name-${session.id}` : undefined"
               >
-                <MessageSquare
-                  :size="14"
-                  :class="activeSessionId === session.id ? 'text-accent' : ''"
-                />
-                <span
-                  class="truncate hidden two-col:inline"
-                  :class="session.autoTitled ? 'session-row__name--auto' : ''"
-                  :data-testid="session.autoTitled ? `auto-titled-name-${session.id}` : undefined"
-                >
-                  {{ session.name }}
-                </span>
-              </button>
+                {{ session.name }}
+              </span>
+            </button>
+            <!-- Delete is the only inline action; rename/export/move live in
+                 the chat-pane header. Hidden at rest; revealed on hover/focus. -->
+            <div class="shrink-0 hidden group-hover:flex group-focus-within:flex items-center">
               <button
                 type="button"
-                class="shrink-0 p-2 rounded-sm text-ink-dim hover:text-ink hover:bg-surface-3"
-                :aria-label="`Rename session ${session.name}`"
-                :data-testid="`rename-session-${session.id}`"
-                @click="startRename(session.id, session.name, $event)"
-              >
-                <Pencil :size="13" />
-              </button>
-              <button
-                type="button"
-                class="shrink-0 p-2 rounded-sm text-ink-dim hover:text-ink hover:bg-surface-3"
-                :aria-label="`Export session ${session.name}`"
-                :data-testid="`export-session-${session.id}`"
-                @click="exportSession(session.id, session.name, $event)"
-              >
-                <Download :size="13" />
-              </button>
-              <!-- WP05 (D-02): keyboard move-to-project affordance (loose sessions) -->
-              <button
-                v-if="projectList.length > 0"
-                type="button"
-                class="shrink-0 p-2 rounded-sm text-ink-dim hover:text-accent hover:bg-surface-3"
-                :aria-label="`Move session ${session.name} to project`"
-                aria-haspopup="menu"
-                :aria-expanded="moveMenu?.sessionId === session.id ? 'true' : 'false'"
-                :data-testid="`move-session-${session.id}`"
-                @click.stop="openMoveMenu(session.id, $event.currentTarget)"
-              >
-                ↗
-              </button>
-              <button
-                type="button"
-                class="shrink-0 p-2 rounded-sm text-ink-dim hover:text-signal-danger hover:bg-surface-3"
+                class="p-2 rounded-sm text-ink-dim hover:text-signal-danger hover:bg-surface-3"
                 :aria-label="`Delete session ${session.name}`"
                 :disabled="deletingId === session.id"
                 :data-testid="`delete-session-${session.id}`"
@@ -1049,7 +806,7 @@ async function onProjectDrop(evt: DragEvent, projectId: string) {
               >
                 <X :size="14" />
               </button>
-            </template>
+            </div>
           </li>
         </ul>
       </div>
@@ -1109,44 +866,6 @@ async function onProjectDrop(evt: DragEvent, projectId: string) {
         @click="startProjectDelete(p)"
       >
         Delete
-      </button>
-    </div>
-
-    <!-- WP05 (D-02): session move-to-project sub-menu -->
-    <div
-      v-if="moveMenu"
-      role="menu"
-      aria-label="Move session to project"
-      class="fixed z-50 rounded-sm border border-border-muted bg-surface-0 shadow-lg py-1 min-w-[160px]"
-      :style="{ left: moveMenu.x + 'px', top: moveMenu.y + 'px' }"
-      data-testid="move-session-menu"
-      @click.stop
-      @keydown.escape.stop="closeMoveMenu"
-    >
-      <div class="px-3 py-1 font-ui text-[10px] uppercase tracking-[0.18em] text-ink-subtle">
-        Move to…
-      </div>
-      <button
-        v-for="p in projectList.filter((x) => x.id !== sessionList.find((s) => s.id === moveMenu?.sessionId)?.projectId)"
-        :key="p.id"
-        type="button"
-        role="menuitem"
-        class="block w-full px-3 py-1.5 text-left font-ui text-xs text-ink hover:bg-surface-2"
-        :data-testid="`move-session-to-${p.id}`"
-        @click="moveSessionViaMenu(moveMenu!.sessionId, p.id)"
-      >
-        {{ p.name }}
-      </button>
-      <!-- Move to global (loose) — only if the session is currently in a project -->
-      <button
-        v-if="sessionList.find((s) => s.id === moveMenu?.sessionId)?.projectId"
-        type="button"
-        role="menuitem"
-        class="block w-full px-3 py-1.5 text-left font-ui text-xs text-ink hover:bg-surface-2"
-        data-testid="move-session-to-global"
-        @click="moveSessionViaMenu(moveMenu!.sessionId, '__loose__')"
-      >
-        Global (no project)
       </button>
     </div>
 
