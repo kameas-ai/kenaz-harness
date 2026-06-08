@@ -12,8 +12,7 @@
  */
 import { computed, onMounted, ref } from 'vue';
 import { useRoute } from 'vue-router';
-import CanvasHead from '@/shell/CanvasHead.vue';
-import SettingsTabs from '@/views/settings/SettingsTabs.vue';
+import SettingsShell from '@/views/settings/SettingsShell.vue';
 import KeyboardShortcuts from '@/components/settings/KeyboardShortcuts.vue';
 import AutonomyPanel from '@/views/settings/AutonomyPanel.vue';
 import UpdatesPanel from '@/views/settings/UpdatesPanel.vue';
@@ -141,6 +140,36 @@ const showAuditTab = computed<boolean>(() => {
 const showAccountTab = computed<boolean>(() => {
   const v = route?.query?.tab;
   return typeof v === 'string' && v === 'account';
+});
+
+// CanvasHead title/subtitle per active query-param sub-tab. The settings
+// sub-panels no longer render their own breadcrumb header (SettingsShell
+// owns it), so the header text has to reflect the current section. General
+// (no ?tab) falls through to the default "App preferences".
+const SECTION_HEADS: Record<string, { title: string; subtitle: string }> = {
+  account: { title: 'Account', subtitle: 'Sign in to access fleet features like shared team context, org-level settings, and role-based capabilities.' },
+  updates: { title: 'Updates', subtitle: 'Check for and install harness updates.' },
+  flags: { title: 'Feature flags', subtitle: 'Toggle experimental and environment-gated features.' },
+  health: { title: 'Health', subtitle: 'Migration drift and MCP server health.' },
+  compaction: { title: 'Compaction', subtitle: 'Authoring strategy for context compaction.' },
+  slashcmds: { title: 'Slash commands', subtitle: 'Author and manage user slash commands.' },
+  workflows: { title: 'Workflows', subtitle: 'Workflow extension and authoring settings.' },
+  hooks: { title: 'Hooks', subtitle: 'Lifecycle hooks that fire on chat-pipeline events.' },
+  tasks: { title: 'Tasks', subtitle: 'Background task monitor settings.' },
+  scheduledchats: { title: 'Scheduled chats', subtitle: 'Recurring chat runs on a schedule.' },
+  secrets: { title: 'Secrets', subtitle: 'Model-accessible secret references.' },
+  'llm-routing': { title: 'LLM routing', subtitle: 'Model fallback and routing rules.' },
+  audit: { title: 'Audit', subtitle: 'Audit-log retention settings.' },
+};
+const DEFAULT_HEAD = {
+  title: 'App preferences',
+  subtitle:
+    'Theme, route restoration, and data-dir info. Settings persist to a single JSON file under your user config dir.',
+};
+const currentHead = computed<{ title: string; subtitle: string }>(() => {
+  const v = route?.query?.tab;
+  const key = typeof v === 'string' ? v : '';
+  return SECTION_HEADS[key] ?? DEFAULT_HEAD;
 });
 
 const settings = ref<Settings>({
@@ -930,14 +959,12 @@ onMounted(() => {
 </script>
 
 <template>
-  <div>
-    <CanvasHead
-      number="06"
-      section="SETTINGS"
-      title="App preferences"
-      subtitle="Theme, route restoration, and data-dir info. Settings persist to a single JSON file under your user config dir."
-    />
-    <SettingsTabs />
+  <SettingsShell
+    number="06"
+    section="SETTINGS"
+    :title="currentHead.title"
+    :subtitle="currentHead.subtitle"
+  >
 
     <!-- auto-update-v0.4.0 WP05 — Updates sub-tab. Mounts in place of
          the General settings sections when ?tab=updates is set on the
@@ -1961,5 +1988,5 @@ onMounted(() => {
       @added="onGlobalAdded"
       @close="globalPickerOpen = false"
     />
-  </div>
+  </SettingsShell>
 </template>

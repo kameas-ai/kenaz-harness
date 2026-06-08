@@ -15,12 +15,13 @@ import { computed, onMounted, ref } from 'vue';
 import {
   DialogRoot,
   DialogPortal,
+  DialogOverlay,
   DialogContent,
   DialogTitle,
+  DialogDescription,
   VisuallyHidden,
 } from 'radix-vue';
-import CanvasHead from '@/shell/CanvasHead.vue';
-import SettingsTabs from '@/views/settings/SettingsTabs.vue';
+import SettingsShell from '@/views/settings/SettingsShell.vue';
 import Button from '@/components/ui/Button.vue';
 import { useHarnessClient } from '@/lib/harnessClientContext';
 import type { AddProviderInput, Provider, TestResult } from '@/lib/types';
@@ -164,24 +165,21 @@ const inlineTestClass = computed(() =>
 </script>
 
 <template>
-  <div>
-    <CanvasHead
-      number="04"
-      section="PROVIDERS"
-      title="Configured LLM providers"
-      subtitle="Bundle providers ship with a signed bundle. Personal providers live in your local providers.json — credentials always behind the OS keychain."
-    >
-      <template #trailing>
-        <Button
-          variant="accent"
-          :data-testid="'open-add-provider'"
-          @click="openDrawer"
-        >
-          Add provider
-        </Button>
-      </template>
-    </CanvasHead>
-    <SettingsTabs />
+  <SettingsShell
+    number="04"
+    section="PROVIDERS"
+    title="Configured LLM providers"
+    subtitle="Bundle providers ship with a signed bundle. Personal providers live in your local providers.json — credentials always behind the OS keychain."
+  >
+    <template #head-trailing>
+      <Button
+        variant="accent"
+        :data-testid="'open-add-provider'"
+        @click="openDrawer"
+      >
+        Add provider
+      </Button>
+    </template>
 
     <div class="px-6 py-4">
       <!-- Local runtimes detection cards (absent when feature flag off) -->
@@ -249,8 +247,12 @@ const inlineTestClass = computed(() =>
       @update:open="(v) => { if (!v) closeDrawer(); }"
     >
       <DialogPortal>
-        <!-- Scrim overlay -->
-        <div
+        <!-- Scrim overlay — must be a Radix DialogOverlay (not a plain div):
+             in modal mode DialogContent sets body { pointer-events: none },
+             and only Radix-managed layers (DialogOverlay/DialogContent) get
+             pointer-events re-enabled. A plain div inherits the body lock, so
+             its @click never fires and the whole window goes unclickable. -->
+        <DialogOverlay
           class="fixed inset-0 z-50 bg-modal-overlay"
           :data-testid="'drawer-scrim'"
           @click="closeDrawer"
@@ -262,6 +264,7 @@ const inlineTestClass = computed(() =>
         >
           <VisuallyHidden>
             <DialogTitle>{{ editingProvider ? `Edit ${editingProvider.name || editingProvider.id}` : 'New personal provider' }}</DialogTitle>
+            <DialogDescription>{{ editingProvider ? 'Edit the configuration for this personal provider.' : 'Configure a new personal LLM provider with credentials stored in your OS keychain.' }}</DialogDescription>
           </VisuallyHidden>
           <header
             class="flex items-center justify-between border-b border-border-muted px-6 py-4"
@@ -290,5 +293,5 @@ const inlineTestClass = computed(() =>
         </DialogContent>
       </DialogPortal>
     </DialogRoot>
-  </div>
+  </SettingsShell>
 </template>

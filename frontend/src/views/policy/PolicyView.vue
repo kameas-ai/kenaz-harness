@@ -16,6 +16,7 @@
  */
 import { computed, onMounted, ref, watch } from 'vue';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
+import SettingsTabs from '@/views/settings/SettingsTabs.vue';
 import type { PolicyFileDetail, ParseError } from '@/lib/types';
 
 const client = useHarnessClient();
@@ -276,7 +277,9 @@ watch(editorSource, (val) => {
 </script>
 
 <template>
-  <div class="policy-view">
+  <div class="flex h-full min-h-0">
+    <SettingsTabs />
+    <div class="policy-view flex-1 min-w-0">
     <!-- Disabled state when feature flag is off -->
     <div v-if="!editorEnabled" class="policy-view__disabled" data-testid="policy-editor-disabled">
       <p>The Cedar policy editor is disabled. Set <code>HARNESS_POLICY_EDITOR_UI=1</code> to enable it.</p>
@@ -538,6 +541,7 @@ watch(editorSource, (val) => {
         </section>
       </div>
     </template>
+    </div>
   </div>
 </template>
 

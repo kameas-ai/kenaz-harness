@@ -1,0 +1,51 @@
+/**
+ * SettingsTabs — vertical icon-rail structure test.
+ *
+ * After the settings-nav redesign the strip is a grouped vertical rail
+ * (mirroring the app LeftRail). This pins the structure: the six category
+ * group headers render, every nav item carries an icon + its settings-tab
+ * test id, and the full item set is present.
+ */
+import { describe, it, expect } from 'vitest';
+import { mount } from '@vue/test-utils';
+import SettingsTabs from '@/views/settings/SettingsTabs.vue';
+
+// vue-router returns undefined outside a router context — SettingsTabs
+// guards for this and degrades to "no active state".
+describe('SettingsTabs — vertical nav rail', () => {
+  it('renders the six category group headers', () => {
+    const wrapper = mount(SettingsTabs);
+    const headers = wrapper.findAll('h3').map((h) => h.text());
+    expect(headers).toEqual([
+      'App',
+      'Authoring',
+      'Runtime',
+      'Integrations',
+      'Security',
+      'Privacy',
+    ]);
+  });
+
+  it('renders every nav item with an icon and a test id', () => {
+    const wrapper = mount(SettingsTabs);
+    const items = wrapper.findAll('[data-testid^="settings-tab-"]');
+    // 5 (App) + 4 (Authoring) + 2 (Runtime) + 4 (Integrations) + 3 (Security) + 1 (Privacy)
+    expect(items).toHaveLength(19);
+    for (const item of items) {
+      // lucide-vue-next renders an <svg>; every row should carry one.
+      expect(item.find('svg').exists()).toBe(true);
+    }
+  });
+
+  it('keeps the addressable tabs (General, Providers, Permissions, Audit)', () => {
+    const wrapper = mount(SettingsTabs);
+    for (const id of [
+      'settings-tab-general',
+      'settings-tab-providers',
+      'settings-tab-permissions',
+      'settings-tab-audit',
+    ]) {
+      expect(wrapper.find(`[data-testid="${id}"]`).exists()).toBe(true);
+    }
+  });
+});

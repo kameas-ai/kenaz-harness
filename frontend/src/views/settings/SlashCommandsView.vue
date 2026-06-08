@@ -16,8 +16,6 @@
  * user-slash-commands-01KQ8TD9 WP07.
  */
 import { computed, onMounted, ref } from 'vue';
-import CanvasHead from '@/shell/CanvasHead.vue';
-import SettingsTabs from '@/views/settings/SettingsTabs.vue';
 import Button from '@/components/ui/Button.vue';
 import SlashCommandEditor from '@/views/settings/SlashCommandEditor.vue';
 import { useHarnessClient } from '@/lib/harnessClientContext';
@@ -147,26 +145,16 @@ const KIND_LABEL: Record<UserCommandKind, string> = {
 </script>
 
 <template>
-  <div>
-    <CanvasHead
-      number="12"
-      section="SETTINGS"
-      title="Slash commands"
-      subtitle="User-defined commands invoked with / in the chat composer. Text, tool dispatch, and prompt templates."
-    >
-      <template #trailing>
-        <Button
-          variant="accent"
-          data-testid="new-slash-command-btn"
-          @click="openCreate"
-        >
-          New command
-        </Button>
-      </template>
-    </CanvasHead>
-    <SettingsTabs />
-
-    <div class="px-6 py-4 max-w-5xl">
+  <div class="px-6 py-4 max-w-5xl">
+    <div class="mb-4 flex justify-end">
+      <Button
+        variant="accent"
+        data-testid="new-slash-command-btn"
+        @click="openCreate"
+      >
+        New command
+      </Button>
+    </div>
       <!-- Error banner -->
       <div
         v-if="listError || deleteError"
@@ -368,5 +356,4 @@ const KIND_LABEL: Record<UserCommandKind, string> = {
         </div>
       </div>
     </div>
-  </div>
 </template>

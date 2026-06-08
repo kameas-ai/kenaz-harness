@@ -1,21 +1,45 @@
 <script setup lang="ts">
 /**
- * SettingsTabs — sub-nav for the Settings hub.
+ * SettingsTabs — vertical sub-nav rail for the Settings hub.
  *
- * Rendered at the top of SettingsView, ProvidersView, HooksView, and
- * BundlesView so users land in a coherent "settings" surface no matter
- * which route they enter through. Routes stay individually addressable
- * for deep-linking (legacy /providers, /hooks, /bundles).
+ * Rendered (via SettingsShell) on the left of SettingsView, ProvidersView,
+ * BundlesView, HooksView, PermissionsView, and PolicyView so users land in a
+ * coherent "settings" surface no matter which route they enter through.
+ * Routes stay individually addressable for deep-linking (/providers, /policy,
+ * /permissions/*, and the /settings?tab=… query-param panels).
  *
- * Layout: tabs are grouped into categories and rendered in a wrapping
- * flex strip so the nav reflows to multiple rows at narrow widths
- * instead of forcing a horizontal scroll.
+ * Layout: a vertical, grouped, icon'd rail mirroring the app's LeftRail /
+ * RailEntry vocabulary (icon + label, grouped under uppercase small-caps
+ * headers, active = surface-2 + accent hairline ring + accent icon). Labels
+ * collapse to icons-only under the two-col (960px) breakpoint.
  */
+import type { Component } from 'vue';
 import { computed } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
+import {
+  Activity,
+  AlertTriangle,
+  Archive,
+  CalendarClock,
+  CheckSquare,
+  CircleUser,
+  Command,
+  Download,
+  FileText,
+  Flag,
+  GitBranch,
+  KeyRound,
+  Package,
+  Plug,
+  Route,
+  Scale,
+  Shield,
+  SlidersHorizontal,
+  Webhook,
+} from '@/shell/icons';
 
 // useRoute / useRouter return undefined when the component is mounted
-// outside a router context (vitest unit tests). Guard so the tabs strip
+// outside a router context (vitest unit tests). Guard so the rail
 // degrades to "no active state" instead of crashing the host view.
 const route = useRoute() as ReturnType<typeof useRoute> | undefined;
 const router = useRouter() as ReturnType<typeof useRouter> | undefined;
@@ -23,6 +47,7 @@ const router = useRouter() as ReturnType<typeof useRouter> | undefined;
 interface Tab {
   to: string;
   label: string;
+  icon: Component;
   /** Optional path-prefix used to keep the tab highlighted across
    *  nested routes (e.g. /permissions/fs still highlights Permissions). */
   matchPrefix?: string;
@@ -41,52 +66,57 @@ interface TabGroup {
   tabs: ReadonlyArray<Tab>;
 }
 
-// Groups are visual only — they keep related tabs adjacent so the strip
-// reads as a structured nav instead of a long undifferentiated row.
+// Groups keep related items adjacent so the rail reads as a structured
+// nav instead of a long undifferentiated list.
 const groups: ReadonlyArray<TabGroup> = [
   {
     label: 'App',
     tabs: [
-      { to: '/settings', label: 'General' },
+      { to: '/settings', label: 'General', icon: SlidersHorizontal },
       // fleet-auth-foundation-01NDFSEX08 WP06 — Account (fleet identity) sub-tab.
-      { to: '/settings?tab=account', label: 'Account', query: 'account' },
-      { to: '/settings?tab=updates', label: 'Updates', query: 'updates' },
-      { to: '/settings?tab=flags', label: 'Flags', query: 'flags' },
-      { to: '/settings?tab=health', label: 'Health', query: 'health' },
+      { to: '/settings?tab=account', label: 'Account', query: 'account', icon: CircleUser },
+      { to: '/settings?tab=updates', label: 'Updates', query: 'updates', icon: Download },
+      { to: '/settings?tab=flags', label: 'Flags', query: 'flags', icon: Flag },
+      { to: '/settings?tab=health', label: 'Health', query: 'health', icon: Activity },
     ],
   },
   {
     label: 'Authoring',
     tabs: [
-      { to: '/settings?tab=compaction', label: 'Compaction', query: 'compaction' },
-      { to: '/settings?tab=slashcmds', label: 'Slash Commands', query: 'slashcmds' },
-      { to: '/settings?tab=workflows', label: 'Workflows', query: 'workflows' },
-      { to: '/settings?tab=hooks', label: 'Hooks', query: 'hooks' },
+      { to: '/settings?tab=compaction', label: 'Compaction', query: 'compaction', icon: Archive },
+      { to: '/settings?tab=slashcmds', label: 'Slash Commands', query: 'slashcmds', icon: Command },
+      { to: '/settings?tab=workflows', label: 'Workflows', query: 'workflows', icon: GitBranch },
+      { to: '/settings?tab=hooks', label: 'Hooks', query: 'hooks', icon: Webhook },
     ],
   },
   {
     label: 'Runtime',
     tabs: [
-      { to: '/settings?tab=tasks', label: 'Tasks', query: 'tasks' },
-      { to: '/settings?tab=scheduledchats', label: 'Scheduled Chats', query: 'scheduledchats' },
+      { to: '/settings?tab=tasks', label: 'Tasks', query: 'tasks', icon: CheckSquare },
+      {
+        to: '/settings?tab=scheduledchats',
+        label: 'Scheduled Chats',
+        query: 'scheduledchats',
+        icon: CalendarClock,
+      },
     ],
   },
   {
     label: 'Integrations',
     tabs: [
-      { to: '/providers', label: 'Providers' },
-      { to: '/bundles', label: 'Bundles' },
-      { to: '/settings?tab=secrets', label: 'Secrets', query: 'secrets' },
-      { to: '/settings?tab=llm-routing', label: 'LLM Routing', query: 'llm-routing' },
+      { to: '/providers', label: 'Providers', icon: Plug },
+      { to: '/bundles', label: 'Bundles', icon: Package },
+      { to: '/settings?tab=secrets', label: 'Secrets', query: 'secrets', icon: KeyRound },
+      { to: '/settings?tab=llm-routing', label: 'LLM Routing', query: 'llm-routing', icon: Route },
     ],
   },
   {
     label: 'Security',
     tabs: [
-      { to: '/permissions/bash', label: 'Permissions', matchPrefix: '/permissions' },
-      { to: '/policy', label: 'Policy', matchPrefix: '/policy' },
+      { to: '/permissions/bash', label: 'Permissions', matchPrefix: '/permissions', icon: Shield },
+      { to: '/policy', label: 'Policy', matchPrefix: '/policy', icon: Scale },
       // audit-log-enhancement-01KX5R8F WP07
-      { to: '/settings?tab=audit', label: 'Audit', query: 'audit' },
+      { to: '/settings?tab=audit', label: 'Audit', query: 'audit', icon: FileText },
     ],
   },
   {
@@ -96,6 +126,7 @@ const groups: ReadonlyArray<TabGroup> = [
         to: '/settings?tab=crash-reporting',
         label: 'Crash Reporting',
         query: 'crash-reporting',
+        icon: AlertTriangle,
       },
     ],
   },
@@ -129,34 +160,46 @@ function goto(to: string) {
 
 <template>
   <nav
-    class="px-6 pt-2 border-b border-border-muted"
+    class="shrink-0 w-14 two-col:w-56 h-full overflow-y-auto border-r border-border-muted bg-surface-0 p-2 two-col:p-3"
     aria-label="Settings sections"
     data-testid="settings-tabs"
   >
-    <ul class="flex flex-wrap items-end gap-x-4 gap-y-1">
+    <ul class="grid gap-3">
       <li
-        v-for="(group, gIdx) in groups"
+        v-for="group in groups"
         :key="group.label"
-        class="flex flex-wrap items-end gap-1"
-        :class="gIdx > 0 ? 'border-l border-border-muted pl-4' : ''"
         :aria-label="group.label"
       >
-        <button
-          v-for="t in group.tabs"
-          :key="t.to"
-          type="button"
-          class="px-3 py-1.5 -mb-px font-ui text-[12px] uppercase tracking-[0.16em] border-b-2 transition-colors"
-          :class="
-            isActive(t)
-              ? 'border-accent text-ink'
-              : 'border-transparent text-ink-muted hover:text-ink'
-          "
-          :aria-current="isActive(t) ? 'page' : undefined"
-          :data-testid="`settings-tab-${t.label.toLowerCase().replace(/\s+/g, '-')}`"
-          @click="goto(t.to)"
+        <h3
+          class="hidden two-col:block px-3 pb-1 font-ui text-[10px] font-medium uppercase tracking-[0.18em] text-ink-subtle"
         >
-          {{ t.label }}
-        </button>
+          {{ group.label }}
+        </h3>
+        <ul class="grid gap-0.5">
+          <li v-for="t in group.tabs" :key="t.to">
+            <button
+              type="button"
+              class="flex items-center gap-2 px-3 py-2 rounded-sm w-full text-left text-sm font-ui transition-fast ease-kenaz"
+              :class="
+                isActive(t)
+                  ? 'text-ink bg-surface-2 ring-1 ring-accent-hairline'
+                  : 'text-ink-muted hover:text-ink hover:bg-surface-2'
+              "
+              :aria-current="isActive(t) ? 'page' : undefined"
+              :title="t.label"
+              :data-testid="`settings-tab-${t.label.toLowerCase().replace(/\s+/g, '-')}`"
+              @click="goto(t.to)"
+            >
+              <component
+                :is="t.icon"
+                :size="14"
+                class="shrink-0"
+                :class="isActive(t) ? 'text-accent' : ''"
+              />
+              <span class="truncate hidden two-col:inline">{{ t.label }}</span>
+            </button>
+          </li>
+        </ul>
       </li>
     </ul>
   </nav>

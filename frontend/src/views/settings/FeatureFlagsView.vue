@@ -12,8 +12,6 @@
  * user-slash-commands-01KQ8TD9 WP09.
  */
 import { onMounted, ref } from 'vue';
-import CanvasHead from '@/shell/CanvasHead.vue';
-import SettingsTabs from '@/views/settings/SettingsTabs.vue';
 import { useHarnessClient } from '@/lib/harnessClientContext';
 import type { FeatureFlagInfo } from '@/lib/types';
 
@@ -41,16 +39,7 @@ onMounted(() => {
 </script>
 
 <template>
-  <div>
-    <CanvasHead
-      number="13"
-      section="SETTINGS"
-      title="Feature flags"
-      subtitle="Runtime feature gates controlled via environment variables. Changes take effect after restarting the app."
-    />
-    <SettingsTabs />
-
-    <div class="px-6 py-4 max-w-3xl">
+  <div class="px-6 py-4 max-w-3xl">
       <div
         v-if="error"
         class="mb-3 rounded-md border border-signal-danger bg-surface-1 px-3 py-2 font-ui text-[12px] text-signal-danger"
@@ -130,5 +119,4 @@ onMounted(() => {
         any other value (or unset) enables. Requires app restart.
       </p>
     </div>
-  </div>
 </template>
