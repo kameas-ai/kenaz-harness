@@ -16,31 +16,19 @@ const props = defineProps<{
   hasChildren: boolean;
   isCollapsed: boolean;
   isActive: boolean;
-  isRenaming: boolean;
   maxDepth: number;
-  renameDraft?: string;
   draggable?: boolean;
 }>();
 
 const emit = defineEmits<{
   (e: 'open', id: string): void;
   (e: 'toggle-collapse', id: string): void;
-  (e: 'commit-rename', id: string): void;
-  (e: 'cancel-rename'): void;
-  (e: 'update:renameDraft', value: string): void;
 }>();
 
 /** Indentation in pixels: depth capped at maxDepth, 12 px per level. */
 const indentPx = computed(() => Math.min(props.depth, props.maxDepth) * 12);
 
 const isBranch = computed(() => !!props.session.parentSessionId);
-
-function setRenameInputRef(el: Element | null) {
-  if (el instanceof HTMLInputElement) {
-    el.focus();
-    el.select();
-  }
-}
 </script>
 
 <template>
@@ -50,24 +38,10 @@ function setRenameInputRef(el: Element | null) {
     :data-testid="`session-row-${session.id}`"
     :data-session-id="session.id"
     :data-depth="depth"
-    :draggable="draggable && !isRenaming"
+    :draggable="draggable"
   >
-    <!-- Rename input (when isRenaming) -->
-    <template v-if="isRenaming">
-      <input
-        :ref="setRenameInputRef"
-        :value="renameDraft"
-        class="flex-1 min-w-0 px-2 py-1 rounded-sm border border-accent bg-surface-2 text-sm font-ui text-ink focus:outline-none"
-        :data-testid="`rename-session-input-${session.id}`"
-        @input="emit('update:renameDraft', ($event.target as HTMLInputElement).value)"
-        @keydown.enter="emit('commit-rename', session.id)"
-        @keydown.escape="emit('cancel-rename')"
-        @blur="emit('commit-rename', session.id)"
-      />
-    </template>
-    <template v-else>
-      <!-- Chevron (only when children exist) -->
-      <button
+    <!-- Chevron (only when children exist) -->
+    <button
         v-if="hasChildren"
         type="button"
         class="flex-shrink-0 w-4 h-5 flex items-center justify-center text-ink-dim hover:text-ink"
@@ -112,10 +86,11 @@ function setRenameInputRef(el: Element | null) {
         </span>
       </button>
 
-      <!-- Action buttons (rename / delete) — appear on hover -->
-      <div class="flex-shrink-0 flex items-center opacity-0 group-hover:opacity-100 transition-fast">
+      <!-- Action button(s) — hidden at rest so the name owns the row;
+           revealed on hover or keyboard focus (display gating, not opacity,
+           so they reserve no width when hidden). -->
+      <div class="flex-shrink-0 hidden group-hover:flex group-focus-within:flex items-center transition-fast">
         <slot name="actions" />
       </div>
-    </template>
   </li>
 </template>

@@ -36,7 +36,9 @@
 .shell-grid {
   display: grid;
   grid-template-rows: auto 1fr;
-  grid-template-columns: 240px 1fr;
+  /* Rail width is user-resizable (Shell.vue drag handle, persisted to
+     localStorage). --rail-width defaults to 240px when unset. */
+  grid-template-columns: var(--rail-width, 240px) 1fr;
   grid-template-areas:
     'titlebar titlebar'
     'rail main';
@@ -45,6 +47,7 @@
 }
 
 @media (max-width: 960px) {
+  /* Collapsed icon-rail wins over the user width; resize handle is hidden. */
   .shell-grid {
     grid-template-columns: 56px 1fr;
   }
@@ -61,6 +64,7 @@
 
 .shell-rail {
   grid-area: rail;
+  position: relative; /* anchors the absolute resize handle on the right edge */
   overflow: hidden;
   display: flex;
   flex-direction: column;
