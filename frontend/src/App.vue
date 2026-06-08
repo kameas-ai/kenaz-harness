@@ -50,16 +50,13 @@ onMounted(async () => {
   await restoreLastRoute(router, client);
   installRouteAuditing(router, client);
 
-  // Probe the onboarding state; mount the dialog when it reports first-run.
-  // Errors are silently swallowed so a boot failure never blocks the UI.
-  try {
-    const state = await client.onboarding.state();
-    if (state.firstRun) {
-      onboardingOpen.value = true;
-    }
-  } catch {
-    // Onboarding API not yet wired in this build — no-op.
-  }
+  // Onboarding first-run dialog is DISABLED pending reimplementation as a
+  // separate window. The in-app modal greyed out + trapped the whole window
+  // with no working exit (Get started → starter error, Just chat → grey-out).
+  // Do NOT auto-open it here; it will return as a separate OS window.
+  // (see task: reimplement onboarding "Get started" as a separate window)
+  //   const state = await client.onboarding.state();
+  //   if (state.firstRun) onboardingOpen.value = true;
 });
 </script>
 

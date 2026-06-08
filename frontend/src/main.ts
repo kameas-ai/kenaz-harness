@@ -6,6 +6,7 @@ import './styles/global.css';
 
 import { installHarnessClient } from '@/lib/harnessClientContext';
 import { createHarnessClient } from '@/lib/harnessClient';
+import { logEvent } from '@/lib/eventLog';
 import type { SentryTier } from '@/sentry';
 
 // Placeholder routes — primary surfaces (sessions/tools/bundles/providers/audit/settings)
@@ -128,6 +129,38 @@ app.use(router);
 
 const client = createHarnessClient();
 installHarnessClient(app, client);
+
+// Global error visibility. Route ALL uncaught frontend errors to the backend
+// log (~/.kenaz/harness/<env>/logs/harness.log via Diag_LogClientEvent) so
+// render failures in portaled/modal content — which escape <ErrorBoundary>'s
+// component-scoped onErrorCaptured — are diagnosable instead of silently
+// blanking the UI (onboarding dialog, Add-provider drawer, etc.).
+app.config.errorHandler = (err, _instance, info) => {
+  const e = err instanceof Error ? err : new Error(String(err));
+  // eslint-disable-next-line no-console
+  console.error('[vue.errorHandler]', info, e);
+  logEvent('error', 'vue.error', {
+    info: String(info),
+    message: e.message,
+    stack: e.stack ?? '',
+  });
+};
+window.addEventListener('error', (ev) => {
+  logEvent('error', 'window.error', {
+    message: ev.message,
+    source: ev.filename ?? '',
+    pos: `${ev.lineno ?? 0}:${ev.colno ?? 0}`,
+    stack: ev.error instanceof Error ? (ev.error.stack ?? '') : '',
+  });
+});
+window.addEventListener('unhandledrejection', (ev) => {
+  const r = ev.reason;
+  const e = r instanceof Error ? r : new Error(String(r));
+  logEvent('error', 'window.unhandledrejection', {
+    message: e.message,
+    stack: e.stack ?? '',
+  });
+});
 
 // wire-up point 4 for sentry: fetch crash-reporting tier from appInfo and
 // lazily initialise @sentry/vue only when tier != 'off'.

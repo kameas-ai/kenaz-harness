@@ -15,11 +15,17 @@ import (
 // It bypasses the kill-switch by setting the profile directly.
 func newTestClient(t *testing.T, srv *httptest.Server) *Client {
 	t.Helper()
+	// Seed the FleetConfig cache so /api/v1/* calls don't try to fetch
+	// /config.json from the test server.
+	SeedFleetConfigForTesting(srv.URL, FleetConfig{
+		Issuer:     "https://example.com",
+		ClientID:   "client-id",
+		APIBaseURL: srv.URL,
+	})
 	c := &Client{
 		profile: EnvProfile{
 			Name:           "test",
 			FleetBaseURL:   srv.URL,
-			// Minimal configuration so Configured() is true.
 			ZitadelIssuer:  "https://example.com",
 			NativeClientID: "client-id",
 			APIAudience:    "aud",

@@ -10,6 +10,7 @@ import (
 	"github.com/sigil-tech/kaneaz-harness/core/fleet"
 	"github.com/sigil-tech/kaneaz-harness/core/llm"
 	"github.com/sigil-tech/kaneaz-harness/core/llm/fleet_hosted"
+	"github.com/sigil-tech/kaneaz-harness/core/logging"
 	"github.com/sigil-tech/kaneaz-harness/core/mcp/recipes"
 	cedarpolicy "github.com/sigil-tech/kaneaz-harness/core/policy/cedar"
 )
@@ -202,41 +203,63 @@ func (a *API) fleetPoller() *fleet.CapabilityPoller {
 // FleetSignIn kicks off the PKCE loopback OAuth flow. On success it
 // calls FleetRefreshIdentity to populate the cached identity.
 func (a *API) FleetSignIn(ctx context.Context) (FleetIdentity, error) {
+	logging.L().Info("fleet.rpc.sign_in.start")
 	c := a.fleetClient()
 	if c == nil || fleet.Disabled() {
+		logging.L().Warn("fleet.rpc.sign_in.disabled", "client_nil", c == nil, "env_disabled", fleet.Disabled())
 		return FleetIdentity{}, fleet.ErrFleetDisabled
 	}
 	profile := fleet.ResolveProfile()
-	// Pre-flight: refuse early when the profile is missing the build-time
-	// client_id (a clear typed error beats opening the browser to a broken
-	// authorization URL). DeviceCodeFlow would otherwise fail with an opaque
-	// HTTP/parse error after the user has already clicked through.
 	if !profile.Configured() {
+		logging.L().Warn("fleet.rpc.sign_in.profile_not_configured",
+			"profile", profile.Name,
+			"issuer", profile.ZitadelIssuer,
+			"has_client_id", profile.NativeClientID != "",
+			"fleet_base_url", profile.FleetBaseURL,
+		)
 		return FleetIdentity{}, fleet.ErrProfileNotConfigured
 	}
 	ts, err := fleet.DeviceCodeFlow(ctx, profile)
 	if err != nil {
+		logging.L().Error("fleet.rpc.sign_in.device_code_flow_failed", "err", err.Error())
 		return FleetIdentity{}, err
 	}
 	if err := fleet.SaveTokens(ts); err != nil {
+		logging.L().Error("fleet.rpc.sign_in.save_tokens_failed", "err", err.Error())
 		return FleetIdentity{}, err
 	}
-	return a.fleetEnroll(ctx)
+	logging.L().Info("fleet.rpc.sign_in.tokens_saved")
+	id, err := a.fleetEnroll(ctx)
+	if err != nil {
+		logging.L().Error("fleet.rpc.sign_in.enroll_failed", "err", err.Error())
+		return id, err
+	}
+	logging.L().Info("fleet.rpc.sign_in.success",
+		"org_id", id.OrgID,
+		"team_id", id.TeamID,
+		"email", id.Email,
+		"tier", id.Tier,
+		"roles", id.Roles,
+	)
+	return id, nil
 }
 
 // FleetSignOut clears tokens and identity cache.
 func (a *API) FleetSignOut(ctx context.Context) error {
+	logging.L().Info("fleet.rpc.sign_out.start")
 	if fleet.Disabled() {
+		logging.L().Warn("fleet.rpc.sign_out.disabled_by_env")
 		return fleet.ErrFleetDisabled
 	}
 	if err := fleet.ClearTokens(); err != nil {
+		logging.L().Error("fleet.rpc.sign_out.clear_tokens_failed", "err", err.Error())
 		return err
 	}
 	dataDir := a.fleetDataDir()
 	if dataDir != "" {
-		// Best-effort delete.
 		_ = os.Remove(fleet.IdentityFilePath(dataDir))
 	}
+	logging.L().Info("fleet.rpc.sign_out.success")
 	return nil
 }
 
@@ -276,14 +299,30 @@ func (a *API) FleetProfile(_ context.Context) (FleetProfileInfo, error) {
 func (a *API) fleetEnroll(ctx context.Context) (FleetIdentity, error) {
 	c := a.fleetClient()
 	if c == nil {
+		logging.L().Warn("fleet.rpc.enroll.no_client")
 		return FleetIdentity{}, fleet.ErrFleetDisabled
 	}
 	dataDir := a.fleetDataDir()
-	nodeID, _ := fleet.NodeID(dataDir)
+	nodeID, nodeIDErr := fleet.NodeID(dataDir)
+	if nodeIDErr != nil {
+		logging.L().Warn("fleet.rpc.enroll.node_id_error", "err", nodeIDErr.Error())
+	}
+	logging.L().Info("fleet.rpc.enroll.start",
+		"node_id", nodeID,
+		"platform", runtime.GOOS,
+		"fleet_base_url", c.Profile().FleetBaseURL,
+	)
 	id, err := c.RefreshIdentity(ctx, nodeID, runtime.GOOS, "0.18.0")
 	if err != nil {
+		logging.L().Error("fleet.rpc.enroll.failed", "err", err.Error())
 		return FleetIdentity{}, err
 	}
+	logging.L().Info("fleet.rpc.enroll.success",
+		"org_id", id.OrgID,
+		"team_id", id.TeamID,
+		"email", id.Email,
+		"tier", id.Tier,
+	)
 	return fleetIdentityToView(id), nil
 }
 

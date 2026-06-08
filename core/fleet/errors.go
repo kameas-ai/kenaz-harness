@@ -43,4 +43,19 @@ var (
 	// as a "locked" state in the LockdownBanner and disables the composer.
 	// (fleet-emergency-lockdown-01NDFSEX12 WP04)
 	ErrLockdownActive = errors.New("fleet: emergency lockdown is active")
+
+	// ErrFleetAPINotRouted is returned by API calls that hit the fleet
+	// base URL but receive an HTML response instead of JSON. This almost
+	// always means CloudFront / the fleet ingress is misconfigured — the
+	// dashboard SPA is being served for /api/v1/* paths because no
+	// behavior routes API calls to the Go backend. The harness can't do
+	// anything about this server-side; surface it so users know to ping
+	// fleet infra ownership.
+	ErrFleetAPINotRouted = errors.New("fleet: API endpoint returned HTML (dashboard SPA fall-through) — fleet infra needs to route /api/v1/* to the backend")
+
+	// ErrFleetUnreachable is returned by API calls that fail at the
+	// transport layer — DNS resolution failure, connection refused,
+	// connection reset, timeout. Typical cause: VPN not active, or
+	// the fleet deployment is offline.
+	ErrFleetUnreachable = errors.New("fleet: server unreachable (check VPN connection, then retry)")
 )

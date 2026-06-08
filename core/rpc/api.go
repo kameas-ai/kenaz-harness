@@ -841,6 +841,17 @@ func New(c *core.Core) *API {
 	a.settingsAPI = settingsImpl
 	a.settingsImpl = settingsImpl
 
+	// Wire the fleet client (fleet-auth-foundation-01NDFSEX08 chassis-boot wire-
+	// up). Without this every fleet RPC returns ErrFleetDisabled because
+	// SettingsAPI.fleetClient() is nil. NewClient returns a nopClient when
+	// HARNESS_FLEET_DISABLED=1, which preserves the OSS-first behaviour: the
+	// settings RPC code still short-circuits via the isNop check.
+	if fleetClient, ferr := fleet.NewClient(fleet.ClientOpts{DataDir: dataDir}); ferr == nil {
+		settingsImpl.SetFleetClient(fleetClient, dataDir)
+	} else {
+		logging.L().Warn("fleet.client.init_error", "err", ferr.Error())
+	}
+
 	// Wire the lockdown broker so fleet:lockdown:changed events reach the
 	// frontend banner. Must be called after both a.broker and a.settingsImpl
 	// are assigned. SetLockdownBroker is idempotent; if SetFleetClient was
