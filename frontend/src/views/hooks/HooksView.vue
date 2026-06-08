@@ -13,8 +13,7 @@
  * toggle drives the same install/remove pair.
  */
 import { computed, onMounted, ref } from 'vue';
-import CanvasHead from '@/shell/CanvasHead.vue';
-import SettingsTabs from '@/views/settings/SettingsTabs.vue';
+import SettingsShell from '@/views/settings/SettingsShell.vue';
 import Button from '@/components/ui/Button.vue';
 import { useHarnessClient } from '@/lib/harnessClientContext';
 import type { Hook, HookEvent, HookKind, BuiltinDescriptor } from '@/lib/types';
@@ -160,24 +159,21 @@ const kinds: HookKind[] = ['builtin', 'shell', 'mcp'];
 </script>
 
 <template>
-  <div>
-    <CanvasHead
-      number="08"
-      section="HOOKS"
-      title="Lifecycle hooks"
-      subtitle="Configurable side-effects that fire on chat-pipeline events. Memory.retrieve / memory.persist are the v1 preinstalled builtins."
-    >
-      <template #trailing>
-        <Button
-          variant="accent"
-          :data-testid="'open-add-hook'"
-          @click="openCreateDrawer"
-        >
-          Add hook
-        </Button>
-      </template>
-    </CanvasHead>
-    <SettingsTabs />
+  <SettingsShell
+    number="08"
+    section="HOOKS"
+    title="Lifecycle hooks"
+    subtitle="Configurable side-effects that fire on chat-pipeline events. Memory.retrieve / memory.persist are the v1 preinstalled builtins."
+  >
+    <template #head-trailing>
+      <Button
+        variant="accent"
+        :data-testid="'open-add-hook'"
+        @click="openCreateDrawer"
+      >
+        Add hook
+      </Button>
+    </template>
 
     <div class="px-6 py-4 max-w-5xl">
       <div
@@ -436,5 +432,5 @@ const kinds: HookKind[] = ['builtin', 'shell', 'mcp'];
         </div>
       </div>
     </div>
-  </div>
+  </SettingsShell>
 </template>

@@ -15,8 +15,7 @@
  * Bundle_Install / Bundle_Remove on the harness.
  */
 import { onMounted, ref } from 'vue';
-import CanvasHead from '@/shell/CanvasHead.vue';
-import SettingsTabs from '@/views/settings/SettingsTabs.vue';
+import SettingsShell from '@/views/settings/SettingsShell.vue';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
 import type { Bundle } from '@/lib/types';
 
@@ -97,15 +96,12 @@ onMounted(() => {
 </script>
 
 <template>
-  <div>
-    <CanvasHead
-      number="03"
-      section="BUNDLES"
-      title="Installed bundles"
-      subtitle="Every bundle pinned in kaneaz.lock with its source channel, signature, and artifact count. Bytes live in the local CAS — nothing leaves the device."
-    />
-    <SettingsTabs />
-
+  <SettingsShell
+    number="03"
+    section="BUNDLES"
+    title="Installed bundles"
+    subtitle="Every bundle pinned in kaneaz.lock with its source channel, signature, and artifact count. Bytes live in the local CAS — nothing leaves the device."
+  >
     <div v-if="loading" class="px-6 py-4 font-ui text-sm text-ink-muted">
       Loading bundles…
     </div>
@@ -246,5 +242,5 @@ onMounted(() => {
         {{ installError }}
       </div>
     </form>
-  </div>
+  </SettingsShell>
 </template>

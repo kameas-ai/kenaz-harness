@@ -16,8 +16,6 @@
  * hooks-event-surface-expansion-01KZNP3A WP07d.
  */
 import { onMounted, ref } from 'vue';
-import CanvasHead from '@/shell/CanvasHead.vue';
-import SettingsTabs from '@/views/settings/SettingsTabs.vue';
 import HooksPanel from '@/components/settings/HooksPanel.vue';
 import HookEditor from '@/components/settings/HookEditor.vue';
 import HookDryRunDrawer from '@/components/settings/HookDryRunDrawer.vue';
@@ -166,14 +164,6 @@ onMounted(async () => {
 
 <template>
   <div>
-    <CanvasHead
-      number="09"
-      section="SETTINGS"
-      title="Lifecycle hooks"
-      subtitle="Configurable side-effects on chat-pipeline and lifecycle events. Shell, builtin, and MCP kinds."
-    />
-    <SettingsTabs />
-
     <div class="px-6 py-4 max-w-5xl">
       <!-- save error banner (from editor) -->
       <div

@@ -10,8 +10,7 @@
 
 import { computed, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
-import CanvasHead from '@/shell/CanvasHead.vue';
-import SettingsTabs from '@/views/settings/SettingsTabs.vue';
+import SettingsShell from '@/views/settings/SettingsShell.vue';
 import PermissionDialsPanel from '@/components/settings/PermissionDialsPanel.vue';
 import BashPermissionsPanel from '@/views/settings/BashPermissionsPanel.vue';
 import FilesystemPermissionsPanel from '@/views/settings/FilesystemPermissionsPanel.vue';
@@ -65,15 +64,13 @@ watch(
 </script>
 
 <template>
-  <div data-testid="permissions-view">
-    <CanvasHead
-      number="06"
-      section="SETTINGS"
-      title="Permissions"
-      subtitle="Saved “Allow always” grants for bash, filesystem, credentials, and tools. Revoke a row to re-prompt the next time the harness sees that resource."
-    />
-    <SettingsTabs />
-
+  <SettingsShell
+    data-testid="permissions-view"
+    number="06"
+    section="SETTINGS"
+    title="Permissions"
+    subtitle="Saved “Allow always” grants for bash, filesystem, credentials, and tools. Revoke a row to re-prompt the next time the harness sees that resource."
+  >
     <div class="px-6 pt-4 pb-2 border-b border-border-muted">
       <PermissionDialsPanel />
     </div>
@@ -111,5 +108,5 @@ watch(
         <ToolPermissionsPanel v-else-if="activeFamily === 'tool'" />
       </div>
     </div>
-  </div>
+  </SettingsShell>
 </template>
