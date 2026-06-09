@@ -8,11 +8,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/sigil-tech/kaneaz-harness/core/context/audit"
-	"github.com/sigil-tech/kaneaz-harness/core/policy/cedar"
-	corewf "github.com/sigil-tech/kaneaz-harness/core/workflows"
-	wfcatalog "github.com/sigil-tech/kaneaz-harness/core/workflows/catalog"
-	wfsched "github.com/sigil-tech/kaneaz-harness/core/workflows/scheduler"
+	"github.com/kameas-ai/kenaz-harness/core/context/audit"
+	"github.com/kameas-ai/kenaz-harness/core/policy/cedar"
+	corewf "github.com/kameas-ai/kenaz-harness/core/workflows"
+	wfcatalog "github.com/kameas-ai/kenaz-harness/core/workflows/catalog"
+	wfsched "github.com/kameas-ai/kenaz-harness/core/workflows/scheduler"
 )
 
 // ErrEngineUnavailable is returned when the chassis booted without

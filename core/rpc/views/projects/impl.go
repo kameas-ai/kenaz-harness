@@ -4,9 +4,9 @@ import (
 	"context"
 	"time"
 
-	"github.com/sigil-tech/kaneaz-harness/core/autonomy"
-	coreprojects "github.com/sigil-tech/kaneaz-harness/core/projects"
-	"github.com/sigil-tech/kaneaz-harness/core/session"
+	"github.com/kameas-ai/kenaz-harness/core/autonomy"
+	coreprojects "github.com/kameas-ai/kenaz-harness/core/projects"
+	"github.com/kameas-ai/kenaz-harness/core/session"
 )
 
 // API is the concrete ProjectsAPI implementation. It coordinates the

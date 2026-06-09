@@ -12,12 +12,12 @@ import (
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
 	"github.com/wailsapp/wails/v2/pkg/options/mac"
 
-	"github.com/sigil-tech/kaneaz-harness/core"
-	"github.com/sigil-tech/kaneaz-harness/core/logging"
-	"github.com/sigil-tech/kaneaz-harness/core/paths"
-	"github.com/sigil-tech/kaneaz-harness/core/rpc"
-	coresentry "github.com/sigil-tech/kaneaz-harness/core/sentry"
-	"github.com/sigil-tech/kaneaz-harness/core/update/bootswap"
+	"github.com/kameas-ai/kenaz-harness/core"
+	"github.com/kameas-ai/kenaz-harness/core/logging"
+	"github.com/kameas-ai/kenaz-harness/core/paths"
+	"github.com/kameas-ai/kenaz-harness/core/rpc"
+	coresentry "github.com/kameas-ai/kenaz-harness/core/sentry"
+	"github.com/kameas-ai/kenaz-harness/core/update/bootswap"
 )
 
 //go:embed all:frontend/dist

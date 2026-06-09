@@ -18,7 +18,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/sigil-tech/kaneaz-harness/core/policy"
+	"github.com/kameas-ai/kenaz-harness/core/policy"
 )
 
 // Document is the canonical YAML/JSON document the lowering pipeline

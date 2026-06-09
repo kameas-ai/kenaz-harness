@@ -7,13 +7,13 @@ import (
 	"time"
 
 	cedarlib "github.com/cedar-policy/cedar-go"
-	"github.com/sigil-tech/kaneaz-harness/core/credstore"
-	"github.com/sigil-tech/kaneaz-harness/core/mcp/recipes"
-	"github.com/sigil-tech/kaneaz-harness/core/policy/cedar"
-	"github.com/sigil-tech/kaneaz-harness/core/secrets"
-	"github.com/sigil-tech/kaneaz-harness/core/secrets/ref"
-	"github.com/sigil-tech/kaneaz-harness/core/secrets/registry"
-	"github.com/sigil-tech/kaneaz-harness/core/secrets/secret"
+	"github.com/kameas-ai/kenaz-harness/core/credstore"
+	"github.com/kameas-ai/kenaz-harness/core/mcp/recipes"
+	"github.com/kameas-ai/kenaz-harness/core/policy/cedar"
+	"github.com/kameas-ai/kenaz-harness/core/secrets"
+	"github.com/kameas-ai/kenaz-harness/core/secrets/ref"
+	"github.com/kameas-ai/kenaz-harness/core/secrets/registry"
+	"github.com/kameas-ai/kenaz-harness/core/secrets/secret"
 )
 
 // ── fakeMCPBackend ─────────────────────────────────────────────────────

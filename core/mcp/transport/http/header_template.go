@@ -15,7 +15,7 @@ package http
 import (
 	"strings"
 
-	"github.com/sigil-tech/kaneaz-harness/core/mcp/recipes"
+	"github.com/kameas-ai/kenaz-harness/core/mcp/recipes"
 )
 
 // HeaderTemplate captures the per-recipe header set plus the env

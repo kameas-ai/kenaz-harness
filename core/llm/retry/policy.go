@@ -3,7 +3,7 @@
 package retry
 
 import (
-	llm "github.com/sigil-tech/kaneaz-harness/core/llm"
+	llm "github.com/kameas-ai/kenaz-harness/core/llm"
 )
 
 // Policy is a usable RetryPolicy with sensible defaults filled in.

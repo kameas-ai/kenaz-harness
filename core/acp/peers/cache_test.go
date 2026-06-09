@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sigil-tech/kaneaz-harness/core/acp"
-	"github.com/sigil-tech/kaneaz-harness/core/acp/verify"
+	"github.com/kameas-ai/kenaz-harness/core/acp"
+	"github.com/kameas-ai/kenaz-harness/core/acp/verify"
 )
 
 type fakeFetcher struct {

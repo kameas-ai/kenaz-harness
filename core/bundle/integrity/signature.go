@@ -4,9 +4,9 @@ import (
 	"context"
 	"fmt"
 
-	bundle "github.com/sigil-tech/kaneaz-harness/core/bundle"
-	"github.com/sigil-tech/kaneaz-harness/core/bundle/manifest"
-	"github.com/sigil-tech/kaneaz-harness/core/trust"
+	bundle "github.com/kameas-ai/kenaz-harness/core/bundle"
+	"github.com/kameas-ai/kenaz-harness/core/bundle/manifest"
+	"github.com/kameas-ai/kenaz-harness/core/trust"
 )
 
 // SigningPolicy controls signature verification behaviour.

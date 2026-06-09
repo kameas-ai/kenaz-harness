@@ -11,7 +11,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/sigil-tech/kaneaz-harness/core/agentgraph"
+	"github.com/kameas-ai/kenaz-harness/core/agentgraph"
 )
 
 // ---- drop_oldest ----

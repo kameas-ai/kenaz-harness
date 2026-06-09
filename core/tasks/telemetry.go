@@ -8,7 +8,7 @@ import (
 	oteltrace "go.opentelemetry.io/otel/trace"
 )
 
-var tracer = otel.Tracer("github.com/sigil-tech/kaneaz-harness/core/tasks")
+var tracer = otel.Tracer("github.com/kameas-ai/kenaz-harness/core/tasks")
 
 // spanCreate records a harness.task.create span. The span covers the
 // synchronous registration path only — it does NOT include the async

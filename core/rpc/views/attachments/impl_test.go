@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	coreatt "github.com/sigil-tech/kaneaz-harness/core/attachments"
-	attview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/attachments"
+	coreatt "github.com/kameas-ai/kenaz-harness/core/attachments"
+	attview "github.com/kameas-ai/kenaz-harness/core/rpc/views/attachments"
 )
 
 func newAPI(t *testing.T, reader attview.SessionProjectReader) *attview.API {

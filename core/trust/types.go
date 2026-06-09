@@ -3,7 +3,7 @@ package trust
 import (
 	"time"
 
-	"github.com/sigil-tech/kaneaz-harness/core/trust/internal/algo"
+	"github.com/kameas-ai/kenaz-harness/core/trust/internal/algo"
 )
 
 // Algorithm identifies a signing/verification algorithm. The canonical

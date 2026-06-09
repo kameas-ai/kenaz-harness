@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	coreupdate "github.com/sigil-tech/kaneaz-harness/core/update"
+	coreupdate "github.com/kameas-ai/kenaz-harness/core/update"
 )
 
 // fakeService is the test double used across this file. It records

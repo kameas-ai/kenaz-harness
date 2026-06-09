@@ -3,7 +3,7 @@ package conversation
 import (
 	"context"
 
-	"github.com/sigil-tech/kaneaz-harness/core/storage"
+	"github.com/kameas-ai/kenaz-harness/core/storage"
 )
 
 // NewStorageDB wraps a storage.DB so the conversation SQL store can

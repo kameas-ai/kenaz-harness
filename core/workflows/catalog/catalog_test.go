@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/sigil-tech/kaneaz-harness/core/workflows/catalog"
+	"github.com/kameas-ai/kenaz-harness/core/workflows/catalog"
 )
 
 // TestCatalog_ListReturnsBuiltins confirms that a catalog with no Store

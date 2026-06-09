@@ -11,8 +11,8 @@ import (
 	"sync"
 	"time"
 
-	coreag "github.com/sigil-tech/kaneaz-harness/core/agentgraph"
-	corenodes "github.com/sigil-tech/kaneaz-harness/core/agentgraph/nodes"
+	coreag "github.com/kameas-ai/kenaz-harness/core/agentgraph"
+	corenodes "github.com/kameas-ai/kenaz-harness/core/agentgraph/nodes"
 )
 
 // Manager owns the resolved-manifest catalog plus the user-override

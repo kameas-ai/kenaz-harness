@@ -5,7 +5,7 @@ import (
 	"sort"
 	"testing"
 
-	"github.com/sigil-tech/kaneaz-harness/core/policy"
+	"github.com/kameas-ai/kenaz-harness/core/policy"
 )
 
 // fakeKind is a minimal ControlKind used to exercise the registry.

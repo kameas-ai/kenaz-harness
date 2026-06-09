@@ -22,11 +22,11 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/sigil-tech/kaneaz-harness/core/credstore/refs"
-	"github.com/sigil-tech/kaneaz-harness/core/event/secretref"
-	"github.com/sigil-tech/kaneaz-harness/core/policy/cedar"
-	"github.com/sigil-tech/kaneaz-harness/core/secrets"
-	webfetch "github.com/sigil-tech/kaneaz-harness/core/tools/webfetch"
+	"github.com/kameas-ai/kenaz-harness/core/credstore/refs"
+	"github.com/kameas-ai/kenaz-harness/core/event/secretref"
+	"github.com/kameas-ai/kenaz-harness/core/policy/cedar"
+	"github.com/kameas-ai/kenaz-harness/core/secrets"
+	webfetch "github.com/kameas-ai/kenaz-harness/core/tools/webfetch"
 )
 
 // ── acceptance helpers ────────────────────────────────────────────────────

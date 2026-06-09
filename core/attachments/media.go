@@ -25,8 +25,8 @@ import (
 	"github.com/ledongthuc/pdf"
 	"golang.org/x/image/webp"
 
-	llm "github.com/sigil-tech/kaneaz-harness/core/llm"
-	"github.com/sigil-tech/kaneaz-harness/core/storage"
+	llm "github.com/kameas-ai/kenaz-harness/core/llm"
+	"github.com/kameas-ai/kenaz-harness/core/storage"
 )
 
 // MediaArtifact is the durable metadata row for one binary blob stored

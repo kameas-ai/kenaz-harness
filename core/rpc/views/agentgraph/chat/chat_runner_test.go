@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
-	coreag "github.com/sigil-tech/kaneaz-harness/core/agentgraph"
-	"github.com/sigil-tech/kaneaz-harness/core/compaction"
-	corellm "github.com/sigil-tech/kaneaz-harness/core/llm"
+	coreag "github.com/kameas-ai/kenaz-harness/core/agentgraph"
+	"github.com/kameas-ai/kenaz-harness/core/compaction"
+	corellm "github.com/kameas-ai/kenaz-harness/core/llm"
 )
 
 // fakeCompactionEngine is a recording fake for compaction.Engine. It

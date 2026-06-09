@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sigil-tech/kaneaz-harness/core/contexts"
+	"github.com/kameas-ai/kenaz-harness/core/contexts"
 )
 
 func newLib(t *testing.T) (*contexts.Library, string) {

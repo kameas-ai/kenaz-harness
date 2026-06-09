@@ -4,7 +4,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/sigil-tech/kaneaz-harness/core/fleet"
+	"github.com/kameas-ai/kenaz-harness/core/fleet"
 )
 
 // TestCheckLockdown_NotActive: flag is false → no error.

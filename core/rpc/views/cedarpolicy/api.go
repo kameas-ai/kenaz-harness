@@ -12,7 +12,7 @@ package cedarpolicy
 import (
 	"context"
 
-	"github.com/sigil-tech/kaneaz-harness/core/policy/cedar"
+	"github.com/kameas-ai/kenaz-harness/core/policy/cedar"
 )
 
 // PolicyFile mirrors cedar.PolicyFile through the RPC boundary. The

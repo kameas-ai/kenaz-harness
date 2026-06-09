@@ -6,8 +6,8 @@ package sessions
 import (
 	"context"
 
-	"github.com/sigil-tech/kaneaz-harness/core/autonomy"
-	"github.com/sigil-tech/kaneaz-harness/core/llm"
+	"github.com/kameas-ai/kenaz-harness/core/autonomy"
+	"github.com/kameas-ai/kenaz-harness/core/llm"
 )
 
 // AutonomyKnobValues is the wire shape for a ResolvedKnobs payload.

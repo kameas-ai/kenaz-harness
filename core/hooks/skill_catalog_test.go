@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	coreslashcmd "github.com/sigil-tech/kaneaz-harness/core/slashcmd"
+	coreslashcmd "github.com/kameas-ai/kenaz-harness/core/slashcmd"
 )
 
 // fakeSkillStore implements SkillLister for tests.

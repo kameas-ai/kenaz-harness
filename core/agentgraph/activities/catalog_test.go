@@ -6,8 +6,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	agentgraph "github.com/sigil-tech/kaneaz-harness/core/agentgraph"
-	"github.com/sigil-tech/kaneaz-harness/core/agentgraph/activities"
+	agentgraph "github.com/kameas-ai/kenaz-harness/core/agentgraph"
+	"github.com/kameas-ai/kenaz-harness/core/agentgraph/activities"
 )
 
 // TestLoadBundled loads the embedded YAML files and asserts every

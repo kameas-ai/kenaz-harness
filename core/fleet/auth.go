@@ -16,7 +16,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/sigil-tech/kaneaz-harness/core/logging"
+	"github.com/kameas-ai/kenaz-harness/core/logging"
 )
 
 // shortID returns the first 8 chars of s for log-safe identifiers.

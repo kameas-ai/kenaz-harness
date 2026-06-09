@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	coreag "github.com/sigil-tech/kaneaz-harness/core/agentgraph"
+	coreag "github.com/kameas-ai/kenaz-harness/core/agentgraph"
 )
 
 // recordingPartialPersister is a fake PartialPersister that records

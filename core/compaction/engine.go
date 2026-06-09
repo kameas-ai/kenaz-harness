@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/sigil-tech/kaneaz-harness/core/context/audit"
-	"github.com/sigil-tech/kaneaz-harness/core/llm/tokenizer"
+	"github.com/kameas-ai/kenaz-harness/core/context/audit"
+	"github.com/kameas-ai/kenaz-harness/core/llm/tokenizer"
 )
 
 // engine.go houses the threshold-mode summarize-then-replace compaction

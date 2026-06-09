@@ -13,8 +13,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sigil-tech/kaneaz-harness/core/mcp/transport"
-	"github.com/sigil-tech/kaneaz-harness/core/mcp/transport/sse"
+	"github.com/kameas-ai/kenaz-harness/core/mcp/transport"
+	"github.com/kameas-ai/kenaz-harness/core/mcp/transport/sse"
 )
 
 // fakeSSEServer is a minimal httptest.Server that speaks the SSE

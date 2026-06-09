@@ -5,7 +5,7 @@ import (
 	"strings"
 	"unicode"
 
-	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/settings"
+	"github.com/kameas-ai/kenaz-harness/core/rpc/views/settings"
 )
 
 // BranchSuggestion is the non-nil result returned by Detect when the

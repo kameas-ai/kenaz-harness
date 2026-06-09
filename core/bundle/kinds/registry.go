@@ -5,7 +5,7 @@ import (
 	"sort"
 	"sync"
 
-	bundle "github.com/sigil-tech/kaneaz-harness/core/bundle"
+	bundle "github.com/kameas-ai/kenaz-harness/core/bundle"
 )
 
 // Registry is the kind-handler registry. Implementations MUST be

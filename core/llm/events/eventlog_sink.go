@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/sigil-tech/kaneaz-harness/core/event"
+	"github.com/kameas-ai/kenaz-harness/core/event"
 )
 
 // EventLogEmitter is the public seam from the event-log mission this

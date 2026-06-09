@@ -6,9 +6,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sigil-tech/kaneaz-harness/core/session"
-	"github.com/sigil-tech/kaneaz-harness/core/storage"
-	"github.com/sigil-tech/kaneaz-harness/core/usage"
+	"github.com/kameas-ai/kenaz-harness/core/session"
+	"github.com/kameas-ai/kenaz-harness/core/storage"
+	"github.com/kameas-ai/kenaz-harness/core/usage"
 )
 
 // TestIntegration_SingleWriter_DoubleMeterConsumer is the WP07

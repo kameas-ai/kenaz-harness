@@ -5,7 +5,7 @@ import (
 	"context"
 	"errors"
 
-	corecorpus "github.com/sigil-tech/kaneaz-harness/core/corpus"
+	corecorpus "github.com/kameas-ai/kenaz-harness/core/corpus"
 )
 
 // API is the concrete CorpusAPI implementation.

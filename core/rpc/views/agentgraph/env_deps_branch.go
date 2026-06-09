@@ -4,9 +4,9 @@ import (
 	"context"
 	"fmt"
 
-	coreag "github.com/sigil-tech/kaneaz-harness/core/agentgraph"
-	coreconv "github.com/sigil-tech/kaneaz-harness/core/conversation"
-	"github.com/sigil-tech/kaneaz-harness/core/session"
+	coreag "github.com/kameas-ai/kenaz-harness/core/agentgraph"
+	coreconv "github.com/kameas-ai/kenaz-harness/core/conversation"
+	"github.com/kameas-ai/kenaz-harness/core/session"
 )
 
 // BranchSeamAdapter wraps core/conversation.Manager + session.Manager

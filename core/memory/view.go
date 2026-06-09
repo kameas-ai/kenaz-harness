@@ -3,7 +3,7 @@ package memory
 import (
 	"context"
 
-	"github.com/sigil-tech/kaneaz-harness/core/event"
+	"github.com/kameas-ai/kenaz-harness/core/event"
 )
 
 type Snapshot struct {

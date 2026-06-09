@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/sigil-tech/kaneaz-harness/core/session"
+	"github.com/kameas-ai/kenaz-harness/core/session"
 )
 
 // jsonMeta is the header block embedded at the top of every JSON export.

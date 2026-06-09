@@ -11,8 +11,8 @@ import (
 	"strings"
 	"testing"
 
-	llm "github.com/sigil-tech/kaneaz-harness/core/llm"
-	"github.com/sigil-tech/kaneaz-harness/core/llm/wirecheck"
+	llm "github.com/kameas-ai/kenaz-harness/core/llm"
+	"github.com/kameas-ai/kenaz-harness/core/llm/wirecheck"
 )
 
 // inScopeAdapters is the set of adapter kinds the completeness check

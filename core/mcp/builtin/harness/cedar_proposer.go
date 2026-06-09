@@ -28,7 +28,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/sigil-tech/kaneaz-harness/core/event/kind"
+	"github.com/kameas-ai/kenaz-harness/core/event/kind"
 )
 
 // TopicCedarProposePending is the broker topic the frontend

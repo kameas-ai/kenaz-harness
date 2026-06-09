@@ -5,9 +5,9 @@ import (
 	"errors"
 	"testing"
 
-	coreprojects "github.com/sigil-tech/kaneaz-harness/core/projects"
-	projectsview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/projects"
-	"github.com/sigil-tech/kaneaz-harness/core/session"
+	coreprojects "github.com/kameas-ai/kenaz-harness/core/projects"
+	projectsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/projects"
+	"github.com/kameas-ai/kenaz-harness/core/session"
 )
 
 func newAPI(t *testing.T) *projectsview.API {

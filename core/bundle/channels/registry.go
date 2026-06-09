@@ -5,8 +5,8 @@ import (
 	"sort"
 	"sync"
 
-	bundle "github.com/sigil-tech/kaneaz-harness/core/bundle"
-	"github.com/sigil-tech/kaneaz-harness/core/secrets"
+	bundle "github.com/kameas-ai/kenaz-harness/core/bundle"
+	"github.com/kameas-ai/kenaz-harness/core/secrets"
 )
 
 // Registry maps channel kind ids to factory functions. It is the only

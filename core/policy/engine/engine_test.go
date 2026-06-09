@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/sigil-tech/kaneaz-harness/core/policy"
-	"github.com/sigil-tech/kaneaz-harness/core/policy/engine"
+	"github.com/kameas-ai/kenaz-harness/core/policy"
+	"github.com/kameas-ai/kenaz-harness/core/policy/engine"
 )
 
 // fixedAction is the test-side Action implementation.

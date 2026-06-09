@@ -24,7 +24,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sigil-tech/kaneaz-harness/core/session"
+	"github.com/kameas-ai/kenaz-harness/core/session"
 )
 
 // helper returns a pointer to a float64 value.

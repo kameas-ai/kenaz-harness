@@ -7,8 +7,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/sigil-tech/kaneaz-harness/core/autonomy"
-	"github.com/sigil-tech/kaneaz-harness/core/storage"
+	"github.com/kameas-ai/kenaz-harness/core/autonomy"
+	"github.com/kameas-ai/kenaz-harness/core/storage"
 )
 
 // sqlStore persists projects through a storage.DB-shaped connection.

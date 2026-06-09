@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sigil-tech/kaneaz-harness/core/mcp/recipes"
+	"github.com/kameas-ai/kenaz-harness/core/mcp/recipes"
 )
 
 // validUserYAML is one well-formed user-recipe used across tests.

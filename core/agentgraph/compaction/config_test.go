@@ -3,7 +3,7 @@ package compaction_test
 import (
 	"testing"
 
-	"github.com/sigil-tech/kaneaz-harness/core/agentgraph/compaction"
+	"github.com/kameas-ai/kenaz-harness/core/agentgraph/compaction"
 )
 
 func TestMemoryResolver_DefaultsApplied(t *testing.T) {

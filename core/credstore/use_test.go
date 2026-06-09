@@ -6,7 +6,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/sigil-tech/kaneaz-harness/core/credstore"
+	"github.com/kameas-ai/kenaz-harness/core/credstore"
 )
 
 // TestUse_OpPanicZeroesBuf verifies that when op panics the credential

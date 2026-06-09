@@ -9,7 +9,7 @@ import (
 	"io"
 	"strings"
 
-	"github.com/sigil-tech/kaneaz-harness/core/llm"
+	"github.com/kameas-ai/kenaz-harness/core/llm"
 )
 
 // SSEFrame is the decoded top-level structure of one OpenAI SSE data

@@ -10,10 +10,10 @@ import (
 	"testing"
 	"time"
 
-	corecorpus "github.com/sigil-tech/kaneaz-harness/core/corpus"
-	corpusview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/corpus"
-	"github.com/sigil-tech/kaneaz-harness/core/storage"
-	storagesqlite "github.com/sigil-tech/kaneaz-harness/core/storage/sqlite"
+	corecorpus "github.com/kameas-ai/kenaz-harness/core/corpus"
+	corpusview "github.com/kameas-ai/kenaz-harness/core/rpc/views/corpus"
+	"github.com/kameas-ai/kenaz-harness/core/storage"
+	storagesqlite "github.com/kameas-ai/kenaz-harness/core/storage/sqlite"
 )
 
 type stubEmbedder struct{}

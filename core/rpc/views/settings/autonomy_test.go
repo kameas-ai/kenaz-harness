@@ -3,7 +3,7 @@ package settings
 import (
 	"testing"
 
-	"github.com/sigil-tech/kaneaz-harness/core/autonomy"
+	"github.com/kameas-ai/kenaz-harness/core/autonomy"
 )
 
 // TestFileStore_AutonomyDefaultEmpty pins that a fresh-install

@@ -10,7 +10,7 @@
 package merge
 
 import (
-	pack "github.com/sigil-tech/kaneaz-harness/core/context/pack"
+	pack "github.com/kameas-ai/kenaz-harness/core/context/pack"
 )
 
 // LayerInput is one layer's contribution: the layer designation plus the

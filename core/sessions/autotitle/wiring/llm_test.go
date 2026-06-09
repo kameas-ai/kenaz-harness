@@ -5,8 +5,8 @@ import (
 	"errors"
 	"testing"
 
-	corellm "github.com/sigil-tech/kaneaz-harness/core/llm"
-	"github.com/sigil-tech/kaneaz-harness/core/llm/cost"
+	corellm "github.com/kameas-ai/kenaz-harness/core/llm"
+	"github.com/kameas-ai/kenaz-harness/core/llm/cost"
 )
 
 // fakeStream is a minimal corellm.Stream implementation for tests.

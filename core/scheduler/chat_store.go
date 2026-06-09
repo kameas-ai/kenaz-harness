@@ -11,7 +11,7 @@ import (
 	"errors"
 	"time"
 
-	"github.com/sigil-tech/kaneaz-harness/core/storage"
+	"github.com/kameas-ai/kenaz-harness/core/storage"
 )
 
 // ErrChatRunNotFound is returned when a requested scheduled chat run

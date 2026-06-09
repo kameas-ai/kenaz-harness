@@ -4,7 +4,7 @@ import (
 	"math"
 	"testing"
 
-	llm "github.com/sigil-tech/kaneaz-harness/core/llm"
+	llm "github.com/kameas-ai/kenaz-harness/core/llm"
 )
 
 func TestStarterTable_Loads(t *testing.T) {

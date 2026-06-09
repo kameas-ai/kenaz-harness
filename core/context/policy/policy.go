@@ -12,7 +12,7 @@ package policy
 import (
 	"fmt"
 
-	pack "github.com/sigil-tech/kaneaz-harness/core/context/pack"
+	pack "github.com/kameas-ai/kenaz-harness/core/context/pack"
 )
 
 // ConflictMode selects how the merger reacts when two layers define an

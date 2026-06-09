@@ -6,7 +6,7 @@ package projects
 import (
 	"context"
 
-	"github.com/sigil-tech/kaneaz-harness/core/autonomy"
+	"github.com/kameas-ai/kenaz-harness/core/autonomy"
 )
 
 // Project is the wire shape for a project entity. Timestamps render as

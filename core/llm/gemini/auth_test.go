@@ -6,7 +6,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	llm "github.com/sigil-tech/kaneaz-harness/core/llm"
+	llm "github.com/kameas-ai/kenaz-harness/core/llm"
 )
 
 // TestAPIKeyAuth_Authorize verifies the x-goog-api-key header is set correctly.

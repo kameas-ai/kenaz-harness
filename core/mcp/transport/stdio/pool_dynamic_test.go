@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	coremcp "github.com/sigil-tech/kaneaz-harness/core/mcp"
+	coremcp "github.com/kameas-ai/kenaz-harness/core/mcp"
 )
 
 // TestPool_OpenOne_HappyPath spawns one server through the dynamic

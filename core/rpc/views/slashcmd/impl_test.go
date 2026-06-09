@@ -6,10 +6,10 @@ import (
 	"strings"
 	"testing"
 
-	slashview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/slashcmd"
-	coreslashcmd "github.com/sigil-tech/kaneaz-harness/core/slashcmd"
-	"github.com/sigil-tech/kaneaz-harness/core/storage"
-	storagesqlite "github.com/sigil-tech/kaneaz-harness/core/storage/sqlite"
+	slashview "github.com/kameas-ai/kenaz-harness/core/rpc/views/slashcmd"
+	coreslashcmd "github.com/kameas-ai/kenaz-harness/core/slashcmd"
+	"github.com/kameas-ai/kenaz-harness/core/storage"
+	storagesqlite "github.com/kameas-ai/kenaz-harness/core/storage/sqlite"
 )
 
 type fakeAppender struct{ called int }

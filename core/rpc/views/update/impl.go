@@ -9,8 +9,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/sigil-tech/kaneaz-harness/core/logging"
-	coreupdate "github.com/sigil-tech/kaneaz-harness/core/update"
+	"github.com/kameas-ai/kenaz-harness/core/logging"
+	coreupdate "github.com/kameas-ai/kenaz-harness/core/update"
 )
 
 // ErrServiceUnavailable is returned by every state-mutating method

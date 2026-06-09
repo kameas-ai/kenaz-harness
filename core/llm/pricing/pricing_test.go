@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sigil-tech/kaneaz-harness/core/llm/pricing"
+	"github.com/kameas-ai/kenaz-harness/core/llm/pricing"
 )
 
 func TestLookup_AnthropicSonnet(t *testing.T) {

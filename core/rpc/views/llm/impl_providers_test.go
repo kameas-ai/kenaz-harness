@@ -6,8 +6,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	connectorllm "github.com/sigil-tech/kaneaz-harness/core/llm"
-	"github.com/sigil-tech/kaneaz-harness/core/llm/personal"
+	connectorllm "github.com/kameas-ai/kenaz-harness/core/llm"
+	"github.com/kameas-ai/kenaz-harness/core/llm/personal"
 )
 
 type fakeKeychain struct {

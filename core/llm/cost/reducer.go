@@ -11,8 +11,8 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	llm "github.com/sigil-tech/kaneaz-harness/core/llm"
-	"github.com/sigil-tech/kaneaz-harness/core/llm/pricing"
+	llm "github.com/kameas-ai/kenaz-harness/core/llm"
+	"github.com/kameas-ai/kenaz-harness/core/llm/pricing"
 )
 
 // Cost source constants used in llm.Cost.Source and the

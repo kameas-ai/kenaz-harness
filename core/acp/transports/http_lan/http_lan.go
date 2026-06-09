@@ -13,8 +13,8 @@ package http_lan
 import (
 	"context"
 
-	"github.com/sigil-tech/kaneaz-harness/core/acp"
-	"github.com/sigil-tech/kaneaz-harness/core/acp/envelope"
+	"github.com/kameas-ai/kenaz-harness/core/acp"
+	"github.com/kameas-ai/kenaz-harness/core/acp/envelope"
 )
 
 // Kind is the transport kind constant.

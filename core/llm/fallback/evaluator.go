@@ -4,7 +4,7 @@ import (
 	"errors"
 	"strings"
 
-	"github.com/sigil-tech/kaneaz-harness/core/llm"
+	"github.com/kameas-ai/kenaz-harness/core/llm"
 )
 
 // Match reports whether err matches any trigger in the provided slice,

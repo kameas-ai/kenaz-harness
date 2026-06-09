@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	llm "github.com/sigil-tech/kaneaz-harness/core/llm"
+	llm "github.com/kameas-ai/kenaz-harness/core/llm"
 )
 
 // TestTestKey_AIStudio200 verifies TestKey returns nil for a 200 response.

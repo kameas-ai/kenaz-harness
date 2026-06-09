@@ -17,8 +17,8 @@ import (
 	"encoding/json"
 	"strings"
 
-	"github.com/sigil-tech/kaneaz-harness/core/credstore/refs"
-	"github.com/sigil-tech/kaneaz-harness/core/secrets"
+	"github.com/kameas-ai/kenaz-harness/core/credstore/refs"
+	"github.com/kameas-ai/kenaz-harness/core/secrets"
 )
 
 const (

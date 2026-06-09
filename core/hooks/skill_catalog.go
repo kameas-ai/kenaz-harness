@@ -30,7 +30,7 @@ import (
 	"fmt"
 	"strings"
 
-	coreslashcmd "github.com/sigil-tech/kaneaz-harness/core/slashcmd"
+	coreslashcmd "github.com/kameas-ai/kenaz-harness/core/slashcmd"
 )
 
 const (

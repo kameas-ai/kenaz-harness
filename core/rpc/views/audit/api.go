@@ -5,7 +5,7 @@ package audit
 import (
 	"context"
 
-	eventlog "github.com/sigil-tech/kaneaz-harness/core/event/log"
+	eventlog "github.com/kameas-ai/kenaz-harness/core/event/log"
 )
 
 // Entry is a redacted audit log entry. Redaction is applied server-side

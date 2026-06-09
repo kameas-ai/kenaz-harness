@@ -15,12 +15,12 @@ import (
 	"encoding/json"
 	"fmt"
 
-	harness "github.com/sigil-tech/kaneaz-harness/core/mcp/builtin/harness"
-	"github.com/sigil-tech/kaneaz-harness/core/mcp/recipes"
-	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/llm"
-	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/sessions"
-	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/settings"
-	"github.com/sigil-tech/kaneaz-harness/core/session"
+	harness "github.com/kameas-ai/kenaz-harness/core/mcp/builtin/harness"
+	"github.com/kameas-ai/kenaz-harness/core/mcp/recipes"
+	"github.com/kameas-ai/kenaz-harness/core/rpc/views/llm"
+	"github.com/kameas-ai/kenaz-harness/core/rpc/views/sessions"
+	"github.com/kameas-ai/kenaz-harness/core/rpc/views/settings"
+	"github.com/kameas-ai/kenaz-harness/core/session"
 )
 
 // ---- WP04 read adapters ----

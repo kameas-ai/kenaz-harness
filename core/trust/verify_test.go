@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sigil-tech/kaneaz-harness/core/trust"
-	"github.com/sigil-tech/kaneaz-harness/core/trust/internal/fingerprint"
+	"github.com/kameas-ai/kenaz-harness/core/trust"
+	"github.com/kameas-ai/kenaz-harness/core/trust/internal/fingerprint"
 )
 
 // signedFixture builds a freshly-signed Ed25519 envelope plus the
