@@ -28,6 +28,11 @@ const (
 	CatalogKindWorkflow  CatalogItemKind = "workflow"
 	CatalogKindAgentPack CatalogItemKind = "agent_pack"
 	CatalogKindBundle    CatalogItemKind = "bundle"
+	// CatalogKindSkill is the catalog kind for user slash-command skills
+	// (fleet-skills-sync-01NDFSEX18). The wire contract is identical to
+	// other catalog kinds (§2a + §3 of contract-harness-sync.md); only
+	// the payload encoding differs (slashcmd.Skill JSON, ≤ 256KB).
+	CatalogKindSkill CatalogItemKind = "skill"
 )
 
 // CatalogVisibility controls who can see a catalog item.
