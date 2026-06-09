@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	llm "github.com/sigil-tech/kaneaz-harness/core/llm"
+	llm "github.com/kameas-ai/kenaz-harness/core/llm"
 )
 
 // ─── Gemini wire types (request side) ────────────────────────────────────────

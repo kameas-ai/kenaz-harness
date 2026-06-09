@@ -3,7 +3,7 @@ package session
 import (
 	"context"
 
-	"github.com/sigil-tech/kaneaz-harness/core/storage/migrations"
+	"github.com/kameas-ai/kenaz-harness/core/storage/migrations"
 )
 
 // migrationIDSourceModelOutput identifies migration 0327 — the schema

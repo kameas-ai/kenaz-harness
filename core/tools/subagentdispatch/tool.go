@@ -26,8 +26,8 @@ import (
 	"fmt"
 	"strings"
 
-	coreagents "github.com/sigil-tech/kaneaz-harness/core/agents"
-	"github.com/sigil-tech/kaneaz-harness/core/agentgraph"
+	coreagents "github.com/kameas-ai/kenaz-harness/core/agents"
+	"github.com/kameas-ai/kenaz-harness/core/agentgraph"
 )
 
 const (

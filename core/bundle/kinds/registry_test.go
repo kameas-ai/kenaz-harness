@@ -6,9 +6,9 @@ import (
 	"sync"
 	"testing"
 
-	bundle "github.com/sigil-tech/kaneaz-harness/core/bundle"
-	"github.com/sigil-tech/kaneaz-harness/core/bundle/kinds"
-	"github.com/sigil-tech/kaneaz-harness/core/bundle/kinds/testkind"
+	bundle "github.com/kameas-ai/kenaz-harness/core/bundle"
+	"github.com/kameas-ai/kenaz-harness/core/bundle/kinds"
+	"github.com/kameas-ai/kenaz-harness/core/bundle/kinds/testkind"
 )
 
 func TestRegisterAndLookup(t *testing.T) {

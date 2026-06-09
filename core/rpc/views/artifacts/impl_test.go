@@ -7,8 +7,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	coreart "github.com/sigil-tech/kaneaz-harness/core/artifacts"
-	"github.com/sigil-tech/kaneaz-harness/core/attachments"
+	coreart "github.com/kameas-ai/kenaz-harness/core/artifacts"
+	"github.com/kameas-ai/kenaz-harness/core/attachments"
 )
 
 // newTestAPI constructs an API wired against in-memory stores rooted

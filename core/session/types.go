@@ -3,8 +3,8 @@ package session
 import (
 	"time"
 
-	"github.com/sigil-tech/kaneaz-harness/core/autonomy"
-	"github.com/sigil-tech/kaneaz-harness/core/llm"
+	"github.com/kameas-ai/kenaz-harness/core/autonomy"
+	"github.com/kameas-ai/kenaz-harness/core/llm"
 )
 
 // Record is the durable representation of a chat session as the rail UI

@@ -3,7 +3,7 @@ package session
 import (
 	"context"
 
-	"github.com/sigil-tech/kaneaz-harness/core/event"
+	"github.com/kameas-ai/kenaz-harness/core/event"
 )
 
 // Executor drives the agent execution loop for a Session (the

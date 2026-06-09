@@ -21,10 +21,10 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/sigil-tech/kaneaz-harness/core/context/audit"
-	rpcworkflows "github.com/sigil-tech/kaneaz-harness/core/rpc/views/workflows"
-	"github.com/sigil-tech/kaneaz-harness/core/workflows"
-	"github.com/sigil-tech/kaneaz-harness/core/workflows/scheduler"
+	"github.com/kameas-ai/kenaz-harness/core/context/audit"
+	rpcworkflows "github.com/kameas-ai/kenaz-harness/core/rpc/views/workflows"
+	"github.com/kameas-ai/kenaz-harness/core/workflows"
+	"github.com/kameas-ai/kenaz-harness/core/workflows/scheduler"
 )
 
 // ─── fake dependencies ──────────────────────────────────────────────────────

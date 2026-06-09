@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sigil-tech/kaneaz-harness/core/fleet"
-	"github.com/sigil-tech/kaneaz-harness/core/rpc/middleware"
+	"github.com/kameas-ai/kenaz-harness/core/fleet"
+	"github.com/kameas-ai/kenaz-harness/core/rpc/middleware"
 )
 
 // TestLockdown_FullFlowIntegration verifies that:

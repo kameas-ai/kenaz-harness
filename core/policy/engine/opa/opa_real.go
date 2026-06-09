@@ -31,8 +31,8 @@ import (
 	"context"
 	"errors"
 
-	"github.com/sigil-tech/kaneaz-harness/core/policy"
-	"github.com/sigil-tech/kaneaz-harness/core/policy/engine"
+	"github.com/kameas-ai/kenaz-harness/core/policy"
+	"github.com/kameas-ai/kenaz-harness/core/policy/engine"
 )
 
 // Backend is the OPA-backed engine.Backend. Compile parses every

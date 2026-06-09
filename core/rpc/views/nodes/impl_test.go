@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	corenodes "github.com/sigil-tech/kaneaz-harness/core/agentgraph/nodes"
-	nodesview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/nodes"
+	corenodes "github.com/kameas-ai/kenaz-harness/core/agentgraph/nodes"
+	nodesview "github.com/kameas-ai/kenaz-harness/core/rpc/views/nodes"
 )
 
 // helper that loads the bundled-only catalog for happy-path tests.

@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/sigil-tech/kaneaz-harness/core/artifacts"
+	"github.com/kameas-ai/kenaz-harness/core/artifacts"
 )
 
 // repeatLines emits n distinct lines so blocks meet the line

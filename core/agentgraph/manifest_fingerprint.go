@@ -20,7 +20,7 @@ import (
 	"fmt"
 	"sort"
 
-	"github.com/sigil-tech/kaneaz-harness/core/agentgraph/nodes"
+	"github.com/kameas-ai/kenaz-harness/core/agentgraph/nodes"
 )
 
 // fingerprintInput is the canonical, JSON-serializable shape we hash.

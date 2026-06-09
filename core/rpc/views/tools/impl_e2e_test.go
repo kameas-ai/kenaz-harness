@@ -12,10 +12,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sigil-tech/kaneaz-harness/core/mcp/recipes"
-	"github.com/sigil-tech/kaneaz-harness/core/mcp/stdio"
-	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/tools"
-	"github.com/sigil-tech/kaneaz-harness/core/secrets"
+	"github.com/kameas-ai/kenaz-harness/core/mcp/recipes"
+	"github.com/kameas-ai/kenaz-harness/core/mcp/stdio"
+	"github.com/kameas-ai/kenaz-harness/core/rpc/views/tools"
+	"github.com/kameas-ai/kenaz-harness/core/secrets"
 )
 
 // buildFakeServerForFilesystemE2E compiles the in-tree fake MCP

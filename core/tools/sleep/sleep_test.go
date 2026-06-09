@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sigil-tech/kaneaz-harness/core/tools/sleep"
+	"github.com/kameas-ai/kenaz-harness/core/tools/sleep"
 )
 
 func TestTool_NameDescriptionSchema(t *testing.T) {

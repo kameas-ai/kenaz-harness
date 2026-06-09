@@ -7,8 +7,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/sigil-tech/kaneaz-harness/core/toolloop"
-	"github.com/sigil-tech/kaneaz-harness/core/tools/fsbuiltins"
+	"github.com/kameas-ai/kenaz-harness/core/toolloop"
+	"github.com/kameas-ai/kenaz-harness/core/tools/fsbuiltins"
 )
 
 // opts returns Options with no Gate (all paths permitted) and the given ReadSet.

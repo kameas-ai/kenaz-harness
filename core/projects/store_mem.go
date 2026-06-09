@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/sigil-tech/kaneaz-harness/core/autonomy"
+	"github.com/kameas-ai/kenaz-harness/core/autonomy"
 )
 
 // memStore is the in-memory Store implementation. Backed by a map

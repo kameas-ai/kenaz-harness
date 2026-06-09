@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sigil-tech/kaneaz-harness/core/secrets/ref"
-	"github.com/sigil-tech/kaneaz-harness/core/secrets/registry"
-	"github.com/sigil-tech/kaneaz-harness/core/secrets/secret"
+	"github.com/kameas-ai/kenaz-harness/core/secrets/ref"
+	"github.com/kameas-ai/kenaz-harness/core/secrets/registry"
+	"github.com/kameas-ai/kenaz-harness/core/secrets/secret"
 )
 
 // fakeBackend is a deliberately tiny test double. It lives in the test

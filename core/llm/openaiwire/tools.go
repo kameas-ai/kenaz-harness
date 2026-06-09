@@ -5,7 +5,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/sigil-tech/kaneaz-harness/core/llm"
+	"github.com/kameas-ai/kenaz-harness/core/llm"
 )
 
 // ToolCallState tracks the in-flight assembly of one OpenAI streaming

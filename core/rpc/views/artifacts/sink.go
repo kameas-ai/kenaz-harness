@@ -13,7 +13,7 @@ import (
 	"strings"
 	"time"
 
-	coreart "github.com/sigil-tech/kaneaz-harness/core/artifacts"
+	coreart "github.com/kameas-ai/kenaz-harness/core/artifacts"
 )
 
 // generatedImageFetchTimeout is the bounded HTTP GET deadline applied

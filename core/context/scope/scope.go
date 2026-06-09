@@ -4,7 +4,7 @@
 // the active workflow never participates in override matching.
 package scope
 
-import pack "github.com/sigil-tech/kaneaz-harness/core/context/pack"
+import pack "github.com/kameas-ai/kenaz-harness/core/context/pack"
 
 // Filter narrows entries down to those that apply for the (workflow,
 // agent) pair. An empty workflow string means "no workflow context", in

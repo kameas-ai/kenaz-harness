@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/settings"
+	"github.com/kameas-ai/kenaz-harness/core/rpc/views/settings"
 )
 
 // TestMCPAutoRestart_DefaultOn verifies that a freshly-constructed API

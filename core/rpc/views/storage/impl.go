@@ -10,8 +10,8 @@ import (
 	"strconv"
 	"time"
 
-	corestorage "github.com/sigil-tech/kaneaz-harness/core/storage"
-	"github.com/sigil-tech/kaneaz-harness/core/storage/migrations"
+	corestorage "github.com/kameas-ai/kenaz-harness/core/storage"
+	"github.com/kameas-ai/kenaz-harness/core/storage/migrations"
 )
 
 // ErrFixNotAutomatable mirrors migrations.ErrFixNotAutomatable at the view

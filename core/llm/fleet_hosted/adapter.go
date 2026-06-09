@@ -10,8 +10,8 @@ import (
 	"strings"
 	"sync"
 
-	llm "github.com/sigil-tech/kaneaz-harness/core/llm"
-	"github.com/sigil-tech/kaneaz-harness/core/llm/openaiwire"
+	llm "github.com/kameas-ai/kenaz-harness/core/llm"
+	"github.com/kameas-ai/kenaz-harness/core/llm/openaiwire"
 )
 
 // BearerProvider returns the current fleet Bearer token to be injected into

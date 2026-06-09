@@ -1,4 +1,4 @@
-module github.com/sigil-tech/kaneaz-harness
+module github.com/kameas-ai/kenaz-harness
 
 go 1.25.0
 

@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	pack "github.com/sigil-tech/kaneaz-harness/core/context/pack"
+	pack "github.com/kameas-ai/kenaz-harness/core/context/pack"
 )
 
 const manifest = `name: acme-org-context

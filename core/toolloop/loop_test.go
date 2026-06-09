@@ -5,8 +5,8 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/sigil-tech/kaneaz-harness/core/toolloop"
-	"github.com/sigil-tech/kaneaz-harness/core/tools/sleep"
+	"github.com/kameas-ai/kenaz-harness/core/toolloop"
+	"github.com/kameas-ai/kenaz-harness/core/tools/sleep"
 )
 
 // TestIsPassiveTool verifies that kaneaz__sleep is recognised as passive

@@ -13,7 +13,7 @@ package backends
 import (
 	"context"
 
-	"github.com/sigil-tech/kaneaz-harness/core/trust"
+	"github.com/kameas-ai/kenaz-harness/core/trust"
 )
 
 // SigningBackend is the contract every backend implements (FR-008).

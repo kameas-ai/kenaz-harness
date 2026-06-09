@@ -21,7 +21,7 @@ package permissions
 import (
 	"context"
 
-	"github.com/sigil-tech/kaneaz-harness/core/policy/cedar"
+	"github.com/kameas-ai/kenaz-harness/core/policy/cedar"
 )
 
 // Decision is the closed-set string the modal emits. Mirrors

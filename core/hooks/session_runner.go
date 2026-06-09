@@ -8,7 +8,7 @@ package hooks
 import (
 	"context"
 
-	"github.com/sigil-tech/kaneaz-harness/core/session"
+	"github.com/kameas-ai/kenaz-harness/core/session"
 )
 
 // Compile-time assertion: SessionRunnerAdapter implements

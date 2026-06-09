@@ -8,7 +8,7 @@ package artifacts
 import (
 	"context"
 
-	coreart "github.com/sigil-tech/kaneaz-harness/core/artifacts"
+	coreart "github.com/kameas-ai/kenaz-harness/core/artifacts"
 )
 
 // Artifact is the wire shape for one stored artifact. Timestamps

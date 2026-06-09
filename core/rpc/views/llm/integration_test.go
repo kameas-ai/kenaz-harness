@@ -5,9 +5,9 @@ import (
 	"strings"
 	"testing"
 
-	coreatt "github.com/sigil-tech/kaneaz-harness/core/attachments"
-	coreprojects "github.com/sigil-tech/kaneaz-harness/core/projects"
-	"github.com/sigil-tech/kaneaz-harness/core/session"
+	coreatt "github.com/kameas-ai/kenaz-harness/core/attachments"
+	coreprojects "github.com/kameas-ai/kenaz-harness/core/projects"
+	"github.com/kameas-ai/kenaz-harness/core/session"
 )
 
 // TestIntegration_ResolvedSystemPromptOrdering wires the real (in-memory)

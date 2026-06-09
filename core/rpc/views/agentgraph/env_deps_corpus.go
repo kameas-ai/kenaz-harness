@@ -3,8 +3,8 @@ package agentgraph
 import (
 	"context"
 
-	coreag "github.com/sigil-tech/kaneaz-harness/core/agentgraph"
-	corecorpus "github.com/sigil-tech/kaneaz-harness/core/corpus"
+	coreag "github.com/kameas-ai/kenaz-harness/core/agentgraph"
+	corecorpus "github.com/kameas-ai/kenaz-harness/core/corpus"
 )
 
 // CorpusBackendAdapter wraps core/corpus.Manager onto the

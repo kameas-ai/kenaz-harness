@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	pack "github.com/sigil-tech/kaneaz-harness/core/context/pack"
-	"github.com/sigil-tech/kaneaz-harness/core/context/policy"
+	pack "github.com/kameas-ai/kenaz-harness/core/context/pack"
+	"github.com/kameas-ai/kenaz-harness/core/context/policy"
 )
 
 // fixturePack builds a tiny in-memory pack with the given entries. Real

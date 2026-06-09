@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"time"
 
-	"github.com/sigil-tech/kaneaz-harness/core/event/kind"
+	"github.com/kameas-ai/kenaz-harness/core/event/kind"
 )
 
 // AuditSink is the audit emission surface used by the harness-self

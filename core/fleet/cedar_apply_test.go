@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	gocedar "github.com/cedar-policy/cedar-go"
-	cedarpolicy "github.com/sigil-tech/kaneaz-harness/core/policy/cedar"
+	cedarpolicy "github.com/kameas-ai/kenaz-harness/core/policy/cedar"
 )
 
 // newTestEngine creates an in-memory Cedar engine suitable for apply tests.

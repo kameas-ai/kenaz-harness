@@ -10,7 +10,7 @@ import (
 	"fmt"
 	"time"
 
-	coretasks "github.com/sigil-tech/kaneaz-harness/core/tasks"
+	coretasks "github.com/kameas-ai/kenaz-harness/core/tasks"
 )
 
 // TaskRow is the wire-safe serialisation of a background task for the UI.

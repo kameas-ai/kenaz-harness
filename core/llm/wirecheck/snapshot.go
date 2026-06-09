@@ -1,7 +1,7 @@
 package wirecheck
 
 import (
-	llm "github.com/sigil-tech/kaneaz-harness/core/llm"
+	llm "github.com/kameas-ai/kenaz-harness/core/llm"
 )
 
 // Snapshotter is the optional interface adapters implement when their

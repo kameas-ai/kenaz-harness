@@ -12,10 +12,10 @@ import (
 	"testing"
 	"time"
 
-	coreag "github.com/sigil-tech/kaneaz-harness/core/agentgraph"
-	corellm "github.com/sigil-tech/kaneaz-harness/core/llm"
-	"github.com/sigil-tech/kaneaz-harness/core/session"
-	autotitle "github.com/sigil-tech/kaneaz-harness/core/sessions/autotitle"
+	coreag "github.com/kameas-ai/kenaz-harness/core/agentgraph"
+	corellm "github.com/kameas-ai/kenaz-harness/core/llm"
+	"github.com/kameas-ai/kenaz-harness/core/session"
+	autotitle "github.com/kameas-ai/kenaz-harness/core/sessions/autotitle"
 )
 
 // These integration tests load the production chat_default.yaml graph

@@ -8,7 +8,7 @@ import (
 
 	"github.com/zalando/go-keyring"
 
-	"github.com/sigil-tech/kaneaz-harness/core/paths"
+	"github.com/kameas-ai/kenaz-harness/core/paths"
 )
 
 // keyringService is the SHARED, product-neutral OS-keychain service under which

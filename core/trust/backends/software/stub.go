@@ -7,8 +7,8 @@ import (
 	"context"
 	"errors"
 
-	"github.com/sigil-tech/kaneaz-harness/core/trust"
-	"github.com/sigil-tech/kaneaz-harness/core/trust/backends"
+	"github.com/kameas-ai/kenaz-harness/core/trust"
+	"github.com/kameas-ai/kenaz-harness/core/trust/backends"
 )
 
 // ErrSoftwareBackendDisabled is returned by every entry point in the

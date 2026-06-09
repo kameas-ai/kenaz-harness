@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	coremcp "github.com/sigil-tech/kaneaz-harness/core/mcp"
+	coremcp "github.com/kameas-ai/kenaz-harness/core/mcp"
 )
 
 // TestStatus_LifecycleStates walks one server through every state

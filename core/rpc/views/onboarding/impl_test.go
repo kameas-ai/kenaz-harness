@@ -4,8 +4,8 @@ import (
 	"context"
 	"testing"
 
-	harnessmcp "github.com/sigil-tech/kaneaz-harness/core/mcp/builtin/harness"
-	coreonboarding "github.com/sigil-tech/kaneaz-harness/core/onboarding"
+	harnessmcp "github.com/kameas-ai/kenaz-harness/core/mcp/builtin/harness"
+	coreonboarding "github.com/kameas-ai/kenaz-harness/core/onboarding"
 )
 
 type stubFirstRun struct{ first bool }

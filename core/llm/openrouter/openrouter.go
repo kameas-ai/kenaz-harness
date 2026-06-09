@@ -33,11 +33,11 @@ import (
 	"sync"
 	"time"
 
-	llm "github.com/sigil-tech/kaneaz-harness/core/llm"
-	"github.com/sigil-tech/kaneaz-harness/core/llm/httpx"
-	"github.com/sigil-tech/kaneaz-harness/core/llm/openaiwire"
-	"github.com/sigil-tech/kaneaz-harness/core/llm/structured"
-	"github.com/sigil-tech/kaneaz-harness/core/logging"
+	llm "github.com/kameas-ai/kenaz-harness/core/llm"
+	"github.com/kameas-ai/kenaz-harness/core/llm/httpx"
+	"github.com/kameas-ai/kenaz-harness/core/llm/openaiwire"
+	"github.com/kameas-ai/kenaz-harness/core/llm/structured"
+	"github.com/kameas-ai/kenaz-harness/core/logging"
 )
 
 // Kind is the canonical provider kind ("openrouter").
@@ -46,7 +46,7 @@ const Kind = "openrouter"
 const (
 	defaultEndpoint    = "https://openrouter.ai/api/v1/chat/completions"
 	defaultModelsURL   = "https://openrouter.ai/api/v1/models"
-	defaultReferer     = "https://github.com/sigil-tech/kaneaz-harness"
+	defaultReferer     = "https://github.com/kameas-ai/kenaz-harness"
 	defaultAppTitle    = "kaneaz-harness"
 	errorBodyByteLimit = 4096
 )

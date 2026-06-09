@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sigil-tech/kaneaz-harness/core/workflows/catalog"
-	wfsched "github.com/sigil-tech/kaneaz-harness/core/workflows/scheduler"
-	corewf "github.com/sigil-tech/kaneaz-harness/core/workflows"
+	"github.com/kameas-ai/kenaz-harness/core/workflows/catalog"
+	wfsched "github.com/kameas-ai/kenaz-harness/core/workflows/scheduler"
+	corewf "github.com/kameas-ai/kenaz-harness/core/workflows"
 )
 
 // --- fakes ---

@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/sigil-tech/kaneaz-harness/core/attachments"
+	"github.com/kameas-ai/kenaz-harness/core/attachments"
 )
 
 // TestManager_AddMedia_RoundTrip verifies the WP02 binary-attachment

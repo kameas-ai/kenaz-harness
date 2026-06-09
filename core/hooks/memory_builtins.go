@@ -18,7 +18,7 @@ import (
 	"log/slog"
 	"strings"
 
-	"github.com/sigil-tech/kaneaz-harness/core/memory"
+	"github.com/kameas-ai/kenaz-harness/core/memory"
 )
 
 // MemoryRetriever is the surface the retrieve builtin needs. The

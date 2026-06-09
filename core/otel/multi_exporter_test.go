@@ -6,7 +6,7 @@ import (
 	"sync"
 	"testing"
 
-	coreotel "github.com/sigil-tech/kaneaz-harness/core/otel"
+	coreotel "github.com/kameas-ai/kenaz-harness/core/otel"
 	sdklog "go.opentelemetry.io/otel/sdk/log"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"

@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	httptransport "github.com/sigil-tech/kaneaz-harness/core/mcp/transport/http"
+	httptransport "github.com/kameas-ai/kenaz-harness/core/mcp/transport/http"
 )
 
 // fakeJSONRPCServer is a minimal httptest.Server stub that echoes

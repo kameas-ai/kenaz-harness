@@ -7,10 +7,10 @@ import (
 	"context"
 	"testing"
 
-	"github.com/sigil-tech/kaneaz-harness/core/trust"
-	"github.com/sigil-tech/kaneaz-harness/core/trust/backends"
-	"github.com/sigil-tech/kaneaz-harness/core/trust/backends/software"
-	"github.com/sigil-tech/kaneaz-harness/core/trust/internal/algo"
+	"github.com/kameas-ai/kenaz-harness/core/trust"
+	"github.com/kameas-ai/kenaz-harness/core/trust/backends"
+	"github.com/kameas-ai/kenaz-harness/core/trust/backends/software"
+	"github.com/kameas-ai/kenaz-harness/core/trust/internal/algo"
 )
 
 // TestSoftwareSignVerifyRoundTrip — the canonical software-backend

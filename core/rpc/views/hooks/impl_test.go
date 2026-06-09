@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	corehooks "github.com/sigil-tech/kaneaz-harness/core/hooks"
+	corehooks "github.com/kameas-ai/kenaz-harness/core/hooks"
 )
 
 type fakeRegistry struct {

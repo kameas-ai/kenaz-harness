@@ -1,6 +1,6 @@
 package scheduler
 
-import "github.com/sigil-tech/kaneaz-harness/core/session"
+import "github.com/kameas-ai/kenaz-harness/core/session"
 
 // JobKind identifies the dispatch path for a Job.
 //

@@ -7,11 +7,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sigil-tech/kaneaz-harness/core/event"
-	"github.com/sigil-tech/kaneaz-harness/core/event/log"
-	"github.com/sigil-tech/kaneaz-harness/core/event/redact"
-	llm "github.com/sigil-tech/kaneaz-harness/core/llm"
-	llmevents "github.com/sigil-tech/kaneaz-harness/core/llm/events"
+	"github.com/kameas-ai/kenaz-harness/core/event"
+	"github.com/kameas-ai/kenaz-harness/core/event/log"
+	"github.com/kameas-ai/kenaz-harness/core/event/redact"
+	llm "github.com/kameas-ai/kenaz-harness/core/llm"
+	llmevents "github.com/kameas-ai/kenaz-harness/core/llm/events"
 )
 
 // fakeEmitter is the smallest concrete event.Emitter that records

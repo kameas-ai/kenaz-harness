@@ -25,7 +25,7 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/sigil-tech/kaneaz-harness/core/mcp/transport"
+	"github.com/kameas-ai/kenaz-harness/core/mcp/transport"
 )
 
 // ServerName is the identifier this server registers under in the MCP

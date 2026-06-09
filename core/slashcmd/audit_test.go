@@ -5,10 +5,10 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/sigil-tech/kaneaz-harness/core/context/audit"
-	coreslashcmd "github.com/sigil-tech/kaneaz-harness/core/slashcmd"
-	"github.com/sigil-tech/kaneaz-harness/core/storage"
-	storagesqlite "github.com/sigil-tech/kaneaz-harness/core/storage/sqlite"
+	"github.com/kameas-ai/kenaz-harness/core/context/audit"
+	coreslashcmd "github.com/kameas-ai/kenaz-harness/core/slashcmd"
+	"github.com/kameas-ai/kenaz-harness/core/storage"
+	storagesqlite "github.com/kameas-ai/kenaz-harness/core/storage/sqlite"
 )
 
 // fakeAuditEmitter records every emitted event for assertion.

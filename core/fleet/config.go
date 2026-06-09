@@ -15,7 +15,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/sigil-tech/kaneaz-harness/core/logging"
+	"github.com/kameas-ai/kenaz-harness/core/logging"
 )
 
 // FleetConfig is the runtime configuration the dashboard SPA fetches from

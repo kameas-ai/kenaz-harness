@@ -8,7 +8,7 @@ import "crypto/ed25519"
 // This variable is intentionally left as an empty string at source time.
 // At release time the build pipeline populates it via:
 //
-//	-ldflags "-X github.com/sigil-tech/kaneaz-harness/core/fleet.fleetSigningPublicKeyBytes=<hex>"
+//	-ldflags "-X github.com/kameas-ai/kenaz-harness/core/fleet.fleetSigningPublicKeyBytes=<hex>"
 //
 // During development / CI without the ldflags the variable remains empty and
 // FleetSigningKey() returns nil, causing all bundle verification to fail with

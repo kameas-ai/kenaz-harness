@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/sigil-tech/kaneaz-harness/core/attachments"
+	"github.com/kameas-ai/kenaz-harness/core/attachments"
 )
 
 // MediaStorer is the narrow surface the artifacts manager needs from

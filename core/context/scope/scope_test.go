@@ -3,7 +3,7 @@ package scope
 import (
 	"testing"
 
-	pack "github.com/sigil-tech/kaneaz-harness/core/context/pack"
+	pack "github.com/kameas-ai/kenaz-harness/core/context/pack"
 )
 
 func TestAllow_NoScope_AppliesEverywhere(t *testing.T) {

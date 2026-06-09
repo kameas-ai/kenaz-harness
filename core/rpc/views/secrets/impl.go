@@ -9,7 +9,7 @@ import (
 	"fmt"
 	"strings"
 
-	coresecrets "github.com/sigil-tech/kaneaz-harness/core/secrets"
+	coresecrets "github.com/kameas-ai/kenaz-harness/core/secrets"
 )
 
 // Errors returned by the RPC surface.

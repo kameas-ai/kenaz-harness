@@ -15,7 +15,7 @@ import (
 	"encoding/json"
 	"time"
 
-	"github.com/sigil-tech/kaneaz-harness/core/event/kind"
+	"github.com/kameas-ai/kenaz-harness/core/event/kind"
 )
 
 // Kind is the registered event kind for this package.

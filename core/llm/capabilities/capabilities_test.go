@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	llm "github.com/sigil-tech/kaneaz-harness/core/llm"
+	llm "github.com/kameas-ai/kenaz-harness/core/llm"
 )
 
 // TestCatalog_BackfillVision verifies the multimodal-io WP03 vision

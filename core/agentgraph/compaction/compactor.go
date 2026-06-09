@@ -21,7 +21,7 @@ import (
 	"errors"
 	"time"
 
-	"github.com/sigil-tech/kaneaz-harness/core/agentgraph"
+	"github.com/kameas-ai/kenaz-harness/core/agentgraph"
 )
 
 // Site identifies the kernel firing point that triggered a compaction.

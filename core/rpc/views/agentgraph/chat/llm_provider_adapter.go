@@ -8,10 +8,10 @@ import (
 	"sync"
 	"time"
 
-	coreag "github.com/sigil-tech/kaneaz-harness/core/agentgraph"
-	corellm "github.com/sigil-tech/kaneaz-harness/core/llm"
-	"github.com/sigil-tech/kaneaz-harness/core/llm/retry"
-	artview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/artifacts"
+	coreag "github.com/kameas-ai/kenaz-harness/core/agentgraph"
+	corellm "github.com/kameas-ai/kenaz-harness/core/llm"
+	"github.com/kameas-ai/kenaz-harness/core/llm/retry"
+	artview "github.com/kameas-ai/kenaz-harness/core/rpc/views/artifacts"
 )
 
 // LLMProviderAdapter satisfies the agentgraph.LLMProvider seam by

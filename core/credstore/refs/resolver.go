@@ -8,8 +8,8 @@ import (
 	"runtime"
 	"strings"
 
-	"github.com/sigil-tech/kaneaz-harness/core/event/secretref"
-	"github.com/sigil-tech/kaneaz-harness/core/policy/cedar"
+	"github.com/kameas-ai/kenaz-harness/core/event/secretref"
+	"github.com/kameas-ai/kenaz-harness/core/policy/cedar"
 )
 
 // Sentinel errors returned by Resolve and Substitute.

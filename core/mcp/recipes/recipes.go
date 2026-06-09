@@ -25,7 +25,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/sigil-tech/kaneaz-harness/core/mcp"
+	"github.com/kameas-ai/kenaz-harness/core/mcp"
 )
 
 // Recognised transport identifiers. Empty string is treated as

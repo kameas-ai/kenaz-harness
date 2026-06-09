@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	bundle "github.com/sigil-tech/kaneaz-harness/core/bundle"
-	"github.com/sigil-tech/kaneaz-harness/core/bundle/lockfile"
+	bundle "github.com/kameas-ai/kenaz-harness/core/bundle"
+	"github.com/kameas-ai/kenaz-harness/core/bundle/lockfile"
 )
 
 func sample() *lockfile.Lockfile {

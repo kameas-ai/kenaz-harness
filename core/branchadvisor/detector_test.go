@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/settings"
+	"github.com/kameas-ai/kenaz-harness/core/rpc/views/settings"
 )
 
 // threshold is the default used across most tests.

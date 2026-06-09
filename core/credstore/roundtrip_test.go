@@ -13,7 +13,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/sigil-tech/kaneaz-harness/core/credstore"
+	"github.com/kameas-ai/kenaz-harness/core/credstore"
 )
 
 func TestRoundTrip_HappyPath(t *testing.T) {

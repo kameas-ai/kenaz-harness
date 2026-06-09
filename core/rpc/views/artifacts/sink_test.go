@@ -5,7 +5,7 @@ import (
 	"sync"
 	"testing"
 
-	coreart "github.com/sigil-tech/kaneaz-harness/core/artifacts"
+	coreart "github.com/kameas-ai/kenaz-harness/core/artifacts"
 )
 
 // recordingCaptureManager captures every Capture call so the test can

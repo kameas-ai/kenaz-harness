@@ -5,8 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/sigil-tech/kaneaz-harness/core/agents"
-	"github.com/sigil-tech/kaneaz-harness/core/autonomy"
+	"github.com/kameas-ai/kenaz-harness/core/agents"
+	"github.com/kameas-ai/kenaz-harness/core/autonomy"
 )
 
 // TestBundledProfilesLoad verifies all five shipped profiles parse cleanly.

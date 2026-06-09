@@ -3,7 +3,7 @@ package config
 import (
 	"context"
 
-	"github.com/sigil-tech/kaneaz-harness/core/bundle"
+	"github.com/kameas-ai/kenaz-harness/core/bundle"
 )
 
 type Document struct {

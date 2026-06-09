@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/sigil-tech/kaneaz-harness/core/sentry"
+	"github.com/kameas-ai/kenaz-harness/core/sentry"
 )
 
 func TestRedactString_SecretRef(t *testing.T) {

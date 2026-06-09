@@ -9,7 +9,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/sigil-tech/kaneaz-harness/core/secrets"
+	"github.com/kameas-ai/kenaz-harness/core/secrets"
 )
 
 // KeychainLocator returns the canonical keychain locator for a

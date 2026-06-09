@@ -22,7 +22,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/sigil-tech/kaneaz-harness/core/autonomy"
+	"github.com/kameas-ai/kenaz-harness/core/autonomy"
 )
 
 // ErrBundledReadOnly is returned by Save when the id matches a bundled

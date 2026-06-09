@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sigil-tech/kaneaz-harness/core/event/log"
-	"github.com/sigil-tech/kaneaz-harness/core/event/redact"
+	"github.com/kameas-ai/kenaz-harness/core/event/log"
+	"github.com/kameas-ai/kenaz-harness/core/event/redact"
 )
 
 // newTestEmitter builds a fully-wired emitter against an in-memory

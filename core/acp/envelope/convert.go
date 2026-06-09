@@ -14,7 +14,7 @@ package envelope
 import (
 	"encoding/json"
 
-	"github.com/sigil-tech/kaneaz-harness/core/acp"
+	"github.com/kameas-ai/kenaz-harness/core/acp"
 )
 
 // sdkCard mirrors the shape of an A2A v1.0 AgentCard. When the SDK is

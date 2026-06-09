@@ -12,8 +12,8 @@ import (
 	"sync"
 	"time"
 
-	coreag "github.com/sigil-tech/kaneaz-harness/core/agentgraph"
-	"github.com/sigil-tech/kaneaz-harness/core/agentgraph/activities"
+	coreag "github.com/kameas-ai/kenaz-harness/core/agentgraph"
+	"github.com/kameas-ai/kenaz-harness/core/agentgraph/activities"
 )
 
 // Manager owns the kernel, the on-disk graph library, the activity

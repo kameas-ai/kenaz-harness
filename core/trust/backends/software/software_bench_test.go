@@ -7,8 +7,8 @@ import (
 	"context"
 	"testing"
 
-	"github.com/sigil-tech/kaneaz-harness/core/trust"
-	"github.com/sigil-tech/kaneaz-harness/core/trust/backends/software"
+	"github.com/kameas-ai/kenaz-harness/core/trust"
+	"github.com/kameas-ai/kenaz-harness/core/trust/backends/software"
 )
 
 // BenchmarkSoftwareSign captures NFR-002 evidence: < 20 ms p95 for

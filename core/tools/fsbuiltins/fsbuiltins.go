@@ -36,9 +36,9 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/sigil-tech/kaneaz-harness/core/policy/cedar"
-	corefs "github.com/sigil-tech/kaneaz-harness/core/tools/fs"
-	"github.com/sigil-tech/kaneaz-harness/core/toolloop"
+	"github.com/kameas-ai/kenaz-harness/core/policy/cedar"
+	corefs "github.com/kameas-ai/kenaz-harness/core/tools/fs"
+	"github.com/kameas-ai/kenaz-harness/core/toolloop"
 )
 
 // Tool names — kaneaz__ prefix is reserved for built-ins.

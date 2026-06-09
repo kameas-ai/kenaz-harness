@@ -9,10 +9,10 @@ import (
 	"testing"
 
 	cedarraw "github.com/cedar-policy/cedar-go"
-	"github.com/sigil-tech/kaneaz-harness/core/credstore/refs"
-	policycedar "github.com/sigil-tech/kaneaz-harness/core/policy/cedar"
-	"github.com/sigil-tech/kaneaz-harness/core/secrets"
-	"github.com/sigil-tech/kaneaz-harness/core/tools/webfetch"
+	"github.com/kameas-ai/kenaz-harness/core/credstore/refs"
+	policycedar "github.com/kameas-ai/kenaz-harness/core/policy/cedar"
+	"github.com/kameas-ai/kenaz-harness/core/secrets"
+	"github.com/kameas-ai/kenaz-harness/core/tools/webfetch"
 )
 
 // ─── Cedar gate fake ──────────────────────────────────────────────────────────
