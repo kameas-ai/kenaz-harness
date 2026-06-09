@@ -21,6 +21,9 @@ import (
 	compactionview "github.com/kameas-ai/kenaz-harness/core/rpc/views/compaction"
 	contextsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/contexts"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/contextview"
+	catalogview "github.com/kameas-ai/kenaz-harness/core/rpc/views/catalog"
+	syncview "github.com/kameas-ai/kenaz-harness/core/rpc/views/sync"
+	cedarview "github.com/kameas-ai/kenaz-harness/core/rpc/views/cedar"
 	corpusview "github.com/kameas-ai/kenaz-harness/core/rpc/views/corpus"
 	dialsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/dials"
 	hooksview "github.com/kameas-ai/kenaz-harness/core/rpc/views/hooks"
@@ -104,6 +107,9 @@ func (f *fakeHarnessAPI) Sessions() sessions.SessionsAPI             { return f.
 func (f *fakeHarnessAPI) Trust() trust.TrustAPI                      { return f.trustAPI }
 func (f *fakeHarnessAPI) Context() contextview.ContextAPI            { return f.contextAPI }
 func (f *fakeHarnessAPI) Contexts() contextsview.ContextsAPI         { return f.contextsAPI }
+func (f *fakeHarnessAPI) Catalog() catalogview.CatalogAPI            { return nil }
+func (f *fakeHarnessAPI) Sync() syncview.SyncAPI                     { return nil }
+func (f *fakeHarnessAPI) CedarPublish() cedarview.CedarAPI           { return nil }
 func (f *fakeHarnessAPI) Bundle() bundle.BundleAPI                   { return f.bundleAPI }
 func (f *fakeHarnessAPI) Policy() policy.PolicyAPI                   { return f.policyAPI }
 func (f *fakeHarnessAPI) Audit() audit.AuditAPI                      { return f.auditAPI }

@@ -307,6 +307,60 @@ const (
 	// HARNESS_FLEET_LOCKDOWN_BYPASS=1 env var is set, regardless of whether
 	// a lockdown is currently in effect. Payload: FleetLockdownBypassPayload.
 	KindFleetLockdownBypassUsed Kind = "fleet.lockdown_bypass_used"
+
+	// ── Fleet context-graph sync audit kinds
+	// (fleet-context-graph-sync-01NDFSEX17 WP05)
+
+	// KindFleetContextPublished fires when a local context entry is successfully
+	// pushed to the fleet context graph (team_shared or org_shared). The payload
+	// carries only the node ID, classification, and version — no body content.
+	//
+	// Privacy invariant: body, title, and metadata are NEVER included.
+	KindFleetContextPublished Kind = "fleet.context_published"
+
+	// KindFleetContextPulled fires once per successful PullDelta call that
+	// returns at least one node. The payload is a batch summary (node count,
+	// cursor) — no individual entry contents.
+	//
+	// Privacy invariant: entry bodies and titles are NEVER included.
+	KindFleetContextPulled Kind = "fleet.context_pulled"
+
+	// KindFleetContextPromoted fires when a team_shared entry is successfully
+	// elevated to org_shared via the Promote call. The payload carries the node
+	// ID and the new classification only.
+	//
+	// Privacy invariant: entry body and title are NEVER included.
+	KindFleetContextPromoted Kind = "fleet.context_promoted"
+
+	// ── Fleet share-and-sync audit kinds
+	// (fleet-share-and-sync-01NDFSEX14).
+
+	// KindFleetPolicyPublished fires when an admin publishes a Cedar rule
+	// bundle to the team via POST /api/v1/cedar-policy/publish.
+	// Payload: FleetPolicyPublishedPayload.
+	KindFleetPolicyPublished Kind = "fleet.policy_published"
+
+	// KindFleetCatalogPublished fires when a user publishes a workflow,
+	// agent pack, or bundle to the team catalog.
+	// Payload: FleetCatalogPublishedPayload.
+	KindFleetCatalogPublished Kind = "fleet.catalog_published"
+
+	// ── Fleet skills (fleet-skills-sync-01NDFSEX18 WP07) ────────────────────
+
+	// KindFleetSkillPublished fires when the user successfully publishes a
+	// user slash-command as a skill to the fleet catalog.
+	// Payload: FleetSkillPublishedPayload.
+	KindFleetSkillPublished Kind = "fleet.skill_published"
+
+	// KindFleetSkillInstalled fires when a skill is installed from the fleet
+	// catalog (pull-down) and live-registered in the registry.
+	// Payload: FleetSkillInstalledPayload.
+	KindFleetSkillInstalled Kind = "fleet.skill_installed"
+
+	// KindFleetSkillUninstalled fires when a skill is removed from the local
+	// store and unregistered from the registry.
+	// Payload: FleetSkillUninstalledPayload.
+	KindFleetSkillUninstalled Kind = "fleet.skill_uninstalled"
 )
 
 // Event is the wire shape passed to the event log. The concrete event-log
@@ -988,6 +1042,30 @@ type FleetLockdownBypassPayload struct {
 	EnvVar string `json:"env_var"`
 }
 
+// FleetPolicyPublishedPayload carries the signalling for KindFleetPolicyPublished.
+// Privacy invariant: rule source bytes are NEVER included — only the rule_id
+// and author are emitted.
+type FleetPolicyPublishedPayload struct {
+	// RuleID is the unique identifier of the published Cedar rule.
+	RuleID string `json:"rule_id"`
+	// Author is the identity of the publishing admin (email or user_id).
+	Author string `json:"author,omitempty"`
+}
+
+// FleetCatalogPublishedPayload carries the signalling for
+// KindFleetCatalogPublished. Privacy invariant: payload bytes are NEVER
+// included — only catalog metadata.
+type FleetCatalogPublishedPayload struct {
+	// CatalogID is the server-assigned catalog item ID.
+	CatalogID string `json:"catalog_id"`
+	// Kind is the item kind (workflow, agent_pack, bundle).
+	Kind string `json:"kind"`
+	// Slug is the human-readable catalog slug.
+	Slug string `json:"slug,omitempty"`
+	// Version is the published SemVer string.
+	Version string `json:"version,omitempty"`
+}
+
 // Emit is a small convenience wrapper for callers that have a payload
 // value but not a pre-built Event. Errors are returned to the caller —
 // audit must never panic.
@@ -1000,4 +1078,82 @@ func Emit(ctx context.Context, em Emitter, kind Kind, payload any, now time.Time
 		return err
 	}
 	return em.Emit(ctx, e)
+}
+
+// ── Fleet context-graph sync payload types
+// (fleet-context-graph-sync-01NDFSEX17 WP05)
+
+// FleetContextPublishedPayload is the audit payload for KindFleetContextPublished.
+//
+// Privacy invariant: body, title, and metadata are NEVER included.
+type FleetContextPublishedPayload struct {
+	// NodeID is the stable UUID of the published node.
+	NodeID string `json:"node_id"`
+	// Classification is "team_shared" or "org_shared".
+	Classification string `json:"classification"`
+	// Version is the version sent to the server.
+	Version int `json:"version"`
+}
+
+// FleetContextPulledPayload is the audit payload for KindFleetContextPulled.
+// Emitted once per PullDelta call that returns at least one node.
+//
+// Privacy invariant: entry bodies and titles are NEVER included.
+type FleetContextPulledPayload struct {
+	// NodeCount is the number of nodes received in this pull batch.
+	NodeCount int `json:"node_count"`
+	// TombstoneCount is the number of those nodes that were soft-deleted.
+	TombstoneCount int `json:"tombstone_count"`
+	// Cursor is the RFC3339Nano timestamp advanced after this pull.
+	Cursor string `json:"cursor"`
+}
+
+// FleetContextPromotedPayload is the audit payload for KindFleetContextPromoted.
+//
+// Privacy invariant: entry body and title are NEVER included.
+type FleetContextPromotedPayload struct {
+	// NodeID is the stable UUID of the promoted node.
+	NodeID string `json:"node_id"`
+	// ToClassification is always "org_shared" in v0.
+	ToClassification string `json:"to_classification"`
+}
+
+// ── Fleet skill audit payload types (fleet-skills-sync-01NDFSEX18 WP07) ──────
+
+// FleetSkillPublishedPayload carries the audit signalling for
+// KindFleetSkillPublished.
+//
+// Privacy invariant: skill body, template, and tool_args_template are NEVER
+// included — only catalog metadata and provenance.
+type FleetSkillPublishedPayload struct {
+	// CatalogID is the server-assigned catalog item ID.
+	CatalogID string `json:"catalog_id"`
+	// Slug is the human-readable catalog slug (matches the skill trigger).
+	Slug string `json:"slug,omitempty"`
+	// Version is the published SemVer string.
+	Version string `json:"version,omitempty"`
+	// Visibility is "private", "team", or "org_public".
+	Visibility string `json:"visibility"`
+}
+
+// FleetSkillInstalledPayload carries the audit signalling for
+// KindFleetSkillInstalled.
+//
+// Privacy invariant: skill body is NEVER included.
+type FleetSkillInstalledPayload struct {
+	// CatalogID is the fleet catalog item ID.
+	CatalogID string `json:"catalog_id"`
+	// Version is the installed SemVer string.
+	Version string `json:"version,omitempty"`
+	// Trigger is the slash-command trigger (no leading slash).
+	Trigger string `json:"trigger"`
+}
+
+// FleetSkillUninstalledPayload carries the audit signalling for
+// KindFleetSkillUninstalled.
+type FleetSkillUninstalledPayload struct {
+	// SkillID is the local store ID of the uninstalled skill.
+	SkillID string `json:"skill_id"`
+	// Trigger is the slash-command trigger that was unregistered.
+	Trigger string `json:"trigger,omitempty"`
 }

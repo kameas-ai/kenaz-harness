@@ -56,6 +56,8 @@ import (
 	secretsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/secrets"
 	planmodeview "github.com/kameas-ai/kenaz-harness/core/rpc/views/planmode"
 	sentryview "github.com/kameas-ai/kenaz-harness/core/rpc/views/sentry"
+	catalogview "github.com/kameas-ai/kenaz-harness/core/rpc/views/catalog"
+	syncview "github.com/kameas-ai/kenaz-harness/core/rpc/views/sync"
 	"github.com/kameas-ai/kenaz-harness/core/logging"
 	"github.com/kameas-ai/kenaz-harness/core/mcp/stdio"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/middleware"
@@ -566,6 +568,29 @@ func (b *Bindings) Contexts_RecentlyApplied(limit int) ([]string, error) {
 }
 func (b *Bindings) Contexts_RootPath() (string, error) {
 	return b.api.Contexts().RootPath(b.ctx())
+}
+
+// Contexts_ContextPublish publishes a local context entry to the fleet
+// context graph. Requires the ContextGraphSyncer to be wired (via
+// API.WithSyncer) and CapSharedTeamGraph capability.
+// (fleet-context-graph-sync-01NDFSEX17 WP06)
+func (b *Bindings) Contexts_ContextPublish(req contextsview.ContextPublishRequest) (contextsview.ContextPublishResult, error) {
+	return b.api.Contexts().Context_Publish(b.ctx(), req)
+}
+
+// Contexts_ContextPromote elevates a team_shared context entry to org_shared
+// on the fleet server. Requires CapSharedTeamGraph.
+// (fleet-context-graph-sync-01NDFSEX17 WP06)
+func (b *Bindings) Contexts_ContextPromote(nodeID string) (contextsview.ContextPromoteResult, error) {
+	return b.api.Contexts().Context_Promote(b.ctx(), nodeID)
+}
+
+// Contexts_ContextSyncStatus returns a snapshot of the fleet context-graph
+// syncer state: cursor, last pull time, error strings, pull count, and team
+// cap flag. Always returns a non-error result.
+// (fleet-context-graph-sync-01NDFSEX17 WP06)
+func (b *Bindings) Contexts_ContextSyncStatus() (contextsview.ContextSyncStatusView, error) {
+	return b.api.Contexts().Context_SyncStatus(b.ctx())
 }
 
 // ── bundle ─────────────────────────────────────────────────────────────
@@ -1880,6 +1905,28 @@ func (b *Bindings) Slashcmd_Run(name string, args map[string]string, sessionID, 
 	return b.api.Slash().UserRun(b.ctx(), name, args, sessionID, projectID, cwd, selection)
 }
 
+// ── fleet skill RPCs (fleet-skills-sync-01NDFSEX18 WP02/03/04) ───────
+
+func (b *Bindings) Slashcmd_SkillList() ([]slashview.SkillItemWire, error) {
+	return b.api.Slash().SkillList(b.ctx())
+}
+
+func (b *Bindings) Slashcmd_SkillPublish(name, projectID, visibility string) error {
+	return b.api.Slash().SkillPublish(b.ctx(), name, projectID, visibility)
+}
+
+func (b *Bindings) Slashcmd_SkillInstall(catalogID, version string) error {
+	return b.api.Slash().SkillInstall(b.ctx(), catalogID, version)
+}
+
+func (b *Bindings) Slashcmd_SkillUninstall(skillID string) error {
+	return b.api.Slash().SkillUninstall(b.ctx(), skillID)
+}
+
+func (b *Bindings) Slashcmd_SkillRenameLocalTrigger(skillID, newTrigger string) error {
+	return b.api.Slash().SkillRenameLocalTrigger(b.ctx(), skillID, newTrigger)
+}
+
 // ── feature flags (user-slash-commands-01KQ8TD9 WP09) ────────────────
 
 // FeatureFlagInfo carries a single feature-flag name + enabled state
@@ -2579,4 +2626,74 @@ func (b *Bindings) Fleet_GetTelemetryConsent() (string, error) {
 // Team+).
 func (b *Bindings) Fleet_SetTelemetryConsent(level string) error {
 	return b.api.Fleet().SetTelemetryConsent(b.ctx(), level)
+}
+
+// ── Catalog bindings (fleet-share-and-sync-01NDFSEX14 WP02) ──────────────────
+
+// Catalog_Publish signs and publishes a workflow/agent-pack/bundle to the
+// fleet catalog. Returns the canonical catalog item with its assigned ID.
+func (b *Bindings) Catalog_Publish(input catalogview.PublishInput) (catalogview.CatalogItemView, error) {
+	return b.api.Catalog().Catalog_Publish(b.ctx(), input)
+}
+
+// Catalog_List returns items in the fleet catalog, optionally filtered by kind
+// or visibility.
+func (b *Bindings) Catalog_List(filter catalogview.CatalogFilter) ([]catalogview.CatalogItemView, error) {
+	return b.api.Catalog().Catalog_List(b.ctx(), filter)
+}
+
+// Catalog_Install downloads and installs the identified catalog item into the
+// local DataDir. Returns an error when signature verification fails.
+func (b *Bindings) Catalog_Install(catalogID, version string) error {
+	return b.api.Catalog().Catalog_Install(b.ctx(), catalogID, version)
+}
+
+// Catalog_Uninstall removes a previously-installed catalog item from the local
+// DataDir. Idempotent when the item is not installed.
+func (b *Bindings) Catalog_Uninstall(kind, catalogID, version string) error {
+	return b.api.Catalog().Catalog_Uninstall(b.ctx(), kind, catalogID, version)
+}
+
+// Catalog_Installed lists all catalog items currently installed in the local
+// DataDir, across all kinds.
+func (b *Bindings) Catalog_Installed() ([]catalogview.CatalogItemView, error) {
+	return b.api.Catalog().Catalog_Installed(b.ctx())
+}
+
+// ── Sync bindings (fleet-share-and-sync-01NDFSEX14 WP05) ─────────────────────
+
+// Sync_Toggle enables or disables sync for the given category string
+// (e.g. "provider_profiles", "ui_theme"). On enable, triggers an immediate push.
+func (b *Bindings) Sync_Toggle(category string, enabled bool) error {
+	return b.api.Sync().Sync_Toggle(b.ctx(), category, enabled)
+}
+
+// Sync_Status returns the sync status for all categories.
+func (b *Bindings) Sync_Status() ([]syncview.SyncStatusView, error) {
+	return b.api.Sync().Sync_Status(b.ctx())
+}
+
+// Sync_ForcePush immediately pushes local state for the given category to fleet.
+func (b *Bindings) Sync_ForcePush(category string) error {
+	return b.api.Sync().Sync_ForcePush(b.ctx(), category)
+}
+
+// Sync_ForcePull immediately pulls remote state for the given category and applies it.
+func (b *Bindings) Sync_ForcePull(category string) error {
+	return b.api.Sync().Sync_ForcePull(b.ctx(), category)
+}
+
+// Sync_PendingMCPSecrets returns MCPs that arrived via sync but need credentials
+// from the user before they can start. Shown in the SyncPanel "Provide credentials" banner.
+func (b *Bindings) Sync_PendingMCPSecrets() ([]syncview.PendingMCPSecret, error) {
+	return b.api.Sync().Sync_PendingMCPSecrets(b.ctx())
+}
+
+// ── CedarPublish bindings (fleet-share-and-sync-01NDFSEX14 WP07) ─────────────
+
+// Cedar_PublishToTeam publishes a Cedar rule source to the team via fleet.
+// The current user must have the policy_admin role; returns ErrCapabilityNotInTier
+// when the server responds 403.
+func (b *Bindings) Cedar_PublishToTeam(ruleID, ruleSource string) error {
+	return b.api.CedarPublish().Cedar_PublishToTeam(b.ctx(), ruleID, ruleSource)
 }

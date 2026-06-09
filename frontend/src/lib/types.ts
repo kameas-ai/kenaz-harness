@@ -558,6 +558,44 @@ export interface ContextNode {
   children?: ContextNode[];
 }
 
+// ── Fleet context-graph sync types (fleet-context-graph-sync-01NDFSEX17) ──────
+
+export interface ContextPublishRequest {
+  node_id: string;
+  layer: 'team' | 'org';
+  kind: string;
+  title: string;
+  body: string;
+  team_id?: string;
+  version: number;
+}
+
+export interface ContextPushConflict {
+  node_id: string;
+  server_version: number;
+  client_version: number;
+}
+
+export interface ContextPublishResult {
+  accepted_nodes: number;
+  accepted_edges: number;
+  conflicts: ContextPushConflict[];
+}
+
+export interface ContextPromoteResult {
+  updated_node_id: string;
+  new_classification: 'org_shared';
+}
+
+export interface ContextSyncStatusView {
+  cursor: string;
+  last_pull_at?: string;
+  last_pull_err: string;
+  last_push_err: string;
+  pull_count: number;
+  team_cap_enabled: boolean;
+}
+
 export interface Bundle {
   id: string;
   name: string;
@@ -3755,4 +3793,74 @@ export interface LockdownStatusView {
   active: boolean;
   /** Admin-supplied reason text; empty when not active or no reason given. */
   reason: string;
+}
+
+// ── Catalog types (fleet-share-and-sync-01NDFSEX14 WP02) ────────────────────
+
+/**
+ * CatalogPublishInput — input to Catalog_Publish.
+ * Mirrors core/rpc/views/catalog.PublishInput.
+ */
+export interface CatalogPublishInput {
+  kind: 'workflow' | 'agent_pack' | 'bundle' | string;
+  slug: string;
+  version: string;
+  description: string;
+  visibility: 'private' | 'team' | 'org_public' | string;
+  /** JSON-serialised opaque payload (workflow/pack/bundle definition). */
+  payload_json: string;
+}
+
+/**
+ * CatalogFilter — optional filter for Catalog_List.
+ * Mirrors core/rpc/views/catalog.CatalogFilter.
+ */
+export interface CatalogFilter {
+  kind?: string;
+  visibility?: string;
+}
+
+/**
+ * CatalogItemView — a catalog item as seen by the frontend.
+ * Mirrors core/rpc/views/catalog.CatalogItemView.
+ */
+export interface CatalogItemView {
+  id: string;
+  kind: string;
+  slug: string;
+  version: string;
+  description: string;
+  visibility: string;
+  /** RFC3339 timestamp; absent if never published. */
+  published_at?: string;
+  /** true when this version is installed in the local DataDir. */
+  installed: boolean;
+}
+
+// ── Sync types (fleet-share-and-sync-01NDFSEX14 WP05) ───────────────────────
+
+/**
+ * SyncStatusView — per-category sync state.
+ * Mirrors core/rpc/views/sync.SyncStatusView.
+ */
+export interface SyncStatusView {
+  category: string;
+  enabled: boolean;
+  /** RFC3339; absent if never pushed. */
+  last_push_at?: string;
+  /** RFC3339; absent if never pulled. */
+  last_pull_at?: string;
+  /** Non-empty when the last push/pull errored. */
+  last_error?: string;
+}
+
+/**
+ * PendingMCPSecret — an MCP that arrived via sync but needs credentials.
+ * Mirrors core/rpc/views/sync.PendingMCPSecret.
+ */
+export interface PendingMCPSecret {
+  mcp_id: string;
+  recipe_id: string;
+  /** env var names the user must supply before the MCP can start. */
+  requires_secret_keys: string[];
 }

@@ -13,6 +13,7 @@ import (
 	"github.com/kameas-ai/kenaz-harness/core/logging"
 	"github.com/kameas-ai/kenaz-harness/core/mcp/recipes"
 	cedarpolicy "github.com/kameas-ai/kenaz-harness/core/policy/cedar"
+	"github.com/kameas-ai/kenaz-harness/core/slashcmd"
 )
 
 // AdapterRegistrar is the minimal interface from the LLM registry that the
@@ -44,6 +45,13 @@ type fleetState struct {
 	// fleetModelPrefs is the last-received fleet model preferences.
 	// Protected by mu.
 	fleetModelPrefs *fleet.BundleModelPrefs
+
+	// skillStore + skillRegistry are wired at boot time via SetSkillRefs so the
+	// compositeConfigApplier can call fleet.ApplyMandatedSkills when a bundle
+	// carries the mandated_skills section (fleet-skills-sync-01NDFSEX18 WP05).
+	// Both may be nil when fleet skill sync is not configured.
+	skillStore    *slashcmd.SkillStore
+	skillRegistry *slashcmd.Registry
 }
 
 // SetFleetClient wires a fleet.Client into the API and starts the capability
@@ -116,6 +124,24 @@ func (a *API) SetCedarEngine(engine *cedarpolicy.Engine) {
 	a.fleet.mu.Lock()
 	defer a.fleet.mu.Unlock()
 	a.fleet.cedarEngine = engine
+}
+
+// SetSkillRefs wires the fleet-skill store and slash registry into the fleet
+// state so that the compositeConfigApplier can call fleet.ApplyMandatedSkills
+// when a config bundle carries a mandated_skills section.
+// (fleet-skills-sync-01NDFSEX18 WP05)
+//
+// Called from rpc.New() after both the skillStore and slashRegistry are
+// constructed. Safe to skip — when nil, ApplyBundle silently skips the
+// mandated_skills section.
+func (a *API) SetSkillRefs(store *slashcmd.SkillStore, registry *slashcmd.Registry) {
+	if a.fleet == nil {
+		a.fleet = &fleetState{}
+	}
+	a.fleet.mu.Lock()
+	defer a.fleet.mu.Unlock()
+	a.fleet.skillStore = store
+	a.fleet.skillRegistry = registry
 }
 
 // wireFleetHostedAdapter creates the fleet_hosted LLM adapter and registers
@@ -198,6 +224,13 @@ func (a *API) fleetPoller() *fleet.CapabilityPoller {
 	a.fleet.mu.RLock()
 	defer a.fleet.mu.RUnlock()
 	return a.fleet.poller
+}
+
+// CapabilityPoller returns the fleet capability poller, or nil when fleet is
+// not configured. Used by the rpc layer to resolve live capabilities at call
+// time (fleet-skills-sync-01NDFSEX18 WP02).
+func (a *API) CapabilityPoller() *fleet.CapabilityPoller {
+	return a.fleetPoller()
 }
 
 // FleetSignIn kicks off the PKCE loopback OAuth flow. On success it
@@ -459,6 +492,24 @@ func (a *compositeConfigApplier) ApplyBundle(ctx context.Context, b *fleet.Bundl
 		dataDir := a.state.dataDir
 		a.state.mu.RUnlock()
 		fleet.SetWeightURLs(dataDir, b.KameasMLWeightURLs)
+	}
+
+	// Mandated skills (fleet-skills-sync-01NDFSEX18 WP05).
+	// Partial-success pattern: individual skill errors are collected but
+	// don't prevent the bundle ACK from advancing (matching the rest of
+	// the bundle apply logic).
+	if len(b.MandatedSkills) > 0 {
+		a.state.mu.RLock()
+		skillStore := a.state.skillStore
+		skillRegistry := a.state.skillRegistry
+		a.state.mu.RUnlock()
+		if skillStore != nil && skillRegistry != nil {
+			skillErrs := fleet.ApplyMandatedSkills(skillStore, skillRegistry, b.MandatedSkills)
+			for _, se := range skillErrs {
+				logging.L().Warn("fleet.config.mandated_skills.apply_error", "err", se.Error())
+				errs = append(errs, se)
+			}
+		}
 	}
 
 	if len(errs) > 0 {

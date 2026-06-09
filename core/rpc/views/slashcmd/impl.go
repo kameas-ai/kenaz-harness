@@ -6,16 +6,36 @@ import (
 	"fmt"
 	"time"
 
+	corefleet "github.com/kameas-ai/kenaz-harness/core/fleet"
 	coreslashcmd "github.com/kameas-ai/kenaz-harness/core/slashcmd"
 )
+
+// SkillDeps bundles the fleet dependencies needed for skill publish/install.
+// All fields are optional — the surface degrades gracefully when nil.
+// (fleet-skills-sync-01NDFSEX18 WP02/03/04)
+type SkillDeps struct {
+	// SkillStore persists fleet-installed skills to disk.
+	SkillStore *coreslashcmd.SkillStore
+	// FleetClient is the fleet HTTP client for publish/install RPCs.
+	FleetClient *corefleet.Client
+	// Signer is the device signing key for payload signing.
+	Signer *corefleet.DeviceSigner
+	// GetCaps returns the current capability snapshot at call time so that
+	// tier changes propagate within one poll interval without restart.
+	// When nil, DefaultDenyCapabilities is used (all capability checks fail).
+	GetCaps func() *corefleet.Capabilities
+	// PubKeyBase64 is the fleet signing public key for install verification.
+	PubKeyBase64 string
+}
 
 // API is the concrete SlashAPI implementation. It delegates to the
 // supplied *slashcmd.Registry; the registry owns all command-specific
 // behaviour. The view's responsibility is wire shape conversion.
 type API struct {
-	registry *coreslashcmd.Registry
-	store    *coreslashcmd.Store    // may be nil before user-slashcmd WP02 wiring
-	dispatch *coreslashcmd.Dispatch // may be nil before WP03 wiring
+	registry   *coreslashcmd.Registry
+	store      *coreslashcmd.Store    // may be nil before user-slashcmd WP02 wiring
+	dispatch   *coreslashcmd.Dispatch // may be nil before WP03 wiring
+	skillDeps  SkillDeps              // fleet-skills-sync-01NDFSEX18
 }
 
 // New constructs the API. A nil registry is permitted — the surface
@@ -29,6 +49,14 @@ func New(registry *coreslashcmd.Registry) *API {
 // NewWithStore constructs the API with user-command store + dispatch wired.
 func NewWithStore(registry *coreslashcmd.Registry, store *coreslashcmd.Store, dispatch *coreslashcmd.Dispatch) *API {
 	return &API{registry: registry, store: store, dispatch: dispatch}
+}
+
+// WithSkillDeps wires fleet skill dependencies into the API.
+// Called from rpc.New() after the fleet client is configured.
+// (fleet-skills-sync-01NDFSEX18 WP02)
+func (a *API) WithSkillDeps(deps SkillDeps) *API {
+	a.skillDeps = deps
+	return a
 }
 
 // Execute parses raw and dispatches to the registry. Unknown commands
@@ -199,6 +227,141 @@ func wireToCoreCmd(w UserCommandWire) coreslashcmd.UserCommand {
 		Inputs:           w.Inputs,
 		CreatedAt:        w.CreatedAt,
 		UpdatedAt:        w.UpdatedAt,
+	}
+}
+
+// ── fleet skill methods (fleet-skills-sync-01NDFSEX18 WP02/03/04) ────────────
+
+// SkillList returns all fleet-installed skills from the SkillStore.
+func (a *API) SkillList(_ context.Context) ([]SkillItemWire, error) {
+	if a.skillDeps.SkillStore == nil {
+		return nil, nil // not wired — return empty, not an error
+	}
+	skills, err := a.skillDeps.SkillStore.List()
+	if err != nil {
+		return nil, err
+	}
+	out := make([]SkillItemWire, 0, len(skills))
+	for _, sk := range skills {
+		// Detect shadow: the Registry has the trigger but with a different type.
+		shadowed := false
+		if a.registry != nil {
+			if cmd, ok := a.registry.Lookup(sk.EffectiveTrigger()); ok {
+				// If the registry has the trigger but not via this skill's EffectiveTrigger,
+				// it means a different command is occupying it.
+				if cmd.Description() != sk.Description {
+					shadowed = true
+				}
+			}
+		}
+		out = append(out, skillToWire(sk, shadowed))
+	}
+	return out, nil
+}
+
+// SkillPublish signs the user command named by (name, projectID) and
+// publishes it to the fleet catalog as a skill with the given visibility.
+func (a *API) SkillPublish(ctx context.Context, name, projectID, visibility string) error {
+	if a.store == nil {
+		return fmt.Errorf("slashcmd view: user command store not wired")
+	}
+	if a.skillDeps.FleetClient == nil {
+		return corefleet.ErrFleetDisabled
+	}
+	if a.skillDeps.Signer == nil {
+		return fmt.Errorf("slashcmd view: skill publish: signer not configured")
+	}
+
+	// Load the source user command.
+	cmd, err := a.store.LoadUserOne(ctx, name, projectID)
+	if err != nil {
+		return fmt.Errorf("slashcmd view: skill publish load command: %w", err)
+	}
+
+	// Build a Skill from the UserCommand.
+	skill := coreslashcmd.Skill{
+		ID:               name,
+		Trigger:          name,
+		Kind:             cmd.Kind,
+		Description:      cmd.Description,
+		Body:             cmd.Body,
+		Tool:             cmd.Tool,
+		ToolArgsTemplate: cmd.ToolArgsTemplate,
+		Inputs:           cmd.Inputs,
+		Source:           coreslashcmd.SkillSourceCatalog,
+	}
+
+	vis := corefleet.CatalogVisibility(visibility)
+	var caps *corefleet.Capabilities
+	if a.skillDeps.GetCaps != nil {
+		caps = a.skillDeps.GetCaps()
+	}
+	if caps == nil {
+		c := corefleet.DefaultDenyCapabilities()
+		caps = &c
+	}
+
+	_, err = corefleet.PublishSkill(ctx, a.skillDeps.FleetClient, caps, a.skillDeps.Signer, skill, vis)
+	return err
+}
+
+// SkillInstall downloads, verifies, and live-registers a skill from the catalog.
+func (a *API) SkillInstall(ctx context.Context, catalogID, version string) error {
+	if a.skillDeps.FleetClient == nil {
+		return corefleet.ErrFleetDisabled
+	}
+	if a.skillDeps.SkillStore == nil {
+		return fmt.Errorf("slashcmd view: skill store not wired")
+	}
+	if a.registry == nil {
+		return fmt.Errorf("slashcmd view: registry not wired")
+	}
+	return corefleet.InstallSkill(ctx, a.skillDeps.FleetClient,
+		a.skillDeps.SkillStore, a.registry,
+		a.skillDeps.PubKeyBase64, catalogID, version)
+}
+
+// SkillUninstall removes and live-unregisters a skill by store ID.
+func (a *API) SkillUninstall(_ context.Context, skillID string) error {
+	if a.skillDeps.SkillStore == nil {
+		return fmt.Errorf("slashcmd view: skill store not wired")
+	}
+	if a.registry == nil {
+		return fmt.Errorf("slashcmd view: registry not wired")
+	}
+	return corefleet.UninstallSkill(a.skillDeps.SkillStore, a.registry, skillID)
+}
+
+// SkillRenameLocalTrigger sets a local trigger alias to resolve a shadow conflict.
+// An empty newTrigger clears the alias (reverts to canonical trigger).
+// (fleet-skills-sync-01NDFSEX18 WP06, FR-401)
+func (a *API) SkillRenameLocalTrigger(_ context.Context, skillID, newTrigger string) error {
+	if a.skillDeps.SkillStore == nil {
+		return fmt.Errorf("slashcmd view: skill store not wired")
+	}
+	if a.registry == nil {
+		return fmt.Errorf("slashcmd view: registry not wired")
+	}
+	return coreslashcmd.RenameLocalTrigger(a.skillDeps.SkillStore, a.registry, skillID, newTrigger)
+}
+
+// skillToWire converts a Skill to its wire shape.
+func skillToWire(sk coreslashcmd.Skill, shadowed bool) SkillItemWire {
+	return SkillItemWire{
+		ID:           sk.ID,
+		CatalogID:    sk.CatalogID,
+		Version:      sk.Version,
+		Source:       string(sk.Source),
+		Trigger:      sk.Trigger,
+		LocalTrigger: sk.LocalTrigger,
+		Kind:         string(sk.Kind),
+		Description:  sk.Description,
+		Body:         sk.Body,
+		OrgManaged:   sk.OrgManaged,
+		Disabled:     sk.Disabled,
+		Shadowed:     shadowed,
+		InstalledAt:  sk.InstalledAt,
+		UpdatedAt:    sk.UpdatedAt,
 	}
 }
 
