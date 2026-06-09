@@ -3,7 +3,7 @@ import { mount, flushPromises } from '@vue/test-utils';
 import ContextsView from '@/views/contexts/ContextsView.vue';
 import { createFakeHarnessClient } from '@/lib/harnessClient';
 import { HarnessClientKey } from '@/lib/harnessClientContext';
-import type { ContextNode } from '@/lib/types';
+import type { ContextNode, ContextSyncStatusView, ContextPublishRequest, ContextPublishResult } from '@/lib/types';
 
 function provide(opts: {
   tree?: ContextNode;
@@ -12,6 +12,8 @@ function provide(opts: {
   recent?: string[];
   rootPath?: string;
   saveSpy?: (path: string, content: string) => Promise<void>;
+  syncStatus?: ContextSyncStatusView;
+  publishSpy?: (req: ContextPublishRequest) => Promise<ContextPublishResult>;
 }) {
   const tree: ContextNode =
     opts.tree ?? { name: '', path: '', kind: 'folder' };
@@ -19,6 +21,13 @@ function provide(opts: {
   const files = opts.files ?? {};
   const recent = opts.recent ?? [];
   const rootPath = opts.rootPath ?? '/tmp/contexts';
+  const syncStatus: ContextSyncStatusView = opts.syncStatus ?? {
+    cursor: '',
+    last_pull_err: '',
+    last_push_err: '',
+    pull_count: 0,
+    team_cap_enabled: false,
+  };
 
   const client = createFakeHarnessClient({
     contexts: {
@@ -37,6 +46,16 @@ function provide(opts: {
       delete: async () => undefined,
       recentlyApplied: async () => recent,
       rootPath: async () => rootPath,
+      syncStatus: async () => syncStatus,
+      publish: opts.publishSpy ?? (async (_req) => ({
+        accepted_nodes: 1,
+        accepted_edges: 0,
+        conflicts: [],
+      })),
+      promote: async (nodeID) => ({
+        updated_node_id: nodeID,
+        new_classification: 'org_shared' as const,
+      }),
     },
   });
   return { client };
@@ -310,5 +329,231 @@ describe('ContextsView', () => {
     expect(w.find('[data-testid="context-recent-pinned.md"]').exists()).toBe(
       true,
     );
+  });
+
+  describe('WP07 — fleet context-graph sync UI', () => {
+    it('does not show sync status strip when team cap is absent', async () => {
+      const { client } = provide({
+        syncStatus: {
+          cursor: '',
+          last_pull_err: '',
+          last_push_err: '',
+          pull_count: 0,
+          team_cap_enabled: false,
+        },
+      });
+      const w = mount(ContextsView, {
+        global: { provide: { [HarnessClientKey as symbol]: client } },
+      });
+      await flushPromises();
+      expect(w.find('[data-testid=context-sync-status-strip]').exists()).toBe(false);
+    });
+
+    it('shows sync status strip when team cap is enabled', async () => {
+      const { client } = provide({
+        syncStatus: {
+          cursor: '2026-06-08T00:00:00Z',
+          last_pull_err: '',
+          last_push_err: '',
+          pull_count: 5,
+          team_cap_enabled: true,
+        },
+      });
+      const w = mount(ContextsView, {
+        global: { provide: { [HarnessClientKey as symbol]: client } },
+      });
+      await flushPromises();
+      const strip = w.find('[data-testid=context-sync-status-strip]');
+      expect(strip.exists()).toBe(true);
+      expect(strip.text()).toContain('Team sync active');
+      expect(w.find('[data-testid=context-sync-pull-count]').text()).toContain('5');
+    });
+
+    it('does not show publish button when team cap is absent', async () => {
+      const tree: ContextNode = {
+        name: '',
+        path: '',
+        kind: 'folder',
+        children: [{ name: 'guide.md', path: 'guide.md', kind: 'file' }],
+      };
+      const { client } = provide({
+        tree,
+        files: { 'guide.md': '# guide' },
+        syncStatus: {
+          cursor: '',
+          last_pull_err: '',
+          last_push_err: '',
+          pull_count: 0,
+          team_cap_enabled: false,
+        },
+      });
+      const w = mount(ContextsView, {
+        global: { provide: { [HarnessClientKey as symbol]: client } },
+      });
+      await flushPromises();
+      // Click to select a file.
+      await w.find('[data-testid="context-node-guide.md"]').trigger('click');
+      await flushPromises();
+      expect(w.find('[data-testid=context-publish-btn]').exists()).toBe(false);
+    });
+
+    it('shows publish button when team cap is enabled and a file is selected', async () => {
+      const tree: ContextNode = {
+        name: '',
+        path: '',
+        kind: 'folder',
+        children: [{ name: 'style.md', path: 'style.md', kind: 'file' }],
+      };
+      const { client } = provide({
+        tree,
+        files: { 'style.md': '# Go style' },
+        syncStatus: {
+          cursor: '',
+          last_pull_err: '',
+          last_push_err: '',
+          pull_count: 0,
+          team_cap_enabled: true,
+        },
+      });
+      const w = mount(ContextsView, {
+        global: { provide: { [HarnessClientKey as symbol]: client } },
+      });
+      await flushPromises();
+      // No file selected yet — button hidden.
+      expect(w.find('[data-testid=context-publish-btn]').exists()).toBe(false);
+      // Select a file.
+      await w.find('[data-testid="context-node-style.md"]').trigger('click');
+      await flushPromises();
+      // Button appears.
+      expect(w.find('[data-testid=context-publish-btn]').exists()).toBe(true);
+    });
+
+    it('opens the first-publish confirm dialog on publish button click', async () => {
+      const tree: ContextNode = {
+        name: '',
+        path: '',
+        kind: 'folder',
+        children: [{ name: 'tips.md', path: 'tips.md', kind: 'file' }],
+      };
+      const { client } = provide({
+        tree,
+        files: { 'tips.md': '# tips' },
+        syncStatus: {
+          cursor: '',
+          last_pull_err: '',
+          last_push_err: '',
+          pull_count: 0,
+          team_cap_enabled: true,
+        },
+      });
+      const w = mount(ContextsView, {
+        global: { provide: { [HarnessClientKey as symbol]: client } },
+      });
+      await flushPromises();
+      await w.find('[data-testid="context-node-tips.md"]').trigger('click');
+      await flushPromises();
+      // Click publish.
+      await w.find('[data-testid=context-publish-btn]').trigger('click');
+      await flushPromises();
+      const dialog = w.find('[data-testid=context-publish-confirm-dialog]');
+      expect(dialog.exists()).toBe(true);
+      expect(dialog.text()).toContain('Share with your team?');
+      expect(dialog.text()).toContain('visible to everyone in your organisation');
+    });
+
+    it('cancels the confirm dialog without publishing', async () => {
+      const tree: ContextNode = {
+        name: '',
+        path: '',
+        kind: 'folder',
+        children: [{ name: 'cancel.md', path: 'cancel.md', kind: 'file' }],
+      };
+      const publishSpy = vi.fn(async (_req: ContextPublishRequest) => ({
+        accepted_nodes: 1,
+        accepted_edges: 0,
+        conflicts: [],
+      }));
+      const { client } = provide({
+        tree,
+        files: { 'cancel.md': '# cancel' },
+        syncStatus: { cursor: '', last_pull_err: '', last_push_err: '', pull_count: 0, team_cap_enabled: true },
+        publishSpy,
+      });
+      const w = mount(ContextsView, {
+        global: { provide: { [HarnessClientKey as symbol]: client } },
+      });
+      await flushPromises();
+      await w.find('[data-testid="context-node-cancel.md"]').trigger('click');
+      await flushPromises();
+      await w.find('[data-testid=context-publish-btn]').trigger('click');
+      await flushPromises();
+      // Dialog is open.
+      expect(w.find('[data-testid=context-publish-confirm-dialog]').exists()).toBe(true);
+      // Click cancel.
+      await w.find('[data-testid=context-publish-confirm-cancel]').trigger('click');
+      await flushPromises();
+      // Dialog closed, publish not called.
+      expect(w.find('[data-testid=context-publish-confirm-dialog]').exists()).toBe(false);
+      expect(publishSpy).not.toHaveBeenCalled();
+    });
+
+    it('calls publish and shows result after confirming', async () => {
+      const tree: ContextNode = {
+        name: '',
+        path: '',
+        kind: 'folder',
+        children: [{ name: 'house.md', path: 'house.md', kind: 'file' }],
+      };
+      const publishSpy = vi.fn(async (_req: ContextPublishRequest) => ({
+        accepted_nodes: 1,
+        accepted_edges: 0,
+        conflicts: [],
+      }));
+      const { client } = provide({
+        tree,
+        files: { 'house.md': '# House Go style' },
+        syncStatus: { cursor: '', last_pull_err: '', last_push_err: '', pull_count: 0, team_cap_enabled: true },
+        publishSpy,
+      });
+      const w = mount(ContextsView, {
+        global: { provide: { [HarnessClientKey as symbol]: client } },
+      });
+      await flushPromises();
+      await w.find('[data-testid="context-node-house.md"]').trigger('click');
+      await flushPromises();
+      await w.find('[data-testid=context-publish-btn]').trigger('click');
+      await flushPromises();
+      // Confirm.
+      await w.find('[data-testid=context-publish-confirm-ok]').trigger('click');
+      await flushPromises();
+      // publish was called with layer=team.
+      expect(publishSpy).toHaveBeenCalledOnce();
+      const req = publishSpy.mock.calls[0]![0];
+      expect(req.layer).toBe('team');
+      expect(req.title).toBe('house');
+      expect(req.body).toBe('# House Go style');
+      // Result strip shown.
+      expect(w.find('[data-testid=context-publish-result]').exists()).toBe(true);
+      expect(w.find('[data-testid=context-publish-result]').text()).toContain('Published');
+    });
+
+    it('shows sync pull error in status strip', async () => {
+      const { client } = provide({
+        syncStatus: {
+          cursor: '',
+          last_pull_err: 'fleet: timeout',
+          last_push_err: '',
+          pull_count: 0,
+          team_cap_enabled: true,
+        },
+      });
+      const w = mount(ContextsView, {
+        global: { provide: { [HarnessClientKey as symbol]: client } },
+      });
+      await flushPromises();
+      const errEl = w.find('[data-testid=context-sync-pull-err]');
+      expect(errEl.exists()).toBe(true);
+      expect(errEl.text()).toContain('fleet: timeout');
+    });
   });
 });

@@ -20,12 +20,24 @@
  *     side fsnotify watcher (WP05 watcher polish). External writes
  *     fan out to every subscriber within ~200 ms; we re-fetch the
  *     tree and surface a brief "external change detected" toast.
+ *
+ * WP07 additions (fleet-context-graph-sync-01NDFSEX17):
+ *   - Sync status strip in the tree panel header (team cap, pull count,
+ *     cursor). Hidden when fleet is not signed in / team cap absent.
+ *   - "Share to team" affordance in the preview panel for files when the
+ *     team-graph capability is active. Gated on `syncStatus.team_cap_enabled`.
+ *   - First-publish confirm: "This entry will be visible to your org" so
+ *     users don't accidentally publish secrets into a shared layer (NFR-006).
+ *   - `publish` calls `client.contexts.publish` with a deterministic nodeID
+ *     derived from the path (sha-ish stable ID approach: md5-hex of the path
+ *     is not available in the browser; instead we use btoa(path) as the ID,
+ *     which is stable across sessions for the same file path).
  */
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import CanvasHead from '@/shell/CanvasHead.vue';
 import { Plus, FileText } from '@/shell/icons';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
-import type { ContextNode } from '@/lib/types';
+import type { ContextNode, ContextSyncStatusView, ContextPublishResult } from '@/lib/types';
 import ContextTree from './ContextTree.vue';
 import ContextPreview from './ContextPreview.vue';
 import GlobalContextPanel from '@/components/settings/GlobalContextPanel.vue';
@@ -49,6 +61,87 @@ let externalChangeToastTimer: ReturnType<typeof setTimeout> | null = null;
 
 const importInputRef = ref<HTMLInputElement | null>(null);
 const importError = ref<string | null>(null);
+
+// ── Fleet context-graph sync (WP07) ──────────────────────────────────────────
+
+/** Snapshot of the fleet context-graph syncer state. */
+const syncStatus = ref<ContextSyncStatusView | null>(null);
+
+/**
+ * showPublishConfirm controls the "visible to your org" first-publish
+ * dialog. The dialog must be confirmed before the actual publish call.
+ */
+const showPublishConfirm = ref(false);
+/** Result of the most recent publish call (shown inline). */
+const publishResult = ref<ContextPublishResult | null>(null);
+/** Error string from the last publish call. */
+const publishError = ref<string | null>(null);
+/** Whether a publish call is in progress. */
+const publishLoading = ref(false);
+
+/** teamCapEnabled is true when fleet has the team-graph sharing cap. */
+const teamCapEnabled = computed(
+  () => syncStatus.value?.team_cap_enabled ?? false,
+);
+
+/** Stable node ID for the selected file (btoa of path). */
+const selectedNodeID = computed(() => {
+  if (!selectedPath.value) return '';
+  try {
+    return btoa(selectedPath.value);
+  } catch {
+    return selectedPath.value;
+  }
+});
+
+async function loadSyncStatus() {
+  try {
+    syncStatus.value = await client.contexts.syncStatus();
+  } catch {
+    // Fleet not wired — treat as local-only.
+    syncStatus.value = null;
+  }
+}
+
+/**
+ * openPublishConfirm — show the "visible to your org" confirm dialog.
+ * Only called when teamCapEnabled and a file is selected.
+ */
+function openPublishConfirm() {
+  publishError.value = null;
+  publishResult.value = null;
+  showPublishConfirm.value = true;
+}
+
+/**
+ * confirmPublish — the user clicked "Yes, share" in the confirm dialog.
+ * Calls client.contexts.publish with the selected file's metadata.
+ * The nodeID is derived from the path (stable cross-session).
+ */
+async function confirmPublish() {
+  showPublishConfirm.value = false;
+  if (!selectedPath.value || !previewContent.value) return;
+  publishLoading.value = true;
+  publishError.value = null;
+  publishResult.value = null;
+  try {
+    const result = await client.contexts.publish({
+      node_id: selectedNodeID.value,
+      layer: 'team',
+      kind: 'guidance',
+      title: selectedPath.value.replace(/.*\//, '').replace(/\.[^.]+$/, ''),
+      body: previewContent.value,
+      version: 1,
+    });
+    publishResult.value = result;
+    // Reload sync status to show updated pull count.
+    await loadSyncStatus();
+  } catch (e) {
+    publishError.value = e instanceof Error ? e.message : 'Publish failed.';
+  } finally {
+    publishLoading.value = false;
+  }
+}
 
 const hasFiles = computed(() => {
   const t = tree.value;
@@ -196,6 +289,7 @@ onMounted(() => {
   void loadTree();
   void loadRecent();
   void loadRoot();
+  void loadSyncStatus();
   if (typeof window !== 'undefined' && window.runtime?.EventsOn) {
     unsubscribeExternal = window.runtime.EventsOn(
       'contexts:tree-changed',
@@ -288,6 +382,85 @@ onBeforeUnmount(() => {
       {{ importError }}
     </div>
 
+    <!-- Sync status strip — only shown when fleet team-graph cap is active -->
+    <div
+      v-if="teamCapEnabled"
+      class="px-4 py-1 bg-surface-1 border-b border-border-muted font-ui text-[11px] text-ink-muted flex items-center gap-3"
+      data-testid="context-sync-status-strip"
+    >
+      <span class="flex items-center gap-1">
+        <span
+          class="inline-block w-2 h-2 rounded-full bg-signal-success"
+          data-testid="context-sync-cap-indicator"
+        />
+        <span>Team sync active</span>
+      </span>
+      <span v-if="syncStatus && syncStatus.pull_count > 0" data-testid="context-sync-pull-count">
+        {{ syncStatus.pull_count }} shared entr{{ syncStatus.pull_count === 1 ? 'y' : 'ies' }} received
+      </span>
+      <span v-if="syncStatus && syncStatus.last_pull_err" class="text-signal-danger" data-testid="context-sync-pull-err">
+        Pull error: {{ syncStatus.last_pull_err }}
+      </span>
+      <span v-if="syncStatus && syncStatus.last_push_err" class="text-signal-danger" data-testid="context-sync-push-err">
+        Push error: {{ syncStatus.last_push_err }}
+      </span>
+    </div>
+
+    <!-- Publish confirm dialog — first-publish "visible to your org" warning -->
+    <div
+      v-if="showPublishConfirm"
+      class="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
+      data-testid="context-publish-confirm-overlay"
+    >
+      <div
+        class="bg-surface-1 rounded-xl shadow-xl border border-border-muted p-6 max-w-sm w-full mx-4"
+        data-testid="context-publish-confirm-dialog"
+      >
+        <h2 class="font-ui font-semibold text-sm text-ink mb-2">Share with your team?</h2>
+        <p class="font-ui text-[12px] text-ink-muted leading-relaxed mb-4">
+          This entry will be visible to everyone in your organisation. Do not share credentials,
+          private keys, or sensitive personal information in shared layers.
+        </p>
+        <div class="flex justify-end gap-3">
+          <button
+            type="button"
+            class="font-ui text-[12px] text-ink-dim hover:text-ink px-3 py-1.5 rounded-md border border-border-muted"
+            data-testid="context-publish-confirm-cancel"
+            @click="showPublishConfirm = false"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            class="font-ui text-[12px] text-accent hover:text-accent-muted px-3 py-1.5 rounded-md bg-accent/10 hover:bg-accent/20"
+            data-testid="context-publish-confirm-ok"
+            @click="confirmPublish"
+          >
+            Yes, share
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Publish result / error toast -->
+    <div
+      v-if="publishResult"
+      class="px-4 py-1 bg-surface-1 border-b border-border-muted font-ui text-[11px] text-signal-success"
+      data-testid="context-publish-result"
+    >
+      Published ({{ publishResult.accepted_nodes }} node{{ publishResult.accepted_nodes === 1 ? '' : 's' }})
+      <span v-if="publishResult.conflicts && publishResult.conflicts.length > 0" class="text-signal-warning ml-2">
+        · {{ publishResult.conflicts.length }} version conflict{{ publishResult.conflicts.length === 1 ? '' : 's' }}
+      </span>
+    </div>
+    <div
+      v-if="publishError"
+      class="px-4 py-1 bg-surface-1 border-b border-border-muted font-ui text-[11px] text-signal-danger"
+      data-testid="context-publish-error"
+    >
+      {{ publishError }}
+    </div>
+
     <div class="flex-1 grid grid-cols-[260px_1fr_240px] min-h-0">
       <!-- left: tree -->
       <nav
@@ -298,6 +471,18 @@ onBeforeUnmount(() => {
           <span class="font-ui text-[10px] uppercase tracking-[0.18em] text-ink-subtle flex-1">
             Library
           </span>
+          <!-- Publish affordance — only when team cap enabled and a file is selected -->
+          <button
+            v-if="teamCapEnabled && selectedPath"
+            type="button"
+            class="text-[11px] text-accent hover:text-accent-muted flex items-center gap-1 disabled:opacity-50"
+            :disabled="publishLoading"
+            data-testid="context-publish-btn"
+            @click="openPublishConfirm"
+          >
+            <span v-if="publishLoading">Sharing…</span>
+            <span v-else>Share to team</span>
+          </button>
           <button
             type="button"
             class="text-[11px] text-ink-dim hover:text-accent flex items-center gap-1"

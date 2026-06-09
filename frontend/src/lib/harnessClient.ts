@@ -1478,6 +1478,13 @@ export interface ContextsClient {
   delete(path: string): Promise<void>;
   recentlyApplied(limit: number): Promise<string[]>;
   rootPath(): Promise<string>;
+  // ── Fleet context-graph sync (fleet-context-graph-sync-01NDFSEX17) ──
+  /** Publish a local team/org entry to the fleet context graph. */
+  publish(req: ContextPublishRequest): Promise<ContextPublishResult>;
+  /** Elevate a team_shared entry to org_shared on the fleet server. */
+  promote(nodeID: string): Promise<ContextPromoteResult>;
+  /** Return a snapshot of the fleet context-graph syncer state. */
+  syncStatus(): Promise<ContextSyncStatusView>;
 }
 
 /**
@@ -3537,6 +3544,23 @@ export function createFakeHarnessClient(
       delete: noop,
       recentlyApplied: async () => [],
       rootPath: async () => '/fake/contexts',
+      publish: async (_req: ContextPublishRequest) => ({
+        accepted_nodes: 1,
+        accepted_edges: 0,
+        conflicts: [],
+      }),
+      promote: async (_nodeID: string) => ({
+        updated_node_id: _nodeID,
+        new_classification: 'org_shared' as const,
+      }),
+      syncStatus: async () => ({
+        cursor: '',
+        last_pull_at: undefined,
+        last_pull_err: '',
+        last_push_err: '',
+        pull_count: 0,
+        team_cap_enabled: false,
+      }),
     },
     attachments: {
       list: async () => [],
