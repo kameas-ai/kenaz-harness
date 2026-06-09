@@ -140,7 +140,11 @@ jobs:
           # `-race` flag requires CGO; pin it on explicitly so the
           # detector can't flip it back to 0.
           CGO_ENABLED: "1"
-        run: go test ./core/... -race -count=1 -short
+        # cmd/harness-vm carries the in-VM dispatch RPC service and its
+        # audit/privacy + auth tests; ./core/... alone never exercised them
+        # (Phase A follow-up B1). The audit lifecycle test is deterministic
+        # under -race (accept-sequence ordering in the fake sock).
+        run: go test ./core/... ./cmd/harness-vm/... -race -count=1 -short
 
   wire-golden-locked:
     name: Wire golden tests (locked tier)

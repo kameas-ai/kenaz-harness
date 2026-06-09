@@ -209,6 +209,106 @@ func TestAuthSuccess(t *testing.T) {
 	}
 }
 
+// TestAuthRejectsWrongToken verifies that when the server has a token
+// configured (the baked-image / production path), a connection presenting the
+// WRONG token in the auth handshake is rejected with auth.error and cannot
+// proceed to send task messages. This is the deny-by-default contract that
+// closes the optional-auth concern from Phase A (#163).
+func TestAuthRejectsWrongToken(t *testing.T) {
+	srv, addr := startTestServer(t, "correct-token")
+	defer srv.Close()
+
+	conn, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer conn.Close()
+
+	// Present a valid auth message but with the wrong token.
+	sendMsg(t, conn, map[string]any{"kind": "auth", "token": "wrong-token"})
+	resp := recvMsg(t, conn)
+	if resp["kind"] != "auth.error" {
+		t.Fatalf("expected auth.error for wrong token; got %v", resp)
+	}
+	// The error must not echo the configured token back.
+	if mt, _ := resp["message_truncated"].(string); strings.Contains(mt, "correct-token") {
+		t.Fatalf("auth.error leaked the configured token: %v", resp)
+	}
+}
+
+// TestAuthRejectsMissingToken verifies that when the server has a token
+// configured, an auth message with NO token field (empty client token) is
+// rejected. An empty client token must never satisfy a non-empty server token.
+func TestAuthRejectsMissingToken(t *testing.T) {
+	srv, addr := startTestServer(t, "correct-token")
+	defer srv.Close()
+
+	conn, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer conn.Close()
+
+	// auth message with no token field at all.
+	sendMsg(t, conn, map[string]any{"kind": "auth"})
+	resp := recvMsg(t, conn)
+	if resp["kind"] != "auth.error" {
+		t.Fatalf("expected auth.error for missing token; got %v", resp)
+	}
+}
+
+// TestAuthRequiredRejectsTaskUntilAuthed verifies the handshake is REQUIRED: a
+// connection that fails auth (wrong token) cannot drive a task even if it then
+// sends a well-formed task.start — the server closed it after auth.error.
+func TestAuthRequiredRejectsTaskUntilAuthed(t *testing.T) {
+	srv, addr := startTestServer(t, "correct-token")
+	defer srv.Close()
+
+	conn, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer conn.Close()
+
+	sendMsg(t, conn, map[string]any{"kind": "auth", "token": "nope"})
+	resp := recvMsg(t, conn)
+	if resp["kind"] != "auth.error" {
+		t.Fatalf("expected auth.error; got %v", resp)
+	}
+
+	// After auth.error the server closes the conn. A subsequent task.start must
+	// NOT be serviced: the next read returns EOF (connection closed), not a
+	// task lifecycle event.
+	sendMsg(t, conn, map[string]any{"kind": "task.start", "task_id": "x", "prompt": "p"})
+	_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	scanner := bufio.NewScanner(conn)
+	if scanner.Scan() {
+		t.Fatalf("expected connection closed after auth.error; got line %q", scanner.Text())
+	}
+}
+
+// TestAuthDevModeUnauthenticated verifies the local-dev path: when the server
+// has NO token configured (empty HARNESS_VM_TOKEN), any auth handshake — even
+// one carrying a spurious token — is accepted. This preserves the documented
+// dev-mode escape hatch while production (token set) stays deny-by-default.
+func TestAuthDevModeUnauthenticated(t *testing.T) {
+	srv, addr := startTestServer(t, "")
+	defer srv.Close()
+
+	conn, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer conn.Close()
+
+	// A token is present in the message but the server has none configured.
+	sendMsg(t, conn, map[string]any{"kind": "auth", "token": "ignored-in-dev"})
+	resp := recvMsg(t, conn)
+	if resp["kind"] != "auth.ok" {
+		t.Fatalf("dev mode (no server token) must accept any handshake; got %v", resp)
+	}
+}
+
 // TestBadRequest verifies that an unknown message kind after auth gets a
 // task.error{code:bad_request} response.
 func TestBadRequest(t *testing.T) {
