@@ -1451,6 +1451,123 @@ export namespace contexts {
 		}
 	}
 
+	export class ContextPublishRequest {
+	    node_id: string;
+	    layer: string;
+	    kind: string;
+	    title: string;
+	    body: string;
+	    team_id?: string;
+	    version: number;
+
+	    static createFrom(source: any = {}) {
+	        return new ContextPublishRequest(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.node_id = source["node_id"];
+	        this.layer = source["layer"];
+	        this.kind = source["kind"];
+	        this.title = source["title"];
+	        this.body = source["body"];
+	        this.team_id = source["team_id"];
+	        this.version = source["version"];
+	    }
+	}
+
+	export class ContextPublishResult {
+	    accepted_nodes: number;
+	    accepted_edges: number;
+	    conflicts: fleet.ContextPushConflict[];
+
+	    static createFrom(source: any = {}) {
+	        return new ContextPublishResult(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.accepted_nodes = source["accepted_nodes"];
+	        this.accepted_edges = source["accepted_edges"];
+	        this.conflicts = this.convertValues(source["conflicts"], fleet.ContextPushConflict);
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+
+	export class ContextPromoteResult {
+	    updated_node_id: string;
+	    new_classification: string;
+
+	    static createFrom(source: any = {}) {
+	        return new ContextPromoteResult(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.updated_node_id = source["updated_node_id"];
+	        this.new_classification = source["new_classification"];
+	    }
+	}
+
+	export class ContextSyncStatusView {
+	    cursor: string;
+	    // Go type: time
+	    last_pull_at?: any;
+	    last_pull_err: string;
+	    last_push_err: string;
+	    pull_count: number;
+	    team_cap_enabled: boolean;
+
+	    static createFrom(source: any = {}) {
+	        return new ContextSyncStatusView(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.cursor = source["cursor"];
+	        this.last_pull_at = this.convertValues(source["last_pull_at"], null);
+	        this.last_pull_err = source["last_pull_err"];
+	        this.last_push_err = source["last_push_err"];
+	        this.pull_count = source["pull_count"];
+	        this.team_cap_enabled = source["team_cap_enabled"];
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+
 }
 
 export namespace contextview {
@@ -2162,6 +2279,27 @@ export namespace elicit {
 		}
 	}
 	
+
+}
+
+export namespace fleet {
+
+	export class ContextPushConflict {
+	    node_id: string;
+	    server_version: number;
+	    client_version: number;
+
+	    static createFrom(source: any = {}) {
+	        return new ContextPushConflict(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.node_id = source["node_id"];
+	        this.server_version = source["server_version"];
+	        this.client_version = source["client_version"];
+	    }
+	}
 
 }
 

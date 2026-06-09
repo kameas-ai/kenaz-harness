@@ -310,6 +310,18 @@ export function Contexts_Save(arg1, arg2) {
   return window['go']['rpc']['Bindings']['Contexts_Save'](arg1, arg2);
 }
 
+export function Contexts_ContextPublish(arg1) {
+  return window['go']['rpc']['Bindings']['Contexts_ContextPublish'](arg1);
+}
+
+export function Contexts_ContextPromote(arg1) {
+  return window['go']['rpc']['Bindings']['Contexts_ContextPromote'](arg1);
+}
+
+export function Contexts_ContextSyncStatus() {
+  return window['go']['rpc']['Bindings']['Contexts_ContextSyncStatus']();
+}
+
 export function Corpus_CreateCorpus(arg1) {
   return window['go']['rpc']['Bindings']['Corpus_CreateCorpus'](arg1);
 }

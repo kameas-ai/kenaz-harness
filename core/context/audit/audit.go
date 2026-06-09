@@ -307,6 +307,30 @@ const (
 	// HARNESS_FLEET_LOCKDOWN_BYPASS=1 env var is set, regardless of whether
 	// a lockdown is currently in effect. Payload: FleetLockdownBypassPayload.
 	KindFleetLockdownBypassUsed Kind = "fleet.lockdown_bypass_used"
+
+	// ── Fleet context-graph sync audit kinds
+	// (fleet-context-graph-sync-01NDFSEX17 WP05)
+
+	// KindFleetContextPublished fires when a local context entry is successfully
+	// pushed to the fleet context graph (team_shared or org_shared). The payload
+	// carries only the node ID, classification, and version — no body content.
+	//
+	// Privacy invariant: body, title, and metadata are NEVER included.
+	KindFleetContextPublished Kind = "fleet.context_published"
+
+	// KindFleetContextPulled fires once per successful PullDelta call that
+	// returns at least one node. The payload is a batch summary (node count,
+	// cursor) — no individual entry contents.
+	//
+	// Privacy invariant: entry bodies and titles are NEVER included.
+	KindFleetContextPulled Kind = "fleet.context_pulled"
+
+	// KindFleetContextPromoted fires when a team_shared entry is successfully
+	// elevated to org_shared via the Promote call. The payload carries the node
+	// ID and the new classification only.
+	//
+	// Privacy invariant: entry body and title are NEVER included.
+	KindFleetContextPromoted Kind = "fleet.context_promoted"
 )
 
 // Event is the wire shape passed to the event log. The concrete event-log
@@ -1000,4 +1024,42 @@ func Emit(ctx context.Context, em Emitter, kind Kind, payload any, now time.Time
 		return err
 	}
 	return em.Emit(ctx, e)
+}
+
+// ── Fleet context-graph sync payload types
+// (fleet-context-graph-sync-01NDFSEX17 WP05)
+
+// FleetContextPublishedPayload is the audit payload for KindFleetContextPublished.
+//
+// Privacy invariant: body, title, and metadata are NEVER included.
+type FleetContextPublishedPayload struct {
+	// NodeID is the stable UUID of the published node.
+	NodeID string `json:"node_id"`
+	// Classification is "team_shared" or "org_shared".
+	Classification string `json:"classification"`
+	// Version is the version sent to the server.
+	Version int `json:"version"`
+}
+
+// FleetContextPulledPayload is the audit payload for KindFleetContextPulled.
+// Emitted once per PullDelta call that returns at least one node.
+//
+// Privacy invariant: entry bodies and titles are NEVER included.
+type FleetContextPulledPayload struct {
+	// NodeCount is the number of nodes received in this pull batch.
+	NodeCount int `json:"node_count"`
+	// TombstoneCount is the number of those nodes that were soft-deleted.
+	TombstoneCount int `json:"tombstone_count"`
+	// Cursor is the RFC3339Nano timestamp advanced after this pull.
+	Cursor string `json:"cursor"`
+}
+
+// FleetContextPromotedPayload is the audit payload for KindFleetContextPromoted.
+//
+// Privacy invariant: entry body and title are NEVER included.
+type FleetContextPromotedPayload struct {
+	// NodeID is the stable UUID of the promoted node.
+	NodeID string `json:"node_id"`
+	// ToClassification is always "org_shared" in v0.
+	ToClassification string `json:"to_classification"`
 }
