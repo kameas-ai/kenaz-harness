@@ -19,7 +19,7 @@ import (
 	"testing"
 	"time"
 
-	contextpack "github.com/sigil-tech/kaneaz-harness/core/context/pack"
+	contextpack "github.com/kameas-ai/kenaz-harness/core/context/pack"
 )
 
 // makeCapPollerWithNoCap creates a poller with no capabilities enabled.

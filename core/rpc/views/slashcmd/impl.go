@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"time"
 
-	corefleet "github.com/sigil-tech/kaneaz-harness/core/fleet"
-	coreslashcmd "github.com/sigil-tech/kaneaz-harness/core/slashcmd"
+	corefleet "github.com/kameas-ai/kenaz-harness/core/fleet"
+	coreslashcmd "github.com/kameas-ai/kenaz-harness/core/slashcmd"
 )
 
 // SkillDeps bundles the fleet dependencies needed for skill publish/install.

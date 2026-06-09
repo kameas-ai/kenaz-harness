@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"time"
 
-	contextaudit "github.com/sigil-tech/kaneaz-harness/core/context/audit"
-	corefleet "github.com/sigil-tech/kaneaz-harness/core/fleet"
+	contextaudit "github.com/kameas-ai/kenaz-harness/core/context/audit"
+	corefleet "github.com/kameas-ai/kenaz-harness/core/fleet"
 )
 
 // API implements CatalogAPI backed by fleet.Client.

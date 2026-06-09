@@ -42,7 +42,7 @@ import (
 	"sync"
 	"time"
 
-	contextpack "github.com/sigil-tech/kaneaz-harness/core/context/pack"
+	contextpack "github.com/kameas-ai/kenaz-harness/core/context/pack"
 )
 
 // ── Layer ↔ classification mapping ────────────────────────────────────────────

@@ -4,7 +4,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/sigil-tech/kaneaz-harness/core/slashcmd"
+	"github.com/kameas-ai/kenaz-harness/core/slashcmd"
 )
 
 // ── SkillStore: Save + Get round-trip ────────────────────────────────────────

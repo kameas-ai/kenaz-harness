@@ -20,7 +20,7 @@ import (
 	"net/http"
 	"time"
 
-	contextaudit "github.com/sigil-tech/kaneaz-harness/core/context/audit"
+	contextaudit "github.com/kameas-ai/kenaz-harness/core/context/audit"
 )
 
 // cedarPublishRequest is the JSON body for POST /api/v1/cedar-policy/publish.

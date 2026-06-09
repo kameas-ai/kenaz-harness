@@ -20,7 +20,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/sigil-tech/kaneaz-harness/core/logging"
+	"github.com/kameas-ai/kenaz-harness/core/logging"
 )
 
 // SyncCategory identifies one of the five per-user sync surfaces.

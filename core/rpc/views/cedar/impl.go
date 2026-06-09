@@ -3,8 +3,8 @@ package cedar
 import (
 	"context"
 
-	contextaudit "github.com/sigil-tech/kaneaz-harness/core/context/audit"
-	corefleet "github.com/sigil-tech/kaneaz-harness/core/fleet"
+	contextaudit "github.com/kameas-ai/kenaz-harness/core/context/audit"
+	corefleet "github.com/kameas-ai/kenaz-harness/core/fleet"
 )
 
 // auditEmitter is the minimal interface the cedar view needs for audit.

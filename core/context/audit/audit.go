@@ -11,7 +11,7 @@ import (
 	"encoding/json"
 	"time"
 
-	pack "github.com/sigil-tech/kaneaz-harness/core/context/pack"
+	pack "github.com/kameas-ai/kenaz-harness/core/context/pack"
 )
 
 // Kind enumerates context-event kinds (FR-011, FR-012). The kinds

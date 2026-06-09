@@ -21,7 +21,7 @@ import (
 	"testing"
 	"time"
 
-	contextpack "github.com/sigil-tech/kaneaz-harness/core/context/pack"
+	contextpack "github.com/kameas-ai/kenaz-harness/core/context/pack"
 )
 
 // contextFakeServer is a minimal httptest stub for the context endpoints.

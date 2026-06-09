@@ -14,7 +14,7 @@ import (
 	"context"
 	"time"
 
-	fleet "github.com/sigil-tech/kaneaz-harness/core/fleet"
+	fleet "github.com/kameas-ai/kenaz-harness/core/fleet"
 )
 
 // NodeKind discriminates files from folders in the tree response.

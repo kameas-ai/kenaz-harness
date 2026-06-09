@@ -17,8 +17,8 @@ import (
 	"testing"
 	"time"
 
-	contextaudit "github.com/sigil-tech/kaneaz-harness/core/context/audit"
-	contextpack "github.com/sigil-tech/kaneaz-harness/core/context/pack"
+	contextaudit "github.com/kameas-ai/kenaz-harness/core/context/audit"
+	contextpack "github.com/kameas-ai/kenaz-harness/core/context/pack"
 )
 
 // fakeContextAuditEmitter is a race-safe audit.Emitter for testing.

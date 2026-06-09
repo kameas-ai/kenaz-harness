@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	corefleet "github.com/sigil-tech/kaneaz-harness/core/fleet"
+	corefleet "github.com/kameas-ai/kenaz-harness/core/fleet"
 )
 
 // API implements SyncAPI backed by fleet.Syncer.

@@ -9,9 +9,9 @@ import (
 	"errors"
 	"fmt"
 
-	contextpack "github.com/sigil-tech/kaneaz-harness/core/context/pack"
-	corecontexts "github.com/sigil-tech/kaneaz-harness/core/contexts"
-	fleet "github.com/sigil-tech/kaneaz-harness/core/fleet"
+	contextpack "github.com/kameas-ai/kenaz-harness/core/context/pack"
+	corecontexts "github.com/kameas-ai/kenaz-harness/core/contexts"
+	fleet "github.com/kameas-ai/kenaz-harness/core/fleet"
 )
 
 // Library is the slim interface this view needs. core/contexts.Library

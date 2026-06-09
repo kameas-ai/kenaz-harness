@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	contextpack "github.com/sigil-tech/kaneaz-harness/core/context/pack"
+	contextpack "github.com/kameas-ai/kenaz-harness/core/context/pack"
 )
 
 // TestLayerMapping_ClassificationForLayer verifies the layer→classification mapping.

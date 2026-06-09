@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	contextpack "github.com/sigil-tech/kaneaz-harness/core/context/pack"
+	contextpack "github.com/kameas-ai/kenaz-harness/core/context/pack"
 )
 
 // TestEdgePush_TwoPhase verifies that PushEntry includes both nodes and edges

@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sigil-tech/kaneaz-harness/core/slashcmd"
+	"github.com/kameas-ai/kenaz-harness/core/slashcmd"
 )
 
 // ── helpers ───────────────────────────────────────────────────────────────────

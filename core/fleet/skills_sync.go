@@ -15,7 +15,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/sigil-tech/kaneaz-harness/core/slashcmd"
+	"github.com/kameas-ai/kenaz-harness/core/slashcmd"
 )
 
 // SkillSyncMaxPayloadBytes is the enforced cap for a single skill payload
