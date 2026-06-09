@@ -102,6 +102,9 @@ import (
 	credstoreRefs "github.com/sigil-tech/kaneaz-harness/core/credstore/refs"
 	sentryview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/sentry"
 	fleetview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/fleet"
+	catalogview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/catalog"
+	syncview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/sync"
+	cedarview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/cedar"
 	corefleet "github.com/sigil-tech/kaneaz-harness/core/fleet"
 	"github.com/sigil-tech/kaneaz-harness/core/eval"
 	"github.com/sigil-tech/kaneaz-harness/core/session"
@@ -260,6 +263,18 @@ type HarnessAPI interface {
 	// fleet-otel-archival-01NDFSEX11 WP07). Provides GetTelemetryConsent
 	// and SetTelemetryConsent for the Settings → Privacy panel.
 	Fleet() fleetview.FleetAPI
+
+	// Catalog exposes the fleet catalog publish/list/install/uninstall surface
+	// (fleet-share-and-sync-01NDFSEX14 WP02). Backed by core/fleet/catalog.go.
+	Catalog() catalogview.CatalogAPI
+
+	// Sync exposes the per-category settings sync surface
+	// (fleet-share-and-sync-01NDFSEX14 WP05). Backed by core/fleet/sync.go.
+	Sync() syncview.SyncAPI
+
+	// CedarPublish exposes the team Cedar policy publish surface
+	// (fleet-share-and-sync-01NDFSEX14 WP07). Admin-gated.
+	CedarPublish() cedarview.CedarAPI
 }
 
 // ShellStatus drives the Toolbar status pills + LegendBar live-rate
@@ -519,6 +534,18 @@ type API struct {
 	// fleetAPI is the fleet telemetry consent RPC surface
 	// (fleet-otel-archival-01NDFSEX11 WP07).
 	fleetAPI fleetview.FleetAPI
+
+	// catalogAPI is the fleet catalog publish/list/install/uninstall surface
+	// (fleet-share-and-sync-01NDFSEX14 WP02).
+	catalogAPI catalogview.CatalogAPI
+
+	// syncAPI is the per-category settings sync surface
+	// (fleet-share-and-sync-01NDFSEX14 WP05).
+	syncAPI syncview.SyncAPI
+
+	// cedarPublishAPI is the team Cedar policy publish surface
+	// (fleet-share-and-sync-01NDFSEX14 WP07).
+	cedarPublishAPI cedarview.CedarAPI
 }
 
 // Builtins returns the in-binary tool registry. Used by the chat-input
@@ -1481,6 +1508,53 @@ func New(c *core.Core) *API {
 		// at tier=free, which is correct for the test chassis).
 		tc, _ := corefleet.NewTelemetryConsent(os.TempDir(), corefleet.StaticTierReader{})
 		a.fleetAPI = &fleetview.Impl{Consent: tc}
+	}
+
+	// Wire Catalog / Sync / CedarPublish views (fleet-share-and-sync-01NDFSEX14).
+	// All three degrade gracefully (fleet.ErrFleetDisabled) when the fleet client
+	// is a nop or settingsImpl is nil, so the nil-check pattern mirrors Sentry.
+	{
+		var flCl *corefleet.Client
+		var flDataDir string
+		if a.settingsImpl != nil {
+			flCl = a.settingsImpl.FleetClientForBootstrap()
+			flDataDir = dataDir
+		}
+		flAudit := &fleetAuditEmitter{impl: a.auditImpl}
+
+		// Catalog (WP02)
+		if flDataDir != "" {
+			signer, signerErr := corefleet.NewDeviceSigner(flDataDir)
+			if signerErr != nil {
+				logging.L().Warn("fleet.signer.init.failed", "err", signerErr)
+				// Still wire with nil signer — Publish will return an error on
+				// attempt; List/Install/Installed remain functional.
+				a.catalogAPI = catalogview.NewAPI(flCl, nil, flDataDir).WithEmitter(flAudit)
+			} else {
+				a.catalogAPI = catalogview.NewAPI(flCl, signer, flDataDir).WithEmitter(flAudit)
+			}
+		} else {
+			a.catalogAPI = catalogview.NewAPI(nil, nil, "").WithEmitter(flAudit)
+		}
+
+		// Sync (WP05) — wired with a nil Syncer when fleet is disabled.
+		// The Syncer is a lightweight object; we create it unconditionally but
+		// its Push/Pull methods short-circuit via ErrFleetDisabled when flCl is nil.
+		syncer := corefleet.NewSyncer(flCl)
+		a.syncAPI = syncview.NewAPI(syncer, &corefleet.SecretPromptQueue{})
+
+		// CedarPublish (WP07)
+		identityFn := func() (string, error) {
+			if flDataDir == "" {
+				return "", nil
+			}
+			id, err := corefleet.LoadIdentity(flDataDir)
+			if err != nil {
+				return "", err
+			}
+			return id.Email, nil
+		}
+		a.cedarPublishAPI = cedarview.NewAPI(flCl, identityFn, flAudit)
 	}
 
 	a.bindings = NewBindings(a)
@@ -4642,6 +4716,28 @@ func (e lockdownAuditEmitter) Emit(_ context.Context, ev contextaudit.Event) err
 	return nil
 }
 
+// fleetAuditEmitter bridges the catalog/cedar/sync views' auditEmitter interface
+// (which requires EmitFleetEvent) to the rpc/views/audit.API ring buffer via Push.
+// Implements the subset of contextaudit.Emitter needed by the SaS surfaces.
+// (fleet-share-and-sync-01NDFSEX14)
+type fleetAuditEmitter struct {
+	impl *audit.API
+}
+
+func (e *fleetAuditEmitter) EmitFleetEvent(_ context.Context, kind contextaudit.Kind, payload any) error {
+	if e.impl == nil {
+		return nil
+	}
+	e.impl.Push(audit.Entry{
+		ID:        fmt.Sprintf("fleet-sas-%d", time.Now().UnixNano()),
+		Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+		Category:  "FLEET",
+		Subject:   string(kind),
+		Trailing:  fmt.Sprintf("payload_type=%T", payload),
+	})
+	return nil
+}
+
 // auditRingAdapter adapts audit.API to searchview.AuditLister.
 type auditRingAdapter struct {
 	api *audit.API
@@ -4984,6 +5080,18 @@ func (a *API) Sentry() sentryview.SentryAPI { return a.sentryAPI }
 // Fleet implements HarnessAPI. Returns the fleet telemetry consent RPC surface.
 // (fleet-otel-archival-01NDFSEX11 WP07)
 func (a *API) Fleet() fleetview.FleetAPI { return a.fleetAPI }
+
+// Catalog implements HarnessAPI. Returns the fleet catalog publish/list/install surface.
+// (fleet-share-and-sync-01NDFSEX14 WP02)
+func (a *API) Catalog() catalogview.CatalogAPI { return a.catalogAPI }
+
+// Sync implements HarnessAPI. Returns the per-category settings sync surface.
+// (fleet-share-and-sync-01NDFSEX14 WP05)
+func (a *API) Sync() syncview.SyncAPI { return a.syncAPI }
+
+// CedarPublish implements HarnessAPI. Returns the team Cedar policy publish surface.
+// (fleet-share-and-sync-01NDFSEX14 WP07)
+func (a *API) CedarPublish() cedarview.CedarAPI { return a.cedarPublishAPI }
 
 // brokerPlanEmitter adapts a *StreamBroker to the planmodeview.EventEmitter
 // interface. The broker's Publish method broadcasts to all subscribers
