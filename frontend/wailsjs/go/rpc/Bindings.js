@@ -186,6 +186,26 @@ export function Bundle_Remove(arg1) {
   return window['go']['rpc']['Bindings']['Bundle_Remove'](arg1);
 }
 
+export function Catalog_Install(arg1, arg2) {
+  return window['go']['rpc']['Bindings']['Catalog_Install'](arg1, arg2);
+}
+
+export function Catalog_Installed() {
+  return window['go']['rpc']['Bindings']['Catalog_Installed']();
+}
+
+export function Catalog_List(arg1) {
+  return window['go']['rpc']['Bindings']['Catalog_List'](arg1);
+}
+
+export function Catalog_Publish(arg1) {
+  return window['go']['rpc']['Bindings']['Catalog_Publish'](arg1);
+}
+
+export function Catalog_Uninstall(arg1, arg2, arg3) {
+  return window['go']['rpc']['Bindings']['Catalog_Uninstall'](arg1, arg2, arg3);
+}
+
 export function CedarPolicy_Delete(arg1) {
   return window['go']['rpc']['Bindings']['CedarPolicy_Delete'](arg1);
 }
@@ -234,6 +254,10 @@ export function CedarPolicy_WriteSnippet(arg1, arg2) {
   return window['go']['rpc']['Bindings']['CedarPolicy_WriteSnippet'](arg1, arg2);
 }
 
+export function Cedar_PublishToTeam(arg1, arg2) {
+  return window['go']['rpc']['Bindings']['Cedar_PublishToTeam'](arg1, arg2);
+}
+
 export function Compaction_GetConfig(arg1, arg2) {
   return window['go']['rpc']['Bindings']['Compaction_GetConfig'](arg1, arg2);
 }
@@ -272,6 +296,18 @@ export function Context_StartStream() {
 
 export function Context_StopStream(arg1) {
   return window['go']['rpc']['Bindings']['Context_StopStream'](arg1);
+}
+
+export function Contexts_ContextPromote(arg1) {
+  return window['go']['rpc']['Bindings']['Contexts_ContextPromote'](arg1);
+}
+
+export function Contexts_ContextPublish(arg1) {
+  return window['go']['rpc']['Bindings']['Contexts_ContextPublish'](arg1);
+}
+
+export function Contexts_ContextSyncStatus() {
+  return window['go']['rpc']['Bindings']['Contexts_ContextSyncStatus']();
 }
 
 export function Contexts_CreateFolder(arg1) {
@@ -1336,6 +1372,26 @@ export function Storage_ApplyDriftFix(arg1) {
 
 export function Storage_GetMigrationDriftReport() {
   return window['go']['rpc']['Bindings']['Storage_GetMigrationDriftReport']();
+}
+
+export function Sync_ForcePull(arg1) {
+  return window['go']['rpc']['Bindings']['Sync_ForcePull'](arg1);
+}
+
+export function Sync_ForcePush(arg1) {
+  return window['go']['rpc']['Bindings']['Sync_ForcePush'](arg1);
+}
+
+export function Sync_PendingMCPSecrets() {
+  return window['go']['rpc']['Bindings']['Sync_PendingMCPSecrets']();
+}
+
+export function Sync_Status() {
+  return window['go']['rpc']['Bindings']['Sync_Status']();
+}
+
+export function Sync_Toggle(arg1, arg2) {
+  return window['go']['rpc']['Bindings']['Sync_Toggle'](arg1, arg2);
 }
 
 export function Tools_ForgetRecipeKey(arg1, arg2) {

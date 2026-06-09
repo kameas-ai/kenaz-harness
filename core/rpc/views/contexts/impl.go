@@ -7,8 +7,11 @@ package contexts
 import (
 	"context"
 	"errors"
+	"fmt"
 
+	contextpack "github.com/sigil-tech/kaneaz-harness/core/context/pack"
 	corecontexts "github.com/sigil-tech/kaneaz-harness/core/contexts"
+	fleet "github.com/sigil-tech/kaneaz-harness/core/fleet"
 )
 
 // Library is the slim interface this view needs. core/contexts.Library
@@ -27,7 +30,8 @@ type Library interface {
 
 // API is the concrete ContextsAPI.
 type API struct {
-	lib Library
+	lib    Library
+	syncer *fleet.ContextGraphSyncer
 }
 
 // New constructs the view. A nil library is allowed; methods return
@@ -35,6 +39,15 @@ type API struct {
 // of a confusing "not wired" error from the chassis stub.
 func New(lib Library) *API {
 	return &API{lib: lib}
+}
+
+// WithSyncer wires the fleet context-graph syncer. Safe to call once
+// at construction; passing nil clears any previously wired syncer.
+// When the syncer is nil the Context_Publish / Context_Promote methods
+// return ErrFleetDisabled; Context_SyncStatus returns a zeroed view.
+func (a *API) WithSyncer(s *fleet.ContextGraphSyncer) *API {
+	a.syncer = s
+	return a
 }
 
 // ErrLibraryUnavailable indicates the chassis booted without the
@@ -139,6 +152,78 @@ func toWire(in corecontexts.Node) Node {
 		}
 	}
 	return out
+}
+
+// ── Fleet context-graph sync methods ─────────────────────────────────────────
+
+// Context_Publish publishes a local entry to the fleet context graph.
+// The request must specify layer = "team" or "org"; personal entries are
+// rejected with ErrPersonalLayerNotSyncable.
+// Requires a wired ContextGraphSyncer; returns ErrFleetDisabled otherwise.
+func (a *API) Context_Publish(ctx context.Context, req ContextPublishRequest) (ContextPublishResult, error) {
+	if a == nil || a.syncer == nil {
+		return ContextPublishResult{}, fleet.ErrFleetDisabled
+	}
+
+	layer := contextpack.Layer(req.Layer)
+
+	entry := fleet.ContextNodeEntry{
+		ID:      req.NodeID,
+		Layer:   layer,
+		Kind:    req.Kind,
+		Title:   req.Title,
+		Body:    req.Body,
+		Version: req.Version,
+	}
+	if req.TeamID != "" {
+		entry.TeamID = &req.TeamID
+	}
+
+	result, err := a.syncer.PushEntry(ctx, entry, nil)
+	if err != nil {
+		return ContextPublishResult{}, fmt.Errorf("contexts: publish: %w", err)
+	}
+	return ContextPublishResult{
+		AcceptedNodes: result.AcceptedNodes,
+		AcceptedEdges: result.AcceptedEdges,
+		Conflicts:     result.Conflicts,
+	}, nil
+}
+
+// Context_Promote elevates a team_shared entry to org_shared.
+// Requires a wired ContextGraphSyncer; returns ErrFleetDisabled otherwise.
+func (a *API) Context_Promote(ctx context.Context, nodeID string) (ContextPromoteResult, error) {
+	if a == nil || a.syncer == nil {
+		return ContextPromoteResult{}, fleet.ErrFleetDisabled
+	}
+
+	result, err := a.syncer.Promote(ctx, nodeID)
+	if err != nil {
+		return ContextPromoteResult{}, fmt.Errorf("contexts: promote: %w", err)
+	}
+	return ContextPromoteResult{
+		UpdatedNodeID:     result.Node.ID,
+		NewClassification: string(result.Node.Classification),
+	}, nil
+}
+
+// Context_SyncStatus returns a read-only snapshot of the context-graph
+// syncer state. Always returns a non-error result; sync problems are
+// surfaced in the struct fields.
+func (a *API) Context_SyncStatus(_ context.Context) (ContextSyncStatusView, error) {
+	if a == nil || a.syncer == nil {
+		// Syncer not wired — return zeroed view, no error.
+		return ContextSyncStatusView{}, nil
+	}
+	snap := a.syncer.Status()
+	return ContextSyncStatusView{
+		Cursor:         snap.Cursor,
+		LastPullAt:     snap.LastPullAt,
+		LastPullErr:    snap.LastPullErr,
+		LastPushErr:    snap.LastPushErr,
+		PullCount:      snap.PullCount,
+		TeamCapEnabled: snap.TeamCapEnabled,
+	}, nil
 }
 
 // Compile-time witness.
