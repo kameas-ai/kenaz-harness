@@ -5,7 +5,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/sigil-tech/kaneaz-harness/core/agentgraph/nodes"
+	"github.com/kameas-ai/kenaz-harness/core/agentgraph/nodes"
 )
 
 // TestCatalogGetListArchetypes loads the shipped set and exercises every

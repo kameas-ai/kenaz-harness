@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sigil-tech/kaneaz-harness/core/workflows/scheduler"
+	"github.com/kameas-ai/kenaz-harness/core/workflows/scheduler"
 )
 
 // --- fakes ---

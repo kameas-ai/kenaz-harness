@@ -6,9 +6,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/sigil-tech/kaneaz-harness/core/credstore"
-	"github.com/sigil-tech/kaneaz-harness/core/secrets"
-	"github.com/sigil-tech/kaneaz-harness/core/secrets/ref"
+	"github.com/kameas-ai/kenaz-harness/core/credstore"
+	"github.com/kameas-ai/kenaz-harness/core/secrets"
+	"github.com/kameas-ai/kenaz-harness/core/secrets/ref"
 )
 
 func TestPeek_DisplayRule_LongKey(t *testing.T) {

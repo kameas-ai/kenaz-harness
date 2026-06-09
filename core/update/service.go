@@ -14,8 +14,8 @@ import (
 
 	"golang.org/x/mod/semver"
 
-	"github.com/sigil-tech/kaneaz-harness/core/context/audit"
-	"github.com/sigil-tech/kaneaz-harness/core/logging"
+	"github.com/kameas-ai/kenaz-harness/core/context/audit"
+	"github.com/kameas-ai/kenaz-harness/core/logging"
 )
 
 // Config wires the Service. All required fields are validated by

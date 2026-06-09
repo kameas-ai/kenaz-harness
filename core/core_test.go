@@ -5,8 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/sigil-tech/kaneaz-harness/core"
-	"github.com/sigil-tech/kaneaz-harness/core/event"
+	"github.com/kameas-ai/kenaz-harness/core"
+	"github.com/kameas-ai/kenaz-harness/core/event"
 )
 
 // TestNew_RejectsEmptyDataDir pins the basic precondition: Core

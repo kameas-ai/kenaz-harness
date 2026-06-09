@@ -23,7 +23,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sigil-tech/kaneaz-harness/core/sentry"
+	"github.com/kameas-ai/kenaz-harness/core/sentry"
 )
 
 // knownSecrets are the raw secret literals that must NEVER appear in any

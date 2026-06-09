@@ -6,8 +6,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/sigil-tech/kaneaz-harness/core/acp"
-	"github.com/sigil-tech/kaneaz-harness/core/secrets"
+	"github.com/kameas-ai/kenaz-harness/core/acp"
+	"github.com/kameas-ai/kenaz-harness/core/secrets"
 )
 
 func TestRegistryLoadAndLookup(t *testing.T) {

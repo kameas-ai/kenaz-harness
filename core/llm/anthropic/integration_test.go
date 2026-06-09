@@ -28,13 +28,13 @@ import (
 	"testing"
 	"time"
 
-	corellm "github.com/sigil-tech/kaneaz-harness/core/llm"
-	"github.com/sigil-tech/kaneaz-harness/core/llm/anthropic"
-	"github.com/sigil-tech/kaneaz-harness/core/llm/anthropic/smoke"
-	"github.com/sigil-tech/kaneaz-harness/core/llm/credref"
-	"github.com/sigil-tech/kaneaz-harness/core/llm/events"
-	llmregistry "github.com/sigil-tech/kaneaz-harness/core/llm/registry"
-	"github.com/sigil-tech/kaneaz-harness/core/secrets"
+	corellm "github.com/kameas-ai/kenaz-harness/core/llm"
+	"github.com/kameas-ai/kenaz-harness/core/llm/anthropic"
+	"github.com/kameas-ai/kenaz-harness/core/llm/anthropic/smoke"
+	"github.com/kameas-ai/kenaz-harness/core/llm/credref"
+	"github.com/kameas-ai/kenaz-harness/core/llm/events"
+	llmregistry "github.com/kameas-ai/kenaz-harness/core/llm/registry"
+	"github.com/kameas-ai/kenaz-harness/core/secrets"
 )
 
 // TestPipelineEndToEnd exercises the full connector pipeline:

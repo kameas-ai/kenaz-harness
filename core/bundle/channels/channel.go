@@ -19,7 +19,7 @@ import (
 	"context"
 	"io"
 
-	"github.com/sigil-tech/kaneaz-harness/core/secrets"
+	"github.com/kameas-ai/kenaz-harness/core/secrets"
 )
 
 // Channel is the contract for a distribution-channel adapter.

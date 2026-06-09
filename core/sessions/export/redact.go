@@ -6,7 +6,7 @@ import (
 	"strings"
 	"unicode"
 
-	"github.com/sigil-tech/kaneaz-harness/core/session"
+	"github.com/kameas-ai/kenaz-harness/core/session"
 )
 
 // RedactionMatch records a single substitution made by RedactValue.

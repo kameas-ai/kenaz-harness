@@ -6,8 +6,8 @@ import (
 	"os"
 	"time"
 
-	"github.com/sigil-tech/kaneaz-harness/core/context/audit"
-	"github.com/sigil-tech/kaneaz-harness/core/logging"
+	"github.com/kameas-ai/kenaz-harness/core/context/audit"
+	"github.com/kameas-ai/kenaz-harness/core/logging"
 )
 
 // RecoverMain is a deferred function for the main goroutine. When a panic

@@ -15,13 +15,13 @@ import (
 	"path/filepath"
 	"sync"
 
-	"github.com/sigil-tech/kaneaz-harness/core/logging"
-	"github.com/sigil-tech/kaneaz-harness/core/session"
-	"github.com/sigil-tech/kaneaz-harness/core/slashcmd"
-	"github.com/sigil-tech/kaneaz-harness/core/storage"
-	storagedb "github.com/sigil-tech/kaneaz-harness/core/storage/db"
-	"github.com/sigil-tech/kaneaz-harness/core/storage/internal/lockfile"
-	"github.com/sigil-tech/kaneaz-harness/core/storage/migrations"
+	"github.com/kameas-ai/kenaz-harness/core/logging"
+	"github.com/kameas-ai/kenaz-harness/core/session"
+	"github.com/kameas-ai/kenaz-harness/core/slashcmd"
+	"github.com/kameas-ai/kenaz-harness/core/storage"
+	storagedb "github.com/kameas-ai/kenaz-harness/core/storage/db"
+	"github.com/kameas-ai/kenaz-harness/core/storage/internal/lockfile"
+	"github.com/kameas-ai/kenaz-harness/core/storage/migrations"
 
 	_ "modernc.org/sqlite"
 )

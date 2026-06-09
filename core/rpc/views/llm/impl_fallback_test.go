@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/sigil-tech/kaneaz-harness/core/llm/fallback"
+	"github.com/kameas-ai/kenaz-harness/core/llm/fallback"
 )
 
 // buildTestAPI constructs a minimal API with a tempdir-backed FSStore.

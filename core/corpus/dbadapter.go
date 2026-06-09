@@ -3,7 +3,7 @@ package corpus
 import (
 	"context"
 
-	"github.com/sigil-tech/kaneaz-harness/core/storage"
+	"github.com/kameas-ai/kenaz-harness/core/storage"
 )
 
 // NewStorageDB wraps a storage.DB so the corpus manager can consume it

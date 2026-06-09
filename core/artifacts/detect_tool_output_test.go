@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/sigil-tech/kaneaz-harness/core/artifacts"
+	"github.com/kameas-ai/kenaz-harness/core/artifacts"
 )
 
 // b64 is a tiny helper for building base64-encoded fixtures.

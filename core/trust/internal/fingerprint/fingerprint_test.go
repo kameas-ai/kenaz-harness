@@ -3,7 +3,7 @@ package fingerprint_test
 import (
 	"testing"
 
-	"github.com/sigil-tech/kaneaz-harness/core/trust/internal/fingerprint"
+	"github.com/kameas-ai/kenaz-harness/core/trust/internal/fingerprint"
 )
 
 // TestFingerprintDeterministic — the same input produces the same

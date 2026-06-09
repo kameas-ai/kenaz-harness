@@ -13,8 +13,8 @@ import (
 	"os"
 	"time"
 
-	"github.com/sigil-tech/kaneaz-harness/core/logging"
-	"github.com/sigil-tech/kaneaz-harness/core/storage"
+	"github.com/kameas-ai/kenaz-harness/core/logging"
+	"github.com/kameas-ai/kenaz-harness/core/storage"
 )
 
 // envCostTelemetry is the opt-out env var. Default "on".

@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sigil-tech/kaneaz-harness/core/autonomy"
-	"github.com/sigil-tech/kaneaz-harness/core/projects"
+	"github.com/kameas-ai/kenaz-harness/core/autonomy"
+	"github.com/kameas-ai/kenaz-harness/core/projects"
 )
 
 // autonomyTestProject seeds a minimal Project so the tests can exercise

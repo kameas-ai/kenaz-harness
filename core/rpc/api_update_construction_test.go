@@ -17,8 +17,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/sigil-tech/kaneaz-harness/core"
-	"github.com/sigil-tech/kaneaz-harness/core/logging"
+	"github.com/kameas-ai/kenaz-harness/core"
+	"github.com/kameas-ai/kenaz-harness/core/logging"
 )
 
 // captureLog replaces the process-global logger with a buffer-backed

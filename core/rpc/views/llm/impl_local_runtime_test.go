@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/sigil-tech/kaneaz-harness/core/llm/localruntime"
+	"github.com/kameas-ai/kenaz-harness/core/llm/localruntime"
 )
 
 // fakePersonalStore is a minimal in-memory implementation of personal.Store

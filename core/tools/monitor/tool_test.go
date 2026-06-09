@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sigil-tech/kaneaz-harness/core/tasks"
-	"github.com/sigil-tech/kaneaz-harness/core/tools/monitor"
+	"github.com/kameas-ai/kenaz-harness/core/tasks"
+	"github.com/kameas-ai/kenaz-harness/core/tools/monitor"
 )
 
 // fakeRegistry implements monitor.RegistryIface with an in-memory backend.

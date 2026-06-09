@@ -8,7 +8,7 @@ import (
 	"log/slog"
 	"strings"
 
-	"github.com/sigil-tech/kaneaz-harness/core/toolloop"
+	"github.com/kameas-ai/kenaz-harness/core/toolloop"
 )
 
 // This file holds the compute-primitive executors (FR-029 .. FR-039):

@@ -11,8 +11,8 @@ import (
 	"context"
 	"testing"
 
-	coreag "github.com/sigil-tech/kaneaz-harness/core/agentgraph"
-	"github.com/sigil-tech/kaneaz-harness/core/autonomy"
+	coreag "github.com/kameas-ai/kenaz-harness/core/agentgraph"
+	"github.com/kameas-ai/kenaz-harness/core/autonomy"
 )
 
 // recordingPermResolver captures Resolve calls and returns a scripted verdict.

@@ -14,8 +14,8 @@ import (
 	"time"
 
 	cedargo "github.com/cedar-policy/cedar-go"
-	"github.com/sigil-tech/kaneaz-harness/core/credstore/refs"
-	"github.com/sigil-tech/kaneaz-harness/core/policy/cedar"
+	"github.com/kameas-ai/kenaz-harness/core/credstore/refs"
+	"github.com/kameas-ai/kenaz-harness/core/policy/cedar"
 )
 
 // DefaultAllowlist is the set of safe-by-default commands the bash

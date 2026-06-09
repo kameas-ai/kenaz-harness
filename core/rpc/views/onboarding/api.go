@@ -22,7 +22,7 @@ package onboarding
 import (
 	"context"
 
-	coreonboarding "github.com/sigil-tech/kaneaz-harness/core/onboarding"
+	coreonboarding "github.com/kameas-ai/kenaz-harness/core/onboarding"
 )
 
 // OnboardingState is the boot-time state the frontend reads to decide

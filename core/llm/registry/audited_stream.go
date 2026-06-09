@@ -5,8 +5,8 @@ import (
 	"sync"
 	"time"
 
-	llm "github.com/sigil-tech/kaneaz-harness/core/llm"
-	"github.com/sigil-tech/kaneaz-harness/core/llm/events"
+	llm "github.com/kameas-ai/kenaz-harness/core/llm"
+	"github.com/kameas-ai/kenaz-harness/core/llm/events"
 )
 
 // auditedStream wraps an adapter Stream with the connector's terminal

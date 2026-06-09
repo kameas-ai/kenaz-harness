@@ -20,8 +20,8 @@ import (
 	"sync"
 	"testing"
 
-	coreart "github.com/sigil-tech/kaneaz-harness/core/artifacts"
-	artview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/artifacts"
+	coreart "github.com/kameas-ai/kenaz-harness/core/artifacts"
+	artview "github.com/kameas-ai/kenaz-harness/core/rpc/views/artifacts"
 )
 
 // ─── fixture image bytes ──────────────────────────────────────────────────────

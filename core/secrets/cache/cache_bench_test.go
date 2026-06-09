@@ -3,8 +3,8 @@ package cache_test
 import (
 	"testing"
 
-	"github.com/sigil-tech/kaneaz-harness/core/secrets/cache"
-	"github.com/sigil-tech/kaneaz-harness/core/secrets/ref"
+	"github.com/kameas-ai/kenaz-harness/core/secrets/cache"
+	"github.com/kameas-ai/kenaz-harness/core/secrets/ref"
 )
 
 // BenchmarkCache_WarmHit measures the warm-hit path. NFR-001 requires

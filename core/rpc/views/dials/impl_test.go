@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	coredials "github.com/sigil-tech/kaneaz-harness/core/agentgraph/dials"
+	coredials "github.com/kameas-ai/kenaz-harness/core/agentgraph/dials"
 )
 
 func TestSetGet_Roundtrip(t *testing.T) {

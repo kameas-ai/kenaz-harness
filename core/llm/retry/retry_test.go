@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	llm "github.com/sigil-tech/kaneaz-harness/core/llm"
+	llm "github.com/kameas-ai/kenaz-harness/core/llm"
 )
 
 // ─────────────────────────────────────────────────────────────────────────────

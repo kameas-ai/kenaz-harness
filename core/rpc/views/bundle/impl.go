@@ -16,9 +16,9 @@ import (
 	"sort"
 	"sync"
 
-	"github.com/sigil-tech/kaneaz-harness/core/bundle/cache"
-	"github.com/sigil-tech/kaneaz-harness/core/bundle/lockfile"
-	"github.com/sigil-tech/kaneaz-harness/core/bundle/manifest"
+	"github.com/kameas-ai/kenaz-harness/core/bundle/cache"
+	"github.com/kameas-ai/kenaz-harness/core/bundle/lockfile"
+	"github.com/kameas-ai/kenaz-harness/core/bundle/manifest"
 )
 
 // Reader is the minimal interface this impl needs — backed in

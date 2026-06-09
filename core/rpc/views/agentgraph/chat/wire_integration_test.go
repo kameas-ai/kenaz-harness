@@ -38,12 +38,12 @@ import (
 	"sync"
 	"testing"
 
-	llm "github.com/sigil-tech/kaneaz-harness/core/llm"
-	"github.com/sigil-tech/kaneaz-harness/core/llm/anthropic"
-	"github.com/sigil-tech/kaneaz-harness/core/llm/bedrock"
-	"github.com/sigil-tech/kaneaz-harness/core/llm/openai"
-	"github.com/sigil-tech/kaneaz-harness/core/llm/openrouter"
-	"github.com/sigil-tech/kaneaz-harness/core/llm/wirecheck"
+	llm "github.com/kameas-ai/kenaz-harness/core/llm"
+	"github.com/kameas-ai/kenaz-harness/core/llm/anthropic"
+	"github.com/kameas-ai/kenaz-harness/core/llm/bedrock"
+	"github.com/kameas-ai/kenaz-harness/core/llm/openai"
+	"github.com/kameas-ai/kenaz-harness/core/llm/openrouter"
+	"github.com/kameas-ai/kenaz-harness/core/llm/wirecheck"
 )
 
 // ── helpers ───────────────────────────────────────────────────────────────────

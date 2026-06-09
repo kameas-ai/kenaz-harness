@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/scheduledchat"
-	"github.com/sigil-tech/kaneaz-harness/core/scheduler"
+	"github.com/kameas-ai/kenaz-harness/core/rpc/views/scheduledchat"
+	"github.com/kameas-ai/kenaz-harness/core/scheduler"
 )
 
 // ── fake store ────────────────────────────────────────────────────────────

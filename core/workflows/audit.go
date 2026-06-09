@@ -14,7 +14,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/sigil-tech/kaneaz-harness/core/context/audit"
+	"github.com/kameas-ai/kenaz-harness/core/context/audit"
 )
 
 // EmitExecuted records a completed Run (success or failure) on the

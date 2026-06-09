@@ -27,7 +27,7 @@ import (
 	"fmt"
 
 	cedar "github.com/cedar-policy/cedar-go"
-	cedarpolicy "github.com/sigil-tech/kaneaz-harness/core/policy/cedar"
+	cedarpolicy "github.com/kameas-ai/kenaz-harness/core/policy/cedar"
 )
 
 // CedarDelta is the decoded form of Bundle.CedarDelta.

@@ -18,7 +18,7 @@ import (
 	"sync"
 	"time"
 
-	llm "github.com/sigil-tech/kaneaz-harness/core/llm"
+	llm "github.com/kameas-ai/kenaz-harness/core/llm"
 )
 
 // Kind enumerates the connector-emitted event-log kinds (plan §5.3).

@@ -10,12 +10,12 @@ import (
 	"sync/atomic"
 	"time"
 
-	coreag "github.com/sigil-tech/kaneaz-harness/core/agentgraph"
-	"github.com/sigil-tech/kaneaz-harness/core/compaction"
-	corellm "github.com/sigil-tech/kaneaz-harness/core/llm"
-	"github.com/sigil-tech/kaneaz-harness/core/llm/tokenizer"
-	"github.com/sigil-tech/kaneaz-harness/core/logging"
-	artview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/artifacts"
+	coreag "github.com/kameas-ai/kenaz-harness/core/agentgraph"
+	"github.com/kameas-ai/kenaz-harness/core/compaction"
+	corellm "github.com/kameas-ai/kenaz-harness/core/llm"
+	"github.com/kameas-ai/kenaz-harness/core/llm/tokenizer"
+	"github.com/kameas-ai/kenaz-harness/core/logging"
+	artview "github.com/kameas-ai/kenaz-harness/core/rpc/views/artifacts"
 )
 
 // envCompactionDisabled is the env-var sentinel value the harness

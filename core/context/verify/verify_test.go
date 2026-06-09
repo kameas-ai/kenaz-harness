@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	pack "github.com/sigil-tech/kaneaz-harness/core/context/pack"
+	pack "github.com/kameas-ai/kenaz-harness/core/context/pack"
 )
 
 // fakeTrust is the canonical in-test stand-in for the real trust mission's

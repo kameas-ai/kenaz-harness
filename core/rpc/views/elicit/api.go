@@ -33,8 +33,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/sigil-tech/kaneaz-harness/core/asks"
-	"github.com/sigil-tech/kaneaz-harness/core/tools/askuserquestion"
+	"github.com/kameas-ai/kenaz-harness/core/asks"
+	"github.com/kameas-ai/kenaz-harness/core/tools/askuserquestion"
 )
 
 // requestIDSeq is a per-process monotonic counter used in newRequestID

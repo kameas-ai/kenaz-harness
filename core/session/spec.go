@@ -1,6 +1,6 @@
 package session
 
-import "github.com/sigil-tech/kaneaz-harness/core/bundle"
+import "github.com/kameas-ai/kenaz-harness/core/bundle"
 
 type Spec struct {
 	BundleSet    []bundle.Dependency `json:"bundle_set"`

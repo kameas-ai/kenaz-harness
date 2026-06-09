@@ -6,7 +6,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/sigil-tech/kaneaz-harness/core/session"
+	"github.com/kameas-ai/kenaz-harness/core/session"
 )
 
 // recordingStarter is a fake ResumeStarter that captures every

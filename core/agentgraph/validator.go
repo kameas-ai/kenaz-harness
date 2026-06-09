@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/sigil-tech/kaneaz-harness/core/agentgraph/nodes"
+	"github.com/kameas-ai/kenaz-harness/core/agentgraph/nodes"
 )
 
 // KnownDials is the canonical list of dial names the validator accepts

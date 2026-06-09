@@ -27,7 +27,7 @@ import (
 	"sort"
 	"strings"
 
-	agentgraph "github.com/sigil-tech/kaneaz-harness/core/agentgraph"
+	agentgraph "github.com/kameas-ai/kenaz-harness/core/agentgraph"
 	"gopkg.in/yaml.v3"
 )
 

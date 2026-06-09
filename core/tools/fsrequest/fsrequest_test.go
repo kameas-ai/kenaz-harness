@@ -6,7 +6,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/sigil-tech/kaneaz-harness/core/tools/fsrequest"
+	"github.com/kameas-ai/kenaz-harness/core/tools/fsrequest"
 )
 
 // stubDelegate is a test double for RequestAdditionalAllowedDir.

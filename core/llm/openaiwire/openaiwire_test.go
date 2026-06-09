@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/sigil-tech/kaneaz-harness/core/llm"
-	"github.com/sigil-tech/kaneaz-harness/core/llm/openaiwire"
+	"github.com/kameas-ai/kenaz-harness/core/llm"
+	"github.com/kameas-ai/kenaz-harness/core/llm/openaiwire"
 )
 
 // TestSerializeTools_RoundTrip verifies that a ToolSpec array round-trips

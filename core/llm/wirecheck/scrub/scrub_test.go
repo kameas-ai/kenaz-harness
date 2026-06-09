@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/sigil-tech/kaneaz-harness/core/llm/wirecheck/scrub"
+	"github.com/kameas-ai/kenaz-harness/core/llm/wirecheck/scrub"
 )
 
 // ── ScrubSSE golden tests ─────────────────────────────────────────────────────

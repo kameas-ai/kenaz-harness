@@ -6,8 +6,8 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/sigil-tech/kaneaz-harness/core/mcp"
-	"github.com/sigil-tech/kaneaz-harness/core/toolloop"
+	"github.com/kameas-ai/kenaz-harness/core/mcp"
+	"github.com/kameas-ai/kenaz-harness/core/toolloop"
 )
 
 // stubPool is a minimal mcp.Pool fake. The discoverer only reads

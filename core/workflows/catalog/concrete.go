@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"sync"
 
-	wfsched "github.com/sigil-tech/kaneaz-harness/core/workflows/scheduler"
-	corewf "github.com/sigil-tech/kaneaz-harness/core/workflows"
+	wfsched "github.com/kameas-ai/kenaz-harness/core/workflows/scheduler"
+	corewf "github.com/kameas-ai/kenaz-harness/core/workflows"
 )
 
 // RecipeRegistry is the narrow read-only interface the catalog uses to

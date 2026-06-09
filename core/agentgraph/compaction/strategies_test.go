@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/sigil-tech/kaneaz-harness/core/agentgraph"
-	"github.com/sigil-tech/kaneaz-harness/core/agentgraph/compaction"
+	"github.com/kameas-ai/kenaz-harness/core/agentgraph"
+	"github.com/kameas-ai/kenaz-harness/core/agentgraph/compaction"
 )
 
 // fakeLLM is a deterministic LLMSummarizer used by the summary tests.

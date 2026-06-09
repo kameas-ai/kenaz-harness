@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	llm "github.com/sigil-tech/kaneaz-harness/core/llm"
+	llm "github.com/kameas-ai/kenaz-harness/core/llm"
 )
 
 // loadFixture reads a recorded fixture file from testdata.

@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sigil-tech/kaneaz-harness/core/trust"
+	"github.com/kameas-ai/kenaz-harness/core/trust"
 )
 
 // _ = (trust.TrustEngine)(nil) at file scope guarantees the interface

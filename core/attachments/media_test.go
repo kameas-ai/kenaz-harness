@@ -14,11 +14,11 @@ import (
 	"sync"
 	"testing"
 
-	llm "github.com/sigil-tech/kaneaz-harness/core/llm"
+	llm "github.com/kameas-ai/kenaz-harness/core/llm"
 
-	"github.com/sigil-tech/kaneaz-harness/core/attachments"
-	"github.com/sigil-tech/kaneaz-harness/core/storage"
-	storagesqlite "github.com/sigil-tech/kaneaz-harness/core/storage/sqlite"
+	"github.com/kameas-ai/kenaz-harness/core/attachments"
+	"github.com/kameas-ai/kenaz-harness/core/storage"
+	storagesqlite "github.com/kameas-ai/kenaz-harness/core/storage/sqlite"
 )
 
 // ── minimal PNG fixture ───────────────────────────────────────────────────

@@ -22,9 +22,9 @@ import (
 	"path/filepath"
 	"strings"
 
-	bundle "github.com/sigil-tech/kaneaz-harness/core/bundle"
-	"github.com/sigil-tech/kaneaz-harness/core/bundle/channels"
-	"github.com/sigil-tech/kaneaz-harness/core/secrets"
+	bundle "github.com/kameas-ai/kenaz-harness/core/bundle"
+	"github.com/kameas-ai/kenaz-harness/core/bundle/channels"
+	"github.com/kameas-ai/kenaz-harness/core/secrets"
 )
 
 // Kind is the registered channel kind id.

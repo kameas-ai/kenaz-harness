@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/sigil-tech/kaneaz-harness/core/logging"
+	"github.com/kameas-ai/kenaz-harness/core/logging"
 )
 
 // Kernel is the graph executor. It walks the ready set of a Graph,

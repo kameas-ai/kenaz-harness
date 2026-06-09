@@ -7,8 +7,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	corellm "github.com/sigil-tech/kaneaz-harness/core/llm"
-	"github.com/sigil-tech/kaneaz-harness/core/eval"
+	corellm "github.com/kameas-ai/kenaz-harness/core/llm"
+	"github.com/kameas-ai/kenaz-harness/core/eval"
 )
 
 // ── Fixture helpers ──────────────────────────────────────────────────────────

@@ -19,9 +19,9 @@ import (
 	"context"
 	"errors"
 
-	harnessmcp "github.com/sigil-tech/kaneaz-harness/core/mcp/builtin/harness"
-	llmview "github.com/sigil-tech/kaneaz-harness/core/rpc/views/llm"
-	"github.com/sigil-tech/kaneaz-harness/core/session"
+	harnessmcp "github.com/kameas-ai/kenaz-harness/core/mcp/builtin/harness"
+	llmview "github.com/kameas-ai/kenaz-harness/core/rpc/views/llm"
+	"github.com/kameas-ai/kenaz-harness/core/session"
 )
 
 // ---- FirstRunChecker adapter ------------------------------------------------

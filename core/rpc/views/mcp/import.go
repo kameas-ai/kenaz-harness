@@ -24,7 +24,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/sigil-tech/kaneaz-harness/core/mcp/recipes"
+	"github.com/kameas-ai/kenaz-harness/core/mcp/recipes"
 )
 
 // ImportRequest is the wire shape the frontend sends. RawJSON is the

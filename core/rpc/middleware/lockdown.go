@@ -5,7 +5,7 @@
 package middleware
 
 import (
-	"github.com/sigil-tech/kaneaz-harness/core/fleet"
+	"github.com/kameas-ai/kenaz-harness/core/fleet"
 )
 
 // CheckLockdown returns fleet.ErrLockdownActive when a fleet-issued emergency

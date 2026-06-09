@@ -8,7 +8,7 @@ import (
 	"sort"
 	"time"
 
-	"github.com/sigil-tech/kaneaz-harness/core/memory"
+	"github.com/kameas-ai/kenaz-harness/core/memory"
 )
 
 // Rules tunes the prune sweep. All fields zero ⇒ conservative

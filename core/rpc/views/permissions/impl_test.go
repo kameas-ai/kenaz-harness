@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sigil-tech/kaneaz-harness/core/policy/cedar"
+	"github.com/kameas-ai/kenaz-harness/core/policy/cedar"
 )
 
 // fakeEngine counts Reload calls so tests can assert revoke triggers

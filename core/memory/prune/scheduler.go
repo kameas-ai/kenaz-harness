@@ -5,7 +5,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/sigil-tech/kaneaz-harness/core/memory"
+	"github.com/kameas-ai/kenaz-harness/core/memory"
 )
 
 // Scheduler runs the prune sweep on a cadence (default once per day

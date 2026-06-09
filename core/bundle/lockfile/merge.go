@@ -3,7 +3,7 @@ package lockfile
 import (
 	"fmt"
 
-	bundle "github.com/sigil-tech/kaneaz-harness/core/bundle"
+	bundle "github.com/kameas-ai/kenaz-harness/core/bundle"
 )
 
 // ResolveConflicts is the entry point for the deferred

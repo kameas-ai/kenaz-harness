@@ -234,7 +234,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/sigil-tech/kaneaz-harness/core/agentgraph/nodes"
+	"github.com/kameas-ai/kenaz-harness/core/agentgraph/nodes"
 )
 
 // Generated NodeKind constants. The on-the-wire string values come

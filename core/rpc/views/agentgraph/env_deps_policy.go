@@ -3,8 +3,8 @@ package agentgraph
 import (
 	"context"
 
-	coreag "github.com/sigil-tech/kaneaz-harness/core/agentgraph"
-	"github.com/sigil-tech/kaneaz-harness/core/policy/cedar"
+	coreag "github.com/kameas-ai/kenaz-harness/core/agentgraph"
+	"github.com/kameas-ai/kenaz-harness/core/policy/cedar"
 )
 
 // PolicyGateAdapter wraps a cedar.Gate onto the agentgraph.PolicyGate

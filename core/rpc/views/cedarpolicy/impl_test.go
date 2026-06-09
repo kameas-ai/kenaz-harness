@@ -6,8 +6,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/sigil-tech/kaneaz-harness/core/policy/cedar"
-	"github.com/sigil-tech/kaneaz-harness/core/rpc/views/cedarpolicy"
+	"github.com/kameas-ai/kenaz-harness/core/policy/cedar"
+	"github.com/kameas-ai/kenaz-harness/core/rpc/views/cedarpolicy"
 )
 
 // Compile-time witness: *cedarpolicy.API satisfies CedarPolicyAPI.

@@ -11,8 +11,8 @@
 package stdio
 
 import (
-	"github.com/sigil-tech/kaneaz-harness/core/mcp/transport"
-	stdiopkg "github.com/sigil-tech/kaneaz-harness/core/mcp/transport/stdio"
+	"github.com/kameas-ai/kenaz-harness/core/mcp/transport"
+	stdiopkg "github.com/kameas-ai/kenaz-harness/core/mcp/transport/stdio"
 )
 
 // Pool / PoolOptions / ServerInstance — the production pool types.

@@ -11,7 +11,7 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/sigil-tech/kaneaz-harness/core/mcp"
+	"github.com/kameas-ai/kenaz-harness/core/mcp"
 )
 
 // Handler is a registered (server, tool) → response function. Returning

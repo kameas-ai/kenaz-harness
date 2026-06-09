@@ -11,11 +11,11 @@ import (
 	"strings"
 	"sync/atomic"
 
-	autotitle "github.com/sigil-tech/kaneaz-harness/core/sessions/autotitle"
+	autotitle "github.com/kameas-ai/kenaz-harness/core/sessions/autotitle"
 
-	corellm "github.com/sigil-tech/kaneaz-harness/core/llm"
-	"github.com/sigil-tech/kaneaz-harness/core/llm/cost"
-	"github.com/sigil-tech/kaneaz-harness/core/logging"
+	corellm "github.com/kameas-ai/kenaz-harness/core/llm"
+	"github.com/kameas-ai/kenaz-harness/core/llm/cost"
+	"github.com/kameas-ai/kenaz-harness/core/logging"
 )
 
 // LLMRegistry is the narrow slice of core/llm/registry.Registry that

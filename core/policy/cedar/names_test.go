@@ -3,7 +3,7 @@ package cedar_test
 import (
 	"testing"
 
-	"github.com/sigil-tech/kaneaz-harness/core/policy/cedar"
+	"github.com/kameas-ai/kenaz-harness/core/policy/cedar"
 )
 
 func TestValidPolicyName_Accepted(t *testing.T) {

@@ -5,8 +5,8 @@ package capabilities_test
 import (
 	"testing"
 
-	"github.com/sigil-tech/kaneaz-harness/core/llm"
-	"github.com/sigil-tech/kaneaz-harness/core/llm/capabilities"
+	"github.com/kameas-ai/kenaz-harness/core/llm"
+	"github.com/kameas-ai/kenaz-harness/core/llm/capabilities"
 )
 
 func ptr[T any](v T) *T { return &v }

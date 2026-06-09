@@ -5,8 +5,8 @@ import (
 	"database/sql"
 	"errors"
 
-	"github.com/sigil-tech/kaneaz-harness/core/storage"
-	"github.com/sigil-tech/kaneaz-harness/core/storage/migrations"
+	"github.com/kameas-ai/kenaz-harness/core/storage"
+	"github.com/kameas-ai/kenaz-harness/core/storage/migrations"
 )
 
 // reader implements storage.Reader against *sql.DB.

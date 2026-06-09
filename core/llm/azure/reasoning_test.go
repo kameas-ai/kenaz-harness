@@ -7,7 +7,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	llm "github.com/sigil-tech/kaneaz-harness/core/llm"
+	llm "github.com/kameas-ai/kenaz-harness/core/llm"
 )
 
 // TestReasoning_RequestBody_High checks that a request with Reasoning.BudgetTokens

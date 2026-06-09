@@ -4,7 +4,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/sigil-tech/kaneaz-harness/core/sentry"
+	"github.com/kameas-ai/kenaz-harness/core/sentry"
 )
 
 func TestDisabled_EnvVars(t *testing.T) {

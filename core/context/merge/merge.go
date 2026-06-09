@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"sort"
 
-	pack "github.com/sigil-tech/kaneaz-harness/core/context/pack"
-	"github.com/sigil-tech/kaneaz-harness/core/context/policy"
-	"github.com/sigil-tech/kaneaz-harness/core/context/scope"
+	pack "github.com/kameas-ai/kenaz-harness/core/context/pack"
+	"github.com/kameas-ai/kenaz-harness/core/context/policy"
+	"github.com/kameas-ai/kenaz-harness/core/context/scope"
 )
 
 // Request bundles the inputs needed for one merge pass. Layers may

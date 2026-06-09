@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	corefleet "github.com/sigil-tech/kaneaz-harness/core/fleet"
+	corefleet "github.com/kameas-ai/kenaz-harness/core/fleet"
 )
 
 // Impl implements FleetAPI backed by core/fleet.TelemetryConsent.

@@ -6,10 +6,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sigil-tech/kaneaz-harness/core/credstore"
-	"github.com/sigil-tech/kaneaz-harness/core/secrets"
-	"github.com/sigil-tech/kaneaz-harness/core/secrets/ref"
-	"github.com/sigil-tech/kaneaz-harness/core/secrets/secret"
+	"github.com/kameas-ai/kenaz-harness/core/credstore"
+	"github.com/kameas-ai/kenaz-harness/core/secrets"
+	"github.com/kameas-ai/kenaz-harness/core/secrets/ref"
+	"github.com/kameas-ai/kenaz-harness/core/secrets/secret"
 )
 
 // fakeResolver is a ResolverAPI used in tests. It returns a

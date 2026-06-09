@@ -9,7 +9,7 @@ import (
 	"testing"
 
 	"github.com/robfig/cron/v3"
-	workflows "github.com/sigil-tech/kaneaz-harness/core/workflows"
+	workflows "github.com/kameas-ai/kenaz-harness/core/workflows"
 )
 
 // loadBuiltinFile is a test helper that reads a YAML from the directory that

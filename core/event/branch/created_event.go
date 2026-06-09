@@ -8,8 +8,8 @@ package branch
 import (
 	"time"
 
-	"github.com/sigil-tech/kaneaz-harness/core/context/audit"
-	"github.com/sigil-tech/kaneaz-harness/core/event/kind"
+	"github.com/kameas-ai/kenaz-harness/core/context/audit"
+	"github.com/kameas-ai/kenaz-harness/core/event/kind"
 )
 
 // KindBranchCreated is the kind.Kind value registered in the kind

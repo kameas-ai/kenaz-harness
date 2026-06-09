@@ -8,7 +8,7 @@ import (
 	"strconv"
 	"strings"
 
-	bundle "github.com/sigil-tech/kaneaz-harness/core/bundle"
+	bundle "github.com/kameas-ai/kenaz-harness/core/bundle"
 )
 
 // Read parses a canonical kaneaz.lock document. The reader accepts only the

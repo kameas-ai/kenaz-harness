@@ -5,8 +5,8 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/sigil-tech/kaneaz-harness/core/tools/todo"
-	"github.com/sigil-tech/kaneaz-harness/core/toolloop"
+	"github.com/kameas-ai/kenaz-harness/core/tools/todo"
+	"github.com/kameas-ai/kenaz-harness/core/toolloop"
 )
 
 // ── Store tests ─────────────────────────────────────────────────────────────

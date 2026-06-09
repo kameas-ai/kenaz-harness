@@ -3,7 +3,7 @@ package session
 import (
 	"context"
 
-	"github.com/sigil-tech/kaneaz-harness/core/storage/migrations"
+	"github.com/kameas-ai/kenaz-harness/core/storage/migrations"
 )
 
 // migrationIDBranchDisplayMeta identifies migration 0323 — additive

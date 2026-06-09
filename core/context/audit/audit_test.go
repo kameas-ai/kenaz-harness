@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	pack "github.com/sigil-tech/kaneaz-harness/core/context/pack"
+	pack "github.com/kameas-ai/kenaz-harness/core/context/pack"
 )
 
 type recordingEmitter struct {

@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/sigil-tech/kaneaz-harness/core/mcp/transport"
+	"github.com/kameas-ai/kenaz-harness/core/mcp/transport"
 )
 
 // HealthProbe issues a `tools/list` JSON-RPC request on a recurring

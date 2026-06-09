@@ -25,10 +25,10 @@ import (
 	"sync/atomic"
 	"time"
 
-	coremcp "github.com/sigil-tech/kaneaz-harness/core/mcp"
-	"github.com/sigil-tech/kaneaz-harness/core/mcp/transport"
-	"github.com/sigil-tech/kaneaz-harness/core/credstore/refs"
-	"github.com/sigil-tech/kaneaz-harness/core/policy/cedar"
+	coremcp "github.com/kameas-ai/kenaz-harness/core/mcp"
+	"github.com/kameas-ai/kenaz-harness/core/mcp/transport"
+	"github.com/kameas-ai/kenaz-harness/core/credstore/refs"
+	"github.com/kameas-ai/kenaz-harness/core/policy/cedar"
 )
 
 // Default deadlines used by the lifecycle code paths. These are

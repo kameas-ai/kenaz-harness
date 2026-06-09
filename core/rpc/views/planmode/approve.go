@@ -26,8 +26,8 @@ import (
 	"context"
 	"fmt"
 
-	coreart "github.com/sigil-tech/kaneaz-harness/core/artifacts"
-	coreplanmode "github.com/sigil-tech/kaneaz-harness/core/tools/planmode"
+	coreart "github.com/kameas-ai/kenaz-harness/core/artifacts"
+	coreplanmode "github.com/kameas-ai/kenaz-harness/core/tools/planmode"
 )
 
 // ApproveRequest is the input to Planmode_Approve.

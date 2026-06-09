@@ -6,10 +6,10 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/sigil-tech/kaneaz-harness/core/artifacts"
-	"github.com/sigil-tech/kaneaz-harness/core/autonomy"
-	"github.com/sigil-tech/kaneaz-harness/core/tools/planmode"
-	"github.com/sigil-tech/kaneaz-harness/core/toolloop"
+	"github.com/kameas-ai/kenaz-harness/core/artifacts"
+	"github.com/kameas-ai/kenaz-harness/core/autonomy"
+	"github.com/kameas-ai/kenaz-harness/core/tools/planmode"
+	"github.com/kameas-ai/kenaz-harness/core/toolloop"
 )
 
 // ─── fakes ─────────────────────────────────────────────────────────────────

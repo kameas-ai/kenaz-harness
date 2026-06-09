@@ -17,7 +17,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/sigil-tech/kaneaz-harness/core/agentgraph"
+	"github.com/kameas-ai/kenaz-harness/core/agentgraph"
 )
 
 // Pipeline is the top-level entrypoint the kernel uses. Construct one

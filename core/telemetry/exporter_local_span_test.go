@@ -6,9 +6,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sigil-tech/kaneaz-harness/core/storage"
-	storagesqlite "github.com/sigil-tech/kaneaz-harness/core/storage/sqlite"
-	"github.com/sigil-tech/kaneaz-harness/core/telemetry"
+	"github.com/kameas-ai/kenaz-harness/core/storage"
+	storagesqlite "github.com/kameas-ai/kenaz-harness/core/storage/sqlite"
+	"github.com/kameas-ai/kenaz-harness/core/telemetry"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"

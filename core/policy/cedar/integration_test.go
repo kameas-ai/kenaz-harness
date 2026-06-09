@@ -27,7 +27,7 @@ import (
 	"testing"
 
 	cedarlib "github.com/cedar-policy/cedar-go"
-	"github.com/sigil-tech/kaneaz-harness/core/policy/cedar"
+	"github.com/kameas-ai/kenaz-harness/core/policy/cedar"
 )
 
 // fakeToolDispatcher emulates the structure of core/rpc/views/tools or

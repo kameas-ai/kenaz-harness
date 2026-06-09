@@ -6,9 +6,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sigil-tech/kaneaz-harness/core/artifacts"
-	"github.com/sigil-tech/kaneaz-harness/core/storage"
-	storagesqlite "github.com/sigil-tech/kaneaz-harness/core/storage/sqlite"
+	"github.com/kameas-ai/kenaz-harness/core/artifacts"
+	"github.com/kameas-ai/kenaz-harness/core/storage"
+	storagesqlite "github.com/kameas-ai/kenaz-harness/core/storage/sqlite"
 )
 
 // openTestDB opens a fresh on-disk SQLite for store tests. Migration

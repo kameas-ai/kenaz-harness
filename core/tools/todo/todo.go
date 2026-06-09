@@ -25,7 +25,7 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/sigil-tech/kaneaz-harness/core/toolloop"
+	"github.com/kameas-ai/kenaz-harness/core/toolloop"
 )
 
 // ToolName is the canonical fully-qualified name exposed to the model.

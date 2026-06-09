@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	llm "github.com/sigil-tech/kaneaz-harness/core/llm"
+	llm "github.com/kameas-ai/kenaz-harness/core/llm"
 )
 
 // AttemptHook is called once per retry boundary (after the failure of
