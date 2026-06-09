@@ -956,6 +956,15 @@ func New(c *core.Core) *API {
 		}()
 	}
 
+	// fleet-skills-sync-01NDFSEX18 WP01/WP02: SkillStore persists fleet-installed
+	// skills to <DataDir>/slashcmds/*.json. Constructed early alongside slashStore
+	// so BootLoad can run before the chassis serves requests. Declared here so the
+	// fleet block below can wire SkillDeps onto slashAPI without a scope violation.
+	var skillStore *coreslashcmd.SkillStore
+	if c != nil && c.DataDir() != "" {
+		skillStore = coreslashcmd.NewSkillStore(c.DataDir())
+	}
+
 	// model-secret-references-01KW7M5A WP10: construct the process-singleton
 	// ExposureIndex. All secrets exposed via /secret add or the Settings
 	// Secrets panel are stored here. The list_secrets and web_fetch built-in
@@ -1320,6 +1329,27 @@ func New(c *core.Core) *API {
 			logging.L().Info("rpc.slashcmd.user_skipped",
 				"reason", "no core / no storage / disabled by flag")
 		}
+
+		// fleet-skills-sync-01NDFSEX18 WP01: BootLoad fleet skills from disk
+		// into the registry at startup. Best-effort: errors are logged but do
+		// not block the chassis from booting.
+		if skillStore != nil {
+			go func() {
+				n, err := coreslashcmd.BootLoad(skillStore, slashRegistry)
+				if err != nil {
+					logging.L().Warn("slashcmd.skills.boot_load.failed", "err", err.Error())
+				} else if n > 0 {
+					logging.L().Info("slashcmd.skills.boot_load.ok", "count", n)
+				}
+			}()
+		}
+
+		// fleet-skills-sync-01NDFSEX18 WP05: wire skill refs into the fleet
+		// settings state so the compositeConfigApplier can call
+		// fleet.ApplyMandatedSkills when a config bundle carries mandated_skills.
+		if skillStore != nil && a.settingsImpl != nil {
+			a.settingsImpl.SetSkillRefs(skillStore, slashRegistry)
+		}
 	}
 
 	// Auto-update subsystem (mission auto-update, v0.4.0 WP03).
@@ -1523,6 +1553,7 @@ func New(c *core.Core) *API {
 		flAudit := &fleetAuditEmitter{impl: a.auditImpl}
 
 		// Catalog (WP02)
+		var catalogSigner *corefleet.DeviceSigner // kept for SkillDeps wiring below
 		if flDataDir != "" {
 			signer, signerErr := corefleet.NewDeviceSigner(flDataDir)
 			if signerErr != nil {
@@ -1531,6 +1562,7 @@ func New(c *core.Core) *API {
 				// attempt; List/Install/Installed remain functional.
 				a.catalogAPI = catalogview.NewAPI(flCl, nil, flDataDir).WithEmitter(flAudit)
 			} else {
+				catalogSigner = signer
 				a.catalogAPI = catalogview.NewAPI(flCl, signer, flDataDir).WithEmitter(flAudit)
 			}
 		} else {
@@ -1555,6 +1587,38 @@ func New(c *core.Core) *API {
 			return id.Email, nil
 		}
 		a.cedarPublishAPI = cedarview.NewAPI(flCl, identityFn, flAudit)
+
+		// fleet-skills-sync-01NDFSEX18 WP02: wire fleet skill dependencies onto
+		// the slashAPI. The capability snapshot is read lazily from the poller at
+		// call time via GetCaps so tier changes propagate within one poll
+		// interval without restart.
+		if slashAPI, ok := a.slashAPI.(*slashview.API); ok && skillStore != nil {
+			// Capture a reference to settingsImpl so the GetCaps closure holds
+			// the exact API instance used for capability polling.
+			settingsRef := a.settingsImpl
+			getCaps := func() *corefleet.Capabilities {
+				if settingsRef == nil {
+					return nil
+				}
+				p := settingsRef.CapabilityPoller()
+				if p == nil {
+					return nil
+				}
+				c := p.Current()
+				return &c
+			}
+			slashAPI.WithSkillDeps(slashview.SkillDeps{
+				SkillStore:   skillStore,
+				FleetClient:  flCl,
+				Signer:       catalogSigner,
+				GetCaps:      getCaps,
+				PubKeyBase64: "", // fleet-level pub key; empty = skip verify (same as catalog)
+			})
+			logging.L().Info("rpc.slashcmd.skill_deps_wired",
+				"fleet_client_nil", flCl == nil,
+				"signer_nil", catalogSigner == nil,
+			)
+		}
 	}
 
 	a.bindings = NewBindings(a)

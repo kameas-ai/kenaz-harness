@@ -64,6 +64,15 @@ type Bundle struct {
 	// Persisted to disk for the kameas-ml consumer; not applied in-process.
 	KameasMLWeightURLs []string `json:"kameas_ml_weight_urls,omitempty"`
 
+	// MandatedSkills is the push-down section for org-admin-required skills
+	// (fleet-skills-sync-01NDFSEX18 WP05). Each entry is an opaque JSON
+	// object containing the skill payload that will be installed read-only
+	// on every org member's device (FR-301).
+	//
+	// The field is omitted from bundles that carry no mandated skills so
+	// the signing payload stays minimal for orgs that don't use this feature.
+	MandatedSkills []json.RawMessage `json:"mandated_skills,omitempty"`
+
 	// Signature is the base64-encoded ed25519 signature over the SHA-256 of
 	// the canonical JSON of this bundle with the "signature" field absent.
 	// This field is excluded from the signing input.
@@ -88,6 +97,7 @@ type bundleSigningPayload struct {
 	MCPAllowlist       []string          `json:"mcp_allowlist,omitempty"`
 	ModelPrefs         *BundleModelPrefs `json:"model_prefs,omitempty"`
 	KameasMLWeightURLs []string          `json:"kameas_ml_weight_urls,omitempty"`
+	MandatedSkills     []json.RawMessage `json:"mandated_skills,omitempty"`
 }
 
 // signingPayload produces the canonical JSON bytes that were signed (all
@@ -101,6 +111,7 @@ func (b *Bundle) signingPayload() ([]byte, error) {
 		MCPAllowlist:       b.MCPAllowlist,
 		ModelPrefs:         b.ModelPrefs,
 		KameasMLWeightURLs: b.KameasMLWeightURLs,
+		MandatedSkills:     b.MandatedSkills,
 	}
 	return json.Marshal(p)
 }

@@ -344,6 +344,23 @@ const (
 	// agent pack, or bundle to the team catalog.
 	// Payload: FleetCatalogPublishedPayload.
 	KindFleetCatalogPublished Kind = "fleet.catalog_published"
+
+	// ── Fleet skills (fleet-skills-sync-01NDFSEX18 WP07) ────────────────────
+
+	// KindFleetSkillPublished fires when the user successfully publishes a
+	// user slash-command as a skill to the fleet catalog.
+	// Payload: FleetSkillPublishedPayload.
+	KindFleetSkillPublished Kind = "fleet.skill_published"
+
+	// KindFleetSkillInstalled fires when a skill is installed from the fleet
+	// catalog (pull-down) and live-registered in the registry.
+	// Payload: FleetSkillInstalledPayload.
+	KindFleetSkillInstalled Kind = "fleet.skill_installed"
+
+	// KindFleetSkillUninstalled fires when a skill is removed from the local
+	// store and unregistered from the registry.
+	// Payload: FleetSkillUninstalledPayload.
+	KindFleetSkillUninstalled Kind = "fleet.skill_uninstalled"
 )
 
 // Event is the wire shape passed to the event log. The concrete event-log
@@ -1099,4 +1116,44 @@ type FleetContextPromotedPayload struct {
 	NodeID string `json:"node_id"`
 	// ToClassification is always "org_shared" in v0.
 	ToClassification string `json:"to_classification"`
+}
+
+// ── Fleet skill audit payload types (fleet-skills-sync-01NDFSEX18 WP07) ──────
+
+// FleetSkillPublishedPayload carries the audit signalling for
+// KindFleetSkillPublished.
+//
+// Privacy invariant: skill body, template, and tool_args_template are NEVER
+// included — only catalog metadata and provenance.
+type FleetSkillPublishedPayload struct {
+	// CatalogID is the server-assigned catalog item ID.
+	CatalogID string `json:"catalog_id"`
+	// Slug is the human-readable catalog slug (matches the skill trigger).
+	Slug string `json:"slug,omitempty"`
+	// Version is the published SemVer string.
+	Version string `json:"version,omitempty"`
+	// Visibility is "private", "team", or "org_public".
+	Visibility string `json:"visibility"`
+}
+
+// FleetSkillInstalledPayload carries the audit signalling for
+// KindFleetSkillInstalled.
+//
+// Privacy invariant: skill body is NEVER included.
+type FleetSkillInstalledPayload struct {
+	// CatalogID is the fleet catalog item ID.
+	CatalogID string `json:"catalog_id"`
+	// Version is the installed SemVer string.
+	Version string `json:"version,omitempty"`
+	// Trigger is the slash-command trigger (no leading slash).
+	Trigger string `json:"trigger"`
+}
+
+// FleetSkillUninstalledPayload carries the audit signalling for
+// KindFleetSkillUninstalled.
+type FleetSkillUninstalledPayload struct {
+	// SkillID is the local store ID of the uninstalled skill.
+	SkillID string `json:"skill_id"`
+	// Trigger is the slash-command trigger that was unregistered.
+	Trigger string `json:"trigger,omitempty"`
 }

@@ -82,6 +82,28 @@ type RunResultWire struct {
 	Metadata     map[string]any `json:"metadata,omitempty"`
 }
 
+// SkillItemWire is the wire shape for a fleet-installed skill (returned
+// by SkillList). Mirrors slashcmd.Skill with JSON tags.
+// (fleet-skills-sync-01NDFSEX18 WP02)
+type SkillItemWire struct {
+	ID           string `json:"id"`
+	CatalogID    string `json:"catalogId,omitempty"`
+	Version      string `json:"version,omitempty"`
+	Source       string `json:"source"`
+	Trigger      string `json:"trigger"`
+	LocalTrigger string `json:"localTrigger,omitempty"`
+	Kind         string `json:"kind"`
+	Description  string `json:"description,omitempty"`
+	Body         string `json:"body,omitempty"`
+	OrgManaged   bool   `json:"orgManaged"`
+	Disabled     bool   `json:"disabled,omitempty"`
+	// Shadowed is true when the effective trigger is occupied by a
+	// higher-priority personal or built-in command (FR-401).
+	Shadowed     bool   `json:"shadowed,omitempty"`
+	InstalledAt  int64  `json:"installedAt,omitempty"`
+	UpdatedAt    int64  `json:"updatedAt,omitempty"`
+}
+
 // SlashAPI is the view-scoped surface backing the chat composer's
 // slash-command path.
 type SlashAPI interface {
@@ -110,4 +132,23 @@ type SlashAPI interface {
 	// This is the human-invoked entry point; the __skill builtin tool
 	// calls Dispatch.Run directly.
 	UserRun(ctx context.Context, name string, args map[string]string, sessionID, projectID, cwd, selection string) (RunResultWire, error)
+
+	// ── fleet skill CRUD (fleet-skills-sync-01NDFSEX18 WP02/03/04) ────
+
+	// SkillList returns all fleet-installed skills (catalog + mandated).
+	SkillList(ctx context.Context) ([]SkillItemWire, error)
+	// SkillPublish signs and publishes a user command as a fleet skill
+	// with the given visibility scope. Requires fleet + capability.
+	SkillPublish(ctx context.Context, name, projectID, visibility string) error
+	// SkillInstall downloads, verifies, and live-registers a skill from
+	// the catalog. No restart required (FR-202).
+	SkillInstall(ctx context.Context, catalogID, version string) error
+	// SkillUninstall removes and live-unregisters a skill by its store ID.
+	// For catalog skills the ID is the catalogID; for mandated skills it
+	// is the slug assigned by the fleet admin.
+	SkillUninstall(ctx context.Context, skillID string) error
+	// SkillRenameLocalTrigger sets a local trigger alias to resolve a shadow
+	// conflict (FR-401). Pass an empty newTrigger to clear the alias and
+	// revert to the canonical trigger.
+	SkillRenameLocalTrigger(ctx context.Context, skillID, newTrigger string) error
 }
