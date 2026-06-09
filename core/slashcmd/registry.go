@@ -81,6 +81,41 @@ func (r *Registry) Register(cmd Command) error {
 	return nil
 }
 
+// RegisterSkill adds a fleet-installed skill command to the registry.
+// Unlike Register, it returns a non-nil error (but does NOT panic) when
+// the trigger is already occupied — the caller can surface the shadow
+// indicator in the UI. Built-ins and user-defined commands always win.
+//
+// RegisterSkill is safe to call at runtime (after construction) because
+// the skill-sync subsystem serialises calls via its own mutex before
+// calling here. Do NOT call from multiple goroutines without external
+// serialisation.
+//
+// (fleet-skills-sync-01NDFSEX18 WP01)
+func (r *Registry) RegisterSkill(cmd Command) error {
+	if cmd == nil {
+		return fmt.Errorf("slashcmd: nil command")
+	}
+	name := cmd.Name()
+	if name == "" {
+		return fmt.Errorf("slashcmd: skill command with empty name")
+	}
+	if _, exists := r.commands[name]; exists {
+		return fmt.Errorf("slashcmd: trigger %q already occupied", name)
+	}
+	r.commands[name] = cmd
+	return nil
+}
+
+// Unregister removes the command with the given name from the registry.
+// No-op when the name is not registered. Used by the skill-sync subsystem
+// to live-unregister an installed skill without restarting the app.
+//
+// (fleet-skills-sync-01NDFSEX18 WP01)
+func (r *Registry) Unregister(name string) {
+	delete(r.commands, name)
+}
+
 // Lookup returns the command registered under name. The bool reports
 // whether a command was found; callers wanting an error-shape
 // response should use Execute or check against ErrUnknownCommand.
