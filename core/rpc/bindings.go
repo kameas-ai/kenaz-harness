@@ -1905,6 +1905,24 @@ func (b *Bindings) Slashcmd_Run(name string, args map[string]string, sessionID, 
 	return b.api.Slash().UserRun(b.ctx(), name, args, sessionID, projectID, cwd, selection)
 }
 
+// ── fleet skill RPCs (fleet-skills-sync-01NDFSEX18 WP02/03/04) ───────
+
+func (b *Bindings) Slashcmd_SkillList() ([]slashview.SkillItemWire, error) {
+	return b.api.Slash().SkillList(b.ctx())
+}
+
+func (b *Bindings) Slashcmd_SkillPublish(name, projectID, visibility string) error {
+	return b.api.Slash().SkillPublish(b.ctx(), name, projectID, visibility)
+}
+
+func (b *Bindings) Slashcmd_SkillInstall(catalogID, version string) error {
+	return b.api.Slash().SkillInstall(b.ctx(), catalogID, version)
+}
+
+func (b *Bindings) Slashcmd_SkillUninstall(skillID string) error {
+	return b.api.Slash().SkillUninstall(b.ctx(), skillID)
+}
+
 // ── feature flags (user-slash-commands-01KQ8TD9 WP09) ────────────────
 
 // FeatureFlagInfo carries a single feature-flag name + enabled state
