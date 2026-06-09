@@ -14,6 +14,7 @@ import {cedar} from '../models';
 import {compaction} from '../models';
 import {contextview} from '../models';
 import {contexts} from '../models';
+import {fleet} from '../models';
 import {corpus} from '../models';
 import {dials} from '../models';
 import {elicit} from '../models';
@@ -199,6 +200,12 @@ export function Contexts_Rename(arg1:string,arg2:string):Promise<void>;
 export function Contexts_RootPath():Promise<string>;
 
 export function Contexts_Save(arg1:string,arg2:string):Promise<void>;
+
+export function Contexts_ContextPublish(arg1:contexts.ContextPublishRequest):Promise<contexts.ContextPublishResult>;
+
+export function Contexts_ContextPromote(arg1:string):Promise<contexts.ContextPromoteResult>;
+
+export function Contexts_ContextSyncStatus():Promise<contexts.ContextSyncStatusView>;
 
 export function Corpus_CreateCorpus(arg1:corpus.CreateRequest):Promise<corpus.Corpus>;
 

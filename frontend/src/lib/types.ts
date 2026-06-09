@@ -558,6 +558,44 @@ export interface ContextNode {
   children?: ContextNode[];
 }
 
+// ── Fleet context-graph sync types (fleet-context-graph-sync-01NDFSEX17) ──────
+
+export interface ContextPublishRequest {
+  node_id: string;
+  layer: 'team' | 'org';
+  kind: string;
+  title: string;
+  body: string;
+  team_id?: string;
+  version: number;
+}
+
+export interface ContextPushConflict {
+  node_id: string;
+  server_version: number;
+  client_version: number;
+}
+
+export interface ContextPublishResult {
+  accepted_nodes: number;
+  accepted_edges: number;
+  conflicts: ContextPushConflict[];
+}
+
+export interface ContextPromoteResult {
+  updated_node_id: string;
+  new_classification: 'org_shared';
+}
+
+export interface ContextSyncStatusView {
+  cursor: string;
+  last_pull_at?: string;
+  last_pull_err: string;
+  last_push_err: string;
+  pull_count: number;
+  team_cap_enabled: boolean;
+}
+
 export interface Bundle {
   id: string;
   name: string;

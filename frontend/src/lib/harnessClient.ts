@@ -157,6 +157,10 @@ import type {
   CapabilitiesView,
   FleetConfigPullStatusView,
   LockdownStatusView,
+  ContextPublishRequest,
+  ContextPublishResult,
+  ContextPromoteResult,
+  ContextSyncStatusView,
 } from './types';
 
 /**
@@ -341,6 +345,9 @@ interface WailsBindingsLike {
   Contexts_Delete(path: string): Promise<void>;
   Contexts_RecentlyApplied(limit: number): Promise<string[]>;
   Contexts_RootPath(): Promise<string>;
+  Contexts_ContextPublish(req: ContextPublishRequest): Promise<ContextPublishResult>;
+  Contexts_ContextPromote(nodeID: string): Promise<ContextPromoteResult>;
+  Contexts_ContextSyncStatus(): Promise<ContextSyncStatusView>;
 
   Attachments_List(scopeKind: string, scopeID: string): Promise<Attachment[]>;
   Attachments_ListResolved(sessionID: string): Promise<Attachment[]>;
@@ -2871,6 +2878,9 @@ export function createHarnessClient(): HarnessClient {
       delete: (path) => b().Contexts_Delete(path),
       recentlyApplied: (limit) => b().Contexts_RecentlyApplied(limit),
       rootPath: () => b().Contexts_RootPath(),
+      publish: (req: ContextPublishRequest) => b().Contexts_ContextPublish(req),
+      promote: (nodeID: string) => b().Contexts_ContextPromote(nodeID),
+      syncStatus: () => b().Contexts_ContextSyncStatus(),
     },
     attachments: {
       list: ({ scopeKind, scopeId }) =>

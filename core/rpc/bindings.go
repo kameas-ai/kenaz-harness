@@ -568,6 +568,29 @@ func (b *Bindings) Contexts_RootPath() (string, error) {
 	return b.api.Contexts().RootPath(b.ctx())
 }
 
+// Contexts_ContextPublish publishes a local context entry to the fleet
+// context graph. Requires the ContextGraphSyncer to be wired (via
+// API.WithSyncer) and CapSharedTeamGraph capability.
+// (fleet-context-graph-sync-01NDFSEX17 WP06)
+func (b *Bindings) Contexts_ContextPublish(req contextsview.ContextPublishRequest) (contextsview.ContextPublishResult, error) {
+	return b.api.Contexts().Context_Publish(b.ctx(), req)
+}
+
+// Contexts_ContextPromote elevates a team_shared context entry to org_shared
+// on the fleet server. Requires CapSharedTeamGraph.
+// (fleet-context-graph-sync-01NDFSEX17 WP06)
+func (b *Bindings) Contexts_ContextPromote(nodeID string) (contextsview.ContextPromoteResult, error) {
+	return b.api.Contexts().Context_Promote(b.ctx(), nodeID)
+}
+
+// Contexts_ContextSyncStatus returns a snapshot of the fleet context-graph
+// syncer state: cursor, last pull time, error strings, pull count, and team
+// cap flag. Always returns a non-error result.
+// (fleet-context-graph-sync-01NDFSEX17 WP06)
+func (b *Bindings) Contexts_ContextSyncStatus() (contextsview.ContextSyncStatusView, error) {
+	return b.api.Contexts().Context_SyncStatus(b.ctx())
+}
+
 // ── bundle ─────────────────────────────────────────────────────────────
 
 func (b *Bindings) Bundle_List() ([]bundle.Bundle, error) {
