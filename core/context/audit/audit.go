@@ -307,6 +307,19 @@ const (
 	// HARNESS_FLEET_LOCKDOWN_BYPASS=1 env var is set, regardless of whether
 	// a lockdown is currently in effect. Payload: FleetLockdownBypassPayload.
 	KindFleetLockdownBypassUsed Kind = "fleet.lockdown_bypass_used"
+
+	// ── Fleet share-and-sync audit kinds
+	// (fleet-share-and-sync-01NDFSEX14).
+
+	// KindFleetPolicyPublished fires when an admin publishes a Cedar rule
+	// bundle to the team via POST /api/v1/cedar-policy/publish.
+	// Payload: FleetPolicyPublishedPayload.
+	KindFleetPolicyPublished Kind = "fleet.policy_published"
+
+	// KindFleetCatalogPublished fires when a user publishes a workflow,
+	// agent pack, or bundle to the team catalog.
+	// Payload: FleetCatalogPublishedPayload.
+	KindFleetCatalogPublished Kind = "fleet.catalog_published"
 )
 
 // Event is the wire shape passed to the event log. The concrete event-log
@@ -986,6 +999,30 @@ type FleetLockdownBypassPayload struct {
 	// Always "HARNESS_FLEET_LOCKDOWN_BYPASS" for now; field exists so
 	// future bypass mechanisms are distinguishable in the audit log.
 	EnvVar string `json:"env_var"`
+}
+
+// FleetPolicyPublishedPayload carries the signalling for KindFleetPolicyPublished.
+// Privacy invariant: rule source bytes are NEVER included — only the rule_id
+// and author are emitted.
+type FleetPolicyPublishedPayload struct {
+	// RuleID is the unique identifier of the published Cedar rule.
+	RuleID string `json:"rule_id"`
+	// Author is the identity of the publishing admin (email or user_id).
+	Author string `json:"author,omitempty"`
+}
+
+// FleetCatalogPublishedPayload carries the signalling for
+// KindFleetCatalogPublished. Privacy invariant: payload bytes are NEVER
+// included — only catalog metadata.
+type FleetCatalogPublishedPayload struct {
+	// CatalogID is the server-assigned catalog item ID.
+	CatalogID string `json:"catalog_id"`
+	// Kind is the item kind (workflow, agent_pack, bundle).
+	Kind string `json:"kind"`
+	// Slug is the human-readable catalog slug.
+	Slug string `json:"slug,omitempty"`
+	// Version is the published SemVer string.
+	Version string `json:"version,omitempty"`
 }
 
 // Emit is a small convenience wrapper for callers that have a payload
