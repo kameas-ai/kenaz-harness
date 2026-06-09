@@ -147,4 +147,8 @@ type SlashAPI interface {
 	// For catalog skills the ID is the catalogID; for mandated skills it
 	// is the slug assigned by the fleet admin.
 	SkillUninstall(ctx context.Context, skillID string) error
+	// SkillRenameLocalTrigger sets a local trigger alias to resolve a shadow
+	// conflict (FR-401). Pass an empty newTrigger to clear the alias and
+	// revert to the canonical trigger.
+	SkillRenameLocalTrigger(ctx context.Context, skillID, newTrigger string) error
 }

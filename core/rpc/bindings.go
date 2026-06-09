@@ -1923,6 +1923,10 @@ func (b *Bindings) Slashcmd_SkillUninstall(skillID string) error {
 	return b.api.Slash().SkillUninstall(b.ctx(), skillID)
 }
 
+func (b *Bindings) Slashcmd_SkillRenameLocalTrigger(skillID, newTrigger string) error {
+	return b.api.Slash().SkillRenameLocalTrigger(b.ctx(), skillID, newTrigger)
+}
+
 // ── feature flags (user-slash-commands-01KQ8TD9 WP09) ────────────────
 
 // FeatureFlagInfo carries a single feature-flag name + enabled state

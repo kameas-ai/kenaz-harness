@@ -332,6 +332,19 @@ func (a *API) SkillUninstall(_ context.Context, skillID string) error {
 	return corefleet.UninstallSkill(a.skillDeps.SkillStore, a.registry, skillID)
 }
 
+// SkillRenameLocalTrigger sets a local trigger alias to resolve a shadow conflict.
+// An empty newTrigger clears the alias (reverts to canonical trigger).
+// (fleet-skills-sync-01NDFSEX18 WP06, FR-401)
+func (a *API) SkillRenameLocalTrigger(_ context.Context, skillID, newTrigger string) error {
+	if a.skillDeps.SkillStore == nil {
+		return fmt.Errorf("slashcmd view: skill store not wired")
+	}
+	if a.registry == nil {
+		return fmt.Errorf("slashcmd view: registry not wired")
+	}
+	return coreslashcmd.RenameLocalTrigger(a.skillDeps.SkillStore, a.registry, skillID, newTrigger)
+}
+
 // skillToWire converts a Skill to its wire shape.
 func skillToWire(sk coreslashcmd.Skill, shadowed bool) SkillItemWire {
 	return SkillItemWire{

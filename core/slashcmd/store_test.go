@@ -311,3 +311,148 @@ func TestSkill_EffectiveTrigger(t *testing.T) {
 		t.Errorf("EffectiveTrigger = %q, want %q", sk2.EffectiveTrigger(), "review")
 	}
 }
+
+// ── RenameLocalTrigger (WP06 FR-401) ─────────────────────────────────────────
+
+// TestRenameLocalTrigger_Basic verifies the happy path: renaming a local
+// trigger unregisters the old trigger and registers the new one.
+func TestRenameLocalTrigger_Basic(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	store := slashcmd.NewSkillStore(dir)
+	reg, err := slashcmd.NewRegistry(slashcmd.Deps{})
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
+
+	sk := slashcmd.Skill{
+		ID:      "rename-skill",
+		Source:  slashcmd.SkillSourceCatalog,
+		Trigger: "review",
+		Kind:    slashcmd.KindText,
+		Body:    "review body",
+	}
+	if err := slashcmd.LiveRegister(store, reg, sk); err != nil {
+		t.Fatalf("LiveRegister: %v", err)
+	}
+
+	// Rename /review → /myreview.
+	if err := slashcmd.RenameLocalTrigger(store, reg, "rename-skill", "myreview"); err != nil {
+		t.Fatalf("RenameLocalTrigger: %v", err)
+	}
+
+	// Old trigger must be gone.
+	if _, ok := reg.Lookup("review"); ok {
+		t.Error("old trigger 'review' still registered after rename")
+	}
+	// New trigger must be present.
+	if _, ok := reg.Lookup("myreview"); !ok {
+		t.Error("new trigger 'myreview' not registered after rename")
+	}
+	// Persisted skill must have LocalTrigger set.
+	persisted, err := store.Get("rename-skill")
+	if err != nil {
+		t.Fatalf("Get after rename: %v", err)
+	}
+	if persisted.LocalTrigger != "myreview" {
+		t.Errorf("persisted LocalTrigger = %q, want %q", persisted.LocalTrigger, "myreview")
+	}
+}
+
+// TestRenameLocalTrigger_ClearAlias verifies that passing an empty newTrigger
+// clears the alias and reverts to the canonical trigger.
+func TestRenameLocalTrigger_ClearAlias(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	store := slashcmd.NewSkillStore(dir)
+	reg, err := slashcmd.NewRegistry(slashcmd.Deps{})
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
+
+	sk := slashcmd.Skill{
+		ID:           "rename-clear",
+		Source:       slashcmd.SkillSourceCatalog,
+		Trigger:      "pr",
+		LocalTrigger: "mypr",
+		Kind:         slashcmd.KindText,
+		Body:         "pr body",
+	}
+	if err := slashcmd.LiveRegister(store, reg, sk); err != nil {
+		t.Fatalf("LiveRegister: %v", err)
+	}
+
+	// skill is registered under "mypr" (the LocalTrigger).
+	if _, ok := reg.Lookup("mypr"); !ok {
+		t.Error("'mypr' not registered after LiveRegister with LocalTrigger")
+	}
+
+	// Clear the alias.
+	if err := slashcmd.RenameLocalTrigger(store, reg, "rename-clear", ""); err != nil {
+		t.Fatalf("RenameLocalTrigger (clear): %v", err)
+	}
+
+	// Old local trigger must be gone.
+	if _, ok := reg.Lookup("mypr"); ok {
+		t.Error("'mypr' still registered after clearing alias")
+	}
+	// Canonical trigger must be registered.
+	if _, ok := reg.Lookup("pr"); !ok {
+		t.Error("canonical 'pr' not registered after clearing alias")
+	}
+	// LocalTrigger must be cleared on disk.
+	persisted, err := store.Get("rename-clear")
+	if err != nil {
+		t.Fatalf("Get after clear: %v", err)
+	}
+	if persisted.LocalTrigger != "" {
+		t.Errorf("persisted LocalTrigger = %q after clear, want empty", persisted.LocalTrigger)
+	}
+}
+
+// TestRenameLocalTrigger_ShadowedNewTrigger verifies that renaming to a trigger
+// already occupied by another command returns ErrTriggerShadowed.
+func TestRenameLocalTrigger_ShadowedNewTrigger(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	store := slashcmd.NewSkillStore(dir)
+	reg, err := slashcmd.NewRegistry(slashcmd.Deps{})
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
+
+	// Register the skill we want to rename.
+	sk := slashcmd.Skill{
+		ID:      "rename-shadow",
+		Source:  slashcmd.SkillSourceCatalog,
+		Trigger: "deploy",
+		Kind:    slashcmd.KindText,
+		Body:    "deploy body",
+	}
+	if err := slashcmd.LiveRegister(store, reg, sk); err != nil {
+		t.Fatalf("LiveRegister: %v", err)
+	}
+
+	// Attempt to rename to "help" which is a built-in.
+	renameErr := slashcmd.RenameLocalTrigger(store, reg, "rename-shadow", "help")
+	if !errors.Is(renameErr, slashcmd.ErrTriggerShadowed) {
+		t.Errorf("expected ErrTriggerShadowed, got: %v", renameErr)
+	}
+}
+
+// TestRenameLocalTrigger_NotFound verifies that renaming an unknown skill
+// returns ErrSkillNotFound.
+func TestRenameLocalTrigger_NotFound(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	store := slashcmd.NewSkillStore(dir)
+	reg, err := slashcmd.NewRegistry(slashcmd.Deps{})
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
+
+	renameErr := slashcmd.RenameLocalTrigger(store, reg, "nonexistent", "something")
+	if !errors.Is(renameErr, slashcmd.ErrSkillNotFound) {
+		t.Errorf("expected ErrSkillNotFound, got: %v", renameErr)
+	}
+}

@@ -343,3 +343,44 @@ func LiveUnregister(store *SkillStore, registry *Registry, id string) error {
 // already occupied by a higher-precedence command (personal > team > org).
 // The skill is persisted but not registered until the conflict resolves.
 var ErrTriggerShadowed = errors.New("slashcmd: trigger shadowed by higher-priority command")
+
+// RenameLocalTrigger updates the LocalTrigger of the skill identified by id.
+// When newTrigger is empty the rename is cleared (effective trigger reverts to Trigger).
+//
+// The registry is updated live: the old effective trigger is unregistered and
+// the new effective trigger is registered. Returns ErrSkillNotFound when the
+// skill does not exist. Returns ErrTriggerShadowed (wrapped) when newTrigger
+// is already occupied by a higher-priority command.
+//
+// Resolves FR-401: user can rename a local trigger to resolve a shadow conflict.
+func RenameLocalTrigger(store *SkillStore, registry *Registry, id, newTrigger string) error {
+	sk, err := store.Get(id)
+	if err != nil {
+		return err
+	}
+
+	// Unregister the old effective trigger.
+	oldTrigger := sk.EffectiveTrigger()
+	registry.Unregister(oldTrigger)
+
+	// Apply the rename.
+	sk.LocalTrigger = newTrigger
+	if err := store.Save(sk); err != nil {
+		// Best-effort re-register on save failure so the registry stays consistent.
+		if oldTrigger != "" {
+			cmd := skillCommand{skill: sk}
+			_ = registry.RegisterSkill(cmd)
+		}
+		return fmt.Errorf("slashcmd: RenameLocalTrigger: save: %w", err)
+	}
+
+	// Re-register under the new effective trigger.
+	newEffective := sk.EffectiveTrigger()
+	if newEffective != "" {
+		cmd := skillCommand{skill: sk}
+		if regErr := registry.RegisterSkill(cmd); regErr != nil {
+			return fmt.Errorf("%w: %q is already registered", ErrTriggerShadowed, newEffective)
+		}
+	}
+	return nil
+}
