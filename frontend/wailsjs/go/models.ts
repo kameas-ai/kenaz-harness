@@ -915,6 +915,73 @@ export namespace bundle {
 
 }
 
+export namespace catalog {
+	
+	export class CatalogFilter {
+	    kind?: string;
+	    visibility?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new CatalogFilter(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.kind = source["kind"];
+	        this.visibility = source["visibility"];
+	    }
+	}
+	export class CatalogItemView {
+	    id: string;
+	    kind: string;
+	    slug: string;
+	    version: string;
+	    description: string;
+	    visibility: string;
+	    published_at?: string;
+	    installed: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new CatalogItemView(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.kind = source["kind"];
+	        this.slug = source["slug"];
+	        this.version = source["version"];
+	        this.description = source["description"];
+	        this.visibility = source["visibility"];
+	        this.published_at = source["published_at"];
+	        this.installed = source["installed"];
+	    }
+	}
+	export class PublishInput {
+	    kind: string;
+	    slug: string;
+	    version: string;
+	    description: string;
+	    visibility: string;
+	    payload_json: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new PublishInput(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.kind = source["kind"];
+	        this.slug = source["slug"];
+	        this.version = source["version"];
+	        this.description = source["description"];
+	        this.visibility = source["visibility"];
+	        this.payload_json = source["payload_json"];
+	    }
+	}
+
+}
+
 export namespace cedar {
 	
 	export class BashPromptSurface {
@@ -1409,6 +1476,119 @@ export namespace compaction {
 
 export namespace contexts {
 	
+	export class ContextPromoteResult {
+	    updated_node_id: string;
+	    new_classification: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ContextPromoteResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.updated_node_id = source["updated_node_id"];
+	        this.new_classification = source["new_classification"];
+	    }
+	}
+	export class ContextPublishRequest {
+	    node_id: string;
+	    layer: string;
+	    kind: string;
+	    title: string;
+	    body: string;
+	    team_id?: string;
+	    version: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new ContextPublishRequest(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.node_id = source["node_id"];
+	        this.layer = source["layer"];
+	        this.kind = source["kind"];
+	        this.title = source["title"];
+	        this.body = source["body"];
+	        this.team_id = source["team_id"];
+	        this.version = source["version"];
+	    }
+	}
+	export class ContextPublishResult {
+	    accepted_nodes: number;
+	    accepted_edges: number;
+	    conflicts: fleet.ContextPushConflict[];
+	
+	    static createFrom(source: any = {}) {
+	        return new ContextPublishResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.accepted_nodes = source["accepted_nodes"];
+	        this.accepted_edges = source["accepted_edges"];
+	        this.conflicts = this.convertValues(source["conflicts"], fleet.ContextPushConflict);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class ContextSyncStatusView {
+	    cursor: string;
+	    // Go type: time
+	    last_pull_at: any;
+	    last_pull_err: string;
+	    last_push_err: string;
+	    pull_count: number;
+	    team_cap_enabled: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new ContextSyncStatusView(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.cursor = source["cursor"];
+	        this.last_pull_at = this.convertValues(source["last_pull_at"], null);
+	        this.last_pull_err = source["last_pull_err"];
+	        this.last_push_err = source["last_push_err"];
+	        this.pull_count = source["pull_count"];
+	        this.team_cap_enabled = source["team_cap_enabled"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	export class Node {
 	    name: string;
 	    path: string;
@@ -1432,123 +1612,6 @@ export namespace contexts {
 	        this.children = this.convertValues(source["children"], Node);
 	    }
 	
-		convertValues(a: any, classs: any, asMap: boolean = false): any {
-		    if (!a) {
-		        return a;
-		    }
-		    if (a.slice && a.map) {
-		        return (a as any[]).map(elem => this.convertValues(elem, classs));
-		    } else if ("object" === typeof a) {
-		        if (asMap) {
-		            for (const key of Object.keys(a)) {
-		                a[key] = new classs(a[key]);
-		            }
-		            return a;
-		        }
-		        return new classs(a);
-		    }
-		    return a;
-		}
-	}
-
-	export class ContextPublishRequest {
-	    node_id: string;
-	    layer: string;
-	    kind: string;
-	    title: string;
-	    body: string;
-	    team_id?: string;
-	    version: number;
-
-	    static createFrom(source: any = {}) {
-	        return new ContextPublishRequest(source);
-	    }
-
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.node_id = source["node_id"];
-	        this.layer = source["layer"];
-	        this.kind = source["kind"];
-	        this.title = source["title"];
-	        this.body = source["body"];
-	        this.team_id = source["team_id"];
-	        this.version = source["version"];
-	    }
-	}
-
-	export class ContextPublishResult {
-	    accepted_nodes: number;
-	    accepted_edges: number;
-	    conflicts: fleet.ContextPushConflict[];
-
-	    static createFrom(source: any = {}) {
-	        return new ContextPublishResult(source);
-	    }
-
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.accepted_nodes = source["accepted_nodes"];
-	        this.accepted_edges = source["accepted_edges"];
-	        this.conflicts = this.convertValues(source["conflicts"], fleet.ContextPushConflict);
-	    }
-
-		convertValues(a: any, classs: any, asMap: boolean = false): any {
-		    if (!a) {
-		        return a;
-		    }
-		    if (a.slice && a.map) {
-		        return (a as any[]).map(elem => this.convertValues(elem, classs));
-		    } else if ("object" === typeof a) {
-		        if (asMap) {
-		            for (const key of Object.keys(a)) {
-		                a[key] = new classs(a[key]);
-		            }
-		            return a;
-		        }
-		        return new classs(a);
-		    }
-		    return a;
-		}
-	}
-
-	export class ContextPromoteResult {
-	    updated_node_id: string;
-	    new_classification: string;
-
-	    static createFrom(source: any = {}) {
-	        return new ContextPromoteResult(source);
-	    }
-
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.updated_node_id = source["updated_node_id"];
-	        this.new_classification = source["new_classification"];
-	    }
-	}
-
-	export class ContextSyncStatusView {
-	    cursor: string;
-	    // Go type: time
-	    last_pull_at?: any;
-	    last_pull_err: string;
-	    last_push_err: string;
-	    pull_count: number;
-	    team_cap_enabled: boolean;
-
-	    static createFrom(source: any = {}) {
-	        return new ContextSyncStatusView(source);
-	    }
-
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.cursor = source["cursor"];
-	        this.last_pull_at = this.convertValues(source["last_pull_at"], null);
-	        this.last_pull_err = source["last_pull_err"];
-	        this.last_push_err = source["last_push_err"];
-	        this.pull_count = source["pull_count"];
-	        this.team_cap_enabled = source["team_cap_enabled"];
-	    }
-
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -2283,16 +2346,16 @@ export namespace elicit {
 }
 
 export namespace fleet {
-
+	
 	export class ContextPushConflict {
 	    node_id: string;
 	    server_version: number;
 	    client_version: number;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new ContextPushConflict(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.node_id = source["node_id"];
@@ -6280,6 +6343,47 @@ export namespace storage {
 
 }
 
+export namespace sync {
+	
+	export class PendingMCPSecret {
+	    mcp_id: string;
+	    recipe_id: string;
+	    requires_secret_keys: string[];
+	
+	    static createFrom(source: any = {}) {
+	        return new PendingMCPSecret(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.mcp_id = source["mcp_id"];
+	        this.recipe_id = source["recipe_id"];
+	        this.requires_secret_keys = source["requires_secret_keys"];
+	    }
+	}
+	export class SyncStatusView {
+	    category: string;
+	    enabled: boolean;
+	    last_push_at?: string;
+	    last_pull_at?: string;
+	    last_error?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new SyncStatusView(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.category = source["category"];
+	        this.enabled = source["enabled"];
+	        this.last_push_at = source["last_push_at"];
+	        this.last_pull_at = source["last_pull_at"];
+	        this.last_error = source["last_error"];
+	    }
+	}
+
+}
+
 export namespace tools {
 	
 	export class FSAccessResult {
@@ -6882,119 +6986,6 @@ export namespace workflows {
 	        this.version = source["version"];
 	        this.stepCount = source["stepCount"];
 	        this.source = source["source"];
-	    }
-	}
-
-}
-
-// -- Catalog view models (fleet-share-and-sync-01NDFSEX14 WP02) ---------------
-export namespace catalog {
-
-	export class PublishInput {
-	    kind: string;
-	    slug: string;
-	    version: string;
-	    description: string;
-	    visibility: string;
-	    payload_json: string;
-
-	    static createFrom(source: any = {}) {
-	        return new PublishInput(source);
-	    }
-
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.kind = source["kind"];
-	        this.slug = source["slug"];
-	        this.version = source["version"];
-	        this.description = source["description"];
-	        this.visibility = source["visibility"];
-	        this.payload_json = source["payload_json"];
-	    }
-	}
-
-	export class CatalogFilter {
-	    kind?: string;
-	    visibility?: string;
-
-	    static createFrom(source: any = {}) {
-	        return new CatalogFilter(source);
-	    }
-
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.kind = source["kind"];
-	        this.visibility = source["visibility"];
-	    }
-	}
-
-	export class CatalogItemView {
-	    id: string;
-	    kind: string;
-	    slug: string;
-	    version: string;
-	    description: string;
-	    visibility: string;
-	    published_at?: string;
-	    installed: boolean;
-
-	    static createFrom(source: any = {}) {
-	        return new CatalogItemView(source);
-	    }
-
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.id = source["id"];
-	        this.kind = source["kind"];
-	        this.slug = source["slug"];
-	        this.version = source["version"];
-	        this.description = source["description"];
-	        this.visibility = source["visibility"];
-	        this.published_at = source["published_at"];
-	        this.installed = source["installed"];
-	    }
-	}
-
-}
-
-// -- Sync view models (fleet-share-and-sync-01NDFSEX14 WP05) ------------------
-export namespace sync {
-
-	export class SyncStatusView {
-	    category: string;
-	    enabled: boolean;
-	    last_push_at?: string;
-	    last_pull_at?: string;
-	    last_error?: string;
-
-	    static createFrom(source: any = {}) {
-	        return new SyncStatusView(source);
-	    }
-
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.category = source["category"];
-	        this.enabled = source["enabled"];
-	        this.last_push_at = source["last_push_at"];
-	        this.last_pull_at = source["last_pull_at"];
-	        this.last_error = source["last_error"];
-	    }
-	}
-
-	export class PendingMCPSecret {
-	    mcp_id: string;
-	    recipe_id: string;
-	    requires_secret_keys: string[];
-
-	    static createFrom(source: any = {}) {
-	        return new PendingMCPSecret(source);
-	    }
-
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.mcp_id = source["mcp_id"];
-	        this.recipe_id = source["recipe_id"];
-	        this.requires_secret_keys = source["requires_secret_keys"];
 	    }
 	}
 

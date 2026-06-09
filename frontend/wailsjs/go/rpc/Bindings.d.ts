@@ -9,12 +9,12 @@ import {log} from '../models';
 import {audit} from '../models';
 import {branches} from '../models';
 import {bundle} from '../models';
+import {catalog} from '../models';
 import {cedarpolicy} from '../models';
 import {cedar} from '../models';
 import {compaction} from '../models';
 import {contextview} from '../models';
 import {contexts} from '../models';
-import {fleet} from '../models';
 import {corpus} from '../models';
 import {dials} from '../models';
 import {elicit} from '../models';
@@ -40,14 +40,13 @@ import {context} from '../models';
 import {settings} from '../models';
 import {slashcmd} from '../models';
 import {storage} from '../models';
+import {sync} from '../models';
 import {transport} from '../models';
 import {tools} from '../models';
 import {trust} from '../models';
 import {update} from '../models';
 import {workflow} from '../models';
 import {workflows} from '../models';
-import {catalog} from '../models';
-import {sync} from '../models';
 
 export function A2A_ListCards():Promise<Array<a2a.Card>>;
 
@@ -141,6 +140,16 @@ export function Bundle_List():Promise<Array<bundle.Bundle>>;
 
 export function Bundle_Remove(arg1:string):Promise<void>;
 
+export function Catalog_Install(arg1:string,arg2:string):Promise<void>;
+
+export function Catalog_Installed():Promise<Array<catalog.CatalogItemView>>;
+
+export function Catalog_List(arg1:catalog.CatalogFilter):Promise<Array<catalog.CatalogItemView>>;
+
+export function Catalog_Publish(arg1:catalog.PublishInput):Promise<catalog.CatalogItemView>;
+
+export function Catalog_Uninstall(arg1:string,arg2:string,arg3:string):Promise<void>;
+
 export function CedarPolicy_Delete(arg1:string):Promise<void>;
 
 export function CedarPolicy_Get(arg1:string):Promise<cedarpolicy.PolicyFileDetail>;
@@ -165,6 +174,8 @@ export function CedarPolicy_Validate(arg1:string):Promise<cedarpolicy.ParseResul
 
 export function CedarPolicy_WriteSnippet(arg1:string,arg2:string):Promise<void>;
 
+export function Cedar_PublishToTeam(arg1:string,arg2:string):Promise<void>;
+
 export function Compaction_GetConfig(arg1:compaction.Layer,arg2:string):Promise<compaction.Config>;
 
 export function Compaction_GetEffective(arg1:compaction.ScopeKey):Promise<compaction.EffectiveConfig>;
@@ -185,6 +196,12 @@ export function Context_StartStream():Promise<string>;
 
 export function Context_StopStream(arg1:string):Promise<void>;
 
+export function Contexts_ContextPromote(arg1:string):Promise<contexts.ContextPromoteResult>;
+
+export function Contexts_ContextPublish(arg1:contexts.ContextPublishRequest):Promise<contexts.ContextPublishResult>;
+
+export function Contexts_ContextSyncStatus():Promise<contexts.ContextSyncStatusView>;
+
 export function Contexts_CreateFolder(arg1:string):Promise<void>;
 
 export function Contexts_Delete(arg1:string):Promise<void>;
@@ -202,12 +219,6 @@ export function Contexts_Rename(arg1:string,arg2:string):Promise<void>;
 export function Contexts_RootPath():Promise<string>;
 
 export function Contexts_Save(arg1:string,arg2:string):Promise<void>;
-
-export function Contexts_ContextPublish(arg1:contexts.ContextPublishRequest):Promise<contexts.ContextPublishResult>;
-
-export function Contexts_ContextPromote(arg1:string):Promise<contexts.ContextPromoteResult>;
-
-export function Contexts_ContextSyncStatus():Promise<contexts.ContextSyncStatusView>;
 
 export function Corpus_CreateCorpus(arg1:corpus.CreateRequest):Promise<corpus.Corpus>;
 
@@ -252,28 +263,6 @@ export function Elicit_SubmitWizardStep(arg1:string,arg2:string,arg3:json.RawMes
 export function Fleet_GetTelemetryConsent():Promise<string>;
 
 export function Fleet_SetTelemetryConsent(arg1:string):Promise<void>;
-
-export function Catalog_Publish(arg1:catalog.PublishInput):Promise<catalog.CatalogItemView>;
-
-export function Catalog_List(arg1:catalog.CatalogFilter):Promise<Array<catalog.CatalogItemView>>;
-
-export function Catalog_Install(arg1:string,arg2:string):Promise<void>;
-
-export function Catalog_Uninstall(arg1:string,arg2:string,arg3:string):Promise<void>;
-
-export function Catalog_Installed():Promise<Array<catalog.CatalogItemView>>;
-
-export function Sync_Toggle(arg1:string,arg2:boolean):Promise<void>;
-
-export function Sync_Status():Promise<Array<sync.SyncStatusView>>;
-
-export function Sync_ForcePush(arg1:string):Promise<void>;
-
-export function Sync_ForcePull(arg1:string):Promise<void>;
-
-export function Sync_PendingMCPSecrets():Promise<Array<sync.PendingMCPSecret>>;
-
-export function Cedar_PublishToTeam(arg1:string,arg2:string):Promise<void>;
 
 export function Graph_CancelRun(arg1:string):Promise<void>;
 
@@ -744,6 +733,16 @@ export function Slashcmd_Save(arg1:slashcmd.UserCommandWire):Promise<void>;
 export function Storage_ApplyDriftFix(arg1:number):Promise<void>;
 
 export function Storage_GetMigrationDriftReport():Promise<storage.DriftReport>;
+
+export function Sync_ForcePull(arg1:string):Promise<void>;
+
+export function Sync_ForcePush(arg1:string):Promise<void>;
+
+export function Sync_PendingMCPSecrets():Promise<Array<sync.PendingMCPSecret>>;
+
+export function Sync_Status():Promise<Array<sync.SyncStatusView>>;
+
+export function Sync_Toggle(arg1:string,arg2:boolean):Promise<void>;
 
 export function Tools_ForgetRecipeKey(arg1:string,arg2:string):Promise<void>;
 
