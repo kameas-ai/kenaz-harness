@@ -13,6 +13,11 @@
 // Auth: client must send {"kind":"auth","token":"<HARNESS_VM_TOKEN>"}
 // as the first message on each connection. Server replies
 // {"kind":"auth.ok"} or closes the connection with {"kind":"auth.error"}.
+// When HARNESS_VM_TOKEN is set (the baked-image / production path) the token
+// is REQUIRED and validated with a constant-time compare; a mismatch is
+// rejected. An unset HARNESS_VM_TOKEN leaves the handshake unauthenticated
+// for LOCAL DEV ONLY (the baked image always sets it ⇒ deny-by-default in
+// production). The token is never logged.
 //
 // Task lifecycle (per connection, one active task at a time):
 //
@@ -35,6 +40,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -63,6 +69,17 @@ func main() {
 	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
 		Level: slog.LevelInfo,
 	}))
+
+	// Auth posture. When HARNESS_VM_TOKEN is set (the baked-image / production
+	// path), the dispatch handshake is REQUIRED: every connection's auth token
+	// is validated with a constant-time compare and a mismatch is rejected. When
+	// the env is empty (local dev only) the handshake stays unauthenticated.
+	// NEVER log the token itself — only whether one is configured.
+	if token != "" {
+		log.Info("kenaz-harness-vm: dispatch auth REQUIRED (HARNESS_VM_TOKEN set)")
+	} else {
+		log.Warn("kenaz-harness-vm: dispatch auth DISABLED (HARNESS_VM_TOKEN unset) — local dev only")
+	}
 
 	// Ledger emitter: when SIGIL_INGEST_SOCKET names the in-VM reporter
 	// ingest endpoint, task lifecycle (start/tool_call/complete) is pushed
@@ -161,10 +178,16 @@ func handleConn(log *slog.Logger, conn net.Conn, token string, ledger *ledgerEmi
 		_ = w.send(msg{"kind": "auth.error", "message_truncated": "expected auth message"})
 		return
 	}
-	// When a token is configured, validate it.
+	// When a token is configured (the baked-image / production path), the
+	// dispatch handshake is REQUIRED: the client's token must match. The
+	// comparison is constant-time (crypto/subtle) so a rejected handshake leaks
+	// no timing signal about how many leading bytes matched. The token is NEVER
+	// logged or echoed back. An empty configured token (local dev only) skips
+	// validation entirely — deny-by-default holds in production because the
+	// baked image always sets HARNESS_VM_TOKEN.
 	if token != "" {
 		clientToken, _ := authMsg["token"].(string)
-		if clientToken != token {
+		if subtle.ConstantTimeCompare([]byte(clientToken), []byte(token)) != 1 {
 			_ = w.send(msg{"kind": "auth.error", "message_truncated": "invalid token"})
 			return
 		}

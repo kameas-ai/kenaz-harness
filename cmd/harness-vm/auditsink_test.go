@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"net"
+	"sort"
 	"sync"
 	"testing"
 	"time"
@@ -13,10 +14,26 @@ import (
 // fakeAuditSock is a test double for the reporter's audit collector socket. It
 // listens on TCP (the sink's network is overridden to "tcp" in tests) and
 // collects every line-delimited JSON record written to it.
+//
+// DETERMINISM: the audit sink dials a NEW connection per record and emits
+// synchronously on the caller's goroutine, so dial order == emit order. But
+// each accepted connection is serviced by its own goroutine, so the order in
+// which records are *appended* to a shared slice is scheduler-dependent. To
+// make ordering assertions stable under -race, accept assigns each connection
+// a monotonic sequence number (under the accept loop, which is single-threaded)
+// and records are returned sorted by that sequence — recovering the
+// deterministic emit order regardless of handler-goroutine scheduling.
 type fakeAuditSock struct {
 	ln   net.Listener
 	mu   sync.Mutex
-	recs []auditRecord
+	recs []seqRecord
+}
+
+// seqRecord pairs an audit record with the accept-sequence of the connection it
+// arrived on, so the test can recover deterministic emit order.
+type seqRecord struct {
+	seq int
+	rec auditRecord
 }
 
 func newFakeAuditSock(t *testing.T) *fakeAuditSock {
@@ -27,18 +44,22 @@ func newFakeAuditSock(t *testing.T) *fakeAuditSock {
 	}
 	f := &fakeAuditSock{ln: ln}
 	go func() {
+		seq := 0
 		for {
 			conn, err := ln.Accept()
 			if err != nil {
 				return
 			}
-			go f.handle(conn)
+			// Sequence is assigned in the single-threaded accept loop, so it
+			// reflects dial order (== synchronous emit order) deterministically.
+			seq++
+			go f.handle(conn, seq)
 		}
 	}()
 	return f
 }
 
-func (f *fakeAuditSock) handle(conn net.Conn) {
+func (f *fakeAuditSock) handle(conn net.Conn, seq int) {
 	defer conn.Close()
 	scanner := bufio.NewScanner(conn)
 	for scanner.Scan() {
@@ -47,7 +68,7 @@ func (f *fakeAuditSock) handle(conn net.Conn) {
 			continue
 		}
 		f.mu.Lock()
-		f.recs = append(f.recs, rec)
+		f.recs = append(f.recs, seqRecord{seq: seq, rec: rec})
 		f.mu.Unlock()
 	}
 }
@@ -55,11 +76,18 @@ func (f *fakeAuditSock) handle(conn net.Conn) {
 func (f *fakeAuditSock) addr() string { return f.ln.Addr().String() }
 func (f *fakeAuditSock) close()       { _ = f.ln.Close() }
 
+// snapshot returns the collected records sorted by accept sequence, recovering
+// deterministic emit order regardless of handler-goroutine scheduling.
 func (f *fakeAuditSock) snapshot() []auditRecord {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	out := make([]auditRecord, len(f.recs))
-	copy(out, f.recs)
+	srt := make([]seqRecord, len(f.recs))
+	copy(srt, f.recs)
+	sort.SliceStable(srt, func(i, j int) bool { return srt[i].seq < srt[j].seq })
+	out := make([]auditRecord, len(srt))
+	for i := range srt {
+		out[i] = srt[i].rec
+	}
 	return out
 }
 
