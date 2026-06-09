@@ -6887,3 +6887,116 @@ export namespace workflows {
 
 }
 
+// -- Catalog view models (fleet-share-and-sync-01NDFSEX14 WP02) ---------------
+export namespace catalog {
+
+	export class PublishInput {
+	    kind: string;
+	    slug: string;
+	    version: string;
+	    description: string;
+	    visibility: string;
+	    payload_json: string;
+
+	    static createFrom(source: any = {}) {
+	        return new PublishInput(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.kind = source["kind"];
+	        this.slug = source["slug"];
+	        this.version = source["version"];
+	        this.description = source["description"];
+	        this.visibility = source["visibility"];
+	        this.payload_json = source["payload_json"];
+	    }
+	}
+
+	export class CatalogFilter {
+	    kind?: string;
+	    visibility?: string;
+
+	    static createFrom(source: any = {}) {
+	        return new CatalogFilter(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.kind = source["kind"];
+	        this.visibility = source["visibility"];
+	    }
+	}
+
+	export class CatalogItemView {
+	    id: string;
+	    kind: string;
+	    slug: string;
+	    version: string;
+	    description: string;
+	    visibility: string;
+	    published_at?: string;
+	    installed: boolean;
+
+	    static createFrom(source: any = {}) {
+	        return new CatalogItemView(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.kind = source["kind"];
+	        this.slug = source["slug"];
+	        this.version = source["version"];
+	        this.description = source["description"];
+	        this.visibility = source["visibility"];
+	        this.published_at = source["published_at"];
+	        this.installed = source["installed"];
+	    }
+	}
+
+}
+
+// -- Sync view models (fleet-share-and-sync-01NDFSEX14 WP05) ------------------
+export namespace sync {
+
+	export class SyncStatusView {
+	    category: string;
+	    enabled: boolean;
+	    last_push_at?: string;
+	    last_pull_at?: string;
+	    last_error?: string;
+
+	    static createFrom(source: any = {}) {
+	        return new SyncStatusView(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.category = source["category"];
+	        this.enabled = source["enabled"];
+	        this.last_push_at = source["last_push_at"];
+	        this.last_pull_at = source["last_pull_at"];
+	        this.last_error = source["last_error"];
+	    }
+	}
+
+	export class PendingMCPSecret {
+	    mcp_id: string;
+	    recipe_id: string;
+	    requires_secret_keys: string[];
+
+	    static createFrom(source: any = {}) {
+	        return new PendingMCPSecret(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.mcp_id = source["mcp_id"];
+	        this.recipe_id = source["recipe_id"];
+	        this.requires_secret_keys = source["requires_secret_keys"];
+	    }
+	}
+
+}
+

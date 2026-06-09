@@ -410,6 +410,50 @@ export function Fleet_SetTelemetryConsent(arg1) {
   return window['go']['rpc']['Bindings']['Fleet_SetTelemetryConsent'](arg1);
 }
 
+export function Catalog_Publish(arg1) {
+  return window['go']['rpc']['Bindings']['Catalog_Publish'](arg1);
+}
+
+export function Catalog_List(arg1) {
+  return window['go']['rpc']['Bindings']['Catalog_List'](arg1);
+}
+
+export function Catalog_Install(arg1, arg2) {
+  return window['go']['rpc']['Bindings']['Catalog_Install'](arg1, arg2);
+}
+
+export function Catalog_Uninstall(arg1, arg2, arg3) {
+  return window['go']['rpc']['Bindings']['Catalog_Uninstall'](arg1, arg2, arg3);
+}
+
+export function Catalog_Installed() {
+  return window['go']['rpc']['Bindings']['Catalog_Installed']();
+}
+
+export function Sync_Toggle(arg1, arg2) {
+  return window['go']['rpc']['Bindings']['Sync_Toggle'](arg1, arg2);
+}
+
+export function Sync_Status() {
+  return window['go']['rpc']['Bindings']['Sync_Status']();
+}
+
+export function Sync_ForcePush(arg1) {
+  return window['go']['rpc']['Bindings']['Sync_ForcePush'](arg1);
+}
+
+export function Sync_ForcePull(arg1) {
+  return window['go']['rpc']['Bindings']['Sync_ForcePull'](arg1);
+}
+
+export function Sync_PendingMCPSecrets() {
+  return window['go']['rpc']['Bindings']['Sync_PendingMCPSecrets']();
+}
+
+export function Cedar_PublishToTeam(arg1, arg2) {
+  return window['go']['rpc']['Bindings']['Cedar_PublishToTeam'](arg1, arg2);
+}
+
 export function Graph_CancelRun(arg1) {
   return window['go']['rpc']['Bindings']['Graph_CancelRun'](arg1);
 }
