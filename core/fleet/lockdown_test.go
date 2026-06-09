@@ -53,6 +53,11 @@ func setupLockdownTest(t *testing.T, baseURL string) *Client {
 		RefreshToken: "rt-lockdown-test",
 		ExpiresAt:    time.Now().Add(time.Hour),
 	})
+	SeedFleetConfigForTesting(baseURL, FleetConfig{
+		Issuer:     baseURL,
+		ClientID:   "test",
+		APIBaseURL: baseURL,
+	})
 	return &Client{
 		profile: EnvProfile{
 			Name:           EnvLocal,
@@ -163,6 +168,11 @@ func TestWatcher_NoEmitOnNoDelta(t *testing.T) {
 		AccessToken:  "at-no-delta",
 		RefreshToken: "rt-no-delta",
 		ExpiresAt:    time.Now().Add(time.Hour),
+	})
+	SeedFleetConfigForTesting(srv.URL, FleetConfig{
+		Issuer:     srv.URL,
+		ClientID:   "test",
+		APIBaseURL: srv.URL,
 	})
 	client := &Client{
 		profile: EnvProfile{

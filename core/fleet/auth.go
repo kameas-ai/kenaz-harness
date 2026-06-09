@@ -15,7 +15,21 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/sigil-tech/kaneaz-harness/core/logging"
 )
+
+// shortID returns the first 8 chars of s for log-safe identifiers.
+// Empty input renders as "(empty)" so the field never disappears.
+func shortID(s string) string {
+	if s == "" {
+		return "(empty)"
+	}
+	if len(s) <= 8 {
+		return s
+	}
+	return s[:8] + "…"
+}
 
 // TokenSet holds the OAuth2 token set returned by the Zitadel PKCE flow.
 type TokenSet struct {
@@ -85,6 +99,13 @@ func openBrowser(rawURL string) error {
 //  4. Waits up to 60s for the callback.
 //  5. Exchanges the code for a TokenSet.
 func DeviceCodeFlow(ctx context.Context, profile EnvProfile) (TokenSet, error) {
+	logging.L().Info("fleet.auth.device_code_flow.start",
+		"profile", profile.Name,
+		"issuer", profile.ZitadelIssuer,
+		"client_id", shortID(profile.NativeClientID),
+		"audience", shortID(profile.APIAudience),
+		"scopes", strings.Join(profile.OIDCScopes, " "),
+	)
 	verifier, err := generatePKCEVerifier()
 	if err != nil {
 		return TokenSet{}, err
@@ -103,6 +124,12 @@ func DeviceCodeFlow(ctx context.Context, profile EnvProfile) (TokenSet, error) {
 	}
 	port := ln.Addr().(*net.TCPAddr).Port
 	redirectURI := fmt.Sprintf("http://127.0.0.1:%d/callback", port)
+	logging.L().Info("fleet.auth.loopback.ready",
+		"port", port,
+		"redirect_uri", redirectURI,
+		"pkce_challenge", shortID(challenge),
+		"state", shortID(state),
+	)
 
 	// Build authorization URL.
 	authURL := fmt.Sprintf(
@@ -128,21 +155,32 @@ func DeviceCodeFlow(ctx context.Context, profile EnvProfile) (TokenSet, error) {
 	mux.HandleFunc("/callback", func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
 		if errParam := q.Get("error"); errParam != "" {
+			errDesc := q.Get("error_description")
+			logging.L().Warn("fleet.auth.callback.idp_error", "error", errParam, "error_description", errDesc)
 			_, _ = fmt.Fprintf(w, "<html><body><p>Authorization failed: %s. You may close this tab.</p></body></html>", errParam)
-			resultCh <- callbackResult{err: fmt.Errorf("%w: %s", ErrAuthFailed, errParam)}
+			resultCh <- callbackResult{err: fmt.Errorf("%w: %s: %s", ErrAuthFailed, errParam, errDesc)}
 			return
 		}
 		if q.Get("state") != state {
+			logging.L().Warn("fleet.auth.callback.state_mismatch",
+				"expected", shortID(state),
+				"received", shortID(q.Get("state")),
+			)
 			_, _ = fmt.Fprint(w, "<html><body><p>State mismatch. You may close this tab.</p></body></html>")
 			resultCh <- callbackResult{err: ErrStateMismatch}
 			return
 		}
 		code := q.Get("code")
 		if code == "" {
+			logging.L().Warn("fleet.auth.callback.missing_code")
 			_, _ = fmt.Fprint(w, "<html><body><p>Missing code. You may close this tab.</p></body></html>")
 			resultCh <- callbackResult{err: fmt.Errorf("%w: no code in callback", ErrAuthFailed)}
 			return
 		}
+		logging.L().Info("fleet.auth.callback.received",
+			"code_len", len(code),
+			"code_prefix", shortID(code),
+		)
 		_, _ = fmt.Fprint(w, "<html><body><p>Signed in successfully. You may close this tab.</p></body></html>")
 		resultCh <- callbackResult{code: code}
 	})
@@ -180,6 +218,13 @@ func DeviceCodeFlow(ctx context.Context, profile EnvProfile) (TokenSet, error) {
 // exchangeCode exchanges an authorization code for a TokenSet.
 func exchangeCode(ctx context.Context, profile EnvProfile, code, redirectURI, verifier string) (TokenSet, error) {
 	tokenURL := profile.ZitadelIssuer + "/oauth/v2/token"
+	logging.L().Info("fleet.auth.token_exchange.start",
+		"url", tokenURL,
+		"redirect_uri", redirectURI,
+		"client_id", shortID(profile.NativeClientID),
+		"verifier_len", len(verifier),
+		"code_prefix", shortID(code),
+	)
 	form := url.Values{
 		"grant_type":    {"authorization_code"},
 		"code":          {code},
@@ -190,20 +235,45 @@ func exchangeCode(ctx context.Context, profile EnvProfile, code, redirectURI, ve
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, tokenURL,
 		strings.NewReader(form.Encode()))
 	if err != nil {
+		logging.L().Error("fleet.auth.token_exchange.build_request_failed", "err", err.Error())
 		return TokenSet{}, fmt.Errorf("fleet: token request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
+		logging.L().Error("fleet.auth.token_exchange.transport_error", "err", err.Error(), "url", tokenURL)
 		return TokenSet{}, fmt.Errorf("fleet: token exchange: %w", err)
 	}
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {
+		// Truncate body so log doesn't explode on a giant HTML error page.
+		bodyPreview := string(body)
+		if len(bodyPreview) > 800 {
+			bodyPreview = bodyPreview[:800] + "…(truncated)"
+		}
+		logging.L().Error("fleet.auth.token_exchange.failed",
+			"status", resp.StatusCode,
+			"url", tokenURL,
+			"redirect_uri", redirectURI,
+			"client_id", shortID(profile.NativeClientID),
+			"body", bodyPreview,
+		)
 		return TokenSet{}, fmt.Errorf("%w: status %d: %s", ErrAuthFailed, resp.StatusCode, body)
 	}
-	return parseTokenResponse(body)
+	ts, err := parseTokenResponse(body)
+	if err != nil {
+		logging.L().Error("fleet.auth.token_exchange.parse_failed", "err", err.Error())
+		return ts, err
+	}
+	logging.L().Info("fleet.auth.token_exchange.success",
+		"access_token_len", len(ts.AccessToken),
+		"refresh_token_present", ts.RefreshToken != "",
+		"id_token_present", ts.IDToken != "",
+		"expires_at", ts.ExpiresAt.Format(time.RFC3339),
+	)
+	return ts, nil
 }
 
 // RefreshTokenSet exchanges a refresh token for a new TokenSet.

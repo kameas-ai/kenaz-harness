@@ -42,7 +42,10 @@ func (c *Client) do(ctx context.Context, method, path string, body io.Reader) (*
 		return nil, ErrNotSignedIn
 	}
 
-	reqURL := c.profile.FleetBaseURL + path
+	reqURL, urlErr := c.APIURL(ctx, path)
+	if urlErr != nil {
+		return nil, urlErr
+	}
 
 	var lastResp *http.Response
 	var lastErr error

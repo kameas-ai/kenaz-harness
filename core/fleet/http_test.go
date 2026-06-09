@@ -16,14 +16,23 @@ import (
 // Restores via t.Cleanup.
 func stubTokens(t *testing.T, ts TokenSet) {
 	t.Helper()
-	_ = keyring.Set(keyringService, keyAccessToken, ts.AccessToken)
-	_ = keyring.Set(keyringService, keyRefreshToken, ts.RefreshToken)
-	_ = keyring.Set(keyringService, keyExpiresAt, "9999999999")
+	_ = keyring.Set(keyringService, keyAccessToken(), ts.AccessToken)
+	_ = keyring.Set(keyringService, keyRefreshToken(), ts.RefreshToken)
+	_ = keyring.Set(keyringService, keyExpiresAt(), "9999999999")
 	t.Cleanup(func() { _ = ClearTokens() })
 }
 
 func makeTestClient(t *testing.T, baseURL string) *Client {
 	t.Helper()
+	// Seed the FleetConfig cache so test API calls don't need to fetch
+	// /config.json from the test server. The "SPA host" and "API host"
+	// are the same httptest server in tests (it's the unified stub).
+	SeedFleetConfigForTesting(baseURL, FleetConfig{
+		Issuer:     baseURL,
+		ClientID:   "test",
+		APIBaseURL: baseURL,
+		FetchedAt:  time.Now().UTC(),
+	})
 	return &Client{
 		profile: EnvProfile{
 			Name:           EnvLocal,

@@ -17,7 +17,7 @@
  * harness-self MCP server's tools take over from there.
  */
 
-import { onMounted, ref } from 'vue';
+import { onMounted, ref, watch } from 'vue';
 import { useHarnessClient } from '@/lib/harnessClientContext';
 import type { OnboardingCard, StarterSummary } from '@/lib/harnessClient';
 
@@ -42,12 +42,10 @@ const errorMsg = ref<string | null>(null);
 
 async function refreshCard() {
   errorMsg.value = null;
-  try {
-    const resp = await client.onboarding.begin();
-    currentState.value = resp.state;
-    card.value = resp.card;
-  } catch {
-    // Graceful degradation: show a static welcome card if the API is not yet wired.
+  // Render a usable card immediately so the dialog is NEVER button-less, even
+  // if begin() is slow, hangs, or the API isn't wired. begin() (below) then
+  // overrides it with the real FSM card when it resolves.
+  if (!card.value) {
     card.value = {
       title: 'Welcome to Kaneaz',
       body: 'Let\'s get you set up.',
@@ -56,6 +54,13 @@ async function refreshCard() {
         { id: 'dismiss', label: 'Skip onboarding' },
       ],
     };
+  }
+  try {
+    const resp = await client.onboarding.begin();
+    currentState.value = resp.state;
+    card.value = resp.card;
+  } catch {
+    // Keep the static fallback card already shown above.
   }
 }
 
@@ -148,6 +153,19 @@ onMounted(() => {
     void refreshCard();
   }
 });
+
+// `open` flips to true asynchronously (App.vue probes onboarding.state() after
+// mount), so onMounted alone often runs while open is still false and the card
+// never loads — leaving a bare "Welcome" with no buttons. Re-run refreshCard
+// whenever the dialog opens without a card.
+watch(
+  () => props.open,
+  (isOpen) => {
+    if (isOpen && !card.value) {
+      void refreshCard();
+    }
+  },
+);
 </script>
 
 <template>

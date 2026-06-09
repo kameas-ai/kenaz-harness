@@ -6,7 +6,6 @@ import (
 	"flag"
 	"log"
 	"os"
-	"path/filepath"
 
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
@@ -15,6 +14,7 @@ import (
 
 	"github.com/sigil-tech/kaneaz-harness/core"
 	"github.com/sigil-tech/kaneaz-harness/core/logging"
+	"github.com/sigil-tech/kaneaz-harness/core/paths"
 	"github.com/sigil-tech/kaneaz-harness/core/rpc"
 	coresentry "github.com/sigil-tech/kaneaz-harness/core/sentry"
 	"github.com/sigil-tech/kaneaz-harness/core/update/bootswap"
@@ -38,10 +38,6 @@ func main() {
 	// wire-up point 1 for sentry (sentry-error-monitoring-01KX5R8G WP02).
 	defer coresentry.RecoverMain()
 
-	// Eager-open the file logger so the first lines of the boot
-	// sequence (data-dir setup, core.New) land in ~/.kenaz/harness.log.
-	logging.L().Info("harness.boot", "pid", os.Getpid(), "version", Version)
-
 	// Dev-only flag: --enable-manifest-hot-reload turns on the polling
 	// watcher under <DataDir>/agent_graph/nodes/ so authoring a new
 	// override and saving immediately reflects in the palette without
@@ -52,12 +48,40 @@ func main() {
 		"dev: poll <DataDir>/agent_graph/nodes/ and reload the node manifest catalog on change")
 	flag.Parse()
 
-	dataDir, err := defaultDataDir()
+	// Resolve the per-env data dir (~/.kenaz/harness/<env>) and adopt any
+	// legacy ~/.harness data BEFORE the logger opens, so the per-env log file
+	// lands inside the (possibly just-migrated) data directory.
+	dataDir, err := paths.DataDir()
 	if err != nil {
 		log.Fatalf("data dir: %v", err)
 	}
+	var migrateNote string
+	if legacy, lerr := paths.LegacyDataDir(); lerr == nil && paths.EnvName() == paths.EnvProd {
+		if res, merr := paths.MigrateLegacy(legacy, dataDir); merr != nil {
+			migrateNote = "legacy data-dir migration error: " + merr.Error()
+		} else if res.Migrated {
+			migrateNote = "adopted legacy data dir " + res.From + " → " + res.To
+			if res.Skipped != "" {
+				migrateNote += " (" + res.Skipped + ")"
+			}
+		} else if res.Skipped != "" && res.Skipped != "no legacy data dir" {
+			migrateNote = "legacy data-dir migration skipped: " + res.Skipped
+		}
+	}
 	if err := os.MkdirAll(dataDir, 0o755); err != nil {
 		log.Fatalf("mkdir data dir: %v", err)
+	}
+
+	// Point the file logger at the per-env logs dir, THEN emit the first line
+	// so the boot sequence lands in ~/.kenaz/harness/<env>/logs/harness.log.
+	if logDir, lerr := paths.LogDir(); lerr == nil {
+		logging.Configure(logDir)
+	}
+	logging.L().Info("harness.boot",
+		"pid", os.Getpid(), "version", Version,
+		"env", paths.EnvName(), "data_dir", dataDir)
+	if migrateNote != "" {
+		logging.L().Info("harness.datadir.migrate", "note", migrateNote)
 	}
 
 	// Boot-time auto-update swap (mission auto-update WP02). On
@@ -156,10 +180,3 @@ func initSentryFromSettings(api *rpc.Bindings) {
 	}
 }
 
-func defaultDataDir() (string, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(home, ".harness"), nil
-}

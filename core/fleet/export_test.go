@@ -17,6 +17,11 @@ import (
 // The client is wired with a minimal EnvProfile whose Configured() returns
 // true so the poller's fetch path does not short-circuit.
 func BuildClientForTesting(baseURL string, httpClient *http.Client) *Client {
+	SeedFleetConfigForTesting(baseURL, FleetConfig{
+		Issuer:     "https://example.com",
+		ClientID:   "client-id",
+		APIBaseURL: baseURL,
+	})
 	return &Client{
 		profile: EnvProfile{
 			Name:           "test",

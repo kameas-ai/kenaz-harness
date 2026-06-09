@@ -62,14 +62,16 @@ async function init() {
 
 // ── computed ──────────────────────────────────────────────────────────────
 
-const isSignedIn = computed(() => !!identity.value && identity.value !== false);
+// Truthy only for a real identity object; null (unfetched) and false
+// (signed out) are both falsy, so the cast is unnecessary.
+const isSignedIn = computed(() => !!identity.value);
 
 const badgeColor = computed(() => profile.value?.badgeColor ?? '');
 const envName = computed(() => (profile.value?.name ?? '').toUpperCase());
 
 const tierLabel = computed(() => {
   const id = identity.value;
-  if (!id || id === false) return '';
+  if (!id) return '';
   return id.tier ?? '';
 });
 
@@ -95,18 +97,70 @@ async function signIn() {
   try {
     identity.value = await client.settings.fleetSignIn();
   } catch (e: any) {
-    const raw = e?.message ?? String(e ?? '');
-    if (raw.includes('env profile not populated')) {
-      error.value =
-        'Sign-in is not available: build profile is missing the Zitadel client ID. ' +
-        'Run a build with the LLE TF outputs injected, or set KENAZ_HARNESS_ENV=local.';
-    } else {
-      error.value = raw || 'Sign-in failed. Please try again.';
-    }
+    error.value = humanizeFleetError(e?.message ?? String(e ?? ''));
     identity.value = false;
   } finally {
     loading.value = false;
   }
+}
+
+// humanizeFleetError maps the raw Go error string into an actionable
+// message for the user. Patterns mirror the sentinel error wording in
+// core/fleet/errors.go.
+function humanizeFleetError(raw: string): string {
+  if (!raw) return 'Sign-in failed. Please try again.';
+  if (raw.includes('env profile not populated')) {
+    return (
+      'Sign-in is not available: this build is missing the Zitadel client ID. ' +
+      'Run a build with the LLE Terraform outputs injected via -ldflags, or set ' +
+      'KENAZ_HARNESS_ENV=local.'
+    );
+  }
+  if (raw.includes('dashboard SPA fall-through') || raw.includes('returned HTML')) {
+    return (
+      'Sign-in completed against Zitadel, but the fleet server returned HTML ' +
+      'instead of JSON. The fleet ingress (CloudFront / ALB) is not routing ' +
+      '/api/v1/* to the Go backend. Ping the fleet ops owner; your tokens ARE ' +
+      'saved in the OS keychain in the meantime.'
+    );
+  }
+  if (raw.includes('server unreachable') || raw.includes('no such host')) {
+    return (
+      'Can\'t reach the fleet server. Check your VPN connection (LLE fleet is ' +
+      'VPN-gated) and retry.'
+    );
+  }
+  if (raw.includes('connection refused') || raw.includes('i/o timeout')) {
+    return (
+      'Fleet server is not responding. The deployment may be offline. Retry ' +
+      'in a minute, or check fleet status with your team.'
+    );
+  }
+  if (raw.includes('refresh failed') || raw.includes('re-sign-in required')) {
+    return 'Your session expired. Sign in again.';
+  }
+  if (raw.includes('enroll route not registered')) {
+    return (
+      'Sign-in completed against Zitadel and the harness reached the fleet API ' +
+      'host, but the deployed fleet binary does not register POST /api/v1/enroll. ' +
+      'The fleet team needs to merge the enrollment branch to main and redeploy. ' +
+      'Your access token IS saved in the keychain in the meantime.'
+    );
+  }
+  if (raw.includes('state mismatch') || raw.includes('ErrStateMismatch')) {
+    return (
+      'OAuth state mismatch — the browser callback didn\'t match the harness\'s ' +
+      'request. Try signing in again from a fresh tab.'
+    );
+  }
+  if (raw.includes('disabled by env')) {
+    return (
+      'Fleet integration is disabled by the HARNESS_FLEET_DISABLED environment ' +
+      'variable. Unset it and restart the harness to re-enable.'
+    );
+  }
+  // Fall back to the raw error — at least it\'s informative for a developer.
+  return raw;
 }
 
 async function signOut() {

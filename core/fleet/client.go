@@ -3,6 +3,7 @@ package fleet
 import (
 	"context"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -54,6 +55,37 @@ func (c *Client) Profile() EnvProfile {
 		return EnvProfile{}
 	}
 	return c.profile
+}
+
+// FleetConfig returns the runtime config for this client's SPA host,
+// resolving from cache or fetching /config.json fresh. The returned
+// FleetConfig carries APIBaseURL — the host that owns /api/v1/*.
+func (c *Client) FleetConfig(ctx context.Context) (FleetConfig, error) {
+	if c == nil || c.isNop {
+		return FleetConfig{}, ErrFleetDisabled
+	}
+	if c.profile.FleetBaseURL == "" {
+		return FleetConfig{}, ErrProfileNotConfigured
+	}
+	return ResolveFleetConfig(ctx, c.dataDir, c.profile.FleetBaseURL)
+}
+
+// APIURL resolves the absolute URL for a /api/v1/... path against the
+// API host returned by /config.json. path must start with "/api/v1/".
+// Callers concatenate it with the rest of the path; this helper only
+// returns the host prefix + path, no query parameters.
+func (c *Client) APIURL(ctx context.Context, path string) (string, error) {
+	cfg, err := c.FleetConfig(ctx)
+	if err != nil {
+		return "", err
+	}
+	if path == "" {
+		return cfg.APIBaseURL, nil
+	}
+	if !strings.HasPrefix(path, "/") {
+		path = "/" + path
+	}
+	return cfg.APIBaseURL + path, nil
 }
 
 // nopClientInstance returns a Client that returns ErrFleetDisabled for

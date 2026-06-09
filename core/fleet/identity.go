@@ -10,7 +10,10 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
+
+	"github.com/sigil-tech/kaneaz-harness/core/logging"
 )
 
 // Identity holds the harness user's fleet identity. Fields are populated
@@ -140,6 +143,7 @@ func orgIDToString(v any) string {
 func (c *Client) enrollIdentity(ctx context.Context, nodeID, platform, version string) (Identity, error) {
 	ts, err := LoadTokens()
 	if err != nil {
+		logging.L().Warn("fleet.enroll.load_tokens_failed", "err", err.Error())
 		return Identity{}, ErrNotSignedIn
 	}
 
@@ -153,9 +157,19 @@ func (c *Client) enrollIdentity(ctx context.Context, nodeID, platform, version s
 		return Identity{}, fmt.Errorf("fleet: marshal enroll request: %w", err)
 	}
 
-	reqURL := c.profile.FleetBaseURL + "/api/v1/enroll"
+	reqURL, urlErr := c.APIURL(ctx, "/api/v1/enroll")
+	if urlErr != nil {
+		logging.L().Error("fleet.enroll.api_url_failed", "err", urlErr.Error())
+		return Identity{}, urlErr
+	}
+	logging.L().Info("fleet.enroll.http.start",
+		"url", reqURL,
+		"body_bytes", len(bodyBytes),
+		"access_token_len", len(ts.AccessToken),
+	)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, reqURL, bytes.NewReader(bodyBytes))
 	if err != nil {
+		logging.L().Error("fleet.enroll.build_request_failed", "err", err.Error())
 		return Identity{}, fmt.Errorf("fleet: enroll request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
@@ -163,12 +177,48 @@ func (c *Client) enrollIdentity(ctx context.Context, nodeID, platform, version s
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
+		logging.L().Error("fleet.enroll.transport_error", "err", err.Error(), "url", reqURL)
+		// Map common transport failures to a clearer sentinel.
+		es := err.Error()
+		if strings.Contains(es, "no such host") ||
+			strings.Contains(es, "connection refused") ||
+			strings.Contains(es, "i/o timeout") ||
+			strings.Contains(es, "EOF") {
+			return Identity{}, fmt.Errorf("%w (%s): %v", ErrFleetUnreachable, reqURL, err)
+		}
 		return Identity{}, fmt.Errorf("fleet: enroll: %w", err)
 	}
 	defer resp.Body.Close()
 	respBody, _ := io.ReadAll(resp.Body)
+	contentType := resp.Header.Get("Content-Type")
+	logging.L().Info("fleet.enroll.http.response",
+		"status", resp.StatusCode,
+		"body_bytes", len(respBody),
+		"content_type", contentType,
+	)
+
+	// CloudFront / ALB / nginx commonly fall through to a dashboard SPA's
+	// index.html when /api/v1/* isn't routed to the backend. The HTTP
+	// status will be 200 OK, the body will be HTML, and unmarshalling
+	// will hit a misleading "invalid character '<'" error. Catch that
+	// upstream so the message is actionable for the fleet ops team.
+	if strings.HasPrefix(contentType, "text/html") ||
+		bytes.HasPrefix(bytes.TrimSpace(respBody), []byte("<")) {
+		preview := string(respBody)
+		if len(preview) > 200 {
+			preview = preview[:200] + "…(truncated)"
+		}
+		logging.L().Error("fleet.enroll.html_response",
+			"status", resp.StatusCode,
+			"url", reqURL,
+			"content_type", contentType,
+			"body_prefix", preview,
+		)
+		return Identity{}, fmt.Errorf("%w (got %d bytes of HTML from %s)", ErrFleetAPINotRouted, len(respBody), reqURL)
+	}
 
 	if resp.StatusCode == http.StatusUnauthorized {
+		logging.L().Info("fleet.enroll.401_refreshing")
 		// Attempt token refresh.
 		newTS, refreshErr := RefreshTokenSet(ctx, c.profile, ts.RefreshToken)
 		if refreshErr != nil {
@@ -191,11 +241,30 @@ func (c *Client) enrollIdentity(ctx context.Context, nodeID, platform, version s
 	}
 
 	if resp.StatusCode != http.StatusOK {
+		preview := string(respBody)
+		if len(preview) > 800 {
+			preview = preview[:800] + "…(truncated)"
+		}
+		logging.L().Error("fleet.enroll.non_2xx",
+			"status", resp.StatusCode,
+			"url", reqURL,
+			"body", preview,
+		)
+		// 404 with a plain-text Go-stdlib "404 page not found" body
+		// means we reached the fleet binary and authed successfully,
+		// but the deployed version doesn't register /api/v1/enroll.
+		// This is a fleet deployment-version mismatch — the kenaz-fleet
+		// branch with the enroll handler hasn't shipped to this env yet.
+		if resp.StatusCode == http.StatusNotFound &&
+			strings.Contains(strings.ToLower(preview), "404 page not found") {
+			return Identity{}, fmt.Errorf("fleet: enroll route not registered on the deployed fleet binary at %s — fleet needs to deploy the branch that ships POST /api/v1/enroll (raw response: %s)", reqURL, preview)
+		}
 		return Identity{}, fmt.Errorf("fleet: enroll: status %d: %s", resp.StatusCode, respBody)
 	}
 
 	var er enrollResponse
 	if err := json.Unmarshal(respBody, &er); err != nil {
+		logging.L().Error("fleet.enroll.parse_failed", "err", err.Error(), "body_prefix", string(respBody[:min(len(respBody), 200)]))
 		return Identity{}, fmt.Errorf("fleet: parse enroll response: %w", err)
 	}
 

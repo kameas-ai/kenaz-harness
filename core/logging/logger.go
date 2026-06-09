@@ -24,13 +24,27 @@ const (
 )
 
 var (
-	once         sync.Once
-	loggerInt    *slog.Logger
-	fileHandler  slog.Handler
-	logFile      *os.File
-	openErr      error
-	replaceMu    sync.Mutex
+	once          sync.Once
+	loggerInt     *slog.Logger
+	fileHandler   slog.Handler
+	logFile       *os.File
+	openErr       error
+	replaceMu     sync.Mutex
+	configuredDir string
 )
+
+// Configure sets the directory the log file is written to. It MUST be called
+// before the first L()/FileHandler() call (the file is opened lazily on first
+// use); calls after the logger has opened are ignored. When left unset, the
+// logger falls back to ~/.kenaz for backward compatibility.
+//
+// main calls this with the per-env log directory (paths.LogDir,
+// ~/.kenaz/harness/<env>/logs) so dev/stage/prod logs never interleave.
+func Configure(dir string) {
+	replaceMu.Lock()
+	defer replaceMu.Unlock()
+	configuredDir = dir
+}
 
 // L returns the process-global slog.Logger writing JSON lines to
 // ~/.kenaz/harness.log. On the first call the file is opened (parent
@@ -47,12 +61,15 @@ func L() *slog.Logger {
 }
 
 func initLogger() {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		fallback("home dir: " + err.Error())
-		return
+	dir := configuredDir
+	if dir == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			fallback("home dir: " + err.Error())
+			return
+		}
+		dir = filepath.Join(home, defaultDir)
 	}
-	dir := filepath.Join(home, defaultDir)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		fallback("mkdir " + dir + ": " + err.Error())
 		return
