@@ -45,6 +45,8 @@ import {trust} from '../models';
 import {update} from '../models';
 import {workflow} from '../models';
 import {workflows} from '../models';
+import {catalog} from '../models';
+import {sync} from '../models';
 
 export function A2A_ListCards():Promise<Array<a2a.Card>>;
 
@@ -243,6 +245,28 @@ export function Elicit_SubmitWizardStep(arg1:string,arg2:string,arg3:json.RawMes
 export function Fleet_GetTelemetryConsent():Promise<string>;
 
 export function Fleet_SetTelemetryConsent(arg1:string):Promise<void>;
+
+export function Catalog_Publish(arg1:catalog.PublishInput):Promise<catalog.CatalogItemView>;
+
+export function Catalog_List(arg1:catalog.CatalogFilter):Promise<Array<catalog.CatalogItemView>>;
+
+export function Catalog_Install(arg1:string,arg2:string):Promise<void>;
+
+export function Catalog_Uninstall(arg1:string,arg2:string,arg3:string):Promise<void>;
+
+export function Catalog_Installed():Promise<Array<catalog.CatalogItemView>>;
+
+export function Sync_Toggle(arg1:string,arg2:boolean):Promise<void>;
+
+export function Sync_Status():Promise<Array<sync.SyncStatusView>>;
+
+export function Sync_ForcePush(arg1:string):Promise<void>;
+
+export function Sync_ForcePull(arg1:string):Promise<void>;
+
+export function Sync_PendingMCPSecrets():Promise<Array<sync.PendingMCPSecret>>;
+
+export function Cedar_PublishToTeam(arg1:string,arg2:string):Promise<void>;
 
 export function Graph_CancelRun(arg1:string):Promise<void>;
 

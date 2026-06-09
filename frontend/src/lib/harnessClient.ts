@@ -157,6 +157,11 @@ import type {
   CapabilitiesView,
   FleetConfigPullStatusView,
   LockdownStatusView,
+  CatalogPublishInput,
+  CatalogItemView,
+  CatalogFilter,
+  SyncStatusView,
+  PendingMCPSecret,
 } from './types';
 
 /**
@@ -750,6 +755,34 @@ interface WailsBindingsLike {
   Fleet_GetTelemetryConsent(): Promise<string>;
   /** Persists a new fleet telemetry consent level. Returns an error if the org tier is insufficient. */
   Fleet_SetTelemetryConsent(level: string): Promise<void>;
+
+  // ── Catalog (fleet-share-and-sync-01NDFSEX14 WP02) ────────────────────────
+  /** Sign and publish a workflow/agent-pack/bundle to the fleet catalog. */
+  Catalog_Publish(input: CatalogPublishInput): Promise<CatalogItemView>;
+  /** List catalog items, optionally filtered by kind or visibility. */
+  Catalog_List(filter: CatalogFilter): Promise<CatalogItemView[]>;
+  /** Download and install a catalog item into the local DataDir. */
+  Catalog_Install(catalogID: string, version: string): Promise<void>;
+  /** Remove an installed catalog item from the local DataDir. Idempotent. */
+  Catalog_Uninstall(kind: string, catalogID: string, version: string): Promise<void>;
+  /** List all catalog items currently installed in the local DataDir. */
+  Catalog_Installed(): Promise<CatalogItemView[]>;
+
+  // ── Sync (fleet-share-and-sync-01NDFSEX14 WP05) ───────────────────────────
+  /** Enable or disable sync for a category. On enable, triggers an immediate push. */
+  Sync_Toggle(category: string, enabled: boolean): Promise<void>;
+  /** Returns sync status for all categories. */
+  Sync_Status(): Promise<SyncStatusView[]>;
+  /** Immediately push local state for the category to fleet. */
+  Sync_ForcePush(category: string): Promise<void>;
+  /** Immediately pull remote state for the category and apply it. */
+  Sync_ForcePull(category: string): Promise<void>;
+  /** MCPs that arrived via sync but need credentials before they can start. */
+  Sync_PendingMCPSecrets(): Promise<PendingMCPSecret[]>;
+
+  // ── Cedar team publish (fleet-share-and-sync-01NDFSEX14 WP07) ────────────
+  /** Publish a Cedar rule to the team via fleet. Requires policy_admin role. */
+  Cedar_PublishToTeam(ruleID: string, ruleSource: string): Promise<void>;
 
   // ── audit-log-enhancement-01KX5R8F WP07 — retention settings ──────────
   Settings_GetAuditSettings(): Promise<import('./types').AuditSettings>;
@@ -2624,6 +2657,43 @@ export interface FleetClient {
   setTelemetryConsent(level: 'none' | 'aggregate' | 'full'): Promise<void>;
 }
 
+// ── Catalog client (fleet-share-and-sync-01NDFSEX14 WP02) ───────────────────
+
+export interface CatalogClient {
+  /** Sign and publish a workflow/agent-pack/bundle to the fleet catalog. */
+  publish(input: CatalogPublishInput): Promise<CatalogItemView>;
+  /** List catalog items, optionally filtered. */
+  list(filter?: CatalogFilter): Promise<CatalogItemView[]>;
+  /** Install a catalog item into the local DataDir. */
+  install(catalogID: string, version: string): Promise<void>;
+  /** Remove an installed catalog item. Idempotent. */
+  uninstall(kind: string, catalogID: string, version: string): Promise<void>;
+  /** List all catalog items currently installed locally. */
+  installed(): Promise<CatalogItemView[]>;
+}
+
+// ── Sync client (fleet-share-and-sync-01NDFSEX14 WP05) ──────────────────────
+
+export interface SyncClient {
+  /** Enable or disable sync for a category. On enable, triggers immediate push. */
+  toggle(category: string, enabled: boolean): Promise<void>;
+  /** Returns sync status for all categories. */
+  status(): Promise<SyncStatusView[]>;
+  /** Force-push local state for a category. */
+  forcePush(category: string): Promise<void>;
+  /** Force-pull remote state for a category and apply. */
+  forcePull(category: string): Promise<void>;
+  /** MCPs that arrived via sync but need credentials. */
+  pendingMCPSecrets(): Promise<PendingMCPSecret[]>;
+}
+
+// ── CedarPublish client (fleet-share-and-sync-01NDFSEX14 WP07) ──────────────
+
+export interface CedarPublishClient {
+  /** Publish a Cedar rule to the team. Requires policy_admin role. */
+  publishToTeam(ruleID: string, ruleSource: string): Promise<void>;
+}
+
 export interface HarnessClient {
   shellStatus(): Promise<ShellStatus>;
   appInfo(): Promise<AppInfo>;
@@ -2680,6 +2750,12 @@ export interface HarnessClient {
   sentry: SentryClient;
   /** Fleet telemetry consent surface (fleet-otel-archival-01NDFSEX11 WP06). */
   fleet: FleetClient;
+  /** Catalog publish/list/install surface (fleet-share-and-sync-01NDFSEX14 WP02). */
+  catalog: CatalogClient;
+  /** Per-category settings sync surface (fleet-share-and-sync-01NDFSEX14 WP05). */
+  sync: SyncClient;
+  /** Team Cedar policy publish surface (fleet-share-and-sync-01NDFSEX14 WP07). */
+  cedarPublish: CedarPublishClient;
 }
 
 // ── runtime client ─────────────────────────────────────────────────────
@@ -3254,6 +3330,26 @@ export function createHarnessClient(): HarnessClient {
           .Fleet_GetTelemetryConsent()
           .then((level) => (level as 'none' | 'aggregate' | 'full') ?? 'none'),
       setTelemetryConsent: (level) => b().Fleet_SetTelemetryConsent(level),
+    },
+    // ── Catalog (fleet-share-and-sync-01NDFSEX14 WP02) ────────────────────
+    catalog: {
+      publish: (input) => b().Catalog_Publish(input),
+      list: (filter = {}) => b().Catalog_List(filter),
+      install: (catalogID, version) => b().Catalog_Install(catalogID, version),
+      uninstall: (kind, catalogID, version) => b().Catalog_Uninstall(kind, catalogID, version),
+      installed: () => b().Catalog_Installed(),
+    },
+    // ── Sync (fleet-share-and-sync-01NDFSEX14 WP05) ────────────────────────
+    sync: {
+      toggle: (category, enabled) => b().Sync_Toggle(category, enabled),
+      status: () => b().Sync_Status(),
+      forcePush: (category) => b().Sync_ForcePush(category),
+      forcePull: (category) => b().Sync_ForcePull(category),
+      pendingMCPSecrets: () => b().Sync_PendingMCPSecrets(),
+    },
+    // ── CedarPublish (fleet-share-and-sync-01NDFSEX14 WP07) ──────────────
+    cedarPublish: {
+      publishToTeam: (ruleID, ruleSource) => b().Cedar_PublishToTeam(ruleID, ruleSource),
     },
   };
 }
@@ -4295,6 +4391,31 @@ export function createFakeHarnessClient(
     fleet: {
       getTelemetryConsent: async () => 'none' as const,
       setTelemetryConsent: noop,
+    },
+    catalog: {
+      publish: async () => ({
+        id: '',
+        kind: '',
+        slug: '',
+        version: '',
+        description: '',
+        visibility: 'private',
+        installed: false,
+      }),
+      list: async () => [],
+      install: noop,
+      uninstall: noop,
+      installed: async () => [],
+    },
+    sync: {
+      toggle: noop,
+      status: async () => [],
+      forcePush: noop,
+      forcePull: noop,
+      pendingMCPSecrets: async () => [],
+    },
+    cedarPublish: {
+      publishToTeam: noop,
     },
   };
 
