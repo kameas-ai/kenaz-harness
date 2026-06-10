@@ -43,7 +43,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
       - name: Detect manifests
         id: detect
@@ -57,7 +57,7 @@ jobs:
 
       - name: Set up Go
         if: steps.detect.outputs.go == 'true'
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version: ${{ inputs.go-version || '1.22' }}
 
@@ -103,13 +103,14 @@ jobs:
 
       - name: Set up Node
         if: steps.detect.outputs.node == 'true'
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: ${{ inputs.node-version || '20' }}
 
       - name: Install license-checker
         if: steps.detect.outputs.node == 'true'
-        run: npm install -g license-checker
+        # Pinned exact version (was unpinned `latest`).
+        run: npm install -g license-checker@25.0.1
 
       - name: Generate Node attributions
         if: steps.detect.outputs.node == 'true'
@@ -172,7 +173,7 @@ jobs:
 
       - name: Upload attribution artifacts
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: oss-attributions-${{ github.run_id }}
           path: |
@@ -189,7 +190,7 @@ jobs:
       - name: Mint installation token from kameas-ai-oss-bot App
         if: steps.combine.outputs.changed == 'true'
         id: app-token
-        uses: actions/create-github-app-token@v1
+        uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547 # v1
         with:
           app-id: ${{ secrets.KAMEAS_OSS_BOT_APP_ID }}
           private-key: ${{ secrets.KAMEAS_OSS_BOT_APP_PRIVATE_KEY }}
@@ -201,7 +202,7 @@ jobs:
         id: open_pr
         if: steps.combine.outputs.changed == 'true'
         continue-on-error: true
-        uses: peter-evans/create-pull-request@v6
+        uses: peter-evans/create-pull-request@c5a7806660adbe173f04e3e038b0ccdcd758773c # v6
         with:
           # Pass the App-minted token so the push triggers sibling
           # workflows (CI, CLA). The default GITHUB_TOKEN, by GitHub
