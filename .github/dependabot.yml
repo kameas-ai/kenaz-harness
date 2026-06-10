@@ -1,0 +1,17 @@
+version: 2
+
+# Keeps the SHA-pinned GitHub Actions fresh: Dependabot bumps each pinned
+# commit SHA (and its trailing `# vX` comment) via PRs, so pinning to immutable
+# SHAs doesn't mean missing security patches. Grouped into one PR to keep noise
+# down. Go and npm tooling can be added here later if desired.
+updates:
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: ci
+    groups:
+      actions:
+        patterns:
+          - "*"
