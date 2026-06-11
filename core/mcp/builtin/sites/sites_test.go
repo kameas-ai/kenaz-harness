@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/kameas-ai/kenaz-harness/core/fleet"
 	"github.com/kameas-ai/kenaz-harness/core/mcp/builtin/sites"
@@ -337,6 +338,49 @@ func TestSitesInit_FleetDisabled_StillWorks(t *testing.T) {
 	})
 	if tcr.IsError {
 		t.Fatalf("sites_init should work with fleet disabled, got: %s", textContent(t, tcr))
+	}
+}
+
+// ----- capability-absent path -----
+
+// TestSitesDeploy_CapabilityAbsent_IsError verifies that when a signed-in
+// client is present but the sites_hosting capability is absent from the
+// capability cache, tools return isError:true with a message mentioning
+// "Enterprise" (the capability-absent branch of authCheck — FR-101).
+func TestSitesDeploy_CapabilityAbsent_IsError(t *testing.T) {
+	if fleet.Disabled() {
+		t.Skip("HARNESS_FLEET_DISABLED=1: capability-absent path requires fleet enabled")
+	}
+	t.Parallel()
+
+	dataDir := t.TempDir()
+
+	// Store a real (mock-keychain) access token so LoadTokens() succeeds.
+	if err := fleet.SaveTokens(fleet.TokenSet{AccessToken: "test-token-sentinel"}); err != nil {
+		t.Fatalf("SaveTokens: %v", err)
+	}
+
+	// Write a capabilities snapshot with no sites_hosting so the cap check fires.
+	caps := fleet.Capabilities{
+		Tier:      "pro",
+		Enabled:   map[fleet.Capability]bool{},
+		FetchedAt: time.Now(),
+	}
+	if err := fleet.SaveCapabilities(dataDir, caps); err != nil {
+		t.Fatalf("SaveCapabilities: %v", err)
+	}
+
+	fc, _ := fleet.NewClient(fleet.ClientOpts{DataDir: dataDir})
+	srv := toolserver.NewServer(sites.ServerName, sites.ServerVersion)
+	sites.RegisterAll(srv, fc, dataDir)
+
+	tcr := callTool(t, srv, "sites_deploy", map[string]any{"path": "/tmp/nonexistent"})
+	if !tcr.IsError {
+		t.Fatal("sites_deploy should return isError:true when capability absent")
+	}
+	msg := textContent(t, tcr)
+	if !strings.Contains(msg, "Enterprise") {
+		t.Errorf("capability-absent error should mention Enterprise; got: %s", msg)
 	}
 }
 

@@ -173,6 +173,19 @@ var validateMatrix = []struct {
 		json:    `{"version":1,"name":"good","type":"static","static":{"dir":"dist/../../../etc"}}`,
 		wantErr: "\"..\"",
 	},
+	{
+		// Windows-separator escape: "..\esc" must be rejected on all platforms
+		// (contract §2 requires forward-slash separators only).
+		name:    "static.dir with Windows backslash escape rejected",
+		json:    "{\"version\":1,\"name\":\"good\",\"type\":\"static\",\"static\":{\"dir\":\"..\\\\esc\"}}",
+		wantErr: "backslash",
+	},
+	{
+		// Backslash in a subdirectory path must also be rejected.
+		name:    "static.dir with backslash subdirectory rejected",
+		json:    "{\"version\":1,\"name\":\"good\",\"type\":\"static\",\"static\":{\"dir\":\"dist\\\\sub\"}}",
+		wantErr: "backslash",
+	},
 	// ----- dynamic.env value field -----
 	{
 		name:    "dynamic.env value field rejected",

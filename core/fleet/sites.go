@@ -27,6 +27,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"time"
 )
 
@@ -173,7 +174,7 @@ func (c *Client) SiteDeploy(
 		return DeploymentRecord{}, ErrNotSignedIn
 	}
 
-	reqURL, err := c.APIURL(ctx, "/api/v1/sites/"+siteID+"/deployments")
+	reqURL, err := c.APIURL(ctx, "/api/v1/sites/"+url.PathEscape(siteID)+"/deployments")
 	if err != nil {
 		return DeploymentRecord{}, err
 	}
@@ -241,7 +242,7 @@ func (c *Client) SiteStatus(ctx context.Context, siteID string) (SiteRecord, err
 		return SiteRecord{}, ErrFleetDisabled
 	}
 
-	resp, err := c.Get(ctx, "/api/v1/sites/"+siteID)
+	resp, err := c.Get(ctx, "/api/v1/sites/"+url.PathEscape(siteID))
 	if err != nil {
 		return SiteRecord{}, fmt.Errorf("fleet/sites: status %q: %w", siteID, err)
 	}
@@ -268,7 +269,7 @@ func (c *Client) SiteLogs(ctx context.Context, siteID string, tailLines int) (st
 		return "", ErrFleetDisabled
 	}
 
-	path := fmt.Sprintf("/api/v1/sites/%s/logs", siteID)
+	path := fmt.Sprintf("/api/v1/sites/%s/logs", url.PathEscape(siteID))
 	if tailLines > 0 {
 		path = fmt.Sprintf("%s?tail_lines=%d", path, tailLines)
 	}
@@ -298,7 +299,7 @@ func (c *Client) SiteDelete(ctx context.Context, siteID string) error {
 		return ErrFleetDisabled
 	}
 
-	resp, err := c.Delete(ctx, "/api/v1/sites/"+siteID)
+	resp, err := c.Delete(ctx, "/api/v1/sites/"+url.PathEscape(siteID))
 	if err != nil {
 		return fmt.Errorf("fleet/sites: delete %q: %w", siteID, err)
 	}
@@ -321,7 +322,7 @@ func (c *Client) SiteEnvSet(ctx context.Context, siteID string, vars map[string]
 		Vars map[string]string `json:"vars"`
 	}{Vars: vars}
 
-	resp, err := c.Put(ctx, "/api/v1/sites/"+siteID+"/env", mustMarshalReader(body))
+	resp, err := c.Put(ctx, "/api/v1/sites/"+url.PathEscape(siteID)+"/env", mustMarshalReader(body))
 	if err != nil {
 		return fmt.Errorf("fleet/sites: env set %q: %w", siteID, err)
 	}
@@ -339,7 +340,7 @@ func (c *Client) SiteEnvList(ctx context.Context, siteID string) ([]SiteEnvEntry
 		return nil, ErrFleetDisabled
 	}
 
-	resp, err := c.Get(ctx, "/api/v1/sites/"+siteID+"/env")
+	resp, err := c.Get(ctx, "/api/v1/sites/"+url.PathEscape(siteID)+"/env")
 	if err != nil {
 		return nil, fmt.Errorf("fleet/sites: env list %q: %w", siteID, err)
 	}

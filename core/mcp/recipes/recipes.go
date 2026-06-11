@@ -492,16 +492,26 @@ func buildSubstitutionVars(config map[string]any) (map[string]string, map[string
 	return vars, listVars
 }
 
+// ErrHarnessExeNotFound is returned by resolveHarnessExe when the resolved
+// executable path does not exist on disk. Spawn-spec validation will surface
+// a typed error to the caller rather than a confusing "command not found" from
+// the OS at subprocess start time.
+var ErrHarnessExeNotFound = errors.New("recipes: ${HARNESS_EXE}: resolved executable not found on disk")
+
 // resolveHarnessExe returns the symlink-followed absolute path of the
 // currently running executable. Exposed as a var so tests can stub it.
+// Returns ErrHarnessExeNotFound if the resolved path does not exist.
 var resolveHarnessExe = func() (string, error) {
 	exe, err := os.Executable()
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("recipes: ${HARNESS_EXE}: os.Executable: %w", err)
 	}
 	resolved, err := filepath.EvalSymlinks(exe)
 	if err != nil {
-		return exe, nil // return unresolved on EvalSymlinks failure
+		resolved = exe // use unresolved path if symlink evaluation fails
+	}
+	if _, statErr := os.Stat(resolved); statErr != nil {
+		return "", fmt.Errorf("%w: %s", ErrHarnessExeNotFound, resolved)
 	}
 	return resolved, nil
 }

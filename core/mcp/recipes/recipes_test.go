@@ -578,3 +578,30 @@ func repeat(s string, n int) string {
 	}
 	return string(out)
 }
+
+// TestHarnessExe_FailedResolution verifies that when os.Executable() fails
+// (or the resolved path does not exist), ${HARNESS_EXE} is NOT expanded —
+// the literal token stays in Command[0] so spawn-spec validation rejects it
+// with a clear error rather than silently launching a missing binary.
+//
+// Note: NOT parallel — mutates a package-level function var.
+func TestHarnessExe_FailedResolution(t *testing.T) {
+	// Inject a stub that simulates os.Executable failure.
+	orig := recipes.ResolveHarnessExeForTest(func() (string, error) {
+		return "", errors.New("injected failure")
+	})
+	defer recipes.ResolveHarnessExeForTest(orig)
+
+	r := recipes.Recipe{
+		ID:      "fleet-sites",
+		Command: []string{"${HARNESS_EXE}", "mcp", "sites"},
+	}
+	spec := r.ToServerSpec(nil, nil)
+	if len(spec.Command) == 0 {
+		t.Fatal("Command should not be empty")
+	}
+	// When resolution fails the placeholder must survive unexpanded.
+	if spec.Command[0] != "${HARNESS_EXE}" {
+		t.Errorf("expected literal ${HARNESS_EXE} placeholder, got %q", spec.Command[0])
+	}
+}

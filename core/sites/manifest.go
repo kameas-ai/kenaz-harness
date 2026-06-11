@@ -321,6 +321,16 @@ func validateStaticDir(dir string) error {
 	if dir == "" {
 		return nil
 	}
+	// Reject any backslash outright (matches contract §2: paths must use
+	// forward slashes; Windows-separator escapes such as "..\esc" are
+	// not accepted on any platform).
+	if strings.ContainsRune(dir, '\\') {
+		return fmt.Errorf(
+			"sites/manifest: static.dir %q contains a backslash; "+
+				"use forward-slash separators only",
+			dir,
+		)
+	}
 	if filepath.IsAbs(dir) {
 		return fmt.Errorf(
 			"sites/manifest: static.dir must be a relative path, got absolute path %q",

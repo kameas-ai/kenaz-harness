@@ -9,9 +9,9 @@
 // see most of your home directory; it CANNOT touch your secrets,
 // credentials, or .git internals through this policy.
 //
-// Cedar matches the Filesystem entity by its EUID (the canonical path
-// supplied by the gate hook). The `like` operator does suffix/prefix/
-// substring matching with `*` wildcards.
+// Cedar matches the Filesystem entity by its canonical_path in context
+// (the absolute, cleaned path supplied by the gate hook). The `like`
+// operator does suffix/prefix/substring matching with `*` wildcards.
 //
 // You SHOULD review and extend the deny list for your own environment:
 // add project-specific secret directories, dotfiles you treat as
@@ -23,73 +23,73 @@
 forbid (
     principal == User::"local",
     action in [Action::"file_read", Action::"file_write"],
-    resource is Filesystem
+    resource is FilesystemOp
 ) when {
-    resource like Filesystem::"*/.ssh/*" ||
-    resource == Filesystem::"*/.ssh"
+    context.canonical_path like "*/.ssh/*" ||
+    context.canonical_path like "*/.ssh"
 };
 
 forbid (
     principal == User::"local",
     action in [Action::"file_read", Action::"file_write"],
-    resource is Filesystem
+    resource is FilesystemOp
 ) when {
-    resource like Filesystem::"*/.aws/*" ||
-    resource == Filesystem::"*/.aws"
+    context.canonical_path like "*/.aws/*" ||
+    context.canonical_path like "*/.aws"
 };
 
 forbid (
     principal == User::"local",
     action in [Action::"file_read", Action::"file_write"],
-    resource is Filesystem
+    resource is FilesystemOp
 ) when {
-    resource like Filesystem::"*/.gnupg/*" ||
-    resource == Filesystem::"*/.gnupg"
+    context.canonical_path like "*/.gnupg/*" ||
+    context.canonical_path like "*/.gnupg"
 };
 
 forbid (
     principal == User::"local",
     action in [Action::"file_read", Action::"file_write"],
-    resource is Filesystem
+    resource is FilesystemOp
 ) when {
-    resource like Filesystem::"*/.config/gh/*" ||
-    resource like Filesystem::"*/.config/op/*" ||
-    resource like Filesystem::"*/.config/azure/*" ||
-    resource like Filesystem::"*/.config/gcloud/*" ||
-    resource like Filesystem::"*/.config/doctl/*"
+    context.canonical_path like "*/.config/gh/*" ||
+    context.canonical_path like "*/.config/op/*" ||
+    context.canonical_path like "*/.config/azure/*" ||
+    context.canonical_path like "*/.config/gcloud/*" ||
+    context.canonical_path like "*/.config/doctl/*"
 };
 
 forbid (
     principal == User::"local",
     action in [Action::"file_read", Action::"file_write"],
-    resource is Filesystem
+    resource is FilesystemOp
 ) when {
-    resource like Filesystem::"*/.netrc" ||
-    resource like Filesystem::"*/.npmrc" ||
-    resource like Filesystem::"*/.pypirc" ||
-    resource like Filesystem::"*/.cargo/credentials*" ||
-    resource like Filesystem::"*/.docker/config.json"
+    context.canonical_path like "*/.netrc" ||
+    context.canonical_path like "*/.npmrc" ||
+    context.canonical_path like "*/.pypirc" ||
+    context.canonical_path like "*/.cargo/credentials*" ||
+    context.canonical_path like "*/.docker/config.json"
 };
 
 // --- dotenv files (any depth) ---------------------------------------
 forbid (
     principal == User::"local",
     action in [Action::"file_read", Action::"file_write"],
-    resource is Filesystem
+    resource is FilesystemOp
 ) when {
-    resource like Filesystem::"*/.env" ||
-    resource like Filesystem::"*/.env.*" ||
-    resource like Filesystem::"*.env.local" ||
-    resource like Filesystem::"*.env.production*"
+    context.canonical_path like "*/.env" ||
+    context.canonical_path like "*/.env.*" ||
+    context.canonical_path like "*.env.local" ||
+    context.canonical_path like "*.env.production*"
 };
 
 // --- macOS keychain + login items -----------------------------------
 forbid (
     principal == User::"local",
     action in [Action::"file_read", Action::"file_write"],
-    resource is Filesystem
+    resource is FilesystemOp
 ) when {
-    resource like Filesystem::"*/Library/Keychains/*"
+    context.canonical_path like "*/Library/Keychains/*"
 };
 
 // --- system-wide deny (writes only; reads stay permitted) -----------
@@ -99,16 +99,16 @@ forbid (
 forbid (
     principal == User::"local",
     action == Action::"file_write",
-    resource is Filesystem
+    resource is FilesystemOp
 ) when {
-    resource like Filesystem::"/etc/*" ||
-    resource like Filesystem::"/usr/*" ||
-    resource like Filesystem::"/bin/*" ||
-    resource like Filesystem::"/sbin/*" ||
-    resource like Filesystem::"/var/log/*" ||
-    resource like Filesystem::"/Library/*" ||
-    resource like Filesystem::"/System/*" ||
-    resource like Filesystem::"/Applications/*"
+    context.canonical_path like "/etc/*" ||
+    context.canonical_path like "/usr/*" ||
+    context.canonical_path like "/bin/*" ||
+    context.canonical_path like "/sbin/*" ||
+    context.canonical_path like "/var/log/*" ||
+    context.canonical_path like "/Library/*" ||
+    context.canonical_path like "/System/*" ||
+    context.canonical_path like "/Applications/*"
 };
 
 // --- git internals --------------------------------------------------
@@ -119,9 +119,9 @@ forbid (
 forbid (
     principal == User::"local",
     action == Action::"file_write",
-    resource is Filesystem
+    resource is FilesystemOp
 ) when {
-    resource like Filesystem::"*/.git/*"
+    context.canonical_path like "*/.git/*"
 };
 
 // --- harness-internal data dir --------------------------------------
@@ -130,10 +130,10 @@ forbid (
 forbid (
     principal == User::"local",
     action in [Action::"file_read", Action::"file_write"],
-    resource is Filesystem
+    resource is FilesystemOp
 ) when {
-    resource like Filesystem::"*/kaneaz-harness/data.db*" ||
-    resource like Filesystem::"*/kaneaz-harness/keychain*"
+    context.canonical_path like "*/kaneaz-harness/data.db*" ||
+    context.canonical_path like "*/kaneaz-harness/keychain*"
 };
 
 // --- end of recommended forbids -------------------------------------
