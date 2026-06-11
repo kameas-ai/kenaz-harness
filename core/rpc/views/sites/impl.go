@@ -109,8 +109,13 @@ func newWithClient(fc FleetSitesClient, fleetEnabled bool, dataDir string, emitt
 // checkPreConditions verifies fleet is enabled, the user is signed in, and
 // the sites_hosting capability is present. Returns a typed sentinel error on
 // failure so the frontend can render contextual messages (FR-005).
+//
+// fleetEnabled is set at construction time (via New or newWithClient) and
+// already incorporates the corefleet.Disabled() flag — we do NOT re-check it
+// here so that tests using NewForTesting with fleetEnabled=true can override
+// the env-var gate.
 func (s *SitesImpl) checkPreConditions() error {
-	if !s.fleetEnabled || corefleet.Disabled() {
+	if !s.fleetEnabled {
 		return corefleet.ErrFleetDisabled
 	}
 	if _, err := corefleet.LoadTokens(); err != nil {
