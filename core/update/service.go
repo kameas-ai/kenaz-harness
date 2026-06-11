@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -175,8 +176,21 @@ func (s *service) checkChannel(ctx context.Context, channel string) (Info, error
 // to honor Config.Platform overrides in tests without modifying
 // runtime.GOOS.
 func pickAssetFor(m manifest, platform string) (manifestAsset, bool) {
+	// platform is a "GOOS/GOARCH" tuple. Published manifests key assets
+	// either by separate os/arch fields (canonical) or by a "GOOS-GOARCH"
+	// platform string; historic fixtures used the slash form. Match the
+	// structured fields first, then fall back to a separator-insensitive
+	// platform-string compare so all three shapes resolve.
+	goos, goarch, _ := strings.Cut(platform, "/")
+	dashForm := goos + "-" + goarch
 	for _, a := range m.Assets {
-		if a.Platform == platform {
+		if a.OS != "" || a.Arch != "" {
+			if a.OS == goos && a.Arch == goarch {
+				return a, true
+			}
+			continue
+		}
+		if a.Platform == platform || a.Platform == dashForm {
 			return a, true
 		}
 	}

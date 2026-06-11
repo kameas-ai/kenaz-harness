@@ -10,9 +10,10 @@ import (
 )
 
 // manifest mirrors the JSON shape served at
-// https://docs.kameas.ai/downloads/manifest.json. Unknown fields are
-// ignored by encoding/json so future server-side fields don't break
-// older clients.
+// https://downloads.kameas.ai/kenaz-harness/manifest.json (the same file
+// the docs download page consumes; published by release.yml). Unknown
+// fields are ignored by encoding/json so future server-side fields don't
+// break older clients.
 type manifest struct {
 	Version string          `json:"version"`
 	Notes   string          `json:"notes,omitempty"`
@@ -20,16 +21,28 @@ type manifest struct {
 }
 
 type manifestAsset struct {
-	Platform string `json:"platform"` // e.g. "darwin/arm64"
-	URL      string `json:"url"`
-	Sha256   string `json:"sha256"`
+	// Platform is the published "GOOS-GOARCH" string (e.g. "darwin-arm64").
+	// Historic fixtures used a "GOOS/GOARCH" slash form; matching is
+	// separator-insensitive (see pickAssetFor).
+	Platform string `json:"platform"`
+	// OS and Arch are the canonical match keys in the published manifest;
+	// when present they are matched against runtime.GOOS/GOARCH directly,
+	// which is robust to the platform-string separator.
+	OS     string `json:"os,omitempty"`
+	Arch   string `json:"arch,omitempty"`
+	URL    string `json:"url"`
+	Sha256 string `json:"sha256"`
 }
 
 // stableManifestURL and prereleaseManifestURL are the production
 // manifest endpoints. Tests override them via Config.ManifestURL.
+//
+// These point at the release CDN (downloads.kameas.ai), which is where
+// release.yml publishes the per-product manifest. The stage CNAME backs
+// the prerelease (release-candidate) channel.
 const (
-	stableManifestURL     = "https://docs.kameas.ai/downloads/manifest.json"
-	prereleaseManifestURL = "https://docs.kameas.ai/downloads/manifest-prerelease.json"
+	stableManifestURL     = "https://downloads.kameas.ai/kenaz-harness/manifest.json"
+	prereleaseManifestURL = "https://stage-downloads.kameas.ai/kenaz-harness/manifest.json"
 )
 
 // channelManifestURL returns the manifest URL for the given channel.
@@ -87,13 +100,7 @@ func fetchManifest(ctx context.Context, client *http.Client, url string) (manife
 // build (GOOS/GOARCH). Returns the asset and true, or an empty asset
 // and false if no match.
 func pickAsset(m manifest) (manifestAsset, bool) {
-	want := platformTuple()
-	for _, a := range m.Assets {
-		if a.Platform == want {
-			return a, true
-		}
-	}
-	return manifestAsset{}, false
+	return pickAssetFor(m, platformTuple())
 }
 
 // platformTuple returns "GOOS/GOARCH" for the running binary. Exposed

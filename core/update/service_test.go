@@ -502,11 +502,16 @@ func TestService_PrereleaseFallback(t *testing.T) {
 		Version: "v0.4.0",
 		Assets:  []manifestAsset{{Platform: "linux/amd64", URL: "u", Sha256: sha}},
 	})
+	// Stable and prerelease now share the same path
+	// (/kenaz-harness/manifest.json) and differ only by host
+	// (downloads vs stage-downloads). rewriteTransport encodes the
+	// original host into the path so the mux can tell them apart:
+	// the stable host serves 200, the stage host 404 → fallback.
 	mux := http.NewServeMux()
-	mux.HandleFunc("/downloads/manifest.json", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/downloads.kameas.ai/kenaz-harness/manifest.json", func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write(stableBody)
 	})
-	mux.HandleFunc("/downloads/manifest-prerelease.json", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/stage-downloads.kameas.ai/kenaz-harness/manifest.json", func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "not found", http.StatusNotFound)
 	})
 	srv := httptest.NewServer(mux)
@@ -560,8 +565,10 @@ type rewriteTransport struct {
 }
 
 func (rt *rewriteTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	// Replace scheme+host with rt.base; keep path.
-	newURL := rt.base + req.URL.Path
+	// Replace scheme+host with rt.base; encode the original host into the
+	// path so a single test server can distinguish channel hosts that now
+	// share a path (downloads vs stage-downloads, both /kenaz-harness/...).
+	newURL := rt.base + "/" + req.URL.Host + req.URL.Path
 	r2, err := http.NewRequestWithContext(req.Context(), req.Method, newURL, nil)
 	if err != nil {
 		return nil, err
@@ -630,6 +637,38 @@ func TestPickAssetFor(t *testing.T) {
 	}
 	if _, ok := pickAssetFor(m, "freebsd/amd64"); ok {
 		t.Fatal("expected no match")
+	}
+}
+
+// TestPickAssetForPublishedShape pins the *real* manifest shape published
+// by release.yml (downloads.kameas.ai/kenaz-harness/manifest.json): assets
+// keyed by separate os/arch fields plus a "GOOS-GOARCH" dash platform
+// string. The runtime tuple is "GOOS/GOARCH" (slash); the matcher must
+// resolve across the separator. Regression guard for the v1.6.0 updater
+// drift (clients were polling a stale manifest *and* the matcher only
+// understood the slash form).
+func TestPickAssetForPublishedShape(t *testing.T) {
+	m := manifest{
+		Version: "v1.6.0",
+		Assets: []manifestAsset{
+			{Platform: "darwin-arm64", OS: "darwin", Arch: "arm64", URL: "a"},
+			{Platform: "linux-amd64", OS: "linux", Arch: "amd64", URL: "b"},
+		},
+	}
+	if a, ok := pickAssetFor(m, "darwin/arm64"); !ok || a.URL != "a" {
+		t.Fatalf("os/arch match (darwin/arm64) failed: %+v ok=%v", a, ok)
+	}
+	if a, ok := pickAssetFor(m, "linux/amd64"); !ok || a.URL != "b" {
+		t.Fatalf("os/arch match (linux/amd64) failed: %+v ok=%v", a, ok)
+	}
+	if _, ok := pickAssetFor(m, "windows/amd64"); ok {
+		t.Fatal("expected no windows match")
+	}
+
+	// Dash platform string with no os/arch fields must still resolve.
+	dashOnly := manifest{Assets: []manifestAsset{{Platform: "darwin-arm64", URL: "c"}}}
+	if a, ok := pickAssetFor(dashOnly, "darwin/arm64"); !ok || a.URL != "c" {
+		t.Fatalf("dash-only platform string match failed: %+v ok=%v", a, ok)
 	}
 }
 

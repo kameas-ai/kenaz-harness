@@ -24,18 +24,19 @@
 //
 // # Manifest schema
 //
-// Stable channel:  https://docs.kameas.ai/downloads/manifest.json
-// Prerelease:      https://docs.kameas.ai/downloads/manifest-prerelease.json
+// Stable channel:  https://downloads.kameas.ai/kenaz-harness/manifest.json
+// Prerelease:      https://stage-downloads.kameas.ai/kenaz-harness/manifest.json
 //
-// JSON shape (only the fields used here):
+// JSON shape (only the fields used here; assets carry os/arch as the
+// canonical match keys, matched against runtime.GOOS/GOARCH):
 //
 //	{
-//	  "version": "v0.4.0",
+//	  "version": "v1.6.0",
 //	  "notes":   "release blurb or URL",
 //	  "assets":  [
-//	    {"platform":"darwin/arm64","url":"https://...","sha256":"hex"},
-//	    {"platform":"linux/amd64", "url":"https://...","sha256":"hex"},
-//	    {"platform":"windows/amd64","url":"https://...","sha256":"hex"}
+//	    {"platform":"darwin-arm64","os":"darwin","arch":"arm64","url":"https://...","sha256":"hex"},
+//	    {"platform":"linux-amd64", "os":"linux", "arch":"amd64","url":"https://...","sha256":"hex"},
+//	    {"platform":"windows-amd64","os":"windows","arch":"amd64","url":"https://...","sha256":"hex"}
 //	  ]
 //	}
 //
