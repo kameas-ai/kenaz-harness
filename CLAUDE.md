@@ -99,6 +99,24 @@ Version numbers consumed by infra/release-pipeline iterations are *real tags* on
 
 `docs/roadmap.md` slot labels (e.g. "v0.8.5 — UX maturity") are **planning artifacts, not version contracts**. The next tag is whatever `tag-on-merge.yml` bumps from the latest tag using the PR's Conventional Commits prefix. Example: v0.8.5-themed UX work landed as **`v0.9.0`** because v0.8.4 + `feat:` = v0.9.0. Accept the drift; don't contort PR titles to hit a planning label. When the user references a roadmap slot, translate to the current tag context before acting.
 
+### Environments & promotion (release downloads)
+
+The harness is a desktop app; its "environments" are the env-specific S3 + CloudFront **download** channels that `release.yml` publishes signed builds to. The **trigger picks the env** (see the header of `.github/workflows/release.yml`):
+
+| Trigger | Env | Channel |
+|---|---|---|
+| **push to `main`** (any commit) | **dev** | rolling "latest" → `s3://kameas-ai-dev-releases-use2` → dev.downloads.kameas.ai |
+| **tag `v*-rc*`** (e.g. `v1.2.0-rc1`) | **stage** | release candidate → `s3://kameas-ai-stage-releases-use2` → stage.downloads.kameas.ai |
+| **tag `v*`** (no `-rc`) **or** `workflow_dispatch` with `version=` | **prod** | stable → `s3://kameas-ai-prod-releases-use2` → prod.downloads.kameas.ai |
+
+**Develop → promote ladder:**
+1. **Develop** locally with `wails dev` + the test commands under *Local dev commands*. Open a PR; `pr.yml` (lint/vet/codegen-drift, `-race -short` Go tests, frontend tests+typecheck) is the gate.
+2. **Merge → main** ⇒ a **dev** rolling build is published automatically (every merge, incl. `chore`/`docs`). Smoke it from the dev channel.
+3. **Stage (optional RC):** push a `v<X.Y.Z>-rc1` tag manually ⇒ a **stage** release-candidate build. Soak it.
+4. **Prod:** a stable `v<X.Y.Z>` tag ⇒ a **prod** build. `tag-on-merge.yml` auto-cuts this stable tag from a `feat:`/`fix:` PR — so a normal feature merge yields **both** a dev rolling build (from the push) **and**, once the tag lands, a prod build. To gate prod behind an RC, push the `-rc` tag (and soak) **before** the stable tag, or land the work as a no-bump prefix (`chore`/`docs`/`refactor`) so only the dev rolling build is produced until you choose to tag.
+
+Note: `tag-on-merge` cutting the stable tag immediately means **a `feat:`/`fix:` merge ships to prod downloads without a stage stop** unless you deliberately RC-tag first. Treat that as the default and plan RC soak explicitly when a release warrants it.
+
 ---
 
 ## Mission system (kitty-specs/)
