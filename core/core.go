@@ -29,11 +29,9 @@ import (
 	"github.com/kameas-ai/kenaz-harness/core/bundle/cache"
 	"github.com/kameas-ai/kenaz-harness/core/config"
 	"github.com/kameas-ai/kenaz-harness/core/event"
-	"github.com/kameas-ai/kenaz-harness/core/fleet"
 	"github.com/kameas-ai/kenaz-harness/core/llm"
 	"github.com/kameas-ai/kenaz-harness/core/logging"
 	"github.com/kameas-ai/kenaz-harness/core/mcp"
-	"github.com/kameas-ai/kenaz-harness/core/mcp/recipes"
 	"github.com/kameas-ai/kenaz-harness/core/memory"
 	"github.com/kameas-ai/kenaz-harness/core/projects"
 	"github.com/kameas-ai/kenaz-harness/core/scheduler"
@@ -233,26 +231,6 @@ func (c *Core) SetBashMigrationBootstrap(fn func(context.Context) error) {
 		return
 	}
 	c.bashMigrationBootstrap = fn
-}
-
-// SetCapabilityPoller wires the fleet capability poller into Core and
-// registers the sites capability reconciler. The reconciler enables the
-// "fleet-sites" MCP recipe when the sites_hosting capability appears and
-// disables it when it disappears (including 24 h TTL expiry).
-//
-// dataDir is used to load and save the enabled-recipes list. Call this
-// after constructing the fleet client and before starting the poller.
-func (c *Core) SetCapabilityPoller(poller *fleet.CapabilityPoller, dataDir string) {
-	if c == nil || poller == nil {
-		return
-	}
-	enabled, err := recipes.LoadEnabled(dataDir)
-	if err != nil {
-		logging.L().Warn("core.sites_reconciler.load_enabled_failed", "err", err.Error())
-		enabled = &recipes.EnabledRecipes{}
-	}
-	reconciler := fleet.NewSitesReconciler(poller, enabled, dataDir)
-	reconciler.Start()
 }
 
 // Start brings every wired subsystem online. It is safe to call once;

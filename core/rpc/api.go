@@ -1635,6 +1635,22 @@ func New(c *core.Core) *API {
 		}
 	}
 
+	// Sites capability reconciler (sites-mcp-server-01NSITE05 WP04).
+	// Enables the "fleet-sites" recipe when sites_hosting appears and
+	// disables it when it disappears or goes stale (24 h TTL). Wired
+	// here because core/rpc already owns the CapabilityPoller and
+	// recipes.EnabledRecipes — this avoids core/core.go importing fleet.
+	if a.settingsImpl != nil && dataDir != "" {
+		if poller := a.settingsImpl.CapabilityPoller(); poller != nil {
+			enabled, err := recipes.LoadEnabled(dataDir)
+			if err != nil {
+				logging.L().Warn("rpc.sites_reconciler.load_enabled_failed", "err", err.Error())
+				enabled = &recipes.EnabledRecipes{}
+			}
+			corefleet.NewSitesReconciler(poller, enabled, dataDir).Start()
+		}
+	}
+
 	a.bindings = NewBindings(a)
 	if a.settingsImpl != nil {
 		a.bindings.SetSettingsStore(a.settingsImpl.Store())
