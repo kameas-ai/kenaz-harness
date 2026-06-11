@@ -19,7 +19,6 @@ import type {
   ResolvedAutonomy,
   Session,
   SiteSummary,
-  DeployProgressEvent,
   Project,
   Provider,
   AddProviderInput,

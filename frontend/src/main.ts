@@ -121,6 +121,14 @@ const router = createRouter({
       name: 'policy',
       component: () => import('@/views/policy/PolicyView.vue'),
     },
+    {
+      // sites-ui-01NSITE06 — Fleet Sites hosting surface.
+      // Only reachable when sites_hosting capability is present; the nav
+      // entry is hidden unless signedIn && capability('sites_hosting').
+      path: '/sites',
+      name: 'sites',
+      component: () => import('@/views/sites/SitesView.vue'),
+    },
   ],
 });
 

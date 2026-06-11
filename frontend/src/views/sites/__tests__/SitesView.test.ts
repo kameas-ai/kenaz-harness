@@ -212,17 +212,8 @@ describe('SitesView', () => {
     const deployFn = vi.fn().mockResolvedValue(STATIC_SITE);
     const pickFn = vi.fn().mockResolvedValue('/home/user/my-site');
     const listFn = vi.fn().mockResolvedValue([]);
-    const { global } = provide({
-      tools: {
-        listRecipes: vi.fn().mockResolvedValue([]),
-        installRecipe: vi.fn(),
-        uninstallRecipe: vi.fn(),
-        forgetRecipeKey: vi.fn(),
-        recipeStatus: vi.fn(),
-        recipeConfig: vi.fn(),
-        pickDirectory: pickFn,
-        requestAdditionalAllowedDir: vi.fn(),
-      },
+    // Build a full fake client so tools.pickDirectory can be overridden.
+    const baseClient = createFakeHarnessClient({
       sites: {
         list: listFn,
         deploy: deployFn,
@@ -231,6 +222,9 @@ describe('SitesView', () => {
         delete: vi.fn(),
       },
     });
+    // Patch only pickDirectory; keep everything else from the fake.
+    baseClient.tools.pickDirectory = pickFn;
+    const global = { provide: { [HarnessClientKey as symbol]: baseClient } };
     const w = mount(SitesView, { global });
     await flushPromises();
     await w.find('[data-testid=sites-deploy-btn]').trigger('click');
@@ -242,17 +236,7 @@ describe('SitesView', () => {
   it('shows deploy error when deploy throws', async () => {
     const deployFn = vi.fn().mockRejectedValue(new Error('invalid manifest'));
     const pickFn = vi.fn().mockResolvedValue('/home/user/bad-site');
-    const { global } = provide({
-      tools: {
-        listRecipes: vi.fn().mockResolvedValue([]),
-        installRecipe: vi.fn(),
-        uninstallRecipe: vi.fn(),
-        forgetRecipeKey: vi.fn(),
-        recipeStatus: vi.fn(),
-        recipeConfig: vi.fn(),
-        pickDirectory: pickFn,
-        requestAdditionalAllowedDir: vi.fn(),
-      },
+    const baseClient = createFakeHarnessClient({
       sites: {
         list: async () => [],
         deploy: deployFn,
@@ -261,6 +245,8 @@ describe('SitesView', () => {
         delete: vi.fn(),
       },
     });
+    baseClient.tools.pickDirectory = pickFn;
+    const global = { provide: { [HarnessClientKey as symbol]: baseClient } };
     const w = mount(SitesView, { global });
     await flushPromises();
     await w.find('[data-testid=sites-deploy-btn]').trigger('click');
