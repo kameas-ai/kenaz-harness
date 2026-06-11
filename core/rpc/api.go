@@ -105,6 +105,7 @@ import (
 	catalogview "github.com/kameas-ai/kenaz-harness/core/rpc/views/catalog"
 	syncview "github.com/kameas-ai/kenaz-harness/core/rpc/views/sync"
 	cedarview "github.com/kameas-ai/kenaz-harness/core/rpc/views/cedar"
+	sitesview "github.com/kameas-ai/kenaz-harness/core/rpc/views/sites"
 	corefleet "github.com/kameas-ai/kenaz-harness/core/fleet"
 	"github.com/kameas-ai/kenaz-harness/core/eval"
 	"github.com/kameas-ai/kenaz-harness/core/session"
@@ -275,6 +276,11 @@ type HarnessAPI interface {
 	// CedarPublish exposes the team Cedar policy publish surface
 	// (fleet-share-and-sync-01NDFSEX14 WP07). Admin-gated.
 	CedarPublish() cedarview.CedarAPI
+
+	// Sites exposes the fleet-hosted sites RPC surface (sites-ui-01NSITE06).
+	// The view is gated on the sites_hosting capability; it is the same
+	// core/sites + core/fleet/sites.go layer used by the MCP server.
+	Sites() sitesview.SitesAPI
 }
 
 // ShellStatus drives the Toolbar status pills + LegendBar live-rate
@@ -546,6 +552,10 @@ type API struct {
 	// cedarPublishAPI is the team Cedar policy publish surface
 	// (fleet-share-and-sync-01NDFSEX14 WP07).
 	cedarPublishAPI cedarview.CedarAPI
+
+	// sitesAPI is the fleet-hosted sites RPC surface (sites-ui-01NSITE06).
+	// Backed by core/sites/packager.go + core/fleet/sites.go.
+	sitesAPI sitesview.SitesAPI
 }
 
 // Builtins returns the in-binary tool registry. Used by the chat-input
@@ -1587,6 +1597,10 @@ func New(c *core.Core) *API {
 			return id.Email, nil
 		}
 		a.cedarPublishAPI = cedarview.NewAPI(flCl, identityFn, flAudit)
+
+		// Sites (sites-ui-01NSITE06): capability-gated sites RPC surface.
+		// Deploy progress events are published via the existing broker.
+		a.sitesAPI = sitesview.New(flCl, flDataDir, brokerPublisher{broker: a.broker})
 
 		// fleet-skills-sync-01NDFSEX18 WP02: wire fleet skill dependencies onto
 		// the slashAPI. The capability snapshot is read lazily from the poller at
@@ -5156,6 +5170,10 @@ func (a *API) Sync() syncview.SyncAPI { return a.syncAPI }
 // CedarPublish implements HarnessAPI. Returns the team Cedar policy publish surface.
 // (fleet-share-and-sync-01NDFSEX14 WP07)
 func (a *API) CedarPublish() cedarview.CedarAPI { return a.cedarPublishAPI }
+
+// Sites implements HarnessAPI. Returns the fleet-hosted sites RPC surface.
+// (sites-ui-01NSITE06)
+func (a *API) Sites() sitesview.SitesAPI { return a.sitesAPI }
 
 // brokerPlanEmitter adapts a *StreamBroker to the planmodeview.EventEmitter
 // interface. The broker's Publish method broadcasts to all subscribers
