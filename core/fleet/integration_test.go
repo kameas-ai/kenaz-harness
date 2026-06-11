@@ -197,9 +197,14 @@ func TestIntegration_AllCapabilityKeys(t *testing.T) {
 		}
 	}
 
-	// Total count gate: we defined exactly 25.
-	if len(all) != 25 {
-		t.Errorf("AllCapabilities() len = %d, want 25", len(all))
+	// Verify CapSitesHosting is present (sites-foundation-01NSITE04 WP01).
+	if _, ok := seen[fleet.CapSitesHosting]; !ok {
+		t.Errorf("AllCapabilities() missing CapSitesHosting")
+	}
+
+	// Total count gate: we defined exactly 26 (25 baseline + CapSitesHosting).
+	if len(all) != 26 {
+		t.Errorf("AllCapabilities() len = %d, want 26", len(all))
 	}
 }
 

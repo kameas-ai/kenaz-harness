@@ -39,6 +39,11 @@ const (
 	CapComplianceDocsSoC2Full   Capability = "compliance_docs_soc2_full"
 	CapComplianceDocsCustom     Capability = "compliance_docs_custom"
 	CapQuarterlyAttestationReports Capability = "quarterly_attestation_reports"
+
+	// CapSitesHosting gates the Fleet Sites feature (Enterprise tier only).
+	// Wire value: "sites_hosting" (pinned in kenaz-fleet/docs/contract-harness-sites.md §0).
+	// Mission: sites-foundation-01NSITE04, WP01.
+	CapSitesHosting Capability = "sites_hosting"
 )
 
 // AllCapabilities returns every known Capability constant in declaration
@@ -70,6 +75,7 @@ func AllCapabilities() []Capability {
 		CapComplianceDocsSoC2Full,
 		CapComplianceDocsCustom,
 		CapQuarterlyAttestationReports,
+		CapSitesHosting,
 	}
 }
 
