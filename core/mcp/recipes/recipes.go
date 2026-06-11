@@ -22,6 +22,8 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 
@@ -104,6 +106,13 @@ type Recipe struct {
 	// install alongside this recipe. The install modal surfaces a
 	// "copy recommended policy" affordance when set.
 	RecommendedPolicyTemplate string `json:"recommended_policy_template,omitempty"`
+	// RequiredCapability names the fleet capability key that must be present
+	// (and non-stale per the 24 h TTL) for this recipe to be enabled. When
+	// non-empty, the capability reconciler enables the recipe when the
+	// capability is present and disables it when it disappears or is stale.
+	// Empty (the default) means the recipe has no capability gate.
+	// JSON key: required_capability (omitempty — absent from most recipes).
+	RequiredCapability string `json:"required_capability,omitempty"`
 	// PromptOnFirstUse lists tool names (bare, without the server prefix)
 	// within this recipe that opt into the universal interactive-permission
 	// prompt gate on their first invocation. When the Cedar engine returns
@@ -411,11 +420,16 @@ func validateRecipeURL(raw string) error {
 // for Command (callers may mutate the input recipe's Command without
 // disturbing the spec).
 func (r *Recipe) ToServerSpec(env map[string]string, config map[string]any) mcp.ServerSpec {
-	cmd := make([]string, 0, len(r.Command)+len(r.ArgsTemplate))
-	cmd = append(cmd, r.Command...)
+	// Always build substitution vars so ${HARNESS_EXE} (and any other scalar
+	// tokens) in Command are expanded even when ArgsTemplate is empty.
+	// This is safe for existing recipes whose Command contains no tokens —
+	// Substitute is a no-op for token-free strings.
+	vars, listVars := buildSubstitutionVars(config)
+	expandedCmd := Substitute(r.Command, vars, listVars)
+	cmd := make([]string, 0, len(expandedCmd)+len(r.ArgsTemplate))
+	cmd = append(cmd, expandedCmd...)
 
 	if len(r.ArgsTemplate) > 0 {
-		vars, listVars := buildSubstitutionVars(config)
 		cmd = append(cmd, Substitute(r.ArgsTemplate, vars, listVars)...)
 	}
 
@@ -450,9 +464,20 @@ func (r *Recipe) ToServerSpec(env map[string]string, config map[string]any) mcp.
 // String-typed values land in vars; []string and []any-of-string land
 // in listVars. Other shapes are skipped (Substitute will leave the
 // token literal and warn-log).
+//
+// ${HARNESS_EXE} is resolved at call time via os.Executable() + symlink
+// following. If os.Executable() fails, the empty string is used; spawn-spec
+// validation will reject an empty Command[0].
 func buildSubstitutionVars(config map[string]any) (map[string]string, map[string][]string) {
 	vars := map[string]string{}
 	listVars := map[string][]string{}
+
+	// ${HARNESS_EXE}: resolve the running binary path (symlink-followed) so
+	// recipes using ["${HARNESS_EXE}", "mcp", "sites"] spawn the right binary.
+	if exe, err := resolveHarnessExe(); err == nil {
+		vars["HARNESS_EXE"] = exe
+	}
+
 	if config == nil {
 		return vars, listVars
 	}
@@ -465,6 +490,20 @@ func buildSubstitutionVars(config map[string]any) (map[string]string, map[string
 		}
 	}
 	return vars, listVars
+}
+
+// resolveHarnessExe returns the symlink-followed absolute path of the
+// currently running executable. Exposed as a var so tests can stub it.
+var resolveHarnessExe = func() (string, error) {
+	exe, err := os.Executable()
+	if err != nil {
+		return "", err
+	}
+	resolved, err := filepath.EvalSymlinks(exe)
+	if err != nil {
+		return exe, nil // return unresolved on EvalSymlinks failure
+	}
+	return resolved, nil
 }
 
 // RecipeDirs extracts the union of all "allowed_directories" config

@@ -13,8 +13,42 @@ func TestShippedSingletonParses(t *testing.T) {
 	if cat == nil {
 		t.Fatal("Shipped() returned nil")
 	}
-	if got := len(cat.List()); got != 1 {
-		t.Fatalf("want 1 recipe, got %d", got)
+	// shipped.json now contains fleet-sites + filesystem (2 recipes).
+	if got := len(cat.List()); got < 1 {
+		t.Fatalf("want at least 1 recipe, got %d", got)
+	}
+	// Verify the fleet-sites recipe is present and valid.
+	r, ok := cat.Get("fleet-sites")
+	if !ok {
+		t.Fatal("fleet-sites recipe not found in shipped catalog")
+	}
+	if r.RequiredCapability != "sites_hosting" {
+		t.Errorf("fleet-sites required_capability = %q, want \"sites_hosting\"", r.RequiredCapability)
+	}
+}
+
+// TestFleetSites_HarnessExeSubstitution verifies that ToServerSpec expands
+// ${HARNESS_EXE} to a non-empty path for the fleet-sites recipe.
+func TestFleetSites_HarnessExeSubstitution(t *testing.T) {
+	t.Parallel()
+	cat := recipes.Shipped()
+	r, ok := cat.Get("fleet-sites")
+	if !ok {
+		t.Fatal("fleet-sites not found")
+	}
+	spec := r.ToServerSpec(nil, nil)
+	if len(spec.Command) == 0 {
+		t.Fatal("ToServerSpec produced empty command")
+	}
+	// Command[0] was ${HARNESS_EXE} in the template; it must expand to the
+	// running test binary path (non-empty, existing file).
+	exe := spec.Command[0]
+	if exe == "" || exe == "${HARNESS_EXE}" {
+		t.Errorf("${HARNESS_EXE} was not expanded: Command[0] = %q", exe)
+	}
+	// The rest of the command must be ["mcp", "sites"].
+	if len(spec.Command) < 3 || spec.Command[1] != "mcp" || spec.Command[2] != "sites" {
+		t.Errorf("command tail wrong: %v", spec.Command)
 	}
 }
 
