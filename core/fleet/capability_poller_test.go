@@ -204,6 +204,50 @@ func TestCapabilityPoller_Refresh_Success(t *testing.T) {
 	}
 }
 
+// TestCapabilityPoller_Refresh_UpdatesCurrent verifies that after a successful
+// Refresh(), Current() immediately returns the newly fetched capabilities.
+// This is the regression test for the bug where Refresh() returned the correct
+// value but never called setCurrent, so Current() lagged behind.
+func TestCapabilityPoller_Refresh_UpdatesCurrent(t *testing.T) {
+	if !tryInstallFakeTokens(t) {
+		t.Skip("OS keychain unavailable")
+	}
+	expected := Capabilities{
+		Tier:      "team",
+		Enabled:   map[Capability]bool{CapHostedInference: true},
+		FetchedAt: time.Now().UTC().Truncate(time.Second),
+		Source:    "fleet",
+	}
+	srv := fakeCapabilityServer(t, expected, 0)
+	defer srv.Close()
+
+	client := newTestClient(t, srv)
+	dir := t.TempDir()
+	p := NewCapabilityPoller(client, dir)
+
+	// Before Refresh, Current() must be default-deny.
+	if p.Current().Source != "default-deny" {
+		t.Fatal("pre-condition: Current() should be default-deny before Refresh")
+	}
+
+	_, err := p.Refresh(context.Background())
+	if err != nil {
+		t.Fatalf("Refresh = error %v", err)
+	}
+
+	// Current() must now reflect the freshly fetched capabilities.
+	cur := p.Current()
+	if cur.Source != "fleet" {
+		t.Errorf("Current().Source = %q, want 'fleet' (Refresh must call setCurrent)", cur.Source)
+	}
+	if cur.Tier != "team" {
+		t.Errorf("Current().Tier = %q, want 'team'", cur.Tier)
+	}
+	if !cur.Has(CapHostedInference) {
+		t.Error("Current().Has(CapHostedInference) = false, want true")
+	}
+}
+
 // TestCapabilityPoller_SingleFlight_Collapse verifies multiple concurrent
 // Refresh calls collapse to one HTTP request.
 func TestCapabilityPoller_SingleFlight_Collapse(t *testing.T) {

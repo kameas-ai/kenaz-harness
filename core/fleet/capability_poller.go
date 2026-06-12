@@ -212,6 +212,14 @@ func (p *CapabilityPoller) Refresh(ctx context.Context) (Capabilities, error) {
 		return DefaultDenyCapabilities(), fmt.Errorf("fleet: capability poller singleflight: %w", err)
 	}
 	r := v.(result)
+	// Apply the fetched value immediately so Current() reflects the result of
+	// this call. The poll loop also calls setCurrent after Refresh, but callers
+	// who invoke Refresh directly (e.g. on-demand refresh) must not observe a
+	// stale Current(). Only update on success; error paths preserve the
+	// last-known good value intentionally.
+	if r.err == nil {
+		p.setCurrent(r.caps)
+	}
 	return r.caps, r.err
 }
 
