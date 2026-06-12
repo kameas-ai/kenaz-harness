@@ -347,18 +347,27 @@ func TestSitesInit_FleetDisabled_StillWorks(t *testing.T) {
 // client is present but the sites_hosting capability is absent from the
 // capability cache, tools return isError:true with a message mentioning
 // "Enterprise" (the capability-absent branch of authCheck — FR-101).
+//
+// NOTE: This test is intentionally NOT parallel. It writes to the global
+// zalando/go-keyring mock store (via fleet.SaveTokens), and that store's
+// internal map is not goroutine-safe. Running parallel would race with any
+// concurrent test that reads the same mock keyring (data-race detected by
+// -race on Linux CI). The t.Cleanup call below restores the keyring to its
+// pre-test state so subsequent tests that expect no tokens still pass.
 func TestSitesDeploy_CapabilityAbsent_IsError(t *testing.T) {
 	if fleet.Disabled() {
 		t.Skip("HARNESS_FLEET_DISABLED=1: capability-absent path requires fleet enabled")
 	}
-	t.Parallel()
 
 	dataDir := t.TempDir()
 
 	// Store a real (mock-keychain) access token so LoadTokens() succeeds.
+	// ClearTokens is registered first so it runs after the test body — it
+	// wipes the sentinel so tests that expect a signed-out state still work.
 	if err := fleet.SaveTokens(fleet.TokenSet{AccessToken: "test-token-sentinel"}); err != nil {
 		t.Fatalf("SaveTokens: %v", err)
 	}
+	t.Cleanup(func() { _ = fleet.ClearTokens() })
 
 	// Write a capabilities snapshot with no sites_hosting so the cap check fires.
 	caps := fleet.Capabilities{
