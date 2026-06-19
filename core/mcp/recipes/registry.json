@@ -28,15 +28,15 @@
       "display_name": "Fetch (HTTP)",
       "description": "Generic HTTP fetch tool: the model can request a URL and read the response. No credentials required; the recipe imposes no allow-list — limit access via Cedar policy if you need a domain whitelist.",
       "category": "fetch",
-      "command": ["npx", "-y", "@modelcontextprotocol/server-fetch"],
+      "command": ["uvx", "mcp-server-fetch"],
       "env_keys": [],
       "config_options": [],
       "capabilities": { "tools": true, "resources": false, "prompts": false, "sampling": false },
       "docs_url": "https://github.com/modelcontextprotocol/servers-archived/tree/main/src/fetch",
-      "init_timeout_ms": 10000,
+      "init_timeout_ms": 15000,
       "ping_period_ms": 30000,
       "sampling_policy": { "allowed": false, "default": false },
-      "warning": "npm fetch on first run can take 5–15 s."
+      "warning": "Python server (PyPI mcp-server-fetch) launched via uvx; requires uv installed. First run downloads the package (5–15 s)."
     },
     {
       "id": "brave-search",
@@ -65,7 +65,7 @@
       "display_name": "SQLite",
       "description": "Read and write a local SQLite database. The model gets read_query, write_query, create_table, list_tables, and describe_table tools scoped to the database file you point it at.",
       "category": "filesystem",
-      "command": ["npx", "-y", "@modelcontextprotocol/server-sqlite", "${DB_PATH}"],
+      "command": ["uvx", "mcp-server-sqlite", "--db-path", "${DB_PATH}"],
       "env_keys": [],
       "config_options": [
         {
@@ -79,10 +79,10 @@
       ],
       "capabilities": { "tools": true, "resources": false, "prompts": false, "sampling": false },
       "docs_url": "https://github.com/modelcontextprotocol/servers-archived/tree/main/src/sqlite",
-      "init_timeout_ms": 10000,
+      "init_timeout_ms": 15000,
       "ping_period_ms": 30000,
       "sampling_policy": { "allowed": false, "default": false },
-      "warning": "npm fetch on first run can take 5–15 s."
+      "warning": "Python server (PyPI mcp-server-sqlite) launched via uvx; requires uv installed. First run downloads the package (5–15 s)."
     },
     {
       "id": "postgres",
@@ -139,22 +139,22 @@
       "display_name": "Time",
       "description": "Time-zone aware utilities: get the current time in a given IANA timezone, convert times between zones. No credentials required.",
       "category": "fetch",
-      "command": ["npx", "-y", "@modelcontextprotocol/server-time"],
+      "command": ["uvx", "mcp-server-time"],
       "env_keys": [],
       "config_options": [],
       "capabilities": { "tools": true, "resources": false, "prompts": false, "sampling": false },
       "docs_url": "https://github.com/modelcontextprotocol/servers-archived/tree/main/src/time",
-      "init_timeout_ms": 10000,
+      "init_timeout_ms": 15000,
       "ping_period_ms": 30000,
       "sampling_policy": { "allowed": false, "default": false },
-      "warning": "npm fetch on first run can take 5–15 s."
+      "warning": "Python server (PyPI mcp-server-time) launched via uvx; requires uv installed. First run downloads the package (5–15 s)."
     },
     {
       "id": "git",
       "display_name": "Git",
       "description": "Read git history, diff, blame, and branch metadata for a single repository checkout. The recipe is read-only by default and is scoped to the repo path you select.",
       "category": "filesystem",
-      "command": ["npx", "-y", "@modelcontextprotocol/server-git", "--repository", "${REPO_PATH}"],
+      "command": ["uvx", "mcp-server-git", "--repository", "${REPO_PATH}"],
       "env_keys": [],
       "config_options": [
         {
@@ -168,10 +168,10 @@
       ],
       "capabilities": { "tools": true, "resources": false, "prompts": false, "sampling": false },
       "docs_url": "https://github.com/modelcontextprotocol/servers-archived/tree/main/src/git",
-      "init_timeout_ms": 10000,
+      "init_timeout_ms": 15000,
       "ping_period_ms": 30000,
       "sampling_policy": { "allowed": false, "default": false },
-      "warning": "npm fetch on first run can take 5–15 s."
+      "warning": "Python server (PyPI mcp-server-git) launched via uvx; requires uv installed. First run downloads the package (5–15 s)."
     },
     {
       "id": "puppeteer",
