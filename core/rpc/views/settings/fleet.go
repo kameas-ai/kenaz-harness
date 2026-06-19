@@ -14,6 +14,8 @@ import (
 	"github.com/kameas-ai/kenaz-harness/core/mcp/recipes"
 	cedarpolicy "github.com/kameas-ai/kenaz-harness/core/policy/cedar"
 	"github.com/kameas-ai/kenaz-harness/core/slashcmd"
+	"go.opentelemetry.io/otel/sdk/resource"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 )
 
 // AdapterRegistrar is the minimal interface from the LLM registry that the
@@ -52,6 +54,23 @@ type fleetState struct {
 	// Both may be nil when fleet skill sync is not configured.
 	skillStore    *slashcmd.SkillStore
 	skillRegistry *slashcmd.Registry
+
+	// otlpPipeline is the post-login OTLP export pipeline
+	// (harness-fleet-otlp-export-01NTLMEX01). Set via SetFleetOTLPPipeline;
+	// nil means OTLP export is not configured (OSS build / fleet disabled).
+	otlpPipeline *fleet.FleetOTLPPipeline
+
+	// telemetryRes is the startup OTel resource from telemetry.Init, held
+	// so Activate can merge it with identity attrs.
+	telemetryRes *resource.Resource
+
+	// consent is the TelemetryConsent from the rpc API, used to gate
+	// Activate: if consent == "none" the pipeline is not activated.
+	consent *fleet.TelemetryConsent
+
+	// tp is the TracerProvider from telemetry.Init; held so Activate can
+	// register/unregister span processors on re-login.
+	tp *sdktrace.TracerProvider
 }
 
 // SetFleetClient wires a fleet.Client into the API and starts the capability
@@ -124,6 +143,36 @@ func (a *API) SetCedarEngine(engine *cedarpolicy.Engine) {
 	a.fleet.mu.Lock()
 	defer a.fleet.mu.Unlock()
 	a.fleet.cedarEngine = engine
+}
+
+// SetFleetOTLPPipeline wires the post-login OTLP export pipeline into the
+// fleet state. Call this after SetFleetClient, before FleetSignIn or
+// FleetRefreshIdentity, so the pipeline is ready to Activate on the first
+// enroll success.
+//
+//   - p:          the FleetOTLPPipeline constructed in core.New.
+//   - startupRes: the OTel resource from telemetry.Telemetry.Resource; merged
+//     with identity attrs at Activate time.
+//   - tp:         the TracerProvider from telemetry.Telemetry.TracerProvider;
+//     used by Activate to register the post-login BatchSpanProcessor.
+//   - consent:    the TelemetryConsent instance (gates on EffectiveLevel).
+//
+// (harness-fleet-otlp-export-01NTLMEX01 wiring seam)
+func (a *API) SetFleetOTLPPipeline(
+	p *fleet.FleetOTLPPipeline,
+	startupRes *resource.Resource,
+	tp *sdktrace.TracerProvider,
+	consent *fleet.TelemetryConsent,
+) {
+	if a.fleet == nil {
+		a.fleet = &fleetState{}
+	}
+	a.fleet.mu.Lock()
+	defer a.fleet.mu.Unlock()
+	a.fleet.otlpPipeline = p
+	a.fleet.telemetryRes = startupRes
+	a.fleet.tp = tp
+	a.fleet.consent = consent
 }
 
 // SetSkillRefs wires the fleet-skill store and slash registry into the fleet
@@ -356,7 +405,72 @@ func (a *API) fleetEnroll(ctx context.Context) (FleetIdentity, error) {
 		"email", id.Email,
 		"tier", id.Tier,
 	)
+
+	// Activate the fleet OTLP export pipeline post-enroll.
+	// This is the post-login trigger point (FR-003): identity attrs are now
+	// known (user.id = JWT sub resolved via enroll response, org.id =
+	// enroll org_id, machine.id = nodeID), so we can build the identity
+	// resource and register the OTLP processors/exporters.
+	a.activateOTLPPipeline(ctx, id, nodeID)
+
 	return fleetIdentityToView(id), nil
+}
+
+// activateOTLPPipeline calls FleetOTLPPipeline.Activate post-enroll.
+// Gates on: pipeline wired, consent != "none", profile configured.
+// Best-effort: errors are logged at warn and do not fail the enroll flow.
+func (a *API) activateOTLPPipeline(ctx context.Context, id fleet.Identity, nodeID string) {
+	if a.fleet == nil {
+		return
+	}
+	a.fleet.mu.RLock()
+	pipeline := a.fleet.otlpPipeline
+	baseRes := a.fleet.telemetryRes
+	consent := a.fleet.consent
+	tp := a.fleet.tp
+	a.fleet.mu.RUnlock()
+
+	if pipeline == nil {
+		logging.L().Debug("fleet.otlp.activate.skipped", "reason", "pipeline_not_wired")
+		return
+	}
+
+	// Consent gate: "none" (default) → no OTLP export (NFR-005 / FR-006).
+	if consent != nil && consent.EffectiveLevel() == fleet.ConsentNone {
+		logging.L().Debug("fleet.otlp.activate.skipped", "reason", "consent_none")
+		return
+	}
+
+	profile := fleet.ResolveProfile()
+	otlpBase := fleet.OTLPBaseURL(profile)
+	if otlpBase == "" {
+		logging.L().Debug("fleet.otlp.activate.skipped", "reason", "no_fleet_url")
+		return
+	}
+
+	// kameas.user.id MUST equal the Zitadel JWT `sub` — the fleet OTLP
+	// receiver (validateResourceAttrs) rejects with 401 otherwise. The
+	// enroll response's user_id is the fleet-internal UUID, a DIFFERENT
+	// identity namespace, so decode the sub from the access token instead.
+	userID, subErr := fleet.SubjectFromAccessToken()
+	if subErr != nil || userID == "" {
+		reason := "empty"
+		if subErr != nil {
+			reason = subErr.Error()
+		}
+		logging.L().Warn("fleet.otlp.activate.no_subject", "org_id", id.OrgID, "err", reason)
+		return
+	}
+
+	attrs := fleet.IdentityAttrs{
+		UserID:    userID,
+		OrgID:     id.OrgID,
+		MachineID: nodeID,
+	}
+
+	if err := pipeline.Activate(ctx, otlpBase, baseRes, attrs, fleet.DefaultBearerProvider(), tp); err != nil {
+		logging.L().Warn("fleet.otlp.activate.failed", "err", err.Error())
+	}
 }
 
 // fleetIdentityToView converts a fleet.Identity to the view type.

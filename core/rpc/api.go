@@ -116,6 +116,8 @@ import (
 	wfsched "github.com/kameas-ai/kenaz-harness/core/workflows/scheduler"
 	schedulerPkg "github.com/kameas-ai/kenaz-harness/core/scheduler"
 	"github.com/zalando/go-keyring"
+	"go.opentelemetry.io/otel/sdk/resource"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 )
 
 // HarnessAPI is the boundary between the Wails-hosted Vue frontend and
@@ -1532,6 +1534,26 @@ func New(c *core.Core) *API {
 			tc, _ = corefleet.NewTelemetryConsent(os.TempDir(), corefleet.StaticTierReader{})
 		}
 		a.fleetAPI = &fleetview.Impl{Consent: tc}
+
+		// Wire the fleet OTLP export pipeline (harness-fleet-otlp-export-01NTLMEX01).
+		// SetFleetOTLPPipeline is called here because:
+		//   (a) tc (consent) is now known,
+		//   (b) telemetry is already up (c.Start() ran before rpc.New),
+		//   (c) settingsImpl is wired above so we can wire the activate hook.
+		if settingsImpl != nil {
+			var otlpRes *resource.Resource
+			var otlpTP *sdktrace.TracerProvider
+			if tel := c.Telemetry(); tel != nil {
+				otlpRes = tel.Resource
+				otlpTP = tel.TracerProvider
+			}
+			settingsImpl.SetFleetOTLPPipeline(
+				c.FleetOTLPPipeline(),
+				otlpRes,
+				otlpTP,
+				tc,
+			)
+		}
 	} else {
 		// Test-chassis path: create a consent with a temp dir so the
 		// RPC surface is non-nil (callers get "none" and SetLevel is a no-op
@@ -1587,6 +1609,30 @@ func New(c *core.Core) *API {
 			return id.Email, nil
 		}
 		a.cedarPublishAPI = cedarview.NewAPI(flCl, identityFn, flAudit)
+
+		// fleet-context-graph-sync-01NDFSEX17: wire the ContextGraphSyncer so
+		// Context_Publish / Context_Promote / Context_SyncStatus actually reach
+		// fleet. Without this wire the methods short-circuit via ErrFleetDisabled
+		// because contextsview.New() is called early (before flCl is resolved)
+		// and the syncer is left nil.
+		//
+		// Gating: a type assertion to *contextsview.API is safe because
+		// newContextsAPI always returns *contextsview.API (the interface is only
+		// widened for the field type). A nil flCl / isNop client is deliberately
+		// allowed — NewContextGraphSyncer handles the nop case via canPull /
+		// canPush which return ErrFleetDisabled, preserving the offline posture.
+		if impl, ok := a.contextsAPI.(*contextsview.API); ok {
+			var caps *corefleet.CapabilityPoller
+			if a.settingsImpl != nil {
+				caps = a.settingsImpl.CapabilityPoller()
+			}
+			syncer := corefleet.NewContextGraphSyncer(flCl, flDataDir, caps)
+			impl.WithSyncer(syncer)
+			logging.L().Info("rpc.context_graph_syncer.wired",
+				"fleet_client_nil", flCl == nil,
+				"data_dir", flDataDir,
+			)
+		}
 
 		// fleet-skills-sync-01NDFSEX18 WP02: wire fleet skill dependencies onto
 		// the slashAPI. The capability snapshot is read lazily from the poller at

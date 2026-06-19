@@ -1366,6 +1366,26 @@ export function Slashcmd_Save(arg1) {
   return window['go']['rpc']['Bindings']['Slashcmd_Save'](arg1);
 }
 
+export function Slashcmd_SkillInstall(arg1, arg2) {
+  return window['go']['rpc']['Bindings']['Slashcmd_SkillInstall'](arg1, arg2);
+}
+
+export function Slashcmd_SkillList() {
+  return window['go']['rpc']['Bindings']['Slashcmd_SkillList']();
+}
+
+export function Slashcmd_SkillPublish(arg1, arg2, arg3) {
+  return window['go']['rpc']['Bindings']['Slashcmd_SkillPublish'](arg1, arg2, arg3);
+}
+
+export function Slashcmd_SkillRenameLocalTrigger(arg1, arg2) {
+  return window['go']['rpc']['Bindings']['Slashcmd_SkillRenameLocalTrigger'](arg1, arg2);
+}
+
+export function Slashcmd_SkillUninstall(arg1) {
+  return window['go']['rpc']['Bindings']['Slashcmd_SkillUninstall'](arg1);
+}
+
 export function Storage_ApplyDriftFix(arg1) {
   return window['go']['rpc']['Bindings']['Storage_ApplyDriftFix'](arg1);
 }

@@ -6173,6 +6173,44 @@ export namespace slashcmd {
 	        this.metadata = source["metadata"];
 	    }
 	}
+	export class SkillItemWire {
+	    id: string;
+	    catalogId?: string;
+	    version?: string;
+	    source: string;
+	    trigger: string;
+	    localTrigger?: string;
+	    kind: string;
+	    description?: string;
+	    body?: string;
+	    orgManaged: boolean;
+	    disabled?: boolean;
+	    shadowed?: boolean;
+	    installedAt?: number;
+	    updatedAt?: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new SkillItemWire(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.catalogId = source["catalogId"];
+	        this.version = source["version"];
+	        this.source = source["source"];
+	        this.trigger = source["trigger"];
+	        this.localTrigger = source["localTrigger"];
+	        this.kind = source["kind"];
+	        this.description = source["description"];
+	        this.body = source["body"];
+	        this.orgManaged = source["orgManaged"];
+	        this.disabled = source["disabled"];
+	        this.shadowed = source["shadowed"];
+	        this.installedAt = source["installedAt"];
+	        this.updatedAt = source["updatedAt"];
+	    }
+	}
 	export class UserCommandInput {
 	    name: string;
 	    kind: string;

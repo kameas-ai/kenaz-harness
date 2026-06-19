@@ -29,6 +29,7 @@ import (
 	"github.com/kameas-ai/kenaz-harness/core/bundle/cache"
 	"github.com/kameas-ai/kenaz-harness/core/config"
 	"github.com/kameas-ai/kenaz-harness/core/event"
+	"github.com/kameas-ai/kenaz-harness/core/fleet"
 	"github.com/kameas-ai/kenaz-harness/core/llm"
 	"github.com/kameas-ai/kenaz-harness/core/logging"
 	"github.com/kameas-ai/kenaz-harness/core/mcp"
@@ -177,6 +178,13 @@ type Core struct {
 	// telemetry-otel NFR-003).
 	telemetryMu sync.Mutex
 	telemetry   *telemetry.Telemetry
+
+	// fleetOTLPPipeline manages the post-login OTLP export side-channel
+	// (harness-fleet-otlp-export-01NTLMEX01). Constructed in New so its
+	// lazy metric/log exporters can be registered at initTelemetry time.
+	// Exposed via FleetOTLPPipeline() for the rpc layer to call Activate
+	// after enroll.
+	fleetOTLPPipeline *fleet.FleetOTLPPipeline
 }
 
 // New constructs a Core. It validates DataDir and wires any
@@ -198,6 +206,11 @@ func New(opts Options) (*Core, error) {
 	c.LLMs = opts.Subsystems.LLMs
 	c.MCP = opts.Subsystems.MCP
 	c.mcpRecipeBootstrap = opts.Subsystems.MCPRecipeBootstrap
+	// Construct the fleet OTLP pipeline early (before initTelemetry) so
+	// its lazy metric/log exporters can be registered in the PeriodicReader
+	// and BatchProcessor at telemetry.Init time. The pipeline is inactive
+	// (no-ops) until Activate is called after successful enroll.
+	c.fleetOTLPPipeline = fleet.NewFleetOTLPPipeline(nil)
 	return c, nil
 }
 
@@ -284,6 +297,17 @@ func (c *Core) Start(ctx context.Context) error {
 	return nil
 }
 
+// FleetOTLPPipeline returns the fleet OTLP export pipeline constructed in
+// New. The rpc layer calls this to wire Activate after successful enroll.
+// Returns nil when the Core was constructed without a DataDir (test-chassis
+// path).
+func (c *Core) FleetOTLPPipeline() *fleet.FleetOTLPPipeline {
+	if c == nil {
+		return nil
+	}
+	return c.fleetOTLPPipeline
+}
+
 // initTelemetry constructs the telemetry surface lazily under Start.
 // Errors degrade silently: chat surface continues without telemetry
 // (NFR-003 spirit). Held under telemetryMu so concurrent Start +
@@ -299,7 +323,8 @@ func (c *Core) initTelemetry() {
 		logging.L().Warn("telemetry.init_skipped", "reason", "storage unavailable")
 		return
 	}
-	tel, err := telemetry.Init(context.Background(), telemetry.Config{
+
+	cfg := telemetry.Config{
 		DataDir:           c.opts.DataDir,
 		BuildVersion:      c.opts.BuildVersion,
 		Storage:           storage,
@@ -308,7 +333,21 @@ func (c *Core) initTelemetry() {
 		OTLPHeaders:       c.opts.Telemetry.OTLPHeaders,
 		OTLPInsecure:      c.opts.Telemetry.OTLPInsecure,
 		InstallSlogBridge: true,
-	})
+	}
+
+	// Wire the fleet OTLP lazy exporters so they get a PeriodicReader /
+	// BatchProcessor at provider construction time. They no-op until
+	// FleetOTLPPipeline.Activate is called post-login (harness-fleet-otlp-
+	// export-01NTLMEX01 constraint 1 / resource immutability solution).
+	if c.fleetOTLPPipeline != nil && !fleet.Disabled() {
+		profile := fleet.ResolveProfile()
+		if profile.Configured() {
+			cfg.MetricExporters = append(cfg.MetricExporters, c.fleetOTLPPipeline.MetricExporter())
+			cfg.LogExporters = append(cfg.LogExporters, c.fleetOTLPPipeline.LogExporter())
+		}
+	}
+
+	tel, err := telemetry.Init(context.Background(), cfg)
 	if err != nil {
 		logging.L().Warn("telemetry.init_failed", "err", err.Error())
 		return
@@ -349,6 +388,11 @@ func (c *Core) Shutdown(ctx context.Context) error {
 	}
 	if c.Events != nil {
 		record(c.Events.Close())
+	}
+	// Fleet OTLP pipeline drains before telemetry so any in-flight
+	// span processors are unregistered before the TracerProvider shuts down.
+	if c.fleetOTLPPipeline != nil {
+		record(c.fleetOTLPPipeline.Shutdown(ctx))
 	}
 	// Telemetry teardown runs before the DB closes so any flush the
 	// providers emit on Shutdown lands in the local SQLite tables.
