@@ -1528,10 +1528,30 @@ func New(c *core.Core) *API {
 
 	// Wire Fleet telemetry consent view (fleet-otel-archival-01NDFSEX11 WP07).
 	if c != nil && c.DataDir() != "" {
-		tc, err := corefleet.NewTelemetryConsent(c.DataDir(), corefleet.StaticTierReader{})
+		// Back the consent tier off the live capability poller (settingsImpl was
+		// wired + SetFleetClient'd above, so the poller exists). Without this the
+		// consent clamps every level to "none" at tier=free — EffectiveLevel
+		// fails closed — so ConsentFull/Aggregate could never activate the OTLP
+		// pipeline regardless of the user's real (enterprise) tier. Lazy read so
+		// the poller's first refresh (which carries the enrolled tier) is picked
+		// up by activation time. (completes the StaticTierReader placeholder)
+		tierReader := corefleet.TierReaderFunc(func() string {
+			if a.settingsImpl == nil {
+				return "free"
+			}
+			p := a.settingsImpl.CapabilityPoller()
+			if p == nil {
+				return "free"
+			}
+			if t := p.Current().Tier; t != "" {
+				return t
+			}
+			return "free"
+		})
+		tc, err := corefleet.NewTelemetryConsent(c.DataDir(), tierReader)
 		if err != nil {
 			logging.L().Warn("fleet.consent.init.failed", "err", err)
-			tc, _ = corefleet.NewTelemetryConsent(os.TempDir(), corefleet.StaticTierReader{})
+			tc, _ = corefleet.NewTelemetryConsent(os.TempDir(), tierReader)
 		}
 		a.fleetAPI = &fleetview.Impl{Consent: tc}
 
