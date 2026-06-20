@@ -135,6 +135,49 @@
       "warning": "npm fetch on first run can take 5–15 s."
     },
     {
+      "id": "gmail",
+      "display_name": "Gmail",
+      "description": "Read, search, send, draft, and label Gmail messages through the Gmail API. Requires a Google Cloud OAuth client and a one-time browser sign-in (see setup notes).",
+      "category": "communication",
+      "command": ["npx", "-y", "@gongrzhe/server-gmail-autoauth-mcp"],
+      "env_keys": [],
+      "config_options": [],
+      "capabilities": { "tools": true, "resources": false, "prompts": false, "sampling": false },
+      "docs_url": "https://github.com/GongRzhe/Gmail-MCP-Server",
+      "init_timeout_ms": 30000,
+      "ping_period_ms": 30000,
+      "sampling_policy": { "allowed": false, "default": false },
+      "warning": "One-time setup required before install works: create a Google Cloud OAuth client (Desktop or Web), save gcp-oauth.keys.json to ~/.gmail-mcp/, then run `npx @gongrzhe/server-gmail-autoauth-mcp auth` once to authorize in your browser (creds cached at ~/.gmail-mcp/credentials.json). First npm fetch can take 10–20 s."
+    },
+    {
+      "id": "outlook",
+      "display_name": "Outlook (Microsoft 365)",
+      "description": "Read, search, send, and organize Outlook mail — plus calendar and contacts — via the Microsoft Graph API. Signs in with a device code in your browser on first use; personal accounts need no credentials.",
+      "category": "communication",
+      "command": ["npx", "-y", "@softeria/ms-365-mcp-server", "--preset", "outlook"],
+      "env_keys": [
+        {
+          "name": "MS365_MCP_CLIENT_ID",
+          "display": "Azure app client ID (optional — for work/school accounts)",
+          "docs_url": "https://github.com/softeria/ms-365-mcp-server#authentication",
+          "required": false
+        },
+        {
+          "name": "MS365_MCP_TENANT_ID",
+          "display": "Azure tenant ID (optional — defaults to 'common'; 'consumers' for personal)",
+          "docs_url": "https://github.com/softeria/ms-365-mcp-server#authentication",
+          "required": false
+        }
+      ],
+      "config_options": [],
+      "capabilities": { "tools": true, "resources": false, "prompts": false, "sampling": false },
+      "docs_url": "https://github.com/softeria/ms-365-mcp-server",
+      "init_timeout_ms": 30000,
+      "ping_period_ms": 30000,
+      "sampling_policy": { "allowed": false, "default": false },
+      "warning": "First use triggers a device-code sign-in: the server prints a URL + code for you to authorize in your browser. Personal accounts work out of the box; work/school accounts may require a custom Azure app (set the optional client/tenant IDs above). First npm fetch can take 10–20 s."
+    },
+    {
       "id": "time",
       "display_name": "Time",
       "description": "Time-zone aware utilities: get the current time in a given IANA timezone, convert times between zones. No credentials required.",

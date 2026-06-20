@@ -18,6 +18,8 @@ var expectedRegistryIDs = []string{
 	"sqlite",
 	"postgres",
 	"slack",
+	"gmail",
+	"outlook",
 	"time",
 	"git",
 	"puppeteer",
