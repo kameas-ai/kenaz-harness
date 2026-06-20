@@ -13,7 +13,8 @@
 import { ref, computed, onMounted } from 'vue';
 import { useHarnessClient } from '@/lib/harnessClientContext';
 import { Wrench, Search, Folder, Brain, Globe } from '@/shell/icons';
-import type { RecipeListing, RecipeCategory } from '@/lib/types';
+import type { RecipeListing, RecipeCategory, Recipe, RecipeStatus } from '@/lib/types';
+import RecipeKeyPromptModal from './RecipeKeyPromptModal.vue';
 
 const emit = defineEmits<{
   (e: 'installed'): void;
@@ -26,6 +27,38 @@ const loading = ref(false);
 const error = ref<string | null>(null);
 const busyById = ref<Record<string, boolean>>({});
 const rowError = ref<Record<string, string | null>>({});
+
+// Recipe currently being configured in the install modal. When set, the
+// RecipeKeyPromptModal collects the recipe's env keys / config options /
+// warning ack and runs the install with the user-provided values — instead
+// of the old behaviour of calling install with empty maps and surfacing the
+// "required env key missing" error inline.
+const configuringRecipe = ref<Recipe | null>(null);
+
+// A recipe needs the install modal when it has credentials to collect, config
+// options to set, or a warning the user must acknowledge. Zero-config recipes
+// (e.g. fetch) install in one click without an intermediate dialog.
+function needsConfigure(recipe: Recipe): boolean {
+  return (
+    recipe.envKeys.length > 0 ||
+    (recipe.configOptions?.length ?? 0) > 0 ||
+    Boolean(recipe.warning)
+  );
+}
+
+function installRecipe(
+  id: string,
+  env: Record<string, string>,
+  config: Record<string, unknown>,
+): Promise<RecipeStatus> {
+  return client.tools.recipes.install(id, env, config);
+}
+
+function onModalInstalled() {
+  configuringRecipe.value = null;
+  emit('installed');
+  void load();
+}
 
 function categoryIcon(category: RecipeCategory) {
   switch (category) {
@@ -60,8 +93,17 @@ async function load() {
 async function install(listing: RecipeListing) {
   const id = listing.recipe.id;
   if (busyById.value[id]) return;
-  busyById.value = { ...busyById.value, [id]: true };
   rowError.value = { ...rowError.value, [id]: null };
+
+  // Recipes that need credentials, config, or a warning ack are configured
+  // through the modal so the user supplies what's required up front — never a
+  // raw "missing key" error after the fact.
+  if (needsConfigure(listing.recipe)) {
+    configuringRecipe.value = listing.recipe;
+    return;
+  }
+
+  busyById.value = { ...busyById.value, [id]: true };
   try {
     await client.tools.recipes.install(id, {}, {});
     emit('installed');
@@ -150,5 +192,16 @@ const visibleListings = computed(() => listings.value);
         </button>
       </div>
     </div>
+
+    <!-- Install modal: collects env keys / config / warning ack for recipes
+         that need them, instead of erroring out after a blank install. -->
+    <RecipeKeyPromptModal
+      v-if="configuringRecipe"
+      :open="configuringRecipe !== null"
+      :recipe="configuringRecipe"
+      :install="installRecipe"
+      @close="configuringRecipe = null"
+      @installed="onModalInstalled"
+    />
   </div>
 </template>
