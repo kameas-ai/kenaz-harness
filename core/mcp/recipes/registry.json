@@ -4,24 +4,29 @@
     {
       "id": "github",
       "display_name": "GitHub",
-      "description": "Search repositories, read files, list issues + pull requests, and fetch repository metadata. Requires a GitHub personal access token.",
+      "description": "Search repositories, read files, manage issues + pull requests, and fetch repository metadata via GitHub's official remote MCP server. Sign in with GitHub (OAuth) — no token to paste — or supply a personal access token as a fallback.",
       "category": "search",
-      "command": ["npx", "-y", "@modelcontextprotocol/server-github"],
+      "transport": "http",
+      "url": "https://api.githubcopilot.com/mcp/",
+      "auth": {
+        "kind": "mcp_oauth",
+        "client_id": "",
+        "scopes": ["repo", "read:org", "read:user"]
+      },
       "env_keys": [
         {
-          "name": "GITHUB_TOKEN",
-          "display": "GitHub personal access token",
+          "name": "GITHUB_PERSONAL_ACCESS_TOKEN",
+          "display": "GitHub personal access token (optional — fallback if you don't sign in)",
           "docs_url": "https://github.com/settings/tokens",
-          "required": true
+          "required": false
         }
       ],
       "config_options": [],
       "capabilities": { "tools": true, "resources": false, "prompts": false, "sampling": false },
-      "docs_url": "https://github.com/modelcontextprotocol/servers-archived/tree/main/src/github",
-      "init_timeout_ms": 10000,
+      "docs_url": "https://github.com/github/github-mcp-server",
+      "init_timeout_ms": 15000,
       "ping_period_ms": 30000,
-      "sampling_policy": { "allowed": false, "default": false },
-      "warning": "npm fetch on first run can take 5–15 s."
+      "sampling_policy": { "allowed": false, "default": false }
     },
     {
       "id": "fetch",
