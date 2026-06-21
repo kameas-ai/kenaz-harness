@@ -2082,6 +2082,14 @@ export interface ToolsRecipesClient {
     env: Record<string, string>,
     config?: Record<string, unknown>,
   ): Promise<RecipeStatus>;
+  /**
+   * signIn runs the MCP OAuth authorization flow for a remote recipe whose
+   * `recipe.auth.kind === 'mcp_oauth'`: it opens the system browser, the user
+   * approves access, and the harness stores the bearer token and respawns the
+   * recipe authenticated. Rejects when the recipe is not OAuth-capable or has
+   * no configured client_id.
+   */
+  signIn(id: string): Promise<RecipeStatus>;
   uninstall(id: string): Promise<void>;
   forgetKey(id: string, envName: string): Promise<void>;
   status(id: string): Promise<RecipeStatus>;
@@ -3165,6 +3173,8 @@ export function createHarnessClient(): HarnessClient {
           adaptRecipeStatus(
             await b().Tools_InstallRecipe(id, env, config ?? {}),
           ),
+        signIn: async (id) =>
+          adaptRecipeStatus(await b().Tools_SignInRecipe(id)),
         uninstall: (id) => b().Tools_UninstallRecipe(id),
         forgetKey: (id, envName) => b().Tools_ForgetRecipeKey(id, envName),
         status: async (id) =>
@@ -3989,6 +3999,17 @@ export function createFakeHarnessClient(
       recipes: {
         list: async () => [],
         install: async (id) => ({
+          id,
+          enabled: true,
+          state: 'starting',
+          restartAttempts: 0,
+          keysPresent: true,
+          pid: 0,
+          toolCount: 0,
+          resourceCount: 0,
+          promptCount: 0,
+        }),
+        signIn: async (id) => ({
           id,
           enabled: true,
           state: 'starting',

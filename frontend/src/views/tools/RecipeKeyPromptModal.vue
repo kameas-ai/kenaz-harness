@@ -79,6 +79,29 @@ const configValues = ref<Record<string, unknown>>({});
 const submitting = ref(false);
 const errorMsg = ref<string | null>(null);
 const inputsContainer = ref<HTMLElement | null>(null);
+
+// OAuth sign-in (preferred over pasting a token). When the recipe declares
+// auth.kind === 'mcp_oauth', the modal leads with a "Sign in" button that runs
+// the browser OAuth flow; any env keys become an optional fallback.
+const oauthAuth = computed(() =>
+  props.recipe.auth?.kind === 'mcp_oauth' ? props.recipe.auth : null,
+);
+const signingIn = ref(false);
+
+async function signIn() {
+  if (signingIn.value || !oauthAuth.value) return;
+  signingIn.value = true;
+  errorMsg.value = null;
+  try {
+    const status = await client.tools.recipes.signIn(props.recipe.id);
+    emit('installed', status);
+    emit('close');
+  } catch (e) {
+    errorMsg.value = e instanceof Error ? e.message : String(e);
+  } finally {
+    signingIn.value = false;
+  }
+}
 // Hazard-recipe acknowledgment (recipes carrying a `warning` string).
 // The user must check this box before Install becomes clickable.
 const warningAck = ref(false);
@@ -412,6 +435,32 @@ function onKeydown(event: KeyboardEvent) {
         <p class="text-[12px] text-ink-muted max-w-prose">
           {{ recipe.description }}
         </p>
+
+        <!-- OAuth sign-in (preferred). Leads the modal for mcp_oauth recipes;
+             env keys below become an optional fallback. -->
+        <section
+          v-if="oauthAuth"
+          class="rounded-sm border border-accent-hairline bg-accent-glow/30 px-3 py-3 space-y-2"
+          data-testid="recipe-modal-oauth-section"
+        >
+          <div class="text-[11px] uppercase tracking-[0.18em] text-ink-subtle">
+            Sign in
+          </div>
+          <p class="text-[12px] text-ink-muted leading-snug max-w-prose">
+            Sign in with your account in the browser — no token to paste. The
+            harness stores the credential securely and refreshes it
+            automatically.
+          </p>
+          <button
+            type="button"
+            class="rounded-sm border border-accent-hairline bg-surface-0 px-3 py-1.5 font-ui text-[12px] text-accent hover:bg-accent-glow disabled:opacity-50 disabled:cursor-not-allowed"
+            :disabled="signingIn"
+            data-testid="recipe-modal-signin-btn"
+            @click="signIn"
+          >
+            {{ signingIn ? 'Waiting for browser…' : `Sign in to ${recipe.displayName}` }}
+          </button>
+        </section>
 
         <!-- Recommended policy install (cedar-policy-editor-ui-01KQ8TD6 WP03) -->
         <!-- Shown when the recipe ships with a recommended Cedar policy template,
