@@ -371,6 +371,40 @@ func TestToServerSpec_ConfigDataDirScalar(t *testing.T) {
 	}
 }
 
+// TestToServerSpec_HTTPHeadersAndPostURLPropagate verifies that a remote
+// (http) recipe's HeadersTemplate and PostURL survive into the ServerSpec.
+// Without this the OAuth Authorization header (and SSE post URL) would be
+// silently dropped and the connection could never authenticate.
+func TestToServerSpec_HTTPHeadersAndPostURLPropagate(t *testing.T) {
+	r := recipes.Recipe{
+		ID:        "remote",
+		Transport: recipes.TransportHTTP,
+		URL:       "https://api.example.com/mcp/",
+		HeadersTemplate: map[string]string{
+			"Authorization": "Bearer ${MCP_OAUTH_TOKEN}",
+		},
+		PostURL: "https://api.example.com/mcp/post",
+	}
+	spec := r.ToServerSpec(map[string]string{"MCP_OAUTH_TOKEN": "tok"}, nil)
+	if spec.Transport != recipes.TransportHTTP {
+		t.Errorf("Transport = %q, want http", spec.Transport)
+	}
+	if spec.URL != "https://api.example.com/mcp/" {
+		t.Errorf("URL = %q", spec.URL)
+	}
+	if spec.HeadersTemplate["Authorization"] != "Bearer ${MCP_OAUTH_TOKEN}" {
+		t.Errorf("HeadersTemplate not propagated: %v", spec.HeadersTemplate)
+	}
+	if spec.PostURL != "https://api.example.com/mcp/post" {
+		t.Errorf("PostURL = %q", spec.PostURL)
+	}
+	// Mutating the recipe's header map must not disturb the spec (defensive copy).
+	r.HeadersTemplate["Authorization"] = "tampered"
+	if spec.HeadersTemplate["Authorization"] == "tampered" {
+		t.Error("HeadersTemplate not defensively copied")
+	}
+}
+
 // TestPromptOnFirstUseRoundTrip verifies that the PromptOnFirstUse slice
 // survives JSON marshal → unmarshal exactly (WP06 requirement).
 func TestPromptOnFirstUseRoundTrip(t *testing.T) {

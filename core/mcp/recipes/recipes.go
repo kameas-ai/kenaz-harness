@@ -467,12 +467,28 @@ func (r *Recipe) ToServerSpec(env map[string]string, config map[string]any) mcp.
 		transport = TransportStdio
 	}
 
+	// Propagate the per-request header template + SSE post URL for remote
+	// (http/sse) recipes. Without this, an http recipe's HeadersTemplate
+	// (e.g. an Authorization bearer for an OAuth remote server) would be
+	// silently dropped and the connection would never authenticate. Values
+	// may carry ${ENV_VAR} tokens that the transport factory substitutes from
+	// Env at connection-open time.
+	var headers map[string]string
+	if len(r.HeadersTemplate) > 0 {
+		headers = make(map[string]string, len(r.HeadersTemplate))
+		for k, v := range r.HeadersTemplate {
+			headers[k] = v
+		}
+	}
+
 	return mcp.ServerSpec{
-		Name:      r.ID,
-		Transport: transport,
-		Command:   cmd,
-		URL:       r.URL,
-		Env:       envCopy,
+		Name:            r.ID,
+		Transport:       transport,
+		Command:         cmd,
+		URL:             r.URL,
+		PostURL:         r.PostURL,
+		Env:             envCopy,
+		HeadersTemplate: headers,
 	}
 }
 
