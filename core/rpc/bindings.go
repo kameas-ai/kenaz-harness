@@ -1660,6 +1660,12 @@ func (b *Bindings) Tools_InstallRecipe(id string, env map[string]string, config 
 	return b.api.Tools().InstallRecipe(b.ctx(), id, env, config)
 }
 
+// Tools_SignInRecipe runs the MCP OAuth sign-in for a remote recipe (opens the
+// system browser), persists the token, and respawns the recipe authenticated.
+func (b *Bindings) Tools_SignInRecipe(id string) (stdio.RecipeStatus, error) {
+	return b.api.Tools().SignInRecipe(b.ctx(), id)
+}
+
 func (b *Bindings) Tools_UninstallRecipe(id string) error {
 	return b.api.Tools().UninstallRecipe(b.ctx(), id)
 }

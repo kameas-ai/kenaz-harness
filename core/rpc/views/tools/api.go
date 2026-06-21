@@ -62,6 +62,12 @@ type ToolsAPI interface {
 	// optional options fall back to the recipe's declared Default.
 	// Recipes with no ConfigOptions ignore this argument.
 	InstallRecipe(ctx context.Context, id string, env map[string]string, config map[string]any) (stdio.RecipeStatus, error)
+	// SignInRecipe runs the MCP OAuth authorization flow for a remote
+	// recipe (Auth.Kind == mcp_oauth), opening the system browser, persists
+	// the resulting bearer token to the keychain, and respawns the recipe
+	// authenticated. Errors clearly when the recipe is not an OAuth recipe
+	// or has no configured client_id.
+	SignInRecipe(ctx context.Context, id string) (stdio.RecipeStatus, error)
 	// UninstallRecipe stops the running server (SIGTERM grace) and
 	// removes the entry from the persisted enabled list. Keychain
 	// entries persist — explicit deletion goes through ForgetRecipeKey.

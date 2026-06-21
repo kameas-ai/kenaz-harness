@@ -4832,6 +4832,24 @@ export namespace recipes {
 	        this.required = source["required"];
 	    }
 	}
+	export class RecipeAuth {
+	    kind: string;
+	    client_id?: string;
+	    scopes?: string[];
+	    token_env_var?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new RecipeAuth(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.kind = source["kind"];
+	        this.client_id = source["client_id"];
+	        this.scopes = source["scopes"];
+	        this.token_env_var = source["token_env_var"];
+	    }
+	}
 	export class SamplingPolicy {
 	    allowed: boolean;
 	    default: boolean;
@@ -4868,6 +4886,7 @@ export namespace recipes {
 	    recommended_policy_template?: string;
 	    prompt_on_first_use?: string[];
 	    pre_seeding_policy?: string;
+	    auth?: RecipeAuth;
 	
 	    static createFrom(source: any = {}) {
 	        return new Recipe(source);
@@ -4896,6 +4915,7 @@ export namespace recipes {
 	        this.recommended_policy_template = source["recommended_policy_template"];
 	        this.prompt_on_first_use = source["prompt_on_first_use"];
 	        this.pre_seeding_policy = source["pre_seeding_policy"];
+	        this.auth = this.convertValues(source["auth"], RecipeAuth);
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -4956,6 +4976,7 @@ export namespace recipes {
 		    return a;
 		}
 	}
+	
 	
 	
 	export class TranslationReport {

@@ -25,6 +25,13 @@ func KeychainLocator(recipeID, envName string) string {
 	return "mcp/" + recipeID + "/" + envName
 }
 
+// OAuthCredentialLocator returns the keychain locator under which a recipe's
+// MCP-OAuth StoredCredential blob is persisted: "mcp/<recipeID>/__oauth".
+// The double-underscore segment keeps it out of the env-key namespace.
+func OAuthCredentialLocator(recipeID string) string {
+	return "mcp/" + recipeID + "/__oauth"
+}
+
 // ResolveEnv resolves every EnvKey in recipe through backend and
 // returns the env map ready to attach to exec.Cmd.Env.
 //

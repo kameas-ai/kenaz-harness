@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"os/exec"
+	"runtime"
 	"time"
 )
 
@@ -133,4 +135,23 @@ func AuthorizeInteractive(ctx context.Context, cfg InteractiveConfig) (*Tokens, 
 func writeBrowserMessage(w http.ResponseWriter, msg string) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_, _ = fmt.Fprintf(w, "<!doctype html><html><body style=\"font-family:system-ui;padding:2rem\"><p>%s</p></body></html>", msg)
+}
+
+// OpenSystemBrowser opens rawURL in the default system browser (open on macOS,
+// start on Windows, xdg-open elsewhere). It is the production OpenBrowser hook
+// for AuthorizeInteractive; the process is detached (no Wait).
+func OpenSystemBrowser(rawURL string) error {
+	var cmd *exec.Cmd
+	switch runtime.GOOS {
+	case "darwin":
+		cmd = exec.Command("open", rawURL)
+	case "windows":
+		cmd = exec.Command("cmd", "/c", "start", rawURL)
+	default:
+		cmd = exec.Command("xdg-open", rawURL)
+	}
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("oauth: open browser (%s): %w", runtime.GOOS, err)
+	}
+	return nil
 }
