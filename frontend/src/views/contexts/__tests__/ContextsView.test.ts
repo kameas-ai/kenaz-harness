@@ -14,6 +14,7 @@ function provide(opts: {
   saveSpy?: (path: string, content: string) => Promise<void>;
   syncStatus?: ContextSyncStatusView;
   publishSpy?: (req: ContextPublishRequest) => Promise<ContextPublishResult>;
+  createFolderSpy?: (path: string) => Promise<void>;
 }) {
   const tree: ContextNode =
     opts.tree ?? { name: '', path: '', kind: 'folder' };
@@ -41,7 +42,7 @@ function provide(opts: {
         return v;
       },
       save: opts.saveSpy ?? (async () => undefined),
-      createFolder: async () => undefined,
+      createFolder: opts.createFolderSpy ?? (async () => undefined),
       rename: async () => undefined,
       delete: async () => undefined,
       recentlyApplied: async () => recent,
@@ -554,6 +555,59 @@ describe('ContextsView', () => {
       const errEl = w.find('[data-testid=context-sync-pull-err]');
       expect(errEl.exists()).toBe(true);
       expect(errEl.text()).toContain('fleet: timeout');
+    });
+  });
+
+  describe('create folder', () => {
+    it('prompts for a name and creates the folder with it (not a timestamp)', async () => {
+      const createFolderSpy = vi.fn(async () => undefined);
+      const tree: ContextNode = {
+        name: '',
+        path: '',
+        kind: 'folder',
+        children: [{ name: 'notes.md', path: 'notes.md', kind: 'file' }],
+      };
+      const { client } = provide({ tree, createFolderSpy });
+      const w = mount(ContextsView, {
+        global: { provide: { [HarnessClientKey as symbol]: client } },
+      });
+      await flushPromises();
+
+      // Reveal the inline name input.
+      await w.find('[data-testid=context-create-folder]').trigger('click');
+      const input = w.find('[data-testid=context-new-folder-input]');
+      expect(input.exists()).toBe(true);
+
+      // Type a name and confirm with Enter.
+      await input.setValue('Research notes');
+      await input.trigger('keydown.enter');
+      await flushPromises();
+
+      // createFolder is called with the typed name at the library root,
+      // NOT an auto-generated folder-<timestamp> placeholder.
+      expect(createFolderSpy).toHaveBeenCalledTimes(1);
+      expect(createFolderSpy).toHaveBeenCalledWith('Research notes');
+    });
+
+    it('cancels folder creation on Escape without calling createFolder', async () => {
+      const createFolderSpy = vi.fn(async () => undefined);
+      const { client } = provide({
+        tree: { name: '', path: '', kind: 'folder', children: [{ name: 'a.md', path: 'a.md', kind: 'file' }] },
+        createFolderSpy,
+      });
+      const w = mount(ContextsView, {
+        global: { provide: { [HarnessClientKey as symbol]: client } },
+      });
+      await flushPromises();
+
+      await w.find('[data-testid=context-create-folder]').trigger('click');
+      const input = w.find('[data-testid=context-new-folder-input]');
+      await input.setValue('scratch');
+      await input.trigger('keydown.esc');
+      await flushPromises();
+
+      expect(createFolderSpy).not.toHaveBeenCalled();
+      expect(w.find('[data-testid=context-new-folder-input]').exists()).toBe(false);
     });
   });
 });
