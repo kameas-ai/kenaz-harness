@@ -1442,6 +1442,10 @@ export function Tools_RequestAdditionalAllowedDir(arg1, arg2, arg3) {
   return window['go']['rpc']['Bindings']['Tools_RequestAdditionalAllowedDir'](arg1, arg2, arg3);
 }
 
+export function Tools_SignInRecipe(arg1) {
+  return window['go']['rpc']['Bindings']['Tools_SignInRecipe'](arg1);
+}
+
 export function Tools_UninstallRecipe(arg1) {
   return window['go']['rpc']['Bindings']['Tools_UninstallRecipe'](arg1);
 }
