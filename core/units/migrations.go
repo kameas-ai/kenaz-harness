@@ -24,6 +24,13 @@ const (
 	// can distinguish server-counter space from local-counter space and
 	// avoid silently overwriting un-synced local edits.
 	migrationIDUnitsSyncStateBaselines = "units/1102-sync-state-baselines"
+
+	// migrationIDUnitsConflictEdge identifies migration 1103 — extends the
+	// unit_edges.kind CHECK constraint to admit the Phase-3 'conflicts_with'
+	// edge kind (the enshrined-conflict marker). SQLite cannot ALTER a CHECK
+	// in place, so the table is rebuilt with the wider constraint, preserving
+	// every existing edge row and index.
+	migrationIDUnitsConflictEdge = "units/1103-conflict-edge"
 )
 
 // sqlUnitsSchema is the DDL for migration 1100. Three tables:
@@ -147,6 +154,38 @@ const sqlUnitsSyncStateBaselines = `
         ADD COLUMN synced_local_version INTEGER NOT NULL DEFAULT 0;
 `
 
+// sqlUnitsConflictEdge is the DDL for migration 1103 — it widens the
+// unit_edges.kind CHECK to include 'conflicts_with' (the enshrined-conflict
+// marker introduced by Phase-3 WP17). SQLite has no ALTER ... CHECK, so the
+// table is rebuilt: create the new shape, copy rows, drop the old table,
+// rename, and recreate the two traversal indexes. unit_edges is only ever a
+// child of units (no other table references it), so the DROP/RENAME is FK-safe
+// without toggling the foreign_keys pragma (which SQLite forbids inside the
+// migration transaction anyway).
+const sqlUnitsConflictEdge = `
+    CREATE TABLE unit_edges_new (
+        id          TEXT PRIMARY KEY,
+        from_id     TEXT NOT NULL REFERENCES units(id) ON DELETE CASCADE,
+        to_id       TEXT NOT NULL REFERENCES units(id) ON DELETE CASCADE,
+        kind        TEXT NOT NULL CHECK (kind IN ('references','derived_from','promoted_from','supersedes','conflicts_with')),
+        version     INTEGER NOT NULL DEFAULT 1,
+        created_at  INTEGER NOT NULL
+    );
+
+    INSERT INTO unit_edges_new (id, from_id, to_id, kind, version, created_at)
+        SELECT id, from_id, to_id, kind, version, created_at FROM unit_edges;
+
+    DROP TABLE unit_edges;
+
+    ALTER TABLE unit_edges_new RENAME TO unit_edges;
+
+    CREATE INDEX IF NOT EXISTS idx_unit_edges_from
+        ON unit_edges (from_id, created_at ASC);
+
+    CREATE INDEX IF NOT EXISTS idx_unit_edges_to
+        ON unit_edges (to_id, created_at ASC);
+`
+
 // Migrations returns the migration set that owns the units schema.
 func Migrations() []migrations.Migration {
 	return []migrations.Migration{
@@ -220,6 +259,47 @@ func Migrations() []migrations.Migration {
 					ALTER TABLE unit_sync_state_old RENAME TO unit_sync_state
 				`)
 				return err
+			},
+		},
+		{
+			ID:            migrationIDUnitsConflictEdge,
+			Version:       1103,
+			OwningMission: OwningMission,
+			UpSource:      sqlUnitsConflictEdge,
+			Up: func(ctx context.Context, tx migrations.WriteTx) error {
+				for _, stmt := range splitUnitSQL(sqlUnitsConflictEdge) {
+					if _, err := tx.Exec(ctx, stmt); err != nil {
+						return err
+					}
+				}
+				return nil
+			},
+			Down: func(ctx context.Context, tx migrations.WriteTx) error {
+				// Rebuild back to the narrower CHECK. Any conflicts_with rows
+				// would violate it; drop them first so the downgrade succeeds.
+				stmts := []string{
+					`DELETE FROM unit_edges WHERE kind = 'conflicts_with'`,
+					`CREATE TABLE unit_edges_old (
+						id          TEXT PRIMARY KEY,
+						from_id     TEXT NOT NULL REFERENCES units(id) ON DELETE CASCADE,
+						to_id       TEXT NOT NULL REFERENCES units(id) ON DELETE CASCADE,
+						kind        TEXT NOT NULL CHECK (kind IN ('references','derived_from','promoted_from','supersedes')),
+						version     INTEGER NOT NULL DEFAULT 1,
+						created_at  INTEGER NOT NULL
+					)`,
+					`INSERT INTO unit_edges_old (id, from_id, to_id, kind, version, created_at)
+						SELECT id, from_id, to_id, kind, version, created_at FROM unit_edges`,
+					`DROP TABLE unit_edges`,
+					`ALTER TABLE unit_edges_old RENAME TO unit_edges`,
+					`CREATE INDEX IF NOT EXISTS idx_unit_edges_from ON unit_edges (from_id, created_at ASC)`,
+					`CREATE INDEX IF NOT EXISTS idx_unit_edges_to ON unit_edges (to_id, created_at ASC)`,
+				}
+				for _, stmt := range stmts {
+					if _, err := tx.Exec(ctx, stmt); err != nil {
+						return err
+					}
+				}
+				return nil
 			},
 		},
 	}

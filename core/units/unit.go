@@ -158,6 +158,11 @@ const (
 	EdgePromotedFrom EdgeKind = "promoted_from"
 	// EdgeSupersedes marks that FromID replaces ToID.
 	EdgeSupersedes EdgeKind = "supersedes"
+	// EdgeConflictsWith marks an ENSHRINED conflict: FromID and ToID are two
+	// coexisting units that legitimately diverge (Phase-3 enshrine, DESIGN §4).
+	// Both load; precedence decides order; the conflict is surfaced flagged,
+	// never silently dropped (FR-041/FR-042).
+	EdgeConflictsWith EdgeKind = "conflicts_with"
 )
 
 // UnitFilter narrows the List query. Empty/zero fields match every row.
@@ -250,7 +255,7 @@ func validLoadPolicy(p LoadPolicy) bool {
 // validEdgeKind reports whether k is a known EdgeKind value.
 func validEdgeKind(k EdgeKind) bool {
 	switch k {
-	case EdgeReferences, EdgeDerivedFrom, EdgePromotedFrom, EdgeSupersedes:
+	case EdgeReferences, EdgeDerivedFrom, EdgePromotedFrom, EdgeSupersedes, EdgeConflictsWith:
 		return true
 	}
 	return false

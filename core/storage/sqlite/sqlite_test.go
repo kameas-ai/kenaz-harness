@@ -211,9 +211,10 @@ func TestOpen_ApplyIdempotent(t *testing.T) {
 	// 1 slash_commands_user (1000) +
 	// 1 units (1100, unified-context-artifacts-01NCTXU01) +
 	// 1 unit_sync_state (1101, unified-context-artifacts-01NCTXU01 Phase 2) +
-	// 1 unit_sync_state_baselines (1102, unified-context-artifacts-01NCTXU01 3-way baseline fix) = 39.
-	if count != 39 {
-		t.Errorf("ledger count = %d, want 39", count)
+	// 1 unit_sync_state_baselines (1102, unified-context-artifacts-01NCTXU01 3-way baseline fix) +
+	// 1 conflict-edge (1103, unified-context-artifacts-01NCTXU01 Phase 3 enshrine marker) = 40.
+	if count != 40 {
+		t.Errorf("ledger count = %d, want 40", count)
 	}
 }
 

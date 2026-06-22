@@ -393,3 +393,88 @@ func TestSQLStore_Promote_EdgeLineage(t *testing.T) {
 		t.Errorf("promoted_from edge not found in ListEdges(src)")
 	}
 }
+
+// TestSQLStore_ConflictsWithEdge_Enshrine verifies migration 1103 widened the
+// unit_edges.kind CHECK so the Phase-3 conflicts_with marker edge is accepted by
+// the SQL store, and that ResolveEnshrine round-trips against real SQLite
+// (coexisting unit + marker edge + enshrine marker metadata) — WP17b/WP18.
+func TestSQLStore_ConflictsWithEdge_Enshrine(t *testing.T) {
+	db := openTestDB(t)
+	m := units.NewManager(units.NewSQLStore(db))
+	ctx := context.Background()
+
+	src, err := m.Create(ctx, units.Unit{
+		Kind: units.KindDoc, Scope: units.ScopeProject, ScopeID: "p1",
+		Classification: units.ClassTeam, LoadPolicy: units.LoadAlways,
+		Title: "policy", Body: "ours",
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	newUnit, edge, err := m.ResolveEnshrine(ctx, src.ID, "policy (theirs)", "theirs", "diverge")
+	if err != nil {
+		t.Fatalf("ResolveEnshrine (SQL): %v", err)
+	}
+	if edge.Kind != units.EdgeConflictsWith {
+		t.Fatalf("edge kind = %q, want conflicts_with", edge.Kind)
+	}
+
+	// Round-trip: the conflicts_with edge survives in SQLite (CHECK accepted it).
+	edges, err := m.ListEdges(ctx, src.ID)
+	if err != nil {
+		t.Fatalf("ListEdges: %v", err)
+	}
+	found := false
+	for _, e := range edges {
+		if e.Kind == units.EdgeConflictsWith && e.FromID == newUnit.ID && e.ToID == src.ID {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("conflicts_with edge not persisted by SQL store")
+	}
+
+	// The enshrined unit is flagged at resolution time.
+	loaded, err := m.Get(ctx, newUnit.ID)
+	if err != nil {
+		t.Fatalf("Get enshrined: %v", err)
+	}
+	if _, flagged := units.IsEnshrined(loaded); !flagged {
+		t.Fatal("enshrined unit not flagged after SQL round-trip")
+	}
+
+	resolved, err := m.ResolveLoadable(ctx, units.UnitFilter{Scope: units.ScopeProject, ScopeID: "p1"})
+	if err != nil {
+		t.Fatalf("ResolveLoadable: %v", err)
+	}
+	var flaggedSeen bool
+	for _, r := range resolved {
+		if r.Flagged && r.Unit.ID == newUnit.ID {
+			flaggedSeen = true
+		}
+	}
+	if !flaggedSeen {
+		t.Fatal("enshrined unit not surfaced flagged by ResolveLoadable (SQL)")
+	}
+}
+
+// TestSQLStore_AddEdge_RejectsUnknownKind confirms the widened CHECK still
+// rejects genuinely-unknown edge kinds (the validation boundary held).
+func TestSQLStore_AddEdge_RejectsUnknownKind(t *testing.T) {
+	db := openTestDB(t)
+	st := units.NewSQLStore(db)
+	ctx := context.Background()
+
+	a, _ := st.Create(ctx, units.Unit{
+		Kind: units.KindDoc, Scope: units.ScopeGlobal,
+		Classification: units.ClassTeam, LoadPolicy: units.LoadAlways, Title: "a",
+	})
+	b, _ := st.Create(ctx, units.Unit{
+		Kind: units.KindDoc, Scope: units.ScopeGlobal,
+		Classification: units.ClassTeam, LoadPolicy: units.LoadAlways, Title: "b",
+	})
+	if _, err := st.AddEdge(ctx, units.Edge{FromID: a.ID, ToID: b.ID, Kind: units.EdgeKind("bogus")}); err == nil {
+		t.Fatal("AddEdge accepted unknown kind")
+	}
+}
