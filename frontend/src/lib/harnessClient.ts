@@ -347,6 +347,11 @@ interface WailsBindingsLike {
   Contexts_Get(path: string): Promise<string>;
   Contexts_Save(path: string, content: string): Promise<void>;
   Contexts_CreateFolder(path: string): Promise<void>;
+  Contexts_AttachModule(
+    scopeKind: string,
+    scopeId: string,
+    dirPath: string,
+  ): Promise<ModuleAttachment>;
   Contexts_Rename(oldPath: string, newPath: string): Promise<void>;
   Contexts_Delete(path: string): Promise<void>;
   Contexts_RecentlyApplied(limit: number): Promise<string[]>;
@@ -536,6 +541,7 @@ interface WailsBindingsLike {
     env: Record<string, string>,
     config: Record<string, unknown>,
   ): Promise<WireRecipeStatus>;
+  Tools_SignInRecipe(id: string): Promise<WireRecipeStatus>;
   Tools_UninstallRecipe(id: string): Promise<void>;
   Tools_ForgetRecipeKey(id: string, envName: string): Promise<void>;
   Tools_RecipeStatus(id: string): Promise<WireRecipeStatus>;

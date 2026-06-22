@@ -260,7 +260,6 @@ async function confirmCreateFolder() {
             data-testid="session-new-folder-input"
             @keydown.enter.prevent="confirmCreateFolder"
             @keydown.esc.prevent="cancelCreateFolder"
-            @blur="cancelCreateFolder"
           />
           <p class="mt-1 font-ui text-[10px] text-ink-subtle">
             Creates in context library and attaches at session scope · Enter to create, Esc to cancel

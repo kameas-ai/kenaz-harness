@@ -614,7 +614,6 @@ function onDragEnd() {
             data-testid="project-new-folder-input"
             @keydown.enter.prevent="confirmCreateFolder"
             @keydown.esc.prevent="cancelCreateFolder"
-            @blur="cancelCreateFolder"
           />
           <p class="mt-1 font-ui text-[10px] text-ink-subtle">
             Creates a top-level folder in the context library and attaches it at project scope · Enter to create, Esc to cancel
