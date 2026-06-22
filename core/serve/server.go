@@ -16,26 +16,44 @@
 //
 // GET  /healthz — unauthenticated; returns 200 {"ok":true}
 //
+// GET  / (and all other paths) — serves the embedded dist-served bundle.
+// GET / always injects the bearer token as a <meta name="harness-token"> tag
+// in place of the <!--HARNESS_TOKEN_META--> placeholder in served.html.
+//
 // # Auth
 //
-// All endpoints except /healthz require:
+// All endpoints except /healthz and static assets require:
 //
 //	Authorization: Bearer <token>
 //
 // where <token> matches HARNESS_SERVE_TOKEN.  Comparison is constant-time.
 // A missing or wrong token yields 401.  When HARNESS_SERVE_TOKEN is empty the
 // server still starts but every request is allowed through — local-dev only.
+//
+// # Embedding the bundle
+//
+// The caller (main.go) is responsible for embedding frontend/dist-served via
+// //go:embed and passing the resulting fs.FS to New.  This keeps core/serve
+// free of a direct dependency on the build artifact layout.
+// When staticFS is nil the static-file handler returns 404 (test / minimal
+// deployments).
 package serve
 
 import (
+	"bytes"
 	"context"
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
+	"io/fs"
 	"log/slog"
+	"mime"
 	"net"
 	"net/http"
 	"os"
+	"path"
 	"strings"
 	"sync"
 	"time"
@@ -56,18 +74,27 @@ const (
 	EnvToken = "HARNESS_SERVE_TOKEN"
 )
 
+// tokenPlaceholder is the HTML comment that served.html uses as a slot for
+// the injected bearer-token meta tag.
+const tokenPlaceholder = "<!--HARNESS_TOKEN_META-->"
+
 // Server is the harness HTTP/WS server for served mode.  Construct with New
 // and call Serve to block until the context is cancelled.
 type Server struct {
-	api    *rpc.API
-	token  string
-	log    *slog.Logger
-	srv    *http.Server
+	api      *rpc.API
+	token    string
+	staticFS fs.FS   // embedded dist-served bundle; nil → 404 for static paths
+	log      *slog.Logger
+	srv      *http.Server
 }
 
 // New constructs a Server backed by the given *rpc.API.
+//
+// staticFS is the embedded frontend/dist-served bundle (pass the fs.FS
+// sub-rooted at the dist-served directory).  When nil, GET / returns 404.
+//
 // If token is empty, auth is disabled (local dev).
-func New(api *rpc.API, addr, token string, log *slog.Logger) *Server {
+func New(api *rpc.API, addr, token string, staticFS fs.FS, log *slog.Logger) *Server {
 	if addr == "" {
 		addr = DefaultListenAddr
 		if v := os.Getenv(EnvListenAddr); v != "" {
@@ -82,15 +109,20 @@ func New(api *rpc.API, addr, token string, log *slog.Logger) *Server {
 	}
 
 	s := &Server{
-		api:   api,
-		token: token,
-		log:   log,
+		api:      api,
+		token:    token,
+		staticFS: staticFS,
+		log:      log,
 	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", s.handleHealthz)
 	mux.Handle("/ws", s.authMiddleware(websocket.Handler(s.handleWS)))
 	mux.Handle("/rpc", s.authMiddleware(http.HandlerFunc(s.handleRPC)))
+	// All other paths are served from the embedded static bundle.
+	// Static assets are public (no auth) because the HTML page itself carries
+	// the token via the injected meta tag — the JS reads it on boot.
+	mux.HandleFunc("/", s.handleStatic)
 
 	s.srv = &http.Server{
 		Addr:              addr,
@@ -165,6 +197,78 @@ func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write([]byte(`{"ok":true}` + "\n"))
+}
+
+// ─── static file serving ──────────────────────────────────────────────────
+
+// handleStatic serves the embedded dist-served bundle.  GET / and GET
+// /index.html both serve served.html with the token placeholder replaced.
+// Asset requests (e.g. /assets/foo.js) are served verbatim.
+//
+// If staticFS is nil a 404 is returned immediately.
+func (s *Server) handleStatic(w http.ResponseWriter, r *http.Request) {
+	if s.staticFS == nil {
+		http.Error(w, "static bundle not available", http.StatusNotFound)
+		return
+	}
+
+	// Normalise the path: strip leading slash and collapse dots.
+	p := path.Clean(r.URL.Path)
+	p = strings.TrimPrefix(p, "/")
+
+	// Index: serve served.html with token injection regardless of the exact
+	// path requested (SPA hash-router handles client-side routing).
+	isIndex := p == "" || p == "." || p == "index.html" || !strings.Contains(p, ".")
+	if isIndex {
+		s.serveIndex(w, r)
+		return
+	}
+
+	f, err := s.staticFS.Open(p)
+	if err != nil {
+		// Fall back to index for unknown paths so SPA deep-links work.
+		s.serveIndex(w, r)
+		return
+	}
+	defer f.Close() //nolint:errcheck
+
+	stat, err := f.Stat()
+	if err != nil || stat.IsDir() {
+		s.serveIndex(w, r)
+		return
+	}
+
+	// Serve the file with a detected content type.
+	ext := path.Ext(p)
+	ct := mime.TypeByExtension(ext)
+	if ct == "" {
+		ct = "application/octet-stream"
+	}
+	w.Header().Set("Content-Type", ct)
+	w.WriteHeader(http.StatusOK)
+	_, _ = io.Copy(w, f)
+}
+
+// serveIndex reads served.html from the embedded FS, injects the token meta
+// tag in place of <!--HARNESS_TOKEN_META-->, and writes it to w.
+func (s *Server) serveIndex(w http.ResponseWriter, _ *http.Request) {
+	raw, err := fs.ReadFile(s.staticFS, "served.html")
+	if err != nil {
+		http.Error(w, "served.html not found in bundle", http.StatusInternalServerError)
+		return
+	}
+
+	// Build the meta tag.  When no token is configured, inject an empty tag so
+	// the JS still finds the element and treats auth as disabled.
+	metaTag := fmt.Sprintf(`<meta name="harness-token" content=%q />`,
+		s.token)
+	injected := bytes.ReplaceAll(raw, []byte(tokenPlaceholder), []byte(metaTag))
+
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	// Prevent caching of the index so browsers always get a fresh token.
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(injected)
 }
 
 // ─── /rpc ─────────────────────────────────────────────────────────────────

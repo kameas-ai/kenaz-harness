@@ -5,10 +5,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"io/fs"
 	"net"
 	"net/http"
 	"strings"
 	"testing"
+	"testing/fstest"
 	"time"
 
 	"golang.org/x/net/websocket"
@@ -16,6 +18,62 @@ import (
 	"github.com/kameas-ai/kenaz-harness/core/rpc"
 	"github.com/kameas-ai/kenaz-harness/core/serve"
 )
+
+// minimalStaticFS returns a minimal in-memory FS that mimics the dist-served
+// bundle layout, with a served.html that contains the token placeholder and
+// a small JS asset.
+func minimalStaticFS() fs.FS {
+	const indexHTML = `<!DOCTYPE html><html><head>` +
+		`<!--HARNESS_TOKEN_META-->` +
+		`</head><body><div id="app"></div>` +
+		`<script src="/assets/app.js"></script>` +
+		`</body></html>`
+	const appJS = `console.log("harness-served");`
+	return fstest.MapFS{
+		"served.html":    &fstest.MapFile{Data: []byte(indexHTML)},
+		"assets/app.js":  &fstest.MapFile{Data: []byte(appJS)},
+		"assets/app.css": &fstest.MapFile{Data: []byte(`body{margin:0}`)},
+	}
+}
+
+// newTestServerWithStatic starts a serve.Server with the given token and a
+// minimal in-memory static bundle.
+func newTestServerWithStatic(t *testing.T, token string) (srv *serve.Server, baseURL string, cancel context.CancelFunc) {
+	t.Helper()
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	addr := ln.Addr().String()
+	_ = ln.Close()
+
+	api := rpc.New(nil)
+	ctx, ctxCancel := context.WithCancel(context.Background())
+	s := serve.New(api, addr, token, minimalStaticFS(), nil)
+
+	done := make(chan error, 1)
+	go func() { done <- s.Serve(ctx) }()
+
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		c, cerr := net.Dial("tcp", addr)
+		if cerr == nil {
+			_ = c.Close()
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	return s, "http://" + addr, func() {
+		ctxCancel()
+		select {
+		case <-done:
+		case <-time.After(3 * time.Second):
+			t.Error("server did not shut down in time")
+		}
+	}
+}
 
 // newTestServer starts a serve.Server on a random port with the given token,
 // backed by a rpc.New(nil) API (test chassis — no core).
@@ -36,7 +94,7 @@ func newTestServer(t *testing.T, token string) (srv *serve.Server, baseURL strin
 
 	ctx, ctxCancel := context.WithCancel(context.Background())
 
-	s := serve.New(api, addr, token, nil)
+	s := serve.New(api, addr, token, nil, nil)
 
 	done := make(chan error, 1)
 	go func() { done <- s.Serve(ctx) }()
@@ -321,5 +379,186 @@ func TestWS_AuthRequired(t *testing.T) {
 	_, err := websocket.DialConfig(cfg)
 	if err == nil {
 		t.Error("expected dial failure for unauthenticated WS, got nil error")
+	}
+}
+
+// ─── static-bundle serving + token injection ──────────────────────────────
+
+// TestStatic_IndexInjectsToken verifies that GET / returns the SPA HTML with
+// the bearer token injected as a <meta name="harness-token"> tag.
+func TestStatic_IndexInjectsToken(t *testing.T) {
+	_, baseURL, cancel := newTestServerWithStatic(t, "my-secret-token")
+	defer cancel()
+
+	resp, err := http.Get(baseURL + "/")
+	if err != nil {
+		t.Fatalf("GET /: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+	ct := resp.Header.Get("Content-Type")
+	if !strings.HasPrefix(ct, "text/html") {
+		t.Errorf("expected text/html Content-Type, got %q", ct)
+	}
+	// Must not be cached.
+	if cc := resp.Header.Get("Cache-Control"); !strings.Contains(cc, "no-store") {
+		t.Errorf("expected Cache-Control: no-store, got %q", cc)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	bodyStr := string(body)
+
+	// The placeholder must have been replaced.
+	if strings.Contains(bodyStr, "<!--HARNESS_TOKEN_META-->") {
+		t.Error("token placeholder was not replaced in served HTML")
+	}
+	// The injected meta tag must carry the token.
+	wantMeta := `<meta name="harness-token" content="my-secret-token"`
+	if !strings.Contains(bodyStr, wantMeta) {
+		t.Errorf("expected injected token meta tag in HTML, got:\n%s", bodyStr)
+	}
+}
+
+// TestStatic_IndexEmptyToken verifies that an empty token still produces a
+// valid meta tag (empty content) rather than the raw placeholder.
+func TestStatic_IndexEmptyToken(t *testing.T) {
+	_, baseURL, cancel := newTestServerWithStatic(t, "")
+	defer cancel()
+
+	resp, err := http.Get(baseURL + "/")
+	if err != nil {
+		t.Fatalf("GET /: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	bodyStr := string(body)
+
+	if strings.Contains(bodyStr, "<!--HARNESS_TOKEN_META-->") {
+		t.Error("placeholder must be replaced even when token is empty")
+	}
+	// An empty token still produces a meta element.
+	wantMeta := `<meta name="harness-token" content=""`
+	if !strings.Contains(bodyStr, wantMeta) {
+		t.Errorf("expected empty-token meta tag, got:\n%s", bodyStr)
+	}
+}
+
+// TestStatic_AssetServed verifies that a known asset from the bundle is served
+// with the correct content type.
+func TestStatic_AssetServed(t *testing.T) {
+	_, baseURL, cancel := newTestServerWithStatic(t, "tok")
+	defer cancel()
+
+	resp, err := http.Get(baseURL + "/assets/app.js")
+	if err != nil {
+		t.Fatalf("GET /assets/app.js: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+	ct := resp.Header.Get("Content-Type")
+	if !strings.Contains(ct, "javascript") {
+		t.Errorf("expected javascript Content-Type, got %q", ct)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	if !strings.Contains(string(body), "harness-served") {
+		t.Errorf("unexpected asset body: %s", body)
+	}
+}
+
+// TestStatic_CSSAssetServed verifies CSS assets are served with the right MIME type.
+func TestStatic_CSSAssetServed(t *testing.T) {
+	_, baseURL, cancel := newTestServerWithStatic(t, "tok")
+	defer cancel()
+
+	resp, err := http.Get(baseURL + "/assets/app.css")
+	if err != nil {
+		t.Fatalf("GET /assets/app.css: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+	ct := resp.Header.Get("Content-Type")
+	if !strings.Contains(ct, "css") {
+		t.Errorf("expected css Content-Type, got %q", ct)
+	}
+}
+
+// TestStatic_UnknownPathFallsBackToIndex verifies that an unrecognised path
+// falls back to serving the SPA index so the hash-router can handle it.
+func TestStatic_UnknownPathFallsBackToIndex(t *testing.T) {
+	_, baseURL, cancel := newTestServerWithStatic(t, "tok")
+	defer cancel()
+
+	resp, err := http.Get(baseURL + "/sessions/abc123")
+	if err != nil {
+		t.Fatalf("GET /sessions/abc123: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 (SPA fallback), got %d", resp.StatusCode)
+	}
+	ct := resp.Header.Get("Content-Type")
+	if !strings.HasPrefix(ct, "text/html") {
+		t.Errorf("expected text/html for SPA fallback, got %q", ct)
+	}
+}
+
+// TestStatic_NilFSReturns404 verifies that when no static bundle is provided
+// (nil staticFS), GET / returns 404 instead of panicking.
+func TestStatic_NilFSReturns404(t *testing.T) {
+	_, baseURL, cancel := newTestServer(t, "tok") // newTestServer passes nil staticFS
+	defer cancel()
+
+	resp, err := http.Get(baseURL + "/")
+	if err != nil {
+		t.Fatalf("GET /: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("expected 404 when staticFS is nil, got %d", resp.StatusCode)
+	}
+}
+
+// TestStatic_HealthzStillWorks confirms /healthz is served even when a static
+// FS is wired (the mux ordering is correct).
+func TestStatic_HealthzStillWorks(t *testing.T) {
+	_, baseURL, cancel := newTestServerWithStatic(t, "tok")
+	defer cancel()
+
+	resp, err := http.Get(baseURL + "/healthz")
+	if err != nil {
+		t.Fatalf("GET /healthz: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 for /healthz, got %d", resp.StatusCode)
+	}
+	var body map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if ok, _ := body["ok"].(bool); !ok {
+		t.Errorf("expected {\"ok\":true}, got %v", body)
 	}
 }

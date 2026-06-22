@@ -4,6 +4,7 @@ import (
 	"context"
 	"embed"
 	"flag"
+	"io/fs"
 	"log"
 	"log/slog"
 	"os"
@@ -24,6 +25,16 @@ import (
 
 //go:embed all:frontend/dist
 var assets embed.FS
+
+// servedAssets holds the dist-served/ bundle (built by `npm run build:served`
+// in frontend/).  It is embedded at compile time; if the directory is absent
+// the build will fail with a helpful message from the go:embed directive.
+//
+// Build dependency: run `cd frontend && npm run build:served` before
+// `go build ./...` so that frontend/dist-served/served.html exists.
+//
+//go:embed all:frontend/dist-served
+var servedAssets embed.FS
 
 // Version is injected by the release pipeline via:
 //
@@ -229,7 +240,14 @@ func runServeMode(listenAddr string) {
 		addr = serve.DefaultListenAddr
 	}
 
-	srv := serve.New(api, addr, token, serveLog)
+	// Sub-root the embedded FS so serve.Server sees served.html at the root.
+	servedFS, err := fs.Sub(servedAssets, "frontend/dist-served")
+	if err != nil {
+		serveLog.Error("harness.serve: sub-root served assets", "err", err)
+		os.Exit(1)
+	}
+
+	srv := serve.New(api, addr, token, servedFS, serveLog)
 	if serveErr := srv.Serve(ctx); serveErr != nil && serveErr != context.Canceled {
 		serveLog.Error("harness.serve: server error", "err", serveErr)
 		os.Exit(1)
