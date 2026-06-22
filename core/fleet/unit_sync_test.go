@@ -82,13 +82,14 @@ func TestUnitSyncer_PushDirty_PersonalNeverPushed(t *testing.T) {
 		t.Errorf("pushed classification = %q, want team_shared", pushed[0].Classification)
 	}
 
-	// Sidecar baseline recorded at the pushed version.
+	// Sidecar baseline recorded at the pushed version (both baselines set).
 	st, err := m.GetSyncState(ctx, teamU.ID)
 	if err != nil {
 		t.Fatalf("GetSyncState: %v", err)
 	}
-	if st.SyncedVersion != teamU.Version || st.NodeID != teamU.ID {
-		t.Errorf("sidecar = %+v, want synced_version=%d node_id=%q", st, teamU.Version, teamU.ID)
+	if st.SyncedServerVersion != teamU.Version || st.SyncedLocalVersion != teamU.Version || st.NodeID != teamU.ID {
+		t.Errorf("sidecar = %+v, want synced_server_version=%d synced_local_version=%d node_id=%q",
+			st, teamU.Version, teamU.Version, teamU.ID)
 	}
 }
 
@@ -170,13 +171,13 @@ func TestUnitSyncer_PullDown_CreatesReadLayer(t *testing.T) {
 	if got.LoadPolicy != units.LoadOnDemand {
 		t.Errorf("load policy = %q, want on_demand", got.LoadPolicy)
 	}
-	// Sidecar maps server node id → local unit.
+	// Sidecar maps server node id → local unit with both 3-way baselines set.
 	st, err := m.GetSyncStateByNodeID(ctx, "srv-node-1")
 	if err != nil {
 		t.Fatalf("GetSyncStateByNodeID: %v", err)
 	}
-	if st.UnitID != got.ID || st.SyncedVersion != 1 {
-		t.Errorf("sidecar = %+v, want unit=%q synced=1", st, got.ID)
+	if st.UnitID != got.ID || st.SyncedServerVersion != 1 || st.SyncedLocalVersion != got.Version {
+		t.Errorf("sidecar = %+v, want unit=%q synced_server=1 synced_local=%d", st, got.ID, got.Version)
 	}
 }
 
@@ -195,7 +196,9 @@ func TestUnitSyncer_PullDown_FastForward(t *testing.T) {
 	// Local unit synced at version 0, node id maps to server.
 	local := seedTeamUnit(t, m, "doc", "v0 body")
 	if _, err := m.UpsertSyncState(ctx, units.SyncState{
-		UnitID: local.ID, NodeID: "srv-ff", SyncedVersion: local.Version, Classification: "team_shared",
+		UnitID: local.ID, NodeID: "srv-ff",
+		SyncedServerVersion: local.Version, SyncedLocalVersion: local.Version,
+		Classification: "team_shared",
 	}); err != nil {
 		t.Fatalf("seed sidecar: %v", err)
 	}
@@ -243,7 +246,9 @@ func TestUnitSyncer_PullDown_Conflict(t *testing.T) {
 	// Local unit synced at version 0.
 	local := seedTeamUnit(t, m, "doc", "base body")
 	if _, err := m.UpsertSyncState(ctx, units.SyncState{
-		UnitID: local.ID, NodeID: "srv-cf", SyncedVersion: local.Version, Classification: "team_shared",
+		UnitID: local.ID, NodeID: "srv-cf",
+		SyncedServerVersion: local.Version, SyncedLocalVersion: local.Version,
+		Classification: "team_shared",
 	}); err != nil {
 		t.Fatalf("seed sidecar: %v", err)
 	}
@@ -319,7 +324,9 @@ func TestUnitSyncer_PullDown_NeverOverwritesPersonal(t *testing.T) {
 		t.Fatalf("Create personal: %v", err)
 	}
 	if _, err := m.UpsertSyncState(ctx, units.SyncState{
-		UnitID: personal.ID, NodeID: "srv-personal", SyncedVersion: 0, Classification: "team_shared",
+		UnitID: personal.ID, NodeID: "srv-personal",
+		SyncedServerVersion: 0, SyncedLocalVersion: 0,
+		Classification: "team_shared",
 	}); err != nil {
 		t.Fatalf("seed sidecar: %v", err)
 	}
@@ -371,5 +378,195 @@ func TestUnitSyncer_PushDirty_NoCapIsLocalOnly(t *testing.T) {
 	defer fake.mu.Unlock()
 	if len(fake.pushRequests) != 0 {
 		t.Fatalf("no-cap push must not hit the network, got %d requests", len(fake.pushRequests))
+	}
+}
+
+// TestUnitSyncer_PullDown_PostPullLocalEditConflict is the load-bearing
+// regression test for the pre-1102 overwrite bug. Before the fix the single
+// sidecar baseline conflated the server counter space with the local counter
+// space, so a post-pull local edit was SILENTLY OVERWRITTEN by a subsequent
+// server delta instead of surfacing a conflict.
+//
+// Scenario:
+//  1. Server delta at server version 3 → first-sight pull → Create (local.Version=0);
+//     sidecar: SyncedServerVersion=3, SyncedLocalVersion=0.
+//  2. User edits the read layer → local.Version bumps to 1 (local-counter space).
+//  3. Server delta at server version 4 arrives.
+//     Pre-fix check: local.Version(1) > SyncedVersion(3) = FALSE → fast-forward (BUG).
+//     Post-fix check: localChanged=local.Version(1) > SyncedLocalVersion(0)=TRUE;
+//     serverChanged=server.Version(4) > SyncedServerVersion(3)=TRUE → CONFLICT (CORRECT).
+func TestUnitSyncer_PullDown_PostPullLocalEditConflict(t *testing.T) {
+	fake := &contextFakeServer{}
+	srv := httptest.NewServer(fake)
+	defer srv.Close()
+	stubTokens(t, TokenSet{AccessToken: "at", RefreshToken: "rt", ExpiresAt: time.Now().Add(time.Hour)})
+	client := makeTestClient(t, srv.URL)
+	caps := makeCapPollerWithTeamCap(t)
+	m := newUnitTestManager()
+	ctx := context.Background()
+
+	// Register both pull responses upfront (the fake server serves them in order,
+	// advancing its index after each call so the second PullDown gets the v4 delta).
+	updated := time.Now().UTC().Format(time.RFC3339Nano)
+	updated2 := time.Now().UTC().Add(time.Millisecond).Format(time.RFC3339Nano)
+	// Response 1: first-sight pull at server version 3.
+	fake.addPullResponse(contextPullResponse{
+		Nodes: []ContextPulledNode{{
+			ID: "node-v3", Kind: "doc", Title: "shared doc", Body: "server body v3",
+			Classification: ClassTeamShared, Version: 3, UpdatedAt: updated,
+		}},
+		Cursor: updated,
+	})
+	// Response 2: server delta at version 4 (the dangerous update).
+	fake.addPullResponse(contextPullResponse{
+		Nodes: []ContextPulledNode{{
+			ID: "node-v3", Kind: "doc", Title: "shared doc", Body: "server body v4",
+			Classification: ClassTeamShared, Version: 4, UpdatedAt: updated2,
+		}},
+		Cursor: updated2,
+	})
+
+	syncer := NewUnitSyncer(client, m, NewUnitMapper(""), caps, t.TempDir())
+
+	// Step 1: first-sight pull at server version 3.
+	applied, err := syncer.PullDown(ctx)
+	if err != nil {
+		t.Fatalf("PullDown (v3): %v", err)
+	}
+	if applied != 1 {
+		t.Fatalf("PullDown (v3): applied=%d, want 1", applied)
+	}
+
+	// Resolve the local unit that was created.
+	st, err := m.GetSyncStateByNodeID(ctx, "node-v3")
+	if err != nil {
+		t.Fatalf("GetSyncStateByNodeID after v3 pull: %v", err)
+	}
+	localUnit, err := m.Get(ctx, st.UnitID)
+	if err != nil {
+		t.Fatalf("Get local unit: %v", err)
+	}
+	// Verify the sidecar was recorded with BOTH baselines (not the single
+	// conflated SyncedVersion that caused the original bug).
+	if st.SyncedServerVersion != 3 {
+		t.Fatalf("after v3 pull: SyncedServerVersion=%d, want 3", st.SyncedServerVersion)
+	}
+	if st.SyncedLocalVersion != localUnit.Version {
+		t.Fatalf("after v3 pull: SyncedLocalVersion=%d, want %d (local version after Create)",
+			st.SyncedLocalVersion, localUnit.Version)
+	}
+
+	// Step 2: user edits the read layer → local.Version becomes 1.
+	editedUnit, err := m.Update(ctx, localUnit.ID, "LOCAL EDIT — must not be overwritten", nil)
+	if err != nil {
+		t.Fatalf("Update local: %v", err)
+	}
+	if editedUnit.Version != 1 {
+		t.Fatalf("edited unit version = %d, want 1", editedUnit.Version)
+	}
+
+	// Step 3: server delta at version 4 arrives. Must surface a conflict,
+	// not fast-forward over the local edit.
+	applied2, err := syncer.PullDown(ctx)
+	if err != nil {
+		t.Fatalf("PullDown (v4): %v", err)
+	}
+	if applied2 != 0 {
+		t.Fatalf("PullDown (v4): applied=%d, want 0 (conflict must not apply)", applied2)
+	}
+
+	// The local edit must be preserved — no silent overwrite.
+	got, err := m.Get(ctx, localUnit.ID)
+	if err != nil {
+		t.Fatalf("Get after v4 pull: %v", err)
+	}
+	if got.Body != "LOCAL EDIT — must not be overwritten" {
+		t.Fatalf("body = %q; want local edit preserved (no silent overwrite)", got.Body)
+	}
+
+	// The conflict must be surfaced with the correct version triple:
+	//   SyncedVersion (server baseline) = 3
+	//   LocalVersion                    = 1
+	//   ServerVersion                   = 4
+	conflicts := syncer.Conflicts()
+	if len(conflicts) != 1 {
+		t.Fatalf("conflicts = %d, want 1", len(conflicts))
+	}
+	c := conflicts[0]
+	if c.UnitID != localUnit.ID || c.NodeID != "node-v3" {
+		t.Errorf("conflict unit/node IDs wrong: %+v", c)
+	}
+	if c.SyncedVersion != 3 || c.LocalVersion != 1 || c.ServerVersion != 4 {
+		t.Errorf("conflict versions = {synced:%d local:%d server:%d}, want {synced:3 local:1 server:4}",
+			c.SyncedVersion, c.LocalVersion, c.ServerVersion)
+	}
+}
+
+// TestUnitSyncer_PullDown_FastForwardUpdatesBaselines verifies the clean
+// fast-forward path: server advanced, local unchanged → apply + advance BOTH
+// baselines so a subsequent server delta or local edit is compared correctly.
+func TestUnitSyncer_PullDown_FastForwardUpdatesBaselines(t *testing.T) {
+	fake := &contextFakeServer{}
+	srv := httptest.NewServer(fake)
+	defer srv.Close()
+	stubTokens(t, TokenSet{AccessToken: "at", RefreshToken: "rt", ExpiresAt: time.Now().Add(time.Hour)})
+	client := makeTestClient(t, srv.URL)
+	caps := makeCapPollerWithTeamCap(t)
+	m := newUnitTestManager()
+	ctx := context.Background()
+
+	// Seed a local unit already synced at server version 2 / local version 0.
+	local := seedTeamUnit(t, m, "ff-baselines-doc", "v2 body")
+	if _, err := m.UpsertSyncState(ctx, units.SyncState{
+		UnitID:              local.ID,
+		NodeID:              "node-ff-baselines",
+		SyncedServerVersion: 2,
+		SyncedLocalVersion:  local.Version, // 0
+		Classification:      "team_shared",
+	}); err != nil {
+		t.Fatalf("seed sidecar: %v", err)
+	}
+
+	// Server advances to version 5 (clean — no local edits since last sync).
+	updated := time.Now().UTC().Format(time.RFC3339Nano)
+	fake.addPullResponse(contextPullResponse{
+		Nodes: []ContextPulledNode{{
+			ID: "node-ff-baselines", Kind: "doc", Title: "ff-baselines-doc", Body: "v5 body",
+			Classification: ClassTeamShared, Version: 5, UpdatedAt: updated,
+		}},
+		Cursor: updated,
+	})
+
+	syncer := NewUnitSyncer(client, m, NewUnitMapper(""), caps, t.TempDir())
+	applied, err := syncer.PullDown(ctx)
+	if err != nil {
+		t.Fatalf("PullDown: %v", err)
+	}
+	if applied != 1 {
+		t.Fatalf("applied = %d, want 1 (fast-forward)", applied)
+	}
+	if len(syncer.Conflicts()) != 0 {
+		t.Fatalf("no conflicts expected on clean fast-forward, got: %+v", syncer.Conflicts())
+	}
+
+	// Body must reflect the server update.
+	got, err := m.Get(ctx, local.ID)
+	if err != nil {
+		t.Fatalf("Get after fast-forward: %v", err)
+	}
+	if got.Body != "v5 body" {
+		t.Errorf("body = %q, want fast-forwarded 'v5 body'", got.Body)
+	}
+
+	// BOTH baselines must be advanced so future deltas compare correctly.
+	st, err := m.GetSyncStateByNodeID(ctx, "node-ff-baselines")
+	if err != nil {
+		t.Fatalf("GetSyncStateByNodeID: %v", err)
+	}
+	if st.SyncedServerVersion != 5 {
+		t.Errorf("SyncedServerVersion = %d, want 5 after fast-forward", st.SyncedServerVersion)
+	}
+	if st.SyncedLocalVersion != got.Version {
+		t.Errorf("SyncedLocalVersion = %d, want %d (local version after apply)", st.SyncedLocalVersion, got.Version)
 	}
 }

@@ -129,7 +129,11 @@ func (m *Manager) DeleteSyncState(ctx context.Context, unitID string) error {
 //
 // A unit is dirty when:
 //   - it has no sidecar row (never synced), OR
-//   - its current Version > sidecar.SyncedVersion.
+//   - its current Version > sidecar.SyncedLocalVersion (the local version at
+//     the time of the last successful sync). SyncedVersion is the legacy alias
+//     consulted as a fallback when SyncedLocalVersion is zero and SyncedVersion
+//     is non-zero (rows written by pre-1102 code); new rows always have
+//     SyncedLocalVersion set correctly.
 func (m *Manager) ListDirty(ctx context.Context, classification Classification) ([]Unit, error) {
 	if classification == ClassPersonal {
 		return nil, nil // personal units never sync
@@ -148,7 +152,14 @@ func (m *Manager) ListDirty(ctx context.Context, classification Classification) 
 			}
 			return nil, err
 		}
-		if u.Version > st.SyncedVersion {
+		// Use SyncedLocalVersion (the local counter at last sync) as the dirty
+		// baseline. Fall back to the legacy SyncedVersion field for rows written
+		// by code that pre-dates the 3-way baseline (1102 migration).
+		baseline := st.SyncedLocalVersion
+		if baseline == 0 && st.SyncedVersion > 0 {
+			baseline = st.SyncedVersion
+		}
+		if u.Version > baseline {
 			out = append(out, u)
 		}
 	}

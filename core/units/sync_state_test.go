@@ -128,6 +128,49 @@ func runSyncStateSuite(t *testing.T, store units.Store) {
 			t.Fatalf("LastSynced not defaulted to now: %v", got.LastSynced)
 		}
 	})
+
+	// empty_node_id_rejected verifies that both backends consistently reject
+	// an UpsertSyncState call with an empty NodeID. This prevents the mem/SQL
+	// divergence where memStore previously allowed multiple rows with an empty
+	// node_id while the SQL UNIQUE index (on node_id NOT NULL DEFAULT '')
+	// silently accepted one empty row but rejected a second.
+	t.Run("empty_node_id_rejected", func(t *testing.T) {
+		u := seedUnit(t, m, units.ClassTeam)
+		_, err := m.UpsertSyncState(ctx, units.SyncState{
+			UnitID:        u.ID,
+			NodeID:        "", // must be rejected by BOTH backends
+			SyncedVersion: 1,
+			Classification: "team_shared",
+		})
+		if err == nil {
+			t.Fatal("UpsertSyncState with empty NodeID: expected error, got nil")
+		}
+	})
+
+	// three_way_baselines verifies that SyncedServerVersion and
+	// SyncedLocalVersion round-trip independently so the pull path can
+	// distinguish server-counter space from local-counter space.
+	t.Run("three_way_baselines", func(t *testing.T) {
+		u := seedUnit(t, m, units.ClassTeam)
+		want := units.SyncState{
+			UnitID:              u.ID,
+			NodeID:              "3way-" + u.ID,
+			SyncedServerVersion: 7,
+			SyncedLocalVersion:  2,
+			Classification:      "team_shared",
+		}
+		if _, err := m.UpsertSyncState(ctx, want); err != nil {
+			t.Fatalf("UpsertSyncState: %v", err)
+		}
+		got, err := m.GetSyncState(ctx, u.ID)
+		if err != nil {
+			t.Fatalf("GetSyncState: %v", err)
+		}
+		if got.SyncedServerVersion != 7 || got.SyncedLocalVersion != 2 {
+			t.Fatalf("3-way baselines roundtrip: got server=%d local=%d, want server=7 local=2",
+				got.SyncedServerVersion, got.SyncedLocalVersion)
+		}
+	})
 }
 
 func TestSyncState_Mem(t *testing.T) {

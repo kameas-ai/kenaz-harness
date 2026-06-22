@@ -384,13 +384,17 @@ func (s *sqlStore) ListVersions(ctx context.Context, unitID string) ([]UnitVersi
 // ── Sync sidecar ───────────────────────────────────────────────────────
 
 const sqlSelectSyncState = `
-    SELECT unit_id, node_id, synced_version, classification, last_synced
+    SELECT unit_id, node_id, synced_version, classification, last_synced,
+           synced_server_version, synced_local_version
     FROM unit_sync_state
 `
 
 func (s *sqlStore) UpsertSyncState(ctx context.Context, st SyncState) (SyncState, error) {
 	if st.UnitID == "" {
 		return SyncState{}, fmt.Errorf("units: UpsertSyncState: empty UnitID")
+	}
+	if st.NodeID == "" {
+		return SyncState{}, fmt.Errorf("units: UpsertSyncState: empty NodeID")
 	}
 	if st.LastSynced.IsZero() {
 		st.LastSynced = s.now()
@@ -403,16 +407,20 @@ func (s *sqlStore) UpsertSyncState(ctx context.Context, st SyncState) (SyncState
 		// constraint failure rather than silently re-homing the node.
 		_, err := tx.Exec(ctx, `
             INSERT INTO unit_sync_state
-                (unit_id, node_id, synced_version, classification, last_synced)
-            VALUES (?, ?, ?, ?, ?)
+                (unit_id, node_id, synced_version, classification, last_synced,
+                 synced_server_version, synced_local_version)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(unit_id) DO UPDATE SET
-                node_id        = excluded.node_id,
-                synced_version = excluded.synced_version,
-                classification = excluded.classification,
-                last_synced    = excluded.last_synced
+                node_id               = excluded.node_id,
+                synced_version        = excluded.synced_version,
+                classification        = excluded.classification,
+                last_synced           = excluded.last_synced,
+                synced_server_version = excluded.synced_server_version,
+                synced_local_version  = excluded.synced_local_version
         `,
 			st.UnitID, st.NodeID, st.SyncedVersion, st.Classification,
 			st.LastSynced.UnixNano(),
+			st.SyncedServerVersion, st.SyncedLocalVersion,
 		)
 		return err
 	}); err != nil {
@@ -479,6 +487,7 @@ func scanSyncState(sc interface{ Scan(dest ...any) error }) (SyncState, error) {
 	)
 	if err := sc.Scan(
 		&st.UnitID, &st.NodeID, &st.SyncedVersion, &st.Classification, &lastSyncedNs,
+		&st.SyncedServerVersion, &st.SyncedLocalVersion,
 	); err != nil {
 		return SyncState{}, err
 	}

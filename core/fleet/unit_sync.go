@@ -242,12 +242,17 @@ func (s *UnitSyncer) pushClass(ctx context.Context, class units.Classification) 
 		if conflicted[u.ID] {
 			continue // server rejected this version — leave sidecar untouched
 		}
+		// After a successful push-ack both baselines advance to the pushed
+		// unit's local version. The server echoes back the same version we
+		// sent (the push is our version), so SyncedServerVersion = SyncedLocalVersion
+		// = u.Version immediately after a push.
 		if _, err := s.store.UpsertSyncState(ctx, units.SyncState{
-			UnitID:         u.ID,
-			NodeID:         u.ID, // harness reuses unit id as node id on push
-			SyncedVersion:  u.Version,
-			Classification: classStr,
-			LastSynced:     now,
+			UnitID:              u.ID,
+			NodeID:              u.ID, // harness reuses unit id as node id on push
+			SyncedServerVersion: u.Version,
+			SyncedLocalVersion:  u.Version,
+			Classification:      classStr,
+			LastSynced:          now,
 		}); err != nil {
 			return 0, fmt.Errorf("fleet: unit push: sidecar %s: %w", u.ID, err)
 		}
@@ -344,17 +349,28 @@ func (s *UnitSyncer) PullDown(ctx context.Context) (int, error) {
 
 // applyPulledNode maps one pulled node into the local store and returns
 // whether a write was applied. It resolves the local unit via the sidecar
-// node-id index (no re-discovery). Conflict rules:
+// node-id index (no re-discovery). Conflict rules (3-way baseline):
 //
 //   - Tombstones (DeletedAt != nil) are skipped (Phase-3 handles deletes).
 //   - A node mapping to a local personal unit is never applied (defensive —
 //     personal units are never pushed, so this should not occur).
 //   - First sight (no sidecar): create the unit locally as a read layer and
-//     record the sidecar baseline.
-//   - Known unit, server version == sidecar synced version: no-op.
-//   - Known unit, local edited since sync (local.Version > synced) AND server
-//     advanced (server.Version > synced): CONFLICT — record, do not write.
-//   - Known unit, only server advanced: fast-forward the local body + sidecar.
+//     record BOTH baselines (SyncedServerVersion = server.Version,
+//     SyncedLocalVersion = created.Version).
+//   - Known unit: derive serverChanged and localChanged from the two
+//     independent baselines:
+//     serverChanged = server.Version > st.SyncedServerVersion
+//     localChanged  = local.Version  > st.SyncedLocalVersion
+//     - !serverChanged: no-op (server hasn't advanced; local may be dirty and
+//       will push on the next PushDirty cycle).
+//     - serverChanged && localChanged: CONFLICT — surface, do NOT apply.
+//     - serverChanged && !localChanged: clean fast-forward — apply + update
+//       BOTH baselines.
+//
+// The two-counter invariant prevents the pre-1102 bug where a unit pulled at
+// server version N was created with local Version=0 and sidecar baseline=N;
+// after a local edit (local.Version=1) a later server delta checked
+// local.Version(1) > baseline(N) = FALSE and silently overwrote the edit.
 func (s *UnitSyncer) applyPulledNode(ctx context.Context, n ContextPulledNode) (bool, error) {
 	if n.DeletedAt != nil {
 		return false, nil // tombstone — defer to Phase-3
@@ -374,14 +390,18 @@ func (s *UnitSyncer) applyPulledNode(ctx context.Context, n ContextPulledNode) (
 		if cerr != nil {
 			return false, fmt.Errorf("fleet: unit pull: create %s: %w", n.ID, cerr)
 		}
-		// If Create bumped to its own version baseline, record the SERVER
-		// version as the synced baseline so future deltas compare correctly.
+		// Record BOTH baselines so the first subsequent delta compares in the
+		// correct counter spaces. SyncedServerVersion = server's version at
+		// creation; SyncedLocalVersion = the local unit's Version after Create
+		// (always 0 since Create forces Version=0, but using created.Version
+		// is self-documenting and safe against future Create changes).
 		if _, serr := s.store.UpsertSyncState(ctx, units.SyncState{
-			UnitID:         created.ID,
-			NodeID:         n.ID,
-			SyncedVersion:  n.Version,
-			Classification: string(n.Classification),
-			LastSynced:     time.Now().UTC(),
+			UnitID:              created.ID,
+			NodeID:              n.ID,
+			SyncedServerVersion: n.Version,
+			SyncedLocalVersion:  created.Version,
+			Classification:      string(n.Classification),
+			LastSynced:          time.Now().UTC(),
 		}); serr != nil {
 			return false, fmt.Errorf("fleet: unit pull: sidecar create %s: %w", n.ID, serr)
 		}
@@ -400,23 +420,31 @@ func (s *UnitSyncer) applyPulledNode(ctx context.Context, n ContextPulledNode) (
 		return false, nil
 	}
 
-	if n.Version <= st.SyncedVersion {
-		return false, nil // server is not ahead of our baseline — nothing to do
+	// 3-way baseline comparison. Each counter space is tracked independently.
+	serverChanged := n.Version > st.SyncedServerVersion
+	localChanged := local.Version > st.SyncedLocalVersion
+
+	if !serverChanged {
+		// Server hasn't advanced beyond our last sync — nothing to apply.
+		// Local edits (localChanged) will be offered to the server on the
+		// next PushDirty cycle.
+		return false, nil
 	}
 
-	if local.Version > st.SyncedVersion {
-		// Local has un-synced edits AND server advanced → genuine conflict.
+	if localChanged {
+		// Both sides moved: genuine conflict. Surface it, do NOT blind-upsert.
 		s.recordConflict(UnitConflict{
 			UnitID:        local.ID,
 			NodeID:        n.ID,
 			LocalVersion:  local.Version,
-			SyncedVersion: st.SyncedVersion,
+			SyncedVersion: st.SyncedServerVersion, // caller-facing "synced" = server baseline
 			ServerVersion: n.Version,
 		})
-		return false, nil // surface, do not blind-upsert
+		return false, nil
 	}
 
-	// Clean fast-forward: apply server body + advance sidecar baseline.
+	// Clean fast-forward: server advanced, local is unchanged since last sync.
+	// Apply the server body and advance BOTH baselines.
 	if _, err := s.store.Update(ctx, local.ID, mapped.Body, mapped.Metadata); err != nil {
 		return false, fmt.Errorf("fleet: unit pull: update %s: %w", local.ID, err)
 	}
@@ -425,11 +453,12 @@ func (s *UnitSyncer) applyPulledNode(ctx context.Context, n ContextPulledNode) (
 		return false, err
 	}
 	if _, err := s.store.UpsertSyncState(ctx, units.SyncState{
-		UnitID:         local.ID,
-		NodeID:         n.ID,
-		SyncedVersion:  updated.Version, // local version after the fast-forward
-		Classification: string(n.Classification),
-		LastSynced:     time.Now().UTC(),
+		UnitID:              local.ID,
+		NodeID:              n.ID,
+		SyncedServerVersion: n.Version,       // server counter at this pull
+		SyncedLocalVersion:  updated.Version, // local counter after the fast-forward apply
+		Classification:      string(n.Classification),
+		LastSynced:          time.Now().UTC(),
 	}); err != nil {
 		return false, fmt.Errorf("fleet: unit pull: sidecar update %s: %w", local.ID, err)
 	}

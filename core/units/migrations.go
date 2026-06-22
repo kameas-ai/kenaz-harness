@@ -18,6 +18,12 @@ const (
 	// migrationIDUnitsSyncState identifies migration 1101 — the Phase-2
 	// fleet sync sidecar (unit_sync_state).
 	migrationIDUnitsSyncState = "units/1101-sync-state"
+
+	// migrationIDUnitsSyncStateBaselines identifies migration 1102 — the
+	// 3-way sync baseline columns added to unit_sync_state so the pull path
+	// can distinguish server-counter space from local-counter space and
+	// avoid silently overwriting un-synced local edits.
+	migrationIDUnitsSyncStateBaselines = "units/1102-sync-state-baselines"
 )
 
 // sqlUnitsSchema is the DDL for migration 1100. Three tables:
@@ -116,6 +122,31 @@ const sqlUnitsSyncStateSchema = `
         ON unit_sync_state (node_id);
 `
 
+// sqlUnitsSyncStateBaselines is the DDL for migration 1102 — adds the two
+// separate version-space columns that implement the correct 3-way sync
+// baseline, fixing the read-down overwrite bug where a post-pull local edit
+// could be silently overwritten because the single synced_version column
+// conflated the server counter space with the local counter space.
+//
+//   - synced_server_version: the server's node Version at last sync. Used as
+//     the server-side baseline: server.Version > synced_server_version means
+//     the server moved on (serverChanged).
+//   - synced_local_version: the local unit's Version at last sync. Used as
+//     the local-side baseline: local.Version > synced_local_version means the
+//     user made un-synced local edits (localChanged).
+//
+// Both columns default to 0 (no edits assumed), which is the conservative
+// safe default: if an existing row has no value for these columns the first
+// pull after migration will treat any local version > 0 as a potential
+// conflict, surfacing it for review rather than silently overwriting.
+const sqlUnitsSyncStateBaselines = `
+    ALTER TABLE unit_sync_state
+        ADD COLUMN synced_server_version INTEGER NOT NULL DEFAULT 0;
+
+    ALTER TABLE unit_sync_state
+        ADD COLUMN synced_local_version INTEGER NOT NULL DEFAULT 0;
+`
+
 // Migrations returns the migration set that owns the units schema.
 func Migrations() []migrations.Migration {
 	return []migrations.Migration{
@@ -153,6 +184,41 @@ func Migrations() []migrations.Migration {
 			},
 			Down: func(ctx context.Context, tx migrations.WriteTx) error {
 				_, err := tx.Exec(ctx, "DROP TABLE IF EXISTS unit_sync_state")
+				return err
+			},
+		},
+		{
+			ID:            migrationIDUnitsSyncStateBaselines,
+			Version:       1102,
+			OwningMission: OwningMission,
+			UpSource:      sqlUnitsSyncStateBaselines,
+			Up: func(ctx context.Context, tx migrations.WriteTx) error {
+				for _, stmt := range splitUnitSQL(sqlUnitsSyncStateBaselines) {
+					if _, err := tx.Exec(ctx, stmt); err != nil {
+						return err
+					}
+				}
+				return nil
+			},
+			Down: func(ctx context.Context, tx migrations.WriteTx) error {
+				// SQLite does not support DROP COLUMN in older versions; a
+				// down-migration that must run on SQLite recreates the table
+				// without the new columns. In practice operators downgrading
+				// past 1102 should restore from backup.
+				_, err := tx.Exec(ctx, `
+					CREATE TABLE IF NOT EXISTS unit_sync_state_old AS
+						SELECT unit_id, node_id, synced_version, classification, last_synced
+						FROM unit_sync_state
+				`)
+				if err != nil {
+					return err
+				}
+				if _, err := tx.Exec(ctx, "DROP TABLE unit_sync_state"); err != nil {
+					return err
+				}
+				_, err = tx.Exec(ctx, `
+					ALTER TABLE unit_sync_state_old RENAME TO unit_sync_state
+				`)
 				return err
 			},
 		},

@@ -274,6 +274,12 @@ func (s *memStore) UpsertSyncState(_ context.Context, st SyncState) (SyncState, 
 	if st.UnitID == "" {
 		return SyncState{}, fmt.Errorf("units: UpsertSyncState: empty UnitID")
 	}
+	// Reject empty node_id: consistent with the SQL store which has a NOT NULL
+	// DEFAULT '' column but enforces non-empty via the same application-level
+	// guard we add here. Both backends must behave identically.
+	if st.NodeID == "" {
+		return SyncState{}, fmt.Errorf("units: UpsertSyncState: empty NodeID")
+	}
 	if st.LastSynced.IsZero() {
 		st.LastSynced = s.now()
 	}
@@ -281,13 +287,11 @@ func (s *memStore) UpsertSyncState(_ context.Context, st SyncState) (SyncState, 
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	// Enforce the node_id UNIQUE invariant: a non-empty node id may not map
-	// to two different units.
-	if st.NodeID != "" {
-		for uid, existing := range s.syncState {
-			if uid != st.UnitID && existing.NodeID == st.NodeID {
-				return SyncState{}, fmt.Errorf("units: UpsertSyncState: node_id %q already mapped to unit %q", st.NodeID, uid)
-			}
+	// Enforce the node_id UNIQUE invariant: a node id may not map to two
+	// different units. Both backends must behave identically here.
+	for uid, existing := range s.syncState {
+		if uid != st.UnitID && existing.NodeID == st.NodeID {
+			return SyncState{}, fmt.Errorf("units: UpsertSyncState: node_id %q already mapped to unit %q", st.NodeID, uid)
 		}
 	}
 	s.syncState[st.UnitID] = st
