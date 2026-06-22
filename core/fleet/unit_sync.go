@@ -551,6 +551,20 @@ func (s *UnitSyncer) Conflicts() []UnitConflict {
 	return out
 }
 
+// ClearConflict drops the surfaced conflict for unitID once it has been
+// resolved (merge or enshrine, Phase-3 WP17). A no-op when no conflict is
+// recorded for the unit. Safe for concurrent use.
+func (s *UnitSyncer) ClearConflict(unitID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i, c := range s.conflicts {
+		if c.UnitID == unitID {
+			s.conflicts = append(s.conflicts[:i], s.conflicts[i+1:]...)
+			return
+		}
+	}
+}
+
 // UnitSyncStatus is the status view for the RPC layer.
 type UnitSyncStatus struct {
 	Cursor        string    `json:"cursor"`
