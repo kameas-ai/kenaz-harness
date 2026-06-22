@@ -14,6 +14,10 @@ const (
 	// migrationIDUnitsInit identifies migration 1100 — the initial
 	// schema landing for the unified-context-artifacts units store.
 	migrationIDUnitsInit = "units/1100-init"
+
+	// migrationIDUnitsSyncState identifies migration 1101 — the Phase-2
+	// fleet sync sidecar (unit_sync_state).
+	migrationIDUnitsSyncState = "units/1101-sync-state"
 )
 
 // sqlUnitsSchema is the DDL for migration 1100. Three tables:
@@ -84,6 +88,34 @@ const sqlUnitsSchema = `
         ON unit_edges (to_id, created_at ASC);
 `
 
+// sqlUnitsSyncStateSchema is the DDL for migration 1101 — the Phase-2
+// fleet sync sidecar (WP13/WP14 of unified-context-artifacts-01NCTXU01).
+//
+// unit_sync_state holds one row per *synced* unit: the fleet node id it
+// maps to, the unit version last confirmed in sync, the opaque fleet
+// classification recorded at last sync, and the last-sync wall clock.
+// Personal units never get a row (they never leave the machine, NFR-005).
+//
+//   - unit_id is the primary key and FK to units(id) (ON DELETE CASCADE so
+//     deleting a unit drops its sidecar).
+//   - node_id has a UNIQUE index so the pull path can resolve a server node
+//     back to its local unit in one lookup (no re-discovery).
+//   - classification is stored opaquely as a string so core/units never
+//     learns the fleet vocabulary (team_shared / org_shared) — the mapper
+//     in core/fleet owns the translation.
+const sqlUnitsSyncStateSchema = `
+    CREATE TABLE IF NOT EXISTS unit_sync_state (
+        unit_id         TEXT PRIMARY KEY REFERENCES units(id) ON DELETE CASCADE,
+        node_id         TEXT NOT NULL DEFAULT '',
+        synced_version  INTEGER NOT NULL DEFAULT 0,
+        classification  TEXT NOT NULL DEFAULT '',
+        last_synced     INTEGER NOT NULL
+    );
+
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_unit_sync_state_node
+        ON unit_sync_state (node_id);
+`
+
 // Migrations returns the migration set that owns the units schema.
 func Migrations() []migrations.Migration {
 	return []migrations.Migration{
@@ -104,6 +136,24 @@ func Migrations() []migrations.Migration {
 			// past 1100 must restore from a pre-1100 backup.
 			Down: func(_ context.Context, _ migrations.WriteTx) error {
 				return nil
+			},
+		},
+		{
+			ID:            migrationIDUnitsSyncState,
+			Version:       1101,
+			OwningMission: OwningMission,
+			UpSource:      sqlUnitsSyncStateSchema,
+			Up: func(ctx context.Context, tx migrations.WriteTx) error {
+				for _, stmt := range splitUnitSQL(sqlUnitsSyncStateSchema) {
+					if _, err := tx.Exec(ctx, stmt); err != nil {
+						return err
+					}
+				}
+				return nil
+			},
+			Down: func(ctx context.Context, tx migrations.WriteTx) error {
+				_, err := tx.Exec(ctx, "DROP TABLE IF EXISTS unit_sync_state")
+				return err
 			},
 		},
 	}
