@@ -108,15 +108,22 @@ func TestImpl_UnitMethods_UnitsUnavailable(t *testing.T) {
 
 func TestImpl_PromoteAsMR_InvalidTarget(t *testing.T) {
 	m := units.NewManager(units.NewMemoryStore())
-	// Syncer present but target invalid → rejected before any network call.
+	// Syncer is nil (offline), but target validation runs before the syncer
+	// check so the invalid-target error is always returned — no fleet needed.
 	impl := &Impl{Units: m, Syncer: nil}
 	ctx := context.Background()
 	u, _ := m.Create(ctx, units.Unit{
 		Kind: units.KindDoc, Scope: units.ScopeProject, ScopeID: "p1",
 		Classification: units.ClassPersonal, LoadPolicy: units.LoadAlways, Title: "n",
 	})
-	// "personal" is not a valid promote target.
-	if _, err := impl.Unit_PromoteAsMergeRequest(ctx, u.ID, "personal", "", ""); err == nil {
-		t.Error("promote to personal accepted; want rejection")
+	// "personal" is not a valid promote target; must get the invalid-target
+	// error, NOT ErrSyncerUnavailable (which would mean the Syncer check ran
+	// before the target-validation path and the test was covering the wrong branch).
+	_, err := impl.Unit_PromoteAsMergeRequest(ctx, u.ID, "personal", "", "")
+	if err == nil {
+		t.Fatal("promote to personal accepted; want rejection")
+	}
+	if errors.Is(err, ErrSyncerUnavailable) {
+		t.Errorf("promote to personal returned ErrSyncerUnavailable; target-validation path was bypassed — the Syncer nil-check ran first")
 	}
 }

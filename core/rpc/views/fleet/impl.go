@@ -63,15 +63,19 @@ func (f *Impl) Unit_PromoteAsMergeRequest(ctx context.Context, unitID, toClassif
 	if f.Units == nil {
 		return MergeRequestResult{}, ErrUnitsUnavailable
 	}
-	if f.Syncer == nil {
-		return MergeRequestResult{}, ErrSyncerUnavailable
-	}
+	// Validate the target classification before checking the syncer so that
+	// callers (and tests) always get the invalid-target error regardless of
+	// whether fleet sync is enabled — no network round-trip needed to reject
+	// a nonsensical target.
 	toClass := units.Classification(toClassification)
 	switch toClass {
 	case units.ClassTeam, units.ClassOrg:
 		// valid promotion targets
 	default:
 		return MergeRequestResult{}, fmt.Errorf("invalid promote target %q; must be team or org", toClassification)
+	}
+	if f.Syncer == nil {
+		return MergeRequestResult{}, ErrSyncerUnavailable
 	}
 	src, err := f.Units.Get(ctx, unitID)
 	if err != nil {
