@@ -1565,23 +1565,41 @@ func New(c *core.Core) *API {
 		a.fleetAPI = &fleetview.Impl{Consent: tc}
 
 		// Wire the fleet OTLP export pipeline (harness-fleet-otlp-export-01NTLMEX01).
-		// SetFleetOTLPPipeline is called here because:
-		//   (a) tc (consent) is now known,
-		//   (b) telemetry is already up (c.Start() ran before rpc.New),
-		//   (c) settingsImpl is wired above so we can wire the activate hook.
-		if settingsImpl != nil {
-			var otlpRes *resource.Resource
-			var otlpTP *sdktrace.TracerProvider
-			if tel := c.Telemetry(); tel != nil {
-				otlpRes = tel.Resource
-				otlpTP = tel.TracerProvider
+		//
+		// OSS-first boundary (fleet-auth-foundation-01NDFSEX08 WP07): core must
+		// not import core/fleet. The concrete pipeline is constructed here in
+		// the rpc layer (which is allowed to import core/fleet) and wired into
+		// core via the FleetPipeline interface setter before c.Start runs
+		// initTelemetry. The rpc layer also holds a typed ref for the Activate
+		// call in settings/fleet.go.
+		//
+		// c.Start() has NOT run yet at this point (it fires in the Wails
+		// OnStartup callback). SetFleetPipeline must be called here so
+		// initTelemetry (inside c.Start) finds the exporters already registered.
+		if !corefleet.Disabled() {
+			profile := corefleet.ResolveProfile()
+			if profile.Configured() {
+				fleetPipeline := corefleet.NewFleetOTLPPipeline(nil)
+				// Wire into core via the interface so core stays fleet-free.
+				if c != nil {
+					c.SetFleetPipeline(fleetPipeline)
+				}
+				// Wire into settings (Activate hook post-enroll) with the concrete type.
+				if settingsImpl != nil {
+					var otlpRes *resource.Resource
+					var otlpTP *sdktrace.TracerProvider
+					if tel := c.Telemetry(); tel != nil {
+						otlpRes = tel.Resource
+						otlpTP = tel.TracerProvider
+					}
+					settingsImpl.SetFleetOTLPPipeline(
+						fleetPipeline,
+						otlpRes,
+						otlpTP,
+						tc,
+					)
+				}
 			}
-			settingsImpl.SetFleetOTLPPipeline(
-				c.FleetOTLPPipeline(),
-				otlpRes,
-				otlpTP,
-				tc,
-			)
 		}
 	} else {
 		// Test-chassis path: create a consent with a temp dir so the

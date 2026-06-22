@@ -298,6 +298,10 @@ export function Context_StopStream(arg1) {
   return window['go']['rpc']['Bindings']['Context_StopStream'](arg1);
 }
 
+export function Contexts_AttachModule(arg1, arg2, arg3) {
+  return window['go']['rpc']['Bindings']['Contexts_AttachModule'](arg1, arg2, arg3);
+}
+
 export function Contexts_ContextPromote(arg1) {
   return window['go']['rpc']['Bindings']['Contexts_ContextPromote'](arg1);
 }
@@ -344,10 +348,6 @@ export function Contexts_RootPath() {
 
 export function Contexts_Save(arg1, arg2) {
   return window['go']['rpc']['Bindings']['Contexts_Save'](arg1, arg2);
-}
-
-export function Contexts_AttachModule(arg1, arg2, arg3) {
-  return window['go']['rpc']['Bindings']['Contexts_AttachModule'](arg1, arg2, arg3);
 }
 
 export function Corpus_CreateCorpus(arg1) {

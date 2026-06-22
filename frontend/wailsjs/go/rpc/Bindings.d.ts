@@ -196,6 +196,8 @@ export function Context_StartStream():Promise<string>;
 
 export function Context_StopStream(arg1:string):Promise<void>;
 
+export function Contexts_AttachModule(arg1:string,arg2:string,arg3:string):Promise<contexts.ModuleAttachment>;
+
 export function Contexts_ContextPromote(arg1:string):Promise<contexts.ContextPromoteResult>;
 
 export function Contexts_ContextPublish(arg1:contexts.ContextPublishRequest):Promise<contexts.ContextPublishResult>;
@@ -219,8 +221,6 @@ export function Contexts_Rename(arg1:string,arg2:string):Promise<void>;
 export function Contexts_RootPath():Promise<string>;
 
 export function Contexts_Save(arg1:string,arg2:string):Promise<void>;
-
-export function Contexts_AttachModule(arg1:string,arg2:string,arg3:string):Promise<contexts.ModuleAttachment>;
 
 export function Corpus_CreateCorpus(arg1:corpus.CreateRequest):Promise<corpus.Corpus>;
 

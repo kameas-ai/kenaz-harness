@@ -1589,6 +1589,32 @@ export namespace contexts {
 		    return a;
 		}
 	}
+	export class ModuleAttachment {
+	    id: string;
+	    scopeKind: string;
+	    scopeId?: string;
+	    contentSource: string;
+	    content: string;
+	    kind: string;
+	    position: number;
+	    createdAt: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ModuleAttachment(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.scopeKind = source["scopeKind"];
+	        this.scopeId = source["scopeId"];
+	        this.contentSource = source["contentSource"];
+	        this.content = source["content"];
+	        this.kind = source["kind"];
+	        this.position = source["position"];
+	        this.createdAt = source["createdAt"];
+	    }
+	}
 	export class Node {
 	    name: string;
 	    path: string;
@@ -1629,32 +1655,6 @@ export namespace contexts {
 		    }
 		    return a;
 		}
-	}
-	export class ModuleAttachment {
-	    id: string;
-	    scopeKind: string;
-	    scopeId?: string;
-	    contentSource: string;
-	    content: string;
-	    kind: string;
-	    position: number;
-	    createdAt: string;
-
-	    static createFrom(source: any = {}) {
-	        return new ModuleAttachment(source);
-	    }
-
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.id = source["id"];
-	        this.scopeKind = source["scopeKind"];
-	        this.scopeId = source["scopeId"];
-	        this.contentSource = source["contentSource"];
-	        this.content = source["content"];
-	        this.kind = source["kind"];
-	        this.position = source["position"];
-	        this.createdAt = source["createdAt"];
-	    }
 	}
 
 }
