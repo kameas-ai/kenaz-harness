@@ -459,6 +459,52 @@ func TestSQLStore_ConflictsWithEdge_Enshrine(t *testing.T) {
 	}
 }
 
+// TestMigration1103_Rollback_NarrowCheckRestored verifies that rolling back
+// migration 1103 restores the narrow unit_edges.kind CHECK constraint, so a
+// 'conflicts_with' insert is rejected again after rollback. This guards the
+// down-path from silently leaving the schema in the widened state.
+func TestMigration1103_Rollback_NarrowCheckRestored(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+
+	// Precondition: 1103 is applied (openTestDB runs all migrations). Confirm
+	// conflicts_with is currently accepted (sanity-check before rolling back).
+	st := units.NewSQLStore(db)
+	a, _ := st.Create(ctx, units.Unit{
+		Kind: units.KindDoc, Scope: units.ScopeGlobal,
+		Classification: units.ClassTeam, LoadPolicy: units.LoadAlways, Title: "a",
+	})
+	b, _ := st.Create(ctx, units.Unit{
+		Kind: units.KindDoc, Scope: units.ScopeGlobal,
+		Classification: units.ClassTeam, LoadPolicy: units.LoadAlways, Title: "b",
+	})
+	if _, err := st.AddEdge(ctx, units.Edge{FromID: a.ID, ToID: b.ID, Kind: units.EdgeConflictsWith}); err != nil {
+		t.Fatalf("precondition: conflicts_with edge rejected before rollback: %v", err)
+	}
+
+	// Roll back migration 1103 (restores the narrow CHECK).
+	if err := db.Migrations().Rollback(ctx, 1102); err != nil {
+		t.Fatalf("Rollback(1102): %v", err)
+	}
+
+	// After rollback the narrow CHECK is back: a conflicts_with insert must fail.
+	// We bypass units.Store validation (which also rejects unknown kinds) by
+	// writing directly through the DB's WriteTx so the SQL constraint is what
+	// we're testing, not the Go-layer guard.
+	ulid := "01HW0000000000000000000ZZ" // synthetic; just needs to not collide
+	insertErr := db.WriteTx(ctx, func(tx storage.WriteTx) error {
+		_, err := tx.Exec(ctx,
+			`INSERT INTO unit_edges (id, from_id, to_id, kind, version, created_at)
+			 VALUES (?, ?, ?, 'conflicts_with', 1, strftime('%s','now'))`,
+			ulid, a.ID, b.ID,
+		)
+		return err
+	})
+	if insertErr == nil {
+		t.Fatal("after 1103 rollback: conflicts_with insert succeeded; narrow CHECK not restored")
+	}
+}
+
 // TestSQLStore_AddEdge_RejectsUnknownKind confirms the widened CHECK still
 // rejects genuinely-unknown edge kinds (the validation boundary held).
 func TestSQLStore_AddEdge_RejectsUnknownKind(t *testing.T) {
