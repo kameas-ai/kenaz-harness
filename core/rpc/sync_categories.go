@@ -35,6 +35,17 @@ type uiThemePayload struct {
 	Accent string `json:"accent"`
 }
 
+// modelPrefsPayload is the credential-free wire shape for SyncCategoryModelPrefs.
+// Only fields that carry NO credential bytes are included.
+// API keys / credential store references live outside the Settings struct and
+// must never appear here. This payload covers model selection + compaction prefs.
+type modelPrefsPayload struct {
+	CompactionAggressiveness string `json:"compactionAggressiveness,omitempty"`
+	CompactionArchiveDays    int    `json:"compactionArchiveDays,omitempty"`
+	CompactionRecentWindow   int    `json:"compactionRecentWindow,omitempty"`
+	MaxAgentTurns            int    `json:"maxAgentTurns,omitempty"`
+}
+
 // registerSyncCategories wires collectors + appliers for every sync category
 // onto syncer and starts the background poll loop. Safe to call with a nil
 // syncer or nil settings store: it no-ops so the offline / fleet-disabled
@@ -91,26 +102,72 @@ func registerSyncCategories(
 			corefleet.CategoryConfigForMCP(mcpCategory))
 	}
 
-	// ── provider_profiles / model_prefs / mcp_recipes ───────────────────────
+	// ── model_prefs ─────────────────────────────────────────────────────────
 	//
-	// These three subsystems do not yet expose a single credential-free
-	// snapshot accessor that this wiring can safely collect from. They are
-	// registered with an empty-payload collector so:
-	//   1. The category appears in Sync_Status and can be toggled.
-	//   2. A fleet pull-down that carries newer state is still applied via the
-	//      (nil) applier path without error — i.e. the loop is fully live.
-	// Once those subsystems surface a redacted snapshot, swap the collector
-	// here. The HARD RULE (no credential bytes) is trivially satisfied by the
-	// empty payload.
+	// Credential-free model preference fields: compaction aggressiveness,
+	// archive days, recent window, max agent turns. API keys are in the
+	// credential store and never appear here.
+	if store != nil {
+		syncer.RegisterCategory(corefleet.SyncCategoryModelPrefs, corefleet.CategoryConfig{
+			Collector: func(_ context.Context) (json.RawMessage, error) {
+				s, err := store.LoadAll()
+				if err != nil {
+					return nil, err
+				}
+				return json.Marshal(modelPrefsPayload{
+					CompactionAggressiveness: s.CompactionAggressiveness,
+					CompactionArchiveDays:    s.CompactionArchiveDays,
+					CompactionRecentWindow:   s.CompactionRecentWindow,
+					MaxAgentTurns:            s.MaxAgentTurns,
+				})
+			},
+			Applier: func(_ context.Context, raw json.RawMessage) error {
+				var p modelPrefsPayload
+				if err := json.Unmarshal(raw, &p); err != nil {
+					return err
+				}
+				s, err := store.LoadAll()
+				if err != nil {
+					return err
+				}
+				if p.CompactionAggressiveness != "" {
+					s.CompactionAggressiveness = p.CompactionAggressiveness
+				}
+				if p.CompactionArchiveDays > 0 {
+					s.CompactionArchiveDays = p.CompactionArchiveDays
+				}
+				if p.CompactionRecentWindow > 0 {
+					s.CompactionRecentWindow = p.CompactionRecentWindow
+				}
+				if p.MaxAgentTurns > 0 {
+					s.MaxAgentTurns = p.MaxAgentTurns
+				}
+				return store.SaveAll(s)
+			},
+		})
+	}
+
+	// ── provider_profiles / mcp_recipes ─────────────────────────────────────
+	//
+	// These subsystems do not yet expose a single credential-free snapshot
+	// accessor. They are registered with an empty-payload collector (HARD
+	// RULE: no credential bytes) and a no-op applier (non-nil so the pull-
+	// apply path is live — when fleet carries newer state the loop runs
+	// through without error, ready for the subsystem to be extended later).
 	emptyCollector := func(_ context.Context) (json.RawMessage, error) {
 		return json.RawMessage(`{}`), nil
 	}
+	noopApplier := func(_ context.Context, _ json.RawMessage) error {
+		return nil
+	}
 	for _, cat := range []corefleet.SyncCategory{
 		corefleet.SyncCategoryProviderProfiles,
-		corefleet.SyncCategoryModelPrefs,
 		corefleet.SyncCategoryMCPRecipes,
 	} {
-		syncer.RegisterCategory(cat, corefleet.CategoryConfig{Collector: emptyCollector})
+		syncer.RegisterCategory(cat, corefleet.CategoryConfig{
+			Collector: emptyCollector,
+			Applier:   noopApplier,
+		})
 	}
 
 	syncer.StartPolling(ctx)
