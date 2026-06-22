@@ -477,6 +477,13 @@ func validContentSource(src string) bool {
 		// string after a successful Put.
 		return len(src) > len("media:")
 	}
+	if strings.HasPrefix(src, "module:") {
+		// "module:<dir-rel-path>" — a context module directory. The
+		// directory contains a root file (context.md / agents.md) whose
+		// front-matter declares which sibling files to load eagerly.
+		// Introduced by unified-context-artifacts-01NCTXU01.
+		return len(src) > len("module:")
+	}
 	return false
 }
 

@@ -13,6 +13,7 @@ import (
 	"github.com/kameas-ai/kenaz-harness/core"
 	coresubagent "github.com/kameas-ai/kenaz-harness/core/tools/subagentdispatch"
 	coreart "github.com/kameas-ai/kenaz-harness/core/artifacts"
+	corecontexts "github.com/kameas-ai/kenaz-harness/core/contexts"
 	"github.com/kameas-ai/kenaz-harness/core/logging"
 	"github.com/kameas-ai/kenaz-harness/core/policy/cedar"
 	elicitview "github.com/kameas-ai/kenaz-harness/core/rpc/views/elicit"
@@ -32,6 +33,7 @@ import (
 	corewebsearch "github.com/kameas-ai/kenaz-harness/core/tools/websearch"
 	coreaskuser "github.com/kameas-ai/kenaz-harness/core/tools/askuserquestion"
 	corelistsecrets "github.com/kameas-ai/kenaz-harness/core/tools/listsecrets"
+	corereadctx "github.com/kameas-ai/kenaz-harness/core/tools/readcontextfile"
 	corewebfetch "github.com/kameas-ai/kenaz-harness/core/tools/webfetch"
 	coresecrets "github.com/kameas-ai/kenaz-harness/core/secrets"
 	"github.com/kameas-ai/kenaz-harness/core/credstore/refs"
@@ -610,7 +612,40 @@ func builtinEnabledPredicate(s *settings.API) func(string) bool {
 		case coreplanmode.EnterToolName, coreplanmode.ExitToolName:
 			logging.L().Info("rpc.builtins.predicate", "tool", name, "enabled", true)
 			return true
+
+		// ── read_context_file (unified-context-artifacts-01NCTXU01) ──
+		// Always-on: reading context module files on demand is low-risk and
+		// is the expected companion behaviour to module attachment. Path-
+		// confinement enforced within the tool itself (module root boundary).
+		case corereadctx.ToolName:
+			logging.L().Info("rpc.builtins.predicate", "tool", name, "enabled", true)
+			return true
 		}
 		return true
 	}
+}
+
+// registerReadContextFileTool wires the kaneaz__read_context_file
+// built-in into the registry. The tool allows the agent to read on-demand
+// files from attached context modules (unified-context-artifacts-01NCTXU01).
+//
+// nil registry, nil library, or nil moduleSource are no-ops — the tool is
+// not registered when the context library or attachment manager are absent
+// (test/nil-core paths).
+func registerReadContextFileTool(
+	registry *toolloop.BuiltinRegistry,
+	lib *corecontexts.Library,
+	moduleSource corereadctx.ModuleSource,
+) {
+	if registry == nil || lib == nil || moduleSource == nil {
+		logging.L().Info("rpc.builtins.read_context_file_skipped",
+			"reason", "library or module source not wired")
+		return
+	}
+	tool := corereadctx.New(corereadctx.Options{
+		Library: lib,
+		Modules: moduleSource,
+	})
+	registry.Register(tool)
+	logging.L().Info("rpc.builtins.register", "tool", tool.Name())
 }

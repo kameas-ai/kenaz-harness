@@ -859,6 +859,15 @@ func New(c *core.Core) *API {
 	contextsAPI, contextsLib := newContextsAPI(c)
 	a.contextsAPI = contextsAPI
 	startContextsWatcher(contextsLib, a.broker)
+	// Wire the attachments manager into the contexts view so AttachModule
+	// can persist context_attachments rows. Uses a type assertion because
+	// newContextsAPI always returns *contextsview.API (the interface is
+	// widened only for the field type). A nil attMgr leaves the adder
+	// unwired — AttachModule will still resolve module content but won't
+	// persist an attachment row (test/nil-core path).
+	if impl, ok := contextsAPI.(*contextsview.API); ok && attMgr != nil {
+		impl.WithAttachmentAdder(&contextsAttachmentAdder{mgr: attMgr})
+	}
 
 	// Settings: file-backed when we have a user config dir; in-memory
 	// fallback for the test harness path so New(nil) keeps working.
@@ -1063,7 +1072,7 @@ func New(c *core.Core) *API {
 	a.corpusMgr = newCorpusManager(c, embedder)
 	a.graphMgr = newGraphManagerWithDeps(c, a.convMgr, a.corpusMgr, memStore, embedder, a_bashStore)
 
-	stack := newLLMStack(c, a.broker, personalForLLM, hooksRunner, attMgr, confirmEachEnabled, artifactSink, artifactSinkConcrete, settingsImpl, a_bashStore, artMgr, a.graphMgr, a.promptRegistry, usageMgr, a.elicitAPI, slashDispatch, a.exposureIdx, a.sessionsAPI)
+	stack := newLLMStack(c, a.broker, personalForLLM, hooksRunner, attMgr, confirmEachEnabled, artifactSink, artifactSinkConcrete, settingsImpl, a_bashStore, artMgr, a.graphMgr, a.promptRegistry, usageMgr, a.elicitAPI, slashDispatch, a.exposureIdx, a.sessionsAPI, contextsLib)
 	a.llmAPI = stack.api
 	a.stdioPool = stack.pool
 	a.builtins = stack.builtins
@@ -2620,6 +2629,10 @@ func newLLMStack(
 	slashDispatch *coreslashcmd.Dispatch,
 	exposureIdx *secrets.ExposureIndex,
 	postureManager coreplanmode.SessionPostureManager,
+	// contextsLib is the open Context Library used to register the
+	// kaneaz__read_context_file built-in. nil is safe; the tool is
+	// simply not registered when no library is wired.
+	contextsLib *corecontexts.Library,
 ) llmStack {
 	// Share ONE secrets backend between the credref resolver (which
 	// reads keys when streaming) and the keychain writer (which stages
@@ -2744,6 +2757,17 @@ func newLLMStack(
 	// (FSReadEnabled / FSWriteEnabled) so the Tools panel toggles take effect
 	// on the next chat turn. Uses the same Cedar engine as the bash tool.
 	registerFSBuiltinTools(builtinRegistry, bashCedarEngine, settingsStore)
+	// unified-context-artifacts-01NCTXU01: register the read_context_file
+	// built-in so the agent can read on-demand files from attached context
+	// modules. Requires both the contexts library AND an attachment manager;
+	// nil-safe: if either is absent the tool is simply not registered.
+	if attMgr != nil && contextsLib != nil {
+		modSrc := &moduleSourceAdapter{
+			mgr:    attMgr,
+			reader: &sessionProjectReader{mgr: c.SessionManager()},
+		}
+		registerReadContextFileTool(builtinRegistry, contextsLib, modSrc)
+	}
 	builtinFilter := toolloop.NewEnabledFilter(builtinRegistry, builtinEnabledPredicate(settingsImpl))
 	wrappedPool := toolloop.NewBuiltinPool(&mcpPoolAdapter{inner: mcpPool}, builtinFilter)
 	var attResolver llm.AttachmentsResolver
@@ -3477,6 +3501,72 @@ func newContextsAPI(c *core.Core) (contextsview.ContextsAPI, *corecontexts.Libra
 	// shouldn't keep the surface from coming up.
 	_ = lib.SweepTrash()
 	return contextsview.New(lib), lib
+}
+
+// moduleSourceAdapter bridges core/attachments.Manager into the
+// readcontextfile.ModuleSource interface so the read_context_file tool
+// can enumerate the currently attached module directories for a session.
+// It queries the attachment manager for all resolved attachments whose
+// ContentSource has the "module:" scheme.
+type moduleSourceAdapter struct {
+	mgr    *coreatt.Manager
+	reader coreatt.SessionProjectReader
+}
+
+func (s *moduleSourceAdapter) AttachedModuleDirs(ctx context.Context, sessionID string) ([]string, error) {
+	if s == nil || s.mgr == nil {
+		return nil, nil
+	}
+	rows, err := s.mgr.ListResolved(ctx, s.reader, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	const prefix = "module:"
+	var dirs []string
+	seen := make(map[string]bool)
+	for _, r := range rows {
+		if !strings.HasPrefix(r.ContentSource, prefix) {
+			continue
+		}
+		dir := r.ContentSource[len(prefix):]
+		if dir != "" && !seen[dir] {
+			seen[dir] = true
+			dirs = append(dirs, dir)
+		}
+	}
+	return dirs, nil
+}
+
+// contextsAttachmentAdder bridges core/attachments.Manager into the
+// contextsview.AttachmentAdder interface so AttachModule can persist a
+// context_attachments row without the contexts view importing the core
+// attachments package directly.
+type contextsAttachmentAdder struct {
+	mgr *coreatt.Manager
+}
+
+func (a *contextsAttachmentAdder) Add(ctx context.Context, in contextsview.AttachmentInput) (contextsview.ModuleAttachment, error) {
+	stored, err := a.mgr.Add(ctx, coreatt.Attachment{
+		ScopeKind:     in.ScopeKind,
+		ScopeID:       in.ScopeID,
+		ContentSource: in.ContentSource,
+		Content:       in.Content,
+		Kind:          in.Kind,
+	})
+	if err != nil {
+		return contextsview.ModuleAttachment{}, err
+	}
+	out := contextsview.ModuleAttachment{
+		ID:            stored.ID,
+		ScopeKind:     stored.ScopeKind,
+		ScopeID:       stored.ScopeID,
+		ContentSource: stored.ContentSource,
+		Content:       stored.Content,
+		Kind:          stored.Kind,
+		Position:      stored.Position,
+		CreatedAt:     stored.CreatedAt.UTC().Format(time.RFC3339Nano),
+	}
+	return out, nil
 }
 
 // startContextsWatcher wires the library's fsnotify-backed watcher into
