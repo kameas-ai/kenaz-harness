@@ -157,6 +157,18 @@ type ContextSyncStatusView struct {
 	PullCount int `json:"pull_count"`
 	// TeamCapEnabled is true when the team-graph sharing capability is active.
 	TeamCapEnabled bool `json:"team_cap_enabled"`
+	// Conflicts holds per-node server/client version conflicts from the most
+	// recent push (empty when the last push had none). The frontend prompts
+	// the user to reconcile each conflicted entry.
+	Conflicts []ContextConflictView `json:"conflicts,omitempty"`
+}
+
+// ContextConflictView is one per-node version conflict surfaced by
+// Context_SyncStatus (server_version vs client_version).
+type ContextConflictView struct {
+	NodeID        string `json:"node_id"`
+	ServerVersion int    `json:"server_version"`
+	ClientVersion int    `json:"client_version"`
 }
 
 // ── Context module / AttachModule ────────────────────────────────────────────

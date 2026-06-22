@@ -1698,6 +1698,14 @@ func New(c *core.Core) *API {
 			}
 			syncer := corefleet.NewContextGraphSyncer(flCl, flDataDir, caps)
 			impl.WithSyncer(syncer)
+
+			// harness-fleet-sync-activation-01NSYNC01 gap #2: start the
+			// background context-pull loop so f->h team/org read-layer deltas
+			// merge into the local pulled cache (surfaced via PulledEntries)
+			// without a manual Context_SyncStatus poke. Self-gates on
+			// sign-in + team-graph capability; personal stays local.
+			syncer.StartPoller(context.Background())
+
 			logging.L().Info("rpc.context_graph_syncer.wired",
 				"fleet_client_nil", flCl == nil,
 				"data_dir", flDataDir,

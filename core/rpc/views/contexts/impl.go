@@ -243,6 +243,17 @@ func (a *API) Context_SyncStatus(_ context.Context) (ContextSyncStatusView, erro
 		return ContextSyncStatusView{}, nil
 	}
 	snap := a.syncer.Status()
+	var conflicts []ContextConflictView
+	if len(snap.Conflicts) > 0 {
+		conflicts = make([]ContextConflictView, len(snap.Conflicts))
+		for i, c := range snap.Conflicts {
+			conflicts[i] = ContextConflictView{
+				NodeID:        c.NodeID,
+				ServerVersion: c.ServerVersion,
+				ClientVersion: c.ClientVersion,
+			}
+		}
+	}
 	return ContextSyncStatusView{
 		Cursor:         snap.Cursor,
 		LastPullAt:     snap.LastPullAt,
@@ -250,6 +261,7 @@ func (a *API) Context_SyncStatus(_ context.Context) (ContextSyncStatusView, erro
 		LastPushErr:    snap.LastPushErr,
 		PullCount:      snap.PullCount,
 		TeamCapEnabled: snap.TeamCapEnabled,
+		Conflicts:      conflicts,
 	}, nil
 }
 

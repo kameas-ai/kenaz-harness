@@ -280,8 +280,17 @@ type ContextGraphSyncer struct {
 	lastPullErr string
 	// lastPushErr is the last push error string (empty on success).
 	lastPushErr string
+	// lastConflicts holds the per-node version conflicts (server_version vs
+	// client_version) from the most recent push that returned any. Surfaced
+	// via Status so the Contexts view can prompt the user to reconcile.
+	lastConflicts []ContextPushConflict
 	// pullCount is the total number of entries received from fleet (cumulative).
 	pullCount int
+
+	// pollOnce guards StartPoller so the background loop starts at most once.
+	pollOnce sync.Once
+	// stopCh signals the background poll loop to exit (closed by Stop).
+	stopCh chan struct{}
 }
 
 // NewContextGraphSyncer constructs a ContextGraphSyncer. The syncer does
@@ -424,6 +433,13 @@ func (s *ContextGraphSyncer) PushEntry(ctx context.Context, entry ContextNodeEnt
 
 	s.mu.Lock()
 	s.lastPushErr = ""
+	// Surface server/client version conflicts so the Contexts view can prompt
+	// the user to reconcile (FR: surface server_version vs client_version).
+	if len(result.Conflicts) > 0 {
+		s.lastConflicts = append([]ContextPushConflict(nil), result.Conflicts...)
+	} else {
+		s.lastConflicts = nil
+	}
 	s.mu.Unlock()
 
 	return &result, nil
@@ -679,6 +695,10 @@ type ContextSyncStatusSnapshot struct {
 	PullCount int `json:"pull_count"`
 	// TeamCapEnabled is true when the team-graph capability is active.
 	TeamCapEnabled bool `json:"team_cap_enabled"`
+	// Conflicts holds the per-node server/client version conflicts from the
+	// most recent push (empty when the last push had none). Lets the Contexts
+	// view prompt the user to reconcile.
+	Conflicts []ContextPushConflict `json:"conflicts,omitempty"`
 }
 
 // Status returns a snapshot of the syncer state.
@@ -690,6 +710,10 @@ func (s *ContextGraphSyncer) Status() ContextSyncStatusSnapshot {
 		cur := s.caps.Current()
 		teamCap = cur.Has(CapSharedTeamGraph)
 	}
+	var conflicts []ContextPushConflict
+	if len(s.lastConflicts) > 0 {
+		conflicts = append([]ContextPushConflict(nil), s.lastConflicts...)
+	}
 	return ContextSyncStatusSnapshot{
 		Cursor:         s.cursor,
 		LastPullAt:     s.lastPullAt,
@@ -697,6 +721,81 @@ func (s *ContextGraphSyncer) Status() ContextSyncStatusSnapshot {
 		LastPushErr:    s.lastPushErr,
 		PullCount:      s.pullCount,
 		TeamCapEnabled: teamCap,
+		Conflicts:      conflicts,
+	}
+}
+
+// ── Background pull poller (harness-fleet-sync-activation-01NSYNC01 gap #2) ─────
+
+const (
+	contextPullBaseInterval = 60 * time.Second
+	contextPullBackoff1     = 300 * time.Second  // 5 min
+	contextPullBackoff2     = 1800 * time.Second // 30 min
+	contextPullMaxConsecErr = 2
+)
+
+// StartPoller launches a background loop that periodically PullDelta()s the
+// f->h context-graph delta (team/org read layers) and merges it into the local
+// pulled cache, which the Contexts view surfaces via PulledEntries /
+// PulledEdges. Personal entries are never pulled (they stay device-local).
+//
+// The loop self-gates: PullDelta returns (0, nil) when the user is signed out,
+// offline, or lacks the team-graph capability, so the poller is a cheap no-op
+// in those states. On transient pull errors it backs off 60s → 300s → 1800s,
+// mirroring the settings Syncer. Context cancellation (or Stop) ends the loop.
+//
+// Idempotent: only the first call starts the goroutine.
+func (s *ContextGraphSyncer) StartPoller(ctx context.Context) {
+	s.pollOnce.Do(func() {
+		if s.stopCh == nil {
+			s.stopCh = make(chan struct{})
+		}
+		go s.pollLoop(ctx)
+	})
+}
+
+// Stop signals the background poll loop to exit. Safe to call once.
+func (s *ContextGraphSyncer) Stop() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.stopCh != nil {
+		select {
+		case <-s.stopCh:
+			// already closed
+		default:
+			close(s.stopCh)
+		}
+	}
+}
+
+func (s *ContextGraphSyncer) pollLoop(ctx context.Context) {
+	consecutiveErrors := 0
+	timer := time.NewTimer(contextPullBaseInterval)
+	defer timer.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-s.stopCh:
+			return
+		case <-timer.C:
+			if _, err := s.PullDelta(ctx); err != nil {
+				consecutiveErrors++
+				log.Printf("fleet: context pull poll failed (consecutive=%d): %v", consecutiveErrors, err)
+			} else {
+				consecutiveErrors = 0
+			}
+			var interval time.Duration
+			switch {
+			case consecutiveErrors >= contextPullMaxConsecErr*2:
+				interval = contextPullBackoff2
+			case consecutiveErrors >= contextPullMaxConsecErr:
+				interval = contextPullBackoff1
+			default:
+				interval = contextPullBaseInterval
+			}
+			timer.Reset(interval)
+		}
 	}
 }
 
