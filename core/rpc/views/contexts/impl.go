@@ -6,6 +6,7 @@ package contexts
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"strings"
@@ -262,6 +263,51 @@ func (a *API) Context_SyncStatus(_ context.Context) (ContextSyncStatusView, erro
 		PullCount:      snap.PullCount,
 		TeamCapEnabled: snap.TeamCapEnabled,
 		Conflicts:      conflicts,
+	}, nil
+}
+
+// Context_Search runs a server-side search over the caller's visible context
+// graph. Returns an empty result (no error) when the syncer is not wired or
+// fleet is disabled / unentitled. (gap #5)
+func (a *API) Context_Search(ctx context.Context, query, teamID string, limit int) ([]ContextSearchHitView, error) {
+	if a == nil || a.syncer == nil {
+		return nil, nil
+	}
+	hits, err := a.syncer.SearchContext(ctx, query, teamID, limit)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]ContextSearchHitView, 0, len(hits))
+	for _, h := range hits {
+		out = append(out, ContextSearchHitView{
+			NodeID:         h.Node.ID,
+			Title:          h.Node.Title,
+			Classification: string(h.Node.Classification),
+			Snippet:        h.Snippet,
+			Rank:           h.Rank,
+		})
+	}
+	return out, nil
+}
+
+// Context_Export streams the caller's visible context graph (NDJSON or gzipped
+// tarball). Returns an empty result (no error) when the syncer is not wired or
+// fleet is disabled / unentitled. (gap #5)
+func (a *API) Context_Export(ctx context.Context, teamID, format string) (ContextExportView, error) {
+	if a == nil || a.syncer == nil {
+		return ContextExportView{}, nil
+	}
+	exp, err := a.syncer.ExportContext(ctx, teamID, format)
+	if err != nil {
+		return ContextExportView{}, err
+	}
+	if exp == nil {
+		return ContextExportView{}, nil
+	}
+	return ContextExportView{
+		ContentType: exp.ContentType,
+		DataBase64:  base64.StdEncoding.EncodeToString(exp.Data),
+		ByteLen:     len(exp.Data),
 	}, nil
 }
 

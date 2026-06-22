@@ -37,6 +37,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sync"
@@ -651,6 +652,120 @@ func (s *ContextGraphSyncer) Promote(ctx context.Context, nodeID string) (*Conte
 	s.mu.Unlock()
 
 	return &result, nil
+}
+
+// ── Search / Export thin clients (gap #5) ──────────────────────────────────────
+//
+// Thin clients over POST /api/v1/context/search and GET /api/v1/context/export.
+// Wire shapes mirror kenaz-fleet service/api_types.go. Both gate on the same
+// team-graph capability + sign-in as pull (canPull) so they no-op cleanly when
+// fleet is disabled / signed-out / unentitled.
+
+// ContextSearchHit is one search result (mirrors fleet ContextSearchHit).
+// Node reuses the pulled-node shape; Snippet is an excerpt with the match
+// wrapped in **bold markers**; Rank is the v0 match-count stand-in for the
+// vector similarity score.
+type ContextSearchHit struct {
+	Node    ContextPulledNode `json:"node"`
+	Snippet string            `json:"snippet"`
+	Rank    float64           `json:"rank"`
+}
+
+// contextSearchRequest mirrors fleet ContextSearchRequest.
+type contextSearchRequest struct {
+	Query  string `json:"query"`
+	TeamID string `json:"team_id,omitempty"`
+	Limit  int    `json:"limit,omitempty"`
+}
+
+// contextSearchResponse mirrors fleet ContextSearchResponse.
+type contextSearchResponse struct {
+	Results []ContextSearchHit `json:"results"`
+}
+
+// SearchContext runs a server-side search over the caller's visible context
+// graph (title+body ILIKE in v0). teamID is optional; limit <= 0 lets the
+// server pick a default. Returns nil + no error when fleet is disabled /
+// unentitled (offline-graceful, matching the pull posture).
+func (s *ContextGraphSyncer) SearchContext(ctx context.Context, query, teamID string, limit int) ([]ContextSearchHit, error) {
+	if err := s.canPull(); err != nil {
+		return nil, nil // offline / signed-out / unentitled → empty, no error
+	}
+	req := contextSearchRequest{Query: query, TeamID: teamID, Limit: limit}
+	resp, err := s.client.PostJSON(ctx, "/api/v1/context/search", req)
+	if err != nil {
+		return nil, fmt.Errorf("fleet: context search: %w", err)
+	}
+	defer func() {
+		_, _ = io.Copy(io.Discard, resp.Body)
+		_ = resp.Body.Close()
+	}()
+	if resp.StatusCode == http.StatusForbidden {
+		return nil, nil // unentitled → empty
+	}
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("fleet: context search status %d: %s", resp.StatusCode, body)
+	}
+	var out contextSearchResponse
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, fmt.Errorf("fleet: context search decode: %w", err)
+	}
+	return out.Results, nil
+}
+
+// ContextExport is the result of an export stream: the raw bytes plus the
+// server's content type (application/x-ndjson or application/gzip).
+type ContextExport struct {
+	ContentType string
+	Data        []byte
+}
+
+// ExportContext streams the caller's visible context graph. format is "jsonl"
+// (default) or "tarball"; teamID optionally narrows to a single team. The
+// whole stream is buffered into memory (the server caps synchronous exports at
+// 100k nodes). Returns nil + no error when fleet is disabled / unentitled.
+func (s *ContextGraphSyncer) ExportContext(ctx context.Context, teamID, format string) (*ContextExport, error) {
+	if err := s.canPull(); err != nil {
+		return nil, nil
+	}
+	q := url.Values{}
+	if teamID != "" {
+		q.Set("team_id", teamID)
+	}
+	if format != "" {
+		q.Set("format", format)
+	}
+	path := "/api/v1/context/export"
+	if len(q) > 0 {
+		path += "?" + q.Encode()
+	}
+	resp, err := s.client.Get(ctx, path)
+	if err != nil {
+		return nil, fmt.Errorf("fleet: context export: %w", err)
+	}
+	defer func() {
+		_, _ = io.Copy(io.Discard, resp.Body)
+		_ = resp.Body.Close()
+	}()
+	if resp.StatusCode == http.StatusForbidden {
+		return nil, nil
+	}
+	if resp.StatusCode == http.StatusRequestEntityTooLarge {
+		return nil, fmt.Errorf("fleet: context export too large (use a team-scoped export)")
+	}
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("fleet: context export status %d: %s", resp.StatusCode, body)
+	}
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("fleet: context export read: %w", err)
+	}
+	return &ContextExport{
+		ContentType: resp.Header.Get("Content-Type"),
+		Data:        data,
+	}, nil
 }
 
 // ── Snapshot / status helpers ─────────────────────────────────────────────────

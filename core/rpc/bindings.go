@@ -593,6 +593,22 @@ func (b *Bindings) Contexts_ContextSyncStatus() (contextsview.ContextSyncStatusV
 	return b.api.Contexts().Context_SyncStatus(b.ctx())
 }
 
+// Contexts_ContextSearch runs a server-side search over the caller's visible
+// context graph (title+body match in v0). teamID is optional; limit <= 0 lets
+// the server pick a default. Returns an empty result when fleet is disabled /
+// unentitled. (harness-fleet-sync-activation-01NSYNC01 gap #5)
+func (b *Bindings) Contexts_ContextSearch(query, teamID string, limit int) ([]contextsview.ContextSearchHitView, error) {
+	return b.api.Contexts().Context_Search(b.ctx(), query, teamID, limit)
+}
+
+// Contexts_ContextExport streams the caller's visible context graph as NDJSON
+// ("jsonl", default) or a gzipped tarball ("tarball"). teamID optionally
+// narrows to a single team. The payload is base64-encoded in the view.
+// (harness-fleet-sync-activation-01NSYNC01 gap #5)
+func (b *Bindings) Contexts_ContextExport(teamID, format string) (contextsview.ContextExportView, error) {
+	return b.api.Contexts().Context_Export(b.ctx(), teamID, format)
+}
+
 // Contexts_AttachModule creates a context-module attachment for the given
 // directory. scopeKind is one of "global", "project", "session"; scopeID is
 // the project or session id (empty for global); dirPath is the library-
