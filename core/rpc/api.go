@@ -548,6 +548,18 @@ type API struct {
 	// cedarPublishAPI is the team Cedar policy publish surface
 	// (fleet-share-and-sync-01NDFSEX14 WP07).
 	cedarPublishAPI cedarview.CedarAPI
+
+	// settingsSyncer is the per-category settings Syncer started by
+	// registerSyncCategories. Held for Shutdown teardown (FR-001).
+	settingsSyncer *corefleet.Syncer
+
+	// ctxGraphSyncer is the fleet context-graph pull syncer started in New.
+	// Held for Shutdown teardown (FR-011).
+	ctxGraphSyncer *corefleet.ContextGraphSyncer
+
+	// contextsLib is the open Context Library. Held so the fleet merger
+	// closure (FR-012) can call MergeFleetEntries without re-opening the lib.
+	contextsLib *corecontexts.Library
 }
 
 // Builtins returns the in-binary tool registry. Used by the chat-input
@@ -683,6 +695,14 @@ func (a *API) Shutdown() {
 	// record even on clean shutdown.
 	if a.evalRecorder != nil {
 		a.evalRecorder.StopAll()
+	}
+	// FR-001: stop the settings sync background poller.
+	if a.settingsSyncer != nil {
+		a.settingsSyncer.Stop()
+	}
+	// FR-011: stop the context-graph pull background poller.
+	if a.ctxGraphSyncer != nil {
+		a.ctxGraphSyncer.Stop()
 	}
 }
 
@@ -858,6 +878,7 @@ func New(c *core.Core) *API {
 	}
 	contextsAPI, contextsLib := newContextsAPI(c)
 	a.contextsAPI = contextsAPI
+	a.contextsLib = contextsLib
 	startContextsWatcher(contextsLib, a.broker)
 	// Wire the attachments manager into the contexts view so AttachModule
 	// can persist context_attachments rows. Uses a type assertion because
@@ -1642,7 +1663,33 @@ func New(c *core.Core) *API {
 		// The Syncer is a lightweight object; we create it unconditionally but
 		// its Push/Pull methods short-circuit via ErrFleetDisabled when flCl is nil.
 		syncer := corefleet.NewSyncer(flCl)
-		a.syncAPI = syncview.NewAPI(syncer, &corefleet.SecretPromptQueue{})
+		syncPending := &corefleet.SecretPromptQueue{}
+		a.syncAPI = syncview.NewAPI(syncer, syncPending)
+
+		// harness-fleet-sync-activation-01NSYNC01 gap #1: register the five
+		// sync categories on the Syncer and start the debounced background
+		// poll loop. Without this the Syncer foundation was dormant — no
+		// categories registered + StartPolling never called. The MCP category
+		// shares syncPending so the SyncPanel banner sees MCPs that arrive via
+		// pull and still need credentials. registerSyncCategories no-ops when
+		// the syncer or store is nil, preserving the offline posture.
+		var syncStore settings.SettingsStore
+		if a.settingsImpl != nil {
+			syncStore = a.settingsImpl.Store()
+		}
+		mcpSyncCat := corefleet.NewMCPSyncCategory(nil, nil, nil, syncPending)
+		registerSyncCategories(context.Background(), syncer, syncStore, mcpSyncCat)
+
+		// Connect settings mutations to the Syncer's debounced push so a theme
+		// change schedules a push-up (no-op when the category is disabled).
+		if a.settingsImpl != nil {
+			a.settingsImpl.SetSyncNotifier(func(category string) {
+				syncer.NotifyMutation(corefleet.SyncCategory(category))
+			})
+		}
+
+		// Store for Shutdown teardown (FR-001).
+		a.settingsSyncer = syncer
 
 		// CedarPublish (WP07)
 		identityFn := func() (string, error) {
@@ -1673,8 +1720,59 @@ func New(c *core.Core) *API {
 			if a.settingsImpl != nil {
 				caps = a.settingsImpl.CapabilityPoller()
 			}
-			syncer := corefleet.NewContextGraphSyncer(flCl, flDataDir, caps)
-			impl.WithSyncer(syncer)
+			ctxSyncer := corefleet.NewContextGraphSyncer(flCl, flDataDir, caps)
+			impl.WithSyncer(ctxSyncer)
+
+			// FR-012: wire the library merger so each successful PullDelta
+			// applies team/org entries to the local context library. The
+			// closure converts ContextNodeEntry → contexts.FleetEntry here in
+			// the rpc layer (the only layer allowed to import both packages).
+			// a.contextsLib is set just above from newContextsAPI; may be nil
+			// when the chassis booted without a DataDir (test path) — the
+			// merger closure nil-guards against that.
+			lib := a.contextsLib // captured for the closure below
+			ctxSyncer.SetLibraryMerger(func(entries []corefleet.ContextNodeEntry) {
+				if lib == nil {
+					return
+				}
+				// Convert fleet.ContextNodeEntry → contexts.FleetEntry (mirror
+				// type; avoids importing core/fleet from core/contexts).
+				converted := make([]corecontexts.FleetEntry, 0, len(entries))
+				for _, e := range entries {
+					fe := corecontexts.FleetEntry{
+						ID:        e.ID,
+						Layer:     e.Layer,
+						Kind:      e.Kind,
+						Title:     e.Title,
+						Body:      e.Body,
+						Metadata:  e.Metadata,
+						Version:   e.Version,
+						DeletedAt: e.DeletedAt,
+					}
+					converted = append(converted, fe)
+				}
+				lib.MergeFleetEntries(converted)
+			})
+
+			// FR-013: wire the conflict notifier so pull-time conflicts are
+			// emitted as broker events that the frontend can surface.
+			if lib != nil && a.broker != nil {
+				brokerRef := a.broker
+				lib.SetConflictNotifier(func(c corecontexts.ContextConflict) {
+					brokerRef.emitter.Emit(brokerRef.EmitCtx(), "contexts:pull-conflict", c)
+				})
+			}
+
+			// harness-fleet-sync-activation-01NSYNC01 gap #2: start the
+			// background context-pull loop so f->h team/org read-layer deltas
+			// merge into the local pulled cache (surfaced via PulledEntries)
+			// without a manual Context_SyncStatus poke. Self-gates on
+			// sign-in + team-graph capability; personal stays local.
+			ctxSyncer.StartPoller(context.Background())
+
+			// Store for Shutdown teardown (FR-011).
+			a.ctxGraphSyncer = ctxSyncer
+
 			logging.L().Info("rpc.context_graph_syncer.wired",
 				"fleet_client_nil", flCl == nil,
 				"data_dir", flDataDir,

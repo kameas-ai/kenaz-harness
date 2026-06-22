@@ -1589,6 +1589,58 @@ export namespace contexts {
 		    return a;
 		}
 	}
+	export class ContextConflictView {
+	    node_id: string;
+	    server_version: number;
+	    client_version: number;
+
+	    static createFrom(source: any = {}) {
+	        return new ContextConflictView(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.node_id = source["node_id"];
+	        this.server_version = source["server_version"];
+	        this.client_version = source["client_version"];
+	    }
+	}
+	export class ContextExportView {
+	    content_type: string;
+	    data_base64: string;
+	    byte_len: number;
+
+	    static createFrom(source: any = {}) {
+	        return new ContextExportView(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.content_type = source["content_type"];
+	        this.data_base64 = source["data_base64"];
+	        this.byte_len = source["byte_len"];
+	    }
+	}
+	export class ContextSearchHitView {
+	    node_id: string;
+	    title: string;
+	    classification: string;
+	    snippet: string;
+	    rank: number;
+
+	    static createFrom(source: any = {}) {
+	        return new ContextSearchHitView(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.node_id = source["node_id"];
+	        this.title = source["title"];
+	        this.classification = source["classification"];
+	        this.snippet = source["snippet"];
+	        this.rank = source["rank"];
+	    }
+	}
 	export class ModuleAttachment {
 	    id: string;
 	    scopeKind: string;
@@ -1598,11 +1650,11 @@ export namespace contexts {
 	    kind: string;
 	    position: number;
 	    createdAt: string;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new ModuleAttachment(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.id = source["id"];
@@ -6160,6 +6212,21 @@ export namespace settings {
 		    }
 		    return a;
 		}
+	}
+
+	export class TelemetryOptInView {
+	    category: string;
+	    opted_in: boolean;
+
+	    static createFrom(source: any = {}) {
+	        return new TelemetryOptInView(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.category = source["category"];
+	        this.opted_in = source["opted_in"];
+	    }
 	}
 
 }

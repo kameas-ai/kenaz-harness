@@ -8,8 +8,6 @@ import (
 	"time"
 
 	"github.com/kameas-ai/kenaz-harness/core/fleet"
-	"github.com/kameas-ai/kenaz-harness/core/llm"
-	"github.com/kameas-ai/kenaz-harness/core/llm/fleet_hosted"
 	"github.com/kameas-ai/kenaz-harness/core/logging"
 	"github.com/kameas-ai/kenaz-harness/core/mcp/recipes"
 	cedarpolicy "github.com/kameas-ai/kenaz-harness/core/policy/cedar"
@@ -18,16 +16,9 @@ import (
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 )
 
-// AdapterRegistrar is the minimal interface from the LLM registry that the
-// fleet wiring code needs. Using an interface avoids a hard import of
-// core/llm/registry from this package.
-type AdapterRegistrar interface {
-	RegisterAdapter(a llm.ProviderAdapter)
-}
-
 // fleetState holds the fleet client, dataDir, capability poller, config
-// poller, the fleet_hosted LLM adapter (when CapHostedInference is enabled),
-// and the emergency-lockdown watcher (fleet-emergency-lockdown-01NDFSEX12).
+// poller, and the emergency-lockdown watcher
+// (fleet-emergency-lockdown-01NDFSEX12).
 // It is attached to API after construction via SetFleetClient.
 type fleetState struct {
 	mu              sync.RWMutex
@@ -35,8 +26,6 @@ type fleetState struct {
 	dataDir         string
 	poller          *fleet.CapabilityPoller
 	configPoller    *fleet.ConfigPoller
-	llmRegistrar    AdapterRegistrar
-	fleetAdapter    *fleet_hosted.Adapter
 	lockdownWatcher *fleet.Watcher
 	lockdownBroker  fleet.BrokerSink
 
@@ -71,6 +60,12 @@ type fleetState struct {
 	// tp is the TracerProvider from telemetry.Init; held so Activate can
 	// register/unregister span processors on re-login.
 	tp *sdktrace.TracerProvider
+
+	// telemetryOptIns is the per-class telemetry opt-in set last fetched from
+	// the fleet store (harness-fleet-sync-activation-01NSYNC01 gap #4). The
+	// fleet store is authoritative; this is the harness-side cache populated at
+	// enroll. nil before the first successful fetch.
+	telemetryOptIns []fleet.TelemetryOptInItem
 }
 
 // SetFleetClient wires a fleet.Client into the API and starts the capability
@@ -97,12 +92,6 @@ func (a *API) SetFleetClient(c *fleet.Client, dataDir string) {
 		cp := fleet.NewConfigPoller(c, dataDir, applier)
 		a.fleet.configPoller = cp
 		cp.Start(context.Background())
-	}
-	// Wire the fleet_hosted LLM adapter when we have a profile URL.
-	// The adapter gates itself at resolve time via the EnabledFunc so
-	// tier changes propagate within one poll interval without restart.
-	if c != nil && c.Profile().FleetBaseURL != "" {
-		a.wireFleetHostedAdapter(c)
 	}
 	// Start the emergency-lockdown watcher. The watcher self-gates on
 	// CapEmergencyLockdown so it exits immediately when the capability
@@ -191,53 +180,6 @@ func (a *API) SetSkillRefs(store *slashcmd.SkillStore, registry *slashcmd.Regist
 	defer a.fleet.mu.Unlock()
 	a.fleet.skillStore = store
 	a.fleet.skillRegistry = registry
-}
-
-// wireFleetHostedAdapter creates the fleet_hosted LLM adapter and registers
-// it in the LLM registry (if one has been set via SetLLMRegistrar).
-// Called under a.fleet.mu.Lock() from SetFleetClient.
-func (a *API) wireFleetHostedAdapter(c *fleet.Client) {
-	profile := c.Profile()
-	if profile.FleetBaseURL == "" {
-		return
-	}
-	poller := a.fleet.poller // already set above
-	bearer := func() (string, error) {
-		ts, err := fleet.LoadTokens()
-		if err != nil {
-			return "", err
-		}
-		return ts.AccessToken, nil
-	}
-	enabled := func() bool {
-		if poller == nil {
-			return false
-		}
-		cur := poller.Current()
-		return cur.Has(fleet.CapHostedInference)
-	}
-	adapter := fleet_hosted.New(profile.FleetBaseURL, bearer, enabled)
-	a.fleet.fleetAdapter = adapter
-	if a.fleet.llmRegistrar != nil {
-		a.fleet.llmRegistrar.RegisterAdapter(adapter)
-	}
-}
-
-// SetLLMRegistrar wires the LLM adapter registry into the fleet state so
-// that the fleet_hosted adapter can be registered when SetFleetClient is
-// called. Must be called before SetFleetClient to take effect; otherwise
-// the adapter is registered lazily on the next SetFleetClient call.
-func (a *API) SetLLMRegistrar(r AdapterRegistrar) {
-	if a.fleet == nil {
-		a.fleet = &fleetState{}
-	}
-	a.fleet.mu.Lock()
-	defer a.fleet.mu.Unlock()
-	a.fleet.llmRegistrar = r
-	// If SetFleetClient was called first, register any pending adapter.
-	if a.fleet.fleetAdapter != nil {
-		r.RegisterAdapter(a.fleet.fleetAdapter)
-	}
 }
 
 func (a *API) fleetClient() *fleet.Client {
@@ -413,7 +355,38 @@ func (a *API) fleetEnroll(ctx context.Context) (FleetIdentity, error) {
 	// resource and register the OTLP processors/exporters.
 	a.activateOTLPPipeline(ctx, id, nodeID)
 
+	// Reconcile per-class telemetry opt-ins from the fleet store post-enroll
+	// (harness-fleet-sync-activation-01NSYNC01 gap #4). The fleet store is the
+	// source of truth for the seven classes (replacing local-only JSON). This
+	// is best-effort and consent-gated: it caches the fleet-resolved opt-ins
+	// but never relaxes the TelemetryConsent.EffectiveLevel export gate.
+	a.refreshTelemetryOptIns(ctx)
+
 	return fleetIdentityToView(id), nil
+}
+
+// refreshTelemetryOptIns fetches the per-class telemetry opt-in set from the
+// fleet store and caches it on the fleet state. Best-effort: errors are logged
+// at debug/warn and never fail the enroll flow. The cached set is exposed via
+// FleetTelemetryOptIns for the settings UI.
+func (a *API) refreshTelemetryOptIns(ctx context.Context) {
+	c := a.fleetClient()
+	if c == nil {
+		return
+	}
+	items, err := c.GetTelemetryOptIns(ctx)
+	if err != nil {
+		// Unentitled / offline / signed-out → keep whatever is cached. Not fatal.
+		logging.L().Debug("fleet.telemetry_optins.refresh.skipped", "err", err.Error())
+		return
+	}
+	if a.fleet == nil {
+		return
+	}
+	a.fleet.mu.Lock()
+	a.fleet.telemetryOptIns = items
+	a.fleet.mu.Unlock()
+	logging.L().Info("fleet.telemetry_optins.refreshed", "classes", len(items))
 }
 
 // activateOTLPPipeline calls FleetOTLPPipeline.Activate post-enroll.
@@ -568,7 +541,12 @@ func (a *API) FleetConfigPullStatus(_ context.Context) (FleetConfigPullStatusVie
 //   - cedar_delta   → cedarpolicy.Engine.SetTeamBundle
 //   - mcp_allowlist → recipes.ApplyFleetAllowlist
 //   - model_prefs   → stored in fleetState.fleetModelPrefs
-//   - weight_urls   → fleet.SetWeightURLs
+//
+// The kameas_ml_weight_urls bundle section is intentionally ignored: the
+// fleet-hosted-LLM / kameas-ml surface was removed
+// (harness-fleet-sync-activation-01NSYNC01, dead-code cleanup). The wire
+// field is retained on Bundle so signature verification of server-signed
+// bundles still round-trips, but it is no longer persisted or applied.
 type compositeConfigApplier struct {
 	state *fleetState
 }
@@ -600,13 +578,8 @@ func (a *compositeConfigApplier) ApplyBundle(ctx context.Context, b *fleet.Bundl
 		a.state.mu.Unlock()
 	}
 
-	// Weight URLs.
-	if len(b.KameasMLWeightURLs) > 0 {
-		a.state.mu.RLock()
-		dataDir := a.state.dataDir
-		a.state.mu.RUnlock()
-		fleet.SetWeightURLs(dataDir, b.KameasMLWeightURLs)
-	}
+	// Weight URLs (kameas_ml_weight_urls): intentionally ignored — the
+	// fleet-hosted-LLM / kameas-ml surface was removed. See the type doc above.
 
 	// Mandated skills (fleet-skills-sync-01NDFSEX18 WP05).
 	// Partial-success pattern: individual skill errors are collected but
@@ -662,4 +635,73 @@ type LockdownStatusView struct {
 func (a *API) FleetLockdownStatus(_ context.Context) (LockdownStatusView, error) {
 	active := fleet.LockdownActive()
 	return LockdownStatusView{Active: active}, nil
+}
+
+// ── Telemetry opt-ins (harness-fleet-sync-activation-01NSYNC01 gap #4) ─────────
+
+// TelemetryOptInView is the wire-safe per-class opt-in record surfaced to the
+// settings UI. Mirrors fleet.TelemetryOptInItem with an RFC3339 timestamp.
+type TelemetryOptInView struct {
+	Class   string `json:"class"`
+	OptedIn bool   `json:"optedIn"`
+	OptedAt string `json:"optedAt,omitempty"`
+	Source  string `json:"source,omitempty"`
+}
+
+// FleetTelemetryOptIns returns the per-class telemetry opt-in set. On a cold
+// read (cache empty) it fetches from the fleet store; otherwise it returns the
+// cache populated at enroll. Returns fleet.ErrFleetDisabled when fleet is not
+// wired. The set is the fleet store's view (the source of truth), not the
+// local-only JSON.
+func (a *API) FleetTelemetryOptIns(ctx context.Context) ([]TelemetryOptInView, error) {
+	c := a.fleetClient()
+	if c == nil || fleet.Disabled() {
+		return nil, fleet.ErrFleetDisabled
+	}
+	a.fleet.mu.RLock()
+	cached := a.fleet.telemetryOptIns
+	a.fleet.mu.RUnlock()
+	if cached == nil {
+		// Cold read: pull from the fleet store now.
+		a.refreshTelemetryOptIns(ctx)
+		a.fleet.mu.RLock()
+		cached = a.fleet.telemetryOptIns
+		a.fleet.mu.RUnlock()
+	}
+	return telemetryOptInsToView(cached), nil
+}
+
+// FleetSetTelemetryOptIn flips a single class opt-in in the fleet store
+// (source becomes 'user_self' server-side) and refreshes the local cache.
+// Consent-gated by tier server-side; the harness never bypasses the export
+// consent gate. Returns fleet.ErrFleetDisabled when fleet is not wired.
+func (a *API) FleetSetTelemetryOptIn(ctx context.Context, class string, optedIn bool) error {
+	c := a.fleetClient()
+	if c == nil || fleet.Disabled() {
+		return fleet.ErrFleetDisabled
+	}
+	if err := c.PutTelemetryOptIns(ctx, []fleet.TelemetryOptInItem{
+		{Class: class, OptedIn: optedIn},
+	}); err != nil {
+		return err
+	}
+	// Re-pull so the cache reflects the server-applied source/opted_at.
+	a.refreshTelemetryOptIns(ctx)
+	return nil
+}
+
+func telemetryOptInsToView(items []fleet.TelemetryOptInItem) []TelemetryOptInView {
+	out := make([]TelemetryOptInView, 0, len(items))
+	for _, it := range items {
+		v := TelemetryOptInView{
+			Class:   it.Class,
+			OptedIn: it.OptedIn,
+			Source:  it.Source,
+		}
+		if it.OptedAt != nil && !it.OptedAt.IsZero() {
+			v.OptedAt = it.OptedAt.UTC().Format(time.RFC3339)
+		}
+		out = append(out, v)
+	}
+	return out
 }

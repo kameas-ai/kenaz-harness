@@ -205,6 +205,10 @@ var (
 	// ErrVersionConflict is returned when a concurrent version bump
 	// races. Callers may retry.
 	ErrVersionConflict = errors.New("units: version conflict")
+
+	// ErrSyncStateNotFound is returned when a unit (or node id) has no
+	// sync sidecar row — i.e. it has never been synced to fleet.
+	ErrSyncStateNotFound = errors.New("units: sync state not found")
 )
 
 // validKind reports whether k is a known Kind value.

@@ -31,7 +31,7 @@ describe('featureFlags', () => {
 
   describe('capability()', () => {
     it('returns false when appInfo is null (not yet fetched)', () => {
-      expect(capability('hosted_inference')).toBe(false);
+      expect(capability('launcher_updates')).toBe(false);
     });
 
     it('returns false when capabilities map is absent from appInfo', () => {
@@ -44,44 +44,44 @@ describe('featureFlags', () => {
         windowSize: { width: 0, height: 0 },
         // no capabilities field
       });
-      expect(capability('hosted_inference')).toBe(false);
+      expect(capability('launcher_updates')).toBe(false);
     });
 
     it('returns false when capabilities map is empty', () => {
       initFeatureFlags(makeInfo({}));
-      expect(capability('hosted_inference')).toBe(false);
+      expect(capability('launcher_updates')).toBe(false);
     });
 
     it('returns true when capability key is explicitly true', () => {
-      initFeatureFlags(makeInfo({ hosted_inference: true }));
-      expect(capability('hosted_inference')).toBe(true);
+      initFeatureFlags(makeInfo({ launcher_updates: true }));
+      expect(capability('launcher_updates')).toBe(true);
     });
 
     it('returns false when capability key is explicitly false', () => {
-      initFeatureFlags(makeInfo({ hosted_inference: false }));
-      expect(capability('hosted_inference')).toBe(false);
+      initFeatureFlags(makeInfo({ launcher_updates: false }));
+      expect(capability('launcher_updates')).toBe(false);
     });
 
     it('returns false for a missing key (not present in map)', () => {
-      initFeatureFlags(makeInfo({ hosted_inference: true }));
+      initFeatureFlags(makeInfo({ launcher_updates: true }));
       expect(capability('shared_team_graph')).toBe(false);
     });
 
     it('returns false for an unknown key (no panic)', () => {
-      initFeatureFlags(makeInfo({ hosted_inference: true }));
+      initFeatureFlags(makeInfo({ launcher_updates: true }));
       expect(capability('not_a_real_capability_xyz')).toBe(false);
     });
 
     it('returns true for each capability that is set to true', () => {
       const caps: Record<string, boolean> = {
-        hosted_inference: true,
         launcher_updates: true,
+        iso_distribution: true,
         sso_saml: false,
         shared_team_graph: true,
       };
       initFeatureFlags(makeInfo(caps));
-      expect(capability('hosted_inference')).toBe(true);
       expect(capability('launcher_updates')).toBe(true);
+      expect(capability('iso_distribution')).toBe(true);
       expect(capability('sso_saml')).toBe(false);
       expect(capability('shared_team_graph')).toBe(true);
     });
@@ -110,14 +110,14 @@ describe('featureFlags', () => {
     });
 
     it('is true when capabilities map has at least one entry', () => {
-      initFeatureFlags(makeInfo({ hosted_inference: true }));
+      initFeatureFlags(makeInfo({ launcher_updates: true }));
       expect(signedIn.value).toBe(true);
     });
 
     it('is true even when all values are false (signed in but no caps enabled)', () => {
       // The map being non-empty means we received a fleet response →
       // the user is signed in even if all caps are false.
-      initFeatureFlags(makeInfo({ hosted_inference: false }));
+      initFeatureFlags(makeInfo({ launcher_updates: false }));
       expect(signedIn.value).toBe(true);
     });
 
@@ -125,7 +125,7 @@ describe('featureFlags', () => {
       // Start signed-out.
       expect(signedIn.value).toBe(false);
       // Sign in.
-      initFeatureFlags(makeInfo({ hosted_inference: true }));
+      initFeatureFlags(makeInfo({ launcher_updates: true }));
       expect(signedIn.value).toBe(true);
       // Sign out.
       initFeatureFlags(makeInfo({}));
@@ -135,21 +135,21 @@ describe('featureFlags', () => {
 
   describe('OSS-first gating pattern', () => {
     it('capability returns false for any key when signed out', () => {
-      // Simulates v-if="signedIn && capability('hosted_inference')"
+      // Simulates v-if="signedIn && capability('launcher_updates')"
       initFeatureFlags(null);
-      const gateOpen = signedIn.value && capability('hosted_inference');
+      const gateOpen = signedIn.value && capability('launcher_updates');
       expect(gateOpen).toBe(false);
     });
 
     it('gate is open when signed in and capability enabled', () => {
-      initFeatureFlags(makeInfo({ hosted_inference: true }));
-      const gateOpen = signedIn.value && capability('hosted_inference');
+      initFeatureFlags(makeInfo({ launcher_updates: true }));
+      const gateOpen = signedIn.value && capability('launcher_updates');
       expect(gateOpen).toBe(true);
     });
 
     it('gate is closed when signed in but capability disabled', () => {
-      initFeatureFlags(makeInfo({ hosted_inference: false }));
-      const gateOpen = signedIn.value && capability('hosted_inference');
+      initFeatureFlags(makeInfo({ launcher_updates: false }));
+      const gateOpen = signedIn.value && capability('launcher_updates');
       expect(gateOpen).toBe(false);
     });
   });

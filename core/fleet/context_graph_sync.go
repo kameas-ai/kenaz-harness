@@ -37,6 +37,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sync"
@@ -280,8 +281,26 @@ type ContextGraphSyncer struct {
 	lastPullErr string
 	// lastPushErr is the last push error string (empty on success).
 	lastPushErr string
+	// lastConflicts holds the per-node version conflicts (server_version vs
+	// client_version) from the most recent push that returned any. Surfaced
+	// via Status so the Contexts view can prompt the user to reconcile.
+	lastConflicts []ContextPushConflict
 	// pullCount is the total number of entries received from fleet (cumulative).
 	pullCount int
+
+	// pollOnce guards StartPoller so the background loop starts at most once.
+	pollOnce sync.Once
+	// stopCh signals the background poll loop to exit (closed by Stop).
+	stopCh chan struct{}
+
+	// libraryMerger is an optional callback set via SetLibraryMerger.
+	// It is called after each successful PullDelta with the full pulled
+	// entry set so the local context library picks up org/team entries.
+	// Injected from core/rpc/api.go (the only layer allowed to import
+	// both core/fleet and core/contexts). nil is safe — the pull loop
+	// runs normally and updates the in-memory pulled cache; the merge
+	// is simply skipped.
+	libraryMerger func([]ContextNodeEntry)
 }
 
 // NewContextGraphSyncer constructs a ContextGraphSyncer. The syncer does
@@ -424,6 +443,13 @@ func (s *ContextGraphSyncer) PushEntry(ctx context.Context, entry ContextNodeEnt
 
 	s.mu.Lock()
 	s.lastPushErr = ""
+	// Surface server/client version conflicts so the Contexts view can prompt
+	// the user to reconcile (FR: surface server_version vs client_version).
+	if len(result.Conflicts) > 0 {
+		s.lastConflicts = append([]ContextPushConflict(nil), result.Conflicts...)
+	} else {
+		s.lastConflicts = nil
+	}
 	s.mu.Unlock()
 
 	return &result, nil
@@ -637,6 +663,120 @@ func (s *ContextGraphSyncer) Promote(ctx context.Context, nodeID string) (*Conte
 	return &result, nil
 }
 
+// ── Search / Export thin clients (gap #5) ──────────────────────────────────────
+//
+// Thin clients over POST /api/v1/context/search and GET /api/v1/context/export.
+// Wire shapes mirror kenaz-fleet service/api_types.go. Both gate on the same
+// team-graph capability + sign-in as pull (canPull) so they no-op cleanly when
+// fleet is disabled / signed-out / unentitled.
+
+// ContextSearchHit is one search result (mirrors fleet ContextSearchHit).
+// Node reuses the pulled-node shape; Snippet is an excerpt with the match
+// wrapped in **bold markers**; Rank is the v0 match-count stand-in for the
+// vector similarity score.
+type ContextSearchHit struct {
+	Node    ContextPulledNode `json:"node"`
+	Snippet string            `json:"snippet"`
+	Rank    float64           `json:"rank"`
+}
+
+// contextSearchRequest mirrors fleet ContextSearchRequest.
+type contextSearchRequest struct {
+	Query  string `json:"query"`
+	TeamID string `json:"team_id,omitempty"`
+	Limit  int    `json:"limit,omitempty"`
+}
+
+// contextSearchResponse mirrors fleet ContextSearchResponse.
+type contextSearchResponse struct {
+	Results []ContextSearchHit `json:"results"`
+}
+
+// SearchContext runs a server-side search over the caller's visible context
+// graph (title+body ILIKE in v0). teamID is optional; limit <= 0 lets the
+// server pick a default. Returns nil + no error when fleet is disabled /
+// unentitled (offline-graceful, matching the pull posture).
+func (s *ContextGraphSyncer) SearchContext(ctx context.Context, query, teamID string, limit int) ([]ContextSearchHit, error) {
+	if err := s.canPull(); err != nil {
+		return nil, nil // offline / signed-out / unentitled → empty, no error
+	}
+	req := contextSearchRequest{Query: query, TeamID: teamID, Limit: limit}
+	resp, err := s.client.PostJSON(ctx, "/api/v1/context/search", req)
+	if err != nil {
+		return nil, fmt.Errorf("fleet: context search: %w", err)
+	}
+	defer func() {
+		_, _ = io.Copy(io.Discard, resp.Body)
+		_ = resp.Body.Close()
+	}()
+	if resp.StatusCode == http.StatusForbidden {
+		return nil, nil // unentitled → empty
+	}
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("fleet: context search status %d: %s", resp.StatusCode, body)
+	}
+	var out contextSearchResponse
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, fmt.Errorf("fleet: context search decode: %w", err)
+	}
+	return out.Results, nil
+}
+
+// ContextExport is the result of an export stream: the raw bytes plus the
+// server's content type (application/x-ndjson or application/gzip).
+type ContextExport struct {
+	ContentType string
+	Data        []byte
+}
+
+// ExportContext streams the caller's visible context graph. format is "jsonl"
+// (default) or "tarball"; teamID optionally narrows to a single team. The
+// whole stream is buffered into memory (the server caps synchronous exports at
+// 100k nodes). Returns nil + no error when fleet is disabled / unentitled.
+func (s *ContextGraphSyncer) ExportContext(ctx context.Context, teamID, format string) (*ContextExport, error) {
+	if err := s.canPull(); err != nil {
+		return nil, nil
+	}
+	q := url.Values{}
+	if teamID != "" {
+		q.Set("team_id", teamID)
+	}
+	if format != "" {
+		q.Set("format", format)
+	}
+	path := "/api/v1/context/export"
+	if len(q) > 0 {
+		path += "?" + q.Encode()
+	}
+	resp, err := s.client.Get(ctx, path)
+	if err != nil {
+		return nil, fmt.Errorf("fleet: context export: %w", err)
+	}
+	defer func() {
+		_, _ = io.Copy(io.Discard, resp.Body)
+		_ = resp.Body.Close()
+	}()
+	if resp.StatusCode == http.StatusForbidden {
+		return nil, nil
+	}
+	if resp.StatusCode == http.StatusRequestEntityTooLarge {
+		return nil, fmt.Errorf("fleet: context export too large (use a team-scoped export)")
+	}
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("fleet: context export status %d: %s", resp.StatusCode, body)
+	}
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("fleet: context export read: %w", err)
+	}
+	return &ContextExport{
+		ContentType: resp.Header.Get("Content-Type"),
+		Data:        data,
+	}, nil
+}
+
 // ── Snapshot / status helpers ─────────────────────────────────────────────────
 
 // PulledEntries returns a snapshot of all pulled entries (team + org layers).
@@ -679,6 +819,10 @@ type ContextSyncStatusSnapshot struct {
 	PullCount int `json:"pull_count"`
 	// TeamCapEnabled is true when the team-graph capability is active.
 	TeamCapEnabled bool `json:"team_cap_enabled"`
+	// Conflicts holds the per-node server/client version conflicts from the
+	// most recent push (empty when the last push had none). Lets the Contexts
+	// view prompt the user to reconcile.
+	Conflicts []ContextPushConflict `json:"conflicts,omitempty"`
 }
 
 // Status returns a snapshot of the syncer state.
@@ -690,6 +834,10 @@ func (s *ContextGraphSyncer) Status() ContextSyncStatusSnapshot {
 		cur := s.caps.Current()
 		teamCap = cur.Has(CapSharedTeamGraph)
 	}
+	var conflicts []ContextPushConflict
+	if len(s.lastConflicts) > 0 {
+		conflicts = append([]ContextPushConflict(nil), s.lastConflicts...)
+	}
 	return ContextSyncStatusSnapshot{
 		Cursor:         s.cursor,
 		LastPullAt:     s.lastPullAt,
@@ -697,6 +845,104 @@ func (s *ContextGraphSyncer) Status() ContextSyncStatusSnapshot {
 		LastPushErr:    s.lastPushErr,
 		PullCount:      s.pullCount,
 		TeamCapEnabled: teamCap,
+		Conflicts:      conflicts,
+	}
+}
+
+// ── Background pull poller (harness-fleet-sync-activation-01NSYNC01 gap #2) ─────
+
+const (
+	contextPullBaseInterval = 60 * time.Second
+	contextPullBackoff1     = 300 * time.Second  // 5 min
+	contextPullBackoff2     = 1800 * time.Second // 30 min
+	contextPullMaxConsecErr = 2
+)
+
+// StartPoller launches a background loop that periodically PullDelta()s the
+// f->h context-graph delta (team/org read layers) and merges it into the local
+// pulled cache, which the Contexts view surfaces via PulledEntries /
+// PulledEdges. Personal entries are never pulled (they stay device-local).
+//
+// The loop self-gates: PullDelta returns (0, nil) when the user is signed out,
+// offline, or lacks the team-graph capability, so the poller is a cheap no-op
+// in those states. On transient pull errors it backs off 60s → 300s → 1800s,
+// mirroring the settings Syncer. Context cancellation (or Stop) ends the loop.
+//
+// Idempotent: only the first call starts the goroutine.
+func (s *ContextGraphSyncer) StartPoller(ctx context.Context) {
+	s.pollOnce.Do(func() {
+		if s.stopCh == nil {
+			s.stopCh = make(chan struct{})
+		}
+		go s.pollLoop(ctx)
+	})
+}
+
+// Stop signals the background poll loop to exit. Safe to call once.
+func (s *ContextGraphSyncer) Stop() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.stopCh != nil {
+		select {
+		case <-s.stopCh:
+			// already closed
+		default:
+			close(s.stopCh)
+		}
+	}
+}
+
+// SetLibraryMerger wires a callback that is called after each successful
+// PullDelta with the full current set of pulled (non-tombstoned) entries.
+// The callback is invoked from the poll goroutine; it must be non-blocking.
+// Safe to call before or after StartPoller. Passing nil clears the merger.
+func (s *ContextGraphSyncer) SetLibraryMerger(f func([]ContextNodeEntry)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.libraryMerger = f
+}
+
+func (s *ContextGraphSyncer) pollLoop(ctx context.Context) {
+	consecutiveErrors := 0
+	timer := time.NewTimer(contextPullBaseInterval)
+	defer timer.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-s.stopCh:
+			return
+		case <-timer.C:
+			n, err := s.PullDelta(ctx)
+			if err != nil {
+				consecutiveErrors++
+				log.Printf("fleet: context pull poll failed (consecutive=%d): %v", consecutiveErrors, err)
+			} else {
+				consecutiveErrors = 0
+				// FR-012: after a successful pull, apply any received entries to
+				// the local context library via the injected libraryMerger. We
+				// always call with the full pulled snapshot (not just the delta)
+				// so the library stays consistent even across restarts.
+				if n > 0 {
+					s.mu.RLock()
+					merger := s.libraryMerger
+					s.mu.RUnlock()
+					if merger != nil {
+						merger(s.PulledEntries())
+					}
+				}
+			}
+			var interval time.Duration
+			switch {
+			case consecutiveErrors >= contextPullMaxConsecErr*2:
+				interval = contextPullBackoff2
+			case consecutiveErrors >= contextPullMaxConsecErr:
+				interval = contextPullBackoff1
+			default:
+				interval = contextPullBaseInterval
+			}
+			timer.Reset(interval)
+		}
 	}
 }
 

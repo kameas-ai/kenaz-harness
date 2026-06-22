@@ -71,6 +71,101 @@ func (m *Manager) ListVersions(ctx context.Context, unitID string) ([]UnitVersio
 	return m.store.ListVersions(ctx, unitID)
 }
 
+// ── Sync sidecar (Phase-2) ──────────────────────────────────────────────
+//
+// The fleet UnitSyncer reaches the sidecar exclusively through these
+// Manager methods (DIRECTIVE_001: core/units is the single owner of the
+// unit_sync_state table). core/units stays fleet-free — the classification
+// recorded here is an opaque string the fleet mapper supplies.
+
+// UpsertSyncState records (or replaces) the sync sidecar for a unit:
+// the fleet node id it maps to, the version last confirmed in sync, the
+// opaque fleet classification, and the last-sync time. Personal units must
+// never be passed here — the syncer is responsible for skipping them.
+func (m *Manager) UpsertSyncState(ctx context.Context, st SyncState) (SyncState, error) {
+	if st.UnitID == "" {
+		return SyncState{}, errors.New("units: UpsertSyncState: empty UnitID")
+	}
+	return m.store.UpsertSyncState(ctx, st)
+}
+
+// GetSyncState returns the sidecar for a unit, or ErrSyncStateNotFound when
+// the unit has never been synced.
+func (m *Manager) GetSyncState(ctx context.Context, unitID string) (SyncState, error) {
+	if unitID == "" {
+		return SyncState{}, errors.New("units: GetSyncState: empty unitID")
+	}
+	return m.store.GetSyncState(ctx, unitID)
+}
+
+// GetSyncStateByNodeID resolves a fleet node id back to its sidecar row
+// (and thus its local unit) without re-discovery. ErrSyncStateNotFound
+// when no local unit maps to that node id yet.
+func (m *Manager) GetSyncStateByNodeID(ctx context.Context, nodeID string) (SyncState, error) {
+	if nodeID == "" {
+		return SyncState{}, errors.New("units: GetSyncStateByNodeID: empty nodeID")
+	}
+	return m.store.GetSyncStateByNodeID(ctx, nodeID)
+}
+
+// ListSyncState returns every sidecar row, ordered by unit id.
+func (m *Manager) ListSyncState(ctx context.Context) ([]SyncState, error) {
+	return m.store.ListSyncState(ctx)
+}
+
+// DeleteSyncState drops the sidecar row for a unit.
+func (m *Manager) DeleteSyncState(ctx context.Context, unitID string) error {
+	if unitID == "" {
+		return errors.New("units: DeleteSyncState: empty unitID")
+	}
+	return m.store.DeleteSyncState(ctx, unitID)
+}
+
+// ListDirty returns the units whose local Version is ahead of the version
+// last confirmed in sync (or which have no sidecar yet), restricted to the
+// given classification. It is the push-up worklist: every dirty team/org
+// unit the syncer must offer to fleet. Personal units are never returned
+// even if classification is ClassPersonal — they are local-only (NFR-005).
+//
+// A unit is dirty when:
+//   - it has no sidecar row (never synced), OR
+//   - its current Version > sidecar.SyncedLocalVersion (the local version at
+//     the time of the last successful sync). SyncedVersion is the legacy alias
+//     consulted as a fallback when SyncedLocalVersion is zero and SyncedVersion
+//     is non-zero (rows written by pre-1102 code); new rows always have
+//     SyncedLocalVersion set correctly.
+func (m *Manager) ListDirty(ctx context.Context, classification Classification) ([]Unit, error) {
+	if classification == ClassPersonal {
+		return nil, nil // personal units never sync
+	}
+	all, err := m.store.List(ctx, UnitFilter{Classification: classification})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]Unit, 0, len(all))
+	for _, u := range all {
+		st, err := m.store.GetSyncState(ctx, u.ID)
+		if err != nil {
+			if errors.Is(err, ErrSyncStateNotFound) {
+				out = append(out, u) // never synced → dirty
+				continue
+			}
+			return nil, err
+		}
+		// Use SyncedLocalVersion (the local counter at last sync) as the dirty
+		// baseline. Fall back to the legacy SyncedVersion field for rows written
+		// by code that pre-dates the 3-way baseline (1102 migration).
+		baseline := st.SyncedLocalVersion
+		if baseline == 0 && st.SyncedVersion > 0 {
+			baseline = st.SyncedVersion
+		}
+		if u.Version > baseline {
+			out = append(out, u)
+		}
+	}
+	return out, nil
+}
+
 // Promote creates a new Unit that is a copy of src with the supplied
 // newScope and newClassification, then adds a promoted_from edge from
 // the new unit to the original. The original unit is left untouched.

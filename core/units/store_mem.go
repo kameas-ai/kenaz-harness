@@ -12,12 +12,13 @@ import (
 // memStore is the in-memory Store implementation. Backed by maps
 // guarded by an RWMutex; appropriate for test scale.
 type memStore struct {
-	mu       sync.RWMutex
-	units    map[string]Unit
-	versions []UnitVersion
-	edges    []Edge
-	now      func() time.Time
-	idGen    func() (string, error)
+	mu        sync.RWMutex
+	units     map[string]Unit
+	versions  []UnitVersion
+	edges     []Edge
+	syncState map[string]SyncState // keyed by unit id
+	now       func() time.Time
+	idGen     func() (string, error)
 }
 
 // MemStoreOption configures a memStore at construction.
@@ -44,9 +45,10 @@ func WithMemIDGen(gen func() (string, error)) MemStoreOption {
 // NewMemoryStore returns an in-memory Store. Useful for tests.
 func NewMemoryStore(opts ...MemStoreOption) Store {
 	s := &memStore{
-		units: map[string]Unit{},
-		now:   func() time.Time { return time.Now().UTC() },
-		idGen: defaultUnitID,
+		units:     map[string]Unit{},
+		syncState: map[string]SyncState{},
+		now:       func() time.Time { return time.Now().UTC() },
+		idGen:     defaultUnitID,
 	}
 	for _, opt := range opts {
 		opt(s)
@@ -264,6 +266,80 @@ func (s *memStore) ListVersions(_ context.Context, unitID string) ([]UnitVersion
 		return out[i].Version < out[j].Version
 	})
 	return out, nil
+}
+
+// ── Sync sidecar ───────────────────────────────────────────────────────
+
+func (s *memStore) UpsertSyncState(_ context.Context, st SyncState) (SyncState, error) {
+	if st.UnitID == "" {
+		return SyncState{}, fmt.Errorf("units: UpsertSyncState: empty UnitID")
+	}
+	// Reject empty node_id: consistent with the SQL store which has a NOT NULL
+	// DEFAULT '' column but enforces non-empty via the same application-level
+	// guard we add here. Both backends must behave identically.
+	if st.NodeID == "" {
+		return SyncState{}, fmt.Errorf("units: UpsertSyncState: empty NodeID")
+	}
+	if st.LastSynced.IsZero() {
+		st.LastSynced = s.now()
+	}
+	st.LastSynced = st.LastSynced.UTC()
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	// Enforce the node_id UNIQUE invariant: a node id may not map to two
+	// different units. Both backends must behave identically here.
+	for uid, existing := range s.syncState {
+		if uid != st.UnitID && existing.NodeID == st.NodeID {
+			return SyncState{}, fmt.Errorf("units: UpsertSyncState: node_id %q already mapped to unit %q", st.NodeID, uid)
+		}
+	}
+	s.syncState[st.UnitID] = st
+	return st, nil
+}
+
+func (s *memStore) GetSyncState(_ context.Context, unitID string) (SyncState, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	st, ok := s.syncState[unitID]
+	if !ok {
+		return SyncState{}, ErrSyncStateNotFound
+	}
+	return st, nil
+}
+
+func (s *memStore) GetSyncStateByNodeID(_ context.Context, nodeID string) (SyncState, error) {
+	if nodeID == "" {
+		return SyncState{}, ErrSyncStateNotFound
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, st := range s.syncState {
+		if st.NodeID == nodeID {
+			return st, nil
+		}
+	}
+	return SyncState{}, ErrSyncStateNotFound
+}
+
+func (s *memStore) ListSyncState(_ context.Context) ([]SyncState, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]SyncState, 0, len(s.syncState))
+	for _, st := range s.syncState {
+		out = append(out, st)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].UnitID < out[j].UnitID
+	})
+	return out, nil
+}
+
+func (s *memStore) DeleteSyncState(_ context.Context, unitID string) error {
+	s.mu.Lock()
+	delete(s.syncState, unitID)
+	s.mu.Unlock()
+	return nil
 }
 
 // ensure memStore implements Store at compile time.

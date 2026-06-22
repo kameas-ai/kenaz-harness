@@ -593,6 +593,22 @@ func (b *Bindings) Contexts_ContextSyncStatus() (contextsview.ContextSyncStatusV
 	return b.api.Contexts().Context_SyncStatus(b.ctx())
 }
 
+// Contexts_ContextSearch runs a server-side search over the caller's visible
+// context graph (title+body match in v0). teamID is optional; limit <= 0 lets
+// the server pick a default. Returns an empty result when fleet is disabled /
+// unentitled. (harness-fleet-sync-activation-01NSYNC01 gap #5)
+func (b *Bindings) Contexts_ContextSearch(query, teamID string, limit int) ([]contextsview.ContextSearchHitView, error) {
+	return b.api.Contexts().Context_Search(b.ctx(), query, teamID, limit)
+}
+
+// Contexts_ContextExport streams the caller's visible context graph as NDJSON
+// ("jsonl", default) or a gzipped tarball ("tarball"). teamID optionally
+// narrows to a single team. The payload is base64-encoded in the view.
+// (harness-fleet-sync-activation-01NSYNC01 gap #5)
+func (b *Bindings) Contexts_ContextExport(teamID, format string) (contextsview.ContextExportView, error) {
+	return b.api.Contexts().Context_Export(b.ctx(), teamID, format)
+}
+
 // Contexts_AttachModule creates a context-module attachment for the given
 // directory. scopeKind is one of "global", "project", "session"; scopeID is
 // the project or session id (empty for global); dirPath is the library-
@@ -1419,6 +1435,20 @@ func (b *Bindings) Settings_FleetConfigPullStatus() (settings.FleetConfigPullSta
 // fleet:lockdown:changed event. (fleet-emergency-lockdown-01NDFSEX12 WP02)
 func (b *Bindings) Settings_FleetLockdownStatus() (settings.LockdownStatusView, error) {
 	return b.api.Settings().FleetLockdownStatus(b.ctx())
+}
+
+// Settings_FleetTelemetryOptIns returns the per-class telemetry opt-in set
+// from the fleet store (the source of truth, replacing local-only JSON).
+// (harness-fleet-sync-activation-01NSYNC01 gap #4)
+func (b *Bindings) Settings_FleetTelemetryOptIns() ([]settings.TelemetryOptInView, error) {
+	return b.api.Settings().FleetTelemetryOptIns(b.ctx())
+}
+
+// Settings_FleetSetTelemetryOptIn flips a single telemetry class opt-in in the
+// fleet store (source becomes 'user_self') and refreshes the local cache.
+// (harness-fleet-sync-activation-01NSYNC01 gap #4)
+func (b *Bindings) Settings_FleetSetTelemetryOptIn(class string, optedIn bool) error {
+	return b.api.Settings().FleetSetTelemetryOptIn(b.ctx(), class, optedIn)
 }
 
 // ── memory ─────────────────────────────────────────────────────────────

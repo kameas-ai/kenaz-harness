@@ -53,9 +53,11 @@ type Bundle struct {
 	CedarDelta json.RawMessage `json:"cedar_delta,omitempty"`
 
 	// MCPAllowlist is the slice of MCP recipe IDs the fleet admin permits.
-	// When non-nil, only recipes in this list may be installed/enabled.
 	// nil means "no fleet restriction" (all recipes allowed).
-	MCPAllowlist []string `json:"mcp_allowlist,omitempty"`
+	// An empty (non-nil) slice means "block all" — no recipes may be installed.
+	// The field is NOT omitempty so an explicit empty array round-trips through
+	// JSON as [] (distinct from nil/absent) and the ed25519 signature covers it.
+	MCPAllowlist []string `json:"mcp_allowlist"`
 
 	// ModelPrefs specifies the fleet-managed model preferences.
 	ModelPrefs *BundleModelPrefs `json:"model_prefs,omitempty"`
@@ -90,11 +92,14 @@ type BundleModelPrefs struct {
 
 // bundleSigningPayload is the shape marshalled to produce the signature input.
 // It mirrors Bundle but omits the Signature field.
+// MCPAllowlist is NOT omitempty so an explicit empty array (block-all) is
+// included in the signature and the verify+apply path can distinguish nil
+// (no restriction) from [] (block-all). Must stay in sync with Bundle above.
 type bundleSigningPayload struct {
 	BundleID           int64             `json:"bundle_id"`
 	IssuedAt           time.Time         `json:"issued_at"`
 	CedarDelta         json.RawMessage   `json:"cedar_delta,omitempty"`
-	MCPAllowlist       []string          `json:"mcp_allowlist,omitempty"`
+	MCPAllowlist       []string          `json:"mcp_allowlist"`
 	ModelPrefs         *BundleModelPrefs `json:"model_prefs,omitempty"`
 	KameasMLWeightURLs []string          `json:"kameas_ml_weight_urls,omitempty"`
 	MandatedSkills     []json.RawMessage `json:"mandated_skills,omitempty"`

@@ -11,6 +11,13 @@ import (
 //
 // All methods are safe for concurrent use.
 type Store interface {
+	// SyncStateStore holds the per-unit fleet sync sidecar (node_id,
+	// synced_version, classification, last_synced). It is part of the
+	// store contract so re-sync needs no re-discovery and conflict checks
+	// have a durable baseline. core/units stays fleet-free: the sidecar
+	// stores the fleet classification opaquely as a string.
+	SyncStateStore
+
 	// Create writes a new Unit row. If u.ID is empty a fresh ULID is
 	// minted; if u.CreatedAt/UpdatedAt are zero the current wall clock
 	// is used. Version is forced to 0 on create. Returns the inserted
