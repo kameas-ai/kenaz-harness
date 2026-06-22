@@ -60,6 +60,12 @@ type fleetState struct {
 	// tp is the TracerProvider from telemetry.Init; held so Activate can
 	// register/unregister span processors on re-login.
 	tp *sdktrace.TracerProvider
+
+	// telemetryOptIns is the per-class telemetry opt-in set last fetched from
+	// the fleet store (harness-fleet-sync-activation-01NSYNC01 gap #4). The
+	// fleet store is authoritative; this is the harness-side cache populated at
+	// enroll. nil before the first successful fetch.
+	telemetryOptIns []fleet.TelemetryOptInItem
 }
 
 // SetFleetClient wires a fleet.Client into the API and starts the capability
@@ -349,7 +355,38 @@ func (a *API) fleetEnroll(ctx context.Context) (FleetIdentity, error) {
 	// resource and register the OTLP processors/exporters.
 	a.activateOTLPPipeline(ctx, id, nodeID)
 
+	// Reconcile per-class telemetry opt-ins from the fleet store post-enroll
+	// (harness-fleet-sync-activation-01NSYNC01 gap #4). The fleet store is the
+	// source of truth for the seven classes (replacing local-only JSON). This
+	// is best-effort and consent-gated: it caches the fleet-resolved opt-ins
+	// but never relaxes the TelemetryConsent.EffectiveLevel export gate.
+	a.refreshTelemetryOptIns(ctx)
+
 	return fleetIdentityToView(id), nil
+}
+
+// refreshTelemetryOptIns fetches the per-class telemetry opt-in set from the
+// fleet store and caches it on the fleet state. Best-effort: errors are logged
+// at debug/warn and never fail the enroll flow. The cached set is exposed via
+// FleetTelemetryOptIns for the settings UI.
+func (a *API) refreshTelemetryOptIns(ctx context.Context) {
+	c := a.fleetClient()
+	if c == nil {
+		return
+	}
+	items, err := c.GetTelemetryOptIns(ctx)
+	if err != nil {
+		// Unentitled / offline / signed-out → keep whatever is cached. Not fatal.
+		logging.L().Debug("fleet.telemetry_optins.refresh.skipped", "err", err.Error())
+		return
+	}
+	if a.fleet == nil {
+		return
+	}
+	a.fleet.mu.Lock()
+	a.fleet.telemetryOptIns = items
+	a.fleet.mu.Unlock()
+	logging.L().Info("fleet.telemetry_optins.refreshed", "classes", len(items))
 }
 
 // activateOTLPPipeline calls FleetOTLPPipeline.Activate post-enroll.
@@ -598,4 +635,73 @@ type LockdownStatusView struct {
 func (a *API) FleetLockdownStatus(_ context.Context) (LockdownStatusView, error) {
 	active := fleet.LockdownActive()
 	return LockdownStatusView{Active: active}, nil
+}
+
+// ── Telemetry opt-ins (harness-fleet-sync-activation-01NSYNC01 gap #4) ─────────
+
+// TelemetryOptInView is the wire-safe per-class opt-in record surfaced to the
+// settings UI. Mirrors fleet.TelemetryOptInItem with an RFC3339 timestamp.
+type TelemetryOptInView struct {
+	Class   string `json:"class"`
+	OptedIn bool   `json:"optedIn"`
+	OptedAt string `json:"optedAt,omitempty"`
+	Source  string `json:"source,omitempty"`
+}
+
+// FleetTelemetryOptIns returns the per-class telemetry opt-in set. On a cold
+// read (cache empty) it fetches from the fleet store; otherwise it returns the
+// cache populated at enroll. Returns fleet.ErrFleetDisabled when fleet is not
+// wired. The set is the fleet store's view (the source of truth), not the
+// local-only JSON.
+func (a *API) FleetTelemetryOptIns(ctx context.Context) ([]TelemetryOptInView, error) {
+	c := a.fleetClient()
+	if c == nil || fleet.Disabled() {
+		return nil, fleet.ErrFleetDisabled
+	}
+	a.fleet.mu.RLock()
+	cached := a.fleet.telemetryOptIns
+	a.fleet.mu.RUnlock()
+	if cached == nil {
+		// Cold read: pull from the fleet store now.
+		a.refreshTelemetryOptIns(ctx)
+		a.fleet.mu.RLock()
+		cached = a.fleet.telemetryOptIns
+		a.fleet.mu.RUnlock()
+	}
+	return telemetryOptInsToView(cached), nil
+}
+
+// FleetSetTelemetryOptIn flips a single class opt-in in the fleet store
+// (source becomes 'user_self' server-side) and refreshes the local cache.
+// Consent-gated by tier server-side; the harness never bypasses the export
+// consent gate. Returns fleet.ErrFleetDisabled when fleet is not wired.
+func (a *API) FleetSetTelemetryOptIn(ctx context.Context, class string, optedIn bool) error {
+	c := a.fleetClient()
+	if c == nil || fleet.Disabled() {
+		return fleet.ErrFleetDisabled
+	}
+	if err := c.PutTelemetryOptIns(ctx, []fleet.TelemetryOptInItem{
+		{Class: class, OptedIn: optedIn},
+	}); err != nil {
+		return err
+	}
+	// Re-pull so the cache reflects the server-applied source/opted_at.
+	a.refreshTelemetryOptIns(ctx)
+	return nil
+}
+
+func telemetryOptInsToView(items []fleet.TelemetryOptInItem) []TelemetryOptInView {
+	out := make([]TelemetryOptInView, 0, len(items))
+	for _, it := range items {
+		v := TelemetryOptInView{
+			Class:   it.Class,
+			OptedIn: it.OptedIn,
+			Source:  it.Source,
+		}
+		if it.OptedAt != nil && !it.OptedAt.IsZero() {
+			v.OptedAt = it.OptedAt.UTC().Format(time.RFC3339)
+		}
+		out = append(out, v)
+	}
+	return out
 }

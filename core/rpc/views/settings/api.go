@@ -1183,6 +1183,16 @@ type SettingsAPI interface {
 	// Safe to call from any goroutine; reads the process-global atomic flag.
 	// (fleet-emergency-lockdown-01NDFSEX12 WP02)
 	FleetLockdownStatus(ctx context.Context) (LockdownStatusView, error)
+
+	// FleetTelemetryOptIns returns the per-class telemetry opt-in set from the
+	// fleet store (source of truth, replacing local-only JSON).
+	// (harness-fleet-sync-activation-01NSYNC01 gap #4)
+	FleetTelemetryOptIns(ctx context.Context) ([]TelemetryOptInView, error)
+
+	// FleetSetTelemetryOptIn flips a single telemetry class opt-in in the fleet
+	// store and refreshes the local cache.
+	// (harness-fleet-sync-activation-01NSYNC01 gap #4)
+	FleetSetTelemetryOptIn(ctx context.Context, class string, optedIn bool) error
 }
 
 // CapabilitiesView is the wire-safe projection of fleet.Capabilities.

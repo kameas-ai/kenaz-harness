@@ -1421,6 +1421,20 @@ func (b *Bindings) Settings_FleetLockdownStatus() (settings.LockdownStatusView, 
 	return b.api.Settings().FleetLockdownStatus(b.ctx())
 }
 
+// Settings_FleetTelemetryOptIns returns the per-class telemetry opt-in set
+// from the fleet store (the source of truth, replacing local-only JSON).
+// (harness-fleet-sync-activation-01NSYNC01 gap #4)
+func (b *Bindings) Settings_FleetTelemetryOptIns() ([]settings.TelemetryOptInView, error) {
+	return b.api.Settings().FleetTelemetryOptIns(b.ctx())
+}
+
+// Settings_FleetSetTelemetryOptIn flips a single telemetry class opt-in in the
+// fleet store (source becomes 'user_self') and refreshes the local cache.
+// (harness-fleet-sync-activation-01NSYNC01 gap #4)
+func (b *Bindings) Settings_FleetSetTelemetryOptIn(class string, optedIn bool) error {
+	return b.api.Settings().FleetSetTelemetryOptIn(b.ctx(), class, optedIn)
+}
+
 // ── memory ─────────────────────────────────────────────────────────────
 
 func (b *Bindings) Memory_ListChunks(filter memoryview.ListFilter) ([]memoryview.Chunk, error) {
