@@ -30,7 +30,7 @@ const SkillSyncMaxPayloadBytes = 256 * 1024
 // Visibility must be one of CatalogVisPrivate, CatalogVisTeam, or
 // CatalogVisOrgPublic. Capability gate:
 //   - CatalogVisTeam or CatalogVisOrgPublic → requires CapSharedTeamGraph
-//   - CatalogVisPrivate                     → requires CapHostedInference
+//   - CatalogVisPrivate                     → requires CapPersonalFleetDashboard
 //
 // Returns ErrCapabilityNotInTier when the current capabilities don't permit
 // the requested visibility scope (FR-102).
@@ -52,7 +52,7 @@ func PublishSkill(
 			return CatalogItem{}, fmt.Errorf("%w (need Team+ for team/org-public skill publish)", ErrCatalogNotInTier)
 		}
 	case CatalogVisPrivate:
-		if err := caps.Require(CapHostedInference); err != nil {
+		if err := caps.Require(CapPersonalFleetDashboard); err != nil {
 			return CatalogItem{}, fmt.Errorf("%w (need Pro for private skill sync)", ErrCatalogNotInTier)
 		}
 	default:

@@ -29,8 +29,8 @@ type AllowlistFilter struct {
 var globalAllowlist AllowlistFilter
 
 // ApplyFleetAllowlist installs the fleet-managed allow-list globally.
-// Passing nil or an empty slice clears any prior fleet restriction
-// (all recipes become allowed again).
+// Passing nil clears any prior fleet restriction (all recipes become allowed).
+// Passing a non-nil empty slice activates block-all mode (no recipes allowed).
 //
 // This function is called by the fleet config poller after each successful
 // bundle apply. It is the only write path for the global allow-list.
@@ -46,16 +46,20 @@ func IsAllowed(recipeID string) bool {
 	return globalAllowlist.IsAllowed(recipeID)
 }
 
-// Set replaces the current allow-list. nil or empty allowedIDs clears
-// the restriction.
+// Set replaces the current allow-list.
+//   - nil allowedIDs clears the restriction (all recipes allowed).
+//   - A non-nil empty slice activates block-all mode (no recipes allowed).
+//   - A non-empty slice restricts to the listed recipe IDs.
 func (f *AllowlistFilter) Set(allowedIDs []string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if len(allowedIDs) == 0 {
+	if allowedIDs == nil {
+		// nil → no fleet restriction.
 		f.active = false
 		f.ids = nil
 		return
 	}
+	// Non-nil (including empty) → fleet restriction active.
 	f.active = true
 	f.ids = make(map[string]bool, len(allowedIDs))
 	for _, id := range allowedIDs {

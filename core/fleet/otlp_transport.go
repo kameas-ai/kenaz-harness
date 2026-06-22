@@ -12,8 +12,6 @@ import (
 // Returning ("", nil) means "no token yet" (pre-login); the caller
 // should skip the request. Returning ("", err) means an unrecoverable
 // error.
-//
-// The reference implementation mirrors fleet_hosted/adapter.go:17-23.
 type BearerProvider func() (string, error)
 
 // DefaultBearerProvider returns a BearerProvider that reads the current

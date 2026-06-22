@@ -58,7 +58,7 @@ export const signedIn: ComputedRef<boolean> = computed(() => {
  * Returns false for missing keys, empty maps, signed-out state, or when
  * fleet is disabled. Never throws.
  *
- * Usage in templates: `v-if="signedIn && capability('hosted_inference')"`
+ * Usage in templates: `v-if="signedIn && capability('launcher_updates')"`
  */
 export function capability(key: string): boolean {
   return _appInfo.value?.capabilities?.[key] === true;

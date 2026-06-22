@@ -86,8 +86,8 @@ func TestCapabilityPoller_Current_DefaultDeny(t *testing.T) {
 	if cur.Source != "default-deny" {
 		t.Errorf("Source = %q, want 'default-deny'", cur.Source)
 	}
-	if cur.Has(CapHostedInference) {
-		t.Error("default-deny Has(CapHostedInference) = true, want false")
+	if cur.Has(CapLauncherUpdates) {
+		t.Error("default-deny Has(CapLauncherUpdates) = true, want false")
 	}
 }
 
@@ -178,7 +178,7 @@ func TestCapabilityPoller_Refresh_Success(t *testing.T) {
 	}
 	expected := Capabilities{
 		Tier:      "pro",
-		Enabled:   map[Capability]bool{CapHostedInference: true, CapLauncherUpdates: false},
+		Enabled:   map[Capability]bool{CapLauncherUpdates: true, CapISODistribution: false},
 		FetchedAt: time.Now().UTC().Truncate(time.Second),
 		Source:    "fleet",
 	}
@@ -199,8 +199,8 @@ func TestCapabilityPoller_Refresh_Success(t *testing.T) {
 	if caps.Tier != "pro" {
 		t.Errorf("Tier = %q, want 'pro'", caps.Tier)
 	}
-	if !caps.Enabled[CapHostedInference] {
-		t.Errorf("CapHostedInference: got false, want true")
+	if !caps.Enabled[CapLauncherUpdates] {
+		t.Errorf("CapLauncherUpdates: got false, want true")
 	}
 }
 
@@ -222,7 +222,7 @@ func TestCapabilityPoller_SingleFlight_Collapse(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		wire := capabilitiesWireResponse{
 			Tier:         "team",
-			Capabilities: map[string]bool{string(CapHostedInference): true},
+			Capabilities: map[string]bool{string(CapLauncherUpdates): true},
 			FetchedAt:    time.Now(),
 		}
 		_ = json.NewEncoder(w).Encode(wire)
@@ -263,7 +263,7 @@ func TestCapabilityPoller_Stop_Race(t *testing.T) {
 	}
 	srv := fakeCapabilityServer(t, Capabilities{
 		Tier:      "pro",
-		Enabled:   map[Capability]bool{CapHostedInference: true},
+		Enabled:   map[Capability]bool{CapLauncherUpdates: true},
 		FetchedAt: time.Now(),
 	}, 0)
 	defer srv.Close()
@@ -320,7 +320,7 @@ func TestCapabilityPoller_LoadsCacheOnStart(t *testing.T) {
 	// Pre-populate cache with a fresh snapshot (recent enough to not trigger immediate refetch).
 	cached := Capabilities{
 		Tier:      "team",
-		Enabled:   map[Capability]bool{CapHostedInference: true},
+		Enabled:   map[Capability]bool{CapLauncherUpdates: true},
 		FetchedAt: time.Now(), // fresh
 		Source:    "cache",
 	}

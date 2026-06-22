@@ -202,6 +202,10 @@ export function Contexts_ContextPromote(arg1:string):Promise<contexts.ContextPro
 
 export function Contexts_ContextPublish(arg1:contexts.ContextPublishRequest):Promise<contexts.ContextPublishResult>;
 
+export function Contexts_ContextExport(arg1:string,arg2:string):Promise<contexts.ContextExportView>;
+
+export function Contexts_ContextSearch(arg1:string,arg2:string,arg3:number):Promise<Array<contexts.ContextSearchHitView>>;
+
 export function Contexts_ContextSyncStatus():Promise<contexts.ContextSyncStatusView>;
 
 export function Contexts_CreateFolder(arg1:string):Promise<void>;
@@ -590,7 +594,11 @@ export function Settings_FleetSignIn():Promise<settings.FleetIdentity>;
 
 export function Settings_FleetSignOut():Promise<void>;
 
+export function Settings_FleetSetTelemetryOptIn(arg1:string,arg2:boolean):Promise<void>;
+
 export function Settings_FleetSignedIn():Promise<boolean>;
+
+export function Settings_FleetTelemetryOptIns():Promise<Array<settings.TelemetryOptInView>>;
 
 export function Settings_Get():Promise<settings.Settings>;
 

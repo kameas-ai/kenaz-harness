@@ -66,7 +66,7 @@ func TestSaveAndLoadCapabilities_RoundTrip(t *testing.T) {
 	original := Capabilities{
 		Tier: "enterprise",
 		Enabled: map[Capability]bool{
-			CapHostedInference:   true,
+			CapLauncherUpdates:   true,
 			CapSharedTeamGraph:   false,
 			CapOPACustomRego:     true,
 			CapSSOSAML:           true,
@@ -106,7 +106,7 @@ func TestSaveCapabilities_AtomicWrite(t *testing.T) {
 	dir := t.TempDir()
 	c := Capabilities{
 		Tier:      "pro",
-		Enabled:   map[Capability]bool{CapHostedInference: true},
+		Enabled:   map[Capability]bool{CapLauncherUpdates: true},
 		FetchedAt: time.Now(),
 	}
 	if err := SaveCapabilities(dir, c); err != nil {
