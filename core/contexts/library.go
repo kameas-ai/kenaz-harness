@@ -31,6 +31,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	contextpack "github.com/kameas-ai/kenaz-harness/core/context/pack"
 )
 
 // Library is a content-only file-tree CRUD surface anchored at root.
@@ -48,6 +50,21 @@ type Library struct {
 	// Library mutators always feed through one or the other so the
 	// 200 ms quiet-period contract holds either way.
 	debounceFallback fallbackDebouncer
+
+	// fleetMu guards the fleet-layer fields below. Separate from mu so the
+	// existing file-CRUD methods do not need updating.
+	fleetMu sync.RWMutex
+	// fleetEntries is the in-memory cache of team/org entries received from
+	// fleet. Keyed by node ID for O(1) lookup in MergeFleetEntries.
+	fleetEntries map[string]FleetEntry
+	// conflictNotifier is called (non-blocking) when a pull-time version
+	// conflict is detected. Injected via SetConflictNotifier; nil is safe.
+	conflictNotifier ConflictNotifier
+
+	// localVersions tracks the locally-edited version for entries that exist
+	// in fleetEntries so conflict detection can compare server vs client ver.
+	// Set by MarkLocalVersion; never touched by the fleet pull path.
+	localVersions map[string]int
 }
 
 // NodeKind discriminates folders from files in a tree response.
@@ -641,4 +658,113 @@ func hasAllowedExt(p string) bool {
 	ext := strings.ToLower(filepath.Ext(p))
 	_, ok := allowedExtensions[ext]
 	return ok
+}
+
+// ── Fleet merge layer (harness-fleet-sync-activation-01NSYNC01) ──────────────
+
+// SetConflictNotifier wires the callback called when MergeFleetEntries detects
+// a version conflict (server version > locally-edited version). The callback is
+// non-blocking — it must not call back into Library methods. Safe to call before
+// or after MergeFleetEntries begins; replaces any previously wired notifier.
+func (l *Library) SetConflictNotifier(fn ConflictNotifier) {
+	if l == nil {
+		return
+	}
+	l.fleetMu.Lock()
+	defer l.fleetMu.Unlock()
+	l.conflictNotifier = fn
+}
+
+// MarkLocalVersion records a locally-edited version for a fleet entry so the
+// conflict detector in MergeFleetEntries can compare server vs client version.
+// Called by the Contexts view whenever the user edits a fleet-sourced entry
+// locally. A zero version clears the local-version record.
+func (l *Library) MarkLocalVersion(nodeID string, version int) {
+	if l == nil {
+		return
+	}
+	l.fleetMu.Lock()
+	defer l.fleetMu.Unlock()
+	if l.localVersions == nil {
+		l.localVersions = make(map[string]int)
+	}
+	if version == 0 {
+		delete(l.localVersions, nodeID)
+	} else {
+		l.localVersions[nodeID] = version
+	}
+}
+
+// FleetEntries returns a snapshot of all fleet (team/org layer) entries that
+// are currently cached in the library. Tombstoned entries (DeletedAt != nil)
+// are excluded. The returned slice is a copy — safe for the caller to retain.
+func (l *Library) FleetEntries() []FleetEntry {
+	if l == nil {
+		return nil
+	}
+	l.fleetMu.RLock()
+	defer l.fleetMu.RUnlock()
+	out := make([]FleetEntry, 0, len(l.fleetEntries))
+	for _, e := range l.fleetEntries {
+		if e.DeletedAt != nil {
+			continue
+		}
+		out = append(out, e)
+	}
+	return out
+}
+
+// MergeFleetEntries upserts the given fleet-pulled entries into the Library's
+// in-memory fleet layer. It enforces the following invariants:
+//
+//   - Personal layer entries are silently skipped (personal-stays-local, NFR-003).
+//   - Tombstoned entries (DeletedAt != nil) are removed from the cache.
+//   - When a pull carries a server version that is strictly less than a locally-
+//     edited version for the same node, the local edit wins: the entry is NOT
+//     overwritten, and a ContextConflict event is emitted via the wired
+//     ConflictNotifier (FR-013).
+//
+// MergeFleetEntries is safe for concurrent use.
+func (l *Library) MergeFleetEntries(entries []FleetEntry) {
+	if l == nil || len(entries) == 0 {
+		return
+	}
+
+	l.fleetMu.Lock()
+	defer l.fleetMu.Unlock()
+
+	if l.fleetEntries == nil {
+		l.fleetEntries = make(map[string]FleetEntry, len(entries))
+	}
+
+	for _, e := range entries {
+		// NFR-003: personal layer must never enter the fleet merge layer.
+		if e.Layer == contextpack.LayerPersonal {
+			continue
+		}
+
+		// Tombstone: remove from cache.
+		if e.DeletedAt != nil {
+			delete(l.fleetEntries, e.ID)
+			continue
+		}
+
+		// Conflict detection (FR-013): if there is a locally-edited version
+		// AND the incoming server version is strictly less than the local edit,
+		// preserve the local edit and surface the conflict.
+		if localVer, hasLocal := l.localVersions[e.ID]; hasLocal && e.Version < localVer {
+			if l.conflictNotifier != nil {
+				l.conflictNotifier(ContextConflict{
+					NodeID:        e.ID,
+					ServerVersion: e.Version,
+					ClientVersion: localVer,
+				})
+			}
+			// Do NOT overwrite the locally-edited entry.
+			continue
+		}
+
+		// Normal upsert: insert or replace.
+		l.fleetEntries[e.ID] = e
+	}
 }

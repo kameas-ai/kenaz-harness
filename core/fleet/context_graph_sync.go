@@ -292,6 +292,15 @@ type ContextGraphSyncer struct {
 	pollOnce sync.Once
 	// stopCh signals the background poll loop to exit (closed by Stop).
 	stopCh chan struct{}
+
+	// libraryMerger is an optional callback set via SetLibraryMerger.
+	// It is called after each successful PullDelta with the full pulled
+	// entry set so the local context library picks up org/team entries.
+	// Injected from core/rpc/api.go (the only layer allowed to import
+	// both core/fleet and core/contexts). nil is safe — the pull loop
+	// runs normally and updates the in-memory pulled cache; the merge
+	// is simply skipped.
+	libraryMerger func([]ContextNodeEntry)
 }
 
 // NewContextGraphSyncer constructs a ContextGraphSyncer. The syncer does
@@ -883,6 +892,16 @@ func (s *ContextGraphSyncer) Stop() {
 	}
 }
 
+// SetLibraryMerger wires a callback that is called after each successful
+// PullDelta with the full current set of pulled (non-tombstoned) entries.
+// The callback is invoked from the poll goroutine; it must be non-blocking.
+// Safe to call before or after StartPoller. Passing nil clears the merger.
+func (s *ContextGraphSyncer) SetLibraryMerger(f func([]ContextNodeEntry)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.libraryMerger = f
+}
+
 func (s *ContextGraphSyncer) pollLoop(ctx context.Context) {
 	consecutiveErrors := 0
 	timer := time.NewTimer(contextPullBaseInterval)
@@ -894,11 +913,24 @@ func (s *ContextGraphSyncer) pollLoop(ctx context.Context) {
 		case <-s.stopCh:
 			return
 		case <-timer.C:
-			if _, err := s.PullDelta(ctx); err != nil {
+			n, err := s.PullDelta(ctx)
+			if err != nil {
 				consecutiveErrors++
 				log.Printf("fleet: context pull poll failed (consecutive=%d): %v", consecutiveErrors, err)
 			} else {
 				consecutiveErrors = 0
+				// FR-012: after a successful pull, apply any received entries to
+				// the local context library via the injected libraryMerger. We
+				// always call with the full pulled snapshot (not just the delta)
+				// so the library stays consistent even across restarts.
+				if n > 0 {
+					s.mu.RLock()
+					merger := s.libraryMerger
+					s.mu.RUnlock()
+					if merger != nil {
+						merger(s.PulledEntries())
+					}
+				}
 			}
 			var interval time.Duration
 			switch {
