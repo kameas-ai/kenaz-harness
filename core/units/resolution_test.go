@@ -61,6 +61,44 @@ func TestResolveMerge_MissingUnit(t *testing.T) {
 	}
 }
 
+// TestResolveMerge_PreservesMetadataWhenNil asserts that calling ResolveMerge
+// with nil metadata carries forward the unit's existing metadata rather than
+// replacing it with "{}". Artifact provenance fields (content_hash, byte_size)
+// must survive a whole-body merge-resolve.
+func TestResolveMerge_PreservesMetadataWhenNil(t *testing.T) {
+	m := newResTestManager()
+	ctx := context.Background()
+
+	// Create a unit with artifact-style metadata (provenance fields).
+	existing := json.RawMessage(`{"content_hash":"deadbeef","byte_size":1024}`)
+	u := mustCreate(t, m, Unit{
+		Kind: KindArtifact, Scope: ScopeProject, ScopeID: "p1",
+		Classification: ClassTeam, LoadPolicy: LoadAlways,
+		Title: "artifact", Body: "original body",
+		Metadata: existing,
+	})
+
+	// ResolveMerge with nil metadata: provenance must be preserved.
+	resolved, err := m.ResolveMerge(ctx, u.ID, "resolved body", nil)
+	if err != nil {
+		t.Fatalf("ResolveMerge: %v", err)
+	}
+	if resolved.Body != "resolved body" {
+		t.Errorf("body = %q, want resolved body", resolved.Body)
+	}
+	if resolved.Version != u.Version+1 {
+		t.Errorf("version = %d, want %d", resolved.Version, u.Version+1)
+	}
+	// Metadata must not have been wiped to "{}".
+	if string(resolved.Metadata) == "{}" {
+		t.Error("ResolveMerge with nil metadata wiped existing metadata to {}; want provenance preserved")
+	}
+	// The exact provenance fields must survive.
+	if string(resolved.Metadata) != string(existing) {
+		t.Errorf("metadata = %s, want %s", resolved.Metadata, existing)
+	}
+}
+
 // TestResolveEnshrine_CreatesCoexistingUnitAndMarkerEdge verifies enshrine
 // creates a NEW coexisting unit (same scope/classification) carrying the other
 // side's body, linked to the source by a conflicts_with marker edge, with the

@@ -57,15 +57,23 @@ var ErrNotEnshrineable = errors.New("units: cannot enshrine against source")
 // makes the unit dirty again, so the next sync cycle re-offers it — clearing
 // the conflict by converging on the resolved body (WP17a).
 //
-// metadata may be nil (the unit's metadata is left to the store's normalise).
+// metadata may be nil; when nil the unit's existing metadata is preserved so
+// a whole-body merge does not destroy artifact provenance fields such as
+// content_hash and byte_size that were not part of the conflict.
 func (m *Manager) ResolveMerge(ctx context.Context, unitID, resolvedBody string, metadata json.RawMessage) (Unit, error) {
 	if unitID == "" {
 		return Unit{}, errors.New("units: ResolveMerge: empty unitID")
 	}
-	// Confirm the unit exists first so the error is a clean ErrUnitNotFound
-	// rather than a store-specific update miss.
-	if _, err := m.store.Get(ctx, unitID); err != nil {
+	// Fetch the current unit: confirms existence (clean ErrUnitNotFound) and
+	// gives us the existing metadata to carry forward when the caller passes nil.
+	current, err := m.store.Get(ctx, unitID)
+	if err != nil {
 		return Unit{}, fmt.Errorf("units: ResolveMerge: %w", err)
+	}
+	// Preserve existing metadata when the caller passes nil so provenance
+	// fields (content_hash, byte_size, etc.) survive a whole-body resolve.
+	if metadata == nil {
+		metadata = current.Metadata
 	}
 	updated, err := m.store.Update(ctx, unitID, resolvedBody, []byte(metadata))
 	if err != nil {
@@ -223,8 +231,10 @@ func (m *Manager) ResolveLoadable(ctx context.Context, filter UnitFilter) ([]Res
 	// Stable precedence sort. Primary: classification rank (org=0, team=1,
 	// personal=2) so shared layers load first as the base and personal wins
 	// last. Secondary: scope rank (global=0, project=1, session=2). Tertiary:
-	// enshrined units after their canonical peer. Quaternary: created_at for
-	// determinism.
+	// cluster all sides of one enshrined conflict together by PeerUnitID so
+	// every flagged side sorts right after its canonical peer regardless of
+	// insertion order. Quaternary: unflagged before flagged within a cluster.
+	// Quinary: created_at for determinism.
 	sort.SliceStable(out, func(i, j int) bool {
 		ci, cj := classRank(out[i].Unit.Classification), classRank(out[j].Unit.Classification)
 		if ci != cj {
@@ -234,8 +244,22 @@ func (m *Manager) ResolveLoadable(ctx context.Context, filter UnitFilter) ([]Res
 		if si != sj {
 			return si < sj
 		}
-		// Group enshrined sides right after their peer: a flagged unit sorts
-		// after a non-flagged one when otherwise equal.
+		// Cluster all sides of one enshrined conflict by PeerUnitID. The
+		// non-flagged canonical peer has an empty PeerUnitID; the flagged
+		// sides carry the peer's id. Using the unit's own id for the
+		// non-flagged side keeps it at the head of the cluster.
+		pi := out[i].Marker.PeerUnitID
+		if !out[i].Flagged {
+			pi = out[i].Unit.ID
+		}
+		pj := out[j].Marker.PeerUnitID
+		if !out[j].Flagged {
+			pj = out[j].Unit.ID
+		}
+		if pi != pj {
+			return pi < pj
+		}
+		// Within a conflict cluster: non-flagged (canonical) before flagged.
 		if out[i].Flagged != out[j].Flagged {
 			return !out[i].Flagged
 		}
