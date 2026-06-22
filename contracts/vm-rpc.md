@@ -148,6 +148,96 @@ is a human-witnessed operator smoke.
 
 ---
 
+## Phase G — read-only view surfaces
+
+**Status:** IN-PROGRESS (read paths). **Owner:** Phase G (`kenaz-harness` server adapter + `kenaz` host client).
+
+Phase G adds **read-only** query RPCs that let the kenaz host render its
+IDE-merger views (Sessions / Tools / Memory / Workflows / Providers) from the
+data the in-VM harness already owns. They are additive to the Phase 8 task
+surface: same NDJSON framing, same auth handshake, same long-lived connection.
+A read RPC is request/response and runs independently of the task busy-guard —
+a read can be served while a task streams `task.running` chunks on the same
+connection.
+
+Server implementation: `cmd/harness-vm/readservice.go` wraps the in-process
+`rpc.API` view accessors (the same surface the harness's own Wails app binds)
+via `rpc.New(core.New(Options{DataDir}))`. Only read accessors are called;
+write paths are deferred (and would fail headless — harness mutations emit Wails
+runtime events that need a lifecycle context the in-VM service lacks).
+
+### Common shape
+
+```jsonc
+C→S: {"kind":"<surface>.<verb>","req_id":"<id>", ...args}
+S→C: {"kind":"<surface>.<verb>.ok","req_id":"<id>", ...payload}
+S→C: {"kind":"<surface>.<verb>.error","req_id":"<id>","code":"...","message_truncated":"..."}
+```
+
+`req_id` is echoed so the host correlates the response on the shared
+connection. Error `code` values: `bad_request` (missing/invalid arg),
+`server_error` (the in-process API returned an error), `unavailable` (the read
+surface failed to bootstrap — e.g. locked/absent data dir; the task surface
+still works).
+
+### Caps
+
+Result sets are bounded server-side (no cursor pagination in v1 — the host
+shows the most-recent N): `maxListItems=200`, `maxMessageItems=500`,
+per-message content `maxMessageBytes=4096`, memory chunk summary
+`maxChunkSummaryByte=256`. Content fields truncated at a UTF-8 rune boundary
+carry `"truncated":true`.
+
+### Surfaces
+
+```jsonc
+// Sessions
+C→S: {"kind":"sessions.list","req_id":"<id>"}
+S→C: {"kind":"sessions.list.ok","req_id":"<id>","sessions":[{"id","name","createdAt","updatedAt","kind?","projectId?"}]}
+C→S: {"kind":"sessions.get","req_id":"<id>","sessionID":"<id>"}
+S→C: {"kind":"sessions.get.ok","req_id":"<id>","session":{...}}
+C→S: {"kind":"sessions.list_messages","req_id":"<id>","sessionID":"<id>"}
+S→C: {"kind":"sessions.list_messages.ok","req_id":"<id>","messages":[{"id","role","content","truncated?","createdAt"}]}
+
+// Tools (MCP recipe registry)
+C→S: {"kind":"tools.list","req_id":"<id>"}
+S→C: {"kind":"tools.list.ok","req_id":"<id>","tools":[{"name","kind":"mcp","enabled"}]}
+
+// Memory
+C→S: {"kind":"memory.list_chunks","req_id":"<id>"}
+S→C: {"kind":"memory.list_chunks.ok","req_id":"<id>","chunks":[{"id","scopeKind","scopeId?","summary","createdAt","pinned?"}]}
+
+// Providers (LLM)
+C→S: {"kind":"providers.list","req_id":"<id>"}
+S→C: {"kind":"providers.list.ok","req_id":"<id>","providers":[{"id","name","kind?","present","sourceTag?"}]}
+
+// Workflows
+C→S: {"kind":"workflows.list","req_id":"<id>"}
+S→C: {"kind":"workflows.list.ok","req_id":"<id>","workflows":[{"id","name","description?","stepCount","source"}]}
+```
+
+### Privacy (load-bearing — enforced by `readservice_test.go`)
+
+- **Memory:** the `summary` is the chunk *title* bounded to 256 UTF-8 bytes.
+  The response NEVER carries `Chunk.Content` (raw chunk text), `FilesRead`, or
+  `FilesModified`. Full-chunk fetch (`memory.get_chunk`) is a deferred RPC that
+  will require a per-fetch audit ledger entry.
+- **Providers:** the response carries only `present` (is a credential
+  configured?) and `sourceTag` (the credential-reference *kind* — e.g.
+  `keychain` / `aws-profile`). It NEVER carries the credential value, a redacted
+  preview, the locator string, or the byte length of any of those.
+- **Sessions / Workflows:** message bodies are truncated at 4 KiB; the workflow
+  list carries metadata only (no YAML body — that needs `secrets/lint`
+  redaction, deferred to `workflows.get`).
+
+### Deferred (not in this surface)
+
+Write paths everywhere; `memory.get_chunk` (full text + audit); `workflows.get`
+(YAML body with secret redaction); cursor pagination; the `agent_feed.*` push
+stream (per-workbench task lifecycle → host AgentFeed panel).
+
+---
+
 ## Smoke Probe (Phase 1)
 
 The smoke script (`kenaz-workbench/scripts/smoke-macos.sh --image=headless`)
