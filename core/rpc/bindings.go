@@ -593,6 +593,21 @@ func (b *Bindings) Contexts_ContextSyncStatus() (contextsview.ContextSyncStatusV
 	return b.api.Contexts().Context_SyncStatus(b.ctx())
 }
 
+// Contexts_AttachModule creates a context-module attachment for the given
+// directory. scopeKind is one of "global", "project", "session"; scopeID is
+// the project or session id (empty for global); dirPath is the library-
+// relative path of a module directory (containing context.md / agents.md).
+//
+// The returned ModuleAttachment contains the resolved content (root file +
+// always:-listed files) and is persisted as a context_attachments row so
+// it participates in the existing global→project→session injection order.
+// On-demand files in the module are available via kaneaz__read_context_file.
+//
+// (unified-context-artifacts-01NCTXU01)
+func (b *Bindings) Contexts_AttachModule(scopeKind, scopeID, dirPath string) (contextsview.ModuleAttachment, error) {
+	return b.api.Contexts().AttachModule(b.ctx(), scopeKind, scopeID, dirPath)
+}
+
 // ── bundle ─────────────────────────────────────────────────────────────
 
 func (b *Bindings) Bundle_List() ([]bundle.Bundle, error) {

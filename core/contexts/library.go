@@ -339,6 +339,20 @@ func (l *Library) CreateFolder(path string) error {
 		return fmt.Errorf("contexts: mkdir %q: %w", path, err)
 	}
 	l.notifyOp(rel, OpCreated)
+	// Scaffold a stub context.md so the newly created directory is
+	// immediately a valid context module (FR-010). The stub explains the
+	// always/on-demand model so authors understand the authoring pattern
+	// without reading external documentation.
+	//
+	// Best-effort: a scaffold failure is non-fatal — the directory was
+	// created successfully; the user can always create context.md manually.
+	rootPath := filepath.Join(abs, "context.md")
+	if _, err := os.Stat(rootPath); os.IsNotExist(err) {
+		if wErr := os.WriteFile(rootPath, []byte(ContextModuleStub), 0o600); wErr == nil {
+			stubRel := rel + "/context.md"
+			l.notifyOp(stubRel, OpCreated)
+		}
+	}
 	return nil
 }
 

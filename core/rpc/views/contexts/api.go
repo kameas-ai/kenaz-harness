@@ -86,6 +86,25 @@ type ContextsAPI interface {
 	// cursor, last pull time, error strings, pull count, and team cap enabled.
 	// Always returns a non-error result; sync problems are surfaced in the struct.
 	Context_SyncStatus(ctx context.Context) (ContextSyncStatusView, error)
+
+	// ── Context module attachment (unified-context-artifacts-01NCTXU01) ──
+
+	// AttachModule creates an attachment for a context module directory.
+	//
+	// dirPath is the library-relative path of a module directory (a
+	// directory containing a context.md or agents.md root file).
+	// scopeKind is one of "global", "project", "session"; scopeID is
+	// the project or session id (empty for global).
+	//
+	// The returned ModuleAttachment has ContentSource = "module:<dirPath>"
+	// and Content = the concatenated root file + all always:-listed files
+	// (the on-demand files are NOT included; they are reached only via the
+	// kaneaz__read_context_file tool).
+	//
+	// Returns ErrLibraryUnavailable when the library is not wired,
+	// ErrNotFound (wrapped) when dirPath does not exist or has no root
+	// file, and ErrInvalidModule when the directory is not a valid module.
+	AttachModule(ctx context.Context, scopeKind, scopeID, dirPath string) (ModuleAttachment, error)
 }
 
 // ── Wire shapes for context sync RPC ──────────────────────────────────────────
@@ -138,4 +157,24 @@ type ContextSyncStatusView struct {
 	PullCount int `json:"pull_count"`
 	// TeamCapEnabled is true when the team-graph sharing capability is active.
 	TeamCapEnabled bool `json:"team_cap_enabled"`
+}
+
+// ── Context module / AttachModule ────────────────────────────────────────────
+
+// ModuleAttachment is the wire shape returned by AttachModule. It mirrors
+// the context_attachments table row so the frontend can render and manage
+// the attachment without a separate List fetch.
+//
+// JSON field names are identical to those of the attachments view's
+// Attachment type so the frontend's existing attachment-list logic
+// can handle both shapes without modification.
+type ModuleAttachment struct {
+	ID            string `json:"id"`
+	ScopeKind     string `json:"scopeKind"`
+	ScopeID       string `json:"scopeId,omitempty"`
+	ContentSource string `json:"contentSource"`
+	Content       string `json:"content"`
+	Kind          string `json:"kind"`
+	Position      int    `json:"position"`
+	CreatedAt     string `json:"createdAt"`
 }
