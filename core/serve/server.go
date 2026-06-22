@@ -55,7 +55,6 @@ import (
 	"os"
 	"path"
 	"strings"
-	"sync"
 	"time"
 
 	"golang.org/x/net/websocket"
@@ -82,6 +81,7 @@ const tokenPlaceholder = "<!--HARNESS_TOKEN_META-->"
 // and call Serve to block until the context is cancelled.
 type Server struct {
 	api      *rpc.API
+	bus      *rpc.EventBus // in-process event bus for real-time WS push
 	token    string
 	staticFS fs.FS   // embedded dist-served bundle; nil → 404 for static paths
 	log      *slog.Logger
@@ -110,6 +110,7 @@ func New(api *rpc.API, addr, token string, staticFS fs.FS, log *slog.Logger) *Se
 
 	s := &Server{
 		api:      api,
+		bus:      api.EventBus(),
 		token:    token,
 		staticFS: staticFS,
 		log:      log,
@@ -374,9 +375,13 @@ func (s *Server) handleWS(ws *websocket.Conn) {
 	}
 }
 
-// streamSessions sends an initial sessions snapshot then polls every 2 s
-// until the connection closes.  Real-time push is deferred; this proves
-// the WS pattern end-to-end with a simple poll-based approach.
+// streamSessions sends an initial sessions snapshot then pushes events in
+// real time via the EventBus.  The bus receives every event the StreamBroker
+// publishes (both desktop Wails and served-mode paths share the same broker
+// with a MultiEmitter fan-out).
+//
+// The caller is the Sessions_Stream WS method handler and drains incoming
+// frames concurrently so a client ping or disconnect is detected promptly.
 func (s *Server) streamSessions(ctx context.Context, ws *websocket.Conn) {
 	// writeFrame sends a frame and returns false when the connection is broken.
 	writeFrame := func(event string, data any) bool {
@@ -384,7 +389,8 @@ func (s *Server) streamSessions(ctx context.Context, ws *websocket.Conn) {
 		return err == nil
 	}
 
-	// Send an initial snapshot.
+	// Send an initial snapshot before subscribing to the bus so the client
+	// always sees the current state even when no events arrive immediately.
 	sessions, err := s.api.Sessions().List(ctx)
 	if err != nil {
 		_ = websocket.JSON.Send(ws, wsFrame{Error: "sessions list: " + err.Error()})
@@ -394,14 +400,11 @@ func (s *Server) streamSessions(ctx context.Context, ws *websocket.Conn) {
 		return
 	}
 
-	// Poll-based streaming: send updates every 2 s.  A deduplicated push-
-	// based approach is deferred to a later WP once the broker is wired for
-	// non-Wails emission.
-	var mu sync.Mutex
-	prevJSON, _ := json.Marshal(sessions)
-
-	ticker := time.NewTicker(2 * time.Second)
-	defer ticker.Stop()
+	// Subscribe to session-list change events on the in-process bus.
+	// TopicSessionListChanged is the broker topic emitted by every backend
+	// write that mutates the sessions list.
+	busCh, busCancel := s.bus.Subscribe(64, rpc.TopicSessionListChanged)
+	defer busCancel()
 
 	// Drain incoming messages in a separate goroutine so a client ping or
 	// a disconnect signal reaches us promptly.
@@ -423,7 +426,15 @@ func (s *Server) streamSessions(ctx context.Context, ws *websocket.Conn) {
 			return
 		case <-readDone:
 			return // client closed the connection
-		case <-ticker.C:
+		case ev, ok := <-busCh:
+			if !ok {
+				// bus channel was closed (server shutting down)
+				_ = websocket.JSON.Send(ws, wsFrame{Event: "closed"})
+				return
+			}
+			// Re-fetch the full list so the client gets a consistent snapshot
+			// after each change rather than a bare delta.  The payload
+			// (SessionListChangedPayload) is forwarded as event metadata.
 			updated, err := s.api.Sessions().List(ctx)
 			if err != nil {
 				if !writeFrame("error", map[string]string{"message": err.Error()}) {
@@ -431,17 +442,11 @@ func (s *Server) streamSessions(ctx context.Context, ws *websocket.Conn) {
 				}
 				continue
 			}
-			newJSON, _ := json.Marshal(updated)
-			mu.Lock()
-			changed := string(newJSON) != string(prevJSON)
-			if changed {
-				prevJSON = newJSON
-			}
-			mu.Unlock()
-			if changed {
-				if !writeFrame("sessions:update", updated) {
-					return
-				}
+			if !writeFrame("sessions:update", map[string]any{
+				"sessions": updated,
+				"change":   ev.Payload,
+			}) {
+				return
 			}
 		}
 	}

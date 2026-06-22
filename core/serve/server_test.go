@@ -367,6 +367,115 @@ func TestWS_UnknownMethod(t *testing.T) {
 	}
 }
 
+// newTestAPIServer is like newTestServer but also returns the *rpc.API so
+// callers can publish directly to the EventBus to trigger push assertions.
+func newTestAPIServer(t *testing.T, token string) (api *rpc.API, srv *serve.Server, baseURL string, cancel context.CancelFunc) {
+	t.Helper()
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	addr := ln.Addr().String()
+	_ = ln.Close()
+
+	api = rpc.New(nil)
+	ctx, ctxCancel := context.WithCancel(context.Background())
+	srv = serve.New(api, addr, token, nil, nil)
+
+	done := make(chan error, 1)
+	go func() { done <- srv.Serve(ctx) }()
+
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		c, cerr := net.Dial("tcp", addr)
+		if cerr == nil {
+			_ = c.Close()
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	return api, srv, "http://" + addr, func() {
+		ctxCancel()
+		select {
+		case <-done:
+		case <-time.After(3 * time.Second):
+			t.Error("server did not shut down in time")
+		}
+	}
+}
+
+// TestWS_SessionsStream_PushDirect verifies that publishing a
+// TopicSessionListChanged event to the API's EventBus causes a connected /ws
+// client to receive a "sessions:update" frame in real time, with no polling.
+// The assertion deadline is 500 ms — well under the old 2 s poll period.
+func TestWS_SessionsStream_PushDirect(t *testing.T) {
+	api, _, baseURL, cancel := newTestAPIServer(t, "tok")
+	defer cancel()
+
+	wsURL := "ws" + strings.TrimPrefix(baseURL, "http") + "/ws"
+	cfg, err := websocket.NewConfig(wsURL, "http://localhost")
+	if err != nil {
+		t.Fatalf("ws config: %v", err)
+	}
+	cfg.Header.Set("Authorization", "Bearer tok")
+
+	ws, err := websocket.DialConfig(cfg)
+	if err != nil {
+		t.Fatalf("ws dial: %v", err)
+	}
+	defer ws.Close() //nolint:errcheck
+
+	// Start the sessions stream.
+	if err := websocket.JSON.Send(ws, map[string]any{
+		"method": "Sessions_Stream",
+		"params": map[string]any{},
+	}); err != nil {
+		t.Fatalf("ws send: %v", err)
+	}
+
+	// Consume the mandatory initial snapshot.
+	ws.SetReadDeadline(time.Now().Add(3 * time.Second))
+	var snapshotFrame struct {
+		Event string `json:"event"`
+	}
+	if err := websocket.JSON.Receive(ws, &snapshotFrame); err != nil {
+		t.Fatalf("snapshot receive: %v", err)
+	}
+	if snapshotFrame.Event != "sessions:snapshot" {
+		t.Fatalf("expected 'sessions:snapshot', got %q", snapshotFrame.Event)
+	}
+
+	// Publish a session-list change directly to the EventBus.
+	// This is what the real broker does when a session mutation fires.
+	go func() {
+		// Small yield so the streamSessions goroutine is blocked on busCh select.
+		time.Sleep(20 * time.Millisecond)
+		api.EventBus().Publish(rpc.TopicSessionListChanged, rpc.SessionListChangedPayload{
+			Reason:    "created",
+			SessionID: "test-session-1",
+			Timestamp: 1000,
+		})
+	}()
+
+	// Expect a "sessions:update" frame within 500 ms — NOT 2 s.
+	ws.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+	var updateFrame struct {
+		Event string `json:"event"`
+		Error string `json:"error"`
+	}
+	if err := websocket.JSON.Receive(ws, &updateFrame); err != nil {
+		t.Fatalf("update frame not received within 500 ms (push path broken?): %v", err)
+	}
+	if updateFrame.Error != "" {
+		t.Fatalf("unexpected frame error: %s", updateFrame.Error)
+	}
+	if updateFrame.Event != "sessions:update" {
+		t.Errorf("expected 'sessions:update', got %q", updateFrame.Event)
+	}
+}
+
 // TestWS_AuthRequired verifies that /ws rejects connections without a token.
 func TestWS_AuthRequired(t *testing.T) {
 	_, baseURL, cancel := newTestServer(t, "secret")
