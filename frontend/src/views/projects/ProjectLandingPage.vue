@@ -7,7 +7,7 @@
  * scoped attachments and lets the user add / remove / reorder /
  * refresh entries pulled from the Context Library.
  */
-import { computed, onMounted, ref, watch } from 'vue';
+import { computed, nextTick, onMounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import CanvasHead from '@/shell/CanvasHead.vue';
 import { MessageSquare, Plus, Pencil, Brain } from '@/shell/icons';
@@ -38,6 +38,47 @@ const attachments = ref<Attachment[]>([]);
 const attachmentsError = ref<string | null>(null);
 const attachmentsLoading = ref(false);
 const pickerOpen = ref(false);
+
+// Scoped "new context folder" inline-name prompt (FR-021).
+const creatingFolder = ref(false);
+const newFolderName = ref('');
+const newFolderInputRef = ref<HTMLInputElement | null>(null);
+const newFolderError = ref<string | null>(null);
+
+function beginCreateFolder() {
+  newFolderError.value = null;
+  creatingFolder.value = true;
+  newFolderName.value = '';
+  void nextTick(() => newFolderInputRef.value?.focus());
+}
+
+function cancelCreateFolder() {
+  creatingFolder.value = false;
+  newFolderName.value = '';
+  newFolderError.value = null;
+}
+
+async function confirmCreateFolder() {
+  const name = newFolderName.value.trim().replace(/[/\\]+/g, '-');
+  if (!name) {
+    cancelCreateFolder();
+    return;
+  }
+  newFolderError.value = null;
+  try {
+    await client.contexts.createFolder(name);
+    await client.attachments.add({
+      scopeKind: 'project',
+      scopeId: projectId.value,
+      contentSource: `library:${name}`,
+      content: '',
+    });
+    cancelCreateFolder();
+    await loadAttachments(projectId.value);
+  } catch (e) {
+    newFolderError.value = e instanceof Error ? e.message : 'Folder create failed.';
+  }
+}
 
 // Editable description state (WP07 T002).
 const descEditing = ref(false);
@@ -534,15 +575,57 @@ function onDragEnd() {
             Project context
             <span class="ml-1 text-ink-dim">({{ attachments.length }})</span>
           </h2>
-          <button
-            type="button"
-            class="flex items-center gap-1 rounded-sm border border-accent-hairline bg-surface-1 px-2 py-1 font-ui text-[11px] text-accent hover:bg-accent-glow"
-            data-testid="project-add-context"
-            @click="openPicker"
+          <div class="flex items-center gap-2">
+            <button
+              type="button"
+              class="flex items-center gap-1 rounded-sm border border-border-muted bg-surface-1 px-2 py-1 font-ui text-[11px] text-ink-muted hover:bg-surface-2 hover:text-accent"
+              data-testid="project-new-context-folder"
+              @click="beginCreateFolder"
+            >
+              <Plus :size="12" />
+              <span>New folder</span>
+            </button>
+            <button
+              type="button"
+              class="flex items-center gap-1 rounded-sm border border-accent-hairline bg-surface-1 px-2 py-1 font-ui text-[11px] text-accent hover:bg-accent-glow"
+              data-testid="project-add-context"
+              @click="openPicker"
+            >
+              <Plus :size="12" />
+              <span>Add context</span>
+            </button>
+          </div>
+        </div>
+        <!-- Inline new-folder name prompt (FR-021) -->
+        <div
+          v-if="creatingFolder"
+          class="mt-2"
+          data-testid="project-new-folder-row"
+        >
+          <input
+            ref="newFolderInputRef"
+            v-model="newFolderName"
+            type="text"
+            placeholder="Folder name…"
+            aria-label="New context folder name"
+            spellcheck="false"
+            autocomplete="off"
+            class="w-full rounded-sm border border-border-muted bg-surface-1 px-2 py-1 font-ui text-[12px] text-ink focus:border-accent focus:outline-none"
+            data-testid="project-new-folder-input"
+            @keydown.enter.prevent="confirmCreateFolder"
+            @keydown.esc.prevent="cancelCreateFolder"
+            @blur="cancelCreateFolder"
+          />
+          <p class="mt-1 font-ui text-[10px] text-ink-subtle">
+            Creates a top-level folder in the context library and attaches it at project scope · Enter to create, Esc to cancel
+          </p>
+          <p
+            v-if="newFolderError"
+            class="mt-1 font-ui text-[10px] text-signal-danger"
+            data-testid="project-new-folder-error"
           >
-            <Plus :size="12" />
-            <span>Add context</span>
-          </button>
+            {{ newFolderError }}
+          </p>
         </div>
         <p class="mt-1 font-ui text-[11px] text-ink-dim">
           Attached files apply to every session in this project, including
