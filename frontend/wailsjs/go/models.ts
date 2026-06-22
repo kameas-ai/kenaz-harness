@@ -1589,6 +1589,32 @@ export namespace contexts {
 		    return a;
 		}
 	}
+	export class ModuleAttachment {
+	    id: string;
+	    scopeKind: string;
+	    scopeId?: string;
+	    contentSource: string;
+	    content: string;
+	    kind: string;
+	    position: number;
+	    createdAt: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ModuleAttachment(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.scopeKind = source["scopeKind"];
+	        this.scopeId = source["scopeId"];
+	        this.contentSource = source["contentSource"];
+	        this.content = source["content"];
+	        this.kind = source["kind"];
+	        this.position = source["position"];
+	        this.createdAt = source["createdAt"];
+	    }
+	}
 	export class Node {
 	    name: string;
 	    path: string;
@@ -4832,6 +4858,24 @@ export namespace recipes {
 	        this.required = source["required"];
 	    }
 	}
+	export class RecipeAuth {
+	    kind: string;
+	    client_id?: string;
+	    scopes?: string[];
+	    token_env_var?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new RecipeAuth(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.kind = source["kind"];
+	        this.client_id = source["client_id"];
+	        this.scopes = source["scopes"];
+	        this.token_env_var = source["token_env_var"];
+	    }
+	}
 	export class SamplingPolicy {
 	    allowed: boolean;
 	    default: boolean;
@@ -4868,6 +4912,7 @@ export namespace recipes {
 	    recommended_policy_template?: string;
 	    prompt_on_first_use?: string[];
 	    pre_seeding_policy?: string;
+	    auth?: RecipeAuth;
 	
 	    static createFrom(source: any = {}) {
 	        return new Recipe(source);
@@ -4896,6 +4941,7 @@ export namespace recipes {
 	        this.recommended_policy_template = source["recommended_policy_template"];
 	        this.prompt_on_first_use = source["prompt_on_first_use"];
 	        this.pre_seeding_policy = source["pre_seeding_policy"];
+	        this.auth = this.convertValues(source["auth"], RecipeAuth);
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -4956,6 +5002,7 @@ export namespace recipes {
 		    return a;
 		}
 	}
+	
 	
 	
 	export class TranslationReport {
@@ -6171,6 +6218,44 @@ export namespace slashcmd {
 	        this.renderedArgs = source["renderedArgs"];
 	        this.toolName = source["toolName"];
 	        this.metadata = source["metadata"];
+	    }
+	}
+	export class SkillItemWire {
+	    id: string;
+	    catalogId?: string;
+	    version?: string;
+	    source: string;
+	    trigger: string;
+	    localTrigger?: string;
+	    kind: string;
+	    description?: string;
+	    body?: string;
+	    orgManaged: boolean;
+	    disabled?: boolean;
+	    shadowed?: boolean;
+	    installedAt?: number;
+	    updatedAt?: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new SkillItemWire(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.catalogId = source["catalogId"];
+	        this.version = source["version"];
+	        this.source = source["source"];
+	        this.trigger = source["trigger"];
+	        this.localTrigger = source["localTrigger"];
+	        this.kind = source["kind"];
+	        this.description = source["description"];
+	        this.body = source["body"];
+	        this.orgManaged = source["orgManaged"];
+	        this.disabled = source["disabled"];
+	        this.shadowed = source["shadowed"];
+	        this.installedAt = source["installedAt"];
+	        this.updatedAt = source["updatedAt"];
 	    }
 	}
 	export class UserCommandInput {

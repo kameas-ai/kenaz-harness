@@ -345,6 +345,226 @@ describe('ProjectLandingPage', () => {
     expect(router.currentRoute.value.query.scopeId).toBe('p1');
   });
 
+  // ── FR-021: project-scope "New context folder" affordance ─────────────
+
+  it('shows the "New folder" button next to "Add context" in the project context section (FR-021)', async () => {
+    const project: Project = {
+      id: 'p1',
+      name: 'Foo',
+      description: '',
+      createdAt: '',
+      updatedAt: '',
+    };
+    const { client, router } = setup({ projectId: 'p1', project });
+    await router.push('/projects/p1');
+    await router.isReady();
+    const w = mount(ProjectLandingPage, {
+      global: {
+        plugins: [router],
+        provide: { [HarnessClientKey as symbol]: client },
+      },
+    });
+    await flushPromises();
+    expect(w.find('[data-testid=project-new-context-folder]').exists()).toBe(true);
+    expect(w.find('[data-testid=project-add-context]').exists()).toBe(true);
+  });
+
+  it('reveals the inline folder-name input when "New folder" is clicked (FR-021)', async () => {
+    const project: Project = {
+      id: 'p1',
+      name: 'Foo',
+      description: '',
+      createdAt: '',
+      updatedAt: '',
+    };
+    const { client, router } = setup({ projectId: 'p1', project });
+    await router.push('/projects/p1');
+    await router.isReady();
+    const w = mount(ProjectLandingPage, {
+      global: {
+        plugins: [router],
+        provide: { [HarnessClientKey as symbol]: client },
+      },
+    });
+    await flushPromises();
+    // Input hidden initially.
+    expect(w.find('[data-testid=project-new-folder-row]').exists()).toBe(false);
+    await w.find('[data-testid=project-new-context-folder]').trigger('click');
+    await flushPromises();
+    expect(w.find('[data-testid=project-new-folder-row]').exists()).toBe(true);
+    expect(w.find('[data-testid=project-new-folder-input]').exists()).toBe(true);
+  });
+
+  it('calls createFolder + attachments.add and reloads attachments on Enter (FR-021)', async () => {
+    const project: Project = {
+      id: 'p1',
+      name: 'Foo',
+      description: '',
+      createdAt: '',
+      updatedAt: '',
+    };
+    const createFolder = vi.fn(async () => undefined);
+    const addAttachment = vi.fn(async () => ({
+      id: 'att-new',
+      scopeKind: 'project' as const,
+      scopeId: 'p1',
+      contentSource: 'library:my-folder',
+      content: '',
+      kind: 'system' as const,
+      position: 0,
+      createdAt: '',
+    }));
+    const client = createFakeHarnessClient({
+      projects: {
+        list: async () => [],
+        get: async () => project,
+        create: async () => ({ id: 'p', name: 'p', description: '', createdAt: '', updatedAt: '' }),
+        rename: async () => undefined,
+        updateDescription: async () => undefined,
+        remove: async () => undefined,
+        addSession: async () => undefined,
+        removeSession: async () => undefined,
+        listSessions: async () => [],
+      },
+      contexts: {
+        list: async () => ({ name: '', path: '', kind: 'folder' as const }),
+        listAll: async () => ({ name: '', path: '', kind: 'folder' as const }),
+        get: async () => '',
+        save: async () => undefined,
+        createFolder,
+        rename: async () => undefined,
+        delete: async () => undefined,
+        recentlyApplied: async () => [],
+        rootPath: async () => '/tmp/contexts',
+      },
+      attachments: {
+        list: async () => [],
+        listResolved: async () => [],
+        add: addAttachment,
+        remove: async () => undefined,
+        reorder: async () => undefined,
+        refresh: async () => ({} as Attachment),
+      },
+    });
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [
+        { path: '/projects/:id', name: 'project', component: ProjectLandingPage },
+        { path: '/sessions/:id?', name: 'sessions', component: { template: '<div />' } },
+      ],
+    });
+    await router.push('/projects/p1');
+    await router.isReady();
+    const w = mount(ProjectLandingPage, {
+      global: {
+        plugins: [router],
+        provide: { [HarnessClientKey as symbol]: client },
+      },
+    });
+    await flushPromises();
+
+    await w.find('[data-testid=project-new-context-folder]').trigger('click');
+    await flushPromises();
+    const input = w.find<HTMLInputElement>('[data-testid=project-new-folder-input]');
+    await input.setValue('my-folder');
+    await input.trigger('keydown.enter');
+    await flushPromises();
+
+    expect(createFolder).toHaveBeenCalledWith('my-folder');
+    expect(addAttachment).toHaveBeenCalledWith({
+      scopeKind: 'project',
+      scopeId: 'p1',
+      contentSource: 'library:my-folder',
+      content: '',
+    });
+    // Input dismissed after create.
+    expect(w.find('[data-testid=project-new-folder-row]').exists()).toBe(false);
+  });
+
+  it('surfaces an error and keeps the form open when createFolder fails', async () => {
+    const project: Project = {
+      id: 'p1', name: 'Foo', description: '', createdAt: '', updatedAt: '',
+    };
+    const client = createFakeHarnessClient({
+      projects: {
+        list: async () => [],
+        get: async () => project,
+        create: async () => ({ id: 'p', name: 'p', description: '', createdAt: '', updatedAt: '' }),
+        rename: async () => undefined,
+        updateDescription: async () => undefined,
+        remove: async () => undefined,
+        addSession: async () => undefined,
+        removeSession: async () => undefined,
+        listSessions: async () => [],
+      },
+      contexts: {
+        list: async () => ({ name: '', path: '', kind: 'folder' as const }),
+        listAll: async () => ({ name: '', path: '', kind: 'folder' as const }),
+        get: async () => '',
+        save: async () => undefined,
+        createFolder: async () => {
+          throw new Error('disk full');
+        },
+        rename: async () => undefined,
+        delete: async () => undefined,
+        recentlyApplied: async () => [],
+        rootPath: async () => '/tmp/contexts',
+      },
+    });
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [
+        { path: '/projects/:id', name: 'project', component: ProjectLandingPage },
+        { path: '/sessions/:id?', name: 'sessions', component: { template: '<div />' } },
+      ],
+    });
+    await router.push('/projects/p1');
+    await router.isReady();
+    const w = mount(ProjectLandingPage, {
+      global: { plugins: [router], provide: { [HarnessClientKey as symbol]: client } },
+    });
+    await flushPromises();
+
+    await w.find('[data-testid=project-new-context-folder]').trigger('click');
+    await flushPromises();
+    const input = w.find<HTMLInputElement>('[data-testid=project-new-folder-input]');
+    await input.setValue('bad-folder');
+    await input.trigger('keydown.enter');
+    await flushPromises();
+
+    // The error must be VISIBLE (form stays open) — not silently swallowed.
+    const err = w.find('[data-testid=project-new-folder-error]');
+    expect(err.exists()).toBe(true);
+    expect(err.text()).toContain('disk full');
+    expect(w.find('[data-testid=project-new-folder-row]').exists()).toBe(true);
+  });
+
+  it('dismisses the inline input when Esc is pressed (FR-021)', async () => {
+    const project: Project = {
+      id: 'p1',
+      name: 'Foo',
+      description: '',
+      createdAt: '',
+      updatedAt: '',
+    };
+    const { client, router } = setup({ projectId: 'p1', project });
+    await router.push('/projects/p1');
+    await router.isReady();
+    const w = mount(ProjectLandingPage, {
+      global: {
+        plugins: [router],
+        provide: { [HarnessClientKey as symbol]: client },
+      },
+    });
+    await flushPromises();
+    await w.find('[data-testid=project-new-context-folder]').trigger('click');
+    await flushPromises();
+    expect(w.find('[data-testid=project-new-folder-row]').exists()).toBe(true);
+    await w.find('[data-testid=project-new-folder-input]').trigger('keydown.esc');
+    await flushPromises();
+    expect(w.find('[data-testid=project-new-folder-row]').exists()).toBe(false);
+  });
+
   it('renders sessions sorted by lastActiveAt with the start-session CTA (WP07 T002)', async () => {
     const project: Project = {
       id: 'p1',

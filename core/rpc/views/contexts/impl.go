@@ -8,10 +8,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	contextpack "github.com/kameas-ai/kenaz-harness/core/context/pack"
 	corecontexts "github.com/kameas-ai/kenaz-harness/core/contexts"
 	fleet "github.com/kameas-ai/kenaz-harness/core/fleet"
+	"github.com/kameas-ai/kenaz-harness/core/logging"
 )
 
 // Library is the slim interface this view needs. core/contexts.Library
@@ -26,13 +28,38 @@ type Library interface {
 	Delete(path string) error
 	RecentlyApplied(limit int) []string
 	Root() string
+	// Module helpers (unified-context-artifacts-01NCTXU01).
+	IsModule(dir string) bool
+	ParseModule(dir string) (corecontexts.Module, error)
+}
+
+// AttachmentAdder is the narrow surface AttachModule uses to create a
+// context_attachments row. core/attachments.Manager satisfies it;
+// tests can pass a fake.
+type AttachmentAdder interface {
+	Add(ctx context.Context, att AttachmentInput) (ModuleAttachment, error)
+}
+
+// AttachmentInput is the input to AttachmentAdder.Add. Mirrors the
+// core/attachments.Attachment fields the caller controls.
+type AttachmentInput struct {
+	ScopeKind     string
+	ScopeID       string
+	ContentSource string
+	Content       string
+	Kind          string
 }
 
 // API is the concrete ContextsAPI.
 type API struct {
-	lib    Library
-	syncer *fleet.ContextGraphSyncer
+	lib        Library
+	syncer     *fleet.ContextGraphSyncer
+	attAdder   AttachmentAdder
 }
+
+// ErrInvalidModule is returned by AttachModule when the directory exists
+// but has no root file (context.md / agents.md).
+var ErrInvalidModule = errors.New("contexts: directory has no root file (context.md or agents.md) — not a valid context module")
 
 // New constructs the view. A nil library is allowed; methods return
 // ErrLibraryUnavailable so the frontend renders an empty state instead
@@ -224,6 +251,101 @@ func (a *API) Context_SyncStatus(_ context.Context) (ContextSyncStatusView, erro
 		PullCount:      snap.PullCount,
 		TeamCapEnabled: snap.TeamCapEnabled,
 	}, nil
+}
+
+// WithAttachmentAdder wires an AttachmentAdder so AttachModule can
+// persist a context_attachments row. When nil, AttachModule returns an
+// error rather than panicking — the attachment store is optional at
+// view construction time (chassis boots before all subsystems are ready).
+func (a *API) WithAttachmentAdder(adder AttachmentAdder) *API {
+	a.attAdder = adder
+	return a
+}
+
+// AttachModule implements ContextsAPI. It reads the module at dirPath
+// (root file + always: files), concatenates their content, and creates
+// a context_attachments row whose ContentSource is "module:<dirPath>".
+//
+// The resolved content order is: root file first, then always: files in
+// declared order. On-demand files (Others) are NOT included — they are
+// reachable via kaneaz__read_context_file at conversation time.
+func (a *API) AttachModule(ctx context.Context, scopeKind, scopeID, dirPath string) (ModuleAttachment, error) {
+	if a == nil || a.lib == nil {
+		return ModuleAttachment{}, ErrLibraryUnavailable
+	}
+	if !a.lib.IsModule(dirPath) {
+		return ModuleAttachment{}, fmt.Errorf("%w: %q", ErrInvalidModule, dirPath)
+	}
+
+	mod, err := a.lib.ParseModule(dirPath)
+	if err != nil {
+		return ModuleAttachment{}, fmt.Errorf("contexts: attach_module: parse module %q: %w", dirPath, err)
+	}
+
+	// Collect content: root file then always: files in order.
+	type namedContent struct {
+		path    string
+		content string
+	}
+	var parts []namedContent
+
+	rootContent, err := a.lib.Get(mod.Root)
+	if err != nil {
+		return ModuleAttachment{}, fmt.Errorf("contexts: attach_module: read root %q: %w", mod.Root, err)
+	}
+	parts = append(parts, namedContent{path: mod.Root, content: rootContent})
+
+	for _, ap := range mod.Always {
+		content, err := a.lib.Get(ap)
+		if err != nil {
+			// A declared always: file that can't be read (missing, or a
+			// disallowed extension) is a soft error — it must not block
+			// attachment — but it is NOT silent: warn so a mistyped or
+			// deleted always: entry is diagnosable instead of vanishing.
+			logging.L().Warn("contexts.attach_module.always_skipped",
+				"module", mod.Root, "file", ap, "err", err.Error())
+			continue
+		}
+		parts = append(parts, namedContent{path: ap, content: content})
+	}
+
+	// Concatenate into a single snapshot separated by file-path headers
+	// so the model can correlate content back to filenames.
+	var sb strings.Builder
+	for i, p := range parts {
+		if i > 0 {
+			sb.WriteString("\n\n")
+		}
+		fmt.Fprintf(&sb, "<!-- file: %s -->\n", p.path)
+		sb.WriteString(p.content)
+	}
+	combined := sb.String()
+
+	// Persist the attachment row.
+	if a.attAdder == nil {
+		// No attachment store wired — return a synthetic in-memory record
+		// so callers get the resolved content even without persistence.
+		// This path is used in tests and CLI-only mode.
+		return ModuleAttachment{
+			ScopeKind:     scopeKind,
+			ScopeID:       scopeID,
+			ContentSource: "module:" + dirPath,
+			Content:       combined,
+			Kind:          "system",
+		}, nil
+	}
+
+	stored, err := a.attAdder.Add(ctx, AttachmentInput{
+		ScopeKind:     scopeKind,
+		ScopeID:       scopeID,
+		ContentSource: "module:" + dirPath,
+		Content:       combined,
+		Kind:          "system",
+	})
+	if err != nil {
+		return ModuleAttachment{}, fmt.Errorf("contexts: attach_module: persist attachment: %w", err)
+	}
+	return stored, nil
 }
 
 // Compile-time witness.

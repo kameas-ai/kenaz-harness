@@ -298,6 +298,10 @@ export function Context_StopStream(arg1) {
   return window['go']['rpc']['Bindings']['Context_StopStream'](arg1);
 }
 
+export function Contexts_AttachModule(arg1, arg2, arg3) {
+  return window['go']['rpc']['Bindings']['Contexts_AttachModule'](arg1, arg2, arg3);
+}
+
 export function Contexts_ContextPromote(arg1) {
   return window['go']['rpc']['Bindings']['Contexts_ContextPromote'](arg1);
 }
@@ -1366,6 +1370,26 @@ export function Slashcmd_Save(arg1) {
   return window['go']['rpc']['Bindings']['Slashcmd_Save'](arg1);
 }
 
+export function Slashcmd_SkillInstall(arg1, arg2) {
+  return window['go']['rpc']['Bindings']['Slashcmd_SkillInstall'](arg1, arg2);
+}
+
+export function Slashcmd_SkillList() {
+  return window['go']['rpc']['Bindings']['Slashcmd_SkillList']();
+}
+
+export function Slashcmd_SkillPublish(arg1, arg2, arg3) {
+  return window['go']['rpc']['Bindings']['Slashcmd_SkillPublish'](arg1, arg2, arg3);
+}
+
+export function Slashcmd_SkillRenameLocalTrigger(arg1, arg2) {
+  return window['go']['rpc']['Bindings']['Slashcmd_SkillRenameLocalTrigger'](arg1, arg2);
+}
+
+export function Slashcmd_SkillUninstall(arg1) {
+  return window['go']['rpc']['Bindings']['Slashcmd_SkillUninstall'](arg1);
+}
+
 export function Storage_ApplyDriftFix(arg1) {
   return window['go']['rpc']['Bindings']['Storage_ApplyDriftFix'](arg1);
 }
@@ -1420,6 +1444,10 @@ export function Tools_RecipeStatus(arg1) {
 
 export function Tools_RequestAdditionalAllowedDir(arg1, arg2, arg3) {
   return window['go']['rpc']['Bindings']['Tools_RequestAdditionalAllowedDir'](arg1, arg2, arg3);
+}
+
+export function Tools_SignInRecipe(arg1) {
+  return window['go']['rpc']['Bindings']['Tools_SignInRecipe'](arg1);
 }
 
 export function Tools_UninstallRecipe(arg1) {

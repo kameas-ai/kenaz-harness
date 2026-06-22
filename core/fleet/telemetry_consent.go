@@ -49,6 +49,20 @@ type StaticTierReader struct{}
 
 func (StaticTierReader) OrgTier() string { return "free" }
 
+// TierReaderFunc adapts a plain func to the OrgTierReader interface so callers
+// can back the consent tier off a live source (e.g. the CapabilityPoller's
+// current tier) without defining a named type. A nil func or empty return is
+// treated as "free" by currentTier's caller.
+type TierReaderFunc func() string
+
+// OrgTier implements OrgTierReader.
+func (f TierReaderFunc) OrgTier() string {
+	if f == nil {
+		return "free"
+	}
+	return f()
+}
+
 // consentFile is the filename within DataDir/fleet/ where the consent state
 // is persisted.
 const consentFile = "telemetry_consent.json"

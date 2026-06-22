@@ -156,6 +156,9 @@ func (s *memStore) UpdateScope(ctx context.Context, id, scopeKind, scopeID strin
 				ErrUnsupportedScope, scopeID, sessProj)
 		}
 		a.ProjectID = &sessProj
+	case ScopeKindGlobal:
+		// Promote to global scope: clear project_id.
+		a.ProjectID = nil
 	case ScopeKindSession:
 		a.ProjectID = nil
 	}

@@ -528,6 +528,23 @@ export interface Attachment {
 }
 
 /**
+ * ModuleAttachment — result of attaching a whole context module directory
+ * (one with a root context.md / agents.md). Same shape as Attachment;
+ * `contentSource` carries the `module:<dir>` scheme and `content` is the
+ * resolved root + `always:` files. Mirrors contexts.ModuleAttachment.
+ */
+export interface ModuleAttachment {
+  id: string;
+  scopeKind: string;
+  scopeId?: string;
+  contentSource: string;
+  content: string;
+  kind: string;
+  position: number;
+  createdAt: string;
+}
+
+/**
  * AttachmentAddInput — wire shape Attachments.add accepts. Mirrors
  * core/rpc/views/attachments.AddInput. The server fills in id +
  * createdAt when omitted.
@@ -2032,6 +2049,23 @@ export interface ConfigOption {
  * filesystem-mcp-recipe mission. Recipes that take only env keys
  * (e.g. Brave Search) leave them undefined / empty.
  */
+/**
+ * RecipeAuth declares OAuth sign-in for a remote (http/sse) recipe. When
+ * `kind === 'mcp_oauth'` the harness can obtain a bearer token via the MCP
+ * authorization flow (the install modal shows a "Sign in" button) instead of
+ * asking for a pasted token. Undefined for ordinary key-based / local recipes.
+ */
+export interface RecipeAuth {
+  kind: 'mcp_oauth';
+  /**
+   * Pre-registered public OAuth client id. Empty when the operator has not
+   * registered an OAuth app yet — sign-in then fails with a clear message.
+   */
+  clientId?: string;
+  scopes?: string[];
+  tokenEnvVar?: string;
+}
+
 export interface Recipe {
   id: string;
   displayName: string;
@@ -2042,6 +2076,11 @@ export interface Recipe {
   docsUrl?: string;
   argsTemplate?: string[];
   configOptions?: ConfigOption[];
+  /**
+   * OAuth sign-in declaration for remote recipes (e.g. GitHub's official
+   * remote MCP server). Drives the "Sign in" affordance in the install modal.
+   */
+  auth?: RecipeAuth;
   /**
    * Optional hazard message rendered by the install modal in a stark
    * red banner with an explicit confirmation checkbox. Set on recipes

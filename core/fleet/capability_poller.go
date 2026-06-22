@@ -212,6 +212,13 @@ func (p *CapabilityPoller) Refresh(ctx context.Context) (Capabilities, error) {
 		return DefaultDenyCapabilities(), fmt.Errorf("fleet: capability poller singleflight: %w", err)
 	}
 	r := v.(result)
+	// Publish the fetched snapshot so Current() reflects the refresh for
+	// direct callers (Start's loop also calls setCurrent, harmlessly). On a
+	// fetch error fetch() returns the last-known value, so we only update on
+	// success to avoid clobbering good state with a transient failure.
+	if r.err == nil {
+		p.setCurrent(r.caps)
+	}
 	return r.caps, r.err
 }
 

@@ -386,6 +386,9 @@ func (s *stubTools) ListRecipes(_ context.Context) ([]tools.RecipeListing, error
 func (s *stubTools) InstallRecipe(_ context.Context, _ string, _ map[string]string, _ map[string]any) (stdio.RecipeStatus, error) {
 	return stdio.RecipeStatus{}, errNotWired
 }
+func (s *stubTools) SignInRecipe(_ context.Context, _ string) (stdio.RecipeStatus, error) {
+	return stdio.RecipeStatus{}, errNotWired
+}
 func (s *stubTools) UninstallRecipe(_ context.Context, _ string) error { return errNotWired }
 func (s *stubTools) ForgetRecipeKey(_ context.Context, _, _ string) error {
 	return errNotWired

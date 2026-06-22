@@ -33,6 +33,7 @@ import type {
   Attachment,
   AttachmentAddInput,
   AttachmentScopeKind,
+  ModuleAttachment,
   Bundle,
   ContentBlock,
   Denial,
@@ -346,6 +347,11 @@ interface WailsBindingsLike {
   Contexts_Get(path: string): Promise<string>;
   Contexts_Save(path: string, content: string): Promise<void>;
   Contexts_CreateFolder(path: string): Promise<void>;
+  Contexts_AttachModule(
+    scopeKind: string,
+    scopeId: string,
+    dirPath: string,
+  ): Promise<ModuleAttachment>;
   Contexts_Rename(oldPath: string, newPath: string): Promise<void>;
   Contexts_Delete(path: string): Promise<void>;
   Contexts_RecentlyApplied(limit: number): Promise<string[]>;
@@ -535,6 +541,7 @@ interface WailsBindingsLike {
     env: Record<string, string>,
     config: Record<string, unknown>,
   ): Promise<WireRecipeStatus>;
+  Tools_SignInRecipe(id: string): Promise<WireRecipeStatus>;
   Tools_UninstallRecipe(id: string): Promise<void>;
   Tools_ForgetRecipeKey(id: string, envName: string): Promise<void>;
   Tools_RecipeStatus(id: string): Promise<WireRecipeStatus>;
@@ -1507,6 +1514,17 @@ export interface ContextsClient {
   get(path: string): Promise<string>;
   save(path: string, content: string): Promise<void>;
   createFolder(path: string): Promise<void>;
+  /**
+   * attachModule attaches a whole context module *directory* (one with a
+   * root context.md / agents.md) to a scope. The module's root + its
+   * front-matter `always:` files load eagerly; the rest are read on demand
+   * via read_context_file. Rejects a directory that has no root file.
+   */
+  attachModule(
+    scopeKind: AttachmentScopeKind,
+    scopeId: string,
+    dirPath: string,
+  ): Promise<ModuleAttachment>;
   rename(oldPath: string, newPath: string): Promise<void>;
   delete(path: string): Promise<void>;
   recentlyApplied(limit: number): Promise<string[]>;
@@ -2082,6 +2100,14 @@ export interface ToolsRecipesClient {
     env: Record<string, string>,
     config?: Record<string, unknown>,
   ): Promise<RecipeStatus>;
+  /**
+   * signIn runs the MCP OAuth authorization flow for a remote recipe whose
+   * `recipe.auth.kind === 'mcp_oauth'`: it opens the system browser, the user
+   * approves access, and the harness stores the bearer token and respawns the
+   * recipe authenticated. Rejects when the recipe is not OAuth-capable or has
+   * no configured client_id.
+   */
+  signIn(id: string): Promise<RecipeStatus>;
   uninstall(id: string): Promise<void>;
   forgetKey(id: string, envName: string): Promise<void>;
   status(id: string): Promise<RecipeStatus>;
@@ -2957,6 +2983,8 @@ export function createHarnessClient(): HarnessClient {
       get: (path) => b().Contexts_Get(path),
       save: (path, content) => b().Contexts_Save(path, content),
       createFolder: (path) => b().Contexts_CreateFolder(path),
+      attachModule: (scopeKind, scopeId, dirPath) =>
+        b().Contexts_AttachModule(scopeKind, scopeId, dirPath),
       rename: (oldPath, newPath) => b().Contexts_Rename(oldPath, newPath),
       delete: (path) => b().Contexts_Delete(path),
       recentlyApplied: (limit) => b().Contexts_RecentlyApplied(limit),
@@ -3165,6 +3193,8 @@ export function createHarnessClient(): HarnessClient {
           adaptRecipeStatus(
             await b().Tools_InstallRecipe(id, env, config ?? {}),
           ),
+        signIn: async (id) =>
+          adaptRecipeStatus(await b().Tools_SignInRecipe(id)),
         uninstall: (id) => b().Tools_UninstallRecipe(id),
         forgetKey: (id, envName) => b().Tools_ForgetRecipeKey(id, envName),
         status: async (id) =>
@@ -3636,6 +3666,16 @@ export function createFakeHarnessClient(
       get: async () => '',
       save: noop,
       createFolder: noop,
+      attachModule: async (scopeKind, scopeId, dirPath) => ({
+        id: 'fake-module-attachment',
+        scopeKind,
+        scopeId,
+        contentSource: `module:${dirPath}`,
+        content: '',
+        kind: 'system',
+        position: 0,
+        createdAt: '',
+      }),
       rename: noop,
       delete: noop,
       recentlyApplied: async () => [],
@@ -3989,6 +4029,17 @@ export function createFakeHarnessClient(
       recipes: {
         list: async () => [],
         install: async (id) => ({
+          id,
+          enabled: true,
+          state: 'starting',
+          restartAttempts: 0,
+          keysPresent: true,
+          pid: 0,
+          toolCount: 0,
+          resourceCount: 0,
+          promptCount: 0,
+        }),
+        signIn: async (id) => ({
           id,
           enabled: true,
           state: 'starting',

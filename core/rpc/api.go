@@ -116,6 +116,8 @@ import (
 	wfsched "github.com/kameas-ai/kenaz-harness/core/workflows/scheduler"
 	schedulerPkg "github.com/kameas-ai/kenaz-harness/core/scheduler"
 	"github.com/zalando/go-keyring"
+	"go.opentelemetry.io/otel/sdk/resource"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 )
 
 // HarnessAPI is the boundary between the Wails-hosted Vue frontend and
@@ -857,6 +859,15 @@ func New(c *core.Core) *API {
 	contextsAPI, contextsLib := newContextsAPI(c)
 	a.contextsAPI = contextsAPI
 	startContextsWatcher(contextsLib, a.broker)
+	// Wire the attachments manager into the contexts view so AttachModule
+	// can persist context_attachments rows. Uses a type assertion because
+	// newContextsAPI always returns *contextsview.API (the interface is
+	// widened only for the field type). A nil attMgr leaves the adder
+	// unwired — AttachModule will still resolve module content but won't
+	// persist an attachment row (test/nil-core path).
+	if impl, ok := contextsAPI.(*contextsview.API); ok && attMgr != nil {
+		impl.WithAttachmentAdder(&contextsAttachmentAdder{mgr: attMgr})
+	}
 
 	// Settings: file-backed when we have a user config dir; in-memory
 	// fallback for the test harness path so New(nil) keeps working.
@@ -1061,7 +1072,7 @@ func New(c *core.Core) *API {
 	a.corpusMgr = newCorpusManager(c, embedder)
 	a.graphMgr = newGraphManagerWithDeps(c, a.convMgr, a.corpusMgr, memStore, embedder, a_bashStore)
 
-	stack := newLLMStack(c, a.broker, personalForLLM, hooksRunner, attMgr, confirmEachEnabled, artifactSink, artifactSinkConcrete, settingsImpl, a_bashStore, artMgr, a.graphMgr, a.promptRegistry, usageMgr, a.elicitAPI, slashDispatch, a.exposureIdx, a.sessionsAPI)
+	stack := newLLMStack(c, a.broker, personalForLLM, hooksRunner, attMgr, confirmEachEnabled, artifactSink, artifactSinkConcrete, settingsImpl, a_bashStore, artMgr, a.graphMgr, a.promptRegistry, usageMgr, a.elicitAPI, slashDispatch, a.exposureIdx, a.sessionsAPI, contextsLib)
 	a.llmAPI = stack.api
 	a.stdioPool = stack.pool
 	a.builtins = stack.builtins
@@ -1526,12 +1537,70 @@ func New(c *core.Core) *API {
 
 	// Wire Fleet telemetry consent view (fleet-otel-archival-01NDFSEX11 WP07).
 	if c != nil && c.DataDir() != "" {
-		tc, err := corefleet.NewTelemetryConsent(c.DataDir(), corefleet.StaticTierReader{})
+		// Back the consent tier off the live capability poller (settingsImpl was
+		// wired + SetFleetClient'd above, so the poller exists). Without this the
+		// consent clamps every level to "none" at tier=free — EffectiveLevel
+		// fails closed — so ConsentFull/Aggregate could never activate the OTLP
+		// pipeline regardless of the user's real (enterprise) tier. Lazy read so
+		// the poller's first refresh (which carries the enrolled tier) is picked
+		// up by activation time. (completes the StaticTierReader placeholder)
+		tierReader := corefleet.TierReaderFunc(func() string {
+			if a.settingsImpl == nil {
+				return "free"
+			}
+			p := a.settingsImpl.CapabilityPoller()
+			if p == nil {
+				return "free"
+			}
+			if t := p.Current().Tier; t != "" {
+				return t
+			}
+			return "free"
+		})
+		tc, err := corefleet.NewTelemetryConsent(c.DataDir(), tierReader)
 		if err != nil {
 			logging.L().Warn("fleet.consent.init.failed", "err", err)
-			tc, _ = corefleet.NewTelemetryConsent(os.TempDir(), corefleet.StaticTierReader{})
+			tc, _ = corefleet.NewTelemetryConsent(os.TempDir(), tierReader)
 		}
 		a.fleetAPI = &fleetview.Impl{Consent: tc}
+
+		// Wire the fleet OTLP export pipeline (harness-fleet-otlp-export-01NTLMEX01).
+		//
+		// OSS-first boundary (fleet-auth-foundation-01NDFSEX08 WP07): core must
+		// not import core/fleet. The concrete pipeline is constructed here in
+		// the rpc layer (which is allowed to import core/fleet) and wired into
+		// core via the FleetPipeline interface setter before c.Start runs
+		// initTelemetry. The rpc layer also holds a typed ref for the Activate
+		// call in settings/fleet.go.
+		//
+		// c.Start() has NOT run yet at this point (it fires in the Wails
+		// OnStartup callback). SetFleetPipeline must be called here so
+		// initTelemetry (inside c.Start) finds the exporters already registered.
+		if !corefleet.Disabled() {
+			profile := corefleet.ResolveProfile()
+			if profile.Configured() {
+				fleetPipeline := corefleet.NewFleetOTLPPipeline(nil)
+				// Wire into core via the interface so core stays fleet-free.
+				if c != nil {
+					c.SetFleetPipeline(fleetPipeline)
+				}
+				// Wire into settings (Activate hook post-enroll) with the concrete type.
+				if settingsImpl != nil {
+					var otlpRes *resource.Resource
+					var otlpTP *sdktrace.TracerProvider
+					if tel := c.Telemetry(); tel != nil {
+						otlpRes = tel.Resource
+						otlpTP = tel.TracerProvider
+					}
+					settingsImpl.SetFleetOTLPPipeline(
+						fleetPipeline,
+						otlpRes,
+						otlpTP,
+						tc,
+					)
+				}
+			}
+		}
 	} else {
 		// Test-chassis path: create a consent with a temp dir so the
 		// RPC surface is non-nil (callers get "none" and SetLevel is a no-op
@@ -1587,6 +1656,30 @@ func New(c *core.Core) *API {
 			return id.Email, nil
 		}
 		a.cedarPublishAPI = cedarview.NewAPI(flCl, identityFn, flAudit)
+
+		// fleet-context-graph-sync-01NDFSEX17: wire the ContextGraphSyncer so
+		// Context_Publish / Context_Promote / Context_SyncStatus actually reach
+		// fleet. Without this wire the methods short-circuit via ErrFleetDisabled
+		// because contextsview.New() is called early (before flCl is resolved)
+		// and the syncer is left nil.
+		//
+		// Gating: a type assertion to *contextsview.API is safe because
+		// newContextsAPI always returns *contextsview.API (the interface is only
+		// widened for the field type). A nil flCl / isNop client is deliberately
+		// allowed — NewContextGraphSyncer handles the nop case via canPull /
+		// canPush which return ErrFleetDisabled, preserving the offline posture.
+		if impl, ok := a.contextsAPI.(*contextsview.API); ok {
+			var caps *corefleet.CapabilityPoller
+			if a.settingsImpl != nil {
+				caps = a.settingsImpl.CapabilityPoller()
+			}
+			syncer := corefleet.NewContextGraphSyncer(flCl, flDataDir, caps)
+			impl.WithSyncer(syncer)
+			logging.L().Info("rpc.context_graph_syncer.wired",
+				"fleet_client_nil", flCl == nil,
+				"data_dir", flDataDir,
+			)
+		}
 
 		// fleet-skills-sync-01NDFSEX18 WP02: wire fleet skill dependencies onto
 		// the slashAPI. The capability snapshot is read lazily from the poller at
@@ -2554,6 +2647,10 @@ func newLLMStack(
 	slashDispatch *coreslashcmd.Dispatch,
 	exposureIdx *secrets.ExposureIndex,
 	postureManager coreplanmode.SessionPostureManager,
+	// contextsLib is the open Context Library used to register the
+	// kaneaz__read_context_file built-in. nil is safe; the tool is
+	// simply not registered when no library is wired.
+	contextsLib *corecontexts.Library,
 ) llmStack {
 	// Share ONE secrets backend between the credref resolver (which
 	// reads keys when streaming) and the keychain writer (which stages
@@ -2678,6 +2775,17 @@ func newLLMStack(
 	// (FSReadEnabled / FSWriteEnabled) so the Tools panel toggles take effect
 	// on the next chat turn. Uses the same Cedar engine as the bash tool.
 	registerFSBuiltinTools(builtinRegistry, bashCedarEngine, settingsStore)
+	// unified-context-artifacts-01NCTXU01: register the read_context_file
+	// built-in so the agent can read on-demand files from attached context
+	// modules. Requires both the contexts library AND an attachment manager;
+	// nil-safe: if either is absent the tool is simply not registered.
+	if attMgr != nil && contextsLib != nil {
+		modSrc := &moduleSourceAdapter{
+			mgr:    attMgr,
+			reader: &sessionProjectReader{mgr: c.SessionManager()},
+		}
+		registerReadContextFileTool(builtinRegistry, contextsLib, modSrc)
+	}
 	builtinFilter := toolloop.NewEnabledFilter(builtinRegistry, builtinEnabledPredicate(settingsImpl))
 	wrappedPool := toolloop.NewBuiltinPool(&mcpPoolAdapter{inner: mcpPool}, builtinFilter)
 	var attResolver llm.AttachmentsResolver
@@ -3411,6 +3519,72 @@ func newContextsAPI(c *core.Core) (contextsview.ContextsAPI, *corecontexts.Libra
 	// shouldn't keep the surface from coming up.
 	_ = lib.SweepTrash()
 	return contextsview.New(lib), lib
+}
+
+// moduleSourceAdapter bridges core/attachments.Manager into the
+// readcontextfile.ModuleSource interface so the read_context_file tool
+// can enumerate the currently attached module directories for a session.
+// It queries the attachment manager for all resolved attachments whose
+// ContentSource has the "module:" scheme.
+type moduleSourceAdapter struct {
+	mgr    *coreatt.Manager
+	reader coreatt.SessionProjectReader
+}
+
+func (s *moduleSourceAdapter) AttachedModuleDirs(ctx context.Context, sessionID string) ([]string, error) {
+	if s == nil || s.mgr == nil {
+		return nil, nil
+	}
+	rows, err := s.mgr.ListResolved(ctx, s.reader, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	const prefix = "module:"
+	var dirs []string
+	seen := make(map[string]bool)
+	for _, r := range rows {
+		if !strings.HasPrefix(r.ContentSource, prefix) {
+			continue
+		}
+		dir := r.ContentSource[len(prefix):]
+		if dir != "" && !seen[dir] {
+			seen[dir] = true
+			dirs = append(dirs, dir)
+		}
+	}
+	return dirs, nil
+}
+
+// contextsAttachmentAdder bridges core/attachments.Manager into the
+// contextsview.AttachmentAdder interface so AttachModule can persist a
+// context_attachments row without the contexts view importing the core
+// attachments package directly.
+type contextsAttachmentAdder struct {
+	mgr *coreatt.Manager
+}
+
+func (a *contextsAttachmentAdder) Add(ctx context.Context, in contextsview.AttachmentInput) (contextsview.ModuleAttachment, error) {
+	stored, err := a.mgr.Add(ctx, coreatt.Attachment{
+		ScopeKind:     in.ScopeKind,
+		ScopeID:       in.ScopeID,
+		ContentSource: in.ContentSource,
+		Content:       in.Content,
+		Kind:          in.Kind,
+	})
+	if err != nil {
+		return contextsview.ModuleAttachment{}, err
+	}
+	out := contextsview.ModuleAttachment{
+		ID:            stored.ID,
+		ScopeKind:     stored.ScopeKind,
+		ScopeID:       stored.ScopeID,
+		ContentSource: stored.ContentSource,
+		Content:       stored.Content,
+		Kind:          stored.Kind,
+		Position:      stored.Position,
+		CreatedAt:     stored.CreatedAt.UTC().Format(time.RFC3339Nano),
+	}
+	return out, nil
 }
 
 // startContextsWatcher wires the library's fsnotify-backed watcher into

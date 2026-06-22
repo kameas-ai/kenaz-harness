@@ -196,6 +196,8 @@ export function Context_StartStream():Promise<string>;
 
 export function Context_StopStream(arg1:string):Promise<void>;
 
+export function Contexts_AttachModule(arg1:string,arg2:string,arg3:string):Promise<contexts.ModuleAttachment>;
+
 export function Contexts_ContextPromote(arg1:string):Promise<contexts.ContextPromoteResult>;
 
 export function Contexts_ContextPublish(arg1:contexts.ContextPublishRequest):Promise<contexts.ContextPublishResult>;
@@ -730,6 +732,16 @@ export function Slashcmd_Run(arg1:string,arg2:Record<string, string>,arg3:string
 
 export function Slashcmd_Save(arg1:slashcmd.UserCommandWire):Promise<void>;
 
+export function Slashcmd_SkillInstall(arg1:string,arg2:string):Promise<void>;
+
+export function Slashcmd_SkillList():Promise<Array<slashcmd.SkillItemWire>>;
+
+export function Slashcmd_SkillPublish(arg1:string,arg2:string,arg3:string):Promise<void>;
+
+export function Slashcmd_SkillRenameLocalTrigger(arg1:string,arg2:string):Promise<void>;
+
+export function Slashcmd_SkillUninstall(arg1:string):Promise<void>;
+
 export function Storage_ApplyDriftFix(arg1:number):Promise<void>;
 
 export function Storage_GetMigrationDriftReport():Promise<storage.DriftReport>;
@@ -757,6 +769,8 @@ export function Tools_RecipeConfig(arg1:string):Promise<Record<string, any>>;
 export function Tools_RecipeStatus(arg1:string):Promise<transport.RecipeStatus>;
 
 export function Tools_RequestAdditionalAllowedDir(arg1:string,arg2:string,arg3:string):Promise<tools.FSAccessResult>;
+
+export function Tools_SignInRecipe(arg1:string):Promise<transport.RecipeStatus>;
 
 export function Tools_UninstallRecipe(arg1:string):Promise<void>;
 

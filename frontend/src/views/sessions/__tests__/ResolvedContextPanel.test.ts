@@ -171,4 +171,94 @@ describe('ResolvedContextPanel', () => {
     expect(html).not.toMatch(/#[0-9a-fA-F]{3,8}\b/);
     expect(html).not.toMatch(/rgba?\s*\(/i);
   });
+
+  // ── FR-021: session-scope "New context folder" affordance ─────────────
+
+  it('shows the "New folder" button in the session-new-folder-section when expanded (FR-021)', async () => {
+    const { wrapper } = mountPanel([]);
+    await flushPromises();
+    // Expand the panel first.
+    await wrapper.find('[data-testid=resolved-context-toggle]').trigger('click');
+    await flushPromises();
+    expect(wrapper.find('[data-testid=session-new-folder-section]').exists()).toBe(true);
+    expect(wrapper.find('[data-testid=session-new-context-folder]').exists()).toBe(true);
+  });
+
+  it('reveals the inline folder-name input when "New folder" is clicked (FR-021)', async () => {
+    const { wrapper } = mountPanel([]);
+    await flushPromises();
+    await wrapper.find('[data-testid=resolved-context-toggle]').trigger('click');
+    await flushPromises();
+    // Input hidden initially.
+    expect(wrapper.find('[data-testid=session-new-folder-row]').exists()).toBe(false);
+    await wrapper.find('[data-testid=session-new-context-folder]').trigger('click');
+    await flushPromises();
+    expect(wrapper.find('[data-testid=session-new-folder-row]').exists()).toBe(true);
+    expect(wrapper.find('[data-testid=session-new-folder-input]').exists()).toBe(true);
+  });
+
+  it('calls createFolder + attachments.add and refreshes resolved on Enter (FR-021)', async () => {
+    const createFolder = vi.fn(async () => undefined);
+    const addAttachment = vi.fn(async () => makeAttachment({ id: 'att-new', scopeKind: 'session', contentSource: 'library:team-notes' }));
+    const listResolved = vi.fn().mockResolvedValue([]);
+    const client = createFakeHarnessClient({
+      contexts: {
+        list: async () => ({ name: '', path: '', kind: 'folder' as const }),
+        listAll: async () => ({ name: '', path: '', kind: 'folder' as const }),
+        get: async () => '',
+        save: async () => undefined,
+        createFolder,
+        rename: async () => undefined,
+        delete: async () => undefined,
+        recentlyApplied: async () => [],
+        rootPath: async () => '/tmp/contexts',
+      },
+      attachments: {
+        list: async () => [],
+        listResolved,
+        add: addAttachment,
+        remove: async () => undefined,
+        reorder: async () => undefined,
+        refresh: async () => makeAttachment({}),
+      },
+    });
+    const wrapper = mount(ResolvedContextPanel, {
+      props: { sessionId: 's-42' },
+      global: { provide: { [HarnessClientKey as symbol]: client } },
+    });
+    await flushPromises();
+    await wrapper.find('[data-testid=resolved-context-toggle]').trigger('click');
+    await flushPromises();
+    await wrapper.find('[data-testid=session-new-context-folder]').trigger('click');
+    await flushPromises();
+    const input = wrapper.find<HTMLInputElement>('[data-testid=session-new-folder-input]');
+    await input.setValue('team-notes');
+    await input.trigger('keydown.enter');
+    await flushPromises();
+
+    expect(createFolder).toHaveBeenCalledWith('team-notes');
+    expect(addAttachment).toHaveBeenCalledWith({
+      scopeKind: 'session',
+      scopeId: 's-42',
+      contentSource: 'library:team-notes',
+      content: '',
+    });
+    // listResolved called again after create.
+    expect(listResolved.mock.calls.length).toBeGreaterThanOrEqual(2);
+    // Input dismissed after create.
+    expect(wrapper.find('[data-testid=session-new-folder-row]').exists()).toBe(false);
+  });
+
+  it('dismisses the session folder input when Esc is pressed (FR-021)', async () => {
+    const { wrapper } = mountPanel([]);
+    await flushPromises();
+    await wrapper.find('[data-testid=resolved-context-toggle]').trigger('click');
+    await flushPromises();
+    await wrapper.find('[data-testid=session-new-context-folder]').trigger('click');
+    await flushPromises();
+    expect(wrapper.find('[data-testid=session-new-folder-row]').exists()).toBe(true);
+    await wrapper.find('[data-testid=session-new-folder-input]').trigger('keydown.esc');
+    await flushPromises();
+    expect(wrapper.find('[data-testid=session-new-folder-row]').exists()).toBe(false);
+  });
 });

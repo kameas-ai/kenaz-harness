@@ -144,6 +144,12 @@ type Recipe struct {
 	// logged and the install continues. The install never rolls back on
 	// snippet write failure.
 	PreSeedingPolicy string `json:"pre_seeding_policy,omitempty"`
+	// Auth declares an OAuth sign-in for remote (http/sse) recipes. When set
+	// to Kind=="mcp_oauth" the harness can obtain a bearer token via the MCP
+	// authorization flow (RFC 9728 discovery → RFC 8414 → auth-code+PKCE,
+	// implemented in core/mcp/oauth) instead of asking the user to paste a
+	// long-lived token. Nil for ordinary key-based or local stdio recipes.
+	Auth *RecipeAuth `json:"auth,omitempty" yaml:"auth,omitempty"`
 	// Source tags the loader that produced this Recipe. It is set by
 	// loaders (LoadShipped → SourceShipped, registry loader →
 	// SourceRegistry, UserStore → SourceUser/SourceImported) and is
@@ -151,6 +157,35 @@ type Recipe struct {
 	// field. Consumers use it to render badges and to drive the
 	// MergedCatalog precedence rules.
 	Source string `json:"-" yaml:"-"`
+}
+
+// AuthKindMCPOAuth is the only RecipeAuth.Kind currently recognised: the
+// harness runs the MCP authorization flow (core/mcp/oauth) to obtain a bearer
+// token for a remote server.
+const AuthKindMCPOAuth = "mcp_oauth"
+
+// RecipeAuth declares OAuth sign-in for a remote recipe. It is advisory
+// metadata: the actual authorization-server + endpoints are discovered at
+// connect time from the server's 401 challenge (RFC 9728 / RFC 8414), so the
+// recipe need only carry the bits discovery cannot supply.
+type RecipeAuth struct {
+	// Kind selects the auth mechanism. Currently only AuthKindMCPOAuth.
+	Kind string `json:"kind" yaml:"kind"`
+	// ClientID is a pre-registered public OAuth client id. Required for
+	// authorization servers that do not support dynamic client registration
+	// (GitHub being the canonical case — its AS publishes no metadata and
+	// offers no DCR, so a registered OAuth App client id must be supplied).
+	// Empty is permitted at rest (the recipe ships before the operator has
+	// registered an app); sign-in fails with a clear error until it is set.
+	ClientID string `json:"client_id,omitempty" yaml:"client_id,omitempty"`
+	// Scopes requested during the grant. When empty the harness falls back to
+	// the scopes advertised in the protected-resource metadata.
+	Scopes []string `json:"scopes,omitempty" yaml:"scopes,omitempty"`
+	// TokenEnvVar names the env var the bearer token is injected as for stdio
+	// recipes that read a token from the environment (e.g. a local server
+	// wanting GITHUB_TOKEN). Empty for pure remote recipes, where the token
+	// goes into the Authorization header instead.
+	TokenEnvVar string `json:"token_env_var,omitempty" yaml:"token_env_var,omitempty"`
 }
 
 // Recipe Source values. Loaders stamp these onto Recipe.Source after
@@ -432,12 +467,28 @@ func (r *Recipe) ToServerSpec(env map[string]string, config map[string]any) mcp.
 		transport = TransportStdio
 	}
 
+	// Propagate the per-request header template + SSE post URL for remote
+	// (http/sse) recipes. Without this, an http recipe's HeadersTemplate
+	// (e.g. an Authorization bearer for an OAuth remote server) would be
+	// silently dropped and the connection would never authenticate. Values
+	// may carry ${ENV_VAR} tokens that the transport factory substitutes from
+	// Env at connection-open time.
+	var headers map[string]string
+	if len(r.HeadersTemplate) > 0 {
+		headers = make(map[string]string, len(r.HeadersTemplate))
+		for k, v := range r.HeadersTemplate {
+			headers[k] = v
+		}
+	}
+
 	return mcp.ServerSpec{
-		Name:      r.ID,
-		Transport: transport,
-		Command:   cmd,
-		URL:       r.URL,
-		Env:       envCopy,
+		Name:            r.ID,
+		Transport:       transport,
+		Command:         cmd,
+		URL:             r.URL,
+		PostURL:         r.PostURL,
+		Env:             envCopy,
+		HeadersTemplate: headers,
 	}
 }
 

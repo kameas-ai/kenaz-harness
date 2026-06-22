@@ -298,6 +298,16 @@ func (a *API) InstallRecipe(ctx context.Context, id string, env map[string]strin
 	}
 	spec := recipe.ToServerSpec(resolved, resolvedConfig)
 
+	// For OAuth recipes (remote servers signed in via the MCP authorization
+	// flow), inject the bearer from the stored credential, refreshing if
+	// needed. No-op for non-OAuth recipes; deferred (server unauthenticated)
+	// when the user has not signed in yet.
+	if err := a.injectOAuthBearer(ctx, recipe, &spec); err != nil {
+		a.cfg.Enabled.Remove(id)
+		_ = a.saveEnabled()
+		return stdio.RecipeStatus{}, err
+	}
+
 	if a.cfg.Pool == nil {
 		return stdio.RecipeStatus{}, errors.New("tools: no pool configured")
 	}

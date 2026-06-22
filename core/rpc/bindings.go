@@ -593,6 +593,21 @@ func (b *Bindings) Contexts_ContextSyncStatus() (contextsview.ContextSyncStatusV
 	return b.api.Contexts().Context_SyncStatus(b.ctx())
 }
 
+// Contexts_AttachModule creates a context-module attachment for the given
+// directory. scopeKind is one of "global", "project", "session"; scopeID is
+// the project or session id (empty for global); dirPath is the library-
+// relative path of a module directory (containing context.md / agents.md).
+//
+// The returned ModuleAttachment contains the resolved content (root file +
+// always:-listed files) and is persisted as a context_attachments row so
+// it participates in the existing global→project→session injection order.
+// On-demand files in the module are available via kaneaz__read_context_file.
+//
+// (unified-context-artifacts-01NCTXU01)
+func (b *Bindings) Contexts_AttachModule(scopeKind, scopeID, dirPath string) (contextsview.ModuleAttachment, error) {
+	return b.api.Contexts().AttachModule(b.ctx(), scopeKind, scopeID, dirPath)
+}
+
 // ── bundle ─────────────────────────────────────────────────────────────
 
 func (b *Bindings) Bundle_List() ([]bundle.Bundle, error) {
@@ -1658,6 +1673,12 @@ func (b *Bindings) Tools_ListRecipes() ([]tools.RecipeListing, error) {
 
 func (b *Bindings) Tools_InstallRecipe(id string, env map[string]string, config map[string]any) (stdio.RecipeStatus, error) {
 	return b.api.Tools().InstallRecipe(b.ctx(), id, env, config)
+}
+
+// Tools_SignInRecipe runs the MCP OAuth sign-in for a remote recipe (opens the
+// system browser), persists the token, and respawns the recipe authenticated.
+func (b *Bindings) Tools_SignInRecipe(id string) (stdio.RecipeStatus, error) {
+	return b.api.Tools().SignInRecipe(b.ctx(), id)
 }
 
 func (b *Bindings) Tools_UninstallRecipe(id string) error {
