@@ -1,3 +1,5 @@
+//go:build !serve
+
 package rpc
 
 import (
