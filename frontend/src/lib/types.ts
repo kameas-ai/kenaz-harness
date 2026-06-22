@@ -528,6 +528,23 @@ export interface Attachment {
 }
 
 /**
+ * ModuleAttachment — result of attaching a whole context module directory
+ * (one with a root context.md / agents.md). Same shape as Attachment;
+ * `contentSource` carries the `module:<dir>` scheme and `content` is the
+ * resolved root + `always:` files. Mirrors contexts.ModuleAttachment.
+ */
+export interface ModuleAttachment {
+  id: string;
+  scopeKind: string;
+  scopeId?: string;
+  contentSource: string;
+  content: string;
+  kind: string;
+  position: number;
+  createdAt: string;
+}
+
+/**
  * AttachmentAddInput — wire shape Attachments.add accepts. Mirrors
  * core/rpc/views/attachments.AddInput. The server fills in id +
  * createdAt when omitted.

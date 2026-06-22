@@ -33,6 +33,7 @@ import type {
   Attachment,
   AttachmentAddInput,
   AttachmentScopeKind,
+  ModuleAttachment,
   Bundle,
   ContentBlock,
   Denial,
@@ -1507,6 +1508,17 @@ export interface ContextsClient {
   get(path: string): Promise<string>;
   save(path: string, content: string): Promise<void>;
   createFolder(path: string): Promise<void>;
+  /**
+   * attachModule attaches a whole context module *directory* (one with a
+   * root context.md / agents.md) to a scope. The module's root + its
+   * front-matter `always:` files load eagerly; the rest are read on demand
+   * via read_context_file. Rejects a directory that has no root file.
+   */
+  attachModule(
+    scopeKind: AttachmentScopeKind,
+    scopeId: string,
+    dirPath: string,
+  ): Promise<ModuleAttachment>;
   rename(oldPath: string, newPath: string): Promise<void>;
   delete(path: string): Promise<void>;
   recentlyApplied(limit: number): Promise<string[]>;
@@ -2965,6 +2977,8 @@ export function createHarnessClient(): HarnessClient {
       get: (path) => b().Contexts_Get(path),
       save: (path, content) => b().Contexts_Save(path, content),
       createFolder: (path) => b().Contexts_CreateFolder(path),
+      attachModule: (scopeKind, scopeId, dirPath) =>
+        b().Contexts_AttachModule(scopeKind, scopeId, dirPath),
       rename: (oldPath, newPath) => b().Contexts_Rename(oldPath, newPath),
       delete: (path) => b().Contexts_Delete(path),
       recentlyApplied: (limit) => b().Contexts_RecentlyApplied(limit),
@@ -3646,6 +3660,16 @@ export function createFakeHarnessClient(
       get: async () => '',
       save: noop,
       createFolder: noop,
+      attachModule: async (scopeKind, scopeId, dirPath) => ({
+        id: 'fake-module-attachment',
+        scopeKind,
+        scopeId,
+        contentSource: `module:${dirPath}`,
+        content: '',
+        kind: 'system',
+        position: 0,
+        createdAt: '',
+      }),
       rename: noop,
       delete: noop,
       recentlyApplied: async () => [],

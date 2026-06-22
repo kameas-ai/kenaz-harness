@@ -172,4 +172,50 @@ describe('AttachmentTreePicker', () => {
     expect(err.exists()).toBe(true);
     expect(err.text()).toContain('disk on fire');
   });
+
+  it('attaches a whole module via attachModule when a folder is selected', async () => {
+    const attachModule = vi.fn(
+      async (scopeKind: string, scopeId: string, dirPath: string) => ({
+        id: 'mod-1',
+        scopeKind,
+        scopeId,
+        contentSource: `module:${dirPath}`,
+        content: 'root body',
+        kind: 'system',
+        position: 0,
+        createdAt: '',
+      }),
+    );
+    const add = vi.fn();
+    const { wrapper } = mountPicker({
+      contexts: {
+        list: async () => tree(),
+        get: async () => 'file body',
+        save: async () => undefined,
+        createFolder: async () => undefined,
+        attachModule,
+        rename: async () => undefined,
+        delete: async () => undefined,
+        recentlyApplied: async () => [],
+        rootPath: async () => '/fake',
+      },
+      attachments: { add },
+    });
+    await flushPromises();
+
+    // Click the "briefs" folder row → selects it as a module target.
+    await wrapper.find('[data-testid=context-node-briefs]').trigger('click');
+    await flushPromises();
+
+    // The Attach button routes to attachModule, NOT the single-file path.
+    const addBtn = wrapper.find('[data-testid=attachment-tree-add]');
+    expect(addBtn.text()).toContain('Attach module');
+    await addBtn.trigger('click');
+    await flushPromises();
+
+    expect(attachModule).toHaveBeenCalledWith('project', 'p-1', 'briefs');
+    expect(add).not.toHaveBeenCalled();
+    expect(wrapper.emitted('added')).toBeTruthy();
+    expect(wrapper.emitted('close')).toBeTruthy();
+  });
 });

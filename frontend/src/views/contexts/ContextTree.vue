@@ -27,6 +27,10 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   (e: 'select', path: string): void;
+  // Emitted when a folder row is clicked (in addition to expand/collapse).
+  // Pickers that support attaching a whole module directory listen for this;
+  // the library view ignores it, so file-selection behaviour is unchanged.
+  (e: 'select-folder', path: string): void;
 }>();
 
 // Top-level folder under the root expands by default so a fresh user
@@ -37,6 +41,7 @@ const expanded = ref(props.isRoot === true);
 function toggle() {
   if (props.node.kind === 'folder') {
     expanded.value = !expanded.value;
+    emit('select-folder', props.node.path);
   } else {
     emit('select', props.node.path);
   }
@@ -44,6 +49,10 @@ function toggle() {
 
 function onChildSelect(path: string) {
   emit('select', path);
+}
+
+function onChildSelectFolder(path: string) {
+  emit('select-folder', path);
 }
 
 const isFolder = computed(() => props.node.kind === 'folder');
@@ -85,6 +94,7 @@ const isSelected = computed(
         :node="child"
         :selected-path="selectedPath"
         @select="onChildSelect"
+        @select-folder="onChildSelectFolder"
       />
     </ul>
   </li>
@@ -95,6 +105,7 @@ const isSelected = computed(
       :node="child"
       :selected-path="selectedPath"
       @select="onChildSelect"
+      @select-folder="onChildSelectFolder"
     />
   </ul>
 </template>
