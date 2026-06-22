@@ -8,8 +8,6 @@ import (
 	"time"
 
 	"github.com/kameas-ai/kenaz-harness/core/fleet"
-	"github.com/kameas-ai/kenaz-harness/core/llm"
-	"github.com/kameas-ai/kenaz-harness/core/llm/fleet_hosted"
 	"github.com/kameas-ai/kenaz-harness/core/logging"
 	"github.com/kameas-ai/kenaz-harness/core/mcp/recipes"
 	cedarpolicy "github.com/kameas-ai/kenaz-harness/core/policy/cedar"
@@ -18,16 +16,9 @@ import (
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 )
 
-// AdapterRegistrar is the minimal interface from the LLM registry that the
-// fleet wiring code needs. Using an interface avoids a hard import of
-// core/llm/registry from this package.
-type AdapterRegistrar interface {
-	RegisterAdapter(a llm.ProviderAdapter)
-}
-
 // fleetState holds the fleet client, dataDir, capability poller, config
-// poller, the fleet_hosted LLM adapter (when CapHostedInference is enabled),
-// and the emergency-lockdown watcher (fleet-emergency-lockdown-01NDFSEX12).
+// poller, and the emergency-lockdown watcher
+// (fleet-emergency-lockdown-01NDFSEX12).
 // It is attached to API after construction via SetFleetClient.
 type fleetState struct {
 	mu              sync.RWMutex
@@ -35,8 +26,6 @@ type fleetState struct {
 	dataDir         string
 	poller          *fleet.CapabilityPoller
 	configPoller    *fleet.ConfigPoller
-	llmRegistrar    AdapterRegistrar
-	fleetAdapter    *fleet_hosted.Adapter
 	lockdownWatcher *fleet.Watcher
 	lockdownBroker  fleet.BrokerSink
 
@@ -97,12 +86,6 @@ func (a *API) SetFleetClient(c *fleet.Client, dataDir string) {
 		cp := fleet.NewConfigPoller(c, dataDir, applier)
 		a.fleet.configPoller = cp
 		cp.Start(context.Background())
-	}
-	// Wire the fleet_hosted LLM adapter when we have a profile URL.
-	// The adapter gates itself at resolve time via the EnabledFunc so
-	// tier changes propagate within one poll interval without restart.
-	if c != nil && c.Profile().FleetBaseURL != "" {
-		a.wireFleetHostedAdapter(c)
 	}
 	// Start the emergency-lockdown watcher. The watcher self-gates on
 	// CapEmergencyLockdown so it exits immediately when the capability
@@ -191,53 +174,6 @@ func (a *API) SetSkillRefs(store *slashcmd.SkillStore, registry *slashcmd.Regist
 	defer a.fleet.mu.Unlock()
 	a.fleet.skillStore = store
 	a.fleet.skillRegistry = registry
-}
-
-// wireFleetHostedAdapter creates the fleet_hosted LLM adapter and registers
-// it in the LLM registry (if one has been set via SetLLMRegistrar).
-// Called under a.fleet.mu.Lock() from SetFleetClient.
-func (a *API) wireFleetHostedAdapter(c *fleet.Client) {
-	profile := c.Profile()
-	if profile.FleetBaseURL == "" {
-		return
-	}
-	poller := a.fleet.poller // already set above
-	bearer := func() (string, error) {
-		ts, err := fleet.LoadTokens()
-		if err != nil {
-			return "", err
-		}
-		return ts.AccessToken, nil
-	}
-	enabled := func() bool {
-		if poller == nil {
-			return false
-		}
-		cur := poller.Current()
-		return cur.Has(fleet.CapHostedInference)
-	}
-	adapter := fleet_hosted.New(profile.FleetBaseURL, bearer, enabled)
-	a.fleet.fleetAdapter = adapter
-	if a.fleet.llmRegistrar != nil {
-		a.fleet.llmRegistrar.RegisterAdapter(adapter)
-	}
-}
-
-// SetLLMRegistrar wires the LLM adapter registry into the fleet state so
-// that the fleet_hosted adapter can be registered when SetFleetClient is
-// called. Must be called before SetFleetClient to take effect; otherwise
-// the adapter is registered lazily on the next SetFleetClient call.
-func (a *API) SetLLMRegistrar(r AdapterRegistrar) {
-	if a.fleet == nil {
-		a.fleet = &fleetState{}
-	}
-	a.fleet.mu.Lock()
-	defer a.fleet.mu.Unlock()
-	a.fleet.llmRegistrar = r
-	// If SetFleetClient was called first, register any pending adapter.
-	if a.fleet.fleetAdapter != nil {
-		r.RegisterAdapter(a.fleet.fleetAdapter)
-	}
 }
 
 func (a *API) fleetClient() *fleet.Client {
@@ -568,7 +504,12 @@ func (a *API) FleetConfigPullStatus(_ context.Context) (FleetConfigPullStatusVie
 //   - cedar_delta   → cedarpolicy.Engine.SetTeamBundle
 //   - mcp_allowlist → recipes.ApplyFleetAllowlist
 //   - model_prefs   → stored in fleetState.fleetModelPrefs
-//   - weight_urls   → fleet.SetWeightURLs
+//
+// The kameas_ml_weight_urls bundle section is intentionally ignored: the
+// fleet-hosted-LLM / kameas-ml surface was removed
+// (harness-fleet-sync-activation-01NSYNC01, dead-code cleanup). The wire
+// field is retained on Bundle so signature verification of server-signed
+// bundles still round-trips, but it is no longer persisted or applied.
 type compositeConfigApplier struct {
 	state *fleetState
 }
@@ -600,13 +541,8 @@ func (a *compositeConfigApplier) ApplyBundle(ctx context.Context, b *fleet.Bundl
 		a.state.mu.Unlock()
 	}
 
-	// Weight URLs.
-	if len(b.KameasMLWeightURLs) > 0 {
-		a.state.mu.RLock()
-		dataDir := a.state.dataDir
-		a.state.mu.RUnlock()
-		fleet.SetWeightURLs(dataDir, b.KameasMLWeightURLs)
-	}
+	// Weight URLs (kameas_ml_weight_urls): intentionally ignored — the
+	// fleet-hosted-LLM / kameas-ml surface was removed. See the type doc above.
 
 	// Mandated skills (fleet-skills-sync-01NDFSEX18 WP05).
 	// Partial-success pattern: individual skill errors are collected but

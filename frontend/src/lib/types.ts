@@ -158,9 +158,7 @@ export type ProviderKind =
   | 'azure-openai'
   | 'gemini'
   /** Custom OpenAI-compatible endpoint (custom-openai-compatible-endpoint-01KQ8VN0) */
-  | 'custom-openai'
-  /** Fleet-hosted inference — only available when signedIn && capability('hosted_inference') (fleet-capability-surface-01NDFSEX09) */
-  | 'fleet-hosted';
+  | 'custom-openai';
 
 /**
  * GeminiEndpointKind selects which Google endpoint to target.
@@ -755,7 +753,7 @@ export interface AppInfo {
   customOpenAIEnabled?: boolean;
   /**
    * capabilities is the fleet capability gate state keyed by the snake_case
-   * wire key (e.g. "hosted_inference"). Undefined or empty when the user is
+   * wire key (e.g. "launcher_updates"). Undefined or empty when the user is
    * signed out or fleet is disabled.
    * (fleet-capability-surface-01NDFSEX09 WP11)
    */
