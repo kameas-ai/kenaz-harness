@@ -215,6 +215,10 @@ func (s *sqlStore) UpdateScope(ctx context.Context, id, scopeKind, scopeID strin
 				ErrUnsupportedScope, scopeID, sessProj)
 		}
 		projectID = sessProj
+	case ScopeKindGlobal:
+		// Promote to global scope: clear project_id. The artifact
+		// becomes visible to all sessions and projects.
+		projectID = nil
 	case ScopeKindSession:
 		// Demote: clear project_id.
 		projectID = nil
@@ -439,7 +443,7 @@ func validSource(s string) bool {
 
 func validScope(s string) bool {
 	switch s {
-	case ScopeKindSession, ScopeKindProject:
+	case ScopeKindSession, ScopeKindProject, ScopeKindGlobal:
 		return true
 	}
 	return false

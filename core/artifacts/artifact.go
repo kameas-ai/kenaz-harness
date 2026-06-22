@@ -159,10 +159,17 @@ const (
 )
 
 // ScopeKind enum values for Artifact.ScopeKind. Validated at the SQL
-// CHECK boundary in migration 0303.
+// CHECK boundary in migration 0303 (extended to include "global" by
+// migration 0332 — unified-context-artifacts-01NCTXU01 additive scope
+// widening).
 const (
 	ScopeKindSession = "session"
 	ScopeKindProject = "project"
+	// ScopeKindGlobal makes an artifact visible across all sessions and
+	// projects. Added in migration 0332 so global artifacts can be
+	// surfaced as Units in the unified context+artifacts store.
+	// ScopeID is empty for global-scope artifacts.
+	ScopeKindGlobal = "global"
 )
 
 // Sentinel errors. Stable typed errors so callers can errors.Is.
@@ -175,8 +182,8 @@ var (
 	ErrUnsupportedSource = errors.New("artifacts: unsupported source")
 
 	// ErrUnsupportedScope is returned when UpdateScope receives a kind
-	// outside {session, project}, or when a session→project promote
-	// targets a session that has no project.
+	// outside {session, project, global}, or when a session→project
+	// promote targets a session that has no project.
 	ErrUnsupportedScope = errors.New("artifacts: unsupported scope")
 
 	// ErrVersionConflict is returned when WriteVersion detects that the

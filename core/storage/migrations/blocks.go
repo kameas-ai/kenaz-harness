@@ -34,6 +34,10 @@ var CanonicalBlocks = map[string]VersionBlock{
 	// model-invoked-skills-catalog-01KZNP3E may add a column-add migration
 	// in this same block (version 1001+) to extend slash_commands_user.
 	"user-slash-commands": {Min: 1000, Max: 1099},
+	// unified-context-artifacts-01NCTXU01: 1100-1199.
+	// Units + unit_versions + unit_edges tables for the unified
+	// context+artifacts store (core/units package).
+	"units": {Min: 1100, Max: 1199},
 }
 
 // LookupBlock returns the reserved block for the given owning-mission

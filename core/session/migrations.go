@@ -130,6 +130,11 @@ const sqlInitSchema = `
 // capability matrices for custom OpenAI-compatible endpoints
 // (custom-openai-compatible-endpoint-01KQ8VN0 WP03 — see
 // migrations_custom_endpoint.go).
+// 0332 extends the artifacts.scope_kind CHECK constraint to include
+// 'global' so artifacts can be promoted to global scope (visible to all
+// sessions and projects) as required by the unified-context-artifacts
+// store FR-003 (unified-context-artifacts-01NCTXU01 — see
+// migrations_artifacts_global_scope.go).
 func Migrations() []migrations.Migration {
 	return []migrations.Migration{
 		{
@@ -193,6 +198,7 @@ func Migrations() []migrations.Migration {
 		migration0329(),
 		migration0330(),
 		migration0331(),
+		migration0332(),
 	}
 }
 
