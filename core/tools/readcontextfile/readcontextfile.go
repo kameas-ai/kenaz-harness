@@ -17,6 +17,7 @@ package readcontextfile
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -221,17 +222,16 @@ func (t *Tool) confirmInAttachedModule(ctx context.Context, reqPath string) erro
 }
 
 // isNotFound inspects errors from the Library for a not-found signal.
-// We check for the sentinel rather than string-matching so the check is
-// stable across library refactors.
+// Uses the typed sentinel (errors.Is) rather than string-matching so the
+// check is stable across library refactors and can't misclassify an
+// unrelated error whose message happens to contain "not found".
 func isNotFound(err error) bool {
-	return strings.Contains(err.Error(), "not found") ||
-		os.IsNotExist(err)
+	return errors.Is(err, contexts.ErrNotFound) || os.IsNotExist(err)
 }
 
-// isFileTooLarge detects the library's size-cap error.
+// isFileTooLarge detects the library's size-cap error via its sentinel.
 func isFileTooLarge(err error) bool {
-	return strings.Contains(err.Error(), "exceeds 1 MiB limit") ||
-		strings.Contains(err.Error(), "file exceeds")
+	return errors.Is(err, contexts.ErrFileTooLarge)
 }
 
 func marshalErr(kind, message string) (json.RawMessage, error) {

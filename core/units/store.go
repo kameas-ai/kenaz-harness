@@ -35,6 +35,14 @@ type Store interface {
 	// both FromID and ToID refer to existing units.
 	AddEdge(ctx context.Context, e Edge) (Edge, error)
 
+	// CreateWithEdge inserts a new Unit AND an Edge originating from it in
+	// a single atomic operation: the edge's FromID is set to the newly
+	// minted unit id, and if either write fails NEITHER is persisted (no
+	// orphaned unit without its lineage edge). e.ToID must reference an
+	// existing unit; e.Kind must be valid. Returns the inserted Unit + Edge.
+	// This is the transactional primitive behind Promote.
+	CreateWithEdge(ctx context.Context, u Unit, e Edge) (Unit, Edge, error)
+
 	// ListEdges returns all edges where FromID or ToID matches id,
 	// ordered by created_at ASC.
 	ListEdges(ctx context.Context, unitID string) ([]Edge, error)

@@ -138,7 +138,8 @@ type ArtifactFilter struct {
 	// Source restricts to one of SourceCodeBlock / SourceToolOutput /
 	// SourceUserPin. Empty = all sources.
 	Source string
-	// ScopeKind restricts to "session" or "project". Empty = both.
+	// ScopeKind restricts to "session", "project", or "global".
+	// Empty = all scopes.
 	ScopeKind string
 }
 

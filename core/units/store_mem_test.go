@@ -518,3 +518,63 @@ func TestManager_ListVersions_OrderedAsc(t *testing.T) {
 		}
 	}
 }
+
+// ── CreateWithEdge (atomic Promote primitive) ──────────────────────────
+
+// TestMemStore_CreateWithEdge_Atomic verifies the unit + edge land together.
+func TestMemStore_CreateWithEdge_Atomic(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	st := units.NewMemoryStore()
+
+	// Seed a target unit the edge will point at.
+	target, err := st.Create(ctx, makeUnit(units.KindDoc, units.ScopeProject))
+	if err != nil {
+		t.Fatalf("seed target: %v", err)
+	}
+
+	src := makeUnit(units.KindDoc, units.ScopeGlobal)
+	u, e, err := st.CreateWithEdge(ctx, src, units.Edge{
+		ToID: target.ID,
+		Kind: units.EdgePromotedFrom,
+	})
+	if err != nil {
+		t.Fatalf("CreateWithEdge: %v", err)
+	}
+	if u.ID == "" || e.ID == "" {
+		t.Fatalf("expected ids: unit=%q edge=%q", u.ID, e.ID)
+	}
+	if e.FromID != u.ID {
+		t.Errorf("edge FromID = %q, want new unit id %q", e.FromID, u.ID)
+	}
+	// Both must be persisted: the unit is gettable and the edge is listed.
+	if _, err := st.Get(ctx, u.ID); err != nil {
+		t.Errorf("new unit not persisted: %v", err)
+	}
+	edges, err := st.ListEdges(ctx, u.ID)
+	if err != nil || len(edges) != 1 {
+		t.Fatalf("ListEdges = %v (err %v), want 1 edge", edges, err)
+	}
+}
+
+// TestMemStore_CreateWithEdge_NoOrphanOnBadTarget verifies that when the edge
+// target does not exist, NEITHER the unit nor the edge is persisted (atomicity
+// — no orphaned unit without its lineage edge).
+func TestMemStore_CreateWithEdge_NoOrphanOnBadTarget(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	st := units.NewMemoryStore()
+
+	before, _ := st.List(ctx, units.UnitFilter{})
+	_, _, err := st.CreateWithEdge(ctx, makeUnit(units.KindDoc, units.ScopeGlobal), units.Edge{
+		ToID: "does-not-exist",
+		Kind: units.EdgePromotedFrom,
+	})
+	if err == nil {
+		t.Fatal("expected error for non-existent edge target, got nil")
+	}
+	after, _ := st.List(ctx, units.UnitFilter{})
+	if len(after) != len(before) {
+		t.Errorf("orphan unit created despite edge failure: before=%d after=%d", len(before), len(after))
+	}
+}

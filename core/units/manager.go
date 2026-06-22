@@ -106,18 +106,16 @@ func (m *Manager) Promote(ctx context.Context, srcID string, newScope Scope, new
 		Body:           src.Body,
 		Metadata:       src.Metadata,
 	}
-	newUnit, err := m.store.Create(ctx, promoted)
-	if err != nil {
-		return Unit{}, Edge{}, fmt.Errorf("units: Promote: create: %w", err)
-	}
-
-	edge, err := m.store.AddEdge(ctx, Edge{
-		FromID: newUnit.ID,
-		ToID:   srcID,
-		Kind:   EdgePromotedFrom,
+	// Atomic: the promoted unit and its promoted_from lineage edge are
+	// written in one transaction, so a failure never leaves an orphaned
+	// unit without its provenance edge. (CreateWithEdge sets the edge's
+	// FromID to the newly-minted unit id.)
+	newUnit, edge, err := m.store.CreateWithEdge(ctx, promoted, Edge{
+		ToID: srcID,
+		Kind: EdgePromotedFrom,
 	})
 	if err != nil {
-		return Unit{}, Edge{}, fmt.Errorf("units: Promote: add edge: %w", err)
+		return Unit{}, Edge{}, fmt.Errorf("units: Promote: %w", err)
 	}
 
 	return newUnit, edge, nil

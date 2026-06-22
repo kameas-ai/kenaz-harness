@@ -184,6 +184,58 @@ func (s *memStore) AddEdge(ctx context.Context, e Edge) (Edge, error) {
 	return e, nil
 }
 
+// CreateWithEdge inserts the unit and an edge from it atomically (both under
+// one lock acquisition; validation happens before the lock). See
+// Store.CreateWithEdge.
+func (s *memStore) CreateWithEdge(ctx context.Context, u Unit, e Edge) (Unit, Edge, error) {
+	if err := validateUnit(u); err != nil {
+		return Unit{}, Edge{}, err
+	}
+	if !validEdgeKind(e.Kind) {
+		return Unit{}, Edge{}, fmt.Errorf("%w: %q", ErrUnsupportedEdgeKind, e.Kind)
+	}
+	if e.ToID == "" {
+		return Unit{}, Edge{}, fmt.Errorf("units: CreateWithEdge: ToID is required")
+	}
+	if _, err := s.Get(ctx, e.ToID); err != nil {
+		return Unit{}, Edge{}, fmt.Errorf("units: CreateWithEdge: to unit: %w", err)
+	}
+
+	if u.ID == "" {
+		id, err := s.idGen()
+		if err != nil {
+			return Unit{}, Edge{}, fmt.Errorf("units: id gen: %w", err)
+		}
+		u.ID = id
+	}
+	now := s.now()
+	if u.CreatedAt.IsZero() {
+		u.CreatedAt = now
+	}
+	u.UpdatedAt = u.CreatedAt
+	u.Version = 0
+	u.Metadata = normaliseMetadata(u.Metadata)
+
+	e.FromID = u.ID
+	if e.ID == "" {
+		id, err := s.idGen()
+		if err != nil {
+			return Unit{}, Edge{}, fmt.Errorf("units: edge id gen: %w", err)
+		}
+		e.ID = id
+	}
+	if e.CreatedAt.IsZero() {
+		e.CreatedAt = s.now()
+	}
+	e.Version = 1
+
+	s.mu.Lock()
+	s.units[u.ID] = u
+	s.edges = append(s.edges, e)
+	s.mu.Unlock()
+	return u, e, nil
+}
+
 func (s *memStore) ListEdges(_ context.Context, unitID string) ([]Edge, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

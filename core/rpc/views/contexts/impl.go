@@ -13,6 +13,7 @@ import (
 	contextpack "github.com/kameas-ai/kenaz-harness/core/context/pack"
 	corecontexts "github.com/kameas-ai/kenaz-harness/core/contexts"
 	fleet "github.com/kameas-ai/kenaz-harness/core/fleet"
+	"github.com/kameas-ai/kenaz-harness/core/logging"
 )
 
 // Library is the slim interface this view needs. core/contexts.Library
@@ -297,8 +298,12 @@ func (a *API) AttachModule(ctx context.Context, scopeKind, scopeID, dirPath stri
 	for _, ap := range mod.Always {
 		content, err := a.lib.Get(ap)
 		if err != nil {
-			// Missing always: files are a soft error — log-worthy but
-			// should not prevent attachment creation. Skip and continue.
+			// A declared always: file that can't be read (missing, or a
+			// disallowed extension) is a soft error — it must not block
+			// attachment — but it is NOT silent: warn so a mistyped or
+			// deleted always: entry is diagnosable instead of vanishing.
+			logging.L().Warn("contexts.attach_module.always_skipped",
+				"module", mod.Root, "file", ap, "err", err.Error())
 			continue
 		}
 		parts = append(parts, namedContent{path: ap, content: content})
