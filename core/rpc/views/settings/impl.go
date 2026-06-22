@@ -1191,6 +1191,28 @@ type API struct {
 	// fleet holds the optional fleet client and data dir. Populated via
 	// SetFleetClient during chassis boot; nil when fleet is not wired.
 	fleet *fleetState
+
+	// syncNotify is the optional fleet-sync mutation hook
+	// (harness-fleet-sync-activation-01NSYNC01 gap #1). When set via
+	// SetSyncNotifier, Set() calls it with the affected sync category so the
+	// fleet Syncer can schedule a debounced push. nil when fleet sync is not
+	// wired; the call is a no-op in that case.
+	syncNotify func(category string)
+}
+
+// SetSyncNotifier wires the fleet-sync mutation hook. The rpc layer connects
+// this to fleet.Syncer.NotifyMutation so that a settings change schedules a
+// debounced push-up. Safe to leave unset (fleet disabled / OSS build).
+func (a *API) SetSyncNotifier(fn func(category string)) {
+	a.syncNotify = fn
+}
+
+// notifySync invokes the sync mutation hook for the given category when one
+// is wired. Best-effort: never blocks the caller (the Syncer debounces).
+func (a *API) notifySync(category string) {
+	if a.syncNotify != nil {
+		a.syncNotify(category)
+	}
 }
 
 // NewAPI constructs a SettingsAPI backed by the given store. nil
@@ -1215,7 +1237,16 @@ func (a *API) Get(_ context.Context) (Settings, error) {
 
 // Set persists every field.
 func (a *API) Set(_ context.Context, s Settings) error {
-	return a.store.SaveAll(s)
+	if err := a.store.SaveAll(s); err != nil {
+		return err
+	}
+	// Schedule a debounced push of the ui_theme category (the credential-free
+	// surface this full-settings save can affect). The Syncer no-ops when the
+	// category is disabled (harness-fleet-sync-activation-01NSYNC01 gap #1).
+	// Literal mirrors fleet.SyncCategoryUITheme; impl.go deliberately avoids a
+	// core/fleet import to keep the OSS-first boundary clean.
+	a.notifySync("ui_theme")
+	return nil
 }
 
 // LoadAutonomyProfile delegates to the store. Returns the empty Layer

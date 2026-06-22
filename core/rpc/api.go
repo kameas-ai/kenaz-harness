@@ -1642,7 +1642,30 @@ func New(c *core.Core) *API {
 		// The Syncer is a lightweight object; we create it unconditionally but
 		// its Push/Pull methods short-circuit via ErrFleetDisabled when flCl is nil.
 		syncer := corefleet.NewSyncer(flCl)
-		a.syncAPI = syncview.NewAPI(syncer, &corefleet.SecretPromptQueue{})
+		syncPending := &corefleet.SecretPromptQueue{}
+		a.syncAPI = syncview.NewAPI(syncer, syncPending)
+
+		// harness-fleet-sync-activation-01NSYNC01 gap #1: register the five
+		// sync categories on the Syncer and start the debounced background
+		// poll loop. Without this the Syncer foundation was dormant — no
+		// categories registered + StartPolling never called. The MCP category
+		// shares syncPending so the SyncPanel banner sees MCPs that arrive via
+		// pull and still need credentials. registerSyncCategories no-ops when
+		// the syncer or store is nil, preserving the offline posture.
+		var syncStore settings.SettingsStore
+		if a.settingsImpl != nil {
+			syncStore = a.settingsImpl.Store()
+		}
+		mcpSyncCat := corefleet.NewMCPSyncCategory(nil, nil, nil, syncPending)
+		registerSyncCategories(context.Background(), syncer, syncStore, mcpSyncCat)
+
+		// Connect settings mutations to the Syncer's debounced push so a theme
+		// change schedules a push-up (no-op when the category is disabled).
+		if a.settingsImpl != nil {
+			a.settingsImpl.SetSyncNotifier(func(category string) {
+				syncer.NotifyMutation(corefleet.SyncCategory(category))
+			})
+		}
 
 		// CedarPublish (WP07)
 		identityFn := func() (string, error) {
