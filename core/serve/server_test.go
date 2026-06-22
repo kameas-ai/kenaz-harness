@@ -17,6 +17,7 @@ import (
 
 	"github.com/kameas-ai/kenaz-harness/core/rpc"
 	"github.com/kameas-ai/kenaz-harness/core/serve"
+	"github.com/kameas-ai/kenaz-harness/core/serve/authbroker"
 )
 
 // minimalStaticFS returns a minimal in-memory FS that mimics the dist-served
@@ -645,6 +646,99 @@ func TestStatic_NilFSReturns404(t *testing.T) {
 
 	if resp.StatusCode != http.StatusNotFound {
 		t.Fatalf("expected 404 when staticFS is nil, got %d", resp.StatusCode)
+	}
+}
+
+// ─── Auth_State RPC ───────────────────────────────────────────────────────
+
+// TestRPC_AuthState_NoSession verifies that Auth_State returns "anonymous"
+// when no authbroker.Session is wired (the default for tests).
+func TestRPC_AuthState_NoSession(t *testing.T) {
+	_, baseURL, cancel := newTestServer(t, "tok")
+	defer cancel()
+
+	resp := authedPost(t, baseURL, "tok", `{"method":"Auth_State","params":{}}`)
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		t.Fatalf("expected 200, got %d: %s", resp.StatusCode, b)
+	}
+	var envelope struct {
+		Result struct {
+			State string `json:"state"`
+		} `json:"result"`
+		Error string `json:"error"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&envelope); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if envelope.Error != "" {
+		t.Fatalf("unexpected error: %s", envelope.Error)
+	}
+	if envelope.Result.State != "anonymous" {
+		t.Errorf("expected state 'anonymous', got %q", envelope.Result.State)
+	}
+}
+
+// TestRPC_AuthState_WithSession verifies that Auth_State reflects the auth
+// session state when a session is wired via WithAuthSession.
+func TestRPC_AuthState_WithSession(t *testing.T) {
+	// Create an anonymous session (no signed-in seed).
+	anonSession := authbroker.NewSession(
+		context.Background(),
+		authbroker.Config{SignedIn: false},
+		nil,
+	)
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	addr := ln.Addr().String()
+	_ = ln.Close()
+
+	api := rpc.New(nil)
+	ctx, ctxCancel := context.WithCancel(context.Background())
+	defer ctxCancel()
+
+	srv := serve.New(api, addr, "tok", nil, nil, serve.WithAuthSession(anonSession))
+	done := make(chan error, 1)
+	go func() { done <- srv.Serve(ctx) }()
+
+	// Wait for server to be ready.
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		c, cerr := net.Dial("tcp", addr)
+		if cerr == nil {
+			_ = c.Close()
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	baseURL := "http://" + addr
+
+	resp := authedPost(t, baseURL, "tok", `{"method":"Auth_State","params":{}}`)
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		t.Fatalf("expected 200, got %d: %s", resp.StatusCode, b)
+	}
+	var envelope struct {
+		Result struct {
+			State string `json:"state"`
+		} `json:"result"`
+		Error string `json:"error"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&envelope); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if envelope.Error != "" {
+		t.Fatalf("unexpected error: %s", envelope.Error)
+	}
+	if envelope.Result.State != "anonymous" {
+		t.Errorf("expected state 'anonymous' from anon session, got %q", envelope.Result.State)
 	}
 }
 

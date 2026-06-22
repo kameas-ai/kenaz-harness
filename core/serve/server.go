@@ -60,6 +60,7 @@ import (
 	"golang.org/x/net/websocket"
 
 	"github.com/kameas-ai/kenaz-harness/core/rpc"
+	"github.com/kameas-ai/kenaz-harness/core/serve/authbroker"
 )
 
 const (
@@ -80,12 +81,23 @@ const tokenPlaceholder = "<!--HARNESS_TOKEN_META-->"
 // Server is the harness HTTP/WS server for served mode.  Construct with New
 // and call Serve to block until the context is cancelled.
 type Server struct {
-	api      *rpc.API
-	bus      *rpc.EventBus // in-process event bus for real-time WS push
-	token    string
-	staticFS fs.FS   // embedded dist-served bundle; nil → 404 for static paths
-	log      *slog.Logger
-	srv      *http.Server
+	api         *rpc.API
+	bus         *rpc.EventBus // in-process event bus for real-time WS push
+	token       string
+	staticFS    fs.FS              // embedded dist-served bundle; nil → 404 for static paths
+	log         *slog.Logger
+	srv         *http.Server
+	authSession *authbroker.Session // nil when serve mode is not wired with auth (tests / anonymous)
+}
+
+// ServerOption is a functional option for [New].
+type ServerOption func(*Server)
+
+// WithAuthSession wires an [authbroker.Session] into the server.  When set,
+// the Auth_State RPC method returns the current auth state.  When nil (default)
+// Auth_State returns "anonymous".
+func WithAuthSession(s *authbroker.Session) ServerOption {
+	return func(srv *Server) { srv.authSession = s }
 }
 
 // New constructs a Server backed by the given *rpc.API.
@@ -94,7 +106,9 @@ type Server struct {
 // sub-rooted at the dist-served directory).  When nil, GET / returns 404.
 //
 // If token is empty, auth is disabled (local dev).
-func New(api *rpc.API, addr, token string, staticFS fs.FS, log *slog.Logger) *Server {
+//
+// opts are optional [ServerOption] values, e.g. [WithAuthSession].
+func New(api *rpc.API, addr, token string, staticFS fs.FS, log *slog.Logger, opts ...ServerOption) *Server {
 	if addr == "" {
 		addr = DefaultListenAddr
 		if v := os.Getenv(EnvListenAddr); v != "" {
@@ -114,6 +128,9 @@ func New(api *rpc.API, addr, token string, staticFS fs.FS, log *slog.Logger) *Se
 		token:    token,
 		staticFS: staticFS,
 		log:      log,
+	}
+	for _, o := range opts {
+		o(s)
 	}
 
 	mux := http.NewServeMux()
@@ -305,6 +322,16 @@ func (s *Server) handleRPC(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, RPCResponse{Result: result})
 }
 
+// AuthStateResult is the response shape for the Auth_State RPC method.
+// It exposes the current in-VM auth state to the served frontend so the UI
+// can show signed-in vs anonymous vs signed-out without token bytes.
+//
+// Privacy: no token bytes, claims, email, or PII are included here.
+type AuthStateResult struct {
+	// State is one of "anonymous", "signed_in", or "signed_out".
+	State string `json:"state"`
+}
+
 // dispatch routes a method name to the appropriate rpc.API call.
 // Only a representative slice is wired here; the full port is deferred.
 func (s *Server) dispatch(ctx context.Context, method string, params json.RawMessage) (any, error) {
@@ -326,6 +353,15 @@ func (s *Server) dispatch(ctx context.Context, method string, params json.RawMes
 			return nil, errors.New("Sessions_Get: bad params: " + err.Error())
 		}
 		return s.api.Sessions().Get(ctx, p.ID)
+
+	// Auth_State returns the current in-VM auth state for the served frontend.
+	// Privacy: no token bytes are included in the response.
+	case "Auth_State":
+		state := authbroker.StateAnonymous
+		if s.authSession != nil {
+			state = s.authSession.State()
+		}
+		return AuthStateResult{State: state.String()}, nil
 
 	default:
 		return nil, errors.New("method not found: " + method)

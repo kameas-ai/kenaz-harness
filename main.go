@@ -20,6 +20,7 @@ import (
 	"github.com/kameas-ai/kenaz-harness/core/rpc"
 	coresentry "github.com/kameas-ai/kenaz-harness/core/sentry"
 	"github.com/kameas-ai/kenaz-harness/core/serve"
+	"github.com/kameas-ai/kenaz-harness/core/serve/authbroker"
 	"github.com/kameas-ai/kenaz-harness/core/update/bootswap"
 )
 
@@ -192,7 +193,8 @@ func main() {
 //  1. Resolve and prepare the data dir (same as desktop path).
 //  2. Boot core + rpc.API (same as desktop path).
 //  3. Call core.Start on a background context.
-//  4. Hand the API to serve.New and block on Serve.
+//  4. Read KENAZ_AUTH_* env vars, initialise the auth broker session (F2-WP8).
+//  5. Hand the API + auth session to serve.New and block on Serve.
 func runServeMode(listenAddr string) {
 	serveLog := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
 		Level: slog.LevelInfo,
@@ -231,6 +233,18 @@ func runServeMode(listenAddr string) {
 	}
 	api.SetContext(ctx)
 
+	// F2-WP8: initialise the in-VM auth session from KENAZ_AUTH_* env vars
+	// (injected via EnvironmentFile from the KENAZMETA disk, same mechanism as
+	// SIGIL_INGEST_TOKEN / HARNESS_VM_TOKEN).
+	//
+	// Privacy: broker token and access token bytes are never logged.
+	authCfg := authbroker.ReadConfig(os.Getenv)
+	authSession := authbroker.NewSession(ctx, authCfg, serveLog)
+	serveLog.Info("harness.serve: auth session initialised",
+		"auth_state", authSession.State().String(),
+		"broker_addr", authCfg.BrokerAddr,
+	)
+
 	token := os.Getenv(serve.EnvToken)
 	addr := listenAddr
 	if addr == "" {
@@ -247,7 +261,7 @@ func runServeMode(listenAddr string) {
 		os.Exit(1)
 	}
 
-	srv := serve.New(api, addr, token, servedFS, serveLog)
+	srv := serve.New(api, addr, token, servedFS, serveLog, serve.WithAuthSession(authSession))
 	if serveErr := srv.Serve(ctx); serveErr != nil && serveErr != context.Canceled {
 		serveLog.Error("harness.serve: server error", "err", serveErr)
 		os.Exit(1)
