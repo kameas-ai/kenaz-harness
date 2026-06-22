@@ -75,13 +75,13 @@ describe('featureFlags', () => {
     it('returns true for each capability that is set to true', () => {
       const caps: Record<string, boolean> = {
         launcher_updates: true,
-        launcher_updates: true,
+        iso_distribution: true,
         sso_saml: false,
         shared_team_graph: true,
       };
       initFeatureFlags(makeInfo(caps));
       expect(capability('launcher_updates')).toBe(true);
-      expect(capability('launcher_updates')).toBe(true);
+      expect(capability('iso_distribution')).toBe(true);
       expect(capability('sso_saml')).toBe(false);
       expect(capability('shared_team_graph')).toBe(true);
     });
