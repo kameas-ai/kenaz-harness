@@ -14,6 +14,7 @@ import {cedarpolicy} from '../models';
 import {cedar} from '../models';
 import {compaction} from '../models';
 import {contextview} from '../models';
+import {fleet} from '../models';
 import {contexts} from '../models';
 import {corpus} from '../models';
 import {dials} from '../models';
@@ -271,6 +272,16 @@ export function Fleet_GetTelemetryConsent():Promise<string>;
 export function Fleet_SetTelemetryConsent(arg1:string):Promise<void>;
 
 export function Graph_CancelRun(arg1:string):Promise<void>;
+
+export function Unit_PromoteAsMergeRequest(arg1:string,arg2:string,arg3:string,arg4:string):Promise<fleet.MergeRequestResult>;
+
+export function Unit_ListConflicts():Promise<Array<fleet.UnitConflictView>>;
+
+export function Unit_ResolveMerge(arg1:string,arg2:string):Promise<void>;
+
+export function Unit_ResolveEnshrine(arg1:string,arg2:string,arg3:string,arg4:string):Promise<string>;
+
+export function Unit_ResolveLoadable(arg1:string,arg2:string):Promise<Array<fleet.ResolvedUnitView>>;
 
 export function Graph_DeleteGraph(arg1:string):Promise<void>;
 

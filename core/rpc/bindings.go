@@ -57,6 +57,7 @@ import (
 	planmodeview "github.com/kameas-ai/kenaz-harness/core/rpc/views/planmode"
 	sentryview "github.com/kameas-ai/kenaz-harness/core/rpc/views/sentry"
 	catalogview "github.com/kameas-ai/kenaz-harness/core/rpc/views/catalog"
+	fleetview "github.com/kameas-ai/kenaz-harness/core/rpc/views/fleet"
 	syncview "github.com/kameas-ai/kenaz-harness/core/rpc/views/sync"
 	"github.com/kameas-ai/kenaz-harness/core/logging"
 	"github.com/kameas-ai/kenaz-harness/core/mcp/stdio"
@@ -2677,6 +2678,40 @@ func (b *Bindings) Fleet_GetTelemetryConsent() (string, error) {
 // Team+).
 func (b *Bindings) Fleet_SetTelemetryConsent(level string) error {
 	return b.api.Fleet().SetTelemetryConsent(b.ctx(), level)
+}
+
+// ── Phase-3 unit collaboration bindings (unified-context-artifacts-01NCTXU01) ─
+
+// Unit_PromoteAsMergeRequest opens a merge request to promote a unit UP a
+// classification level (personal→team→org) instead of writing the higher layer
+// directly (WP16). toClassification is "team" | "org".
+func (b *Bindings) Unit_PromoteAsMergeRequest(unitID, toClassification, title, body string) (fleetview.MergeRequestResult, error) {
+	return b.api.Fleet().Unit_PromoteAsMergeRequest(b.ctx(), unitID, toClassification, title, body)
+}
+
+// Unit_ListConflicts returns the unresolved same-unit pull conflicts surfaced
+// by the syncer (the resolution worklist).
+func (b *Bindings) Unit_ListConflicts() ([]fleetview.UnitConflictView, error) {
+	return b.api.Fleet().Unit_ListConflicts(b.ctx())
+}
+
+// Unit_ResolveMerge applies a whole-body MERGE resolution to a conflicted unit
+// (WP17a): the resolved body is written as a new version and the conflict clears.
+func (b *Bindings) Unit_ResolveMerge(unitID, resolvedBody string) error {
+	return b.api.Fleet().Unit_ResolveMerge(b.ctx(), unitID, resolvedBody)
+}
+
+// Unit_ResolveEnshrine applies an ENSHRINE resolution (WP17b): a coexisting unit
+// plus a conflicts_with marker edge so both sides load. Returns the new unit id.
+func (b *Bindings) Unit_ResolveEnshrine(srcUnitID, enshrinedTitle, enshrinedBody, reason string) (string, error) {
+	return b.api.Fleet().Unit_ResolveEnshrine(b.ctx(), srcUnitID, enshrinedTitle, enshrinedBody, reason)
+}
+
+// Unit_ResolveLoadable returns the precedence-ordered loadable set for a scope
+// with enshrined conflicts flagged (WP18). scope is "" | "global" | "project" |
+// "session"; scopeID narrows further.
+func (b *Bindings) Unit_ResolveLoadable(scope, scopeID string) ([]fleetview.ResolvedUnitView, error) {
+	return b.api.Fleet().Unit_ResolveLoadable(b.ctx(), scope, scopeID)
 }
 
 // ── Catalog bindings (fleet-share-and-sync-01NDFSEX14 WP02) ──────────────────

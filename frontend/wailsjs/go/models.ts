@@ -2424,21 +2424,97 @@ export namespace elicit {
 }
 
 export namespace fleet {
-	
+
 	export class ContextPushConflict {
 	    node_id: string;
 	    server_version: number;
 	    client_version: number;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new ContextPushConflict(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.node_id = source["node_id"];
 	        this.server_version = source["server_version"];
 	        this.client_version = source["client_version"];
+	    }
+	}
+	export class MergeRequestResult {
+	    id: string;
+	    unit_node_id: string;
+	    from_classification: string;
+	    to_classification: string;
+	    proposed_version: number;
+	    title: string;
+	    body: string;
+	    status: string;
+	    created_at: string;
+
+	    static createFrom(source: any = {}) {
+	        return new MergeRequestResult(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.unit_node_id = source["unit_node_id"];
+	        this.from_classification = source["from_classification"];
+	        this.to_classification = source["to_classification"];
+	        this.proposed_version = source["proposed_version"];
+	        this.title = source["title"];
+	        this.body = source["body"];
+	        this.status = source["status"];
+	        this.created_at = source["created_at"];
+	    }
+	}
+	export class UnitConflictView {
+	    unit_id: string;
+	    node_id: string;
+	    local_version: number;
+	    synced_version: number;
+	    server_version: number;
+
+	    static createFrom(source: any = {}) {
+	        return new UnitConflictView(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.unit_id = source["unit_id"];
+	        this.node_id = source["node_id"];
+	        this.local_version = source["local_version"];
+	        this.synced_version = source["synced_version"];
+	        this.server_version = source["server_version"];
+	    }
+	}
+	export class ResolvedUnitView {
+	    unit_id: string;
+	    title: string;
+	    body: string;
+	    scope: string;
+	    classification: string;
+	    flagged: boolean;
+	    peer_unit_id: string;
+	    reason: string;
+	    precedence: number;
+
+	    static createFrom(source: any = {}) {
+	        return new ResolvedUnitView(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.unit_id = source["unit_id"];
+	        this.title = source["title"];
+	        this.body = source["body"];
+	        this.scope = source["scope"];
+	        this.classification = source["classification"];
+	        this.flagged = source["flagged"];
+	        this.peer_unit_id = source["peer_unit_id"];
+	        this.reason = source["reason"];
+	        this.precedence = source["precedence"];
 	    }
 	}
 

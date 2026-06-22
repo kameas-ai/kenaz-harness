@@ -446,6 +446,26 @@ export function Fleet_SetTelemetryConsent(arg1) {
   return window['go']['rpc']['Bindings']['Fleet_SetTelemetryConsent'](arg1);
 }
 
+export function Unit_PromoteAsMergeRequest(arg1, arg2, arg3, arg4) {
+  return window['go']['rpc']['Bindings']['Unit_PromoteAsMergeRequest'](arg1, arg2, arg3, arg4);
+}
+
+export function Unit_ListConflicts() {
+  return window['go']['rpc']['Bindings']['Unit_ListConflicts']();
+}
+
+export function Unit_ResolveMerge(arg1, arg2) {
+  return window['go']['rpc']['Bindings']['Unit_ResolveMerge'](arg1, arg2);
+}
+
+export function Unit_ResolveEnshrine(arg1, arg2, arg3, arg4) {
+  return window['go']['rpc']['Bindings']['Unit_ResolveEnshrine'](arg1, arg2, arg3, arg4);
+}
+
+export function Unit_ResolveLoadable(arg1, arg2) {
+  return window['go']['rpc']['Bindings']['Unit_ResolveLoadable'](arg1, arg2);
+}
+
 export function Graph_CancelRun(arg1) {
   return window['go']['rpc']['Bindings']['Graph_CancelRun'](arg1);
 }
