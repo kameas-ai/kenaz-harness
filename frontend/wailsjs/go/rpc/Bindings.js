@@ -310,6 +310,14 @@ export function Contexts_ContextPublish(arg1) {
   return window['go']['rpc']['Bindings']['Contexts_ContextPublish'](arg1);
 }
 
+export function Contexts_ContextExport(arg1, arg2) {
+  return window['go']['rpc']['Bindings']['Contexts_ContextExport'](arg1, arg2);
+}
+
+export function Contexts_ContextSearch(arg1, arg2, arg3) {
+  return window['go']['rpc']['Bindings']['Contexts_ContextSearch'](arg1, arg2, arg3);
+}
+
 export function Contexts_ContextSyncStatus() {
   return window['go']['rpc']['Bindings']['Contexts_ContextSyncStatus']();
 }
@@ -1086,8 +1094,16 @@ export function Settings_FleetSignOut() {
   return window['go']['rpc']['Bindings']['Settings_FleetSignOut']();
 }
 
+export function Settings_FleetSetTelemetryOptIn(arg1, arg2) {
+  return window['go']['rpc']['Bindings']['Settings_FleetSetTelemetryOptIn'](arg1, arg2);
+}
+
 export function Settings_FleetSignedIn() {
   return window['go']['rpc']['Bindings']['Settings_FleetSignedIn']();
+}
+
+export function Settings_FleetTelemetryOptIns() {
+  return window['go']['rpc']['Bindings']['Settings_FleetTelemetryOptIns']();
 }
 
 export function Settings_Get() {
