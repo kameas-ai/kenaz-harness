@@ -381,6 +381,120 @@ func (s *sqlStore) ListVersions(ctx context.Context, unitID string) ([]UnitVersi
 	return out, rows.Err()
 }
 
+// ── Sync sidecar ───────────────────────────────────────────────────────
+
+const sqlSelectSyncState = `
+    SELECT unit_id, node_id, synced_version, classification, last_synced,
+           synced_server_version, synced_local_version
+    FROM unit_sync_state
+`
+
+func (s *sqlStore) UpsertSyncState(ctx context.Context, st SyncState) (SyncState, error) {
+	if st.UnitID == "" {
+		return SyncState{}, fmt.Errorf("units: UpsertSyncState: empty UnitID")
+	}
+	if st.NodeID == "" {
+		return SyncState{}, fmt.Errorf("units: UpsertSyncState: empty NodeID")
+	}
+	if st.LastSynced.IsZero() {
+		st.LastSynced = s.now()
+	}
+	st.LastSynced = st.LastSynced.UTC()
+
+	if err := s.db.WriteTx(ctx, func(tx storage.WriteTx) error {
+		// SQLite upsert on the unit_id primary key. node_id carries a UNIQUE
+		// index; a node-id collision with a *different* unit surfaces as a
+		// constraint failure rather than silently re-homing the node.
+		_, err := tx.Exec(ctx, `
+            INSERT INTO unit_sync_state
+                (unit_id, node_id, synced_version, classification, last_synced,
+                 synced_server_version, synced_local_version)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(unit_id) DO UPDATE SET
+                node_id               = excluded.node_id,
+                synced_version        = excluded.synced_version,
+                classification        = excluded.classification,
+                last_synced           = excluded.last_synced,
+                synced_server_version = excluded.synced_server_version,
+                synced_local_version  = excluded.synced_local_version
+        `,
+			st.UnitID, st.NodeID, st.SyncedVersion, st.Classification,
+			st.LastSynced.UnixNano(),
+			st.SyncedServerVersion, st.SyncedLocalVersion,
+		)
+		return err
+	}); err != nil {
+		return SyncState{}, fmt.Errorf("units: UpsertSyncState: %w", err)
+	}
+	return st, nil
+}
+
+func (s *sqlStore) GetSyncState(ctx context.Context, unitID string) (SyncState, error) {
+	row := s.db.Reader().QueryRow(ctx, sqlSelectSyncState+" WHERE unit_id = ?", unitID)
+	st, err := scanSyncState(row)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return SyncState{}, ErrSyncStateNotFound
+		}
+		return SyncState{}, err
+	}
+	return st, nil
+}
+
+func (s *sqlStore) GetSyncStateByNodeID(ctx context.Context, nodeID string) (SyncState, error) {
+	if nodeID == "" {
+		return SyncState{}, ErrSyncStateNotFound
+	}
+	row := s.db.Reader().QueryRow(ctx, sqlSelectSyncState+" WHERE node_id = ?", nodeID)
+	st, err := scanSyncState(row)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return SyncState{}, ErrSyncStateNotFound
+		}
+		return SyncState{}, err
+	}
+	return st, nil
+}
+
+func (s *sqlStore) ListSyncState(ctx context.Context) ([]SyncState, error) {
+	rows, err := s.db.Reader().Query(ctx, sqlSelectSyncState+" ORDER BY unit_id ASC")
+	if err != nil {
+		return nil, fmt.Errorf("units: ListSyncState: query: %w", err)
+	}
+	defer rows.Close()
+	var out []SyncState
+	for rows.Next() {
+		st, err := scanSyncState(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, st)
+	}
+	return out, rows.Err()
+}
+
+func (s *sqlStore) DeleteSyncState(ctx context.Context, unitID string) error {
+	return s.db.WriteTx(ctx, func(tx storage.WriteTx) error {
+		_, err := tx.Exec(ctx, "DELETE FROM unit_sync_state WHERE unit_id = ?", unitID)
+		return err
+	})
+}
+
+func scanSyncState(sc interface{ Scan(dest ...any) error }) (SyncState, error) {
+	var (
+		st           SyncState
+		lastSyncedNs int64
+	)
+	if err := sc.Scan(
+		&st.UnitID, &st.NodeID, &st.SyncedVersion, &st.Classification, &lastSyncedNs,
+		&st.SyncedServerVersion, &st.SyncedLocalVersion,
+	); err != nil {
+		return SyncState{}, err
+	}
+	st.LastSynced = time.Unix(0, lastSyncedNs).UTC()
+	return st, nil
+}
+
 // ── Scan helpers ───────────────────────────────────────────────────────
 
 func scanUnit(sc interface{ Scan(dest ...any) error }) (Unit, error) {
