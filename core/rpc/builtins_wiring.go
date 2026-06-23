@@ -49,7 +49,7 @@ var GlobalFSReadSet = corefsbuiltins.NewReadSet()
 
 // GlobalTodoStore is the process-global per-session todo list store shared
 // across all sessions. The store holds the structured task list the model
-// writes via kaneaz__todo_write. Session data is evicted when the session
+// writes via kenaz__todo_write. Session data is evicted when the session
 // ends (Drop call from the lifecycle manager).
 // (builtin-tools-search-and-elicitation-01KZNP3D WP05)
 var GlobalTodoStore = coretodo.NewStore()
@@ -205,7 +205,7 @@ func registerBuiltinTools(
 		"delegate_wired", askDelegate != nil,
 	)
 
-	// kaneaz__skill: model-invoked skill dispatcher (model-invoked-skills-catalog-01KZNP3E WP02).
+	// kenaz__skill: model-invoked skill dispatcher (model-invoked-skills-catalog-01KZNP3E WP02).
 	// Default-on: invoking a user-authored skill is low-risk and expected behaviour.
 	// The tool is nil-safe: when slashDispatch is nil (test harness path, no
 	// real Core) it returns a friendly "not configured" error rather than
@@ -219,7 +219,7 @@ func registerBuiltinTools(
 		"dispatch_wired", slashDispatch != nil,
 	)
 
-	// kaneaz__list_secrets: lists secrets exposed to the model (model-secret-references-01KW7M5A WP06/WP10).
+	// kenaz__list_secrets: lists secrets exposed to the model (model-secret-references-01KW7M5A WP06/WP10).
 	// Always registered when an ExposureIndex is wired; nil index is a
 	// no-op so the test harness path (nil exposureIdx) stays clean.
 	if exposureIdx != nil {
@@ -237,7 +237,7 @@ func registerBuiltinTools(
 			"reason", "no exposure index wired")
 	}
 
-	// kaneaz__web_fetch: makes authenticated HTTP requests on behalf of
+	// kenaz__web_fetch: makes authenticated HTTP requests on behalf of
 	// the model (model-secret-references-01KW7M5A WP07). Always registered;
 	// the tool resolves @secret: references at request time via the
 	// per-context Resolver so no plaintext enters the conversation context.
@@ -245,7 +245,7 @@ func registerBuiltinTools(
 	registry.Register(webFetchTool)
 	logging.L().Info("rpc.builtins.register", "tool", webFetchTool.Name())
 
-	// kaneaz__subagent_dispatch: model-callable sub-agent spawner
+	// kenaz__subagent_dispatch: model-callable sub-agent spawner
 	// (branch-subagent-interactive-01KZNP3B WP03). Always registered.
 	// The BranchSeam is nil until WP07 wires the live seam; the tool
 	// returns a clean "seam_not_configured" error in that case so model
@@ -264,7 +264,7 @@ func registerBuiltinTools(
 		logging.L().Info("rpc.builtins.register", "tool", subagentTool.Name())
 	}
 
-	// kaneaz__enter_plan_mode / kaneaz__exit_plan_mode: plan-mode posture
+	// kenaz__enter_plan_mode / kenaz__exit_plan_mode: plan-mode posture
 	// tools (plan-mode-posture-01KZNP3F WP03/WP04). Both require a
 	// SessionPostureManager to read and mutate the session's autonomy layer.
 	// ExitTool additionally requires an ArtifactCapturer to persist the
@@ -330,7 +330,7 @@ func todoEnabledLookup(store settings.SettingsStore) func() bool {
 	}
 }
 
-// registerFSRequestTool registers the kaneaz__request_filesystem_access
+// registerFSRequestTool registers the kenaz__request_filesystem_access
 // built-in after the toolsAPI is wired (must be called after
 // newToolsAPI returns). nil registry or nil toolsAPI are no-ops so the
 // test harness path stays clean.
@@ -473,12 +473,12 @@ func constructWebSearch() *corewebsearch.Tool {
 
 // defaultBashSandbox returns the workspace path the bash tool uses as
 // its sandbox root. Prefers <DataDir>/agent-workspace; falls back to
-// /tmp/kaneaz-bash for the test harness path.
+// /tmp/kenaz-bash for the test harness path.
 func defaultBashSandbox(c *core.Core) string {
 	if c != nil && c.DataDir() != "" {
 		return filepath.Join(c.DataDir(), "agent-workspace")
 	}
-	return filepath.Join("/tmp", "kaneaz-bash")
+	return filepath.Join("/tmp", "kenaz-bash")
 }
 
 // builtinEnabledPredicate returns a func(name) bool that the toolloop
@@ -625,7 +625,7 @@ func builtinEnabledPredicate(s *settings.API) func(string) bool {
 	}
 }
 
-// registerReadContextFileTool wires the kaneaz__read_context_file
+// registerReadContextFileTool wires the kenaz__read_context_file
 // built-in into the registry. The tool allows the agent to read on-demand
 // files from attached context modules (unified-context-artifacts-01NCTXU01).
 //

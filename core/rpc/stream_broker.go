@@ -53,7 +53,7 @@ const (
 	TopicSessionListChanged = "session.list_changed"
 
 	// TopicElicitPending is the broker topic the elicitation view emits
-	// when the kaneaz__ask_user_question tool calls OpenDialog (mission
+	// when the kenaz__ask_user_question tool calls OpenDialog (mission
 	// ask-user-question-interactive-01KZNP3G WP04). The frontend's
 	// AskUserQuestion component subscribes here via useEventStream and
 	// renders the dialog when a payload arrives.

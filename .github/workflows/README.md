@@ -84,14 +84,14 @@ Jobs:
 
 ### docusaurus side (kenaz-docs)
 
-Add a workflow at `.github/workflows/kaneaz-harness-release.yml` in
+Add a workflow at `.github/workflows/kenaz-harness-release.yml` in
 `kameas-ai/kenaz-docs` that listens for `repository_dispatch` of type
-`kaneaz-harness-release`:
+`kenaz-harness-release`:
 
 ```yaml
 on:
   repository_dispatch:
-    types: [kaneaz-harness-release]
+    types: [kenaz-harness-release]
 ```
 
 The payload is:
@@ -101,13 +101,13 @@ The payload is:
   "version": "v0.0.0-main-...",
   "tag": "main",
   "release_url": "...",
-  "manifest_url": "https://github.com/kameas-ai/kaneaz-harness/releases/download/<tag>/manifest.json",
+  "manifest_url": "https://github.com/kameas-ai/kenaz-harness/releases/download/<tag>/manifest.json",
   "is_release": true
 }
 ```
 
 The docs workflow `curl`s `manifest_url`, writes it to (e.g.)
-`static/downloads/kaneaz-harness/manifest.json`, regenerates the docusaurus
+`static/downloads/kenaz-harness/manifest.json`, regenerates the docusaurus
 download page from that JSON, commits, and triggers the docs deploy.
 
 The `manifest.json` schema is:
@@ -124,7 +124,7 @@ The `manifest.json` schema is:
       "platform": "linux-amd64",
       "os": "linux",
       "arch": "amd64",
-      "filename": "kaneaz-harness-v0.1.0-linux-amd64.tar.gz",
+      "filename": "kenaz-harness-v0.1.0-linux-amd64.tar.gz",
       "url": "https://github.com/.../releases/download/v0.1.0/...",
       "sha256": "...",
       "ext": "tar.gz",

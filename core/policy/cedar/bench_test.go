@@ -122,7 +122,7 @@ func BenchmarkEvaluate_Filesystem_WriteNotApplicable(b *testing.B) {
 func BenchmarkEvaluate_Tool_BuiltinAllow(b *testing.B) {
 	runEvaluateBench(b,
 		ActionUseTool,
-		PermissionToolUID("kaneaz__bash"),
+		PermissionToolUID("kenaz__bash"),
 		nil,
 	)
 }

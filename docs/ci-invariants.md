@@ -29,7 +29,7 @@ gate runs on every PR and blocks merge on failure.
 
 ## #5 — Single-file persistence with schema versioning
 
-- All UI state lives in `$USER_CONFIG_DIR/kaneaz-harness/settings.json` with a top-level `schemaVersion: 1` integer.
+- All UI state lives in `$USER_CONFIG_DIR/kenaz-harness/settings.json` with a top-level `schemaVersion: 1` integer.
 - **CI gate**: `bash scripts/ci/check-single-persistence-file.sh` (asserts a single canonical filename in `core/rpc/settings.go`).
 - The Go-side test (when WP13 lands) covers schemaVersion migrations + corruption recovery.
 

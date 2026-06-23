@@ -1,7 +1,7 @@
 // Package cedar is the Cedar-based policy engine for the
 // agent-kernel-graph mission (WP14). It wraps the official Apache-2.0
 // Cedar Go binding (`github.com/cedar-policy/cedar-go`) behind a small
-// kaneaz-harness-shaped API, loads `.cedar` policy files from
+// kenaz-harness-shaped API, loads `.cedar` policy files from
 // `<DataDir>/policy/`, and exposes a single Evaluate entry point that
 // every gate hook in the harness calls before performing a gated
 // action (tool execution, model selection, memory write, network
@@ -30,7 +30,7 @@
 // Package layout:
 //
 //   - engine.go     — Engine type, Evaluate / Reload, Decision.
-//   - types.go      — kaneaz-harness ↔ Cedar entity-type mapping.
+//   - types.go      — kenaz-harness ↔ Cedar entity-type mapping.
 //   - decisions.go  — in-memory decision log + DecisionStore seam.
 //   - hooks.go      — gate-hook adapter helpers consumers wire in.
 //   - policies/default_policy.cedar — embedded starter policy bundle.

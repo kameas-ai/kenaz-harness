@@ -138,7 +138,7 @@ func (toolDispatchExecutor) Execute(ctx context.Context, env *Env, node *Node, i
 		tr, callErr := env.Tools.Call(ctx, ToolCall{Name: oc.call.Name, Args: oc.args})
 		duration := time.Since(startedAt)
 
-		// Gate: passive tools (e.g. kaneaz__sleep) must not consume an
+		// Gate: passive tools (e.g. kenaz__sleep) must not consume an
 		// iteration slot (FR-010). toolloop.ShouldCountIteration returns
 		// false for any tool registered as tool.passive in Cedar.
 		if env.Counters != nil && toolloop.ShouldCountIteration(oc.call.Name) {

@@ -74,7 +74,7 @@ const (
 	ActionWorkflowSave   = "workflow.save"
 	ActionWorkflowDelete = "workflow.delete"
 
-	// ActionArtifactUpdate gates the kaneaz__update_artifact builtin
+	// ActionArtifactUpdate gates the kenaz__update_artifact builtin
 	// (update-artifact-tool-01KQ8TD4). Default-allow under FSWriteEnabled;
 	// gated by the same FSWriteDisabled toggle as the write-family fs
 	// builtins. The resource UID is Artifact::"<artifact-id>".
@@ -88,17 +88,17 @@ const (
 	// Downstream skills-catalog + future elicitation missions MUST follow
 	// the same convention when adding new action families.
 
-	// ActionToolReadGlob gates kaneaz__glob (glob-match across a directory
+	// ActionToolReadGlob gates kenaz__glob (glob-match across a directory
 	// tree). Resource UID: Filesystem::"<base-dir>". Default-allow when
 	// FSReadEnabled is true; gated by the same FSReadDisabled toggle.
 	ActionToolReadGlob = "tool.read.glob"
 
-	// ActionToolReadGrep gates kaneaz__grep (in-process regex search).
+	// ActionToolReadGrep gates kenaz__grep (in-process regex search).
 	// Resource UID: Filesystem::"<search-path>". Default-allow when
 	// FSReadEnabled is true; gated by the same FSReadDisabled toggle.
 	ActionToolReadGrep = "tool.read.grep"
 
-	// ActionToolTodoWrite gates kaneaz__todo_write (structured task list
+	// ActionToolTodoWrite gates kenaz__todo_write (structured task list
 	// write). Resource UID: TodoList::"session" (session-scoped list).
 	// Default-allow when TodoEnabled is true; gated by TodoDisabled toggle.
 	// The action intentionally lives in the "tool.todo" family rather than
@@ -106,13 +106,13 @@ const (
 	// the broader filesystem write surface.
 	ActionToolTodoWrite = "tool.todo.write"
 
-	// ActionToolTodoRead gates future kaneaz__todo_read (reserved — not yet
+	// ActionToolTodoRead gates future kenaz__todo_read (reserved — not yet
 	// implemented). Declared here so Cedar policy snippets written against
 	// the action family validate without schema changes when the read tool
 	// ships. Resource UID: TodoList::"session".
 	ActionToolTodoRead = "tool.todo.read"
 
-	// ActionElicitAsk gates kaneaz__ask_user_question (synchronous
+	// ActionElicitAsk gates kenaz__ask_user_question (synchronous
 	// single-question elicitation: model calls tool → backend opens
 	// dialog → user answers → result returns to model). Introduced by
 	// ask-user-question-interactive-01KZNP3G WP01. Resource UID:
@@ -124,12 +124,12 @@ const (
 	// builtin tools. Introduced by mission
 	// builtin-tools-search-and-elicitation-01KZNP3D (WP04).
 	//
-	// Currently only kaneaz__sleep uses this action. Passive tools are
+	// Currently only kenaz__sleep uses this action. Passive tools are
 	// default-allow and are never gated by a Settings toggle because they
 	// have no observable side effects and must remain available for
 	// __monitor watch patterns.
 	//
-	// The resource UID convention is Tool::"kaneaz__<tool_name>" — the same
+	// The resource UID convention is Tool::"kenaz__<tool_name>" — the same
 	// shape as ActionUseTool, but evaluated under the tool.passive action
 	// ID so policy authors can write targeted rules for passive tools
 	// without affecting the broader use_tool gate.
@@ -142,7 +142,7 @@ const (
 	// so policy authors can permit or forbid individual skills independently
 	// of the broader tool surface.
 	//
-	//   ActionToolSkillInvoke — gates kaneaz__skill calls (model invokes a
+	//   ActionToolSkillInvoke — gates kenaz__skill calls (model invokes a
 	//     user-defined slash command marked model_invokable=true).
 	//     Resource UID: Skill::"<command-name>".
 	ActionToolSkillInvoke = "tool.skill.invoke"
@@ -183,7 +183,7 @@ const (
 	// The "tool.subagent" family follows the established "<domain>.<operation>"
 	// naming convention.
 	//
-	//   ActionToolSubagentDispatch — gates kaneaz__subagent_dispatch calls.
+	//   ActionToolSubagentDispatch — gates kenaz__subagent_dispatch calls.
 	//     Resource UID: SubagentProfile::"<profile-id>". Policy authors can
 	//     forbid specific profiles (e.g. the implementer profile in a
 	//     read-only session) while leaving others open.
@@ -205,7 +205,7 @@ const (
 	//     exposed_secrets set; forbid for untrusted agent_kind; forbid when the
 	//     per-session resolution budget is exhausted.
 	//
-	//   ActionToolListSecrets — gates the kaneaz__list_secrets builtin tool.
+	//   ActionToolListSecrets — gates the kenaz__list_secrets builtin tool.
 	//     Resource UID: Tool::"builtin__list_secrets". Default-allow so the
 	//     model can discover what references it may use; admins can disable
 	//     per-session with an explicit forbid rule.
@@ -215,7 +215,7 @@ const (
 	// ── Background task monitor action family ─────────────────────────────
 	// Introduced by mission background-task-monitor-01KZNP3C (WP03).
 	//
-	//   ActionToolTasksMonitor  — gates kaneaz__monitor (drain + watch mode).
+	//   ActionToolTasksMonitor  — gates kenaz__monitor (drain + watch mode).
 	//     Resource UID: Task::"<task-id>". Default-allow (passive read-only);
 	//     can be restricted per-session with an explicit forbid rule.
 	//   ActionToolTasksCancel   — gates Tasks_Abort RPC + Abort from the Tasks
@@ -376,7 +376,7 @@ func (o Outcome) String() string {
 }
 
 // ToolUID builds a Cedar EntityUID for a tool reference, using the
-// kaneaz-harness "<server>__<tool>" convention. server may be empty
+// kenaz-harness "<server>__<tool>" convention. server may be empty
 // for first-party tools (websearch, bash) — those are stored as
 // "builtin__<tool>" so the entity space stays uniform.
 func ToolUID(server, tool string) cedar.EntityUID {
@@ -521,7 +521,7 @@ func BashCommandUID(pattern string) cedar.EntityUID {
 
 // FilesystemOpUID builds a Cedar EntityUID for the FilesystemOp family.
 // canonicalPath is the `filepath.Abs` + `filepath.Clean`'d path from
-// FR-017 (e.g. "/Users/alec/projects/kaneaz/main.go"). Callers MUST
+// FR-017 (e.g. "/Users/alec/projects/kenaz/main.go"). Callers MUST
 // canonicalise the path before invoking this constructor; the
 // constructor itself only enforces the universal "no empty / no
 // control / no leading .." invariant — it does NOT re-canonicalise so
@@ -537,7 +537,7 @@ func FilesystemOpUID(canonicalPath string) cedar.EntityUID {
 
 // PermissionToolUID builds a Cedar EntityUID for the Tool family in
 // the WP01 universal-permission shape. toolName is the fully qualified
-// "<server>__<tool>" name (e.g. "kaneaz__bash", "filesystem__write_file").
+// "<server>__<tool>" name (e.g. "kenaz__bash", "filesystem__write_file").
 // This constructor differs from the older ToolUID(server, tool) helper
 // — that one composes the id from two arguments and is kept for
 // backwards compatibility with the agent-kernel-graph chat-runner

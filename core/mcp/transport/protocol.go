@@ -25,7 +25,7 @@ const SupportedProtocolVersion = "2024-11-05"
 // placeholder until the build system threads through a real one;
 // servers treat this as informational.
 const (
-	ClientName    = "kaneaz-harness"
+	ClientName    = "kenaz-harness"
 	ClientVersion = "0.0.0"
 )
 

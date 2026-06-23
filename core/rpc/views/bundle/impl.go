@@ -76,7 +76,7 @@ func NewAPI(opts ...Option) *API {
 	return a
 }
 
-// fsReader resolves <dataDir>/kaneaz.lock (the canonical lockfile path
+// fsReader resolves <dataDir>/kenaz.lock (the canonical lockfile path
 // for v1; the resolver mission may move this once it lands).
 type fsReader struct {
 	path string
@@ -84,7 +84,7 @@ type fsReader struct {
 
 // NewFSReader returns a reader anchored at the harness data dir.
 func NewFSReader(dataDir string) Reader {
-	return &fsReader{path: filepath.Join(dataDir, "kaneaz.lock")}
+	return &fsReader{path: filepath.Join(dataDir, "kenaz.lock")}
 }
 
 func (r *fsReader) ReadLockfile() ([]byte, error) {
@@ -106,7 +106,7 @@ type fsWriter struct {
 
 // NewFSWriter returns a writer anchored at the harness data dir.
 func NewFSWriter(dataDir string) Writer {
-	return &fsWriter{path: filepath.Join(dataDir, "kaneaz.lock")}
+	return &fsWriter{path: filepath.Join(dataDir, "kenaz.lock")}
 }
 
 func (w *fsWriter) WriteLockfile(data []byte) error {
@@ -114,7 +114,7 @@ func (w *fsWriter) WriteLockfile(data []byte) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("bundle: mkdir %s: %w", dir, err)
 	}
-	tmp, err := os.CreateTemp(dir, ".kaneaz.lock.tmp-*")
+	tmp, err := os.CreateTemp(dir, ".kenaz.lock.tmp-*")
 	if err != nil {
 		return fmt.Errorf("bundle: create tmp lockfile: %w", err)
 	}
@@ -230,7 +230,7 @@ func lockedToBundle(lb lockfile.LockedBundle, cas CASLike, includeArtifacts bool
 
 // Install registers a bundle in the lockfile. Beta-scoped to the
 // local_path channel: req.Path must point at a directory that contains
-// a kaneaz.yaml manifest at its root. The manifest is parsed, validated,
+// a kenaz.yaml manifest at its root. The manifest is parsed, validated,
 // and converted into a LockedBundle entry that's appended to the
 // lockfile (replacing any existing entry of the same name). Artifact
 // bytes are NOT fetched into the CAS by this minimal install path —
@@ -250,7 +250,7 @@ func (a *API) Install(_ context.Context, req InstallRequest) (Bundle, error) {
 	if !filepath.IsAbs(req.Path) {
 		return Bundle{}, fmt.Errorf("bundle: install path %q must be absolute", req.Path)
 	}
-	manifestPath := filepath.Join(req.Path, "kaneaz.yaml")
+	manifestPath := filepath.Join(req.Path, "kenaz.yaml")
 	raw, err := os.ReadFile(manifestPath)
 	if err != nil {
 		return Bundle{}, fmt.Errorf("bundle: read manifest %s: %w", manifestPath, err)

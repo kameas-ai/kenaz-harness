@@ -1,5 +1,5 @@
 // Package bash provides a sandboxed wrapper around os/exec for the
-// built-in kaneaz__bash tool. Commands are executed via `bash -lc` so
+// built-in kenaz__bash tool. Commands are executed via `bash -lc` so
 // pipes, redirects, variable expansion, globbing, and command
 // substitution all work. Parse is retained for Cedar pattern derivation
 // from the first segment of a command chain.

@@ -52,8 +52,8 @@ func unmarshalResult(t *testing.T, raw json.RawMessage) callResult {
 func TestToolMetadata(t *testing.T) {
 	t.Parallel()
 	tool := New(Options{SandboxRoot: t.TempDir()})
-	if got := tool.Name(); got != "kaneaz__bash" {
-		t.Errorf("Name = %q, want kaneaz__bash", got)
+	if got := tool.Name(); got != "kenaz__bash" {
+		t.Errorf("Name = %q, want kenaz__bash", got)
 	}
 	if tool.Description() == "" {
 		t.Errorf("Description is empty")
@@ -737,10 +737,10 @@ func TestCallEnvVarExpansionWorks(t *testing.T) {
 		t.Skipf("echo missing: %v", err)
 	}
 	// Set a known env var in the current process; bash -lc inherits env.
-	t.Setenv("KANEAZ_TEST_VAR", "expanded_value")
+	t.Setenv("KENAZ_TEST_VAR", "expanded_value")
 	tool, _ := newTool(t)
 	raw, err := tool.Call(context.Background(), mustMarshal(t, callArgs{
-		Command: `echo $KANEAZ_TEST_VAR`,
+		Command: `echo $KENAZ_TEST_VAR`,
 	}))
 	if err != nil {
 		t.Fatalf("Call: %v", err)

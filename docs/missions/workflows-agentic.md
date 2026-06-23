@@ -4,7 +4,7 @@ Mission: `workflows-agentic-01KW2D3X`
 
 ## Background
 
-Kaneaz ships as a personal AI assistant with direct access to email, Slack,
+Kenaz ships as a personal AI assistant with direct access to email, Slack,
 calendar, and code. The most-requested power-user feature is the ability to
 encode repeated multi-step tasks as a runnable workflow — "pull my morning
 messages, summarise them, and push an OS notification at 07:00" — without

@@ -61,7 +61,7 @@ func (AllowAll) Evaluate(
 // dispatch call site with this; on Deny, return the PolicyDeniedError
 // to the caller so the frontend can surface the denial.
 //
-// server / tool follow the kaneaz-harness "<server>__<tool>" naming;
+// server / tool follow the kenaz-harness "<server>__<tool>" naming;
 // pass server="" for first-party tools.
 func CheckTool(ctx context.Context, g Gate, server, tool string) error {
 	if g == nil {

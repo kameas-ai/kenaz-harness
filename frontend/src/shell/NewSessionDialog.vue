@@ -211,7 +211,7 @@ async function onSubmit() {
     // carry these fields yet.
     try {
       window.localStorage.setItem(
-        `kaneaz.session.config.${session.id}`,
+        `kenaz.session.config.${session.id}`,
         JSON.stringify({
           providerId: selected.value.providerId,
           modelId: selected.value.modelId,

@@ -34,29 +34,29 @@ describe('shortcuts/platform', () => {
   afterEach(() => {
     // Clean up localStorage override.
     if (typeof localStorage !== 'undefined') {
-      localStorage.removeItem('kaneaz_shortcut_platform');
+      localStorage.removeItem('kenaz_shortcut_platform');
     }
     _resetPlatformCache();
   });
 
   describe('detectPlatform', () => {
     it('returns mac/win/linux via localStorage override', () => {
-      localStorage.setItem('kaneaz_shortcut_platform', 'mac');
+      localStorage.setItem('kenaz_shortcut_platform', 'mac');
       expect(detectPlatform()).toBe('mac');
 
       _resetPlatformCache();
-      localStorage.setItem('kaneaz_shortcut_platform', 'win');
+      localStorage.setItem('kenaz_shortcut_platform', 'win');
       expect(detectPlatform()).toBe('win');
 
       _resetPlatformCache();
-      localStorage.setItem('kaneaz_shortcut_platform', 'linux');
+      localStorage.setItem('kenaz_shortcut_platform', 'linux');
       expect(detectPlatform()).toBe('linux');
     });
   });
 
   describe('toCanonical — mac platform', () => {
     beforeEach(() => {
-      localStorage.setItem('kaneaz_shortcut_platform', 'mac');
+      localStorage.setItem('kenaz_shortcut_platform', 'mac');
     });
 
     it('Cmd+K from metaKey + k', () => {
@@ -87,7 +87,7 @@ describe('shortcuts/platform', () => {
 
   describe('toCanonical — win platform', () => {
     beforeEach(() => {
-      localStorage.setItem('kaneaz_shortcut_platform', 'win');
+      localStorage.setItem('kenaz_shortcut_platform', 'win');
     });
 
     it('Cmd+K from ctrlKey + k on Win', () => {
@@ -105,7 +105,7 @@ describe('shortcuts/platform', () => {
 
   describe('matchesEvent — mac platform', () => {
     beforeEach(() => {
-      localStorage.setItem('kaneaz_shortcut_platform', 'mac');
+      localStorage.setItem('kenaz_shortcut_platform', 'mac');
     });
 
     it('Cmd+K matches metaKey+k on Mac', () => {
@@ -127,7 +127,7 @@ describe('shortcuts/platform', () => {
 
   describe('matchesEvent — win platform', () => {
     beforeEach(() => {
-      localStorage.setItem('kaneaz_shortcut_platform', 'win');
+      localStorage.setItem('kenaz_shortcut_platform', 'win');
     });
 
     it('Cmd+K matches ctrlKey+k on Win', () => {
@@ -141,7 +141,7 @@ describe('shortcuts/platform', () => {
 
   describe('formatBinding — mac platform', () => {
     beforeEach(() => {
-      localStorage.setItem('kaneaz_shortcut_platform', 'mac');
+      localStorage.setItem('kenaz_shortcut_platform', 'mac');
     });
 
     it('Cmd+Enter → ⌘⏎', () => {
@@ -163,7 +163,7 @@ describe('shortcuts/platform', () => {
 
   describe('formatBinding — win platform', () => {
     beforeEach(() => {
-      localStorage.setItem('kaneaz_shortcut_platform', 'win');
+      localStorage.setItem('kenaz_shortcut_platform', 'win');
     });
 
     it('Cmd+Enter → Ctrl+Enter', () => {

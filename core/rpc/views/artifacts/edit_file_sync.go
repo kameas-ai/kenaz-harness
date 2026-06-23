@@ -1,7 +1,7 @@
 // edit_file_sync.go implements the edit-file artifact sync pipeline for
 // mission edit-file-artifact-sync-01KQ8TD5. The feature is gated behind
 // HARNESS_EDIT_FILE_ARTIFACT_SYNC=on (WP04). When active, every
-// kaneaz__edit_file tool call is recognised by the sink and a post-edit
+// kenaz__edit_file tool call is recognised by the sink and a post-edit
 // snapshot of the file is captured as an artifact with AbsolutePath set
 // in the SourceRef.
 //
@@ -44,7 +44,7 @@ import (
 
 // editFileSyncTracer is the instrumentation library name used for all
 // spans emitted by the edit-file sync pipeline (WP06).
-const editFileSyncTracerName = "kaneaz-harness/artifacts/edit-file-sync"
+const editFileSyncTracerName = "kenaz-harness/artifacts/edit-file-sync"
 
 // envEditFileArtifactSync is the primary feature-gate env-var for the
 // edit-file artifact sync feature (WP04).
@@ -138,10 +138,10 @@ func (b *CoalesceBuffer) Drop(sessionID string) {
 }
 
 // ExtractEditFilePath parses toolArgs and returns the canonical
-// absolute path from a kaneaz__edit_file call. Returns "" when
+// absolute path from a kenaz__edit_file call. Returns "" when
 // toolName is not an edit_file variant or args are unparseable.
 //
-// Recognised suffixes: "__edit_file" (kaneaz built-in).
+// Recognised suffixes: "__edit_file" (kenaz built-in).
 func ExtractEditFilePath(toolName, toolArgs string) string {
 	if toolName == "" || toolArgs == "" {
 		return ""

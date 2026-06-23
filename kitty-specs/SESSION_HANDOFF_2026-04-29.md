@@ -17,13 +17,13 @@ d2aa7f5 spec: flesh out save-artifact-builtin mission
 
 ### Mission: `save-artifact-builtin-01KQCZ4C` — COMPLETE
 
-Third in-binary tool (`kaneaz__save_artifact`) sitting alongside `kaneaz__web_search` and `kaneaz__bash`. Models can save deliverables straight to the Artifacts tab in one call: `(title, content[, mime_type])` → `artifact_id`. No MCP filesystem recipe required, default ON.
+Third in-binary tool (`kenaz__save_artifact`) sitting alongside `kenaz__web_search` and `kenaz__bash`. Models can save deliverables straight to the Artifacts tab in one call: `(title, content[, mime_type])` → `artifact_id`. No MCP filesystem recipe required, default ON.
 
 - `core/tools/saveartifact/` — new package; `toolloop.BuiltinTool` impl with full validation matrix (oversize, invalid args, no-session, capture failure, disabled-short-circuit).
 - `core/toolloop/context.go` — session-id context plumbing (`WithSessionID` / `SessionIDFromContext`) so future built-ins can pull session id without growing the `MCPPool.Call` signature.
 - `core/rpc/views/agentgraph/chat/kernel_tool_adapter.go` — stuffs session id into ctx just before `pool.Call`; tools that don't read it pay nothing.
 - Settings: `SaveArtifactDisabled` (inverted, default ON, mirrors `AutoCaptureCodeBlocksDisabled`); full `Load*`/`Save*` chain on both `FileStore` and `memoryStore`; `Settings_Get/SetSaveArtifactEnabled` bindings; `harnessClient.ts` typed methods.
-- Frontend: third toggle row in `KaneazToolsPanel.vue` (default ON state).
+- Frontend: third toggle row in `KenazToolsPanel.vue` (default ON state).
 - Spec at `kitty-specs/save-artifact-builtin-01KQCZ4C/spec.md` (13 FRs, 3 NFRs, 6 constraints, 4 locked Qs).
 
 ### Mission: `mcp-server-install-01KQ8TDP` — PARTIAL (3 of 10 WPs)

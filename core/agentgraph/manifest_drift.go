@@ -108,6 +108,24 @@ func getLiveManifestVersionMap() map[string]string {
 	return liveManifestVersionMap
 }
 
+// grandfatheredFingerprints maps a node kind to the set of pre-rename
+// fingerprints that are behaviorally equivalent to the current live
+// fingerprint and must NOT register as drift. The kaneaz->kenaz tool-name
+// rename changed the embedded tool-name string (an attr default) for these
+// kinds, shifting their manifest fingerprint without changing behavior; the
+// manifest_version was intentionally left unchanged. Without this allowance,
+// graphs authored before the rename would warn — and, in block mode, refuse
+// to run — over a pure string fix. Each entry is a one-time, fixed-value
+// grandfather; genuine future fingerprint changes still surface as drift.
+var grandfatheredFingerprints = map[string]map[string]bool{
+	"sleep": {
+		"5d12fa131e6f79f24f0c94aab65f5b63b333c0d71850194c4bd4d0052248cd0b": true,
+	},
+	"subagent_dispatch": {
+		"6fbbfb38f73499cf91a3625acef72e5c1156c4ac734ed37913ea070ddc392922": true,
+	},
+}
+
 // CheckManifestDrift returns one ManifestDriftWarning per node in g
 // whose live fingerprint differs from the fingerprint recorded at author
 // time. Nodes with no provenance row (pre-migration or never-saved) are
@@ -148,6 +166,10 @@ func CheckManifestDrift(g Graph, provenanceRows []NodeProvenance) []ManifestDrif
 
 		if liveFP == prov.FingerprintAtAuthor {
 			continue // no drift
+		}
+
+		if grandfatheredFingerprints[kindStr][prov.FingerprintAtAuthor] {
+			continue // behavior-neutral pre-rename fingerprint; not drift
 		}
 
 		liveVersion := liveVersions[kindStr]

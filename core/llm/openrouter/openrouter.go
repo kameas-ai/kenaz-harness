@@ -47,7 +47,7 @@ const (
 	defaultEndpoint    = "https://openrouter.ai/api/v1/chat/completions"
 	defaultModelsURL   = "https://openrouter.ai/api/v1/models"
 	defaultReferer     = "https://github.com/kameas-ai/kenaz-harness"
-	defaultAppTitle    = "kaneaz-harness"
+	defaultAppTitle    = "kenaz-harness"
 	errorBodyByteLimit = 4096
 )
 
@@ -77,7 +77,7 @@ func WithEndpoint(u string) Option {
 }
 
 // WithReferer overrides the HTTP-Referer ranking header value. By
-// default the adapter advertises the kaneaz-harness GitHub URL.
+// default the adapter advertises the kenaz-harness GitHub URL.
 func WithReferer(s string) Option {
 	return func(a *Adapter) {
 		if s != "" {
@@ -87,7 +87,7 @@ func WithReferer(s string) Option {
 }
 
 // WithAppTitle overrides the X-Title ranking header value. By default
-// the adapter advertises "kaneaz-harness".
+// the adapter advertises "kenaz-harness".
 func WithAppTitle(s string) Option {
 	return func(a *Adapter) {
 		if s != "" {

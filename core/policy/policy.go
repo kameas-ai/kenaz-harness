@@ -1,4 +1,4 @@
-// Package policy is the public API surface for the kaneaz-harness policy
+// Package policy is the public API surface for the kenaz-harness policy
 // engine. Every consumer that takes a policy-relevant action (LLM call,
 // MCP install, A2A peer dial, bundle fetch, scheduler dispatch, network
 // exposure) calls into the PolicyEngine returned by core/policy/engine.

@@ -152,7 +152,7 @@ func TestValidateAllowedDir_AllowsHomeChild(t *testing.T) {
 	// Create a subdir under the user's home, then clean it up. We
 	// can't rely on a particular user-owned subdir existing; this
 	// test asserts the policy (children allowed) using a fresh dir.
-	tmp, err := os.MkdirTemp(home, "kaneaz-test-*")
+	tmp, err := os.MkdirTemp(home, "kenaz-test-*")
 	if err != nil {
 		t.Skipf("cannot mkdir under home (%v), skipping", err)
 	}
@@ -179,7 +179,7 @@ func TestEnsureWorkspace_CreatesDirAndMarker(t *testing.T) {
 	if !info.IsDir() {
 		t.Errorf("workspace is not a directory")
 	}
-	marker := filepath.Join(got, ".kaneaz-workspace")
+	marker := filepath.Join(got, ".kenaz-workspace")
 	if _, err := os.Stat(marker); err != nil {
 		t.Errorf("marker file missing: %v", err)
 	}
@@ -193,7 +193,7 @@ func TestEnsureWorkspace_Idempotent(t *testing.T) {
 	}
 	// Touch the marker with sentinel content; a re-run must NOT
 	// overwrite it.
-	marker := filepath.Join(first, ".kaneaz-workspace")
+	marker := filepath.Join(first, ".kenaz-workspace")
 	const sentinel = "preserved"
 	if err := os.WriteFile(marker, []byte(sentinel), 0o600); err != nil {
 		t.Fatal(err)

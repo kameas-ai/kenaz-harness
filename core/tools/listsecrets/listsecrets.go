@@ -1,4 +1,4 @@
-// Package listsecrets implements the kaneaz__list_secrets built-in tool.
+// Package listsecrets implements the kenaz__list_secrets built-in tool.
 //
 // list_secrets is the model's only path to discover which @secret:
 // references are available in the current session. It NEVER returns
@@ -23,7 +23,7 @@ import (
 
 const (
 	// ToolName is the namespaced tool identifier surfaced to the model.
-	ToolName = "kaneaz__list_secrets"
+	ToolName = "kenaz__list_secrets"
 
 	// ToolDescription is the model-facing description.
 	ToolDescription = "List the secret references this session is permitted to resolve. " +

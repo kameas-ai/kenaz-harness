@@ -132,8 +132,8 @@ forbid (
     action in [Action::"file_read", Action::"file_write"],
     resource is Filesystem
 ) when {
-    resource like Filesystem::"*/kaneaz-harness/data.db*" ||
-    resource like Filesystem::"*/kaneaz-harness/keychain*"
+    resource like Filesystem::"*/kenaz-harness/data.db*" ||
+    resource like Filesystem::"*/kenaz-harness/keychain*"
 };
 
 // --- end of recommended forbids -------------------------------------

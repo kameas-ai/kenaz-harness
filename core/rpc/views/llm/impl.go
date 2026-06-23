@@ -552,7 +552,7 @@ func (a *API) buildMessages(ctx context.Context, sessionID, model, kind string) 
 	if a.history == nil || sessionID == "" {
 		return []corellm.Message{
 			corellm.NewTextMessage(corellm.RoleUser,
-				"Hello from the kaneaz-harness demo. Reply with a one-sentence greeting."),
+				"Hello from the kenaz-harness demo. Reply with a one-sentence greeting."),
 		}, nil
 	}
 	stored, err := a.history.ListMessages(ctx, sessionID)

@@ -40,12 +40,12 @@ import (
 // queries for the hot path.
 type Backend struct {
 	// PackagePrefix is the Rego package prefix the lowering pipeline
-	// uses, e.g. "kaneaz.policy". Defaults to "kaneaz.policy".
+	// uses, e.g. "kenaz.policy". Defaults to "kenaz.policy".
 	PackagePrefix string
 }
 
 // New constructs an OPA-backed Backend.
-func New() *Backend { return &Backend{PackagePrefix: "kaneaz.policy"} }
+func New() *Backend { return &Backend{PackagePrefix: "kenaz.policy"} }
 
 // Name implements engine.Backend.
 func (b *Backend) Name() string { return "opa" }

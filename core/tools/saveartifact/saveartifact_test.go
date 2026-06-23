@@ -280,8 +280,8 @@ func TestTool_NameAndDescription(t *testing.T) {
 	if tool.Name() != ToolName {
 		t.Errorf("Name() = %q, want %q", tool.Name(), ToolName)
 	}
-	if !strings.HasPrefix(tool.Name(), "kaneaz__") {
-		t.Errorf("Name() = %q, must have kaneaz__ prefix", tool.Name())
+	if !strings.HasPrefix(tool.Name(), "kenaz__") {
+		t.Errorf("Name() = %q, must have kenaz__ prefix", tool.Name())
 	}
 	if tool.Description() == "" {
 		t.Error("Description() empty")

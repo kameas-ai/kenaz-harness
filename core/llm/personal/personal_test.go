@@ -14,7 +14,7 @@ import (
 func newTempStore(t *testing.T) *FileStore {
 	t.Helper()
 	dir := t.TempDir()
-	s, err := NewFileStore(filepath.Join(dir, "kaneaz-harness", "providers.json"))
+	s, err := NewFileStore(filepath.Join(dir, "kenaz-harness", "providers.json"))
 	if err != nil {
 		t.Fatalf("NewFileStore: %v", err)
 	}
@@ -28,7 +28,7 @@ func keychainProfile(id string) llm.ProviderProfile {
 		Model: "claude-sonnet",
 		Cred: llm.CredentialReference{
 			Kind:    "keychain",
-			Locator: "kaneaz-harness/" + id,
+			Locator: "kenaz-harness/" + id,
 		},
 	}
 }
@@ -141,7 +141,7 @@ func TestFileStore_RejectsInvalidProfile(t *testing.T) {
 
 func TestFileStore_PersistsAcrossInstances(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, "kaneaz-harness", "providers.json")
+	path := filepath.Join(dir, "kenaz-harness", "providers.json")
 	s1, err := NewFileStore(path)
 	if err != nil {
 		t.Fatalf("NewFileStore: %v", err)
@@ -181,7 +181,7 @@ func TestFileStore_FileMode0600(t *testing.T) {
 
 func TestFileStore_EmptyFileTreatedAsEmpty(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, "kaneaz-harness", "providers.json")
+	path := filepath.Join(dir, "kenaz-harness", "providers.json")
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
@@ -203,7 +203,7 @@ func TestFileStore_EmptyFileTreatedAsEmpty(t *testing.T) {
 
 func TestFileStore_CorruptFile(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, "kaneaz-harness", "providers.json")
+	path := filepath.Join(dir, "kenaz-harness", "providers.json")
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
@@ -225,7 +225,7 @@ func TestDefaultPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DefaultPath: %v", err)
 	}
-	if !strings.HasSuffix(got, filepath.Join("kaneaz-harness", "providers.json")) {
+	if !strings.HasSuffix(got, filepath.Join("kenaz-harness", "providers.json")) {
 		t.Fatalf("unexpected path %q", got)
 	}
 }

@@ -62,7 +62,7 @@ type Settings struct {
 	BashEnabled bool `json:"bashEnabled,omitempty"`
 
 	// SaveArtifactDisabled is the inverted-form persisted bit for the
-	// kaneaz__save_artifact built-in. Default ON (zero-value Disabled
+	// kenaz__save_artifact built-in. Default ON (zero-value Disabled
 	// → tool enabled) — saving deliverables is a low-risk primitive
 	// that should work on first launch without setup. Mirrors the
 	// AutoCaptureCodeBlocksDisabled pattern. Read via the
@@ -206,7 +206,7 @@ type Settings struct {
 	KeyboardShortcutsPreset string `json:"keyboardShortcutsPreset,omitempty"`
 
 	// FSRequestAccessDisabled is the inverted persisted bit for the
-	// kaneaz__request_filesystem_access built-in. Default ON (zero-value
+	// kenaz__request_filesystem_access built-in. Default ON (zero-value
 	// Disabled → tool enabled) so users can expand filesystem access
 	// from the first session without any setup. Read via the
 	// FSRequestAccessEnabled() accessor; never read directly.
@@ -280,22 +280,22 @@ type Settings struct {
 	// ── Builtin filesystem tool dials (builtin-filesystem-tools-01KR3N4P) ──
 
 	// FSReadDisabled is the inverted persisted bit for the read-family
-	// builtin filesystem tools (kaneaz__read_file, kaneaz__list_dir,
-	// kaneaz__glob, kaneaz__grep, kaneaz__list_open_worklist). Default OFF
+	// builtin filesystem tools (kenaz__read_file, kenaz__list_dir,
+	// kenaz__glob, kenaz__grep, kenaz__list_open_worklist). Default OFF
 	// (zero-value Disabled → tools disabled) — the user opts in from the
 	// Tools panel (WP06). Read via the FSReadEnabled() accessor; never
 	// read directly.
 	FSReadDisabled bool `json:"fsReadDisabled,omitempty"`
 
 	// FSWriteDisabled is the inverted persisted bit for the write-family
-	// builtin filesystem tools (kaneaz__write_file, kaneaz__edit_file).
+	// builtin filesystem tools (kenaz__write_file, kenaz__edit_file).
 	// Default OFF (zero-value Disabled → tools disabled) — the user opts
 	// in from the Tools panel (WP06). Read via the FSWriteEnabled()
 	// accessor; never read directly.
 	FSWriteDisabled bool `json:"fsWriteDisabled,omitempty"`
 
 	// TodoDisabled is the inverted persisted bit for the
-	// kaneaz__todo_write builtin tool
+	// kenaz__todo_write builtin tool
 	// (builtin-tools-search-and-elicitation-01KZNP3D WP05/WP07).
 	// Default OFF (zero-value Disabled → tool disabled) — the user opts
 	// in from the Tools panel. Read via the TodoEnabled() accessor;
@@ -552,7 +552,7 @@ const DefaultMaxAgentTurns = 25
 // active. Default true on a fresh install (zero-value Disabled).
 func (s Settings) AutoCaptureCodeBlocks() bool { return !s.AutoCaptureCodeBlocksDisabled }
 
-// SaveArtifactEnabled reports whether the kaneaz__save_artifact
+// SaveArtifactEnabled reports whether the kenaz__save_artifact
 // built-in is enabled. Default true on a fresh install (zero-value
 // Disabled). Inverted on the wire so the JSON shape matches the
 // storage contract.
@@ -562,7 +562,7 @@ func (s Settings) SaveArtifactEnabled() bool { return !s.SaveArtifactDisabled }
 // active. Default true on a fresh install.
 func (s Settings) AutoCaptureToolOutputs() bool { return !s.AutoCaptureToolOutputsDisabled }
 
-// FSRequestAccessEnabled reports whether kaneaz__request_filesystem_access
+// FSRequestAccessEnabled reports whether kenaz__request_filesystem_access
 // is enabled. Default true on a fresh install (zero-value Disabled).
 func (s Settings) FSRequestAccessEnabled() bool { return !s.FSRequestAccessDisabled }
 
@@ -804,7 +804,7 @@ func (s Settings) FSReadEnabled() bool { return !s.FSReadDisabled }
 // (builtin-filesystem-tools-01KR3N4P)
 func (s Settings) FSWriteEnabled() bool { return !s.FSWriteDisabled }
 
-// TodoEnabled reports whether the kaneaz__todo_write builtin tool is
+// TodoEnabled reports whether the kenaz__todo_write builtin tool is
 // enabled. Default false on a fresh install (zero-value Disabled →
 // tool off). The user opts in from the Tools panel.
 // (builtin-tools-search-and-elicitation-01KZNP3D WP07)
@@ -865,7 +865,7 @@ type WindowSize struct {
 }
 
 // SettingsStore is the persistence interface (default impl: single
-// JSON file at $USER_CONFIG_DIR/kaneaz-harness/settings.json).
+// JSON file at $USER_CONFIG_DIR/kenaz-harness/settings.json).
 type SettingsStore interface {
 	LoadAll() (Settings, error)
 	SaveAll(Settings) error
@@ -899,7 +899,7 @@ type SettingsStore interface {
 	LoadBash() (bool, error)
 	SaveBash(enabled bool) error
 	// LoadSaveArtifactEnabled / SaveSaveArtifactEnabled expose the
-	// kaneaz__save_artifact built-in opt-in. Default true (on) — saving
+	// kenaz__save_artifact built-in opt-in. Default true (on) — saving
 	// deliverables is a low-risk primitive that should work on first
 	// launch. The toolloop's EnabledFilter consults the predicate
 	// (which calls LoadSaveArtifactEnabled) on every Run boundary so a
@@ -946,7 +946,7 @@ type SettingsStore interface {
 	SaveCedarStrictCredentialMode(enabled bool) error
 
 	// LoadFSRequestAccessEnabled / SaveFSRequestAccessEnabled expose
-	// the kaneaz__request_filesystem_access built-in opt-in. Default
+	// the kenaz__request_filesystem_access built-in opt-in. Default
 	// true (on) — requesting expanded filesystem access is a low-risk
 	// convenience that should work on a fresh install.
 	LoadFSRequestAccessEnabled() (bool, error)
@@ -1030,7 +1030,7 @@ type SettingsStore interface {
 	LoadFSWriteEnabled() (bool, error)
 	SaveFSWriteEnabled(enabled bool) error
 
-	// LoadTodoEnabled / SaveTodoEnabled expose the kaneaz__todo_write
+	// LoadTodoEnabled / SaveTodoEnabled expose the kenaz__todo_write
 	// builtin tool opt-in. Default false (tool off until the user enables
 	// it from the Tools panel). The toolloop's EnabledFilter consults this
 	// on every Run boundary so a toggle takes effect on the next chat turn.

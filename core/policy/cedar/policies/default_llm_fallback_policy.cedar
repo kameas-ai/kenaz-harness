@@ -1,4 +1,4 @@
-// kaneaz-harness default LLM fallback routing policy
+// kenaz-harness default LLM fallback routing policy
 // (model-fallback-routing-01NDFSEX04 WP03).
 //
 // Stance: default-allow. Any configured fallback chain may be used by

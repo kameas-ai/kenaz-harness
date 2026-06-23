@@ -14,8 +14,8 @@ attrs:
   name:
     type: string
     required: true
-    description: "Always kaneaz__sleep."
-    default: kaneaz__sleep
+    description: "Always kenaz__sleep."
+    default: kenaz__sleep
   seconds:
     type: int
     description: "Duration to sleep. Clamped to [1, 600]."

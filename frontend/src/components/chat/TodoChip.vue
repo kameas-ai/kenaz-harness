@@ -1,7 +1,7 @@
 <script setup lang="ts">
 /**
  * TodoChip — compact pill that appears in a chat message bubble when
- * the model invoked kaneaz__todo_write.
+ * the model invoked kenaz__todo_write.
  *
  * Shows a summary line ("N tasks · X done") and emits `open` when
  * clicked so the parent (MessageBubble) can mount the TodoSidePanel.

@@ -189,7 +189,7 @@ func (a *kernelToolAdapter) Call(ctx context.Context, call coreag.ToolCall) (cor
 	}
 
 	// Stuff the session ID into ctx so built-in tools that need it
-	// (kaneaz__save_artifact) can pull it out without a parameter.
+	// (kenaz__save_artifact) can pull it out without a parameter.
 	// Tools that don't read it pay nothing.
 	out, err := a.pool.Call(toolloop.WithSessionID(ctx, a.sessionID), server, tool, argsJSON)
 	if err != nil {

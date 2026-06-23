@@ -1,5 +1,5 @@
 // Package asktemplates resolves reusable elicitation templates for the
-// kaneaz__ask_user_question builtin tool
+// kenaz__ask_user_question builtin tool
 // (ask-user-question-interactive-01KZNP3G WP07).
 //
 // Templates live in two locations:

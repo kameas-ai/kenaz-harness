@@ -23,7 +23,7 @@ import (
 
 // ServiceName is the canonical service.name attribute the harness
 // emits on every signal. Pinned per FR-002.
-const ServiceName = "kaneaz-harness"
+const ServiceName = "kenaz-harness"
 
 // Config drives Init. Only DataDir + Storage are required; the rest
 // have safe defaults. WP02 will populate the SpanExporters /
@@ -338,7 +338,7 @@ func installSlogBridge(lp *sdklog.LoggerProvider, fallback *slog.Logger) {
 	if fileH == nil && fallback != nil {
 		fileH = fallback.Handler()
 	}
-	otelLogger := lp.Logger("kaneaz-harness/slog-bridge")
+	otelLogger := lp.Logger("kenaz-harness/slog-bridge")
 	bridge := NewSlogBridge(fileH, otelLogger)
 	logging.Replace(bridge)
 }

@@ -141,7 +141,7 @@ func main() {
 	api := rpc.New(c)
 
 	err = wails.Run(&options.App{
-		Title:  "kaneaz-harness",
+		Title:  "kenaz-harness",
 		Width:  1280,
 		Height: 800,
 		AssetServer: &assetserver.Options{

@@ -133,8 +133,8 @@ func TestSaveAndLoadRoundTrip(t *testing.T) {
 		Description:  "A test-only profile.",
 		Model:        "anthropic/claude-haiku-4-5",
 		AutonomyTier: autonomy.TierCautious,
-		AllowedTools: []string{"kaneaz__read_file", "kaneaz__grep"},
-		DeniedTools:  []string{"kaneaz__bash"},
+		AllowedTools: []string{"kenaz__read_file", "kenaz__grep"},
+		DeniedTools:  []string{"kenaz__bash"},
 		BudgetTokens: 30000,
 		BudgetTimeS:  120,
 		MergePolicy:  agents.MergePolicyConfirm,
@@ -181,8 +181,8 @@ func TestValidate_ToolInBothLists(t *testing.T) {
 		ID:           "test",
 		Name:         "Test",
 		Description:  "Test.",
-		AllowedTools: []string{"kaneaz__bash"},
-		DeniedTools:  []string{"kaneaz__bash"},
+		AllowedTools: []string{"kenaz__bash"},
+		DeniedTools:  []string{"kenaz__bash"},
 	}
 	if err := agents.Validate(p); err == nil {
 		t.Error("Validate: expected error for tool in both lists, got nil")

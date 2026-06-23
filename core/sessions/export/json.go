@@ -72,7 +72,7 @@ func renderJSON(
 ) ([]byte, error) {
 	meta := jsonMeta{
 		ExportFormatVersion: ExportFormatVersion,
-		HarnessVersion:      "kaneaz-harness",
+		HarnessVersion:      "kenaz-harness",
 		ExportedAt:          now.UTC().Format(time.RFC3339),
 		SessionID:           sess.ID,
 		ExportFormat:        string(FormatJSON),

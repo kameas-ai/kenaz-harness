@@ -10,8 +10,8 @@
 #
 # Usage:
 #   ./scripts/sign-mac.sh                              # auto-detect .app
-#   ./scripts/sign-mac.sh build/bin/kaneaz-harness.app # explicit path
-#   NOTARIZE=1 NOTARY_PROFILE=kaneaz ./scripts/sign-mac.sh
+#   ./scripts/sign-mac.sh build/bin/kenaz-harness.app # explicit path
+#   NOTARIZE=1 NOTARY_PROFILE=kenaz ./scripts/sign-mac.sh
 #
 # Set IDENTITY to override the cert lookup:
 #   IDENTITY="Developer ID Application: Alec Feeman (TEAMID)" ./scripts/sign-mac.sh
@@ -68,7 +68,7 @@ spctl --assess --type execute --verbose=4 "$APP_PATH" || {
 }
 
 if [[ "${NOTARIZE:-0}" == "1" ]]; then
-  PROFILE="${NOTARY_PROFILE:-kaneaz}"
+  PROFILE="${NOTARY_PROFILE:-kenaz}"
   echo "→ Submitting to Apple notary service (profile=$PROFILE)"
 
   # Wails outputs the .app uncompressed; notary needs zip/dmg/pkg.
@@ -90,7 +90,7 @@ fi
 echo "✓ done: $APP_PATH"
 echo
 echo "If you haven't stored notary credentials yet:"
-echo "  xcrun notarytool store-credentials kaneaz \\"
+echo "  xcrun notarytool store-credentials kenaz \\"
 echo "    --apple-id alec@example.com \\"
 echo "    --team-id YOURTEAMID \\"
 echo "    --password APP-SPECIFIC-PASSWORD"

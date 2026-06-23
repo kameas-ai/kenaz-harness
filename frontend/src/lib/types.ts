@@ -1971,7 +1971,7 @@ export interface DryRunResult {
 
 /**
  * RecipeCategory groups recipes in the Tools panel. Drives the icon
- * mapping in `KaneazToolsPanel.vue` (search→Search, filesystem→Folder,
+ * mapping in `KenazToolsPanel.vue` (search→Search, filesystem→Folder,
  * memory→Brain, fetch→Globe, default→Wrench).
  */
 export type RecipeCategory =

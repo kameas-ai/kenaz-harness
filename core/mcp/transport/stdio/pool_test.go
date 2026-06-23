@@ -115,7 +115,7 @@ func TestPool_BadSpecDoesNotPoison(t *testing.T) {
 	defer cancel()
 	err := p.Open(ctx, []coremcp.ServerSpec{
 		{Name: "good", Transport: "stdio", Command: []string{bin}},
-		{Name: "bad", Transport: "stdio", Command: []string{"/nonexistent-binary-kaneaz-test"}},
+		{Name: "bad", Transport: "stdio", Command: []string{"/nonexistent-binary-kenaz-test"}},
 	})
 	if err == nil {
 		t.Fatalf("Open: expected partial failure, got nil")

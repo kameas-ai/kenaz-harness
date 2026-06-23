@@ -73,7 +73,7 @@ type ArtifactSourceRef struct {
 	// for display — path separators replaced).
 	Filename string `json:"filename,omitempty"`
 	// AbsolutePath is the canonical on-disk path when the artifact
-	// originated from a kaneaz__edit_file / kaneaz__write_file call
+	// originated from a kenaz__edit_file / kenaz__write_file call
 	// (edit-file-artifact-sync-01KQ8TD5 WP01). Empty for all other
 	// sources. When set, the Artifacts tab can render a "Show in Finder /
 	// Open in editor" affordance pointing at the live file on disk.
@@ -92,7 +92,7 @@ type ArtifactSourceRef struct {
 }
 
 // ArtifactVersion is one entry in the append-only revision history for
-// an artifact. Written by kaneaz__update_artifact; the parent Artifact
+// an artifact. Written by kenaz__update_artifact; the parent Artifact
 // row is never mutated. The actual bytes live in the shared CAS at
 // <DataDir>/media/<ContentHash> — same location as the original capture.
 //

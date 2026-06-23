@@ -326,7 +326,7 @@ func (a *API) WithAttachmentAdder(adder AttachmentAdder) *API {
 //
 // The resolved content order is: root file first, then always: files in
 // declared order. On-demand files (Others) are NOT included — they are
-// reachable via kaneaz__read_context_file at conversation time.
+// reachable via kenaz__read_context_file at conversation time.
 func (a *API) AttachModule(ctx context.Context, scopeKind, scopeID, dirPath string) (ModuleAttachment, error) {
 	if a == nil || a.lib == nil {
 		return ModuleAttachment{}, ErrLibraryUnavailable

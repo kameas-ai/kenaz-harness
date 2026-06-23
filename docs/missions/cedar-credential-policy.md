@@ -125,7 +125,7 @@ snippet to `<DataDir>/policy/` and calls `Engine.Reload()`.
 9. Test credential access: open Settings → Credentials, attempt to
    **Export** a credential. The modal should deny immediately
    (embedded `manual_export` forbid).
-10. Test builtin tool dispatch (`kaneaz__bash`). Should be silent
+10. Test builtin tool dispatch (`kenaz__bash`). Should be silent
     (pre-permitted by `default_tool_policy.cedar`).
 11. Test an MCP tool on first launch (`filesystem__read_file`).
     A prompt should appear. Pick Allow Always. Verify the grant file.
@@ -199,8 +199,8 @@ Run this checklist on a clean data directory before tagging a release.
   Once; second boot is silent (transient grant). Pick Allow Always;
   subsequent boots are silent without prompting (Cedar policy written).
 
-- [ ] **10. Builtin tool (kaneaz__bash)**: silent Allow (embedded tool
-  policy permits `server_name == "kaneaz"`). No dialog.
+- [ ] **10. Builtin tool (kenaz__bash)**: silent Allow (embedded tool
+  policy permits `server_name == "kenaz"`). No dialog.
 
 - [ ] **11. MCP tool first call**: dialog appears for `filesystem__read_file`.
   Pick Allow Always. Grant file written. Second call silent.
@@ -214,7 +214,7 @@ Run this checklist on a clean data directory before tagging a release.
   Allow.
 
 - [ ] **14. PermissionMode=paranoid**: all families Deny unless explicitly
-  permitted. Builtin kaneaz tools still Allow (embedded default permits
+  permitted. Builtin kenaz tools still Allow (embedded default permits
   them). Reset to permissive after confirming.
 
 ---

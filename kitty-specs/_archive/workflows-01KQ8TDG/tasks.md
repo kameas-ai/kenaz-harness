@@ -218,8 +218,8 @@ Parallelism notes:
 - WP11 lands last (touches the audit kinds + cedar policies that the integration tests assert on).
 
 ### Critical Files for Implementation
-- /Users/alecfeeman/PycharmProjects/kaneaz-harness/core/workflows/engine.go (new — central executor)
-- /Users/alecfeeman/PycharmProjects/kaneaz-harness/core/workflows/loader.go (new — YAML schema + validator)
-- /Users/alecfeeman/PycharmProjects/kaneaz-harness/core/rpc/views/workflows/api.go (new — RPC surface bridging frontend to engine)
-- /Users/alecfeeman/PycharmProjects/kaneaz-harness/core/workflows/dispatch.go (new — inline_run vs runSpawned + rerun_policy)
-- /Users/alecfeeman/PycharmProjects/kaneaz-harness/frontend/src/views/workflows/WorkflowEditor.vue (new — primary author UX)
+- /Users/alecfeeman/PycharmProjects/kenaz-harness/core/workflows/engine.go (new — central executor)
+- /Users/alecfeeman/PycharmProjects/kenaz-harness/core/workflows/loader.go (new — YAML schema + validator)
+- /Users/alecfeeman/PycharmProjects/kenaz-harness/core/rpc/views/workflows/api.go (new — RPC surface bridging frontend to engine)
+- /Users/alecfeeman/PycharmProjects/kenaz-harness/core/workflows/dispatch.go (new — inline_run vs runSpawned + rerun_policy)
+- /Users/alecfeeman/PycharmProjects/kenaz-harness/frontend/src/views/workflows/WorkflowEditor.vue (new — primary author UX)

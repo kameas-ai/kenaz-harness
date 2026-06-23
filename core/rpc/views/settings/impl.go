@@ -1,7 +1,7 @@
 // Package settings's impl provides a JSON-file backed SettingsAPI +
 // SettingsStore.
 //
-// Persistence: $USER_CONFIG_DIR/kaneaz-harness/settings.json (privacy
+// Persistence: $USER_CONFIG_DIR/kenaz-harness/settings.json (privacy
 // CI invariant #5). Schema version + lastRoute + theme are the
 // canonical persisted fields; window size + accent are also captured
 // so the chassis can restore its full first-paint state.
@@ -24,6 +24,7 @@ import (
 
 	"github.com/kameas-ai/kenaz-harness/core/autonomy"
 	"github.com/kameas-ai/kenaz-harness/core/compaction"
+	"github.com/kameas-ai/kenaz-harness/core/paths"
 )
 
 // FileStore is a SettingsStore backed by a single JSON file. Safe for
@@ -34,18 +35,19 @@ type FileStore struct {
 	path string
 }
 
-// NewFileStore returns a store rooted at <userConfigDir>/kaneaz-harness/.
+// NewFileStore returns a store rooted at <userConfigDir>/kenaz-harness/.
 // The directory is created on first write.
 func NewFileStore(userConfigDir string) (*FileStore, error) {
 	if userConfigDir == "" {
 		return nil, errors.New("settings: empty user config dir")
 	}
-	dir := filepath.Join(userConfigDir, "kaneaz-harness")
+	dir := filepath.Join(userConfigDir, "kenaz-harness")
 	return &FileStore{path: filepath.Join(dir, "settings.json")}, nil
 }
 
 // NewFileStoreFromEnv resolves USER_CONFIG_DIR via os.UserConfigDir.
 func NewFileStoreFromEnv() (*FileStore, error) {
+	paths.MigrateLegacyConfigDir()
 	dir, err := os.UserConfigDir()
 	if err != nil {
 		return nil, fmt.Errorf("settings: user config dir: %w", err)
@@ -429,7 +431,7 @@ func (s *FileStore) SaveBash(enabled bool) error {
 	return s.saveLocked(got)
 }
 
-// LoadSaveArtifactEnabled returns the kaneaz__save_artifact built-in
+// LoadSaveArtifactEnabled returns the kenaz__save_artifact built-in
 // opt-in. Default true (on) — wire shape persists the inverted
 // SaveArtifactDisabled bit so a fresh install (zero-value across the
 // board) matches "tool enabled".
@@ -632,7 +634,7 @@ func (s *FileStore) SaveCedarStrictCredentialMode(enabled bool) error {
 	return s.saveLocked(got)
 }
 
-// LoadFSRequestAccessEnabled returns the kaneaz__request_filesystem_access
+// LoadFSRequestAccessEnabled returns the kenaz__request_filesystem_access
 // built-in opt-in. Default true (on) — zero-value FSRequestAccessDisabled
 // means enabled. Errors return the safe default so the tool keeps working
 // even if the settings file is unreadable.
@@ -824,7 +826,7 @@ func (s *FileStore) SaveFSWriteEnabled(enabled bool) error {
 
 // ── Todo tool FileStore accessors (builtin-tools-search-and-elicitation-01KZNP3D) ──
 
-// LoadTodoEnabled returns the kaneaz__todo_write opt-in.
+// LoadTodoEnabled returns the kenaz__todo_write opt-in.
 // Default false (tool off until the user enables it). Errors return the
 // safe default (false) so the tool remains disabled when the settings
 // file is unreadable.
@@ -836,7 +838,7 @@ func (s *FileStore) LoadTodoEnabled() (bool, error) {
 	return got.TodoEnabled(), nil
 }
 
-// SaveTodoEnabled persists the kaneaz__todo_write opt-in.
+// SaveTodoEnabled persists the kenaz__todo_write opt-in.
 // Persists as the inverted TodoDisabled bit.
 func (s *FileStore) SaveTodoEnabled(enabled bool) error {
 	s.mu.Lock()

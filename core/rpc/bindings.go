@@ -574,7 +574,7 @@ func (b *Bindings) Contexts_ContextExport(teamID, format string) (contextsview.C
 // The returned ModuleAttachment contains the resolved content (root file +
 // always:-listed files) and is persisted as a context_attachments row so
 // it participates in the existing global→project→session injection order.
-// On-demand files in the module are available via kaneaz__read_context_file.
+// On-demand files in the module are available via kenaz__read_context_file.
 //
 // (unified-context-artifacts-01NCTXU01)
 func (b *Bindings) Contexts_AttachModule(scopeKind, scopeID, dirPath string) (contextsview.ModuleAttachment, error) {
@@ -779,7 +779,7 @@ func (b *Bindings) Settings_SetBash(enabled bool) error {
 	return b.storeFn().SaveBash(enabled)
 }
 
-// Settings_GetSaveArtifactEnabled exposes the kaneaz__save_artifact
+// Settings_GetSaveArtifactEnabled exposes the kenaz__save_artifact
 // built-in opt-in flag. Default true (on) — saving deliverables is a
 // low-risk primitive that should work on a fresh install. Surfaced as a
 // toggle row in the Tools panel; toolloop reads this on every Run
@@ -801,7 +801,7 @@ func (b *Bindings) Settings_SetSaveArtifactEnabled(enabled bool) error {
 }
 
 // Settings_GetFSRequestAccessEnabled exposes the
-// kaneaz__request_filesystem_access built-in opt-in flag (default true).
+// kenaz__request_filesystem_access built-in opt-in flag (default true).
 // The toolloop EnabledFilter reads this on every Run boundary so toggling
 // takes effect on the next chat.
 func (b *Bindings) Settings_GetFSRequestAccessEnabled() (bool, error) {
@@ -860,7 +860,7 @@ func (b *Bindings) Settings_SetFSWriteEnabled(enabled bool) error {
 
 // ── Todo tool dial (builtin-tools-search-and-elicitation-01KZNP3D WP07) ──
 
-// Settings_GetTodoEnabled exposes the kaneaz__todo_write builtin opt-in
+// Settings_GetTodoEnabled exposes the kenaz__todo_write builtin opt-in
 // (default false — tool off until the user enables it from the Tools panel).
 // The toolloop's EnabledFilter consults this on every Run boundary so a
 // toggle takes effect on the next chat turn.
@@ -871,7 +871,7 @@ func (b *Bindings) Settings_GetTodoEnabled() (bool, error) {
 	return b.storeFn().LoadTodoEnabled()
 }
 
-// Settings_SetTodoEnabled persists the kaneaz__todo_write opt-in flag.
+// Settings_SetTodoEnabled persists the kenaz__todo_write opt-in flag.
 func (b *Bindings) Settings_SetTodoEnabled(enabled bool) error {
 	if b.storeFn == nil {
 		return nil
@@ -1685,7 +1685,7 @@ func (b *Bindings) Tools_RecipeConfig(id string) (map[string]any, error) {
 }
 
 // Tools_RequestAdditionalAllowedDir is the Wails binding for the runtime
-// "expand filesystem access" flow. The model's kaneaz__request_filesystem_access
+// "expand filesystem access" flow. The model's kenaz__request_filesystem_access
 // built-in calls this via its delegate; it can also be called directly from
 // the frontend if a future UI surface needs it.
 //
@@ -1706,7 +1706,7 @@ func (b *Bindings) Tools_RequestAdditionalAllowedDir(recipeID, path, reason stri
 
 // ── shell escape (chat input `!cmd` feature) ──────────────────────────
 
-// BashExecResult mirrors the JSON the kaneaz__bash tool returns.
+// BashExecResult mirrors the JSON the kenaz__bash tool returns.
 // stdout/stderr are plain strings (UTF-8); the bash tool already caps
 // at 64 KiB per stream and signals truncation via the `Truncated` flag.
 type BashExecResult struct {
@@ -1716,7 +1716,7 @@ type BashExecResult struct {
 	Truncated bool   `json:"truncated"`
 }
 
-// Bash_Exec runs a single command line through the kaneaz__bash
+// Bash_Exec runs a single command line through the kenaz__bash
 // built-in tool and returns its result. Used by the chat input's
 // `!cmd` shell-escape — typing `!ls -la ~/Desktop` dispatches here
 // (not to the LLM) and the parent renders the result inline as a
@@ -1731,9 +1731,9 @@ func (b *Bindings) Bash_Exec(sessionID, command string) (BashExecResult, error) 
 	if !ok || holder.Builtins() == nil {
 		return BashExecResult{}, errors.New("rpc: bash tool registry not wired")
 	}
-	tool, ok := holder.Builtins().Lookup("kaneaz__bash")
+	tool, ok := holder.Builtins().Lookup("kenaz__bash")
 	if !ok {
-		return BashExecResult{}, errors.New("rpc: kaneaz__bash tool not registered (toggle on in Settings → Tools)")
+		return BashExecResult{}, errors.New("rpc: kenaz__bash tool not registered (toggle on in Settings → Tools)")
 	}
 	args, err := json.Marshal(struct {
 		Command string `json:"command"`
@@ -2336,7 +2336,7 @@ func (b *Bindings) Onboarding_ListStarters() ([]onboardingview.StarterSummary, e
 
 // Elicit_SubmitAnswer resolves a pending ask-user-question elicitation.
 // requestID was emitted on the "elicit:pending" broker topic when the
-// model called kaneaz__ask_user_question; answerJSON is the user's answer
+// model called kenaz__ask_user_question; answerJSON is the user's answer
 // (a JSON-encoded value matching the question kind), or null when
 // cancelled is true. The blocking OpenDialog call on the Go side returns
 // after this method resolves the pending channel.

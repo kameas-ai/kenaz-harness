@@ -14,8 +14,8 @@ attrs:
   name:
     type: string
     required: true
-    description: "Always kaneaz__subagent_dispatch."
-    default: kaneaz__subagent_dispatch
+    description: "Always kenaz__subagent_dispatch."
+    default: kenaz__subagent_dispatch
   profile:
     type: string
     required: true

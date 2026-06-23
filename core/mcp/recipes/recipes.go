@@ -115,7 +115,7 @@ type Recipe struct {
 	// the caller's existing allow/deny policy drives the verdict, exactly
 	// as before WP06. Recipe authors SHOULD list only tools whose default
 	// posture is NotApplicable (i.e. not already covered by a broad
-	// server-level Cedar permit rule); listing a builtin kaneaz tool here
+	// server-level Cedar permit rule); listing a builtin kenaz tool here
 	// has no effect because the default_tool_policy.cedar already allows
 	// them unconditionally.
 	//

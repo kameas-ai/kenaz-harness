@@ -253,7 +253,7 @@ const otherFamilyChoices = computed(() =>
 
 // Read the new-session-dialog's localStorage stash for this session,
 // if present. NewSessionDialog writes the user's chosen
-// (providerId, modelId) under "kaneaz.session.config.<id>" so we
+// (providerId, modelId) under "kenaz.session.config.<id>" so we
 // can honour cross-family choices that the mid-conversation switcher
 // would otherwise block.
 function readSessionConfig(sessionID: string): {
@@ -263,7 +263,7 @@ function readSessionConfig(sessionID: string): {
   if (!sessionID) return null;
   try {
     const raw = window.localStorage.getItem(
-      `kaneaz.session.config.${sessionID}`,
+      `kenaz.session.config.${sessionID}`,
     );
     if (!raw) return null;
     const parsed = JSON.parse(raw) as {
@@ -958,7 +958,7 @@ watch(sessionId, () => {
 }, { immediate: true });
 
 // Refresh the session artifact list when the LLM stream closes so that
-// tool-created artifacts (e.g. kaneaz__save_artifact) appear immediately
+// tool-created artifacts (e.g. kenaz__save_artifact) appear immediately
 // without requiring a manual navigation or session switch.
 useEventStream<{ session_id?: string }>('llm:stream-closed', (payload) => {
   if (payload?.session_id && payload.session_id !== sessionId.value) return;

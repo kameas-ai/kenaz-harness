@@ -1,4 +1,4 @@
-// Package bundle is the public façade of the kaneaz-harness bundle layer.
+// Package bundle is the public façade of the kenaz-harness bundle layer.
 //
 // It exposes the typed error sentinels referenced across every subpackage —
 // resolver, manifest, lockfile, cache, channels, and integrity. Sentinels are
@@ -48,8 +48,8 @@ var (
 // Deferred / unimplemented features (intentional v1 scope cuts).
 var (
 	// ErrNotImplementedV1x is returned by features deferred to v1.x — most
-	// notably the `kaneaz lock --resolve-conflicts` subcommand. The error
+	// notably the `kenaz lock --resolve-conflicts` subcommand. The error
 	// message points operators at the deferred command name so the gap is
 	// actionable rather than mysterious.
-	ErrNotImplementedV1x = errors.New("bundle: feature deferred to v1.x (e.g., `kaneaz lock --resolve-conflicts`)")
+	ErrNotImplementedV1x = errors.New("bundle: feature deferred to v1.x (e.g., `kenaz lock --resolve-conflicts`)")
 )

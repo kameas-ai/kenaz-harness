@@ -1,4 +1,4 @@
-// kaneaz-harness default policy bundle (agent-kernel-graph WP14).
+// kenaz-harness default policy bundle (agent-kernel-graph WP14).
 //
 // Stance: default-allow with logging. The harness is local-only,
 // single-user, privacy-first; the user opts in to fail-closed via

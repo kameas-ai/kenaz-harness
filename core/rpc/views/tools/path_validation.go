@@ -82,7 +82,7 @@ var allowOverrides = []string{
 // the first time EnsureWorkspace creates it. The marker lets a future
 // "Reset workspace" path identify which directory is harness-owned
 // without misidentifying a user's pre-existing folder.
-const workspaceMarkerName = ".kaneaz-workspace"
+const workspaceMarkerName = ".kenaz-workspace"
 
 // agentWorkspaceDirName is the conventional subdirectory under
 // dataDir that EnsureWorkspace materialises.
@@ -255,7 +255,7 @@ func matchesDenyRoot(clean, root string) bool {
 }
 
 // EnsureWorkspace creates <dataDir>/agent-workspace if it doesn't
-// already exist and drops a .kaneaz-workspace marker file at its
+// already exist and drops a .kenaz-workspace marker file at its
 // root the first time. Subsequent calls are idempotent: the marker
 // is left untouched and the existing directory is returned.
 //
@@ -283,7 +283,7 @@ func EnsureWorkspace(dataDir string) (string, error) {
 	}
 	if created {
 		marker := filepath.Join(workspace, workspaceMarkerName)
-		if err := os.WriteFile(marker, []byte("kaneaz harness agent workspace\n"), 0o600); err != nil {
+		if err := os.WriteFile(marker, []byte("kenaz harness agent workspace\n"), 0o600); err != nil {
 			return "", fmt.Errorf("tools: EnsureWorkspace: write marker %q: %w", marker, err)
 		}
 	}

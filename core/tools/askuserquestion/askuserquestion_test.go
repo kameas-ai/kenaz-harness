@@ -228,7 +228,7 @@ func TestCall_DelegateError_Other(t *testing.T) {
 
 func TestToolName(t *testing.T) {
 	tool := askuserquestion.New(askuserquestion.Options{})
-	if tool.Name() != "kaneaz__ask_user_question" {
+	if tool.Name() != "kenaz__ask_user_question" {
 		t.Errorf("unexpected tool name: %q", tool.Name())
 	}
 }

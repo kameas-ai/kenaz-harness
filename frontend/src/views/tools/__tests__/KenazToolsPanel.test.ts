@@ -2,7 +2,7 @@ import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
 import { mount, flushPromises } from '@vue/test-utils';
 import { defineComponent, h } from 'vue';
 import { createMemoryHistory, createRouter } from 'vue-router';
-import KaneazToolsPanel from '@/views/tools/KaneazToolsPanel.vue';
+import KenazToolsPanel from '@/views/tools/KenazToolsPanel.vue';
 import {
   createFakeHarnessClient,
   type HarnessClient,
@@ -151,7 +151,7 @@ const Stub = defineComponent({
 });
 
 async function mountPanel(setup: MountResult) {
-  return mount(KaneazToolsPanel, {
+  return mount(KenazToolsPanel, {
     global: {
       provide: { [HarnessClientKey as symbol]: setup.client },
       plugins: [setup.router],
@@ -166,7 +166,7 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-describe('KaneazToolsPanel — recipes section', () => {
+describe('KenazToolsPanel — recipes section', () => {
   it('renders the existing Memory row plus a row per enabled recipe (catalog rows hidden)', async () => {
     // The panel intentionally only surfaces installed (enabled) recipes;
     // catalog browsing lives in the Add MCP Server modal. So a clean-
@@ -671,7 +671,7 @@ describe('KaneazToolsPanel — recipes section', () => {
 
 // ── builtin-filesystem-tools-01KR3N4P WP06 — FS toggle UI ──────────────
 
-describe('KaneazToolsPanel — builtin filesystem tools toggles', () => {
+describe('KenazToolsPanel — builtin filesystem tools toggles', () => {
   it('renders the fs-read and fs-write toggle rows', async () => {
     const setup = makeClient([]);
     const w = await mountPanel(setup);
@@ -811,11 +811,11 @@ describe('KaneazToolsPanel — builtin filesystem tools toggles', () => {
 
     const row = w.find('[data-testid=fs-read-tool-row]');
     const text = row.text();
-    expect(text).toContain('kaneaz__read_file');
-    expect(text).toContain('kaneaz__list_dir');
-    expect(text).toContain('kaneaz__glob');
-    expect(text).toContain('kaneaz__grep');
-    expect(text).toContain('kaneaz__list_open_worklist');
+    expect(text).toContain('kenaz__read_file');
+    expect(text).toContain('kenaz__list_dir');
+    expect(text).toContain('kenaz__glob');
+    expect(text).toContain('kenaz__grep');
+    expect(text).toContain('kenaz__list_open_worklist');
   });
 
   it('fs-write row lists the 2 write-family tool names', async () => {
@@ -825,7 +825,7 @@ describe('KaneazToolsPanel — builtin filesystem tools toggles', () => {
 
     const row = w.find('[data-testid=fs-write-tool-row]');
     const text = row.text();
-    expect(text).toContain('kaneaz__write_file');
-    expect(text).toContain('kaneaz__edit_file');
+    expect(text).toContain('kenaz__write_file');
+    expect(text).toContain('kenaz__edit_file');
   });
 });

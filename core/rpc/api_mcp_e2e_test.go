@@ -27,7 +27,7 @@ func buildFakeServerForE2E(t *testing.T) string {
 	t.Helper()
 	_, here, _, _ := runtime.Caller(0)
 	srcDir := filepath.Join(filepath.Dir(here), "..", "mcp", "stdio", "testdata", "fake-mcp-server")
-	tmpDir, err := os.MkdirTemp("", "kaneaz-fake-e2e-")
+	tmpDir, err := os.MkdirTemp("", "kenaz-fake-e2e-")
 	if err != nil {
 		t.Fatalf("mktemp: %v", err)
 	}

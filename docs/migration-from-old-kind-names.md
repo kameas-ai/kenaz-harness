@@ -140,9 +140,9 @@ grep -lE 'kind: (llm|plan|branch|fork)$' <DataDir>/agent_graph/library/*.yaml
 ```
 
 (On macOS substitute `<DataDir>` with
-`~/Library/Application Support/kaneaz-harness/`. On Linux it lives at
-`~/.local/share/kaneaz-harness/`. On Windows,
-`%APPDATA%\kaneaz-harness\`.)
+`~/Library/Application Support/kenaz-harness/`. On Linux it lives at
+`~/.local/share/kenaz-harness/`. On Windows,
+`%APPDATA%\kenaz-harness\`.)
 
 The `branch` match is intentional — `grep` cannot disambiguate the
 predicate-router (alias) usage from the sub-graph-spawn (canonical)

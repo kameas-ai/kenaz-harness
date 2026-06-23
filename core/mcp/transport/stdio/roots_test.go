@@ -23,7 +23,7 @@ func (s *stubRootsHandler) Roots(_ context.Context, _ string) ([]Root, error) {
 
 func TestDefaultRoots_DataDirOnly(t *testing.T) {
 	t.Parallel()
-	h := DefaultRoots("/tmp/kaneaz", nil)
+	h := DefaultRoots("/tmp/kenaz", nil)
 	got, err := h.Roots(context.Background(), "any-server")
 	if err != nil {
 		t.Fatalf("Roots: %v", err)
@@ -31,7 +31,7 @@ func TestDefaultRoots_DataDirOnly(t *testing.T) {
 	if len(got) != 1 {
 		t.Fatalf("roots = %d, want 1", len(got))
 	}
-	if got[0].URI != "file:///tmp/kaneaz" {
+	if got[0].URI != "file:///tmp/kenaz" {
 		t.Fatalf("uri = %q", got[0].URI)
 	}
 }
