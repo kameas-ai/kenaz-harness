@@ -49,6 +49,7 @@ import (
 	"github.com/kameas-ai/kenaz-harness/core/mcp/stdio"
 	corememory "github.com/kameas-ai/kenaz-harness/core/memory"
 	"github.com/kameas-ai/kenaz-harness/core/policy/cedar"
+	"github.com/kameas-ai/kenaz-harness/core/units"
 	autotitle "github.com/kameas-ai/kenaz-harness/core/sessions/autotitle"
 	autotitlewiring "github.com/kameas-ai/kenaz-harness/core/sessions/autotitle/wiring"
 	coreart "github.com/kameas-ai/kenaz-harness/core/artifacts"
@@ -557,6 +558,15 @@ type API struct {
 	// Held for Shutdown teardown (FR-011).
 	ctxGraphSyncer *corefleet.ContextGraphSyncer
 
+	// unitSyncer is the Phase-3 unified-Unit fleet sync engine (promote-as-MR
+	// client + pull-conflict surface). Held for Shutdown teardown.
+	// (unified-context-artifacts-01NCTXU01 / Phase 3)
+	unitSyncer *corefleet.UnitSyncer
+
+	// unitsMgr is the fleet-free unified Unit store manager. Held so the
+	// fleet view's resolution/enshrine RPCs reach it.
+	unitsMgr *units.Manager
+
 	// contextsLib is the open Context Library. Held so the fleet merger
 	// closure (FR-012) can call MergeFleetEntries without re-opening the lib.
 	contextsLib *corecontexts.Library
@@ -704,6 +714,10 @@ func (a *API) Shutdown() {
 	if a.ctxGraphSyncer != nil {
 		a.ctxGraphSyncer.Stop()
 	}
+	// Phase-3: stop the unified-Unit pull background poller.
+	if a.unitSyncer != nil {
+		a.unitSyncer.Stop()
+	}
 }
 
 // ErrEvalNotConfigured is returned by Sessions_StartCapture /
@@ -788,6 +802,15 @@ func New(c *core.Core) *API {
 		dataDir = c.DataDir()
 	}
 
+	// Unified Unit store manager (unified-context-artifacts-01NCTXU01). Backed
+	// by the same storage.DB; nil on the test chassis (no real storage.DB). The
+	// Phase-3 fleet view resolution/enshrine RPCs reach it; the UnitSyncer is
+	// wired later (once the fleet client is resolved).
+	var unitsMgr *units.Manager
+	if db != nil {
+		unitsMgr = units.NewManager(units.NewSQLStore(db))
+	}
+
 	a := &API{
 		core:           c,
 		a2aAPI:         &stubA2A{},
@@ -803,6 +826,7 @@ func New(c *core.Core) *API {
 		mediaStore:     media,
 		usageMgr:       usageMgr,
 		storageAPI:     storageview.NewAPI(db, dataDir),
+		unitsMgr:       unitsMgr,
 	}
 	a.attachmentsAPI = newAttachmentsAPI(c, attMgr)
 	a.artifactsAPI = newArtifactsAPI(c, artStore, artMgr, media)
@@ -1774,6 +1798,47 @@ func New(c *core.Core) *API {
 			a.ctxGraphSyncer = ctxSyncer
 
 			logging.L().Info("rpc.context_graph_syncer.wired",
+				"fleet_client_nil", flCl == nil,
+				"data_dir", flDataDir,
+			)
+		}
+
+		// unified-context-artifacts-01NCTXU01 / Phase 3: wire the UnitSyncer so
+		// the fleet view's promote-as-MR + conflict-resolution RPCs reach fleet
+		// and surface pull-time conflicts. Gated like the context syncer: a nil
+		// flCl / isNop client degrades to local-only (canSync short-circuits).
+		// The units.Manager is fleet-free and was constructed earlier from the
+		// storage.DB; the syncer is the fleet-touching half. teamID is sourced
+		// from the enrolled identity (empty when signed-out).
+		if a.unitsMgr != nil {
+			var caps *corefleet.CapabilityPoller
+			if a.settingsImpl != nil {
+				caps = a.settingsImpl.CapabilityPoller()
+			}
+			teamID := ""
+			if flDataDir != "" {
+				if id, idErr := corefleet.LoadIdentity(flDataDir); idErr == nil {
+					teamID = id.TeamID
+				}
+			}
+			unitMapper := corefleet.NewUnitMapper(teamID)
+			unitSyncer := corefleet.NewUnitSyncer(flCl, a.unitsMgr, unitMapper, caps, flDataDir)
+			// Read-down-auto: pull org/team units into the local clone as read
+			// layers. Self-gates on sign-in + team-graph capability.
+			unitSyncer.StartPoller(context.Background())
+			a.unitSyncer = unitSyncer
+
+			// Attach the manager + syncer to the already-wired fleet view Impl so
+			// the Phase-3 RPCs (Unit_PromoteAsMergeRequest / Unit_ResolveMerge /
+			// Unit_ResolveEnshrine / Unit_ResolveLoadable / Unit_ListConflicts) are
+			// live. a.fleetAPI is always a *fleetview.Impl (set above on both the
+			// real and test paths).
+			if fi, ok := a.fleetAPI.(*fleetview.Impl); ok {
+				fi.Units = a.unitsMgr
+				fi.Syncer = unitSyncer
+			}
+
+			logging.L().Info("rpc.unit_syncer.wired",
 				"fleet_client_nil", flCl == nil,
 				"data_dir", flDataDir,
 			)
