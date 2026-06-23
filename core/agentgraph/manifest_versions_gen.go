@@ -259,7 +259,7 @@ const (
 
 	// SleepManifestFingerprint is the sha256 of the behavior-affecting
 	// subset of `kind: sleep` at the time of last codegen.
-	SleepManifestFingerprint = "5d12fa131e6f79f24f0c94aab65f5b63b333c0d71850194c4bd4d0052248cd0b"
+	SleepManifestFingerprint = "25bdeda8fedd3f09762bd08000e79e7f3ce7779095e0e9bbfdd5a230d4594668"
 
 	// SubagentDispatchManifestVersion is the behavior-contract semver for `kind: subagent_dispatch`.
 	// Bump this in the manifest's `manifest_version:` field when any
@@ -268,7 +268,7 @@ const (
 
 	// SubagentDispatchManifestFingerprint is the sha256 of the behavior-affecting
 	// subset of `kind: subagent_dispatch` at the time of last codegen.
-	SubagentDispatchManifestFingerprint = "6fbbfb38f73499cf91a3625acef72e5c1156c4ac734ed37913ea070ddc392922"
+	SubagentDispatchManifestFingerprint = "9fe5268825a7e13803c67ae41fed8c8772ab24ff3b77b375afc32dbe905dba54"
 
 	// ToolManifestVersion is the behavior-contract semver for `kind: tool`.
 	// Bump this in the manifest's `manifest_version:` field when any

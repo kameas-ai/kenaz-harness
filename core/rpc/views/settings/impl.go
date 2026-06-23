@@ -24,6 +24,7 @@ import (
 
 	"github.com/kameas-ai/kenaz-harness/core/autonomy"
 	"github.com/kameas-ai/kenaz-harness/core/compaction"
+	"github.com/kameas-ai/kenaz-harness/core/paths"
 )
 
 // FileStore is a SettingsStore backed by a single JSON file. Safe for
@@ -46,6 +47,7 @@ func NewFileStore(userConfigDir string) (*FileStore, error) {
 
 // NewFileStoreFromEnv resolves USER_CONFIG_DIR via os.UserConfigDir.
 func NewFileStoreFromEnv() (*FileStore, error) {
+	paths.MigrateLegacyConfigDir()
 	dir, err := os.UserConfigDir()
 	if err != nil {
 		return nil, fmt.Errorf("settings: user config dir: %w", err)

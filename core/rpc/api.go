@@ -2727,8 +2727,10 @@ func (f *keychainForgetter) Forget(_ context.Context, locator string) error {
 		return nil
 	}
 	// OS-keychain is best-effort: a missing entry on the deletion
-	// path is non-fatal.
+	// path is non-fatal. Also clear any legacy-namespace entry so a
+	// forgotten secret doesn't linger under the old service name.
 	_ = keyring.Delete(keyringService, locator)
+	_ = keyring.Delete(legacyKeyringService, locator)
 	if f.backend != nil {
 		f.backend.ClearEntry(secretsref.RefKeychain, locator)
 	}
@@ -3893,7 +3895,7 @@ func newEmbedderFromProfiles(profiles []corellm.ProviderProfile, profileIDOverri
 	// Build a key resolver for a keychain-backed profile locator.
 	makeKeychainResolver := func(locator string) corememory.KeyResolver {
 		return func(_ context.Context) ([]byte, error) {
-			val, err := keyring.Get(keyringService, locator)
+			val, err := keyringGetMigrating(locator)
 			if err != nil {
 				return nil, fmt.Errorf("memory: keychain get %q: %w", locator, err)
 			}
@@ -4603,6 +4605,28 @@ type keychainWriter struct {
 // keyringService matches secrets.MemoryBackend's namespace so reads
 // via Resolve(RefKeychain) find the entry written here.
 const keyringService = "kenaz-harness"
+
+// legacyKeyringService is the previous (misspelled) namespace. Reads fall
+// back to it and migrate forward so credentials stored before the
+// kaneaz->kenaz rename survive. New writes only use keyringService.
+const legacyKeyringService = "kaneaz-harness"
+
+// keyringGetMigrating reads locator from the current namespace, falling
+// back to the legacy namespace on not-found and migrating the value
+// forward (best-effort).
+func keyringGetMigrating(locator string) (string, error) {
+	v, err := keyring.Get(keyringService, locator)
+	if err == nil {
+		return v, nil
+	}
+	if errors.Is(err, keyring.ErrNotFound) {
+		if lv, lerr := keyring.Get(legacyKeyringService, locator); lerr == nil {
+			_ = keyring.Set(keyringService, locator, lv)
+			return lv, nil
+		}
+	}
+	return "", err
+}
 
 // Write stores plaintext in the OS keychain under the harness's
 // service namespace, mirrors it to the in-memory backend, and zeroes

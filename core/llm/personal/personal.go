@@ -27,6 +27,7 @@ import (
 	"sync"
 
 	llm "github.com/kameas-ai/kenaz-harness/core/llm"
+	"github.com/kameas-ai/kenaz-harness/core/paths"
 )
 
 // Store is the contract the rpc layer and the registry consume. The
@@ -85,6 +86,7 @@ func NewFileStore(path string) (*FileStore, error) {
 // DefaultPath returns $USER_CONFIG_DIR/kenaz-harness/providers.json.
 // On platforms where os.UserConfigDir fails, a typed error is returned.
 func DefaultPath() (string, error) {
+	paths.MigrateLegacyConfigDir()
 	dir, err := os.UserConfigDir()
 	if err != nil {
 		return "", fmt.Errorf("personal: resolve user config dir: %w", err)
