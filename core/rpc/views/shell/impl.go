@@ -13,7 +13,6 @@ import (
 	"sync"
 
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/tools"
-	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
 // Opener is the runtime hook OpenInOSBrowser uses to dispatch the
@@ -30,15 +29,6 @@ type API struct {
 	mu     sync.RWMutex
 	ctx    context.Context
 	opener Opener
-}
-
-// New constructs a ShellAPI. Pass nil for opener to use the default
-// wails runtime.BrowserOpenURL; tests pass a recorder.
-func New(opener Opener) *API {
-	if opener == nil {
-		opener = runtime.BrowserOpenURL
-	}
-	return &API{opener: opener}
 }
 
 // SetContext threads the Wails OnStartup-supplied context to the

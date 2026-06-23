@@ -2,6 +2,8 @@ build/bin
 node_modules
 frontend/dist/*
 !frontend/dist/.gitkeep
+frontend/dist-served/*
+!frontend/dist-served/.gitkeep
 .idea/
 kitty-specs/
 .worktrees/

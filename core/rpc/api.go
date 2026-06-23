@@ -458,6 +458,13 @@ type API struct {
 	// stays intact.
 	broker *StreamBroker
 
+	// eventBus is the in-process non-Wails emission sink.  It receives
+	// every event the broker publishes via the MultiEmitter fan-out, so
+	// served-mode WebSocket connections can subscribe to real-time pushes
+	// without needing the Wails runtime context.  The desktop path is
+	// unaffected: WailsEmitter still fires for every event.
+	eventBus *EventBus
+
 	// bindings is the Wails-reflected surface; held for the lifetime of
 	// API so OnStartup can call SetContext on it.
 	bindings *Bindings
@@ -830,7 +837,8 @@ func New(c *core.Core) *API {
 	}
 	a.attachmentsAPI = newAttachmentsAPI(c, attMgr)
 	a.artifactsAPI = newArtifactsAPI(c, artStore, artMgr, media)
-	a.broker = NewStreamBroker(WailsEmitter{})
+	a.eventBus = NewEventBus()
+	a.broker = NewStreamBroker(NewMultiEmitter(WailsEmitter{}, &busEmitter{bus: a.eventBus}))
 
 	// Cedar prompt registry — process-singleton shared by every gate
 	// site (bash, fs, cred, tool) AND by the permissions view. Built
@@ -5206,6 +5214,12 @@ func (a *API) Bindings() []any { return []any{a.bindings} }
 // invariant #1 — only emitter.go / stream_broker.go call
 // runtime.EventsEmit — keeps holding.
 func (a *API) StreamBroker() *StreamBroker { return a.broker }
+
+// EventBus returns the in-process event bus that mirrors every event the
+// StreamBroker publishes.  Served-mode WebSocket handlers subscribe here
+// to receive real-time push notifications without the Wails runtime
+// context.  The desktop Wails path is unaffected.
+func (a *API) EventBus() *EventBus { return a.eventBus }
 
 // buildCedarEngineOrNil constructs a *cedar.Engine for callers that
 // need the concrete Engine type — the cedarpolicy view (ListPolicies /

@@ -4,7 +4,9 @@ import (
 	"context"
 	"embed"
 	"flag"
+	"io/fs"
 	"log"
+	"log/slog"
 	"os"
 
 	"github.com/wailsapp/wails/v2"
@@ -17,11 +19,23 @@ import (
 	"github.com/kameas-ai/kenaz-harness/core/paths"
 	"github.com/kameas-ai/kenaz-harness/core/rpc"
 	coresentry "github.com/kameas-ai/kenaz-harness/core/sentry"
+	"github.com/kameas-ai/kenaz-harness/core/serve"
+	"github.com/kameas-ai/kenaz-harness/core/serve/authbroker"
 	"github.com/kameas-ai/kenaz-harness/core/update/bootswap"
 )
 
 //go:embed all:frontend/dist
 var assets embed.FS
+
+// servedAssets holds the dist-served/ bundle (built by `npm run build:served`
+// in frontend/).  It is embedded at compile time; if the directory is absent
+// the build will fail with a helpful message from the go:embed directive.
+//
+// Build dependency: run `cd frontend && npm run build:served` before
+// `go build ./...` so that frontend/dist-served/served.html exists.
+//
+//go:embed all:frontend/dist-served
+var servedAssets embed.FS
 
 // Version is injected by the release pipeline via:
 //
@@ -46,7 +60,23 @@ func main() {
 	// manifest set.
 	enableHotReload := flag.Bool("enable-manifest-hot-reload", false,
 		"dev: poll <DataDir>/agent_graph/nodes/ and reload the node manifest catalog on change")
+
+	// --serve: skip Wails and run as an HTTP/WS server instead.
+	// The address is controlled by --listen (default 0.0.0.0:7880) or the
+	// HARNESS_SERVE_LISTEN env var.  Token auth is required when
+	// HARNESS_SERVE_TOKEN is set.
+	serveMode := flag.Bool("serve", false,
+		"run in served mode: start an HTTP/WS server instead of launching the Wails desktop app")
+	listenAddr := flag.String("listen", "",
+		"address to listen on in served mode (default 0.0.0.0:7880 or HARNESS_SERVE_LISTEN env)")
+
 	flag.Parse()
+
+	// Served mode: skip Wails and start the HTTP/WS server.
+	if *serveMode {
+		runServeMode(*listenAddr)
+		return
+	}
 
 	// Resolve the per-env data dir (~/.kenaz/harness/<env>) and adopt any
 	// legacy ~/.harness data BEFORE the logger opens, so the per-env log file
@@ -152,6 +182,89 @@ func main() {
 	})
 	if err != nil {
 		log.Fatalf("wails run: %v", err)
+	}
+}
+
+// runServeMode boots the harness in HTTP/WS served mode and blocks until
+// SIGTERM / SIGINT.  It does NOT start the Wails desktop — this path is
+// designed for in-VM deployments where a browser connects over HTTP.
+//
+// Sequence:
+//  1. Resolve and prepare the data dir (same as desktop path).
+//  2. Boot core + rpc.API (same as desktop path).
+//  3. Call core.Start on a background context.
+//  4. Read KENAZ_AUTH_* env vars, initialise the auth broker session (F2-WP8).
+//  5. Hand the API + auth session to serve.New and block on Serve.
+func runServeMode(listenAddr string) {
+	serveLog := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
+		Level: slog.LevelInfo,
+	}))
+
+	dataDir, err := paths.DataDir()
+	if err != nil {
+		serveLog.Error("harness.serve: data dir", "err", err)
+		os.Exit(1)
+	}
+	if err := os.MkdirAll(dataDir, 0o755); err != nil {
+		serveLog.Error("harness.serve: mkdir data dir", "err", err)
+		os.Exit(1)
+	}
+	if logDir, lerr := paths.LogDir(); lerr == nil {
+		logging.Configure(logDir)
+	}
+	serveLog.Info("harness.serve.boot", "pid", os.Getpid(), "version", Version, "data_dir", dataDir)
+
+	c, err := core.New(core.Options{
+		DataDir:      dataDir,
+		BuildVersion: Version,
+	})
+	if err != nil {
+		serveLog.Error("harness.serve: core init", "err", err)
+		os.Exit(1)
+	}
+
+	api := rpc.New(c)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	if err := c.Start(ctx); err != nil {
+		serveLog.Warn("harness.serve: core start", "err", err)
+	}
+	api.SetContext(ctx)
+
+	// F2-WP8: initialise the in-VM auth session from KENAZ_AUTH_* env vars
+	// (injected via EnvironmentFile from the KENAZMETA disk, same mechanism as
+	// SIGIL_INGEST_TOKEN / HARNESS_VM_TOKEN).
+	//
+	// Privacy: broker token and access token bytes are never logged.
+	authCfg := authbroker.ReadConfig(os.Getenv)
+	authSession := authbroker.NewSession(ctx, authCfg, serveLog)
+	serveLog.Info("harness.serve: auth session initialised",
+		"auth_state", authSession.State().String(),
+		"broker_addr", authCfg.BrokerAddr,
+	)
+
+	token := os.Getenv(serve.EnvToken)
+	addr := listenAddr
+	if addr == "" {
+		addr = os.Getenv(serve.EnvListenAddr)
+	}
+	if addr == "" {
+		addr = serve.DefaultListenAddr
+	}
+
+	// Sub-root the embedded FS so serve.Server sees served.html at the root.
+	servedFS, err := fs.Sub(servedAssets, "frontend/dist-served")
+	if err != nil {
+		serveLog.Error("harness.serve: sub-root served assets", "err", err)
+		os.Exit(1)
+	}
+
+	srv := serve.New(api, addr, token, servedFS, serveLog, serve.WithAuthSession(authSession))
+	if serveErr := srv.Serve(ctx); serveErr != nil && serveErr != context.Canceled {
+		serveLog.Error("harness.serve: server error", "err", serveErr)
+		os.Exit(1)
 	}
 }
 

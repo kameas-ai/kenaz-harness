@@ -14,6 +14,8 @@
  * client is purely a TypeScript concern.
  */
 
+import { ServedTransport } from './servedTransport';
+
 import type {
   AutonomyLayer,
   ResolvedAutonomy,
@@ -3400,6 +3402,102 @@ export function createHarnessClient(): HarnessClient {
     },
   };
 }
+
+// ── served-mode client (HTTP/WS transport) ────────────────────────────
+
+/**
+ * createServedHarnessClient — a HarnessClient whose subset of methods that
+ * core/serve exposes (AppInfo, ShellStatus, Sessions_List, Sessions_Get,
+ * Sessions_Stream) are wired to the HTTP/WS transport.  All other methods
+ * fall back to the fake-client stubs so the application stays mountable in
+ * served mode without crashing on unimplemented RPCs.
+ *
+ * Token resolution is handled inside ServedTransport (meta tag →
+ * window.__HARNESS_TOKEN__ → empty).  Callers can pass an explicit token
+ * or baseURL for testing / cross-origin use.
+ *
+ * Deferred: porting every RPC method; push-based WS streaming; CSRF/CORS
+ * hardening; the nix leaf flake.
+ */
+export function createServedHarnessClient(opts?: {
+  baseURL?: string;
+  token?: string;
+}): HarnessClient {
+  // ServedTransport is statically imported above.  Vite/Rollup tree-shakes it
+  // out of the Wails desktop bundle because createHarnessClient() is used
+  // there and createServedHarnessClient is never imported/called.
+  const transport = new ServedTransport(opts);
+
+  // Start with a fully-stubbed fake so every method is callable.
+  const base = createFakeHarnessClient();
+
+  // Overlay the methods that core/serve exposes over HTTP/WS.
+  return {
+    ...base,
+
+    appInfo: () => transport.call<AppInfo>('AppInfo'),
+    shellStatus: () => transport.call<ShellStatus>('ShellStatus'),
+
+    // openExternalURL is a fire-and-forget browser operation; window.open is
+    // correct for served mode (no Wails runtime available).
+    openExternalURL: (url: string): void => {
+      if (typeof window !== 'undefined') {
+        window.open(url, '_blank', 'noopener,noreferrer');
+      }
+    },
+
+    sessions: {
+      ...base.sessions,
+
+      list: () => transport.call<Session[]>('Sessions_List'),
+
+      get: (id: string) =>
+        transport.call<Session>('Sessions_Get', { id }),
+
+      /**
+       * startStream — opens a WebSocket subscription for Sessions_Stream.
+       * Returns a synthetic subscription id; the caller must keep it to call
+       * stopStream.  The actual session-update events are routed via the WS
+       * frame handler.  Note: the served WS is poll-based on the server side
+       * (push-based broker is deferred); client-visible behaviour is the same.
+       *
+       * The subscription id is stored in the client-side registry so
+       * stopStream can close the underlying WS.
+       */
+      startStream: (id: string): Promise<string> => {
+        const subId = `served-stream-${id}-${Date.now()}`;
+        const cancel = transport.openStream({
+          method: 'Sessions_Stream',
+          params: { id },
+          onFrame: (_event, _data) => {
+            // Frames arrive but the served mode has no Wails EventsOn to
+            // relay them to subscribers.  Components polling via list()
+            // will see updates on the next poll cycle.  A proper push path
+            // is deferred (requires a non-Wails emitter WP).
+          },
+        });
+        // Store the cancel fn keyed by subId so stopStream can find it.
+        _servedStreamRegistry.set(subId, cancel);
+        return Promise.resolve(subId);
+      },
+
+      stopStream: (subId: string): Promise<void> => {
+        const cancel = _servedStreamRegistry.get(subId);
+        if (cancel) {
+          cancel();
+          _servedStreamRegistry.delete(subId);
+        }
+        return Promise.resolve();
+      },
+    },
+  };
+}
+
+/**
+ * Client-side registry mapping subscription ids to WS close callbacks.
+ * Module-level singleton — safe because served mode runs one instance.
+ */
+const _servedStreamRegistry = new Map<string, () => void>();
 
 // ── fake client for tests ──────────────────────────────────────────────
 

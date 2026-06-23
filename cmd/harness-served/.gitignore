@@ -1,0 +1,4 @@
+# Staged frontend assets — copied from frontend/dist-served/ at build time.
+# Run: cp -r frontend/dist-served cmd/harness-served/frontend/dist-served
+# before: CGO_ENABLED=0 go build -tags serve -o bin/kenaz-harness-served ./cmd/harness-served
+frontend/
