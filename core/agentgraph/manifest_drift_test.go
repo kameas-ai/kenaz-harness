@@ -128,6 +128,43 @@ func TestCheckManifestDrift_UnknownNodeSkipped(t *testing.T) {
 	}
 }
 
+// TestCheckManifestDrift_GrandfatheredRename verifies that a node authored
+// with the pre-rename (kaneaz->kenaz) Sleep fingerprint is NOT reported as
+// drift — the tool-name string change was behavior-neutral — while a
+// genuinely different stale fingerprint for the same kind still warns.
+func TestCheckManifestDrift_GrandfatheredRename(t *testing.T) {
+	t.Parallel()
+
+	const oldSleepFP = "5d12fa131e6f79f24f0c94aab65f5b63b333c0d71850194c4bd4d0052248cd0b"
+
+	g := Graph{ID: "g1", Nodes: []Node{{ID: "n1", Kind: NodeKindSleep}}}
+
+	// Authored with the grandfathered pre-rename fingerprint → no drift.
+	provGrandfathered := []NodeProvenance{{
+		GraphID:                 "g1",
+		NodeID:                  "n1",
+		Kind:                    string(NodeKindSleep),
+		ManifestVersionAtAuthor: "1.0.0",
+		FingerprintAtAuthor:     oldSleepFP,
+	}}
+	if w := CheckManifestDrift(g, provGrandfathered); len(w) != 0 {
+		t.Errorf("expected 0 warnings for grandfathered pre-rename fingerprint, got %d: %+v", len(w), w)
+	}
+
+	// A different stale fingerprint for the same kind must still warn —
+	// the grandfather is narrow, not a blanket suppression.
+	provStale := []NodeProvenance{{
+		GraphID:                 "g1",
+		NodeID:                  "n1",
+		Kind:                    string(NodeKindSleep),
+		ManifestVersionAtAuthor: "1.0.0",
+		FingerprintAtAuthor:     "cafebabecafebabecafebabecafebabecafebabecafebabecafebabecafebabe",
+	}}
+	if w := CheckManifestDrift(g, provStale); len(w) != 1 {
+		t.Fatalf("expected 1 warning for a non-grandfathered stale fingerprint, got %d", len(w))
+	}
+}
+
 // TestAllGeneratedManifestVersions checks that allGeneratedManifestVersions
 // is populated with all callable kinds and non-empty version strings.
 func TestAllGeneratedManifestVersions(t *testing.T) {
