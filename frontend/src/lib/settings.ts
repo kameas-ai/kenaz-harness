@@ -1,7 +1,7 @@
 /**
  * settings — debounced (250 ms) write coalescing for the persisted UI
  * state shape (plan §5.5). The single JSON file at
- * $USER_CONFIG_DIR/kaneaz-harness/settings.json is owned by the Go side
+ * $USER_CONFIG_DIR/kenaz-harness/settings.json is owned by the Go side
  * (core/rpc/settings.go); this module is the TS-side debounce wrapper.
  */
 

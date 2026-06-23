@@ -34,7 +34,7 @@ import (
 
 const (
 	// EnterToolName is the model-facing tool identifier.
-	EnterToolName = "kaneaz__enter_plan_mode"
+	EnterToolName = "kenaz__enter_plan_mode"
 
 	// EnterToolDescription steers the model toward entering plan mode
 	// before multi-file or architecturally ambiguous implementations.
@@ -79,7 +79,7 @@ type EnterOptions struct {
 	Logger *slog.Logger
 }
 
-// EnterTool implements kaneaz__enter_plan_mode. Safe for concurrent use.
+// EnterTool implements kenaz__enter_plan_mode. Safe for concurrent use.
 type EnterTool struct {
 	posture  SessionPostureManager
 	resolver func(ctx context.Context) string

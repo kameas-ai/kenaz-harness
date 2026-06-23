@@ -9,16 +9,16 @@ when_to_use: |
 model: anthropic/claude-haiku-4-5
 autonomy_tier: strict
 allowed_tools:
-  - kaneaz__ask_user_question
+  - kenaz__ask_user_question
 denied_tools:
-  - kaneaz__read_file
-  - kaneaz__list_dir
-  - kaneaz__glob
-  - kaneaz__grep
-  - kaneaz__write_file
-  - kaneaz__edit_file
-  - kaneaz__bash
-  - kaneaz__websearch
+  - kenaz__read_file
+  - kenaz__list_dir
+  - kenaz__glob
+  - kenaz__grep
+  - kenaz__write_file
+  - kenaz__edit_file
+  - kenaz__bash
+  - kenaz__websearch
 budget_tokens: 20000
 budget_time_s: 60
 system_prompt_override: |

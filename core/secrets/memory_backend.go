@@ -18,7 +18,7 @@ import (
 // keychain credentials. zalando/go-keyring routes to the per-OS
 // secure store: macOS Keychain, Windows Credential Manager, libsecret
 // on Linux. A single namespace makes auditing + manual cleanup easy.
-const keyringService = "kaneaz-harness"
+const keyringService = "kenaz-harness"
 
 // MemoryBackend is a single-process Backend that resolves env-var refs
 // from os.Getenv and keychain/file refs from an in-memory map. It is

@@ -58,7 +58,7 @@ func TestTool_NameDescriptionSchema(t *testing.T) {
 		Fetcher:    &stubFetcher{},
 		Extractor:  &stubExtractor{},
 	})
-	if tool.Name() != "kaneaz__web_search" {
+	if tool.Name() != "kenaz__web_search" {
 		t.Errorf("Name = %q", tool.Name())
 	}
 	if tool.Description() == "" {

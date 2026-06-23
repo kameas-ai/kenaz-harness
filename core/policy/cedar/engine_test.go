@@ -393,7 +393,7 @@ func TestPolicyDeniedError_Sentinel(t *testing.T) {
 //     - write outside recipe-dir→ NotApplicable
 //
 //   Tool family:
-//     - kaneaz__bash       → Allow (server_name=="kaneaz")
+//     - kenaz__bash       → Allow (server_name=="kenaz")
 //     - filesystem__read   → NotApplicable (non-builtin)
 
 // TestEvaluate_Family_Credential covers FR-002.
@@ -522,9 +522,9 @@ func TestEvaluate_Family_Tool(t *testing.T) {
 		uid  string
 		want Outcome
 	}{
-		{"builtin-bash-allow", "kaneaz__bash", Allow},
-		{"builtin-websearch-allow", "kaneaz__websearch", Allow},
-		{"builtin-save-artifact-allow", "kaneaz__save_artifact", Allow},
+		{"builtin-bash-allow", "kenaz__bash", Allow},
+		{"builtin-websearch-allow", "kenaz__websearch", Allow},
+		{"builtin-save-artifact-allow", "kenaz__save_artifact", Allow},
 		{"mcp-filesystem-not-applicable", "filesystem__read_file", NotApplicable},
 		{"mcp-postgres-not-applicable", "postgres__query", NotApplicable},
 		{"no-server-not-applicable", "bare_tool", NotApplicable},
@@ -584,9 +584,9 @@ func TestFamilyUIDValidation(t *testing.T) {
 		// Tool (universal shape)
 		{"tool-empty", PermissionToolUID("").String(), `Tool::"invalid"`},
 		{"tool-traversal", PermissionToolUID("..bad").String(), `Tool::"invalid"`},
-		{"tool-control", PermissionToolUID("kaneaz__\tbash").String(), `Tool::"invalid"`},
-		{"tool-nul", PermissionToolUID("kaneaz__bash\x00").String(), `Tool::"invalid"`},
-		{"tool-ok", PermissionToolUID("kaneaz__bash").String(), `Tool::"kaneaz__bash"`},
+		{"tool-control", PermissionToolUID("kenaz__\tbash").String(), `Tool::"invalid"`},
+		{"tool-nul", PermissionToolUID("kenaz__bash\x00").String(), `Tool::"invalid"`},
+		{"tool-ok", PermissionToolUID("kenaz__bash").String(), `Tool::"kenaz__bash"`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

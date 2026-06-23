@@ -47,7 +47,7 @@ async function refreshCard() {
   // overrides it with the real FSM card when it resolves.
   if (!card.value) {
     card.value = {
-      title: 'Welcome to Kaneaz',
+      title: 'Welcome to Kenaz',
       body: 'Let\'s get you set up.',
       actions: [
         { id: 'next', label: 'Get started', primary: true },

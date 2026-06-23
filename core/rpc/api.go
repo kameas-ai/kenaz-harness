@@ -207,7 +207,7 @@ type HarnessAPI interface {
 	// Elicit exposes the ask-user-question RPC surface (mission
 	// ask-user-question-interactive-01KZNP3G WP04). The frontend's
 	// AskUserQuestion dialog submits answers via Elicit_SubmitAnswer;
-	// the kaneaz__ask_user_question tool blocks on OpenDialog until
+	// the kenaz__ask_user_question tool blocks on OpenDialog until
 	// the answer arrives.
 	Elicit() elicitview.ElicitAPI
 
@@ -341,7 +341,7 @@ type API struct {
 	core *core.Core
 
 	// builtins holds the in-binary tool registry so the chat-input
-	// `!cmd` shell-escape can dispatch directly to kaneaz__bash without
+	// `!cmd` shell-escape can dispatch directly to kenaz__bash without
 	// going through the toolloop. Populated at boot from the same
 	// registry the LLM tool catalog reads.
 	builtins *toolloop.BuiltinRegistry
@@ -580,7 +580,7 @@ type API struct {
 }
 
 // Builtins returns the in-binary tool registry. Used by the chat-input
-// `!cmd` shell-escape binding to dispatch directly to kaneaz__bash.
+// `!cmd` shell-escape binding to dispatch directly to kenaz__bash.
 // Concrete-type method; the HarnessAPI interface does not expose it
 // because no view-scoped consumer needs it.
 func (a *API) Builtins() *toolloop.BuiltinRegistry { return a.builtins }
@@ -1085,7 +1085,7 @@ func New(c *core.Core) *API {
 		artifactSinkConcrete = artifactsview.NewSinkConcrete(a.artifactsMgr, cfgFn, nil)
 		// edit-file-artifact-sync-01KQ8TD5 WP05: wrap the concrete sink
 		// with the edit-file sync pipeline. The wrapper intercepts
-		// kaneaz__edit_file post-tool calls when HARNESS_EDIT_FILE_ARTIFACT_SYNC=on
+		// kenaz__edit_file post-tool calls when HARNESS_EDIT_FILE_ARTIFACT_SYNC=on
 		// and the per-user settings dial is enabled, then captures a
 		// post-edit snapshot of the file as an artifact with AbsolutePath set
 		// in the SourceRef. The CoalesceBuffer deduplicates edits to the same
@@ -2819,7 +2819,7 @@ func newLLMStack(
 	exposureIdx *secrets.ExposureIndex,
 	postureManager coreplanmode.SessionPostureManager,
 	// contextsLib is the open Context Library used to register the
-	// kaneaz__read_context_file built-in. nil is safe; the tool is
+	// kenaz__read_context_file built-in. nil is safe; the tool is
 	// simply not registered when no library is wired.
 	contextsLib *corecontexts.Library,
 ) llmStack {
@@ -2975,7 +2975,7 @@ func newLLMStack(
 	//
 	// The discoverer also threads the built-in tool registry through
 	// (gated by the same Settings filter as the dispatch path), so the
-	// model SEES kaneaz__web_search / kaneaz__bash in its tool catalog
+	// model SEES kenaz__web_search / kenaz__bash in its tool catalog
 	// when those Settings toggles are ON.
 	toolDiscoverer := llm.NewMCPToolDiscovererWithBuiltins(mcpPool, perms, builtinFilter)
 
@@ -4602,7 +4602,7 @@ type keychainWriter struct {
 
 // keyringService matches secrets.MemoryBackend's namespace so reads
 // via Resolve(RefKeychain) find the entry written here.
-const keyringService = "kaneaz-harness"
+const keyringService = "kenaz-harness"
 
 // Write stores plaintext in the OS keychain under the harness's
 // service namespace, mirrors it to the in-memory backend, and zeroes
@@ -4630,7 +4630,7 @@ func (w *keychainWriter) Write(_ context.Context, locator string, plaintext []by
 // newPersonalStore constructs the personal-providers FileStore. It
 // prefers c.DataDir()/providers.json when core is wired so test
 // harnesses with an explicit DataDir stay isolated; otherwise it falls
-// back to personal.DefaultPath() ($USER_CONFIG_DIR/kaneaz-harness).
+// back to personal.DefaultPath() ($USER_CONFIG_DIR/kenaz-harness).
 // A construction failure returns nil; the rpc impl treats a nil store
 // as "personal store unavailable" and the chassis still boots.
 func newPersonalStore(c *core.Core) personal.Store {

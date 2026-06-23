@@ -1650,7 +1650,7 @@ export interface SettingsClient {
   /** Persist the bash built-in opt-in flag. */
   setBash(enabled: boolean): Promise<void>;
   /**
-   * Read the kaneaz__save_artifact built-in opt-in (default true —
+   * Read the kenaz__save_artifact built-in opt-in (default true —
    * saving deliverables is a low-risk primitive that should work on
    * a fresh install). Surfaced as a toggle row in the Tools panel.
    */
@@ -1732,8 +1732,8 @@ export interface SettingsClient {
 
   /**
    * Read the read-family builtin filesystem tools opt-in
-   * (kaneaz__read_file, kaneaz__list_dir, kaneaz__glob, kaneaz__grep,
-   * kaneaz__list_open_worklist). Default false.
+   * (kenaz__read_file, kenaz__list_dir, kenaz__glob, kenaz__grep,
+   * kenaz__list_open_worklist). Default false.
    * Surfaced as a toggle row in the Tools panel.
    */
   getFSReadEnabled(): Promise<boolean>;
@@ -1741,7 +1741,7 @@ export interface SettingsClient {
   setFSReadEnabled(enabled: boolean): Promise<void>;
   /**
    * Read the write-family builtin filesystem tools opt-in
-   * (kaneaz__write_file, kaneaz__edit_file). Default false.
+   * (kenaz__write_file, kenaz__edit_file). Default false.
    * Surfaced as a toggle row in the Tools panel.
    */
   getFSWriteEnabled(): Promise<boolean>;
@@ -1749,7 +1749,7 @@ export interface SettingsClient {
   setFSWriteEnabled(enabled: boolean): Promise<void>;
   /**
    * Return whether the runtime filesystem-access-request built-in
-   * (`kaneaz__request_filesystem_access`) is enabled. Default: true.
+   * (`kenaz__request_filesystem_access`) is enabled. Default: true.
    */
   getFSRequestAccessEnabled(): Promise<boolean>;
   /**
@@ -1761,11 +1761,11 @@ export interface SettingsClient {
   // ── Todo tool dial (builtin-tools-search-and-elicitation-01KZNP3D WP07) ──
 
   /**
-   * Read the kaneaz__todo_write builtin opt-in (default false — tool off
+   * Read the kenaz__todo_write builtin opt-in (default false — tool off
    * until the user enables it from the Tools panel).
    */
   getTodoEnabled(): Promise<boolean>;
-  /** Persist the kaneaz__todo_write builtin opt-in flag. */
+  /** Persist the kenaz__todo_write builtin opt-in flag. */
   setTodoEnabled(enabled: boolean): Promise<void>;
 
   // ── autonomy-dial-01KR3M2A WP03 ─────────────────────────────────────
@@ -2183,7 +2183,7 @@ export interface ShellClient {
 }
 
 /**
- * BashExecResult — kaneaz__bash tool's JSON return shape, surfaced via
+ * BashExecResult — kenaz__bash tool's JSON return shape, surfaced via
  * the Bash_Exec binding for the chat-input `!cmd` shell-escape.
  */
 export interface BashExecResult {
@@ -2597,7 +2597,7 @@ export interface OnboardingClient {
  *
  * The frontend subscribes to "elicit:pending" events via useEventStream;
  * when the user submits or cancels, it calls submitAnswer which unblocks
- * the model-side kaneaz__ask_user_question tool call.
+ * the model-side kenaz__ask_user_question tool call.
  */
 export interface ElicitClient {
   /**

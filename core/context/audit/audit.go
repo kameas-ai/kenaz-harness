@@ -156,7 +156,7 @@ const (
 	// The audit log is not the right place for user input (DIRECTIVE_001).
 	//
 	// KindElicitationRequest fires when the model invokes
-	// kaneaz__ask_user_question and the ask is registered in the registry.
+	// kenaz__ask_user_question and the ask is registered in the registry.
 	// Payload: ElicitationRequestPayload.
 	KindElicitationRequest Kind = "elicitation.request"
 

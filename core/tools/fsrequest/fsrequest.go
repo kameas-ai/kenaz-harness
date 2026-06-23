@@ -1,4 +1,4 @@
-// Package fsrequest implements kaneaz__request_filesystem_access, the
+// Package fsrequest implements kenaz__request_filesystem_access, the
 // built-in tool that lets the model ask the user to expand the
 // filesystem MCP recipe's allowed_directories list at runtime.
 //
@@ -20,7 +20,7 @@ import (
 
 const (
 	// ToolName is the namespaced identifier surfaced to the model.
-	ToolName = "kaneaz__request_filesystem_access"
+	ToolName = "kenaz__request_filesystem_access"
 
 	// ToolDescription tells the model when to use this tool.
 	ToolDescription = "Request that a specific local directory be added to the " +
@@ -52,7 +52,7 @@ type RequestAdditionalAllowedDir interface {
 	RequestAdditionalAllowedDir(ctx context.Context, recipeID, path, reason string) (granted bool, expanded string, err error)
 }
 
-// Tool implements kaneaz__request_filesystem_access.
+// Tool implements kenaz__request_filesystem_access.
 // It is safe for concurrent use; all mutable state lives in the delegate.
 type Tool struct {
 	delegate RequestAdditionalAllowedDir

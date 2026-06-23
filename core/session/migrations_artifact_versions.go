@@ -10,7 +10,7 @@ import (
 // landing for the update-artifact-tool mission
 // (update-artifact-tool-01KQ8TD4). Adds the `artifact_versions`
 // append-only history table that records every content revision written
-// by `kaneaz__update_artifact`.
+// by `kenaz__update_artifact`.
 //
 // Design rationale:
 //   - The parent `artifacts` row is NEVER mutated by the update tool.

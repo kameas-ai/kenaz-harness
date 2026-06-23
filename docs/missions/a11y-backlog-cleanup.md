@@ -90,7 +90,7 @@ threads `head.question` as the label.
 `BranchAdvisorSettings`, `HooksPanel`, `HooksView`, `BundlesView`,
 `ContextPreview`, `HookJournalView`, `MemoryView`, `PolicyView`,
 `PlanApprovalModal`, `SessionAutonomyPanel`, `DirectoryPicker`,
-`KaneazToolsPanel`, `PasteConfigTab`, `RecipeKeyPromptModal`, `CatalogView`.
+`KenazToolsPanel`, `PasteConfigTab`, `RecipeKeyPromptModal`, `CatalogView`.
 
 ## Axe-core regression tests
 

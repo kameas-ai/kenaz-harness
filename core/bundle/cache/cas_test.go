@@ -35,7 +35,7 @@ func sha(b []byte) string {
 
 func TestPutMatch(t *testing.T) {
 	c := mkCAS(t)
-	data := []byte("hello, kaneaz")
+	data := []byte("hello, kenaz")
 	digest := sha(data)
 	r, err := c.Put(context.Background(), bytes.NewReader(data), digest)
 	if err != nil {
@@ -60,7 +60,7 @@ func TestPutMatch(t *testing.T) {
 
 func TestPutMismatch(t *testing.T) {
 	c := mkCAS(t)
-	data := []byte("hello, kaneaz")
+	data := []byte("hello, kenaz")
 	wrongDigest := sha([]byte("different"))
 	_, err := c.Put(context.Background(), bytes.NewReader(data), wrongDigest)
 	if !errors.Is(err, bundle.ErrIntegrityMismatch) {

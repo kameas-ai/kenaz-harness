@@ -9,7 +9,7 @@ import (
 	"github.com/kameas-ai/kenaz-harness/core/policy/lower/schema"
 )
 
-const goldenYAML = `api_version: kaneaz.policy/v1
+const goldenYAML = `api_version: kenaz.policy/v1
 kind: policy
 policy_id: 01HZX8VR0YJ91A2C3D4E5F6G7H
 name: org-baseline
@@ -91,7 +91,7 @@ func TestParseYAMLEmptyDocument(t *testing.T) {
 
 func TestToArtifactRejectsBadAPIVersion(t *testing.T) {
 	d := schema.Document{
-		APIVersion: "kaneaz.policy/v0",
+		APIVersion: "kenaz.policy/v0",
 		Kind:       "policy",
 		PolicyID:   "p1",
 		Name:       "n",
@@ -178,7 +178,7 @@ func TestToArtifactRejectsBadFailurePosture(t *testing.T) {
 
 func TestParseJSON(t *testing.T) {
 	body := `{
-  "api_version": "kaneaz.policy/v1",
+  "api_version": "kenaz.policy/v1",
   "kind": "policy",
   "policy_id": "p",
   "name": "n",
@@ -202,7 +202,7 @@ func TestParseJSON(t *testing.T) {
 }
 
 func TestJSONSchemaDocumentNonEmpty(t *testing.T) {
-	if !strings.Contains(schema.JSONSchemaDocument, "kaneaz.policy/v1") {
+	if !strings.Contains(schema.JSONSchemaDocument, "kenaz.policy/v1") {
 		t.Fatalf("JSONSchemaDocument should reference api_version")
 	}
 }

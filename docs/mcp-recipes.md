@@ -37,7 +37,7 @@ on plumbs `https://api.search.brave.com/` into the running model's
 tool-call surface so the assistant can search the open web.
 
 1. **Open the Tools tab.** Click `02 — TOOLS` in the left rail. The
-   "Kaneaz tools" panel sits at the top of the canvas; the existing
+   "Kenaz tools" panel sits at the top of the canvas; the existing
    "Long-term memory" row is unchanged.
 2. **Find the Brave Search row** in the "Connected MCP recipes" list
    below the memory row. The status pill on the right reads

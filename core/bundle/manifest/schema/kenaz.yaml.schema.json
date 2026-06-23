@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://kaneaz.dev/schema/kaneaz.yaml/v1.json",
-  "title": "kaneaz.yaml manifest schema (v1)",
-  "description": "Bundle manifest format for kaneaz-harness. YAML 1.2; quoted strings mandated for short identifiers (Norway mitigation).",
+  "$id": "https://kenaz.dev/schema/kenaz.yaml/v1.json",
+  "title": "kenaz.yaml manifest schema (v1)",
+  "description": "Bundle manifest format for kenaz-harness. YAML 1.2; quoted strings mandated for short identifiers (Norway mitigation).",
   "type": "object",
   "required": ["schema_version", "name", "version", "license", "artifacts"],
   "additionalProperties": false,

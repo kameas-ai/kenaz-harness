@@ -91,7 +91,7 @@ func TestFilenameValidation_AcceptedNames(t *testing.T) {
 		"cred_allow_openai.cedar",
 		"cred_allow_anthropic.cedar",
 		"tool_allow_websearch.cedar",
-		"tool_allow_kaneaz__bash.cedar",
+		"tool_allow_kenaz__bash.cedar",
 		// boundary: single-char stem after prefix
 		"bash_allow_.cedar", // stem is "bash_allow_" (11 chars) which is fine
 		// mixed digits

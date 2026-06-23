@@ -113,7 +113,7 @@ type ContextsAPI interface {
 	// The returned ModuleAttachment has ContentSource = "module:<dirPath>"
 	// and Content = the concatenated root file + all always:-listed files
 	// (the on-demand files are NOT included; they are reached only via the
-	// kaneaz__read_context_file tool).
+	// kenaz__read_context_file tool).
 	//
 	// Returns ErrLibraryUnavailable when the library is not wired,
 	// ErrNotFound (wrapped) when dirPath does not exist or has no root

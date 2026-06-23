@@ -6,7 +6,7 @@
 //
 //   - OpenAskDialog(request ElicitRequest) ElicitResponse
 //     Opens the AskUserQuestion dialog and blocks until the user
-//     submits or cancels. Called indirectly by the kaneaz__ask_user_question
+//     submits or cancels. Called indirectly by the kenaz__ask_user_question
 //     tool's Delegate implementation.
 //
 //   - SubmitAskAnswer(requestID string, answer json.RawMessage, cancelled bool)
@@ -15,7 +15,7 @@
 //
 // Wire flow (synchronous single-question, WP04):
 //
-//  1. Model calls kaneaz__ask_user_question → tool.Call → Delegate.OpenDialog
+//  1. Model calls kenaz__ask_user_question → tool.Call → Delegate.OpenDialog
 //  2. Delegate enqueues ElicitRequest → emits event on TopicElicitPending
 //  3. Frontend receives event, renders AskUserQuestion dialog
 //  4. User answers → frontend calls Elicit_SubmitAnswer(requestID, answer, false)

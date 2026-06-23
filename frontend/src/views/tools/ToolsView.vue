@@ -10,7 +10,7 @@
  */
 import { onMounted, ref } from 'vue';
 import CanvasHead from '@/shell/CanvasHead.vue';
-import KaneazToolsPanel from './KaneazToolsPanel.vue';
+import KenazToolsPanel from './KenazToolsPanel.vue';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
 import type { MCPServer } from '@/lib/types';
 
@@ -60,10 +60,10 @@ onMounted(() => {
       number="02"
       section="TOOLS"
       title="Tools"
-      subtitle="Built-in Kaneaz tools toggle on top; below them, every MCP server registered with the harness. All tool calls flow through the local mcp-client; nothing leaves the device."
+      subtitle="Built-in Kenaz tools toggle on top; below them, every MCP server registered with the harness. All tool calls flow through the local mcp-client; nothing leaves the device."
     />
 
-    <KaneazToolsPanel />
+    <KenazToolsPanel />
 
     <div class="px-6 pt-2 pb-1">
       <h2
@@ -95,7 +95,7 @@ onMounted(() => {
         layer so capability advertisements stay enforceable.
       </p>
       <a
-        href="https://github.com/sigil-tech/kaneaz-harness/blob/main/docs/mcp.md"
+        href="https://github.com/sigil-tech/kenaz-harness/blob/main/docs/mcp.md"
         class="mt-3 inline-block text-accent hover:text-accent-muted"
         target="_blank"
         rel="noopener"

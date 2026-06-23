@@ -158,7 +158,7 @@ function escapeHtml(s: string): string {
 
 function onDragStart(ev: DragEvent, kindId: string) {
   if (ev.dataTransfer) {
-    ev.dataTransfer.setData('application/x-kaneaz-node-kind', kindId);
+    ev.dataTransfer.setData('application/x-kenaz-node-kind', kindId);
     ev.dataTransfer.setData('text/plain', kindId);
     ev.dataTransfer.effectAllowed = 'copy';
   }

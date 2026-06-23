@@ -1,5 +1,5 @@
 // Package websearch implements the local-first web-search tool for the
-// Kaneaz harness. The package owns the Backend interface, public-search
+// Kenaz harness. The package owns the Backend interface, public-search
 // scrapers (DuckDuckGo HTML, Wikipedia opensearch), the multi-backend
 // aggregator, page fetch + readable-text extraction, and the
 // <source>-tag prompt-injection wrapper. The Tool struct stitches these

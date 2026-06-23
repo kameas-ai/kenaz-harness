@@ -78,7 +78,7 @@ describe('AddProviderForm', () => {
     expect(input.name).toBe('Claude Sonnet 4.5');
     expect(input.cred.kind).toBe('keychain');
     expect(input.cred.locator).toBe(
-      'kaneaz-harness/anthropic-claude-sonnet-4-5',
+      'kenaz-harness/anthropic-claude-sonnet-4-5',
     );
     expect(input.plaintextApiKey).toBe('sk-secret');
   });
@@ -102,7 +102,7 @@ describe('AddProviderForm', () => {
     await wrapper.find('form').trigger('submit.prevent');
     const emitted = wrapper.emitted('submit') as AddProviderInput[][];
     expect(emitted[0][0].id).toBe('my-anth');
-    expect(emitted[0][0].cred.locator).toBe('kaneaz-harness/my-anth');
+    expect(emitted[0][0].cred.locator).toBe('kenaz-harness/my-anth');
   });
 
   it('falls back to manual model entry when /models returns empty', async () => {

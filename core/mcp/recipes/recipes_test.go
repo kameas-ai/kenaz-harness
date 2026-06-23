@@ -39,7 +39,7 @@ func TestBraveSearchRemoved(t *testing.T) {
 	// Local-only stance (charter): the Brave Search recipe required an
 	// external API key and is no longer shipped. Web search ships as a
 	// built-in keyless tool surfaced via core/tools/websearch (toggle
-	// in KaneazToolsPanel under "Local tools").
+	// in KenazToolsPanel under "Local tools").
 	cat := recipes.Shipped()
 	if _, ok := cat.Get("brave-search"); ok {
 		t.Fatal("brave-search MUST NOT be in shipped catalog (local-only stance)")

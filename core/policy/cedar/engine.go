@@ -50,7 +50,7 @@ var defaultBashPolicySource []byte
 var defaultFilesystemPolicySource []byte
 
 // defaultToolPolicySource is the embedded Tool-family default for the
-// universal permission system. Permits built-in `kaneaz__*` tools by
+// universal permission system. Permits built-in `kenaz__*` tools by
 // matching on the `server_name` context attribute; non-builtin tools
 // fall through to NotApplicable + prompt.
 //
@@ -597,7 +597,7 @@ func populateFamilyContext(
 		// "<server>__<tool>" shape. The split is deterministic; a
 		// resource id that doesn't contain "__" is treated as a
 		// no-server tool name (server_name="") so the default policy
-		// — which permits server_name=="kaneaz" — refuses to match.
+		// — which permits server_name=="kenaz" — refuses to match.
 		toolName := resourceID
 		serverName := ""
 		if idx := strings.Index(resourceID, "__"); idx >= 0 {

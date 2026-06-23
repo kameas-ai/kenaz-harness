@@ -5,7 +5,7 @@ import (
 	"sync"
 )
 
-const fallbackUserAgent = "kaneaz-harness/dev"
+const fallbackUserAgent = "kenaz-harness/dev"
 
 var (
 	uaOnce sync.Once
@@ -23,7 +23,7 @@ func userAgent() string {
 			uaVal = fallbackUserAgent
 			return
 		}
-		uaVal = "kaneaz-harness/" + info.Main.Version
+		uaVal = "kenaz-harness/" + info.Main.Version
 	})
 	return uaVal
 }

@@ -1,13 +1,13 @@
 // Package fsbuiltins implements the builtin filesystem tools for the
 // builtin-filesystem-tools-01KR3N4P mission. It registers six tools:
 //
-//   - kaneaz__read_file     — read a file's text content (WP01)
-//   - kaneaz__list_dir      — list a directory's entries (WP01)
-//   - kaneaz__glob          — glob match across a directory tree (WP01)
-//   - kaneaz__grep          — in-process regex search (WP02)
-//   - kaneaz__write_file    — atomic write to a path (WP03)
-//   - kaneaz__edit_file     — replace a substring in a file (WP03)
-//   - kaneaz__list_open_worklist — enumerate pending worklist items (WP04)
+//   - kenaz__read_file     — read a file's text content (WP01)
+//   - kenaz__list_dir      — list a directory's entries (WP01)
+//   - kenaz__glob          — glob match across a directory tree (WP01)
+//   - kenaz__grep          — in-process regex search (WP02)
+//   - kenaz__write_file    — atomic write to a path (WP03)
+//   - kenaz__edit_file     — replace a substring in a file (WP03)
+//   - kenaz__list_open_worklist — enumerate pending worklist items (WP04)
 //
 // All tools gate on the same Cedar fs.Gate flow. Read tools gate on
 // OpRead, write tools on OpWrite. The edit_file tool additionally
@@ -17,7 +17,7 @@
 // Per-session "read" state is held in a process-global ReadSet keyed by
 // session ID. The chat runner (or dispatch adapter) is expected to call
 // ReadSet.Add(sessionID, canonicalPath) after every successful
-// kaneaz__read_file call — the edit_file tool consults the set.
+// kenaz__read_file call — the edit_file tool consults the set.
 //
 // DIRECTIVE_001: backend-only; no CGo, no GUI imports.
 package fsbuiltins
@@ -41,15 +41,15 @@ import (
 	"github.com/kameas-ai/kenaz-harness/core/toolloop"
 )
 
-// Tool names — kaneaz__ prefix is reserved for built-ins.
+// Tool names — kenaz__ prefix is reserved for built-ins.
 const (
-	NameReadFile          = "kaneaz__read_file"
-	NameListDir           = "kaneaz__list_dir"
-	NameGlob              = "kaneaz__glob"
-	NameGrep              = "kaneaz__grep"
-	NameWriteFile         = "kaneaz__write_file"
-	NameEditFile          = "kaneaz__edit_file"
-	NameListOpenWorklist  = "kaneaz__list_open_worklist"
+	NameReadFile          = "kenaz__read_file"
+	NameListDir           = "kenaz__list_dir"
+	NameGlob              = "kenaz__glob"
+	NameGrep              = "kenaz__grep"
+	NameWriteFile         = "kenaz__write_file"
+	NameEditFile          = "kenaz__edit_file"
+	NameListOpenWorklist  = "kenaz__list_open_worklist"
 )
 
 // ErrEditWithoutRead is returned by edit_file when the canonical path
@@ -193,7 +193,7 @@ func jsonString(s string) string {
 
 // ─── read_file ──────────────────────────────────────────────────────────────
 
-// ReadFileTool implements kaneaz__read_file.
+// ReadFileTool implements kenaz__read_file.
 type ReadFileTool struct {
 	gate    *corefs.Gate
 	readSet *ReadSet
@@ -316,7 +316,7 @@ func (t *ReadFileTool) Call(ctx context.Context, raw json.RawMessage) (json.RawM
 
 // ─── list_dir ───────────────────────────────────────────────────────────────
 
-// ListDirTool implements kaneaz__list_dir.
+// ListDirTool implements kenaz__list_dir.
 type ListDirTool struct {
 	gate    *corefs.Gate
 	enabled func() bool
@@ -456,7 +456,7 @@ func toDirEntry(path, root string, d fs.DirEntry) dirEntry {
 
 // ─── glob ───────────────────────────────────────────────────────────────────
 
-// GlobTool implements kaneaz__glob.
+// GlobTool implements kenaz__glob.
 type GlobTool struct {
 	gate    *corefs.Gate
 	enabled func() bool
@@ -621,7 +621,7 @@ func matchDoublestar(pats, segs []string) bool {
 
 // ─── grep ───────────────────────────────────────────────────────────────────
 
-// GrepTool implements kaneaz__grep using an internal walker (no ripgrep).
+// GrepTool implements kenaz__grep using an internal walker (no ripgrep).
 type GrepTool struct {
 	gate    *corefs.Gate
 	enabled func() bool
@@ -783,7 +783,7 @@ func (t *GrepTool) Call(ctx context.Context, raw json.RawMessage) (json.RawMessa
 
 // ─── write_file ─────────────────────────────────────────────────────────────
 
-// WriteFileTool implements kaneaz__write_file with atomic-write pattern.
+// WriteFileTool implements kenaz__write_file with atomic-write pattern.
 type WriteFileTool struct {
 	gate    *corefs.Gate
 	enabled func() bool
@@ -896,7 +896,7 @@ func atomicWrite(path string, data []byte, mode fs.FileMode) error {
 
 // ─── edit_file ──────────────────────────────────────────────────────────────
 
-// EditFileTool implements kaneaz__edit_file. Enforces that the path was
+// EditFileTool implements kenaz__edit_file. Enforces that the path was
 // read in the current session before accepting an edit.
 type EditFileTool struct {
 	gate    *corefs.Gate
@@ -1012,7 +1012,7 @@ func (t *EditFileTool) Call(ctx context.Context, raw json.RawMessage) (json.RawM
 
 // ─── list_open_worklist ─────────────────────────────────────────────────────
 
-// ListOpenWorklistTool implements kaneaz__list_open_worklist.
+// ListOpenWorklistTool implements kenaz__list_open_worklist.
 // It scans a YAML/JSON worklist directory for pending items and returns
 // them. When the worklist is empty it also returns a loop-refusal hint.
 type ListOpenWorklistTool struct {

@@ -1,4 +1,4 @@
-// Package todo implements the kaneaz__todo_write builtin tool
+// Package todo implements the kenaz__todo_write builtin tool
 // (builtin-tools-search-and-elicitation-01KZNP3D WP05).
 //
 // The tool lets the model maintain a structured, session-scoped task list.
@@ -29,7 +29,7 @@ import (
 )
 
 // ToolName is the canonical fully-qualified name exposed to the model.
-const ToolName = "kaneaz__todo_write"
+const ToolName = "kenaz__todo_write"
 
 // StatusPending, StatusInProgress, StatusDone, StatusCancelled are the
 // closed enum values for TodoItem.Status. The model MUST send one of
@@ -186,7 +186,7 @@ type Options struct {
 	Enabled func() bool
 }
 
-// TodoWriteTool implements kaneaz__todo_write.
+// TodoWriteTool implements kenaz__todo_write.
 type TodoWriteTool struct {
 	store   *Store
 	enabled func() bool

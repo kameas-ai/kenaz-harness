@@ -1,4 +1,4 @@
-// Package readcontextfile implements the kaneaz__read_context_file
+// Package readcontextfile implements the kenaz__read_context_file
 // built-in tool. It lets the agent read a non-root, non-always file
 // from an attached context module on demand.
 //
@@ -10,7 +10,7 @@
 //     so requests outside them are rejected).
 //   - File size is bounded to MaxFileBytes (1 MiB, same as the library).
 //
-// Tool name: kaneaz__read_context_file  (uses the "kaneaz__" built-in
+// Tool name: kenaz__read_context_file  (uses the "kenaz__" built-in
 // prefix so the toolloop can route by prefix without a registry lookup).
 package readcontextfile
 
@@ -29,7 +29,7 @@ import (
 
 const (
 	// ToolName is the namespaced identifier surfaced to the model.
-	ToolName = "kaneaz__read_context_file"
+	ToolName = "kenaz__read_context_file"
 
 	// ToolDescription explains when the agent should use this tool.
 	// The phrasing intentionally echoes AGENTS.md conventions so models
@@ -89,7 +89,7 @@ type Options struct {
 	SessionResolver func(ctx context.Context) string
 }
 
-// Tool implements the kaneaz__read_context_file built-in.
+// Tool implements the kenaz__read_context_file built-in.
 // Safe for concurrent use after construction.
 type Tool struct {
 	lib      LibraryReader

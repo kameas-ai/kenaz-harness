@@ -3,13 +3,13 @@
 //
 // When registered, the hook prepends a system message containing a
 // compact catalog of all user commands with model_invokable=true so
-// the model knows which kaneaz__skill invocations are valid in the
+// the model knows which kenaz__skill invocations are valid in the
 // current session.
 //
 // Catalog format (injected as a system message):
 //
 //	## Available skills
-//	You can invoke the following skills using the kaneaz__skill tool.
+//	You can invoke the following skills using the kenaz__skill tool.
 //
 //	### /summarize
 //	Summarize the current document or selection.
@@ -44,8 +44,8 @@ const (
 
 	// catalogHeader is prepended to every catalog injection.
 	catalogHeader = "## Available skills\n" +
-		"You can invoke the following skills using the `kaneaz__skill` tool.\n" +
-		"Call `kaneaz__skill` with `{\"name\": \"<skill-name>\", \"args\": {...}}` " +
+		"You can invoke the following skills using the `kenaz__skill` tool.\n" +
+		"Call `kenaz__skill` with `{\"name\": \"<skill-name>\", \"args\": {...}}` " +
 		"when the user's request matches a skill's description.\n\n"
 
 	// catalogTruncationNote is appended when the budget forces truncation.
@@ -78,7 +78,7 @@ func RegisterSkillCatalogBuiltin(reg *BuiltinRegistry, deps SkillCatalogDeps) {
 	reg.RegisterPreSend(BuiltinSkillCatalog, makeSkillCatalogBuiltin(deps), BuiltinDescriptor{
 		ID:          BuiltinSkillCatalog,
 		Name:        "Skill catalog: inject",
-		Description: "Pre-send hook. Injects the catalog of model-invokable skills as a system message so the model can invoke them via kaneaz__skill.",
+		Description: "Pre-send hook. Injects the catalog of model-invokable skills as a system message so the model can invoke them via kenaz__skill.",
 		Events:      []string{EventPreSend},
 		DefaultConfig: map[string]any{
 			"max_catalog_bytes": MaxCatalogBytes,

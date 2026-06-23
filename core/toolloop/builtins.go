@@ -16,7 +16,7 @@
 //   3. BuiltinPool wraps an MCPPool and merges the built-in registry
 //      into both Tools() and Call(). Built-in tools take precedence
 //      over an MCP server that happens to expose the same name (the
-//      "kaneaz__" prefix is reserved on the MCP catalog so this
+//      "kenaz__" prefix is reserved on the MCP catalog so this
 //      conflict never arises in practice).
 //
 // The BuiltinPool is the chassis-side entry point: wiring code wraps
@@ -48,9 +48,9 @@ type BuiltinTool interface {
 
 // BuiltinServerName is the synthetic server name the loop uses for
 // the dispatch path. It MUST NOT clash with any real MCP server name;
-// users can't add a server called "kaneaz" because the recipe catalog
+// users can't add a server called "kenaz" because the recipe catalog
 // validates server names against an allowlist.
-const BuiltinServerName = "kaneaz"
+const BuiltinServerName = "kenaz"
 
 // toolNameSeparator is the canonical delimiter between server and
 // tool names in the namespaced "<server>__<tool>" form used on the
@@ -59,22 +59,22 @@ const BuiltinServerName = "kaneaz"
 const toolNameSeparator = "__"
 
 // builtinNamePrefix is the namespace prefix the in-binary tools embed
-// in their Name() values (e.g. websearch.Name = "kaneaz__web_search").
-// The toolloop's namespaced-name split strips the "kaneaz__" prefix
+// in their Name() values (e.g. websearch.Name = "kenaz__web_search").
+// The toolloop's namespaced-name split strips the "kenaz__" prefix
 // before dispatch, so BuiltinPool.Call receives the tool name without
 // the prefix. We restore the prefix when looking up the registry so
 // the BuiltinTool's own Name() comparison works.
-const builtinNamePrefix = "kaneaz" + toolNameSeparator
+const builtinNamePrefix = "kenaz" + toolNameSeparator
 
-// fullBuiltinName re-attaches the "kaneaz__" prefix to a stripped
-// tool name. The toolloop splits "kaneaz__bash" into server="kaneaz"
+// fullBuiltinName re-attaches the "kenaz__" prefix to a stripped
+// tool name. The toolloop splits "kenaz__bash" into server="kenaz"
 // + tool="bash"; BuiltinPool.Call needs to find the tool registered
-// under "kaneaz__bash". The helper hides the asymmetry from callers.
+// under "kenaz__bash". The helper hides the asymmetry from callers.
 func fullBuiltinName(stripped string) string {
 	return builtinNamePrefix + stripped
 }
 
-// strippedBuiltinName removes the "kaneaz__" prefix when present.
+// strippedBuiltinName removes the "kenaz__" prefix when present.
 // Used by BuiltinPool.Tools to publish the un-namespaced tool name in
 // the (server, name) tuple the loop's catalog membership check
 // expects.
@@ -281,7 +281,7 @@ func NewBuiltinPool(base MCPPool, registry BuiltinLookup) *BuiltinPool {
 // list — the dispatch path doesn't care about ordering.
 //
 // Each built-in's (Server, Name) is (BuiltinServerName, stripped) —
-// the "kaneaz__" prefix is removed so the loop's namespaced-name split
+// the "kenaz__" prefix is removed so the loop's namespaced-name split
 // produces the same stripped name on dispatch. Lookup compensates by
 // re-attaching the prefix.
 func (p *BuiltinPool) Tools(ctx context.Context) ([]Tool, error) {
@@ -314,7 +314,7 @@ func (p *BuiltinPool) Call(ctx context.Context, server, tool string, args json.R
 	}
 	if server == BuiltinServerName && p.builtins != nil {
 		// Try the name as-passed, then the prefixed form. Built-ins
-		// register under their full Name() (e.g. "kaneaz__bash"); the
+		// register under their full Name() (e.g. "kenaz__bash"); the
 		// loop strips the prefix on dispatch so we look up under both.
 		if t, ok := p.builtins.Lookup(tool); ok {
 			return t.Call(ctx, args)

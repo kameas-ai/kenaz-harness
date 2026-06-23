@@ -1,4 +1,4 @@
-// Package askuserquestion implements the kaneaz__ask_user_question
+// Package askuserquestion implements the kenaz__ask_user_question
 // built-in tool (mission ask-user-question-interactive-01KZNP3G).
 //
 // The tool lets the model pose a structured question to the user via a
@@ -12,7 +12,7 @@
 //   - date       — date-only picker (YYYY-MM-DD)
 //   - file       — OS file-picker (returns path)
 //
-// The tool follows the same "kaneaz__" prefix + BuiltinTool interface
+// The tool follows the same "kenaz__" prefix + BuiltinTool interface
 // contract as save_artifact and bash. The RPC layer (Elicit view, WP04)
 // holds the dialog-open/resolve machinery; this package owns only the
 // argument parsing, validation, and the blocking call to the RPC bridge.
@@ -31,8 +31,8 @@ import (
 )
 
 // ToolName is the namespaced tool identifier surfaced to the model.
-// The "kaneaz__" prefix is reserved for built-ins.
-const ToolName = "kaneaz__ask_user_question"
+// The "kenaz__" prefix is reserved for built-ins.
+const ToolName = "kenaz__ask_user_question"
 
 // ToolDescription is the user-facing description sent to the model.
 // Phrased to bias model selection toward this tool when the model
@@ -215,7 +215,7 @@ type Options struct {
 	Logger   *slog.Logger
 }
 
-// Tool implements the kaneaz__ask_user_question builtin.
+// Tool implements the kenaz__ask_user_question builtin.
 // Safe for concurrent use.
 type Tool struct {
 	delegate Delegate

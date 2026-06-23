@@ -14,7 +14,7 @@ import (
 
 const (
 	// ToolName is the tool-discovery name for the built-in web search.
-	ToolName = "kaneaz__web_search"
+	ToolName = "kenaz__web_search"
 
 	// ToolDescription is the user-facing description surfaced via the
 	// tool-discovery layer.

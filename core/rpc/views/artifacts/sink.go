@@ -119,7 +119,7 @@ func (s *sink) OnPostToolMessage(ctx context.Context, sessionID, toolName, toolA
 	}
 
 	// Path 1 — file-write tools. When the model uses a filesystem MCP
-	// (or kaneaz built-in) to write a file, the tool *result* is a
+	// (or kenaz built-in) to write a file, the tool *result* is a
 	// brief "Successfully wrote N bytes to /path" string with no
 	// fenced code blocks — the actual content the user wants pinned
 	// lives in the tool ARGS. Pull it out and emit an artifact
@@ -147,7 +147,7 @@ func (s *sink) OnPostToolMessage(ctx context.Context, sessionID, toolName, toolA
 	}
 
 	// Path 2 — generic code-block scan over the tool result text.
-	// Some tools (kaneaz__bash, search tools) return fenced blocks
+	// Some tools (kenaz__bash, search tools) return fenced blocks
 	// directly in their output; this is the existing behaviour.
 	if toolResult != "" {
 		// Use the tool name as the synthetic message id so callers correlate

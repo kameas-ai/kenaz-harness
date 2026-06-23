@@ -10,7 +10,7 @@ package agentgraph
 // dispatch-path integration.
 //
 // Acceptance criteria (FR-010):
-//   - After 1 dispatch of kaneaz__sleep, env.Counters.ToolCallsMade == 0.
+//   - After 1 dispatch of kenaz__sleep, env.Counters.ToolCallsMade == 0.
 //   - After 1 dispatch of a non-passive tool, env.Counters.ToolCallsMade == 1.
 
 import (
@@ -21,18 +21,18 @@ import (
 )
 
 // iterGateStubTools wraps stubTools (defined in exec_compute_test.go) with
-// pre-registered kaneaz__sleep and a non-passive test tool.
+// pre-registered kenaz__sleep and a non-passive test tool.
 func newIterGateTools() *stubTools {
 	t := newStubTools()
 	t.allow(sleep.ToolName, `{"slept_s":1}`, false)
-	t.allow("kaneaz__glob", `{"matches":[]}`, false)
+	t.allow("kenaz__glob", `{"matches":[]}`, false)
 	return t
 }
 
 // ---- toolDispatchExecutor (model-driven dispatch) ----
 
 // TestToolDispatchExecutor_PassiveTool_DoesNotIncrementCounter verifies that
-// dispatching kaneaz__sleep via the model-driven tool_dispatch executor does
+// dispatching kenaz__sleep via the model-driven tool_dispatch executor does
 // NOT increment ToolCallsMade (FR-010).
 func TestToolDispatchExecutor_PassiveTool_DoesNotIncrementCounter(t *testing.T) {
 	t.Parallel()
@@ -56,7 +56,7 @@ func TestToolDispatchExecutor_PassiveTool_DoesNotIncrementCounter(t *testing.T) 
 	}
 
 	if got := env.Counters.ToolCallsMade; got != 0 {
-		t.Errorf("ToolCallsMade after kaneaz__sleep = %d, want 0 (FR-010)", got)
+		t.Errorf("ToolCallsMade after kenaz__sleep = %d, want 0 (FR-010)", got)
 	}
 }
 
@@ -77,7 +77,7 @@ func TestToolDispatchExecutor_ActiveTool_IncrementsCounter(t *testing.T) {
 	}
 	inputs := PortValues{
 		"tool_calls": []ToolCallRequest{
-			{ID: "c1", Name: "kaneaz__glob", Arguments: `{"pattern":"*.go"}`},
+			{ID: "c1", Name: "kenaz__glob", Arguments: `{"pattern":"*.go"}`},
 		},
 	}
 	if _, err := ex.Execute(context.Background(), env, node, inputs); err != nil {
@@ -85,7 +85,7 @@ func TestToolDispatchExecutor_ActiveTool_IncrementsCounter(t *testing.T) {
 	}
 
 	if got := env.Counters.ToolCallsMade; got != 1 {
-		t.Errorf("ToolCallsMade after kaneaz__glob = %d, want 1", got)
+		t.Errorf("ToolCallsMade after kenaz__glob = %d, want 1", got)
 	}
 }
 
@@ -114,7 +114,7 @@ func TestToolExecutor_PassiveTool_DoesNotIncrementCounter(t *testing.T) {
 	}
 
 	if got := env.Counters.ToolCallsMade; got != 0 {
-		t.Errorf("ToolCallsMade after static kaneaz__sleep = %d, want 0 (FR-010)", got)
+		t.Errorf("ToolCallsMade after static kenaz__sleep = %d, want 0 (FR-010)", got)
 	}
 }
 
@@ -130,7 +130,7 @@ func TestToolExecutor_ActiveTool_IncrementsCounter(t *testing.T) {
 	node := &Node{
 		ID:    "glob-node",
 		Kind:  NodeKindTool,
-		Attrs: ToolAttrs{Name: "kaneaz__glob"},
+		Attrs: ToolAttrs{Name: "kenaz__glob"},
 	}
 	if _, err := ex.Execute(context.Background(), env, node, PortValues{
 		"args": map[string]any{"pattern": "*.go"},
@@ -139,6 +139,6 @@ func TestToolExecutor_ActiveTool_IncrementsCounter(t *testing.T) {
 	}
 
 	if got := env.Counters.ToolCallsMade; got != 1 {
-		t.Errorf("ToolCallsMade after static kaneaz__glob = %d, want 1", got)
+		t.Errorf("ToolCallsMade after static kenaz__glob = %d, want 1", got)
 	}
 }

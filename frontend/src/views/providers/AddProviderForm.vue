@@ -451,7 +451,7 @@ function onSubmit(): void {
   } else if (isNoneAuth) {
     cred = { kind: 'keychain' as const, locator: '' };
   } else {
-    cred = { kind: 'keychain' as const, locator: `kaneaz-harness/${id}` };
+    cred = { kind: 'keychain' as const, locator: `kenaz-harness/${id}` };
   }
 
   const input: AddProviderInput = {

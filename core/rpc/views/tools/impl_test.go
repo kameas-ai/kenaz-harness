@@ -672,7 +672,7 @@ func TestInstallRecipe_DataDirSubstitutedInDefault(t *testing.T) {
 	if _, statErr := os.Stat(wantWorkspace); statErr != nil {
 		t.Fatalf("default workspace not created: %v", statErr)
 	}
-	if _, statErr := os.Stat(filepath.Join(wantWorkspace, ".kaneaz-workspace")); statErr != nil {
+	if _, statErr := os.Stat(filepath.Join(wantWorkspace, ".kenaz-workspace")); statErr != nil {
 		t.Fatalf("workspace marker not written: %v", statErr)
 	}
 	// Persisted Config carries the expanded path (no literal ${DATA_DIR}).

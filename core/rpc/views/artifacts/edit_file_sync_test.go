@@ -13,7 +13,7 @@ import (
 func TestExtractEditFilePath_HappyPath(t *testing.T) {
 	t.Parallel()
 	args := `{"path":"/tmp/foo.go","old_str":"foo","new_str":"bar"}`
-	got := ExtractEditFilePath("kaneaz__edit_file", args)
+	got := ExtractEditFilePath("kenaz__edit_file", args)
 	if got == "" {
 		t.Fatal("expected non-empty path")
 	}
@@ -26,7 +26,7 @@ func TestExtractEditFilePath_HappyPath(t *testing.T) {
 func TestExtractEditFilePath_WrongTool(t *testing.T) {
 	t.Parallel()
 	args := `{"path":"/tmp/foo.go","old_str":"foo","new_str":"bar"}`
-	got := ExtractEditFilePath("kaneaz__read_file", args)
+	got := ExtractEditFilePath("kenaz__read_file", args)
 	if got != "" {
 		t.Errorf("expected empty for non-edit_file tool, got %q", got)
 	}
@@ -34,7 +34,7 @@ func TestExtractEditFilePath_WrongTool(t *testing.T) {
 
 func TestExtractEditFilePath_EmptyArgs(t *testing.T) {
 	t.Parallel()
-	got := ExtractEditFilePath("kaneaz__edit_file", "")
+	got := ExtractEditFilePath("kenaz__edit_file", "")
 	if got != "" {
 		t.Errorf("expected empty for empty args, got %q", got)
 	}
@@ -42,7 +42,7 @@ func TestExtractEditFilePath_EmptyArgs(t *testing.T) {
 
 func TestExtractEditFilePath_MissingPath(t *testing.T) {
 	t.Parallel()
-	got := ExtractEditFilePath("kaneaz__edit_file", `{"old_str":"x","new_str":"y"}`)
+	got := ExtractEditFilePath("kenaz__edit_file", `{"old_str":"x","new_str":"y"}`)
 	if got != "" {
 		t.Errorf("expected empty for missing path, got %q", got)
 	}
@@ -108,7 +108,7 @@ func TestCaptureFromEditFile_ReadsFile(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	cand := captureFromEditFile("kaneaz__edit_file", path)
+	cand := captureFromEditFile("kenaz__edit_file", path)
 	if cand == nil {
 		t.Fatal("expected non-nil candidate")
 	}
@@ -125,7 +125,7 @@ func TestCaptureFromEditFile_ReadsFile(t *testing.T) {
 
 func TestCaptureFromEditFile_MissingFile(t *testing.T) {
 	t.Parallel()
-	cand := captureFromEditFile("kaneaz__edit_file", "/nonexistent/file.go")
+	cand := captureFromEditFile("kenaz__edit_file", "/nonexistent/file.go")
 	if cand != nil {
 		t.Error("expected nil for missing file")
 	}
@@ -149,7 +149,7 @@ func TestSinkWithEditSync_EnvVarGate(t *testing.T) {
 	synced := NewSinkWithEditSync(inner, NewCoalesceBuffer(), nil)
 
 	args := `{"path":"` + path + `","old_str":"x","new_str":"y"}`
-	synced.OnPostToolMessage(context.Background(), "s1", "kaneaz__edit_file", args, `{"written":12}`, time.Second)
+	synced.OnPostToolMessage(context.Background(), "s1", "kenaz__edit_file", args, `{"written":12}`, time.Second)
 
 	// Without env-var, edit_file sync should not have fired.
 	// The base sink may or may not fire for tool_output — check that no
@@ -181,7 +181,7 @@ func TestSinkWithEditSync_CapturesWhenEnvVarOn(t *testing.T) {
 	synced := NewSinkWithEditSync(inner, NewCoalesceBuffer(), func() bool { return true })
 
 	args := `{"path":"` + path + `","old_str":"x","new_str":"y"}`
-	synced.OnPostToolMessage(context.Background(), "s1", "kaneaz__edit_file", args, `{"written":30}`, time.Second)
+	synced.OnPostToolMessage(context.Background(), "s1", "kenaz__edit_file", args, `{"written":30}`, time.Second)
 
 	// At least one call should carry AbsolutePath.
 	calls := mgr.snapshotCalls()
@@ -216,8 +216,8 @@ func TestSinkWithEditSync_CoalescesDuplicates(t *testing.T) {
 	args := `{"path":"` + path + `","old_str":"x","new_str":"y"}`
 	ctx := context.Background()
 	// Call twice with the same path.
-	synced.OnPostToolMessage(ctx, "s1", "kaneaz__edit_file", args, `{}`, time.Second)
-	synced.OnPostToolMessage(ctx, "s1", "kaneaz__edit_file", args, `{}`, time.Second)
+	synced.OnPostToolMessage(ctx, "s1", "kenaz__edit_file", args, `{}`, time.Second)
+	synced.OnPostToolMessage(ctx, "s1", "kenaz__edit_file", args, `{}`, time.Second)
 
 	// Count captures with AbsolutePath set.
 	count := 0
@@ -249,7 +249,7 @@ func TestSinkWithEditSync_PerUserGateOff(t *testing.T) {
 	synced := NewSinkWithEditSync(inner, NewCoalesceBuffer(), func() bool { return false })
 
 	args := `{"path":"` + path + `","old_str":"x","new_str":"y"}`
-	synced.OnPostToolMessage(context.Background(), "s1", "kaneaz__edit_file", args, `{}`, time.Second)
+	synced.OnPostToolMessage(context.Background(), "s1", "kenaz__edit_file", args, `{}`, time.Second)
 
 	for _, batch := range mgr.snapshotCalls() {
 		for _, c := range batch {

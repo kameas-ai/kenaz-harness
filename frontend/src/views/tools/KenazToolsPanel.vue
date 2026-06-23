@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /**
- * KaneazToolsPanel — built-in toggleable tools shipped with the
+ * KenazToolsPanel — built-in toggleable tools shipped with the
  * harness. v1 hosts the Memory tool; the WP06 extension below it
  * adds the shipped MCP recipes catalog (Brave Search, etc.) with
  * toggle / key-prompt-modal / status pill UX.
@@ -618,7 +618,7 @@ watch(
     <h2
       class="font-ui text-[11px] uppercase tracking-[0.18em] text-ink-subtle mb-3"
     >
-      Kaneaz tools
+      Kenaz tools
     </h2>
 
     <div
@@ -788,11 +788,11 @@ watch(
             Enables the read-family builtin tools shipped with the harness:
           </p>
           <ul class="mt-1 font-mono text-[10px] text-ink-dim list-none">
-            <li>kaneaz__read_file</li>
-            <li>kaneaz__list_dir</li>
-            <li>kaneaz__glob</li>
-            <li>kaneaz__grep</li>
-            <li>kaneaz__list_open_worklist</li>
+            <li>kenaz__read_file</li>
+            <li>kenaz__list_dir</li>
+            <li>kenaz__glob</li>
+            <li>kenaz__grep</li>
+            <li>kenaz__list_open_worklist</li>
           </ul>
           <p class="mt-1 text-[11px] text-ink-muted max-w-prose">
             Default OFF. Cedar policy still applies to every call. Filesystem access
@@ -842,8 +842,8 @@ watch(
             Enables the write-family builtin tools shipped with the harness:
           </p>
           <ul class="mt-1 font-mono text-[10px] text-ink-dim list-none">
-            <li>kaneaz__write_file</li>
-            <li>kaneaz__edit_file</li>
+            <li>kenaz__write_file</li>
+            <li>kenaz__edit_file</li>
           </ul>
           <p class="mt-1 text-[11px] text-ink-muted max-w-prose">
             Default OFF. Write tools modify your filesystem directly.
@@ -896,7 +896,7 @@ watch(
             </span>
           </div>
           <p class="mt-1 text-[11px] text-ink-muted max-w-prose">
-            Enables the <code class="font-mono">kaneaz__todo_write</code> builtin.
+            Enables the <code class="font-mono">kenaz__todo_write</code> builtin.
             The model maintains a session-scoped structured task list — items have
             status (pending, in_progress, done, cancelled) and priority. The list
             is written atomically on each call and visible in the chat via the

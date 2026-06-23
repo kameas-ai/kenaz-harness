@@ -1,4 +1,4 @@
-// Package manifest implements the kaneaz.yaml bundle manifest format.
+// Package manifest implements the kenaz.yaml bundle manifest format.
 //
 // The manifest is YAML 1.2-shaped (per research D1) with a JSON Schema that
 // is embedded at build time and is the source of truth for the manifest
@@ -28,7 +28,7 @@ import (
 	"strconv"
 )
 
-// Manifest is the parsed kaneaz.yaml descriptor.
+// Manifest is the parsed kenaz.yaml descriptor.
 type Manifest struct {
 	SchemaVersion int                  `yaml:"schema_version" json:"schema_version"`
 	Name          string               `yaml:"name" json:"name"`

@@ -1,12 +1,12 @@
-// Package updateartifact implements the kaneaz__update_artifact built-in
+// Package updateartifact implements the kenaz__update_artifact built-in
 // tool. It accepts (artifact_id, content[, summary][, path]) from the
 // model and writes a NEW row in artifact_versions rather than mutating
 // the parent artifact row. The bytes ride into the existing MediaStore
 // CAS pipeline so dedup and refcounting work unchanged.
 //
 // This package mirrors the saveartifact package structure:
-// core/tools/saveartifact implements kaneaz__save_artifact (create);
-// this package implements kaneaz__update_artifact (revise).
+// core/tools/saveartifact implements kenaz__save_artifact (create);
+// this package implements kenaz__update_artifact (revise).
 //
 // Default-on by design, parallel to save_artifact: updating a
 // deliverable is a low-risk primitive. The Settings dial uses the same
@@ -28,7 +28,7 @@ import (
 
 const (
 	// ToolName is the namespaced tool identifier surfaced to the model.
-	ToolName = "kaneaz__update_artifact"
+	ToolName = "kenaz__update_artifact"
 
 	// ToolDescription is the user-facing description sent to the model
 	// via the tool catalog. Phrased to bias model selection toward this
@@ -43,13 +43,13 @@ const (
 	MaxContentBytes = 10 * 1024 * 1024
 )
 
-// inputSchema is the JSON Schema for kaneaz__update_artifact.
+// inputSchema is the JSON Schema for kenaz__update_artifact.
 const inputSchema = `{
   "type": "object",
   "properties": {
     "artifact_id": {
       "type": "string",
-      "description": "ID of the artifact to update (as returned by kaneaz__save_artifact or a prior kaneaz__update_artifact call)."
+      "description": "ID of the artifact to update (as returned by kenaz__save_artifact or a prior kenaz__update_artifact call)."
     },
     "content": {
       "type": "string",
@@ -92,7 +92,7 @@ type Options struct {
 	Logger          *slog.Logger
 }
 
-// Tool implements the kaneaz__update_artifact built-in. Safe for
+// Tool implements the kenaz__update_artifact built-in. Safe for
 // concurrent use; all state is read-only after construction.
 type Tool struct {
 	updater  Updater

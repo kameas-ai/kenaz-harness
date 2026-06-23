@@ -1,4 +1,4 @@
-// Package trust implements the kaneaz-harness cryptographic trust primitive
+// Package trust implements the kenaz-harness cryptographic trust primitive
 // for A2A signed agent cards and any future signed surface (context packs,
 // bundle manifests, signed policy artifacts).
 //

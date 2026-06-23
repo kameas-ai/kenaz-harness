@@ -1,6 +1,6 @@
-// Iteration gate for the toolloop (WP04 — kaneaz__sleep).
+// Iteration gate for the toolloop (WP04 — kenaz__sleep).
 //
-// The spec (FR-010) requires that kaneaz__sleep does NOT count against
+// The spec (FR-010) requires that kenaz__sleep does NOT count against
 // KnobMaxIterations. The agentgraph loop body calls every tool through
 // the BuiltinPool and increments a counter on each tool dispatch. The
 // IterGate below is the hook point that lets the dispatch path decide
@@ -11,13 +11,13 @@
 // The IterGate exposes two helpers:
 //
 //  1. IsPassiveTool(name) — returns true for tools whose Cedar action is
-//     tool.passive (currently kaneaz__sleep only). The agentgraph's
+//     tool.passive (currently kenaz__sleep only). The agentgraph's
 //     toolDispatchExecutor consults this before calling env.Counters.AddTool()
 //     so passive tools never increment the run-wide ToolCallsMade counter
 //     (which maps onto KnobMaxIterations through the budget gates).
 //
 //  2. IterCounter — a thin, thread-safe counter that the loop test uses to
-//     verify the invariant: calling kaneaz__sleep through a BuiltinPool
+//     verify the invariant: calling kenaz__sleep through a BuiltinPool
 //     leaves the counter at its pre-call value.
 //
 // # Integration with pre_tool_use
@@ -59,7 +59,7 @@ var passiveToolNames = map[string]struct{}{
 // env.Counters.AddTool() for the named tool.
 //
 // The check is O(1) and allocation-free. toolName is the fully qualified
-// "kaneaz__<tool>" name; partial names are not matched.
+// "kenaz__<tool>" name; partial names are not matched.
 func IsPassiveTool(toolName string) bool {
 	_, ok := passiveToolNames[toolName]
 	return ok

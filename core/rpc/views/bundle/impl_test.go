@@ -191,7 +191,7 @@ artifacts:
     path: policy/policy.toml
     content_hash: "sha256:` + sha64("a-policy") + `"
 `
-	if err := os.WriteFile(filepath.Join(bundleDir, "kaneaz.yaml"), []byte(manifestYAML), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(bundleDir, "kenaz.yaml"), []byte(manifestYAML), 0o644); err != nil {
 		t.Fatalf("write manifest: %v", err)
 	}
 	rw := &memReadWriter{}

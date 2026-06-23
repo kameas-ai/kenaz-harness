@@ -347,7 +347,7 @@ func TestRegistry_MergePersonalProfilesAppends(t *testing.T) {
 	}
 	personal := llm.ProviderProfile{
 		ID: "personal-prof", Kind: "openai", Model: "gpt-4o-mini",
-		Cred: llm.CredentialReference{Kind: "keychain", Locator: "kaneaz-harness/personal-prof"},
+		Cred: llm.CredentialReference{Kind: "keychain", Locator: "kenaz-harness/personal-prof"},
 	}
 	if err := r.MergePersonalProfiles([]llm.ProviderProfile{personal}); err != nil {
 		t.Fatalf("MergePersonalProfiles: %v", err)
@@ -369,7 +369,7 @@ func TestRegistry_MergePersonalProfilesBundleWinsOnCollision(t *testing.T) {
 	}
 	personal := llm.ProviderProfile{
 		ID: "shared-id", Kind: "openai", Model: "gpt-4o-mini",
-		Cred: llm.CredentialReference{Kind: "keychain", Locator: "kaneaz-harness/shared-id"},
+		Cred: llm.CredentialReference{Kind: "keychain", Locator: "kenaz-harness/shared-id"},
 	}
 	if err := r.MergePersonalProfiles([]llm.ProviderProfile{personal}); err != nil {
 		t.Fatalf("MergePersonalProfiles: %v", err)

@@ -35,7 +35,7 @@ func doBuildFakeServer() (string, error) {
 	// works regardless of the test's working directory.
 	_, here, _, _ := runtime.Caller(0)
 	srcDir := filepath.Join(filepath.Dir(here), "testdata", "fake-mcp-server")
-	tmpDir, err := os.MkdirTemp("", "kaneaz-fake-mcp-")
+	tmpDir, err := os.MkdirTemp("", "kenaz-fake-mcp-")
 	if err != nil {
 		return "", err
 	}

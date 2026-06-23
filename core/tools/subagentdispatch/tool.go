@@ -1,4 +1,4 @@
-// Package subagentdispatch implements the kaneaz__subagent_dispatch builtin
+// Package subagentdispatch implements the kenaz__subagent_dispatch builtin
 // tool (branch-subagent-interactive-01KZNP3B WP03).
 //
 // The model calls this tool to delegate a task to a named sub-agent profile.
@@ -32,7 +32,7 @@ import (
 
 const (
 	// ToolName is the namespaced identifier surfaced to the model.
-	ToolName = "kaneaz__subagent_dispatch"
+	ToolName = "kenaz__subagent_dispatch"
 
 	// ToolDescription explains the tool to the model.
 	ToolDescription = "Dispatch a sub-agent to handle a delegated task. " +
@@ -47,7 +47,7 @@ const (
 	MaxPromptLen = 32768
 )
 
-// inputSchema is the JSON Schema for kaneaz__subagent_dispatch's args.
+// inputSchema is the JSON Schema for kenaz__subagent_dispatch's args.
 const inputSchema = `{
   "type": "object",
   "properties": {
@@ -138,7 +138,7 @@ type Options struct {
 	Tasks TasksRegistry
 }
 
-// Tool implements the kaneaz__subagent_dispatch builtin.
+// Tool implements the kenaz__subagent_dispatch builtin.
 type Tool struct {
 	opts Options
 }

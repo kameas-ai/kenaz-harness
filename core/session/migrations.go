@@ -110,7 +110,7 @@ const sqlInitSchema = `
 // needed by the branching-ux-polish-01KQ8TD7 WP01 breadcrumb + sidebar
 // (spec §3 / plan §1).
 // 0324 lands the artifact_versions append-only history table that backs
-// the kaneaz__update_artifact builtin tool
+// the kenaz__update_artifact builtin tool
 // (update-artifact-tool-01KQ8TD4 — see migrations_artifact_versions.go).
 // 0326 lands the agent_graph_node_provenance table that records
 // {kind, manifest_version_at_author, fingerprint_at_author} per graph node,

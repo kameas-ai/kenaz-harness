@@ -283,7 +283,7 @@ function onAttrUpdate(next: Record<string, unknown>) {
 // ── palette drop handling ────────────────────────────────────────────
 
 function onYamlDragOver(ev: DragEvent) {
-  if (ev.dataTransfer && ev.dataTransfer.types.includes('application/x-kaneaz-node-kind')) {
+  if (ev.dataTransfer && ev.dataTransfer.types.includes('application/x-kenaz-node-kind')) {
     ev.preventDefault();
     ev.dataTransfer.dropEffect = 'copy';
   }
@@ -292,7 +292,7 @@ function onYamlDragOver(ev: DragEvent) {
 function onYamlDrop(ev: DragEvent) {
   if (!ev.dataTransfer) return;
   const kind =
-    ev.dataTransfer.getData('application/x-kaneaz-node-kind') ||
+    ev.dataTransfer.getData('application/x-kenaz-node-kind') ||
     ev.dataTransfer.getData('text/plain');
   if (!kind) return;
   ev.preventDefault();

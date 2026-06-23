@@ -1,4 +1,4 @@
-// Package webfetch implements the kaneaz__web_fetch built-in tool.
+// Package webfetch implements the kenaz__web_fetch built-in tool.
 //
 // web_fetch makes HTTP requests on behalf of the model. It supports
 // @secret: reference substitution in header values, the request body,
@@ -31,7 +31,7 @@ import (
 
 const (
 	// ToolName is the namespaced tool identifier.
-	ToolName = "kaneaz__web_fetch"
+	ToolName = "kenaz__web_fetch"
 
 	// ToolDescription is the model-facing description.
 	ToolDescription = "Make an HTTP request. Supports @secret:<locator> references " +

@@ -1,6 +1,6 @@
 // Package personal implements the user-scoped "personal providers" store
 // (DIRECTIVE_001). It persists a small set of ProviderProfile entries to
-// $USER_CONFIG_DIR/kaneaz-harness/providers.json so a user can add a
+// $USER_CONFIG_DIR/kenaz-harness/providers.json so a user can add a
 // provider through the UI without authoring a Bundle.
 //
 // Security posture (mission C-002 / C-004):
@@ -82,14 +82,14 @@ func NewFileStore(path string) (*FileStore, error) {
 	return &FileStore{path: path}, nil
 }
 
-// DefaultPath returns $USER_CONFIG_DIR/kaneaz-harness/providers.json.
+// DefaultPath returns $USER_CONFIG_DIR/kenaz-harness/providers.json.
 // On platforms where os.UserConfigDir fails, a typed error is returned.
 func DefaultPath() (string, error) {
 	dir, err := os.UserConfigDir()
 	if err != nil {
 		return "", fmt.Errorf("personal: resolve user config dir: %w", err)
 	}
-	return filepath.Join(dir, "kaneaz-harness", "providers.json"), nil
+	return filepath.Join(dir, "kenaz-harness", "providers.json"), nil
 }
 
 // fileShape is the on-disk JSON. A typed wrapper makes future schema

@@ -99,7 +99,7 @@ const emit = defineEmits<{
   /**
    * Bash-escape submit. Fires INSTEAD of `send` / `sendBlocks` when
    * the trimmed input begins with `!`. The parent dispatches via the
-   * kaneaz__bash tool (Cedar gate applies) and renders the result
+   * kenaz__bash tool (Cedar gate applies) and renders the result
    * inline as a synthetic system message.
    */
   (e: 'bashCommand', cmd: string): void;
@@ -920,7 +920,7 @@ function send() {
   }
   // Bash-escape branch: when the trimmed input begins with `!`, emit
   // a bashCommand event with the rest of the line. The parent runs it
-  // through the kaneaz__bash tool (Cedar gate applies) and renders
+  // through the kenaz__bash tool (Cedar gate applies) and renders
   // the result inline as a synthetic system message — same pattern as
   // slash commands. The bang is stripped before dispatch.
   if (text.startsWith('!')) {

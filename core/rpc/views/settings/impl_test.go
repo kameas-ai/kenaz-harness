@@ -65,7 +65,7 @@ func TestFileStore_RoundTrip(t *testing.T) {
 	}
 
 	// Disk format: file exists, schemaVersion field present.
-	raw, err := os.ReadFile(filepath.Join(dir, "kaneaz-harness", "settings.json"))
+	raw, err := os.ReadFile(filepath.Join(dir, "kenaz-harness", "settings.json"))
 	if err != nil {
 		t.Fatalf("ReadFile: %v", err)
 	}
@@ -86,7 +86,7 @@ func TestFileStore_RoundTrip(t *testing.T) {
 
 func TestFileStore_PartialFile_FillsDefaults(t *testing.T) {
 	dir := t.TempDir()
-	settingsPath := filepath.Join(dir, "kaneaz-harness", "settings.json")
+	settingsPath := filepath.Join(dir, "kenaz-harness", "settings.json")
 	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
@@ -540,7 +540,7 @@ func TestFileStore_CompactionFields_RoundTrip(t *testing.T) {
 
 	// Disk JSON shape: confirm the camelCase keys are present so the
 	// frontend's TypeScript interface matches the wire format.
-	raw, err := os.ReadFile(filepath.Join(dir, "kaneaz-harness", "settings.json"))
+	raw, err := os.ReadFile(filepath.Join(dir, "kenaz-harness", "settings.json"))
 	if err != nil {
 		t.Fatalf("ReadFile: %v", err)
 	}

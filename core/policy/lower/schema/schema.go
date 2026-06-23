@@ -48,7 +48,7 @@ type ClauseDoc struct {
 // CurrentAPIVersion is the api_version every v1 PolicyArtifact must
 // declare.
 const (
-	CurrentAPIVersion = "kaneaz.policy/v1"
+	CurrentAPIVersion = "kenaz.policy/v1"
 	CurrentKind       = "policy"
 )
 
@@ -199,11 +199,11 @@ func FromArtifact(a policy.PolicyArtifact) Document {
 // ControlKind owns its own param shape.
 const JSONSchemaDocument = `{
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://kaneaz.io/schemas/policy/v1.json",
+  "$id": "https://kenaz.io/schemas/policy/v1.json",
   "type": "object",
   "required": ["api_version", "kind", "policy_id", "name", "version", "layer", "clauses"],
   "properties": {
-    "api_version": {"const": "kaneaz.policy/v1"},
+    "api_version": {"const": "kenaz.policy/v1"},
     "kind":        {"const": "policy"},
     "policy_id":   {"type": "string", "minLength": 1},
     "name":        {"type": "string", "minLength": 1},

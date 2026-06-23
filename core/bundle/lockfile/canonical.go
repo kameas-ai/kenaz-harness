@@ -11,7 +11,7 @@ import (
 	bundle "github.com/kameas-ai/kenaz-harness/core/bundle"
 )
 
-// Read parses a canonical kaneaz.lock document. The reader accepts only the
+// Read parses a canonical kenaz.lock document. The reader accepts only the
 // subset of TOML that Write emits — a deliberate choice (see package doc).
 // Lockfiles authored by hand should be re-canonicalized via Write before
 // commit.

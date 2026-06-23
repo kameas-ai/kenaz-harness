@@ -1366,7 +1366,7 @@ type SleepAttrs struct {
 	// Model: Provider-specific model name.
 	Model string `json:"model,omitempty" yaml:"model,omitempty"`
 
-	// Name: Always kaneaz__sleep.
+	// Name: Always kenaz__sleep.
 	Name string `json:"name,omitempty" yaml:"name,omitempty"`
 
 	// Provider: LLM provider identifier (e.g. anthropic, bedrock).
@@ -1425,7 +1425,7 @@ type SubagentDispatchAttrs struct {
 	// Model: Provider-specific model name.
 	Model string `json:"model,omitempty" yaml:"model,omitempty"`
 
-	// Name: Always kaneaz__subagent_dispatch.
+	// Name: Always kenaz__subagent_dispatch.
 	Name string `json:"name,omitempty" yaml:"name,omitempty"`
 
 	// Profile: ID of the sub-agent profile to use (e.g. explore, code-reviewer).

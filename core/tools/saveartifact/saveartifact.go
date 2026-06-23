@@ -1,4 +1,4 @@
-// Package saveartifact implements the kaneaz__save_artifact built-in
+// Package saveartifact implements the kenaz__save_artifact built-in
 // tool. It accepts (title, content[, mime_type]) from the model and
 // pipes the content directly into the existing artifact CAS pipeline:
 // MediaStore.Put for content-hash-keyed storage, then an artifacts row
@@ -6,7 +6,7 @@
 //
 // This sits alongside core/tools/websearch and core/tools/bash; the
 // chassis registers all three through core/rpc/builtins_wiring.go and
-// the toolloop's BuiltinPool dispatches by namespaced "kaneaz__" name.
+// the toolloop's BuiltinPool dispatches by namespaced "kenaz__" name.
 //
 // Default-on by design (mirrors the user-supplied design intent):
 // saving deliverables is a low-risk primitive — the cost of an unwanted
@@ -33,9 +33,9 @@ import (
 
 const (
 	// ToolName is the namespaced tool identifier surfaced to the
-	// model. The "kaneaz__" prefix is reserved for built-ins so the
+	// model. The "kenaz__" prefix is reserved for built-ins so the
 	// dispatcher can route by prefix without a registry lookup.
-	ToolName = "kaneaz__save_artifact"
+	ToolName = "kenaz__save_artifact"
 
 	// ToolDescription is the user-facing description sent to the
 	// model via the tool catalog. Phrased to bias model selection
@@ -62,7 +62,7 @@ const (
 	DefaultMimeType = "text/plain; charset=utf-8"
 )
 
-// inputSchema is the JSON Schema describing kaneaz__save_artifact's
+// inputSchema is the JSON Schema describing kenaz__save_artifact's
 // argument shape. Inlined as a constant so InputSchema() returns the
 // same json.RawMessage on every call.
 const inputSchema = `{
@@ -113,7 +113,7 @@ type Options struct {
 	Logger          *slog.Logger
 }
 
-// Tool implements the kaneaz__save_artifact built-in. Safe for
+// Tool implements the kenaz__save_artifact built-in. Safe for
 // concurrent use; all state is read-only after construction.
 type Tool struct {
 	mgr      Manager

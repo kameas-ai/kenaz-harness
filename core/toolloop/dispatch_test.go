@@ -4,7 +4,7 @@ package toolloop
 //
 // Coverage matrix:
 //   • Nil engine → no-op (gate passes).
-//   • Built-in tool (kaneaz server, engine says Allow) → passes without prompt.
+//   • Built-in tool (kenaz server, engine says Allow) → passes without prompt.
 //   • Untagged MCP tool (engine says NotApplicable, promptOnFirstUse=false)
 //       → passes without prompt (backwards-compat default).
 //   • Tagged tool first call (engine says NotApplicable, promptOnFirstUse=true)
@@ -86,7 +86,7 @@ func TestEvaluateToolGate_NilEngine_IsNoop(t *testing.T) {
 
 func TestEvaluateToolGate_BuiltinAllowed_NoPrompt(t *testing.T) {
 	t.Parallel()
-	// The default_tool_policy permits kaneaz tools (server_name=="kaneaz").
+	// The default_tool_policy permits kenaz tools (server_name=="kenaz").
 	// Simulate with a gate that returns Allow.
 	gate := &fakeGate{outcome: cedar.Allow}
 	registry := &stubPromptRegistry{grant: GrantDeny} // would fail if called
@@ -94,7 +94,7 @@ func TestEvaluateToolGate_BuiltinAllowed_NoPrompt(t *testing.T) {
 	err := EvaluateToolGate(context.Background(), GateInput{
 		Engine:           gate,
 		Registry:         registry,
-		ServerName:       "kaneaz",
+		ServerName:       "kenaz",
 		ToolName:         "bash",
 		PromptOnFirstUse: false,
 	})
@@ -374,7 +374,7 @@ func TestMemTransientGrantCache_HasSet(t *testing.T) {
 func TestEvaluateToolGate_RealCedarEngine_BuiltinAllow(t *testing.T) {
 	t.Parallel()
 	// Integration-style test: use the real Cedar engine with the
-	// embedded default_tool_policy to verify kaneaz tools are Allowed
+	// embedded default_tool_policy to verify kenaz tools are Allowed
 	// without a prompt, even when tagged.
 	engine, err := cedar.NewEngine(cedar.Options{
 		IncludeEmbedded: true,
@@ -388,12 +388,12 @@ func TestEvaluateToolGate_RealCedarEngine_BuiltinAllow(t *testing.T) {
 	callErr := EvaluateToolGate(context.Background(), GateInput{
 		Engine:           engine,
 		Registry:         registry,
-		ServerName:       "kaneaz",
+		ServerName:       "kenaz",
 		ToolName:         "bash",
 		PromptOnFirstUse: true, // tagged, but policy allows → no prompt
 	})
 	if callErr != nil {
-		t.Fatalf("kaneaz built-in should be Allowed by default policy, got: %v", callErr)
+		t.Fatalf("kenaz built-in should be Allowed by default policy, got: %v", callErr)
 	}
 	if len(registry.calls) != 0 {
 		t.Errorf("prompt should not fire for Allow; called %d times", len(registry.calls))
@@ -402,7 +402,7 @@ func TestEvaluateToolGate_RealCedarEngine_BuiltinAllow(t *testing.T) {
 
 func TestEvaluateToolGate_RealCedarEngine_MCPToolNotApplicable_Tagged(t *testing.T) {
 	t.Parallel()
-	// A non-kaneaz MCP tool returns NotApplicable from the real engine.
+	// A non-kenaz MCP tool returns NotApplicable from the real engine.
 	// With PromptOnFirstUse=true, the prompt fires.
 	engine, err := cedar.NewEngine(cedar.Options{
 		IncludeEmbedded: true,
@@ -437,7 +437,7 @@ func TestEvaluateToolGate_RealCedarEngine_MCPToolNotApplicable_Tagged(t *testing
 
 func TestEvaluateToolGate_RealCedarEngine_MCPToolNotApplicable_Untagged(t *testing.T) {
 	t.Parallel()
-	// A non-kaneaz MCP tool returns NotApplicable from the real engine.
+	// A non-kenaz MCP tool returns NotApplicable from the real engine.
 	// With PromptOnFirstUse=false (untagged), the tool passes without prompt.
 	engine, err := cedar.NewEngine(cedar.Options{
 		IncludeEmbedded: true,

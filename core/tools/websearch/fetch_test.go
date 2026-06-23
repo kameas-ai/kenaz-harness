@@ -15,7 +15,7 @@ import (
 func TestFetcher_RoundTrip(t *testing.T) {
 	t.Parallel()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !strings.HasPrefix(r.Header.Get("User-Agent"), "kaneaz-harness/") {
+		if !strings.HasPrefix(r.Header.Get("User-Agent"), "kenaz-harness/") {
 			t.Errorf("missing UA: %q", r.Header.Get("User-Agent"))
 		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
