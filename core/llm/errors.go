@@ -110,8 +110,28 @@ type ErrRetryBudgetExhausted struct {
 }
 
 func (e *ErrRetryBudgetExhausted) Error() string {
+	if last := e.lastErr(); last != nil {
+		return fmt.Sprintf("llm: retry budget exhausted after %d attempts; last error: %s",
+			len(e.Attempts), last.Error())
+	}
 	return fmt.Sprintf("llm: retry budget exhausted after %d attempts", len(e.Attempts))
 }
+
+// lastErr returns the error from the final recorded attempt, or nil
+// when no attempt carried one.
+func (e *ErrRetryBudgetExhausted) lastErr() error {
+	for i := len(e.Attempts) - 1; i >= 0; i-- {
+		if e.Attempts[i].Err != nil {
+			return e.Attempts[i].Err
+		}
+	}
+	return nil
+}
+
+// Unwrap exposes the last attempt's underlying error so errors.Is /
+// errors.As can reach the real provider fault (e.g. *ErrTransient with
+// its HTTP status) instead of stopping at the generic budget wrapper.
+func (e *ErrRetryBudgetExhausted) Unwrap() error { return e.lastErr() }
 
 // ErrAuth marks an authentication / authorization failure (401/403).
 // Non-transient — never retried (FR-017).

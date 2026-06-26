@@ -8,6 +8,7 @@ import (
 
 	coreag "github.com/kameas-ai/kenaz-harness/core/agentgraph"
 	"github.com/kameas-ai/kenaz-harness/core/autonomy"
+	"github.com/kameas-ai/kenaz-harness/core/logging"
 	"github.com/kameas-ai/kenaz-harness/core/toolloop"
 )
 
@@ -66,6 +67,11 @@ func (a *kernelToolAdapter) Has(name string) bool {
 	if a.catalog == nil {
 		tools, err := a.pool.Tools(context.Background())
 		if err != nil {
+			// Surface the discovery failure: otherwise Has() returns false
+			// and the kernel reports a misleading "unknown tool" with no
+			// trace of the real cause (network / permission / pool error).
+			logging.L().Warn("chat.tool_adapter.catalog_load_failed",
+				"at", "Has", "err", err.Error())
 			return false
 		}
 		a.catalog = tools
@@ -92,6 +98,7 @@ func (a *kernelToolAdapter) Has(name string) bool {
 // kernel surfaces the failure to the model without crashing the run.
 func (a *kernelToolAdapter) Call(ctx context.Context, call coreag.ToolCall) (coreag.ToolResult, error) {
 	if a == nil || a.pool == nil {
+		logging.L().Error("chat.tool_adapter.nil_pool", "tool", call.Name)
 		return coreag.ToolResult{}, errors.New("chat: nil tool pool adapter")
 	}
 	server, tool, ok := splitName(call.Name)
@@ -100,6 +107,8 @@ func (a *kernelToolAdapter) Call(ctx context.Context, call coreag.ToolCall) (cor
 		if a.catalog == nil {
 			tools, err := a.pool.Tools(ctx)
 			if err != nil {
+				logging.L().Warn("chat.tool_adapter.catalog_load_failed",
+					"at", "Call", "tool", call.Name, "err", err.Error())
 				return coreag.ToolResult{}, fmt.Errorf("chat: tool catalog: %w", err)
 			}
 			a.catalog = tools

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"runtime/debug"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -389,6 +390,12 @@ type chatSub struct {
 	done          chan struct{}
 	bridge        *StreamBridge
 	finished      atomic.Bool
+	// cancelCause records WHY the run's context was cancelled, so the
+	// terminal close can distinguish an explicit user Stop ("stop-called")
+	// from the inbound RPC ctx being cancelled out from under us
+	// ("inbound-ctx" — the signature of a desktop focus-loss / webview
+	// suspend killing the run). Empty until something cancels.
+	cancelCause atomic.Value // string
 }
 
 // New constructs a ChatRunner. Every Config field is validated; a
@@ -510,14 +517,12 @@ func (r *ChatRunner) StartStream(ctx context.Context, profileID, sessionID, mode
 
 	bridge := NewStreamBridge(r.cfg.Broker, subID, sessionID)
 
+	// The run's ctx derives from Background so it survives the inbound
+	// RPC call returning. A watcher goroutine (started after `sub` is
+	// built, below) re-attaches the inbound ctx's cancellation AND records
+	// the cause, so the terminal path can tell a focus-loss abort apart
+	// from an explicit Stop.
 	streamCtx, cancel := context.WithCancel(context.Background())
-	go func() {
-		select {
-		case <-ctx.Done():
-			cancel()
-		case <-streamCtx.Done():
-		}
-	}()
 
 	// Pre-seed the AskBus with the user's message so the chat graph's
 	// `ask_user` AskNode resolves on its first fire. The chat graph is
@@ -605,6 +610,42 @@ func (r *ChatRunner) StartStream(ctx context.Context, profileID, sessionID, mode
 	r.subs[subID] = sub
 	r.mu.Unlock()
 
+	logging.L().Info("chat.run.start",
+		"sub_id", subID,
+		"session_id", sessionID,
+		"profile_id", profileID,
+		"model_override", modelOverride,
+	)
+
+	// Watcher: re-attach the inbound ctx's cancellation to streamCtx and
+	// record the cause. The inbound ctx here is the Wails app-lifetime
+	// context (bindings.ctx()), so this fires on app shutdown — NOT on
+	// window focus loss (focus-loss stalls are an App Nap problem, handled
+	// by NSAppSleepDisabled in build/darwin/Info*.plist). Recording the
+	// cause as "inbound-ctx" keeps a shutdown-time abort distinguishable
+	// from an explicit user Stop in the log.
+	go func() {
+		defer func() {
+			if rec := recover(); rec != nil {
+				logging.L().Error("chat.run.watcher.panic",
+					"sub_id", subID, "session_id", sessionID, "panic", rec)
+				cancel() // never leave the run orphaned on a watcher panic
+			}
+		}()
+		select {
+		case <-ctx.Done():
+			sub.cancelCause.Store("inbound-ctx")
+			logging.L().Warn("chat.run.ctx_cancelled",
+				"sub_id", subID,
+				"session_id", sessionID,
+				"cause", "inbound-ctx",
+				"ctx_err", ctx.Err(),
+			)
+			cancel()
+		case <-streamCtx.Done():
+		}
+	}()
+
 	go r.driveRun(streamCtx, sub, env)
 	return subID, nil
 }
@@ -618,6 +659,9 @@ func (r *ChatRunner) StopStream(_ context.Context, subID string) error {
 	if !ok {
 		return fmt.Errorf("chat: subscription %q not found", subID)
 	}
+	sub.cancelCause.Store("stop-called")
+	logging.L().Info("chat.run.stop_called",
+		"sub_id", subID, "session_id", sub.sessionID)
 	sub.cancel()
 	<-sub.done
 	return nil
@@ -686,17 +730,43 @@ func (r *ChatRunner) RedriveLastTurn(ctx context.Context, profileID string) (new
 func (r *ChatRunner) driveRun(ctx context.Context, sub *chatSub, env *coreag.Env) {
 	log := logging.L()
 	defer func() {
+		// Recover any panic in the kernel run or the terminal
+		// classification/persist logic. Without this a panic would crash
+		// the whole harness process AND (via the deferred close below)
+		// the run's bookkeeping would still need to complete so StopStream's
+		// `<-sub.done` does not deadlock. close(sub.done) runs last.
+		if rec := recover(); rec != nil {
+			log.Error("chat.run.panic",
+				"sub_id", sub.id, "session_id", sub.sessionID,
+				"panic", fmt.Sprintf("%v", rec), "stack", string(debug.Stack()))
+			// Best-effort: tell the frontend the turn ended so the typing
+			// indicator clears instead of hanging forever.
+			if sub.finished.CompareAndSwap(false, true) {
+				sub.bridge.EmitClosed("backend-error", "internal error", "")
+			}
+		}
 		r.mu.Lock()
 		delete(r.subs, sub.id)
 		r.mu.Unlock()
 		close(sub.done)
 	}()
 
+	runStart := time.Now()
 	err := r.cfg.Kernel.Run(ctx, env)
 	reason := "completed"
 	message := ""
 	finishReason := ""
 	runTerminatedClean := false // true when kernel finished without error (or ErrPaused)
+
+	if err != nil {
+		log.Info("chat.run.kernel_exit",
+			"sub_id", sub.id,
+			"session_id", sub.sessionID,
+			"err", err.Error(),
+			"cancel_cause", cancelCauseString(sub),
+			"duration_ms", time.Since(runStart).Milliseconds(),
+		)
+	}
 
 	// provider-keychain-rotation-01KQ8TD9 WP03: auth-failure interception.
 	// When the kernel run exits with *ErrProviderAuthFailed AND the key-rotation
@@ -780,7 +850,21 @@ func (r *ChatRunner) driveRun(ctx context.Context, sub *chatSub, env *coreag.Env
 		reason = "custom_endpoint_missing_capability"
 		message = err.Error()
 	case errors.Is(err, context.Canceled):
+		// The run's context was cancelled. Distinguish an explicit user
+		// Stop from the inbound (app-lifetime) ctx being cancelled — the
+		// latter ("inbound-ctx") happens at app shutdown. Both surface as
+		// "stop-called" to the frontend (no error toast), but the log
+		// makes the true cause unambiguous when debugging "the agent
+		// stopped on its own".
 		reason = "stop-called"
+		cause := cancelCauseString(sub)
+		if cause == "inbound-ctx" {
+			log.Warn("chat.run.aborted_by_inbound_ctx",
+				"sub_id", sub.id,
+				"session_id", sub.sessionID,
+				"note", "run cancelled by inbound app ctx (app shutdown), not a user Stop",
+			)
+		}
 	default:
 		reason = "backend-error"
 		message = err.Error()
@@ -860,6 +944,16 @@ func (r *ChatRunner) driveRun(ctx context.Context, sub *chatSub, env *coreag.Env
 		"reason", reason,
 		"err", message,
 	)
+}
+
+// cancelCauseString returns the recorded cancellation cause for a sub
+// ("stop-called", "inbound-ctx") or "none" when nothing cancelled it.
+// Used by the terminal path to attribute a context.Canceled exit.
+func cancelCauseString(sub *chatSub) string {
+	if v, ok := sub.cancelCause.Load().(string); ok && v != "" {
+		return v
+	}
+	return "none"
 }
 
 // persistPartialTimeout caps the partial-persist call so a slow

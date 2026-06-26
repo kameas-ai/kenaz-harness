@@ -4,11 +4,49 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"runtime/debug"
 	"sync"
 	"time"
 
 	"github.com/kameas-ai/kenaz-harness/core/logging"
 )
+
+// safeExecute invokes an executor with panic recovery. A buggy node (a
+// wrong type assertion on node.Attrs, a nil-map write) or a panicking
+// tool/seam would otherwise crash the entire harness process, because
+// executors run inside bare goroutines (kernel dispatch, Parallel) with
+// no recovery of their own. Here a panic is converted into an ordinary
+// node-level error — logged with a full stack at ERROR — so the run
+// fails cleanly and the rest of the app keeps running.
+//
+// Every site that calls Executor.Execute (the kernel's dispatch loop and
+// the inline body/target dispatches in Loop/Retry/Parallel) routes
+// through this wrapper.
+func safeExecute(ctx context.Context, ex Executor, env *Env, node *Node, inputs PortValues) (res Result, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			stack := debug.Stack()
+			runID, sessID, nodeID, kind := "", "", "", ""
+			if env != nil {
+				runID, sessID = env.RunID, env.SessionID
+			}
+			if node != nil {
+				nodeID, kind = node.ID, string(node.Kind)
+			}
+			logging.L().Error("agentgraph.node.panic",
+				"run_id", runID,
+				"session_id", sessID,
+				"node_id", nodeID,
+				"kind", kind,
+				"panic", fmt.Sprintf("%v", r),
+				"stack", string(stack),
+			)
+			res = NewResult()
+			err = fmt.Errorf("agentgraph: node %q (%s) panicked: %v", nodeID, kind, r)
+		}
+	}()
+	return ex.Execute(ctx, env, node, inputs)
+}
 
 // Kernel is the graph executor. It walks the ready set of a Graph,
 // fires nodes via the executor registry, persists each batch to the
@@ -202,6 +240,22 @@ func (k *Kernel) Run(ctx context.Context, env *Env) error {
 	dispatch = func(nodeID string) {
 		defer wg.Done()
 		defer func() { <-sem }()
+		// Backstop: safeExecute already wraps the executor call, but a
+		// panic in the surrounding bookkeeping (event append, log write,
+		// state mutation) would otherwise escape this bare goroutine and
+		// crash the process. Convert it to a run-terminating firstErr.
+		defer func() {
+			if rec := recover(); rec != nil {
+				logging.L().Error("agentgraph.dispatch.panic",
+					"run_id", env.RunID, "node_id", nodeID,
+					"panic", fmt.Sprintf("%v", rec), "stack", string(debug.Stack()))
+				mu.Lock()
+				if firstErr == nil {
+					firstErr = fmt.Errorf("agentgraph: kernel: dispatch %q panicked: %v", nodeID, rec)
+				}
+				mu.Unlock()
+			}
+		}()
 
 		mu.Lock()
 		if firstErr != nil || pause {
@@ -270,7 +324,7 @@ func (k *Kernel) Run(ctx context.Context, env *Env) error {
 			"inputs", inputPorts,
 		)
 
-		r, err := ex.Execute(ctx, env, nd, inputs)
+		r, err := safeExecute(ctx, ex, env, nd, inputs)
 		// Always commit the node_start + executor events even on error.
 		for _, e := range r.Events.Events {
 			if e.RunID == "" {
