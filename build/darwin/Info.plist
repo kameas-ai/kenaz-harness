@@ -21,6 +21,13 @@
         <string>10.13.0</string>
         <key>NSHighResolutionCapable</key>
         <string>true</string>
+        <!-- Disable macOS App Nap so the OS does not suspend/throttle the
+             whole process when the window loses focus. Without this a long
+             agent turn streaming over HTTP can stall while unfocused until
+             the connection times out — surfacing as a retry-budget-exhausted
+             failure and the agent appearing to "stop" on focus loss. -->
+        <key>NSAppSleepDisabled</key>
+        <true/>
         <key>NSHumanReadableCopyright</key>
         <string>{{.Info.Copyright}}</string>
         {{if .Info.FileAssociations}}

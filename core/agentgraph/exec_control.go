@@ -4,11 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/kameas-ai/kenaz-harness/core/logging"
 	"golang.org/x/sync/semaphore"
 )
 
@@ -411,10 +413,16 @@ func (parallelExecutor) Execute(ctx context.Context, env *Env, node *Node, input
 	if concurrency <= 0 {
 		concurrency = 4 // matches the default in the testdata fixture
 	}
+	parStart := time.Now()
+	logging.L().Info("agentgraph.parallel.start",
+		"run_id", env.RunID, "session_id", env.SessionID, "node_id", node.ID,
+		"targets", a.Targets, "concurrency", concurrency)
+
 	sem := semaphore.NewWeighted(int64(concurrency))
 	results := make([]PortValues, len(a.Targets))
 	errs := make([]error, len(a.Targets))
 	var wg sync.WaitGroup
+	var evMu sync.Mutex // res.Events is shared across the target goroutines
 
 	// Build a sub-kernel per target so each target gets its own
 	// fan-out scope. The targets themselves are node IDs in the
@@ -422,6 +430,9 @@ func (parallelExecutor) Execute(ctx context.Context, env *Env, node *Node, input
 	for i, tID := range a.Targets {
 		i, tID := i, tID
 		if err := sem.Acquire(ctx, 1); err != nil {
+			logging.L().Warn("agentgraph.parallel.acquire.error",
+				"run_id", env.RunID, "node_id", node.ID, "target", tID,
+				"err", err.Error(), "ctx_err", ctxErrString(ctx))
 			errs[i] = err
 			continue
 		}
@@ -429,6 +440,18 @@ func (parallelExecutor) Execute(ctx context.Context, env *Env, node *Node, input
 		go func() {
 			defer sem.Release(1)
 			defer wg.Done()
+			// Backstop: safeExecute wraps the target call, but a panic in
+			// this goroutine's own bookkeeping must not crash the process.
+			defer func() {
+				if rec := recover(); rec != nil {
+					logging.L().Error("agentgraph.parallel.panic",
+						"run_id", env.RunID, "node_id", node.ID, "target", tID,
+						"panic", fmt.Sprintf("%v", rec), "stack", string(debug.Stack()))
+					if errs[i] == nil {
+						errs[i] = fmt.Errorf("parallel: target %q panicked: %v", tID, rec)
+					}
+				}
+			}()
 			target := lookupNode(env.Graph, tID)
 			if target == nil {
 				errs[i] = fmt.Errorf("parallel: unknown target %q", tID)
@@ -439,24 +462,51 @@ func (parallelExecutor) Execute(ctx context.Context, env *Env, node *Node, input
 				errs[i] = err
 				return
 			}
-			r, err := ex.Execute(ctx, env, target, inputs)
+			tStart := time.Now()
+			logging.L().Info("agentgraph.parallel.target.fire",
+				"run_id", env.RunID, "node_id", node.ID,
+				"target", target.ID, "kind", string(target.Kind))
+			r, err := safeExecute(ctx, ex, env, target, inputs)
 			if err != nil {
+				logging.L().Warn("agentgraph.parallel.target.error",
+					"run_id", env.RunID, "node_id", node.ID,
+					"target", target.ID, "kind", string(target.Kind),
+					"err", err.Error(), "ctx_err", ctxErrString(ctx),
+					"duration_ms", time.Since(tStart).Milliseconds())
 				errs[i] = err
 				return
 			}
+			logging.L().Info("agentgraph.parallel.target.complete",
+				"run_id", env.RunID, "node_id", node.ID,
+				"target", target.ID, "kind", string(target.Kind),
+				"duration_ms", time.Since(tStart).Milliseconds())
 			results[i] = r.Outputs
+			evMu.Lock()
 			for _, e := range r.Events.Events {
 				e.RunID = env.RunID
 				e.NodeID = target.ID
 				res.Events.Append(e)
 			}
+			evMu.Unlock()
 		}()
 	}
 	wg.Wait()
+	failed := 0
+	var firstErr error
 	for _, err := range errs {
 		if err != nil {
-			return res, err
+			failed++
+			if firstErr == nil {
+				firstErr = err
+			}
 		}
+	}
+	logging.L().Info("agentgraph.parallel.end",
+		"run_id", env.RunID, "node_id", node.ID,
+		"targets", len(a.Targets), "failed", failed,
+		"duration_ms", time.Since(parStart).Milliseconds())
+	if firstErr != nil {
+		return res, firstErr
 	}
 	res.Outputs["out"] = results
 	return res, nil
@@ -504,6 +554,17 @@ func (loopExecutor) Execute(ctx context.Context, env *Env, node *Node, inputs Po
 		return res, fmt.Errorf("loop: node %q: max_iterations must be > 0", node.ID)
 	}
 
+	loopStart := time.Now()
+	logging.L().Info("agentgraph.loop.start",
+		"run_id", env.RunID,
+		"session_id", env.SessionID,
+		"node_id", node.ID,
+		"max_iterations", a.MaxIterations,
+		"body", a.Body,
+		"has_condition", a.Condition != "",
+	)
+	stopReason := "max_iterations"
+
 	current := inputs.Clone()
 	var iter int
 	for iter = 0; iter < a.MaxIterations; iter++ {
@@ -512,12 +573,22 @@ func (loopExecutor) Execute(ctx context.Context, env *Env, node *Node, inputs Po
 		if a.Condition != "" && iter > 0 {
 			ok, err := evalBranchExpr(a.Condition, current)
 			if err != nil {
+				logging.L().Warn("agentgraph.loop.condition.error",
+					"run_id", env.RunID, "node_id", node.ID, "iter", iter,
+					"condition", a.Condition, "err", err.Error())
 				return res, fmt.Errorf("loop: node %q: condition: %w", node.ID, err)
 			}
+			logging.L().Info("agentgraph.loop.condition",
+				"run_id", env.RunID, "node_id", node.ID, "iter", iter,
+				"condition", a.Condition, "result", ok)
 			if !ok {
+				stopReason = "condition_false"
 				break
 			}
 		}
+		logging.L().Info("agentgraph.loop.iteration",
+			"run_id", env.RunID, "node_id", node.ID,
+			"iter", iter, "max_iterations", a.MaxIterations)
 		for _, bID := range a.Body {
 			target := lookupNode(env.Graph, bID)
 			if target == nil {
@@ -527,13 +598,31 @@ func (loopExecutor) Execute(ctx context.Context, env *Env, node *Node, inputs Po
 			if err != nil {
 				return res, err
 			}
-			r, err := ex.Execute(ctx, env, target, current)
+			bodyStart := time.Now()
+			logging.L().Info("agentgraph.loop.body.fire",
+				"run_id", env.RunID, "node_id", node.ID, "iter", iter,
+				"body_node", target.ID, "kind", string(target.Kind))
+			r, err := safeExecute(ctx, ex, env, target, current)
 			if err != nil {
+				logging.L().Warn("agentgraph.loop.body.error",
+					"run_id", env.RunID, "node_id", node.ID, "iter", iter,
+					"body_node", target.ID, "kind", string(target.Kind),
+					"err", err.Error(),
+					"ctx_err", ctxErrString(ctx),
+					"duration_ms", time.Since(bodyStart).Milliseconds())
 				return res, fmt.Errorf("loop: node %q: body %s: %w", node.ID, bID, err)
 			}
 			if r.Pause {
+				logging.L().Info("agentgraph.loop.body.pause",
+					"run_id", env.RunID, "node_id", node.ID, "iter", iter,
+					"body_node", target.ID, "reason", r.PauseReason)
 				return res, ErrPaused
 			}
+			logging.L().Info("agentgraph.loop.body.complete",
+				"run_id", env.RunID, "node_id", node.ID, "iter", iter,
+				"body_node", target.ID, "kind", string(target.Kind),
+				"events", len(r.Events.Events),
+				"duration_ms", time.Since(bodyStart).Milliseconds())
 			env.State.SetOutputs(target.ID, r.Outputs)
 			for _, e := range r.Events.Events {
 				e.RunID = env.RunID
@@ -546,6 +635,10 @@ func (loopExecutor) Execute(ctx context.Context, env *Env, node *Node, inputs Po
 			current = r.Outputs
 		}
 	}
+	logging.L().Info("agentgraph.loop.end",
+		"run_id", env.RunID, "node_id", node.ID,
+		"iterations", iter, "stop_reason", stopReason,
+		"duration_ms", time.Since(loopStart).Milliseconds())
 	// Surface the last body node's output ports onto the LoopNode itself
 	// so outside-loop edges can pull specific named values out of the
 	// loop. The canonical `out` (PortValues bag) and `iterations` keys
@@ -586,9 +679,18 @@ func (retryExecutor) Execute(ctx context.Context, env *Env, node *Node, inputs P
 		cap = 5000
 	}
 
+	retryStart := time.Now()
+	logging.L().Info("agentgraph.retry.start",
+		"run_id", env.RunID, "session_id", env.SessionID, "node_id", node.ID,
+		"max_attempts", a.MaxAttempts, "body", a.Body,
+		"backoff_base_ms", base, "backoff_max_ms", cap)
+
 	current := inputs.Clone()
 	var lastErr error
 	for attempt := 1; attempt <= a.MaxAttempts; attempt++ {
+		logging.L().Info("agentgraph.retry.attempt",
+			"run_id", env.RunID, "node_id", node.ID,
+			"attempt", attempt, "max_attempts", a.MaxAttempts)
 		var stepErr error
 		for _, bID := range a.Body {
 			target := lookupNode(env.Graph, bID)
@@ -599,12 +701,26 @@ func (retryExecutor) Execute(ctx context.Context, env *Env, node *Node, inputs P
 			if err != nil {
 				return res, err
 			}
-			r, err := ex.Execute(ctx, env, target, current)
+			bodyStart := time.Now()
+			logging.L().Info("agentgraph.retry.body.fire",
+				"run_id", env.RunID, "node_id", node.ID, "attempt", attempt,
+				"body_node", target.ID, "kind", string(target.Kind))
+			r, err := safeExecute(ctx, ex, env, target, current)
 			if err != nil {
+				logging.L().Warn("agentgraph.retry.body.error",
+					"run_id", env.RunID, "node_id", node.ID, "attempt", attempt,
+					"body_node", target.ID, "kind", string(target.Kind),
+					"err", err.Error(),
+					"ctx_err", ctxErrString(ctx),
+					"duration_ms", time.Since(bodyStart).Milliseconds())
 				stepErr = err
 				lastErr = err
 				break
 			}
+			logging.L().Info("agentgraph.retry.body.complete",
+				"run_id", env.RunID, "node_id", node.ID, "attempt", attempt,
+				"body_node", target.ID, "kind", string(target.Kind),
+				"duration_ms", time.Since(bodyStart).Milliseconds())
 			env.State.SetOutputs(target.ID, r.Outputs)
 			for _, e := range r.Events.Events {
 				e.RunID = env.RunID
@@ -618,11 +734,18 @@ func (retryExecutor) Execute(ctx context.Context, env *Env, node *Node, inputs P
 		if stepErr == nil {
 			res.Outputs["out"] = current
 			res.Outputs["attempts"] = attempt
+			logging.L().Info("agentgraph.retry.end",
+				"run_id", env.RunID, "node_id", node.ID, "outcome", "ok",
+				"attempts", attempt, "duration_ms", time.Since(retryStart).Milliseconds())
 			return res, nil
 		}
 		// classify retryable / fatal: anything not ErrBudgetExceeded /
 		// ErrPaused / ErrNotImplemented is retryable for now.
 		if stepErr == ErrBudgetExceeded || stepErr == ErrPaused {
+			logging.L().Info("agentgraph.retry.end",
+				"run_id", env.RunID, "node_id", node.ID, "outcome", "fatal",
+				"attempts", attempt, "err", stepErr.Error(),
+				"duration_ms", time.Since(retryStart).Milliseconds())
 			return res, stepErr
 		}
 		if attempt < a.MaxAttempts {
@@ -634,13 +757,23 @@ func (retryExecutor) Execute(ctx context.Context, env *Env, node *Node, inputs P
 					break
 				}
 			}
+			logging.L().Info("agentgraph.retry.backoff",
+				"run_id", env.RunID, "node_id", node.ID, "attempt", attempt,
+				"delay_ms", delay.Milliseconds())
 			select {
 			case <-ctx.Done():
+				logging.L().Warn("agentgraph.retry.cancelled",
+					"run_id", env.RunID, "node_id", node.ID, "attempt", attempt,
+					"ctx_err", ctxErrString(ctx))
 				return res, ctx.Err()
 			case <-time.After(delay):
 			}
 		}
 	}
+	logging.L().Warn("agentgraph.retry.end",
+		"run_id", env.RunID, "node_id", node.ID, "outcome", "exhausted",
+		"attempts", a.MaxAttempts, "err", errString(lastErr),
+		"duration_ms", time.Since(retryStart).Milliseconds())
 	return res, fmt.Errorf("retry: node %q: exhausted %d attempts: %w", node.ID, a.MaxAttempts, lastErr)
 }
 
@@ -1001,6 +1134,37 @@ func resolveRegistry(env *Env) *executorRegistry {
 		return env.registry
 	}
 	return newExecutorRegistry()
+}
+
+// ctxErrString renders the context's cancellation state as a short
+// string for log fields. It distinguishes "live" (still running) from
+// "canceled" (ctx.Cancel was called — e.g. the frontend disconnected
+// when the desktop window lost focus, or the user navigated away) and
+// "deadline_exceeded" (a timeout fired). When debugging "the agent
+// stopped on its own", an err alongside ctx_err=canceled is the
+// signature of an upstream cancellation rather than a provider failure.
+func ctxErrString(ctx context.Context) string {
+	if ctx == nil {
+		return "nil"
+	}
+	switch err := ctx.Err(); {
+	case err == nil:
+		return "live"
+	case errors.Is(err, context.Canceled):
+		return "canceled"
+	case errors.Is(err, context.DeadlineExceeded):
+		return "deadline_exceeded"
+	default:
+		return err.Error()
+	}
+}
+
+// errString is a nil-safe Error() for log fields.
+func errString(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
 }
 
 func lookupNode(g *Graph, id string) *Node {

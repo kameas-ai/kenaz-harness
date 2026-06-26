@@ -5,9 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log/slog"
 	"strings"
+	"time"
 
+	"github.com/kameas-ai/kenaz-harness/core/logging"
 	"github.com/kameas-ai/kenaz-harness/core/toolloop"
 )
 
@@ -152,13 +153,38 @@ func (modelExecutor) Execute(ctx context.Context, env *Env, node *Node, inputs P
 	// Nil-safe: withStreamSink returns ctx unchanged when env.StreamSink
 	// is nil (test runs, scripted activities, batch executions).
 	llmCtx := withStreamSink(ctx, env.StreamSink)
+	callStart := time.Now()
+	logging.L().Info("agentgraph.model.call",
+		"run_id", env.RunID, "session_id", env.SessionID, "node_id", node.ID,
+		"provider", a.Provider, "model", a.Model,
+		"messages", len(msgs), "tools", len(tools),
+		"max_tokens", a.MaxTokens, "system_prompt_len", len(a.SystemPrompt),
+	)
 	resp, err := env.LLM.Generate(llmCtx, req)
 	if err != nil {
+		logging.L().Warn("agentgraph.model.error",
+			"run_id", env.RunID, "session_id", env.SessionID, "node_id", node.ID,
+			"provider", a.Provider, "model", a.Model,
+			"err", err.Error(),
+			// ctx_err disambiguates a provider failure from an upstream
+			// cancellation (e.g. frontend disconnect on desktop focus loss).
+			"ctx_err", ctxErrString(ctx),
+			"duration_ms", time.Since(callStart).Milliseconds(),
+		)
 		_ = res.Events.AppendKind(env.RunID, node.ID, EventNodeError, map[string]any{
 			"err": err.Error(),
 		})
 		return res, fmt.Errorf("model: node %q: %w", node.ID, err)
 	}
+
+	logging.L().Info("agentgraph.model.result",
+		"run_id", env.RunID, "session_id", env.SessionID, "node_id", node.ID,
+		"provider", a.Provider, "model", a.Model,
+		"tokens", resp.TokensUsed, "cost_usd", resp.CostUSD,
+		"finish_reason", resp.FinishReason, "tool_calls", len(resp.ToolCalls),
+		"content_len", len(resp.Content),
+		"duration_ms", time.Since(callStart).Milliseconds(),
+	)
 
 	if env.Counters != nil {
 		env.Counters.AddLLM(resp.TokensUsed)
@@ -267,11 +293,15 @@ func (toolExecutor) Execute(ctx context.Context, env *Env, node *Node, inputs Po
 	if env.LifecycleHooks != nil {
 		merged, err := env.LifecycleHooks.FirePreToolUse(ctx, env.SessionID, a.Name, argsJSON, "", "")
 		if err != nil {
-			slog.Default().Warn("hooks.pre_tool_use.fire_failed",
-				"tool", a.Name, "err", err.Error())
+			logging.L().Warn("agentgraph.tool.pre_tool_use_hook.failed",
+				"run_id", env.RunID, "session_id", env.SessionID,
+				"node_id", node.ID, "tool", a.Name, "err", err.Error())
 		} else {
 			if merged.Blocked {
 				// Hook denied — short-circuit; return a tool error result.
+				logging.L().Warn("agentgraph.tool.hook_denied",
+					"run_id", env.RunID, "session_id", env.SessionID, "node_id", node.ID,
+					"tool", a.Name, "reason", merged.BlockReason)
 				_ = res.Events.AppendKind(env.RunID, node.ID, EventHookDenied, map[string]any{
 					"tool":   a.Name,
 					"reason": merged.BlockReason,
@@ -301,6 +331,14 @@ func (toolExecutor) Execute(ctx context.Context, env *Env, node *Node, inputs Po
 		}
 	}
 
+	argKeys := make([]string, 0, len(args))
+	for k := range args {
+		argKeys = append(argKeys, k)
+	}
+	callStart := time.Now()
+	logging.L().Info("agentgraph.tool.call",
+		"run_id", env.RunID, "session_id", env.SessionID, "node_id", node.ID,
+		"tool", a.Name, "arg_keys", argKeys)
 	tr, err := env.Tools.Call(ctx, ToolCall{Name: a.Name, Args: args})
 	// Gate: passive tools (e.g. kenaz__sleep) must not consume an
 	// iteration slot (FR-010). toolloop.ShouldCountIteration returns
@@ -309,6 +347,11 @@ func (toolExecutor) Execute(ctx context.Context, env *Env, node *Node, inputs Po
 		env.Counters.AddTool()
 	}
 	if err != nil {
+		logging.L().Warn("agentgraph.tool.error",
+			"run_id", env.RunID, "session_id", env.SessionID, "node_id", node.ID,
+			"tool", a.Name, "err", err.Error(),
+			"ctx_err", ctxErrString(ctx),
+			"duration_ms", time.Since(callStart).Milliseconds())
 		// v2 lifecycle hook: post_tool_use_failure.
 		if env.LifecycleHooks != nil {
 			_, _ = env.LifecycleHooks.FirePostToolUse(ctx, env.SessionID, a.Name, argsJSON, nil,
@@ -320,6 +363,10 @@ func (toolExecutor) Execute(ctx context.Context, env *Env, node *Node, inputs Po
 		})
 		return res, fmt.Errorf("tool: node %q (%s): %w", node.ID, a.Name, err)
 	}
+	logging.L().Info("agentgraph.tool.result",
+		"run_id", env.RunID, "session_id", env.SessionID, "node_id", node.ID,
+		"tool", a.Name, "is_error", tr.IsError, "bytes", len(tr.Content),
+		"duration_ms", time.Since(callStart).Milliseconds())
 
 	// Post-tool compaction (FR-041 site #2). The pipeline decides
 	// whether to fire based on result byte size + cascading config.
@@ -375,8 +422,9 @@ func (toolExecutor) Execute(ctx context.Context, env *Env, node *Node, inputs Po
 		merged, herr := env.LifecycleHooks.FirePostToolUse(ctx, env.SessionID, a.Name, argsJSON, outJSON,
 			false, "", "", "")
 		if herr != nil {
-			slog.Default().Warn("hooks.post_tool_use.fire_failed",
-				"tool", a.Name, "err", herr.Error())
+			logging.L().Warn("agentgraph.tool.post_tool_use_hook.failed",
+				"run_id", env.RunID, "session_id", env.SessionID,
+				"node_id", node.ID, "tool", a.Name, "err", herr.Error())
 		} else {
 			// Apply updated_mcp_tool_output (MCP tools only, but we apply
 			// unconditionally — non-MCP tools just never set it).
