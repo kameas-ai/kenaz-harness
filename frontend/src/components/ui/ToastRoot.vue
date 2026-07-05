@@ -13,7 +13,7 @@
  * the toast message and an optional Undo link. Auto-dismiss after 5s.
  */
 import { onBeforeUnmount, onMounted } from 'vue';
-import { push, dismiss, invokeUndo, useToastQueue } from '@/composables/useToastQueue';
+import { push, dismiss, invokeUndo, invokeAction, useToastQueue } from '@/composables/useToastQueue';
 
 const { toasts } = useToastQueue();
 
@@ -56,6 +56,18 @@ onBeforeUnmount(() => {
       >
         Undo
       </button>
+      <template v-if="t.actions">
+        <button
+          v-for="action in t.actions"
+          :key="action.label"
+          type="button"
+          class="toast-action"
+          :data-testid="`toast-action-${t.id}-${action.label}`"
+          @click="invokeAction(t.id, action.label)"
+        >
+          {{ action.label }}
+        </button>
+      </template>
       <button
         type="button"
         class="toast-close"
@@ -114,6 +126,20 @@ onBeforeUnmount(() => {
 }
 
 .toast-undo:hover {
+  text-decoration: underline;
+}
+
+.toast-action {
+  background: transparent;
+  border: 0;
+  color: var(--accent);
+  font-family: inherit;
+  font-size: inherit;
+  cursor: pointer;
+  padding: 0 0.25rem;
+}
+
+.toast-action:hover {
   text-decoration: underline;
 }
 
