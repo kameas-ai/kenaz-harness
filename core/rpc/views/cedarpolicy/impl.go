@@ -280,7 +280,7 @@ func (a *API) SavePolicy(ctx context.Context, name string, source string) (Parse
 		return ParseResult{}, fmt.Errorf("cedarpolicy: rename %q → %q: %w", tmp, dst, err)
 	}
 	a.reloadBestEffort(ctx, "SavePolicy", name)
-	_ = audit.Emit(ctx, a.emitter, audit.KindPolicyFileSaved, audit.PolicyFileSavedPayload{
+	audit.MustEmit(ctx, a.emitter, audit.KindPolicyFileSaved, audit.PolicyFileSavedPayload{
 		Name:    name,
 		Bytes:   len(source),
 		ParseOK: true,
@@ -312,7 +312,7 @@ func (a *API) DeletePolicy(ctx context.Context, name string) error {
 		return fmt.Errorf("cedarpolicy: remove %q: %w", dst, err)
 	}
 	a.reloadBestEffort(ctx, "DeletePolicy", name)
-	_ = audit.Emit(ctx, a.emitter, audit.KindPolicyFileDeleted, audit.PolicyFileDeletedPayload{
+	audit.MustEmit(ctx, a.emitter, audit.KindPolicyFileDeleted, audit.PolicyFileDeletedPayload{
 		Name: name,
 	}, time.Now())
 	return nil
@@ -369,7 +369,7 @@ func (a *API) InstallTemplate(ctx context.Context, templateName string, destName
 		return PolicyFileDetail{}, fmt.Errorf("cedarpolicy: rename %q → %q: %w", tmp, dst, err)
 	}
 	a.reloadBestEffort(ctx, "InstallTemplate", destName)
-	_ = audit.Emit(ctx, a.emitter, audit.KindPolicyTemplateInstalled, audit.PolicyTemplateInstalledPayload{
+	audit.MustEmit(ctx, a.emitter, audit.KindPolicyTemplateInstalled, audit.PolicyTemplateInstalledPayload{
 		Template: templateName,
 		Dest:     destName,
 		Bytes:    len(data),

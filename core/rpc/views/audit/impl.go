@@ -334,7 +334,7 @@ func (a *API) BulkPurge(ctx context.Context, eventIDs []string) error {
 				AttemptCount: len(eventIDs),
 				Reason:       reason,
 			}
-			_ = contextaudit.Emit(ctx, em, contextaudit.KindAuditBulkPurgeBlockedByPolicy, payload, time.Now())
+			contextaudit.MustEmit(ctx, em, contextaudit.KindAuditBulkPurgeBlockedByPolicy, payload, time.Now())
 		}
 		return err
 	}
@@ -354,7 +354,7 @@ func (a *API) BulkPurge(ctx context.Context, eventIDs []string) error {
 			EventIDs:    eventIDs,
 			PurgedCount: len(eventIDs),
 		}
-		_ = contextaudit.Emit(ctx, em, contextaudit.KindAuditBulkPurgeExecuted, payload, time.Now())
+		contextaudit.MustEmit(ctx, em, contextaudit.KindAuditBulkPurgeExecuted, payload, time.Now())
 	}
 	return nil
 }

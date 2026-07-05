@@ -16,6 +16,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sort"
 	"strings"
 	"sync"
@@ -860,7 +861,19 @@ func (a *API) ResummarizeChunk(ctx context.Context, chunkID string) (Chunk, erro
 			SessionID: found.SessionID,
 			RetryAt:   time.Now().UTC(),
 		}
-		_ = a.narrativeJobs.Enqueue(ctx, job) // enqueue is best-effort
+		// (FR-006) WARN-log on enqueue failure so a "re-summarize did nothing"
+		// scenario is diagnosable. The view chunk is still returned (user-facing
+		// re-summarize reports success on enqueue, not on completion).
+		if err := a.narrativeJobs.Enqueue(ctx, job); err != nil {
+			slog.WarnContext(ctx, "memory: resummarize enqueue failed",
+				"turn_id",    found.TurnID,
+				"session_id", found.SessionID,
+				"error",      err.Error(),
+			)
+			// Surfaced to caller as an explicit error so the frontend can inform
+			// the user the re-summarize was not enqueued (FR-007).
+			return Chunk{}, fmt.Errorf("memory: resummarize not enqueued: %w", err)
+		}
 		return toViewChunk(*found), nil
 	}
 
