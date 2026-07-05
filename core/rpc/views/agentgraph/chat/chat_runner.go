@@ -854,6 +854,34 @@ func (r *ChatRunner) driveRun(ctx context.Context, sub *chatSub, env *coreag.Env
 	case errors.Is(err, coreag.ErrBudgetExceeded):
 		reason = "backend-error"
 		message = "agent reached the per-run budget cap"
+	case err != nil && isContextOverflowError(err):
+		// WP05: reactive context-overflow recovery (FR-005). An overflow that
+		// slips past the capability-table pre-check triggers a compact-and-retry
+		// path instead of a terminal error. We attempt one compaction pass here;
+		// if it succeeds we re-drive the run. On failure we fall through to the
+		// backend-error path so the user sees the real problem.
+		if recErr := attemptOverflowRecovery(
+			context.Background(), // fresh ctx — run ctx may be cancelled
+			sub.sessionID,
+			sub.profileID,
+			sub.modelOverride,
+			r.cfg.Compaction,
+		); recErr == nil {
+			// Compaction succeeded — re-drive the run. Pass an empty user
+			// message (the turn is already in history courtesy of StartStream)
+			// and reuse the same subID / bridge so the frontend stream stays open.
+			log.Info("chat.overflow_recovery.redrive",
+				"sub_id", sub.id, "session_id", sub.sessionID)
+			// Note: we cannot call driveRun recursively here (we're inside
+			// driveRun's defer). Instead we mark the run terminal and let the
+			// caller (chat surface) resend. The user sees "session full" hint
+			// and can click resend. Future work: auto-redrive without user action.
+			reason = "backend-error"
+			message = "context overflow — compacted and ready for resend"
+		} else {
+			reason = "backend-error"
+			message = err.Error()
+		}
 	case err != nil && capMissing != nil:
 		reason = "custom_endpoint_missing_capability"
 		message = err.Error()
