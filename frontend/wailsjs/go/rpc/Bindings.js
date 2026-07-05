@@ -1546,16 +1546,16 @@ export function Workflows_CancelRun(arg1) {
   return window['go']['rpc']['Bindings']['Workflows_CancelRun'](arg1);
 }
 
-export function Workflows_Catalog_Get(arg1) {
-  return window['go']['rpc']['Bindings']['Workflows_Catalog_Get'](arg1);
+export function Workflows_CatalogGet(arg1) {
+  return window['go']['rpc']['Bindings']['Workflows_CatalogGet'](arg1);
 }
 
-export function Workflows_Catalog_Install(arg1) {
-  return window['go']['rpc']['Bindings']['Workflows_Catalog_Install'](arg1);
+export function Workflows_CatalogInstall(arg1) {
+  return window['go']['rpc']['Bindings']['Workflows_CatalogInstall'](arg1);
 }
 
-export function Workflows_Catalog_List() {
-  return window['go']['rpc']['Bindings']['Workflows_Catalog_List']();
+export function Workflows_CatalogList() {
+  return window['go']['rpc']['Bindings']['Workflows_CatalogList']();
 }
 
 export function Workflows_Delete(arg1) {

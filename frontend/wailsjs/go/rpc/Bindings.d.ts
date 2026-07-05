@@ -821,11 +821,11 @@ export function Workflow_StopStream(arg1:string):Promise<void>;
 
 export function Workflows_CancelRun(arg1:string):Promise<void>;
 
-export function Workflows_Catalog_Get(arg1:string):Promise<workflows.CatalogPreview>;
+export function Workflows_CatalogGet(arg1:string):Promise<workflows.CatalogPreview>;
 
-export function Workflows_Catalog_Install(arg1:string):Promise<workflows.CatalogInstallResult>;
+export function Workflows_CatalogInstall(arg1:string):Promise<workflows.CatalogInstallResult>;
 
-export function Workflows_Catalog_List():Promise<Array<workflows.CatalogEntry>>;
+export function Workflows_CatalogList():Promise<Array<workflows.CatalogEntry>>;
 
 export function Workflows_Delete(arg1:string):Promise<void>;
 
