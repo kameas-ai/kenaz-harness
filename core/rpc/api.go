@@ -3010,7 +3010,30 @@ func newLLMStack(
 	if c != nil {
 		sessionMgrForUsage = c.SessionManager()
 	}
-	chatRunner := buildChatRunner(broker, reg, wrappedPool, perms, historyAdapter, settingsImpl, graphMgr, toolDiscoverer, artifactSinkConcrete, compactionDeps, usageMgr, sessionMgrForUsage)
+
+	// Build the autotitle generator for the chat runner's post-run trigger.
+	// Uses the same registry + profile resolver pattern as the sessions API.
+	var chatAutoTitleGen chat.AutoTitleGenerator
+	if reg != nil {
+		capturedStore := store
+		llmCaller := autotitlewiring.NewLLMCaller(reg,
+			autotitlewiring.WithProfileResolver(func(_ context.Context, profileID, modelOverride string) (string, string, bool) {
+				if profileID != "" {
+					return profileID, modelOverride, true
+				}
+				if capturedStore != nil {
+					profs, perr := capturedStore.List()
+					if perr == nil && len(profs) > 0 {
+						return profs[0].ID, profs[0].Model, true
+					}
+				}
+				return "", "", false
+			}),
+		)
+		chatAutoTitleGen = autotitle.New(llmCaller)
+	}
+
+	chatRunner := buildChatRunner(broker, reg, wrappedPool, perms, historyAdapter, settingsImpl, graphMgr, toolDiscoverer, artifactSinkConcrete, compactionDeps, usageMgr, sessionMgrForUsage, chatAutoTitleGen)
 	var capCatalog llm.CapCatalog
 	if cat, err := llmcap.LoadDefault(); err == nil {
 		capCatalog = &capCatalogAdapter{cat: cat}
@@ -3235,6 +3258,7 @@ func buildChatRunner(
 	compactionDeps *chat.CompactionDeps,
 	usageMgr usage.Manager,
 	sessionMgr *session.Manager,
+	autoTitleGen chat.AutoTitleGenerator,
 ) *chat.ChatRunner {
 	if graphMgr == nil || graphMgr.Kernel() == nil {
 		logging.L().Warn("chat.runner.disabled", "reason", "graph manager unavailable")
@@ -3391,6 +3415,28 @@ func buildChatRunner(
 			}
 		}
 	}
+	// WP05 (p0-wiring-fixes): wire AutoTitle deps so the post-run trigger
+	// actually gates on the user's toggle.
+	var autoTitleDeps *chat.AutoTitleDeps
+	if sessionMgr != nil && autoTitleGen != nil {
+		capturedSettings := settingsImpl
+		capturedBroker := broker
+		autoTitleDeps = &chat.AutoTitleDeps{
+			Manager:   sessionMgr,
+			Generator: autoTitleGen,
+			EffectiveEnabled: func() bool {
+				if capturedSettings == nil {
+					return true
+				}
+				enabled, err := capturedSettings.GetAutoTitleEnabled(context.Background())
+				if err != nil {
+					return true // default on
+				}
+				return enabled
+			},
+			Broker: capturedBroker,
+		}
+	}
 	runner, err := chat.New(chat.Config{
 		Kernel:           graphMgr.Kernel(),
 		Registry:         reg,
@@ -3406,6 +3452,7 @@ func buildChatRunner(
 		Compaction:             compactionDeps,
 		PartialPersister:       partialPersister,
 		UsageHook:              usageHookFn,
+		AutoTitle:              autoTitleDeps,
 		// multimodal-io-extended-01KQ8TD2 WP02: wire the concrete artifact
 		// sink as the generated-image capturer so StreamGeneratedImage
 		// events land in the artifact store with Source=="model_output".
