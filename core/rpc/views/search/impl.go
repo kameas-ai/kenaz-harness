@@ -5,8 +5,12 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
+	"fmt"
+	"runtime/debug"
 	"strings"
 	"time"
+
+	"github.com/kameas-ai/kenaz-harness/core/logging"
 )
 
 // AuditEmitter is the narrow seam the search view calls when emitting
@@ -425,6 +429,20 @@ func (a *managerAPI) UnifiedSearch(ctx context.Context, query string, filters Se
 			continue
 		}
 		go func() {
+			// Recover panics from the per-corpus adapter (FR-003). A
+			// panicking adapter returns an error for that corpus so the
+			// collector is not stranded, and the process does not crash.
+			defer func() {
+				if r := recover(); r != nil {
+					stack := debug.Stack()
+					logging.L().Error("search.unified.corpus_adapter.panic",
+						"corpus", ae.corpus,
+						"panic", fmt.Sprintf("%v", r),
+						"stack", string(stack),
+					)
+					ch <- result{err: fmt.Errorf("corpus %q adapter panicked: %v", ae.corpus, r)}
+				}
+			}()
 			hits, err := ae.adapter.search(ctx, q, limit)
 			// Score each hit based on its position within the corpus.
 			for i := range hits {
