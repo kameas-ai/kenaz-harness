@@ -428,7 +428,11 @@ func (s *Server) dispatch(ctx context.Context, method string, params json.RawMes
 		return AuthStateResult{State: state.String()}, nil
 
 	default:
-		return nil, errors.New("method not found: " + method)
+		// Explicit "not ported" error so the served frontend can distinguish
+		// "this method exists on desktop but is not yet wired in serve mode"
+		// from a genuine typo.  FR-005: no fake success — the caller gets a
+		// clear error, never silent fake data.
+		return nil, fmt.Errorf("serve: %q is not ported to served mode; use the desktop app or file a ticket", method)
 	}
 }
 

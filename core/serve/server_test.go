@@ -282,8 +282,11 @@ func TestRPC_UnknownMethod(t *testing.T) {
 	if err := json.NewDecoder(resp.Body).Decode(&envelope); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if !strings.Contains(envelope.Error, "method not found") {
-		t.Errorf("expected 'method not found' error, got %q", envelope.Error)
+	// FR-005: unhandled methods now return an explicit "not ported" error
+	// rather than a generic "method not found" to help callers distinguish
+	// "typo" from "valid desktop binding not yet wired in serve mode".
+	if !strings.Contains(envelope.Error, "not ported to served mode") {
+		t.Errorf("expected 'not ported to served mode' in error, got %q", envelope.Error)
 	}
 }
 
@@ -810,6 +813,40 @@ func TestRPC_AuthState_WithSession(t *testing.T) {
 	}
 	if envelope.Result.State != "anonymous" {
 		t.Errorf("expected state 'anonymous' from anon session, got %q", envelope.Result.State)
+	}
+}
+
+// TestRPC_UnhandledMethod_NotPortedError verifies that calling a desktop
+// binding not yet wired in serve mode returns a clear "not ported" error
+// (FR-005) rather than fake data or a generic "method not found" message.
+func TestRPC_UnhandledMethod_NotPortedError(t *testing.T) {
+	_, baseURL, cancel := newTestServer(t, "")
+	defer cancel()
+
+	// "Settings_Get" is a valid desktop binding not wired in serve dispatch.
+	body := strings.NewReader(`{"method":"Settings_Get","params":{}}`)
+	resp, err := http.Post(baseURL+"/rpc", "application/json", body)
+	if err != nil {
+		t.Fatalf("POST /rpc: %v", err)
+	}
+	defer resp.Body.Close()
+
+	// The HTTP response is 200 (RPC-level error, not HTTP error).
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+	var envelope struct {
+		Error  string `json:"error"`
+		Result any    `json:"result"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&envelope); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if envelope.Error == "" {
+		t.Fatal("expected an error for an unhandled method, got none")
+	}
+	if !strings.Contains(envelope.Error, "not ported to served mode") {
+		t.Errorf("expected 'not ported to served mode' in error, got %q", envelope.Error)
 	}
 }
 
