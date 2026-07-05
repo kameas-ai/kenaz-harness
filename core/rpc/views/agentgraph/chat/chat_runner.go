@@ -751,6 +751,14 @@ func (r *ChatRunner) driveRun(ctx context.Context, sub *chatSub, env *coreag.Env
 		close(sub.done)
 	}()
 
+	// WP02 — periodic partial flush: start a background goroutine that
+	// periodically persists accumulated streamed text during the run.
+	// This closes the crash-loss window (FR-002). The goroutine exits
+	// automatically when the run's context is cancelled.
+	if r.cfg.PartialPersister != nil {
+		go runPeriodicFlush(ctx, sub.sessionID, sub.bridge, r.cfg.PartialPersister, 0)
+	}
+
 	runStart := time.Now()
 	err := r.cfg.Kernel.Run(ctx, env)
 	reason := "completed"
