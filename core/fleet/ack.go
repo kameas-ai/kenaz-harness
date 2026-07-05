@@ -14,7 +14,20 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"regexp"
 )
+
+// pathLike matches absolute filesystem paths that may appear in error strings
+// (e.g. "/home/user/.config/kenaz/..." or "C:\Users\..." on Windows). These
+// are redacted before leaving the device so that host identities and directory
+// layouts are not sent to the fleet server.
+var pathLike = regexp.MustCompile(`(?i)([a-z]:\\[^:\s"']+|/[^\s"']{4,})`)
+
+// redactPaths replaces absolute filesystem paths in s with "<path>" so that
+// ACK error strings do not carry host-specific information to the fleet server.
+func redactPaths(s string) string {
+	return pathLike.ReplaceAllString(s, "<path>")
+}
 
 // configACKPayload is the JSON body sent to the fleet ACK endpoint.
 type configACKPayload struct {
@@ -48,11 +61,11 @@ func PostConfigACK(ctx context.Context, client *Client, bundleID int64, applyErr
 		Applied:  len(applyErrs) == 0,
 	}
 	if len(applyErrs) > 0 {
-		payload.ErrorMsg = applyErrs[0].Error()
+		payload.ErrorMsg = redactPaths(applyErrs[0].Error())
 		payload.Errors = make([]string, 0, len(applyErrs))
 		for _, e := range applyErrs {
 			if e != nil {
-				payload.Errors = append(payload.Errors, e.Error())
+				payload.Errors = append(payload.Errors, redactPaths(e.Error()))
 			}
 		}
 	}

@@ -360,7 +360,7 @@ onBeforeUnmount(() => {
       :subtitle="
         rootPath
           ? `Markdown + text files in ${rootPath}. Drop a file in the folder or use the “+ Folder” affordance to organise.`
-          : 'Markdown + text files attached to sessions, projects, or globally. Local-only — nothing leaves the device.'
+          : 'Markdown + text files attached to sessions, projects, or globally. Local-only — context files never leave the device (fleet config-apply ACKs and opted-in telemetry are the only egress when fleet config distribution is active).'
       "
     >
       <template #trailing>
