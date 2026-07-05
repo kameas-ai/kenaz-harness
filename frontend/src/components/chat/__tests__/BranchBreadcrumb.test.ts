@@ -9,7 +9,7 @@
  *  5. Multi-level ancestorCount > 1 shows "..." expand toggle.
  *  6. Deleted parent renders fallback form without link.
  */
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import { mount, flushPromises } from '@vue/test-utils';
 import { createMemoryHistory, createRouter } from 'vue-router';
 import { defineComponent, h } from 'vue';
@@ -29,7 +29,8 @@ async function mountBreadcrumb(props: Record<string, unknown>) {
   await router.push('/sessions/child-1');
   await router.isReady();
   const w = mount(BranchBreadcrumb, {
-    props,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    props: props as any,
     global: { plugins: [router] },
   });
   return { w, router };

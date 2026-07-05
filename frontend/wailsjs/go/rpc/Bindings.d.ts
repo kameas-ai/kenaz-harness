@@ -14,7 +14,6 @@ import {cedarpolicy} from '../models';
 import {cedar} from '../models';
 import {compaction} from '../models';
 import {contextview} from '../models';
-import {fleet} from '../models';
 import {contexts} from '../models';
 import {corpus} from '../models';
 import {dials} from '../models';
@@ -45,6 +44,7 @@ import {sync} from '../models';
 import {transport} from '../models';
 import {tools} from '../models';
 import {trust} from '../models';
+import {fleet} from '../models';
 import {update} from '../models';
 import {workflow} from '../models';
 import {workflows} from '../models';
@@ -199,11 +199,11 @@ export function Context_StopStream(arg1:string):Promise<void>;
 
 export function Contexts_AttachModule(arg1:string,arg2:string,arg3:string):Promise<contexts.ModuleAttachment>;
 
+export function Contexts_ContextExport(arg1:string,arg2:string):Promise<contexts.ContextExportView>;
+
 export function Contexts_ContextPromote(arg1:string):Promise<contexts.ContextPromoteResult>;
 
 export function Contexts_ContextPublish(arg1:contexts.ContextPublishRequest):Promise<contexts.ContextPublishResult>;
-
-export function Contexts_ContextExport(arg1:string,arg2:string):Promise<contexts.ContextExportView>;
 
 export function Contexts_ContextSearch(arg1:string,arg2:string,arg3:number):Promise<Array<contexts.ContextSearchHitView>>;
 
@@ -272,16 +272,6 @@ export function Fleet_GetTelemetryConsent():Promise<string>;
 export function Fleet_SetTelemetryConsent(arg1:string):Promise<void>;
 
 export function Graph_CancelRun(arg1:string):Promise<void>;
-
-export function Unit_PromoteAsMergeRequest(arg1:string,arg2:string,arg3:string,arg4:string):Promise<fleet.MergeRequestResult>;
-
-export function Unit_ListConflicts():Promise<Array<fleet.UnitConflictView>>;
-
-export function Unit_ResolveMerge(arg1:string,arg2:string):Promise<void>;
-
-export function Unit_ResolveEnshrine(arg1:string,arg2:string,arg3:string,arg4:string):Promise<string>;
-
-export function Unit_ResolveLoadable(arg1:string,arg2:string):Promise<Array<fleet.ResolvedUnitView>>;
 
 export function Graph_DeleteGraph(arg1:string):Promise<void>;
 
@@ -565,6 +555,8 @@ export function Sessions_Reorder(arg1:Array<string>):Promise<void>;
 
 export function Sessions_ResolveAutonomy(arg1:string):Promise<sessions.ResolvedAutonomy>;
 
+export function Sessions_ResumeMessage(arg1:string,arg2:string):Promise<sessions.ResumeMessageResult>;
+
 export function Sessions_SaveAsArtifact(arg1:string,arg2:string,arg3:string,arg4:number,arg5:number):Promise<artifacts.Artifact>;
 
 export function Sessions_SaveDraft(arg1:string,arg2:string):Promise<void>;
@@ -601,11 +593,11 @@ export function Settings_FleetRefreshCapabilities():Promise<settings.Capabilitie
 
 export function Settings_FleetRefreshIdentity():Promise<settings.FleetIdentity>;
 
+export function Settings_FleetSetTelemetryOptIn(arg1:string,arg2:boolean):Promise<void>;
+
 export function Settings_FleetSignIn():Promise<settings.FleetIdentity>;
 
 export function Settings_FleetSignOut():Promise<void>;
-
-export function Settings_FleetSetTelemetryOptIn(arg1:string,arg2:boolean):Promise<void>;
 
 export function Settings_FleetSignedIn():Promise<boolean>;
 
@@ -621,6 +613,8 @@ export function Settings_GetAutoCaptureGeneratedImages():Promise<boolean>;
 
 export function Settings_GetAutoResumeOnKeyRotation():Promise<boolean>;
 
+export function Settings_GetAutoTitleEnabled():Promise<boolean>;
+
 export function Settings_GetAutonomy():Promise<autonomy.Layer>;
 
 export function Settings_GetBash():Promise<boolean>;
@@ -628,8 +622,6 @@ export function Settings_GetBash():Promise<boolean>;
 export function Settings_GetBashAllowlistMigrated():Promise<boolean>;
 
 export function Settings_GetCedarStrictCredentialMode():Promise<boolean>;
-
-export function Settings_GetConfirmEach():Promise<boolean>;
 
 export function Settings_GetEmbedderConfig():Promise<rpc.EmbedderConfigResult>;
 
@@ -677,6 +669,8 @@ export function Settings_SetAutoCaptureGeneratedImages(arg1:boolean):Promise<voi
 
 export function Settings_SetAutoResumeOnKeyRotation(arg1:boolean):Promise<void>;
 
+export function Settings_SetAutoTitleEnabled(arg1:boolean):Promise<void>;
+
 export function Settings_SetAutonomy(arg1:autonomy.Layer):Promise<void>;
 
 export function Settings_SetBash(arg1:boolean):Promise<void>;
@@ -684,8 +678,6 @@ export function Settings_SetBash(arg1:boolean):Promise<void>;
 export function Settings_SetBashAllowlistMigrated(arg1:boolean):Promise<void>;
 
 export function Settings_SetCedarStrictCredentialMode(arg1:boolean):Promise<void>;
-
-export function Settings_SetConfirmEach(arg1:boolean):Promise<void>;
 
 export function Settings_SetEmbedderConfig(arg1:string,arg2:string):Promise<void>;
 
@@ -797,6 +789,16 @@ export function Trust_GetSecretReference(arg1:string):Promise<trust.SecretRefere
 
 export function Trust_ListSecretReferences():Promise<Array<trust.SecretReference>>;
 
+export function Unit_ListConflicts():Promise<Array<fleet.UnitConflictView>>;
+
+export function Unit_PromoteAsMergeRequest(arg1:string,arg2:string,arg3:string,arg4:string):Promise<fleet.MergeRequestResult>;
+
+export function Unit_ResolveEnshrine(arg1:string,arg2:string,arg3:string,arg4:string):Promise<string>;
+
+export function Unit_ResolveLoadable(arg1:string,arg2:string):Promise<Array<fleet.ResolvedUnitView>>;
+
+export function Unit_ResolveMerge(arg1:string,arg2:string):Promise<void>;
+
 export function Update_Apply():Promise<void>;
 
 export function Update_ListSkippedVersions():Promise<Array<string>>;
@@ -818,6 +820,12 @@ export function Workflow_StartStream():Promise<string>;
 export function Workflow_StopStream(arg1:string):Promise<void>;
 
 export function Workflows_CancelRun(arg1:string):Promise<void>;
+
+export function Workflows_CatalogGet(arg1:string):Promise<workflows.CatalogPreview>;
+
+export function Workflows_CatalogInstall(arg1:string):Promise<workflows.CatalogInstallResult>;
+
+export function Workflows_CatalogList():Promise<Array<workflows.CatalogEntry>>;
 
 export function Workflows_Delete(arg1:string):Promise<void>;
 

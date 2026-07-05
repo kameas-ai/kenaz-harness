@@ -53,7 +53,7 @@ function makeClient() {
       saveGraph: vi.fn(async () => undefined),
       deleteGraph: async () => undefined,
       validate: vi.fn(async () => ({ ok: true, issues: [] })),
-      startRun: async (req) => ({
+      startRun: async (req: { graphId: string }) => ({
         runId: 'r',
         status: {
           runId: 'r',
@@ -68,7 +68,7 @@ function makeClient() {
           costUsd: 0,
         },
       }),
-      getRunStatus: async (id) => ({
+      getRunStatus: async (id: string) => ({
         runId: id,
         graphId: 'g',
         state: 'completed' as const,
@@ -80,8 +80,7 @@ function makeClient() {
         toolCalls: 0,
         costUsd: 0.001,
       }),
-      listRuns: async () => [],
-    },
+    } as any,
   });
 }
 

@@ -95,21 +95,21 @@ async function mountWithRoute(
             provideFakeClient(app, {
               sessions: {
                 list: async () => sessionList,
-                get: async (id) =>
+                get: async (id: string) =>
                   sessionList.find((s) => s.id === id) ?? {
                     id,
                     name: 'Session',
                     createdAt: '',
                     updatedAt: '',
                   },
-                create: async (name) => ({ id: 'new', name, createdAt: '', updatedAt: '' }),
+                create: async (name: string) => ({ id: 'new', name, createdAt: '', updatedAt: '' }),
                 rename: async () => undefined,
                 delete: async () => undefined,
                 reorder: async () => undefined,
                 startStream: async () => 'sub',
                 stopStream: async () => undefined,
                 listMessages: async () => [],
-                appendMessage: async (sid, role, content) => ({
+                appendMessage: async (sid: string, role: string, content: string) => ({
                   id: 'm-x',
                   sessionId: sid,
                   role,
@@ -120,12 +120,12 @@ async function mountWithRoute(
                 loadDraft: async () => '',
                 setSystemPrompt: async () => undefined,
                 moveToProject: async () => undefined,
-              },
+              } as any,
               llm: {
                 listProviders: async () => [],
                 startStream: async () => 'sub',
                 stopStream: async () => undefined,
-              },
+              } as any,
               ...seed,
             });
           },
@@ -194,14 +194,14 @@ describe('SessionsView (branching-ux-polish WP07)', () => {
         sessions: {
           list: async () => sessions,
           get: async () => sessions[0]!,
-          create: async (name) => ({ id: 'new', name, createdAt: '', updatedAt: '' }),
+          create: async (name: string) => ({ id: 'new', name, createdAt: '', updatedAt: '' }),
           rename: async () => undefined,
           delete: async () => undefined,
           reorder: async () => undefined,
           startStream: async () => 'sub',
           stopStream: async () => undefined,
           listMessages: async () => messages,
-          appendMessage: async (sid, role, content) => ({
+          appendMessage: async (sid: string, role: string, content: string) => ({
             id: 'm-x',
             sessionId: sid,
             role,
@@ -212,11 +212,11 @@ describe('SessionsView (branching-ux-polish WP07)', () => {
           loadDraft: async () => '',
           setSystemPrompt: async () => undefined,
           moveToProject: async () => undefined,
-        },
+        } as any,
         branches: {
           list: async () => [],
           create: async () => fakeBranch,
-          createExplicit: async (opts) => {
+          createExplicit: async (opts: { parentSessionId: string; parentMessageId?: string }) => {
             createCalls.push({
               parentSessionId: opts.parentSessionId,
               parentMessageId: opts.parentMessageId ?? '',
@@ -245,7 +245,7 @@ describe('SessionsView (branching-ux-polish WP07)', () => {
           commitReintegration: async () => undefined,
           setAdvisorDismissed: async () => undefined,
           listWithBranchTree: async () => [],
-        },
+        } as any,
       },
       sessions,
     );

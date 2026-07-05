@@ -79,11 +79,11 @@ function mountWith(opts: MountOpts = {}) {
         capturedAt: '',
       }),
       testEmbedder: async () => 0,
-    },
+    } as any,
     sessions: {
       list: async () => [],
       get: sessionGet,
-      create: async (name) => ({
+      create: async (name: string) => ({
         id: 'new',
         name,
         createdAt: '',
@@ -95,7 +95,7 @@ function mountWith(opts: MountOpts = {}) {
       startStream: async () => 'sub',
       stopStream: async () => undefined,
       listMessages: async () => [],
-      appendMessage: async (id, role, content) => ({
+      appendMessage: async (id: string, role: string, content: string) => ({
         id: 'm',
         sessionId: id,
         role,
@@ -106,7 +106,7 @@ function mountWith(opts: MountOpts = {}) {
       loadDraft: async () => '',
       setSystemPrompt: async () => undefined,
       moveToProject: async () => undefined,
-    },
+    } as any,
   });
   const wrapper = mount(MemoryView, {
     global: {

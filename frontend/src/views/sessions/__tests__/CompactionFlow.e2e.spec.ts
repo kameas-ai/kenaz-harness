@@ -234,8 +234,6 @@ function makeSettingsClient(): HarnessClient['settings'] {
     saveTheme: async () => undefined,
     getMemory: async () => false,
     setMemory: async () => undefined,
-    getConfirmEach: async () => true,
-    setConfirmEach: async () => undefined,
     getWebSearch: async () => false,
     setWebSearch: async () => undefined,
     getBash: async () => false,
@@ -256,7 +254,7 @@ function makeSettingsClient(): HarnessClient['settings'] {
     setCedarStrictCredentialMode: async () => undefined,
     getFSRequestAccessEnabled: async () => true,
     setFSRequestAccessEnabled: async () => undefined,
-  };
+  } as any;
 }
 
 async function mountWithRoute(seed: Partial<HarnessClient>) {
@@ -314,7 +312,7 @@ describe('CompactionFlow.e2e (WP09 — plan §4 acceptance smoke)', () => {
         listProviders: async () => providers,
         startStream: async () => 'sub',
         stopStream: async () => undefined,
-      },
+      } as any,
     });
     await flushPromises();
 
@@ -353,7 +351,7 @@ describe('CompactionFlow.e2e (WP09 — plan §4 acceptance smoke)', () => {
         listProviders: async () => providers,
         startStream: async () => 'sub',
         stopStream: async () => undefined,
-      },
+      } as any,
     });
     await flushPromises();
 
@@ -405,7 +403,7 @@ describe('CompactionFlow.e2e (WP09 — plan §4 acceptance smoke)', () => {
         listProviders: async () => providers,
         startStream: async () => 'sub',
         stopStream: async () => undefined,
-      },
+      } as any,
     });
     await flushPromises();
 
@@ -438,7 +436,7 @@ describe('CompactionFlow.e2e (WP09 — plan §4 acceptance smoke)', () => {
           listProviders: async () => providers,
           startStream: async () => 'sub',
           stopStream: async () => undefined,
-        },
+        } as any,
       });
       await flushPromises();
 
@@ -460,7 +458,7 @@ describe('CompactionFlow.e2e (WP09 — plan §4 acceptance smoke)', () => {
           listProviders: async () => providers,
           startStream: async () => 'sub',
           stopStream: async () => undefined,
-        },
+        } as any,
       });
       await flushPromises();
 
@@ -485,7 +483,7 @@ describe('CompactionFlow.e2e (WP09 — plan §4 acceptance smoke)', () => {
         listProviders: async () => providers,
         startStream: async () => 'sub',
         stopStream: async () => undefined,
-      },
+      } as any,
     });
     await flushPromises();
 

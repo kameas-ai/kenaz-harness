@@ -280,42 +280,6 @@ export interface MCPServer {
 
 // ── MCP Test Connection (mission mcp-server-install-01KQ8TDP, WP07) ────
 //
-// Wire shape for `MCP_TestRecipe`. Field names match the Go JSON tags
-// (camelCase) on mcp.TestResult. The frontend renders the result in the
-// "Test Connection" drawer without any adaptation layer.
-
-/**
- * MCPTestResult is the outcome of a one-shot Test Connection RPC.
- * All string fields may be empty on failure; numeric counts default to 0
- * when the server did not advertise the capability or the handshake
- * did not complete.
- */
-export interface MCPTestResult {
-  /** Whether the full initialize + capability listing completed without error. */
-  ok: boolean;
-  /** Server name from the initialize response serverInfo block. */
-  serverName: string;
-  /** Server version from the initialize response serverInfo block. */
-  serverVersion: string;
-  /** Protocol version echoed back by the server. */
-  protocolVersion: string;
-  /** Number of tools reported by tools/list (0 if not advertised). */
-  toolCount: number;
-  /** Number of resources reported by resources/list (0 if not advertised). */
-  resourceCount: number;
-  /** Number of prompts reported by prompts/list (0 if not advertised). */
-  promptCount: number;
-  /**
-   * Up to 4 KiB of the most recent stderr output (stdio recipes only).
-   * Empty for HTTP/SSE transports.
-   */
-  stderrTail: string;
-  /** Human-readable error when ok is false. Empty when ok is true. */
-  errorMessage: string;
-  /** Wall-clock elapsed time from connection open to close, in milliseconds. */
-  durationMs: number;
-}
-
 // Wire shape for `MCP_TestRecipe`. Field names follow Go JSON tags
 // (snake_case) verbatim. `ok` is the primary discriminant; `error`
 // is populated on failure. Capability counts are -1 when the server
@@ -1236,13 +1200,6 @@ export interface Message {
   streamingFailureKind?: 'transient' | 'auth' | 'unknown' | string;
   streamingRecoverable?: boolean;
   continuationOf?: string;
-  /** Frontend-only marker for the WP03 partial-message bubble — set by
-   * the useSession close-handler when the stream dropped before the
-   * assistant turn could land via SessionWriteNode. Mirrors the WP00
-   * surface: the bubble shows "Connection lost — partial reply
-   * preserved." plus a Resume button when streamingRecoverable. */
-  streamingError?: string;
-
   /**
    * Per-message token usage (per-message-token-meter-01KR3PQR). Present
    * only on assistant rows for which the token-cost-telemetry pipeline
@@ -2950,11 +2907,11 @@ export interface BranchReintegrationProposal {
 
 /**
  * BranchReintegrationCommitOpts — options for CommitReintegration.
+ * Field names must match core/rpc/views/branches/api.go CommitReintegrationOptions.
  */
 export interface BranchReintegrationCommitOpts {
   branchSessionId: string;
-  parentSessionId: string;
-  summary: string;
+  finalSummaryText: string;
   wasEdited: boolean;
 }
 
@@ -2974,6 +2931,17 @@ export type BranchModelPreference =
  */
 export interface BranchCreateOptions {
   parentSessionId: string;
+  /**
+   * parentMessageId anchors the fork at a specific message. When set,
+   * Branches_Create copies messages [0..parentMessageId] into the child session
+   * (branching-ux-polish-01KQ8TD7 WP02). Mirrors the Go JSON tag.
+   */
+  parentMessageId?: string;
+  /**
+   * creationPath is "explicit" | "edit_resend" | "unknown". Set by the
+   * "Branch from this turn" menu item. Defaults to "unknown" when unset.
+   */
+  creationPath?: string;
   title?: string;
   taskHint?: string;
   modelPreference?: BranchModelPreference;

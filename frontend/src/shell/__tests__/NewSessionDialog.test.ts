@@ -105,11 +105,11 @@ describe('NewSessionDialog (Mission A: starting context)', () => {
         removeProvider: async () => undefined,
         testProvider: async () => ({ success: true, latency_ms: 0, message: '' }),
         listModels: async () => [],
-      },
+      } as any,
       sessions: {
         list: async () => [],
-        get: async (id) => ({ id, name: id, createdAt: '', updatedAt: '' }),
-        create: async (name) => ({
+        get: async (id: string) => ({ id, name: id, createdAt: '', updatedAt: '' }),
+        create: async (name: string) => ({
           id: 'new-session-id',
           name,
           createdAt: '',
@@ -121,7 +121,7 @@ describe('NewSessionDialog (Mission A: starting context)', () => {
         startStream: async () => 'sub',
         stopStream: async () => undefined,
         listMessages: async () => [],
-        appendMessage: async (id, role, content) => {
+        appendMessage: async (id: string, role: string, content: string) => {
           appendCalls.push({ id, role, content });
           return {
             id: 'm1',
@@ -133,11 +133,11 @@ describe('NewSessionDialog (Mission A: starting context)', () => {
         },
         saveDraft: async () => undefined,
         loadDraft: async () => '',
-        setSystemPrompt: async (id, content, kind) => {
-          calls.push({ id, content, kind });
+        setSystemPrompt: async (id: string, content: string, kind: string) => {
+          calls.push({ id, content, kind: kind as 'system' | 'user_seed' });
         },
         moveToProject: async () => undefined,
-      },
+      } as any,
     });
     const pushSpy = vi.spyOn(router, 'push');
 
@@ -181,11 +181,11 @@ describe('NewSessionDialog (Mission A: starting context)', () => {
         removeProvider: async () => undefined,
         testProvider: async () => ({ success: true, latency_ms: 0, message: '' }),
         listModels: async () => [],
-      },
+      } as any,
       sessions: {
         list: async () => [],
-        get: async (id) => ({ id, name: id, createdAt: '', updatedAt: '' }),
-        create: async (name) => ({
+        get: async (id: string) => ({ id, name: id, createdAt: '', updatedAt: '' }),
+        create: async (name: string) => ({
           id: 'new-session-id',
           name,
           createdAt: '',
@@ -197,7 +197,7 @@ describe('NewSessionDialog (Mission A: starting context)', () => {
         startStream: async () => 'sub',
         stopStream: async () => undefined,
         listMessages: async () => [],
-        appendMessage: async (id, role, content) => {
+        appendMessage: async (id: string, role: string, content: string) => {
           appendCalls.push({ id, role, content });
           return {
             id: 'm1',
@@ -209,11 +209,11 @@ describe('NewSessionDialog (Mission A: starting context)', () => {
         },
         saveDraft: async () => undefined,
         loadDraft: async () => '',
-        setSystemPrompt: async (id, content, kind) => {
-          calls.push({ id, content, kind });
+        setSystemPrompt: async (id: string, content: string, kind: string) => {
+          calls.push({ id, content, kind: kind as 'system' | 'user_seed' });
         },
         moveToProject: async () => undefined,
-      },
+      } as any,
     });
 
     const fileInput = w.find<HTMLInputElement>('input[type="file"]');
@@ -258,7 +258,7 @@ describe('NewSessionDialog (Mission A: starting context)', () => {
         removeProvider: async () => undefined,
         testProvider: async () => ({ success: true, latency_ms: 0, message: '' }),
         listModels: async () => [],
-      },
+      } as any,
       projects: {
         list: async () => [
           {
@@ -269,14 +269,14 @@ describe('NewSessionDialog (Mission A: starting context)', () => {
             updatedAt: '',
           },
         ],
-        get: async (id) => ({
+        get: async (id: string) => ({
           id,
           name: id,
           description: '',
           createdAt: '',
           updatedAt: '',
         }),
-        create: async (name) => ({
+        create: async (name: string) => ({
           id: 'new-proj-id',
           name,
           description: '',
@@ -289,11 +289,11 @@ describe('NewSessionDialog (Mission A: starting context)', () => {
         addSession: async () => undefined,
         removeSession: async () => undefined,
         listSessions: async () => [],
-      },
+      } as any,
       sessions: {
         list: async () => [],
-        get: async (id) => ({ id, name: id, createdAt: '', updatedAt: '' }),
-        create: async (name) => ({
+        get: async (id: string) => ({ id, name: id, createdAt: '', updatedAt: '' }),
+        create: async (name: string) => ({
           id: 'new-session-id',
           name,
           createdAt: '',
@@ -305,7 +305,7 @@ describe('NewSessionDialog (Mission A: starting context)', () => {
         startStream: async () => 'sub',
         stopStream: async () => undefined,
         listMessages: async () => [],
-        appendMessage: async (id, role, content) => ({
+        appendMessage: async (id: string, role: string, content: string) => ({
           id: 'm1',
           sessionId: id,
           role,
@@ -315,10 +315,10 @@ describe('NewSessionDialog (Mission A: starting context)', () => {
         saveDraft: async () => undefined,
         loadDraft: async () => '',
         setSystemPrompt: async () => undefined,
-        moveToProject: async (id, projectId) => {
+        moveToProject: async (id: string, projectId: string) => {
           moveCalls.push({ id, projectId });
         },
-      },
+      } as any,
     });
 
     const select = w.find<HTMLSelectElement>('[data-testid="new-session-project"]');
@@ -347,11 +347,11 @@ describe('NewSessionDialog (Mission A: starting context)', () => {
         removeProvider: async () => undefined,
         testProvider: async () => ({ success: true, latency_ms: 0, message: '' }),
         listModels: async () => [],
-      },
+      } as any,
       sessions: {
         list: async () => [],
-        get: async (id) => ({ id, name: id, createdAt: '', updatedAt: '' }),
-        create: async (name) => ({
+        get: async (id: string) => ({ id, name: id, createdAt: '', updatedAt: '' }),
+        create: async (name: string) => ({
           id: 'new-session-id',
           name,
           createdAt: '',
@@ -363,7 +363,7 @@ describe('NewSessionDialog (Mission A: starting context)', () => {
         startStream: async () => 'sub',
         stopStream: async () => undefined,
         listMessages: async () => [],
-        appendMessage: async (id, role, content) => {
+        appendMessage: async (id: string, role: string, content: string) => {
           appendCalls.push({ id, role, content });
           return {
             id: 'm1',
@@ -375,11 +375,11 @@ describe('NewSessionDialog (Mission A: starting context)', () => {
         },
         saveDraft: async () => undefined,
         loadDraft: async () => '',
-        setSystemPrompt: async (id, content, kind) => {
-          calls.push({ id, content, kind });
+        setSystemPrompt: async (id: string, content: string, kind: string) => {
+          calls.push({ id, content, kind: kind as 'system' | 'user_seed' });
         },
         moveToProject: async () => undefined,
-      },
+      } as any,
     });
 
     await w.find('[data-testid="new-session-create"]').trigger('click');

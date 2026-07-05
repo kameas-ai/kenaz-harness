@@ -58,10 +58,15 @@ describe('BranchSidebar', () => {
       branches: {
         list: vi.fn().mockResolvedValue(branches),
         create: vi.fn(),
+        createExplicit: vi.fn(),
         status: vi.fn(),
         merge: vi.fn(),
         abandon: vi.fn(),
         recommendModel: vi.fn(),
+        proposeReintegrationSummary: vi.fn(),
+        commitReintegration: vi.fn(),
+        setAdvisorDismissed: vi.fn(),
+        listWithBranchTree: vi.fn(),
       },
     });
     await flushPromises();
@@ -84,10 +89,15 @@ describe('BranchSidebar', () => {
       branches: {
         list: vi.fn().mockResolvedValue(branches),
         create: vi.fn(),
+        createExplicit: vi.fn(),
         status: vi.fn(),
         merge: vi.fn(),
         abandon: vi.fn(),
         recommendModel: vi.fn(),
+        proposeReintegrationSummary: vi.fn(),
+        commitReintegration: vi.fn(),
+        setAdvisorDismissed: vi.fn(),
+        listWithBranchTree: vi.fn(),
       },
     });
     await flushPromises();
@@ -103,10 +113,15 @@ describe('BranchSidebar', () => {
       branches: {
         list,
         create: vi.fn(),
+        createExplicit: vi.fn(),
         status: vi.fn(),
         merge,
         abandon: vi.fn(),
         recommendModel: vi.fn(),
+        proposeReintegrationSummary: vi.fn(),
+        commitReintegration: vi.fn(),
+        setAdvisorDismissed: vi.fn(),
+        listWithBranchTree: vi.fn(),
       },
     });
     await flushPromises();
@@ -124,10 +139,15 @@ describe('BranchSidebar', () => {
       branches: {
         list,
         create: vi.fn(),
+        createExplicit: vi.fn(),
         status: vi.fn(),
         merge: vi.fn(),
         abandon,
         recommendModel: vi.fn(),
+        proposeReintegrationSummary: vi.fn(),
+        commitReintegration: vi.fn(),
+        setAdvisorDismissed: vi.fn(),
+        listWithBranchTree: vi.fn(),
       },
     });
     await flushPromises();

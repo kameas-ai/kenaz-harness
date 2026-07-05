@@ -53,7 +53,7 @@ async function doApprove() {
   submitting.value = true;
   lastError.value = null;
   try {
-    await window.go.rpc.HarnessAPI.Planmode_Approve({
+    await window.go?.rpc?.Bindings?.Planmode_Approve({
       session_id: props.sessionId,
       plan_id: props.planId,
     });
@@ -71,7 +71,7 @@ async function doDiscard() {
   submitting.value = true;
   lastError.value = null;
   try {
-    await window.go.rpc.HarnessAPI.Planmode_Discard({
+    await window.go?.rpc?.Bindings?.Planmode_Discard({
       session_id: props.sessionId,
       plan_id: props.planId,
     });
@@ -89,7 +89,7 @@ async function doSaveEdit() {
   submitting.value = true;
   lastError.value = null;
   try {
-    await window.go.rpc.HarnessAPI.Planmode_Edit({
+    await window.go?.rpc?.Bindings?.Planmode_Edit({
       session_id: props.sessionId,
       plan_id: props.planId,
       edited_plan: editedText.value,

@@ -24,7 +24,6 @@ import type {
   AppInfo,
   ModelInfo,
   ProviderKind,
-  CustomAuthScheme,
   CustomCapabilityMatrix,
 } from '@/lib/types';
 import Button from '@/components/ui/Button.vue';
@@ -226,7 +225,6 @@ const requiresAwsProfile = computed(
 // Gemini AI Studio probes via Connect (listModels uses API key).
 // Gemini Vertex skips probe — no /models endpoint on the Vertex path.
 const isGemini = computed(() => form.kind === 'gemini');
-const isGeminiAIStudio = computed(() => isGemini.value && form.geminiEndpointKind === 'ai_studio');
 const isGeminiVertex = computed(() => isGemini.value && form.geminiEndpointKind === 'vertex');
 const geminiVertexUsesADC = computed(() => isGeminiVertex.value && form.geminiVertexAuth === 'adc');
 const geminiVertexUsesSAPaste = computed(() => isGeminiVertex.value && form.geminiVertexAuth === 'service_account_paste');

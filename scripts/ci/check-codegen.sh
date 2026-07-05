@@ -111,4 +111,80 @@ EOF
   exit 1
 fi
 
+# ---- wailsjs binding source → committed hash gate ----
+#
+# `wails generate module` requires the Wails toolchain (CGO + macOS/Windows
+# SDK for the GUI layer) which is NOT available on the self-hosted kameas-ci-*
+# ARM64 pool. Instead we gate drift via a committed SHA-256 hash of the
+# binding-source files (core/rpc/bindings.go + core/rpc/bindings_*.go).
+# When any of those source files change without a corresponding wailsjs regen
+# the stored hash drifts and CI catches it.
+#
+# To update the hash (after running `wails generate module` locally and
+# committing the regenerated frontend/wailsjs/ files):
+#   bash scripts/ci/check-codegen.sh --update-wailsjs-hash
+#   git add scripts/ci/wailsjs-bindings.sha256
+#   git commit -m "chore(frontend): update wailsjs binding source hash"
+#
+# (p0-wiring-fixes-3TVMG0MX WP09)
+
+WAILSJS_HASH_FILE="${REPO_ROOT}/scripts/ci/wailsjs-bindings.sha256"
+WAILSJS_SOURCES="${REPO_ROOT}/core/rpc/bindings.go"
+# Collect any split-file bindings_*.go additions. Order MUST be deterministic
+# across platforms: shell glob expansion is locale-collated, and macOS vs the
+# Linux CI runner order `.` and `_` differently (e.g. bindings_wails.go vs
+# bindings_wails_serve.go), which would flip the concatenation and drift the
+# hash. Force byte-wise (LC_ALL=C) sorting so the digest is platform-stable.
+while IFS= read -r f; do
+  [[ -f "${f}" ]] && WAILSJS_SOURCES="${WAILSJS_SOURCES} ${f}"
+done < <(LC_ALL=C ls -1 "${REPO_ROOT}"/core/rpc/bindings_*.go 2>/dev/null | LC_ALL=C sort)
+
+# Portable SHA-256: self-hosted Linux runners ship `sha256sum`; macOS dev boxes
+# ship `shasum`. Both emit the identical SHA-256 digest, so the committed hash
+# stays valid across platforms. (shasum-only broke CI on the Linux ARM64 pool.)
+if command -v sha256sum >/dev/null 2>&1; then
+  _wailsjs_sha() { sha256sum | awk '{print $1}'; }
+else
+  _wailsjs_sha() { shasum -a 256 | awk '{print $1}'; }
+fi
+
+if [[ "${1:-}" == "--update-wailsjs-hash" ]]; then
+  COMPUTED=$(cat ${WAILSJS_SOURCES} | _wailsjs_sha)
+  echo "${COMPUTED}" > "${WAILSJS_HASH_FILE}"
+  echo "check-codegen: wailsjs binding source hash updated to ${COMPUTED}"
+  echo "check-codegen: OK — generated files match"
+  exit 0
+fi
+
+if [[ -f "${WAILSJS_HASH_FILE}" ]]; then
+  COMMITTED_HASH=$(cat "${WAILSJS_HASH_FILE}")
+  CURRENT_HASH=$(cat ${WAILSJS_SOURCES} | _wailsjs_sha)
+  if [[ "${COMMITTED_HASH}" != "${CURRENT_HASH}" ]]; then
+    cat >&2 <<EOF
+
+check-codegen: WAILSJS DRIFT DETECTED.
+
+The binding source (core/rpc/bindings.go) has changed since the last
+time the wailsjs files were regenerated. The committed files under
+frontend/wailsjs/go/rpc/Bindings.{js,d.ts} and
+frontend/wailsjs/go/models.ts may be stale.
+
+Fix:
+  1. Run 'wails generate module' on a dev machine (needs the Wails
+     toolchain — macOS or Linux with GTK installed).
+  2. Commit the updated frontend/wailsjs/ files.
+  3. Update the hash: bash scripts/ci/check-codegen.sh --update-wailsjs-hash
+  4. Commit scripts/ci/wailsjs-bindings.sha256 alongside the regen.
+
+Committed hash : ${COMMITTED_HASH}
+Current hash   : ${CURRENT_HASH}
+
+EOF
+    exit 1
+  fi
+  echo "check-codegen: wailsjs binding source hash OK (${CURRENT_HASH})"
+else
+  echo "check-codegen: WARN — ${WAILSJS_HASH_FILE} not found; skipping wailsjs hash gate"
+fi
+
 echo "check-codegen: OK — generated files match"

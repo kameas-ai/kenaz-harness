@@ -27,8 +27,6 @@ function buildWrapper(overrides: Record<string, string> = {}) {
       saveTheme: async () => undefined,
       getMemory: async () => false,
       setMemory: async () => undefined,
-      getConfirmEach: async () => true,
-      setConfirmEach: async () => undefined,
       getWebSearch: async () => false,
       setWebSearch: async () => undefined,
       getBash: async () => false,
@@ -37,10 +35,8 @@ function buildWrapper(overrides: Record<string, string> = {}) {
       setSaveArtifact: async () => undefined,
       getMaxAgentTurns: async () => 0,
       setMaxAgentTurns: async () => undefined,
-      getShortcuts: async () => ({}),
-      setShortcut: async () => undefined,
-      setShortcuts: async () => undefined,
-    },
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any,
   });
   return {
     wrapper: mount(KeyboardShortcuts, {

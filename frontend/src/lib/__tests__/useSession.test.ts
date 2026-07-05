@@ -103,7 +103,7 @@ describe('useSession (chat-ui)', () => {
     const { w, session } = mountWithSession({
       sessions: {
         list: async () => [],
-        get: async (id) => ({ id, name: 'My Session', createdAt: '', updatedAt: '' }),
+        get: async (id: string) => ({ id, name: 'My Session', createdAt: '', updatedAt: '' }),
         create: async () => ({ id: 'x', name: '', createdAt: '', updatedAt: '' }),
         rename: async () => undefined,
         delete: async () => undefined,
@@ -111,11 +111,11 @@ describe('useSession (chat-ui)', () => {
         startStream: async () => 'sub',
         stopStream: async () => undefined,
         listMessages: async () => initial,
-        appendMessage: async (id, role, content) =>
-          makeMessage({ id: 'new', sessionId: id, role, content }),
+        appendMessage: async (id: string, role: string, content: string) =>
+          makeMessage({ id: 'new', sessionId: id, role: role as Message['role'], content }),
         saveDraft: async () => undefined,
         loadDraft: async () => 'pending draft',
-      },
+      } as any,
     });
     await vi.runAllTimersAsync();
     await nextTick();
@@ -130,7 +130,7 @@ describe('useSession (chat-ui)', () => {
     const { w, session } = mountWithSession({
       sessions: {
         list: async () => [],
-        get: async (id) => ({ id, name: id, createdAt: '', updatedAt: '' }),
+        get: async (id: string) => ({ id, name: id, createdAt: '', updatedAt: '' }),
         create: async () => ({ id: '', name: '', createdAt: '', updatedAt: '' }),
         rename: async () => undefined,
         delete: async () => undefined,
@@ -138,18 +138,18 @@ describe('useSession (chat-ui)', () => {
         startStream: async () => 'sub',
         stopStream: async () => undefined,
         listMessages: async () => [],
-        appendMessage: async (id, role, content) => {
+        appendMessage: async (id: string, role: string, content: string) => {
           seenAppend.push(`${role}:${content}`);
-          return makeMessage({ id: 'u-1', sessionId: id, role, content });
+          return makeMessage({ id: 'u-1', sessionId: id, role: role as Message['role'], content });
         },
         saveDraft: async () => undefined,
         loadDraft: async () => '',
-      },
+      } as any,
       llm: {
         listProviders: async () => [],
         startStream: async () => 'sub-llm-1',
         stopStream: async () => undefined,
-      },
+      } as any,
     });
     await vi.runAllTimersAsync();
     await session.send('Hello!', 'profile-anthropic');
@@ -164,7 +164,7 @@ describe('useSession (chat-ui)', () => {
     const { w, session } = mountWithSession({
       sessions: {
         list: async () => [],
-        get: async (id) => ({ id, name: id, createdAt: '', updatedAt: '' }),
+        get: async (id: string) => ({ id, name: id, createdAt: '', updatedAt: '' }),
         create: async () => ({ id: '', name: '', createdAt: '', updatedAt: '' }),
         rename: async () => undefined,
         delete: async () => undefined,
@@ -172,16 +172,16 @@ describe('useSession (chat-ui)', () => {
         startStream: async () => 'sub',
         stopStream: async () => undefined,
         listMessages: async () => [],
-        appendMessage: async (id, role, content) =>
-          makeMessage({ id: 'u-1', sessionId: id, role, content }),
+        appendMessage: async (id: string, role: string, content: string) =>
+          makeMessage({ id: 'u-1', sessionId: id, role: role as Message['role'], content }),
         saveDraft: async () => undefined,
         loadDraft: async () => '',
-      },
+      } as any,
       llm: {
         listProviders: async () => [],
         startStream: async () => 'sub-x',
         stopStream: async () => undefined,
-      },
+      } as any,
     });
     await vi.runAllTimersAsync();
     await session.send('q', 'profile');
@@ -223,7 +223,7 @@ describe('useSession (chat-ui)', () => {
     const { w, session } = mountWithSession({
       sessions: {
         list: async () => [],
-        get: async (id) => ({ id, name: id, createdAt: '', updatedAt: '' }),
+        get: async (id: string) => ({ id, name: id, createdAt: '', updatedAt: '' }),
         create: async () => ({ id: '', name: '', createdAt: '', updatedAt: '' }),
         rename: async () => undefined,
         delete: async () => undefined,
@@ -231,11 +231,11 @@ describe('useSession (chat-ui)', () => {
         startStream: async () => 'sub',
         stopStream: async () => undefined,
         listMessages: async () => [],
-        appendMessage: async (id, role, content) =>
-          makeMessage({ id: 'u-1', sessionId: id, role, content }),
+        appendMessage: async (id: string, role: string, content: string) =>
+          makeMessage({ id: 'u-1', sessionId: id, role: role as Message['role'], content }),
         saveDraft: async () => undefined,
         loadDraft: async () => '',
-      },
+      } as any,
     });
     await vi.runAllTimersAsync();
     rt.emit('sessions:event', {
@@ -253,7 +253,7 @@ describe('useSession (chat-ui)', () => {
     const { w, session } = mountWithSession({
       sessions: {
         list: async () => [],
-        get: async (id) => ({ id, name: id, createdAt: '', updatedAt: '' }),
+        get: async (id: string) => ({ id, name: id, createdAt: '', updatedAt: '' }),
         create: async () => ({ id: '', name: '', createdAt: '', updatedAt: '' }),
         rename: async () => undefined,
         delete: async () => undefined,
@@ -261,13 +261,13 @@ describe('useSession (chat-ui)', () => {
         startStream: async () => 'sub',
         stopStream: async () => undefined,
         listMessages: async () => [],
-        appendMessage: async (id, role, content) =>
-          makeMessage({ id: 'u-1', sessionId: id, role, content }),
+        appendMessage: async (id: string, role: string, content: string) =>
+          makeMessage({ id: 'u-1', sessionId: id, role: role as Message['role'], content }),
         saveDraft: async () => {
           saveCount += 1;
         },
         loadDraft: async () => '',
-      },
+      } as any,
     });
     await vi.runAllTimersAsync();
     session.draft.value = 'a';
@@ -282,7 +282,7 @@ describe('useSession (chat-ui)', () => {
     const { w, session } = mountWithSession({
       sessions: {
         list: async () => [],
-        get: async (id) => ({ id, name: id, createdAt: '', updatedAt: '' }),
+        get: async (id: string) => ({ id, name: id, createdAt: '', updatedAt: '' }),
         create: async () => ({ id: '', name: '', createdAt: '', updatedAt: '' }),
         rename: async () => undefined,
         delete: async () => undefined,
@@ -290,16 +290,16 @@ describe('useSession (chat-ui)', () => {
         startStream: async () => 'sub',
         stopStream: async () => undefined,
         listMessages: async () => [],
-        appendMessage: async (id, role, content) =>
-          makeMessage({ id: 'u-1', sessionId: id, role, content }),
+        appendMessage: async (id: string, role: string, content: string) =>
+          makeMessage({ id: 'u-1', sessionId: id, role: role as Message['role'], content }),
         saveDraft: async () => undefined,
         loadDraft: async () => '',
-      },
+      } as any,
       llm: {
         listProviders: async () => [],
         startStream: async () => 'sub-err',
         stopStream: async () => undefined,
-      },
+      } as any,
     });
     await vi.runAllTimersAsync();
     await session.send('q', 'p');
@@ -339,7 +339,7 @@ describe('useSession (chat-ui)', () => {
     const { w, session } = mountWithSession({
       sessions: {
         list: async () => [],
-        get: async (id) => ({ id, name: id, createdAt: '', updatedAt: '' }),
+        get: async (id: string) => ({ id, name: id, createdAt: '', updatedAt: '' }),
         create: async () => ({ id: '', name: '', createdAt: '', updatedAt: '' }),
         rename: async () => undefined,
         delete: async () => undefined,
@@ -347,16 +347,16 @@ describe('useSession (chat-ui)', () => {
         startStream: async () => 'sub',
         stopStream: async () => undefined,
         listMessages: async () => [],
-        appendMessage: async (id, role, content) =>
-          makeMessage({ id: 'u-1', sessionId: id, role, content }),
+        appendMessage: async (id: string, role: string, content: string) =>
+          makeMessage({ id: 'u-1', sessionId: id, role: role as Message['role'], content }),
         saveDraft: async () => undefined,
         loadDraft: async () => '',
-      },
+      } as any,
       llm: {
         listProviders: async () => [],
         startStream: async () => 'sub-ok',
         stopStream: async () => undefined,
-      },
+      } as any,
     });
     await vi.runAllTimersAsync();
     await session.send('q', 'p');
@@ -389,7 +389,7 @@ describe('useSession (chat-ui)', () => {
     const { w, session } = mountWithSession({
       sessions: {
         list: async () => [],
-        get: async (id) => ({ id, name: id, createdAt: '', updatedAt: '' }),
+        get: async (id: string) => ({ id, name: id, createdAt: '', updatedAt: '' }),
         create: async () => ({ id: '', name: '', createdAt: '', updatedAt: '' }),
         rename: async () => undefined,
         delete: async () => undefined,
@@ -397,16 +397,16 @@ describe('useSession (chat-ui)', () => {
         startStream: async () => 'sub',
         stopStream: async () => undefined,
         listMessages: async () => [],
-        appendMessage: async (id, role, content) =>
-          makeMessage({ id: 'u-1', sessionId: id, role, content }),
+        appendMessage: async (id: string, role: string, content: string) =>
+          makeMessage({ id: 'u-1', sessionId: id, role: role as Message['role'], content }),
         saveDraft: async () => undefined,
         loadDraft: async () => '',
-      },
+      } as any,
       llm: {
         listProviders: async () => [],
         startStream: async () => 'sub-cancel',
         stopStream: async () => undefined,
-      },
+      } as any,
     });
     await vi.runAllTimersAsync();
     await session.send('q', 'p');
@@ -427,7 +427,7 @@ describe('useSession (chat-ui)', () => {
     const { w, session } = mountWithSession({
       sessions: {
         list: async () => [],
-        get: async (id) => ({ id, name: id, createdAt: '', updatedAt: '' }),
+        get: async (id: string) => ({ id, name: id, createdAt: '', updatedAt: '' }),
         create: async () => ({ id: '', name: '', createdAt: '', updatedAt: '' }),
         rename: async () => undefined,
         delete: async () => undefined,
@@ -435,16 +435,16 @@ describe('useSession (chat-ui)', () => {
         startStream: async () => 'sub',
         stopStream: async () => undefined,
         listMessages: async () => [],
-        appendMessage: async (id, role, content) =>
-          makeMessage({ id: 'u-1', sessionId: id, role, content }),
+        appendMessage: async (id: string, role: string, content: string) =>
+          makeMessage({ id: 'u-1', sessionId: id, role: role as Message['role'], content }),
         saveDraft: async () => undefined,
         loadDraft: async () => '',
-      },
+      } as any,
       llm: {
         listProviders: async () => [],
         startStream: async () => 'sub-no-chunks',
         stopStream: async () => undefined,
-      },
+      } as any,
     });
     await vi.runAllTimersAsync();
     await session.send('q', 'p');
@@ -481,7 +481,7 @@ function makeSessionsStub(
 ): HarnessClient['sessions'] {
   const stub: HarnessClient['sessions'] = {
     list: async () => [],
-    get: async (id) => makeSession({ id }),
+    get: async (id: string) => makeSession({ id }),
     create: async () => makeSession({}),
     rename: async () => undefined,
     delete: async () => undefined,
@@ -491,7 +491,7 @@ function makeSessionsStub(
     listMessages: async () => [],
     listMessagesActive: async () => ({ messages: [], sweptCount: 0 }),
     listMessagesAll: async () => ({ messages: [], sweptCount: 0 }),
-    appendMessage: async (id, role, content) => makeMessage({ id: 'x', sessionId: id, role, content }),
+    appendMessage: async (id: string, role: string, content: string) => makeMessage({ id: 'x', sessionId: id, role: role as Message['role'], content }),
     sendMessageWithBlocks: async () => makeMessage({}),
     saveDraft: async () => undefined,
     loadDraft: async () => '',
@@ -510,6 +510,7 @@ function makeSessionsStub(
       project: { level: null, overrides: {} },
       session: { level: null, overrides: {} },
     }),
+    export: async () => ({ path: '', byteCount: 0 }),
   };
   return { ...stub, ...overrides };
 }

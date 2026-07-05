@@ -171,7 +171,7 @@ describe('LLMRoutingPanel', () => {
       await flushPromises();
 
       expect(saveFn).toHaveBeenCalledOnce();
-      const arg = saveFn.mock.calls[0][0] as FallbackChain;
+      const arg = (saveFn.mock.calls as any[])[0]?.[0] as FallbackChain;
       expect(arg.id).toBe('test-chain');
       expect(arg.name).toBe('Test Chain');
     });

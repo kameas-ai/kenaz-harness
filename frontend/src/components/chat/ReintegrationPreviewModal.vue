@@ -78,8 +78,7 @@ async function confirm() {
   try {
     await client.branches.commitReintegration({
       branchSessionId: props.branchSessionId,
-      parentSessionId: props.parentSessionId,
-      summary: editedSummary.value,
+      finalSummaryText: editedSummary.value,
       wasEdited: wasEdited.value,
     });
     emit('committed');

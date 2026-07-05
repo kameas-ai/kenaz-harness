@@ -483,6 +483,56 @@ func TestRegistry_GeminiRegisteredWhenFlagOn(t *testing.T) {
 	}
 }
 
+// TestRegistry_Evict_ThenReload verifies that Evict removes a profile so
+// that LoadProfiles can replace it (the UpdateProvider seam).
+func TestRegistry_Evict_ThenReload(t *testing.T) {
+	t.Parallel()
+	r, err := New(Options{})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	profV1 := llm.ProviderProfile{
+		ID:    "p-evict-test",
+		Kind:  "openai",
+		Model: "gpt-4o",
+		Cred:  llm.CredentialReference{Kind: "keychain", Locator: "kenaz-harness/evict-test"},
+	}
+	if err := r.LoadProfiles([]llm.ProviderProfile{profV1}); err != nil {
+		t.Fatalf("LoadProfiles v1: %v", err)
+	}
+
+	// Evict, then reload with new model.
+	if err := r.Evict(profV1.ID); err != nil {
+		t.Fatalf("Evict: %v", err)
+	}
+
+	profV2 := profV1
+	profV2.Model = "gpt-4o-mini"
+	if err := r.LoadProfiles([]llm.ProviderProfile{profV2}); err != nil {
+		t.Fatalf("LoadProfiles v2: %v", err)
+	}
+
+	got, err := r.Profile(profV1.ID)
+	if err != nil {
+		t.Fatalf("Profile after reload: %v", err)
+	}
+	if got.Model != "gpt-4o-mini" {
+		t.Errorf("expected model gpt-4o-mini after reload, got %q", got.Model)
+	}
+}
+
+// TestRegistry_Evict_Missing is a no-op that must not return an error.
+func TestRegistry_Evict_Missing(t *testing.T) {
+	t.Parallel()
+	r, err := New(Options{})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if err := r.Evict("does-not-exist"); err != nil {
+		t.Errorf("Evict of unknown id returned error: %v", err)
+	}
+}
+
 // TestRegistry_GeminiNotRegisteredWhenFlagOff verifies gemini adapter is absent
 // when HARNESS_GOOGLE_GEMINI=off.
 func TestRegistry_GeminiNotRegisteredWhenFlagOff(t *testing.T) {

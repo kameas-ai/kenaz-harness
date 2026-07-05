@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import { mount, flushPromises } from '@vue/test-utils';
 import { createMemoryHistory, createRouter } from 'vue-router';
 import { defineComponent, h, nextTick } from 'vue';
@@ -71,15 +71,15 @@ describe('LeftRail (project grouping)', () => {
     const { w } = await mountRail({
       sessions: {
         list: async () => sessions,
-        get: async (id) => sessions.find((s) => s.id === id) ?? sessions[0],
-        create: async (name) => ({ id: 'x', name, createdAt: '', updatedAt: '' }),
+        get: async (id: string) => sessions.find((s) => s.id === id) ?? sessions[0],
+        create: async (name: string) => ({ id: 'x', name, createdAt: '', updatedAt: '' }),
         rename: async () => undefined,
         delete: async () => undefined,
         reorder: async () => undefined,
         startStream: async () => 'sub',
         stopStream: async () => undefined,
         listMessages: async () => [],
-        appendMessage: async (id, role, content) => ({
+        appendMessage: async (id: string, role: string, content: string) => ({
           id: 'm1',
           sessionId: id,
           role,
@@ -90,11 +90,11 @@ describe('LeftRail (project grouping)', () => {
         loadDraft: async () => '',
         setSystemPrompt: async () => undefined,
         moveToProject: async () => undefined,
-      },
+      } as any,
       projects: {
         list: async () => projects,
-        get: async (id) => projects[0]!,
-        create: async (name) => ({
+        get: async (_id: string) => projects[0]!,
+        create: async (name: string) => ({
           id: 'np',
           name,
           description: '',
@@ -107,7 +107,7 @@ describe('LeftRail (project grouping)', () => {
         addSession: async () => undefined,
         removeSession: async () => undefined,
         listSessions: async () => [],
-      },
+      } as any,
     });
     expect(w.find('[data-testid="project-group-p1"]').exists()).toBe(true);
     expect(w.find('[data-testid="project-header-p1"]').exists()).toBe(true);
@@ -122,15 +122,15 @@ describe('LeftRail (project grouping)', () => {
     const { w } = await mountRail({
       sessions: {
         list: async () => [],
-        get: async (id) => ({ id, name: id, createdAt: '', updatedAt: '' }),
-        create: async (name) => ({ id: 's1', name, createdAt: '', updatedAt: '' }),
+        get: async (id: string) => ({ id, name: id, createdAt: '', updatedAt: '' }),
+        create: async (name: string) => ({ id: 's1', name, createdAt: '', updatedAt: '' }),
         rename: async () => undefined,
         delete: async () => undefined,
         reorder: async () => undefined,
         startStream: async () => 'sub',
         stopStream: async () => undefined,
         listMessages: async () => [],
-        appendMessage: async (id, role, content) => ({
+        appendMessage: async (id: string, role: string, content: string) => ({
           id: 'm',
           sessionId: id,
           role,
@@ -141,7 +141,7 @@ describe('LeftRail (project grouping)', () => {
         loadDraft: async () => '',
         setSystemPrompt: async () => undefined,
         moveToProject: async () => undefined,
-      },
+      } as any,
       projects: {
         list: async () => projectsList,
         get: async () => ({
@@ -151,7 +151,7 @@ describe('LeftRail (project grouping)', () => {
           createdAt: '',
           updatedAt: '',
         }),
-        create: async (name) => {
+        create: async (name: string) => {
           created.push(name);
           const p: Project = {
             id: 'p-new',
@@ -169,7 +169,7 @@ describe('LeftRail (project grouping)', () => {
         addSession: async () => undefined,
         removeSession: async () => undefined,
         listSessions: async () => [],
-      },
+      } as any,
     });
 
     await w.find('[data-testid="new-project"]').trigger('click');
@@ -195,15 +195,15 @@ describe('LeftRail (project grouping)', () => {
     const { w } = await mountRail({
       sessions: {
         list: async () => [],
-        get: async (id) => ({ id, name: id, createdAt: '', updatedAt: '' }),
-        create: async (name) => ({ id: 's', name, createdAt: '', updatedAt: '' }),
+        get: async (id: string) => ({ id, name: id, createdAt: '', updatedAt: '' }),
+        create: async (name: string) => ({ id: 's', name, createdAt: '', updatedAt: '' }),
         rename: async () => undefined,
         delete: async () => undefined,
         reorder: async () => undefined,
         startStream: async () => 'sub',
         stopStream: async () => undefined,
         listMessages: async () => [],
-        appendMessage: async (id, role, content) => ({
+        appendMessage: async (id: string, role: string, content: string) => ({
           id: 'm',
           sessionId: id,
           role,
@@ -214,11 +214,11 @@ describe('LeftRail (project grouping)', () => {
         loadDraft: async () => '',
         setSystemPrompt: async () => undefined,
         moveToProject: async () => undefined,
-      },
+      } as any,
       projects: {
         list: async () => projects,
-        get: async (id) => projects[0]!,
-        create: async (name) => ({
+        get: async (_id: string) => projects[0]!,
+        create: async (name: string) => ({
           id: 'np',
           name,
           description: '',
@@ -231,7 +231,7 @@ describe('LeftRail (project grouping)', () => {
         addSession: async () => undefined,
         removeSession: async () => undefined,
         listSessions: async () => [],
-      },
+      } as any,
     });
     const header = w.find('[data-testid="project-header-p1"]');
     await header.trigger('contextmenu');
@@ -263,15 +263,15 @@ describe('LeftRail (project grouping)', () => {
     const { w } = await mountRail({
       sessions: {
         list: async () => sessions,
-        get: async (id) => sessions.find((s) => s.id === id) ?? sessions[0]!,
-        create: async (name) => ({ id: 'x', name, createdAt: '', updatedAt: '' }),
+        get: async (id: string) => sessions.find((s) => s.id === id) ?? sessions[0]!,
+        create: async (name: string) => ({ id: 'x', name, createdAt: '', updatedAt: '' }),
         rename: async () => undefined,
         delete: async () => undefined,
         reorder: async () => undefined,
         startStream: async () => 'sub',
         stopStream: async () => undefined,
         listMessages: async () => [],
-        appendMessage: async (id, role, content) => ({
+        appendMessage: async (id: string, role: string, content: string) => ({
           id: 'm1',
           sessionId: id,
           role,
@@ -281,14 +281,14 @@ describe('LeftRail (project grouping)', () => {
         saveDraft: async () => undefined,
         loadDraft: async () => '',
         setSystemPrompt: async () => undefined,
-        moveToProject: async (id, projectId) => {
+        moveToProject: async (id: string, projectId: string) => {
           moveCalls.push({ id, projectId });
         },
-      },
+      } as any,
       projects: {
         list: async () => projects,
         get: async () => projects[0]!,
-        create: async (name) => ({
+        create: async (name: string) => ({
           id: 'np',
           name,
           description: '',
@@ -301,7 +301,7 @@ describe('LeftRail (project grouping)', () => {
         addSession: async () => undefined,
         removeSession: async () => undefined,
         listSessions: async () => [],
-      },
+      } as any,
     });
 
     const sessionRow = w.find('[data-testid="session-row-s-loose"]');
@@ -352,15 +352,15 @@ describe('LeftRail (project grouping)', () => {
     const { w } = await mountRail({
       sessions: {
         list: async () => sessions,
-        get: async (id) => sessions.find((s) => s.id === id) ?? sessions[0]!,
-        create: async (name) => ({ id: 'x', name, createdAt: '', updatedAt: '' }),
+        get: async (id: string) => sessions.find((s) => s.id === id) ?? sessions[0]!,
+        create: async (name: string) => ({ id: 'x', name, createdAt: '', updatedAt: '' }),
         rename: async () => undefined,
         delete: async () => undefined,
         reorder: async () => undefined,
         startStream: async () => 'sub',
         stopStream: async () => undefined,
         listMessages: async () => [],
-        appendMessage: async (id, role, content) => ({
+        appendMessage: async (id: string, role: string, content: string) => ({
           id: 'm',
           sessionId: id,
           role,
@@ -370,14 +370,14 @@ describe('LeftRail (project grouping)', () => {
         saveDraft: async () => undefined,
         loadDraft: async () => '',
         setSystemPrompt: async () => undefined,
-        moveToProject: async (id, projectId) => {
+        moveToProject: async (id: string, projectId: string) => {
           moveCalls.push({ id, projectId });
         },
-      },
+      } as any,
       projects: {
         list: async () => projects,
         get: async () => projects[0]!,
-        create: async (name) => ({
+        create: async (name: string) => ({
           id: 'np',
           name,
           description: '',
@@ -390,7 +390,7 @@ describe('LeftRail (project grouping)', () => {
         addSession: async () => undefined,
         removeSession: async () => undefined,
         listSessions: async () => [],
-      },
+      } as any,
     });
 
     const sessionRow = w.find('[data-testid="session-row-s-attached"]');
@@ -427,15 +427,15 @@ describe('LeftRail (project grouping)', () => {
     const { w } = await mountRail({
       sessions: {
         list: async () => [],
-        get: async (id) => ({ id, name: id, createdAt: '', updatedAt: '' }),
-        create: async (name) => ({ id: 's', name, createdAt: '', updatedAt: '' }),
+        get: async (id: string) => ({ id, name: id, createdAt: '', updatedAt: '' }),
+        create: async (name: string) => ({ id: 's', name, createdAt: '', updatedAt: '' }),
         rename: async () => undefined,
         delete: async () => undefined,
         reorder: async () => undefined,
         startStream: async () => 'sub',
         stopStream: async () => undefined,
         listMessages: async () => [],
-        appendMessage: async (id, role, content) => ({
+        appendMessage: async (id: string, role: string, content: string) => ({
           id: 'm',
           sessionId: id,
           role,
@@ -446,11 +446,11 @@ describe('LeftRail (project grouping)', () => {
         loadDraft: async () => '',
         setSystemPrompt: async () => undefined,
         moveToProject: async () => undefined,
-      },
+      } as any,
       projects: {
         list: async () => projects,
-        get: async (id) => projects[0]!,
-        create: async (name) => ({
+        get: async (_id: string) => projects[0]!,
+        create: async (name: string) => ({
           id: 'np',
           name,
           description: '',
@@ -459,13 +459,13 @@ describe('LeftRail (project grouping)', () => {
         }),
         rename: async () => undefined,
         updateDescription: async () => undefined,
-        remove: async (id, cascade) => {
+        remove: async (id: string, cascade: boolean) => {
           removeCalls.push({ id, cascade });
         },
         addSession: async () => undefined,
         removeSession: async () => undefined,
         listSessions: async () => [],
-      },
+      } as any,
     });
 
     await w.find('[data-testid="project-header-p1"]').trigger('contextmenu');
@@ -498,15 +498,15 @@ describe('LeftRail (WP05 auto-title rail distinction)', () => {
     const { w } = await mountRail({
       sessions: {
         list: async () => sessions,
-        get: async (id) => sessions.find((s) => s.id === id) ?? sessions[0]!,
-        create: async (name) => ({ id: 'new', name, createdAt: '', updatedAt: '' }),
+        get: async (id: string) => sessions.find((s) => s.id === id) ?? sessions[0]!,
+        create: async (name: string) => ({ id: 'new', name, createdAt: '', updatedAt: '' }),
         rename: async () => undefined,
         delete: async () => undefined,
         reorder: async () => undefined,
         startStream: async () => 'sub',
         stopStream: async () => undefined,
         listMessages: async () => [],
-        appendMessage: async (id, role, content) => ({
+        appendMessage: async (id: string, role: string, content: string) => ({
           id: 'm',
           sessionId: id,
           role,
@@ -520,7 +520,7 @@ describe('LeftRail (WP05 auto-title rail distinction)', () => {
         saveAsArtifact: async () => ({} as any),
         suggestTitle: async () => 'New title',
         clearTitle: async () => undefined,
-      },
+      } as any,
     });
     const span = w.find('[data-testid="auto-titled-name-auto-s"]');
     expect(span.exists()).toBe(true);
@@ -540,15 +540,15 @@ describe('LeftRail (WP05 auto-title rail distinction)', () => {
     const { w } = await mountRail({
       sessions: {
         list: async () => sessions,
-        get: async (id) => sessions.find((s) => s.id === id) ?? sessions[0]!,
-        create: async (name) => ({ id: 'new', name, createdAt: '', updatedAt: '' }),
+        get: async (id: string) => sessions.find((s) => s.id === id) ?? sessions[0]!,
+        create: async (name: string) => ({ id: 'new', name, createdAt: '', updatedAt: '' }),
         rename: async () => undefined,
         delete: async () => undefined,
         reorder: async () => undefined,
         startStream: async () => 'sub',
         stopStream: async () => undefined,
         listMessages: async () => [],
-        appendMessage: async (id, role, content) => ({
+        appendMessage: async (id: string, role: string, content: string) => ({
           id: 'm',
           sessionId: id,
           role,
@@ -562,7 +562,7 @@ describe('LeftRail (WP05 auto-title rail distinction)', () => {
         saveAsArtifact: async () => ({} as any),
         suggestTitle: async () => 'New title',
         clearTitle: async () => undefined,
-      },
+      } as any,
     });
     const row = w.find('[data-testid="open-session-user-s"]');
     expect(row.exists()).toBe(true);
@@ -583,15 +583,15 @@ describe('LeftRail (WP05 auto-title rail distinction)', () => {
     const { w } = await mountRail({
       sessions: {
         list: async () => sessions,
-        get: async (id) => sessions.find((s) => s.id === id) ?? sessions[0]!,
-        create: async (name) => ({ id: 'new', name, createdAt: '', updatedAt: '' }),
+        get: async (id: string) => sessions.find((s) => s.id === id) ?? sessions[0]!,
+        create: async (name: string) => ({ id: 'new', name, createdAt: '', updatedAt: '' }),
         rename: async () => undefined,
         delete: async () => undefined,
         reorder: async () => undefined,
         startStream: async () => 'sub',
         stopStream: async () => undefined,
         listMessages: async () => [],
-        appendMessage: async (id, role, content) => ({
+        appendMessage: async (id: string, role: string, content: string) => ({
           id: 'm',
           sessionId: id,
           role,
@@ -605,7 +605,7 @@ describe('LeftRail (WP05 auto-title rail distinction)', () => {
         saveAsArtifact: async () => ({} as any),
         suggestTitle: async () => 'New title',
         clearTitle: async () => undefined,
-      },
+      } as any,
     });
     expect(w.find('[data-testid="auto-titled-name-plain-s"]').exists()).toBe(false);
   });
@@ -625,15 +625,15 @@ describe('LeftRail (WP05 auto-title rail distinction)', () => {
     const { w } = await mountRail({
       sessions: {
         list: async () => [],
-        get: async (id) => ({ id, name: id, createdAt: '', updatedAt: '' }),
-        create: async (name) => ({ id: 's', name, createdAt: '', updatedAt: '' }),
+        get: async (id: string) => ({ id, name: id, createdAt: '', updatedAt: '' }),
+        create: async (name: string) => ({ id: 's', name, createdAt: '', updatedAt: '' }),
         rename: async () => undefined,
         delete: async () => undefined,
         reorder: async () => undefined,
         startStream: async () => 'sub',
         stopStream: async () => undefined,
         listMessages: async () => [],
-        appendMessage: async (id, role, content) => ({
+        appendMessage: async (id: string, role: string, content: string) => ({
           id: 'm',
           sessionId: id,
           role,
@@ -644,11 +644,11 @@ describe('LeftRail (WP05 auto-title rail distinction)', () => {
         loadDraft: async () => '',
         setSystemPrompt: async () => undefined,
         moveToProject: async () => undefined,
-      },
+      } as any,
       projects: {
         list: async () => projects,
         get: async () => projects[0]!,
-        create: async (name) => ({
+        create: async (name: string) => ({
           id: 'np',
           name,
           description: '',
@@ -661,7 +661,7 @@ describe('LeftRail (WP05 auto-title rail distinction)', () => {
         addSession: async () => undefined,
         removeSession: async () => undefined,
         listSessions: async () => [],
-      },
+      } as any,
     });
     const optionsBtn = w.find('[data-testid="project-options-pw4"]');
     expect(optionsBtn.exists()).toBe(true);
@@ -682,15 +682,15 @@ describe('LeftRail (WP05 auto-title rail distinction)', () => {
     const { w } = await mountRail({
       sessions: {
         list: async () => [],
-        get: async (id) => ({ id, name: id, createdAt: '', updatedAt: '' }),
-        create: async (name) => ({ id: 's', name, createdAt: '', updatedAt: '' }),
+        get: async (id: string) => ({ id, name: id, createdAt: '', updatedAt: '' }),
+        create: async (name: string) => ({ id: 's', name, createdAt: '', updatedAt: '' }),
         rename: async () => undefined,
         delete: async () => undefined,
         reorder: async () => undefined,
         startStream: async () => 'sub',
         stopStream: async () => undefined,
         listMessages: async () => [],
-        appendMessage: async (id, role, content) => ({
+        appendMessage: async (id: string, role: string, content: string) => ({
           id: 'm',
           sessionId: id,
           role,
@@ -701,11 +701,11 @@ describe('LeftRail (WP05 auto-title rail distinction)', () => {
         loadDraft: async () => '',
         setSystemPrompt: async () => undefined,
         moveToProject: async () => undefined,
-      },
+      } as any,
       projects: {
         list: async () => projects,
         get: async () => projects[0]!,
-        create: async (name) => ({
+        create: async (name: string) => ({
           id: 'np',
           name,
           description: '',
@@ -718,7 +718,7 @@ describe('LeftRail (WP05 auto-title rail distinction)', () => {
         addSession: async () => undefined,
         removeSession: async () => undefined,
         listSessions: async () => [],
-      },
+      } as any,
     });
     // Menu hidden before click
     expect(w.find('[data-testid="project-menu"]').exists()).toBe(false);

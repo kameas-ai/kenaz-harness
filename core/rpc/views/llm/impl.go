@@ -1075,12 +1075,12 @@ func (a *API) UpdateProvider(ctx context.Context, in AddProviderInput) error {
 		return err
 	}
 	if a.reg != nil {
-		// Replace any in-memory copy. The simplest path is to push the
-		// new profile via LoadProfiles; since the registry rejects
-		// duplicate IDs, we have to remove first via a future
-		// RegistryEvict seam. For now, the AddProvider flow already
-		// has best-effort LoadProfiles semantics so we mirror it.
-		_ = a.reg.LoadProfiles([]corellm.ProviderProfile{profile})
+		// Evict the stale in-memory entry first so that LoadProfiles
+		// does not hit the "profile id already loaded" collision error.
+		_ = a.reg.Evict(in.ID)
+		if err := a.reg.LoadProfiles([]corellm.ProviderProfile{profile}); err != nil {
+			return fmt.Errorf("llm: UpdateProvider: registry reload: %w", err)
+		}
 	}
 	a.mu.Lock()
 	delete(a.validated, in.ID)
@@ -1103,6 +1103,9 @@ func (a *API) RemoveProvider(_ context.Context, id string) error {
 	}
 	if err := a.store.Remove(id); err != nil {
 		return err
+	}
+	if a.reg != nil {
+		_ = a.reg.Evict(id)
 	}
 	a.mu.Lock()
 	delete(a.validated, id)

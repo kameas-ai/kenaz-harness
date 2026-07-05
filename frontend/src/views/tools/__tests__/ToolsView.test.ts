@@ -11,7 +11,7 @@ function provide(seed: MCPServer[] = []) {
       listServers: async () => seed,
       startStream: async () => 'fake-mcp-sub',
       stopStream: async () => undefined,
-    },
+    } as any,
   });
   return { client };
 }
