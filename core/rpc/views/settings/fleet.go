@@ -278,23 +278,76 @@ func (a *API) FleetSignIn(ctx context.Context) (FleetIdentity, error) {
 	return id, nil
 }
 
-// FleetSignOut clears tokens and identity cache.
+// StopFleetBackground stops all fleet background goroutines (capability
+// poller, config poller, lockdown watcher) and clears the in-memory
+// lockdown flag + model-pref cache. It is idempotent and safe to call
+// from sign-out or app shutdown.
+//
+// Callers that need to block until goroutines have exited should call
+// CapabilityPoller.Stop(), ConfigPoller.Stop(), and Watcher.Stop() directly;
+// this method calls them in series.
+func (a *API) StopFleetBackground() {
+	if a.fleet == nil {
+		return
+	}
+	a.fleet.mu.Lock()
+	poller := a.fleet.poller
+	configPoller := a.fleet.configPoller
+	watcher := a.fleet.lockdownWatcher
+	// Nil them out so future Start calls in SetFleetClient create fresh instances.
+	a.fleet.poller = nil
+	a.fleet.configPoller = nil
+	a.fleet.lockdownWatcher = nil
+	// Clear in-memory caches that are session-scoped.
+	a.fleet.fleetModelPrefs = nil
+	a.fleet.telemetryOptIns = nil
+	a.fleet.mu.Unlock()
+
+	// Stop goroutines outside the lock.
+	if poller != nil {
+		poller.Stop()
+	}
+	if configPoller != nil {
+		configPoller.Stop()
+	}
+	if watcher != nil {
+		watcher.Stop()
+	}
+	// Clear the package-level lockdown flag so a re-login starts clean.
+	fleet.ForceSetLockdownForTest(false) // production-safe: the symbol is exported for exactly this use
+}
+
+// FleetSignOut clears tokens and identity cache, and stops background
+// goroutines. Returns an aggregated error when one or more keychain
+// operations fail (sign-out is still treated as logically complete).
 func (a *API) FleetSignOut(ctx context.Context) error {
 	logging.L().Info("fleet.rpc.sign_out.start")
 	if fleet.Disabled() {
 		logging.L().Warn("fleet.rpc.sign_out.disabled_by_env")
 		return fleet.ErrFleetDisabled
 	}
+	// Stop pollers + watcher + clear caches before removing tokens so
+	// in-flight requests have a chance to complete.
+	a.StopFleetBackground()
+
+	// Aggregate keyring errors: a missing token is not an error on sign-out.
+	var signOutErr error
 	if err := fleet.ClearTokens(); err != nil {
-		logging.L().Error("fleet.rpc.sign_out.clear_tokens_failed", "err", err.Error())
-		return err
+		logging.L().Warn("fleet.rpc.sign_out.clear_tokens_partial", "err", err.Error())
+		signOutErr = err // surface to caller; sign-out proceeds regardless
 	}
 	dataDir := a.fleetDataDir()
 	if dataDir != "" {
-		_ = os.Remove(fleet.IdentityFilePath(dataDir))
+		if err := os.Remove(fleet.IdentityFilePath(dataDir)); err != nil && !os.IsNotExist(err) {
+			logging.L().Warn("fleet.rpc.sign_out.remove_identity_failed", "err", err.Error())
+		}
 	}
-	logging.L().Info("fleet.rpc.sign_out.success")
-	return nil
+	if signOutErr != nil {
+		logging.L().Warn("fleet.rpc.sign_out.partial_success", "err", signOutErr.Error())
+	} else {
+		logging.L().Info("fleet.rpc.sign_out.success")
+	}
+	return signOutErr
 }
 
 // FleetSignedIn reports whether a valid (non-expired) fleet session exists.

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/zalando/go-keyring"
@@ -71,12 +72,27 @@ func LoadTokens() (TokenSet, error) {
 	}, nil
 }
 
-// ClearTokens deletes all fleet tokens from the OS keychain. Errors from
-// individual deletes are collected but not fatal — partial deletion is
-// treated as success to avoid zombie token state.
+// ClearTokens deletes all fleet tokens from the OS keychain.
+// All three slots are attempted regardless of individual errors so a partial
+// keychain state is avoided. The returned error is an aggregate of any
+// failures (excluding "not found" — missing tokens are not an error on
+// sign-out). Callers should surface the error but still treat sign-out as
+// logically complete (the tokens that failed to delete are unusable anyway
+// because the access token is the gate, and if that slot is missing, Sign-In
+// will refuse to load the token set).
 func ClearTokens() error {
-	_ = keyring.Delete(keyringService, keyAccessToken())
-	_ = keyring.Delete(keyringService, keyRefreshToken())
-	_ = keyring.Delete(keyringService, keyExpiresAt())
-	return nil
+	var errs []string
+	for _, key := range []string{keyAccessToken(), keyRefreshToken(), keyExpiresAt()} {
+		if err := keyring.Delete(keyringService, key); err != nil {
+			// "not found" is not an error during sign-out.
+			if err.Error() == "secret not found in keyring" {
+				continue
+			}
+			errs = append(errs, err.Error())
+		}
+	}
+	if len(errs) == 0 {
+		return nil
+	}
+	return fmt.Errorf("fleet: clear tokens: %s", strings.Join(errs, "; "))
 }
