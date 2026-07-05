@@ -664,8 +664,23 @@ func builtinEnabledPredicate(s *settings.API) func(string) bool {
 		case corereadctx.ToolName:
 			logging.L().Info("rpc.builtins.predicate", "tool", name, "enabled", true)
 			return true
+
+		// ── list_secrets (model-secret-references-01KW7M5A) ──
+		// Always-on when registered (the registration guard is the nil
+		// exposureIdx check; once registered it should always be usable).
+		case corelistsecrets.ToolName:
+			logging.L().Info("rpc.builtins.predicate", "tool", name, "enabled", true)
+			return true
 		}
-		return true
+		// Fail-closed: an unknown tool name has no explicit predicate case.
+		// Deny the tool and emit a WARN so the developer knows to add a case
+		// (crash-recovery-tool-gating-0XQTC4RK FR-006).
+		logging.L().Warn("rpc.builtins.predicate.unknown_tool",
+			"tool", name,
+			"action", "deny",
+			"reason", "no explicit predicate case — add one to builtinEnabledPredicate",
+		)
+		return false
 	}
 }
 
