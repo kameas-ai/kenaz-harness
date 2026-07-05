@@ -671,7 +671,7 @@ type compositeConfigApplier struct {
 	state *fleetState
 }
 
-func (a *compositeConfigApplier) ApplyBundle(ctx context.Context, b *fleet.Bundle) error {
+func (a *compositeConfigApplier) ApplyBundle(ctx context.Context, b *fleet.Bundle) []error {
 	var errs []error
 
 	// Cedar delta.
@@ -702,9 +702,8 @@ func (a *compositeConfigApplier) ApplyBundle(ctx context.Context, b *fleet.Bundl
 	// fleet-hosted-LLM / kameas-ml surface was removed. See the type doc above.
 
 	// Mandated skills (fleet-skills-sync-01NDFSEX18 WP05).
-	// Partial-success pattern: individual skill errors are collected but
-	// don't prevent the bundle ACK from advancing (matching the rest of
-	// the bundle apply logic).
+	// FR-012: all section errors are collected and returned so the ACK
+	// carries the full set and the caller can decide not to advance lastAppliedID.
 	if len(b.MandatedSkills) > 0 {
 		a.state.mu.RLock()
 		skillStore := a.state.skillStore
@@ -719,10 +718,8 @@ func (a *compositeConfigApplier) ApplyBundle(ctx context.Context, b *fleet.Bundl
 		}
 	}
 
-	if len(errs) > 0 {
-		return errs[0] // return first error; others are logged by the poller
-	}
-	return nil
+	// Return all errors (FR-012). An empty slice means full success.
+	return errs
 }
 
 // FleetModelPrefs returns the current fleet-managed model preferences, or nil

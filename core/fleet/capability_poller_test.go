@@ -91,26 +91,34 @@ func TestCapabilityPoller_Current_DefaultDeny(t *testing.T) {
 	}
 }
 
-// TestBackoffState_Progression verifies next() returns 5/15/60 then stays at 60.
+// TestBackoffState_Progression verifies next() returns values close to
+// 5/15/60 min (±10% jitter) then stays near 60 min.
 func TestBackoffState_Progression(t *testing.T) {
 	b := &backoffState{}
-	want := []time.Duration{5 * time.Minute, 15 * time.Minute, 60 * time.Minute, 60 * time.Minute}
-	for i, w := range want {
+	nominals := []time.Duration{5 * time.Minute, 15 * time.Minute, 60 * time.Minute, 60 * time.Minute}
+	for i, nom := range nominals {
 		got := b.next()
-		if got != w {
-			t.Errorf("step %d: next() = %v, want %v", i, got, w)
+		lo := time.Duration(float64(nom) * 0.89)
+		hi := time.Duration(float64(nom) * 1.11)
+		if got < lo || got > hi {
+			t.Errorf("step %d: next() = %v, want %v ± 10%%", i, got, nom)
 		}
 	}
 }
 
-// TestBackoffState_ResetOnSuccess verifies reset() starts over from step 0.
+// TestBackoffState_ResetOnSuccess verifies reset() starts over from step 0
+// (the first value after reset must be close to 5 min).
 func TestBackoffState_ResetOnSuccess(t *testing.T) {
 	b := &backoffState{}
 	_ = b.next()
 	_ = b.next()
 	b.reset()
-	if got := b.next(); got != 5*time.Minute {
-		t.Errorf("after reset, next() = %v, want 5m", got)
+	got := b.next()
+	nom := 5 * time.Minute
+	lo := time.Duration(float64(nom) * 0.89)
+	hi := time.Duration(float64(nom) * 1.11)
+	if got < lo || got > hi {
+		t.Errorf("after reset, next() = %v, want %v ± 10%%", got, nom)
 	}
 }
 

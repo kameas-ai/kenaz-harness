@@ -29,7 +29,8 @@ type backoffState struct {
 }
 
 // next returns the next backoff duration and advances the step counter.
-// Once the max step is reached it stays there.
+// Once the max step is reached it stays there. ±10% jitter is applied so
+// multiple pollers don't thunderherd after an outage (FR-013).
 func (b *backoffState) next() time.Duration {
 	if b.step >= len(backoffSteps) {
 		b.step = len(backoffSteps)
@@ -38,7 +39,7 @@ func (b *backoffState) next() time.Duration {
 	if b.step < len(backoffSteps)-1 {
 		b.step++
 	}
-	return d
+	return addJitter(d, 0.10)
 }
 
 // reset clears backoff after a successful fetch.

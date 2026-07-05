@@ -27,7 +27,7 @@ type integrationApplier struct {
 	applyErr      error
 }
 
-func (a *integrationApplier) ApplyBundle(_ context.Context, b *Bundle) error {
+func (a *integrationApplier) ApplyBundle(_ context.Context, b *Bundle) []error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	cp := *b
@@ -44,7 +44,10 @@ func (a *integrationApplier) ApplyBundle(_ context.Context, b *Bundle) error {
 	if b.MCPAllowlist != nil {
 		a.mcpAllowlists = append(a.mcpAllowlists, b.MCPAllowlist)
 	}
-	return a.applyErr
+	if a.applyErr != nil {
+		return []error{a.applyErr}
+	}
+	return nil
 }
 
 func (a *integrationApplier) snapshot() ([]*Bundle, []string, [][]string) {
@@ -281,7 +284,8 @@ func TestIntegration_SignatureRejectionKeepsPrior(t *testing.T) {
 }
 
 // TestIntegration_PartialApplyStillACKs verifies that when ApplyBundle returns
-// an error (partial failure), the poller still sends an ACK with applied=false.
+// errors (partial failure), the poller still sends an ACK with applied=false
+// AND does not advance lastAppliedID (so the bundle is re-attempted next poll).
 func TestIntegration_PartialApplyStillACKs(t *testing.T) {
 	pub, priv, _ := ed25519.GenerateKey(rand.Reader)
 	setTestSigningKey(t, pub)
@@ -326,10 +330,11 @@ func TestIntegration_PartialApplyStillACKs(t *testing.T) {
 	if !waitUntil(t, 200*time.Millisecond, func() bool { return fake.ackCount() >= 1 }) {
 		t.Error("expected ACK to be sent even on partial failure")
 	}
-	// Bundle_id should still have advanced.
+	// FR-012: lastAppliedID must NOT advance on partial failure — the bundle
+	// is re-attempted on the next poll cycle so the failed sections are retried.
 	st := p.Status()
-	if st.LastAppliedID != 5 {
-		t.Errorf("LastAppliedID = %d, want 5 (bundle_id advances even on partial failure)", st.LastAppliedID)
+	if st.LastAppliedID != 0 {
+		t.Errorf("LastAppliedID = %d, want 0 (bundle_id must NOT advance on partial failure)", st.LastAppliedID)
 	}
 	if !strings.Contains(st.LastError, "partial") {
 		t.Errorf("expected partial failure in LastError, got %q", st.LastError)

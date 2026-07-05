@@ -23,27 +23,38 @@ type configACKPayload struct {
 	// Applied is true when all sections applied without error.
 	Applied bool `json:"applied"`
 	// ErrorMsg carries the first error from a partial-failure apply, or empty.
+	// Kept for server-side backwards compatibility.
 	ErrorMsg string `json:"error,omitempty"`
+	// Errors carries all per-section apply errors (FR-012). Clients that speak
+	// the v1 wire format ignore unknown fields, so this extends cleanly.
+	Errors []string `json:"errors,omitempty"`
 }
 
-// PostConfigACK posts an ACK to /api/v1/configs/<id>/ack. applyErr may be
-// nil (full success) or non-nil (partial apply failure). Either way the ACK
-// is sent so the fleet server knows the bundle was received and processed.
+// PostConfigACK posts an ACK to /api/v1/configs/<id>/ack. applyErrs is the
+// list of per-section errors from the apply pipeline (may be empty on full
+// success). Either way the ACK is sent so the fleet server knows the bundle
+// was received and processed.
 //
 // Returns nil on HTTP 200/204; returns an error on transport or server errors.
 // Callers treat this as best-effort: errors are logged, not propagated beyond
 // the poll loop.
-func PostConfigACK(ctx context.Context, client *Client, bundleID int64, applyErr error) error {
+func PostConfigACK(ctx context.Context, client *Client, bundleID int64, applyErrs []error) error {
 	if client == nil || client.isNop {
 		return ErrFleetDisabled
 	}
 
 	payload := configACKPayload{
 		BundleID: bundleID,
-		Applied:  applyErr == nil,
+		Applied:  len(applyErrs) == 0,
 	}
-	if applyErr != nil {
-		payload.ErrorMsg = applyErr.Error()
+	if len(applyErrs) > 0 {
+		payload.ErrorMsg = applyErrs[0].Error()
+		payload.Errors = make([]string, 0, len(applyErrs))
+		for _, e := range applyErrs {
+			if e != nil {
+				payload.Errors = append(payload.Errors, e.Error())
+			}
+		}
 	}
 
 	body, err := json.Marshal(payload)
