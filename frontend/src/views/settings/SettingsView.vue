@@ -29,6 +29,7 @@ import LLMRoutingPanel from '@/views/settings/LLMRoutingPanel.vue';
 import AuditSettingsPanel from '@/views/settings/AuditSettingsPanel.vue';
 import AccountPanel from '@/views/settings/AccountPanel.vue';
 import UnitConflictsPanel from '@/views/settings/UnitConflictsPanel.vue';
+import FleetTelemetryPanel from '@/views/settings/FleetTelemetryPanel.vue';
 import LongSessionNudgeSettings from '@/components/settings/LongSessionNudgeSettings.vue';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
 import { debouncedSave } from '@/lib/settings';
@@ -1060,6 +1061,13 @@ onMounted(() => {
       data-testid="settings-account-pane"
     >
       <AccountPanel />
+      <!-- fleet-integrity-observability WP09: telemetry consent control. -->
+      <section>
+        <h2 class="font-ui text-[11px] uppercase tracking-[0.18em] text-ink-subtle mb-3">
+          Fleet Telemetry
+        </h2>
+        <FleetTelemetryPanel />
+      </section>
       <!-- fleet-integrity-observability WP08: unit-sync conflict + error surface. -->
       <section>
         <h2 class="font-ui text-[11px] uppercase tracking-[0.18em] text-ink-subtle mb-3">

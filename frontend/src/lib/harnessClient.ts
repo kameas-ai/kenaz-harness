@@ -804,6 +804,12 @@ interface WailsBindingsLike {
   /** Publish a Cedar rule to the team via fleet. Requires policy_admin role. */
   Cedar_PublishToTeam(ruleID: string, ruleSource: string): Promise<void>;
 
+  // ── Fleet telemetry opt-ins (fleet-integrity-observability WP09) ─────────
+  /** Returns the per-class telemetry opt-in set from the fleet store. */
+  Settings_FleetTelemetryOptIns(): Promise<import('./types').TelemetryOptInView[]>;
+  /** Flip a single telemetry class opt-in in the fleet store. */
+  Settings_FleetSetTelemetryOptIn(className: string, optedIn: boolean): Promise<void>;
+
   // ── Unit sync conflicts (fleet-integrity-observability WP08) ─────────────
   /** Returns the current unit syncer state: pull/push errors, conflict count. */
   Unit_SyncStatus(): Promise<import('./types').UnitSyncStatusView>;
@@ -1909,6 +1915,11 @@ export interface SettingsClient {
   // ── fleet-integrity-observability WP02 ──────────────────────────────────
   /** Global fleet health summary: signing-key presence + config source + session state. */
   fleetHealth(): Promise<FleetHealthView>;
+  // ── fleet-integrity-observability WP09 ──────────────────────────────────
+  /** Returns the per-class telemetry opt-in set from the fleet store. */
+  fleetTelemetryOptIns(): Promise<import('./types').TelemetryOptInView[]>;
+  /** Flip a single telemetry class opt-in. */
+  setFleetTelemetryOptIn(className: string, optedIn: boolean): Promise<void>;
 }
 
 /**
@@ -3137,6 +3148,10 @@ export function createHarnessClient(): HarnessClient {
       fleetLockdownStatus: () => b().Settings_FleetLockdownStatus(),
       // fleet-integrity-observability WP02
       fleetHealth: () => b().Settings_FleetHealth(),
+      // fleet-integrity-observability WP09
+      fleetTelemetryOptIns: () => b().Settings_FleetTelemetryOptIns(),
+      setFleetTelemetryOptIn: (className, optedIn) =>
+        b().Settings_FleetSetTelemetryOptIn(className, optedIn),
     },
     permissions: {
       listGrants: (family) =>
@@ -3993,6 +4008,9 @@ export function createFakeHarnessClient(
         configLastError: '',
         signedIn: false,
       }),
+      // fleet-integrity-observability WP09
+      fleetTelemetryOptIns: async (): Promise<import('./types').TelemetryOptInView[]> => [],
+      setFleetTelemetryOptIn: noop,
     },
     permissions: {
       listGrants: async () => [],

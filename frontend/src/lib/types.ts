@@ -3818,6 +3818,23 @@ export interface LockdownStatusView {
   reason: string;
 }
 
+// ── Fleet telemetry opt-in types (fleet-integrity-observability WP09) ────────
+
+/**
+ * TelemetryOptInView — per-class telemetry opt-in record from the fleet store.
+ * Mirrors core/rpc/views/settings.TelemetryOptInView.
+ * (harness-fleet-sync-activation-01NSYNC01 gap #4 / fleet-integrity-observability WP09)
+ */
+export interface TelemetryOptInView {
+  /** One of the seven telemetry classes (e.g. "model_calls", "tool_usage"). */
+  class: string;
+  optedIn: boolean;
+  /** RFC3339 timestamp of last opt-in change, or undefined. */
+  optedAt?: string;
+  /** "user_self" | "admin_default" | etc. */
+  source?: string;
+}
+
 // ── Unit sync types (fleet-integrity-observability WP08) ────────────────────
 
 /**
