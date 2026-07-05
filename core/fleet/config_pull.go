@@ -257,13 +257,13 @@ func (p *ConfigPoller) poll(ctx context.Context) error {
 		return e
 	}
 
-	// Signature verification.
-	key := FleetSigningKey()
+	// Signature verification using the accept-set (supports key rotation).
+	keys := FleetSigningKeys()
 	p.mu.RLock()
 	lastID := p.lastAppliedID
 	p.mu.RUnlock()
 
-	if err := Verify(&b, key, lastID); err != nil {
+	if err := VerifyWithKeySet(&b, keys, lastID); err != nil {
 		// Hard-reject: do NOT apply; do NOT advance bundle_id; DO set error.
 		p.setError(fmt.Sprintf("bundle verification failed (hard-reject): %v", err))
 		return err // also triggers backoff
