@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 
 	"github.com/kameas-ai/kenaz-harness/core"
+	"github.com/kameas-ai/kenaz-harness/core/agentgraph"
 	coresubagent "github.com/kameas-ai/kenaz-harness/core/tools/subagentdispatch"
 	coreart "github.com/kameas-ai/kenaz-harness/core/artifacts"
 	corecontexts "github.com/kameas-ai/kenaz-harness/core/contexts"
@@ -258,22 +259,35 @@ func registerBuiltinTools(
 	)
 
 	// kenaz__subagent_dispatch: model-callable sub-agent spawner
-	// (branch-subagent-interactive-01KZNP3B WP03). Always registered.
-	// The BranchSeam is nil until WP07 wires the live seam; the tool
-	// returns a clean "seam_not_configured" error in that case so model
-	// self-correction is straightforward.
+	// (branch-subagent-interactive-01KZNP3B WP03).
+	//
+	// NOT registered when Seam is nil (crash-recovery-tool-gating-0XQTC4RK
+	// FR-007): advertising a tool that always returns seam_not_configured
+	// wastes model turns and creates confusing failures. Skip registration
+	// until the live BranchSeam is wired. The tool will appear in the
+	// catalog (and in the predicate switch) only when Seam is non-nil.
+	//
+	// Seam is nil in the current build; remove this guard when the branch
+	// session manager wires the seam in a future mission.
 	{
-		var dataDir string
-		if c != nil {
-			dataDir = c.DataDir()
+		var subagentSeam agentgraph.BranchSeam // nil — seam not yet wired
+		if subagentSeam != nil {
+			var dataDir string
+			if c != nil {
+				dataDir = c.DataDir()
+			}
+			subagentTool := coresubagent.New(coresubagent.Options{
+				DataDir: dataDir,
+				Seam:    subagentSeam,
+				Tasks:   nil, // wired by background-task-monitor in WP06
+			})
+			registry.Register(subagentTool)
+			logging.L().Info("rpc.builtins.register", "tool", subagentTool.Name())
+		} else {
+			logging.L().Info("rpc.builtins.subagent_dispatch_skipped",
+				"reason", "BranchSeam not yet wired — tool omitted from model catalog (FR-007)",
+			)
 		}
-		subagentTool := coresubagent.New(coresubagent.Options{
-			DataDir: dataDir,
-			Seam:    nil, // wired by branch session manager in WP07
-			Tasks:   nil, // wired by background-task-monitor in WP06
-		})
-		registry.Register(subagentTool)
-		logging.L().Info("rpc.builtins.register", "tool", subagentTool.Name())
 	}
 
 	// kenaz__enter_plan_mode / kenaz__exit_plan_mode: plan-mode posture

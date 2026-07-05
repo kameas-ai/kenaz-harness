@@ -4,7 +4,9 @@ import (
 	"testing"
 
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/settings"
+	"github.com/kameas-ai/kenaz-harness/core/toolloop"
 	corebash "github.com/kameas-ai/kenaz-harness/core/tools/bash"
+	coresubagent "github.com/kameas-ai/kenaz-harness/core/tools/subagentdispatch"
 	corewebfetch "github.com/kameas-ai/kenaz-harness/core/tools/webfetch"
 	corewebsearch "github.com/kameas-ai/kenaz-harness/core/tools/websearch"
 )
@@ -75,5 +77,36 @@ func TestBuiltinEnabledPredicate_WebFetchDefaultOff(t *testing.T) {
 
 	if pred(corewebfetch.ToolName) {
 		t.Error("kenaz__web_fetch should be disabled by default (FR-005); got enabled")
+	}
+}
+
+// TestSubagentDispatchNotRegisteredWhenSeamNil asserts that
+// kenaz__subagent_dispatch is not registered when the BranchSeam is nil,
+// so the model's tool catalog omits a permanently-broken tool (FR-007).
+func TestSubagentDispatchNotRegisteredWhenSeamNil(t *testing.T) {
+	t.Parallel()
+
+	registry := toolloop.NewBuiltinRegistry()
+	// Call registerBuiltinTools with nil core and nil settings — the seam
+	// will be nil, so the subagent dispatch tool must not appear.
+	registerBuiltinTools(
+		nil,      // core
+		registry,
+		nil,      // bashStore
+		nil,      // artifactsMgr
+		nil,      // store
+		nil,      // cedarEngine
+		nil,      // promptRegistry
+		nil,      // elicitAPI
+		nil,      // slashDispatch
+		nil,      // exposureIdx
+		nil,      // budget
+		nil,      // posture
+	)
+
+	for _, name := range registry.Names() {
+		if name == coresubagent.ToolName {
+			t.Errorf("kenaz__subagent_dispatch is registered even though BranchSeam is nil (FR-007)")
+		}
 	}
 }
