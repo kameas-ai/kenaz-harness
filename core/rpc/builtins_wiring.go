@@ -656,13 +656,6 @@ func builtinEnabledPredicate(s *settings.API) func(string) bool {
 			logging.L().Info("rpc.builtins.predicate", "tool", name, "enabled", true)
 			return true
 
-		// ── Subagent dispatch tool (branch-subagent-interactive-01KZNP3B) ──
-		// Default ON: the model dispatching sub-agents is the primary use case.
-		// The tool degrades gracefully when the BranchSeam is not yet wired.
-		case coresubagent.ToolName:
-			logging.L().Info("rpc.builtins.predicate", "tool", name, "enabled", true)
-			return true
-
 		// ── Plan-mode tools (plan-mode-posture-01KZNP3F) ──
 		// Always-on: these are posture-management tools with no dangerous
 		// side-effects on their own. The Cedar gate enforces write restrictions
