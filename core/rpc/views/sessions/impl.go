@@ -1006,7 +1006,7 @@ func (a *managerAPI) Export(ctx context.Context, sessionID, format string) (Expo
 	byteCount := int64(len(rendered))
 
 	// 6. Audit.
-	_ = audit.Emit(ctx, a.auditEmitter, audit.KindSessionExport, audit.SessionExportPayload{
+	audit.MustEmit(ctx, a.auditEmitter, audit.KindSessionExport, audit.SessionExportPayload{
 		SessionID:      sessionID,
 		Format:         format,
 		OutputBasename: filepath.Base(dest),
