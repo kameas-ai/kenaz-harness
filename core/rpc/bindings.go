@@ -2405,6 +2405,7 @@ func (b *Bindings) Workflows_CancelRun(runID string) error {
 // workflows-agentic-01KW2D3X). Returns ErrCatalogUnavailable when no
 // catalog backend is wired.
 func (b *Bindings) Workflows_CatalogList() ([]workflowsview.CatalogEntry, error) {
+	defer sentry.WrapBinding("Workflows_CatalogList")()
 	return b.api.Workflows().Catalog_List(b.ctx())
 }
 
@@ -2412,6 +2413,7 @@ func (b *Bindings) Workflows_CatalogList() ([]workflowsview.CatalogEntry, error)
 // the catalog item identified by id. The preview drawer uses this to render
 // the install confirmation and the YAML diff.
 func (b *Bindings) Workflows_CatalogGet(id string) (workflowsview.CatalogPreview, error) {
+	defer sentry.WrapBinding("Workflows_CatalogGet")()
 	return b.api.Workflows().Catalog_Get(b.ctx(), id)
 }
 
@@ -2420,6 +2422,7 @@ func (b *Bindings) Workflows_CatalogGet(id string) (workflowsview.CatalogPreview
 // ErrNotFound when id is unknown; returns ErrCatalogUnavailable when no
 // catalog backend is wired.
 func (b *Bindings) Workflows_CatalogInstall(id string) (workflowsview.CatalogInstallResult, error) {
+	defer sentry.WrapBinding("Workflows_CatalogInstall")()
 	return b.api.Workflows().Catalog_Install(b.ctx(), id)
 }
 
