@@ -109,6 +109,7 @@ function mountChip(resolved: ResolvedAutonomy) {
       getAutonomy: async () => resolved.session,
       setAutonomy,
       resolveAutonomy,
+      export: async () => ({ path: '', byteCount: 0 }),
     },
   });
   const wrapper = mount(AutonomyChip, {

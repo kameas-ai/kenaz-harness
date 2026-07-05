@@ -150,7 +150,6 @@ import type {
   LocalRuntimeInfo,
   LocalRuntimeConfigResult,
   CustomTemplateSummary,
-  CustomCapabilityMatrix,
   CustomProbeRequest,
   CustomProbeResult,
   FallbackChain,
@@ -301,6 +300,11 @@ interface WailsBindingsLike {
     source: string,
   ): Promise<RotationResult>;
   LLM_ResumeAfterKeyRotation(resumeToken: string): Promise<void>;
+  LLM_TestProviderKey(
+    kind: string,
+    host: string,
+    plaintextKey: string,
+  ): Promise<import('./types').ProviderKeyTestResult>;
   LLM_ListDetectedLocalRuntimes(): Promise<LocalRuntimeInfo[]>;
   LLM_AutoConfigureLocalRuntime(kind: string): Promise<LocalRuntimeConfigResult>;
   LLM_RescanLocalRuntimes(): Promise<LocalRuntimeInfo[]>;
@@ -800,6 +804,11 @@ interface WailsBindingsLike {
   // ── audit-log-enhancement-01KX5R8F WP07 — retention settings ──────────
   Settings_GetAuditSettings(): Promise<import('./types').AuditSettings>;
   Settings_SetAuditSettings(s: import('./types').AuditSettings): Promise<void>;
+
+  // ── plan-mode-posture-01KZNP3F WP06 — plan approval actions ─────────────
+  Planmode_Approve(req: { session_id: string; plan_id: string }): Promise<Record<string, unknown>>;
+  Planmode_Discard(req: { session_id: string; plan_id: string }): Promise<Record<string, unknown>>;
+  Planmode_Edit(req: { session_id: string; plan_id: string; edited_plan: string }): Promise<Record<string, unknown>>;
 }
 
 
@@ -1447,16 +1456,6 @@ export interface MCPClient {
   importClaudeDesktopConfig(
     req: MCPImportRequest,
   ): Promise<MCPImportResponse>;
-  /**
-   * testRecipe — opens a one-shot connection to the MCP server described
-   * by recipe, performs the initialize + capability listing handshake
-   * (30 s hard timeout), and returns a TestResult summary.
-   *
-   * The recipe is NOT registered with the production MCP pool — this is
-   * a pure fire-and-forget connectivity check (mission
-   * mcp-server-install-01KQ8TDP, WP07).
-   */
-  testRecipe(recipe: Recipe): Promise<MCPTestResult>;
 }
 
 export type {
@@ -1467,7 +1466,6 @@ export type {
   MCPImportStatus,
   MCPTranslationReport,
   MCPImportWrotePath,
-  MCPTestResult,
   AttachmentLimitsView,
 };
 
@@ -3713,15 +3711,14 @@ export function createFakeHarnessClient(
       }),
       testRecipe: async () => ({
         ok: true,
-        serverName: 'fake-server',
-        serverVersion: '0.0.0',
-        protocolVersion: '2024-11-05',
-        toolCount: 0,
-        resourceCount: 0,
-        promptCount: 0,
-        stderrTail: '',
-        errorMessage: '',
-        durationMs: 1,
+        protocol_version: '2024-11-05',
+        server_info: { name: 'fake-server', version: '0.0.0' },
+        capabilities: {},
+        tool_count: 0,
+        resource_count: 0,
+        prompt_count: 0,
+        stderr_tail: '',
+        duration_ms: 1,
       }),
     },
     a2a: {
@@ -3937,7 +3934,7 @@ export function createFakeHarnessClient(
       getAutoTitleEnabled: async () => true,
       setAutoTitleEnabled: noop,
       // audit-log-enhancement-01KX5R8F WP07
-      getAuditSettings: async () => ({ strategy: 'keep_forever', windowDays: 90 }),
+      getAuditSettings: async () => ({ strategy: 'keep_forever', window_days: 90 }),
       setAuditSettings: noop,
       // fleet-auth-foundation-01NDFSEX08 WP05
       fleetSignIn: async () => ({

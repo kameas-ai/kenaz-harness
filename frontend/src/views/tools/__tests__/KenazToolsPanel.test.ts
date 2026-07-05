@@ -1,6 +1,6 @@
-import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import { mount, flushPromises } from '@vue/test-utils';
-import { defineComponent, h } from 'vue';
+import { defineComponent } from 'vue';
 import { createMemoryHistory, createRouter } from 'vue-router';
 import KenazToolsPanel from '@/views/tools/KenazToolsPanel.vue';
 import {
@@ -92,16 +92,13 @@ function makeClient(
   statusOverrides: Map<string, RecipeStatus[]> = new Map(),
 ): MountResult {
   const list = vi.fn(async () => initialList.map((l) => ({ ...l })));
-  const install = vi.fn<
-    [string, Record<string, string>, Record<string, unknown>?],
-    Promise<RecipeStatus>
-  >(async (id) =>
+  const install = vi.fn(async (id: string) =>
     makeStatus(id, { enabled: true, state: 'starting', keysPresent: true }),
   );
   const uninstall = vi.fn(async () => undefined);
   const forgetKey = vi.fn(async () => undefined);
   const config = vi.fn(async (_id: string): Promise<Record<string, unknown>> => ({}));
-  const status = vi.fn<[string], Promise<RecipeStatus>>(async (id) => {
+  const status = vi.fn(async (id: string): Promise<RecipeStatus> => {
     const seq = statusOverrides.get(id);
     if (seq && seq.length > 0) {
       return seq.shift() ?? makeStatus(id);
@@ -122,8 +119,8 @@ function makeClient(
         forgetKey,
         status,
         config,
-      },
-    },
+      } as any,
+    } as any,
   });
 
   const router = createRouter({
@@ -614,7 +611,7 @@ describe('KenazToolsPanel — recipes section', () => {
       openInOSBrowser,
       pathComplete: vi.fn(async () => []),
       readFile: vi.fn(async () => ({ dataBase64: '', mediaType: '' })),
-    };
+    } as any;
 
     const w = await mountPanel(setup);
     await flushPromises();

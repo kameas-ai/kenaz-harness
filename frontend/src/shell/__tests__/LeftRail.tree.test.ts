@@ -7,11 +7,9 @@
  *  2. Two-level tree — a parent with one branch child renders with chevron.
  *  3. Three-level tree with collapse — grandchild hidden when parent collapsed.
  */
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import { mount } from '@vue/test-utils';
-import { defineComponent, ref } from 'vue';
 import type { Session } from '@/lib/types';
-import { provideFakeClient } from '@/lib/harnessClient';
 
 // We test SessionTreeRow directly for the three core behaviours.
 // LeftRail integration mounts the real component with a fake client.

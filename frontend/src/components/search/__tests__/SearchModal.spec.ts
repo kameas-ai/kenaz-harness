@@ -48,22 +48,27 @@ function mountModal(opts: {
 }) {
   const hits = opts.hits ?? [];
   const client = createFakeHarnessClient({
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     search: {
       sessions: opts.searchError
         ? () => Promise.reject(new Error('search failed'))
         : () => Promise.resolve(hits),
-    },
+      unified: () => Promise.resolve(hits),
+    } as any,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     projects: {
       list: async () => [],
-      get: async (id) => ({ id, name: id, description: '', createdAt: '', updatedAt: '' }),
-      create: async (name) => ({ id: `p-${name}`, name, description: '', createdAt: '', updatedAt: '' }),
+      get: async (id: string) => ({ id, name: id, description: '', createdAt: '', updatedAt: '' }),
+      create: async (name: string) => ({ id: `p-${name}`, name, description: '', createdAt: '', updatedAt: '' }),
       rename: async () => undefined,
       updateDescription: async () => undefined,
       remove: async () => undefined,
       addSession: async () => undefined,
       removeSession: async () => undefined,
       listSessions: async () => [],
-    },
+      getAutonomy: async () => ({ level: null, overrides: {} }),
+      setAutonomy: async () => undefined,
+    } as any,
   });
 
   return mount(SearchModal, {
@@ -111,8 +116,10 @@ describe('SearchModal', () => {
   it('does not call search immediately on input', async () => {
     const sessionsSpy = vi.fn().mockResolvedValue([]);
     const client = createFakeHarnessClient({
-      search: { sessions: sessionsSpy },
-      projects: { list: async () => [], get: async (id) => ({ id, name: id, description: '', createdAt: '', updatedAt: '' }), create: async (n) => ({ id: n, name: n, description: '', createdAt: '', updatedAt: '' }), rename: async () => undefined, updateDescription: async () => undefined, remove: async () => undefined, addSession: async () => undefined, removeSession: async () => undefined, listSessions: async () => [] },
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      search: { sessions: sessionsSpy, unified: vi.fn().mockResolvedValue([]) } as any,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      projects: { list: async () => [], get: async (id: string) => ({ id, name: id, description: '', createdAt: '', updatedAt: '' }), create: async (n: string) => ({ id: n, name: n, description: '', createdAt: '', updatedAt: '' }), rename: async () => undefined, updateDescription: async () => undefined, remove: async () => undefined, addSession: async () => undefined, removeSession: async () => undefined, listSessions: async () => [], getAutonomy: async () => ({ level: null, overrides: {} }), setAutonomy: async () => undefined } as any,
     });
     const wrapper = mount(SearchModal, {
       global: { provide: { [HarnessClientKey as symbol]: client } },
@@ -126,8 +133,10 @@ describe('SearchModal', () => {
   it('calls search after 150ms debounce', async () => {
     const sessionsSpy = vi.fn().mockResolvedValue([]);
     const client = createFakeHarnessClient({
-      search: { sessions: sessionsSpy },
-      projects: { list: async () => [], get: async (id) => ({ id, name: id, description: '', createdAt: '', updatedAt: '' }), create: async (n) => ({ id: n, name: n, description: '', createdAt: '', updatedAt: '' }), rename: async () => undefined, updateDescription: async () => undefined, remove: async () => undefined, addSession: async () => undefined, removeSession: async () => undefined, listSessions: async () => [] },
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      search: { sessions: sessionsSpy, unified: vi.fn().mockResolvedValue([]) } as any,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      projects: { list: async () => [], get: async (id: string) => ({ id, name: id, description: '', createdAt: '', updatedAt: '' }), create: async (n: string) => ({ id: n, name: n, description: '', createdAt: '', updatedAt: '' }), rename: async () => undefined, updateDescription: async () => undefined, remove: async () => undefined, addSession: async () => undefined, removeSession: async () => undefined, listSessions: async () => [], getAutonomy: async () => ({ level: null, overrides: {} }), setAutonomy: async () => undefined } as any,
     });
     const wrapper = mount(SearchModal, {
       global: { provide: { [HarnessClientKey as symbol]: client } },

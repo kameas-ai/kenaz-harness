@@ -63,7 +63,8 @@ function mountWith(opts: MountOpts = {}) {
       ingestPath,
       jobStatus,
       retrieve: async () => ({ results: [], dropped: 0 }),
-    },
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any,
   });
 
   const wrapper = mount(IngestModal, {

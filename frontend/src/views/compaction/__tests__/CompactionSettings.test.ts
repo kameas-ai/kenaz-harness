@@ -79,7 +79,7 @@ function mountWith(opts: MountOpts = {}) {
       setConfig,
       triggerManualCompaction,
       listCustomStrategies,
-    },
+    } as any,
   });
 
   const wrapper = mount(CompactionSettings, {
@@ -165,7 +165,7 @@ describe('CompactionSettings', () => {
     await btn.trigger('click');
     await flushPromises();
     expect(triggerManualCompaction).toHaveBeenCalledTimes(1);
-    expect(triggerManualCompaction.mock.calls[0]![0]).toBe('s1');
+    expect((triggerManualCompaction.mock.calls as any[])[0]?.[0]).toBe('s1');
     expect(
       wrapper.find('[data-testid="compaction-trigger-summary"]').text(),
     ).toContain('Compacted via summary');

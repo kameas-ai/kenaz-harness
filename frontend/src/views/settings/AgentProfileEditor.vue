@@ -82,7 +82,7 @@ function stringToToolList(s: string): string[] {
       <!-- Header -->
       <div class="flex items-center justify-between border-b border-border-muted px-6 py-4">
         <h2 class="font-ui text-base font-semibold text-ink">
-          {{ readOnly ? 'View Profile' : editingProfile?.id ? 'Edit Profile' : 'New Profile' }}
+          {{ readOnly ? 'View Profile' : profile?.id ? 'Edit Profile' : 'New Profile' }}
         </h2>
         <button
           type="button"

@@ -28,7 +28,7 @@ function provide(seedListResolved: Attachment[]) {
       remove: async () => undefined,
       reorder: async () => undefined,
       refresh: async () => seedListResolved[0],
-    },
+    } as any,
   });
 }
 
@@ -130,7 +130,7 @@ describe('ResolvedContextPanel', () => {
         remove: async () => undefined,
         reorder: async () => undefined,
         refresh: async () => makeAttachment({}),
-      },
+      } as any,
     });
     const wrapper = mount(ResolvedContextPanel, {
       props: { sessionId: 's-1' },
@@ -212,7 +212,7 @@ describe('ResolvedContextPanel', () => {
         delete: async () => undefined,
         recentlyApplied: async () => [],
         rootPath: async () => '/tmp/contexts',
-      },
+      } as any,
       attachments: {
         list: async () => [],
         listResolved,
@@ -220,7 +220,7 @@ describe('ResolvedContextPanel', () => {
         remove: async () => undefined,
         reorder: async () => undefined,
         refresh: async () => makeAttachment({}),
-      },
+      } as any,
     });
     const wrapper = mount(ResolvedContextPanel, {
       props: { sessionId: 's-42' },

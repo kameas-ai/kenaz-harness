@@ -47,7 +47,7 @@ function mountWith(entries: MemoryJournalEntry[]) {
         collapsed: 0,
         pinned: 0,
       }),
-    },
+    } as any,
   });
   const wrapper = mount(HookJournalView, {
     global: {

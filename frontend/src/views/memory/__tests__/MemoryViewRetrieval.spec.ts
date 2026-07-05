@@ -7,7 +7,7 @@ import { mount, flushPromises } from '@vue/test-utils';
 import MemoryView from '@/views/memory/MemoryView.vue';
 import { createFakeHarnessClient } from '@/lib/harnessClient';
 import { HarnessClientKey } from '@/lib/harnessClientContext';
-import type { RetrievalReport, ScoredChunk, MemoryChunk } from '@/lib/types';
+import type { RetrievalReport, ScoredChunk } from '@/lib/types';
 
 function makeReport(over: Partial<RetrievalReport> = {}): RetrievalReport {
   return {

@@ -30,7 +30,7 @@ onMounted(async () => {
   try {
     const s = await client.settings.getAuditSettings();
     strategy.value = s.strategy;
-    windowDays.value = s.windowDays;
+    windowDays.value = s.window_days;
   } catch (e) {
     error.value = e instanceof Error ? e.message : String(e);
   } finally {
@@ -45,7 +45,7 @@ async function save() {
   try {
     await client.settings.setAuditSettings({
       strategy: strategy.value,
-      windowDays: windowDays.value,
+      window_days: windowDays.value,
     });
     saved.value = true;
     setTimeout(() => { saved.value = false; }, 3000);

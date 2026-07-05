@@ -19,12 +19,13 @@ describe('createFakeHarnessClient (FR-008 / SC-006)', () => {
 
   it('accepts a partial seed override', async () => {
     const c = createFakeHarnessClient({
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       sessions: {
         list: async () => [
           { id: 's1', name: 'one', createdAt: 'x', updatedAt: 'x' },
         ],
-        get: async (id) => ({ id, name: id, createdAt: '', updatedAt: '' }),
-        create: async (n) => ({
+        get: async (id: string) => ({ id, name: id, createdAt: '', updatedAt: '' }),
+        create: async (n: string) => ({
           id: 'new',
           name: n,
           createdAt: '',
@@ -35,7 +36,7 @@ describe('createFakeHarnessClient (FR-008 / SC-006)', () => {
         reorder: async () => undefined,
         startStream: async () => 'sub',
         stopStream: async () => undefined,
-      },
+      } as any,
     });
     const list = await c.sessions.list();
     expect(list).toHaveLength(1);

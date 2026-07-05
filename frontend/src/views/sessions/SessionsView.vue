@@ -116,7 +116,7 @@ const session = useSession(sessionIdRef);
 // a static sessionId. We pass the computed sessionId.value; the composable
 // is re-created whenever SessionsView re-mounts, which is sufficient since
 // plan approval is a per-session transient state.
-const { pendingPlanId, isActive: planModeActive, setActive: setPlanModeActive } = usePlanMode(sessionId.value);
+const { pendingPlanId, setActive: setPlanModeActive } = usePlanMode(sessionId.value);
 
 // Tracks the plan text fetched from the artifacts store when pendingPlanId is set.
 const pendingPlanText = ref<string | null>(null);

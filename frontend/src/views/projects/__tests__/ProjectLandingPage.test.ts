@@ -20,7 +20,7 @@ function setup(opts: {
   const client = createFakeHarnessClient({
     projects: {
       list: async () => [],
-      get: async (id) => {
+      get: async (id: string) => {
         if (opts.getError) throw opts.getError;
         if (project && project.id === id) return project;
         throw new Error('not found');
@@ -38,7 +38,7 @@ function setup(opts: {
       addSession: async () => undefined,
       removeSession: async () => undefined,
       listSessions: async () => sessions,
-    },
+    } as any,
     attachments: {
       list: opts.attachmentsList ?? (async () => [...attachments]),
       listResolved: async () => [],
@@ -46,7 +46,7 @@ function setup(opts: {
       remove: async () => undefined,
       reorder: async () => undefined,
       refresh: async () => attachments[0] ?? ({} as Attachment),
-    },
+    } as any,
   });
   const router = createRouter({
     history: createMemoryHistory(),
@@ -254,7 +254,7 @@ describe('ProjectLandingPage', () => {
         addSession: async () => undefined,
         removeSession: async () => undefined,
         listSessions: async () => [],
-      },
+      } as any,
     });
     const router = createRouter({
       history: createMemoryHistory(),
@@ -308,13 +308,14 @@ describe('ProjectLandingPage', () => {
         addSession: async () => undefined,
         removeSession: async () => undefined,
         listSessions: async () => [],
-      },
+      } as any,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       memory: {
         listChunks,
         rememberMessage: async () => 'mem-id',
         promoteScope: async () => 'mem-id',
         forget: async () => undefined,
-      },
+      } as any,
     });
     const router = createRouter({
       history: createMemoryHistory(),
@@ -425,7 +426,7 @@ describe('ProjectLandingPage', () => {
         addSession: async () => undefined,
         removeSession: async () => undefined,
         listSessions: async () => [],
-      },
+      } as any,
       contexts: {
         list: async () => ({ name: '', path: '', kind: 'folder' as const }),
         listAll: async () => ({ name: '', path: '', kind: 'folder' as const }),
@@ -436,7 +437,7 @@ describe('ProjectLandingPage', () => {
         delete: async () => undefined,
         recentlyApplied: async () => [],
         rootPath: async () => '/tmp/contexts',
-      },
+      } as any,
       attachments: {
         list: async () => [],
         listResolved: async () => [],
@@ -444,7 +445,7 @@ describe('ProjectLandingPage', () => {
         remove: async () => undefined,
         reorder: async () => undefined,
         refresh: async () => ({} as Attachment),
-      },
+      } as any,
     });
     const router = createRouter({
       history: createMemoryHistory(),
@@ -496,7 +497,7 @@ describe('ProjectLandingPage', () => {
         addSession: async () => undefined,
         removeSession: async () => undefined,
         listSessions: async () => [],
-      },
+      } as any,
       contexts: {
         list: async () => ({ name: '', path: '', kind: 'folder' as const }),
         listAll: async () => ({ name: '', path: '', kind: 'folder' as const }),
@@ -509,7 +510,7 @@ describe('ProjectLandingPage', () => {
         delete: async () => undefined,
         recentlyApplied: async () => [],
         rootPath: async () => '/tmp/contexts',
-      },
+      } as any,
     });
     const router = createRouter({
       history: createMemoryHistory(),

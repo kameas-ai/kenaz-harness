@@ -91,12 +91,12 @@ async function refresh() {
   }
 }
 
-const isSignedIn = computed(() => !!identity.value && identity.value !== false);
+const isSignedIn = computed(() => !!identity.value);
 const fleetEnabled = computed(() => !fleetDisabled.value);
 
 const initials = computed(() => {
   const id = identity.value;
-  if (!id || id === false) return '';
+  if (!id) return '';
   const source = id.displayName?.trim() || id.email?.trim() || '';
   const parts = source.split(/[\s@]+/).filter(Boolean);
   if (parts.length === 0) return '';
@@ -110,17 +110,17 @@ const envName = computed(() => (profile.value?.name ?? '').toUpperCase());
 
 const emailDisplay = computed(() => {
   const id = identity.value;
-  if (!id || id === false) return '';
+  if (!id) return '';
   return id.email || id.displayName || '';
 });
 const orgDisplay = computed(() => {
   const id = identity.value;
-  if (!id || id === false) return '';
+  if (!id) return '';
   return id.orgName || '';
 });
 const tierLabel = computed(() => {
   const id = identity.value;
-  if (!id || id === false) return '';
+  if (!id) return '';
   return id.tier || '';
 });
 
