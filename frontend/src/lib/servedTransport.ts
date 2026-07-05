@@ -128,6 +128,28 @@ export function stopReconnectPoller(): void {
   _reconnectAttempt = 0;
 }
 
+/**
+ * retryReconnectNow — fire an immediate reconnect probe, bypassing the backoff
+ * timer. Wired to the ConnectionLostBanner "Retry" button so a user-initiated
+ * retry doesn't have to wait for the next scheduled backoff step. Cancels any
+ * pending scheduled attempt, resets the backoff, and probes /healthz right
+ * away; on success attemptReconnect() flips the state back to 'ready', and on
+ * failure it reschedules the poller as usual.
+ *
+ * No-op when no reconnect target has been recorded yet (i.e. the transport
+ * never observed a connection loss). Safe to call in native mode — nothing
+ * ever populates `_healthcheckURL` there, so it stays a no-op.
+ */
+export function retryReconnectNow(): void {
+  if (_reconnectTimer !== null) {
+    clearTimeout(_reconnectTimer);
+    _reconnectTimer = null;
+  }
+  _reconnectAttempt = 0;
+  if (_healthcheckURL === '') return; // no target recorded — nothing to probe
+  void attemptReconnect();
+}
+
 export class ServedTransport {
   private readonly baseURL: string;
   private readonly token: string;

@@ -5,7 +5,15 @@
  * WebSocket behaviour is validated with a minimal ws-mock helper.
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { ServedTransport } from '@/lib/servedTransport';
+import {
+  ServedTransport,
+  retryReconnectNow,
+  stopReconnectPoller,
+} from '@/lib/servedTransport';
+import {
+  setConnectionState,
+  useConnectionState,
+} from '@/lib/useConnectionState';
 
 // ── fetch stub helpers ────────────────────────────────────────────────────────
 
@@ -128,6 +136,59 @@ describe('ServedTransport.call', () => {
     await transport.call('Sessions_Get', { id: 'sess-1' });
 
     expect(bodies[0]).toEqual({ method: 'Sessions_Get', params: { id: 'sess-1' } });
+  });
+});
+
+// ── retryReconnectNow (ConnectionLostBanner Retry) ────────────────────────────
+
+describe('retryReconnectNow', () => {
+  let origFetch: typeof globalThis.fetch;
+
+  beforeEach(() => {
+    origFetch = globalThis.fetch;
+    setConnectionState('ready');
+  });
+
+  afterEach(() => {
+    globalThis.fetch = origFetch;
+    stopReconnectPoller();
+    setConnectionState('ready');
+  });
+
+  it('probes /healthz immediately and recovers to ready on success', async () => {
+    // 1. Drive the transport into the "lost" state by failing a /rpc call —
+    //    this records the reconnect target (_healthcheckURL) and starts the
+    //    backoff poller.
+    globalThis.fetch = makeFetchStub(async () => {
+      throw new TypeError('network down');
+    });
+    const transport = new ServedTransport({ baseURL: 'http://127.0.0.1:7880' });
+    await expect(transport.call('AppInfo')).rejects.toThrow(/network error/);
+
+    const state = useConnectionState();
+    expect(state.value).toBe('lost');
+
+    // 2. Server comes back; a user clicks Retry. The immediate probe must
+    //    hit /healthz and flip the state back to ready without waiting for
+    //    the backoff timer.
+    const hit: string[] = [];
+    globalThis.fetch = makeFetchStub(async (input) => {
+      hit.push(String(input));
+      return jsonOk({ ok: true });
+    });
+
+    retryReconnectNow();
+    // Allow the awaited fetch inside attemptReconnect to resolve.
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(hit.some((u) => u.endsWith('/healthz'))).toBe(true);
+    expect(state.value).toBe('ready');
+  });
+
+  it('does not throw when invoked (safe in native mode)', () => {
+    // Called with no active/failed transport — must be a safe no-op, never
+    // throwing (the ConnectionLostBanner may exist in native builds too).
+    expect(() => retryReconnectNow()).not.toThrow();
   });
 });
 
