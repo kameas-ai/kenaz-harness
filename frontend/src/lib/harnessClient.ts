@@ -2827,6 +2827,11 @@ export interface HarnessClient {
   sync: SyncClient;
   /** Team Cedar policy publish surface (fleet-share-and-sync-01NDFSEX14 WP07). */
   cedarPublish: CedarPublishClient;
+  // ── Unit sync (fleet-integrity-observability WP08) ────────────────────
+  Unit_SyncStatus(): Promise<import('./types').UnitSyncStatusView>;
+  Unit_ListConflicts(): Promise<import('./types').UnitConflictView[]>;
+  Unit_ResolveMerge(unitID: string, resolvedBody: string): Promise<void>;
+  Unit_ResolveEnshrine(srcUnitID: string, enshrinedTitle: string, enshrinedBody: string, reason: string): Promise<string>;
 }
 
 // ── runtime client ─────────────────────────────────────────────────────
