@@ -130,8 +130,24 @@ func (b *Bundle) signingPayload() ([]byte, error) {
 //   - ErrSigningKeyNotConfigured — key is nil; hard-reject
 //   - ErrInvalidSignature       — signature mismatch; hard-reject
 //   - ErrBundleIDNonMonotonic   — bundle_id is not strictly > lastAppliedID
+//
+// For accept-set verification (key rotation), use VerifyWithKeySet.
 func Verify(b *Bundle, key ed25519.PublicKey, lastAppliedID int64) error {
 	if len(key) == 0 {
+		return fmt.Errorf("%w: cannot verify without a signing key", ErrSigningKeyNotConfigured)
+	}
+	return VerifyWithKeySet(b, []ed25519.PublicKey{key}, lastAppliedID)
+}
+
+// VerifyWithKeySet verifies the bundle signature against any key in the
+// accept-set and enforces the monotonic bundle_id guard. An empty accept-set
+// is treated as ErrSigningKeyNotConfigured (fail-closed).
+//
+// FR-003: during key rotation, the accept-set contains both the outgoing and
+// the incoming key. Any bundle signed by either key is accepted. Once all
+// binaries with the old key are retired, the old key is removed from the set.
+func VerifyWithKeySet(b *Bundle, keys []ed25519.PublicKey, lastAppliedID int64) error {
+	if len(keys) == 0 {
 		return fmt.Errorf("%w: cannot verify without a signing key", ErrSigningKeyNotConfigured)
 	}
 
@@ -157,7 +173,15 @@ func Verify(b *Bundle, key ed25519.PublicKey, lastAppliedID int64) error {
 
 	// ed25519 signs the message directly (not the hash), but to align with the
 	// server's convention we sign the 32-byte SHA-256 digest.
-	if !ed25519.Verify(key, hash[:], sig) {
+	// Try each key in the accept-set; accept if any key matches.
+	verified := false
+	for _, key := range keys {
+		if len(key) == ed25519.PublicKeySize && ed25519.Verify(key, hash[:], sig) {
+			verified = true
+			break
+		}
+	}
+	if !verified {
 		return ErrInvalidSignature
 	}
 

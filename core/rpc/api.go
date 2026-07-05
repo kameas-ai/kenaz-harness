@@ -725,6 +725,11 @@ func (a *API) Shutdown() {
 	if a.unitSyncer != nil {
 		a.unitSyncer.Stop()
 	}
+	// Fleet background goroutines (capability poller, config poller, lockdown
+	// watcher). StopFleetBackground is idempotent and nil-safe.
+	if a.settingsImpl != nil {
+		a.settingsImpl.StopFleetBackground()
+	}
 }
 
 // ErrEvalNotConfigured is returned by Sessions_StartCapture /

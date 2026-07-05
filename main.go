@@ -15,6 +15,7 @@ import (
 	"github.com/wailsapp/wails/v2/pkg/options/mac"
 
 	"github.com/kameas-ai/kenaz-harness/core"
+	"github.com/kameas-ai/kenaz-harness/core/fleet"
 	"github.com/kameas-ai/kenaz-harness/core/logging"
 	"github.com/kameas-ai/kenaz-harness/core/paths"
 	"github.com/kameas-ai/kenaz-harness/core/rpc"
@@ -112,6 +113,22 @@ func main() {
 		"env", paths.EnvName(), "data_dir", dataDir)
 	if migrateNote != "" {
 		logging.L().Info("harness.datadir.migrate", "note", migrateNote)
+	}
+
+	// FR-002: assert fleet signing-key presence at boot. A shipped binary
+	// without a key logs exactly one WARN so the absence is never silent.
+	// Dev builds (Version == "dev") skip this so local development is unaffected.
+	if !fleet.ConfigDistributionEnabled() {
+		if Version != "dev" {
+			logging.L().Warn("fleet.config_distribution.disabled",
+				"reason", "signing key not injected at build time",
+				"action", "fleet config bundles will not be applied; contact ops to provision FLEET_SIGNING_PUBKEY")
+		} else {
+			logging.L().Debug("fleet.config_distribution.disabled",
+				"reason", "dev build — signing key absent by design")
+		}
+	} else {
+		logging.L().Info("fleet.config_distribution.enabled")
 	}
 
 	// Boot-time auto-update swap (mission auto-update WP02). On

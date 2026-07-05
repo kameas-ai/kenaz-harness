@@ -585,6 +585,8 @@ export function Settings_FleetCapabilities():Promise<settings.CapabilitiesView>;
 
 export function Settings_FleetConfigPullStatus():Promise<settings.FleetConfigPullStatusView>;
 
+export function Settings_FleetHealth():Promise<settings.FleetHealthView>;
+
 export function Settings_FleetLockdownStatus():Promise<settings.LockdownStatusView>;
 
 export function Settings_FleetProfile():Promise<settings.FleetProfileInfo>;
@@ -802,6 +804,8 @@ export function Unit_ResolveEnshrine(arg1:string,arg2:string,arg3:string,arg4:st
 export function Unit_ResolveLoadable(arg1:string,arg2:string):Promise<Array<fleet.ResolvedUnitView>>;
 
 export function Unit_ResolveMerge(arg1:string,arg2:string):Promise<void>;
+
+export function Unit_SyncStatus():Promise<fleet.UnitSyncStatusView>;
 
 export function Update_Apply():Promise<void>;
 

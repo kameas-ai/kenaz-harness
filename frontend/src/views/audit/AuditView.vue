@@ -279,7 +279,7 @@ onBeforeUnmount(() => {
       number="05"
       section="AUDIT"
       title="Append-only event log"
-      subtitle="Every event is redacted server-side before it lands here. Nothing leaves the device unless a connector explicitly opts in."
+      subtitle="Every event is redacted server-side before it lands here. Nothing leaves the device unless a connector explicitly opts in, or fleet config distribution is active (config-apply ACKs and telemetry opt-ins egress to your fleet server)."
     />
 
     <!-- Rich filter rail -->

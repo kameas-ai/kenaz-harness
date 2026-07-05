@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/zalando/go-keyring"
@@ -73,20 +74,16 @@ func LoadTokens() (TokenSet, error) {
 }
 
 // ClearTokens deletes all fleet tokens from the OS keychain.
-//
-// (FR-004) Individual delete failures are now WARN-logged (not silently
-// swallowed) so a failing keychain clear is diagnosable.  Partial deletion
-// is still treated as a best-effort success — the caller's sign-out goal
-// is satisfied even when one token key was already absent or the keychain
-// backend returns a transient error, provided the access token is cleared.
-// A non-nil error is returned only when the access-token delete fails
-// (because a stale access token is the most likely cause of "zombie" login).
-//
-// NOTE: the fleet-integrity mission's WP06 also touches this function.
-// Keep this change self-contained (logging + structured error return) so the
-// two changes compose cleanly when merged.
+// All three slots are attempted regardless of individual errors so a partial
+// keychain state is avoided. Individual delete failures are WARN-logged (not
+// silently swallowed, FR-004) so a failing keychain clear is diagnosable, and
+// the returned error aggregates every failure (fleet-integrity WP06), excluding
+// "not found" — missing tokens are not an error on sign-out. Callers should
+// surface the error but may still treat sign-out as logically complete (the
+// access token is the gate; a token that failed to delete is unusable anyway
+// because Sign-In refuses to load an incomplete set).
 func ClearTokens() error {
-	var firstErr error
+	var errs []string
 	for _, key := range []string{keyAccessToken(), keyRefreshToken(), keyExpiresAt()} {
 		if err := keyring.Delete(keyringService, key); err != nil {
 			if err == keyring.ErrNotFound {
@@ -94,13 +91,14 @@ func ClearTokens() error {
 				continue
 			}
 			slog.Warn("fleet: ClearTokens keychain delete failed",
-				"key",   key,
+				"key", key,
 				"error", err.Error(),
 			)
-			if firstErr == nil && key == keyAccessToken() {
-				firstErr = fmt.Errorf("fleet: clear access token: %w", err)
-			}
+			errs = append(errs, err.Error())
 		}
 	}
-	return firstErr
+	if len(errs) == 0 {
+		return nil
+	}
+	return fmt.Errorf("fleet: clear tokens: %s", strings.Join(errs, "; "))
 }

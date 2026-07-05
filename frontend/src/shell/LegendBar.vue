@@ -2,6 +2,7 @@
 import LiveRateIndicator from '@/components/ui/LiveRateIndicator.vue';
 import StatusPill from './StatusPill.vue';
 import MemoryCaptureRatePill from './MemoryCaptureRatePill.vue';
+import FleetHealthChip from './FleetHealthChip.vue';
 import { useShellStatus, useHarnessClient } from '@/lib/useHarnessAPI';
 import { ref, onMounted } from 'vue';
 
@@ -50,6 +51,8 @@ onMounted(async () => {
         :title="`Crash reporting: ${crashTier}`"
         data-testid="crash-reporting-pill"
       >reporting: {{ crashTier }}</span>
+      <!-- fleet-integrity-observability WP10: persistent fleet-health indicator -->
+      <FleetHealthChip />
     </div>
     <StatusPill />
   </div>

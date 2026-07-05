@@ -100,7 +100,7 @@ onMounted(() => {
     number="03"
     section="BUNDLES"
     title="Installed bundles"
-    subtitle="Every bundle pinned in kenaz.lock with its source channel, signature, and artifact count. Bytes live in the local CAS — nothing leaves the device."
+    subtitle="Every bundle pinned in kenaz.lock with its source channel, signature, and artifact count. Bytes live in the local CAS — bundle bytes never leave the device (fleet config-apply ACKs and opted-in telemetry are the only egress when fleet config distribution is active)."
   >
     <div v-if="loading" class="px-6 py-4 font-ui text-sm text-ink-muted">
       Loading bundles…

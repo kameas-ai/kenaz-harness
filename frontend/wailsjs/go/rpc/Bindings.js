@@ -1074,6 +1074,10 @@ export function Settings_FleetConfigPullStatus() {
   return window['go']['rpc']['Bindings']['Settings_FleetConfigPullStatus']();
 }
 
+export function Settings_FleetHealth() {
+  return window['go']['rpc']['Bindings']['Settings_FleetHealth']();
+}
+
 export function Settings_FleetLockdownStatus() {
   return window['go']['rpc']['Bindings']['Settings_FleetLockdownStatus']();
 }
@@ -1508,6 +1512,10 @@ export function Unit_ResolveLoadable(arg1, arg2) {
 
 export function Unit_ResolveMerge(arg1, arg2) {
   return window['go']['rpc']['Bindings']['Unit_ResolveMerge'](arg1, arg2);
+}
+
+export function Unit_SyncStatus() {
+  return window['go']['rpc']['Bindings']['Unit_SyncStatus']();
 }
 
 export function Update_Apply() {

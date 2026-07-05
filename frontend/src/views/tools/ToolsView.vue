@@ -67,7 +67,7 @@ onMounted(() => {
       number="02"
       section="TOOLS"
       title="Tools"
-      subtitle="Built-in Kenaz tools toggle on top; below them, every MCP server registered with the harness. All tool calls flow through the local mcp-client; nothing leaves the device."
+      subtitle="Built-in Kenaz tools toggle on top; below them, every MCP server registered with the harness. All tool calls flow through the local mcp-client; tool invocations do not leave the device (fleet config-apply ACKs and opted-in telemetry are the only egress when fleet config distribution is active)."
     />
 
     <KenazToolsPanel />

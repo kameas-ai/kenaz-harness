@@ -1592,6 +1592,13 @@ func (b *Bindings) Settings_FleetLockdownStatus() (settings.LockdownStatusView, 
 	return b.api.Settings().FleetLockdownStatus(b.ctx())
 }
 
+// Settings_FleetHealth returns the global fleet health summary: signing-key
+// presence, config source, last error, and session state. Used by the header
+// fleet-health chip (WP10 / FR-002 / FR-010).
+func (b *Bindings) Settings_FleetHealth() (settings.FleetHealthView, error) {
+	return b.api.Settings().FleetHealth(b.ctx())
+}
+
 // Settings_FleetTelemetryOptIns returns the per-class telemetry opt-in set
 // from the fleet store (the source of truth, replacing local-only JSON).
 // (harness-fleet-sync-activation-01NSYNC01 gap #4)
@@ -3006,6 +3013,14 @@ func (b *Bindings) Unit_ResolveEnshrine(srcUnitID, enshrinedTitle, enshrinedBody
 func (b *Bindings) Unit_ResolveLoadable(scope, scopeID string) ([]fleetview.ResolvedUnitView, error) {
 	defer sentry.WrapBinding("Unit_ResolveLoadable")()
 	return b.api.Fleet().Unit_ResolveLoadable(b.ctx(), scope, scopeID)
+}
+
+// Unit_SyncStatus returns a snapshot of the unit syncer state: cursor,
+// last pull/push timestamps, errors, and conflict count. Returns a zero-value
+// view when the syncer is not wired (fleet disabled / OSS build).
+// (fleet-integrity-observability WP08)
+func (b *Bindings) Unit_SyncStatus() (fleetview.UnitSyncStatusView, error) {
+	return b.api.Fleet().Unit_SyncStatus(b.ctx())
 }
 
 // ── Catalog bindings (fleet-share-and-sync-01NDFSEX14 WP02) ──────────────────

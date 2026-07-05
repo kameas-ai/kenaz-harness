@@ -160,6 +160,7 @@ import type {
   FleetProfileInfo,
   CapabilitiesView,
   FleetConfigPullStatusView,
+  FleetHealthView,
   LockdownStatusView,
   ContextPublishRequest,
   ContextPublishResult,
@@ -486,6 +487,8 @@ interface WailsBindingsLike {
   Settings_FleetConfigPullStatus(): Promise<FleetConfigPullStatusView>;
   // fleet-emergency-lockdown-01NDFSEX12 WP02
   Settings_FleetLockdownStatus(): Promise<LockdownStatusView>;
+  // fleet-integrity-observability WP02 — global fleet health indicator
+  Settings_FleetHealth(): Promise<FleetHealthView>;
 
   Memory_ListChunks(filter: MemoryListFilter): Promise<MemoryChunk[]>;
   Memory_RememberMessage(
@@ -804,6 +807,22 @@ interface WailsBindingsLike {
   // ── Cedar team publish (fleet-share-and-sync-01NDFSEX14 WP07) ────────────
   /** Publish a Cedar rule to the team via fleet. Requires policy_admin role. */
   Cedar_PublishToTeam(ruleID: string, ruleSource: string): Promise<void>;
+
+  // ── Fleet telemetry opt-ins (fleet-integrity-observability WP09) ─────────
+  /** Returns the per-class telemetry opt-in set from the fleet store. */
+  Settings_FleetTelemetryOptIns(): Promise<import('./types').TelemetryOptInView[]>;
+  /** Flip a single telemetry class opt-in in the fleet store. */
+  Settings_FleetSetTelemetryOptIn(className: string, optedIn: boolean): Promise<void>;
+
+  // ── Unit sync conflicts (fleet-integrity-observability WP08) ─────────────
+  /** Returns the current unit syncer state: pull/push errors, conflict count. */
+  Unit_SyncStatus(): Promise<import('./types').UnitSyncStatusView>;
+  /** Returns the list of unresolved same-unit pull conflicts. */
+  Unit_ListConflicts(): Promise<import('./types').UnitConflictView[]>;
+  /** Applies a whole-body MERGE resolution to a conflicted unit. */
+  Unit_ResolveMerge(unitID: string, resolvedBody: string): Promise<void>;
+  /** Applies an ENSHRINE resolution: creates a coexisting unit. Returns the new unit ID. */
+  Unit_ResolveEnshrine(srcUnitID: string, enshrinedTitle: string, enshrinedBody: string, reason: string): Promise<string>;
 
   // ── audit-log-enhancement-01KX5R8F WP07 — retention settings ──────────
   Settings_GetAuditSettings(): Promise<import('./types').AuditSettings>;
@@ -1904,6 +1923,14 @@ export interface SettingsClient {
   // ── fleet-emergency-lockdown-01NDFSEX12 WP02 ────────────────────────────
   /** Return the current fleet emergency lockdown state. */
   fleetLockdownStatus(): Promise<LockdownStatusView>;
+  // ── fleet-integrity-observability WP02 ──────────────────────────────────
+  /** Global fleet health summary: signing-key presence + config source + session state. */
+  fleetHealth(): Promise<FleetHealthView>;
+  // ── fleet-integrity-observability WP09 ──────────────────────────────────
+  /** Returns the per-class telemetry opt-in set from the fleet store. */
+  fleetTelemetryOptIns(): Promise<import('./types').TelemetryOptInView[]>;
+  /** Flip a single telemetry class opt-in. */
+  setFleetTelemetryOptIn(className: string, optedIn: boolean): Promise<void>;
 }
 
 /**
@@ -2800,6 +2827,11 @@ export interface HarnessClient {
   sync: SyncClient;
   /** Team Cedar policy publish surface (fleet-share-and-sync-01NDFSEX14 WP07). */
   cedarPublish: CedarPublishClient;
+  // ── Unit sync (fleet-integrity-observability WP08) ────────────────────
+  Unit_SyncStatus(): Promise<import('./types').UnitSyncStatusView>;
+  Unit_ListConflicts(): Promise<import('./types').UnitConflictView[]>;
+  Unit_ResolveMerge(unitID: string, resolvedBody: string): Promise<void>;
+  Unit_ResolveEnshrine(srcUnitID: string, enshrinedTitle: string, enshrinedBody: string, reason: string): Promise<string>;
 }
 
 // ── runtime client ─────────────────────────────────────────────────────
@@ -3132,6 +3164,12 @@ export function createHarnessClient(): HarnessClient {
       fleetConfigPullStatus: () => b().Settings_FleetConfigPullStatus(),
       // fleet-emergency-lockdown-01NDFSEX12 WP02
       fleetLockdownStatus: () => b().Settings_FleetLockdownStatus(),
+      // fleet-integrity-observability WP02
+      fleetHealth: () => b().Settings_FleetHealth(),
+      // fleet-integrity-observability WP09
+      fleetTelemetryOptIns: () => b().Settings_FleetTelemetryOptIns(),
+      setFleetTelemetryOptIn: (className, optedIn) =>
+        b().Settings_FleetSetTelemetryOptIn(className, optedIn),
     },
     permissions: {
       listGrants: (family) =>
@@ -3401,6 +3439,12 @@ export function createHarnessClient(): HarnessClient {
     cedarPublish: {
       publishToTeam: (ruleID, ruleSource) => b().Cedar_PublishToTeam(ruleID, ruleSource),
     },
+    // ── Unit sync (fleet-integrity-observability WP08) ────────────────────
+    Unit_SyncStatus: () => b().Unit_SyncStatus(),
+    Unit_ListConflicts: () => b().Unit_ListConflicts(),
+    Unit_ResolveMerge: (unitID, resolvedBody) => b().Unit_ResolveMerge(unitID, resolvedBody),
+    Unit_ResolveEnshrine: (srcUnitID, enshrinedTitle, enshrinedBody, reason) =>
+      b().Unit_ResolveEnshrine(srcUnitID, enshrinedTitle, enshrinedBody, reason),
   };
 }
 
@@ -4041,9 +4085,20 @@ export function createFakeHarnessClient(
       // fleet-config-pull-01NDFSEX10 WP02
       fleetConfigPullStatus: async () => ({
         lastAppliedId: 0, lastAppliedAt: '', lastError: '', source: 'default-deny', bundleChecksum: '',
+        configDistributionEnabled: false,
       }),
       // fleet-emergency-lockdown-01NDFSEX12 WP02
       fleetLockdownStatus: async () => ({ active: false, reason: '' }),
+      // fleet-integrity-observability WP02
+      fleetHealth: async (): Promise<FleetHealthView> => ({
+        configDistributionEnabled: false,
+        configSource: 'no-key',
+        configLastError: '',
+        signedIn: false,
+      }),
+      // fleet-integrity-observability WP09
+      fleetTelemetryOptIns: async (): Promise<import('./types').TelemetryOptInView[]> => [],
+      setFleetTelemetryOptIn: noop,
     },
     permissions: {
       listGrants: async () => [],
@@ -4667,6 +4722,19 @@ export function createFakeHarnessClient(
     cedarPublish: {
       publishToTeam: noop,
     },
+    // ── Unit sync (fleet-integrity-observability WP08) ────────────────────
+    Unit_SyncStatus: async (): Promise<import('./types').UnitSyncStatusView> => ({
+      cursor: '',
+      lastPullAt: '',
+      lastPullErr: '',
+      lastPushErr: '',
+      pushCount: 0,
+      pullCount: 0,
+      conflictCount: 0,
+    }),
+    Unit_ListConflicts: async (): Promise<import('./types').UnitConflictView[]> => [],
+    Unit_ResolveMerge: noop,
+    Unit_ResolveEnshrine: async () => '',
   };
 
   return { ...defaults, ...seed };

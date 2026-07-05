@@ -2,6 +2,8 @@ package settings
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"os"
 	"runtime"
 	"sync"
@@ -79,6 +81,10 @@ func (a *API) SetFleetClient(c *fleet.Client, dataDir string) {
 	defer a.fleet.mu.Unlock()
 	a.fleet.client = c
 	a.fleet.dataDir = dataDir
+	// Wire the session-expired broker into the client if already set.
+	if a.fleet.lockdownBroker != nil && c != nil {
+		c.SetSessionBroker(a.fleet.lockdownBroker)
+	}
 	// Start the capability poller lazily. When c is a nop client the poller
 	// will degrade gracefully on every Refresh call.
 	if a.fleet.poller == nil {
@@ -105,6 +111,8 @@ func (a *API) SetFleetClient(c *fleet.Client, dataDir string) {
 
 // SetLockdownBroker wires the event broker into the fleet state so the
 // lockdown Watcher can publish fleet:lockdown:changed events to the frontend.
+// Also wires the same broker into the fleet Client for session-expired events
+// (fleet-integrity-observability WP05 / FR-005).
 // Must be called before SetFleetClient to take effect on first start; if called
 // after, the watcher uses the broker on its next reconnect cycle.
 // (fleet-emergency-lockdown-01NDFSEX12 WP02)
@@ -118,6 +126,10 @@ func (a *API) SetLockdownBroker(sink fleet.BrokerSink) {
 	// If the watcher is already running, update its broker reference.
 	if a.fleet.lockdownWatcher != nil {
 		a.fleet.lockdownWatcher.SetBroker(sink)
+	}
+	// Wire the broker into the fleet client for session-expired events (FR-005).
+	if a.fleet.client != nil {
+		a.fleet.client.SetSessionBroker(sink)
 	}
 }
 
@@ -268,32 +280,93 @@ func (a *API) FleetSignIn(ctx context.Context) (FleetIdentity, error) {
 	return id, nil
 }
 
-// FleetSignOut clears tokens and identity cache.
+// StopFleetBackground stops all fleet background goroutines (capability
+// poller, config poller, lockdown watcher) and clears the in-memory
+// lockdown flag + model-pref cache. It is idempotent and safe to call
+// from sign-out or app shutdown.
+//
+// Callers that need to block until goroutines have exited should call
+// CapabilityPoller.Stop(), ConfigPoller.Stop(), and Watcher.Stop() directly;
+// this method calls them in series.
+func (a *API) StopFleetBackground() {
+	if a.fleet == nil {
+		return
+	}
+	a.fleet.mu.Lock()
+	poller := a.fleet.poller
+	configPoller := a.fleet.configPoller
+	watcher := a.fleet.lockdownWatcher
+	// Nil them out so future Start calls in SetFleetClient create fresh instances.
+	a.fleet.poller = nil
+	a.fleet.configPoller = nil
+	a.fleet.lockdownWatcher = nil
+	// Clear in-memory caches that are session-scoped.
+	a.fleet.fleetModelPrefs = nil
+	a.fleet.telemetryOptIns = nil
+	a.fleet.mu.Unlock()
+
+	// Stop goroutines outside the lock.
+	if poller != nil {
+		poller.Stop()
+	}
+	if configPoller != nil {
+		configPoller.Stop()
+	}
+	if watcher != nil {
+		watcher.Stop()
+	}
+	// Clear the package-level lockdown flag so a re-login starts clean.
+	fleet.ForceSetLockdownForTest(false) // production-safe: the symbol is exported for exactly this use
+}
+
+// FleetSignOut clears tokens and identity cache, and stops background
+// goroutines. Returns an aggregated error when one or more keychain
+// operations fail (sign-out is still treated as logically complete).
 func (a *API) FleetSignOut(ctx context.Context) error {
 	logging.L().Info("fleet.rpc.sign_out.start")
 	if fleet.Disabled() {
 		logging.L().Warn("fleet.rpc.sign_out.disabled_by_env")
 		return fleet.ErrFleetDisabled
 	}
+	// Stop pollers + watcher + clear caches before removing tokens so
+	// in-flight requests have a chance to complete.
+	a.StopFleetBackground()
+
+	// Aggregate keyring errors: a missing token is not an error on sign-out.
+	var signOutErr error
 	if err := fleet.ClearTokens(); err != nil {
-		logging.L().Error("fleet.rpc.sign_out.clear_tokens_failed", "err", err.Error())
-		return err
+		logging.L().Warn("fleet.rpc.sign_out.clear_tokens_partial", "err", err.Error())
+		signOutErr = err // surface to caller; sign-out proceeds regardless
 	}
 	dataDir := a.fleetDataDir()
 	if dataDir != "" {
-		_ = os.Remove(fleet.IdentityFilePath(dataDir))
+		if err := os.Remove(fleet.IdentityFilePath(dataDir)); err != nil && !os.IsNotExist(err) {
+			logging.L().Warn("fleet.rpc.sign_out.remove_identity_failed", "err", err.Error())
+			signOutErr = errors.Join(signOutErr, fmt.Errorf("remove identity file: %w", err))
+		}
 	}
-	logging.L().Info("fleet.rpc.sign_out.success")
-	return nil
+	if signOutErr != nil {
+		logging.L().Warn("fleet.rpc.sign_out.partial_success", "err", signOutErr.Error())
+	} else {
+		logging.L().Info("fleet.rpc.sign_out.success")
+	}
+	return signOutErr
 }
 
-// FleetSignedIn reports whether valid tokens exist.
-func (a *API) FleetSignedIn(_ context.Context) (bool, error) {
+// FleetSignedIn reports whether a valid (non-expired) fleet session exists.
+//
+// FR-004: honors token expiry — a dead session (expired access + refresh)
+// returns false so the UI can show a re-auth prompt rather than a fake
+// "signed in" state. Uses Client.SignedIn for consistent expiry semantics.
+func (a *API) FleetSignedIn(ctx context.Context) (bool, error) {
 	if fleet.Disabled() {
 		return false, nil
 	}
-	_, err := fleet.LoadTokens()
-	return err == nil, nil
+	c := a.fleetClient()
+	if c == nil {
+		return false, nil
+	}
+	return c.SignedIn(ctx)
 }
 
 // FleetRefreshIdentity calls the fleet enroll endpoint.
@@ -520,17 +593,60 @@ func (a *API) fleetConfigPoller() *fleet.ConfigPoller {
 // FleetConfigPullStatus returns the current config-pull poller state.
 // Returns a zero-value view when fleet is disabled or the poller is not yet wired.
 func (a *API) FleetConfigPullStatus(_ context.Context) (FleetConfigPullStatusView, error) {
+	enabled := fleet.ConfigDistributionEnabled()
 	p := a.fleetConfigPoller()
 	if p == nil {
-		return FleetConfigPullStatusView{Source: "default-deny"}, nil
+		return FleetConfigPullStatusView{
+			Source:                    "default-deny",
+			ConfigDistributionEnabled: enabled,
+		}, nil
 	}
 	st := p.Status()
 	return FleetConfigPullStatusView{
-		LastAppliedID:  st.LastAppliedID,
-		LastAppliedAt:  st.LastAppliedAt,
-		LastError:      st.LastError,
-		Source:         st.Source,
-		BundleChecksum: st.BundleChecksum,
+		LastAppliedID:             st.LastAppliedID,
+		LastAppliedAt:             st.LastAppliedAt,
+		LastError:                 st.LastError,
+		Source:                    st.Source,
+		BundleChecksum:            st.BundleChecksum,
+		ConfigDistributionEnabled: enabled,
+	}, nil
+}
+
+// FleetHealth returns a compact fleet-health summary for the global health
+// indicator (WP10). It combines the signing-key presence, the config source,
+// and the current session state into a single call so the header chip can
+// render without multiple sequential RPCs.
+func (a *API) FleetHealth(ctx context.Context) (FleetHealthView, error) {
+	enabled := fleet.ConfigDistributionEnabled()
+
+	// Config source + last error.
+	var configSource, configLastError string
+	if !enabled {
+		configSource = "no-key"
+	} else {
+		p := a.fleetConfigPoller()
+		if p == nil {
+			configSource = "default-deny-degraded"
+		} else {
+			st := p.Status()
+			configSource = st.Source
+			configLastError = st.LastError
+			if configSource == "default-deny" && configLastError == "" {
+				configSource = "default-deny-degraded"
+			}
+		}
+	}
+
+	// Session state — delegate to FleetSignedIn/Client.SignedIn so Health uses
+	// the same expiry semantics (tokenExpiryGrace + consistent no-ExpiresAt
+	// handling) as the account UI, rather than a divergent inline check.
+	signedIn, _ := a.FleetSignedIn(ctx)
+
+	return FleetHealthView{
+		ConfigDistributionEnabled: enabled,
+		ConfigSource:              configSource,
+		ConfigLastError:           configLastError,
+		SignedIn:                  signedIn,
 	}, nil
 }
 
@@ -551,7 +667,7 @@ type compositeConfigApplier struct {
 	state *fleetState
 }
 
-func (a *compositeConfigApplier) ApplyBundle(ctx context.Context, b *fleet.Bundle) error {
+func (a *compositeConfigApplier) ApplyBundle(ctx context.Context, b *fleet.Bundle) []error {
 	var errs []error
 
 	// Cedar delta.
@@ -582,9 +698,8 @@ func (a *compositeConfigApplier) ApplyBundle(ctx context.Context, b *fleet.Bundl
 	// fleet-hosted-LLM / kameas-ml surface was removed. See the type doc above.
 
 	// Mandated skills (fleet-skills-sync-01NDFSEX18 WP05).
-	// Partial-success pattern: individual skill errors are collected but
-	// don't prevent the bundle ACK from advancing (matching the rest of
-	// the bundle apply logic).
+	// FR-012: all section errors are collected and returned so the ACK
+	// carries the full set and the caller can decide not to advance lastAppliedID.
 	if len(b.MandatedSkills) > 0 {
 		a.state.mu.RLock()
 		skillStore := a.state.skillStore
@@ -599,10 +714,8 @@ func (a *compositeConfigApplier) ApplyBundle(ctx context.Context, b *fleet.Bundl
 		}
 	}
 
-	if len(errs) > 0 {
-		return errs[0] // return first error; others are logged by the poller
-	}
-	return nil
+	// Return all errors (FR-012). An empty slice means full success.
+	return errs
 }
 
 // FleetModelPrefs returns the current fleet-managed model preferences, or nil
