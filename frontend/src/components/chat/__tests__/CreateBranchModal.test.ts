@@ -40,10 +40,15 @@ describe('CreateBranchModal', () => {
         branches: {
           list: vi.fn(),
           create: vi.fn(),
+          createExplicit: vi.fn(),
           status: vi.fn(),
           merge: vi.fn(),
           abandon: vi.fn(),
           recommendModel: vi.fn().mockResolvedValue(recommendation),
+          proposeReintegrationSummary: vi.fn(),
+          commitReintegration: vi.fn(),
+          setAdvisorDismissed: vi.fn(),
+          listWithBranchTree: vi.fn(),
         },
       },
     );
@@ -72,6 +77,7 @@ describe('CreateBranchModal', () => {
         branches: {
           list: vi.fn(),
           create,
+          createExplicit: vi.fn(),
           status: vi.fn(),
           merge: vi.fn(),
           abandon: vi.fn(),
@@ -81,6 +87,10 @@ describe('CreateBranchModal', () => {
             tier: 'medium',
             reason: 'default',
           }),
+          proposeReintegrationSummary: vi.fn(),
+          commitReintegration: vi.fn(),
+          setAdvisorDismissed: vi.fn(),
+          listWithBranchTree: vi.fn(),
         },
       },
     );
@@ -100,6 +110,7 @@ describe('CreateBranchModal', () => {
         branches: {
           list: vi.fn(),
           create: vi.fn(),
+          createExplicit: vi.fn(),
           status: vi.fn(),
           merge: vi.fn(),
           abandon: vi.fn(),
@@ -110,6 +121,10 @@ describe('CreateBranchModal', () => {
             reason: 'contained_task_smaller_model',
             crossProviderWarning: 'Cross-provider fork: image bytes may lose fidelity.',
           }),
+          proposeReintegrationSummary: vi.fn(),
+          commitReintegration: vi.fn(),
+          setAdvisorDismissed: vi.fn(),
+          listWithBranchTree: vi.fn(),
         },
       },
     );

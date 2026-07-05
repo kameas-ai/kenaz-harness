@@ -5,7 +5,7 @@
  * Replaces the old props-driven WP14 tests; the view now uses the
  * harnessClient directly (client-driven architecture).
  */
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { mount, flushPromises } from '@vue/test-utils';
 import PolicyView from '../PolicyView.vue';
 import type { HarnessClient, CedarPolicyClient } from '@/lib/harnessClient';

@@ -72,7 +72,8 @@ const deleteModal = ref<{ project: Project; cascade: boolean } | null>(null);
 
 const collapsed = ref<Set<string>>(new Set());
 let focusedProjectRenameId: string | null = null;
-function setProjectRenameRef(el: Element | null) {
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function setProjectRenameRef(el: any) {
   if (!(el instanceof HTMLInputElement)) {
     focusedProjectRenameId = null;
     return;

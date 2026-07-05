@@ -176,9 +176,9 @@ interface BridgeShape {
   ) => Promise<WorkflowsRunResult>;
   Workflows_Save: (input: WorkflowsSaveInput) => Promise<WorkflowsSaveOutput>;
   Workflows_Delete: (id: string) => Promise<void>;
-  Workflows_Catalog_List: () => Promise<WorkflowsCatalogEntry[]>;
-  Workflows_Catalog_Get: (id: string) => Promise<WorkflowsCatalogPreview>;
-  Workflows_Catalog_Install: (id: string) => Promise<WorkflowsCatalogInstallResult>;
+  Workflows_CatalogList: () => Promise<WorkflowsCatalogEntry[]>;
+  Workflows_CatalogGet: (id: string) => Promise<WorkflowsCatalogPreview>;
+  Workflows_CatalogInstall: (id: string) => Promise<WorkflowsCatalogInstallResult>;
   // Scheduler (workflows-agentic-01KW2D3X WP02)
   Workflows_ScheduleSet: (input: WorkflowsScheduleSetInput) => Promise<void>;
   Workflows_ScheduleClear: (workflowId: string) => Promise<void>;
@@ -211,9 +211,9 @@ export function createWorkflowsClient(): WorkflowsClient {
     save: (input) => bridge().Workflows_Save(input),
     remove: (id) => bridge().Workflows_Delete(id),
     catalog: {
-      list: () => bridge().Workflows_Catalog_List(),
-      get: (id) => bridge().Workflows_Catalog_Get(id),
-      install: (id) => bridge().Workflows_Catalog_Install(id),
+      list: () => bridge().Workflows_CatalogList(),
+      get: (id) => bridge().Workflows_CatalogGet(id),
+      install: (id) => bridge().Workflows_CatalogInstall(id),
     },
     scheduleSet: (input) => bridge().Workflows_ScheduleSet(input),
     scheduleClear: (workflowId) => bridge().Workflows_ScheduleClear(workflowId),

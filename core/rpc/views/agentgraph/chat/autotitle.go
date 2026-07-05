@@ -63,7 +63,7 @@ type AutoTitleDeps struct {
 	// Audit emitter for EventKindSessionAutoTitled events.
 	Audit AutoTitleAudit
 	// EffectiveEnabled returns true when the feature flag is on.
-	// Defaults to an always-true stub; WP03 will wire the real flag.
+	// Defaults to an always-true stub when nil.
 	EffectiveEnabled func() bool
 	// Broker is the optional event publisher for TopicSessionListChanged.
 	// When non-nil, a successful auto-title write emits a "title_set"
@@ -72,8 +72,7 @@ type AutoTitleDeps struct {
 }
 
 // autoTitleEnabled reports whether the feature flag allows auto-titling.
-// Falls back to true (enabled) when no function is provided — WP03 will
-// wire the real flag.
+// Falls back to true (enabled) when no function is provided.
 func (d *AutoTitleDeps) autoTitleEnabled() bool {
 	if d == nil || d.EffectiveEnabled == nil {
 		return true
@@ -134,7 +133,7 @@ func (r *ChatRunner) fireAutoTitle(sessionID, profileID, modelOverride string) {
 		}
 	}()
 
-	// Feature-flag check (WP03 will wire the real flag; stub is always-true).
+	// Feature-flag check (WP05 wired the real flag via EffectiveEnabled).
 	if !deps.autoTitleEnabled() {
 		log.Debug("chat.autotitle.disabled", "session_id", sessionID)
 		return

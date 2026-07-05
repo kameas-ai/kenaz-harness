@@ -203,6 +203,7 @@ describe('ChatInput branch-advisor', () => {
         branches: {
           list: vi.fn(),
           create: vi.fn(),
+          createExplicit: vi.fn(),
           status: vi.fn(),
           merge: vi.fn(),
           abandon: vi.fn(),
@@ -210,6 +211,7 @@ describe('ChatInput branch-advisor', () => {
           proposeReintegrationSummary: vi.fn().mockResolvedValue({ proposedSummary: '', tokenCount: 0, model: '' }),
           commitReintegration: vi.fn().mockResolvedValue(undefined),
           setAdvisorDismissed,
+          listWithBranchTree: vi.fn(),
         },
       },
     );

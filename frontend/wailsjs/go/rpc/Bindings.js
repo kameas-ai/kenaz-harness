@@ -302,16 +302,16 @@ export function Contexts_AttachModule(arg1, arg2, arg3) {
   return window['go']['rpc']['Bindings']['Contexts_AttachModule'](arg1, arg2, arg3);
 }
 
+export function Contexts_ContextExport(arg1, arg2) {
+  return window['go']['rpc']['Bindings']['Contexts_ContextExport'](arg1, arg2);
+}
+
 export function Contexts_ContextPromote(arg1) {
   return window['go']['rpc']['Bindings']['Contexts_ContextPromote'](arg1);
 }
 
 export function Contexts_ContextPublish(arg1) {
   return window['go']['rpc']['Bindings']['Contexts_ContextPublish'](arg1);
-}
-
-export function Contexts_ContextExport(arg1, arg2) {
-  return window['go']['rpc']['Bindings']['Contexts_ContextExport'](arg1, arg2);
 }
 
 export function Contexts_ContextSearch(arg1, arg2, arg3) {
@@ -444,26 +444,6 @@ export function Fleet_GetTelemetryConsent() {
 
 export function Fleet_SetTelemetryConsent(arg1) {
   return window['go']['rpc']['Bindings']['Fleet_SetTelemetryConsent'](arg1);
-}
-
-export function Unit_PromoteAsMergeRequest(arg1, arg2, arg3, arg4) {
-  return window['go']['rpc']['Bindings']['Unit_PromoteAsMergeRequest'](arg1, arg2, arg3, arg4);
-}
-
-export function Unit_ListConflicts() {
-  return window['go']['rpc']['Bindings']['Unit_ListConflicts']();
-}
-
-export function Unit_ResolveMerge(arg1, arg2) {
-  return window['go']['rpc']['Bindings']['Unit_ResolveMerge'](arg1, arg2);
-}
-
-export function Unit_ResolveEnshrine(arg1, arg2, arg3, arg4) {
-  return window['go']['rpc']['Bindings']['Unit_ResolveEnshrine'](arg1, arg2, arg3, arg4);
-}
-
-export function Unit_ResolveLoadable(arg1, arg2) {
-  return window['go']['rpc']['Bindings']['Unit_ResolveLoadable'](arg1, arg2);
 }
 
 export function Graph_CancelRun(arg1) {
@@ -1034,6 +1014,10 @@ export function Sessions_ResolveAutonomy(arg1) {
   return window['go']['rpc']['Bindings']['Sessions_ResolveAutonomy'](arg1);
 }
 
+export function Sessions_ResumeMessage(arg1, arg2) {
+  return window['go']['rpc']['Bindings']['Sessions_ResumeMessage'](arg1, arg2);
+}
+
 export function Sessions_SaveAsArtifact(arg1, arg2, arg3, arg4, arg5) {
   return window['go']['rpc']['Bindings']['Sessions_SaveAsArtifact'](arg1, arg2, arg3, arg4, arg5);
 }
@@ -1106,16 +1090,16 @@ export function Settings_FleetRefreshIdentity() {
   return window['go']['rpc']['Bindings']['Settings_FleetRefreshIdentity']();
 }
 
+export function Settings_FleetSetTelemetryOptIn(arg1, arg2) {
+  return window['go']['rpc']['Bindings']['Settings_FleetSetTelemetryOptIn'](arg1, arg2);
+}
+
 export function Settings_FleetSignIn() {
   return window['go']['rpc']['Bindings']['Settings_FleetSignIn']();
 }
 
 export function Settings_FleetSignOut() {
   return window['go']['rpc']['Bindings']['Settings_FleetSignOut']();
-}
-
-export function Settings_FleetSetTelemetryOptIn(arg1, arg2) {
-  return window['go']['rpc']['Bindings']['Settings_FleetSetTelemetryOptIn'](arg1, arg2);
 }
 
 export function Settings_FleetSignedIn() {
@@ -1146,6 +1130,10 @@ export function Settings_GetAutoResumeOnKeyRotation() {
   return window['go']['rpc']['Bindings']['Settings_GetAutoResumeOnKeyRotation']();
 }
 
+export function Settings_GetAutoTitleEnabled() {
+  return window['go']['rpc']['Bindings']['Settings_GetAutoTitleEnabled']();
+}
+
 export function Settings_GetAutonomy() {
   return window['go']['rpc']['Bindings']['Settings_GetAutonomy']();
 }
@@ -1160,10 +1148,6 @@ export function Settings_GetBashAllowlistMigrated() {
 
 export function Settings_GetCedarStrictCredentialMode() {
   return window['go']['rpc']['Bindings']['Settings_GetCedarStrictCredentialMode']();
-}
-
-export function Settings_GetConfirmEach() {
-  return window['go']['rpc']['Bindings']['Settings_GetConfirmEach']();
 }
 
 export function Settings_GetEmbedderConfig() {
@@ -1262,6 +1246,10 @@ export function Settings_SetAutoResumeOnKeyRotation(arg1) {
   return window['go']['rpc']['Bindings']['Settings_SetAutoResumeOnKeyRotation'](arg1);
 }
 
+export function Settings_SetAutoTitleEnabled(arg1) {
+  return window['go']['rpc']['Bindings']['Settings_SetAutoTitleEnabled'](arg1);
+}
+
 export function Settings_SetAutonomy(arg1) {
   return window['go']['rpc']['Bindings']['Settings_SetAutonomy'](arg1);
 }
@@ -1276,10 +1264,6 @@ export function Settings_SetBashAllowlistMigrated(arg1) {
 
 export function Settings_SetCedarStrictCredentialMode(arg1) {
   return window['go']['rpc']['Bindings']['Settings_SetCedarStrictCredentialMode'](arg1);
-}
-
-export function Settings_SetConfirmEach(arg1) {
-  return window['go']['rpc']['Bindings']['Settings_SetConfirmEach'](arg1);
 }
 
 export function Settings_SetEmbedderConfig(arg1, arg2) {
@@ -1506,6 +1490,26 @@ export function Trust_ListSecretReferences() {
   return window['go']['rpc']['Bindings']['Trust_ListSecretReferences']();
 }
 
+export function Unit_ListConflicts() {
+  return window['go']['rpc']['Bindings']['Unit_ListConflicts']();
+}
+
+export function Unit_PromoteAsMergeRequest(arg1, arg2, arg3, arg4) {
+  return window['go']['rpc']['Bindings']['Unit_PromoteAsMergeRequest'](arg1, arg2, arg3, arg4);
+}
+
+export function Unit_ResolveEnshrine(arg1, arg2, arg3, arg4) {
+  return window['go']['rpc']['Bindings']['Unit_ResolveEnshrine'](arg1, arg2, arg3, arg4);
+}
+
+export function Unit_ResolveLoadable(arg1, arg2) {
+  return window['go']['rpc']['Bindings']['Unit_ResolveLoadable'](arg1, arg2);
+}
+
+export function Unit_ResolveMerge(arg1, arg2) {
+  return window['go']['rpc']['Bindings']['Unit_ResolveMerge'](arg1, arg2);
+}
+
 export function Update_Apply() {
   return window['go']['rpc']['Bindings']['Update_Apply']();
 }
@@ -1548,6 +1552,18 @@ export function Workflow_StopStream(arg1) {
 
 export function Workflows_CancelRun(arg1) {
   return window['go']['rpc']['Bindings']['Workflows_CancelRun'](arg1);
+}
+
+export function Workflows_CatalogGet(arg1) {
+  return window['go']['rpc']['Bindings']['Workflows_CatalogGet'](arg1);
+}
+
+export function Workflows_CatalogInstall(arg1) {
+  return window['go']['rpc']['Bindings']['Workflows_CatalogInstall'](arg1);
+}
+
+export function Workflows_CatalogList() {
+  return window['go']['rpc']['Bindings']['Workflows_CatalogList']();
 }
 
 export function Workflows_Delete(arg1) {

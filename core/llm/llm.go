@@ -711,6 +711,11 @@ type Registry interface {
 	// error and the registry is left unchanged.
 	LoadProfiles(profs []ProviderProfile) error
 
+	// Evict removes the profile with the given id from the in-memory
+	// map. Idempotent: evicting an unknown id is a no-op. Callers that
+	// need to replace an existing profile must Evict then LoadProfiles.
+	Evict(id string) error
+
 	// Profile looks up a profile by id.
 	Profile(id string) (ProviderProfile, error)
 

@@ -284,6 +284,13 @@ type Settings struct {
 	// MCPAutoRestart() accessor; never read directly.
 	MCPAutoRestartDisabled bool `json:"mcpAutoRestartDisabled,omitempty"`
 
+	// AutoTitleDisabled is the inverted persisted bit for the
+	// session auto-titling feature (p0-wiring-fixes-3TVMG0MX WP05).
+	// Default ON (zero-value Disabled → auto-title enabled) so new
+	// installs get titles without any setup. Read via the
+	// AutoTitleEnabled() accessor; never read directly.
+	AutoTitleDisabled bool `json:"autoTitleDisabled,omitempty"`
+
 	// ── Builtin filesystem tool dials (builtin-filesystem-tools-01KR3N4P) ──
 
 	// FSReadDisabled is the inverted persisted bit for the read-family
@@ -799,6 +806,11 @@ func (s Settings) MonthlyCostNotifyEnabled() bool {
 // (mcp-server-health-ui-01KQ8TD6 WP06)
 func (s Settings) MCPAutoRestart() bool { return !s.MCPAutoRestartDisabled }
 
+// AutoTitleEnabled reports whether session auto-titling is on. Default
+// true on a fresh install (zero-value Disabled → feature enabled).
+// (p0-wiring-fixes-3TVMG0MX WP05)
+func (s Settings) AutoTitleEnabled() bool { return !s.AutoTitleDisabled }
+
 // FSReadEnabled reports whether the read-family builtin filesystem tools
 // are enabled. Default false on a fresh install (zero-value Disabled →
 // tools off). The user opts in from the Tools panel (WP06).
@@ -1028,6 +1040,12 @@ type SettingsStore interface {
 	LoadMCPAutoRestart() (bool, error)
 	SaveMCPAutoRestart(enabled bool) error
 
+	// LoadAutoTitleEnabled / SaveAutoTitleEnabled expose the session
+	// auto-title feature flag (p0-wiring-fixes-3TVMG0MX WP05). Default
+	// true on a fresh install (zero-value Disabled → feature enabled).
+	LoadAutoTitleEnabled() (bool, error)
+	SaveAutoTitleEnabled(enabled bool) error
+
 	// ── Builtin filesystem tool dial accessors (builtin-filesystem-tools-01KR3N4P) ──
 
 	// LoadFSReadEnabled / SaveFSReadEnabled expose the read-family
@@ -1114,6 +1132,12 @@ type SettingsAPI interface {
 	GetMCPAutoRestart(ctx context.Context) (bool, error)
 	// SetMCPAutoRestart persists the MCP auto-restart dial.
 	SetMCPAutoRestart(ctx context.Context, enabled bool) error
+	// GetAutoTitleEnabled returns whether session auto-titling is on.
+	// Default true on a fresh install (zero-value → enabled).
+	// (p0-wiring-fixes-3TVMG0MX WP05)
+	GetAutoTitleEnabled(ctx context.Context) (bool, error)
+	// SetAutoTitleEnabled persists the auto-title feature toggle.
+	SetAutoTitleEnabled(ctx context.Context, enabled bool) error
 	// GetEmbedderConfig returns the persisted (profileID, modelOverride)
 	// pair for the memory embedder.  Empty strings mean "auto-pick".
 	// (v0.5.2 universal-embedder fix)

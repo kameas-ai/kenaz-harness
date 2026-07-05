@@ -48,7 +48,7 @@ const isCustom = computed<boolean>(() => {
   if (!r) return false;
   // Custom when ANY layer has overrides set on knobs.
   const anyOverride = (l: { overrides?: Record<string, unknown> }) =>
-    l.overrides && Object.keys(l.overrides).length > 0;
+    Boolean(l.overrides && Object.keys(l.overrides).length > 0);
   return anyOverride(r.session) || anyOverride(r.project) || anyOverride(r.global);
 });
 

@@ -51,14 +51,14 @@ export async function initSentry(opts: SentryInitOptions): Promise<boolean> {
       release: opts.release,
       dist: opts.gitsha,
 
-      // Privacy — no session tracking or PII auto-collection.
-      autoSessionTracking: false,
+      // Privacy — no PII auto-collection.
       sendDefaultPii: false,
 
       // Redact all events before transmission.
-      beforeSend(event) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      beforeSend(event: any) {
         try {
-          return redactSentryEvent(event, { redactString, redactObject, redactStringDeep });
+          return redactSentryEvent(event as SentryEventLike, { redactString, redactObject, redactStringDeep }) as any;
         } catch {
           // If the redactor itself throws, drop the event rather than
           // transmitting potentially un-redacted content.

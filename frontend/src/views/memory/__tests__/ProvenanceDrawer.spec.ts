@@ -1,7 +1,7 @@
 /**
  * ProvenanceDrawer tests — memory-inspection-ui-01KX5R8E WP08.
  */
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import { mount, flushPromises } from '@vue/test-utils';
 import ProvenanceDrawer from '@/views/memory/ProvenanceDrawer.vue';
 import type { ChunkProvenance } from '@/lib/types';

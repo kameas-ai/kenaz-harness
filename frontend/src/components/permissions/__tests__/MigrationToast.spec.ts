@@ -29,8 +29,6 @@ function mountToast(toastShown: boolean) {
       saveTheme: async () => undefined,
       getMemory: async () => false,
       setMemory: async () => undefined,
-      getConfirmEach: async () => true,
-      setConfirmEach: async () => undefined,
       getWebFetchEnabled: async () => false,
       setWebFetchEnabled: async () => undefined,
       getWebSearch: async () => false,
@@ -51,7 +49,8 @@ function mountToast(toastShown: boolean) {
       setCedarStrictCredentialMode: async () => undefined,
       getFSRequestAccessEnabled: async () => true,
       setFSRequestAccessEnabled: async () => undefined,
-    },
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any,
   });
 
   const wrapper = mount(MigrationToast, {

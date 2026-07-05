@@ -47,12 +47,8 @@ const props = defineProps<{
   content: string;
   streaming?: boolean;
   /**
-   * Stream-failure marker (long-turn-resilience WP00). When set, the
-   * bubble renders a muted "Connection lost — message may be
-   * incomplete." sub-line beneath the body. No Resume button yet —
-   * that lands in WP03.
+   * (See streamingError below for the frontend-only failure marker.)
    */
-  streamingError?: string;
   toolCalls?: readonly ToolCall[];
   /**
    * Polymorphic content blocks for multimodal messages

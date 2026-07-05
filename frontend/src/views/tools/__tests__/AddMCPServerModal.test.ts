@@ -175,7 +175,7 @@ describe('RegistryTab — list and install', () => {
       makeListing(makeRecipe('filesystem'), { enabled: true }),
     ];
     const list = vi.fn(async () => recipes);
-    const w = mountRegistryTab({ tools: { recipes: { list, install: vi.fn(), uninstall: vi.fn(), forgetKey: vi.fn(), status: vi.fn(), config: vi.fn(async () => ({})) } } });
+    const w = mountRegistryTab({ tools: { recipes: { list, install: vi.fn(), uninstall: vi.fn(), forgetKey: vi.fn(), status: vi.fn(), config: vi.fn(async () => ({})) } as any } as any }) as any;
 
     await flushPromises();
 
@@ -189,7 +189,7 @@ describe('RegistryTab — list and install', () => {
       makeListing(makeRecipe('brave-search'), { enabled: true }),
     ];
     const list = vi.fn(async () => recipes);
-    const w = mountRegistryTab({ tools: { recipes: { list, install: vi.fn(), uninstall: vi.fn(), forgetKey: vi.fn(), status: vi.fn(), config: vi.fn(async () => ({})) } } });
+    const w = mountRegistryTab({ tools: { recipes: { list, install: vi.fn(), uninstall: vi.fn(), forgetKey: vi.fn(), status: vi.fn(), config: vi.fn(async () => ({})) } as any } as any }) as any;
     await flushPromises();
 
     expect(w.find('[data-testid="registry-empty"]').exists()).toBe(true);
@@ -197,7 +197,7 @@ describe('RegistryTab — list and install', () => {
 
   it('shows error when list fails', async () => {
     const list = vi.fn(async () => { throw new Error('Network error'); });
-    const w = mountRegistryTab({ tools: { recipes: { list, install: vi.fn(), uninstall: vi.fn(), forgetKey: vi.fn(), status: vi.fn(), config: vi.fn(async () => ({})) } } });
+    const w = mountRegistryTab({ tools: { recipes: { list, install: vi.fn(), uninstall: vi.fn(), forgetKey: vi.fn(), status: vi.fn(), config: vi.fn(async () => ({})) } as any } as any }) as any;
     await flushPromises();
 
     expect(w.find('[data-testid="registry-error"]').text()).toContain('Network error');
@@ -216,8 +216,8 @@ describe('RegistryTab — list and install', () => {
           forgetKey: vi.fn(),
           status: vi.fn(),
           config: vi.fn(async () => ({})),
-        },
-      },
+        } as any,
+      } as any,
     });
     await flushPromises();
 
@@ -241,8 +241,8 @@ describe('RegistryTab — list and install', () => {
           forgetKey: vi.fn(),
           status: vi.fn(),
           config: vi.fn(async () => ({})),
-        },
-      },
+        } as any,
+      } as any,
     });
     await flushPromises();
 
@@ -292,7 +292,7 @@ describe('PasteConfigTab — dry-run and import', () => {
     };
 
     const importFn = vi.fn(async () => dryRunResponse);
-    const w = mountPasteTab({ mcp: { listServers: vi.fn(async () => []), startStream: vi.fn(async () => 'sub'), stopStream: vi.fn(), importClaudeDesktopConfig: importFn } });
+    const w = mountPasteTab({ mcp: { listServers: vi.fn(async () => []), startStream: vi.fn(async () => 'sub'), stopStream: vi.fn(), importClaudeDesktopConfig: importFn } as any }) as any;
 
     // Fill in textarea
     const textarea = w.find('[data-testid="paste-config-textarea"]');
@@ -330,7 +330,7 @@ describe('PasteConfigTab — dry-run and import', () => {
       },
     };
     const importFn = vi.fn(async () => dryRunResponse);
-    const w = mountPasteTab({ mcp: { listServers: vi.fn(async () => []), startStream: vi.fn(async () => 'sub'), stopStream: vi.fn(), importClaudeDesktopConfig: importFn } });
+    const w = mountPasteTab({ mcp: { listServers: vi.fn(async () => []), startStream: vi.fn(async () => 'sub'), stopStream: vi.fn(), importClaudeDesktopConfig: importFn } as any }) as any;
 
     await w.find('[data-testid="paste-config-textarea"]').setValue('{}');
     await w.find('[data-testid="paste-translate-btn"]').trigger('click');
@@ -358,7 +358,7 @@ describe('PasteConfigTab — dry-run and import', () => {
       },
     };
     const importFn = vi.fn(async () => response);
-    const w = mountPasteTab({ mcp: { listServers: vi.fn(async () => []), startStream: vi.fn(async () => 'sub'), stopStream: vi.fn(), importClaudeDesktopConfig: importFn } });
+    const w = mountPasteTab({ mcp: { listServers: vi.fn(async () => []), startStream: vi.fn(async () => 'sub'), stopStream: vi.fn(), importClaudeDesktopConfig: importFn } as any }) as any;
 
     await w.find('[data-testid="paste-config-textarea"]').setValue('{}');
     await w.find('[data-testid="paste-translate-btn"]').trigger('click');
@@ -399,7 +399,7 @@ describe('PasteConfigTab — dry-run and import', () => {
       },
     };
     const importFn = vi.fn(async () => response);
-    const w = mountPasteTab({ mcp: { listServers: vi.fn(async () => []), startStream: vi.fn(async () => 'sub'), stopStream: vi.fn(), importClaudeDesktopConfig: importFn } });
+    const w = mountPasteTab({ mcp: { listServers: vi.fn(async () => []), startStream: vi.fn(async () => 'sub'), stopStream: vi.fn(), importClaudeDesktopConfig: importFn } as any }) as any;
 
     await w.find('[data-testid="paste-config-textarea"]').setValue('{}');
     await w.find('[data-testid="paste-translate-btn"]').trigger('click');
@@ -440,7 +440,7 @@ describe('PasteConfigTab — dry-run and import', () => {
       },
     };
     const importFn = vi.fn(async () => response);
-    const w = mountPasteTab({ mcp: { listServers: vi.fn(async () => []), startStream: vi.fn(async () => 'sub'), stopStream: vi.fn(), importClaudeDesktopConfig: importFn } });
+    const w = mountPasteTab({ mcp: { listServers: vi.fn(async () => []), startStream: vi.fn(async () => 'sub'), stopStream: vi.fn(), importClaudeDesktopConfig: importFn } as any }) as any;
 
     await w.find('[data-testid="paste-config-textarea"]').setValue('{}');
     await w.find('[data-testid="paste-translate-btn"]').trigger('click');
@@ -452,7 +452,7 @@ describe('PasteConfigTab — dry-run and import', () => {
 
   it('shows translate error on API failure', async () => {
     const importFn = vi.fn(async () => { throw new Error('Bad JSON'); });
-    const w = mountPasteTab({ mcp: { listServers: vi.fn(async () => []), startStream: vi.fn(async () => 'sub'), stopStream: vi.fn(), importClaudeDesktopConfig: importFn } });
+    const w = mountPasteTab({ mcp: { listServers: vi.fn(async () => []), startStream: vi.fn(async () => 'sub'), stopStream: vi.fn(), importClaudeDesktopConfig: importFn } as any }) as any;
 
     await w.find('[data-testid="paste-config-textarea"]').setValue('bad json');
     await w.find('[data-testid="paste-translate-btn"]').trigger('click');

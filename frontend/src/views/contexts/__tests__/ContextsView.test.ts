@@ -34,7 +34,7 @@ function provide(opts: {
     contexts: {
       list: async () => tree,
       listAll: async () => treeAll,
-      get: async (path) => {
+      get: async (path: string) => {
         const v = files[path];
         if (v === undefined) {
           throw new Error(`not found: ${path}`);
@@ -53,11 +53,11 @@ function provide(opts: {
         accepted_edges: 0,
         conflicts: [],
       })),
-      promote: async (nodeID) => ({
+      promote: async (nodeID: string) => ({
         updated_node_id: nodeID,
         new_classification: 'org_shared' as const,
       }),
-    },
+    } as any,
   });
   return { client };
 }

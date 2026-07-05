@@ -36,13 +36,13 @@ function provide(opts: {
       bulkPurge: bulkPurgeFn,
       startStream: async () => 'fake-sub',
       stopStream: async () => {},
-      verifyChain: async () => ({ verified: true, checkedCount: 0 }),
-      verifyEntry: async () => ({ verified: true }),
+      verifyChain: async () => ({ verified: true, rows_checked: 0 }),
+      verifyEntry: async () => true,
       export: async () => 'fake-export-path',
       listSavedQueries: async () => [],
       saveQuery: async () => {},
       deleteQuery: async () => {},
-    },
+    } as any,
   });
   return { client, bulkPurgeFn, listEntriesFn };
 }

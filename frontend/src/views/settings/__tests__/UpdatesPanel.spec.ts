@@ -50,8 +50,6 @@ function buildClient(initial: Settings) {
         saveTheme: async () => undefined,
         getMemory: async () => false,
         setMemory: async () => undefined,
-        getConfirmEach: async () => true,
-        setConfirmEach: async () => undefined,
         getWebFetchEnabled: async () => false,
         setWebFetchEnabled: async () => undefined,
         getWebSearch: async () => false,
@@ -78,7 +76,7 @@ function buildClient(initial: Settings) {
         setFSRequestAccessEnabled: async () => undefined,
         getAutonomy: async () => ({ level: null, overrides: {} }),
         setAutonomy: async () => undefined,
-      },
+      } as any,
     }),
     set,
     get,
@@ -101,7 +99,7 @@ function mountPanel(opts: {
   };
   const startCheck = vi.fn(async () => {});
   const installLatest = vi.fn(async () => {});
-  const unskipVersion = vi.fn(async () => {});
+  const unskipVersion = vi.fn(async (_v: string) => {});
   let skipped = [...(opts.skipped ?? [])];
   const updater = createFakeUpdateClient({
     status: async () => fullStatus,

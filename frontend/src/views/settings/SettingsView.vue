@@ -179,11 +179,9 @@ const settings = ref<Settings>({
   accent: 'default',
   windowSize: { width: 1280, height: 800 },
   memoryEnabled: false,
-  confirmEachDisabled: false,
 });
 const appInfo = ref<AppInfo | null>(null);
 const restoreOnLaunch = ref(true);
-const confirmEachEnabled = ref(true);
 // multimodal-io-01KQ8TDF WP08 / FR-023
 const multimodalInputEnabled = ref(true);
 // multimodal-io-extended-01KQ8TD2 WP08 — env flag gate (HARNESS_MULTIMODAL_OUT).
@@ -531,11 +529,6 @@ async function refresh() {
     // Keep defaults on error.
   }
   try {
-    confirmEachEnabled.value = await client.settings.getConfirmEach();
-  } catch {
-    confirmEachEnabled.value = true;
-  }
-  try {
     multimodalInputEnabled.value = await client.settings.getMultimodalInput();
   } catch {
     multimodalInputEnabled.value = true;
@@ -776,16 +769,6 @@ async function onDrop(_evt: DragEvent, overId: string) {
 
 function onDragEnd() {
   draggedId.value = null;
-}
-
-async function toggleConfirmEach() {
-  confirmEachEnabled.value = !confirmEachEnabled.value;
-  try {
-    await client.settings.setConfirmEach(confirmEachEnabled.value);
-  } catch {
-    // Revert visually if the write failed.
-    confirmEachEnabled.value = !confirmEachEnabled.value;
-  }
 }
 
 // multimodal-io-01KQ8TDF WP08 / FR-023 — user-side multimodal toggle.
@@ -1379,27 +1362,6 @@ onMounted(() => {
           on resumes search immediately. Search activity is logged with a
           truncated <span class="font-mono">query_hash</span>; the raw query
           is never recorded.
-        </p>
-      </section>
-
-      <section>
-        <h2 class="font-ui text-[11px] uppercase tracking-[0.18em] text-ink-subtle">
-          Tool execution
-        </h2>
-        <label class="mt-2 flex items-center gap-3 font-ui text-[12px] text-ink">
-          <input
-            type="checkbox"
-            class="accent-accent"
-            :checked="confirmEachEnabled"
-            data-testid="confirm-each-toggle"
-            @change="toggleConfirmEach"
-          />
-          Show confirmation modal for tools marked <span class="font-mono">confirm_each</span>
-        </label>
-        <p class="mt-1 text-[11px] text-ink-muted">
-          When off, tools whose policy resolves to <span class="font-mono">confirm_each</span>
-          dispatch automatically (equivalent to <span class="font-mono">auto_allow</span>).
-          Default: ON.
         </p>
       </section>
 

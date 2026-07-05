@@ -63,12 +63,12 @@ function buildClient(store: FakeStore) {
   return createFakeHarnessClient({
     projects: {
       list: async () => [...store.projects],
-      get: async (id) => {
+      get: async (id: string) => {
         const p = store.projects.find((x) => x.id === id);
         if (!p) throw new Error(`project ${id} not found`);
         return p;
       },
-      create: async (name, description) => {
+      create: async (name: string, description: string | undefined) => {
         const p: Project = {
           id: `p-${store.nextProjectId++}`,
           name,
@@ -79,15 +79,15 @@ function buildClient(store: FakeStore) {
         store.projects.push(p);
         return p;
       },
-      rename: async (id, name) => {
+      rename: async (id: string, name: string) => {
         const p = store.projects.find((x) => x.id === id);
         if (p) p.name = name;
       },
-      updateDescription: async (id, description) => {
+      updateDescription: async (id: string, description: string) => {
         const p = store.projects.find((x) => x.id === id);
         if (p) p.description = description;
       },
-      remove: async (id, deleteSessions) => {
+      remove: async (id: string, deleteSessions: boolean) => {
         store.projects = store.projects.filter((p) => p.id !== id);
         if (deleteSessions) {
           store.sessions = store.sessions.filter((s) => s.projectId !== id);
@@ -97,25 +97,25 @@ function buildClient(store: FakeStore) {
           }
         }
       },
-      addSession: async (projectId, sessionId) => {
+      addSession: async (projectId: string, sessionId: string) => {
         const s = store.sessions.find((x) => x.id === sessionId);
         if (s) s.projectId = projectId;
       },
-      removeSession: async (sessionId) => {
+      removeSession: async (sessionId: string) => {
         const s = store.sessions.find((x) => x.id === sessionId);
         if (s) s.projectId = undefined;
       },
-      listSessions: async (projectId) =>
+      listSessions: async (projectId: string) =>
         store.sessions.filter((s) => s.projectId === projectId),
-    },
+    } as any,
     sessions: {
       list: async () => [...store.sessions],
-      get: async (id) => {
+      get: async (id: string) => {
         const s = store.sessions.find((x) => x.id === id);
         if (!s) throw new Error(`session ${id} not found`);
         return s;
       },
-      create: async (name) => {
+      create: async (name: string) => {
         const s: Session = {
           id: `s-${store.nextSessionId++}`,
           name,
@@ -132,7 +132,7 @@ function buildClient(store: FakeStore) {
       startStream: async () => 'fake-sub',
       stopStream: async () => undefined,
       listMessages: async () => [],
-      appendMessage: async (id, role, content) => ({
+      appendMessage: async (id: string, role: string, content: string) => ({
         id: `m-${Math.random().toString(36).slice(2, 8)}`,
         sessionId: id,
         role,
@@ -142,17 +142,17 @@ function buildClient(store: FakeStore) {
       saveDraft: async () => undefined,
       loadDraft: async () => '',
       setSystemPrompt: async () => undefined,
-      moveToProject: async (id, projectId) => {
+      moveToProject: async (id: string, projectId: string) => {
         const s = store.sessions.find((x) => x.id === id);
         if (s) s.projectId = projectId === '' ? undefined : projectId;
       },
-    },
+    } as any,
     attachments: {
-      list: async ({ scopeKind, scopeId }) => {
+      list: async ({ scopeKind, scopeId }: { scopeKind: any; scopeId?: string }) => {
         const key = scopeKey(scopeKind, scopeId ?? '');
         return [...(store.attachmentsByScope.get(key) ?? [])];
       },
-      listResolved: async (sessionId) => {
+      listResolved: async (sessionId: string) => {
         const sess = store.sessions.find((x) => x.id === sessionId);
         const out: Attachment[] = [];
         out.push(...(store.attachmentsByScope.get(scopeKey('global', '')) ?? []));
@@ -164,7 +164,7 @@ function buildClient(store: FakeStore) {
         out.push(...(store.attachmentsByScope.get(scopeKey('session', sessionId)) ?? []));
         return out;
       },
-      add: async (input) => {
+      add: async (input: any) => {
         const scopeId = input.scopeId ?? '';
         const att: Attachment = {
           id: `a-${store.nextAttachmentId++}`,
@@ -184,7 +184,7 @@ function buildClient(store: FakeStore) {
       },
       remove: async () => undefined,
       reorder: async () => undefined,
-      refresh: async (id) =>
+      refresh: async (id: string) =>
         ({
           id,
           scopeKind: 'project',
@@ -195,9 +195,9 @@ function buildClient(store: FakeStore) {
           position: 0,
           createdAt: '',
         } as Attachment),
-    },
+    } as any,
     memory: {
-      listChunks: async (filter) => {
+      listChunks: async (filter: any) => {
         if (!filter) return [...store.memory];
         return store.memory.filter((c) => {
           if (filter.scopeKind && c.scopeKind !== filter.scopeKind) return false;
@@ -209,7 +209,7 @@ function buildClient(store: FakeStore) {
       rememberMessage: async () => 'mem-id',
       promoteScope: async () => 'mem-id',
       forget: async () => undefined,
-    },
+    } as any,
   });
 }
 

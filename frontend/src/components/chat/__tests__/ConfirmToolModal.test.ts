@@ -100,6 +100,7 @@ describe('ConfirmToolModal', () => {
   it('calls resolveConfirm with the right decision on Allow click', async () => {
     const resolveSpy = vi.fn(async () => undefined);
     const w = mountModal({
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       llm: {
         listProviders: async () => [],
         startStream: async () => 'sub',
@@ -110,7 +111,7 @@ describe('ConfirmToolModal', () => {
         testProvider: async () => ({ success: true, latency_ms: 0, message: 'ok' }),
         listModels: async () => [],
         resolveConfirm: resolveSpy,
-      },
+      } as any,
     });
     const rt = (window as unknown as { runtime: FakeRuntime }).runtime;
     rt.emit('llm:tool-confirm-request', makeRequest({ request_id: 'r-allow' }));
@@ -128,6 +129,7 @@ describe('ConfirmToolModal', () => {
   it('calls resolveConfirm with always_deny on the Always deny click', async () => {
     const resolveSpy = vi.fn(async () => undefined);
     const w = mountModal({
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       llm: {
         listProviders: async () => [],
         startStream: async () => 'sub',
@@ -138,7 +140,7 @@ describe('ConfirmToolModal', () => {
         testProvider: async () => ({ success: true, latency_ms: 0, message: 'ok' }),
         listModels: async () => [],
         resolveConfirm: resolveSpy,
-      },
+      } as any,
     });
     const rt = (window as unknown as { runtime: FakeRuntime }).runtime;
     rt.emit('llm:tool-confirm-request', makeRequest({ request_id: 'r-deny' }));
@@ -182,6 +184,7 @@ describe('ConfirmToolModal', () => {
       throw new Error('backend down');
     });
     const w = mountModal({
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       llm: {
         listProviders: async () => [],
         startStream: async () => 'sub',
@@ -192,7 +195,7 @@ describe('ConfirmToolModal', () => {
         testProvider: async () => ({ success: true, latency_ms: 0, message: 'ok' }),
         listModels: async () => [],
         resolveConfirm: resolveSpy,
-      },
+      } as any,
     });
     const rt = (window as unknown as { runtime: FakeRuntime }).runtime;
     rt.emit('llm:tool-confirm-request', makeRequest());

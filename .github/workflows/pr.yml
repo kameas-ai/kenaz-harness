@@ -197,7 +197,6 @@ jobs:
 
       - name: typecheck
         run: npm run typecheck --if-present
-        continue-on-error: true # pre-existing typecheck warnings; soften until cleaned
 
       - name: vitest
         run: npm test -- --run

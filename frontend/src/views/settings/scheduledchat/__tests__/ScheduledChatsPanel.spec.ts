@@ -200,7 +200,6 @@ describe('ScheduledChatsPanel', () => {
     const initialCallCount = listMock.mock.calls.length;
 
     // Simulate the modal emitting "saved"
-    const modal = wrapper.findComponent({ name: 'ScheduledChatFormModal' } as any);
     // The modal is stubbed so emit via wrapper.vm directly
     await (wrapper.vm as any).handleSaved(FAKE_RUN);
     await flushPromises();

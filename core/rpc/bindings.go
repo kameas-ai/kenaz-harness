@@ -286,6 +286,16 @@ func (b *Bindings) Sessions_StopCapture(sessionID string) error {
 	return b.api.Sessions_StopCapture(b.ctx(), sessionID)
 }
 
+// Sessions_ResumeMessage opens a continuation stream against the partial
+// assistant row identified by sessionID + messageID. The row must have
+// streaming_failed_at set and streaming_recoverable=true. Returns a
+// ResumeMessageResult whose SubscriptionID can be drained via the same
+// LLM stream-chunk / closed topics used for normal turns.
+// (long-turn-resilience-01KR3PRS WP03 / p0-wiring-fixes-3TVMG0MX WP06)
+func (b *Bindings) Sessions_ResumeMessage(sessionID, messageID string) (sessions.ResumeMessageResult, error) {
+	return b.api.Sessions().ResumeMessage(b.ctx(), sessionID, messageID)
+}
+
 // ── llm ────────────────────────────────────────────────────────────────
 
 func (b *Bindings) LLM_ListProviders() ([]llm.Provider, error) {
@@ -840,26 +850,6 @@ func (b *Bindings) Settings_SetMemory(enabled bool) error {
 	return b.storeFn().SaveMemory(enabled)
 }
 
-// Settings_GetConfirmEach exposes the WP05 confirm-each tool-call
-// modal opt-in flag (default true). The frontend toggle and the
-// toolloop's per-Run flag check both read this.
-func (b *Bindings) Settings_GetConfirmEach() (bool, error) {
-	defer sentry.WrapBinding("Settings_GetConfirmEach")()
-	if b.storeFn == nil {
-		return true, nil
-	}
-	return b.storeFn().LoadConfirmEach()
-}
-
-// Settings_SetConfirmEach persists the WP05 confirm-each opt-in flag.
-func (b *Bindings) Settings_SetConfirmEach(enabled bool) error {
-	defer sentry.WrapBinding("Settings_SetConfirmEach")()
-	if b.storeFn == nil {
-		return nil
-	}
-	return b.storeFn().SaveConfirmEach(enabled)
-}
-
 // Settings_GetWebSearch exposes the local-first web-search built-in
 // opt-in flag (default false). Surfaced as a toggle row in the Tools
 // panel; toolloop reads this on every Run boundary so toggling takes
@@ -1286,6 +1276,18 @@ func (b *Bindings) Settings_GetMCPAutoRestart() (bool, error) {
 func (b *Bindings) Settings_SetMCPAutoRestart(enabled bool) error {
 	defer sentry.WrapBinding("Settings_SetMCPAutoRestart")()
 	return b.api.Settings().SetMCPAutoRestart(b.ctx(), enabled)
+}
+
+// Settings_GetAutoTitleEnabled returns whether session auto-titling is on.
+// Default true on a fresh install.
+// (p0-wiring-fixes-3TVMG0MX WP05)
+func (b *Bindings) Settings_GetAutoTitleEnabled() (bool, error) {
+	return b.api.Settings().GetAutoTitleEnabled(b.ctx())
+}
+
+// Settings_SetAutoTitleEnabled persists the auto-title feature toggle.
+func (b *Bindings) Settings_SetAutoTitleEnabled(enabled bool) error {
+	return b.api.Settings().SetAutoTitleEnabled(b.ctx(), enabled)
 }
 
 // EmbedderConfigResult is the wire shape returned by
@@ -2395,6 +2397,30 @@ func (b *Bindings) Workflows_ScheduleNextFire(workflowID string) (string, error)
 func (b *Bindings) Workflows_CancelRun(runID string) error {
 	defer sentry.WrapBinding("Workflows_CancelRun")()
 	return b.api.Workflows().CancelRun(b.ctx(), runID)
+}
+
+// ── workflow catalog bindings (p0-wiring-fixes WP02) ──────────────────────
+// Workflows_CatalogList returns the full catalog of installable workflow
+// templates. Delegates to the WorkflowsAPI catalog seam (WP03 of
+// workflows-agentic-01KW2D3X). Returns ErrCatalogUnavailable when no
+// catalog backend is wired.
+func (b *Bindings) Workflows_CatalogList() ([]workflowsview.CatalogEntry, error) {
+	return b.api.Workflows().Catalog_List(b.ctx())
+}
+
+// Workflows_CatalogGet returns the full YAML source + entry metadata for
+// the catalog item identified by id. The preview drawer uses this to render
+// the install confirmation and the YAML diff.
+func (b *Bindings) Workflows_CatalogGet(id string) (workflowsview.CatalogPreview, error) {
+	return b.api.Workflows().Catalog_Get(b.ctx(), id)
+}
+
+// Workflows_CatalogInstall copies the catalog item identified by id into
+// the user's workflow store and optionally arms a cron schedule. Returns
+// ErrNotFound when id is unknown; returns ErrCatalogUnavailable when no
+// catalog backend is wired.
+func (b *Bindings) Workflows_CatalogInstall(id string) (workflowsview.CatalogInstallResult, error) {
+	return b.api.Workflows().Catalog_Install(b.ctx(), id)
 }
 
 // ── scheduled chat runs (scheduled-chat-runs-01KX5R8B, WP04) ──────────

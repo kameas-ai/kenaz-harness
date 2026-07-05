@@ -147,7 +147,7 @@ describe('ChatInput (chat-ui)', () => {
     }));
     const w = mountInput(
       { sessionId: 'sess-1' },
-      { attachments: { ...({} as never), addMedia } as unknown as HarnessClient['attachments'] },
+      { attachments: { ...({}), addMedia } as unknown as HarnessClient['attachments'] },
     );
     const file = new File([new Uint8Array([0x89, 0x50, 0x4e, 0x47])], 'pic.png', {
       type: 'image/png',
@@ -175,7 +175,7 @@ describe('ChatInput (chat-ui)', () => {
     }));
     const w = mountInput(
       { sessionId: 'sess-1' },
-      { attachments: { ...({} as never), addMedia } as unknown as HarnessClient['attachments'] },
+      { attachments: { ...({}), addMedia } as unknown as HarnessClient['attachments'] },
     );
     const file = new File([new Uint8Array([0x25, 0x50, 0x44, 0x46])], 'doc.pdf', {
       type: 'application/pdf',
@@ -203,7 +203,7 @@ describe('ChatInput (chat-ui)', () => {
     }));
     const w = mountInput(
       { sessionId: 'sess-1' },
-      { attachments: { ...({} as never), add } as unknown as HarnessClient['attachments'] },
+      { attachments: { ...({}), add } as unknown as HarnessClient['attachments'] },
     );
     const file = new File(['package main\n'], 'main.go', { type: '' });
     const cmp = w.vm as unknown as {
@@ -262,7 +262,7 @@ describe('ChatInput (chat-ui)', () => {
     }));
     const w = mountInput(
       { sessionId: 'sess-1' },
-      { attachments: { ...({} as never), addMedia } as unknown as HarnessClient['attachments'] },
+      { attachments: { ...({}), addMedia } as unknown as HarnessClient['attachments'] },
     );
     const file = new File([new Uint8Array([0x89, 0x50, 0x4e, 0x47])], 'pic.png', {
       type: 'image/png',
@@ -345,7 +345,7 @@ describe('ChatInput (chat-ui)', () => {
           pathComplete,
           readFile,
         } as unknown as HarnessClient['shell'],
-        attachments: { ...({} as never), add } as unknown as HarnessClient['attachments'],
+        attachments: { ...({}), add } as unknown as HarnessClient['attachments'],
       },
     );
     const textarea = w.find<HTMLTextAreaElement>('textarea');

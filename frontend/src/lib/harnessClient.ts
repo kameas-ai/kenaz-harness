@@ -150,7 +150,6 @@ import type {
   LocalRuntimeInfo,
   LocalRuntimeConfigResult,
   CustomTemplateSummary,
-  CustomCapabilityMatrix,
   CustomProbeRequest,
   CustomProbeResult,
   FallbackChain,
@@ -301,6 +300,11 @@ interface WailsBindingsLike {
     source: string,
   ): Promise<RotationResult>;
   LLM_ResumeAfterKeyRotation(resumeToken: string): Promise<void>;
+  LLM_TestProviderKey(
+    kind: string,
+    host: string,
+    plaintextKey: string,
+  ): Promise<import('./types').ProviderKeyTestResult>;
   LLM_ListDetectedLocalRuntimes(): Promise<LocalRuntimeInfo[]>;
   LLM_AutoConfigureLocalRuntime(kind: string): Promise<LocalRuntimeConfigResult>;
   LLM_RescanLocalRuntimes(): Promise<LocalRuntimeInfo[]>;
@@ -327,7 +331,6 @@ interface WailsBindingsLike {
   MCP_ImportClaudeDesktopConfig(
     req: MCPImportRequest,
   ): Promise<MCPImportResponse>;
-  MCP_TestRecipe(recipe: WireRecipe): Promise<MCPTestResult>;
 
   A2A_ListCards(): Promise<A2ACard[]>;
   A2A_StartStream(): Promise<string>;
@@ -399,8 +402,6 @@ interface WailsBindingsLike {
   Settings_Set(s: Settings): Promise<void>;
   Settings_GetMemory(): Promise<boolean>;
   Settings_SetMemory(enabled: boolean): Promise<void>;
-  Settings_GetConfirmEach(): Promise<boolean>;
-  Settings_SetConfirmEach(enabled: boolean): Promise<void>;
   Settings_GetWebFetchEnabled(): Promise<boolean>;
   Settings_SetWebFetchEnabled(enabled: boolean): Promise<void>;
   Settings_GetWebSearch(): Promise<boolean>;
@@ -805,6 +806,11 @@ interface WailsBindingsLike {
   // ── audit-log-enhancement-01KX5R8F WP07 — retention settings ──────────
   Settings_GetAuditSettings(): Promise<import('./types').AuditSettings>;
   Settings_SetAuditSettings(s: import('./types').AuditSettings): Promise<void>;
+
+  // ── plan-mode-posture-01KZNP3F WP06 — plan approval actions ─────────────
+  Planmode_Approve(req: { session_id: string; plan_id: string }): Promise<Record<string, unknown>>;
+  Planmode_Discard(req: { session_id: string; plan_id: string }): Promise<Record<string, unknown>>;
+  Planmode_Edit(req: { session_id: string; plan_id: string; edited_plan: string }): Promise<Record<string, unknown>>;
 }
 
 
@@ -1452,16 +1458,6 @@ export interface MCPClient {
   importClaudeDesktopConfig(
     req: MCPImportRequest,
   ): Promise<MCPImportResponse>;
-  /**
-   * testRecipe — opens a one-shot connection to the MCP server described
-   * by recipe, performs the initialize + capability listing handshake
-   * (30 s hard timeout), and returns a TestResult summary.
-   *
-   * The recipe is NOT registered with the production MCP pool — this is
-   * a pure fire-and-forget connectivity check (mission
-   * mcp-server-install-01KQ8TDP, WP07).
-   */
-  testRecipe(recipe: Recipe): Promise<MCPTestResult>;
 }
 
 export type {
@@ -1472,7 +1468,6 @@ export type {
   MCPImportStatus,
   MCPTranslationReport,
   MCPImportWrotePath,
-  MCPTestResult,
   AttachmentLimitsView,
 };
 
@@ -1632,10 +1627,6 @@ export interface SettingsClient {
   getMemory(): Promise<boolean>;
   /** Persist the long-term-memory opt-in flag. */
   setMemory(enabled: boolean): Promise<void>;
-  /** Read the WP05 confirm-each modal opt-in flag (default true). */
-  getConfirmEach(): Promise<boolean>;
-  /** Persist the WP05 confirm-each modal opt-in flag. */
-  setConfirmEach(enabled: boolean): Promise<void>;
   /**
    * Read the kenaz__web_fetch built-in opt-in (default false).
    * Surfaced as a toggle row in the Tools panel.
@@ -2967,7 +2958,6 @@ export function createHarnessClient(): HarnessClient {
       testRecipe: (recipeID, env = {}, config = {}) =>
         b().MCP_TestRecipe(recipeID, env, config),
       importClaudeDesktopConfig: (req) => b().MCP_ImportClaudeDesktopConfig(req),
-      testRecipe: (recipe) => b().MCP_TestRecipe(recipe as WireRecipe),
     },
     a2a: {
       listCards: () => b().A2A_ListCards(),
@@ -3056,8 +3046,6 @@ export function createHarnessClient(): HarnessClient {
       saveTheme: (t) => b().SaveTheme(t),
       getMemory: () => b().Settings_GetMemory(),
       setMemory: (enabled) => b().Settings_SetMemory(enabled),
-      getConfirmEach: () => b().Settings_GetConfirmEach(),
-      setConfirmEach: (enabled) => b().Settings_SetConfirmEach(enabled),
       getWebFetchEnabled: () => b().Settings_GetWebFetchEnabled(),
       setWebFetchEnabled: (enabled) => b().Settings_SetWebFetchEnabled(enabled),
       getWebSearch: () => b().Settings_GetWebSearch(),
@@ -3734,15 +3722,14 @@ export function createFakeHarnessClient(
       }),
       testRecipe: async () => ({
         ok: true,
-        serverName: 'fake-server',
-        serverVersion: '0.0.0',
-        protocolVersion: '2024-11-05',
-        toolCount: 0,
-        resourceCount: 0,
-        promptCount: 0,
-        stderrTail: '',
-        errorMessage: '',
-        durationMs: 1,
+        protocol_version: '2024-11-05',
+        server_info: { name: 'fake-server', version: '0.0.0' },
+        capabilities: {},
+        tool_count: 0,
+        resource_count: 0,
+        prompt_count: 0,
+        stderr_tail: '',
+        duration_ms: 1,
       }),
     },
     a2a: {
@@ -3892,7 +3879,6 @@ export function createFakeHarnessClient(
         accent: 'default',
         windowSize: { width: 1280, height: 800 },
         memoryEnabled: false,
-        confirmEachDisabled: false,
       }),
       set: noop,
       loadRoute: async () => '/sessions',
@@ -3902,8 +3888,6 @@ export function createFakeHarnessClient(
       saveTheme: noop,
       getMemory: async () => false,
       setMemory: noop,
-      getConfirmEach: async () => true,
-      setConfirmEach: noop,
       getWebFetchEnabled: async () => false,
       setWebFetchEnabled: noop,
       getWebSearch: async () => false,
@@ -3963,7 +3947,7 @@ export function createFakeHarnessClient(
       getAutoTitleEnabled: async () => true,
       setAutoTitleEnabled: noop,
       // audit-log-enhancement-01KX5R8F WP07
-      getAuditSettings: async () => ({ strategy: 'keep_forever', windowDays: 90 }),
+      getAuditSettings: async () => ({ strategy: 'keep_forever', window_days: 90 }),
       setAuditSettings: noop,
       // fleet-auth-foundation-01NDFSEX08 WP05
       fleetSignIn: async () => ({

@@ -75,7 +75,7 @@ describe('MessageBubble branch-from-turn button', () => {
     // by confirming the existing instance. In practice the flag is read once
     // at mount-time; if the flag is changed after mount, the button stays
     // hidden on the next mount attempt as well).
-    const w = mount(MessageBubble, {
+    void mount(MessageBubble, {
       props: { role: 'assistant', content: 'reply', messageId: 'm-5' },
     });
     // The component reads localStorage at the top of <script setup>, which

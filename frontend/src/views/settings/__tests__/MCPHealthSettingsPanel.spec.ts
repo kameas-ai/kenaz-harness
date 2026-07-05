@@ -17,7 +17,7 @@ function buildClient(initialAutoRestart: boolean) {
     settings: {
       getMCPAutoRestart,
       setMCPAutoRestart,
-    },
+    } as any,
   });
   return { client, getMCPAutoRestart, setMCPAutoRestart };
 }
@@ -74,7 +74,7 @@ describe('MCPHealthSettingsPanel', () => {
         setMCPAutoRestart: async () => {
           throw new Error('store write failed');
         },
-      },
+      } as any,
     });
     const wrapper = mount(MCPHealthSettingsPanel, {
       global: { provide: { [HarnessClientKey as symbol]: client } },

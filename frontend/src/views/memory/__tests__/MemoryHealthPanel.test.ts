@@ -73,7 +73,7 @@ function mountWith(opts: MountOpts = {}) {
         lastErrorAt: null,
         recentErrorCount: 0,
       }),
-    },
+    } as any,
   });
   const wrapper = mount(MemoryHealthPanel, {
     global: {
