@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"time"
 )
 
 // PortValues is the typed-loose carrier for input/output port data
@@ -229,6 +230,20 @@ type Env struct {
 	// nil means no schema validation — the executor degrades to well-
 	// formedness-only checking (JSON must parse as an object).
 	ToolSchemas map[string][]byte // toolName → JSON Schema bytes
+
+	// ToolCallTimeout is the per-call deadline applied by tool_dispatch.
+	// Zero means no timeout (the existing behaviour). When set, any tool
+	// call that does not complete within this duration receives a timeout
+	// is_error result so the model sees the failure rather than the loop
+	// hanging indefinitely (FR-007 / agent-loop-robustness-parity WP07).
+	ToolCallTimeout time.Duration
+
+	// MutatingTools is the set of tool names that MUST NOT run concurrently
+	// with other mutating tools (FR-007 mutation-safety). When non-empty,
+	// the dispatcher serialises all calls whose name is in MutatingTools;
+	// read-only tools still run in parallel up to MaxConcurrent.
+	// nil means all tools are treated as read-only (parallel by default).
+	MutatingTools map[string]bool
 
 	// registry is the executor lookup table the control executors
 	// (Loop, Retry, Parallel) use to dispatch into peer nodes. The
