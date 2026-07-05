@@ -197,6 +197,44 @@ export function friendlyUnsupportedFeatureError(err: unknown): string | null {
   return `Feature "${parsed.feature}" is not supported by model "${parsed.modelId}".`;
 }
 
+// ── ServedUnsupportedError (served-mode-honesty-WZQR1ZJE WP01) ───────────
+
+/**
+ * ServedUnsupportedError is thrown by createUnsupportedServedClient() for
+ * every RPC method that is NOT wired to the real HTTP/WS transport in served
+ * mode.  Components catch this error and render an honest "not available in
+ * served mode" state instead of fabricated data.
+ *
+ * Use isServedUnsupportedError() to narrow an unknown catch value.
+ */
+export class ServedUnsupportedError extends Error {
+  /** The RPC method name that was called. */
+  readonly method: string;
+
+  constructor(method: string) {
+    super(`served mode: "${method}" is not available in served mode`);
+    this.name = 'ServedUnsupportedError';
+    this.method = method;
+    // Maintain proper prototype chain in transpiled envs.
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+
+  /**
+   * friendly returns a short, user-facing message suitable for display in a
+   * "not available" badge or empty-state panel.
+   */
+  friendly(): string {
+    return 'This feature is not available in served mode. Run the harness as a desktop app to use it.';
+  }
+}
+
+/**
+ * isServedUnsupportedError narrows an unknown catch value to ServedUnsupportedError.
+ */
+export function isServedUnsupportedError(err: unknown): err is ServedUnsupportedError {
+  return err instanceof ServedUnsupportedError;
+}
+
 // ── helpers ──────────────────────────────────────────────────────────────
 
 function toErrorString(err: unknown): string {

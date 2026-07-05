@@ -5,7 +5,15 @@
  * WebSocket behaviour is validated with a minimal ws-mock helper.
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { ServedTransport } from '@/lib/servedTransport';
+import {
+  ServedTransport,
+  retryReconnectNow,
+  stopReconnectPoller,
+} from '@/lib/servedTransport';
+import {
+  setConnectionState,
+  useConnectionState,
+} from '@/lib/useConnectionState';
 
 // ── fetch stub helpers ────────────────────────────────────────────────────────
 
@@ -131,6 +139,59 @@ describe('ServedTransport.call', () => {
   });
 });
 
+// ── retryReconnectNow (ConnectionLostBanner Retry) ────────────────────────────
+
+describe('retryReconnectNow', () => {
+  let origFetch: typeof globalThis.fetch;
+
+  beforeEach(() => {
+    origFetch = globalThis.fetch;
+    setConnectionState('ready');
+  });
+
+  afterEach(() => {
+    globalThis.fetch = origFetch;
+    stopReconnectPoller();
+    setConnectionState('ready');
+  });
+
+  it('probes /healthz immediately and recovers to ready on success', async () => {
+    // 1. Drive the transport into the "lost" state by failing a /rpc call —
+    //    this records the reconnect target (_healthcheckURL) and starts the
+    //    backoff poller.
+    globalThis.fetch = makeFetchStub(async () => {
+      throw new TypeError('network down');
+    });
+    const transport = new ServedTransport({ baseURL: 'http://127.0.0.1:7880' });
+    await expect(transport.call('AppInfo')).rejects.toThrow(/network error/);
+
+    const state = useConnectionState();
+    expect(state.value).toBe('lost');
+
+    // 2. Server comes back; a user clicks Retry. The immediate probe must
+    //    hit /healthz and flip the state back to ready without waiting for
+    //    the backoff timer.
+    const hit: string[] = [];
+    globalThis.fetch = makeFetchStub(async (input) => {
+      hit.push(String(input));
+      return jsonOk({ ok: true });
+    });
+
+    retryReconnectNow();
+    // Allow the awaited fetch inside attemptReconnect to resolve.
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(hit.some((u) => u.endsWith('/healthz'))).toBe(true);
+    expect(state.value).toBe('ready');
+  });
+
+  it('does not throw when invoked (safe in native mode)', () => {
+    // Called with no active/failed transport — must be a safe no-op, never
+    // throwing (the ConnectionLostBanner may exist in native builds too).
+    expect(() => retryReconnectNow()).not.toThrow();
+  });
+});
+
 // ── createServedHarnessClient integration smoke ───────────────────────────────
 
 describe('createServedHarnessClient', () => {
@@ -234,16 +295,17 @@ describe('createServedHarnessClient', () => {
     expect(session.id).toBe('s42');
   });
 
-  it('falls back to stub (empty array) for unimplemented methods like projects.list()', async () => {
+  it('rejects with ServedUnsupportedError for methods not wired in served mode (FR-001)', async () => {
     globalThis.fetch = makeFetchStub(async () => {
       throw new Error('should not be called');
     });
 
     const { createServedHarnessClient } = await import('@/lib/harnessClient');
+    const { isServedUnsupportedError } = await import('@/lib/errors');
     const client = createServedHarnessClient({ baseURL: 'http://127.0.0.1:7880', token: '' });
 
-    // projects.list() is not wired in served mode — should return stub default.
-    const projects = await client.projects.list();
-    expect(projects).toEqual([]);
+    // projects.list() is not wired in served mode — should reject with
+    // ServedUnsupportedError (FR-001), not silently return fake data.
+    await expect(client.projects.list()).rejects.toSatisfy(isServedUnsupportedError);
   });
 });

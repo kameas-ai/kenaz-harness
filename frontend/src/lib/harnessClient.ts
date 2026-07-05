@@ -15,6 +15,8 @@
  */
 
 import { ServedTransport } from './servedTransport';
+import { ServedUnsupportedError } from './errors';
+import { dispatchServedEvent } from './useServedEvents';
 
 import type {
   AutonomyLayer,
@@ -3405,18 +3407,66 @@ export function createHarnessClient(): HarnessClient {
 // ── served-mode client (HTTP/WS transport) ────────────────────────────
 
 /**
+ * Client-side registry mapping subscription ids to WS close callbacks.
+ * Module-level singleton — safe because served mode runs one instance.
+ */
+const _servedStreamRegistry = new Map<string, () => void>();
+
+/**
+ * createUnsupportedServedClient — a HarnessClient whose every method
+ * rejects with ServedUnsupportedError.  Used as the base for
+ * createServedHarnessClient() so that any method not explicitly overlaid
+ * by the real transport returns an honest error instead of fake data.
+ *
+ * This replaces the old createFakeHarnessClient() base that silently
+ * accepted writes which were then discarded (FR-001).
+ *
+ * Implementation strategy: start from the fake client (correct shape),
+ * then walk every function value recursively and replace it with a
+ * rejector that throws ServedUnsupportedError.  This avoids having to
+ * enumerate every method manually and stays automatically in sync when
+ * new methods are added to HarnessClient.
+ */
+export function createUnsupportedServedClient(): HarnessClient {
+  const fake = createFakeHarnessClient();
+
+  function wrapValue(val: unknown, path: string): unknown {
+    if (typeof val === 'function') {
+      // Replace with a function that always rejects.
+      return (..._args: unknown[]) =>
+        Promise.reject(new ServedUnsupportedError(path));
+    }
+    if (val !== null && typeof val === 'object' && !Array.isArray(val)) {
+      // Recurse into sub-client objects.
+      const wrapped: Record<string, unknown> = {};
+      for (const [k, v] of Object.entries(val as Record<string, unknown>)) {
+        wrapped[k] = wrapValue(v, `${path}.${k}`);
+      }
+      return wrapped;
+    }
+    return val;
+  }
+
+  // Walk the fake client's top-level fields.
+  const result: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(fake as unknown as Record<string, unknown>)) {
+    result[k] = wrapValue(v, k);
+  }
+  // openExternalURL is void (not Promise), so override it separately to be a no-op.
+  result['openExternalURL'] = (_url: string): void => { /* no-op in unsupported client */ };
+  return result as unknown as HarnessClient;
+}
+
+/**
  * createServedHarnessClient — a HarnessClient whose subset of methods that
  * core/serve exposes (AppInfo, ShellStatus, Sessions_List, Sessions_Get,
  * Sessions_Stream) are wired to the HTTP/WS transport.  All other methods
- * fall back to the fake-client stubs so the application stays mountable in
- * served mode without crashing on unimplemented RPCs.
+ * reject with ServedUnsupportedError so that components can render an honest
+ * "not available in served mode" state instead of fabricated data (FR-001).
  *
  * Token resolution is handled inside ServedTransport (meta tag →
  * window.__HARNESS_TOKEN__ → empty).  Callers can pass an explicit token
  * or baseURL for testing / cross-origin use.
- *
- * Deferred: porting every RPC method; push-based WS streaming; CSRF/CORS
- * hardening; the nix leaf flake.
  */
 export function createServedHarnessClient(opts?: {
   baseURL?: string;
@@ -3427,10 +3477,10 @@ export function createServedHarnessClient(opts?: {
   // there and createServedHarnessClient is never imported/called.
   const transport = new ServedTransport(opts);
 
-  // Start with a fully-stubbed fake so every method is callable.
-  const base = createFakeHarnessClient();
+  // Start with a base that rejects every call with ServedUnsupportedError.
+  // Overlay only the methods that core/serve actually exposes.
+  const base = createUnsupportedServedClient();
 
-  // Overlay the methods that core/serve exposes over HTTP/WS.
   return {
     ...base,
 
@@ -3457,8 +3507,7 @@ export function createServedHarnessClient(opts?: {
        * startStream — opens a WebSocket subscription for Sessions_Stream.
        * Returns a synthetic subscription id; the caller must keep it to call
        * stopStream.  The actual session-update events are routed via the WS
-       * frame handler.  Note: the served WS is poll-based on the server side
-       * (push-based broker is deferred); client-visible behaviour is the same.
+       * frame handler.
        *
        * The subscription id is stored in the client-side registry so
        * stopStream can close the underlying WS.
@@ -3468,11 +3517,26 @@ export function createServedHarnessClient(opts?: {
         const cancel = transport.openStream({
           method: 'Sessions_Stream',
           params: { id },
-          onFrame: (_event, _data) => {
-            // Frames arrive but the served mode has no Wails EventsOn to
-            // relay them to subscribers.  Components polling via list()
-            // will see updates on the next poll cycle.  A proper push path
-            // is deferred (requires a non-Wails emitter WP).
+          onFrame: (event, data) => {
+            // Dispatch WS frames into the served-event bus so composables
+            // that use useEventStream() receive them without the Wails
+            // runtime bridge (FR-007).
+            //
+            // elicit:pending — a new blocking dialog was opened.
+            // elicit:pending:snapshot — list of in-flight asks on reconnect.
+            if (event === 'elicit:pending') {
+              dispatchServedEvent('elicit:pending', data);
+            } else if (event === 'elicit:pending:snapshot') {
+              // Snapshot is an array of ElicitRequest; re-emit each as
+              // an individual 'elicit:pending' event so the
+              // AskUserQuestion component queues them normally.
+              const list = Array.isArray(data) ? data : [];
+              for (const req of list) {
+                dispatchServedEvent('elicit:pending', req);
+              }
+            }
+            // session:snapshot and sessions:update are handled via
+            // sessions.list() polling; no action needed here.
           },
         });
         // Store the cancel fn keyed by subId so stopStream can find it.
@@ -3489,14 +3553,20 @@ export function createServedHarnessClient(opts?: {
         return Promise.resolve();
       },
     },
+
+    elicit: {
+      ...base.elicit,
+
+      /**
+       * listPending — returns in-flight elicitation asks (FR-007).
+       * The served frontend calls this on reconnect to re-render any dialog
+       * that was open before the WS was lost.
+       */
+      listPending: () =>
+        transport.call<import('./types').ElicitRequest[]>('Elicit_ListPending'),
+    },
   };
 }
-
-/**
- * Client-side registry mapping subscription ids to WS close callbacks.
- * Module-level singleton — safe because served mode runs one instance.
- */
-const _servedStreamRegistry = new Map<string, () => void>();
 
 // ── fake client for tests ──────────────────────────────────────────────
 

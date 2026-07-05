@@ -18,6 +18,8 @@ import { computed, onMounted, ref } from 'vue';
 import CanvasHead from '@/shell/CanvasHead.vue';
 import ArtifactPreview from './ArtifactPreview.vue';
 import { useArtifacts, useHarnessClient } from '@/lib/useHarnessAPI';
+import { useServedMode } from '@/lib/useServedMode';
+import NotAvailableInServedMode from '@/components/ui/NotAvailableInServedMode.vue';
 import type {
   Artifact,
   ArtifactFilter,
@@ -43,6 +45,7 @@ const MIME_PREFIXES: readonly { value: string; label: string }[] = [
   { value: 'application/', label: 'application/' },
 ];
 
+const servedMode = useServedMode();
 const client = useHarnessClient();
 const {
   list,
@@ -171,7 +174,15 @@ onMounted(() => {
 </script>
 
 <template>
-  <div class="h-full flex flex-col" data-testid="artifacts-view">
+  <NotAvailableInServedMode
+    v-if="servedMode"
+    feature="Artifacts"
+  />
+  <div
+    v-else
+    class="h-full flex flex-col"
+    data-testid="artifacts-view"
+  >
     <CanvasHead
       number="09"
       section="ARTIFACTS"

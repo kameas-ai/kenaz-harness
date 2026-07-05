@@ -27,6 +27,8 @@ import {
 import { useHarnessClient } from './harnessClientContext';
 import { useEventStream } from './useEventStream';
 import { logEvent } from './eventLog';
+import { isServedMode } from './useServedMode';
+import { useConnectionState } from './useConnectionState';
 import type { ContentBlock, Message, Session } from './types';
 
 /**
@@ -122,6 +124,49 @@ export function useSession(id: Ref<string>): UseSessionResult {
   let streamTimeoutHandle: ReturnType<typeof setTimeout> | null = null;
   let draftDebounceHandle: ReturnType<typeof setTimeout> | null = null;
   let lastSavedDraft = '';
+
+  // ── served-mode Sessions_Stream wiring (FR-007) ─────────────────────────
+  //
+  // In native (Wails) mode, session/elicit/usage events arrive over the
+  // window.runtime event bridge, so no explicit subscription is needed —
+  // useEventStream() is already listening. In served mode there is no Wails
+  // bridge; the only way those events reach the browser is the Sessions_Stream
+  // WebSocket, which harnessClient.ts's served client opens via
+  // sessions.startStream(). Nothing was calling it, which left the served UI
+  // inert after a reconnect (pending elicitations never re-surfaced).
+  //
+  // We open the stream for the active session and re-open it on reconnect so
+  // the elicit:pending / elicit:pending:snapshot frames flow again after the
+  // WS drops. This is a no-op in native mode (guarded by isServedMode()).
+  const served = isServedMode();
+  const connection = useConnectionState();
+  let servedStreamSubId: string | null = null;
+
+  async function openServedStream(sessionID: string): Promise<void> {
+    if (!served || !sessionID) return;
+    await closeServedStream();
+    try {
+      servedStreamSubId = await client.sessions.startStream(sessionID);
+    } catch (err) {
+      // Best-effort: the reconnect poller in servedTransport will retry the
+      // underlying connection; surfacing this would be noise.
+      logEvent('warn', 'served.session_stream.open_failed', {
+        session_id: sessionID,
+        message: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  async function closeServedStream(): Promise<void> {
+    const sub = servedStreamSubId;
+    servedStreamSubId = null;
+    if (!sub) return;
+    try {
+      await client.sessions.stopStream(sub);
+    } catch {
+      // Best-effort teardown.
+    }
+  }
 
   function clearStreamTimeout() {
     if (streamTimeoutHandle) {
@@ -527,9 +572,24 @@ export function useSession(id: Ref<string>): UseSessionResult {
       }
       clearStreamTimeout();
       void load(next);
+      // (Re)open the served-mode Sessions_Stream for the new active session so
+      // elicit/session events reach the browser (no-op in native mode).
+      void openServedStream(next);
     },
     { immediate: true },
   );
+
+  // Re-open the served-mode stream when the connection recovers. The WS is
+  // torn down on connection loss; without re-subscribing, a reconnect would
+  // leave the browser without the elicit:pending:snapshot frame that
+  // re-surfaces an in-flight ask (FR-007). No-op in native mode.
+  if (served) {
+    watch(connection, (state, prev) => {
+      if (state === 'ready' && prev !== 'ready' && id.value) {
+        void openServedStream(id.value);
+      }
+    });
+  }
 
   // Refetch on toggle. Vue's default-lazy watch only fires on
   // value change, so the very first fire is whatever the user
@@ -546,6 +606,7 @@ export function useSession(id: Ref<string>): UseSessionResult {
   onBeforeUnmount(() => {
     clearStreamTimeout();
     if (draftDebounceHandle) clearTimeout(draftDebounceHandle);
+    void closeServedStream();
   });
 
   return {

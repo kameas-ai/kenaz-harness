@@ -36,6 +36,8 @@ import { computed, onMounted, ref } from 'vue';
 import { useRoute } from 'vue-router';
 import CanvasHead from '@/shell/CanvasHead.vue';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
+import { useServedMode } from '@/lib/useServedMode';
+import NotAvailableInServedMode from '@/components/ui/NotAvailableInServedMode.vue';
 import type {
   MemoryChunk,
   MemoryListFilter,
@@ -50,6 +52,7 @@ import PrunePreviewModal from './PrunePreviewModal.vue';
 import ProvenanceDrawer from './ProvenanceDrawer.vue';
 import type { ChunkProvenance } from '@/lib/types';
 
+const servedMode = useServedMode();
 const client = useHarnessClient();
 const route = useRoute();
 
@@ -493,7 +496,11 @@ defineExpose({ refresh });
 </script>
 
 <template>
-  <div>
+  <NotAvailableInServedMode
+    v-if="servedMode"
+    feature="Memory"
+  />
+  <div v-else>
     <CanvasHead
       number="07"
       section="MEMORY"
