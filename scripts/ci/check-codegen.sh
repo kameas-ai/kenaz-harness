@@ -130,10 +130,14 @@ fi
 
 WAILSJS_HASH_FILE="${REPO_ROOT}/scripts/ci/wailsjs-bindings.sha256"
 WAILSJS_SOURCES="${REPO_ROOT}/core/rpc/bindings.go"
-# Collect any split-file bindings_*.go additions.
-for f in "${REPO_ROOT}"/core/rpc/bindings_*.go; do
+# Collect any split-file bindings_*.go additions. Order MUST be deterministic
+# across platforms: shell glob expansion is locale-collated, and macOS vs the
+# Linux CI runner order `.` and `_` differently (e.g. bindings_wails.go vs
+# bindings_wails_serve.go), which would flip the concatenation and drift the
+# hash. Force byte-wise (LC_ALL=C) sorting so the digest is platform-stable.
+while IFS= read -r f; do
   [[ -f "${f}" ]] && WAILSJS_SOURCES="${WAILSJS_SOURCES} ${f}"
-done
+done < <(LC_ALL=C ls -1 "${REPO_ROOT}"/core/rpc/bindings_*.go 2>/dev/null | LC_ALL=C sort)
 
 # Portable SHA-256: self-hosted Linux runners ship `sha256sum`; macOS dev boxes
 # ship `shasum`. Both emit the identical SHA-256 digest, so the committed hash
