@@ -2072,6 +2072,30 @@ func (b *Bindings) Workflows_CancelRun(runID string) error {
 	return b.api.Workflows().CancelRun(b.ctx(), runID)
 }
 
+// ── workflow catalog bindings (p0-wiring-fixes WP02) ──────────────────────
+// Workflows_Catalog_List returns the full catalog of installable workflow
+// templates. Delegates to the WorkflowsAPI catalog seam (WP03 of
+// workflows-agentic-01KW2D3X). Returns ErrCatalogUnavailable when no
+// catalog backend is wired.
+func (b *Bindings) Workflows_Catalog_List() ([]workflowsview.CatalogEntry, error) {
+	return b.api.Workflows().Catalog_List(b.ctx())
+}
+
+// Workflows_Catalog_Get returns the full YAML source + entry metadata for
+// the catalog item identified by id. The preview drawer uses this to render
+// the install confirmation and the YAML diff.
+func (b *Bindings) Workflows_Catalog_Get(id string) (workflowsview.CatalogPreview, error) {
+	return b.api.Workflows().Catalog_Get(b.ctx(), id)
+}
+
+// Workflows_Catalog_Install copies the catalog item identified by id into
+// the user's workflow store and optionally arms a cron schedule. Returns
+// ErrNotFound when id is unknown; returns ErrCatalogUnavailable when no
+// catalog backend is wired.
+func (b *Bindings) Workflows_Catalog_Install(id string) (workflowsview.CatalogInstallResult, error) {
+	return b.api.Workflows().Catalog_Install(b.ctx(), id)
+}
+
 // ── scheduled chat runs (scheduled-chat-runs-01KX5R8B, WP04) ──────────
 
 func (b *Bindings) ScheduledChat_Create(in scheduledchatview.CreateInput) (scheduledchatview.ChatRunEntry, error) {
