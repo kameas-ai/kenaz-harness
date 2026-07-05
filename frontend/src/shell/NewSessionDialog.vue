@@ -359,7 +359,15 @@ const isSelected = (c: ModelChoice) =>
             v-else-if="choices.length === 0"
             class="mt-2 rounded-sm border border-signal-warn bg-surface-1 px-3 py-2 text-xs text-ink"
           >
-            No providers configured. Add one in /providers first.
+            <p>No AI providers configured yet.</p>
+            <button
+              type="button"
+              class="mt-2 inline-block rounded-sm border border-accent px-3 py-1.5 text-xs text-accent hover:bg-accent-glow"
+              data-testid="new-session-go-to-providers"
+              @click="() => { close(); router.push('/providers'); }"
+            >
+              Add a provider →
+            </button>
           </div>
           <div v-else class="mt-2 space-y-2">
             <div
