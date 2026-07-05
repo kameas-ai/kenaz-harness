@@ -31,6 +31,8 @@ function provide(
       saveTheme,
       getMemory: async () => false,
       setMemory: async () => undefined,
+      getWebFetchEnabled: async () => false,
+      setWebFetchEnabled: async () => undefined,
     },
     appInfo: async () => ({
       build: '0.1.0-test',

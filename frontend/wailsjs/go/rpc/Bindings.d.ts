@@ -667,6 +667,8 @@ export function Settings_GetShowPerMessageTokenMeter():Promise<boolean>;
 
 export function Settings_GetTodoEnabled():Promise<boolean>;
 
+export function Settings_GetWebFetchEnabled():Promise<boolean>;
+
 export function Settings_GetWebSearch():Promise<boolean>;
 
 export function Settings_Set(arg1:settings.Settings):Promise<void>;
@@ -724,6 +726,8 @@ export function Settings_SetShortcuts(arg1:Record<string, string>):Promise<void>
 export function Settings_SetShowPerMessageTokenMeter(arg1:boolean):Promise<void>;
 
 export function Settings_SetTodoEnabled(arg1:boolean):Promise<void>;
+
+export function Settings_SetWebFetchEnabled(arg1:boolean):Promise<void>;
 
 export function Settings_SetWebSearch(arg1:boolean):Promise<void>;
 

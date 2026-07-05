@@ -401,6 +401,8 @@ interface WailsBindingsLike {
   Settings_SetMemory(enabled: boolean): Promise<void>;
   Settings_GetConfirmEach(): Promise<boolean>;
   Settings_SetConfirmEach(enabled: boolean): Promise<void>;
+  Settings_GetWebFetchEnabled(): Promise<boolean>;
+  Settings_SetWebFetchEnabled(enabled: boolean): Promise<void>;
   Settings_GetWebSearch(): Promise<boolean>;
   Settings_SetWebSearch(enabled: boolean): Promise<void>;
   Settings_GetBash(): Promise<boolean>;
@@ -1634,6 +1636,13 @@ export interface SettingsClient {
   getConfirmEach(): Promise<boolean>;
   /** Persist the WP05 confirm-each modal opt-in flag. */
   setConfirmEach(enabled: boolean): Promise<void>;
+  /**
+   * Read the kenaz__web_fetch built-in opt-in (default false).
+   * Surfaced as a toggle row in the Tools panel.
+   */
+  getWebFetchEnabled(): Promise<boolean>;
+  /** Persist the kenaz__web_fetch built-in opt-in flag. */
+  setWebFetchEnabled(enabled: boolean): Promise<void>;
   /**
    * Read the local-first web-search built-in opt-in (default false).
    * Surfaced as a toggle row in the Tools panel.
@@ -3049,6 +3058,8 @@ export function createHarnessClient(): HarnessClient {
       setMemory: (enabled) => b().Settings_SetMemory(enabled),
       getConfirmEach: () => b().Settings_GetConfirmEach(),
       setConfirmEach: (enabled) => b().Settings_SetConfirmEach(enabled),
+      getWebFetchEnabled: () => b().Settings_GetWebFetchEnabled(),
+      setWebFetchEnabled: (enabled) => b().Settings_SetWebFetchEnabled(enabled),
       getWebSearch: () => b().Settings_GetWebSearch(),
       setWebSearch: (enabled) => b().Settings_SetWebSearch(enabled),
       getBash: () => b().Settings_GetBash(),
@@ -3893,6 +3904,8 @@ export function createFakeHarnessClient(
       setMemory: noop,
       getConfirmEach: async () => true,
       setConfirmEach: noop,
+      getWebFetchEnabled: async () => false,
+      setWebFetchEnabled: noop,
       getWebSearch: async () => false,
       setWebSearch: noop,
       getBash: async () => false,

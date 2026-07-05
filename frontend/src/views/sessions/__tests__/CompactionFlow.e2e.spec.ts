@@ -236,6 +236,8 @@ function makeSettingsClient(): HarnessClient['settings'] {
     setMemory: async () => undefined,
     getConfirmEach: async () => true,
     setConfirmEach: async () => undefined,
+    getWebFetchEnabled: async () => false,
+    setWebFetchEnabled: async () => undefined,
     getWebSearch: async () => false,
     setWebSearch: async () => undefined,
     getBash: async () => false,

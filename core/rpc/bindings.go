@@ -881,6 +881,27 @@ func (b *Bindings) Settings_SetWebSearch(enabled bool) error {
 	return b.storeFn().SaveWebSearch(enabled)
 }
 
+// Settings_GetWebFetchEnabled exposes the kenaz__web_fetch built-in
+// opt-in flag (default false). Surfaced as a toggle row in the Tools
+// panel; toolloop reads this on every Run boundary so toggling takes
+// effect on the next chat.
+func (b *Bindings) Settings_GetWebFetchEnabled() (bool, error) {
+	defer sentry.WrapBinding("Settings_GetWebFetchEnabled")()
+	if b.storeFn == nil {
+		return false, nil
+	}
+	return b.storeFn().LoadWebFetchEnabled()
+}
+
+// Settings_SetWebFetchEnabled persists the kenaz__web_fetch built-in opt-in flag.
+func (b *Bindings) Settings_SetWebFetchEnabled(enabled bool) error {
+	defer sentry.WrapBinding("Settings_SetWebFetchEnabled")()
+	if b.storeFn == nil {
+		return nil
+	}
+	return b.storeFn().SaveWebFetchEnabled(enabled)
+}
+
 // Settings_GetBash exposes the local-first bash built-in opt-in flag
 // (default false). The bash tool is also gated by the per-command
 // allowlist regardless of this toggle.
