@@ -849,6 +849,20 @@ async function onBranchFromTurn(message: { id?: string }) {
 
 const hasAnyProvider = computed(() => providers.value.length > 0);
 
+// long-turn-resilience WP03: resume a partial message stream.
+// resumeMessage opens a continuation stream; errors surface via the
+// stream-closed event rather than here.
+async function onResumeMessage(messageId: string) {
+  const sid = sessionId.value;
+  if (!sid || !messageId) return;
+  try {
+    await client.sessions.resumeMessage(sid, messageId);
+  } catch (e) {
+    // resumeMessage opens a stream; errors surface via the stream-closed event
+    console.warn('resume failed', e);
+  }
+}
+
 // Long-term-memory opt-in. Off by default (privacy posture); read once
 // on mount and again when the window regains focus so toggling it in
 // settings takes effect on the next chat.
@@ -1524,6 +1538,7 @@ async function onNudgeNewSession() {
             @save-artifact="onSaveArtifactFromMessage"
             @open-artifact="openArtifactPreview"
             @branch-from-turn="onBranchFromTurn"
+            @resume="onResumeMessage"
           />
           <BranchSidebar
             v-if="hasSession"
