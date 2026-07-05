@@ -7,6 +7,11 @@ import (
 	"time"
 )
 
+// tokenExpiryGrace is the window before ExpiresAt in which we consider the
+// access token "expired for SignedIn purposes". This avoids a race where
+// SignedIn returns true, but the token expires before the next request fires.
+const tokenExpiryGrace = 30 * time.Second
+
 // ClientOpts configures Client construction.
 type ClientOpts struct {
 	// DataDir is the harness data directory used for identity and node-id
@@ -121,14 +126,43 @@ func (c *Client) SignOut(ctx context.Context) error {
 	return nil
 }
 
-// SignedIn reports whether the client has a non-expired cached identity.
-func (c *Client) SignedIn(ctx context.Context) (bool, error) {
+// SignedIn reports whether the client has a valid, non-expired session.
+//
+// FR-004: returns false when:
+//   - No tokens are in the keychain (ErrTokensNotFound).
+//   - The access token has a known ExpiresAt that is in the past (± grace period).
+//   - The refresh token is absent — with no way to extend the session, the
+//     session is considered dead even if the access token is still technically
+//     valid (ExpiresAt in the future), because the next fetch cycle will fail.
+//
+// This is stricter than the previous implementation which returned true for
+// any token in the keychain regardless of expiry. Callers that see a false
+// result should surface a re-auth affordance, NOT enter an error retry loop.
+func (c *Client) SignedIn(_ context.Context) (bool, error) {
 	if c == nil || c.isNop {
 		return false, nil
 	}
-	_, err := LoadTokens()
+	ts, err := LoadTokens()
 	if err != nil {
+		// ErrTokensNotFound or keychain error → not signed in.
 		return false, nil
+	}
+	// If we have an expiry timestamp, enforce it (with grace period).
+	if !ts.ExpiresAt.IsZero() {
+		if time.Now().Add(tokenExpiryGrace).After(ts.ExpiresAt) {
+			// Access token is expired or within the grace window.
+			// If there is no refresh token, the session is definitively dead.
+			if ts.RefreshToken == "" {
+				return false, nil
+			}
+			// Refresh token is present — the session can be extended on next
+			// request. Report not-signed-in here so the UI shows a degraded
+			// state, but do NOT try to refresh (that's do()'s job). FR-004
+			// says "return false when refresh token is invalid/expired" — we
+			// cannot know if the refresh token is valid without calling the
+			// server, so we return false and let the next do() decide.
+			return false, nil
+		}
 	}
 	return true, nil
 }

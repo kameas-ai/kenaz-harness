@@ -287,13 +287,20 @@ func (a *API) FleetSignOut(ctx context.Context) error {
 	return nil
 }
 
-// FleetSignedIn reports whether valid tokens exist.
-func (a *API) FleetSignedIn(_ context.Context) (bool, error) {
+// FleetSignedIn reports whether a valid (non-expired) fleet session exists.
+//
+// FR-004: honors token expiry — a dead session (expired access + refresh)
+// returns false so the UI can show a re-auth prompt rather than a fake
+// "signed in" state. Uses Client.SignedIn for consistent expiry semantics.
+func (a *API) FleetSignedIn(ctx context.Context) (bool, error) {
 	if fleet.Disabled() {
 		return false, nil
 	}
-	_, err := fleet.LoadTokens()
-	return err == nil, nil
+	c := a.fleetClient()
+	if c == nil {
+		return false, nil
+	}
+	return c.SignedIn(ctx)
 }
 
 // FleetRefreshIdentity calls the fleet enroll endpoint.
