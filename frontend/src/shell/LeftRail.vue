@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, onMounted } from 'vue';
+import { computed, ref, onMounted, onBeforeUnmount } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import RailEntry from './RailEntry.vue';
 import SessionTreeRow from './SessionTreeRow.vue';
@@ -215,9 +215,20 @@ function hasChildren(sessionId: string): boolean {
 /** Max visible branch depth — read from settings if available. */
 const maxBranchDepth = ref<number>(5);
 
+// WP09: Listen for the palette's 'New Session' action dispatched via
+// kenaz:open-new-session CustomEvent from useCommandPalette.
+function onOpenNewSessionEvent() {
+  newSession();
+}
+
 onMounted(() => {
   refreshSessions();
   refreshProjects();
+  window.addEventListener('kenaz:open-new-session', onOpenNewSessionEvent);
+});
+
+onBeforeUnmount(() => {
+  window.removeEventListener('kenaz:open-new-session', onOpenNewSessionEvent);
 });
 
 function newSession(projectId?: string) {
