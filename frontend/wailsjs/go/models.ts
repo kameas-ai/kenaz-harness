@@ -5276,6 +5276,22 @@ export namespace rpc {
 	        this.truncated = source["truncated"];
 	    }
 	}
+	export class BootHealthReport {
+	    mcpInitError?: string;
+	    skillsInitError?: string;
+	    fleetInitError?: string;
+
+	    static createFrom(source: any = {}) {
+	        return new BootHealthReport(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.mcpInitError = source["mcpInitError"];
+	        this.skillsInitError = source["skillsInitError"];
+	        this.fleetInitError = source["fleetInitError"];
+	    }
+	}
 	export class EmbedderConfigResult {
 	    profileId: string;
 	    modelOverride: string;

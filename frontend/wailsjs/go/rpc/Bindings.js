@@ -130,6 +130,10 @@ export function Bash_Exec(arg1, arg2) {
   return window['go']['rpc']['Bindings']['Bash_Exec'](arg1, arg2);
 }
 
+export function BootHealth_Get() {
+  return window['go']['rpc']['Bindings']['BootHealth_Get']();
+}
+
 export function Branches_Abandon(arg1) {
   return window['go']['rpc']['Bindings']['Branches_Abandon'](arg1);
 }

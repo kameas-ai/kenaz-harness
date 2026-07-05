@@ -197,6 +197,85 @@ export function friendlyUnsupportedFeatureError(err: unknown): string | null {
   return `Feature "${parsed.feature}" is not supported by model "${parsed.modelId}".`;
 }
 
+// ── Structured RPC error envelope (agent-loop-robustness-parity WP08) ────
+
+/**
+ * RPCErrorEnvelope mirrors core/rpc.RPCError. When the backend returns one
+ * of the typed LLM errors it maps it to this envelope and embeds it in
+ * the broker event payload (future) or as a JSON-encoded Wails error body.
+ *
+ * Code vocabulary:
+ *   "auth"              — authentication / API-key failure
+ *   "transient"         — recoverable transient failure
+ *   "budget_exhausted"  — retry budget consumed
+ *   "context_overflow"  — context window exceeded
+ *   "invalid_request"   — malformed request
+ *   "internal"          — unexpected internal error
+ */
+export interface RPCErrorEnvelope {
+  code: string;
+  message: string;
+  hint?: string;
+  retryable: boolean;
+}
+
+/**
+ * parseRPCError attempts to parse a structured RPCErrorEnvelope from the
+ * given value. Returns null when the value does not conform to the envelope
+ * shape (e.g. a plain string error from an older binding or a non-LLM path).
+ *
+ * The envelope can arrive as:
+ *   - an RPCErrorEnvelope object (when the binding returns one directly)
+ *   - a JSON string encoding of RPCErrorEnvelope (when Wails serialises it
+ *     as the error body of a rejected promise)
+ */
+export function parseRPCError(err: unknown): RPCErrorEnvelope | null {
+  if (!err) return null;
+
+  // Direct object: check for the required fields.
+  if (typeof err === 'object' && err !== null) {
+    const e = err as Record<string, unknown>;
+    if (typeof e['code'] === 'string' && typeof e['message'] === 'string' && typeof e['retryable'] === 'boolean') {
+      return {
+        code: e['code'] as string,
+        message: e['message'] as string,
+        hint: typeof e['hint'] === 'string' ? (e['hint'] as string) : undefined,
+        retryable: e['retryable'] as boolean,
+      };
+    }
+  }
+
+  // JSON string: try to parse.
+  if (typeof err === 'string') {
+    try {
+      const parsed = JSON.parse(err) as Record<string, unknown>;
+      if (typeof parsed['code'] === 'string' && typeof parsed['message'] === 'string' && typeof parsed['retryable'] === 'boolean') {
+        return {
+          code: parsed['code'] as string,
+          message: parsed['message'] as string,
+          hint: typeof parsed['hint'] === 'string' ? (parsed['hint'] as string) : undefined,
+          retryable: parsed['retryable'] as boolean,
+        };
+      }
+    } catch {
+      // Not JSON — fall through.
+    }
+  }
+
+  return null;
+}
+
+/**
+ * friendlyRPCError returns a user-facing string from a structured envelope,
+ * preferring the Hint when present. Returns null when err is not a recognised
+ * RPCErrorEnvelope (callers should fall back to their existing error parsers).
+ */
+export function friendlyRPCError(err: unknown): string | null {
+  const envelope = parseRPCError(err);
+  if (!envelope) return null;
+  return envelope.hint || envelope.message;
+}
+
 // ── helpers ──────────────────────────────────────────────────────────────
 
 function toErrorString(err: unknown): string {

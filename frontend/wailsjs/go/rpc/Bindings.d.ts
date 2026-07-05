@@ -113,6 +113,8 @@ export function Audit_VerifyEntry(arg1:string):Promise<boolean>;
 
 export function Bash_Exec(arg1:string,arg2:string):Promise<rpc.BashExecResult>;
 
+export function BootHealth_Get():Promise<rpc.BootHealthReport>;
+
 export function Branches_Abandon(arg1:string):Promise<void>;
 
 export function Branches_CommitReintegration(arg1:branches.CommitReintegrationOptions):Promise<void>;
