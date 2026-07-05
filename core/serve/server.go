@@ -427,6 +427,12 @@ func (s *Server) dispatch(ctx context.Context, method string, params json.RawMes
 		}
 		return AuthStateResult{State: state.String()}, nil
 
+	// Elicit_ListPending returns in-flight blocking elicitations (FR-007).
+	// The served frontend calls this on WS reconnect to re-render any
+	// dialog that was open before the connection was lost.
+	case "Elicit_ListPending":
+		return s.api.Elicit().ListPending(ctx)
+
 	default:
 		// Explicit "not ported" error so the served frontend can distinguish
 		// "this method exists on desktop but is not yet wired in serve mode"
@@ -484,6 +490,12 @@ func (s *Server) handleWS(ws *websocket.Conn) {
 // publishes (both desktop Wails and served-mode paths share the same broker
 // with a MultiEmitter fan-out).
 //
+// In addition to session-list changes, this handler also bridges
+// elicit:pending events (FR-007) so the served frontend receives new
+// elicitation dialogs over the same WS connection without a separate stream.
+// The frontend should call Elicit_ListPending via POST /rpc on reconnect to
+// recover any asks that were in-flight before the connection was lost.
+//
 // The caller is the Sessions_Stream WS method handler and drains incoming
 // frames concurrently so a client ping or disconnect is detected promptly.
 func (s *Server) streamSessions(ctx context.Context, ws *websocket.Conn) {
@@ -493,8 +505,8 @@ func (s *Server) streamSessions(ctx context.Context, ws *websocket.Conn) {
 		return err == nil
 	}
 
-	// Send an initial snapshot before subscribing to the bus so the client
-	// always sees the current state even when no events arrive immediately.
+	// Send an initial sessions snapshot before subscribing to the bus so the
+	// client always sees the current state even when no events arrive immediately.
 	sessions, err := s.api.Sessions().List(ctx)
 	if err != nil {
 		_ = websocket.JSON.Send(ws, wsFrame{Error: "sessions list: " + err.Error()})
@@ -504,10 +516,18 @@ func (s *Server) streamSessions(ctx context.Context, ws *websocket.Conn) {
 		return
 	}
 
-	// Subscribe to session-list change events on the in-process bus.
-	// TopicSessionListChanged is the broker topic emitted by every backend
-	// write that mutates the sessions list.
-	busCh, busCancel := s.bus.Subscribe(64, rpc.TopicSessionListChanged)
+	// Send any currently-pending elicitation asks as an initial snapshot so
+	// the frontend can reconstruct dialog state on reconnect (FR-007).
+	pending, err := s.api.Elicit().ListPending(ctx)
+	if err == nil && len(pending) > 0 {
+		if !writeFrame("elicit:pending:snapshot", pending) {
+			return
+		}
+	}
+
+	// Subscribe to session-list change events and elicit:pending events on
+	// the in-process bus.
+	busCh, busCancel := s.bus.Subscribe(64, rpc.TopicSessionListChanged, rpc.TopicElicitPending)
 	defer busCancel()
 
 	// Drain incoming messages in a separate goroutine so a client ping or
@@ -536,21 +556,31 @@ func (s *Server) streamSessions(ctx context.Context, ws *websocket.Conn) {
 				_ = websocket.JSON.Send(ws, wsFrame{Event: "closed"})
 				return
 			}
-			// Re-fetch the full list so the client gets a consistent snapshot
-			// after each change rather than a bare delta.  The payload
-			// (SessionListChangedPayload) is forwarded as event metadata.
-			updated, err := s.api.Sessions().List(ctx)
-			if err != nil {
-				if !writeFrame("error", map[string]string{"message": err.Error()}) {
+			switch ev.Topic {
+			case rpc.TopicElicitPending:
+				// Forward elicitation ask as-is so the served frontend can
+				// open the ask dialog (FR-007).
+				if !writeFrame("elicit:pending", ev.Payload) {
 					return
 				}
-				continue
-			}
-			if !writeFrame("sessions:update", map[string]any{
-				"sessions": updated,
-				"change":   ev.Payload,
-			}) {
-				return
+			default:
+				// Session-list change: re-fetch the full list so the client
+				// gets a consistent snapshot after each change rather than a
+				// bare delta.  The payload (SessionListChangedPayload) is
+				// forwarded as event metadata.
+				updated, err := s.api.Sessions().List(ctx)
+				if err != nil {
+					if !writeFrame("error", map[string]string{"message": err.Error()}) {
+						return
+					}
+					continue
+				}
+				if !writeFrame("sessions:update", map[string]any{
+					"sessions": updated,
+					"change":   ev.Payload,
+				}) {
+					return
+				}
 			}
 		}
 	}

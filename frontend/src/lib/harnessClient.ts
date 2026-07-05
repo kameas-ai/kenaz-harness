@@ -16,6 +16,7 @@
 
 import { ServedTransport } from './servedTransport';
 import { ServedUnsupportedError } from './errors';
+import { dispatchServedEvent } from './useServedEvents';
 
 import type {
   AutonomyLayer,
@@ -3505,11 +3506,26 @@ export function createServedHarnessClient(opts?: {
         const cancel = transport.openStream({
           method: 'Sessions_Stream',
           params: { id },
-          onFrame: (_event, _data) => {
-            // Frames arrive but the served mode has no Wails EventsOn to
-            // relay them to subscribers.  Components polling via list()
-            // will see updates on the next poll cycle.  A proper push path
-            // is deferred (requires a non-Wails emitter WP).
+          onFrame: (event, data) => {
+            // Dispatch WS frames into the served-event bus so composables
+            // that use useEventStream() receive them without the Wails
+            // runtime bridge (FR-007).
+            //
+            // elicit:pending — a new blocking dialog was opened.
+            // elicit:pending:snapshot — list of in-flight asks on reconnect.
+            if (event === 'elicit:pending') {
+              dispatchServedEvent('elicit:pending', data);
+            } else if (event === 'elicit:pending:snapshot') {
+              // Snapshot is an array of ElicitRequest; re-emit each as
+              // an individual 'elicit:pending' event so the
+              // AskUserQuestion component queues them normally.
+              const list = Array.isArray(data) ? data : [];
+              for (const req of list) {
+                dispatchServedEvent('elicit:pending', req);
+              }
+            }
+            // session:snapshot and sessions:update are handled via
+            // sessions.list() polling; no action needed here.
           },
         });
         // Store the cancel fn keyed by subId so stopStream can find it.
@@ -3525,6 +3541,18 @@ export function createServedHarnessClient(opts?: {
         }
         return Promise.resolve();
       },
+    },
+
+    elicit: {
+      ...base.elicit,
+
+      /**
+       * listPending — returns in-flight elicitation asks (FR-007).
+       * The served frontend calls this on reconnect to re-render any dialog
+       * that was open before the WS was lost.
+       */
+      listPending: () =>
+        transport.call<import('./types').ElicitRequest[]>('Elicit_ListPending'),
     },
   };
 }

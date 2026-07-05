@@ -234,16 +234,17 @@ describe('createServedHarnessClient', () => {
     expect(session.id).toBe('s42');
   });
 
-  it('falls back to stub (empty array) for unimplemented methods like projects.list()', async () => {
+  it('rejects with ServedUnsupportedError for methods not wired in served mode (FR-001)', async () => {
     globalThis.fetch = makeFetchStub(async () => {
       throw new Error('should not be called');
     });
 
     const { createServedHarnessClient } = await import('@/lib/harnessClient');
+    const { isServedUnsupportedError } = await import('@/lib/errors');
     const client = createServedHarnessClient({ baseURL: 'http://127.0.0.1:7880', token: '' });
 
-    // projects.list() is not wired in served mode — should return stub default.
-    const projects = await client.projects.list();
-    expect(projects).toEqual([]);
+    // projects.list() is not wired in served mode — should reject with
+    // ServedUnsupportedError (FR-001), not silently return fake data.
+    await expect(client.projects.list()).rejects.toSatisfy(isServedUnsupportedError);
   });
 });
