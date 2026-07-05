@@ -61,6 +61,7 @@ import (
 	"golang.org/x/net/websocket"
 
 	"github.com/kameas-ai/kenaz-harness/core/rpc"
+	elicitview "github.com/kameas-ai/kenaz-harness/core/rpc/views/elicit"
 	"github.com/kameas-ai/kenaz-harness/core/serve/authbroker"
 )
 
@@ -104,7 +105,8 @@ type Server struct {
 	staticFS    fs.FS // embedded dist-served bundle; nil → 404 for static paths
 	log         *slog.Logger
 	srv         *http.Server
-	authSession *authbroker.Session // nil when serve mode is not wired with auth (tests / anonymous)
+	authSession *authbroker.Session  // nil when serve mode is not wired with auth (tests / anonymous)
+	elicit      elicitview.ElicitAPI // nil → falls back to api.Elicit(); injected for a stable pending surface
 }
 
 // ServerOption is a functional option for [New].
@@ -115,6 +117,21 @@ type ServerOption func(*Server)
 // Auth_State returns "anonymous".
 func WithAuthSession(s *authbroker.Session) ServerOption {
 	return func(srv *Server) { srv.authSession = s }
+}
+
+// WithElicitAPI wires a stable [elicitview.ElicitAPI] into the server so the
+// Elicit_ListPending RPC and the elicit:pending:snapshot WS frame observe a
+// single, long-lived pending-ask registry.
+//
+// This matters because [rpc.API.Elicit] returns a fresh zero-config stub on
+// every call when the API was constructed with a nil core (the test chassis
+// path), which would make any registered pending ask invisible to a later
+// snapshot read. Production wiring (rpc.New(core)) already returns a stable
+// surface, so this option is primarily used by tests and by callers that want
+// to guarantee the pending registry the served frontend sees is the same one
+// the tool layer writes to.
+func WithElicitAPI(e elicitview.ElicitAPI) ServerOption {
+	return func(srv *Server) { srv.elicit = e }
 }
 
 // New constructs a Server backed by the given *rpc.API.
@@ -419,6 +436,18 @@ type AuthStateResult struct {
 	State string `json:"state"`
 }
 
+// elicitAPI returns the elicitation surface the served frontend should read.
+// It prefers an explicitly-injected surface (WithElicitAPI) and otherwise
+// falls back to api.Elicit(). The fallback is safe for production where
+// rpc.New(core) returns a stable surface; injection is needed for the test
+// chassis where rpc.New(nil).Elicit() hands back a fresh stub each call.
+func (s *Server) elicitAPI() elicitview.ElicitAPI {
+	if s.elicit != nil {
+		return s.elicit
+	}
+	return s.api.Elicit()
+}
+
 // dispatch routes a method name to the appropriate rpc.API call.
 // Only a representative slice is wired here; the full port is deferred.
 func (s *Server) dispatch(ctx context.Context, method string, params json.RawMessage) (any, error) {
@@ -454,7 +483,7 @@ func (s *Server) dispatch(ctx context.Context, method string, params json.RawMes
 	// The served frontend calls this on WS reconnect to re-render any
 	// dialog that was open before the connection was lost.
 	case "Elicit_ListPending":
-		return s.api.Elicit().ListPending(ctx)
+		return s.elicitAPI().ListPending(ctx)
 
 	default:
 		// Explicit "not ported" error so the served frontend can distinguish
@@ -541,7 +570,7 @@ func (s *Server) streamSessions(ctx context.Context, ws *websocket.Conn) {
 
 	// Send any currently-pending elicitation asks as an initial snapshot so
 	// the frontend can reconstruct dialog state on reconnect (FR-007).
-	pending, err := s.api.Elicit().ListPending(ctx)
+	pending, err := s.elicitAPI().ListPending(ctx)
 	if err == nil && len(pending) > 0 {
 		if !writeFrame("elicit:pending:snapshot", pending) {
 			return

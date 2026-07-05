@@ -17,8 +17,10 @@ import (
 	"golang.org/x/net/websocket"
 
 	"github.com/kameas-ai/kenaz-harness/core/rpc"
+	elicitview "github.com/kameas-ai/kenaz-harness/core/rpc/views/elicit"
 	"github.com/kameas-ai/kenaz-harness/core/serve"
 	"github.com/kameas-ai/kenaz-harness/core/serve/authbroker"
+	"github.com/kameas-ai/kenaz-harness/core/tools/askuserquestion"
 )
 
 // minimalStaticFS returns a minimal in-memory FS that mimics the dist-served
@@ -910,6 +912,179 @@ func TestRPC_UnhandledMethod_NotPortedError(t *testing.T) {
 	}
 	if !strings.Contains(envelope.Error, "not ported to served mode") {
 		t.Errorf("expected 'not ported to served mode' in error, got %q", envelope.Error)
+	}
+}
+
+// newTestServerWithElicit starts a serve.Server on a random port with a
+// stable elicit surface injected via WithElicitAPI, so a pending ask
+// registered through the returned *elicit.API is visible to the server's
+// Elicit_ListPending / elicit:pending:snapshot paths.
+func newTestServerWithElicit(t *testing.T, token string) (elicit *elicitview.API, srv *serve.Server, baseURL string, cancel context.CancelFunc) {
+	t.Helper()
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	addr := ln.Addr().String()
+	_ = ln.Close()
+
+	api := rpc.New(nil)
+	elicit = elicitview.New(elicitview.Config{}) // emitter nil — snapshot path needs no emit
+	ctx, ctxCancel := context.WithCancel(context.Background())
+	srv = serve.New(api, addr, token, nil, nil, serve.WithElicitAPI(elicit))
+
+	done := make(chan error, 1)
+	go func() { done <- srv.Serve(ctx) }()
+
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		c, cerr := net.Dial("tcp", addr)
+		if cerr == nil {
+			_ = c.Close()
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	return elicit, srv, "http://" + addr, func() {
+		ctxCancel()
+		select {
+		case <-done:
+		case <-time.After(3 * time.Second):
+			t.Error("server did not shut down in time")
+		}
+	}
+}
+
+// TestWS_SessionsStream_ElicitPendingSnapshot verifies FR-007: when a blocking
+// elicitation is pending, a client that (re)connects the Sessions_Stream WS
+// receives an "elicit:pending:snapshot" frame carrying that ask. This is the
+// mechanism by which a served-mode reconnect re-surfaces an in-flight ask.
+//
+// It mirrors the WS_SessionsStream pattern: register a pending ask (via a
+// backgrounded OpenDialog on an injected elicit surface), open a *second* WS,
+// consume the mandatory sessions:snapshot, then assert the elicit snapshot
+// frame contains the registered request.
+func TestWS_SessionsStream_ElicitPendingSnapshot(t *testing.T) {
+	elicit, _, baseURL, cancel := newTestServerWithElicit(t, "tok")
+	defer cancel()
+
+	// Register a pending elicitation. OpenDialog blocks until answered /
+	// timed out, so run it in a goroutine; it registers the pending entry
+	// synchronously before blocking on the response channel.
+	askDone := make(chan struct{})
+	go func() {
+		defer close(askDone)
+		_, _ = elicit.OpenDialog(context.Background(), askuserquestion.AskArgs{
+			Question: "Proceed with deploy?",
+			Kind:     askuserquestion.KindRadio,
+			Options: []askuserquestion.QuestionOption{
+				{Value: "yes", Label: "Yes"},
+				{Value: "no", Label: "No"},
+			},
+		})
+	}()
+
+	// Poll until the ask is registered (OpenDialog registers before it blocks).
+	regDeadline := time.Now().Add(2 * time.Second)
+	for {
+		pending, _ := elicit.ListPending(context.Background())
+		if len(pending) > 0 {
+			break
+		}
+		if time.Now().After(regDeadline) {
+			t.Fatal("pending ask was not registered in time")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	// Connect a (second) WS client — this is the "reconnect" that must
+	// re-surface the pending ask.
+	wsURL := "ws" + strings.TrimPrefix(baseURL, "http") + "/ws"
+	cfg, err := websocket.NewConfig(wsURL, "http://localhost")
+	if err != nil {
+		t.Fatalf("ws config: %v", err)
+	}
+	cfg.Header.Set("Authorization", "Bearer tok")
+
+	ws, err := websocket.DialConfig(cfg)
+	if err != nil {
+		t.Fatalf("ws dial: %v", err)
+	}
+	defer ws.Close() //nolint:errcheck
+
+	if err := websocket.JSON.Send(ws, map[string]any{
+		"method": "Sessions_Stream",
+		"params": map[string]any{},
+	}); err != nil {
+		t.Fatalf("ws send: %v", err)
+	}
+
+	// Read frames until we see the elicit snapshot. The mandatory
+	// sessions:snapshot frame arrives first.
+	var (
+		sawSnapshot bool
+		sawElicit   bool
+		gotRequest  string
+	)
+	readDeadline := time.Now().Add(5 * time.Second)
+	for !sawElicit && time.Now().Before(readDeadline) {
+		ws.SetReadDeadline(time.Now().Add(2 * time.Second))
+		var frame struct {
+			Event string          `json:"event"`
+			Data  json.RawMessage `json:"data"`
+			Error string          `json:"error"`
+		}
+		if err := websocket.JSON.Receive(ws, &frame); err != nil {
+			t.Fatalf("ws receive: %v", err)
+		}
+		if frame.Error != "" {
+			t.Fatalf("ws frame error: %s", frame.Error)
+		}
+		switch frame.Event {
+		case "sessions:snapshot":
+			sawSnapshot = true
+		case "elicit:pending:snapshot":
+			sawElicit = true
+			// Data is an array of ElicitRequest; confirm our ask is present.
+			var reqs []struct {
+				RequestID string `json:"request_id"`
+				Question  string `json:"question"`
+			}
+			if err := json.Unmarshal(frame.Data, &reqs); err != nil {
+				t.Fatalf("unmarshal elicit snapshot: %v (data=%s)", err, frame.Data)
+			}
+			if len(reqs) == 0 {
+				t.Fatal("elicit:pending:snapshot data was empty")
+			}
+			for _, r := range reqs {
+				if r.Question == "Proceed with deploy?" {
+					gotRequest = r.RequestID
+				}
+			}
+		}
+	}
+
+	if !sawSnapshot {
+		t.Error("did not receive mandatory sessions:snapshot frame")
+	}
+	if !sawElicit {
+		t.Fatal("did not receive elicit:pending:snapshot frame within deadline")
+	}
+	if gotRequest == "" {
+		t.Error("elicit:pending:snapshot did not contain the registered ask")
+	}
+
+	// Resolve the ask so the backgrounded OpenDialog returns and the
+	// goroutine exits cleanly (avoids a leaked goroutine under -race).
+	if err := elicit.SubmitAnswer(context.Background(), gotRequest, json.RawMessage(`"yes"`), false); err != nil {
+		t.Errorf("SubmitAnswer: %v", err)
+	}
+	select {
+	case <-askDone:
+	case <-time.After(2 * time.Second):
+		t.Error("OpenDialog did not return after SubmitAnswer")
 	}
 }
 
