@@ -17,6 +17,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"runtime/debug"
 	"sync"
 	"time"
 
@@ -196,6 +197,17 @@ func (s *Syncer) NotifyMutation(cat SyncCategory) {
 	ch := make(chan struct{}, 1)
 	s.debounce[cat] = ch
 	go func() {
+		// Recover panics from the debounced-push goroutine (FR-003).
+		defer func() {
+			if r := recover(); r != nil {
+				stack := debug.Stack()
+				logging.L().Error("fleet.sync.debounced_push.panic",
+					"category", string(cat),
+					"panic", fmt.Sprintf("%v", r),
+					"stack", string(stack),
+				)
+			}
+		}()
 		timer := time.NewTimer(5 * time.Second)
 		defer timer.Stop()
 		select {

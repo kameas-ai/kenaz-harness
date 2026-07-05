@@ -3,6 +3,7 @@ package fleet
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"strconv"
 	"time"
 
@@ -71,12 +72,35 @@ func LoadTokens() (TokenSet, error) {
 	}, nil
 }
 
-// ClearTokens deletes all fleet tokens from the OS keychain. Errors from
-// individual deletes are collected but not fatal — partial deletion is
-// treated as success to avoid zombie token state.
+// ClearTokens deletes all fleet tokens from the OS keychain.
+//
+// (FR-004) Individual delete failures are now WARN-logged (not silently
+// swallowed) so a failing keychain clear is diagnosable.  Partial deletion
+// is still treated as a best-effort success — the caller's sign-out goal
+// is satisfied even when one token key was already absent or the keychain
+// backend returns a transient error, provided the access token is cleared.
+// A non-nil error is returned only when the access-token delete fails
+// (because a stale access token is the most likely cause of "zombie" login).
+//
+// NOTE: the fleet-integrity mission's WP06 also touches this function.
+// Keep this change self-contained (logging + structured error return) so the
+// two changes compose cleanly when merged.
 func ClearTokens() error {
-	_ = keyring.Delete(keyringService, keyAccessToken())
-	_ = keyring.Delete(keyringService, keyRefreshToken())
-	_ = keyring.Delete(keyringService, keyExpiresAt())
-	return nil
+	var firstErr error
+	for _, key := range []string{keyAccessToken(), keyRefreshToken(), keyExpiresAt()} {
+		if err := keyring.Delete(keyringService, key); err != nil {
+			if err == keyring.ErrNotFound {
+				// Already absent — that's the desired post-state.
+				continue
+			}
+			slog.Warn("fleet: ClearTokens keychain delete failed",
+				"key",   key,
+				"error", err.Error(),
+			)
+			if firstErr == nil && key == keyAccessToken() {
+				firstErr = fmt.Errorf("fleet: clear access token: %w", err)
+			}
+		}
+	}
+	return firstErr
 }

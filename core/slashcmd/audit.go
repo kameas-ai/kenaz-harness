@@ -69,7 +69,7 @@ func EmitRun(
 	if runErr != nil {
 		payload.ErrorClass = classifyRunError(runErr)
 	}
-	_ = audit.Emit(ctx, em, audit.KindSlashCommandRun, payload, time.Now().UTC())
+	audit.MustEmit(ctx, em, audit.KindSlashCommandRun, payload, time.Now().UTC())
 }
 
 // classifyRunError maps a run-time error onto a stable class label so

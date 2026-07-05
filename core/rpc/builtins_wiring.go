@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 
 	"github.com/kameas-ai/kenaz-harness/core"
+	"github.com/kameas-ai/kenaz-harness/core/agentgraph"
 	coresubagent "github.com/kameas-ai/kenaz-harness/core/tools/subagentdispatch"
 	coreart "github.com/kameas-ai/kenaz-harness/core/artifacts"
 	corecontexts "github.com/kameas-ai/kenaz-harness/core/contexts"
@@ -238,30 +239,55 @@ func registerBuiltinTools(
 	}
 
 	// kenaz__web_fetch: makes authenticated HTTP requests on behalf of
-	// the model (model-secret-references-01KW7M5A WP07). Always registered;
-	// the tool resolves @secret: references at request time via the
-	// per-context Resolver so no plaintext enters the conversation context.
-	webFetchTool := corewebfetch.New(corewebfetch.Options{})
+	// the model (model-secret-references-01KW7M5A WP07). Gated behind a
+	// Cedar network-policy gate (host allowlist, same pattern as websearch)
+	// AND a user-facing Settings toggle (crash-recovery-tool-gating-0XQTC4RK
+	// FR-005). Default OFF — the tool resolves @secret: references at
+	// request time so the gate must be explicit rather than implicit.
+	var webFetchGateEngine cedar.Gate = cedar.AllowAll{}
+	if cedarEngine != nil {
+		webFetchGateEngine = cedarEngine
+	}
+	webFetchTool := corewebfetch.New(corewebfetch.Options{
+		Gate:    webFetchGateEngine,
+		Enabled: webFetchEnabledLookup(store),
+	})
 	registry.Register(webFetchTool)
-	logging.L().Info("rpc.builtins.register", "tool", webFetchTool.Name())
+	logging.L().Info("rpc.builtins.register",
+		"tool", webFetchTool.Name(),
+		"cedar_gate", cedarEngine != nil,
+	)
 
 	// kenaz__subagent_dispatch: model-callable sub-agent spawner
-	// (branch-subagent-interactive-01KZNP3B WP03). Always registered.
-	// The BranchSeam is nil until WP07 wires the live seam; the tool
-	// returns a clean "seam_not_configured" error in that case so model
-	// self-correction is straightforward.
+	// (branch-subagent-interactive-01KZNP3B WP03).
+	//
+	// NOT registered when Seam is nil (crash-recovery-tool-gating-0XQTC4RK
+	// FR-007): advertising a tool that always returns seam_not_configured
+	// wastes model turns and creates confusing failures. Skip registration
+	// until the live BranchSeam is wired. The tool will appear in the
+	// catalog (and in the predicate switch) only when Seam is non-nil.
+	//
+	// Seam is nil in the current build; remove this guard when the branch
+	// session manager wires the seam in a future mission.
 	{
-		var dataDir string
-		if c != nil {
-			dataDir = c.DataDir()
+		var subagentSeam agentgraph.BranchSeam // nil — seam not yet wired
+		if subagentSeam != nil {
+			var dataDir string
+			if c != nil {
+				dataDir = c.DataDir()
+			}
+			subagentTool := coresubagent.New(coresubagent.Options{
+				DataDir: dataDir,
+				Seam:    subagentSeam,
+				Tasks:   nil, // wired by background-task-monitor in WP06
+			})
+			registry.Register(subagentTool)
+			logging.L().Info("rpc.builtins.register", "tool", subagentTool.Name())
+		} else {
+			logging.L().Info("rpc.builtins.subagent_dispatch_skipped",
+				"reason", "BranchSeam not yet wired — tool omitted from model catalog (FR-007)",
+			)
 		}
-		subagentTool := coresubagent.New(coresubagent.Options{
-			DataDir: dataDir,
-			Seam:    nil, // wired by branch session manager in WP07
-			Tasks:   nil, // wired by background-task-monitor in WP06
-		})
-		registry.Register(subagentTool)
-		logging.L().Info("rpc.builtins.register", "tool", subagentTool.Name())
 	}
 
 	// kenaz__enter_plan_mode / kenaz__exit_plan_mode: plan-mode posture
@@ -291,6 +317,25 @@ func registerBuiltinTools(
 	} else {
 		logging.L().Info("rpc.builtins.plan_mode_tools_skipped",
 			"reason", "no posture manager wired")
+	}
+}
+
+// webFetchEnabledLookup returns a closure kenaz__web_fetch consults inside Call
+// to honour the live WebFetch Settings toggle. nil store collapses to "disabled"
+// — correct fail-closed posture for a network-capable tool.
+// (crash-recovery-tool-gating-0XQTC4RK FR-005)
+func webFetchEnabledLookup(store settings.SettingsStore) func() bool {
+	if store == nil {
+		return func() bool { return false }
+	}
+	return func() bool {
+		v, err := store.LoadWebFetchEnabled()
+		if err != nil {
+			logging.L().Warn("rpc.builtins.web_fetch_enabled_lookup.read_failed", "err", err.Error())
+			// Default-off: soft-fail to disabled so the network tool stays off.
+			return false
+		}
+		return v
 	}
 }
 
@@ -507,6 +552,19 @@ func builtinEnabledPredicate(s *settings.API) func(string) bool {
 			}
 			logging.L().Info("rpc.builtins.predicate", "tool", name, "enabled", v)
 			return v
+		// ── web_fetch (crash-recovery-tool-gating-0XQTC4RK FR-005) ──
+		// Default OFF: the tool makes outbound HTTP requests; the user must
+		// explicitly opt in. Cedar network policy applies at call time regardless.
+		case corewebfetch.ToolName:
+			v, err := store.LoadWebFetchEnabled()
+			if err != nil {
+				logging.L().Warn("rpc.builtins.predicate.read_failed",
+					"tool", name, "err", err.Error())
+				// Default-off: fail to disabled on a transient settings error.
+				return false
+			}
+			logging.L().Info("rpc.builtins.predicate", "tool", name, "enabled", v)
+			return v
 		case corebash.Name:
 			v, err := store.LoadBash()
 			if err != nil {
@@ -598,13 +656,6 @@ func builtinEnabledPredicate(s *settings.API) func(string) bool {
 			logging.L().Info("rpc.builtins.predicate", "tool", name, "enabled", true)
 			return true
 
-		// ── Subagent dispatch tool (branch-subagent-interactive-01KZNP3B) ──
-		// Default ON: the model dispatching sub-agents is the primary use case.
-		// The tool degrades gracefully when the BranchSeam is not yet wired.
-		case coresubagent.ToolName:
-			logging.L().Info("rpc.builtins.predicate", "tool", name, "enabled", true)
-			return true
-
 		// ── Plan-mode tools (plan-mode-posture-01KZNP3F) ──
 		// Always-on: these are posture-management tools with no dangerous
 		// side-effects on their own. The Cedar gate enforces write restrictions
@@ -620,8 +671,23 @@ func builtinEnabledPredicate(s *settings.API) func(string) bool {
 		case corereadctx.ToolName:
 			logging.L().Info("rpc.builtins.predicate", "tool", name, "enabled", true)
 			return true
+
+		// ── list_secrets (model-secret-references-01KW7M5A) ──
+		// Always-on when registered (the registration guard is the nil
+		// exposureIdx check; once registered it should always be usable).
+		case corelistsecrets.ToolName:
+			logging.L().Info("rpc.builtins.predicate", "tool", name, "enabled", true)
+			return true
 		}
-		return true
+		// Fail-closed: an unknown tool name has no explicit predicate case.
+		// Deny the tool and emit a WARN so the developer knows to add a case
+		// (crash-recovery-tool-gating-0XQTC4RK FR-006).
+		logging.L().Warn("rpc.builtins.predicate.unknown_tool",
+			"tool", name,
+			"action", "deny",
+			"reason", "no explicit predicate case — add one to builtinEnabledPredicate",
+		)
+		return false
 	}
 }
 

@@ -1540,6 +1540,16 @@ async function onNudgeNewSession() {
             @branch-from-turn="onBranchFromTurn"
             @resume="onResumeMessage"
           />
+          <!-- Branch-from-turn failure — rendered below the chat thread
+               (FR-003: the error ref was set but never displayed). -->
+          <div
+            v-if="branchFromTurnError"
+            class="mx-4 mb-2 rounded-sm border border-signal-danger bg-surface-1 px-3 py-2 font-ui text-[12px] text-signal-danger"
+            role="alert"
+            data-testid="branch-from-turn-error"
+          >
+            Branch from turn failed: {{ branchFromTurnError }}
+          </div>
           <BranchSidebar
             v-if="hasSession"
             :parent-session-id="sessionId"

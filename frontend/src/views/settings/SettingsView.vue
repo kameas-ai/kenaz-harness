@@ -33,6 +33,7 @@ import AccountPanel from '@/views/settings/AccountPanel.vue';
 import LongSessionNudgeSettings from '@/components/settings/LongSessionNudgeSettings.vue';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
 import { debouncedSave } from '@/lib/settings';
+import { runAsyncAction } from '@/composables/useAsyncAction';
 import { markdownExtensionsRef } from '@/lib/markdown/injectionKeys';
 import { Plus } from '@/shell/icons';
 import AttachmentRow from '@/components/contexts/AttachmentRow.vue';
@@ -349,12 +350,12 @@ async function loadAutoTitleEnabled() {
 
 async function toggleAutoTitleEnabled() {
   const next = !autoTitleEnabled.value;
-  autoTitleEnabled.value = next;
-  try {
-    await client.settings.setAutoTitleEnabled(next);
-  } catch {
-    autoTitleEnabled.value = !next;
-  }
+  await runAsyncAction({
+    optimistic: () => { autoTitleEnabled.value = next; },
+    revert:     () => { autoTitleEnabled.value = !next; },
+    action:     () => client.settings.setAutoTitleEnabled(next),
+    errorLabel: 'Toggle auto-title',
+  });
 }
 
 // v0.5.2: embedder provider config (Bug #2 universal-embedder fix)
@@ -517,12 +518,12 @@ async function loadShowPerMessageTokenMeter() {
 
 async function toggleShowPerMessageTokenMeter() {
   const next = !showPerMessageTokenMeter.value;
-  showPerMessageTokenMeter.value = next;
-  try {
-    await client.settings.setShowPerMessageTokenMeter(next);
-  } catch {
-    showPerMessageTokenMeter.value = !next;
-  }
+  await runAsyncAction({
+    optimistic: () => { showPerMessageTokenMeter.value = next; },
+    revert:     () => { showPerMessageTokenMeter.value = !next; },
+    action:     () => client.settings.setShowPerMessageTokenMeter(next),
+    errorLabel: 'Toggle token meter',
+  });
 }
 
 async function refresh() {
@@ -776,26 +777,24 @@ function onDragEnd() {
 
 // multimodal-io-01KQ8TDF WP08 / FR-023 — user-side multimodal toggle.
 async function toggleMultimodalInput() {
-  multimodalInputEnabled.value = !multimodalInputEnabled.value;
-  try {
-    await client.settings.setMultimodalInput(multimodalInputEnabled.value);
-  } catch {
-    // Revert visually if the write failed.
-    multimodalInputEnabled.value = !multimodalInputEnabled.value;
-  }
+  const next = !multimodalInputEnabled.value;
+  await runAsyncAction({
+    optimistic: () => { multimodalInputEnabled.value = next; },
+    revert:     () => { multimodalInputEnabled.value = !next; },
+    action:     () => client.settings.setMultimodalInput(next),
+    errorLabel: 'Toggle multimodal input',
+  });
 }
 
 // multimodal-io-extended-01KQ8TD2 WP06 — generated image capture dials.
 async function toggleAutoCaptureGeneratedImages() {
-  autoCaptureGeneratedImages.value = !autoCaptureGeneratedImages.value;
-  try {
-    await client.settings.setAutoCaptureGeneratedImages(
-      autoCaptureGeneratedImages.value,
-    );
-  } catch {
-    // Revert visually if the write failed.
-    autoCaptureGeneratedImages.value = !autoCaptureGeneratedImages.value;
-  }
+  const next = !autoCaptureGeneratedImages.value;
+  await runAsyncAction({
+    optimistic: () => { autoCaptureGeneratedImages.value = next; },
+    revert:     () => { autoCaptureGeneratedImages.value = !next; },
+    action:     () => client.settings.setAutoCaptureGeneratedImages(next),
+    errorLabel: 'Toggle auto-capture generated images',
+  });
 }
 
 async function onMaxGeneratedImageMiBInput(evt: Event) {
@@ -821,13 +820,13 @@ async function onMaxGeneratedImageMiBInput(evt: Event) {
 
 // provider-keychain-rotation-01KQ8TD9 WP07 — auto-resume on key rotation.
 async function toggleAutoResumeOnKeyRotation() {
-  autoResumeOnKeyRotation.value = !autoResumeOnKeyRotation.value;
-  try {
-    await client.settings.setAutoResumeOnKeyRotation(autoResumeOnKeyRotation.value);
-  } catch {
-    // Revert visually if the write failed.
-    autoResumeOnKeyRotation.value = !autoResumeOnKeyRotation.value;
-  }
+  const next = !autoResumeOnKeyRotation.value;
+  await runAsyncAction({
+    optimistic: () => { autoResumeOnKeyRotation.value = next; },
+    revert:     () => { autoResumeOnKeyRotation.value = !next; },
+    action:     () => client.settings.setAutoResumeOnKeyRotation(next),
+    errorLabel: 'Toggle auto-resume on key rotation',
+  });
 }
 
 // cross-session-search WP07 — searchEnabled toggle. Inverts the
@@ -842,18 +841,24 @@ const searchEnabled = computed({
 
 async function toggleSearchEnabled() {
   const next = !searchEnabled.value;
-  searchEnabled.value = next;
-  try {
-    await client.settings.set({ ...settings.value, searchDisabled: !next });
-  } catch {
-    // Revert visually if the write failed.
-    searchEnabled.value = !next;
-  }
+  await runAsyncAction({
+    optimistic: () => { searchEnabled.value = next; },
+    revert:     () => { searchEnabled.value = !next; },
+    action:     () => client.settings.set({ ...settings.value, searchDisabled: !next }),
+    errorLabel: 'Toggle search',
+  });
 }
 
 function setTheme(t: Theme) {
+  const previous = settings.value.theme;
   settings.value = { ...settings.value, theme: t };
-  void client.settings.saveTheme(t).catch(() => {});
+  // (FR-002) Route through the failure pathway — a failed theme save now
+  // reverts the local state and surfaces a toast.
+  void runAsyncAction({
+    revert: () => { settings.value = { ...settings.value, theme: previous }; },
+    action: () => client.settings.saveTheme(t),
+    errorLabel: 'Save theme',
+  });
 }
 
 /* ── Markdown rendering extensions (markdown-rendering-polish-01KQ8TDT) ── */
@@ -898,12 +903,12 @@ const autoCollapseBranches = computed({
 
 async function toggleAutoCollapseBranches() {
   const next = !autoCollapseBranches.value;
-  autoCollapseBranches.value = next;
-  try {
-    await client.settings.set({ ...settings.value, autoCollapseBranchesInSidebar: next });
-  } catch {
-    autoCollapseBranches.value = !next;
-  }
+  await runAsyncAction({
+    optimistic: () => { autoCollapseBranches.value = next; },
+    revert:     () => { autoCollapseBranches.value = !next; },
+    action:     () => client.settings.set({ ...settings.value, autoCollapseBranchesInSidebar: next }),
+    errorLabel: 'Toggle auto-collapse branches',
+  });
 }
 
 /** deleteBranchesWithParent — default false (safe orphan behaviour). */
@@ -916,12 +921,12 @@ const deleteBranchesWithParent = computed({
 
 async function toggleDeleteBranchesWithParent() {
   const next = !deleteBranchesWithParent.value;
-  deleteBranchesWithParent.value = next;
-  try {
-    await client.settings.set({ ...settings.value, deleteBranchesWithParent: next });
-  } catch {
-    deleteBranchesWithParent.value = !next;
-  }
+  await runAsyncAction({
+    optimistic: () => { deleteBranchesWithParent.value = next; },
+    revert:     () => { deleteBranchesWithParent.value = !next; },
+    action:     () => client.settings.set({ ...settings.value, deleteBranchesWithParent: next }),
+    errorLabel: 'Toggle delete branches with parent',
+  });
 }
 
 /** maxVisibleBranchDepth — default 5 per spec. */

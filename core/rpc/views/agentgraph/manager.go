@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -127,9 +128,12 @@ func NewManager(opts ...ManagerOption) (*Manager, error) {
 		cat, err := activities.LoadCatalog(activities.LoadOptions{UserDir: userActivities})
 		if err != nil {
 			// Non-fatal; the catalog still contains whatever loaded.
-			// Log via the manager state so callers can surface it
-			// from validation.
-			_ = err
+			// (FR-006) WARN-log so a corrupt user-activities directory is
+			// diagnosable rather than silently swallowed.
+			slog.Warn("agentgraph: activity catalog load error; catalog may be incomplete",
+				"user_dir", userActivities,
+				"error",    err.Error(),
+			)
 		}
 		if cat == nil {
 			cat = activities.NewEmptyCatalog()

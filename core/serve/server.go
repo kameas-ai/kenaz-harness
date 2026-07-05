@@ -55,11 +55,13 @@ import (
 	"net/http"
 	"os"
 	"path"
+	"runtime/debug"
 	"strings"
 	"time"
 
 	"golang.org/x/net/websocket"
 
+	"github.com/kameas-ai/kenaz-harness/core/logging"
 	"github.com/kameas-ai/kenaz-harness/core/rpc"
 	elicitview "github.com/kameas-ai/kenaz-harness/core/rpc/views/elicit"
 	"github.com/kameas-ai/kenaz-harness/core/serve/authbroker"
@@ -228,8 +230,17 @@ func (s *Server) Serve(ctx context.Context) error {
 		"auth", s.token != "",
 	)
 
-	// Shut down when the context is cancelled.
+	// Shut down when the context is cancelled. Recover panics (FR-003).
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				stack := debug.Stack()
+				logging.L().Error("serve.server.shutdown_goroutine.panic",
+					"panic", fmt.Sprintf("%v", r),
+					"stack", string(stack),
+				)
+			}
+		}()
 		<-ctx.Done()
 		shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
@@ -583,10 +594,19 @@ func (s *Server) streamSessions(ctx context.Context, ws *websocket.Conn) {
 	defer busCancel()
 
 	// Drain incoming messages in a separate goroutine so a client ping or
-	// a disconnect signal reaches us promptly.
+	// a disconnect signal reaches us promptly. Recover panics (FR-003).
 	readDone := make(chan struct{})
 	go func() {
 		defer close(readDone)
+		defer func() {
+			if r := recover(); r != nil {
+				stack := debug.Stack()
+				logging.L().Error("serve.server.ws_read.panic",
+					"panic", fmt.Sprintf("%v", r),
+					"stack", string(stack),
+				)
+			}
+		}()
 		for {
 			var ignored json.RawMessage
 			if err := websocket.JSON.Receive(ws, &ignored); err != nil {

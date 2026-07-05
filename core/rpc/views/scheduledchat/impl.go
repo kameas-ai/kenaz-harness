@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/kameas-ai/kenaz-harness/core/policy/cedar"
@@ -221,9 +222,14 @@ func (a *API) RunNow(ctx context.Context, id string) (RunSummary, error) {
 	// Assign a fresh history row ID and persist.
 	histRec.ID = newID()
 	histRec.ChatRunID = id
+	// (FR-006) WARN-log on history-write failure so a missing run record is
+	// diagnosable. The summary is still returned — the run completed; only
+	// the history entry is missing (non-fatal from the user's perspective).
 	if perr := a.cfg.Store.AppendHistory(ctx, histRec); perr != nil {
-		// Non-fatal: log in real wiring; return the summary anyway.
-		_ = perr
+		slog.WarnContext(ctx, "scheduledchat: history write failed; run record not persisted",
+			"chat_run_id", id,
+			"error",       perr.Error(),
+		)
 	}
 
 	return runSummaryFromRecord(histRec), nil

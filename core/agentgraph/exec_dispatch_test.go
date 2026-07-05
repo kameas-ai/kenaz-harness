@@ -241,6 +241,76 @@ func TestToolDispatchExecutor_ToolErrorBecomesIsError(t *testing.T) {
 	}
 }
 
+// TestToolDispatchExecutor_PanicingToolYieldsIsError asserts that a panicking
+// tool goroutine produces an is_error ToolResult (visible to the model), that
+// sibling tool calls in the same fan-out still complete, and that the test
+// process survives (FR-001).
+func TestToolDispatchExecutor_PanicingToolYieldsIsError(t *testing.T) {
+	t.Parallel()
+
+	// panicTools satisfies ToolRegistry: "panic__tool" panics, "ok__tool" returns normally.
+	pt := &panicTools{}
+
+	env := &Env{
+		RunID:    "run-panic",
+		Tools:    pt,
+		Counters: &RunCounters{},
+		State:    NewRunState(),
+	}
+	applyEnvDefaults(env)
+
+	node := &Node{
+		ID:    "td",
+		Kind:  NodeKindToolDispatch,
+		Attrs: ToolDispatchAttrs{ParallelDispatch: true, MaxConcurrent: 4},
+	}
+	calls := []ToolCallRequest{
+		{ID: "c1", Name: "panic__tool", Arguments: `{}`},
+		{ID: "c2", Name: "ok__tool", Arguments: `{}`},
+	}
+
+	// Execute must not panic; the test process survives.
+	res, err := toolDispatchExecutor{}.Execute(context.Background(), env, node,
+		PortValues{"tool_calls": calls})
+	if err != nil {
+		t.Fatalf("Execute returned unexpected error: %v", err)
+	}
+
+	results, ok := res.Outputs["tool_results"].([]ToolResult)
+	if !ok {
+		t.Fatalf("tool_results type: got %T, want []ToolResult", res.Outputs["tool_results"])
+	}
+	if len(results) != 2 {
+		t.Fatalf("len(tool_results) = %d, want 2", len(results))
+	}
+
+	// Results preserve original order: c1 (panic), c2 (ok).
+	if !results[0].IsError {
+		t.Errorf("results[0].IsError = false; panicking tool should yield IsError=true")
+	}
+	if results[1].IsError {
+		t.Errorf("results[1].IsError = true; ok tool should not be an error")
+	}
+	if results[1].Content != "ok-result" {
+		t.Errorf("results[1].Content = %q, want %q", results[1].Content, "ok-result")
+	}
+}
+
+// panicTools is a minimal ToolRegistry implementation for the panic test.
+// "panic__tool" panics with a fixed string; "ok__tool" returns a normal result.
+type panicTools struct{}
+
+func (p *panicTools) Has(name string) bool {
+	return name == "panic__tool" || name == "ok__tool"
+}
+
+func (p *panicTools) Call(_ context.Context, c ToolCall) (ToolResult, error) {
+	if c.Name == "panic__tool" {
+		panic("injected panic for test")
+	}
+	return ToolResult{Content: "ok-result"}, nil
+}
+
 // TestToolDispatchExecutor_BudgetGate asserts the executor short-
 // circuits when the per-run tool-call cap would be exceeded by the
 // pending dispatch, surfacing ErrBudgetExceeded with EventBudgetCapHit.
