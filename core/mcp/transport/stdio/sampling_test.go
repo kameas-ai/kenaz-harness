@@ -31,6 +31,7 @@ func (r *stubRegistry) RegisterAdapter(_ corellm.ProviderAdapter) {}
 func (r *stubRegistry) LoadProfiles(_ []corellm.ProviderProfile) error {
 	return nil
 }
+func (r *stubRegistry) Evict(_ string) error { return nil }
 func (r *stubRegistry) Profile(_ string) (corellm.ProviderProfile, error) {
 	return corellm.ProviderProfile{}, nil
 }
