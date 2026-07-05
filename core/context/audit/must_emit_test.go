@@ -58,8 +58,9 @@ func TestMustEmit_FailingEmitter_WarnLogsAndDoesNotPanic(t *testing.T) {
 	var buf bytes.Buffer
 	handler := slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn})
 	logger := slog.New(handler)
+	origLogger := slog.Default()
 	slog.SetDefault(logger)
-	t.Cleanup(func() { slog.SetDefault(slog.Default()) })
+	t.Cleanup(func() { slog.SetDefault(origLogger) })
 
 	em := &failingEmitter{err: errors.New("store unavailable")}
 	MustEmit(context.Background(), em, KindSlashCommandRun, SlashCommandRunPayload{
