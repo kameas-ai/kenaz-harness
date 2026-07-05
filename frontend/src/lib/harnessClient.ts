@@ -399,8 +399,6 @@ interface WailsBindingsLike {
   Settings_Set(s: Settings): Promise<void>;
   Settings_GetMemory(): Promise<boolean>;
   Settings_SetMemory(enabled: boolean): Promise<void>;
-  Settings_GetConfirmEach(): Promise<boolean>;
-  Settings_SetConfirmEach(enabled: boolean): Promise<void>;
   Settings_GetWebSearch(): Promise<boolean>;
   Settings_SetWebSearch(enabled: boolean): Promise<void>;
   Settings_GetBash(): Promise<boolean>;
@@ -1630,10 +1628,6 @@ export interface SettingsClient {
   getMemory(): Promise<boolean>;
   /** Persist the long-term-memory opt-in flag. */
   setMemory(enabled: boolean): Promise<void>;
-  /** Read the WP05 confirm-each modal opt-in flag (default true). */
-  getConfirmEach(): Promise<boolean>;
-  /** Persist the WP05 confirm-each modal opt-in flag. */
-  setConfirmEach(enabled: boolean): Promise<void>;
   /**
    * Read the local-first web-search built-in opt-in (default false).
    * Surfaced as a toggle row in the Tools panel.
@@ -3047,8 +3041,6 @@ export function createHarnessClient(): HarnessClient {
       saveTheme: (t) => b().SaveTheme(t),
       getMemory: () => b().Settings_GetMemory(),
       setMemory: (enabled) => b().Settings_SetMemory(enabled),
-      getConfirmEach: () => b().Settings_GetConfirmEach(),
-      setConfirmEach: (enabled) => b().Settings_SetConfirmEach(enabled),
       getWebSearch: () => b().Settings_GetWebSearch(),
       setWebSearch: (enabled) => b().Settings_SetWebSearch(enabled),
       getBash: () => b().Settings_GetBash(),
@@ -3881,7 +3873,6 @@ export function createFakeHarnessClient(
         accent: 'default',
         windowSize: { width: 1280, height: 800 },
         memoryEnabled: false,
-        confirmEachDisabled: false,
       }),
       set: noop,
       loadRoute: async () => '/sessions',
@@ -3891,8 +3882,6 @@ export function createFakeHarnessClient(
       saveTheme: noop,
       getMemory: async () => false,
       setMemory: noop,
-      getConfirmEach: async () => true,
-      setConfirmEach: noop,
       getWebSearch: async () => false,
       setWebSearch: noop,
       getBash: async () => false,

@@ -724,24 +724,6 @@ func (b *Bindings) Settings_SetMemory(enabled bool) error {
 	return b.storeFn().SaveMemory(enabled)
 }
 
-// Settings_GetConfirmEach exposes the WP05 confirm-each tool-call
-// modal opt-in flag (default true). The frontend toggle and the
-// toolloop's per-Run flag check both read this.
-func (b *Bindings) Settings_GetConfirmEach() (bool, error) {
-	if b.storeFn == nil {
-		return true, nil
-	}
-	return b.storeFn().LoadConfirmEach()
-}
-
-// Settings_SetConfirmEach persists the WP05 confirm-each opt-in flag.
-func (b *Bindings) Settings_SetConfirmEach(enabled bool) error {
-	if b.storeFn == nil {
-		return nil
-	}
-	return b.storeFn().SaveConfirmEach(enabled)
-}
-
 // Settings_GetWebSearch exposes the local-first web-search built-in
 // opt-in flag (default false). Surfaced as a toggle row in the Tools
 // panel; toolloop reads this on every Run boundary so toggling takes
