@@ -29,6 +29,7 @@ import { computed, ref } from 'vue';
 import { useEventStream } from '@/lib/useEventStream';
 import { useHarnessClient } from '@/lib/harnessClientContext';
 import type { ConfirmDecision, ConfirmToolRequest } from '@/lib/types';
+import BaseDialog from '@/components/ui/BaseDialog.vue';
 
 const client = useHarnessClient();
 
@@ -80,18 +81,15 @@ defineExpose({ queue });
 </script>
 
 <template>
-  <div
-    v-if="head"
-    class="fixed inset-0 z-50 flex items-center justify-center"
-    role="dialog"
-    aria-modal="true"
-    aria-labelledby="confirm-tool-modal-title"
+  <BaseDialog
+    :open="!!head"
+    title="Tool confirmation required"
+    panel-class="w-full max-w-lg rounded-md border border-accent-hairline bg-surface-1 p-5 shadow-xl"
+    :close-on-overlay-click="false"
     data-testid="confirm-tool-modal"
+    @close="() => {}"
   >
-    <div class="absolute inset-0 bg-modal-overlay" />
-    <div
-      class="relative w-full max-w-lg rounded-md border border-accent-hairline bg-surface-1 p-5 shadow-xl"
-    >
+    <div v-if="head">
       <div class="font-ui text-[11px] uppercase tracking-[0.18em] text-ink-subtle">
         Tool confirmation required
       </div>
@@ -166,5 +164,5 @@ defineExpose({ queue });
         +{{ queue.length - 1 }} more pending
       </div>
     </div>
-  </div>
+  </BaseDialog>
 </template>

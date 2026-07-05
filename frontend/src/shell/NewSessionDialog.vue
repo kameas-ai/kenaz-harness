@@ -18,6 +18,7 @@
 import { computed, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import Button from '@/components/ui/Button.vue';
+import BaseDialog from '@/components/ui/BaseDialog.vue';
 import { useHarnessClient } from '@/lib/harnessClientContext';
 import { flattenChoices, type ModelChoice } from '@/lib/modelFamily';
 import type { Project, Provider } from '@/lib/types';
@@ -256,16 +257,13 @@ const isSelected = (c: ModelChoice) =>
 </script>
 
 <template>
-  <div
-    v-if="open"
-    class="fixed inset-0 z-50 flex items-center justify-center"
-    role="dialog"
-    aria-modal="true"
-    aria-label="Configure new session"
+  <BaseDialog
+    :open="open"
+    title="Configure new session"
+    panel-class="z-10 w-[520px] max-w-[90vw] max-h-[80vh] overflow-hidden flex flex-col rounded-md border border-border-muted bg-surface-0 shadow-lg"
+    @close="close"
   >
-    <div class="absolute inset-0 bg-modal-overlay" @click="close" />
     <div
-      class="relative z-10 w-[520px] max-w-[90vw] max-h-[80vh] overflow-hidden flex flex-col rounded-md border border-border-muted bg-surface-0 shadow-lg"
       :data-testid="'new-session-dialog'"
     >
       <header class="flex items-center justify-between border-b border-border-muted px-5 py-3">
@@ -503,5 +501,5 @@ const isSelected = (c: ModelChoice) =>
         </Button>
       </footer>
     </div>
-  </div>
+  </BaseDialog>
 </template>
