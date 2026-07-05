@@ -585,6 +585,8 @@ export function Settings_FleetCapabilities():Promise<settings.CapabilitiesView>;
 
 export function Settings_FleetConfigPullStatus():Promise<settings.FleetConfigPullStatusView>;
 
+export function Settings_FleetHealth():Promise<settings.FleetHealthView>;
+
 export function Settings_FleetLockdownStatus():Promise<settings.LockdownStatusView>;
 
 export function Settings_FleetProfile():Promise<settings.FleetProfileInfo>;

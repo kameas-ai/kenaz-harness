@@ -6035,11 +6035,12 @@ export namespace settings {
 	    lastError: string;
 	    source: string;
 	    bundleChecksum: string;
-	
+	    configDistributionEnabled: boolean;
+
 	    static createFrom(source: any = {}) {
 	        return new FleetConfigPullStatusView(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.lastAppliedId = source["lastAppliedId"];
@@ -6047,6 +6048,25 @@ export namespace settings {
 	        this.lastError = source["lastError"];
 	        this.source = source["source"];
 	        this.bundleChecksum = source["bundleChecksum"];
+	        this.configDistributionEnabled = source["configDistributionEnabled"];
+	    }
+	}
+	export class FleetHealthView {
+	    configDistributionEnabled: boolean;
+	    configSource: string;
+	    configLastError: string;
+	    signedIn: boolean;
+
+	    static createFrom(source: any = {}) {
+	        return new FleetHealthView(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.configDistributionEnabled = source["configDistributionEnabled"];
+	        this.configSource = source["configSource"];
+	        this.configLastError = source["configLastError"];
+	        this.signedIn = source["signedIn"];
 	    }
 	}
 	export class FleetIdentity {

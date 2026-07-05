@@ -3786,6 +3786,24 @@ export interface FleetConfigPullStatusView {
   source: string;
   /** Hex SHA-256 of the last-seen bundle body (for 304 Not Modified gating). */
   bundleChecksum: string;
+  /** true when a fleet signing key is injected in this binary (FR-002). */
+  configDistributionEnabled: boolean;
+}
+
+/**
+ * FleetHealthView — compact fleet health summary for the global health
+ * indicator chip. Mirrors core/rpc/views/settings.FleetHealthView.
+ * (fleet-integrity-observability WP02 / FR-002 / FR-010)
+ */
+export interface FleetHealthView {
+  /** true when a fleet signing key is wired in this binary. */
+  configDistributionEnabled: boolean;
+  /** "fleet" | "stale-cache" | "default-deny-degraded" | "no-key" */
+  configSource: string;
+  /** Most recent error from the config poller, or empty string. */
+  configLastError: string;
+  /** true when the client has a valid (non-expired) session. */
+  signedIn: boolean;
 }
 
 /**

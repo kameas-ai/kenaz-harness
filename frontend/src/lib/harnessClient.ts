@@ -158,6 +158,7 @@ import type {
   FleetProfileInfo,
   CapabilitiesView,
   FleetConfigPullStatusView,
+  FleetHealthView,
   LockdownStatusView,
   ContextPublishRequest,
   ContextPublishResult,
@@ -482,6 +483,8 @@ interface WailsBindingsLike {
   Settings_FleetConfigPullStatus(): Promise<FleetConfigPullStatusView>;
   // fleet-emergency-lockdown-01NDFSEX12 WP02
   Settings_FleetLockdownStatus(): Promise<LockdownStatusView>;
+  // fleet-integrity-observability WP02 — global fleet health indicator
+  Settings_FleetHealth(): Promise<FleetHealthView>;
 
   Memory_ListChunks(filter: MemoryListFilter): Promise<MemoryChunk[]>;
   Memory_RememberMessage(
@@ -1893,6 +1896,9 @@ export interface SettingsClient {
   // ── fleet-emergency-lockdown-01NDFSEX12 WP02 ────────────────────────────
   /** Return the current fleet emergency lockdown state. */
   fleetLockdownStatus(): Promise<LockdownStatusView>;
+  // ── fleet-integrity-observability WP02 ──────────────────────────────────
+  /** Global fleet health summary: signing-key presence + config source + session state. */
+  fleetHealth(): Promise<FleetHealthView>;
 }
 
 /**
@@ -3119,6 +3125,8 @@ export function createHarnessClient(): HarnessClient {
       fleetConfigPullStatus: () => b().Settings_FleetConfigPullStatus(),
       // fleet-emergency-lockdown-01NDFSEX12 WP02
       fleetLockdownStatus: () => b().Settings_FleetLockdownStatus(),
+      // fleet-integrity-observability WP02
+      fleetHealth: () => b().Settings_FleetHealth(),
     },
     permissions: {
       listGrants: (family) =>
@@ -3958,9 +3966,17 @@ export function createFakeHarnessClient(
       // fleet-config-pull-01NDFSEX10 WP02
       fleetConfigPullStatus: async () => ({
         lastAppliedId: 0, lastAppliedAt: '', lastError: '', source: 'default-deny', bundleChecksum: '',
+        configDistributionEnabled: false,
       }),
       // fleet-emergency-lockdown-01NDFSEX12 WP02
       fleetLockdownStatus: async () => ({ active: false, reason: '' }),
+      // fleet-integrity-observability WP02
+      fleetHealth: async (): Promise<FleetHealthView> => ({
+        configDistributionEnabled: false,
+        configSource: 'no-key',
+        configLastError: '',
+        signedIn: false,
+      }),
     },
     permissions: {
       listGrants: async () => [],

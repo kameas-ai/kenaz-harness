@@ -520,17 +520,67 @@ func (a *API) fleetConfigPoller() *fleet.ConfigPoller {
 // FleetConfigPullStatus returns the current config-pull poller state.
 // Returns a zero-value view when fleet is disabled or the poller is not yet wired.
 func (a *API) FleetConfigPullStatus(_ context.Context) (FleetConfigPullStatusView, error) {
+	enabled := fleet.ConfigDistributionEnabled()
 	p := a.fleetConfigPoller()
 	if p == nil {
-		return FleetConfigPullStatusView{Source: "default-deny"}, nil
+		return FleetConfigPullStatusView{
+			Source:                    "default-deny",
+			ConfigDistributionEnabled: enabled,
+		}, nil
 	}
 	st := p.Status()
 	return FleetConfigPullStatusView{
-		LastAppliedID:  st.LastAppliedID,
-		LastAppliedAt:  st.LastAppliedAt,
-		LastError:      st.LastError,
-		Source:         st.Source,
-		BundleChecksum: st.BundleChecksum,
+		LastAppliedID:             st.LastAppliedID,
+		LastAppliedAt:             st.LastAppliedAt,
+		LastError:                 st.LastError,
+		Source:                    st.Source,
+		BundleChecksum:            st.BundleChecksum,
+		ConfigDistributionEnabled: enabled,
+	}, nil
+}
+
+// FleetHealth returns a compact fleet-health summary for the global health
+// indicator (WP10). It combines the signing-key presence, the config source,
+// and the current session state into a single call so the header chip can
+// render without multiple sequential RPCs.
+func (a *API) FleetHealth(ctx context.Context) (FleetHealthView, error) {
+	enabled := fleet.ConfigDistributionEnabled()
+
+	// Config source + last error.
+	var configSource, configLastError string
+	if !enabled {
+		configSource = "no-key"
+	} else {
+		p := a.fleetConfigPoller()
+		if p == nil {
+			configSource = "default-deny-degraded"
+		} else {
+			st := p.Status()
+			configSource = st.Source
+			configLastError = st.LastError
+			if configSource == "default-deny" && configLastError == "" {
+				configSource = "default-deny-degraded"
+			}
+		}
+	}
+
+	// Session state.
+	signedIn := false
+	if !fleet.Disabled() {
+		ts, err := fleet.LoadTokens()
+		if err == nil && !ts.ExpiresAt.IsZero() && ts.ExpiresAt.After(time.Now()) {
+			signedIn = true
+		} else if err == nil && ts.ExpiresAt.IsZero() {
+			// Token exists but no expiry info — treat as signed-in (legacy token).
+			signedIn = true
+		}
+	}
+
+	return FleetHealthView{
+		ConfigDistributionEnabled: enabled,
+		ConfigSource:              configSource,
+		ConfigLastError:           configLastError,
+		SignedIn:                  signedIn,
 	}, nil
 }
 
