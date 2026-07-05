@@ -431,6 +431,31 @@ func (s *FileStore) SaveBash(enabled bool) error {
 	return s.saveLocked(got)
 }
 
+// LoadWebFetchEnabled returns the kenaz__web_fetch built-in opt-in.
+// Default false (off) — the tool makes outbound HTTP requests with
+// @secret: substitution; the user must opt in from the Tools panel.
+// Cedar network policy applies regardless of this toggle.
+// (crash-recovery-tool-gating-0XQTC4RK FR-005)
+func (s *FileStore) LoadWebFetchEnabled() (bool, error) {
+	got, err := s.LoadAll()
+	if err != nil {
+		return got.WebFetchEnabled, err
+	}
+	return got.WebFetchEnabled, nil
+}
+
+// SaveWebFetchEnabled persists the kenaz__web_fetch opt-in flag.
+func (s *FileStore) SaveWebFetchEnabled(enabled bool) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	got, err := s.loadLocked()
+	if err != nil {
+		return err
+	}
+	got.WebFetchEnabled = enabled
+	return s.saveLocked(got)
+}
+
 // LoadSaveArtifactEnabled returns the kenaz__save_artifact built-in
 // opt-in. Default true (on) — wire shape persists the inverted
 // SaveArtifactDisabled bit so a fresh install (zero-value across the
@@ -1484,6 +1509,19 @@ func (m *memoryStore) SaveBash(enabled bool) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.data.BashEnabled = enabled
+	return nil
+}
+
+func (m *memoryStore) LoadWebFetchEnabled() (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.data.WebFetchEnabled, nil
+}
+
+func (m *memoryStore) SaveWebFetchEnabled(enabled bool) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.data.WebFetchEnabled = enabled
 	return nil
 }
 

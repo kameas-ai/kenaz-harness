@@ -238,12 +238,24 @@ func registerBuiltinTools(
 	}
 
 	// kenaz__web_fetch: makes authenticated HTTP requests on behalf of
-	// the model (model-secret-references-01KW7M5A WP07). Always registered;
-	// the tool resolves @secret: references at request time via the
-	// per-context Resolver so no plaintext enters the conversation context.
-	webFetchTool := corewebfetch.New(corewebfetch.Options{})
+	// the model (model-secret-references-01KW7M5A WP07). Gated behind a
+	// Cedar network-policy gate (host allowlist, same pattern as websearch)
+	// AND a user-facing Settings toggle (crash-recovery-tool-gating-0XQTC4RK
+	// FR-005). Default OFF — the tool resolves @secret: references at
+	// request time so the gate must be explicit rather than implicit.
+	var webFetchGateEngine cedar.Gate = cedar.AllowAll{}
+	if cedarEngine != nil {
+		webFetchGateEngine = cedarEngine
+	}
+	webFetchTool := corewebfetch.New(corewebfetch.Options{
+		Gate:    webFetchGateEngine,
+		Enabled: webFetchEnabledLookup(store),
+	})
 	registry.Register(webFetchTool)
-	logging.L().Info("rpc.builtins.register", "tool", webFetchTool.Name())
+	logging.L().Info("rpc.builtins.register",
+		"tool", webFetchTool.Name(),
+		"cedar_gate", cedarEngine != nil,
+	)
 
 	// kenaz__subagent_dispatch: model-callable sub-agent spawner
 	// (branch-subagent-interactive-01KZNP3B WP03). Always registered.
@@ -291,6 +303,25 @@ func registerBuiltinTools(
 	} else {
 		logging.L().Info("rpc.builtins.plan_mode_tools_skipped",
 			"reason", "no posture manager wired")
+	}
+}
+
+// webFetchEnabledLookup returns a closure kenaz__web_fetch consults inside Call
+// to honour the live WebFetch Settings toggle. nil store collapses to "disabled"
+// — correct fail-closed posture for a network-capable tool.
+// (crash-recovery-tool-gating-0XQTC4RK FR-005)
+func webFetchEnabledLookup(store settings.SettingsStore) func() bool {
+	if store == nil {
+		return func() bool { return false }
+	}
+	return func() bool {
+		v, err := store.LoadWebFetchEnabled()
+		if err != nil {
+			logging.L().Warn("rpc.builtins.web_fetch_enabled_lookup.read_failed", "err", err.Error())
+			// Default-off: soft-fail to disabled so the network tool stays off.
+			return false
+		}
+		return v
 	}
 }
 
@@ -503,6 +534,19 @@ func builtinEnabledPredicate(s *settings.API) func(string) bool {
 			if err != nil {
 				logging.L().Warn("rpc.builtins.predicate.read_failed",
 					"tool", name, "err", err.Error())
+				return false
+			}
+			logging.L().Info("rpc.builtins.predicate", "tool", name, "enabled", v)
+			return v
+		// ── web_fetch (crash-recovery-tool-gating-0XQTC4RK FR-005) ──
+		// Default OFF: the tool makes outbound HTTP requests; the user must
+		// explicitly opt in. Cedar network policy applies at call time regardless.
+		case corewebfetch.ToolName:
+			v, err := store.LoadWebFetchEnabled()
+			if err != nil {
+				logging.L().Warn("rpc.builtins.predicate.read_failed",
+					"tool", name, "err", err.Error())
+				// Default-off: fail to disabled on a transient settings error.
 				return false
 			}
 			logging.L().Info("rpc.builtins.predicate", "tool", name, "enabled", v)
