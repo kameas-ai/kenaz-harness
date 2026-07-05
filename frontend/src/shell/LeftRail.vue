@@ -24,6 +24,8 @@ import { useConnectionState } from '@/lib/useConnectionState';
 import NewSessionDialog from './NewSessionDialog.vue';
 import MemoryBadge from './MemoryBadge.vue';
 import WorkflowRunsSection from '@/components/workflows/WorkflowRunsSection.vue';
+import ConfirmDialog from '@/components/ui/ConfirmDialog.vue';
+import { useConfirmDialog } from '@/composables/useConfirmDialog';
 import type { Project, Session } from '@/lib/types';
 import '@/styles/sessions.css';
 
@@ -53,6 +55,7 @@ const {
 const newSessionDialogOpen = ref(false);
 const newSessionProjectId = ref<string | undefined>(undefined);
 const deletingId = ref<string | null>(null);
+const { confirmState, confirm } = useConfirmDialog();
 
 // Served-mode connection gate (FR-003): creating a session hits the backend
 // (Sessions_Create). When the served transport is lost, disable the
@@ -272,11 +275,13 @@ async function deleteSession(id: string, event: Event) {
 
 async function clearAll() {
   if (sessionList.value.length === 0) return;
-  if (
-    !window.confirm(
-      `Delete all ${sessionList.value.length} sessions? This cannot be undone.`,
-    )
-  ) {
+  const ok = await confirm({
+    title: `Delete all ${sessionList.value.length} sessions?`,
+    message: 'This cannot be undone.',
+    danger: true,
+    confirmLabel: 'Delete all',
+  });
+  if (!ok) {
     return;
   }
   lastError.value = null;
@@ -947,4 +952,11 @@ async function onProjectDrop(evt: DragEvent, projectId: string) {
       </ul>
     </nav>
   </div>
+
+  <!-- Destructive action confirmation (WP03) -->
+  <ConfirmDialog
+    v-bind="confirmState"
+    @confirm="confirmState.resolve(true)"
+    @cancel="confirmState.resolve(false)"
+  />
 </template>
