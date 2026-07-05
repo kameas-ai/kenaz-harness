@@ -2,6 +2,7 @@ package serve_test
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -489,6 +490,76 @@ func TestWS_AuthRequired(t *testing.T) {
 	_, err := websocket.DialConfig(cfg)
 	if err == nil {
 		t.Error("expected dial failure for unauthenticated WS, got nil error")
+	}
+}
+
+// TestWS_SubprotocolAuth verifies that a browser-style WebSocket connection
+// authenticated via Sec-WebSocket-Protocol: harness-auth.<base64(token)>
+// is accepted (FR-004).
+func TestWS_SubprotocolAuth(t *testing.T) {
+	const secret = "my-secret-token"
+	_, baseURL, cancel := newTestServer(t, secret)
+	defer cancel()
+
+	wsURL := "ws" + strings.TrimPrefix(baseURL, "http") + "/ws"
+	cfg, err := websocket.NewConfig(wsURL, "http://localhost")
+	if err != nil {
+		t.Fatalf("ws config: %v", err)
+	}
+	// Browser path: no Authorization header; token via Sec-WebSocket-Protocol.
+	encoded := base64.StdEncoding.EncodeToString([]byte(secret))
+	// Strip padding to match the client's btoa() + replace(/=/g,'') pattern.
+	encoded = strings.TrimRight(encoded, "=")
+	// Use cfg.Protocol (not cfg.Header.Set) so the x/net/websocket client
+	// sends the correct Sec-WebSocket-Protocol header and validates the
+	// server's sub-protocol selection in the 101 response.
+	cfg.Protocol = []string{"harness-v1", fmt.Sprintf("harness-auth.%s", encoded)}
+
+	ws, err := websocket.DialConfig(cfg)
+	if err != nil {
+		t.Fatalf("expected WS connection to succeed with sub-protocol auth, got: %v", err)
+	}
+	defer ws.Close() //nolint:errcheck
+
+	// Send the sessions stream request and expect a snapshot — verifies the
+	// connection is fully functional, not just HTTP 101.
+	if err := websocket.JSON.Send(ws, map[string]any{
+		"method": "Sessions_Stream",
+		"params": map[string]any{},
+	}); err != nil {
+		t.Fatalf("ws send: %v", err)
+	}
+	ws.SetReadDeadline(time.Now().Add(5 * time.Second))
+	var frame struct {
+		Event string `json:"event"`
+		Error string `json:"error"`
+	}
+	if err := websocket.JSON.Receive(ws, &frame); err != nil {
+		t.Fatalf("ws receive: %v", err)
+	}
+	if frame.Error != "" {
+		t.Fatalf("ws frame error: %s", frame.Error)
+	}
+	if frame.Event != "sessions:snapshot" {
+		t.Errorf("expected 'sessions:snapshot', got %q", frame.Event)
+	}
+}
+
+// TestWS_SubprotocolAuthWrongToken verifies that the sub-protocol path still
+// rejects a wrong token (constant-time compare, not just prefix match).
+func TestWS_SubprotocolAuthWrongToken(t *testing.T) {
+	_, baseURL, cancel := newTestServer(t, "correct-token")
+	defer cancel()
+
+	wsURL := "ws" + strings.TrimPrefix(baseURL, "http") + "/ws"
+	cfg, _ := websocket.NewConfig(wsURL, "http://localhost")
+	encoded := base64.StdEncoding.EncodeToString([]byte("wrong-token"))
+	encoded = strings.TrimRight(encoded, "=")
+	cfg.Protocol = []string{"harness-v1", fmt.Sprintf("harness-auth.%s", encoded)}
+
+	_, err := websocket.DialConfig(cfg)
+	if err == nil {
+		t.Error("expected dial failure for wrong token via sub-protocol, got nil error")
 	}
 }
 

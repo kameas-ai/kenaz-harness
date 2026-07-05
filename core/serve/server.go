@@ -43,6 +43,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/subtle"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -133,9 +134,40 @@ func New(api *rpc.API, addr, token string, staticFS fs.FS, log *slog.Logger, opt
 		o(s)
 	}
 
+	// wsServer wraps handleWS with a custom handshake that:
+	//  1. Selects exactly one sub-protocol from the client's offered list
+	//     (required by the WS spec and by golang.org/x/net/websocket when
+	//     the client offers multiple protocols).
+	//  2. Preserves the auth-agnostic origin check from the default handler.
+	//  When the client sends "harness-v1, harness-auth.<token>", the server
+	//  selects "harness-v1" as the agreed protocol and the auth token is
+	//  extracted from the offered list in checkAuth() (before upgrade).
+	wsServer := websocket.Server{
+		Handshake: func(cfg *websocket.Config, req *http.Request) error {
+			// Check origin (mirrors the default Handler behaviour).
+			var err error
+			cfg.Origin, err = websocket.Origin(cfg, req)
+			if err != nil {
+				return err
+			}
+			// Select exactly one protocol: prefer "harness-v1" if offered.
+			// This resolves the AcceptHandshake "multiple protocols" error.
+			for _, p := range cfg.Protocol {
+				if p == "harness-v1" {
+					cfg.Protocol = []string{"harness-v1"}
+					return nil
+				}
+			}
+			// No recognized control protocol — select nothing (pre-v2 compat).
+			cfg.Protocol = nil
+			return nil
+		},
+		Handler: websocket.Handler(s.handleWS),
+	}
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", s.handleHealthz)
-	mux.Handle("/ws", s.authMiddleware(websocket.Handler(s.handleWS)))
+	mux.Handle("/ws", s.authMiddleware(&wsServer))
 	mux.Handle("/rpc", s.authMiddleware(http.HandlerFunc(s.handleRPC)))
 	// All other paths are served from the embedded static bundle.
 	// Static assets are public (no auth) because the HTML page itself carries
@@ -196,17 +228,49 @@ func (s *Server) authMiddleware(h http.Handler) http.Handler {
 }
 
 // checkAuth returns true when auth is satisfied.  Constant-time token compare.
+//
+// Two auth paths are accepted (FR-004):
+//  1. HTTP Authorization header: "Bearer <token>" — used by non-browser
+//     clients (curl, the Go test client, etc.).
+//  2. WebSocket sub-protocol: "harness-auth.<base64url-token>" — used by
+//     browsers, which cannot set the Authorization header during a WS
+//     handshake.  The client sends Sec-WebSocket-Protocol: harness-v1,
+//     harness-auth.<base64(token)> and the server extracts the token from
+//     the matching sub-protocol label.
 func (s *Server) checkAuth(r *http.Request) bool {
 	if s.token == "" {
 		return true // auth disabled — local dev
 	}
+	// Path 1: Authorization header.
 	hdr := r.Header.Get("Authorization")
-	const prefix = "Bearer "
-	if !strings.HasPrefix(hdr, prefix) {
-		return false
+	const bearerPrefix = "Bearer "
+	if strings.HasPrefix(hdr, bearerPrefix) {
+		provided := hdr[len(bearerPrefix):]
+		return subtle.ConstantTimeCompare([]byte(provided), []byte(s.token)) == 1
 	}
-	provided := hdr[len(prefix):]
-	return subtle.ConstantTimeCompare([]byte(provided), []byte(s.token)) == 1
+	// Path 2: Sec-WebSocket-Protocol sub-protocol auth.
+	// The browser sends: Sec-WebSocket-Protocol: harness-v1, harness-auth.<base64token>
+	// We scan the comma-separated list for a label starting with "harness-auth.".
+	const wsAuthPrefix = "harness-auth."
+	for _, proto := range strings.Split(r.Header.Get("Sec-Websocket-Protocol"), ",") {
+		proto = strings.TrimSpace(proto)
+		if strings.HasPrefix(proto, wsAuthPrefix) {
+			encoded := proto[len(wsAuthPrefix):]
+			// Re-pad the base64 string (the client strips trailing = characters).
+			switch len(encoded) % 4 {
+			case 2:
+				encoded += "=="
+			case 3:
+				encoded += "="
+			}
+			decoded, err := base64.StdEncoding.DecodeString(encoded)
+			if err != nil {
+				return false
+			}
+			return subtle.ConstantTimeCompare(decoded, []byte(s.token)) == 1
+		}
+	}
+	return false
 }
 
 // ─── /healthz ─────────────────────────────────────────────────────────────
