@@ -30,7 +30,7 @@ func EmitExecuted(ctx context.Context, em audit.Emitter, r *Run) {
 	if dur < 0 {
 		dur = 0
 	}
-	_ = audit.Emit(ctx, em, audit.KindWorkflowExecuted,
+	audit.MustEmit(ctx, em, audit.KindWorkflowExecuted,
 		audit.WorkflowExecutedPayload{
 			WorkflowID: r.WorkflowID,
 			RunID:      r.ID,
@@ -52,7 +52,7 @@ func EmitStepFailures(ctx context.Context, em audit.Emitter, r *Run) {
 		if s.Status != "failed" {
 			continue
 		}
-		_ = audit.Emit(ctx, em, audit.KindWorkflowStepFailed,
+		audit.MustEmit(ctx, em, audit.KindWorkflowStepFailed,
 			audit.WorkflowStepFailedPayload{
 				WorkflowID: r.WorkflowID,
 				RunID:      r.ID,
@@ -68,7 +68,7 @@ func EmitSaved(ctx context.Context, em audit.Emitter, w Workflow) {
 	if em == nil {
 		return
 	}
-	_ = audit.Emit(ctx, em, audit.KindWorkflowSaved,
+	audit.MustEmit(ctx, em, audit.KindWorkflowSaved,
 		audit.WorkflowSavedPayload{
 			WorkflowID: w.ID,
 			Version:    w.Version,
@@ -81,7 +81,7 @@ func EmitDeleted(ctx context.Context, em audit.Emitter, workflowID string) {
 	if em == nil {
 		return
 	}
-	_ = audit.Emit(ctx, em, audit.KindWorkflowDeleted,
+	audit.MustEmit(ctx, em, audit.KindWorkflowDeleted,
 		audit.WorkflowDeletedPayload{
 			WorkflowID: workflowID,
 		}, time.Now().UTC())

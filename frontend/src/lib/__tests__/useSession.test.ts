@@ -8,6 +8,18 @@ import type { HarnessClient } from '@/lib/harnessClient';
 import { setConnectionState } from '@/lib/useConnectionState';
 import type { Message, Session } from '@/lib/types';
 
+// Controllable served-mode flag. Defaults to false (desktop) so the existing
+// suite is unaffected; the served-stream test flips it to true. useSession
+// reads isServedMode() once at setup time, so toggling before mount suffices.
+let servedModeFlag = false;
+vi.mock('@/lib/useServedMode', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/useServedMode')>();
+  return {
+    ...actual,
+    isServedMode: () => servedModeFlag,
+  };
+});
+
 interface FakeRuntime {
   EventsOn: (topic: string, cb: (payload: unknown) => void) => () => void;
   emit: (topic: string, payload: unknown) => void;
@@ -66,6 +78,7 @@ describe('useSession (chat-ui)', () => {
   afterEach(() => {
     uninstallRuntime();
     vi.useRealTimers();
+    servedModeFlag = false;
   });
 
   function mountWithSession(
@@ -454,6 +467,62 @@ describe('useSession (chat-ui)', () => {
     expect(session.streamingTimedOut.value).toBe(true);
     w.unmount();
   });
+
+  // ── served-mode Sessions_Stream wiring (FR-007) ──────────────────────────
+  // In served mode useSession must open the Sessions_Stream for the active
+  // session (so elicit/session events reach the browser) and re-open it on
+  // reconnect. The isServedMode() mock is flipped true just for this test.
+  it('opens the served Sessions_Stream for the active session and re-opens on reconnect', async () => {
+    servedModeFlag = true;
+    const startCalls: string[] = [];
+    const stopCalls: string[] = [];
+    const { w } = mountWithSession(
+      {
+        sessions: {
+          list: async () => [],
+          get: async (id: string) => ({ id, name: id, createdAt: '', updatedAt: '' }),
+          create: async () => ({ id: '', name: '', createdAt: '', updatedAt: '' }),
+          rename: async () => undefined,
+          delete: async () => undefined,
+          reorder: async () => undefined,
+          startStream: async (id: string) => {
+            startCalls.push(id);
+            return `sub-${startCalls.length}`;
+          },
+          stopStream: async (sub: string) => {
+            stopCalls.push(sub);
+          },
+          listMessages: async () => [],
+          appendMessage: async (id: string, role: string, content: string) =>
+            makeMessage({ id: 'x', sessionId: id, role: role as Message['role'], content }),
+          saveDraft: async () => undefined,
+          loadDraft: async () => '',
+        } as any,
+      },
+      ref('sess-live'),
+    );
+
+    await vi.runAllTimersAsync();
+    await nextTick();
+
+    // Mount opened the stream for the active session.
+    expect(startCalls).toContain('sess-live');
+    const afterMount = startCalls.length;
+
+    // Simulate a connection drop then recovery; the stream must be re-opened.
+    setConnectionState('lost');
+    await nextTick();
+    setConnectionState('ready');
+    await vi.runAllTimersAsync();
+    await nextTick();
+
+    expect(startCalls.length).toBeGreaterThan(afterMount);
+    expect(startCalls[startCalls.length - 1]).toBe('sess-live');
+
+    w.unmount();
+    // Teardown closed the last subscription.
+    expect(stopCalls.length).toBeGreaterThan(0);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -526,6 +595,7 @@ describe('useSessions — broker-driven refresh', () => {
   afterEach(() => {
     uninstallRuntime();
     vi.useRealTimers();
+    servedModeFlag = false;
   });
 
   function mountWithSessions(seed: Partial<HarnessClient>) {

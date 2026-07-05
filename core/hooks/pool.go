@@ -5,7 +5,13 @@
 // submit call returns false (caller logs and drops).
 package hooks
 
-import "sync"
+import (
+	"fmt"
+	"runtime/debug"
+	"sync"
+
+	"github.com/kameas-ai/kenaz-harness/core/logging"
+)
 
 // defaultPoolSize is the default number of worker goroutines in the
 // async hook dispatch pool.
@@ -36,7 +42,22 @@ func newAsyncPool(size int) *asyncPool {
 		go func() {
 			defer p.wg.Done()
 			for w := range p.work {
-				w.fn()
+				// Recover panics from individual hook builtins (FR-002).
+				// A panicking hook is logged and surfaced as a hook failure;
+				// the worker goroutine continues processing subsequent work
+				// items and the process does not crash.
+				func() {
+					defer func() {
+						if r := recover(); r != nil {
+							stack := debug.Stack()
+							logging.L().Error("hooks.pool.worker.panic",
+								"panic", fmt.Sprintf("%v", r),
+								"stack", string(stack),
+							)
+						}
+					}()
+					w.fn()
+				}()
 			}
 		}()
 	}

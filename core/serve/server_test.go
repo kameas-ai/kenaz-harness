@@ -2,6 +2,7 @@ package serve_test
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -16,8 +17,10 @@ import (
 	"golang.org/x/net/websocket"
 
 	"github.com/kameas-ai/kenaz-harness/core/rpc"
+	elicitview "github.com/kameas-ai/kenaz-harness/core/rpc/views/elicit"
 	"github.com/kameas-ai/kenaz-harness/core/serve"
 	"github.com/kameas-ai/kenaz-harness/core/serve/authbroker"
+	"github.com/kameas-ai/kenaz-harness/core/tools/askuserquestion"
 )
 
 // minimalStaticFS returns a minimal in-memory FS that mimics the dist-served
@@ -281,8 +284,11 @@ func TestRPC_UnknownMethod(t *testing.T) {
 	if err := json.NewDecoder(resp.Body).Decode(&envelope); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if !strings.Contains(envelope.Error, "method not found") {
-		t.Errorf("expected 'method not found' error, got %q", envelope.Error)
+	// FR-005: unhandled methods now return an explicit "not ported" error
+	// rather than a generic "method not found" to help callers distinguish
+	// "typo" from "valid desktop binding not yet wired in serve mode".
+	if !strings.Contains(envelope.Error, "not ported to served mode") {
+		t.Errorf("expected 'not ported to served mode' in error, got %q", envelope.Error)
 	}
 }
 
@@ -492,6 +498,76 @@ func TestWS_AuthRequired(t *testing.T) {
 	}
 }
 
+// TestWS_SubprotocolAuth verifies that a browser-style WebSocket connection
+// authenticated via Sec-WebSocket-Protocol: harness-auth.<base64(token)>
+// is accepted (FR-004).
+func TestWS_SubprotocolAuth(t *testing.T) {
+	const secret = "my-secret-token"
+	_, baseURL, cancel := newTestServer(t, secret)
+	defer cancel()
+
+	wsURL := "ws" + strings.TrimPrefix(baseURL, "http") + "/ws"
+	cfg, err := websocket.NewConfig(wsURL, "http://localhost")
+	if err != nil {
+		t.Fatalf("ws config: %v", err)
+	}
+	// Browser path: no Authorization header; token via Sec-WebSocket-Protocol.
+	encoded := base64.StdEncoding.EncodeToString([]byte(secret))
+	// Strip padding to match the client's btoa() + replace(/=/g,'') pattern.
+	encoded = strings.TrimRight(encoded, "=")
+	// Use cfg.Protocol (not cfg.Header.Set) so the x/net/websocket client
+	// sends the correct Sec-WebSocket-Protocol header and validates the
+	// server's sub-protocol selection in the 101 response.
+	cfg.Protocol = []string{"harness-v1", fmt.Sprintf("harness-auth.%s", encoded)}
+
+	ws, err := websocket.DialConfig(cfg)
+	if err != nil {
+		t.Fatalf("expected WS connection to succeed with sub-protocol auth, got: %v", err)
+	}
+	defer ws.Close() //nolint:errcheck
+
+	// Send the sessions stream request and expect a snapshot — verifies the
+	// connection is fully functional, not just HTTP 101.
+	if err := websocket.JSON.Send(ws, map[string]any{
+		"method": "Sessions_Stream",
+		"params": map[string]any{},
+	}); err != nil {
+		t.Fatalf("ws send: %v", err)
+	}
+	ws.SetReadDeadline(time.Now().Add(5 * time.Second))
+	var frame struct {
+		Event string `json:"event"`
+		Error string `json:"error"`
+	}
+	if err := websocket.JSON.Receive(ws, &frame); err != nil {
+		t.Fatalf("ws receive: %v", err)
+	}
+	if frame.Error != "" {
+		t.Fatalf("ws frame error: %s", frame.Error)
+	}
+	if frame.Event != "sessions:snapshot" {
+		t.Errorf("expected 'sessions:snapshot', got %q", frame.Event)
+	}
+}
+
+// TestWS_SubprotocolAuthWrongToken verifies that the sub-protocol path still
+// rejects a wrong token (constant-time compare, not just prefix match).
+func TestWS_SubprotocolAuthWrongToken(t *testing.T) {
+	_, baseURL, cancel := newTestServer(t, "correct-token")
+	defer cancel()
+
+	wsURL := "ws" + strings.TrimPrefix(baseURL, "http") + "/ws"
+	cfg, _ := websocket.NewConfig(wsURL, "http://localhost")
+	encoded := base64.StdEncoding.EncodeToString([]byte("wrong-token"))
+	encoded = strings.TrimRight(encoded, "=")
+	cfg.Protocol = []string{"harness-v1", fmt.Sprintf("harness-auth.%s", encoded)}
+
+	_, err := websocket.DialConfig(cfg)
+	if err == nil {
+		t.Error("expected dial failure for wrong token via sub-protocol, got nil error")
+	}
+}
+
 // ─── static-bundle serving + token injection ──────────────────────────────
 
 // TestStatic_IndexInjectsToken verifies that GET / returns the SPA HTML with
@@ -560,6 +636,69 @@ func TestStatic_IndexEmptyToken(t *testing.T) {
 	wantMeta := `<meta name="harness-token" content=""`
 	if !strings.Contains(bodyStr, wantMeta) {
 		t.Errorf("expected empty-token meta tag, got:\n%s", bodyStr)
+	}
+}
+
+// minimalStaticFSWithCSP is like minimalStaticFS but the served.html carries
+// the raw __CSP_PLACEHOLDER__ sentinel (simulating a bundle built without the
+// Vite inject-csp plugin) so we can assert the server substitutes it.
+func minimalStaticFSWithCSP() fs.FS {
+	const indexHTML = `<!DOCTYPE html><html><head>` +
+		`<meta http-equiv="Content-Security-Policy" content="__CSP_PLACEHOLDER__" />` +
+		`<!--HARNESS_TOKEN_META-->` +
+		`</head><body><div id="app"></div></body></html>`
+	return fstest.MapFS{
+		"served.html": &fstest.MapFile{Data: []byte(indexHTML)},
+	}
+}
+
+// TestStatic_IndexSubstitutesCSPPlaceholder verifies that when the served
+// bundle still carries the raw __CSP_PLACEHOLDER__ sentinel, the server
+// replaces it with the real served-mode CSP rather than shipping a literal
+// placeholder as the Content-Security-Policy.
+func TestStatic_IndexSubstitutesCSPPlaceholder(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	addr := ln.Addr().String()
+	_ = ln.Close()
+
+	api := rpc.New(nil)
+	ctx, ctxCancel := context.WithCancel(context.Background())
+	defer ctxCancel()
+	s := serve.New(api, addr, "tok", minimalStaticFSWithCSP(), nil)
+	done := make(chan error, 1)
+	go func() { done <- s.Serve(ctx) }()
+
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		c, cerr := net.Dial("tcp", addr)
+		if cerr == nil {
+			_ = c.Close()
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	resp, err := http.Get("http://" + addr + "/")
+	if err != nil {
+		t.Fatalf("GET /: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	bodyStr := string(body)
+
+	if strings.Contains(bodyStr, "__CSP_PLACEHOLDER__") {
+		t.Error("CSP placeholder was not substituted in served HTML")
+	}
+	// The real served CSP allows same-origin connect-src (needed for /rpc + /ws).
+	if !strings.Contains(bodyStr, "connect-src 'self'") {
+		t.Errorf("expected served CSP with connect-src 'self', got:\n%s", bodyStr)
 	}
 }
 
@@ -739,6 +878,213 @@ func TestRPC_AuthState_WithSession(t *testing.T) {
 	}
 	if envelope.Result.State != "anonymous" {
 		t.Errorf("expected state 'anonymous' from anon session, got %q", envelope.Result.State)
+	}
+}
+
+// TestRPC_UnhandledMethod_NotPortedError verifies that calling a desktop
+// binding not yet wired in serve mode returns a clear "not ported" error
+// (FR-005) rather than fake data or a generic "method not found" message.
+func TestRPC_UnhandledMethod_NotPortedError(t *testing.T) {
+	_, baseURL, cancel := newTestServer(t, "")
+	defer cancel()
+
+	// "Settings_Get" is a valid desktop binding not wired in serve dispatch.
+	body := strings.NewReader(`{"method":"Settings_Get","params":{}}`)
+	resp, err := http.Post(baseURL+"/rpc", "application/json", body)
+	if err != nil {
+		t.Fatalf("POST /rpc: %v", err)
+	}
+	defer resp.Body.Close()
+
+	// The HTTP response is 200 (RPC-level error, not HTTP error).
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+	var envelope struct {
+		Error  string `json:"error"`
+		Result any    `json:"result"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&envelope); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if envelope.Error == "" {
+		t.Fatal("expected an error for an unhandled method, got none")
+	}
+	if !strings.Contains(envelope.Error, "not ported to served mode") {
+		t.Errorf("expected 'not ported to served mode' in error, got %q", envelope.Error)
+	}
+}
+
+// newTestServerWithElicit starts a serve.Server on a random port with a
+// stable elicit surface injected via WithElicitAPI, so a pending ask
+// registered through the returned *elicit.API is visible to the server's
+// Elicit_ListPending / elicit:pending:snapshot paths.
+func newTestServerWithElicit(t *testing.T, token string) (elicit *elicitview.API, srv *serve.Server, baseURL string, cancel context.CancelFunc) {
+	t.Helper()
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	addr := ln.Addr().String()
+	_ = ln.Close()
+
+	api := rpc.New(nil)
+	elicit = elicitview.New(elicitview.Config{}) // emitter nil — snapshot path needs no emit
+	ctx, ctxCancel := context.WithCancel(context.Background())
+	srv = serve.New(api, addr, token, nil, nil, serve.WithElicitAPI(elicit))
+
+	done := make(chan error, 1)
+	go func() { done <- srv.Serve(ctx) }()
+
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		c, cerr := net.Dial("tcp", addr)
+		if cerr == nil {
+			_ = c.Close()
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	return elicit, srv, "http://" + addr, func() {
+		ctxCancel()
+		select {
+		case <-done:
+		case <-time.After(3 * time.Second):
+			t.Error("server did not shut down in time")
+		}
+	}
+}
+
+// TestWS_SessionsStream_ElicitPendingSnapshot verifies FR-007: when a blocking
+// elicitation is pending, a client that (re)connects the Sessions_Stream WS
+// receives an "elicit:pending:snapshot" frame carrying that ask. This is the
+// mechanism by which a served-mode reconnect re-surfaces an in-flight ask.
+//
+// It mirrors the WS_SessionsStream pattern: register a pending ask (via a
+// backgrounded OpenDialog on an injected elicit surface), open a *second* WS,
+// consume the mandatory sessions:snapshot, then assert the elicit snapshot
+// frame contains the registered request.
+func TestWS_SessionsStream_ElicitPendingSnapshot(t *testing.T) {
+	elicit, _, baseURL, cancel := newTestServerWithElicit(t, "tok")
+	defer cancel()
+
+	// Register a pending elicitation. OpenDialog blocks until answered /
+	// timed out, so run it in a goroutine; it registers the pending entry
+	// synchronously before blocking on the response channel.
+	askDone := make(chan struct{})
+	go func() {
+		defer close(askDone)
+		_, _ = elicit.OpenDialog(context.Background(), askuserquestion.AskArgs{
+			Question: "Proceed with deploy?",
+			Kind:     askuserquestion.KindRadio,
+			Options: []askuserquestion.QuestionOption{
+				{Value: "yes", Label: "Yes"},
+				{Value: "no", Label: "No"},
+			},
+		})
+	}()
+
+	// Poll until the ask is registered (OpenDialog registers before it blocks).
+	regDeadline := time.Now().Add(2 * time.Second)
+	for {
+		pending, _ := elicit.ListPending(context.Background())
+		if len(pending) > 0 {
+			break
+		}
+		if time.Now().After(regDeadline) {
+			t.Fatal("pending ask was not registered in time")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	// Connect a (second) WS client — this is the "reconnect" that must
+	// re-surface the pending ask.
+	wsURL := "ws" + strings.TrimPrefix(baseURL, "http") + "/ws"
+	cfg, err := websocket.NewConfig(wsURL, "http://localhost")
+	if err != nil {
+		t.Fatalf("ws config: %v", err)
+	}
+	cfg.Header.Set("Authorization", "Bearer tok")
+
+	ws, err := websocket.DialConfig(cfg)
+	if err != nil {
+		t.Fatalf("ws dial: %v", err)
+	}
+	defer ws.Close() //nolint:errcheck
+
+	if err := websocket.JSON.Send(ws, map[string]any{
+		"method": "Sessions_Stream",
+		"params": map[string]any{},
+	}); err != nil {
+		t.Fatalf("ws send: %v", err)
+	}
+
+	// Read frames until we see the elicit snapshot. The mandatory
+	// sessions:snapshot frame arrives first.
+	var (
+		sawSnapshot bool
+		sawElicit   bool
+		gotRequest  string
+	)
+	readDeadline := time.Now().Add(5 * time.Second)
+	for !sawElicit && time.Now().Before(readDeadline) {
+		ws.SetReadDeadline(time.Now().Add(2 * time.Second))
+		var frame struct {
+			Event string          `json:"event"`
+			Data  json.RawMessage `json:"data"`
+			Error string          `json:"error"`
+		}
+		if err := websocket.JSON.Receive(ws, &frame); err != nil {
+			t.Fatalf("ws receive: %v", err)
+		}
+		if frame.Error != "" {
+			t.Fatalf("ws frame error: %s", frame.Error)
+		}
+		switch frame.Event {
+		case "sessions:snapshot":
+			sawSnapshot = true
+		case "elicit:pending:snapshot":
+			sawElicit = true
+			// Data is an array of ElicitRequest; confirm our ask is present.
+			var reqs []struct {
+				RequestID string `json:"request_id"`
+				Question  string `json:"question"`
+			}
+			if err := json.Unmarshal(frame.Data, &reqs); err != nil {
+				t.Fatalf("unmarshal elicit snapshot: %v (data=%s)", err, frame.Data)
+			}
+			if len(reqs) == 0 {
+				t.Fatal("elicit:pending:snapshot data was empty")
+			}
+			for _, r := range reqs {
+				if r.Question == "Proceed with deploy?" {
+					gotRequest = r.RequestID
+				}
+			}
+		}
+	}
+
+	if !sawSnapshot {
+		t.Error("did not receive mandatory sessions:snapshot frame")
+	}
+	if !sawElicit {
+		t.Fatal("did not receive elicit:pending:snapshot frame within deadline")
+	}
+	if gotRequest == "" {
+		t.Error("elicit:pending:snapshot did not contain the registered ask")
+	}
+
+	// Resolve the ask so the backgrounded OpenDialog returns and the
+	// goroutine exits cleanly (avoids a leaked goroutine under -race).
+	if err := elicit.SubmitAnswer(context.Background(), gotRequest, json.RawMessage(`"yes"`), false); err != nil {
+		t.Errorf("SubmitAnswer: %v", err)
+	}
+	select {
+	case <-askDone:
+	case <-time.After(2 * time.Second):
+		t.Error("OpenDialog did not return after SubmitAnswer")
 	}
 }
 

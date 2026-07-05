@@ -2727,15 +2727,28 @@ type keychainForgetter struct {
 	backend *secrets.MemoryBackend
 }
 
-func (f *keychainForgetter) Forget(_ context.Context, locator string) error {
+func (f *keychainForgetter) Forget(ctx context.Context, locator string) error {
 	if f == nil {
 		return nil
 	}
-	// OS-keychain is best-effort: a missing entry on the deletion
-	// path is non-fatal. Also clear any legacy-namespace entry so a
-	// forgotten secret doesn't linger under the old service name.
-	_ = keyring.Delete(keyringService, locator)
-	_ = keyring.Delete(legacyKeyringService, locator)
+	// OS-keychain: best-effort on the deletion path — a missing entry is
+	// treated as success by keychainDelete, and other errors are WARN-logged
+	// (FR-004) so a failing keychain delete is no longer fully silent.
+	// Also clear any legacy-namespace entry so a forgotten secret doesn't
+	// linger under the old service name.
+	if err := keychainDelete(ctx, keyringService, locator); err != nil {
+		slog.WarnContext(ctx, "secret delete: keychain delete failed; entry may persist",
+			"locator", locator,
+			"error",   err.Error(),
+		)
+	}
+	if err := keychainDelete(ctx, legacyKeyringService, locator); err != nil {
+		// Legacy namespace: best-effort; log but don't accumulate the error.
+		slog.WarnContext(ctx, "secret delete: legacy keychain delete failed",
+			"locator", locator,
+			"error",   err.Error(),
+		)
+	}
 	if f.backend != nil {
 		f.backend.ClearEntry(secretsref.RefKeychain, locator)
 	}
@@ -4683,16 +4696,25 @@ func keyringGetMigrating(locator string) (string, error) {
 // Write stores plaintext in the OS keychain under the harness's
 // service namespace, mirrors it to the in-memory backend, and zeroes
 // the supplied buffer.
-func (w *keychainWriter) Write(_ context.Context, locator string, plaintext []byte) error {
+//
+// (FR-004) On keychain-set failure the error is WARN-logged so
+// operators can diagnose API-key persistence failures instead of
+// silently losing keys across restarts.  We still fall through to the
+// in-memory backend so the user can chat in the current session even
+// when the OS keychain is unavailable (CI / sandbox / Linux without
+// libsecret).  The returned error is non-nil on keychain failure so
+// RPC callers (e.g. Settings_SaveAPIKey) can surface the warning.
+func (w *keychainWriter) Write(ctx context.Context, locator string, plaintext []byte) error {
 	if w == nil {
 		return nil
 	}
-	if err := keyring.Set(keyringService, locator, string(plaintext)); err != nil {
-		// Don't hard-fail — fall through to the in-memory cache so
-		// the user can still chat in the current session even if the
-		// OS keychain backend is unavailable (CI / sandbox / Linux
-		// without libsecret).
-		_ = err
+	var keychainErr error
+	if err := keychainSet(ctx, keyringService, locator, string(plaintext)); err != nil {
+		// Log is already emitted by keychainSet — record for return.
+		slog.WarnContext(ctx, "API key written to in-memory cache only; keychain unavailable",
+			"locator", locator,
+		)
+		keychainErr = err
 	}
 	if w.backend != nil {
 		w.backend.SetEntry(secretsref.RefKeychain, locator, plaintext)
@@ -4700,7 +4722,10 @@ func (w *keychainWriter) Write(_ context.Context, locator string, plaintext []by
 	for i := range plaintext {
 		plaintext[i] = 0
 	}
-	return nil
+	// Return the keychain error so the RPC layer can surface it.
+	// The in-memory backend is always updated, so the current session
+	// is unaffected even when this returns non-nil.
+	return keychainErr
 }
 
 // newPersonalStore constructs the personal-providers FileStore. It

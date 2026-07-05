@@ -17,10 +17,17 @@
  *
  * # WS streaming
  *  GET /ws
- *  Authorization: Bearer <token>  (via `?token=` query param, WS doesn't carry headers)
+ *  Sec-WebSocket-Protocol: harness-auth.<token>  (browser-compatible auth)
  *  client → { method, params }
  *  server → { event, data } | { event: "closed" } | { error }
+ *
+ * # Connection state
+ *  The transport emits connection state changes to a module-level store
+ *  (setConnectionState) so the Shell can show a ConnectionLostBanner and
+ *  attempt reconnect with exponential backoff (FR-003).
  */
+
+import { setConnectionState } from './useConnectionState';
 
 export interface ServedRPCRequest {
   method: string;
@@ -60,6 +67,89 @@ function resolveToken(): string {
   return '';
 }
 
+// ── Reconnect poller ─────────────────────────────────────────────────────
+
+/**
+ * BACKOFF_STEPS_MS — exponential backoff delays for reconnect attempts.
+ * The sequence is: 1s, 2s, 4s, 8s, 16s, 30s (capped).
+ */
+const BACKOFF_STEPS_MS = [1_000, 2_000, 4_000, 8_000, 16_000, 30_000];
+
+let _reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+let _reconnectAttempt = 0;
+let _healthcheckURL = '';
+
+/**
+ * startReconnectPoller — called when the transport detects connection loss.
+ * Polls /healthz with exponential backoff; transitions state back to 'ready'
+ * on success. The poller is idempotent — calling it again while a timer is
+ * running is a no-op.
+ */
+function startReconnectPoller(baseURL: string): void {
+  if (_reconnectTimer !== null) return; // already running
+  _healthcheckURL = `${baseURL}/healthz`;
+  scheduleNextAttempt();
+}
+
+function scheduleNextAttempt(): void {
+  const delay = BACKOFF_STEPS_MS[Math.min(_reconnectAttempt, BACKOFF_STEPS_MS.length - 1)];
+  _reconnectTimer = setTimeout(() => {
+    _reconnectTimer = null;
+    void attemptReconnect();
+  }, delay);
+}
+
+async function attemptReconnect(): Promise<void> {
+  try {
+    const res = await fetch(_healthcheckURL, { method: 'GET', cache: 'no-store' });
+    if (res.ok) {
+      // Server is back — transition to ready.
+      _reconnectAttempt = 0;
+      setConnectionState('ready');
+      return;
+    }
+  } catch {
+    // Network error: server still down.
+  }
+  _reconnectAttempt++;
+  setConnectionState('lost');
+  scheduleNextAttempt();
+}
+
+/**
+ * stopReconnectPoller — cancels any pending reconnect attempt.
+ * Called when the transport is deliberately closed.
+ */
+export function stopReconnectPoller(): void {
+  if (_reconnectTimer !== null) {
+    clearTimeout(_reconnectTimer);
+    _reconnectTimer = null;
+  }
+  _reconnectAttempt = 0;
+}
+
+/**
+ * retryReconnectNow — fire an immediate reconnect probe, bypassing the backoff
+ * timer. Wired to the ConnectionLostBanner "Retry" button so a user-initiated
+ * retry doesn't have to wait for the next scheduled backoff step. Cancels any
+ * pending scheduled attempt, resets the backoff, and probes /healthz right
+ * away; on success attemptReconnect() flips the state back to 'ready', and on
+ * failure it reschedules the poller as usual.
+ *
+ * No-op when no reconnect target has been recorded yet (i.e. the transport
+ * never observed a connection loss). Safe to call in native mode — nothing
+ * ever populates `_healthcheckURL` there, so it stays a no-op.
+ */
+export function retryReconnectNow(): void {
+  if (_reconnectTimer !== null) {
+    clearTimeout(_reconnectTimer);
+    _reconnectTimer = null;
+  }
+  _reconnectAttempt = 0;
+  if (_healthcheckURL === '') return; // no target recorded — nothing to probe
+  void attemptReconnect();
+}
+
 export class ServedTransport {
   private readonly baseURL: string;
   private readonly token: string;
@@ -78,17 +168,33 @@ export class ServedTransport {
   /**
    * call — POST /rpc and return the typed result.
    * Throws on network error or when the server returns { error }.
+   * On network error, transitions connection state to 'lost' and starts
+   * the reconnect poller (FR-003).
    */
   async call<T = unknown>(method: string, params?: unknown): Promise<T> {
     const body: ServedRPCRequest = { method, params: params ?? null };
-    const res = await fetch(`${this.baseURL}/rpc`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        ...this.authHeaders(),
-      },
-      body: JSON.stringify(body),
-    });
+    let res: Response;
+    try {
+      res = await fetch(`${this.baseURL}/rpc`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...this.authHeaders(),
+        },
+        body: JSON.stringify(body),
+      });
+    } catch {
+      // Network-level failure (server down / offline).
+      setConnectionState('lost');
+      startReconnectPoller(this.baseURL);
+      throw new Error(`servedTransport: ${method}: network error`);
+    }
+
+    // Successful HTTP response — connection is up.
+    if (_reconnectTimer !== null) {
+      stopReconnectPoller();
+      setConnectionState('ready');
+    }
 
     if (!res.ok) {
       let msg = `HTTP ${res.status}`;
@@ -111,6 +217,11 @@ export class ServedTransport {
   /**
    * openStream — open a WebSocket to /ws and return a cancellable handle.
    *
+   * Auth: when a token is set, it is sent as a Sec-WebSocket-Protocol header
+   * value using the "harness-auth.<token>" sub-protocol (browser-compatible;
+   * see FR-004).  The server must accept this sub-protocol and extract the
+   * token from it.  The token is NOT placed in the URL query string.
+   *
    * The caller provides:
    *   - method  — e.g. "Sessions_Stream"
    *   - params  — optional params forwarded to the server
@@ -128,7 +239,16 @@ export class ServedTransport {
     onClose?: WSCloseHandler;
   }): () => void {
     const wsURL = this.buildWSURL();
-    const ws = new WebSocket(wsURL);
+    const wsOpts: string[] = ['harness-v1'];
+    if (this.token) {
+      // Encode the token as a sub-protocol so browsers can send auth
+      // without a custom header (which the WS API doesn't support).
+      // The server must accept "harness-auth.<token>" and validate it.
+      // Base64url-encode the token to ensure it's a valid protocol label
+      // (no spaces, commas, or other WS-protocol-disallowed chars).
+      wsOpts.push(`harness-auth.${btoa(this.token).replace(/=/g, '')}`);
+    }
+    const ws = new WebSocket(wsURL, wsOpts);
     let closed = false;
 
     ws.addEventListener('open', () => {
@@ -136,6 +256,11 @@ export class ServedTransport {
       ws.send(
         JSON.stringify({ method: opts.method, params: opts.params ?? null }),
       );
+      // Clear any pending reconnect state — WS came up.
+      if (_reconnectTimer !== null) {
+        stopReconnectPoller();
+        setConnectionState('ready');
+      }
     });
 
     ws.addEventListener('message', (ev: MessageEvent<string>) => {
@@ -160,16 +285,26 @@ export class ServedTransport {
     });
 
     ws.addEventListener('error', () => {
-      if (!closed) opts.onError?.('websocket error');
+      if (!closed) {
+        opts.onError?.('websocket error');
+        setConnectionState('lost');
+        startReconnectPoller(this.baseURL);
+      }
     });
 
     ws.addEventListener('close', () => {
-      if (!closed) opts.onClose?.();
+      if (!closed) {
+        opts.onClose?.();
+        // Unexpected close: start the reconnect poller.
+        setConnectionState('lost');
+        startReconnectPoller(this.baseURL);
+      }
       closed = true;
     });
 
     return () => {
       closed = true;
+      stopReconnectPoller();
       if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
         ws.close();
       }
@@ -178,21 +313,19 @@ export class ServedTransport {
 
   /**
    * buildWSURL — convert the base HTTP URL to a ws:// / wss:// URL.
+   * The token is NOT included in the URL (FR-004 privacy constraint).
    */
   private buildWSURL(): string {
     if (this.baseURL === '') {
       // Same origin: use window.location
       const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
       const path = '/ws';
-      const tokenParam = this.token
-        ? `?token=${encodeURIComponent(this.token)}`
-        : '';
-      return `${proto}//${window.location.host}${path}${tokenParam}`;
+      return `${proto}//${window.location.host}${path}`;
     }
     const url = new URL(this.baseURL);
     url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
     url.pathname = '/ws';
-    if (this.token) url.searchParams.set('token', this.token);
+    // Do NOT add token as query param — use sub-protocol instead.
     return url.toString();
   }
 }

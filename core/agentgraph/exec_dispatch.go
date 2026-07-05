@@ -4,11 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"runtime/debug"
 	"strings"
 	"time"
 
 	"golang.org/x/sync/errgroup"
 
+	"github.com/kameas-ai/kenaz-harness/core/logging"
 	"github.com/kameas-ai/kenaz-harness/core/toolloop"
 )
 
@@ -189,6 +191,36 @@ func (toolDispatchExecutor) Execute(ctx context.Context, env *Env, node *Node, i
 		}
 	}
 
+	// safeDispatchOne wraps dispatchOne with panic recovery (FR-001).
+	// A panicking tool goroutine yields an is_error ToolResult visible to
+	// the model; sibling tool calls in the same fan-out continue and the
+	// process does not crash. This mirrors the kernel's safeExecute pattern.
+	safeDispatchOne := func(i int) {
+		defer func() {
+			if r := recover(); r != nil {
+				stack := debug.Stack()
+				oc := &outcomes[i]
+				logging.L().Error("agentgraph.tool_dispatch.panic",
+					"tool", oc.call.Name,
+					"call_id", oc.call.ID,
+					"panic", fmt.Sprintf("%v", r),
+					"stack", string(stack),
+				)
+				oc.result = ToolResult{
+					Content: fmt.Sprintf("tool panicked: %v", r),
+					IsError: true,
+				}
+				oc.err = fmt.Errorf("tool %q panicked: %v", oc.call.Name, r)
+				_ = oc.events.AppendKind(env.RunID, node.ID, EventNodeError, map[string]any{
+					"err":     fmt.Sprintf("panic: %v", r),
+					"tool":    oc.call.Name,
+					"call_id": oc.call.ID,
+				})
+			}
+		}()
+		dispatchOne(i)
+	}
+
 	if len(calls) > 1 && a.MaxConcurrent != 1 {
 		// Default behaviour is parallel; max_concurrent caps the
 		// goroutine count via errgroup's SetLimit. Setting
@@ -198,14 +230,14 @@ func (toolDispatchExecutor) Execute(ctx context.Context, env *Env, node *Node, i
 		for i := range calls {
 			i := i
 			grp.Go(func() error {
-				dispatchOne(i)
+				safeDispatchOne(i)
 				return nil
 			})
 		}
 		_ = grp.Wait()
 	} else {
 		for i := range calls {
-			dispatchOne(i)
+			safeDispatchOne(i)
 		}
 	}
 

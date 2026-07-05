@@ -18,6 +18,8 @@
  */
 import { ref, computed, onMounted } from 'vue';
 import CanvasHead from '@/shell/CanvasHead.vue';
+import { useServedMode } from '@/lib/useServedMode';
+import NotAvailableInServedMode from '@/components/ui/NotAvailableInServedMode.vue';
 import WorkflowEditor from './WorkflowEditor.vue';
 import SimpleTemplateEditor from './SimpleTemplateEditor.vue';
 import CatalogView from './CatalogView.vue';
@@ -44,6 +46,7 @@ const props = defineProps<{
   chatClient?: ScheduledChatClient;
 }>();
 
+const servedMode = useServedMode();
 const client: WorkflowsClient = props.client ?? createWorkflowsClient();
 // scheduled-chat-runs-01KX5R8B WP06 — production creates a real client;
 // tests can inject a fake via the chatClient prop.
@@ -273,7 +276,11 @@ onMounted(loadCatalog);
 </script>
 
 <template>
-  <div>
+  <NotAvailableInServedMode
+    v-if="servedMode"
+    feature="Workflows"
+  />
+  <div v-else>
     <CanvasHead
       number="08"
       section="WORKFLOWS"

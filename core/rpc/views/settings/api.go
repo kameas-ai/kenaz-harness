@@ -61,6 +61,13 @@ type Settings struct {
 	// (read-only commands; deny by pattern).
 	BashEnabled bool `json:"bashEnabled,omitempty"`
 
+	// WebFetchEnabled controls the kenaz__web_fetch built-in. Default OFF
+	// (zero-value → disabled). The tool makes authenticated HTTP requests
+	// on behalf of the model, resolving @secret: references at request time.
+	// Gated by Cedar network policy (host allowlist) in addition to this toggle.
+	// (crash-recovery-tool-gating-0XQTC4RK FR-005)
+	WebFetchEnabled bool `json:"webFetchEnabled,omitempty"`
+
 	// SaveArtifactDisabled is the inverted-form persisted bit for the
 	// kenaz__save_artifact built-in. Default ON (zero-value Disabled
 	// → tool enabled) — saving deliverables is a low-risk primitive
@@ -910,6 +917,12 @@ type SettingsStore interface {
 	// in the same shape. Default false (off).
 	LoadBash() (bool, error)
 	SaveBash(enabled bool) error
+	// LoadWebFetchEnabled / SaveWebFetchEnabled expose the kenaz__web_fetch
+	// built-in opt-in. Default false (off) — the tool makes outbound HTTP
+	// requests with @secret: substitution; the user must opt in and the Cedar
+	// network gate applies regardless. (crash-recovery-tool-gating-0XQTC4RK FR-005)
+	LoadWebFetchEnabled() (bool, error)
+	SaveWebFetchEnabled(enabled bool) error
 	// LoadSaveArtifactEnabled / SaveSaveArtifactEnabled expose the
 	// kenaz__save_artifact built-in opt-in. Default true (on) — saving
 	// deliverables is a low-risk primitive that should work on first

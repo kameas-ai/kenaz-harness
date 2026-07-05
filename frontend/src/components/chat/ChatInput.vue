@@ -29,6 +29,8 @@ import { computed, onBeforeUnmount, onMounted, ref, watch, watchEffect } from 'v
 import { Paperclip, X, FileText } from 'lucide-vue-next';
 import { useDropZone } from '@vueuse/core';
 import { useHarnessClient } from '@/lib/harnessClientContext';
+import { isServedMode } from '@/lib/useServedMode';
+import { useConnectionState } from '@/lib/useConnectionState';
 import type {
   ContentBlock,
   CostEstimate,
@@ -244,11 +246,21 @@ watch(
   },
 );
 
+// Served-mode connection gate (FR-003): sending a message requires the
+// backend (append + llm.startStream). When the served-mode WS/HTTP transport
+// is lost, disable the composer so the user can't type into a void that will
+// silently fail. No-op in native mode (isServedMode() is false there, so the
+// desktop composer is never gated by connection state).
+const served = isServedMode();
+const connection = useConnectionState();
+const connectionLost = computed(() => served && connection.value === 'lost');
+
 // Textarea + send button stay enabled while streaming so the user can
 // queue follow-up messages — the parent's `send` handler routes them
 // into a queue that drains as soon as the current turn finishes.
-// `disabled` (no provider, no session) still hard-locks the input.
-const isDisabled = computed(() => props.disabled === true);
+// `disabled` (no provider, no session) still hard-locks the input, as does a
+// lost served-mode connection.
+const isDisabled = computed(() => props.disabled === true || connectionLost.value);
 const trimmed = computed(() => internal.value.trim());
 
 // ── pending attachments (staged before send) ──────────────────────────
@@ -1155,6 +1167,17 @@ const acceptedTypes =
       data-testid="chat-input-error"
     >
       {{ localError || errorBanner }}
+    </div>
+
+    <!-- served-mode connection-lost notice (FR-003): the composer is disabled
+         while the backend is unreachable so sends can't silently fail. -->
+    <div
+      v-if="connectionLost"
+      class="mb-2 rounded-md border border-signal-danger bg-surface-1 px-3 py-2 font-ui text-[12px] text-ink-muted"
+      role="status"
+      data-testid="chat-input-connection-lost"
+    >
+      Connection to the harness backend lost — sending is paused until it reconnects.
     </div>
 
     <!-- branch suggestion banner (FR-002) -->

@@ -332,6 +332,20 @@ func TestSession_BrokerSignedOut_ClearsToken(t *testing.T) {
 		t.Errorf("access token must be cleared on sign-out, got non-empty")
 	}
 
+	// Ledger event is emitted asynchronously after the state transition, so
+	// poll for it rather than reading once (the immediate read raced the emit
+	// and flaked under CI's -race timing).
+	ledgerDeadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(ledgerDeadline) {
+		ledgerMu.Lock()
+		n := len(ledgerEvents)
+		ledgerMu.Unlock()
+		if n > 0 {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
 	// Ledger event must have been emitted.
 	ledgerMu.Lock()
 	events := ledgerEvents

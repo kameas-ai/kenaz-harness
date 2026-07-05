@@ -19,6 +19,8 @@ import {
   Folder,
 } from './icons';
 import { useSessions, useProjects } from '@/lib/useHarnessAPI';
+import { isServedMode } from '@/lib/useServedMode';
+import { useConnectionState } from '@/lib/useConnectionState';
 import NewSessionDialog from './NewSessionDialog.vue';
 import MemoryBadge from './MemoryBadge.vue';
 import WorkflowRunsSection from '@/components/workflows/WorkflowRunsSection.vue';
@@ -51,6 +53,14 @@ const {
 const newSessionDialogOpen = ref(false);
 const newSessionProjectId = ref<string | undefined>(undefined);
 const deletingId = ref<string | null>(null);
+
+// Served-mode connection gate (FR-003): creating a session hits the backend
+// (Sessions_Create). When the served transport is lost, disable the
+// new-session affordances so a click can't silently fail. No-op in native
+// mode — isServedMode() is false there, so the desktop rail is never gated.
+const served = isServedMode();
+const connection = useConnectionState();
+const backendUnavailable = computed(() => served && connection.value === 'lost');
 
 // WP07 — drag-and-drop session-to-project membership. The dragged
 // session id is captured at dragstart; project headers + the Loose
@@ -474,8 +484,10 @@ async function onProjectDrop(evt: DragEvent, projectId: string) {
     <div class="px-2 pt-3 pb-2 flex items-center gap-1">
       <button
         type="button"
-        class="flex items-center gap-2 px-3 py-2 rounded-sm flex-1 text-left text-sm font-ui text-accent border border-accent-hairline hover:bg-accent-glow transition-fast ease-kenaz disabled:opacity-50"
+        class="flex items-center gap-2 px-3 py-2 rounded-sm flex-1 text-left text-sm font-ui text-accent border border-accent-hairline hover:bg-accent-glow transition-fast ease-kenaz disabled:opacity-50 disabled:cursor-not-allowed"
         aria-label="New session"
+        :disabled="backendUnavailable"
+        :title="backendUnavailable ? 'Connection to the harness backend lost — reconnecting…' : undefined"
         @click="newSession(activeProjectId || undefined)"
       >
         <Plus :size="14" />
@@ -611,9 +623,10 @@ async function onProjectDrop(evt: DragEvent, projectId: string) {
               </button>
               <button
                 type="button"
-                class="shrink-0 p-1.5 rounded-sm text-ink-dim hover:text-accent hover:bg-surface-3 focus:outline-none focus:ring-1 focus:ring-accent"
+                class="shrink-0 p-1.5 rounded-sm text-ink-dim hover:text-accent hover:bg-surface-3 focus:outline-none focus:ring-1 focus:ring-accent disabled:opacity-50 disabled:cursor-not-allowed"
                 :aria-label="`New session in ${project.name}`"
                 :data-testid="`new-session-in-project-${project.id}`"
+                :disabled="backendUnavailable"
                 @click.stop="newSession(project.id)"
               >
                 <Plus :size="12" />

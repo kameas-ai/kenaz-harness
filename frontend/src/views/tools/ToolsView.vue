@@ -12,8 +12,11 @@ import { onMounted, ref } from 'vue';
 import CanvasHead from '@/shell/CanvasHead.vue';
 import KenazToolsPanel from './KenazToolsPanel.vue';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
+import { useServedMode } from '@/lib/useServedMode';
+import NotAvailableInServedMode from '@/components/ui/NotAvailableInServedMode.vue';
 import type { MCPServer } from '@/lib/types';
 
+const servedMode = useServedMode();
 const client = useHarnessClient();
 
 const servers = ref<readonly MCPServer[]>([]);
@@ -55,7 +58,11 @@ onMounted(() => {
 </script>
 
 <template>
-  <div>
+  <NotAvailableInServedMode
+    v-if="servedMode"
+    feature="Tools"
+  />
+  <div v-else>
     <CanvasHead
       number="02"
       section="TOOLS"

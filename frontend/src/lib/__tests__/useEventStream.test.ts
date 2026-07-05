@@ -125,17 +125,34 @@ describe('useEventStream (chat-ui)', () => {
     w.unmount();
   });
 
-  it('is a no-op when window.runtime is missing', () => {
+  it('falls back to served-event bus when window.runtime is missing', async () => {
+    // Uninstall the Wails runtime to simulate served mode.
     uninstallRuntime();
+
+    const seen: string[] = [];
     const Comp = defineComponent({
       setup() {
-        const r = useEventStream('llm:stream-chunk');
+        const r = useEventStream<{ delta: string }>(
+          'llm:stream-chunk',
+          (p) => seen.push(p.delta),
+        );
         return () =>
           h('div', `${r.active.value}|${r.count.value}`);
       },
     });
     const w = mount(Comp);
-    expect(w.text()).toBe('false|0');
+
+    // In served mode the composable subscribes to the served-event bus
+    // and reports active=true even without window.runtime.
+    expect(w.text()).toBe('true|0');
+
+    // Dispatch an event through the served bus; the handler should fire.
+    const { dispatchServedEvent } = await import('@/lib/useServedEvents');
+    dispatchServedEvent('llm:stream-chunk', { delta: 'hello' });
+    await nextTick();
+
+    expect(seen).toEqual(['hello']);
+    expect(w.text()).toBe('true|1');
     w.unmount();
   });
 });

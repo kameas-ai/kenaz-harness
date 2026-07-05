@@ -27,8 +27,11 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"sync"
 	"time"
+
+	"github.com/kameas-ai/kenaz-harness/core/logging"
 )
 
 // configPollInterval is the normal interval between config bundle fetches.
@@ -148,6 +151,17 @@ func (p *ConfigPoller) Start(ctx context.Context) {
 	go func() {
 		defer close(p.done)
 		defer cancel()
+		// Recover panics from the polling loop (FR-003). The goroutine logs
+		// the panic and exits cleanly rather than crashing the process.
+		defer func() {
+			if r := recover(); r != nil {
+				stack := debug.Stack()
+				logging.L().Error("fleet.config_poller.panic",
+					"panic", fmt.Sprintf("%v", r),
+					"stack", string(stack),
+				)
+			}
+		}()
 
 		// Immediate first poll.
 		if err := p.poll(innerCtx); err != nil {

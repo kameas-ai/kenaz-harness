@@ -37,7 +37,7 @@ func emitChecked(ctx context.Context, em audit.Emitter, channel, resultVersion s
 	if ms < 0 {
 		ms = 0
 	}
-	_ = audit.Emit(ctx, em, audit.KindUpdateChecked,
+	audit.MustEmit(ctx, em, audit.KindUpdateChecked,
 		audit.UpdateCheckedAttrs{
 			Channel:       channel,
 			ResultVersion: resultVersion,
@@ -52,7 +52,7 @@ func emitAvailable(ctx context.Context, em audit.Emitter, current, available, ch
 	if em == nil {
 		return
 	}
-	_ = audit.Emit(ctx, em, audit.KindUpdateAvailable,
+	audit.MustEmit(ctx, em, audit.KindUpdateAvailable,
 		audit.UpdateAvailableAttrs{
 			CurrentVersion:   current,
 			AvailableVersion: available,
@@ -65,7 +65,7 @@ func emitDownloaded(ctx context.Context, em audit.Emitter, version string, bytes
 	if em == nil {
 		return
 	}
-	_ = audit.Emit(ctx, em, audit.KindUpdateDownloaded,
+	audit.MustEmit(ctx, em, audit.KindUpdateDownloaded,
 		audit.UpdateDownloadedAttrs{
 			Version:     version,
 			Bytes:       bytes,
@@ -81,7 +81,7 @@ func emitApplied(ctx context.Context, em audit.Emitter, from, to, platform strin
 	if em == nil {
 		return
 	}
-	_ = audit.Emit(ctx, em, audit.KindUpdateApplied,
+	audit.MustEmit(ctx, em, audit.KindUpdateApplied,
 		audit.UpdateAppliedAttrs{
 			FromVersion: from,
 			ToVersion:   to,
@@ -94,7 +94,7 @@ func emitSkipped(ctx context.Context, em audit.Emitter, version, reason string) 
 	if em == nil {
 		return
 	}
-	_ = audit.Emit(ctx, em, audit.KindUpdateSkipped,
+	audit.MustEmit(ctx, em, audit.KindUpdateSkipped,
 		audit.UpdateSkippedAttrs{
 			Version: version,
 			Reason:  reason,
@@ -109,7 +109,7 @@ func emitFailed(ctx context.Context, em audit.Emitter, action string, err error)
 	if em == nil || err == nil {
 		return
 	}
-	_ = audit.Emit(ctx, em, audit.KindUpdateFailed,
+	audit.MustEmit(ctx, em, audit.KindUpdateFailed,
 		audit.UpdateFailedAttrs{
 			Action:     action,
 			ErrorClass: classifyUpdateError(err),

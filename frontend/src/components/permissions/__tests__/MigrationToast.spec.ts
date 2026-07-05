@@ -29,6 +29,8 @@ function mountToast(toastShown: boolean) {
       saveTheme: async () => undefined,
       getMemory: async () => false,
       setMemory: async () => undefined,
+      getWebFetchEnabled: async () => false,
+      setWebFetchEnabled: async () => undefined,
       getWebSearch: async () => false,
       setWebSearch: async () => undefined,
       getBash: async () => false,

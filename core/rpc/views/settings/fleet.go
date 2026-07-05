@@ -2,6 +2,8 @@ package settings
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"os"
 	"runtime"
 	"sync"
@@ -340,6 +342,7 @@ func (a *API) FleetSignOut(ctx context.Context) error {
 	if dataDir != "" {
 		if err := os.Remove(fleet.IdentityFilePath(dataDir)); err != nil && !os.IsNotExist(err) {
 			logging.L().Warn("fleet.rpc.sign_out.remove_identity_failed", "err", err.Error())
+			signOutErr = errors.Join(signOutErr, fmt.Errorf("remove identity file: %w", err))
 		}
 	}
 	if signOutErr != nil {
@@ -634,17 +637,10 @@ func (a *API) FleetHealth(ctx context.Context) (FleetHealthView, error) {
 		}
 	}
 
-	// Session state.
-	signedIn := false
-	if !fleet.Disabled() {
-		ts, err := fleet.LoadTokens()
-		if err == nil && !ts.ExpiresAt.IsZero() && ts.ExpiresAt.After(time.Now()) {
-			signedIn = true
-		} else if err == nil && ts.ExpiresAt.IsZero() {
-			// Token exists but no expiry info — treat as signed-in (legacy token).
-			signedIn = true
-		}
-	}
+	// Session state — delegate to FleetSignedIn/Client.SignedIn so Health uses
+	// the same expiry semantics (tokenExpiryGrace + consistent no-ExpiresAt
+	// handling) as the account UI, rather than a divergent inline check.
+	signedIn, _ := a.FleetSignedIn(ctx)
 
 	return FleetHealthView{
 		ConfigDistributionEnabled: enabled,

@@ -34,6 +34,7 @@ import { useTheme } from '@/lib/useTheme';
 import { useSearchPalette } from '@/lib/useSearchPalette';
 import { useCommandPalette } from '@/lib/useCommandPalette';
 import { useUpdateStore } from '@/components/updates/useUpdateStore';
+import { runAsyncAction } from '@/composables/useAsyncAction';
 import type { FleetIdentity, FleetProfileInfo } from '@/lib/types';
 
 const client = useHarnessClient();
@@ -48,6 +49,8 @@ const profile = ref<FleetProfileInfo | null>(null);
 const fleetDisabled = ref(false);
 const menuOpen = ref(false);
 const loading = ref(false);
+/** Inline error state for sign-out failure — visible near the sign-out button. */
+const signOutError = ref<string | null>(null);
 
 let pollTimer: number | null = null;
 
@@ -192,14 +195,26 @@ async function handleSignIn() {
 async function handleSignOut() {
   close();
   loading.value = true;
-  try {
-    await client.settings.fleetSignOut();
+  signOutError.value = null;
+  // (FR-003) Surface sign-out failures instead of silently ignoring them.
+  const result = await runAsyncAction({
+    action:     () => client.settings.fleetSignOut(),
+    errorLabel: 'Sign out',
+    toastMessage: (err) => {
+      const msg = err instanceof Error ? err.message : String(err);
+      return `Sign out failed: ${msg}. You may still be signed in.`;
+    },
+  });
+  if (!result.error) {
     identity.value = false;
-  } catch {
-    // Ignored — next poll refreshes state.
-  } finally {
-    loading.value = false;
+  } else {
+    signOutError.value = result.err instanceof Error
+      ? result.err.message
+      : String(result.err);
+    // Re-open the menu so the user sees the error inline.
+    menuOpen.value = true;
   }
+  loading.value = false;
 }
 </script>
 
@@ -346,6 +361,15 @@ async function handleSignOut() {
         >
           {{ loading ? 'Signing out…' : 'Sign out' }}
         </button>
+        <!-- Sign-out failure inline error (FR-003) -->
+        <p
+          v-if="signOutError"
+          class="px-2 pb-1 font-ui text-[10px] text-signal-danger"
+          role="alert"
+          data-testid="sign-out-error"
+        >
+          {{ signOutError }}
+        </p>
       </template>
     </div>
   </div>

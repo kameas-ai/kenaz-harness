@@ -3,6 +3,7 @@ package fleet
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"strconv"
 	"strings"
 	"time"
@@ -74,20 +75,25 @@ func LoadTokens() (TokenSet, error) {
 
 // ClearTokens deletes all fleet tokens from the OS keychain.
 // All three slots are attempted regardless of individual errors so a partial
-// keychain state is avoided. The returned error is an aggregate of any
-// failures (excluding "not found" — missing tokens are not an error on
-// sign-out). Callers should surface the error but still treat sign-out as
-// logically complete (the tokens that failed to delete are unusable anyway
-// because the access token is the gate, and if that slot is missing, Sign-In
-// will refuse to load the token set).
+// keychain state is avoided. Individual delete failures are WARN-logged (not
+// silently swallowed, FR-004) so a failing keychain clear is diagnosable, and
+// the returned error aggregates every failure (fleet-integrity WP06), excluding
+// "not found" — missing tokens are not an error on sign-out. Callers should
+// surface the error but may still treat sign-out as logically complete (the
+// access token is the gate; a token that failed to delete is unusable anyway
+// because Sign-In refuses to load an incomplete set).
 func ClearTokens() error {
 	var errs []string
 	for _, key := range []string{keyAccessToken(), keyRefreshToken(), keyExpiresAt()} {
 		if err := keyring.Delete(keyringService, key); err != nil {
-			// "not found" is not an error during sign-out.
-			if err.Error() == "secret not found in keyring" {
+			if err == keyring.ErrNotFound {
+				// Already absent — that's the desired post-state.
 				continue
 			}
+			slog.Warn("fleet: ClearTokens keychain delete failed",
+				"key", key,
+				"error", err.Error(),
+			)
 			errs = append(errs, err.Error())
 		}
 	}

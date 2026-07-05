@@ -46,6 +46,8 @@ function makeClient(overrides: Partial<Settings> = {}) {
       saveTheme: vi.fn().mockResolvedValue(undefined),
       getMemory: async () => false,
       setMemory: async () => undefined,
+      getWebFetchEnabled: async () => false,
+      setWebFetchEnabled: async () => undefined,
     } as any,
     appInfo: async () => ({
       build: '0.1.0-test',

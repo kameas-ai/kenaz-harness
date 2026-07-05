@@ -7,10 +7,13 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"runtime/debug"
 	"sync"
 	"time"
 
 	"golang.org/x/sync/singleflight"
+
+	"github.com/kameas-ai/kenaz-harness/core/logging"
 )
 
 // pollInterval is the normal interval between capability refreshes.
@@ -123,6 +126,16 @@ func (p *CapabilityPoller) Start(ctx context.Context) {
 	go func() {
 		defer close(p.done)
 		defer cancel()
+		// Recover panics from the capability poll loop (FR-003).
+		defer func() {
+			if r := recover(); r != nil {
+				stack := debug.Stack()
+				logging.L().Error("fleet.capability_poller.panic",
+					"panic", fmt.Sprintf("%v", r),
+					"stack", string(stack),
+				)
+			}
+		}()
 
 		// Decide whether to fetch immediately or wait.
 		cur := p.Current()

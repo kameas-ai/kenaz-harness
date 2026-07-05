@@ -12,6 +12,8 @@
  */
 
 import { computed, onMounted, ref } from 'vue';
+import { useServedMode } from '@/lib/useServedMode';
+import NotAvailableInServedMode from '@/components/ui/NotAvailableInServedMode.vue';
 import {
   DialogRoot,
   DialogPortal,
@@ -29,6 +31,7 @@ import AddProviderForm from './AddProviderForm.vue';
 import ProviderRow from './ProviderRow.vue';
 import LocalRuntimesSection from './LocalRuntimesSection.vue';
 
+const servedMode = useServedMode();
 const client = useHarnessClient();
 
 const providers = ref<readonly Provider[]>([]);
@@ -165,7 +168,12 @@ const inlineTestClass = computed(() =>
 </script>
 
 <template>
+  <NotAvailableInServedMode
+    v-if="servedMode"
+    feature="Providers"
+  />
   <SettingsShell
+    v-else
     number="04"
     section="PROVIDERS"
     title="Configured LLM providers"
