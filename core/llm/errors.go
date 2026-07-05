@@ -79,10 +79,18 @@ func (e *ErrCredentialResolution) Unwrap() error { return e.Cause }
 // ErrTransient marks a recoverable provider error subject to retry
 // (FR-016 / FR-017). Adapters MUST wrap network blips, 408, 425, 429,
 // and 5xx responses in ErrTransient.
+//
+// RetryAfterSec, when > 0, carries the server-mandated backoff from the
+// Retry-After or X-RateLimit-Reset-After response headers. The retry
+// middleware honors this value (FR-004 / agent-loop-robustness-parity
+// WP04): it uses max(computedBackoff, RetryAfterSec * 1000) as the
+// actual sleep so rate-limit storms don't retry faster than the server
+// requests.
 type ErrTransient struct {
-	Status  int
-	Message string
-	Cause   error
+	Status         int
+	Message        string
+	Cause          error
+	RetryAfterSec  float64 // server-requested backoff in seconds; 0 means not specified
 }
 
 func (e *ErrTransient) Error() string {
