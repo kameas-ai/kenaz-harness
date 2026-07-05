@@ -327,7 +327,6 @@ interface WailsBindingsLike {
   MCP_ImportClaudeDesktopConfig(
     req: MCPImportRequest,
   ): Promise<MCPImportResponse>;
-  MCP_TestRecipe(recipe: WireRecipe): Promise<MCPTestResult>;
 
   A2A_ListCards(): Promise<A2ACard[]>;
   A2A_StartStream(): Promise<string>;
@@ -2952,7 +2951,6 @@ export function createHarnessClient(): HarnessClient {
       testRecipe: (recipeID, env = {}, config = {}) =>
         b().MCP_TestRecipe(recipeID, env, config),
       importClaudeDesktopConfig: (req) => b().MCP_ImportClaudeDesktopConfig(req),
-      testRecipe: (recipe) => b().MCP_TestRecipe(recipe as WireRecipe),
     },
     a2a: {
       listCards: () => b().A2A_ListCards(),
