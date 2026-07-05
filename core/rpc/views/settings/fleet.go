@@ -79,6 +79,10 @@ func (a *API) SetFleetClient(c *fleet.Client, dataDir string) {
 	defer a.fleet.mu.Unlock()
 	a.fleet.client = c
 	a.fleet.dataDir = dataDir
+	// Wire the session-expired broker into the client if already set.
+	if a.fleet.lockdownBroker != nil && c != nil {
+		c.SetSessionBroker(a.fleet.lockdownBroker)
+	}
 	// Start the capability poller lazily. When c is a nop client the poller
 	// will degrade gracefully on every Refresh call.
 	if a.fleet.poller == nil {
@@ -105,6 +109,8 @@ func (a *API) SetFleetClient(c *fleet.Client, dataDir string) {
 
 // SetLockdownBroker wires the event broker into the fleet state so the
 // lockdown Watcher can publish fleet:lockdown:changed events to the frontend.
+// Also wires the same broker into the fleet Client for session-expired events
+// (fleet-integrity-observability WP05 / FR-005).
 // Must be called before SetFleetClient to take effect on first start; if called
 // after, the watcher uses the broker on its next reconnect cycle.
 // (fleet-emergency-lockdown-01NDFSEX12 WP02)
@@ -118,6 +124,10 @@ func (a *API) SetLockdownBroker(sink fleet.BrokerSink) {
 	// If the watcher is already running, update its broker reference.
 	if a.fleet.lockdownWatcher != nil {
 		a.fleet.lockdownWatcher.SetBroker(sink)
+	}
+	// Wire the broker into the fleet client for session-expired events (FR-005).
+	if a.fleet.client != nil {
+		a.fleet.client.SetSessionBroker(sink)
 	}
 }
 

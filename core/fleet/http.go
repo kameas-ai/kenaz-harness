@@ -11,6 +11,17 @@ import (
 	"time"
 )
 
+// TopicFleetSessionExpired is the Wails broker topic emitted when a token
+// refresh fails (the user must re-authenticate). Declared here next to the
+// payload type. The stream broker re-exports it via the event system.
+const TopicFleetSessionExpired = "fleet:session:expired"
+
+// SessionExpiredPayload is the JSON shape emitted on TopicFleetSessionExpired.
+type SessionExpiredPayload struct {
+	// Reason is a human-readable string describing why the session expired.
+	Reason string `json:"reason"`
+}
+
 // do executes an HTTP request against the fleet server with:
 //   - Bearer token injection from the keychain
 //   - 5xx exponential backoff (1s/2s/4s, max 3 total attempts)
@@ -40,6 +51,28 @@ func (c *Client) do(ctx context.Context, method, path string, body io.Reader) (*
 	ts, err := LoadTokens()
 	if err != nil {
 		return nil, ErrNotSignedIn
+	}
+
+	// FR-006: proactively refresh when the token is known-expired (or within
+	// the grace window) rather than only reacting to a server 401. This avoids
+	// a failed first request for every poll cycle after token expiry.
+	if !ts.ExpiresAt.IsZero() && time.Now().Add(tokenExpiryGrace).After(ts.ExpiresAt) {
+		if ts.RefreshToken != "" {
+			newTS, refreshErr := RefreshTokenSet(ctx, c.profile, ts.RefreshToken)
+			if refreshErr != nil {
+				// Proactive refresh failed → emit session-expired event and bail.
+				c.emitSessionExpired("proactive refresh failed: " + refreshErr.Error())
+				return nil, ErrTokenExpired
+			}
+			if saveErr := SaveTokens(newTS); saveErr != nil {
+				return nil, saveErr
+			}
+			ts = newTS
+		} else {
+			// Expired with no refresh token → session is dead.
+			c.emitSessionExpired("access token expired and no refresh token available")
+			return nil, ErrTokenExpired
+		}
 	}
 
 	reqURL, urlErr := c.APIURL(ctx, path)
@@ -110,11 +143,13 @@ func (c *Client) do(ctx context.Context, method, path string, body io.Reader) (*
 
 	doRefresh:
 		if refreshAttempts > 0 {
-			// Already tried refresh once.
+			// Already tried refresh once — session is dead.
+			c.emitSessionExpired("re-authentication required after refresh failure")
 			return nil, ErrTokenExpired
 		}
 		newTS, refreshErr := RefreshTokenSet(ctx, c.profile, ts.RefreshToken)
 		if refreshErr != nil {
+			c.emitSessionExpired("refresh token exchange failed: " + refreshErr.Error())
 			return nil, ErrTokenExpired
 		}
 		if saveErr := SaveTokens(newTS); saveErr != nil {
@@ -125,6 +160,15 @@ func (c *Client) do(ctx context.Context, method, path string, body io.Reader) (*
 	}
 
 	return nil, errors.New("fleet: unexpected retry exhaustion")
+}
+
+// emitSessionExpired publishes a TopicFleetSessionExpired event to the broker,
+// if one is wired. Safe to call with a nil broker.
+func (c *Client) emitSessionExpired(reason string) {
+	if c == nil || c.sessionBroker == nil {
+		return
+	}
+	c.sessionBroker.Emit(TopicFleetSessionExpired, SessionExpiredPayload{Reason: reason})
 }
 
 // Get performs a GET against the fleet server path.

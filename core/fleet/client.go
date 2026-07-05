@@ -33,6 +33,21 @@ type Client struct {
 	dataDir     string
 	httpTimeout time.Duration
 	isNop       bool
+
+	// sessionBroker is optional. When set, refresh failures emit
+	// TopicFleetSessionExpired on the Wails event bus so the UI
+	// can surface a re-auth banner (FR-005).
+	sessionBroker BrokerSink
+}
+
+// SetSessionBroker wires the event broker into the client. When set, a
+// refresh failure emits TopicFleetSessionExpired to the frontend.
+// Safe to call at any time; replaces the previous broker.
+func (c *Client) SetSessionBroker(b BrokerSink) {
+	if c == nil || c.isNop {
+		return
+	}
+	c.sessionBroker = b
 }
 
 // NewClient constructs and returns a Client using the resolved env profile.
