@@ -219,6 +219,17 @@ type Env struct {
 	// the suggestion stream.
 	MergeSuggester *MergeSuggester
 
+	// ToolSchemas maps tool name → JSON-Schema bytes for the tools the
+	// model was given this run. Populated by the LLMProviderAdapter at
+	// StartStream time from the discovered ToolSpec slice.
+	//
+	// The tool_dispatch executor reads this map at dispatch time to
+	// validate model-supplied arguments before forwarding them to the
+	// tool implementation (FR-006 / agent-loop-robustness-parity WP06).
+	// nil means no schema validation — the executor degrades to well-
+	// formedness-only checking (JSON must parse as an object).
+	ToolSchemas map[string][]byte // toolName → JSON Schema bytes
+
 	// registry is the executor lookup table the control executors
 	// (Loop, Retry, Parallel) use to dispatch into peer nodes. The
 	// kernel sets this on entry to Run(); leaving it nil falls back

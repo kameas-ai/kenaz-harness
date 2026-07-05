@@ -110,6 +110,43 @@ func (toolDispatchExecutor) Execute(ctx context.Context, env *Env, node *Node, i
 		oc := &outcomes[i]
 		oc.args, oc.rawArgs = parseToolArgs(oc.call.Arguments)
 
+		// WP06 — tool-input schema validation (FR-006):
+		// Validate args against the tool's input_schema before dispatch.
+		// On mismatch, surface a model-readable is_error result so the
+		// model can self-correct next turn rather than receiving an opaque
+		// tool failure. Also rejects the _raw passthrough for unparseable
+		// args — parseToolArgs still produces the _raw map for partial
+		// compatibility, but we check for it here and reject it.
+		if _, isRaw := oc.args["_raw"]; isRaw {
+			errMsg := fmt.Sprintf(
+				"Tool %q received non-JSON arguments that could not be parsed as a JSON object. "+
+					"Please provide a valid JSON object as arguments.",
+				oc.call.Name,
+			)
+			oc.result = ToolResult{Content: errMsg, IsError: true}
+			oc.err = fmt.Errorf("tool_dispatch: %s", errMsg)
+			_ = oc.events.AppendKind(env.RunID, node.ID, EventNodeError, map[string]any{
+				"err":     errMsg,
+				"tool":    oc.call.Name,
+				"call_id": oc.call.ID,
+			})
+			return
+		}
+		var schemaJSON []byte
+		if env.ToolSchemas != nil {
+			schemaJSON = env.ToolSchemas[oc.call.Name]
+		}
+		if msg := validateToolArgs(oc.call.Arguments, oc.call.Name, schemaJSON); msg != "" {
+			oc.result = ToolResult{Content: msg, IsError: true}
+			oc.err = fmt.Errorf("tool_dispatch: validation: %s", msg)
+			_ = oc.events.AppendKind(env.RunID, node.ID, EventNodeError, map[string]any{
+				"err":     msg,
+				"tool":    oc.call.Name,
+				"call_id": oc.call.ID,
+			})
+			return
+		}
+
 		// Pre-tool boundary (mirror toolExecutor). Greedy memory hook +
 		// chassis-side mutation extension point.
 		if env.Hooks != nil {
