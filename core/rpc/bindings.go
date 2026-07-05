@@ -1098,6 +1098,18 @@ func (b *Bindings) Settings_SetMCPAutoRestart(enabled bool) error {
 	return b.api.Settings().SetMCPAutoRestart(b.ctx(), enabled)
 }
 
+// Settings_GetAutoTitleEnabled returns whether session auto-titling is on.
+// Default true on a fresh install.
+// (p0-wiring-fixes-3TVMG0MX WP05)
+func (b *Bindings) Settings_GetAutoTitleEnabled() (bool, error) {
+	return b.api.Settings().GetAutoTitleEnabled(b.ctx())
+}
+
+// Settings_SetAutoTitleEnabled persists the auto-title feature toggle.
+func (b *Bindings) Settings_SetAutoTitleEnabled(enabled bool) error {
+	return b.api.Settings().SetAutoTitleEnabled(b.ctx(), enabled)
+}
+
 // EmbedderConfigResult is the wire shape returned by
 // Settings_GetEmbedderConfig so the frontend can bind both fields in
 // a single RPC call.

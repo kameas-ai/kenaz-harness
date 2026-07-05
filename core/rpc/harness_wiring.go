@@ -211,7 +211,12 @@ var settingsKeyToJSON = map[string]string{
 	// same sentinel approach.
 	"DefaultProvider":    "_defaultProvider",
 	"DefaultModel":       "_defaultModel",
-	"AutoTitleEnabled":   "_autoTitleEnabled",
+	// AutoTitleEnabled is exposed via Settings_GetAutoTitleEnabled /
+	// Settings_SetAutoTitleEnabled bindings (p0-wiring-fixes-3TVMG0MX WP05).
+	// The inverted storage bit (AutoTitleDisabled) cannot be set directly
+	// via the JSON-patch mechanism here without value inversion, so we keep
+	// the sentinel and let the dedicated binding methods handle persistence.
+	"AutoTitleEnabled": "_autoTitleEnabled",
 }
 
 // llmProviderWriterAdapter wraps llm.LLMConnectorAPI and implements

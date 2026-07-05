@@ -749,6 +749,29 @@ func (s *FileStore) SaveMCPAutoRestart(enabled bool) error {
 	return s.saveLocked(got)
 }
 
+// LoadAutoTitleEnabled returns whether session auto-titling is on.
+// Default true (zero-value Disabled → feature enabled).
+func (s *FileStore) LoadAutoTitleEnabled() (bool, error) {
+	got, err := s.LoadAll()
+	if err != nil {
+		return got.AutoTitleEnabled(), err
+	}
+	return got.AutoTitleEnabled(), nil
+}
+
+// SaveAutoTitleEnabled persists the auto-title feature toggle. Stored
+// as the inverted AutoTitleDisabled bit.
+func (s *FileStore) SaveAutoTitleEnabled(enabled bool) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	got, err := s.loadLocked()
+	if err != nil {
+		return err
+	}
+	got.AutoTitleDisabled = !enabled
+	return s.saveLocked(got)
+}
+
 // ── Key-rotation FileStore accessors (provider-keychain-rotation-01KQ8TD9 WP07) ──
 
 // LoadAutoResumeOnKeyRotation returns whether the harness should automatically
@@ -1273,6 +1296,17 @@ func (a *API) SetMCPAutoRestart(_ context.Context, enabled bool) error {
 	return a.store.SaveMCPAutoRestart(enabled)
 }
 
+// GetAutoTitleEnabled returns whether session auto-titling is on.
+// (p0-wiring-fixes-3TVMG0MX WP05)
+func (a *API) GetAutoTitleEnabled(_ context.Context) (bool, error) {
+	return a.store.LoadAutoTitleEnabled()
+}
+
+// SetAutoTitleEnabled persists the auto-title feature toggle.
+func (a *API) SetAutoTitleEnabled(_ context.Context, enabled bool) error {
+	return a.store.SaveAutoTitleEnabled(enabled)
+}
+
 // envArtifactBinaryPreview is the feature-flag env-var for the binary
 // preview feature. Default: on (empty or any non-"false" value).
 const envArtifactBinaryPreview = "HARNESS_ARTIFACT_BINARY_PREVIEW"
@@ -1644,6 +1678,19 @@ func (m *memoryStore) SaveMCPAutoRestart(enabled bool) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.data.MCPAutoRestartDisabled = !enabled
+	return nil
+}
+
+func (m *memoryStore) LoadAutoTitleEnabled() (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.data.AutoTitleEnabled(), nil
+}
+
+func (m *memoryStore) SaveAutoTitleEnabled(enabled bool) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.data.AutoTitleDisabled = !enabled
 	return nil
 }
 
