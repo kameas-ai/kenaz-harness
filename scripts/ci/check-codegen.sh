@@ -135,8 +135,17 @@ for f in "${REPO_ROOT}"/core/rpc/bindings_*.go; do
   [[ -f "${f}" ]] && WAILSJS_SOURCES="${WAILSJS_SOURCES} ${f}"
 done
 
+# Portable SHA-256: self-hosted Linux runners ship `sha256sum`; macOS dev boxes
+# ship `shasum`. Both emit the identical SHA-256 digest, so the committed hash
+# stays valid across platforms. (shasum-only broke CI on the Linux ARM64 pool.)
+if command -v sha256sum >/dev/null 2>&1; then
+  _wailsjs_sha() { sha256sum | awk '{print $1}'; }
+else
+  _wailsjs_sha() { shasum -a 256 | awk '{print $1}'; }
+fi
+
 if [[ "${1:-}" == "--update-wailsjs-hash" ]]; then
-  COMPUTED=$(cat ${WAILSJS_SOURCES} | shasum -a 256 | awk '{print $1}')
+  COMPUTED=$(cat ${WAILSJS_SOURCES} | _wailsjs_sha)
   echo "${COMPUTED}" > "${WAILSJS_HASH_FILE}"
   echo "check-codegen: wailsjs binding source hash updated to ${COMPUTED}"
   echo "check-codegen: OK — generated files match"
@@ -145,7 +154,7 @@ fi
 
 if [[ -f "${WAILSJS_HASH_FILE}" ]]; then
   COMMITTED_HASH=$(cat "${WAILSJS_HASH_FILE}")
-  CURRENT_HASH=$(cat ${WAILSJS_SOURCES} | shasum -a 256 | awk '{print $1}')
+  CURRENT_HASH=$(cat ${WAILSJS_SOURCES} | _wailsjs_sha)
   if [[ "${COMMITTED_HASH}" != "${CURRENT_HASH}" ]]; then
     cat >&2 <<EOF
 
