@@ -255,6 +255,16 @@ func (b *Bindings) Sessions_StopCapture(sessionID string) error {
 	return b.api.Sessions_StopCapture(b.ctx(), sessionID)
 }
 
+// Sessions_ResumeMessage opens a continuation stream against the partial
+// assistant row identified by sessionID + messageID. The row must have
+// streaming_failed_at set and streaming_recoverable=true. Returns a
+// ResumeMessageResult whose SubscriptionID can be drained via the same
+// LLM stream-chunk / closed topics used for normal turns.
+// (long-turn-resilience-01KR3PRS WP03 / p0-wiring-fixes-3TVMG0MX WP06)
+func (b *Bindings) Sessions_ResumeMessage(sessionID, messageID string) (sessions.ResumeMessageResult, error) {
+	return b.api.Sessions().ResumeMessage(b.ctx(), sessionID, messageID)
+}
+
 // ── llm ────────────────────────────────────────────────────────────────
 
 func (b *Bindings) LLM_ListProviders() ([]llm.Provider, error) {
