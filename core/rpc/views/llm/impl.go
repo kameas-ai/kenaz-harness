@@ -1078,7 +1078,9 @@ func (a *API) UpdateProvider(ctx context.Context, in AddProviderInput) error {
 		// Evict the stale in-memory entry first so that LoadProfiles
 		// does not hit the "profile id already loaded" collision error.
 		_ = a.reg.Evict(in.ID)
-		_ = a.reg.LoadProfiles([]corellm.ProviderProfile{profile})
+		if err := a.reg.LoadProfiles([]corellm.ProviderProfile{profile}); err != nil {
+			return fmt.Errorf("llm: UpdateProvider: registry reload: %w", err)
+		}
 	}
 	a.mu.Lock()
 	delete(a.validated, in.ID)
