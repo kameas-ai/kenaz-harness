@@ -637,6 +637,69 @@ func TestStatic_IndexEmptyToken(t *testing.T) {
 	}
 }
 
+// minimalStaticFSWithCSP is like minimalStaticFS but the served.html carries
+// the raw __CSP_PLACEHOLDER__ sentinel (simulating a bundle built without the
+// Vite inject-csp plugin) so we can assert the server substitutes it.
+func minimalStaticFSWithCSP() fs.FS {
+	const indexHTML = `<!DOCTYPE html><html><head>` +
+		`<meta http-equiv="Content-Security-Policy" content="__CSP_PLACEHOLDER__" />` +
+		`<!--HARNESS_TOKEN_META-->` +
+		`</head><body><div id="app"></div></body></html>`
+	return fstest.MapFS{
+		"served.html": &fstest.MapFile{Data: []byte(indexHTML)},
+	}
+}
+
+// TestStatic_IndexSubstitutesCSPPlaceholder verifies that when the served
+// bundle still carries the raw __CSP_PLACEHOLDER__ sentinel, the server
+// replaces it with the real served-mode CSP rather than shipping a literal
+// placeholder as the Content-Security-Policy.
+func TestStatic_IndexSubstitutesCSPPlaceholder(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	addr := ln.Addr().String()
+	_ = ln.Close()
+
+	api := rpc.New(nil)
+	ctx, ctxCancel := context.WithCancel(context.Background())
+	defer ctxCancel()
+	s := serve.New(api, addr, "tok", minimalStaticFSWithCSP(), nil)
+	done := make(chan error, 1)
+	go func() { done <- s.Serve(ctx) }()
+
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		c, cerr := net.Dial("tcp", addr)
+		if cerr == nil {
+			_ = c.Close()
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	resp, err := http.Get("http://" + addr + "/")
+	if err != nil {
+		t.Fatalf("GET /: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	bodyStr := string(body)
+
+	if strings.Contains(bodyStr, "__CSP_PLACEHOLDER__") {
+		t.Error("CSP placeholder was not substituted in served HTML")
+	}
+	// The real served CSP allows same-origin connect-src (needed for /rpc + /ws).
+	if !strings.Contains(bodyStr, "connect-src 'self'") {
+		t.Errorf("expected served CSP with connect-src 'self', got:\n%s", bodyStr)
+	}
+}
+
 // TestStatic_AssetServed verifies that a known asset from the bundle is served
 // with the correct content type.
 func TestStatic_AssetServed(t *testing.T) {

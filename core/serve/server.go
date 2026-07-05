@@ -79,13 +79,29 @@ const (
 // the injected bearer-token meta tag.
 const tokenPlaceholder = "<!--HARNESS_TOKEN_META-->"
 
+// cspPlaceholder is the sentinel that the Vite `inject-csp` plugin normally
+// substitutes at build time (see frontend/vite.config.ts). The server
+// replaces it defensively at serve time so a bundle that shipped the raw
+// placeholder (e.g. built without the plugin) can never serve a literal
+// "__CSP_PLACEHOLDER__" as its Content-Security-Policy.
+const cspPlaceholder = "__CSP_PLACEHOLDER__"
+
+// servedCSP is the Content-Security-Policy for served mode. It must be kept
+// in sync with SERVED_CSP in frontend/vite.config.ts. Unlike the desktop
+// production CSP (connect-src 'none'), served mode allows same-origin
+// connect-src so the browser can reach /rpc and /ws on the harness server.
+const servedCSP = "default-src 'none'; connect-src 'self'; script-src 'self'; " +
+	"style-src 'self' 'unsafe-inline'; img-src 'self' data:; " +
+	"font-src 'self'; base-uri 'none'; form-action 'none'; " +
+	"frame-ancestors 'none'; object-src 'none'"
+
 // Server is the harness HTTP/WS server for served mode.  Construct with New
 // and call Serve to block until the context is cancelled.
 type Server struct {
 	api         *rpc.API
 	bus         *rpc.EventBus // in-process event bus for real-time WS push
 	token       string
-	staticFS    fs.FS              // embedded dist-served bundle; nil → 404 for static paths
+	staticFS    fs.FS // embedded dist-served bundle; nil → 404 for static paths
 	log         *slog.Logger
 	srv         *http.Server
 	authSession *authbroker.Session // nil when serve mode is not wired with auth (tests / anonymous)
@@ -345,6 +361,13 @@ func (s *Server) serveIndex(w http.ResponseWriter, _ *http.Request) {
 	metaTag := fmt.Sprintf(`<meta name="harness-token" content=%q />`,
 		s.token)
 	injected := bytes.ReplaceAll(raw, []byte(tokenPlaceholder), []byte(metaTag))
+
+	// Defensively substitute the CSP placeholder. The Vite `inject-csp` plugin
+	// normally replaces it at build time; doing it here too means a bundle
+	// built without that plugin can never serve a literal "__CSP_PLACEHOLDER__"
+	// as its Content-Security-Policy (which would break the page). No-op when
+	// the placeholder is already substituted.
+	injected = bytes.ReplaceAll(injected, []byte(cspPlaceholder), []byte(servedCSP))
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	// Prevent caching of the index so browsers always get a fresh token.
