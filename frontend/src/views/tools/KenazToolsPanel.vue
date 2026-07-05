@@ -657,8 +657,8 @@ watch(
       class="rounded-sm border border-border-muted bg-surface-1 divide-y divide-border-muted"
     >
       <!-- Web search row (built-in; local-only DuckDuckGo + Wikipedia) -->
-      <div
-        class="px-4 py-3 grid gap-3 items-start"
+      <label
+        class="px-4 py-3 grid gap-3 items-start cursor-pointer"
         style="grid-template-columns: 1fr auto"
         data-testid="websearch-tool-row"
       >
@@ -687,8 +687,8 @@ watch(
             {{ webSearchError }}
           </div>
         </div>
-        <label
-          class="inline-flex items-center cursor-pointer select-none"
+        <div
+          class="inline-flex items-center select-none"
           :class="webSearchBusy ? 'opacity-60 cursor-wait' : ''"
         >
           <input
@@ -700,12 +700,12 @@ watch(
             data-testid="websearch-toggle"
             @change="toggleWebSearch"
           />
-        </label>
-      </div>
+        </div>
+      </label>
 
       <!-- Web fetch row (built-in; Cedar-gated network fetch) -->
-      <div
-        class="px-4 py-3 grid gap-3 items-start"
+      <label
+        class="px-4 py-3 grid gap-3 items-start cursor-pointer"
         style="grid-template-columns: 1fr auto"
         data-testid="webfetch-tool-row"
       >
@@ -734,8 +734,8 @@ watch(
             {{ webFetchError }}
           </div>
         </div>
-        <label
-          class="inline-flex items-center cursor-pointer select-none"
+        <div
+          class="inline-flex items-center select-none"
           :class="webFetchBusy ? 'opacity-60 cursor-wait' : ''"
         >
           <input
@@ -747,12 +747,12 @@ watch(
             data-testid="webfetch-toggle"
             @change="toggleWebFetch"
           />
-        </label>
-      </div>
+        </div>
+      </label>
 
       <!-- Bash row (built-in; sandboxed via per-command allowlist) -->
-      <div
-        class="px-4 py-3 grid gap-3 items-start"
+      <label
+        class="px-4 py-3 grid gap-3 items-start cursor-pointer"
         style="grid-template-columns: 1fr auto"
         data-testid="bash-tool-row"
       >
@@ -783,8 +783,8 @@ watch(
             {{ bashError }}
           </div>
         </div>
-        <label
-          class="inline-flex items-center cursor-pointer select-none"
+        <div
+          class="inline-flex items-center select-none"
           :class="bashBusy ? 'opacity-60 cursor-wait' : ''"
         >
           <input
@@ -796,12 +796,12 @@ watch(
             data-testid="bash-toggle"
             @change="toggleBash"
           />
-        </label>
-      </div>
+        </div>
+      </label>
 
       <!-- Save artifact row (built-in; CAS-only, default ON) -->
-      <div
-        class="px-4 py-3 grid gap-3 items-start"
+      <label
+        class="px-4 py-3 grid gap-3 items-start cursor-pointer"
         style="grid-template-columns: 1fr auto"
         data-testid="saveartifact-tool-row"
       >
@@ -831,8 +831,8 @@ watch(
             {{ saveArtifactError }}
           </div>
         </div>
-        <label
-          class="inline-flex items-center cursor-pointer select-none"
+        <div
+          class="inline-flex items-center select-none"
           :class="saveArtifactBusy ? 'opacity-60 cursor-wait' : ''"
         >
           <input
@@ -844,12 +844,12 @@ watch(
             data-testid="saveartifact-toggle"
             @change="toggleSaveArtifact"
           />
-        </label>
-      </div>
+        </div>
+      </label>
 
       <!-- Builtin filesystem read tools row (builtin-filesystem-tools-01KR3N4P WP06) -->
-      <div
-        class="px-4 py-3 grid gap-3 items-start"
+      <label
+        class="px-4 py-3 grid gap-3 items-start cursor-pointer"
         style="grid-template-columns: 1fr auto"
         data-testid="fs-read-tool-row"
       >
@@ -885,8 +885,8 @@ watch(
             {{ fsReadError }}
           </div>
         </div>
-        <label
-          class="inline-flex items-center cursor-pointer select-none"
+        <div
+          class="inline-flex items-center select-none"
           :class="fsReadBusy ? 'opacity-60 cursor-wait' : ''"
         >
           <input
@@ -898,12 +898,12 @@ watch(
             data-testid="fs-read-toggle"
             @change="toggleFSRead"
           />
-        </label>
-      </div>
+        </div>
+      </label>
 
       <!-- Builtin filesystem write tools row (builtin-filesystem-tools-01KR3N4P WP06) -->
-      <div
-        class="px-4 py-3 grid gap-3 items-start"
+      <label
+        class="px-4 py-3 grid gap-3 items-start cursor-pointer"
         style="grid-template-columns: 1fr auto"
         data-testid="fs-write-tool-row"
       >
@@ -942,8 +942,8 @@ watch(
             {{ fsWriteError }}
           </div>
         </div>
-        <label
-          class="inline-flex items-center cursor-pointer select-none"
+        <div
+          class="inline-flex items-center select-none"
           :class="fsWriteBusy ? 'opacity-60 cursor-wait' : ''"
         >
           <input
@@ -955,12 +955,12 @@ watch(
             data-testid="fs-write-toggle"
             @change="toggleFSWrite"
           />
-        </label>
-      </div>
+        </div>
+      </label>
 
       <!-- Todo write tool row (builtin-tools-search-and-elicitation-01KZNP3D WP07) -->
-      <div
-        class="px-4 py-3 grid gap-3 items-start"
+      <label
+        class="px-4 py-3 grid gap-3 items-start cursor-pointer"
         style="grid-template-columns: 1fr auto"
         data-testid="todo-tool-row"
       >
@@ -989,8 +989,8 @@ watch(
             {{ todoError }}
           </div>
         </div>
-        <label
-          class="inline-flex items-center cursor-pointer select-none"
+        <div
+          class="inline-flex items-center select-none"
           :class="todoBusy ? 'opacity-60 cursor-wait' : ''"
         >
           <input
@@ -1002,12 +1002,12 @@ watch(
             data-testid="todo-toggle"
             @change="toggleTodo"
           />
-        </label>
-      </div>
+        </div>
+      </label>
 
       <!-- Memory tool row -->
-      <div
-        class="px-4 py-3 grid gap-3 items-start"
+      <label
+        class="px-4 py-3 grid gap-3 items-start cursor-pointer"
         style="grid-template-columns: 1fr auto"
       >
         <div>
@@ -1046,8 +1046,8 @@ watch(
             {{ memoryError }}
           </div>
         </div>
-        <label
-          class="inline-flex items-center cursor-pointer select-none"
+        <div
+          class="inline-flex items-center select-none"
           :class="memoryBusy ? 'opacity-60 cursor-wait' : ''"
         >
           <input
@@ -1059,8 +1059,8 @@ watch(
             data-testid="memory-toggle"
             @change="toggleMemory"
           />
-        </label>
-      </div>
+        </div>
+      </label>
     </div>
 
     <!-- Connected MCP recipes header + Add CTA -->

@@ -500,7 +500,7 @@ const isSelected = (c: ModelChoice) =>
           Cancel
         </Button>
         <Button
-          variant="accent"
+          variant="primary"
           :disabled="!selected || submitting"
           :data-testid="'new-session-create'"
           @click="onSubmit"
