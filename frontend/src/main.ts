@@ -121,6 +121,12 @@ const router = createRouter({
       name: 'policy',
       component: () => import('@/views/policy/PolicyView.vue'),
     },
+    {
+      // WP08: catch-all not-found route (FR-011).
+      path: '/:pathMatch(.*)*',
+      name: 'not-found',
+      component: () => import('@/views/NotFoundView.vue'),
+    },
   ],
 });
 
