@@ -26,6 +26,7 @@ import ReasoningControl from '@/components/chat/ReasoningControl.vue';
 import SlashArgFill from '@/components/chat/SlashArgFill.vue';
 import ResolvedContextPanel from '@/views/sessions/ResolvedContextPanel.vue';
 import ConfirmToolModal from '@/components/chat/ConfirmToolModal.vue';
+import PlanApprovalModal from '@/views/sessions/PlanApprovalModal.vue';
 import BranchSidebar from '@/components/chat/BranchSidebar.vue';
 import BranchBreadcrumb from '@/components/chat/BranchBreadcrumb.vue';
 import CreateBranchModal from '@/components/chat/CreateBranchModal.vue';
@@ -46,6 +47,7 @@ import { useArtifacts, useHarnessClient, useSessions } from '@/lib/useHarnessAPI
 import { useSession } from '@/lib/useSession';
 import { useEventStream } from '@/lib/useEventStream';
 import { useLongSessionNudge } from '@/lib/useLongSessionNudge';
+import { usePlanMode } from '@/lib/planmode';
 import type {
   Artifact,
   ArtifactScope,
@@ -106,6 +108,52 @@ const surfaceState = computed<
 
 const sessionIdRef = computed(() => sessionId.value);
 const session = useSession(sessionIdRef);
+
+// ── Plan approval (plan-mode-posture-01KZNP3F WP06 / p0-wiring-fixes WP01) ──
+// usePlanMode subscribes to `plan_mode_changed` Wails events and exposes
+// pendingPlanId when the model is awaiting user approval on a plan artifact.
+// NOTE: usePlanMode is a composable — it must be called at setup time with
+// a static sessionId. We pass the computed sessionId.value; the composable
+// is re-created whenever SessionsView re-mounts, which is sufficient since
+// plan approval is a per-session transient state.
+const { pendingPlanId, isActive: planModeActive, setActive: setPlanModeActive } = usePlanMode(sessionId.value);
+
+// Tracks the plan text fetched from the artifacts store when pendingPlanId is set.
+const pendingPlanText = ref<string | null>(null);
+
+watch(
+  pendingPlanId,
+  async (planId) => {
+    if (!planId) {
+      pendingPlanText.value = null;
+      return;
+    }
+    try {
+      const artifact = await client.artifacts.get(planId);
+      // bytes is base64-encoded; plan artifacts are plain text (markdown).
+      pendingPlanText.value = artifact.bytes ? atob(artifact.bytes) : '';
+    } catch {
+      pendingPlanText.value = '';
+    }
+  },
+);
+
+function onPlanApproved(_planId: string) {
+  setPlanModeActive(false);
+  pendingPlanText.value = null;
+  void session.refresh();
+}
+
+function onPlanDiscarded(_planId: string) {
+  setPlanModeActive(false);
+  pendingPlanText.value = null;
+}
+
+function onPlanEdited(_planId: string, _editedPlan: string) {
+  setPlanModeActive(false);
+  pendingPlanText.value = null;
+  void session.refresh();
+}
 
 const providers = ref<readonly Provider[]>([]);
 const providersLoaded = ref(false);
@@ -1729,6 +1777,17 @@ async function onNudgeNewSession() {
       @close="onNewSessionDialogClose"
     />
     <ConfirmToolModal />
+    <!-- Plan approval modal (p0-wiring-fixes WP01) — renders when the model
+         has exited plan_mode and the toolloop is awaiting user approval. -->
+    <PlanApprovalModal
+      v-if="pendingPlanId && pendingPlanText !== null && sessionId"
+      :session-id="sessionId"
+      :plan-id="pendingPlanId"
+      :plan="pendingPlanText"
+      @approved="onPlanApproved"
+      @discarded="onPlanDiscarded"
+      @edited="onPlanEdited"
+    />
     <CreateBranchModal
       v-if="hasSession"
       :parent-session-id="sessionId"
