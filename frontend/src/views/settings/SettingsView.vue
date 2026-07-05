@@ -12,6 +12,8 @@
  */
 import { computed, onMounted, ref } from 'vue';
 import { useRoute } from 'vue-router';
+import { useServedMode } from '@/lib/useServedMode';
+import NotAvailableInServedMode from '@/components/ui/NotAvailableInServedMode.vue';
 import SettingsShell from '@/views/settings/SettingsShell.vue';
 import KeyboardShortcuts from '@/components/settings/KeyboardShortcuts.vue';
 import AutonomyPanel from '@/views/settings/AutonomyPanel.vue';
@@ -47,6 +49,7 @@ import type {
   Theme,
 } from '@/lib/types';
 
+const servedMode = useServedMode();
 const client = useHarnessClient();
 
 // auto-update-v0.4.0 WP05 — Updates is a sub-tab on the same /settings
@@ -942,7 +945,12 @@ onMounted(() => {
 </script>
 
 <template>
+  <NotAvailableInServedMode
+    v-if="servedMode"
+    feature="Settings"
+  />
   <SettingsShell
+    v-else
     number="06"
     section="SETTINGS"
     :title="currentHead.title"

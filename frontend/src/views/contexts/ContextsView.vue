@@ -37,12 +37,15 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue';
 import CanvasHead from '@/shell/CanvasHead.vue';
 import { Plus, FileText } from '@/shell/icons';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
+import { useServedMode } from '@/lib/useServedMode';
+import NotAvailableInServedMode from '@/components/ui/NotAvailableInServedMode.vue';
 import type { ContextNode, ContextSyncStatusView, ContextPublishResult } from '@/lib/types';
 import ContextTree from './ContextTree.vue';
 import ContextPreview from './ContextPreview.vue';
 import GlobalContextPanel from '@/components/settings/GlobalContextPanel.vue';
 import ContextRecent from './ContextRecent.vue';
 
+const servedMode = useServedMode();
 const client = useHarnessClient();
 
 const tree = ref<ContextNode | null>(null);
@@ -352,7 +355,14 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="h-full flex flex-col">
+  <NotAvailableInServedMode
+    v-if="servedMode"
+    feature="Contexts"
+  />
+  <div
+    v-else
+    class="h-full flex flex-col"
+  >
     <CanvasHead
       number="07"
       section="CONTEXTS"
