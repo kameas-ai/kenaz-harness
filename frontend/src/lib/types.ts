@@ -3818,6 +3818,38 @@ export interface LockdownStatusView {
   reason: string;
 }
 
+// ── Unit sync types (fleet-integrity-observability WP08) ────────────────────
+
+/**
+ * UnitConflictView — one unresolved same-unit pull conflict surfaced by the
+ * UnitSyncer. Mirrors core/rpc/views/fleet.UnitConflictView.
+ */
+export interface UnitConflictView {
+  unit_id: string;
+  node_id: string;
+  local_version: number;
+  synced_version: number;
+  server_version: number;
+}
+
+/**
+ * UnitSyncStatusView — snapshot of the UnitSyncer state.
+ * Mirrors core/rpc/views/fleet.UnitSyncStatusView.
+ * (fleet-integrity-observability WP08)
+ */
+export interface UnitSyncStatusView {
+  cursor: string;
+  /** RFC3339 timestamp of the last successful pull, or empty. */
+  lastPullAt: string;
+  /** Most recent pull error, or empty. */
+  lastPullErr: string;
+  /** Most recent push error, or empty. */
+  lastPushErr: string;
+  pushCount: number;
+  pullCount: number;
+  conflictCount: number;
+}
+
 // ── Catalog types (fleet-share-and-sync-01NDFSEX14 WP02) ────────────────────
 
 /**

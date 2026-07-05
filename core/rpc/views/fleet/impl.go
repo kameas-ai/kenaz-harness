@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	corefleet "github.com/kameas-ai/kenaz-harness/core/fleet"
 	"github.com/kameas-ai/kenaz-harness/core/units"
@@ -177,4 +178,25 @@ func (f *Impl) Unit_ResolveLoadable(ctx context.Context, scope, scopeID string) 
 		})
 	}
 	return out, nil
+}
+
+// Unit_SyncStatus returns a snapshot of the unit syncer state. Returns a
+// zero-value view when the syncer is nil (fleet disabled / offline).
+func (f *Impl) Unit_SyncStatus(_ context.Context) (UnitSyncStatusView, error) {
+	if f.Syncer == nil {
+		return UnitSyncStatusView{}, nil
+	}
+	st := f.Syncer.Status()
+	v := UnitSyncStatusView{
+		Cursor:        st.Cursor,
+		LastPullErr:   st.LastPullErr,
+		LastPushErr:   st.LastPushErr,
+		PushCount:     st.PushCount,
+		PullCount:     st.PullCount,
+		ConflictCount: st.ConflictCount,
+	}
+	if !st.LastPullAt.IsZero() {
+		v.LastPullAt = st.LastPullAt.UTC().Format(time.RFC3339)
+	}
+	return v, nil
 }

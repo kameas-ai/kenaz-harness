@@ -1506,6 +1506,10 @@ export function Unit_ResolveMerge(arg1, arg2) {
   return window['go']['rpc']['Bindings']['Unit_ResolveMerge'](arg1, arg2);
 }
 
+export function Unit_SyncStatus() {
+  return window['go']['rpc']['Bindings']['Unit_SyncStatus']();
+}
+
 export function Update_Apply() {
   return window['go']['rpc']['Bindings']['Update_Apply']();
 }

@@ -804,6 +804,16 @@ interface WailsBindingsLike {
   /** Publish a Cedar rule to the team via fleet. Requires policy_admin role. */
   Cedar_PublishToTeam(ruleID: string, ruleSource: string): Promise<void>;
 
+  // ── Unit sync conflicts (fleet-integrity-observability WP08) ─────────────
+  /** Returns the current unit syncer state: pull/push errors, conflict count. */
+  Unit_SyncStatus(): Promise<import('./types').UnitSyncStatusView>;
+  /** Returns the list of unresolved same-unit pull conflicts. */
+  Unit_ListConflicts(): Promise<import('./types').UnitConflictView[]>;
+  /** Applies a whole-body MERGE resolution to a conflicted unit. */
+  Unit_ResolveMerge(unitID: string, resolvedBody: string): Promise<void>;
+  /** Applies an ENSHRINE resolution: creates a coexisting unit. Returns the new unit ID. */
+  Unit_ResolveEnshrine(srcUnitID: string, enshrinedTitle: string, enshrinedBody: string, reason: string): Promise<string>;
+
   // ── audit-log-enhancement-01KX5R8F WP07 — retention settings ──────────
   Settings_GetAuditSettings(): Promise<import('./types').AuditSettings>;
   Settings_SetAuditSettings(s: import('./types').AuditSettings): Promise<void>;
@@ -3396,6 +3406,12 @@ export function createHarnessClient(): HarnessClient {
     cedarPublish: {
       publishToTeam: (ruleID, ruleSource) => b().Cedar_PublishToTeam(ruleID, ruleSource),
     },
+    // ── Unit sync (fleet-integrity-observability WP08) ────────────────────
+    Unit_SyncStatus: () => b().Unit_SyncStatus(),
+    Unit_ListConflicts: () => b().Unit_ListConflicts(),
+    Unit_ResolveMerge: (unitID, resolvedBody) => b().Unit_ResolveMerge(unitID, resolvedBody),
+    Unit_ResolveEnshrine: (srcUnitID, enshrinedTitle, enshrinedBody, reason) =>
+      b().Unit_ResolveEnshrine(srcUnitID, enshrinedTitle, enshrinedBody, reason),
   };
 }
 
@@ -4600,6 +4616,19 @@ export function createFakeHarnessClient(
     cedarPublish: {
       publishToTeam: noop,
     },
+    // ── Unit sync (fleet-integrity-observability WP08) ────────────────────
+    Unit_SyncStatus: async (): Promise<import('./types').UnitSyncStatusView> => ({
+      cursor: '',
+      lastPullAt: '',
+      lastPullErr: '',
+      lastPushErr: '',
+      pushCount: 0,
+      pullCount: 0,
+      conflictCount: 0,
+    }),
+    Unit_ListConflicts: async (): Promise<import('./types').UnitConflictView[]> => [],
+    Unit_ResolveMerge: noop,
+    Unit_ResolveEnshrine: async () => '',
   };
 
   return { ...defaults, ...seed };

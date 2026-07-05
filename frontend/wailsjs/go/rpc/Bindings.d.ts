@@ -801,6 +801,8 @@ export function Unit_ResolveLoadable(arg1:string,arg2:string):Promise<Array<flee
 
 export function Unit_ResolveMerge(arg1:string,arg2:string):Promise<void>;
 
+export function Unit_SyncStatus():Promise<fleet.UnitSyncStatusView>;
+
 export function Update_Apply():Promise<void>;
 
 export function Update_ListSkippedVersions():Promise<Array<string>>;

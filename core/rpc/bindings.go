@@ -2613,6 +2613,14 @@ func (b *Bindings) Unit_ResolveLoadable(scope, scopeID string) ([]fleetview.Reso
 	return b.api.Fleet().Unit_ResolveLoadable(b.ctx(), scope, scopeID)
 }
 
+// Unit_SyncStatus returns a snapshot of the unit syncer state: cursor,
+// last pull/push timestamps, errors, and conflict count. Returns a zero-value
+// view when the syncer is not wired (fleet disabled / OSS build).
+// (fleet-integrity-observability WP08)
+func (b *Bindings) Unit_SyncStatus() (fleetview.UnitSyncStatusView, error) {
+	return b.api.Fleet().Unit_SyncStatus(b.ctx())
+}
+
 // ── Catalog bindings (fleet-share-and-sync-01NDFSEX14 WP02) ──────────────────
 
 // Catalog_Publish signs and publishes a workflow/agent-pack/bundle to the
