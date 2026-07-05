@@ -282,7 +282,7 @@ watch(editorSource, (val) => {
     <div class="policy-view flex-1 min-w-0">
     <!-- Disabled state when feature flag is off -->
     <div v-if="!editorEnabled" class="policy-view__disabled" data-testid="policy-editor-disabled">
-      <p>The Cedar policy editor is disabled. Set <code>HARNESS_POLICY_EDITOR_UI=1</code> to enable it.</p>
+      <p>The advanced security policy editor is disabled. Contact your administrator to enable it.</p>
     </div>
 
     <template v-else>

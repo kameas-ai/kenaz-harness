@@ -88,9 +88,8 @@ async function signIn() {
   if (profile.value && !profile.value.configured) {
     error.value =
       `Sign-in is not available for the "${profile.value.name}" build profile — ` +
-      `it is missing the Zitadel client ID. ` +
-      `This is a build-pipeline gap (the release.yml step that reads sigil-infra ` +
-      `TF outputs and injects them as ldflags has not landed yet).`;
+      `the identity provider is not configured in this build. ` +
+      `This is a build-pipeline gap; contact your administrator.`;
     loading.value = false;
     return;
   }
@@ -111,17 +110,15 @@ function humanizeFleetError(raw: string): string {
   if (!raw) return 'Sign-in failed. Please try again.';
   if (raw.includes('env profile not populated')) {
     return (
-      'Sign-in is not available: this build is missing the Zitadel client ID. ' +
-      'Run a build with the LLE Terraform outputs injected via -ldflags, or set ' +
-      'KENAZ_HARNESS_ENV=local.'
+      'Sign-in is not available: the identity provider is not configured in this build. ' +
+      'Contact your administrator to set up fleet integration.'
     );
   }
   if (raw.includes('dashboard SPA fall-through') || raw.includes('returned HTML')) {
     return (
-      'Sign-in completed against Zitadel, but the fleet server returned HTML ' +
-      'instead of JSON. The fleet ingress (CloudFront / ALB) is not routing ' +
-      '/api/v1/* to the Go backend. Ping the fleet ops owner; your tokens ARE ' +
-      'saved in the OS keychain in the meantime.'
+      'Sign-in succeeded, but the fleet server returned an unexpected response. ' +
+      'The fleet ingress may not be routing API requests correctly. ' +
+      'Contact your fleet administrator; your session tokens are saved locally.'
     );
   }
   if (raw.includes('server unreachable') || raw.includes('no such host')) {
@@ -141,22 +138,20 @@ function humanizeFleetError(raw: string): string {
   }
   if (raw.includes('enroll route not registered')) {
     return (
-      'Sign-in completed against Zitadel and the harness reached the fleet API ' +
-      'host, but the deployed fleet binary does not register POST /api/v1/enroll. ' +
-      'The fleet team needs to merge the enrollment branch to main and redeploy. ' +
-      'Your access token IS saved in the keychain in the meantime.'
+      'Sign-in succeeded, but the fleet server is not ready for enrollment yet. ' +
+      'Contact your administrator. Your access token is saved locally in the meantime.'
     );
   }
   if (raw.includes('state mismatch') || raw.includes('ErrStateMismatch')) {
     return (
-      'OAuth state mismatch — the browser callback didn\'t match the harness\'s ' +
-      'request. Try signing in again from a fresh tab.'
+      'Sign-in request expired or was redirected unexpectedly. ' +
+      'Try signing in again from a fresh tab.'
     );
   }
   if (raw.includes('disabled by env')) {
     return (
-      'Fleet integration is disabled by the HARNESS_FLEET_DISABLED environment ' +
-      'variable. Unset it and restart the harness to re-enable.'
+      'Fleet integration has been disabled by an administrator setting. ' +
+      'Contact your administrator to re-enable fleet features.'
     );
   }
   // Fall back to the raw error — at least it\'s informative for a developer.
@@ -193,11 +188,10 @@ async function refreshIdentity() {
   <!-- ── Disabled state ─────────────────────────────────────────────────── -->
   <div v-if="fleetDisabled" class="account-panel">
     <div class="panel-banner disabled-banner" data-testid="fleet-disabled-banner">
-      <p class="banner-title">Fleet disabled by environment</p>
+      <p class="banner-title">Fleet features disabled</p>
       <p class="banner-body">
-        The HARNESS_FLEET_DISABLED environment variable is set. Fleet features
-        are unavailable. Unset this variable and restart the harness to enable
-        fleet integration.
+        Fleet integration has been disabled by an administrator setting.
+        Contact your administrator to enable fleet features.
       </p>
     </div>
   </div>
