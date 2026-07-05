@@ -27,6 +27,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os/exec"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"time"
@@ -273,7 +274,7 @@ func (r *Runner) RunPreSend(ctx context.Context, ev PreSendEvent) (PreSendEvent,
 		return ev, nil
 	}
 	for _, h := range hookList {
-		next, err := r.dispatchPreSend(ctx, h, ev)
+		next, err := r.safeDispatchPreSend(ctx, h, ev)
 		if err != nil {
 			r.logger.Warn("hooks.presend.dispatch_failed",
 				"id", h.ID, "kind", h.Kind, "err", err.Error())
@@ -282,6 +283,26 @@ func (r *Runner) RunPreSend(ctx context.Context, ev PreSendEvent) (PreSendEvent,
 		ev = next
 	}
 	return ev, nil
+}
+
+// safeDispatchPreSend wraps dispatchPreSend with panic recovery (FR-002).
+// A panicking synchronous pre-send hook is logged and treated as a dispatch
+// error — the unmodified event is passed to the next hook so the send path
+// is never taken down by a single broken hook.
+func (r *Runner) safeDispatchPreSend(ctx context.Context, h Hook, ev PreSendEvent) (out PreSendEvent, err error) {
+	defer func() {
+		if rec := recover(); rec != nil {
+			stack := debug.Stack()
+			r.logger.Error("hooks.presend.panic",
+				"id", h.ID, "kind", h.Kind,
+				"panic", fmt.Sprintf("%v", rec),
+				"stack", string(stack),
+			)
+			out = ev
+			err = fmt.Errorf("hook panicked: %v", rec)
+		}
+	}()
+	return r.dispatchPreSend(ctx, h, ev)
 }
 
 // RunElicitation fires elicitation hooks before the ask dialog renders.
@@ -423,11 +444,29 @@ func (r *Runner) RunPostSend(ctx context.Context, ev PostSendEvent) {
 	}
 	hookList := r.registry.EnabledForEvent(EventPostSend, ev.SessionID, ev.Kind, ev.Model)
 	for _, h := range hookList {
-		if err := r.dispatchPostSend(ctx, h, ev); err != nil {
+		if err := r.safeDispatchPostSend(ctx, h, ev); err != nil {
 			r.logger.Warn("hooks.postsend.dispatch_failed",
 				"id", h.ID, "kind", h.Kind, "err", err.Error())
 		}
 	}
+}
+
+// safeDispatchPostSend wraps dispatchPostSend with panic recovery (FR-002).
+// A panicking synchronous post-send hook is logged and the remaining hooks
+// continue — the send path is never taken down by a single broken hook.
+func (r *Runner) safeDispatchPostSend(ctx context.Context, h Hook, ev PostSendEvent) (err error) {
+	defer func() {
+		if rec := recover(); rec != nil {
+			stack := debug.Stack()
+			r.logger.Error("hooks.postsend.panic",
+				"id", h.ID, "kind", h.Kind,
+				"panic", fmt.Sprintf("%v", rec),
+				"stack", string(stack),
+			)
+			err = fmt.Errorf("hook panicked: %v", rec)
+		}
+	}()
+	return r.dispatchPostSend(ctx, h, ev)
 }
 
 func (r *Runner) dispatchPreSend(ctx context.Context, h Hook, ev PreSendEvent) (PreSendEvent, error) {

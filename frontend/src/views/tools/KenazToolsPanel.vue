@@ -112,6 +112,37 @@ async function toggleWebSearch(event: Event) {
   }
 }
 
+// ── Web fetch built-in (core/tools/webfetch) ───────────────────────────
+const webFetchEnabled = ref(false);
+const webFetchError = ref<string | null>(null);
+const webFetchBusy = ref(false);
+
+async function refreshWebFetch() {
+  try {
+    webFetchEnabled.value = await client.settings.getWebFetchEnabled();
+  } catch {
+    webFetchEnabled.value = false;
+  }
+}
+
+async function toggleWebFetch(event: Event) {
+  if (webFetchBusy.value) return;
+  const next = (event.target as HTMLInputElement).checked;
+  webFetchBusy.value = true;
+  webFetchError.value = null;
+  const previous = webFetchEnabled.value;
+  webFetchEnabled.value = next;
+  try {
+    await client.settings.setWebFetchEnabled(next);
+  } catch (e) {
+    webFetchEnabled.value = previous;
+    webFetchError.value =
+      e instanceof Error ? e.message : 'Failed to toggle web fetch.';
+  } finally {
+    webFetchBusy.value = false;
+  }
+}
+
 // ── Bash built-in (core/tools/bash) ────────────────────────────────────
 const bashEnabled = ref(false);
 const bashError = ref<string | null>(null);
@@ -276,6 +307,7 @@ async function toggleSaveArtifact(event: Event) {
 onMounted(() => {
   void refreshMemory();
   void refreshWebSearch();
+  void refreshWebFetch();
   void refreshBash();
   void refreshFSRead();
   void refreshFSWrite();
@@ -667,6 +699,53 @@ watch(
             aria-label="Enable web search tool"
             data-testid="websearch-toggle"
             @change="toggleWebSearch"
+          />
+        </label>
+      </div>
+
+      <!-- Web fetch row (built-in; Cedar-gated network fetch) -->
+      <div
+        class="px-4 py-3 grid gap-3 items-start"
+        style="grid-template-columns: 1fr auto"
+        data-testid="webfetch-tool-row"
+      >
+        <div>
+          <div class="flex items-center gap-2 font-ui text-[13px] text-ink">
+            <span>Web fetch</span>
+            <span
+              v-if="webFetchEnabled"
+              class="text-[10px] uppercase tracking-[0.16em] text-signal-ok"
+            >
+              on
+            </span>
+          </div>
+          <p class="mt-1 text-[11px] text-ink-muted max-w-prose">
+            Lets the assistant fetch URLs and resolve
+            <code class="font-mono">@secret:</code> references in request
+            headers. Outbound HTTP is gated by Cedar policy (host allowlist).
+            Default OFF — enable only when the assistant needs to read live web
+            content or call authenticated endpoints.
+          </p>
+          <div
+            v-if="webFetchError"
+            class="mt-2 text-[11px] text-signal-danger"
+            role="alert"
+          >
+            {{ webFetchError }}
+          </div>
+        </div>
+        <label
+          class="inline-flex items-center cursor-pointer select-none"
+          :class="webFetchBusy ? 'opacity-60 cursor-wait' : ''"
+        >
+          <input
+            type="checkbox"
+            class="accent-accent w-4 h-4"
+            :checked="webFetchEnabled"
+            :disabled="webFetchBusy"
+            aria-label="Enable web fetch tool"
+            data-testid="webfetch-toggle"
+            @change="toggleWebFetch"
           />
         </label>
       </div>

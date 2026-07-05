@@ -1222,6 +1222,10 @@ export function Settings_GetTodoEnabled() {
   return window['go']['rpc']['Bindings']['Settings_GetTodoEnabled']();
 }
 
+export function Settings_GetWebFetchEnabled() {
+  return window['go']['rpc']['Bindings']['Settings_GetWebFetchEnabled']();
+}
+
 export function Settings_GetWebSearch() {
   return window['go']['rpc']['Bindings']['Settings_GetWebSearch']();
 }
@@ -1336,6 +1340,10 @@ export function Settings_SetShowPerMessageTokenMeter(arg1) {
 
 export function Settings_SetTodoEnabled(arg1) {
   return window['go']['rpc']['Bindings']['Settings_SetTodoEnabled'](arg1);
+}
+
+export function Settings_SetWebFetchEnabled(arg1) {
+  return window['go']['rpc']['Bindings']['Settings_SetWebFetchEnabled'](arg1);
 }
 
 export function Settings_SetWebSearch(arg1) {

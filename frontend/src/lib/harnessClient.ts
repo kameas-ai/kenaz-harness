@@ -402,6 +402,8 @@ interface WailsBindingsLike {
   Settings_Set(s: Settings): Promise<void>;
   Settings_GetMemory(): Promise<boolean>;
   Settings_SetMemory(enabled: boolean): Promise<void>;
+  Settings_GetWebFetchEnabled(): Promise<boolean>;
+  Settings_SetWebFetchEnabled(enabled: boolean): Promise<void>;
   Settings_GetWebSearch(): Promise<boolean>;
   Settings_SetWebSearch(enabled: boolean): Promise<void>;
   Settings_GetBash(): Promise<boolean>;
@@ -1625,6 +1627,13 @@ export interface SettingsClient {
   getMemory(): Promise<boolean>;
   /** Persist the long-term-memory opt-in flag. */
   setMemory(enabled: boolean): Promise<void>;
+  /**
+   * Read the kenaz__web_fetch built-in opt-in (default false).
+   * Surfaced as a toggle row in the Tools panel.
+   */
+  getWebFetchEnabled(): Promise<boolean>;
+  /** Persist the kenaz__web_fetch built-in opt-in flag. */
+  setWebFetchEnabled(enabled: boolean): Promise<void>;
   /**
    * Read the local-first web-search built-in opt-in (default false).
    * Surfaced as a toggle row in the Tools panel.
@@ -3037,6 +3046,8 @@ export function createHarnessClient(): HarnessClient {
       saveTheme: (t) => b().SaveTheme(t),
       getMemory: () => b().Settings_GetMemory(),
       setMemory: (enabled) => b().Settings_SetMemory(enabled),
+      getWebFetchEnabled: () => b().Settings_GetWebFetchEnabled(),
+      setWebFetchEnabled: (enabled) => b().Settings_SetWebFetchEnabled(enabled),
       getWebSearch: () => b().Settings_GetWebSearch(),
       setWebSearch: (enabled) => b().Settings_SetWebSearch(enabled),
       getBash: () => b().Settings_GetBash(),
@@ -3877,6 +3888,8 @@ export function createFakeHarnessClient(
       saveTheme: noop,
       getMemory: async () => false,
       setMemory: noop,
+      getWebFetchEnabled: async () => false,
+      setWebFetchEnabled: noop,
       getWebSearch: async () => false,
       setWebSearch: noop,
       getBash: async () => false,
