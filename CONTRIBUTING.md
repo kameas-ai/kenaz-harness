@@ -42,6 +42,68 @@ go test ./core/... -race -count=1 -short
 cd frontend && npm test
 ```
 
+## Fleet telemetry in dev
+
+When running `wails dev` with a Kameas account, the harness can export OTel
+spans, metrics, and log records to the dev fleet server so you can observe
+real harness telemetry in the fleet analytics dashboard.
+
+### Quick start
+
+```bash
+# Preferred: use the wrapper script (sets KENAZ_HARNESS_ENV=dev automatically)
+bash scripts/dev.sh
+
+# Or set the env var manually
+KENAZ_HARNESS_ENV=dev wails dev
+```
+
+`KENAZ_HARNESS_ENV=dev` makes `core/fleet.ResolveProfile()` return the dev
+`EnvProfile`, which points the fleet OTLP pipeline at
+`https://dev.fleet.kameas.ai`. The harness must be signed in for the
+`tokenRoundTripper` to inject a Bearer token; pre-login spans accumulate in
+the 10 000-span ring buffer and are flushed after the first successful login.
+
+### Opt-in required
+
+Fleet telemetry export only runs when the user has set consent to "aggregate"
+or "full" in **Settings → Privacy → Fleet telemetry**. The default is "none".
+No outbound network traffic occurs at consent = "none".
+
+### Disabling fleet export
+
+Set `KENAZ_HARNESS_ENV=` (empty string) or leave consent at "none":
+
+```bash
+KENAZ_HARNESS_ENV= wails dev   # no fleet exporters constructed
+```
+
+An empty `KENAZ_HARNESS_ENV` resolves to the prod OSS profile (no
+`FleetBaseURL`), so no fleet exporter is ever constructed and no outbound
+traffic occurs — consistent with the OSS binary distribution (NFR-001).
+
+### Observing telemetry
+
+After sign-in with a valid dev-fleet JWT, spans should reach the fleet
+receiver within one 30-second flush cycle. You can verify with:
+
+```bash
+# Watch fleet access logs on the dev ALB (requires Tailscale + fleet-admin role)
+# Or check the fleet analytics dashboard at https://dev.fleet.kameas.ai/dashboard
+```
+
+### Relevant files
+
+| File | Purpose |
+|---|---|
+| `core/fleet/otlp_pipeline.go` | `FleetOTLPPipeline` — lazy exporter wiring; `Activate` post-login |
+| `core/fleet/otlp_transport.go` | `tokenRoundTripper` — per-request Bearer injection |
+| `core/fleet/otel_exporter.go` | `FleetSpanExporter` — ring buffer + JSON batch flush |
+| `core/fleet/telemetry_redactor.go` | `DefaultRedactor` — scrubs secrets at enqueue |
+| `core/fleet/env.go` | `ResolveProfile` / `OTLPBaseURL` — env-to-endpoint mapping |
+
+---
+
 ## Code standards
 
 ### Go
