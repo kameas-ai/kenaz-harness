@@ -81,7 +81,6 @@ async function refresh() {
 }
 
 const isSignedIn = computed(() => !!identity.value);
-const fleetEnabled = computed(() => !fleetDisabled.value);
 
 const initials = computed(() => {
   const id = identity.value;
