@@ -2,12 +2,17 @@ package retry
 
 import (
 	"context"
+	"errors"
 	"math/rand"
 	"sync"
 	"time"
 
 	llm "github.com/kameas-ai/kenaz-harness/core/llm"
 )
+
+// errorsAs is an alias for errors.As used to avoid lint warnings about
+// direct package-level calls in the retry function body.
+var errorsAs = errors.As
 
 // AttemptHook is called once per retry boundary (after the failure of
 // attempt N, before the sleep). Both the retry middleware itself and
@@ -74,6 +79,11 @@ func (m *Middleware) SetSleep(s func(ctx context.Context, d time.Duration) error
 //
 // fn returns (result, error). If error is an *llm.ErrTransient, it is
 // retried; any other error type returns immediately.
+//
+// Retry-After / server backoff: when the *ErrTransient carries a
+// RetryAfterSec > 0 the actual sleep is max(computedBackoff, RetryAfterSec*1000)
+// so the middleware never retries faster than the server requests
+// (FR-004 / agent-loop-robustness-parity WP04).
 func Run[T any](m *Middleware, ctx context.Context, policy Policy, fn func(ctx context.Context) (T, error)) (T, int, error) {
 	var zero T
 	if policy.MaxAttempts < 1 {
@@ -100,6 +110,10 @@ func Run[T any](m *Middleware, ctx context.Context, policy Policy, fn func(ctx c
 			m.mu.Unlock()
 			actualMS = int(rand01 * float64(plannedMS))
 		}
+		// Honor server-mandated Retry-After: use max(jitteredBackoff, serverBackoffMS).
+		if serverMS := retryAfterMS(err); serverMS > actualMS {
+			actualMS = serverMS
+		}
 		outcomes = append(outcomes, llm.AttemptOutcome{
 			Attempt: attempt, Err: err,
 			BackoffMS: plannedMS, ActualMS: actualMS,
@@ -118,6 +132,20 @@ func Run[T any](m *Middleware, ctx context.Context, policy Policy, fn func(ctx c
 		}
 	}
 	return zero, policy.MaxAttempts, &llm.ErrRetryBudgetExhausted{Attempts: outcomes}
+}
+
+// retryAfterMS extracts the server-requested backoff from an error in
+// milliseconds. Returns 0 when the error does not carry a RetryAfterSec
+// value or when the value is ≤ 0.
+func retryAfterMS(err error) int {
+	var t *llm.ErrTransient
+	if !errorsAs(err, &t) {
+		return 0
+	}
+	if t == nil || t.RetryAfterSec <= 0 {
+		return 0
+	}
+	return int(t.RetryAfterSec * 1000)
 }
 
 // computeBackoff returns base * 2^(attempt-1) capped at MaxMS.

@@ -171,6 +171,9 @@ import type {
   CatalogFilter,
   SyncStatusView,
   PendingMCPSecret,
+  BootHealthReport,
+  TaskRow,
+  LineRow,
 } from './types';
 
 /**
@@ -832,6 +835,15 @@ interface WailsBindingsLike {
   Planmode_Approve(req: { session_id: string; plan_id: string }): Promise<Record<string, unknown>>;
   Planmode_Discard(req: { session_id: string; plan_id: string }): Promise<Record<string, unknown>>;
   Planmode_Edit(req: { session_id: string; plan_id: string; edited_plan: string }): Promise<Record<string, unknown>>;
+  // agent-loop-robustness-parity WP08: boot-health surface (FR-008)
+  BootHealth_Get(): Promise<BootHealthReport>;
+  // background-task-monitor WP05: task management bindings
+  Tasks_List(): Promise<TaskRow[]>;
+  Tasks_Get(id: string): Promise<TaskRow>;
+  Tasks_Tail(id: string, fromOffset: number): Promise<LineRow[]>;
+  Tasks_Abort(id: string): Promise<void>;
+  Tasks_AbortBySession(sessionID: string): Promise<void>;
+  Tasks_ListBySession(sessionID: string): Promise<TaskRow[]>;
 }
 
 
@@ -2832,6 +2844,16 @@ export interface HarnessClient {
   Unit_ListConflicts(): Promise<import('./types').UnitConflictView[]>;
   Unit_ResolveMerge(unitID: string, resolvedBody: string): Promise<void>;
   Unit_ResolveEnshrine(srcUnitID: string, enshrinedTitle: string, enshrinedBody: string, reason: string): Promise<string>;
+  // ── Boot health (agent-loop-robustness-parity WP08 / FR-008) ──────────
+  /** Returns per-subsystem init error strings from the boot phase. */
+  BootHealth_Get(): Promise<BootHealthReport>;
+  // ── Background tasks (background-task-monitor WP05) ───────────────────
+  Tasks_List(): Promise<TaskRow[]>;
+  Tasks_Get(id: string): Promise<TaskRow>;
+  Tasks_Tail(id: string, fromOffset: number): Promise<LineRow[]>;
+  Tasks_Abort(id: string): Promise<void>;
+  Tasks_AbortBySession(sessionID: string): Promise<void>;
+  Tasks_ListBySession(sessionID: string): Promise<TaskRow[]>;
 }
 
 // ── runtime client ─────────────────────────────────────────────────────
@@ -3445,6 +3467,15 @@ export function createHarnessClient(): HarnessClient {
     Unit_ResolveMerge: (unitID, resolvedBody) => b().Unit_ResolveMerge(unitID, resolvedBody),
     Unit_ResolveEnshrine: (srcUnitID, enshrinedTitle, enshrinedBody, reason) =>
       b().Unit_ResolveEnshrine(srcUnitID, enshrinedTitle, enshrinedBody, reason),
+    // ── Boot health (agent-loop-robustness-parity WP08 / FR-008) ──────────
+    BootHealth_Get: () => b().BootHealth_Get(),
+    // ── Background tasks (background-task-monitor WP05) ───────────────────
+    Tasks_List: () => b().Tasks_List(),
+    Tasks_Get: (id) => b().Tasks_Get(id),
+    Tasks_Tail: (id, fromOffset) => b().Tasks_Tail(id, fromOffset),
+    Tasks_Abort: (id) => b().Tasks_Abort(id),
+    Tasks_AbortBySession: (sessionID) => b().Tasks_AbortBySession(sessionID),
+    Tasks_ListBySession: (sessionID) => b().Tasks_ListBySession(sessionID),
   };
 }
 
@@ -4735,6 +4766,18 @@ export function createFakeHarnessClient(
     Unit_ListConflicts: async (): Promise<import('./types').UnitConflictView[]> => [],
     Unit_ResolveMerge: noop,
     Unit_ResolveEnshrine: async () => '',
+    // ── Boot health (agent-loop-robustness-parity WP08 / FR-008) ──────────
+    BootHealth_Get: async (): Promise<BootHealthReport> => ({}),
+    // ── Background tasks (background-task-monitor WP05) ───────────────────
+    Tasks_List: async (): Promise<TaskRow[]> => [],
+    Tasks_Get: async (): Promise<TaskRow> => ({
+      id: '', kind: '', ownerSessionId: '', cmd: '', description: '',
+      status: 'running', exitCode: 0, startedAt: '', ageMs: 0,
+    }),
+    Tasks_Tail: async (): Promise<LineRow[]> => [],
+    Tasks_Abort: noop,
+    Tasks_AbortBySession: noop,
+    Tasks_ListBySession: async (): Promise<TaskRow[]> => [],
   };
 
   return { ...defaults, ...seed };

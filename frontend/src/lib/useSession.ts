@@ -29,6 +29,7 @@ import { useEventStream } from './useEventStream';
 import { logEvent } from './eventLog';
 import { isServedMode } from './useServedMode';
 import { useConnectionState } from './useConnectionState';
+import { friendlyRPCError } from './errors';
 import type { ContentBlock, Message, Session } from './types';
 
 /**
@@ -454,12 +455,16 @@ export function useSession(id: Ref<string>): UseSessionResult {
         }
       }, STREAM_TIMEOUT_MS);
     } catch (err) {
-      const e = err instanceof Error ? err : new Error(String(err));
-      error.value = e.message;
+      // FR-008 (agent-loop-robustness-parity WP08): if the backend returned a
+      // structured RPCErrorEnvelope, surface the hint/message instead of the
+      // raw Go error string.
+      const friendly = friendlyRPCError(err);
+      const msg = friendly ?? (err instanceof Error ? err.message : String(err));
+      error.value = msg;
       logEvent('error', 'send.failed', {
         session_id: sid,
         profile_id: profileID,
-        message: e.message,
+        message: msg,
       });
     }
   }
@@ -508,12 +513,14 @@ export function useSession(id: Ref<string>): UseSessionResult {
         }
       }, STREAM_TIMEOUT_MS);
     } catch (err) {
-      const e = err instanceof Error ? err : new Error(String(err));
-      error.value = e.message;
+      // FR-008: surface structured RPCErrorEnvelope hint/message when available.
+      const friendly = friendlyRPCError(err);
+      const msg = friendly ?? (err instanceof Error ? err.message : String(err));
+      error.value = msg;
       logEvent('error', 'send.failed', {
         session_id: sid,
         profile_id: profileID,
-        message: e.message,
+        message: msg,
       });
     }
   }

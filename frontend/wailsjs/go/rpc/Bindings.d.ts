@@ -48,6 +48,7 @@ import {fleet} from '../models';
 import {update} from '../models';
 import {workflow} from '../models';
 import {workflows} from '../models';
+import {tasks} from '../models';
 
 export function A2A_ListCards():Promise<Array<a2a.Card>>;
 
@@ -112,6 +113,8 @@ export function Audit_VerifyChain(arg1:string,arg2:string):Promise<audit.VerifyC
 export function Audit_VerifyEntry(arg1:string):Promise<boolean>;
 
 export function Bash_Exec(arg1:string,arg2:string):Promise<rpc.BashExecResult>;
+
+export function BootHealth_Get():Promise<rpc.BootHealthReport>;
 
 export function Branches_Abandon(arg1:string):Promise<void>;
 
@@ -856,3 +859,15 @@ export function Workflows_ScheduleNextFire(arg1:string):Promise<string>;
 export function Workflows_ScheduleRunHistory(arg1:string,arg2:number):Promise<Array<workflows.RunSummary>>;
 
 export function Workflows_ScheduleSet(arg1:workflows.ScheduleSetInput):Promise<void>;
+
+export function Tasks_List():Promise<Array<tasks.TaskRow>>;
+
+export function Tasks_Get(arg1:string):Promise<tasks.TaskRow>;
+
+export function Tasks_Tail(arg1:string,arg2:number):Promise<Array<tasks.LineRow>>;
+
+export function Tasks_Abort(arg1:string):Promise<void>;
+
+export function Tasks_AbortBySession(arg1:string):Promise<void>;
+
+export function Tasks_ListBySession(arg1:string):Promise<Array<tasks.TaskRow>>;

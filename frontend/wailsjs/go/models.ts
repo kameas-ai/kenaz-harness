@@ -5300,6 +5300,22 @@ export namespace rpc {
 	        this.truncated = source["truncated"];
 	    }
 	}
+	export class BootHealthReport {
+	    mcpInitError?: string;
+	    skillsInitError?: string;
+	    fleetInitError?: string;
+
+	    static createFrom(source: any = {}) {
+	        return new BootHealthReport(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.mcpInitError = source["mcpInitError"];
+	        this.skillsInitError = source["skillsInitError"];
+	        this.fleetInitError = source["fleetInitError"];
+	    }
+	}
 	export class EmbedderConfigResult {
 	    profileId: string;
 	    modelOverride: string;
@@ -7357,6 +7373,59 @@ export namespace workflows {
 	        this.version = source["version"];
 	        this.stepCount = source["stepCount"];
 	        this.source = source["source"];
+	    }
+	}
+
+}
+
+export namespace tasks {
+
+	export class LineRow {
+	    stream: string;
+	    text: string;
+	    offset: number;
+	    at: string;
+
+	    static createFrom(source: any = {}) {
+	        return new LineRow(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.stream = source["stream"];
+	        this.text = source["text"];
+	        this.offset = source["offset"];
+	        this.at = source["at"];
+	    }
+	}
+	export class TaskRow {
+	    id: string;
+	    kind: string;
+	    ownerSessionId: string;
+	    cmd: string;
+	    description: string;
+	    status: string;
+	    exitCode: number;
+	    startedAt: string;
+	    endedAt?: string;
+	    ageMs: number;
+
+	    static createFrom(source: any = {}) {
+	        return new TaskRow(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.kind = source["kind"];
+	        this.ownerSessionId = source["ownerSessionId"];
+	        this.cmd = source["cmd"];
+	        this.description = source["description"];
+	        this.status = source["status"];
+	        this.exitCode = source["exitCode"];
+	        this.startedAt = source["startedAt"];
+	        this.endedAt = source["endedAt"];
+	        this.ageMs = source["ageMs"];
 	    }
 	}
 

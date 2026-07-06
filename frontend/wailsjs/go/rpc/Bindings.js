@@ -130,6 +130,10 @@ export function Bash_Exec(arg1, arg2) {
   return window['go']['rpc']['Bindings']['Bash_Exec'](arg1, arg2);
 }
 
+export function BootHealth_Get() {
+  return window['go']['rpc']['Bindings']['BootHealth_Get']();
+}
+
 export function Branches_Abandon(arg1) {
   return window['go']['rpc']['Bindings']['Branches_Abandon'](arg1);
 }
@@ -1616,4 +1620,28 @@ export function Workflows_ScheduleRunHistory(arg1, arg2) {
 
 export function Workflows_ScheduleSet(arg1) {
   return window['go']['rpc']['Bindings']['Workflows_ScheduleSet'](arg1);
+}
+
+export function Tasks_List() {
+  return window['go']['rpc']['Bindings']['Tasks_List']();
+}
+
+export function Tasks_Get(arg1) {
+  return window['go']['rpc']['Bindings']['Tasks_Get'](arg1);
+}
+
+export function Tasks_Tail(arg1, arg2) {
+  return window['go']['rpc']['Bindings']['Tasks_Tail'](arg1, arg2);
+}
+
+export function Tasks_Abort(arg1) {
+  return window['go']['rpc']['Bindings']['Tasks_Abort'](arg1);
+}
+
+export function Tasks_AbortBySession(arg1) {
+  return window['go']['rpc']['Bindings']['Tasks_AbortBySession'](arg1);
+}
+
+export function Tasks_ListBySession(arg1) {
+  return window['go']['rpc']['Bindings']['Tasks_ListBySession'](arg1);
 }

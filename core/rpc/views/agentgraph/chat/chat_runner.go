@@ -390,6 +390,10 @@ type chatSub struct {
 	done          chan struct{}
 	bridge        *StreamBridge
 	finished      atomic.Bool
+	// overflowRetried guards the auto-redrive path (FR-005 / WP05 nit): at
+	// most one automatic overflow-recovery redrive per run. A second overflow
+	// after the first compaction falls through to the normal backend-error path.
+	overflowRetried atomic.Bool
 	// cancelCause records WHY the run's context was cancelled, so the
 	// terminal close can distinguish an explicit user Stop ("stop-called")
 	// from the inbound RPC ctx being cancelled out from under us
@@ -751,6 +755,14 @@ func (r *ChatRunner) driveRun(ctx context.Context, sub *chatSub, env *coreag.Env
 		close(sub.done)
 	}()
 
+	// WP02 — periodic partial flush: start a background goroutine that
+	// periodically persists accumulated streamed text during the run.
+	// This closes the crash-loss window (FR-002). The goroutine exits
+	// automatically when the run's context is cancelled.
+	if r.cfg.PartialPersister != nil {
+		go runPeriodicFlush(ctx, sub.sessionID, sub.bridge, r.cfg.PartialPersister, 0)
+	}
+
 	runStart := time.Now()
 	err := r.cfg.Kernel.Run(ctx, env)
 	reason := "completed"
@@ -846,6 +858,47 @@ func (r *ChatRunner) driveRun(ctx context.Context, sub *chatSub, env *coreag.Env
 	case errors.Is(err, coreag.ErrBudgetExceeded):
 		reason = "backend-error"
 		message = "agent reached the per-run budget cap"
+	case err != nil && isContextOverflowError(err):
+		// WP05: reactive context-overflow recovery (FR-005). An overflow that
+		// slips past the capability-table pre-check triggers a compact-and-retry
+		// path instead of a terminal error. We attempt one compaction pass here;
+		// if it succeeds we auto-redrive the run (at most once — guard via
+		// sub.overflowRetried so a second overflow after compaction falls through
+		// to the normal backend-error path). On compaction failure we fall through
+		// to the backend-error path so the user sees the real problem.
+		redrove := false
+		if !sub.overflowRetried.Swap(true) {
+			// First overflow: attempt compaction then re-drive.
+			if recErr := attemptOverflowRecovery(
+				context.Background(), // fresh ctx — run ctx may be cancelled
+				sub.sessionID,
+				sub.profileID,
+				sub.modelOverride,
+				r.cfg.Compaction,
+			); recErr == nil {
+				// Compaction succeeded — re-run the kernel with the same env
+				// and a fresh context so the frontend stream stays open.
+				log.Info("chat.overflow_recovery.auto_redrive",
+					"sub_id", sub.id, "session_id", sub.sessionID)
+				redriveCtx, redriveCancel := context.WithCancel(context.Background())
+				redriveErr := r.cfg.Kernel.Run(redriveCtx, env)
+				redriveCancel()
+				redrove = true
+				if redriveErr == nil {
+					reason = "completed"
+					runTerminatedClean = true
+				} else {
+					log.Info("chat.overflow_recovery.redrive_exit",
+						"sub_id", sub.id, "session_id", sub.sessionID, "err", redriveErr.Error())
+					reason = "backend-error"
+					message = redriveErr.Error()
+				}
+			}
+		}
+		if !redrove {
+			reason = "backend-error"
+			message = err.Error()
+		}
 	case err != nil && capMissing != nil:
 		reason = "custom_endpoint_missing_capability"
 		message = err.Error()
@@ -864,6 +917,18 @@ func (r *ChatRunner) driveRun(ctx context.Context, sub *chatSub, env *coreag.Env
 				"session_id", sub.sessionID,
 				"note", "run cancelled by inbound app ctx (app shutdown), not a user Stop",
 			)
+		}
+		// FR-001 (agent-loop-robustness-parity WP01): persist the partial
+		// assistant text + backfill synthetic is_error tool_results for any
+		// dangling tool_use calls so the transcript is API-valid on resume.
+		// Use a fresh background context — the run's ctx is already
+		// cancelled at this point.
+		if r.cfg.HistoryWriter != nil {
+			danglingCalls := sub.bridge.SeenToolCalls()
+			interruptState := NewInterruptState(sub.bridge, danglingCalls)
+			persistCtx, persistCancel := context.WithTimeout(context.Background(), persistPartialTimeout)
+			interruptState.PersistInterrupt(persistCtx, sub.sessionID, r.cfg.HistoryWriter)
+			persistCancel()
 		}
 	default:
 		reason = "backend-error"

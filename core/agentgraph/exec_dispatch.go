@@ -3,9 +3,11 @@ package agentgraph
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"runtime/debug"
 	"strings"
+	"sync"
 	"time"
 
 	"golang.org/x/sync/errgroup"
@@ -106,9 +108,54 @@ func (toolDispatchExecutor) Execute(ctx context.Context, env *Env, node *Node, i
 		outcomes[i] = dispatchOutcome{call: c}
 	}
 
+	// WP07 — mutation-safe concurrency (FR-007):
+	// Mutating tools (names present in env.MutatingTools) acquire this
+	// mutex before calling env.Tools.Call so they cannot interleave with
+	// each other. Read-only tools bypass the lock and parallelize freely
+	// up to MaxConcurrent.  nil / empty MutatingTools == all tools are
+	// read-only (pre-WP07 behaviour).
+	var mutateLock sync.Mutex
+
 	dispatchOne := func(i int) {
 		oc := &outcomes[i]
 		oc.args, oc.rawArgs = parseToolArgs(oc.call.Arguments)
+
+		// WP06 — tool-input schema validation (FR-006):
+		// Validate args against the tool's input_schema before dispatch.
+		// On mismatch, surface a model-readable is_error result so the
+		// model can self-correct next turn rather than receiving an opaque
+		// tool failure. Also rejects the _raw passthrough for unparseable
+		// args — parseToolArgs still produces the _raw map for partial
+		// compatibility, but we check for it here and reject it.
+		if _, isRaw := oc.args["_raw"]; isRaw {
+			errMsg := fmt.Sprintf(
+				"Tool %q received non-JSON arguments that could not be parsed as a JSON object. "+
+					"Please provide a valid JSON object as arguments.",
+				oc.call.Name,
+			)
+			oc.result = ToolResult{Content: errMsg, IsError: true}
+			oc.err = fmt.Errorf("tool_dispatch: %s", errMsg)
+			_ = oc.events.AppendKind(env.RunID, node.ID, EventNodeError, map[string]any{
+				"err":     errMsg,
+				"tool":    oc.call.Name,
+				"call_id": oc.call.ID,
+			})
+			return
+		}
+		var schemaJSON []byte
+		if env.ToolSchemas != nil {
+			schemaJSON = env.ToolSchemas[oc.call.Name]
+		}
+		if msg := validateToolArgs(oc.call.Arguments, oc.call.Name, schemaJSON); msg != "" {
+			oc.result = ToolResult{Content: msg, IsError: true}
+			oc.err = fmt.Errorf("tool_dispatch: validation: %s", msg)
+			_ = oc.events.AppendKind(env.RunID, node.ID, EventNodeError, map[string]any{
+				"err":     msg,
+				"tool":    oc.call.Name,
+				"call_id": oc.call.ID,
+			})
+			return
+		}
 
 		// Pre-tool boundary (mirror toolExecutor). Greedy memory hook +
 		// chassis-side mutation extension point.
@@ -136,9 +183,45 @@ func (toolDispatchExecutor) Execute(ctx context.Context, env *Env, node *Node, i
 			"node_kind": "tool_dispatch",
 		})
 
+		// WP07 — per-call timeout (FR-007):
+		// Wrap the dispatch context with a deadline when the caller has
+		// configured one.  A zero ToolCallTimeout disables the deadline so
+		// the existing behaviour is preserved for callers that do not opt in.
+		callCtx := ctx
+		var callCancel context.CancelFunc
+		if env.ToolCallTimeout > 0 {
+			callCtx, callCancel = context.WithTimeout(ctx, env.ToolCallTimeout)
+			defer callCancel()
+		}
+
+		// WP07 — mutation-safe serialization (FR-007):
+		// Acquire the per-Execute mutex when this tool is declared mutating.
+		// This ensures that two concurrently dispatched mutating calls never
+		// overlap, while read-only calls proceed without blocking.
+		isMutating := env.MutatingTools != nil && env.MutatingTools[oc.call.Name]
+		if isMutating {
+			mutateLock.Lock()
+		}
+
 		startedAt := time.Now()
-		tr, callErr := env.Tools.Call(ctx, ToolCall{Name: oc.call.Name, Args: oc.args})
+		tr, callErr := env.Tools.Call(callCtx, ToolCall{Name: oc.call.Name, Args: oc.args})
 		duration := time.Since(startedAt)
+
+		if isMutating {
+			mutateLock.Unlock()
+		}
+
+		// WP07 — surface timeout as is_error so the model sees a clear
+		// failure rather than an opaque context cancellation.
+		if callErr != nil && errors.Is(callErr, context.DeadlineExceeded) {
+			tr = ToolResult{
+				Content: fmt.Sprintf(
+					"tool %q timed out after %s — the operation did not complete within the allowed window",
+					oc.call.Name, env.ToolCallTimeout,
+				),
+				IsError: true,
+			}
+		}
 
 		// Gate: passive tools (e.g. kenaz__sleep) must not consume an
 		// iteration slot (FR-010). toolloop.ShouldCountIteration returns
@@ -151,9 +234,14 @@ func (toolDispatchExecutor) Execute(ctx context.Context, env *Env, node *Node, i
 			// Wrap deny / dispatch failure into an IsError result so the
 			// model sees the failure as a tool message; the err return
 			// only surfaces for genuine kernel failures (nil pool, etc.).
-			tr = ToolResult{
-				Content: callErr.Error(),
-				IsError: true,
+			// Skip if the timeout handler already set tr (WP07): the
+			// timeout is_error is more informative than a raw
+			// context.DeadlineExceeded string.
+			if !errors.Is(callErr, context.DeadlineExceeded) {
+				tr = ToolResult{
+					Content: callErr.Error(),
+					IsError: true,
+				}
 			}
 			oc.err = callErr
 			_ = oc.events.AppendKind(env.RunID, node.ID, EventNodeError, map[string]any{

@@ -3936,3 +3936,15 @@ export interface PendingMCPSecret {
   /** env var names the user must supply before the MCP can start. */
   requires_secret_keys: string[];
 }
+
+/**
+ * BootHealthReport carries per-subsystem init error strings from the
+ * harness boot phase. A non-empty field means that subsystem failed to
+ * start; empty means healthy (FR-008 / agent-loop-robustness-parity WP08).
+ * Mirrors core/rpc.BootHealthReport.
+ */
+export interface BootHealthReport {
+  mcpInitError?: string;
+  skillsInitError?: string;
+  fleetInitError?: string;
+}

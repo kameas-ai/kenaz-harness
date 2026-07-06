@@ -56,6 +56,7 @@ import (
 	catalogview "github.com/kameas-ai/kenaz-harness/core/rpc/views/catalog"
 	fleetview "github.com/kameas-ai/kenaz-harness/core/rpc/views/fleet"
 	syncview "github.com/kameas-ai/kenaz-harness/core/rpc/views/sync"
+	tasksview "github.com/kameas-ai/kenaz-harness/core/rpc/views/tasks"
 	"github.com/kameas-ai/kenaz-harness/core/logging"
 	"github.com/kameas-ai/kenaz-harness/core/mcp/stdio"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/middleware"
@@ -199,7 +200,14 @@ func (b *Bindings) Sessions_Reorder(ids []string) error {
 }
 func (b *Bindings) Sessions_StartStream(id string) (string, error) {
 	defer sentry.WrapBinding("Sessions_StartStream")()
-	return b.api.Sessions().StartStream(b.ctx(), id)
+	subID, err := b.api.Sessions().StartStream(b.ctx(), id)
+	// FR-008 (agent-loop-robustness-parity WP08): map typed LLM errors to the
+	// structured RPCError envelope so the frontend can render targeted toasts
+	// instead of raw Go error strings.
+	if rpcErr := MapLLMError(err); rpcErr != nil {
+		return subID, rpcErr
+	}
+	return subID, err
 }
 func (b *Bindings) Sessions_StopStream(subID string) error {
 	defer sentry.WrapBinding("Sessions_StopStream")()
@@ -3102,4 +3110,42 @@ func (b *Bindings) Sync_PendingMCPSecrets() ([]syncview.PendingMCPSecret, error)
 func (b *Bindings) Cedar_PublishToTeam(ruleID, ruleSource string) error {
 	defer sentry.WrapBinding("Cedar_PublishToTeam")()
 	return b.api.CedarPublish().Cedar_PublishToTeam(b.ctx(), ruleID, ruleSource)
+}
+
+// ── Tasks bindings (background-task-monitor-01KZNP3C WP05) ──────────────────
+
+// Tasks_List returns all known background tasks sorted newest-first.
+func (b *Bindings) Tasks_List() ([]tasksview.TaskRow, error) {
+	defer sentry.WrapBinding("Tasks_List")()
+	return b.api.Tasks().Tasks_List(b.ctx())
+}
+
+// Tasks_Get returns a single task by ID.
+func (b *Bindings) Tasks_Get(id string) (tasksview.TaskRow, error) {
+	defer sentry.WrapBinding("Tasks_Get")()
+	return b.api.Tasks().Tasks_Get(b.ctx(), id)
+}
+
+// Tasks_Tail returns output lines captured since fromOffset.
+func (b *Bindings) Tasks_Tail(id string, fromOffset int64) ([]tasksview.LineRow, error) {
+	defer sentry.WrapBinding("Tasks_Tail")()
+	return b.api.Tasks().Tasks_Tail(b.ctx(), id, fromOffset)
+}
+
+// Tasks_Abort sends SIGTERM to the task's process and marks it cancelled.
+func (b *Bindings) Tasks_Abort(id string) error {
+	defer sentry.WrapBinding("Tasks_Abort")()
+	return b.api.Tasks().Tasks_Abort(b.ctx(), id)
+}
+
+// Tasks_AbortBySession aborts all running tasks owned by the given session.
+func (b *Bindings) Tasks_AbortBySession(sessionID string) error {
+	defer sentry.WrapBinding("Tasks_AbortBySession")()
+	return b.api.Tasks().Tasks_AbortBySession(b.ctx(), sessionID)
+}
+
+// Tasks_ListBySession returns tasks owned by the given session.
+func (b *Bindings) Tasks_ListBySession(sessionID string) ([]tasksview.TaskRow, error) {
+	defer sentry.WrapBinding("Tasks_ListBySession")()
+	return b.api.Tasks().Tasks_ListBySession(b.ctx(), sessionID)
 }

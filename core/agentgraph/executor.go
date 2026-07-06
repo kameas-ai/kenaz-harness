@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"time"
 )
 
 // PortValues is the typed-loose carrier for input/output port data
@@ -218,6 +219,31 @@ type Env struct {
 	// MergeSuggester powers the kernel's "merge?" toast. nil disables
 	// the suggestion stream.
 	MergeSuggester *MergeSuggester
+
+	// ToolSchemas maps tool name → JSON-Schema bytes for the tools the
+	// model was given this run. Populated by the LLMProviderAdapter at
+	// StartStream time from the discovered ToolSpec slice.
+	//
+	// The tool_dispatch executor reads this map at dispatch time to
+	// validate model-supplied arguments before forwarding them to the
+	// tool implementation (FR-006 / agent-loop-robustness-parity WP06).
+	// nil means no schema validation — the executor degrades to well-
+	// formedness-only checking (JSON must parse as an object).
+	ToolSchemas map[string][]byte // toolName → JSON Schema bytes
+
+	// ToolCallTimeout is the per-call deadline applied by tool_dispatch.
+	// Zero means no timeout (the existing behaviour). When set, any tool
+	// call that does not complete within this duration receives a timeout
+	// is_error result so the model sees the failure rather than the loop
+	// hanging indefinitely (FR-007 / agent-loop-robustness-parity WP07).
+	ToolCallTimeout time.Duration
+
+	// MutatingTools is the set of tool names that MUST NOT run concurrently
+	// with other mutating tools (FR-007 mutation-safety). When non-empty,
+	// the dispatcher serialises all calls whose name is in MutatingTools;
+	// read-only tools still run in parallel up to MaxConcurrent.
+	// nil means all tools are treated as read-only (parallel by default).
+	MutatingTools map[string]bool
 
 	// registry is the executor lookup table the control executors
 	// (Loop, Retry, Parallel) use to dispatch into peer nodes. The
