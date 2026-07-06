@@ -5770,3 +5770,38 @@ func (e *brokerPlanEmitter) Emit(_ context.Context, _ string, event string, payl
 	e.broker.Publish(event, payload)
 	return nil
 }
+
+// Broker returns the StreamBroker so main.go can wire it into the native
+// menu controller (os-menu-bar-01NDFSEX16 WP03). The broker is always
+// non-nil on the production chassis; tests that call rpc.New(nil) may
+// receive a broker without a Wails context (safe to call Publish on).
+func (a *API) Broker() *StreamBroker {
+	if a == nil {
+		return nil
+	}
+	return a.broker
+}
+
+// SettingsStore returns the underlying settings persistence store so the
+// native menu can read the current theme at startup without going through
+// the Wails-bound Settings_Get RPC (which needs a Wails context that is
+// not yet available at menu construction time).
+// (os-menu-bar-01NDFSEX16 WP03)
+func (a *API) SettingsStore() settings.SettingsStore {
+	if a == nil || a.settingsImpl == nil {
+		return nil
+	}
+	return a.settingsImpl.Store()
+}
+
+// UpdateStartCheck triggers an immediate update check via the Manager if wired.
+// Used by the native menu "Check for Updates" handler (os-menu-bar-01NDFSEX16 WP03).
+// Safe to call with a nil updateAPI.
+func (a *API) UpdateStartCheck(ctx context.Context) {
+	if a == nil || a.updateAPI == nil {
+		return
+	}
+	if err := a.updateAPI.StartCheck(ctx); err != nil {
+		logging.L().Warn("menu.update.check_failed", "err", err.Error())
+	}
+}
