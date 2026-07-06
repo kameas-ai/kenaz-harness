@@ -1024,6 +1024,13 @@ export interface Settings {
    * the first-launch onboarding modal. Controls whether the modal mounts.
    */
   hasSeenCrashReportingOnboarding?: boolean;
+  /**
+   * hasSeenFleetTelemetryOnboarding: set to true after the user dismisses
+   * the first-launch fleet-telemetry onboarding modal. Controls whether
+   * the modal mounts on post-sign-in first paint.
+   * (fleet-otel-archival-01NDFSEX11 WP06)
+   */
+  hasSeenFleetTelemetryOnboarding?: boolean;
 }
 
 /**

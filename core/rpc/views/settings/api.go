@@ -515,6 +515,13 @@ type Settings struct {
 	// to true after the user dismisses it.
 	// (sentry-error-monitoring-01KX5R8G WP05)
 	HasSeenCrashReportingOnboarding bool `json:"hasSeenCrashReportingOnboarding,omitempty"`
+
+	// HasSeenFleetTelemetryOnboarding records whether the first-launch
+	// one-time fleet-telemetry onboarding modal has been shown. When false
+	// (default) the frontend shows the modal on first paint after sign-in
+	// and sets this to true after the user dismisses it.
+	// (fleet-otel-archival-01NDFSEX11 WP06)
+	HasSeenFleetTelemetryOnboarding bool `json:"hasSeenFleetTelemetryOnboarding,omitempty"`
 }
 
 // ProviderProfileRef is the wire shape that identifies a provider+model
