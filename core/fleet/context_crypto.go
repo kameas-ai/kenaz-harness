@@ -18,7 +18,9 @@ package fleet
 // layer. Raw key material never leaves this file.
 
 import (
+	"crypto/ecdh"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -28,7 +30,6 @@ import (
 	"github.com/zalando/go-keyring"
 	"golang.org/x/crypto/chacha20poly1305"
 	"golang.org/x/crypto/hkdf"
-	"crypto/sha256"
 
 	"github.com/kameas-ai/kenaz-harness/core/logging"
 	"github.com/kameas-ai/kenaz-harness/core/paths"
@@ -60,6 +61,12 @@ const (
 	LabelSessionEvents DeriveLabel = "session-events-v1"
 	// LabelProjectEvents is the HKDF label for project event stream keys.
 	LabelProjectEvents DeriveLabel = "project-events-v1"
+	// LabelHandoffKey is the HKDF label for deriving the symmetric AEAD
+	// key from an X25519 shared secret during team session handoff.
+	LabelHandoffKey DeriveLabel = "handoff-v1"
+	// LabelHandoffIdentity is the HKDF label for deriving the per-device
+	// X25519 private key scalar used as the recipient identity key.
+	LabelHandoffIdentity DeriveLabel = "handoff-identity-v1"
 )
 
 // SeedKey ensures a context seed exists in the OS keychain. If no seed exists,
@@ -137,6 +144,31 @@ func DeriveKey(seed []byte, label DeriveLabel) ([]byte, error) {
 		return nil, fmt.Errorf("fleet: HKDF expand: %w", err)
 	}
 	return key, nil
+}
+
+// LoadOwnHandoffPrivKey derives a deterministic X25519 private key for this
+// device from the context seed. The corresponding public key is what fleet's
+// identity service registers on behalf of this user; the sender fetches it
+// via fetchRecipientPublicKey to derive the handoff AEAD key.
+//
+// Derivation: HKDF(seed, label=LabelHandoffIdentity) → 32 raw scalar bytes →
+// X25519 private key (the Go standard library accepts raw 32-byte scalars).
+//
+// Privacy invariant: the private key bytes are never logged.
+func LoadOwnHandoffPrivKey() (*ecdh.PrivateKey, error) {
+	seed, err := LoadContextSeed()
+	if err != nil {
+		return nil, fmt.Errorf("fleet: load own handoff priv key: %w", err)
+	}
+	scalar, err := DeriveKey(seed, LabelHandoffIdentity)
+	if err != nil {
+		return nil, fmt.Errorf("fleet: derive handoff identity scalar: %w", err)
+	}
+	priv, err := ecdh.X25519().NewPrivateKey(scalar)
+	if err != nil {
+		return nil, fmt.Errorf("fleet: build X25519 private key: %w", err)
+	}
+	return priv, nil
 }
 
 // Encrypt encrypts plaintext with XChaCha20-Poly1305 using key.

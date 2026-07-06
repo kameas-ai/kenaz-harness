@@ -114,6 +114,7 @@ func (a *handoffBackendAdapter) ListTeam(ctx context.Context) ([]contextsyncview
 			UserID:      m.UserID,
 			DisplayName: m.DisplayName,
 			Email:       m.Email,
+			CanReceive:  m.CanReceive,
 		})
 	}
 	return out, nil

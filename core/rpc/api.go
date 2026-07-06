@@ -2058,6 +2058,29 @@ func New(c *core.Core) *API {
 				Handoff:  &handoffBackendAdapter{hh: handoffHandler},
 				Recovery: &recoveryBackendAdapter{},
 			}
+
+			// FR-003 (fleet-context-sync-01NDFSEX15): wire the append hook so
+			// every session.Message persisted by the LLM write path is also
+			// streamed to the fleet event stream when sync is enabled for the
+			// session. The hook is a no-op when sync is disabled (guarded inside
+			// SessionSyncer.AppendEvent). We marshal only opaque IDs (message ID
+			// + role); no plaintext content crosses this boundary.
+			if stack.historyAdapter != nil {
+				capturedSyncer := sessionSyncer
+				stack.historyAdapter.syncHook = func(ctx context.Context, sessionID string, _ uint64, payload []byte) {
+					if err := capturedSyncer.AppendEvent(ctx, sessionID, corefleet.SessionEventRecord{
+						Seq:   0, // seq 0 signals "append as new tail"; fleet assigns the monotonic seq
+						Bytes: payload,
+					}); err != nil && err != corefleet.ErrFleetDisabled {
+						logging.L().Warn("rpc.context_sync.append_event_failed",
+							"session_id", sessionID[:min(len(sessionID), 8)],
+							"err", err.Error(),
+						)
+					}
+				}
+				logging.L().Info("rpc.context_sync.append_hook_wired")
+			}
+
 			logging.L().Info("rpc.context_sync.wired",
 				"fleet_client_nil", flCl == nil,
 			)
@@ -3015,6 +3038,13 @@ type llmStack struct {
 	// (long-turn-resilience-01KR3PRS WP03). nil when graphMgr was
 	// unavailable at boot.
 	chatRunner *chat.ChatRunner
+	// historyAdapter is the shared *sessionHistoryReader constructed
+	// inside newLLMStack. Exposed so the context-sync wiring block in
+	// New() can attach the FR-003 sessionSyncAppendHook after the
+	// fleet SessionSyncer is available (the sync block runs after
+	// newLLMStack). Setting historyAdapter.syncHook wires the hook for
+	// all llmHistoryWriter instances since they all share this reader.
+	historyAdapter *sessionHistoryReader
 }
 
 func newLLMStack(
@@ -3300,6 +3330,7 @@ func newLLMStack(
 		compactionLLM:       compactionLLM,
 		compactionAudit:     compactionAudit,
 		chatRunner:          chatRunner,
+		historyAdapter:      historyAdapter,
 	}
 }
 
@@ -4745,6 +4776,11 @@ func newSessionHistoryReader(c *core.Core) *sessionHistoryReader {
 
 type sessionHistoryReader struct {
 	mgr *session.Manager
+	// syncHook is set once at boot by the context-sync wiring block in
+	// New(). It fires after each successful AppendMessage to stream new
+	// events to the fleet session-sync stream (FR-003).
+	// Privacy invariant: the hook must never log message content.
+	syncHook sessionSyncAppendHook
 }
 
 func (r *sessionHistoryReader) ListMessages(ctx context.Context, sessionID string) ([]llm.SessionMessage, error) {
@@ -4769,22 +4805,48 @@ func (r *sessionHistoryReader) ListMessages(ctx context.Context, sessionID strin
 // AppendMessage persists the assistant turn at stream completion so a
 // future ListMessages call rehydrates it. Implements the toolloop's
 // SessionHistoryRW.AppendMessage shape (error-only return).
+// FR-003: fires syncHook after a successful persist so the new event is
+// streamed to fleet for sessions with context-sync enabled.
 func (r *sessionHistoryReader) AppendMessage(ctx context.Context, sessionID, role, content string) error {
 	if r == nil || r.mgr == nil {
 		return nil
 	}
-	_, err := r.mgr.AppendMessage(ctx, sessionID, session.Message{
+	stored, err := r.mgr.AppendMessage(ctx, sessionID, session.Message{
 		Role:    session.Role(role),
 		Content: content,
 	})
-	return err
+	if err != nil {
+		return err
+	}
+	if hook := r.syncHook; hook != nil {
+		payload, merr := json.Marshal(map[string]string{
+			"id":   stored.ID,
+			"role": role,
+		})
+		if merr == nil {
+			hook(ctx, sessionID, 0, payload)
+		}
+	}
+	return nil
 }
+
+// sessionSyncAppendHook is the callback fired by llmHistoryWriter after each
+// successful AppendMessage call. It is set once at boot by the context-sync
+// wiring block in New() before any chat session starts; no concurrent-write
+// hazard exists. The hook marshals the message to JSON and ships it to fleet
+// via SessionSyncer.AppendEvent (no-op when sync is not enabled for the
+// session). Privacy invariant: the hook must never log message content.
+type sessionSyncAppendHook func(ctx context.Context, sessionID string, seq uint64, payload []byte)
 
 // llmHistoryWriter wraps sessionHistoryReader to satisfy the LLM
 // view's SessionMessageWriter shape, which returns the persisted
 // message id alongside the error so the post-finalize hooks
 // (artifacts code-block detector) can anchor SourceRef.MessageID to
 // the freshly persisted row.
+//
+// FR-003 (fleet-context-sync-01NDFSEX15): the fleet streaming hook is
+// stored on inner (sessionHistoryReader.syncHook) so both this writer
+// and any other path that calls inner.AppendMessage fire it.
 type llmHistoryWriter struct {
 	inner *sessionHistoryReader
 }
@@ -4813,6 +4875,18 @@ func (w *llmHistoryWriter) AppendMessage(ctx context.Context, sessionID, role, c
 	})
 	if err != nil {
 		return "", err
+	}
+	// FR-003: stream event to fleet when session sync is enabled.
+	// The hook is stored on inner (sessionHistoryReader) so the same
+	// hook fires regardless of which writer path is taken.
+	if hook := w.inner.syncHook; hook != nil {
+		payload, merr := json.Marshal(map[string]string{
+			"id":   stored.ID,
+			"role": role,
+		})
+		if merr == nil {
+			hook(ctx, sessionID, 0, payload)
+		}
 	}
 	return stored.ID, nil
 }

@@ -196,6 +196,64 @@ func TestSessionSyncer_AppendEvent_SkipsWhenDisabled(t *testing.T) {
 	}
 }
 
+// ── AppendEvent fires when sync is on ──────────────────────────────────────
+
+func TestSessionSyncer_AppendEvent_FiresWhenEnabled(t *testing.T) {
+	var (
+		appendCalls int
+		mu          sync.Mutex
+	)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && r.URL.Path == "/api/v1/context/append" {
+			mu.Lock()
+			appendCalls++
+			mu.Unlock()
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	stubTokens(t, TokenSet{
+		AccessToken:  "at-append",
+		RefreshToken: "rt-append",
+		ExpiresAt:    time.Now().Add(time.Hour),
+	})
+	c := makeTestClient(t, srv.URL)
+	ss := NewSessionSyncer(c, nil, nil)
+
+	seed := make([]byte, seedSize)
+	for i := range seed {
+		seed[i] = byte(i + 7)
+	}
+	if err := StoreContextSeed(seed); err != nil {
+		t.Fatalf("StoreContextSeed: %v", err)
+	}
+
+	sessionID := "session-append-enabled-test"
+	// Enable sync so isSessionSyncEnabled returns true.
+	if err := setSessionSyncEnabled(sessionID, true); err != nil {
+		t.Fatalf("setSessionSyncEnabled: %v", err)
+	}
+	t.Cleanup(func() { _ = setSessionSyncEnabled(sessionID, false) })
+
+	err := ss.AppendEvent(context.Background(), sessionID, SessionEventRecord{
+		Seq:   1,
+		Bytes: []byte(`{"role":"user","content":"<opaque>"}`),
+	})
+	if err != nil {
+		t.Fatalf("AppendEvent: %v", err)
+	}
+
+	mu.Lock()
+	calls := appendCalls
+	mu.Unlock()
+
+	if calls == 0 {
+		t.Error("AppendEvent should POST to fleet when session sync is enabled, but no POST was observed")
+	}
+}
+
 // ── DeleteRemote ───────────────────────────────────────────────────────────
 
 func TestSessionSyncer_DeleteRemote_EmitsAudit(t *testing.T) {

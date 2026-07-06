@@ -53,6 +53,11 @@ type TeamMember struct {
 	UserID      string `json:"user_id"`
 	DisplayName string `json:"display_name"`
 	Email       string `json:"email"`
+	// CanReceive is true when fleet has a registered X25519 public key for
+	// this member, meaning they can receive encrypted session handoffs.
+	// Members without a registered key are listed but cannot be selected as
+	// handoff recipients.
+	CanReceive bool `json:"can_receive"`
 }
 
 // InboxItem is a session share received by the current user.
@@ -313,8 +318,8 @@ func deriveHandoffKey(recipientPubKeyBytes []byte) ([]byte, []byte, error) {
 		return nil, nil, fmt.Errorf("ECDH: %w", err)
 	}
 
-	// Derive symmetric key: HKDF(sharedSecret, info="handoff-v1").
-	handoffKey, err := DeriveKey(sharedSecret[:32], "handoff-v1")
+	// Derive symmetric key: HKDF(sharedSecret, info=LabelHandoffKey).
+	handoffKey, err := DeriveKey(sharedSecret[:32], LabelHandoffKey)
 	if err != nil {
 		return nil, nil, fmt.Errorf("derive handoff key: %w", err)
 	}
@@ -323,30 +328,41 @@ func deriveHandoffKey(recipientPubKeyBytes []byte) ([]byte, []byte, error) {
 }
 
 // deriveReceiveKey derives the same handoff key as the sender by performing
-// ECDH with our stored private key and the sender's ephemeral public key.
-// In this simplified v0.21.0 implementation the private key is derived from
-// the device context seed (shared secret model). Future versions will use a
-// persistent X25519 key pair stored separately.
+// X25519 ECDH with our seed-derived private key and the sender's ephemeral
+// public key, then running the same HKDF step used in deriveHandoffKey.
+//
+// Key agreement symmetry (Diffie-Hellman):
+//
+//	sender:   sharedSecret = ephemeralPriv.ECDH(recipientPub)
+//	receiver: sharedSecret = recipientPriv.ECDH(ephemeralPub)
+//	          ⟹ both sides derive the same sharedSecret → same AEAD key.
+//
+// The recipient's private key is deterministically derived from the device
+// context seed via LoadOwnHandoffPrivKey. The corresponding public key is
+// what the fleet identity service returns for this user ID; the sender fetches
+// it via fetchRecipientPublicKey, so both sides use the same key material.
 func (h *HandoffHandler) deriveReceiveKey(ephemeralPubKeyBytes []byte) ([]byte, error) {
-	seed, err := LoadContextSeed()
+	// Load our seed-derived X25519 private key.
+	recipientPriv, err := LoadOwnHandoffPrivKey()
 	if err != nil {
-		return nil, fmt.Errorf("load seed for receive key: %w", err)
+		return nil, fmt.Errorf("load own handoff private key: %w", err)
 	}
 
-	// In the v0.21.0 simplified model: the handoff key is derived from the
-	// context seed + the ephemeral public key bytes as info. This matches
-	// what the sender produced when they called deriveHandoffKey using our
-	// seed-derived public key. A future WP will replace this with a proper
-	// persistent X25519 key pair.
-	infoKey := make([]byte, 32)
-	copy(infoKey, seed)
-	for i, b := range ephemeralPubKeyBytes {
-		if i >= len(infoKey) {
-			break
-		}
-		infoKey[i] ^= b
+	// Parse the sender's ephemeral public key.
+	curve := ecdh.X25519()
+	ephemeralPub, err := curve.NewPublicKey(ephemeralPubKeyBytes)
+	if err != nil {
+		return nil, fmt.Errorf("parse ephemeral public key: %w", err)
 	}
-	return DeriveKey(infoKey, "handoff-v1")
+
+	// X25519 ECDH: recipientPriv · ephemeralPub == ephemeralPriv · recipientPub.
+	sharedSecret, err := recipientPriv.ECDH(ephemeralPub)
+	if err != nil {
+		return nil, fmt.Errorf("ECDH receive: %w", err)
+	}
+
+	// Same HKDF step as deriveHandoffKey.
+	return DeriveKey(sharedSecret[:32], LabelHandoffKey)
 }
 
 // ── audit helper ──────────────────────────────────────────────────────────────

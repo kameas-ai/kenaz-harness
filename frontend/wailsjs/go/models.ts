@@ -7635,6 +7635,7 @@ export namespace contextsync {
 	    userID: string;
 	    displayName: string;
 	    email: string;
+	    canReceive: boolean;
 
 	    static createFrom(source: any = {}) {
 	        return new TeamMemberView(source);
@@ -7645,6 +7646,7 @@ export namespace contextsync {
 	        this.userID = source["userID"];
 	        this.displayName = source["displayName"];
 	        this.email = source["email"];
+	        this.canReceive = source["canReceive"];
 	    }
 	}
 

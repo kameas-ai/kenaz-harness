@@ -39,6 +39,11 @@ type TeamMemberView struct {
 	UserID      string `json:"userID"`
 	DisplayName string `json:"displayName"`
 	Email       string `json:"email"`
+	// CanReceive is true when fleet has a registered X25519 public key for
+	// this member, meaning they can receive encrypted session handoffs.
+	// The frontend ShareSessionDialog filters by this flag to build the
+	// eligible recipient list.
+	CanReceive bool `json:"canReceive"`
 }
 
 // InboxItemView is the RPC-facing projection of a shared-session inbox item.
@@ -184,6 +189,9 @@ type TeamMemberRecord struct {
 	UserID      string
 	DisplayName string
 	Email       string
+	// CanReceive is true when fleet has a registered X25519 public key for
+	// this member so they can receive encrypted session handoffs.
+	CanReceive bool
 }
 
 // InboxItemRecord is the raw fleet inbox item, mapped from fleet.InboxItem.

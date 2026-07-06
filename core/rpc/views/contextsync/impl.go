@@ -140,6 +140,7 @@ func (im *Impl) Handoff_ListTeam(ctx context.Context) ([]TeamMemberView, error) 
 			UserID:      m.UserID,
 			DisplayName: m.DisplayName,
 			Email:       m.Email,
+			CanReceive:  m.CanReceive,
 		})
 	}
 	return out, nil
