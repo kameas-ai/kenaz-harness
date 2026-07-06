@@ -326,9 +326,9 @@ watch(editorSource, (val) => {
         <div class="policy-view__title">
           <span class="policy-view__section">POLICY</span>
         </div>
-        <h1 class="policy-view__heading">Cedar policy editor</h1>
+        <h1 class="policy-view__heading">Security policy (advanced)</h1>
         <p class="policy-view__sub">
-          Edit Cedar policies under <code>&lt;DataDir&gt;/policy/</code>.
+          Edit security policies under <code>&lt;DataDir&gt;/policy/</code>.
           Embedded defaults are read-only. Changes take effect on the next tool call.
         </p>
       </header>
