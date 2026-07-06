@@ -6,9 +6,16 @@ import (
 	"fmt"
 	"time"
 
+	contextaudit "github.com/kameas-ai/kenaz-harness/core/context/audit"
 	corefleet "github.com/kameas-ai/kenaz-harness/core/fleet"
 	coreslashcmd "github.com/kameas-ai/kenaz-harness/core/slashcmd"
 )
+
+// auditEmitter is the minimal interface the slashcmd view needs for audit.
+// Matches the interface used by core/rpc/views/catalog.
+type auditEmitter interface {
+	EmitFleetEvent(ctx context.Context, kind contextaudit.Kind, payload any) error
+}
 
 // SkillDeps bundles the fleet dependencies needed for skill publish/install.
 // All fields are optional — the surface degrades gracefully when nil.
@@ -26,6 +33,10 @@ type SkillDeps struct {
 	GetCaps func() *corefleet.Capabilities
 	// PubKeyBase64 is the fleet signing public key for install verification.
 	PubKeyBase64 string
+	// Emitter is the optional audit emitter for skill sync events
+	// (fleet-skills-sync-01NDFSEX18 WP07, FR-501).
+	// Nil means audit events are silently dropped.
+	Emitter auditEmitter
 }
 
 // API is the concrete SlashAPI implementation. It delegates to the
@@ -301,7 +312,17 @@ func (a *API) SkillPublish(ctx context.Context, name, projectID, visibility stri
 		caps = &c
 	}
 
-	_, err = corefleet.PublishSkill(ctx, a.skillDeps.FleetClient, caps, a.skillDeps.Signer, skill, vis)
+	item, err := corefleet.PublishSkill(ctx, a.skillDeps.FleetClient, caps, a.skillDeps.Signer, skill, vis)
+	if err == nil && a.skillDeps.Emitter != nil {
+		// FR-501: fleet.skill_published audit event.
+		_ = a.skillDeps.Emitter.EmitFleetEvent(ctx, contextaudit.KindFleetSkillPublished,
+			contextaudit.FleetSkillPublishedPayload{
+				CatalogID:  item.ID,
+				Slug:       item.Slug,
+				Version:    item.Version,
+				Visibility: visibility,
+			})
+	}
 	return err
 }
 
@@ -316,20 +337,49 @@ func (a *API) SkillInstall(ctx context.Context, catalogID, version string) error
 	if a.registry == nil {
 		return fmt.Errorf("slashcmd view: registry not wired")
 	}
-	return corefleet.InstallSkill(ctx, a.skillDeps.FleetClient,
+	err := corefleet.InstallSkill(ctx, a.skillDeps.FleetClient,
 		a.skillDeps.SkillStore, a.registry,
 		a.skillDeps.PubKeyBase64, catalogID, version)
+	if err == nil && a.skillDeps.Emitter != nil {
+		// FR-501: fleet.skill_installed audit event.
+		// Fetch the trigger from the store so the audit entry records it.
+		trigger := catalogID // fallback when store lookup fails
+		if sk, lookupErr := a.skillDeps.SkillStore.Get(catalogID); lookupErr == nil {
+			trigger = sk.EffectiveTrigger()
+		}
+		_ = a.skillDeps.Emitter.EmitFleetEvent(ctx, contextaudit.KindFleetSkillInstalled,
+			contextaudit.FleetSkillInstalledPayload{
+				CatalogID: catalogID,
+				Version:   version,
+				Trigger:   trigger,
+			})
+	}
+	return err
 }
 
 // SkillUninstall removes and live-unregisters a skill by store ID.
-func (a *API) SkillUninstall(_ context.Context, skillID string) error {
+func (a *API) SkillUninstall(ctx context.Context, skillID string) error {
 	if a.skillDeps.SkillStore == nil {
 		return fmt.Errorf("slashcmd view: skill store not wired")
 	}
 	if a.registry == nil {
 		return fmt.Errorf("slashcmd view: registry not wired")
 	}
-	return corefleet.UninstallSkill(a.skillDeps.SkillStore, a.registry, skillID)
+	// Capture trigger before removal for the audit record.
+	var trigger string
+	if sk, lookupErr := a.skillDeps.SkillStore.Get(skillID); lookupErr == nil {
+		trigger = sk.EffectiveTrigger()
+	}
+	err := corefleet.UninstallSkill(a.skillDeps.SkillStore, a.registry, skillID)
+	if err == nil && a.skillDeps.Emitter != nil {
+		// FR-501: fleet.skill_uninstalled audit event.
+		_ = a.skillDeps.Emitter.EmitFleetEvent(ctx, contextaudit.KindFleetSkillUninstalled,
+			contextaudit.FleetSkillUninstalledPayload{
+				SkillID: skillID,
+				Trigger: trigger,
+			})
+	}
+	return err
 }
 
 // SkillRenameLocalTrigger sets a local trigger alias to resolve a shadow conflict.

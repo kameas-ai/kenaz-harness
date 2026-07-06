@@ -2286,6 +2286,40 @@ export interface SlashRunResult {
 }
 
 /**
+ * SkillSource — where a fleet-installed skill came from.
+ * (fleet-skills-sync-01NDFSEX18)
+ */
+export type SkillSource = 'catalog' | 'mandated';
+
+/**
+ * SkillItem — wire shape for a fleet-installed skill returned by
+ * Slashcmd_SkillList. Mirrors slashcmd.SkillItemWire.
+ * (fleet-skills-sync-01NDFSEX18 WP04/WP06)
+ */
+export interface SkillItem {
+  id: string;
+  catalogId?: string;
+  version?: string;
+  source: SkillSource;
+  trigger: string;
+  /** User's local rename, if any. Overrides trigger when non-empty. */
+  localTrigger?: string;
+  kind: UserCommandKind;
+  description?: string;
+  body?: string;
+  orgManaged: boolean;
+  disabled?: boolean;
+  /**
+   * Shadowed is true when the skill's effective trigger is occupied by a
+   * higher-priority command (personal > team > org). The skill was saved
+   * but is not dispatched until the conflict resolves. (FR-401)
+   */
+  shadowed?: boolean;
+  installedAt?: number;
+  updatedAt?: number;
+}
+
+/**
  * SlashResultKind — discriminator the chat surface uses to style the
  * inline result bubble. The Go side surfaces one of these four.
  */

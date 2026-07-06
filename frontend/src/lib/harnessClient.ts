@@ -90,6 +90,7 @@ import type {
   UserCommand,
   UserCommandSummary,
   SlashRunResult,
+  SkillItem,
   FeatureFlagInfo,
   Corpus,
   CorpusFile,
@@ -597,6 +598,18 @@ interface WailsBindingsLike {
     cwd: string,
     selection: string,
   ): Promise<SlashRunResult>;
+
+  // ── fleet skill CRUD (fleet-skills-sync-01NDFSEX18 WP04/WP06) ──────
+  /** Returns all fleet-installed skills (catalog + mandated). */
+  Slashcmd_SkillList(): Promise<SkillItem[]>;
+  /** Downloads, verifies, and live-registers a skill from the catalog. */
+  Slashcmd_SkillInstall(catalogID: string, version: string): Promise<void>;
+  /** Removes and live-unregisters a skill by its store ID. */
+  Slashcmd_SkillUninstall(skillID: string): Promise<void>;
+  /** Signs and publishes a user command as a fleet skill. */
+  Slashcmd_SkillPublish(name: string, projectID: string, visibility: string): Promise<void>;
+  /** Sets a local trigger alias to resolve a shadow conflict. Empty newTrigger clears it. */
+  Slashcmd_SkillRenameLocalTrigger(skillID: string, newTrigger: string): Promise<void>;
 
   Corpus_ListCorpora(scope: string): Promise<Corpus[]>;
   Corpus_CreateCorpus(req: CorpusCreateRequest): Promise<Corpus>;
@@ -2279,7 +2292,8 @@ export interface SlashClient {
 
 /**
  * SlashcmdClient — user-defined slash command CRUD + dispatch
- * (mission user-slash-commands-01KQ8TD9).
+ * (mission user-slash-commands-01KQ8TD9) and fleet skill CRUD
+ * (mission fleet-skills-sync-01NDFSEX18).
  */
 export interface SlashcmdClient {
   list(projectID: string): Promise<UserCommandSummary[]>;
@@ -2294,6 +2308,17 @@ export interface SlashcmdClient {
     cwd: string,
     selection: string,
   ): Promise<SlashRunResult>;
+  // ── fleet skill CRUD (fleet-skills-sync-01NDFSEX18 WP04/WP06) ─────────
+  /** Returns all fleet-installed skills (catalog + mandated). */
+  skillList(): Promise<SkillItem[]>;
+  /** Downloads, verifies, and live-registers a skill from the catalog. */
+  skillInstall(catalogID: string, version: string): Promise<void>;
+  /** Removes and live-unregisters a skill by its store ID. */
+  skillUninstall(skillID: string): Promise<void>;
+  /** Signs and publishes a user command as a fleet skill. */
+  skillPublish(name: string, projectID: string, visibility: string): Promise<void>;
+  /** Sets a local trigger alias to resolve a shadow conflict (FR-401). */
+  skillRenameLocalTrigger(skillID: string, newTrigger: string): Promise<void>;
 }
 
 /**
@@ -3337,6 +3362,14 @@ export function createHarnessClient(): HarnessClient {
       delete: (name, projectID) => b().Slashcmd_Delete(name, projectID),
       run: (name, args, sessionID, projectID, cwd, selection) =>
         b().Slashcmd_Run(name, args, sessionID, projectID, cwd, selection),
+      // fleet skill methods (fleet-skills-sync-01NDFSEX18 WP04/WP06)
+      skillList: () => b().Slashcmd_SkillList(),
+      skillInstall: (catalogID, version) => b().Slashcmd_SkillInstall(catalogID, version),
+      skillUninstall: (skillID) => b().Slashcmd_SkillUninstall(skillID),
+      skillPublish: (name, projectID, visibility) =>
+        b().Slashcmd_SkillPublish(name, projectID, visibility),
+      skillRenameLocalTrigger: (skillID, newTrigger) =>
+        b().Slashcmd_SkillRenameLocalTrigger(skillID, newTrigger),
     },
     corpus: {
       listCorpora: (scope) => b().Corpus_ListCorpora(scope),
@@ -4768,6 +4801,12 @@ export function createFakeHarnessClient(
         kind: 'info' as const,
         text: '',
       }),
+      // fleet skill stubs (fleet-skills-sync-01NDFSEX18)
+      skillList: async () => [],
+      skillInstall: noop,
+      skillUninstall: noop,
+      skillPublish: noop,
+      skillRenameLocalTrigger: noop,
     },
     agents: {
       listProfiles: async () => [],
