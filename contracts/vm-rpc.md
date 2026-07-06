@@ -185,8 +185,8 @@ still works).
 Result sets are bounded server-side (no cursor pagination in v1 — the host
 shows the most-recent N): `maxListItems=200`, `maxMessageItems=500`,
 per-message content `maxMessageBytes=4096`, memory chunk summary
-`maxChunkSummaryByte=256`. Content fields truncated at a UTF-8 rune boundary
-carry `"truncated":true`.
+`maxChunkSummaryByte=256`, per-unit body preview `maxUnitBodyPreviewBy=4096`.
+Content fields truncated at a UTF-8 rune boundary carry `"truncated":true`.
 
 ### Surfaces
 
@@ -214,6 +214,14 @@ S→C: {"kind":"providers.list.ok","req_id":"<id>","providers":[{"id","name","ki
 // Workflows
 C→S: {"kind":"workflows.list","req_id":"<id>"}
 S→C: {"kind":"workflows.list.ok","req_id":"<id>","workflows":[{"id","name","description?","stepCount","source"}]}
+
+// Units (unified context+artifacts store — Spec 056 kenaz.harness.run-control)
+C→S: {"kind":"units.list","req_id":"<id>"}
+S→C: {"kind":"units.list.ok","req_id":"<id>","units":[{"id","kind","scope","scopeId?","classification","version","title","bodyPreview","truncated?","createdAt","updatedAt"}]}
+
+// Artifacts (units.list narrowed to kind=="artifact" — the run "review artifacts" path)
+C→S: {"kind":"artifacts.list","req_id":"<id>"}
+S→C: {"kind":"artifacts.list.ok","req_id":"<id>","artifacts":[{...same wireUnit shape as units.list}]}
 ```
 
 ### Privacy (load-bearing — enforced by `readservice_test.go`)
@@ -229,6 +237,46 @@ S→C: {"kind":"workflows.list.ok","req_id":"<id>","workflows":[{"id","name","de
 - **Sessions / Workflows:** message bodies are truncated at 4 KiB; the workflow
   list carries metadata only (no YAML body — that needs `secrets/lint`
   redaction, deferred to `workflows.get`).
+- **Units / Artifacts:** metadata + a `bodyPreview` truncated at 4 KiB (UTF-8
+  boundary). The raw `Metadata` JSON blob (may carry CAS hashes / extension
+  data) is NEVER forwarded; no unit body crosses the wire uncapped.
+
+### Run-control — `task.start` `run_params` widening (Spec 056, `kenaz.harness.run-control`)
+
+`task.start` widens **additively** from `{task_id, prompt}` to
+`{task_id, prompt, run_params?}`. `run_params` and every sub-key are OPTIONAL;
+an **absent** `run_params` reproduces today's exact dispatch behaviour. The
+terminal-event wire (`task.running` / `task.complete` / `task.cancelled` /
+`task.error`) is UNCHANGED.
+
+```jsonc
+C→S: {"kind":"task.start","task_id":"<id>","prompt":"<prompt>",
+      "run_params":{                       // optional; snake_case sub-keys, all optional
+        "workflow_preset":"<id|name>",      // core/workflows/builtin preset selector
+        "system_prompt_ref":"<ref>",        // reserved — no in-VM consumer yet (Phase 1)
+        "autonomy_tier":"strict|cautious|default|bold|autonomous",
+        "review_rigor":"<opaque>",          // reserved — no in-VM consumer yet (Phase 1)
+        "policy_strictness":"<opaque>"      // reserved — no in-VM consumer yet (Phase 1)
+      }}
+```
+
+Phase-1 server mapping (`cmd/harness-vm`):
+- **`workflow_preset`** (live consumer): resolved against the embedded builtin
+  catalog (id or display name, case-insensitive). The resolved step sequence
+  drives the graph's node sequence, so the selection is observable on the run's
+  ledger trail (one `tool_call` per preset step, in order — Spec 056 AC-5). An
+  unresolvable preset ⇒ `task.error{code:"unknown_preset"}` (never marks busy).
+- **`autonomy_tier`**: validated against `core/autonomy.ParseTier`; an unknown
+  tier ⇒ `task.error{code:"bad_request"}`. Plumbed-not-enforced in the headless
+  in-VM graph path (no live `session.Spec` / autonomy resolver there yet).
+- **`system_prompt_ref` / `review_rigor` / `policy_strictness`**: parsed and
+  threaded, but have no consumer in the in-VM graph runner yet (their
+  Cedar/workflow knobs live in the full session engine). Reserved for a later
+  phase; see the Spec 056 CONCERNS.
+
+Privacy: `run_params` carries only structural selectors (preset names, tier
+labels, refs) — never prompt text, message bodies, or diffs. The ledger
+`task.start` still carries `prompt_len` only.
 
 ### Deferred (not in this surface)
 

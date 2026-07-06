@@ -264,6 +264,38 @@ func handleConn(log *slog.Logger, conn net.Conn, token string, ledger *ledgerEmi
 				continue
 			}
 
+			// Optional run_params (kenaz.harness.run-control). Absent run_params
+			// ⇒ today's exact behaviour: params.isZero() and presetSteps==nil.
+			// Validation + preset resolution happen BEFORE the busy guard so a
+			// malformed request is rejected without ever marking the connection
+			// busy (a subsequent well-formed task.start proceeds immediately).
+			params, hasParams := parseRunParams(m)
+			var presetSteps []string
+			if hasParams {
+				if reason := validateRunParams(params); reason != "" {
+					_ = w.send(msg{
+						"kind":              "task.error",
+						"task_id":           taskID,
+						"code":              "bad_request",
+						"message_truncated": truncate(reason, maxMessageLen),
+					})
+					continue
+				}
+				if params.WorkflowPreset != "" {
+					steps, ok := resolveWorkflowPreset(params.WorkflowPreset)
+					if !ok {
+						_ = w.send(msg{
+							"kind":              "task.error",
+							"task_id":           taskID,
+							"code":              "unknown_preset",
+							"message_truncated": truncate("unknown workflow_preset: "+params.WorkflowPreset, maxMessageLen),
+						})
+						continue
+					}
+					presetSteps = steps
+				}
+			}
+
 			// Concurrent-task guard (Bug 2 fix).
 			if !busy.CompareAndSwap(0, 1) {
 				_ = w.send(msg{
@@ -280,7 +312,7 @@ func handleConn(log *slog.Logger, conn net.Conn, token string, ledger *ledgerEmi
 			cancelFn = cancel
 
 			// Spawn the task runner. It writes via w and clears busy when done.
-			go runTask(log, w, &busy, cancel, ctx, taskID, prompt, ledger, audit)
+			go runTask(log, w, &busy, cancel, ctx, taskID, prompt, params, presetSteps, ledger, audit)
 
 		case "task.cancel":
 			if busy.Load() == 0 {
@@ -326,13 +358,22 @@ func runTask(
 	ctx context.Context,
 	taskID string,
 	prompt string,
+	params RunParams,
+	presetSteps []string,
 	ledger *ledgerEmitter,
 	audit *auditSink,
 ) {
 	defer cancel() // release the cancel func's resources
 
 	started := time.Now()
-	log.Info("kenaz-harness-vm: task starting", "task_id", taskID)
+	if !params.isZero() {
+		// Structural only — never the values' content beyond the preset label,
+		// which is a fixed catalog id (not user content).
+		log.Info("kenaz-harness-vm: task starting", "task_id", taskID,
+			"workflow_preset", params.WorkflowPreset, "preset_steps", len(presetSteps))
+	} else {
+		log.Info("kenaz-harness-vm: task starting", "task_id", taskID)
+	}
 	// task.start on both audit surfaces. Ledger carries prompt length (never
 	// the text); the audit line carries no length at all — metadata only.
 	ledger.emitTaskStart(taskID, len(prompt))
@@ -357,7 +398,15 @@ func runTask(
 		ledger.emitToolCall(taskID, node)
 	}
 
-	runErr := runAgentTaskGraph(ctx, taskID, prompt, tracer, onChunk)
+	// When a workflow_preset resolved to a step sequence, drive the graph from
+	// it (the node sequence surfaces on the ledger trail — Spec 056 AC-5).
+	// Otherwise reproduce today's exact two-node plan→run graph.
+	var runErr error
+	if len(presetSteps) > 0 {
+		runErr = runAgentPresetGraph(ctx, taskID, prompt, presetSteps, tracer, onChunk)
+	} else {
+		runErr = runAgentTaskGraph(ctx, taskID, prompt, tracer, onChunk)
+	}
 	durationMs := time.Since(started).Milliseconds()
 
 	// Cancellation wins over any run error: a cancelled context surfaces as a
