@@ -2057,6 +2057,7 @@ func New(c *core.Core) *API {
 				Signer:       catalogSigner,
 				GetCaps:      getCaps,
 				PubKeyBase64: "", // fleet-level pub key; empty = skip verify (same as catalog)
+				Emitter:      flAudit, // FR-501: wire audit for skill_published/installed/uninstalled
 			})
 			logging.L().Info("rpc.slashcmd.skill_deps_wired",
 				"fleet_client_nil", flCl == nil,

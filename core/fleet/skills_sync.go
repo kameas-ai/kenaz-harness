@@ -13,6 +13,7 @@ package fleet
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	"github.com/kameas-ai/kenaz-harness/core/slashcmd"
@@ -192,20 +193,7 @@ func ApplyMandatedSkills(
 }
 
 // isSkillShadowedErr reports whether err wraps ErrTriggerShadowed.
+// LiveRegister wraps the sentinel with %w, so errors.Is traverses the chain.
 func isSkillShadowedErr(err error) bool {
-	if err == nil {
-		return false
-	}
-	return contains(err.Error(), slashcmd.ErrTriggerShadowed.Error())
-}
-
-func contains(s, substr string) bool {
-	return len(s) >= len(substr) && (s == substr || len(s) > 0 && (func() bool {
-		for i := 0; i <= len(s)-len(substr); i++ {
-			if s[i:i+len(substr)] == substr {
-				return true
-			}
-		}
-		return false
-	})())
+	return errors.Is(err, slashcmd.ErrTriggerShadowed)
 }
