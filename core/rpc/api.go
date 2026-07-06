@@ -66,6 +66,7 @@ import (
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/bundle"
 	cedarpolicyview "github.com/kameas-ai/kenaz-harness/core/rpc/views/cedarpolicy"
 	compactionview "github.com/kameas-ai/kenaz-harness/core/rpc/views/compaction"
+	complianceview "github.com/kameas-ai/kenaz-harness/core/rpc/views/compliance"
 	contextsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/contexts"
 	contextview "github.com/kameas-ai/kenaz-harness/core/rpc/views/contextview"
 	corpusview "github.com/kameas-ai/kenaz-harness/core/rpc/views/corpus"
@@ -299,6 +300,13 @@ type HarnessAPI interface {
 	// (acp-orchestration-integration-01NDFSEX06). Provides ListPeers,
 	// TrustPeer, RevokePeer, Dispatch, and GetTrace.
 	ACP() acpview.ACPAPI
+
+	// Compliance exposes the fleet audit-archival compliance panel
+	// (fleet-audit-archival-01NDFSEX13 WP05). Provides Status,
+	// ArchiveNow, and SetRetention for the Settings → Compliance panel.
+	// Gated on CapAuditLogImmuDB; returns ErrComplianceNotEnabled when
+	// the capability is not active.
+	Compliance() complianceview.ComplianceAPI
 }
 
 // ShellStatus drives the Toolbar status pills + LegendBar live-rate
@@ -614,6 +622,12 @@ type API struct {
 	// ACP layer is available; falls back to NullAPI for graceful empty
 	// operation on the test-chassis path.
 	acpAPI acpview.ACPAPI
+
+	// complianceAPI is the fleet audit-archival compliance RPC surface
+	// (fleet-audit-archival-01NDFSEX13 WP05). Wired in New when the
+	// fleet archiver is configured; returns ErrComplianceNotEnabled
+	// when CapAuditLogImmuDB is not active.
+	complianceAPI complianceview.ComplianceAPI
 }
 
 // Builtins returns the in-binary tool registry. Used by the chat-input
@@ -913,6 +927,9 @@ func New(c *core.Core) *API {
 		taskReg:        taskReg,
 		tasksAPI:       tasksAPI,
 		acpAPI:         acpview.NewNullAPI(),
+		// complianceAPI: wired with a no-capability guard until
+		// the archiver + sweeper are started post-fleet-init.
+		complianceAPI: complianceview.NewAPI(nil, nil, func() bool { return false }),
 	}
 	a.attachmentsAPI = newAttachmentsAPI(c, attMgr)
 	a.artifactsAPI = newArtifactsAPI(c, artStore, artMgr, media)
@@ -5822,6 +5839,8 @@ func (a *API) Tasks() tasksview.TasksAPI { return a.tasksAPI }
 // ACP implements HarnessAPI. Returns the ACP peer management + envelope
 // dispatch surface (acp-orchestration-integration-01NDFSEX06).
 func (a *API) ACP() acpview.ACPAPI { return a.acpAPI }
+
+func (a *API) Compliance() complianceview.ComplianceAPI { return a.complianceAPI }
 
 // brokerPlanEmitter adapts a *StreamBroker to the planmodeview.EventEmitter
 // interface. The broker's Publish method broadcasts to all subscribers
