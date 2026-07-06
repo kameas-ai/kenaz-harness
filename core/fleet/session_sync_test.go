@@ -12,27 +12,6 @@ import (
 	contextaudit "github.com/kameas-ai/kenaz-harness/core/context/audit"
 )
 
-// fakeEmitter is a race-safe test audit emitter.
-type fakeEmitter struct {
-	mu      sync.Mutex
-	emitted []contextaudit.Event
-}
-
-func (f *fakeEmitter) Emit(_ context.Context, e contextaudit.Event) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.emitted = append(f.emitted, e)
-	return nil
-}
-
-func (f *fakeEmitter) snapshot() []contextaudit.Event {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	out := make([]contextaudit.Event, len(f.emitted))
-	copy(out, f.emitted)
-	return out
-}
-
 // setupSessionSyncServer creates an httptest server that accepts context
 // append + delete calls and returns the SessionSyncer under test.
 func setupSessionSyncServer(t *testing.T) (*httptest.Server, *SessionSyncer, *fakeEmitter) {

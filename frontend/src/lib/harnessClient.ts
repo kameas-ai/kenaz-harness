@@ -90,6 +90,7 @@ import type {
   UserCommand,
   UserCommandSummary,
   SlashRunResult,
+  SkillItem,
   FeatureFlagInfo,
   Corpus,
   CorpusFile,
@@ -185,6 +186,7 @@ import type {
   FleetTeamMemberView,
   FleetInboxItemView,
   FleetAcceptedSessionView,
+  ComplianceStatus,
 } from './types';
 
 /**
@@ -604,6 +606,18 @@ interface WailsBindingsLike {
     selection: string,
   ): Promise<SlashRunResult>;
 
+  // ── fleet skill CRUD (fleet-skills-sync-01NDFSEX18 WP04/WP06) ──────
+  /** Returns all fleet-installed skills (catalog + mandated). */
+  Slashcmd_SkillList(): Promise<SkillItem[]>;
+  /** Downloads, verifies, and live-registers a skill from the catalog. */
+  Slashcmd_SkillInstall(catalogID: string, version: string): Promise<void>;
+  /** Removes and live-unregisters a skill by its store ID. */
+  Slashcmd_SkillUninstall(skillID: string): Promise<void>;
+  /** Signs and publishes a user command as a fleet skill. */
+  Slashcmd_SkillPublish(name: string, projectID: string, visibility: string): Promise<void>;
+  /** Sets a local trigger alias to resolve a shadow conflict. Empty newTrigger clears it. */
+  Slashcmd_SkillRenameLocalTrigger(skillID: string, newTrigger: string): Promise<void>;
+
   Corpus_ListCorpora(scope: string): Promise<Corpus[]>;
   Corpus_CreateCorpus(req: CorpusCreateRequest): Promise<Corpus>;
   Corpus_GetCorpus(corpusID: string): Promise<Corpus>;
@@ -881,6 +895,10 @@ interface WailsBindingsLike {
   Handoff_Accept(inboxItemID: string): Promise<FleetAcceptedSessionView>;
   ContextSync_GenerateRecoveryCode(): Promise<string>;
   ContextSync_ApplyRecoveryCode(code: string): Promise<void>;
+  // ── Compliance (fleet-audit-archival-01NDFSEX13 WP05) ─────────────────
+  Compliance_Status(): Promise<ComplianceStatus>;
+  Compliance_ArchiveNow(): Promise<void>;
+  Compliance_SetRetention(days: number): Promise<void>;
 }
 
 
@@ -2298,7 +2316,8 @@ export interface SlashClient {
 
 /**
  * SlashcmdClient — user-defined slash command CRUD + dispatch
- * (mission user-slash-commands-01KQ8TD9).
+ * (mission user-slash-commands-01KQ8TD9) and fleet skill CRUD
+ * (mission fleet-skills-sync-01NDFSEX18).
  */
 export interface SlashcmdClient {
   list(projectID: string): Promise<UserCommandSummary[]>;
@@ -2313,6 +2332,17 @@ export interface SlashcmdClient {
     cwd: string,
     selection: string,
   ): Promise<SlashRunResult>;
+  // ── fleet skill CRUD (fleet-skills-sync-01NDFSEX18 WP04/WP06) ─────────
+  /** Returns all fleet-installed skills (catalog + mandated). */
+  skillList(): Promise<SkillItem[]>;
+  /** Downloads, verifies, and live-registers a skill from the catalog. */
+  skillInstall(catalogID: string, version: string): Promise<void>;
+  /** Removes and live-unregisters a skill by its store ID. */
+  skillUninstall(skillID: string): Promise<void>;
+  /** Signs and publishes a user command as a fleet skill. */
+  skillPublish(name: string, projectID: string, visibility: string): Promise<void>;
+  /** Sets a local trigger alias to resolve a shadow conflict (FR-401). */
+  skillRenameLocalTrigger(skillID: string, newTrigger: string): Promise<void>;
 }
 
 /**
@@ -2835,6 +2865,17 @@ export interface SitesClient {
   delete(site: string): Promise<void>;
 }
 
+// ── Compliance client (fleet-audit-archival-01NDFSEX13 WP05) ────────────────
+
+export interface ComplianceClient {
+  /** Returns current archival status. Rejects when CapAuditLogImmuDB is inactive. */
+  status(): Promise<ComplianceStatus>;
+  /** Trigger an immediate archive flush outside the normal batch interval. */
+  archiveNow(): Promise<void>;
+  /** Update the local audit retention window. Days must be 30 | 60 | 90 | 365. */
+  setRetention(days: number): Promise<void>;
+}
+
 export interface HarnessClient {
   shellStatus(): Promise<ShellStatus>;
   appInfo(): Promise<AppInfo>;
@@ -2899,6 +2940,8 @@ export interface HarnessClient {
   cedarPublish: CedarPublishClient;
   /** Fleet Sites hosting surface (sites-ui-01NSITE06). */
   sites: SitesClient;
+  /** Fleet audit archival compliance surface (fleet-audit-archival-01NDFSEX13 WP05). */
+  compliance: ComplianceClient;
   // ── Unit sync (fleet-integrity-observability WP08) ────────────────────
   Unit_SyncStatus(): Promise<import('./types').UnitSyncStatusView>;
   Unit_ListConflicts(): Promise<import('./types').UnitConflictView[]>;
@@ -3369,6 +3412,14 @@ export function createHarnessClient(): HarnessClient {
       delete: (name, projectID) => b().Slashcmd_Delete(name, projectID),
       run: (name, args, sessionID, projectID, cwd, selection) =>
         b().Slashcmd_Run(name, args, sessionID, projectID, cwd, selection),
+      // fleet skill methods (fleet-skills-sync-01NDFSEX18 WP04/WP06)
+      skillList: () => b().Slashcmd_SkillList(),
+      skillInstall: (catalogID, version) => b().Slashcmd_SkillInstall(catalogID, version),
+      skillUninstall: (skillID) => b().Slashcmd_SkillUninstall(skillID),
+      skillPublish: (name, projectID, visibility) =>
+        b().Slashcmd_SkillPublish(name, projectID, visibility),
+      skillRenameLocalTrigger: (skillID, newTrigger) =>
+        b().Slashcmd_SkillRenameLocalTrigger(skillID, newTrigger),
     },
     corpus: {
       listCorpora: (scope) => b().Corpus_ListCorpora(scope),
@@ -3548,6 +3599,12 @@ export function createHarnessClient(): HarnessClient {
       status: (site) => b().Sites_Status(site),
       logs: (site, tailLines) => b().Sites_Logs(site, tailLines),
       delete: (site) => b().Sites_Delete(site),
+    },
+    // ── Compliance (fleet-audit-archival-01NDFSEX13 WP05) ────────────────
+    compliance: {
+      status: () => b().Compliance_Status(),
+      archiveNow: () => b().Compliance_ArchiveNow(),
+      setRetention: (days) => b().Compliance_SetRetention(days),
     },
     // ── Unit sync (fleet-integrity-observability WP08) ────────────────────
     Unit_SyncStatus: () => b().Unit_SyncStatus(),
@@ -4813,6 +4870,12 @@ export function createFakeHarnessClient(
         kind: 'info' as const,
         text: '',
       }),
+      // fleet skill stubs (fleet-skills-sync-01NDFSEX18)
+      skillList: async () => [],
+      skillInstall: noop,
+      skillUninstall: noop,
+      skillPublish: noop,
+      skillRenameLocalTrigger: noop,
     },
     agents: {
       listProfiles: async () => [],
@@ -4877,6 +4940,19 @@ export function createFakeHarnessClient(
       }),
       logs: async () => '',
       delete: noop,
+    },
+    // ── Compliance (fleet-audit-archival-01NDFSEX13 WP05) ────────────────
+    compliance: {
+      status: async (): Promise<ComplianceStatus> => ({
+        lastArchivedAt: '',
+        pendingCount: 0,
+        chainBreak: false,
+        retentionDays: 90,
+        enabled: false,
+        archiverRunning: false,
+      }),
+      archiveNow: noop,
+      setRetention: noop,
     },
     // ── Unit sync (fleet-integrity-observability WP08) ────────────────────
     Unit_SyncStatus: async (): Promise<import('./types').UnitSyncStatusView> => ({

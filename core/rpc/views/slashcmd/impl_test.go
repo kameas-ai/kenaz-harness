@@ -4,13 +4,43 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 
+	contextaudit "github.com/kameas-ai/kenaz-harness/core/context/audit"
+	corefleet "github.com/kameas-ai/kenaz-harness/core/fleet"
 	slashview "github.com/kameas-ai/kenaz-harness/core/rpc/views/slashcmd"
 	coreslashcmd "github.com/kameas-ai/kenaz-harness/core/slashcmd"
 	"github.com/kameas-ai/kenaz-harness/core/storage"
 	storagesqlite "github.com/kameas-ai/kenaz-harness/core/storage/sqlite"
 )
+
+// ── fakeAuditEmitter implements the auditEmitter interface (FR-501) ───────────
+
+type emitRecord struct {
+	kind    contextaudit.Kind
+	payload any
+}
+
+type fakeAuditEmitter struct {
+	mu      sync.Mutex
+	records []emitRecord
+}
+
+func (f *fakeAuditEmitter) EmitFleetEvent(_ context.Context, kind contextaudit.Kind, payload any) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.records = append(f.records, emitRecord{kind: kind, payload: payload})
+	return nil
+}
+
+func (f *fakeAuditEmitter) snapshot() []emitRecord {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]emitRecord, len(f.records))
+	copy(out, f.records)
+	return out
+}
 
 type fakeAppender struct{ called int }
 
@@ -272,5 +302,111 @@ func TestAPIUserSave_NilStore(t *testing.T) {
 	err := api.UserSave(context.Background(), slashview.UserCommandWire{})
 	if err == nil {
 		t.Error("expected error from nil store")
+	}
+}
+
+// ── FR-501 audit emit tests (fleet-skills-sync-01NDFSEX18 WP07) ──────────────
+
+// newViewWithSkillDeps builds an API wired with a SkillStore, Registry, and
+// the given fakeAuditEmitter. No fleet client is supplied (offline posture).
+func newViewWithSkillDeps(t *testing.T, emitter *fakeAuditEmitter) (*slashview.API, *coreslashcmd.SkillStore, *coreslashcmd.Registry) {
+	t.Helper()
+	reg, err := coreslashcmd.NewRegistry(coreslashcmd.Deps{})
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
+	db, dir := openUserRPCDB(t)
+	store := coreslashcmd.NewStore(db, dir)
+	dispatch := coreslashcmd.NewDispatch(store, nil)
+	skillStore := coreslashcmd.NewSkillStore(dir)
+
+	api := slashview.NewWithStore(reg, store, dispatch)
+	api.WithSkillDeps(slashview.SkillDeps{
+		SkillStore: skillStore,
+		// No FleetClient — operations that need fleet will error, but the audit
+		// path under test (uninstall) does not require it.
+		FleetClient: nil,
+		GetCaps: func() *corefleet.Capabilities {
+			c := corefleet.DefaultDenyCapabilities()
+			return &c
+		},
+		Emitter: emitter,
+	})
+	return api, skillStore, reg
+}
+
+// TestSkillUninstall_EmitsAuditEvent verifies that SkillUninstall fires
+// fleet.skill_uninstalled (FR-501) via the wired Emitter when the
+// skill is successfully removed.
+func TestSkillUninstall_EmitsAuditEvent(t *testing.T) {
+	t.Parallel()
+	emitter := &fakeAuditEmitter{}
+	api, skillStore, registry := newViewWithSkillDeps(t, emitter)
+
+	// Pre-register a skill so Uninstall has something to remove.
+	sk := coreslashcmd.Skill{
+		ID:      "audit-uninstall",
+		Trigger: "audit-test",
+		Kind:    coreslashcmd.KindText,
+		Body:    "body",
+		Source:  coreslashcmd.SkillSourceCatalog,
+	}
+	if err := coreslashcmd.LiveRegister(skillStore, registry, sk); err != nil {
+		t.Fatalf("LiveRegister: %v", err)
+	}
+
+	if err := api.SkillUninstall(context.Background(), "audit-uninstall"); err != nil {
+		t.Fatalf("SkillUninstall: %v", err)
+	}
+
+	recs := emitter.snapshot()
+	if len(recs) != 1 {
+		t.Fatalf("expected 1 audit record, got %d", len(recs))
+	}
+	if recs[0].kind != contextaudit.KindFleetSkillUninstalled {
+		t.Errorf("kind = %q, want %q", recs[0].kind, contextaudit.KindFleetSkillUninstalled)
+	}
+	p, ok := recs[0].payload.(contextaudit.FleetSkillUninstalledPayload)
+	if !ok {
+		t.Fatalf("payload type = %T, want FleetSkillUninstalledPayload", recs[0].payload)
+	}
+	if p.SkillID != "audit-uninstall" {
+		t.Errorf("payload.SkillID = %q, want %q", p.SkillID, "audit-uninstall")
+	}
+}
+
+// TestSkillUninstall_NoEmitWhenEmitterNil verifies that SkillUninstall does
+// not panic when no Emitter is wired (graceful degradation).
+func TestSkillUninstall_NoEmitWhenEmitterNil(t *testing.T) {
+	t.Parallel()
+	reg, err := coreslashcmd.NewRegistry(coreslashcmd.Deps{})
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
+	db, dir := openUserRPCDB(t)
+	store := coreslashcmd.NewStore(db, dir)
+	dispatch := coreslashcmd.NewDispatch(store, nil)
+	skillStore := coreslashcmd.NewSkillStore(dir)
+
+	api := slashview.NewWithStore(reg, store, dispatch)
+	// Wire SkillDeps without an Emitter — Emitter field stays nil.
+	api.WithSkillDeps(slashview.SkillDeps{
+		SkillStore: skillStore,
+	})
+
+	sk := coreslashcmd.Skill{
+		ID:      "nil-emitter-skill",
+		Trigger: "nil-emitter-test",
+		Kind:    coreslashcmd.KindText,
+		Body:    "body",
+		Source:  coreslashcmd.SkillSourceCatalog,
+	}
+	if err := coreslashcmd.LiveRegister(skillStore, reg, sk); err != nil {
+		t.Fatalf("LiveRegister: %v", err)
+	}
+
+	// Must not panic even though Emitter is nil.
+	if err := api.SkillUninstall(context.Background(), "nil-emitter-skill"); err != nil {
+		t.Fatalf("SkillUninstall with nil Emitter: %v", err)
 	}
 }

@@ -50,6 +50,14 @@ func (c *Client) SetSessionBroker(b BrokerSink) {
 	c.sessionBroker = b
 }
 
+// IsNop reports whether the client is a no-op stub (fleet disabled or not
+// enrolled). An IsNop client returns ErrFleetDisabled for all operations.
+// Callers that want to skip construction of dependent subsystems can gate on
+// this; the subsystems themselves guard against nop clients internally.
+func (c *Client) IsNop() bool {
+	return c == nil || c.isNop
+}
+
 // NewClient constructs and returns a Client using the resolved env profile.
 // If Disabled() is true, NewClient returns a nopClient.
 func NewClient(opts ClientOpts) (*Client, error) {

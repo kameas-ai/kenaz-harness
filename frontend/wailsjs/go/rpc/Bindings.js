@@ -218,6 +218,18 @@ export function Catalog_Install(arg1, arg2) {
   return window['go']['rpc']['Bindings']['Catalog_Install'](arg1, arg2);
 }
 
+export function Compliance_ArchiveNow() {
+  return window['go']['rpc']['Bindings']['Compliance_ArchiveNow']();
+}
+
+export function Compliance_SetRetention(arg1) {
+  return window['go']['rpc']['Bindings']['Compliance_SetRetention'](arg1);
+}
+
+export function Compliance_Status() {
+  return window['go']['rpc']['Bindings']['Compliance_Status']();
+}
+
 export function Catalog_Installed() {
   return window['go']['rpc']['Bindings']['Catalog_Installed']();
 }

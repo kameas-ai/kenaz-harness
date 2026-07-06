@@ -20,6 +20,7 @@ import (
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/bundle"
 	cedarpolicyview "github.com/kameas-ai/kenaz-harness/core/rpc/views/cedarpolicy"
 	compactionview "github.com/kameas-ai/kenaz-harness/core/rpc/views/compaction"
+	complianceview "github.com/kameas-ai/kenaz-harness/core/rpc/views/compliance"
 	contextsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/contexts"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/contextview"
 	corpusview "github.com/kameas-ai/kenaz-harness/core/rpc/views/corpus"
@@ -3321,4 +3322,29 @@ func (b *Bindings) ContextSync_GenerateRecoveryCode() (string, error) {
 func (b *Bindings) ContextSync_ApplyRecoveryCode(code string) error {
 	defer sentry.WrapBinding("ContextSync_ApplyRecoveryCode")()
 	return b.api.ContextSync().ContextSync_ApplyRecoveryCode(b.ctx(), code)
+}
+
+// ── Compliance bindings (fleet-audit-archival-01NDFSEX13 WP05) ───────────────
+
+// Compliance_Status returns a snapshot of the audit-archival state for the
+// Compliance panel: last archived timestamp, pending event count, chain-break
+// flag, and the configured retention window.
+func (b *Bindings) Compliance_Status() (complianceview.ComplianceStatus, error) {
+	defer sentry.WrapBinding("Compliance_Status")()
+	return b.api.Compliance().Status(b.ctx())
+}
+
+// Compliance_ArchiveNow triggers an immediate audit archive flush.
+// Returns an error when the archiver is halted (chain-break) or the
+// audit_log_immudb capability is not active.
+func (b *Bindings) Compliance_ArchiveNow() error {
+	defer sentry.WrapBinding("Compliance_ArchiveNow")()
+	return b.api.Compliance().ArchiveNow(b.ctx())
+}
+
+// Compliance_SetRetention updates the local retention window.
+// days must be one of 30, 60, 90, or 365.
+func (b *Bindings) Compliance_SetRetention(days int) error {
+	defer sentry.WrapBinding("Compliance_SetRetention")()
+	return b.api.Compliance().SetRetention(b.ctx(), days)
 }

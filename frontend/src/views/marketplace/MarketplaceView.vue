@@ -7,10 +7,14 @@
  * client.catalog.uninstall. An "Installed" pill is shown on items whose
  * `installed` flag is true.
  *
- * Filters: kind (all / workflow / agent_pack / bundle) + visibility +
+ * Skills (kind="skill") are routed through client.slashcmd.skillInstall /
+ * skillUninstall instead of the generic catalog path, so they are
+ * live-registered into the slash-command registry without a restart.
+ *
+ * Filters: kind (all / workflow / agent_pack / bundle / skill) + visibility +
  * free-text search on slug / description.
  *
- * (fleet-share-and-sync-01NDFSEX14 WP03)
+ * (fleet-share-and-sync-01NDFSEX14 WP03; fleet-skills-sync-01NDFSEX18 WP04)
  */
 import { ref, computed, onMounted } from 'vue';
 import CanvasHead from '@/shell/CanvasHead.vue';
@@ -75,7 +79,12 @@ function setBusy(id: string, on: boolean) {
 async function install(item: CatalogItemView) {
   setBusy(item.id, true);
   try {
-    await client.catalog.install(item.id, item.version);
+    if (item.kind === 'skill') {
+      // Skills route through the slashcmd surface for live-registration (FR-202).
+      await client.slashcmd.skillInstall(item.id, item.version);
+    } else {
+      await client.catalog.install(item.id, item.version);
+    }
     pushToast(`Installed: ${item.slug} v${item.version}`);
     await loadItems();
   } catch (err) {
@@ -88,7 +97,12 @@ async function install(item: CatalogItemView) {
 async function uninstall(item: CatalogItemView) {
   setBusy(item.id, true);
   try {
-    await client.catalog.uninstall(item.kind, item.id, item.version);
+    if (item.kind === 'skill') {
+      // Skills are identified by their catalog ID in the skill store.
+      await client.slashcmd.skillUninstall(item.id);
+    } else {
+      await client.catalog.uninstall(item.kind, item.id, item.version);
+    }
     pushToast(`Uninstalled: ${item.slug} v${item.version}`);
     await loadItems();
   } catch (err) {
@@ -149,6 +163,7 @@ async function applyFilters() {
           <option value="workflow">Workflow</option>
           <option value="agent_pack">Agent pack</option>
           <option value="bundle">Bundle</option>
+          <option value="skill">Skill</option>
         </select>
         <!-- Visibility filter -->
         <select

@@ -56,6 +56,7 @@ import (
 	tasksview "github.com/kameas-ai/kenaz-harness/core/rpc/views/tasks"
 	acpview "github.com/kameas-ai/kenaz-harness/core/rpc/views/acp"
 	contextsyncview "github.com/kameas-ai/kenaz-harness/core/rpc/views/contextsync"
+	complianceview "github.com/kameas-ai/kenaz-harness/core/rpc/views/compliance"
 	corefleet "github.com/kameas-ai/kenaz-harness/core/fleet"
 )
 
@@ -181,6 +182,7 @@ func (f *fakeHarnessAPI) Sessions_StopCapture(_ context.Context, _ string) error
 func (f *fakeHarnessAPI) Tasks() tasksview.TasksAPI                               { return nil }
 func (f *fakeHarnessAPI) ACP() acpview.ACPAPI                                     { return acpview.NewNullAPI() }
 func (f *fakeHarnessAPI) ContextSync() contextsyncview.ContextSyncAPI             { return &contextsyncview.Impl{} }
+func (f *fakeHarnessAPI) Compliance() complianceview.ComplianceAPI                { return complianceview.NewAPI(nil, nil, func() bool { return false }) }
 
 // Compile-time interface witness (plan §4.2).
 var _ HarnessAPI = (*fakeHarnessAPI)(nil)

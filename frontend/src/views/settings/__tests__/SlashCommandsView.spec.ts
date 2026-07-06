@@ -3,15 +3,35 @@
  *
  * Tests for the Settings → Slash Commands list + editor surface.
  * user-slash-commands-01KQ8TD9 WP07.
+ * fleet-skills-sync-01NDFSEX18 WP03 — "Publish to team" button (FR-101/102).
  */
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import { mount, flushPromises } from '@vue/test-utils';
 import { createRouter, createWebHashHistory } from 'vue-router';
 
 import SlashCommandsView from '@/views/settings/SlashCommandsView.vue';
 import { createFakeHarnessClient } from '@/lib/harnessClient';
 import { HarnessClientKey } from '@/lib/harnessClientContext';
-import type { UserCommandSummary, UserCommand } from '@/lib/types';
+import { initFeatureFlags } from '@/lib/featureFlags';
+import type { UserCommandSummary, UserCommand, AppInfo } from '@/lib/types';
+
+// Suppress toast side effects in tests
+vi.mock('@/composables/useToastQueue', () => ({
+  push: vi.fn(),
+}));
+
+// Helper to build the minimal AppInfo shape used by initFeatureFlags.
+function makeAppInfo(caps: Record<string, boolean>): AppInfo {
+  return {
+    build: 'test',
+    commit: 'test',
+    buildTime: '',
+    goVersion: '',
+    platform: 'test',
+    windowSize: { width: 1280, height: 800 },
+    capabilities: caps,
+  };
+}
 
 const FAKE_SUMMARY: UserCommandSummary = {
   name: 'standup',
@@ -35,9 +55,11 @@ function buildClient(overrides: {
   full?: UserCommand;
   saveFn?: ReturnType<typeof vi.fn>;
   deleteFn?: ReturnType<typeof vi.fn>;
+  skillPublishFn?: ReturnType<typeof vi.fn>;
 }) {
   const saveFn = overrides.saveFn ?? vi.fn(async () => undefined);
   const deleteFn = overrides.deleteFn ?? vi.fn(async () => undefined);
+  const skillPublishFn = overrides.skillPublishFn ?? vi.fn(async () => undefined);
   const client = createFakeHarnessClient({
     slashcmd: {
       list: async () => overrides.list ?? [],
@@ -45,9 +67,14 @@ function buildClient(overrides: {
       save: saveFn,
       delete: deleteFn,
       run: async () => ({ kind: 'info' as const, text: '' }),
+      skillList: async () => [],
+      skillInstall: vi.fn(async () => undefined),
+      skillUninstall: vi.fn(async () => undefined),
+      skillPublish: skillPublishFn,
+      skillRenameLocalTrigger: vi.fn(async () => undefined),
     },
   });
-  return { client, saveFn, deleteFn };
+  return { client, saveFn, deleteFn, skillPublishFn };
 }
 
 // Minimal router to satisfy useRoute / SettingsTabs
@@ -59,7 +86,7 @@ const router = createRouter({
 function mountView(
   overrides: Parameters<typeof buildClient>[0] = {},
 ) {
-  const { client, saveFn, deleteFn } = buildClient(overrides);
+  const { client, saveFn, deleteFn, skillPublishFn } = buildClient(overrides);
   const wrapper = mount(SlashCommandsView, {
     global: {
       provide: { [HarnessClientKey as symbol]: client },
@@ -67,11 +94,27 @@ function mountView(
       stubs: {
         CanvasHead: { template: '<div><slot name="trailing"/></div>' },
         SettingsTabs: { template: '<div/>' },
+        // Stub ConfirmDialog to render inline (avoiding Teleport in jsdom tests).
+        ConfirmDialog: {
+          props: ['open', 'title', 'message', 'confirmLabel', 'cancelLabel', 'danger'],
+          template: `
+            <div v-if="open" data-testid="confirm-dialog-stub">
+              <button data-testid="confirm-dialog-confirm" @click="$emit('confirm')">Confirm</button>
+              <button data-testid="confirm-dialog-cancel" @click="$emit('cancel')">Cancel</button>
+            </div>
+          `,
+          emits: ['confirm', 'cancel'],
+        },
       },
     },
   });
-  return { wrapper, client, saveFn, deleteFn };
+  return { wrapper, client, saveFn, deleteFn, skillPublishFn };
 }
+
+afterEach(() => {
+  // Reset featureFlags state between tests to avoid capability bleed.
+  initFeatureFlags(null);
+});
 
 describe('SlashCommandsView', () => {
   describe('empty state', () => {
@@ -185,6 +228,88 @@ describe('SlashCommandsView', () => {
       expect(saveFn).toHaveBeenCalledOnce();
       const arg = saveFn.mock.calls[0][0] as UserCommand;
       expect(arg.name).toBe('greet');
+    });
+  });
+
+  // ── "Publish to team" (fleet-skills-sync-01NDFSEX18 WP03, FR-101/102) ──
+
+  describe('Publish to team (FR-101/102)', () => {
+    it('shows "Publish to team" button when editing an existing command and user has shared_team_graph', async () => {
+      initFeatureFlags(makeAppInfo({ shared_team_graph: true }));
+      const { wrapper } = mountView({ list: [FAKE_SUMMARY], full: FAKE_FULL });
+      await flushPromises();
+
+      await wrapper.find('[data-testid="slashcmd-row-standup"]').trigger('click');
+      await flushPromises();
+
+      expect(wrapper.find('[data-testid="publish-to-team-btn"]').exists()).toBe(true);
+    });
+
+    it('shows "Team+ required" note when user lacks shared_team_graph capability', async () => {
+      initFeatureFlags(makeAppInfo({}));
+      const { wrapper } = mountView({ list: [FAKE_SUMMARY], full: FAKE_FULL });
+      await flushPromises();
+
+      await wrapper.find('[data-testid="slashcmd-row-standup"]').trigger('click');
+      await flushPromises();
+
+      expect(wrapper.find('[data-testid="publish-to-team-btn"]').exists()).toBe(false);
+      expect(wrapper.find('[data-testid="publish-to-team-unavailable"]').exists()).toBe(true);
+    });
+
+    it('does not show publish section when creating a new command', async () => {
+      initFeatureFlags(makeAppInfo({ shared_team_graph: true }));
+      const { wrapper } = mountView({ list: [] });
+      await flushPromises();
+
+      await wrapper.find('[data-testid="new-slash-command-btn"]').trigger('click');
+      await wrapper.vm.$nextTick();
+
+      // publish section only shown for existing (non-null) commands
+      expect(wrapper.find('[data-testid="publish-to-team-section"]').exists()).toBe(false);
+    });
+
+    it('calls slashcmd.skillPublish with confirmed dialog', async () => {
+      initFeatureFlags(makeAppInfo({ shared_team_graph: true }));
+      const skillPublishFn = vi.fn(async () => undefined);
+      const { wrapper } = mountView({ list: [FAKE_SUMMARY], full: FAKE_FULL, skillPublishFn });
+      await flushPromises();
+
+      await wrapper.find('[data-testid="slashcmd-row-standup"]').trigger('click');
+      await flushPromises();
+
+      const publishBtn = wrapper.find('[data-testid="publish-to-team-btn"]');
+      expect(publishBtn.exists()).toBe(true);
+      await publishBtn.trigger('click');
+      await wrapper.vm.$nextTick();
+
+      // ConfirmDialog should be open — confirm it
+      const confirmBtn = wrapper.find('[data-testid="confirm-dialog-confirm"]');
+      expect(confirmBtn.exists()).toBe(true);
+      await confirmBtn.trigger('click');
+      await flushPromises();
+
+      expect(skillPublishFn).toHaveBeenCalledWith('standup', '', 'team');
+    });
+
+    it('does not call skillPublish when confirm dialog is cancelled', async () => {
+      initFeatureFlags(makeAppInfo({ shared_team_graph: true }));
+      const skillPublishFn = vi.fn(async () => undefined);
+      const { wrapper } = mountView({ list: [FAKE_SUMMARY], full: FAKE_FULL, skillPublishFn });
+      await flushPromises();
+
+      await wrapper.find('[data-testid="slashcmd-row-standup"]').trigger('click');
+      await flushPromises();
+
+      await wrapper.find('[data-testid="publish-to-team-btn"]').trigger('click');
+      await wrapper.vm.$nextTick();
+
+      const cancelBtn = wrapper.find('[data-testid="confirm-dialog-cancel"]');
+      expect(cancelBtn.exists()).toBe(true);
+      await cancelBtn.trigger('click');
+      await flushPromises();
+
+      expect(skillPublishFn).not.toHaveBeenCalled();
     });
   });
 });
