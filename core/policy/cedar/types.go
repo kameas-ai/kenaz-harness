@@ -247,6 +247,25 @@ const (
 	// Default-forbid — destructive irreversible operation; operators
 	// must explicitly permit with a Cedar policy snippet.
 	ActionAuditBulkPurge = "audit.bulk_purge"
+
+	// ── ACP envelope action family ────────────────────────────────────────
+	// Introduced by mission acp-orchestration-integration-01NDFSEX06.
+	// The "acp" family follows the established "<domain>.<operation>"
+	// naming convention. Both actions gate byte transmission before any
+	// transport call happens.
+	//
+	//   ActionACPSend    — gates ACP_Dispatch before the envelope is
+	//     signed and handed to the transport. Resource UID:
+	//     ACPEnvelope::"<peer_id>". Default-permit only to peers at
+	//     trust tier ≥ "verified"; deny → no transport call.
+	//
+	//   ActionACPReceive — gates acceptance of an inbound envelope after
+	//     the transport delivers it but before the payload is dispatched
+	//     to the skill router. Resource UID: ACPEnvelope::"<peer_id>".
+	//     Default-permit from any tier ≥ "pending" with a warning audit
+	//     event; deny → envelope dropped.
+	ActionACPSend    = "acp_send"
+	ActionACPReceive = "acp_receive"
 )
 
 // Entity-type names mirror spec §4.10's recommended mapping:
@@ -336,6 +355,18 @@ const (
 	// Introduced by mission audit-log-enhancement-01KX5R8F (WP08).
 	// Resource UIDs take the shape AuditLog::"events" (currently a singleton).
 	EntityTypeAuditLog = "AuditLog"
+
+	// EntityTypeACPEnvelope is the Cedar entity type for ACP peer envelopes.
+	// Introduced by mission acp-orchestration-integration-01NDFSEX06.
+	// Resource UIDs take the shape ACPEnvelope::"<peer_id>" — one entity
+	// per peer so policy authors can target individual peers.
+	//
+	// Relevant attributes available on the entity at eval time:
+	//   peer_id        — string: the peer's stable identifier
+	//   peer_trust_tier — string: "pending" | "verified" | "revoked"
+	//   transport      — string: "uds" | "http_loopback" | "http_lan"
+	//   direction      — string: "send" | "receive"
+	EntityTypeACPEnvelope = "ACPEnvelope"
 
 	// PrincipalLocal is the canonical EntityUID id for the single
 	// local user. The harness is single-user / privacy-first
@@ -703,4 +734,19 @@ func AuditLogUID(id string) cedar.EntityUID {
 		safeID = invalidUIDID
 	}
 	return cedar.NewEntityUID(EntityTypeAuditLog, cedar.String(safeID))
+}
+
+// ACPEnvelopeUID builds a Cedar EntityUID for the ACPEnvelope family
+// introduced by mission acp-orchestration-integration-01NDFSEX06.
+// peerID is the peer's stable identifier. Malformed ids (empty / control
+// characters / leading "..") are replaced with the literal "invalid" so
+// the resulting UID type-matches in `resource is ACPEnvelope` clauses
+// but never satisfies any real permit — a typo therefore never silently
+// authorises an ACP envelope exchange.
+func ACPEnvelopeUID(peerID string) cedar.EntityUID {
+	safeID := peerID
+	if !validateFamilyID(peerID) {
+		safeID = invalidUIDID
+	}
+	return cedar.NewEntityUID(EntityTypeACPEnvelope, cedar.String(safeID))
 }
