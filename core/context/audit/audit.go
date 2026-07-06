@@ -372,6 +372,35 @@ const (
 	// portion of the turn payload — only the envelope id, peer id, transport,
 	// direction, outcome, byte counts, and error code.
 	KindACPEnvelope Kind = "acp.envelope"
+
+	// ── Fleet audit-archival kinds (fleet-audit-archival-01NDFSEX13) ─────────
+
+	// KindFleetAuditChainBreak fires when the pre-send hash-chain verifier
+	// detects a break in the local audit log. Archival hard-stops; the
+	// operator must investigate and manually advance the cursor past the
+	// gap (losing those events from the off-device archive). Payload:
+	// FleetAuditChainBreakPayload.
+	//
+	// Privacy invariant: the payload MUST NOT carry event payloads or any
+	// user-authored content — only IDs, the event_id where the break was
+	// detected, and an error classification.
+	KindFleetAuditChainBreak Kind = "fleet.audit_chain_break"
+
+	// KindFleetAuditArchived fires once per successfully ACK'd batch of
+	// audit events sent to the fleet immudb endpoint. The payload carries
+	// only counts and the cursor range — no event payloads.
+	// Payload: FleetAuditArchivedPayload.
+	KindFleetAuditArchived Kind = "fleet.audit_archived"
+
+	// KindFleetAuditChainSkipped fires when an operator manually advances
+	// the archive cursor past a chain-break gap (explicit recovery action).
+	// Payload: FleetAuditChainSkippedPayload.
+	KindFleetAuditChainSkipped Kind = "fleet.audit_chain_skipped"
+
+	// KindFleetAuditRetentionSwept fires once per successful retention sweep
+	// pass that deletes locally-retained audit rows that are both ACK'd and
+	// older than the retention window. Payload: FleetAuditRetentionSweptPayload.
+	KindFleetAuditRetentionSwept Kind = "fleet.audit_retention_swept"
 )
 
 // Event is the wire shape passed to the event log. The concrete event-log
@@ -1218,4 +1247,65 @@ type ACPEnvelopePayload struct {
 	// ErrorCode is a machine-readable error classifier; empty on success.
 	// Examples: "acp:policy_denied", "acp:transport_refused", "acp:verify_rejected".
 	ErrorCode string `json:"error_code,omitempty"`
+}
+
+// ── Fleet audit-archival payloads (fleet-audit-archival-01NDFSEX13) ──────────
+
+// FleetAuditChainBreakPayload carries the audit signalling for
+// KindFleetAuditChainBreak. Emitted when the pre-send hash-chain
+// verifier detects a mismatch in the local audit log.
+//
+// Privacy invariant: no event payloads, user content, or credential
+// bytes are included — only IDs and the event_id of the break.
+type FleetAuditChainBreakPayload struct {
+	// BrokenAtID is the event_id of the first row where the hash check
+	// failed. The archiver halts at this cursor.
+	BrokenAtID string `json:"broken_at_id"`
+	// BatchStartID is the event_id of the first event in the batch that
+	// was being verified when the break was detected.
+	BatchStartID string `json:"batch_start_id"`
+	// ErrorClass is a machine-readable classification of the break type:
+	// "payload_hash_mismatch" | "prev_hash_mismatch".
+	ErrorClass string `json:"error_class"`
+}
+
+// FleetAuditArchivedPayload carries the audit signalling for
+// KindFleetAuditArchived. Emitted once per batch ACK'd by the fleet
+// endpoint.
+//
+// Privacy invariant: no event payloads, user content, or credential
+// bytes are included — only counts and cursor range.
+type FleetAuditArchivedPayload struct {
+	// BatchSize is the number of events sent and ACK'd in this batch.
+	BatchSize int `json:"batch_size"`
+	// FromID is the event_id of the first event in the batch.
+	FromID string `json:"from_id"`
+	// ToID is the event_id of the last event in the batch (the new cursor value).
+	ToID string `json:"to_id"`
+}
+
+// FleetAuditChainSkippedPayload carries the audit signalling for
+// KindFleetAuditChainSkipped. Emitted when an operator manually advances
+// the archive cursor past a chain-break gap.
+//
+// Privacy invariant: no event payloads or user content — only cursor IDs.
+type FleetAuditChainSkippedPayload struct {
+	// FromID is the cursor value before the skip.
+	FromID string `json:"from_id"`
+	// ToID is the cursor value after the skip (the new resume point).
+	ToID string `json:"to_id"`
+}
+
+// FleetAuditRetentionSweptPayload carries the audit signalling for
+// KindFleetAuditRetentionSwept. Emitted once per retention sweep pass.
+//
+// Privacy invariant: no event payloads or user content — only counts
+// and the oldest event_id that was deleted.
+type FleetAuditRetentionSweptPayload struct {
+	// DeletedCount is the number of locally-retained rows deleted.
+	DeletedCount int `json:"deleted_count"`
+	// OldestDeletedID is the event_id of the oldest row deleted.
+	OldestDeletedID string `json:"oldest_deleted_id,omitempty"`
+	// RetentionDays is the configured retention window used for this pass.
+	RetentionDays int `json:"retention_days"`
 }
