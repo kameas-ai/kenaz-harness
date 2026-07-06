@@ -160,6 +160,14 @@ func (a *AuditArchiver) Stop() {
 	}
 }
 
+// IsRunning reports whether the archive background loop is currently
+// running. A constructed-but-not-started archiver (or one that has
+// stopped) returns false. Used by the compliance status view so a
+// constructed-but-stopped archiver does not report running=true.
+func (a *AuditArchiver) IsRunning() bool {
+	return a.running.Load()
+}
+
 // ChainBreakDetected reports whether a hash-chain break was detected
 // and the archiver has halted.
 func (a *AuditArchiver) ChainBreakDetected() bool {

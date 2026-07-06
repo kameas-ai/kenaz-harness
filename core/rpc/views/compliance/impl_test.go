@@ -2,8 +2,11 @@ package compliance
 
 import (
 	"context"
+	"io"
+	"net/http"
 	"testing"
 
+	contextaudit "github.com/kameas-ai/kenaz-harness/core/context/audit"
 	"github.com/kameas-ai/kenaz-harness/core/fleet"
 )
 
@@ -61,3 +64,77 @@ func TestComplianceAPI_Status_RetentionFromSweeper(t *testing.T) {
 		t.Errorf("want 60, got %d", status.RetentionDays)
 	}
 }
+
+// TestComplianceAPI_Status_ArchiverRunning_RealState verifies that the
+// compliance panel reports ArchiverRunning = true only when the archiver is
+// actually running, and false after it is stopped.
+//
+// This is the acceptance test for review blocker 2: status.ArchiverRunning
+// must use archiver.IsRunning() not a static "archiver != nil" check.
+// (fleet-audit-archival-01NDFSEX13 WP05)
+func TestComplianceAPI_Status_ArchiverRunning_RealState(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	// noopPoster satisfies fleet.AuditHTTPPoster so the archiver loop starts
+	// without a live fleet endpoint.
+	archiver := fleet.NewAuditArchiver(fleet.AuditArchiverConfig{
+		Poster: &testNoopPoster{},
+		Tail:   &contextaudit.MemoryTailReader{},
+		// CapCheck nil → archiver runs unconditionally per AuditArchiverConfig docs.
+	})
+	sweeper := fleet.NewAuditRetentionSweeper(fleet.AuditRetentionConfig{})
+	api := NewAPI(archiver, sweeper, func() bool { return true })
+
+	// Before Start: Enabled=true (capCheck), ArchiverRunning=false.
+	status, err := api.Status(context.Background())
+	if err != nil {
+		t.Fatalf("Status before Start: %v", err)
+	}
+	if !status.Enabled {
+		t.Error("want Enabled=true (capCheck always returns true)")
+	}
+	if status.ArchiverRunning {
+		t.Error("want ArchiverRunning=false before archiver.Start()")
+	}
+
+	// Start archiver; IsRunning() must flip to true.
+	archiver.Start(ctx)
+	if !archiver.IsRunning() {
+		t.Fatal("archiver.IsRunning() should be true immediately after Start()")
+	}
+
+	// Compliance panel must reflect the live running state.
+	status, err = api.Status(context.Background())
+	if err != nil {
+		t.Fatalf("Status after Start: %v", err)
+	}
+	if !status.ArchiverRunning {
+		t.Error("want ArchiverRunning=true after archiver.Start()")
+	}
+
+	// Stop the archiver; IsRunning() must return to false.
+	archiver.Stop()
+	if archiver.IsRunning() {
+		t.Error("archiver.IsRunning() should be false after Stop()")
+	}
+
+	status, err = api.Status(context.Background())
+	if err != nil {
+		t.Fatalf("Status after Stop: %v", err)
+	}
+	if status.ArchiverRunning {
+		t.Error("want ArchiverRunning=false after archiver.Stop()")
+	}
+}
+
+// ── test helpers ──────────────────────────────────────────────────────────────
+
+// testNoopPoster is a fleet.AuditHTTPPoster that accepts all posts silently.
+// It lets the fleet.AuditArchiver start without a live fleet endpoint.
+type testNoopPoster struct{}
+
+func (p *testNoopPoster) Post(_ context.Context, _ string, _ string, _ io.Reader) (*http.Response, error) {
+	return &http.Response{StatusCode: http.StatusOK, Body: http.NoBody}, nil
+}
+

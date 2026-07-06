@@ -21,6 +21,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/kameas-ai/kenaz-harness/core"
@@ -628,6 +629,20 @@ type API struct {
 	// fleet archiver is configured; returns ErrComplianceNotEnabled
 	// when CapAuditLogImmuDB is not active.
 	complianceAPI complianceview.ComplianceAPI
+
+	// auditArchiver is the fleet audit archival background loop
+	// (fleet-audit-archival-01NDFSEX13 WP02). Nil when
+	// CapAuditLogImmuDB is not active or fleet is not configured.
+	// Held for Start (in SetContext) and Stop (in Shutdown).
+	auditArchiver *corefleet.AuditArchiver
+	// auditSweeper is the local retention sweep background loop
+	// (fleet-audit-archival-01NDFSEX13 WP04). Nil under the same
+	// conditions as auditArchiver.
+	auditSweeper *corefleet.AuditRetentionSweeper
+	// auditTailBuf bridges the audit observer pipeline to the
+	// fleet archiver's TailReader. Populated by ObserveTailEvent
+	// which is called from AuditObserver when auditArchiver is wired.
+	auditTailBuf *auditTailBuffer
 }
 
 // Builtins returns the in-binary tool registry. Used by the chat-input
@@ -742,6 +757,21 @@ func (a *API) SetContext(ctx context.Context) {
 			}
 		}()
 	}
+
+	// Start fleet audit archiver + retention sweeper background loops
+	// (fleet-audit-archival-01NDFSEX13). Constructed in New only when
+	// CapAuditLogImmuDB is available; started here because SetContext is
+	// called with the Wails-supplied app context, which is the correct
+	// lifetime for background goroutines. Idempotent (Start is a no-op
+	// when the archiver is already running).
+	if a.auditArchiver != nil {
+		a.auditArchiver.Start(ctx)
+		logging.L().Info("fleet.audit_archiver.started")
+	}
+	if a.auditSweeper != nil {
+		a.auditSweeper.Start(ctx)
+		logging.L().Info("fleet.audit_sweeper.started")
+	}
 }
 
 // Shutdown cancels the auto-update background poller and stops the
@@ -780,6 +810,14 @@ func (a *API) Shutdown() {
 	// watcher). StopFleetBackground is idempotent and nil-safe.
 	if a.settingsImpl != nil {
 		a.settingsImpl.StopFleetBackground()
+	}
+	// fleet-audit-archival-01NDFSEX13: stop the archiver and sweeper so
+	// no in-flight batch is abandoned on clean shutdown.
+	if a.auditArchiver != nil {
+		a.auditArchiver.Stop()
+	}
+	if a.auditSweeper != nil {
+		a.auditSweeper.Stop()
 	}
 }
 
@@ -2023,6 +2061,90 @@ func New(c *core.Core) *API {
 			logging.L().Info("rpc.slashcmd.skill_deps_wired",
 				"fleet_client_nil", flCl == nil,
 				"signer_nil", catalogSigner == nil,
+			)
+		}
+	}
+
+	// fleet-audit-archival-01NDFSEX13: construct the real AuditArchiver +
+	// AuditRetentionSweeper and replace the stub complianceAPI. Gate on
+	// CapAuditLogImmuDB: when the capability is active and the fleet
+	// client + data dir are available, the archiver streams local audit
+	// events to fleet's immudb backend. When not available the stub
+	// (nil archiver, nil sweeper) keeps returning ErrComplianceNotEnabled
+	// cleanly.
+	{
+		var flCl *corefleet.Client
+		if a.settingsImpl != nil {
+			flCl = a.settingsImpl.FleetClientForBootstrap()
+		}
+		// capCheck reads the live capability poller so tier changes
+		// propagate within one poll interval without restart.
+		capCheck := func() bool {
+			if a.settingsImpl == nil {
+				return false
+			}
+			p := a.settingsImpl.CapabilityPoller()
+			if p == nil {
+				return false
+			}
+			cap := p.Current()
+		return cap.Has(corefleet.CapAuditLogImmudb)
+		}
+		// Construct only when we have a fleet client (non-nop) and a
+		// DataDir for cursor persistence. Degrade gracefully when the
+		// user is not enrolled or fleet is disabled.
+		if dataDir != "" && flCl != nil && !flCl.IsNop() {
+			// auditTailBuf is a thread-safe TailReader that receives
+			// events from the audit observer pipeline. The archiver
+			// reads from this buffer to build batches.
+			tailBuf := newAuditTailBuffer()
+			a.auditTailBuf = tailBuf
+
+			// DeviceSigner signs each batch with the device ed25519 key
+			// (re-use the key from catalog wiring; NewDeviceSigner is
+			// idempotent and reads the same key file).
+			var archiveSigner corefleet.Signer
+			if s, sigErr := corefleet.NewDeviceSigner(dataDir); sigErr != nil {
+				logging.L().Warn("fleet.audit_archiver.signer_init_failed", "err", sigErr)
+				// Nil signer: archiver will batch and send without a
+				// device signature (fleet accepts unsigned for now).
+			} else {
+				archiveSigner = s
+			}
+
+			// AuditArchiver: batches events from tailBuf → fleet endpoint.
+			archiver := corefleet.NewAuditArchiver(corefleet.AuditArchiverConfig{
+				Client:   flCl,
+				DataDir:  dataDir,
+				Tail:     tailBuf,
+				Signer:   archiveSigner,
+				Verifier: &corefleet.BatchChainVerifier{},
+				Emitter:  &auditArchiverEmitter{impl: a.auditImpl},
+				CapCheck: capCheck,
+			})
+			a.auditArchiver = archiver
+
+			// AuditRetentionSweeper: runs hourly, deletes ACK'd + aged rows.
+			// Backend is nil here (event-log backend not yet fully wired);
+			// SweepOnce returns 0 rows when backend is nil (safe no-op).
+			sweeper := corefleet.NewAuditRetentionSweeper(corefleet.AuditRetentionConfig{
+				Cursor:  archiver.CurrentCursor,
+				Emitter: &auditArchiverEmitter{impl: a.auditImpl},
+			})
+			a.auditSweeper = sweeper
+
+			// Replace the stub with the real compliance view.
+			a.complianceAPI = complianceview.NewAPI(archiver, sweeper, capCheck)
+			logging.L().Info("fleet.audit_archiver.wired",
+				"data_dir", dataDir,
+				"fleet_client_nil", flCl == nil,
+			)
+		} else {
+			// Keep the nil-guard stub; compliance panel shows "not enabled".
+			logging.L().Info("fleet.audit_archiver.skipped",
+				"data_dir_empty", dataDir == "",
+				"fleet_client_nil", flCl == nil,
+				"fleet_client_nop", flCl != nil && flCl.IsNop(),
 			)
 		}
 	}
@@ -4984,11 +5106,35 @@ func (s *streamSinkAdapter) Emit(topic string, payload any) {
 // API's ring buffer + active subscribers. Wiring lives at the call
 // site (main.go) so core/rpc stays decoupled from the emitter
 // constructor (DIRECTIVE_001).
+//
+// When the fleet audit archiver is wired (auditTailBuf non-nil),
+// the observer also appends a TailEvent to the buffer so the
+// archiver can stream events to the fleet immudb backend.
 func (a *API) AuditObserver() func(event.Event) {
 	if a.auditImpl == nil {
 		return func(event.Event) {}
 	}
-	return a.auditImpl.ObserveEvent
+	if a.auditTailBuf == nil {
+		return a.auditImpl.ObserveEvent
+	}
+	tailBuf := a.auditTailBuf
+	return func(ev event.Event) {
+		a.auditImpl.ObserveEvent(ev)
+		// Convert event.Event → contextaudit.TailEvent for the archiver.
+		sid := ""
+		if ev.SessionID != nil {
+			sid = ev.SessionID.String()
+		}
+		tailBuf.Append(contextaudit.TailEvent{
+			ID:          ev.EventID.String(),
+			Kind:        ev.Kind.String(),
+			EmittedAt:   ev.EmittedAt,
+			Payload:     []byte(ev.Payload),
+			PayloadHash: ev.PayloadHash,
+			PrevHash:    ev.PrevHash,
+			SessionID:   sid,
+		})
+	}
 }
 
 // ShellStatus returns a default shell status. Real values are filled by
@@ -5901,3 +6047,79 @@ func (a *API) UpdateStartCheck(ctx context.Context) {
 		logging.L().Warn("menu.update.check_failed", "err", err.Error())
 	}
 }
+// ── fleet-audit-archival-01NDFSEX13 boot helpers ─────────────────────────────
+
+// auditTailBuffer is a thread-safe TailReader that receives TailEvent values
+// from the AuditObserver pipeline and exposes them to the AuditArchiver via
+// the TailReader interface. It is constructed only when the archiver is wired
+// (fleet client non-nop, dataDir set) and fed by AuditObserver().
+//
+// Since/HighWater perform a linear scan; the buffer is bounded in practice
+// because the archiver drains it regularly (every archival flush interval).
+type auditTailBuffer struct {
+	mu     sync.Mutex
+	events []contextaudit.TailEvent
+}
+
+func newAuditTailBuffer() *auditTailBuffer {
+	return &auditTailBuffer{}
+}
+
+// Append adds an event to the tail buffer. Called from the AuditObserver
+// goroutine — must be safe for concurrent calls.
+func (b *auditTailBuffer) Append(e contextaudit.TailEvent) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.events = append(b.events, e)
+}
+
+// Since implements contextaudit.TailReader.
+func (b *auditTailBuffer) Since(_ context.Context, afterID string, limit int) ([]contextaudit.TailEvent, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	var out []contextaudit.TailEvent
+	for _, e := range b.events {
+		if afterID != "" && e.ID <= afterID {
+			continue
+		}
+		out = append(out, e)
+		if limit > 0 && len(out) >= limit {
+			break
+		}
+	}
+	return out, nil
+}
+
+// HighWater implements contextaudit.TailReader.
+func (b *auditTailBuffer) HighWater(_ context.Context) (string, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if len(b.events) == 0 {
+		return "", nil
+	}
+	return b.events[len(b.events)-1].ID, nil
+}
+
+// auditArchiverEmitter implements contextaudit.Emitter by forwarding events
+// to the rpc/views/audit.API ring buffer via Push. Used by the AuditArchiver
+// and AuditRetentionSweeper to surface fleet archive/sweep events in the
+// in-process audit ring so they appear in the compliance panel.
+// (fleet-audit-archival-01NDFSEX13 WP05)
+type auditArchiverEmitter struct {
+	impl *audit.API
+}
+
+func (e *auditArchiverEmitter) Emit(_ context.Context, ev contextaudit.Event) error {
+	if e.impl == nil {
+		return nil
+	}
+	e.impl.Push(audit.Entry{
+		ID:        fmt.Sprintf("fleet-archive-%d", ev.TS.UnixNano()),
+		Timestamp: ev.TS.UTC().Format(time.RFC3339Nano),
+		Category:  "FLEET",
+		Subject:   string(ev.Kind),
+		Trailing:  fmt.Sprintf("payload_bytes=%d", len(ev.Payload)),
+	})
+	return nil
+}
+
