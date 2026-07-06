@@ -22,6 +22,10 @@ export function ACP_GetTrace(arg1) {
   return window['go']['rpc']['Bindings']['ACP_GetTrace'](arg1);
 }
 
+export function ACP_ListTraces(arg1) {
+  return window['go']['rpc']['Bindings']['ACP_ListTraces'](arg1);
+}
+
 export function ACP_ListPeers() {
   return window['go']['rpc']['Bindings']['ACP_ListPeers']();
 }

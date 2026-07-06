@@ -861,6 +861,7 @@ interface WailsBindingsLike {
   ACP_RevokePeer(peerID: string): Promise<void>;
   ACP_Dispatch(peerID: string, turnPayload: string): Promise<ACPDispatchResult>;
   ACP_GetTrace(envelopeID: string): Promise<ACPEnvelopeTrace>;
+  ACP_ListTraces(peerID: string): Promise<ACPEnvelopeTrace[]>;
 }
 
 
@@ -2900,6 +2901,7 @@ export interface HarnessClient {
   ACP_RevokePeer(peerID: string): Promise<void>;
   ACP_Dispatch(peerID: string, turnPayload: string): Promise<ACPDispatchResult>;
   ACP_GetTrace(envelopeID: string): Promise<ACPEnvelopeTrace>;
+  ACP_ListTraces(peerID: string): Promise<ACPEnvelopeTrace[]>;
 }
 
 // ── runtime client ─────────────────────────────────────────────────────
@@ -3536,6 +3538,7 @@ export function createHarnessClient(): HarnessClient {
     ACP_RevokePeer: (peerID) => b().ACP_RevokePeer(peerID),
     ACP_Dispatch: (peerID, turnPayload) => b().ACP_Dispatch(peerID, turnPayload),
     ACP_GetTrace: (envelopeID) => b().ACP_GetTrace(envelopeID),
+    ACP_ListTraces: (peerID) => b().ACP_ListTraces(peerID),
   };
 }
 
@@ -4868,6 +4871,7 @@ export function createFakeHarnessClient(
       envelopeId: '', peerId: '', transport: '', direction: 'send',
       outcome: 'ok', bytesIn: 0, bytesOut: 0, createdAt: '',
     }),
+    ACP_ListTraces: async (_peerID: string): Promise<ACPEnvelopeTrace[]> => [],
   };
 
   return { ...defaults, ...seed };

@@ -62,6 +62,8 @@ export function ACP_Dispatch(arg1:string,arg2:string):Promise<acp.DispatchResult
 
 export function ACP_GetTrace(arg1:string):Promise<acp.EnvelopeTrace>;
 
+export function ACP_ListTraces(arg1:string):Promise<Array<acp.EnvelopeTrace>>;
+
 export function ACP_ListPeers():Promise<Array<acp.Peer>>;
 
 export function ACP_RevokePeer(arg1:string):Promise<void>;

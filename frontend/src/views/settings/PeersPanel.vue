@@ -85,18 +85,22 @@ async function revokePeer(peerID: string) {
 // ── Inspect last-seen envelope trace ──────────────────────────────────────
 
 const inspectingPeerID = ref<string | null>(null);
+// traceMap maps peerID → most-recent ACPEnvelopeTrace for that peer.
 const traceMap = ref<Map<string, ACPEnvelopeTrace>>(new Map());
 const traceError = ref<string | null>(null);
 
 async function inspectTrace(peer: ACPPeer) {
-  // The last-seen envelope ID comes from a per-peer last_envelope_id field;
-  // since Peer doesn't carry that, we use ACP_GetTrace with the peer's ID
-  // as a lookup hint. The backend resolves the most-recent trace for the peer.
+  // ACP_ListTraces returns all envelope traces for the peer, newest first.
+  // We display the most-recent one (index 0).
   inspectingPeerID.value = peer.id;
   traceError.value = null;
   try {
-    const trace = await client.ACP_GetTrace(peer.id);
-    traceMap.value = new Map(traceMap.value).set(peer.id, trace);
+    const traces = await client.ACP_ListTraces(peer.id);
+    if (traces.length === 0) {
+      traceError.value = 'No envelope traces found for this peer yet.';
+    } else {
+      traceMap.value = new Map(traceMap.value).set(peer.id, traces[0]);
+    }
   } catch (e) {
     traceError.value = e instanceof Error ? e.message : String(e);
   } finally {

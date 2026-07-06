@@ -3229,3 +3229,11 @@ func (b *Bindings) ACP_GetTrace(envelopeID string) (acpview.EnvelopeTrace, error
 	defer sentry.WrapBinding("ACP_GetTrace")()
 	return b.api.ACP().ACP_GetTrace(b.ctx(), envelopeID)
 }
+
+// ACP_ListTraces returns the most-recent envelope traces for the given
+// peer, newest first. Returns an empty slice when no traces exist yet.
+// FR-005.
+func (b *Bindings) ACP_ListTraces(peerID string) ([]acpview.EnvelopeTrace, error) {
+	defer sentry.WrapBinding("ACP_ListTraces")()
+	return b.api.ACP().ACP_ListTraces(b.ctx(), peerID)
+}
