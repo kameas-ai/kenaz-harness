@@ -4034,3 +4034,79 @@ export interface ACPTrustResult {
   peerId: string;
   trustTier: string;
 }
+
+// ── ContextSync (fleet-context-sync-01NDFSEX15 WP07) ─────────────────────────
+// These types mirror the Go view structs in core/rpc/views/contextsync.
+
+/**
+ * FleetSessionSyncStatus — returned by SessionSync_Toggle / SessionSync_ResumeFrom.
+ * Mirrors contextsync.SessionSyncStatus.
+ *
+ * Named with "Fleet" prefix to avoid colliding with the existing
+ * ContextSyncStatusView (context-graph sync, different subsystem).
+ */
+export interface FleetSessionSyncStatus {
+  sessionID: string;
+  enabled: boolean;
+  /** Number of events replayed from the fleet stream. */
+  resumedCount: number;
+  lastSeq: number;
+  /** RFC3339 timestamp of last successful sync, or empty. */
+  lastSyncAt: string;
+}
+
+/**
+ * FleetArtifactClassOptionsView — per-artifact-class opt-in for project sync.
+ * Mirrors contextsync.ArtifactClassOptionsView.
+ */
+export interface FleetArtifactClassOptionsView {
+  /** Map of artifact class name → enabled. */
+  classes: Record<string, boolean>;
+}
+
+/**
+ * FleetProjectSyncStatus — returned by ProjectSync_Toggle / ProjectSync_SetArtifactClass.
+ * Mirrors contextsync.ProjectSyncStatus.
+ */
+export interface FleetProjectSyncStatus {
+  projectID: string;
+  enabled: boolean;
+  lastSeq: number;
+  /** RFC3339 timestamp of last successful sync, or empty. */
+  lastSyncAt: string;
+  artifactClasses: FleetArtifactClassOptionsView;
+}
+
+/**
+ * FleetTeamMemberView — an entry returned by Handoff_ListTeam.
+ * Mirrors contextsync.TeamMemberView.
+ */
+export interface FleetTeamMemberView {
+  userID: string;
+  displayName: string;
+  email: string;
+  /** Whether this member can receive session handoffs. */
+  canReceive: boolean;
+}
+
+/**
+ * FleetInboxItemView — one item in the handoff inbox (Handoff_Inbox).
+ * Mirrors contextsync.InboxItemView.
+ */
+export interface FleetInboxItemView {
+  itemID: string;
+  fromUserID: string;
+  fromDisplayName: string;
+  sessionTitle: string;
+  /** RFC3339 timestamp when the share was received. */
+  receivedAt: string;
+}
+
+/**
+ * FleetAcceptedSessionView — returned by Handoff_Accept.
+ * Mirrors contextsync.AcceptedSessionView.
+ * Only the event count crosses the RPC boundary — no session content.
+ */
+export interface FleetAcceptedSessionView {
+  eventCount: number;
+}
