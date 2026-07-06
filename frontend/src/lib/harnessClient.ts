@@ -868,6 +868,19 @@ interface WailsBindingsLike {
   ACP_Dispatch(peerID: string, turnPayload: string): Promise<ACPDispatchResult>;
   ACP_GetTrace(envelopeID: string): Promise<ACPEnvelopeTrace>;
   ACP_ListTraces(peerID: string): Promise<ACPEnvelopeTrace[]>;
+  // ── ContextSync (fleet-context-sync-01NDFSEX15 WP07) ─────────────────────
+  SessionSync_Toggle(sessionID: string, enable: boolean): Promise<FleetSessionSyncStatus>;
+  SessionSync_DeleteRemote(sessionID: string): Promise<void>;
+  SessionSync_ResumeFrom(sessionID: string, sinceSeq: number): Promise<number>;
+  ProjectSync_Toggle(projectID: string, enable: boolean): Promise<FleetProjectSyncStatus>;
+  ProjectSync_DeleteRemote(projectID: string): Promise<void>;
+  ProjectSync_SetArtifactClass(projectID: string, opts: FleetArtifactClassOptionsView): Promise<FleetProjectSyncStatus>;
+  Handoff_ListTeam(): Promise<FleetTeamMemberView[]>;
+  Handoff_Share(sessionID: string, recipientUserID: string): Promise<void>;
+  Handoff_Inbox(): Promise<FleetInboxItemView[]>;
+  Handoff_Accept(inboxItemID: string): Promise<FleetAcceptedSessionView>;
+  ContextSync_GenerateRecoveryCode(): Promise<string>;
+  ContextSync_ApplyRecoveryCode(code: string): Promise<void>;
 }
 
 

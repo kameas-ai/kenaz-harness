@@ -49,10 +49,13 @@ function buildClient(overrides: {
       list: async () => [],
       create: async () => ({ id: 'proj-test', name: 'Test Project', description: '' } as never),
       rename: async () => {},
-      setDescription: async () => {},
-      delete: async () => {},
-      reorder: async () => {},
-      getMemoryCount: async () => 0,
+      updateDescription: async () => {},
+      remove: async () => {},
+      addSession: async () => {},
+      removeSession: async () => {},
+      listSessions: async () => [],
+      getAutonomy: async () => ({ level: null, overrides: {} }),
+      setAutonomy: async () => {},
     },
   });
   return { client, toggleFn, setClassFn };
