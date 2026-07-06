@@ -1,8 +1,12 @@
 /**
- * UserMenu — unified top-right dropdown tests.
+ * UserMenu — status pill + fleet-identity popover tests.
  *
- * Covers: trigger render in all 3 fleet states, identity header, search
- * row, palette row, theme row, account row variants, sign-out flow.
+ * v0.20.0: non-account rows (Search, Command Palette, Theme, Update Available)
+ * have moved to the OS native menu bar. Asserts:
+ *   - trigger always renders (except fleet disabled)
+ *   - removed rows are absent
+ *   - account rows behave identically to v0.19.0
+ *   - fleet-disabled renders nothing
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { mount, flushPromises } from '@vue/test-utils';
@@ -110,16 +114,30 @@ describe('UserMenu', () => {
     vi.useRealTimers();
   });
 
-  it('trigger always renders, even when fleet is disabled', async () => {
-    const wrapper = mountUserMenu(buildDisabledClient());
+  // ── Trigger render ─────────────────────────────────────────────────────
+
+  it('trigger renders when fleet is enabled (signed-out)', async () => {
+    const wrapper = mountUserMenu(buildSignedOutClient());
     await flushPromises();
     expect(wrapper.find('[data-testid="user-menu-trigger"]').exists()).toBe(true);
+  });
+
+  it('trigger renders when signed in', async () => {
+    const wrapper = mountUserMenu(buildSignedInClient());
+    await flushPromises();
+    expect(wrapper.find('[data-testid="user-menu-trigger"]').exists()).toBe(true);
+  });
+
+  it('renders nothing when fleet is disabled (HARNESS_FLEET_DISABLED=1)', async () => {
+    const wrapper = mountUserMenu(buildDisabledClient());
+    await flushPromises();
+    // The entire component renders nothing when fleet is disabled.
+    expect(wrapper.find('[data-testid="user-menu-trigger"]').exists()).toBe(false);
   });
 
   it('renders avatar with initials when signed in', async () => {
     const wrapper = mountUserMenu(buildSignedInClient());
     await flushPromises();
-    // Initials from "Alice Cooper" → "AC".
     expect(wrapper.find('[data-testid="user-menu-trigger"]').text()).toContain('AC');
   });
 
@@ -129,55 +147,49 @@ describe('UserMenu', () => {
     expect(wrapper.find('[data-testid="user-menu-trigger"]').text()).toContain('DEV');
   });
 
-  it('non-fleet menu rows render in all fleet states', async () => {
-    for (const client of [
-      buildSignedOutClient(),
-      buildSignedInClient(),
-      buildDisabledClient(),
-    ]) {
+  // ── Removed rows (must be absent) ──────────────────────────────────────
+
+  it('removed non-account rows are NOT present', async () => {
+    for (const client of [buildSignedOutClient(), buildSignedInClient()]) {
       const wrapper = mountUserMenu(client);
       await flushPromises();
       await wrapper.find('[data-testid="user-menu-trigger"]').trigger('click');
       await flushPromises();
-      expect(wrapper.find('[data-testid="menu-search"]').exists()).toBe(true);
-      expect(wrapper.find('[data-testid="menu-command-palette"]').exists()).toBe(true);
-      expect(wrapper.find('[data-testid="menu-theme"]').exists()).toBe(true);
+      // These rows moved to the OS menu bar; they must not appear in the popover.
+      expect(wrapper.find('[data-testid="menu-search"]').exists()).toBe(false);
+      expect(wrapper.find('[data-testid="menu-command-palette"]').exists()).toBe(false);
+      expect(wrapper.find('[data-testid="menu-theme"]').exists()).toBe(false);
+      expect(wrapper.find('[data-testid="menu-update"]').exists()).toBe(false);
     }
   });
 
-  it('fleet account rows render only when fleet is enabled', async () => {
-    // Signed-out + fleet enabled: shows "Sign in" row only.
-    {
-      const wrapper = mountUserMenu(buildSignedOutClient());
-      await flushPromises();
-      await wrapper.find('[data-testid="user-menu-trigger"]').trigger('click');
-      await flushPromises();
-      const signInBtn = wrapper.find('[data-testid="menu-sign-in"]');
-      expect(signInBtn.exists()).toBe(true);
-      expect(signInBtn.text()).toContain('Sign in');
-      expect(wrapper.find('[data-testid="menu-account"]').exists()).toBe(false);
-      expect(wrapper.find('[data-testid="menu-sign-out"]').exists()).toBe(false);
-    }
-    // Signed-in: "Account settings" + "Sign out".
-    {
-      const wrapper = mountUserMenu(buildSignedInClient());
-      await flushPromises();
-      await wrapper.find('[data-testid="user-menu-trigger"]').trigger('click');
-      await flushPromises();
-      expect(wrapper.find('[data-testid="menu-sign-in"]').exists()).toBe(false);
-      expect(wrapper.find('[data-testid="menu-account"]').text()).toContain('Account settings');
-      expect(wrapper.find('[data-testid="menu-sign-out"]').exists()).toBe(true);
-    }
-    // Fleet disabled: no account / sign-in / sign-out rows.
-    {
-      const wrapper = mountUserMenu(buildDisabledClient());
-      await flushPromises();
-      await wrapper.find('[data-testid="user-menu-trigger"]').trigger('click');
-      await flushPromises();
-      expect(wrapper.find('[data-testid="menu-sign-in"]').exists()).toBe(false);
-      expect(wrapper.find('[data-testid="menu-account"]').exists()).toBe(false);
-      expect(wrapper.find('[data-testid="menu-sign-out"]').exists()).toBe(false);
-    }
+  it('update-dot overlay is NOT on the trigger', async () => {
+    const wrapper = mountUserMenu(buildSignedInClient());
+    await flushPromises();
+    // The .update-dot was removed from the trigger in v0.20.0.
+    expect(wrapper.find('.update-dot').exists()).toBe(false);
+  });
+
+  // ── Account rows ────────────────────────────────────────────────────────
+
+  it('signed-out: shows Sign in row only', async () => {
+    const wrapper = mountUserMenu(buildSignedOutClient());
+    await flushPromises();
+    await wrapper.find('[data-testid="user-menu-trigger"]').trigger('click');
+    await flushPromises();
+    expect(wrapper.find('[data-testid="menu-sign-in"]').exists()).toBe(true);
+    expect(wrapper.find('[data-testid="menu-account"]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid="menu-sign-out"]').exists()).toBe(false);
+  });
+
+  it('signed-in: shows Account settings + Sign out', async () => {
+    const wrapper = mountUserMenu(buildSignedInClient());
+    await flushPromises();
+    await wrapper.find('[data-testid="user-menu-trigger"]').trigger('click');
+    await flushPromises();
+    expect(wrapper.find('[data-testid="menu-sign-in"]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid="menu-account"]').text()).toContain('Account settings');
+    expect(wrapper.find('[data-testid="menu-sign-out"]').exists()).toBe(true);
   });
 
   it('identity header populates when signed in', async () => {
