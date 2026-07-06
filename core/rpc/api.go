@@ -108,6 +108,7 @@ import (
 	catalogview "github.com/kameas-ai/kenaz-harness/core/rpc/views/catalog"
 	syncview "github.com/kameas-ai/kenaz-harness/core/rpc/views/sync"
 	cedarview "github.com/kameas-ai/kenaz-harness/core/rpc/views/cedar"
+	sitesview "github.com/kameas-ai/kenaz-harness/core/rpc/views/sites"
 	corefleet "github.com/kameas-ai/kenaz-harness/core/fleet"
 	"github.com/kameas-ai/kenaz-harness/core/eval"
 	"github.com/kameas-ai/kenaz-harness/core/session"
@@ -280,6 +281,11 @@ type HarnessAPI interface {
 	// CedarPublish exposes the team Cedar policy publish surface
 	// (fleet-share-and-sync-01NDFSEX14 WP07). Admin-gated.
 	CedarPublish() cedarview.CedarAPI
+
+	// Sites exposes the fleet-hosted sites RPC surface (sites-ui-01NSITE06).
+	// The view is gated on the sites_hosting capability; it is the same
+	// core/sites + core/fleet/sites.go layer used by the MCP server.
+	Sites() sitesview.SitesAPI
 
 	// Tasks exposes the background-task registry RPC surface
 	// (background-task-monitor-01KZNP3C WP05). Provides List, Get, Tail,
@@ -563,6 +569,10 @@ type API struct {
 	// cedarPublishAPI is the team Cedar policy publish surface
 	// (fleet-share-and-sync-01NDFSEX14 WP07).
 	cedarPublishAPI cedarview.CedarAPI
+
+	// sitesAPI is the fleet-hosted sites RPC surface (sites-ui-01NSITE06).
+	// Backed by core/sites/packager.go + core/fleet/sites.go.
+	sitesAPI sitesview.SitesAPI
 
 	// settingsSyncer is the per-category settings Syncer started by
 	// registerSyncCategories. Held for Shutdown teardown (FR-001).
@@ -1796,6 +1806,10 @@ func New(c *core.Core) *API {
 		}
 		a.cedarPublishAPI = cedarview.NewAPI(flCl, identityFn, flAudit)
 
+		// Sites (sites-ui-01NSITE06): capability-gated sites RPC surface.
+		// Deploy progress events are published via the existing broker.
+		a.sitesAPI = sitesview.New(flCl, flDataDir, brokerPublisher{broker: a.broker})
+
 		// fleet-context-graph-sync-01NDFSEX17: wire the ContextGraphSyncer so
 		// Context_Publish / Context_Promote / Context_SyncStatus actually reach
 		// fleet. Without this wire the methods short-circuit via ErrFleetDisabled
@@ -1942,6 +1956,22 @@ func New(c *core.Core) *API {
 				"fleet_client_nil", flCl == nil,
 				"signer_nil", catalogSigner == nil,
 			)
+		}
+	}
+
+	// Sites capability reconciler (sites-mcp-server-01NSITE05 WP04).
+	// Enables the "fleet-sites" recipe when sites_hosting appears and
+	// disables it when it disappears or goes stale (24 h TTL). Wired
+	// here because core/rpc already owns the CapabilityPoller and
+	// recipes.EnabledRecipes — this avoids core/core.go importing fleet.
+	if a.settingsImpl != nil && dataDir != "" {
+		if poller := a.settingsImpl.CapabilityPoller(); poller != nil {
+			enabled, err := recipes.LoadEnabled(dataDir)
+			if err != nil {
+				logging.L().Warn("rpc.sites_reconciler.load_enabled_failed", "err", err.Error())
+				enabled = &recipes.EnabledRecipes{}
+			}
+			corefleet.NewSitesReconciler(poller, enabled, dataDir).Start()
 		}
 	}
 
@@ -5701,6 +5731,10 @@ func (a *API) Sync() syncview.SyncAPI { return a.syncAPI }
 // CedarPublish implements HarnessAPI. Returns the team Cedar policy publish surface.
 // (fleet-share-and-sync-01NDFSEX14 WP07)
 func (a *API) CedarPublish() cedarview.CedarAPI { return a.cedarPublishAPI }
+
+// Sites implements HarnessAPI. Returns the fleet-hosted sites RPC surface.
+// (sites-ui-01NSITE06)
+func (a *API) Sites() sitesview.SitesAPI { return a.sitesAPI }
 
 // Tasks implements HarnessAPI. Returns the background-task registry RPC surface.
 // (background-task-monitor-01KZNP3C WP05 / FR-003)

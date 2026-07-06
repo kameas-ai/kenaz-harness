@@ -14,6 +14,7 @@ import (
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
 	"github.com/wailsapp/wails/v2/pkg/options/mac"
 
+	"github.com/kameas-ai/kenaz-harness/cmd/mcpsubcmd"
 	"github.com/kameas-ai/kenaz-harness/core"
 	"github.com/kameas-ai/kenaz-harness/core/fleet"
 	"github.com/kameas-ai/kenaz-harness/core/logging"
@@ -52,6 +53,16 @@ func main() {
 	// the main goroutine is captured + flushed before re-panicking.
 	// wire-up point 1 for sentry (sentry-error-monitoring-01KX5R8G WP02).
 	defer coresentry.RecoverMain()
+
+	// Early dispatch: `harness mcp <server>` routes to the stdio MCP server
+	// BEFORE flag.Parse, Wails, SQLite, or any other subsystem init.
+	// This keeps the subprocess cold-start well under 200 ms (NFR-001).
+	// No credentials are passed as argv — they are loaded from the keychain
+	// inside the subprocess (FR-301 / §5 OSS security boundary).
+	if len(os.Args) >= 2 && os.Args[1] == "mcp" {
+		mcpsubcmd.Dispatch(context.Background(), os.Args[2:])
+		return // unreachable — Dispatch calls os.Exit on completion
+	}
 
 	// Dev-only flag: --enable-manifest-hot-reload turns on the polling
 	// watcher under <DataDir>/agent_graph/nodes/ so authoring a new

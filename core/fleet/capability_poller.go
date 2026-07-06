@@ -58,6 +58,7 @@ func (b *backoffState) reset() {
 // Lifecycle:
 //
 //	p := NewCapabilityPoller(client, dataDir)
+//	p.OnChange(func(c Capabilities) { /* reconcile */ })
 //	p.Start(ctx)   // launch background goroutine
 //	caps := p.Current()
 //	p.Stop()       // clean shutdown
@@ -68,8 +69,10 @@ type CapabilityPoller struct {
 	backoff  *backoffState
 	sf       singleflight.Group
 
-	mu      sync.RWMutex
-	current Capabilities
+	mu       sync.RWMutex
+	current  Capabilities
+	// listeners holds OnChange callbacks, appended under mu.
+	listeners []func(Capabilities)
 
 	// cancel shuts down the background goroutine.
 	cancel context.CancelFunc
@@ -99,11 +102,42 @@ func (p *CapabilityPoller) Current() Capabilities {
 	return p.current
 }
 
-// setCurrent replaces the in-memory snapshot.
+// OnChange registers fn to be called whenever the enabled capability set
+// changes (a key is added or removed). fn is invoked synchronously under
+// the write lock, so implementations must be fast and non-blocking.
+// Multiple listeners are supported; they are called in registration order.
+func (p *CapabilityPoller) OnChange(fn func(Capabilities)) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.listeners = append(p.listeners, fn)
+}
+
+// setCurrent replaces the in-memory snapshot and fires OnChange listeners
+// when the enabled-capability set has changed.
 func (p *CapabilityPoller) setCurrent(c Capabilities) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	prev := p.current
 	p.current = c
+	if enabledSetChanged(prev, c) && len(p.listeners) > 0 {
+		for _, fn := range p.listeners {
+			fn(c)
+		}
+	}
+}
+
+// enabledSetChanged returns true when the set of enabled capability keys differs
+// between a and b (ignoring FetchedAt, Source, Tier changes).
+func enabledSetChanged(a, b Capabilities) bool {
+	if len(a.Enabled) != len(b.Enabled) {
+		return true
+	}
+	for k, va := range a.Enabled {
+		if vb, ok := b.Enabled[k]; !ok || va != vb {
+			return true
+		}
+	}
+	return false
 }
 
 // Start launches the polling goroutine. If the cached snapshot is empty or
@@ -194,6 +228,13 @@ func (p *CapabilityPoller) Stop() {
 		p.cancel()
 	}
 	<-p.done
+}
+
+// ForceSetCurrentForTesting calls setCurrent directly, bypassing the
+// network fetch path. Used only by package-level tests that need to
+// exercise OnChange listeners without a real HTTP server.
+func (p *CapabilityPoller) ForceSetCurrentForTesting(c Capabilities) {
+	p.setCurrent(c)
 }
 
 // capabilitiesWireResponse is the JSON shape returned by

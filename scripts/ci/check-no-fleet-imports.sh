@@ -31,11 +31,14 @@ fi
 # - core/rpc/views/settings        — original boundary (auth + capability + config-pull RPCs).
 # - core/rpc/views/fleet           — dedicated fleet view (fleet-otel-archival WP07).
 # - core/rpc/middleware            — lockdown middleware (fleet-emergency-lockdown WP04).
+# - core/mcp/builtin/sites         — fleet-sites MCP server: fleet-facing by definition;
+#                                    remove the directory to fork fleet-free.
 ALLOWLIST=(
   "${MODULE}/core/rpc"
   "${MODULE}/core/rpc/views/settings"
   "${MODULE}/core/rpc/views/fleet"
   "${MODULE}/core/rpc/middleware"
+  "${MODULE}/core/mcp/builtin/sites"
 )
 
 # Build the list of all non-fleet packages in the repo.

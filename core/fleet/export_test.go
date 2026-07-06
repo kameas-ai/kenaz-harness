@@ -9,6 +9,12 @@ import (
 	"time"
 )
 
+// NewNopClient returns a nop (fleet-disabled) *Client for unit tests.
+// All methods on this client return ErrFleetDisabled.
+func NewNopClient() *Client {
+	return nopClientInstance()
+}
+
 // BuildClientForTesting constructs a *Client that talks to the given
 // base URL using the supplied HTTP client. Intended for integration tests
 // that need a Client pointing at an httptest.Server without going through

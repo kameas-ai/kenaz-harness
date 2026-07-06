@@ -56,6 +56,7 @@ import (
 	catalogview "github.com/kameas-ai/kenaz-harness/core/rpc/views/catalog"
 	fleetview "github.com/kameas-ai/kenaz-harness/core/rpc/views/fleet"
 	syncview "github.com/kameas-ai/kenaz-harness/core/rpc/views/sync"
+	sitesview "github.com/kameas-ai/kenaz-harness/core/rpc/views/sites"
 	tasksview "github.com/kameas-ai/kenaz-harness/core/rpc/views/tasks"
 	"github.com/kameas-ai/kenaz-harness/core/logging"
 	"github.com/kameas-ai/kenaz-harness/core/mcp/stdio"
@@ -3110,6 +3111,44 @@ func (b *Bindings) Sync_PendingMCPSecrets() ([]syncview.PendingMCPSecret, error)
 func (b *Bindings) Cedar_PublishToTeam(ruleID, ruleSource string) error {
 	defer sentry.WrapBinding("Cedar_PublishToTeam")()
 	return b.api.CedarPublish().Cedar_PublishToTeam(b.ctx(), ruleID, ruleSource)
+}
+
+// ── Sites bindings (sites-ui-01NSITE06) ────────────────────────────────────
+
+// Sites_List returns the current org's deployed sites as a slice of SiteSummary.
+// Returns ErrFleetDisabled when HARNESS_FLEET_DISABLED=1, ErrNotSignedIn when
+// no tokens exist, or ErrCapabilityNotInTier when sites_hosting is absent.
+func (b *Bindings) Sites_List() ([]sitesview.SiteSummary, error) {
+	defer sentry.WrapBinding("Sites_List")()
+	return b.api.Sites().Sites_List(b.ctx())
+}
+
+// Sites_Deploy validates the manifest in rootDir, packs it, uploads, and polls
+// for completion. Deploy progress events are emitted on "sites:deploy:progress"
+// as DeployProgressEvent payloads. The frontend subscribes via Wails EventsOn.
+func (b *Bindings) Sites_Deploy(rootDir string) (sitesview.SiteSummary, error) {
+	defer sentry.WrapBinding("Sites_Deploy")()
+	return b.api.Sites().Sites_Deploy(b.ctx(), rootDir)
+}
+
+// Sites_Status returns the current state of a single site by slug/name.
+func (b *Bindings) Sites_Status(site string) (sitesview.SiteSummary, error) {
+	defer sentry.WrapBinding("Sites_Status")()
+	return b.api.Sites().Sites_Status(b.ctx(), site)
+}
+
+// Sites_Logs returns up to tailLines lines of build+runtime logs for site.
+// tailLines is clamped to 2000 (contract maximum) by the impl.
+func (b *Bindings) Sites_Logs(site string, tailLines int) (string, error) {
+	defer sentry.WrapBinding("Sites_Logs")()
+	return b.api.Sites().Sites_Logs(b.ctx(), site, tailLines)
+}
+
+// Sites_Delete deletes the named site. The frontend enforces a two-step
+// confirm dialog before calling this binding (FR-004).
+func (b *Bindings) Sites_Delete(site string) error {
+	defer sentry.WrapBinding("Sites_Delete")()
+	return b.api.Sites().Sites_Delete(b.ctx(), site)
 }
 
 // ── Tasks bindings (background-task-monitor-01KZNP3C WP05) ──────────────────

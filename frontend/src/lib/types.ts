@@ -3937,6 +3937,31 @@ export interface PendingMCPSecret {
   requires_secret_keys: string[];
 }
 
+// ── Fleet Sites (fleet-sites-harness sites-ui-01NSITE06) ─────────────────────
+
+/**
+ * SiteSummary — a single deployed site as returned by Sites_List / Sites_Status.
+ * Mirrors core/rpc/views/sites.SiteSummary.
+ */
+export interface SiteSummary {
+  name: string;
+  kind: 'static' | 'dynamic';
+  url: string;
+  status: string;
+  /** RFC3339; absent/zero for never-deployed. */
+  deployedAt?: string;
+}
+
+/**
+ * DeployProgressEvent — emitted on the "sites:deploy:progress" topic
+ * while Sites_Deploy is running. Mirrors core/rpc/views/sites.DeployProgressEvent.
+ */
+export interface DeployProgressEvent {
+  stage: string;
+  message: string;
+  url?: string;
+}
+
 /**
  * BootHealthReport carries per-subsystem init error strings from the
  * harness boot phase. A non-empty field means that subsystem failed to
