@@ -59,9 +59,14 @@ type fleetState struct {
 	// Activate: if consent == "none" the pipeline is not activated.
 	consent *fleet.TelemetryConsent
 
-	// tp is the TracerProvider from telemetry.Init; held so Activate can
-	// register/unregister span processors on re-login.
-	tp *sdktrace.TracerProvider
+	// tpFunc is a lazy accessor for the TracerProvider from telemetry.Init.
+	// It is stored as a function rather than a pointer because telemetry.Init
+	// runs inside c.Start() which fires AFTER rpc.New() constructs the fleet
+	// state — a direct pointer captured at rpc.New time is always nil.
+	// The function is invoked at Activate time (post-login, post-c.Start) so
+	// it returns the real provider.
+	// (harness-fleet-otlp-export-01NTLMEX01 tp-nil timing fix)
+	tpFunc func() *sdktrace.TracerProvider
 
 	// telemetryOptIns is the per-class telemetry opt-in set last fetched from
 	// the fleet store (harness-fleet-sync-activation-01NSYNC01 gap #4). The
@@ -154,15 +159,18 @@ func (a *API) SetCedarEngine(engine *cedarpolicy.Engine) {
 //   - p:          the FleetOTLPPipeline constructed in core.New.
 //   - startupRes: the OTel resource from telemetry.Telemetry.Resource; merged
 //     with identity attrs at Activate time.
-//   - tp:         the TracerProvider from telemetry.Telemetry.TracerProvider;
-//     used by Activate to register the post-login BatchSpanProcessor.
+//   - tpFunc:     a lazy accessor for the TracerProvider from telemetry.Init.
+//     Stored as a function rather than a direct pointer because telemetry.Init
+//     runs inside c.Start() which fires AFTER rpc.New() — a pointer captured
+//     at rpc.New time is always nil. The function is called at Activate time
+//     (post-login, post-c.Start) so it returns the real provider.
 //   - consent:    the TelemetryConsent instance (gates on EffectiveLevel).
 //
-// (harness-fleet-otlp-export-01NTLMEX01 wiring seam)
+// (harness-fleet-otlp-export-01NTLMEX01 wiring seam; tp-nil timing fix)
 func (a *API) SetFleetOTLPPipeline(
 	p *fleet.FleetOTLPPipeline,
 	startupRes *resource.Resource,
-	tp *sdktrace.TracerProvider,
+	tpFunc func() *sdktrace.TracerProvider,
 	consent *fleet.TelemetryConsent,
 ) {
 	if a.fleet == nil {
@@ -172,7 +180,7 @@ func (a *API) SetFleetOTLPPipeline(
 	defer a.fleet.mu.Unlock()
 	a.fleet.otlpPipeline = p
 	a.fleet.telemetryRes = startupRes
-	a.fleet.tp = tp
+	a.fleet.tpFunc = tpFunc
 	a.fleet.consent = consent
 }
 
@@ -473,8 +481,19 @@ func (a *API) activateOTLPPipeline(ctx context.Context, id fleet.Identity, nodeI
 	pipeline := a.fleet.otlpPipeline
 	baseRes := a.fleet.telemetryRes
 	consent := a.fleet.consent
-	tp := a.fleet.tp
+	tpFunc := a.fleet.tpFunc
 	a.fleet.mu.RUnlock()
+
+	// Resolve the TracerProvider lazily. By the time activateOTLPPipeline is
+	// called (post-login, post-c.Start), telemetry.Init has already run and
+	// tpFunc returns the real provider. Calling it here rather than capturing
+	// the pointer at rpc.New time avoids the tp-nil race where c.Start / init-
+	// Telemetry hasn't executed yet.
+	// (harness-fleet-otlp-export-01NTLMEX01 tp-nil timing fix)
+	var tp *sdktrace.TracerProvider
+	if tpFunc != nil {
+		tp = tpFunc()
+	}
 
 	if pipeline == nil {
 		logging.L().Debug("fleet.otlp.activate.skipped", "reason", "pipeline_not_wired")
