@@ -32,6 +32,7 @@ import {
   KeyRound,
   Package,
   Plug,
+  RefreshCw,
   Route,
   Scale,
   Shield,
@@ -111,6 +112,8 @@ const groups: ReadonlyArray<TabGroup> = [
       { to: '/settings?tab=llm-routing', label: 'LLM Routing', query: 'llm-routing', icon: Route },
       // acp-orchestration-integration-01NDFSEX06 WP05 — ACP Peers tab.
       { to: '/settings?tab=peers', label: 'Peers', query: 'peers', icon: Globe },
+      // fleet-share-and-sync-01NDFSEX14 WP06 — Settings sync tab.
+      { to: '/settings?tab=sync', label: 'Sync', query: 'sync', icon: RefreshCw },
     ],
   },
   {
