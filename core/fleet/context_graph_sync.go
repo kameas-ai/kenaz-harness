@@ -333,6 +333,12 @@ func (s *ContextGraphSyncer) WithAuditEmitter(e contextaudit.Emitter) *ContextGr
 	return s
 }
 
+// AuditEmitter returns the contextaudit.Emitter wired via WithAuditEmitter, or
+// nil if none was injected. Exposed for construction-path assertions in tests.
+func (s *ContextGraphSyncer) AuditEmitter() contextaudit.Emitter {
+	return s.auditEmitter
+}
+
 // ── Capability gating helpers ─────────────────────────────────────────────────
 
 // canPushTeam returns nil if the team-graph capability is present.

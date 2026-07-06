@@ -1946,7 +1946,8 @@ func New(c *core.Core) *API {
 			if a.settingsImpl != nil {
 				caps = a.settingsImpl.CapabilityPoller()
 			}
-			ctxSyncer := corefleet.NewContextGraphSyncer(flCl, flDataDir, caps)
+			ctxSyncer := corefleet.NewContextGraphSyncer(flCl, flDataDir, caps).
+				WithAuditEmitter(&contextSyncAuditBridge{impl: a.auditImpl})
 			impl.WithSyncer(ctxSyncer)
 
 			// FR-012: wire the library merger so each successful PullDelta
