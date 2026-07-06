@@ -14,6 +14,26 @@ export function A2A_StopStream(arg1) {
   return window['go']['rpc']['Bindings']['A2A_StopStream'](arg1);
 }
 
+export function ACP_Dispatch(arg1, arg2) {
+  return window['go']['rpc']['Bindings']['ACP_Dispatch'](arg1, arg2);
+}
+
+export function ACP_GetTrace(arg1) {
+  return window['go']['rpc']['Bindings']['ACP_GetTrace'](arg1);
+}
+
+export function ACP_ListPeers() {
+  return window['go']['rpc']['Bindings']['ACP_ListPeers']();
+}
+
+export function ACP_RevokePeer(arg1) {
+  return window['go']['rpc']['Bindings']['ACP_RevokePeer'](arg1);
+}
+
+export function ACP_TrustPeer(arg1) {
+  return window['go']['rpc']['Bindings']['ACP_TrustPeer'](arg1);
+}
+
 export function Agents_DeleteProfile(arg1) {
   return window['go']['rpc']['Bindings']['Agents_DeleteProfile'](arg1);
 }

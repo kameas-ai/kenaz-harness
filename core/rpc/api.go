@@ -109,6 +109,7 @@ import (
 	syncview "github.com/kameas-ai/kenaz-harness/core/rpc/views/sync"
 	cedarview "github.com/kameas-ai/kenaz-harness/core/rpc/views/cedar"
 	sitesview "github.com/kameas-ai/kenaz-harness/core/rpc/views/sites"
+	acpview "github.com/kameas-ai/kenaz-harness/core/rpc/views/acp"
 	corefleet "github.com/kameas-ai/kenaz-harness/core/fleet"
 	"github.com/kameas-ai/kenaz-harness/core/eval"
 	"github.com/kameas-ai/kenaz-harness/core/session"
@@ -291,6 +292,11 @@ type HarnessAPI interface {
 	// (background-task-monitor-01KZNP3C WP05). Provides List, Get, Tail,
 	// Abort, and AbortBySession for the Tasks panel.
 	Tasks() tasksview.TasksAPI
+
+	// ACP exposes the ACP peer management + envelope dispatch surface
+	// (acp-orchestration-integration-01NDFSEX06). Provides ListPeers,
+	// TrustPeer, RevokePeer, Dispatch, and GetTrace.
+	ACP() acpview.ACPAPI
 }
 
 // ShellStatus drives the Toolbar status pills + LegendBar live-rate
@@ -600,6 +606,12 @@ type API struct {
 	// are marked crashed before any new runs register (FR-003 / WP03).
 	taskReg  *coretasks.Registry
 	tasksAPI tasksview.TasksAPI
+
+	// acpAPI is the ACP peer management + envelope dispatch surface
+	// (acp-orchestration-integration-01NDFSEX06). Wired in New when the
+	// ACP layer is available; falls back to NullAPI for graceful empty
+	// operation on the test-chassis path.
+	acpAPI acpview.ACPAPI
 }
 
 // Builtins returns the in-binary tool registry. Used by the chat-input
@@ -898,6 +910,7 @@ func New(c *core.Core) *API {
 		unitsMgr:       unitsMgr,
 		taskReg:        taskReg,
 		tasksAPI:       tasksAPI,
+		acpAPI:         acpview.NewNullAPI(),
 	}
 	a.attachmentsAPI = newAttachmentsAPI(c, attMgr)
 	a.artifactsAPI = newArtifactsAPI(c, artStore, artMgr, media)
@@ -5739,6 +5752,10 @@ func (a *API) Sites() sitesview.SitesAPI { return a.sitesAPI }
 // Tasks implements HarnessAPI. Returns the background-task registry RPC surface.
 // (background-task-monitor-01KZNP3C WP05 / FR-003)
 func (a *API) Tasks() tasksview.TasksAPI { return a.tasksAPI }
+
+// ACP implements HarnessAPI. Returns the ACP peer management + envelope
+// dispatch surface (acp-orchestration-integration-01NDFSEX06).
+func (a *API) ACP() acpview.ACPAPI { return a.acpAPI }
 
 // brokerPlanEmitter adapts a *StreamBroker to the planmodeview.EventEmitter
 // interface. The broker's Publish method broadcasts to all subscribers

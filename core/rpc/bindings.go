@@ -58,6 +58,7 @@ import (
 	syncview "github.com/kameas-ai/kenaz-harness/core/rpc/views/sync"
 	sitesview "github.com/kameas-ai/kenaz-harness/core/rpc/views/sites"
 	tasksview "github.com/kameas-ai/kenaz-harness/core/rpc/views/tasks"
+	acpview "github.com/kameas-ai/kenaz-harness/core/rpc/views/acp"
 	"github.com/kameas-ai/kenaz-harness/core/logging"
 	"github.com/kameas-ai/kenaz-harness/core/mcp/stdio"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/middleware"
@@ -3187,4 +3188,44 @@ func (b *Bindings) Tasks_AbortBySession(sessionID string) error {
 func (b *Bindings) Tasks_ListBySession(sessionID string) ([]tasksview.TaskRow, error) {
 	defer sentry.WrapBinding("Tasks_ListBySession")()
 	return b.api.Tasks().Tasks_ListBySession(b.ctx(), sessionID)
+}
+
+// ── ACP bindings (acp-orchestration-integration-01NDFSEX06) ─────────────────
+
+// ACP_ListPeers returns the current peer list with trust state and last-seen
+// timestamps. FR-001.
+func (b *Bindings) ACP_ListPeers() ([]acpview.Peer, error) {
+	defer sentry.WrapBinding("ACP_ListPeers")()
+	return b.api.ACP().ACP_ListPeers(b.ctx())
+}
+
+// ACP_TrustPeer verifies the signed card in cardBlob and — on success —
+// adds the peer to the runtime store at trust tier "verified". Returns
+// the resulting TrustResult. cardBlob is a JSON-encoded AgentCard.
+// FR-002.
+func (b *Bindings) ACP_TrustPeer(cardBlob string) (acpview.TrustResult, error) {
+	defer sentry.WrapBinding("ACP_TrustPeer")()
+	return b.api.ACP().ACP_TrustPeer(b.ctx(), cardBlob)
+}
+
+// ACP_RevokePeer removes the peer from the runtime store and invalidates
+// outstanding envelopes. FR-003.
+func (b *Bindings) ACP_RevokePeer(peerID string) error {
+	defer sentry.WrapBinding("ACP_RevokePeer")()
+	return b.api.ACP().ACP_RevokePeer(b.ctx(), peerID)
+}
+
+// ACP_Dispatch builds an envelope, runs the Cedar acp_send gate, sends via
+// the matched transport, and returns an envelope_id. turnPayload must be
+// valid JSON (or a plain string that will be JSON-wrapped). FR-004.
+func (b *Bindings) ACP_Dispatch(peerID, turnPayload string) (acpview.DispatchResult, error) {
+	defer sentry.WrapBinding("ACP_Dispatch")()
+	return b.api.ACP().ACP_Dispatch(b.ctx(), peerID, turnPayload)
+}
+
+// ACP_GetTrace returns the full envelope lifecycle for the given
+// envelope_id. FR-005.
+func (b *Bindings) ACP_GetTrace(envelopeID string) (acpview.EnvelopeTrace, error) {
+	defer sentry.WrapBinding("ACP_GetTrace")()
+	return b.api.ACP().ACP_GetTrace(b.ctx(), envelopeID)
 }
