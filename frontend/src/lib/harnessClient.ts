@@ -22,6 +22,7 @@ import type {
   AutonomyLayer,
   ResolvedAutonomy,
   Session,
+  SiteSummary,
   Project,
   Provider,
   AddProviderInput,
@@ -831,6 +832,12 @@ interface WailsBindingsLike {
   Settings_GetAuditSettings(): Promise<import('./types').AuditSettings>;
   Settings_SetAuditSettings(s: import('./types').AuditSettings): Promise<void>;
 
+  // ── Fleet Sites (sites-ui-01NSITE06) ─────────────────────────────────────
+  Sites_List(): Promise<SiteSummary[]>;
+  Sites_Deploy(rootDir: string): Promise<SiteSummary>;
+  Sites_Status(site: string): Promise<SiteSummary>;
+  Sites_Logs(site: string, tailLines: number): Promise<string>;
+  Sites_Delete(site: string): Promise<void>;
   // ── plan-mode-posture-01KZNP3F WP06 — plan approval actions ─────────────
   Planmode_Approve(req: { session_id: string; plan_id: string }): Promise<Record<string, unknown>>;
   Planmode_Discard(req: { session_id: string; plan_id: string }): Promise<Record<string, unknown>>;
@@ -2777,6 +2784,27 @@ export interface CedarPublishClient {
   publishToTeam(ruleID: string, ruleSource: string): Promise<void>;
 }
 
+// ── Sites client (sites-ui-01NSITE06) ─────────────────────────────────────
+
+export interface SitesClient {
+  /** List all deployed sites for the current fleet org. */
+  list(): Promise<SiteSummary[]>;
+  /**
+   * Deploy a local directory. rootDir must contain a kameas-site.json manifest.
+   * Progress events are emitted on the "sites:deploy:progress" topic while running.
+   */
+  deploy(rootDir: string): Promise<SiteSummary>;
+  /** Fetch the current status of a single site. */
+  status(site: string): Promise<SiteSummary>;
+  /**
+   * Fetch the last `tailLines` log lines for a dynamic site.
+   * tailLines is clamped to 2000 by the backend.
+   */
+  logs(site: string, tailLines: number): Promise<string>;
+  /** Delete a site and all its deployments. */
+  delete(site: string): Promise<void>;
+}
+
 export interface HarnessClient {
   shellStatus(): Promise<ShellStatus>;
   appInfo(): Promise<AppInfo>;
@@ -2839,6 +2867,8 @@ export interface HarnessClient {
   sync: SyncClient;
   /** Team Cedar policy publish surface (fleet-share-and-sync-01NDFSEX14 WP07). */
   cedarPublish: CedarPublishClient;
+  /** Fleet Sites hosting surface (sites-ui-01NSITE06). */
+  sites: SitesClient;
   // ── Unit sync (fleet-integrity-observability WP08) ────────────────────
   Unit_SyncStatus(): Promise<import('./types').UnitSyncStatusView>;
   Unit_ListConflicts(): Promise<import('./types').UnitConflictView[]>;
@@ -3460,6 +3490,14 @@ export function createHarnessClient(): HarnessClient {
     // ── CedarPublish (fleet-share-and-sync-01NDFSEX14 WP07) ──────────────
     cedarPublish: {
       publishToTeam: (ruleID, ruleSource) => b().Cedar_PublishToTeam(ruleID, ruleSource),
+    },
+    // ── Sites (sites-ui-01NSITE06) ────────────────────────────────────────
+    sites: {
+      list: () => b().Sites_List(),
+      deploy: (rootDir) => b().Sites_Deploy(rootDir),
+      status: (site) => b().Sites_Status(site),
+      logs: (site, tailLines) => b().Sites_Logs(site, tailLines),
+      delete: (site) => b().Sites_Delete(site),
     },
     // ── Unit sync (fleet-integrity-observability WP08) ────────────────────
     Unit_SyncStatus: () => b().Unit_SyncStatus(),
@@ -4752,6 +4790,23 @@ export function createFakeHarnessClient(
     },
     cedarPublish: {
       publishToTeam: noop,
+    },
+    sites: {
+      list: async () => [],
+      deploy: async (_rootDir) => ({
+        name: 'fake-site',
+        kind: 'static' as const,
+        url: '',
+        status: 'live',
+      }),
+      status: async (site) => ({
+        name: site,
+        kind: 'static' as const,
+        url: '',
+        status: 'live',
+      }),
+      logs: async () => '',
+      delete: noop,
     },
     // ── Unit sync (fleet-integrity-observability WP08) ────────────────────
     Unit_SyncStatus: async (): Promise<import('./types').UnitSyncStatusView> => ({

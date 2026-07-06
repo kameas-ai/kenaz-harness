@@ -26,6 +26,7 @@ export const CAPABILITY_KEYS = [
   'compliance_docs_soc2_full',
   'compliance_docs_custom',
   'quarterly_attestation_reports',
+  'sites_hosting',
 ] as const;
 
 export type Capability = (typeof CAPABILITY_KEYS)[number];

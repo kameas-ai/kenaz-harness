@@ -12,6 +12,7 @@ import {
   Settings,
   Brain,
   GitBranch,
+  Globe,
   Trash2,
   X,
   ChevronDown,
@@ -19,6 +20,7 @@ import {
   Folder,
 } from './icons';
 import { useSessions, useProjects } from '@/lib/useHarnessAPI';
+import { signedIn, capability } from '@/lib/featureFlags';
 import { isServedMode } from '@/lib/useServedMode';
 import { useConnectionState } from '@/lib/useConnectionState';
 import NewSessionDialog from './NewSessionDialog.vue';
@@ -971,6 +973,12 @@ async function onProjectDrop(evt: DragEvent, projectId: string) {
         <li><RailEntry :icon="Archive" label="Artifacts" to="/artifacts" /></li>
         <li><RailEntry :icon="GitBranch" label="Agent graphs" to="/agentgraph" /></li>
         <li><RailEntry :icon="FileText" label="Audit log" to="/audit" /></li>
+        <li
+          v-if="signedIn && capability('sites_hosting')"
+          data-testid="nav-sites"
+        >
+          <RailEntry :icon="Globe" label="Sites" to="/sites" />
+        </li>
         <li><RailEntry :icon="Settings" label="Settings" to="/settings" /></li>
       </ul>
     </nav>

@@ -8,8 +8,25 @@ import (
 
 func TestAllCapabilitiesCount(t *testing.T) {
 	all := AllCapabilities()
-	if len(all) != 21 {
-		t.Errorf("AllCapabilities() = %d entries, want 21", len(all))
+	if len(all) != 22 {
+		t.Errorf("AllCapabilities() = %d entries, want 22", len(all))
+	}
+}
+
+func TestCapSitesHostingInAllCapabilities(t *testing.T) {
+	// WP01: sites-foundation-01NSITE04 — CapSitesHosting must appear exactly once.
+	found := false
+	for _, c := range AllCapabilities() {
+		if c == CapSitesHosting {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("AllCapabilities() does not contain CapSitesHosting (%q)", CapSitesHosting)
+	}
+	if string(CapSitesHosting) != "sites_hosting" {
+		t.Errorf("CapSitesHosting = %q, want \"sites_hosting\"", CapSitesHosting)
 	}
 }
 

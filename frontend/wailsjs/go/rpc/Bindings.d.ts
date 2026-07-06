@@ -38,9 +38,11 @@ import {sentry} from '../models';
 import {sessions} from '../models';
 import {context} from '../models';
 import {settings} from '../models';
+import {sites} from '../models';
 import {slashcmd} from '../models';
 import {storage} from '../models';
 import {sync} from '../models';
+import {tasks} from '../models';
 import {transport} from '../models';
 import {tools} from '../models';
 import {trust} from '../models';
@@ -48,7 +50,6 @@ import {fleet} from '../models';
 import {update} from '../models';
 import {workflow} from '../models';
 import {workflows} from '../models';
-import {tasks} from '../models';
 
 export function A2A_ListCards():Promise<Array<a2a.Card>>;
 
@@ -738,6 +739,16 @@ export function Shell_PickFile(arg1:string,arg2:string,arg3:Array<string>):Promi
 
 export function Shell_ReadFile(arg1:string):Promise<rpc.ShellReadFileResult>;
 
+export function Sites_Delete(arg1:string):Promise<void>;
+
+export function Sites_Deploy(arg1:string):Promise<sites.SiteSummary>;
+
+export function Sites_List():Promise<Array<sites.SiteSummary>>;
+
+export function Sites_Logs(arg1:string,arg2:number):Promise<string>;
+
+export function Sites_Status(arg1:string):Promise<sites.SiteSummary>;
+
 export function Slash_Execute(arg1:string,arg2:string):Promise<slashcmd.ExecuteResult>;
 
 export function Slash_List():Promise<Array<slashcmd.CommandInfo>>;
@@ -775,6 +786,18 @@ export function Sync_PendingMCPSecrets():Promise<Array<sync.PendingMCPSecret>>;
 export function Sync_Status():Promise<Array<sync.SyncStatusView>>;
 
 export function Sync_Toggle(arg1:string,arg2:boolean):Promise<void>;
+
+export function Tasks_Abort(arg1:string):Promise<void>;
+
+export function Tasks_AbortBySession(arg1:string):Promise<void>;
+
+export function Tasks_Get(arg1:string):Promise<tasks.TaskRow>;
+
+export function Tasks_List():Promise<Array<tasks.TaskRow>>;
+
+export function Tasks_ListBySession(arg1:string):Promise<Array<tasks.TaskRow>>;
+
+export function Tasks_Tail(arg1:string,arg2:number):Promise<Array<tasks.LineRow>>;
 
 export function Tools_ForgetRecipeKey(arg1:string,arg2:string):Promise<void>;
 
@@ -859,15 +882,3 @@ export function Workflows_ScheduleNextFire(arg1:string):Promise<string>;
 export function Workflows_ScheduleRunHistory(arg1:string,arg2:number):Promise<Array<workflows.RunSummary>>;
 
 export function Workflows_ScheduleSet(arg1:workflows.ScheduleSetInput):Promise<void>;
-
-export function Tasks_List():Promise<Array<tasks.TaskRow>>;
-
-export function Tasks_Get(arg1:string):Promise<tasks.TaskRow>;
-
-export function Tasks_Tail(arg1:string,arg2:number):Promise<Array<tasks.LineRow>>;
-
-export function Tasks_Abort(arg1:string):Promise<void>;
-
-export function Tasks_AbortBySession(arg1:string):Promise<void>;
-
-export function Tasks_ListBySession(arg1:string):Promise<Array<tasks.TaskRow>>;

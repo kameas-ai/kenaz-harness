@@ -933,3 +933,35 @@ func TestLoadHarnessSnippets_ListPolicies(t *testing.T) {
 		}
 	}
 }
+
+// TestAllEmbeddedCedarTemplatesParse walks the embedded PoliciesFS and parses
+// every *.cedar file through the real Cedar engine (cedarlib.NewPolicySetFromBytes).
+// This ensures that sites-recommended.cedar and all other templates cannot
+// silently become syntactically invalid without the test suite catching it.
+func TestAllEmbeddedCedarTemplatesParse(t *testing.T) {
+	t.Parallel()
+	entries, err := PoliciesFS.ReadDir("policies")
+	if err != nil {
+		t.Fatalf("ReadDir policies: %v", err)
+	}
+	if len(entries) == 0 {
+		t.Fatal("no *.cedar files found in embedded policies FS")
+	}
+	for _, entry := range entries {
+		entry := entry
+		t.Run(entry.Name(), func(t *testing.T) {
+			t.Parallel()
+			if entry.IsDir() {
+				t.Skip("directory entry — skipping")
+			}
+			data, readErr := PoliciesFS.ReadFile("policies/" + entry.Name())
+			if readErr != nil {
+				t.Fatalf("ReadFile %s: %v", entry.Name(), readErr)
+			}
+			_, parseErr := cedarlib.NewPolicySetFromBytes(entry.Name(), data)
+			if parseErr != nil {
+				t.Errorf("Cedar parse error in %s: %v", entry.Name(), parseErr)
+			}
+		})
+	}
+}

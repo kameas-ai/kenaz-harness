@@ -52,6 +52,7 @@ import (
 	planmodeview "github.com/kameas-ai/kenaz-harness/core/rpc/views/planmode"
 	sentryview "github.com/kameas-ai/kenaz-harness/core/rpc/views/sentry"
 	fleetview "github.com/kameas-ai/kenaz-harness/core/rpc/views/fleet"
+	sitesview "github.com/kameas-ai/kenaz-harness/core/rpc/views/sites"
 	tasksview "github.com/kameas-ai/kenaz-harness/core/rpc/views/tasks"
 	corefleet "github.com/kameas-ai/kenaz-harness/core/fleet"
 )
@@ -163,6 +164,7 @@ func (f *fakeHarnessAPI) Fleet() fleetview.FleetAPI {
 	tc, _ := corefleet.NewTelemetryConsent(os.TempDir(), corefleet.StaticTierReader{})
 	return &fleetview.Impl{Consent: tc}
 }
+func (f *fakeHarnessAPI) Sites() sitesview.SitesAPI { return nil }
 func (f *fakeHarnessAPI) Planmode_Approve(_ context.Context, _ planmodeview.ApproveRequest) (planmodeview.ApproveResponse, error) {
 	return planmodeview.ApproveResponse{}, nil
 }
