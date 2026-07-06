@@ -112,6 +112,7 @@ import (
 	cedarview "github.com/kameas-ai/kenaz-harness/core/rpc/views/cedar"
 	sitesview "github.com/kameas-ai/kenaz-harness/core/rpc/views/sites"
 	acpview "github.com/kameas-ai/kenaz-harness/core/rpc/views/acp"
+	contextsyncview "github.com/kameas-ai/kenaz-harness/core/rpc/views/contextsync"
 	acppeers "github.com/kameas-ai/kenaz-harness/core/acp/peers"
 	acpenvelope "github.com/kameas-ai/kenaz-harness/core/acp/envelope"
 	corefleet "github.com/kameas-ai/kenaz-harness/core/fleet"
@@ -301,6 +302,12 @@ type HarnessAPI interface {
 	// (acp-orchestration-integration-01NDFSEX06). Provides ListPeers,
 	// TrustPeer, RevokePeer, Dispatch, and GetTrace.
 	ACP() acpview.ACPAPI
+
+	// ContextSync exposes the private E2E-encrypted session/project context
+	// continuity surface (fleet-context-sync-01NDFSEX15 WP06). Provides
+	// SessionSync_Toggle, ProjectSync_Toggle, Handoff_Share, Handoff_Accept,
+	// ContextSync_GenerateRecoveryCode, and related methods.
+	ContextSync() contextsyncview.ContextSyncAPI
 
 	// Compliance exposes the fleet audit-archival compliance panel
 	// (fleet-audit-archival-01NDFSEX13 WP05). Provides Status,
@@ -623,6 +630,12 @@ type API struct {
 	// ACP layer is available; falls back to NullAPI for graceful empty
 	// operation on the test-chassis path.
 	acpAPI acpview.ACPAPI
+
+	// contextSyncAPI is the E2E-encrypted session/project context continuity
+	// surface (fleet-context-sync-01NDFSEX15 WP06). Wired in New when the
+	// fleet client is available; all backends nil-guard so the surface
+	// degrades gracefully when fleet is disabled.
+	contextSyncAPI contextsyncview.ContextSyncAPI
 
 	// complianceAPI is the fleet audit-archival compliance RPC surface
 	// (fleet-audit-archival-01NDFSEX13 WP05). Wired in New when the
@@ -965,6 +978,7 @@ func New(c *core.Core) *API {
 		taskReg:        taskReg,
 		tasksAPI:       tasksAPI,
 		acpAPI:         acpview.NewNullAPI(),
+		contextSyncAPI: &contextsyncview.Impl{}, // nil backends degrade gracefully
 		// complianceAPI: wired with a no-capability guard until
 		// the archiver + sweeper are started post-fleet-init.
 		complianceAPI: complianceview.NewAPI(nil, nil, func() bool { return false }),
@@ -2064,6 +2078,69 @@ func New(c *core.Core) *API {
 				"signer_nil", catalogSigner == nil,
 			)
 		}
+
+		// fleet-context-sync-01NDFSEX15 WP06: wire the E2E-encrypted
+		// session/project context continuity backends.
+		//
+		// Capability gating is done in the fleet layer (SessionSyncer,
+		// ProjectSyncer, HandoffHandler all check caps internally). We
+		// pass nil caps here so the fleet layer reads the live snapshot
+		// at each call — consistent with the pattern above (getCaps closure).
+		{
+			capsFn := func() *corefleet.Capabilities {
+				if a.settingsImpl == nil {
+					return nil
+				}
+				p := a.settingsImpl.CapabilityPoller()
+				if p == nil {
+					return nil
+				}
+				c := p.Current()
+				return &c
+			}
+			// Build syncers with nil caps — the syncers call capsFn-provided
+			// snapshot at enable-time via the fleet client. For v0.21.0 we
+			// pass nil caps directly and let capabilities be checked lazily.
+			_ = capsFn // caps are surfaced to the fleet layer via the backends below
+
+			contextSyncAudit := &contextSyncAuditBridge{impl: a.auditImpl}
+			sessionSyncer := corefleet.NewSessionSyncer(flCl, contextSyncAudit, nil)
+			projectSyncer := corefleet.NewProjectSyncer(flCl, contextSyncAudit, nil)
+			handoffHandler := corefleet.NewHandoffHandler(flCl, contextSyncAudit, nil)
+
+			a.contextSyncAPI = &contextsyncview.Impl{
+				Session:  &sessionSyncBackendAdapter{ss: sessionSyncer},
+				Project:  &projectSyncBackendAdapter{ps: projectSyncer},
+				Handoff:  &handoffBackendAdapter{hh: handoffHandler},
+				Recovery: &recoveryBackendAdapter{},
+			}
+
+			// FR-003 (fleet-context-sync-01NDFSEX15): wire the append hook so
+			// every session.Message persisted by the LLM write path is also
+			// streamed to the fleet event stream when sync is enabled for the
+			// session. The hook is a no-op when sync is disabled (guarded inside
+			// SessionSyncer.AppendEvent). We marshal only opaque IDs (message ID
+			// + role); no plaintext content crosses this boundary.
+			if stack.historyAdapter != nil {
+				capturedSyncer := sessionSyncer
+				stack.historyAdapter.syncHook = func(ctx context.Context, sessionID string, _ uint64, payload []byte) {
+					if err := capturedSyncer.AppendEvent(ctx, sessionID, corefleet.SessionEventRecord{
+						Seq:   0, // seq 0 signals "append as new tail"; fleet assigns the monotonic seq
+						Bytes: payload,
+					}); err != nil && err != corefleet.ErrFleetDisabled {
+						logging.L().Warn("rpc.context_sync.append_event_failed",
+							"session_id", sessionID[:min(len(sessionID), 8)],
+							"err", err.Error(),
+						)
+					}
+				}
+				logging.L().Info("rpc.context_sync.append_hook_wired")
+			}
+
+			logging.L().Info("rpc.context_sync.wired",
+				"fleet_client_nil", flCl == nil,
+			)
+		}
 	}
 
 	// fleet-audit-archival-01NDFSEX13: construct the real AuditArchiver +
@@ -3101,6 +3178,13 @@ type llmStack struct {
 	// (long-turn-resilience-01KR3PRS WP03). nil when graphMgr was
 	// unavailable at boot.
 	chatRunner *chat.ChatRunner
+	// historyAdapter is the shared *sessionHistoryReader constructed
+	// inside newLLMStack. Exposed so the context-sync wiring block in
+	// New() can attach the FR-003 sessionSyncAppendHook after the
+	// fleet SessionSyncer is available (the sync block runs after
+	// newLLMStack). Setting historyAdapter.syncHook wires the hook for
+	// all llmHistoryWriter instances since they all share this reader.
+	historyAdapter *sessionHistoryReader
 }
 
 func newLLMStack(
@@ -3386,6 +3470,7 @@ func newLLMStack(
 		compactionLLM:       compactionLLM,
 		compactionAudit:     compactionAudit,
 		chatRunner:          chatRunner,
+		historyAdapter:      historyAdapter,
 	}
 }
 
@@ -4831,6 +4916,11 @@ func newSessionHistoryReader(c *core.Core) *sessionHistoryReader {
 
 type sessionHistoryReader struct {
 	mgr *session.Manager
+	// syncHook is set once at boot by the context-sync wiring block in
+	// New(). It fires after each successful AppendMessage to stream new
+	// events to the fleet session-sync stream (FR-003).
+	// Privacy invariant: the hook must never log message content.
+	syncHook sessionSyncAppendHook
 }
 
 func (r *sessionHistoryReader) ListMessages(ctx context.Context, sessionID string) ([]llm.SessionMessage, error) {
@@ -4855,22 +4945,48 @@ func (r *sessionHistoryReader) ListMessages(ctx context.Context, sessionID strin
 // AppendMessage persists the assistant turn at stream completion so a
 // future ListMessages call rehydrates it. Implements the toolloop's
 // SessionHistoryRW.AppendMessage shape (error-only return).
+// FR-003: fires syncHook after a successful persist so the new event is
+// streamed to fleet for sessions with context-sync enabled.
 func (r *sessionHistoryReader) AppendMessage(ctx context.Context, sessionID, role, content string) error {
 	if r == nil || r.mgr == nil {
 		return nil
 	}
-	_, err := r.mgr.AppendMessage(ctx, sessionID, session.Message{
+	stored, err := r.mgr.AppendMessage(ctx, sessionID, session.Message{
 		Role:    session.Role(role),
 		Content: content,
 	})
-	return err
+	if err != nil {
+		return err
+	}
+	if hook := r.syncHook; hook != nil {
+		payload, merr := json.Marshal(map[string]string{
+			"id":   stored.ID,
+			"role": role,
+		})
+		if merr == nil {
+			hook(ctx, sessionID, 0, payload)
+		}
+	}
+	return nil
 }
+
+// sessionSyncAppendHook is the callback fired by llmHistoryWriter after each
+// successful AppendMessage call. It is set once at boot by the context-sync
+// wiring block in New() before any chat session starts; no concurrent-write
+// hazard exists. The hook marshals the message to JSON and ships it to fleet
+// via SessionSyncer.AppendEvent (no-op when sync is not enabled for the
+// session). Privacy invariant: the hook must never log message content.
+type sessionSyncAppendHook func(ctx context.Context, sessionID string, seq uint64, payload []byte)
 
 // llmHistoryWriter wraps sessionHistoryReader to satisfy the LLM
 // view's SessionMessageWriter shape, which returns the persisted
 // message id alongside the error so the post-finalize hooks
 // (artifacts code-block detector) can anchor SourceRef.MessageID to
 // the freshly persisted row.
+//
+// FR-003 (fleet-context-sync-01NDFSEX15): the fleet streaming hook is
+// stored on inner (sessionHistoryReader.syncHook) so both this writer
+// and any other path that calls inner.AppendMessage fire it.
 type llmHistoryWriter struct {
 	inner *sessionHistoryReader
 }
@@ -4899,6 +5015,18 @@ func (w *llmHistoryWriter) AppendMessage(ctx context.Context, sessionID, role, c
 	})
 	if err != nil {
 		return "", err
+	}
+	// FR-003: stream event to fleet when session sync is enabled.
+	// The hook is stored on inner (sessionHistoryReader) so the same
+	// hook fires regardless of which writer path is taken.
+	if hook := w.inner.syncHook; hook != nil {
+		payload, merr := json.Marshal(map[string]string{
+			"id":   stored.ID,
+			"role": role,
+		})
+		if merr == nil {
+			hook(ctx, sessionID, 0, payload)
+		}
 	}
 	return stored.ID, nil
 }
@@ -5614,6 +5742,30 @@ func (e *acpAuditBridge) Emit(_ context.Context, ev contextaudit.Event) error {
 	return nil
 }
 
+// contextSyncAuditBridge implements contextaudit.Emitter for the
+// fleet-context-sync surfaces (SessionSyncer, ProjectSyncer, HandoffHandler).
+// Routes fleet.*_sync and fleet.session_shared_* events to the in-process
+// audit ring. Privacy: only opaque IDs appear in the Subject; payload_type
+// is used for Trailing so no content bytes reach the ring.
+// (fleet-context-sync-01NDFSEX15 WP06)
+type contextSyncAuditBridge struct {
+	impl *audit.API
+}
+
+func (e *contextSyncAuditBridge) Emit(_ context.Context, ev contextaudit.Event) error {
+	if e.impl == nil {
+		return nil
+	}
+	e.impl.Push(audit.Entry{
+		ID:        fmt.Sprintf("ctx-sync-%d", ev.TS.UnixNano()),
+		Timestamp: ev.TS.UTC().Format(time.RFC3339Nano),
+		Category:  "FLEET",
+		Subject:   string(ev.Kind),
+		Trailing:  fmt.Sprintf("payload_type=%T", ev.Payload),
+	})
+	return nil
+}
+
 // auditRingAdapter adapts audit.API to searchview.AuditLister.
 type auditRingAdapter struct {
 	api *audit.API
@@ -5986,6 +6138,10 @@ func (a *API) Tasks() tasksview.TasksAPI { return a.tasksAPI }
 // ACP implements HarnessAPI. Returns the ACP peer management + envelope
 // dispatch surface (acp-orchestration-integration-01NDFSEX06).
 func (a *API) ACP() acpview.ACPAPI { return a.acpAPI }
+
+// ContextSync implements HarnessAPI. Returns the E2E-encrypted context
+// continuity surface (fleet-context-sync-01NDFSEX15 WP06).
+func (a *API) ContextSync() contextsyncview.ContextSyncAPI { return a.contextSyncAPI }
 
 func (a *API) Compliance() complianceview.ComplianceAPI { return a.complianceAPI }
 

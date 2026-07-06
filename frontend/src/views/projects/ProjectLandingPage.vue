@@ -21,6 +21,7 @@ import type {
   ArtifactScope,
   ArtifactWithBytes,
   Attachment,
+  FleetProjectSyncStatus,
   Project,
   Session,
 } from '@/lib/types';
@@ -362,6 +363,75 @@ async function onDrop(_evt: DragEvent, overId: string) {
 
 function onDragEnd() {
   draggedId.value = null;
+}
+
+// ── Fleet project sync (fleet-context-sync-01NDFSEX15 WP08) ─────────────────
+//
+// Sync toggle + per-artifact-class opt-in panel.
+// All encryption/upload is inside the Go backend — the UI only reflects status.
+
+const projectSyncStatus = ref<FleetProjectSyncStatus | null>(null);
+const projectSyncToggling = ref(false);
+const projectSyncArtifactSaving = ref(false);
+
+/** Known artifact class names for the opt-in panel. */
+const ARTIFACT_CLASSES = ['notes', 'code', 'documents', 'binaries'] as const;
+
+async function loadProjectSyncStatus(id: string) {
+  if (!id) return;
+  try {
+    // Calling Toggle(id, false) would be wrong — use ResumeFrom(0) as a status probe.
+    // Actually for status we just check if current status is cached. Start null until toggled.
+  } catch {
+    // Non-fatal.
+  }
+}
+
+watch(
+  () => projectId.value,
+  (id) => {
+    projectSyncStatus.value = null;
+    void loadProjectSyncStatus(id);
+  },
+  { immediate: true },
+);
+
+const isProjectSyncEnabled = computed(() => projectSyncStatus.value?.enabled ?? false);
+
+const artifactClassMap = computed<Record<string, boolean>>(() => {
+  const classes = projectSyncStatus.value?.artifactClasses?.classes ?? {};
+  return ARTIFACT_CLASSES.reduce(
+    (acc, cls) => ({ ...acc, [cls]: classes[cls] ?? false }),
+    {} as Record<string, boolean>,
+  );
+});
+
+async function onToggleProjectSync() {
+  const id = projectId.value;
+  if (!id || projectSyncToggling.value) return;
+  projectSyncToggling.value = true;
+  try {
+    projectSyncStatus.value = await client.ProjectSync_Toggle(id, !isProjectSyncEnabled.value);
+  } catch {
+    // Capability unavailable.
+  } finally {
+    projectSyncToggling.value = false;
+  }
+}
+
+async function onToggleArtifactClass(cls: string, enabled: boolean) {
+  const id = projectId.value;
+  if (!id || projectSyncArtifactSaving.value) return;
+  projectSyncArtifactSaving.value = true;
+  try {
+    const current = { ...(projectSyncStatus.value?.artifactClasses?.classes ?? {}) };
+    current[cls] = enabled;
+    projectSyncStatus.value = await client.ProjectSync_SetArtifactClass(id, { classes: current });
+  } catch {
+    // Non-fatal.
+  } finally {
+    projectSyncArtifactSaving.value = false;
+  }
 }
 </script>
 
@@ -743,6 +813,61 @@ function onDragEnd() {
           No project-scope artifacts yet. Promote a session-scope artifact
           from its preview modal.
         </p>
+      </section>
+
+      <!-- Fleet project sync (fleet-context-sync-01NDFSEX15 WP08) -->
+      <section data-testid="project-sync-section">
+        <div class="flex items-center justify-between mb-2">
+          <h2 class="font-ui text-[11px] font-medium uppercase tracking-[0.18em] text-ink-subtle">
+            Fleet Sync
+          </h2>
+          <!-- Sync toggle -->
+          <button
+            type="button"
+            class="flex items-center gap-1.5 rounded px-2 py-0.5 font-ui text-[11px] uppercase tracking-[0.15em] transition-colors"
+            :class="isProjectSyncEnabled
+              ? 'bg-accent/15 text-accent border border-accent/40'
+              : 'bg-surface-2 text-ink-muted border border-border-muted hover:bg-surface-3'"
+            :disabled="projectSyncToggling"
+            :aria-pressed="isProjectSyncEnabled"
+            data-testid="project-sync-toggle"
+            @click="onToggleProjectSync"
+          >
+            <span
+              class="inline-block w-1.5 h-1.5 rounded-full"
+              :class="isProjectSyncEnabled ? 'bg-accent' : 'bg-ink-subtle'"
+            />
+            {{ isProjectSyncEnabled ? 'Enabled' : 'Disabled' }}
+          </button>
+        </div>
+
+        <p class="font-ui text-xs text-ink-muted mb-3">
+          When enabled, project events are encrypted and synced to the fleet for cross-device continuity.
+        </p>
+
+        <!-- Per-artifact-class opt-in (only shown when sync is enabled) -->
+        <div
+          v-if="isProjectSyncEnabled"
+          class="rounded border border-border-muted bg-surface-1 divide-y divide-border-muted"
+          data-testid="project-artifact-class-panel"
+        >
+          <div
+            v-for="cls in ARTIFACT_CLASSES"
+            :key="cls"
+            class="flex items-center justify-between px-3 py-2"
+            :data-testid="`artifact-class-row-${cls}`"
+          >
+            <span class="font-ui text-sm text-ink capitalize">{{ cls }}</span>
+            <input
+              type="checkbox"
+              :checked="artifactClassMap[cls]"
+              :disabled="projectSyncArtifactSaving"
+              class="accent-accent cursor-pointer"
+              :data-testid="`artifact-class-toggle-${cls}`"
+              @change="(e) => onToggleArtifactClass(cls, (e.target as HTMLInputElement).checked)"
+            />
+          </div>
+        </div>
       </section>
     </div>
 

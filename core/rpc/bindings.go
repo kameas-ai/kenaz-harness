@@ -60,6 +60,7 @@ import (
 	sitesview "github.com/kameas-ai/kenaz-harness/core/rpc/views/sites"
 	tasksview "github.com/kameas-ai/kenaz-harness/core/rpc/views/tasks"
 	acpview "github.com/kameas-ai/kenaz-harness/core/rpc/views/acp"
+	contextsyncview "github.com/kameas-ai/kenaz-harness/core/rpc/views/contextsync"
 	"github.com/kameas-ai/kenaz-harness/core/logging"
 	"github.com/kameas-ai/kenaz-harness/core/mcp/stdio"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/middleware"
@@ -3237,6 +3238,90 @@ func (b *Bindings) ACP_GetTrace(envelopeID string) (acpview.EnvelopeTrace, error
 func (b *Bindings) ACP_ListTraces(peerID string) ([]acpview.EnvelopeTrace, error) {
 	defer sentry.WrapBinding("ACP_ListTraces")()
 	return b.api.ACP().ACP_ListTraces(b.ctx(), peerID)
+}
+
+// ── ContextSync bindings (fleet-context-sync-01NDFSEX15 WP06) ────────────────
+
+// SessionSync_Toggle enables or disables fleet sync for a session. When
+// enabling, existing events are backfilled (encrypted) to the fleet.
+// Privacy: no plaintext event content crosses this boundary.
+func (b *Bindings) SessionSync_Toggle(sessionID string, enable bool) (contextsyncview.SessionSyncStatus, error) {
+	defer sentry.WrapBinding("SessionSync_Toggle")()
+	return b.api.ContextSync().SessionSync_Toggle(b.ctx(), sessionID, enable)
+}
+
+// SessionSync_DeleteRemote purges the remote stream for a session from the
+// fleet and clears the sync toggle. The local session is untouched.
+func (b *Bindings) SessionSync_DeleteRemote(sessionID string) error {
+	defer sentry.WrapBinding("SessionSync_DeleteRemote")()
+	return b.api.ContextSync().SessionSync_DeleteRemote(b.ctx(), sessionID)
+}
+
+// SessionSync_ResumeFrom replays fleet events from sinceSeq. Returns the
+// number of events applied; no content crosses the RPC boundary.
+func (b *Bindings) SessionSync_ResumeFrom(sessionID string, sinceSeq uint64) (int, error) {
+	defer sentry.WrapBinding("SessionSync_ResumeFrom")()
+	return b.api.ContextSync().SessionSync_ResumeFrom(b.ctx(), sessionID, sinceSeq)
+}
+
+// ProjectSync_Toggle enables or disables fleet sync for a project.
+func (b *Bindings) ProjectSync_Toggle(projectID string, enable bool) (contextsyncview.ProjectSyncStatus, error) {
+	defer sentry.WrapBinding("ProjectSync_Toggle")()
+	return b.api.ContextSync().ProjectSync_Toggle(b.ctx(), projectID, enable)
+}
+
+// ProjectSync_DeleteRemote purges the remote stream for a project.
+func (b *Bindings) ProjectSync_DeleteRemote(projectID string) error {
+	defer sentry.WrapBinding("ProjectSync_DeleteRemote")()
+	return b.api.ContextSync().ProjectSync_DeleteRemote(b.ctx(), projectID)
+}
+
+// ProjectSync_SetArtifactClass updates per-artifact-class sync opt-in for a
+// project and returns the current status.
+func (b *Bindings) ProjectSync_SetArtifactClass(projectID string, opts contextsyncview.ArtifactClassOptionsView) (contextsyncview.ProjectSyncStatus, error) {
+	defer sentry.WrapBinding("ProjectSync_SetArtifactClass")()
+	return b.api.ContextSync().ProjectSync_SetArtifactClass(b.ctx(), projectID, opts)
+}
+
+// Handoff_ListTeam returns team members available as handoff recipients.
+func (b *Bindings) Handoff_ListTeam() ([]contextsyncview.TeamMemberView, error) {
+	defer sentry.WrapBinding("Handoff_ListTeam")()
+	return b.api.ContextSync().Handoff_ListTeam(b.ctx())
+}
+
+// Handoff_Share re-encrypts a session for recipientUserID and posts it to the
+// fleet handoff inbox. No plaintext content crosses this boundary.
+func (b *Bindings) Handoff_Share(sessionID, recipientUserID string) error {
+	defer sentry.WrapBinding("Handoff_Share")()
+	return b.api.ContextSync().Handoff_Share(b.ctx(), sessionID, recipientUserID)
+}
+
+// Handoff_Inbox returns the current fleet handoff inbox for the current user.
+func (b *Bindings) Handoff_Inbox() ([]contextsyncview.InboxItemView, error) {
+	defer sentry.WrapBinding("Handoff_Inbox")()
+	return b.api.ContextSync().Handoff_Inbox(b.ctx())
+}
+
+// Handoff_Accept decrypts an inbox item. Returns a view with the event count;
+// no content crosses the RPC boundary.
+func (b *Bindings) Handoff_Accept(inboxItemID string) (contextsyncview.AcceptedSessionView, error) {
+	defer sentry.WrapBinding("Handoff_Accept")()
+	return b.api.ContextSync().Handoff_Accept(b.ctx(), inboxItemID)
+}
+
+// ContextSync_GenerateRecoveryCode mints a recovery code for the device
+// context seed. The code is displayed once and must be acknowledged.
+func (b *Bindings) ContextSync_GenerateRecoveryCode() (string, error) {
+	defer sentry.WrapBinding("ContextSync_GenerateRecoveryCode")()
+	return b.api.ContextSync().ContextSync_GenerateRecoveryCode(b.ctx())
+}
+
+// ContextSync_ApplyRecoveryCode imports a recovery code, overwriting the local
+// context seed. After this the device shares encryption keys with the device
+// that generated the code.
+func (b *Bindings) ContextSync_ApplyRecoveryCode(code string) error {
+	defer sentry.WrapBinding("ContextSync_ApplyRecoveryCode")()
+	return b.api.ContextSync().ContextSync_ApplyRecoveryCode(b.ctx(), code)
 }
 
 // ── Compliance bindings (fleet-audit-archival-01NDFSEX13 WP05) ───────────────

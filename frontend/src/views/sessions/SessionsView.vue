@@ -43,6 +43,7 @@ import MigrationToast from '@/components/permissions/MigrationToast.vue';
 import ArtifactPreview from '@/views/artifacts/ArtifactPreview.vue';
 import CostCell from '@/components/chat/CostCell.vue';
 import LongSessionNudge from '@/components/chat/LongSessionNudge.vue';
+import ShareSessionDialog from '@/views/sessions/ShareSessionDialog.vue';
 import { useArtifacts, useHarnessClient, useSessions } from '@/lib/useHarnessAPI';
 import { useSession } from '@/lib/useSession';
 import { useEventStream } from '@/lib/useEventStream';
@@ -52,6 +53,8 @@ import type {
   Artifact,
   ArtifactScope,
   ArtifactWithBytes,
+  FleetSessionSyncStatus,
+  FleetInboxItemView,
   MemoryScopeKind,
   Message,
   Provider,
@@ -1200,6 +1203,73 @@ async function onNudgeNewSession() {
   // Open NewSessionDialog in the same project.
   newSessionDialogOpen.value = true;
 }
+
+// ── Fleet context sync (fleet-context-sync-01NDFSEX15 WP07) ─────────────────
+//
+// Lightweight session-sync toggle + share dialog state.
+// The actual encryption/upload happens inside the Go backend — this UI
+// only calls the RPC surface and reflects the returned status.
+
+const syncStatus = ref<FleetSessionSyncStatus | null>(null);
+const syncToggling = ref(false);
+const shareDialogOpen = ref(false);
+
+/** Inbox items received via Handoff_Inbox. Refreshed on mount when cap enabled. */
+const inboxItems = ref<FleetInboxItemView[]>([]);
+const inboxLoaded = ref(false);
+
+// Refresh inbox when the view mounts and any time the session changes.
+watch(
+  sessionId,
+  async (id) => {
+    if (!id) return;
+    // Also reset sync status — a different session may have a different toggle state.
+    syncStatus.value = null;
+  },
+);
+
+async function loadInbox() {
+  try {
+    inboxItems.value = await client.Handoff_Inbox();
+  } catch {
+    // Non-fatal — inbox is an optional affordance.
+    inboxItems.value = [];
+  } finally {
+    inboxLoaded.value = true;
+  }
+}
+
+onMounted(() => {
+  void loadInbox();
+});
+
+const isSyncEnabled = computed(() => syncStatus.value?.enabled ?? false);
+
+async function onToggleSync() {
+  const id = sessionId.value;
+  if (!id || syncToggling.value) return;
+  syncToggling.value = true;
+  try {
+    syncStatus.value = await client.SessionSync_Toggle(id, !isSyncEnabled.value);
+  } catch {
+    // Ignore — capability may be unavailable; button returns to previous state.
+  } finally {
+    syncToggling.value = false;
+  }
+}
+
+function onOpenShare() {
+  shareDialogOpen.value = true;
+}
+
+function onShareClose() {
+  shareDialogOpen.value = false;
+}
+
+async function onShared() {
+  // Refresh inbox so the recipient's copy shows up if they're the same user.
+  void loadInbox();
+}
 </script>
 
 <template>
@@ -1219,6 +1289,49 @@ async function onNudgeNewSession() {
         :parent-title="breadcrumbParentTitle"
         :parent-deleted="breadcrumbParentDeleted"
       />
+      <!-- Fleet sync toolbar (fleet-context-sync-01NDFSEX15 WP07) -->
+      <!-- Only rendered when a session is loaded. -->
+      <div
+        v-if="surfaceState === 'loaded'"
+        class="flex items-center gap-2 px-4 py-1 border-b border-border-muted bg-surface-1"
+        data-testid="session-sync-toolbar"
+      >
+        <!-- Sync toggle -->
+        <button
+          type="button"
+          class="flex items-center gap-1.5 rounded px-2 py-0.5 font-ui text-[11px] uppercase tracking-[0.15em] transition-colors"
+          :class="isSyncEnabled
+            ? 'bg-accent/15 text-accent border border-accent/40'
+            : 'bg-surface-2 text-ink-muted border border-border-muted hover:bg-surface-3'"
+          :disabled="syncToggling"
+          :aria-pressed="isSyncEnabled"
+          data-testid="session-sync-toggle"
+          @click="onToggleSync"
+        >
+          <span
+            class="inline-block w-1.5 h-1.5 rounded-full"
+            :class="isSyncEnabled ? 'bg-accent' : 'bg-ink-subtle'"
+          />
+          {{ isSyncEnabled ? 'Synced to fleet' : 'Sync to fleet' }}
+        </button>
+        <!-- Share button (only shown when session is loaded) -->
+        <button
+          type="button"
+          class="flex items-center gap-1 rounded px-2 py-0.5 font-ui text-[11px] uppercase tracking-[0.15em] text-ink-muted border border-border-muted bg-surface-2 hover:bg-surface-3 transition-colors"
+          data-testid="session-share-btn"
+          @click="onOpenShare"
+        >
+          Share
+        </button>
+        <!-- Inbox badge (shown when there are pending handoff items) -->
+        <span
+          v-if="inboxItems.length > 0"
+          class="ml-auto rounded-full bg-accent px-2 py-0.5 font-ui text-[10px] text-white"
+          data-testid="session-inbox-badge"
+        >
+          {{ inboxItems.length }} shared
+        </span>
+      </div>
     </div>
 
     <!-- main canvas -->
@@ -1848,6 +1961,14 @@ async function onNudgeNewSession() {
       :on-promote="promoteArtifact"
       :on-delete="deleteArtifact"
       @close="closeArtifactPreview"
+    />
+    <!-- Fleet handoff: share session dialog (fleet-context-sync-01NDFSEX15 WP07) -->
+    <ShareSessionDialog
+      v-if="shareDialogOpen"
+      :open="shareDialogOpen"
+      :session-i-d="sessionId"
+      @close="onShareClose"
+      @shared="onShared"
     />
   </div>
 </template>

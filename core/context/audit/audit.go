@@ -373,6 +373,51 @@ const (
 	// direction, outcome, byte counts, and error code.
 	KindACPEnvelope Kind = "acp.envelope"
 
+	// ── Fleet context sync audit kinds (fleet-context-sync-01NDFSEX15) ──────
+
+	// KindFleetSessionSyncEnabled fires when a user enables fleet sync for a
+	// session. Payload: FleetSessionSyncPayload.
+	//
+	// Privacy invariant: session name and message content are NEVER included.
+	// Only session_id and stream_id cross the audit boundary.
+	KindFleetSessionSyncEnabled Kind = "fleet.session_sync_enabled"
+
+	// KindFleetSessionSyncDisabled fires when fleet sync is disabled for a
+	// session (toggle off). Payload: FleetSessionSyncPayload.
+	KindFleetSessionSyncDisabled Kind = "fleet.session_sync_disabled"
+
+	// KindFleetSessionSyncResumed fires when a session is resumed from fleet
+	// (replay on open). Payload: FleetSessionSyncResumedPayload.
+	//
+	// Privacy invariant: event count only; no event content.
+	KindFleetSessionSyncResumed Kind = "fleet.session_sync_resumed"
+
+	// KindFleetSessionSyncRemoteDeleted fires when the user explicitly purges
+	// a session's events from fleet. Payload: FleetSessionSyncPayload.
+	KindFleetSessionSyncRemoteDeleted Kind = "fleet.session_sync_remote_deleted"
+
+	// KindFleetProjectSyncEnabled fires when project sync is toggled on.
+	// Payload: FleetProjectSyncPayload.
+	KindFleetProjectSyncEnabled Kind = "fleet.project_sync_enabled"
+
+	// KindFleetProjectSyncDisabled fires when project sync is toggled off.
+	// Payload: FleetProjectSyncPayload.
+	KindFleetProjectSyncDisabled Kind = "fleet.project_sync_disabled"
+
+	// KindFleetProjectSyncRemoteDeleted fires when project events are purged
+	// from fleet. Payload: FleetProjectSyncPayload.
+	KindFleetProjectSyncRemoteDeleted Kind = "fleet.project_sync_remote_deleted"
+
+	// KindFleetSessionSharedOutbound fires when a session is shared with a
+	// teammate (sender side). Payload: FleetSessionHandoffPayload.
+	//
+	// Privacy invariant: session name and message content are NEVER included.
+	KindFleetSessionSharedOutbound Kind = "fleet.session_shared_outbound"
+
+	// KindFleetSessionSharedInbound fires when a shared session is accepted
+	// by the recipient. Payload: FleetSessionHandoffPayload.
+	KindFleetSessionSharedInbound Kind = "fleet.session_shared_inbound"
+
 	// ── Fleet audit-archival kinds (fleet-audit-archival-01NDFSEX13) ─────────
 
 	// KindFleetAuditChainBreak fires when the pre-send hash-chain verifier
@@ -1247,6 +1292,58 @@ type ACPEnvelopePayload struct {
 	// ErrorCode is a machine-readable error classifier; empty on success.
 	// Examples: "acp:policy_denied", "acp:transport_refused", "acp:verify_rejected".
 	ErrorCode string `json:"error_code,omitempty"`
+}
+
+// ── Fleet context sync payload structs (fleet-context-sync-01NDFSEX15) ───────
+
+// FleetSessionSyncPayload is the audit payload for session sync toggle events
+// (KindFleetSessionSyncEnabled, KindFleetSessionSyncDisabled,
+// KindFleetSessionSyncRemoteDeleted).
+//
+// Privacy invariant: SessionName and message content are NEVER included.
+type FleetSessionSyncPayload struct {
+	// SessionID is the opaque session identifier.
+	SessionID string `json:"session_id"`
+	// StreamID is the fleet stream identifier assigned to this session.
+	StreamID string `json:"stream_id"`
+}
+
+// FleetSessionSyncResumedPayload is the audit payload for KindFleetSessionSyncResumed.
+//
+// Privacy invariant: event content is NEVER included — only the count.
+type FleetSessionSyncResumedPayload struct {
+	// SessionID is the opaque session identifier.
+	SessionID string `json:"session_id"`
+	// StreamID is the fleet stream identifier.
+	StreamID string `json:"stream_id"`
+	// EventsReplayed is the number of events replayed from fleet.
+	EventsReplayed int `json:"events_replayed"`
+}
+
+// FleetProjectSyncPayload is the audit payload for project sync toggle events
+// (KindFleetProjectSyncEnabled, KindFleetProjectSyncDisabled,
+// KindFleetProjectSyncRemoteDeleted).
+//
+// Privacy invariant: project name and content are NEVER included.
+type FleetProjectSyncPayload struct {
+	// ProjectID is the opaque project identifier.
+	ProjectID string `json:"project_id"`
+	// StreamID is the fleet stream identifier assigned to this project.
+	StreamID string `json:"stream_id"`
+}
+
+// FleetSessionHandoffPayload is the audit payload for team handoff events
+// (KindFleetSessionSharedOutbound, KindFleetSessionSharedInbound).
+//
+// Privacy invariant: session name, message content, and recipient email are
+// NEVER included — only opaque IDs cross the audit boundary.
+type FleetSessionHandoffPayload struct {
+	// SessionID is the opaque session identifier being shared.
+	SessionID string `json:"session_id"`
+	// RecipientUserID is the opaque user ID of the recipient.
+	RecipientUserID string `json:"recipient_user_id"`
+	// InboxItemID is the fleet inbox item ID (non-empty on inbound shares).
+	InboxItemID string `json:"inbox_item_id,omitempty"`
 }
 
 // ── Fleet audit-archival payloads (fleet-audit-archival-01NDFSEX13) ──────────
