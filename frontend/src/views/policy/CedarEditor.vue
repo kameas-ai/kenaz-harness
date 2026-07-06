@@ -27,8 +27,8 @@
 import { computed, onMounted, ref } from 'vue';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
 import { signedIn, capability } from '@/lib/featureFlags';
-import type { PolicyFileDetail, ParseError } from '@/lib/types';
-import type { FleetConfigPullStatusView } from '@/lib/types';
+import type { PolicyFileDetail, ParseError, FleetConfigPullStatusView, FleetIdentity } from '@/lib/types';
+import BaseDialog from '@/components/ui/BaseDialog.vue';
 
 const client = useHarnessClient();
 
@@ -49,6 +49,65 @@ async function loadConfigPullStatus() {
     configPullStatus.value = null;
   } finally {
     configPullLoading.value = false;
+  }
+}
+
+// ── fleet identity (for policy_admin role check) WP08 ─────────────────
+
+/** null = not yet loaded; false = not signed in; FleetIdentity = loaded */
+const fleetIdentity = ref<FleetIdentity | null | false>(null);
+
+async function loadFleetIdentity() {
+  if (!signedIn.value) {
+    fleetIdentity.value = false;
+    return;
+  }
+  try {
+    const [signedInFlag, identity] = await Promise.all([
+      client.settings.fleetSignedIn(),
+      // best-effort: use cached identity if available
+      client.settings.fleetRefreshIdentity().catch(() => null),
+    ]);
+    fleetIdentity.value = signedInFlag ? (identity ?? false) : false;
+  } catch {
+    fleetIdentity.value = false;
+  }
+}
+
+/** True when the current user has the policy_admin role (FR-201). */
+const isPolicyAdmin = computed<boolean>(() => {
+  if (!fleetIdentity.value) return false;
+  const id = fleetIdentity.value as FleetIdentity;
+  return Array.isArray(id.roles) && id.roles.includes('policy_admin');
+});
+
+// ── publish-to-team state (WP08) ──────────────────────────────────────
+
+const publishPreviewOpen = ref(false);
+const publishing = ref(false);
+const publishError = ref<string | null>(null);
+
+function openPublishPreview() {
+  if (!selectedFile.value) return;
+  publishError.value = null;
+  publishPreviewOpen.value = true;
+}
+
+async function confirmPublishToTeam() {
+  if (!selectedFile.value) return;
+  publishing.value = true;
+  publishError.value = null;
+  try {
+    await client.cedarPublish.publishToTeam(
+      selectedFile.value.name,
+      editorSource.value,
+    );
+    publishPreviewOpen.value = false;
+    showToast(`Policy "${selectedFile.value.name}" published to team.`);
+  } catch (err) {
+    publishError.value = err instanceof Error ? err.message : String(err);
+  } finally {
+    publishing.value = false;
   }
 }
 
@@ -107,7 +166,7 @@ const hasConfigPullError = computed(
 // ── lifecycle ──────────────────────────────────────────────────────────
 
 onMounted(async () => {
-  await Promise.all([loadFileList(), loadConfigPullStatus()]);
+  await Promise.all([loadFileList(), loadConfigPullStatus(), loadFleetIdentity()]);
 });
 
 // ── helpers ────────────────────────────────────────────────────────────
@@ -322,6 +381,56 @@ function showToast(msg: string) {
       {{ toast }}
     </div>
 
+    <!-- Publish to team diff-preview dialog (WP08 / FR-202) -->
+    <BaseDialog
+      :open="publishPreviewOpen"
+      title="Publish Cedar rule to team"
+      panel-class="w-full max-w-lg rounded-md border border-border-muted bg-surface-1 p-5 shadow-xl"
+      @close="publishPreviewOpen = false"
+    >
+      <div data-testid="cedar-publish-preview-dialog">
+        <h2 class="font-ui text-base font-semibold text-ink">
+          Publish to team
+        </h2>
+        <p class="mt-1 font-ui text-xs text-ink-muted">
+          Publishing <strong>{{ selectedFile?.name }}</strong> will push this rule to the fleet
+          team bundle. All team members will receive it on next config-pull cycle.
+        </p>
+        <!-- Diff preview — shows current source so admin can confirm -->
+        <div class="mt-3 rounded-sm border border-border-muted bg-surface-0 p-3 max-h-48 overflow-y-auto">
+          <pre class="font-mono text-xs text-ink whitespace-pre-wrap">{{ editorSource }}</pre>
+        </div>
+        <div
+          v-if="publishError"
+          class="mt-2 rounded-sm border border-red-200 bg-red-50 px-3 py-2 font-ui text-xs text-red-700"
+          role="alert"
+          data-testid="cedar-publish-error"
+        >
+          {{ publishError }}
+        </div>
+        <div class="mt-4 flex justify-end gap-2">
+          <button
+            type="button"
+            class="cedar-editor__btn"
+            :disabled="publishing"
+            data-testid="cedar-publish-preview-cancel"
+            @click="publishPreviewOpen = false"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            class="cedar-editor__btn cedar-editor__btn--primary"
+            :disabled="publishing"
+            data-testid="cedar-publish-preview-confirm"
+            @click="confirmPublishToTeam"
+          >
+            {{ publishing ? 'Publishing…' : 'Publish to team' }}
+          </button>
+        </div>
+      </div>
+    </BaseDialog>
+
     <!-- Delete confirm dialog -->
     <div
       v-if="confirmDelete"
@@ -520,6 +629,16 @@ function showToast(msg: string) {
               @click="handleOverride"
             >
               Override
+            </button>
+            <!-- Publish to team button: only for non-team-managed files with policy_admin role (FR-201/WP08) -->
+            <button
+              v-if="isPolicyAdmin && selectedFile && !isTeamManaged"
+              type="button"
+              class="cedar-editor__btn cedar-editor__btn--publish"
+              data-testid="cedar-publish-to-team-btn"
+              @click="openPublishPreview"
+            >
+              Publish to team
             </button>
             <!-- Parse status pill -->
             <span
@@ -1047,5 +1166,15 @@ function showToast(msg: string) {
 
 .cedar-editor__btn--override:hover:not(:disabled) {
   background: color-mix(in srgb, var(--accent) 15%, transparent);
+}
+
+.cedar-editor__btn--publish {
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 20%, transparent);
+}
+
+.cedar-editor__btn--publish:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
 }
 </style>
