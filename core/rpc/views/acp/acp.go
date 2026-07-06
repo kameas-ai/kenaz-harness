@@ -11,6 +11,8 @@ package acp
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"sync"
@@ -22,6 +24,7 @@ import (
 	"github.com/kameas-ai/kenaz-harness/core/acp/peers"
 	"github.com/kameas-ai/kenaz-harness/core/acp/verify"
 	"github.com/kameas-ai/kenaz-harness/core/policy/cedar"
+	cedarlib "github.com/cedar-policy/cedar-go"
 )
 
 // ── Wire types ────────────────────────────────────────────────────────────
@@ -71,6 +74,9 @@ type ACPAPI interface {
 	ACP_RevokePeer(ctx context.Context, peerID string) error
 	ACP_Dispatch(ctx context.Context, peerID, turnPayload string) (DispatchResult, error)
 	ACP_GetTrace(ctx context.Context, envelopeID string) (EnvelopeTrace, error)
+	// ACP_ListTraces returns the most-recent envelope traces for a given peer.
+	// Returns up to maxN traces (or all if maxN <= 0), newest first. FR-005.
+	ACP_ListTraces(ctx context.Context, peerID string) ([]EnvelopeTrace, error)
 }
 
 // RegistryIface is the narrow interface the ACP view needs from core/acp/peers.
@@ -88,12 +94,15 @@ type EnvelopeIface interface {
 
 // ── trace store ───────────────────────────────────────────────────────────
 
-// traceStore holds the last N envelope traces in memory.
+// traceStore holds the last N envelope traces in memory, keyed by
+// envelope ID, with a secondary per-peer reverse index so callers can
+// retrieve all recent traces for a given peer.
 type traceStore struct {
-	mu     sync.Mutex
-	traces map[string]EnvelopeTrace // keyed by envelopeID
-	order  []string                 // insertion order for LRU eviction
-	maxN   int
+	mu        sync.Mutex
+	traces    map[string]EnvelopeTrace // keyed by envelopeID
+	order     []string                 // insertion order for LRU eviction
+	peerIndex map[string][]string      // peerID → []envelopeID (insertion order)
+	maxN      int
 }
 
 func newTraceStore(maxN int) *traceStore {
@@ -101,8 +110,9 @@ func newTraceStore(maxN int) *traceStore {
 		maxN = 1000
 	}
 	return &traceStore{
-		traces: make(map[string]EnvelopeTrace, maxN),
-		maxN:   maxN,
+		traces:    make(map[string]EnvelopeTrace, maxN),
+		peerIndex: make(map[string][]string),
+		maxN:      maxN,
 	}
 }
 
@@ -114,9 +124,26 @@ func (s *traceStore) put(t EnvelopeTrace) {
 			// evict oldest
 			oldest := s.order[0]
 			s.order = s.order[1:]
+			if evicted, ok := s.traces[oldest]; ok {
+				// also drop from peerIndex
+				if ids, pok := s.peerIndex[evicted.PeerID]; pok {
+					updated := make([]string, 0, len(ids))
+					for _, id := range ids {
+						if id != oldest {
+							updated = append(updated, id)
+						}
+					}
+					if len(updated) == 0 {
+						delete(s.peerIndex, evicted.PeerID)
+					} else {
+						s.peerIndex[evicted.PeerID] = updated
+					}
+				}
+			}
 			delete(s.traces, oldest)
 		}
 		s.order = append(s.order, t.EnvelopeID)
+		s.peerIndex[t.PeerID] = append(s.peerIndex[t.PeerID], t.EnvelopeID)
 	}
 	s.traces[t.EnvelopeID] = t
 }
@@ -128,12 +155,31 @@ func (s *traceStore) get(envelopeID string) (EnvelopeTrace, bool) {
 	return t, ok
 }
 
+// listForPeer returns all traces for the given peerID, newest first.
+func (s *traceStore) listForPeer(peerID string) []EnvelopeTrace {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	ids, ok := s.peerIndex[peerID]
+	if !ok {
+		return nil
+	}
+	out := make([]EnvelopeTrace, 0, len(ids))
+	// ids are insertion order; reverse for newest-first
+	for i := len(ids) - 1; i >= 0; i-- {
+		if t, ok := s.traces[ids[i]]; ok {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
 // ── peerStore ─────────────────────────────────────────────────────────────
 
 // peerMeta holds runtime-enriched metadata not in PeerProfile.
 type peerMeta struct {
-	trustTier string
-	lastSeen  time.Time
+	trustTier       string
+	lastSeen        time.Time
+	cardFingerprint string
 }
 
 // peerStore is the runtime peer registry that extends the core/acp/peers
@@ -188,9 +234,10 @@ func (ps *peerStore) trust(profile acp.PeerProfile, card acp.AgentCard) {
 	defer ps.mu.Unlock()
 	ps.peers[profile.PeerID] = profile
 	fp := cardFingerprint(card)
-	ps.meta[profile.PeerID] = peerMeta{trustTier: "verified"}
-	// store fingerprint for display
-	_ = fp
+	ps.meta[profile.PeerID] = peerMeta{
+		trustTier:       "verified",
+		cardFingerprint: fp,
+	}
 	// Also push to underlying registry so it participates in bundle reload.
 	if ps.reg != nil {
 		existing := ps.reg.All()
@@ -358,8 +405,10 @@ func (a *API) ACP_Dispatch(ctx context.Context, peerID, turnPayload string) (Dis
 			"transport":       string(profile.Transport),
 			"direction":       "send",
 		}
+		// Pass the raw peerID; the EngineAdapter builds the proper
+		// ACPEnvelope::"<peerID>" EntityUID via cedar.ACPEnvelopeUID.
 		outcome, reason, err := a.cedarEng.Check(ctx,
-			cedar.PrincipalLocal, cedar.ActionACPSend, cedar.EntityTypeACPEnvelope+"::\""+peerID+"\"",
+			cedar.PrincipalLocal, cedar.ActionACPSend, peerID,
 			attrs,
 		)
 		if err != nil {
@@ -444,6 +493,16 @@ func (a *API) ACP_GetTrace(_ context.Context, envelopeID string) (EnvelopeTrace,
 	return t, nil
 }
 
+// ACP_ListTraces returns the most-recent envelope traces for the given
+// peerID, newest first. Returns an empty slice (not an error) when no
+// traces exist for the peer yet. FR-005.
+func (a *API) ACP_ListTraces(_ context.Context, peerID string) ([]EnvelopeTrace, error) {
+	if peerID == "" {
+		return nil, fmt.Errorf("acp: ACP_ListTraces: peer_id must not be empty")
+	}
+	return a.traces.listForPeer(peerID), nil
+}
+
 // ── helpers ───────────────────────────────────────────────────────────────
 
 func toPeer(p acp.PeerProfile, m peerMeta) Peer {
@@ -453,8 +512,14 @@ func toPeer(p acp.PeerProfile, m peerMeta) Peer {
 		TrustTier:   m.trustTier,
 		EndpointURL: p.EndpointURL,
 	}
-	if p.InlineCard != nil {
+	// Prefer the stored fingerprint (computed at trust time); fall back
+	// to computing it fresh from the inline card if available.
+	if m.cardFingerprint != "" {
+		w.CardFingerprint = m.cardFingerprint
+	} else if p.InlineCard != nil {
 		w.CardFingerprint = cardFingerprint(*p.InlineCard)
+	}
+	if p.InlineCard != nil {
 		w.AgentName = p.InlineCard.Name
 		w.AgentDescription = p.InlineCard.Description
 	}
@@ -475,12 +540,24 @@ func cardFingerprint(card acp.AgentCard) string {
 }
 
 func inferTransport(endpointURL string) acp.TransportKind {
+	hasPrefix := func(s, p string) bool {
+		return len(s) >= len(p) && s[:len(p)] == p
+	}
 	switch {
-	case len(endpointURL) > 7 && endpointURL[:7] == "unix://":
+	case hasPrefix(endpointURL, "unix://"):
 		return acp.TransportUDS
-	case len(endpointURL) > 16 && endpointURL[:16] == "http://127.0.0.1":
+	case hasPrefix(endpointURL, "http://127.0.0.1"):
 		return acp.TransportLoopback
-	case len(endpointURL) > 15 && endpointURL[:15] == "http://localhost":
+	case hasPrefix(endpointURL, "http://localhost"):
+		return acp.TransportLoopback
+	case hasPrefix(endpointURL, "https://127.0.0.1"):
+		return acp.TransportLoopback
+	case hasPrefix(endpointURL, "https://localhost"):
+		return acp.TransportLoopback
+	// IPv6 loopback: http://[::1] or https://[::1]
+	case hasPrefix(endpointURL, "http://[::1]"):
+		return acp.TransportLoopback
+	case hasPrefix(endpointURL, "https://[::1]"):
 		return acp.TransportLoopback
 	default:
 		return acp.TransportLAN
@@ -505,9 +582,18 @@ func emitACPEnvelope(ctx context.Context, em coreaudit.Emitter, t EnvelopeTrace)
 	coreaudit.MustEmit(ctx, em, coreaudit.KindACPEnvelope, payload, time.Now().UTC())
 }
 
-// newEnvelopeID mints a time-ordered opaque envelope identifier.
+// newEnvelopeID mints a cryptographically-random opaque envelope
+// identifier. Uses crypto/rand so collisions are negligible even at
+// high dispatch rates; the "env_" prefix keeps it human-distinguishable
+// from other IDs in audit logs.
 func newEnvelopeID() string {
-	return fmt.Sprintf("env_%d", time.Now().UnixNano())
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		// crypto/rand failure is catastrophic; fall back to a
+		// time-based suffix so the caller can still record a trace.
+		return fmt.Sprintf("env_fallback_%d", time.Now().UnixNano())
+	}
+	return "env_" + hex.EncodeToString(b)
 }
 
 // NullAPI is a no-op implementation returned when the ACP layer is not
@@ -534,11 +620,80 @@ func (NullAPI) ACP_Dispatch(_ context.Context, _, _ string) (DispatchResult, err
 func (NullAPI) ACP_GetTrace(_ context.Context, _ string) (EnvelopeTrace, error) {
 	return EnvelopeTrace{}, fmt.Errorf("acp: not configured")
 }
+func (NullAPI) ACP_ListTraces(_ context.Context, _ string) ([]EnvelopeTrace, error) {
+	return nil, nil
+}
 
 // ── ensure *API and NullAPI both satisfy ACPAPI ──────────────────────────
 
 var _ ACPAPI = (*API)(nil)
 var _ ACPAPI = NullAPI{}
+
+// ── Cedar engine adapter ──────────────────────────────────────────────────
+
+// EngineAdapter wraps a *cedar.Engine (the harness's concrete engine from
+// core/policy/cedar) and makes it satisfy the CedarEngine interface used
+// by this view. The adapter translates the string-keyed principal/resource
+// arguments into the cedar.EntityUID type the engine expects, and converts
+// context attrs from map[string]interface{} to map[cedarlib.String]cedarlib.Value.
+//
+// Callers in api.go should wrap the concrete *cedar.Engine with NewEngineAdapter
+// before passing it in acpview.Options.Cedar.
+type EngineAdapter struct {
+	eng *cedar.Engine
+}
+
+// NewEngineAdapter constructs an EngineAdapter. eng must not be nil.
+func NewEngineAdapter(eng *cedar.Engine) *EngineAdapter {
+	return &EngineAdapter{eng: eng}
+}
+
+// Check implements CedarEngine. For ACP calls the view passes
+// cedar.PrincipalLocal ("local") as principal and the raw peerID as
+// resource; this method builds the proper Cedar EntityUIDs from those
+// values. attrs is the context map built by ACP_Dispatch / ACP_Receive.
+func (a *EngineAdapter) Check(
+	ctx context.Context,
+	principal, action, resource string,
+	attrs map[string]interface{},
+) (cedar.Outcome, string, error) {
+	// Translate principal: "local" → User::"local" via cedar.UserUID().
+	var principalUID cedarlib.EntityUID
+	if principal == cedar.PrincipalLocal {
+		principalUID = cedar.UserUID()
+	} else {
+		principalUID = cedarlib.NewEntityUID(cedar.EntityTypeUser, cedarlib.String(principal))
+	}
+
+	// Translate resource: resource is the raw peerID; build the
+	// ACPEnvelope::"<peerID>" entity UID via the canonical helper so
+	// the id is validated before evaluation.
+	resourceUID := cedar.ACPEnvelopeUID(resource)
+
+	// Build context attrs: convert map[string]interface{} →
+	// map[cedarlib.String]cedarlib.Value so the engine can evaluate
+	// attribute conditions like `context.peer_trust_tier == "verified"`.
+	ctxMap := make(map[cedarlib.String]cedarlib.Value, len(attrs))
+	for k, v := range attrs {
+		switch val := v.(type) {
+		case string:
+			ctxMap[cedarlib.String(k)] = cedarlib.String(val)
+		case bool:
+			ctxMap[cedarlib.String(k)] = cedarlib.Boolean(val)
+		case int:
+			ctxMap[cedarlib.String(k)] = cedarlib.Long(val)
+		case int64:
+			ctxMap[cedarlib.String(k)] = cedarlib.Long(val)
+		default:
+			// Best-effort: marshal to string so the attribute is present
+			// (even if not type-correct for the policy).
+			ctxMap[cedarlib.String(k)] = cedarlib.String(fmt.Sprintf("%v", val))
+		}
+	}
+
+	dec := a.eng.Evaluate(ctx, principalUID, action, resourceUID, ctxMap)
+	return dec.Outcome, dec.Reason, nil
+}
 
 // DefaultRegistry returns a new peers.Registry seeded with no profiles.
 // Useful for constructing the API in the zero-configuration path.
