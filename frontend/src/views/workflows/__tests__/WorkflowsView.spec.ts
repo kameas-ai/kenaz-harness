@@ -30,6 +30,14 @@ vi.mock('@/shell/CanvasHead.vue', () => ({
   default: { template: '<div data-testid="canvas-head-stub" />' },
 }));
 
+// PublishDialog (WP03) calls useHarnessClient() internally. The existing
+// WorkflowsView tests don't provide a HarnessClient injection, so stub
+// PublishDialog here to avoid "called outside of a HarnessClient provider"
+// errors in tests that focus on the workflow-run functionality.
+vi.mock('@/views/marketplace/PublishDialog.vue', () => ({
+  default: { template: '<div />' },
+}));
+
 const summary: WorkflowsSummary = {
   id: 'plan_implement_review',
   name: 'Plan → Implement → Review',

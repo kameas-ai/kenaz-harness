@@ -25,6 +25,9 @@ import SimpleTemplateEditor from './SimpleTemplateEditor.vue';
 import CatalogView from './CatalogView.vue';
 import CatalogPreviewDrawer from './CatalogPreviewDrawer.vue';
 import ScheduledInbox from './ScheduledInbox.vue';
+// fleet-share-and-sync-01NDFSEX14 WP03 — Publish to team catalog
+import PublishDialog from '@/views/marketplace/PublishDialog.vue';
+import { signedIn } from '@/lib/featureFlags';
 import {
   createWorkflowsClient,
   type WorkflowsClient,
@@ -51,6 +54,25 @@ const client: WorkflowsClient = props.client ?? createWorkflowsClient();
 // scheduled-chat-runs-01KX5R8B WP06 — production creates a real client;
 // tests can inject a fake via the chatClient prop.
 const chatClient: ScheduledChatClient = props.chatClient ?? createScheduledChatClient();
+// ── publish-to-team state (WP03) ──────────────────────────────────────
+const publishDialogOpen = ref(false);
+const publishToast = ref<string | null>(null);
+let publishToastTimer: ReturnType<typeof setTimeout> | null = null;
+
+function showPublishToast(msg: string) {
+  publishToast.value = msg;
+  if (publishToastTimer) clearTimeout(publishToastTimer);
+  publishToastTimer = setTimeout(() => { publishToast.value = null; }, 3000);
+}
+
+function openPublishDialog() {
+  publishDialogOpen.value = true;
+}
+
+function onWorkflowPublished() {
+  publishDialogOpen.value = false;
+  showPublishToast('Workflow published to team catalog.');
+}
 
 const catalog = ref<WorkflowsSummary[]>([]);
 const loading = ref(false);
@@ -523,6 +545,34 @@ onMounted(loadCatalog);
             >
               Delete
             </button>
+            <!-- fleet-share-and-sync-01NDFSEX14 WP03 — Publish to team -->
+            <button
+              v-if="signedIn"
+              type="button"
+              class="rounded-sm border border-border-muted bg-surface-0 px-3 py-1.5 font-ui text-sm text-ink-muted hover:bg-surface-2"
+              data-testid="workflows-publish-btn"
+              @click="openPublishDialog"
+            >
+              Publish to team
+            </button>
+          </div>
+          <!-- Publish dialog (WP03) -->
+          <PublishDialog
+            :open="publishDialogOpen"
+            kind="workflow"
+            :slug="selected?.id ?? ''"
+            :payload-json="JSON.stringify(selected ?? {})"
+            @close="publishDialogOpen = false"
+            @published="onWorkflowPublished"
+          />
+          <!-- Publish toast -->
+          <div
+            v-if="publishToast"
+            class="fixed bottom-6 right-6 z-[9999] rounded-sm border border-border-muted bg-surface-3 px-4 py-2 font-ui text-sm text-ink shadow-lg"
+            role="status"
+            data-testid="workflows-publish-toast"
+          >
+            {{ publishToast }}
           </div>
 
           <div

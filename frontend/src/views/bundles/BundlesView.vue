@@ -18,6 +18,9 @@ import { onMounted, ref } from 'vue';
 import SettingsShell from '@/views/settings/SettingsShell.vue';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
 import type { Bundle } from '@/lib/types';
+// fleet-share-and-sync-01NDFSEX14 WP03 — Publish to team catalog
+import PublishDialog from '@/views/marketplace/PublishDialog.vue';
+import { signedIn } from '@/lib/featureFlags';
 
 const client = useHarnessClient();
 
@@ -31,6 +34,29 @@ const installPath = ref('');
 const installBusy = ref(false);
 const installError = ref<string | null>(null);
 const removingId = ref<string | null>(null);
+
+// ── publish-to-team state (WP03) ─────────────────────────────────────────
+const publishDialogOpen = ref(false);
+const publishingBundle = ref<Bundle | null>(null);
+const publishToast = ref<string | null>(null);
+let publishToastTimer: ReturnType<typeof setTimeout> | null = null;
+
+function showPublishToast(msg: string) {
+  publishToast.value = msg;
+  if (publishToastTimer) clearTimeout(publishToastTimer);
+  publishToastTimer = setTimeout(() => { publishToast.value = null; }, 3000);
+}
+
+function openPublishDialog(b: Bundle) {
+  publishingBundle.value = b;
+  publishDialogOpen.value = true;
+}
+
+function onBundlePublished() {
+  publishDialogOpen.value = false;
+  publishingBundle.value = null;
+  showPublishToast('Bundle published to team catalog.');
+}
 
 async function refresh() {
   loading.value = true;
@@ -166,6 +192,16 @@ onMounted(() => {
               >
                 {{ expanded[b.id] ? 'Hide' : 'View artifacts' }}
               </button>
+              <!-- fleet-share-and-sync-01NDFSEX14 WP03 -->
+              <button
+                v-if="signedIn"
+                type="button"
+                class="text-[11px] text-ink-muted hover:text-accent"
+                :data-testid="`bundle-publish-${b.id}`"
+                @click="openPublishDialog(b)"
+              >
+                Publish to team
+              </button>
               <button
                 type="button"
                 class="text-[11px] text-signal-danger hover:text-ink disabled:opacity-50"
@@ -242,5 +278,23 @@ onMounted(() => {
         {{ installError }}
       </div>
     </form>
+    <!-- fleet-share-and-sync-01NDFSEX14 WP03 — Publish dialog -->
+    <PublishDialog
+      :open="publishDialogOpen"
+      kind="bundle"
+      :slug="publishingBundle?.name ?? ''"
+      :payload-json="JSON.stringify(publishingBundle ?? {})"
+      @close="publishDialogOpen = false; publishingBundle = null"
+      @published="onBundlePublished"
+    />
+    <!-- Publish toast -->
+    <div
+      v-if="publishToast"
+      class="fixed bottom-6 right-6 z-[9999] rounded-sm border border-border-muted bg-surface-3 px-4 py-2 font-ui text-sm text-ink shadow-lg"
+      role="status"
+      data-testid="bundle-publish-toast"
+    >
+      {{ publishToast }}
+    </div>
   </SettingsShell>
 </template>

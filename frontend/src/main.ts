@@ -130,6 +130,13 @@ const router = createRouter({
       component: () => import('@/views/sites/SitesView.vue'),
     },
     {
+      // fleet-share-and-sync-01NDFSEX14 WP03 — Team catalog browser.
+      // Only useful when signed in; hidden by nav when signedIn is false.
+      path: '/marketplace',
+      name: 'marketplace',
+      component: () => import('@/views/marketplace/MarketplaceView.vue'),
+    },
+    {
       // WP08: catch-all not-found route (FR-011).
       path: '/:pathMatch(.*)*',
       name: 'not-found',
