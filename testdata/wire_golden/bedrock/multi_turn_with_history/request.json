@@ -1,0 +1,28 @@
+{
+  "messages": [
+    {
+      "content": [
+        {
+          "text": "My name is Alice."
+        }
+      ],
+      "role": "user"
+    },
+    {
+      "content": [
+        {
+          "text": "Hello Alice! How can I help you today?"
+        }
+      ],
+      "role": "assistant"
+    },
+    {
+      "content": [
+        {
+          "text": "What is my name?"
+        }
+      ],
+      "role": "user"
+    }
+  ]
+}

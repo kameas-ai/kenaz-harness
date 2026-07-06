@@ -6,22 +6,22 @@ import (
 	"testing"
 )
 
-// UpdateEnabled reports whether the -update flag is active for the
-// given adapter. It checks the TEST_<ADAPTER>_KEY environment variable.
+// UpdateEnabled reports whether the -update flag is active for the given adapter.
+// It checks whether the TEST_<UPPER_ADAPTER>_KEY environment variable is set.
 //
-// When update mode is disabled (the default), replay mode is used: the
-// locked-tier fixtures are loaded from testdata/ and compared against
+// When update mode is disabled (the default / locked tier), replay mode is used:
+// the httptest-served fixtures from testdata/ are loaded and compared against
 // the request body produced by the adapter under test.
 //
-// When update mode is enabled (TEST_<ADAPTER>_KEY is set), the adapter
-// makes a real network call and the returned SSE stream is written back
-// to the fixture file after scrubbing. The hand-authored request.json is
-// never modified.
+// When update mode is enabled (-update flag is passed AND the adapter's
+// TEST_<ADAPTER>_KEY env secret is present), the adapter makes a real network
+// call, the returned SSE stream is passed through scrub.ScrubSSE, and the
+// scrubbed bytes are written back to the fixture file.
 //
 // Example usage in a test:
 //
 //	if wirecheck.UpdateEnabled(t, "anthropic") {
-//	    // record from real API
+//	    // record from real API + scrub + write fixture
 //	} else {
 //	    // replay from fixture
 //	}

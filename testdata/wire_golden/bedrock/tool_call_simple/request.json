@@ -1,0 +1,34 @@
+{
+  "messages": [
+    {
+      "content": [
+        {
+          "text": "What is the weather in London?"
+        }
+      ],
+      "role": "user"
+    }
+  ],
+  "toolConfig": {
+    "tools": [
+      {
+        "toolSpec": {
+          "description": "Get the current weather for a location",
+          "inputSchema": {
+            "json": {
+              "properties": {
+                "location": {
+                  "description": "City name",
+                  "type": "string"
+                }
+              },
+              "required": ["location"],
+              "type": "object"
+            }
+          },
+          "name": "get_weather"
+        }
+      }
+    ]
+  }
+}

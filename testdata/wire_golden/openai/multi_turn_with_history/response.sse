@@ -1,0 +1,9 @@
+data: {"id":"wire-golden-id-1","object":"chat.completion.chunk","created":0,"model":"gpt-4o","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}],"usage":null}
+
+data: {"id":"wire-golden-id-1","object":"chat.completion.chunk","created":0,"model":"gpt-4o","choices":[{"index":0,"delta":{"content":"Your name is Alice."},"finish_reason":null}],"usage":null}
+
+data: {"id":"wire-golden-id-1","object":"chat.completion.chunk","created":0,"model":"gpt-4o","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":null}
+
+data: {"id":"wire-golden-id-1","object":"chat.completion.chunk","created":0,"model":"gpt-4o","choices":[],"usage":{"prompt_tokens":30,"completion_tokens":5,"total_tokens":35}}
+
+data: [DONE]

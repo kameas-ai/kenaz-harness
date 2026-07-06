@@ -110,6 +110,46 @@ investigation.
    (recorded with `-update`) under `testdata/wire_golden/<adapter>/<scenario>/`
    and add a `Test<Adapter>_<Scenario>_WireGolden` function.
 
+## Live-tier nightly run
+
+The `wire-golden-live.yml` workflow runs nightly at 09:00 UTC. It re-runs all
+`*_WireGolden` tests against real upstream APIs using provider credentials
+stored as Actions secrets (`WIRE_GOLDEN_<ADAPTER>_KEY`).
+
+### Drift outcomes
+
+| Outcome | What happened | Automated action |
+|---------|---------------|------------------|
+| `no-drift` | Fixtures still match upstream | No PR |
+| `response-drift` | Provider changed a response field | Auto-PR on `auto/wire-golden-refresh` updating `response.sse` only |
+| `request-regression` | Provider rejected our request body | Regression PR labelled `regression` for human investigation |
+| `skipped` | No keys configured for this adapter | Warning in workflow summary |
+
+A live-tier failure **never blocks `pr.yml`** (the commit-time CI gate).
+
+### Auto-PR constraints (response-drift)
+
+The auto-PR's diff is constrained to `testdata/wire_golden/*/response.sse`.
+CI on the auto-PR runs the locked tier against the new fixtures. If green and
+a maintainer approves, it merges. The auto-PR uses a single rolling branch
+`auto/wire-golden-refresh` — force-pushed on each new drift, so there is always
+at most one open response-drift PR.
+
+### Key rotation
+
+Provider keys are stored as `WIRE_GOLDEN_ANTHROPIC_KEY`, `WIRE_GOLDEN_OPENAI_KEY`,
+`WIRE_GOLDEN_OPENROUTER_KEY`, `WIRE_GOLDEN_BEDROCK_KEY` in the repository's
+Actions secrets. Rotate annually or when a key is revoked. Missing keys cause
+the affected adapter to skip (not fail) the workflow.
+
+### Drift dashboard
+
+The drift report is written to `docs/wire-golden-drift.md` and pushed to the
+`wire-golden-drift` branch on each nightly run. Read it to see the outcome of
+the last live-tier run and any open PRs.
+
+[View drift report](wire-golden-drift.md)
+
 ## Scrubber hygiene rules
 
 The scrubber (`core/llm/wirecheck/scrub/`) normalises recorded fixtures to be

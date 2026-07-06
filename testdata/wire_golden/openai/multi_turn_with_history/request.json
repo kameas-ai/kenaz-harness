@@ -1,0 +1,21 @@
+{
+  "messages": [
+    {
+      "content": "My name is Alice.",
+      "role": "user"
+    },
+    {
+      "content": "Hello Alice! How can I help you today?",
+      "role": "assistant"
+    },
+    {
+      "content": "What is my name?",
+      "role": "user"
+    }
+  ],
+  "model": "gpt-4o",
+  "stream": true,
+  "stream_options": {
+    "include_usage": true
+  }
+}
