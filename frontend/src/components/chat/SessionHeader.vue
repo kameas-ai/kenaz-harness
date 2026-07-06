@@ -120,19 +120,21 @@ const confirmOpen = ref(false);
 const lastError = ref<string | null>(null);
 
 // ── Export affordance (session-export-01NDFSEX05 WP03) ───────────────
+// WP03: replaced window.confirm picker with a proper dropdown menu.
 const exporting = ref(false);
+const exportMenuOpen = ref(false);
 
-async function onExportClick() {
+function openExportMenu() {
+  exportMenuOpen.value = !exportMenuOpen.value;
+}
+
+async function exportAs(format: 'markdown' | 'json') {
+  exportMenuOpen.value = false;
   if (exporting.value) return;
-  // Simple format selection via native confirm: OK → Markdown, Cancel → JSON.
-  const wantMarkdown = window.confirm(
-    'Export session — click OK for Markdown (.md) or Cancel for JSON (.json).',
-  );
-  const format = wantMarkdown ? 'markdown' : 'json';
   exporting.value = true;
   lastError.value = null;
   try {
-    await client.sessions.export(props.session.id, format as 'markdown' | 'json');
+    await client.sessions.export(props.session.id, format);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     if (!msg.includes('cancelled')) {
@@ -209,15 +211,61 @@ function cancelConfirm() {
 
     <AutonomyChip :session-id="session.id" />
 
-    <button
-      type="button"
-      data-testid="export-session-btn"
-      class="shrink-0 text-xs px-2 py-1 rounded text-ink-muted hover:text-ink hover:bg-surface-2 transition-colors"
-      :disabled="exporting"
-      @click="onExportClick"
-    >
-      Export…
-    </button>
+    <!-- Export dropdown (WP03: replaced window.confirm picker) -->
+    <div class="relative shrink-0">
+      <button
+        type="button"
+        data-testid="export-session-btn"
+        class="text-xs px-2 py-1 rounded text-ink-muted hover:text-ink hover:bg-surface-2 transition-colors"
+        :disabled="exporting"
+        aria-haspopup="menu"
+        :aria-expanded="exportMenuOpen ? 'true' : 'false'"
+        @click="openExportMenu"
+      >
+        Export…
+      </button>
+      <button
+        v-if="exportMenuOpen"
+        type="button"
+        class="fixed inset-0 z-40 cursor-default"
+        aria-hidden="true"
+        tabindex="-1"
+        @click="exportMenuOpen = false"
+      />
+      <div
+        v-if="exportMenuOpen"
+        class="absolute right-0 top-full z-50 mt-1 min-w-[9rem] rounded-sm border border-border-muted bg-surface-2 shadow-lg"
+        role="menu"
+      >
+        <button
+          type="button"
+          role="menuitem"
+          class="block w-full px-3 py-1.5 text-left text-xs text-ink hover:bg-surface-3"
+          data-testid="export-markdown"
+          @click="exportAs('markdown')"
+        >
+          Markdown (.md)
+        </button>
+        <button
+          type="button"
+          role="menuitem"
+          class="block w-full px-3 py-1.5 text-left text-xs text-ink hover:bg-surface-3"
+          data-testid="export-json"
+          @click="exportAs('json')"
+        >
+          JSON (.json)
+        </button>
+        <button
+          type="button"
+          role="menuitem"
+          class="block w-full px-3 py-1.5 text-left text-xs text-ink-muted hover:bg-surface-3"
+          data-testid="export-cancel"
+          @click="exportMenuOpen = false"
+        >
+          Cancel
+        </button>
+      </div>
+    </div>
 
     <!-- Move-to-project (relocated from the left-rail rows) -->
     <div class="relative shrink-0">

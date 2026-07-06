@@ -3786,6 +3786,24 @@ export interface FleetConfigPullStatusView {
   source: string;
   /** Hex SHA-256 of the last-seen bundle body (for 304 Not Modified gating). */
   bundleChecksum: string;
+  /** true when a fleet signing key is injected in this binary (FR-002). */
+  configDistributionEnabled: boolean;
+}
+
+/**
+ * FleetHealthView — compact fleet health summary for the global health
+ * indicator chip. Mirrors core/rpc/views/settings.FleetHealthView.
+ * (fleet-integrity-observability WP02 / FR-002 / FR-010)
+ */
+export interface FleetHealthView {
+  /** true when a fleet signing key is wired in this binary. */
+  configDistributionEnabled: boolean;
+  /** "fleet" | "stale-cache" | "default-deny-degraded" | "no-key" */
+  configSource: string;
+  /** Most recent error from the config poller, or empty string. */
+  configLastError: string;
+  /** true when the client has a valid (non-expired) session. */
+  signedIn: boolean;
 }
 
 /**
@@ -3798,6 +3816,55 @@ export interface LockdownStatusView {
   active: boolean;
   /** Admin-supplied reason text; empty when not active or no reason given. */
   reason: string;
+}
+
+// ── Fleet telemetry opt-in types (fleet-integrity-observability WP09) ────────
+
+/**
+ * TelemetryOptInView — per-class telemetry opt-in record from the fleet store.
+ * Mirrors core/rpc/views/settings.TelemetryOptInView.
+ * (harness-fleet-sync-activation-01NSYNC01 gap #4 / fleet-integrity-observability WP09)
+ */
+export interface TelemetryOptInView {
+  /** One of the seven telemetry classes (e.g. "model_calls", "tool_usage"). */
+  class: string;
+  optedIn: boolean;
+  /** RFC3339 timestamp of last opt-in change, or undefined. */
+  optedAt?: string;
+  /** "user_self" | "admin_default" | etc. */
+  source?: string;
+}
+
+// ── Unit sync types (fleet-integrity-observability WP08) ────────────────────
+
+/**
+ * UnitConflictView — one unresolved same-unit pull conflict surfaced by the
+ * UnitSyncer. Mirrors core/rpc/views/fleet.UnitConflictView.
+ */
+export interface UnitConflictView {
+  unit_id: string;
+  node_id: string;
+  local_version: number;
+  synced_version: number;
+  server_version: number;
+}
+
+/**
+ * UnitSyncStatusView — snapshot of the UnitSyncer state.
+ * Mirrors core/rpc/views/fleet.UnitSyncStatusView.
+ * (fleet-integrity-observability WP08)
+ */
+export interface UnitSyncStatusView {
+  cursor: string;
+  /** RFC3339 timestamp of the last successful pull, or empty. */
+  lastPullAt: string;
+  /** Most recent pull error, or empty. */
+  lastPullErr: string;
+  /** Most recent push error, or empty. */
+  lastPushErr: string;
+  pushCount: number;
+  pullCount: number;
+  conflictCount: number;
 }
 
 // ── Catalog types (fleet-share-and-sync-01NDFSEX14 WP02) ────────────────────
@@ -3868,4 +3935,16 @@ export interface PendingMCPSecret {
   recipe_id: string;
   /** env var names the user must supply before the MCP can start. */
   requires_secret_keys: string[];
+}
+
+/**
+ * BootHealthReport carries per-subsystem init error strings from the
+ * harness boot phase. A non-empty field means that subsystem failed to
+ * start; empty means healthy (FR-008 / agent-loop-robustness-parity WP08).
+ * Mirrors core/rpc.BootHealthReport.
+ */
+export interface BootHealthReport {
+  mcpInitError?: string;
+  skillsInitError?: string;
+  fleetInitError?: string;
 }

@@ -15,6 +15,8 @@
  */
 
 import { ServedTransport } from './servedTransport';
+import { ServedUnsupportedError } from './errors';
+import { dispatchServedEvent } from './useServedEvents';
 
 import type {
   AutonomyLayer,
@@ -158,6 +160,7 @@ import type {
   FleetProfileInfo,
   CapabilitiesView,
   FleetConfigPullStatusView,
+  FleetHealthView,
   LockdownStatusView,
   ContextPublishRequest,
   ContextPublishResult,
@@ -168,6 +171,9 @@ import type {
   CatalogFilter,
   SyncStatusView,
   PendingMCPSecret,
+  BootHealthReport,
+  TaskRow,
+  LineRow,
 } from './types';
 
 /**
@@ -484,6 +490,8 @@ interface WailsBindingsLike {
   Settings_FleetConfigPullStatus(): Promise<FleetConfigPullStatusView>;
   // fleet-emergency-lockdown-01NDFSEX12 WP02
   Settings_FleetLockdownStatus(): Promise<LockdownStatusView>;
+  // fleet-integrity-observability WP02 — global fleet health indicator
+  Settings_FleetHealth(): Promise<FleetHealthView>;
 
   Memory_ListChunks(filter: MemoryListFilter): Promise<MemoryChunk[]>;
   Memory_RememberMessage(
@@ -803,6 +811,22 @@ interface WailsBindingsLike {
   /** Publish a Cedar rule to the team via fleet. Requires policy_admin role. */
   Cedar_PublishToTeam(ruleID: string, ruleSource: string): Promise<void>;
 
+  // ── Fleet telemetry opt-ins (fleet-integrity-observability WP09) ─────────
+  /** Returns the per-class telemetry opt-in set from the fleet store. */
+  Settings_FleetTelemetryOptIns(): Promise<import('./types').TelemetryOptInView[]>;
+  /** Flip a single telemetry class opt-in in the fleet store. */
+  Settings_FleetSetTelemetryOptIn(className: string, optedIn: boolean): Promise<void>;
+
+  // ── Unit sync conflicts (fleet-integrity-observability WP08) ─────────────
+  /** Returns the current unit syncer state: pull/push errors, conflict count. */
+  Unit_SyncStatus(): Promise<import('./types').UnitSyncStatusView>;
+  /** Returns the list of unresolved same-unit pull conflicts. */
+  Unit_ListConflicts(): Promise<import('./types').UnitConflictView[]>;
+  /** Applies a whole-body MERGE resolution to a conflicted unit. */
+  Unit_ResolveMerge(unitID: string, resolvedBody: string): Promise<void>;
+  /** Applies an ENSHRINE resolution: creates a coexisting unit. Returns the new unit ID. */
+  Unit_ResolveEnshrine(srcUnitID: string, enshrinedTitle: string, enshrinedBody: string, reason: string): Promise<string>;
+
   // ── audit-log-enhancement-01KX5R8F WP07 — retention settings ──────────
   Settings_GetAuditSettings(): Promise<import('./types').AuditSettings>;
   Settings_SetAuditSettings(s: import('./types').AuditSettings): Promise<void>;
@@ -811,6 +835,15 @@ interface WailsBindingsLike {
   Planmode_Approve(req: { session_id: string; plan_id: string }): Promise<Record<string, unknown>>;
   Planmode_Discard(req: { session_id: string; plan_id: string }): Promise<Record<string, unknown>>;
   Planmode_Edit(req: { session_id: string; plan_id: string; edited_plan: string }): Promise<Record<string, unknown>>;
+  // agent-loop-robustness-parity WP08: boot-health surface (FR-008)
+  BootHealth_Get(): Promise<BootHealthReport>;
+  // background-task-monitor WP05: task management bindings
+  Tasks_List(): Promise<TaskRow[]>;
+  Tasks_Get(id: string): Promise<TaskRow>;
+  Tasks_Tail(id: string, fromOffset: number): Promise<LineRow[]>;
+  Tasks_Abort(id: string): Promise<void>;
+  Tasks_AbortBySession(sessionID: string): Promise<void>;
+  Tasks_ListBySession(sessionID: string): Promise<TaskRow[]>;
 }
 
 
@@ -1902,6 +1935,14 @@ export interface SettingsClient {
   // ── fleet-emergency-lockdown-01NDFSEX12 WP02 ────────────────────────────
   /** Return the current fleet emergency lockdown state. */
   fleetLockdownStatus(): Promise<LockdownStatusView>;
+  // ── fleet-integrity-observability WP02 ──────────────────────────────────
+  /** Global fleet health summary: signing-key presence + config source + session state. */
+  fleetHealth(): Promise<FleetHealthView>;
+  // ── fleet-integrity-observability WP09 ──────────────────────────────────
+  /** Returns the per-class telemetry opt-in set from the fleet store. */
+  fleetTelemetryOptIns(): Promise<import('./types').TelemetryOptInView[]>;
+  /** Flip a single telemetry class opt-in. */
+  setFleetTelemetryOptIn(className: string, optedIn: boolean): Promise<void>;
 }
 
 /**
@@ -2798,6 +2839,21 @@ export interface HarnessClient {
   sync: SyncClient;
   /** Team Cedar policy publish surface (fleet-share-and-sync-01NDFSEX14 WP07). */
   cedarPublish: CedarPublishClient;
+  // ── Unit sync (fleet-integrity-observability WP08) ────────────────────
+  Unit_SyncStatus(): Promise<import('./types').UnitSyncStatusView>;
+  Unit_ListConflicts(): Promise<import('./types').UnitConflictView[]>;
+  Unit_ResolveMerge(unitID: string, resolvedBody: string): Promise<void>;
+  Unit_ResolveEnshrine(srcUnitID: string, enshrinedTitle: string, enshrinedBody: string, reason: string): Promise<string>;
+  // ── Boot health (agent-loop-robustness-parity WP08 / FR-008) ──────────
+  /** Returns per-subsystem init error strings from the boot phase. */
+  BootHealth_Get(): Promise<BootHealthReport>;
+  // ── Background tasks (background-task-monitor WP05) ───────────────────
+  Tasks_List(): Promise<TaskRow[]>;
+  Tasks_Get(id: string): Promise<TaskRow>;
+  Tasks_Tail(id: string, fromOffset: number): Promise<LineRow[]>;
+  Tasks_Abort(id: string): Promise<void>;
+  Tasks_AbortBySession(sessionID: string): Promise<void>;
+  Tasks_ListBySession(sessionID: string): Promise<TaskRow[]>;
 }
 
 // ── runtime client ─────────────────────────────────────────────────────
@@ -3130,6 +3186,12 @@ export function createHarnessClient(): HarnessClient {
       fleetConfigPullStatus: () => b().Settings_FleetConfigPullStatus(),
       // fleet-emergency-lockdown-01NDFSEX12 WP02
       fleetLockdownStatus: () => b().Settings_FleetLockdownStatus(),
+      // fleet-integrity-observability WP02
+      fleetHealth: () => b().Settings_FleetHealth(),
+      // fleet-integrity-observability WP09
+      fleetTelemetryOptIns: () => b().Settings_FleetTelemetryOptIns(),
+      setFleetTelemetryOptIn: (className, optedIn) =>
+        b().Settings_FleetSetTelemetryOptIn(className, optedIn),
     },
     permissions: {
       listGrants: (family) =>
@@ -3399,24 +3461,87 @@ export function createHarnessClient(): HarnessClient {
     cedarPublish: {
       publishToTeam: (ruleID, ruleSource) => b().Cedar_PublishToTeam(ruleID, ruleSource),
     },
+    // ── Unit sync (fleet-integrity-observability WP08) ────────────────────
+    Unit_SyncStatus: () => b().Unit_SyncStatus(),
+    Unit_ListConflicts: () => b().Unit_ListConflicts(),
+    Unit_ResolveMerge: (unitID, resolvedBody) => b().Unit_ResolveMerge(unitID, resolvedBody),
+    Unit_ResolveEnshrine: (srcUnitID, enshrinedTitle, enshrinedBody, reason) =>
+      b().Unit_ResolveEnshrine(srcUnitID, enshrinedTitle, enshrinedBody, reason),
+    // ── Boot health (agent-loop-robustness-parity WP08 / FR-008) ──────────
+    BootHealth_Get: () => b().BootHealth_Get(),
+    // ── Background tasks (background-task-monitor WP05) ───────────────────
+    Tasks_List: () => b().Tasks_List(),
+    Tasks_Get: (id) => b().Tasks_Get(id),
+    Tasks_Tail: (id, fromOffset) => b().Tasks_Tail(id, fromOffset),
+    Tasks_Abort: (id) => b().Tasks_Abort(id),
+    Tasks_AbortBySession: (sessionID) => b().Tasks_AbortBySession(sessionID),
+    Tasks_ListBySession: (sessionID) => b().Tasks_ListBySession(sessionID),
   };
 }
 
 // ── served-mode client (HTTP/WS transport) ────────────────────────────
 
 /**
+ * Client-side registry mapping subscription ids to WS close callbacks.
+ * Module-level singleton — safe because served mode runs one instance.
+ */
+const _servedStreamRegistry = new Map<string, () => void>();
+
+/**
+ * createUnsupportedServedClient — a HarnessClient whose every method
+ * rejects with ServedUnsupportedError.  Used as the base for
+ * createServedHarnessClient() so that any method not explicitly overlaid
+ * by the real transport returns an honest error instead of fake data.
+ *
+ * This replaces the old createFakeHarnessClient() base that silently
+ * accepted writes which were then discarded (FR-001).
+ *
+ * Implementation strategy: start from the fake client (correct shape),
+ * then walk every function value recursively and replace it with a
+ * rejector that throws ServedUnsupportedError.  This avoids having to
+ * enumerate every method manually and stays automatically in sync when
+ * new methods are added to HarnessClient.
+ */
+export function createUnsupportedServedClient(): HarnessClient {
+  const fake = createFakeHarnessClient();
+
+  function wrapValue(val: unknown, path: string): unknown {
+    if (typeof val === 'function') {
+      // Replace with a function that always rejects.
+      return (..._args: unknown[]) =>
+        Promise.reject(new ServedUnsupportedError(path));
+    }
+    if (val !== null && typeof val === 'object' && !Array.isArray(val)) {
+      // Recurse into sub-client objects.
+      const wrapped: Record<string, unknown> = {};
+      for (const [k, v] of Object.entries(val as Record<string, unknown>)) {
+        wrapped[k] = wrapValue(v, `${path}.${k}`);
+      }
+      return wrapped;
+    }
+    return val;
+  }
+
+  // Walk the fake client's top-level fields.
+  const result: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(fake as unknown as Record<string, unknown>)) {
+    result[k] = wrapValue(v, k);
+  }
+  // openExternalURL is void (not Promise), so override it separately to be a no-op.
+  result['openExternalURL'] = (_url: string): void => { /* no-op in unsupported client */ };
+  return result as unknown as HarnessClient;
+}
+
+/**
  * createServedHarnessClient — a HarnessClient whose subset of methods that
  * core/serve exposes (AppInfo, ShellStatus, Sessions_List, Sessions_Get,
  * Sessions_Stream) are wired to the HTTP/WS transport.  All other methods
- * fall back to the fake-client stubs so the application stays mountable in
- * served mode without crashing on unimplemented RPCs.
+ * reject with ServedUnsupportedError so that components can render an honest
+ * "not available in served mode" state instead of fabricated data (FR-001).
  *
  * Token resolution is handled inside ServedTransport (meta tag →
  * window.__HARNESS_TOKEN__ → empty).  Callers can pass an explicit token
  * or baseURL for testing / cross-origin use.
- *
- * Deferred: porting every RPC method; push-based WS streaming; CSRF/CORS
- * hardening; the nix leaf flake.
  */
 export function createServedHarnessClient(opts?: {
   baseURL?: string;
@@ -3427,10 +3552,10 @@ export function createServedHarnessClient(opts?: {
   // there and createServedHarnessClient is never imported/called.
   const transport = new ServedTransport(opts);
 
-  // Start with a fully-stubbed fake so every method is callable.
-  const base = createFakeHarnessClient();
+  // Start with a base that rejects every call with ServedUnsupportedError.
+  // Overlay only the methods that core/serve actually exposes.
+  const base = createUnsupportedServedClient();
 
-  // Overlay the methods that core/serve exposes over HTTP/WS.
   return {
     ...base,
 
@@ -3457,8 +3582,7 @@ export function createServedHarnessClient(opts?: {
        * startStream — opens a WebSocket subscription for Sessions_Stream.
        * Returns a synthetic subscription id; the caller must keep it to call
        * stopStream.  The actual session-update events are routed via the WS
-       * frame handler.  Note: the served WS is poll-based on the server side
-       * (push-based broker is deferred); client-visible behaviour is the same.
+       * frame handler.
        *
        * The subscription id is stored in the client-side registry so
        * stopStream can close the underlying WS.
@@ -3468,11 +3592,26 @@ export function createServedHarnessClient(opts?: {
         const cancel = transport.openStream({
           method: 'Sessions_Stream',
           params: { id },
-          onFrame: (_event, _data) => {
-            // Frames arrive but the served mode has no Wails EventsOn to
-            // relay them to subscribers.  Components polling via list()
-            // will see updates on the next poll cycle.  A proper push path
-            // is deferred (requires a non-Wails emitter WP).
+          onFrame: (event, data) => {
+            // Dispatch WS frames into the served-event bus so composables
+            // that use useEventStream() receive them without the Wails
+            // runtime bridge (FR-007).
+            //
+            // elicit:pending — a new blocking dialog was opened.
+            // elicit:pending:snapshot — list of in-flight asks on reconnect.
+            if (event === 'elicit:pending') {
+              dispatchServedEvent('elicit:pending', data);
+            } else if (event === 'elicit:pending:snapshot') {
+              // Snapshot is an array of ElicitRequest; re-emit each as
+              // an individual 'elicit:pending' event so the
+              // AskUserQuestion component queues them normally.
+              const list = Array.isArray(data) ? data : [];
+              for (const req of list) {
+                dispatchServedEvent('elicit:pending', req);
+              }
+            }
+            // session:snapshot and sessions:update are handled via
+            // sessions.list() polling; no action needed here.
           },
         });
         // Store the cancel fn keyed by subId so stopStream can find it.
@@ -3489,14 +3628,20 @@ export function createServedHarnessClient(opts?: {
         return Promise.resolve();
       },
     },
+
+    elicit: {
+      ...base.elicit,
+
+      /**
+       * listPending — returns in-flight elicitation asks (FR-007).
+       * The served frontend calls this on reconnect to re-render any dialog
+       * that was open before the WS was lost.
+       */
+      listPending: () =>
+        transport.call<import('./types').ElicitRequest[]>('Elicit_ListPending'),
+    },
   };
 }
-
-/**
- * Client-side registry mapping subscription ids to WS close callbacks.
- * Module-level singleton — safe because served mode runs one instance.
- */
-const _servedStreamRegistry = new Map<string, () => void>();
 
 // ── fake client for tests ──────────────────────────────────────────────
 
@@ -3971,9 +4116,20 @@ export function createFakeHarnessClient(
       // fleet-config-pull-01NDFSEX10 WP02
       fleetConfigPullStatus: async () => ({
         lastAppliedId: 0, lastAppliedAt: '', lastError: '', source: 'default-deny', bundleChecksum: '',
+        configDistributionEnabled: false,
       }),
       // fleet-emergency-lockdown-01NDFSEX12 WP02
       fleetLockdownStatus: async () => ({ active: false, reason: '' }),
+      // fleet-integrity-observability WP02
+      fleetHealth: async (): Promise<FleetHealthView> => ({
+        configDistributionEnabled: false,
+        configSource: 'no-key',
+        configLastError: '',
+        signedIn: false,
+      }),
+      // fleet-integrity-observability WP09
+      fleetTelemetryOptIns: async (): Promise<import('./types').TelemetryOptInView[]> => [],
+      setFleetTelemetryOptIn: noop,
     },
     permissions: {
       listGrants: async () => [],
@@ -4597,6 +4753,31 @@ export function createFakeHarnessClient(
     cedarPublish: {
       publishToTeam: noop,
     },
+    // ── Unit sync (fleet-integrity-observability WP08) ────────────────────
+    Unit_SyncStatus: async (): Promise<import('./types').UnitSyncStatusView> => ({
+      cursor: '',
+      lastPullAt: '',
+      lastPullErr: '',
+      lastPushErr: '',
+      pushCount: 0,
+      pullCount: 0,
+      conflictCount: 0,
+    }),
+    Unit_ListConflicts: async (): Promise<import('./types').UnitConflictView[]> => [],
+    Unit_ResolveMerge: noop,
+    Unit_ResolveEnshrine: async () => '',
+    // ── Boot health (agent-loop-robustness-parity WP08 / FR-008) ──────────
+    BootHealth_Get: async (): Promise<BootHealthReport> => ({}),
+    // ── Background tasks (background-task-monitor WP05) ───────────────────
+    Tasks_List: async (): Promise<TaskRow[]> => [],
+    Tasks_Get: async (): Promise<TaskRow> => ({
+      id: '', kind: '', ownerSessionId: '', cmd: '', description: '',
+      status: 'running', exitCode: 0, startedAt: '', ageMs: 0,
+    }),
+    Tasks_Tail: async (): Promise<LineRow[]> => [],
+    Tasks_Abort: noop,
+    Tasks_AbortBySession: noop,
+    Tasks_ListBySession: async (): Promise<TaskRow[]> => [],
   };
 
   return { ...defaults, ...seed };

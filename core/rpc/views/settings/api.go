@@ -1221,6 +1221,11 @@ type SettingsAPI interface {
 	// (fleet-emergency-lockdown-01NDFSEX12 WP02)
 	FleetLockdownStatus(ctx context.Context) (LockdownStatusView, error)
 
+	// FleetHealth returns a compact fleet health summary: signing-key presence,
+	// config source, last error, and session state. Used by the global health
+	// indicator chip (WP10 / FR-002 / FR-010).
+	FleetHealth(ctx context.Context) (FleetHealthView, error)
+
 	// FleetTelemetryOptIns returns the per-class telemetry opt-in set from the
 	// fleet store (source of truth, replacing local-only JSON).
 	// (harness-fleet-sync-activation-01NSYNC01 gap #4)
@@ -1280,6 +1285,25 @@ type FleetConfigPullStatusView struct {
 	// BundleChecksum is the hex SHA-256 of the last-seen bundle body (used for
 	// 304 Not Modified gating).
 	BundleChecksum string `json:"bundleChecksum"`
+	// ConfigDistributionEnabled reports whether a fleet signing key is wired
+	// in this binary (FR-002). When false the fleet config distribution is
+	// silently disabled (safe fail-closed), and the UI shows a degraded state.
+	ConfigDistributionEnabled bool `json:"configDistributionEnabled"`
+}
+
+// FleetHealthView is the wire-safe projection of overall fleet health
+// surfaced to the global health indicator (WP10 / FR-002 / FR-010).
+type FleetHealthView struct {
+	// ConfigDistributionEnabled reports whether a fleet signing key is wired
+	// in this binary. false means fleet config bundles can never be applied.
+	ConfigDistributionEnabled bool `json:"configDistributionEnabled"`
+	// ConfigSource is the last-known config source: "fleet", "stale-cache",
+	// "default-deny-degraded", or "no-key".
+	ConfigSource string `json:"configSource"`
+	// ConfigLastError is the most recent error string from the config poller.
+	ConfigLastError string `json:"configLastError"`
+	// SignedIn is true when the client has a valid (non-expired) session.
+	SignedIn bool `json:"signedIn"`
 }
 
 // AuditSettings holds the operator-configurable audit log retention policy.

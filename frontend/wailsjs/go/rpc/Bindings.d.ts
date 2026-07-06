@@ -48,6 +48,7 @@ import {fleet} from '../models';
 import {update} from '../models';
 import {workflow} from '../models';
 import {workflows} from '../models';
+import {tasks} from '../models';
 
 export function A2A_ListCards():Promise<Array<a2a.Card>>;
 
@@ -587,6 +588,8 @@ export function Settings_FleetCapabilities():Promise<settings.CapabilitiesView>;
 
 export function Settings_FleetConfigPullStatus():Promise<settings.FleetConfigPullStatusView>;
 
+export function Settings_FleetHealth():Promise<settings.FleetHealthView>;
+
 export function Settings_FleetLockdownStatus():Promise<settings.LockdownStatusView>;
 
 export function Settings_FleetProfile():Promise<settings.FleetProfileInfo>;
@@ -805,6 +808,8 @@ export function Unit_ResolveLoadable(arg1:string,arg2:string):Promise<Array<flee
 
 export function Unit_ResolveMerge(arg1:string,arg2:string):Promise<void>;
 
+export function Unit_SyncStatus():Promise<fleet.UnitSyncStatusView>;
+
 export function Update_Apply():Promise<void>;
 
 export function Update_ListSkippedVersions():Promise<Array<string>>;
@@ -854,3 +859,15 @@ export function Workflows_ScheduleNextFire(arg1:string):Promise<string>;
 export function Workflows_ScheduleRunHistory(arg1:string,arg2:number):Promise<Array<workflows.RunSummary>>;
 
 export function Workflows_ScheduleSet(arg1:workflows.ScheduleSetInput):Promise<void>;
+
+export function Tasks_List():Promise<Array<tasks.TaskRow>>;
+
+export function Tasks_Get(arg1:string):Promise<tasks.TaskRow>;
+
+export function Tasks_Tail(arg1:string,arg2:number):Promise<Array<tasks.LineRow>>;
+
+export function Tasks_Abort(arg1:string):Promise<void>;
+
+export function Tasks_AbortBySession(arg1:string):Promise<void>;
+
+export function Tasks_ListBySession(arg1:string):Promise<Array<tasks.TaskRow>>;

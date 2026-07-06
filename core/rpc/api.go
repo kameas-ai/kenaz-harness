@@ -103,6 +103,8 @@ import (
 	credstoreRefs "github.com/kameas-ai/kenaz-harness/core/credstore/refs"
 	sentryview "github.com/kameas-ai/kenaz-harness/core/rpc/views/sentry"
 	fleetview "github.com/kameas-ai/kenaz-harness/core/rpc/views/fleet"
+	tasksview "github.com/kameas-ai/kenaz-harness/core/rpc/views/tasks"
+	coretasks "github.com/kameas-ai/kenaz-harness/core/tasks"
 	catalogview "github.com/kameas-ai/kenaz-harness/core/rpc/views/catalog"
 	syncview "github.com/kameas-ai/kenaz-harness/core/rpc/views/sync"
 	cedarview "github.com/kameas-ai/kenaz-harness/core/rpc/views/cedar"
@@ -278,6 +280,11 @@ type HarnessAPI interface {
 	// CedarPublish exposes the team Cedar policy publish surface
 	// (fleet-share-and-sync-01NDFSEX14 WP07). Admin-gated.
 	CedarPublish() cedarview.CedarAPI
+
+	// Tasks exposes the background-task registry RPC surface
+	// (background-task-monitor-01KZNP3C WP05). Provides List, Get, Tail,
+	// Abort, and AbortBySession for the Tasks panel.
+	Tasks() tasksview.TasksAPI
 }
 
 // ShellStatus drives the Toolbar status pills + LegendBar live-rate
@@ -577,6 +584,12 @@ type API struct {
 	// contextsLib is the open Context Library. Held so the fleet merger
 	// closure (FR-012) can call MergeFleetEntries without re-opening the lib.
 	contextsLib *corecontexts.Library
+
+	// taskReg is the background-task registry (background-task-monitor-01KZNP3C).
+	// Created at boot with RecoverOrphansWithPIDCheck so orphaned running rows
+	// are marked crashed before any new runs register (FR-003 / WP03).
+	taskReg  *coretasks.Registry
+	tasksAPI tasksview.TasksAPI
 }
 
 // Builtins returns the in-binary tool registry. Used by the chat-input
@@ -725,6 +738,11 @@ func (a *API) Shutdown() {
 	if a.unitSyncer != nil {
 		a.unitSyncer.Stop()
 	}
+	// Fleet background goroutines (capability poller, config poller, lockdown
+	// watcher). StopFleetBackground is idempotent and nil-safe.
+	if a.settingsImpl != nil {
+		a.settingsImpl.StopFleetBackground()
+	}
 }
 
 // ErrEvalNotConfigured is returned by Sessions_StartCapture /
@@ -818,6 +836,40 @@ func New(c *core.Core) *API {
 		unitsMgr = units.NewManager(units.NewSQLStore(db))
 	}
 
+	// Background-task registry (background-task-monitor-01KZNP3C WP05 / WP03).
+	// Create early so RecoverOrphansWithPIDCheck marks orphaned running rows
+	// crashed before any new task runs register (FR-003).
+	var taskReg *coretasks.Registry
+	var tasksAPI tasksview.TasksAPI
+	{
+		var taskStore coretasks.SQLStore
+		if db != nil {
+			type sqlHandle interface{ SQL() *sql.DB }
+			if h, ok := db.(sqlHandle); ok {
+				if rawDB := h.SQL(); rawDB != nil {
+					taskStore = coretasks.NewSQLiteStore(rawDB)
+				}
+			}
+		}
+		logDir := ""
+		if dataDir != "" {
+			logDir = filepath.Join(dataDir, "task_logs")
+		}
+		taskReg = coretasks.NewRegistry(coretasks.Options{
+			Store:  taskStore,
+			LogDir: logDir,
+			Logger: logging.L(),
+		})
+		// FR-003: mark orphaned running rows crashed at boot. Best-effort;
+		// errors are absorbed — the registry operates in-memory-only on
+		// failures.
+		aliveCount := coretasks.RecoverOrphansWithPIDCheck(context.Background(), taskReg, logDir)
+		logging.L().Info("rpc.boot.task_orphan_recovery",
+			"alive_tasks", aliveCount,
+		)
+		tasksAPI = tasksview.NewAPI(taskReg)
+	}
+
 	a := &API{
 		core:           c,
 		a2aAPI:         &stubA2A{},
@@ -834,6 +886,8 @@ func New(c *core.Core) *API {
 		usageMgr:       usageMgr,
 		storageAPI:     storageview.NewAPI(db, dataDir),
 		unitsMgr:       unitsMgr,
+		taskReg:        taskReg,
+		tasksAPI:       tasksAPI,
 	}
 	a.attachmentsAPI = newAttachmentsAPI(c, attMgr)
 	a.artifactsAPI = newArtifactsAPI(c, artStore, artMgr, media)
@@ -932,6 +986,11 @@ func New(c *core.Core) *API {
 	a.settingsAPI = settingsImpl
 	a.settingsImpl = settingsImpl
 
+	// FR-008 (agent-loop-robustness-parity WP08): boot health error strings
+	// collected during subsystem init. Passed to SetBootErrors at the end of
+	// api.New so the frontend's BootHealthBanner can display targeted warnings.
+	var bootMCPErr, bootSkillsErr, bootFleetErr string
+
 	// Wire the fleet client (fleet-auth-foundation-01NDFSEX08 chassis-boot wire-
 	// up). Without this every fleet RPC returns ErrFleetDisabled because
 	// SettingsAPI.fleetClient() is nil. NewClient returns a nopClient when
@@ -941,6 +1000,7 @@ func New(c *core.Core) *API {
 		settingsImpl.SetFleetClient(fleetClient, dataDir)
 	} else {
 		logging.L().Warn("fleet.client.init_error", "err", ferr.Error())
+		bootFleetErr = ferr.Error()
 	}
 
 	// Wire the lockdown broker so fleet:lockdown:changed events reach the
@@ -1946,6 +2006,14 @@ func New(c *core.Core) *API {
 		})
 		logging.L().Info("onboarding.api.ready")
 	}
+
+	// FR-008 (agent-loop-robustness-parity WP08): record the boot-phase
+	// error strings so the frontend's BootHealthBanner can surface them.
+	// Called once at the end of api.New when all subsystems have had a
+	// chance to log their init errors. Async subsystems (MCP pool, skills
+	// BootLoad) are not yet captured here; they update the store when their
+	// goroutines complete (future follow-up). Fleet init is synchronous.
+	SetBootErrors(bootMCPErr, bootSkillsErr, bootFleetErr)
 
 	return a
 }
@@ -3316,6 +3384,36 @@ func buildChatRunner(
 			// fires this boundary per tool result; the sink runs the
 			// code-block detector against the tool payload.
 			env.Hooks.RegisterToolPostHook(artifactSinkConcrete.OnPostToolMessage)
+		}
+		// WP07 (agent-loop-robustness-parity FR-007): populate the two
+		// dispatcher configuration fields that were defined but never wired
+		// from the production path.
+		//
+		// ToolCallTimeout: 5 minutes covers the slowest realistic tool calls
+		// (long bash scripts, large file writes) while preventing permanent
+		// hangs from a stuck subprocess. Overridable in tests via the
+		// runner's EnvDefaults callback.
+		if env.ToolCallTimeout == 0 {
+			env.ToolCallTimeout = 5 * time.Minute
+		}
+		// MutatingTools: the write-side builtin tools that must NOT run
+		// concurrently with one another. Read-only tools (read_file,
+		// list_dir, glob, grep, web_search, web_fetch, list_secrets,
+		// ask_user_question, sleep, monitor, skill, subagent_dispatch)
+		// stay parallel. MCP tools are not in-process, so they are
+		// conservatively treated as read-only here; the MCP pool serialises
+		// concurrent calls on its own. kenaz__bash is included because bash
+		// commands can mutate shared state (filesystem, processes).
+		if env.MutatingTools == nil {
+			env.MutatingTools = map[string]bool{
+				corebash.Name:                true, // "kenaz__bash"
+				"kenaz__write_file":           true,
+				"kenaz__edit_file":            true,
+				"kenaz__save_artifact":        true,
+				"kenaz__update_artifact":      true,
+				"kenaz__todo_write":           true,
+				"kenaz__request_filesystem_access": true,
+			}
 		}
 	}
 	// long-turn-resilience-01KR3PRS WP03: PartialPersister wires the
@@ -5603,6 +5701,10 @@ func (a *API) Sync() syncview.SyncAPI { return a.syncAPI }
 // CedarPublish implements HarnessAPI. Returns the team Cedar policy publish surface.
 // (fleet-share-and-sync-01NDFSEX14 WP07)
 func (a *API) CedarPublish() cedarview.CedarAPI { return a.cedarPublishAPI }
+
+// Tasks implements HarnessAPI. Returns the background-task registry RPC surface.
+// (background-task-monitor-01KZNP3C WP05 / FR-003)
+func (a *API) Tasks() tasksview.TasksAPI { return a.tasksAPI }
 
 // brokerPlanEmitter adapts a *StreamBroker to the planmodeview.EventEmitter
 // interface. The broker's Publish method broadcasts to all subscribers

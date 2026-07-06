@@ -43,6 +43,18 @@ type RegistryIface interface {
 	Abort(ctx context.Context, id string) error
 }
 
+// TasksAPI is the narrow interface the HarnessAPI surface exposes for the
+// background task registry (background-task-monitor-01KZNP3C WP05).
+// Implemented by *API.
+type TasksAPI interface {
+	Tasks_List(ctx context.Context) ([]TaskRow, error)
+	Tasks_Get(ctx context.Context, id string) (TaskRow, error)
+	Tasks_Tail(ctx context.Context, id string, fromOffset int64) ([]LineRow, error)
+	Tasks_Abort(ctx context.Context, id string) error
+	Tasks_AbortBySession(ctx context.Context, sessionID string) error
+	Tasks_ListBySession(ctx context.Context, sessionID string) ([]TaskRow, error)
+}
+
 // API provides the four Wails-bound task operations.
 type API struct {
 	reg RegistryIface

@@ -2,8 +2,17 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mount, flushPromises } from '@vue/test-utils';
 import ChatInput from '@/components/chat/ChatInput.vue';
 import { provideFakeClient } from '@/lib/harnessClientContext';
+import { setConnectionState } from '@/lib/useConnectionState';
 import type { HarnessClient } from '@/lib/harnessClient';
 import { axe } from 'vitest-axe';
+
+// Controllable served-mode flag (default false = desktop) so the existing
+// suite is unaffected. ChatInput reads isServedMode() once at setup.
+let servedModeFlag = false;
+vi.mock('@/lib/useServedMode', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/useServedMode')>();
+  return { ...actual, isServedMode: () => servedModeFlag };
+});
 
 function mountInput(
   props: Record<string, unknown> = {},
@@ -42,6 +51,8 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.restoreAllMocks();
+  servedModeFlag = false;
+  setConnectionState('ready');
 });
 
 describe('ChatInput (chat-ui)', () => {
@@ -411,5 +422,39 @@ describe('ChatInput (chat-ui)', () => {
     });
     // @ts-expect-error — toHaveNoViolations is added via test-setup.ts extend
     expect(results).toHaveNoViolations();
+  });
+
+  // ── served-mode connection gate (FR-003) ─────────────────────────────────
+  it('disables the composer and shows a notice when the served connection is lost', async () => {
+    servedModeFlag = true;
+    setConnectionState('lost');
+    const w = mountInput();
+    await flushPromises();
+
+    // Textarea + send button are disabled; the lost-connection notice shows.
+    expect(w.find('textarea').attributes('disabled')).toBeDefined();
+    expect(w.find('button[type="submit"]').attributes('disabled')).toBeDefined();
+    expect(w.find('[data-testid="chat-input-connection-lost"]').exists()).toBe(true);
+
+    // Enter must not emit send while the backend is unreachable.
+    await w.find('textarea').setValue('hello');
+    await w.find('textarea').trigger('keydown', { key: 'Enter' });
+    expect(w.emitted('send')).toBeFalsy();
+
+    // Recovery re-enables the composer.
+    setConnectionState('ready');
+    await flushPromises();
+    expect(w.find('textarea').attributes('disabled')).toBeUndefined();
+    expect(w.find('[data-testid="chat-input-connection-lost"]').exists()).toBe(false);
+  });
+
+  it('does NOT gate the composer on connection state in native mode', async () => {
+    servedModeFlag = false;
+    setConnectionState('lost');
+    const w = mountInput();
+    await flushPromises();
+    // Native: connection state must not disable the composer.
+    expect(w.find('textarea').attributes('disabled')).toBeUndefined();
+    expect(w.find('[data-testid="chat-input-connection-lost"]').exists()).toBe(false);
   });
 });

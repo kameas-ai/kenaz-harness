@@ -10,7 +10,7 @@
  *   3. On decision, BasePermissionModal calls
  *      client.permissions.resolve(requestID, decision) and emits
  *      'resolved' so the parent can pop the queue.
- *   4. Esc key = Deny. 5-minute timeout = auto-Deny.
+ *   4. Esc key = Deny (via BaseDialog). 5-minute timeout = auto-Deny.
  *
  * Props:
  *   - familyIcon  — emoji or short label (rendered in the eyebrow)
@@ -27,11 +27,15 @@
  *
  * Emits:
  *   - resolved(requestID: string, decision: string)
+ *
+ * Migrated (FR-001 / WP01 review): uses BaseDialog for Escape-to-close +
+ * focus-trap instead of a hand-rolled overlay.
  */
 
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, ref, watch } from 'vue';
 import { useHarnessClient } from '@/lib/harnessClientContext';
 import type { PermissionRequest } from '@/lib/types';
+import BaseDialog from '@/components/ui/BaseDialog.vue';
 
 const props = withDefaults(
   defineProps<{
@@ -90,15 +94,7 @@ watch(
 
 onBeforeUnmount(clearTimer);
 
-// Esc = Deny
-function onKeydown(e: KeyboardEvent) {
-  if (e.key === 'Escape' && props.request) {
-    void decide('deny');
-  }
-}
-
-onMounted(() => document.addEventListener('keydown', onKeydown));
-onBeforeUnmount(() => document.removeEventListener('keydown', onKeydown));
+// Esc = Deny. Delegated to BaseDialog's @close handler (see template).
 
 async function decide(decision: string) {
   const req = props.request;
@@ -126,18 +122,21 @@ defineExpose({ decide });
 </script>
 
 <template>
-  <div
-    v-if="request"
-    class="fixed inset-0 z-50 flex items-center justify-center"
-    role="dialog"
-    aria-modal="true"
-    :aria-labelledby="`perm-modal-title-${request.request_id}`"
-    data-testid="base-permission-modal"
+  <!--
+    FR-001 / WP01 review fix: BaseDialog provides Escape-to-close + focus-trap.
+    Escape maps to @close which calls decide('deny') so the behaviour is
+    preserved (Esc = Deny).
+  -->
+  <BaseDialog
+    :open="!!request"
+    :title="`${familyLabel} — permission required`"
+    z-class="z-50"
+    :close-on-overlay-click="false"
+    panel-class="w-full max-w-lg rounded-md border border-accent-hairline bg-surface-1 p-5 shadow-xl"
+    @close="decide('deny')"
   >
-    <div class="absolute inset-0 bg-modal-overlay" />
-    <div
-      class="relative w-full max-w-lg rounded-md border border-accent-hairline bg-surface-1 p-5 shadow-xl"
-    >
+    <template v-if="request">
+      <div data-testid="base-permission-modal">
       <!-- Eyebrow -->
       <div class="flex items-center gap-1.5 font-ui text-[11px] uppercase tracking-[0.18em] text-ink-subtle">
         <span aria-hidden="true">{{ familyIcon }}</span>
@@ -230,6 +229,7 @@ defineExpose({ decide });
       >
         +{{ extraPending }} more pending
       </div>
-    </div>
-  </div>
+      </div>
+    </template>
+  </BaseDialog>
 </template>

@@ -77,6 +77,12 @@ type StreamBridge struct {
 	// would then double-bill, so the resume button is suppressed and
 	// the user sees the "re-issue" footer instead.
 	hasToolEvent bool
+	// seenToolCalls accumulates every tool_use the LLM emitted during
+	// the current run. Used by the interrupt path (FR-001) to backfill
+	// synthetic is_error tool_result messages for dangling calls so the
+	// transcript stays API-valid on resume
+	// (agent-loop-robustness-parity WP01).
+	seenToolCalls []coreag.ToolCallRequest
 }
 
 // NewStreamBridge constructs a bridge that fans every emitted event
@@ -110,6 +116,15 @@ func (b *StreamBridge) Emit(ev coreag.StreamEvent) {
 		}
 	case coreag.StreamEventTool:
 		b.hasToolEvent = true
+		// Record the tool call so the interrupt path can backfill
+		// synthetic is_error tool_results (FR-001 / WP01).
+		if ev.ToolID != "" || ev.ToolName != "" {
+			b.seenToolCalls = append(b.seenToolCalls, coreag.ToolCallRequest{
+				ID:        ev.ToolID,
+				Name:      ev.ToolName,
+				Arguments: ev.ToolArgs,
+			})
+		}
 	}
 	b.mu.Unlock()
 	chunk := translateAGStreamEvent(ev)
@@ -132,6 +147,26 @@ func (b *StreamBridge) PartialState() (text string, hasTool bool) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return string(b.partialText), b.hasToolEvent
+}
+
+// SeenToolCalls returns a snapshot of every tool_use the LLM emitted
+// during this run. The caller (interrupt path) uses this to backfill
+// synthetic is_error tool_result messages for any dangling calls so the
+// persisted transcript is API-valid on resume
+// (agent-loop-robustness-parity FR-001 / WP01). Safe to call
+// concurrently with Emit.
+func (b *StreamBridge) SeenToolCalls() []coreag.ToolCallRequest {
+	if b == nil {
+		return nil
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if len(b.seenToolCalls) == 0 {
+		return nil
+	}
+	out := make([]coreag.ToolCallRequest, len(b.seenToolCalls))
+	copy(out, b.seenToolCalls)
+	return out
 }
 
 // Close satisfies agentgraph.StreamSink. Emits a terminal

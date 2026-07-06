@@ -200,3 +200,106 @@ func hexEncNibble(b byte) byte {
 	}
 	return 'a' + b - 10
 }
+
+// ── Accept-set (key rotation) tests ─────────────────────────────────────────
+
+// TestVerifyWithKeySet_EmptySet verifies that an empty accept-set always rejects.
+func TestVerifyWithKeySet_EmptySet(t *testing.T) {
+	_, priv := newTestKeyPair(t)
+	b := sampleBundle()
+	signBundle(t, priv, b)
+
+	err := VerifyWithKeySet(b, nil, 0)
+	if !errors.Is(err, ErrSigningKeyNotConfigured) {
+		t.Errorf("empty set: expected ErrSigningKeyNotConfigured, got: %v", err)
+	}
+}
+
+// TestVerifyWithKeySet_ForeignKeyRejected verifies that a bundle signed by
+// an unknown key is rejected even when the accept-set is non-empty.
+func TestVerifyWithKeySet_ForeignKeyRejected(t *testing.T) {
+	pub1, _ := newTestKeyPair(t) // the accepted key
+	_, priv2 := newTestKeyPair(t) // the foreign key used to sign
+
+	b := sampleBundle()
+	signBundle(t, priv2, b) // signed by foreign key
+
+	err := VerifyWithKeySet(b, []ed25519.PublicKey{pub1}, 0)
+	if !errors.Is(err, ErrInvalidSignature) {
+		t.Errorf("foreign key: expected ErrInvalidSignature, got: %v", err)
+	}
+}
+
+// TestVerifyWithKeySet_RotationOverlap verifies that during a key rotation
+// window, a bundle signed by either the old or the new key is accepted.
+func TestVerifyWithKeySet_RotationOverlap(t *testing.T) {
+	pubOld, privOld := newTestKeyPair(t)
+	pubNew, privNew := newTestKeyPair(t)
+
+	// Accept-set contains BOTH keys (rotation overlap window).
+	acceptSet := []ed25519.PublicKey{pubOld, pubNew}
+
+	// Bundle signed by old key → accepted.
+	bOld := sampleBundle()
+	bOld.BundleID = 10
+	signBundle(t, privOld, bOld)
+	if err := VerifyWithKeySet(bOld, acceptSet, 0); err != nil {
+		t.Errorf("old key during overlap: expected nil, got: %v", err)
+	}
+
+	// Bundle signed by new key → also accepted.
+	bNew := sampleBundle()
+	bNew.BundleID = 11
+	signBundle(t, privNew, bNew)
+	if err := VerifyWithKeySet(bNew, acceptSet, 10); err != nil {
+		t.Errorf("new key during overlap: expected nil, got: %v", err)
+	}
+}
+
+// TestVerifyWithKeySet_AfterRotation verifies that after retiring the old key,
+// only the new key is accepted.
+func TestVerifyWithKeySet_AfterRotation(t *testing.T) {
+	_, privOld := newTestKeyPair(t)
+	pubNew, privNew := newTestKeyPair(t)
+
+	// Old key retired: accept-set contains only the new key.
+	acceptSet := []ed25519.PublicKey{pubNew}
+
+	// Bundle signed by old key → now rejected.
+	bOld := sampleBundle()
+	bOld.BundleID = 20
+	signBundle(t, privOld, bOld)
+	if err := VerifyWithKeySet(bOld, acceptSet, 0); !errors.Is(err, ErrInvalidSignature) {
+		t.Errorf("old key after retirement: expected ErrInvalidSignature, got: %v", err)
+	}
+
+	// Bundle signed by new key → still accepted.
+	bNew := sampleBundle()
+	bNew.BundleID = 21
+	signBundle(t, privNew, bNew)
+	if err := VerifyWithKeySet(bNew, acceptSet, 0); err != nil {
+		t.Errorf("new key after rotation: expected nil, got: %v", err)
+	}
+}
+
+// TestConfigDistributionEnabled verifies the helper gates on key presence.
+func TestConfigDistributionEnabled(t *testing.T) {
+	saved := fleetSigningPublicKeyBytes
+	defer func() { fleetSigningPublicKeyBytes = saved }()
+
+	fleetSigningPublicKeyBytes = ""
+	if ConfigDistributionEnabled() {
+		t.Error("expected false when no key bytes set")
+	}
+
+	// Set a valid key.
+	pub, _ := newTestKeyPair(t)
+	hexStr := ""
+	for _, b := range []byte(pub) {
+		hexStr += string([]byte{hexEncNibble(b >> 4), hexEncNibble(b & 0x0f)})
+	}
+	fleetSigningPublicKeyBytes = hexStr
+	if !ConfigDistributionEnabled() {
+		t.Error("expected true when valid key bytes set")
+	}
+}

@@ -1078,6 +1078,10 @@ export function Settings_FleetConfigPullStatus() {
   return window['go']['rpc']['Bindings']['Settings_FleetConfigPullStatus']();
 }
 
+export function Settings_FleetHealth() {
+  return window['go']['rpc']['Bindings']['Settings_FleetHealth']();
+}
+
 export function Settings_FleetLockdownStatus() {
   return window['go']['rpc']['Bindings']['Settings_FleetLockdownStatus']();
 }
@@ -1514,6 +1518,10 @@ export function Unit_ResolveMerge(arg1, arg2) {
   return window['go']['rpc']['Bindings']['Unit_ResolveMerge'](arg1, arg2);
 }
 
+export function Unit_SyncStatus() {
+  return window['go']['rpc']['Bindings']['Unit_SyncStatus']();
+}
+
 export function Update_Apply() {
   return window['go']['rpc']['Bindings']['Update_Apply']();
 }
@@ -1612,4 +1620,28 @@ export function Workflows_ScheduleRunHistory(arg1, arg2) {
 
 export function Workflows_ScheduleSet(arg1) {
   return window['go']['rpc']['Bindings']['Workflows_ScheduleSet'](arg1);
+}
+
+export function Tasks_List() {
+  return window['go']['rpc']['Bindings']['Tasks_List']();
+}
+
+export function Tasks_Get(arg1) {
+  return window['go']['rpc']['Bindings']['Tasks_Get'](arg1);
+}
+
+export function Tasks_Tail(arg1, arg2) {
+  return window['go']['rpc']['Bindings']['Tasks_Tail'](arg1, arg2);
+}
+
+export function Tasks_Abort(arg1) {
+  return window['go']['rpc']['Bindings']['Tasks_Abort'](arg1);
+}
+
+export function Tasks_AbortBySession(arg1) {
+  return window['go']['rpc']['Bindings']['Tasks_AbortBySession'](arg1);
+}
+
+export function Tasks_ListBySession(arg1) {
+  return window['go']['rpc']['Bindings']['Tasks_ListBySession'](arg1);
 }

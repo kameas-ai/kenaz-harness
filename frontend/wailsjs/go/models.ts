@@ -2505,11 +2505,11 @@ export namespace fleet {
 	    local_version: number;
 	    synced_version: number;
 	    server_version: number;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new UnitConflictView(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.unit_id = source["unit_id"];
@@ -2517,6 +2517,30 @@ export namespace fleet {
 	        this.local_version = source["local_version"];
 	        this.synced_version = source["synced_version"];
 	        this.server_version = source["server_version"];
+	    }
+	}
+	export class UnitSyncStatusView {
+	    cursor: string;
+	    lastPullAt: string;
+	    lastPullErr: string;
+	    lastPushErr: string;
+	    pushCount: number;
+	    pullCount: number;
+	    conflictCount: number;
+
+	    static createFrom(source: any = {}) {
+	        return new UnitSyncStatusView(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.cursor = source["cursor"];
+	        this.lastPullAt = source["lastPullAt"];
+	        this.lastPullErr = source["lastPullErr"];
+	        this.lastPushErr = source["lastPushErr"];
+	        this.pushCount = source["pushCount"];
+	        this.pullCount = source["pullCount"];
+	        this.conflictCount = source["conflictCount"];
 	    }
 	}
 
@@ -6051,11 +6075,12 @@ export namespace settings {
 	    lastError: string;
 	    source: string;
 	    bundleChecksum: string;
-	
+	    configDistributionEnabled: boolean;
+
 	    static createFrom(source: any = {}) {
 	        return new FleetConfigPullStatusView(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.lastAppliedId = source["lastAppliedId"];
@@ -6063,6 +6088,25 @@ export namespace settings {
 	        this.lastError = source["lastError"];
 	        this.source = source["source"];
 	        this.bundleChecksum = source["bundleChecksum"];
+	        this.configDistributionEnabled = source["configDistributionEnabled"];
+	    }
+	}
+	export class FleetHealthView {
+	    configDistributionEnabled: boolean;
+	    configSource: string;
+	    configLastError: string;
+	    signedIn: boolean;
+
+	    static createFrom(source: any = {}) {
+	        return new FleetHealthView(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.configDistributionEnabled = source["configDistributionEnabled"];
+	        this.configSource = source["configSource"];
+	        this.configLastError = source["configLastError"];
+	        this.signedIn = source["signedIn"];
 	    }
 	}
 	export class FleetIdentity {
@@ -7329,6 +7373,59 @@ export namespace workflows {
 	        this.version = source["version"];
 	        this.stepCount = source["stepCount"];
 	        this.source = source["source"];
+	    }
+	}
+
+}
+
+export namespace tasks {
+
+	export class LineRow {
+	    stream: string;
+	    text: string;
+	    offset: number;
+	    at: string;
+
+	    static createFrom(source: any = {}) {
+	        return new LineRow(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.stream = source["stream"];
+	        this.text = source["text"];
+	        this.offset = source["offset"];
+	        this.at = source["at"];
+	    }
+	}
+	export class TaskRow {
+	    id: string;
+	    kind: string;
+	    ownerSessionId: string;
+	    cmd: string;
+	    description: string;
+	    status: string;
+	    exitCode: number;
+	    startedAt: string;
+	    endedAt?: string;
+	    ageMs: number;
+
+	    static createFrom(source: any = {}) {
+	        return new TaskRow(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.kind = source["kind"];
+	        this.ownerSessionId = source["ownerSessionId"];
+	        this.cmd = source["cmd"];
+	        this.description = source["description"];
+	        this.status = source["status"];
+	        this.exitCode = source["exitCode"];
+	        this.startedAt = source["startedAt"];
+	        this.endedAt = source["endedAt"];
+	        this.ageMs = source["ageMs"];
 	    }
 	}
 

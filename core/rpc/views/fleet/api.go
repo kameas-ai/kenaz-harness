@@ -45,6 +45,27 @@ type ResolvedUnitView struct {
 	Precedence     int    `json:"precedence"`
 }
 
+// UnitSyncStatusView is the wire-safe snapshot of UnitSyncer.Status.
+// Exposed via Unit_SyncStatus so the frontend can render LastPullErr /
+// LastPushErr without polling at the per-second rate. (fleet-integrity-
+// observability WP08)
+type UnitSyncStatusView struct {
+	// Cursor is the server-side sync cursor (opaque string).
+	Cursor string `json:"cursor"`
+	// LastPullAt is the RFC3339 timestamp of the last successful pull, or empty.
+	LastPullAt string `json:"lastPullAt"`
+	// LastPullErr is the most-recent pull error, or empty.
+	LastPullErr string `json:"lastPullErr"`
+	// LastPushErr is the most-recent push error, or empty.
+	LastPushErr string `json:"lastPushErr"`
+	// PushCount is the lifetime push count for this syncer instance.
+	PushCount int `json:"pushCount"`
+	// PullCount is the lifetime pull count for this syncer instance.
+	PullCount int `json:"pullCount"`
+	// ConflictCount is the number of currently surfaced conflicts.
+	ConflictCount int `json:"conflictCount"`
+}
+
 // FleetAPI is the view-scoped RPC surface for fleet telemetry consent and
 // Phase-3 unit collaboration.
 type FleetAPI interface {
@@ -83,4 +104,10 @@ type FleetAPI interface {
 	// scope, with enshrined conflicts flagged (WP18). scope is "" for all,
 	// or one of "global" | "project" | "session"; scopeID narrows further.
 	Unit_ResolveLoadable(ctx context.Context, scope, scopeID string) ([]ResolvedUnitView, error)
+
+	// Unit_SyncStatus returns a snapshot of the unit syncer state: cursor,
+	// last pull/push timestamps and errors, and the current conflict count.
+	// Returns a zero-value view when the syncer is not wired (offline/OSS).
+	// (fleet-integrity-observability WP08)
+	Unit_SyncStatus(ctx context.Context) (UnitSyncStatusView, error)
 }

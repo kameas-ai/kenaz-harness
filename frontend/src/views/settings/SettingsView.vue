@@ -12,6 +12,8 @@
  */
 import { computed, onMounted, ref } from 'vue';
 import { useRoute } from 'vue-router';
+import { useServedMode } from '@/lib/useServedMode';
+import NotAvailableInServedMode from '@/components/ui/NotAvailableInServedMode.vue';
 import SettingsShell from '@/views/settings/SettingsShell.vue';
 import KeyboardShortcuts from '@/components/settings/KeyboardShortcuts.vue';
 import AutonomyPanel from '@/views/settings/AutonomyPanel.vue';
@@ -28,6 +30,8 @@ import TasksPanel from '@/views/settings/TasksPanel.vue';
 import LLMRoutingPanel from '@/views/settings/LLMRoutingPanel.vue';
 import AuditSettingsPanel from '@/views/settings/AuditSettingsPanel.vue';
 import AccountPanel from '@/views/settings/AccountPanel.vue';
+import UnitConflictsPanel from '@/views/settings/UnitConflictsPanel.vue';
+import FleetTelemetryPanel from '@/views/settings/FleetTelemetryPanel.vue';
 import LongSessionNudgeSettings from '@/components/settings/LongSessionNudgeSettings.vue';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
 import { debouncedSave } from '@/lib/settings';
@@ -48,6 +52,7 @@ import type {
   Theme,
 } from '@/lib/types';
 
+const servedMode = useServedMode();
 const client = useHarnessClient();
 
 // auto-update-v0.4.0 WP05 — Updates is a sub-tab on the same /settings
@@ -947,7 +952,12 @@ onMounted(() => {
 </script>
 
 <template>
+  <NotAvailableInServedMode
+    v-if="servedMode"
+    feature="Settings"
+  />
   <SettingsShell
+    v-else
     number="06"
     section="SETTINGS"
     :title="currentHead.title"
@@ -1060,10 +1070,24 @@ onMounted(() => {
     <!-- fleet-auth-foundation-01NDFSEX08 WP06 — Account (fleet identity) sub-tab. -->
     <div
       v-else-if="showAccountTab"
-      class="px-6 py-4 max-w-3xl"
+      class="px-6 py-4 max-w-3xl space-y-6"
       data-testid="settings-account-pane"
     >
       <AccountPanel />
+      <!-- fleet-integrity-observability WP09: telemetry consent control. -->
+      <section>
+        <h2 class="font-ui text-[11px] uppercase tracking-[0.18em] text-ink-subtle mb-3">
+          Fleet Telemetry
+        </h2>
+        <FleetTelemetryPanel />
+      </section>
+      <!-- fleet-integrity-observability WP08: unit-sync conflict + error surface. -->
+      <section>
+        <h2 class="font-ui text-[11px] uppercase tracking-[0.18em] text-ink-subtle mb-3">
+          Unit Sync
+        </h2>
+        <UnitConflictsPanel />
+      </section>
     </div>
 
     <div

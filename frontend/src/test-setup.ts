@@ -1,5 +1,19 @@
 // Vitest global setup. Anything common across the test suite goes here.
 
+// ── Wails bridge stub ────────────────────────────────────────────────────────
+// useServedMode() detects served mode by checking for the absence of
+// window.go.rpc.Bindings (the Wails-injected binding surface).  In tests the
+// jsdom/happy-dom environment doesn't have Wails, so without this stub every
+// test would see "served mode = true" and views would render the
+// NotAvailableInServedMode panel instead of their real content.
+//
+// Inject a minimal stub so the detection returns false (desktop mode) in tests.
+// Tests that specifically want to verify served-mode behaviour should mock
+// useServedMode (via vi.mock) or use dispatchServedEvent directly.
+(window as unknown as { go: unknown }).go = {
+  rpc: { Bindings: Object.create(null) as object },
+};
+
 // ── axe-core / vitest-axe integration ────────────────────────────────────────
 // Extend vitest `expect` with `toHaveNoViolations` so any test can assert:
 //

@@ -12,8 +12,11 @@ import { onMounted, ref } from 'vue';
 import CanvasHead from '@/shell/CanvasHead.vue';
 import KenazToolsPanel from './KenazToolsPanel.vue';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
+import { useServedMode } from '@/lib/useServedMode';
+import NotAvailableInServedMode from '@/components/ui/NotAvailableInServedMode.vue';
 import type { MCPServer } from '@/lib/types';
 
+const servedMode = useServedMode();
 const client = useHarnessClient();
 
 const servers = ref<readonly MCPServer[]>([]);
@@ -55,12 +58,16 @@ onMounted(() => {
 </script>
 
 <template>
-  <div>
+  <NotAvailableInServedMode
+    v-if="servedMode"
+    feature="Tools"
+  />
+  <div v-else>
     <CanvasHead
       number="02"
       section="TOOLS"
       title="Tools"
-      subtitle="Built-in Kenaz tools toggle on top; below them, every MCP server registered with the harness. All tool calls flow through the local mcp-client; nothing leaves the device."
+      subtitle="Built-in Kenaz tools toggle on top; below them, every MCP server registered with the harness. All tool calls flow through the local mcp-client; tool invocations do not leave the device (fleet config-apply ACKs and opted-in telemetry are the only egress when fleet config distribution is active)."
     />
 
     <KenazToolsPanel />

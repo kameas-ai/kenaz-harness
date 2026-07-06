@@ -37,12 +37,15 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue';
 import CanvasHead from '@/shell/CanvasHead.vue';
 import { Plus, FileText } from '@/shell/icons';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
+import { useServedMode } from '@/lib/useServedMode';
+import NotAvailableInServedMode from '@/components/ui/NotAvailableInServedMode.vue';
 import type { ContextNode, ContextSyncStatusView, ContextPublishResult } from '@/lib/types';
 import ContextTree from './ContextTree.vue';
 import ContextPreview from './ContextPreview.vue';
 import GlobalContextPanel from '@/components/settings/GlobalContextPanel.vue';
 import ContextRecent from './ContextRecent.vue';
 
+const servedMode = useServedMode();
 const client = useHarnessClient();
 
 const tree = ref<ContextNode | null>(null);
@@ -146,6 +149,28 @@ async function confirmPublish() {
 const hasFiles = computed(() => {
   const t = tree.value;
   return t !== null && Array.isArray(t.children) && t.children.length > 0;
+});
+
+// WP11: text filter for the context tree.
+const contextTextFilter = ref<string>('');
+
+/** Recursively collect all file nodes from the tree into a flat array. */
+function flattenFiles(node: ContextNode): ContextNode[] {
+  if (node.kind === 'file') return [node];
+  const out: ContextNode[] = [];
+  for (const child of node.children ?? []) {
+    out.push(...flattenFiles(child));
+  }
+  return out;
+}
+
+/** File nodes matching the current text filter (used when filter is active). */
+const filteredContextFiles = computed<ContextNode[]>(() => {
+  const q = contextTextFilter.value.trim().toLowerCase();
+  if (!q || !tree.value) return [];
+  return flattenFiles(tree.value).filter((n) =>
+    n.name.toLowerCase().includes(q) || n.path.toLowerCase().includes(q),
+  );
 });
 
 async function loadTree() {
@@ -352,7 +377,14 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="h-full flex flex-col">
+  <NotAvailableInServedMode
+    v-if="servedMode"
+    feature="Contexts"
+  />
+  <div
+    v-else
+    class="h-full flex flex-col"
+  >
     <CanvasHead
       number="07"
       section="CONTEXTS"
@@ -360,7 +392,7 @@ onBeforeUnmount(() => {
       :subtitle="
         rootPath
           ? `Markdown + text files in ${rootPath}. Drop a file in the folder or use the “+ Folder” affordance to organise.`
-          : 'Markdown + text files attached to sessions, projects, or globally. Local-only — nothing leaves the device.'
+          : 'Markdown + text files attached to sessions, projects, or globally. Local-only — context files never leave the device (fleet config-apply ACKs and opted-in telemetry are the only egress when fleet config distribution is active).'
       "
     >
       <template #trailing>
@@ -532,6 +564,20 @@ onBeforeUnmount(() => {
             <span>Folder</span>
           </button>
         </header>
+        <!-- WP11: text filter input for the context tree -->
+        <div class="px-2 pt-2">
+          <input
+            v-model="contextTextFilter"
+            type="text"
+            placeholder="Filter contexts…"
+            aria-label="Filter context files"
+            spellcheck="false"
+            autocomplete="off"
+            class="w-full rounded-sm border border-border-muted bg-surface-1 px-2 py-1 font-ui text-[12px] text-ink placeholder:text-ink-dim focus:border-accent focus:outline-none"
+            data-testid="context-text-filter"
+          />
+        </div>
+
         <!-- Inline new-folder name prompt. Revealed by "+ Folder"; the
              folder is created under the current selection (shown in the
              hint) so the user controls name AND location. -->
@@ -598,6 +644,32 @@ onBeforeUnmount(() => {
               Create a folder →
             </button>
           </div>
+          <!-- WP11: flat search results when filter is active -->
+          <template v-else-if="contextTextFilter">
+            <div
+              v-if="filteredContextFiles.length === 0"
+              class="px-2 py-3 font-ui text-[12px] text-ink-muted"
+              data-testid="context-filter-empty"
+            >
+              No files match "{{ contextTextFilter }}"
+            </div>
+            <ul v-else class="space-y-0.5" data-testid="context-filter-results">
+              <li
+                v-for="node in filteredContextFiles"
+                :key="node.path"
+              >
+                <button
+                  type="button"
+                  class="w-full rounded-sm px-2 py-1 text-left font-ui text-[12px] hover:bg-surface-2"
+                  :class="selectedPath === node.path ? 'bg-surface-2 text-ink' : 'text-ink-muted'"
+                  :data-testid="`context-filter-item-${node.path}`"
+                  @click="selectFile(node.path)"
+                >
+                  {{ node.name }}
+                </button>
+              </li>
+            </ul>
+          </template>
           <ContextTree
             v-else-if="tree"
             :node="tree"
