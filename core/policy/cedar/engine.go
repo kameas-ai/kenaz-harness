@@ -73,6 +73,18 @@ var defaultWorkflowsPolicySource []byte
 //go:embed policies/default_session_export_policy.cedar
 var defaultSessionExportPolicySource []byte
 
+// defaultACPPolicySource is the embedded ACP-envelope default for
+// mission acp-orchestration-integration-01NDFSEX06.
+// Posture (FR-007, FR-008):
+//   - acp_send  → permit only to "verified" peers; forbid "revoked" and
+//     "pending" peers (explicit forbid so default-allow posture does not
+//     silently open acp_send to untrusted agents).
+//   - acp_receive → permit "verified" and "pending" peers; forbid
+//     "revoked" peers.
+//
+//go:embed policies/default_acp_policy.cedar
+var defaultACPPolicySource []byte
+
 // DefaultPolicyName is the synthetic filename used when reporting the
 // embedded policy to the frontend.
 const DefaultPolicyName = "default_policy.cedar"
@@ -91,6 +103,7 @@ const (
 	DefaultToolPolicyName          = "default_tool_policy.cedar"
 	DefaultWorkflowsPolicyName     = "default_workflows_policy.cedar"
 	DefaultSessionExportPolicyName = "default_session_export_policy.cedar"
+	DefaultACPPolicyName           = "default_acp_policy.cedar"
 )
 
 // PolicyDir is the directory under DataDir where user-authored
@@ -244,6 +257,7 @@ func (e *Engine) Reload(ctx context.Context) error {
 			{DefaultToolPolicyName, defaultToolPolicySource},
 			{DefaultWorkflowsPolicyName, defaultWorkflowsPolicySource},
 			{DefaultSessionExportPolicyName, defaultSessionExportPolicySource},
+			{DefaultACPPolicyName, defaultACPPolicySource},
 		}
 		for _, em := range embedded {
 			sources = append(sources, policySource{
