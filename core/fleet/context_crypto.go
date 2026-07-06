@@ -180,11 +180,12 @@ func Decrypt(key, ciphertext, nonce []byte) ([]byte, error) {
 // recoveryCodePrefix is a human-readable prefix to distinguish recovery codes.
 const recoveryCodePrefix = "KENAZ"
 
-// MintRecoveryCode encodes seed as a URL-safe base64 string prefixed with
-// "KENAZ-" and chunked for readability. The code is safe to display to the
-// user once; the caller must not log or persist it.
+// MintRecoveryCode encodes seed as a standard (non-URL-safe) base64 string
+// prefixed with "KENAZ-" and chunked for readability. Standard base64 uses
+// A-Z, a-z, 0-9, +, / (no hyphens), so the "-" character is safe as a
+// block delimiter.
 //
-// Format: KENAZ-<base64url-block1>-<base64url-block2>-...
+// Format: KENAZ-<base64std-block1>-<base64std-block2>-...
 // Block size: 8 chars per block for readability.
 //
 // Privacy invariant: the returned code contains the raw seed. Never log it.
@@ -192,8 +193,9 @@ func MintRecoveryCode(seed []byte) (string, error) {
 	if len(seed) != seedSize {
 		return "", fmt.Errorf("fleet: seed must be %d bytes", seedSize)
 	}
-	// Use raw URL-safe base64 (no padding).
-	encoded := base64.RawURLEncoding.EncodeToString(seed)
+	// Use standard base64 (no padding). Standard base64 alphabet does not
+	// contain "-", so the hyphen delimiter is safe to use.
+	encoded := base64.RawStdEncoding.EncodeToString(seed)
 	// Chunk into 8-char blocks for readability.
 	var blocks []string
 	blocks = append(blocks, recoveryCodePrefix)
@@ -224,7 +226,7 @@ func UseRecoveryCode(code string) ([]byte, error) {
 	}
 	// Rejoin the data blocks.
 	encoded := strings.Join(parts[1:], "")
-	seed, err := base64.RawURLEncoding.DecodeString(encoded)
+	seed, err := base64.RawStdEncoding.DecodeString(encoded)
 	if err != nil {
 		return nil, fmt.Errorf("%w: base64 decode: %v", ErrBadRecoveryCode, err)
 	}
