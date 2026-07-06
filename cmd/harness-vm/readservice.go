@@ -34,6 +34,7 @@ import (
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/sessions"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/tools"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/workflows"
+	"github.com/kameas-ai/kenaz-harness/core/units"
 	"log/slog"
 )
 
@@ -42,10 +43,11 @@ import (
 // frame or the host's render budget. Pagination cursors are a later-phase
 // addition — for v1 the host shows the most-recent N.
 const (
-	maxListItems        = 200  // sessions / tools / memory / workflows / providers
-	maxMessageItems     = 500  // messages in one session
-	maxMessageBytes     = 4096 // per-message content cap (UTF-8 bytes)
-	maxChunkSummaryByte = 256  // memory chunk summary cap (UTF-8 bytes)
+	maxListItems         = 200  // sessions / tools / memory / workflows / providers / units
+	maxMessageItems      = 500  // messages in one session
+	maxMessageBytes      = 4096 // per-message content cap (UTF-8 bytes)
+	maxChunkSummaryByte  = 256  // memory chunk summary cap (UTF-8 bytes)
+	maxUnitBodyPreviewBy = 4096 // per-unit body preview cap (UTF-8 bytes)
 )
 
 // readAPI is the subset of the in-process rpc.API surface the read service
@@ -57,6 +59,10 @@ type readAPI interface {
 	Memory() memory.MemoryAPI
 	Workflows() workflows.WorkflowsAPI
 	LLMConnector() llm.LLMConnectorAPI
+	// Units returns the unified Unit store manager backing units.list /
+	// artifacts.list. It may be nil (chassis without storage) — the units
+	// handlers respond code:"unavailable" in that case.
+	Units() *units.Manager
 }
 
 // readService answers the Phase G read RPCs. A nil api means the in-VM
@@ -90,7 +96,8 @@ func newReadService(ctx context.Context, dataDir string, log *slog.Logger) (*rea
 func isReadKind(kind string) bool {
 	switch kind {
 	case "sessions.list", "sessions.get", "sessions.list_messages",
-		"tools.list", "memory.list_chunks", "providers.list", "workflows.list":
+		"tools.list", "memory.list_chunks", "providers.list", "workflows.list",
+		"units.list", "artifacts.list":
 		return true
 	}
 	return false
@@ -123,6 +130,10 @@ func (s *readService) handle(ctx context.Context, kind string, in msg) msg {
 		return s.providersList(ctx, reqID)
 	case "workflows.list":
 		return s.workflowsList(ctx, reqID)
+	case "units.list":
+		return s.unitsList(ctx, reqID)
+	case "artifacts.list":
+		return s.artifactsList(ctx, reqID)
 	default:
 		return errResp(kind, reqID, "bad_request", "not a read kind")
 	}
@@ -386,5 +397,80 @@ func (s *readService) workflowsList(ctx context.Context, reqID string) msg {
 	}
 	resp := okResp("workflows.list", reqID)
 	resp["workflows"] = out
+	return resp
+}
+
+// ---- units / artifacts ------------------------------------------------------
+
+// wireUnit is the privacy-narrow shape for a units.Unit. It carries the
+// structural metadata the Runs UI renders plus a capped body PREVIEW — the body
+// is truncated at maxUnitBodyPreviewBy UTF-8 bytes so a single unit can never
+// blow the NDJSON frame or leak an unbounded artifact body. The raw Metadata
+// JSON blob is NOT forwarded (it can carry CAS hashes / extension data the host
+// views don't render). This mirrors the existing read RPCs' metadata-only shape.
+type wireUnit struct {
+	ID             string `json:"id"`
+	Kind           string `json:"kind"`
+	Scope          string `json:"scope"`
+	ScopeID        string `json:"scopeId,omitempty"`
+	Classification string `json:"classification"`
+	Version        int    `json:"version"`
+	Title          string `json:"title"`
+	BodyPreview    string `json:"bodyPreview"`
+	Truncated      bool   `json:"truncated,omitempty"`
+	CreatedAt      string `json:"createdAt"`
+	UpdatedAt      string `json:"updatedAt"`
+}
+
+func toWireUnit(u units.Unit) wireUnit {
+	preview, trunc := truncBytes(u.Body, maxUnitBodyPreviewBy)
+	return wireUnit{
+		ID:             u.ID,
+		Kind:           string(u.Kind),
+		Scope:          string(u.Scope),
+		ScopeID:        u.ScopeID,
+		Classification: string(u.Classification),
+		Version:        u.Version,
+		Title:          u.Title,
+		BodyPreview:    preview,
+		Truncated:      trunc,
+		CreatedAt:      u.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
+		UpdatedAt:      u.UpdatedAt.Format("2006-01-02T15:04:05Z07:00"),
+	}
+}
+
+// unitsList surfaces every unit (all kinds), most-recent first, metadata + a
+// capped body preview. Backed by units.Manager.List.
+func (s *readService) unitsList(ctx context.Context, reqID string) msg {
+	return s.listUnits(ctx, reqID, "units.list", "units", units.UnitFilter{})
+}
+
+// artifactsList is unitsList narrowed to KindArtifact — the "review artifacts"
+// read path (ADR-agent-run-model §5/§6: a run's artifacts are units). Same
+// envelope + same cap as unitsList.
+func (s *readService) artifactsList(ctx context.Context, reqID string) msg {
+	return s.listUnits(ctx, reqID, "artifacts.list", "artifacts", units.UnitFilter{Kind: units.KindArtifact})
+}
+
+// listUnits is the shared body for units.list / artifacts.list. respKey is the
+// array field name on the ok response ("units" | "artifacts").
+func (s *readService) listUnits(ctx context.Context, reqID, kind, respKey string, filter units.UnitFilter) msg {
+	mgr := s.api.Units()
+	if mgr == nil {
+		return errResp(kind, reqID, "unavailable", "harness units surface not initialised")
+	}
+	list, err := mgr.List(ctx, filter)
+	if err != nil {
+		return errResp(kind, reqID, "server_error", err.Error())
+	}
+	if len(list) > maxListItems {
+		list = list[:maxListItems]
+	}
+	out := make([]wireUnit, 0, len(list))
+	for _, u := range list {
+		out = append(out, toWireUnit(u))
+	}
+	resp := okResp(kind, reqID)
+	resp[respKey] = out
 	return resp
 }

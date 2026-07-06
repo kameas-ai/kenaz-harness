@@ -78,31 +78,92 @@ func runAgentTaskGraph(
 	tracer agentgraph.TraceSink,
 	onChunk graphChunkSink,
 ) error {
+	// The default two-node plan→run chain. The chunk label is the node Kind
+	// ("transform"), preserving the pre-run-params behaviour byte-for-byte.
+	kindLabel := string(agentgraph.NodeKindTransform)
+	steps := []graphStep{
+		{id: stepPlanID, label: kindLabel, transform: transformPlan, params: map[string]any{"prompt": prompt}},
+		{id: stepRunID, label: kindLabel, transform: transformRun},
+	}
+	return runGraphSteps(ctx, taskID, steps, tracer, onChunk)
+}
+
+// runAgentPresetGraph drives the run from a resolved workflow-preset step
+// sequence (Spec 056 AC-5). Each preset step becomes one graph node whose chunk
+// label is the STEP NAME (structural — a fixed catalog identifier, never user
+// content), so the preset's node sequence is observable on the ledger trail.
+// The first node surfaces the prompt; the rest echo their upstream input,
+// exercising the same kernel traversal / TraceSink hook the default graph does.
+func runAgentPresetGraph(
+	ctx context.Context,
+	taskID string,
+	prompt string,
+	presetSteps []string,
+	tracer agentgraph.TraceSink,
+	onChunk graphChunkSink,
+) error {
+	if len(presetSteps) == 0 {
+		return runAgentTaskGraph(ctx, taskID, prompt, tracer, onChunk)
+	}
+	steps := make([]graphStep, 0, len(presetSteps))
+	for i, name := range presetSteps {
+		st := graphStep{id: fmt.Sprintf("s%d", i), label: name, transform: transformRun}
+		if i == 0 {
+			st.transform = transformPlan
+			st.params = map[string]any{"prompt": prompt}
+		}
+		steps = append(steps, st)
+	}
+	return runGraphSteps(ctx, taskID, steps, tracer, onChunk)
+}
+
+// graphStep is one node in the linear agent.task chain: a graph node id, the
+// chunk label forwarded to onChunk (and thus the ledger tool_call `tool`
+// value), the registered transform to fire, and its params.
+type graphStep struct {
+	id        string
+	label     string
+	transform string
+	params    map[string]any
+}
+
+// runGraphSteps builds a linear transform graph from steps, runs it through the
+// real agentgraph.Kernel, and streams each node's terminal "out" value back as
+// a task.running chunk in declared order. It is the shared core behind both the
+// default and preset graphs — the ONLY difference between them is the step list.
+func runGraphSteps(
+	ctx context.Context,
+	taskID string,
+	steps []graphStep,
+	tracer agentgraph.TraceSink,
+	onChunk graphChunkSink,
+) error {
+	if len(steps) == 0 {
+		return nil
+	}
+
+	nodes := make([]agentgraph.Node, len(steps))
+	var edges []agentgraph.Edge
+	for i, st := range steps {
+		nodes[i] = agentgraph.Node{
+			ID:    st.id,
+			Kind:  agentgraph.NodeKindTransform,
+			Attrs: agentgraph.TransformAttrs{Name: st.transform, Params: st.params},
+		}
+		if i > 0 {
+			edges = append(edges, agentgraph.Edge{
+				From: agentgraph.EndpointRef{Node: steps[i-1].id, Port: "out"},
+				To:   agentgraph.EndpointRef{Node: st.id, Port: "in"},
+			})
+		}
+	}
+
 	g := &agentgraph.Graph{
 		SpecVersion: agentgraph.SpecVersion,
 		ID:          "agent.task",
-		Entrypoints: []string{stepPlanID},
-		Nodes: []agentgraph.Node{
-			{
-				ID:   stepPlanID,
-				Kind: agentgraph.NodeKindTransform,
-				Attrs: agentgraph.TransformAttrs{
-					Name:   transformPlan,
-					Params: map[string]any{"prompt": prompt},
-				},
-			},
-			{
-				ID:    stepRunID,
-				Kind:  agentgraph.NodeKindTransform,
-				Attrs: agentgraph.TransformAttrs{Name: transformRun},
-			},
-		},
-		Edges: []agentgraph.Edge{
-			{
-				From: agentgraph.EndpointRef{Node: stepPlanID, Port: "out"},
-				To:   agentgraph.EndpointRef{Node: stepRunID, Port: "in"},
-			},
-		},
+		Entrypoints: []string{steps[0].id},
+		Nodes:       nodes,
+		Edges:       edges,
 	}
 
 	// Register the agent.task step transforms onto a registry seeded with the
@@ -128,13 +189,13 @@ func runAgentTaskGraph(
 	}
 
 	// Stream each node's terminal "out" value as a task.running chunk, in
-	// topological order. This is the live RPC surface; it carries content and
-	// goes ONLY to the connected client.
-	for _, nodeID := range []string{stepPlanID, stepRunID} {
-		out := env.State.Outputs(nodeID)
+	// declared order. This is the live RPC surface; it carries content and goes
+	// ONLY to the connected client.
+	for _, st := range steps {
+		out := env.State.Outputs(st.id)
 		if v, ok := out["out"]; ok {
 			if s := renderChunk(v); s != "" {
-				onChunk(nodeKindOf(g, nodeID), s)
+				onChunk(st.label, s)
 			}
 		}
 	}
@@ -186,14 +247,4 @@ func renderChunk(v any) string {
 	default:
 		return strings.TrimSpace(fmt.Sprintf("%v", t))
 	}
-}
-
-// nodeKindOf returns the structural node kind for nodeID, or "" if absent.
-func nodeKindOf(g *agentgraph.Graph, nodeID string) string {
-	for i := range g.Nodes {
-		if g.Nodes[i].ID == nodeID {
-			return string(g.Nodes[i].Kind)
-		}
-	}
-	return ""
 }

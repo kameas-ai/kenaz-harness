@@ -5186,6 +5186,12 @@ func (a *API) Artifacts() artifactsview.ArtifactsAPI {
 	}
 	return a.artifactsAPI
 }
+
+// Units returns the fleet-free unified Unit store manager, or nil when the
+// chassis has no backing storage.DB (the test chassis). The in-VM Phase-G read
+// service consults it for the units.list / artifacts.list read RPCs; callers
+// must nil-check the result.
+func (a *API) Units() *units.Manager { return a.unitsMgr }
 func (a *API) Tools() tools.ToolsAPI {
 	if a.toolsAPI == nil {
 		return &stubTools{}
