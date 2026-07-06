@@ -45,6 +45,16 @@ const (
 	// Wire value: "sites_hosting" (pinned in kenaz-fleet/docs/contract-harness-sites.md §0).
 	// Mission: sites-foundation-01NSITE04, WP01.
 	CapSitesHosting Capability = "sites_hosting"
+
+	// CapContextSync gates multi-device session/project sync (Pro+ tier).
+	// Wire value: "context_sync".
+	// Mission: fleet-context-sync-01NDFSEX15.
+	CapContextSync Capability = "context_sync"
+
+	// CapTeamSessionHandoff gates the team handoff feature (Team+ tier).
+	// Wire value: "team_session_handoff".
+	// Mission: fleet-context-sync-01NDFSEX15 WP05.
+	CapTeamSessionHandoff Capability = "team_session_handoff"
 )
 
 // AllCapabilities returns every known Capability constant in declaration
@@ -73,6 +83,8 @@ func AllCapabilities() []Capability {
 		CapComplianceDocsCustom,
 		CapQuarterlyAttestationReports,
 		CapSitesHosting,
+		CapContextSync,
+		CapTeamSessionHandoff,
 	}
 }
 
