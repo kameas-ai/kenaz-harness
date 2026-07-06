@@ -8,15 +8,19 @@ import (
 	"log"
 	"log/slog"
 	"os"
+	"sync"
+	"time"
 
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
 	"github.com/wailsapp/wails/v2/pkg/options/mac"
+	wailsruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 
 	"github.com/kameas-ai/kenaz-harness/core"
 	"github.com/kameas-ai/kenaz-harness/core/fleet"
 	"github.com/kameas-ai/kenaz-harness/core/logging"
+	coremenus "github.com/kameas-ai/kenaz-harness/core/menu"
 	"github.com/kameas-ai/kenaz-harness/core/paths"
 	"github.com/kameas-ai/kenaz-harness/core/rpc"
 	coresentry "github.com/kameas-ai/kenaz-harness/core/sentry"
@@ -157,6 +161,48 @@ func main() {
 
 	api := rpc.New(c)
 
+	// os-menu-bar-01NDFSEX16 WP03: build the initial native application menu.
+	// Handlers wire the broker (topic publish) + updater (CheckNow adapter).
+	menuHandlers := coremenus.NewHandlers(
+		api.Broker(),
+		coremenus.UpdateCheckerFunc(func(ctx context.Context) { api.UpdateStartCheck(ctx) }),
+		nil, // ContextProvider is set in OnStartup via SetMenuCtxProv (below)
+	)
+	// Derive initial state before first paint: theme from settings store,
+	// update/recent-sessions start empty (populated after first poll/events).
+	initialMenuState := deriveMenuState(api)
+	appMenu := coremenus.Build(initialMenuState, menuHandlers)
+
+	// menuMu protects concurrent access to menuState + the rebuild debounce.
+	var menuMu sync.Mutex
+	var menuState = initialMenuState
+	var menuDebounce *time.Timer
+	var menuCtx context.Context
+
+	// rebuildMenu reconstructs and re-applies the native menu.
+	// Must be called with menuMu held.
+	rebuildMenuLocked := func() {
+		if menuCtx == nil {
+			return // OnStartup has not fired yet
+		}
+		appMenu = coremenus.Build(menuState, menuHandlers)
+		wailsruntime.MenuSetApplicationMenu(menuCtx, appMenu)
+	}
+
+	// scheduleRebuild debounces menu rebuilds to at most one per 100 ms.
+	scheduleRebuild := func() {
+		menuMu.Lock()
+		defer menuMu.Unlock()
+		if menuDebounce != nil {
+			menuDebounce.Stop()
+		}
+		menuDebounce = time.AfterFunc(100*time.Millisecond, func() {
+			menuMu.Lock()
+			defer menuMu.Unlock()
+			rebuildMenuLocked()
+		})
+	}
+
 	err = wails.Run(&options.App{
 		Title:  "kenaz-harness",
 		Width:  1280,
@@ -177,11 +223,48 @@ func main() {
 			WebviewIsTransparent: false,
 			WindowIsTranslucent:  false,
 		},
+		// Wire the initial menu before the window opens.
+		Menu: appMenu,
 		OnStartup: func(ctx context.Context) {
 			api.SetContext(ctx)
+
+			// Store the Wails ctx for runtime.MenuSetApplicationMenu calls.
+			menuMu.Lock()
+			menuCtx = ctx
+			menuMu.Unlock()
+
+			// Wire the ContextProvider on the handlers so BrowserOpenURL works.
+			menuHandlers.SetCtxProv(coremenus.ContextProviderFunc(func() context.Context { return ctx }))
+
 			if err := c.Start(ctx); err != nil {
 				log.Printf("core start: %v", err)
 			}
+
+			// Subscribe to broker events that require a menu rebuild.
+			// runtime.EventsOn wires a Go-side listener on the same topic
+			// the broker's WailsEmitter published to.
+			//
+			// theme:changed — flip the radio checkmark in View → Theme.
+			wailsruntime.EventsOn(ctx, "theme:changed", func(data ...interface{}) {
+				menuMu.Lock()
+				if len(data) > 0 {
+					if m, ok := data[0].(map[string]interface{}); ok {
+						if mode, ok := m["mode"].(string); ok {
+							menuState.ThemeMode = coremenus.ThemeMode(mode)
+						}
+					}
+				}
+				menuMu.Unlock()
+				scheduleRebuild()
+			})
+			// update:available — relabel Help → Check for Updates.
+			wailsruntime.EventsOn(ctx, "update:available", func(_ ...interface{}) {
+				menuMu.Lock()
+				menuState.UpdateState = coremenus.UpdateAvailable
+				menuMu.Unlock()
+				scheduleRebuild()
+			})
+
 			// Initialise Sentry after core.Start so the settings store is
 			// ready. wire-up point 1 for sentry (sentry-error-monitoring-01KX5R8G WP02).
 			// api.Bindings() returns []any{<*Bindings>}; assert back to the concrete
@@ -283,6 +366,25 @@ func runServeMode(listenAddr string) {
 		serveLog.Error("harness.serve: server error", "err", serveErr)
 		os.Exit(1)
 	}
+}
+
+// deriveMenuState snapshots the menu-relevant application state from the
+// API. Called at app startup to build the initial menu, and before each
+// rebuild triggered by broker events.
+//
+// Best-effort: individual field reads that fail are silently skipped so a
+// store read error never prevents the menu from rendering.
+// (os-menu-bar-01NDFSEX16 WP03)
+func deriveMenuState(api *rpc.API) coremenus.MenuState {
+	var state coremenus.MenuState
+	state.ThemeMode = coremenus.ThemeSystem // default
+
+	if store := api.SettingsStore(); store != nil {
+		if theme, err := store.LoadTheme(); err == nil && theme != "" {
+			state.ThemeMode = coremenus.ThemeMode(theme)
+		}
+	}
+	return state
 }
 
 // initSentryFromSettings reads the crash-reporting settings, calls

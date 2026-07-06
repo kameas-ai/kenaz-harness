@@ -85,6 +85,14 @@ func NewHandlers(broker Broker, updater UpdateChecker, ctxProv ContextProvider) 
 	}
 }
 
+// SetCtxProv wires the ContextProvider after construction. Called from
+// main.go OnStartup once the Wails app context is available.
+// Safe for concurrent use (the ctxProv field is only set here and read
+// in handler methods; Wails delivers menu callbacks after OnStartup).
+func (h *Handlers) SetCtxProv(p ContextProvider) {
+	h.ctxProv = p
+}
+
 // appCtx returns the Wails app context if available, otherwise background.
 func (h *Handlers) appCtx() context.Context {
 	if h.ctxProv != nil {
