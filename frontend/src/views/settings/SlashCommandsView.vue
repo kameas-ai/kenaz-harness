@@ -14,12 +14,17 @@
  * shown.
  *
  * user-slash-commands-01KQ8TD9 WP07.
+ * fleet-skills-sync-01NDFSEX18 WP03 — "Publish to team" button (FR-101/102).
  */
 import { computed, onMounted, ref } from 'vue';
 import Button from '@/components/ui/Button.vue';
+import ConfirmDialog from '@/components/ui/ConfirmDialog.vue';
 import SlashCommandEditor from '@/views/settings/SlashCommandEditor.vue';
 import SkillsPanel from '@/views/settings/SkillsPanel.vue';
 import { useHarnessClient } from '@/lib/harnessClientContext';
+import { signedIn, capability } from '@/lib/featureFlags';
+import { push as pushToast } from '@/composables/useToastQueue';
+import { useConfirmDialog } from '@/composables/useConfirmDialog';
 import type {
   UserCommand,
   UserCommandKind,
@@ -28,6 +33,45 @@ import type {
 } from '@/lib/types';
 
 const client = useHarnessClient();
+
+// ── publish state (fleet-skills-sync-01NDFSEX18 WP03) ─────────────────
+const { confirmState, confirm } = useConfirmDialog();
+const publishing = ref(false);
+
+/**
+ * canPublishToTeam returns true when the user is signed in and has the
+ * shared_team_graph capability (Team+ tier, FR-102).
+ */
+const canPublishToTeam = computed(
+  () => signedIn.value && capability('shared_team_graph'),
+);
+
+async function handlePublishToTeam(): Promise<void> {
+  const cmd = editorCommand.value;
+  if (!cmd) return;
+
+  const ok = await confirm({
+    title: `Publish /${cmd.name} to team?`,
+    message:
+      'This skill will be visible to your whole team in the Marketplace. ' +
+      'Make sure it contains no secrets or sensitive information.',
+    confirmLabel: 'Publish',
+  });
+  if (!ok) return;
+
+  publishing.value = true;
+  try {
+    await client.slashcmd.skillPublish(cmd.name, cmd.projectId ?? '', 'team');
+    pushToast(`/${cmd.name} published to team`);
+  } catch (err) {
+    pushToast(
+      `Publish failed: ${err instanceof Error ? err.message : String(err)}`,
+      { level: 'error' },
+    );
+  } finally {
+    publishing.value = false;
+  }
+}
 
 // ── list state ─────────────────────────────────────────────────────────
 
@@ -354,8 +398,40 @@ const KIND_LABEL: Record<UserCommandKind, string> = {
           >
             {{ saveError }}
           </p>
+
+          <!-- "Publish to team" — capability-gated (FR-101/102, fleet-skills-sync-01NDFSEX18 WP03) -->
+          <div
+            v-if="editorCommand !== null"
+            class="mt-4 border-t border-border-muted pt-3"
+            data-testid="publish-to-team-section"
+          >
+            <Button
+              v-if="canPublishToTeam"
+              variant="ghost"
+              size="sm"
+              :disabled="publishing"
+              data-testid="publish-to-team-btn"
+              @click="handlePublishToTeam"
+            >
+              {{ publishing ? 'Publishing…' : 'Publish to team' }}
+            </Button>
+            <p
+              v-else
+              class="font-ui text-[11px] text-ink-muted"
+              data-testid="publish-to-team-unavailable"
+            >
+              Team+ required to publish skills to your team.
+            </p>
+          </div>
         </div>
       </div>
+
+      <!-- Confirm dialog for skill publish (fleet-skills-sync-01NDFSEX18 WP03) -->
+      <ConfirmDialog
+        v-bind="confirmState"
+        @confirm="confirmState.resolve(true)"
+        @cancel="confirmState.resolve(false)"
+      />
 
       <!-- ── Fleet Skills section (fleet-skills-sync-01NDFSEX18 WP04/WP06) ── -->
       <div class="mt-8 border-t border-border-muted pt-6">
