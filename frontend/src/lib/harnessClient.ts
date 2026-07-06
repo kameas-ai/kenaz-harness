@@ -175,6 +175,10 @@ import type {
   BootHealthReport,
   TaskRow,
   LineRow,
+  ACPPeer,
+  ACPEnvelopeTrace,
+  ACPDispatchResult,
+  ACPTrustResult,
 } from './types';
 
 /**
@@ -851,6 +855,12 @@ interface WailsBindingsLike {
   Tasks_Abort(id: string): Promise<void>;
   Tasks_AbortBySession(sessionID: string): Promise<void>;
   Tasks_ListBySession(sessionID: string): Promise<TaskRow[]>;
+  // ── ACP peer management (acp-orchestration-integration-01NDFSEX06) ──────
+  ACP_ListPeers(): Promise<ACPPeer[]>;
+  ACP_TrustPeer(cardBlob: string): Promise<ACPTrustResult>;
+  ACP_RevokePeer(peerID: string): Promise<void>;
+  ACP_Dispatch(peerID: string, turnPayload: string): Promise<ACPDispatchResult>;
+  ACP_GetTrace(envelopeID: string): Promise<ACPEnvelopeTrace>;
 }
 
 
@@ -2884,6 +2894,12 @@ export interface HarnessClient {
   Tasks_Abort(id: string): Promise<void>;
   Tasks_AbortBySession(sessionID: string): Promise<void>;
   Tasks_ListBySession(sessionID: string): Promise<TaskRow[]>;
+  // ── ACP peer management (acp-orchestration-integration-01NDFSEX06) ──────
+  ACP_ListPeers(): Promise<ACPPeer[]>;
+  ACP_TrustPeer(cardBlob: string): Promise<ACPTrustResult>;
+  ACP_RevokePeer(peerID: string): Promise<void>;
+  ACP_Dispatch(peerID: string, turnPayload: string): Promise<ACPDispatchResult>;
+  ACP_GetTrace(envelopeID: string): Promise<ACPEnvelopeTrace>;
 }
 
 // ── runtime client ─────────────────────────────────────────────────────
@@ -3514,6 +3530,12 @@ export function createHarnessClient(): HarnessClient {
     Tasks_Abort: (id) => b().Tasks_Abort(id),
     Tasks_AbortBySession: (sessionID) => b().Tasks_AbortBySession(sessionID),
     Tasks_ListBySession: (sessionID) => b().Tasks_ListBySession(sessionID),
+    // ── ACP peer management (acp-orchestration-integration-01NDFSEX06) ──────
+    ACP_ListPeers: () => b().ACP_ListPeers(),
+    ACP_TrustPeer: (cardBlob) => b().ACP_TrustPeer(cardBlob),
+    ACP_RevokePeer: (peerID) => b().ACP_RevokePeer(peerID),
+    ACP_Dispatch: (peerID, turnPayload) => b().ACP_Dispatch(peerID, turnPayload),
+    ACP_GetTrace: (envelopeID) => b().ACP_GetTrace(envelopeID),
   };
 }
 
@@ -4833,6 +4855,19 @@ export function createFakeHarnessClient(
     Tasks_Abort: noop,
     Tasks_AbortBySession: noop,
     Tasks_ListBySession: async (): Promise<TaskRow[]> => [],
+    // ── ACP peer management (acp-orchestration-integration-01NDFSEX06) ──────
+    ACP_ListPeers: async (): Promise<ACPPeer[]> => [],
+    ACP_TrustPeer: async (_cardBlob: string): Promise<ACPTrustResult> => ({
+      peerId: '', trustTier: 'full',
+    }),
+    ACP_RevokePeer: noop,
+    ACP_Dispatch: async (_peerID: string, _turnPayload: string): Promise<ACPDispatchResult> => ({
+      envelopeId: '',
+    }),
+    ACP_GetTrace: async (_envelopeID: string): Promise<ACPEnvelopeTrace> => ({
+      envelopeId: '', peerId: '', transport: '', direction: 'send',
+      outcome: 'ok', bytesIn: 0, bytesOut: 0, createdAt: '',
+    }),
   };
 
   return { ...defaults, ...seed };
