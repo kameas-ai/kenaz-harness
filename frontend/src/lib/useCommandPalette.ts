@@ -62,22 +62,8 @@ const actions = ref<PaletteAction[]>([
       }
     },
   },
-  // ── Theme toggle — routes through document class + persists via hook ─
-  {
-    id: 'palette.toggle-theme',
-    label: 'Toggle theme',
-    hint: 'Switch between dark and light mode',
-    perform: () => {
-      if (typeof document === 'undefined') return;
-      const isDark = document.documentElement.classList.contains('dark');
-      document.documentElement.classList.toggle('dark', !isDark);
-      document.documentElement.style.colorScheme = isDark ? 'light' : 'dark';
-      // Dispatch a custom event so useTheme watchers can persist the change.
-      window.dispatchEvent(
-        new CustomEvent('kenaz:theme-toggle', { detail: { dark: !isDark } }),
-      );
-    },
-  },
+  // ── Theme toggle — registered from CommandPalette.vue via useTheme (WP09 review fix) ─
+  // (action registered dynamically in CommandPalette.vue so it has Vue context for useTheme)
   // ── Navigation ──────────────────────────────────────────────────────
   ...NAV_ACTIONS,
   // ── Settings ────────────────────────────────────────────────────────
