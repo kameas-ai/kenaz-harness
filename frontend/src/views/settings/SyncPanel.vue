@@ -154,6 +154,9 @@ async function forcePull(id: string) {
 }
 
 function goToMCPTools() {
+  // TODO: pass ?pending=1 once ToolsView/MCPView consumes a `pending` query
+  // param to auto-open the MCP panel filtered to servers awaiting credentials.
+  // For now, navigate to /tools without a filter so the link is at least live.
   void router?.push('/tools');
 }
 </script>

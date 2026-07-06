@@ -7,6 +7,7 @@ import {
   Archive,
   Plus,
   MessageSquare,
+  Package,
   Wrench,
   FileText,
   Settings,
@@ -978,6 +979,12 @@ async function onProjectDrop(evt: DragEvent, projectId: string) {
           data-testid="nav-sites"
         >
           <RailEntry :icon="Globe" label="Sites" to="/sites" />
+        </li>
+        <li
+          v-if="signedIn"
+          data-testid="nav-marketplace"
+        >
+          <RailEntry :icon="Package" label="Marketplace" to="/marketplace" />
         </li>
         <li><RailEntry :icon="Settings" label="Settings" to="/settings" /></li>
       </ul>

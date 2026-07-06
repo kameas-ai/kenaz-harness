@@ -16,6 +16,7 @@ import { ref, computed, onMounted } from 'vue';
 import CanvasHead from '@/shell/CanvasHead.vue';
 import { signedIn } from '@/lib/featureFlags';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
+import { push as pushToast } from '@/composables/useToastQueue';
 import type { CatalogItemView } from '@/lib/types';
 
 const client = useHarnessClient();
@@ -32,8 +33,6 @@ const searchQuery = ref('');
 
 // per-item busy flags
 const busyIds = ref<Set<string>>(new Set());
-const toastMsg = ref<string | null>(null);
-let toastTimer: ReturnType<typeof setTimeout> | null = null;
 
 // ── load ──────────────────────────────────────────────────────────────────
 async function loadItems() {
@@ -73,20 +72,14 @@ function setBusy(id: string, on: boolean) {
   busyIds.value = s;
 }
 
-function showToast(msg: string) {
-  toastMsg.value = msg;
-  if (toastTimer) clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => { toastMsg.value = null; }, 3000);
-}
-
 async function install(item: CatalogItemView) {
   setBusy(item.id, true);
   try {
     await client.catalog.install(item.id, item.version);
-    showToast(`Installed: ${item.slug} v${item.version}`);
+    pushToast(`Installed: ${item.slug} v${item.version}`);
     await loadItems();
   } catch (err) {
-    showToast(`Install failed: ${err instanceof Error ? err.message : String(err)}`);
+    pushToast(`Install failed: ${err instanceof Error ? err.message : String(err)}`, { level: 'error' });
   } finally {
     setBusy(item.id, false);
   }
@@ -96,10 +89,10 @@ async function uninstall(item: CatalogItemView) {
   setBusy(item.id, true);
   try {
     await client.catalog.uninstall(item.kind, item.id, item.version);
-    showToast(`Uninstalled: ${item.slug} v${item.version}`);
+    pushToast(`Uninstalled: ${item.slug} v${item.version}`);
     await loadItems();
   } catch (err) {
-    showToast(`Uninstall failed: ${err instanceof Error ? err.message : String(err)}`);
+    pushToast(`Uninstall failed: ${err instanceof Error ? err.message : String(err)}`, { level: 'error' });
   } finally {
     setBusy(item.id, false);
   }
@@ -112,16 +105,6 @@ async function applyFilters() {
 
 <template>
   <div class="flex h-full flex-col" data-testid="marketplace-view">
-    <!-- Toast -->
-    <div
-      v-if="toastMsg"
-      class="fixed bottom-6 right-6 z-[9999] rounded-sm border border-border-muted bg-surface-3 px-4 py-2 font-ui text-sm text-ink shadow-lg"
-      role="status"
-      data-testid="marketplace-toast"
-    >
-      {{ toastMsg }}
-    </div>
-
     <CanvasHead
       title="Marketplace"
       subtitle="Browse and install items from the fleet catalog."
