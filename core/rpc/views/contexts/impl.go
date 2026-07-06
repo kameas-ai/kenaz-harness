@@ -84,6 +84,12 @@ func (a *API) WithSyncer(s *fleet.ContextGraphSyncer) *API {
 var ErrLibraryUnavailable = errors.New("contexts: library unavailable")
 
 // List returns the recursive tree converted into the wire shape.
+// When a syncer is wired, pulled team/org entries from fleet are appended
+// as synthetic nodes at their layer subfolder (personal > team > org
+// precedence — pulled entries always appear below any local personal entry).
+// Tombstoned entries are excluded (already filtered by PulledEntries).
+// When the syncer is nil, the result is local-only (FR-010, FR-011).
+// (context-graph-e2e-01NINTG03 WP03)
 func (a *API) List(_ context.Context) (Node, error) {
 	if a == nil || a.lib == nil {
 		return Node{Kind: KindFolder}, ErrLibraryUnavailable
@@ -92,7 +98,11 @@ func (a *API) List(_ context.Context) (Node, error) {
 	if err != nil {
 		return Node{}, err
 	}
-	return toWire(root), nil
+	wire := toWire(root)
+	if a.syncer != nil {
+		wire = mergePulledEntries(wire, a.syncer.PulledEntries())
+	}
+	return wire, nil
 }
 
 // ListAll returns the tree with dotfiles included. Used by the
@@ -105,7 +115,77 @@ func (a *API) ListAll(_ context.Context) (Node, error) {
 	if err != nil {
 		return Node{}, err
 	}
-	return toWire(root), nil
+	wire := toWire(root)
+	if a.syncer != nil {
+		wire = mergePulledEntries(wire, a.syncer.PulledEntries())
+	}
+	return wire, nil
+}
+
+// mergePulledEntries appends pulled team/org entries as synthetic file nodes
+// under a virtual layer subfolder inside the root node. Each pulled entry
+// becomes a KindFile node whose Name is the entry Title and whose Path is
+// "<layer>/_fleet/<id>". Entries are grouped by layer (team before org).
+//
+// The merge is additive: if a local file with the same name already exists in
+// the tree it is NOT replaced (personal > team > org precedence). The frontend
+// uses Path as the stable key; fleet entries carry the fleet node ID in the
+// path so they never collide with filesystem paths.
+//
+// This is the WP03 merge bridge. A richer conflict-resolution pass via
+// core/context/merge is a follow-up (out of scope for this mission).
+func mergePulledEntries(root Node, pulled []fleet.ContextNodeEntry) Node {
+	if len(pulled) == 0 {
+		return root
+	}
+
+	// Group by layer.
+	teamEntries := make([]fleet.ContextNodeEntry, 0)
+	orgEntries := make([]fleet.ContextNodeEntry, 0)
+	for _, e := range pulled {
+		switch e.Layer {
+		case contextpack.LayerTeam:
+			teamEntries = append(teamEntries, e)
+		case contextpack.LayerOrg:
+			orgEntries = append(orgEntries, e)
+		}
+	}
+
+	appendLayerNodes := func(entries []fleet.ContextNodeEntry, layerName string) {
+		if len(entries) == 0 {
+			return
+		}
+		synthetic := make([]Node, 0, len(entries))
+		for _, e := range entries {
+			// Path encodes the fleet node ID so it never collides with fs paths.
+			path := layerName + "/_fleet/" + e.ID
+			synthetic = append(synthetic, Node{
+				Name: e.Title,
+				Path: path,
+				Kind: KindFile,
+			})
+		}
+		// Look for an existing top-level folder with this name and append there;
+		// otherwise append a virtual folder directly to root.Children.
+		for i, child := range root.Children {
+			if child.Kind == KindFolder && child.Name == layerName {
+				root.Children[i].Children = append(root.Children[i].Children, synthetic...)
+				return
+			}
+		}
+		// No existing folder — create a virtual one.
+		root.Children = append(root.Children, Node{
+			Name:     layerName,
+			Path:     layerName,
+			Kind:     KindFolder,
+			Children: synthetic,
+		})
+	}
+
+	appendLayerNodes(teamEntries, "team")
+	appendLayerNodes(orgEntries, "org")
+
+	return root
 }
 
 func (a *API) Get(_ context.Context, path string) (string, error) {
