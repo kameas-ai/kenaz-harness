@@ -4034,3 +4034,22 @@ export interface ACPTrustResult {
   peerId: string;
   trustTier: string;
 }
+
+/**
+ * ComplianceStatus — current fleet audit archival state.
+ * Mirrors core/rpc/views/compliance.ComplianceStatus.
+ */
+export interface ComplianceStatus {
+  /** RFC3339 timestamp of last successful archive flush; empty if never. */
+  lastArchivedAt: string;
+  /** Approximate number of audit events awaiting archival. */
+  pendingCount: number;
+  /** True if a hash-chain continuity break was detected. Archival is halted. */
+  chainBreak: boolean;
+  /** Current retention window in days. */
+  retentionDays: number;
+  /** True when CapAuditLogImmuDB capability is active for this org tier. */
+  enabled: boolean;
+  /** True when the background archiver goroutine is running. */
+  archiverRunning: boolean;
+}
