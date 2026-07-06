@@ -86,10 +86,9 @@ defineExpose({ queue });
     title="Tool confirmation required"
     panel-class="w-full max-w-lg rounded-md border border-accent-hairline bg-surface-1 p-5 shadow-xl"
     :close-on-overlay-click="false"
-    data-testid="confirm-tool-modal"
     @close="() => {}"
   >
-    <div v-if="head">
+    <div v-if="head" data-testid="confirm-tool-modal">
       <div class="font-ui text-[11px] uppercase tracking-[0.18em] text-ink-subtle">
         Tool confirmation required
       </div>

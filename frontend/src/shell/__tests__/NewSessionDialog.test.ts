@@ -34,6 +34,9 @@ async function mountDialog(seed: Partial<HarnessClient> = {}) {
 
   const w = mount(NewSessionDialog, {
     props: { open: false },
+    // Mount into document.body so that BaseDialog's <Teleport to="body">
+    // renders into the live DOM and is reachable via document.querySelector.
+    attachTo: document.body,
     global: {
       plugins: [
         router,
@@ -51,6 +54,7 @@ async function mountDialog(seed: Partial<HarnessClient> = {}) {
   await nextTick();
   return { w, router };
 }
+
 
 function makeProviders(): Provider[] {
   return [
@@ -90,6 +94,8 @@ describe('NewSessionDialog (Mission A: starting context)', () => {
   });
   afterEach(() => {
     window.localStorage.clear();
+    // Clean up any stray DOM nodes left by attachTo: document.body mounts.
+    document.body.innerHTML = '';
   });
 
   it('calls setSystemPrompt with kind=system when system radio is selected', async () => {
@@ -143,19 +149,22 @@ describe('NewSessionDialog (Mission A: starting context)', () => {
 
     // Default kind is 'system' — leave it alone. Drive the file-input
     // change handler with a stub File.
-    const fileInput = w.find<HTMLInputElement>('input[type="file"]');
-    expect(fileInput.exists()).toBe(true);
+    const fileInputEl = document.body.querySelector<HTMLInputElement>('input[type="file"]');
+    expect(fileInputEl).not.toBeNull();
     const file = makeFile('# system seed\nbe concise.');
-    Object.defineProperty(fileInput.element, 'files', {
+    Object.defineProperty(fileInputEl!, 'files', {
       value: [file],
       configurable: true,
     });
-    await fileInput.trigger('change');
+    fileInputEl!.dispatchEvent(new Event('change', { bubbles: true }));
     await flushPromises();
     await nextTick();
 
     // Choice should auto-select the lone provider/model on load.
-    await w.find('[data-testid="new-session-create"]').trigger('click');
+    const createBtn = document.body.querySelector<HTMLElement>('[data-testid="new-session-create"]');
+    expect(createBtn).not.toBeNull();
+    createBtn!.click();
+    await flushPromises();
     await flushPromises();
 
     expect(calls).toHaveLength(1);
@@ -216,23 +225,27 @@ describe('NewSessionDialog (Mission A: starting context)', () => {
       } as any,
     });
 
-    const fileInput = w.find<HTMLInputElement>('input[type="file"]');
+    const fileInputEl = document.body.querySelector<HTMLInputElement>('input[type="file"]');
+    expect(fileInputEl).not.toBeNull();
     const file = makeFile('please summarise the docs.');
-    Object.defineProperty(fileInput.element, 'files', {
+    Object.defineProperty(fileInputEl!, 'files', {
       value: [file],
       configurable: true,
     });
-    await fileInput.trigger('change');
+    fileInputEl!.dispatchEvent(new Event('change', { bubbles: true }));
     await flushPromises();
     await nextTick();
 
     // Switch to user_seed.
-    const userSeedRadio = w.find('[data-testid="new-session-context-kind-user-seed"]');
-    expect(userSeedRadio.exists()).toBe(true);
-    await userSeedRadio.trigger('change');
+    const userSeedRadioEl = document.body.querySelector<HTMLInputElement>('[data-testid="new-session-context-kind-user-seed"]');
+    expect(userSeedRadioEl).not.toBeNull();
+    userSeedRadioEl!.dispatchEvent(new Event('change', { bubbles: true }));
     await nextTick();
 
-    await w.find('[data-testid="new-session-create"]').trigger('click');
+    const createBtn = document.body.querySelector<HTMLElement>('[data-testid="new-session-create"]');
+    expect(createBtn).not.toBeNull();
+    createBtn!.click();
+    await flushPromises();
     await flushPromises();
 
     expect(appendCalls).toHaveLength(1);
@@ -321,12 +334,16 @@ describe('NewSessionDialog (Mission A: starting context)', () => {
       } as any,
     });
 
-    const select = w.find<HTMLSelectElement>('[data-testid="new-session-project"]');
-    expect(select.exists()).toBe(true);
-    await select.setValue('p1');
+    const selectEl = document.body.querySelector<HTMLSelectElement>('[data-testid="new-session-project"]');
+    expect(selectEl).not.toBeNull();
+    selectEl!.value = 'p1';
+    selectEl!.dispatchEvent(new Event('change', { bubbles: true }));
     await nextTick();
 
-    await w.find('[data-testid="new-session-create"]').trigger('click');
+    const createBtn = document.body.querySelector<HTMLElement>('[data-testid="new-session-create"]');
+    expect(createBtn).not.toBeNull();
+    createBtn!.click();
+    await flushPromises();
     await flushPromises();
 
     expect(moveCalls).toHaveLength(1);
@@ -382,7 +399,9 @@ describe('NewSessionDialog (Mission A: starting context)', () => {
       } as any,
     });
 
-    await w.find('[data-testid="new-session-create"]').trigger('click');
+    const createBtn = document.body.querySelector<HTMLElement>('[data-testid="new-session-create"]');
+    expect(createBtn).not.toBeNull();
+    createBtn!.click();
     await flushPromises();
 
     expect(calls).toHaveLength(0);
