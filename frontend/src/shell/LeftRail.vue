@@ -267,6 +267,16 @@ async function deleteSession(id: string, event: Event) {
   event.preventDefault();
   event.stopPropagation();
   if (!id || deletingId.value) return;
+  // WP03 review fix: route single-session delete through ConfirmDialog.
+  const session = sessionList.value.find((s) => s.id === id);
+  const sessionName = session?.name || id;
+  const ok = await confirm({
+    title: `Delete "${sessionName}"?`,
+    message: 'This cannot be undone.',
+    danger: true,
+    confirmLabel: 'Delete',
+  });
+  if (!ok) return;
   deletingId.value = id;
   lastError.value = null;
   try {
