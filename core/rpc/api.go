@@ -1946,7 +1946,8 @@ func New(c *core.Core) *API {
 			if a.settingsImpl != nil {
 				caps = a.settingsImpl.CapabilityPoller()
 			}
-			ctxSyncer := corefleet.NewContextGraphSyncer(flCl, flDataDir, caps)
+			ctxSyncer := corefleet.NewContextGraphSyncer(flCl, flDataDir, caps).
+				WithAuditEmitter(&contextSyncAuditBridge{impl: a.auditImpl})
 			impl.WithSyncer(ctxSyncer)
 
 			// FR-012: wire the library merger so each successful PullDelta
@@ -1989,12 +1990,14 @@ func New(c *core.Core) *API {
 				})
 			}
 
-			// harness-fleet-sync-activation-01NSYNC01 gap #2: start the
-			// background context-pull loop so f->h team/org read-layer deltas
-			// merge into the local pulled cache (surfaced via PulledEntries)
-			// without a manual Context_SyncStatus poke. Self-gates on
-			// sign-in + team-graph capability; personal stays local.
-			ctxSyncer.StartPoller(context.Background())
+			// harness-fleet-sync-activation-01NSYNC01 gap #2 /
+			// context-graph-e2e-01NINTG03 WP02: start the background
+			// context-pull loop so f->h team/org read-layer deltas merge into
+			// the local pulled cache (surfaced via PulledEntries) without a
+			// manual Context_SyncStatus poke. Self-gates on sign-in + team-graph
+			// capability; personal stays local.
+			// 0 means "use the default 60s cadence" (StartPoller FR-001).
+			ctxSyncer.StartPoller(context.Background(), 0)
 
 			// Store for Shutdown teardown (FR-011).
 			a.ctxGraphSyncer = ctxSyncer
