@@ -235,6 +235,34 @@ export function isServedUnsupportedError(err: unknown): err is ServedUnsupported
   return err instanceof ServedUnsupportedError;
 }
 
+// ── General-purpose friendly() helper (WP06) ─────────────────────────────
+
+/**
+ * friendly — converts any unknown caught error into a user-displayable string.
+ *
+ * Priority:
+ *   1. Known typed errors (attachment, unsupported-feature, served-mode).
+ *   2. Short raw errors (< 200 chars): show verbatim.
+ *   3. Long errors: truncate + append "… (check logs for details)".
+ *
+ * Use this everywhere you would otherwise write:
+ *   `err instanceof Error ? err.message : String(err)`
+ *
+ * Components should NOT render `err.message` directly in templates.
+ * Always call `friendly(err)` so Go-internal error strings are humanised.
+ */
+export function friendly(err: unknown): string {
+  const attachment = friendlyAttachmentError(err);
+  if (attachment) return attachment;
+  const unsupported = friendlyUnsupportedFeatureError(err);
+  if (unsupported) return unsupported;
+  if (isServedUnsupportedError(err)) return err.friendly();
+  const raw = toErrorString(err);
+  if (!raw) return 'An unexpected error occurred.';
+  if (raw.length <= 200) return raw;
+  return raw.slice(0, 197) + '…';
+}
+
 // ── helpers ──────────────────────────────────────────────────────────────
 
 function toErrorString(err: unknown): string {

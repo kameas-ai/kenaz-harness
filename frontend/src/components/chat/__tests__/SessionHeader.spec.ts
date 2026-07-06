@@ -140,36 +140,41 @@ describe('SessionHeader — export affordance (session-export-01NDFSEX05 WP03)',
     expect(w.text()).toContain('Export…');
   });
 
-  it('calls sessions.export with markdown when window.confirm returns true', async () => {
-    vi.spyOn(window, 'confirm').mockReturnValue(true);
+  it('calls sessions.export with markdown when the Markdown menu item is clicked', async () => {
     const { w, exportMock } = mountHeader(baseSession);
     await flushPromises();
+    // WP03: export uses a dropdown instead of window.confirm.
+    // Click the Export… button to open the menu, then pick Markdown.
     await w.find('[data-testid="export-session-btn"]').trigger('click');
+    await flushPromises();
+    await w.find('[data-testid="export-markdown"]').trigger('click');
     await flushPromises();
     expect(exportMock).toHaveBeenCalledWith('ses-1', 'markdown');
-    vi.restoreAllMocks();
   });
 
-  it('calls sessions.export with json when window.confirm returns false', async () => {
-    vi.spyOn(window, 'confirm').mockReturnValue(false);
+  it('calls sessions.export with json when the JSON menu item is clicked', async () => {
     const { w, exportMock } = mountHeader(baseSession);
     await flushPromises();
+    // WP03: export uses a dropdown instead of window.confirm.
+    // Click the Export… button to open the menu, then pick JSON.
     await w.find('[data-testid="export-session-btn"]').trigger('click');
     await flushPromises();
+    await w.find('[data-testid="export-json"]').trigger('click');
+    await flushPromises();
     expect(exportMock).toHaveBeenCalledWith('ses-1', 'json');
-    vi.restoreAllMocks();
   });
 
   it('silently ignores a cancelled export (no error shown)', async () => {
-    vi.spyOn(window, 'confirm').mockReturnValue(true);
     const cancelledExport = vi.fn().mockRejectedValue(new Error('export cancelled by user'));
     const { w } = mountHeader(baseSession, undefined, cancelledExport);
     await flushPromises();
+    // Open the menu and pick an option; the cancelled export should not show an error.
     await w.find('[data-testid="export-session-btn"]').trigger('click');
+    await flushPromises();
+    await w.find('[data-testid="export-markdown"]').trigger('click');
     await flushPromises();
     // No error text should appear for a cancel.
     expect(w.find('[data-testid="export-session-btn"]').attributes('disabled')).toBeUndefined();
-    vi.restoreAllMocks();
   });
 });
 

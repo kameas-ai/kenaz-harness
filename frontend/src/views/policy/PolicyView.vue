@@ -282,7 +282,7 @@ watch(editorSource, (val) => {
     <div class="policy-view flex-1 min-w-0">
     <!-- Disabled state when feature flag is off -->
     <div v-if="!editorEnabled" class="policy-view__disabled" data-testid="policy-editor-disabled">
-      <p>The Cedar policy editor is disabled. Set <code>HARNESS_POLICY_EDITOR_UI=1</code> to enable it.</p>
+      <p>The advanced security policy editor is disabled. Contact your administrator to enable it.</p>
     </div>
 
     <template v-else>
@@ -326,9 +326,9 @@ watch(editorSource, (val) => {
         <div class="policy-view__title">
           <span class="policy-view__section">POLICY</span>
         </div>
-        <h1 class="policy-view__heading">Cedar policy editor</h1>
+        <h1 class="policy-view__heading">Security policy (advanced)</h1>
         <p class="policy-view__sub">
-          Edit Cedar policies under <code>&lt;DataDir&gt;/policy/</code>.
+          Edit security policies under <code>&lt;DataDir&gt;/policy/</code>.
           Embedded defaults are read-only. Changes take effect on the next tool call.
         </p>
       </header>

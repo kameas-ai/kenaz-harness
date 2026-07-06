@@ -123,7 +123,7 @@ const toolGrantLabels: Record<SubagentToolGrantMode, string> = {
   inherit: 'Inherit from parent',
   readonly: 'Read-only tools only',
   none: 'No tools',
-  cedar: 'Advanced (custom Cedar policy)',
+  cedar: 'Advanced (custom security policy)',
 };
 </script>
 

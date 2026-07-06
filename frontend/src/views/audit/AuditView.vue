@@ -23,7 +23,15 @@ const client = useHarnessClient();
 
 // ── Filter state ────────────────────────────────────────────────────────
 const selectedCategory = ref<string>('');
-const sinceInput = ref<string>('');
+// WP11: default to last-7-days so the view opens on recent entries, not an
+// empty screen when the log is sparse. Format: RFC3339 date (UTC midnight).
+function sevenDaysAgoISO(): string {
+  const d = new Date();
+  d.setUTCDate(d.getUTCDate() - 7);
+  d.setUTCHours(0, 0, 0, 0);
+  return d.toISOString().slice(0, 10); // "YYYY-MM-DD"
+}
+const sinceInput = ref<string>(sevenDaysAgoISO());
 const untilInput = ref<string>('');
 const actorInput = ref<string>('');
 const freeText = ref<string>('');

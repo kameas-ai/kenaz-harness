@@ -1,14 +1,36 @@
 <script setup lang="ts">
-import { computed, ref, watch, nextTick } from 'vue';
+import { computed, ref, watch, nextTick, onBeforeUnmount } from 'vue';
 import { useCommandPalette } from '@/lib/useCommandPalette';
+import { useTheme } from '@/lib/useTheme';
 
 /**
  * CommandPalette — Cmd/Ctrl+K modal palette (FR-010). Implements the
  * keyboard binding via useCommandPalette and renders a simple list +
  * filter. Radix-Vue's Dialog is the canonical primitive once the
  * shadcn-vue copy lands; this is the lightweight v1.0 surface.
+ *
+ * WP09 review fix: the theme toggle action is registered here (inside Vue
+ * setup context) so it can call useTheme().cycle() which persists the choice
+ * via client.settings.saveTheme. The previous approach directly manipulated
+ * document.documentElement and dispatched a custom event that nothing listened
+ * to, so the setting was not persisted.
  */
 const palette = useCommandPalette();
+const { cycle: cycleTheme } = useTheme();
+
+// Register theme toggle — runs cycle() which persists via useTheme.set()
+const unregisterThemeToggle = palette.register({
+  id: 'palette.toggle-theme',
+  label: 'Toggle theme',
+  hint: 'Switch between dark and light mode',
+  perform: () => {
+    cycleTheme();
+  },
+});
+
+onBeforeUnmount(() => {
+  unregisterThemeToggle();
+});
 const filter = ref('');
 const inputEl = ref<HTMLInputElement | null>(null);
 

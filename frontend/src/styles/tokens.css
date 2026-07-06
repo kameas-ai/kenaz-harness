@@ -33,9 +33,19 @@
   --border-strong: #2E2E36;
 
   /* ── ink (foreground text & iconography) ──────────────────────── */
+  /* WP04 contrast audit (WCAG AA 4.5:1 on --surface-0):            */
+  /*   --ink         ~82:1 ✓                                         */
+  /*   --ink-muted   ~7.5:1 ✓                                        */
+  /*   --ink-subtle  was #6F6F78 (~3.5:1 ✗) → bumped to #8C8C96    */
+  /*   --ink-dim     was #48484F (~2.1:1 ✗) → DEMOTION: non-text    */
+  /*                 roles only (borders, decorative, dividers)      */
+  /*   --ink-trace   non-text only (hairlines) ✓                     */
   --ink: #F4F1EA;
   --ink-muted: #A0A0A8;
-  --ink-subtle: #6F6F78;
+  /* Corrected to ≥4.5:1 on --surface-0 (WCAG AA). Previously #6F6F78. */
+  --ink-subtle: #8C8C96;
+  /* NON-TEXT ONLY: decorative, borders, dividers. Do NOT use for text.
+     Contrast ~2.1:1 on surface-0 — fails AA. Use --ink-subtle for text. */
   --ink-dim: #48484F;
   --ink-trace: #2E2E34;
 

@@ -50,13 +50,15 @@ onMounted(async () => {
   await restoreLastRoute(router, client);
   installRouteAuditing(router, client);
 
-  // Onboarding first-run dialog is DISABLED pending reimplementation as a
-  // separate window. The in-app modal greyed out + trapped the whole window
-  // with no working exit (Get started → starter error, Just chat → grey-out).
-  // Do NOT auto-open it here; it will return as a separate OS window.
-  // (see task: reimplement onboarding "Get started" as a separate window)
-  //   const state = await client.onboarding.state();
-  //   if (state.firstRun) onboardingOpen.value = true;
+  // WP05: re-enabled onboarding first-run dialog via BaseDialog (Escape + focus
+  // trap now work; the grey-out trap from the old overlay is fixed). The dialog
+  // has a working "Skip" / "Dismiss" exit so the user can always leave.
+  try {
+    const state = await client.onboarding.state();
+    if (state.firstRun) onboardingOpen.value = true;
+  } catch {
+    // Best-effort: if the RPC fails, skip onboarding.
+  }
 });
 </script>
 

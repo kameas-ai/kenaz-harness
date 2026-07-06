@@ -30,10 +30,10 @@ import PlanApprovalModal from '@/views/sessions/PlanApprovalModal.vue';
 import BranchSidebar from '@/components/chat/BranchSidebar.vue';
 import BranchBreadcrumb from '@/components/chat/BranchBreadcrumb.vue';
 import CreateBranchModal from '@/components/chat/CreateBranchModal.vue';
-import MergeSuggestionToast from '@/components/chat/MergeSuggestionToast.vue';
-import CostThresholdToast from '@/components/chat/CostThresholdToast.vue';
 import AuthFailureToast from '@/components/chat/AuthFailureToast.vue';
-import RetryAfterRotateToast from '@/components/chat/RetryAfterRotateToast.vue';
+// WP02 review fix: CostThresholdToast, MergeSuggestionToast, RetryAfterRotateToast
+// replaced by useEventToasts (single toast mechanism).
+import { useEventToasts } from '@/composables/useEventToasts';
 import FallbackActivePill from '@/components/chat/FallbackActivePill.vue';
 import BashPermissionModal from '@/components/permissions/BashPermissionModal.vue';
 import FilesystemPermissionModal from '@/components/permissions/FilesystemPermissionModal.vue';
@@ -69,6 +69,11 @@ const route = useRoute();
 const router = useRouter();
 const client = useHarnessClient();
 const { list: sessionList, refresh: refreshSessions } = useSessions();
+
+// WP02 review fix: mount the unified event-toast composable here so all three
+// previously-bespoke toasts (cost threshold, merge suggestion, retry-after-rotate)
+// flow through the single useToastQueue pathway (ToastRoot renders them).
+useEventToasts();
 
 // Refresh the rail's session list when SessionsView mounts so the
 // empty-state checks against an up-to-date count instead of an
@@ -1784,6 +1789,11 @@ async function onNudgeNewSession() {
             activeProviderUnsupported ||
             session.loading.value
           "
+          :disabled-hint="
+            !activeProvider && providersLoaded
+              ? 'No provider configured — go to Providers to add one before sending.'
+              : undefined
+          "
           :estimate="{ tokens: 0, usd: 0 }"
           :session-id="sessionId"
           :error-banner="session.error.value"
@@ -1820,11 +1830,9 @@ async function onNudgeNewSession() {
       @close="closeCreateBranchModal"
       @created="closeCreateBranchModal"
     />
-    <MergeSuggestionToast />
-    <CostThresholdToast />
-    <!-- provider-keychain-rotation-01KQ8TD9 WP05 — auth failure + post-rotation toasts -->
+    <!-- provider-keychain-rotation-01KQ8TD9 WP05 — auth failure toast (rich-UI; not in useEventToasts) -->
+    <!-- MergeSuggestionToast, CostThresholdToast, RetryAfterRotateToast removed in WP02 review fix — now handled by useEventToasts() -->
     <AuthFailureToast :auto-resume-enabled="autoResumeOnKeyRotation" />
-    <RetryAfterRotateToast />
     <!-- model-fallback-routing-01NDFSEX04 WP05 — fallback-active indicator pill -->
     <FallbackActivePill />
     <!-- WP08 — universal permission modals (one per family) -->
