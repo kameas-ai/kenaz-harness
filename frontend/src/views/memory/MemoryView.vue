@@ -78,6 +78,8 @@ const chunks = ref<readonly MemoryChunk[]>([]);
 const loading = ref(false);
 const error = ref<string | null>(null);
 const activeFilter = ref<FilterPill>('all');
+// WP11: text filter for the chunks list
+const chunkTextFilter = ref<string>('');
 const openMenuId = ref<string | null>(null);
 const promote = ref<PromoteState | null>(null);
 
@@ -87,6 +89,13 @@ const filterPills: readonly { id: FilterPill; label: string; glyph: string }[] =
   { id: 'project', label: 'Project', glyph: '📁' },
   { id: 'session', label: 'Session', glyph: '💬' },
 ];
+
+// WP11: text-filtered chunks — filters by substring match on content text.
+const visibleChunks = computed(() => {
+  const q = chunkTextFilter.value.trim().toLowerCase();
+  if (!q) return chunks.value;
+  return chunks.value.filter((c) => c.content?.toLowerCase().includes(q));
+});
 
 function buildFilter(pill: FilterPill): MemoryListFilter {
   if (pill === 'all') return {};
@@ -755,6 +764,20 @@ defineExpose({ refresh });
     </div><!-- end retrieval tab panel -->
 
     <div v-if="activeMainTab === 'chunks'" class="px-6 py-4 max-w-4xl">
+      <!-- WP11: text filter input for chunks list -->
+      <div class="mb-3">
+        <input
+          v-model="chunkTextFilter"
+          type="text"
+          placeholder="Filter memories…"
+          aria-label="Filter memories by text"
+          spellcheck="false"
+          autocomplete="off"
+          class="w-full rounded-sm border border-border-muted bg-surface-1 px-3 py-1.5 font-ui text-[12px] text-ink placeholder:text-ink-dim focus:border-accent focus:outline-none"
+          data-testid="memory-text-filter"
+        />
+      </div>
+
       <!-- Scope filter pills (WP06 T005) -->
       <div
         class="mb-4 flex flex-wrap gap-2"
@@ -888,9 +911,19 @@ defineExpose({ refresh });
         </p>
       </div>
 
+      <div
+        v-else-if="visibleChunks.length === 0"
+        class="rounded-md border border-border-muted bg-surface-1 px-4 py-4 text-center"
+        data-testid="memory-filter-empty"
+      >
+        <p class="font-ui text-sm text-ink-muted">
+          No memories match "{{ chunkTextFilter }}"
+        </p>
+      </div>
+
       <ul v-else class="space-y-2" data-testid="memory-chunk-list">
         <li
-          v-for="chunk in chunks"
+          v-for="chunk in visibleChunks"
           :key="chunk.id"
           class="relative rounded-md border border-border-muted bg-surface-1 px-4 py-3"
           :data-testid="`memory-chunk-${chunk.id}`"

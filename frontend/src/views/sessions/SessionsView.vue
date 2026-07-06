@@ -1784,6 +1784,11 @@ async function onNudgeNewSession() {
             activeProviderUnsupported ||
             session.loading.value
           "
+          :disabled-hint="
+            !activeProvider && providersLoaded
+              ? 'No provider configured — go to Providers to add one before sending.'
+              : undefined
+          "
           :estimate="{ tokens: 0, usd: 0 }"
           :session-id="sessionId"
           :error-banner="session.error.value"

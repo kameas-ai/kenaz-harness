@@ -550,9 +550,20 @@ function editConfig(listing: RecipeListing) {
 // This ensures a clean-install shows zero rows, and that the Delete
 // button is only presented for recipes that are actually enabled —
 // clicking Delete on a non-enabled catalog entry would be a no-op.
-const visibleRecipes = computed<readonly RecipeListing[]>(() =>
-  recipes.value.filter((l) => l.enabled),
-);
+
+// WP11: text filter for the MCP recipes list.
+const mcpTextFilter = ref<string>('');
+
+const visibleRecipes = computed<readonly RecipeListing[]>(() => {
+  const enabled = recipes.value.filter((l) => l.enabled);
+  const q = mcpTextFilter.value.trim().toLowerCase();
+  if (!q) return enabled;
+  return enabled.filter(
+    (l) =>
+      l.recipe.displayName.toLowerCase().includes(q) ||
+      (l.recipe.description ?? '').toLowerCase().includes(q),
+  );
+});
 
 function statusOf(listing: RecipeListing): RecipeStatus {
   return listing.status;
@@ -1064,7 +1075,7 @@ watch(
     </div>
 
     <!-- Connected MCP recipes header + Add CTA -->
-    <div class="mt-6 flex items-center justify-between mb-3">
+    <div class="mt-6 flex items-center justify-between mb-2">
       <h2
         class="font-ui text-[11px] uppercase tracking-[0.18em] text-ink-subtle"
       >
@@ -1078,6 +1089,20 @@ watch(
       >
         + Add MCP Server
       </button>
+    </div>
+
+    <!-- WP11: text filter for MCP recipes -->
+    <div class="mb-3">
+      <input
+        v-model="mcpTextFilter"
+        type="text"
+        placeholder="Filter MCP servers…"
+        aria-label="Filter MCP servers"
+        spellcheck="false"
+        autocomplete="off"
+        class="w-full rounded-sm border border-border-muted bg-surface-1 px-3 py-1.5 font-ui text-[12px] text-ink placeholder:text-ink-dim focus:border-accent focus:outline-none"
+        data-testid="mcp-text-filter"
+      />
     </div>
 
     <div
@@ -1096,11 +1121,18 @@ watch(
       {{ recipesError }}
     </div>
     <div
-      v-else-if="visibleRecipes.length === 0"
+      v-else-if="visibleRecipes.length === 0 && !mcpTextFilter"
       class="rounded-sm border border-border-muted bg-surface-1 px-4 py-3 font-ui text-[12px] text-ink-muted"
       data-testid="recipes-empty"
     >
       No MCP servers installed. Click <strong>+ Add MCP Server</strong> to browse the catalog and install one.
+    </div>
+    <div
+      v-else-if="visibleRecipes.length === 0 && mcpTextFilter"
+      class="rounded-sm border border-border-muted bg-surface-1 px-4 py-3 font-ui text-[12px] text-ink-muted"
+      data-testid="recipes-filter-empty"
+    >
+      No MCP servers match "{{ mcpTextFilter }}"
     </div>
 
     <div

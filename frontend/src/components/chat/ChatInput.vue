@@ -57,6 +57,12 @@ const props = defineProps<{
   /** Optional disabled override (e.g. no-provider state). */
   disabled?: boolean;
   /**
+   * WP11: Optional hint shown in the composer when it is disabled but
+   * not due to a lost connection. Use to explain why sending is blocked
+   * (e.g. "Configure a provider to start sending messages").
+   */
+  disabledHint?: string;
+  /**
    * Session id used as the scope for staged attachments. The chat
    * surface always passes its active session id; tests may pass a
    * fixed string.
@@ -1178,6 +1184,17 @@ const acceptedTypes =
       data-testid="chat-input-connection-lost"
     >
       Connection to the harness backend lost — sending is paused until it reconnects.
+    </div>
+
+    <!-- WP11: disabled-state hint — shown when the composer is locked for
+         a reason other than a lost connection (e.g. no provider configured). -->
+    <div
+      v-if="props.disabled && !connectionLost && props.disabledHint"
+      class="mb-2 rounded-md border border-border-muted bg-surface-1 px-3 py-2 font-ui text-[12px] text-ink-muted"
+      role="status"
+      data-testid="chat-input-disabled-hint"
+    >
+      {{ props.disabledHint }}
     </div>
 
     <!-- branch suggestion banner (FR-002) -->
