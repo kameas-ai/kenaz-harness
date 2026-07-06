@@ -1378,6 +1378,26 @@ export function Shell_ReadFile(arg1) {
   return window['go']['rpc']['Bindings']['Shell_ReadFile'](arg1);
 }
 
+export function Sites_Delete(arg1) {
+  return window['go']['rpc']['Bindings']['Sites_Delete'](arg1);
+}
+
+export function Sites_Deploy(arg1) {
+  return window['go']['rpc']['Bindings']['Sites_Deploy'](arg1);
+}
+
+export function Sites_List() {
+  return window['go']['rpc']['Bindings']['Sites_List']();
+}
+
+export function Sites_Logs(arg1, arg2) {
+  return window['go']['rpc']['Bindings']['Sites_Logs'](arg1, arg2);
+}
+
+export function Sites_Status(arg1) {
+  return window['go']['rpc']['Bindings']['Sites_Status'](arg1);
+}
+
 export function Slash_Execute(arg1, arg2) {
   return window['go']['rpc']['Bindings']['Slash_Execute'](arg1, arg2);
 }
@@ -1452,6 +1472,30 @@ export function Sync_Status() {
 
 export function Sync_Toggle(arg1, arg2) {
   return window['go']['rpc']['Bindings']['Sync_Toggle'](arg1, arg2);
+}
+
+export function Tasks_Abort(arg1) {
+  return window['go']['rpc']['Bindings']['Tasks_Abort'](arg1);
+}
+
+export function Tasks_AbortBySession(arg1) {
+  return window['go']['rpc']['Bindings']['Tasks_AbortBySession'](arg1);
+}
+
+export function Tasks_Get(arg1) {
+  return window['go']['rpc']['Bindings']['Tasks_Get'](arg1);
+}
+
+export function Tasks_List() {
+  return window['go']['rpc']['Bindings']['Tasks_List']();
+}
+
+export function Tasks_ListBySession(arg1) {
+  return window['go']['rpc']['Bindings']['Tasks_ListBySession'](arg1);
+}
+
+export function Tasks_Tail(arg1, arg2) {
+  return window['go']['rpc']['Bindings']['Tasks_Tail'](arg1, arg2);
 }
 
 export function Tools_ForgetRecipeKey(arg1, arg2) {
@@ -1620,28 +1664,4 @@ export function Workflows_ScheduleRunHistory(arg1, arg2) {
 
 export function Workflows_ScheduleSet(arg1) {
   return window['go']['rpc']['Bindings']['Workflows_ScheduleSet'](arg1);
-}
-
-export function Tasks_List() {
-  return window['go']['rpc']['Bindings']['Tasks_List']();
-}
-
-export function Tasks_Get(arg1) {
-  return window['go']['rpc']['Bindings']['Tasks_Get'](arg1);
-}
-
-export function Tasks_Tail(arg1, arg2) {
-  return window['go']['rpc']['Bindings']['Tasks_Tail'](arg1, arg2);
-}
-
-export function Tasks_Abort(arg1) {
-  return window['go']['rpc']['Bindings']['Tasks_Abort'](arg1);
-}
-
-export function Tasks_AbortBySession(arg1) {
-  return window['go']['rpc']['Bindings']['Tasks_AbortBySession'](arg1);
-}
-
-export function Tasks_ListBySession(arg1) {
-  return window['go']['rpc']['Bindings']['Tasks_ListBySession'](arg1);
 }

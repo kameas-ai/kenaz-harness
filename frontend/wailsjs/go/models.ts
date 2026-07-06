@@ -2505,11 +2505,11 @@ export namespace fleet {
 	    local_version: number;
 	    synced_version: number;
 	    server_version: number;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new UnitConflictView(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.unit_id = source["unit_id"];
@@ -2527,11 +2527,11 @@ export namespace fleet {
 	    pushCount: number;
 	    pullCount: number;
 	    conflictCount: number;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new UnitSyncStatusView(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.cursor = source["cursor"];
@@ -5064,6 +5064,7 @@ export namespace recipes {
 	    config_options?: ConfigOption[];
 	    warning?: string;
 	    recommended_policy_template?: string;
+	    required_capability?: string;
 	    prompt_on_first_use?: string[];
 	    pre_seeding_policy?: string;
 	    auth?: RecipeAuth;
@@ -5093,6 +5094,7 @@ export namespace recipes {
 	        this.config_options = this.convertValues(source["config_options"], ConfigOption);
 	        this.warning = source["warning"];
 	        this.recommended_policy_template = source["recommended_policy_template"];
+	        this.required_capability = source["required_capability"];
 	        this.prompt_on_first_use = source["prompt_on_first_use"];
 	        this.pre_seeding_policy = source["pre_seeding_policy"];
 	        this.auth = this.convertValues(source["auth"], RecipeAuth);
@@ -5304,11 +5306,11 @@ export namespace rpc {
 	    mcpInitError?: string;
 	    skillsInitError?: string;
 	    fleetInitError?: string;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new BootHealthReport(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.mcpInitError = source["mcpInitError"];
@@ -6076,11 +6078,11 @@ export namespace settings {
 	    source: string;
 	    bundleChecksum: string;
 	    configDistributionEnabled: boolean;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new FleetConfigPullStatusView(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.lastAppliedId = source["lastAppliedId"];
@@ -6096,11 +6098,11 @@ export namespace settings {
 	    configSource: string;
 	    configLastError: string;
 	    signedIn: boolean;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new FleetHealthView(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.configDistributionEnabled = source["configDistributionEnabled"];
@@ -6211,6 +6213,7 @@ export namespace settings {
 	    autoCaptureToolOutputsDisabled?: boolean;
 	    webSearchEnabled?: boolean;
 	    bashEnabled?: boolean;
+	    webFetchEnabled?: boolean;
 	    saveArtifactDisabled?: boolean;
 	    maxAgentTurns?: number;
 	    compactionAggressiveness?: string;
@@ -6289,6 +6292,7 @@ export namespace settings {
 	        this.autoCaptureToolOutputsDisabled = source["autoCaptureToolOutputsDisabled"];
 	        this.webSearchEnabled = source["webSearchEnabled"];
 	        this.bashEnabled = source["bashEnabled"];
+	        this.webFetchEnabled = source["webFetchEnabled"];
 	        this.saveArtifactDisabled = source["saveArtifactDisabled"];
 	        this.maxAgentTurns = source["maxAgentTurns"];
 	        this.compactionAggressiveness = source["compactionAggressiveness"];
@@ -6384,6 +6388,50 @@ export namespace settings {
 	        this.optedAt = source["optedAt"];
 	        this.source = source["source"];
 	    }
+	}
+
+}
+
+export namespace sites {
+	
+	export class SiteSummary {
+	    name: string;
+	    kind: string;
+	    url?: string;
+	    status: string;
+	    // Go type: time
+	    deployedAt?: any;
+	
+	    static createFrom(source: any = {}) {
+	        return new SiteSummary(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.kind = source["kind"];
+	        this.url = source["url"];
+	        this.status = source["status"];
+	        this.deployedAt = this.convertValues(source["deployedAt"], null);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
 	}
 
 }
@@ -6688,6 +6736,59 @@ export namespace sync {
 	        this.last_push_at = source["last_push_at"];
 	        this.last_pull_at = source["last_pull_at"];
 	        this.last_error = source["last_error"];
+	    }
+	}
+
+}
+
+export namespace tasks {
+	
+	export class LineRow {
+	    stream: string;
+	    text: string;
+	    offset: number;
+	    at: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new LineRow(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.stream = source["stream"];
+	        this.text = source["text"];
+	        this.offset = source["offset"];
+	        this.at = source["at"];
+	    }
+	}
+	export class TaskRow {
+	    id: string;
+	    kind: string;
+	    ownerSessionId: string;
+	    cmd: string;
+	    description: string;
+	    status: string;
+	    exitCode: number;
+	    startedAt: string;
+	    endedAt?: string;
+	    ageMs: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new TaskRow(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.kind = source["kind"];
+	        this.ownerSessionId = source["ownerSessionId"];
+	        this.cmd = source["cmd"];
+	        this.description = source["description"];
+	        this.status = source["status"];
+	        this.exitCode = source["exitCode"];
+	        this.startedAt = source["startedAt"];
+	        this.endedAt = source["endedAt"];
+	        this.ageMs = source["ageMs"];
 	    }
 	}
 
@@ -7373,59 +7474,6 @@ export namespace workflows {
 	        this.version = source["version"];
 	        this.stepCount = source["stepCount"];
 	        this.source = source["source"];
-	    }
-	}
-
-}
-
-export namespace tasks {
-
-	export class LineRow {
-	    stream: string;
-	    text: string;
-	    offset: number;
-	    at: string;
-
-	    static createFrom(source: any = {}) {
-	        return new LineRow(source);
-	    }
-
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.stream = source["stream"];
-	        this.text = source["text"];
-	        this.offset = source["offset"];
-	        this.at = source["at"];
-	    }
-	}
-	export class TaskRow {
-	    id: string;
-	    kind: string;
-	    ownerSessionId: string;
-	    cmd: string;
-	    description: string;
-	    status: string;
-	    exitCode: number;
-	    startedAt: string;
-	    endedAt?: string;
-	    ageMs: number;
-
-	    static createFrom(source: any = {}) {
-	        return new TaskRow(source);
-	    }
-
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.id = source["id"];
-	        this.kind = source["kind"];
-	        this.ownerSessionId = source["ownerSessionId"];
-	        this.cmd = source["cmd"];
-	        this.description = source["description"];
-	        this.status = source["status"];
-	        this.exitCode = source["exitCode"];
-	        this.startedAt = source["startedAt"];
-	        this.endedAt = source["endedAt"];
-	        this.ageMs = source["ageMs"];
 	    }
 	}
 
