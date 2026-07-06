@@ -344,6 +344,11 @@ func (a *AuditArchiver) flushOnce(ctx context.Context) error {
 
 	a.lastArchivedAt.Store(time.Now().UnixNano())
 
+	// Advance the predecessor hash in the BatchChainVerifier.
+	if bv, ok := a.cfg.Verifier.(*BatchChainVerifier); ok {
+		bv.AdvancePredecessor(events)
+	}
+
 	_ = emitAudit(ctx, a.cfg.Emitter, contextaudit.KindFleetAuditArchived,
 		contextaudit.FleetAuditArchivedPayload{
 			BatchSize: len(events),
