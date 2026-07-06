@@ -21,9 +21,10 @@
 //
 // The menu is rebuilt and re-applied via runtime.MenuSetApplicationMenu
 // whenever one of these state changes fires via the broker:
-//   - theme:changed      → flips the radio checkmark in View → Theme
-//   - update:available   → re-labels Help → Check for Updates
-//   - sessions:updated   → repopulates File → Open Recent (max 10)
+//   - theme:changed            → flips the radio checkmark in View → Theme
+//   - update:available         → re-labels Help → Check for Updates
+//   - session.list_changed     → repopulates File → Open Recent (max 10)
+//                                (broker topic rpc.TopicSessionListChanged)
 //
 // Each rebuild is debounced to ≤ 1 rebuild per 100 ms (FR-012).
 package menu

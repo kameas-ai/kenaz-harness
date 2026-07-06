@@ -67,10 +67,70 @@ func TestBuild_MacOSAppMenuFirst(t *testing.T) {
 	if len(m.Items) == 0 {
 		t.Fatal("menu empty")
 	}
-	// AppMenuRole == 1 per Wails constants.
-	if m.Items[0].Role != 1 {
-		t.Errorf("first item role = %d, want 1 (AppMenuRole)", m.Items[0].Role)
+	// Custom App menu replaces AppMenuRole so we can wire Preferences…
+	// The first item is a "Kenaz Harness" submenu containing Preferences.
+	first := m.Items[0]
+	if first.Label != "Kenaz Harness" {
+		t.Errorf("first item label = %q, want %q", first.Label, "Kenaz Harness")
 	}
+	if first.SubMenu == nil {
+		t.Fatal("Kenaz Harness menu has no submenu")
+	}
+	var foundPrefs bool
+	for _, item := range first.SubMenu.Items {
+		if item.Label == "Preferences…" {
+			foundPrefs = true
+		}
+	}
+	if !foundPrefs {
+		t.Error("Preferences… item not found in Kenaz Harness app menu")
+	}
+}
+
+func TestBuild_MacOSPreferences_HasAccelerator(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("macOS-only test")
+	}
+	m := Build(MenuState{}, noopHandlers())
+	if len(m.Items) == 0 {
+		t.Fatal("menu empty")
+	}
+	appMenu := m.Items[0]
+	if appMenu.SubMenu == nil {
+		t.Fatal("no app submenu")
+	}
+	for _, item := range appMenu.SubMenu.Items {
+		if item.Label == "Preferences…" {
+			if item.Accelerator == nil {
+				t.Error("Preferences… missing accelerator (want ⌘,)")
+			}
+			return
+		}
+	}
+	t.Error("Preferences… item not found")
+}
+
+func TestBuild_WinLinux_PreferencesInFile(t *testing.T) {
+	if runtime.GOOS == "darwin" {
+		t.Skip("Windows/Linux-only test")
+	}
+	m := Build(MenuState{}, noopHandlers())
+	for _, top := range m.Items {
+		if top.Label != "File" || top.SubMenu == nil {
+			continue
+		}
+		for _, fi := range top.SubMenu.Items {
+			if fi.Label == "Preferences…" {
+				if fi.Accelerator == nil {
+					t.Error("Preferences… missing accelerator (want Ctrl+,)")
+				}
+				return
+			}
+		}
+		t.Error("Preferences… not found in File menu on Windows/Linux")
+		return
+	}
+	t.Error("File menu not found")
 }
 
 func TestBuild_ThemeRadioCheckmarks(t *testing.T) {

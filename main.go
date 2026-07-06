@@ -275,6 +275,25 @@ func main() {
 				menuMu.Unlock()
 				scheduleRebuild()
 			})
+			// session.list_changed — repopulate File → Open Recent (max 10).
+			// Broker topic rpc.TopicSessionListChanged = "session.list_changed".
+			wailsruntime.EventsOn(ctx, rpc.TopicSessionListChanged, func(_ ...interface{}) {
+				if sessAPI := api.Sessions(); sessAPI != nil {
+					if sessions, err := sessAPI.List(context.Background()); err == nil {
+						refs := make([]coremenus.SessionRef, 0, 10)
+						for i, s := range sessions {
+							if i >= 10 {
+								break
+							}
+							refs = append(refs, coremenus.SessionRef{ID: s.ID, Title: s.Name})
+						}
+						menuMu.Lock()
+						menuState.RecentSessions = refs
+						menuMu.Unlock()
+						scheduleRebuild()
+					}
+				}
+			})
 
 			// Initialise Sentry after core.Start so the settings store is
 			// ready. wire-up point 1 for sentry (sentry-error-monitoring-01KX5R8G WP02).
@@ -395,6 +414,22 @@ func deriveMenuState(api *rpc.API) coremenus.MenuState {
 			state.ThemeMode = coremenus.ThemeMode(theme)
 		}
 	}
+
+	// Populate File → Open Recent (capped at 10, most-recent first).
+	// Sessions().List returns sessions ordered by last-active descending.
+	if sessAPI := api.Sessions(); sessAPI != nil {
+		if sessions, err := sessAPI.List(context.Background()); err == nil {
+			refs := make([]coremenus.SessionRef, 0, 10)
+			for i, s := range sessions {
+				if i >= 10 {
+					break
+				}
+				refs = append(refs, coremenus.SessionRef{ID: s.ID, Title: s.Name})
+			}
+			state.RecentSessions = refs
+		}
+	}
+
 	return state
 }
 

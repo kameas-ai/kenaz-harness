@@ -23,12 +23,22 @@ func Build(state MenuState, h *Handlers) *wailsmenu.Menu {
 	app := wailsmenu.NewMenu()
 
 	if runtime.GOOS == "darwin" {
-		// macOS: standard App menu first (AppMenuRole delegates to NSApp).
-		app.Append(wailsmenu.AppMenu())
+		// macOS: custom App menu replacing AppMenuRole so we can inject
+		// Preferences… (⌘,) between About and the standard window items.
+		// Wails v2 does not expose individual Role constants (HideRole,
+		// QuitRole, etc.) so we wire Quit via onQuit and omit Hide/HideOthers
+		// rather than using a no-op Role=0 on menu items.
+		appSub := wailsmenu.NewMenu()
+		appSub.AddText("About Kenaz Harness", nil, h.onAboutDialog)
+		appSub.AddSeparator()
+		appSub.AddText("Preferences…", keys.CmdOrCtrl(","), h.onPreferences)
+		appSub.AddSeparator()
+		appSub.AddText("Quit Kenaz Harness", keys.CmdOrCtrl("q"), h.onQuit)
+		app.Append(wailsmenu.SubMenu("Kenaz Harness", appSub))
 	}
 
 	app.Append(buildFileMenu(state, h))
-	app.Append(buildEditMenu())
+	app.Append(buildEditMenu(h))
 	app.Append(buildViewMenu(state, h))
 	app.Append(buildHelpMenu(state, h))
 
@@ -37,8 +47,15 @@ func Build(state MenuState, h *Handlers) *wailsmenu.Menu {
 
 // buildFileMenu builds the File top-level menu.
 // On Win/Linux the Quit item is appended; on macOS Quit lives in the App menu.
+// On Win/Linux Preferences… is placed at the top before New Session (macOS
+// Preferences lives in the App menu via onPreferences wired to ⌘,).
 func buildFileMenu(state MenuState, h *Handlers) *wailsmenu.MenuItem {
 	sub := wailsmenu.NewMenu()
+
+	if runtime.GOOS != "darwin" {
+		sub.AddText("Preferences…", keys.CmdOrCtrl(","), h.onPreferences)
+		sub.AddSeparator()
+	}
 
 	sub.AddText("New Session", keys.CmdOrCtrl("n"), h.onNewSession)
 
@@ -72,8 +89,8 @@ func buildFileMenu(state MenuState, h *Handlers) *wailsmenu.MenuItem {
 
 // buildEditMenu builds the Edit top-level menu.
 // EditMenuRole delegates to the OS-native edit menu on macOS.
-// On Windows/Linux we provide explicit Undo/Redo/Cut/Copy/Paste/SelectAll.
-func buildEditMenu() *wailsmenu.MenuItem {
+// On Windows/Linux we provide explicit Undo/Redo/Cut/Copy/Paste/SelectAll/Find.
+func buildEditMenu(h *Handlers) *wailsmenu.MenuItem {
 	if runtime.GOOS == "darwin" {
 		return wailsmenu.EditMenu()
 	}
@@ -86,6 +103,8 @@ func buildEditMenu() *wailsmenu.MenuItem {
 	sub.AddText("Copy", keys.CmdOrCtrl("c"), nil)
 	sub.AddText("Paste", keys.CmdOrCtrl("v"), nil)
 	sub.AddText("Select All", keys.CmdOrCtrl("a"), nil)
+	sub.AddSeparator()
+	sub.AddText("Find", keys.CmdOrCtrl("f"), h.onFind)
 	return wailsmenu.SubMenu("Edit", sub)
 }
 
