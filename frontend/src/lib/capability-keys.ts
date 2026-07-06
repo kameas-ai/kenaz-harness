@@ -27,6 +27,8 @@ export const CAPABILITY_KEYS = [
   'compliance_docs_custom',
   'quarterly_attestation_reports',
   'sites_hosting',
+  'context_sync',
+  'team_session_handoff',
 ] as const;
 
 export type Capability = (typeof CAPABILITY_KEYS)[number];

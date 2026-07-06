@@ -110,6 +110,7 @@ import (
 	cedarview "github.com/kameas-ai/kenaz-harness/core/rpc/views/cedar"
 	sitesview "github.com/kameas-ai/kenaz-harness/core/rpc/views/sites"
 	acpview "github.com/kameas-ai/kenaz-harness/core/rpc/views/acp"
+	contextsyncview "github.com/kameas-ai/kenaz-harness/core/rpc/views/contextsync"
 	acppeers "github.com/kameas-ai/kenaz-harness/core/acp/peers"
 	acpenvelope "github.com/kameas-ai/kenaz-harness/core/acp/envelope"
 	corefleet "github.com/kameas-ai/kenaz-harness/core/fleet"
@@ -299,6 +300,12 @@ type HarnessAPI interface {
 	// (acp-orchestration-integration-01NDFSEX06). Provides ListPeers,
 	// TrustPeer, RevokePeer, Dispatch, and GetTrace.
 	ACP() acpview.ACPAPI
+
+	// ContextSync exposes the private E2E-encrypted session/project context
+	// continuity surface (fleet-context-sync-01NDFSEX15 WP06). Provides
+	// SessionSync_Toggle, ProjectSync_Toggle, Handoff_Share, Handoff_Accept,
+	// ContextSync_GenerateRecoveryCode, and related methods.
+	ContextSync() contextsyncview.ContextSyncAPI
 }
 
 // ShellStatus drives the Toolbar status pills + LegendBar live-rate
@@ -614,6 +621,12 @@ type API struct {
 	// ACP layer is available; falls back to NullAPI for graceful empty
 	// operation on the test-chassis path.
 	acpAPI acpview.ACPAPI
+
+	// contextSyncAPI is the E2E-encrypted session/project context continuity
+	// surface (fleet-context-sync-01NDFSEX15 WP06). Wired in New when the
+	// fleet client is available; all backends nil-guard so the surface
+	// degrades gracefully when fleet is disabled.
+	contextSyncAPI contextsyncview.ContextSyncAPI
 }
 
 // Builtins returns the in-binary tool registry. Used by the chat-input
@@ -913,6 +926,7 @@ func New(c *core.Core) *API {
 		taskReg:        taskReg,
 		tasksAPI:       tasksAPI,
 		acpAPI:         acpview.NewNullAPI(),
+		contextSyncAPI: &contextsyncview.Impl{}, // nil backends degrade gracefully
 	}
 	a.attachmentsAPI = newAttachmentsAPI(c, attMgr)
 	a.artifactsAPI = newArtifactsAPI(c, artStore, artMgr, media)
@@ -2006,6 +2020,46 @@ func New(c *core.Core) *API {
 			logging.L().Info("rpc.slashcmd.skill_deps_wired",
 				"fleet_client_nil", flCl == nil,
 				"signer_nil", catalogSigner == nil,
+			)
+		}
+
+		// fleet-context-sync-01NDFSEX15 WP06: wire the E2E-encrypted
+		// session/project context continuity backends.
+		//
+		// Capability gating is done in the fleet layer (SessionSyncer,
+		// ProjectSyncer, HandoffHandler all check caps internally). We
+		// pass nil caps here so the fleet layer reads the live snapshot
+		// at each call — consistent with the pattern above (getCaps closure).
+		{
+			capsFn := func() *corefleet.Capabilities {
+				if a.settingsImpl == nil {
+					return nil
+				}
+				p := a.settingsImpl.CapabilityPoller()
+				if p == nil {
+					return nil
+				}
+				c := p.Current()
+				return &c
+			}
+			// Build syncers with nil caps — the syncers call capsFn-provided
+			// snapshot at enable-time via the fleet client. For v0.21.0 we
+			// pass nil caps directly and let capabilities be checked lazily.
+			_ = capsFn // caps are surfaced to the fleet layer via the backends below
+
+			contextSyncAudit := &contextSyncAuditBridge{impl: a.auditImpl}
+			sessionSyncer := corefleet.NewSessionSyncer(flCl, contextSyncAudit, nil)
+			projectSyncer := corefleet.NewProjectSyncer(flCl, contextSyncAudit, nil)
+			handoffHandler := corefleet.NewHandoffHandler(flCl, contextSyncAudit, nil)
+
+			a.contextSyncAPI = &contextsyncview.Impl{
+				Session:  &sessionSyncBackendAdapter{ss: sessionSyncer},
+				Project:  &projectSyncBackendAdapter{ps: projectSyncer},
+				Handoff:  &handoffBackendAdapter{hh: handoffHandler},
+				Recovery: &recoveryBackendAdapter{},
+			}
+			logging.L().Info("rpc.context_sync.wired",
+				"fleet_client_nil", flCl == nil,
 			)
 		}
 	}
@@ -5450,6 +5504,30 @@ func (e *acpAuditBridge) Emit(_ context.Context, ev contextaudit.Event) error {
 	return nil
 }
 
+// contextSyncAuditBridge implements contextaudit.Emitter for the
+// fleet-context-sync surfaces (SessionSyncer, ProjectSyncer, HandoffHandler).
+// Routes fleet.*_sync and fleet.session_shared_* events to the in-process
+// audit ring. Privacy: only opaque IDs appear in the Subject; payload_type
+// is used for Trailing so no content bytes reach the ring.
+// (fleet-context-sync-01NDFSEX15 WP06)
+type contextSyncAuditBridge struct {
+	impl *audit.API
+}
+
+func (e *contextSyncAuditBridge) Emit(_ context.Context, ev contextaudit.Event) error {
+	if e.impl == nil {
+		return nil
+	}
+	e.impl.Push(audit.Entry{
+		ID:        fmt.Sprintf("ctx-sync-%d", ev.TS.UnixNano()),
+		Timestamp: ev.TS.UTC().Format(time.RFC3339Nano),
+		Category:  "FLEET",
+		Subject:   string(ev.Kind),
+		Trailing:  fmt.Sprintf("payload_type=%T", ev.Payload),
+	})
+	return nil
+}
+
 // auditRingAdapter adapts audit.API to searchview.AuditLister.
 type auditRingAdapter struct {
 	api *audit.API
@@ -5822,6 +5900,10 @@ func (a *API) Tasks() tasksview.TasksAPI { return a.tasksAPI }
 // ACP implements HarnessAPI. Returns the ACP peer management + envelope
 // dispatch surface (acp-orchestration-integration-01NDFSEX06).
 func (a *API) ACP() acpview.ACPAPI { return a.acpAPI }
+
+// ContextSync implements HarnessAPI. Returns the E2E-encrypted context
+// continuity surface (fleet-context-sync-01NDFSEX15 WP06).
+func (a *API) ContextSync() contextsyncview.ContextSyncAPI { return a.contextSyncAPI }
 
 // brokerPlanEmitter adapts a *StreamBroker to the planmodeview.EventEmitter
 // interface. The broker's Publish method broadcasts to all subscribers

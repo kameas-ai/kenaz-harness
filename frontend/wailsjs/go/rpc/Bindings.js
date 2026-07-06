@@ -1689,3 +1689,51 @@ export function Workflows_ScheduleRunHistory(arg1, arg2) {
 export function Workflows_ScheduleSet(arg1) {
   return window['go']['rpc']['Bindings']['Workflows_ScheduleSet'](arg1);
 }
+
+export function SessionSync_Toggle(arg1, arg2) {
+  return window['go']['rpc']['Bindings']['SessionSync_Toggle'](arg1, arg2);
+}
+
+export function SessionSync_DeleteRemote(arg1) {
+  return window['go']['rpc']['Bindings']['SessionSync_DeleteRemote'](arg1);
+}
+
+export function SessionSync_ResumeFrom(arg1, arg2) {
+  return window['go']['rpc']['Bindings']['SessionSync_ResumeFrom'](arg1, arg2);
+}
+
+export function ProjectSync_Toggle(arg1, arg2) {
+  return window['go']['rpc']['Bindings']['ProjectSync_Toggle'](arg1, arg2);
+}
+
+export function ProjectSync_DeleteRemote(arg1) {
+  return window['go']['rpc']['Bindings']['ProjectSync_DeleteRemote'](arg1);
+}
+
+export function ProjectSync_SetArtifactClass(arg1, arg2) {
+  return window['go']['rpc']['Bindings']['ProjectSync_SetArtifactClass'](arg1, arg2);
+}
+
+export function Handoff_ListTeam() {
+  return window['go']['rpc']['Bindings']['Handoff_ListTeam']();
+}
+
+export function Handoff_Share(arg1, arg2) {
+  return window['go']['rpc']['Bindings']['Handoff_Share'](arg1, arg2);
+}
+
+export function Handoff_Inbox() {
+  return window['go']['rpc']['Bindings']['Handoff_Inbox']();
+}
+
+export function Handoff_Accept(arg1) {
+  return window['go']['rpc']['Bindings']['Handoff_Accept'](arg1);
+}
+
+export function ContextSync_GenerateRecoveryCode() {
+  return window['go']['rpc']['Bindings']['ContextSync_GenerateRecoveryCode']();
+}
+
+export function ContextSync_ApplyRecoveryCode(arg1) {
+  return window['go']['rpc']['Bindings']['ContextSync_ApplyRecoveryCode'](arg1);
+}

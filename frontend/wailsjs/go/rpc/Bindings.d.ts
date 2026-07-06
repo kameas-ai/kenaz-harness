@@ -48,6 +48,7 @@ import {transport} from '../models';
 import {tools} from '../models';
 import {trust} from '../models';
 import {fleet} from '../models';
+import {contextsync} from '../models';
 import {update} from '../models';
 import {workflow} from '../models';
 import {workflows} from '../models';
@@ -895,3 +896,27 @@ export function Workflows_ScheduleNextFire(arg1:string):Promise<string>;
 export function Workflows_ScheduleRunHistory(arg1:string,arg2:number):Promise<Array<workflows.RunSummary>>;
 
 export function Workflows_ScheduleSet(arg1:workflows.ScheduleSetInput):Promise<void>;
+
+export function SessionSync_Toggle(arg1:string,arg2:boolean):Promise<contextsync.SessionSyncStatus>;
+
+export function SessionSync_DeleteRemote(arg1:string):Promise<void>;
+
+export function SessionSync_ResumeFrom(arg1:string,arg2:number):Promise<number>;
+
+export function ProjectSync_Toggle(arg1:string,arg2:boolean):Promise<contextsync.ProjectSyncStatus>;
+
+export function ProjectSync_DeleteRemote(arg1:string):Promise<void>;
+
+export function ProjectSync_SetArtifactClass(arg1:string,arg2:contextsync.ArtifactClassOptionsView):Promise<contextsync.ProjectSyncStatus>;
+
+export function Handoff_ListTeam():Promise<Array<contextsync.TeamMemberView>>;
+
+export function Handoff_Share(arg1:string,arg2:string):Promise<void>;
+
+export function Handoff_Inbox():Promise<Array<contextsync.InboxItemView>>;
+
+export function Handoff_Accept(arg1:string):Promise<contextsync.AcceptedSessionView>;
+
+export function ContextSync_GenerateRecoveryCode():Promise<string>;
+
+export function ContextSync_ApplyRecoveryCode(arg1:string):Promise<void>;

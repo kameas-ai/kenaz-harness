@@ -7566,3 +7566,123 @@ export namespace workflows {
 
 }
 
+export namespace contextsync {
+
+	export class ArtifactClassOptionsView {
+	    notes: boolean;
+	    binaries: boolean;
+	    memory: boolean;
+
+	    static createFrom(source: any = {}) {
+	        return new ArtifactClassOptionsView(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.notes = source["notes"];
+	        this.binaries = source["binaries"];
+	        this.memory = source["memory"];
+	    }
+	}
+
+	export class ProjectSyncStatus {
+	    enabled: boolean;
+	    artifactClassOptions: ArtifactClassOptionsView;
+
+	    static createFrom(source: any = {}) {
+	        return new ProjectSyncStatus(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.enabled = source["enabled"];
+	        this.artifactClassOptions = this.convertValues(source["artifactClassOptions"], ArtifactClassOptionsView);
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+	        if (!a) {
+	            return a;
+	        }
+	        if (a.slice && a.map) {
+	            return (a as any[]).map(elem => this.convertValues(elem, classs));
+	        } else if ("object" === typeof a) {
+	            if (asMap) {
+	                for (const key of Object.keys(a)) {
+	                    a[key] = new classs(a[key]);
+	                }
+	                return a;
+	            }
+	            return new classs(a);
+	        }
+	        return a;
+	    }
+	}
+
+	export class SessionSyncStatus {
+	    enabled: boolean;
+
+	    static createFrom(source: any = {}) {
+	        return new SessionSyncStatus(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.enabled = source["enabled"];
+	    }
+	}
+
+	export class TeamMemberView {
+	    userID: string;
+	    displayName: string;
+	    email: string;
+
+	    static createFrom(source: any = {}) {
+	        return new TeamMemberView(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.userID = source["userID"];
+	        this.displayName = source["displayName"];
+	        this.email = source["email"];
+	    }
+	}
+
+	export class InboxItemView {
+	    inboxItemID: string;
+	    sessionID: string;
+	    senderUserID: string;
+	    senderEmail: string;
+	    receivedAt: string;
+
+	    static createFrom(source: any = {}) {
+	        return new InboxItemView(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.inboxItemID = source["inboxItemID"];
+	        this.sessionID = source["sessionID"];
+	        this.senderUserID = source["senderUserID"];
+	        this.senderEmail = source["senderEmail"];
+	        this.receivedAt = source["receivedAt"];
+	    }
+	}
+
+	export class AcceptedSessionView {
+	    localSessionID: string;
+	    eventCount: number;
+
+	    static createFrom(source: any = {}) {
+	        return new AcceptedSessionView(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.localSessionID = source["localSessionID"];
+	        this.eventCount = source["eventCount"];
+	    }
+	}
+
+}
+
