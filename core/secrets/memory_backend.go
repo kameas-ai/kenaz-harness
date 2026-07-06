@@ -18,7 +18,29 @@ import (
 // keychain credentials. zalando/go-keyring routes to the per-OS
 // secure store: macOS Keychain, Windows Credential Manager, libsecret
 // on Linux. A single namespace makes auditing + manual cleanup easy.
-const keyringService = "kaneaz-harness"
+const keyringService = "kenaz-harness"
+
+// legacyKeyringService is the previous (misspelled) namespace. Reads fall
+// back to it and migrate the value forward so credentials stored before the
+// kaneaz->kenaz rename are not orphaned. New writes only use keyringService.
+const legacyKeyringService = "kaneaz-harness"
+
+// keyringGetMigrating reads locator from the current keychain namespace,
+// falling back to the legacy namespace on a not-found and migrating the
+// value forward (best-effort) so subsequent reads hit the new namespace.
+func keyringGetMigrating(locator string) (string, error) {
+	v, err := keyring.Get(keyringService, locator)
+	if err == nil {
+		return v, nil
+	}
+	if errors.Is(err, keyring.ErrNotFound) {
+		if lv, lerr := keyring.Get(legacyKeyringService, locator); lerr == nil {
+			_ = keyring.Set(keyringService, locator, lv) // forward-migrate; ignore failure
+			return lv, nil
+		}
+	}
+	return "", err
+}
 
 // MemoryBackend is a single-process Backend that resolves env-var refs
 // from os.Getenv and keychain/file refs from an in-memory map. It is
@@ -99,7 +121,7 @@ func (b *MemoryBackend) Resolve(ctx context.Context, r ref.CredentialReference) 
 		// Prefer the OS keychain so credentials survive process
 		// restarts. Fall back to the in-memory map for tests +
 		// for keys that have only been staged this session.
-		if v, err := keyring.Get(keyringService, r.Locator); err == nil {
+		if v, err := keyringGetMigrating(r.Locator); err == nil {
 			return secret.NewStdlibSecret([]byte(v), r.ID(), r.ConsumerID), nil
 		}
 		key := r.Kind.String() + "|" + r.Locator

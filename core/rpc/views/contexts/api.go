@@ -86,6 +86,39 @@ type ContextsAPI interface {
 	// cursor, last pull time, error strings, pull count, and team cap enabled.
 	// Always returns a non-error result; sync problems are surfaced in the struct.
 	Context_SyncStatus(ctx context.Context) (ContextSyncStatusView, error)
+
+	// Context_Search runs a server-side search over the caller's visible
+	// context graph (title+body match in v0). teamID is optional; limit <= 0
+	// lets the server pick a default. Returns an empty result (no error) when
+	// fleet is disabled / unentitled / signed-out.
+	// (harness-fleet-sync-activation-01NSYNC01 gap #5)
+	Context_Search(ctx context.Context, query, teamID string, limit int) ([]ContextSearchHitView, error)
+
+	// Context_Export streams the caller's visible context graph as NDJSON
+	// (format "jsonl", default) or a gzipped tarball (format "tarball").
+	// teamID optionally narrows to a single team. Returns an empty result (no
+	// error) when fleet is disabled / unentitled.
+	// (harness-fleet-sync-activation-01NSYNC01 gap #5)
+	Context_Export(ctx context.Context, teamID, format string) (ContextExportView, error)
+
+	// ── Context module attachment (unified-context-artifacts-01NCTXU01) ──
+
+	// AttachModule creates an attachment for a context module directory.
+	//
+	// dirPath is the library-relative path of a module directory (a
+	// directory containing a context.md or agents.md root file).
+	// scopeKind is one of "global", "project", "session"; scopeID is
+	// the project or session id (empty for global).
+	//
+	// The returned ModuleAttachment has ContentSource = "module:<dirPath>"
+	// and Content = the concatenated root file + all always:-listed files
+	// (the on-demand files are NOT included; they are reached only via the
+	// kenaz__read_context_file tool).
+	//
+	// Returns ErrLibraryUnavailable when the library is not wired,
+	// ErrNotFound (wrapped) when dirPath does not exist or has no root
+	// file, and ErrInvalidModule when the directory is not a valid module.
+	AttachModule(ctx context.Context, scopeKind, scopeID, dirPath string) (ModuleAttachment, error)
 }
 
 // ── Wire shapes for context sync RPC ──────────────────────────────────────────
@@ -138,4 +171,65 @@ type ContextSyncStatusView struct {
 	PullCount int `json:"pull_count"`
 	// TeamCapEnabled is true when the team-graph sharing capability is active.
 	TeamCapEnabled bool `json:"team_cap_enabled"`
+	// Conflicts holds per-node server/client version conflicts from the most
+	// recent push (empty when the last push had none). The frontend prompts
+	// the user to reconcile each conflicted entry.
+	Conflicts []ContextConflictView `json:"conflicts,omitempty"`
+}
+
+// ContextConflictView is one per-node version conflict surfaced by
+// Context_SyncStatus (server_version vs client_version).
+type ContextConflictView struct {
+	NodeID        string `json:"node_id"`
+	ServerVersion int    `json:"server_version"`
+	ClientVersion int    `json:"client_version"`
+}
+
+// ContextSearchHitView is one search result from Context_Search.
+type ContextSearchHitView struct {
+	// NodeID is the matched node's stable UUID.
+	NodeID string `json:"node_id"`
+	// Title is the matched node's title.
+	Title string `json:"title"`
+	// Classification is "team_shared" or "org_shared".
+	Classification string `json:"classification"`
+	// Snippet is an excerpt with the match wrapped in **bold markers**.
+	Snippet string `json:"snippet"`
+	// Rank is the v0 match-count stand-in for the vector similarity score.
+	Rank float64 `json:"rank"`
+}
+
+// ContextExportView is the result of Context_Export: the base64-encoded export
+// stream plus the server's content type (application/x-ndjson | application/gzip).
+// Base64 keeps the (possibly gzipped binary) payload wire-safe over the JSON
+// RPC boundary.
+type ContextExportView struct {
+	// ContentType is the export MIME type.
+	ContentType string `json:"content_type"`
+	// DataBase64 is the base64-encoded export stream. Empty when fleet is
+	// disabled / unentitled.
+	DataBase64 string `json:"data_base64"`
+	// ByteLen is the decoded length, for the frontend to show a size hint
+	// without decoding.
+	ByteLen int `json:"byte_len"`
+}
+
+// ── Context module / AttachModule ────────────────────────────────────────────
+
+// ModuleAttachment is the wire shape returned by AttachModule. It mirrors
+// the context_attachments table row so the frontend can render and manage
+// the attachment without a separate List fetch.
+//
+// JSON field names are identical to those of the attachments view's
+// Attachment type so the frontend's existing attachment-list logic
+// can handle both shapes without modification.
+type ModuleAttachment struct {
+	ID            string `json:"id"`
+	ScopeKind     string `json:"scopeKind"`
+	ScopeID       string `json:"scopeId,omitempty"`
+	ContentSource string `json:"contentSource"`
+	Content       string `json:"content"`
+	Kind          string `json:"kind"`
+	Position      int    `json:"position"`
+	CreatedAt     string `json:"createdAt"`
 }

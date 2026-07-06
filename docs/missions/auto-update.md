@@ -4,7 +4,7 @@ Mission: `auto-update` (v0.4.0)
 
 ## Background
 
-Kaneaz Harness ships fast — users now upgrade multiple times per week as
+Kenaz Harness ships fast — users now upgrade multiple times per week as
 the kernel-graph refactor, cedar policy gates, and OpenRouter resilience
 work all land on staggered cadences. The pre-v0.4.0 story was "download
 a fresh DMG / tarball / installer from docs.kameas.ai and re-launch by

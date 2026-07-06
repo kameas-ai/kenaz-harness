@@ -49,6 +49,7 @@ import (
 	"github.com/kameas-ai/kenaz-harness/core/mcp/stdio"
 	corememory "github.com/kameas-ai/kenaz-harness/core/memory"
 	"github.com/kameas-ai/kenaz-harness/core/policy/cedar"
+	"github.com/kameas-ai/kenaz-harness/core/units"
 	autotitle "github.com/kameas-ai/kenaz-harness/core/sessions/autotitle"
 	autotitlewiring "github.com/kameas-ai/kenaz-harness/core/sessions/autotitle/wiring"
 	coreart "github.com/kameas-ai/kenaz-harness/core/artifacts"
@@ -102,6 +103,8 @@ import (
 	credstoreRefs "github.com/kameas-ai/kenaz-harness/core/credstore/refs"
 	sentryview "github.com/kameas-ai/kenaz-harness/core/rpc/views/sentry"
 	fleetview "github.com/kameas-ai/kenaz-harness/core/rpc/views/fleet"
+	tasksview "github.com/kameas-ai/kenaz-harness/core/rpc/views/tasks"
+	coretasks "github.com/kameas-ai/kenaz-harness/core/tasks"
 	catalogview "github.com/kameas-ai/kenaz-harness/core/rpc/views/catalog"
 	syncview "github.com/kameas-ai/kenaz-harness/core/rpc/views/sync"
 	cedarview "github.com/kameas-ai/kenaz-harness/core/rpc/views/cedar"
@@ -117,6 +120,8 @@ import (
 	wfsched "github.com/kameas-ai/kenaz-harness/core/workflows/scheduler"
 	schedulerPkg "github.com/kameas-ai/kenaz-harness/core/scheduler"
 	"github.com/zalando/go-keyring"
+	"go.opentelemetry.io/otel/sdk/resource"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 )
 
 // HarnessAPI is the boundary between the Wails-hosted Vue frontend and
@@ -205,7 +210,7 @@ type HarnessAPI interface {
 	// Elicit exposes the ask-user-question RPC surface (mission
 	// ask-user-question-interactive-01KZNP3G WP04). The frontend's
 	// AskUserQuestion dialog submits answers via Elicit_SubmitAnswer;
-	// the kaneaz__ask_user_question tool blocks on OpenDialog until
+	// the kenaz__ask_user_question tool blocks on OpenDialog until
 	// the answer arrives.
 	Elicit() elicitview.ElicitAPI
 
@@ -281,6 +286,11 @@ type HarnessAPI interface {
 	// The view is gated on the sites_hosting capability; it is the same
 	// core/sites + core/fleet/sites.go layer used by the MCP server.
 	Sites() sitesview.SitesAPI
+
+	// Tasks exposes the background-task registry RPC surface
+	// (background-task-monitor-01KZNP3C WP05). Provides List, Get, Tail,
+	// Abort, and AbortBySession for the Tasks panel.
+	Tasks() tasksview.TasksAPI
 }
 
 // ShellStatus drives the Toolbar status pills + LegendBar live-rate
@@ -344,7 +354,7 @@ type API struct {
 	core *core.Core
 
 	// builtins holds the in-binary tool registry so the chat-input
-	// `!cmd` shell-escape can dispatch directly to kaneaz__bash without
+	// `!cmd` shell-escape can dispatch directly to kenaz__bash without
 	// going through the toolloop. Populated at boot from the same
 	// registry the LLM tool catalog reads.
 	builtins *toolloop.BuiltinRegistry
@@ -461,6 +471,13 @@ type API struct {
 	// stays intact.
 	broker *StreamBroker
 
+	// eventBus is the in-process non-Wails emission sink.  It receives
+	// every event the broker publishes via the MultiEmitter fan-out, so
+	// served-mode WebSocket connections can subscribe to real-time pushes
+	// without needing the Wails runtime context.  The desktop path is
+	// unaffected: WailsEmitter still fires for every event.
+	eventBus *EventBus
+
 	// bindings is the Wails-reflected surface; held for the lifetime of
 	// API so OnStartup can call SetContext on it.
 	bindings *Bindings
@@ -556,10 +573,37 @@ type API struct {
 	// sitesAPI is the fleet-hosted sites RPC surface (sites-ui-01NSITE06).
 	// Backed by core/sites/packager.go + core/fleet/sites.go.
 	sitesAPI sitesview.SitesAPI
+
+	// settingsSyncer is the per-category settings Syncer started by
+	// registerSyncCategories. Held for Shutdown teardown (FR-001).
+	settingsSyncer *corefleet.Syncer
+
+	// ctxGraphSyncer is the fleet context-graph pull syncer started in New.
+	// Held for Shutdown teardown (FR-011).
+	ctxGraphSyncer *corefleet.ContextGraphSyncer
+
+	// unitSyncer is the Phase-3 unified-Unit fleet sync engine (promote-as-MR
+	// client + pull-conflict surface). Held for Shutdown teardown.
+	// (unified-context-artifacts-01NCTXU01 / Phase 3)
+	unitSyncer *corefleet.UnitSyncer
+
+	// unitsMgr is the fleet-free unified Unit store manager. Held so the
+	// fleet view's resolution/enshrine RPCs reach it.
+	unitsMgr *units.Manager
+
+	// contextsLib is the open Context Library. Held so the fleet merger
+	// closure (FR-012) can call MergeFleetEntries without re-opening the lib.
+	contextsLib *corecontexts.Library
+
+	// taskReg is the background-task registry (background-task-monitor-01KZNP3C).
+	// Created at boot with RecoverOrphansWithPIDCheck so orphaned running rows
+	// are marked crashed before any new runs register (FR-003 / WP03).
+	taskReg  *coretasks.Registry
+	tasksAPI tasksview.TasksAPI
 }
 
 // Builtins returns the in-binary tool registry. Used by the chat-input
-// `!cmd` shell-escape binding to dispatch directly to kaneaz__bash.
+// `!cmd` shell-escape binding to dispatch directly to kenaz__bash.
 // Concrete-type method; the HarnessAPI interface does not expose it
 // because no view-scoped consumer needs it.
 func (a *API) Builtins() *toolloop.BuiltinRegistry { return a.builtins }
@@ -692,6 +736,23 @@ func (a *API) Shutdown() {
 	if a.evalRecorder != nil {
 		a.evalRecorder.StopAll()
 	}
+	// FR-001: stop the settings sync background poller.
+	if a.settingsSyncer != nil {
+		a.settingsSyncer.Stop()
+	}
+	// FR-011: stop the context-graph pull background poller.
+	if a.ctxGraphSyncer != nil {
+		a.ctxGraphSyncer.Stop()
+	}
+	// Phase-3: stop the unified-Unit pull background poller.
+	if a.unitSyncer != nil {
+		a.unitSyncer.Stop()
+	}
+	// Fleet background goroutines (capability poller, config poller, lockdown
+	// watcher). StopFleetBackground is idempotent and nil-safe.
+	if a.settingsImpl != nil {
+		a.settingsImpl.StopFleetBackground()
+	}
 }
 
 // ErrEvalNotConfigured is returned by Sessions_StartCapture /
@@ -776,6 +837,49 @@ func New(c *core.Core) *API {
 		dataDir = c.DataDir()
 	}
 
+	// Unified Unit store manager (unified-context-artifacts-01NCTXU01). Backed
+	// by the same storage.DB; nil on the test chassis (no real storage.DB). The
+	// Phase-3 fleet view resolution/enshrine RPCs reach it; the UnitSyncer is
+	// wired later (once the fleet client is resolved).
+	var unitsMgr *units.Manager
+	if db != nil {
+		unitsMgr = units.NewManager(units.NewSQLStore(db))
+	}
+
+	// Background-task registry (background-task-monitor-01KZNP3C WP05 / WP03).
+	// Create early so RecoverOrphansWithPIDCheck marks orphaned running rows
+	// crashed before any new task runs register (FR-003).
+	var taskReg *coretasks.Registry
+	var tasksAPI tasksview.TasksAPI
+	{
+		var taskStore coretasks.SQLStore
+		if db != nil {
+			type sqlHandle interface{ SQL() *sql.DB }
+			if h, ok := db.(sqlHandle); ok {
+				if rawDB := h.SQL(); rawDB != nil {
+					taskStore = coretasks.NewSQLiteStore(rawDB)
+				}
+			}
+		}
+		logDir := ""
+		if dataDir != "" {
+			logDir = filepath.Join(dataDir, "task_logs")
+		}
+		taskReg = coretasks.NewRegistry(coretasks.Options{
+			Store:  taskStore,
+			LogDir: logDir,
+			Logger: logging.L(),
+		})
+		// FR-003: mark orphaned running rows crashed at boot. Best-effort;
+		// errors are absorbed — the registry operates in-memory-only on
+		// failures.
+		aliveCount := coretasks.RecoverOrphansWithPIDCheck(context.Background(), taskReg, logDir)
+		logging.L().Info("rpc.boot.task_orphan_recovery",
+			"alive_tasks", aliveCount,
+		)
+		tasksAPI = tasksview.NewAPI(taskReg)
+	}
+
 	a := &API{
 		core:           c,
 		a2aAPI:         &stubA2A{},
@@ -791,10 +895,14 @@ func New(c *core.Core) *API {
 		mediaStore:     media,
 		usageMgr:       usageMgr,
 		storageAPI:     storageview.NewAPI(db, dataDir),
+		unitsMgr:       unitsMgr,
+		taskReg:        taskReg,
+		tasksAPI:       tasksAPI,
 	}
 	a.attachmentsAPI = newAttachmentsAPI(c, attMgr)
 	a.artifactsAPI = newArtifactsAPI(c, artStore, artMgr, media)
-	a.broker = NewStreamBroker(WailsEmitter{})
+	a.eventBus = NewEventBus()
+	a.broker = NewStreamBroker(NewMultiEmitter(WailsEmitter{}, &busEmitter{bus: a.eventBus}))
 
 	// Cedar prompt registry — process-singleton shared by every gate
 	// site (bash, fs, cred, tool) AND by the permissions view. Built
@@ -866,7 +974,17 @@ func New(c *core.Core) *API {
 	}
 	contextsAPI, contextsLib := newContextsAPI(c)
 	a.contextsAPI = contextsAPI
+	a.contextsLib = contextsLib
 	startContextsWatcher(contextsLib, a.broker)
+	// Wire the attachments manager into the contexts view so AttachModule
+	// can persist context_attachments rows. Uses a type assertion because
+	// newContextsAPI always returns *contextsview.API (the interface is
+	// widened only for the field type). A nil attMgr leaves the adder
+	// unwired — AttachModule will still resolve module content but won't
+	// persist an attachment row (test/nil-core path).
+	if impl, ok := contextsAPI.(*contextsview.API); ok && attMgr != nil {
+		impl.WithAttachmentAdder(&contextsAttachmentAdder{mgr: attMgr})
+	}
 
 	// Settings: file-backed when we have a user config dir; in-memory
 	// fallback for the test harness path so New(nil) keeps working.
@@ -878,6 +996,11 @@ func New(c *core.Core) *API {
 	a.settingsAPI = settingsImpl
 	a.settingsImpl = settingsImpl
 
+	// FR-008 (agent-loop-robustness-parity WP08): boot health error strings
+	// collected during subsystem init. Passed to SetBootErrors at the end of
+	// api.New so the frontend's BootHealthBanner can display targeted warnings.
+	var bootMCPErr, bootSkillsErr, bootFleetErr string
+
 	// Wire the fleet client (fleet-auth-foundation-01NDFSEX08 chassis-boot wire-
 	// up). Without this every fleet RPC returns ErrFleetDisabled because
 	// SettingsAPI.fleetClient() is nil. NewClient returns a nopClient when
@@ -887,6 +1010,7 @@ func New(c *core.Core) *API {
 		settingsImpl.SetFleetClient(fleetClient, dataDir)
 	} else {
 		logging.L().Warn("fleet.client.init_error", "err", ferr.Error())
+		bootFleetErr = ferr.Error()
 	}
 
 	// Wire the lockdown broker so fleet:lockdown:changed events reach the
@@ -1031,7 +1155,7 @@ func New(c *core.Core) *API {
 		artifactSinkConcrete = artifactsview.NewSinkConcrete(a.artifactsMgr, cfgFn, nil)
 		// edit-file-artifact-sync-01KQ8TD5 WP05: wrap the concrete sink
 		// with the edit-file sync pipeline. The wrapper intercepts
-		// kaneaz__edit_file post-tool calls when HARNESS_EDIT_FILE_ARTIFACT_SYNC=on
+		// kenaz__edit_file post-tool calls when HARNESS_EDIT_FILE_ARTIFACT_SYNC=on
 		// and the per-user settings dial is enabled, then captures a
 		// post-edit snapshot of the file as an artifact with AbsolutePath set
 		// in the SourceRef. The CoalesceBuffer deduplicates edits to the same
@@ -1071,7 +1195,7 @@ func New(c *core.Core) *API {
 	a.corpusMgr = newCorpusManager(c, embedder)
 	a.graphMgr = newGraphManagerWithDeps(c, a.convMgr, a.corpusMgr, memStore, embedder, a_bashStore)
 
-	stack := newLLMStack(c, a.broker, personalForLLM, hooksRunner, attMgr, confirmEachEnabled, artifactSink, artifactSinkConcrete, settingsImpl, a_bashStore, artMgr, a.graphMgr, a.promptRegistry, usageMgr, a.elicitAPI, slashDispatch, a.exposureIdx, a.sessionsAPI)
+	stack := newLLMStack(c, a.broker, personalForLLM, hooksRunner, attMgr, confirmEachEnabled, artifactSink, artifactSinkConcrete, settingsImpl, a_bashStore, artMgr, a.graphMgr, a.promptRegistry, usageMgr, a.elicitAPI, slashDispatch, a.exposureIdx, a.sessionsAPI, contextsLib)
 	a.llmAPI = stack.api
 	a.stdioPool = stack.pool
 	a.builtins = stack.builtins
@@ -1536,12 +1660,70 @@ func New(c *core.Core) *API {
 
 	// Wire Fleet telemetry consent view (fleet-otel-archival-01NDFSEX11 WP07).
 	if c != nil && c.DataDir() != "" {
-		tc, err := corefleet.NewTelemetryConsent(c.DataDir(), corefleet.StaticTierReader{})
+		// Back the consent tier off the live capability poller (settingsImpl was
+		// wired + SetFleetClient'd above, so the poller exists). Without this the
+		// consent clamps every level to "none" at tier=free — EffectiveLevel
+		// fails closed — so ConsentFull/Aggregate could never activate the OTLP
+		// pipeline regardless of the user's real (enterprise) tier. Lazy read so
+		// the poller's first refresh (which carries the enrolled tier) is picked
+		// up by activation time. (completes the StaticTierReader placeholder)
+		tierReader := corefleet.TierReaderFunc(func() string {
+			if a.settingsImpl == nil {
+				return "free"
+			}
+			p := a.settingsImpl.CapabilityPoller()
+			if p == nil {
+				return "free"
+			}
+			if t := p.Current().Tier; t != "" {
+				return t
+			}
+			return "free"
+		})
+		tc, err := corefleet.NewTelemetryConsent(c.DataDir(), tierReader)
 		if err != nil {
 			logging.L().Warn("fleet.consent.init.failed", "err", err)
-			tc, _ = corefleet.NewTelemetryConsent(os.TempDir(), corefleet.StaticTierReader{})
+			tc, _ = corefleet.NewTelemetryConsent(os.TempDir(), tierReader)
 		}
 		a.fleetAPI = &fleetview.Impl{Consent: tc}
+
+		// Wire the fleet OTLP export pipeline (harness-fleet-otlp-export-01NTLMEX01).
+		//
+		// OSS-first boundary (fleet-auth-foundation-01NDFSEX08 WP07): core must
+		// not import core/fleet. The concrete pipeline is constructed here in
+		// the rpc layer (which is allowed to import core/fleet) and wired into
+		// core via the FleetPipeline interface setter before c.Start runs
+		// initTelemetry. The rpc layer also holds a typed ref for the Activate
+		// call in settings/fleet.go.
+		//
+		// c.Start() has NOT run yet at this point (it fires in the Wails
+		// OnStartup callback). SetFleetPipeline must be called here so
+		// initTelemetry (inside c.Start) finds the exporters already registered.
+		if !corefleet.Disabled() {
+			profile := corefleet.ResolveProfile()
+			if profile.Configured() {
+				fleetPipeline := corefleet.NewFleetOTLPPipeline(nil)
+				// Wire into core via the interface so core stays fleet-free.
+				if c != nil {
+					c.SetFleetPipeline(fleetPipeline)
+				}
+				// Wire into settings (Activate hook post-enroll) with the concrete type.
+				if settingsImpl != nil {
+					var otlpRes *resource.Resource
+					var otlpTP *sdktrace.TracerProvider
+					if tel := c.Telemetry(); tel != nil {
+						otlpRes = tel.Resource
+						otlpTP = tel.TracerProvider
+					}
+					settingsImpl.SetFleetOTLPPipeline(
+						fleetPipeline,
+						otlpRes,
+						otlpTP,
+						tc,
+					)
+				}
+			}
+		}
 	} else {
 		// Test-chassis path: create a consent with a temp dir so the
 		// RPC surface is non-nil (callers get "none" and SetLevel is a no-op
@@ -1583,7 +1765,33 @@ func New(c *core.Core) *API {
 		// The Syncer is a lightweight object; we create it unconditionally but
 		// its Push/Pull methods short-circuit via ErrFleetDisabled when flCl is nil.
 		syncer := corefleet.NewSyncer(flCl)
-		a.syncAPI = syncview.NewAPI(syncer, &corefleet.SecretPromptQueue{})
+		syncPending := &corefleet.SecretPromptQueue{}
+		a.syncAPI = syncview.NewAPI(syncer, syncPending)
+
+		// harness-fleet-sync-activation-01NSYNC01 gap #1: register the five
+		// sync categories on the Syncer and start the debounced background
+		// poll loop. Without this the Syncer foundation was dormant — no
+		// categories registered + StartPolling never called. The MCP category
+		// shares syncPending so the SyncPanel banner sees MCPs that arrive via
+		// pull and still need credentials. registerSyncCategories no-ops when
+		// the syncer or store is nil, preserving the offline posture.
+		var syncStore settings.SettingsStore
+		if a.settingsImpl != nil {
+			syncStore = a.settingsImpl.Store()
+		}
+		mcpSyncCat := corefleet.NewMCPSyncCategory(nil, nil, nil, syncPending)
+		registerSyncCategories(context.Background(), syncer, syncStore, mcpSyncCat)
+
+		// Connect settings mutations to the Syncer's debounced push so a theme
+		// change schedules a push-up (no-op when the category is disabled).
+		if a.settingsImpl != nil {
+			a.settingsImpl.SetSyncNotifier(func(category string) {
+				syncer.NotifyMutation(corefleet.SyncCategory(category))
+			})
+		}
+
+		// Store for Shutdown teardown (FR-001).
+		a.settingsSyncer = syncer
 
 		// CedarPublish (WP07)
 		identityFn := func() (string, error) {
@@ -1601,6 +1809,122 @@ func New(c *core.Core) *API {
 		// Sites (sites-ui-01NSITE06): capability-gated sites RPC surface.
 		// Deploy progress events are published via the existing broker.
 		a.sitesAPI = sitesview.New(flCl, flDataDir, brokerPublisher{broker: a.broker})
+
+		// fleet-context-graph-sync-01NDFSEX17: wire the ContextGraphSyncer so
+		// Context_Publish / Context_Promote / Context_SyncStatus actually reach
+		// fleet. Without this wire the methods short-circuit via ErrFleetDisabled
+		// because contextsview.New() is called early (before flCl is resolved)
+		// and the syncer is left nil.
+		//
+		// Gating: a type assertion to *contextsview.API is safe because
+		// newContextsAPI always returns *contextsview.API (the interface is only
+		// widened for the field type). A nil flCl / isNop client is deliberately
+		// allowed — NewContextGraphSyncer handles the nop case via canPull /
+		// canPush which return ErrFleetDisabled, preserving the offline posture.
+		if impl, ok := a.contextsAPI.(*contextsview.API); ok {
+			var caps *corefleet.CapabilityPoller
+			if a.settingsImpl != nil {
+				caps = a.settingsImpl.CapabilityPoller()
+			}
+			ctxSyncer := corefleet.NewContextGraphSyncer(flCl, flDataDir, caps)
+			impl.WithSyncer(ctxSyncer)
+
+			// FR-012: wire the library merger so each successful PullDelta
+			// applies team/org entries to the local context library. The
+			// closure converts ContextNodeEntry → contexts.FleetEntry here in
+			// the rpc layer (the only layer allowed to import both packages).
+			// a.contextsLib is set just above from newContextsAPI; may be nil
+			// when the chassis booted without a DataDir (test path) — the
+			// merger closure nil-guards against that.
+			lib := a.contextsLib // captured for the closure below
+			ctxSyncer.SetLibraryMerger(func(entries []corefleet.ContextNodeEntry) {
+				if lib == nil {
+					return
+				}
+				// Convert fleet.ContextNodeEntry → contexts.FleetEntry (mirror
+				// type; avoids importing core/fleet from core/contexts).
+				converted := make([]corecontexts.FleetEntry, 0, len(entries))
+				for _, e := range entries {
+					fe := corecontexts.FleetEntry{
+						ID:        e.ID,
+						Layer:     e.Layer,
+						Kind:      e.Kind,
+						Title:     e.Title,
+						Body:      e.Body,
+						Metadata:  e.Metadata,
+						Version:   e.Version,
+						DeletedAt: e.DeletedAt,
+					}
+					converted = append(converted, fe)
+				}
+				lib.MergeFleetEntries(converted)
+			})
+
+			// FR-013: wire the conflict notifier so pull-time conflicts are
+			// emitted as broker events that the frontend can surface.
+			if lib != nil && a.broker != nil {
+				brokerRef := a.broker
+				lib.SetConflictNotifier(func(c corecontexts.ContextConflict) {
+					brokerRef.emitter.Emit(brokerRef.EmitCtx(), "contexts:pull-conflict", c)
+				})
+			}
+
+			// harness-fleet-sync-activation-01NSYNC01 gap #2: start the
+			// background context-pull loop so f->h team/org read-layer deltas
+			// merge into the local pulled cache (surfaced via PulledEntries)
+			// without a manual Context_SyncStatus poke. Self-gates on
+			// sign-in + team-graph capability; personal stays local.
+			ctxSyncer.StartPoller(context.Background())
+
+			// Store for Shutdown teardown (FR-011).
+			a.ctxGraphSyncer = ctxSyncer
+
+			logging.L().Info("rpc.context_graph_syncer.wired",
+				"fleet_client_nil", flCl == nil,
+				"data_dir", flDataDir,
+			)
+		}
+
+		// unified-context-artifacts-01NCTXU01 / Phase 3: wire the UnitSyncer so
+		// the fleet view's promote-as-MR + conflict-resolution RPCs reach fleet
+		// and surface pull-time conflicts. Gated like the context syncer: a nil
+		// flCl / isNop client degrades to local-only (canSync short-circuits).
+		// The units.Manager is fleet-free and was constructed earlier from the
+		// storage.DB; the syncer is the fleet-touching half. teamID is sourced
+		// from the enrolled identity (empty when signed-out).
+		if a.unitsMgr != nil {
+			var caps *corefleet.CapabilityPoller
+			if a.settingsImpl != nil {
+				caps = a.settingsImpl.CapabilityPoller()
+			}
+			teamID := ""
+			if flDataDir != "" {
+				if id, idErr := corefleet.LoadIdentity(flDataDir); idErr == nil {
+					teamID = id.TeamID
+				}
+			}
+			unitMapper := corefleet.NewUnitMapper(teamID)
+			unitSyncer := corefleet.NewUnitSyncer(flCl, a.unitsMgr, unitMapper, caps, flDataDir)
+			// Read-down-auto: pull org/team units into the local clone as read
+			// layers. Self-gates on sign-in + team-graph capability.
+			unitSyncer.StartPoller(context.Background())
+			a.unitSyncer = unitSyncer
+
+			// Attach the manager + syncer to the already-wired fleet view Impl so
+			// the Phase-3 RPCs (Unit_PromoteAsMergeRequest / Unit_ResolveMerge /
+			// Unit_ResolveEnshrine / Unit_ResolveLoadable / Unit_ListConflicts) are
+			// live. a.fleetAPI is always a *fleetview.Impl (set above on both the
+			// real and test paths).
+			if fi, ok := a.fleetAPI.(*fleetview.Impl); ok {
+				fi.Units = a.unitsMgr
+				fi.Syncer = unitSyncer
+			}
+
+			logging.L().Info("rpc.unit_syncer.wired",
+				"fleet_client_nil", flCl == nil,
+				"data_dir", flDataDir,
+			)
+		}
 
 		// fleet-skills-sync-01NDFSEX18 WP02: wire fleet skill dependencies onto
 		// the slashAPI. The capability snapshot is read lazily from the poller at
@@ -1712,6 +2036,14 @@ func New(c *core.Core) *API {
 		})
 		logging.L().Info("onboarding.api.ready")
 	}
+
+	// FR-008 (agent-loop-robustness-parity WP08): record the boot-phase
+	// error strings so the frontend's BootHealthBanner can surface them.
+	// Called once at the end of api.New when all subsystems have had a
+	// chance to log their init errors. Async subsystems (MCP pool, skills
+	// BootLoad) are not yet captured here; they update the store when their
+	// goroutines complete (future follow-up). Fleet init is synchronous.
+	SetBootErrors(bootMCPErr, bootSkillsErr, bootFleetErr)
 
 	return a
 }
@@ -2488,13 +2820,28 @@ type keychainForgetter struct {
 	backend *secrets.MemoryBackend
 }
 
-func (f *keychainForgetter) Forget(_ context.Context, locator string) error {
+func (f *keychainForgetter) Forget(ctx context.Context, locator string) error {
 	if f == nil {
 		return nil
 	}
-	// OS-keychain is best-effort: a missing entry on the deletion
-	// path is non-fatal.
-	_ = keyring.Delete(keyringService, locator)
+	// OS-keychain: best-effort on the deletion path — a missing entry is
+	// treated as success by keychainDelete, and other errors are WARN-logged
+	// (FR-004) so a failing keychain delete is no longer fully silent.
+	// Also clear any legacy-namespace entry so a forgotten secret doesn't
+	// linger under the old service name.
+	if err := keychainDelete(ctx, keyringService, locator); err != nil {
+		slog.WarnContext(ctx, "secret delete: keychain delete failed; entry may persist",
+			"locator", locator,
+			"error",   err.Error(),
+		)
+	}
+	if err := keychainDelete(ctx, legacyKeyringService, locator); err != nil {
+		// Legacy namespace: best-effort; log but don't accumulate the error.
+		slog.WarnContext(ctx, "secret delete: legacy keychain delete failed",
+			"locator", locator,
+			"error",   err.Error(),
+		)
+	}
 	if f.backend != nil {
 		f.backend.ClearEntry(secretsref.RefKeychain, locator)
 	}
@@ -2584,6 +2931,10 @@ func newLLMStack(
 	slashDispatch *coreslashcmd.Dispatch,
 	exposureIdx *secrets.ExposureIndex,
 	postureManager coreplanmode.SessionPostureManager,
+	// contextsLib is the open Context Library used to register the
+	// kenaz__read_context_file built-in. nil is safe; the tool is
+	// simply not registered when no library is wired.
+	contextsLib *corecontexts.Library,
 ) llmStack {
 	// Share ONE secrets backend between the credref resolver (which
 	// reads keys when streaming) and the keychain writer (which stages
@@ -2708,6 +3059,17 @@ func newLLMStack(
 	// (FSReadEnabled / FSWriteEnabled) so the Tools panel toggles take effect
 	// on the next chat turn. Uses the same Cedar engine as the bash tool.
 	registerFSBuiltinTools(builtinRegistry, bashCedarEngine, settingsStore)
+	// unified-context-artifacts-01NCTXU01: register the read_context_file
+	// built-in so the agent can read on-demand files from attached context
+	// modules. Requires both the contexts library AND an attachment manager;
+	// nil-safe: if either is absent the tool is simply not registered.
+	if attMgr != nil && contextsLib != nil {
+		modSrc := &moduleSourceAdapter{
+			mgr:    attMgr,
+			reader: &sessionProjectReader{mgr: c.SessionManager()},
+		}
+		registerReadContextFileTool(builtinRegistry, contextsLib, modSrc)
+	}
 	builtinFilter := toolloop.NewEnabledFilter(builtinRegistry, builtinEnabledPredicate(settingsImpl))
 	wrappedPool := toolloop.NewBuiltinPool(&mcpPoolAdapter{inner: mcpPool}, builtinFilter)
 	var attResolver llm.AttachmentsResolver
@@ -2726,7 +3088,7 @@ func newLLMStack(
 	//
 	// The discoverer also threads the built-in tool registry through
 	// (gated by the same Settings filter as the dispatch path), so the
-	// model SEES kaneaz__web_search / kaneaz__bash in its tool catalog
+	// model SEES kenaz__web_search / kenaz__bash in its tool catalog
 	// when those Settings toggles are ON.
 	toolDiscoverer := llm.NewMCPToolDiscovererWithBuiltins(mcpPool, perms, builtinFilter)
 
@@ -2759,7 +3121,30 @@ func newLLMStack(
 	if c != nil {
 		sessionMgrForUsage = c.SessionManager()
 	}
-	chatRunner := buildChatRunner(broker, reg, wrappedPool, perms, historyAdapter, settingsImpl, graphMgr, toolDiscoverer, artifactSinkConcrete, compactionDeps, usageMgr, sessionMgrForUsage)
+
+	// Build the autotitle generator for the chat runner's post-run trigger.
+	// Uses the same registry + profile resolver pattern as the sessions API.
+	var chatAutoTitleGen chat.AutoTitleGenerator
+	if reg != nil {
+		capturedStore := store
+		llmCaller := autotitlewiring.NewLLMCaller(reg,
+			autotitlewiring.WithProfileResolver(func(_ context.Context, profileID, modelOverride string) (string, string, bool) {
+				if profileID != "" {
+					return profileID, modelOverride, true
+				}
+				if capturedStore != nil {
+					profs, perr := capturedStore.List()
+					if perr == nil && len(profs) > 0 {
+						return profs[0].ID, profs[0].Model, true
+					}
+				}
+				return "", "", false
+			}),
+		)
+		chatAutoTitleGen = autotitle.New(llmCaller)
+	}
+
+	chatRunner := buildChatRunner(broker, reg, wrappedPool, perms, historyAdapter, settingsImpl, graphMgr, toolDiscoverer, artifactSinkConcrete, compactionDeps, usageMgr, sessionMgrForUsage, chatAutoTitleGen)
 	var capCatalog llm.CapCatalog
 	if cat, err := llmcap.LoadDefault(); err == nil {
 		capCatalog = &capCatalogAdapter{cat: cat}
@@ -2984,6 +3369,7 @@ func buildChatRunner(
 	compactionDeps *chat.CompactionDeps,
 	usageMgr usage.Manager,
 	sessionMgr *session.Manager,
+	autoTitleGen chat.AutoTitleGenerator,
 ) *chat.ChatRunner {
 	if graphMgr == nil || graphMgr.Kernel() == nil {
 		logging.L().Warn("chat.runner.disabled", "reason", "graph manager unavailable")
@@ -3028,6 +3414,36 @@ func buildChatRunner(
 			// fires this boundary per tool result; the sink runs the
 			// code-block detector against the tool payload.
 			env.Hooks.RegisterToolPostHook(artifactSinkConcrete.OnPostToolMessage)
+		}
+		// WP07 (agent-loop-robustness-parity FR-007): populate the two
+		// dispatcher configuration fields that were defined but never wired
+		// from the production path.
+		//
+		// ToolCallTimeout: 5 minutes covers the slowest realistic tool calls
+		// (long bash scripts, large file writes) while preventing permanent
+		// hangs from a stuck subprocess. Overridable in tests via the
+		// runner's EnvDefaults callback.
+		if env.ToolCallTimeout == 0 {
+			env.ToolCallTimeout = 5 * time.Minute
+		}
+		// MutatingTools: the write-side builtin tools that must NOT run
+		// concurrently with one another. Read-only tools (read_file,
+		// list_dir, glob, grep, web_search, web_fetch, list_secrets,
+		// ask_user_question, sleep, monitor, skill, subagent_dispatch)
+		// stay parallel. MCP tools are not in-process, so they are
+		// conservatively treated as read-only here; the MCP pool serialises
+		// concurrent calls on its own. kenaz__bash is included because bash
+		// commands can mutate shared state (filesystem, processes).
+		if env.MutatingTools == nil {
+			env.MutatingTools = map[string]bool{
+				corebash.Name:                true, // "kenaz__bash"
+				"kenaz__write_file":           true,
+				"kenaz__edit_file":            true,
+				"kenaz__save_artifact":        true,
+				"kenaz__update_artifact":      true,
+				"kenaz__todo_write":           true,
+				"kenaz__request_filesystem_access": true,
+			}
 		}
 	}
 	// long-turn-resilience-01KR3PRS WP03: PartialPersister wires the
@@ -3140,6 +3556,28 @@ func buildChatRunner(
 			}
 		}
 	}
+	// WP05 (p0-wiring-fixes): wire AutoTitle deps so the post-run trigger
+	// actually gates on the user's toggle.
+	var autoTitleDeps *chat.AutoTitleDeps
+	if sessionMgr != nil && autoTitleGen != nil {
+		capturedSettings := settingsImpl
+		capturedBroker := broker
+		autoTitleDeps = &chat.AutoTitleDeps{
+			Manager:   sessionMgr,
+			Generator: autoTitleGen,
+			EffectiveEnabled: func() bool {
+				if capturedSettings == nil {
+					return true
+				}
+				enabled, err := capturedSettings.GetAutoTitleEnabled(context.Background())
+				if err != nil {
+					return true // default on
+				}
+				return enabled
+			},
+			Broker: capturedBroker,
+		}
+	}
 	runner, err := chat.New(chat.Config{
 		Kernel:           graphMgr.Kernel(),
 		Registry:         reg,
@@ -3155,6 +3593,7 @@ func buildChatRunner(
 		Compaction:             compactionDeps,
 		PartialPersister:       partialPersister,
 		UsageHook:              usageHookFn,
+		AutoTitle:              autoTitleDeps,
 		// multimodal-io-extended-01KQ8TD2 WP02: wire the concrete artifact
 		// sink as the generated-image capturer so StreamGeneratedImage
 		// events land in the artifact store with Source=="model_output".
@@ -3443,6 +3882,72 @@ func newContextsAPI(c *core.Core) (contextsview.ContextsAPI, *corecontexts.Libra
 	return contextsview.New(lib), lib
 }
 
+// moduleSourceAdapter bridges core/attachments.Manager into the
+// readcontextfile.ModuleSource interface so the read_context_file tool
+// can enumerate the currently attached module directories for a session.
+// It queries the attachment manager for all resolved attachments whose
+// ContentSource has the "module:" scheme.
+type moduleSourceAdapter struct {
+	mgr    *coreatt.Manager
+	reader coreatt.SessionProjectReader
+}
+
+func (s *moduleSourceAdapter) AttachedModuleDirs(ctx context.Context, sessionID string) ([]string, error) {
+	if s == nil || s.mgr == nil {
+		return nil, nil
+	}
+	rows, err := s.mgr.ListResolved(ctx, s.reader, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	const prefix = "module:"
+	var dirs []string
+	seen := make(map[string]bool)
+	for _, r := range rows {
+		if !strings.HasPrefix(r.ContentSource, prefix) {
+			continue
+		}
+		dir := r.ContentSource[len(prefix):]
+		if dir != "" && !seen[dir] {
+			seen[dir] = true
+			dirs = append(dirs, dir)
+		}
+	}
+	return dirs, nil
+}
+
+// contextsAttachmentAdder bridges core/attachments.Manager into the
+// contextsview.AttachmentAdder interface so AttachModule can persist a
+// context_attachments row without the contexts view importing the core
+// attachments package directly.
+type contextsAttachmentAdder struct {
+	mgr *coreatt.Manager
+}
+
+func (a *contextsAttachmentAdder) Add(ctx context.Context, in contextsview.AttachmentInput) (contextsview.ModuleAttachment, error) {
+	stored, err := a.mgr.Add(ctx, coreatt.Attachment{
+		ScopeKind:     in.ScopeKind,
+		ScopeID:       in.ScopeID,
+		ContentSource: in.ContentSource,
+		Content:       in.Content,
+		Kind:          in.Kind,
+	})
+	if err != nil {
+		return contextsview.ModuleAttachment{}, err
+	}
+	out := contextsview.ModuleAttachment{
+		ID:            stored.ID,
+		ScopeKind:     stored.ScopeKind,
+		ScopeID:       stored.ScopeID,
+		ContentSource: stored.ContentSource,
+		Content:       stored.Content,
+		Kind:          stored.Kind,
+		Position:      stored.Position,
+		CreatedAt:     stored.CreatedAt.UTC().Format(time.RFC3339Nano),
+	}
+	return out, nil
+}
+
 // startContextsWatcher wires the library's fsnotify-backed watcher into
 // the StreamBroker's Wails event surface so the frontend's listener on
 // "contexts:tree-changed" receives ticks for both in-process mutations
@@ -3578,7 +4083,7 @@ func newEmbedderFromProfiles(profiles []corellm.ProviderProfile, profileIDOverri
 	// Build a key resolver for a keychain-backed profile locator.
 	makeKeychainResolver := func(locator string) corememory.KeyResolver {
 		return func(_ context.Context) ([]byte, error) {
-			val, err := keyring.Get(keyringService, locator)
+			val, err := keyringGetMigrating(locator)
 			if err != nil {
 				return nil, fmt.Errorf("memory: keychain get %q: %w", locator, err)
 			}
@@ -4287,21 +4792,52 @@ type keychainWriter struct {
 
 // keyringService matches secrets.MemoryBackend's namespace so reads
 // via Resolve(RefKeychain) find the entry written here.
-const keyringService = "kaneaz-harness"
+const keyringService = "kenaz-harness"
+
+// legacyKeyringService is the previous (misspelled) namespace. Reads fall
+// back to it and migrate forward so credentials stored before the
+// kaneaz->kenaz rename survive. New writes only use keyringService.
+const legacyKeyringService = "kaneaz-harness"
+
+// keyringGetMigrating reads locator from the current namespace, falling
+// back to the legacy namespace on not-found and migrating the value
+// forward (best-effort).
+func keyringGetMigrating(locator string) (string, error) {
+	v, err := keyring.Get(keyringService, locator)
+	if err == nil {
+		return v, nil
+	}
+	if errors.Is(err, keyring.ErrNotFound) {
+		if lv, lerr := keyring.Get(legacyKeyringService, locator); lerr == nil {
+			_ = keyring.Set(keyringService, locator, lv)
+			return lv, nil
+		}
+	}
+	return "", err
+}
 
 // Write stores plaintext in the OS keychain under the harness's
 // service namespace, mirrors it to the in-memory backend, and zeroes
 // the supplied buffer.
-func (w *keychainWriter) Write(_ context.Context, locator string, plaintext []byte) error {
+//
+// (FR-004) On keychain-set failure the error is WARN-logged so
+// operators can diagnose API-key persistence failures instead of
+// silently losing keys across restarts.  We still fall through to the
+// in-memory backend so the user can chat in the current session even
+// when the OS keychain is unavailable (CI / sandbox / Linux without
+// libsecret).  The returned error is non-nil on keychain failure so
+// RPC callers (e.g. Settings_SaveAPIKey) can surface the warning.
+func (w *keychainWriter) Write(ctx context.Context, locator string, plaintext []byte) error {
 	if w == nil {
 		return nil
 	}
-	if err := keyring.Set(keyringService, locator, string(plaintext)); err != nil {
-		// Don't hard-fail — fall through to the in-memory cache so
-		// the user can still chat in the current session even if the
-		// OS keychain backend is unavailable (CI / sandbox / Linux
-		// without libsecret).
-		_ = err
+	var keychainErr error
+	if err := keychainSet(ctx, keyringService, locator, string(plaintext)); err != nil {
+		// Log is already emitted by keychainSet — record for return.
+		slog.WarnContext(ctx, "API key written to in-memory cache only; keychain unavailable",
+			"locator", locator,
+		)
+		keychainErr = err
 	}
 	if w.backend != nil {
 		w.backend.SetEntry(secretsref.RefKeychain, locator, plaintext)
@@ -4309,13 +4845,16 @@ func (w *keychainWriter) Write(_ context.Context, locator string, plaintext []by
 	for i := range plaintext {
 		plaintext[i] = 0
 	}
-	return nil
+	// Return the keychain error so the RPC layer can surface it.
+	// The in-memory backend is always updated, so the current session
+	// is unaffected even when this returns non-nil.
+	return keychainErr
 }
 
 // newPersonalStore constructs the personal-providers FileStore. It
 // prefers c.DataDir()/providers.json when core is wired so test
 // harnesses with an explicit DataDir stay isolated; otherwise it falls
-// back to personal.DefaultPath() ($USER_CONFIG_DIR/kaneaz-harness).
+// back to personal.DefaultPath() ($USER_CONFIG_DIR/kenaz-harness).
 // A construction failure returns nil; the rpc impl treats a nil store
 // as "personal store unavailable" and the chassis still boots.
 func newPersonalStore(c *core.Core) personal.Store {
@@ -4900,6 +5439,12 @@ func (a *API) Bindings() []any { return []any{a.bindings} }
 // runtime.EventsEmit — keeps holding.
 func (a *API) StreamBroker() *StreamBroker { return a.broker }
 
+// EventBus returns the in-process event bus that mirrors every event the
+// StreamBroker publishes.  Served-mode WebSocket handlers subscribe here
+// to receive real-time push notifications without the Wails runtime
+// context.  The desktop Wails path is unaffected.
+func (a *API) EventBus() *EventBus { return a.eventBus }
+
 // buildCedarEngineOrNil constructs a *cedar.Engine for callers that
 // need the concrete Engine type — the cedarpolicy view (ListPolicies /
 // Reload / RecentDecisions / WritePolicySnippet) and the bash gate
@@ -5190,6 +5735,10 @@ func (a *API) CedarPublish() cedarview.CedarAPI { return a.cedarPublishAPI }
 // Sites implements HarnessAPI. Returns the fleet-hosted sites RPC surface.
 // (sites-ui-01NSITE06)
 func (a *API) Sites() sitesview.SitesAPI { return a.sitesAPI }
+
+// Tasks implements HarnessAPI. Returns the background-task registry RPC surface.
+// (background-task-monitor-01KZNP3C WP05 / FR-003)
+func (a *API) Tasks() tasksview.TasksAPI { return a.tasksAPI }
 
 // brokerPlanEmitter adapts a *StreamBroker to the planmodeview.EventEmitter
 // interface. The broker's Publish method broadcasts to all subscribers

@@ -43,15 +43,15 @@ func TestBuiltinRegistry_RegisterLookup(t *testing.T) {
 	if !r.Empty() {
 		t.Fatal("fresh registry should be empty")
 	}
-	r.Register(&stubBuiltin{name: "kaneaz__web_search"})
+	r.Register(&stubBuiltin{name: "kenaz__web_search"})
 	if r.Empty() {
 		t.Fatal("registry should not be empty after Register")
 	}
-	got, ok := r.Lookup("kaneaz__web_search")
+	got, ok := r.Lookup("kenaz__web_search")
 	if !ok || got == nil {
 		t.Fatalf("Lookup ok=%v got=%v", ok, got)
 	}
-	if got.Name() != "kaneaz__web_search" {
+	if got.Name() != "kenaz__web_search" {
 		t.Errorf("Name = %q", got.Name())
 	}
 }
@@ -59,8 +59,8 @@ func TestBuiltinRegistry_RegisterLookup(t *testing.T) {
 func TestBuiltinRegistry_Unregister(t *testing.T) {
 	t.Parallel()
 	r := NewBuiltinRegistry()
-	r.Register(&stubBuiltin{name: "kaneaz__bash"})
-	r.Unregister("kaneaz__bash")
+	r.Register(&stubBuiltin{name: "kenaz__bash"})
+	r.Unregister("kenaz__bash")
 	if !r.Empty() {
 		t.Fatal("Unregister did not clear the registry")
 	}
@@ -69,19 +69,19 @@ func TestBuiltinRegistry_Unregister(t *testing.T) {
 func TestEnabledFilter_GatesByPredicate(t *testing.T) {
 	t.Parallel()
 	r := NewBuiltinRegistry()
-	r.Register(&stubBuiltin{name: "kaneaz__bash"})
-	r.Register(&stubBuiltin{name: "kaneaz__web_search"})
+	r.Register(&stubBuiltin{name: "kenaz__bash"})
+	r.Register(&stubBuiltin{name: "kenaz__web_search"})
 	enabled := func(name string) bool {
-		return name == "kaneaz__bash"
+		return name == "kenaz__bash"
 	}
 	f := NewEnabledFilter(r, enabled)
-	if got := f.Names(); len(got) != 1 || got[0] != "kaneaz__bash" {
+	if got := f.Names(); len(got) != 1 || got[0] != "kenaz__bash" {
 		t.Errorf("Names = %v", got)
 	}
-	if _, ok := f.Lookup("kaneaz__web_search"); ok {
+	if _, ok := f.Lookup("kenaz__web_search"); ok {
 		t.Error("disabled tool was returned by Lookup")
 	}
-	if _, ok := f.Lookup("kaneaz__bash"); !ok {
+	if _, ok := f.Lookup("kenaz__bash"); !ok {
 		t.Error("enabled tool was hidden by Lookup")
 	}
 }
@@ -90,7 +90,7 @@ func TestBuiltinPool_TopologyAndCallDispatch(t *testing.T) {
 	t.Parallel()
 	mcp := &stubMCPPool{tools: []Tool{{Server: "real-server", Name: "fetch"}}}
 	registry := NewBuiltinRegistry()
-	bash := &stubBuiltin{name: "kaneaz__bash"}
+	bash := &stubBuiltin{name: "kenaz__bash"}
 	registry.Register(bash)
 
 	pool := NewBuiltinPool(mcp, registry)
@@ -99,7 +99,7 @@ func TestBuiltinPool_TopologyAndCallDispatch(t *testing.T) {
 		t.Fatalf("Tools: %v", err)
 	}
 	// Expect MCP tool first, builtin second; builtin name is stripped
-	// of the "kaneaz__" prefix to mirror what the loop's split path
+	// of the "kenaz__" prefix to mirror what the loop's split path
 	// produces.
 	if len(tools) != 2 {
 		t.Fatalf("Tools count = %d want 2 (got %v)", len(tools), tools)
@@ -108,11 +108,11 @@ func TestBuiltinPool_TopologyAndCallDispatch(t *testing.T) {
 		t.Errorf("Tools[0] = %+v want real-server/fetch", tools[0])
 	}
 	if tools[1].Server != BuiltinServerName || tools[1].Name != "bash" {
-		t.Errorf("Tools[1] = %+v want kaneaz/bash", tools[1])
+		t.Errorf("Tools[1] = %+v want kenaz/bash", tools[1])
 	}
 
-	// Dispatch a built-in: server="kaneaz", tool="bash" — the pool
-	// re-prefixes "bash" to "kaneaz__bash" for registry lookup.
+	// Dispatch a built-in: server="kenaz", tool="bash" — the pool
+	// re-prefixes "bash" to "kenaz__bash" for registry lookup.
 	if _, err := pool.Call(context.Background(), BuiltinServerName, "bash", json.RawMessage(`{"command":"ls"}`)); err != nil {
 		t.Fatalf("Call builtin: %v", err)
 	}
@@ -138,7 +138,7 @@ func TestBuiltinPool_MissingBuiltinFallsThrough(t *testing.T) {
 	mcp := &stubMCPPool{tools: []Tool{{Server: "x", Name: "y"}}}
 	registry := NewBuiltinRegistry()
 	pool := NewBuiltinPool(mcp, registry)
-	// "kaneaz/missing" isn't in the registry; pool falls through to MCP.
+	// "kenaz/missing" isn't in the registry; pool falls through to MCP.
 	if _, err := pool.Call(context.Background(), BuiltinServerName, "missing", json.RawMessage(`{}`)); err != nil {
 		t.Fatalf("Call: %v", err)
 	}

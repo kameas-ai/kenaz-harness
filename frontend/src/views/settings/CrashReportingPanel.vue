@@ -7,7 +7,7 @@
  *
  * (sentry-error-monitoring-01KX5R8G WP05)
  */
-import { ref, computed, onMounted } from 'vue';
+import { ref, onMounted } from 'vue';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
 
 const client = useHarnessClient();
@@ -43,19 +43,6 @@ onMounted(async () => {
     lastFive.value = entries;
   } catch (err) {
     errorMsg.value = String(err);
-  }
-});
-
-// ── Computed ────────────────────────────────────────────────────────────────
-
-const tierLabel = computed(() => {
-  switch (tier.value) {
-    case 'anonymous':
-      return 'Anonymous';
-    case 'identified':
-      return 'Identified';
-    default:
-      return 'Off';
   }
 });
 

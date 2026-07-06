@@ -61,8 +61,15 @@ type Settings struct {
 	// (read-only commands; deny by pattern).
 	BashEnabled bool `json:"bashEnabled,omitempty"`
 
+	// WebFetchEnabled controls the kenaz__web_fetch built-in. Default OFF
+	// (zero-value → disabled). The tool makes authenticated HTTP requests
+	// on behalf of the model, resolving @secret: references at request time.
+	// Gated by Cedar network policy (host allowlist) in addition to this toggle.
+	// (crash-recovery-tool-gating-0XQTC4RK FR-005)
+	WebFetchEnabled bool `json:"webFetchEnabled,omitempty"`
+
 	// SaveArtifactDisabled is the inverted-form persisted bit for the
-	// kaneaz__save_artifact built-in. Default ON (zero-value Disabled
+	// kenaz__save_artifact built-in. Default ON (zero-value Disabled
 	// → tool enabled) — saving deliverables is a low-risk primitive
 	// that should work on first launch without setup. Mirrors the
 	// AutoCaptureCodeBlocksDisabled pattern. Read via the
@@ -206,7 +213,7 @@ type Settings struct {
 	KeyboardShortcutsPreset string `json:"keyboardShortcutsPreset,omitempty"`
 
 	// FSRequestAccessDisabled is the inverted persisted bit for the
-	// kaneaz__request_filesystem_access built-in. Default ON (zero-value
+	// kenaz__request_filesystem_access built-in. Default ON (zero-value
 	// Disabled → tool enabled) so users can expand filesystem access
 	// from the first session without any setup. Read via the
 	// FSRequestAccessEnabled() accessor; never read directly.
@@ -277,25 +284,32 @@ type Settings struct {
 	// MCPAutoRestart() accessor; never read directly.
 	MCPAutoRestartDisabled bool `json:"mcpAutoRestartDisabled,omitempty"`
 
+	// AutoTitleDisabled is the inverted persisted bit for the
+	// session auto-titling feature (p0-wiring-fixes-3TVMG0MX WP05).
+	// Default ON (zero-value Disabled → auto-title enabled) so new
+	// installs get titles without any setup. Read via the
+	// AutoTitleEnabled() accessor; never read directly.
+	AutoTitleDisabled bool `json:"autoTitleDisabled,omitempty"`
+
 	// ── Builtin filesystem tool dials (builtin-filesystem-tools-01KR3N4P) ──
 
 	// FSReadDisabled is the inverted persisted bit for the read-family
-	// builtin filesystem tools (kaneaz__read_file, kaneaz__list_dir,
-	// kaneaz__glob, kaneaz__grep, kaneaz__list_open_worklist). Default OFF
+	// builtin filesystem tools (kenaz__read_file, kenaz__list_dir,
+	// kenaz__glob, kenaz__grep, kenaz__list_open_worklist). Default OFF
 	// (zero-value Disabled → tools disabled) — the user opts in from the
 	// Tools panel (WP06). Read via the FSReadEnabled() accessor; never
 	// read directly.
 	FSReadDisabled bool `json:"fsReadDisabled,omitempty"`
 
 	// FSWriteDisabled is the inverted persisted bit for the write-family
-	// builtin filesystem tools (kaneaz__write_file, kaneaz__edit_file).
+	// builtin filesystem tools (kenaz__write_file, kenaz__edit_file).
 	// Default OFF (zero-value Disabled → tools disabled) — the user opts
 	// in from the Tools panel (WP06). Read via the FSWriteEnabled()
 	// accessor; never read directly.
 	FSWriteDisabled bool `json:"fsWriteDisabled,omitempty"`
 
 	// TodoDisabled is the inverted persisted bit for the
-	// kaneaz__todo_write builtin tool
+	// kenaz__todo_write builtin tool
 	// (builtin-tools-search-and-elicitation-01KZNP3D WP05/WP07).
 	// Default OFF (zero-value Disabled → tool disabled) — the user opts
 	// in from the Tools panel. Read via the TodoEnabled() accessor;
@@ -552,7 +566,7 @@ const DefaultMaxAgentTurns = 25
 // active. Default true on a fresh install (zero-value Disabled).
 func (s Settings) AutoCaptureCodeBlocks() bool { return !s.AutoCaptureCodeBlocksDisabled }
 
-// SaveArtifactEnabled reports whether the kaneaz__save_artifact
+// SaveArtifactEnabled reports whether the kenaz__save_artifact
 // built-in is enabled. Default true on a fresh install (zero-value
 // Disabled). Inverted on the wire so the JSON shape matches the
 // storage contract.
@@ -562,7 +576,7 @@ func (s Settings) SaveArtifactEnabled() bool { return !s.SaveArtifactDisabled }
 // active. Default true on a fresh install.
 func (s Settings) AutoCaptureToolOutputs() bool { return !s.AutoCaptureToolOutputsDisabled }
 
-// FSRequestAccessEnabled reports whether kaneaz__request_filesystem_access
+// FSRequestAccessEnabled reports whether kenaz__request_filesystem_access
 // is enabled. Default true on a fresh install (zero-value Disabled).
 func (s Settings) FSRequestAccessEnabled() bool { return !s.FSRequestAccessDisabled }
 
@@ -792,6 +806,11 @@ func (s Settings) MonthlyCostNotifyEnabled() bool {
 // (mcp-server-health-ui-01KQ8TD6 WP06)
 func (s Settings) MCPAutoRestart() bool { return !s.MCPAutoRestartDisabled }
 
+// AutoTitleEnabled reports whether session auto-titling is on. Default
+// true on a fresh install (zero-value Disabled → feature enabled).
+// (p0-wiring-fixes-3TVMG0MX WP05)
+func (s Settings) AutoTitleEnabled() bool { return !s.AutoTitleDisabled }
+
 // FSReadEnabled reports whether the read-family builtin filesystem tools
 // are enabled. Default false on a fresh install (zero-value Disabled →
 // tools off). The user opts in from the Tools panel (WP06).
@@ -804,7 +823,7 @@ func (s Settings) FSReadEnabled() bool { return !s.FSReadDisabled }
 // (builtin-filesystem-tools-01KR3N4P)
 func (s Settings) FSWriteEnabled() bool { return !s.FSWriteDisabled }
 
-// TodoEnabled reports whether the kaneaz__todo_write builtin tool is
+// TodoEnabled reports whether the kenaz__todo_write builtin tool is
 // enabled. Default false on a fresh install (zero-value Disabled →
 // tool off). The user opts in from the Tools panel.
 // (builtin-tools-search-and-elicitation-01KZNP3D WP07)
@@ -865,7 +884,7 @@ type WindowSize struct {
 }
 
 // SettingsStore is the persistence interface (default impl: single
-// JSON file at $USER_CONFIG_DIR/kaneaz-harness/settings.json).
+// JSON file at $USER_CONFIG_DIR/kenaz-harness/settings.json).
 type SettingsStore interface {
 	LoadAll() (Settings, error)
 	SaveAll(Settings) error
@@ -898,8 +917,14 @@ type SettingsStore interface {
 	// in the same shape. Default false (off).
 	LoadBash() (bool, error)
 	SaveBash(enabled bool) error
+	// LoadWebFetchEnabled / SaveWebFetchEnabled expose the kenaz__web_fetch
+	// built-in opt-in. Default false (off) — the tool makes outbound HTTP
+	// requests with @secret: substitution; the user must opt in and the Cedar
+	// network gate applies regardless. (crash-recovery-tool-gating-0XQTC4RK FR-005)
+	LoadWebFetchEnabled() (bool, error)
+	SaveWebFetchEnabled(enabled bool) error
 	// LoadSaveArtifactEnabled / SaveSaveArtifactEnabled expose the
-	// kaneaz__save_artifact built-in opt-in. Default true (on) — saving
+	// kenaz__save_artifact built-in opt-in. Default true (on) — saving
 	// deliverables is a low-risk primitive that should work on first
 	// launch. The toolloop's EnabledFilter consults the predicate
 	// (which calls LoadSaveArtifactEnabled) on every Run boundary so a
@@ -946,7 +971,7 @@ type SettingsStore interface {
 	SaveCedarStrictCredentialMode(enabled bool) error
 
 	// LoadFSRequestAccessEnabled / SaveFSRequestAccessEnabled expose
-	// the kaneaz__request_filesystem_access built-in opt-in. Default
+	// the kenaz__request_filesystem_access built-in opt-in. Default
 	// true (on) — requesting expanded filesystem access is a low-risk
 	// convenience that should work on a fresh install.
 	LoadFSRequestAccessEnabled() (bool, error)
@@ -1015,6 +1040,12 @@ type SettingsStore interface {
 	LoadMCPAutoRestart() (bool, error)
 	SaveMCPAutoRestart(enabled bool) error
 
+	// LoadAutoTitleEnabled / SaveAutoTitleEnabled expose the session
+	// auto-title feature flag (p0-wiring-fixes-3TVMG0MX WP05). Default
+	// true on a fresh install (zero-value Disabled → feature enabled).
+	LoadAutoTitleEnabled() (bool, error)
+	SaveAutoTitleEnabled(enabled bool) error
+
 	// ── Builtin filesystem tool dial accessors (builtin-filesystem-tools-01KR3N4P) ──
 
 	// LoadFSReadEnabled / SaveFSReadEnabled expose the read-family
@@ -1030,7 +1061,7 @@ type SettingsStore interface {
 	LoadFSWriteEnabled() (bool, error)
 	SaveFSWriteEnabled(enabled bool) error
 
-	// LoadTodoEnabled / SaveTodoEnabled expose the kaneaz__todo_write
+	// LoadTodoEnabled / SaveTodoEnabled expose the kenaz__todo_write
 	// builtin tool opt-in. Default false (tool off until the user enables
 	// it from the Tools panel). The toolloop's EnabledFilter consults this
 	// on every Run boundary so a toggle takes effect on the next chat turn.
@@ -1101,6 +1132,12 @@ type SettingsAPI interface {
 	GetMCPAutoRestart(ctx context.Context) (bool, error)
 	// SetMCPAutoRestart persists the MCP auto-restart dial.
 	SetMCPAutoRestart(ctx context.Context, enabled bool) error
+	// GetAutoTitleEnabled returns whether session auto-titling is on.
+	// Default true on a fresh install (zero-value → enabled).
+	// (p0-wiring-fixes-3TVMG0MX WP05)
+	GetAutoTitleEnabled(ctx context.Context) (bool, error)
+	// SetAutoTitleEnabled persists the auto-title feature toggle.
+	SetAutoTitleEnabled(ctx context.Context, enabled bool) error
 	// GetEmbedderConfig returns the persisted (profileID, modelOverride)
 	// pair for the memory embedder.  Empty strings mean "auto-pick".
 	// (v0.5.2 universal-embedder fix)
@@ -1183,6 +1220,21 @@ type SettingsAPI interface {
 	// Safe to call from any goroutine; reads the process-global atomic flag.
 	// (fleet-emergency-lockdown-01NDFSEX12 WP02)
 	FleetLockdownStatus(ctx context.Context) (LockdownStatusView, error)
+
+	// FleetHealth returns a compact fleet health summary: signing-key presence,
+	// config source, last error, and session state. Used by the global health
+	// indicator chip (WP10 / FR-002 / FR-010).
+	FleetHealth(ctx context.Context) (FleetHealthView, error)
+
+	// FleetTelemetryOptIns returns the per-class telemetry opt-in set from the
+	// fleet store (source of truth, replacing local-only JSON).
+	// (harness-fleet-sync-activation-01NSYNC01 gap #4)
+	FleetTelemetryOptIns(ctx context.Context) ([]TelemetryOptInView, error)
+
+	// FleetSetTelemetryOptIn flips a single telemetry class opt-in in the fleet
+	// store and refreshes the local cache.
+	// (harness-fleet-sync-activation-01NSYNC01 gap #4)
+	FleetSetTelemetryOptIn(ctx context.Context, class string, optedIn bool) error
 }
 
 // CapabilitiesView is the wire-safe projection of fleet.Capabilities.
@@ -1233,6 +1285,25 @@ type FleetConfigPullStatusView struct {
 	// BundleChecksum is the hex SHA-256 of the last-seen bundle body (used for
 	// 304 Not Modified gating).
 	BundleChecksum string `json:"bundleChecksum"`
+	// ConfigDistributionEnabled reports whether a fleet signing key is wired
+	// in this binary (FR-002). When false the fleet config distribution is
+	// silently disabled (safe fail-closed), and the UI shows a degraded state.
+	ConfigDistributionEnabled bool `json:"configDistributionEnabled"`
+}
+
+// FleetHealthView is the wire-safe projection of overall fleet health
+// surfaced to the global health indicator (WP10 / FR-002 / FR-010).
+type FleetHealthView struct {
+	// ConfigDistributionEnabled reports whether a fleet signing key is wired
+	// in this binary. false means fleet config bundles can never be applied.
+	ConfigDistributionEnabled bool `json:"configDistributionEnabled"`
+	// ConfigSource is the last-known config source: "fleet", "stale-cache",
+	// "default-deny-degraded", or "no-key".
+	ConfigSource string `json:"configSource"`
+	// ConfigLastError is the most recent error string from the config poller.
+	ConfigLastError string `json:"configLastError"`
+	// SignedIn is true when the client has a valid (non-expired) session.
+	SignedIn bool `json:"signedIn"`
 }
 
 // AuditSettings holds the operator-configurable audit log retention policy.

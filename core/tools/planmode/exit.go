@@ -15,7 +15,7 @@ import (
 
 const (
 	// ExitToolName is the model-facing tool identifier.
-	ExitToolName = "kaneaz__exit_plan_mode"
+	ExitToolName = "kenaz__exit_plan_mode"
 
 	// ExitToolDescription steers the model toward calling this tool
 	// only when it has a complete, well-structured plan to present.
@@ -63,7 +63,7 @@ type ExitOptions struct {
 	Logger *slog.Logger
 }
 
-// ExitTool implements kaneaz__exit_plan_mode. Safe for concurrent use.
+// ExitTool implements kenaz__exit_plan_mode. Safe for concurrent use.
 type ExitTool struct {
 	posture   SessionPostureManager
 	artifacts ArtifactCapturer

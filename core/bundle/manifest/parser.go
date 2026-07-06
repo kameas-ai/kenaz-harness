@@ -8,7 +8,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// Parse decodes a kaneaz.yaml manifest. It enforces a two-phase parse:
+// Parse decodes a kenaz.yaml manifest. It enforces a two-phase parse:
 //
 //  1. The schema_version field is decoded first as an integer; if it is
 //     greater than the current harness's CurrentSchemaVersion or less than

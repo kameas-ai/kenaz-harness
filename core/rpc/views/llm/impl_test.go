@@ -71,6 +71,12 @@ type fakeRegistry struct {
 }
 
 func (f *fakeRegistry) RegisterAdapter(_ corellm.ProviderAdapter) {}
+func (f *fakeRegistry) Evict(id string) error {
+	if f.profiles != nil {
+		delete(f.profiles, id)
+	}
+	return nil
+}
 func (f *fakeRegistry) LoadProfiles(profs []corellm.ProviderProfile) error {
 	if f.profiles == nil {
 		f.profiles = map[string]corellm.ProviderProfile{}
@@ -324,6 +330,7 @@ func (r *recordingRegistry) RegisterAdapter(corellm.ProviderAdapter) {}
 func (r *recordingRegistry) LoadProfiles([]corellm.ProviderProfile) error {
 	return nil
 }
+func (r *recordingRegistry) Evict(_ string) error { return nil }
 func (r *recordingRegistry) Profile(id string) (corellm.ProviderProfile, error) {
 	return corellm.ProviderProfile{ID: id, Kind: "anthropic", Model: "x"}, nil
 }
@@ -602,5 +609,124 @@ func TestGetAttachmentLimits_DisabledByEnvFlag(t *testing.T) {
 	// The real gate integration is covered in capabilities/gate_test.go.
 	if !got.ImageInput {
 		t.Error("fakeCapCatalog always returns ImageInput=true; env-flag override test belongs in gate_test.go")
+	}
+}
+
+// ── WP04: UpdateProvider evict-then-reload + RemoveProvider evict ────────────
+//
+// These tests are in impl_test.go (not impl_providers_test.go) because they
+// focus on the registry interaction, not the store/keychain round-trip.
+
+// TestUpdateProvider_EvictsAndReloads verifies that UpdateProvider evicts the
+// stale registry entry and then reloads it, so the next registry lookup uses
+// the updated model (FR-004).
+func TestUpdateProvider_EvictsAndReloads(t *testing.T) {
+	t.Parallel()
+	// Use the real FileStore + a recording fakeRegistry so we can observe
+	// what profiles the registry receives.
+	api, _, _, _, store := newProvidersAPI(t)
+	reg := &fakeRegistry{}
+	api.reg = reg
+
+	// AddProvider pre-seeds the store; then manually seed the registry
+	// so it looks like a previously-loaded profile.
+	in := AddProviderInput{
+		ID:    "prov-wp04",
+		Kind:  "openai",
+		Model: "gpt-4o",
+		Cred:  CredentialReference{Kind: "keychain", Locator: "kenaz-harness/prov-wp04"},
+		PlaintextAPIKey: "sk-v1",
+	}
+	// AddProvider writes to the keychain; wire a no-op keychain so it succeeds.
+	api.keychain = &noopKeychain{}
+	if err := api.AddProvider(context.Background(), in); err != nil {
+		t.Fatalf("AddProvider: %v", err)
+	}
+
+	// Manually seed the registry with the v1 profile so Evict has something
+	// to delete.
+	_ = reg.LoadProfiles([]corellm.ProviderProfile{{
+		ID:    "prov-wp04",
+		Kind:  "openai",
+		Model: "gpt-4o",
+		Cred:  corellm.CredentialReference{Kind: "keychain", Locator: "kenaz-harness/prov-wp04"},
+	}})
+	loadedBefore := len(reg.loaded)
+
+	// UpdateProvider should evict the old entry then reload with new model.
+	up := AddProviderInput{
+		ID:    "prov-wp04",
+		Kind:  "openai",
+		Model: "gpt-4o-mini",
+		Cred:  CredentialReference{Kind: "keychain", Locator: "kenaz-harness/prov-wp04"},
+	}
+	if err := api.UpdateProvider(context.Background(), up); err != nil {
+		t.Fatalf("UpdateProvider: %v", err)
+	}
+
+	// Expect at least one more LoadProfiles call after the eviction.
+	if len(reg.loaded) <= loadedBefore {
+		t.Fatal("expected a registry LoadProfiles call from UpdateProvider")
+	}
+	last := reg.loaded[len(reg.loaded)-1]
+	if last.Model != "gpt-4o-mini" {
+		t.Errorf("expected new model gpt-4o-mini in registry after UpdateProvider, got %q", last.Model)
+	}
+
+	_ = store // consumed via API
+}
+
+// noopKeychain is a KeychainWriter that does nothing (for tests that don't
+// care about the OS keychain write).
+type noopKeychain struct{}
+
+func (noopKeychain) Write(_ context.Context, _ string, plaintext []byte) error {
+	// Zero the slice to satisfy the KeychainWriter contract.
+	for i := range plaintext {
+		plaintext[i] = 0
+	}
+	return nil
+}
+
+// TestRemoveProvider_EvictsFromRegistry verifies that RemoveProvider evicts
+// the profile from the registry after removing it from the store (FR-004).
+func TestRemoveProvider_EvictsFromRegistry(t *testing.T) {
+	t.Parallel()
+	api, _, _, _, _ := newProvidersAPI(t)
+	reg := &fakeRegistry{}
+	api.reg = reg
+	api.keychain = &noopKeychain{}
+
+	// AddProvider seeds the store.
+	in := AddProviderInput{
+		ID:    "prov-remove",
+		Kind:  "openai",
+		Model: "gpt-4o",
+		Cred:  CredentialReference{Kind: "keychain", Locator: "kenaz-harness/prov-remove"},
+		PlaintextAPIKey: "sk-rm",
+	}
+	if err := api.AddProvider(context.Background(), in); err != nil {
+		t.Fatalf("AddProvider: %v", err)
+	}
+
+	// Manually seed the registry (simulate a previously-loaded profile).
+	_ = reg.LoadProfiles([]corellm.ProviderProfile{{
+		ID:    "prov-remove",
+		Kind:  "openai",
+		Model: "gpt-4o",
+		Cred:  corellm.CredentialReference{Kind: "keychain", Locator: "kenaz-harness/prov-remove"},
+	}})
+
+	if _, err := reg.Profile("prov-remove"); err != nil {
+		t.Fatalf("profile should be present before remove: %v", err)
+	}
+
+	if err := api.RemoveProvider(context.Background(), "prov-remove"); err != nil {
+		t.Fatalf("RemoveProvider: %v", err)
+	}
+
+	// After RemoveProvider the profile must be gone from the registry.
+	if _, err := reg.Profile("prov-remove"); err == nil {
+		t.Error("expected profile to be absent from registry after RemoveProvider")
 	}
 }

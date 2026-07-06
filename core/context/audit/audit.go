@@ -9,6 +9,7 @@ package audit
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 	"time"
 
 	pack "github.com/kameas-ai/kenaz-harness/core/context/pack"
@@ -156,7 +157,7 @@ const (
 	// The audit log is not the right place for user input (DIRECTIVE_001).
 	//
 	// KindElicitationRequest fires when the model invokes
-	// kaneaz__ask_user_question and the ask is registered in the registry.
+	// kenaz__ask_user_question and the ask is registered in the registry.
 	// Payload: ElicitationRequestPayload.
 	KindElicitationRequest Kind = "elicitation.request"
 
@@ -1078,6 +1079,28 @@ func Emit(ctx context.Context, em Emitter, kind Kind, payload any, now time.Time
 		return err
 	}
 	return em.Emit(ctx, e)
+}
+
+// MustEmit is the WARN-on-error wrapper for fire-and-forget audit call sites
+// (silent-failure-elimination-QQ5GXW50 WP05 / FR-005).
+//
+// Call sites that previously wrote `_ = audit.Emit(...)` should migrate to
+// `audit.MustEmit(ctx, em, kind, payload, now)` so a marshal or emitter
+// failure is logged rather than silently dropped.  The audit trail is the
+// canonical record (C-005); a silent omission is worse than a loud warning.
+//
+// MustEmit never panics and never returns an error — it is designed for
+// sites where surfacing the error to the user is either impossible or
+// undesired (the primary operation succeeded; the audit trail is secondary).
+// For call sites where the primary operation depends on the audit trail
+// succeeding, use Emit and propagate the error normally.
+func MustEmit(ctx context.Context, em Emitter, kind Kind, payload any, now time.Time) {
+	if err := Emit(ctx, em, kind, payload, now); err != nil {
+		slog.WarnContext(ctx, "audit emit failed",
+			"kind",  string(kind),
+			"error", err.Error(),
+		)
+	}
 }
 
 // ── Fleet context-graph sync payload types

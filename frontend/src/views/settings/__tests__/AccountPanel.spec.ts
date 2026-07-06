@@ -48,7 +48,7 @@ function buildDisabledClient() {
       fleetSignIn: vi.fn(async () => ({ userId: '', orgId: '', teamId: '' })),
       fleetSignOut: vi.fn(async () => {}),
       fleetRefreshIdentity: vi.fn(async () => ({ userId: '', orgId: '', teamId: '' })),
-    },
+    } as any,
   });
 }
 
@@ -60,7 +60,7 @@ function buildSignedOutClient() {
       fleetSignIn: vi.fn(async () => mockIdentity),
       fleetSignOut: vi.fn(async () => {}),
       fleetRefreshIdentity: vi.fn(async () => mockIdentity),
-    },
+    } as any,
   });
 }
 
@@ -72,7 +72,7 @@ function buildSignedInClient(profile: FleetProfileInfo = prodProfile) {
       fleetSignIn: vi.fn(async () => mockIdentity),
       fleetSignOut: vi.fn(async () => {}),
       fleetRefreshIdentity: vi.fn(async () => mockIdentity),
-    },
+    } as any,
   });
 }
 

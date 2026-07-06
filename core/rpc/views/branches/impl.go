@@ -144,7 +144,7 @@ func (a *API) CreateBranch(ctx context.Context, opts CreateBranchOptions) (Branc
 			return Branch{}, err
 		}
 		// Emit KindBranchCreated audit event for explicit path.
-		_ = audit.Emit(ctx, a.cfg.Audit, audit.KindBranchCreated,
+		audit.MustEmit(ctx, a.cfg.Audit, audit.KindBranchCreated,
 			audit.BranchCreatedPayload{
 				ParentSessionID: opts.ParentSessionID,
 				ParentMessageID: opts.ParentMessageID,
@@ -221,7 +221,7 @@ func (a *API) CreateBranch(ctx context.Context, opts CreateBranchOptions) (Branc
 
 	// Emit audit event for accepted subagent branch (WP04).
 	if isSubagent {
-		_ = audit.Emit(ctx, a.cfg.Audit, audit.KindBranchAdvisorAccepted,
+		audit.MustEmit(ctx, a.cfg.Audit, audit.KindBranchAdvisorAccepted,
 			audit.BranchAdvisorAcceptedPayload{
 				Confidence:       opts.AdvisorConfidence,
 				BranchSessionID:  br.ChildSessionID,
@@ -537,7 +537,7 @@ func (a *API) CommitReintegration(ctx context.Context, opts CommitReintegrationO
 
 	// Emit audit event.
 	tokenCount := utf8.RuneCountInString(summary) / 4
-	_ = audit.Emit(ctx, a.cfg.Audit, audit.KindBranchReintegrated,
+	audit.MustEmit(ctx, a.cfg.Audit, audit.KindBranchReintegrated,
 		audit.BranchReintegratedPayload{
 			ParentSessionID:   br.ParentSessionID,
 			BranchSessionID:   opts.BranchSessionID,
@@ -561,7 +561,7 @@ func (a *API) SetAdvisorDismissed(ctx context.Context, sessionID string, dismiss
 		return fmt.Errorf("branches: set advisor dismissed: %w", err)
 	}
 	// Emit audit event for explicit session-scoped dismissal.
-	_ = audit.Emit(ctx, a.cfg.Audit, audit.KindBranchAdvisorDismissed,
+	audit.MustEmit(ctx, a.cfg.Audit, audit.KindBranchAdvisorDismissed,
 		audit.BranchAdvisorDismissedPayload{
 			Scope:  "session",
 			Reason: "dont_suggest_again",

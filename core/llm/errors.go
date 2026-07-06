@@ -79,10 +79,18 @@ func (e *ErrCredentialResolution) Unwrap() error { return e.Cause }
 // ErrTransient marks a recoverable provider error subject to retry
 // (FR-016 / FR-017). Adapters MUST wrap network blips, 408, 425, 429,
 // and 5xx responses in ErrTransient.
+//
+// RetryAfterSec, when > 0, carries the server-mandated backoff from the
+// Retry-After or X-RateLimit-Reset-After response headers. The retry
+// middleware honors this value (FR-004 / agent-loop-robustness-parity
+// WP04): it uses max(computedBackoff, RetryAfterSec * 1000) as the
+// actual sleep so rate-limit storms don't retry faster than the server
+// requests.
 type ErrTransient struct {
-	Status  int
-	Message string
-	Cause   error
+	Status         int
+	Message        string
+	Cause          error
+	RetryAfterSec  float64 // server-requested backoff in seconds; 0 means not specified
 }
 
 func (e *ErrTransient) Error() string {
@@ -110,8 +118,28 @@ type ErrRetryBudgetExhausted struct {
 }
 
 func (e *ErrRetryBudgetExhausted) Error() string {
+	if last := e.lastErr(); last != nil {
+		return fmt.Sprintf("llm: retry budget exhausted after %d attempts; last error: %s",
+			len(e.Attempts), last.Error())
+	}
 	return fmt.Sprintf("llm: retry budget exhausted after %d attempts", len(e.Attempts))
 }
+
+// lastErr returns the error from the final recorded attempt, or nil
+// when no attempt carried one.
+func (e *ErrRetryBudgetExhausted) lastErr() error {
+	for i := len(e.Attempts) - 1; i >= 0; i-- {
+		if e.Attempts[i].Err != nil {
+			return e.Attempts[i].Err
+		}
+	}
+	return nil
+}
+
+// Unwrap exposes the last attempt's underlying error so errors.Is /
+// errors.As can reach the real provider fault (e.g. *ErrTransient with
+// its HTTP status) instead of stopping at the generic budget wrapper.
+func (e *ErrRetryBudgetExhausted) Unwrap() error { return e.lastErr() }
 
 // ErrAuth marks an authentication / authorization failure (401/403).
 // Non-transient — never retried (FR-017).

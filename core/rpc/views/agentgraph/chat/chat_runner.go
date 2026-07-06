@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"runtime/debug"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -389,6 +390,16 @@ type chatSub struct {
 	done          chan struct{}
 	bridge        *StreamBridge
 	finished      atomic.Bool
+	// overflowRetried guards the auto-redrive path (FR-005 / WP05 nit): at
+	// most one automatic overflow-recovery redrive per run. A second overflow
+	// after the first compaction falls through to the normal backend-error path.
+	overflowRetried atomic.Bool
+	// cancelCause records WHY the run's context was cancelled, so the
+	// terminal close can distinguish an explicit user Stop ("stop-called")
+	// from the inbound RPC ctx being cancelled out from under us
+	// ("inbound-ctx" — the signature of a desktop focus-loss / webview
+	// suspend killing the run). Empty until something cancels.
+	cancelCause atomic.Value // string
 }
 
 // New constructs a ChatRunner. Every Config field is validated; a
@@ -510,14 +521,12 @@ func (r *ChatRunner) StartStream(ctx context.Context, profileID, sessionID, mode
 
 	bridge := NewStreamBridge(r.cfg.Broker, subID, sessionID)
 
+	// The run's ctx derives from Background so it survives the inbound
+	// RPC call returning. A watcher goroutine (started after `sub` is
+	// built, below) re-attaches the inbound ctx's cancellation AND records
+	// the cause, so the terminal path can tell a focus-loss abort apart
+	// from an explicit Stop.
 	streamCtx, cancel := context.WithCancel(context.Background())
-	go func() {
-		select {
-		case <-ctx.Done():
-			cancel()
-		case <-streamCtx.Done():
-		}
-	}()
 
 	// Pre-seed the AskBus with the user's message so the chat graph's
 	// `ask_user` AskNode resolves on its first fire. The chat graph is
@@ -605,6 +614,42 @@ func (r *ChatRunner) StartStream(ctx context.Context, profileID, sessionID, mode
 	r.subs[subID] = sub
 	r.mu.Unlock()
 
+	logging.L().Info("chat.run.start",
+		"sub_id", subID,
+		"session_id", sessionID,
+		"profile_id", profileID,
+		"model_override", modelOverride,
+	)
+
+	// Watcher: re-attach the inbound ctx's cancellation to streamCtx and
+	// record the cause. The inbound ctx here is the Wails app-lifetime
+	// context (bindings.ctx()), so this fires on app shutdown — NOT on
+	// window focus loss (focus-loss stalls are an App Nap problem, handled
+	// by NSAppSleepDisabled in build/darwin/Info*.plist). Recording the
+	// cause as "inbound-ctx" keeps a shutdown-time abort distinguishable
+	// from an explicit user Stop in the log.
+	go func() {
+		defer func() {
+			if rec := recover(); rec != nil {
+				logging.L().Error("chat.run.watcher.panic",
+					"sub_id", subID, "session_id", sessionID, "panic", rec)
+				cancel() // never leave the run orphaned on a watcher panic
+			}
+		}()
+		select {
+		case <-ctx.Done():
+			sub.cancelCause.Store("inbound-ctx")
+			logging.L().Warn("chat.run.ctx_cancelled",
+				"sub_id", subID,
+				"session_id", sessionID,
+				"cause", "inbound-ctx",
+				"ctx_err", ctx.Err(),
+			)
+			cancel()
+		case <-streamCtx.Done():
+		}
+	}()
+
 	go r.driveRun(streamCtx, sub, env)
 	return subID, nil
 }
@@ -618,6 +663,9 @@ func (r *ChatRunner) StopStream(_ context.Context, subID string) error {
 	if !ok {
 		return fmt.Errorf("chat: subscription %q not found", subID)
 	}
+	sub.cancelCause.Store("stop-called")
+	logging.L().Info("chat.run.stop_called",
+		"sub_id", subID, "session_id", sub.sessionID)
 	sub.cancel()
 	<-sub.done
 	return nil
@@ -686,17 +734,51 @@ func (r *ChatRunner) RedriveLastTurn(ctx context.Context, profileID string) (new
 func (r *ChatRunner) driveRun(ctx context.Context, sub *chatSub, env *coreag.Env) {
 	log := logging.L()
 	defer func() {
+		// Recover any panic in the kernel run or the terminal
+		// classification/persist logic. Without this a panic would crash
+		// the whole harness process AND (via the deferred close below)
+		// the run's bookkeeping would still need to complete so StopStream's
+		// `<-sub.done` does not deadlock. close(sub.done) runs last.
+		if rec := recover(); rec != nil {
+			log.Error("chat.run.panic",
+				"sub_id", sub.id, "session_id", sub.sessionID,
+				"panic", fmt.Sprintf("%v", rec), "stack", string(debug.Stack()))
+			// Best-effort: tell the frontend the turn ended so the typing
+			// indicator clears instead of hanging forever.
+			if sub.finished.CompareAndSwap(false, true) {
+				sub.bridge.EmitClosed("backend-error", "internal error", "")
+			}
+		}
 		r.mu.Lock()
 		delete(r.subs, sub.id)
 		r.mu.Unlock()
 		close(sub.done)
 	}()
 
+	// WP02 — periodic partial flush: start a background goroutine that
+	// periodically persists accumulated streamed text during the run.
+	// This closes the crash-loss window (FR-002). The goroutine exits
+	// automatically when the run's context is cancelled.
+	if r.cfg.PartialPersister != nil {
+		go runPeriodicFlush(ctx, sub.sessionID, sub.bridge, r.cfg.PartialPersister, 0)
+	}
+
+	runStart := time.Now()
 	err := r.cfg.Kernel.Run(ctx, env)
 	reason := "completed"
 	message := ""
 	finishReason := ""
 	runTerminatedClean := false // true when kernel finished without error (or ErrPaused)
+
+	if err != nil {
+		log.Info("chat.run.kernel_exit",
+			"sub_id", sub.id,
+			"session_id", sub.sessionID,
+			"err", err.Error(),
+			"cancel_cause", cancelCauseString(sub),
+			"duration_ms", time.Since(runStart).Milliseconds(),
+		)
+	}
 
 	// provider-keychain-rotation-01KQ8TD9 WP03: auth-failure interception.
 	// When the kernel run exits with *ErrProviderAuthFailed AND the key-rotation
@@ -776,11 +858,78 @@ func (r *ChatRunner) driveRun(ctx context.Context, sub *chatSub, env *coreag.Env
 	case errors.Is(err, coreag.ErrBudgetExceeded):
 		reason = "backend-error"
 		message = "agent reached the per-run budget cap"
+	case err != nil && isContextOverflowError(err):
+		// WP05: reactive context-overflow recovery (FR-005). An overflow that
+		// slips past the capability-table pre-check triggers a compact-and-retry
+		// path instead of a terminal error. We attempt one compaction pass here;
+		// if it succeeds we auto-redrive the run (at most once — guard via
+		// sub.overflowRetried so a second overflow after compaction falls through
+		// to the normal backend-error path). On compaction failure we fall through
+		// to the backend-error path so the user sees the real problem.
+		redrove := false
+		if !sub.overflowRetried.Swap(true) {
+			// First overflow: attempt compaction then re-drive.
+			if recErr := attemptOverflowRecovery(
+				context.Background(), // fresh ctx — run ctx may be cancelled
+				sub.sessionID,
+				sub.profileID,
+				sub.modelOverride,
+				r.cfg.Compaction,
+			); recErr == nil {
+				// Compaction succeeded — re-run the kernel with the same env
+				// and a fresh context so the frontend stream stays open.
+				log.Info("chat.overflow_recovery.auto_redrive",
+					"sub_id", sub.id, "session_id", sub.sessionID)
+				redriveCtx, redriveCancel := context.WithCancel(context.Background())
+				redriveErr := r.cfg.Kernel.Run(redriveCtx, env)
+				redriveCancel()
+				redrove = true
+				if redriveErr == nil {
+					reason = "completed"
+					runTerminatedClean = true
+				} else {
+					log.Info("chat.overflow_recovery.redrive_exit",
+						"sub_id", sub.id, "session_id", sub.sessionID, "err", redriveErr.Error())
+					reason = "backend-error"
+					message = redriveErr.Error()
+				}
+			}
+		}
+		if !redrove {
+			reason = "backend-error"
+			message = err.Error()
+		}
 	case err != nil && capMissing != nil:
 		reason = "custom_endpoint_missing_capability"
 		message = err.Error()
 	case errors.Is(err, context.Canceled):
+		// The run's context was cancelled. Distinguish an explicit user
+		// Stop from the inbound (app-lifetime) ctx being cancelled — the
+		// latter ("inbound-ctx") happens at app shutdown. Both surface as
+		// "stop-called" to the frontend (no error toast), but the log
+		// makes the true cause unambiguous when debugging "the agent
+		// stopped on its own".
 		reason = "stop-called"
+		cause := cancelCauseString(sub)
+		if cause == "inbound-ctx" {
+			log.Warn("chat.run.aborted_by_inbound_ctx",
+				"sub_id", sub.id,
+				"session_id", sub.sessionID,
+				"note", "run cancelled by inbound app ctx (app shutdown), not a user Stop",
+			)
+		}
+		// FR-001 (agent-loop-robustness-parity WP01): persist the partial
+		// assistant text + backfill synthetic is_error tool_results for any
+		// dangling tool_use calls so the transcript is API-valid on resume.
+		// Use a fresh background context — the run's ctx is already
+		// cancelled at this point.
+		if r.cfg.HistoryWriter != nil {
+			danglingCalls := sub.bridge.SeenToolCalls()
+			interruptState := NewInterruptState(sub.bridge, danglingCalls)
+			persistCtx, persistCancel := context.WithTimeout(context.Background(), persistPartialTimeout)
+			interruptState.PersistInterrupt(persistCtx, sub.sessionID, r.cfg.HistoryWriter)
+			persistCancel()
+		}
 	default:
 		reason = "backend-error"
 		message = err.Error()
@@ -860,6 +1009,16 @@ func (r *ChatRunner) driveRun(ctx context.Context, sub *chatSub, env *coreag.Env
 		"reason", reason,
 		"err", message,
 	)
+}
+
+// cancelCauseString returns the recorded cancellation cause for a sub
+// ("stop-called", "inbound-ctx") or "none" when nothing cancelled it.
+// Used by the terminal path to attribute a context.Canceled exit.
+func cancelCauseString(sub *chatSub) string {
+	if v, ok := sub.cancelCause.Load().(string); ok && v != "" {
+		return v
+	}
+	return "none"
 }
 
 // persistPartialTimeout caps the partial-persist call so a slow

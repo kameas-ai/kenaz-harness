@@ -170,7 +170,7 @@ func TestSchemaEmbedded(t *testing.T) {
 	if len(manifest.SchemaJSON) < 100 {
 		t.Errorf("schema not embedded (size=%d)", len(manifest.SchemaJSON))
 	}
-	if !strings.Contains(string(manifest.SchemaJSON), "kaneaz.yaml") {
-		t.Errorf("schema does not look like kaneaz schema")
+	if !strings.Contains(string(manifest.SchemaJSON), "kenaz.yaml") {
+		t.Errorf("schema does not look like kenaz schema")
 	}
 }

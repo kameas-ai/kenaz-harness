@@ -18,7 +18,7 @@ import (
 
 // makeSkillTestSetup creates a fresh test SkillStore + Registry + DeviceSigner
 // + Capabilities and returns them. Capabilities are set to a permissive set
-// that includes both CapSharedTeamGraph and CapHostedInference.
+// that includes both CapSharedTeamGraph and CapPersonalFleetDashboard.
 func makeSkillTestSetup(t *testing.T) (
 	store *slashcmd.SkillStore,
 	registry *slashcmd.Registry,
@@ -45,7 +45,7 @@ func makeSkillTestSetup(t *testing.T) (
 		Tier: "team",
 		Enabled: map[Capability]bool{
 			CapSharedTeamGraph: true,
-			CapHostedInference: true,
+			CapPersonalFleetDashboard: true,
 		},
 		FetchedAt: time.Now(),
 		Source:    "test",

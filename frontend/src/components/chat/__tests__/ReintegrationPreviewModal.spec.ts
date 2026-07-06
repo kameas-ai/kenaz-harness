@@ -35,12 +35,15 @@ function branchesSeed(overrides: Partial<HarnessClient['branches']> = {}): Parti
     branches: {
       list: vi.fn().mockResolvedValue([]),
       create: vi.fn(),
+      createExplicit: vi.fn(),
       status: vi.fn(),
       merge: vi.fn(),
       abandon: vi.fn(),
       recommendModel: vi.fn(),
       proposeReintegrationSummary: vi.fn().mockResolvedValue(defaultProposal),
       commitReintegration: vi.fn().mockResolvedValue(undefined),
+      setAdvisorDismissed: vi.fn(),
+      listWithBranchTree: vi.fn(),
       ...overrides,
     },
   };
@@ -101,8 +104,7 @@ describe('ReintegrationPreviewModal', () => {
 
     expect(commit).toHaveBeenCalledWith({
       branchSessionId: 'b1',
-      parentSessionId: 'p1',
-      summary: 'Edited: the answer is still 42.',
+      finalSummaryText: 'Edited: the answer is still 42.',
       wasEdited: true,
     });
   });

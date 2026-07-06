@@ -15,14 +15,14 @@ function buildClient(initial: AuditSettings) {
     current = { ...s };
   });
   const client = createFakeHarnessClient({
-    settings: { getAuditSettings, setAuditSettings },
+    settings: { getAuditSettings, setAuditSettings } as any,
   });
   return { client, getAuditSettings, setAuditSettings };
 }
 
 describe('AuditSettingsPanel', () => {
   it('renders without crashing', async () => {
-    const { client } = buildClient({ strategy: 'keep_forever', windowDays: 90 });
+    const { client } = buildClient({ strategy: 'keep_forever', window_days: 90 });
     const wrapper = mount(AuditSettingsPanel, {
       global: { provide: { [HarnessClientKey as symbol]: client } },
     });
@@ -31,7 +31,7 @@ describe('AuditSettingsPanel', () => {
   });
 
   it('loads initial strategy from backend', async () => {
-    const { client, getAuditSettings } = buildClient({ strategy: 'keep_forever', windowDays: 90 });
+    const { client, getAuditSettings } = buildClient({ strategy: 'keep_forever', window_days: 90 });
     const wrapper = mount(AuditSettingsPanel, {
       global: { provide: { [HarnessClientKey as symbol]: client } },
     });
@@ -42,7 +42,7 @@ describe('AuditSettingsPanel', () => {
   });
 
   it('hides window days input for keep_forever strategy', async () => {
-    const { client } = buildClient({ strategy: 'keep_forever', windowDays: 90 });
+    const { client } = buildClient({ strategy: 'keep_forever', window_days: 90 });
     const wrapper = mount(AuditSettingsPanel, {
       global: { provide: { [HarnessClientKey as symbol]: client } },
     });
@@ -51,7 +51,7 @@ describe('AuditSettingsPanel', () => {
   });
 
   it('shows window days input for delete_after_window strategy', async () => {
-    const { client } = buildClient({ strategy: 'delete_after_window', windowDays: 30 });
+    const { client } = buildClient({ strategy: 'delete_after_window', window_days: 30 });
     const wrapper = mount(AuditSettingsPanel, {
       global: { provide: { [HarnessClientKey as symbol]: client } },
     });
@@ -62,7 +62,7 @@ describe('AuditSettingsPanel', () => {
   });
 
   it('saves new settings on submit', async () => {
-    const { client, setAuditSettings } = buildClient({ strategy: 'keep_forever', windowDays: 90 });
+    const { client, setAuditSettings } = buildClient({ strategy: 'keep_forever', window_days: 90 });
     const wrapper = mount(AuditSettingsPanel, {
       global: { provide: { [HarnessClientKey as symbol]: client } },
     });
@@ -84,12 +84,12 @@ describe('AuditSettingsPanel', () => {
     await flushPromises();
 
     expect(setAuditSettings).toHaveBeenCalledWith(
-      expect.objectContaining({ strategy: 'delete_after_window', windowDays: 60 }),
+      expect.objectContaining({ strategy: 'delete_after_window', window_days: 60 }),
     );
   });
 
   it('shows success banner after save', async () => {
-    const { client } = buildClient({ strategy: 'keep_forever', windowDays: 90 });
+    const { client } = buildClient({ strategy: 'keep_forever', window_days: 90 });
     const wrapper = mount(AuditSettingsPanel, {
       global: { provide: { [HarnessClientKey as symbol]: client } },
     });
@@ -102,11 +102,11 @@ describe('AuditSettingsPanel', () => {
   it('shows error banner when save fails', async () => {
     const client = createFakeHarnessClient({
       settings: {
-        getAuditSettings: async () => ({ strategy: 'keep_forever' as const, windowDays: 90 }),
+        getAuditSettings: async () => ({ strategy: 'keep_forever' as const, window_days: 90 }),
         setAuditSettings: async () => {
           throw new Error('disk full');
         },
-      },
+      } as any,
     });
     const wrapper = mount(AuditSettingsPanel, {
       global: { provide: { [HarnessClientKey as symbol]: client } },

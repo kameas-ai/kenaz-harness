@@ -57,25 +57,25 @@ func TestCapabilities_Has(t *testing.T) {
 		{
 			name:    "nil capabilities returns false",
 			caps:    nil,
-			key:     CapHostedInference,
+			key:     CapLauncherUpdates,
 			wantHas: false,
 		},
 		{
 			name:    "enabled key within TTL returns true",
-			caps:    &Capabilities{Tier: "pro", Enabled: map[Capability]bool{CapHostedInference: true}, FetchedAt: fresh},
-			key:     CapHostedInference,
+			caps:    &Capabilities{Tier: "pro", Enabled: map[Capability]bool{CapLauncherUpdates: true}, FetchedAt: fresh},
+			key:     CapLauncherUpdates,
 			wantHas: true,
 		},
 		{
 			name:    "disabled key within TTL returns false",
-			caps:    &Capabilities{Tier: "pro", Enabled: map[Capability]bool{CapHostedInference: false}, FetchedAt: fresh},
-			key:     CapHostedInference,
+			caps:    &Capabilities{Tier: "pro", Enabled: map[Capability]bool{CapLauncherUpdates: false}, FetchedAt: fresh},
+			key:     CapLauncherUpdates,
 			wantHas: false,
 		},
 		{
 			name:    "enabled key but stale (>24h) returns false",
-			caps:    &Capabilities{Tier: "pro", Enabled: map[Capability]bool{CapHostedInference: true}, FetchedAt: stale},
-			key:     CapHostedInference,
+			caps:    &Capabilities{Tier: "pro", Enabled: map[Capability]bool{CapLauncherUpdates: true}, FetchedAt: stale},
+			key:     CapLauncherUpdates,
 			wantHas: false,
 		},
 		{
@@ -87,25 +87,25 @@ func TestCapabilities_Has(t *testing.T) {
 		{
 			name:    "nil Enabled map returns false",
 			caps:    &Capabilities{Tier: "pro", Enabled: nil, FetchedAt: fresh},
-			key:     CapHostedInference,
+			key:     CapLauncherUpdates,
 			wantHas: false,
 		},
 		{
 			name:    "zero FetchedAt (never fetched) returns false",
-			caps:    &Capabilities{Tier: "pro", Enabled: map[Capability]bool{CapHostedInference: true}, FetchedAt: time.Time{}},
-			key:     CapHostedInference,
+			caps:    &Capabilities{Tier: "pro", Enabled: map[Capability]bool{CapLauncherUpdates: true}, FetchedAt: time.Time{}},
+			key:     CapLauncherUpdates,
 			wantHas: false,
 		},
 		{
 			name:    "exactly 24h boundary is stale",
-			caps:    &Capabilities{Tier: "pro", Enabled: map[Capability]bool{CapHostedInference: true}, FetchedAt: now.Add(-24 * time.Hour)},
-			key:     CapHostedInference,
+			caps:    &Capabilities{Tier: "pro", Enabled: map[Capability]bool{CapLauncherUpdates: true}, FetchedAt: now.Add(-24 * time.Hour)},
+			key:     CapLauncherUpdates,
 			wantHas: false,
 		},
 		{
 			name:    "just under 24h is fresh",
-			caps:    &Capabilities{Tier: "pro", Enabled: map[Capability]bool{CapHostedInference: true}, FetchedAt: now.Add(-23*time.Hour - 59*time.Minute)},
-			key:     CapHostedInference,
+			caps:    &Capabilities{Tier: "pro", Enabled: map[Capability]bool{CapLauncherUpdates: true}, FetchedAt: now.Add(-23*time.Hour - 59*time.Minute)},
+			key:     CapLauncherUpdates,
 			wantHas: true,
 		},
 		{
@@ -133,10 +133,10 @@ func TestCapabilities_Require(t *testing.T) {
 	t.Run("returns nil when capability present", func(t *testing.T) {
 		caps := &Capabilities{
 			Tier:      "pro",
-			Enabled:   map[Capability]bool{CapHostedInference: true},
+			Enabled:   map[Capability]bool{CapLauncherUpdates: true},
 			FetchedAt: fresh,
 		}
-		if err := caps.Require(CapHostedInference); err != nil {
+		if err := caps.Require(CapLauncherUpdates); err != nil {
 			t.Errorf("Require(enabled) = %v, want nil", err)
 		}
 	})
@@ -144,10 +144,10 @@ func TestCapabilities_Require(t *testing.T) {
 	t.Run("wraps ErrCapabilityNotInTier on missing", func(t *testing.T) {
 		caps := &Capabilities{
 			Tier:      "pro",
-			Enabled:   map[Capability]bool{CapHostedInference: false},
+			Enabled:   map[Capability]bool{CapLauncherUpdates: false},
 			FetchedAt: fresh,
 		}
-		err := caps.Require(CapHostedInference)
+		err := caps.Require(CapLauncherUpdates)
 		if err == nil {
 			t.Fatal("Require(disabled) = nil, want error")
 		}
@@ -179,7 +179,7 @@ func TestCapabilities_Require(t *testing.T) {
 
 	t.Run("nil caps Require returns ErrCapabilityNotInTier", func(t *testing.T) {
 		var caps *Capabilities
-		err := caps.Require(CapHostedInference)
+		err := caps.Require(CapLauncherUpdates)
 		if !errors.Is(err, ErrCapabilityNotInTier) {
 			t.Errorf("nil.Require = %v, want ErrCapabilityNotInTier", err)
 		}
@@ -191,8 +191,8 @@ func TestDefaultDenyCapabilities(t *testing.T) {
 	if d.Source != "default-deny" {
 		t.Errorf("Source = %q, want 'default-deny'", d.Source)
 	}
-	if d.Has(CapHostedInference) {
-		t.Error("default-deny Has(CapHostedInference) = true, want false")
+	if d.Has(CapLauncherUpdates) {
+		t.Error("default-deny Has(CapLauncherUpdates) = true, want false")
 	}
 	for _, c := range AllCapabilities() {
 		if d.Has(c) {

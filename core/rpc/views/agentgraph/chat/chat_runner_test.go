@@ -602,6 +602,7 @@ type stubRegistry struct{}
 
 func (stubRegistry) RegisterAdapter(_ corellm.ProviderAdapter)    {}
 func (stubRegistry) LoadProfiles(_ []corellm.ProviderProfile) error { return nil }
+func (stubRegistry) Evict(_ string) error                           { return nil }
 func (stubRegistry) Profile(_ string) (corellm.ProviderProfile, error) {
 	return corellm.ProviderProfile{}, errors.New("stub")
 }

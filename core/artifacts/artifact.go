@@ -73,7 +73,7 @@ type ArtifactSourceRef struct {
 	// for display — path separators replaced).
 	Filename string `json:"filename,omitempty"`
 	// AbsolutePath is the canonical on-disk path when the artifact
-	// originated from a kaneaz__edit_file / kaneaz__write_file call
+	// originated from a kenaz__edit_file / kenaz__write_file call
 	// (edit-file-artifact-sync-01KQ8TD5 WP01). Empty for all other
 	// sources. When set, the Artifacts tab can render a "Show in Finder /
 	// Open in editor" affordance pointing at the live file on disk.
@@ -92,7 +92,7 @@ type ArtifactSourceRef struct {
 }
 
 // ArtifactVersion is one entry in the append-only revision history for
-// an artifact. Written by kaneaz__update_artifact; the parent Artifact
+// an artifact. Written by kenaz__update_artifact; the parent Artifact
 // row is never mutated. The actual bytes live in the shared CAS at
 // <DataDir>/media/<ContentHash> — same location as the original capture.
 //
@@ -138,7 +138,8 @@ type ArtifactFilter struct {
 	// Source restricts to one of SourceCodeBlock / SourceToolOutput /
 	// SourceUserPin. Empty = all sources.
 	Source string
-	// ScopeKind restricts to "session" or "project". Empty = both.
+	// ScopeKind restricts to "session", "project", or "global".
+	// Empty = all scopes.
 	ScopeKind string
 }
 
@@ -159,10 +160,17 @@ const (
 )
 
 // ScopeKind enum values for Artifact.ScopeKind. Validated at the SQL
-// CHECK boundary in migration 0303.
+// CHECK boundary in migration 0303 (extended to include "global" by
+// migration 0332 — unified-context-artifacts-01NCTXU01 additive scope
+// widening).
 const (
 	ScopeKindSession = "session"
 	ScopeKindProject = "project"
+	// ScopeKindGlobal makes an artifact visible across all sessions and
+	// projects. Added in migration 0332 so global artifacts can be
+	// surfaced as Units in the unified context+artifacts store.
+	// ScopeID is empty for global-scope artifacts.
+	ScopeKindGlobal = "global"
 )
 
 // Sentinel errors. Stable typed errors so callers can errors.Is.
@@ -175,8 +183,8 @@ var (
 	ErrUnsupportedSource = errors.New("artifacts: unsupported source")
 
 	// ErrUnsupportedScope is returned when UpdateScope receives a kind
-	// outside {session, project}, or when a session→project promote
-	// targets a session that has no project.
+	// outside {session, project, global}, or when a session→project
+	// promote targets a session that has no project.
 	ErrUnsupportedScope = errors.New("artifacts: unsupported scope")
 
 	// ErrVersionConflict is returned when WriteVersion detects that the

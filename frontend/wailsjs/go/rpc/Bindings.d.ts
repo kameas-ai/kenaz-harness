@@ -44,9 +44,11 @@ import {sync} from '../models';
 import {transport} from '../models';
 import {tools} from '../models';
 import {trust} from '../models';
+import {fleet} from '../models';
 import {update} from '../models';
 import {workflow} from '../models';
 import {workflows} from '../models';
+import {tasks} from '../models';
 
 export function A2A_ListCards():Promise<Array<a2a.Card>>;
 
@@ -111,6 +113,8 @@ export function Audit_VerifyChain(arg1:string,arg2:string):Promise<audit.VerifyC
 export function Audit_VerifyEntry(arg1:string):Promise<boolean>;
 
 export function Bash_Exec(arg1:string,arg2:string):Promise<rpc.BashExecResult>;
+
+export function BootHealth_Get():Promise<rpc.BootHealthReport>;
 
 export function Branches_Abandon(arg1:string):Promise<void>;
 
@@ -196,9 +200,15 @@ export function Context_StartStream():Promise<string>;
 
 export function Context_StopStream(arg1:string):Promise<void>;
 
+export function Contexts_AttachModule(arg1:string,arg2:string,arg3:string):Promise<contexts.ModuleAttachment>;
+
+export function Contexts_ContextExport(arg1:string,arg2:string):Promise<contexts.ContextExportView>;
+
 export function Contexts_ContextPromote(arg1:string):Promise<contexts.ContextPromoteResult>;
 
 export function Contexts_ContextPublish(arg1:contexts.ContextPublishRequest):Promise<contexts.ContextPublishResult>;
+
+export function Contexts_ContextSearch(arg1:string,arg2:string,arg3:number):Promise<Array<contexts.ContextSearchHitView>>;
 
 export function Contexts_ContextSyncStatus():Promise<contexts.ContextSyncStatusView>;
 
@@ -548,6 +558,8 @@ export function Sessions_Reorder(arg1:Array<string>):Promise<void>;
 
 export function Sessions_ResolveAutonomy(arg1:string):Promise<sessions.ResolvedAutonomy>;
 
+export function Sessions_ResumeMessage(arg1:string,arg2:string):Promise<sessions.ResumeMessageResult>;
+
 export function Sessions_SaveAsArtifact(arg1:string,arg2:string,arg3:string,arg4:number,arg5:number):Promise<artifacts.Artifact>;
 
 export function Sessions_SaveDraft(arg1:string,arg2:string):Promise<void>;
@@ -576,6 +588,8 @@ export function Settings_FleetCapabilities():Promise<settings.CapabilitiesView>;
 
 export function Settings_FleetConfigPullStatus():Promise<settings.FleetConfigPullStatusView>;
 
+export function Settings_FleetHealth():Promise<settings.FleetHealthView>;
+
 export function Settings_FleetLockdownStatus():Promise<settings.LockdownStatusView>;
 
 export function Settings_FleetProfile():Promise<settings.FleetProfileInfo>;
@@ -584,11 +598,15 @@ export function Settings_FleetRefreshCapabilities():Promise<settings.Capabilitie
 
 export function Settings_FleetRefreshIdentity():Promise<settings.FleetIdentity>;
 
+export function Settings_FleetSetTelemetryOptIn(arg1:string,arg2:boolean):Promise<void>;
+
 export function Settings_FleetSignIn():Promise<settings.FleetIdentity>;
 
 export function Settings_FleetSignOut():Promise<void>;
 
 export function Settings_FleetSignedIn():Promise<boolean>;
+
+export function Settings_FleetTelemetryOptIns():Promise<Array<settings.TelemetryOptInView>>;
 
 export function Settings_Get():Promise<settings.Settings>;
 
@@ -600,6 +618,8 @@ export function Settings_GetAutoCaptureGeneratedImages():Promise<boolean>;
 
 export function Settings_GetAutoResumeOnKeyRotation():Promise<boolean>;
 
+export function Settings_GetAutoTitleEnabled():Promise<boolean>;
+
 export function Settings_GetAutonomy():Promise<autonomy.Layer>;
 
 export function Settings_GetBash():Promise<boolean>;
@@ -607,8 +627,6 @@ export function Settings_GetBash():Promise<boolean>;
 export function Settings_GetBashAllowlistMigrated():Promise<boolean>;
 
 export function Settings_GetCedarStrictCredentialMode():Promise<boolean>;
-
-export function Settings_GetConfirmEach():Promise<boolean>;
 
 export function Settings_GetEmbedderConfig():Promise<rpc.EmbedderConfigResult>;
 
@@ -646,6 +664,8 @@ export function Settings_GetShowPerMessageTokenMeter():Promise<boolean>;
 
 export function Settings_GetTodoEnabled():Promise<boolean>;
 
+export function Settings_GetWebFetchEnabled():Promise<boolean>;
+
 export function Settings_GetWebSearch():Promise<boolean>;
 
 export function Settings_Set(arg1:settings.Settings):Promise<void>;
@@ -656,6 +676,8 @@ export function Settings_SetAutoCaptureGeneratedImages(arg1:boolean):Promise<voi
 
 export function Settings_SetAutoResumeOnKeyRotation(arg1:boolean):Promise<void>;
 
+export function Settings_SetAutoTitleEnabled(arg1:boolean):Promise<void>;
+
 export function Settings_SetAutonomy(arg1:autonomy.Layer):Promise<void>;
 
 export function Settings_SetBash(arg1:boolean):Promise<void>;
@@ -663,8 +685,6 @@ export function Settings_SetBash(arg1:boolean):Promise<void>;
 export function Settings_SetBashAllowlistMigrated(arg1:boolean):Promise<void>;
 
 export function Settings_SetCedarStrictCredentialMode(arg1:boolean):Promise<void>;
-
-export function Settings_SetConfirmEach(arg1:boolean):Promise<void>;
 
 export function Settings_SetEmbedderConfig(arg1:string,arg2:string):Promise<void>;
 
@@ -704,6 +724,8 @@ export function Settings_SetShowPerMessageTokenMeter(arg1:boolean):Promise<void>
 
 export function Settings_SetTodoEnabled(arg1:boolean):Promise<void>;
 
+export function Settings_SetWebFetchEnabled(arg1:boolean):Promise<void>;
+
 export function Settings_SetWebSearch(arg1:boolean):Promise<void>;
 
 export function ShellStatus():Promise<rpc.ShellStatus>;
@@ -729,6 +751,16 @@ export function Slashcmd_List(arg1:string):Promise<Array<slashcmd.UserCommandSum
 export function Slashcmd_Run(arg1:string,arg2:Record<string, string>,arg3:string,arg4:string,arg5:string,arg6:string):Promise<slashcmd.RunResultWire>;
 
 export function Slashcmd_Save(arg1:slashcmd.UserCommandWire):Promise<void>;
+
+export function Slashcmd_SkillInstall(arg1:string,arg2:string):Promise<void>;
+
+export function Slashcmd_SkillList():Promise<Array<slashcmd.SkillItemWire>>;
+
+export function Slashcmd_SkillPublish(arg1:string,arg2:string,arg3:string):Promise<void>;
+
+export function Slashcmd_SkillRenameLocalTrigger(arg1:string,arg2:string):Promise<void>;
+
+export function Slashcmd_SkillUninstall(arg1:string):Promise<void>;
 
 export function Storage_ApplyDriftFix(arg1:number):Promise<void>;
 
@@ -758,11 +790,25 @@ export function Tools_RecipeStatus(arg1:string):Promise<transport.RecipeStatus>;
 
 export function Tools_RequestAdditionalAllowedDir(arg1:string,arg2:string,arg3:string):Promise<tools.FSAccessResult>;
 
+export function Tools_SignInRecipe(arg1:string):Promise<transport.RecipeStatus>;
+
 export function Tools_UninstallRecipe(arg1:string):Promise<void>;
 
 export function Trust_GetSecretReference(arg1:string):Promise<trust.SecretReference>;
 
 export function Trust_ListSecretReferences():Promise<Array<trust.SecretReference>>;
+
+export function Unit_ListConflicts():Promise<Array<fleet.UnitConflictView>>;
+
+export function Unit_PromoteAsMergeRequest(arg1:string,arg2:string,arg3:string,arg4:string):Promise<fleet.MergeRequestResult>;
+
+export function Unit_ResolveEnshrine(arg1:string,arg2:string,arg3:string,arg4:string):Promise<string>;
+
+export function Unit_ResolveLoadable(arg1:string,arg2:string):Promise<Array<fleet.ResolvedUnitView>>;
+
+export function Unit_ResolveMerge(arg1:string,arg2:string):Promise<void>;
+
+export function Unit_SyncStatus():Promise<fleet.UnitSyncStatusView>;
 
 export function Update_Apply():Promise<void>;
 
@@ -786,6 +832,12 @@ export function Workflow_StopStream(arg1:string):Promise<void>;
 
 export function Workflows_CancelRun(arg1:string):Promise<void>;
 
+export function Workflows_CatalogGet(arg1:string):Promise<workflows.CatalogPreview>;
+
+export function Workflows_CatalogInstall(arg1:string):Promise<workflows.CatalogInstallResult>;
+
+export function Workflows_CatalogList():Promise<Array<workflows.CatalogEntry>>;
+
 export function Workflows_Delete(arg1:string):Promise<void>;
 
 export function Workflows_Get(arg1:string):Promise<workflows.Workflow>;
@@ -807,3 +859,15 @@ export function Workflows_ScheduleNextFire(arg1:string):Promise<string>;
 export function Workflows_ScheduleRunHistory(arg1:string,arg2:number):Promise<Array<workflows.RunSummary>>;
 
 export function Workflows_ScheduleSet(arg1:workflows.ScheduleSetInput):Promise<void>;
+
+export function Tasks_List():Promise<Array<tasks.TaskRow>>;
+
+export function Tasks_Get(arg1:string):Promise<tasks.TaskRow>;
+
+export function Tasks_Tail(arg1:string,arg2:number):Promise<Array<tasks.LineRow>>;
+
+export function Tasks_Abort(arg1:string):Promise<void>;
+
+export function Tasks_AbortBySession(arg1:string):Promise<void>;
+
+export function Tasks_ListBySession(arg1:string):Promise<Array<tasks.TaskRow>>;

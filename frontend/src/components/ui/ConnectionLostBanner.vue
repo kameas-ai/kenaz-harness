@@ -1,17 +1,24 @@
 <script setup lang="ts">
 import { ref } from 'vue';
 import { setConnectionState } from '@/lib/useConnectionState';
+import { retryReconnectNow } from '@/lib/servedTransport';
 
 /**
  * ConnectionLostBanner — single dismissable, non-toasting banner (FR-013).
- * Shown only when useConnectionState() === 'lost'. Retry pokes the
- * bridge by transitioning state back to 'connecting'.
+ * Shown only when useConnectionState() === 'lost'. Retry transitions the
+ * state to 'connecting' AND fires an immediate served-mode reconnect probe
+ * (bypassing the backoff timer) so the user's click actually pokes the
+ * backend instead of waiting for the next scheduled attempt. retryReconnectNow
+ * is a no-op in native mode / when no reconnect target has been recorded.
  */
 const dismissed = ref(false);
 
 function retry() {
   setConnectionState('connecting');
   dismissed.value = false;
+  // Trigger an immediate reconnect attempt rather than passively waiting for
+  // the backoff poller's next tick.
+  retryReconnectNow();
 }
 
 function dismiss() {

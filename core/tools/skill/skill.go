@@ -1,11 +1,11 @@
-// Package skill implements the kaneaz__skill built-in tool.
+// Package skill implements the kenaz__skill built-in tool.
 //
 // The model calls this tool to invoke any user-defined slash command that
 // has model_invokable=true set in its frontmatter. The tool resolves the
 // command via core/slashcmd.Dispatch.Run and returns the rendered output
 // as a JSON string.
 //
-// Tool name: kaneaz__skill (follows the kaneaz__ prefix convention for
+// Tool name: kenaz__skill (follows the kenaz__ prefix convention for
 // first-party builtins so Cedar policy can gate it uniformly).
 //
 // Input schema:
@@ -36,7 +36,7 @@ import (
 
 const (
 	// ToolName is the namespaced identifier surfaced to the model.
-	ToolName = "kaneaz__skill"
+	ToolName = "kenaz__skill"
 
 	// ToolDescription guides the model on when to call this tool.
 	ToolDescription = "Invoke a user-defined skill (slash command) by name. " +
@@ -49,7 +49,7 @@ const (
 	MaxNameLen = 64
 )
 
-// inputSchema is the JSON Schema for kaneaz__skill's argument shape.
+// inputSchema is the JSON Schema for kenaz__skill's argument shape.
 const inputSchema = `{
   "type": "object",
   "properties": {
@@ -86,7 +86,7 @@ type Options struct {
 	Enabled func() bool
 }
 
-// Tool implements the kaneaz__skill builtin.
+// Tool implements the kenaz__skill builtin.
 type Tool struct {
 	opts Options
 }

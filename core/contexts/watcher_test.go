@@ -105,7 +105,14 @@ func TestWatcherDuplicateOpDropped(t *testing.T) {
 	defer w.Close()
 
 	// Two CreateFolder calls (same path, same op) within the window
-	// must collapse to a single tick.
+	// must collapse to a single directory-created tick. The scaffold
+	// writes a context.md stub alongside the directory, so we expect
+	// exactly two distinct paths in the debounced event set:
+	//   - "notes"           (directory created)
+	//   - "notes/context.md" (scaffold root file created)
+	// A third call on the same already-existing path is a no-op and
+	// must NOT produce an additional event (that's the duplicate-drop
+	// contract).
 	if err := lib.CreateFolder("notes"); err != nil {
 		t.Fatalf("CreateFolder 1: %v", err)
 	}
@@ -113,11 +120,21 @@ func TestWatcherDuplicateOpDropped(t *testing.T) {
 		t.Fatalf("CreateFolder 2: %v", err)
 	}
 	got := drainOpEvents(w, 400*time.Millisecond)
-	if len(got) != 1 {
-		t.Fatalf("got %d events; want 1 (duplicate-drop)", len(got))
+	// Expect exactly 2 events: the directory and the scaffolded root file.
+	// The second CreateFolder is a no-op (dir already exists) so its
+	// OpCreated on "notes" is dropped by the debouncer.
+	if len(got) != 2 {
+		t.Fatalf("got %d events; want 2 (notes + notes/context.md)", len(got))
 	}
-	if got[0].Op != contexts.OpCreated || got[0].Path != "notes" {
-		t.Fatalf("event = %+v; want notes/created", got[0])
+	paths := make(map[string]bool)
+	for _, ev := range got {
+		paths[ev.Path] = true
+	}
+	if !paths["notes"] {
+		t.Error("missing event for notes directory")
+	}
+	if !paths["notes/context.md"] {
+		t.Error("missing event for notes/context.md scaffold")
 	}
 }
 

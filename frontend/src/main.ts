@@ -129,6 +129,12 @@ const router = createRouter({
       name: 'sites',
       component: () => import('@/views/sites/SitesView.vue'),
     },
+    {
+      // WP08: catch-all not-found route (FR-011).
+      path: '/:pathMatch(.*)*',
+      name: 'not-found',
+      component: () => import('@/views/NotFoundView.vue'),
+    },
   ],
 });
 

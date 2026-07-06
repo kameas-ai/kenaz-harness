@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, onMounted } from 'vue';
+import { computed, ref, onMounted, onBeforeUnmount } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import RailEntry from './RailEntry.vue';
 import SessionTreeRow from './SessionTreeRow.vue';
@@ -21,9 +21,13 @@ import {
 } from './icons';
 import { useSessions, useProjects } from '@/lib/useHarnessAPI';
 import { signedIn, capability } from '@/lib/featureFlags';
+import { isServedMode } from '@/lib/useServedMode';
+import { useConnectionState } from '@/lib/useConnectionState';
 import NewSessionDialog from './NewSessionDialog.vue';
 import MemoryBadge from './MemoryBadge.vue';
 import WorkflowRunsSection from '@/components/workflows/WorkflowRunsSection.vue';
+import ConfirmDialog from '@/components/ui/ConfirmDialog.vue';
+import { useConfirmDialog } from '@/composables/useConfirmDialog';
 import type { Project, Session } from '@/lib/types';
 import '@/styles/sessions.css';
 
@@ -53,6 +57,15 @@ const {
 const newSessionDialogOpen = ref(false);
 const newSessionProjectId = ref<string | undefined>(undefined);
 const deletingId = ref<string | null>(null);
+const { confirmState, confirm } = useConfirmDialog();
+
+// Served-mode connection gate (FR-003): creating a session hits the backend
+// (Sessions_Create). When the served transport is lost, disable the
+// new-session affordances so a click can't silently fail. No-op in native
+// mode — isServedMode() is false there, so the desktop rail is never gated.
+const served = isServedMode();
+const connection = useConnectionState();
+const backendUnavailable = computed(() => served && connection.value === 'lost');
 
 // WP07 — drag-and-drop session-to-project membership. The dragged
 // session id is captured at dragstart; project headers + the Loose
@@ -74,7 +87,8 @@ const deleteModal = ref<{ project: Project; cascade: boolean } | null>(null);
 
 const collapsed = ref<Set<string>>(new Set());
 let focusedProjectRenameId: string | null = null;
-function setProjectRenameRef(el: Element | null) {
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function setProjectRenameRef(el: any) {
   if (!(el instanceof HTMLInputElement)) {
     focusedProjectRenameId = null;
     return;
@@ -203,9 +217,20 @@ function hasChildren(sessionId: string): boolean {
 /** Max visible branch depth — read from settings if available. */
 const maxBranchDepth = ref<number>(5);
 
+// WP09: Listen for the palette's 'New Session' action dispatched via
+// kenaz:open-new-session CustomEvent from useCommandPalette.
+function onOpenNewSessionEvent() {
+  newSession();
+}
+
 onMounted(() => {
   refreshSessions();
   refreshProjects();
+  window.addEventListener('kenaz:open-new-session', onOpenNewSessionEvent);
+});
+
+onBeforeUnmount(() => {
+  window.removeEventListener('kenaz:open-new-session', onOpenNewSessionEvent);
 });
 
 function newSession(projectId?: string) {
@@ -244,6 +269,16 @@ async function deleteSession(id: string, event: Event) {
   event.preventDefault();
   event.stopPropagation();
   if (!id || deletingId.value) return;
+  // WP03 review fix: route single-session delete through ConfirmDialog.
+  const session = sessionList.value.find((s) => s.id === id);
+  const sessionName = session?.name || id;
+  const ok = await confirm({
+    title: `Delete "${sessionName}"?`,
+    message: 'This cannot be undone.',
+    danger: true,
+    confirmLabel: 'Delete',
+  });
+  if (!ok) return;
   deletingId.value = id;
   lastError.value = null;
   try {
@@ -263,11 +298,13 @@ async function deleteSession(id: string, event: Event) {
 
 async function clearAll() {
   if (sessionList.value.length === 0) return;
-  if (
-    !window.confirm(
-      `Delete all ${sessionList.value.length} sessions? This cannot be undone.`,
-    )
-  ) {
+  const ok = await confirm({
+    title: `Delete all ${sessionList.value.length} sessions?`,
+    message: 'This cannot be undone.',
+    danger: true,
+    confirmLabel: 'Delete all',
+  });
+  if (!ok) {
     return;
   }
   lastError.value = null;
@@ -475,8 +512,10 @@ async function onProjectDrop(evt: DragEvent, projectId: string) {
     <div class="px-2 pt-3 pb-2 flex items-center gap-1">
       <button
         type="button"
-        class="flex items-center gap-2 px-3 py-2 rounded-sm flex-1 text-left text-sm font-ui text-accent border border-accent-hairline hover:bg-accent-glow transition-fast ease-kenaz disabled:opacity-50"
+        class="flex items-center gap-2 px-3 py-2 rounded-sm flex-1 text-left text-sm font-ui text-accent border border-accent-hairline hover:bg-accent-glow transition-fast ease-kenaz disabled:opacity-50 disabled:cursor-not-allowed"
         aria-label="New session"
+        :disabled="backendUnavailable"
+        :title="backendUnavailable ? 'Connection to the harness backend lost — reconnecting…' : undefined"
         @click="newSession(activeProjectId || undefined)"
       >
         <Plus :size="14" />
@@ -612,9 +651,10 @@ async function onProjectDrop(evt: DragEvent, projectId: string) {
               </button>
               <button
                 type="button"
-                class="shrink-0 p-1.5 rounded-sm text-ink-dim hover:text-accent hover:bg-surface-3 focus:outline-none focus:ring-1 focus:ring-accent"
+                class="shrink-0 p-1.5 rounded-sm text-ink-dim hover:text-accent hover:bg-surface-3 focus:outline-none focus:ring-1 focus:ring-accent disabled:opacity-50 disabled:cursor-not-allowed"
                 :aria-label="`New session in ${project.name}`"
                 :data-testid="`new-session-in-project-${project.id}`"
+                :disabled="backendUnavailable"
                 @click.stop="newSession(project.id)"
               >
                 <Plus :size="12" />
@@ -928,8 +968,10 @@ async function onProjectDrop(evt: DragEvent, projectId: string) {
         <li><RailEntry :icon="Wrench" label="Tools" to="/tools" /></li>
         <li><RailEntry :icon="GitBranch" label="Workflows" to="/workflows" /></li>
         <li><RailEntry :icon="FileText" label="Contexts" to="/contexts" /></li>
+        <li><RailEntry :icon="FileText" label="Corpora" to="/corpora" /></li>
         <li><RailEntry :icon="Brain" label="Memory" to="/memory" /></li>
         <li><RailEntry :icon="Archive" label="Artifacts" to="/artifacts" /></li>
+        <li><RailEntry :icon="GitBranch" label="Agent graphs" to="/agentgraph" /></li>
         <li><RailEntry :icon="FileText" label="Audit log" to="/audit" /></li>
         <li
           v-if="signedIn && capability('sites_hosting')"
@@ -941,4 +983,11 @@ async function onProjectDrop(evt: DragEvent, projectId: string) {
       </ul>
     </nav>
   </div>
+
+  <!-- Destructive action confirmation (WP03) -->
+  <ConfirmDialog
+    v-bind="confirmState"
+    @confirm="confirmState.resolve(true)"
+    @cancel="confirmState.resolve(false)"
+  />
 </template>

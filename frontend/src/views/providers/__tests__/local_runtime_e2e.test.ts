@@ -16,7 +16,6 @@ import { createFakeHarnessClient, type HarnessClient } from '@/lib/harnessClient
 import type {
   LocalRuntimeInfo,
   LocalRuntimeConfigResult,
-  Provider,
 } from '@/lib/types';
 import LocalRuntimesSection from '@/views/providers/LocalRuntimesSection.vue';
 
@@ -42,9 +41,6 @@ function makeRuntime(kind: string, running = true): LocalRuntimeInfo {
   };
 }
 
-function makeProvider(id: string): Provider {
-  return { id, name: id, tier: 'personal', model: 'llama3:8b', source: 'personal' };
-}
 
 function makeClient(
   override: Partial<HarnessClient['llm']> = {},

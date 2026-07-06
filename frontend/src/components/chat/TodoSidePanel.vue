@@ -1,7 +1,7 @@
 <script setup lang="ts">
 /**
  * TodoSidePanel — slide-in panel that renders the session todo list
- * maintained by kaneaz__todo_write calls.
+ * maintained by kenaz__todo_write calls.
  *
  * Mounted by the parent (ChatView / MessageBubble host) when the user
  * clicks a TodoChip. The panel is purely presentational — it receives
@@ -146,7 +146,7 @@ function priorityBadge(priority: TodoItem['priority']): string | null {
             <CheckSquare class="mb-3 h-8 w-8 text-ink-dim" aria-hidden="true" />
             <p class="font-ui text-[12px] text-ink-muted">No tasks yet.</p>
             <p class="mt-1 font-ui text-[11px] text-ink-dim">
-              The model will add tasks here via kaneaz__todo_write.
+              The model will add tasks here via kenaz__todo_write.
             </p>
           </div>
 

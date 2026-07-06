@@ -2,7 +2,7 @@
 /**
  * BundlesView — installed bundles list (NN/SECTION pattern).
  *
- * Shows every bundle pinned in kaneaz.lock with its source channel,
+ * Shows every bundle pinned in kenaz.lock with its source channel,
  * signature status, and artifact count. Expanding a row calls
  * Bundle_Get and renders the per-artifact name/kind/content-hash
  * triples — payload bytes never traverse the rpc surface.
@@ -100,7 +100,7 @@ onMounted(() => {
     number="03"
     section="BUNDLES"
     title="Installed bundles"
-    subtitle="Every bundle pinned in kaneaz.lock with its source channel, signature, and artifact count. Bytes live in the local CAS — nothing leaves the device."
+    subtitle="Every bundle pinned in kenaz.lock with its source channel, signature, and artifact count. Bytes live in the local CAS — bundle bytes never leave the device (fleet config-apply ACKs and opted-in telemetry are the only egress when fleet config distribution is active)."
   >
     <div v-if="loading" class="px-6 py-4 font-ui text-sm text-ink-muted">
       Loading bundles…
@@ -120,10 +120,10 @@ onMounted(() => {
       <p class="mt-2 max-w-prose text-ink-muted">
         Bundles pin connector configurations, MCP servers, and policy
         clauses in a content-addressed store. Add one by running the
-        bundle resolver against a kaneaz.toml manifest.
+        bundle resolver against a kenaz.toml manifest.
       </p>
       <a
-        href="https://github.com/sigil-tech/kaneaz-harness/blob/main/docs/bundles.md"
+        href="https://github.com/sigil-tech/kenaz-harness/blob/main/docs/bundles.md"
         class="mt-3 inline-block text-accent hover:text-accent-muted"
         target="_blank"
         rel="noopener"
@@ -210,7 +210,7 @@ onMounted(() => {
       <div class="text-ink mb-2">Install a local_path bundle</div>
       <p class="text-ink-muted mb-3 max-w-prose">
         Beta scope: point at an absolute filesystem path that contains a
-        <code class="font-mono">kaneaz.yaml</code> manifest at its root.
+        <code class="font-mono">kenaz.yaml</code> manifest at its root.
         The bundle is registered in the lockfile; artifact bytes stay
         on disk where they already are.
       </p>

@@ -15,7 +15,7 @@ import {
 // provide() that ran with the OLD symbol at boot — surfacing as
 // "useHarnessClient called outside of a HarnessClient provider".
 export const HarnessClientKey: InjectionKey<HarnessClient> =
-  Symbol.for('kaneaz.harnessClient') as InjectionKey<HarnessClient>;
+  Symbol.for('kenaz.harnessClient') as InjectionKey<HarnessClient>;
 
 export function installHarnessClient(app: App, client: HarnessClient): void {
   app.provide(HarnessClientKey, client);

@@ -7,10 +7,13 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"runtime/debug"
 	"sync"
 	"time"
 
 	"golang.org/x/sync/singleflight"
+
+	"github.com/kameas-ai/kenaz-harness/core/logging"
 )
 
 // pollInterval is the normal interval between capability refreshes.
@@ -29,7 +32,8 @@ type backoffState struct {
 }
 
 // next returns the next backoff duration and advances the step counter.
-// Once the max step is reached it stays there.
+// Once the max step is reached it stays there. ±10% jitter is applied so
+// multiple pollers don't thunderherd after an outage (FR-013).
 func (b *backoffState) next() time.Duration {
 	if b.step >= len(backoffSteps) {
 		b.step = len(backoffSteps)
@@ -38,7 +42,7 @@ func (b *backoffState) next() time.Duration {
 	if b.step < len(backoffSteps)-1 {
 		b.step++
 	}
-	return d
+	return addJitter(d, 0.10)
 }
 
 // reset clears backoff after a successful fetch.
@@ -156,6 +160,16 @@ func (p *CapabilityPoller) Start(ctx context.Context) {
 	go func() {
 		defer close(p.done)
 		defer cancel()
+		// Recover panics from the capability poll loop (FR-003).
+		defer func() {
+			if r := recover(); r != nil {
+				stack := debug.Stack()
+				logging.L().Error("fleet.capability_poller.panic",
+					"panic", fmt.Sprintf("%v", r),
+					"stack", string(stack),
+				)
+			}
+		}()
 
 		// Decide whether to fetch immediately or wait.
 		cur := p.Current()
@@ -253,6 +267,13 @@ func (p *CapabilityPoller) Refresh(ctx context.Context) (Capabilities, error) {
 		return DefaultDenyCapabilities(), fmt.Errorf("fleet: capability poller singleflight: %w", err)
 	}
 	r := v.(result)
+	// Publish the fetched snapshot so Current() reflects the refresh for
+	// direct callers (Start's loop also calls setCurrent, harmlessly). On a
+	// fetch error fetch() returns the last-known value, so we only update on
+	// success to avoid clobbering good state with a transient failure.
+	if r.err == nil {
+		p.setCurrent(r.caps)
+	}
 	return r.caps, r.err
 }
 

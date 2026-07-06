@@ -10,16 +10,17 @@ import (
 // orgs-tiers-billing-design.md §2.
 type Capability string
 
-// The 25 capability keys (fleet-capability-surface-01NDFSEX09).
+// The capability keys (fleet-capability-surface-01NDFSEX09).
 // Wire values are the snake_case strings the backend emits; the Go
 // constants use UpperCamelCase with a Cap prefix.
+//
+// NOTE: the fleet-hosted inference + kameas-ml capability constants
+// (hosted_inference, kameas_ml_general/team_tuned/org_tuned) were dropped
+// when the fleet-hosted-LLM surface was removed
+// (harness-fleet-sync-activation-01NSYNC01, dead-code cleanup).
 const (
-	CapHostedInference          Capability = "hosted_inference"
 	CapLauncherUpdates          Capability = "launcher_updates"
 	CapISODistribution          Capability = "iso_distribution"
-	CapKameasMLGeneral          Capability = "kameas_ml_general"
-	CapKameasMLTeamTuned        Capability = "kameas_ml_team_tuned"
-	CapKameasMLOrgTuned         Capability = "kameas_ml_org_tuned"
 	CapSharedTeamGraph          Capability = "shared_team_graph"
 	CapCrossTeamGraphIsolation  Capability = "cross_team_graph_isolation"
 	CapOPAPresetPolicies        Capability = "opa_preset_policies"
@@ -50,12 +51,8 @@ const (
 // order. Used by parity checks, codegen, and tests.
 func AllCapabilities() []Capability {
 	return []Capability{
-		CapHostedInference,
 		CapLauncherUpdates,
 		CapISODistribution,
-		CapKameasMLGeneral,
-		CapKameasMLTeamTuned,
-		CapKameasMLOrgTuned,
 		CapSharedTeamGraph,
 		CapCrossTeamGraphIsolation,
 		CapOPAPresetPolicies,

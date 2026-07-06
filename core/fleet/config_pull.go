@@ -23,11 +23,15 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math/rand"
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"sync"
 	"time"
+
+	"github.com/kameas-ai/kenaz-harness/core/logging"
 )
 
 // configPollInterval is the normal interval between config bundle fetches.
@@ -38,9 +42,11 @@ var configBackoffSteps = []time.Duration{5 * time.Minute, 15 * time.Minute, 60 *
 
 // ConfigApplier is the callback invoked after a bundle passes signature
 // verification. Each section that is non-nil/non-empty is applied in order.
-// Errors are collected; a partial failure still ACKs but is reported.
+// All per-section errors are returned so the ACK can carry the full list
+// (FR-012). A non-empty return value means the bundle was partially applied;
+// the caller will NOT advance lastAppliedID so the bundle is retried next poll.
 type ConfigApplier interface {
-	ApplyBundle(ctx context.Context, b *Bundle) error
+	ApplyBundle(ctx context.Context, b *Bundle) []error
 }
 
 // ConfigPollStatus is the wire shape returned to the frontend via the
@@ -93,10 +99,20 @@ func (b *configBackoffState) next() time.Duration {
 	if b.step < len(configBackoffSteps)-1 {
 		b.step++
 	}
-	return d
+	// Add ±10% jitter so multiple instances don't thunderherd after an outage.
+	return addJitter(d, 0.10)
 }
 
 func (b *configBackoffState) reset() { b.step = 0 }
+
+// addJitter returns d ± (jitterFrac * d) where the offset is uniformly random.
+// jitterFrac should be in [0, 1). This is a package-level helper shared by
+// all fleet pollers.
+func addJitter(d time.Duration, jitterFrac float64) time.Duration {
+	// rand.Float64 returns [0.0, 1.0) — shift to [-0.5, 0.5) then scale.
+	offset := time.Duration(float64(d) * jitterFrac * (rand.Float64()*2 - 1)) //nolint:gosec
+	return d + offset
+}
 
 // NewConfigPoller constructs a ConfigPoller. Call Start(ctx) to launch the
 // background goroutine.
@@ -135,6 +151,17 @@ func (p *ConfigPoller) Start(ctx context.Context) {
 	go func() {
 		defer close(p.done)
 		defer cancel()
+		// Recover panics from the polling loop (FR-003). The goroutine logs
+		// the panic and exits cleanly rather than crashing the process.
+		defer func() {
+			if r := recover(); r != nil {
+				stack := debug.Stack()
+				logging.L().Error("fleet.config_poller.panic",
+					"panic", fmt.Sprintf("%v", r),
+					"stack", string(stack),
+				)
+			}
+		}()
 
 		// Immediate first poll.
 		if err := p.poll(innerCtx); err != nil {
@@ -257,40 +284,53 @@ func (p *ConfigPoller) poll(ctx context.Context) error {
 		return e
 	}
 
-	// Signature verification.
-	key := FleetSigningKey()
+	// Signature verification using the accept-set (supports key rotation).
+	keys := FleetSigningKeys()
 	p.mu.RLock()
 	lastID := p.lastAppliedID
 	p.mu.RUnlock()
 
-	if err := Verify(&b, key, lastID); err != nil {
+	if err := VerifyWithKeySet(&b, keys, lastID); err != nil {
 		// Hard-reject: do NOT apply; do NOT advance bundle_id; DO set error.
 		p.setError(fmt.Sprintf("bundle verification failed (hard-reject): %v", err))
 		return err // also triggers backoff
 	}
 
 	// Apply the bundle through the registered applier.
-	applyErr := p.applier.ApplyBundle(ctx, &b)
+	// FR-012: applier returns ALL per-section errors so the ACK can carry them.
+	applyErrs := p.applier.ApplyBundle(ctx, &b)
 
 	// Compute new checksum of the raw body (for 304 on next poll).
 	newChecksum := hexChecksumOf(body)
 
-	// Update state regardless of partial apply errors.
+	// FR-012: only advance lastAppliedID when the apply is fully clean.
+	// On partial failure the ID stays at the previous value so the bundle is
+	// re-attempted on the next poll. The checksum is also NOT advanced so
+	// the next GET returns the same bundle (no 304 short-circuit).
 	p.mu.Lock()
-	p.lastAppliedID = b.BundleID
-	p.lastAppliedAt = time.Now()
-	p.checksum = newChecksum
-	p.source = "fleet"
-	if applyErr != nil {
-		p.lastError = fmt.Sprintf("partial apply failure: %v", applyErr)
-	} else {
+	if len(applyErrs) == 0 {
+		p.lastAppliedID = b.BundleID
+		p.lastAppliedAt = time.Now()
+		p.checksum = newChecksum
 		p.lastError = ""
+	} else {
+		// Surface the error set but leave ID + checksum untouched.
+		msgs := make([]string, 0, len(applyErrs))
+		for _, e := range applyErrs {
+			if e != nil {
+				msgs = append(msgs, e.Error())
+			}
+		}
+		p.lastError = fmt.Sprintf("partial apply failure: %d error(s): %v", len(msgs), msgs)
 	}
+	p.source = "fleet"
 	p.mu.Unlock()
 
-	// Persist state to disk.
-	if saveErr := saveBundleState(p.dataDir, b.BundleID, newChecksum); saveErr != nil {
-		log.Printf("fleet: save bundle state: %v", saveErr)
+	// Persist state to disk only on full success.
+	if len(applyErrs) == 0 {
+		if saveErr := saveBundleState(p.dataDir, b.BundleID, newChecksum); saveErr != nil {
+			log.Printf("fleet: save bundle state: %v", saveErr)
+		}
 	}
 
 	// ACK back to fleet (best-effort; errors are logged, not propagated).
@@ -298,12 +338,12 @@ func (p *ConfigPoller) poll(ctx context.Context) error {
 	// the caller's context is cancelled around the same time (e.g. Stop()).
 	ackCtx, ackCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer ackCancel()
-	if ackErr := PostConfigACK(ackCtx, p.client, b.BundleID, applyErr); ackErr != nil {
+	if ackErr := PostConfigACK(ackCtx, p.client, b.BundleID, applyErrs); ackErr != nil {
 		log.Printf("fleet: config ack: %v", ackErr)
 	}
 
-	if applyErr != nil {
-		return applyErr
+	if len(applyErrs) > 0 {
+		return applyErrs[0] // triggers backoff; all errors already in lastError
 	}
 	return nil
 }

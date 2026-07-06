@@ -12,6 +12,8 @@
  */
 import { computed, onMounted, ref } from 'vue';
 import { useRoute } from 'vue-router';
+import { useServedMode } from '@/lib/useServedMode';
+import NotAvailableInServedMode from '@/components/ui/NotAvailableInServedMode.vue';
 import SettingsShell from '@/views/settings/SettingsShell.vue';
 import KeyboardShortcuts from '@/components/settings/KeyboardShortcuts.vue';
 import AutonomyPanel from '@/views/settings/AutonomyPanel.vue';
@@ -28,9 +30,12 @@ import TasksPanel from '@/views/settings/TasksPanel.vue';
 import LLMRoutingPanel from '@/views/settings/LLMRoutingPanel.vue';
 import AuditSettingsPanel from '@/views/settings/AuditSettingsPanel.vue';
 import AccountPanel from '@/views/settings/AccountPanel.vue';
+import UnitConflictsPanel from '@/views/settings/UnitConflictsPanel.vue';
+import FleetTelemetryPanel from '@/views/settings/FleetTelemetryPanel.vue';
 import LongSessionNudgeSettings from '@/components/settings/LongSessionNudgeSettings.vue';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
 import { debouncedSave } from '@/lib/settings';
+import { runAsyncAction } from '@/composables/useAsyncAction';
 import { markdownExtensionsRef } from '@/lib/markdown/injectionKeys';
 import { Plus } from '@/shell/icons';
 import AttachmentRow from '@/components/contexts/AttachmentRow.vue';
@@ -47,6 +52,7 @@ import type {
   Theme,
 } from '@/lib/types';
 
+const servedMode = useServedMode();
 const client = useHarnessClient();
 
 // auto-update-v0.4.0 WP05 — Updates is a sub-tab on the same /settings
@@ -179,11 +185,9 @@ const settings = ref<Settings>({
   accent: 'default',
   windowSize: { width: 1280, height: 800 },
   memoryEnabled: false,
-  confirmEachDisabled: false,
 });
 const appInfo = ref<AppInfo | null>(null);
 const restoreOnLaunch = ref(true);
-const confirmEachEnabled = ref(true);
 // multimodal-io-01KQ8TDF WP08 / FR-023
 const multimodalInputEnabled = ref(true);
 // multimodal-io-extended-01KQ8TD2 WP08 — env flag gate (HARNESS_MULTIMODAL_OUT).
@@ -348,12 +352,12 @@ async function loadAutoTitleEnabled() {
 
 async function toggleAutoTitleEnabled() {
   const next = !autoTitleEnabled.value;
-  autoTitleEnabled.value = next;
-  try {
-    await client.settings.setAutoTitleEnabled(next);
-  } catch {
-    autoTitleEnabled.value = !next;
-  }
+  await runAsyncAction({
+    optimistic: () => { autoTitleEnabled.value = next; },
+    revert:     () => { autoTitleEnabled.value = !next; },
+    action:     () => client.settings.setAutoTitleEnabled(next),
+    errorLabel: 'Toggle auto-title',
+  });
 }
 
 // v0.5.2: embedder provider config (Bug #2 universal-embedder fix)
@@ -516,12 +520,12 @@ async function loadShowPerMessageTokenMeter() {
 
 async function toggleShowPerMessageTokenMeter() {
   const next = !showPerMessageTokenMeter.value;
-  showPerMessageTokenMeter.value = next;
-  try {
-    await client.settings.setShowPerMessageTokenMeter(next);
-  } catch {
-    showPerMessageTokenMeter.value = !next;
-  }
+  await runAsyncAction({
+    optimistic: () => { showPerMessageTokenMeter.value = next; },
+    revert:     () => { showPerMessageTokenMeter.value = !next; },
+    action:     () => client.settings.setShowPerMessageTokenMeter(next),
+    errorLabel: 'Toggle token meter',
+  });
 }
 
 async function refresh() {
@@ -529,11 +533,6 @@ async function refresh() {
     settings.value = await client.settings.get();
   } catch {
     // Keep defaults on error.
-  }
-  try {
-    confirmEachEnabled.value = await client.settings.getConfirmEach();
-  } catch {
-    confirmEachEnabled.value = true;
   }
   try {
     multimodalInputEnabled.value = await client.settings.getMultimodalInput();
@@ -778,38 +777,26 @@ function onDragEnd() {
   draggedId.value = null;
 }
 
-async function toggleConfirmEach() {
-  confirmEachEnabled.value = !confirmEachEnabled.value;
-  try {
-    await client.settings.setConfirmEach(confirmEachEnabled.value);
-  } catch {
-    // Revert visually if the write failed.
-    confirmEachEnabled.value = !confirmEachEnabled.value;
-  }
-}
-
 // multimodal-io-01KQ8TDF WP08 / FR-023 — user-side multimodal toggle.
 async function toggleMultimodalInput() {
-  multimodalInputEnabled.value = !multimodalInputEnabled.value;
-  try {
-    await client.settings.setMultimodalInput(multimodalInputEnabled.value);
-  } catch {
-    // Revert visually if the write failed.
-    multimodalInputEnabled.value = !multimodalInputEnabled.value;
-  }
+  const next = !multimodalInputEnabled.value;
+  await runAsyncAction({
+    optimistic: () => { multimodalInputEnabled.value = next; },
+    revert:     () => { multimodalInputEnabled.value = !next; },
+    action:     () => client.settings.setMultimodalInput(next),
+    errorLabel: 'Toggle multimodal input',
+  });
 }
 
 // multimodal-io-extended-01KQ8TD2 WP06 — generated image capture dials.
 async function toggleAutoCaptureGeneratedImages() {
-  autoCaptureGeneratedImages.value = !autoCaptureGeneratedImages.value;
-  try {
-    await client.settings.setAutoCaptureGeneratedImages(
-      autoCaptureGeneratedImages.value,
-    );
-  } catch {
-    // Revert visually if the write failed.
-    autoCaptureGeneratedImages.value = !autoCaptureGeneratedImages.value;
-  }
+  const next = !autoCaptureGeneratedImages.value;
+  await runAsyncAction({
+    optimistic: () => { autoCaptureGeneratedImages.value = next; },
+    revert:     () => { autoCaptureGeneratedImages.value = !next; },
+    action:     () => client.settings.setAutoCaptureGeneratedImages(next),
+    errorLabel: 'Toggle auto-capture generated images',
+  });
 }
 
 async function onMaxGeneratedImageMiBInput(evt: Event) {
@@ -835,13 +822,13 @@ async function onMaxGeneratedImageMiBInput(evt: Event) {
 
 // provider-keychain-rotation-01KQ8TD9 WP07 — auto-resume on key rotation.
 async function toggleAutoResumeOnKeyRotation() {
-  autoResumeOnKeyRotation.value = !autoResumeOnKeyRotation.value;
-  try {
-    await client.settings.setAutoResumeOnKeyRotation(autoResumeOnKeyRotation.value);
-  } catch {
-    // Revert visually if the write failed.
-    autoResumeOnKeyRotation.value = !autoResumeOnKeyRotation.value;
-  }
+  const next = !autoResumeOnKeyRotation.value;
+  await runAsyncAction({
+    optimistic: () => { autoResumeOnKeyRotation.value = next; },
+    revert:     () => { autoResumeOnKeyRotation.value = !next; },
+    action:     () => client.settings.setAutoResumeOnKeyRotation(next),
+    errorLabel: 'Toggle auto-resume on key rotation',
+  });
 }
 
 // cross-session-search WP07 — searchEnabled toggle. Inverts the
@@ -856,18 +843,24 @@ const searchEnabled = computed({
 
 async function toggleSearchEnabled() {
   const next = !searchEnabled.value;
-  searchEnabled.value = next;
-  try {
-    await client.settings.set({ ...settings.value, searchDisabled: !next });
-  } catch {
-    // Revert visually if the write failed.
-    searchEnabled.value = !next;
-  }
+  await runAsyncAction({
+    optimistic: () => { searchEnabled.value = next; },
+    revert:     () => { searchEnabled.value = !next; },
+    action:     () => client.settings.set({ ...settings.value, searchDisabled: !next }),
+    errorLabel: 'Toggle search',
+  });
 }
 
 function setTheme(t: Theme) {
+  const previous = settings.value.theme;
   settings.value = { ...settings.value, theme: t };
-  void client.settings.saveTheme(t).catch(() => {});
+  // (FR-002) Route through the failure pathway — a failed theme save now
+  // reverts the local state and surfaces a toast.
+  void runAsyncAction({
+    revert: () => { settings.value = { ...settings.value, theme: previous }; },
+    action: () => client.settings.saveTheme(t),
+    errorLabel: 'Save theme',
+  });
 }
 
 /* ── Markdown rendering extensions (markdown-rendering-polish-01KQ8TDT) ── */
@@ -912,12 +905,12 @@ const autoCollapseBranches = computed({
 
 async function toggleAutoCollapseBranches() {
   const next = !autoCollapseBranches.value;
-  autoCollapseBranches.value = next;
-  try {
-    await client.settings.set({ ...settings.value, autoCollapseBranchesInSidebar: next });
-  } catch {
-    autoCollapseBranches.value = !next;
-  }
+  await runAsyncAction({
+    optimistic: () => { autoCollapseBranches.value = next; },
+    revert:     () => { autoCollapseBranches.value = !next; },
+    action:     () => client.settings.set({ ...settings.value, autoCollapseBranchesInSidebar: next }),
+    errorLabel: 'Toggle auto-collapse branches',
+  });
 }
 
 /** deleteBranchesWithParent — default false (safe orphan behaviour). */
@@ -930,12 +923,12 @@ const deleteBranchesWithParent = computed({
 
 async function toggleDeleteBranchesWithParent() {
   const next = !deleteBranchesWithParent.value;
-  deleteBranchesWithParent.value = next;
-  try {
-    await client.settings.set({ ...settings.value, deleteBranchesWithParent: next });
-  } catch {
-    deleteBranchesWithParent.value = !next;
-  }
+  await runAsyncAction({
+    optimistic: () => { deleteBranchesWithParent.value = next; },
+    revert:     () => { deleteBranchesWithParent.value = !next; },
+    action:     () => client.settings.set({ ...settings.value, deleteBranchesWithParent: next }),
+    errorLabel: 'Toggle delete branches with parent',
+  });
 }
 
 /** maxVisibleBranchDepth — default 5 per spec. */
@@ -959,7 +952,12 @@ onMounted(() => {
 </script>
 
 <template>
+  <NotAvailableInServedMode
+    v-if="servedMode"
+    feature="Settings"
+  />
   <SettingsShell
+    v-else
     number="06"
     section="SETTINGS"
     :title="currentHead.title"
@@ -1072,10 +1070,24 @@ onMounted(() => {
     <!-- fleet-auth-foundation-01NDFSEX08 WP06 — Account (fleet identity) sub-tab. -->
     <div
       v-else-if="showAccountTab"
-      class="px-6 py-4 max-w-3xl"
+      class="px-6 py-4 max-w-3xl space-y-6"
       data-testid="settings-account-pane"
     >
       <AccountPanel />
+      <!-- fleet-integrity-observability WP09: telemetry consent control. -->
+      <section>
+        <h2 class="font-ui text-[11px] uppercase tracking-[0.18em] text-ink-subtle mb-3">
+          Fleet Telemetry
+        </h2>
+        <FleetTelemetryPanel />
+      </section>
+      <!-- fleet-integrity-observability WP08: unit-sync conflict + error surface. -->
+      <section>
+        <h2 class="font-ui text-[11px] uppercase tracking-[0.18em] text-ink-subtle mb-3">
+          Unit Sync
+        </h2>
+        <UnitConflictsPanel />
+      </section>
     </div>
 
     <div
@@ -1379,27 +1391,6 @@ onMounted(() => {
           on resumes search immediately. Search activity is logged with a
           truncated <span class="font-mono">query_hash</span>; the raw query
           is never recorded.
-        </p>
-      </section>
-
-      <section>
-        <h2 class="font-ui text-[11px] uppercase tracking-[0.18em] text-ink-subtle">
-          Tool execution
-        </h2>
-        <label class="mt-2 flex items-center gap-3 font-ui text-[12px] text-ink">
-          <input
-            type="checkbox"
-            class="accent-accent"
-            :checked="confirmEachEnabled"
-            data-testid="confirm-each-toggle"
-            @change="toggleConfirmEach"
-          />
-          Show confirmation modal for tools marked <span class="font-mono">confirm_each</span>
-        </label>
-        <p class="mt-1 text-[11px] text-ink-muted">
-          When off, tools whose policy resolves to <span class="font-mono">confirm_each</span>
-          dispatch automatically (equivalent to <span class="font-mono">auto_allow</span>).
-          Default: ON.
         </p>
       </section>
 

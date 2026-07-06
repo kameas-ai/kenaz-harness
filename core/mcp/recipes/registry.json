@@ -4,39 +4,44 @@
     {
       "id": "github",
       "display_name": "GitHub",
-      "description": "Search repositories, read files, list issues + pull requests, and fetch repository metadata. Requires a GitHub personal access token.",
+      "description": "Search repositories, read files, manage issues + pull requests, and fetch repository metadata via GitHub's official remote MCP server. Sign in with GitHub (OAuth) — no token to paste — or supply a personal access token as a fallback.",
       "category": "search",
-      "command": ["npx", "-y", "@modelcontextprotocol/server-github"],
+      "transport": "http",
+      "url": "https://api.githubcopilot.com/mcp/",
+      "auth": {
+        "kind": "mcp_oauth",
+        "client_id": "",
+        "scopes": ["repo", "read:org", "read:user"]
+      },
       "env_keys": [
         {
-          "name": "GITHUB_TOKEN",
-          "display": "GitHub personal access token",
+          "name": "GITHUB_PERSONAL_ACCESS_TOKEN",
+          "display": "GitHub personal access token (optional — fallback if you don't sign in)",
           "docs_url": "https://github.com/settings/tokens",
-          "required": true
+          "required": false
         }
       ],
       "config_options": [],
       "capabilities": { "tools": true, "resources": false, "prompts": false, "sampling": false },
-      "docs_url": "https://github.com/modelcontextprotocol/servers-archived/tree/main/src/github",
-      "init_timeout_ms": 10000,
+      "docs_url": "https://github.com/github/github-mcp-server",
+      "init_timeout_ms": 15000,
       "ping_period_ms": 30000,
-      "sampling_policy": { "allowed": false, "default": false },
-      "warning": "npm fetch on first run can take 5–15 s."
+      "sampling_policy": { "allowed": false, "default": false }
     },
     {
       "id": "fetch",
       "display_name": "Fetch (HTTP)",
       "description": "Generic HTTP fetch tool: the model can request a URL and read the response. No credentials required; the recipe imposes no allow-list — limit access via Cedar policy if you need a domain whitelist.",
       "category": "fetch",
-      "command": ["npx", "-y", "@modelcontextprotocol/server-fetch"],
+      "command": ["uvx", "mcp-server-fetch"],
       "env_keys": [],
       "config_options": [],
       "capabilities": { "tools": true, "resources": false, "prompts": false, "sampling": false },
       "docs_url": "https://github.com/modelcontextprotocol/servers-archived/tree/main/src/fetch",
-      "init_timeout_ms": 10000,
+      "init_timeout_ms": 15000,
       "ping_period_ms": 30000,
       "sampling_policy": { "allowed": false, "default": false },
-      "warning": "npm fetch on first run can take 5–15 s."
+      "warning": "Python server (PyPI mcp-server-fetch) launched via uvx; requires uv installed. First run downloads the package (5–15 s)."
     },
     {
       "id": "brave-search",
@@ -65,7 +70,7 @@
       "display_name": "SQLite",
       "description": "Read and write a local SQLite database. The model gets read_query, write_query, create_table, list_tables, and describe_table tools scoped to the database file you point it at.",
       "category": "filesystem",
-      "command": ["npx", "-y", "@modelcontextprotocol/server-sqlite", "${DB_PATH}"],
+      "command": ["uvx", "mcp-server-sqlite", "--db-path", "${DB_PATH}"],
       "env_keys": [],
       "config_options": [
         {
@@ -79,10 +84,10 @@
       ],
       "capabilities": { "tools": true, "resources": false, "prompts": false, "sampling": false },
       "docs_url": "https://github.com/modelcontextprotocol/servers-archived/tree/main/src/sqlite",
-      "init_timeout_ms": 10000,
+      "init_timeout_ms": 15000,
       "ping_period_ms": 30000,
       "sampling_policy": { "allowed": false, "default": false },
-      "warning": "npm fetch on first run can take 5–15 s."
+      "warning": "Python server (PyPI mcp-server-sqlite) launched via uvx; requires uv installed. First run downloads the package (5–15 s)."
     },
     {
       "id": "postgres",
@@ -135,26 +140,69 @@
       "warning": "npm fetch on first run can take 5–15 s."
     },
     {
+      "id": "gmail",
+      "display_name": "Gmail",
+      "description": "Read, search, send, draft, and label Gmail messages through the Gmail API. Requires a Google Cloud OAuth client and a one-time browser sign-in (see setup notes).",
+      "category": "communication",
+      "command": ["npx", "-y", "@gongrzhe/server-gmail-autoauth-mcp"],
+      "env_keys": [],
+      "config_options": [],
+      "capabilities": { "tools": true, "resources": false, "prompts": false, "sampling": false },
+      "docs_url": "https://github.com/GongRzhe/Gmail-MCP-Server",
+      "init_timeout_ms": 30000,
+      "ping_period_ms": 30000,
+      "sampling_policy": { "allowed": false, "default": false },
+      "warning": "One-time setup required before install works: create a Google Cloud OAuth client (Desktop or Web), save gcp-oauth.keys.json to ~/.gmail-mcp/, then run `npx @gongrzhe/server-gmail-autoauth-mcp auth` once to authorize in your browser (creds cached at ~/.gmail-mcp/credentials.json). First npm fetch can take 10–20 s."
+    },
+    {
+      "id": "outlook",
+      "display_name": "Outlook (Microsoft 365)",
+      "description": "Read, search, send, and organize Outlook mail — plus calendar and contacts — via the Microsoft Graph API. Signs in with a device code in your browser on first use; personal accounts need no credentials.",
+      "category": "communication",
+      "command": ["npx", "-y", "@softeria/ms-365-mcp-server", "--preset", "outlook"],
+      "env_keys": [
+        {
+          "name": "MS365_MCP_CLIENT_ID",
+          "display": "Azure app client ID (optional — for work/school accounts)",
+          "docs_url": "https://github.com/softeria/ms-365-mcp-server#authentication",
+          "required": false
+        },
+        {
+          "name": "MS365_MCP_TENANT_ID",
+          "display": "Azure tenant ID (optional — defaults to 'common'; 'consumers' for personal)",
+          "docs_url": "https://github.com/softeria/ms-365-mcp-server#authentication",
+          "required": false
+        }
+      ],
+      "config_options": [],
+      "capabilities": { "tools": true, "resources": false, "prompts": false, "sampling": false },
+      "docs_url": "https://github.com/softeria/ms-365-mcp-server",
+      "init_timeout_ms": 30000,
+      "ping_period_ms": 30000,
+      "sampling_policy": { "allowed": false, "default": false },
+      "warning": "First use triggers a device-code sign-in: the server prints a URL + code for you to authorize in your browser. Personal accounts work out of the box; work/school accounts may require a custom Azure app (set the optional client/tenant IDs above). First npm fetch can take 10–20 s."
+    },
+    {
       "id": "time",
       "display_name": "Time",
       "description": "Time-zone aware utilities: get the current time in a given IANA timezone, convert times between zones. No credentials required.",
       "category": "fetch",
-      "command": ["npx", "-y", "@modelcontextprotocol/server-time"],
+      "command": ["uvx", "mcp-server-time"],
       "env_keys": [],
       "config_options": [],
       "capabilities": { "tools": true, "resources": false, "prompts": false, "sampling": false },
       "docs_url": "https://github.com/modelcontextprotocol/servers-archived/tree/main/src/time",
-      "init_timeout_ms": 10000,
+      "init_timeout_ms": 15000,
       "ping_period_ms": 30000,
       "sampling_policy": { "allowed": false, "default": false },
-      "warning": "npm fetch on first run can take 5–15 s."
+      "warning": "Python server (PyPI mcp-server-time) launched via uvx; requires uv installed. First run downloads the package (5–15 s)."
     },
     {
       "id": "git",
       "display_name": "Git",
       "description": "Read git history, diff, blame, and branch metadata for a single repository checkout. The recipe is read-only by default and is scoped to the repo path you select.",
       "category": "filesystem",
-      "command": ["npx", "-y", "@modelcontextprotocol/server-git", "--repository", "${REPO_PATH}"],
+      "command": ["uvx", "mcp-server-git", "--repository", "${REPO_PATH}"],
       "env_keys": [],
       "config_options": [
         {
@@ -168,10 +216,10 @@
       ],
       "capabilities": { "tools": true, "resources": false, "prompts": false, "sampling": false },
       "docs_url": "https://github.com/modelcontextprotocol/servers-archived/tree/main/src/git",
-      "init_timeout_ms": 10000,
+      "init_timeout_ms": 15000,
       "ping_period_ms": 30000,
       "sampling_policy": { "allowed": false, "default": false },
-      "warning": "npm fetch on first run can take 5–15 s."
+      "warning": "Python server (PyPI mcp-server-git) launched via uvx; requires uv installed. First run downloads the package (5–15 s)."
     },
     {
       "id": "puppeteer",

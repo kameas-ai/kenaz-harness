@@ -1,7 +1,7 @@
-// Package sleep implements the kaneaz__sleep builtin tool
+// Package sleep implements the kenaz__sleep builtin tool
 // (builtin-tools-search-and-elicitation-01KZNP3D, WP04).
 //
-// kaneaz__sleep lets the model intentionally yield a turn without burning
+// kenaz__sleep lets the model intentionally yield a turn without burning
 // token budget or consuming a KnobMaxIterations slot. The canonical use
 // case is "I need to wait N seconds before polling the next result" in
 // __monitor watch patterns.
@@ -11,7 +11,7 @@
 //   - Input:  { "seconds": int }  — clamped to [1, 600].
 //   - Output: { "slept_s": int }
 //   - Does NOT count against KnobMaxIterations. The toolloop's IterGate
-//     recognises kaneaz__sleep by its constant tool name and skips the
+//     recognises kenaz__sleep by its constant tool name and skips the
 //     iteration increment (see core/toolloop/loop.go).
 //   - Cedar action: tool.passive. Default-allow; never gated by a Settings
 //     toggle because this is a passive no-side-effect primitive.
@@ -33,8 +33,8 @@ import (
 
 const (
 	// ToolName is the namespaced identifier surfaced to the model.
-	// The "kaneaz__" prefix is reserved for builtins.
-	ToolName = "kaneaz__sleep"
+	// The "kenaz__" prefix is reserved for builtins.
+	ToolName = "kenaz__sleep"
 
 	// ToolDescription is the user-facing description sent to the model.
 	ToolDescription = "Yield for the specified number of seconds without consuming an iteration slot. " +
@@ -48,7 +48,7 @@ const (
 	MaxSeconds = 600
 )
 
-// inputSchema is the JSON Schema for kaneaz__sleep's argument shape.
+// inputSchema is the JSON Schema for kenaz__sleep's argument shape.
 const inputSchema = `{
   "type": "object",
   "properties": {
@@ -78,7 +78,7 @@ type errorResult struct {
 	Message string `json:"message"`
 }
 
-// Tool implements the kaneaz__sleep builtin. Safe for concurrent use;
+// Tool implements the kenaz__sleep builtin. Safe for concurrent use;
 // zero-value is valid after construction via New.
 type Tool struct{}
 

@@ -18,6 +18,8 @@ var expectedRegistryIDs = []string{
 	"sqlite",
 	"postgres",
 	"slack",
+	"gmail",
+	"outlook",
 	"time",
 	"git",
 	"puppeteer",
@@ -144,14 +146,25 @@ func TestRegistryGitHubRecipe(t *testing.T) {
 	if r.Category != "search" {
 		t.Errorf("Category = %q, want search", r.Category)
 	}
-	if len(r.EnvKeys) != 1 {
-		t.Fatalf("EnvKeys len = %d, want 1", len(r.EnvKeys))
+	// GitHub now points at the official remote MCP server over HTTP and signs
+	// in via OAuth (no token to paste); the PAT env key is an optional fallback.
+	if r.Transport != recipes.TransportHTTP {
+		t.Errorf("Transport = %q, want http", r.Transport)
 	}
-	if r.EnvKeys[0].Name != "GITHUB_TOKEN" {
-		t.Errorf("EnvKeys[0].Name = %q, want GITHUB_TOKEN", r.EnvKeys[0].Name)
+	if r.URL != "https://api.githubcopilot.com/mcp/" {
+		t.Errorf("URL = %q", r.URL)
 	}
-	if !r.EnvKeys[0].Required {
-		t.Error("GITHUB_TOKEN should be required")
+	if r.Auth == nil || r.Auth.Kind != recipes.AuthKindMCPOAuth {
+		t.Fatalf("Auth = %+v, want mcp_oauth", r.Auth)
+	}
+	if len(r.Auth.Scopes) == 0 {
+		t.Error("Auth.Scopes should list the requested OAuth scopes")
+	}
+	if len(r.EnvKeys) != 1 || r.EnvKeys[0].Name != "GITHUB_PERSONAL_ACCESS_TOKEN" {
+		t.Fatalf("EnvKeys = %+v, want one optional GITHUB_PERSONAL_ACCESS_TOKEN", r.EnvKeys)
+	}
+	if r.EnvKeys[0].Required {
+		t.Error("PAT should be optional (OAuth is the primary path)")
 	}
 }
 
@@ -282,8 +295,15 @@ func TestRegistryPlaywrightRecipe(t *testing.T) {
 func TestRegistryEveryRecipeHasCommand(t *testing.T) {
 	cat := recipes.Registry()
 	for _, r := range cat.List() {
+		// Remote recipes (http/sse) carry a URL instead of a stdio command.
+		if r.Transport == recipes.TransportHTTP || r.Transport == recipes.TransportSSE {
+			if r.URL == "" {
+				t.Errorf("remote recipe %q has empty URL", r.ID)
+			}
+			continue
+		}
 		if len(r.Command) == 0 || r.Command[0] == "" {
-			t.Errorf("recipe %q has empty Command", r.ID)
+			t.Errorf("stdio recipe %q has empty Command", r.ID)
 		}
 	}
 }

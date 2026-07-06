@@ -47,7 +47,7 @@ const (
 	defaultEndpoint    = "https://openrouter.ai/api/v1/chat/completions"
 	defaultModelsURL   = "https://openrouter.ai/api/v1/models"
 	defaultReferer     = "https://github.com/kameas-ai/kenaz-harness"
-	defaultAppTitle    = "kaneaz-harness"
+	defaultAppTitle    = "kenaz-harness"
 	errorBodyByteLimit = 4096
 )
 
@@ -77,7 +77,7 @@ func WithEndpoint(u string) Option {
 }
 
 // WithReferer overrides the HTTP-Referer ranking header value. By
-// default the adapter advertises the kaneaz-harness GitHub URL.
+// default the adapter advertises the kenaz-harness GitHub URL.
 func WithReferer(s string) Option {
 	return func(a *Adapter) {
 		if s != "" {
@@ -87,7 +87,7 @@ func WithReferer(s string) Option {
 }
 
 // WithAppTitle overrides the X-Title ranking header value. By default
-// the adapter advertises "kaneaz-harness".
+// the adapter advertises "kenaz-harness".
 func WithAppTitle(s string) Option {
 	return func(a *Adapter) {
 		if s != "" {
@@ -262,6 +262,14 @@ func (a *Adapter) Stream(ctx context.Context, req llm.GenerationRequest, prof ll
 	resp, err := a.httpc.Do(httpReq)
 	if err != nil {
 		cancel()
+		// Log the transport failure: this is the silent path that the
+		// retry middleware previously surfaced only as "retry budget
+		// exhausted". ctx_err disambiguates an upstream cancellation
+		// (e.g. frontend disconnect on desktop focus loss) from a real
+		// network fault.
+		logging.L().Warn("openrouter.http.error",
+			"model", prof.Model, "endpoint", endpoint,
+			"err", err.Error(), "ctx_err", ctx.Err())
 		return nil, &llm.ErrTransient{Status: 0, Message: err.Error(), Cause: err}
 	}
 
@@ -269,7 +277,16 @@ func (a *Adapter) Stream(ctx context.Context, req llm.GenerationRequest, prof ll
 		bodySnippet, _ := io.ReadAll(io.LimitReader(resp.Body, errorBodyByteLimit))
 		_ = resp.Body.Close()
 		cancel()
-		return nil, classifyStatus(resp.StatusCode, bodySnippet)
+		// Log the non-2xx status + body snippet. Without this the actual
+		// provider rejection (429 rate limit, 5xx, 400 invalid request)
+		// was invisible — only the post-retry generic error reached the
+		// log. classifyStatus decides retryability; we log it either way.
+		classified := classifyStatus(resp.StatusCode, bodySnippet)
+		logging.L().Warn("openrouter.http.error",
+			"model", prof.Model, "status", resp.StatusCode,
+			"body", string(bodySnippet),
+			"retryable", llm.IsTransient(classified))
+		return nil, classified
 	}
 
 	s := &chatStream{

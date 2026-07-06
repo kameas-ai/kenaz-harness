@@ -236,6 +236,21 @@ func (r *Registry) LoadProfiles(profs []llm.ProviderProfile) error {
 	return nil
 }
 
+// Evict removes the profile identified by id from the in-memory registry
+// so that a subsequent LoadProfiles call can reload it with updated credentials
+// or model settings. Idempotent: evicting an id that was never loaded (or was
+// already evicted) is a no-op and returns nil.
+//
+// Evict is the seam that UpdateProvider and RemoveProvider use to replace a
+// live profile without hitting the "profile id already loaded" collision error
+// that LoadProfiles returns on duplicate ids.
+func (r *Registry) Evict(id string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	delete(r.profiles, id)
+	return nil
+}
+
 // Profile returns the loaded profile by id.
 func (r *Registry) Profile(id string) (llm.ProviderProfile, error) {
 	r.mu.RLock()

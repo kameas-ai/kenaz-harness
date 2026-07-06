@@ -72,7 +72,7 @@ func TestImpl_AddProvider_StoresKeychainAndProfile(t *testing.T) {
 		Model: "claude-sonnet",
 		Cred: CredentialReference{
 			Kind:    "keychain",
-			Locator: "kaneaz-harness/personal-anth",
+			Locator: "kenaz-harness/personal-anth",
 		},
 		PlaintextAPIKey: "sk-secret",
 	}
@@ -83,10 +83,10 @@ func TestImpl_AddProvider_StoresKeychainAndProfile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
-	if got.Cred.Kind != "keychain" || got.Cred.Locator != "kaneaz-harness/personal-anth" {
+	if got.Cred.Kind != "keychain" || got.Cred.Locator != "kenaz-harness/personal-anth" {
 		t.Fatalf("unexpected stored profile: %+v", got)
 	}
-	if string(keychain.stored["kaneaz-harness/personal-anth"]) != "sk-secret" {
+	if string(keychain.stored["kenaz-harness/personal-anth"]) != "sk-secret" {
 		t.Fatalf("keychain did not receive plaintext: %v", keychain.stored)
 	}
 }
@@ -138,7 +138,7 @@ func TestImpl_RemoveProvider_PersonalRoundTrip(t *testing.T) {
 	api, _, _, _, store := newProvidersAPI(t)
 	in := AddProviderInput{
 		ID: "p", Kind: "anthropic", Model: "x",
-		Cred: CredentialReference{Kind: "keychain", Locator: "kaneaz-harness/p"},
+		Cred: CredentialReference{Kind: "keychain", Locator: "kenaz-harness/p"},
 	}
 	if err := api.AddProvider(context.Background(), in); err != nil {
 		t.Fatalf("AddProvider: %v", err)
@@ -167,7 +167,7 @@ func TestImpl_TestProvider_PopulatesValidated(t *testing.T) {
 	api, _, _, prober, _ := newProvidersAPI(t)
 	in := AddProviderInput{
 		ID: "p", Kind: "anthropic", Model: "x",
-		Cred: CredentialReference{Kind: "keychain", Locator: "kaneaz-harness/p"},
+		Cred: CredentialReference{Kind: "keychain", Locator: "kenaz-harness/p"},
 	}
 	if err := api.AddProvider(context.Background(), in); err != nil {
 		t.Fatalf("AddProvider: %v", err)
@@ -202,7 +202,7 @@ func TestImpl_TestProvider_FailureKeepsValidatedFalse(t *testing.T) {
 	api, _, _, prober, _ := newProvidersAPI(t)
 	in := AddProviderInput{
 		ID: "p", Kind: "anthropic", Model: "x",
-		Cred: CredentialReference{Kind: "keychain", Locator: "kaneaz-harness/p"},
+		Cred: CredentialReference{Kind: "keychain", Locator: "kenaz-harness/p"},
 	}
 	if err := api.AddProvider(context.Background(), in); err != nil {
 		t.Fatalf("AddProvider: %v", err)
@@ -228,7 +228,7 @@ func TestImpl_ListProviders_BundleWinsOverPersonalCollision(t *testing.T) {
 	}}
 	if err := api.AddProvider(context.Background(), AddProviderInput{
 		ID: "shared", Kind: "openai", Model: "gpt-4o-mini",
-		Cred: CredentialReference{Kind: "keychain", Locator: "kaneaz-harness/shared"},
+		Cred: CredentialReference{Kind: "keychain", Locator: "kenaz-harness/shared"},
 	}); err != nil {
 		t.Fatalf("AddProvider: %v", err)
 	}
@@ -261,7 +261,7 @@ func TestImpl_ListProviders_SortedDeterministically(t *testing.T) {
 	for _, id := range []string{"z2", "z1"} {
 		if err := api.AddProvider(context.Background(), AddProviderInput{
 			ID: id, Kind: "openai", Model: "x",
-			Cred: CredentialReference{Kind: "keychain", Locator: "kaneaz-harness/" + id},
+			Cred: CredentialReference{Kind: "keychain", Locator: "kenaz-harness/" + id},
 		}); err != nil {
 			t.Fatalf("AddProvider: %v", err)
 		}

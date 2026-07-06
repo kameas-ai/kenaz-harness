@@ -46,7 +46,7 @@ type Channel interface {
 }
 
 // ChannelSpec describes the operator's channel configuration. The same
-// shape that lives in kaneaz.yaml `dependencies[].source` and the lockfile
+// shape that lives in kenaz.yaml `dependencies[].source` and the lockfile
 // `[[bundle]].source`.
 type ChannelSpec struct {
 	Kind string // "git" | "oci" | "http_mirror" | "local_path"

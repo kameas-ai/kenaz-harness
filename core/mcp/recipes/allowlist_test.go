@@ -46,12 +46,24 @@ func TestAllowlistFilter_ClearAllowlist(t *testing.T) {
 	}
 }
 
-func TestAllowlistFilter_EmptySliceClearsAllowlist(t *testing.T) {
+// TestAllowlistFilter_EmptySliceBlocksAll verifies the cross-repo contract:
+// a non-nil empty slice means "block all" (distinct from nil = no restriction).
+// This mirrors the fleet-side behaviour where mcp_allowlist:[] in the bundle
+// JSON means the org admin has explicitly blocked all MCP recipes.
+func TestAllowlistFilter_EmptySliceBlocksAll(t *testing.T) {
 	var f AllowlistFilter
 	f.Set([]string{"github"})
-	f.Set([]string{}) // empty slice == clear
+	f.Set([]string{}) // non-nil empty slice → block-all, NOT clear
+	if f.IsAllowed("github") {
+		t.Error("github should be blocked after Set([]) — block-all mode active")
+	}
+	if f.IsAllowed("filesystem") {
+		t.Error("filesystem should be blocked after Set([]) — block-all mode active")
+	}
+	// nil clears the restriction.
+	f.Set(nil)
 	if !f.IsAllowed("filesystem") {
-		t.Error("filesystem should be allowed after Set([])")
+		t.Error("filesystem should be allowed after Set(nil)")
 	}
 }
 

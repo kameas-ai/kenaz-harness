@@ -20,6 +20,7 @@
 import { onMounted, ref, watch } from 'vue';
 import { useHarnessClient } from '@/lib/harnessClientContext';
 import type { OnboardingCard, StarterSummary } from '@/lib/harnessClient';
+import BaseDialog from '@/components/ui/BaseDialog.vue';
 
 const props = defineProps<{
   open: boolean;
@@ -47,7 +48,7 @@ async function refreshCard() {
   // overrides it with the real FSM card when it resolves.
   if (!card.value) {
     card.value = {
-      title: 'Welcome to Kaneaz',
+      title: 'Welcome to Kenaz',
       body: 'Let\'s get you set up.',
       actions: [
         { id: 'next', label: 'Get started', primary: true },
@@ -169,8 +170,8 @@ watch(
 </script>
 
 <template>
-  <div v-if="open" class="onboarding-overlay" role="dialog" aria-modal="true">
-    <div class="onboarding-dialog">
+  <BaseDialog :open="open" title="Welcome to Kenaz" panel-class="onboarding-dialog" @close="emit('close')">
+    <div>
       <header class="dialog-head">
         <h2 v-if="card">{{ card.title }}</h2>
         <h2 v-else>Welcome</h2>
@@ -216,19 +217,10 @@ watch(
         </template>
       </section>
     </div>
-  </div>
+  </BaseDialog>
 </template>
 
 <style scoped>
-.onboarding-overlay {
-  position: fixed;
-  inset: 0;
-  background: var(--modal-overlay);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 1000;
-}
 .onboarding-dialog {
   background: var(--surface-2);
   color: var(--ink);

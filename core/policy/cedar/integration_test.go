@@ -331,7 +331,7 @@ func TestIntegration_ToolGate_FirstCallPromptsSecondSilent(t *testing.T) {
 
 	toolFQN := "filesystem__read_file"
 
-	// First call: MCP tool → NotApplicable (not a kaneaz builtin).
+	// First call: MCP tool → NotApplicable (not a kenaz builtin).
 	d1 := e.Evaluate(context.Background(), cedar.UserUID(),
 		cedar.ActionUseTool, cedar.PermissionToolUID(toolFQN), nil)
 	if d1.Outcome != cedar.NotApplicable {
@@ -662,16 +662,16 @@ func TestIntegration_CredentialFamily_AllFourFamiliesEndToEnd(t *testing.T) {
 		{
 			name: "tool/builtin_bash",
 			firstEval: func() cedar.Decision {
-				// kaneaz builtins are pre-permitted.
+				// kenaz builtins are pre-permitted.
 				return e.Evaluate(context.Background(), cedar.UserUID(),
 					cedar.ActionUseTool,
-					cedar.PermissionToolUID("kaneaz__bash"), nil)
+					cedar.PermissionToolUID("kenaz__bash"), nil)
 			},
 			writeGrant: func() {}, // pre-permitted, no grant needed
 			secondEval: func() cedar.Decision {
 				return e.Evaluate(context.Background(), cedar.UserUID(),
 					cedar.ActionUseTool,
-					cedar.PermissionToolUID("kaneaz__bash"), nil)
+					cedar.PermissionToolUID("kenaz__bash"), nil)
 			},
 		},
 	}

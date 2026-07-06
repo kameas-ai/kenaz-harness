@@ -6,7 +6,7 @@
 //
 //   - OpenAskDialog(request ElicitRequest) ElicitResponse
 //     Opens the AskUserQuestion dialog and blocks until the user
-//     submits or cancels. Called indirectly by the kaneaz__ask_user_question
+//     submits or cancels. Called indirectly by the kenaz__ask_user_question
 //     tool's Delegate implementation.
 //
 //   - SubmitAskAnswer(requestID string, answer json.RawMessage, cancelled bool)
@@ -15,7 +15,7 @@
 //
 // Wire flow (synchronous single-question, WP04):
 //
-//  1. Model calls kaneaz__ask_user_question → tool.Call → Delegate.OpenDialog
+//  1. Model calls kenaz__ask_user_question → tool.Call → Delegate.OpenDialog
 //  2. Delegate enqueues ElicitRequest → emits event on TopicElicitPending
 //  3. Frontend receives event, renders AskUserQuestion dialog
 //  4. User answers → frontend calls Elicit_SubmitAnswer(requestID, answer, false)
@@ -181,7 +181,8 @@ type ElicitResponse struct {
 
 // pendingEntry is one in-flight elicitation awaiting user input.
 type pendingEntry struct {
-	ch chan ElicitResponse
+	ch  chan ElicitResponse
+	req ElicitRequest // stored so ListPending can return it on reconnect
 }
 
 // wizardEntry tracks state for a multi-question wizard in flight.
@@ -309,7 +310,7 @@ func (a *API) OpenDialog(ctx context.Context, args askuserquestion.AskArgs) (ask
 	}
 
 	a.mu.Lock()
-	a.pending[reqID] = pendingEntry{ch: ch}
+	a.pending[reqID] = pendingEntry{ch: ch, req: req}
 	wailsCtx := a.wailsCtx
 	a.mu.Unlock()
 
@@ -598,18 +599,25 @@ func (a *API) ListDeferred(_ context.Context, sessionID string) ([]asks.Deferred
 	return a.deferred.ListPending(sessionID), nil
 }
 
-// ListPending returns the current in-flight requests. The frontend uses
-// this on reconnect to re-render any dialog it missed.
+// ListPending returns the current in-flight blocking elicitation requests.
+// The frontend calls this on reconnect (FR-007) to re-render any dialog
+// that was open before the connection was lost.
+//
+// Returns a snapshot of all pending asks; callers receive enough information
+// to show "an input is being requested — reconnect to continue" even if the
+// full dialog cannot be reconstructed.
 func (a *API) ListPending(_ context.Context) ([]ElicitRequest, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
-	// We only store channels, not the original request. For WP04 we
-	// return empty — full request storage for reconnect is deferred to
-	// the async/multi-wizard WPs (WP05+). Until then the frontend re-emits
-	// on reconnect via the same TopicElicitPending topic.
-	_ = a.pending
-	return nil, nil
+	if len(a.pending) == 0 {
+		return nil, nil
+	}
+	out := make([]ElicitRequest, 0, len(a.pending))
+	for _, entry := range a.pending {
+		out = append(out, entry.req)
+	}
+	return out, nil
 }
 
 // newRequestID generates a time-based hex request ID. The ID is unique

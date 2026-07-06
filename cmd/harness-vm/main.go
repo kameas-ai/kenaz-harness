@@ -51,6 +51,8 @@ import (
 	"sync/atomic"
 	"syscall"
 	"time"
+
+	"github.com/kameas-ai/kenaz-harness/core/paths"
 )
 
 const defaultHarnessPort = "7881"
@@ -109,6 +111,25 @@ func main() {
 		log.Info("kenaz-harness-vm: audit emission disabled (KENAZ_HARNESS_EVENT_SOCK unset)")
 	}
 
+	// Read surface (Phase G): the sessions / tools / memory / workflows /
+	// providers queries the kenaz host renders in its IDE-merger views. Bootstrap
+	// is best-effort — a failure (e.g. a locked or absent data dir) leaves the
+	// task surface fully functional and read RPCs respond code:"unavailable".
+	// HARNESS_READ_DATADIR overrides the resolved data dir (tests / host dev).
+	readDataDir := os.Getenv("HARNESS_READ_DATADIR")
+	if readDataDir == "" {
+		if dd, derr := paths.DataDir(); derr == nil {
+			readDataDir = dd
+		}
+	}
+	reads, rerr := newReadService(context.Background(), readDataDir, log)
+	if rerr != nil {
+		log.Warn("kenaz-harness-vm: read surface disabled (bootstrap failed)", "err", rerr, "data_dir", readDataDir)
+		reads = &readService{log: log} // nil api → reads answer code:"unavailable"
+	} else {
+		log.Info("kenaz-harness-vm: read surface enabled", "data_dir", readDataDir)
+	}
+
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		log.Error("kenaz-harness-vm: listen failed", "addr", addr, "err", err)
@@ -130,7 +151,7 @@ func main() {
 			log.Info("kenaz-harness-vm: accept loop exiting", "reason", err)
 			return
 		}
-		go handleConn(log, conn, token, ledger, audit)
+		go handleConn(log, conn, token, ledger, audit, reads)
 	}
 }
 
@@ -159,7 +180,7 @@ func (w *connWriter) send(m msg) error {
 
 // handleConn manages the full lifecycle of one client connection:
 // auth handshake, then a loop dispatching task messages.
-func handleConn(log *slog.Logger, conn net.Conn, token string, ledger *ledgerEmitter, audit *auditSink) {
+func handleConn(log *slog.Logger, conn net.Conn, token string, ledger *ledgerEmitter, audit *auditSink, reads *readService) {
 	defer func() { _ = conn.Close() }()
 
 	w := &connWriter{conn: conn}
@@ -221,6 +242,16 @@ func handleConn(log *slog.Logger, conn net.Conn, token string, ledger *ledgerEmi
 		}
 
 		kind, _ := m["kind"].(string)
+
+		// Phase G read RPCs are synchronous request/response and independent of
+		// the task busy-guard — a read can be served while a task streams. They
+		// are routed here, before the task dispatcher, so an unknown kind still
+		// falls through to the default bad_request branch below.
+		if isReadKind(kind) {
+			_ = w.send(reads.handle(context.Background(), kind, m))
+			continue
+		}
+
 		switch kind {
 		case "task.start":
 			taskID, _ := m["task_id"].(string)

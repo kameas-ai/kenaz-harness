@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta http-equiv="Content-Security-Policy" content="__CSP_PLACEHOLDER__" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>kenaz-harness</title>
+    <link rel="icon" type="image/svg+xml" href="/assets/favicon.svg" />
+    <!--
+      harness-token is injected by core/serve's static file handler so the
+      served frontend can authenticate against /rpc and /ws without
+      embedding the token in the build artifact.  The Go side renders this
+      page on every GET / request.
+    -->
+    <!--HARNESS_TOKEN_META-->
+    <!--
+      Critical token block — keep in sync with index.html.
+    -->
+    <style>
+      :root { color-scheme: dark; --surface-0:#0A0A0B; --ink:#F4F1EA; --accent:#C8A56A; }
+      html, body { margin: 0; background: var(--surface-0); color: var(--ink); }
+    </style>
+</head>
+<body>
+<div id="app"></div>
+<script src="/src/main-served.ts" type="module"></script>
+</body>
+</html>

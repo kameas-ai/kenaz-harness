@@ -4,8 +4,13 @@
  * provides the accessibility scaffolding for the more complex
  * primitives; this one is a plain <button>.
  */
+/**
+ * WP10 additions:
+ *   - 'primary': filled CTA button (accent background, surface-0 text)
+ *   - 'danger': danger-colored outline (for destructive actions)
+ */
 defineProps<{
-  variant?: 'default' | 'ghost' | 'accent';
+  variant?: 'default' | 'ghost' | 'accent' | 'primary' | 'danger';
   size?: 'sm' | 'md';
   type?: 'button' | 'submit' | 'reset';
   disabled?: boolean;
@@ -19,11 +24,15 @@ defineProps<{
     class="font-ui rounded-sm transition-fast ease-kenaz disabled:opacity-50"
     :class="[
       size === 'sm' ? 'px-2 py-1 text-xs' : 'px-3 py-1.5 text-sm',
-      variant === 'accent'
-        ? 'text-accent border border-accent-hairline hover:bg-accent-glow'
-        : variant === 'ghost'
-          ? 'text-ink-muted hover:text-ink hover:bg-surface-2'
-          : 'text-ink bg-surface-2 hover:bg-surface-3 border border-border-muted',
+      variant === 'primary'
+        ? 'bg-accent text-surface-0 hover:opacity-90 font-semibold'
+        : variant === 'danger'
+          ? 'text-signal-danger border border-signal-danger hover:bg-signal-danger hover:text-surface-0'
+          : variant === 'accent'
+            ? 'text-accent border border-accent-hairline hover:bg-accent-glow'
+            : variant === 'ghost'
+              ? 'text-ink-muted hover:text-ink hover:bg-surface-2'
+              : 'text-ink bg-surface-2 hover:bg-surface-3 border border-border-muted',
     ]"
   >
     <slot />

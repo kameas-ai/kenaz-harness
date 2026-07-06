@@ -1,8 +1,8 @@
-// Package monitor implements the kaneaz__monitor builtin tool
+// Package monitor implements the kenaz__monitor builtin tool
 // (background-task-monitor-01KZNP3C, WP03).
 //
-// kaneaz__monitor subscribes to the output stream of a background task
-// started with kaneaz__bash(run_in_background:true). Two modes:
+// kenaz__monitor subscribes to the output stream of a background task
+// started with kenaz__bash(run_in_background:true). Two modes:
 //
 //   - drain: return all output since the last call and return immediately.
 //   - watch: block until the first condition fires:
@@ -29,7 +29,7 @@ import (
 
 const (
 	// ToolName is the tool identifier surfaced to the model.
-	ToolName = "kaneaz__monitor"
+	ToolName = "kenaz__monitor"
 
 	// defaultWatchTimeoutS is the default watch timeout in seconds.
 	defaultWatchTimeoutS = 300
@@ -40,11 +40,11 @@ const (
 )
 
 // ToolDescription is the user-facing description.
-const ToolDescription = "Monitor the output of a background task started with kaneaz__bash(run_in_background:true). " +
+const ToolDescription = "Monitor the output of a background task started with kenaz__bash(run_in_background:true). " +
 	"Use mode:\"drain\" to retrieve all output since the last call. " +
 	"Use mode:\"watch\" to block until a regex matches, the task exits, or a timeout fires."
 
-// inputSchema is the JSON Schema for kaneaz__monitor.
+// inputSchema is the JSON Schema for kenaz__monitor.
 const inputSchema = `{
   "type": "object",
   "properties": {
@@ -144,7 +144,7 @@ type OffsetStore interface {
 }
 
 
-// Tool implements kaneaz__monitor. Safe for concurrent use.
+// Tool implements kenaz__monitor. Safe for concurrent use.
 type Tool struct {
 	reg          RegistryIface
 	offsets      OffsetStore

@@ -1,3 +1,5 @@
+//go:build !serve
+
 package rpc
 
 import (
@@ -22,4 +24,26 @@ type WailsEmitter struct{}
 // stream_broker.go).
 func (WailsEmitter) Emit(ctx context.Context, topic string, payload any) {
 	runtime.EventsEmit(ctx, topic, payload)
+}
+
+// MultiEmitter fans out a single Emit call to all registered sinks in
+// order.  The desktop Wails path and the in-process EventBus path are
+// both wired here in served mode so neither path needs to know about the
+// other.  The Wails privacy CI invariant (only emitter.go and
+// stream_broker.go call runtime.EventsEmit) is preserved because every
+// sink that reaches runtime.EventsEmit does so through WailsEmitter.
+type MultiEmitter struct {
+	sinks []Emitter
+}
+
+// NewMultiEmitter constructs a MultiEmitter from the given sinks.
+func NewMultiEmitter(sinks ...Emitter) *MultiEmitter {
+	return &MultiEmitter{sinks: sinks}
+}
+
+// Emit calls Emit on every registered sink.
+func (m *MultiEmitter) Emit(ctx context.Context, topic string, payload any) {
+	for _, s := range m.sinks {
+		s.Emit(ctx, topic, payload)
+	}
 }

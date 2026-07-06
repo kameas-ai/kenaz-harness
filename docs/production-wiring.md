@@ -65,7 +65,7 @@ to the chassis; they reach the LLM through:
 
 3. **`core/toolloop.BuiltinPool`** — wraps the MCP pool. Built-in
    tools surface via `Tools()` under the synthetic server prefix
-   `"kaneaz"`; `Call(server="kaneaz", tool="bash", …)` dispatches to
+   `"kenaz"`; `Call(server="kenaz", tool="bash", …)` dispatches to
    the in-binary tool without going through MCP.
 
 4. **`core/rpc/views/llm.NewMCPToolDiscovererWithBuiltins`** —
@@ -73,7 +73,7 @@ to the chassis; they reach the LLM through:
    tools AND built-in tools onto every `GenerationRequest.Tools`.
 
 Net effect: when the user toggles "Web search" ON in Settings, the
-LLM's tool catalog gains a `kaneaz__web_search` entry on the next
+LLM's tool catalog gains a `kenaz__web_search` entry on the next
 turn, and a tool-call against that name dispatches to
 `core/tools/websearch.Tool.Call` directly.
 

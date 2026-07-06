@@ -38,7 +38,7 @@ async function setup(allArtifacts: Artifact[]) {
           install(app) {
             provideFakeClient(app, {
               artifacts: {
-                list: async (filter) => {
+                list: async (filter: any) => {
                   lastFilter = filter;
                   return allArtifacts.filter((a) => {
                     if (filter?.scopeKind && a.scopeKind !== filter.scopeKind) {
@@ -56,14 +56,14 @@ async function setup(allArtifacts: Artifact[]) {
                     return true;
                   });
                 },
-                get: async (id) => ({
+                get: async (id: string) => ({
                   artifact: allArtifacts.find((a) => a.id === id) ?? makeArtifact({ id }),
                   bytes: btoa('text'),
                 }),
-                promote: async (id) =>
+                promote: async (id: string) =>
                   allArtifacts.find((a) => a.id === id) ?? makeArtifact({ id }),
                 remove: async () => undefined,
-              },
+              } as any,
             });
           },
         },

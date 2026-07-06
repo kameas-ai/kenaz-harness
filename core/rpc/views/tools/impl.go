@@ -298,6 +298,16 @@ func (a *API) InstallRecipe(ctx context.Context, id string, env map[string]strin
 	}
 	spec := recipe.ToServerSpec(resolved, resolvedConfig)
 
+	// For OAuth recipes (remote servers signed in via the MCP authorization
+	// flow), inject the bearer from the stored credential, refreshing if
+	// needed. No-op for non-OAuth recipes; deferred (server unauthenticated)
+	// when the user has not signed in yet.
+	if err := a.injectOAuthBearer(ctx, recipe, &spec); err != nil {
+		a.cfg.Enabled.Remove(id)
+		_ = a.saveEnabled()
+		return stdio.RecipeStatus{}, err
+	}
+
 	if a.cfg.Pool == nil {
 		return stdio.RecipeStatus{}, errors.New("tools: no pool configured")
 	}
@@ -797,7 +807,15 @@ func (a *API) RequestAdditionalAllowedDir(ctx context.Context, recipeID, path, r
 				// Roll back: restore the snapshot in memory and on disk.
 				entry.Config = snapshot
 				a.cfg.Enabled.Add(entry)
-				_ = a.saveEnabled() // best-effort; log but don't surface
+				// (FR-006) WARN-log the rollback-save failure; the in-memory snapshot
+				// was already restored so the restart failure will be visible to the user
+				// via the returned error, but a stale on-disk state is diagnosable via the log.
+				if saveErr2 := a.saveEnabled(); saveErr2 != nil {
+					slog.WarnContext(ctx, "tools: rollback save failed; on-disk state may be stale",
+						"recipe_id", recipeID,
+						"error",     saveErr2.Error(),
+					)
+				}
 				return false, canonical, fmt.Errorf("tools: restart failed: %w", restartErr)
 			}
 		}

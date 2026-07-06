@@ -77,7 +77,7 @@ type Field struct {
 // renderWelcome returns the Card for the welcome state.
 func renderWelcome() Card {
 	return Card{
-		Title: "Welcome to Kaneaz",
+		Title: "Welcome to Kenaz",
 		Body:  "Let's connect your first AI provider so you can start chatting. This takes about a minute.",
 		Actions: []Action{
 			{ID: string(EventNext), Label: "Get started", Primary: true},
@@ -109,7 +109,7 @@ func renderEnterAPIKey(kind ProviderKind, priorErr string) Card {
 	label := providerLabel(kind)
 	c := Card{
 		Title:        "Enter your " + label + " API key",
-		Body:         "Your key is stored locally and never sent to Kaneaz servers.",
+		Body:         "Your key is stored locally and never sent to Kenaz servers.",
 		ProviderHint: kind,
 		Fields: []Field{
 			{

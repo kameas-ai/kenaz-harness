@@ -66,9 +66,9 @@ func defaultBashRunID() string {
 }
 
 // Name is the namespaced tool identifier surfaced to the model. The
-// "kaneaz__" prefix is reserved for built-in (in-binary) tools so the
+// "kenaz__" prefix is reserved for built-in (in-binary) tools so the
 // dispatcher can route by prefix without a registry lookup.
-const Name = "kaneaz__bash"
+const Name = "kenaz__bash"
 
 // description is the user-facing tool description sent to the model.
 // It mirrors FR-010's text and the assistant relies on the truncated
@@ -81,7 +81,7 @@ const description = "Execute a shell command via `bash -lc` as the user's own ac
 	"The Cedar gate evaluates the FIRST command in a chain only — don't hide destructive ops behind a benign first command (e.g. `echo hi && rm -rf foo`); the user only saw `echo` in the prompt. " +
 	"Returns stdout, stderr, exit code, and a truncated flag."
 
-// inputSchema is the JSON Schema describing kaneaz__bash's argument
+// inputSchema is the JSON Schema describing kenaz__bash's argument
 // shape (FR-010). Inlined as a constant so InputSchema() can return
 // the same json.RawMessage every call without re-serialising.
 const inputSchema = `{
@@ -166,7 +166,7 @@ type BackgroundSpawnFunc func(ctx context.Context, sessionID, cmd, description s
 // process exits, to mark the task terminal.
 type BackgroundEndFunc func(ctx context.Context, taskID string, exitCode int)
 
-// Tool implements the kaneaz__bash built-in tool. It is safe for
+// Tool implements the kenaz__bash built-in tool. It is safe for
 // concurrent use; all state is read-only after construction and the
 // per-call work happens in stack-local Run/Parse calls.
 type Tool struct {
@@ -207,7 +207,7 @@ func New(opts Options) *Tool {
 	}
 }
 
-// Name returns the namespaced tool identifier (always "kaneaz__bash").
+// Name returns the namespaced tool identifier (always "kenaz__bash").
 func (t *Tool) Name() string { return Name }
 
 // Description returns the user-facing tool description.

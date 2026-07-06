@@ -5,12 +5,8 @@
 //   go generate ./core/fleet/...
 
 export const CAPABILITY_KEYS = [
-  'hosted_inference',
   'launcher_updates',
   'iso_distribution',
-  'kameas_ml_general',
-  'kameas_ml_team_tuned',
-  'kameas_ml_org_tuned',
   'shared_team_graph',
   'cross_team_graph_isolation',
   'opa_preset_policies',

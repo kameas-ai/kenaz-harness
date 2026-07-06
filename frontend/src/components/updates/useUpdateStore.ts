@@ -29,8 +29,8 @@ import { ref, computed, type Ref } from 'vue';
 import type { UpdateClient, UpdateStatus } from '@/lib/updateClient';
 import { createUpdateClient } from '@/lib/updateClient';
 
-const SKIP_LS_KEY = 'kaneaz_update_skipped_version';
-const FIRST_SEEN_LS_KEY = 'kaneaz_update_first_seen_version';
+const SKIP_LS_KEY = 'kenaz_update_skipped_version';
+const FIRST_SEEN_LS_KEY = 'kenaz_update_first_seen_version';
 
 /** Layer 3: public manifest URL — fetched directly from the frontend
  *  as a fallback when the backend update service is broken/skipped. */

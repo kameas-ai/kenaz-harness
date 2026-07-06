@@ -52,13 +52,13 @@ func (s *store) auditDrain() {
 			if !ok {
 				return
 			}
-			_ = audit.Emit(job.ctx, s.auditEmitter, audit.KindCredentialAccessed, job.payload, job.payload.AccessedAt)
+			audit.MustEmit(job.ctx, s.auditEmitter, audit.KindCredentialAccessed, job.payload, job.payload.AccessedAt)
 		case <-s.done:
 			// Drain remaining jobs before exit.
 			for {
 				select {
 				case job := <-s.auditCh:
-					_ = audit.Emit(job.ctx, s.auditEmitter, audit.KindCredentialAccessed, job.payload, job.payload.AccessedAt)
+					audit.MustEmit(job.ctx, s.auditEmitter, audit.KindCredentialAccessed, job.payload, job.payload.AccessedAt)
 				default:
 					return
 				}

@@ -29,7 +29,7 @@ func renderMarkdown(
 
 	// ── Meta header ─────────────────────────────────────────────────────
 	sb.WriteString(fmt.Sprintf("# %s\n\n", escapeMarkdown(title)))
-	sb.WriteString("<!-- kaneaz-harness export -->\n")
+	sb.WriteString("<!-- kenaz-harness export -->\n")
 	sb.WriteString(fmt.Sprintf("<!-- export_format_version: %d -->\n", ExportFormatVersion))
 	sb.WriteString(fmt.Sprintf("<!-- exported_at: %s -->\n", now.UTC().Format(time.RFC3339)))
 	sb.WriteString(fmt.Sprintf("<!-- session_id: %s -->\n", sess.ID))

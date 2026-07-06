@@ -153,7 +153,8 @@ func TestOpen_RegistersSessionMigrations(t *testing.T) {
 	// provider-implementation-uniformity-01KQ8V4F WP05/WP09.
 	// 0331 (custom_endpoint_capabilities) lands with
 	// custom-openai-compatible-endpoint-01KQ8VN0 WP03.
-	want := []int{300, 301, 302, 303, 304, 305, 306, 307, 308, 309, 310, 311, 312, 313, 314, 315, 316, 317, 318, 319, 320, 321, 322, 323, 324, 325, 326, 327, 328, 329, 330, 331}
+	// 0332 (artifacts_global_scope) lands with unified-context-artifacts-01NCTXU01.
+	want := []int{300, 301, 302, 303, 304, 305, 306, 307, 308, 309, 310, 311, 312, 313, 314, 315, 316, 317, 318, 319, 320, 321, 322, 323, 324, 325, 326, 327, 328, 329, 330, 331, 332}
 	if len(versions) != len(want) {
 		t.Fatalf("session migrations applied = %v, want %v", versions, want)
 	}
@@ -206,9 +207,14 @@ func TestOpen_ApplyIdempotent(t *testing.T) {
 	// 1 provider_capabilities (0329, provider-implementation-uniformity-01KQ8V4F) +
 	// 1 knobs (0330, provider-implementation-uniformity-01KQ8V4F) +
 	// 1 custom_endpoint_capabilities (0331, custom-openai-compatible-endpoint) +
-	// 1 slash_commands_user (1000) = 35.
-	if count != 35 {
-		t.Errorf("ledger count = %d, want 35", count)
+	// 1 artifacts_global_scope (0332, unified-context-artifacts-01NCTXU01) +
+	// 1 slash_commands_user (1000) +
+	// 1 units (1100, unified-context-artifacts-01NCTXU01) +
+	// 1 unit_sync_state (1101, unified-context-artifacts-01NCTXU01 Phase 2) +
+	// 1 unit_sync_state_baselines (1102, unified-context-artifacts-01NCTXU01 3-way baseline fix) +
+	// 1 conflict-edge (1103, unified-context-artifacts-01NCTXU01 Phase 3 enshrine marker) = 40.
+	if count != 40 {
+		t.Errorf("ledger count = %d, want 40", count)
 	}
 }
 

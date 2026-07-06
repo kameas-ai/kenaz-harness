@@ -105,6 +105,12 @@ jobs:
         # (it runs fully in test-frontend which does npm ci first).
         run: bash scripts/ci/check-oss-first.sh
 
+      - name: serve-dispatch drift report
+        # FR-005: informational check — lists desktop Bindings methods not yet
+        # wired in the serve-mode RPC dispatcher so the gap is visible in CI
+        # logs.  Exits 0 (never blocks a PR) until SERVE_DRIFT_GATE=1 is set.
+        run: bash scripts/ci/check-serve-dispatch-drift.sh
+
       # csp guard runs in test-frontend after `npm run build` produces
       # the real frontend/dist/index.html — there's no point checking
       # the CSP of a stub.
@@ -197,7 +203,6 @@ jobs:
 
       - name: typecheck
         run: npm run typecheck --if-present
-        continue-on-error: true # pre-existing typecheck warnings; soften until cleaned
 
       - name: vitest
         run: npm test -- --run

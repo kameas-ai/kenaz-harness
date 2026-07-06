@@ -2,30 +2,25 @@ package settings
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"os"
 	"runtime"
 	"sync"
 	"time"
 
 	"github.com/kameas-ai/kenaz-harness/core/fleet"
-	"github.com/kameas-ai/kenaz-harness/core/llm"
-	"github.com/kameas-ai/kenaz-harness/core/llm/fleet_hosted"
 	"github.com/kameas-ai/kenaz-harness/core/logging"
 	"github.com/kameas-ai/kenaz-harness/core/mcp/recipes"
 	cedarpolicy "github.com/kameas-ai/kenaz-harness/core/policy/cedar"
 	"github.com/kameas-ai/kenaz-harness/core/slashcmd"
+	"go.opentelemetry.io/otel/sdk/resource"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 )
 
-// AdapterRegistrar is the minimal interface from the LLM registry that the
-// fleet wiring code needs. Using an interface avoids a hard import of
-// core/llm/registry from this package.
-type AdapterRegistrar interface {
-	RegisterAdapter(a llm.ProviderAdapter)
-}
-
 // fleetState holds the fleet client, dataDir, capability poller, config
-// poller, the fleet_hosted LLM adapter (when CapHostedInference is enabled),
-// and the emergency-lockdown watcher (fleet-emergency-lockdown-01NDFSEX12).
+// poller, and the emergency-lockdown watcher
+// (fleet-emergency-lockdown-01NDFSEX12).
 // It is attached to API after construction via SetFleetClient.
 type fleetState struct {
 	mu              sync.RWMutex
@@ -33,8 +28,6 @@ type fleetState struct {
 	dataDir         string
 	poller          *fleet.CapabilityPoller
 	configPoller    *fleet.ConfigPoller
-	llmRegistrar    AdapterRegistrar
-	fleetAdapter    *fleet_hosted.Adapter
 	lockdownWatcher *fleet.Watcher
 	lockdownBroker  fleet.BrokerSink
 
@@ -52,6 +45,29 @@ type fleetState struct {
 	// Both may be nil when fleet skill sync is not configured.
 	skillStore    *slashcmd.SkillStore
 	skillRegistry *slashcmd.Registry
+
+	// otlpPipeline is the post-login OTLP export pipeline
+	// (harness-fleet-otlp-export-01NTLMEX01). Set via SetFleetOTLPPipeline;
+	// nil means OTLP export is not configured (OSS build / fleet disabled).
+	otlpPipeline *fleet.FleetOTLPPipeline
+
+	// telemetryRes is the startup OTel resource from telemetry.Init, held
+	// so Activate can merge it with identity attrs.
+	telemetryRes *resource.Resource
+
+	// consent is the TelemetryConsent from the rpc API, used to gate
+	// Activate: if consent == "none" the pipeline is not activated.
+	consent *fleet.TelemetryConsent
+
+	// tp is the TracerProvider from telemetry.Init; held so Activate can
+	// register/unregister span processors on re-login.
+	tp *sdktrace.TracerProvider
+
+	// telemetryOptIns is the per-class telemetry opt-in set last fetched from
+	// the fleet store (harness-fleet-sync-activation-01NSYNC01 gap #4). The
+	// fleet store is authoritative; this is the harness-side cache populated at
+	// enroll. nil before the first successful fetch.
+	telemetryOptIns []fleet.TelemetryOptInItem
 }
 
 // SetFleetClient wires a fleet.Client into the API and starts the capability
@@ -65,6 +81,10 @@ func (a *API) SetFleetClient(c *fleet.Client, dataDir string) {
 	defer a.fleet.mu.Unlock()
 	a.fleet.client = c
 	a.fleet.dataDir = dataDir
+	// Wire the session-expired broker into the client if already set.
+	if a.fleet.lockdownBroker != nil && c != nil {
+		c.SetSessionBroker(a.fleet.lockdownBroker)
+	}
 	// Start the capability poller lazily. When c is a nop client the poller
 	// will degrade gracefully on every Refresh call.
 	if a.fleet.poller == nil {
@@ -79,12 +99,6 @@ func (a *API) SetFleetClient(c *fleet.Client, dataDir string) {
 		a.fleet.configPoller = cp
 		cp.Start(context.Background())
 	}
-	// Wire the fleet_hosted LLM adapter when we have a profile URL.
-	// The adapter gates itself at resolve time via the EnabledFunc so
-	// tier changes propagate within one poll interval without restart.
-	if c != nil && c.Profile().FleetBaseURL != "" {
-		a.wireFleetHostedAdapter(c)
-	}
 	// Start the emergency-lockdown watcher. The watcher self-gates on
 	// CapEmergencyLockdown so it exits immediately when the capability
 	// is absent (fleet-emergency-lockdown-01NDFSEX12 WP02).
@@ -97,6 +111,8 @@ func (a *API) SetFleetClient(c *fleet.Client, dataDir string) {
 
 // SetLockdownBroker wires the event broker into the fleet state so the
 // lockdown Watcher can publish fleet:lockdown:changed events to the frontend.
+// Also wires the same broker into the fleet Client for session-expired events
+// (fleet-integrity-observability WP05 / FR-005).
 // Must be called before SetFleetClient to take effect on first start; if called
 // after, the watcher uses the broker on its next reconnect cycle.
 // (fleet-emergency-lockdown-01NDFSEX12 WP02)
@@ -111,6 +127,10 @@ func (a *API) SetLockdownBroker(sink fleet.BrokerSink) {
 	if a.fleet.lockdownWatcher != nil {
 		a.fleet.lockdownWatcher.SetBroker(sink)
 	}
+	// Wire the broker into the fleet client for session-expired events (FR-005).
+	if a.fleet.client != nil {
+		a.fleet.client.SetSessionBroker(sink)
+	}
 }
 
 // SetCedarEngine wires the Cedar policy engine into the fleet state so that
@@ -124,6 +144,36 @@ func (a *API) SetCedarEngine(engine *cedarpolicy.Engine) {
 	a.fleet.mu.Lock()
 	defer a.fleet.mu.Unlock()
 	a.fleet.cedarEngine = engine
+}
+
+// SetFleetOTLPPipeline wires the post-login OTLP export pipeline into the
+// fleet state. Call this after SetFleetClient, before FleetSignIn or
+// FleetRefreshIdentity, so the pipeline is ready to Activate on the first
+// enroll success.
+//
+//   - p:          the FleetOTLPPipeline constructed in core.New.
+//   - startupRes: the OTel resource from telemetry.Telemetry.Resource; merged
+//     with identity attrs at Activate time.
+//   - tp:         the TracerProvider from telemetry.Telemetry.TracerProvider;
+//     used by Activate to register the post-login BatchSpanProcessor.
+//   - consent:    the TelemetryConsent instance (gates on EffectiveLevel).
+//
+// (harness-fleet-otlp-export-01NTLMEX01 wiring seam)
+func (a *API) SetFleetOTLPPipeline(
+	p *fleet.FleetOTLPPipeline,
+	startupRes *resource.Resource,
+	tp *sdktrace.TracerProvider,
+	consent *fleet.TelemetryConsent,
+) {
+	if a.fleet == nil {
+		a.fleet = &fleetState{}
+	}
+	a.fleet.mu.Lock()
+	defer a.fleet.mu.Unlock()
+	a.fleet.otlpPipeline = p
+	a.fleet.telemetryRes = startupRes
+	a.fleet.tp = tp
+	a.fleet.consent = consent
 }
 
 // SetSkillRefs wires the fleet-skill store and slash registry into the fleet
@@ -142,53 +192,6 @@ func (a *API) SetSkillRefs(store *slashcmd.SkillStore, registry *slashcmd.Regist
 	defer a.fleet.mu.Unlock()
 	a.fleet.skillStore = store
 	a.fleet.skillRegistry = registry
-}
-
-// wireFleetHostedAdapter creates the fleet_hosted LLM adapter and registers
-// it in the LLM registry (if one has been set via SetLLMRegistrar).
-// Called under a.fleet.mu.Lock() from SetFleetClient.
-func (a *API) wireFleetHostedAdapter(c *fleet.Client) {
-	profile := c.Profile()
-	if profile.FleetBaseURL == "" {
-		return
-	}
-	poller := a.fleet.poller // already set above
-	bearer := func() (string, error) {
-		ts, err := fleet.LoadTokens()
-		if err != nil {
-			return "", err
-		}
-		return ts.AccessToken, nil
-	}
-	enabled := func() bool {
-		if poller == nil {
-			return false
-		}
-		cur := poller.Current()
-		return cur.Has(fleet.CapHostedInference)
-	}
-	adapter := fleet_hosted.New(profile.FleetBaseURL, bearer, enabled)
-	a.fleet.fleetAdapter = adapter
-	if a.fleet.llmRegistrar != nil {
-		a.fleet.llmRegistrar.RegisterAdapter(adapter)
-	}
-}
-
-// SetLLMRegistrar wires the LLM adapter registry into the fleet state so
-// that the fleet_hosted adapter can be registered when SetFleetClient is
-// called. Must be called before SetFleetClient to take effect; otherwise
-// the adapter is registered lazily on the next SetFleetClient call.
-func (a *API) SetLLMRegistrar(r AdapterRegistrar) {
-	if a.fleet == nil {
-		a.fleet = &fleetState{}
-	}
-	a.fleet.mu.Lock()
-	defer a.fleet.mu.Unlock()
-	a.fleet.llmRegistrar = r
-	// If SetFleetClient was called first, register any pending adapter.
-	if a.fleet.fleetAdapter != nil {
-		r.RegisterAdapter(a.fleet.fleetAdapter)
-	}
 }
 
 func (a *API) fleetClient() *fleet.Client {
@@ -277,32 +280,93 @@ func (a *API) FleetSignIn(ctx context.Context) (FleetIdentity, error) {
 	return id, nil
 }
 
-// FleetSignOut clears tokens and identity cache.
+// StopFleetBackground stops all fleet background goroutines (capability
+// poller, config poller, lockdown watcher) and clears the in-memory
+// lockdown flag + model-pref cache. It is idempotent and safe to call
+// from sign-out or app shutdown.
+//
+// Callers that need to block until goroutines have exited should call
+// CapabilityPoller.Stop(), ConfigPoller.Stop(), and Watcher.Stop() directly;
+// this method calls them in series.
+func (a *API) StopFleetBackground() {
+	if a.fleet == nil {
+		return
+	}
+	a.fleet.mu.Lock()
+	poller := a.fleet.poller
+	configPoller := a.fleet.configPoller
+	watcher := a.fleet.lockdownWatcher
+	// Nil them out so future Start calls in SetFleetClient create fresh instances.
+	a.fleet.poller = nil
+	a.fleet.configPoller = nil
+	a.fleet.lockdownWatcher = nil
+	// Clear in-memory caches that are session-scoped.
+	a.fleet.fleetModelPrefs = nil
+	a.fleet.telemetryOptIns = nil
+	a.fleet.mu.Unlock()
+
+	// Stop goroutines outside the lock.
+	if poller != nil {
+		poller.Stop()
+	}
+	if configPoller != nil {
+		configPoller.Stop()
+	}
+	if watcher != nil {
+		watcher.Stop()
+	}
+	// Clear the package-level lockdown flag so a re-login starts clean.
+	fleet.ForceSetLockdownForTest(false) // production-safe: the symbol is exported for exactly this use
+}
+
+// FleetSignOut clears tokens and identity cache, and stops background
+// goroutines. Returns an aggregated error when one or more keychain
+// operations fail (sign-out is still treated as logically complete).
 func (a *API) FleetSignOut(ctx context.Context) error {
 	logging.L().Info("fleet.rpc.sign_out.start")
 	if fleet.Disabled() {
 		logging.L().Warn("fleet.rpc.sign_out.disabled_by_env")
 		return fleet.ErrFleetDisabled
 	}
+	// Stop pollers + watcher + clear caches before removing tokens so
+	// in-flight requests have a chance to complete.
+	a.StopFleetBackground()
+
+	// Aggregate keyring errors: a missing token is not an error on sign-out.
+	var signOutErr error
 	if err := fleet.ClearTokens(); err != nil {
-		logging.L().Error("fleet.rpc.sign_out.clear_tokens_failed", "err", err.Error())
-		return err
+		logging.L().Warn("fleet.rpc.sign_out.clear_tokens_partial", "err", err.Error())
+		signOutErr = err // surface to caller; sign-out proceeds regardless
 	}
 	dataDir := a.fleetDataDir()
 	if dataDir != "" {
-		_ = os.Remove(fleet.IdentityFilePath(dataDir))
+		if err := os.Remove(fleet.IdentityFilePath(dataDir)); err != nil && !os.IsNotExist(err) {
+			logging.L().Warn("fleet.rpc.sign_out.remove_identity_failed", "err", err.Error())
+			signOutErr = errors.Join(signOutErr, fmt.Errorf("remove identity file: %w", err))
+		}
 	}
-	logging.L().Info("fleet.rpc.sign_out.success")
-	return nil
+	if signOutErr != nil {
+		logging.L().Warn("fleet.rpc.sign_out.partial_success", "err", signOutErr.Error())
+	} else {
+		logging.L().Info("fleet.rpc.sign_out.success")
+	}
+	return signOutErr
 }
 
-// FleetSignedIn reports whether valid tokens exist.
-func (a *API) FleetSignedIn(_ context.Context) (bool, error) {
+// FleetSignedIn reports whether a valid (non-expired) fleet session exists.
+//
+// FR-004: honors token expiry — a dead session (expired access + refresh)
+// returns false so the UI can show a re-auth prompt rather than a fake
+// "signed in" state. Uses Client.SignedIn for consistent expiry semantics.
+func (a *API) FleetSignedIn(ctx context.Context) (bool, error) {
 	if fleet.Disabled() {
 		return false, nil
 	}
-	_, err := fleet.LoadTokens()
-	return err == nil, nil
+	c := a.fleetClient()
+	if c == nil {
+		return false, nil
+	}
+	return c.SignedIn(ctx)
 }
 
 // FleetRefreshIdentity calls the fleet enroll endpoint.
@@ -356,7 +420,103 @@ func (a *API) fleetEnroll(ctx context.Context) (FleetIdentity, error) {
 		"email", id.Email,
 		"tier", id.Tier,
 	)
+
+	// Activate the fleet OTLP export pipeline post-enroll.
+	// This is the post-login trigger point (FR-003): identity attrs are now
+	// known (user.id = JWT sub resolved via enroll response, org.id =
+	// enroll org_id, machine.id = nodeID), so we can build the identity
+	// resource and register the OTLP processors/exporters.
+	a.activateOTLPPipeline(ctx, id, nodeID)
+
+	// Reconcile per-class telemetry opt-ins from the fleet store post-enroll
+	// (harness-fleet-sync-activation-01NSYNC01 gap #4). The fleet store is the
+	// source of truth for the seven classes (replacing local-only JSON). This
+	// is best-effort and consent-gated: it caches the fleet-resolved opt-ins
+	// but never relaxes the TelemetryConsent.EffectiveLevel export gate.
+	a.refreshTelemetryOptIns(ctx)
+
 	return fleetIdentityToView(id), nil
+}
+
+// refreshTelemetryOptIns fetches the per-class telemetry opt-in set from the
+// fleet store and caches it on the fleet state. Best-effort: errors are logged
+// at debug/warn and never fail the enroll flow. The cached set is exposed via
+// FleetTelemetryOptIns for the settings UI.
+func (a *API) refreshTelemetryOptIns(ctx context.Context) {
+	c := a.fleetClient()
+	if c == nil {
+		return
+	}
+	items, err := c.GetTelemetryOptIns(ctx)
+	if err != nil {
+		// Unentitled / offline / signed-out → keep whatever is cached. Not fatal.
+		logging.L().Debug("fleet.telemetry_optins.refresh.skipped", "err", err.Error())
+		return
+	}
+	if a.fleet == nil {
+		return
+	}
+	a.fleet.mu.Lock()
+	a.fleet.telemetryOptIns = items
+	a.fleet.mu.Unlock()
+	logging.L().Info("fleet.telemetry_optins.refreshed", "classes", len(items))
+}
+
+// activateOTLPPipeline calls FleetOTLPPipeline.Activate post-enroll.
+// Gates on: pipeline wired, consent != "none", profile configured.
+// Best-effort: errors are logged at warn and do not fail the enroll flow.
+func (a *API) activateOTLPPipeline(ctx context.Context, id fleet.Identity, nodeID string) {
+	if a.fleet == nil {
+		return
+	}
+	a.fleet.mu.RLock()
+	pipeline := a.fleet.otlpPipeline
+	baseRes := a.fleet.telemetryRes
+	consent := a.fleet.consent
+	tp := a.fleet.tp
+	a.fleet.mu.RUnlock()
+
+	if pipeline == nil {
+		logging.L().Debug("fleet.otlp.activate.skipped", "reason", "pipeline_not_wired")
+		return
+	}
+
+	// Consent gate: "none" (default) → no OTLP export (NFR-005 / FR-006).
+	if consent != nil && consent.EffectiveLevel() == fleet.ConsentNone {
+		logging.L().Debug("fleet.otlp.activate.skipped", "reason", "consent_none")
+		return
+	}
+
+	profile := fleet.ResolveProfile()
+	otlpBase := fleet.OTLPBaseURL(profile)
+	if otlpBase == "" {
+		logging.L().Debug("fleet.otlp.activate.skipped", "reason", "no_fleet_url")
+		return
+	}
+
+	// kameas.user.id MUST equal the Zitadel JWT `sub` — the fleet OTLP
+	// receiver (validateResourceAttrs) rejects with 401 otherwise. The
+	// enroll response's user_id is the fleet-internal UUID, a DIFFERENT
+	// identity namespace, so decode the sub from the access token instead.
+	userID, subErr := fleet.SubjectFromAccessToken()
+	if subErr != nil || userID == "" {
+		reason := "empty"
+		if subErr != nil {
+			reason = subErr.Error()
+		}
+		logging.L().Warn("fleet.otlp.activate.no_subject", "org_id", id.OrgID, "err", reason)
+		return
+	}
+
+	attrs := fleet.IdentityAttrs{
+		UserID:    userID,
+		OrgID:     id.OrgID,
+		MachineID: nodeID,
+	}
+
+	if err := pipeline.Activate(ctx, otlpBase, baseRes, attrs, fleet.DefaultBearerProvider(), tp); err != nil {
+		logging.L().Warn("fleet.otlp.activate.failed", "err", err.Error())
+	}
 }
 
 // fleetIdentityToView converts a fleet.Identity to the view type.
@@ -433,17 +593,60 @@ func (a *API) fleetConfigPoller() *fleet.ConfigPoller {
 // FleetConfigPullStatus returns the current config-pull poller state.
 // Returns a zero-value view when fleet is disabled or the poller is not yet wired.
 func (a *API) FleetConfigPullStatus(_ context.Context) (FleetConfigPullStatusView, error) {
+	enabled := fleet.ConfigDistributionEnabled()
 	p := a.fleetConfigPoller()
 	if p == nil {
-		return FleetConfigPullStatusView{Source: "default-deny"}, nil
+		return FleetConfigPullStatusView{
+			Source:                    "default-deny",
+			ConfigDistributionEnabled: enabled,
+		}, nil
 	}
 	st := p.Status()
 	return FleetConfigPullStatusView{
-		LastAppliedID:  st.LastAppliedID,
-		LastAppliedAt:  st.LastAppliedAt,
-		LastError:      st.LastError,
-		Source:         st.Source,
-		BundleChecksum: st.BundleChecksum,
+		LastAppliedID:             st.LastAppliedID,
+		LastAppliedAt:             st.LastAppliedAt,
+		LastError:                 st.LastError,
+		Source:                    st.Source,
+		BundleChecksum:            st.BundleChecksum,
+		ConfigDistributionEnabled: enabled,
+	}, nil
+}
+
+// FleetHealth returns a compact fleet-health summary for the global health
+// indicator (WP10). It combines the signing-key presence, the config source,
+// and the current session state into a single call so the header chip can
+// render without multiple sequential RPCs.
+func (a *API) FleetHealth(ctx context.Context) (FleetHealthView, error) {
+	enabled := fleet.ConfigDistributionEnabled()
+
+	// Config source + last error.
+	var configSource, configLastError string
+	if !enabled {
+		configSource = "no-key"
+	} else {
+		p := a.fleetConfigPoller()
+		if p == nil {
+			configSource = "default-deny-degraded"
+		} else {
+			st := p.Status()
+			configSource = st.Source
+			configLastError = st.LastError
+			if configSource == "default-deny" && configLastError == "" {
+				configSource = "default-deny-degraded"
+			}
+		}
+	}
+
+	// Session state — delegate to FleetSignedIn/Client.SignedIn so Health uses
+	// the same expiry semantics (tokenExpiryGrace + consistent no-ExpiresAt
+	// handling) as the account UI, rather than a divergent inline check.
+	signedIn, _ := a.FleetSignedIn(ctx)
+
+	return FleetHealthView{
+		ConfigDistributionEnabled: enabled,
+		ConfigSource:              configSource,
+		ConfigLastError:           configLastError,
+		SignedIn:                  signedIn,
 	}, nil
 }
 
@@ -454,12 +657,17 @@ func (a *API) FleetConfigPullStatus(_ context.Context) (FleetConfigPullStatusVie
 //   - cedar_delta   → cedarpolicy.Engine.SetTeamBundle
 //   - mcp_allowlist → recipes.ApplyFleetAllowlist
 //   - model_prefs   → stored in fleetState.fleetModelPrefs
-//   - weight_urls   → fleet.SetWeightURLs
+//
+// The kameas_ml_weight_urls bundle section is intentionally ignored: the
+// fleet-hosted-LLM / kameas-ml surface was removed
+// (harness-fleet-sync-activation-01NSYNC01, dead-code cleanup). The wire
+// field is retained on Bundle so signature verification of server-signed
+// bundles still round-trips, but it is no longer persisted or applied.
 type compositeConfigApplier struct {
 	state *fleetState
 }
 
-func (a *compositeConfigApplier) ApplyBundle(ctx context.Context, b *fleet.Bundle) error {
+func (a *compositeConfigApplier) ApplyBundle(ctx context.Context, b *fleet.Bundle) []error {
 	var errs []error
 
 	// Cedar delta.
@@ -486,18 +694,12 @@ func (a *compositeConfigApplier) ApplyBundle(ctx context.Context, b *fleet.Bundl
 		a.state.mu.Unlock()
 	}
 
-	// Weight URLs.
-	if len(b.KameasMLWeightURLs) > 0 {
-		a.state.mu.RLock()
-		dataDir := a.state.dataDir
-		a.state.mu.RUnlock()
-		fleet.SetWeightURLs(dataDir, b.KameasMLWeightURLs)
-	}
+	// Weight URLs (kameas_ml_weight_urls): intentionally ignored — the
+	// fleet-hosted-LLM / kameas-ml surface was removed. See the type doc above.
 
 	// Mandated skills (fleet-skills-sync-01NDFSEX18 WP05).
-	// Partial-success pattern: individual skill errors are collected but
-	// don't prevent the bundle ACK from advancing (matching the rest of
-	// the bundle apply logic).
+	// FR-012: all section errors are collected and returned so the ACK
+	// carries the full set and the caller can decide not to advance lastAppliedID.
 	if len(b.MandatedSkills) > 0 {
 		a.state.mu.RLock()
 		skillStore := a.state.skillStore
@@ -512,10 +714,8 @@ func (a *compositeConfigApplier) ApplyBundle(ctx context.Context, b *fleet.Bundl
 		}
 	}
 
-	if len(errs) > 0 {
-		return errs[0] // return first error; others are logged by the poller
-	}
-	return nil
+	// Return all errors (FR-012). An empty slice means full success.
+	return errs
 }
 
 // FleetModelPrefs returns the current fleet-managed model preferences, or nil
@@ -548,4 +748,73 @@ type LockdownStatusView struct {
 func (a *API) FleetLockdownStatus(_ context.Context) (LockdownStatusView, error) {
 	active := fleet.LockdownActive()
 	return LockdownStatusView{Active: active}, nil
+}
+
+// ── Telemetry opt-ins (harness-fleet-sync-activation-01NSYNC01 gap #4) ─────────
+
+// TelemetryOptInView is the wire-safe per-class opt-in record surfaced to the
+// settings UI. Mirrors fleet.TelemetryOptInItem with an RFC3339 timestamp.
+type TelemetryOptInView struct {
+	Class   string `json:"class"`
+	OptedIn bool   `json:"optedIn"`
+	OptedAt string `json:"optedAt,omitempty"`
+	Source  string `json:"source,omitempty"`
+}
+
+// FleetTelemetryOptIns returns the per-class telemetry opt-in set. On a cold
+// read (cache empty) it fetches from the fleet store; otherwise it returns the
+// cache populated at enroll. Returns fleet.ErrFleetDisabled when fleet is not
+// wired. The set is the fleet store's view (the source of truth), not the
+// local-only JSON.
+func (a *API) FleetTelemetryOptIns(ctx context.Context) ([]TelemetryOptInView, error) {
+	c := a.fleetClient()
+	if c == nil || fleet.Disabled() {
+		return nil, fleet.ErrFleetDisabled
+	}
+	a.fleet.mu.RLock()
+	cached := a.fleet.telemetryOptIns
+	a.fleet.mu.RUnlock()
+	if cached == nil {
+		// Cold read: pull from the fleet store now.
+		a.refreshTelemetryOptIns(ctx)
+		a.fleet.mu.RLock()
+		cached = a.fleet.telemetryOptIns
+		a.fleet.mu.RUnlock()
+	}
+	return telemetryOptInsToView(cached), nil
+}
+
+// FleetSetTelemetryOptIn flips a single class opt-in in the fleet store
+// (source becomes 'user_self' server-side) and refreshes the local cache.
+// Consent-gated by tier server-side; the harness never bypasses the export
+// consent gate. Returns fleet.ErrFleetDisabled when fleet is not wired.
+func (a *API) FleetSetTelemetryOptIn(ctx context.Context, class string, optedIn bool) error {
+	c := a.fleetClient()
+	if c == nil || fleet.Disabled() {
+		return fleet.ErrFleetDisabled
+	}
+	if err := c.PutTelemetryOptIns(ctx, []fleet.TelemetryOptInItem{
+		{Class: class, OptedIn: optedIn},
+	}); err != nil {
+		return err
+	}
+	// Re-pull so the cache reflects the server-applied source/opted_at.
+	a.refreshTelemetryOptIns(ctx)
+	return nil
+}
+
+func telemetryOptInsToView(items []fleet.TelemetryOptInItem) []TelemetryOptInView {
+	out := make([]TelemetryOptInView, 0, len(items))
+	for _, it := range items {
+		v := TelemetryOptInView{
+			Class:   it.Class,
+			OptedIn: it.OptedIn,
+			Source:  it.Source,
+		}
+		if it.OptedAt != nil && !it.OptedAt.IsZero() {
+			v.OptedAt = it.OptedAt.UTC().Format(time.RFC3339)
+		}
+		out = append(out, v)
+	}
+	return out
 }

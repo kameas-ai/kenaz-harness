@@ -25,20 +25,20 @@ import (
 	"time"
 )
 
-// editFileArgs builds a minimal JSON tool-args string for kaneaz__edit_file.
+// editFileArgs builds a minimal JSON tool-args string for kenaz__edit_file.
 func editFileArgs(path string) string {
 	return `{"path":"` + path + `","old_str":"x","new_str":"y"}`
 }
 
 // editFileOKResult is a representative tool result for a successful
-// kaneaz__edit_file call (the sink only checks for non-empty result;
+// kenaz__edit_file call (the sink only checks for non-empty result;
 // actual content is irrelevant for capture purposes).
 const editFileOKResult = `{"written":12}`
 
 // ─── Test A — coalesce: 3 edits to same path → 1 artifact ──────────────────
 
 // TestE2E_A_Coalesce_SamePath3Edits verifies that three consecutive
-// kaneaz__edit_file calls to the same path within one turn produce
+// kenaz__edit_file calls to the same path within one turn produce
 // exactly ONE artifact capture (CoalesceBuffer deduplication).
 func TestE2E_A_Coalesce_SamePath3Edits(t *testing.T) {
 	t.Setenv(envEditFileArtifactSync, "on")
@@ -58,9 +58,9 @@ func TestE2E_A_Coalesce_SamePath3Edits(t *testing.T) {
 	args := editFileArgs(path)
 
 	// Three edits to the same path within one turn.
-	synced.OnPostToolMessage(ctx, "sess-a", "kaneaz__edit_file", args, editFileOKResult, time.Second)
-	synced.OnPostToolMessage(ctx, "sess-a", "kaneaz__edit_file", args, editFileOKResult, time.Second)
-	synced.OnPostToolMessage(ctx, "sess-a", "kaneaz__edit_file", args, editFileOKResult, time.Second)
+	synced.OnPostToolMessage(ctx, "sess-a", "kenaz__edit_file", args, editFileOKResult, time.Second)
+	synced.OnPostToolMessage(ctx, "sess-a", "kenaz__edit_file", args, editFileOKResult, time.Second)
+	synced.OnPostToolMessage(ctx, "sess-a", "kenaz__edit_file", args, editFileOKResult, time.Second)
 
 	// Count captures with AbsolutePath set to our path.
 	count := countCapturesForPath(mgr, path)
@@ -93,9 +93,9 @@ func TestE2E_B_CoalescePerTurn(t *testing.T) {
 	args := editFileArgs(path)
 
 	// Turn 1: 3 edits to same path → 1 capture.
-	synced.OnPostToolMessage(ctx, "sess-b", "kaneaz__edit_file", args, editFileOKResult, time.Second)
-	synced.OnPostToolMessage(ctx, "sess-b", "kaneaz__edit_file", args, editFileOKResult, time.Second)
-	synced.OnPostToolMessage(ctx, "sess-b", "kaneaz__edit_file", args, editFileOKResult, time.Second)
+	synced.OnPostToolMessage(ctx, "sess-b", "kenaz__edit_file", args, editFileOKResult, time.Second)
+	synced.OnPostToolMessage(ctx, "sess-b", "kenaz__edit_file", args, editFileOKResult, time.Second)
+	synced.OnPostToolMessage(ctx, "sess-b", "kenaz__edit_file", args, editFileOKResult, time.Second)
 
 	afterTurn1 := countCapturesForPath(mgr, path)
 	if afterTurn1 != 1 {
@@ -107,7 +107,7 @@ func TestE2E_B_CoalescePerTurn(t *testing.T) {
 
 	// Turn 2: 1 more edit to the same path → should create a second capture
 	// because the buffer was flushed.
-	synced.OnPostToolMessage(ctx, "sess-b", "kaneaz__edit_file", args, editFileOKResult, time.Second)
+	synced.OnPostToolMessage(ctx, "sess-b", "kenaz__edit_file", args, editFileOKResult, time.Second)
 
 	afterTurn2 := countCapturesForPath(mgr, path)
 	if afterTurn2 != 2 {
@@ -155,9 +155,9 @@ func TestE2E_C_CrossProject(t *testing.T) {
 	args := editFileArgs(path)
 
 	// Project A session edits the file.
-	syncedA.OnPostToolMessage(ctx, "sess-projA", "kaneaz__edit_file", args, editFileOKResult, time.Second)
+	syncedA.OnPostToolMessage(ctx, "sess-projA", "kenaz__edit_file", args, editFileOKResult, time.Second)
 	// Project B session edits the same disk path.
-	syncedB.OnPostToolMessage(ctx, "sess-projB", "kaneaz__edit_file", args, editFileOKResult, time.Second)
+	syncedB.OnPostToolMessage(ctx, "sess-projB", "kenaz__edit_file", args, editFileOKResult, time.Second)
 
 	// Manager A should see exactly 1 capture.
 	if got := countCapturesForPath(mgrA, path); got != 1 {
@@ -209,7 +209,7 @@ func TestE2E_D_SaveArtifactSourcedRowNotUpdated(t *testing.T) {
 	// invariant provides the guard; here we assert that a __edit_file call to
 	// editPath produces exactly one new capture for editPath.
 
-	synced.OnPostToolMessage(ctx, "sess-d", "kaneaz__edit_file", editFileArgs(editPath), editFileOKResult, time.Second)
+	synced.OnPostToolMessage(ctx, "sess-d", "kenaz__edit_file", editFileArgs(editPath), editFileOKResult, time.Second)
 
 	if got := countCapturesForPath(mgr, editPath); got != 1 {
 		t.Errorf("Test D: expected 1 capture for editPath, got %d", got)
@@ -250,7 +250,7 @@ func TestE2E_E_EditOnDeletedFile(t *testing.T) {
 	ctx := context.Background()
 
 	// Must not panic.
-	synced.OnPostToolMessage(ctx, "sess-e", "kaneaz__edit_file", editFileArgs(path), editFileOKResult, time.Second)
+	synced.OnPostToolMessage(ctx, "sess-e", "kenaz__edit_file", editFileArgs(path), editFileOKResult, time.Second)
 
 	// No artifact should have been captured for the deleted file.
 	if got := countCapturesForPath(mgr, path); got != 0 {
@@ -281,7 +281,7 @@ func TestE2E_F_FeatureFlagOff(t *testing.T) {
 
 	ctx := context.Background()
 
-	synced.OnPostToolMessage(ctx, "sess-f", "kaneaz__edit_file", editFileArgs(path), editFileOKResult, time.Second)
+	synced.OnPostToolMessage(ctx, "sess-f", "kenaz__edit_file", editFileArgs(path), editFileOKResult, time.Second)
 
 	// No artifact with AbsolutePath should have been created.
 	if got := countCapturesForPath(mgr, path); got != 0 {
@@ -310,7 +310,7 @@ func TestE2E_F2_PerUserGateDisabled(t *testing.T) {
 
 	ctx := context.Background()
 
-	synced.OnPostToolMessage(ctx, "sess-f2", "kaneaz__edit_file", editFileArgs(path), editFileOKResult, time.Second)
+	synced.OnPostToolMessage(ctx, "sess-f2", "kenaz__edit_file", editFileArgs(path), editFileOKResult, time.Second)
 
 	if got := countCapturesForPath(mgr, path); got != 0 {
 		t.Errorf("Test F2: expected 0 captures when per-user gate is off, got %d", got)
@@ -344,7 +344,7 @@ func TestE2E_ThreeDifferentPaths(t *testing.T) {
 	ctx := context.Background()
 
 	for _, p := range paths {
-		synced.OnPostToolMessage(ctx, "sess-3paths", "kaneaz__edit_file", editFileArgs(p), editFileOKResult, time.Second)
+		synced.OnPostToolMessage(ctx, "sess-3paths", "kenaz__edit_file", editFileArgs(p), editFileOKResult, time.Second)
 	}
 
 	// Each distinct path should produce exactly 1 capture.

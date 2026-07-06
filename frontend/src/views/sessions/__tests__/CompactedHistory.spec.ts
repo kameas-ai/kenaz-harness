@@ -200,7 +200,7 @@ describe('SessionsView (WP07 compacted history)', () => {
         listProviders: async () => providers,
         startStream: async () => 'sub',
         stopStream: async () => undefined,
-      },
+      } as any,
     });
     await flushPromises();
 
@@ -227,7 +227,7 @@ describe('SessionsView (WP07 compacted history)', () => {
         listProviders: async () => providers,
         startStream: async () => 'sub',
         stopStream: async () => undefined,
-      },
+      } as any,
     });
     await flushPromises();
 
@@ -252,7 +252,7 @@ describe('SessionsView (WP07 compacted history)', () => {
         listProviders: async () => providers,
         startStream: async () => 'sub',
         stopStream: async () => undefined,
-      },
+      } as any,
     });
     await flushPromises();
 
@@ -294,7 +294,7 @@ describe('SessionsView (WP07 compacted history)', () => {
         listProviders: async () => providers,
         startStream: async () => 'sub',
         stopStream: async () => undefined,
-      },
+      } as any,
     });
     await flushPromises();
 
@@ -313,7 +313,7 @@ describe('SessionsView (WP07 compacted history)', () => {
         listProviders: async () => providers,
         startStream: async () => 'sub',
         stopStream: async () => undefined,
-      },
+      } as any,
     });
     await flushPromises();
 

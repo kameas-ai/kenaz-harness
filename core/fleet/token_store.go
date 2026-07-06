@@ -3,7 +3,9 @@ package fleet
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/zalando/go-keyring"
@@ -71,12 +73,32 @@ func LoadTokens() (TokenSet, error) {
 	}, nil
 }
 
-// ClearTokens deletes all fleet tokens from the OS keychain. Errors from
-// individual deletes are collected but not fatal — partial deletion is
-// treated as success to avoid zombie token state.
+// ClearTokens deletes all fleet tokens from the OS keychain.
+// All three slots are attempted regardless of individual errors so a partial
+// keychain state is avoided. Individual delete failures are WARN-logged (not
+// silently swallowed, FR-004) so a failing keychain clear is diagnosable, and
+// the returned error aggregates every failure (fleet-integrity WP06), excluding
+// "not found" — missing tokens are not an error on sign-out. Callers should
+// surface the error but may still treat sign-out as logically complete (the
+// access token is the gate; a token that failed to delete is unusable anyway
+// because Sign-In refuses to load an incomplete set).
 func ClearTokens() error {
-	_ = keyring.Delete(keyringService, keyAccessToken())
-	_ = keyring.Delete(keyringService, keyRefreshToken())
-	_ = keyring.Delete(keyringService, keyExpiresAt())
-	return nil
+	var errs []string
+	for _, key := range []string{keyAccessToken(), keyRefreshToken(), keyExpiresAt()} {
+		if err := keyring.Delete(keyringService, key); err != nil {
+			if err == keyring.ErrNotFound {
+				// Already absent — that's the desired post-state.
+				continue
+			}
+			slog.Warn("fleet: ClearTokens keychain delete failed",
+				"key", key,
+				"error", err.Error(),
+			)
+			errs = append(errs, err.Error())
+		}
+	}
+	if len(errs) == 0 {
+		return nil
+	}
+	return fmt.Errorf("fleet: clear tokens: %s", strings.Join(errs, "; "))
 }

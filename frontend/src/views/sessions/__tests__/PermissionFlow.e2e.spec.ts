@@ -792,7 +792,7 @@ describe('PermissionFlow.e2e — WP12 modal acceptance', () => {
     const w = mount(ToolPermissionModal, {
       props: {
         promptId: 'p-tool-05',
-        server: 'kaneaz',
+        server: 'kenaz',
         tool: 'bash',
         args: '',
         onResolve: (r: PermissionResolution) => resolutions.push(r),

@@ -9,7 +9,7 @@ import (
 	"github.com/kameas-ai/kenaz-harness/core/tools/sleep"
 )
 
-// TestIsPassiveTool verifies that kaneaz__sleep is recognised as passive
+// TestIsPassiveTool verifies that kenaz__sleep is recognised as passive
 // and that a normal tool name is not.
 func TestIsPassiveTool(t *testing.T) {
 	t.Parallel()
@@ -20,8 +20,8 @@ func TestIsPassiveTool(t *testing.T) {
 		want     bool
 	}{
 		{"sleep_is_passive", sleep.ToolName, true},
-		{"bash_is_active", "kaneaz__bash", false},
-		{"web_search_is_active", "kaneaz__web_search", false},
+		{"bash_is_active", "kenaz__bash", false},
+		{"web_search_is_active", "kenaz__web_search", false},
 		{"empty_is_active", "", false},
 		{"arbitrary_mcp_is_active", "filesystem__write_file", false},
 	}
@@ -44,13 +44,13 @@ func TestShouldCountIteration(t *testing.T) {
 	if toolloop.ShouldCountIteration(sleep.ToolName) {
 		t.Errorf("ShouldCountIteration(%q) = true; sleep must not consume an iteration", sleep.ToolName)
 	}
-	if !toolloop.ShouldCountIteration("kaneaz__bash") {
-		t.Error("ShouldCountIteration(kaneaz__bash) = false; bash must consume an iteration")
+	if !toolloop.ShouldCountIteration("kenaz__bash") {
+		t.Error("ShouldCountIteration(kenaz__bash) = false; bash must consume an iteration")
 	}
 }
 
 // TestIterCounter_AdvanceIfActive is the core WP04 acceptance criterion:
-// calling kaneaz__sleep through AdvanceIfActive does NOT increment the
+// calling kenaz__sleep through AdvanceIfActive does NOT increment the
 // counter; calling any other tool does.
 func TestIterCounter_AdvanceIfActive(t *testing.T) {
 	t.Parallel()
@@ -58,7 +58,7 @@ func TestIterCounter_AdvanceIfActive(t *testing.T) {
 	var counter toolloop.IterCounter
 
 	// Non-passive tool increments.
-	if advanced := counter.AdvanceIfActive("kaneaz__bash"); !advanced {
+	if advanced := counter.AdvanceIfActive("kenaz__bash"); !advanced {
 		t.Error("bash call should advance counter")
 	}
 	if counter.Value() != 1 {
@@ -74,7 +74,7 @@ func TestIterCounter_AdvanceIfActive(t *testing.T) {
 	}
 
 	// Another non-passive call increments again.
-	counter.AdvanceIfActive("kaneaz__web_search")
+	counter.AdvanceIfActive("kenaz__web_search")
 	if counter.Value() != 2 {
 		t.Errorf("counter = %d want 2 after web_search call", counter.Value())
 	}
@@ -92,8 +92,8 @@ func TestIterCounter_Reset(t *testing.T) {
 	t.Parallel()
 
 	var counter toolloop.IterCounter
-	counter.AdvanceIfActive("kaneaz__bash")
-	counter.AdvanceIfActive("kaneaz__bash")
+	counter.AdvanceIfActive("kenaz__bash")
+	counter.AdvanceIfActive("kenaz__bash")
 	if counter.Value() != 2 {
 		t.Fatalf("counter = %d want 2 before reset", counter.Value())
 	}
@@ -122,7 +122,7 @@ func TestBuiltinPool_SleepDoesNotCountIterations(t *testing.T) {
 	registry.Register(sleepTool)
 
 	// Register a stub bash-like tool.
-	bashTool := &passthroughBuiltin{name: "kaneaz__bash"}
+	bashTool := &passthroughBuiltin{name: "kenaz__bash"}
 	registry.Register(bashTool)
 
 	pool := toolloop.NewBuiltinPool(nil, registry)
@@ -134,7 +134,7 @@ func TestBuiltinPool_SleepDoesNotCountIterations(t *testing.T) {
 	if err != nil {
 		t.Fatalf("bash call error: %v", err)
 	}
-	counter.AdvanceIfActive("kaneaz__bash")
+	counter.AdvanceIfActive("kenaz__bash")
 
 	if counter.Value() != 1 {
 		t.Errorf("counter after bash = %d want 1", counter.Value())

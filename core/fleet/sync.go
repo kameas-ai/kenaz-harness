@@ -17,6 +17,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"runtime/debug"
 	"sync"
 	"time"
 
@@ -196,6 +197,17 @@ func (s *Syncer) NotifyMutation(cat SyncCategory) {
 	ch := make(chan struct{}, 1)
 	s.debounce[cat] = ch
 	go func() {
+		// Recover panics from the debounced-push goroutine (FR-003).
+		defer func() {
+			if r := recover(); r != nil {
+				stack := debug.Stack()
+				logging.L().Error("fleet.sync.debounced_push.panic",
+					"category", string(cat),
+					"panic", fmt.Sprintf("%v", r),
+					"stack", string(stack),
+				)
+			}
+		}()
 		timer := time.NewTimer(5 * time.Second)
 		defer timer.Stop()
 		select {
@@ -378,6 +390,46 @@ func (s *Syncer) StartPolling(ctx context.Context) {
 // Stop signals the debounce goroutines and poll loop to exit.
 func (s *Syncer) Stop() {
 	close(s.stopCh)
+}
+
+// CollectCategory invokes the registered collector for the given category and
+// returns the raw payload. Returns an error if no collector is wired.
+// This method does NOT require the category to be enabled or a fleet client to
+// be present — it is intended for diagnostic views and unit tests.
+func (s *Syncer) CollectCategory(ctx context.Context, cat SyncCategory) (json.RawMessage, error) {
+	s.mu.RLock()
+	cfg, ok := s.configs[cat]
+	s.mu.RUnlock()
+	if !ok || cfg.Collector == nil {
+		return nil, fmt.Errorf("fleet/sync: no collector registered for %q", cat)
+	}
+	return cfg.Collector(ctx)
+}
+
+// ApplyCategory invokes the registered applier for the given category with
+// the given raw payload. Returns an error if no applier is wired.
+// This method does NOT require the category to be enabled or a fleet client
+// to be present — it is intended for unit tests and administrative tooling.
+func (s *Syncer) ApplyCategory(ctx context.Context, cat SyncCategory, raw json.RawMessage) error {
+	s.mu.RLock()
+	cfg, ok := s.configs[cat]
+	s.mu.RUnlock()
+	if !ok || cfg.Applier == nil {
+		return fmt.Errorf("fleet/sync: no applier registered for %q", cat)
+	}
+	return cfg.Applier(ctx, raw)
+}
+
+// RegisteredCategories returns the set of categories that have a registered
+// configuration (collector or applier). Useful for diagnostics and tests.
+func (s *Syncer) RegisteredCategories() []SyncCategory {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]SyncCategory, 0, len(s.configs))
+	for cat := range s.configs {
+		out = append(out, cat)
+	}
+	return out
 }
 
 const (

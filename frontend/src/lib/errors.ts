@@ -197,6 +197,154 @@ export function friendlyUnsupportedFeatureError(err: unknown): string | null {
   return `Feature "${parsed.feature}" is not supported by model "${parsed.modelId}".`;
 }
 
+// ── Structured RPC error envelope (agent-loop-robustness-parity WP08) ────
+
+/**
+ * RPCErrorEnvelope mirrors core/rpc.RPCError. When the backend returns one
+ * of the typed LLM errors it maps it to this envelope and embeds it in
+ * the broker event payload (future) or as a JSON-encoded Wails error body.
+ *
+ * Code vocabulary:
+ *   "auth"              — authentication / API-key failure
+ *   "transient"         — recoverable transient failure
+ *   "budget_exhausted"  — retry budget consumed
+ *   "context_overflow"  — context window exceeded
+ *   "invalid_request"   — malformed request
+ *   "internal"          — unexpected internal error
+ */
+export interface RPCErrorEnvelope {
+  code: string;
+  message: string;
+  hint?: string;
+  retryable: boolean;
+}
+
+/**
+ * parseRPCError attempts to parse a structured RPCErrorEnvelope from the
+ * given value. Returns null when the value does not conform to the envelope
+ * shape (e.g. a plain string error from an older binding or a non-LLM path).
+ *
+ * The envelope can arrive as:
+ *   - an RPCErrorEnvelope object (when the binding returns one directly)
+ *   - a JSON string encoding of RPCErrorEnvelope (when Wails serialises it
+ *     as the error body of a rejected promise)
+ */
+export function parseRPCError(err: unknown): RPCErrorEnvelope | null {
+  if (!err) return null;
+
+  // Direct object: check for the required fields.
+  if (typeof err === 'object' && err !== null) {
+    const e = err as Record<string, unknown>;
+    if (typeof e['code'] === 'string' && typeof e['message'] === 'string' && typeof e['retryable'] === 'boolean') {
+      return {
+        code: e['code'] as string,
+        message: e['message'] as string,
+        hint: typeof e['hint'] === 'string' ? (e['hint'] as string) : undefined,
+        retryable: e['retryable'] as boolean,
+      };
+    }
+  }
+
+  // JSON string: try to parse.
+  if (typeof err === 'string') {
+    try {
+      const parsed = JSON.parse(err) as Record<string, unknown>;
+      if (typeof parsed['code'] === 'string' && typeof parsed['message'] === 'string' && typeof parsed['retryable'] === 'boolean') {
+        return {
+          code: parsed['code'] as string,
+          message: parsed['message'] as string,
+          hint: typeof parsed['hint'] === 'string' ? (parsed['hint'] as string) : undefined,
+          retryable: parsed['retryable'] as boolean,
+        };
+      }
+    } catch {
+      // Not JSON — fall through.
+    }
+  }
+
+  return null;
+}
+
+/**
+ * friendlyRPCError returns a user-facing string from a structured envelope,
+ * preferring the Hint when present. Returns null when err is not a recognised
+ * RPCErrorEnvelope (callers should fall back to their existing error parsers).
+ */
+export function friendlyRPCError(err: unknown): string | null {
+  const envelope = parseRPCError(err);
+  if (!envelope) return null;
+  return envelope.hint || envelope.message;
+}
+
+// ── ServedUnsupportedError (served-mode-honesty-WZQR1ZJE WP01) ───────────
+
+/**
+ * ServedUnsupportedError is thrown by createUnsupportedServedClient() for
+ * every RPC method that is NOT wired to the real HTTP/WS transport in served
+ * mode.  Components catch this error and render an honest "not available in
+ * served mode" state instead of fabricated data.
+ *
+ * Use isServedUnsupportedError() to narrow an unknown catch value.
+ */
+export class ServedUnsupportedError extends Error {
+  /** The RPC method name that was called. */
+  readonly method: string;
+
+  constructor(method: string) {
+    super(`served mode: "${method}" is not available in served mode`);
+    this.name = 'ServedUnsupportedError';
+    this.method = method;
+    // Maintain proper prototype chain in transpiled envs.
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+
+  /**
+   * friendly returns a short, user-facing message suitable for display in a
+   * "not available" badge or empty-state panel.
+   */
+  friendly(): string {
+    return 'This feature is not available in served mode. Run the harness as a desktop app to use it.';
+  }
+}
+
+/**
+ * isServedUnsupportedError narrows an unknown catch value to ServedUnsupportedError.
+ */
+export function isServedUnsupportedError(err: unknown): err is ServedUnsupportedError {
+  return err instanceof ServedUnsupportedError;
+}
+
+// ── General-purpose friendly() helper ────────────────────────────────────
+
+/**
+ * friendly — converts any unknown caught error into a user-displayable string.
+ *
+ * Priority:
+ *   1. Structured RPC error envelope (agent-loop-robustness-parity WP08).
+ *   2. Known typed errors (attachment, unsupported-feature, served-mode).
+ *   3. Short raw errors (< 200 chars): show verbatim.
+ *   4. Long errors: truncate + append "… (check logs for details)".
+ *
+ * Use this everywhere you would otherwise write:
+ *   `err instanceof Error ? err.message : String(err)`
+ *
+ * Components should NOT render `err.message` directly in templates.
+ * Always call `friendly(err)` so Go-internal error strings are humanised.
+ */
+export function friendly(err: unknown): string {
+  const rpc = friendlyRPCError(err);
+  if (rpc) return rpc;
+  const attachment = friendlyAttachmentError(err);
+  if (attachment) return attachment;
+  const unsupported = friendlyUnsupportedFeatureError(err);
+  if (unsupported) return unsupported;
+  if (isServedUnsupportedError(err)) return err.friendly();
+  const raw = toErrorString(err);
+  if (!raw) return 'An unexpected error occurred.';
+  if (raw.length <= 200) return raw;
+  return raw.slice(0, 197) + '…';
+}
+
 // ── helpers ──────────────────────────────────────────────────────────────
 
 function toErrorString(err: unknown): string {

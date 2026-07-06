@@ -115,7 +115,7 @@ defineExpose({ queue });
       <!-- Eyebrow -->
       <div class="flex items-center gap-1.5 font-ui text-[11px] uppercase tracking-[0.18em] text-ink-subtle">
         <span aria-hidden="true">📋</span>
-        <span>Cedar policy — agent proposal</span>
+        <span>Security policy — agent proposal</span>
       </div>
 
       <!-- Policy name -->

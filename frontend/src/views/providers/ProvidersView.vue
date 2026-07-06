@@ -12,6 +12,8 @@
  */
 
 import { computed, onMounted, ref } from 'vue';
+import { useServedMode } from '@/lib/useServedMode';
+import NotAvailableInServedMode from '@/components/ui/NotAvailableInServedMode.vue';
 import {
   DialogRoot,
   DialogPortal,
@@ -23,13 +25,17 @@ import {
 } from 'radix-vue';
 import SettingsShell from '@/views/settings/SettingsShell.vue';
 import Button from '@/components/ui/Button.vue';
+import ConfirmDialog from '@/components/ui/ConfirmDialog.vue';
+import { useConfirmDialog } from '@/composables/useConfirmDialog';
 import { useHarnessClient } from '@/lib/harnessClientContext';
 import type { AddProviderInput, Provider, TestResult } from '@/lib/types';
 import AddProviderForm from './AddProviderForm.vue';
 import ProviderRow from './ProviderRow.vue';
 import LocalRuntimesSection from './LocalRuntimesSection.vue';
 
+const servedMode = useServedMode();
 const client = useHarnessClient();
+const { confirmState, confirm } = useConfirmDialog();
 
 const providers = ref<readonly Provider[]>([]);
 const loading = ref(false);
@@ -135,6 +141,16 @@ async function onTest(id: string): Promise<void> {
 }
 
 async function onRemove(id: string): Promise<void> {
+  // WP03 review fix: route provider removal through ConfirmDialog.
+  const provider = providers.value.find((p) => p.id === id);
+  const providerName = provider?.name || id;
+  const ok = await confirm({
+    title: `Remove provider "${providerName}"?`,
+    message: 'This cannot be undone. Sessions using this provider will need to be updated.',
+    danger: true,
+    confirmLabel: 'Remove',
+  });
+  if (!ok) return;
   errorMessage.value = '';
   try {
     await client.llm.removeProvider(id);
@@ -165,7 +181,12 @@ const inlineTestClass = computed(() =>
 </script>
 
 <template>
+  <NotAvailableInServedMode
+    v-if="servedMode"
+    feature="Providers"
+  />
   <SettingsShell
+    v-else
     number="04"
     section="PROVIDERS"
     title="Configured LLM providers"
@@ -293,5 +314,12 @@ const inlineTestClass = computed(() =>
         </DialogContent>
       </DialogPortal>
     </DialogRoot>
+
+    <!-- WP03 review fix: destructive-action confirmation for provider removal -->
+    <ConfirmDialog
+      v-bind="confirmState"
+      @confirm="confirmState.resolve(true)"
+      @cancel="confirmState.resolve(false)"
+    />
   </SettingsShell>
 </template>

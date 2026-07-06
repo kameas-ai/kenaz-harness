@@ -105,6 +105,12 @@ const emit = defineEmits<{
    * client.branches.createExplicit and navigates to the child session.
    */
   (e: 'branch-from-turn', message: Message): void;
+  /**
+   * Forwarded from MessageBubble's "Resume" button on a partial message
+   * (long-turn-resilience WP03). Parent calls
+   * client.sessions.resumeMessage to continue the interrupted stream.
+   */
+  (e: 'resume', messageId: string): void;
 }>();
 
 function artifactsFor(messageId: string): readonly Artifact[] {
@@ -277,11 +283,14 @@ defineExpose({ scrollToBottom });
           :completion-tokens="m.completionTokens"
           :cost-usd="m.costUsd"
           :message-cost-source="m.messageCostSource"
+          :streaming-failed-at="m.streamingFailedAt"
+          :streaming-recoverable="m.streamingRecoverable"
           @remember="(scope) => emit('remember', m, scope)"
           @save-artifact="() => emit('save-artifact', m)"
           @open-artifact="(a) => emit('open-artifact', a)"
           @jump-to-summary="onJumpToSummary"
           @branch-from-turn="() => emit('branch-from-turn', m)"
+          @resume="(mid) => emit('resume', mid)"
         />
       </div>
 

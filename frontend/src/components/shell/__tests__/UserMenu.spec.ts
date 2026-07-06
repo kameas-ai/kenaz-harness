@@ -50,13 +50,14 @@ function makeRouter() {
 
 function buildSignedOutClient() {
   return createFakeHarnessClient({
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     settings: {
       fleetProfile: vi.fn(async () => prodProfile),
       fleetSignedIn: vi.fn(async () => false),
       fleetSignIn: vi.fn(async () => aliceIdentity),
       fleetSignOut: vi.fn(async () => {}),
       fleetRefreshIdentity: vi.fn(async () => aliceIdentity),
-    },
+    } as any,
   });
 }
 
@@ -65,18 +66,20 @@ function buildSignedInClient(
   identity: FleetIdentity = aliceIdentity,
 ) {
   return createFakeHarnessClient({
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     settings: {
       fleetProfile: vi.fn(async () => profile),
       fleetSignedIn: vi.fn(async () => true),
       fleetSignIn: vi.fn(async () => identity),
       fleetSignOut: vi.fn(async () => {}),
       fleetRefreshIdentity: vi.fn(async () => identity),
-    },
+    } as any,
   });
 }
 
 function buildDisabledClient() {
   return createFakeHarnessClient({
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     settings: {
       fleetProfile: vi.fn(async () => {
         throw new Error('fleet: disabled by env');
@@ -85,7 +88,7 @@ function buildDisabledClient() {
       fleetSignIn: vi.fn(async () => ({ userId: '', orgId: '', teamId: '' })),
       fleetSignOut: vi.fn(async () => {}),
       fleetRefreshIdentity: vi.fn(async () => ({ userId: '', orgId: '', teamId: '' })),
-    },
+    } as any,
   });
 }
 

@@ -355,7 +355,7 @@ jobs:
           # platforms that don't need one.
           ARGS=(
             -platform "${{ matrix.wails_platform }}"
-            -ldflags "-X main.Version=${VERSION}"
+            -ldflags "-X main.Version=${VERSION} -X github.com/kameas-ai/kenaz-harness/core/fleet.fleetSigningPublicKeyBytes=${{ secrets.FLEET_SIGNING_PUBKEY }}"
             -trimpath
           )
           if [ "${{ runner.os }}" = "Linux" ]; then
@@ -471,7 +471,7 @@ jobs:
           set -euo pipefail
           VERSION="${{ needs.derive-version.outputs.version }}"
           wails build -platform ${{ matrix.wails_platform }} -nsis \
-            -ldflags "-X main.Version=${VERSION}" \
+            -ldflags "-X main.Version=${VERSION} -X github.com/kameas-ai/kenaz-harness/core/fleet.fleetSigningPublicKeyBytes=${{ secrets.FLEET_SIGNING_PUBKEY }}" \
             -trimpath
 
       - name: rename NSIS installer for clean asset name (windows-amd64 only)

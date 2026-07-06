@@ -24,14 +24,14 @@ type Secret struct {
 }
 
 // NewSecret constructs a Secret from raw bytes. The fingerprint is the
-// first 12 base32-ish chars of HMAC-SHA-256(salt, "kaneaz-fingerprint").
+// first 12 base32-ish chars of HMAC-SHA-256(salt, "kenaz-fingerprint").
 // Used in RedactionSummary so audit can scope correlation queries to
 // a salt window.
 func NewSecret(salt []byte) *Secret {
 	cp := make([]byte, len(salt))
 	copy(cp, salt)
 	mac := hmac.New(sha256.New, cp)
-	mac.Write([]byte("kaneaz-fingerprint"))
+	mac.Write([]byte("kenaz-fingerprint"))
 	sum := mac.Sum(nil)
 	fp := encodeFingerprint(sum)
 	return &Secret{bytes: cp, fingerprint: fp}
@@ -65,7 +65,7 @@ func (s *Secret) Rotate(newSalt []byte) {
 	copy(cp, newSalt)
 	s.bytes = cp
 	mac := hmac.New(sha256.New, cp)
-	mac.Write([]byte("kaneaz-fingerprint"))
+	mac.Write([]byte("kenaz-fingerprint"))
 	s.fingerprint = encodeFingerprint(mac.Sum(nil))
 }
 

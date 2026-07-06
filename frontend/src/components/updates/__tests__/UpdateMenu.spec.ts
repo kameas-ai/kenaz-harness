@@ -42,7 +42,7 @@ const baseStatus: UpdateStatus = {
 function setPlatform(p: 'mac' | 'win' | 'linux') {
   _resetPlatformCache();
   if (typeof localStorage !== 'undefined') {
-    localStorage.setItem('kaneaz_shortcut_platform', p);
+    localStorage.setItem('kenaz_shortcut_platform', p);
   }
 }
 
@@ -66,7 +66,7 @@ describe('UpdateMenu', () => {
   });
   afterEach(() => {
     if (typeof localStorage !== 'undefined') {
-      localStorage.removeItem('kaneaz_shortcut_platform');
+      localStorage.removeItem('kenaz_shortcut_platform');
     }
     _resetPlatformCache();
     __resetUpdateStoreForTests();
@@ -171,7 +171,7 @@ describe('UpdateMenu', () => {
     await flushPromises();
     expect(skipFn).toHaveBeenCalledWith('0.4.1');
     expect(w.emitted('close')).toBeTruthy();
-    expect(localStorage.getItem('kaneaz_update_skipped_version')).toBe('0.4.1');
+    expect(localStorage.getItem('kenaz_update_skipped_version')).toBe('0.4.1');
   });
 
   it('emits navigate-settings when Settings is clicked', async () => {

@@ -1,4 +1,4 @@
-// Package lockfile implements the kaneaz.lock format.
+// Package lockfile implements the kenaz.lock format.
 //
 // Format: TOML, Cargo-flavored, schema-versioned, byte-deterministic. The
 // lockfile pins every bundle by content hash and records the channel that
@@ -22,7 +22,7 @@ const CurrentSchemaVersion = 1
 // MinSchemaVersion is the lowest version this harness can read.
 const MinSchemaVersion = 1
 
-// Lockfile is the parsed kaneaz.lock document.
+// Lockfile is the parsed kenaz.lock document.
 type Lockfile struct {
 	SchemaVersion int             `toml:"schema_version"`
 	Bundles       []LockedBundle  `toml:"bundle"`

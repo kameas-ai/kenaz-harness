@@ -23,13 +23,15 @@ type fakeApplier struct {
 	errFn   func(*Bundle) error
 }
 
-func (f *fakeApplier) ApplyBundle(_ context.Context, b *Bundle) error {
+func (f *fakeApplier) ApplyBundle(_ context.Context, b *Bundle) []error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	cp := *b
 	f.applied = append(f.applied, &cp)
 	if f.errFn != nil {
-		return f.errFn(b)
+		if err := f.errFn(b); err != nil {
+			return []error{err}
+		}
 	}
 	return nil
 }

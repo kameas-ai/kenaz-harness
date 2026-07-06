@@ -21,6 +21,7 @@
 
 import { onBeforeUnmount, ref, type Ref, watch } from 'vue';
 import { useConnectionState } from './useConnectionState';
+import { onServedEvent } from './useServedEvents';
 
 export interface UseEventStreamResult<T> {
   /** Last payload received on the topic, or null. */
@@ -60,13 +61,25 @@ export function useEventStream<T>(
   function attach() {
     if (off) return;
     const rt = getRuntime();
-    if (!rt?.EventsOn) return;
-    off = rt.EventsOn(topic, (payload) => {
-      const typed = payload as T;
-      latest.value = typed;
-      count.value += 1;
-      if (handler) handler(typed);
-    });
+    if (rt?.EventsOn) {
+      // Wails desktop path: wire the native event bridge.
+      off = rt.EventsOn(topic, (payload) => {
+        const typed = payload as T;
+        latest.value = typed;
+        count.value += 1;
+        if (handler) handler(typed);
+      });
+    } else {
+      // Served mode fallback: subscribe to the in-process served-event bus
+      // that is populated by the WS frame handler in harnessClient.ts.
+      // Callers receive events identically to the Wails path (FR-007).
+      off = onServedEvent(topic, (payload) => {
+        const typed = payload as T;
+        latest.value = typed;
+        count.value += 1;
+        if (handler) handler(typed);
+      });
+    }
     active.value = true;
   }
 

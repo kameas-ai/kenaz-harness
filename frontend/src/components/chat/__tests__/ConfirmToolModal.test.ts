@@ -41,6 +41,9 @@ function uninstallRuntime() {
 
 function mountModal(seed: Partial<HarnessClient> = {}) {
   return mount(ConfirmToolModal, {
+    // Mount into document.body so BaseDialog's <Teleport to="body"> renders
+    // content into the live DOM, reachable via document.body.querySelector.
+    attachTo: document.body,
     global: {
       plugins: [
         {
@@ -66,6 +69,11 @@ function makeRequest(overrides: Partial<ConfirmToolRequest> = {}): ConfirmToolRe
   };
 }
 
+/** Query a testid from document.body (needed for Teleport-rendered content). */
+function q(testid: string): HTMLElement | null {
+  return document.body.querySelector(`[data-testid="${testid}"]`);
+}
+
 describe('ConfirmToolModal', () => {
   beforeEach(() => {
     installFakeRuntime();
@@ -73,11 +81,14 @@ describe('ConfirmToolModal', () => {
   });
   afterEach(() => {
     uninstallRuntime();
+    // Clean up DOM nodes left by attachTo: document.body mounts.
+    document.body.innerHTML = '';
   });
 
   it('renders nothing when no confirm request has arrived', () => {
     const w = mountModal();
-    expect(w.find('[data-testid="confirm-tool-modal"]').exists()).toBe(false);
+    // The inner div (data-testid="confirm-tool-modal") only renders when head != null.
+    expect(q('confirm-tool-modal')).toBeNull();
     w.unmount();
   });
 
@@ -87,19 +98,18 @@ describe('ConfirmToolModal', () => {
     rt.emit('llm:tool-confirm-request', makeRequest());
     await flushPromises();
 
-    const modal = w.find('[data-testid="confirm-tool-modal"]');
-    expect(modal.exists()).toBe(true);
-    expect(w.text()).toContain('github.create_issue');
+    expect(q('confirm-tool-modal')).not.toBeNull();
+    expect(document.body.textContent).toContain('github.create_issue');
     // Args summary is pretty-printed JSON.
-    const args = w.find('[data-testid="confirm-tool-modal-args"]');
-    expect(args.exists()).toBe(true);
-    expect(args.text()).toContain('hello');
+    expect(q('confirm-tool-modal-args')).not.toBeNull();
+    expect(q('confirm-tool-modal-args')!.textContent).toContain('hello');
     w.unmount();
   });
 
   it('calls resolveConfirm with the right decision on Allow click', async () => {
     const resolveSpy = vi.fn(async () => undefined);
     const w = mountModal({
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       llm: {
         listProviders: async () => [],
         startStream: async () => 'sub',
@@ -110,24 +120,27 @@ describe('ConfirmToolModal', () => {
         testProvider: async () => ({ success: true, latency_ms: 0, message: 'ok' }),
         listModels: async () => [],
         resolveConfirm: resolveSpy,
-      },
+      } as any,
     });
     const rt = (window as unknown as { runtime: FakeRuntime }).runtime;
     rt.emit('llm:tool-confirm-request', makeRequest({ request_id: 'r-allow' }));
     await flushPromises();
 
-    await w.find('[data-testid="confirm-tool-allow"]').trigger('click');
+    const allowBtn = q('confirm-tool-allow');
+    expect(allowBtn).not.toBeNull();
+    allowBtn!.click();
     await flushPromises();
 
     expect(resolveSpy).toHaveBeenCalledWith('r-allow', 'allow');
     // After resolving the modal closes (queue is empty).
-    expect(w.find('[data-testid="confirm-tool-modal"]').exists()).toBe(false);
+    expect(q('confirm-tool-modal')).toBeNull();
     w.unmount();
   });
 
   it('calls resolveConfirm with always_deny on the Always deny click', async () => {
     const resolveSpy = vi.fn(async () => undefined);
     const w = mountModal({
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       llm: {
         listProviders: async () => [],
         startStream: async () => 'sub',
@@ -138,13 +151,15 @@ describe('ConfirmToolModal', () => {
         testProvider: async () => ({ success: true, latency_ms: 0, message: 'ok' }),
         listModels: async () => [],
         resolveConfirm: resolveSpy,
-      },
+      } as any,
     });
     const rt = (window as unknown as { runtime: FakeRuntime }).runtime;
     rt.emit('llm:tool-confirm-request', makeRequest({ request_id: 'r-deny' }));
     await flushPromises();
 
-    await w.find('[data-testid="confirm-tool-always-deny"]').trigger('click');
+    const alwaysDenyBtn = q('confirm-tool-always-deny');
+    expect(alwaysDenyBtn).not.toBeNull();
+    alwaysDenyBtn!.click();
     await flushPromises();
 
     expect(resolveSpy).toHaveBeenCalledWith('r-deny', 'always_deny');
@@ -158,9 +173,9 @@ describe('ConfirmToolModal', () => {
     rt.emit('llm:tool-confirm-request', makeRequest({ request_id: 'r-2', tool: 'second' }));
     await flushPromises();
 
-    expect(w.text()).toContain('first');
-    expect(w.text()).not.toContain('second');
-    expect(w.text()).toContain('+1 more pending');
+    expect(document.body.textContent).toContain('first');
+    expect(document.body.textContent).not.toContain('second');
+    expect(document.body.textContent).toContain('+1 more pending');
     w.unmount();
   });
 
@@ -173,7 +188,7 @@ describe('ConfirmToolModal', () => {
     await flushPromises();
 
     // Only one queued; "more pending" indicator should not show.
-    expect(w.text()).not.toContain('more pending');
+    expect(document.body.textContent).not.toContain('more pending');
     w.unmount();
   });
 
@@ -182,6 +197,7 @@ describe('ConfirmToolModal', () => {
       throw new Error('backend down');
     });
     const w = mountModal({
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       llm: {
         listProviders: async () => [],
         startStream: async () => 'sub',
@@ -192,18 +208,20 @@ describe('ConfirmToolModal', () => {
         testProvider: async () => ({ success: true, latency_ms: 0, message: 'ok' }),
         listModels: async () => [],
         resolveConfirm: resolveSpy,
-      },
+      } as any,
     });
     const rt = (window as unknown as { runtime: FakeRuntime }).runtime;
     rt.emit('llm:tool-confirm-request', makeRequest());
     await flushPromises();
 
-    await w.find('[data-testid="confirm-tool-allow"]').trigger('click');
+    const allowBtn = q('confirm-tool-allow');
+    expect(allowBtn).not.toBeNull();
+    allowBtn!.click();
     await flushPromises();
 
-    expect(w.text()).toContain('backend down');
+    expect(document.body.textContent).toContain('backend down');
     // The modal stays open so the user can retry.
-    expect(w.find('[data-testid="confirm-tool-modal"]').exists()).toBe(true);
+    expect(q('confirm-tool-modal')).not.toBeNull();
     w.unmount();
   });
 });

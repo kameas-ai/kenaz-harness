@@ -110,18 +110,18 @@ func (r *recordingEmitter) CardCacheMiss(_ context.Context, _, peerID, _, _, _ s
 func TestPreflightAllSuccessAndFailure(t *testing.T) {
 	t.Parallel()
 	backend := newStaticBackend(map[string][]byte{
-		"keychain|kaneaz/peer-a": []byte("secret-a"),
+		"keychain|kenaz/peer-a": []byte("secret-a"),
 	})
 	em := &recordingEmitter{}
 	r := NewRegistry(backend, em)
 	profiles := []acp.PeerProfile{
 		{
 			PeerID: "peer-a", Transport: acp.TransportLoopback, CardSource: acp.CardSourceWellKnown,
-			AuthRef: &secrets.Reference{Kind: secrets.RefKeychain, Locator: "kaneaz/peer-a"},
+			AuthRef: &secrets.Reference{Kind: secrets.RefKeychain, Locator: "kenaz/peer-a"},
 		},
 		{
 			PeerID: "peer-b", Transport: acp.TransportLoopback, CardSource: acp.CardSourceWellKnown,
-			AuthRef: &secrets.Reference{Kind: secrets.RefKeychain, Locator: "kaneaz/missing"},
+			AuthRef: &secrets.Reference{Kind: secrets.RefKeychain, Locator: "kenaz/missing"},
 		},
 		{
 			// No AuthRef — preflight reports success.

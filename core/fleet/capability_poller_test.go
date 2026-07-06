@@ -86,31 +86,39 @@ func TestCapabilityPoller_Current_DefaultDeny(t *testing.T) {
 	if cur.Source != "default-deny" {
 		t.Errorf("Source = %q, want 'default-deny'", cur.Source)
 	}
-	if cur.Has(CapHostedInference) {
-		t.Error("default-deny Has(CapHostedInference) = true, want false")
+	if cur.Has(CapLauncherUpdates) {
+		t.Error("default-deny Has(CapLauncherUpdates) = true, want false")
 	}
 }
 
-// TestBackoffState_Progression verifies next() returns 5/15/60 then stays at 60.
+// TestBackoffState_Progression verifies next() returns values close to
+// 5/15/60 min (±10% jitter) then stays near 60 min.
 func TestBackoffState_Progression(t *testing.T) {
 	b := &backoffState{}
-	want := []time.Duration{5 * time.Minute, 15 * time.Minute, 60 * time.Minute, 60 * time.Minute}
-	for i, w := range want {
+	nominals := []time.Duration{5 * time.Minute, 15 * time.Minute, 60 * time.Minute, 60 * time.Minute}
+	for i, nom := range nominals {
 		got := b.next()
-		if got != w {
-			t.Errorf("step %d: next() = %v, want %v", i, got, w)
+		lo := time.Duration(float64(nom) * 0.89)
+		hi := time.Duration(float64(nom) * 1.11)
+		if got < lo || got > hi {
+			t.Errorf("step %d: next() = %v, want %v ± 10%%", i, got, nom)
 		}
 	}
 }
 
-// TestBackoffState_ResetOnSuccess verifies reset() starts over from step 0.
+// TestBackoffState_ResetOnSuccess verifies reset() starts over from step 0
+// (the first value after reset must be close to 5 min).
 func TestBackoffState_ResetOnSuccess(t *testing.T) {
 	b := &backoffState{}
 	_ = b.next()
 	_ = b.next()
 	b.reset()
-	if got := b.next(); got != 5*time.Minute {
-		t.Errorf("after reset, next() = %v, want 5m", got)
+	got := b.next()
+	nom := 5 * time.Minute
+	lo := time.Duration(float64(nom) * 0.89)
+	hi := time.Duration(float64(nom) * 1.11)
+	if got < lo || got > hi {
+		t.Errorf("after reset, next() = %v, want %v ± 10%%", got, nom)
 	}
 }
 
@@ -178,7 +186,7 @@ func TestCapabilityPoller_Refresh_Success(t *testing.T) {
 	}
 	expected := Capabilities{
 		Tier:      "pro",
-		Enabled:   map[Capability]bool{CapHostedInference: true, CapLauncherUpdates: false},
+		Enabled:   map[Capability]bool{CapLauncherUpdates: true, CapISODistribution: false},
 		FetchedAt: time.Now().UTC().Truncate(time.Second),
 		Source:    "fleet",
 	}
@@ -199,8 +207,8 @@ func TestCapabilityPoller_Refresh_Success(t *testing.T) {
 	if caps.Tier != "pro" {
 		t.Errorf("Tier = %q, want 'pro'", caps.Tier)
 	}
-	if !caps.Enabled[CapHostedInference] {
-		t.Errorf("CapHostedInference: got false, want true")
+	if !caps.Enabled[CapLauncherUpdates] {
+		t.Errorf("CapLauncherUpdates: got false, want true")
 	}
 }
 
@@ -222,7 +230,7 @@ func TestCapabilityPoller_SingleFlight_Collapse(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		wire := capabilitiesWireResponse{
 			Tier:         "team",
-			Capabilities: map[string]bool{string(CapHostedInference): true},
+			Capabilities: map[string]bool{string(CapLauncherUpdates): true},
 			FetchedAt:    time.Now(),
 		}
 		_ = json.NewEncoder(w).Encode(wire)
@@ -263,7 +271,7 @@ func TestCapabilityPoller_Stop_Race(t *testing.T) {
 	}
 	srv := fakeCapabilityServer(t, Capabilities{
 		Tier:      "pro",
-		Enabled:   map[Capability]bool{CapHostedInference: true},
+		Enabled:   map[Capability]bool{CapLauncherUpdates: true},
 		FetchedAt: time.Now(),
 	}, 0)
 	defer srv.Close()
@@ -320,7 +328,7 @@ func TestCapabilityPoller_LoadsCacheOnStart(t *testing.T) {
 	// Pre-populate cache with a fresh snapshot (recent enough to not trigger immediate refetch).
 	cached := Capabilities{
 		Tier:      "team",
-		Enabled:   map[Capability]bool{CapHostedInference: true},
+		Enabled:   map[Capability]bool{CapLauncherUpdates: true},
 		FetchedAt: time.Now(), // fresh
 		Source:    "cache",
 	}

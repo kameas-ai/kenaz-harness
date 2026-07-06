@@ -103,8 +103,8 @@ function provide(overrides: Partial<Settings> = {}) {
       saveTheme: async () => undefined,
       getMemory: async () => false,
       setMemory: async () => undefined,
-      getConfirmEach: async () => true,
-      setConfirmEach: async () => undefined,
+      getWebFetchEnabled: async () => false,
+      setWebFetchEnabled: async () => undefined,
       getWebSearch: async () => false,
       setWebSearch: async () => undefined,
       getBash: async () => false,
@@ -113,7 +113,7 @@ function provide(overrides: Partial<Settings> = {}) {
       setSaveArtifact: async () => undefined,
       getMaxAgentTurns: async () => 0,
       setMaxAgentTurns: async () => undefined,
-    },
+    } as any,
     llm: {
       listProviders,
       startStream: async () => 'fake-sub',
@@ -128,7 +128,7 @@ function provide(overrides: Partial<Settings> = {}) {
       }),
       listModels: async () => [],
       resolveConfirm: async () => undefined,
-    },
+    } as any,
     compaction: {
       getConfig: async () => ({ sites: {} }),
       getEffective: async () => ({

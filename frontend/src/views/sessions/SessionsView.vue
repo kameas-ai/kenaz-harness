@@ -26,13 +26,14 @@ import ReasoningControl from '@/components/chat/ReasoningControl.vue';
 import SlashArgFill from '@/components/chat/SlashArgFill.vue';
 import ResolvedContextPanel from '@/views/sessions/ResolvedContextPanel.vue';
 import ConfirmToolModal from '@/components/chat/ConfirmToolModal.vue';
+import PlanApprovalModal from '@/views/sessions/PlanApprovalModal.vue';
 import BranchSidebar from '@/components/chat/BranchSidebar.vue';
 import BranchBreadcrumb from '@/components/chat/BranchBreadcrumb.vue';
 import CreateBranchModal from '@/components/chat/CreateBranchModal.vue';
-import MergeSuggestionToast from '@/components/chat/MergeSuggestionToast.vue';
-import CostThresholdToast from '@/components/chat/CostThresholdToast.vue';
 import AuthFailureToast from '@/components/chat/AuthFailureToast.vue';
-import RetryAfterRotateToast from '@/components/chat/RetryAfterRotateToast.vue';
+// WP02 review fix: CostThresholdToast, MergeSuggestionToast, RetryAfterRotateToast
+// replaced by useEventToasts (single toast mechanism).
+import { useEventToasts } from '@/composables/useEventToasts';
 import FallbackActivePill from '@/components/chat/FallbackActivePill.vue';
 import BashPermissionModal from '@/components/permissions/BashPermissionModal.vue';
 import FilesystemPermissionModal from '@/components/permissions/FilesystemPermissionModal.vue';
@@ -46,6 +47,7 @@ import { useArtifacts, useHarnessClient, useSessions } from '@/lib/useHarnessAPI
 import { useSession } from '@/lib/useSession';
 import { useEventStream } from '@/lib/useEventStream';
 import { useLongSessionNudge } from '@/lib/useLongSessionNudge';
+import { usePlanMode } from '@/lib/planmode';
 import type {
   Artifact,
   ArtifactScope,
@@ -67,6 +69,11 @@ const route = useRoute();
 const router = useRouter();
 const client = useHarnessClient();
 const { list: sessionList, refresh: refreshSessions } = useSessions();
+
+// WP02 review fix: mount the unified event-toast composable here so all three
+// previously-bespoke toasts (cost threshold, merge suggestion, retry-after-rotate)
+// flow through the single useToastQueue pathway (ToastRoot renders them).
+useEventToasts();
 
 // Refresh the rail's session list when SessionsView mounts so the
 // empty-state checks against an up-to-date count instead of an
@@ -106,6 +113,52 @@ const surfaceState = computed<
 
 const sessionIdRef = computed(() => sessionId.value);
 const session = useSession(sessionIdRef);
+
+// ── Plan approval (plan-mode-posture-01KZNP3F WP06 / p0-wiring-fixes WP01) ──
+// usePlanMode subscribes to `plan_mode_changed` Wails events and exposes
+// pendingPlanId when the model is awaiting user approval on a plan artifact.
+// NOTE: usePlanMode is a composable — it must be called at setup time with
+// a static sessionId. We pass the computed sessionId.value; the composable
+// is re-created whenever SessionsView re-mounts, which is sufficient since
+// plan approval is a per-session transient state.
+const { pendingPlanId, setActive: setPlanModeActive } = usePlanMode(sessionId.value);
+
+// Tracks the plan text fetched from the artifacts store when pendingPlanId is set.
+const pendingPlanText = ref<string | null>(null);
+
+watch(
+  pendingPlanId,
+  async (planId) => {
+    if (!planId) {
+      pendingPlanText.value = null;
+      return;
+    }
+    try {
+      const artifact = await client.artifacts.get(planId);
+      // bytes is base64-encoded; plan artifacts are plain text (markdown).
+      pendingPlanText.value = artifact.bytes ? atob(artifact.bytes) : '';
+    } catch {
+      pendingPlanText.value = '';
+    }
+  },
+);
+
+function onPlanApproved(_planId: string) {
+  setPlanModeActive(false);
+  pendingPlanText.value = null;
+  void session.refresh();
+}
+
+function onPlanDiscarded(_planId: string) {
+  setPlanModeActive(false);
+  pendingPlanText.value = null;
+}
+
+function onPlanEdited(_planId: string, _editedPlan: string) {
+  setPlanModeActive(false);
+  pendingPlanText.value = null;
+  void session.refresh();
+}
 
 const providers = ref<readonly Provider[]>([]);
 const providersLoaded = ref(false);
@@ -253,7 +306,7 @@ const otherFamilyChoices = computed(() =>
 
 // Read the new-session-dialog's localStorage stash for this session,
 // if present. NewSessionDialog writes the user's chosen
-// (providerId, modelId) under "kaneaz.session.config.<id>" so we
+// (providerId, modelId) under "kenaz.session.config.<id>" so we
 // can honour cross-family choices that the mid-conversation switcher
 // would otherwise block.
 function readSessionConfig(sessionID: string): {
@@ -263,7 +316,7 @@ function readSessionConfig(sessionID: string): {
   if (!sessionID) return null;
   try {
     const raw = window.localStorage.getItem(
-      `kaneaz.session.config.${sessionID}`,
+      `kenaz.session.config.${sessionID}`,
     );
     if (!raw) return null;
     const parsed = JSON.parse(raw) as {
@@ -801,6 +854,20 @@ async function onBranchFromTurn(message: { id?: string }) {
 
 const hasAnyProvider = computed(() => providers.value.length > 0);
 
+// long-turn-resilience WP03: resume a partial message stream.
+// resumeMessage opens a continuation stream; errors surface via the
+// stream-closed event rather than here.
+async function onResumeMessage(messageId: string) {
+  const sid = sessionId.value;
+  if (!sid || !messageId) return;
+  try {
+    await client.sessions.resumeMessage(sid, messageId);
+  } catch (e) {
+    // resumeMessage opens a stream; errors surface via the stream-closed event
+    console.warn('resume failed', e);
+  }
+}
+
 // Long-term-memory opt-in. Off by default (privacy posture); read once
 // on mount and again when the window regains focus so toggling it in
 // settings takes effect on the next chat.
@@ -958,7 +1025,7 @@ watch(sessionId, () => {
 }, { immediate: true });
 
 // Refresh the session artifact list when the LLM stream closes so that
-// tool-created artifacts (e.g. kaneaz__save_artifact) appear immediately
+// tool-created artifacts (e.g. kenaz__save_artifact) appear immediately
 // without requiring a manual navigation or session switch.
 useEventStream<{ session_id?: string }>('llm:stream-closed', (payload) => {
   if (payload?.session_id && payload.session_id !== sessionId.value) return;
@@ -1476,7 +1543,18 @@ async function onNudgeNewSession() {
             @save-artifact="onSaveArtifactFromMessage"
             @open-artifact="openArtifactPreview"
             @branch-from-turn="onBranchFromTurn"
+            @resume="onResumeMessage"
           />
+          <!-- Branch-from-turn failure — rendered below the chat thread
+               (FR-003: the error ref was set but never displayed). -->
+          <div
+            v-if="branchFromTurnError"
+            class="mx-4 mb-2 rounded-sm border border-signal-danger bg-surface-1 px-3 py-2 font-ui text-[12px] text-signal-danger"
+            role="alert"
+            data-testid="branch-from-turn-error"
+          >
+            Branch from turn failed: {{ branchFromTurnError }}
+          </div>
           <BranchSidebar
             v-if="hasSession"
             :parent-session-id="sessionId"
@@ -1711,6 +1789,11 @@ async function onNudgeNewSession() {
             activeProviderUnsupported ||
             session.loading.value
           "
+          :disabled-hint="
+            !activeProvider && providersLoaded
+              ? 'No provider configured — go to Providers to add one before sending.'
+              : undefined
+          "
           :estimate="{ tokens: 0, usd: 0 }"
           :session-id="sessionId"
           :error-banner="session.error.value"
@@ -1729,6 +1812,17 @@ async function onNudgeNewSession() {
       @close="onNewSessionDialogClose"
     />
     <ConfirmToolModal />
+    <!-- Plan approval modal (p0-wiring-fixes WP01) — renders when the model
+         has exited plan_mode and the toolloop is awaiting user approval. -->
+    <PlanApprovalModal
+      v-if="pendingPlanId && pendingPlanText !== null && sessionId"
+      :session-id="sessionId"
+      :plan-id="pendingPlanId"
+      :plan="pendingPlanText"
+      @approved="onPlanApproved"
+      @discarded="onPlanDiscarded"
+      @edited="onPlanEdited"
+    />
     <CreateBranchModal
       v-if="hasSession"
       :parent-session-id="sessionId"
@@ -1736,11 +1830,9 @@ async function onNudgeNewSession() {
       @close="closeCreateBranchModal"
       @created="closeCreateBranchModal"
     />
-    <MergeSuggestionToast />
-    <CostThresholdToast />
-    <!-- provider-keychain-rotation-01KQ8TD9 WP05 — auth failure + post-rotation toasts -->
+    <!-- provider-keychain-rotation-01KQ8TD9 WP05 — auth failure toast (rich-UI; not in useEventToasts) -->
+    <!-- MergeSuggestionToast, CostThresholdToast, RetryAfterRotateToast removed in WP02 review fix — now handled by useEventToasts() -->
     <AuthFailureToast :auto-resume-enabled="autoResumeOnKeyRotation" />
-    <RetryAfterRotateToast />
     <!-- model-fallback-routing-01NDFSEX04 WP05 — fallback-active indicator pill -->
     <FallbackActivePill />
     <!-- WP08 — universal permission modals (one per family) -->

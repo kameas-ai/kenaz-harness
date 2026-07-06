@@ -4,8 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"runtime/debug"
 	"sync"
 	"sync/atomic"
+
+	"github.com/kameas-ai/kenaz-harness/core/logging"
 )
 
 // StreamCloseReason mirrors plan §4.2: ctx-cancelled | stop-called | backend-error.
@@ -53,7 +56,7 @@ const (
 	TopicSessionListChanged = "session.list_changed"
 
 	// TopicElicitPending is the broker topic the elicitation view emits
-	// when the kaneaz__ask_user_question tool calls OpenDialog (mission
+	// when the kenaz__ask_user_question tool calls OpenDialog (mission
 	// ask-user-question-interactive-01KZNP3G WP04). The frontend's
 	// AskUserQuestion component subscribes here via useEventStream and
 	// renders the dialog when a payload arrives.
@@ -205,6 +208,27 @@ func (b *StreamBroker) Subscribe(
 
 	go func() {
 		defer b.subs.Delete(id)
+		// Recover panics from the subscription goroutine (FR-003). A panic
+		// closes this subscription cleanly and logs, but does not crash the
+		// process or strand the subscriber.
+		defer func() {
+			if r := recover(); r != nil {
+				stack := debug.Stack()
+				logging.L().Error("rpc.stream_broker.panic",
+					"id", id,
+					"view", view,
+					"panic", fmt.Sprintf("%v", r),
+					"stack", string(stack),
+				)
+				sub.closeOnce.Do(func() {
+					b.emitter.Emit(ctx, fmt.Sprintf("%s:stream-closed", view), StreamClosedPayload{
+						ID:      id,
+						Reason:  StreamClosedBackendError,
+						Message: fmt.Sprintf("panic: %v", r),
+					})
+				})
+			}
+		}()
 
 		var reason StreamCloseReason = StreamClosedCtxCancelled
 		var msg string

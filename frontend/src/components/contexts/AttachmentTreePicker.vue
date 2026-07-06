@@ -46,6 +46,12 @@ const loadingTree = ref(false);
 const adding = ref(false);
 const addError = ref<string | null>(null);
 const selectedPath = ref<string | null>(null);
+// When the user picks a folder, we attach the whole module directory instead
+// of a single file. selectedKind tracks which was last chosen so the footer +
+// Attach action branch correctly. The backend AttachModule enforces that the
+// directory is a module (has a context.md / agents.md root) and rejects it
+// otherwise — surfaced as addError.
+const selectedKind = ref<'file' | 'folder' | null>(null);
 
 async function loadTree() {
   loadingTree.value = true;
@@ -62,6 +68,12 @@ async function loadTree() {
 
 async function onSelect(path: string) {
   selectedPath.value = path;
+  selectedKind.value = 'file';
+}
+
+async function onSelectFolder(path: string) {
+  selectedPath.value = path;
+  selectedKind.value = 'folder';
 }
 
 async function onAdd() {
@@ -69,16 +81,28 @@ async function onAdd() {
   adding.value = true;
   addError.value = null;
   try {
-    const content = await client.contexts.get(selectedPath.value);
-    const attached = await client.attachments.add({
-      scopeKind: props.scopeKind,
-      scopeId: props.scopeId,
-      contentSource: `library:${selectedPath.value}`,
-      content,
-      kind: props.attachmentKind ?? 'system',
-    });
-    emit('added', attached);
+    let attached;
+    if (selectedKind.value === 'folder') {
+      // Attach the whole module directory (root + always-files eager, rest
+      // on-demand). AttachModule rejects a non-module dir (no root file).
+      attached = await client.contexts.attachModule(
+        props.scopeKind,
+        props.scopeId,
+        selectedPath.value,
+      );
+    } else {
+      const content = await client.contexts.get(selectedPath.value);
+      attached = await client.attachments.add({
+        scopeKind: props.scopeKind,
+        scopeId: props.scopeId,
+        contentSource: `library:${selectedPath.value}`,
+        content,
+        kind: props.attachmentKind ?? 'system',
+      });
+    }
+    emit('added', attached as Attachment);
     selectedPath.value = null;
+    selectedKind.value = null;
     emit('close');
   } catch (err) {
     addError.value = err instanceof Error ? err.message : String(err);
@@ -90,6 +114,7 @@ async function onAdd() {
 function close() {
   if (adding.value) return;
   selectedPath.value = null;
+  selectedKind.value = null;
   addError.value = null;
   emit('close');
 }
@@ -103,6 +128,7 @@ watch(
   (open) => {
     if (open) {
       selectedPath.value = null;
+      selectedKind.value = null;
       addError.value = null;
       void loadTree();
     }
@@ -172,6 +198,7 @@ watch(
           :selected-path="selectedPath"
           :is-root="true"
           @select="onSelect"
+          @select-folder="onSelectFolder"
         />
       </div>
 
@@ -186,7 +213,7 @@ watch(
             {{ selectedPath }}
           </span>
           <span v-else class="font-ui text-[11px] text-ink-dim">
-            Select a file to attach
+            Select a file, or a folder to attach a whole module
           </span>
           <div
             v-if="addError"
@@ -213,7 +240,7 @@ watch(
             data-testid="attachment-tree-add"
             @click="onAdd"
           >
-            {{ adding ? 'Adding…' : 'Attach' }}
+            {{ adding ? 'Adding…' : selectedKind === 'folder' ? 'Attach module' : 'Attach' }}
           </button>
         </div>
       </footer>

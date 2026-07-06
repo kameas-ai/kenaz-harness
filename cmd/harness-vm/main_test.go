@@ -42,7 +42,9 @@ func startTestServerAudit(t *testing.T, token string, audit *auditSink, ledger .
 			if err != nil {
 				return
 			}
-			go handleConn(log, conn, token, le, audit)
+			// Task-surface tests don't exercise the read RPCs; a disabled
+			// read service (nil api) answers any read kind with code:"unavailable".
+			go handleConn(log, conn, token, le, audit, &readService{log: log})
 		}
 	}()
 	return ln, ln.Addr().String()

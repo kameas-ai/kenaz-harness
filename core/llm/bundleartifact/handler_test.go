@@ -15,7 +15,7 @@ kind: anthropic
 model: claude-sonnet-4-7-20260420
 auth:
   kind: keychain
-  locator: kaneaz/anthropic-api-key
+  locator: kenaz/anthropic-api-key
 defaults:
   temperature: 0.7
 retry:

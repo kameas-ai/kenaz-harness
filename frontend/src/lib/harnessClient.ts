@@ -14,6 +14,10 @@
  * client is purely a TypeScript concern.
  */
 
+import { ServedTransport } from './servedTransport';
+import { ServedUnsupportedError } from './errors';
+import { dispatchServedEvent } from './useServedEvents';
+
 import type {
   AutonomyLayer,
   ResolvedAutonomy,
@@ -34,6 +38,7 @@ import type {
   Attachment,
   AttachmentAddInput,
   AttachmentScopeKind,
+  ModuleAttachment,
   Bundle,
   ContentBlock,
   Denial,
@@ -148,7 +153,6 @@ import type {
   LocalRuntimeInfo,
   LocalRuntimeConfigResult,
   CustomTemplateSummary,
-  CustomCapabilityMatrix,
   CustomProbeRequest,
   CustomProbeResult,
   FallbackChain,
@@ -157,6 +161,7 @@ import type {
   FleetProfileInfo,
   CapabilitiesView,
   FleetConfigPullStatusView,
+  FleetHealthView,
   LockdownStatusView,
   ContextPublishRequest,
   ContextPublishResult,
@@ -167,6 +172,9 @@ import type {
   CatalogFilter,
   SyncStatusView,
   PendingMCPSecret,
+  BootHealthReport,
+  TaskRow,
+  LineRow,
 } from './types';
 
 /**
@@ -299,6 +307,11 @@ interface WailsBindingsLike {
     source: string,
   ): Promise<RotationResult>;
   LLM_ResumeAfterKeyRotation(resumeToken: string): Promise<void>;
+  LLM_TestProviderKey(
+    kind: string,
+    host: string,
+    plaintextKey: string,
+  ): Promise<import('./types').ProviderKeyTestResult>;
   LLM_ListDetectedLocalRuntimes(): Promise<LocalRuntimeInfo[]>;
   LLM_AutoConfigureLocalRuntime(kind: string): Promise<LocalRuntimeConfigResult>;
   LLM_RescanLocalRuntimes(): Promise<LocalRuntimeInfo[]>;
@@ -325,7 +338,6 @@ interface WailsBindingsLike {
   MCP_ImportClaudeDesktopConfig(
     req: MCPImportRequest,
   ): Promise<MCPImportResponse>;
-  MCP_TestRecipe(recipe: WireRecipe): Promise<MCPTestResult>;
 
   A2A_ListCards(): Promise<A2ACard[]>;
   A2A_StartStream(): Promise<string>;
@@ -347,6 +359,11 @@ interface WailsBindingsLike {
   Contexts_Get(path: string): Promise<string>;
   Contexts_Save(path: string, content: string): Promise<void>;
   Contexts_CreateFolder(path: string): Promise<void>;
+  Contexts_AttachModule(
+    scopeKind: string,
+    scopeId: string,
+    dirPath: string,
+  ): Promise<ModuleAttachment>;
   Contexts_Rename(oldPath: string, newPath: string): Promise<void>;
   Contexts_Delete(path: string): Promise<void>;
   Contexts_RecentlyApplied(limit: number): Promise<string[]>;
@@ -392,8 +409,8 @@ interface WailsBindingsLike {
   Settings_Set(s: Settings): Promise<void>;
   Settings_GetMemory(): Promise<boolean>;
   Settings_SetMemory(enabled: boolean): Promise<void>;
-  Settings_GetConfirmEach(): Promise<boolean>;
-  Settings_SetConfirmEach(enabled: boolean): Promise<void>;
+  Settings_GetWebFetchEnabled(): Promise<boolean>;
+  Settings_SetWebFetchEnabled(enabled: boolean): Promise<void>;
   Settings_GetWebSearch(): Promise<boolean>;
   Settings_SetWebSearch(enabled: boolean): Promise<void>;
   Settings_GetBash(): Promise<boolean>;
@@ -474,6 +491,8 @@ interface WailsBindingsLike {
   Settings_FleetConfigPullStatus(): Promise<FleetConfigPullStatusView>;
   // fleet-emergency-lockdown-01NDFSEX12 WP02
   Settings_FleetLockdownStatus(): Promise<LockdownStatusView>;
+  // fleet-integrity-observability WP02 — global fleet health indicator
+  Settings_FleetHealth(): Promise<FleetHealthView>;
 
   Memory_ListChunks(filter: MemoryListFilter): Promise<MemoryChunk[]>;
   Memory_RememberMessage(
@@ -536,6 +555,7 @@ interface WailsBindingsLike {
     env: Record<string, string>,
     config: Record<string, unknown>,
   ): Promise<WireRecipeStatus>;
+  Tools_SignInRecipe(id: string): Promise<WireRecipeStatus>;
   Tools_UninstallRecipe(id: string): Promise<void>;
   Tools_ForgetRecipeKey(id: string, envName: string): Promise<void>;
   Tools_RecipeStatus(id: string): Promise<WireRecipeStatus>;
@@ -792,6 +812,22 @@ interface WailsBindingsLike {
   /** Publish a Cedar rule to the team via fleet. Requires policy_admin role. */
   Cedar_PublishToTeam(ruleID: string, ruleSource: string): Promise<void>;
 
+  // ── Fleet telemetry opt-ins (fleet-integrity-observability WP09) ─────────
+  /** Returns the per-class telemetry opt-in set from the fleet store. */
+  Settings_FleetTelemetryOptIns(): Promise<import('./types').TelemetryOptInView[]>;
+  /** Flip a single telemetry class opt-in in the fleet store. */
+  Settings_FleetSetTelemetryOptIn(className: string, optedIn: boolean): Promise<void>;
+
+  // ── Unit sync conflicts (fleet-integrity-observability WP08) ─────────────
+  /** Returns the current unit syncer state: pull/push errors, conflict count. */
+  Unit_SyncStatus(): Promise<import('./types').UnitSyncStatusView>;
+  /** Returns the list of unresolved same-unit pull conflicts. */
+  Unit_ListConflicts(): Promise<import('./types').UnitConflictView[]>;
+  /** Applies a whole-body MERGE resolution to a conflicted unit. */
+  Unit_ResolveMerge(unitID: string, resolvedBody: string): Promise<void>;
+  /** Applies an ENSHRINE resolution: creates a coexisting unit. Returns the new unit ID. */
+  Unit_ResolveEnshrine(srcUnitID: string, enshrinedTitle: string, enshrinedBody: string, reason: string): Promise<string>;
+
   // ── audit-log-enhancement-01KX5R8F WP07 — retention settings ──────────
   Settings_GetAuditSettings(): Promise<import('./types').AuditSettings>;
   Settings_SetAuditSettings(s: import('./types').AuditSettings): Promise<void>;
@@ -802,6 +838,19 @@ interface WailsBindingsLike {
   Sites_Status(site: string): Promise<SiteSummary>;
   Sites_Logs(site: string, tailLines: number): Promise<string>;
   Sites_Delete(site: string): Promise<void>;
+  // ── plan-mode-posture-01KZNP3F WP06 — plan approval actions ─────────────
+  Planmode_Approve(req: { session_id: string; plan_id: string }): Promise<Record<string, unknown>>;
+  Planmode_Discard(req: { session_id: string; plan_id: string }): Promise<Record<string, unknown>>;
+  Planmode_Edit(req: { session_id: string; plan_id: string; edited_plan: string }): Promise<Record<string, unknown>>;
+  // agent-loop-robustness-parity WP08: boot-health surface (FR-008)
+  BootHealth_Get(): Promise<BootHealthReport>;
+  // background-task-monitor WP05: task management bindings
+  Tasks_List(): Promise<TaskRow[]>;
+  Tasks_Get(id: string): Promise<TaskRow>;
+  Tasks_Tail(id: string, fromOffset: number): Promise<LineRow[]>;
+  Tasks_Abort(id: string): Promise<void>;
+  Tasks_AbortBySession(sessionID: string): Promise<void>;
+  Tasks_ListBySession(sessionID: string): Promise<TaskRow[]>;
 }
 
 
@@ -1449,16 +1498,6 @@ export interface MCPClient {
   importClaudeDesktopConfig(
     req: MCPImportRequest,
   ): Promise<MCPImportResponse>;
-  /**
-   * testRecipe — opens a one-shot connection to the MCP server described
-   * by recipe, performs the initialize + capability listing handshake
-   * (30 s hard timeout), and returns a TestResult summary.
-   *
-   * The recipe is NOT registered with the production MCP pool — this is
-   * a pure fire-and-forget connectivity check (mission
-   * mcp-server-install-01KQ8TDP, WP07).
-   */
-  testRecipe(recipe: Recipe): Promise<MCPTestResult>;
 }
 
 export type {
@@ -1469,7 +1508,6 @@ export type {
   MCPImportStatus,
   MCPTranslationReport,
   MCPImportWrotePath,
-  MCPTestResult,
   AttachmentLimitsView,
 };
 
@@ -1515,6 +1553,17 @@ export interface ContextsClient {
   get(path: string): Promise<string>;
   save(path: string, content: string): Promise<void>;
   createFolder(path: string): Promise<void>;
+  /**
+   * attachModule attaches a whole context module *directory* (one with a
+   * root context.md / agents.md) to a scope. The module's root + its
+   * front-matter `always:` files load eagerly; the rest are read on demand
+   * via read_context_file. Rejects a directory that has no root file.
+   */
+  attachModule(
+    scopeKind: AttachmentScopeKind,
+    scopeId: string,
+    dirPath: string,
+  ): Promise<ModuleAttachment>;
   rename(oldPath: string, newPath: string): Promise<void>;
   delete(path: string): Promise<void>;
   recentlyApplied(limit: number): Promise<string[]>;
@@ -1618,10 +1667,13 @@ export interface SettingsClient {
   getMemory(): Promise<boolean>;
   /** Persist the long-term-memory opt-in flag. */
   setMemory(enabled: boolean): Promise<void>;
-  /** Read the WP05 confirm-each modal opt-in flag (default true). */
-  getConfirmEach(): Promise<boolean>;
-  /** Persist the WP05 confirm-each modal opt-in flag. */
-  setConfirmEach(enabled: boolean): Promise<void>;
+  /**
+   * Read the kenaz__web_fetch built-in opt-in (default false).
+   * Surfaced as a toggle row in the Tools panel.
+   */
+  getWebFetchEnabled(): Promise<boolean>;
+  /** Persist the kenaz__web_fetch built-in opt-in flag. */
+  setWebFetchEnabled(enabled: boolean): Promise<void>;
   /**
    * Read the local-first web-search built-in opt-in (default false).
    * Surfaced as a toggle row in the Tools panel.
@@ -1638,7 +1690,7 @@ export interface SettingsClient {
   /** Persist the bash built-in opt-in flag. */
   setBash(enabled: boolean): Promise<void>;
   /**
-   * Read the kaneaz__save_artifact built-in opt-in (default true —
+   * Read the kenaz__save_artifact built-in opt-in (default true —
    * saving deliverables is a low-risk primitive that should work on
    * a fresh install). Surfaced as a toggle row in the Tools panel.
    */
@@ -1720,8 +1772,8 @@ export interface SettingsClient {
 
   /**
    * Read the read-family builtin filesystem tools opt-in
-   * (kaneaz__read_file, kaneaz__list_dir, kaneaz__glob, kaneaz__grep,
-   * kaneaz__list_open_worklist). Default false.
+   * (kenaz__read_file, kenaz__list_dir, kenaz__glob, kenaz__grep,
+   * kenaz__list_open_worklist). Default false.
    * Surfaced as a toggle row in the Tools panel.
    */
   getFSReadEnabled(): Promise<boolean>;
@@ -1729,7 +1781,7 @@ export interface SettingsClient {
   setFSReadEnabled(enabled: boolean): Promise<void>;
   /**
    * Read the write-family builtin filesystem tools opt-in
-   * (kaneaz__write_file, kaneaz__edit_file). Default false.
+   * (kenaz__write_file, kenaz__edit_file). Default false.
    * Surfaced as a toggle row in the Tools panel.
    */
   getFSWriteEnabled(): Promise<boolean>;
@@ -1737,7 +1789,7 @@ export interface SettingsClient {
   setFSWriteEnabled(enabled: boolean): Promise<void>;
   /**
    * Return whether the runtime filesystem-access-request built-in
-   * (`kaneaz__request_filesystem_access`) is enabled. Default: true.
+   * (`kenaz__request_filesystem_access`) is enabled. Default: true.
    */
   getFSRequestAccessEnabled(): Promise<boolean>;
   /**
@@ -1749,11 +1801,11 @@ export interface SettingsClient {
   // ── Todo tool dial (builtin-tools-search-and-elicitation-01KZNP3D WP07) ──
 
   /**
-   * Read the kaneaz__todo_write builtin opt-in (default false — tool off
+   * Read the kenaz__todo_write builtin opt-in (default false — tool off
    * until the user enables it from the Tools panel).
    */
   getTodoEnabled(): Promise<boolean>;
-  /** Persist the kaneaz__todo_write builtin opt-in flag. */
+  /** Persist the kenaz__todo_write builtin opt-in flag. */
   setTodoEnabled(enabled: boolean): Promise<void>;
 
   // ── autonomy-dial-01KR3M2A WP03 ─────────────────────────────────────
@@ -1890,6 +1942,14 @@ export interface SettingsClient {
   // ── fleet-emergency-lockdown-01NDFSEX12 WP02 ────────────────────────────
   /** Return the current fleet emergency lockdown state. */
   fleetLockdownStatus(): Promise<LockdownStatusView>;
+  // ── fleet-integrity-observability WP02 ──────────────────────────────────
+  /** Global fleet health summary: signing-key presence + config source + session state. */
+  fleetHealth(): Promise<FleetHealthView>;
+  // ── fleet-integrity-observability WP09 ──────────────────────────────────
+  /** Returns the per-class telemetry opt-in set from the fleet store. */
+  fleetTelemetryOptIns(): Promise<import('./types').TelemetryOptInView[]>;
+  /** Flip a single telemetry class opt-in. */
+  setFleetTelemetryOptIn(className: string, optedIn: boolean): Promise<void>;
 }
 
 /**
@@ -2090,6 +2150,14 @@ export interface ToolsRecipesClient {
     env: Record<string, string>,
     config?: Record<string, unknown>,
   ): Promise<RecipeStatus>;
+  /**
+   * signIn runs the MCP OAuth authorization flow for a remote recipe whose
+   * `recipe.auth.kind === 'mcp_oauth'`: it opens the system browser, the user
+   * approves access, and the harness stores the bearer token and respawns the
+   * recipe authenticated. Rejects when the recipe is not OAuth-capable or has
+   * no configured client_id.
+   */
+  signIn(id: string): Promise<RecipeStatus>;
   uninstall(id: string): Promise<void>;
   forgetKey(id: string, envName: string): Promise<void>;
   status(id: string): Promise<RecipeStatus>;
@@ -2163,7 +2231,7 @@ export interface ShellClient {
 }
 
 /**
- * BashExecResult — kaneaz__bash tool's JSON return shape, surfaced via
+ * BashExecResult — kenaz__bash tool's JSON return shape, surfaced via
  * the Bash_Exec binding for the chat-input `!cmd` shell-escape.
  */
 export interface BashExecResult {
@@ -2577,7 +2645,7 @@ export interface OnboardingClient {
  *
  * The frontend subscribes to "elicit:pending" events via useEventStream;
  * when the user submits or cancels, it calls submitAnswer which unblocks
- * the model-side kaneaz__ask_user_question tool call.
+ * the model-side kenaz__ask_user_question tool call.
  */
 export interface ElicitClient {
   /**
@@ -2801,6 +2869,21 @@ export interface HarnessClient {
   cedarPublish: CedarPublishClient;
   /** Fleet Sites hosting surface (sites-ui-01NSITE06). */
   sites: SitesClient;
+  // ── Unit sync (fleet-integrity-observability WP08) ────────────────────
+  Unit_SyncStatus(): Promise<import('./types').UnitSyncStatusView>;
+  Unit_ListConflicts(): Promise<import('./types').UnitConflictView[]>;
+  Unit_ResolveMerge(unitID: string, resolvedBody: string): Promise<void>;
+  Unit_ResolveEnshrine(srcUnitID: string, enshrinedTitle: string, enshrinedBody: string, reason: string): Promise<string>;
+  // ── Boot health (agent-loop-robustness-parity WP08 / FR-008) ──────────
+  /** Returns per-subsystem init error strings from the boot phase. */
+  BootHealth_Get(): Promise<BootHealthReport>;
+  // ── Background tasks (background-task-monitor WP05) ───────────────────
+  Tasks_List(): Promise<TaskRow[]>;
+  Tasks_Get(id: string): Promise<TaskRow>;
+  Tasks_Tail(id: string, fromOffset: number): Promise<LineRow[]>;
+  Tasks_Abort(id: string): Promise<void>;
+  Tasks_AbortBySession(sessionID: string): Promise<void>;
+  Tasks_ListBySession(sessionID: string): Promise<TaskRow[]>;
 }
 
 // ── runtime client ─────────────────────────────────────────────────────
@@ -2961,7 +3044,6 @@ export function createHarnessClient(): HarnessClient {
       testRecipe: (recipeID, env = {}, config = {}) =>
         b().MCP_TestRecipe(recipeID, env, config),
       importClaudeDesktopConfig: (req) => b().MCP_ImportClaudeDesktopConfig(req),
-      testRecipe: (recipe) => b().MCP_TestRecipe(recipe as WireRecipe),
     },
     a2a: {
       listCards: () => b().A2A_ListCards(),
@@ -2988,6 +3070,8 @@ export function createHarnessClient(): HarnessClient {
       get: (path) => b().Contexts_Get(path),
       save: (path, content) => b().Contexts_Save(path, content),
       createFolder: (path) => b().Contexts_CreateFolder(path),
+      attachModule: (scopeKind, scopeId, dirPath) =>
+        b().Contexts_AttachModule(scopeKind, scopeId, dirPath),
       rename: (oldPath, newPath) => b().Contexts_Rename(oldPath, newPath),
       delete: (path) => b().Contexts_Delete(path),
       recentlyApplied: (limit) => b().Contexts_RecentlyApplied(limit),
@@ -3048,8 +3132,8 @@ export function createHarnessClient(): HarnessClient {
       saveTheme: (t) => b().SaveTheme(t),
       getMemory: () => b().Settings_GetMemory(),
       setMemory: (enabled) => b().Settings_SetMemory(enabled),
-      getConfirmEach: () => b().Settings_GetConfirmEach(),
-      setConfirmEach: (enabled) => b().Settings_SetConfirmEach(enabled),
+      getWebFetchEnabled: () => b().Settings_GetWebFetchEnabled(),
+      setWebFetchEnabled: (enabled) => b().Settings_SetWebFetchEnabled(enabled),
       getWebSearch: () => b().Settings_GetWebSearch(),
       setWebSearch: (enabled) => b().Settings_SetWebSearch(enabled),
       getBash: () => b().Settings_GetBash(),
@@ -3132,6 +3216,12 @@ export function createHarnessClient(): HarnessClient {
       fleetConfigPullStatus: () => b().Settings_FleetConfigPullStatus(),
       // fleet-emergency-lockdown-01NDFSEX12 WP02
       fleetLockdownStatus: () => b().Settings_FleetLockdownStatus(),
+      // fleet-integrity-observability WP02
+      fleetHealth: () => b().Settings_FleetHealth(),
+      // fleet-integrity-observability WP09
+      fleetTelemetryOptIns: () => b().Settings_FleetTelemetryOptIns(),
+      setFleetTelemetryOptIn: (className, optedIn) =>
+        b().Settings_FleetSetTelemetryOptIn(className, optedIn),
     },
     permissions: {
       listGrants: (family) =>
@@ -3196,6 +3286,8 @@ export function createHarnessClient(): HarnessClient {
           adaptRecipeStatus(
             await b().Tools_InstallRecipe(id, env, config ?? {}),
           ),
+        signIn: async (id) =>
+          adaptRecipeStatus(await b().Tools_SignInRecipe(id)),
         uninstall: (id) => b().Tools_UninstallRecipe(id),
         forgetKey: (id, envName) => b().Tools_ForgetRecipeKey(id, envName),
         status: async (id) =>
@@ -3406,6 +3498,185 @@ export function createHarnessClient(): HarnessClient {
       status: (site) => b().Sites_Status(site),
       logs: (site, tailLines) => b().Sites_Logs(site, tailLines),
       delete: (site) => b().Sites_Delete(site),
+    },
+    // ── Unit sync (fleet-integrity-observability WP08) ────────────────────
+    Unit_SyncStatus: () => b().Unit_SyncStatus(),
+    Unit_ListConflicts: () => b().Unit_ListConflicts(),
+    Unit_ResolveMerge: (unitID, resolvedBody) => b().Unit_ResolveMerge(unitID, resolvedBody),
+    Unit_ResolveEnshrine: (srcUnitID, enshrinedTitle, enshrinedBody, reason) =>
+      b().Unit_ResolveEnshrine(srcUnitID, enshrinedTitle, enshrinedBody, reason),
+    // ── Boot health (agent-loop-robustness-parity WP08 / FR-008) ──────────
+    BootHealth_Get: () => b().BootHealth_Get(),
+    // ── Background tasks (background-task-monitor WP05) ───────────────────
+    Tasks_List: () => b().Tasks_List(),
+    Tasks_Get: (id) => b().Tasks_Get(id),
+    Tasks_Tail: (id, fromOffset) => b().Tasks_Tail(id, fromOffset),
+    Tasks_Abort: (id) => b().Tasks_Abort(id),
+    Tasks_AbortBySession: (sessionID) => b().Tasks_AbortBySession(sessionID),
+    Tasks_ListBySession: (sessionID) => b().Tasks_ListBySession(sessionID),
+  };
+}
+
+// ── served-mode client (HTTP/WS transport) ────────────────────────────
+
+/**
+ * Client-side registry mapping subscription ids to WS close callbacks.
+ * Module-level singleton — safe because served mode runs one instance.
+ */
+const _servedStreamRegistry = new Map<string, () => void>();
+
+/**
+ * createUnsupportedServedClient — a HarnessClient whose every method
+ * rejects with ServedUnsupportedError.  Used as the base for
+ * createServedHarnessClient() so that any method not explicitly overlaid
+ * by the real transport returns an honest error instead of fake data.
+ *
+ * This replaces the old createFakeHarnessClient() base that silently
+ * accepted writes which were then discarded (FR-001).
+ *
+ * Implementation strategy: start from the fake client (correct shape),
+ * then walk every function value recursively and replace it with a
+ * rejector that throws ServedUnsupportedError.  This avoids having to
+ * enumerate every method manually and stays automatically in sync when
+ * new methods are added to HarnessClient.
+ */
+export function createUnsupportedServedClient(): HarnessClient {
+  const fake = createFakeHarnessClient();
+
+  function wrapValue(val: unknown, path: string): unknown {
+    if (typeof val === 'function') {
+      // Replace with a function that always rejects.
+      return (..._args: unknown[]) =>
+        Promise.reject(new ServedUnsupportedError(path));
+    }
+    if (val !== null && typeof val === 'object' && !Array.isArray(val)) {
+      // Recurse into sub-client objects.
+      const wrapped: Record<string, unknown> = {};
+      for (const [k, v] of Object.entries(val as Record<string, unknown>)) {
+        wrapped[k] = wrapValue(v, `${path}.${k}`);
+      }
+      return wrapped;
+    }
+    return val;
+  }
+
+  // Walk the fake client's top-level fields.
+  const result: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(fake as unknown as Record<string, unknown>)) {
+    result[k] = wrapValue(v, k);
+  }
+  // openExternalURL is void (not Promise), so override it separately to be a no-op.
+  result['openExternalURL'] = (_url: string): void => { /* no-op in unsupported client */ };
+  return result as unknown as HarnessClient;
+}
+
+/**
+ * createServedHarnessClient — a HarnessClient whose subset of methods that
+ * core/serve exposes (AppInfo, ShellStatus, Sessions_List, Sessions_Get,
+ * Sessions_Stream) are wired to the HTTP/WS transport.  All other methods
+ * reject with ServedUnsupportedError so that components can render an honest
+ * "not available in served mode" state instead of fabricated data (FR-001).
+ *
+ * Token resolution is handled inside ServedTransport (meta tag →
+ * window.__HARNESS_TOKEN__ → empty).  Callers can pass an explicit token
+ * or baseURL for testing / cross-origin use.
+ */
+export function createServedHarnessClient(opts?: {
+  baseURL?: string;
+  token?: string;
+}): HarnessClient {
+  // ServedTransport is statically imported above.  Vite/Rollup tree-shakes it
+  // out of the Wails desktop bundle because createHarnessClient() is used
+  // there and createServedHarnessClient is never imported/called.
+  const transport = new ServedTransport(opts);
+
+  // Start with a base that rejects every call with ServedUnsupportedError.
+  // Overlay only the methods that core/serve actually exposes.
+  const base = createUnsupportedServedClient();
+
+  return {
+    ...base,
+
+    appInfo: () => transport.call<AppInfo>('AppInfo'),
+    shellStatus: () => transport.call<ShellStatus>('ShellStatus'),
+
+    // openExternalURL is a fire-and-forget browser operation; window.open is
+    // correct for served mode (no Wails runtime available).
+    openExternalURL: (url: string): void => {
+      if (typeof window !== 'undefined') {
+        window.open(url, '_blank', 'noopener,noreferrer');
+      }
+    },
+
+    sessions: {
+      ...base.sessions,
+
+      list: () => transport.call<Session[]>('Sessions_List'),
+
+      get: (id: string) =>
+        transport.call<Session>('Sessions_Get', { id }),
+
+      /**
+       * startStream — opens a WebSocket subscription for Sessions_Stream.
+       * Returns a synthetic subscription id; the caller must keep it to call
+       * stopStream.  The actual session-update events are routed via the WS
+       * frame handler.
+       *
+       * The subscription id is stored in the client-side registry so
+       * stopStream can close the underlying WS.
+       */
+      startStream: (id: string): Promise<string> => {
+        const subId = `served-stream-${id}-${Date.now()}`;
+        const cancel = transport.openStream({
+          method: 'Sessions_Stream',
+          params: { id },
+          onFrame: (event, data) => {
+            // Dispatch WS frames into the served-event bus so composables
+            // that use useEventStream() receive them without the Wails
+            // runtime bridge (FR-007).
+            //
+            // elicit:pending — a new blocking dialog was opened.
+            // elicit:pending:snapshot — list of in-flight asks on reconnect.
+            if (event === 'elicit:pending') {
+              dispatchServedEvent('elicit:pending', data);
+            } else if (event === 'elicit:pending:snapshot') {
+              // Snapshot is an array of ElicitRequest; re-emit each as
+              // an individual 'elicit:pending' event so the
+              // AskUserQuestion component queues them normally.
+              const list = Array.isArray(data) ? data : [];
+              for (const req of list) {
+                dispatchServedEvent('elicit:pending', req);
+              }
+            }
+            // session:snapshot and sessions:update are handled via
+            // sessions.list() polling; no action needed here.
+          },
+        });
+        // Store the cancel fn keyed by subId so stopStream can find it.
+        _servedStreamRegistry.set(subId, cancel);
+        return Promise.resolve(subId);
+      },
+
+      stopStream: (subId: string): Promise<void> => {
+        const cancel = _servedStreamRegistry.get(subId);
+        if (cancel) {
+          cancel();
+          _servedStreamRegistry.delete(subId);
+        }
+        return Promise.resolve();
+      },
+    },
+
+    elicit: {
+      ...base.elicit,
+
+      /**
+       * listPending — returns in-flight elicitation asks (FR-007).
+       * The served frontend calls this on reconnect to re-render any dialog
+       * that was open before the WS was lost.
+       */
+      listPending: () =>
+        transport.call<import('./types').ElicitRequest[]>('Elicit_ListPending'),
     },
   };
 }
@@ -3634,15 +3905,14 @@ export function createFakeHarnessClient(
       }),
       testRecipe: async () => ({
         ok: true,
-        serverName: 'fake-server',
-        serverVersion: '0.0.0',
-        protocolVersion: '2024-11-05',
-        toolCount: 0,
-        resourceCount: 0,
-        promptCount: 0,
-        stderrTail: '',
-        errorMessage: '',
-        durationMs: 1,
+        protocol_version: '2024-11-05',
+        server_info: { name: 'fake-server', version: '0.0.0' },
+        capabilities: {},
+        tool_count: 0,
+        resource_count: 0,
+        prompt_count: 0,
+        stderr_tail: '',
+        duration_ms: 1,
       }),
     },
     a2a: {
@@ -3675,6 +3945,16 @@ export function createFakeHarnessClient(
       get: async () => '',
       save: noop,
       createFolder: noop,
+      attachModule: async (scopeKind, scopeId, dirPath) => ({
+        id: 'fake-module-attachment',
+        scopeKind,
+        scopeId,
+        contentSource: `module:${dirPath}`,
+        content: '',
+        kind: 'system',
+        position: 0,
+        createdAt: '',
+      }),
       rename: noop,
       delete: noop,
       recentlyApplied: async () => [],
@@ -3782,7 +4062,6 @@ export function createFakeHarnessClient(
         accent: 'default',
         windowSize: { width: 1280, height: 800 },
         memoryEnabled: false,
-        confirmEachDisabled: false,
       }),
       set: noop,
       loadRoute: async () => '/sessions',
@@ -3792,8 +4071,8 @@ export function createFakeHarnessClient(
       saveTheme: noop,
       getMemory: async () => false,
       setMemory: noop,
-      getConfirmEach: async () => true,
-      setConfirmEach: noop,
+      getWebFetchEnabled: async () => false,
+      setWebFetchEnabled: noop,
       getWebSearch: async () => false,
       setWebSearch: noop,
       getBash: async () => false,
@@ -3851,7 +4130,7 @@ export function createFakeHarnessClient(
       getAutoTitleEnabled: async () => true,
       setAutoTitleEnabled: noop,
       // audit-log-enhancement-01KX5R8F WP07
-      getAuditSettings: async () => ({ strategy: 'keep_forever', windowDays: 90 }),
+      getAuditSettings: async () => ({ strategy: 'keep_forever', window_days: 90 }),
       setAuditSettings: noop,
       // fleet-auth-foundation-01NDFSEX08 WP05
       fleetSignIn: async () => ({
@@ -3875,9 +4154,20 @@ export function createFakeHarnessClient(
       // fleet-config-pull-01NDFSEX10 WP02
       fleetConfigPullStatus: async () => ({
         lastAppliedId: 0, lastAppliedAt: '', lastError: '', source: 'default-deny', bundleChecksum: '',
+        configDistributionEnabled: false,
       }),
       // fleet-emergency-lockdown-01NDFSEX12 WP02
       fleetLockdownStatus: async () => ({ active: false, reason: '' }),
+      // fleet-integrity-observability WP02
+      fleetHealth: async (): Promise<FleetHealthView> => ({
+        configDistributionEnabled: false,
+        configSource: 'no-key',
+        configLastError: '',
+        signedIn: false,
+      }),
+      // fleet-integrity-observability WP09
+      fleetTelemetryOptIns: async (): Promise<import('./types').TelemetryOptInView[]> => [],
+      setFleetTelemetryOptIn: noop,
     },
     permissions: {
       listGrants: async () => [],
@@ -4028,6 +4318,17 @@ export function createFakeHarnessClient(
       recipes: {
         list: async () => [],
         install: async (id) => ({
+          id,
+          enabled: true,
+          state: 'starting',
+          restartAttempts: 0,
+          keysPresent: true,
+          pid: 0,
+          toolCount: 0,
+          resourceCount: 0,
+          promptCount: 0,
+        }),
+        signIn: async (id) => ({
           id,
           enabled: true,
           state: 'starting',
@@ -4507,6 +4808,31 @@ export function createFakeHarnessClient(
       logs: async () => '',
       delete: noop,
     },
+    // ── Unit sync (fleet-integrity-observability WP08) ────────────────────
+    Unit_SyncStatus: async (): Promise<import('./types').UnitSyncStatusView> => ({
+      cursor: '',
+      lastPullAt: '',
+      lastPullErr: '',
+      lastPushErr: '',
+      pushCount: 0,
+      pullCount: 0,
+      conflictCount: 0,
+    }),
+    Unit_ListConflicts: async (): Promise<import('./types').UnitConflictView[]> => [],
+    Unit_ResolveMerge: noop,
+    Unit_ResolveEnshrine: async () => '',
+    // ── Boot health (agent-loop-robustness-parity WP08 / FR-008) ──────────
+    BootHealth_Get: async (): Promise<BootHealthReport> => ({}),
+    // ── Background tasks (background-task-monitor WP05) ───────────────────
+    Tasks_List: async (): Promise<TaskRow[]> => [],
+    Tasks_Get: async (): Promise<TaskRow> => ({
+      id: '', kind: '', ownerSessionId: '', cmd: '', description: '',
+      status: 'running', exitCode: 0, startedAt: '', ageMs: 0,
+    }),
+    Tasks_Tail: async (): Promise<LineRow[]> => [],
+    Tasks_Abort: noop,
+    Tasks_AbortBySession: noop,
+    Tasks_ListBySession: async (): Promise<TaskRow[]> => [],
   };
 
   return { ...defaults, ...seed };

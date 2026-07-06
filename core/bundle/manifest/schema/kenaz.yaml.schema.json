@@ -1,0 +1,126 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kenaz.dev/schema/kenaz.yaml/v1.json",
+  "title": "kenaz.yaml manifest schema (v1)",
+  "description": "Bundle manifest format for kenaz-harness. YAML 1.2; quoted strings mandated for short identifiers (Norway mitigation).",
+  "type": "object",
+  "required": ["schema_version", "name", "version", "license", "artifacts"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Manifest schema version. Bumped on incompatible schema changes."
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 255,
+      "pattern": "^[a-z0-9][a-z0-9._-]*$",
+      "description": "Bundle name. Lowercase alphanumerics, dots, underscores, hyphens."
+    },
+    "version": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Semver string (e.g., 1.2.3 or 1.2.3-rc.1+build)."
+    },
+    "license": {
+      "type": "string",
+      "minLength": 1,
+      "description": "SPDX license identifier (e.g., Apache-2.0, MIT)."
+    },
+    "metadata": {
+      "type": "object",
+      "additionalProperties": { "type": "string" }
+    },
+    "dependencies": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/bundle_reference" },
+      "default": []
+    },
+    "artifacts": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/artifact" }
+    },
+    "signatures": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/signature_ref" },
+      "default": []
+    }
+  },
+  "$defs": {
+    "bundle_reference": {
+      "type": "object",
+      "required": ["name", "version"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "version": { "type": "string", "minLength": 1 },
+        "source": { "$ref": "#/$defs/channel_spec" }
+      }
+    },
+    "channel_spec": {
+      "type": "object",
+      "required": ["kind"],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": ["git", "oci", "http_mirror", "local_path"]
+        },
+        "ref": { "type": "string" },
+        "url": { "type": "string" },
+        "path": { "type": "string" },
+        "auth": {
+          "type": "object",
+          "properties": {
+            "keychain": { "type": "string" }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    "artifact": {
+      "type": "object",
+      "required": ["name", "kind", "path", "content_hash"],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+        },
+        "kind": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^[a-z][a-z0-9_]*$"
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "content_hash": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "kind_metadata": {
+          "type": "object"
+        }
+      }
+    },
+    "signature_ref": {
+      "type": "object",
+      "required": ["kind", "locator"],
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": ["sigstore_referrer", "ed25519_detached"]
+        },
+        "locator": { "type": "string", "minLength": 1 },
+        "algorithm": { "type": "string" },
+        "key_id": { "type": "string" }
+      }
+    }
+  }
+}

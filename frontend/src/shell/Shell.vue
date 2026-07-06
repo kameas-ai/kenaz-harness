@@ -6,6 +6,8 @@ import LeftRail from './LeftRail.vue';
 import LegendBar from './LegendBar.vue';
 import ConnectionLostBanner from '@/components/ui/ConnectionLostBanner.vue';
 import LockdownBanner from '@/components/ui/LockdownBanner.vue';
+import SessionExpiredBanner from '@/components/ui/SessionExpiredBanner.vue';
+import BootHealthBanner from '@/components/ui/BootHealthBanner.vue';
 import SearchModal from '@/components/search/SearchModal.vue';
 import SearchPalette from '@/components/search/SearchPalette.vue';
 import CheatSheetModal from '@/components/shortcuts/CheatSheetModal.vue';
@@ -222,6 +224,10 @@ onBeforeUnmount(() => {
       <div id="shell-canvas" class="shell-canvas" role="region" aria-label="Active surface">
         <!-- fleet-emergency-lockdown-01NDFSEX12 WP05: persistent lockdown banner. -->
         <LockdownBanner />
+        <!-- fleet-integrity-observability WP05: session-expired re-auth affordance. -->
+        <SessionExpiredBanner />
+        <!-- agent-loop-robustness-parity WP08: boot-health init-error banner. -->
+        <BootHealthBanner />
         <ConnectionLostBanner v-if="isLost" />
         <div
           v-if="isStarting"

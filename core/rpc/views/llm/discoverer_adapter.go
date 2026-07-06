@@ -31,7 +31,7 @@ const ToolNameSeparator = "__"
 // When a non-nil BuiltinLookup is provided, the discoverer ALSO appends
 // every enabled built-in tool (gated by the lookup's filter, e.g.
 // Settings.WebSearchEnabled). Built-ins surface to the model namespaced
-// as "kaneaz__<tool>" — the toolloop's BuiltinPool dispatches them
+// as "kenaz__<tool>" — the toolloop's BuiltinPool dispatches them
 // without going through MCP.
 type mcpToolDiscoverer struct {
 	pool     mcp.Pool
@@ -92,10 +92,10 @@ func (d *mcpToolDiscoverer) Tools(ctx context.Context, sessionID string) ([]core
 	}
 	if d.builtins != nil && !d.builtins.Empty() {
 		for _, b := range d.builtins.List() {
-			// Built-ins use the reserved "kaneaz" server prefix so the
+			// Built-ins use the reserved "kenaz" server prefix so the
 			// toolloop's namespaced-name split sends Call back to
 			// BuiltinPool. The Name() value already includes the
-			// "kaneaz__" prefix in production tools (websearch.Name,
+			// "kenaz__" prefix in production tools (websearch.Name,
 			// bash.Name); the discoverer publishes that name verbatim.
 			out = append(out, corellm.ToolSpec{
 				Name:        b.Name(),

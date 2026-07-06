@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"time"
@@ -990,23 +991,34 @@ func (a *managerAPI) Export(ctx context.Context, sessionID, format string) (Expo
 	}
 
 	// Materialise sidecar artifacts alongside the main file.
+	// (FR-006) Both mkdir and WriteFile failures are now WARN-logged so
+	// "missing sidecar" export anomalies are diagnosable in support logs.
 	if len(sidecars) > 0 {
 		baseDir := filepath.Dir(dest)
 		for _, sc := range sidecars {
 			scPath := filepath.Join(baseDir, sc.RelPath)
 			if mkdirErr := os.MkdirAll(filepath.Dir(scPath), 0o755); mkdirErr != nil {
-				// Non-fatal: log and continue.
-				_ = mkdirErr
+				slog.WarnContext(ctx, "export sidecar mkdir failed; sidecar skipped",
+					"session_id", sessionID,
+					"rel_path",   sc.RelPath,
+					"error",      mkdirErr.Error(),
+				)
 				continue
 			}
-			_ = os.WriteFile(scPath, sc.Bytes, 0o644)
+			if writeErr := os.WriteFile(scPath, sc.Bytes, 0o644); writeErr != nil {
+				slog.WarnContext(ctx, "export sidecar write failed",
+					"session_id", sessionID,
+					"rel_path",   sc.RelPath,
+					"error",      writeErr.Error(),
+				)
+			}
 		}
 	}
 
 	byteCount := int64(len(rendered))
 
 	// 6. Audit.
-	_ = audit.Emit(ctx, a.auditEmitter, audit.KindSessionExport, audit.SessionExportPayload{
+	audit.MustEmit(ctx, a.auditEmitter, audit.KindSessionExport, audit.SessionExportPayload{
 		SessionID:      sessionID,
 		Format:         format,
 		OutputBasename: filepath.Base(dest),

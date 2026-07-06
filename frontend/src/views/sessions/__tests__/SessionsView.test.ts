@@ -106,7 +106,7 @@ describe('SessionsView (chat-ui)', () => {
         listProviders: async () => [],
         startStream: async () => 'sub',
         stopStream: async () => undefined,
-      },
+      } as any,
     });
     expect(w.text()).toContain('No provider configured');
     expect(w.text()).toContain('Configure providers');
@@ -124,7 +124,7 @@ describe('SessionsView (chat-ui)', () => {
     const { w } = await mountWithRoute('#s-1', {
       sessions: {
         list: async () => [],
-        get: async (id) => ({
+        get: async (id: string) => ({
           id,
           name: 'Onboarding',
           createdAt: '',
@@ -139,8 +139,8 @@ describe('SessionsView (chat-ui)', () => {
         listMessages: async () => messages,
         listMessagesActive: async () => ({ messages, sweptCount: 0 }),
         listMessagesAll: async () => ({ messages, sweptCount: 0 }),
-        appendMessage: async (id, role, content) =>
-          makeMessage({ id: 'new', sessionId: id, role, content }),
+        appendMessage: async (id: string, role: string, content: string) =>
+          makeMessage({ id: 'new', sessionId: id, role: role as Message['role'], content }),
         sendMessageWithBlocks: async () => makeMessage({ id: 'b' }),
         saveDraft: async () => undefined,
         loadDraft: async () => '',
@@ -148,12 +148,12 @@ describe('SessionsView (chat-ui)', () => {
         moveToProject: async () => undefined,
         getUsage: async () => ({ promptTokens: 0, completionTokens: 0, totalTokens: 0, costUsd: 0, costSource: 'unknown' as const, messageCount: 0, pricingDataDate: '' }),
         saveAsArtifact: async () => ({ id: '', sessionId: '', title: '', mimeType: 'text/plain', contentHash: '', byteSize: 0, source: 'user_pin' as const, sourceRef: { messageId: '', offset: 0, length: 0 }, scopeKind: 'session' as const, createdAt: '' }),
-      },
+      } as any,
       llm: {
         listProviders: async () => providers,
         startStream: async () => 'sub-llm',
         stopStream: async () => undefined,
-      },
+      } as any,
     });
     // CanvasHead title reflects the loaded session name.
     expect(w.text()).toContain('Onboarding');
@@ -195,7 +195,7 @@ describe('SessionsView (chat-ui)', () => {
     const { w } = await mountWithRoute('#s-1', {
       sessions: {
         list: async () => [],
-        get: async (id) => ({ id, name: 'Demo', createdAt: '', updatedAt: '' }),
+        get: async (id: string) => ({ id, name: 'Demo', createdAt: '', updatedAt: '' }),
         create: async () => ({ id: '', name: '', createdAt: '', updatedAt: '' }),
         rename: async () => undefined,
         delete: async () => undefined,
@@ -205,8 +205,8 @@ describe('SessionsView (chat-ui)', () => {
         listMessages: async () => messages,
         listMessagesActive: async () => ({ messages, sweptCount: 0 }),
         listMessagesAll: async () => ({ messages, sweptCount: 0 }),
-        appendMessage: async (id, role, content) =>
-          makeMessage({ id: 'new', sessionId: id, role, content }),
+        appendMessage: async (id: string, role: string, content: string) =>
+          makeMessage({ id: 'new', sessionId: id, role: role as Message['role'], content }),
         sendMessageWithBlocks: async () => makeMessage({ id: 'b' }),
         saveDraft: async () => undefined,
         loadDraft: async () => '',
@@ -214,7 +214,7 @@ describe('SessionsView (chat-ui)', () => {
         moveToProject: async () => undefined,
         getUsage: async () => ({ promptTokens: 0, completionTokens: 0, totalTokens: 0, costUsd: 0, costSource: 'unknown' as const, messageCount: 0, pricingDataDate: '' }),
         saveAsArtifact: async () => sessionArtifact,
-      },
+      } as any,
       llm: {
         listProviders: async () => providers,
         startStream: async () => 'sub',
@@ -225,9 +225,9 @@ describe('SessionsView (chat-ui)', () => {
         testProvider: async () => ({ success: true, latency_ms: 1, message: 'ok' }),
         listModels: async () => [],
         resolveConfirm: async () => undefined,
-      },
+      } as any,
       artifacts: {
-        list: async (filter) => {
+        list: async (filter: any) => {
           recordedFilters.push(filter);
           if (filter?.sessionId) {
             return [sessionArtifact, otherArtifact].filter(
@@ -242,7 +242,7 @@ describe('SessionsView (chat-ui)', () => {
         }),
         promote: async () => sessionArtifact,
         remove: async () => undefined,
-      },
+      } as any,
     });
     await flushPromises();
     // The list should have been fetched with sessionId === 's-1'.
@@ -271,7 +271,7 @@ describe('SessionsView (chat-ui)', () => {
         listProviders: async () => providers,
         startStream: async () => 'sub',
         stopStream: async () => undefined,
-      },
+      } as any,
     });
     expect(w.text()).not.toContain('No provider configured');
     w.unmount();
@@ -300,7 +300,8 @@ describe('SessionsView (chat-ui)', () => {
       moveToProject: async () => undefined,
       getUsage: async () => ({ promptTokens: 0, completionTokens: 0, totalTokens: 0, costUsd: 0, costSource: 'unknown' as const, messageCount: 0, pricingDataDate: '' }),
       saveAsArtifact: async () => ({ id: '', sessionId: '', title: '', mimeType: 'text/plain', contentHash: '', byteSize: 0, source: 'user_pin' as const, sourceRef: { messageId: '', offset: 0, length: 0 }, scopeKind: 'session' as const, createdAt: '' }),
-    };
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any;
   }
 
   it('context meter renders bar and correct denominator when contextWindow is known', async () => {
@@ -324,7 +325,7 @@ describe('SessionsView (chat-ui)', () => {
         listProviders: async () => providers,
         startStream: async () => 'sub',
         stopStream: async () => undefined,
-      },
+      } as any,
     });
     const meter = w.find('[data-testid="session-context-meter"]');
     expect(meter.exists()).toBe(true);
@@ -357,7 +358,7 @@ describe('SessionsView (chat-ui)', () => {
         listProviders: async () => providers,
         startStream: async () => 'sub',
         stopStream: async () => undefined,
-      },
+      } as any,
     });
     const meter = w.find('[data-testid="session-context-meter"]');
     expect(meter.exists()).toBe(true);
@@ -389,7 +390,7 @@ describe('SessionsView (chat-ui)', () => {
         listProviders: async () => providers,
         startStream: async () => 'sub',
         stopStream: async () => undefined,
-      },
+      } as any,
     });
     const meter = w.find('[data-testid="session-context-meter"]');
     expect(meter.exists()).toBe(true);
@@ -423,7 +424,7 @@ describe('SessionsView (chat-ui)', () => {
         listProviders: async () => providers,
         startStream: async () => 'sub',
         stopStream: async () => undefined,
-      },
+      } as any,
     });
     const meter = w.find('[data-testid="session-context-meter"]');
     expect(meter.exists()).toBe(true);

@@ -53,9 +53,11 @@ type Bundle struct {
 	CedarDelta json.RawMessage `json:"cedar_delta,omitempty"`
 
 	// MCPAllowlist is the slice of MCP recipe IDs the fleet admin permits.
-	// When non-nil, only recipes in this list may be installed/enabled.
 	// nil means "no fleet restriction" (all recipes allowed).
-	MCPAllowlist []string `json:"mcp_allowlist,omitempty"`
+	// An empty (non-nil) slice means "block all" — no recipes may be installed.
+	// The field is NOT omitempty so an explicit empty array round-trips through
+	// JSON as [] (distinct from nil/absent) and the ed25519 signature covers it.
+	MCPAllowlist []string `json:"mcp_allowlist"`
 
 	// ModelPrefs specifies the fleet-managed model preferences.
 	ModelPrefs *BundleModelPrefs `json:"model_prefs,omitempty"`
@@ -90,11 +92,14 @@ type BundleModelPrefs struct {
 
 // bundleSigningPayload is the shape marshalled to produce the signature input.
 // It mirrors Bundle but omits the Signature field.
+// MCPAllowlist is NOT omitempty so an explicit empty array (block-all) is
+// included in the signature and the verify+apply path can distinguish nil
+// (no restriction) from [] (block-all). Must stay in sync with Bundle above.
 type bundleSigningPayload struct {
 	BundleID           int64             `json:"bundle_id"`
 	IssuedAt           time.Time         `json:"issued_at"`
 	CedarDelta         json.RawMessage   `json:"cedar_delta,omitempty"`
-	MCPAllowlist       []string          `json:"mcp_allowlist,omitempty"`
+	MCPAllowlist       []string          `json:"mcp_allowlist"`
 	ModelPrefs         *BundleModelPrefs `json:"model_prefs,omitempty"`
 	KameasMLWeightURLs []string          `json:"kameas_ml_weight_urls,omitempty"`
 	MandatedSkills     []json.RawMessage `json:"mandated_skills,omitempty"`
@@ -125,8 +130,24 @@ func (b *Bundle) signingPayload() ([]byte, error) {
 //   - ErrSigningKeyNotConfigured — key is nil; hard-reject
 //   - ErrInvalidSignature       — signature mismatch; hard-reject
 //   - ErrBundleIDNonMonotonic   — bundle_id is not strictly > lastAppliedID
+//
+// For accept-set verification (key rotation), use VerifyWithKeySet.
 func Verify(b *Bundle, key ed25519.PublicKey, lastAppliedID int64) error {
 	if len(key) == 0 {
+		return fmt.Errorf("%w: cannot verify without a signing key", ErrSigningKeyNotConfigured)
+	}
+	return VerifyWithKeySet(b, []ed25519.PublicKey{key}, lastAppliedID)
+}
+
+// VerifyWithKeySet verifies the bundle signature against any key in the
+// accept-set and enforces the monotonic bundle_id guard. An empty accept-set
+// is treated as ErrSigningKeyNotConfigured (fail-closed).
+//
+// FR-003: during key rotation, the accept-set contains both the outgoing and
+// the incoming key. Any bundle signed by either key is accepted. Once all
+// binaries with the old key are retired, the old key is removed from the set.
+func VerifyWithKeySet(b *Bundle, keys []ed25519.PublicKey, lastAppliedID int64) error {
+	if len(keys) == 0 {
 		return fmt.Errorf("%w: cannot verify without a signing key", ErrSigningKeyNotConfigured)
 	}
 
@@ -152,7 +173,15 @@ func Verify(b *Bundle, key ed25519.PublicKey, lastAppliedID int64) error {
 
 	// ed25519 signs the message directly (not the hash), but to align with the
 	// server's convention we sign the 32-byte SHA-256 digest.
-	if !ed25519.Verify(key, hash[:], sig) {
+	// Try each key in the accept-set; accept if any key matches.
+	verified := false
+	for _, key := range keys {
+		if len(key) == ed25519.PublicKeySize && ed25519.Verify(key, hash[:], sig) {
+			verified = true
+			break
+		}
+	}
+	if !verified {
 		return ErrInvalidSignature
 	}
 

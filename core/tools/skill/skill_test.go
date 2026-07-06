@@ -1,4 +1,4 @@
-// skill_test.go — unit tests for the kaneaz__skill built-in tool.
+// skill_test.go — unit tests for the kenaz__skill built-in tool.
 //
 // model-invoked-skills-catalog-01KZNP3E WP02.
 package skill

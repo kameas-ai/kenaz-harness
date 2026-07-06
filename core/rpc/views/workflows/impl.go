@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -110,14 +111,24 @@ func New(cfg Config) *API {
 	}
 	// Hydrate any user workflows that were persisted in prior sessions
 	// so the catalog is complete on first List without a manual reload.
+	// (FR-006) Load failures are now WARN-logged so a corrupt or missing
+	// workflow store is diagnosable rather than silently swallowed.
 	if cfg.Store != nil {
-		if summaries, err := cfg.Store.List(context.Background()); err == nil {
+		if summaries, err := cfg.Store.List(context.Background()); err != nil {
+			slog.Warn("workflows: failed to list persisted workflows; catalog may be incomplete",
+				"error", err.Error(),
+			)
+		} else {
 			for _, s := range summaries {
 				if _, ok := a.byID[s.ID]; ok {
 					continue
 				}
 				w, err := cfg.Store.Load(context.Background(), s.ID)
 				if err != nil {
+					slog.Warn("workflows: failed to load persisted workflow",
+						"workflow_id", s.ID,
+						"error",       err.Error(),
+					)
 					continue
 				}
 				a.byID[s.ID] = w

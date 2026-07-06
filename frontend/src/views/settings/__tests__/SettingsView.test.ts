@@ -31,7 +31,9 @@ function provide(
       saveTheme,
       getMemory: async () => false,
       setMemory: async () => undefined,
-    },
+      getWebFetchEnabled: async () => false,
+      setWebFetchEnabled: async () => undefined,
+    } as any,
     appInfo: async () => ({
       build: '0.1.0-test',
       commit: 'abcdef0',
@@ -47,7 +49,7 @@ function provide(
       remove: async () => undefined,
       reorder: async () => undefined,
       refresh: async () => attachmentRows[0] ?? ({} as Attachment),
-    },
+    } as any,
   });
   return { client, saveTheme, set };
 }

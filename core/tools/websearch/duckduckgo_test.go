@@ -52,7 +52,7 @@ func TestDuckDuckGo_SearchUsesEndpoint(t *testing.T) {
 		if r.URL.Query().Get("q") == "" {
 			t.Errorf("missing q param")
 		}
-		if !strings.HasPrefix(r.Header.Get("User-Agent"), "kaneaz-harness/") {
+		if !strings.HasPrefix(r.Header.Get("User-Agent"), "kenaz-harness/") {
 			t.Errorf("missing UA: %q", r.Header.Get("User-Agent"))
 		}
 		w.Header().Set("Content-Type", "text/html")

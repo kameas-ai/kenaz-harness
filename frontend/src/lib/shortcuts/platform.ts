@@ -11,7 +11,7 @@
  *   - Win/Linux → ctrlKey
  *
  * Override knob for tests / dev: set
- *   localStorage.kaneaz_shortcut_platform = 'mac' | 'win' | 'linux'
+ *   localStorage.kenaz_shortcut_platform = 'mac' | 'win' | 'linux'
  */
 
 export type Platform = 'mac' | 'win' | 'linux';
@@ -23,7 +23,7 @@ export function detectPlatform(): Platform {
   if (_cachedPlatform !== null) return _cachedPlatform;
 
   if (typeof localStorage !== 'undefined') {
-    const override = localStorage.getItem('kaneaz_shortcut_platform');
+    const override = localStorage.getItem('kenaz_shortcut_platform');
     if (override === 'mac' || override === 'win' || override === 'linux') {
       _cachedPlatform = override;
       return _cachedPlatform;

@@ -173,7 +173,7 @@ describe('NodePalette', () => {
     expect(events).toBeTruthy();
     expect(events![0][0]).toEqual({ kind: 'decision' });
     expect(dt.setData).toHaveBeenCalledWith(
-      'application/x-kaneaz-node-kind',
+      'application/x-kenaz-node-kind',
       'decision',
     );
   });

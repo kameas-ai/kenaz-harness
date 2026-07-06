@@ -13,6 +13,14 @@ const PROD_CSP =
   "font-src 'self'; base-uri 'none'; form-action 'none'; " +
   "frame-ancestors 'none'; object-src 'none'";
 
+// Served-mode CSP: connect-src must allow same-origin HTTP + WS so the
+// browser can reach /rpc and /ws on the harness HTTP server.
+const SERVED_CSP =
+  "default-src 'none'; connect-src 'self'; script-src 'self'; " +
+  "style-src 'self' 'unsafe-inline'; img-src 'self' data:; " +
+  "font-src 'self'; base-uri 'none'; form-action 'none'; " +
+  "frame-ancestors 'none'; object-src 'none'";
+
 const DEV_CSP =
   "default-src 'none'; connect-src 'self' ws://localhost:* http://localhost:*; " +
   "script-src 'self' 'unsafe-eval' 'unsafe-inline'; " +
@@ -20,13 +28,21 @@ const DEV_CSP =
   "font-src 'self' data:; base-uri 'none'; form-action 'none'; " +
   "frame-ancestors 'none'; object-src 'none'";
 
+// BUILD_TARGET env var selects which bundle to produce:
+//   (unset / "desktop") → Wails desktop bundle (default, index.html)
+//   "served"            → HTTP-served VM bundle (served.html)
+const buildTarget = process.env['BUILD_TARGET'] ?? 'desktop';
+
 export default defineConfig(({ command }) => ({
   plugins: [
     vue(),
     {
       name: 'inject-csp',
       transformIndexHtml(html) {
-        const csp = command === 'build' ? PROD_CSP : DEV_CSP;
+        if (command !== 'build') {
+          return html.replace('__CSP_PLACEHOLDER__', DEV_CSP);
+        }
+        const csp = buildTarget === 'served' ? SERVED_CSP : PROD_CSP;
         return html.replace('__CSP_PLACEHOLDER__', csp);
       },
     },
@@ -36,18 +52,40 @@ export default defineConfig(({ command }) => ({
       '@': path.resolve(__dirname, 'src'),
     },
   },
-  build: {
-    target: 'es2022',
-    sourcemap: false,
-    rollupOptions: {
-      output: {
-        // Predictable chunk names for CSP / bundle-size CI.
-        entryFileNames: 'assets/[name]-[hash].js',
-        chunkFileNames: 'assets/[name]-[hash].js',
-        assetFileNames: 'assets/[name]-[hash][extname]',
-      },
-    },
-  },
+  // Select entry point based on BUILD_TARGET.
+  ...(buildTarget === 'served'
+    ? {
+        root: path.resolve(__dirname),
+        build: {
+          target: 'es2022',
+          sourcemap: false,
+          // Output to dist-served/ so it doesn't overwrite the desktop dist/.
+          outDir: path.resolve(__dirname, 'dist-served'),
+          emptyOutDir: true,
+          rollupOptions: {
+            input: path.resolve(__dirname, 'served.html'),
+            output: {
+              entryFileNames: 'assets/[name]-[hash].js',
+              chunkFileNames: 'assets/[name]-[hash].js',
+              assetFileNames: 'assets/[name]-[hash][extname]',
+            },
+          },
+        },
+      }
+    : {
+        build: {
+          target: 'es2022',
+          sourcemap: false,
+          rollupOptions: {
+            output: {
+              // Predictable chunk names for CSP / bundle-size CI.
+              entryFileNames: 'assets/[name]-[hash].js',
+              chunkFileNames: 'assets/[name]-[hash].js',
+              assetFileNames: 'assets/[name]-[hash][extname]',
+            },
+          },
+        },
+      }),
   server: {
     port: 5173,
     strictPort: false,

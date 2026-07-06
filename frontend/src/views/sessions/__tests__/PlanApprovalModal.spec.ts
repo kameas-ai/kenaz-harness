@@ -17,8 +17,8 @@ function installFakeGo(overrides: Partial<FakeHarnessAPI> = {}): FakeHarnessAPI 
     Planmode_Edit: vi.fn().mockResolvedValue({ approved: true, session_id: 'sess', plan_id: 'plan-001' }),
     ...overrides,
   };
-  (window as unknown as { go: { rpc: { HarnessAPI: FakeHarnessAPI } } }).go = {
-    rpc: { HarnessAPI: api },
+  (window as unknown as { go: { rpc: { Bindings: FakeHarnessAPI } } }).go = {
+    rpc: { Bindings: api },
   };
   return api;
 }
