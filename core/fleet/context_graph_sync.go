@@ -43,6 +43,7 @@ import (
 	"sync"
 	"time"
 
+	contextaudit "github.com/kameas-ai/kenaz-harness/core/context/audit"
 	contextpack "github.com/kameas-ai/kenaz-harness/core/context/pack"
 )
 
@@ -293,6 +294,11 @@ type ContextGraphSyncer struct {
 	// stopCh signals the background poll loop to exit (closed by Stop).
 	stopCh chan struct{}
 
+	// auditEmitter is an optional audit emitter injected via WithAuditEmitter.
+	// When nil, audit emit calls are no-ops (nil-safe via contextaudit.Emit).
+	// (context-graph-e2e-01NINTG03 WP01)
+	auditEmitter contextaudit.Emitter
+
 	// libraryMerger is an optional callback set via SetLibraryMerger.
 	// It is called after each successful PullDelta with the full pulled
 	// entry set so the local context library picks up org/team entries.
@@ -315,6 +321,15 @@ func NewContextGraphSyncer(client *Client, dataDir string, caps *CapabilityPolle
 	if c, err := loadContextCursor(dataDir); err == nil {
 		s.cursor = c
 	}
+	return s
+}
+
+// WithAuditEmitter wires an audit emitter for context-graph lifecycle events.
+// When the emitter is nil (or this method is never called), audit emit calls
+// are no-ops — matching the contextaudit.Emit nil-guard contract.
+// (context-graph-e2e-01NINTG03 WP01 FR-009)
+func (s *ContextGraphSyncer) WithAuditEmitter(e contextaudit.Emitter) *ContextGraphSyncer {
+	s.auditEmitter = e
 	return s
 }
 
@@ -452,6 +467,16 @@ func (s *ContextGraphSyncer) PushEntry(ctx context.Context, entry ContextNodeEnt
 	}
 	s.mu.Unlock()
 
+	// FR-006: emit audit event on successful push (context-graph-e2e-01NINTG03 WP01).
+	// Uses MustEmit so a failed emit is logged but never surfaces as a push error.
+	// Privacy invariant: no title, body, or metadata in the payload.
+	contextaudit.MustEmit(ctx, s.auditEmitter, contextaudit.KindFleetContextPublished,
+		contextaudit.FleetContextPublishedPayload{
+			NodeID:         entry.ID,
+			Classification: string(classification),
+			Version:        entry.Version,
+		}, time.Now())
+
 	return &result, nil
 }
 
@@ -571,6 +596,26 @@ func (s *ContextGraphSyncer) PullDelta(ctx context.Context) (int, error) {
 	s.pullCount += n
 	s.lastPullAt = time.Now()
 	s.lastPullErr = ""
+	auditCursor := s.cursor // snapshot for audit emit below (taken while locked)
+
+	// FR-007: emit audit event once per successful pull with ≥ 1 node.
+	// Emit is called while holding mu; contextaudit.MustEmit is fast
+	// (in-process append) so holding the lock is acceptable here.
+	// Privacy invariant: no entry bodies or titles in the payload.
+	if n > 0 {
+		tombstoneCount := 0
+		for _, node := range pullResp.Nodes {
+			if node.DeletedAt != nil {
+				tombstoneCount++
+			}
+		}
+		contextaudit.MustEmit(ctx, s.auditEmitter, contextaudit.KindFleetContextPulled,
+			contextaudit.FleetContextPulledPayload{
+				NodeCount:      n,
+				TombstoneCount: tombstoneCount,
+				Cursor:         auditCursor,
+			}, time.Now())
+	}
 
 	return n, nil
 }
@@ -659,6 +704,14 @@ func (s *ContextGraphSyncer) Promote(ctx context.Context, nodeID string) (*Conte
 		}
 	}
 	s.mu.Unlock()
+
+	// FR-008: emit audit event on successful promote (context-graph-e2e-01NINTG03 WP01).
+	// Privacy invariant: no entry body or title in the payload.
+	contextaudit.MustEmit(ctx, s.auditEmitter, contextaudit.KindFleetContextPromoted,
+		contextaudit.FleetContextPromotedPayload{
+			NodeID:           nodeID,
+			ToClassification: string(ClassOrgShared),
+		}, time.Now())
 
 	return &result, nil
 }
@@ -863,18 +916,27 @@ const (
 // pulled cache, which the Contexts view surfaces via PulledEntries /
 // PulledEdges. Personal entries are never pulled (they stay device-local).
 //
+// interval sets the base poll cadence; 0 uses contextPullBaseInterval (60s).
+// Backoff tiers are relative to the base interval: after 2 consecutive errors
+// the interval scales to contextPullBackoff1 (300s); after 4 it scales to
+// contextPullBackoff2 (1800s). These tiers are absolute, not multiples of
+// interval — short intervals in tests still converge to the floor tiers.
+//
 // The loop self-gates: PullDelta returns (0, nil) when the user is signed out,
 // offline, or lacks the team-graph capability, so the poller is a cheap no-op
-// in those states. On transient pull errors it backs off 60s → 300s → 1800s,
-// mirroring the settings Syncer. Context cancellation (or Stop) ends the loop.
+// in those states. Context cancellation (or Stop) ends the loop.
 //
 // Idempotent: only the first call starts the goroutine.
-func (s *ContextGraphSyncer) StartPoller(ctx context.Context) {
+// (context-graph-e2e-01NINTG03 WP01 FR-001 FR-002)
+func (s *ContextGraphSyncer) StartPoller(ctx context.Context, interval time.Duration) {
+	if interval <= 0 {
+		interval = contextPullBaseInterval
+	}
 	s.pollOnce.Do(func() {
 		if s.stopCh == nil {
 			s.stopCh = make(chan struct{})
 		}
-		go s.pollLoop(ctx)
+		go s.pollLoop(ctx, interval)
 	})
 }
 
@@ -902,9 +964,9 @@ func (s *ContextGraphSyncer) SetLibraryMerger(f func([]ContextNodeEntry)) {
 	s.libraryMerger = f
 }
 
-func (s *ContextGraphSyncer) pollLoop(ctx context.Context) {
+func (s *ContextGraphSyncer) pollLoop(ctx context.Context, baseInterval time.Duration) {
 	consecutiveErrors := 0
-	timer := time.NewTimer(contextPullBaseInterval)
+	timer := time.NewTimer(baseInterval)
 	defer timer.Stop()
 	for {
 		select {
@@ -932,16 +994,16 @@ func (s *ContextGraphSyncer) pollLoop(ctx context.Context) {
 					}
 				}
 			}
-			var interval time.Duration
+			var next time.Duration
 			switch {
 			case consecutiveErrors >= contextPullMaxConsecErr*2:
-				interval = contextPullBackoff2
+				next = contextPullBackoff2
 			case consecutiveErrors >= contextPullMaxConsecErr:
-				interval = contextPullBackoff1
+				next = contextPullBackoff1
 			default:
-				interval = contextPullBaseInterval
+				next = baseInterval
 			}
-			timer.Reset(interval)
+			timer.Reset(next)
 		}
 	}
 }
