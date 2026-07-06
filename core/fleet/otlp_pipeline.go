@@ -12,6 +12,7 @@ import (
 	"go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploghttp"
 	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetrichttp"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
+	otellog "go.opentelemetry.io/otel/log"
 	sdklog "go.opentelemetry.io/otel/sdk/log"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
@@ -174,11 +175,17 @@ func (p *FleetOTLPPipeline) Activate(
 			return fmt.Errorf("fleet/otlp: span exporter: %w", err)
 		}
 		// Wrap to substitute resource on every export call.
-		wrappedSpanExp := &resourceOverrideSpanExporter{
+		withResource := &resourceOverrideSpanExporter{
 			inner: spanExp,
 			res:   identityRes,
 		}
-		proc := sdktrace.NewBatchSpanProcessor(wrappedSpanExp)
+		// Wrap again to redact span name + attributes before they leave the
+		// process boundary (security fix: FR-005 / NFR-001 on the live OTLP
+		// path — harness-fleet-otlp-export-01NTLMEX01). The redacting wrapper
+		// sits between the BatchSpanProcessor and the OTLP HTTP exporter so
+		// all spans are clean before serialisation.
+		redactedSpanExp := &redactingSpanExporter{inner: withResource}
+		proc := sdktrace.NewBatchSpanProcessor(redactedSpanExp)
 		tp.RegisterSpanProcessor(proc)
 		p.activeSpanProc = proc
 		p.tp = tp
@@ -298,6 +305,78 @@ type spanWithResource struct {
 
 func (s *spanWithResource) Resource() *resource.Resource { return s.res }
 
+// ── redactingSpanExporter ─────────────────────────────────────────────────────
+
+// redactingSpanExporter wraps an sdktrace.SpanExporter and applies
+// DefaultRedactor to every span's name and attributes before delegating to the
+// inner exporter.  This is the security fence for the live OTLP path:
+// credential/prompt-bearing span attributes and span names are scrubbed before
+// the OTLP HTTP client serialises and transmits them.
+//
+// Applied immediately before the BatchSpanProcessor's underlying exporter so
+// redaction is guaranteed regardless of consent level — if a span reaches the
+// exporter, it is already clean.
+//
+// (harness-fleet-otlp-export-01NTLMEX01 FR-005 / NFR-001 security fix)
+type redactingSpanExporter struct {
+	inner sdktrace.SpanExporter
+}
+
+func (e *redactingSpanExporter) ExportSpans(ctx context.Context, spans []sdktrace.ReadOnlySpan) error {
+	if len(spans) == 0 {
+		return nil
+	}
+	redacted := make([]sdktrace.ReadOnlySpan, len(spans))
+	for i, s := range spans {
+		redacted[i] = &redactedSpan{ReadOnlySpan: s}
+	}
+	return e.inner.ExportSpans(ctx, redacted)
+}
+
+func (e *redactingSpanExporter) Shutdown(ctx context.Context) error {
+	return e.inner.Shutdown(ctx)
+}
+
+// redactedSpan is a ReadOnlySpan decorator that returns redacted Name() and
+// Attributes(). All other methods delegate to the embedded span unchanged.
+type redactedSpan struct {
+	sdktrace.ReadOnlySpan
+}
+
+func (s *redactedSpan) Name() string {
+	return DefaultRedactor.RedactSpanName(s.ReadOnlySpan.Name())
+}
+
+func (s *redactedSpan) Attributes() []attribute.KeyValue {
+	raw := s.ReadOnlySpan.Attributes()
+	if len(raw) == 0 {
+		return raw
+	}
+	// Convert to map, redact, convert back.
+	m := make(map[string]any, len(raw))
+	for _, kv := range raw {
+		m[string(kv.Key)] = kv.Value.Emit()
+	}
+	cleaned := DefaultRedactor.RedactAttributes(m)
+	out := make([]attribute.KeyValue, 0, len(cleaned))
+	for k, v := range cleaned {
+		switch val := v.(type) {
+		case string:
+			out = append(out, attribute.String(k, val))
+		default:
+			// Non-string values were not modified by the redactor; re-use
+			// the original KeyValue to preserve the original type.
+			for _, orig := range raw {
+				if string(orig.Key) == k {
+					out = append(out, orig)
+					break
+				}
+			}
+		}
+	}
+	return out
+}
+
 // ── resourceOverrideMetricExporter ───────────────────────────────────────────
 
 // resourceOverrideMetricExporter is a lazy sdkmetric.Exporter that is
@@ -404,7 +483,21 @@ func (e *resourceOverrideLogExporter) Export(ctx context.Context, records []sdkl
 	if inner == nil {
 		return nil
 	}
-	return inner.Export(ctx, records)
+	// Redact log bodies before they leave the process boundary
+	// (security fix: NFR-001 / FR-005 on the live OTLP path —
+	// harness-fleet-otlp-export-01NTLMEX01).
+	redacted := make([]sdklog.Record, len(records))
+	for i, r := range records {
+		body := r.Body()
+		if body.Kind() == otellog.KindString {
+			cleaned := DefaultRedactor.RedactLogBody(body.AsString())
+			if cleaned != body.AsString() {
+				r.SetBody(otellog.StringValue(cleaned))
+			}
+		}
+		redacted[i] = r
+	}
+	return inner.Export(ctx, redacted)
 }
 
 func (e *resourceOverrideLogExporter) ForceFlush(ctx context.Context) error {

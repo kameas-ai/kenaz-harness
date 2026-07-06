@@ -6,11 +6,14 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/log"
 	sdklog "go.opentelemetry.io/otel/sdk/log"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
@@ -35,6 +38,23 @@ func makeSpan(t *testing.T, name string) sdktrace.ReadOnlySpan {
 	tp := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
 	tracer := tp.Tracer("test")
 	_, sp := tracer.Start(context.Background(), name)
+	sp.End()
+	if captured == nil {
+		t.Fatal("span recorder did not capture span")
+	}
+	return captured
+}
+
+// makeSpanWithAttrs creates a ReadOnlySpan with the given name and key-value
+// attributes. Callers use this to test redaction of attribute values.
+func makeSpanWithAttrs(t *testing.T, name string, kvs ...attribute.KeyValue) sdktrace.ReadOnlySpan {
+	t.Helper()
+	var captured sdktrace.ReadOnlySpan
+	recorder := &spanRecorder{onEnd: func(s sdktrace.ReadOnlySpan) { captured = s }}
+	tp := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
+	tracer := tp.Tracer("test")
+	_, sp := tracer.Start(context.Background(), name)
+	sp.SetAttributes(kvs...)
 	sp.End()
 	if captured == nil {
 		t.Fatal("span recorder did not capture span")
@@ -276,6 +296,72 @@ func TestFleetLogExporter_AggregateConsentDropsLogs(t *testing.T) {
 
 	if atomic.LoadUint64(&calls) != 0 {
 		t.Errorf("want 0 HTTP calls under aggregate consent for logs, got %d", calls)
+	}
+}
+
+// ── redactor-at-enqueue tests (WP02 / WP05) ───────────────────────────────
+
+// TestSpanRecordFrom_RedactsSecretValue verifies that a @secret:... reference
+// in a span attribute VALUE is replaced with [REDACTED:secret-ref] before the
+// record enters the ring buffer. The KEY itself is not on the deny-list so it
+// passes through; only the value is scrubbed.
+func TestSpanRecordFrom_RedactsSecretValue(t *testing.T) {
+	t.Parallel()
+
+	sp := makeSpanWithAttrs(t, "test-span",
+		attribute.String("prompt", "@secret:vault/my-key"),
+	)
+	rec := spanRecordFrom(sp, &stubConsent{level: "full"})
+
+	got, ok := rec.Attributes["prompt"]
+	if !ok {
+		t.Fatal("want 'prompt' key in attributes, key missing")
+	}
+	gotStr, ok := got.(string)
+	if !ok {
+		t.Fatalf("want string attribute value, got %T", got)
+	}
+	if gotStr != "[REDACTED:secret-ref]" {
+		t.Errorf("want [REDACTED:secret-ref], got %q", gotStr)
+	}
+}
+
+// TestSpanRecordFrom_RedactsSpanName verifies that a bearer token embedded in
+// a span name is replaced with [REDACTED:bearer-token] by the redactor.
+func TestSpanRecordFrom_RedactsSpanName(t *testing.T) {
+	t.Parallel()
+
+	// A span name containing a bearer pattern (should not happen in production
+	// but we test the belt-and-suspenders redaction).
+	sp := makeSpan(t, "bearer sk-ant-api03-AAAAAAAAAAAAAAAAAAAAAA-BBBBBBBBBBBBBB")
+	rec := spanRecordFrom(sp, &stubConsent{level: "full"})
+
+	if strings.Contains(rec.Name, "sk-ant-") {
+		t.Errorf("span name still contains raw key after redaction: %q", rec.Name)
+	}
+	if !strings.Contains(rec.Name, "[REDACTED:") {
+		t.Errorf("expected [REDACTED:...] in span name, got: %q", rec.Name)
+	}
+}
+
+// TestLogRecordsFrom_RedactsBody verifies that a JWT in a log body is replaced
+// with [REDACTED:jwt-token] before the log record is stored.
+func TestLogRecordsFrom_RedactsBody(t *testing.T) {
+	t.Parallel()
+
+	// Construct a log.Record with a JWT-like body using the SDK builder.
+	var r sdklog.Record
+	r.SetBody(log.StringValue("auth header: eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ1c2VyMSJ9.SIGNATURE"))
+
+	recs := logRecordsFrom([]sdklog.Record{r})
+	if len(recs) != 1 {
+		t.Fatalf("want 1 log record, got %d", len(recs))
+	}
+	if strings.Contains(recs[0].Body, "eyJhbGci") {
+		t.Errorf("log body still contains raw JWT after redaction: %q", recs[0].Body)
+	}
+	if !strings.Contains(recs[0].Body, "[REDACTED:jwt-token]") {
+		t.Errorf("expected [REDACTED:jwt-token] in log body, got: %q", recs[0].Body)
 	}
 }
 

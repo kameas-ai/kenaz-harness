@@ -1746,16 +1746,30 @@ func New(c *core.Core) *API {
 				}
 				// Wire into settings (Activate hook post-enroll) with the concrete type.
 				if settingsImpl != nil {
+					// Capture the startup OTel resource eagerly — it is
+					// available even before c.Start if initTelemetry has run,
+					// but if not yet ready we pass nil and let the pipeline
+					// fall back to the base resource at Activate time.
 					var otlpRes *resource.Resource
-					var otlpTP *sdktrace.TracerProvider
 					if tel := c.Telemetry(); tel != nil {
 						otlpRes = tel.Resource
-						otlpTP = tel.TracerProvider
+					}
+					// Pass a lazy accessor for the TracerProvider rather than
+					// a direct pointer. c.Telemetry() is called here BEFORE
+					// c.Start() / initTelemetry, so the TracerProvider is nil
+					// at this point. The function is resolved at Activate time
+					// (post-login, post-c.Start) when the real provider exists.
+					// (harness-fleet-otlp-export-01NTLMEX01 tp-nil timing fix)
+					tpFunc := func() *sdktrace.TracerProvider {
+						if tel := c.Telemetry(); tel != nil {
+							return tel.TracerProvider
+						}
+						return nil
 					}
 					settingsImpl.SetFleetOTLPPipeline(
 						fleetPipeline,
 						otlpRes,
-						otlpTP,
+						tpFunc,
 						tc,
 					)
 				}

@@ -655,9 +655,11 @@ func spanRecordFrom(sp sdktrace.ReadOnlySpan, consent ConsentReader) spanRecord 
 	parent := sp.Parent()
 
 	rec := spanRecord{
-		TraceID:    sc.TraceID().String(),
-		SpanID:     sc.SpanID().String(),
-		Name:       sp.Name(),
+		TraceID: sc.TraceID().String(),
+		SpanID:  sc.SpanID().String(),
+		// Apply redactor to span name before storing in the ring buffer
+		// (harness-fleet-otlp-export-01NTLMEX01 FR-005 / threat: token in name).
+		Name:       DefaultRedactor.RedactSpanName(sp.Name()),
 		StartNS:    sp.StartTime().UnixNano(),
 		EndNS:      sp.EndTime().UnixNano(),
 		StatusCode: int(sp.Status().Code),
@@ -674,7 +676,10 @@ func spanRecordFrom(sp sdktrace.ReadOnlySpan, consent ConsentReader) spanRecord 
 			for _, a := range rawAttrs {
 				attrs[string(a.Key)] = a.Value.Emit()
 			}
-			rec.Attributes = attrs
+			// Apply redactor before the record enters the ring buffer so that
+			// any secret patterns in attribute values are replaced at enqueue
+			// time. This is the privacy fence: post-enqueue the record is clean.
+			rec.Attributes = DefaultRedactor.RedactAttributes(attrs)
 		}
 	}
 	return rec
@@ -741,6 +746,11 @@ func metricRecordsFrom(rm *metricdata.ResourceMetrics, consent ConsentReader) []
 			}
 		}
 	}
+	// Metric names are well-known instrumentation strings (e.g.
+	// "harness.turn.duration_ms") and their values are numeric aggregates.
+	// Neither carry secrets, so no redaction pass is needed here (spec
+	// harness-fleet-otlp-export-01NTLMEX01 WP02 note: "metric names and
+	// values are numeric aggregates that don't carry secrets").
 	_ = consent // future: filter attributes by consent level
 	return recs
 }
@@ -752,10 +762,13 @@ func logRecordsFrom(records []sdklog.Record) []logRecord {
 		if v := r.Body(); v.Kind().String() != "" {
 			body = v.AsString()
 		}
+		// Apply redactor to the log body before the record enters the ring
+		// buffer (harness-fleet-otlp-export-01NTLMEX01 FR-005 / spec §4
+		// open question 4: "yes for log bodies").
 		rec := logRecord{
 			TimestampNS:  r.Timestamp().UnixNano(),
 			SeverityText: r.SeverityText(),
-			Body:         body,
+			Body:         DefaultRedactor.RedactLogBody(body),
 		}
 		recs = append(recs, rec)
 	}

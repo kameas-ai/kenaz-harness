@@ -6,6 +6,7 @@ import CommandPalette from '@/components/ui/CommandPalette.vue';
 import ErrorBoundary from '@/components/ui/ErrorBoundary.vue';
 import ToastRoot from '@/components/ui/ToastRoot.vue';
 import OnboardingDialog from '@/views/onboarding/OnboardingDialog.vue';
+import TelemetryOnboardingModal from '@/components/onboarding/TelemetryOnboardingModal.vue';
 import AboutDialog from '@/components/about/AboutDialog.vue';
 import { useHarnessClient } from '@/lib/harnessClientContext';
 import { setConnectionState } from '@/lib/useConnectionState';
@@ -31,6 +32,11 @@ provide(MD_EXTENSIONS_KEY, markdownExtensionsRef);
 // Onboarding dialog — mounts when the API reports firstRun = true.
 // (harness-self-mcp-onboarding-01KQ8TDU WP08)
 const onboardingOpen = ref(false);
+
+// Fleet telemetry onboarding modal — shown once on first launch after the user
+// has not yet seen it. Wires to the existing consent backend.
+// (fleet-otel-archival-01NDFSEX11 WP06)
+const telemetryOnboardingOpen = ref(false);
 
 // About dialog — opened by the OS menu bar "About" item.
 // (os-menu-bar-01NDFSEX16 WP05)
@@ -112,6 +118,14 @@ onMounted(async () => {
   } catch {
     // Best-effort: if the RPC fails, skip onboarding.
   }
+  // Fleet telemetry onboarding modal — shown once when not yet seen.
+  // (fleet-otel-archival-01NDFSEX11 WP06)
+  try {
+    const s = await client.settings.get();
+    if (!s.hasSeenFleetTelemetryOnboarding) telemetryOnboardingOpen.value = true;
+  } catch {
+    // Best-effort: if the RPC fails, skip the modal.
+  }
 });
 </script>
 
@@ -124,6 +138,11 @@ onMounted(async () => {
       :open="onboardingOpen"
       @close="onboardingOpen = false"
       @navigate-to-session="onOnboardingNavigate"
+    />
+    <!-- Fleet telemetry onboarding modal (fleet-otel-archival-01NDFSEX11 WP06) -->
+    <TelemetryOnboardingModal
+      v-if="telemetryOnboardingOpen"
+      @close="telemetryOnboardingOpen = false"
     />
     <!-- About dialog — opened by OS menu bar "About" item (menu:about:open event) -->
     <AboutDialog

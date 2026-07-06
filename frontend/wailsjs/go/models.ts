@@ -6357,7 +6357,8 @@ export namespace settings {
 	    crashReportingTier?: string;
 	    sentryDsn?: string;
 	    hasSeenCrashReportingOnboarding?: boolean;
-	
+	    hasSeenFleetTelemetryOnboarding?: boolean;
+
 	    static createFrom(source: any = {}) {
 	        return new Settings(source);
 	    }
@@ -6436,8 +6437,9 @@ export namespace settings {
 	        this.crashReportingTier = source["crashReportingTier"];
 	        this.sentryDsn = source["sentryDsn"];
 	        this.hasSeenCrashReportingOnboarding = source["hasSeenCrashReportingOnboarding"];
+	        this.hasSeenFleetTelemetryOnboarding = source["hasSeenFleetTelemetryOnboarding"];
 	    }
-	
+
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
