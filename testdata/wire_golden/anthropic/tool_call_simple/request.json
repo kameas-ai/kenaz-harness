@@ -1,0 +1,27 @@
+{
+  "max_tokens": 1024,
+  "messages": [
+    {
+      "content": "What is the weather in London?",
+      "role": "user"
+    }
+  ],
+  "model": "claude-sonnet-4-5",
+  "stream": true,
+  "tools": [
+    {
+      "description": "Get the current weather for a location",
+      "input_schema": {
+        "properties": {
+          "location": {
+            "description": "City name",
+            "type": "string"
+          }
+        },
+        "required": ["location"],
+        "type": "object"
+      },
+      "name": "get_weather"
+    }
+  ]
+}
