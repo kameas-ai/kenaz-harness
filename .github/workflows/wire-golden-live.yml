@@ -1,0 +1,164 @@
+name: Wire golden live tier (nightly)
+
+# Nightly cron that re-runs the wire-golden tests against real upstream APIs,
+# then either opens an auto-PR (response drift) or a regression-labelled PR
+# (request-side failure).
+#
+# FR-006b, FR-006c, FR-006d from integration-test-harness-01KQ8TD1.
+#
+# Trigger table:
+#   schedule (09:00 UTC daily) → live run against real APIs
+#   workflow_dispatch          → manual one-shot (useful for debugging)
+#
+# Live-tier failures NEVER block commit-time CI (pr.yml is the gate).
+# This workflow is informational + auto-repair only.
+
+on:
+  schedule:
+    - cron: '0 9 * * *'   # 09:00 UTC daily
+  workflow_dispatch:
+    inputs:
+      adapter:
+        description: 'Adapter to test (leave blank for all)'
+        required: false
+        default: ''
+      dry_run:
+        description: 'Dry run: detect drift but do not open PRs'
+        required: false
+        default: 'false'
+
+permissions:
+  contents: write      # push auto/wire-golden-refresh branch
+  pull-requests: write # open auto-PR
+  issues: write        # add labels
+
+concurrency:
+  # Only one live-tier run at a time; a fresh run cancels the previous.
+  group: wire-golden-live
+  cancel-in-progress: true
+
+env:
+  GO_VERSION: '1.25'
+
+jobs:
+  live-tier:
+    name: Wire golden live tier
+    # Self-hosted ARM64 per runner-pool policy (CLAUDE.md).
+    # The live-tier run needs real provider keys (Actions secrets) but no
+    # platform-native toolchain — self-hosted Linux is the right pool.
+    runs-on: [self-hosted, Linux, ARM64, ci-medium]
+
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          # Full history needed: the auto-PR generator reads recent commits
+          # to craft a meaningful PR body.
+          fetch-depth: 0
+
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          # cache: false on self-hosted ARM64 — modules persist naturally.
+          cache: false
+
+      - name: go mod download
+        run: go mod download
+
+      - name: ensure frontend/dist stub
+        run: |
+          mkdir -p frontend/dist
+          touch frontend/dist/.gitkeep
+
+      # Install gh CLI if missing — self-hosted ci-fast/ci-medium image may
+      # not have it baked in (same caveat as release.yml:833).
+      - name: install gh CLI if missing
+        run: |
+          set -euo pipefail
+          if command -v gh >/dev/null 2>&1; then
+            echo "gh already installed: $(gh --version | head -n1)"
+            exit 0
+          fi
+          GH_VERSION="2.62.0"
+          ARCH="$(uname -m)"
+          case "$ARCH" in
+            x86_64)          ARCH=amd64 ;;
+            aarch64|arm64)   ARCH=arm64 ;;
+            *) echo "::error::unsupported arch: $ARCH"; exit 1 ;;
+          esac
+          curl -fsSL "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_${ARCH}.tar.gz" -o /tmp/gh.tgz
+          tar -xzf /tmp/gh.tgz -C /tmp
+          sudo install -m 755 "/tmp/gh_${GH_VERSION}_linux_${ARCH}/bin/gh" /usr/local/bin/gh
+          gh --version | head -n1
+
+      # -------------------------------------------------------------------
+      # Run the live-tier fixture refresh.
+      # For each adapter that has its key set, re-run -update to record
+      # fresh response.sse fixtures, then apply the scrubber.
+      # The classify-drift script categorises the resulting diff as:
+      #   response-only   → auto-PR to update response.sse
+      #   request-side    → regression PR for human investigation
+      #   no-drift        → no PR
+      # -------------------------------------------------------------------
+      - name: run live-tier refresh + classify drift
+        id: refresh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Provider credentials — each adapter skips if its key is absent.
+          WIRE_GOLDEN_ANTHROPIC_KEY:   ${{ secrets.WIRE_GOLDEN_ANTHROPIC_KEY }}
+          WIRE_GOLDEN_OPENAI_KEY:      ${{ secrets.WIRE_GOLDEN_OPENAI_KEY }}
+          WIRE_GOLDEN_OPENROUTER_KEY:  ${{ secrets.WIRE_GOLDEN_OPENROUTER_KEY }}
+          WIRE_GOLDEN_BEDROCK_KEY:     ${{ secrets.WIRE_GOLDEN_BEDROCK_KEY }}
+          # Expose as TEST_* so the wirecheck.RequireUpdateKey helper can find them.
+          TEST_ANTHROPIC_KEY:          ${{ secrets.WIRE_GOLDEN_ANTHROPIC_KEY }}
+          TEST_OPENAI_KEY:             ${{ secrets.WIRE_GOLDEN_OPENAI_KEY }}
+          TEST_OPENROUTER_KEY:         ${{ secrets.WIRE_GOLDEN_OPENROUTER_KEY }}
+          TEST_BEDROCK_KEY:            ${{ secrets.WIRE_GOLDEN_BEDROCK_KEY }}
+          ADAPTER_FILTER:              ${{ github.event.inputs.adapter }}
+          DRY_RUN:                     ${{ github.event.inputs.dry_run || 'false' }}
+        run: bash scripts/ci/wire-golden-refresh.sh
+
+      # -------------------------------------------------------------------
+      # Emit the drift report (WP08).
+      # The script writes docs/wire-golden-drift.md and pushes it to the
+      # rolling wire-golden-drift branch.
+      # -------------------------------------------------------------------
+      - name: emit drift report
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DRIFT_OUTCOME:    ${{ steps.refresh.outputs.drift_outcome }}
+          AUTO_PR_URL:      ${{ steps.refresh.outputs.auto_pr_url }}
+          REGRESSION_PR_URL: ${{ steps.refresh.outputs.regression_pr_url }}
+          DRY_RUN:          ${{ github.event.inputs.dry_run || 'false' }}
+        run: bash scripts/ci/wire-golden-drift-report.sh
+
+      # Surface a workflow summary so the outcome is visible in the
+      # Actions run without reading the full log.
+      - name: summarise outcome
+        if: always()
+        run: |
+          OUTCOME="${{ steps.refresh.outputs.drift_outcome }}"
+          case "$OUTCOME" in
+            no-drift)
+              echo "## Wire golden live tier" >> "$GITHUB_STEP_SUMMARY"
+              echo "No fixture drift detected. All locked-tier goldens match real upstream APIs." >> "$GITHUB_STEP_SUMMARY"
+              ;;
+            response-drift)
+              echo "## Wire golden live tier — response drift detected" >> "$GITHUB_STEP_SUMMARY"
+              echo "Auto-PR opened (or updated) to refresh \`response.sse\` fixtures." >> "$GITHUB_STEP_SUMMARY"
+              AUTO_PR="${{ steps.refresh.outputs.auto_pr_url }}"
+              [ -n "$AUTO_PR" ] && echo "PR: $AUTO_PR" >> "$GITHUB_STEP_SUMMARY"
+              ;;
+            request-regression)
+              echo "## Wire golden live tier — REQUEST-SIDE REGRESSION" >> "$GITHUB_STEP_SUMMARY"
+              echo "A provider rejected our request body. Human investigation required." >> "$GITHUB_STEP_SUMMARY"
+              REG_PR="${{ steps.refresh.outputs.regression_pr_url }}"
+              [ -n "$REG_PR" ] && echo "PR: $REG_PR" >> "$GITHUB_STEP_SUMMARY"
+              ;;
+            skipped)
+              echo "## Wire golden live tier — skipped (no keys available)" >> "$GITHUB_STEP_SUMMARY"
+              echo "No provider keys were set. Set WIRE_GOLDEN_\*_KEY secrets to enable live-tier runs." >> "$GITHUB_STEP_SUMMARY"
+              ;;
+            *)
+              echo "## Wire golden live tier — outcome: $OUTCOME" >> "$GITHUB_STEP_SUMMARY"
+              ;;
+          esac
