@@ -18,6 +18,7 @@
 import { computed, onMounted, ref } from 'vue';
 import Button from '@/components/ui/Button.vue';
 import SlashCommandEditor from '@/views/settings/SlashCommandEditor.vue';
+import SkillsPanel from '@/views/settings/SkillsPanel.vue';
 import { useHarnessClient } from '@/lib/harnessClientContext';
 import type {
   UserCommand,
@@ -354,6 +355,11 @@ const KIND_LABEL: Record<UserCommandKind, string> = {
             {{ saveError }}
           </p>
         </div>
+      </div>
+
+      <!-- ── Fleet Skills section (fleet-skills-sync-01NDFSEX18 WP04/WP06) ── -->
+      <div class="mt-8 border-t border-border-muted pt-6">
+        <SkillsPanel />
       </div>
     </div>
 </template>
