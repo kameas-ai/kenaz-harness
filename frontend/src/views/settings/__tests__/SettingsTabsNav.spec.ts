@@ -29,8 +29,9 @@ describe('SettingsTabs — vertical nav rail', () => {
   it('renders every nav item with an icon and a test id', () => {
     const wrapper = mount(SettingsTabs);
     const items = wrapper.findAll('[data-testid^="settings-tab-"]');
-    // 5 (App) + 4 (Authoring) + 2 (Runtime) + 4 (Integrations) + 3 (Security) + 1 (Privacy) + 1 (Peers)
-    expect(items).toHaveLength(20);
+    // 5 (App) + 4 (Authoring) + 2 (Runtime) + 5 (Integrations: Providers/Bundles/Secrets/LLMRouting/Peers/Sync)
+    // + 3 (Security) + 1 (Privacy) = 21 after WP06 adds the Sync tab
+    expect(items).toHaveLength(21);
     for (const item of items) {
       // lucide-vue-next renders an <svg>; every row should carry one.
       expect(item.find('svg').exists()).toBe(true);

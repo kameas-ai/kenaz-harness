@@ -33,6 +33,8 @@ import AccountPanel from '@/views/settings/AccountPanel.vue';
 import UnitConflictsPanel from '@/views/settings/UnitConflictsPanel.vue';
 import PeersPanel from '@/views/settings/PeersPanel.vue';
 import FleetTelemetryPanel from '@/views/settings/FleetTelemetryPanel.vue';
+// fleet-share-and-sync-01NDFSEX14 WP06 — Sync panel
+import SyncPanel from '@/views/settings/SyncPanel.vue';
 import LongSessionNudgeSettings from '@/components/settings/LongSessionNudgeSettings.vue';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
 import { debouncedSave } from '@/lib/settings';
@@ -156,6 +158,13 @@ const showPeersTab = computed<boolean>(() => {
   return typeof v === 'string' && v === 'peers';
 });
 
+// fleet-share-and-sync-01NDFSEX14 WP06 — Sync sub-tab.
+// Disambiguates via ?tab=sync. Mount switch is in <template> below.
+const showSyncTab = computed<boolean>(() => {
+  const v = route?.query?.tab;
+  return typeof v === 'string' && v === 'sync';
+});
+
 // CanvasHead title/subtitle per active query-param sub-tab. The settings
 // sub-panels no longer render their own breadcrumb header (SettingsShell
 // owns it), so the header text has to reflect the current section. General
@@ -175,6 +184,7 @@ const SECTION_HEADS: Record<string, { title: string; subtitle: string }> = {
   'llm-routing': { title: 'LLM routing', subtitle: 'Model fallback and routing rules.' },
   audit: { title: 'Audit', subtitle: 'Audit-log retention settings.' },
   peers: { title: 'Peers', subtitle: 'Trusted ACP agent peers — register, inspect, and revoke.' },
+  sync: { title: 'Sync', subtitle: 'Cross-device settings sync — keep provider profiles, model prefs, MCP recipes, installed MCPs, and UI theme in sync across all your devices.' },
 };
 const DEFAULT_HEAD = {
   title: 'App preferences',
@@ -1105,6 +1115,15 @@ onMounted(() => {
       data-testid="settings-peers-pane"
     >
       <PeersPanel />
+    </div>
+
+    <!-- fleet-share-and-sync-01NDFSEX14 WP06 — Sync sub-tab. -->
+    <div
+      v-else-if="showSyncTab"
+      class="max-w-3xl"
+      data-testid="settings-sync-pane"
+    >
+      <SyncPanel />
     </div>
 
     <div
