@@ -3973,3 +3973,57 @@ export interface BootHealthReport {
   skillsInitError?: string;
   fleetInitError?: string;
 }
+
+// ── ACP peer management (acp-orchestration-integration-01NDFSEX06) ────────────
+
+/**
+ * ACPPeer — wire-safe view of a trusted peer profile.
+ * Mirrors core/rpc/views/acp.Peer.
+ */
+export interface ACPPeer {
+  id: string;
+  cardFingerprint: string;
+  transport: string;
+  trustTier: string;
+  endpointUrl: string;
+  /** RFC3339; empty if never contacted. */
+  lastSeen?: string;
+  agentName?: string;
+  agentDescription?: string;
+}
+
+/**
+ * ACPEnvelopeTrace — wire-safe view of one envelope lifecycle event.
+ * Mirrors core/rpc/views/acp.EnvelopeTrace.
+ */
+export interface ACPEnvelopeTrace {
+  envelopeId: string;
+  peerId: string;
+  transport: string;
+  /** "send" | "receive" */
+  direction: string;
+  /** "ok" | "denied_by_policy" | "transport_error" | "verify_rejected" */
+  outcome: string;
+  bytesIn: number;
+  bytesOut: number;
+  errorCode?: string;
+  /** RFC3339Nano */
+  createdAt: string;
+}
+
+/**
+ * ACPDispatchResult — returned by ACP_Dispatch.
+ * Mirrors core/rpc/views/acp.DispatchResult.
+ */
+export interface ACPDispatchResult {
+  envelopeId: string;
+}
+
+/**
+ * ACPTrustResult — returned by ACP_TrustPeer.
+ * Mirrors core/rpc/views/acp.TrustResult.
+ */
+export interface ACPTrustResult {
+  peerId: string;
+  trustTier: string;
+}

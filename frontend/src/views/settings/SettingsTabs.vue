@@ -28,6 +28,7 @@ import {
   FileText,
   Flag,
   GitBranch,
+  Globe,
   KeyRound,
   Package,
   Plug,
@@ -108,6 +109,8 @@ const groups: ReadonlyArray<TabGroup> = [
       { to: '/bundles', label: 'Bundles', icon: Package },
       { to: '/settings?tab=secrets', label: 'Secrets', query: 'secrets', icon: KeyRound },
       { to: '/settings?tab=llm-routing', label: 'LLM Routing', query: 'llm-routing', icon: Route },
+      // acp-orchestration-integration-01NDFSEX06 WP05 — ACP Peers tab.
+      { to: '/settings?tab=peers', label: 'Peers', query: 'peers', icon: Globe },
     ],
   },
   {

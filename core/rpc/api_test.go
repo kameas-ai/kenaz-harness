@@ -54,6 +54,7 @@ import (
 	fleetview "github.com/kameas-ai/kenaz-harness/core/rpc/views/fleet"
 	sitesview "github.com/kameas-ai/kenaz-harness/core/rpc/views/sites"
 	tasksview "github.com/kameas-ai/kenaz-harness/core/rpc/views/tasks"
+	acpview "github.com/kameas-ai/kenaz-harness/core/rpc/views/acp"
 	corefleet "github.com/kameas-ai/kenaz-harness/core/fleet"
 )
 
@@ -177,6 +178,7 @@ func (f *fakeHarnessAPI) Planmode_Edit(_ context.Context, _ planmodeview.EditReq
 func (f *fakeHarnessAPI) Sessions_StartCapture(_ context.Context, _ string) error { return nil }
 func (f *fakeHarnessAPI) Sessions_StopCapture(_ context.Context, _ string) error  { return nil }
 func (f *fakeHarnessAPI) Tasks() tasksview.TasksAPI                               { return nil }
+func (f *fakeHarnessAPI) ACP() acpview.ACPAPI                                     { return acpview.NewNullAPI() }
 
 // Compile-time interface witness (plan §4.2).
 var _ HarnessAPI = (*fakeHarnessAPI)(nil)

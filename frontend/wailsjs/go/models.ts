@@ -21,8 +21,93 @@ export namespace a2a {
 
 }
 
+export namespace acp {
+
+	export class DispatchResult {
+	    envelopeId: string;
+
+	    static createFrom(source: any = {}) {
+	        return new DispatchResult(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.envelopeId = source["envelopeId"];
+	    }
+	}
+	export class EnvelopeTrace {
+	    envelopeId: string;
+	    peerId: string;
+	    transport: string;
+	    direction: string;
+	    outcome: string;
+	    bytesIn: number;
+	    bytesOut: number;
+	    errorCode?: string;
+	    createdAt: string;
+
+	    static createFrom(source: any = {}) {
+	        return new EnvelopeTrace(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.envelopeId = source["envelopeId"];
+	        this.peerId = source["peerId"];
+	        this.transport = source["transport"];
+	        this.direction = source["direction"];
+	        this.outcome = source["outcome"];
+	        this.bytesIn = source["bytesIn"];
+	        this.bytesOut = source["bytesOut"];
+	        this.errorCode = source["errorCode"];
+	        this.createdAt = source["createdAt"];
+	    }
+	}
+	export class Peer {
+	    id: string;
+	    cardFingerprint: string;
+	    transport: string;
+	    trustTier: string;
+	    endpointUrl: string;
+	    lastSeen?: string;
+	    agentName?: string;
+	    agentDescription?: string;
+
+	    static createFrom(source: any = {}) {
+	        return new Peer(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.cardFingerprint = source["cardFingerprint"];
+	        this.transport = source["transport"];
+	        this.trustTier = source["trustTier"];
+	        this.endpointUrl = source["endpointUrl"];
+	        this.lastSeen = source["lastSeen"];
+	        this.agentName = source["agentName"];
+	        this.agentDescription = source["agentDescription"];
+	    }
+	}
+	export class TrustResult {
+	    peerId: string;
+	    trustTier: string;
+
+	    static createFrom(source: any = {}) {
+	        return new TrustResult(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.peerId = source["peerId"];
+	        this.trustTier = source["trustTier"];
+	    }
+	}
+
+}
+
 export namespace agentgraph {
-	
+
 	export class GraphInfo {
 	    id: string;
 	    name?: string;

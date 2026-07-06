@@ -31,6 +31,7 @@ import LLMRoutingPanel from '@/views/settings/LLMRoutingPanel.vue';
 import AuditSettingsPanel from '@/views/settings/AuditSettingsPanel.vue';
 import AccountPanel from '@/views/settings/AccountPanel.vue';
 import UnitConflictsPanel from '@/views/settings/UnitConflictsPanel.vue';
+import PeersPanel from '@/views/settings/PeersPanel.vue';
 import FleetTelemetryPanel from '@/views/settings/FleetTelemetryPanel.vue';
 import LongSessionNudgeSettings from '@/components/settings/LongSessionNudgeSettings.vue';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
@@ -148,6 +149,13 @@ const showAccountTab = computed<boolean>(() => {
   return typeof v === 'string' && v === 'account';
 });
 
+// acp-orchestration-integration-01NDFSEX06 WP05 — Peers sub-tab.
+// Disambiguates via ?tab=peers. Mount switch is in <template> below.
+const showPeersTab = computed<boolean>(() => {
+  const v = route?.query?.tab;
+  return typeof v === 'string' && v === 'peers';
+});
+
 // CanvasHead title/subtitle per active query-param sub-tab. The settings
 // sub-panels no longer render their own breadcrumb header (SettingsShell
 // owns it), so the header text has to reflect the current section. General
@@ -166,6 +174,7 @@ const SECTION_HEADS: Record<string, { title: string; subtitle: string }> = {
   secrets: { title: 'Secrets', subtitle: 'Model-accessible secret references.' },
   'llm-routing': { title: 'LLM routing', subtitle: 'Model fallback and routing rules.' },
   audit: { title: 'Audit', subtitle: 'Audit-log retention settings.' },
+  peers: { title: 'Peers', subtitle: 'Trusted ACP agent peers — register, inspect, and revoke.' },
 };
 const DEFAULT_HEAD = {
   title: 'App preferences',
@@ -1088,6 +1097,14 @@ onMounted(() => {
         </h2>
         <UnitConflictsPanel />
       </section>
+    </div>
+
+    <!-- acp-orchestration-integration-01NDFSEX06 WP05 — Peers sub-tab. -->
+    <div
+      v-else-if="showPeersTab"
+      data-testid="settings-peers-pane"
+    >
+      <PeersPanel />
     </div>
 
     <div

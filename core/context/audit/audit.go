@@ -362,6 +362,16 @@ const (
 	// store and unregistered from the registry.
 	// Payload: FleetSkillUninstalledPayload.
 	KindFleetSkillUninstalled Kind = "fleet.skill_uninstalled"
+
+	// ── ACP envelope audit kind (acp-orchestration-integration-01NDFSEX06) ──
+
+	// KindACPEnvelope fires once per ACP envelope exchanged (sent or received).
+	// Payload: ACPEnvelopePayload.
+	//
+	// Privacy invariant: the payload MUST NOT carry the envelope body or any
+	// portion of the turn payload — only the envelope id, peer id, transport,
+	// direction, outcome, byte counts, and error code.
+	KindACPEnvelope Kind = "acp.envelope"
 )
 
 // Event is the wire shape passed to the event log. The concrete event-log
@@ -1179,4 +1189,33 @@ type FleetSkillUninstalledPayload struct {
 	SkillID string `json:"skill_id"`
 	// Trigger is the slash-command trigger that was unregistered.
 	Trigger string `json:"trigger,omitempty"`
+}
+
+// ── ACP envelope payload type (acp-orchestration-integration-01NDFSEX06) ──────
+
+// ACPEnvelopePayload carries the audit signalling for KindACPEnvelope.
+// Emitted once per ACP envelope exchanged (sent or received).
+//
+// Privacy invariant: the envelope body and turn payload MUST NOT appear
+// here. Only the envelope id, routing metadata, outcome, byte counts,
+// and a classified error code are permitted. The audit log is not a
+// message store.
+type ACPEnvelopePayload struct {
+	// EnvelopeID is the unique identifier of the ACP envelope (opaque ULID).
+	EnvelopeID string `json:"envelope_id"`
+	// PeerID is the remote peer's stable identifier.
+	PeerID string `json:"peer_id"`
+	// Transport is the transport kind used: "uds" | "http_loopback" | "http_lan".
+	Transport string `json:"transport"`
+	// Direction is "send" | "receive".
+	Direction string `json:"direction"`
+	// Outcome is "ok" | "denied_by_policy" | "transport_error" | "verify_rejected".
+	Outcome string `json:"outcome"`
+	// BytesIn is the number of bytes received (0 for outbound envelopes).
+	BytesIn int64 `json:"bytes_in"`
+	// BytesOut is the number of bytes transmitted (0 for inbound envelopes).
+	BytesOut int64 `json:"bytes_out"`
+	// ErrorCode is a machine-readable error classifier; empty on success.
+	// Examples: "acp:policy_denied", "acp:transport_refused", "acp:verify_rejected".
+	ErrorCode string `json:"error_code,omitempty"`
 }

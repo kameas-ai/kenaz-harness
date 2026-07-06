@@ -109,6 +109,9 @@ import (
 	syncview "github.com/kameas-ai/kenaz-harness/core/rpc/views/sync"
 	cedarview "github.com/kameas-ai/kenaz-harness/core/rpc/views/cedar"
 	sitesview "github.com/kameas-ai/kenaz-harness/core/rpc/views/sites"
+	acpview "github.com/kameas-ai/kenaz-harness/core/rpc/views/acp"
+	acppeers "github.com/kameas-ai/kenaz-harness/core/acp/peers"
+	acpenvelope "github.com/kameas-ai/kenaz-harness/core/acp/envelope"
 	corefleet "github.com/kameas-ai/kenaz-harness/core/fleet"
 	"github.com/kameas-ai/kenaz-harness/core/eval"
 	"github.com/kameas-ai/kenaz-harness/core/session"
@@ -291,6 +294,11 @@ type HarnessAPI interface {
 	// (background-task-monitor-01KZNP3C WP05). Provides List, Get, Tail,
 	// Abort, and AbortBySession for the Tasks panel.
 	Tasks() tasksview.TasksAPI
+
+	// ACP exposes the ACP peer management + envelope dispatch surface
+	// (acp-orchestration-integration-01NDFSEX06). Provides ListPeers,
+	// TrustPeer, RevokePeer, Dispatch, and GetTrace.
+	ACP() acpview.ACPAPI
 }
 
 // ShellStatus drives the Toolbar status pills + LegendBar live-rate
@@ -600,6 +608,12 @@ type API struct {
 	// are marked crashed before any new runs register (FR-003 / WP03).
 	taskReg  *coretasks.Registry
 	tasksAPI tasksview.TasksAPI
+
+	// acpAPI is the ACP peer management + envelope dispatch surface
+	// (acp-orchestration-integration-01NDFSEX06). Wired in New when the
+	// ACP layer is available; falls back to NullAPI for graceful empty
+	// operation on the test-chassis path.
+	acpAPI acpview.ACPAPI
 }
 
 // Builtins returns the in-binary tool registry. Used by the chat-input
@@ -898,6 +912,7 @@ func New(c *core.Core) *API {
 		unitsMgr:       unitsMgr,
 		taskReg:        taskReg,
 		tasksAPI:       tasksAPI,
+		acpAPI:         acpview.NewNullAPI(),
 	}
 	a.attachmentsAPI = newAttachmentsAPI(c, attMgr)
 	a.artifactsAPI = newArtifactsAPI(c, artStore, artMgr, media)
@@ -1586,6 +1601,28 @@ func New(c *core.Core) *API {
 			// ConfigTrimmer is wired after toolsAPI is constructed; see
 			// the wiring step below that calls setPermissionsConfigTrimmer.
 		})
+	}
+
+	// ACP peer management + envelope dispatch (mission
+	// acp-orchestration-integration-01NDFSEX06). Wire the real API when
+	// DataDir is available; keep the NullAPI stub on the test-chassis
+	// path (c == nil or empty DataDir) so all five verbs return a clear
+	// "not configured" error rather than panicking.
+	if c != nil && c.DataDir() != "" {
+		acpReg := acppeers.NewRegistry(nil, acppeers.NoopEmitter{})
+		acpEnv := acpenvelope.New()
+		acpOpts := acpview.Options{
+			// Audit emitter — bridge the audit API ring buffer.
+			Audit: &acpAuditBridge{impl: a.auditImpl},
+		}
+		// Wire the Cedar engine so the acp_send and acp_receive gates
+		// actually enforce policy. buildCedarEngineOrNil returns nil on
+		// construction failure (logged as a warning); the API tolerates
+		// nil and falls back to permissive (default-allow posture).
+		if eng := buildCedarEngineOrNil(c.DataDir()); eng != nil {
+			acpOpts.Cedar = acpview.NewEngineAdapter(eng)
+		}
+		a.acpAPI = acpview.NewAPI(acpReg, acpEnv, acpOpts)
 	}
 
 	// Elicitation view + ask_user_question tool bridge (mission
@@ -5377,6 +5414,28 @@ func (e *fleetAuditEmitter) EmitFleetEvent(_ context.Context, kind contextaudit.
 	return nil
 }
 
+// acpAuditBridge implements contextaudit.Emitter by forwarding to the
+// rpc/views/audit.API ring buffer via Push. Used exclusively by the ACP
+// view to route KindACPEnvelope events to the in-process audit ring.
+// (acp-orchestration-integration-01NDFSEX06)
+type acpAuditBridge struct {
+	impl *audit.API
+}
+
+func (e *acpAuditBridge) Emit(_ context.Context, ev contextaudit.Event) error {
+	if e.impl == nil {
+		return nil
+	}
+	e.impl.Push(audit.Entry{
+		ID:        fmt.Sprintf("acp-%d", ev.TS.UnixNano()),
+		Timestamp: ev.TS.UTC().Format(time.RFC3339Nano),
+		Category:  "ACP",
+		Subject:   string(ev.Kind),
+		Trailing:  fmt.Sprintf("payload_bytes=%d", len(ev.Payload)),
+	})
+	return nil
+}
+
 // auditRingAdapter adapts audit.API to searchview.AuditLister.
 type auditRingAdapter struct {
 	api *audit.API
@@ -5745,6 +5804,10 @@ func (a *API) Sites() sitesview.SitesAPI { return a.sitesAPI }
 // Tasks implements HarnessAPI. Returns the background-task registry RPC surface.
 // (background-task-monitor-01KZNP3C WP05 / FR-003)
 func (a *API) Tasks() tasksview.TasksAPI { return a.tasksAPI }
+
+// ACP implements HarnessAPI. Returns the ACP peer management + envelope
+// dispatch surface (acp-orchestration-integration-01NDFSEX06).
+func (a *API) ACP() acpview.ACPAPI { return a.acpAPI }
 
 // brokerPlanEmitter adapts a *StreamBroker to the planmodeview.EventEmitter
 // interface. The broker's Publish method broadcasts to all subscribers
