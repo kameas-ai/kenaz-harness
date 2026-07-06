@@ -117,7 +117,13 @@ jobs:
 
   test-go:
     name: Go tests (-race -short)
-    runs-on: [self-hosted, Linux, ARM64, ci-medium]
+    # ci-large (c7g.xlarge, 8 GB) not ci-medium (t4g.medium, 4 GB): the
+    # `go test ./core/... -race` suite (5,400+ tests across 229 packages)
+    # peaks well past 4 GB under the race detector, OOM-killing the runner
+    # mid-job (blank step conclusion + BlobNotFound logs) — especially when
+    # several PRs run concurrently and saturate the medium pool. ci-large is
+    # an on-demand ephemeral tier (autostarter EPHEMERAL_TIERS=ci-medium,ci-large).
+    runs-on: [self-hosted, Linux, ARM64, ci-large]
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
