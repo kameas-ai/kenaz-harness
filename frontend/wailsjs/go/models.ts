@@ -1067,6 +1067,33 @@ export namespace catalog {
 
 }
 
+export namespace compliance {
+
+	export class ComplianceStatus {
+	    lastArchivedAt: string;
+	    pendingCount: number;
+	    chainBreak: boolean;
+	    retentionDays: number;
+	    enabled: boolean;
+	    archiverRunning: boolean;
+
+	    static createFrom(source: any = {}) {
+	        return new ComplianceStatus(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.lastArchivedAt = source["lastArchivedAt"];
+	        this.pendingCount = source["pendingCount"];
+	        this.chainBreak = source["chainBreak"];
+	        this.retentionDays = source["retentionDays"];
+	        this.enabled = source["enabled"];
+	        this.archiverRunning = source["archiverRunning"];
+	    }
+	}
+
+}
+
 export namespace cedar {
 	
 	export class BashPromptSurface {

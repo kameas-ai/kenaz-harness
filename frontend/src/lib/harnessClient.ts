@@ -180,6 +180,7 @@ import type {
   ACPEnvelopeTrace,
   ACPDispatchResult,
   ACPTrustResult,
+  ComplianceStatus,
 } from './types';
 
 /**
@@ -875,6 +876,10 @@ interface WailsBindingsLike {
   ACP_Dispatch(peerID: string, turnPayload: string): Promise<ACPDispatchResult>;
   ACP_GetTrace(envelopeID: string): Promise<ACPEnvelopeTrace>;
   ACP_ListTraces(peerID: string): Promise<ACPEnvelopeTrace[]>;
+  // ── Compliance (fleet-audit-archival-01NDFSEX13 WP05) ─────────────────
+  Compliance_Status(): Promise<ComplianceStatus>;
+  Compliance_ArchiveNow(): Promise<void>;
+  Compliance_SetRetention(days: number): Promise<void>;
 }
 
 
@@ -2841,6 +2846,17 @@ export interface SitesClient {
   delete(site: string): Promise<void>;
 }
 
+// ── Compliance client (fleet-audit-archival-01NDFSEX13 WP05) ────────────────
+
+export interface ComplianceClient {
+  /** Returns current archival status. Rejects when CapAuditLogImmuDB is inactive. */
+  status(): Promise<ComplianceStatus>;
+  /** Trigger an immediate archive flush outside the normal batch interval. */
+  archiveNow(): Promise<void>;
+  /** Update the local audit retention window. Days must be 30 | 60 | 90 | 365. */
+  setRetention(days: number): Promise<void>;
+}
+
 export interface HarnessClient {
   shellStatus(): Promise<ShellStatus>;
   appInfo(): Promise<AppInfo>;
@@ -2905,6 +2921,8 @@ export interface HarnessClient {
   cedarPublish: CedarPublishClient;
   /** Fleet Sites hosting surface (sites-ui-01NSITE06). */
   sites: SitesClient;
+  /** Fleet audit archival compliance surface (fleet-audit-archival-01NDFSEX13 WP05). */
+  compliance: ComplianceClient;
   // ── Unit sync (fleet-integrity-observability WP08) ────────────────────
   Unit_SyncStatus(): Promise<import('./types').UnitSyncStatusView>;
   Unit_ListConflicts(): Promise<import('./types').UnitConflictView[]>;
@@ -3549,6 +3567,12 @@ export function createHarnessClient(): HarnessClient {
       status: (site) => b().Sites_Status(site),
       logs: (site, tailLines) => b().Sites_Logs(site, tailLines),
       delete: (site) => b().Sites_Delete(site),
+    },
+    // ── Compliance (fleet-audit-archival-01NDFSEX13 WP05) ────────────────
+    compliance: {
+      status: () => b().Compliance_Status(),
+      archiveNow: () => b().Compliance_ArchiveNow(),
+      setRetention: (days) => b().Compliance_SetRetention(days),
     },
     // ── Unit sync (fleet-integrity-observability WP08) ────────────────────
     Unit_SyncStatus: () => b().Unit_SyncStatus(),
@@ -4871,6 +4895,19 @@ export function createFakeHarnessClient(
       }),
       logs: async () => '',
       delete: noop,
+    },
+    // ── Compliance (fleet-audit-archival-01NDFSEX13 WP05) ────────────────
+    compliance: {
+      status: async (): Promise<ComplianceStatus> => ({
+        lastArchivedAt: '',
+        pendingCount: 0,
+        chainBreak: false,
+        retentionDays: 90,
+        enabled: false,
+        archiverRunning: false,
+      }),
+      archiveNow: noop,
+      setRetention: noop,
     },
     // ── Unit sync (fleet-integrity-observability WP08) ────────────────────
     Unit_SyncStatus: async (): Promise<import('./types').UnitSyncStatusView> => ({

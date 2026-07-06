@@ -13,6 +13,7 @@ import {bundle} from '../models';
 import {catalog} from '../models';
 import {cedarpolicy} from '../models';
 import {cedar} from '../models';
+import {compliance} from '../models';
 import {compaction} from '../models';
 import {contextview} from '../models';
 import {contexts} from '../models';
@@ -161,6 +162,12 @@ export function Bundle_Remove(arg1:string):Promise<void>;
 export function Catalog_Install(arg1:string,arg2:string):Promise<void>;
 
 export function Catalog_Installed():Promise<Array<catalog.CatalogItemView>>;
+
+export function Compliance_ArchiveNow():Promise<void>;
+
+export function Compliance_SetRetention(arg1:number):Promise<void>;
+
+export function Compliance_Status():Promise<compliance.ComplianceStatus>;
 
 export function Catalog_List(arg1:catalog.CatalogFilter):Promise<Array<catalog.CatalogItemView>>;
 

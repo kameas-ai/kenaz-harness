@@ -35,6 +35,8 @@ import PeersPanel from '@/views/settings/PeersPanel.vue';
 import FleetTelemetryPanel from '@/views/settings/FleetTelemetryPanel.vue';
 // fleet-share-and-sync-01NDFSEX14 WP06 — Sync panel
 import SyncPanel from '@/views/settings/SyncPanel.vue';
+// fleet-audit-archival-01NDFSEX13 WP06 — Compliance panel
+import CompliancePanel from '@/views/settings/CompliancePanel.vue';
 import LongSessionNudgeSettings from '@/components/settings/LongSessionNudgeSettings.vue';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
 import { debouncedSave } from '@/lib/settings';
@@ -165,6 +167,13 @@ const showSyncTab = computed<boolean>(() => {
   return typeof v === 'string' && v === 'sync';
 });
 
+// fleet-audit-archival-01NDFSEX13 WP06 — Compliance sub-tab.
+// Disambiguates via ?tab=compliance. Mount switch is in <template> below.
+const showComplianceTab = computed<boolean>(() => {
+  const v = route?.query?.tab;
+  return typeof v === 'string' && v === 'compliance';
+});
+
 // CanvasHead title/subtitle per active query-param sub-tab. The settings
 // sub-panels no longer render their own breadcrumb header (SettingsShell
 // owns it), so the header text has to reflect the current section. General
@@ -185,6 +194,7 @@ const SECTION_HEADS: Record<string, { title: string; subtitle: string }> = {
   audit: { title: 'Audit', subtitle: 'Audit-log retention settings.' },
   peers: { title: 'Peers', subtitle: 'Trusted ACP agent peers — register, inspect, and revoke.' },
   sync: { title: 'Sync', subtitle: 'Cross-device settings sync — keep provider profiles, model prefs, MCP recipes, installed MCPs, and UI theme in sync across all your devices.' },
+  compliance: { title: 'Compliance', subtitle: 'Immutable fleet audit archival and local retention window (Team+ tier).' },
 };
 const DEFAULT_HEAD = {
   title: 'App preferences',
@@ -1124,6 +1134,15 @@ onMounted(() => {
       data-testid="settings-sync-pane"
     >
       <SyncPanel />
+    </div>
+
+    <!-- fleet-audit-archival-01NDFSEX13 WP06 — Compliance sub-tab. -->
+    <div
+      v-else-if="showComplianceTab"
+      class="max-w-3xl"
+      data-testid="settings-compliance-pane"
+    >
+      <CompliancePanel />
     </div>
 
     <div

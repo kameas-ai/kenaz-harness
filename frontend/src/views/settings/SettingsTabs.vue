@@ -35,6 +35,7 @@ import {
   RefreshCw,
   Route,
   Scale,
+  Server,
   Shield,
   SlidersHorizontal,
   Webhook,
@@ -123,6 +124,8 @@ const groups: ReadonlyArray<TabGroup> = [
       { to: '/policy', label: 'Policy', matchPrefix: '/policy', icon: Scale },
       // audit-log-enhancement-01KX5R8F WP07
       { to: '/settings?tab=audit', label: 'Audit', query: 'audit', icon: FileText },
+      // fleet-audit-archival-01NDFSEX13 WP06 — Compliance (Team+ tier gated)
+      { to: '/settings?tab=compliance', label: 'Compliance', query: 'compliance', icon: Server },
     ],
   },
   {
