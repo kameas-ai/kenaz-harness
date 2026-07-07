@@ -1528,6 +1528,12 @@ func New(c *core.Core) *API {
 		if stack.reg != nil {
 			wfDeps.LLM = &wfLLMStreamerAdapter{reg: stack.reg}
 		}
+		// Wire the OS-notification adapter so notify steps with surface:[os]
+		// dispatch real OS notifications via the Wails runtime (desktop) or
+		// return a soft-fail unconfigured error in headless serve mode.
+		// The ctxFn defers ctx resolution to Notify-call time so construction
+		// before OnStartup is safe.
+		wfDeps.Notifier = &wfNotifierAdapter{ctxFn: a.broker.EmitCtx}
 		a.workflowsAPI = workflowsview.New(workflowsview.Config{
 			Engine:          corewf.NewEngineWithDeps(wfDeps),
 			Catalog:         catalog,
