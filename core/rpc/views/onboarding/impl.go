@@ -64,6 +64,13 @@ type Config struct {
 	// AccountStepAvailable indicates whether the fleet sign-in surface is
 	// wired. When nil, AccountStepAvailable defaults to false.
 	AccountStepAvailable AccountStepAvailableChecker
+	// Signer drives the optional owned-login sign-in step (WP03).
+	// When nil (fleet absent / OSS build) EventSignIn gracefully degrades in
+	// the FSM — guided_action is shown with a "sign-in unavailable" note and
+	// EventSkipAccount always succeeds (OSS-standalone invariant).
+	// Ignored when FSM is non-nil (callers that supply their own FSM are
+	// responsible for passing a signer to it directly).
+	Signer coreonboarding.AccountSigner
 	// DataDir is forwarded to harnessmcp.LoadStarters so user-overridden
 	// starter prompts are picked up.
 	DataDir string
@@ -88,9 +95,16 @@ type API struct {
 
 // New constructs an API. cfg may be the zero value for tests; production
 // passes the full set.
+//
+// When cfg.FSM is nil, New builds a default FSM:
+//   - with no LLM tester (test-connection always passes — callers that need
+//     a real tester supply their own FSM via cfg.FSM)
+//   - with no session-kind transitioner (skipped on terminal state)
+//   - with cfg.Signer when non-nil, so EventSignIn triggers the owned-login
+//     flow; when nil EventSignIn degrades gracefully (OSS-standalone invariant).
 func New(cfg Config) *API {
 	if cfg.FSM == nil {
-		cfg.FSM = coreonboarding.New(nil)
+		cfg.FSM = coreonboarding.NewFull(nil, nil, cfg.Signer)
 	}
 	return &API{
 		cfg:      cfg,

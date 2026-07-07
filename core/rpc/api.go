@@ -2304,7 +2304,13 @@ func New(c *core.Core) *API {
 			SessionStarter:       sessionStarter,
 			SettingsDial:         onboardingSettingsDialAdapter{},
 			AccountStepAvailable: onboardingAccountStepAdapter{},
-			DataDir:              dataDir,
+			// Signer bridges the account step to the fleet owned-login flow
+			// (harness-onboarding-01NHON01 Blocker 3). When fleet is disabled
+			// or the settings API is nil, the adapter returns a descriptive
+			// error so the FSM surfaces "sign-in unavailable" to the user.
+			// EventSkipAccount is unaffected — OSS-standalone invariant holds.
+			Signer:  onboardingAccountSignerAdapter{settingsAPI: a.settingsAPI},
+			DataDir: dataDir,
 		})
 		logging.L().Info("onboarding.api.ready")
 	}

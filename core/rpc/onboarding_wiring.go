@@ -18,6 +18,7 @@ import (
 	"errors"
 	"os"
 
+	"github.com/kameas-ai/kenaz-harness/core/fleet"
 	harnessmcp "github.com/kameas-ai/kenaz-harness/core/mcp/builtin/harness"
 	llmview "github.com/kameas-ai/kenaz-harness/core/rpc/views/llm"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/settings"
@@ -140,6 +141,43 @@ type onboardingSettingsDialAdapter struct{}
 
 func (onboardingSettingsDialAdapter) IsHarnessSelfMCPDisabled(_ context.Context) (bool, error) {
 	return false, nil
+}
+
+// ---- AccountSigner adapter --------------------------------------------------
+
+// onboardingAccountSignerAdapter implements coreonboarding.AccountSigner by
+// delegating to the fleet owned-login sign-in flow already shipped in
+// core/rpc/views/settings.
+//
+// INVARIANT: when Fleet is disabled or the settings API is nil, SignIn returns
+// a user-readable error (never a nil email) so the FSM can surface a clear
+// "sign-in unavailable" message to the user in the account step.
+// EventSkipAccount is always accepted regardless — the OSS-standalone path
+// must never be blocked.
+//
+// This adapter lives in core/rpc/onboarding_wiring.go because that package is
+// allowed to import core/fleet (it is NOT flagged by check-no-fleet-imports.sh,
+// which excludes core/rpc/onboarding_wiring.go explicitly as an allowlisted
+// bridge file). The core/onboarding and core/rpc/views/onboarding packages
+// remain fleet-free.
+type onboardingAccountSignerAdapter struct {
+	settingsAPI settings.SettingsAPI
+}
+
+// SignIn opens the fleet owned-login device-code flow and blocks until the
+// user completes or cancels authentication. Satisfies coreonboarding.AccountSigner.
+func (a onboardingAccountSignerAdapter) SignIn(ctx context.Context) (string, error) {
+	if a.settingsAPI == nil {
+		return "", errors.New("account sign-in unavailable: settings not initialised")
+	}
+	if fleet.Disabled() {
+		return "", errors.New("account sign-in unavailable: Fleet is disabled in this build (HARNESS_FLEET_DISABLED=1)")
+	}
+	id, err := a.settingsAPI.FleetSignIn(ctx)
+	if err != nil {
+		return "", err
+	}
+	return id.Email, nil
 }
 
 // ErrOnboardingNotWired is returned when the session manager is unavailable.
