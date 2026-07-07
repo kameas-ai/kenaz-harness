@@ -750,6 +750,11 @@ interface WailsBindingsLike {
   Onboarding_Dismiss(): Promise<void>;
   Onboarding_RestartPhase2(req: OnboardingRestartPhase2Request): Promise<OnboardingRestartPhase2Response>;
   Onboarding_ListStarters(): Promise<StarterSummary[]>;
+  // WP04 fleet handoff intake seam.
+  Onboarding_AcceptHandoffHint(hint: HandoffHint): Promise<void>;
+  Onboarding_GetHandoffHint(): Promise<HandoffHint>;
+  // WP07 progress sync seam.
+  Onboarding_RecordProgress(step: ProgressStep): Promise<void>;
 
   // ── Elicitation (ask-user-question-interactive-01KZNP3G WP04-WP06) ──
   Elicit_SubmitAnswer(
@@ -2629,6 +2634,13 @@ export interface OnboardingState {
   phase?: string;
   currentState?: string;
   harnessSelfMCPDisabled: boolean;
+  /** True after a successful sign-in in the account step (WP03). */
+  signedIn?: boolean;
+  /**
+   * True when the fleet sign-in surface is wired (HARNESS_FLEET_DISABLED != 1).
+   * When false the account step CTA may be hidden or rendered as unavailable.
+   */
+  accountStepAvailable?: boolean;
 }
 
 /**
@@ -2687,6 +2699,24 @@ export interface OnboardingRestartPhase2Response {
 }
 
 /**
+ * HandoffHint — non-authenticating deep-link hint from the Fleet welcome page.
+ * Pre-fills the email in the account step; never used as authentication.
+ * WP04 fleet handoff intake seam.
+ */
+export interface HandoffHint {
+  /** Email address to pre-fill in the sign-in form (display-only). */
+  emailHint?: string;
+  /** Where the hint came from: "deep_link" | "cli_arg". */
+  source?: string;
+}
+
+/**
+ * ProgressStep — named onboarding step for progress sync (WP07).
+ * Mirrors the Go-side ProgressStep string alias.
+ */
+export type ProgressStep = string;
+
+/**
  * OnboardingClient — view-scoped surface for the harness first-run dialog.
  * Mission: harness-self-mcp-onboarding-01KQ8TDU WP08.
  */
@@ -2697,6 +2727,21 @@ export interface OnboardingClient {
   dismiss(): Promise<void>;
   restartPhase2(req: OnboardingRestartPhase2Request): Promise<OnboardingRestartPhase2Response>;
   listStarters(): Promise<StarterSummary[]>;
+  /**
+   * Store a non-authenticating hint from the Fleet welcome page (WP04).
+   * Pre-fills the email in the account step. No-ops when fleet is disabled.
+   */
+  acceptHandoffHint(hint: HandoffHint): Promise<void>;
+  /**
+   * Return the most recently stored HandoffHint (WP04).
+   * The account step reads this to pre-fill the email field.
+   */
+  getHandoffHint(): Promise<HandoffHint>;
+  /**
+   * Record a named onboarding step as complete (WP07).
+   * Best-effort: errors are non-fatal and the call never blocks the UX.
+   */
+  recordProgress(step: ProgressStep): Promise<void>;
 }
 
 /**
@@ -3516,6 +3561,9 @@ export function createHarnessClient(): HarnessClient {
       dismiss: () => b().Onboarding_Dismiss(),
       restartPhase2: (req) => b().Onboarding_RestartPhase2(req),
       listStarters: () => b().Onboarding_ListStarters(),
+      acceptHandoffHint: (hint) => b().Onboarding_AcceptHandoffHint(hint),
+      getHandoffHint: () => b().Onboarding_GetHandoffHint(),
+      recordProgress: (step) => b().Onboarding_RecordProgress(step),
     },
     elicit: {
       submitAnswer: (requestID, answerJSON, cancelled) =>
@@ -4807,6 +4855,8 @@ export function createFakeHarnessClient(
         firstRun: false,
         completed: true,
         harnessSelfMCPDisabled: false,
+        signedIn: false,
+        accountStepAvailable: false,
       }),
       begin: async () => ({
         state: 'welcome',
@@ -4819,6 +4869,9 @@ export function createFakeHarnessClient(
       dismiss: noop,
       restartPhase2: async () => ({ sessionId: '' }),
       listStarters: async () => [],
+      acceptHandoffHint: noop,
+      getHandoffHint: async () => ({}),
+      recordProgress: noop,
     },
     elicit: {
       submitAnswer: noop,
