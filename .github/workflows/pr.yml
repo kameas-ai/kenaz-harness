@@ -191,7 +191,11 @@ jobs:
     # ubuntu-latest hosted runners are reserved for Apple / Microsoft
     # platform builds (kameas-ai org policy). Linux CI runs on the
     # kameas-ci-* self-hosted pool to keep us off the Actions billing cap.
-    runs-on: [self-hosted, Linux, ARM64, ci-medium]
+    # ci-large (8 GB) not ci-medium (4 GB): vue-tsc + vitest over the full
+    # frontend peak past 4 GB and OOM-killed the medium runner mid-job
+    # (runner-died / BlobNotFound signature), flaking this job on ~every PR
+    # under concurrency — same fix as test-go. ci-large is an on-demand tier.
+    runs-on: [self-hosted, Linux, ARM64, ci-large]
     defaults:
       run:
         working-directory: frontend
