@@ -303,6 +303,14 @@ type ContextGraphSyncer struct {
 	// (context-graph-e2e-01NINTG03 WP01)
 	auditEmitter contextaudit.Emitter
 
+	// firstPushHook is an optional callback fired once after the FIRST successful
+	// PushEntry call. Used by the harness to signal context_synced to the fleet
+	// onboarding state (fleet-welcome-01NWEL01 context_synced seam). The once-
+	// guard (firstPushFired) is set under s.mu; the hook itself is called outside
+	// the lock so it is unconstrained.
+	firstPushHook  func()
+	firstPushFired bool
+
 	// libraryMerger is an optional callback set via SetLibraryMerger.
 	// It is called after each successful PullDelta with the full pulled
 	// entry set so the local context library picks up org/team entries.
@@ -475,7 +483,19 @@ func (s *ContextGraphSyncer) PushEntry(ctx context.Context, entry ContextNodeEnt
 	} else {
 		s.lastConflicts = nil
 	}
+	// fleet-welcome-01NWEL01 context_synced seam: capture the hook and mark
+	// it fired (under the lock for the once-guard), then invoke it outside the
+	// lock so the hook body is not constrained to be lock-free.
+	var hookToFire func()
+	if !s.firstPushFired && s.firstPushHook != nil {
+		s.firstPushFired = true
+		hookToFire = s.firstPushHook
+	}
 	s.mu.Unlock()
+
+	if hookToFire != nil {
+		hookToFire()
+	}
 
 	// FR-006: emit audit event on successful push (context-graph-e2e-01NINTG03 WP01).
 	// Uses MustEmit so a failed emit is logged but never surfaces as a push error.
@@ -977,6 +997,22 @@ func (s *ContextGraphSyncer) SetLibraryMerger(f func([]ContextNodeEntry)) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.libraryMerger = f
+}
+
+// SetFirstPushHook registers a callback that fires at most once after the
+// first successful PushEntry. Used by the harness to PATCH context_synced=true
+// to fleet onboarding state (fleet-welcome-01NWEL01 seam).
+//
+// The hook is invoked outside s.mu so the hook body has no lock constraints.
+// It should be fast (e.g. launch a goroutine internally for any network work).
+// Passing nil clears any previously registered hook. Safe to call before or
+// after StartPoller.
+func (s *ContextGraphSyncer) SetFirstPushHook(fn func()) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.firstPushHook = fn
+	// Reset the fired flag so a new hook can fire even if a prior one already did.
+	s.firstPushFired = false
 }
 
 func (s *ContextGraphSyncer) pollLoop(ctx context.Context, baseInterval time.Duration) {

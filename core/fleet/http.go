@@ -205,6 +205,15 @@ func (c *Client) Put(ctx context.Context, path string, body io.Reader) (*http.Re
 	return c.do(ctx, http.MethodPut, path, body)
 }
 
+// PatchJSON serialises v as JSON and PATCHes it. Caller closes the response body.
+func (c *Client) PatchJSON(ctx context.Context, path string, v any) (*http.Response, error) {
+	data, err := json.Marshal(v)
+	if err != nil {
+		return nil, fmt.Errorf("fleet: marshal patch body: %w", err)
+	}
+	return c.do(ctx, http.MethodPatch, path, bytes.NewReader(data))
+}
+
 // Delete performs a DELETE.
 func (c *Client) Delete(ctx context.Context, path string) (*http.Response, error) {
 	return c.do(ctx, http.MethodDelete, path, nil)
