@@ -2299,11 +2299,12 @@ func New(c *core.Core) *API {
 			sessionStarter.dataDir = dataDir
 		}
 		a.onboardingAPI = onboardingview.New(onboardingview.Config{
-			FirstRun:       firstRunDetector,
-			Completion:     onboardingCompletionAdapter{},
-			SessionStarter: sessionStarter,
-			SettingsDial:   onboardingSettingsDialAdapter{},
-			DataDir:        dataDir,
+			FirstRun:             firstRunDetector,
+			Completion:           onboardingCompletionAdapter{store: settingsStore},
+			SessionStarter:       sessionStarter,
+			SettingsDial:         onboardingSettingsDialAdapter{},
+			AccountStepAvailable: onboardingAccountStepAdapter{},
+			DataDir:              dataDir,
 		})
 		logging.L().Info("onboarding.api.ready")
 	}

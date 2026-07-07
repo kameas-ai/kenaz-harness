@@ -1192,6 +1192,32 @@ func (s *FileStore) RemoveSkippedUpdateVersion(version string) error {
 	return s.saveLocked(got)
 }
 
+// ── First-run onboarding completion flag (harness-onboarding-01NHON01 WP01) ──
+
+// LoadFirstRunOnboardingCompleted returns whether the first-run onboarding
+// flow has been completed or dismissed. Default false (= show onboarding).
+// Errors return false so the dialog still shows on a fresh install even
+// when the settings file is temporarily unreadable.
+func (s *FileStore) LoadFirstRunOnboardingCompleted() (bool, error) {
+	got, err := s.LoadAll()
+	if err != nil {
+		return got.FirstRunOnboardingCompleted, err
+	}
+	return got.FirstRunOnboardingCompleted, nil
+}
+
+// SaveFirstRunOnboardingCompleted persists the onboarding completion flag.
+func (s *FileStore) SaveFirstRunOnboardingCompleted(completed bool) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	got, err := s.loadLocked()
+	if err != nil {
+		return err
+	}
+	got.FirstRunOnboardingCompleted = completed
+	return s.saveLocked(got)
+}
+
 // dedupNonEmpty preserves order, drops empty strings, and coalesces
 // duplicates. Used by SaveSkippedUpdateVersions so a defensive call
 // from a buggy client round-trips cleanly.
@@ -1945,5 +1971,20 @@ func (m *memoryStore) RemoveSkippedUpdateVersion(version string) error {
 		}
 	}
 	m.data.SkippedUpdateVersions = out
+	return nil
+}
+
+// ── First-run onboarding completion flag memoryStore (harness-onboarding-01NHON01 WP01) ──
+
+func (m *memoryStore) LoadFirstRunOnboardingCompleted() (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.data.FirstRunOnboardingCompleted, nil
+}
+
+func (m *memoryStore) SaveFirstRunOnboardingCompleted(completed bool) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.data.FirstRunOnboardingCompleted = completed
 	return nil
 }
