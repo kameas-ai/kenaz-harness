@@ -4751,12 +4751,28 @@ export namespace onboarding {
 		}
 	}
 	
+	export class HandoffHint {
+	    emailHint?: string;
+	    source?: string;
+
+	    static createFrom(source: any = {}) {
+	        return new HandoffHint(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.emailHint = source["emailHint"];
+	        this.source = source["source"];
+	    }
+	}
 	export class OnboardingState {
 	    firstRun: boolean;
 	    completed: boolean;
 	    phase?: string;
 	    currentState?: string;
 	    harnessSelfMCPDisabled: boolean;
+	    signedIn?: boolean;
+	    accountStepAvailable?: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new OnboardingState(source);
@@ -4769,8 +4785,12 @@ export namespace onboarding {
 	        this.phase = source["phase"];
 	        this.currentState = source["currentState"];
 	        this.harnessSelfMCPDisabled = source["harnessSelfMCPDisabled"];
+	        this.signedIn = source["signedIn"];
+	        this.accountStepAvailable = source["accountStepAvailable"];
 	    }
 	}
+	// ProgressStep is a string alias for named onboarding steps (WP07).
+	export type ProgressStep = string;
 	export class RestartPhase2Request {
 	    starterId: string;
 	

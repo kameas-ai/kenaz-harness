@@ -454,11 +454,17 @@ export function Nodes_ListUserOverrides():Promise<Array<nodes.UserOverrideInfo>>
 
 export function Nodes_ReloadOverrides():Promise<nodes.ReloadResult>;
 
+export function Onboarding_AcceptHandoffHint(arg1:onboarding.HandoffHint):Promise<void>;
+
 export function Onboarding_Begin():Promise<onboarding.StepResponse>;
 
 export function Onboarding_Dismiss():Promise<void>;
 
+export function Onboarding_GetHandoffHint():Promise<onboarding.HandoffHint>;
+
 export function Onboarding_ListStarters():Promise<Array<onboarding.StarterSummary>>;
+
+export function Onboarding_RecordProgress(arg1:onboarding.ProgressStep):Promise<void>;
 
 export function Onboarding_RestartPhase2(arg1:onboarding.RestartPhase2Request):Promise<onboarding.RestartPhase2Response>;
 

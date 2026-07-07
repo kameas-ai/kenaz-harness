@@ -15,6 +15,7 @@ import (
 
 	harnessmcp "github.com/kameas-ai/kenaz-harness/core/mcp/builtin/harness"
 	coreonboarding "github.com/kameas-ai/kenaz-harness/core/onboarding"
+	"github.com/kameas-ai/kenaz-harness/core/logging"
 )
 
 // FirstRunChecker reports whether the harness is in its zero-config
@@ -44,6 +45,13 @@ type SettingsDialReader interface {
 	IsHarnessSelfMCPDisabled(ctx context.Context) (bool, error)
 }
 
+// AccountStepAvailableChecker reports whether the fleet sign-in surface is
+// wired in this build. When false, the frontend hides or greys the sign-in
+// CTA. Wired in production to a simple check of HARNESS_FLEET_DISABLED.
+type AccountStepAvailableChecker interface {
+	IsAccountStepAvailable(ctx context.Context) (bool, error)
+}
+
 // Config bundles the host wiring an API needs. All fields are nil-safe;
 // when nil the matching method returns a typed error or a sensible
 // default, so the chassis-only test fixture compiles.
@@ -53,6 +61,9 @@ type Config struct {
 	Completion     CompletionMarker
 	SessionStarter SessionStarter
 	SettingsDial   SettingsDialReader
+	// AccountStepAvailable indicates whether the fleet sign-in surface is
+	// wired. When nil, AccountStepAvailable defaults to false.
+	AccountStepAvailable AccountStepAvailableChecker
 	// DataDir is forwarded to harnessmcp.LoadStarters so user-overridden
 	// starter prompts are picked up.
 	DataDir string
@@ -65,6 +76,14 @@ type API struct {
 	mu      sync.Mutex
 	current coreonboarding.State
 	fsmCtx  coreonboarding.FSMContext
+
+	// handoffHintMu protects the stored handoff hint (WP04 seam).
+	handoffHintMu sync.Mutex
+	handoffHint   HandoffHint
+
+	// progressMu protects the in-memory progress set (WP07 seam).
+	progressMu sync.Mutex
+	progress   map[ProgressStep]bool
 }
 
 // New constructs an API. cfg may be the zero value for tests; production
@@ -74,9 +93,10 @@ func New(cfg Config) *API {
 		cfg.FSM = coreonboarding.New(nil)
 	}
 	return &API{
-		cfg:     cfg,
-		current: coreonboarding.StateWelcome,
-		fsmCtx:  coreonboarding.NewFSMContext(),
+		cfg:      cfg,
+		current:  coreonboarding.StateWelcome,
+		fsmCtx:   coreonboarding.NewFSMContext(),
+		progress: make(map[ProgressStep]bool),
 	}
 }
 
@@ -109,8 +129,15 @@ func (a *API) State(ctx context.Context) (OnboardingState, error) {
 		}
 		out.HarnessSelfMCPDisabled = dis
 	}
+	if a.cfg.AccountStepAvailable != nil {
+		avail, err := a.cfg.AccountStepAvailable.IsAccountStepAvailable(ctx)
+		if err == nil {
+			out.AccountStepAvailable = avail
+		}
+	}
 	a.mu.Lock()
 	out.CurrentState = string(a.current)
+	out.SignedIn = a.fsmCtx.SignedIn
 	a.mu.Unlock()
 	if out.FirstRun || !out.Completed {
 		out.Phase = "phase1"
@@ -142,12 +169,27 @@ func (a *API) Step(ctx context.Context, req StepRequest) (StepResponse, error) {
 		return StepResponse{}, err
 	}
 	a.current = r.State
+	// Capture FSM context fields for progress recording (below the lock).
+	signedIn := a.fsmCtx.SignedIn
 	a.mu.Unlock()
 
-	// On terminal Done state with a successful provider configuration,
-	// flip the completed flag so the dialog never re-shows automatically.
-	if r.State == coreonboarding.StateDone && a.cfg.Completion != nil {
-		_ = a.cfg.Completion.MarkOnboardingCompleted(ctx)
+	// Record progress milestones and flip the completion flag as the FSM
+	// advances through key states (WP01/WP07).
+	switch r.State {
+	case coreonboarding.StateAccountStep:
+		// Provider was successfully configured.
+		_ = a.RecordProgress(ctx, ProgressStepProviderConfigured)
+	case coreonboarding.StateGuidedAction:
+		if signedIn {
+			_ = a.RecordProgress(ctx, ProgressStepAccountConnected)
+		}
+	case coreonboarding.StateDone:
+		// The full onboarding flow reached its terminal state. Flip the
+		// completed flag so the dialog never re-shows automatically.
+		_ = a.RecordProgress(ctx, ProgressStepGuidedActionShown)
+		if a.cfg.Completion != nil {
+			_ = a.cfg.Completion.MarkOnboardingCompleted(ctx)
+		}
 	}
 	return StepResponse{State: string(r.State), Card: r.Card}, nil
 }
@@ -207,6 +249,63 @@ func (a *API) ListStarters(_ context.Context) ([]StarterSummary, error) {
 		})
 	}
 	return out, nil
+}
+
+// AcceptHandoffHint implements OnboardingAPI (WP04 fleet handoff intake seam).
+//
+// DEFERRED FLEET INTEGRATION: the Fleet welcome flow (01NWEL01) will call
+// the harness via a kameas:// deep-link. This seam stores the hint in memory
+// so the account step can pre-fill the email. No auth is performed here.
+func (a *API) AcceptHandoffHint(_ context.Context, hint HandoffHint) error {
+	// Validate: hints with no email are silently ignored rather than errored
+	// so a malformed deep-link never blocks onboarding.
+	if hint.EmailHint == "" && hint.Source == "" {
+		return nil
+	}
+	a.handoffHintMu.Lock()
+	a.handoffHint = hint
+	a.handoffHintMu.Unlock()
+	logging.L().Info("onboarding.handoff_hint.accepted",
+		"source", hint.Source,
+		"has_email", hint.EmailHint != "",
+	)
+	return nil
+}
+
+// GetHandoffHint implements OnboardingAPI (WP04 fleet handoff intake seam).
+func (a *API) GetHandoffHint(_ context.Context) (HandoffHint, error) {
+	a.handoffHintMu.Lock()
+	defer a.handoffHintMu.Unlock()
+	return a.handoffHint, nil
+}
+
+// RecordProgress implements OnboardingAPI (WP07 progress sync seam).
+//
+// Records the step locally and — when signed in — attempts to mirror the
+// progress to the Fleet shared checklist (01NWEL01).
+//
+// DEFERRED FLEET INTEGRATION: the Fleet progress-mirror endpoint is not yet
+// deployed. The local recording always succeeds; the fleet push is a no-op
+// until the fleet side ships. The integration point is clearly marked in the
+// code below.
+func (a *API) RecordProgress(_ context.Context, step ProgressStep) error {
+	a.progressMu.Lock()
+	if a.progress == nil {
+		a.progress = make(map[ProgressStep]bool)
+	}
+	a.progress[step] = true
+	a.progressMu.Unlock()
+	logging.L().Info("onboarding.progress.recorded", "step", string(step))
+
+	// DEFERRED FLEET INTEGRATION (WP07): mirror progress to Fleet shared checklist.
+	// When the Fleet progress-mirror RPC ships (01NWEL01), add a non-blocking
+	// goroutine here that calls the fleet client. The call must be:
+	//   - non-blocking (goroutine)
+	//   - best-effort (errors are logged, never returned to the caller)
+	//   - gated on a.fsmCtx.SignedIn (only mirror when signed in)
+	//   - guarded by the OSS-first invariant (no fleet import in this package)
+	// The fleet call belongs in the host adapter (core/rpc/onboarding_wiring.go).
+	return nil
 }
 
 // Compile-time witness.
