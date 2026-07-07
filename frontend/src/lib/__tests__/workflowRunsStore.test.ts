@@ -170,6 +170,143 @@ describe('workflowRunsStore.applyEvent (pure reducer)', () => {
   });
 });
 
+/**
+ * Tests that exercise the REAL Go-emitted FrontendProgressEvent shape.
+ *
+ * The Go engine publishes FrontendProgressEvent values with:
+ *   { runId, workflowId, phase, stepName, stepKind, error, ts }
+ * NOT the old flat ProgressEvent shape
+ *   { runId, workflowId, step, kind, status, at }
+ *
+ * These tests seed the store with events that match the actual Go
+ * publish shape to confirm FR-005 (no silent-swallow / stuck sidebar).
+ */
+describe('workflowRunsStore — real Go-emitted FrontendProgressEvent shape', () => {
+  beforeEach(() => {
+    __resetWorkflowRunsStoreForTests();
+  });
+  afterEach(() => {
+    __resetWorkflowRunsStoreForTests();
+  });
+
+  it('ingests a complete run lifecycle emitted by the Go engine', () => {
+    // Simulate what Go actually publishes after the FR-005 fix.
+    // The engine emits step events, then impl.go emits run_completed.
+    const goEvents: RunProgressEvent[] = [
+      {
+        runId: 'run-go-01',
+        workflowId: 'plan_implement_review',
+        phase: 'step_started',
+        stepName: 'plan',
+        stepKind: 'model_turn',
+        ts: '2026-07-07T10:00:00.000Z',
+      },
+      {
+        runId: 'run-go-01',
+        workflowId: 'plan_implement_review',
+        phase: 'step_completed',
+        stepName: 'plan',
+        stepKind: 'model_turn',
+        ts: '2026-07-07T10:00:05.000Z',
+      },
+      {
+        runId: 'run-go-01',
+        workflowId: 'plan_implement_review',
+        phase: 'step_started',
+        stepName: 'implement',
+        stepKind: 'model_turn',
+        ts: '2026-07-07T10:00:06.000Z',
+      },
+      {
+        runId: 'run-go-01',
+        workflowId: 'plan_implement_review',
+        phase: 'step_completed',
+        stepName: 'implement',
+        stepKind: 'model_turn',
+        ts: '2026-07-07T10:00:20.000Z',
+      },
+      // run_completed lifecycle event emitted by impl.go after engine.Run
+      {
+        runId: 'run-go-01',
+        workflowId: 'plan_implement_review',
+        phase: 'run_completed',
+        ts: '2026-07-07T10:00:20.001Z',
+      },
+    ];
+
+    for (const e of goEvents) {
+      ingest(e);
+    }
+
+    const store = useWorkflowRunsStore();
+    const run = store.getRun('run-go-01');
+    expect(run).toBeDefined();
+    // Run must be terminal — not stuck on "running".
+    expect(run!.status).toBe('done');
+    expect(run!.steps).toHaveLength(2);
+    expect(run!.steps[0]).toMatchObject({ name: 'plan', kind: 'model_turn', status: 'done' });
+    expect(run!.steps[1]).toMatchObject({ name: 'implement', kind: 'model_turn', status: 'done' });
+  });
+
+  it('sidebar flips to failed when run_failed lifecycle event arrives', () => {
+    ingest({
+      runId: 'run-go-fail',
+      workflowId: 'daily_ea_briefing',
+      phase: 'step_started',
+      stepName: 'fetch_slack',
+      stepKind: 'mcp_call',
+      ts: '2026-07-07T11:00:00.000Z',
+    });
+    ingest({
+      runId: 'run-go-fail',
+      workflowId: 'daily_ea_briefing',
+      phase: 'step_failed',
+      stepName: 'fetch_slack',
+      stepKind: 'mcp_call',
+      error: 'MCP server "slack" is not installed — install it from Tools',
+      ts: '2026-07-07T11:00:01.000Z',
+    });
+    // run_failed emitted by impl.go after engine.Run returns with an error
+    ingest({
+      runId: 'run-go-fail',
+      workflowId: 'daily_ea_briefing',
+      phase: 'run_failed',
+      error: 'step fetch_slack failed',
+      ts: '2026-07-07T11:00:01.001Z',
+    });
+
+    const store = useWorkflowRunsStore();
+    const run = store.getRun('run-go-fail');
+    expect(run).toBeDefined();
+    // Must not be stuck on "running".
+    expect(run!.status).toBe('failed');
+    expect(run!.steps[0].status).toBe('failed');
+    expect(run!.steps[0].error).toContain('slack');
+  });
+
+  it('rejects the OLD flat Go ProgressEvent shape (regression guard)', () => {
+    // Before the FR-005 fix, Go emitted { step, kind, status, at }.
+    // The reducer switches on evt.phase — if phase is missing, the
+    // switch falls through and the run stays "running" forever.
+    // @ts-expect-error — simulate old-shape event hitting the live store
+    ingest({ runId: 'run-old', workflowId: 'wf', step: 'plan', kind: 'model_turn', status: 'completed', at: '2026-07-07T10:00:00Z' });
+    // @ts-expect-error — simulate old-shape run lifecycle event
+    ingest({ runId: 'run-old', workflowId: 'wf', step: '', kind: '', status: 'completed', at: '2026-07-07T10:00:01Z' });
+
+    const store = useWorkflowRunsStore();
+    const run = store.getRun('run-old');
+    // The old shape bootstraps a run (runId is present) but the switch
+    // falls through so status stays 'running' — demonstrating the bug
+    // the FR-005 fix addresses.
+    if (run) {
+      // If a run exists, it must not be marked done (the old shape can't drive it to terminal).
+      expect(run.status).toBe('running');
+    }
+    // The new shape (with phase) would have driven it to 'done'.
+    // This documents the before/after behaviour for reviewers.
+  });
+});
+
 describe('workflowRunsStore (live ref + ordering)', () => {
   beforeEach(() => {
     __resetWorkflowRunsStoreForTests();

@@ -107,9 +107,69 @@ func TestRun_PublishesProgress(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	// 4 steps × 2 transitions (running + completed) = 8 events.
-	if len(pub.events) != 8 {
-		t.Errorf("progress events: got %d want 8", len(pub.events))
+	// 4 steps × 2 transitions (running + completed) = 8 step events,
+	// plus 1 run_completed lifecycle event = 9 total.
+	if len(pub.events) != 9 {
+		t.Errorf("progress events: got %d want 9", len(pub.events))
+	}
+}
+
+// TestRun_PublishesPhaseDiscriminatedEnvelope asserts that the published
+// progress events carry the frontend-expected shape: phase (not status),
+// stepName (not step), and ts (not at). This is the FR-005 regression
+// guard — the Go engine emits flat ProgressEvent values; translateProgressEvent
+// must project them into FrontendProgressEvent before broker publish.
+func TestRun_PublishesPhaseDiscriminatedEnvelope(t *testing.T) {
+	wfs, _ := corewf.LoadBuiltins()
+	pub := &recordingPublisher{}
+	api := New(Config{Engine: corewf.NewEngine(), Catalog: wfs, Publisher: pub})
+	_, err := api.Run(context.Background(), "plan_implement_review", nil)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(pub.events) == 0 {
+		t.Fatal("no progress events published")
+	}
+	// Every event must be a FrontendProgressEvent with Phase set.
+	for i, raw := range pub.events {
+		fe, ok := raw.(FrontendProgressEvent)
+		if !ok {
+			t.Errorf("event[%d]: got %T, want FrontendProgressEvent", i, raw)
+			continue
+		}
+		if fe.Phase == "" {
+			t.Errorf("event[%d]: Phase must not be empty (got %+v)", i, fe)
+		}
+		if fe.Ts == "" {
+			t.Errorf("event[%d]: Ts must not be empty (got %+v)", i, fe)
+		}
+		if fe.RunID == "" {
+			t.Errorf("event[%d]: RunID must not be empty (got %+v)", i, fe)
+		}
+	}
+	// The last event must be the run_completed lifecycle event.
+	last, ok := pub.events[len(pub.events)-1].(FrontendProgressEvent)
+	if !ok {
+		t.Fatalf("last event: want FrontendProgressEvent got %T", pub.events[len(pub.events)-1])
+	}
+	if last.Phase != "run_completed" {
+		t.Errorf("last event: Phase = %q, want run_completed", last.Phase)
+	}
+	// Step events must carry stepName and a recognised step phase.
+	stepPhases := map[string]bool{
+		"step_started": true, "step_completed": true, "step_failed": true, "step_skipped": true,
+	}
+	runPhases := map[string]bool{
+		"run_started": true, "run_completed": true, "run_failed": true,
+	}
+	for i, raw := range pub.events {
+		fe := raw.(FrontendProgressEvent)
+		if stepPhases[fe.Phase] && fe.StepName == "" {
+			t.Errorf("event[%d] phase=%s: StepName must not be empty", i, fe.Phase)
+		}
+		if !stepPhases[fe.Phase] && !runPhases[fe.Phase] {
+			t.Errorf("event[%d]: unrecognised Phase %q", i, fe.Phase)
+		}
 	}
 }
 
