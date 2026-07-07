@@ -293,6 +293,10 @@ type ContextGraphSyncer struct {
 	pollOnce sync.Once
 	// stopCh signals the background poll loop to exit (closed by Stop).
 	stopCh chan struct{}
+	// pollWG tracks the background poll goroutine so Stop() can join it —
+	// without this, Stop only signals and returns, leaving pollLoop mid-flight
+	// (e.g. in PullDelta→LoadTokens) racing the caller's keyring teardown.
+	pollWG sync.WaitGroup
 
 	// auditEmitter is an optional audit emitter injected via WithAuditEmitter.
 	// When nil, audit emit calls are no-ops (nil-safe via contextaudit.Emit).
@@ -942,14 +946,17 @@ func (s *ContextGraphSyncer) StartPoller(ctx context.Context, interval time.Dura
 		if s.stopCh == nil {
 			s.stopCh = make(chan struct{})
 		}
+		s.pollWG.Add(1)
 		go s.pollLoop(ctx, interval)
 	})
 }
 
-// Stop signals the background poll loop to exit. Safe to call once.
+// Stop signals the background poll loop to exit AND waits for it to finish.
+// The join (pollWG.Wait, outside the lock to avoid deadlocking pollLoop's
+// mu.RLock) guarantees no poll iteration is still touching shared state (e.g.
+// the keyring) once Stop returns. Safe to call multiple times.
 func (s *ContextGraphSyncer) Stop() {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if s.stopCh != nil {
 		select {
 		case <-s.stopCh:
@@ -958,6 +965,8 @@ func (s *ContextGraphSyncer) Stop() {
 			close(s.stopCh)
 		}
 	}
+	s.mu.Unlock()
+	s.pollWG.Wait()
 }
 
 // SetLibraryMerger wires a callback that is called after each successful
@@ -971,6 +980,7 @@ func (s *ContextGraphSyncer) SetLibraryMerger(f func([]ContextNodeEntry)) {
 }
 
 func (s *ContextGraphSyncer) pollLoop(ctx context.Context, baseInterval time.Duration) {
+	defer s.pollWG.Done()
 	consecutiveErrors := 0
 	timer := time.NewTimer(baseInterval)
 	defer timer.Stop()
