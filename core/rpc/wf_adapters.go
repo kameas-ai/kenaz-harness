@@ -56,7 +56,7 @@ type wfMCPCallerAdapter struct {
 
 func (a *wfMCPCallerAdapter) Call(ctx context.Context, server, tool string, args map[string]any) (string, error) {
 	if a.pool == nil {
-		return "", fmt.Errorf("MCP server %q is not available — no MCP pool wired", server)
+		return "", fmt.Errorf("MCP server %q is not available — MCP is disabled. Enable it in Settings → Tools", server)
 	}
 	// Marshal args to json.RawMessage (nil args → null).
 	var rawArgs json.RawMessage
