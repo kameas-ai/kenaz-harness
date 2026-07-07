@@ -5,6 +5,16 @@
 //
 // All host dependencies are interface-typed so the view can be
 // constructed in tests without dragging in the full core stack.
+//
+// Fleet integration seams (01NWEL01):
+//
+//   - ProgressSyncer  — mirrors named progress milestones to fleet PATCH
+//     /api/v1/me/onboarding when the user is signed in (WP07).
+//   - FleetStateReader — reads fleet GET /api/v1/me/onboarding on Begin
+//     to warm Path A (pre-fill / skip already-completed steps) (WP04).
+//
+// Both interfaces are OSS-first: defined here, implemented in
+// core/rpc/onboarding_wiring.go which is allowed to import core/fleet/.
 package onboarding
 
 import (
@@ -52,6 +62,54 @@ type AccountStepAvailableChecker interface {
 	IsAccountStepAvailable(ctx context.Context) (bool, error)
 }
 
+// ProgressSyncer mirrors a named onboarding milestone to the Fleet shared
+// checklist (PATCH /api/v1/me/onboarding). Implemented in
+// core/rpc/onboarding_wiring.go by onboardingProgressSyncerAdapter.
+//
+// OSS-first invariant: this interface must NOT be implemented here —
+// the implementation lives in the wiring layer that is permitted to
+// import core/fleet/.
+//
+// The call is always best-effort and non-blocking from the caller's
+// perspective. When fleet is disabled/not signed-in, SyncProgress is a
+// no-op (returns nil immediately).
+type ProgressSyncer interface {
+	// SyncProgress pushes the given step (as a partial PATCH) to fleet.
+	// Must return quickly — the implementation spawns a goroutine for
+	// the actual network call. Never returns an error that would surface
+	// to the user.
+	SyncProgress(ctx context.Context, step ProgressStep, signedIn bool) error
+}
+
+// FleetStateReader reads the fleet-side onboarding state (GET
+// /api/v1/me/onboarding). Used by Begin to warm Path A: if the user is
+// already signed in and fleet shows previously completed steps, the FSM
+// can skip them. Implemented in core/rpc/onboarding_wiring.go.
+//
+// OSS-first invariant: same as ProgressSyncer — defined here, wired from
+// the allowed bridge file.
+//
+// ReadFleetState returns a FleetOnboardingHint. When fleet is disabled,
+// not signed-in, or the call fails, the zero value is returned (no pre-fill).
+// Errors are never surfaced to the onboarding dialog.
+type FleetStateReader interface {
+	ReadFleetState(ctx context.Context) (FleetOnboardingHint, error)
+}
+
+// FleetOnboardingHint carries the relevant fields from the fleet
+// OnboardingState that the harness cares about for Path A warm-start.
+// The struct is intentionally narrow — only pre-fill / skip signals,
+// never credentials or sensitive data.
+type FleetOnboardingHint struct {
+	// AlreadyConnected is true when fleet reports account_connected=true.
+	// The FSM may skip the account step when this is true and the user is
+	// already signed in to the same account.
+	AlreadyConnected bool
+	// AlreadyHarnessInstalled is true when fleet reports harness_installed=true.
+	// Informational; no current FSM effect (future: fast-path skip of install step).
+	AlreadyHarnessInstalled bool
+}
+
 // Config bundles the host wiring an API needs. All fields are nil-safe;
 // when nil the matching method returns a typed error or a sensible
 // default, so the chassis-only test fixture compiles.
@@ -74,6 +132,17 @@ type Config struct {
 	// DataDir is forwarded to harnessmcp.LoadStarters so user-overridden
 	// starter prompts are picked up.
 	DataDir string
+
+	// ── 01NWEL01 fleet integration seams ──────────────────────────────────
+
+	// ProgressSyncer mirrors named milestones to fleet (WP07).
+	// When nil, RecordProgress only records locally (deferred-integration
+	// posture preserved for OSS builds / tests).
+	ProgressSyncer ProgressSyncer
+
+	// FleetStateReader reads fleet onboarding state on Begin (WP04).
+	// When nil, Begin does not attempt fleet state read (zero hint).
+	FleetStateReader FleetStateReader
 }
 
 // API is the concrete OnboardingAPI implementation.
@@ -160,12 +229,45 @@ func (a *API) State(ctx context.Context) (OnboardingState, error) {
 }
 
 // Begin implements OnboardingAPI.
-func (a *API) Begin(_ context.Context) (StepResponse, error) {
+//
+// WP04 fleet state warm-start: when a FleetStateReader is wired and the
+// user is signed in, Begin fetches fleet onboarding state and stores the
+// hint for use by the account step. This is best-effort; failures are
+// logged and ignored — the account step always starts empty on error.
+func (a *API) Begin(ctx context.Context) (StepResponse, error) {
 	r := coreonboarding.InitialCard()
 	a.mu.Lock()
 	a.current = r.State
 	a.fsmCtx = coreonboarding.NewFSMContext()
 	a.mu.Unlock()
+
+	// WP04: read fleet state for Path A warm-start. Non-blocking: errors
+	// are logged and swallowed so a fleet outage never blocks onboarding.
+	if a.cfg.FleetStateReader != nil {
+		hint, err := a.cfg.FleetStateReader.ReadFleetState(ctx)
+		if err != nil {
+			// Log at debug level — fleet may not be available (offline / OSS).
+			logging.L().Debug("onboarding.fleet_state.read_failed",
+				"err", err.Error(),
+			)
+		} else if hint.AlreadyConnected {
+			// Store a synthetic handoff hint so the account step can note
+			// the user is already enrolled. The hint carries no auth grant.
+			a.handoffHintMu.Lock()
+			// Only set if there is no existing deep-link hint (deep-link wins).
+			if a.handoffHint.EmailHint == "" {
+				a.handoffHint = HandoffHint{
+					Source: "fleet_state",
+				}
+			}
+			a.handoffHintMu.Unlock()
+			logging.L().Info("onboarding.fleet_state.warm_start",
+				"already_connected", hint.AlreadyConnected,
+				"harness_installed", hint.AlreadyHarnessInstalled,
+			)
+		}
+	}
+
 	return StepResponse{State: string(r.State), Card: r.Card}, nil
 }
 
@@ -267,9 +369,9 @@ func (a *API) ListStarters(_ context.Context) ([]StarterSummary, error) {
 
 // AcceptHandoffHint implements OnboardingAPI (WP04 fleet handoff intake seam).
 //
-// DEFERRED FLEET INTEGRATION: the Fleet welcome flow (01NWEL01) will call
-// the harness via a kameas:// deep-link. This seam stores the hint in memory
-// so the account step can pre-fill the email. No auth is performed here.
+// Stores a non-authenticating deep-link hint from the Fleet welcome page
+// (01NWEL01). The hint pre-fills the email in the account step but does not
+// grant any access.
 func (a *API) AcceptHandoffHint(_ context.Context, hint HandoffHint) error {
 	// Validate: hints with no email are silently ignored rather than errored
 	// so a malformed deep-link never blocks onboarding.
@@ -287,6 +389,10 @@ func (a *API) AcceptHandoffHint(_ context.Context, hint HandoffHint) error {
 }
 
 // GetHandoffHint implements OnboardingAPI (WP04 fleet handoff intake seam).
+//
+// WP04 full: returns the stored HandoffHint. When a fleet state warm-start
+// set a synthetic hint (source="fleet_state") and the user later receives a
+// real deep-link hint, the deep-link wins (set in AcceptHandoffHint).
 func (a *API) GetHandoffHint(_ context.Context) (HandoffHint, error) {
 	a.handoffHintMu.Lock()
 	defer a.handoffHintMu.Unlock()
@@ -295,14 +401,15 @@ func (a *API) GetHandoffHint(_ context.Context) (HandoffHint, error) {
 
 // RecordProgress implements OnboardingAPI (WP07 progress sync seam).
 //
-// Records the step locally and — when signed in — attempts to mirror the
-// progress to the Fleet shared checklist (01NWEL01).
+// Records the step locally and — when signed in and a ProgressSyncer is
+// wired — fires a non-blocking best-effort mirror to Fleet (01NWEL01).
 //
-// DEFERRED FLEET INTEGRATION: the Fleet progress-mirror endpoint is not yet
-// deployed. The local recording always succeeds; the fleet push is a no-op
-// until the fleet side ships. The integration point is clearly marked in the
-// code below.
-func (a *API) RecordProgress(_ context.Context, step ProgressStep) error {
+// The fleet push is:
+//   - non-blocking (goroutine launched by ProgressSyncer.SyncProgress)
+//   - best-effort (errors are logged, never returned to the caller)
+//   - gated on fsmCtx.SignedIn (only mirror when signed in)
+//   - OSS-first (fleet import lives in the adapter, not here)
+func (a *API) RecordProgress(ctx context.Context, step ProgressStep) error {
 	a.progressMu.Lock()
 	if a.progress == nil {
 		a.progress = make(map[ProgressStep]bool)
@@ -311,14 +418,15 @@ func (a *API) RecordProgress(_ context.Context, step ProgressStep) error {
 	a.progressMu.Unlock()
 	logging.L().Info("onboarding.progress.recorded", "step", string(step))
 
-	// DEFERRED FLEET INTEGRATION (WP07): mirror progress to Fleet shared checklist.
-	// When the Fleet progress-mirror RPC ships (01NWEL01), add a non-blocking
-	// goroutine here that calls the fleet client. The call must be:
-	//   - non-blocking (goroutine)
-	//   - best-effort (errors are logged, never returned to the caller)
-	//   - gated on a.fsmCtx.SignedIn (only mirror when signed in)
-	//   - guarded by the OSS-first invariant (no fleet import in this package)
-	// The fleet call belongs in the host adapter (core/rpc/onboarding_wiring.go).
+	// WP07: mirror to fleet when signed in and syncer is wired.
+	if a.cfg.ProgressSyncer != nil {
+		a.mu.Lock()
+		signedIn := a.fsmCtx.SignedIn
+		a.mu.Unlock()
+		// SyncProgress is expected to be non-blocking (goroutine inside the adapter).
+		// We still discard any error here (best-effort contract).
+		_ = a.cfg.ProgressSyncer.SyncProgress(ctx, step, signedIn)
+	}
 	return nil
 }
 
