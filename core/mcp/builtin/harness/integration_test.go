@@ -207,14 +207,26 @@ func TestIntegration_PhaseOneHandoff(t *testing.T) {
 		t.Fatalf("pick/anthropic: err=%v state=%s", err, r.State)
 	}
 
-	// enter-api-key → done (nil tester always passes)
+	// enter-api-key → account_step (nil tester always passes; WP03 new routing)
 	r, err = fsm.Step(ctx, onboarding.StateEnterAPIKey, onboarding.EventSubmitKey,
 		map[string]string{"api_key": "sk-test-key"}, &fsmCtx)
-	if err != nil || r.State != onboarding.StateDone {
+	if err != nil || r.State != onboarding.StateAccountStep {
 		t.Fatalf("enter/submit: err=%v state=%s", err, r.State)
 	}
 
-	// done → done (EventFinish triggers kind transition)
+	// account_step → guided_action (skip — OSS-standalone invariant)
+	r, err = fsm.Step(ctx, onboarding.StateAccountStep, onboarding.EventSkipAccount, nil, &fsmCtx)
+	if err != nil || r.State != onboarding.StateGuidedAction {
+		t.Fatalf("account/skip: err=%v state=%s", err, r.State)
+	}
+
+	// guided_action → done (EventFinish triggers kind transition; WP06)
+	r, err = fsm.Step(ctx, onboarding.StateGuidedAction, onboarding.EventFinish, nil, &fsmCtx)
+	if err != nil || r.State != onboarding.StateDone {
+		t.Fatalf("guided/finish: err=%v state=%s", err, r.State)
+	}
+
+	// done → done (terminal no-op; kind transition should have fired by now)
 	r, err = fsm.Step(ctx, onboarding.StateDone, onboarding.EventFinish, nil, &fsmCtx)
 	if err != nil || r.State != onboarding.StateDone {
 		t.Fatalf("done/finish: err=%v state=%s", err, r.State)
