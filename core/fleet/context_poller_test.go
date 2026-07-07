@@ -186,6 +186,9 @@ func TestPoller_DoubleStartNoOp(t *testing.T) {
 	client := makeTestClient(t, srv.URL)
 	caps := makeCapPollerWithTeamCap(t)
 	syncer := NewContextGraphSyncer(client, t.TempDir(), caps)
+	// Join the poll goroutine before the test's keyring teardown runs, else
+	// pollLoop's LoadTokens races ClearTokens on the shared keyring mock.
+	defer syncer.Stop()
 	syncer.SetLibraryMerger(func(_ []ContextNodeEntry) {
 		mu.Lock()
 		defer mu.Unlock()
