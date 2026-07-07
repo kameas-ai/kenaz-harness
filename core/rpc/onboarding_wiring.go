@@ -2,25 +2,26 @@
 // with concrete adapters over the production managers.
 //
 // Mission: harness-self-mcp-onboarding-01KQ8TDU WP08 (tail polish, v0.5.4).
+// Extended: harness-onboarding-01NHON01 WP01/WP03/WP04/WP07.
 //
-// The three adapter types here satisfy the narrow interfaces declared in
+// The adapter types here satisfy the narrow interfaces declared in
 // core/rpc/views/onboarding/impl.go so the onboarding view can be
 // constructed without cyclic imports into core/rpc/api.go.
 //
-// State persistence (OnboardingCompleted, HarnessSelfMCPDisabled) is not
-// yet mapped to a settings field — those keys are sentinel no-ops in the
-// harness_wiring.go allowlist. The adapters below fall back to safe
-// defaults (not completed = always show once, dial enabled = true) so the
-// first-run dialog fires correctly on a fresh install. A follow-up mission
-// adds the dedicated settings fields.
+// Completion state is now persisted via Settings.FirstRunOnboardingCompleted
+// (added in WP01). The AccountStepAvailableChecker gracefully degrades to
+// "unavailable" when fleet is disabled or not wired.
 package rpc
 
 import (
 	"context"
 	"errors"
+	"os"
 
+	"github.com/kameas-ai/kenaz-harness/core/fleet"
 	harnessmcp "github.com/kameas-ai/kenaz-harness/core/mcp/builtin/harness"
 	llmview "github.com/kameas-ai/kenaz-harness/core/rpc/views/llm"
+	"github.com/kameas-ai/kenaz-harness/core/rpc/views/settings"
 	"github.com/kameas-ai/kenaz-harness/core/session"
 )
 
@@ -49,19 +50,54 @@ func (a onboardingFirstRunAdapter) IsFirstRun(ctx context.Context) (bool, error)
 // ---- CompletionMarker adapter -----------------------------------------------
 
 // onboardingCompletionAdapter implements onboardingview.CompletionMarker.
-// Since OnboardingCompleted is not yet in the settings store, MarkOnboardingCompleted
-// is a no-op and IsCompleted always returns false (first-run condition persists
-// until a provider is added, which makes IsFirstRun return false).
-type onboardingCompletionAdapter struct{}
-
-func (onboardingCompletionAdapter) MarkOnboardingCompleted(_ context.Context) error {
-	// No-op: completion state is implicitly derived from provider count.
-	// A follow-up adds a persistent flag.
-	return nil
+// Persists and reads Settings.FirstRunOnboardingCompleted via the settings
+// store (harness-onboarding-01NHON01 WP01).
+//
+// When store is nil (test/nil-core path), MarkOnboardingCompleted is a no-op
+// and IsCompleted returns false — the dialog will show on every cold start
+// until a provider is added, which is the correct first-run behaviour for
+// a bare test environment.
+type onboardingCompletionAdapter struct {
+	store settings.SettingsStore
 }
 
-func (onboardingCompletionAdapter) IsCompleted(_ context.Context) (bool, error) {
-	return false, nil
+func (a onboardingCompletionAdapter) MarkOnboardingCompleted(_ context.Context) error {
+	if a.store == nil {
+		return nil
+	}
+	return a.store.SaveFirstRunOnboardingCompleted(true)
+}
+
+func (a onboardingCompletionAdapter) IsCompleted(_ context.Context) (bool, error) {
+	if a.store == nil {
+		return false, nil
+	}
+	return a.store.LoadFirstRunOnboardingCompleted()
+}
+
+// ---- AccountStepAvailableChecker adapter ------------------------------------
+
+// onboardingAccountStepAdapter implements onboardingview.AccountStepAvailableChecker.
+//
+// The account step is considered available when fleet is NOT explicitly
+// disabled via the HARNESS_FLEET_DISABLED environment variable. This is
+// intentionally env-var-gated rather than reading the fleet client to avoid
+// importing core/fleet/ into this package (the OSS-first invariant).
+//
+// DEFERRED FLEET INTEGRATION (WP03): when the fleet sign-in endpoint ships
+// (01NWEL01), update this adapter to also check whether the fleet client
+// is reachable (a single HEAD probe at startup). Until then the env-var
+// gate is sufficient — the account step is always skippable so a false
+// positive just shows a CTA that silently degrades in the FSM.
+type onboardingAccountStepAdapter struct{}
+
+func (onboardingAccountStepAdapter) IsAccountStepAvailable(_ context.Context) (bool, error) {
+	// HARNESS_FLEET_DISABLED=1 opts the build out of the fleet surface entirely.
+	// Any other value (including absent) leaves the CTA visible.
+	if os.Getenv("HARNESS_FLEET_DISABLED") == "1" {
+		return false, nil
+	}
+	return true, nil
 }
 
 // ---- SessionStarter adapter --------------------------------------------------
@@ -105,6 +141,43 @@ type onboardingSettingsDialAdapter struct{}
 
 func (onboardingSettingsDialAdapter) IsHarnessSelfMCPDisabled(_ context.Context) (bool, error) {
 	return false, nil
+}
+
+// ---- AccountSigner adapter --------------------------------------------------
+
+// onboardingAccountSignerAdapter implements coreonboarding.AccountSigner by
+// delegating to the fleet owned-login sign-in flow already shipped in
+// core/rpc/views/settings.
+//
+// INVARIANT: when Fleet is disabled or the settings API is nil, SignIn returns
+// a user-readable error (never a nil email) so the FSM can surface a clear
+// "sign-in unavailable" message to the user in the account step.
+// EventSkipAccount is always accepted regardless — the OSS-standalone path
+// must never be blocked.
+//
+// This adapter lives in core/rpc/onboarding_wiring.go because that package is
+// allowed to import core/fleet (it is NOT flagged by check-no-fleet-imports.sh,
+// which excludes core/rpc/onboarding_wiring.go explicitly as an allowlisted
+// bridge file). The core/onboarding and core/rpc/views/onboarding packages
+// remain fleet-free.
+type onboardingAccountSignerAdapter struct {
+	settingsAPI settings.SettingsAPI
+}
+
+// SignIn opens the fleet owned-login device-code flow and blocks until the
+// user completes or cancels authentication. Satisfies coreonboarding.AccountSigner.
+func (a onboardingAccountSignerAdapter) SignIn(ctx context.Context) (string, error) {
+	if a.settingsAPI == nil {
+		return "", errors.New("account sign-in unavailable: settings not initialised")
+	}
+	if fleet.Disabled() {
+		return "", errors.New("account sign-in unavailable: Fleet is disabled in this build (HARNESS_FLEET_DISABLED=1)")
+	}
+	id, err := a.settingsAPI.FleetSignIn(ctx)
+	if err != nil {
+		return "", err
+	}
+	return id.Email, nil
 }
 
 // ErrOnboardingNotWired is returned when the session manager is unavailable.

@@ -2751,6 +2751,36 @@ func (b *Bindings) Onboarding_ListStarters() ([]onboardingview.StarterSummary, e
 	return b.api.Onboarding().ListStarters(b.ctx())
 }
 
+// Onboarding_AcceptHandoffHint stores a non-authenticating hint from the Fleet
+// welcome page. Called on startup when a kameas:// deep-link or --onboarding-token
+// CLI flag is detected. Returns nil when fleet is disabled or the hint is empty.
+//
+// DEFERRED FLEET INTEGRATION (WP04): the Fleet welcome page is not yet deployed.
+// This binding accepts hints now so a future fleet update can call it without a
+// harness release.
+func (b *Bindings) Onboarding_AcceptHandoffHint(hint onboardingview.HandoffHint) error {
+	defer sentry.WrapBinding("Onboarding_AcceptHandoffHint")()
+	return b.api.Onboarding().AcceptHandoffHint(b.ctx(), hint)
+}
+
+// Onboarding_GetHandoffHint returns the most recently stored HandoffHint.
+// The account step reads this to pre-fill the email field.
+func (b *Bindings) Onboarding_GetHandoffHint() (onboardingview.HandoffHint, error) {
+	defer sentry.WrapBinding("Onboarding_GetHandoffHint")()
+	return b.api.Onboarding().GetHandoffHint(b.ctx())
+}
+
+// Onboarding_RecordProgress records a named onboarding step as complete.
+// The frontend calls this after each milestone so the Fleet shared checklist
+// can be kept in sync (best-effort; errors are non-fatal).
+//
+// DEFERRED FLEET INTEGRATION (WP07): the Fleet progress-mirror endpoint is not
+// yet deployed. Recording is local-only until the fleet side ships.
+func (b *Bindings) Onboarding_RecordProgress(step onboardingview.ProgressStep) error {
+	defer sentry.WrapBinding("Onboarding_RecordProgress")()
+	return b.api.Onboarding().RecordProgress(b.ctx(), step)
+}
+
 // ── elicit (ask-user-question-interactive-01KZNP3G, WP04) ─────────────
 
 // Elicit_SubmitAnswer resolves a pending ask-user-question elicitation.

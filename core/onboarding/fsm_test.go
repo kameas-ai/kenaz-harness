@@ -102,7 +102,7 @@ func TestTransitions(t *testing.T) {
 
 		// ── enter-api-key ─────────────────────────────────────────────────────
 		{
-			name:  "enter-api-key/submit-key success → done",
+			name:  "enter-api-key/submit-key success → account_step",
 			state: onboarding.StateEnterAPIKey,
 			event: onboarding.EventSubmitKey,
 			payload: submitKeyPayload("sk-ant-good"),
@@ -112,7 +112,7 @@ func TestTransitions(t *testing.T) {
 				return &c
 			},
 			tester:    &mockTester{results: []error{nil}},
-			wantState: onboarding.StateDone,
+			wantState: onboarding.StateAccountStep,
 		},
 		{
 			name:  "enter-api-key/submit-key failure → enter-api-key with error",
@@ -154,7 +154,7 @@ func TestTransitions(t *testing.T) {
 			wantErr: true,
 		},
 		{
-			name:  "enter-api-key/nil-tester success → done",
+			name:  "enter-api-key/nil-tester success → account_step",
 			state: onboarding.StateEnterAPIKey,
 			event: onboarding.EventSubmitKey,
 			payload: submitKeyPayload("any-key"),
@@ -164,7 +164,7 @@ func TestTransitions(t *testing.T) {
 				return &c
 			},
 			tester:    nil, // interface nil — FSM treats as "no tester, always pass"
-			wantState: onboarding.StateDone,
+			wantState: onboarding.StateAccountStep,
 		},
 		{
 			name:  "enter-api-key/unknown-event → error",
@@ -181,7 +181,7 @@ func TestTransitions(t *testing.T) {
 
 		// ── test-connection ───────────────────────────────────────────────────
 		{
-			name:  "test-connection/test-ok → done",
+			name:  "test-connection/test-ok → account_step",
 			state: onboarding.StateTestConnection,
 			event: onboarding.EventTestOK,
 			setupCtx: func() *onboarding.FSMContext {
@@ -189,7 +189,7 @@ func TestTransitions(t *testing.T) {
 				c.ChosenKind = onboarding.ProviderAnthropic
 				return &c
 			},
-			wantState: onboarding.StateDone,
+			wantState: onboarding.StateAccountStep,
 		},
 		{
 			name:  "test-connection/test-fail → enter-api-key",
@@ -221,6 +221,83 @@ func TestTransitions(t *testing.T) {
 			setupCtx: func() *onboarding.FSMContext {
 				c := onboarding.NewFSMContext()
 				c.ChosenKind = onboarding.ProviderAnthropic
+				return &c
+			},
+			wantErr: true,
+		},
+
+		// ── account_step (WP03) ──────────────────────────────────────────────
+		{
+			name:  "account_step/skip → guided_action (OSS-standalone invariant)",
+			state: onboarding.StateAccountStep,
+			event: onboarding.EventSkipAccount,
+			setupCtx: func() *onboarding.FSMContext {
+				c := onboarding.NewFSMContext()
+				c.ChosenKind = onboarding.ProviderAnthropic
+				return &c
+			},
+			wantState: onboarding.StateGuidedAction,
+		},
+		{
+			name:  "account_step/sign-in (nil signer) → guided_action",
+			state: onboarding.StateAccountStep,
+			event: onboarding.EventSignIn,
+			setupCtx: func() *onboarding.FSMContext {
+				c := onboarding.NewFSMContext()
+				c.ChosenKind = onboarding.ProviderAnthropic
+				return &c
+			},
+			wantState: onboarding.StateGuidedAction,
+		},
+		{
+			name:  "account_step/unknown-event → error",
+			state: onboarding.StateAccountStep,
+			event: onboarding.EventNext, // "next" is not valid in account_step
+			setupCtx: func() *onboarding.FSMContext {
+				c := onboarding.NewFSMContext()
+				c.ChosenKind = onboarding.ProviderAnthropic
+				return &c
+			},
+			wantErr: true,
+		},
+
+		// ── guided_action (WP06) ─────────────────────────────────────────────
+		{
+			name:  "guided_action/start-new-chat → done",
+			state: onboarding.StateGuidedAction,
+			event: onboarding.EventStartNewChat,
+			setupCtx: func() *onboarding.FSMContext {
+				c := onboarding.NewFSMContext()
+				return &c
+			},
+			wantState: onboarding.StateDone,
+		},
+		{
+			name:  "guided_action/open-settings → done",
+			state: onboarding.StateGuidedAction,
+			event: onboarding.EventOpenSettings,
+			setupCtx: func() *onboarding.FSMContext {
+				c := onboarding.NewFSMContext()
+				return &c
+			},
+			wantState: onboarding.StateDone,
+		},
+		{
+			name:  "guided_action/finish → done",
+			state: onboarding.StateGuidedAction,
+			event: onboarding.EventFinish,
+			setupCtx: func() *onboarding.FSMContext {
+				c := onboarding.NewFSMContext()
+				return &c
+			},
+			wantState: onboarding.StateDone,
+		},
+		{
+			name:  "guided_action/unknown-event → error",
+			state: onboarding.StateGuidedAction,
+			event: onboarding.EventBack,
+			setupCtx: func() *onboarding.FSMContext {
+				c := onboarding.NewFSMContext()
 				return &c
 			},
 			wantErr: true,
@@ -349,12 +426,13 @@ func TestRetryCounter(t *testing.T) {
 	}
 
 	// After 3 failures the user can still try with a corrected key and succeed.
+	// The FSM now routes through account_step (WP03) rather than directly to done.
 	r4, err := fsm.Step(ctx, onboarding.StateEnterAPIKey, onboarding.EventSubmitKey, goodPayload, &fsmCtx)
 	if err != nil {
 		t.Fatalf("attempt 4 (success): unexpected error: %v", err)
 	}
-	if r4.State != onboarding.StateDone {
-		t.Errorf("attempt 4: state = %q, want %q", r4.State, onboarding.StateDone)
+	if r4.State != onboarding.StateAccountStep {
+		t.Errorf("attempt 4: state = %q, want %q", r4.State, onboarding.StateAccountStep)
 	}
 	if r4.Card.ErrorMessage != "" {
 		t.Errorf("attempt 4: card.ErrorMessage should be empty, got %q", r4.Card.ErrorMessage)
@@ -381,6 +459,8 @@ func TestInitialCard(t *testing.T) {
 }
 
 // TestHappyPath exercises the canonical end-to-end flow.
+// Updated for harness-onboarding-01NHON01 WP03/WP06: the FSM now routes
+// through account_step (optional) and guided_action before reaching done.
 func TestHappyPath(t *testing.T) {
 	ctx := context.Background()
 	tester := &mockTester{results: []error{nil}}
@@ -399,13 +479,45 @@ func TestHappyPath(t *testing.T) {
 		t.Errorf("ChosenKind = %q, want %q", fsmCtx.ChosenKind, onboarding.ProviderOpenAI)
 	}
 
-	// enter-api-key → done
+	// enter-api-key → account_step (provider configured successfully)
 	r, err = fsm.Step(ctx, onboarding.StateEnterAPIKey, onboarding.EventSubmitKey, submitKeyPayload("sk-goodkey"), &fsmCtx)
-	requireOK(t, "enter/submit", err, r, onboarding.StateDone)
+	requireOK(t, "enter/submit", err, r, onboarding.StateAccountStep)
 
-	// done → done (finish)
+	// account_step → guided_action (skip account — OSS-standalone path)
+	r, err = fsm.Step(ctx, onboarding.StateAccountStep, onboarding.EventSkipAccount, nil, &fsmCtx)
+	requireOK(t, "account/skip", err, r, onboarding.StateGuidedAction)
+
+	// guided_action → done (user chooses to start a new conversation)
+	r, err = fsm.Step(ctx, onboarding.StateGuidedAction, onboarding.EventStartNewChat, nil, &fsmCtx)
+	requireOK(t, "guided/start-new-chat", err, r, onboarding.StateDone)
+
+	// done → done (finish — terminal no-op)
 	r, err = fsm.Step(ctx, onboarding.StateDone, onboarding.EventFinish, nil, &fsmCtx)
 	requireOK(t, "done/finish", err, r, onboarding.StateDone)
+}
+
+// TestHappyPathSignIn exercises the full flow with a successful sign-in
+// in the account step.
+func TestHappyPathSignIn(t *testing.T) {
+	ctx := context.Background()
+	tester := &mockTester{results: []error{nil}}
+	fsm := onboarding.New(tester)
+
+	fsmCtx := onboarding.NewFSMContext()
+	fsmCtx.ChosenKind = onboarding.ProviderAnthropic
+
+	// enter-api-key → account_step
+	r, err := fsm.Step(ctx, onboarding.StateEnterAPIKey, onboarding.EventSubmitKey, submitKeyPayload("sk-good"), &fsmCtx)
+	requireOK(t, "enter/submit", err, r, onboarding.StateAccountStep)
+
+	// account_step + sign_in: nil signer gracefully degrades to guided_action.
+	// (Production wires a real signer via AccountSigner interface.)
+	r, err = fsm.Step(ctx, onboarding.StateAccountStep, onboarding.EventSignIn, nil, &fsmCtx)
+	requireOK(t, "account/sign_in (nil signer)", err, r, onboarding.StateGuidedAction)
+
+	// guided_action → done (open settings CTA)
+	r, err = fsm.Step(ctx, onboarding.StateGuidedAction, onboarding.EventOpenSettings, nil, &fsmCtx)
+	requireOK(t, "guided/open-settings", err, r, onboarding.StateDone)
 }
 
 // TestBackNavigation verifies that back events unwind correctly.

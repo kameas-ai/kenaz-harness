@@ -802,6 +802,10 @@ export function Nodes_ReloadOverrides() {
   return window['go']['rpc']['Bindings']['Nodes_ReloadOverrides']();
 }
 
+export function Onboarding_AcceptHandoffHint(arg1) {
+  return window['go']['rpc']['Bindings']['Onboarding_AcceptHandoffHint'](arg1);
+}
+
 export function Onboarding_Begin() {
   return window['go']['rpc']['Bindings']['Onboarding_Begin']();
 }
@@ -810,8 +814,16 @@ export function Onboarding_Dismiss() {
   return window['go']['rpc']['Bindings']['Onboarding_Dismiss']();
 }
 
+export function Onboarding_GetHandoffHint() {
+  return window['go']['rpc']['Bindings']['Onboarding_GetHandoffHint']();
+}
+
 export function Onboarding_ListStarters() {
   return window['go']['rpc']['Bindings']['Onboarding_ListStarters']();
+}
+
+export function Onboarding_RecordProgress(arg1) {
+  return window['go']['rpc']['Bindings']['Onboarding_RecordProgress'](arg1);
 }
 
 export function Onboarding_RestartPhase2(arg1) {

@@ -18,7 +18,15 @@ const (
 	StateEnterAPIKey State = "enter_api_key"
 	// StateTestConnection is an in-flight state while the key is being verified.
 	StateTestConnection State = "test_connection"
-	// StateDone is the terminal state after a successful connection test.
+	// StateAccountStep is the optional account/federation-switch step (WP03).
+	// Always skippable — OSS-standalone users press "Continue without account".
+	// INVARIANT: the account step is ALWAYS skippable; the harness must be
+	// fully usable with no Fleet account (FR-003, NFR OSS-standalone).
+	StateAccountStep State = "account_step"
+	// StateGuidedAction is the final step that concludes onboarding on a
+	// concrete first task rather than a dead confirmation screen (FR-007 WP06).
+	StateGuidedAction State = "guided_action"
+	// StateDone is the terminal state after the full onboarding flow completes.
 	StateDone State = "done"
 )
 
@@ -26,12 +34,13 @@ const (
 type Event string
 
 const (
-	// EventNext advances from welcome → pick-provider-kind.
+	// EventNext advances from welcome → pick-provider-kind, and from
+	// account_done / guided_action to the next step.
 	EventNext Event = "next"
 	// EventBack goes back one step (test-connection → enter-api-key, or
 	// enter-api-key → pick-provider-kind).
 	EventBack Event = "back"
-	// EventFinish is the terminal action from the done state.
+	// EventFinish is the terminal action from the done / guided_action state.
 	EventFinish Event = "finish"
 	// EventSubmitKey transitions enter-api-key → test-connection and
 	// triggers the LLMTester call.
@@ -43,6 +52,19 @@ const (
 	// decrements the retry counter and either loops back to enter-api-key
 	// or surfaces a hard failure card.
 	EventTestFail Event = "test_fail"
+
+	// EventSignIn triggers the owned-login sign-in flow from account_step.
+	// The FSM delegates to AccountSigner; on success transitions to guided_action.
+	EventSignIn Event = "sign_in"
+	// EventSkipAccount skips the account step without signing in.
+	// OSS-standalone path — the harness is fully usable without an account.
+	// INVARIANT: this event must always be accepted in StateAccountStep.
+	EventSkipAccount Event = "skip_account"
+
+	// EventStartNewChat is the "start a new conversation" CTA from guided_action.
+	EventStartNewChat Event = "start_new_chat"
+	// EventOpenSettings is the "explore settings" CTA from guided_action.
+	EventOpenSettings Event = "open_settings"
 )
 
 const (
@@ -63,6 +85,27 @@ const (
 // failure (auth failure, network error, quota exceeded, etc.).
 type LLMTester interface {
 	TestProvider(ctx context.Context, kind ProviderKind, apiKey string) error
+}
+
+// AccountSigner drives the optional owned-login sign-in flow (WP03).
+// In production it is satisfied by a thin wrapper over the fleet auth
+// surface in core/rpc/views/settings (already allowlisted for fleet
+// imports). The FSM calls SignIn in the account_step state.
+//
+// SEAM: this interface is the fleet integration point for the account step.
+// Packages that must remain fleet-free implement a no-op or a stub that
+// always returns ErrAccountNotConfigured. The interface itself carries no
+// fleet import — the production binding lives in core/rpc/onboarding_wiring.go
+// which IS allowlisted for fleet imports.
+//
+// INVARIANT: a nil AccountSigner means fleet is absent. The FSM treats this
+// as "sign-in unavailable" — EventSignIn returns to guided_action with a
+// descriptive error; EventSkipAccount still succeeds (OSS-standalone path).
+type AccountSigner interface {
+	// SignIn opens the owned-login browser flow and blocks until the user
+	// completes or cancels authentication. On success returns a non-empty
+	// email. On cancellation or error returns a non-nil error.
+	SignIn(ctx context.Context) (email string, err error)
 }
 
 // SessionKindTransitioner transitions a session's Kind when the onboarding
@@ -91,6 +134,15 @@ type FSMContext struct {
 	// transitions its Kind from "onboarding" → "chat" on terminal state
 	// via the configured SessionKindTransitioner (WP09).
 	SessionID string
+
+	// ── Account step fields (WP03) ─────────────────────────────────────────
+	//
+	// SignedIn is true after a successful sign-in in account_step. Used by
+	// the guided_action step to surface context-bootstrap hints for Team+.
+	SignedIn bool
+	// SignedInEmail is the email address returned by the sign-in flow.
+	// Empty when signed out or when sign-in was skipped.
+	SignedInEmail string
 }
 
 // NewFSMContext returns a fresh FSMContext with all retry budget available.
@@ -107,8 +159,12 @@ type StepResult struct {
 // FSM is the onboarding finite-state machine. It is stateless: all mutable
 // data lives in FSMContext, which the caller holds across requests.
 type FSM struct {
-	tester      LLMTester
+	tester       LLMTester
 	transitioner SessionKindTransitioner
+	// signer drives the optional account/sign-in step (WP03).
+	// nil means fleet is absent — EventSignIn is unavailable; EventSkipAccount
+	// still succeeds so the OSS-standalone path is always reachable.
+	signer AccountSigner
 }
 
 // New constructs an FSM. tester may be nil, in which case the
@@ -123,6 +179,14 @@ func New(tester LLMTester) *FSM {
 // be nil — the FSM then skips the kind transition (backwards-compatible).
 func NewWithTransitioner(tester LLMTester, transitioner SessionKindTransitioner) *FSM {
 	return &FSM{tester: tester, transitioner: transitioner}
+}
+
+// NewFull constructs an FSM with the full production dependency set for the
+// extended onboarding flow (harness-onboarding-01NHON01). Any argument may
+// be nil; nil dependencies cause the corresponding step to degrade gracefully
+// rather than hard-failing.
+func NewFull(tester LLMTester, transitioner SessionKindTransitioner, signer AccountSigner) *FSM {
+	return &FSM{tester: tester, transitioner: transitioner, signer: signer}
 }
 
 // InitialCard returns the card for the initial state without consuming an event.
@@ -161,6 +225,10 @@ func (f *FSM) Step(
 		return f.stepEnterAPIKey(ctx, event, payload, fsmCtx)
 	case StateTestConnection:
 		return f.stepTestConnection(event, fsmCtx)
+	case StateAccountStep:
+		return f.stepAccountStep(ctx, event, fsmCtx)
+	case StateGuidedAction:
+		return f.stepGuidedAction(ctx, event, fsmCtx)
 	case StateDone:
 		return f.stepDone(ctx, event, fsmCtx)
 	default:
@@ -242,12 +310,13 @@ func (f *FSM) stepEnterAPIKey(
 
 		if testErr == nil {
 			// Success — clear the key (it will be stored by the caller) and
-			// advance to done.
+			// advance to the account step so the user can optionally sign in
+			// to Fleet before the guided action concludes onboarding (WP03).
 			fsmCtx.LastError = ""
 			fsmCtx.RetriesLeft = MaxRetries
 			return StepResult{
-				State: StateDone,
-				Card:  renderDone(fsmCtx.ChosenKind),
+				State: StateAccountStep,
+				Card:  renderAccountStep(),
 			}, nil
 		}
 
@@ -279,8 +348,8 @@ func (f *FSM) stepTestConnection(event Event, fsmCtx *FSMContext) (StepResult, e
 	case EventTestOK:
 		fsmCtx.LastError = ""
 		return StepResult{
-			State: StateDone,
-			Card:  renderDone(fsmCtx.ChosenKind),
+			State: StateAccountStep,
+			Card:  renderAccountStep(),
 		}, nil
 	case EventTestFail:
 		if fsmCtx.RetriesLeft > 0 {
@@ -302,15 +371,16 @@ func (f *FSM) stepTestConnection(event Event, fsmCtx *FSMContext) (StepResult, e
 
 // stepDone handles transitions from the done state.
 //
-// On EventFinish the FSM performs the phase-2 handoff (WP09): if a
-// SessionKindTransitioner is configured and FSMContext.SessionID is set,
-// the session's Kind is transitioned from "onboarding" → "chat" so
-// Cedar write-tool policies no longer apply. The transition error is
-// non-fatal — the card is returned regardless.
+// StateDone is terminal — no further transitions are supported. The caller
+// closes the flow when it receives StateDone from stepGuidedAction.
+// This handler exists for legacy callers that send EventFinish directly
+// to StateDone (e.g. test fixtures that bypassed the guided_action step).
 func (f *FSM) stepDone(ctx context.Context, event Event, fsmCtx *FSMContext) (StepResult, error) {
 	switch event {
 	case EventFinish:
 		// Phase-2 handoff: transition session kind onboarding → chat.
+		// Also fires here for legacy callers that land on done before
+		// guided_action was introduced.
 		if f.transitioner != nil && fsmCtx.SessionID != "" {
 			// Non-fatal: a DB error here should not abort the UX flow.
 			_ = f.transitioner.SetKind(ctx, fsmCtx.SessionID, "chat")
@@ -322,6 +392,91 @@ func (f *FSM) stepDone(ctx context.Context, event Event, fsmCtx *FSMContext) (St
 		}, nil
 	default:
 		return StepResult{}, unsupportedEvent(StateDone, event)
+	}
+}
+
+// stepAccountStep handles transitions from the account_step state (WP03).
+//
+// INVARIANT: EventSkipAccount MUST always succeed in this state regardless of
+// whether a signer is configured. The OSS-standalone path depends on it.
+//
+// On EventSignIn with a nil signer the FSM advances directly to guided_action
+// with a note that sign-in is unavailable rather than returning an error —
+// this prevents the account step from becoming a hard blocker on fleet-free
+// builds.
+func (f *FSM) stepAccountStep(ctx context.Context, event Event, fsmCtx *FSMContext) (StepResult, error) {
+	switch event {
+	case EventSkipAccount:
+		// OSS-standalone path — always allowed (INVARIANT).
+		fsmCtx.SignedIn = false
+		fsmCtx.SignedInEmail = ""
+		return StepResult{
+			State: StateGuidedAction,
+			Card:  renderGuidedAction(),
+		}, nil
+
+	case EventSignIn:
+		// SEAM: fleet integration point — deferred to production AccountSigner.
+		// When signer is nil (fleet absent / OSS build), degrade to guided_action.
+		if f.signer == nil {
+			// Fleet is not configured — treat as skip (graceful degradation).
+			// Do NOT return an error: the dialog must still advance.
+			fsmCtx.SignedIn = false
+			return StepResult{
+				State: StateGuidedAction,
+				Card:  renderGuidedAction(),
+			}, nil
+		}
+		email, err := f.signer.SignIn(ctx)
+		if err != nil {
+			// Sign-in failed or was cancelled — stay in account_step with the
+			// error surfaced so the user can retry or skip.
+			return StepResult{
+				State: StateAccountStep,
+				Card: Card{
+					Title:        renderAccountStep().Title,
+					Body:         renderAccountStep().Body,
+					Actions:      renderAccountStep().Actions,
+					ErrorMessage: fmt.Sprintf("Sign-in failed: %v", err),
+				},
+			}, nil
+		}
+		fsmCtx.SignedIn = true
+		fsmCtx.SignedInEmail = email
+		return StepResult{
+			State: StateGuidedAction,
+			Card:  renderGuidedAction(),
+		}, nil
+
+	case EventBack:
+		// Allow going back to provider setup if the user wants to change it.
+		return StepResult{
+			State: StatePickProviderKind,
+			Card:  renderPickProviderKind(),
+		}, nil
+
+	default:
+		return StepResult{}, unsupportedEvent(StateAccountStep, event)
+	}
+}
+
+// stepGuidedAction handles transitions from the guided_action state (WP06).
+// This step concludes onboarding on a concrete first task (FR-007).
+func (f *FSM) stepGuidedAction(ctx context.Context, event Event, fsmCtx *FSMContext) (StepResult, error) {
+	switch event {
+	case EventStartNewChat, EventOpenSettings, EventFinish:
+		// All three CTAs from the guided-action card conclude the flow.
+		// Phase-2 handoff: transition session kind onboarding → chat.
+		if f.transitioner != nil && fsmCtx.SessionID != "" {
+			// Non-fatal: a DB error here should not abort the UX flow.
+			_ = f.transitioner.SetKind(ctx, fsmCtx.SessionID, "chat")
+		}
+		return StepResult{
+			State: StateDone,
+			Card:  renderDone(fsmCtx.ChosenKind),
+		}, nil
+	default:
+		return StepResult{}, unsupportedEvent(StateGuidedAction, event)
 	}
 }
 

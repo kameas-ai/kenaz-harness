@@ -522,6 +522,15 @@ type Settings struct {
 	// and sets this to true after the user dismisses it.
 	// (fleet-otel-archival-01NDFSEX11 WP06)
 	HasSeenFleetTelemetryOnboarding bool `json:"hasSeenFleetTelemetryOnboarding,omitempty"`
+
+	// FirstRunOnboardingCompleted records whether the first-run onboarding
+	// flow (harness-onboarding-01NHON01) has been completed or explicitly
+	// dismissed by the user. When false (default) the harness shows the
+	// full onboarding flow on first launch after at least one provider is
+	// configured, or immediately when no providers are configured.
+	// Persisted so the onboarding dialog does not re-show on relaunch.
+	// (harness-onboarding-01NHON01 WP01)
+	FirstRunOnboardingCompleted bool `json:"firstRunOnboardingCompleted,omitempty"`
 }
 
 // ProviderProfileRef is the wire shape that identifies a provider+model
@@ -1120,6 +1129,15 @@ type SettingsStore interface {
 	// toggle in Settings → Models hides when keychainRotationEnabled = false.
 	LoadAutoResumeOnKeyRotation() (bool, error)
 	SaveAutoResumeOnKeyRotation(enabled bool) error
+
+	// LoadFirstRunOnboardingCompleted / SaveFirstRunOnboardingCompleted expose
+	// the first-run onboarding completion flag (harness-onboarding-01NHON01
+	// WP01). Default false (= show onboarding) on a fresh install. Persisted
+	// so quit/relaunch resumes without re-showing the completed flow. The
+	// onboarding view reads and writes this; the value is also carried in the
+	// full Settings round-trip via FirstRunOnboardingCompleted.
+	LoadFirstRunOnboardingCompleted() (bool, error)
+	SaveFirstRunOnboardingCompleted(completed bool) error
 }
 
 // SettingsAPI is the view-scoped accessor exposed via HarnessAPI.

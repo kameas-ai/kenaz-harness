@@ -118,3 +118,170 @@ func TestFirstRunDetector_NoProviders(t *testing.T) {
 		t.Errorf("expected first-run true with empty inputs")
 	}
 }
+
+// stubSigner is a test AccountSigner.
+type stubSigner struct {
+	email string
+	err   error
+}
+
+func (s *stubSigner) SignIn(_ context.Context) (string, error) { return s.email, s.err }
+
+// TestAPI_SignerWiredThroughConfig verifies that a Signer set in Config is
+// passed to the FSM so EventSignIn succeeds when a real signer is configured.
+// This covers review Blocker 3: the AccountSigner must reach the FSM.
+func TestAPI_SignerWiredThroughConfig(t *testing.T) {
+	t.Parallel()
+	signer := &stubSigner{email: "user@example.com"}
+	api := New(Config{Signer: signer})
+
+	// Walk to account_step via the normal FSM path.
+	ctx := context.Background()
+	begin, err := api.Begin(ctx)
+	if err != nil {
+		t.Fatalf("Begin: %v", err)
+	}
+
+	// Advance: welcome → pick_provider_kind.
+	sr, err := api.Step(ctx, StepRequest{State: begin.State, Event: string(coreonboarding.EventNext)})
+	if err != nil {
+		t.Fatalf("Step welcome→pick: %v", err)
+	}
+	// pick_provider_kind → enter_api_key (event IS the provider kind string).
+	sr, err = api.Step(ctx, StepRequest{
+		State: sr.State,
+		Event: string(coreonboarding.ProviderAnthropic),
+	})
+	if err != nil {
+		t.Fatalf("Step pick→enter: %v", err)
+	}
+	// enter_api_key → test_connection (submit key).
+	sr, err = api.Step(ctx, StepRequest{
+		State:   sr.State,
+		Event:   string(coreonboarding.EventSubmitKey),
+		Payload: map[string]string{"api_key": "sk-ant-test"},
+	})
+	if err != nil {
+		t.Fatalf("Step enter→test: %v", err)
+	}
+	// test_connection → account_step (when tester is nil, connection always succeeds).
+	if sr.State != string(coreonboarding.StateAccountStep) {
+		t.Fatalf("expected account_step after test_connection, got %q", sr.State)
+	}
+
+	// Now fire EventSignIn — with the real signer wired this must succeed
+	// and advance to guided_action (Blocker 3: sign-in must NOT be a no-op).
+	sr, err = api.Step(ctx, StepRequest{
+		State: sr.State,
+		Event: string(coreonboarding.EventSignIn),
+	})
+	if err != nil {
+		t.Fatalf("Step sign_in: %v", err)
+	}
+	if sr.State != string(coreonboarding.StateGuidedAction) {
+		t.Errorf("expected guided_action after sign_in, got %q", sr.State)
+	}
+	// Verify fsmCtx was updated (signedIn must be true).
+	state, err := api.State(ctx)
+	if err != nil {
+		t.Fatalf("State: %v", err)
+	}
+	if !state.SignedIn {
+		t.Errorf("SignedIn = false after successful sign-in, want true")
+	}
+}
+
+// TestAPI_NilSignerDegrades verifies that when no signer is configured,
+// EventSignIn degrades gracefully to guided_action WITHOUT returning an error
+// and WITHOUT a silent no-op — the card must contain a message that the
+// account step completed (degraded). This is the OSS-standalone path.
+func TestAPI_NilSignerDegrades(t *testing.T) {
+	t.Parallel()
+	// No signer in Config — nil FSM will be built with NewFull(nil, nil, nil).
+	api := New(Config{})
+
+	ctx := context.Background()
+	begin, err := api.Begin(ctx)
+	if err != nil {
+		t.Fatalf("Begin: %v", err)
+	}
+	sr, err := api.Step(ctx, StepRequest{State: begin.State, Event: string(coreonboarding.EventNext)})
+	if err != nil {
+		t.Fatalf("Step welcome→pick: %v", err)
+	}
+	sr, err = api.Step(ctx, StepRequest{
+		State: sr.State,
+		Event: string(coreonboarding.ProviderAnthropic),
+	})
+	if err != nil {
+		t.Fatalf("Step pick→enter: %v", err)
+	}
+	sr, err = api.Step(ctx, StepRequest{
+		State:   sr.State,
+		Event:   string(coreonboarding.EventSubmitKey),
+		Payload: map[string]string{"api_key": "sk-ant-test"},
+	})
+	if err != nil {
+		t.Fatalf("Step enter→test: %v", err)
+	}
+	if sr.State != string(coreonboarding.StateAccountStep) {
+		t.Fatalf("expected account_step, got %q", sr.State)
+	}
+
+	// EventSignIn with nil signer must NOT return an error and must NOT
+	// stay stuck — the FSM degrades to guided_action (graceful downgrade).
+	sr, err = api.Step(ctx, StepRequest{
+		State: sr.State,
+		Event: string(coreonboarding.EventSignIn),
+	})
+	if err != nil {
+		t.Fatalf("EventSignIn with nil signer returned unexpected error: %v", err)
+	}
+	if sr.State != string(coreonboarding.StateGuidedAction) {
+		t.Errorf("expected guided_action (graceful degrade), got %q", sr.State)
+	}
+}
+
+// TestAPI_AccountStepAlwaysSkippable verifies the OSS-standalone invariant:
+// EventSkipAccount must succeed regardless of whether a signer is configured.
+func TestAPI_AccountStepAlwaysSkippable(t *testing.T) {
+	t.Parallel()
+	// Test both with and without signer.
+	for _, tc := range []struct {
+		name   string
+		signer coreonboarding.AccountSigner
+	}{
+		{"with_signer", &stubSigner{email: "u@example.com"}},
+		{"without_signer", nil},
+	} {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			api := New(Config{Signer: tc.signer})
+			ctx := context.Background()
+			begin, _ := api.Begin(ctx)
+			sr, _ := api.Step(ctx, StepRequest{State: begin.State, Event: string(coreonboarding.EventNext)})
+			sr, _ = api.Step(ctx, StepRequest{
+				State: sr.State, Event: string(coreonboarding.ProviderAnthropic),
+			})
+			sr, _ = api.Step(ctx, StepRequest{
+				State: sr.State, Event: string(coreonboarding.EventSubmitKey),
+				Payload: map[string]string{"api_key": "sk-ant-test"},
+			})
+			if sr.State != string(coreonboarding.StateAccountStep) {
+				t.Fatalf("expected account_step, got %q", sr.State)
+			}
+			// Skip must always work.
+			sr, err := api.Step(ctx, StepRequest{
+				State: sr.State,
+				Event: string(coreonboarding.EventSkipAccount),
+			})
+			if err != nil {
+				t.Fatalf("EventSkipAccount returned error: %v", err)
+			}
+			if sr.State != string(coreonboarding.StateGuidedAction) {
+				t.Errorf("expected guided_action after skip, got %q", sr.State)
+			}
+		})
+	}
+}

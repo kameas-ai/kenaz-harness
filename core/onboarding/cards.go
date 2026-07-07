@@ -151,6 +151,58 @@ func renderDone(kind ProviderKind) Card {
 	}
 }
 
+// renderAccountStep returns the Card for the optional account/sign-in step.
+// This step is always skippable (OSS-standalone must work with no account).
+// When signed in, Fleet capabilities are fetched and Fleet-connected steps unlock.
+func renderAccountStep() Card {
+	return Card{
+		Title: "Connect your account (optional)",
+		Body:  "Sign in to unlock team features: context sync, shared policies, and fleet context bootstrap. Kenaz works fully without an account — you can always sign in later from Settings.",
+		Actions: []Action{
+			{ID: string(EventSignIn), Label: "Sign in / create account", Primary: true},
+			{ID: string(EventSkipAccount), Label: "Continue without account"},
+		},
+	}
+}
+
+// renderAccountSigningIn returns the Card shown while the sign-in flow is running.
+func renderAccountSigningIn() Card {
+	return Card{
+		Title: "Opening sign-in…",
+		Body:  "A browser window will open for sign-in. Return here when done.",
+	}
+}
+
+// renderAccountDone returns the Card shown after a successful sign-in.
+func renderAccountDone(email string) Card {
+	body := "You are signed in and your account is connected."
+	if email != "" {
+		body = "Signed in as " + email + ". Your account is connected."
+	}
+	return Card{
+		Title: "Account connected",
+		Body:  body,
+		Actions: []Action{
+			{ID: string(EventNext), Label: "Continue", Primary: true},
+		},
+	}
+}
+
+// renderGuidedAction returns the Card for the first-guided-action step.
+// This concludes onboarding on a concrete, useful first task rather than
+// a dead confirmation screen (FR-007).
+func renderGuidedAction() Card {
+	return Card{
+		Title: "Ready — what would you like to do?",
+		Body:  "Kenaz is ready. Try asking it something — describe a project, ask for help with code, or start a new conversation. You can also explore Settings to configure tools, context, and more.",
+		Actions: []Action{
+			{ID: string(EventStartNewChat), Label: "Start a new conversation", Primary: true},
+			{ID: string(EventOpenSettings), Label: "Explore settings"},
+			{ID: string(EventFinish), Label: "Close"},
+		},
+	}
+}
+
 // providerLabel returns a human-readable display name for a ProviderKind.
 func providerLabel(k ProviderKind) string {
 	switch k {
