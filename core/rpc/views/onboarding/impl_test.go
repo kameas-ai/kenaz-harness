@@ -2,7 +2,9 @@ package onboarding
 
 import (
 	"context"
+	"sync"
 	"testing"
+	"time"
 
 	harnessmcp "github.com/kameas-ai/kenaz-harness/core/mcp/builtin/harness"
 	coreonboarding "github.com/kameas-ai/kenaz-harness/core/onboarding"
@@ -239,6 +241,212 @@ func TestAPI_NilSignerDegrades(t *testing.T) {
 	}
 	if sr.State != string(coreonboarding.StateGuidedAction) {
 		t.Errorf("expected guided_action (graceful degrade), got %q", sr.State)
+	}
+}
+
+// ── 01NWEL01 seam tests ───────────────────────────────────────────────────────
+
+// fakeProgressSyncer captures SyncProgress calls for inspection.
+type fakeProgressSyncer struct {
+	mu    sync.Mutex
+	calls []struct {
+		step     ProgressStep
+		signedIn bool
+	}
+}
+
+func (f *fakeProgressSyncer) SyncProgress(_ context.Context, step ProgressStep, signedIn bool) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = append(f.calls, struct {
+		step     ProgressStep
+		signedIn bool
+	}{step, signedIn})
+	return nil
+}
+
+func (f *fakeProgressSyncer) snapshot() []struct {
+	step     ProgressStep
+	signedIn bool
+} {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]struct {
+		step     ProgressStep
+		signedIn bool
+	}, len(f.calls))
+	copy(out, f.calls)
+	return out
+}
+
+// fakeFleetStateReader returns a configurable FleetOnboardingHint.
+type fakeFleetStateReader struct {
+	hint FleetOnboardingHint
+	err  error
+}
+
+func (f *fakeFleetStateReader) ReadFleetState(_ context.Context) (FleetOnboardingHint, error) {
+	return f.hint, f.err
+}
+
+// TestAPI_RecordProgress_SyncerCalledWhenSignedIn verifies that RecordProgress
+// calls SyncProgress when the user is signed in.
+func TestAPI_RecordProgress_SyncerCalledWhenSignedIn(t *testing.T) {
+	t.Parallel()
+	syncer := &fakeProgressSyncer{}
+	signer := &stubSigner{email: "u@example.com"}
+	api := New(Config{
+		Signer:         signer,
+		ProgressSyncer: syncer,
+	})
+
+	ctx := context.Background()
+	// Walk FSM to guided_action via sign-in (sets signedIn=true in fsmCtx).
+	begin, _ := api.Begin(ctx)
+	sr, _ := api.Step(ctx, StepRequest{State: begin.State, Event: string(coreonboarding.EventNext)})
+	sr, _ = api.Step(ctx, StepRequest{State: sr.State, Event: string(coreonboarding.ProviderAnthropic)})
+	sr, _ = api.Step(ctx, StepRequest{
+		State: sr.State, Event: string(coreonboarding.EventSubmitKey),
+		Payload: map[string]string{"api_key": "sk-ant-test"},
+	})
+	// account_step → guided_action via sign-in.
+	sr, err := api.Step(ctx, StepRequest{State: sr.State, Event: string(coreonboarding.EventSignIn)})
+	if err != nil {
+		t.Fatalf("sign-in step: %v", err)
+	}
+	if sr.State != string(coreonboarding.StateGuidedAction) {
+		t.Fatalf("expected guided_action, got %q", sr.State)
+	}
+
+	// RecordProgress should have called SyncProgress for account_connected
+	// (fired internally by Step when entering guided_action while signedIn).
+	// Allow brief settling time for any goroutines (though SyncProgress is sync in the fake).
+	time.Sleep(10 * time.Millisecond)
+	calls := syncer.snapshot()
+	found := false
+	for _, c := range calls {
+		if c.step == ProgressStepAccountConnected && c.signedIn {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected SyncProgress(account_connected, signedIn=true); got calls: %+v", calls)
+	}
+}
+
+// TestAPI_RecordProgress_SyncerNotCalledWhenNotSignedIn verifies that
+// RecordProgress still calls SyncProgress but passes signedIn=false when the
+// user has not signed in (OSS path). The adapter is responsible for the no-op.
+func TestAPI_RecordProgress_SyncerNotCalledWhenNotSignedIn(t *testing.T) {
+	t.Parallel()
+	syncer := &fakeProgressSyncer{}
+	api := New(Config{
+		Signer:         nil, // OSS path: no signer
+		ProgressSyncer: syncer,
+	})
+
+	ctx := context.Background()
+	begin, _ := api.Begin(ctx)
+	sr, _ := api.Step(ctx, StepRequest{State: begin.State, Event: string(coreonboarding.EventNext)})
+	sr, _ = api.Step(ctx, StepRequest{State: sr.State, Event: string(coreonboarding.ProviderAnthropic)})
+	sr, _ = api.Step(ctx, StepRequest{
+		State: sr.State, Event: string(coreonboarding.EventSubmitKey),
+		Payload: map[string]string{"api_key": "sk-ant-test"},
+	})
+	// account_step — RecordProgress(provider_configured) fires here.
+	if sr.State != string(coreonboarding.StateAccountStep) {
+		t.Fatalf("expected account_step, got %q", sr.State)
+	}
+
+	time.Sleep(10 * time.Millisecond)
+	calls := syncer.snapshot()
+	// provider_configured should be in calls with signedIn=false.
+	for _, c := range calls {
+		if c.step == ProgressStepProviderConfigured && c.signedIn {
+			t.Errorf("SyncProgress called with signedIn=true before sign-in")
+		}
+	}
+}
+
+// TestAPI_RecordProgress_NilSyncerIsSafe verifies that a nil ProgressSyncer
+// does not panic (the adapter may be nil in OSS builds / tests).
+func TestAPI_RecordProgress_NilSyncerIsSafe(t *testing.T) {
+	t.Parallel()
+	api := New(Config{}) // no ProgressSyncer
+	ctx := context.Background()
+	if err := api.RecordProgress(ctx, ProgressStepProviderConfigured); err != nil {
+		t.Errorf("RecordProgress with nil syncer returned error: %v", err)
+	}
+}
+
+// TestAPI_Begin_FleetStateReaderWarmStart verifies that when a FleetStateReader
+// is wired and returns AlreadyConnected=true, Begin stores a synthetic handoff
+// hint with source="fleet_state".
+func TestAPI_Begin_FleetStateReaderWarmStart(t *testing.T) {
+	t.Parallel()
+	reader := &fakeFleetStateReader{
+		hint: FleetOnboardingHint{AlreadyConnected: true},
+	}
+	api := New(Config{FleetStateReader: reader})
+
+	ctx := context.Background()
+	_, err := api.Begin(ctx)
+	if err != nil {
+		t.Fatalf("Begin: %v", err)
+	}
+
+	hint, err := api.GetHandoffHint(ctx)
+	if err != nil {
+		t.Fatalf("GetHandoffHint: %v", err)
+	}
+	if hint.Source != "fleet_state" {
+		t.Errorf("hint.Source = %q, want fleet_state", hint.Source)
+	}
+}
+
+// TestAPI_Begin_FleetStateReaderErrorIsSafe verifies that a FleetStateReader
+// error does not cause Begin to fail — fleet errors are logged and swallowed.
+func TestAPI_Begin_FleetStateReaderErrorIsSafe(t *testing.T) {
+	t.Parallel()
+	reader := &fakeFleetStateReader{err: context.DeadlineExceeded}
+	api := New(Config{FleetStateReader: reader})
+
+	ctx := context.Background()
+	resp, err := api.Begin(ctx)
+	if err != nil {
+		t.Fatalf("Begin returned error on reader failure: %v", err)
+	}
+	if resp.State != string(coreonboarding.StateWelcome) {
+		t.Errorf("Begin state = %q, want welcome", resp.State)
+	}
+}
+
+// TestAPI_Begin_DeepLinkHintWinsOverFleetState verifies that an existing
+// deep-link hint (EmailHint set) is not overwritten by the fleet-state hint.
+func TestAPI_Begin_DeepLinkHintWinsOverFleetState(t *testing.T) {
+	t.Parallel()
+	reader := &fakeFleetStateReader{
+		hint: FleetOnboardingHint{AlreadyConnected: true},
+	}
+	api := New(Config{FleetStateReader: reader})
+	ctx := context.Background()
+
+	// Set a deep-link hint first.
+	_ = api.AcceptHandoffHint(ctx, HandoffHint{
+		EmailHint: "user@example.com",
+		Source:    "deep_link",
+	})
+
+	// Begin should NOT overwrite the deep-link hint.
+	_, err := api.Begin(ctx)
+	if err != nil {
+		t.Fatalf("Begin: %v", err)
+	}
+
+	hint, _ := api.GetHandoffHint(ctx)
+	if hint.Source != "deep_link" || hint.EmailHint != "user@example.com" {
+		t.Errorf("deep-link hint was overwritten by fleet state: %+v", hint)
 	}
 }
 
