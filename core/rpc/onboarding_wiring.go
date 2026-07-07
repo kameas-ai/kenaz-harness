@@ -3,6 +3,7 @@
 //
 // Mission: harness-self-mcp-onboarding-01KQ8TDU WP08 (tail polish, v0.5.4).
 // Extended: harness-onboarding-01NHON01 WP01/WP03/WP04/WP07.
+// Extended: fleet-welcome-01NWEL01 — live fleet integration (WP04/WP07).
 //
 // The adapter types here satisfy the narrow interfaces declared in
 // core/rpc/views/onboarding/impl.go so the onboarding view can be
@@ -11,6 +12,16 @@
 // Completion state is now persisted via Settings.FirstRunOnboardingCompleted
 // (added in WP01). The AccountStepAvailableChecker gracefully degrades to
 // "unavailable" when fleet is disabled or not wired.
+//
+// Fleet integration (01NWEL01):
+//
+//   - onboardingProgressSyncerAdapter: PATCH /api/v1/me/onboarding when a
+//     milestone is recorded and the user is signed in (WP07).
+//   - onboardingFleetStateReaderAdapter: GET /api/v1/me/onboarding on Begin
+//     to warm Path A (WP04).
+//
+// Both adapters are best-effort and graceful-on-disabled. The fleet client is
+// injected at construction time from api.go (the chassis layer).
 package rpc
 
 import (
@@ -19,7 +30,9 @@ import (
 	"os"
 
 	"github.com/kameas-ai/kenaz-harness/core/fleet"
+	"github.com/kameas-ai/kenaz-harness/core/logging"
 	harnessmcp "github.com/kameas-ai/kenaz-harness/core/mcp/builtin/harness"
+	onboardingview "github.com/kameas-ai/kenaz-harness/core/rpc/views/onboarding"
 	llmview "github.com/kameas-ai/kenaz-harness/core/rpc/views/llm"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/settings"
 	"github.com/kameas-ai/kenaz-harness/core/session"
@@ -84,11 +97,9 @@ func (a onboardingCompletionAdapter) IsCompleted(_ context.Context) (bool, error
 // intentionally env-var-gated rather than reading the fleet client to avoid
 // importing core/fleet/ into this package (the OSS-first invariant).
 //
-// DEFERRED FLEET INTEGRATION (WP03): when the fleet sign-in endpoint ships
-// (01NWEL01), update this adapter to also check whether the fleet client
-// is reachable (a single HEAD probe at startup). Until then the env-var
-// gate is sufficient — the account step is always skippable so a false
-// positive just shows a CTA that silently degrades in the FSM.
+// WP03 (01NWEL01): the fleet sign-in endpoint is now live. This adapter
+// continues to use the env-var gate only — a false positive just shows a CTA
+// that silently degrades in the FSM, and the env-var is the canonical gate.
 type onboardingAccountStepAdapter struct{}
 
 func (onboardingAccountStepAdapter) IsAccountStepAvailable(_ context.Context) (bool, error) {
@@ -178,6 +189,108 @@ func (a onboardingAccountSignerAdapter) SignIn(ctx context.Context) (string, err
 		return "", err
 	}
 	return id.Email, nil
+}
+
+// ---- ProgressSyncer adapter (WP07, 01NWEL01) --------------------------------
+
+// onboardingProgressSyncerAdapter implements onboardingview.ProgressSyncer.
+// On each milestone it fires a non-blocking best-effort PATCH to the fleet
+// onboarding state endpoint — but ONLY when the user is signed in.
+//
+// Graceful-on-disabled contract:
+//   - nil fleet client → log debug + return nil
+//   - fleet.Disabled() → return nil
+//   - network error → log warn + return nil (never surface to caller)
+//   - not signed in → return nil
+//
+// OSS-first: this type lives in core/rpc/ (allowed to import core/fleet).
+// core/rpc/views/onboarding/ only holds the ProgressSyncer interface.
+type onboardingProgressSyncerAdapter struct {
+	client *fleet.Client
+}
+
+// SyncProgress implements onboardingview.ProgressSyncer.
+// Spawns a goroutine so the caller returns immediately. The goroutine is
+// best-effort and never panics.
+func (a *onboardingProgressSyncerAdapter) SyncProgress(ctx context.Context, step onboardingview.ProgressStep, signedIn bool) error {
+	if a.client == nil || a.client.IsNop() {
+		logging.L().Debug("onboarding.progress_sync.skipped", "reason", "fleet_disabled_or_nil")
+		return nil
+	}
+	if !signedIn {
+		logging.L().Debug("onboarding.progress_sync.skipped", "reason", "not_signed_in", "step", string(step))
+		return nil
+	}
+
+	// Build the partial update (only set the field matching the step).
+	update := progressStepToWire(step)
+	if update == (fleet.OnboardingStateWire{}) {
+		// Unknown step — no-op.
+		return nil
+	}
+	update.Schema = 1
+
+	// Non-blocking: network call goes off in a goroutine.
+	go func() {
+		if err := a.client.PatchOnboardingState(context.Background(), update); err != nil {
+			// ErrNotSignedIn + ErrFleetDisabled are expected in degraded paths.
+			logging.L().Warn("onboarding.progress_sync.failed",
+				"step", string(step),
+				"err", err.Error(),
+			)
+		} else {
+			logging.L().Info("onboarding.progress_sync.ok", "step", string(step))
+		}
+	}()
+	return nil
+}
+
+// progressStepToWire converts a ProgressStep to the matching fleet wire
+// partial-update. Returns zero value for unknown steps.
+func progressStepToWire(step onboardingview.ProgressStep) fleet.OnboardingStateWire {
+	switch step {
+	case onboardingview.ProgressStepProviderConfigured:
+		return fleet.OnboardingStateWire{ProviderConfigured: true}
+	case onboardingview.ProgressStepAccountConnected:
+		return fleet.OnboardingStateWire{AccountConnected: true}
+	case onboardingview.ProgressStepBootstrapRun:
+		return fleet.OnboardingStateWire{BootstrapRun: true}
+	case onboardingview.ProgressStepGuidedActionShown:
+		return fleet.OnboardingStateWire{GuidedActionShown: true}
+	default:
+		return fleet.OnboardingStateWire{}
+	}
+}
+
+// ---- FleetStateReader adapter (WP04, 01NWEL01) ------------------------------
+
+// onboardingFleetStateReaderAdapter implements onboardingview.FleetStateReader.
+// Reads GET /api/v1/me/onboarding to warm Path A on Begin.
+//
+// Graceful-on-disabled contract:
+//   - nil/nop client → return zero hint, nil
+//   - fleet.Disabled() → return zero hint, nil
+//   - network error or not signed in → return zero hint + error (caller logs + ignores)
+//
+// OSS-first: same bridge-file rule as ProgressSyncerAdapter.
+type onboardingFleetStateReaderAdapter struct {
+	client *fleet.Client
+}
+
+// ReadFleetState implements onboardingview.FleetStateReader.
+func (a *onboardingFleetStateReaderAdapter) ReadFleetState(ctx context.Context) (onboardingview.FleetOnboardingHint, error) {
+	if a.client == nil || a.client.IsNop() {
+		return onboardingview.FleetOnboardingHint{}, nil
+	}
+	state, err := a.client.GetOnboardingState(ctx)
+	if err != nil {
+		// Return the error so the caller (Begin) can decide to log and ignore.
+		return onboardingview.FleetOnboardingHint{}, err
+	}
+	return onboardingview.FleetOnboardingHint{
+		AlreadyConnected:        state.AccountConnected,
+		AlreadyHarnessInstalled: state.HarnessInstalled,
+	}, nil
 }
 
 // ErrOnboardingNotWired is returned when the session manager is unavailable.

@@ -1999,6 +1999,29 @@ func New(c *core.Core) *API {
 			// 0 means "use the default 60s cadence" (StartPoller FR-001).
 			ctxSyncer.StartPoller(context.Background(), 0)
 
+			// fleet-welcome-01NWEL01 context_synced seam: fire a best-effort
+			// PATCH /api/v1/me/onboarding {context_synced:true} once after the
+			// first successful context push. The hook is non-blocking (goroutine
+			// inside the PATCH call). If the PATCH fails, the error is logged and
+			// swallowed — fleet also auto-derives context_synced from context_nodes>0.
+			capturedFlCl := flCl // captured for the closure (flCl is block-scoped)
+			ctxSyncer.SetFirstPushHook(func() {
+				go func() {
+					if capturedFlCl == nil || capturedFlCl.IsNop() {
+						return
+					}
+					err := capturedFlCl.PatchOnboardingState(
+						context.Background(),
+						corefleet.OnboardingStateWire{Schema: 1, ContextSynced: true},
+					)
+					if err != nil {
+						logging.L().Warn("rpc.context_synced.patch_failed", "err", err.Error())
+					} else {
+						logging.L().Info("rpc.context_synced.patch_ok")
+					}
+				}()
+			})
+
 			// Store for Shutdown teardown (FR-011).
 			a.ctxGraphSyncer = ctxSyncer
 
@@ -2291,6 +2314,12 @@ func New(c *core.Core) *API {
 	// Wired with real providers when a core is available; the zero-value
 	// onboardingview.New(onboardingview.Config{}) stub handles the nil
 	// chassis path gracefully.
+	//
+	// fleet-welcome-01NWEL01: wire the live fleet onboarding seams:
+	//   - ProgressSyncer: PATCH /api/v1/me/onboarding on each milestone (WP07).
+	//   - FleetStateReader: GET /api/v1/me/onboarding on Begin for Path A (WP04).
+	// Both adapters are best-effort and graceful-on-disabled; a nil or nop
+	// fleet client produces immediate no-ops (ErrFleetDisabled is swallowed).
 	{
 		firstRunDetector := onboardingFirstRunAdapter{llmAPI: a.llmAPI}
 		var sessionStarter onboardingSessionStarterAdapter
@@ -2298,6 +2327,15 @@ func New(c *core.Core) *API {
 			sessionStarter.sessionMgr = c.SessionManager()
 			sessionStarter.dataDir = dataDir
 		}
+
+		// Resolve fleet client for onboarding seams. May be nil (OSS build)
+		// or a nop client (HARNESS_FLEET_DISABLED=1); both are handled gracefully
+		// by the adapter implementations.
+		var onboardingFleetCl *corefleet.Client
+		if a.settingsImpl != nil {
+			onboardingFleetCl = a.settingsImpl.FleetClientForBootstrap()
+		}
+
 		a.onboardingAPI = onboardingview.New(onboardingview.Config{
 			FirstRun:             firstRunDetector,
 			Completion:           onboardingCompletionAdapter{store: settingsStore},
@@ -2311,8 +2349,13 @@ func New(c *core.Core) *API {
 			// EventSkipAccount is unaffected — OSS-standalone invariant holds.
 			Signer:  onboardingAccountSignerAdapter{settingsAPI: a.settingsAPI},
 			DataDir: dataDir,
+			// fleet-welcome-01NWEL01 seams (WP04/WP07):
+			ProgressSyncer:   &onboardingProgressSyncerAdapter{client: onboardingFleetCl},
+			FleetStateReader: &onboardingFleetStateReaderAdapter{client: onboardingFleetCl},
 		})
-		logging.L().Info("onboarding.api.ready")
+		logging.L().Info("onboarding.api.ready",
+			"fleet_seams_wired", onboardingFleetCl != nil && !onboardingFleetCl.IsNop(),
+		)
 	}
 
 	// FR-008 (agent-loop-robustness-parity WP08): record the boot-phase
