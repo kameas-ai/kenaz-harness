@@ -52,6 +52,89 @@ type ProgressPublisher interface {
 	Publish(topic string, payload any)
 }
 
+// FrontendProgressEvent is the discriminated-union envelope the
+// frontend workflowRunsStore expects on the `workflows:run-progress`
+// broker topic. It mirrors the TypeScript RunProgressEvent interface
+// in frontend/src/lib/workflowRunsStore.ts.
+//
+// The Go engine emits flat corewf.ProgressEvent values with a
+// `status` field; translateProgressEvent maps those onto `phase`
+// before the event reaches the broker so the frontend reducer can
+// switch on `evt.phase` without needing a translation shim.
+type FrontendProgressEvent struct {
+	RunID        string `json:"runId"`
+	WorkflowID   string `json:"workflowId"`
+	WorkflowName string `json:"workflowName,omitempty"`
+	// Phase is the discriminated union key the frontend reducer switches on.
+	// Values: run_started | step_started | step_completed | step_failed |
+	//         step_skipped | run_completed | run_failed.
+	Phase    string `json:"phase"`
+	StepName string `json:"stepName,omitempty"`
+	StepKind string `json:"stepKind,omitempty"`
+	Error    string `json:"error,omitempty"`
+	// Ts is the ISO-8601 timestamp the frontend uses for startedAt / finishedAt.
+	Ts     string `json:"ts"`
+	Inline bool   `json:"inline,omitempty"`
+}
+
+// translateProgressEvent maps a flat corewf.ProgressEvent (emitted by
+// the engine's step runner) onto a FrontendProgressEvent that matches
+// the phase-discriminated shape the frontend reducer consumes.
+//
+// Status → Phase mapping:
+//
+//	"running"   → "step_started"  (step has started)
+//	"succeeded" → "step_completed"
+//	"failed"    → "step_failed"
+//	"skipped"   → "step_skipped"
+//
+// Lifecycle events (run_started / run_completed / run_failed) are
+// inferred from Step == "":
+//
+//	status "running"   + Step==""  → "run_started"
+//	status "succeeded" + Step==""  → "run_completed"
+//	status "failed"    + Step==""  → "run_failed"
+func translateProgressEvent(ev corewf.ProgressEvent) FrontendProgressEvent {
+	fe := FrontendProgressEvent{
+		RunID:      ev.RunID,
+		WorkflowID: ev.WorkflowID,
+		StepName:   ev.Step,
+		StepKind:   string(ev.Kind),
+		Error:      ev.Err,
+		Ts:         ev.At.UTC().Format(time.RFC3339Nano),
+		Inline:     ev.Inline,
+	}
+	// Determine phase from the step name + status combination.
+	isLifecycle := ev.Step == ""
+	switch ev.Status {
+	case "running":
+		if isLifecycle {
+			fe.Phase = "run_started"
+		} else {
+			fe.Phase = "step_started"
+		}
+	case "succeeded", "completed":
+		if isLifecycle {
+			fe.Phase = "run_completed"
+		} else {
+			fe.Phase = "step_completed"
+		}
+	case "failed":
+		if isLifecycle {
+			fe.Phase = "run_failed"
+		} else {
+			fe.Phase = "step_failed"
+		}
+	case "skipped":
+		fe.Phase = "step_skipped"
+	default:
+		// Unknown status: emit as step_started so the sidebar at least
+		// shows the step as active rather than silently dropping it.
+		fe.Phase = "step_started"
+	}
+	return fe
+}
+
 // Config bundles the dependencies the impl needs.
 type Config struct {
 	Engine    *corewf.Engine
@@ -245,7 +328,7 @@ func (a *API) RunWithOptions(ctx context.Context, req RunRequest) (RunResult, er
 		stepIdx := make(map[string]int)
 		for ev := range ch {
 			if pub != nil {
-				pub.Publish("workflows:run-progress", ev)
+				pub.Publish("workflows:run-progress", translateProgressEvent(ev))
 			}
 			res.RunID = ev.RunID
 			i, ok := stepIdx[ev.Step]
@@ -267,6 +350,22 @@ func (a *API) RunWithOptions(ctx context.Context, req RunRequest) (RunResult, er
 		if res.Status == "running" {
 			res.Status = "completed"
 		}
+		// Emit run-level lifecycle completion event for the inline path so
+		// the Runs sidebar flips out of "running" after the inline run ends.
+		if pub != nil && res.RunID != "" {
+			finishPhase := "run_completed"
+			if res.Status == "failed" {
+				finishPhase = "run_failed"
+			}
+			pub.Publish("workflows:run-progress", FrontendProgressEvent{
+				RunID:      res.RunID,
+				WorkflowID: w.ID,
+				Phase:      finishPhase,
+				Error:      res.Err,
+				Ts:         time.Now().UTC().Format(time.RFC3339Nano),
+				Inline:     true,
+			})
+		}
 		a.emitInlineAudit(ctx, w.ID, res)
 		return res, nil
 	}
@@ -274,7 +373,7 @@ func (a *API) RunWithOptions(ctx context.Context, req RunRequest) (RunResult, er
 	opts := corewf.RunOptions{SkipCache: req.SkipCache}
 	if pub != nil {
 		opts.ProgressSink = func(ev corewf.ProgressEvent) {
-			pub.Publish("workflows:run-progress", ev)
+			pub.Publish("workflows:run-progress", translateProgressEvent(ev))
 		}
 	}
 	run, err := a.cfg.Engine.Run(ctx, w, typed, opts)
@@ -292,6 +391,24 @@ func (a *API) RunWithOptions(ctx context.Context, req RunRequest) (RunResult, er
 	}
 	if err != nil {
 		res.Err = err.Error()
+	}
+	// Emit run-level lifecycle completion event so the Runs sidebar
+	// always flips out of "running". The engine does not emit these
+	// itself — per-step progress events are emitted via ProgressSink
+	// above; we synthesise run_completed / run_failed here, after the
+	// engine returns, so the frontend reducer can mark the run terminal.
+	if pub != nil && run.ID != "" {
+		finishPhase := "run_completed"
+		if run.Status == "failed" || err != nil {
+			finishPhase = "run_failed"
+		}
+		pub.Publish("workflows:run-progress", FrontendProgressEvent{
+			RunID:      run.ID,
+			WorkflowID: run.WorkflowID,
+			Phase:      finishPhase,
+			Error:      run.Err,
+			Ts:         run.EndedAt.UTC().Format(time.RFC3339Nano),
+		})
 	}
 	// Emit completion + per-step failure audits. The engine's *Run
 	// already carries both the workflow id and the step-level failure

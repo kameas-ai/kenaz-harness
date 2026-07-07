@@ -1514,8 +1514,28 @@ func New(c *core.Core) *API {
 			Store:     wfStore,
 			Scheduler: sched,
 		})
+		// WP01 (workflows-finalization-01NWFX01): wire a concrete MCPCaller
+		// and LLMStreamer into the workflow engine so mcp_call and model_turn
+		// steps dispatch through the same MCP pool / LLM registry the chat
+		// tool loop uses. Without this the runner errors with "no MCPCaller
+		// wired" on every mcp_call step. The pool and registry come from the
+		// LLM stack (constructed above); either may be nil (test chassis or
+		// disabled subsystem) — DefaultRunnersWithDeps handles nil gracefully.
+		wfDeps := corewf.Deps{}
+		if stack.pool != nil {
+			wfDeps.MCP = &wfMCPCallerAdapter{pool: stack.pool}
+		}
+		if stack.reg != nil {
+			wfDeps.LLM = &wfLLMStreamerAdapter{reg: stack.reg}
+		}
+		// Wire the OS-notification adapter so notify steps with surface:[os]
+		// dispatch real OS notifications via the Wails runtime (desktop) or
+		// return a soft-fail unconfigured error in headless serve mode.
+		// The ctxFn defers ctx resolution to Notify-call time so construction
+		// before OnStartup is safe.
+		wfDeps.Notifier = &wfNotifierAdapter{ctxFn: a.broker.EmitCtx}
 		a.workflowsAPI = workflowsview.New(workflowsview.Config{
-			Engine:          corewf.NewEngine(),
+			Engine:          corewf.NewEngineWithDeps(wfDeps),
 			Catalog:         catalog,
 			Publisher:       brokerPublisher{broker: a.broker},
 			Disabled:        disabled,

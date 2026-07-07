@@ -699,3 +699,49 @@ func (denyAllAuthz) Authorize(_ context.Context, _, _ string) error {
 	return fmt.Errorf("policy denied: network access not permitted in test")
 }
 
+// =============================================================================
+// Downstream skip behavior (workflows-finalization-01NWFX01 WP03)
+// =============================================================================
+
+// TestLinearRunner_FailedStepSkipsDownstream verifies that when a linear-mode
+// step fails, all remaining steps are recorded as "skipped" with an upstream
+// reason, rather than silently disappearing from the transcript.
+func TestLinearRunner_FailedStepSkipsDownstream(t *testing.T) {
+	t.Parallel()
+	mcp := &fakeMCP{err: errors.New("MCP server \"slack\" is not installed or not authorized — install it from Tools")}
+	wf := Workflow{
+		ID: "downstream-skip", Name: "Downstream Skip", Version: 1,
+		Steps: []Step{
+			{Name: "fetch_slack", Kind: StepKindMCPCall, Server: "slack", ToolName: "list_messages"},
+			{Name: "write_summary", Kind: StepKindModelTurn, UserPrompt: "summarize", Profile: "default"},
+			{Name: "notify_step", Kind: StepKindNotify, NotifyTitle: "Done", NotifyBody: "done", Surface: []string{"os"}},
+		},
+	}
+	e := NewEngineWithDeps(Deps{MCP: mcp})
+	run, err := e.Run(context.Background(), wf, nil, RunOptions{})
+	if err == nil {
+		t.Fatal("expected error from failed mcp_call")
+	}
+	if run.Status != "failed" {
+		t.Errorf("run.Status=%q want failed", run.Status)
+	}
+	// All 3 steps must appear in the transcript.
+	if len(run.Steps) != 3 {
+		t.Fatalf("run.Steps=%d want 3 (failed + 2 skipped)", len(run.Steps))
+	}
+	// Step 0 must be failed.
+	if run.Steps[0].Status != "failed" {
+		t.Errorf("step[0] status=%q want failed", run.Steps[0].Status)
+	}
+	// Steps 1 and 2 must be skipped with an upstream reason.
+	for i := 1; i <= 2; i++ {
+		sr := run.Steps[i]
+		if sr.Status != "skipped" {
+			t.Errorf("step[%d] (%s) status=%q want skipped", i, sr.Name, sr.Status)
+		}
+		if !strings.Contains(sr.Err, "upstream step") {
+			t.Errorf("step[%d] skip reason=%q does not mention upstream step", i, sr.Err)
+		}
+	}
+}
+

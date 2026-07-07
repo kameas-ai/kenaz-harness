@@ -323,6 +323,19 @@ func (e *Engine) runLinear(
 			run.Err = err.Error()
 			run.EndedAt = stepEnd
 			emit(ProgressEvent{RunID: rc.RunID, WorkflowID: wf.ID, Step: st.Name, Kind: st.Kind, Status: "failed", Err: err.Error(), At: stepEnd})
+			// FR-004 / WP03: mark all remaining steps as skipped with an
+			// upstream-failed reason so the Runs view surfaces a clear
+			// "skipped: upstream step X failed" rather than a missing row.
+			skipReason := fmt.Sprintf("skipped: upstream step %q failed", st.Name)
+			now := e.now()
+			for j := i + 1; j < len(wf.Steps); j++ {
+				rem := wf.Steps[j]
+				run.Steps = append(run.Steps, StepResult{
+					Name: rem.Name, Kind: rem.Kind, Status: "skipped",
+					Err: skipReason, StartedAt: now, EndedAt: now,
+				})
+				emit(ProgressEvent{RunID: rc.RunID, WorkflowID: wf.ID, Step: rem.Name, Kind: rem.Kind, Status: "skipped", Err: skipReason, At: now})
+			}
 			return err
 		}
 		rc.SetOutput(st.Name, out)
@@ -471,6 +484,7 @@ func (e *Engine) runDAG(
 
 		// Collect outcomes; on first error, fail fast.
 		var firstErr error
+		var firstErrStep string // step name that produced firstErr
 		for oc := range outcomes {
 			runMu.Lock()
 			run.Steps = append(run.Steps, oc.res)
@@ -479,6 +493,7 @@ func (e *Engine) runDAG(
 			if oc.err != nil {
 				if firstErr == nil {
 					firstErr = oc.err
+					firstErrStep = oc.name
 				}
 				continue
 			}
@@ -498,7 +513,10 @@ func (e *Engine) runDAG(
 			run.Status = "failed"
 			run.Err = firstErr.Error()
 			run.EndedAt = e.now()
-			// Mark unstarted steps as skipped.
+			// FR-004 / WP03: mark unstarted steps as skipped with a clear
+			// upstream-failed reason so the Runs view surfaces the context.
+			skipReason := fmt.Sprintf("skipped: upstream step %q failed", firstErrStep)
+			skipNow := e.now()
 			for _, st := range wf.Steps {
 				if !completed[st.Name] {
 					alreadyRecorded := false
@@ -512,6 +530,7 @@ func (e *Engine) runDAG(
 					if !alreadyRecorded {
 						run.Steps = append(run.Steps, StepResult{
 							Name: st.Name, Kind: st.Kind, Status: "skipped",
+							Err: skipReason, StartedAt: skipNow, EndedAt: skipNow,
 						})
 					}
 					runMu.Unlock()

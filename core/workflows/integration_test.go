@@ -60,23 +60,29 @@ func (c *captureEmitter) snapshot() []audit.Event {
 // the broker. The integration tests use it as an oracle for "did the
 // engine actually dispatch the steps fresh, or did it serve a cached
 // run".
+//
+// The API now publishes rpcworkflows.FrontendProgressEvent (the
+// phase-discriminated envelope the frontend expects) rather than the
+// flat workflows.ProgressEvent. captureProgress accepts the new type
+// so TestWP11_SaveRunEmitsStepAndCompletionEvents / TestWP11_RerunSkip
+// can still assert "events were emitted" without caring about shape.
 type captureProgress struct {
 	mu     sync.Mutex
-	events []workflows.ProgressEvent
+	events []rpcworkflows.FrontendProgressEvent
 }
 
 func (c *captureProgress) Publish(_ string, payload any) {
-	if ev, ok := payload.(workflows.ProgressEvent); ok {
+	if ev, ok := payload.(rpcworkflows.FrontendProgressEvent); ok {
 		c.mu.Lock()
 		c.events = append(c.events, ev)
 		c.mu.Unlock()
 	}
 }
 
-func (c *captureProgress) snapshot() []workflows.ProgressEvent {
+func (c *captureProgress) snapshot() []rpcworkflows.FrontendProgressEvent {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	out := make([]workflows.ProgressEvent, len(c.events))
+	out := make([]rpcworkflows.FrontendProgressEvent, len(c.events))
 	copy(out, c.events)
 	return out
 }
@@ -257,8 +263,12 @@ func TestWP11_RerunSkipServesFromCache(t *testing.T) {
 		t.Fatalf("Run #2: %v", err)
 	}
 	secondCount := len(f.progress.snapshot())
-	if secondCount != firstCount {
-		t.Errorf("second run added progress events: before=%d after=%d (cache hit should skip emitter)",
+	// The cache hit should not emit fresh step events (the engine
+	// short-circuits via applyCachedRun). We do permit one extra event
+	// (the run_completed lifecycle event that impl.go now always emits
+	// after engine.Run returns so the Runs sidebar never stays "running").
+	if secondCount > firstCount+1 {
+		t.Errorf("second run added too many progress events: before=%d after=%d (cache hit should skip step emitter)",
 			firstCount, secondCount)
 	}
 	if res2.Status != "completed" {
