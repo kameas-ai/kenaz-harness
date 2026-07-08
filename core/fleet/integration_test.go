@@ -51,9 +51,10 @@ func TestIntegration_AllCapabilityKeys(t *testing.T) {
 		t.Errorf("AllCapabilities() missing CapSitesHosting")
 	}
 
-	// Total count gate: 22 baseline + CapContextSync + CapTeamSessionHandoff = 24.
-	if len(all) != 24 {
-		t.Errorf("AllCapabilities() len = %d, want 24", len(all))
+	// Total count gate: 22 baseline + CapContextSync + CapTeamSessionHandoff
+	// + CapContextBootstrap = 25.
+	if len(all) != 25 {
+		t.Errorf("AllCapabilities() len = %d, want 25", len(all))
 	}
 }
 

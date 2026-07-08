@@ -19,26 +19,26 @@ type Capability string
 // when the fleet-hosted-LLM surface was removed
 // (harness-fleet-sync-activation-01NSYNC01, dead-code cleanup).
 const (
-	CapLauncherUpdates          Capability = "launcher_updates"
-	CapISODistribution          Capability = "iso_distribution"
-	CapSharedTeamGraph          Capability = "shared_team_graph"
-	CapCrossTeamGraphIsolation  Capability = "cross_team_graph_isolation"
-	CapOPAPresetPolicies        Capability = "opa_preset_policies"
-	CapOPACustomRego            Capability = "opa_custom_rego"
-	CapAttestationTPM           Capability = "attestation_tpm"
-	CapAuditLogImmudb           Capability = "audit_log_immudb"
-	CapFalcoMonitoring          Capability = "falco_monitoring"
-	CapZeekNetworkVerify        Capability = "zeek_network_verify"
-	CapEmergencyLockdown        Capability = "emergency_lockdown"
-	CapKameasVerifyAttestation  Capability = "kameas_verify_attestation"
-	CapPersonalFleetDashboard   Capability = "personal_fleet_dashboard"
-	CapTeamAdminDashboard       Capability = "team_admin_dashboard"
-	CapPolicyBundleDistribution Capability = "policy_bundle_distribution"
-	CapIsolatedFleetInfra       Capability = "isolated_fleet_infra"
-	CapSSOSAML                  Capability = "sso_saml"
-	CapComplianceDocsSoC2Sum    Capability = "compliance_docs_soc2_summary"
-	CapComplianceDocsSoC2Full   Capability = "compliance_docs_soc2_full"
-	CapComplianceDocsCustom     Capability = "compliance_docs_custom"
+	CapLauncherUpdates             Capability = "launcher_updates"
+	CapISODistribution             Capability = "iso_distribution"
+	CapSharedTeamGraph             Capability = "shared_team_graph"
+	CapCrossTeamGraphIsolation     Capability = "cross_team_graph_isolation"
+	CapOPAPresetPolicies           Capability = "opa_preset_policies"
+	CapOPACustomRego               Capability = "opa_custom_rego"
+	CapAttestationTPM              Capability = "attestation_tpm"
+	CapAuditLogImmudb              Capability = "audit_log_immudb"
+	CapFalcoMonitoring             Capability = "falco_monitoring"
+	CapZeekNetworkVerify           Capability = "zeek_network_verify"
+	CapEmergencyLockdown           Capability = "emergency_lockdown"
+	CapKameasVerifyAttestation     Capability = "kameas_verify_attestation"
+	CapPersonalFleetDashboard      Capability = "personal_fleet_dashboard"
+	CapTeamAdminDashboard          Capability = "team_admin_dashboard"
+	CapPolicyBundleDistribution    Capability = "policy_bundle_distribution"
+	CapIsolatedFleetInfra          Capability = "isolated_fleet_infra"
+	CapSSOSAML                     Capability = "sso_saml"
+	CapComplianceDocsSoC2Sum       Capability = "compliance_docs_soc2_summary"
+	CapComplianceDocsSoC2Full      Capability = "compliance_docs_soc2_full"
+	CapComplianceDocsCustom        Capability = "compliance_docs_custom"
 	CapQuarterlyAttestationReports Capability = "quarterly_attestation_reports"
 
 	// CapSitesHosting gates the Fleet Sites feature (Enterprise tier only).
@@ -55,6 +55,14 @@ const (
 	// Wire value: "team_session_handoff".
 	// Mission: fleet-context-sync-01NDFSEX15 WP05.
 	CapTeamSessionHandoff Capability = "team_session_handoff"
+
+	// CapContextBootstrap gates the fleet-backed context-bootstrap engine
+	// (recipe pull, run lifecycle, context-health). Wire value:
+	// "context_bootstrap". When absent, the harness runs bootstrap fully
+	// locally (LocalRecipeSource + noop fleet sync) so the feature degrades
+	// gracefully offline / on the OSS tier.
+	// Mission: context-bootstrap-harness-integration.
+	CapContextBootstrap Capability = "context_bootstrap"
 )
 
 // AllCapabilities returns every known Capability constant in declaration
@@ -85,6 +93,7 @@ func AllCapabilities() []Capability {
 		CapSitesHosting,
 		CapContextSync,
 		CapTeamSessionHandoff,
+		CapContextBootstrap,
 	}
 }
 
@@ -100,9 +109,9 @@ const capabilityTTL = 24 * time.Hour
 //   - "cache"        — restored from the disk cache
 //   - "default-deny" — offline, signed-out, or fleet not yet returning the endpoint
 type Capabilities struct {
-	Tier      string          `json:"tier"`
+	Tier      string              `json:"tier"`
 	Enabled   map[Capability]bool `json:"capabilities"`
-	FetchedAt time.Time       `json:"fetched_at"`
+	FetchedAt time.Time           `json:"fetched_at"`
 	// Source records where this snapshot came from.
 	// Not sent by the wire protocol; populated by the harness on load.
 	Source string `json:"source,omitempty"`

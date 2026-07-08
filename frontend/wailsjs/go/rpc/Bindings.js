@@ -826,6 +826,10 @@ export function Onboarding_RecordProgress(arg1) {
   return window['go']['rpc']['Bindings']['Onboarding_RecordProgress'](arg1);
 }
 
+export function Onboarding_RunBootstrap(arg1) {
+  return window['go']['rpc']['Bindings']['Onboarding_RunBootstrap'](arg1);
+}
+
 export function Onboarding_RestartPhase2(arg1) {
   return window['go']['rpc']['Bindings']['Onboarding_RestartPhase2'](arg1);
 }

@@ -8,8 +8,8 @@ import (
 
 func TestAllCapabilitiesCount(t *testing.T) {
 	all := AllCapabilities()
-	if len(all) != 24 {
-		t.Errorf("AllCapabilities() = %d entries, want 24", len(all))
+	if len(all) != 25 {
+		t.Errorf("AllCapabilities() = %d entries, want 25", len(all))
 	}
 }
 

@@ -266,6 +266,16 @@ const (
 	//     event; deny → envelope dropped.
 	ActionACPSend    = "acp_send"
 	ActionACPReceive = "acp_receive"
+
+	// ── Context-bootstrap action family ───────────────────────────────────
+	// Introduced by mission context-bootstrap-harness-integration (WP05).
+	//
+	//   ActionContextBootstrapRun — gates StartContextBootstrapRun +
+	//     ResumeContextBootstrapRun (the run-dispatch path that reads
+	//     connected sources and writes extracted context nodes). Resource
+	//     UID: ContextBootstrap::"run". Default-allow for the local user;
+	//     operators can forbid to disable the bootstrap engine entirely.
+	ActionContextBootstrapRun = "context.bootstrap.run"
 )
 
 // Entity-type names mirror spec §4.10's recommended mapping:
@@ -367,6 +377,12 @@ const (
 	//   transport      — string: "uds" | "http_loopback" | "http_lan"
 	//   direction      — string: "send" | "receive"
 	EntityTypeACPEnvelope = "ACPEnvelope"
+
+	// EntityTypeContextBootstrap is the Cedar entity type for the
+	// context-bootstrap run resource. Introduced by mission
+	// context-bootstrap-harness-integration (WP05). Resource UIDs take the
+	// shape ContextBootstrap::"run" (a singleton — one bootstrap engine).
+	EntityTypeContextBootstrap = "ContextBootstrap"
 
 	// PrincipalLocal is the canonical EntityUID id for the single
 	// local user. The harness is single-user / privacy-first
@@ -749,4 +765,16 @@ func ACPEnvelopeUID(peerID string) cedar.EntityUID {
 		safeID = invalidUIDID
 	}
 	return cedar.NewEntityUID(EntityTypeACPEnvelope, cedar.String(safeID))
+}
+
+// ContextBootstrapUID builds a Cedar EntityUID for the context-bootstrap run
+// resource introduced by mission context-bootstrap-harness-integration (WP05).
+// The bootstrap engine is a singleton; the canonical id is "run". Malformed
+// ids are replaced with the literal "invalid".
+func ContextBootstrapUID(id string) cedar.EntityUID {
+	safeID := id
+	if !validateFamilyID(id) {
+		safeID = invalidUIDID
+	}
+	return cedar.NewEntityUID(EntityTypeContextBootstrap, cedar.String(safeID))
 }

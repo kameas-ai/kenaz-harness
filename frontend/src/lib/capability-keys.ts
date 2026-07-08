@@ -29,6 +29,7 @@ export const CAPABILITY_KEYS = [
   'sites_hosting',
   'context_sync',
   'team_session_handoff',
+  'context_bootstrap',
 ] as const;
 
 export type Capability = (typeof CAPABILITY_KEYS)[number];

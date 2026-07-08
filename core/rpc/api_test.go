@@ -6,119 +6,119 @@ import (
 	"strings"
 	"testing"
 
+	corefleet "github.com/kameas-ai/kenaz-harness/core/fleet"
 	corellm "github.com/kameas-ai/kenaz-harness/core/llm"
-	coreslashcmd "github.com/kameas-ai/kenaz-harness/core/slashcmd"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/a2a"
+	acpview "github.com/kameas-ai/kenaz-harness/core/rpc/views/acp"
 	graphview "github.com/kameas-ai/kenaz-harness/core/rpc/views/agentgraph"
+	agentsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/agents"
 	artifactsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/artifacts"
 	attachmentsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/attachments"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/audit"
-	agentsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/agents"
 	branchesview "github.com/kameas-ai/kenaz-harness/core/rpc/views/branches"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/bundle"
-	cedarpolicyview "github.com/kameas-ai/kenaz-harness/core/rpc/views/cedarpolicy"
-	searchview "github.com/kameas-ai/kenaz-harness/core/rpc/views/search"
-	compactionview "github.com/kameas-ai/kenaz-harness/core/rpc/views/compaction"
-	contextsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/contexts"
-	"github.com/kameas-ai/kenaz-harness/core/rpc/views/contextview"
 	catalogview "github.com/kameas-ai/kenaz-harness/core/rpc/views/catalog"
-	syncview "github.com/kameas-ai/kenaz-harness/core/rpc/views/sync"
 	cedarview "github.com/kameas-ai/kenaz-harness/core/rpc/views/cedar"
+	cedarpolicyview "github.com/kameas-ai/kenaz-harness/core/rpc/views/cedarpolicy"
+	compactionview "github.com/kameas-ai/kenaz-harness/core/rpc/views/compaction"
+	complianceview "github.com/kameas-ai/kenaz-harness/core/rpc/views/compliance"
+	contextsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/contexts"
+	contextsyncview "github.com/kameas-ai/kenaz-harness/core/rpc/views/contextsync"
+	"github.com/kameas-ai/kenaz-harness/core/rpc/views/contextview"
 	corpusview "github.com/kameas-ai/kenaz-harness/core/rpc/views/corpus"
 	dialsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/dials"
+	elicitview "github.com/kameas-ai/kenaz-harness/core/rpc/views/elicit"
+	fleetview "github.com/kameas-ai/kenaz-harness/core/rpc/views/fleet"
 	hooksview "github.com/kameas-ai/kenaz-harness/core/rpc/views/hooks"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/llm"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/mcp"
 	memoryview "github.com/kameas-ai/kenaz-harness/core/rpc/views/memory"
 	nodesview "github.com/kameas-ai/kenaz-harness/core/rpc/views/nodes"
+	onboardingview "github.com/kameas-ai/kenaz-harness/core/rpc/views/onboarding"
 	permissionsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/permissions"
+	planmodeview "github.com/kameas-ai/kenaz-harness/core/rpc/views/planmode"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/policy"
 	projectsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/projects"
+	scheduledchatview "github.com/kameas-ai/kenaz-harness/core/rpc/views/scheduledchat"
+	searchview "github.com/kameas-ai/kenaz-harness/core/rpc/views/search"
+	secretsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/secrets"
+	sentryview "github.com/kameas-ai/kenaz-harness/core/rpc/views/sentry"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/sessions"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/settings"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/shell"
+	sitesview "github.com/kameas-ai/kenaz-harness/core/rpc/views/sites"
 	slashview "github.com/kameas-ai/kenaz-harness/core/rpc/views/slashcmd"
+	storageview "github.com/kameas-ai/kenaz-harness/core/rpc/views/storage"
+	syncview "github.com/kameas-ai/kenaz-harness/core/rpc/views/sync"
+	tasksview "github.com/kameas-ai/kenaz-harness/core/rpc/views/tasks"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/tools"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/trust"
 	updateview "github.com/kameas-ai/kenaz-harness/core/rpc/views/update"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/workflow"
 	workflowsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/workflows"
-	scheduledchatview "github.com/kameas-ai/kenaz-harness/core/rpc/views/scheduledchat"
-	storageview "github.com/kameas-ai/kenaz-harness/core/rpc/views/storage"
-	onboardingview "github.com/kameas-ai/kenaz-harness/core/rpc/views/onboarding"
-	elicitview "github.com/kameas-ai/kenaz-harness/core/rpc/views/elicit"
-	secretsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/secrets"
 	coresecrets "github.com/kameas-ai/kenaz-harness/core/secrets"
-	planmodeview "github.com/kameas-ai/kenaz-harness/core/rpc/views/planmode"
-	sentryview "github.com/kameas-ai/kenaz-harness/core/rpc/views/sentry"
-	fleetview "github.com/kameas-ai/kenaz-harness/core/rpc/views/fleet"
-	sitesview "github.com/kameas-ai/kenaz-harness/core/rpc/views/sites"
-	tasksview "github.com/kameas-ai/kenaz-harness/core/rpc/views/tasks"
-	acpview "github.com/kameas-ai/kenaz-harness/core/rpc/views/acp"
-	contextsyncview "github.com/kameas-ai/kenaz-harness/core/rpc/views/contextsync"
-	complianceview "github.com/kameas-ai/kenaz-harness/core/rpc/views/compliance"
-	corefleet "github.com/kameas-ai/kenaz-harness/core/fleet"
+	coreslashcmd "github.com/kameas-ai/kenaz-harness/core/slashcmd"
 )
 
 // fakeHarnessAPI is a compile-time witness that the HarnessAPI interface
 // is satisfiable from a test fixture. Real wiring lives in api.go's API.
 type fakeHarnessAPI struct {
-	llmAPI      llm.LLMConnectorAPI
-	mcpAPI      mcp.MCPAPI
-	a2aAPI      a2a.A2AAPI
-	workflowAPI workflow.WorkflowAPI
-	workflowsAPI workflowsview.WorkflowsAPI
-	sessionsAPI sessions.SessionsAPI
-	trustAPI    trust.TrustAPI
-	contextAPI  contextview.ContextAPI
-	contextsAPI contextsview.ContextsAPI
-	bundleAPI   bundle.BundleAPI
-	policyAPI   policy.PolicyAPI
-	auditAPI    audit.AuditAPI
-	settingsAPI settings.SettingsAPI
-	memoryAPI       memoryview.MemoryAPI
-	hooksAPI        hooksview.HooksAPI
-	projectsAPI     projectsview.ProjectsAPI
-	attachmentsAPI  attachmentsview.AttachmentsAPI
-	artifactsAPI    artifactsview.ArtifactsAPI
-	toolsAPI        tools.ToolsAPI
-	shellAPI        shell.ShellAPI
-	slashAPI        slashview.SlashAPI
-	corpusAPI       corpusview.CorpusAPI
-	graphAPI        graphview.API
-	compactionAPI   compactionview.CompactionAPI
-	branchesAPI     branchesview.BranchesAPI
-	cedarPolicyAPI  cedarpolicyview.CedarPolicyAPI
-	permissionsAPI  permissionsview.PermissionsAPI
-	dialsAPI        dialsview.DialsAPI
-	nodesAPI        nodesview.NodesAPI
-	searchAPI       searchview.SearchAPI
-	updateAPI       updateview.UpdateAPI
-	storageAPI      storageview.StorageAPI
-	elicitAPI       elicitview.ElicitAPI
+	llmAPI         llm.LLMConnectorAPI
+	mcpAPI         mcp.MCPAPI
+	a2aAPI         a2a.A2AAPI
+	workflowAPI    workflow.WorkflowAPI
+	workflowsAPI   workflowsview.WorkflowsAPI
+	sessionsAPI    sessions.SessionsAPI
+	trustAPI       trust.TrustAPI
+	contextAPI     contextview.ContextAPI
+	contextsAPI    contextsview.ContextsAPI
+	bundleAPI      bundle.BundleAPI
+	policyAPI      policy.PolicyAPI
+	auditAPI       audit.AuditAPI
+	settingsAPI    settings.SettingsAPI
+	memoryAPI      memoryview.MemoryAPI
+	hooksAPI       hooksview.HooksAPI
+	projectsAPI    projectsview.ProjectsAPI
+	attachmentsAPI attachmentsview.AttachmentsAPI
+	artifactsAPI   artifactsview.ArtifactsAPI
+	toolsAPI       tools.ToolsAPI
+	shellAPI       shell.ShellAPI
+	slashAPI       slashview.SlashAPI
+	corpusAPI      corpusview.CorpusAPI
+	graphAPI       graphview.API
+	compactionAPI  compactionview.CompactionAPI
+	branchesAPI    branchesview.BranchesAPI
+	cedarPolicyAPI cedarpolicyview.CedarPolicyAPI
+	permissionsAPI permissionsview.PermissionsAPI
+	dialsAPI       dialsview.DialsAPI
+	nodesAPI       nodesview.NodesAPI
+	searchAPI      searchview.SearchAPI
+	updateAPI      updateview.UpdateAPI
+	storageAPI     storageview.StorageAPI
+	elicitAPI      elicitview.ElicitAPI
 }
 
 func (f *fakeHarnessAPI) ShellStatus(_ context.Context) (ShellStatus, error) {
 	return ShellStatus{}, nil
 }
-func (f *fakeHarnessAPI) AppInfo(_ context.Context) (AppInfo, error) { return AppInfo{}, nil }
-func (f *fakeHarnessAPI) LLMConnector() llm.LLMConnectorAPI          { return f.llmAPI }
-func (f *fakeHarnessAPI) MCP() mcp.MCPAPI                            { return f.mcpAPI }
+func (f *fakeHarnessAPI) AppInfo(_ context.Context) (AppInfo, error)  { return AppInfo{}, nil }
+func (f *fakeHarnessAPI) LLMConnector() llm.LLMConnectorAPI           { return f.llmAPI }
+func (f *fakeHarnessAPI) MCP() mcp.MCPAPI                             { return f.mcpAPI }
 func (f *fakeHarnessAPI) MCPImport() *mcp.ImportAPI                   { return nil }
-func (f *fakeHarnessAPI) A2A() a2a.A2AAPI                            { return f.a2aAPI }
-func (f *fakeHarnessAPI) Workflow() workflow.WorkflowAPI             { return f.workflowAPI }
+func (f *fakeHarnessAPI) A2A() a2a.A2AAPI                             { return f.a2aAPI }
+func (f *fakeHarnessAPI) Workflow() workflow.WorkflowAPI              { return f.workflowAPI }
 func (f *fakeHarnessAPI) Workflows() workflowsview.WorkflowsAPI       { return f.workflowsAPI }
-func (f *fakeHarnessAPI) Sessions() sessions.SessionsAPI             { return f.sessionsAPI }
-func (f *fakeHarnessAPI) Trust() trust.TrustAPI                      { return f.trustAPI }
-func (f *fakeHarnessAPI) Context() contextview.ContextAPI            { return f.contextAPI }
-func (f *fakeHarnessAPI) Contexts() contextsview.ContextsAPI         { return f.contextsAPI }
-func (f *fakeHarnessAPI) Catalog() catalogview.CatalogAPI            { return nil }
-func (f *fakeHarnessAPI) Sync() syncview.SyncAPI                     { return nil }
-func (f *fakeHarnessAPI) CedarPublish() cedarview.CedarAPI           { return nil }
-func (f *fakeHarnessAPI) Bundle() bundle.BundleAPI                   { return f.bundleAPI }
-func (f *fakeHarnessAPI) Policy() policy.PolicyAPI                   { return f.policyAPI }
-func (f *fakeHarnessAPI) Audit() audit.AuditAPI                      { return f.auditAPI }
-func (f *fakeHarnessAPI) Settings() settings.SettingsAPI             { return f.settingsAPI }
+func (f *fakeHarnessAPI) Sessions() sessions.SessionsAPI              { return f.sessionsAPI }
+func (f *fakeHarnessAPI) Trust() trust.TrustAPI                       { return f.trustAPI }
+func (f *fakeHarnessAPI) Context() contextview.ContextAPI             { return f.contextAPI }
+func (f *fakeHarnessAPI) Contexts() contextsview.ContextsAPI          { return f.contextsAPI }
+func (f *fakeHarnessAPI) Catalog() catalogview.CatalogAPI             { return nil }
+func (f *fakeHarnessAPI) Sync() syncview.SyncAPI                      { return nil }
+func (f *fakeHarnessAPI) CedarPublish() cedarview.CedarAPI            { return nil }
+func (f *fakeHarnessAPI) Bundle() bundle.BundleAPI                    { return f.bundleAPI }
+func (f *fakeHarnessAPI) Policy() policy.PolicyAPI                    { return f.policyAPI }
+func (f *fakeHarnessAPI) Audit() audit.AuditAPI                       { return f.auditAPI }
+func (f *fakeHarnessAPI) Settings() settings.SettingsAPI              { return f.settingsAPI }
 func (f *fakeHarnessAPI) Memory() memoryview.MemoryAPI                { return f.memoryAPI }
 func (f *fakeHarnessAPI) Hooks() hooksview.HooksAPI                   { return f.hooksAPI }
 func (f *fakeHarnessAPI) Projects() projectsview.ProjectsAPI          { return f.projectsAPI }
@@ -127,20 +127,23 @@ func (f *fakeHarnessAPI) Artifacts() artifactsview.ArtifactsAPI       { return f
 func (f *fakeHarnessAPI) Tools() tools.ToolsAPI                       { return f.toolsAPI }
 func (f *fakeHarnessAPI) Shell() shell.ShellAPI                       { return f.shellAPI }
 func (f *fakeHarnessAPI) Slash() slashview.SlashAPI                   { return f.slashAPI }
-func (f *fakeHarnessAPI) Corpus() corpusview.CorpusAPI                 { return f.corpusAPI }
-func (f *fakeHarnessAPI) Graph() graphview.API                         { return f.graphAPI }
-func (f *fakeHarnessAPI) Compaction() compactionview.CompactionAPI     { return f.compactionAPI }
-func (f *fakeHarnessAPI) Branches() branchesview.BranchesAPI           { return f.branchesAPI }
-func (f *fakeHarnessAPI) CedarPolicy() cedarpolicyview.CedarPolicyAPI  { return f.cedarPolicyAPI }
-func (f *fakeHarnessAPI) Permissions() permissionsview.PermissionsAPI  { return f.permissionsAPI }
-func (f *fakeHarnessAPI) Dials() dialsview.DialsAPI                    { return f.dialsAPI }
-func (f *fakeHarnessAPI) Nodes() nodesview.NodesAPI                    { return f.nodesAPI }
-func (f *fakeHarnessAPI) Search() searchview.SearchAPI                 { return f.searchAPI }
-func (f *fakeHarnessAPI) Update() updateview.UpdateAPI                  { return f.updateAPI }
-func (f *fakeHarnessAPI) Storage() storageview.StorageAPI               { return f.storageAPI }
-func (f *fakeHarnessAPI) CedarProposeResolve(_, _ string) error         { return nil }
-func (f *fakeHarnessAPI) Onboarding() onboardingview.OnboardingAPI       {
+func (f *fakeHarnessAPI) Corpus() corpusview.CorpusAPI                { return f.corpusAPI }
+func (f *fakeHarnessAPI) Graph() graphview.API                        { return f.graphAPI }
+func (f *fakeHarnessAPI) Compaction() compactionview.CompactionAPI    { return f.compactionAPI }
+func (f *fakeHarnessAPI) Branches() branchesview.BranchesAPI          { return f.branchesAPI }
+func (f *fakeHarnessAPI) CedarPolicy() cedarpolicyview.CedarPolicyAPI { return f.cedarPolicyAPI }
+func (f *fakeHarnessAPI) Permissions() permissionsview.PermissionsAPI { return f.permissionsAPI }
+func (f *fakeHarnessAPI) Dials() dialsview.DialsAPI                   { return f.dialsAPI }
+func (f *fakeHarnessAPI) Nodes() nodesview.NodesAPI                   { return f.nodesAPI }
+func (f *fakeHarnessAPI) Search() searchview.SearchAPI                { return f.searchAPI }
+func (f *fakeHarnessAPI) Update() updateview.UpdateAPI                { return f.updateAPI }
+func (f *fakeHarnessAPI) Storage() storageview.StorageAPI             { return f.storageAPI }
+func (f *fakeHarnessAPI) CedarProposeResolve(_, _ string) error       { return nil }
+func (f *fakeHarnessAPI) Onboarding() onboardingview.OnboardingAPI {
 	return onboardingview.New(onboardingview.Config{})
+}
+func (f *fakeHarnessAPI) ContextBootstrap() ContextBootstrapAPI {
+	return nullContextBootstrapAPI{}
 }
 func (f *fakeHarnessAPI) Elicit() elicitview.ElicitAPI {
 	if f.elicitAPI != nil {
@@ -182,7 +185,9 @@ func (f *fakeHarnessAPI) Sessions_StopCapture(_ context.Context, _ string) error
 func (f *fakeHarnessAPI) Tasks() tasksview.TasksAPI                               { return nil }
 func (f *fakeHarnessAPI) ACP() acpview.ACPAPI                                     { return acpview.NewNullAPI() }
 func (f *fakeHarnessAPI) ContextSync() contextsyncview.ContextSyncAPI             { return &contextsyncview.Impl{} }
-func (f *fakeHarnessAPI) Compliance() complianceview.ComplianceAPI                { return complianceview.NewAPI(nil, nil, func() bool { return false }) }
+func (f *fakeHarnessAPI) Compliance() complianceview.ComplianceAPI {
+	return complianceview.NewAPI(nil, nil, func() bool { return false })
+}
 
 // Compile-time interface witness (plan §4.2).
 var _ HarnessAPI = (*fakeHarnessAPI)(nil)
