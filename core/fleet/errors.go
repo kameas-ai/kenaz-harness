@@ -58,4 +58,11 @@ var (
 	// connection reset, timeout. Typical cause: VPN not active, or
 	// the fleet deployment is offline.
 	ErrFleetUnreachable = errors.New("fleet: server unreachable (check VPN connection, then retry)")
+
+	// ErrBootstrapRunFinalized is returned by PatchBootstrapRun /
+	// ResumeBootstrapRun when the server replies 409 because the run has
+	// already reached a terminal (completed/failed) state or is already
+	// running. Advance-only semantics: a finalized run cannot be re-patched.
+	// (context-bootstrap-harness-integration WP01)
+	ErrBootstrapRunFinalized = errors.New("fleet: bootstrap run is finalized (409 run_finalized)")
 )

@@ -446,6 +446,17 @@ const (
 	// pass that deletes locally-retained audit rows that are both ACK'd and
 	// older than the retention window. Payload: FleetAuditRetentionSweptPayload.
 	KindFleetAuditRetentionSwept Kind = "fleet.audit_retention_swept"
+
+	// ── Context-bootstrap audit kind (context-bootstrap-harness-integration) ──
+
+	// KindContextBootstrapRun fires once per bootstrap-run lifecycle event
+	// (started / completed / failed / resumed). Payload:
+	// ContextBootstrapRunPayload.
+	//
+	// Privacy invariant: the payload carries ONLY the run id, phase, outcome,
+	// and aggregate counts (connectors, nodes). It NEVER carries extracted node
+	// bodies, titles, source content, or any third-party credential material.
+	KindContextBootstrapRun Kind = "context.bootstrap_run"
 )
 
 // Event is the wire shape passed to the event log. The concrete event-log
@@ -497,9 +508,9 @@ type PackRejectedPayload struct {
 
 // OverrideAppliedPayload (FR-008).
 type OverrideAppliedPayload struct {
-	EntryName string       `json:"entry_name"`
-	Winner    pack.Layer   `json:"winner"`
-	Loser     pack.Layer   `json:"loser"`
+	EntryName  string       `json:"entry_name"`
+	Winner     pack.Layer   `json:"winner"`
+	Loser      pack.Layer   `json:"loser"`
 	WinnerPack pack.PackRef `json:"winner_pack"`
 	LoserPack  pack.PackRef `json:"loser_pack"`
 }
@@ -791,9 +802,9 @@ type WorkflowNetworkFetchPayload struct {
 	StepID     string `json:"step_id"`
 	StepKind   string `json:"step_kind"` // "web_fetch" | "web_scrape"
 	// Hostname is the request hostname only — never the full URL.
-	Hostname   string `json:"hostname"`
-	Status     int    `json:"status"`
-	Bytes      int    `json:"bytes"`
+	Hostname string `json:"hostname"`
+	Status   int    `json:"status"`
+	Bytes    int    `json:"bytes"`
 }
 
 // BranchCreatedPayload carries signalling for KindBranchCreated
@@ -821,10 +832,10 @@ type BranchCreatedPayload struct {
 // outputs, and session messages are never included.
 type SlashCommandRunPayload struct {
 	Name           string   `json:"name"`
-	Scope          string   `json:"scope"`           // "global" | "project"
-	Kind           string   `json:"kind"`            // "text" | "tool" | "prompt"
-	ModelInvokable bool     `json:"model_invokable"` // true if the command is AI-invokable
-	ArgNames       []string `json:"arg_names"`       // names of args supplied (not values)
+	Scope          string   `json:"scope"`                     // "global" | "project"
+	Kind           string   `json:"kind"`                      // "text" | "tool" | "prompt"
+	ModelInvokable bool     `json:"model_invokable"`           // true if the command is AI-invokable
+	ArgNames       []string `json:"arg_names"`                 // names of args supplied (not values)
 	DispatchedTool string   `json:"dispatched_tool,omitempty"` // tool name for kind=tool
 	SessionID      string   `json:"session_id"`
 	ProjectID      string   `json:"project_id,omitempty"`
@@ -1181,7 +1192,7 @@ func Emit(ctx context.Context, em Emitter, kind Kind, payload any, now time.Time
 func MustEmit(ctx context.Context, em Emitter, kind Kind, payload any, now time.Time) {
 	if err := Emit(ctx, em, kind, payload, now); err != nil {
 		slog.WarnContext(ctx, "audit emit failed",
-			"kind",  string(kind),
+			"kind", string(kind),
 			"error", err.Error(),
 		)
 	}
@@ -1405,4 +1416,30 @@ type FleetAuditRetentionSweptPayload struct {
 	OldestDeletedID string `json:"oldest_deleted_id,omitempty"`
 	// RetentionDays is the configured retention window used for this pass.
 	RetentionDays int `json:"retention_days"`
+}
+
+// ContextBootstrapRunPayload carries the signalling for KindContextBootstrapRun
+// (context-bootstrap-harness-integration WP05).
+//
+// Privacy invariant: the payload carries ONLY the run id, phase, outcome, and
+// aggregate counts. It NEVER carries extracted node bodies, titles, source
+// content, connector-item text, or third-party credential material.
+type ContextBootstrapRunPayload struct {
+	// RunID is the harness-side (or fleet-assigned) run identifier.
+	RunID string `json:"run_id"`
+	// Phase is the terminal phase for this event ("extraction", "done",
+	// "failed", "clarify").
+	Phase string `json:"phase"`
+	// Outcome classifies the lifecycle event: "started" | "completed" |
+	// "failed" | "resumed".
+	Outcome string `json:"outcome"`
+	// ConnectorCount is the number of connectors the run touched.
+	ConnectorCount int `json:"connector_count"`
+	// NodesWritten is the cumulative count of context nodes written.
+	NodesWritten int `json:"nodes_written"`
+	// CoverageHit is true when any connector stopped at a budget ceiling.
+	CoverageHit bool `json:"coverage_hit"`
+	// ErrorClass is a typed error label when Outcome=="failed" (never a raw
+	// error message).
+	ErrorClass string `json:"error_class,omitempty"`
 }

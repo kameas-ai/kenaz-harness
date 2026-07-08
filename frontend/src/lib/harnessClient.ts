@@ -755,6 +755,14 @@ interface WailsBindingsLike {
   Onboarding_GetHandoffHint(): Promise<HandoffHint>;
   // WP07 progress sync seam.
   Onboarding_RecordProgress(step: ProgressStep): Promise<void>;
+  // WP06 context-bootstrap trigger seam.
+  Onboarding_RunBootstrap(consentedSources: string[]): Promise<string>;
+
+  // ── Context bootstrap (context-bootstrap-harness-integration WP05) ──
+  ContextBootstrap_Start(req: StartBootstrapRunRequest): Promise<StartBootstrapRunResult>;
+  ContextBootstrap_Status(): Promise<ContextBootstrapRunStatus>;
+  ContextBootstrap_Resume(runID: string): Promise<StartBootstrapRunResult>;
+  ContextBootstrap_Health(): Promise<ContextHealth>;
 
   // ── Elicitation (ask-user-question-interactive-01KZNP3G WP04-WP06) ──
   Elicit_SubmitAnswer(
@@ -2717,6 +2725,96 @@ export interface HandoffHint {
 export type ProgressStep = string;
 
 /**
+ * ── Context bootstrap (context-bootstrap-harness-integration) ──────────────
+ *
+ * Wire types for the context-bootstrap run + health surface. Mirror the Go
+ * shapes in core/contextbootstrap (RunStatus) and core/fleet (ContextHealth).
+ */
+
+/** Per-connector extraction progress in a bootstrap run. */
+export interface ContextConnectorProgress {
+  connector_id: string;
+  label: string;
+  /** "pending" | "running" | "done" | "skipped" | "failed" */
+  status: string;
+  items_fetched: number;
+  nodes_extracted: number;
+  budget_hit?: boolean;
+}
+
+/** Live progress snapshot pushed on the "contextbootstrap:progress" topic. */
+export interface ContextBootstrapRunStatus {
+  run_id: string;
+  /** "idle" | "interview" | "gating" | "extraction" | "clarify" | "done" | "failed" */
+  phase: string;
+  started_at?: string;
+  connectors: ContextConnectorProgress[];
+  total_nodes_written: number;
+  coverage_report?: Array<{
+    connector_id: string;
+    label: string;
+    items_fetched: number;
+    budget_kind: string;
+    budget_limit: number;
+  }>;
+  error_summary?: string;
+}
+
+/** A user-declared trusted person, weighted higher in the confidence model. */
+export interface BootstrapTrustedPerson {
+  identifier: string;
+  trust_level: string;
+  source: string;
+}
+
+/** Request to start a bootstrap run. */
+export interface StartBootstrapRunRequest {
+  consented_sources: string[];
+  trusted_people?: BootstrapTrustedPerson[];
+}
+
+/** Result of StartRun / Resume. */
+export interface StartBootstrapRunResult {
+  run_id: string;
+  recipe_version: string;
+  status: string;
+  fleet_backed: boolean;
+}
+
+/** Compact latest-run summary in the health rollup. */
+export interface BootstrapLatestRun {
+  run_id: string;
+  status: string;
+  finished_at?: string;
+}
+
+/** Context-graph health rollup for the compact health card. */
+export interface ContextHealth {
+  total_nodes: number;
+  nodes_by_source_kind: Record<string, number>;
+  last_sync?: string;
+  connected_sources: string[];
+  latest_run?: BootstrapLatestRun;
+}
+
+/**
+ * ContextBootstrapClient — view-scoped surface for the context-bootstrap engine.
+ * Drives the onboarding bootstrap step (start/status) and the context-health
+ * card (health). Live progress arrives on the "contextbootstrap:progress"
+ * event topic (subscribe via useEventStream).
+ */
+export interface ContextBootstrapClient {
+  /** Kick a run over the consented connector ids. Blocks until finished. */
+  start(req: StartBootstrapRunRequest): Promise<StartBootstrapRunResult>;
+  /** Read the latest run status snapshot (progress also streams via events). */
+  status(): Promise<ContextBootstrapRunStatus>;
+  /** Resume a paused/interrupted run by id. */
+  resume(runID: string): Promise<StartBootstrapRunResult>;
+  /** Read the context-graph health rollup for the compact card. */
+  health(): Promise<ContextHealth>;
+}
+
+/**
  * OnboardingClient — view-scoped surface for the harness first-run dialog.
  * Mission: harness-self-mcp-onboarding-01KQ8TDU WP08.
  */
@@ -2742,6 +2840,12 @@ export interface OnboardingClient {
    * Best-effort: errors are non-fatal and the call never blocks the UX.
    */
   recordProgress(step: ProgressStep): Promise<void>;
+  /**
+   * Kick a context-bootstrap run over the consented connector ids and mark
+   * the bootstrap_run milestone complete when it finishes (WP06). Returns the
+   * run id. Degrades to a local no-op (empty run id) when no engine is wired.
+   */
+  runBootstrap(consentedSources: string[]): Promise<string>;
 }
 
 /**
@@ -2965,6 +3069,8 @@ export interface HarnessClient {
   search: SearchClient;
   storage: StorageClient;
   onboarding: OnboardingClient;
+  /** Context-bootstrap run + health surface (context-bootstrap-harness-integration). */
+  contextBootstrap: ContextBootstrapClient;
   /** Elicitation surface for the ask-user-question dialog (WP04). */
   elicit: ElicitClient;
   /** Config / feature-flag client (slash-commands WP09). */
@@ -3564,6 +3670,13 @@ export function createHarnessClient(): HarnessClient {
       acceptHandoffHint: (hint) => b().Onboarding_AcceptHandoffHint(hint),
       getHandoffHint: () => b().Onboarding_GetHandoffHint(),
       recordProgress: (step) => b().Onboarding_RecordProgress(step),
+      runBootstrap: (consentedSources) => b().Onboarding_RunBootstrap(consentedSources),
+    },
+    contextBootstrap: {
+      start: (req) => b().ContextBootstrap_Start(req),
+      status: () => b().ContextBootstrap_Status(),
+      resume: (runID) => b().ContextBootstrap_Resume(runID),
+      health: () => b().ContextBootstrap_Health(),
     },
     elicit: {
       submitAnswer: (requestID, answerJSON, cancelled) =>
@@ -4872,6 +4985,13 @@ export function createFakeHarnessClient(
       acceptHandoffHint: noop,
       getHandoffHint: async () => ({}),
       recordProgress: noop,
+      runBootstrap: async () => '',
+    },
+    contextBootstrap: {
+      start: async () => ({ run_id: '', recipe_version: '', status: 'idle', fleet_backed: false }),
+      status: async () => ({ run_id: '', phase: 'idle', connectors: [], total_nodes_written: 0 }),
+      resume: async () => ({ run_id: '', recipe_version: '', status: 'idle', fleet_backed: false }),
+      health: async () => ({ total_nodes: 0, nodes_by_source_kind: {}, connected_sources: [] }),
     },
     elicit: {
       submitAnswer: noop,

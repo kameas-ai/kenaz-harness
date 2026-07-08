@@ -53,6 +53,7 @@ import {contextsync} from '../models';
 import {update} from '../models';
 import {workflow} from '../models';
 import {workflows} from '../models';
+import {contextbootstrap} from '../models';
 
 export function A2A_ListCards():Promise<Array<a2a.Card>>;
 
@@ -221,6 +222,14 @@ export function Context_List():Promise<Array<contextview.ContextEntry>>;
 export function Context_StartStream():Promise<string>;
 
 export function Context_StopStream(arg1:string):Promise<void>;
+
+export function ContextBootstrap_Health():Promise<fleet.ContextHealth>;
+
+export function ContextBootstrap_Resume(arg1:string):Promise<rpc.StartBootstrapRunResult>;
+
+export function ContextBootstrap_Start(arg1:rpc.StartBootstrapRunRequest):Promise<rpc.StartBootstrapRunResult>;
+
+export function ContextBootstrap_Status():Promise<contextbootstrap.RunStatus>;
 
 export function Contexts_AttachModule(arg1:string,arg2:string,arg3:string):Promise<contexts.ModuleAttachment>;
 
@@ -465,6 +474,8 @@ export function Onboarding_GetHandoffHint():Promise<onboarding.HandoffHint>;
 export function Onboarding_ListStarters():Promise<Array<onboarding.StarterSummary>>;
 
 export function Onboarding_RecordProgress(arg1:onboarding.ProgressStep):Promise<void>;
+
+export function Onboarding_RunBootstrap(arg1:Array<string>):Promise<string>;
 
 export function Onboarding_RestartPhase2(arg1:onboarding.RestartPhase2Request):Promise<onboarding.RestartPhase2Response>;
 

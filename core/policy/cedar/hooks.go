@@ -751,6 +751,24 @@ func CheckLLMFallback(ctx context.Context, g Gate, chainID string) error {
 	return enforce(d)
 }
 
+// CheckContextBootstrapRun is the gate-hook helper for the context-bootstrap
+// run-dispatch path (context-bootstrap-harness-integration WP05). Default-allow
+// for the local user; a Cedar forbid rule against ActionContextBootstrapRun
+// disables the bootstrap engine. Returns *PolicyDeniedError on deny.
+func CheckContextBootstrapRun(ctx context.Context, g Gate) error {
+	if g == nil {
+		return nil
+	}
+	d := g.Evaluate(
+		ctx,
+		UserUID(),
+		ActionContextBootstrapRun,
+		ContextBootstrapUID("run"),
+		nil,
+	)
+	return enforce(d)
+}
+
 // enforce maps a Decision to a Go error. Allow + NotApplicable both
 // return nil (default-allow stance); Deny returns *PolicyDeniedError.
 func enforce(d Decision) error {
@@ -822,9 +840,9 @@ func EvaluateSecretReferenceResolve(
 	attrs := map[cedar.String]cedar.Value{
 		cedar.String(CtxKeySecretToolName):        cedar.String(rctx.ToolName),
 		cedar.String(CtxKeySecretDestinationHost): cedar.String(rctx.DestinationHost),
-		cedar.String(CtxKeySecretIsStreaming):      cedar.Boolean(rctx.IsStreaming),
-		cedar.String(CtxKeySecretBudget):           cedar.Long(rctx.Budget),
-		cedar.String(CtxKeySecretAgentKind):        cedar.String(agentKind),
+		cedar.String(CtxKeySecretIsStreaming):     cedar.Boolean(rctx.IsStreaming),
+		cedar.String(CtxKeySecretBudget):          cedar.Long(rctx.Budget),
+		cedar.String(CtxKeySecretAgentKind):       cedar.String(agentKind),
 	}
 	return g.Evaluate(ctx, UserUID(), ActionSecretReferenceResolve, SecretReferenceUID(locator), attrs)
 }

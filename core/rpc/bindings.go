@@ -9,62 +9,64 @@ import (
 	"github.com/kameas-ai/kenaz-harness/core/autonomy"
 	"github.com/kameas-ai/kenaz-harness/core/toolloop"
 
+	"github.com/kameas-ai/kenaz-harness/core/contextbootstrap"
+	eventlog "github.com/kameas-ai/kenaz-harness/core/event/log"
+	corefleet "github.com/kameas-ai/kenaz-harness/core/fleet"
+	llmcap "github.com/kameas-ai/kenaz-harness/core/llm/capabilities"
+	"github.com/kameas-ai/kenaz-harness/core/llm/gemini"
+	"github.com/kameas-ai/kenaz-harness/core/logging"
+	coremcp "github.com/kameas-ai/kenaz-harness/core/mcp"
+	"github.com/kameas-ai/kenaz-harness/core/mcp/stdio"
+	"github.com/kameas-ai/kenaz-harness/core/rpc/middleware"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/a2a"
+	acpview "github.com/kameas-ai/kenaz-harness/core/rpc/views/acp"
 	graphview "github.com/kameas-ai/kenaz-harness/core/rpc/views/agentgraph"
+	agentsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/agents"
 	artifactsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/artifacts"
 	attachmentsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/attachments"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/audit"
-	eventlog "github.com/kameas-ai/kenaz-harness/core/event/log"
-	agentsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/agents"
 	branchesview "github.com/kameas-ai/kenaz-harness/core/rpc/views/branches"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/bundle"
+	catalogview "github.com/kameas-ai/kenaz-harness/core/rpc/views/catalog"
 	cedarpolicyview "github.com/kameas-ai/kenaz-harness/core/rpc/views/cedarpolicy"
 	compactionview "github.com/kameas-ai/kenaz-harness/core/rpc/views/compaction"
 	complianceview "github.com/kameas-ai/kenaz-harness/core/rpc/views/compliance"
 	contextsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/contexts"
+	contextsyncview "github.com/kameas-ai/kenaz-harness/core/rpc/views/contextsync"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/contextview"
 	corpusview "github.com/kameas-ai/kenaz-harness/core/rpc/views/corpus"
 	dialsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/dials"
+	elicitview "github.com/kameas-ai/kenaz-harness/core/rpc/views/elicit"
+	fleetview "github.com/kameas-ai/kenaz-harness/core/rpc/views/fleet"
 	hooksview "github.com/kameas-ai/kenaz-harness/core/rpc/views/hooks"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/llm"
-	coremcp "github.com/kameas-ai/kenaz-harness/core/mcp"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/mcp"
 	memoryview "github.com/kameas-ai/kenaz-harness/core/rpc/views/memory"
 	nodesview "github.com/kameas-ai/kenaz-harness/core/rpc/views/nodes"
 	onboardingview "github.com/kameas-ai/kenaz-harness/core/rpc/views/onboarding"
 	permissionsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/permissions"
+	planmodeview "github.com/kameas-ai/kenaz-harness/core/rpc/views/planmode"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/policy"
 	projectsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/projects"
+	scheduledchatview "github.com/kameas-ai/kenaz-harness/core/rpc/views/scheduledchat"
 	searchview "github.com/kameas-ai/kenaz-harness/core/rpc/views/search"
+	secretsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/secrets"
+	sentryview "github.com/kameas-ai/kenaz-harness/core/rpc/views/sentry"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/sessions"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/settings"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/shell"
+	sitesview "github.com/kameas-ai/kenaz-harness/core/rpc/views/sites"
 	slashview "github.com/kameas-ai/kenaz-harness/core/rpc/views/slashcmd"
-	coreslashcmd "github.com/kameas-ai/kenaz-harness/core/slashcmd"
-	llmcap "github.com/kameas-ai/kenaz-harness/core/llm/capabilities"
-	"github.com/kameas-ai/kenaz-harness/core/llm/gemini"
+	storageview "github.com/kameas-ai/kenaz-harness/core/rpc/views/storage"
+	syncview "github.com/kameas-ai/kenaz-harness/core/rpc/views/sync"
+	tasksview "github.com/kameas-ai/kenaz-harness/core/rpc/views/tasks"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/tools"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/trust"
 	updateview "github.com/kameas-ai/kenaz-harness/core/rpc/views/update"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/workflow"
 	workflowsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/workflows"
-	scheduledchatview "github.com/kameas-ai/kenaz-harness/core/rpc/views/scheduledchat"
-	storageview "github.com/kameas-ai/kenaz-harness/core/rpc/views/storage"
-	elicitview "github.com/kameas-ai/kenaz-harness/core/rpc/views/elicit"
-	secretsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/secrets"
-	planmodeview "github.com/kameas-ai/kenaz-harness/core/rpc/views/planmode"
-	sentryview "github.com/kameas-ai/kenaz-harness/core/rpc/views/sentry"
-	catalogview "github.com/kameas-ai/kenaz-harness/core/rpc/views/catalog"
-	fleetview "github.com/kameas-ai/kenaz-harness/core/rpc/views/fleet"
-	syncview "github.com/kameas-ai/kenaz-harness/core/rpc/views/sync"
-	sitesview "github.com/kameas-ai/kenaz-harness/core/rpc/views/sites"
-	tasksview "github.com/kameas-ai/kenaz-harness/core/rpc/views/tasks"
-	acpview "github.com/kameas-ai/kenaz-harness/core/rpc/views/acp"
-	contextsyncview "github.com/kameas-ai/kenaz-harness/core/rpc/views/contextsync"
-	"github.com/kameas-ai/kenaz-harness/core/logging"
-	"github.com/kameas-ai/kenaz-harness/core/mcp/stdio"
-	"github.com/kameas-ai/kenaz-harness/core/rpc/middleware"
 	"github.com/kameas-ai/kenaz-harness/core/sentry"
+	coreslashcmd "github.com/kameas-ai/kenaz-harness/core/slashcmd"
 )
 
 // Bindings is the Wails-reflected JS-callable surface. Every method has a
@@ -1349,7 +1351,6 @@ func (b *Bindings) Settings_GetArtifactPreview() (ArtifactPreviewConfig, error) 
 	}, err
 }
 
-
 // Settings_GetShowPerMessageTokenMeter returns whether the per-message
 // token meter chip is enabled (default false — chip hidden by default to
 // keep the chat uncluttered). (per-message-token-meter-01KR3PQR)
@@ -2009,7 +2010,9 @@ type BashExecResult struct {
 // tool's run-id cache is best-effort).
 func (b *Bindings) Bash_Exec(sessionID, command string) (BashExecResult, error) {
 	defer sentry.WrapBinding("Bash_Exec")()
-	type builtinsHolder interface{ Builtins() *toolloop.BuiltinRegistry }
+	type builtinsHolder interface {
+		Builtins() *toolloop.BuiltinRegistry
+	}
 	holder, ok := b.api.(builtinsHolder)
 	if !ok || holder.Builtins() == nil {
 		return BashExecResult{}, errors.New("rpc: bash tool registry not wired")
@@ -2779,6 +2782,57 @@ func (b *Bindings) Onboarding_GetHandoffHint() (onboardingview.HandoffHint, erro
 func (b *Bindings) Onboarding_RecordProgress(step onboardingview.ProgressStep) error {
 	defer sentry.WrapBinding("Onboarding_RecordProgress")()
 	return b.api.Onboarding().RecordProgress(b.ctx(), step)
+}
+
+// Onboarding_RunBootstrap kicks a context-bootstrap run over the consented
+// connector ids from the onboarding bootstrap step, blocks until it finishes,
+// and marks the bootstrap_run milestone complete. Returns the run id.
+// (context-bootstrap-harness-integration WP06)
+func (b *Bindings) Onboarding_RunBootstrap(consentedSources []string) (string, error) {
+	defer sentry.WrapBinding("Onboarding_RunBootstrap")()
+	if err := middleware.CheckLockdown(); err != nil {
+		return "", err
+	}
+	return b.api.Onboarding().RunBootstrap(b.ctx(), consentedSources)
+}
+
+// ── context-bootstrap (context-bootstrap-harness-integration, WP05) ───
+
+// ContextBootstrap_Start kicks a context-bootstrap run over the consented
+// connector ids. Returns the run id + recipe version. Gated by Cedar
+// (ActionContextBootstrapRun) when the policy engine is initialized,
+// default-allow otherwise (e.g. OSS builds without a Cedar data directory).
+func (b *Bindings) ContextBootstrap_Start(req StartBootstrapRunRequest) (StartBootstrapRunResult, error) {
+	defer sentry.WrapBinding("ContextBootstrap_Start")()
+	if err := middleware.CheckLockdown(); err != nil {
+		return StartBootstrapRunResult{}, err
+	}
+	return b.api.ContextBootstrap().StartRun(b.ctx(), req)
+}
+
+// ContextBootstrap_Status returns the latest run status snapshot for live
+// progress polling (the primary progress channel is the
+// "contextbootstrap:progress" broker stream).
+func (b *Bindings) ContextBootstrap_Status() (contextbootstrap.RunStatus, error) {
+	defer sentry.WrapBinding("ContextBootstrap_Status")()
+	return b.api.ContextBootstrap().Status(b.ctx())
+}
+
+// ContextBootstrap_Resume resumes a paused/interrupted run by id.
+func (b *Bindings) ContextBootstrap_Resume(runID string) (StartBootstrapRunResult, error) {
+	defer sentry.WrapBinding("ContextBootstrap_Resume")()
+	if err := middleware.CheckLockdown(); err != nil {
+		return StartBootstrapRunResult{}, err
+	}
+	return b.api.ContextBootstrap().Resume(b.ctx(), runID)
+}
+
+// ContextBootstrap_Health returns the context-graph health rollup for the
+// compact context-health card (total nodes, by-source counts, last sync,
+// connected sources, latest run).
+func (b *Bindings) ContextBootstrap_Health() (corefleet.ContextHealth, error) {
+	defer sentry.WrapBinding("ContextBootstrap_Health")()
+	return b.api.ContextBootstrap().Health(b.ctx())
 }
 
 // ── elicit (ask-user-question-interactive-01KZNP3G, WP04) ─────────────
