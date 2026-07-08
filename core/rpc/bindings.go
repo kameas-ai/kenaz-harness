@@ -2784,6 +2784,18 @@ func (b *Bindings) Onboarding_RecordProgress(step onboardingview.ProgressStep) e
 	return b.api.Onboarding().RecordProgress(b.ctx(), step)
 }
 
+// Onboarding_RunBootstrap kicks a context-bootstrap run over the consented
+// connector ids from the onboarding bootstrap step, blocks until it finishes,
+// and marks the bootstrap_run milestone complete. Returns the run id.
+// (context-bootstrap-harness-integration WP06)
+func (b *Bindings) Onboarding_RunBootstrap(consentedSources []string) (string, error) {
+	defer sentry.WrapBinding("Onboarding_RunBootstrap")()
+	if err := middleware.CheckLockdown(); err != nil {
+		return "", err
+	}
+	return b.api.Onboarding().RunBootstrap(b.ctx(), consentedSources)
+}
+
 // ── context-bootstrap (context-bootstrap-harness-integration, WP05) ───
 
 // ContextBootstrap_Start kicks a context-bootstrap run over the consented

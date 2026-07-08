@@ -23,9 +23,9 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/kameas-ai/kenaz-harness/core/logging"
 	harnessmcp "github.com/kameas-ai/kenaz-harness/core/mcp/builtin/harness"
 	coreonboarding "github.com/kameas-ai/kenaz-harness/core/onboarding"
-	"github.com/kameas-ai/kenaz-harness/core/logging"
 )
 
 // FirstRunChecker reports whether the harness is in its zero-config
@@ -96,6 +96,21 @@ type FleetStateReader interface {
 	ReadFleetState(ctx context.Context) (FleetOnboardingHint, error)
 }
 
+// BootstrapRunner kicks a context-bootstrap run for the onboarding bootstrap
+// step (context-bootstrap-harness-integration WP06). Implemented in
+// core/rpc/onboarding_wiring.go by onboardingBootstrapRunnerAdapter, which
+// delegates to the context-bootstrap orchestration API.
+//
+// OSS-first invariant: this interface is defined here (fleet-free); the
+// implementation lives in the bridge file that may import the engine + fleet.
+// A nil BootstrapRunner makes RunBootstrap a no-op that still records the
+// progress step locally (so the FSM does not stall on an OSS build).
+type BootstrapRunner interface {
+	// RunBootstrap dispatches a bootstrap run over the given connector ids and
+	// blocks until it finishes. Returns the run id on success.
+	RunBootstrap(ctx context.Context, consentedSources []string) (string, error)
+}
+
 // FleetOnboardingHint carries the relevant fields from the fleet
 // OnboardingState that the harness cares about for Path A warm-start.
 // The struct is intentionally narrow — only pre-fill / skip signals,
@@ -143,6 +158,11 @@ type Config struct {
 	// FleetStateReader reads fleet onboarding state on Begin (WP04).
 	// When nil, Begin does not attempt fleet state read (zero hint).
 	FleetStateReader FleetStateReader
+
+	// BootstrapRunner kicks the context-bootstrap run for the bootstrap step
+	// (context-bootstrap-harness-integration WP06). When nil, RunBootstrap
+	// only records the step locally (OSS build / test posture).
+	BootstrapRunner BootstrapRunner
 }
 
 // API is the concrete OnboardingAPI implementation.
@@ -428,6 +448,36 @@ func (a *API) RecordProgress(ctx context.Context, step ProgressStep) error {
 		_ = a.cfg.ProgressSyncer.SyncProgress(ctx, step, signedIn)
 	}
 	return nil
+}
+
+// RunBootstrap implements OnboardingAPI (WP06 bootstrap trigger seam).
+//
+// It kicks a context-bootstrap run over the consented connector ids via the
+// wired BootstrapRunner, blocks until the run finishes, and then records the
+// ProgressStepBootstrapRun milestone (which also mirrors bootstrap_run=true to
+// fleet via the ProgressSyncer).
+//
+// Graceful degradation:
+//   - nil BootstrapRunner (OSS build / test) → record the step locally and
+//     return an empty run id, so the FSM never stalls.
+//   - runner error → surface it to the caller (the frontend shows a retry)
+//     WITHOUT marking the step complete.
+func (a *API) RunBootstrap(ctx context.Context, consentedSources []string) (string, error) {
+	if a.cfg.BootstrapRunner == nil {
+		// OSS build / no engine: mark the step done so onboarding can proceed.
+		_ = a.RecordProgress(ctx, ProgressStepBootstrapRun)
+		logging.L().Info("onboarding.bootstrap.skipped", "reason", "no_runner")
+		return "", nil
+	}
+	runID, err := a.cfg.BootstrapRunner.RunBootstrap(ctx, consentedSources)
+	if err != nil {
+		logging.L().Warn("onboarding.bootstrap.failed", "err", err.Error())
+		return "", err
+	}
+	// Run finished — mark the step complete (mirrors bootstrap_run to fleet).
+	_ = a.RecordProgress(ctx, ProgressStepBootstrapRun)
+	logging.L().Info("onboarding.bootstrap.done", "run_id", runID)
+	return runID, nil
 }
 
 // Compile-time witness.

@@ -29,6 +29,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	contextaudit "github.com/kameas-ai/kenaz-harness/core/context/audit"
@@ -130,6 +131,11 @@ type bootstrapContextWriter struct {
 	auditEmitter contextaudit.Emitter
 
 	runID string // current fleet run id; empty when fleet path is disabled
+
+	// contextSyncedOnce guards the one-time PATCH /me/onboarding {context_synced:true}
+	// fired after the first successful fleet push (mirrors the ContextGraphSyncer
+	// first-push hook, which does not fire for bootstrap's direct /context/push).
+	contextSyncedOnce sync.Once
 }
 
 func newBootstrapContextWriter(lib *corecontexts.Library, fleetClient *corefleet.Client, fleetBoot *corefleet.BootstrapClient, auditEmitter contextaudit.Emitter) *bootstrapContextWriter {
@@ -211,6 +217,24 @@ func (w *bootstrapContextWriter) pushNodeToFleet(ctx context.Context, n contextb
 			Classification: "personal",
 			Version:        1,
 		}, time.Now())
+
+	// After the FIRST successful push, PATCH /me/onboarding {context_synced:true}
+	// exactly once. The ContextGraphSyncer first-push hook does not fire for the
+	// bootstrap engine's direct /context/push calls, so we own the signal here.
+	w.contextSyncedOnce.Do(func() {
+		client := w.fleetClient
+		go func() {
+			if client == nil || client.IsNop() {
+				return
+			}
+			if perr := client.PatchOnboardingState(context.Background(),
+				corefleet.OnboardingStateWire{Schema: 1, ContextSynced: true}); perr != nil {
+				logging.L().Warn("contextbootstrap.context_synced.patch_failed", "err_class", classifyWiringErr(perr))
+			} else {
+				logging.L().Info("contextbootstrap.context_synced.patch_ok")
+			}
+		}()
+	})
 	return true
 }
 

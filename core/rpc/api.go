@@ -2440,6 +2440,11 @@ func New(c *core.Core) *API {
 			// fleet-welcome-01NWEL01 seams (WP04/WP07):
 			ProgressSyncer:   &onboardingProgressSyncerAdapter{client: onboardingFleetCl},
 			FleetStateReader: &onboardingFleetStateReaderAdapter{client: onboardingFleetCl},
+			// WP06 (context-bootstrap): let the onboarding bootstrap step kick a
+			// run through the context-bootstrap orchestration API. ContextBootstrap()
+			// always returns non-nil (null impl when no engine), so RunBootstrap
+			// degrades gracefully on OSS builds.
+			BootstrapRunner: onboardingBootstrapRunnerAdapter{api: a.ContextBootstrap()},
 		})
 		logging.L().Info("onboarding.api.ready",
 			"fleet_seams_wired", onboardingFleetCl != nil && !onboardingFleetCl.IsNop(),
