@@ -21,6 +21,7 @@ import { onMounted, ref, watch } from 'vue';
 import { useHarnessClient } from '@/lib/harnessClientContext';
 import type { OnboardingCard, StarterSummary } from '@/lib/harnessClient';
 import BaseDialog from '@/components/ui/BaseDialog.vue';
+import BootstrapStep from '@/components/context/BootstrapStep.vue';
 
 const props = defineProps<{
   open: boolean;
@@ -33,7 +34,15 @@ const emit = defineEmits<{
 
 const client = useHarnessClient();
 
-const phase = ref<'phase1' | 'starter-pick'>('phase1');
+// Three-phase FSM:
+//   phase1       — provider setup (backend-driven card)
+//   bootstrap    — context-bootstrap step (Team+ gated server-side; degrades
+//                  gracefully via Skip if the engine returns capability errors)
+//   starter-pick — curated starter selection (assistant handoff)
+const phase = ref<'phase1' | 'bootstrap' | 'starter-pick'>('phase1');
+
+// Default connector list seeded into BootstrapStep when the recipe is unavailable.
+const defaultBootstrapSources = ['gmail', 'slack', 'github'];
 const card = ref<OnboardingCard | null>(null);
 const currentState = ref<string>('welcome');
 const fieldValues = ref<Record<string, string>>({});
@@ -98,8 +107,9 @@ async function onAction(id: string) {
     return;
   }
   if (id === 'next') {
-    await loadStarters();
-    phase.value = 'starter-pick';
+    // Route through the bootstrap step before starter-pick so the user can
+    // consent to context learning while the provider is freshly connected.
+    phase.value = 'bootstrap';
     return;
   }
   // Generic FSM event — send to backend.
@@ -116,16 +126,33 @@ async function onAction(id: string) {
     if (resp.card?.error_message) {
       errorMsg.value = resp.card.error_message;
     }
-    // If FSM landed on done, show starter picker.
+    // If FSM landed on done, route through the bootstrap step first.
     if (resp.state === 'done') {
-      await loadStarters();
-      phase.value = 'starter-pick';
+      phase.value = 'bootstrap';
     }
   } catch (e: unknown) {
     errorMsg.value = e instanceof Error ? e.message : String(e);
   } finally {
     submitting.value = false;
   }
+}
+
+async function advanceToStarterPick() {
+  await loadStarters();
+  phase.value = 'starter-pick';
+}
+
+// onBootstrapDone is called by BootstrapStep when the run completes. The
+// runID is available for audit/resume but we don't need it to advance.
+async function onBootstrapDone(_runID: string) {
+  await advanceToStarterPick();
+}
+
+// skipBootstrap advances straight to starter-pick without running the engine.
+// Always available so the user is never stuck if bootstrap is unavailable
+// (Team+ gate, no model configured, etc.).
+async function skipBootstrap() {
+  await advanceToStarterPick();
 }
 
 async function onPickStarter(s: StarterSummary) {
@@ -200,6 +227,24 @@ watch(
             >
               {{ a.label }}
             </button>
+          </div>
+        </template>
+
+        <!-- Bootstrap step: context-learning consent + live progress.
+             Server-side Team+ gated; BootstrapStep surfaces any capability
+             error inline. Skip button ensures the dialog is NEVER button-less. -->
+        <template v-else-if="phase === 'bootstrap'">
+          <p class="dialog-bootstrap-heading">Build your personal context</p>
+          <p class="dialog-bootstrap-sub">
+            Let Kenaz learn from your connected tools to build a personal context graph.
+            You can skip this and run it later from Settings.
+          </p>
+          <BootstrapStep
+            :sources="defaultBootstrapSources"
+            @done="onBootstrapDone"
+          />
+          <div class="dialog-actions dialog-bootstrap-actions">
+            <button @click="skipBootstrap">Skip for now</button>
           </div>
         </template>
 
@@ -303,5 +348,17 @@ watch(
 .starter-card span {
   font-size: 0.85rem;
   color: var(--ink-muted);
+}
+.dialog-bootstrap-heading {
+  font-weight: 600;
+  margin-bottom: 0.25rem;
+}
+.dialog-bootstrap-sub {
+  font-size: 0.85rem;
+  color: var(--ink-muted);
+  margin-bottom: 1rem;
+}
+.dialog-bootstrap-actions {
+  margin-top: 1rem;
 }
 </style>

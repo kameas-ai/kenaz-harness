@@ -338,6 +338,22 @@ export function Context_StopStream(arg1) {
   return window['go']['rpc']['Bindings']['Context_StopStream'](arg1);
 }
 
+export function ContextBootstrap_Health() {
+  return window['go']['rpc']['Bindings']['ContextBootstrap_Health']();
+}
+
+export function ContextBootstrap_Resume(arg1) {
+  return window['go']['rpc']['Bindings']['ContextBootstrap_Resume'](arg1);
+}
+
+export function ContextBootstrap_Start(arg1) {
+  return window['go']['rpc']['Bindings']['ContextBootstrap_Start'](arg1);
+}
+
+export function ContextBootstrap_Status() {
+  return window['go']['rpc']['Bindings']['ContextBootstrap_Status']();
+}
+
 export function Contexts_AttachModule(arg1, arg2, arg3) {
   return window['go']['rpc']['Bindings']['Contexts_AttachModule'](arg1, arg2, arg3);
 }

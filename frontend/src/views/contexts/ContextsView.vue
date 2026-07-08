@@ -44,6 +44,7 @@ import ContextTree from './ContextTree.vue';
 import ContextPreview from './ContextPreview.vue';
 import GlobalContextPanel from '@/components/settings/GlobalContextPanel.vue';
 import ContextRecent from './ContextRecent.vue';
+import ContextHealthCard from '@/components/context/ContextHealthCard.vue';
 
 const servedMode = useServedMode();
 const client = useHarnessClient();
@@ -689,12 +690,19 @@ onBeforeUnmount(() => {
         :on-save="savePreview"
       />
 
-      <!-- right: recents -->
-      <ContextRecent
-        :paths="recent"
-        :selected-path="selectedPath"
-        @select="selectFile"
-      />
+      <!-- right: health + recents -->
+      <div class="flex flex-col gap-3 border-l border-border-muted bg-surface-0 overflow-y-auto p-3">
+        <!-- Context-health rollup (context-bootstrap-harness-integration WP07b).
+             Self-contained: loads health on mount, degrades to empty state when
+             fleet is disabled. Not gated by servedMode — the whole view is
+             already inside the v-else block above. -->
+        <ContextHealthCard />
+        <ContextRecent
+          :paths="recent"
+          :selected-path="selectedPath"
+          @select="selectFile"
+        />
+      </div>
     </div>
   </div>
 </template>

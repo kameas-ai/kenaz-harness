@@ -2799,8 +2799,9 @@ func (b *Bindings) Onboarding_RunBootstrap(consentedSources []string) (string, e
 // ── context-bootstrap (context-bootstrap-harness-integration, WP05) ───
 
 // ContextBootstrap_Start kicks a context-bootstrap run over the consented
-// connector ids. Returns the run id + recipe version. Gated by the Cedar
-// ActionContextBootstrapRun action.
+// connector ids. Returns the run id + recipe version. Gated by Cedar
+// (ActionContextBootstrapRun) when the policy engine is initialized,
+// default-allow otherwise (e.g. OSS builds without a Cedar data directory).
 func (b *Bindings) ContextBootstrap_Start(req StartBootstrapRunRequest) (StartBootstrapRunResult, error) {
 	defer sentry.WrapBinding("ContextBootstrap_Start")()
 	if err := middleware.CheckLockdown(); err != nil {

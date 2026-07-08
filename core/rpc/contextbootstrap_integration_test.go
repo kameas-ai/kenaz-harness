@@ -115,9 +115,21 @@ const bootstrapRecipeJSON = `{
 // BootstrapClient + fleet.Client pointed at it, recording every request.
 func newIntegrationFleet(t *testing.T, rec *fleetRecorder) (*corefleet.BootstrapClient, *corefleet.Client, *httptest.Server) {
 	t.Helper()
+	return newIntegrationFleetWithHook(t, rec, nil)
+}
+
+// newIntegrationFleetWithHook is like newIntegrationFleet but calls hook (if
+// non-nil) after each request is recorded. The hook runs under the recorder
+// mutex so it sees a consistent snapshot; it must not block.
+func newIntegrationFleetWithHook(t *testing.T, rec *fleetRecorder, hook func(recordedReq)) (*corefleet.BootstrapClient, *corefleet.Client, *httptest.Server) {
+	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
-		rec.add(recordedReq{method: r.Method, path: r.URL.Path, body: string(body)})
+		rr := recordedReq{method: r.Method, path: r.URL.Path, body: string(body)}
+		rec.add(rr)
+		if hook != nil {
+			hook(rr)
+		}
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/context/bootstrap/recipe":
 			_, _ = w.Write([]byte(bootstrapRecipeJSON))
@@ -181,11 +193,23 @@ func buildIntegrationImpl(t *testing.T, lib *corecontexts.Library, fleetBoot *co
 
 // ─── tests ────────────────────────────────────────────────────────────────────
 
+// Not parallel: mutates the shared keychain singleton (SaveTokens/ClearTokens).
 func TestContextBootstrap_FullLifecycle(t *testing.T) {
-	// Not parallel: uses the keychain singleton via SaveTokens.
 	rec := &fleetRecorder{}
+	// contextSyncedCh is closed by the mock HTTP server when it receives
+	// the PATCH /me/onboarding {context_synced:true} request, replacing
+	// the fragile 150 ms sleep that was previously here.
+	contextSyncedCh := make(chan struct{}, 1)
 	audit := &recordingAudit{}
-	fleetBoot, fleetClient, _ := newIntegrationFleet(t, rec)
+	fleetBoot, fleetClient, _ := newIntegrationFleetWithHook(t, rec, func(r recordedReq) {
+		if r.method == http.MethodPatch && r.path == "/api/v1/me/onboarding" &&
+			strings.Contains(r.body, `"context_synced":true`) {
+			select {
+			case contextSyncedCh <- struct{}{}:
+			default:
+			}
+		}
+	})
 
 	lib, err := corecontexts.Open(t.TempDir())
 	if err != nil {
@@ -206,8 +230,12 @@ func TestContextBootstrap_FullLifecycle(t *testing.T) {
 		t.Errorf("recipe version = %q, want 9.9.9 (fleet recipe)", res.RecipeVersion)
 	}
 
-	// Give the async context_synced PATCH goroutine a moment to fire.
-	time.Sleep(150 * time.Millisecond)
+	// Wait for the async context_synced PATCH goroutine to fire.
+	select {
+	case <-contextSyncedCh:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timeout waiting for context_synced PATCH /me/onboarding")
+	}
 
 	reqs := rec.snapshot()
 	// Assert the full lifecycle appears in the outbound requests.

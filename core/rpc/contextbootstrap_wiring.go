@@ -84,6 +84,9 @@ func mapFleetRecipe(w *corefleet.BootstrapRecipeWire) *contextbootstrap.Bootstra
 		ConfidenceRules: contextbootstrap.ConfidenceRules{
 			AssertMinCorroborations: w.ConfidenceRules.MinCorroborations,
 			TrustedPersonWeight:     w.ConfidenceRules.TrustedPersonWeight,
+			// NOTE: assert/tentative float thresholds are advisory-only — the engine
+			// uses a count-based corroboration model (min_corroborations), so these
+			// are intentionally not mapped yet.
 		},
 	}
 	for _, c := range w.ConnectorCatalog {
@@ -130,7 +133,8 @@ type bootstrapContextWriter struct {
 	fleetBoot    *corefleet.BootstrapClient
 	auditEmitter contextaudit.Emitter
 
-	runID string // current fleet run id; empty when fleet path is disabled
+	mu    sync.RWMutex // guards runID; write on SetRunID, read during dispatch/Sync
+	runID string       // current fleet run id; empty when fleet path is disabled
 
 	// contextSyncedOnce guards the one-time PATCH /me/onboarding {context_synced:true}
 	// fired after the first successful fleet push (mirrors the ContextGraphSyncer
@@ -143,7 +147,11 @@ func newBootstrapContextWriter(lib *corecontexts.Library, fleetClient *corefleet
 }
 
 // SetRunID records the fleet run id for subsequent Sync PATCH calls.
-func (w *bootstrapContextWriter) SetRunID(runID string) { w.runID = runID }
+func (w *bootstrapContextWriter) SetRunID(runID string) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.runID = runID
+}
 
 // WriteNodes implements contextbootstrap.ContextWriter. It writes each node to
 // the local Context Library as a markdown file with YAML frontmatter carrying
@@ -221,6 +229,11 @@ func (w *bootstrapContextWriter) pushNodeToFleet(ctx context.Context, n contextb
 	// After the FIRST successful push, PATCH /me/onboarding {context_synced:true}
 	// exactly once. The ContextGraphSyncer first-push hook does not fire for the
 	// bootstrap engine's direct /context/push calls, so we own the signal here.
+	//
+	// NOTE: a second PATCH /me/onboarding {context_synced:true} may also fire
+	// from ContextGraphSyncer.SetFirstPushHook (api.go ~2043) when the regular
+	// context-graph sync path runs its first push. Fleet treats context_synced as
+	// advance-only/idempotent, so the double-PATCH is harmless.
 	w.contextSyncedOnce.Do(func() {
 		client := w.fleetClient
 		go func() {
@@ -259,7 +272,10 @@ type bootstrapPushNode struct {
 // fleet client or missing run id makes this a no-op (the local write already
 // happened in WriteNodes).
 func (w *bootstrapContextWriter) Sync(ctx context.Context, payload contextbootstrap.SyncPayload) error {
-	if w.fleetBoot == nil || !w.fleetBoot.Enabled() || w.runID == "" {
+	w.mu.RLock()
+	runID := w.runID
+	w.mu.RUnlock()
+	if w.fleetBoot == nil || !w.fleetBoot.Enabled() || runID == "" {
 		return nil
 	}
 	patch := corefleet.BootstrapRunPatch{
@@ -273,7 +289,7 @@ func (w *bootstrapContextWriter) Sync(ctx context.Context, payload contextbootst
 			NodesCreated:   cs.NodesExtracted,
 		})
 	}
-	if err := w.fleetBoot.PatchBootstrapRun(ctx, w.runID, patch); err != nil {
+	if err := w.fleetBoot.PatchBootstrapRun(ctx, runID, patch); err != nil {
 		logging.L().Warn("contextbootstrap.sync.patch_failed", "err_class", classifyWiringErr(err))
 	}
 	return nil
@@ -290,7 +306,9 @@ const TopicContextBootstrapProgress = "contextbootstrap:progress"
 type bootstrapProgressSink struct {
 	broker    *StreamBroker
 	fleetBoot *corefleet.BootstrapClient
-	runID     string
+
+	mu    sync.RWMutex // guards runID; write on SetRunID, read in Emit
+	runID string
 }
 
 func newBootstrapProgressSink(broker *StreamBroker, fleetBoot *corefleet.BootstrapClient) *bootstrapProgressSink {
@@ -298,7 +316,11 @@ func newBootstrapProgressSink(broker *StreamBroker, fleetBoot *corefleet.Bootstr
 }
 
 // SetRunID records the fleet run id for progress PATCH calls.
-func (p *bootstrapProgressSink) SetRunID(runID string) { p.runID = runID }
+func (p *bootstrapProgressSink) SetRunID(runID string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.runID = runID
+}
 
 // Emit implements contextbootstrap.ProgressSink. It must not block: the broker
 // emit is a fire-and-forget, and the fleet PATCH runs in a goroutine.
@@ -306,8 +328,10 @@ func (p *bootstrapProgressSink) Emit(ctx context.Context, status contextbootstra
 	if p.broker != nil {
 		p.broker.emitter.Emit(p.broker.EmitCtx(), TopicContextBootstrapProgress, status)
 	}
-	if p.fleetBoot != nil && p.fleetBoot.Enabled() && p.runID != "" {
-		runID := p.runID
+	p.mu.RLock()
+	runID := p.runID
+	p.mu.RUnlock()
+	if p.fleetBoot != nil && p.fleetBoot.Enabled() && runID != "" {
 		patch := corefleet.BootstrapRunPatch{
 			Phase:        string(status.Phase),
 			NodesCreated: status.TotalNodesWritten,

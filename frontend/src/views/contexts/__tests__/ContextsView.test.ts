@@ -610,4 +610,29 @@ describe('ContextsView', () => {
       expect(w.find('[data-testid=context-new-folder-input]').exists()).toBe(false);
     });
   });
+
+  // BLOCKER-1: ContextHealthCard must be mounted in the right column.
+  describe('ContextHealthCard (context-bootstrap-harness-integration WP07b)', () => {
+    it('mounts ContextHealthCard in the right-hand column (data-testid=context-health-card)', async () => {
+      const { client } = provide({});
+      const w = mount(ContextsView, {
+        global: { provide: { [HarnessClientKey as symbol]: client } },
+      });
+      await flushPromises();
+      // ContextHealthCard renders with data-testid="context-health-card" on mount.
+      expect(w.find('[data-testid="context-health-card"]').exists()).toBe(true);
+    });
+
+    it('calls contextBootstrap.health() on mount via ContextHealthCard', async () => {
+      const { client } = provide({});
+      const healthSpy = vi.spyOn(client.contextBootstrap, 'health');
+      const w = mount(ContextsView, {
+        global: { provide: { [HarnessClientKey as symbol]: client } },
+      });
+      await flushPromises();
+      // ContextHealthCard calls health() in its onMounted hook.
+      expect(healthSpy).toHaveBeenCalled();
+      w.unmount();
+    });
+  });
 });

@@ -2392,9 +2392,18 @@ func New(c *core.Core) *API {
 			audit:       &bootstrapAuditBridge{impl: a.auditImpl},
 		}); cbImpl != nil {
 			a.contextBootstrapAPI = cbImpl
-			logging.L().Info("rpc.context_bootstrap.wired",
-				"fleet_backed", cbFleetCl != nil && !cbFleetCl.IsNop(),
-			)
+			fleetBacked := cbFleetCl != nil && !cbFleetCl.IsNop()
+			logging.L().Info("rpc.context_bootstrap.wired", "fleet_backed", fleetBacked)
+			// Warn when the Cedar gate is nil in a fleet-enabled build: without
+			// the Cedar engine the ContextBootstrap_Start binding is default-allow
+			// regardless of any policy file the operator may have installed. This
+			// is expected in OSS / no-DataDir builds but surprising in fleet builds.
+			if cbGate == nil && fleetBacked {
+				logging.L().Warn("rpc.context_bootstrap.cedar_gate_nil",
+					"reason", "no_cedar_data_dir_or_prompt_registry",
+					"effect", "ActionContextBootstrapRun is default-allow",
+				)
+			}
 		}
 	}
 

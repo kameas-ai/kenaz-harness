@@ -113,6 +113,16 @@ async function start(): Promise<void> {
       </button>
     </div>
 
+    <!-- Starting indicator: shown after clicking Start but before the first
+         progress event arrives (can be 10–30 s while the engine warms up). -->
+    <p
+      v-if="running && !status"
+      class="font-ui text-xs text-ink-muted"
+      data-testid="bootstrap-starting"
+    >
+      Starting…
+    </p>
+
     <p v-if="error" class="font-ui text-xs text-signal-warning" data-testid="bootstrap-error">
       {{ error }}
     </p>
