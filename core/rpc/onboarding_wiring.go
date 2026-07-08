@@ -32,8 +32,8 @@ import (
 	"github.com/kameas-ai/kenaz-harness/core/fleet"
 	"github.com/kameas-ai/kenaz-harness/core/logging"
 	harnessmcp "github.com/kameas-ai/kenaz-harness/core/mcp/builtin/harness"
-	onboardingview "github.com/kameas-ai/kenaz-harness/core/rpc/views/onboarding"
 	llmview "github.com/kameas-ai/kenaz-harness/core/rpc/views/llm"
+	onboardingview "github.com/kameas-ai/kenaz-harness/core/rpc/views/onboarding"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/settings"
 	"github.com/kameas-ai/kenaz-harness/core/session"
 )
@@ -291,6 +291,32 @@ func (a *onboardingFleetStateReaderAdapter) ReadFleetState(ctx context.Context) 
 		AlreadyConnected:        state.AccountConnected,
 		AlreadyHarnessInstalled: state.HarnessInstalled,
 	}, nil
+}
+
+// ---- BootstrapRunner adapter (WP06, context-bootstrap) ----------------------
+
+// onboardingBootstrapRunnerAdapter implements onboardingview.BootstrapRunner by
+// delegating to the context-bootstrap orchestration API. It lives here (in
+// core/rpc) because it bridges the fleet-free onboarding view to the engine +
+// fleet-backed adapters. A nil api makes RunBootstrap a no-op error-free call.
+//
+// OSS-first: core/rpc/views/onboarding only holds the BootstrapRunner interface.
+type onboardingBootstrapRunnerAdapter struct {
+	api ContextBootstrapAPI
+}
+
+// RunBootstrap implements onboardingview.BootstrapRunner. It starts a run over
+// the consented sources and blocks until StartRun returns (StartRun runs the
+// engine synchronously and finalises the fleet run).
+func (a onboardingBootstrapRunnerAdapter) RunBootstrap(ctx context.Context, consentedSources []string) (string, error) {
+	if a.api == nil {
+		return "", nil
+	}
+	res, err := a.api.StartRun(ctx, StartBootstrapRunRequest{ConsentedSources: consentedSources})
+	if err != nil {
+		return "", err
+	}
+	return res.RunID, nil
 }
 
 // ErrOnboardingNotWired is returned when the session manager is unavailable.

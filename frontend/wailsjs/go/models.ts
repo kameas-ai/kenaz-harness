@@ -1586,6 +1586,112 @@ export namespace compaction {
 
 }
 
+export namespace contextbootstrap {
+
+	export class ConnectorProgress {
+	    connector_id: string;
+	    label: string;
+	    status: string;
+	    items_fetched: number;
+	    nodes_extracted: number;
+	    budget_hit?: boolean;
+
+	    static createFrom(source: any = {}) {
+	        return new ConnectorProgress(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.connector_id = source["connector_id"];
+	        this.label = source["label"];
+	        this.status = source["status"];
+	        this.items_fetched = source["items_fetched"];
+	        this.nodes_extracted = source["nodes_extracted"];
+	        this.budget_hit = source["budget_hit"];
+	    }
+	}
+	export class CoverageEntry {
+	    connector_id: string;
+	    label: string;
+	    items_fetched: number;
+	    budget_kind: string;
+	    budget_limit: number;
+
+	    static createFrom(source: any = {}) {
+	        return new CoverageEntry(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.connector_id = source["connector_id"];
+	        this.label = source["label"];
+	        this.items_fetched = source["items_fetched"];
+	        this.budget_kind = source["budget_kind"];
+	        this.budget_limit = source["budget_limit"];
+	    }
+	}
+	export class RunStatus {
+	    run_id: string;
+	    phase: string;
+	    // Go type: time
+	    started_at?: any;
+	    connectors: ConnectorProgress[];
+	    total_nodes_written: number;
+	    coverage_report?: CoverageEntry[];
+	    error_summary?: string;
+
+	    static createFrom(source: any = {}) {
+	        return new RunStatus(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.run_id = source["run_id"];
+	        this.phase = source["phase"];
+	        this.started_at = this.convertValues(source["started_at"], null);
+	        this.connectors = this.convertValues(source["connectors"], ConnectorProgress);
+	        this.total_nodes_written = source["total_nodes_written"];
+	        this.coverage_report = this.convertValues(source["coverage_report"], CoverageEntry);
+	        this.error_summary = source["error_summary"];
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class TrustedPerson {
+	    identifier: string;
+	    trust_level: string;
+	    source: string;
+
+	    static createFrom(source: any = {}) {
+	        return new TrustedPerson(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.identifier = source["identifier"];
+	        this.trust_level = source["trust_level"];
+	        this.source = source["source"];
+	    }
+	}
+
+}
+
 export namespace contexts {
 	
 	export class ContextConflictView {
@@ -2538,7 +2644,61 @@ export namespace elicit {
 }
 
 export namespace fleet {
-	
+
+	export class BootstrapLatestRun {
+	    run_id: string;
+	    status: string;
+	    finished_at?: string;
+
+	    static createFrom(source: any = {}) {
+	        return new BootstrapLatestRun(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.run_id = source["run_id"];
+	        this.status = source["status"];
+	        this.finished_at = source["finished_at"];
+	    }
+	}
+	export class ContextHealth {
+	    total_nodes: number;
+	    nodes_by_source_kind: Record<string, number>;
+	    last_sync?: string;
+	    connected_sources: string[];
+	    latest_run?: BootstrapLatestRun;
+
+	    static createFrom(source: any = {}) {
+	        return new ContextHealth(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.total_nodes = source["total_nodes"];
+	        this.nodes_by_source_kind = source["nodes_by_source_kind"];
+	        this.last_sync = source["last_sync"];
+	        this.connected_sources = source["connected_sources"];
+	        this.latest_run = this.convertValues(source["latest_run"], BootstrapLatestRun);
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	export class ContextPushConflict {
 	    node_id: string;
 	    server_version: number;
@@ -5335,7 +5495,57 @@ export namespace recipes {
 }
 
 export namespace rpc {
-	
+
+	export class StartBootstrapRunRequest {
+	    consented_sources: string[];
+	    trusted_people?: contextbootstrap.TrustedPerson[];
+
+	    static createFrom(source: any = {}) {
+	        return new StartBootstrapRunRequest(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.consented_sources = source["consented_sources"];
+	        this.trusted_people = this.convertValues(source["trusted_people"], contextbootstrap.TrustedPerson);
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class StartBootstrapRunResult {
+	    run_id: string;
+	    recipe_version: string;
+	    status: string;
+	    fleet_backed: boolean;
+
+	    static createFrom(source: any = {}) {
+	        return new StartBootstrapRunResult(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.run_id = source["run_id"];
+	        this.recipe_version = source["recipe_version"];
+	        this.status = source["status"];
+	        this.fleet_backed = source["fleet_backed"];
+	    }
+	}
 	export class WindowSize {
 	    width: number;
 	    height: number;

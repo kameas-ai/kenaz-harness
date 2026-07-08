@@ -76,8 +76,8 @@ type StepRequest struct {
 // StepResponse is the FSM's StepResult lifted to the wire shape.
 // The caller renders Card directly.
 type StepResponse struct {
-	State string                  `json:"state"`
-	Card  coreonboarding.Card     `json:"card"`
+	State string              `json:"state"`
+	Card  coreonboarding.Card `json:"card"`
 }
 
 // RestartPhase2Request is the body the frontend sends when the user
@@ -171,6 +171,15 @@ type OnboardingAPI interface {
 	// yet deployed. The local recording always succeeds; the fleet push is a
 	// no-op until the fleet side ships.
 	RecordProgress(ctx context.Context, step ProgressStep) error
+
+	// ── WP06: Bootstrap trigger seam ────────────────────────────────────────
+	//
+	// RunBootstrap kicks a context-bootstrap run over the consented connector
+	// ids, blocks until it finishes, then records the bootstrap_run milestone.
+	// Returns the run id. Degrades to a local no-op (records the step, empty
+	// run id) when no engine is wired (OSS build).
+	// (context-bootstrap-harness-integration WP06)
+	RunBootstrap(ctx context.Context, consentedSources []string) (string, error)
 }
 
 // StarterSummary is the dialog-render shape — title + description plus

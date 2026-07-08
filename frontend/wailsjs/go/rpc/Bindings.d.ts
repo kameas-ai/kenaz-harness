@@ -466,6 +466,8 @@ export function Onboarding_ListStarters():Promise<Array<onboarding.StarterSummar
 
 export function Onboarding_RecordProgress(arg1:onboarding.ProgressStep):Promise<void>;
 
+export function Onboarding_RunBootstrap(arg1:Array<string>):Promise<string>;
+
 export function Onboarding_RestartPhase2(arg1:onboarding.RestartPhase2Request):Promise<onboarding.RestartPhase2Response>;
 
 export function Onboarding_State():Promise<onboarding.OnboardingState>;
