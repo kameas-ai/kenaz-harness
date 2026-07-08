@@ -25,18 +25,25 @@ import (
 	"time"
 
 	"github.com/kameas-ai/kenaz-harness/core"
+	acpenvelope "github.com/kameas-ai/kenaz-harness/core/acp/envelope"
+	acppeers "github.com/kameas-ai/kenaz-harness/core/acp/peers"
 	coreag "github.com/kameas-ai/kenaz-harness/core/agentgraph"
-	contextaudit "github.com/kameas-ai/kenaz-harness/core/context/audit"
-	"github.com/kameas-ai/kenaz-harness/core/fleet"
 	corenodes "github.com/kameas-ai/kenaz-harness/core/agentgraph/nodes"
+	coreart "github.com/kameas-ai/kenaz-harness/core/artifacts"
 	coreatt "github.com/kameas-ai/kenaz-harness/core/attachments"
+	"github.com/kameas-ai/kenaz-harness/core/autonomy"
 	corecompaction "github.com/kameas-ai/kenaz-harness/core/compaction"
 	compactionwiring "github.com/kameas-ai/kenaz-harness/core/compaction/wiring"
+	contextaudit "github.com/kameas-ai/kenaz-harness/core/context/audit"
 	corecontexts "github.com/kameas-ai/kenaz-harness/core/contexts"
+	coreconv "github.com/kameas-ai/kenaz-harness/core/conversation"
 	corecorpus "github.com/kameas-ai/kenaz-harness/core/corpus"
-	coreupdate "github.com/kameas-ai/kenaz-harness/core/update"
+	credstoreRefs "github.com/kameas-ai/kenaz-harness/core/credstore/refs"
+	"github.com/kameas-ai/kenaz-harness/core/eval"
 	"github.com/kameas-ai/kenaz-harness/core/event"
 	kindpkg "github.com/kameas-ai/kenaz-harness/core/event/kind"
+	"github.com/kameas-ai/kenaz-harness/core/fleet"
+	corefleet "github.com/kameas-ai/kenaz-harness/core/fleet"
 	"github.com/kameas-ai/kenaz-harness/core/hooks"
 	corellm "github.com/kameas-ai/kenaz-harness/core/llm"
 	llmcap "github.com/kameas-ai/kenaz-harness/core/llm/capabilities"
@@ -50,81 +57,74 @@ import (
 	"github.com/kameas-ai/kenaz-harness/core/mcp/stdio"
 	corememory "github.com/kameas-ai/kenaz-harness/core/memory"
 	"github.com/kameas-ai/kenaz-harness/core/policy/cedar"
-	"github.com/kameas-ai/kenaz-harness/core/units"
-	autotitle "github.com/kameas-ai/kenaz-harness/core/sessions/autotitle"
-	autotitlewiring "github.com/kameas-ai/kenaz-harness/core/sessions/autotitle/wiring"
-	coreart "github.com/kameas-ai/kenaz-harness/core/artifacts"
-	coreconv "github.com/kameas-ai/kenaz-harness/core/conversation"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/a2a"
+	acpview "github.com/kameas-ai/kenaz-harness/core/rpc/views/acp"
 	graphview "github.com/kameas-ai/kenaz-harness/core/rpc/views/agentgraph"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/agentgraph/chat"
-	onboardingview "github.com/kameas-ai/kenaz-harness/core/rpc/views/onboarding"
+	agentsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/agents"
 	artifactsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/artifacts"
 	attachmentsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/attachments"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/audit"
-	agentsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/agents"
 	branchesview "github.com/kameas-ai/kenaz-harness/core/rpc/views/branches"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/bundle"
+	catalogview "github.com/kameas-ai/kenaz-harness/core/rpc/views/catalog"
+	cedarview "github.com/kameas-ai/kenaz-harness/core/rpc/views/cedar"
 	cedarpolicyview "github.com/kameas-ai/kenaz-harness/core/rpc/views/cedarpolicy"
 	compactionview "github.com/kameas-ai/kenaz-harness/core/rpc/views/compaction"
 	complianceview "github.com/kameas-ai/kenaz-harness/core/rpc/views/compliance"
 	contextsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/contexts"
+	contextsyncview "github.com/kameas-ai/kenaz-harness/core/rpc/views/contextsync"
 	contextview "github.com/kameas-ai/kenaz-harness/core/rpc/views/contextview"
 	corpusview "github.com/kameas-ai/kenaz-harness/core/rpc/views/corpus"
 	dialsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/dials"
+	elicitview "github.com/kameas-ai/kenaz-harness/core/rpc/views/elicit"
+	fleetview "github.com/kameas-ai/kenaz-harness/core/rpc/views/fleet"
 	hooksview "github.com/kameas-ai/kenaz-harness/core/rpc/views/hooks"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/llm"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/mcp"
 	memoryview "github.com/kameas-ai/kenaz-harness/core/rpc/views/memory"
 	nodesview "github.com/kameas-ai/kenaz-harness/core/rpc/views/nodes"
+	onboardingview "github.com/kameas-ai/kenaz-harness/core/rpc/views/onboarding"
 	permissionsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/permissions"
+	planmodeview "github.com/kameas-ai/kenaz-harness/core/rpc/views/planmode"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/policy"
 	projectsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/projects"
+	scheduledchatview "github.com/kameas-ai/kenaz-harness/core/rpc/views/scheduledchat"
 	searchview "github.com/kameas-ai/kenaz-harness/core/rpc/views/search"
+	secretsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/secrets"
+	sentryview "github.com/kameas-ai/kenaz-harness/core/rpc/views/sentry"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/sessions"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/settings"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/shell"
+	sitesview "github.com/kameas-ai/kenaz-harness/core/rpc/views/sites"
 	slashview "github.com/kameas-ai/kenaz-harness/core/rpc/views/slashcmd"
+	storageview "github.com/kameas-ai/kenaz-harness/core/rpc/views/storage"
+	syncview "github.com/kameas-ai/kenaz-harness/core/rpc/views/sync"
+	tasksview "github.com/kameas-ai/kenaz-harness/core/rpc/views/tasks"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/tools"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/trust"
 	updateview "github.com/kameas-ai/kenaz-harness/core/rpc/views/update"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/workflow"
 	workflowsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/workflows"
-	scheduledchatview "github.com/kameas-ai/kenaz-harness/core/rpc/views/scheduledchat"
-	storageview "github.com/kameas-ai/kenaz-harness/core/rpc/views/storage"
-	elicitview "github.com/kameas-ai/kenaz-harness/core/rpc/views/elicit"
-	secretsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/secrets"
-	planmodeview "github.com/kameas-ai/kenaz-harness/core/rpc/views/planmode"
-	"github.com/kameas-ai/kenaz-harness/core/autonomy"
+	schedulerPkg "github.com/kameas-ai/kenaz-harness/core/scheduler"
 	"github.com/kameas-ai/kenaz-harness/core/secrets"
-	coreslashcmd "github.com/kameas-ai/kenaz-harness/core/slashcmd"
-	corebash "github.com/kameas-ai/kenaz-harness/core/tools/bash"
-	coreskill "github.com/kameas-ai/kenaz-harness/core/tools/skill"
-	coreplanmode "github.com/kameas-ai/kenaz-harness/core/tools/planmode"
 	secretsref "github.com/kameas-ai/kenaz-harness/core/secrets/ref"
-	credstoreRefs "github.com/kameas-ai/kenaz-harness/core/credstore/refs"
-	sentryview "github.com/kameas-ai/kenaz-harness/core/rpc/views/sentry"
-	fleetview "github.com/kameas-ai/kenaz-harness/core/rpc/views/fleet"
-	tasksview "github.com/kameas-ai/kenaz-harness/core/rpc/views/tasks"
-	coretasks "github.com/kameas-ai/kenaz-harness/core/tasks"
-	catalogview "github.com/kameas-ai/kenaz-harness/core/rpc/views/catalog"
-	syncview "github.com/kameas-ai/kenaz-harness/core/rpc/views/sync"
-	cedarview "github.com/kameas-ai/kenaz-harness/core/rpc/views/cedar"
-	sitesview "github.com/kameas-ai/kenaz-harness/core/rpc/views/sites"
-	acpview "github.com/kameas-ai/kenaz-harness/core/rpc/views/acp"
-	contextsyncview "github.com/kameas-ai/kenaz-harness/core/rpc/views/contextsync"
-	acppeers "github.com/kameas-ai/kenaz-harness/core/acp/peers"
-	acpenvelope "github.com/kameas-ai/kenaz-harness/core/acp/envelope"
-	corefleet "github.com/kameas-ai/kenaz-harness/core/fleet"
-	"github.com/kameas-ai/kenaz-harness/core/eval"
 	"github.com/kameas-ai/kenaz-harness/core/session"
+	autotitle "github.com/kameas-ai/kenaz-harness/core/sessions/autotitle"
+	autotitlewiring "github.com/kameas-ai/kenaz-harness/core/sessions/autotitle/wiring"
+	coreslashcmd "github.com/kameas-ai/kenaz-harness/core/slashcmd"
 	"github.com/kameas-ai/kenaz-harness/core/storage"
+	coretasks "github.com/kameas-ai/kenaz-harness/core/tasks"
 	"github.com/kameas-ai/kenaz-harness/core/toolloop"
+	corebash "github.com/kameas-ai/kenaz-harness/core/tools/bash"
+	coreplanmode "github.com/kameas-ai/kenaz-harness/core/tools/planmode"
+	coreskill "github.com/kameas-ai/kenaz-harness/core/tools/skill"
+	"github.com/kameas-ai/kenaz-harness/core/units"
+	coreupdate "github.com/kameas-ai/kenaz-harness/core/update"
 	"github.com/kameas-ai/kenaz-harness/core/usage"
 	corewf "github.com/kameas-ai/kenaz-harness/core/workflows"
 	wfcatalogpkg "github.com/kameas-ai/kenaz-harness/core/workflows/catalog"
 	wfsched "github.com/kameas-ai/kenaz-harness/core/workflows/scheduler"
-	schedulerPkg "github.com/kameas-ai/kenaz-harness/core/scheduler"
 	"github.com/zalando/go-keyring"
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
@@ -212,6 +212,12 @@ type HarnessAPI interface {
 	// OnboardingState on boot, dismiss the dialog, and restart Phase 2
 	// via "Reconfigure with assistant".
 	Onboarding() onboardingview.OnboardingAPI
+
+	// ContextBootstrap exposes the context-bootstrap run + health surface
+	// (context-bootstrap-harness-integration). The frontend's onboarding
+	// bootstrap step drives StartRun/Status; the context-health card reads
+	// Health. Returns a null impl when no model is configured.
+	ContextBootstrap() ContextBootstrapAPI
 
 	// Elicit exposes the ask-user-question RPC surface (mission
 	// ask-user-question-interactive-01KZNP3G WP04). The frontend's
@@ -384,51 +390,51 @@ type API struct {
 	builtins *toolloop.BuiltinRegistry
 
 	// Stable view-accessor instances (plan §4.2).
-	llmAPI      llm.LLMConnectorAPI
-	mcpAPI      mcp.MCPAPI
+	llmAPI llm.LLMConnectorAPI
+	mcpAPI mcp.MCPAPI
 	// mcpImportAPI is the clipboard-import sub-surface (WP08 of
 	// mission mcp-server-install-01KQ8TDP). Wired in New when the
 	// merged catalog + data-dir are available; nil otherwise (the
 	// binding returns ErrImportNotConfigured).
-	mcpImportAPI *mcp.ImportAPI
-	a2aAPI      a2a.A2AAPI
-	workflowAPI workflow.WorkflowAPI
-	workflowsAPI workflowsview.WorkflowsAPI
-	sessionsAPI sessions.SessionsAPI
-	trustAPI    trust.TrustAPI
-	contextAPI  contextview.ContextAPI
-	contextsAPI contextsview.ContextsAPI
-	bundleAPI    bundle.BundleAPI
-	policyAPI    policy.PolicyAPI
-	auditImpl    *audit.API
-	auditAPI     audit.AuditAPI
-	settingsImpl *settings.API
-	settingsAPI  settings.SettingsAPI
-	memoryAPI       memoryview.MemoryAPI
-	hooksAPI        hooksview.HooksAPI
-	projectsAPI     projectsview.ProjectsAPI
-	attachmentsMgr  *coreatt.Manager
-	attachmentsAPI  attachmentsview.AttachmentsAPI
-	artifactsMgr    *coreart.Manager
-	artifactsStore  coreart.Store
-	artifactsAPI    artifactsview.ArtifactsAPI
-	mediaStore      coreatt.MediaStore
-	toolsAPI        tools.ToolsAPI
-	shellImpl       *shell.API
-	shellAPI        shell.ShellAPI
-	slashAPI        slashview.SlashAPI
-	corpusMgr       *corecorpus.Manager
-	corpusAPI       corpusview.CorpusAPI
-	graphMgr        *graphview.Manager
-	graphAPI        graphview.API
-	compactionAPI   compactionview.CompactionAPI
-	convMgr         *coreconv.Manager
-	branchesAPI     branchesview.BranchesAPI
+	mcpImportAPI   *mcp.ImportAPI
+	a2aAPI         a2a.A2AAPI
+	workflowAPI    workflow.WorkflowAPI
+	workflowsAPI   workflowsview.WorkflowsAPI
+	sessionsAPI    sessions.SessionsAPI
+	trustAPI       trust.TrustAPI
+	contextAPI     contextview.ContextAPI
+	contextsAPI    contextsview.ContextsAPI
+	bundleAPI      bundle.BundleAPI
+	policyAPI      policy.PolicyAPI
+	auditImpl      *audit.API
+	auditAPI       audit.AuditAPI
+	settingsImpl   *settings.API
+	settingsAPI    settings.SettingsAPI
+	memoryAPI      memoryview.MemoryAPI
+	hooksAPI       hooksview.HooksAPI
+	projectsAPI    projectsview.ProjectsAPI
+	attachmentsMgr *coreatt.Manager
+	attachmentsAPI attachmentsview.AttachmentsAPI
+	artifactsMgr   *coreart.Manager
+	artifactsStore coreart.Store
+	artifactsAPI   artifactsview.ArtifactsAPI
+	mediaStore     coreatt.MediaStore
+	toolsAPI       tools.ToolsAPI
+	shellImpl      *shell.API
+	shellAPI       shell.ShellAPI
+	slashAPI       slashview.SlashAPI
+	corpusMgr      *corecorpus.Manager
+	corpusAPI      corpusview.CorpusAPI
+	graphMgr       *graphview.Manager
+	graphAPI       graphview.API
+	compactionAPI  compactionview.CompactionAPI
+	convMgr        *coreconv.Manager
+	branchesAPI    branchesview.BranchesAPI
 	// cedarPolicyAPI is the policy-panel RPC surface (mission
 	// cedar-credential-policy-01KQ8TDE, WP02). Constructed in New
 	// when a real *cedar.Engine is available; nil falls back to the
 	// cedarpolicy.NewAPI(nil) graceful-empty surface.
-	cedarPolicyAPI  cedarpolicyview.CedarPolicyAPI
+	cedarPolicyAPI cedarpolicyview.CedarPolicyAPI
 	// policyEditorEnabled mirrors the HARNESS_POLICY_EDITOR_UI env flag.
 	// Read once at boot; cached here so AppInfo can report it without
 	// an os.Getenv on every call (cedar-policy-editor-ui-01KQ8TD6 WP01).
@@ -460,9 +466,9 @@ type API struct {
 	// gate, etc.) can pass it into their gate constructors without
 	// re-plumbing through api.New.
 	promptRegistry *cedar.Registry
-	dialsAPI        dialsview.DialsAPI
-	searchAPI       searchview.SearchAPI
-	storageAPI      storageview.StorageAPI
+	dialsAPI       dialsview.DialsAPI
+	searchAPI      searchview.SearchAPI
+	storageAPI     storageview.StorageAPI
 	// memStoreRef is the long-term memory store held for the search adapter
 	// (unified-search-01KX5R8C WP03). The main memory path (memoryAPI) is
 	// already wired; this ref lets the search lazy-init access it without
@@ -618,6 +624,13 @@ type API struct {
 	// contextsLib is the open Context Library. Held so the fleet merger
 	// closure (FR-012) can call MergeFleetEntries without re-opening the lib.
 	contextsLib *corecontexts.Library
+
+	// contextBootstrapAPI is the context-bootstrap orchestration surface
+	// (context-bootstrap-harness-integration). nil when no model is configured;
+	// the Onboarding() accessor returns a null impl in that case so the RPC
+	// surface degrades gracefully. Wired in New after the LLM stack + fleet
+	// client are resolved.
+	contextBootstrapAPI ContextBootstrapAPI
 
 	// taskReg is the background-task registry (background-task-monitor-01KZNP3C).
 	// Created at boot with RecoverOrphansWithPIDCheck so orphaned running rows
@@ -2116,7 +2129,7 @@ func New(c *core.Core) *API {
 				FleetClient:  flCl,
 				Signer:       catalogSigner,
 				GetCaps:      getCaps,
-				PubKeyBase64: "", // fleet-level pub key; empty = skip verify (same as catalog)
+				PubKeyBase64: "",      // fleet-level pub key; empty = skip verify (same as catalog)
 				Emitter:      flAudit, // FR-501: wire audit for skill_published/installed/uninstalled
 			})
 			logging.L().Info("rpc.slashcmd.skill_deps_wired",
@@ -2212,7 +2225,7 @@ func New(c *core.Core) *API {
 				return false
 			}
 			cap := p.Current()
-		return cap.Has(corefleet.CapAuditLogImmudb)
+			return cap.Has(corefleet.CapAuditLogImmudb)
 		}
 		// Construct only when we have a fleet client (non-nop) and a
 		// DataDir for cursor persistence. Degrade gracefully when the
@@ -2328,6 +2341,61 @@ func New(c *core.Core) *API {
 		logging.L().Info("harness.self.server.ready",
 			"tools", len(a.harnessServer.srv.Tools()),
 		)
+	}
+
+	// Context-bootstrap engine (context-bootstrap-harness-integration).
+	// Assembles the fleet-free engine with concrete adapters: the configured
+	// LLM (over stack.reg), the MCP pool, the local Context Library, the fleet
+	// bootstrap client, the Cedar gate, and the audit ring. When no model is
+	// wired (stack.reg == nil) the constructor returns nil and the
+	// ContextBootstrap() accessor serves a null impl — the RPC surface stays
+	// non-nil and every method degrades gracefully.
+	{
+		var cbModel bootstrapModelCompleter
+		if stack.reg != nil {
+			capturedStore := personalForLLM
+			cbModel = autotitlewiring.NewLLMCaller(stack.reg,
+				autotitlewiring.WithProfileResolver(func(_ context.Context, profileID, modelOverride string) (string, string, bool) {
+					if profileID != "" {
+						return profileID, modelOverride, true
+					}
+					if capturedStore != nil {
+						if profs, perr := capturedStore.List(); perr == nil && len(profs) > 0 {
+							return profs[0].ID, profs[0].Model, true
+						}
+					}
+					return "", "", false
+				}),
+			)
+		}
+		var cbFleetCl *corefleet.Client
+		var cbCaps *corefleet.CapabilityPoller
+		if a.settingsImpl != nil {
+			cbFleetCl = a.settingsImpl.FleetClientForBootstrap()
+			cbCaps = a.settingsImpl.CapabilityPoller()
+		}
+		var cbGate cedar.Gate
+		if a.promptRegistry != nil {
+			// Reuse the same Cedar gate the rest of the RPC layer uses.
+			if c != nil && c.DataDir() != "" {
+				cbGate = buildCedarGate(c.DataDir())
+			}
+		}
+		if cbImpl := newContextBootstrapAPI(contextBootstrapDeps{
+			lib:         a.contextsLib,
+			pool:        a.stdioPool,
+			model:       cbModel,
+			broker:      a.broker,
+			fleetClient: cbFleetCl,
+			caps:        cbCaps,
+			cedar:       cbGate,
+			audit:       &bootstrapAuditBridge{impl: a.auditImpl},
+		}); cbImpl != nil {
+			a.contextBootstrapAPI = cbImpl
+			logging.L().Info("rpc.context_bootstrap.wired",
+				"fleet_backed", cbFleetCl != nil && !cbFleetCl.IsNop(),
+			)
+		}
 	}
 
 	// Onboarding view (harness-self-mcp-onboarding-01KQ8TDU WP08).
@@ -3173,14 +3241,14 @@ func (f *keychainForgetter) Forget(ctx context.Context, locator string) error {
 	if err := keychainDelete(ctx, keyringService, locator); err != nil {
 		slog.WarnContext(ctx, "secret delete: keychain delete failed; entry may persist",
 			"locator", locator,
-			"error",   err.Error(),
+			"error", err.Error(),
 		)
 	}
 	if err := keychainDelete(ctx, legacyKeyringService, locator); err != nil {
 		// Legacy namespace: best-effort; log but don't accumulate the error.
 		slog.WarnContext(ctx, "secret delete: legacy keychain delete failed",
 			"locator", locator,
-			"error",   err.Error(),
+			"error", err.Error(),
 		)
 	}
 	if f.backend != nil {
@@ -3212,9 +3280,9 @@ func (f *keychainForgetter) Forget(ctx context.Context, locator string) error {
 // shared secrets backend is what InstallRecipe writes credentials
 // into so the resolver finds them on the next ResolveEnv).
 type llmStack struct {
-	api      llm.LLMConnectorAPI
-	pool     *stdio.Pool
-	secrets  *secrets.MemoryBackend
+	api     llm.LLMConnectorAPI
+	pool    *stdio.Pool
+	secrets *secrets.MemoryBackend
 	// reg is the LLM registry used by the auto-title generator and any
 	// other post-stack consumers that need direct registry access. Held
 	// here so New() can wire the TitleGenerator without refactoring
@@ -3785,12 +3853,12 @@ func buildChatRunner(
 		// commands can mutate shared state (filesystem, processes).
 		if env.MutatingTools == nil {
 			env.MutatingTools = map[string]bool{
-				corebash.Name:                true, // "kenaz__bash"
-				"kenaz__write_file":           true,
-				"kenaz__edit_file":            true,
-				"kenaz__save_artifact":        true,
-				"kenaz__update_artifact":      true,
-				"kenaz__todo_write":           true,
+				corebash.Name:                      true, // "kenaz__bash"
+				"kenaz__write_file":                true,
+				"kenaz__edit_file":                 true,
+				"kenaz__save_artifact":             true,
+				"kenaz__update_artifact":           true,
+				"kenaz__todo_write":                true,
 				"kenaz__request_filesystem_access": true,
 			}
 		}
@@ -3939,10 +4007,10 @@ func buildChatRunner(
 		MaxTurns:         maxTurns,
 		EnvDefaults:      envDefaults,
 		ToolDiscoverer:   chatToolDiscovererAdapter{inner: tools},
-		Compaction:             compactionDeps,
-		PartialPersister:       partialPersister,
-		UsageHook:              usageHookFn,
-		AutoTitle:              autoTitleDeps,
+		Compaction:       compactionDeps,
+		PartialPersister: partialPersister,
+		UsageHook:        usageHookFn,
+		AutoTitle:        autoTitleDeps,
 		// multimodal-io-extended-01KQ8TD2 WP02: wire the concrete artifact
 		// sink as the generated-image capturer so StreamGeneratedImage
 		// events land in the artifact store with Source=="model_output".
@@ -5430,17 +5498,18 @@ func (a *API) Workflows() workflowsview.WorkflowsAPI {
 	}
 	return a.workflowsAPI
 }
-func (a *API) Sessions() sessions.SessionsAPI    { return a.sessionsAPI }
-func (a *API) Trust() trust.TrustAPI             { return a.trustAPI }
-func (a *API) Context() contextview.ContextAPI   { return a.contextAPI }
+func (a *API) Sessions() sessions.SessionsAPI  { return a.sessionsAPI }
+func (a *API) Trust() trust.TrustAPI           { return a.trustAPI }
+func (a *API) Context() contextview.ContextAPI { return a.contextAPI }
 func (a *API) Contexts() contextsview.ContextsAPI {
 	if a.contextsAPI == nil {
 		return contextsview.New(nil)
 	}
 	return a.contextsAPI
 }
-func (a *API) Bundle() bundle.BundleAPI          { return a.bundleAPI }
-func (a *API) Policy() policy.PolicyAPI          { return a.policyAPI }
+func (a *API) Bundle() bundle.BundleAPI { return a.bundleAPI }
+func (a *API) Policy() policy.PolicyAPI { return a.policyAPI }
+
 // CedarPolicy returns the policy-panel + snippet writer/revoker view
 // (mission cedar-credential-policy-01KQ8TDE, WP02 + WP09). The
 // nil-engine fallback returns a view that serves empty slices for
@@ -5485,6 +5554,17 @@ func (a *API) Onboarding() onboardingview.OnboardingAPI {
 		return onboardingview.New(onboardingview.Config{})
 	}
 	return a.onboardingAPI
+}
+
+// ContextBootstrap returns the context-bootstrap orchestration surface.
+// Always non-nil: when the engine could not be constructed (no model
+// configured / test chassis) a null impl is returned so callers degrade
+// gracefully. (context-bootstrap-harness-integration)
+func (a *API) ContextBootstrap() ContextBootstrapAPI {
+	if a.contextBootstrapAPI == nil {
+		return nullContextBootstrapAPI{}
+	}
+	return a.contextBootstrapAPI
 }
 
 // Elicit returns the ask-user-question RPC surface. If elicitAPI has not
@@ -5564,8 +5644,8 @@ func (a *API) Permissions() permissionsview.PermissionsAPI {
 	}
 	return a.permissionsAPI
 }
-func (a *API) Audit() audit.AuditAPI             { return a.auditAPI }
-func (a *API) Settings() settings.SettingsAPI    { return a.settingsAPI }
+func (a *API) Audit() audit.AuditAPI          { return a.auditAPI }
+func (a *API) Settings() settings.SettingsAPI { return a.settingsAPI }
 func (a *API) Memory() memoryview.MemoryAPI {
 	if a.memoryAPI == nil {
 		return &stubMemory{}
@@ -6010,18 +6090,18 @@ func buildJournalWriter(c *core.Core) coreag.JournalWriter {
 // frontend/src/lib/types.ts). Built per-emit so the modal binds
 // directly without walking the typed surface.
 type flatPermissionRequest struct {
-	RequestID       string             `json:"request_id"`
-	SessionID       string             `json:"session_id,omitempty"`
-	Family          string             `json:"family"`
-	ResourceDisplay string             `json:"resource_display"`
-	ResourceUID     string             `json:"resource_uid,omitempty"`
-	Reason          string             `json:"reason,omitempty"`
-	DangerousTier   bool               `json:"dangerous_tier,omitempty"`
-	DangerCopy      string             `json:"danger_copy,omitempty"`
-	Op              string             `json:"op,omitempty"`
+	RequestID       string              `json:"request_id"`
+	SessionID       string              `json:"session_id,omitempty"`
+	Family          string              `json:"family"`
+	ResourceDisplay string              `json:"resource_display"`
+	ResourceUID     string              `json:"resource_uid,omitempty"`
+	Reason          string              `json:"reason,omitempty"`
+	DangerousTier   bool                `json:"dangerous_tier,omitempty"`
+	DangerCopy      string              `json:"danger_copy,omitempty"`
+	Op              string              `json:"op,omitempty"`
 	Surface         cedar.PromptSurface `json:"surface"`
-	IssuedAt        string             `json:"issued_at"`
-	DeadlineAt      string             `json:"deadline_at"`
+	IssuedAt        string              `json:"issued_at"`
+	DeadlineAt      string              `json:"deadline_at"`
 }
 
 // flattenPendingRequest projects cedar.PendingRequest into the flat
@@ -6277,6 +6357,7 @@ func (a *API) UpdateStartCheck(ctx context.Context) {
 		logging.L().Warn("menu.update.check_failed", "err", err.Error())
 	}
 }
+
 // ── fleet-audit-archival-01NDFSEX13 boot helpers ─────────────────────────────
 
 // auditTailBuffer is a thread-safe TailReader that receives TailEvent values
@@ -6352,4 +6433,3 @@ func (e *auditArchiverEmitter) Emit(_ context.Context, ev contextaudit.Event) er
 	})
 	return nil
 }
-
