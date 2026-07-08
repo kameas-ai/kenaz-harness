@@ -32,6 +32,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"time"
 )
 
 // ── Wire shapes ───────────────────────────────────────────────────────────────
@@ -347,6 +348,27 @@ func (b *BootstrapClient) GetContextHealth(ctx context.Context) (*ContextHealth,
 		out.NodesBySourceKind = map[string]int{}
 	}
 	return &out, nil
+}
+
+// NewClientForTesting constructs a live (non-nop) fleet Client whose HTTP
+// traffic is directed at baseURL. It mirrors the internal makeTestClient helper
+// but is exported so cross-package integration tests (e.g. core/rpc) can drive
+// the fleet surface against an httptest.Server. Callers must SeedFleetConfigForTesting
+// + SaveTokens with the same baseURL before issuing requests.
+//
+// This is a test seam ONLY — production code constructs clients via NewClient.
+func NewClientForTesting(baseURL string) *Client {
+	return &Client{
+		profile: EnvProfile{
+			Name:           EnvLocal,
+			ZitadelIssuer:  baseURL,
+			NativeClientID: "test",
+			FleetBaseURL:   baseURL,
+			OIDCScopes:     DefaultOIDCScopes,
+		},
+		httpClient:  &http.Client{},
+		httpTimeout: 5 * time.Second,
+	}
 }
 
 // drainClose drains and closes an HTTP response body (keep-alive reuse + no leak).
