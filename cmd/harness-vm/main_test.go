@@ -24,16 +24,31 @@ func startTestServer(t *testing.T, token string, ledger ...*ledgerEmitter) (net.
 }
 
 // startTestServerAudit is startTestServer with an optional audit sink wired in.
-// When audit is nil, audit emission is disabled (the no-op path).
+// When audit is nil, audit emission is disabled (the no-op path). The stub
+// executor keeps the offline echo behaviour (real execution is covered by
+// agentexec_test.go with a fake adapter).
 func startTestServerAudit(t *testing.T, token string, audit *auditSink, ledger ...*ledgerEmitter) (net.Listener, string) {
+	t.Helper()
+	var le *ledgerEmitter
+	if len(ledger) > 0 {
+		le = ledger[0]
+	}
+	return startTestServerFull(t, token, stubExecutor{}, audit, le)
+}
+
+// startTestServerWith is startTestServer with an explicit agent executor
+// (agentexec_test.go's real-mode wire tests).
+func startTestServerWith(t *testing.T, token string, exec agentExecutor) (net.Listener, string) {
+	t.Helper()
+	return startTestServerFull(t, token, exec, nil, nil)
+}
+
+// startTestServerFull is the shared accept loop behind the helpers above.
+func startTestServerFull(t *testing.T, token string, exec agentExecutor, audit *auditSink, le *ledgerEmitter) (net.Listener, string) {
 	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("startTestServer: listen: %v", err)
-	}
-	var le *ledgerEmitter
-	if len(ledger) > 0 {
-		le = ledger[0]
 	}
 	log := newTestLogger()
 	go func() {
@@ -44,7 +59,7 @@ func startTestServerAudit(t *testing.T, token string, audit *auditSink, ledger .
 			}
 			// Task-surface tests don't exercise the read RPCs; a disabled
 			// read service (nil api) answers any read kind with code:"unavailable".
-			go handleConn(log, conn, token, le, audit, &readService{log: log})
+			go handleConn(log, conn, token, exec, le, audit, &readService{log: log})
 		}
 	}()
 	return ln, ln.Addr().String()

@@ -42,6 +42,7 @@ import (
 	"context"
 	"crypto/subtle"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -130,6 +131,12 @@ func main() {
 		log.Info("kenaz-harness-vm: read surface enabled", "data_dir", readDataDir)
 	}
 
+	// Agent execution (Spec 058): REAL model-backed by default, resolved from
+	// the in-VM environment (agentexec.go). KENAZ_AGENT_EXEC=stub keeps the
+	// offline echo graph for CI; a real mode with no resolvable credential
+	// fails every task with a named error — never a silent echo.
+	exec := resolveAgentExecutor(log)
+
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		log.Error("kenaz-harness-vm: listen failed", "addr", addr, "err", err)
@@ -151,7 +158,7 @@ func main() {
 			log.Info("kenaz-harness-vm: accept loop exiting", "reason", err)
 			return
 		}
-		go handleConn(log, conn, token, ledger, audit, reads)
+		go handleConn(log, conn, token, exec, ledger, audit, reads)
 	}
 }
 
@@ -180,7 +187,7 @@ func (w *connWriter) send(m msg) error {
 
 // handleConn manages the full lifecycle of one client connection:
 // auth handshake, then a loop dispatching task messages.
-func handleConn(log *slog.Logger, conn net.Conn, token string, ledger *ledgerEmitter, audit *auditSink, reads *readService) {
+func handleConn(log *slog.Logger, conn net.Conn, token string, exec agentExecutor, ledger *ledgerEmitter, audit *auditSink, reads *readService) {
 	defer func() { _ = conn.Close() }()
 
 	w := &connWriter{conn: conn}
@@ -312,7 +319,7 @@ func handleConn(log *slog.Logger, conn net.Conn, token string, ledger *ledgerEmi
 			cancelFn = cancel
 
 			// Spawn the task runner. It writes via w and clears busy when done.
-			go runTask(log, w, &busy, cancel, ctx, taskID, prompt, params, presetSteps, ledger, audit)
+			go runTask(log, w, &busy, cancel, ctx, taskID, prompt, params, presetSteps, exec, ledger, audit)
 
 		case "task.cancel":
 			if busy.Load() == 0 {
@@ -360,6 +367,7 @@ func runTask(
 	prompt string,
 	params RunParams,
 	presetSteps []string,
+	exec agentExecutor,
 	ledger *ledgerEmitter,
 	audit *auditSink,
 ) {
@@ -403,9 +411,9 @@ func runTask(
 	// Otherwise reproduce today's exact two-node plan→run graph.
 	var runErr error
 	if len(presetSteps) > 0 {
-		runErr = runAgentPresetGraph(ctx, taskID, prompt, presetSteps, tracer, onChunk)
+		runErr = runAgentPresetGraph(ctx, taskID, prompt, presetSteps, exec, tracer, onChunk)
 	} else {
-		runErr = runAgentTaskGraph(ctx, taskID, prompt, tracer, onChunk)
+		runErr = runAgentTaskGraph(ctx, taskID, prompt, exec, tracer, onChunk)
 	}
 	durationMs := time.Since(started).Milliseconds()
 
@@ -426,11 +434,20 @@ func runTask(
 	if runErr != nil {
 		log.Warn("kenaz-harness-vm: graph run failed", "task_id", taskID, "err", runErr)
 		busy.Store(0)
+		// Agent-exec configuration failures (no credential, bad mode) surface
+		// their NAMED cause: the kernel's node wrapping would push the name
+		// past the 64-rune truncation (Spec 058 US3 — the error must name the
+		// missing grant on the wire).
+		wireMsg := runErr.Error()
+		var cfgErr *agentConfigError
+		if errors.As(runErr, &cfgErr) {
+			wireMsg = cfgErr.Error()
+		}
 		_ = w.send(msg{
 			"kind":              "task.error",
 			"task_id":           taskID,
 			"code":              "graph_run_failed",
-			"message_truncated": truncate(runErr.Error(), maxMessageLen),
+			"message_truncated": truncate(wireMsg, maxMessageLen),
 		})
 		ledger.emitTaskComplete(taskID)               // terminal ledger event
 		audit.emitTaskComplete(taskID, 1, durationMs) // non-zero exit = failed
