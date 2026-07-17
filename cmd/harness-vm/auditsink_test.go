@@ -130,7 +130,7 @@ func TestAuditSinkFourLifecycleLines(t *testing.T) {
 	started := time.Now()
 	sink.emitTaskStart(taskID)
 	tracer := newNodeTracer(sink, taskID)
-	err := runAgentTaskGraph(context.Background(), taskID, secret, tracer, func(_, _ string) {})
+	err := runAgentTaskGraph(context.Background(), taskID, secret, stubExecutor{}, tracer, func(_, _ string) {})
 	if err != nil {
 		t.Fatalf("runAgentTaskGraph: %v", err)
 	}
@@ -276,7 +276,7 @@ func TestAuditSinkCancelEmitsResult(t *testing.T) {
 	}()
 
 	tracer := newNodeTracer(sink, "task-cancel-audit")
-	_ = runAgentTaskGraph(ctx, "task-cancel-audit", "x", tracer, func(_, _ string) {})
+	_ = runAgentTaskGraph(ctx, "task-cancel-audit", "x", stubExecutor{}, tracer, func(_, _ string) {})
 
 	// Give the per-record dials a moment to land.
 	recs := sock.waitForCount(t, 2, 2*time.Second) // at least one call + its result

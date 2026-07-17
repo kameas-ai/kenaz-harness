@@ -6,19 +6,23 @@
 // client as task.running chunks, and drives the audit sink (via nodeTracer)
 // off the kernel's per-node TraceSink hook.
 //
-// Why a transform graph (not an LLM graph): the in-VM service must run with no
-// network and no provider credentials in CI and on the operator smoke. A chain
-// of transform nodes exercises the SAME kernel traversal, event log, and
-// TraceSink hook points that an LLM graph would — the audit timeline and the
-// RPC stream are shaped identically — while staying deterministic and offline.
-// Swapping in LLMNode kinds later is an env-wiring change here, not a protocol
-// change: the wire contract (task.running / task.complete) and the audit
-// contract (task.tool_call / task.tool_result) are unchanged.
+// The agent step (the `run` node) executes through an agentExecutor
+// (agentexec.go): a REAL core/llm-backed model call by default, or the
+// deterministic offline echo when the process was started with
+// KENAZ_AGENT_EXEC=stub (CI and the operator smoke, which run with no network
+// and no provider credentials). Both executors drive the SAME kernel
+// traversal, event log, and TraceSink hook points — the audit timeline and
+// the RPC stream are shaped identically — so swapping executors is an
+// env-wiring change here, not a protocol change: the wire contract
+// (task.running / task.complete) and the audit contract (task.tool_call /
+// task.tool_result) are unchanged (Spec 058 FR-001/FR-002).
 //
-// The two graph steps each honour ctx with a short delay so a task.cancel
-// arriving mid-run surfaces as a cancelled run (the kernel passes ctx into the
-// transform fn; a context-cancelled transform returns an error that aborts the
-// run, which runTask maps onto task.cancelled when ctx.Err() != nil).
+// Every graph step honours ctx so a task.cancel arriving mid-run surfaces as
+// a cancelled run: the kernel passes ctx into the transform fn — the stub via
+// its cooperative delay, the real executor via context propagation into the
+// in-flight provider call (FR-006). A context-cancelled transform returns an
+// error that aborts the run, which runTask maps onto task.cancelled when
+// ctx.Err() != nil.
 //
 // PRIVACY: the prompt text flows into the graph's run state (it is the user's
 // task), but it NEVER reaches the audit sink — the kernel passes only structural
@@ -42,9 +46,10 @@ import (
 // only, never the audit socket).
 type graphChunkSink func(node, text string)
 
-// stepDelay is the per-node cooperative delay. It is small enough not to slow
-// real use meaningfully, but large enough that a task.cancel issued shortly
-// after task.start lands before the run finishes (cancel_test.go).
+// stepDelay is the per-node cooperative delay used by planTransform and the
+// stub executor. It is small enough not to slow real use meaningfully, but
+// large enough that a task.cancel issued shortly after task.start lands
+// before the run finishes (cancel_test.go).
 const stepDelay = 25 * time.Millisecond
 
 // graph step / node identifiers. Structural strings — these are what the audit
@@ -67,14 +72,15 @@ const (
 //
 //	plan (transform:agent.plan)  →  run (transform:agent.run)
 //
-// `plan` surfaces the prompt into the run; `run` is a stand-in for the agent
-// step. Each node fire produces a tool_call + tool_result audit pair and a
-// task.running chunk, so a real traversal yields the full lifecycle the host
-// audit timeline expects.
+// `plan` surfaces the prompt into the run; `run` executes the agent step
+// through exec (real model call, or the explicit stub echo). Each node fire
+// produces a tool_call + tool_result audit pair and a task.running chunk, so
+// a traversal yields the full lifecycle the host audit timeline expects.
 func runAgentTaskGraph(
 	ctx context.Context,
 	taskID string,
 	prompt string,
+	exec agentExecutor,
 	tracer agentgraph.TraceSink,
 	onChunk graphChunkSink,
 ) error {
@@ -85,25 +91,29 @@ func runAgentTaskGraph(
 		{id: stepPlanID, label: kindLabel, transform: transformPlan, params: map[string]any{"prompt": prompt}},
 		{id: stepRunID, label: kindLabel, transform: transformRun},
 	}
-	return runGraphSteps(ctx, taskID, steps, tracer, onChunk)
+	return runGraphSteps(ctx, taskID, steps, exec, tracer, onChunk)
 }
 
 // runAgentPresetGraph drives the run from a resolved workflow-preset step
 // sequence (Spec 056 AC-5). Each preset step becomes one graph node whose chunk
 // label is the STEP NAME (structural — a fixed catalog identifier, never user
 // content), so the preset's node sequence is observable on the ledger trail.
-// The first node surfaces the prompt; the rest echo their upstream input,
-// exercising the same kernel traversal / TraceSink hook the default graph does.
+// The first node surfaces the prompt; each subsequent node runs the agent
+// executor on its upstream input (its step label passed as structural
+// context), exercising the same kernel traversal / TraceSink hook the default
+// graph does. A mid-chain step failure aborts the run, halting downstream
+// nodes (Spec 058 edge case).
 func runAgentPresetGraph(
 	ctx context.Context,
 	taskID string,
 	prompt string,
 	presetSteps []string,
+	exec agentExecutor,
 	tracer agentgraph.TraceSink,
 	onChunk graphChunkSink,
 ) error {
 	if len(presetSteps) == 0 {
-		return runAgentTaskGraph(ctx, taskID, prompt, tracer, onChunk)
+		return runAgentTaskGraph(ctx, taskID, prompt, exec, tracer, onChunk)
 	}
 	steps := make([]graphStep, 0, len(presetSteps))
 	for i, name := range presetSteps {
@@ -111,10 +121,14 @@ func runAgentPresetGraph(
 		if i == 0 {
 			st.transform = transformPlan
 			st.params = map[string]any{"prompt": prompt}
+		} else {
+			// The step label rides along as structural context for the
+			// executor (a fixed catalog id — never user content).
+			st.params = map[string]any{"step": name}
 		}
 		steps = append(steps, st)
 	}
-	return runGraphSteps(ctx, taskID, steps, tracer, onChunk)
+	return runGraphSteps(ctx, taskID, steps, exec, tracer, onChunk)
 }
 
 // graphStep is one node in the linear agent.task chain: a graph node id, the
@@ -135,6 +149,7 @@ func runGraphSteps(
 	ctx context.Context,
 	taskID string,
 	steps []graphStep,
+	exec agentExecutor,
 	tracer agentgraph.TraceSink,
 	onChunk graphChunkSink,
 ) error {
@@ -172,7 +187,7 @@ func runGraphSteps(
 	transforms := agentgraph.NewTransformRegistry()
 	agentgraph.BuiltinTransforms(transforms)
 	transforms.Register(transformPlan, planTransform)
-	transforms.Register(transformRun, runTransform)
+	transforms.Register(transformRun, makeRunTransform(exec))
 
 	env := &agentgraph.Env{
 		RunID:      taskID,
@@ -213,14 +228,23 @@ func planTransform(ctx context.Context, _ agentgraph.PortValues, params map[stri
 	return agentgraph.PortValues{"out": prompt}, nil
 }
 
-// runTransform is the agent step stand-in. It echoes its input upward (a real
-// LLM/tool step replaces this later) and honours ctx for cancellation.
-func runTransform(ctx context.Context, in agentgraph.PortValues, _ map[string]any) (agentgraph.PortValues, error) {
-	if err := cooperativeDelay(ctx); err != nil {
-		return nil, err
+// makeRunTransform binds exec into the agent step's transform. The node's
+// upstream "in" value (the prompt, or the previous preset step's output) is
+// handed to the executor; the executor's text lands on "out" and is emitted
+// as a task.running chunk at node completion. Cancellation propagates through
+// ctx into the executor (and, for the real executor, into the in-flight
+// provider call — Spec 058 FR-006). An executor error aborts the run, which
+// runTask maps onto the task errored state — never a silent echo (FR-003/004).
+func makeRunTransform(exec agentExecutor) func(context.Context, agentgraph.PortValues, map[string]any) (agentgraph.PortValues, error) {
+	return func(ctx context.Context, in agentgraph.PortValues, params map[string]any) (agentgraph.PortValues, error) {
+		s, _ := in["in"].(string)
+		step, _ := params["step"].(string)
+		out, err := exec.Generate(ctx, step, s)
+		if err != nil {
+			return nil, err
+		}
+		return agentgraph.PortValues{"out": out}, nil
 	}
-	s, _ := in["in"].(string)
-	return agentgraph.PortValues{"out": s}, nil
 }
 
 // cooperativeDelay waits stepDelay or returns ctx.Err() if the run is cancelled
