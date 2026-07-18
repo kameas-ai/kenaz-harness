@@ -1541,6 +1541,22 @@ func New(c *core.Core) *API {
 		if stack.reg != nil {
 			wfDeps.LLM = &wfLLMStreamerAdapter{reg: stack.reg}
 		}
+		// FR-001/FR-002 (01NBUG03): wire DefaultProfileFunc so model_turn steps
+		// resolve the active LLM profile lazily at run time. This avoids the
+		// "no profile" error that fires when DefaultLLMProfile is never set, and
+		// allows a first provider added after launch to be picked up without an
+		// app restart (lazy evaluation). The closure mirrors the auto-title
+		// fallback at line 1352: first personal-provider profile wins.
+		if personalForLLM != nil {
+			capturedWFStore := personalForLLM
+			wfDeps.DefaultProfileFunc = func() string {
+				profs, err := capturedWFStore.List()
+				if err != nil || len(profs) == 0 {
+					return ""
+				}
+				return profs[0].ID
+			}
+		}
 		// Wire the OS-notification adapter so notify steps with surface:[os]
 		// dispatch real OS notifications via the Wails runtime (desktop) or
 		// return a soft-fail unconfigured error in headless serve mode.

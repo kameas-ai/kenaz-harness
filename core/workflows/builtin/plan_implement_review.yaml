@@ -4,7 +4,7 @@ description: |
   The canonical agentic loop. Four chained model_turn steps that draft a
   plan, research it, implement against it, then review the implementation.
   Each step's output is threaded into the next via ${step.X.output}.
-  v0.3.0 beta: model_turn dispatch is stubbed; outputs are echoed.
+  Runs each step against your active model.
 version: 1
 inputs:
   - name: task
