@@ -18,6 +18,7 @@
 import { computed, onMounted, onUnmounted, ref } from 'vue';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
 import type { MemoryHealthSnapshot } from '@/lib/types';
+import { formatActivitySigned } from '@/lib/memoryFormatters';
 
 const client = useHarnessClient();
 
@@ -63,6 +64,8 @@ function pct(n: number, total: number): string {
   if (total === 0) return '0%';
   return `${Math.round((n / total) * 100)}%`;
 }
+
+// formatActivitySigned is imported from @/lib/memoryFormatters (FR-004).
 
 /**
  * FR-003: Resolve the display model name for the embedder row.
@@ -229,21 +232,21 @@ defineExpose({ refresh });
               <td class="py-0.5 text-ink-dim">•</td>
               <td class="py-0.5 text-ink-dim">Captured</td>
               <td class="py-0.5 text-right tabular-nums text-signal-success">
-                +{{ snapshot.activity.captured.toLocaleString() }}
+                {{ formatActivitySigned(snapshot.activity.captured, '+') }}
               </td>
             </tr>
             <tr data-testid="health-activity-pruned">
               <td class="py-0.5 text-ink-dim">•</td>
               <td class="py-0.5 text-ink-dim">Pruned</td>
               <td class="py-0.5 text-right tabular-nums text-signal-warning">
-                -{{ snapshot.activity.pruned.toLocaleString() }}
+                {{ formatActivitySigned(snapshot.activity.pruned, '-') }}
               </td>
             </tr>
             <tr data-testid="health-activity-promoted">
               <td class="py-0.5 text-ink-dim">•</td>
               <td class="py-0.5 text-ink-dim">Promoted</td>
               <td class="py-0.5 text-right tabular-nums">
-                +{{ snapshot.activity.promoted.toLocaleString() }}
+                {{ formatActivitySigned(snapshot.activity.promoted, '+') }}
               </td>
             </tr>
           </tbody>
