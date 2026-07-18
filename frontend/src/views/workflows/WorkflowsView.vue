@@ -239,8 +239,32 @@ function openTemplateEditor() {
   newMenuOpen.value = false;
 }
 
+// STARTER_YAML — a minimal but runnable template so "New (YAML)" opens on a
+// working example rather than a blank canvas. It documents the common fields
+// inline (inputs, a model_turn step, {{ }} interpolation) so a first-time
+// author has a shape to edit instead of guessing the schema. `model` is left
+// commented so the step inherits the default LLM profile until overridden.
+const STARTER_YAML = `# New workflow — edit this starter, then Save (validates before persisting).
+name: 'My workflow'
+description: 'What this workflow does.'
+version: 1
+
+# Typed inputs the run form collects (delete if the workflow takes none):
+inputs:
+  - name: topic
+    kind: string
+    required: true
+
+steps:
+  - name: respond
+    kind: model_turn
+    # model: claude-sonnet-4-6   # uncomment to override the default profile
+    user_prompt: |
+      Write a short paragraph about {{ inputs.topic }}.
+`;
+
 function openBlankYamlEditor() {
-  editorYaml.value = '';
+  editorYaml.value = STARTER_YAML;
   editorTitle.value = 'New workflow (YAML)';
   editorMode.value = 'yaml-new';
   newMenuOpen.value = false;
