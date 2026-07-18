@@ -4,6 +4,7 @@ import Titlebar from './Titlebar.vue';
 import Toolbar from './Toolbar.vue';
 import LeftRail from './LeftRail.vue';
 import LegendBar from './LegendBar.vue';
+import ErrorBoundary from '@/components/ui/ErrorBoundary.vue';
 import ConnectionLostBanner from '@/components/ui/ConnectionLostBanner.vue';
 import LockdownBanner from '@/components/ui/LockdownBanner.vue';
 import SessionExpiredBanner from '@/components/ui/SessionExpiredBanner.vue';
@@ -235,11 +236,16 @@ onBeforeUnmount(() => {
         >
           starting…
         </div>
-        <router-view v-else v-slot="{ Component }">
-          <KeepAlive>
-            <component :is="Component" />
-          </KeepAlive>
-        </router-view>
+        <!-- ErrorBoundary is scoped to the surface content region only (FR-001):
+             the LeftRail and window chrome stay mounted and interactive when a
+             surface throws. Navigating via the rail clears the error (FR-002). -->
+        <ErrorBoundary v-else>
+          <router-view v-slot="{ Component }">
+            <KeepAlive>
+              <component :is="Component" />
+            </KeepAlive>
+          </router-view>
+        </ErrorBoundary>
       </div>
 
       <div class="shell-legend border-t border-border-muted bg-surface-1">

@@ -73,10 +73,23 @@ const TEMPLATES: TemplateMeta[] = [
   },
 ];
 
+// Model choices for the dropdown. Empty value = inherit the engine's
+// DefaultLLMProfile (backend treats an empty `model` as "use the profile
+// default" — see core/workflows/types.go Model field). The rest are the
+// harness's current first-party model ids; power users who need a
+// provider-prefixed id (e.g. Bedrock) can drop to the YAML editor.
+const MODEL_OPTIONS: ReadonlyArray<{ value: string; label: string }> = [
+  { value: '', label: 'Default profile (inherit)' },
+  { value: 'claude-opus-4-8', label: 'Claude Opus 4.8' },
+  { value: 'claude-sonnet-4-6', label: 'Claude Sonnet 4.6' },
+  { value: 'claude-haiku-4-5', label: 'Claude Haiku 4.5' },
+  { value: 'claude-fable-5', label: 'Fable 5' },
+];
+
 const templateId = ref<TemplateId>('single_llm');
 const name = ref<string>('');
 const description = ref<string>('');
-const model = ref<string>('claude-3-5-sonnet');
+const model = ref<string>('claude-sonnet-4-6');
 const promptTemplate = ref<string>('');
 const url = ref<string>('https://example.com/');
 const artifactPath = ref<string>('out.txt');
@@ -122,13 +135,18 @@ function assembleYaml(): string {
     (description.value ? `description: ${yamlString(description.value)}\n` : '') +
     `version: 1\n`;
 
+  // An empty model means "inherit the default profile" — omit the line
+  // entirely rather than emit `model: ''` (which the engine would treat
+  // as an explicit override to the empty string).
+  const modelLine = model.value ? `    model: ${yamlString(model.value)}\n` : '';
+
   if (templateId.value === 'single_llm') {
     return (
       header +
       `steps:\n` +
       `  - name: respond\n` +
       `    kind: model_turn\n` +
-      `    model: ${yamlString(model.value)}\n` +
+      modelLine +
       `    ${blockScalar('user_prompt', promptTemplate.value || 'Say hello.')}\n`
     );
   }
@@ -139,11 +157,11 @@ function assembleYaml(): string {
       `steps:\n` +
       `  - name: plan\n` +
       `    kind: model_turn\n` +
-      `    model: ${yamlString(model.value)}\n` +
+      modelLine +
       `    ${blockScalar('user_prompt', `Plan: ${promptTemplate.value || 'the task'}`)}\n` +
       `  - name: execute\n` +
       `    kind: model_turn\n` +
-      `    model: ${yamlString(model.value)}\n` +
+      modelLine +
       `    ${blockScalar('user_prompt', `Execute the plan from {{ steps.plan.output }}`)}\n`
     );
   }
@@ -255,13 +273,16 @@ defineExpose({ assembleYaml });
 
     <div v-if="meta.needsModel">
       <label class="font-ui text-xs text-ink" for="wf-model">Model</label>
-      <input
+      <select
         id="wf-model"
         v-model="model"
-        type="text"
         class="w-full rounded-sm border border-border-muted bg-surface-2 px-2 py-1 font-mono text-sm text-ink"
         data-testid="template-model"
-      />
+      >
+        <option v-for="opt in MODEL_OPTIONS" :key="opt.value" :value="opt.value">
+          {{ opt.label }}
+        </option>
+      </select>
     </div>
 
     <div v-if="meta.needsPrompt">

@@ -44,8 +44,8 @@ describe('SimpleTemplateEditor', () => {
       .find<HTMLInputElement>('[data-testid="template-description"]')
       .setValue('Says hi');
     await wrapper
-      .find<HTMLInputElement>('[data-testid="template-model"]')
-      .setValue('claude-3-5-sonnet');
+      .find<HTMLSelectElement>('[data-testid="template-model"]')
+      .setValue('claude-sonnet-4-6');
     await wrapper
       .find<HTMLTextAreaElement>('[data-testid="template-prompt"]')
       .setValue('Greet the user warmly.');
@@ -59,7 +59,7 @@ describe('SimpleTemplateEditor', () => {
     expect(yaml).toContain("name: 'My Greeting'");
     expect(yaml).toContain("description: 'Says hi'");
     expect(yaml).toContain('kind: model_turn');
-    expect(yaml).toContain("model: 'claude-3-5-sonnet'");
+    expect(yaml).toContain("model: 'claude-sonnet-4-6'");
     expect(yaml).toContain('Greet the user warmly.');
     expect(wrapper.emitted('saved')).toBeTruthy();
   });

@@ -446,8 +446,15 @@ type AuditEmitter interface {
 type Deps struct {
 	LLM               LLMStreamer
 	DefaultLLMProfile string
-	Tools             ToolCaller
-	MCP               MCPCaller
+	// DefaultProfileFunc, when non-nil, is called at Run time to resolve
+	// the active LLM profile when neither the step nor DefaultLLMProfile
+	// supply one. It is evaluated lazily so adding a first provider after
+	// launch makes workflows runnable without an app restart.
+	// When both DefaultLLMProfile and DefaultProfileFunc are set,
+	// DefaultLLMProfile wins (for back-compat with existing tests).
+	DefaultProfileFunc func() string
+	Tools              ToolCaller
+	MCP                MCPCaller
 	Artifacts         ArtifactsReadWriter
 	// SessionID is threaded into write_artifact rows so they show up
 	// under the right session in the artifacts table. Empty disables

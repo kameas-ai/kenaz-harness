@@ -3,7 +3,6 @@ import { onMounted, provide, ref } from 'vue';
 import { useRouter } from 'vue-router';
 import Shell from '@/shell/Shell.vue';
 import CommandPalette from '@/components/ui/CommandPalette.vue';
-import ErrorBoundary from '@/components/ui/ErrorBoundary.vue';
 import ToastRoot from '@/components/ui/ToastRoot.vue';
 import OnboardingDialog from '@/views/onboarding/OnboardingDialog.vue';
 import TelemetryOnboardingModal from '@/components/onboarding/TelemetryOnboardingModal.vue';
@@ -130,24 +129,22 @@ onMounted(async () => {
 </script>
 
 <template>
-  <ErrorBoundary>
-    <Shell />
-    <CommandPalette />
-    <ToastRoot />
-    <OnboardingDialog
-      :open="onboardingOpen"
-      @close="onboardingOpen = false"
-      @navigate-to-session="onOnboardingNavigate"
-    />
-    <!-- Fleet telemetry onboarding modal (fleet-otel-archival-01NDFSEX11 WP06) -->
-    <TelemetryOnboardingModal
-      v-if="telemetryOnboardingOpen"
-      @close="telemetryOnboardingOpen = false"
-    />
-    <!-- About dialog — opened by OS menu bar "About" item (menu:about:open event) -->
-    <AboutDialog
-      :open="aboutStore.isOpen.value"
-      @update:open="(v) => (v ? aboutStore.open() : aboutStore.close())"
-    />
-  </ErrorBoundary>
+  <Shell />
+  <CommandPalette />
+  <ToastRoot />
+  <OnboardingDialog
+    :open="onboardingOpen"
+    @close="onboardingOpen = false"
+    @navigate-to-session="onOnboardingNavigate"
+  />
+  <!-- Fleet telemetry onboarding modal (fleet-otel-archival-01NDFSEX11 WP06) -->
+  <TelemetryOnboardingModal
+    v-if="telemetryOnboardingOpen"
+    @close="telemetryOnboardingOpen = false"
+  />
+  <!-- About dialog — opened by OS menu bar "About" item (menu:about:open event) -->
+  <AboutDialog
+    :open="aboutStore.isOpen.value"
+    @update:open="(v) => (v ? aboutStore.open() : aboutStore.close())"
+  />
 </template>

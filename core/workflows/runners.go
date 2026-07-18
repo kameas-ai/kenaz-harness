@@ -65,8 +65,12 @@ func DefaultRunners() map[StepKind]StepRunner {
 // time); the rest dispatch through the supplied dependency.
 func DefaultRunnersWithDeps(deps Deps) map[StepKind]StepRunner {
 	out := DefaultRunners()
-	if deps.LLM != nil || deps.DefaultLLMProfile != "" {
-		out[StepKindModelTurn] = modelTurnRunner{llm: deps.LLM, defaultProfile: deps.DefaultLLMProfile}
+	if deps.LLM != nil || deps.DefaultLLMProfile != "" || deps.DefaultProfileFunc != nil {
+		out[StepKindModelTurn] = modelTurnRunner{
+			llm:                deps.LLM,
+			defaultProfile:     deps.DefaultLLMProfile,
+			defaultProfileFunc: deps.DefaultProfileFunc,
+		}
 	}
 	if deps.Tools != nil {
 		out[StepKindToolCall] = toolCallRunner{tools: deps.Tools}
@@ -110,8 +114,9 @@ var errDepUnavailable = errors.New("workflows: runner dependency unavailable")
 // ===========================================================================
 
 type modelTurnRunner struct {
-	llm            LLMStreamer
-	defaultProfile string
+	llm                LLMStreamer
+	defaultProfile     string
+	defaultProfileFunc func() string
 }
 
 func (modelTurnRunner) Validate(st Step) error {
@@ -131,9 +136,12 @@ func (r modelTurnRunner) Run(ctx context.Context, st Step, _ *RunContext) (Typed
 	if profile == "" {
 		profile = r.defaultProfile
 	}
+	if profile == "" && r.defaultProfileFunc != nil {
+		profile = r.defaultProfileFunc()
+	}
 	if profile == "" {
 		return TypedValue{Type: ValueTypeError},
-			fmt.Errorf("model_turn step %q: no profile (set step.profile or Deps.DefaultLLMProfile)", st.Name)
+			fmt.Errorf("model_turn step %q: no profile — configure a provider in Settings → Providers, or set step.profile / Deps.DefaultLLMProfile", st.Name)
 	}
 	stream, err := r.llm.Stream(ctx, LLMRequest{
 		ProfileID: profile,

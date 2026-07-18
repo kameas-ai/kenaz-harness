@@ -2,10 +2,11 @@
  * MigrationDriftPanel tests — v0.5.1 migration-doctor UI.
  *
  * Covers:
- *   1. Empty / clean state — "No drift detected" green pill + clean note
+ *   1. Empty / clean state — "No drift · 0 pending" green pill + clean note
  *   2. Entry rendering — id_mismatch entry shown with ledger/expected IDs
  *   3. Fix button click — calls client.storage.applyDriftFix with the version
  *   4. Load error — surfaces error message when getMigrationDriftReport rejects
+ *   5. Pending-only state — amber "N pending (no drift)" pill (FR-005)
  */
 import { describe, it, expect, vi } from 'vitest';
 import { mount, flushPromises } from '@vue/test-utils';
@@ -50,10 +51,11 @@ describe('MigrationDriftPanel', () => {
     });
     await flushPromises();
 
-    // Green "No drift detected" pill
+    // Green "No drift · 0 pending" pill (FR-005: no longer "No drift detected"
+    // to avoid contradiction when pending-count note is visible below)
     expect(w.find('[data-testid="drift-status-ok"]').exists()).toBe(true);
     expect(w.find('[data-testid="drift-status-ok"]').text()).toContain(
-      'No drift detected',
+      'No drift',
     );
 
     // Clean note text
@@ -142,6 +144,30 @@ describe('MigrationDriftPanel', () => {
       'DB unavailable',
     );
     expect(w.find('[data-testid="drift-status-error"]').exists()).toBe(true);
+  });
+
+  // FR-005: "No drift detected" + "8 pending" was contradictory.
+  // When only code_only (pending) drifts exist: amber "N pending (no drift)" pill.
+  it('shows amber pending pill when only code_only drifts are present (FR-005)', async () => {
+    const pendingEntry = makeDriftEntry({
+      version: 200,
+      kind: 'code_only',
+      severity: 'info',
+      suggestion: 'Will auto-apply on next boot.',
+    });
+    const { client } = provideClient({ drifts: [pendingEntry] });
+    const w = mount(MigrationDriftPanel, {
+      global: { provide: { [HarnessClientKey as symbol]: client } },
+    });
+    await flushPromises();
+
+    // Amber pending pill, not the green "no drift" pill
+    expect(w.find('[data-testid="drift-status-pending"]').exists()).toBe(true);
+    expect(w.find('[data-testid="drift-status-pending"]').text()).toContain('1 pending (no drift)');
+    // Green pill must NOT show
+    expect(w.find('[data-testid="drift-status-ok"]').exists()).toBe(false);
+    // Pending note also visible below the card
+    expect(w.find('[data-testid="drift-pending-note"]').exists()).toBe(true);
   });
 
   it('does not render fix button for ledger_only entries', async () => {
