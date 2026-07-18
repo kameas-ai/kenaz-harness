@@ -10,8 +10,12 @@
  * Two action buttons at the bottom:
  *   • "Test embedder" — calls Memory_TestEmbedder, shows success/error + dims.
  *   • "Re-embed unembedded chunks" — stub modal (backend job not yet shipped).
+ *
+ * FR-003: when the backend returns an empty model string but embeddings
+ * clearly exist (dimensions > 0 or Embedded% > 0), show "(provider default)"
+ * rather than a bare "—" so the row is never silently uninformative.
  */
-import { onMounted, onUnmounted, ref } from 'vue';
+import { computed, onMounted, onUnmounted, ref } from 'vue';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
 import type { MemoryHealthSnapshot } from '@/lib/types';
 
@@ -59,6 +63,27 @@ function pct(n: number, total: number): string {
   if (total === 0) return '0%';
   return `${Math.round((n / total) * 100)}%`;
 }
+
+/**
+ * FR-003: Resolve the display model name for the embedder row.
+ *
+ * When the backend returns model="" but embeddings clearly exist (dimensions
+ * > 0 or some chunks are already embedded), the provider is using a default
+ * model that it did not surface in the API response. Show "(provider default)"
+ * rather than a bare "—" so the row is never silently uninformative.
+ *
+ * If there is genuinely no embedder configured (dimensions = 0 AND embedded
+ * = 0), fall back to "—" as before.
+ */
+const effectiveEmbedderModel = computed<string>(() => {
+  const snap = snapshot.value;
+  if (!snap) return '—';
+  const { model, dimensions } = snap.embedder;
+  if (model) return model;
+  // Embeddings exist but model is not surfaced — provider is using its default.
+  const hasEmbeddings = dimensions > 0 || snap.counts.embedded > 0;
+  return hasEmbeddings ? '(provider default)' : '—';
+});
 
 onMounted(() => {
   void refresh();
@@ -241,7 +266,7 @@ defineExpose({ refresh });
             </tr>
             <tr>
               <td class="py-0.5 pr-6 text-ink-dim">Model</td>
-              <td class="py-0.5">{{ snapshot.embedder.model || '—' }}</td>
+              <td class="py-0.5" data-testid="health-embedder-model">{{ effectiveEmbedderModel }}</td>
             </tr>
             <tr>
               <td class="py-0.5 pr-6 text-ink-dim">Dimensions</td>
