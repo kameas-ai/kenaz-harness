@@ -45,3 +45,50 @@ describe('EventStreamRow (FR-001c, plan §5.2)', () => {
     expect(html).not.toMatch(/#[0-9a-fA-F]{3,8}/);
   });
 });
+
+// FR-002: "count=N" trailing metadata must be rendered as "×N"
+// (chain-length / total-count label; not "collapsed duplicates").
+// Backend emits `count=N` from api.go when migration drift has N versions.
+describe('EventStreamRow trailing formatter (FR-002)', () => {
+  it('reformats count=N to ×N', () => {
+    const w = mount(EventStreamRow, {
+      props: {
+        timestamp: 't',
+        category: 'STORAGE',
+        subject: 'storage.migration.drift-detected',
+        trailing: 'count=8',
+      },
+    });
+    expect(w.text()).toContain('×8');
+    expect(w.text()).not.toContain('count=8');
+  });
+
+  it('reformats count=1 to ×1', () => {
+    const w = mount(EventStreamRow, {
+      props: { timestamp: 't', category: 'STORAGE', subject: 's', trailing: 'count=1' },
+    });
+    expect(w.text()).toContain('×1');
+  });
+
+  it('passes through non-count trailing strings verbatim', () => {
+    const w = mount(EventStreamRow, {
+      props: { timestamp: 't', category: 'STORAGE', subject: 's', trailing: 'payload_bytes=1024' },
+    });
+    expect(w.text()).toContain('payload_bytes=1024');
+  });
+
+  it('passes through hex hash prefix verbatim', () => {
+    const w = mount(EventStreamRow, {
+      props: { timestamp: 't', category: 'STORAGE', subject: 's', trailing: 'a1b2c3d4' },
+    });
+    expect(w.text()).toContain('a1b2c3d4');
+  });
+
+  it('renders nothing when trailing is absent', () => {
+    const w = mount(EventStreamRow, {
+      props: { timestamp: 't', category: 'STORAGE', subject: 's' },
+    });
+    // No trailing span should be rendered
+    expect(w.find('.text-ink-subtle').exists()).toBe(false);
+  });
+});
