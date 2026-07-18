@@ -18,21 +18,18 @@ import AuditEventDrawer from './AuditEventDrawer.vue';
 import { useHarnessClient, useEventLogStream } from '@/lib/useHarnessAPI';
 import { CATEGORIES, type Category } from '@/lib/categories';
 import type { AuditEntry, AuditFilter, AuditFilterQuery, SavedAuditQuery, AuditExportOptions } from '@/lib/types';
+import { defaultAuditSince, defaultAuditUntil } from '@/lib/auditDateFilters';
 
 const client = useHarnessClient();
 
 // ── Filter state ────────────────────────────────────────────────────────
 const selectedCategory = ref<string>('');
-// WP11: default to last-7-days so the view opens on recent entries, not an
-// empty screen when the log is sparse. Format: RFC3339 date (UTC midnight).
-function sevenDaysAgoISO(): string {
-  const d = new Date();
-  d.setUTCDate(d.getUTCDate() - 7);
-  d.setUTCHours(0, 0, 0, 0);
-  return d.toISOString().slice(0, 10); // "YYYY-MM-DD"
-}
-const sinceInput = ref<string>(sevenDaysAgoISO());
-const untilInput = ref<string>('');
+// WP11 / FR-001: default Since = last-7-days (UTC midnight); Until = ''
+// (open-ended, maps to undefined in the filter → no upper bound, always
+// >= Since). Placeholder text in the template uses neutral "YYYY-MM-DD"
+// rather than a hard-coded past date so new users aren't confused.
+const sinceInput = ref<string>(defaultAuditSince());
+const untilInput = ref<string>(defaultAuditUntil());
 const actorInput = ref<string>('');
 const freeText = ref<string>('');
 const verboseToggle = ref<boolean>(false);
@@ -311,7 +308,7 @@ onBeforeUnmount(() => {
           <input
             v-model="sinceInput"
             type="text"
-            placeholder="2026-04-25T00:00:00Z"
+            placeholder="YYYY-MM-DD"
             class="bg-surface-2 text-ink rounded-sm border border-border px-2 py-1 text-[12px] w-48"
           />
         </label>
@@ -320,7 +317,7 @@ onBeforeUnmount(() => {
           <input
             v-model="untilInput"
             type="text"
-            placeholder="2026-04-26T00:00:00Z"
+            placeholder="YYYY-MM-DD (open)"
             class="bg-surface-2 text-ink rounded-sm border border-border px-2 py-1 text-[12px] w-48"
           />
         </label>
