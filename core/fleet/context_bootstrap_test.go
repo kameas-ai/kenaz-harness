@@ -5,6 +5,7 @@ package fleet
 // mirroring the onboarding + context-graph client test patterns.
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -203,6 +204,39 @@ func TestBootstrapClient_GetContextHealth(t *testing.T) {
 	}
 	if h.LatestRun == nil || h.LatestRun.RunID != "run-abc" {
 		t.Errorf("latest run = %+v", h.LatestRun)
+	}
+}
+
+// A backend that omits connected_sources (a nil Go slice marshals to JSON
+// null) must not leave the field nil on the returned rollup — that null
+// crashed the Contexts surface (`connected_sources.length`). GetContextHealth
+// normalizes empty arrays to non-nil so the frontend wire contract
+// (connected_sources: string[]) always holds and the value marshals to [].
+func TestBootstrapClient_GetContextHealth_EmptyArraysNotNull(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		// No connected_sources / nodes_by_source_kind keys at all.
+		_, _ = w.Write([]byte(`{"total_nodes":0}`))
+	}))
+	defer srv.Close()
+	bc := newBootstrapClient(t, srv.URL, true)
+
+	h, err := bc.GetContextHealth(context.Background())
+	if err != nil {
+		t.Fatalf("GetContextHealth: %v", err)
+	}
+	if h.ConnectedSources == nil {
+		t.Error("ConnectedSources is nil; want non-nil empty slice")
+	}
+	if h.NodesBySourceKind == nil {
+		t.Error("NodesBySourceKind is nil; want non-nil empty map")
+	}
+	b, err := json.Marshal(h)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if !bytes.Contains(b, []byte(`"connected_sources":[]`)) {
+		t.Errorf("connected_sources did not marshal to []; got %s", b)
 	}
 }
 

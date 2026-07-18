@@ -347,6 +347,12 @@ func (b *BootstrapClient) GetContextHealth(ctx context.Context) (*ContextHealth,
 	if out.NodesBySourceKind == nil {
 		out.NodesBySourceKind = map[string]int{}
 	}
+	if out.ConnectedSources == nil {
+		// A nil slice marshals to JSON null, which violates the frontend
+		// wire contract (connected_sources: string[]) and crashed the
+		// Contexts surface. Normalize to an empty slice.
+		out.ConnectedSources = []string{}
+	}
 	return &out, nil
 }
 
