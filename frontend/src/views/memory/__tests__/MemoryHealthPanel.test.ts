@@ -259,3 +259,52 @@ describe('MemoryHealthPanel (§2.4)', () => {
     }
   });
 });
+
+// FR-003: embedder model display — never show bare "—" when embeddings exist.
+describe('MemoryHealthPanel embedder model display (FR-003)', () => {
+  it('shows the model name when the backend provides one', async () => {
+    const { wrapper } = mountWith();
+    await flushPromises();
+    const cell = wrapper.find('[data-testid="health-embedder-model"]');
+    expect(cell.text()).toBe('text-embedding-3-small');
+  });
+
+  it('shows "(provider default)" when model is empty but dimensions > 0', async () => {
+    const { wrapper } = mountWith({
+      snapshot: {
+        ...BASE_SNAPSHOT,
+        embedder: { kind: 'openrouter', model: '', dimensions: 1536 },
+      },
+    });
+    await flushPromises();
+    const cell = wrapper.find('[data-testid="health-embedder-model"]');
+    expect(cell.text()).toBe('(provider default)');
+    expect(cell.text()).not.toBe('—');
+  });
+
+  it('shows "(provider default)" when model is empty but embedded count > 0', async () => {
+    const { wrapper } = mountWith({
+      snapshot: {
+        ...BASE_SNAPSHOT,
+        embedder: { kind: 'openrouter', model: '', dimensions: 0 },
+        counts: { ...BASE_SNAPSHOT.counts, embedded: 100 },
+      },
+    });
+    await flushPromises();
+    const cell = wrapper.find('[data-testid="health-embedder-model"]');
+    expect(cell.text()).toBe('(provider default)');
+  });
+
+  it('shows "—" when model is empty AND no embeddings exist', async () => {
+    const { wrapper } = mountWith({
+      snapshot: {
+        ...BASE_SNAPSHOT,
+        embedder: { kind: 'noop', model: '', dimensions: 0 },
+        counts: { ...BASE_SNAPSHOT.counts, embedded: 0 },
+      },
+    });
+    await flushPromises();
+    const cell = wrapper.find('[data-testid="health-embedder-model"]');
+    expect(cell.text()).toBe('—');
+  });
+});

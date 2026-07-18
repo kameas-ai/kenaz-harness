@@ -5,6 +5,12 @@ import { CATEGORY_REGISTRY, type Category } from '@/lib/categories';
 /**
  * EventStreamRow — Kenaz event-stream row primitive (plan §5.2):
  *   [timestamp] · [DOT + LABEL] · [subject] · [trailing-metadata]
+ *
+ * FR-002: `trailing` values of the form "count=N" (emitted by the backend
+ * for chain-length / total-count metadata) are reformatted to "×N" so the
+ * intent is clear to readers scanning the audit log.  Other trailing formats
+ * (hex hash prefix, "payload_bytes=N", "payload_type=T") are passed through
+ * verbatim.
  */
 const props = defineProps<{
   timestamp: string;
@@ -24,6 +30,18 @@ const truncatedSubject = computed(() => {
   const head = s.slice(0, 120);
   const tail = s.slice(-120);
   return `${head}…${tail}`;
+});
+
+/**
+ * Reformat "count=N" trailing metadata as "×N" for readability (FR-002).
+ * All other trailing strings pass through unchanged.
+ */
+const formattedTrailing = computed(() => {
+  const t = props.trailing;
+  if (!t) return t;
+  const m = t.match(/^count=(\d+)$/);
+  if (m) return `×${m[1]}`;
+  return t;
 });
 </script>
 
@@ -48,8 +66,8 @@ const truncatedSubject = computed(() => {
       </span>
     </span>
     <span class="text-ink truncate">{{ truncatedSubject }}</span>
-    <span v-if="trailing" class="text-ink-subtle text-right truncate">
-      {{ trailing }}
+    <span v-if="formattedTrailing" class="text-ink-subtle text-right truncate">
+      {{ formattedTrailing }}
     </span>
   </div>
 </template>

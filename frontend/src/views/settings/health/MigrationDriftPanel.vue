@@ -48,13 +48,28 @@ const hasErrors = computed<boolean>(() =>
   actionableDrifts.value.some((d) => d.severity === 'error'),
 );
 
+/**
+ * FR-005: Status label for the summary pill.
+ *
+ * "drift" = actionable mismatches (id_mismatch / ledger_only) that need
+ * human attention.  "pending" = code_only entries that will self-apply on
+ * the next boot — not drift in the corrective sense.
+ *
+ * Showing "No drift detected" while the pending-note says "8 pending" was
+ * contradictory.  Instead:
+ *   - actionable drift present → "N drift(s) detected" (unchanged)
+ *   - no actionable drift, but pending migrations → "N pending (no drift)"
+ *   - fully clean → "No drift · 0 pending"
+ */
 const statusLabel = computed<string>(() => {
   if (loading.value) return 'Checking…';
   if (loadError.value) return 'Error loading report';
   if (!report.value) return '—';
   const n = actionableDrifts.value.length;
-  if (n === 0) return 'No drift detected';
-  return `${n} drift${n === 1 ? '' : 's'} detected`;
+  if (n > 0) return `${n} drift${n === 1 ? '' : 's'} detected`;
+  const p = pendingCount.value;
+  if (p > 0) return `${p} pending (no drift)`;
+  return 'No drift · 0 pending';
 });
 
 // ── lifecycle ──────────────────────────────────────────────────────────
@@ -156,12 +171,22 @@ function severityBadge(severity: DriftEntry['severity']): string {
             data-testid="drift-status-error"
           >Error</span>
 
+          <!-- No actionable drift + pending migrations: amber "N pending" pill
+               (FR-005 — avoid contradiction with "8 pending" note below) -->
+          <span
+            v-else-if="actionableDrifts.length === 0 && pendingCount > 0"
+            class="inline-flex items-center gap-1 rounded px-2 py-0.5 text-[11px]
+                   bg-signal-warn/10 text-signal-warn border border-signal-warn/20"
+            data-testid="drift-status-pending"
+          >{{ statusLabel }}</span>
+
+          <!-- Fully clean: no actionable drift, no pending migrations -->
           <span
             v-else-if="actionableDrifts.length === 0"
             class="inline-flex items-center gap-1 rounded px-2 py-0.5 text-[11px]
                    bg-signal-success/10 text-signal-success border border-signal-success/20"
             data-testid="drift-status-ok"
-          >No drift detected</span>
+          >{{ statusLabel }}</span>
 
           <span
             v-else
@@ -304,7 +329,7 @@ function severityBadge(severity: DriftEntry['severity']): string {
       class="text-[11px] text-ink-muted"
       data-testid="drift-clean-note"
     >
-      All registered migrations match the ledger.
+      All registered migrations match the ledger. No pending migrations.
     </p>
   </section>
 </template>
