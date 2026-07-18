@@ -115,7 +115,7 @@ async function rerun(): Promise<void> {
         </span>
         <span class="font-ui text-xs text-ink-muted">
           Connected:
-          <template v-if="health.connected_sources.length">
+          <template v-if="health.connected_sources?.length">
             {{ health.connected_sources.join(', ') }}
           </template>
           <template v-else>none</template>

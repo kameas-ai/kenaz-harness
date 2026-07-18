@@ -528,7 +528,7 @@ func (nullContextBootstrapAPI) Status(context.Context) (contextbootstrap.RunStat
 	return contextbootstrap.RunStatus{Phase: contextbootstrap.RunPhaseIdle}, nil
 }
 func (nullContextBootstrapAPI) Health(context.Context) (corefleet.ContextHealth, error) {
-	return corefleet.ContextHealth{NodesBySourceKind: map[string]int{}}, nil
+	return corefleet.ContextHealth{NodesBySourceKind: map[string]int{}, ConnectedSources: []string{}}, nil
 }
 
 // ─── Orchestration API (WP04/WP05) ────────────────────────────────────────────
@@ -771,7 +771,7 @@ func (a *contextBootstrapImpl) Health(ctx context.Context) (corefleet.ContextHea
 			logging.L().Debug("contextbootstrap.health.fleet_failed", "err_class", classifyWiringErr(err))
 		}
 	}
-	return corefleet.ContextHealth{NodesBySourceKind: map[string]int{}}, nil
+	return corefleet.ContextHealth{NodesBySourceKind: map[string]int{}, ConnectedSources: []string{}}, nil
 }
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
