@@ -19,15 +19,26 @@ import (
 // fakeLLM is a minimal LLMStreamer that emits a sequence of text
 // chunks then returns a final.
 type fakeLLM struct {
-	chunks []string
-	err    error
+	mu            sync.Mutex
+	chunks        []string
+	err           error
+	lastProfileID string // set by Stream; read via snapshotProfileID
 }
 
 func (f *fakeLLM) Stream(_ context.Context, req LLMRequest) (LLMStream, error) {
+	f.mu.Lock()
+	f.lastProfileID = req.ProfileID
+	f.mu.Unlock()
 	if f.err != nil {
 		return nil, f.err
 	}
 	return &fakeLLMStream{chunks: f.chunks, prompt: req.Prompt}, nil
+}
+
+func (f *fakeLLM) snapshotProfileID() string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.lastProfileID
 }
 
 type fakeLLMStream struct {
@@ -77,13 +88,101 @@ func TestModelTurn_ErrorsWithoutProfile(t *testing.T) {
 		ID: "x", Name: "x", Version: 1,
 		Steps: []Step{{Name: "say", Kind: StepKindModelTurn, UserPrompt: "hi"}},
 	}
-	e := NewEngineWithDeps(Deps{LLM: llm}) // no profile
+	e := NewEngineWithDeps(Deps{LLM: llm}) // no profile, no func
 	run, err := e.Run(context.Background(), wf, nil, RunOptions{})
 	if err == nil {
 		t.Fatalf("expected error for missing profile, got status=%s", run.Status)
 	}
+	// FR-004: error must contain "no profile" AND actionable guidance.
 	if !strings.Contains(err.Error(), "no profile") {
 		t.Errorf("err: got %v want contains 'no profile'", err)
+	}
+	if !strings.Contains(err.Error(), "Settings") {
+		t.Errorf("err: got %v want actionable hint containing 'Settings'", err)
+	}
+}
+
+func TestModelTurn_DefaultProfileFunc(t *testing.T) {
+	// FR-002: DefaultProfileFunc is called at run time when neither the step
+	// nor DefaultLLMProfile supplies a profile.
+	llm := &fakeLLM{chunks: []string{"resolved"}}
+	wf := Workflow{
+		ID: "x", Name: "x", Version: 1,
+		Steps: []Step{{Name: "say", Kind: StepKindModelTurn, UserPrompt: "hi"}},
+	}
+	called := 0
+	e := NewEngineWithDeps(Deps{
+		LLM: llm,
+		DefaultProfileFunc: func() string {
+			called++
+			return "dynamic-profile"
+		},
+	})
+	run, err := e.Run(context.Background(), wf, nil, RunOptions{})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if run.Status != "completed" {
+		t.Fatalf("status: %s err=%s", run.Status, run.Err)
+	}
+	if called == 0 {
+		t.Error("DefaultProfileFunc was never called")
+	}
+	if got := llm.snapshotProfileID(); got != "dynamic-profile" {
+		t.Errorf("LLM called with profile %q want %q", got, "dynamic-profile")
+	}
+}
+
+func TestModelTurn_DefaultProfileFuncSkippedWhenStaticSet(t *testing.T) {
+	// FR-002: when DefaultLLMProfile is set, the static value wins and
+	// DefaultProfileFunc is not called.
+	llm := &fakeLLM{chunks: []string{"static"}}
+	wf := Workflow{
+		ID: "x", Name: "x", Version: 1,
+		Steps: []Step{{Name: "say", Kind: StepKindModelTurn, UserPrompt: "hi"}},
+	}
+	funcCalled := false
+	e := NewEngineWithDeps(Deps{
+		LLM:               llm,
+		DefaultLLMProfile: "static-profile",
+		DefaultProfileFunc: func() string {
+			funcCalled = true
+			return "dynamic-profile"
+		},
+	})
+	run, err := e.Run(context.Background(), wf, nil, RunOptions{})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if run.Status != "completed" {
+		t.Fatalf("status: %s err=%s", run.Status, run.Err)
+	}
+	if funcCalled {
+		t.Error("DefaultProfileFunc was called but should not be when DefaultLLMProfile is set")
+	}
+	if got := llm.snapshotProfileID(); got != "static-profile" {
+		t.Errorf("LLM called with profile %q want %q", got, "static-profile")
+	}
+}
+
+func TestModelTurn_DefaultProfileFuncReturnsEmptyErrors(t *testing.T) {
+	// When DefaultProfileFunc returns "" (no providers configured) the
+	// error message must be actionable (FR-004).
+	llm := &fakeLLM{chunks: []string{"x"}}
+	wf := Workflow{
+		ID: "x", Name: "x", Version: 1,
+		Steps: []Step{{Name: "say", Kind: StepKindModelTurn, UserPrompt: "hi"}},
+	}
+	e := NewEngineWithDeps(Deps{
+		LLM:                llm,
+		DefaultProfileFunc: func() string { return "" },
+	})
+	_, err := e.Run(context.Background(), wf, nil, RunOptions{})
+	if err == nil {
+		t.Fatal("expected error when func returns empty profile")
+	}
+	if !strings.Contains(err.Error(), "Settings") {
+		t.Errorf("err missing actionable hint: %v", err)
 	}
 }
 
