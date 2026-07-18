@@ -59,7 +59,12 @@ import (
 const defaultHarnessPort = "7881"
 
 // maxMessageLen caps the message_truncated field to this many runes.
-const maxMessageLen = 64
+// Error diagnostics (provider status + reason, e.g. Anthropic's
+// "invalid request (status=400): ...") are provider-generated, not user
+// prompt content, and 64 runes clipped them right at "(status=" — making
+// every agent-run failure undebuggable from the host. 512 is enough to carry
+// a full API error while staying bounded.
+const maxMessageLen = 512
 
 func main() {
 	addr := "0.0.0.0:" + defaultHarnessPort
