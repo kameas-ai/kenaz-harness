@@ -27,7 +27,6 @@ const NAV_ACTIONS: PaletteAction[] = [
   { id: 'nav.tools', label: 'Go to Tools', hint: 'MCP servers & tool bundles', perform: () => navigate('#/tools') },
   { id: 'nav.providers', label: 'Go to Providers', hint: 'AI provider configuration', perform: () => navigate('#/providers') },
   { id: 'nav.contexts', label: 'Go to Contexts', hint: 'Session context files', perform: () => navigate('#/contexts') },
-  { id: 'nav.corpora', label: 'Go to Corpora', hint: 'Corpora knowledge stores', perform: () => navigate('#/corpora') },
   { id: 'nav.memory', label: 'Go to Memory', hint: 'Memory capture settings', perform: () => navigate('#/memory') },
   { id: 'nav.workflows', label: 'Go to Workflows', hint: 'Scheduled workflows', perform: () => navigate('#/workflows') },
   { id: 'nav.artifacts', label: 'Go to Artifacts', hint: 'Saved artifacts & outputs', perform: () => navigate('#/artifacts') },
