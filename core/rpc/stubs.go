@@ -408,6 +408,14 @@ func (s *stubTools) CheckRecipePrereqs(_ context.Context, _ string) ([]tools.Mis
 	return []tools.MissingPrereq{}, nil
 }
 
+func (s *stubTools) BeginDeviceAuth(_ context.Context, _ string) (tools.DeviceAuthBeginResult, error) {
+	return tools.DeviceAuthBeginResult{}, errNotWired
+}
+
+func (s *stubTools) PollDeviceAuth(_ context.Context, _ string) (stdio.RecipeStatus, error) {
+	return stdio.RecipeStatus{}, errNotWired
+}
+
 // ── shell ──────────────────────────────────────────────────────────────
 
 type stubShell struct{}

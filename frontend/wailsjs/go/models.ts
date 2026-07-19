@@ -7259,6 +7259,22 @@ export namespace tasks {
 
 export namespace tools {
 	
+	export class DeviceAuthBeginResult {
+	    userCode: string;
+	    verificationUri: string;
+	    expiresIn: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new DeviceAuthBeginResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.userCode = source["userCode"];
+	        this.verificationUri = source["verificationUri"];
+	        this.expiresIn = source["expiresIn"];
+	    }
+	}
 	export class FSAccessResult {
 	    granted: boolean;
 	    expanded: string;

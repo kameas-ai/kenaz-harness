@@ -134,6 +134,74 @@ async function signIn() {
     signingIn.value = false;
   }
 }
+
+// ── Device-flow (RFC 8628) sign-in (GitHub) ────────────────────────────
+// When primary_auth === 'device_code' AND auth.kind === 'mcp_oauth', the
+// harness drives the device flow directly (GitHub rejects random-port loopback
+// redirects so the PKCE loopback flow cannot be used). The UI:
+//   1. "Start GitHub sign-in" → call beginDeviceAuth → show user_code + link
+//   2. User opens github.com/login/device, enters user_code
+//   3. pollDeviceAuth blocks until approved/expired/denied
+//   4. On success: recipe is installed/respawned, modal closes.
+//
+// The ghu_ token is stored in the OS keychain server-side and NEVER returned
+// via any RPC binding or frontend state.
+
+/** True when this recipe uses the harness-driven device flow (GitHub). */
+const isHarnessDeviceFlow = computed(
+  () => primaryAuth.value === 'device_code' && props.recipe.auth?.kind === 'mcp_oauth',
+);
+
+interface DeviceCodeState {
+  userCode: string;
+  verificationUri: string;
+  expiresIn: number;
+  startedAt: number; // Date.now() ms
+}
+
+const deviceCode = ref<DeviceCodeState | null>(null);
+const devicePolling = ref(false);
+const deviceDone = ref(false);
+
+async function startDeviceSignIn() {
+  if (devicePolling.value) return;
+  errorMsg.value = null;
+  deviceCode.value = null;
+  deviceDone.value = false;
+  try {
+    const result = await client.tools.recipes.beginDeviceAuth(props.recipe.id);
+    deviceCode.value = {
+      userCode: result.userCode,
+      verificationUri: result.verificationUri,
+      expiresIn: result.expiresIn,
+      startedAt: Date.now(),
+    };
+  } catch (e) {
+    errorMsg.value = e instanceof Error ? e.message : String(e);
+    return;
+  }
+
+  // Auto-open the verification URL in the system browser.
+  try {
+    await client.shell.openInOSBrowser(deviceCode.value!.verificationUri);
+  } catch {
+    // Non-fatal: user can click the link manually.
+  }
+
+  // Start polling — this blocks until approved/denied/expired.
+  devicePolling.value = true;
+  try {
+    const status = await client.tools.recipes.pollDeviceAuth(props.recipe.id);
+    deviceDone.value = true;
+    emit('installed', status);
+    emit('close');
+  } catch (e) {
+    errorMsg.value = e instanceof Error ? e.message : String(e);
+    deviceCode.value = null;
+  } finally {
+    devicePolling.value = false;
+  }
+}
 // Hazard-recipe acknowledgment (recipes carrying a `warning` string).
 // The user must check this box before Install becomes clickable.
 const warningAck = ref(false);
@@ -534,10 +602,80 @@ function onKeydown(event: KeyboardEvent) {
           </ul>
         </section>
 
-        <!-- Device-code sign-in banner (e.g. Outlook). Leads when
-             primary_auth === 'device_code'; no token to paste. -->
+        <!-- Device-code sign-in banner — two variants:
+             1. Harness-driven (GitHub): harness calls the device-auth endpoint,
+                shows user_code + link, and polls until done.
+             2. Server-driven (e.g. Outlook/MS365): the MCP server itself handles
+                the flow; the user just clicks Install and the server opens the
+                browser. -->
+
+        <!-- Harness-driven GitHub device flow (primary_auth=device_code + auth.kind=mcp_oauth) -->
         <section
-          v-if="primaryAuth === 'device_code'"
+          v-if="isHarnessDeviceFlow"
+          class="rounded-sm border border-accent-hairline bg-accent-glow/30 px-3 py-3 space-y-3"
+          data-testid="recipe-modal-device-code-section"
+        >
+          <div class="text-[11px] uppercase tracking-[0.18em] text-ink-subtle">
+            Sign in to {{ recipe.displayName }}
+          </div>
+
+          <!-- Before device auth starts -->
+          <template v-if="!deviceCode && !deviceDone">
+            <p class="text-[12px] text-ink-muted leading-snug max-w-prose">
+              Click below to start GitHub sign-in. You will see a short code to
+              enter at <span class="font-mono text-ink">github.com/login/device</span>.
+              No token to paste — just sign in once and the session is saved.
+            </p>
+            <button
+              type="button"
+              class="rounded-sm border border-accent-hairline bg-surface-0 px-3 py-1.5 font-ui text-[12px] text-accent hover:bg-accent-glow disabled:opacity-50 disabled:cursor-not-allowed"
+              :disabled="devicePolling"
+              data-testid="recipe-modal-device-start-btn"
+              @click="startDeviceSignIn"
+            >
+              Start GitHub sign-in
+            </button>
+          </template>
+
+          <!-- After beginDeviceAuth: show user_code + link; polling in progress -->
+          <template v-if="deviceCode && !deviceDone">
+            <p class="text-[12px] text-ink-muted leading-snug">
+              Open <a
+                :href="deviceCode.verificationUri"
+                target="_blank"
+                rel="noopener noreferrer"
+                class="text-accent underline hover:text-accent-muted"
+                data-testid="recipe-modal-device-verify-link"
+              >{{ deviceCode.verificationUri }}</a>
+              in your browser and enter this code:
+            </p>
+            <div
+              class="inline-flex items-center justify-center rounded-sm border border-accent-hairline bg-surface-1 px-4 py-2"
+              data-testid="recipe-modal-device-user-code"
+            >
+              <span class="font-mono text-xl font-bold tracking-widest text-ink select-all">
+                {{ deviceCode.userCode }}
+              </span>
+            </div>
+            <p
+              v-if="devicePolling"
+              class="text-[11px] text-ink-subtle leading-snug"
+              data-testid="recipe-modal-device-polling"
+            >
+              Waiting for you to approve in GitHub…
+            </p>
+          </template>
+
+          <!-- Done (success handled by closing modal; this is a brief flash) -->
+          <template v-if="deviceDone">
+            <p class="text-[12px] text-signal-ok">Signed in. Installing…</p>
+          </template>
+        </section>
+
+        <!-- Server-driven device flow (e.g. Outlook ms-365-mcp-server).
+             The MCP server handles the flow itself; just click Install. -->
+        <section
+          v-if="primaryAuth === 'device_code' && !isHarnessDeviceFlow"
           class="rounded-sm border border-accent-hairline bg-accent-glow/30 px-3 py-3 space-y-2"
           data-testid="recipe-modal-device-code-section"
         >
