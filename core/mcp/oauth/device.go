@@ -92,6 +92,11 @@ type DeviceConfig struct {
 	HTTPClient *http.Client
 	// Now stamps token expiry; nil → time.Now.
 	Now func() time.Time
+	// intervalUnit is the duration one unit of the server-provided poll
+	// interval maps to. Unexported test seam: 0 → time.Second (production).
+	// Tests set a tiny value to avoid real multi-second sleeps while still
+	// exercising the pending / slow_down back-off paths.
+	intervalUnit time.Duration
 }
 
 // RequestDeviceAuthorization POSTs to the device-authorization endpoint and
@@ -177,7 +182,11 @@ func PollDeviceToken(ctx context.Context, cfg DeviceConfig, dar *DeviceAuthoriza
 		nowFn = time.Now
 	}
 
-	interval := time.Duration(dar.Interval) * time.Second
+	unit := cfg.intervalUnit
+	if unit <= 0 {
+		unit = time.Second
+	}
+	interval := time.Duration(dar.Interval) * unit
 	deadline := nowFn().Add(time.Duration(dar.ExpiresIn) * time.Second)
 
 	for {
@@ -203,7 +212,7 @@ func PollDeviceToken(ctx context.Context, cfg DeviceConfig, dar *DeviceAuthoriza
 		tok, err := pollOnce(ctx, client, cfg, dar.DeviceCode, nowFn())
 		if err != nil {
 			if errors.Is(err, errSlowDown) {
-				interval += 5 * time.Second
+				interval += 5 * unit
 				continue
 			}
 			if errors.Is(err, errAuthorizationPending) {

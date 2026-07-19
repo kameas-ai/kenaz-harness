@@ -149,6 +149,9 @@ func TestDeviceFlow_PendingSlowDownSuccess(t *testing.T) {
 
 	// Use a round-tripper that forwards all requests to the appropriate server.
 	cfg.HTTPClient = newMultiServerClient(t, devAuthSrv, srv)
+	// Map the server's poll interval to milliseconds so the pending/slow_down
+	// back-off runs in ~ms instead of real seconds (still exercises both paths).
+	cfg.intervalUnit = time.Millisecond
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -307,9 +310,10 @@ func TestDeviceFlow_SlowDownIncreasesInterval(t *testing.T) {
 		HTTPClient:    newMultiServerClient(t, devAuthSrv, srv),
 		Now:           time.Now,
 	}
+	// Map the server's poll interval to milliseconds so slow_down back-off runs
+	// in ~ms instead of real seconds (still exercises the +interval bump path).
+	cfg.intervalUnit = time.Millisecond
 
-	// Use a very tight context to keep test fast (the actual intervals
-	// are overridden inside PollDeviceToken — we just need enough time).
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
