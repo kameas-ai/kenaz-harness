@@ -24,7 +24,7 @@ import WorkflowEditor from './WorkflowEditor.vue';
 import SimpleTemplateEditor from './SimpleTemplateEditor.vue';
 import CatalogView from './CatalogView.vue';
 import CatalogPreviewDrawer from './CatalogPreviewDrawer.vue';
-import ScheduledInbox from './ScheduledInbox.vue';
+import RunsHistoryTab from './RunsHistoryTab.vue';
 // fleet-share-and-sync-01NDFSEX14 WP03 — Publish to team catalog
 import PublishDialog from '@/views/marketplace/PublishDialog.vue';
 import { signedIn } from '@/lib/featureFlags';
@@ -361,9 +361,9 @@ onMounted(loadCatalog);
         />
       </template>
 
-      <!-- Runs tab (WP03 — scheduled inbox; WP06 extends with chatClient) -->
+      <!-- Runs tab (01NBUG04 — execution history + scheduled subsection) -->
       <template v-else-if="activeTab === 'Runs'">
-        <ScheduledInbox :client="client" :chat-client="chatClient" />
+        <RunsHistoryTab :client="client" :chat-client="chatClient" />
       </template>
 
       <!-- Library tab (existing content) -->
