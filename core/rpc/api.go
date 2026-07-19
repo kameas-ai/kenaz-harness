@@ -1541,6 +1541,15 @@ func New(c *core.Core) *API {
 		if stack.reg != nil {
 			wfDeps.LLM = &wfLLMStreamerAdapter{reg: stack.reg}
 		}
+		// 01NWFT01: wire ToolDiscoverer + ToolDispatcher so model_turn steps
+		// that opt into tools: share the SAME discoverer (one catalog, one
+		// permission filter) and dispatch path as chat (FR-002/FR-003).
+		if stack.toolDiscoverer != nil {
+			wfDeps.ToolDiscoverer = &wfToolDiscovererAdapter{inner: stack.toolDiscoverer}
+		}
+		if stack.wrappedPool != nil {
+			wfDeps.ToolDispatcher = &wfToolDispatcherAdapter{pool: stack.wrappedPool}
+		}
 		// FR-001/FR-002 (01NBUG03): wire DefaultProfileFunc so model_turn steps
 		// resolve the active LLM profile lazily at run time. This avoids the
 		// "no profile" error that fires when DefaultLLMProfile is never set, and
@@ -3356,6 +3365,15 @@ type llmStack struct {
 	// newLLMStack). Setting historyAdapter.syncHook wires the hook for
 	// all llmHistoryWriter instances since they all share this reader.
 	historyAdapter *sessionHistoryReader
+	// wrappedPool is the BuiltinPool that merges in-binary tools with the
+	// MCP pool. Held here so the workflow engine's ToolDispatcher can
+	// dispatch tool calls through the same surface as the chat tool loop
+	// (mission 01NWFT01, FR-003 — shared Cedar path).
+	wrappedPool *toolloop.BuiltinPool
+	// toolDiscoverer is the corellm.ToolDiscoverer constructed during
+	// newLLMStack. Held so the workflow engine can wire the SAME catalog
+	// and permission filter as chat (mission 01NWFT01, FR-002).
+	toolDiscoverer corellm.ToolDiscoverer
 }
 
 func newLLMStack(
@@ -3642,6 +3660,8 @@ func newLLMStack(
 		compactionAudit:     compactionAudit,
 		chatRunner:          chatRunner,
 		historyAdapter:      historyAdapter,
+		wrappedPool:         wrappedPool,
+		toolDiscoverer:      toolDiscoverer,
 	}
 }
 

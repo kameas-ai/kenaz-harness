@@ -24,6 +24,7 @@ package workflows
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 )
 
@@ -105,6 +106,73 @@ type Input struct {
 	Options  []string  `yaml:"options,omitempty" json:"options,omitempty"`
 }
 
+// StepToolsSpec is the value type for a model_turn step's `tools:`
+// field. YAML supports two forms:
+//
+//	tools: all              # string scalar → AllAll = true
+//	tools: [bash, search]  # sequence      → Names = ["bash","search"]
+//
+// The zero value (neither set) means no tools — byte-identical to the
+// previous no-tools behaviour (FR-005).
+type StepToolsSpec struct {
+	// All, when true, means "expose all discovered tools to the model".
+	All bool
+	// Names, when non-empty (and All is false), restricts the tool set
+	// to the listed names (matched against discovered tool names).
+	Names []string
+}
+
+// IsEmpty reports whether the spec requests no tool access (zero value).
+func (s StepToolsSpec) IsEmpty() bool { return !s.All && len(s.Names) == 0 }
+
+// UnmarshalYAML supports both scalar ("all") and sequence ([...]) forms.
+func (s *StepToolsSpec) UnmarshalYAML(unmarshal func(any) error) error {
+	// Try scalar first.
+	var str string
+	if err := unmarshal(&str); err == nil {
+		if str == "all" {
+			s.All = true
+			return nil
+		}
+		return fmt.Errorf("workflows: tools: string value must be %q (got %q)", "all", str)
+	}
+	// Try sequence.
+	var names []string
+	if err := unmarshal(&names); err != nil {
+		return fmt.Errorf("workflows: tools: must be %q or a list of tool names", "all")
+	}
+	for _, n := range names {
+		if n == "all" {
+			s.All = true
+			s.Names = nil
+			return nil
+		}
+	}
+	s.Names = names
+	return nil
+}
+
+// MarshalJSON emits "all" for All=true, a list for Names, or nil for
+// the empty spec so JSON round-trips cleanly.
+func (s StepToolsSpec) MarshalJSON() ([]byte, error) {
+	if s.IsEmpty() {
+		return []byte("null"), nil
+	}
+	if s.All {
+		return []byte(`"all"`), nil
+	}
+	// Encode as JSON array.
+	out := `[`
+	for i, n := range s.Names {
+		if i > 0 {
+			out += ","
+		}
+		out += `"` + n + `"`
+	}
+	out += `]`
+	return []byte(out), nil
+}
+
 // Step is a single executable node in a workflow.
 type Step struct {
 	Name string   `yaml:"name" json:"name"`
@@ -121,6 +189,15 @@ type Step struct {
 	// model_turn fields
 	UserPrompt string   `yaml:"user_prompt,omitempty" json:"userPrompt,omitempty"`
 	AllowTools []string `yaml:"allow_tools,omitempty" json:"allowTools,omitempty"`
+	// Tools controls tool access for this model_turn step.
+	// "all" enables all discovered tools; a list enables the named
+	// subset; absent (empty) disables tool calling entirely (default,
+	// byte-identical to the previous behaviour — FR-005).
+	// Valid only on model_turn steps; ignored on all other kinds.
+	Tools StepToolsSpec `yaml:"tools,omitempty" json:"tools,omitempty"`
+	// MaxToolIterations caps the model→tool→model loop for this step.
+	// 0 means use the engine default (DefaultMaxToolIterations = 8).
+	MaxToolIterations int `yaml:"max_tool_iterations,omitempty" json:"maxToolIterations,omitempty"`
 	// Profile is the LLM provider profile id; the registry resolves
 	// it to a kind+model. Empty falls back to Engine.Deps.DefaultLLMProfile.
 	Profile string `yaml:"profile,omitempty" json:"profile,omitempty"`
@@ -349,20 +426,80 @@ type LLMStreamer interface {
 	Stream(ctx context.Context, req LLMRequest) (LLMStream, error)
 }
 
+// ToolSpec declares one callable tool the model may invoke. It mirrors
+// core/llm.ToolSpec but is kept local so core/workflows stays
+// import-clean (DIRECTIVE_001).
+type ToolSpec struct {
+	Name        string
+	Description string
+	// InputSchema is JSON-Schema bytes describing the tool's arguments.
+	InputSchema []byte
+}
+
+// ToolUseCall is a single tool invocation emitted by the model.
+// It mirrors core/llm.ToolUse without importing that package.
+type ToolUseCall struct {
+	ID    string
+	Name  string
+	Input []byte // raw JSON
+}
+
+// HistoryMessage is one turn in the multi-turn conversation built by
+// the bounded tool loop. Role is "user", "assistant", or "tool".
+type HistoryMessage struct {
+	Role    string
+	Text    string       // non-empty for user/assistant text turns
+	ToolUses []ToolUseCall // populated for assistant tool-call turns
+	// ToolResults carries results back to the model (role="tool").
+	ToolResults []ToolCallResult
+}
+
+// ToolCallResult is the response from a single tool dispatch.
+type ToolCallResult struct {
+	ToolUseID string
+	Content   string
+	IsError   bool
+}
+
 // LLMRequest is the workflows-side mirror of llm.GenerationRequest,
 // trimmed to the fields model_turn actually populates.
+//
+// When Tools is non-empty the registry is expected to advertise tool
+// calling capability and return ToolUses via LLMStream.ToolCalls().
+// History carries prior turns when running the bounded tool loop.
 type LLMRequest struct {
 	ProfileID string
 	Model     string
 	Prompt    string
+	// Tools, when non-empty, enables tool-calling mode. The registry
+	// forwards these specs to the provider.
+	Tools []ToolSpec
+	// History carries the prior conversation turns for the bounded
+	// tool loop. nil/empty means a single-turn (plain completion).
+	History []HistoryMessage
 }
 
 // LLMStream is the narrow streaming surface model_turn consumes.
 // It mirrors llm.Stream's Events / Final pair so callers can adapt
 // the registry's stream with a thin shim.
+//
+// When the stream terminates with tool calls instead of (or in
+// addition to) text, callers should type-assert to ToolCallStream
+// to retrieve the tool-use blocks.
 type LLMStream interface {
 	Events() <-chan LLMStreamEvent
 	Final() (string, error)
+}
+
+// ToolCallStream is an optional extension of LLMStream that returns
+// any tool-use calls the model emitted during the turn. Adapters that
+// support tool calling implement this interface; callers type-assert
+// before entering the bounded loop.
+type ToolCallStream interface {
+	LLMStream
+	// ToolCalls returns the tool-use calls emitted by the model in
+	// this turn. Must be called after the Events channel closes.
+	ToolCalls() []ToolUseCall
 }
 
 // LLMStreamEvent is the single text-delta envelope model_turn cares
@@ -370,6 +507,35 @@ type LLMStream interface {
 type LLMStreamEvent struct {
 	Text string
 	Err  string
+}
+
+// ToolDiscoverer resolves the live set of tools available to a
+// model_turn step. It mirrors core/llm.ToolDiscoverer without
+// importing that package. The wiring layer (core/rpc) adapts the
+// same chat-path discoverer onto this interface so model_turn steps
+// share one catalog and one permission filter with the chat surface.
+//
+// When Tools is "all", Discover() is called with no name filter.
+// When Tools is a name list, Discover() is called and the result is
+// filtered to the named subset.
+type ToolDiscoverer interface {
+	// Discover returns all currently-available tools. The caller
+	// filters by name when the step specifies an explicit list.
+	// A nil return is valid (no tools configured).
+	Discover(ctx context.Context) ([]ToolSpec, error)
+}
+
+// ToolDispatcher dispatches a single tool call through the same
+// permission/Cedar path as chat. It is analogous to the chat-path
+// BuiltinPool.Call / MCPPool.Call but exposed as a single seam so
+// the workflows package does not need to know about MCP servers or
+// builtin registries.
+//
+// name is the fully-qualified namespaced name as discovered (e.g.
+// "kenaz__bash" or "myserver__my_tool"). input is the raw JSON
+// argument object from the model.
+type ToolDispatcher interface {
+	Dispatch(ctx context.Context, name string, input []byte) (content string, isError bool, err error)
 }
 
 // ToolCaller is the interface tool_call dispatches against. Mirrors
@@ -439,6 +605,11 @@ type AuditEmitter interface {
 	EmitNotifySent(ctx context.Context, target, title string) error
 }
 
+// DefaultMaxToolIterations is the default cap on the model→tool→model
+// loop inside a model_turn step that has tools enabled. It mirrors the
+// chat/agent-graph counting so a runaway model cannot spin forever.
+const DefaultMaxToolIterations = 8
+
 // Deps bundles the optional external dependencies workflow runners
 // need. nil entries cause the corresponding runner to error at Run
 // time with a clear "dependency unavailable" message — keeping
@@ -453,6 +624,15 @@ type Deps struct {
 	// When both DefaultLLMProfile and DefaultProfileFunc are set,
 	// DefaultLLMProfile wins (for back-compat with existing tests).
 	DefaultProfileFunc func() string
+	// ToolDiscoverer, when non-nil, provides the live tool catalog for
+	// model_turn steps that opt into tool access (FR-002). Wired from
+	// the same discoverer chat uses (one catalog, one permission filter).
+	// nil disables tool calling in model_turn regardless of Step.Tools.
+	ToolDiscoverer ToolDiscoverer
+	// ToolDispatcher, when non-nil, dispatches tool calls through the
+	// same permission/Cedar path as chat (FR-003). nil means the tool
+	// loop returns an error for any step with tools enabled.
+	ToolDispatcher ToolDispatcher
 	Tools              ToolCaller
 	MCP                MCPCaller
 	Artifacts         ArtifactsReadWriter
