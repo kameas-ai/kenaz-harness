@@ -1614,6 +1614,10 @@ export function Tasks_Tail(arg1, arg2) {
   return window['go']['rpc']['Bindings']['Tasks_Tail'](arg1, arg2);
 }
 
+export function Tools_BeginDeviceAuth(arg1) {
+  return window['go']['rpc']['Bindings']['Tools_BeginDeviceAuth'](arg1);
+}
+
 export function Tools_CheckRecipePrereqs(arg1) {
   return window['go']['rpc']['Bindings']['Tools_CheckRecipePrereqs'](arg1);
 }
@@ -1632,6 +1636,10 @@ export function Tools_ListRecipes() {
 
 export function Tools_PickDirectory(arg1, arg2) {
   return window['go']['rpc']['Bindings']['Tools_PickDirectory'](arg1, arg2);
+}
+
+export function Tools_PollDeviceAuth(arg1) {
+  return window['go']['rpc']['Bindings']['Tools_PollDeviceAuth'](arg1);
 }
 
 export function Tools_RecipeConfig(arg1) {

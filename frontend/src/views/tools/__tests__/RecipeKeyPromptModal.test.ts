@@ -693,6 +693,12 @@ describe('RecipeKeyPromptModal — prereq pre-flight', () => {
                     status: async () => okStatus('test'),
                     config: async () => ({}),
                     checkPrereqs: async () => missing,
+                    beginDeviceAuth: async () => ({
+                      userCode: 'ABCD-1234',
+                      verificationUri: 'https://github.com/login/device',
+                      expiresIn: 900,
+                    }),
+                    pollDeviceAuth: async () => okStatus('test'),
                   },
                   pickDirectory: async () => '',
                   requestAdditionalAllowedDir: async () => ({ granted: false, expanded: '', message: '' }),

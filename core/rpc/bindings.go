@@ -1997,6 +1997,29 @@ func (b *Bindings) Tools_CheckRecipePrereqs(id string) ([]tools.MissingPrereq, e
 	return b.api.Tools().CheckRecipePrereqs(b.ctx(), id)
 }
 
+// Tools_BeginDeviceAuth starts the RFC 8628 device-authorization flow for a
+// recipe whose primary_auth == "device_code" (e.g. the GitHub recipe). It
+// posts to the provider device-authorization endpoint and returns
+// display-safe fields (user_code + verification_uri) to show in the UI.
+// The opaque device_code is held in memory server-side and is never returned
+// through any Wails binding. Call Tools_PollDeviceAuth after showing
+// user_code to the user.
+func (b *Bindings) Tools_BeginDeviceAuth(id string) (tools.DeviceAuthBeginResult, error) {
+	defer sentry.WrapBinding("Tools_BeginDeviceAuth")()
+	return b.api.Tools().BeginDeviceAuth(b.ctx(), id)
+}
+
+// Tools_PollDeviceAuth polls the provider token endpoint for the device auth
+// session started by Tools_BeginDeviceAuth. It blocks until the user approves,
+// the code expires, the user denies, or the app context is cancelled. On
+// success the token is persisted to the OS keychain and the recipe is
+// respawned authenticated. The token is NEVER returned through this binding.
+// Returns the live RecipeStatus so the frontend can update the Tools panel.
+func (b *Bindings) Tools_PollDeviceAuth(id string) (stdio.RecipeStatus, error) {
+	defer sentry.WrapBinding("Tools_PollDeviceAuth")()
+	return b.api.Tools().PollDeviceAuth(b.ctx(), id)
+}
+
 // ── shell escape (chat input `!cmd` feature) ──────────────────────────
 
 // BashExecResult mirrors the JSON the kenaz__bash tool returns.

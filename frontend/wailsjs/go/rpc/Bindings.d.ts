@@ -861,6 +861,8 @@ export function Tasks_ListBySession(arg1:string):Promise<Array<tasks.TaskRow>>;
 
 export function Tasks_Tail(arg1:string,arg2:number):Promise<Array<tasks.LineRow>>;
 
+export function Tools_BeginDeviceAuth(arg1:string):Promise<tools.DeviceAuthBeginResult>;
+
 export function Tools_CheckRecipePrereqs(arg1:string):Promise<Array<tools.MissingPrereq>>;
 
 export function Tools_ForgetRecipeKey(arg1:string,arg2:string):Promise<void>;
@@ -870,6 +872,8 @@ export function Tools_InstallRecipe(arg1:string,arg2:Record<string, string>,arg3
 export function Tools_ListRecipes():Promise<Array<tools.RecipeListing>>;
 
 export function Tools_PickDirectory(arg1:string,arg2:string):Promise<string>;
+
+export function Tools_PollDeviceAuth(arg1:string):Promise<transport.RecipeStatus>;
 
 export function Tools_RecipeConfig(arg1:string):Promise<Record<string, any>>;
 

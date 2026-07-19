@@ -103,4 +103,20 @@ type ToolsAPI interface {
 	// calls this when the install dialog opens to surface a friendly
 	// "install X first" message before the user even clicks Install.
 	CheckRecipePrereqs(ctx context.Context, id string) ([]MissingPrereq, error)
+
+	// BeginDeviceAuth starts the RFC 8628 device-authorization flow for a
+	// recipe whose primary_auth == "device_code". It posts to the provider's
+	// device-authorization endpoint and returns display-safe fields (user_code
+	// + verification_uri + expires_in). The opaque device_code is kept in
+	// memory server-side and must never cross the Wails RPC boundary.
+	// Call PollDeviceAuth after showing the user_code to the user.
+	BeginDeviceAuth(ctx context.Context, id string) (DeviceAuthBeginResult, error)
+
+	// PollDeviceAuth polls the provider's token endpoint for the device auth
+	// session started by BeginDeviceAuth for the same recipe id. It blocks
+	// until the user approves, the code expires, the user denies, or ctx is
+	// cancelled. On success the token is persisted to the credstore (it is
+	// NEVER returned via any RPC value) and the recipe is installed/respawned
+	// so the bearer takes effect immediately. Returns the live RecipeStatus.
+	PollDeviceAuth(ctx context.Context, id string) (stdio.RecipeStatus, error)
 }

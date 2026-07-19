@@ -575,6 +575,12 @@ interface WailsBindingsLike {
   Tools_RecipeStatus(id: string): Promise<WireRecipeStatus>;
   Tools_RecipeConfig(id: string): Promise<Record<string, unknown>>;
   Tools_CheckRecipePrereqs(id: string): Promise<WireMissingPrereq[]>;
+  Tools_BeginDeviceAuth(id: string): Promise<{
+    userCode: string;
+    verificationUri: string;
+    expiresIn: number;
+  }>;
+  Tools_PollDeviceAuth(id: string): Promise<WireRecipeStatus>;
   Tools_PickDirectory(title: string, defaultDir: string): Promise<string>;
   Tools_RequestAdditionalAllowedDir(
     recipeID: string,
@@ -2261,6 +2267,38 @@ export interface ToolsRecipesClient {
    * so missing-runtime errors surface before the user clicks Install.
    */
   checkPrereqs(id: string): Promise<MissingPrereq[]>;
+
+  /**
+   * beginDeviceAuth starts the RFC 8628 device-authorization flow for a
+   * recipe whose `primary_auth === 'device_code'`. Posts to the provider
+   * device-authorization endpoint and returns the display-safe
+   * DeviceAuthBeginResult (user_code + verification_uri). The device_code
+   * is held server-side and never crosses the Wails boundary.
+   * Call pollDeviceAuth after showing user_code to the user.
+   */
+  beginDeviceAuth(id: string): Promise<DeviceAuthBeginResult>;
+
+  /**
+   * pollDeviceAuth blocks until the user approves the device authorization,
+   * the code expires, the user denies, or the call is cancelled. On success
+   * the token is persisted to the OS keychain server-side (never returned
+   * here) and the recipe is respawned authenticated. Returns RecipeStatus.
+   */
+  pollDeviceAuth(id: string): Promise<RecipeStatus>;
+}
+
+/**
+ * DeviceAuthBeginResult is the display-safe shape returned by beginDeviceAuth.
+ * The frontend renders userCode prominently and opens verificationUri in a
+ * browser tab so the user can authorize the device.
+ */
+export interface DeviceAuthBeginResult {
+  /** Short human-readable code the user enters at verificationUri. */
+  userCode: string;
+  /** URL to open in a browser so the user can enter userCode. */
+  verificationUri: string;
+  /** Seconds until the device code expires. */
+  expiresIn: number;
 }
 
 /** Result returned by requestAdditionalAllowedDir. */
@@ -3571,6 +3609,16 @@ export function createHarnessClient(): HarnessClient {
         config: (id) => b().Tools_RecipeConfig(id),
         checkPrereqs: async (id) =>
           (await b().Tools_CheckRecipePrereqs(id)).map(adaptMissingPrereq),
+        beginDeviceAuth: async (id) => {
+          const r = await b().Tools_BeginDeviceAuth(id);
+          return {
+            userCode: r.userCode,
+            verificationUri: r.verificationUri,
+            expiresIn: r.expiresIn,
+          };
+        },
+        pollDeviceAuth: async (id) =>
+          adaptRecipeStatus(await b().Tools_PollDeviceAuth(id)),
       },
       pickDirectory: (title?: string, defaultDir?: string) =>
         b().Tools_PickDirectory(title ?? '', defaultDir ?? ''),
@@ -4676,6 +4724,22 @@ export function createFakeHarnessClient(
         }),
         config: async () => ({}),
         checkPrereqs: async () => [],
+        beginDeviceAuth: async () => ({
+          userCode: 'STUB-0000',
+          verificationUri: 'https://github.com/login/device',
+          expiresIn: 900,
+        }),
+        pollDeviceAuth: async (id) => ({
+          id,
+          enabled: true,
+          state: 'starting' as const,
+          restartAttempts: 0,
+          keysPresent: true,
+          pid: 0,
+          toolCount: 0,
+          resourceCount: 0,
+          promptCount: 0,
+        }),
       },
       pickDirectory: async () => '',
       requestAdditionalAllowedDir: async () => ({
