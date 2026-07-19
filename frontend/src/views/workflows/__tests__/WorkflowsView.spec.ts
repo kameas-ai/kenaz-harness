@@ -273,7 +273,7 @@ describe('WorkflowsView', () => {
     );
   });
 
-  it('shows the ScheduledInbox component when the Runs tab is active (WP03)', async () => {
+  it('shows RunsHistoryTab with execution history + scheduled section when Runs tab is active (01NBUG04)', async () => {
     const wrapper = mount(WorkflowsView, {
       props: { client: fakeClient() },
     });
@@ -283,10 +283,14 @@ describe('WorkflowsView', () => {
     await wrapper.find('[data-testid="workflows-tab-runs"]').trigger('click');
     await flushPromises();
 
-    // ScheduledInbox root element is rendered (scheduleList returns [] so
-    // the empty state within ScheduledInbox shows up under the root testid)
+    // RunsHistoryTab root is rendered
+    expect(wrapper.find('[data-testid="runs-history-tab"]').exists()).toBe(true);
+    // Execution history section present with empty state
+    expect(wrapper.find('[data-testid="runs-history-section"]').exists()).toBe(true);
+    // Scheduled subsection present (wraps ScheduledInbox)
+    expect(wrapper.find('[data-testid="runs-scheduled-section"]').exists()).toBe(true);
     expect(wrapper.find('[data-testid="scheduled-inbox"]').exists()).toBe(true);
-    // Library tab content should be hidden
+    // Library tab content is hidden
     expect(wrapper.find('[data-testid="workflows-catalog"]').exists()).toBe(false);
   });
 });
