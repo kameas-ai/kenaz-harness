@@ -1987,6 +1987,16 @@ func (b *Bindings) Tools_RequestAdditionalAllowedDir(recipeID, path, reason stri
 	return tools.FSAccessResult{Granted: granted, Expanded: expanded, Message: msg}, nil
 }
 
+// Tools_CheckRecipePrereqs inspects the recipe's command and returns any
+// runtimes (uv/uvx, npx/node) that are not present in $PATH. An empty
+// slice means all prerequisites are satisfied. The install modal calls this
+// when it opens so it can show a "install X first" banner before the user
+// attempts an install that will fail at spawn time.
+func (b *Bindings) Tools_CheckRecipePrereqs(id string) ([]tools.MissingPrereq, error) {
+	defer sentry.WrapBinding("Tools_CheckRecipePrereqs")()
+	return b.api.Tools().CheckRecipePrereqs(b.ctx(), id)
+}
+
 // ── shell escape (chat input `!cmd` feature) ──────────────────────────
 
 // BashExecResult mirrors the JSON the kenaz__bash tool returns.
