@@ -30,7 +30,7 @@
  */
 
 import { computed, nextTick, ref, watch } from 'vue';
-import type { Recipe, RecipeStatus, ConfigOption } from '@/lib/types';
+import type { Recipe, RecipeStatus, ConfigOption, MissingPrereq } from '@/lib/types';
 import DirectoryPicker from './DirectoryPicker.vue';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
 import { push as pushToast } from '@/composables/useToastQueue';
@@ -79,6 +79,38 @@ const configValues = ref<Record<string, unknown>>({});
 const submitting = ref(false);
 const errorMsg = ref<string | null>(null);
 const inputsContainer = ref<HTMLElement | null>(null);
+
+// ── primary_auth UX ────────────────────────────────────────────────────
+// Determines the leading presentation in the install modal.
+//
+// 'oauth'       → lead with "Sign in" OAuth button (requires auth.kind=mcp_oauth).
+// 'device_code' → lead with device-code browser sign-in message; optional
+//                 env keys (Azure IDs) are collapsed under "Advanced".
+// 'keys'        → lead with env-key fields (standard).
+// 'none'        → no credentials required; optional env keys collapse to "Advanced".
+// undefined     → legacy (no reordering; render as-declared).
+const primaryAuth = computed(() => props.recipe.primaryAuth);
+
+// 'Advanced' section open/closed state. Defaults open when all env keys
+// are required (so the user can see what's needed), closed when all are
+// optional (device_code / oauth / none paths lead with a friendlier CTA).
+const advancedOpen = ref(false);
+
+// Whether the env-key section should be presented as secondary/optional.
+// True when the primaryAuth hint signals that browser-based sign-in or
+// no-credential flow is the primary path, and all env keys are optional.
+const envKeysAreSecondary = computed(() => {
+  const pa = primaryAuth.value;
+  if (!pa || pa === 'keys') return false;
+  // If any env key is required, we can't hide it under "Advanced".
+  const hasRequired = props.recipe.envKeys.some((k) => k.required);
+  if (hasRequired) return false;
+  return pa === 'device_code' || pa === 'oauth' || pa === 'none';
+});
+
+// Prereq pre-flight — populated when the modal opens.
+const missingPrereqs = ref<MissingPrereq[]>([]);
+const prereqsChecked = ref(false);
 
 // OAuth sign-in (preferred over pasting a token). When the recipe declares
 // auth.kind === 'mcp_oauth', the modal leads with a "Sign in" button that runs
@@ -200,6 +232,19 @@ watch(
       // Re-arm the policy-install button each time the modal opens so
       // the user can install after a delete without having to close/reopen.
       policyInstalled.value = null;
+      // Reset "Advanced" section: start collapsed for device_code/none/oauth
+      // (the friendly headline is the primary CTA), open for standard key paths.
+      advancedOpen.value = !envKeysAreSecondary.value;
+      // Prereq check — runs in background; doesn't block modal render.
+      missingPrereqs.value = [];
+      prereqsChecked.value = false;
+      void client.tools.recipes.checkPrereqs(props.recipe.id).then((missing) => {
+        missingPrereqs.value = missing;
+        prereqsChecked.value = true;
+      }).catch(() => {
+        // Non-fatal: if the check fails, we proceed optimistically.
+        prereqsChecked.value = true;
+      });
       void nextTick(() => {
         const first = inputsContainer.value?.querySelector(
           'input[type="password"], input[type="text"]:not([data-testid^="dirpicker-edit"])',
@@ -211,6 +256,8 @@ watch(
       for (const k of props.recipe.envKeys) cleared[k.name] = '';
       envValues.value = cleared;
       configValues.value = {};
+      missingPrereqs.value = [];
+      prereqsChecked.value = false;
     }
   },
   { immediate: true },
@@ -301,6 +348,29 @@ function defaultHintFor(opt: ConfigOption): string | null {
     return `default: workspace folder under your harness data directory (${tokenised})`;
   }
   return null;
+}
+
+/** Returns true when a string ConfigOption looks like a filesystem path field. */
+function isPathStringOption(opt: ConfigOption): boolean {
+  if (opt.kind !== 'string') return false;
+  const n = opt.name.toLowerCase();
+  const d = (opt.display ?? '').toLowerCase();
+  // Heuristic: name or display contains path-like keywords.
+  return (
+    n.includes('path') || n.includes('file') || n.includes('dir') ||
+    d.includes('path') || d.includes('file') || d.includes('directory') ||
+    d.includes('folder')
+  );
+}
+
+/** Opens the OS native file picker and populates the given string config option. */
+async function pickFileForOption(opt: ConfigOption) {
+  try {
+    const picked = await client.tools.pickDirectory(opt.display || opt.name);
+    if (picked) configValues.value = { ...configValues.value, [opt.name]: picked };
+  } catch {
+    // Ignore cancellation; the user can type the path manually.
+  }
 }
 
 async function submit() {
@@ -436,6 +506,56 @@ function onKeydown(event: KeyboardEvent) {
           {{ recipe.description }}
         </p>
 
+        <!-- Prereq pre-flight banner: shown when required runtimes (uv, npx) are
+             not installed. This surfaces an actionable message early rather than
+             letting the user click Install and see a cryptic spawn error. -->
+        <section
+          v-if="prereqsChecked && missingPrereqs.length > 0"
+          class="rounded-sm border border-signal-warn bg-signal-warn/10 px-3 py-3 space-y-1"
+          role="alert"
+          data-testid="recipe-modal-prereq-banner"
+        >
+          <div class="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.18em] text-signal-warn">
+            <svg class="w-3.5 h-3.5 flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+              <path d="M12 9v4M12 17h.01M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
+            </svg>
+            Missing runtime{{ missingPrereqs.length > 1 ? 's' : '' }}
+          </div>
+          <ul class="space-y-1.5">
+            <li
+              v-for="p in missingPrereqs"
+              :key="p.name"
+              class="text-[12px] text-ink leading-snug"
+              :data-testid="`recipe-modal-prereq-${p.name}`"
+            >
+              <span class="font-semibold">{{ p.name }}</span>
+              <span class="text-ink-muted"> — {{ p.installHint }}</span>
+            </li>
+          </ul>
+        </section>
+
+        <!-- Device-code sign-in banner (e.g. Outlook). Leads when
+             primary_auth === 'device_code'; no token to paste. -->
+        <section
+          v-if="primaryAuth === 'device_code'"
+          class="rounded-sm border border-accent-hairline bg-accent-glow/30 px-3 py-3 space-y-2"
+          data-testid="recipe-modal-device-code-section"
+        >
+          <div class="text-[11px] uppercase tracking-[0.18em] text-ink-subtle">
+            Sign in via browser
+          </div>
+          <p class="text-[12px] text-ink-muted leading-snug max-w-prose">
+            When you click Install, the server will open your browser and ask
+            you to sign in (device code flow). No token to paste — just sign in
+            once and the session is remembered automatically.
+          </p>
+          <p class="text-[12px] text-ink-subtle leading-snug max-w-prose">
+            Personal accounts work without any extra config. For work or school
+            accounts you may need to expand "Advanced" below to set your Azure
+            app ID.
+          </p>
+        </section>
+
         <!-- OAuth sign-in (preferred). Leads the modal for mcp_oauth recipes;
              env keys below become an optional fallback. -->
         <section
@@ -451,6 +571,9 @@ function onKeydown(event: KeyboardEvent) {
             harness stores the credential securely and refreshes it
             automatically.
           </p>
+          <!-- TODO: OAuth client registration required before this button is live.
+               See OAuth app registration ticket. The UX seam is wired; the
+               button will work once Auth.ClientID is set on the recipe. -->
           <button
             type="button"
             class="rounded-sm border border-accent-hairline bg-surface-0 px-3 py-1.5 font-ui text-[12px] text-accent hover:bg-accent-glow disabled:opacity-50 disabled:cursor-not-allowed"
@@ -531,9 +654,13 @@ function onKeydown(event: KeyboardEvent) {
           </label>
         </section>
 
-        <!-- API Keys section -->
+        <!-- API Keys section.
+             When envKeysAreSecondary (device_code / oauth / none primary_auth),
+             the keys are all optional; they're presented under an "Advanced"
+             disclosure so the primary CTA ("just install / sign in") stays clean.
+             When not secondary, keys are shown directly as before. -->
         <section
-          v-if="hasEnvSection"
+          v-if="hasEnvSection && !envKeysAreSecondary"
           class="space-y-3"
           data-testid="recipe-modal-env-section"
         >
@@ -581,6 +708,68 @@ function onKeydown(event: KeyboardEvent) {
           </div>
         </section>
 
+        <!-- Advanced collapse: optional env keys for device_code / oauth / none
+             recipes. Personal accounts typically don't need these; work/school
+             accounts may. The section starts collapsed. -->
+        <details
+          v-if="hasEnvSection && envKeysAreSecondary"
+          :open="advancedOpen"
+          class="rounded-sm border border-border-muted"
+          data-testid="recipe-modal-advanced-section"
+          @toggle="advancedOpen = ($event.target as HTMLDetailsElement).open"
+        >
+          <summary
+            class="flex items-center gap-2 cursor-pointer select-none px-3 py-2 text-[11px] uppercase tracking-[0.18em] text-ink-subtle hover:text-ink list-none"
+            data-testid="recipe-modal-advanced-toggle"
+          >
+            <svg
+              class="w-3 h-3 flex-shrink-0 transition-transform"
+              :class="{ 'rotate-90': advancedOpen }"
+              viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"
+            >
+              <path d="m9 18 6-6-6-6" />
+            </svg>
+            Advanced
+          </summary>
+          <div class="px-3 pb-3 pt-1 space-y-3 border-t border-border-muted">
+            <p class="text-[11px] text-ink-muted leading-snug max-w-prose">
+              Optional — only needed for work or school accounts, or custom Azure app registrations.
+            </p>
+            <div
+              v-for="key in recipe.envKeys"
+              :key="key.name"
+              class="space-y-1"
+            >
+              <label
+                :for="`recipe-key-adv-${recipe.id}-${key.name}`"
+                class="block text-[11px] uppercase tracking-[0.18em] text-ink-subtle"
+              >
+                <span>{{ key.display }}</span>
+              </label>
+              <input
+                :id="`recipe-key-adv-${recipe.id}-${key.name}`"
+                v-model="envValues[key.name]"
+                :name="key.name"
+                type="password"
+                autocomplete="off"
+                spellcheck="false"
+                class="w-full rounded-sm border border-border-muted bg-surface-1 px-2.5 py-1.5 font-mono text-sm text-ink focus:border-accent focus:outline-none"
+                :data-testid="`recipe-key-input-${key.name}`"
+              />
+              <a
+                v-if="key.docsUrl"
+                :href="key.docsUrl"
+                target="_blank"
+                rel="noopener"
+                class="inline-block text-[11px] text-accent hover:text-accent-muted"
+                :data-testid="`recipe-key-docs-${key.name}`"
+              >
+                Learn more →
+              </a>
+            </div>
+          </div>
+        </details>
+
         <!-- Configuration section -->
         <section
           v-if="hasConfigSection"
@@ -621,16 +810,34 @@ function onKeydown(event: KeyboardEvent) {
               :input-id="opt.name"
               @update:model-value="(v: string[]) => configValues[opt.name] = v"
             />
-            <input
+            <!-- String option: for path-like fields, show a native folder-picker
+                 button beside the text input so the user doesn't have to type
+                 an absolute path manually. The button opens the OS dialog via
+                 the Tools_PickDirectory Wails binding. -->
+            <div
               v-else-if="opt.kind === 'string'"
-              v-model="configValues[opt.name] as string"
-              type="text"
-              spellcheck="false"
-              autocomplete="off"
-              :aria-label="`${opt.display || opt.name} value`"
-              class="w-full rounded-sm border border-border-muted bg-surface-1 px-2.5 py-1.5 font-mono text-sm text-ink focus:border-accent focus:outline-none"
-              :data-testid="`recipe-config-string-${opt.name}`"
-            />
+              class="flex items-center gap-1.5"
+            >
+              <input
+                v-model="configValues[opt.name] as string"
+                type="text"
+                spellcheck="false"
+                autocomplete="off"
+                :aria-label="`${opt.display || opt.name} value`"
+                class="flex-1 min-w-0 rounded-sm border border-border-muted bg-surface-1 px-2.5 py-1.5 font-mono text-sm text-ink focus:border-accent focus:outline-none"
+                :data-testid="`recipe-config-string-${opt.name}`"
+              />
+              <button
+                v-if="isPathStringOption(opt)"
+                type="button"
+                class="flex-shrink-0 rounded-sm border border-border-muted bg-surface-1 px-2 py-1.5 text-[11px] text-ink-dim hover:text-ink hover:border-accent"
+                :aria-label="`Pick ${opt.display || opt.name} using file browser`"
+                :data-testid="`recipe-config-string-picker-${opt.name}`"
+                @click="pickFileForOption(opt)"
+              >
+                Browse…
+              </button>
+            </div>
             <select
               v-else-if="opt.kind === 'enum'"
               v-model="configValues[opt.name] as string"
