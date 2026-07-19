@@ -10,7 +10,7 @@
       "url": "https://api.githubcopilot.com/mcp/",
       "auth": {
         "kind": "mcp_oauth",
-        "client_id": "",
+        "client_id": "Iv23li6LDja9hM0dAJGV",
         "scopes": [
           "repo",
           "read:org",
