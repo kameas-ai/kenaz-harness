@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { mount, flushPromises } from '@vue/test-utils';
 import RecipeKeyPromptModal from '@/views/tools/RecipeKeyPromptModal.vue';
-import type { ConfigOption, Recipe, RecipeStatus } from '@/lib/types';
+import type { ConfigOption, MissingPrereq, Recipe, RecipeStatus } from '@/lib/types';
+import { createFakeHarnessClient } from '@/lib/harnessClient';
 import { provideFakeClient } from '@/lib/harnessClientContext';
 import { _resetToastQueue, useToastQueue } from '@/composables/useToastQueue';
 
@@ -583,5 +584,235 @@ describe('RecipeKeyPromptModal', () => {
       expect(w.find('[data-testid=recipe-modal-install-policy-btn]').exists()).toBe(true);
       expect(w.find('[data-testid=recipe-modal-policy-installed-badge]').exists()).toBe(false);
     });
+  });
+});
+
+// ── primary_auth UX tests ─────────────────────────────────────────────────
+describe('RecipeKeyPromptModal — primary_auth UX', () => {
+  function makeDeviceCodeRecipe(overrides: Partial<Recipe> = {}): Recipe {
+    return {
+      id: 'outlook',
+      displayName: 'Outlook',
+      description: 'MS365 mail via device code.',
+      category: 'fetch',
+      primaryAuth: 'device_code',
+      envKeys: [
+        { name: 'MS365_MCP_CLIENT_ID', display: 'Azure client ID', required: false },
+        { name: 'MS365_MCP_TENANT_ID', display: 'Azure tenant ID', required: false },
+      ],
+      capabilities: { tools: true, resources: false, prompts: false, sampling: false },
+      ...overrides,
+    };
+  }
+
+  it('shows device-code banner when primaryAuth === "device_code"', async () => {
+    const recipe = makeDeviceCodeRecipe();
+    const install = vi.fn(async () => okStatus(recipe.id));
+    const w = mount(RecipeKeyPromptModal, {
+      global: { plugins: [{ install: (app) => provideFakeClient(app) }] },
+      props: { open: true, recipe, install },
+    });
+    await flushPromises();
+    expect(w.find('[data-testid=recipe-modal-device-code-section]').exists()).toBe(true);
+  });
+
+  it('collapses optional env keys under Advanced for device_code recipes', async () => {
+    const recipe = makeDeviceCodeRecipe();
+    const install = vi.fn(async () => okStatus(recipe.id));
+    const w = mount(RecipeKeyPromptModal, {
+      global: { plugins: [{ install: (app) => provideFakeClient(app) }] },
+      props: { open: true, recipe, install },
+    });
+    await flushPromises();
+
+    // Primary env-section should NOT be visible (all keys are optional + device_code).
+    expect(w.find('[data-testid=recipe-modal-env-section]').exists()).toBe(false);
+    // Advanced section should exist and be collapsed by default.
+    const advanced = w.find('[data-testid=recipe-modal-advanced-section]');
+    expect(advanced.exists()).toBe(true);
+    // The details element should NOT have the open attribute initially.
+    expect((advanced.element as HTMLDetailsElement).open).toBe(false);
+  });
+
+  it('does not collapse required env keys under Advanced', async () => {
+    const recipe = makeDeviceCodeRecipe({
+      envKeys: [
+        { name: 'REQUIRED_TOKEN', display: 'Required token', required: true },
+      ],
+    });
+    const install = vi.fn(async () => okStatus(recipe.id));
+    const w = mount(RecipeKeyPromptModal, {
+      global: { plugins: [{ install: (app) => provideFakeClient(app) }] },
+      props: { open: true, recipe, install },
+    });
+    await flushPromises();
+
+    // Required key should render directly (not under Advanced).
+    expect(w.find('[data-testid=recipe-modal-env-section]').exists()).toBe(true);
+    expect(w.find('[data-testid=recipe-modal-advanced-section]').exists()).toBe(false);
+  });
+
+  it('does not show device-code banner for keys-primary recipes', async () => {
+    const recipe: Recipe = {
+      id: 'brave-search',
+      displayName: 'Brave Search',
+      description: 'Web search.',
+      category: 'search',
+      primaryAuth: 'keys',
+      envKeys: [{ name: 'BRAVE_API_KEY', display: 'API Key', required: true }],
+      capabilities: { tools: true, resources: false, prompts: false, sampling: false },
+    };
+    const install = vi.fn(async () => okStatus(recipe.id));
+    const w = mount(RecipeKeyPromptModal, {
+      global: { plugins: [{ install: (app) => provideFakeClient(app) }] },
+      props: { open: true, recipe, install },
+    });
+    await flushPromises();
+    expect(w.find('[data-testid=recipe-modal-device-code-section]').exists()).toBe(false);
+    expect(w.find('[data-testid=recipe-modal-env-section]').exists()).toBe(true);
+    expect(w.find('[data-testid=recipe-modal-advanced-section]').exists()).toBe(false);
+  });
+});
+
+// ── prereq pre-flight banner tests ───────────────────────────────────────
+describe('RecipeKeyPromptModal — prereq pre-flight', () => {
+  function withPrereqStub(missing: MissingPrereq[]) {
+    return {
+      global: {
+        plugins: [
+          {
+            install(app: import('vue').App) {
+              const client = createFakeHarnessClient({
+                tools: {
+                  recipes: {
+                    list: async () => [],
+                    install: async () => okStatus('test'),
+                    signIn: async () => okStatus('test'),
+                    uninstall: async () => {},
+                    forgetKey: async () => {},
+                    status: async () => okStatus('test'),
+                    config: async () => ({}),
+                    checkPrereqs: async () => missing,
+                  },
+                  pickDirectory: async () => '',
+                  requestAdditionalAllowedDir: async () => ({ granted: false, expanded: '', message: '' }),
+                },
+              } as Partial<import('@/lib/harnessClient').HarnessClient>);
+              app.provide(
+                Symbol.for('kenaz.harnessClient') as import('vue').InjectionKey<import('@/lib/harnessClient').HarnessClient>,
+                client,
+              );
+            },
+          },
+        ],
+      },
+    };
+  }
+
+  function baseRecipe(): Recipe {
+    return {
+      id: 'fetch',
+      displayName: 'Fetch',
+      description: 'HTTP fetch.',
+      category: 'fetch',
+      primaryAuth: 'none',
+      envKeys: [],
+      capabilities: { tools: true, resources: false, prompts: false, sampling: false },
+    };
+  }
+
+  it('shows prereq banner when checkPrereqs returns missing runtimes', async () => {
+    const missing: MissingPrereq[] = [
+      { name: 'uv / uvx', installHint: 'brew install uv' },
+    ];
+    const recipe = baseRecipe();
+    const install = vi.fn(async () => okStatus(recipe.id));
+    const w = mount(RecipeKeyPromptModal, {
+      ...withPrereqStub(missing),
+      props: { open: true, recipe, install },
+    });
+    await flushPromises();
+
+    const banner = w.find('[data-testid=recipe-modal-prereq-banner]');
+    expect(banner.exists()).toBe(true);
+    expect(banner.text()).toContain('uv / uvx');
+    expect(banner.text()).toContain('brew install uv');
+  });
+
+  it('does not show prereq banner when all runtimes are present', async () => {
+    const recipe = baseRecipe();
+    const install = vi.fn(async () => okStatus(recipe.id));
+    const w = mount(RecipeKeyPromptModal, {
+      ...withPrereqStub([]),
+      props: { open: true, recipe, install },
+    });
+    await flushPromises();
+
+    expect(w.find('[data-testid=recipe-modal-prereq-banner]').exists()).toBe(false);
+  });
+});
+
+// ── path-picker button tests ──────────────────────────────────────────────
+describe('RecipeKeyPromptModal — string config path picker', () => {
+  function makePathRecipe(): Recipe {
+    return {
+      id: 'sqlite',
+      displayName: 'SQLite',
+      description: 'SQLite db.',
+      category: 'filesystem',
+      primaryAuth: 'none',
+      envKeys: [],
+      configOptions: [
+        {
+          name: 'db_path',
+          display: 'Database file path',
+          kind: 'string',
+          required: true,
+          description: 'Path to the SQLite file.',
+        },
+      ],
+      capabilities: { tools: true, resources: false, prompts: false, sampling: false },
+    };
+  }
+
+  it('shows Browse button for path-like string config options', async () => {
+    const recipe = makePathRecipe();
+    const install = vi.fn(async () => okStatus(recipe.id));
+    const w = mount(RecipeKeyPromptModal, {
+      global: { plugins: [{ install: (app) => provideFakeClient(app) }] },
+      props: { open: true, recipe, install },
+    });
+    await flushPromises();
+
+    expect(w.find('[data-testid=recipe-config-string-picker-db_path]').exists()).toBe(true);
+  });
+
+  it('does not show Browse button for non-path string options', async () => {
+    const recipe: Recipe = {
+      id: 'slack',
+      displayName: 'Slack',
+      description: 'Slack.',
+      category: 'fetch',
+      primaryAuth: 'keys',
+      envKeys: [{ name: 'SLACK_BOT_TOKEN', display: 'Bot token', required: true }],
+      configOptions: [
+        {
+          name: 'workspace_name',
+          display: 'Workspace name',
+          kind: 'string',
+          required: false,
+          description: 'Optional workspace display name.',
+        },
+      ],
+      capabilities: { tools: true, resources: false, prompts: false, sampling: false },
+    };
+    const install = vi.fn(async () => okStatus(recipe.id));
+    const w = mount(RecipeKeyPromptModal, {
+      global: { plugins: [{ install: (app) => provideFakeClient(app) }] },
+      props: { open: true, recipe, install },
+    });
+    await flushPromises();
+
+    expect(w.find('[data-testid=recipe-config-string-picker-workspace_name]').exists()).toBe(false);
   });
 });

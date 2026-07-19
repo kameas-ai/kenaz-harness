@@ -2028,6 +2028,21 @@ export interface RecipeAuth {
   tokenEnvVar?: string;
 }
 
+/**
+ * PrimaryAuth — the install-modal rendering hint for a recipe. Controls
+ * which credential method is presented first and whether additional fields
+ * are collapsed under "Advanced".
+ *
+ *   'oauth'       — lead with the OAuth "Sign in" button (requires auth.kind
+ *                   === 'mcp_oauth'). Token/key fields are a secondary fallback.
+ *   'device_code' — lead with a browser device-code sign-in message. Optional
+ *                   env keys (Azure IDs etc.) are collapsed under "Advanced".
+ *   'keys'        — lead with env-key fields; all keys are primary.
+ *   'none'        — no credentials required; any optional env keys are hidden
+ *                   by default under "Advanced".
+ */
+export type PrimaryAuth = 'oauth' | 'device_code' | 'keys' | 'none';
+
 export interface Recipe {
   id: string;
   displayName: string;
@@ -2044,6 +2059,12 @@ export interface Recipe {
    */
   auth?: RecipeAuth;
   /**
+   * Primary auth hint for the install modal. Controls which method is
+   * presented first and whether secondary credential fields are collapsed.
+   * Missing / undefined uses legacy rendering (no reordering).
+   */
+  primaryAuth?: PrimaryAuth;
+  /**
    * Optional hazard message rendered by the install modal in a stark
    * red banner with an explicit confirmation checkbox. Set on recipes
    * that grant elevated trust (e.g. `filesystem-full`, the unrestricted
@@ -2058,6 +2079,17 @@ export interface Recipe {
    * `<DataDir>/policy/`. Pairs with `warning`.
    */
   recommendedPolicyTemplate?: string;
+}
+
+/**
+ * MissingPrereq — one missing runtime dependency reported by
+ * Tools_CheckRecipePrereqs. Mirrors tools.MissingPrereq (Go-side).
+ */
+export interface MissingPrereq {
+  /** Human-readable runtime name, e.g. "uv / uvx" or "Node.js / npx". */
+  name: string;
+  /** Short install hint, e.g. "install uv: https://astral.sh/uv". */
+  installHint: string;
 }
 
 /**

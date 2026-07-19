@@ -96,4 +96,11 @@ type ToolsAPI interface {
 	// canonicalised before returning so the model can retry with the
 	// resolved form.
 	RequestAdditionalAllowedDir(ctx context.Context, recipeID, path, reason string) (granted bool, expanded string, err error)
+
+	// CheckRecipePrereqs inspects the recipe's command and returns any
+	// runtimes (uv/uvx, npx/node) that are not present in $PATH. An
+	// empty slice means all prerequisites are satisfied. The frontend
+	// calls this when the install dialog opens to surface a friendly
+	// "install X first" message before the user even clicks Install.
+	CheckRecipePrereqs(ctx context.Context, id string) ([]MissingPrereq, error)
 }

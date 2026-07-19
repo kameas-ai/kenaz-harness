@@ -328,6 +328,15 @@ func (a *API) InstallRecipe(ctx context.Context, id string, env map[string]strin
 		return stdio.RecipeStatus{}, fmt.Errorf("tools: cedar gate denied recipe %q: %w", id, err)
 	}
 
+	// Prereq pre-flight: detect missing runtimes (uv/uvx, npx/node) before
+	// attempting to spawn. This surfaces a friendly, actionable error message
+	// rather than the raw exec.ErrNotFound or a cryptic child-process failure.
+	if missing := CheckPrereqs(recipe.Command); len(missing) > 0 {
+		a.cfg.Enabled.Remove(id)
+		_ = a.saveEnabled()
+		return stdio.RecipeStatus{}, PrereqError(missing)
+	}
+
 	// Idempotency: if the pool still holds an entry under this id (a
 	// re-install with config changes, or a prior crash that left the
 	// pool dirty), evict it before spawning. CloseOne returning
@@ -827,6 +836,25 @@ func (a *API) RequestAdditionalAllowedDir(ctx context.Context, recipeID, path, r
 	}
 
 	return true, canonical, nil
+}
+
+// CheckRecipePrereqs implements ToolsAPI.CheckRecipePrereqs. It resolves the
+// recipe from the merged catalog and delegates to CheckPrereqs. Returns an
+// empty slice (not nil) when all prerequisites are satisfied, so the JSON wire
+// shape is always an array rather than null.
+func (a *API) CheckRecipePrereqs(_ context.Context, id string) ([]MissingPrereq, error) {
+	if a.cfg.Catalog == nil {
+		return []MissingPrereq{}, nil
+	}
+	recipe, ok := a.cfg.Catalog.Get(id)
+	if !ok {
+		return nil, fmt.Errorf("%w: %q", recipes.ErrRecipeNotFound, id)
+	}
+	missing := CheckPrereqs(recipe.Command)
+	if missing == nil {
+		return []MissingPrereq{}, nil
+	}
+	return missing, nil
 }
 
 // restartRecipe closes and re-opens the MCP server with updatedConfig.
