@@ -148,24 +148,27 @@ func TestTaskStartWithWorkflowPresetSelectsPreset(t *testing.T) {
 		t.Fatalf("preset graph should stream 4 task.running chunks, got %d", running)
 	}
 
-	// The ledger tool_call phases carry the preset's step names in order — the
-	// observable "node sequence" the run's ledger trail shows (AC-5).
+	// The ledger tool_call phases carry the preset's step names — the observable
+	// "node sequence" the run's ledger trail shows (AC-5). Each step emits one
+	// tool_call record via a short-lived TCP connection; under load the fakeIngest
+	// goroutines may append records in any order, so we assert the multiset rather
+	// than arrival order to avoid a scheduling-dependent flake.
 	recs := ingest.waitForPhases(t, 3*time.Second, phaseTaskStart, phaseToolCall, phaseTaskComplete)
-	var tools []string
+	toolCount := map[string]int{}
 	for _, r := range recs {
 		if r.Payload["phase"] == phaseToolCall {
 			if tool, _ := r.Payload["tool"].(string); tool != "" {
-				tools = append(tools, tool)
+				toolCount[tool]++
 			}
 		}
 	}
 	want := []string{"plan", "research", "implement", "review"}
-	if len(tools) != len(want) {
-		t.Fatalf("expected preset step tool_calls %v, got %v", want, tools)
+	if len(toolCount) != len(want) {
+		t.Fatalf("expected %d distinct preset step tool_calls %v, got %v", len(want), want, toolCount)
 	}
-	for i := range want {
-		if tools[i] != want[i] {
-			t.Fatalf("tool_call %d = %q, want %q (full: %v)", i, tools[i], want[i], tools)
+	for _, name := range want {
+		if toolCount[name] != 1 {
+			t.Fatalf("preset step %q: expected 1 tool_call record, got %d (full: %v)", name, toolCount[name], toolCount)
 		}
 	}
 }
