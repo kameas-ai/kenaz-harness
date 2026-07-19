@@ -90,14 +90,9 @@ const router = createRouter({
       component: () => import('@/views/artifacts/ArtifactsView.vue'),
     },
     {
-      path: '/corpora',
-      name: 'corpora',
-      component: () => import('@/views/corpora/CorporaView.vue'),
-    },
-    {
-      path: '/corpora/:id',
-      name: 'corpus-detail',
-      component: () => import('@/views/corpora/CorpusDetail.vue'),
+      // FR-002 (01NKNOW01): Corpora surface retired; redirect to Contexts.
+      path: '/corpora/:pathMatch(.*)*',
+      redirect: '/contexts',
     },
     {
       path: '/agentgraph',
