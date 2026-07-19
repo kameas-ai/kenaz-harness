@@ -22,14 +22,14 @@ export namespace a2a {
 }
 
 export namespace acp {
-
+	
 	export class DispatchResult {
 	    envelopeId: string;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new DispatchResult(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.envelopeId = source["envelopeId"];
@@ -45,11 +45,11 @@ export namespace acp {
 	    bytesOut: number;
 	    errorCode?: string;
 	    createdAt: string;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new EnvelopeTrace(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.envelopeId = source["envelopeId"];
@@ -72,11 +72,11 @@ export namespace acp {
 	    lastSeen?: string;
 	    agentName?: string;
 	    agentDescription?: string;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new Peer(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.id = source["id"];
@@ -92,11 +92,11 @@ export namespace acp {
 	export class TrustResult {
 	    peerId: string;
 	    trustTier: string;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new TrustResult(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.peerId = source["peerId"];
@@ -107,7 +107,7 @@ export namespace acp {
 }
 
 export namespace agentgraph {
-
+	
 	export class GraphInfo {
 	    id: string;
 	    name?: string;
@@ -1067,33 +1067,6 @@ export namespace catalog {
 
 }
 
-export namespace compliance {
-
-	export class ComplianceStatus {
-	    lastArchivedAt: string;
-	    pendingCount: number;
-	    chainBreak: boolean;
-	    retentionDays: number;
-	    enabled: boolean;
-	    archiverRunning: boolean;
-
-	    static createFrom(source: any = {}) {
-	        return new ComplianceStatus(source);
-	    }
-
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.lastArchivedAt = source["lastArchivedAt"];
-	        this.pendingCount = source["pendingCount"];
-	        this.chainBreak = source["chainBreak"];
-	        this.retentionDays = source["retentionDays"];
-	        this.enabled = source["enabled"];
-	        this.archiverRunning = source["archiverRunning"];
-	    }
-	}
-
-}
-
 export namespace cedar {
 	
 	export class BashPromptSurface {
@@ -1586,8 +1559,35 @@ export namespace compaction {
 
 }
 
-export namespace contextbootstrap {
+export namespace compliance {
+	
+	export class ComplianceStatus {
+	    lastArchivedAt: string;
+	    pendingCount: number;
+	    chainBreak: boolean;
+	    retentionDays: number;
+	    enabled: boolean;
+	    archiverRunning: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new ComplianceStatus(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.lastArchivedAt = source["lastArchivedAt"];
+	        this.pendingCount = source["pendingCount"];
+	        this.chainBreak = source["chainBreak"];
+	        this.retentionDays = source["retentionDays"];
+	        this.enabled = source["enabled"];
+	        this.archiverRunning = source["archiverRunning"];
+	    }
+	}
 
+}
+
+export namespace contextbootstrap {
+	
 	export class ConnectorProgress {
 	    connector_id: string;
 	    label: string;
@@ -1595,11 +1595,11 @@ export namespace contextbootstrap {
 	    items_fetched: number;
 	    nodes_extracted: number;
 	    budget_hit?: boolean;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new ConnectorProgress(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.connector_id = source["connector_id"];
@@ -1616,11 +1616,11 @@ export namespace contextbootstrap {
 	    items_fetched: number;
 	    budget_kind: string;
 	    budget_limit: number;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new CoverageEntry(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.connector_id = source["connector_id"];
@@ -1639,11 +1639,11 @@ export namespace contextbootstrap {
 	    total_nodes_written: number;
 	    coverage_report?: CoverageEntry[];
 	    error_summary?: string;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new RunStatus(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.run_id = source["run_id"];
@@ -1654,7 +1654,7 @@ export namespace contextbootstrap {
 	        this.coverage_report = this.convertValues(source["coverage_report"], CoverageEntry);
 	        this.error_summary = source["error_summary"];
 	    }
-
+	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -1677,11 +1677,11 @@ export namespace contextbootstrap {
 	    identifier: string;
 	    trust_level: string;
 	    source: string;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new TrustedPerson(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.identifier = source["identifier"];
@@ -1927,6 +1927,123 @@ export namespace contexts {
 		    }
 		    return a;
 		}
+	}
+
+}
+
+export namespace contextsync {
+	
+	export class AcceptedSessionView {
+	    localSessionID: string;
+	    eventCount: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new AcceptedSessionView(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.localSessionID = source["localSessionID"];
+	        this.eventCount = source["eventCount"];
+	    }
+	}
+	export class ArtifactClassOptionsView {
+	    notes: boolean;
+	    binaries: boolean;
+	    memory: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new ArtifactClassOptionsView(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.notes = source["notes"];
+	        this.binaries = source["binaries"];
+	        this.memory = source["memory"];
+	    }
+	}
+	export class InboxItemView {
+	    inboxItemID: string;
+	    sessionID: string;
+	    senderUserID: string;
+	    senderEmail: string;
+	    receivedAt: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new InboxItemView(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.inboxItemID = source["inboxItemID"];
+	        this.sessionID = source["sessionID"];
+	        this.senderUserID = source["senderUserID"];
+	        this.senderEmail = source["senderEmail"];
+	        this.receivedAt = source["receivedAt"];
+	    }
+	}
+	export class ProjectSyncStatus {
+	    enabled: boolean;
+	    artifactClassOptions: ArtifactClassOptionsView;
+	
+	    static createFrom(source: any = {}) {
+	        return new ProjectSyncStatus(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.enabled = source["enabled"];
+	        this.artifactClassOptions = this.convertValues(source["artifactClassOptions"], ArtifactClassOptionsView);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class SessionSyncStatus {
+	    enabled: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new SessionSyncStatus(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.enabled = source["enabled"];
+	    }
+	}
+	export class TeamMemberView {
+	    userID: string;
+	    displayName: string;
+	    email: string;
+	    canReceive: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new TeamMemberView(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.userID = source["userID"];
+	        this.displayName = source["displayName"];
+	        this.email = source["email"];
+	        this.canReceive = source["canReceive"];
+	    }
 	}
 
 }
@@ -2644,16 +2761,16 @@ export namespace elicit {
 }
 
 export namespace fleet {
-
+	
 	export class BootstrapLatestRun {
 	    run_id: string;
 	    status: string;
 	    finished_at?: string;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new BootstrapLatestRun(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.run_id = source["run_id"];
@@ -2667,11 +2784,11 @@ export namespace fleet {
 	    last_sync?: string;
 	    connected_sources: string[];
 	    latest_run?: BootstrapLatestRun;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new ContextHealth(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.total_nodes = source["total_nodes"];
@@ -2680,7 +2797,7 @@ export namespace fleet {
 	        this.connected_sources = source["connected_sources"];
 	        this.latest_run = this.convertValues(source["latest_run"], BootstrapLatestRun);
 	    }
-
+	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -4914,11 +5031,11 @@ export namespace onboarding {
 	export class HandoffHint {
 	    emailHint?: string;
 	    source?: string;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new HandoffHint(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.emailHint = source["emailHint"];
@@ -4949,8 +5066,6 @@ export namespace onboarding {
 	        this.accountStepAvailable = source["accountStepAvailable"];
 	    }
 	}
-	// ProgressStep is a string alias for named onboarding steps (WP07).
-	export type ProgressStep = string;
 	export class RestartPhase2Request {
 	    starterId: string;
 	
@@ -5360,6 +5475,7 @@ export namespace recipes {
 	    prompt_on_first_use?: string[];
 	    pre_seeding_policy?: string;
 	    auth?: RecipeAuth;
+	    primary_auth?: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new Recipe(source);
@@ -5390,6 +5506,7 @@ export namespace recipes {
 	        this.prompt_on_first_use = source["prompt_on_first_use"];
 	        this.pre_seeding_policy = source["pre_seeding_policy"];
 	        this.auth = this.convertValues(source["auth"], RecipeAuth);
+	        this.primary_auth = source["primary_auth"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -5495,57 +5612,7 @@ export namespace recipes {
 }
 
 export namespace rpc {
-
-	export class StartBootstrapRunRequest {
-	    consented_sources: string[];
-	    trusted_people?: contextbootstrap.TrustedPerson[];
-
-	    static createFrom(source: any = {}) {
-	        return new StartBootstrapRunRequest(source);
-	    }
-
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.consented_sources = source["consented_sources"];
-	        this.trusted_people = this.convertValues(source["trusted_people"], contextbootstrap.TrustedPerson);
-	    }
-
-		convertValues(a: any, classs: any, asMap: boolean = false): any {
-		    if (!a) {
-		        return a;
-		    }
-		    if (a.slice && a.map) {
-		        return (a as any[]).map(elem => this.convertValues(elem, classs));
-		    } else if ("object" === typeof a) {
-		        if (asMap) {
-		            for (const key of Object.keys(a)) {
-		                a[key] = new classs(a[key]);
-		            }
-		            return a;
-		        }
-		        return new classs(a);
-		    }
-		    return a;
-		}
-	}
-	export class StartBootstrapRunResult {
-	    run_id: string;
-	    recipe_version: string;
-	    status: string;
-	    fleet_backed: boolean;
-
-	    static createFrom(source: any = {}) {
-	        return new StartBootstrapRunResult(source);
-	    }
-
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.run_id = source["run_id"];
-	        this.recipe_version = source["recipe_version"];
-	        this.status = source["status"];
-	        this.fleet_backed = source["fleet_backed"];
-	    }
-	}
+	
 	export class WindowSize {
 	    width: number;
 	    height: number;
@@ -5730,6 +5797,56 @@ export namespace rpc {
 	        this.policyApplied = source["policyApplied"];
 	        this.redactionOn = source["redactionOn"];
 	        this.localFirstOn = source["localFirstOn"];
+	    }
+	}
+	export class StartBootstrapRunRequest {
+	    consented_sources: string[];
+	    trusted_people?: contextbootstrap.TrustedPerson[];
+	
+	    static createFrom(source: any = {}) {
+	        return new StartBootstrapRunRequest(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.consented_sources = source["consented_sources"];
+	        this.trusted_people = this.convertValues(source["trusted_people"], contextbootstrap.TrustedPerson);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class StartBootstrapRunResult {
+	    run_id: string;
+	    recipe_version: string;
+	    status: string;
+	    fleet_backed: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new StartBootstrapRunResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.run_id = source["run_id"];
+	        this.recipe_version = source["recipe_version"];
+	        this.status = source["status"];
+	        this.fleet_backed = source["fleet_backed"];
 	    }
 	}
 
@@ -6615,7 +6732,8 @@ export namespace settings {
 	    sentryDsn?: string;
 	    hasSeenCrashReportingOnboarding?: boolean;
 	    hasSeenFleetTelemetryOnboarding?: boolean;
-
+	    firstRunOnboardingCompleted?: boolean;
+	
 	    static createFrom(source: any = {}) {
 	        return new Settings(source);
 	    }
@@ -6695,8 +6813,9 @@ export namespace settings {
 	        this.sentryDsn = source["sentryDsn"];
 	        this.hasSeenCrashReportingOnboarding = source["hasSeenCrashReportingOnboarding"];
 	        this.hasSeenFleetTelemetryOnboarding = source["hasSeenFleetTelemetryOnboarding"];
+	        this.firstRunOnboardingCompleted = source["firstRunOnboardingCompleted"];
 	    }
-
+	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -7154,6 +7273,20 @@ export namespace tools {
 	        this.granted = source["granted"];
 	        this.expanded = source["expanded"];
 	        this.message = source["message"];
+	    }
+	}
+	export class MissingPrereq {
+	    name: string;
+	    install_hint: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new MissingPrereq(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.install_hint = source["install_hint"];
 	    }
 	}
 	export class RecipeListing {
@@ -7818,128 +7951,6 @@ export namespace workflows {
 	        this.version = source["version"];
 	        this.stepCount = source["stepCount"];
 	        this.source = source["source"];
-	    }
-	}
-
-}
-
-export namespace contextsync {
-
-	export class ArtifactClassOptionsView {
-	    notes: boolean;
-	    binaries: boolean;
-	    memory: boolean;
-
-	    static createFrom(source: any = {}) {
-	        return new ArtifactClassOptionsView(source);
-	    }
-
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.notes = source["notes"];
-	        this.binaries = source["binaries"];
-	        this.memory = source["memory"];
-	    }
-	}
-
-	export class ProjectSyncStatus {
-	    enabled: boolean;
-	    artifactClassOptions: ArtifactClassOptionsView;
-
-	    static createFrom(source: any = {}) {
-	        return new ProjectSyncStatus(source);
-	    }
-
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.enabled = source["enabled"];
-	        this.artifactClassOptions = this.convertValues(source["artifactClassOptions"], ArtifactClassOptionsView);
-	    }
-
-		convertValues(a: any, classs: any, asMap: boolean = false): any {
-	        if (!a) {
-	            return a;
-	        }
-	        if (a.slice && a.map) {
-	            return (a as any[]).map(elem => this.convertValues(elem, classs));
-	        } else if ("object" === typeof a) {
-	            if (asMap) {
-	                for (const key of Object.keys(a)) {
-	                    a[key] = new classs(a[key]);
-	                }
-	                return a;
-	            }
-	            return new classs(a);
-	        }
-	        return a;
-	    }
-	}
-
-	export class SessionSyncStatus {
-	    enabled: boolean;
-
-	    static createFrom(source: any = {}) {
-	        return new SessionSyncStatus(source);
-	    }
-
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.enabled = source["enabled"];
-	    }
-	}
-
-	export class TeamMemberView {
-	    userID: string;
-	    displayName: string;
-	    email: string;
-	    canReceive: boolean;
-
-	    static createFrom(source: any = {}) {
-	        return new TeamMemberView(source);
-	    }
-
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.userID = source["userID"];
-	        this.displayName = source["displayName"];
-	        this.email = source["email"];
-	        this.canReceive = source["canReceive"];
-	    }
-	}
-
-	export class InboxItemView {
-	    inboxItemID: string;
-	    sessionID: string;
-	    senderUserID: string;
-	    senderEmail: string;
-	    receivedAt: string;
-
-	    static createFrom(source: any = {}) {
-	        return new InboxItemView(source);
-	    }
-
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.inboxItemID = source["inboxItemID"];
-	        this.sessionID = source["sessionID"];
-	        this.senderUserID = source["senderUserID"];
-	        this.senderEmail = source["senderEmail"];
-	        this.receivedAt = source["receivedAt"];
-	    }
-	}
-
-	export class AcceptedSessionView {
-	    localSessionID: string;
-	    eventCount: number;
-
-	    static createFrom(source: any = {}) {
-	        return new AcceptedSessionView(source);
-	    }
-
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.localSessionID = source["localSessionID"];
-	        this.eventCount = source["eventCount"];
 	    }
 	}
 
