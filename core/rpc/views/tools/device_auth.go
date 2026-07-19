@@ -50,9 +50,13 @@ type DeviceAuthBeginResult struct {
 // recipe (keyed by recipe ID). It is used to correlate a BeginDeviceAuth
 // call with its subsequent PollDeviceAuth call from the same frontend session.
 type pendingDeviceAuth struct {
-	dar    *oauth.DeviceAuthorizationResponse
-	cfg    oauth.DeviceConfig
-	cancel context.CancelFunc // cancels an ongoing poll goroutine, if any
+	dar *oauth.DeviceAuthorizationResponse
+	cfg oauth.DeviceConfig
+	// pollCtx is cancelled by cancel() when this session is replaced by a
+	// newer BeginDeviceAuth for the same recipe; PollDeviceAuth derives its
+	// poll context from it so an in-flight poll is actually interrupted.
+	pollCtx context.Context
+	cancel  context.CancelFunc
 }
 
 // deviceAuthSessions holds in-progress device auth sessions keyed by recipe ID.
@@ -93,8 +97,8 @@ func (a *API) BeginDeviceAuth(ctx context.Context, id string) (DeviceAuthBeginRe
 	if prev, loaded := deviceAuthSessions.LoadAndDelete(id); loaded {
 		prev.(*pendingDeviceAuth).cancel()
 	}
-	_, cancel := context.WithCancel(context.Background())
-	deviceAuthSessions.Store(id, &pendingDeviceAuth{dar: dar, cfg: cfg, cancel: cancel})
+	pollCtx, cancel := context.WithCancel(context.Background())
+	deviceAuthSessions.Store(id, &pendingDeviceAuth{dar: dar, cfg: cfg, pollCtx: pollCtx, cancel: cancel})
 
 	return DeviceAuthBeginResult{
 		UserCode:        dar.UserCode,
@@ -125,8 +129,22 @@ func (a *API) PollDeviceAuth(ctx context.Context, id string) (stdio.RecipeStatus
 	}
 	session := rawSession.(*pendingDeviceAuth)
 
-	// PollDeviceToken blocks until done (or ctx cancelled / expiry).
-	tok, err := oauth.PollDeviceToken(ctx, session.cfg, session.dar)
+	// Poll under a context that stops if EITHER the caller cancels (the Wails
+	// binding ctx) OR a newer BeginDeviceAuth replaces this session (session.pollCtx,
+	// cancelled by the previous session's cancel()). Without merging both, a second
+	// sign-in attempt could not interrupt an in-flight poll.
+	combinedCtx, cancelCombined := context.WithCancel(ctx)
+	defer cancelCombined()
+	go func() {
+		select {
+		case <-session.pollCtx.Done():
+			cancelCombined()
+		case <-combinedCtx.Done():
+		}
+	}()
+
+	// PollDeviceToken blocks until done (or combinedCtx cancelled / expiry).
+	tok, err := oauth.PollDeviceToken(combinedCtx, session.cfg, session.dar)
 	// Always clean up the session entry, whether we succeeded or not.
 	deviceAuthSessions.Delete(id)
 	session.cancel()
