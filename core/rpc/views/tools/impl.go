@@ -234,6 +234,15 @@ func (a *API) InstallRecipe(ctx context.Context, id string, env map[string]strin
 		return stdio.RecipeStatus{}, err
 	}
 
+	// Prereq pre-flight BEFORE any keychain write or enabled-list mutation:
+	// detect missing runtimes (uv/uvx, npx/node) up front so a missing runtime
+	// returns a friendly, actionable error WITHOUT staging the user's secrets in
+	// the OS keychain for a recipe that never installs. Depends only on
+	// recipe.Command, so nothing config- or secret-related is needed yet.
+	if missing := CheckPrereqs(recipe.Command); len(missing) > 0 {
+		return stdio.RecipeStatus{}, PrereqError(missing)
+	}
+
 	// Always zero the caller's plaintext frame before return — even
 	// on the failure paths below — so a stack trace never carries
 	// the credential.
@@ -326,15 +335,6 @@ func (a *API) InstallRecipe(ctx context.Context, id string, env map[string]strin
 		a.cfg.Enabled.Remove(id)
 		_ = a.saveEnabled()
 		return stdio.RecipeStatus{}, fmt.Errorf("tools: cedar gate denied recipe %q: %w", id, err)
-	}
-
-	// Prereq pre-flight: detect missing runtimes (uv/uvx, npx/node) before
-	// attempting to spawn. This surfaces a friendly, actionable error message
-	// rather than the raw exec.ErrNotFound or a cryptic child-process failure.
-	if missing := CheckPrereqs(recipe.Command); len(missing) > 0 {
-		a.cfg.Enabled.Remove(id)
-		_ = a.saveEnabled()
-		return stdio.RecipeStatus{}, PrereqError(missing)
 	}
 
 	// Idempotency: if the pool still holds an entry under this id (a
