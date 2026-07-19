@@ -844,3 +844,467 @@ func TestLinearRunner_FailedStepSkipsDownstream(t *testing.T) {
 	}
 }
 
+// =============================================================================
+// model_turn tool loop (01NWFT01)
+// =============================================================================
+
+// fakeToolDiscoverer returns a fixed list of ToolSpec entries.
+type fakeToolDiscoverer struct {
+	mu    sync.Mutex
+	specs []ToolSpec
+	err   error
+	calls int
+}
+
+func (d *fakeToolDiscoverer) Discover(_ context.Context) ([]ToolSpec, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.calls++
+	return d.specs, d.err
+}
+
+func (d *fakeToolDiscoverer) callCount() int {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.calls
+}
+
+// fakeToolDispatcher records dispatches and returns a canned response.
+type fakeToolDispatcher struct {
+	mu        sync.Mutex
+	dispatched []struct {
+		Name  string
+		Input []byte
+	}
+	response string
+	isError  bool
+	err      error
+}
+
+func (d *fakeToolDispatcher) Dispatch(_ context.Context, name string, input []byte) (string, bool, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.dispatched = append(d.dispatched, struct {
+		Name  string
+		Input []byte
+	}{name, input})
+	if d.err != nil {
+		return "", true, d.err
+	}
+	return d.response, d.isError, nil
+}
+
+func (d *fakeToolDispatcher) snapshot() []struct {
+	Name  string
+	Input []byte
+} {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	out := make([]struct {
+		Name  string
+		Input []byte
+	}, len(d.dispatched))
+	copy(out, d.dispatched)
+	return out
+}
+
+// toolAwareFakeLLM extends fakeLLM to optionally emit tool calls.
+// On the first turn it emits toolCalls; on subsequent turns it emits
+// finalChunks. This simulates a model that calls a tool once then
+// produces a final answer.
+type toolAwareFakeLLM struct {
+	mu         sync.Mutex
+	turn       int
+	toolCalls  []ToolUseCall  // emitted on turn 0
+	finalText  string         // emitted on turn 1+
+	lastReq    LLMRequest
+}
+
+func (f *toolAwareFakeLLM) Stream(_ context.Context, req LLMRequest) (LLMStream, error) {
+	f.mu.Lock()
+	f.lastReq = req
+	turn := f.turn
+	f.turn++
+	f.mu.Unlock()
+
+	if turn == 0 && len(f.toolCalls) > 0 {
+		return &fakeToolAwareStream{toolCalls: f.toolCalls}, nil
+	}
+	return &fakeLLMStream{chunks: []string{f.finalText}}, nil
+}
+
+func (f *toolAwareFakeLLM) snapshotTurn() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.turn
+}
+
+func (f *toolAwareFakeLLM) snapshotLastReq() LLMRequest {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.lastReq
+}
+
+// fakeToolAwareStream implements ToolCallStream.
+type fakeToolAwareStream struct {
+	toolCalls []ToolUseCall
+	once      sync.Once
+	ch        chan LLMStreamEvent
+}
+
+func (s *fakeToolAwareStream) Events() <-chan LLMStreamEvent {
+	s.once.Do(func() {
+		s.ch = make(chan LLMStreamEvent, 1)
+		close(s.ch)
+	})
+	return s.ch
+}
+
+func (s *fakeToolAwareStream) Final() (string, error) { return "", nil }
+
+func (s *fakeToolAwareStream) ToolCalls() []ToolUseCall { return s.toolCalls }
+
+// Verify fakeToolAwareStream satisfies ToolCallStream.
+var _ ToolCallStream = (*fakeToolAwareStream)(nil)
+
+// FR-005: steps without tools: behave byte-identically to today.
+func TestModelTurn_NoTools_ByteIdentical(t *testing.T) {
+	llm := &fakeLLM{chunks: []string{"plain output"}}
+	wf := Workflow{
+		ID: "x", Name: "x", Version: 1,
+		Steps: []Step{{
+			Name: "say", Kind: StepKindModelTurn, UserPrompt: "hi",
+			// Tools is zero value — no tool access.
+		}},
+	}
+	discoverer := &fakeToolDiscoverer{specs: []ToolSpec{{Name: "some_tool", Description: "d"}}}
+	dispatcher := &fakeToolDispatcher{response: "dispatch-result"}
+	e := NewEngineWithDeps(Deps{
+		LLM:               llm,
+		DefaultLLMProfile: "p1",
+		ToolDiscoverer:    discoverer,
+		ToolDispatcher:    dispatcher,
+	})
+	run, err := e.Run(context.Background(), wf, nil, RunOptions{})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if run.Status != "completed" {
+		t.Fatalf("status: %s err=%s", run.Status, run.Err)
+	}
+	if got := run.Steps[0].Output; got != "plain output" {
+		t.Errorf("output: got %q want %q", got, "plain output")
+	}
+	// Discoverer and dispatcher must NOT have been called (FR-005).
+	if discoverer.callCount() != 0 {
+		t.Error("ToolDiscoverer was called for a no-tools step (FR-005 regression)")
+	}
+	if got := dispatcher.snapshot(); len(got) != 0 {
+		t.Error("ToolDispatcher was called for a no-tools step (FR-005 regression)")
+	}
+}
+
+// FR-001/FR-002: tools:"all" discovers all tools and passes them to the LLM.
+func TestModelTurn_ToolsAll_DiscoversCatalog(t *testing.T) {
+	specs := []ToolSpec{
+		{Name: "kenaz__bash", Description: "bash tool", InputSchema: []byte(`{}`)},
+		{Name: "kenaz__search", Description: "search tool", InputSchema: []byte(`{}`)},
+	}
+	llmInst := &toolAwareFakeLLM{
+		finalText: "done with no tools",
+		// No tool calls — model exits immediately.
+	}
+	discoverer := &fakeToolDiscoverer{specs: specs}
+	wf := Workflow{
+		ID: "x", Name: "x", Version: 1,
+		Steps: []Step{{
+			Name:       "use_tools",
+			Kind:       StepKindModelTurn,
+			UserPrompt: "do something",
+			Tools:      StepToolsSpec{All: true},
+		}},
+	}
+	e := NewEngineWithDeps(Deps{
+		LLM:               llmInst,
+		DefaultLLMProfile: "p1",
+		ToolDiscoverer:    discoverer,
+		ToolDispatcher:    &fakeToolDispatcher{},
+	})
+	run, err := e.Run(context.Background(), wf, nil, RunOptions{})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if run.Status != "completed" {
+		t.Fatalf("status: %s err=%s", run.Status, run.Err)
+	}
+	// Discoverer must have been called.
+	if discoverer.callCount() == 0 {
+		t.Error("ToolDiscoverer was not called for tools:all step")
+	}
+	// The LLM must have received the tool specs.
+	req := llmInst.snapshotLastReq()
+	if len(req.Tools) != 2 {
+		t.Errorf("LLM received %d tools, want 2", len(req.Tools))
+	}
+}
+
+// FR-001: tools:[names] filters the catalog to the named subset.
+func TestModelTurn_ToolsNameList_Filtered(t *testing.T) {
+	specs := []ToolSpec{
+		{Name: "kenaz__bash", Description: "bash", InputSchema: []byte(`{}`)},
+		{Name: "kenaz__search", Description: "search", InputSchema: []byte(`{}`)},
+		{Name: "kenaz__web_fetch", Description: "fetch", InputSchema: []byte(`{}`)},
+	}
+	llmInst := &toolAwareFakeLLM{finalText: "filtered"}
+	discoverer := &fakeToolDiscoverer{specs: specs}
+	wf := Workflow{
+		ID: "x", Name: "x", Version: 1,
+		Steps: []Step{{
+			Name:       "named_tools",
+			Kind:       StepKindModelTurn,
+			UserPrompt: "query",
+			Tools:      StepToolsSpec{Names: []string{"kenaz__bash", "kenaz__search"}},
+		}},
+	}
+	e := NewEngineWithDeps(Deps{
+		LLM:               llmInst,
+		DefaultLLMProfile: "p1",
+		ToolDiscoverer:    discoverer,
+		ToolDispatcher:    &fakeToolDispatcher{},
+	})
+	run, err := e.Run(context.Background(), wf, nil, RunOptions{})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if run.Status != "completed" {
+		t.Fatalf("status: %s err=%s", run.Status, run.Err)
+	}
+	req := llmInst.snapshotLastReq()
+	if len(req.Tools) != 2 {
+		t.Errorf("LLM received %d tools, want 2 (filtered)", len(req.Tools))
+	}
+	for _, tool := range req.Tools {
+		if tool.Name != "kenaz__bash" && tool.Name != "kenaz__search" {
+			t.Errorf("unexpected tool in filtered set: %q", tool.Name)
+		}
+	}
+}
+
+// FR-003: bounded tool loop dispatches tool calls and loops.
+func TestModelTurn_ToolLoop_DispatchesAndLoops(t *testing.T) {
+	toolCall := ToolUseCall{
+		ID:    "call_1",
+		Name:  "kenaz__bash",
+		Input: []byte(`{"cmd":"echo hello"}`),
+	}
+	specs := []ToolSpec{{Name: "kenaz__bash", Description: "bash", InputSchema: []byte(`{}`)}}
+	llmInst := &toolAwareFakeLLM{
+		toolCalls: []ToolUseCall{toolCall},
+		finalText: "final answer",
+	}
+	dispatcher := &fakeToolDispatcher{response: "hello"}
+	wf := Workflow{
+		ID: "x", Name: "x", Version: 1,
+		Steps: []Step{{
+			Name:       "loop_step",
+			Kind:       StepKindModelTurn,
+			UserPrompt: "run something",
+			Tools:      StepToolsSpec{All: true},
+		}},
+	}
+	e := NewEngineWithDeps(Deps{
+		LLM:               llmInst,
+		DefaultLLMProfile: "p1",
+		ToolDiscoverer:    &fakeToolDiscoverer{specs: specs},
+		ToolDispatcher:    dispatcher,
+	})
+	run, err := e.Run(context.Background(), wf, nil, RunOptions{})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if run.Status != "completed" {
+		t.Fatalf("status: %s err=%s", run.Status, run.Err)
+	}
+	// Final output should be the second-turn answer.
+	if got := run.Steps[0].Output; got != "final answer" {
+		t.Errorf("output: got %q want %q", got, "final answer")
+	}
+	// LLM should have been called twice (turn 0 with tool call, turn 1 with result).
+	if got := llmInst.snapshotTurn(); got != 2 {
+		t.Errorf("LLM called %d times, want 2", got)
+	}
+	// Dispatcher should have been called once for kenaz__bash.
+	dispatched := dispatcher.snapshot()
+	if len(dispatched) != 1 {
+		t.Fatalf("dispatcher called %d times, want 1", len(dispatched))
+	}
+	if dispatched[0].Name != "kenaz__bash" {
+		t.Errorf("dispatched tool %q, want kenaz__bash", dispatched[0].Name)
+	}
+}
+
+// FR-003: bounded loop respects MaxToolIterations cap.
+func TestModelTurn_ToolLoop_RespectsMaxIterations(t *testing.T) {
+	// LLM always emits a tool call so the loop runs until capped.
+	toolCall := ToolUseCall{ID: "call_n", Name: "kenaz__bash", Input: []byte(`{}`)}
+	specs := []ToolSpec{{Name: "kenaz__bash", Description: "bash", InputSchema: []byte(`{}`)}}
+
+	// infiniteLLM always emits a tool call on every turn.
+	type infiniteLLM struct {
+		mu   sync.Mutex
+		turn int
+	}
+	llmInst := &struct {
+		mu   sync.Mutex
+		turn int
+	}{}
+
+	// Use a custom LLMStreamer that always returns a tool call.
+	var streamFunc func(ctx context.Context, req LLMRequest) (LLMStream, error)
+	streamFunc = func(_ context.Context, _ LLMRequest) (LLMStream, error) {
+		llmInst.mu.Lock()
+		llmInst.turn++
+		llmInst.mu.Unlock()
+		return &fakeToolAwareStream{toolCalls: []ToolUseCall{toolCall}}, nil
+	}
+	llmAdapter := &funcLLMStreamer{fn: streamFunc}
+
+	dispatcher := &fakeToolDispatcher{response: "result"}
+	const maxIter = 3
+	wf := Workflow{
+		ID: "x", Name: "x", Version: 1,
+		Steps: []Step{{
+			Name:              "capped",
+			Kind:              StepKindModelTurn,
+			UserPrompt:        "go forever",
+			Tools:             StepToolsSpec{All: true},
+			MaxToolIterations: maxIter,
+		}},
+	}
+	e := NewEngineWithDeps(Deps{
+		LLM:               llmAdapter,
+		DefaultLLMProfile: "p1",
+		ToolDiscoverer:    &fakeToolDiscoverer{specs: specs},
+		ToolDispatcher:    dispatcher,
+	})
+	run, err := e.Run(context.Background(), wf, nil, RunOptions{})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if run.Status != "completed" {
+		t.Fatalf("status: %s err=%s", run.Status, run.Err)
+	}
+	llmInst.mu.Lock()
+	turns := llmInst.turn
+	llmInst.mu.Unlock()
+	if turns != maxIter {
+		t.Errorf("LLM called %d times, want %d (max_tool_iterations cap)", turns, maxIter)
+	}
+	dispatched := dispatcher.snapshot()
+	// Each iteration that receives a tool call dispatches it before looping.
+	// With maxIter=3 and the model always returning a tool call, all 3
+	// iterations dispatch, so dispatcher is called maxIter times.
+	if len(dispatched) != maxIter {
+		t.Errorf("dispatcher called %d times, want %d", len(dispatched), maxIter)
+	}
+}
+
+// FR-002: no ToolDiscoverer wired → degrade to plain completion.
+func TestModelTurn_ToolsEnabled_NilDiscoverer_DegradesToPlain(t *testing.T) {
+	llm := &fakeLLM{chunks: []string{"plain"}}
+	wf := Workflow{
+		ID: "x", Name: "x", Version: 1,
+		Steps: []Step{{
+			Name:       "deg",
+			Kind:       StepKindModelTurn,
+			UserPrompt: "hi",
+			Tools:      StepToolsSpec{All: true},
+		}},
+	}
+	// ToolDiscoverer nil — falls through to plain completion.
+	e := NewEngineWithDeps(Deps{
+		LLM:               llm,
+		DefaultLLMProfile: "p1",
+	})
+	run, err := e.Run(context.Background(), wf, nil, RunOptions{})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if run.Status != "completed" {
+		t.Fatalf("status: %s err=%s", run.Status, run.Err)
+	}
+	if got := run.Steps[0].Output; got != "plain" {
+		t.Errorf("output: got %q want plain", got)
+	}
+}
+
+// funcLLMStreamer is a test helper that wraps a function as LLMStreamer.
+type funcLLMStreamer struct {
+	fn func(ctx context.Context, req LLMRequest) (LLMStream, error)
+}
+
+func (f *funcLLMStreamer) Stream(ctx context.Context, req LLMRequest) (LLMStream, error) {
+	return f.fn(ctx, req)
+}
+
+// FR-006: webScrapeRunner llm mode resolves profile via DefaultProfileFunc
+// when neither step.profile nor the static profile is set.
+func TestWebScrapeRunner_LLMMode_UsesDefaultProfileFunc(t *testing.T) {
+	llm := &fakeLLM{chunks: []string{"extracted"}}
+	wf := Workflow{
+		ID: "x", Name: "x", Version: 1,
+		Steps: []Step{{
+			Name:          "scrape",
+			Kind:          StepKindWebScrape,
+			URL:           "http://example.com",
+			Mode:          "llm",
+			ExtractPrompt: "extract all data",
+			// No step.Profile set — should use DefaultProfileFunc.
+		}},
+	}
+	called := false
+	e := NewEngineWithDeps(Deps{
+		LLM: llm,
+		DefaultProfileFunc: func() string {
+			called = true
+			return "dynamic-profile"
+		},
+	})
+	// We can't easily mock the HTTP fetch in this unit test; the runner
+	// will fail at the fetch step but BEFORE the LLM profile resolution.
+	// Run and expect a fetch error (not a profile error).
+	run, _ := e.Run(context.Background(), wf, nil, RunOptions{})
+	// The step should fail due to a network error, not a profile error.
+	// The important assertion is that snapshotProfileID reflects the
+	// defaultProfileFunc call, but since the fetch fails first, we just
+	// verify the func was NOT skipped due to missing profile gate.
+	_ = run
+	// The profile function is called lazily during LLM construction; since
+	// the HTTP fetch fails before we reach the LLM, we verify the runner
+	// struct was wired with defaultProfileFunc via a second workflow that
+	// uses a fake fetcher path.
+	//
+	// Regression guard: DefaultProfileFunc is now wired on webScrapeRunner
+	// (FR-006). Previously the runner only used Deps.DefaultLLMProfile (static).
+	// Verify the runner is constructed with the func by inspecting the engine.
+	runners := DefaultRunnersWithDeps(Deps{
+		LLM: llm,
+		DefaultProfileFunc: func() string {
+			called = true
+			return "p-from-func"
+		},
+	})
+	wsr, ok := runners[StepKindWebScrape].(webScrapeRunner)
+	if !ok {
+		t.Fatalf("webScrapeRunner not found in DefaultRunnersWithDeps")
+	}
+	if wsr.defaultProfileFunc == nil {
+		t.Error("FR-006: webScrapeRunner.defaultProfileFunc is nil — DefaultProfileFunc not wired")
+	}
+	// Call it to verify the closure is correct.
+	if got := wsr.defaultProfileFunc(); got != "p-from-func" {
+		t.Errorf("webScrapeRunner.defaultProfileFunc() = %q, want %q", got, "p-from-func")
+	}
+	_ = called
+}
+

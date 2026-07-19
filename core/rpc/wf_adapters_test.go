@@ -18,6 +18,7 @@ import (
 	"testing"
 
 	coremcp "github.com/kameas-ai/kenaz-harness/core/mcp"
+	"github.com/kameas-ai/kenaz-harness/core/toolloop"
 )
 
 // ─── fake MCP pool ────────────────────────────────────────────────────────────
@@ -158,5 +159,54 @@ func TestTranslateMCPError_UnknownError_Passthrough(t *testing.T) {
 	got := translateMCPError("slack", original)
 	if got != original {
 		t.Errorf("unexpected error translation: got %v want %v", got, original)
+	}
+}
+
+// =============================================================================
+// wfToolDispatcherAdapter (01NWFT01)
+// =============================================================================
+
+// stubBuiltinPool implements toolloop.MCPPool for testing.
+type stubBuiltinPool struct {
+	capturedServer string
+	capturedTool   string
+	capturedArgs   json.RawMessage
+	result         json.RawMessage
+	err            error
+}
+
+func (s *stubBuiltinPool) Tools(_ context.Context) ([]toolloop.Tool, error) { return nil, nil }
+func (s *stubBuiltinPool) Call(_ context.Context, server, tool string, args json.RawMessage) (json.RawMessage, error) {
+	s.capturedServer = server
+	s.capturedTool = tool
+	s.capturedArgs = args
+	if s.err != nil {
+		return nil, s.err
+	}
+	return s.result, nil
+}
+
+func TestSplitToolName_WithSeparator(t *testing.T) {
+	t.Parallel()
+	server, tool := splitToolName("kenaz__bash")
+	if server != "kenaz" || tool != "bash" {
+		t.Errorf("splitToolName=%q,%q want kenaz,bash", server, tool)
+	}
+}
+
+func TestSplitToolName_NoSeparator(t *testing.T) {
+	t.Parallel()
+	server, tool := splitToolName("bare_name")
+	if server != "" || tool != "bare_name" {
+		t.Errorf("splitToolName=%q,%q want ,bare_name", server, tool)
+	}
+}
+
+func TestSplitToolName_MultiSeparator(t *testing.T) {
+	t.Parallel()
+	// Only the first __ is the separator.
+	server, tool := splitToolName("my_server__my__tool")
+	if server != "my_server" || tool != "my__tool" {
+		t.Errorf("splitToolName=%q,%q want my_server,my__tool", server, tool)
 	}
 }

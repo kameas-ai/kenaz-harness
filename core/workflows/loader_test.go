@@ -294,3 +294,112 @@ func TestLoadBuiltins_LoadsExample(t *testing.T) {
 		t.Errorf("plan_implement_review not in bundled set")
 	}
 }
+
+// =============================================================================
+// StepToolsSpec YAML parsing (FR-001)
+// =============================================================================
+
+func TestStepToolsSpec_UnmarshalYAML_All(t *testing.T) {
+	yaml := `
+id: x
+name: x
+version: 1
+steps:
+  - name: s
+    kind: model_turn
+    user_prompt: hi
+    tools: all
+`
+	wf, err := LoadYAML([]byte(yaml))
+	if err != nil {
+		t.Fatalf("LoadYAML: %v", err)
+	}
+	st := wf.Steps[0]
+	if !st.Tools.All {
+		t.Error("tools:all should set StepToolsSpec.All=true")
+	}
+	if len(st.Tools.Names) != 0 {
+		t.Errorf("tools:all should leave Names empty, got %v", st.Tools.Names)
+	}
+}
+
+func TestStepToolsSpec_UnmarshalYAML_List(t *testing.T) {
+	yaml := `
+id: x
+name: x
+version: 1
+steps:
+  - name: s
+    kind: model_turn
+    user_prompt: hi
+    tools: [kenaz__bash, kenaz__search]
+`
+	wf, err := LoadYAML([]byte(yaml))
+	if err != nil {
+		t.Fatalf("LoadYAML: %v", err)
+	}
+	st := wf.Steps[0]
+	if st.Tools.All {
+		t.Error("tools:[names] should not set All=true")
+	}
+	if len(st.Tools.Names) != 2 {
+		t.Errorf("want 2 tool names, got %d: %v", len(st.Tools.Names), st.Tools.Names)
+	}
+}
+
+func TestStepToolsSpec_UnmarshalYAML_Absent(t *testing.T) {
+	yaml := `
+id: x
+name: x
+version: 1
+steps:
+  - name: s
+    kind: model_turn
+    user_prompt: hi
+`
+	wf, err := LoadYAML([]byte(yaml))
+	if err != nil {
+		t.Fatalf("LoadYAML: %v", err)
+	}
+	st := wf.Steps[0]
+	if !st.Tools.IsEmpty() {
+		t.Errorf("absent tools: should be empty spec, got %+v", st.Tools)
+	}
+}
+
+func TestStepToolsSpec_UnmarshalYAML_InvalidScalar(t *testing.T) {
+	yaml := `
+id: x
+name: x
+version: 1
+steps:
+  - name: s
+    kind: model_turn
+    user_prompt: hi
+    tools: some_invalid_value
+`
+	_, err := LoadYAML([]byte(yaml))
+	if err == nil {
+		t.Error("expected error for invalid tools scalar, got nil")
+	}
+	if !strings.Contains(err.Error(), "all") {
+		t.Errorf("error should mention 'all', got: %v", err)
+	}
+}
+
+func TestStepToolsSpec_IsEmpty(t *testing.T) {
+	cases := []struct {
+		spec  StepToolsSpec
+		empty bool
+	}{
+		{StepToolsSpec{}, true},
+		{StepToolsSpec{All: true}, false},
+		{StepToolsSpec{Names: []string{"a"}}, false},
+		{StepToolsSpec{All: true, Names: []string{"a"}}, false},
+	}
+	for _, c := range cases {
+		if got := c.spec.IsEmpty(); got != c.empty {
+			t.Errorf("IsEmpty(%+v) = %v, want %v", c.spec, got, c.empty)
+		}
+	}
+}

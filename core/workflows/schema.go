@@ -216,6 +216,17 @@ func validateStepFields(st Step) error {
 		if st.UserPrompt == "" {
 			return fmt.Errorf("step %q: model_turn requires user_prompt", st.Name)
 		}
+		// FR-001: Tools must be absent (empty spec), "all", or a non-empty
+		// list of non-blank tool names. Reject mixing "all" with other names
+		// via the StepToolsSpec invariant (UnmarshalYAML already handles
+		// "all" in a list by setting All=true and clearing Names).
+		if !st.Tools.IsEmpty() {
+			for i, n := range st.Tools.Names {
+				if n == "" {
+					return fmt.Errorf("step %q: model_turn tools[%d]: tool name must not be empty", st.Name, i)
+				}
+			}
+		}
 	case StepKindShell:
 		if st.Cmd == "" {
 			return fmt.Errorf("step %q: shell requires cmd", st.Name)
