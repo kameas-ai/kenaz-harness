@@ -969,7 +969,6 @@ async function onProjectDrop(evt: DragEvent, projectId: string) {
         <li><RailEntry :icon="Wrench" label="Tools" to="/tools" /></li>
         <li><RailEntry :icon="GitBranch" label="Workflows" to="/workflows" /></li>
         <li><RailEntry :icon="FileText" label="Contexts" to="/contexts" /></li>
-        <li><RailEntry :icon="FileText" label="Corpora" to="/corpora" /></li>
         <li><RailEntry :icon="Brain" label="Memory" to="/memory" /></li>
         <li><RailEntry :icon="Archive" label="Artifacts" to="/artifacts" /></li>
         <li><RailEntry :icon="GitBranch" label="Agent graphs" to="/agentgraph" /></li>

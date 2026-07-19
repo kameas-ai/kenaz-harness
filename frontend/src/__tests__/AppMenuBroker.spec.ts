@@ -102,7 +102,6 @@ describe('App.vue — OS menu broker dispatch table', () => {
         stubs: {
           Shell: stubComponent,
           CommandPalette: stubComponent,
-          ErrorBoundary: { template: '<slot />' },
           ToastRoot: stubComponent,
           OnboardingDialog: stubComponent,
           AboutDialog: stubComponent,

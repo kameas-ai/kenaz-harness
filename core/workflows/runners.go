@@ -15,6 +15,12 @@ import (
 	"github.com/kameas-ai/kenaz-harness/core/workflows/web"
 )
 
+// TODO FR-004: surface tool invocations in the Runs-detail UI. This
+// requires threading ToolUseCall records into StepResult so the
+// frontend's Run detail component (WorkflowsView) can render each
+// tool call and its result inline. Deferred to mission
+// 'runs-tab-history' which owns that UI surface.
+
 // runnerRegistry is mutated only by RegisterStepRunner at init time.
 // web_fetch and web_scrape are intentionally absent: they require a
 // per-engine Fetcher (so the robots.txt cache is scoped to the engine
@@ -70,6 +76,8 @@ func DefaultRunnersWithDeps(deps Deps) map[StepKind]StepRunner {
 			llm:                deps.LLM,
 			defaultProfile:     deps.DefaultLLMProfile,
 			defaultProfileFunc: deps.DefaultProfileFunc,
+			toolDiscoverer:     deps.ToolDiscoverer,
+			toolDispatcher:     deps.ToolDispatcher,
 		}
 	}
 	if deps.Tools != nil {
@@ -87,10 +95,11 @@ func DefaultRunnersWithDeps(deps Deps) map[StepKind]StepRunner {
 	fetcher := web.NewFetcher()
 	out[StepKindWebFetch] = webFetchRunner{fetcher: fetcher, authz: deps.NetAuthz}
 	out[StepKindWebScrape] = webScrapeRunner{
-		fetcher: fetcher,
-		llm:     deps.LLM,
-		profile: deps.DefaultLLMProfile,
-		authz:   deps.NetAuthz,
+		fetcher:            fetcher,
+		llm:                deps.LLM,
+		profile:            deps.DefaultLLMProfile,
+		defaultProfileFunc: deps.DefaultProfileFunc, // FR-006: wire DefaultProfileFunc so llm mode resolves default profile
+		authz:              deps.NetAuthz,
 	}
 	// WP06: notify is always wired with provided Notifier/Audit (may be nil).
 	out[StepKindNotify] = notifyRunner{notifier: deps.Notifier, mcp: deps.MCP, audit: deps.Audit}
@@ -111,12 +120,19 @@ var errDepUnavailable = errors.New("workflows: runner dependency unavailable")
 // accumulates text into the step output. Falls back to a stub-echo when no
 // LLM is wired so the chassis can still boot end-to-end without an LLM
 // registry.
+//
+// When Step.Tools is non-empty and Deps.ToolDiscoverer + ToolDispatcher are
+// wired, the runner executes a bounded model→tool→model loop (FR-003).
+// Steps without tools: behave byte-identically to the previous behaviour
+// (FR-005).
 // ===========================================================================
 
 type modelTurnRunner struct {
 	llm                LLMStreamer
 	defaultProfile     string
 	defaultProfileFunc func() string
+	toolDiscoverer     ToolDiscoverer
+	toolDispatcher     ToolDispatcher
 }
 
 func (modelTurnRunner) Validate(st Step) error {
@@ -143,6 +159,29 @@ func (r modelTurnRunner) Run(ctx context.Context, st Step, _ *RunContext) (Typed
 		return TypedValue{Type: ValueTypeError},
 			fmt.Errorf("model_turn step %q: no profile — configure a provider in Settings → Providers, or set step.profile / Deps.DefaultLLMProfile", st.Name)
 	}
+
+	// FR-005: when no tools are requested, run a plain single-turn completion —
+	// byte-identical to the previous behaviour.
+	if st.Tools.IsEmpty() || r.toolDiscoverer == nil || r.toolDispatcher == nil {
+		return r.runPlain(ctx, st, profile)
+	}
+
+	// FR-001/FR-003: discover tools and run the bounded loop.
+	tools, err := r.discoverTools(ctx, st)
+	if err != nil {
+		return TypedValue{Type: ValueTypeError},
+			fmt.Errorf("model_turn step %q: discover tools: %w", st.Name, err)
+	}
+	if len(tools) == 0 {
+		// No tools available — degrade gracefully to plain completion.
+		return r.runPlain(ctx, st, profile)
+	}
+	return r.runToolLoop(ctx, st, profile, tools)
+}
+
+// runPlain executes a single-turn completion without any tool
+// advertisement. This is the regression-pinned path (FR-005).
+func (r modelTurnRunner) runPlain(ctx context.Context, st Step, profile string) (TypedValue, error) {
 	stream, err := r.llm.Stream(ctx, LLMRequest{
 		ProfileID: profile,
 		Model:     st.Model,
@@ -151,6 +190,11 @@ func (r modelTurnRunner) Run(ctx context.Context, st Step, _ *RunContext) (Typed
 	if err != nil {
 		return TypedValue{Type: ValueTypeError}, fmt.Errorf("model_turn step %q: %w", st.Name, err)
 	}
+	return r.drainStream(st, stream)
+}
+
+// drainStream reads Events until the channel closes then calls Final.
+func (r modelTurnRunner) drainStream(st Step, stream LLMStream) (TypedValue, error) {
 	var buf strings.Builder
 	for ev := range stream.Events() {
 		if ev.Err != "" {
@@ -169,6 +213,133 @@ func (r modelTurnRunner) Run(ctx context.Context, st Step, _ *RunContext) (Typed
 		out = final
 	}
 	return TypedValue{Type: ValueTypeText, Text: out}, nil
+}
+
+// discoverTools returns the filtered tool list for this step per Step.Tools.
+func (r modelTurnRunner) discoverTools(ctx context.Context, st Step) ([]ToolSpec, error) {
+	all, err := r.toolDiscoverer.Discover(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if st.Tools.All {
+		return all, nil
+	}
+	// Filter to the named subset.
+	allowed := make(map[string]bool, len(st.Tools.Names))
+	for _, n := range st.Tools.Names {
+		allowed[n] = true
+	}
+	out := make([]ToolSpec, 0, len(st.Tools.Names))
+	for _, t := range all {
+		if allowed[t.Name] {
+			out = append(out, t)
+		}
+	}
+	return out, nil
+}
+
+// runToolLoop runs the bounded model→tool→model loop (FR-003).
+// It mirrors the chat/agent-graph iteration counting: each model turn
+// that emits at least one tool call counts as one iteration; the loop
+// exits when the model stops emitting tool calls or the iteration cap
+// is reached.
+func (r modelTurnRunner) runToolLoop(
+	ctx context.Context, st Step, profile string, tools []ToolSpec,
+) (TypedValue, error) {
+	maxIter := st.MaxToolIterations
+	if maxIter <= 0 {
+		maxIter = DefaultMaxToolIterations
+	}
+
+	// history accumulates the multi-turn conversation.
+	var history []HistoryMessage
+
+	// Seed with the user prompt.
+	req := LLMRequest{
+		ProfileID: profile,
+		Model:     st.Model,
+		Prompt:    st.UserPrompt,
+		Tools:     tools,
+	}
+
+	var lastText string
+	for iter := 0; iter < maxIter; iter++ {
+		req.History = history
+
+		stream, err := r.llm.Stream(ctx, req)
+		if err != nil {
+			return TypedValue{Type: ValueTypeError},
+				fmt.Errorf("model_turn step %q (iter %d): %w", st.Name, iter, err)
+		}
+
+		// Drain text events.
+		var textBuf strings.Builder
+		for ev := range stream.Events() {
+			if ev.Err != "" {
+				return TypedValue{Type: ValueTypeError, Text: textBuf.String()},
+					fmt.Errorf("model_turn step %q (iter %d): stream error: %s", st.Name, iter, ev.Err)
+			}
+			textBuf.WriteString(ev.Text)
+		}
+		if _, ferr := stream.Final(); ferr != nil {
+			return TypedValue{Type: ValueTypeError, Text: textBuf.String()},
+				fmt.Errorf("model_turn step %q (iter %d): final: %w", st.Name, iter, ferr)
+		}
+		turnText := textBuf.String()
+		if turnText != "" {
+			lastText = turnText
+		}
+
+		// Check for tool calls via the optional ToolCallStream interface.
+		tcs, ok := stream.(ToolCallStream)
+		if !ok {
+			// Adapter does not implement ToolCallStream — treat as plain
+			// completion (no tool calls). Return accumulated text.
+			break
+		}
+		calls := tcs.ToolCalls()
+		if len(calls) == 0 {
+			// Model is done — no more tool calls.
+			break
+		}
+
+		// Record this assistant turn in history.
+		assistantTurn := HistoryMessage{
+			Role:     "assistant",
+			Text:     turnText,
+			ToolUses: calls,
+		}
+
+		// Dispatch each tool call and collect results.
+		results := make([]ToolCallResult, 0, len(calls))
+		for _, call := range calls {
+			content, isError, dispErr := r.toolDispatcher.Dispatch(ctx, call.Name, call.Input)
+			if dispErr != nil {
+				// Tool dispatch failure: surface as an error result rather
+				// than aborting the loop, matching the chat/agent-graph
+				// convention (the model sees the error and can recover).
+				content = fmt.Sprintf("tool dispatch error: %s", dispErr.Error())
+				isError = true
+			}
+			results = append(results, ToolCallResult{
+				ToolUseID: call.ID,
+				Content:   content,
+				IsError:   isError,
+			})
+		}
+
+		// Append assistant turn + tool-result turn to history.
+		history = append(history, assistantTurn)
+		history = append(history, HistoryMessage{
+			Role:        "tool",
+			ToolResults: results,
+		})
+
+		// On the next iteration req.Prompt is empty — history carries context.
+		req.Prompt = ""
+	}
+
+	return TypedValue{Type: ValueTypeText, Text: lastText}, nil
 }
 
 // ===========================================================================
@@ -574,10 +745,15 @@ func (r webFetchRunner) Run(ctx context.Context, st Step, _ *RunContext) (TypedV
 // ===========================================================================
 
 type webScrapeRunner struct {
-	fetcher *web.Fetcher
-	llm     LLMStreamer
-	profile string
-	authz   NetworkAuthorizer
+	fetcher            *web.Fetcher
+	llm                LLMStreamer
+	profile            string
+	// defaultProfileFunc, when non-nil, is called to resolve the active
+	// LLM profile when neither the step nor the static profile supply one.
+	// FR-006: gap fix so web_scrape llm mode works without an explicit
+	// step.profile when a default provider is configured.
+	defaultProfileFunc func() string
+	authz              NetworkAuthorizer
 }
 
 func (webScrapeRunner) Validate(st Step) error {
@@ -663,6 +839,10 @@ func (r webScrapeRunner) runLLM(ctx context.Context, st Step, body string) (Type
 	profile := st.Profile
 	if profile == "" {
 		profile = r.profile
+	}
+	// FR-006: fall through to DefaultProfileFunc when static profile is absent.
+	if profile == "" && r.defaultProfileFunc != nil {
+		profile = r.defaultProfileFunc()
 	}
 	if profile == "" {
 		// ExtractWithModel carries the model/profile slug for llm mode.

@@ -234,6 +234,15 @@ func (a *API) InstallRecipe(ctx context.Context, id string, env map[string]strin
 		return stdio.RecipeStatus{}, err
 	}
 
+	// Prereq pre-flight BEFORE any keychain write or enabled-list mutation:
+	// detect missing runtimes (uv/uvx, npx/node) up front so a missing runtime
+	// returns a friendly, actionable error WITHOUT staging the user's secrets in
+	// the OS keychain for a recipe that never installs. Depends only on
+	// recipe.Command, so nothing config- or secret-related is needed yet.
+	if missing := CheckPrereqs(recipe.Command); len(missing) > 0 {
+		return stdio.RecipeStatus{}, PrereqError(missing)
+	}
+
 	// Always zero the caller's plaintext frame before return — even
 	// on the failure paths below — so a stack trace never carries
 	// the credential.
@@ -827,6 +836,25 @@ func (a *API) RequestAdditionalAllowedDir(ctx context.Context, recipeID, path, r
 	}
 
 	return true, canonical, nil
+}
+
+// CheckRecipePrereqs implements ToolsAPI.CheckRecipePrereqs. It resolves the
+// recipe from the merged catalog and delegates to CheckPrereqs. Returns an
+// empty slice (not nil) when all prerequisites are satisfied, so the JSON wire
+// shape is always an array rather than null.
+func (a *API) CheckRecipePrereqs(_ context.Context, id string) ([]MissingPrereq, error) {
+	if a.cfg.Catalog == nil {
+		return []MissingPrereq{}, nil
+	}
+	recipe, ok := a.cfg.Catalog.Get(id)
+	if !ok {
+		return nil, fmt.Errorf("%w: %q", recipes.ErrRecipeNotFound, id)
+	}
+	missing := CheckPrereqs(recipe.Command)
+	if missing == nil {
+		return []MissingPrereq{}, nil
+	}
+	return missing, nil
 }
 
 // restartRecipe closes and re-opens the MCP server with updatedConfig.

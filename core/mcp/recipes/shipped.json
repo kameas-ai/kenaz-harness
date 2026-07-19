@@ -6,32 +6,58 @@
       "display_name": "Fleet Sites",
       "description": "Deploy and manage hosted sites from your Fleet org (Enterprise). Exposes sites_init, sites_deploy, sites_list, sites_status, sites_logs, and sites_delete tools. sites_init works offline; all other tools require Fleet sign-in.",
       "category": "deployment",
-      "command": ["${HARNESS_EXE}", "mcp", "sites"],
+      "command": [
+        "${HARNESS_EXE}",
+        "mcp",
+        "sites"
+      ],
       "env_keys": [],
-      "capabilities": { "tools": true, "resources": false, "prompts": true, "sampling": false },
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": true,
+        "sampling": false
+      },
       "docs_url": "",
       "init_timeout_ms": 5000,
       "ping_period_ms": 30000,
-      "sampling_policy": { "allowed": false, "default": false },
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      },
       "required_capability": "sites_hosting",
       "pre_seeding_policy": "prompt_only",
-      "prompt_on_first_use": ["sites_deploy", "sites_delete"],
-      "recommended_policy_template": "sites-recommended.cedar"
+      "prompt_on_first_use": [
+        "sites_deploy",
+        "sites_delete"
+      ],
+      "recommended_policy_template": "sites-recommended.cedar",
+      "primary_auth": "none"
     },
     {
       "id": "filesystem",
       "display_name": "Filesystem",
       "description": "Read and write files via the MCP filesystem server. Choose an access tier: sandbox (default harness workspace), project (one directory you pick), or full (your entire home directory and its subtrees). The model gets read_file, write_file, list_directory, create_directory, move_file, and search_files tools scoped to the directories you allow.",
       "category": "filesystem",
-      "command": ["npx", "-y", "@modelcontextprotocol/server-filesystem"],
-      "args_template": ["${ALLOWED_DIRS}"],
+      "command": [
+        "npx",
+        "-y",
+        "@modelcontextprotocol/server-filesystem"
+      ],
+      "args_template": [
+        "${ALLOWED_DIRS}"
+      ],
       "env_keys": [],
       "config_options": [
         {
           "name": "access_tier",
           "display": "Access tier",
           "kind": "enum",
-          "choices": ["sandbox", "project", "full"],
+          "choices": [
+            "sandbox",
+            "project",
+            "full"
+          ],
           "default": "sandbox",
           "required": true,
           "description": "sandbox = default harness workspace only (safest); project = one directory you choose (e.g. a code repo); full = your entire home directory and everything below it (use with care)."
@@ -40,17 +66,28 @@
           "name": "allowed_directories",
           "display": "Allowed directories",
           "kind": "directory_list",
-          "default": ["${DATA_DIR}/agent-workspace"],
+          "default": [
+            "${DATA_DIR}/agent-workspace"
+          ],
           "required": true,
           "description": "Directories the model is allowed to read and write. For sandbox, the default workspace is created automatically. For project, add your project root. For full, add your home directory (e.g. ~/). Add additional paths as needed."
         }
       ],
-      "capabilities": { "tools": true, "resources": false, "prompts": false, "sampling": false },
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
       "docs_url": "https://github.com/modelcontextprotocol/servers-archived/tree/main/src/filesystem",
       "init_timeout_ms": 5000,
       "ping_period_ms": 30000,
-      "sampling_policy": { "allowed": false, "default": false },
-      "recommended_policy_template": "filesystem-full-recommended.cedar"
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      },
+      "recommended_policy_template": "filesystem-full-recommended.cedar",
+      "primary_auth": "none"
     }
   ]
 }

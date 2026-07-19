@@ -404,6 +404,10 @@ func (s *stubTools) RequestAdditionalAllowedDir(_ context.Context, _, _, _ strin
 	return false, "", errNotWired
 }
 
+func (s *stubTools) CheckRecipePrereqs(_ context.Context, _ string) ([]tools.MissingPrereq, error) {
+	return []tools.MissingPrereq{}, nil
+}
+
 // ── shell ──────────────────────────────────────────────────────────────
 
 type stubShell struct{}

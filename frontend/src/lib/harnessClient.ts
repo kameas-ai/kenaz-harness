@@ -74,10 +74,12 @@ import type {
   DryRunResult,
   ConfirmDecision,
   Recipe,
+  PrimaryAuth,
   RecipeCategory,
   RecipeListing,
   RecipeState,
   RecipeStatus,
+  MissingPrereq,
   EnvKey,
   ConfigOption,
   ConfigKind,
@@ -572,6 +574,7 @@ interface WailsBindingsLike {
   Tools_ForgetRecipeKey(id: string, envName: string): Promise<void>;
   Tools_RecipeStatus(id: string): Promise<WireRecipeStatus>;
   Tools_RecipeConfig(id: string): Promise<Record<string, unknown>>;
+  Tools_CheckRecipePrereqs(id: string): Promise<WireMissingPrereq[]>;
   Tools_PickDirectory(title: string, defaultDir: string): Promise<string>;
   Tools_RequestAdditionalAllowedDir(
     recipeID: string,
@@ -960,6 +963,11 @@ interface WireConfigOption {
   choices?: string[];
 }
 
+interface WireMissingPrereq {
+  name: string;
+  install_hint: string;
+}
+
 interface WireRecipe {
   id: string;
   display_name: string;
@@ -976,6 +984,8 @@ interface WireRecipe {
   config_options?: WireConfigOption[];
   warning?: string;
   recommended_policy_template?: string;
+  /** primary_auth hint; omitempty on the Go side (absent when empty). */
+  primary_auth?: string;
 }
 
 interface WireRecipeStatus {
@@ -1093,6 +1103,20 @@ function adaptConfigOption(w: WireConfigOption): ConfigOption {
   };
 }
 
+const KNOWN_PRIMARY_AUTH = new Set<PrimaryAuth>(['oauth', 'device_code', 'keys', 'none']);
+
+function adaptPrimaryAuth(raw: string | undefined): PrimaryAuth | undefined {
+  if (!raw) return undefined;
+  return KNOWN_PRIMARY_AUTH.has(raw as PrimaryAuth) ? (raw as PrimaryAuth) : undefined;
+}
+
+function adaptMissingPrereq(w: WireMissingPrereq): MissingPrereq {
+  return {
+    name: w.name,
+    installHint: w.install_hint,
+  };
+}
+
 function adaptRecipe(w: WireRecipe): Recipe {
   const configOptions = w.config_options
     ? w.config_options.map(adaptConfigOption)
@@ -1109,6 +1133,7 @@ function adaptRecipe(w: WireRecipe): Recipe {
     configOptions,
     warning: w.warning || undefined,
     recommendedPolicyTemplate: w.recommended_policy_template || undefined,
+    primaryAuth: adaptPrimaryAuth(w.primary_auth),
   };
 }
 
@@ -2229,6 +2254,13 @@ export interface ToolsRecipesClient {
    * not enabled or have no config.
    */
   config(id: string): Promise<Record<string, unknown>>;
+  /**
+   * checkPrereqs inspects the recipe's command and returns any runtimes
+   * (uv/uvx, npx/node) that are not present in $PATH. An empty array means
+   * all prerequisites are satisfied. Call this when the install dialog opens
+   * so missing-runtime errors surface before the user clicks Install.
+   */
+  checkPrereqs(id: string): Promise<MissingPrereq[]>;
 }
 
 /** Result returned by requestAdditionalAllowedDir. */
@@ -3537,6 +3569,8 @@ export function createHarnessClient(): HarnessClient {
         status: async (id) =>
           adaptRecipeStatus(await b().Tools_RecipeStatus(id)),
         config: (id) => b().Tools_RecipeConfig(id),
+        checkPrereqs: async (id) =>
+          (await b().Tools_CheckRecipePrereqs(id)).map(adaptMissingPrereq),
       },
       pickDirectory: (title?: string, defaultDir?: string) =>
         b().Tools_PickDirectory(title ?? '', defaultDir ?? ''),
@@ -4641,6 +4675,7 @@ export function createFakeHarnessClient(
           promptCount: 0,
         }),
         config: async () => ({}),
+        checkPrereqs: async () => [],
       },
       pickDirectory: async () => '',
       requestAdditionalAllowedDir: async () => ({

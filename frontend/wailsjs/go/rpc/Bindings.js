@@ -22,12 +22,12 @@ export function ACP_GetTrace(arg1) {
   return window['go']['rpc']['Bindings']['ACP_GetTrace'](arg1);
 }
 
-export function ACP_ListTraces(arg1) {
-  return window['go']['rpc']['Bindings']['ACP_ListTraces'](arg1);
-}
-
 export function ACP_ListPeers() {
   return window['go']['rpc']['Bindings']['ACP_ListPeers']();
+}
+
+export function ACP_ListTraces(arg1) {
+  return window['go']['rpc']['Bindings']['ACP_ListTraces'](arg1);
 }
 
 export function ACP_RevokePeer(arg1) {
@@ -218,18 +218,6 @@ export function Catalog_Install(arg1, arg2) {
   return window['go']['rpc']['Bindings']['Catalog_Install'](arg1, arg2);
 }
 
-export function Compliance_ArchiveNow() {
-  return window['go']['rpc']['Bindings']['Compliance_ArchiveNow']();
-}
-
-export function Compliance_SetRetention(arg1) {
-  return window['go']['rpc']['Bindings']['Compliance_SetRetention'](arg1);
-}
-
-export function Compliance_Status() {
-  return window['go']['rpc']['Bindings']['Compliance_Status']();
-}
-
 export function Catalog_Installed() {
   return window['go']['rpc']['Bindings']['Catalog_Installed']();
 }
@@ -322,20 +310,20 @@ export function Compaction_TriggerManual(arg1, arg2) {
   return window['go']['rpc']['Bindings']['Compaction_TriggerManual'](arg1, arg2);
 }
 
+export function Compliance_ArchiveNow() {
+  return window['go']['rpc']['Bindings']['Compliance_ArchiveNow']();
+}
+
+export function Compliance_SetRetention(arg1) {
+  return window['go']['rpc']['Bindings']['Compliance_SetRetention'](arg1);
+}
+
+export function Compliance_Status() {
+  return window['go']['rpc']['Bindings']['Compliance_Status']();
+}
+
 export function Config_GetFlags() {
   return window['go']['rpc']['Bindings']['Config_GetFlags']();
-}
-
-export function Context_List() {
-  return window['go']['rpc']['Bindings']['Context_List']();
-}
-
-export function Context_StartStream() {
-  return window['go']['rpc']['Bindings']['Context_StartStream']();
-}
-
-export function Context_StopStream(arg1) {
-  return window['go']['rpc']['Bindings']['Context_StopStream'](arg1);
 }
 
 export function ContextBootstrap_Health() {
@@ -352,6 +340,26 @@ export function ContextBootstrap_Start(arg1) {
 
 export function ContextBootstrap_Status() {
   return window['go']['rpc']['Bindings']['ContextBootstrap_Status']();
+}
+
+export function ContextSync_ApplyRecoveryCode(arg1) {
+  return window['go']['rpc']['Bindings']['ContextSync_ApplyRecoveryCode'](arg1);
+}
+
+export function ContextSync_GenerateRecoveryCode() {
+  return window['go']['rpc']['Bindings']['ContextSync_GenerateRecoveryCode']();
+}
+
+export function Context_List() {
+  return window['go']['rpc']['Bindings']['Context_List']();
+}
+
+export function Context_StartStream() {
+  return window['go']['rpc']['Bindings']['Context_StartStream']();
+}
+
+export function Context_StopStream(arg1) {
+  return window['go']['rpc']['Bindings']['Context_StopStream'](arg1);
 }
 
 export function Contexts_AttachModule(arg1, arg2, arg3) {
@@ -540,6 +548,22 @@ export function Graph_StartRun(arg1) {
 
 export function Graph_Validate(arg1) {
   return window['go']['rpc']['Bindings']['Graph_Validate'](arg1);
+}
+
+export function Handoff_Accept(arg1) {
+  return window['go']['rpc']['Bindings']['Handoff_Accept'](arg1);
+}
+
+export function Handoff_Inbox() {
+  return window['go']['rpc']['Bindings']['Handoff_Inbox']();
+}
+
+export function Handoff_ListTeam() {
+  return window['go']['rpc']['Bindings']['Handoff_ListTeam']();
+}
+
+export function Handoff_Share(arg1, arg2) {
+  return window['go']['rpc']['Bindings']['Handoff_Share'](arg1, arg2);
 }
 
 export function Hooks_Add(arg1) {
@@ -842,12 +866,12 @@ export function Onboarding_RecordProgress(arg1) {
   return window['go']['rpc']['Bindings']['Onboarding_RecordProgress'](arg1);
 }
 
-export function Onboarding_RunBootstrap(arg1) {
-  return window['go']['rpc']['Bindings']['Onboarding_RunBootstrap'](arg1);
-}
-
 export function Onboarding_RestartPhase2(arg1) {
   return window['go']['rpc']['Bindings']['Onboarding_RestartPhase2'](arg1);
+}
+
+export function Onboarding_RunBootstrap(arg1) {
+  return window['go']['rpc']['Bindings']['Onboarding_RunBootstrap'](arg1);
 }
 
 export function Onboarding_State() {
@@ -896,6 +920,18 @@ export function Policy_StartStream() {
 
 export function Policy_StopStream(arg1) {
   return window['go']['rpc']['Bindings']['Policy_StopStream'](arg1);
+}
+
+export function ProjectSync_DeleteRemote(arg1) {
+  return window['go']['rpc']['Bindings']['ProjectSync_DeleteRemote'](arg1);
+}
+
+export function ProjectSync_SetArtifactClass(arg1, arg2) {
+  return window['go']['rpc']['Bindings']['ProjectSync_SetArtifactClass'](arg1, arg2);
+}
+
+export function ProjectSync_Toggle(arg1, arg2) {
+  return window['go']['rpc']['Bindings']['ProjectSync_Toggle'](arg1, arg2);
 }
 
 export function Projects_AddSession(arg1, arg2) {
@@ -1012,6 +1048,18 @@ export function Sentry_GetLastFive() {
 
 export function Sentry_TestDSN(arg1) {
   return window['go']['rpc']['Bindings']['Sentry_TestDSN'](arg1);
+}
+
+export function SessionSync_DeleteRemote(arg1) {
+  return window['go']['rpc']['Bindings']['SessionSync_DeleteRemote'](arg1);
+}
+
+export function SessionSync_ResumeFrom(arg1, arg2) {
+  return window['go']['rpc']['Bindings']['SessionSync_ResumeFrom'](arg1, arg2);
+}
+
+export function SessionSync_Toggle(arg1, arg2) {
+  return window['go']['rpc']['Bindings']['SessionSync_Toggle'](arg1, arg2);
 }
 
 export function Sessions_AppendMessage(arg1, arg2, arg3) {
@@ -1566,6 +1614,10 @@ export function Tasks_Tail(arg1, arg2) {
   return window['go']['rpc']['Bindings']['Tasks_Tail'](arg1, arg2);
 }
 
+export function Tools_CheckRecipePrereqs(arg1) {
+  return window['go']['rpc']['Bindings']['Tools_CheckRecipePrereqs'](arg1);
+}
+
 export function Tools_ForgetRecipeKey(arg1, arg2) {
   return window['go']['rpc']['Bindings']['Tools_ForgetRecipeKey'](arg1, arg2);
 }
@@ -1732,52 +1784,4 @@ export function Workflows_ScheduleRunHistory(arg1, arg2) {
 
 export function Workflows_ScheduleSet(arg1) {
   return window['go']['rpc']['Bindings']['Workflows_ScheduleSet'](arg1);
-}
-
-export function SessionSync_Toggle(arg1, arg2) {
-  return window['go']['rpc']['Bindings']['SessionSync_Toggle'](arg1, arg2);
-}
-
-export function SessionSync_DeleteRemote(arg1) {
-  return window['go']['rpc']['Bindings']['SessionSync_DeleteRemote'](arg1);
-}
-
-export function SessionSync_ResumeFrom(arg1, arg2) {
-  return window['go']['rpc']['Bindings']['SessionSync_ResumeFrom'](arg1, arg2);
-}
-
-export function ProjectSync_Toggle(arg1, arg2) {
-  return window['go']['rpc']['Bindings']['ProjectSync_Toggle'](arg1, arg2);
-}
-
-export function ProjectSync_DeleteRemote(arg1) {
-  return window['go']['rpc']['Bindings']['ProjectSync_DeleteRemote'](arg1);
-}
-
-export function ProjectSync_SetArtifactClass(arg1, arg2) {
-  return window['go']['rpc']['Bindings']['ProjectSync_SetArtifactClass'](arg1, arg2);
-}
-
-export function Handoff_ListTeam() {
-  return window['go']['rpc']['Bindings']['Handoff_ListTeam']();
-}
-
-export function Handoff_Share(arg1, arg2) {
-  return window['go']['rpc']['Bindings']['Handoff_Share'](arg1, arg2);
-}
-
-export function Handoff_Inbox() {
-  return window['go']['rpc']['Bindings']['Handoff_Inbox']();
-}
-
-export function Handoff_Accept(arg1) {
-  return window['go']['rpc']['Bindings']['Handoff_Accept'](arg1);
-}
-
-export function ContextSync_GenerateRecoveryCode() {
-  return window['go']['rpc']['Bindings']['ContextSync_GenerateRecoveryCode']();
-}
-
-export function ContextSync_ApplyRecoveryCode(arg1) {
-  return window['go']['rpc']['Bindings']['ContextSync_ApplyRecoveryCode'](arg1);
 }

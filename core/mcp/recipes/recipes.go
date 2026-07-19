@@ -159,6 +159,25 @@ type Recipe struct {
 	// implemented in core/mcp/oauth) instead of asking the user to paste a
 	// long-lived token. Nil for ordinary key-based or local stdio recipes.
 	Auth *RecipeAuth `json:"auth,omitempty" yaml:"auth,omitempty"`
+	// PrimaryAuth names the auth method the install modal should lead with.
+	// When set, the modal presents this method prominently and collapses any
+	// additional credential fields (env keys or optional config) under an
+	// "Advanced" / "Use a token instead" section.
+	//
+	// Recognised values:
+	//   ""            — legacy / unset: no reordering; the modal renders keys
+	//                   as declared (backwards compatible default).
+	//   "oauth"       — lead with OAuth "Sign in" button (requires Auth != nil).
+	//                   TODO: OAuth client registration required before this is
+	//                   live; the UX seam is wired but sign-in is a no-op until
+	//                   Auth.ClientID is set (ref: OAuth app registration ticket).
+	//   "device_code" — lead with a "Sign in with browser" device-code flow
+	//                   message (e.g. Outlook); env keys become "Advanced".
+	//   "keys"        — lead with the first env key; all keys are primary.
+	//   "none"        — recipe needs no credentials; env keys section hidden
+	//                   unless all keys are optional (they're collapsed by
+	//                   default).
+	PrimaryAuth string `json:"primary_auth,omitempty" yaml:"primary_auth,omitempty"`
 	// Source tags the loader that produced this Recipe. It is set by
 	// loaders (LoadShipped → SourceShipped, registry loader →
 	// SourceRegistry, UserStore → SourceUser/SourceImported) and is
@@ -172,6 +191,22 @@ type Recipe struct {
 // harness runs the MCP authorization flow (core/mcp/oauth) to obtain a bearer
 // token for a remote server.
 const AuthKindMCPOAuth = "mcp_oauth"
+
+// PrimaryAuth hint constants for Recipe.PrimaryAuth. The install modal leads
+// with the primary auth method and collapses secondary fields under "Advanced".
+const (
+	// PrimaryAuthOAuth leads with an OAuth "Sign in" browser button.
+	// TODO: requires OAuth app registration before sign-in works end-to-end.
+	PrimaryAuthOAuth = "oauth"
+	// PrimaryAuthDeviceCode leads with a device-code browser sign-in message
+	// (e.g. Outlook ms-365-mcp-server). Env keys become secondary ("Advanced").
+	PrimaryAuthDeviceCode = "device_code"
+	// PrimaryAuthKeys leads with env-key fields; all keys are primary.
+	PrimaryAuthKeys = "keys"
+	// PrimaryAuthNone signals no credential is required. Any optional env keys
+	// are collapsed under "Advanced" by default.
+	PrimaryAuthNone = "none"
+)
 
 // RecipeAuth declares OAuth sign-in for a remote recipe. It is advisory
 // metadata: the actual authorization-server + endpoints are discovered at
@@ -403,6 +438,12 @@ func (r *Recipe) Validate() error {
 		// valid
 	default:
 		return fmt.Errorf("%w: recipe %q has invalid pre_seeding_policy %q (want \"\", \"allow_all\", \"prompt_only\", or \"none\")", ErrInvalidRecipe, r.ID, r.PreSeedingPolicy)
+	}
+	switch r.PrimaryAuth {
+	case "", PrimaryAuthOAuth, PrimaryAuthDeviceCode, PrimaryAuthKeys, PrimaryAuthNone:
+		// valid
+	default:
+		return fmt.Errorf("%w: recipe %q has invalid primary_auth %q (want \"\", \"oauth\", \"device_code\", \"keys\", or \"none\")", ErrInvalidRecipe, r.ID, r.PrimaryAuth)
 	}
 	return nil
 }

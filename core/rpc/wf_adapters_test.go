@@ -18,7 +18,48 @@ import (
 	"testing"
 
 	coremcp "github.com/kameas-ai/kenaz-harness/core/mcp"
+	"github.com/kameas-ai/kenaz-harness/core/toolloop"
+	corewf "github.com/kameas-ai/kenaz-harness/core/workflows"
 )
+
+// buildMessages must label assistant history turns with Role "assistant".
+// Regression guard: a prior version mislabeled them "user", producing two
+// consecutive user turns on the second+ iteration of the bounded tool loop,
+// which the Anthropic API rejects with a 400 (alternating-turn violation).
+func TestBuildMessages_AssistantTurnRole(t *testing.T) {
+	t.Parallel()
+	msgs, err := buildMessages(corewf.LLMRequest{
+		Prompt: "", // second+ iteration: reconstruct from history only
+		History: []corewf.HistoryMessage{
+			{Role: "user", Text: "list the repos"},
+			{Role: "assistant", Text: "calling the tool"},
+			{Role: "tool", ToolResults: []corewf.ToolCallResult{{ToolUseID: "t1", Content: "ok"}}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("buildMessages: %v", err)
+	}
+	var roles []string
+	for _, m := range msgs {
+		roles = append(roles, string(m.Role))
+	}
+	// user (seed) → assistant (model turn) → user (tool results, per Anthropic).
+	want := []string{"user", "assistant", "user"}
+	if len(roles) != len(want) {
+		t.Fatalf("roles = %v, want %v", roles, want)
+	}
+	for i := range want {
+		if roles[i] != want[i] {
+			t.Errorf("message[%d].Role = %q, want %q (roles=%v)", i, roles[i], want[i], roles)
+		}
+	}
+	// No two consecutive user turns (the exact failure this guards).
+	for i := 1; i < len(msgs); i++ {
+		if string(msgs[i].Role) == "user" && string(msgs[i-1].Role) == "user" {
+			t.Errorf("consecutive user turns at %d/%d — violates alternating-turn constraint", i-1, i)
+		}
+	}
+}
 
 // ─── fake MCP pool ────────────────────────────────────────────────────────────
 
@@ -158,5 +199,54 @@ func TestTranslateMCPError_UnknownError_Passthrough(t *testing.T) {
 	got := translateMCPError("slack", original)
 	if got != original {
 		t.Errorf("unexpected error translation: got %v want %v", got, original)
+	}
+}
+
+// =============================================================================
+// wfToolDispatcherAdapter (01NWFT01)
+// =============================================================================
+
+// stubBuiltinPool implements toolloop.MCPPool for testing.
+type stubBuiltinPool struct {
+	capturedServer string
+	capturedTool   string
+	capturedArgs   json.RawMessage
+	result         json.RawMessage
+	err            error
+}
+
+func (s *stubBuiltinPool) Tools(_ context.Context) ([]toolloop.Tool, error) { return nil, nil }
+func (s *stubBuiltinPool) Call(_ context.Context, server, tool string, args json.RawMessage) (json.RawMessage, error) {
+	s.capturedServer = server
+	s.capturedTool = tool
+	s.capturedArgs = args
+	if s.err != nil {
+		return nil, s.err
+	}
+	return s.result, nil
+}
+
+func TestSplitToolName_WithSeparator(t *testing.T) {
+	t.Parallel()
+	server, tool := splitToolName("kenaz__bash")
+	if server != "kenaz" || tool != "bash" {
+		t.Errorf("splitToolName=%q,%q want kenaz,bash", server, tool)
+	}
+}
+
+func TestSplitToolName_NoSeparator(t *testing.T) {
+	t.Parallel()
+	server, tool := splitToolName("bare_name")
+	if server != "" || tool != "bare_name" {
+		t.Errorf("splitToolName=%q,%q want ,bare_name", server, tool)
+	}
+}
+
+func TestSplitToolName_MultiSeparator(t *testing.T) {
+	t.Parallel()
+	// Only the first __ is the separator.
+	server, tool := splitToolName("my_server__my__tool")
+	if server != "my_server" || tool != "my__tool" {
+		t.Errorf("splitToolName=%q,%q want my_server,my__tool", server, tool)
 	}
 }
