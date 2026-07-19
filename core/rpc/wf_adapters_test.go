@@ -19,7 +19,47 @@ import (
 
 	coremcp "github.com/kameas-ai/kenaz-harness/core/mcp"
 	"github.com/kameas-ai/kenaz-harness/core/toolloop"
+	corewf "github.com/kameas-ai/kenaz-harness/core/workflows"
 )
+
+// buildMessages must label assistant history turns with Role "assistant".
+// Regression guard: a prior version mislabeled them "user", producing two
+// consecutive user turns on the second+ iteration of the bounded tool loop,
+// which the Anthropic API rejects with a 400 (alternating-turn violation).
+func TestBuildMessages_AssistantTurnRole(t *testing.T) {
+	t.Parallel()
+	msgs, err := buildMessages(corewf.LLMRequest{
+		Prompt: "", // second+ iteration: reconstruct from history only
+		History: []corewf.HistoryMessage{
+			{Role: "user", Text: "list the repos"},
+			{Role: "assistant", Text: "calling the tool"},
+			{Role: "tool", ToolResults: []corewf.ToolCallResult{{ToolUseID: "t1", Content: "ok"}}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("buildMessages: %v", err)
+	}
+	var roles []string
+	for _, m := range msgs {
+		roles = append(roles, string(m.Role))
+	}
+	// user (seed) → assistant (model turn) → user (tool results, per Anthropic).
+	want := []string{"user", "assistant", "user"}
+	if len(roles) != len(want) {
+		t.Fatalf("roles = %v, want %v", roles, want)
+	}
+	for i := range want {
+		if roles[i] != want[i] {
+			t.Errorf("message[%d].Role = %q, want %q (roles=%v)", i, roles[i], want[i], roles)
+		}
+	}
+	// No two consecutive user turns (the exact failure this guards).
+	for i := 1; i < len(msgs); i++ {
+		if string(msgs[i].Role) == "user" && string(msgs[i-1].Role) == "user" {
+			t.Errorf("consecutive user turns at %d/%d — violates alternating-turn constraint", i-1, i)
+		}
+	}
+}
 
 // ─── fake MCP pool ────────────────────────────────────────────────────────────
 

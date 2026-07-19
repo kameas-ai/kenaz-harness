@@ -213,7 +213,7 @@ func buildMessages(req corewf.LLMRequest) ([]corellm.Message, error) {
 					},
 				})
 			}
-			messages = append(messages, corellm.Message{Role: "user", Content: blocks})
+			messages = append(messages, corellm.Message{Role: "assistant", Content: blocks})
 		case "tool":
 			// Tool results: one block per result, packed into a user-role message
 			// (Anthropic's convention: tool results arrive as a user turn).
