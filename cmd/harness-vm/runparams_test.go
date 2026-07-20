@@ -153,7 +153,13 @@ func TestTaskStartWithWorkflowPresetSelectsPreset(t *testing.T) {
 	// tool_call record via a short-lived TCP connection; under load the fakeIngest
 	// goroutines may append records in any order, so we assert the multiset rather
 	// than arrival order to avoid a scheduling-dependent flake.
-	recs := ingest.waitForPhases(t, 3*time.Second, phaseTaskStart, phaseToolCall, phaseTaskComplete)
+	//
+	// We wait for exactly len(want) tool_call records before reading the snapshot.
+	// waitForPhases would exit as soon as the first tool_call record arrives,
+	// causing the subsequent toolCount check to see fewer than 4 records under
+	// scheduler pressure (the root cause of the CI flake).
+	want := []string{"plan", "research", "implement", "review"}
+	recs := ingest.waitForPhaseCount(t, 3*time.Second, phaseToolCall, len(want))
 	toolCount := map[string]int{}
 	for _, r := range recs {
 		if r.Payload["phase"] == phaseToolCall {
@@ -162,7 +168,6 @@ func TestTaskStartWithWorkflowPresetSelectsPreset(t *testing.T) {
 			}
 		}
 	}
-	want := []string{"plan", "research", "implement", "review"}
 	if len(toolCount) != len(want) {
 		t.Fatalf("expected %d distinct preset step tool_calls %v, got %v", len(want), want, toolCount)
 	}
