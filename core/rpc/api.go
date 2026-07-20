@@ -68,6 +68,8 @@ import (
 	artifactsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/artifacts"
 	attachmentsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/attachments"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/audit"
+	logsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/logs"
+	"github.com/kameas-ai/kenaz-harness/core/logstore"
 	branchesview "github.com/kameas-ai/kenaz-harness/core/rpc/views/branches"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/bundle"
 	catalogview "github.com/kameas-ai/kenaz-harness/core/rpc/views/catalog"
@@ -165,6 +167,10 @@ type HarnessAPI interface {
 	Bundle() bundle.BundleAPI
 	Policy() policy.PolicyAPI
 	Audit() audit.AuditAPI
+	// Logs exposes the in-app runtime log store (mission 01NLOGS01 WP04).
+	// Returns the bounded, redacted ring-buffer log surface for Settings →
+	// Security → Logs tab.
+	Logs() logsview.LogsAPI
 	Settings() settings.SettingsAPI
 	Memory() memoryview.MemoryAPI
 	Hooks() hooksview.HooksAPI
@@ -411,6 +417,9 @@ type API struct {
 	policyAPI      policy.PolicyAPI
 	auditImpl      *audit.API
 	auditAPI       audit.AuditAPI
+	// logStore + logsAPI back the Settings → Logs panel (mission 01NLOGS01 WP01/WP04).
+	logStore       *logstore.Store
+	logsAPI        logsview.LogsAPI
 	settingsImpl   *settings.API
 	settingsAPI    settings.SettingsAPI
 	memoryAPI      memoryview.MemoryAPI
@@ -1046,6 +1055,17 @@ func New(c *core.Core) *API {
 	}
 	a.auditImpl = audit.NewAPI(audit.WithSubscriber(a.broker), audit.WithGate(auditGate))
 	a.auditAPI = a.auditImpl
+
+	// mission 01NLOGS01 WP01: construct the bounded in-memory log store and
+	// TEE the current active slog handler through it. We use logging.Handler()
+	// (not logging.FileHandler()) so that test-seam captureLog replacements
+	// are preserved: the logstore handler wraps whatever is currently wired,
+	// so the test buffer still receives records via the chain.
+	a.logStore = logstore.New(0)
+	a.logsAPI = logsview.New(a.logStore)
+	logH := logstore.NewHandler(a.logStore, logging.Handler())
+	logging.Replace(logH)
+
 	a.mcpAPI = mcp.NewAPI(mcp.WithSubscriber(a.broker))
 	// MCP boot-time directory creation (mission mcp-server-install-01KQ8TDP,
 	// WP10). Best-effort: a failure here must never prevent the chassis from
@@ -5740,6 +5760,8 @@ func (a *API) Permissions() permissionsview.PermissionsAPI {
 	return a.permissionsAPI
 }
 func (a *API) Audit() audit.AuditAPI          { return a.auditAPI }
+// Logs returns the in-app runtime log surface (mission 01NLOGS01 WP04).
+func (a *API) Logs() logsview.LogsAPI         { return a.logsAPI }
 func (a *API) Settings() settings.SettingsAPI { return a.settingsAPI }
 func (a *API) Memory() memoryview.MemoryAPI {
 	if a.memoryAPI == nil {

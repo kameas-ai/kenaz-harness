@@ -15,6 +15,8 @@ import (
 	artifactsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/artifacts"
 	attachmentsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/attachments"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/audit"
+	logsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/logs"
+	"github.com/kameas-ai/kenaz-harness/core/logstore"
 	branchesview "github.com/kameas-ai/kenaz-harness/core/rpc/views/branches"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/bundle"
 	catalogview "github.com/kameas-ai/kenaz-harness/core/rpc/views/catalog"
@@ -118,6 +120,9 @@ func (f *fakeHarnessAPI) CedarPublish() cedarview.CedarAPI            { return n
 func (f *fakeHarnessAPI) Bundle() bundle.BundleAPI                    { return f.bundleAPI }
 func (f *fakeHarnessAPI) Policy() policy.PolicyAPI                    { return f.policyAPI }
 func (f *fakeHarnessAPI) Audit() audit.AuditAPI                       { return f.auditAPI }
+// Logs — mission 01NLOGS01 WP04: fake always returns a live store so
+// the compile-time interface witness passes with zero test overhead.
+func (f *fakeHarnessAPI) Logs() logsview.LogsAPI                      { return logsview.New(logstore.New(0)) }
 func (f *fakeHarnessAPI) Settings() settings.SettingsAPI              { return f.settingsAPI }
 func (f *fakeHarnessAPI) Memory() memoryview.MemoryAPI                { return f.memoryAPI }
 func (f *fakeHarnessAPI) Hooks() hooksview.HooksAPI                   { return f.hooksAPI }
