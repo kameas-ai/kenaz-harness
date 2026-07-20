@@ -10,9 +10,10 @@
 
 import type { TaskRow, LineRow } from './types';
 
-// The Wails runtime injects window.go.rpc.API at startup.
-// We access it via a typed proxy to avoid importing wailsjs types
-// that generate during build (not available in vitest).
+// The Wails runtime injects window.go.rpc.Bindings at startup (the bound struct
+// is "Bindings", NOT "API"). Mirror the accessor pattern used in harnessClient.ts
+// so both modules resolve the same global. Tasks_* methods are declared on the
+// Bindings struct and are generated into wailsjs/go/rpc/Bindings.
 type WailsRPC = {
   Tasks_List: () => Promise<TaskRow[]>;
   Tasks_Get: (id: string) => Promise<TaskRow>;
@@ -22,7 +23,13 @@ type WailsRPC = {
 
 function rpc(): WailsRPC {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  return (window as any).go?.rpc?.API as WailsRPC;
+  const b = (typeof window !== 'undefined' && (window as any).go?.rpc?.Bindings) || undefined;
+  if (!b) {
+    throw new Error(
+      'window.go.rpc.Bindings is not available. The harness frontend must run inside Wails.',
+    );
+  }
+  return b as WailsRPC;
 }
 
 /** List all known background tasks, newest-first. */

@@ -971,8 +971,12 @@ async function onProjectDrop(evt: DragEvent, projectId: string) {
         <li><RailEntry :icon="FileText" label="Contexts" to="/contexts" /></li>
         <li><RailEntry :icon="Brain" label="Memory" to="/memory" /></li>
         <li><RailEntry :icon="Archive" label="Artifacts" to="/artifacts" /></li>
-        <li><RailEntry :icon="GitBranch" label="Agent graphs" to="/agentgraph" /></li>
-        <li><RailEntry :icon="FileText" label="Audit log" to="/audit" /></li>
+        <!-- nav-settings-ia-cleanup WP03: Agent graphs demoted from top-level nav.
+             The /agentgraph route and GraphsView remain intact and reachable via
+             the command palette (nav.agentgraph action in useCommandPalette.ts). -->
+        <!-- nav-settings-ia-cleanup WP04: Audit log demoted from top-level nav.
+             Viewer is accessible via Settings → Security → Audit Log. /audit route
+             and the command palette entry (nav.audit) remain intact. -->
         <li
           v-if="signedIn && capability('sites_hosting')"
           data-testid="nav-sites"
