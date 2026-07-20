@@ -200,7 +200,9 @@ const SECTION_HEADS: Record<string, { title: string; subtitle: string }> = {
   scheduledchats: { title: 'Scheduled chats', subtitle: 'Recurring chat runs on a schedule.' },
   secrets: { title: 'Secrets', subtitle: 'Model-accessible secret references.' },
   'llm-routing': { title: 'LLM routing', subtitle: 'Model fallback and routing rules.' },
-  audit: { title: 'Audit', subtitle: 'Audit-log retention settings.' },
+  // nav-settings-ia-cleanup WP04: renamed from 'Audit' to 'Audit Settings' to
+  // distinguish from the separate 'Audit Log' viewer (reached via /audit).
+  audit: { title: 'Audit Settings', subtitle: 'Audit-log retention settings.' },
   peers: { title: 'Peers', subtitle: 'Trusted ACP agent peers — register, inspect, and revoke.' },
   sync: { title: 'Sync', subtitle: 'Cross-device settings sync — keep provider profiles, model prefs, MCP recipes, installed MCPs, and UI theme in sync across all your devices.' },
   compliance: { title: 'Compliance', subtitle: 'Immutable fleet audit archival and local retention window (Team+ tier).' },

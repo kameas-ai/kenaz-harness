@@ -122,8 +122,13 @@ const groups: ReadonlyArray<TabGroup> = [
     tabs: [
       { to: '/permissions/bash', label: 'Permissions', matchPrefix: '/permissions', icon: Shield },
       { to: '/policy', label: 'Policy', matchPrefix: '/policy', icon: Scale },
-      // audit-log-enhancement-01KX5R8F WP07
-      { to: '/settings?tab=audit', label: 'Audit', query: 'audit', icon: FileText },
+      // audit-log-enhancement-01KX5R8F WP07 — Audit retention settings
+      // nav-settings-ia-cleanup WP04: renamed from "Audit" to "Audit Settings" to
+      // distinguish from the "Audit Log" viewer entry below.
+      { to: '/settings?tab=audit', label: 'Audit Settings', query: 'audit', icon: FileText },
+      // nav-settings-ia-cleanup WP04: audit-log viewer promoted into Settings → Security.
+      // Navigates directly to /audit (the viewer keeps its own CanvasHead layout).
+      { to: '/audit', label: 'Audit Log', matchPrefix: '/audit', icon: Activity },
       // fleet-audit-archival-01NDFSEX13 WP06 — Compliance (Team+ tier gated)
       { to: '/settings?tab=compliance', label: 'Compliance', query: 'compliance', icon: Server },
     ],
