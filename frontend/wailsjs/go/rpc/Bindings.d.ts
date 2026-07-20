@@ -27,6 +27,7 @@ import {agentgraph} from '../models';
 import {contextsync} from '../models';
 import {hooks} from '../models';
 import {llm} from '../models';
+import {logstore} from '../models';
 import {mcp} from '../models';
 import {memory} from '../models';
 import {nodes} from '../models';
@@ -408,6 +409,8 @@ export function LoadRoute():Promise<string>;
 export function LoadTheme():Promise<string>;
 
 export function LogRouteChange(arg1:string,arg2:string):Promise<void>;
+
+export function Logs_Tail(arg1:logstore.Filter):Promise<Array<logstore.Row>>;
 
 export function MCP_HealthSnapshot():Promise<Record<string, mcp.HealthEntry>>;
 
