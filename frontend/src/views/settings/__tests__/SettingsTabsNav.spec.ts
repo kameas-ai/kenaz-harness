@@ -30,21 +30,24 @@ describe('SettingsTabs — vertical nav rail', () => {
     const wrapper = mount(SettingsTabs);
     const items = wrapper.findAll('[data-testid^="settings-tab-"]');
     // 5 (App) + 4 (Authoring) + 2 (Runtime) + 6 (Integrations: Providers/Bundles/Secrets/LLMRouting/Peers/Sync)
-    // + 4 (Security: Permissions/Policy/Audit/Compliance) + 1 (Privacy) = 22 after WP06 adds Compliance tab
-    expect(items).toHaveLength(22);
+    // + 5 (Security: Permissions/Policy/Audit Settings/Audit Log/Compliance) + 1 (Privacy) = 23
+    // nav-settings-ia-cleanup WP04: +1 for the "Audit Log" viewer entry in Security.
+    expect(items).toHaveLength(23);
     for (const item of items) {
       // lucide-vue-next renders an <svg>; every row should carry one.
       expect(item.find('svg').exists()).toBe(true);
     }
   });
 
-  it('keeps the addressable tabs (General, Providers, Permissions, Audit)', () => {
+  it('keeps the addressable tabs (General, Providers, Permissions, Audit Settings, Audit Log)', () => {
     const wrapper = mount(SettingsTabs);
     for (const id of [
       'settings-tab-general',
       'settings-tab-providers',
       'settings-tab-permissions',
-      'settings-tab-audit',
+      // nav-settings-ia-cleanup WP04: "Audit" renamed to "Audit Settings"; "Audit Log" added.
+      'settings-tab-audit-settings',
+      'settings-tab-audit-log',
     ]) {
       expect(wrapper.find(`[data-testid="${id}"]`).exists()).toBe(true);
     }

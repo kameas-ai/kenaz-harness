@@ -52,9 +52,12 @@ import (
 	llmregistry "github.com/kameas-ai/kenaz-harness/core/llm/registry"
 	"github.com/kameas-ai/kenaz-harness/core/logging"
 	coremcp "github.com/kameas-ai/kenaz-harness/core/mcp"
+	"github.com/kameas-ai/kenaz-harness/core/mcp/dispatch"
 	harnessmcp "github.com/kameas-ai/kenaz-harness/core/mcp/builtin/harness"
 	"github.com/kameas-ai/kenaz-harness/core/mcp/recipes"
 	"github.com/kameas-ai/kenaz-harness/core/mcp/stdio"
+	mcphttp "github.com/kameas-ai/kenaz-harness/core/mcp/transport/http"
+	mcpsse "github.com/kameas-ai/kenaz-harness/core/mcp/transport/sse"
 	corememory "github.com/kameas-ai/kenaz-harness/core/memory"
 	"github.com/kameas-ai/kenaz-harness/core/policy/cedar"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/a2a"
@@ -488,6 +491,12 @@ type API struct {
 	// UninstallRecipe path can call OpenOne / CloseOne against the
 	// same pool the toolloop dispatches against.
 	stdioPool *stdio.Pool
+
+	// dispatchPool is the transport-routing pool that wraps stdioPool
+	// (and the http/sse sub-pools). The tools view's InstallRecipe /
+	// UninstallRecipe and the core.Core MCP seam consume this so
+	// remote (http/sse) recipes route to the correct transport.
+	dispatchPool *dispatch.Pool
 
 	// usageMgr is the per-session token + cost aggregate store
 	// (token-cost-telemetry-01KQ8TD7). Wired in New when a real
@@ -1295,6 +1304,7 @@ func New(c *core.Core) *API {
 	stack := newLLMStack(c, a.broker, personalForLLM, hooksRunner, attMgr, confirmEachEnabled, artifactSink, artifactSinkConcrete, settingsImpl, a_bashStore, artMgr, a.graphMgr, a.promptRegistry, usageMgr, a.elicitAPI, slashDispatch, a.exposureIdx, a.sessionsAPI, contextsLib)
 	a.llmAPI = stack.api
 	a.stdioPool = stack.pool
+	a.dispatchPool = stack.dispatchPool
 	a.builtins = stack.builtins
 	// long-turn-resilience-01KR3PRS WP03: now that both the chat
 	// runner and the session manager are constructed, wire the
@@ -1394,16 +1404,24 @@ func New(c *core.Core) *API {
 	if c != nil {
 		a.sessionsAPI = sessions.WithExportOpts(a.sessionsAPI, buildCedarGate(c.DataDir()), nil, nil)
 	}
-	if c != nil && a.stdioPool != nil {
-		c.SetMCP(a.stdioPool)
+	if c != nil && a.dispatchPool != nil {
+		// Wire the dispatch pool (all transports) onto Core.MCP so the
+		// context-sync engine and other core consumers can call both
+		// stdio and remote (http/sse) servers transparently.
+		c.SetMCP(a.dispatchPool)
 		// Persisted-recipes bootstrap — Core.Start invokes this once
 		// Storage() is up, so the pool is populated before the chat
 		// surface accepts a turn (FR-030).
-		// Pass the Cedar engine so AllowAlways grants are persisted to
-		// disk (cedar-credential-policy follow-up: AllowAlways mcp_spawn).
+		// Pass the concrete stdio pool here so the bootstrap path only
+		// re-opens stdio recipes (it uses pool.Open(stdioSpecs)); remote
+		// recipes are re-opened through the tools view's InstallRecipe
+		// which already uses the dispatch pool's OpenOne.
 		c.SetMCPRecipeBootstrap(makeMCPRecipeBootstrap(c, a.stdioPool, stack.secrets, a.promptRegistry, buildCedarEngineOrNil(c.DataDir())))
 	}
-	a.toolsAPI = newToolsAPI(c, stack.pool, stack.secrets, a.promptRegistry, a.cedarPolicyAPI)
+	// Pass the dispatch pool as the tools-view PoolController so
+	// InstallRecipe/UninstallRecipe route http/sse recipes to the right
+	// transport sub-pool.
+	a.toolsAPI = newToolsAPI(c, a.dispatchPool, stack.secrets, a.promptRegistry, a.cedarPolicyAPI)
 	// Register the fsrequest built-in after toolsAPI is wired so the
 	// tool's delegate can be the real (non-stub) implementation. The
 	// tool is registered unconditionally; the EnabledFilter gates
@@ -1535,8 +1553,10 @@ func New(c *core.Core) *API {
 		// LLM stack (constructed above); either may be nil (test chassis or
 		// disabled subsystem) — DefaultRunnersWithDeps handles nil gracefully.
 		wfDeps := corewf.Deps{}
-		if stack.pool != nil {
-			wfDeps.MCP = &wfMCPCallerAdapter{pool: stack.pool}
+		if stack.dispatchPool != nil {
+			// Use the dispatch pool so workflow mcp_call steps can reach
+			// remote (http/sse) servers as well as stdio ones.
+			wfDeps.MCP = &wfMCPCallerAdapter{pool: stack.dispatchPool}
 		}
 		if stack.reg != nil {
 			wfDeps.LLM = &wfLLMStreamerAdapter{reg: stack.reg}
@@ -3220,7 +3240,7 @@ func makeMCPRecipeBootstrap(c *core.Core, pool *stdio.Pool, secretsBackend *secr
 // Returns the stub when c is nil — the test harness path constructs
 // rpc.New(nil) and we keep the chassis bootable without crashing on
 // the catalog access.
-func newToolsAPI(c *core.Core, pool *stdio.Pool, secretsBackend *secrets.MemoryBackend, promptReg *cedar.Registry, cedarPolicyAPI cedarpolicyview.CedarPolicyAPI) tools.ToolsAPI {
+func newToolsAPI(c *core.Core, pool tools.PoolController, secretsBackend *secrets.MemoryBackend, promptReg *cedar.Registry, cedarPolicyAPI cedarpolicyview.CedarPolicyAPI) tools.ToolsAPI {
 	if c == nil {
 		return &stubTools{}
 	}
@@ -3374,6 +3394,12 @@ type llmStack struct {
 	// newLLMStack. Held so the workflow engine can wire the SAME catalog
 	// and permission filter as chat (mission 01NWFT01, FR-002).
 	toolDiscoverer corellm.ToolDiscoverer
+	// dispatchPool is the transport-routing pool that wraps the stdio
+	// pool (and the http/sse sub-pools). It implements both mcp.Pool
+	// and tools.PoolController so the tools view and the core MCP seam
+	// can route http/sse recipes to the right transport without knowing
+	// the transport ahead of time.
+	dispatchPool *dispatch.Pool
 }
 
 func newLLMStack(
@@ -3485,6 +3511,21 @@ func newLLMStack(
 		Broker: &poolEventPublisher{broker: broker},
 		Logger: nil, // defaults to slog.Default
 	})
+	// Remote (http/sse) transport sub-pools. The DispatchPool wraps all
+	// three so the tools view and the core MCP seam route recipes to the
+	// correct transport based on ServerSpec.Transport without the caller
+	// knowing which pool is active.
+	httpPool := mcphttp.NewPool(mcphttp.PoolOptions{
+		Logger: nil, // defaults to slog.Default
+	})
+	ssePool := mcpsse.NewPool(mcpsse.PoolOptions{
+		Logger: nil, // defaults to slog.Default
+	})
+	dispatchPool := dispatch.New(dispatch.Options{
+		Stdio: mcpPool,
+		HTTP:  httpPool,
+		SSE:   ssePool,
+	})
 	// Built-in tools registry. The chassis registers websearch + bash
 	// here when Settings toggles are ON. The BuiltinPool merges them
 	// into the pool's tool catalog AND dispatches to them without
@@ -3535,7 +3576,10 @@ func newLLMStack(
 		registerReadContextFileTool(builtinRegistry, contextsLib, modSrc)
 	}
 	builtinFilter := toolloop.NewEnabledFilter(builtinRegistry, builtinEnabledPredicate(settingsImpl))
-	wrappedPool := toolloop.NewBuiltinPool(&mcpPoolAdapter{inner: mcpPool}, builtinFilter)
+	// wrappedPool merges the dispatch pool (all transports) with the
+	// builtin tool registry. The dispatch pool routes Call/Tools across
+	// stdio, http, and sse sub-pools transparently.
+	wrappedPool := toolloop.NewBuiltinPool(&mcpPoolAdapter{inner: dispatchPool}, builtinFilter)
 	var attResolver llm.AttachmentsResolver
 	if attMgr != nil {
 		attResolver = &attachmentsResolverAdapter{
@@ -3554,7 +3598,7 @@ func newLLMStack(
 	// (gated by the same Settings filter as the dispatch path), so the
 	// model SEES kenaz__web_search / kenaz__bash in its tool catalog
 	// when those Settings toggles are ON.
-	toolDiscoverer := llm.NewMCPToolDiscovererWithBuiltins(mcpPool, perms, builtinFilter)
+	toolDiscoverer := llm.NewMCPToolDiscovererWithBuiltins(dispatchPool, perms, builtinFilter)
 
 	// chat-migration cutover (this mission, WP-A): construct the kernel-
 	// driven ChatRunner and hand it to the LLM impl via Config.ChatRunner.
@@ -3662,6 +3706,7 @@ func newLLMStack(
 		historyAdapter:      historyAdapter,
 		wrappedPool:         wrappedPool,
 		toolDiscoverer:      toolDiscoverer,
+		dispatchPool:        dispatchPool,
 	}
 }
 

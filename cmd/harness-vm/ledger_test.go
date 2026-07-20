@@ -93,6 +93,37 @@ func (f *fakeIngest) waitForPhases(t *testing.T, timeout time.Duration, phases .
 	}
 }
 
+// waitForPhaseCount polls until at least n records carrying the given phase
+// have been collected, or the deadline elapses. Returns the snapshot at the
+// moment of success.
+//
+// This is the correct primitive for tests that expect MULTIPLE records of the
+// same phase (e.g. N tool_call records for an N-step preset). waitForPhases
+// exits as soon as it sees the first record of each listed phase; callers that
+// rely on a multiset count must use waitForPhaseCount instead to avoid the
+// race where the snapshot is read before all in-flight fakeIngest.handle
+// goroutines have appended their records.
+func (f *fakeIngest) waitForPhaseCount(t *testing.T, timeout time.Duration, phase string, n int) []ledgerRecord {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for {
+		snap := f.snapshot()
+		count := 0
+		for _, r := range snap {
+			if p, _ := r.Payload["phase"].(string); p == phase {
+				count++
+			}
+		}
+		if count >= n {
+			return snap
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("waitForPhaseCount: timed out waiting for %d %q records; saw %d in %v", n, phase, count, snap)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
 func newTCPEmitter(addr, workbenchID string) *ledgerEmitter {
 	e := newLedgerEmitter(addr, "tcp", workbenchID, newTestLogger())
 	return e
