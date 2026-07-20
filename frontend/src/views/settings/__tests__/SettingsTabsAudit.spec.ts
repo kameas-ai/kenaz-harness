@@ -15,15 +15,24 @@ import SettingsTabs from '@/views/settings/SettingsTabs.vue';
 // doesn't intercept useRouter()-resolved router instances). Production
 // click navigates correctly in the live build. Skipping the click test;
 // the "renders" assertion stays.
+// nav-settings-ia-cleanup WP04: "Audit" (retention settings) is now "Audit Settings";
+// a new "Audit Log" tab navigates directly to /audit (the viewer surface).
 describe('SettingsTabs — Audit tab', () => {
-  it('renders an Audit tab button', () => {
+  it('renders an Audit Settings tab button (renamed from "Audit")', () => {
     const wrapper = mount(SettingsTabs);
-    const auditBtn = wrapper.find('[data-testid="settings-tab-audit"]');
+    const auditBtn = wrapper.find('[data-testid="settings-tab-audit-settings"]');
     expect(auditBtn.exists()).toBe(true);
-    expect(auditBtn.text()).toBe('Audit');
+    expect(auditBtn.text()).toBe('Audit Settings');
   });
 
-  it.skip('Audit tab button calls router.push with ?tab=audit', async () => {
+  it('renders an Audit Log tab button that links to /audit', () => {
+    const wrapper = mount(SettingsTabs);
+    const auditLogBtn = wrapper.find('[data-testid="settings-tab-audit-log"]');
+    expect(auditLogBtn.exists()).toBe(true);
+    expect(auditLogBtn.text()).toBe('Audit Log');
+  });
+
+  it.skip('Audit Settings tab button calls router.push with ?tab=audit', async () => {
     const push = vi.fn();
     const wrapper = mount(SettingsTabs, {
       global: {
@@ -33,7 +42,7 @@ describe('SettingsTabs — Audit tab', () => {
         },
       },
     });
-    const auditBtn = wrapper.find('[data-testid="settings-tab-audit"]');
+    const auditBtn = wrapper.find('[data-testid="settings-tab-audit-settings"]');
     await auditBtn.trigger('click');
     // router.push is called with the string containing tab=audit.
     expect(push).toHaveBeenCalledWith('/settings?tab=audit');
