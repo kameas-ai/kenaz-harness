@@ -30,9 +30,9 @@ describe('SettingsTabs — vertical nav rail', () => {
     const wrapper = mount(SettingsTabs);
     const items = wrapper.findAll('[data-testid^="settings-tab-"]');
     // 5 (App) + 4 (Authoring) + 2 (Runtime) + 6 (Integrations: Providers/Bundles/Secrets/LLMRouting/Peers/Sync)
-    // + 5 (Security: Permissions/Policy/Audit Settings/Audit Log/Compliance) + 1 (Privacy) = 23
-    // nav-settings-ia-cleanup WP04: +1 for the "Audit Log" viewer entry in Security.
-    expect(items).toHaveLength(23);
+    // + 6 (Security: Permissions/Policy/Audit Settings/Audit Log/Compliance/Logs) + 1 (Privacy) = 24
+    // mission 01NLOGS01 WP05: +1 for the "Logs" runtime-log viewer in Security.
+    expect(items).toHaveLength(24);
     for (const item of items) {
       // lucide-vue-next renders an <svg>; every row should carry one.
       expect(item.find('svg').exists()).toBe(true);

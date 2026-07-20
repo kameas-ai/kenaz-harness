@@ -25,6 +25,7 @@ import (
 	artifactsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/artifacts"
 	attachmentsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/attachments"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/audit"
+	logsview "github.com/kameas-ai/kenaz-harness/core/rpc/views/logs"
 	branchesview "github.com/kameas-ai/kenaz-harness/core/rpc/views/branches"
 	"github.com/kameas-ai/kenaz-harness/core/rpc/views/bundle"
 	catalogview "github.com/kameas-ai/kenaz-harness/core/rpc/views/catalog"
@@ -832,6 +833,16 @@ func (b *Bindings) Audit_StartStream(filter audit.Filter) (string, error) {
 func (b *Bindings) Audit_StopStream(subID string) error {
 	defer sentry.WrapBinding("Audit_StopStream")()
 	return b.api.Audit().StopStream(b.ctx(), subID)
+}
+
+// ── logs (mission 01NLOGS01 WP04) ─────────────────────────────────────
+
+// Logs_Tail returns up to filter.Limit rows from the in-memory runtime
+// log ring buffer, newest first. Rows are redacted (no API keys or
+// bearer tokens). The frontend's Logs tab uses this for follow-tail.
+func (b *Bindings) Logs_Tail(filter logsview.Filter) ([]logsview.Row, error) {
+	defer sentry.WrapBinding("Logs_Tail")()
+	return b.api.Logs().Tail(b.ctx(), filter)
 }
 
 // ── settings ───────────────────────────────────────────────────────────

@@ -116,6 +116,21 @@ func FileHandler() slog.Handler {
 	return fileHandler
 }
 
+// Handler returns the *current* active slog.Handler (including any
+// installed bridges). Unlike FileHandler, this returns whatever is
+// currently wired — including test overrides. Callers that want to
+// wrap the current handler (e.g. to tee into a ring buffer while
+// preserving the active chain) should use this instead of FileHandler.
+func Handler() slog.Handler {
+	once.Do(initLogger)
+	replaceMu.Lock()
+	defer replaceMu.Unlock()
+	if loggerInt == nil {
+		return fileHandler
+	}
+	return loggerInt.Handler()
+}
+
 // Replace swaps the process-global slog.Logger's handler. The
 // telemetry package uses this to install its slog→OTel bridge once
 // the SDK providers are constructed. The bridge SHOULD wrap the

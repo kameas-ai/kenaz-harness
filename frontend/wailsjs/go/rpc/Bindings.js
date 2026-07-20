@@ -710,6 +710,10 @@ export function LogRouteChange(arg1, arg2) {
   return window['go']['rpc']['Bindings']['LogRouteChange'](arg1, arg2);
 }
 
+export function Logs_Tail(arg1) {
+  return window['go']['rpc']['Bindings']['Logs_Tail'](arg1);
+}
+
 export function MCP_HealthSnapshot() {
   return window['go']['rpc']['Bindings']['MCP_HealthSnapshot']();
 }

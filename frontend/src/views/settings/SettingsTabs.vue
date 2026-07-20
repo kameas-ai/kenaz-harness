@@ -23,6 +23,7 @@ import {
   CalendarClock,
   CheckSquare,
   CircleUser,
+  Code,
   Command,
   Download,
   FileText,
@@ -129,6 +130,8 @@ const groups: ReadonlyArray<TabGroup> = [
       // nav-settings-ia-cleanup WP04: audit-log viewer promoted into Settings → Security.
       // Navigates directly to /audit (the viewer keeps its own CanvasHead layout).
       { to: '/audit', label: 'Audit Log', matchPrefix: '/audit', icon: Activity },
+      // mission 01NLOGS01 WP05: in-app runtime log ring buffer.
+      { to: '/settings?tab=logs', label: 'Logs', query: 'logs', icon: Code },
       // fleet-audit-archival-01NDFSEX13 WP06 — Compliance (Team+ tier gated)
       { to: '/settings?tab=compliance', label: 'Compliance', query: 'compliance', icon: Server },
     ],
