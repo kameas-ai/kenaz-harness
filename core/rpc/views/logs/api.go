@@ -29,6 +29,15 @@ type Level = logstore.Level
 // Wails-bound methods are added in core/rpc/bindings.go with the
 // naming convention Logs_<Operation>. The frontend's LogsClient
 // delegates to them.
+//
+// TODO(01NLOGS01-stderr): wire MCP-server stderr into the logstore.
+// The stdio pool's per-recipe RingBuffer (core/mcp/transport/ringbuf.go)
+// already captures stderr; a future work-package should add a
+// StderrSink callback to core/mcp/transport/stdio.ServerInstance so
+// every stderr line is also forwarded to Store.AppendRaw("mcp:<id>", …, LevelWarn).
+// The source-filter placeholder is already in the Filter struct
+// (source field = substring match, "mcp:" prefix) so the frontend
+// can already filter for MCP stderr once the wiring lands.
 type LogsAPI interface {
 	// Tail returns up to limit rows (0 = all) from the ring buffer,
 	// newest first, filtered by f. This is the primary "follow-tail"
