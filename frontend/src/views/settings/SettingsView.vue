@@ -37,6 +37,8 @@ import FleetTelemetryPanel from '@/views/settings/FleetTelemetryPanel.vue';
 import SyncPanel from '@/views/settings/SyncPanel.vue';
 // fleet-audit-archival-01NDFSEX13 WP06 — Compliance panel
 import CompliancePanel from '@/views/settings/CompliancePanel.vue';
+// nav-settings-ia-cleanup WP02 — Crash Reporting panel (PRIVACY group)
+import CrashReportingPanel from '@/views/settings/CrashReportingPanel.vue';
 import LongSessionNudgeSettings from '@/components/settings/LongSessionNudgeSettings.vue';
 import { useHarnessClient } from '@/lib/useHarnessAPI';
 import { debouncedSave } from '@/lib/settings';
@@ -174,6 +176,13 @@ const showComplianceTab = computed<boolean>(() => {
   return typeof v === 'string' && v === 'compliance';
 });
 
+// nav-settings-ia-cleanup WP02 — Crash Reporting sub-tab (PRIVACY group).
+// Disambiguates via ?tab=crash-reporting. Mount switch is in <template> below.
+const showCrashReportingTab = computed<boolean>(() => {
+  const v = route?.query?.tab;
+  return typeof v === 'string' && v === 'crash-reporting';
+});
+
 // CanvasHead title/subtitle per active query-param sub-tab. The settings
 // sub-panels no longer render their own breadcrumb header (SettingsShell
 // owns it), so the header text has to reflect the current section. General
@@ -195,6 +204,7 @@ const SECTION_HEADS: Record<string, { title: string; subtitle: string }> = {
   peers: { title: 'Peers', subtitle: 'Trusted ACP agent peers — register, inspect, and revoke.' },
   sync: { title: 'Sync', subtitle: 'Cross-device settings sync — keep provider profiles, model prefs, MCP recipes, installed MCPs, and UI theme in sync across all your devices.' },
   compliance: { title: 'Compliance', subtitle: 'Immutable fleet audit archival and local retention window (Team+ tier).' },
+  'crash-reporting': { title: 'Crash Reporting', subtitle: 'Configure error and crash-report telemetry consent.' },
 };
 const DEFAULT_HEAD = {
   title: 'App preferences',
@@ -1143,6 +1153,15 @@ onMounted(() => {
       data-testid="settings-compliance-pane"
     >
       <CompliancePanel />
+    </div>
+
+    <!-- nav-settings-ia-cleanup WP02 — Crash Reporting sub-tab (PRIVACY group). -->
+    <div
+      v-else-if="showCrashReportingTab"
+      class="px-6 py-4 max-w-3xl"
+      data-testid="settings-crash-reporting-pane"
+    >
+      <CrashReportingPanel />
     </div>
 
     <div
