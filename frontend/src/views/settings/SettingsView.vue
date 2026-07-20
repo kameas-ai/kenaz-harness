@@ -29,6 +29,8 @@ import ModelAccessibleSecretsPanel from '@/views/settings/ModelAccessibleSecrets
 import TasksPanel from '@/views/settings/TasksPanel.vue';
 import LLMRoutingPanel from '@/views/settings/LLMRoutingPanel.vue';
 import AuditSettingsPanel from '@/views/settings/AuditSettingsPanel.vue';
+// mission 01NLOGS01 WP05 — Runtime Logs panel
+import LogsPanel from '@/views/settings/LogsPanel.vue';
 import AccountPanel from '@/views/settings/AccountPanel.vue';
 import UnitConflictsPanel from '@/views/settings/UnitConflictsPanel.vue';
 import PeersPanel from '@/views/settings/PeersPanel.vue';
@@ -148,6 +150,13 @@ const showAuditTab = computed<boolean>(() => {
   return typeof v === 'string' && v === 'audit';
 });
 
+// mission 01NLOGS01 WP05 — Runtime Logs sub-tab.
+// Disambiguates via ?tab=logs. Mount switch is in <template> below.
+const showLogsTab = computed<boolean>(() => {
+  const v = route?.query?.tab;
+  return typeof v === 'string' && v === 'logs';
+});
+
 // fleet-auth-foundation-01NDFSEX08 WP06 — Account (fleet identity) sub-tab.
 // Disambiguates via ?tab=account. Mount switch is in <template> below.
 const showAccountTab = computed<boolean>(() => {
@@ -203,6 +212,8 @@ const SECTION_HEADS: Record<string, { title: string; subtitle: string }> = {
   // nav-settings-ia-cleanup WP04: renamed from 'Audit' to 'Audit Settings' to
   // distinguish from the separate 'Audit Log' viewer (reached via /audit).
   audit: { title: 'Audit Settings', subtitle: 'Audit-log retention settings.' },
+  // mission 01NLOGS01 WP05 — Runtime Logs section head.
+  logs: { title: 'Logs', subtitle: 'Runtime log ring-buffer — debug failed MCP recipes and harness subsystems in-app.' },
   peers: { title: 'Peers', subtitle: 'Trusted ACP agent peers — register, inspect, and revoke.' },
   sync: { title: 'Sync', subtitle: 'Cross-device settings sync — keep provider profiles, model prefs, MCP recipes, installed MCPs, and UI theme in sync across all your devices.' },
   compliance: { title: 'Compliance', subtitle: 'Immutable fleet audit archival and local retention window (Team+ tier).' },
@@ -1106,6 +1117,15 @@ onMounted(() => {
       data-testid="settings-audit-pane"
     >
       <AuditSettingsPanel />
+    </div>
+
+    <!-- mission 01NLOGS01 WP05 — Runtime Logs tab. -->
+    <div
+      v-else-if="showLogsTab"
+      class="flex flex-col h-full"
+      data-testid="settings-logs-pane"
+    >
+      <LogsPanel />
     </div>
 
     <!-- fleet-auth-foundation-01NDFSEX08 WP06 — Account (fleet identity) sub-tab. -->
