@@ -124,21 +124,19 @@ func (p *Pool) openOne(ctx context.Context, spec coremcp.ServerSpec) error {
 	}
 
 	connSpec := Spec{
-		ID:               spec.Name,
-		URL:              spec.URL,
-		Env:              spec.Env,
+		ID:              spec.Name,
+		URL:             spec.URL,
+		HeadersTemplate: spec.HeadersTemplate,
+		Env:             spec.Env,
 		FirstByteTimeout: p.opts.FirstByteTimeout,
 		InitTimeout:      p.opts.InitTimeout,
 		PingPeriod:       p.opts.PingPeriod,
 		PingTimeout:      p.opts.PingTimeout,
 	}
-	// HeadersTemplate piggy-backs on spec.Env when ServerSpec gains
-	// a HeadersTemplate field upstream. For now the Pool surfaces
-	// it through the recipe-aware code path (recipes.Recipe carries
-	// the template; the rpc layer hands it to OpenOne via a
-	// recipe-aware Open call). The bare ServerSpec path lands here
-	// without HeadersTemplate; the Connection still works because
-	// the HTTP server may not require auth.
+	// HeadersTemplate is now passed from ServerSpec.HeadersTemplate.
+	// Values may contain ${VAR} tokens that Connection.Open substitutes
+	// from Env at connection-open time. The Authorization header is
+	// redacted in diagnostic logs by the transport layer.
 
 	loggerAdapter := slogConnectionAdapter{logger: p.opts.Logger}
 
