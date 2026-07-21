@@ -29,6 +29,7 @@ import {
   Scale,
   Search,
   Wrench,
+  Zap,
 } from '@/shell/icons';
 import RecipeKeyPromptModal from './RecipeKeyPromptModal.vue';
 import AddMCPServerModal from './AddMCPServerModal.vue';
@@ -380,6 +381,8 @@ function categoryIcon(category: RecipeCategory) {
       return Scale;
     case 'communication':
       return MessageSquare;
+    case 'automation':
+      return Zap;
     default:
       return Wrench;
   }

@@ -1938,7 +1938,7 @@ export interface DryRunResult {
  * mapping in `KenazToolsPanel.vue` (search→Search, filesystem→Folder,
  * memory→Brain, fetch→Globe, productivity→CheckSquare,
  * developer→Code, finance→Scale, communication→MessageSquare,
- * default→Wrench).
+ * automation→Zap, default→Wrench).
  */
 export type RecipeCategory =
   | 'search'
@@ -1950,6 +1950,7 @@ export type RecipeCategory =
   | 'finance'
   | 'communication'
   | 'deployment'
+  | 'automation'
   | 'other';
 
 /**

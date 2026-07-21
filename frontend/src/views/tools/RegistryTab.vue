@@ -12,7 +12,7 @@
  */
 import { ref, computed, onMounted } from 'vue';
 import { useHarnessClient } from '@/lib/harnessClientContext';
-import { Wrench, Search, Folder, Brain, Globe, CheckSquare, Code, Scale, MessageSquare } from '@/shell/icons';
+import { Wrench, Search, Folder, Brain, Globe, CheckSquare, Code, Scale, MessageSquare, Zap } from '@/shell/icons';
 import type { RecipeListing, RecipeCategory, Recipe, RecipeStatus } from '@/lib/types';
 import RecipeKeyPromptModal from './RecipeKeyPromptModal.vue';
 
@@ -78,6 +78,8 @@ function categoryIcon(category: RecipeCategory) {
       return Scale;
     case 'communication':
       return MessageSquare;
+    case 'automation':
+      return Zap;
     default:
       return Wrench;
   }
