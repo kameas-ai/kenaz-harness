@@ -436,6 +436,34 @@
         "default": false
       },
       "warning": "Notion MCP is in beta \u2014 tool surface may change across Notion releases."
+    },
+    {
+      "id": "linear",
+      "display_name": "Linear",
+      "description": "Search issues, create and update issues, manage projects and cycles in Linear. Sign in with Linear \u2014 no token to paste.",
+      "category": "productivity",
+      "transport": "http",
+      "url": "https://mcp.linear.app/mcp",
+      "auth": {
+        "kind": "mcp_oauth",
+        "scopes": ["read", "write"]
+      },
+      "primary_auth": "browser_oauth_dcr",
+      "env_keys": [],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://linear.app/docs/mcp",
+      "init_timeout_ms": 15000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      }
     }
   ]
 }
