@@ -471,6 +471,51 @@
         "allowed": false,
         "default": false
       }
+    },
+    {
+      "id": "pipedream",
+      "display_name": "Pipedream",
+      "description": "Access 2,400+ connected apps via Pipedream's remote MCP server. Run workflows, list components, and call actions across Slack, GitHub, Google, and thousands more. Sign in with Pipedream (OAuth — no token to paste). Requires a Pipedream project ID and environment.",
+      "category": "automation",
+      "transport": "http",
+      "url": "https://remote.mcp.pipedream.net",
+      "auth": {
+        "kind": "mcp_oauth",
+        "scopes": ["openid", "profile", "email", "offline_access", "mcp"]
+      },
+      "primary_auth": "oauth",
+      "headers_template": {
+        "x-pd-project-id": "${PIPEDREAM_PROJECT_ID}",
+        "x-pd-environment": "${PIPEDREAM_ENVIRONMENT}"
+      },
+      "env_keys": [
+        {
+          "name": "PIPEDREAM_PROJECT_ID",
+          "display": "Pipedream project ID (e.g. proj_xxxxxxx — from Project Settings)",
+          "docs_url": "https://pipedream.com/docs/connect/mcp/developers",
+          "required": true
+        },
+        {
+          "name": "PIPEDREAM_ENVIRONMENT",
+          "display": "Pipedream environment (development or production)",
+          "docs_url": "https://pipedream.com/docs/connect/mcp/developers",
+          "required": true
+        }
+      ],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://pipedream.com/docs/connect/mcp/developers",
+      "init_timeout_ms": 15000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      }
     }
   ]
 }

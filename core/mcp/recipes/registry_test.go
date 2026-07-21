@@ -27,6 +27,7 @@ var expectedRegistryIDs = []string{
 	// iPaaS meta-connectors (pack 01NCONN10)
 	"zapier",
 	"make",
+	"pipedream",
 }
 
 func TestRegistrySingletonParses(t *testing.T) {
@@ -393,6 +394,46 @@ func TestMakeRecipe(t *testing.T) {
 	// DCR zero-app: no baked client_id.
 	if r.Auth.ClientID != "" {
 		t.Errorf("Auth.ClientID = %q, want empty (DCR zero-app)", r.Auth.ClientID)
+	}
+	if r.Category != "automation" {
+		t.Errorf("Category = %q, want automation", r.Category)
+	}
+}
+
+// TestPipedreamRecipe — WP03 acceptance: DCR zero-app, transport http, scopes include "mcp", env_keys present.
+func TestPipedreamRecipe(t *testing.T) {
+	cat := recipes.Registry()
+	r, ok := cat.Get("pipedream")
+	if !ok {
+		t.Fatal("pipedream not in registry")
+	}
+	if r.Transport != recipes.TransportHTTP {
+		t.Errorf("Transport = %q, want http", r.Transport)
+	}
+	if r.Auth == nil || r.Auth.Kind != recipes.AuthKindMCPOAuth {
+		t.Fatalf("Auth = %+v, want mcp_oauth", r.Auth)
+	}
+	// DCR zero-app: no baked client_id.
+	if r.Auth.ClientID != "" {
+		t.Errorf("Auth.ClientID = %q, want empty (DCR zero-app)", r.Auth.ClientID)
+	}
+	// "mcp" scope required for Pipedream Connect MCP.
+	hasMCPScope := false
+	for _, s := range r.Auth.Scopes {
+		if s == "mcp" {
+			hasMCPScope = true
+		}
+	}
+	if !hasMCPScope {
+		t.Errorf("Auth.Scopes = %v, must include \"mcp\"", r.Auth.Scopes)
+	}
+	// env_keys must include PIPEDREAM_PROJECT_ID.
+	envNames := map[string]bool{}
+	for _, e := range r.EnvKeys {
+		envNames[e.Name] = true
+	}
+	if !envNames["PIPEDREAM_PROJECT_ID"] {
+		t.Errorf("EnvKeys = %+v, want PIPEDREAM_PROJECT_ID", r.EnvKeys)
 	}
 	if r.Category != "automation" {
 		t.Errorf("Category = %q, want automation", r.Category)
