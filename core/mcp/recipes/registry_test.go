@@ -29,6 +29,7 @@ var expectedRegistryIDs = []string{
 	"make",
 	"pipedream",
 	"composio",
+	"n8n",
 }
 
 func TestRegistrySingletonParses(t *testing.T) {
@@ -467,6 +468,38 @@ func TestComposioRecipe(t *testing.T) {
 	}
 	if !envNames["COMPOSIO_API_KEY"] {
 		t.Errorf("EnvKeys = %+v, want COMPOSIO_API_KEY", r.EnvKeys)
+	}
+	if r.Category != "automation" {
+		t.Errorf("Category = %q, want automation", r.Category)
+	}
+}
+
+// TestN8nRecipe — WP05 acceptance: per-instance URL, bearer token, primary_auth keys.
+func TestN8nRecipe(t *testing.T) {
+	cat := recipes.Registry()
+	r, ok := cat.Get("n8n")
+	if !ok {
+		t.Fatal("n8n not in registry")
+	}
+	if r.Transport != recipes.TransportHTTP {
+		t.Errorf("Transport = %q, want http", r.Transport)
+	}
+	if r.PrimaryAuth != recipes.PrimaryAuthKeys {
+		t.Errorf("PrimaryAuth = %q, want keys", r.PrimaryAuth)
+	}
+	// No OAuth flow — bearer token via headers_template.
+	if r.Auth != nil {
+		t.Errorf("Auth should be nil for n8n (bearer token auth), got %+v", r.Auth)
+	}
+	envNames := map[string]bool{}
+	for _, e := range r.EnvKeys {
+		envNames[e.Name] = true
+	}
+	if !envNames["N8N_INSTANCE_HOST"] {
+		t.Errorf("EnvKeys = %+v, want N8N_INSTANCE_HOST", r.EnvKeys)
+	}
+	if !envNames["N8N_MCP_ACCESS_TOKEN"] {
+		t.Errorf("EnvKeys = %+v, want N8N_MCP_ACCESS_TOKEN", r.EnvKeys)
 	}
 	if r.Category != "automation" {
 		t.Errorf("Category = %q, want automation", r.Category)

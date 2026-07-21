@@ -556,6 +556,47 @@
         "allowed": false,
         "default": false
       }
+    },
+    {
+      "id": "n8n",
+      "display_name": "n8n",
+      "description": "Trigger and inspect n8n workflows via the n8n MCP server. Works with self-hosted and n8n Cloud instances. Supply your instance hostname (e.g. myorg.app.n8n.cloud) and the MCP access token generated in your n8n instance settings.",
+      "category": "automation",
+      "transport": "http",
+      "url": "https://${N8N_INSTANCE_HOST}/mcp-server/http",
+      "headers_template": {
+        "Authorization": "Bearer ${N8N_MCP_ACCESS_TOKEN}"
+      },
+      "primary_auth": "keys",
+      "env_keys": [
+        {
+          "name": "N8N_INSTANCE_HOST",
+          "display": "n8n instance hostname (e.g. myorg.app.n8n.cloud for n8n Cloud, or your self-hosted domain)",
+          "docs_url": "https://docs.n8n.io/connect/connect-to-n8n-mcp-server/",
+          "required": true
+        },
+        {
+          "name": "N8N_MCP_ACCESS_TOKEN",
+          "display": "n8n MCP access token (from Instance Settings > MCP > Access Token tab)",
+          "docs_url": "https://docs.n8n.io/connect/connect-to-n8n-mcp-server/",
+          "required": true
+        }
+      ],
+      "config_options": [],
+      "capabilities": {
+        "tools": true,
+        "resources": false,
+        "prompts": false,
+        "sampling": false
+      },
+      "docs_url": "https://docs.n8n.io/connect/connect-to-n8n-mcp-server/",
+      "init_timeout_ms": 15000,
+      "ping_period_ms": 30000,
+      "sampling_policy": {
+        "allowed": false,
+        "default": false
+      },
+      "warning": "Workflows must be individually marked 'Available in MCP' in your n8n instance before they appear as tools. For n8n Cloud, your hostname is <slug>.app.n8n.cloud. For self-hosted n8n, use your instance's domain name (without https://)."
     }
   ]
 }
